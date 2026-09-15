@@ -1,0 +1,766 @@
+//! $display-family formatting, matching Bluesim's engine
+//! (`dollar_display.cxx`): every string argument is a format string
+//! consuming subsequent arguments; non-string arguments print in the
+//! task's default base; Verilog column rules (%d space-pads to the
+//! signal's maximal decimal width, %h zero-pads to ceil(bits/4), ...).
+
+use crate::value::Value;
+
+#[derive(Debug, Clone)]
+pub enum Arg {
+    /// value + signed-display flag
+    Val(Value, bool),
+    /// Arc so a precomputed call-site template clones as a refcount
+    /// bump, not a heap copy (the $display hot path)
+    Str(std::sync::Arc<str>),
+    /// real-valued argument (the C++ 'r' annotation)
+    Real(f64),
+}
+
+/// Maximal printed width of an N-bit value in the given base — Verilog's
+/// default column width for unsized format specifiers.
+fn max_width(bits: u32, base: u32, signed: bool) -> usize {
+    if bits == 0 {
+        return 1;
+    }
+    match base {
+        2 => bits as usize,
+        8 => ((bits as usize) + 2) / 3,
+        16 => ((bits as usize) + 3) / 4,
+        _ => {
+            // dollar_display.cxx maxWidth: sign digit + digit count, where
+            // the digit count for <=64 bits is a closed-form for
+            // digits(2^bits-1) even when signed, but for wide data the
+            // signed count switches to digits(2^(bits-1)) (the magnitude)
+            let sign_digit = if signed { 1 } else { 0 };
+            let digits = if bits > 64 {
+                let m = if signed {
+                    Value::from_u64(bits, 1).shl((bits - 1) as u64, bits)
+                } else {
+                    Value::zero(bits).not(bits) // 2^bits-1
+                };
+                m.to_dec_string().len()
+            } else {
+                let factor: i64 = if bits > 12 {
+                    2 - ((bits as i64 - 3) / 10)
+                } else {
+                    2
+                };
+                ((bits as i64 + factor) / 3) as usize
+            };
+            sign_digit + digits
+        }
+    }
+}
+
+/// Minimal digits of a u64 in `base` (2/8/10/16), appended to a stack
+/// buffer MSB-first; x=0 yields "0".  The allocation-free fast path
+/// for <=64-bit values (the overwhelmingly common $display case).
+fn push_u64_digits(out: &mut String, x: u64, base: u64) {
+    let mut buf = [0u8; 64]; // 64 binary digits is the worst case
+    let mut n = 0;
+    let mut x = x;
+    loop {
+        let d = (x % base) as u8;
+        buf[n] = if d < 10 { b'0' + d } else { b'a' + (d - 10) };
+        n += 1;
+        x /= base;
+        if x == 0 {
+            break;
+        }
+    }
+    for k in (0..n).rev() {
+        out.push(buf[k] as char);
+    }
+}
+
+fn push_pad(out: &mut String, c: char, n: usize) {
+    for _ in 0..n {
+        out.push(c);
+    }
+}
+
+/// Append one formatted value.  Semantics are fmt_val's original,
+/// bug-compat included: the final length (sign included) pads up to
+/// `width`, with the fill the caller asks for.  The %d call sites all
+/// pass false — base 10 space-pads even for "%05d", matching
+/// dollar_display.cxx — and the 2/8/16 sites ask for zero fill unless
+/// left justification has moved the padding to the right.
+fn fmt_val_into(
+    out: &mut String,
+    v: &Value,
+    base: u32,
+    zero_pad: bool,
+    width: Option<usize>,
+    signed: bool,
+) {
+    let w = width.unwrap_or(0);
+    // Zero fill is the caller's choice, not the base's: '-' declines it
+    // so the padding can move to the right as spaces.
+    let pad = if zero_pad { '0' } else { ' ' };
+    if v.width <= 64 {
+        // allocation-free path: digit count first, pad, then digits
+        let x = v.as_u64();
+        let (mag, neg) = if base == 10 && signed && v.sign() {
+            // two's-complement magnitude within the value's width
+            let m = x.wrapping_neg()
+                & if v.width == 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << v.width) - 1
+                };
+            (m, true)
+        } else {
+            (x, false)
+        };
+        let b = base as u64;
+        let mut ndig = 1usize;
+        let mut t = mag;
+        while t >= b {
+            ndig += 1;
+            t /= b;
+        }
+        let len = ndig + neg as usize;
+        if len < w {
+            push_pad(out, pad, w - len);
+        }
+        if neg {
+            out.push('-');
+        }
+        push_u64_digits(out, mag, b);
+    } else {
+        let s = match base {
+            2 => v.to_bin_string(),
+            8 => v.to_oct_string(),
+            16 => v.to_hex_string(),
+            _ if signed && v.sign() => {
+                format!("-{}", v.neg(v.width).to_dec_string())
+            }
+            _ => v.to_dec_string(),
+        };
+        // %h/%b/%o strings are max-width with leading zeros: trim to
+        // minimal digits (never below one digit)
+        let s = if base == 10 {
+            s.as_str()
+        } else {
+            s.trim_start_matches('0')
+        };
+        let s = if s.is_empty() { "0" } else { s };
+        if s.len() < w {
+            push_pad(out, pad, w - s.len());
+        }
+        out.push_str(s);
+    }
+}
+
+/// Format one $display-style call.  `default_base` is 10 for the plain
+/// tasks, 16/8/2 for $displayh/$displayo/$displayb.  Output errors
+/// (dollar_display's add_error) accumulate in `errs`; the caller prints
+/// them after the task output, newest first (Target's LIFO list).
+pub fn format_args(args: &[Arg], default_base: u32, loc: &str, errs: &mut Vec<String>) -> String {
+    let mut out = String::new();
+    format_args_into(&mut out, args, default_base, loc, errs);
+    out
+}
+
+/// format_args appending into a caller-owned buffer (the hot $display
+/// path reuses one per Interp — no per-call output allocation).
+pub fn format_args_into(
+    out: &mut String,
+    args: &[Arg],
+    default_base: u32,
+    loc: &str,
+    errs: &mut Vec<String>,
+) {
+    let mut i = 0;
+    while i < args.len() {
+        match &args[i] {
+            Arg::Str(fmt) => {
+                i += 1;
+                format_str(fmt, args, &mut i, out, loc, errs);
+            }
+            Arg::Val(v, sg) => {
+                fmt_val_into(
+                    out,
+                    v,
+                    default_base,
+                    default_base != 10,
+                    Some(max_width(v.width, default_base, *sg)),
+                    *sg,
+                );
+                i += 1;
+            }
+            Arg::Real(r) => {
+                // a bare real hits the integer default format: error and
+                // print the (signed long long) conversion (fill_tValue)
+                errs.push("unexpected real number argument\n".to_string());
+                let v = Value::from_u64(64, (*r as i64) as u64);
+                fmt_val_into(
+                    out,
+                    &v,
+                    default_base,
+                    default_base != 10,
+                    Some(max_width(64, default_base, true)),
+                    true,
+                );
+                i += 1;
+            }
+        }
+    }
+}
+
+/// A bit-packed string value back to text: bytes MSB-first, leading NUL
+/// bytes skipped (how Bluesim reads a Bit#(n) used as a format).
+pub fn unpack_str_pub(v: &Value) -> String {
+    unpack_str(v)
+}
+
+fn unpack_str(v: &Value) -> String {
+    let nbytes = ((v.width as usize) + 7) / 8;
+    let mut s = String::new();
+    for k in (0..nbytes).rev() {
+        let b = v.lshr((k * 8) as u64, v.width).as_u64() as u8;
+        if b == 0 && s.is_empty() {
+            continue;
+        }
+        s.push(b as char);
+    }
+    s
+}
+
+/// $swrite/$sformat semantics: identical to $display's format engine
+/// (dollar_swriteAV calls the same `format(..., restricted=false)` after
+/// peeling the destination) — EVERY string argument is a format string
+/// consuming later arguments; values print in the default base.  This
+/// matters for $format values flattened into the argument list: their
+/// embedded format strings consume their own arguments.
+/// `fmt_first`: $sformat's first argument is always the format, even when
+/// it is a bit-packed string VALUE (the engine's convert_to_string
+/// branch); $swrite formats a leading value as a plain value instead.
+pub fn format_sformat(
+    args: &[Arg],
+    default_base: u32,
+    loc: &str,
+    fmt_first: bool,
+    errs: &mut Vec<String>,
+) -> String {
+    if !fmt_first {
+        // $swrite*: format("d", ..., restricted=false) — the $display
+        // engine exactly
+        return format_args(args, default_base, loc, errs);
+    }
+    // $sformat: format("d", ..., restricted=true) — ONLY the first
+    // argument is a format (a string, or a bit-packed string value);
+    // remaining strings are literal text, remaining values print in the
+    // default base (bsc.verilog/tasks sysStringFormat2)
+    let mut out = String::new();
+    let mut i = 0;
+    match args.first() {
+        Some(Arg::Str(f)) => {
+            i = 1;
+            format_str(f, args, &mut i, &mut out, loc, errs);
+        }
+        Some(Arg::Val(v, _)) => {
+            i = 1;
+            let fmt = unpack_str(v);
+            format_str(&fmt, args, &mut i, &mut out, loc, errs);
+        }
+        _ => {}
+    }
+    while i < args.len() {
+        match &args[i] {
+            Arg::Str(text) => out.push_str(text),
+            Arg::Val(v, sg) => {
+                fmt_val_into(
+                    &mut out,
+                    v,
+                    default_base,
+                    default_base != 10,
+                    Some(max_width(v.width, default_base, *sg)),
+                    *sg,
+                );
+            }
+            Arg::Real(r) => {
+                errs.push("unexpected real number argument\n".to_string());
+                let v = Value::from_u64(64, (*r as i64) as u64);
+                fmt_val_into(
+                    &mut out,
+                    &v,
+                    default_base,
+                    default_base != 10,
+                    Some(max_width(64, default_base, true)),
+                    true,
+                );
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn next_val(args: &[Arg], i: &mut usize, errs: &mut Vec<String>) -> (Value, bool) {
+    while *i < args.len() {
+        let a = &args[*i];
+        *i += 1;
+        match a {
+            Arg::Val(v, sg) => return (v.clone(), *sg),
+            // a string consumed by a numeric spec formats as its bytes
+            Arg::Str(st) => return (str_value(st), false),
+            // a real consumed by an integer spec: error, then the
+            // (signed long long) conversion at 64 bits (fill_tValue)
+            Arg::Real(r) => {
+                errs.push("unexpected real number argument\n".to_string());
+                return (Value::from_u64(64, (*r as i64) as u64), true);
+            }
+        }
+    }
+    (Value::zero(1), false)
+}
+
+/// Consume one argument for a real (%e/%f/%g) spec: non-real arguments
+/// error and convert as best as possible (tValueToDouble).
+fn next_double(args: &[Arg], i: &mut usize, errs: &mut Vec<String>) -> f64 {
+    while *i < args.len() {
+        let a = &args[*i];
+        *i += 1;
+        match a {
+            Arg::Real(r) => return *r,
+            Arg::Val(v, sg) => {
+                errs.push("expected real argument, found non-real argument\n".to_string());
+                if v.width > 64 {
+                    return 0.0; // tValueToDouble punts on wide data
+                }
+                if v.width == 1 {
+                    return if v.as_u64() & 1 == 1 { 1.0 } else { 0.0 };
+                }
+                if *sg {
+                    // sign-extend to i64
+                    let x = v.as_u64();
+                    let sh = 64 - v.width;
+                    return (((x << sh) as i64) >> sh) as f64;
+                }
+                return v.as_u64() as f64;
+            }
+            Arg::Str(_) => {
+                errs.push("expected real argument, found non-real argument\n".to_string());
+                return 0.0; // string fills a wide tValue; wide -> 0
+            }
+        }
+    }
+    0.0
+}
+
+/// C printf %f/%e/%g for the parsed spec, plus space padding to `width`.
+fn c_format_real(spec: char, width: Option<usize>, prec: Option<usize>, v: f64) -> String {
+    fn c_e(v: f64, prec: usize) -> String {
+        let s = format!("{:.*e}", prec, v);
+        let (m, e) = s.split_once('e').unwrap();
+        let exp: i32 = e.parse().unwrap();
+        format!("{}e{}{:02}", m, if exp < 0 { '-' } else { '+' }, exp.abs())
+    }
+    fn trim_g(s: &str) -> String {
+        if s.contains('.') {
+            s.trim_end_matches('0').trim_end_matches('.').to_string()
+        } else {
+            s.to_string()
+        }
+    }
+    // A non-finite value has no mantissa to split from an exponent, and no
+    // exponent to compare against the precision, so neither %e nor %g can
+    // be computed from one.  C printf renders all three conversions the
+    // same way here, and still pads to the field width.
+    let s = if !v.is_finite() {
+        let t = if v.is_nan() {
+            "nan"
+        } else if v.is_sign_positive() {
+            "inf"
+        } else {
+            "-inf"
+        };
+        t.to_string()
+    } else {
+        match spec {
+            'f' => format!("{:.*}", prec.unwrap_or(6), v),
+            'e' => c_e(v, prec.unwrap_or(6)),
+            _ => {
+                // %g: %e if exp < -4 or exp >= P, else %f with P-1-exp
+                // decimals; trailing zeros removed
+                let p = prec.unwrap_or(6).max(1);
+                let es = format!("{:.*e}", p - 1, v);
+                let exp: i32 = es.split_once('e').unwrap().1.parse().unwrap();
+                if exp < -4 || exp >= p as i32 {
+                    let m = trim_g(es.split_once('e').unwrap().0);
+                    format!("{}e{}{:02}", m, if exp < 0 { '-' } else { '+' }, exp.abs())
+                } else {
+                    let decs = (p as i32 - 1 - exp).max(0) as usize;
+                    trim_g(&format!("{:.*}", decs, v))
+                }
+            }
+        }
+    };
+    let w = width.unwrap_or(0);
+    if s.len() < w {
+        format!("{}{}", " ".repeat(w - s.len()), s)
+    } else {
+        s
+    }
+}
+
+/// A string literal as a bit vector: bytes MSB-first (Verilog packing).
+pub fn str_value(s: &str) -> Value {
+    let bytes = s.as_bytes();
+    let w = (bytes.len() as u32 * 8).max(8);
+    let mut v = Value::zero(w);
+    for &b in bytes {
+        v = v.shl(8, w).or(&Value::from_u64(w, b as u64), w);
+    }
+    v
+}
+
+fn next_arg(args: &[Arg], i: &mut usize) -> Option<Arg> {
+    if *i < args.len() {
+        let a = args[*i].clone();
+        *i += 1;
+        Some(a)
+    } else {
+        None
+    }
+}
+
+fn format_str(
+    fmt: &str,
+    args: &[Arg],
+    i: &mut usize,
+    out: &mut String,
+    loc: &str,
+    errs: &mut Vec<String>,
+) {
+    let mut cs = fmt.chars().peekable();
+    while let Some(c) = cs.next() {
+        if c == '\\' {
+            match cs.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('\\') => out.push('\\'),
+                Some('"') => out.push('"'),
+                Some(other) => out.push(other),
+                None => {}
+            }
+            continue;
+        }
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        // parse %[0][width]spec
+        let mut zero_pad = false;
+        let mut width: Option<usize> = None;
+        // '-' left-justifies within the field (C/Verilog printf).  It may
+        // precede the zero flag; zero padding is meaningless when left
+        // justified, so '-' wins, as it does in C.
+        let mut left_justify = false;
+        while cs.peek() == Some(&'-') {
+            left_justify = true;
+            cs.next();
+        }
+        if cs.peek() == Some(&'0') {
+            zero_pad = true;
+            cs.next();
+        }
+        // digits accumulate directly (a String here was a per-spec
+        // allocation on the hot $display path)
+        while let Some(d) = cs.peek().and_then(|d| d.to_digit(10)) {
+            width = Some(
+                width
+                    .unwrap_or(0)
+                    .saturating_mul(10)
+                    .saturating_add(d as usize),
+            );
+            cs.next();
+        }
+        // optional .precision (real formats); no digits parses as 0
+        let mut prec: Option<usize> = None;
+        if cs.peek() == Some(&'.') {
+            cs.next();
+            let mut p = 0usize;
+            while let Some(d) = cs.peek().and_then(|d| d.to_digit(10)) {
+                p = p.saturating_mul(10).saturating_add(d as usize);
+                cs.next();
+            }
+            prec = Some(p);
+        }
+        let spec = cs.next().unwrap_or('%');
+        // "%0d" means minimal width (the 0 is a width of zero), while a
+        // bare "%d" means the maximal column width
+        let explicit_min = zero_pad && width.is_none();
+        // where this conversion's output begins, so '-' can re-align it
+        let field_start = out.len();
+        match spec.to_ascii_lowercase() {
+            '%' => out.push('%'),
+            'd' | 'u' => {
+                let (v, sg) = next_val(args, i, errs);
+                let w = if explicit_min {
+                    None
+                } else {
+                    width.or(Some(max_width(v.width, 10, sg)))
+                };
+                fmt_val_into(out, &v, 10, false, w, sg);
+            }
+            'h' | 'x' => {
+                let (v, _) = next_val(args, i, errs);
+                let w = if explicit_min {
+                    None
+                } else {
+                    width.or(Some(max_width(v.width, 16, false)))
+                };
+                fmt_val_into(out, &v, 16, !left_justify, w, false);
+            }
+            'o' => {
+                let (v, _) = next_val(args, i, errs);
+                let w = if explicit_min {
+                    None
+                } else {
+                    width.or(Some(max_width(v.width, 8, false)))
+                };
+                fmt_val_into(out, &v, 8, !left_justify, w, false);
+            }
+            'b' => {
+                let (v, _) = next_val(args, i, errs);
+                let w = if explicit_min {
+                    None
+                } else {
+                    width.or(Some(max_width(v.width, 2, false)))
+                };
+                fmt_val_into(out, &v, 2, !left_justify, w, false);
+            }
+            'c' => {
+                let (v, _) = next_val(args, i, errs);
+                out.push((v.as_u64() & 0xFF) as u8 as char);
+            }
+            's' => match next_arg(args, i) {
+                Some(Arg::Str(s)) => out.push_str(&s),
+                Some(Arg::Real(r)) => {
+                    errs.push("unexpected real number argument\n".to_string());
+                    let v = Value::from_u64(64, (r as i64) as u64);
+                    let n = ((v.width + 7) / 8) as usize;
+                    let mut bytes = Vec::new();
+                    for k in (0..n).rev() {
+                        let b = v.extract((k * 8 + 7) as u64, (k * 8) as u64, 8).as_u64() as u8;
+                        bytes.push(b);
+                    }
+                    let s: String = bytes
+                        .into_iter()
+                        .skip_while(|&b| b == 0)
+                        .map(|b| b as char)
+                        .collect();
+                    out.push_str(&s);
+                }
+                Some(Arg::Val(v, _)) => {
+                    // sized string: bytes, MSB first, skipping leading NULs
+                    let n = ((v.width + 7) / 8) as usize;
+                    let mut seen = false;
+                    for k in (0..n).rev() {
+                        let b = v.extract((k * 8 + 7) as u64, (k * 8) as u64, 8).as_u64() as u8;
+                        if b == 0 && !seen {
+                            continue;
+                        }
+                        seen = true;
+                        out.push(b as char);
+                    }
+                }
+                None => {}
+            },
+            't' => {
+                let (v, _) = next_val(args, i, errs);
+                let w = width.unwrap_or(20);
+                if v.width <= 64 {
+                    let x = v.as_u64();
+                    let mut ndig = 1usize;
+                    let mut t = x;
+                    while t >= 10 {
+                        ndig += 1;
+                        t /= 10;
+                    }
+                    if ndig < w && !explicit_min {
+                        push_pad(out, ' ', w - ndig);
+                    }
+                    push_u64_digits(out, x, 10);
+                } else {
+                    let s = v.to_dec_string();
+                    if s.len() < w && !explicit_min {
+                        push_pad(out, ' ', w - s.len());
+                    }
+                    out.push_str(&s);
+                }
+            }
+            'f' | 'e' | 'g' => {
+                let v = next_double(args, i, errs);
+                out.push_str(&c_format_real(spec.to_ascii_lowercase(), width, prec, v));
+            }
+            '0' => { /* %0 alone: nothing */ }
+            'm' => out.push_str(loc),
+            // An unrecognized conversion is not fatal: the reference
+            // engine copies the spec through as literal text and leaves
+            // the argument to whatever formats it next, so no format
+            // string a design can write ends the simulation.
+            _ => {
+                out.push('%');
+                if left_justify {
+                    out.push('-');
+                }
+                if zero_pad {
+                    out.push('0');
+                }
+                if let Some(w) = width {
+                    push_u64_digits(out, w as u64, 10);
+                }
+                if let Some(pr) = prec {
+                    out.push('.');
+                    push_u64_digits(out, pr as u64, 10);
+                }
+                out.push(spec);
+            }
+        }
+        // Left justify by rotating the field: the conversions pad on the
+        // left, so the spaces they added move to the end.  Only spaces are
+        // moved -- a value's own leading zeros are part of the digits, and
+        // zero_pad is already off in this branch.
+        if left_justify {
+            let field = &out[field_start..];
+            let body = field.trim_start_matches(' ');
+            let padding = field.len() - body.len();
+            if padding > 0 {
+                let body = body.to_string();
+                out.truncate(field_start);
+                out.push_str(&body);
+                for _ in 0..padding {
+                    out.push(' ');
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(w: u32, x: u64) -> Arg {
+        Arg::Val(Value::from_u64(w, x), false)
+    }
+
+    #[test]
+    fn verilog_column_widths() {
+        // 8-bit %d pads to 3 columns
+        let mut e = Vec::new();
+        let s = format_args(&[Arg::Str("v=%d".into()), v(8, 7)], 10, "", &mut e);
+        assert_eq!(s, "v=  7");
+        let s = format_args(&[Arg::Str("v=%0d".into()), v(8, 7)], 10, "", &mut e);
+        assert_eq!(s, "v=7");
+        let s = format_args(&[Arg::Str("v=%h".into()), v(8, 7)], 10, "", &mut e);
+        assert_eq!(s, "v=07");
+    }
+
+    #[test]
+    fn unknown_spec_is_not_fatal() {
+        // The reference copies an unrecognized conversion through as text
+        // and leaves the argument for the next one; nothing aborts.
+        let mut e = Vec::new();
+        let s = format_args(&[Arg::Str("A %v B".into()), v(16, 0)], 10, "", &mut e);
+        assert_eq!(s, "A %v B    0");
+        // flags, width and precision are echoed as written, case included
+        let s = format_args(&[Arg::Str("%-7z|%0.3Q".into())], 10, "", &mut e);
+        assert_eq!(s, "%-7z|%0.3Q");
+    }
+
+    #[test]
+    fn non_finite_reals() {
+        // No mantissa to split from an exponent: C printf renders these
+        // the same for every conversion, and still pads to the width.
+        let mut e = Vec::new();
+        for spec in ["%f", "%e", "%g"] {
+            let s = format_args(
+                &[Arg::Str(spec.into()), Arg::Real(f64::NAN)],
+                10,
+                "",
+                &mut e,
+            );
+            assert_eq!(s, "nan", "{spec} of NaN");
+            let s = format_args(
+                &[Arg::Str(spec.into()), Arg::Real(f64::INFINITY)],
+                10,
+                "",
+                &mut e,
+            );
+            assert_eq!(s, "inf", "{spec} of +inf");
+            let s = format_args(
+                &[Arg::Str(spec.into()), Arg::Real(f64::NEG_INFINITY)],
+                10,
+                "",
+                &mut e,
+            );
+            assert_eq!(s, "-inf", "{spec} of -inf");
+        }
+        let s = format_args(
+            &[Arg::Str("%10e".into()), Arg::Real(f64::INFINITY)],
+            10,
+            "",
+            &mut e,
+        );
+        assert_eq!(s, "       inf");
+    }
+
+    #[test]
+    fn left_justify() {
+        let mut e = Vec::new();
+        // the report shape that found this: %5d/%-5d
+        let s = format_args(
+            &[Arg::Str("%5d/%-5d".into()), v(32, 12), v(32, 12)],
+            10,
+            "",
+            &mut e,
+        );
+        assert_eq!(s, "   12/12   ");
+        // no padding to move when the value fills the field
+        let s = format_args(&[Arg::Str("%-3d".into()), v(32, 123)], 10, "", &mut e);
+        assert_eq!(s, "123");
+        // wider than the field: nothing is truncated
+        let s = format_args(&[Arg::Str("%-2d".into()), v(32, 12345)], 10, "", &mut e);
+        assert_eq!(s, "12345");
+        // '-' beats '0', as in C
+        let s = format_args(&[Arg::Str("%-05d".into()), v(32, 42)], 10, "", &mut e);
+        assert_eq!(s, "42   ");
+        // an explicit width replaces the natural column width, so the whole
+        // field pads right (C printf: "%-6x" of 0x2f is "2f    ")
+        let s = format_args(&[Arg::Str("%-6h".into()), v(16, 0x2f)], 10, "", &mut e);
+        assert_eq!(s, "2f    ");
+        // with no width, %h still zero-fills to the value's column width
+        let s = format_args(&[Arg::Str("%h".into()), v(16, 0x2f)], 10, "", &mut e);
+        assert_eq!(s, "002f");
+        // %s ignores the width field altogether (so does "%6s"), which
+        // leaves '-' nothing to re-align; pinned so a future width fix for
+        // strings has to revisit this deliberately
+        let s = format_args(
+            &[Arg::Str("[%-6s]".into()), Arg::Str("ab".into())],
+            10,
+            "",
+            &mut e,
+        );
+        assert_eq!(s, "[ab]");
+        assert!(e.is_empty(), "unexpected errors: {e:?}");
+    }
+
+    #[test]
+    fn bare_args_default_base() {
+        let mut e = Vec::new();
+        let s = format_args(&[v(4, 5)], 10, "", &mut e);
+        assert_eq!(s, " 5"); // 4-bit max is 15 -> 2 columns
+    }
+
+    #[test]
+    fn escapes() {
+        let mut e = Vec::new();
+        let s = format_args(&[Arg::Str("a\\nb".into())], 10, "", &mut e);
+        assert_eq!(s, "a\nb");
+    }
+}

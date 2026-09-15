@@ -1,0 +1,1354 @@
+//! The compiled-artifact ABI: the plain-Rust types, constants, and
+//! wire codecs shared between the LLVM lowering (feature `llvm`) and
+//! the artifact load path.  No inkwell here — this module is what a
+//! slim, LLVM-free runtime (artifact loading + trampolines) builds
+//! against.  `lower` glob-re-exports it, so `lower::X` paths keep
+//! working in llvm builds.
+
+use std::collections::HashMap;
+
+use trs_ir::{Design, Expr, StrId};
+
+/// Callback for foreign statements inside compiled bodies (the
+/// $display family and value/ActionValue tasks): compiled code
+/// evaluates the arguments natively at the statement position and
+/// passes their words in `args` (string literals occupy no words —
+/// the call-site table carries them); a task's result words land in
+/// `out`.  A nonzero return aborts the compiled edge — reserved for
+/// genuine aborts, never $finish/$stop (edge-completion contract).
+pub type ForeignCb = unsafe extern "C" fn(
+    env: *mut core::ffi::c_void,
+    ordinal: u32,
+    site: u32,
+    args: *const u64,
+    out: *mut u64,
+) -> i32;
+
+/// Trampoline for prim method calls the arena does not model (FIFOs,
+/// ConfigRegs, RegFiles, ...): the interpreter unmarshals `args` per
+/// the call-site table, invokes the boxed prim, and writes the result
+/// words to `out`.  The site is named by (ordinal, site): one table per
+/// rule, both halves numbered in it.
+pub type PrimCb = unsafe extern "C" fn(
+    env: *mut core::ffi::c_void,
+    ordinal: u32,
+    site: u32,
+    args: *const u64,
+    out: *mut u64,
+);
+
+thread_local! {
+    /// Edge-SSA site census (task #24 M1): static counts of the slot
+    /// round-trips an SSA edge lowering would eliminate.  Indices:
+    /// [0] other-rule CF/WF slot loads (incl. exec WF gates and sched
+    /// inhibitor reads), [1] eager reloads in exec bodies, [2]
+    /// shared-eager reloads in sched fns, [3] eager owner stores (kept
+    /// as exports), [4] words moved by the promotable loads
+    /// (ceil(w/64) per site).  Thread-local like AOT_MODE: the
+    /// one-module link path lowers the whole design on one thread,
+    /// which is the path the census exists for.  Read via
+    /// edge_ssa_sites() under TRS_EDGE_SSA_STATS=1.
+    pub static EDGE_SSA_SITES: std::cell::Cell<[usize; 5]> =
+        const { std::cell::Cell::new([0; 5]) };
+}
+
+pub(crate) fn edge_ssa_count(idx: usize, words: usize) {
+    EDGE_SSA_SITES.with(|c| {
+        let mut v = c.get();
+        v[idx] += 1;
+        v[4] += words;
+        c.set(v);
+    });
+}
+
+/// Snapshot the census counters (this thread).
+pub fn edge_ssa_sites() -> [usize; 5] {
+    EDGE_SSA_SITES.with(|c| c.get())
+}
+
+/// Direct-BDPI support (task #22): c_name -> function address for
+/// baked-mode (JIT) call emission, set once by the interpreter after
+/// dlopening the user .so.  AOT artifacts use per-function pointer
+/// globals filled by the loader instead.
+pub static BDPI_SYMS: std::sync::OnceLock<HashMap<String, usize>> = std::sync::OnceLock::new();
+/// Address of the stdio-flush callback (phase 0 = flush Rust stdout
+/// before the C call, 1 = fflush(NULL) after) — preserves the byte
+/// interleaving of user printf with $display output, exactly like the
+/// interpreter's BDPI dispatch.
+pub static STDIO_CB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+/// Dual-write collision warning hook for the compiled BRAM tick
+/// (bs_prim_mod_bram.h:454-476): a same-instant same-address dual
+/// write whose OVERLAPPING lane carries an EQUAL chunk prints the
+/// reference's warning (chunks_eq is literal equality upstream).  The
+/// interpreter installs a fn resolving the block base POINTER to the
+/// prim's name, quiet-engine gated.  Unset = silent (unit tests).
+pub static BRAM_WARN: std::sync::OnceLock<fn(block: usize, addr: u64)> = std::sync::OnceLock::new();
+/// One compiled prim call site (resolved by the trampoline).
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrimCallSpec {
+    /// global instance index of the prim
+    pub inst: usize,
+    pub method: StrId,
+    /// port the call addresses, for a multi-ported prim method
+    pub port: u32,
+    /// argument widths, in order (marshaled as consecutive word runs)
+    pub arg_widths: Vec<u32>,
+    /// result width (0 = action, no result)
+    pub ret_width: u32,
+    /// action (mutates) vs pure value read
+    pub is_action: bool,
+}
+/// Per-instance name resolution: arena slots and child links assigned
+/// by the interpreter.
+pub struct InstEnv {
+    /// module index in `d.modules`
+    pub mir: usize,
+    /// Dense id of this instance's DEDUP CLASS: one per distinct
+    /// (module type, subtree signature).  Anything emitted once and
+    /// shared between instances is keyed by this, not by `mir`.
+    ///
+    /// Parameters used to split a type into several classes, because
+    /// a compiled body baked them.  They do not any more -- everything
+    /// a parent supplies is a slot -- so in practice a type is one
+    /// class, and the emitter checks that and refuses otherwise
+    /// (objects are named for the module alone).  What could still
+    /// split one is a difference in what the instances construct
+    /// BENEATH them, which is genuinely different code.
+    pub class_id: usize,
+    /// local child instance name -> global instance index
+    pub children: HashMap<StrId, usize>,
+    /// Verilog models this instance DIRECTLY imports, as (Verilog top,
+    /// run key), sorted.  An `import "BVI"' child is a prim, so the
+    /// compiled body never names its model -- every call goes through
+    /// the site table, which the design's plan materialises.  The
+    /// BUILD graph is the part that cannot derive it: compiling a
+    /// fragment runs its reset window, which instantiates the model,
+    /// so a rule that does not depend on the verilate step races it.
+    /// Part of the exec dedup signature's INPUT half -- not because a
+    /// body could differ, but because the manifest row is per class
+    /// and a class must therefore mean one set of models.
+    pub bvi_needs: Vec<(String, String)>,
+    /// local register instance name -> (arena base slot, width); plain
+    /// sync/no-reset regs only, ceil(width/64) consecutive slots
+    pub reg_slot: HashMap<StrId, (u32, u32)>,
+    /// local RWire/PulseWire instance name -> (base slot, width): valid
+    /// word at base, value words after it
+    pub wire_slot: HashMap<StrId, (u32, u32)>,
+    /// local BypassWire instance name -> (base slot, width): value
+    /// words only — no valid word (whas is const-true) and no tick
+    pub bypass_slot: HashMap<StrId, (u32, u32)>,
+    /// local ConfigReg instance name -> (base slot, width): old value,
+    /// current value, written_at instant (see ArenaKind::CReg)
+    pub creg_slot: HashMap<StrId, (u32, u32)>,
+    /// local RegFile instance name -> (base slot, width, lo, hi):
+    /// header [upd_at, upd_addr, upd_prev(w)] then dense data
+    /// (see ArenaKind::RegFile)
+    pub regfile_slot: HashMap<StrId, (u32, u32, u64, u64)>,
+    /// local BRAM instance name -> (base slot, width, size, chunk_size,
+    /// num_wens, dual, pipelined): per-port headers then dense data
+    /// (see ArenaKind::Bram)
+    pub bram_slot: HashMap<StrId, (u32, u32, u64, u32, u32, bool, bool)>,
+    /// local CReg (CRegN5) instance name -> (base slot, width): live
+    /// value then registered value, w words each (see ArenaKind::CReg5)
+    pub creg5_slot: HashMap<StrId, (u32, u32)>,
+    /// local Counter instance name -> (base slot, width): val and
+    /// saved_val (w words each), then saved_at, a (w words), a_at,
+    /// b (w words), b_at, suppress (see ArenaKind::Counter)
+    pub counter_slot: HashMap<StrId, (u32, u32)>,
+    /// local FIFO instance name -> (base slot, width, size, guarded):
+    /// header (elems, saved_elems, fst, enq_at, deq_at, clear_at) then
+    /// data (see ArenaKind::Fifo)
+    pub fifo_slot: HashMap<StrId, (u32, u32, u32, bool, bool)>,
+    /// module reset input port name -> arena slot holding the PORT level
+    /// (1 = deasserted, matching the interpreter's Port read)
+    ///
+    /// DESIGN-GLOBAL and absolute: a reset node is shared across the
+    /// design and sits ahead of every region, so this slot says which
+    /// of the design's resets drives the port, not where the port lives
+    /// in the instance.  Compiled per-type code must NOT bake it -- two
+    /// designs wire one module type to different nodes -- and reads it
+    /// through `reset_tbl` instead.  The interpreter, which is never
+    /// shared between designs, still uses it directly.
+    pub reset_slot: HashMap<StrId, u32>,
+    /// module reset input port name -> its index in this module type's
+    /// reset table.  Type-uniform by construction (the ports come from
+    /// the module, so every instance of a type numbers them the same),
+    /// which is what lets one compiled body serve every instance.
+    pub reset_ord: HashMap<StrId, u32>,
+    /// arena slot of this instance's reset table: `reset_ord.len()`
+    /// consecutive words, word i holding the absolute `reset_slot` of
+    /// the port whose `reset_ord` is i.  Region-relative in compiled
+    /// code, so the indirection costs one load in the prologue and the
+    /// body stays identical across designs.
+    pub reset_tbl: u32,
+    /// outlined stable def -> (memo slot base: stamp word then value
+    /// words, width); type-uniform offsets (part of the dedup sig)
+    pub memo_slot: HashMap<StrId, (u32, u32)>,
+    /// subtree arena region [start, end): every slot this instance's
+    /// compiled code can touch (own state + descendants); the basis
+    /// for per-module-type code dedup (base-relative addressing)
+    pub region: (u32, u32),
+    /// EN_<m> port name -> arena slot; zeroed at composition dispatch,
+    /// stored by compiled call sites (the C++ enable protocol)
+    pub en_slot: HashMap<StrId, u32>,
+    /// Module ARGUMENTS, as slots in this instance's own region:
+    /// name -> (base, width).  The parent supplies a value per
+    /// instantiation, and it used to be BAKED -- which is what made
+    /// one module type into many compiled objects, since two
+    /// instantiations at different values could not share code.
+    ///
+    /// The value is still known at plan time; it is seeded into the
+    /// arena instead of folded into the body, so the body is the same
+    /// for every instantiation and the argument leaves the dedup
+    /// identity entirely.  A read is a load, where it was a constant.
+    /// Part of the LAYOUT half of the signature (where the slot sits),
+    /// never the input half (what the value is).
+    pub arg_slot: HashMap<StrId, (u32, u32)>,
+    /// String module arguments: name -> the slot holding the interned
+    /// string id.  A String port is width 0 and its compiled carrier
+    /// is an i64 marker, so it gets its own map rather than riding in
+    /// `arg_slot` where a zero width means the empty bit-vector.
+    ///
+    /// `str_consts` stays, but only to answer "is this port a
+    /// string?".  Its VALUE is no longer read by the lowering and no
+    /// longer part of the dedup identity -- which is the whole point:
+    /// an instance name threaded through a module was the single most
+    /// common module argument in the corpus (96.7% of them), and
+    /// baking it made every instantiation its own object.
+    pub str_slot: HashMap<StrId, u32>,
+    /// Input clock-gate ports, as slots in this instance's own region.
+    ///
+    /// A gate used to be read by re-expanding the parent's gate
+    /// EXPRESSION in the parent's frame, from inside the child's body
+    /// -- so the body baked the parent's slots and no two instances
+    /// under different gates could share it.  `gates` (the expression,
+    /// and the owner it belongs to) is still how the value is
+    /// produced, but the producing happens in the design-level edge
+    /// function now, once per edge, into this slot.  The child reads
+    /// its own region like it reads anything else.
+    ///
+    /// Sampling once per edge is also the semantics the interpreter
+    /// has: re-expanding live was measured diverging across clock
+    /// domains (mcd_Rand), which is why dynamic gates were refused
+    /// outright rather than compiled.  They need not be now.
+    pub gate_slot: HashMap<StrId, u32>,
+    /// constant-valued module input ports and instantiation
+    /// parameters: the compiled mirror of the interpreter's
+    /// Port/Param fallthrough — an uncalled method's arg reads 0,
+    /// unbound clock/gate/reset-kind input ports read 1, numeric
+    /// params read their bound value.  Dynamic bindings never land
+    /// here (bound gates evaluate in the parent; EN and reset ports
+    /// have arena slots; string params are marker values).  Part of
+    /// the exec dedup signature.
+    pub port_consts: HashMap<StrId, (u32, u64)>,
+    /// Real-valued instantiation parameters, as f64 bits: reals reach
+    /// simulation only as task arguments and module parameters, so the
+    /// compiled carrier is an i64 of the double's bits and the foreign
+    /// spec marks the argument Real (decode rebuilds Arg::Real).  Part
+    /// of the exec dedup signature.
+    pub real_consts: HashMap<StrId, u64>,
+    /// Input clock-gate ports bound at instantiation: port name ->
+    /// (owner instance, gate expr) — reads lower the expr in the
+    /// OWNER's frame, mirroring the interp's parent-context gate
+    /// evaluation.  Part of the exec dedup signature (owner slots are
+    /// absolute in deduped bodies, so gate wiring must pin the sig).
+    pub gates: HashMap<StrId, (usize, Expr)>,
+    /// String-valued instantiation parameters: name -> string id.  The
+    /// compiled carrier for strings is an i64 of the id (the interp's
+    /// str_ref marker value), consumed by StrDyn foreign args, string
+    /// Eq, and the StringConcat intern callback.  Part of the exec
+    /// dedup signature.
+    pub str_consts: HashMap<StrId, StrId>,
+    /// Instantiation values wider than 64 bits: name -> (width, LE
+    /// 32-bit limbs), lowered as wide constants (cval).  Part of the
+    /// exec dedup signature.
+    pub wide_consts: HashMap<StrId, (u32, Vec<u32>)>,
+    /// any rule's CAN_FIRE/WILL_FIRE def name -> arena slot (this
+    /// instance); reads of other rules' fire signals become slot loads
+    pub cfwf_slot: HashMap<StrId, u32>,
+    /// schedule-position def name -> (arena base slot, width): stored by
+    /// the sched fn that owns the def, reloaded by exec bodies (the C++
+    /// `DEF_x = DEF_x;` reuse semantics)
+    pub eager_slot: HashMap<StrId, (u32, u32)>,
+    /// TRACED artifacts only (empty otherwise): VCD-declared member
+    /// def -> (recording slot base, width).  Def bindings store their
+    /// value here so the VCD writer sees the interp's last-evaluated
+    /// semantics.  Part of the exec dedup signature.
+    pub rec_defs: HashMap<StrId, (u32, u32)>,
+    /// TRACED artifacts only: method name -> recording slots for its
+    /// VCD ports (EN time / args / result), stored by inlined call
+    /// sites.  Part of the exec dedup signature.
+    pub rec_meths: HashMap<StrId, RecMeth>,
+}
+
+/// Arena recording slots for one user-module method's VCD ports
+/// (traced artifacts).
+#[derive(Clone)]
+pub struct RecMeth {
+    /// last-call time slot (init u64::MAX; the writer's EN test is
+    /// time == the clock's last posedge)
+    pub t: u32,
+    /// per-argument (base, port width), in method arg order (init 0)
+    pub args: Vec<(u32, u32)>,
+    /// result (base, width) for value/AV methods (init 0)
+    pub res: Option<(u32, u32)>,
+}
+
+/// Design-wide plan: one InstEnv per user instance the compiled code
+/// can touch.
+pub struct PlanEnv<'a> {
+    /// arena slot the dispatcher stamps with the current instant at
+    /// every edge (ConfigReg reads compare written_at against it)
+    pub now_slot: u32,
+    pub d: &'a Design,
+    pub insts: &'a HashMap<usize, InstEnv>,
+    /// activity gating: the shared did-a-watched-write-change scratch
+    /// slot.  Some = arena-inline prim WRITE sites emit accurate marks
+    /// (regs/ConfigRegs compare old vs new; wires/FIFOs mark on the
+    /// taken path), which each exec call site consumes into the dirty
+    /// bitmaps.  None = ungated emission, no marking code.
+    pub gate_scratch: Option<u32>,
+}
+/// One auto-fired always_enabled top method, compiled as an appended
+/// pseudo-spec.  NEVER serialized: Emit and Load both derive the same
+/// list from the design's autofire config (interface order), so
+/// PlanB's wire layout is untouched.
+#[derive(Clone)]
+pub struct AfSpec {
+    /// method index in the TOP module's method list
+    pub method_idx: usize,
+    /// method name — EN_<m>/RDY_<m> sibling lookups
+    pub method: StrId,
+    /// constant argument values in method-arg order:
+    /// (width, limbs normalized to ceil(width/64) words)
+    pub argv: Vec<(u32, Vec<u64>)>,
+}
+
+/// One rule to compile.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct RuleSpec {
+    /// owning instance (key into PlanEnv::insts)
+    pub inst: usize,
+    pub rule_idx: usize,
+    /// arena slots of earlier CAN_FIREs negated into this rule's CF
+    /// (intra-module ME inhibitors + cross-module inhibitors)
+    pub inhibit_slots: Vec<u32>,
+    pub cf_slot: u32,
+    pub wf_slot: u32,
+    /// defs this rule's Sched entry evaluates at its schedule position
+    /// (REntry::eager); each must have an `eager_slot`
+    /// WILL_FIRE is provably constant-true (fire_when_enabled +
+    /// no-conflict rules — the fully-static-schedule case): the exec
+    /// body skips its WF gate entirely
+    pub always_fire: bool,
+    pub eager: Vec<StrId>,
+    /// eager defs of the SAME instance owned by entries that run
+    /// strictly earlier in this rule's composition: the sched fn may
+    /// load their slots instead of re-expanding the cone (the owner has
+    /// already stored them this edge)
+    pub shared: Vec<StrId>,
+    /// unique function-name label (instance path + rule name).  Names
+    /// this SPEC: its sched fn, and its exec fn on the in-process JIT
+    /// path, where every spec is lowered separately.
+    pub label: String,
+    /// names the exec CLASS this spec belongs to, for AOT emission:
+    /// module type, rule, and the subtree signature that decides which
+    /// instances share a body.  Unlike `label` it holds no design-wide
+    /// instance index or schedule ordinal, so the same type compiled
+    /// into two designs produces the same symbol -- which is what makes
+    /// a per-type object comparable, and cacheable, across designs.
+    /// Only rep ordinals are ever emitted or looked up under it.
+    #[serde(default)]
+    pub share_label: String,
+    /// this spec's index in the spec list — the `ordinal` a callback
+    /// site reports, which the runtime uses to find this rule's
+    /// call-site tables
+    pub ordinal: u32,
+    /// Where this rule's SCHED half begins in its single call-site
+    /// table; the exec half is first, at 0 (see `FnProtos`).  An
+    /// output of trial_lower, written back before emission: a lowering
+    /// emits one function at a time and numbers from zero, so a sched
+    /// lowering needs telling where its exec half stopped.  Carried
+    /// here rather than threaded because every lowering site already
+    /// holds the spec.  Zero until trial_lower has run.
+    #[serde(skip)]
+    pub sched_foreign_origin: u32,
+    #[serde(skip)]
+    pub sched_prim_origin: u32,
+    /// Some = auto-fire pseudo-spec: `rule_idx` is a synthetic unique
+    /// key (never index rules with it) and the exec section inlines
+    /// the method body instead.  serde(skip): PlanB only ever carries
+    /// rule specs, and both sides re-derive pseudo-specs identically.
+    #[serde(skip)]
+    pub autofire: Option<AfSpec>,
+}
+
+/// One compiled foreign call site: everything the interpreter needs
+/// to rebuild the Arg list and dispatch ($display family, value tasks).
+#[derive(Clone, PartialEq, Eq)]
+pub struct ForeignSpec {
+    /// instance for $display location reporting
+    pub inst: usize,
+    pub func: StrId,
+    /// result width (0 = plain action, no result)
+    pub ret_width: u32,
+    pub args: Vec<FArgSpec>,
+}
+
+/// One foreign argument: a string literal (no marshaled words), a
+/// numeric value of the given width with its signed-display flag, or a
+/// real value (one marshaled word carrying the f64 bits — the decode
+/// rebuilds the interp's Arg::Real so formatting is identical).
+#[derive(Clone, PartialEq, Eq)]
+pub enum FArgSpec {
+    Str(StrId),
+    Num {
+        width: u32,
+        signed: bool,
+    },
+    Real,
+    /// A dynamically-selected string: one marshaled word carrying the
+    /// string id (static table or runtime-interned) — the decode
+    /// resolves it to the interp's Arg::Str.
+    StrDyn,
+}
+
+/// A compiled rule sched function: (arena, env, region base index,
+/// ordinal) -- the same shape as `CompiledExec`, so that both halves
+/// of a rule are called the same way and a sched body addresses its
+/// region RELATIVE to the base it is handed rather than baking one
+/// instance's offsets.
+///
+/// Unlike an exec body it is still emitted per ordinal, into the
+/// DESIGN's module: what a sched fn computes is when the rule fires,
+/// and that depends on the whole-design schedule -- which of an
+/// instance's rules are marked early decides which eager defs this
+/// entry latches, and that differs between two instances of one
+/// module type.
+pub struct CompiledSched {
+    pub sched: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32),
+}
+
+/// A compiled rule body: (arena, env, region base index, ordinal).
+/// One compiled body serves every instance of its module type, so the
+/// ordinal that names its call-site tables arrives at run time.
+pub struct CompiledExec {
+    pub exec: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32) -> i32,
+}
+
+/// Why a rule cannot be compiled; the caller falls back to the
+/// interpreter (this is expected and silent — coverage grows over time).
+#[derive(Debug)]
+pub struct Ineligible(pub String);
+
+impl std::fmt::Display for Ineligible {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+/// Call-site tables a lowering produces for one rule.  ONE table per
+/// rule, not one per half: the exec fn numbers from zero and the sched
+/// fn continues where it stopped, so a site is named by (ordinal, site)
+/// alone.  A half-indexed pair meant a callee outlined across a
+/// synthesis boundary had to be told which of its caller's two tables
+/// its block sat in, and getting that wrong indexed the other one.
+/// A callback's `site` argument indexes these; the AOT load path
+/// rebuilds them by re-running trial_lower (deterministic).
+pub struct FnProtos {
+    pub foreign: Vec<ForeignSpec>,
+    pub prims: Vec<PrimCallSpec>,
+    /// Where the SCHED half begins in this rule's one call-site
+    /// table.  The exec half is first, at 0, because it is the half a
+    /// whole dedup class shares: a shared body can only bake a
+    /// constant index if that index means the same thing for every
+    /// member, and 0 always does.  The sched half takes the variable
+    /// offset instead, which costs nothing -- a sched fn is
+    /// per-ordinal and nobody shares it.
+    ///
+    /// It was the other way round, and that put design context into a
+    /// shared body: the sched half's SIZE follows how the design's
+    /// schedule split shared eager defs between an instance's rules,
+    /// so members of one class disagreed about where the exec half
+    /// started.
+    pub sched_foreign_origin: u32,
+    pub sched_prim_origin: u32,
+}
+
+/// Wire format for per-ordinal call-site tables baked into artifacts
+/// (trs_protos global): little-endian u32 stream.  Loading decoded
+/// protos skips trial_lower entirely (0.32s of sudoku's startup);
+/// validity is guaranteed by the bir_hash/layout/threshold checks.
+pub fn encode_protos(protos: &[FnProtos]) -> Vec<u8> {
+    let mut o: Vec<u8> = Vec::new();
+    let w = |o: &mut Vec<u8>, v: u32| o.extend_from_slice(&v.to_le_bytes());
+    let wf = |o: &mut Vec<u8>, v: &[ForeignSpec]| {
+        w(o, v.len() as u32);
+        for f in v {
+            w(o, f.inst as u32);
+            w(o, f.func);
+            w(o, f.ret_width);
+            w(o, f.args.len() as u32);
+            for a in &f.args {
+                match a {
+                    FArgSpec::Str(sid) => {
+                        w(o, 0);
+                        w(o, *sid);
+                        w(o, 0);
+                    }
+                    FArgSpec::Num { width, signed } => {
+                        w(o, 1);
+                        w(o, *width);
+                        w(o, *signed as u32);
+                    }
+                    FArgSpec::Real => {
+                        w(o, 2);
+                        w(o, 0);
+                        w(o, 0);
+                    }
+                    FArgSpec::StrDyn => {
+                        w(o, 3);
+                        w(o, 0);
+                        w(o, 0);
+                    }
+                }
+            }
+        }
+    };
+    let wp = |o: &mut Vec<u8>, v: &[PrimCallSpec]| {
+        w(o, v.len() as u32);
+        for pc in v {
+            w(o, pc.inst as u32);
+            w(o, pc.method);
+            w(o, pc.port);
+            w(o, pc.ret_width);
+            w(o, pc.is_action as u32);
+            w(o, pc.arg_widths.len() as u32);
+            for &aw in &pc.arg_widths {
+                w(o, aw);
+            }
+        }
+    };
+    w(&mut o, protos.len() as u32);
+    for p in protos {
+        wf(&mut o, &p.foreign);
+        wp(&mut o, &p.prims);
+        w(&mut o, p.sched_foreign_origin);
+        w(&mut o, p.sched_prim_origin);
+    }
+    o
+}
+
+/// Inverse of encode_protos; None on truncation/garbage.
+pub fn decode_protos(b: &[u8]) -> Option<Vec<FnProtos>> {
+    let mut i = 0usize;
+    // artifact-supplied counts must never drive an allocation larger
+    // than the bytes backing them: every record is >= 4 bytes, so any
+    // count above b.len()/4 is corruption — reject before reserving
+    fn r(b: &[u8], i: &mut usize) -> Option<u32> {
+        let v = u32::from_le_bytes(b.get(*i..*i + 4)?.try_into().ok()?);
+        *i += 4;
+        Some(v)
+    }
+    fn rf(b: &[u8], i: &mut usize) -> Option<Vec<ForeignSpec>> {
+        let n = r(b, i)?;
+        if n as usize > b.len() / 4 {
+            return None;
+        }
+        let mut v = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            let inst = r(b, i)? as usize;
+            let func = r(b, i)?;
+            let ret_width = r(b, i)?;
+            let argc = r(b, i)?;
+            if argc as usize > b.len() / 4 {
+                return None;
+            }
+            let mut args = Vec::with_capacity(argc as usize);
+            for _ in 0..argc {
+                let tag = r(b, i)?;
+                let a = r(b, i)?;
+                let sg = r(b, i)?;
+                // exact tags only: an unknown tag is a corrupted or
+                // future-format artifact — fail CLOSED, or the callback
+                // buffer walk desynchronizes on a garbage width
+                // (review finding: unknown tags fell open as Num)
+                args.push(match tag {
+                    0 => FArgSpec::Str(a),
+                    1 => FArgSpec::Num {
+                        width: a,
+                        signed: sg != 0,
+                    },
+                    2 => FArgSpec::Real,
+                    3 => FArgSpec::StrDyn,
+                    _ => return None,
+                });
+            }
+            v.push(ForeignSpec {
+                inst,
+                func,
+                ret_width,
+                args,
+            });
+        }
+        Some(v)
+    }
+    fn rp(b: &[u8], i: &mut usize) -> Option<Vec<PrimCallSpec>> {
+        let n = r(b, i)?;
+        if n as usize > b.len() / 4 {
+            return None;
+        }
+        let mut v = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            let inst = r(b, i)? as usize;
+            let method = r(b, i)?;
+            let port = r(b, i)?;
+            let ret_width = r(b, i)?;
+            let is_action = r(b, i)? != 0;
+            let argc = r(b, i)?;
+            if argc as usize > b.len() / 4 {
+                return None;
+            }
+            let mut arg_widths = Vec::with_capacity(argc as usize);
+            for _ in 0..argc {
+                arg_widths.push(r(b, i)?);
+            }
+            v.push(PrimCallSpec {
+                inst,
+                method,
+                port,
+                arg_widths,
+                ret_width,
+                is_action,
+            });
+        }
+        Some(v)
+    }
+    let n = r(b, &mut i)?;
+    if n as usize > b.len() / 4 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(n as usize);
+    for _ in 0..n {
+        out.push(FnProtos {
+            foreign: rf(b, &mut i)?,
+            prims: rp(b, &mut i)?,
+            sched_foreign_origin: r(b, &mut i)?,
+            sched_prim_origin: r(b, &mut i)?,
+        });
+    }
+    (i == b.len()).then_some(out)
+}
+thread_local! {
+    /// set while emitting artifact objects (opt default differs)
+    pub static AOT_MODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// RAII guard: artifact emission runs with the AOT opt default.
+pub struct AotModeGuard;
+impl AotModeGuard {
+    pub fn set() -> AotModeGuard {
+        AOT_MODE.with(|m| m.set(true));
+        AotModeGuard
+    }
+}
+impl Drop for AotModeGuard {
+    fn drop(&mut self) {
+        AOT_MODE.with(|m| m.set(false));
+    }
+}
+/// Sentinel method id in a PrimCallSpec: not a method call — the
+/// trampoline answers the prim's gate_out() (compiled Expr::Gate).
+pub const GATE_OUT_METHOD: StrId = u32::MAX;
+
+/// Sentinel func id in a ForeignSpec: not a foreign function — the
+/// callback concatenates its (StrDyn) arguments' texts and interns the
+/// result, returning the new string id (compiled PrimOp::StringConcat,
+/// mirroring the interp's per-evaluation intern_dyn).
+pub const STRING_CONCAT_FUNC: StrId = u32::MAX - 1;
+/// Boundary-tax experiment (sharding rung, step 1): request one
+/// module TYPE's methods be emitted as standalone functions on the
+/// proposed slot ABI (arena, env, inst_base, ordinal, prim_site_base,
+/// foreign_site_base, args...) and CALLED at every cross-module site
+/// instead of inlined.  Requested for every instantiated module type
+/// on every compile: this is how designs are emitted, not a mode.
+/// The one constraint left is that always_enabled methods stay
+/// inline; callback sites in a method cone ARE supported, the caller
+/// reserving them a block in its own tables (see `prim_sites`).
+#[derive(Clone, Debug)]
+pub struct BoundaryReq {
+    /// module type (Design.modules index)
+    pub mir: usize,
+    /// the dedup class this fn serves.  A boundary fn used to be
+    /// emitted once per module TYPE, on the reasoning that instances
+    /// of a type share their slot offsets.  They do -- but the body
+    /// also bakes the exemplar's PARAMETERS, which instances of a type
+    /// do not share, so every instance called a body carrying one
+    /// instance's parameter values.  One per class instead.
+    pub class_id: usize,
+    /// exemplar instance of the CLASS (region source for base-relative
+    /// addressing, and the parameter values the body bakes)
+    pub exemplar: usize,
+    /// method index in the module's methods table
+    pub mi: usize,
+    /// method name id
+    pub method: StrId,
+    /// BK_* kind: 0 = value result fn, 1 = action body fn,
+    /// 2 = actionvalue body+result fn, 3 = actionvalue result-only fn
+    pub kind: u8,
+    /// symbol name
+    pub sym: String,
+    /// declared arg ports (name, width) in call order
+    pub args: Vec<(StrId, u32)>,
+}
+
+/// The realized boundary map, built while the functions are emitted
+/// (result widths are known only at lowering): call sites consult it
+/// to divert.  Keyed (class_id, method, kind) -- see BoundaryReq.
+/// A realized boundary method fn: one compiled body serving every
+/// instance of its dedup CLASS.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BoundaryFn {
+    pub sym: String,
+    pub ret_width: u32,
+    pub args: Vec<(StrId, u32)>,
+    /// This body's call sites, in emission order, as TEMPLATES: `inst`
+    /// holds the DELTA from the fragment instance the body runs as, not
+    /// an absolute index.  A shared body cannot own a call-site table --
+    /// the table is per ordinal and its entries name absolute instances
+    /// -- so each caller instead reserves a block in its OWN table and
+    /// materialises these into it with the callee's absolute instance.
+    /// The caller passes the block's start as a site base, and a site
+    /// here adds its own index to that (see `site_index`).
+    pub prim_sites: Vec<PrimCallSpec>,
+    pub foreign_sites: Vec<ForeignSpec>,
+}
+
+pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
+
+/// AOT layout revision, baked into every artifact: bump whenever slot
+/// allocation, call-site addressing, or callback ABI changes so a
+/// stale .so is refused at load instead of silently misreading the
+/// arena.
+// 27: trs_cb_bdpi_missing joined the callback ABI as a REQUIRED symbol
+//     (a rev-26 runtime never fills it, so a rev-26-labeled artifact
+//     carrying BDPI trap blocks would null-call it on a missing
+//     import), and the liveness walk grew MethValue result cones and
+//     dynamic-schedule alternates (live_en can only grow, but baked
+//     slot layouts change).  26: live-EN-only fast slots (rung 40).
+// 38: Quot and Rem give ALL ONES for a zero divisor, where they
+//     used to call `trs_cb_sigfpe' and raise.  The callback is gone
+//     with its only caller, so an artifact from rev 37 has a
+//     `trs_cb_sigfpe' global this runtime never fills and a code
+//     path that calls through it; and a rev-37 OBJECT mixed into a
+//     rev-38 design would still trap where the design's own bodies
+//     return a value.
+// 37: an object holds every EXEC body of its module, and the edge
+//     fn calls them.  Three changes, none of which a rev-36 object
+//     can be told apart from:
+//     (a) every dedup class gets a representative, so a module's
+//     object carries all its bodies rather than only the ones this
+//     design's edge plan happened not to absorb;
+//     (b) nothing is inlined into the edge fn, so a section that
+//     used to be a design-local copy at site origin 0 is now a call
+//     numbered from that half's real origin;
+//     (c) the sched half went BACK to the design module, one fn per
+//     ordinal under `sched_i{inst}_{ordinal}', after rev 36 moved it
+//     into the per-type object under the class symbol.  It cannot
+//     live there: `early' is per (instance, rule) in the design's
+//     composition, so the eager-def walk reaches different cones for
+//     two instances of one module type and their sched halves
+//     genuinely differ -- observed where one type is instantiated
+//     thirty times, as a 3-vs-1 prim count between two of them.  The
+//     class symbol a rev-36 design links against is simply not
+//     emitted any more.
+//     A rev-36 object mixed with a rev-37 design disagrees about
+//     which call site an index names -- the failure is an
+//     out-of-range prim index in the callback trampoline, not a
+//     wrong answer, but it is the same class and the rev is what
+//     stops it.
+// 36: a sched fn takes (arena, env, region base, ordinal) and
+//     addresses its region RELATIVE to that base, exactly as an exec
+//     fn has since rev 29.  It was the last piece of a module's own
+//     code still baking absolute arena offsets, which is why two
+//     instances of one type emitted two byte-different sched bodies
+//     that differed only by their region offset -- and why a sched
+//     fn could not live in the module's object.  The callback ABI
+//     changes with the signature, so a rev-35 artifact's sched
+//     symbols cannot be called by a rev-36 runtime.
+//     The call-site origins stay baked: unlike the region, they are
+//     constant across a dedup class (each is the shared exec half's
+//     length, which the class invariant already asserts is equal).
+// 35: specialization is gone.  Everything a parent supplies reaches
+//     a fragment's body through a SLOT in the instance's own region,
+//     seeded at plan time, where it used to be a constant folded into
+//     the code -- so a module type compiles to exactly one object and
+//     a rev-34 object both misreads the arena (slot numbering shifts
+//     for every design) and carries one instantiation's values baked
+//     in.  Four carriers, one mechanism:
+//     - module ARGUMENTS, every width.  This was the specialization
+//       axis: one type became one object per valuation, and a
+//       fragment could not be rebuilt alone without restating a
+//       valuation nothing could always express (String arguments had
+//       no spelling at all).  Reads become loads.
+//     - STRINGS are the bulk of it: an instance-name string threaded
+//       through a module is 96.7% of all module arguments in the
+//       corpus measured, so baking it made nearly every
+//       instantiation its own object.
+//     - input CLOCK GATES.  The body used to re-expand the parent's
+//       gate expression in the PARENT's frame, baking the parent's
+//       slots; the design-level edge fn now evaluates it once per
+//       edge into the child's slot.  That was the last carrier able
+//       to split a type into more than one object.
+//     Slots come from the module's DECLARED ports, never from what a
+//     parent supplied -- an ungated instantiation allocates a gate
+//     slot too and reads the seeded 1 -- because a layout derived
+//     from the instantiation would differ between a fragment built
+//     alone and the same fragment inside a design, and those two are
+//     required to be byte-identical.
+//     `str_consts` and `real_consts` STAY, but only as type markers
+//     (is-a-string for the string lowering, pass-as-double for a
+//     foreign call); dropping the Real one printed the f64 bit
+//     pattern as an integer.  Only their VALUES leave the identity.
+//     The slot must be consulted BEFORE those markers in both the
+//     value and width paths, or every instance reads the exemplar's
+//     constant.
+//     Riding along, because it is the same defect one level out: a
+//     rule's single call-site table now puts its EXEC half FIRST, at
+//     origin 0, and gives the sched half the variable origin.  Both
+//     halves have shared one table since rev 28 with exec second, so
+//     the exec half's origin depended on the sched half's SIZE --
+//     which follows the DESIGN's schedule, so members of one dedup
+//     class disagreed about where exec began and the emitter padded
+//     to paper over it.  Exec is the half a shared body indexes, and
+//     0 means the same thing in every design.
+// 34: EN, eager and memo slots are allocated in NAME order, and a
+//     helper fn's symbol carries its def's NAME.  All four took the
+//     order from a StrId -- a position in the enclosing design's
+//     string table, which `intern` assigns on a first-come basis, so
+//     two modules sharing a method name renumber each other between a
+//     fragment built alone and a design containing it.  Slot offsets
+//     are hashed into the signature, so a move files an object under
+//     a name no other design looks for; the helper SYMBOL was worse,
+//     since a reused object would not define the name its consumer
+//     asks for.  Found by audit after the same defect turned up twice
+//     in one day; slot numbering shifts for every design.
+// 33: reset-table ordinals are assigned by PORT NAME.  They came
+//     from `HashMap::iter`, so the order differed per map: two
+//     instances of one type numbered their ports differently and
+//     split into separate classes, and -- worse -- the process that
+//     EMITTED an object numbered them differently from the one that
+//     loaded it, so a compiled body indexed the table its loader had
+//     filled in another order.  Reachable only with two or more reset
+//     ports in one fragment (measured mean 1.02), which is why it
+//     surfaced first on a BVI output reset sitting beside a default
+//     one.  Table contents shift, so a rev-32 object is wrong here.
+// 32: the dedup signature covers a fragment's `import "BVI"' children
+//     (Verilog top + trs-vlt run key).  A BVI import is a prim with
+//     no InstEnv, so the `kids` component skipped it entirely; the
+//     compiled body is unaffected either way (BVI calls go through
+//     the per-ordinal site table), but the manifest names models per
+//     specialization, so a specialization has to mean one set of
+//     them.  Every signature shifts, BVI or not.
+// 31: affinity ranks come from each module's OWN rules and cones
+//     (layout_ranks_fragment_local) instead of the design's
+//     composition walk, so slot offsets inside a fragment no longer
+//     depend on who instantiated it.  Slot numbering shifts for every
+//     design.  Measured on a large design: the distinct 64B lines
+//     an edge touches came out within 0.1% of both design-ordered
+//     and unordered, so the packing is a wash -- and the sharing is
+//     not, with class overlap across a family of related designs
+//     going 28.6% -> 94.6%.
+// 30: every instance's region opens with a reset table -- one word
+//     per reset port, holding the design-global slot that drives it.
+//     Slot numbering therefore shifts, and shared-by-type code reads
+//     a reset port through that table instead of baking the node's
+//     address, so a rev-29 object would both misread the arena and
+//     carry the wrong design's reset wiring.
+// 29: one emission strategy.  The monolithic and rule-group-chunked
+//     paths are gone; every design is emitted as a design module plus
+//     one per module type, with boundary fns across every synthesis
+//     boundary.  Generated code differs for every design, and the
+//     TRS_AOT_ONE_MODULE / TRS_JIT_SHARD / TRS_BOUNDARY_MODULE
+//     fingerprint salts are gone with the flags.
+// 28: callback sites are named by two separate arguments (ordinal,
+//     site) instead of one bit-packed u64 token, so the trampoline
+//     signatures changed and the 16-bit site field -- which a
+//     boundary-heavy design could exhaust, taking the whole design's
+//     AOT compile with it -- is gone.  Each rule owns ONE call-site
+//     table spanning both its sched and its exec half, so a callee
+//     outlined across a synthesis boundary cannot report into a table
+//     its caller did not reserve its block in.  Rule bodies take
+//     their ordinal where they took a token base, and boundary fns
+//     take a site base in place of each packed token seed.
+pub const AOT_LAYOUT_REV: u64 = 38;
+
+/// The revision stamped into artifacts being EMITTED.  Equal to
+/// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV
+/// override, which lets the battery bake a deliberately mismatched
+/// artifact and witness the load-side refusal in both skew directions.
+/// Emit-side only by design: the CHECK side has no override, so the
+/// refusal is unbypassable.
+pub fn baked_layout_rev() -> u64 {
+    std::env::var("TRS_TEST_LAYOUT_REV")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(AOT_LAYOUT_REV)
+}
+/// How a caller reaches an outlined def-piece helper: a baked address
+/// (JIT: the helper engine compiled first) or a named symbol (AOT: ld
+/// resolves it inside the artifact .so).
+pub enum HelperRef {
+    Addr(usize),
+    Sym(String),
+}
+
+/// Outlined pieces available to a lowering: (module ir, def) ->
+/// (helper, result width, port params in signature order).
+pub type HelperMap = HashMap<(usize, StrId), (HelperRef, u32, Vec<(StrId, u32)>)>;
+
+/// One outlined def piece to compile as a helper function.
+#[derive(Clone)]
+pub struct HelperSpec {
+    /// module ir + def being outlined
+    pub mir: usize,
+    pub def: StrId,
+    pub width: u32,
+    /// symbol: hlp_<inst-sig hex>_<def id> (class-unique)
+    pub sym: String,
+    /// exemplar instance (frames, region context); the fn is shared by
+    /// every instance whose subtree sig matches
+    pub inst: usize,
+    /// per-instant memo: region slot base (stamp word, then value
+    /// words) — None for unstable pieces
+    pub memo_slot: Option<u32>,
+    /// unbound data-port reads: helper parameters, signature order
+    pub ports: Vec<(StrId, u32)>,
+}
+/// Edge-SSA emission plan (task #24 M2): everything the whole-edge
+/// inlining emitter needs beyond the FusedComp symbol lists.
+/// `nodes` mirrors the per-comp FusedComp node order but carries SPEC
+/// ORDINALS so sections lower inline; the read/write tables drive the
+/// online eviction that enforces the sharing doctrine.
+pub struct EdgeSsaPlan {
+    /// per composition: (is_exec, spec ordinal) in schedule order
+    pub nodes: Vec<Vec<(bool, usize)>>,
+    /// exec ordinals whose bodies stay OUTLINED (called as the
+    /// standalone exec_<class> symbol from the edge fn instead of
+    /// inlining): the link-time dial — monster bodies bound the
+    /// mega-function while small bodies keep full SSA sharing.
+    /// Outlined ordinals keep their symbols (excluded from elision)
+    /// and their class dedup.
+    pub outlined_execs: std::collections::HashSet<usize>,
+    /// per spec ordinal: prim instances its exec body writes
+    pub exec_writes: Vec<Vec<usize>>,
+    /// per (instance, def): prim instances its cone reads with NO
+    /// stability contract; defs ABSENT from this table must never be
+    /// cached across sections (conservative)
+    pub def_reads: HashMap<(usize, StrId), Vec<usize>>,
+    /// The sched half is CALLED, not inlined: the edge fn is a
+    /// test-and-call dispatcher over `sched_{module}_{rule}`, the
+    /// function the module's own object defines.  Cross-section
+    /// values travel through their CF/WF/eager slots (export_slots is
+    /// widened to all of them; hoists are empty — spine SSA cannot
+    /// dominate another function's body).  Combined with gating, a
+    /// skipped section's call is never even fetched.
+    ///
+    /// Always on but for a TRACED plan, whose recording slots shift
+    /// the whole layout, so its sections are not the module's code.
+    ///
+    /// It used to be a dial, engaged on the largest designs (one
+    /// monolithic edge fn wedges LLVM's early-cse<memssa>, superlinear
+    /// in function size) and measured at 0.68x of the inline shape on
+    /// Flute.  That cost is real and is accepted: where a module's
+    /// code LIVES is not a tuning question, and a design that carries
+    /// its own copy of a body cannot be assembled from the objects
+    /// its modules compiled to.
+    pub outline_sched: bool,
+    /// per composition, per section index: shared PURE defs to hoist
+    /// (computed unconditionally before the section — first-consumer
+    /// position; pure = no warning-emitting or callback reads, so the
+    /// unconditional evaluation is output-invisible)
+    pub hoists: Vec<Vec<Vec<(usize, StrId)>>>,
+    /// slots whose stores survive export elision (see EdgeCtx::exports)
+    pub export_slots: std::collections::HashSet<u32>,
+    /// per composition: arena valid-slot numbers of ungated wire ticks
+    /// to clear (store 0) at the END of the edge fn — the compiled form
+    /// of RWire/PulseWire::tick (the boxed `written` latch only feeds
+    /// VCD, where the interpreter runs ticks itself)
+    pub wire_clears: Vec<Vec<u32>>,
+    /// per composition: (value base slot, words) of ungated CReg ticks —
+    /// the compiled form of CReg::tick is a copy of the live value into
+    /// the registered value (arena words [base, base+w) -> [base+w,
+    /// base+2w)); the boxed per-port history only feeds VCD
+    pub creg_copies: Vec<Vec<(u32, u32)>>,
+    /// per composition: compiled dynamic-scheduling alternatives in
+    /// guard-evaluation order (first matching guard wins; none -> the
+    /// composition's own base row).  Empty everywhere = no dispatch.
+    pub alt_rows: Vec<Vec<AltRow>>,
+    /// per ROW, per spec ordinal: sched-section overrides for the
+    /// order-derived RuleSpec fields (inhibitors, owned-earlier
+    /// shares).  Base rows carry empty maps — a RuleSpec bakes the
+    /// BASE interleaving's values and is correct there.
+    pub sched_over: Vec<HashMap<usize, SchedOver>>,
+    /// per composition: packed trs_bram_tick argument triples of
+    /// ungated BRAM port ticks — the edge fn calls the helper through
+    /// the trs_bram_tick_cb pointer-global (filled at artifact load)
+    pub bram_ticks: Vec<Vec<[u64; 3]>>,
+    /// activity gating (single-composition designs): dirty-bitmap
+    /// geometry in the arena, None = gating not armed for this
+    /// artifact.  Bits [0, n_state_bits) are written prim instances;
+    /// bits [n_state_bits, n_state_bits + n_rules) are RULE bits (a
+    /// recomputed sched section sets its own bit for same-edge
+    /// CF-chain propagation; rule bits never survive the edge roll —
+    /// the epilogue writes only state bits into `next`).
+    pub gate: Option<GateLayout>,
+    /// per spec ordinal: the sched section's sensitivity mask as
+    /// (dirty word index, bit mask) pairs over the CURRENT dirty
+    /// words; None = ungateable (effectful/ported/boxed cone, or the
+    /// cone analysis declined) — the section always runs
+    pub gate_masks: Vec<Option<Vec<(u32, u64)>>>,
+    /// per spec ordinal: state bits its body may write (transitive,
+    /// conservative) — ORed into the NEXT-edge dirty words by the
+    /// edge epilogue when WF or last-edge WF is set (covers value
+    /// changes AND wire/bypass revert-to-default on the fire edge)
+    pub dirty_sync: Vec<Vec<(u32, u64)>>,
+    /// per spec ordinal: the same-cycle-visible subset (wires, CReg,
+    /// loopy/bypass FIFOs) — ORed into the CURRENT dirty words right
+    /// after the exec section when WF is set, so later-in-edge
+    /// readers see the write
+    pub dirty_bypass: Vec<Vec<(u32, u64)>>,
+}
+
+/// Arena geometry of the activity-gating dirty bitmaps.  Three
+/// consecutive regions: CURRENT dirty words (what sched guards test),
+/// NEXT dirty words (accumulates this edge's writes; rolled into
+/// CURRENT at the next edge's start), and last-WF bit words (one bit
+/// per spec ordinal, maintained by the epilogue).
+#[derive(Clone, Copy, Debug)]
+pub struct GateLayout {
+    pub cur_base: u32,
+    pub next_base: u32,
+    pub lastwf_base: u32,
+    /// dirty words per bitmap (state bits + rule bits)
+    pub words: u32,
+    /// last-WF words (ceil(n_rules/64)); allocated but unused since
+    /// the v1.5 scratch scheme (kept for geometry stability)
+    pub lastwf_words: u32,
+    /// first rule bit index (= number of state bits)
+    pub rule_bit_base: u32,
+    /// the shared write-mark scratch word (see PlanEnv::gate_scratch)
+    pub scratch: u32,
+}
+
+/// Pack one BRAM port tick into trs_bram_tick's (a0, a1, a2) args.
+pub fn bram_tick_args(
+    base: u32,
+    port_b: bool,
+    width: u32,
+    size: u64,
+    chunk_size: u32,
+    num_wens: u32,
+    dual: bool,
+) -> [u64; 3] {
+    [
+        base as u64 | (port_b as u64) << 32,
+        width as u64 | (chunk_size as u64) << 32,
+        size | (num_wens as u64) << 32 | (dual as u64) << 62,
+    ]
+}
+
+/// Compiled BRAM end-of-edge tick (the arena form of Bram::clk): the
+/// fused edge fn calls this through the trs_bram_tick_cb
+/// pointer-global once per BRAM port tick.  Layout per
+/// ArenaKind::Bram; args packed by bram_tick_args.  Must mirror the
+/// interpreter's Bram::clk exactly: out2 <- out rotation, pending-put
+/// latch, byte-enable lane merge, cross-port same-instant bypass,
+/// out-of-range -> undet (the WARNING printed at put time on the
+/// trampoline).
+///
+/// # Safety
+/// `arena` must be the design arena; the packed args must describe a
+/// BRAM block passB allocated inside it.
+pub unsafe extern "C" fn trs_bram_tick(arena: *mut u64, now: u64, a0: u64, a1: u64, a2: u64) {
+    let base = (a0 & 0xffff_ffff) as usize;
+    let port_b = a0 >> 32 & 1 != 0;
+    let width = (a1 & 0xffff_ffff) as u32;
+    let chunk = (a1 >> 32) as u32;
+    let size = a2 & 0xffff_ffff;
+    let num_wens = ((a2 >> 32) & 0x3fff_ffff) as u32;
+    let dual = a2 >> 62 & 1 != 0;
+    let w = (width.max(1) as usize).div_ceil(64);
+    let wenw = (num_wens.max(1) as usize).div_ceil(64);
+    let pw = 3 + wenw + 4 * w;
+    let me = base + if port_b { pw } else { 0 };
+    let other = base + if port_b { 0 } else { pw };
+    let (o_wens, o_val) = (3, 3 + wenw);
+    let (o_prev, o_out, o_out2) = (3 + wenw + w, 3 + wenw + 2 * w, 3 + wenw + 3 * w);
+    unsafe {
+        // single-limb fast path (width <= 64, one enable word — the
+        // overwhelmingly common BRAM shape): straight scalar loads and
+        // stores, no libc memcpy, word-level lane merge.  Semantics
+        // identical to the general path below, including the
+        // unconditional out2 rotation (the boxed clk rotates every
+        // tick and selfcheck compares that state).
+        if w == 1 && wenw == 1 {
+            *arena.add(me + o_out2) = *arena.add(me + o_out);
+            if *arena.add(me) != now {
+                return;
+            }
+            let addr = *arena.add(me + 1);
+            let wens = *arena.add(me + o_wens);
+            if addr >= size {
+                *arena.add(me + o_out) = 0xAAAA_AAAA_AAAA_AAAA;
+                mask_top(arena.add(me + o_out), width, 1);
+                return;
+            }
+            let daddr = base + pw * if dual { 2 } else { 1 } + addr as usize;
+            let other_hit = dual && *arena.add(other + 2) == now && *arena.add(other + 1) == addr;
+            if wens != 0 {
+                // collision warning: other port PUT (upd_at, not
+                // written_at) same addr this instant, overlapping
+                // lane, equal chunk (see BRAM_WARN)
+                if dual && *arena.add(other) == now && *arena.add(other + 1) == addr {
+                    let both = wens & *arena.add(other + o_wens);
+                    if both != 0 {
+                        let x = *arena.add(me + o_val) ^ *arena.add(other + o_val);
+                        let mut collide = false;
+                        for n in 0..num_wens {
+                            if both >> (n % 64) & 1 == 0 {
+                                continue;
+                            }
+                            let lo = n * chunk;
+                            if lo >= width {
+                                continue;
+                            }
+                            let len = chunk.min(width - lo);
+                            let m = if len >= 64 {
+                                u64::MAX
+                            } else {
+                                (1u64 << len) - 1
+                            };
+                            if (x >> lo) & m == 0 {
+                                collide = true;
+                            }
+                        }
+                        if collide {
+                            if let Some(f) = BRAM_WARN.get() {
+                                f(arena.add(base) as usize, addr);
+                            }
+                        }
+                    }
+                }
+                *arena.add(me + 2) = now;
+                *arena.add(me + o_prev) = if other_hit {
+                    *arena.add(other + o_prev)
+                } else {
+                    *arena.add(daddr)
+                };
+                // enabled-lane mask over the value word
+                let mut m = 0u64;
+                for n in 0..num_wens {
+                    if wens >> (n % 64) & 1 == 0 || n * chunk >= width {
+                        continue;
+                    }
+                    let lo = n * chunk;
+                    let len = chunk.min(width - lo);
+                    let lane = if len >= 64 {
+                        u64::MAX
+                    } else {
+                        ((1u64 << len) - 1) << lo
+                    };
+                    m |= lane;
+                }
+                let d = arena.add(daddr);
+                *d = *d & !m | *arena.add(me + o_val) & m;
+                // out's disabled lanes come from the just-latched
+                // prev — on a collided write that is the begin-of-
+                // instant value, not the merged memory word
+                // (bs_prim_mod_bram.h:487-501); prev == memory
+                // otherwise, so the words agree
+                *arena.add(me + o_out) = *arena.add(me + o_prev) & !m | *arena.add(me + o_val) & m;
+            } else {
+                *arena.add(me + o_out) = if other_hit {
+                    *arena.add(other + o_prev)
+                } else {
+                    *arena.add(daddr)
+                };
+            }
+            return;
+        }
+        // general path (wide data / >64 enables)
+        // out2 <- out (unconditional rotation, like the boxed clk)
+        std::ptr::copy_nonoverlapping(arena.add(me + o_out), arena.add(me + o_out2), w);
+        if *arena.add(me) != now {
+            return;
+        }
+        let addr = *arena.add(me + 1);
+        let wens_zero = (0..wenw).all(|i| *arena.add(me + o_wens + i) == 0);
+        if addr >= size {
+            // out-of-range: undet pattern, masked to width
+            for i in 0..w {
+                *arena.add(me + o_out + i) = 0xAAAA_AAAA_AAAA_AAAA;
+            }
+            mask_top(arena.add(me + o_out), width, w);
+            return;
+        }
+        let daddr = base + pw * if dual { 2 } else { 1 } + addr as usize * w;
+        // cross-port same-instant bypass: the other port wrote this
+        // address at this instant -> its pre-write value
+        let other_hit = dual && *arena.add(other + 2) == now && *arena.add(other + 1) == addr;
+        if !wens_zero {
+            // collision warning, wide shape (see the fast path / BRAM_WARN)
+            if dual
+                && *arena.add(other) == now
+                && *arena.add(other + 1) == addr
+                && BRAM_WARN.get().is_some()
+            {
+                let mut collide = false;
+                for n in 0..num_wens {
+                    let wi = (n / 64) as usize;
+                    let mine = *arena.add(me + o_wens + wi) >> (n % 64) & 1;
+                    let theirs = *arena.add(other + o_wens + wi) >> (n % 64) & 1;
+                    if mine == 0 || theirs == 0 {
+                        continue;
+                    }
+                    let lo = (n * chunk) as usize;
+                    if lo >= width as usize {
+                        continue;
+                    }
+                    let len = chunk.min(width - n * chunk) as usize;
+                    let mut b = lo;
+                    let mut eq = true;
+                    while b < lo + len {
+                        let w_i = b / 64;
+                        let off = b % 64;
+                        let take = (64 - off).min(lo + len - b);
+                        let m = if take >= 64 {
+                            u64::MAX
+                        } else {
+                            ((1u64 << take) - 1) << off
+                        };
+                        if (*arena.add(me + o_val + w_i) ^ *arena.add(other + o_val + w_i)) & m != 0
+                        {
+                            eq = false;
+                            break;
+                        }
+                        b += take;
+                    }
+                    if eq {
+                        collide = true;
+                        break;
+                    }
+                }
+                if collide {
+                    (BRAM_WARN.get().unwrap())(arena.add(base) as usize, addr);
+                }
+            }
+            // write: prev <- (bypass ? other.prev : data), then merge
+            // the enabled lanes of upd_val into data word-wise, out <-
+            // merged
+            *arena.add(me + 2) = now;
+            if other_hit {
+                std::ptr::copy_nonoverlapping(arena.add(other + o_prev), arena.add(me + o_prev), w);
+            } else {
+                std::ptr::copy_nonoverlapping(arena.add(daddr), arena.add(me + o_prev), w);
+            }
+            // out starts from the just-latched prev: its DISABLED
+            // lanes must show the begin-of-instant value on a collided
+            // write, not the merged memory word
+            // (bs_prim_mod_bram.h:487-501); prev == memory otherwise
+            std::ptr::copy_nonoverlapping(arena.add(me + o_prev), arena.add(me + o_out), w);
+            for n in 0..num_wens {
+                let lane = *arena.add(me + o_wens + (n / 64) as usize) >> (n % 64) & 1;
+                if lane == 0 {
+                    continue;
+                }
+                if n * chunk >= width {
+                    continue;
+                }
+                let lo = (n * chunk) as usize;
+                let len = chunk.min(width - n * chunk) as usize;
+                // word-level merge over [lo, lo+len) into memory AND
+                // out: the bit-by-bit loop here was 35% of
+                // TrafficBRAM's model compute
+                let mut b = lo;
+                while b < lo + len {
+                    let wi = b / 64;
+                    let off = b % 64;
+                    let take = (64 - off).min(lo + len - b);
+                    let m = if take >= 64 {
+                        u64::MAX
+                    } else {
+                        ((1u64 << take) - 1) << off
+                    };
+                    let v = *arena.add(me + o_val + wi) & m;
+                    let d = arena.add(daddr + wi);
+                    *d = *d & !m | v;
+                    let o = arena.add(me + o_out + wi);
+                    *o = *o & !m | v;
+                    b += take;
+                }
+            }
+        } else {
+            // read: bypassed pre-write value or the stored data
+            let src = if other_hit { other + o_prev } else { daddr };
+            std::ptr::copy_nonoverlapping(arena.add(src), arena.add(me + o_out), w);
+        }
+    }
+}
+
+/// Mask the top word of a `words`-long little-endian value to `width`.
+///
+/// # Safety
+/// `p` must point at `words` valid u64s.
+unsafe fn mask_top(p: *mut u64, width: u32, words: usize) {
+    let rem = width % 64;
+    if width != 0 && rem != 0 {
+        unsafe { *p.add(words - 1) &= (1u64 << rem) - 1 };
+    }
+}
+
+/// One node of a fused per-composition edge function.
+/// One compiled dynamic-scheduling alternative of a composition: the
+/// edge fn's prologue evaluates `guard` against pre-edge state
+/// (registers only, by the SchedAlt exporter contract) and branches to
+/// the alternative's body — the compiled twin of the interpreter's
+/// per-edge selection.
+#[derive(Clone)]
+pub struct AltRow {
+    /// row index into EdgeSsaPlan::nodes/hoists (variant rows are
+    /// appended after the per-composition base rows)
+    pub row: usize,
+    /// instance the guard expression is scoped to
+    pub guard_inst: usize,
+    /// the guard, first-match-wins in declaration order
+    pub guard: trs_ir::Expr,
+}
+
+/// Order-derived RuleSpec overrides for a sched section emitted inside
+/// an alternative's body: ME inhibitors follow the interleaving, and
+/// owned-earlier share claims only hold for defs whose owner entry
+/// runs earlier in THIS interleaving.
+#[derive(Clone)]
+pub struct SchedOver {
+    pub inhibit_slots: Vec<u32>,
+    pub shared: Vec<StrId>,
+}
+
+pub enum FusedNode {
+    /// sched fn + its (region base, ordinal) args
+    Sched(HelperRef, u64, u32),
+    /// exec fn + its (region base, ordinal) args
+    Exec(HelperRef, u64, u32),
+}
+
+/// A composition's fused edge: EN slots to zero, then the node
+/// sequence as DIRECT calls — replaces the interpreter's per-node
+/// walk (match + atomic cell load + indirect call, ~77M visits on
+/// sudoku).  Returns nonzero when a body aborted (reserved path;
+/// $finish/$stop complete the edge and return 0).
+pub struct FusedComp {
+    pub en_slots: Vec<u32>,
+    pub now_slot: u32,
+    pub nodes: Vec<FusedNode>,
+}

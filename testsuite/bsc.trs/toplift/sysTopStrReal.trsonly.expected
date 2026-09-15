@@ -1,0 +1,15 @@
+# trs-only golden-compared sweep design: no reference Bluesim
+# executable exists by design (classic Bluesim refuses every
+# top-level parameter).  The sweep gates that refusal tag, links and
+# runs with the bindings below, byte-compares stdout against
+# <top>.out.expected, and ASSERTS the engine outcome.
+#
+# The String and the Real are the point: both are indistinguishable
+# from a same-width Bit vector in the .bir without `Port::vtype', so
+# a binder that ignores it either refuses them or reads the text the
+# wrong way.
+refuse=G0099
+bind=nm=hello world
+bind=r=1.5
+bind=k=42
+engine=aot

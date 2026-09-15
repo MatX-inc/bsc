@@ -1,0 +1,8423 @@
+//! Hybrid JIT (feature `jit`, runtime-gated by TRS_JIT=1): eligible
+//! rules run as LLVM-compiled functions inside the interpreter's event
+//! loop, over a shared u64 arena (see trs-codegen::lower).
+//!
+//! v1 scope — all-or-nothing: the whole design runs compiled or the
+//! whole design stays interpreted.  A composition is compilable when it
+//! has no early (clock-crossing) rules and every schedule node is a
+//! rule (not a method) whose CF/WF cone and body lower successfully:
+//! plain ≤64-bit sync registers, reset-port reads, the scalar PrimOps,
+//! and $display-family statements whose arguments re-evaluate safely at
+//! callback time.  VCD tracing disables the JIT (def-value recording
+//! and per-prim dump hooks want the interpreted paths).
+
+use super::*;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock};
+
+use prim::ArenaKind;
+use trs_codegen::abi::{
+    decode_protos, encode_protos, CompiledExec, CompiledSched, FArgSpec, FnProtos, ForeignCb,
+    FusedComp, FusedNode, HelperMap, HelperRef, HelperSpec, InstEnv, PlanEnv, PrimCb, RecMeth,
+    RuleSpec, AOT_LAYOUT_REV,
+};
+#[cfg(feature = "jit")]
+use trs_codegen::lower::{
+    compile_execs, compile_fused, compile_helpers, compile_scheds, trial_lower,
+};
+
+/// TRS_PROF=1: cheap wall-time accounting of where a JIT/AOT run
+/// spends its time (trampoline vs dispatch vs ticks).  Off = one
+/// cached-bool branch per site.
+pub(crate) mod prof {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::OnceLock;
+    pub static PRIM_NS: AtomicU64 = AtomicU64::new(0);
+    pub static PRIM_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static FOREIGN_NS: AtomicU64 = AtomicU64::new(0);
+    pub static FOREIGN_CALLS: AtomicU64 = AtomicU64::new(0);
+    pub static DISPATCH_NS: AtomicU64 = AtomicU64::new(0);
+    pub static TICK_NS: AtomicU64 = AtomicU64::new(0);
+    /// per prim-method call counts (TRS_PROF=1), keyed Class.method
+    pub static PRIM_HIST: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> =
+        std::sync::Mutex::new(None);
+    /// per prim-class end-of-edge tick counts (TRS_PROF=1): the tick
+    /// loop walks every residual (not-compiled-into-the-edge) ticked
+    /// prim each cycle — attribution for that mass lives here
+    pub static TICK_HIST: std::sync::Mutex<Option<std::collections::HashMap<String, u64>>> =
+        std::sync::Mutex::new(None);
+    pub fn hist_bump(
+        h: &std::sync::Mutex<Option<std::collections::HashMap<String, u64>>>,
+        key: &str,
+    ) {
+        let mut g = h.lock().unwrap();
+        let m = g.get_or_insert_with(Default::default);
+        if let Some(n) = m.get_mut(key) {
+            *n += 1;
+        } else {
+            m.insert(key.to_string(), 1);
+        }
+    }
+    pub fn on() -> bool {
+        static P: OnceLock<bool> = OnceLock::new();
+        *P.get_or_init(|| std::env::var_os("TRS_PROF").is_some())
+    }
+    pub fn add(cell: &AtomicU64, t0: std::time::Instant) {
+        cell.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
+    pub fn dump(total: std::time::Duration) {
+        if let Some(h) = PRIM_HIST.lock().unwrap().as_ref() {
+            let mut v: Vec<_> = h.iter().collect();
+            v.sort_by_key(|(_, &n)| std::cmp::Reverse(n));
+            for (meth, n) in v.into_iter().take(12) {
+                eprintln!("trs prof:   {n:>9}  .{meth}");
+            }
+        }
+        if let Some(h) = TICK_HIST.lock().unwrap().as_ref() {
+            let mut v: Vec<_> = h.iter().collect();
+            v.sort_by_key(|(_, &n)| std::cmp::Reverse(n));
+            for (class, n) in v.into_iter().take(12) {
+                eprintln!("trs prof:   {n:>9}  tick {class}");
+            }
+        }
+        let g = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        eprintln!(
+            "trs prof: total {:.3}s | dispatch {:.3}s | ticks {:.3}s | \
+             prim cb {:.3}s ({} calls) | foreign cb {:.3}s ({} calls)",
+            total.as_secs_f64(),
+            g(&DISPATCH_NS) as f64 / 1e9,
+            g(&TICK_NS) as f64 / 1e9,
+            g(&PRIM_NS) as f64 / 1e9,
+            g(&PRIM_CALLS),
+            g(&FOREIGN_NS) as f64 / 1e9,
+            g(&FOREIGN_CALLS),
+        );
+    }
+}
+
+/// Prim-method trampoline: unmarshal per the call-site table, invoke
+/// the boxed prim through the interpreter, marshal the result back.
+pub(crate) unsafe extern "C" fn jit_prim_cb(
+    env: *mut core::ffi::c_void,
+    ord: u32,
+    site: u32,
+    args: *const u64,
+    out: *mut u64,
+) {
+    let _t0 = prof::on().then(std::time::Instant::now);
+    let interp = &mut *(env as *mut Interp);
+    let (ordinal, local) = (ord as usize, site as usize);
+    let lz = interp
+        .jit_shared
+        .as_ref()
+        .expect("jit prim cb without plan")
+        .clone();
+    // one table per rule, both halves numbered in it
+    let pc = &lz.protos[ordinal].prims[local];
+    let (inst, method, port, ret_width, is_action) =
+        (pc.inst, pc.method, pc.port, pc.ret_width, pc.is_action);
+    // pc borrows the OWNED Arc clone, so it outlives every interp use
+    // below — no arg_widths copy needed (this trampoline runs per
+    // boxed prim access; a Vec clone + a Vec per argument showed as
+    // the malloc traffic under TrafficBRAM's 403k calls)
+    let mut argv = Vec::with_capacity(pc.arg_widths.len());
+    let mut off = 0usize;
+    for &w in &pc.arg_widths {
+        // physical layout is w.max(1) words per argument on BOTH sides
+        // of the ABI — a zero-width argument still occupies one (zero)
+        // word (review finding: reading words.max(1) while advancing by
+        // the logical count walked past the allocation)
+        let words = ((w.max(1) as usize) + 63) / 64;
+        // TRUE logical width: a zero-width prim arg must reach the prim
+        // as the interp's width-0 Value (from_limb_slice masks and keeps
+        // single-limb values off the heap)
+        argv.push(Value::from_limb_slice(
+            w,
+            std::slice::from_raw_parts(args.add(off), words),
+        ));
+        off += words;
+    }
+    crate::prim::FROM_COMPILED.with(|c| c.set(Some((ord, site))));
+    if method == trs_codegen::abi::GATE_OUT_METHOD {
+        // compiled Expr::Gate on a prim child: not a method — answer
+        // gate_out(), the interp's exact read
+        let g = match &interp.insts[inst].kind {
+            InstKind::Prim(p) => p.gate_out() as u64,
+            _ => 1,
+        };
+        *out = g;
+    } else if is_action {
+        interp.call_action(inst, method, port, &argv);
+    } else {
+        let v = interp.call_value(inst, method, port, &argv, ret_width);
+        let words = ((ret_width.max(1) as usize) + 63) / 64;
+        let dst = std::slice::from_raw_parts_mut(out, words);
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = v.limbs64().get(i).copied().unwrap_or(0);
+        }
+    }
+    crate::prim::FROM_COMPILED.with(|c| c.set(None));
+    if let Some(t0) = _t0 {
+        prof::add(&prof::PRIM_NS, t0);
+        prof::PRIM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // the gate sentinel is no string id — interp.s() would index OOB
+        let meth = if method == trs_codegen::abi::GATE_OUT_METHOD {
+            "$gate_out".to_string()
+        } else {
+            interp.s(method).to_string()
+        };
+        // keyed Class.method: the class decides the fix shape (e.g.
+        // BypassWire has no arena kind — every access bounces by
+        // construction — where an RWire bounce means a declined site)
+        let class = match &interp.insts[inst].kind {
+            InstKind::Prim(p) => p.class_name(),
+            _ => "user",
+        };
+        prof::hist_bump(&prof::PRIM_HIST, &format!("{class}.{meth}"));
+    }
+}
+
+/// One dispatch step of a compiled composition, in entries order (rule
+/// ordinals resolved through LazyJit at dispatch time).
+pub(crate) enum JitNode {
+    Sched(u32),
+    Exec(u32),
+}
+
+/// Where a --code artifact lives: a shared object on disk, or the
+/// process's own image (artifact-as-executable: the design objects
+/// are linked INTO the exe with --export-dynamic, and dlopen(NULL)
+/// resolves trs_snap / the edge fns from the global scope).
+#[derive(Clone, Debug)]
+pub enum ArtifactSource {
+    Path(std::path::PathBuf),
+    This,
+}
+
+impl ArtifactSource {
+    pub(crate) fn open(&self) -> Result<libloading::Library, String> {
+        match self {
+            ArtifactSource::Path(so) => {
+                // dlopen treats a bare filename as a library-search-
+                // path lookup, NOT a cwd file (same fix as load_bdpi)
+                let so_owned;
+                let so = if so.to_str().is_some_and(|s| !s.contains('/')) {
+                    so_owned = std::path::Path::new(".").join(so);
+                    so_owned.as_path()
+                } else {
+                    so
+                };
+                unsafe { libloading::Library::new(so).map_err(|e| e.to_string()) }
+            }
+            ArtifactSource::This => Ok(libloading::os::unix::Library::this().into()),
+        }
+    }
+    pub(crate) fn display(&self) -> String {
+        match self {
+            ArtifactSource::Path(so) => so.display().to_string(),
+            ArtifactSource::This => "<self>".to_string(),
+        }
+    }
+}
+
+/// What prime()'s planning pass should do with the compiled form:
+/// JIT in-process (default), emit a persistent artifact .so (trs
+/// link), or load one (trs run --code).
+#[derive(Default)]
+pub(crate) enum JitRequest {
+    #[default]
+    Run,
+    Emit {
+        so: std::path::PathBuf,
+        exe: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    },
+    Load {
+        src: ArtifactSource,
+    },
+}
+
+/// Shared compilation state: eligibility was proven by a synchronous
+/// trial lowering at prime(); SCHED functions compile eagerly (they
+/// run on every edge — sudoku's scheds are 4% of the IR thanks to
+/// eager-slot cone sharing), and EXEC bodies fill per-rule cells on
+/// background workers.  An Exec node whose cell is cold interprets the
+/// body over the same arena-backed state (the interpreter's Def
+/// evaluation falls through to the arena slots), so no global mode
+/// flip exists.
+pub(crate) struct LazyJit {
+    /// owned snapshot the compile threads read (decouples lifetimes
+    /// from the Interp)
+    /// None when every body came preloaded from the artifact (the
+    /// design is only read to compile cold cells) — skipping the
+    /// O(design) clone on the pure-Load startup path.
+    design: Option<Design>,
+    insts: HashMap<usize, InstEnv>,
+    specs: Vec<RuleSpec>,
+    now_slot: u32,
+    /// per-ordinal exec args: (region base index, token base) — the
+    /// compiled body is shared across instances of a module type
+    pub(crate) exec_args: Vec<(u64, u32)>,
+    /// per-ordinal call-site tables (from trial_lower; per-ordinal even
+    /// when the compiled body is shared, because prim targets differ)
+    protos: Vec<FnProtos>,
+    /// exec dedup classes: (representative ordinal, member ordinals)
+    classes: Vec<(usize, Vec<usize>)>,
+    /// outlined def-piece helpers (baked addresses; shared JIT/AOT
+    /// lowering — AOT uses symbol refs at emit time instead)
+    helpers: Arc<HelperMap>,
+    /// eagerly compiled sched fns, one per rule ordinal
+    pub(crate) scheds: Vec<CompiledSched>,
+    /// batch index counter for body workers
+    next_batch: std::sync::atomic::AtomicUsize,
+    batch_size: usize,
+    /// bodies not yet compiled (0 = fully warm: dispatch skips the
+    /// latch/bridge machinery entirely)
+    cold: std::sync::atomic::AtomicUsize,
+    /// teardown flag: workers stop claiming batches so JitPlans::drop
+    /// can join them before the model .so is dlclosed
+    stop: std::sync::atomic::AtomicBool,
+    cells: Vec<OnceLock<CompiledExec>>,
+}
+
+/// The symbol an exec CLASS is emitted under: module type and rule.
+///
+/// Neither is a position in this design.  A design-wide instance index
+/// or schedule ordinal would name the same code differently in every
+/// design that instantiates the type, which is precisely what stops a
+/// per-type object from being reused.  A module type compiles to one
+/// object, so its own name is the whole discriminator -- and a name a
+/// build system can PREDICT from the .bir is what removes the need to
+/// discover object names at all.
+///
+/// `named` is false on the artifact LOAD path, which takes its dedup
+/// classes from the artifact and reads exec fns out of the ordinal
+/// table rather than by name.  Naming nothing is better than naming a
+/// class the emitter never called that.
+fn exec_class_label(
+    d: &trs_ir::Design,
+    mir: usize,
+    rule_idx: usize,
+    named: bool,
+) -> String {
+    if !named {
+        return String::new();
+    }
+    let name = |id: u32| d.strings.get(id as usize).map(String::as_str).unwrap_or("");
+    let m = &d.modules[mir];
+    let r = m.rules.get(rule_idx).map(|r| name(r.name)).unwrap_or("");
+    // LLVM takes most bytes in a symbol, but the artifact's symbols are
+    // also read by tools and by a human diffing two objects; keep them
+    // to the identifier characters bsc itself uses
+    let ok = |s: &str| -> String {
+        s.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '.' })
+            .collect()
+    };
+    format!("{}_{}", ok(name(m.name)), ok(r))
+}
+
+impl LazyJit {
+    pub(crate) fn exec(&self, ord: usize) -> Option<&CompiledExec> {
+        self.cells[ord].get()
+    }
+
+    pub(crate) fn any_cold(&self) -> bool {
+        self.cold.load(Ordering::Acquire) != 0
+    }
+
+    /// No compile tier without `jit`: cells stay cold (and are never
+    /// cold in practice — artifact loads pre-fill every cell, and the
+    /// planner bails before spawning workers otherwise).
+    #[cfg(not(feature = "jit"))]
+    fn work(&self) {}
+
+    /// Worker loop: claim CLASS batches, compile one representative
+    /// per class, fill every member's cell with the shared body and
+    /// its own call-site tables.
+    #[cfg(feature = "jit")]
+    fn work(&self) {
+        loop {
+            if self.stop.load(Ordering::Acquire) {
+                return;
+            }
+            let b = self.next_batch.fetch_add(1, Ordering::AcqRel);
+            let lo = b * self.batch_size;
+            if lo >= self.classes.len() {
+                return;
+            }
+            let hi = (lo + self.batch_size).min(self.classes.len());
+            let env = PlanEnv {
+                d: self
+                    .design
+                    .as_ref()
+                    .expect("cold compile cell without a stashed design"),
+                insts: &self.insts,
+                now_slot: self.now_slot,
+                gate_scratch: None,
+            };
+            let reps: Vec<RuleSpec> = (lo..hi)
+                .map(|c| self.specs[self.classes[c].0].clone())
+                .collect();
+            let compiled = compile_execs(
+                &env,
+                &reps,
+                Some(&self.helpers),
+                jit_foreign_cb,
+                jit_prim_cb,
+            )
+            .unwrap_or_else(|e| {
+                // trial_lower proved eligibility at prime; only an
+                // LLVM-level failure can land here
+                panic!("trs jit: compile of proven-eligible bodies failed: {e}")
+            });
+            for (c, cr) in (lo..hi).zip(compiled) {
+                for &m in &self.classes[c].1 {
+                    let _ = self.cells[m].set(CompiledExec { exec: cr.exec });
+                }
+            }
+            self.cold.fetch_sub(hi - lo, Ordering::AcqRel);
+        }
+    }
+}
+
+/// Per-comp compiled-tick lists + the covered tick-index sets (see
+/// prim_tick_coverage).
+pub(crate) struct TickCoverage {
+    pub(crate) wire_clears: Vec<Vec<u32>>,
+    pub(crate) creg_copies: Vec<Vec<(u32, u32)>>,
+    pub(crate) bram_ticks: Vec<Vec<[u64; 3]>>,
+    /// ticks covered by a level-1 artifact (wire clears only)
+    pub(crate) covered_wire: Vec<std::collections::HashSet<usize>>,
+    /// ticks covered by a level-2 artifact (wires + cregs + brams)
+    pub(crate) covered_all: Vec<std::collections::HashSet<usize>>,
+}
+
+/// Compiled state carried by the Stepper.
+pub(crate) struct JitPlans {
+    /// the shared state arena; register prims and Interp::jit_arena_ptr
+    /// hold raw pointers into this allocation (heap address is stable)
+    _arena: Box<[u64]>,
+    arena_ptr: *mut u64,
+    /// per-composition dispatch lists (parallel to Stepper::rcomps)
+    pub(crate) comp_nodes: Vec<Option<Vec<JitNode>>>,
+    /// EN slots to zero before dispatching a composition (the C++
+    /// schedule zeroes every enable at the top of the pass)
+    pub(crate) en_slots: Vec<u32>,
+    /// slot stamped with the current instant at every edge
+    pub(crate) now_slot: u32,
+    /// lazy compile cells (also reachable from Interp::jit_shared for
+    /// the callbacks)
+    pub(crate) lazy: Arc<LazyJit>,
+    /// background body-compile workers: joined on drop (they execute
+    /// code linked into the interactive model .so, which bluetcl
+    /// dlcloses right after bk_shutdown — a still-running worker then
+    /// executes unmapped code; short jit sessions crashed 5/5)
+    workers: Vec<std::thread::JoinHandle<()>>,
+    /// rule ordinal -> (instance, rule name, WF slot) for the
+    /// interpreted-body fallback while its cell is cold
+    pub(crate) exec_fallback: Vec<(usize, RuleRef, u32)>,
+    /// per composition: rc.ticks indices whose work is compiled INTO
+    /// the loaded edge fns (wire valid-bit clears) — the interp tick
+    /// loop skips them when the fused fn ran, and the central-loop
+    /// preconditions ignore them.  Empty unless an artifact with
+    /// trs_edge_wire_ticks=1 loaded.
+    pub(crate) covered_ticks: Vec<std::collections::HashSet<usize>>,
+    /// the artifact's RunCore boot descriptor (sidecar v2 sections),
+    /// parsed under TRS_RUNCORE_CHECK for the central-loop engage
+    /// witness; None when unchecked, absent, or v1
+    pub(crate) runcore_desc: Option<RunCoreDesc>,
+    /// fused per-composition edge fns (task #17): compiled once all
+    /// bodies are warm; 0 = composition not fused (fall back to the
+    /// node walk).  fn(arena, env, now) -> i32 (nonzero = abort;
+    /// $finish/$stop complete the edge and return 0).
+    pub(crate) fused: std::sync::OnceLock<Vec<usize>>,
+}
+
+impl Drop for JitPlans {
+    fn drop(&mut self) {
+        // stop is per-BATCH: at most one in-flight class compile per
+        // worker delays the join (ms-scale)
+        self.lazy.stop.store(true, Ordering::Release);
+        for h in self.workers.drain(..) {
+            let _ = h.join();
+        }
+    }
+}
+
+impl JitPlans {
+    /// Promote the schedule from data to code: one direct-call edge fn
+    /// per composition.  Requires every body cell warm (the fused code
+    /// bakes cell addresses).  Failure leaves the node walk in place.
+    pub(crate) fn try_fuse(&self) {
+        if std::env::var_os("TRS_NO_FUSION").is_some() {
+            // still resolve the OnceLock: leaving it empty made the
+            // dispatch guard re-enter here — a getenv PER EDGE for the
+            // whole run, the trs/14 bug pattern (per-event-tax audit,
+            // finding 1).  Zero entries = "nothing fused", the same
+            // state the no-jit build uses.
+            let _ = self.fused.get_or_init(|| vec![0; self.comp_nodes.len()]);
+            return;
+        }
+        // no compile tier without `jit`: artifact-provided fused fns
+        // pre-filled the cell at plan build; anything else stays on
+        // the node walk
+        #[cfg(not(feature = "jit"))]
+        let _ = self.fused.get_or_init(|| vec![0; self.comp_nodes.len()]);
+        #[cfg(feature = "jit")]
+        let _ = self.fused.get_or_init(|| {
+            let comps: Vec<FusedComp> = self
+                .comp_nodes
+                .iter()
+                .map(|nodes| FusedComp {
+                    en_slots: self.en_slots.clone(),
+                    now_slot: self.now_slot,
+                    nodes: nodes
+                        .as_ref()
+                        .map(|ns| {
+                            ns.iter()
+                                .map(|n| match *n {
+                                    JitNode::Sched(o) => {
+                                        let (b, t) = self.lazy.exec_args[o as usize];
+                                        FusedNode::Sched(
+                                            trs_codegen::abi::HelperRef::Addr(
+                                                self.lazy.scheds[o as usize].sched as usize,
+                                            ),
+                                            b,
+                                            t,
+                                        )
+                                    }
+                                    JitNode::Exec(o) => {
+                                        let (b, t) = self.lazy.exec_args[o as usize];
+                                        FusedNode::Exec(
+                                            trs_codegen::abi::HelperRef::Addr(
+                                                self.lazy.cells[o as usize]
+                                                    .get()
+                                                    .expect("fuse before warm")
+                                                    .exec
+                                                    as usize,
+                                            ),
+                                            b,
+                                            t,
+                                        )
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
+                .collect();
+            match compile_fused(&comps) {
+                Ok(addrs) => {
+                    if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                        eprintln!("trs jit: fused {} compositions", addrs.len());
+                    }
+                    addrs
+                }
+                Err(e) => {
+                    if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                        eprintln!("trs jit: fusion off ({e})");
+                    }
+                    vec![0; self.comp_nodes.len()]
+                }
+            }
+        });
+    }
+}
+
+impl JitPlans {
+    pub(crate) fn arena_ptr(&self) -> *mut u64 {
+        self.arena_ptr
+    }
+}
+
+/// The callback compiled code uses for foreign statements: rebuild
+/// the Arg list from the call-site spec (numeric args arrive as word
+/// runs, strings ride the table), dispatch through the interpreter's
+/// foreign machinery, and marshal a task's result back.  A nonzero
+/// return aborts the compiled edge (stop_bb) — reserved for genuine
+/// aborts, never $finish/$stop.
+pub(crate) unsafe extern "C" fn jit_foreign_cb(
+    env: *mut core::ffi::c_void,
+    ord: u32,
+    site: u32,
+    args: *const u64,
+    out: *mut u64,
+) -> i32 {
+    let _t0 = prof::on().then(std::time::Instant::now);
+    let interp = &mut *(env as *mut Interp);
+    let (ordinal, local) = (ord as usize, site as usize);
+    let lz = interp
+        .jit_shared
+        .as_ref()
+        .expect("jit foreign cb without plan")
+        .clone();
+    // one table per rule, both halves numbered in it
+    let fs = &lz.protos[ordinal].foreign[local];
+    let (inst, func, ret_width) = (fs.inst, fs.func, fs.ret_width);
+    // per-Interp scratch: the argv spine survives across calls (its
+    // element drops still run — Value buffers go with A3)
+    let mut argv = std::mem::take(&mut interp.foreign_argv);
+    argv.clear();
+    argv.reserve(fs.args.len());
+    let mut off = 0usize;
+    for a in &fs.args {
+        match *a {
+            FArgSpec::Str(sid) => {
+                // Arc-interned once per distinct string id: a clone is
+                // a refcount bump, not a heap copy
+                argv.push(Arg::Str(interp.arg_str(sid)));
+            }
+            FArgSpec::Num { width, signed } => {
+                let w = width;
+                let words = ((w.max(1) as usize) + 63) / 64;
+                // the TRUE width, zero included: the formatter must see
+                // the interp's width-0 Value for zero-width args, not a
+                // width-1 impostor (from_limb_slice masks the buffer
+                // word and keeps single-limb values off the heap)
+                let limbs = std::slice::from_raw_parts(args.add(off), words);
+                argv.push(Arg::Val(Value::from_limb_slice(w, limbs), signed));
+                off += words;
+            }
+            FArgSpec::Real => {
+                // one word of f64 bits -> the interp's Arg::Real, so
+                // %f/%e/%g formatting is byte-identical
+                let word = *args.add(off);
+                argv.push(Arg::Real(f64::from_bits(word)));
+                off += 1;
+            }
+            FArgSpec::StrDyn => {
+                // one word of string id (static or runtime-interned)
+                // -> the interp's Arg::Str, through the same Arc cache
+                // (dyn ids are stable once interned)
+                let word = *args.add(off);
+                argv.push(Arg::Str(interp.arg_str(word as u32)));
+                off += 1;
+            }
+        }
+    }
+    if func == trs_codegen::abi::STRING_CONCAT_FUNC {
+        // compiled PrimOp::StringConcat: concatenate the resolved
+        // texts and intern per evaluation, the interp's exact behavior
+        // (func is a sentinel, not a string id — resolve nothing)
+        let mut text = String::new();
+        for a in &argv {
+            if let Arg::Str(s) = a {
+                text.push_str(s);
+            }
+        }
+        let id = interp.intern_dyn(text);
+        *out = id as u64;
+        argv.clear();
+        interp.foreign_argv = argv;
+        if let Some(t0) = _t0 {
+            prof::add(&prof::FOREIGN_NS, t0);
+            prof::FOREIGN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        return 0;
+    }
+    // task name + %m location through reused per-Interp buffers: no
+    // per-call allocation (loc is "top[.path]", fname a table borrow —
+    // both copied into scratch because foreign_action takes &mut self)
+    let mut fname = std::mem::take(&mut interp.fname_buf);
+    fname.clear();
+    fname.push_str(interp.s(func));
+    let mut loc = std::mem::take(&mut interp.loc_buf);
+    loc.clear();
+    loc.push_str("top");
+    let p = &interp.insts[inst].path;
+    if !p.is_empty() {
+        loc.push('.');
+        loc.push_str(p);
+    }
+    if ret_width == 0 {
+        interp.foreign_action(&fname, &argv, &loc);
+    } else {
+        let v = interp.foreign_value(&fname, &argv, ret_width, &loc);
+        let words = ((ret_width.max(1) as usize) + 63) / 64;
+        let dst = std::slice::from_raw_parts_mut(out, words);
+        for (i, d) in dst.iter_mut().enumerate() {
+            *d = v.limbs64().get(i).copied().unwrap_or(0);
+        }
+    }
+    // return the scratch (the task may have re-entered and taken fresh
+    // buffers — mem::take left valid empties, so this only upgrades
+    // capacity back)
+    argv.clear();
+    interp.foreign_argv = argv;
+    interp.fname_buf = fname;
+    interp.loc_buf = loc;
+    if let Some(t0) = _t0 {
+        prof::add(&prof::FOREIGN_NS, t0);
+        prof::FOREIGN_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    // $finish/$stop do NOT abort compiled code: the reference runs the
+    // in-flight edge (and the finishing rule's remaining statements) TO
+    // COMPLETION — post-finish output is gated inside foreign_action
+    // (dollar_display.cxx family) and the runtime loops stop at the
+    // slice boundary.  The nonzero return -> stop_bb path is reserved
+    // for genuine aborts; nothing requests one today.
+    0
+}
+
+/// Body-splitting cone analysis: child classification for one module
+/// type (uniform across its instances).
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum ChildClass {
+    Reg,
+    CfgReg,
+    Wire,
+    Fifo { loopy: bool },
+    Other,
+}
+
+/// Child resolution for the cone analyzer: an arena-backed prim, a
+/// user submodule (recurse into its method cones), or opaque.
+pub(crate) enum ChildRef {
+    Prim(ChildClass),
+    User(usize),
+    Opaque,
+}
+
+/// Per-def piece statistics (see select_outlined).
+#[derive(Clone)]
+pub(crate) struct PieceInfo {
+    pub eff: u32,
+    pub outlinable: bool,
+    pub stable: bool,
+    pub outlined: bool,
+    /// unbound data-port reads in the piece: helper parameters (v2);
+    /// nonempty => no per-instant memo (value is per-call)
+    pub ports: Vec<StrId>,
+}
+
+/// Bottom-up outline selection over a module's def DAG, recursing
+/// through user-child value-method cones (callee Method.result/ready;
+/// callee Port reads must be bound method args).  eff counts each
+/// transitive non-outlined def once (SSA-memoized lowering cost);
+/// outlined children are unit-cost calls.
+pub(crate) struct ConeAnalyzer<'a> {
+    pub d: &'a Design,
+    /// (mir, child instance name) -> resolution via exemplar instances
+    pub kind: &'a dyn Fn(usize, StrId) -> ChildRef,
+    pub thresh: u32,
+    memo: HashMap<(usize, StrId), PieceInfo>,
+    reach: HashMap<(usize, StrId), std::collections::HashSet<(usize, StrId)>>,
+    own: HashMap<(usize, StrId), u32>,
+    seen: Vec<(usize, StrId)>,
+}
+
+impl<'a> ConeAnalyzer<'a> {
+    pub fn new(d: &'a Design, kind: &'a dyn Fn(usize, StrId) -> ChildRef, thresh: u32) -> Self {
+        ConeAnalyzer {
+            d,
+            kind,
+            thresh,
+            memo: HashMap::new(),
+            reach: HashMap::new(),
+            own: HashMap::new(),
+            seen: Vec::new(),
+        }
+    }
+
+    pub fn module(&mut self, mir: usize) -> HashMap<StrId, PieceInfo> {
+        let names: Vec<StrId> = self.d.modules[mir].defs.iter().map(|dd| dd.name).collect();
+        names.iter().map(|&n| (n, self.def_piece(mir, n))).collect()
+    }
+
+    fn def_piece(&mut self, mir: usize, n: StrId) -> PieceInfo {
+        if let Some(r) = self.memo.get(&(mir, n)) {
+            return r.clone();
+        }
+        if self.seen.contains(&(mir, n)) {
+            return PieceInfo {
+                eff: 0,
+                outlinable: false,
+                stable: false,
+                outlined: false,
+                ports: Vec::new(),
+            };
+        }
+        let Some(di) = self.d.modules[mir].def_idx(n) else {
+            return PieceInfo {
+                eff: 0,
+                outlinable: false,
+                stable: false,
+                outlined: false,
+                ports: Vec::new(),
+            };
+        };
+        self.seen.push((mir, n));
+        let e = self.d.modules[mir].defs[di].expr.clone();
+        let mut rs = std::collections::HashSet::new();
+        let mut ports = std::collections::BTreeSet::new();
+        let (nodes, outl, stab) = self.walk(mir, &e, None, &mut rs, &mut ports);
+        self.seen.pop();
+        let mut eff = nodes;
+        for k in &rs {
+            eff = eff.saturating_add(*self.own.get(k).unwrap_or(&0));
+        }
+        self.own.insert((mir, n), nodes);
+        // cap the parameter count: huge signatures cost more than the
+        // split saves
+        let outl = outl && ports.len() <= 8;
+        let outlined = outl && eff >= self.thresh;
+        if !outlined {
+            rs.insert((mir, n));
+            self.reach.insert((mir, n), rs);
+        }
+        let r = PieceInfo {
+            eff,
+            outlinable: outl,
+            stable: stab,
+            outlined,
+            ports: ports.into_iter().collect(),
+        };
+        self.memo.insert((mir, n), r.clone());
+        r
+    }
+
+    /// returns (own nodes, outlinable, stable); accumulates reached
+    /// non-outlined defs into rs
+    fn walk(
+        &mut self,
+        mir: usize,
+        e: &trs_ir::Expr,
+        margs: Option<&std::collections::HashSet<StrId>>,
+        rs: &mut std::collections::HashSet<(usize, StrId)>,
+        ports: &mut std::collections::BTreeSet<StrId>,
+    ) -> (u32, bool, bool) {
+        use trs_ir::Expr as E;
+        let (mut nodes, mut outl, mut stab) = (1u32, true, true);
+        macro_rules! sub {
+            ($x:expr) => {{
+                let (c, o, sb) = self.walk(mir, $x, margs, rs, ports);
+                nodes = nodes.saturating_add(c);
+                outl &= o;
+                stab &= sb;
+            }};
+        }
+        match e {
+            E::Const { .. } | E::Str(_) | E::Real(_) => {}
+            E::Port(pn) => {
+                if margs.map(|a| a.contains(pn)).unwrap_or(false) {
+                    // bound method arg: accounted at the call site
+                } else {
+                    let m = &self.d.modules[mir];
+                    let is_en = m
+                        .inputs
+                        .iter()
+                        .any(|q| q.name == *pn && q.kind == trs_ir::PortKind::MethodEnable);
+                    // data ports live in Module.inputs; METHOD ARG
+                    // ports live in Method.args — both parameterize
+                    let is_data = m
+                        .inputs
+                        .iter()
+                        .any(|q| q.name == *pn && q.kind != trs_ir::PortKind::MethodEnable)
+                        || m.methods
+                            .iter()
+                            .any(|me| me.args.iter().any(|q| q.name == *pn));
+                    let is_reset = m
+                        .resets
+                        .iter()
+                        .any(|_| false) // reset PORT names resolve via InstEnv; conservative below
+                        ;
+                    let _ = is_reset;
+                    if is_en {
+                        // EN slots change during dispatch
+                        stab = false;
+                    } else if is_data {
+                        // data/method-arg port: helper parameter (v2)
+                        ports.insert(*pn);
+                        stab = false;
+                    } else {
+                        // unknown port kind (reset wires etc.): the
+                        // lowering may not have a binding — taint
+                        outl = false;
+                        stab = false;
+                    }
+                }
+            }
+            E::Def(dn) => {
+                let r = self.def_piece(mir, *dn);
+                outl &= r.outlinable || r.outlined;
+                stab &= r.stable;
+                // a piece's port params propagate to its callers
+                // (outlined callees receive them as call arguments)
+                ports.extend(r.ports.iter().copied());
+                if r.outlined {
+                    nodes = nodes.saturating_add(1);
+                } else {
+                    if let Some(rr) = self.reach.get(&(mir, *dn)) {
+                        rs.extend(rr.iter().cloned());
+                    }
+                    outl &= r.outlinable;
+                }
+            }
+            E::MethCall {
+                instance,
+                method,
+                args,
+                ..
+            } => {
+                for a in args {
+                    sub!(a);
+                }
+                let mname = self.d.strings[*method as usize].clone();
+                match (self.kind)(mir, *instance) {
+                    ChildRef::Prim(c) => {
+                        let (ok, st) = match c {
+                            ChildClass::Reg | ChildClass::CfgReg => {
+                                (matches!(mname.as_str(), "read" | "get" | "_read"), true)
+                            }
+                            ChildClass::Wire => {
+                                // schedule certification pending: not stable
+                                (matches!(mname.as_str(), "whas" | "wget"), false)
+                            }
+                            ChildClass::Fifo { loopy } => match mname.as_str() {
+                                // loopy i_* read LIVE elems — a
+                                // same-instant deq changes them, so
+                                // they never certify as stable
+                                "i_notFull" | "i_notEmpty" => (true, !loopy),
+                                "first" | "notFull" | "notEmpty" => (true, false),
+                                _ => (false, false),
+                            },
+                            ChildClass::Other => (false, false),
+                        };
+                        outl &= ok;
+                        stab &= st;
+                    }
+                    ChildRef::User(cmir) => {
+                        let mm = self.d.modules[cmir]
+                            .methods
+                            .iter()
+                            .find(|m| m.name == *method);
+                        match mm {
+                            Some(m) if m.body.is_empty() && m.result.is_some() => {
+                                let aset: std::collections::HashSet<StrId> =
+                                    m.args.iter().map(|p| p.name).collect();
+                                let res = m.result.clone().unwrap();
+                                // callee ports beyond its bound args
+                                // are the CALLEE module's — v1 cannot
+                                // parameterize across modules: taint
+                                let mut cports = Default::default();
+                                let (c, o, sb) =
+                                    self.walk(cmir, &res, Some(&aset), rs, &mut cports);
+                                nodes = nodes.saturating_add(c);
+                                outl &= o && cports.is_empty();
+                                stab &= sb;
+                            }
+                            Some(m) => {
+                                if std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
+                                    eprintln!(
+                                        "why: method-with-body args={} res={}",
+                                        m.body.len(),
+                                        m.result.is_some()
+                                    );
+                                }
+                                outl = false;
+                                stab = false;
+                            }
+                            None => {
+                                if std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
+                                    eprintln!(
+                                        "why: method-not-found {}",
+                                        self.d.strings[*method as usize]
+                                    );
+                                }
+                                outl = false;
+                                stab = false;
+                            }
+                        }
+                    }
+                    ChildRef::Opaque => {
+                        if std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
+                            eprintln!("why: opaque-child {}", self.d.strings[*instance as usize]);
+                        }
+                        outl = false;
+                        stab = false;
+                    }
+                }
+            }
+            E::Prim { args, .. } => {
+                for a in args {
+                    sub!(a);
+                }
+            }
+            E::If {
+                cond, then_, else_, ..
+            } => {
+                sub!(cond);
+                sub!(then_);
+                sub!(else_);
+            }
+            E::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
+                sub!(scrutinee);
+                for (_, a) in arms {
+                    sub!(a);
+                }
+                sub!(default);
+            }
+            other => {
+                if std::env::var_os("TRS_JIT_SPLIT_WHY").is_some() {
+                    eprintln!("why: expr-kind {:?}", std::mem::discriminant(other));
+                }
+                outl = false;
+                stab = false;
+            }
+        }
+        (nodes, outl, stab)
+    }
+}
+
+/// No compile tier without `jit`: a plan that needs freshly compiled
+/// scheds cannot proceed — the caller falls back to the interpreter.
+#[cfg(not(feature = "jit"))]
+#[allow(clippy::too_many_arguments)]
+fn aot_or_jit_scheds(
+    _interp: &Interp,
+    _inst_envs: &HashMap<usize, InstEnv>,
+    _specs: &[RuleSpec],
+    _now_slot: u32,
+    _helpers: Option<&HelperMap>,
+    _nworkers: usize,
+    trace: bool,
+) -> Option<Vec<CompiledSched>> {
+    if trace {
+        eprintln!("trs jit: off (no artifact and no compile tier)");
+    }
+    None
+}
+
+/// Eager parallel sched compile (in-process JIT path).
+#[cfg(feature = "jit")]
+fn aot_or_jit_scheds(
+    interp: &Interp,
+    inst_envs: &HashMap<usize, InstEnv>,
+    specs: &[RuleSpec],
+    now_slot: u32,
+    helpers: Option<&HelperMap>,
+    nworkers: usize,
+    trace: bool,
+) -> Option<Vec<CompiledSched>> {
+    trs_codegen::lower::llvm_init_once();
+    let t0 = std::time::Instant::now();
+    let n = specs.len();
+    let chunk = n.div_ceil(nworkers).max(1);
+    let sched_results: Vec<_> = std::thread::scope(|sc| {
+        let d = &interp.d;
+        specs
+            .chunks(chunk)
+            .map(|c| {
+                sc.spawn(move || {
+                    let env = PlanEnv {
+                        d,
+                        insts: inst_envs,
+                        now_slot,
+                        gate_scratch: None,
+                    };
+                    compile_scheds(&env, c, helpers, jit_foreign_cb, jit_prim_cb)
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("sched compile thread"))
+            .collect()
+    });
+    let mut scheds = Vec::with_capacity(n);
+    for r in sched_results {
+        match r {
+            Ok(mut v) => scheds.append(&mut v),
+            Err(e) => {
+                if trace {
+                    eprintln!("trs jit: off (sched compile: {e})");
+                }
+                return None;
+            }
+        }
+    }
+    if std::env::var_os("TRS_JIT_TIME").is_some() {
+        eprintln!("trs jit: sched compile {:?}", t0.elapsed());
+    }
+    Some(scheds)
+}
+
+/// trs link: compile every rule (sched + exec) into PIC objects in
+/// parallel, add the fingerprint object, and cc -shared them into the
+/// artifact .so.
+/// The shared-link driver: TRS_CC overrides (set by `trs link --cc`,
+/// so hermetic builds pin the exact tool instead of PATH's `cc`).
+pub fn cc_tool() -> String {
+    std::env::var("TRS_CC").unwrap_or_else(|_| "cc".into())
+}
+
+/// aot_emit's failure channel: LOWERING ineligibility degrades to the
+/// interp artifact (the reference always yields an executable; the
+/// link CLI prints the compiled-mode-unavailable note); only
+/// infrastructure failures (fs, cc, meta object) fail the link.
+/// Trial lower catches most ineligibility earlier — this covers
+/// shapes it does not walk (e.g. value-method reads reachable only
+/// through another module's cones).
+enum EmitFail {
+    Ineligible(String),
+    Infra(String),
+}
+
+#[cfg(feature = "jit")]
+#[allow(clippy::too_many_arguments)]
+fn aot_emit(
+    d: &Design,
+    inst_envs: &HashMap<usize, InstEnv>,
+    specs: &[RuleSpec],
+    now_slot: u32,
+    classes: &[(usize, Vec<usize>)],
+    helper_specs: &[HelperSpec],
+    refs_sym: &HelperMap,
+    split_thresh: u32,
+    protos: &[FnProtos],
+    comp_nodes: &[Option<Vec<JitNode>>],
+    en_slots: &[u32],
+    so: &std::path::Path,
+    exe: Option<&(std::path::PathBuf, std::path::PathBuf)>,
+    bir_hash: u64,
+    bir_hash_raw: u64,
+    plan_a: &[u8],
+    plan_b: &[u8],
+    edge_plan: Option<&trs_codegen::abi::EdgeSsaPlan>,
+    bdpi_names: &[String],
+) -> Result<(), EmitFail> {
+    use trs_codegen::lower::compile_meta_object;
+    trs_codegen::lower::llvm_init_once();
+    let t0 = std::time::Instant::now();
+    let nworkers = jit_workers(specs.len());
+    // One emission strategy: the design module plus one per module
+    // type, boundary fns across every synthesis boundary, pipelines in
+    // parallel.  The monolithic and rule-group-chunked strategies this
+    // replaces are gone, and with them the flags that chose between
+    // them.
+    {
+        let mut rep_of: Vec<usize> = vec![0; specs.len()];
+        for (rep, members) in classes {
+            for &m in members {
+                rep_of[m] = *rep;
+            }
+        }
+        // EVERY class gets a rep, whether or not this design's edge
+        // plan inlines its members.
+        //
+        // It used to get one only if some member was left un-inlined,
+        // on the reasoning that a rule running inline in the edge has
+        // no need of a standalone symbol and emitting one would
+        // double the LLVM mass.  True of the design's own .so -- and
+        // it made a module's object a function of the DESIGN it was
+        // built in: fuse everything and a type's object kept only its
+        // boundary methods, while a module whose content is entirely
+        // rules (every top) got no object at all.
+        //
+        // A module's object holds that module's code.  Whether this
+        // design then inlines a copy into its edge fn is the design's
+        // business, and the two must not be the same decision -- an
+        // object that gained or lost bodies depending on which design
+        // happened to build it first would not be the same object for
+        // the next one, which is the whole basis of reusing it.
+        //
+        // The cost is real and is the price of the contract: a fully
+        // fused design now also emits every body once into its
+        // module's object.  It is also temporary in shape -- the
+        // duplication exists because the design .so is still produced
+        // by a whole-design compile that lowers the edge itself.  Once
+        // fusion is a LINK-time inlining over objects that already
+        // exist, each body is compiled once and the edge either calls
+        // it or inlines it.
+        let rep_ords: Vec<usize> = classes.iter().map(|(r, _)| *r).collect();
+        let comps: Vec<FusedComp> = comp_nodes
+            .iter()
+            .map(|nodes| FusedComp {
+                en_slots: en_slots.to_vec(),
+                now_slot,
+                nodes: nodes
+                    .as_ref()
+                    .map(|ns| {
+                        ns.iter()
+                            .map(|n| match *n {
+                                JitNode::Sched(o) => {
+                                    // per ORDINAL, not per class: the
+                                    // sched half depends on the
+                                    // design's schedule, so it stays
+                                    // in the design module
+                                    let sp = &specs[o as usize];
+                                    FusedNode::Sched(
+                                        HelperRef::Sym(format!("sched_{}", sp.label)),
+                                        inst_envs[&sp.inst].region.0 as u64,
+                                        sp.ordinal,
+                                    )
+                                }
+                                JitNode::Exec(o) => {
+                                    let sp = &specs[o as usize];
+                                    FusedNode::Exec(
+                                        HelperRef::Sym(format!(
+                                            "exec_{}",
+                                            specs[rep_of[o as usize]].share_label
+                                        )),
+                                        inst_envs[&sp.inst].region.0 as u64,
+                                        sp.ordinal,
+                                    )
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect();
+        let env = PlanEnv {
+            d,
+            insts: inst_envs,
+            now_slot,
+            gate_scratch: edge_plan.and_then(|p| p.gate.as_ref().map(|g| g.scratch)),
+        };
+        // boundary method fns (sharding rung).  V1 excludes
+        // always_enabled methods (their rdy-gated call protocol
+        // differs); callback-carrying methods drop out at emission and
+        // stay inline.  quiet=true suppresses the per-method notes,
+        // which the all-types sweep would otherwise emit per method.
+        // Per CLASS, not per module type.  The body bakes the
+        // exemplar's parameters, so one body per type served instances
+        // whose parameters differed from the exemplar's -- silently,
+        // and with the wrong answer.
+        let reqs_for_class = |class_id: usize, quiet: bool| -> Vec<trs_codegen::abi::BoundaryReq> {
+            let Some(exemplar) = env
+                .insts
+                .iter()
+                .filter(|(_, ie)| ie.class_id == class_id)
+                .map(|(&i, _)| i)
+                .min()
+            else {
+                return Vec::new();
+            };
+            let mir = env.insts[&exemplar].mir;
+            let mut reqs = Vec::new();
+            for (mi, m) in env.d.modules[mir].methods.iter().enumerate() {
+                if m.always_enabled {
+                    if !quiet {
+                        eprintln!(
+                            "trs boundary: {} stays inline: always_enabled",
+                            env.d.strings[m.name as usize]
+                        );
+                    }
+                    continue;
+                }
+                let args: Vec<(trs_ir::StrId, u32)> =
+                    m.args.iter().map(|p| (p.name, p.width)).collect();
+                let kinds: &[u8] = match m.kind {
+                    trs_ir::MethodKind::Value => &[0],
+                    trs_ir::MethodKind::Action => &[1],
+                    trs_ir::MethodKind::ActionValue => &[2, 3],
+                };
+                for &kind in kinds {
+                    if kind != 1 && m.result.is_none() {
+                        continue;
+                    }
+                    reqs.push(trs_codegen::abi::BoundaryReq {
+                        mir,
+                        exemplar,
+                        mi,
+                        method: m.name,
+                        kind,
+                        class_id,
+                        sym: format!(
+                            "trs_bnd_{}_{mi}_{kind}",
+                            d.strings
+                                .get(d.modules[mir].name as usize)
+                                .map(|s| s
+                                    .chars()
+                                    .map(|c| if c.is_ascii_alphanumeric() || c == '_' {
+                                        c
+                                    } else {
+                                        '.'
+                                    })
+                                    .collect::<String>())
+                                .unwrap_or_default()
+                        ),
+                        args: args.clone(),
+                    });
+                }
+            }
+            reqs
+        };
+        // Every instantiated dedup CLASS gets per-method boundary fns.
+        // Not a mode: inlining across a synthesis boundary is what put
+        // 66.8M instructions into a single function on a
+        // controller-scale design, where outlining leaves 2.1M as the
+        // largest and a third fewer instructions overall.
+        let boundary_reqs: Vec<trs_codegen::abi::BoundaryReq> = {
+            let ids: std::collections::BTreeSet<usize> =
+                env.insts.values().map(|ie| ie.class_id).collect();
+            ids.into_iter()
+                .flat_map(|c| reqs_for_class(c, true))
+                .collect()
+        };
+        let _g = trs_codegen::abi::AotModeGuard::set();
+        let t1 = std::time::Instant::now();
+        let raw = trs_codegen::lower::compile_design_objects_split(
+            &env,
+            specs,
+            &rep_ords,
+            helper_specs,
+            refs_sym,
+            &comps,
+            edge_plan,
+            &boundary_reqs,
+            nworkers,
+        )
+        .map_err(|e| EmitFail::Ineligible(format!("design object: {e}")))?;
+        let objs: Vec<Vec<u8>> = match raw {
+            trs_codegen::lower::DesignObject::Object(o) => vec![o],
+            trs_codegen::lower::DesignObject::Objects(v) => v,
+        };
+        if std::env::var_os("TRS_JIT_TIME").is_some() {
+            eprintln!("trs aot: one-module compile {:?}", t1.elapsed());
+        }
+        if std::env::var_os("TRS_EDGE_SSA_STATS").is_some() {
+            let s = trs_codegen::abi::edge_ssa_sites();
+            eprintln!(
+                "trs edge-ssa census: fire-signal loads={} eager-reloads(exec)={} \
+                 shared-reloads(sched)={} eager-stores={} promotable-load-words={}",
+                s[0], s[1], s[2], s[3], s[4]
+            );
+        }
+        let tmp = std::env::temp_dir().join(format!("trs-link-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).map_err(|e| EmitFail::Infra(e.to_string()))?;
+        // fixed object order (byte-determinism): design first, then
+        // the sharded per-type objects in ascending mir order
+        let mut files: Vec<std::path::PathBuf> = Vec::new();
+        for (i, o) in objs.into_iter().enumerate() {
+            let f = if i == 0 {
+                tmp.join("design.o")
+            } else {
+                tmp.join(format!("shard{i}.o"))
+            };
+            std::fs::write(&f, o).map_err(|e| EmitFail::Infra(e.to_string()))?;
+            files.push(f);
+        }
+        let meta = compile_meta_object(
+            bir_hash,
+            bir_hash_raw,
+            split_thresh as u64,
+            &encode_protos(protos),
+            edge_plan
+                .map(|p| {
+                    let any = |vs: &[Vec<u32>]| vs.iter().any(|v| !v.is_empty());
+                    if any(&p.wire_clears)
+                        || p.creg_copies.iter().any(|v| !v.is_empty())
+                        || p.bram_ticks.iter().any(|v| !v.is_empty())
+                    {
+                        2
+                    } else {
+                        0
+                    }
+                })
+                .unwrap_or(0),
+            bdpi_names,
+            &d.snap_encode(bir_hash).unwrap_or_default(),
+            plan_a,
+            plan_b,
+        )
+        .map_err(|e| EmitFail::Infra(format!("meta object: {e}")))?;
+        let mf = tmp.join("meta.o");
+        std::fs::write(&mf, meta).map_err(|e| EmitFail::Infra(e.to_string()))?;
+        // temp+rename: a crash mid-cc must never leave a truncated
+        // .so at the final path (it would dlopen-fail or worse on the
+        // next run before the gates can judge it)
+        let so_tmp = so.with_extension("so.tmp");
+        let st = std::process::Command::new(cc_tool())
+            .arg("-shared")
+            .args(crate::hostlink::local_binding())
+            .arg("-o")
+            .arg(&so_tmp)
+            .args(&files)
+            .arg(&mf)
+            .status()
+            .map_err(|e| EmitFail::Infra(format!("{}: {e}", cc_tool())))?;
+        if !st.success() {
+            std::fs::remove_dir_all(&tmp).ok();
+            std::fs::remove_file(&so_tmp).ok();
+            return Err(EmitFail::Infra(format!("{} -shared failed", cc_tool())));
+        }
+        std::fs::rename(&so_tmp, so).map_err(|e| EmitFail::Infra(format!("rename .so: {e}")))?;
+        if let Some((exe_out, libdir)) = exe {
+            // artifact-as-executable: the SAME objects, plus a 3-line
+            // main shim, linked as a PIE with --export-dynamic so the
+            // runtime (via trs_run_main) resolves trs_snap and the
+            // edge fns from our own image.  Prefer the slim LLVM-free
+            // runtime (libtrs_rt.so): the full capi lib carries
+            // statically-linked LLVM whose constructors cost ~5ms at
+            // every exec of the produced binary.
+            let rt = if libdir.join("libtrs_rt.so").exists() {
+                "libtrs_rt.so"
+            } else {
+                "libtrs_capi.so"
+            };
+            let mc = tmp.join("trs_main.c");
+            std::fs::write(
+                &mc,
+                "extern int trs_run_main(int argc, char** argv);\n                 int main(int argc, char** argv)                  { return trs_run_main(argc, argv); }\n",
+            )
+            .map_err(|e| EmitFail::Infra(e.to_string()))?;
+            let exe_tmp = exe_out.with_extension("exe.tmp");
+            let st = std::process::Command::new(cc_tool())
+                .arg(&mc)
+                .args(&files)
+                .arg(&mf)
+                .args(crate::hostlink::export_dynamic())
+                .args(crate::hostlink::no_as_needed())
+                .arg(format!("-L{}", libdir.display()))
+                .arg(crate::hostlink::link_shared(&libdir.join(rt), rt))
+                .arg(format!("-Wl,-rpath,{}", libdir.display()))
+                .args(["-o"])
+                .arg(&exe_tmp)
+                .status()
+                .map_err(|e| EmitFail::Infra(format!("{} exe: {e}", cc_tool())))?;
+            if !st.success() {
+                std::fs::remove_dir_all(&tmp).ok();
+                std::fs::remove_file(&exe_tmp).ok();
+                return Err(EmitFail::Infra("cc exe link failed".into()));
+            }
+            std::fs::rename(&exe_tmp, exe_out)
+                .map_err(|e| EmitFail::Infra(format!("rename exe: {e}")))?;
+        }
+        std::fs::remove_dir_all(&tmp).ok();
+        if std::env::var_os("TRS_JIT_TIME").is_some() {
+            eprintln!("trs aot: emit + link {:?}", t0.elapsed());
+        }
+        return Ok(());
+    }
+}
+
+/// Baked PlanA from the artifact (trs_plan_a): gated on the baked
+/// bir hash matching the interp's (same salted expression aot_load
+/// checks — a mismatched artifact must fail BOTH ways together so the
+/// fallback derives a plan consistent with the in-process compile),
+/// the layout rev, and the PlanA blob version.  Any miss = None =
+/// fresh derivation.
+pub(crate) fn aot_plan_a(src: &ArtifactSource, expected_raw: u64) -> Option<crate::PlanA> {
+    unsafe {
+        let lib = src.open().ok()?;
+        let hr: libloading::Symbol<*const u64> = lib.get(b"trs_bir_hash_raw").ok()?;
+        if **hr != expected_raw {
+            return None;
+        }
+        let l: libloading::Symbol<*const u64> = lib.get(b"trs_plan_a_len").ok()?;
+        let len = **l as usize;
+        if len == 0 {
+            return None;
+        }
+        let r: libloading::Symbol<*const u64> = lib.get(b"trs_layout_rev").ok()?;
+        if **r != trs_codegen::abi::AOT_LAYOUT_REV {
+            return None;
+        }
+        let s: libloading::Symbol<*const u8> = lib.get(b"trs_plan_a").ok()?;
+        let bytes = std::slice::from_raw_parts(*s, len);
+        let plan: crate::PlanA = bincode::deserialize(bytes).ok()?;
+        (plan_a_version(&plan) == crate::PLAN_A_VERSION).then_some(plan)
+    }
+}
+
+fn plan_a_version(p: &crate::PlanA) -> u32 {
+    p.version
+}
+
+/// The expensive-to-derive fraction of jit_plan, baked into artifacts
+/// as trs_plan_b: per-ordinal always-fire bits (deriving them walks
+/// WILL_FIRE def aliases and forces lazy expr decodes) and the exec
+/// dedup classes (deriving them hashes every instance's slot layout).
+/// The specs themselves re-derive at load — measured, that's plain
+/// compute, and shipping them costs more in decode allocations than
+/// the derivation.  Slot-layout consumers depend on trace mode
+/// (recording slots shift the layout), so unlike PlanA this gates on
+/// the SALTED hash — the same expression aot_load checks — plus the
+/// layout rev and the blob version.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct PlanB {
+    version: u32,
+    always_fire: Vec<u8>,
+    class_rep: Vec<u64>,
+    class_members: Vec<u64>,
+    class_off: Vec<u32>,
+}
+
+pub(crate) const PLAN_B_VERSION: u32 = 3;
+
+pub(crate) fn plan_b_encode(specs: &[RuleSpec], classes: &[(usize, Vec<usize>)]) -> Vec<u8> {
+    let mut class_members = Vec::new();
+    let mut class_off = vec![0u32];
+    for (_, m) in classes {
+        class_members.extend(m.iter().map(|&x| x as u64));
+        class_off.push(class_members.len() as u32);
+    }
+    let wire = PlanB {
+        version: PLAN_B_VERSION,
+        always_fire: specs.iter().map(|s| s.always_fire as u8).collect(),
+        class_rep: classes.iter().map(|(r, _)| *r as u64).collect(),
+        class_members,
+        class_off,
+    };
+    bincode::serialize(&wire).unwrap_or_default()
+}
+
+pub(crate) fn aot_plan_b(
+    src: &ArtifactSource,
+    expected_salted: u64,
+) -> Option<(Vec<u8>, Vec<(usize, Vec<usize>)>)> {
+    let wire: PlanB = unsafe {
+        let lib = src.open().ok()?;
+        let h: libloading::Symbol<*const u64> = lib.get(b"trs_bir_hash").ok()?;
+        if **h != expected_salted {
+            return None;
+        }
+        let l: libloading::Symbol<*const u64> = lib.get(b"trs_plan_b_len").ok()?;
+        let len = **l as usize;
+        if len == 0 {
+            return None;
+        }
+        let r: libloading::Symbol<*const u64> = lib.get(b"trs_layout_rev").ok()?;
+        if **r != trs_codegen::abi::AOT_LAYOUT_REV {
+            return None;
+        }
+        let s: libloading::Symbol<*const u8> = lib.get(b"trs_plan_b").ok()?;
+        let bytes = std::slice::from_raw_parts(*s, len);
+        bincode::deserialize(bytes).ok()?
+    };
+    if wire.version != PLAN_B_VERSION {
+        return None;
+    }
+    let classes: Vec<(usize, Vec<usize>)> = (0..wire.class_rep.len())
+        .map(|c| {
+            (
+                wire.class_rep[c] as usize,
+                wire.class_members[wire.class_off[c] as usize..wire.class_off[c + 1] as usize]
+                    .iter()
+                    .map(|&x| x as usize)
+                    .collect(),
+            )
+        })
+        .collect();
+    Some((wire.always_fire, classes))
+}
+
+/// Full-AOT load: the design snapshot embedded in the artifact
+/// (trs_snap + trs_bir_hash), so a --code run does not DECODE the .bir.
+/// Its caller still reads the bytes to fingerprint them, because a .so
+/// is a separately produced artifact and a stale one would otherwise
+/// simulate an older design in full.  That is a read plus an fnv1a, so
+/// it scales with the file; if it ever shows up in startup profiling,
+/// the fix is to stamp the identity into the artifact's .opts at link
+/// and compare that instead.
+/// None = pre-snap artifact, empty snap (encode failed at link), a
+/// missing/unloadable .so, or a snap-gate failure — the caller falls
+/// back to the .bir path and the normal fingerprint cross-check.
+pub(crate) fn aot_embedded_design(src: &ArtifactSource) -> Option<(u64, trs_ir::Design)> {
+    unsafe {
+        let lib = src.open().ok()?;
+        // the RAW design identity: trs_bir_hash is trace-salted (it
+        // belongs to aot_load's mode gate) and would corrupt
+        // interp.bir_hash for traced artifacts.  Artifacts that carry
+        // a snap always carry the raw hash too (same commit).
+        let h: libloading::Symbol<*const u64> = lib.get(b"trs_bir_hash_raw").ok()?;
+        let hash = **h;
+        let l: libloading::Symbol<*const u64> = lib.get(b"trs_snap_len").ok()?;
+        let len = **l as usize;
+        if len == 0 {
+            return None;
+        }
+        let s: libloading::Symbol<*const u8> = lib.get(b"trs_snap").ok()?;
+        let bytes = std::slice::from_raw_parts(*s, len);
+        let d = trs_ir::Design::snap_decode_embedded(bytes, hash)?;
+        Some((hash, d))
+    }
+}
+
+/// trs run --code: dlopen the artifact, verify its fingerprint, fill
+/// the callback pointer-globals, and resolve every rule's sched/exec
+/// function.  Any failure falls back to in-process compilation.
+#[allow(clippy::type_complexity)]
+/// aot_load's marker error for an artifact compiled for the opposite
+/// trace mode: current, not stale — the fallback recompile is silent.
+const TRACE_MODE_MISMATCH: &str = "artifact trace mode differs from this run; compiling in-process";
+
+fn aot_load(
+    src: &ArtifactSource,
+    bir_hash: u64,
+    specs: &[RuleSpec],
+    classes: &[(usize, Vec<usize>)],
+    split_thresh: u32,
+    ncomps: usize,
+    bdpi_fill: &[(String, usize)],
+) -> Result<
+    (
+        Vec<CompiledSched>,
+        Vec<CompiledExec>,
+        Vec<FnProtos>,
+        Vec<usize>,
+        u64,
+    ),
+    String,
+> {
+    unsafe {
+        let lib = src.open()?;
+        let h: libloading::Symbol<*const u64> =
+            lib.get(b"trs_bir_hash").map_err(|e| e.to_string())?;
+        if **h != bir_hash {
+            // the OTHER trace mode's salt matching means the artifact is
+            // current but compiled for the opposite dumping mode — an
+            // expected, by-design in-process recompile, not staleness
+            if **h == bir_hash ^ 0x5452_4143_4544 {
+                return Err(TRACE_MODE_MISMATCH.into());
+            }
+            return Err("BIR fingerprint mismatch (stale artifact)".into());
+        }
+        let r: libloading::Symbol<*const u64> =
+            lib.get(b"trs_layout_rev").map_err(|e| e.to_string())?;
+        if **r != AOT_LAYOUT_REV {
+            return Err(format!(
+                "layout revision {} (this trs expects {AOT_LAYOUT_REV})",
+                **r
+            ));
+        }
+        let t: libloading::Symbol<*const u64> =
+            lib.get(b"trs_split_thresh").map_err(|e| e.to_string())?;
+        if **t != split_thresh as u64 {
+            return Err(format!(
+                "split threshold {} but this run plans with {split_thresh} \
+                 (arena layouts differ)",
+                **t
+            ));
+        }
+        // task #58: BDPI call sites null-check their callee global and
+        // trap here when no loaded BDPI library provided the import —
+        // the trap names the import; a dead import never reaches it
+        unsafe extern "C" fn missing_bdpi_trap(name: *const std::os::raw::c_char) {
+            let n = if name.is_null() {
+                "?".to_string()
+            } else {
+                unsafe { std::ffi::CStr::from_ptr(name) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            eprintln!(
+                "trs: BDPI import '{n}' was called, but no loaded BDPI \
+                 library provides it — compile/link the import's C \
+                 source (the interpreter raises the same error)"
+            );
+            std::process::abort();
+        }
+        // The callback ABI: every trs_cb_* pointer (and the BRAM tick
+        // helper) is REQUIRED — compile_meta_object has defined them
+        // all unconditionally since before rev 26, and the rev gate
+        // above already refused any artifact old enough to lack one,
+        // so a missing symbol here is a stripped or misbuilt artifact
+        // and the load fails closed instead of arming a null call
+        // (the rev-26 lesson: trs_cb_bdpi_missing was optional, so an
+        // old runtime could load a newer same-rev artifact and null-
+        // call the unfilled trap pointer from a BDPI trap block).
+        // Only the per-import trs_bdpi_* callee fills stay tolerant:
+        // that symbol set is design- and user-library-dependent, and
+        // an unfilled callee is exactly what the trap guards.
+        for (name, addr) in [
+            (&b"trs_cb_foreign"[..], jit_foreign_cb as ForeignCb as usize),
+            (&b"trs_cb_prim"[..], jit_prim_cb as PrimCb as usize),
+            (&b"trs_cb_stdio"[..], jit_stdio_cb as usize),
+            (&b"trs_cb_bdpi_missing"[..], missing_bdpi_trap as usize),
+            (
+                &b"trs_bram_tick_cb"[..],
+                trs_codegen::abi::trs_bram_tick as usize,
+            ),
+        ] {
+            let g: libloading::Symbol<*mut usize> = lib.get(name).map_err(|e| e.to_string())?;
+            **g = addr;
+        }
+        let pl: libloading::Symbol<*const u64> =
+            lib.get(b"trs_protos_len").map_err(|e| e.to_string())?;
+        let pg: libloading::Symbol<*const u8> =
+            lib.get(b"trs_protos").map_err(|e| e.to_string())?;
+        let pbytes = std::slice::from_raw_parts(*pg, **pl as usize);
+        let protos = decode_protos(pbytes).ok_or("corrupt trs_protos table")?;
+        if protos.len() != specs.len() {
+            return Err("protos count mismatch".into());
+        }
+        // edge-SSA artifacts elide standalone symbols for rules that
+        // run inline in an edge fn; the token TABLES stay per-ordinal
+        // (edge callbacks resolve through them).  A stub keeps the
+        // types simple and fails LOUDLY if a supposedly-dead path runs.
+        unsafe extern "C" fn missing_sched(_: *mut u64, _: *mut core::ffi::c_void, _: u64, _: u32) {
+            panic!("trs: sched symbol elided by edge-SSA artifact was called");
+        }
+        unsafe extern "C" fn missing_exec(
+            _: *mut u64,
+            _: *mut core::ffi::c_void,
+            _: u64,
+            _: u32,
+        ) -> i32 {
+            panic!("trs: exec symbol elided by edge-SSA artifact was called");
+        }
+        // ordinal-indexed fn tables (one_module artifacts): 3 dlsyms
+        // instead of ~one per rule.  Null entry = elided symbol.
+        // Absent or size-mismatched tables (chunked artifacts) fall
+        // back to the per-symbol path.
+        let tab = |name: &[u8], len_name: &[u8], want: usize| -> Option<&[usize]> {
+            let l = lib.get::<*const u64>(len_name).ok()?;
+            let t = lib.get::<*const usize>(name).ok()?;
+            (**l as usize == want).then(|| std::slice::from_raw_parts(*t, want))
+        };
+        let sched_tab = tab(b"trs_sched_tab", b"trs_sched_tab_len", specs.len());
+        let exec_tab = tab(b"trs_exec_tab", b"trs_exec_tab_len", specs.len());
+        let edge_tab = tab(b"trs_edge_tab", b"trs_edge_tab_len", ncomps);
+        // sched fns: one per ORDINAL, in the design's own module --
+        // unlike an exec body, the sched half is a function of the
+        // design's schedule, so there is no class symbol to share.
+        let mut scheds = Vec::with_capacity(specs.len());
+        for (o, spec) in specs.iter().enumerate() {
+            let sf = match sched_tab {
+                Some(t) if t[o] != 0 => std::mem::transmute::<
+                    usize,
+                    unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32),
+                >(t[o]),
+                Some(_) => missing_sched,
+                None => lib
+                    .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32)>(
+                        format!("sched_{}\0", spec.label).as_bytes(),
+                    )
+                    .map(|f| *f)
+                    .unwrap_or(missing_sched),
+            };
+            scheds.push(CompiledSched { sched: sf });
+        }
+        // exec bodies: one symbol per dedup class, shared by members
+        let mut execs: Vec<Option<CompiledExec>> = (0..specs.len()).map(|_| None).collect();
+        for (rep, members) in classes {
+            let ef = match exec_tab {
+                Some(t) if t[*rep] != 0 => std::mem::transmute::<
+                    usize,
+                    unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32) -> i32,
+                >(t[*rep]),
+                Some(_) => missing_exec,
+                // no table: the per-symbol fallback, which needs the
+                // class name the emitter used.  A load that took its
+                // classes from the artifact never derived one, and an
+                // artifact this trs emits always carries the table.
+                None if specs[*rep].share_label.is_empty() => missing_exec,
+                None => lib
+                    .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32) -> i32>(
+                        format!("exec_{}\0", specs[*rep].share_label).as_bytes(),
+                    )
+                    .map(|f| *f)
+                    .unwrap_or(missing_exec),
+            };
+            for &m in members {
+                execs[m] = Some(CompiledExec { exec: ef });
+            }
+        }
+        let execs: Vec<CompiledExec> = execs
+            .into_iter()
+            .map(|o| o.expect("every ordinal belongs to a dedup class"))
+            .collect();
+        // fused edge fns (absent in pre-fusion artifacts: rev-gated)
+        let mut fused = Vec::with_capacity(ncomps);
+        for k in 0..ncomps {
+            let ef = match edge_tab {
+                Some(t) if t[k] != 0 => t[k],
+                Some(_) => return Err(format!("edge_c{k}: null table entry")),
+                None => *lib
+                    .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64) -> i32>(
+                        format!("edge_c{k}\0").as_bytes(),
+                    )
+                    .map_err(|e| e.to_string())? as usize,
+            };
+            fused.push(ef);
+        }
+        // direct-BDPI callee globals (tolerant on purpose: the symbol
+        // set is design-dependent, and an unfilled callee is what the
+        // missing-import trap guards)
+        for (gname, addr) in bdpi_fill {
+            if let Ok(g) = lib.get::<*mut usize>(gname.as_bytes()) {
+                unsafe { **g = *addr };
+            }
+        }
+        // edge fns carry compiled ticks (absent symbol = old artifact
+        // = 0; 1 = wire clears only, 2 = wires + cregs + brams)
+        let tick_level = lib
+            .get::<*const u64>(b"trs_edge_wire_ticks")
+            .map(|g| unsafe { **g })
+            .unwrap_or(0);
+        // the artifact stays mapped for the process lifetime
+        std::mem::forget(lib);
+        Ok((scheds, execs, protos, fused, tick_level))
+    }
+}
+
+/// Stage-A capture for the RunCore boot descriptor: what only the
+/// Emit arm can see.  prime's runcore_desc_finish consumes it.
+pub(crate) struct RunCoreStageA {
+    /// per-comp rc.ticks indices the emitted edge fns cover
+    pub(crate) covered: Vec<std::collections::HashSet<usize>>,
+    /// edge-SSA emission was on (off = no compiled ticks = central
+    /// loop never engages = ineligible)
+    pub(crate) edge_ssa: bool,
+    /// any prim stayed boxed (no arena slot): its window/steady state
+    /// lives in structs a RunCore boot doesn't have — ineligible
+    /// until lazy Reflect (adversarial-panel finding)
+    pub(crate) boxed: bool,
+    /// per bounce-reachable prim inst (any inst named by a sched or
+    /// exec PrimCallSpec): (inst, slot, tag, words, strings) seed rows
+    /// for the sidecar PRIMS section — the boot restores exactly these
+    /// prims, adopts their live slots, and services bounces natively
+    /// (rung 3b; the rows replace 3a's blanket prim-site gate).
+    /// Err = why native servicing is impossible (unattached target,
+    /// unseedable kind) — the design then boots classic.
+    #[allow(clippy::type_complexity)]
+    pub(crate) prim_rows: Result<Vec<(u64, u64, u64, Vec<u64>, Vec<String>)>, String>,
+    /// BRAM warn registry rows keyed back to relative arena slots:
+    /// (slot, addr_bits, full name)
+    pub(crate) warns: Vec<(u64, u32, String)>,
+    /// mem-file loads (overlay rung): (inst, file, binary_format) in
+    /// construction order; every load inst is also in prim_rows
+    pub(crate) load_rows: Vec<(u64, String, u64)>,
+}
+
+/// Parsed sidecar-v2 boot descriptor (clock + comp order +
+/// eligibility), stashed in JitPlans for the engage-time witness and,
+/// later, consumed by the RunCore boot driver.
+#[derive(PartialEq, Debug)]
+pub(crate) struct RunCoreDesc {
+    pub(crate) hi: u64,
+    pub(crate) lo: u64,
+    pub(crate) delay: u64,
+    pub(crate) init_high: bool,
+    pub(crate) has_init: bool,
+    pub(crate) pos: Vec<usize>,
+    pub(crate) neg: Vec<usize>,
+    /// RunCore boot eligibility (central + the boot-only gates)
+    pub(crate) eligible: bool,
+    /// central-loop mirror only — what the engage witness compares
+    pub(crate) central: bool,
+    pub(crate) reason: String,
+    /// window-bake sections, when the link's post-emit bake found the
+    /// reset window skippable: (post-window arena, tp, tn, cycle)
+    pub(crate) window: Option<(Vec<u64>, u64, u64, u64)>,
+}
+
+// Boot-descriptor section tags (sidecar v2, after the RLE runs:
+// b"TRSBOOTD", u64 section count, then per section u64 tag + u64
+// payload byte length + payload padded to 8).
+pub(crate) const RC_SEC_STRINGS: u64 = 1;
+pub(crate) const RC_SEC_PATHS: u64 = 2;
+pub(crate) const RC_SEC_CLOCK: u64 = 3;
+pub(crate) const RC_SEC_COMPS: u64 = 4;
+pub(crate) const RC_SEC_WARNS: u64 = 5;
+pub(crate) const RC_SEC_ELIG: u64 = 6;
+// window-bake sections (appended by the link's post-emit bake): the
+// post-reset-window arena image and the clock state at the central-
+// loop engage point — the state a RunCore boot starts from
+pub(crate) const RC_SEC_WARENA: u64 = 7;
+pub(crate) const RC_SEC_WSTATE: u64 = 8;
+// bounce-reachable prim seeds (rung 3b): per row [inst, slot, tag,
+// nwords, words..., nstrs, (len, bytes)...] — the boot restores these
+// prims over their live slots and services compiled prim call sites
+// natively (runcore_prim_cb)
+pub(crate) const RC_SEC_PRIMS: u64 = 9;
+// mem-file loads (overlay rung): per row [inst, file_len, file, bin]
+// in construction order — the boot rewrites each prim's data region
+// from the CURRENT file over the baked window image (the two-fill
+// bake gate proved the rest of the window independent of it).  Every
+// LOADS inst also has a PRIMS seed row.
+pub(crate) const RC_SEC_LOADS: u64 = 10;
+
+/// RLE-encode `words` as (value, run) LE u64 pairs onto `out`.
+fn rle_push(words: &[u64], out: &mut Vec<u8>) {
+    let mut i = 0;
+    while i < words.len() {
+        let v = words[i];
+        let mut j = i + 1;
+        while j < words.len() && words[j] == v {
+            j += 1;
+        }
+        out.extend_from_slice(&v.to_le_bytes());
+        out.extend_from_slice(&((j - i) as u64).to_le_bytes());
+        i = j;
+    }
+}
+
+/// Decode (value, run) pairs into exactly `nslots` words; None on any
+/// truncation, overflow, or length mismatch (the boot path must treat
+/// every field of the file as hostile — adversarial-panel finding).
+pub(crate) fn rle_decode(bytes: &[u8], nslots: usize) -> Option<Vec<u64>> {
+    let mut out = Vec::with_capacity(nslots);
+    let mut pos = 0;
+    while out.len() < nslots {
+        let v = u64::from_le_bytes(bytes.get(pos..pos + 8)?.try_into().ok()?);
+        let run = u64::from_le_bytes(bytes.get(pos + 8..pos + 16)?.try_into().ok()?);
+        pos += 16;
+        let run = usize::try_from(run).ok()?;
+        if run == 0 || run > nslots - out.len() {
+            return None;
+        }
+        out.extend(std::iter::repeat(v).take(run));
+    }
+    (pos == bytes.len()).then_some(out)
+}
+
+impl Interp {
+    /// RunCore arena sidecar, validation form (self-sufficient AOT
+    /// init, rung 1): encode the freshly built post-attach arena as
+    /// header + RLE runs.  Format: b"TRSARENA", then LE u64s
+    /// [version, AOT_LAYOUT_REV, salted bir hash, nslots], then
+    /// (value, run) u64 pairs covering nslots.  Version 1 ends there;
+    /// runcore_desc_finish appends the boot-descriptor sections and
+    /// bumps the version.  Mem-file designs are included (overlay
+    /// rung): the link never reads load files, so the image is
+    /// file-independent; the witnesses mask the data regions and the
+    /// boot overlays them from the live file.
+    fn runcore_image_encode(&self) -> Option<Vec<u8>> {
+        if self.jit_arena_ptr.is_null()
+            || self.jit_arena_len == 0
+            // traced artifacts boot classic (their rec_inits land
+            // after this hook, and the wave engine needs the interp)
+            || self.vcd_trace
+            // A design with top-level bindings boots classic too.
+            // This image IS the arena as the link seeded it, bound
+            // values and all, and the whole point of a binding is
+            // that the next run may supply a different one -- booting
+            // from the image would silently run the link's value.
+            //
+            // It cannot be gated on the salt instead: the sidecar's
+            // hash field pairs it with the .so, which is compared
+            // against the `trs_bir_hash' symbol, so there is nowhere
+            // in the current format to put a second key.  Skipping
+            // the image costs these designs the fast BOOT only -- the
+            // compiled .so is binding-independent and still loads,
+            // which is the part that matters at simulation rate.
+            || self.top_binds_salt() != 0
+        {
+            return None;
+        }
+        // mem-file designs are back in (overlay rung): the link never
+        // reads load files (set_load_memfiles(false)), so this image
+        // is file-independent by construction; the witnesses mask the
+        // data regions and the boot overlays them from the live file
+        let words = unsafe { std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len) };
+        let salted = self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544);
+        let mut out = Vec::with_capacity(64 + words.len() / 4);
+        out.extend_from_slice(b"TRSARENA");
+        for v in [
+            1u64,
+            trs_codegen::abi::baked_layout_rev(),
+            salted,
+            self.jit_arena_len as u64,
+        ] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        rle_push(words, &mut out);
+        Some(out)
+    }
+
+    /// prime's post-plan hook for an Emit run: assemble the boot
+    /// descriptor (sidecar v2 sections) from stage A plus the clock
+    /// and comp state prime just built, mirroring try_central's
+    /// eligibility so the engage-time witness can compare decisions.
+    pub(crate) fn runcore_desc_finish(
+        &mut self,
+        rcomps: &[RComp],
+        sources: &[crate::ClockSource],
+        clocks: &[StrId],
+        driver_clock: &HashMap<usize, usize>,
+    ) {
+        let Some(mut img) = self.runcore_pending.take() else {
+            return;
+        };
+        let Some(sa) = self.runcore_stage_a.take() else {
+            self.runcore_pending = Some(img);
+            return;
+        };
+        // -- eligibility, two classes (adversarial-panel finding: the
+        // central loop's conditions are WIDER than RunCore's — BDPI
+        // and boxed prims engage the central loop just fine, so a
+        // single flag made the engage witness cry wolf on them) --
+        // central: mirrors try_central's bail conditions exactly; the
+        //   engage witness compares THIS flag.
+        // runcore: central + the boot-only gates; the driver boots on
+        //   THIS flag.
+        let mut c_reason: Option<String> = None;
+        let mut r_reason: Option<String> = None;
+        let ineligible = |r: &mut Option<String>, s: &str| {
+            if r.is_none() {
+                *r = Some(s.to_string());
+            }
+        };
+        if !sa.edge_ssa {
+            ineligible(&mut r_reason, "edge-SSA emission off");
+        }
+        // rung 3a: the ONLY foreign imports the boot services natively
+        // are the two library ones (rand32/srand — a fresh GlibcRandom
+        // matches the classic engine's fresh stream, and any window-
+        // time draw already makes the window unskippable); anything
+        // else, or an aliased name, boots classic.  Exactness matters:
+        // the boot PANICS on an unexpected task rather than fall back,
+        // so this gate must make that unreachable.
+        let lib_only = self.d.foreign_funcs.iter().all(|f| {
+            let (n, c) = (self.s(f.name), self.s(f.c_name));
+            (n == "rand32" && c == "rand32") || (n == "srand" && c == "srand")
+        });
+        if !lib_only {
+            ineligible(&mut r_reason, "foreign (BDPI) imports");
+        }
+        if sa.boxed {
+            ineligible(&mut r_reason, "boxed prims (lazy Reflect pending)");
+        }
+        // dynamic scheduling: alternative interleavings select per
+        // edge.  Compiled-alts artifacts DO reach Emit now (the edge
+        // fns carry the guard dispatch), so this gate is load-bearing:
+        // the RunCore boot replays baked plan state under one comp
+        // order, and no single baked window/plan order is valid
+        // across selections — alts designs boot classic (v1).
+        if rcomps.iter().any(|rc| !rc.alts.is_empty()) {
+            ineligible(&mut r_reason, "dynamic scheduling (alts)");
+        }
+        // auto-fire designs (compiled via pseudo-specs) stay RunCore-
+        // ineligible v1: the boot's baked plan replay knows nothing of
+        // the per-edge anchor invocations, and such designs usually
+        // carry bindings anyway (which the boot hook already refuses)
+        if !self.autofire.is_empty() {
+            ineligible(&mut r_reason, "top always_enabled autofire");
+        }
+        // the boot parser caps LOADS rows (hostile-file bound): refuse
+        // HERE, where a reason can be recorded, rather than bake a
+        // sidecar every boot silently rejects (review finding)
+        if sa.load_rows.len() > 1 << 12 {
+            ineligible(&mut r_reason, "mem-file load count");
+        }
+        // rung 3b: prim call sites no longer gate eligibility — the
+        // PRIMS section bakes a native servicer seed for every
+        // bounce-reachable prim instead.  Only a site whose target
+        // cannot be seeded (unattached, unseedable kind) boots classic.
+        let prim_rows: &[(u64, u64, u64, Vec<u64>, Vec<String>)] = match &sa.prim_rows {
+            Ok(rows) => rows,
+            Err(e) => {
+                ineligible(&mut r_reason, e);
+                &[]
+            }
+        };
+        if !driver_clock.is_empty() {
+            ineligible(&mut c_reason, "driver clocks");
+        }
+        if !self.rstgen_out.is_empty() {
+            ineligible(&mut c_reason, "reset generators");
+        }
+        let mut wave = None;
+        for (ci, src) in sources.iter().enumerate() {
+            if let crate::ClockSource::Wave(w) = src {
+                if wave.is_some() {
+                    ineligible(&mut c_reason, "multiple wave clocks");
+                }
+                wave = Some((ci, *w));
+            }
+        }
+        let (wci, wv) = match wave {
+            Some((ci, w)) => (ci, Some(w)),
+            None => {
+                ineligible(&mut c_reason, "no wave clock");
+                (usize::MAX, None)
+            }
+        };
+        if wci != usize::MAX && Some(clocks[wci]) != self.d.default_clock {
+            ineligible(&mut c_reason, "wave clock is not the default clock");
+        }
+        let mut pos: Vec<usize> = Vec::new();
+        let mut neg: Vec<usize> = Vec::new();
+        for (rci, rc) in rcomps.iter().enumerate() {
+            if rc.clk != wci {
+                ineligible(&mut c_reason, "composition on a non-wave clock");
+                continue;
+            }
+            // the central mirror honors the ARTIFACT's tick coverage:
+            // with edge-SSA off the emitted edge fns carry no ticks,
+            // so the load-side covered set is empty regardless of
+            // what coverage analysis would say
+            let uncovered = rc.ticks.iter().enumerate().any(|(ti, t)| {
+                !t.2 && !(sa.edge_ssa && sa.covered.get(rci).is_some_and(|c| c.contains(&ti)))
+            });
+            if rc.posedge {
+                if !rc.early.is_empty() {
+                    ineligible(&mut c_reason, "early rules");
+                }
+                if uncovered {
+                    ineligible(&mut c_reason, "uncovered prim tick");
+                }
+                pos.push(rci);
+            } else {
+                if rc.entries.iter().any(|e| !e.nodes.is_empty()) || uncovered {
+                    ineligible(&mut c_reason, "negedge composition with work");
+                }
+                neg.push(rci);
+            }
+        }
+        if pos.is_empty() {
+            ineligible(&mut c_reason, "no posedge compositions");
+        }
+        let central = c_reason.is_none();
+        let reason = c_reason.or(r_reason);
+        // -- sections --
+        let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
+        let sect = |o: &mut Vec<u8>, tag: u64, payload: &[u8]| {
+            w64(o, tag);
+            w64(o, payload.len() as u64);
+            o.extend_from_slice(payload);
+            o.resize(o.len().next_multiple_of(8), 0);
+        };
+        let mut p = Vec::new();
+        img.extend_from_slice(b"TRSBOOTD");
+        w64(&mut img, 8);
+        // strings: the full design table (StrDyn tokens may select any)
+        p.clear();
+        w64(&mut p, self.d.strings.len() as u64);
+        for s in &self.d.strings {
+            w64(&mut p, s.len() as u64);
+            p.extend_from_slice(s.as_bytes());
+        }
+        sect(&mut img, RC_SEC_STRINGS, &p);
+        // instance paths (foreign %m locations)
+        p.clear();
+        w64(&mut p, self.insts.len() as u64);
+        for i in &self.insts {
+            w64(&mut p, i.path.len() as u64);
+            p.extend_from_slice(i.path.as_bytes());
+        }
+        sect(&mut img, RC_SEC_PATHS, &p);
+        // clock
+        p.clear();
+        let cvals = wv.map_or([0u64; 5], |w| {
+            [w.hi, w.lo, w.delay, w.init_high as u64, w.has_init as u64]
+        });
+        for v in cvals {
+            w64(&mut p, v);
+        }
+        sect(&mut img, RC_SEC_CLOCK, &p);
+        // comp call order
+        p.clear();
+        w64(&mut p, pos.len() as u64);
+        for &o in &pos {
+            w64(&mut p, o as u64);
+        }
+        w64(&mut p, neg.len() as u64);
+        for &o in &neg {
+            w64(&mut p, o as u64);
+        }
+        sect(&mut img, RC_SEC_COMPS, &p);
+        // BRAM warn rows
+        p.clear();
+        w64(&mut p, sa.warns.len() as u64);
+        for (slot, bits, name) in &sa.warns {
+            w64(&mut p, *slot);
+            w64(&mut p, *bits as u64);
+            w64(&mut p, name.len() as u64);
+            p.extend_from_slice(name.as_bytes());
+        }
+        sect(&mut img, RC_SEC_WARNS, &p);
+        // eligibility: [runcore flag, central-mirror flag, reason]
+        p.clear();
+        w64(&mut p, (central && reason.is_none()) as u64);
+        w64(&mut p, central as u64);
+        let r = reason.unwrap_or_default();
+        w64(&mut p, r.len() as u64);
+        p.extend_from_slice(r.as_bytes());
+        sect(&mut img, RC_SEC_ELIG, &p);
+        // bounce-reachable prim seeds (empty for site-free designs)
+        p.clear();
+        w64(&mut p, prim_rows.len() as u64);
+        for (inst, slot, tag, ws, ss) in prim_rows {
+            w64(&mut p, *inst);
+            w64(&mut p, *slot);
+            w64(&mut p, *tag);
+            w64(&mut p, ws.len() as u64);
+            for w in ws {
+                w64(&mut p, *w);
+            }
+            w64(&mut p, ss.len() as u64);
+            for s in ss {
+                w64(&mut p, s.len() as u64);
+                p.extend_from_slice(s.as_bytes());
+            }
+        }
+        sect(&mut img, RC_SEC_PRIMS, &p);
+        // mem-file loads (construction order; empty for file-free
+        // designs)
+        p.clear();
+        w64(&mut p, sa.load_rows.len() as u64);
+        for (inst, file, bin) in &sa.load_rows {
+            w64(&mut p, *inst);
+            w64(&mut p, file.len() as u64);
+            p.extend_from_slice(file.as_bytes());
+            w64(&mut p, *bin);
+        }
+        sect(&mut img, RC_SEC_LOADS, &p);
+        // bump the header version: sections present.  The version IS
+        // the eligibility-semantics revision — bump it whenever the
+        // gate rules change, so a driver never trusts an `eligible`
+        // flag computed under older rules (panel stale-pair finding).
+        // 2 = pre-prim-gate; 3 = prim-site + lib-BDPI gates; 4 =
+        // native prim servicing (sites eligible via PRIMS seeds); 5 =
+        // mem-file overlay (LOADS rows + two-fill-gated windows).
+        img[8..16].copy_from_slice(&5u64.to_le_bytes());
+        self.runcore_pending = Some(img);
+    }
+
+    /// TRS_RUNCORE_CHECK=1: compare this load's freshly built arena
+    /// against the artifact's sidecar image, and (v2) validate the
+    /// boot-descriptor sections against live state — strings, inst
+    /// paths, and BRAM warn rows compare here; clock, comp order, and
+    /// eligibility parse into a RunCoreDesc for the central-loop
+    /// engage witness.  A mismatch means a determinism or descriptor
+    /// claim failed — loud, never fatal (this is the witness, not the
+    /// boot).  Match reports under TRS_STARTUP_TIME.
+    fn runcore_image_check(&self, sidecar: &std::path::Path) -> Option<RunCoreDesc> {
+        let Ok(bytes) = std::fs::read(sidecar) else {
+            eprintln!(
+                "trs runcore: check requested but {} is unreadable",
+                sidecar.display()
+            );
+            return None;
+        };
+        let fail = |what: &str| {
+            eprintln!("trs runcore: MISMATCH vs {}: {what}", sidecar.display());
+        };
+        if bytes.len() < 8 + 32 || &bytes[..8] != b"TRSARENA" {
+            fail("bad header");
+            return None;
+        }
+        let rd = |k: usize| u64::from_le_bytes(bytes[8 + 8 * k..16 + 8 * k].try_into().unwrap());
+        let salted = self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544);
+        let version = rd(0);
+        if version != 1 && version != 5 {
+            // 2-4 = older eligibility-semantics revisions: stale
+            fail("unknown or stale version");
+            return None;
+        }
+        if rd(1) != trs_codegen::abi::AOT_LAYOUT_REV {
+            fail("layout revision");
+            return None;
+        }
+        if rd(2) != salted {
+            fail("design hash");
+            return None;
+        }
+        if rd(3) != self.jit_arena_len as u64 {
+            fail("arena length");
+            return None;
+        }
+        let words = unsafe { std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len) };
+        // mem-file data regions legitimately track the file (the link
+        // never reads it, this load did): mask them out of the arena
+        // compares; the LOADS section arm verifies the region claims
+        let mask = self.runcore_load_mask();
+        let masked = |k: usize| mask.iter().any(|&(s, l)| k >= s && k < s + l);
+        // find where the RLE runs end (also validates them; every
+        // field is file data and must be treated as hostile)
+        let mut pos = 8 + 32;
+        let mut slot = 0usize;
+        while slot < words.len() {
+            let (Some(vb), Some(rb)) = (bytes.get(pos..pos + 8), bytes.get(pos + 8..pos + 16))
+            else {
+                fail("image truncated mid-run");
+                return None;
+            };
+            let v = u64::from_le_bytes(vb.try_into().unwrap());
+            let run = u64::from_le_bytes(rb.try_into().unwrap());
+            pos += 16;
+            let Ok(run) = usize::try_from(run) else {
+                fail("run length overflow");
+                return None;
+            };
+            if run == 0 || run > words.len() - slot {
+                fail("run length out of range");
+                return None;
+            }
+            for k in slot..slot + run {
+                if words[k] != v && !masked(k) {
+                    fail(&format!("slot {k}: image {v:#x}, rebuilt {:#x}", words[k]));
+                    return None;
+                }
+            }
+            slot += run;
+        }
+        if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+            eprintln!("trs runcore: image MATCH ({} slots)", self.jit_arena_len);
+        }
+        if version == 1 {
+            return None;
+        }
+        let _ = version;
+        // -- v2 boot-descriptor sections --
+        // every take is bounds-checked and every failure REPORTS: a
+        // truncated or corrupt descriptor must never be a silent None
+        // (this parser is destined for the unconditional boot path)
+        let take8 = |pos: &mut usize| -> Option<u64> {
+            let v = bytes.get(*pos..*pos + 8)?;
+            *pos += 8;
+            Some(u64::from_le_bytes(v.try_into().unwrap()))
+        };
+        let take_str = |pos: &mut usize| -> Option<&str> {
+            let n = usize::try_from(take8(pos)?).ok()?;
+            let s = bytes.get(*pos..pos.checked_add(n)?)?;
+            *pos += n;
+            std::str::from_utf8(s).ok()
+        };
+        macro_rules! want {
+            ($e:expr, $what:literal) => {
+                match $e {
+                    Some(v) => v,
+                    None => {
+                        fail(concat!("descriptor truncated: ", $what));
+                        return None;
+                    }
+                }
+            };
+        }
+        if bytes.get(pos..pos + 8) != Some(&b"TRSBOOTD"[..]) {
+            fail("missing boot descriptor");
+            return None;
+        }
+        pos += 8;
+        let nsect = want!(take8(&mut pos), "section count");
+        if nsect > 64 {
+            fail("absurd section count");
+            return None;
+        }
+        let mut desc = RunCoreDesc {
+            hi: 0,
+            lo: 0,
+            delay: 0,
+            init_high: false,
+            has_init: false,
+            pos: Vec::new(),
+            neg: Vec::new(),
+            eligible: false,
+            central: false,
+            reason: String::new(),
+            window: None,
+        };
+        let mut seen_tags = 0u64;
+        let mut wstate = None;
+        let mut warena: Option<Vec<u64>> = None;
+        for _ in 0..nsect {
+            let tag = want!(take8(&mut pos), "section tag");
+            let len = want!(
+                usize::try_from(want!(take8(&mut pos), "section length")).ok(),
+                "section length overflow"
+            );
+            let end = want!(
+                pos.checked_add(len).map(|e| e.next_multiple_of(8)),
+                "section length overflow"
+            );
+            if end > bytes.len() {
+                fail("section overruns file");
+                return None;
+            }
+            if tag >= 1 && tag <= 63 {
+                if seen_tags & (1 << tag) != 0 {
+                    fail("duplicate section");
+                    return None;
+                }
+                seen_tags |= 1 << tag;
+            }
+            let mut p = pos;
+            match tag {
+                RC_SEC_STRINGS => {
+                    let n = want!(take8(&mut p), "string count");
+                    if n != self.d.strings.len() as u64 {
+                        fail("descriptor: string count");
+                        return None;
+                    }
+                    for want in &self.d.strings {
+                        if take_str(&mut p) != Some(want.as_str()) {
+                            fail("descriptor: string table drift");
+                            return None;
+                        }
+                    }
+                }
+                RC_SEC_PATHS => {
+                    let n = want!(take8(&mut p), "inst count");
+                    if n != self.insts.len() as u64 {
+                        fail("descriptor: inst count");
+                        return None;
+                    }
+                    for i in &self.insts {
+                        if take_str(&mut p) != Some(i.path.as_str()) {
+                            fail("descriptor: inst path drift");
+                            return None;
+                        }
+                    }
+                }
+                RC_SEC_CLOCK => {
+                    desc.hi = want!(take8(&mut p), "clock hi");
+                    desc.lo = want!(take8(&mut p), "clock lo");
+                    desc.delay = want!(take8(&mut p), "clock delay");
+                    desc.init_high = want!(take8(&mut p), "clock init") != 0;
+                    desc.has_init = want!(take8(&mut p), "clock has_init") != 0;
+                }
+                RC_SEC_COMPS => {
+                    let np = want!(take8(&mut p), "pos count");
+                    for _ in 0..np {
+                        desc.pos.push(want!(take8(&mut p), "pos ordinal") as usize);
+                    }
+                    let nn = want!(take8(&mut p), "neg count");
+                    for _ in 0..nn {
+                        desc.neg.push(want!(take8(&mut p), "neg ordinal") as usize);
+                    }
+                }
+                RC_SEC_WARNS => {
+                    let reg = crate::prim::bram_warn_rows();
+                    let n = want!(take8(&mut p), "warn count");
+                    let mut seen = 0usize;
+                    for _ in 0..n {
+                        let slot = want!(take8(&mut p), "warn slot");
+                        let bits = want!(take8(&mut p), "warn bits") as u32;
+                        let name = want!(take_str(&mut p), "warn name");
+                        // bounds BEFORE any pointer arithmetic: the
+                        // slot is file data (UB finding)
+                        if slot >= self.jit_arena_len as u64 {
+                            fail(&format!("warn slot {slot} out of range"));
+                            return None;
+                        }
+                        let key = unsafe { self.jit_arena_ptr.add(slot as usize) } as usize;
+                        match reg.get(&key) {
+                            Some((n2, b2)) if n2 == name && *b2 == bits => {
+                                seen += 1;
+                            }
+                            _ => {
+                                fail(&format!(
+                                    "descriptor: warn row drift at slot {slot} ({name})"
+                                ));
+                                return None;
+                            }
+                        }
+                    }
+                    // count only rows in THIS arena's slot range: the
+                    // registry is process-global and an earlier engine
+                    // in the same process (selfcheck) leaves its own
+                    let ours = reg
+                        .keys()
+                        .filter(|&&k| {
+                            let base = self.jit_arena_ptr as usize;
+                            k >= base && k < base + 8 * self.jit_arena_len
+                        })
+                        .count();
+                    if seen != ours {
+                        fail(&format!(
+                            "descriptor: warn rows {seen} baked vs {ours} live"
+                        ));
+                        return None;
+                    }
+                }
+                RC_SEC_ELIG => {
+                    desc.eligible = want!(take8(&mut p), "elig flag") != 0;
+                    desc.central = want!(take8(&mut p), "central flag") != 0;
+                    desc.reason = want!(take_str(&mut p), "elig reason").to_string();
+                }
+                RC_SEC_WARENA => {
+                    let Some(w) = rle_decode(&bytes[p..pos + len], self.jit_arena_len) else {
+                        fail("window arena malformed");
+                        return None;
+                    };
+                    warena = Some(w);
+                }
+                RC_SEC_WSTATE => {
+                    wstate = Some((
+                        want!(take8(&mut p), "window tp"),
+                        want!(take8(&mut p), "window tn"),
+                        want!(take8(&mut p), "window cycle"),
+                    ));
+                }
+                RC_SEC_PRIMS => {
+                    // recompute the bounce-reachable set from the live
+                    // plan and compare each baked seed against the
+                    // live prim's own serialization + attachment
+                    let Some(lz) = self.jit_shared.as_ref() else {
+                        fail("descriptor: prim seeds without a live plan");
+                        return None;
+                    };
+                    let mut want_insts: std::collections::BTreeSet<usize> = Default::default();
+                    for pr in lz.protos.iter() {
+                        for pc in pr.prims.iter() {
+                            want_insts.insert(pc.inst);
+                        }
+                    }
+                    // mem-file prims are in the PRIMS rows too (the
+                    // boot's overlay drives them) — same union here
+                    want_insts.extend(self.runcore_live_loads().iter().map(|r| r.0 as usize));
+                    // mirror the encoder: if ANY bounce-reachable inst
+                    // is unattached or unseedable, desc_finish encoded
+                    // ZERO rows (and an ineligible reason) — expecting
+                    // the full set there made the witness cry wolf on
+                    // every such design (panel finding)
+                    let seedable = want_insts.iter().all(|&i| {
+                        matches!(&self.insts[i].kind, InstKind::Prim(pm)
+                            if pm.runcore_seed().is_some()
+                                && pm.runcore_slot().is_some())
+                    });
+                    let expect = if seedable { want_insts.len() } else { 0 };
+                    let n = want!(take8(&mut p), "prim seed count");
+                    if n != expect as u64 {
+                        fail(&format!(
+                            "descriptor: {n} prim seeds baked vs {expect} \
+                             expected live"
+                        ));
+                        return None;
+                    }
+                    let mut seen_insts = std::collections::HashSet::new();
+                    for _ in 0..n {
+                        let inst = want!(take8(&mut p), "prim seed inst") as usize;
+                        let slot = want!(take8(&mut p), "prim seed slot");
+                        let tag = want!(take8(&mut p), "prim seed tag");
+                        let nw = want!(take8(&mut p), "prim seed words");
+                        if nw > 64 {
+                            fail("descriptor: absurd prim seed words");
+                            return None;
+                        }
+                        let mut ws = Vec::with_capacity(nw as usize);
+                        for _ in 0..nw {
+                            ws.push(want!(take8(&mut p), "prim seed word"));
+                        }
+                        let ns = want!(take8(&mut p), "prim seed strings");
+                        if ns > 8 {
+                            fail("descriptor: absurd prim seed strings");
+                            return None;
+                        }
+                        let mut ss = Vec::with_capacity(ns as usize);
+                        for _ in 0..ns {
+                            ss.push(want!(take_str(&mut p), "prim seed string").to_string());
+                        }
+                        if !want_insts.contains(&inst) {
+                            fail(&format!(
+                                "descriptor: prim seed for inst {inst} \
+                                 which no live call site reaches"
+                            ));
+                            return None;
+                        }
+                        if !seen_insts.insert(inst) {
+                            fail(&format!(
+                                "descriptor: duplicate prim seed for \
+                                 inst {inst}"
+                            ));
+                            return None;
+                        }
+                        let InstKind::Prim(pm) = &self.insts[inst].kind else {
+                            fail("descriptor: prim seed on non-prim inst");
+                            return None;
+                        };
+                        if pm.runcore_seed() != Some((tag, ws, ss)) {
+                            fail(&format!(
+                                "descriptor: prim seed drift at inst \
+                                 {inst} ({})",
+                                self.insts[inst].path
+                            ));
+                            return None;
+                        }
+                        let live = pm.runcore_slot().and_then(|ptr| {
+                            (ptr as usize)
+                                .checked_sub(self.jit_arena_ptr as usize)
+                                .map(|d| d / 8)
+                        });
+                        if live != Some(slot as usize) {
+                            fail(&format!(
+                                "descriptor: prim slot drift at inst \
+                                 {inst}: baked {slot}, live {live:?}"
+                            ));
+                            return None;
+                        }
+                    }
+                }
+                RC_SEC_LOADS => {
+                    // compare the baked rows against the live prims'
+                    // retained load requests, in construction order
+                    let live_loads = self.runcore_live_loads();
+                    let n = want!(take8(&mut p), "load row count");
+                    if n != live_loads.len() as u64 {
+                        fail(&format!(
+                            "descriptor: {n} load rows baked vs {} live",
+                            live_loads.len()
+                        ));
+                        return None;
+                    }
+                    for want_row in &live_loads {
+                        let inst = want!(take8(&mut p), "load inst");
+                        let file = want!(take_str(&mut p), "load file").to_string();
+                        let bin = want!(take8(&mut p), "load bin");
+                        if (inst, file.as_str(), bin)
+                            != (want_row.0, want_row.1.as_str(), want_row.2)
+                        {
+                            fail(&format!(
+                                "descriptor: load row drift at inst {inst} \
+                                 ({file})"
+                            ));
+                            return None;
+                        }
+                    }
+                }
+                _ => {
+                    fail(&format!("descriptor: unknown section {tag}"));
+                    return None;
+                }
+            }
+            pos = end;
+        }
+        // required sections: 1-6 + 9 + 10 always; window sections
+        // travel as a pair or not at all
+        for t in [
+            RC_SEC_STRINGS,
+            RC_SEC_PATHS,
+            RC_SEC_CLOCK,
+            RC_SEC_COMPS,
+            RC_SEC_WARNS,
+            RC_SEC_ELIG,
+            RC_SEC_PRIMS,
+            RC_SEC_LOADS,
+        ] {
+            if seen_tags & (1 << t) == 0 {
+                fail("descriptor: missing required section");
+                return None;
+            }
+        }
+        match (warena, wstate) {
+            (Some(a), Some((tp, tn, cyc))) => {
+                desc.window = Some((a, tp, tn, cyc));
+            }
+            (None, None) => {}
+            _ => {
+                fail("descriptor: window sections must travel as a pair");
+                return None;
+            }
+        }
+        // an eligible claim with a degenerate clock or no posedge
+        // comps is self-contradictory — refuse it before any boot
+        // path could trust it
+        if (desc.eligible || desc.central) && (desc.hi + desc.lo == 0 || desc.pos.is_empty()) {
+            fail("descriptor: eligible with degenerate clock/comps");
+            return None;
+        }
+        if desc.eligible && !desc.central {
+            fail("descriptor: runcore-eligible but not central-eligible");
+            return None;
+        }
+        if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+            eprintln!(
+                "trs runcore: descriptor sections MATCH (eligible={} \
+                 central={} {}{})",
+                desc.eligible,
+                desc.central,
+                desc.reason,
+                if desc.window.is_some() {
+                    " +window"
+                } else {
+                    ""
+                }
+            );
+        }
+        Some(desc)
+    }
+
+    /// Window-bake sections: the current (post-window) arena as RLE
+    /// plus the engage-point clock state.  Called from the central
+    /// loop's engage point when runcore_bake is armed.
+    pub(crate) fn runcore_window_encode(&self, tp: u64, tn: u64) -> Vec<u8> {
+        let words = unsafe { std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len) };
+        let w64 = |o: &mut Vec<u8>, v: u64| o.extend_from_slice(&v.to_le_bytes());
+        let mut rle = Vec::new();
+        rle_push(words, &mut rle);
+        let mut out = Vec::with_capacity(rle.len() + 64);
+        w64(&mut out, RC_SEC_WARENA);
+        w64(&mut out, rle.len() as u64);
+        out.extend_from_slice(&rle);
+        // rle is 16-byte-granular, already 8-aligned
+        w64(&mut out, RC_SEC_WSTATE);
+        w64(&mut out, 24);
+        for v in [tp, tn, self.cycle] {
+            w64(&mut out, v);
+        }
+        out
+    }
+
+    // -- link-time window bake (docs/RUNCORE.md): runcore_bake_capture
+    // runs the reset window quiet on a FRESH interp with an artifact
+    // Load request armed; runcore_bake_commit gates (two-fill, for
+    // mem-file designs) and splices the captured sections into the
+    // sidecar.  Every non-clean outcome is a silent classic boot. --
+
+    /// The live mem-file data regions as absolute (word index, len)
+    /// ranges into the arena — the words whose content legitimately
+    /// tracks the load file (masked by every arena witness compare;
+    /// rewritten by the boot's overlay).
+    pub(crate) fn runcore_load_mask(&self) -> Vec<(usize, usize)> {
+        let base = self.jit_arena_ptr as usize;
+        let mut m = Vec::new();
+        for inst in &self.insts {
+            if let InstKind::Prim(p) = &inst.kind {
+                if p.runcore_load().is_some() {
+                    if let (Some(ptr), Some((off, len))) =
+                        (p.runcore_slot(), p.runcore_load_region())
+                    {
+                        if let Some(s) = (ptr as usize).checked_sub(base) {
+                            m.push((s / 8 + off, len));
+                        }
+                    }
+                }
+            }
+        }
+        m
+    }
+
+    /// The live mem-file load rows, (inst, file, binary_format) in
+    /// construction order — the single source both the encoder and
+    /// the witness use (drift between them is exactly what the
+    /// witness compare exists to catch, so they must share one walk).
+    pub(crate) fn runcore_live_loads(&self) -> Vec<(u64, String, u64)> {
+        let mut rows = Vec::new();
+        for (ci, inst) in self.insts.iter().enumerate() {
+            if let InstKind::Prim(p) = &inst.kind {
+                if let Some((f, bin)) = p.runcore_load() {
+                    rows.push((ci as u64, f, bin as u64));
+                }
+            }
+        }
+        rows
+    }
+
+    /// True when the design has mem-file prims (RegFileLoad /
+    /// BRAM*Load) — the link's bake then runs the two-fill gate.
+    pub fn runcore_has_loads(&self) -> bool {
+        self.insts
+            .iter()
+            .any(|i| matches!(&i.kind, InstKind::Prim(p) if p.runcore_load().is_some()))
+    }
+
+    /// Run the reset window on the loaded artifact and capture the
+    /// boundary state (docs/RUNCORE.md).  `fill`: two-fill gate
+    /// pattern written into every mem-file data region at plan time.
+    /// None = not bakeable — never engaged, dirty window, or a
+    /// perturbed region was written during the window (the boot's
+    /// overlay would lose that write) — the design boots classic.
+    pub fn runcore_bake_capture(&mut self, fill: Option<u64>) -> Option<RunCoreBake> {
+        self.set_quiet();
+        self.runcore_bake = true;
+        self.runcore_bake_fill = fill;
+        let before = crate::prim::WINDOW_EFFECTS.load(std::sync::atomic::Ordering::Relaxed);
+        // TWO cycles: advance(1) finishes cycle 1's timeslice and stops
+        // BEFORE the pop that deasserts reset — the engage point (and
+        // the capture) is only reached on the way to cycle 2.  The
+        // capture snapshots the effects counter, so the one steady
+        // cycle executed past the boundary cannot pollute the gate.
+        self.advance(2);
+        let captured = self.runcore_window.take();
+        let clean = captured
+            .as_ref()
+            .is_some_and(|(_, at_capture, _)| *at_capture == before);
+        // regions untouched by the window: with the fill in place, a
+        // window write into a region would leave it != the fill image
+        let regions_hold = fill.is_none_or(|pat| {
+            self.insts.iter().all(|i| match &i.kind {
+                InstKind::Prim(p) if p.runcore_load().is_some() && p.runcore_slot().is_some() => {
+                    p.runcore_region_is(pat)
+                }
+                _ => true,
+            })
+        });
+        if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+            let bails: Vec<String> = crate::CENTRAL_BAIL
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    let n = c.load(std::sync::atomic::Ordering::Relaxed);
+                    (n > 0).then(|| format!("#{i}x{n}"))
+                })
+                .collect();
+            eprintln!(
+                "trs runcore: bake engaged={} clean={clean} \
+                 regions_hold={regions_hold} (bails [{}])",
+                captured.is_some(),
+                bails.join(" ")
+            );
+        }
+        let (sections, _, state) = captured?;
+        if !clean || !regions_hold {
+            return None;
+        }
+        let arena =
+            unsafe { std::slice::from_raw_parts(self.jit_arena_ptr, self.jit_arena_len) }.to_vec();
+        Some(RunCoreBake {
+            sections,
+            arena,
+            mask: self.runcore_load_mask(),
+            state,
+        })
+    }
+}
+
+/// One window-bake capture: the encoded window sections plus what the
+/// two-fill gate compares.
+pub struct RunCoreBake {
+    sections: Vec<u8>,
+    /// the post-window (boundary) arena
+    arena: Vec<u64>,
+    /// mem-file data regions, absolute (word index, len)
+    mask: Vec<(usize, usize)>,
+    /// (tp, tn, cycle) at capture
+    state: (u64, u64, u64),
+}
+
+/// Two-fill gate + sidecar splice.  For a mem-file design, `a` and
+/// `b` are captures under DIFFERENT fill patterns: baking is sound
+/// only when every word OUTSIDE the load regions (and the clock
+/// state) agrees — the window provably does not depend on the file
+/// content the boot's overlay will replace.  File-free designs pass
+/// `b = None` (single capture, no gate).
+pub fn runcore_bake_commit(
+    sidecar: &std::path::Path,
+    a: &RunCoreBake,
+    b: Option<&RunCoreBake>,
+) -> Result<bool, String> {
+    if let Some(b) = b {
+        let masked = |k: usize| a.mask.iter().any(|&(s, l)| k >= s && k < s + l);
+        let sound = a.state == b.state
+            && a.mask == b.mask
+            && a.arena.len() == b.arena.len()
+            && (0..a.arena.len()).all(|k| masked(k) || a.arena[k] == b.arena[k]);
+        if !sound {
+            if std::env::var_os("TRS_STARTUP_TIME").is_some() {
+                eprintln!(
+                    "trs runcore: bake refused — window depends on \
+                     mem-file content (two-fill gate)"
+                );
+            }
+            return Ok(false);
+        }
+    }
+    let sections = &a.sections;
+    let mut bytes = std::fs::read(sidecar).map_err(|e| format!("{}: {e}", sidecar.display()))?;
+    // bump nsect (u64 right after TRSBOOTD) by 2 and append
+    let Some(td) = bytes
+        .windows(8)
+        .position(|w| w == b"TRSBOOTD")
+        .filter(|&i| i + 16 <= bytes.len())
+    else {
+        return Err("sidecar has no boot descriptor".into());
+    };
+    let nsect = u64::from_le_bytes(bytes[td + 8..td + 16].try_into().unwrap());
+    bytes[td + 8..td + 16].copy_from_slice(&(nsect + 2).to_le_bytes());
+    bytes.extend_from_slice(sections);
+    let tmp = sidecar.with_extension("arena.tmp");
+    std::fs::write(&tmp, &bytes)
+        .and_then(|()| std::fs::rename(&tmp, sidecar))
+        .map_err(|e| format!("{}: {e}", sidecar.display()))?;
+    Ok(true)
+}
+
+/// Worker-thread count for compile fan-out (TRS_JIT_THREADS caps).
+fn jit_workers(n: usize) -> usize {
+    std::env::var("TRS_JIT_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|x| x.get())
+                .unwrap_or(8)
+        })
+        .clamp(1, 64)
+        .min(n.max(1))
+}
+
+/// Stdio-flush callback for direct BDPI calls: phase 0 flushes the
+/// runtime's stdout sink BEFORE the C call, phase 1 fflush(NULL)es
+/// libc's buffers after — the interleaving contract bdpi::Bdpi::call
+/// keeps.
+pub(crate) unsafe extern "C" fn jit_stdio_cb(phase: u64) {
+    if phase == 0 {
+        crate::out::flush();
+    } else {
+        unsafe { libc::fflush(std::ptr::null_mut()) };
+    }
+}
+
+impl Interp {
+    /// Ticks the edge fns compile: ungated, non-reset ticks of
+    /// arena-backed wires (RWire/PulseWire valid-bit clears).  Returns
+    /// per composition the valid-slot list (emitter) and the covered
+    /// rc.ticks indices (runtime skip + central preconditions).  Must
+    /// stay deterministic across processes: the linker bakes the
+    /// clears, the loader re-derives the covered set.
+    fn prim_tick_coverage(
+        &self,
+        inst_envs: &HashMap<usize, InstEnv>,
+        rcomps: &[RComp],
+    ) -> TickCoverage {
+        let mut wire_of: HashMap<usize, u32> = HashMap::new();
+        let mut creg_of: HashMap<usize, (u32, u32)> = HashMap::new();
+        let mut bram_of: HashMap<usize, (u32, u32, u64, u32, u32, bool)> = HashMap::new();
+        for ie in inst_envs.values() {
+            for (name, &(base, _w)) in &ie.wire_slot {
+                if let Some(&gi) = ie.children.get(name) {
+                    wire_of.insert(gi, base);
+                }
+            }
+            for (name, &(base, w)) in &ie.creg5_slot {
+                if let Some(&gi) = ie.children.get(name) {
+                    creg_of.insert(gi, (base, w.max(1).div_ceil(64)));
+                }
+            }
+            for (name, &(base, w, sz, cs, nw, du, _pl)) in &ie.bram_slot {
+                if let Some(&gi) = ie.children.get(name) {
+                    bram_of.insert(gi, (base, w, sz, cs, nw, du));
+                }
+            }
+        }
+        let mut out = TickCoverage {
+            wire_clears: Vec::with_capacity(rcomps.len()),
+            creg_copies: Vec::with_capacity(rcomps.len()),
+            bram_ticks: Vec::with_capacity(rcomps.len()),
+            covered_wire: Vec::with_capacity(rcomps.len()),
+            covered_all: Vec::with_capacity(rcomps.len()),
+        };
+        for rc in rcomps {
+            let mut cl: Vec<u32> = Vec::new();
+            let mut cc: Vec<(u32, u32)> = Vec::new();
+            let mut bt: Vec<[u64; 3]> = Vec::new();
+            let mut cov_w = std::collections::HashSet::new();
+            let mut cov_a = std::collections::HashSet::new();
+            for (ti, (inst, pname, is_rst, _owner, gexpr)) in rc.ticks.iter().enumerate() {
+                if *is_rst || gexpr.is_some() || self.rstgen_out.contains_key(inst) {
+                    continue;
+                }
+                if let Some(&slot) = wire_of.get(inst) {
+                    cl.push(slot);
+                    cov_w.insert(ti);
+                    cov_a.insert(ti);
+                } else if let Some(&(base, words)) = creg_of.get(inst) {
+                    cc.push((base, words));
+                    cov_a.insert(ti);
+                } else if let Some(&(base, w, sz, cs, nw, du)) = bram_of.get(inst) {
+                    // tick order is preserved (the cross-port bypass
+                    // reads the other port's just-latched written_at)
+                    bt.push(trs_codegen::abi::bram_tick_args(
+                        base,
+                        pname == "clkB",
+                        w,
+                        sz,
+                        cs,
+                        nw,
+                        du,
+                    ));
+                    cov_a.insert(ti);
+                }
+            }
+            cl.sort_unstable();
+            out.wire_clears.push(cl);
+            out.creg_copies.push(cc);
+            out.bram_ticks.push(bt);
+            out.covered_wire.push(cov_w);
+            out.covered_all.push(cov_a);
+        }
+        out
+    }
+
+    /// Task #24 M1: gap-wise cross-rule def-sharing legality census.
+    /// For every def consumed by 2+ exec bodies of a composition,
+    /// decide per consumer-gap whether the anchor value survives —
+    /// i.e. no intervening exec writes state the def's cone reads
+    /// UNSTABLY (stable = begin-of-instant prim contracts only:
+    /// ConfigReg reads, FIFO i_* views).  Prints the shareable vs
+    /// must-recompute mass and a kill histogram; this table is what
+    /// the SSA edge emitter (M2) consumes as its legality oracle.
+    fn edge_ssa_plan(
+        &self,
+        inst_envs: &HashMap<usize, InstEnv>,
+        nodes: &[Vec<(bool, usize)>],
+        specs: &[RuleSpec],
+        has_early: bool,
+        stats: bool,
+        // activity-gating dirty-region geometry (allocated by
+        // jit_plan for every request kind); None = the caller forbids
+        // gating for this plan (stats runs, traced artifacts)
+        gate: Option<trs_codegen::abi::GateLayout>,
+    ) -> trs_codegen::abi::EdgeSsaPlan {
+        let specs_lite: Vec<(usize, usize)> =
+            specs.iter().map(|sp| (sp.inst, sp.rule_idx)).collect();
+        let specs_lite = &specs_lite[..];
+        use std::collections::HashSet;
+        use trs_ir::{Action as A, Expr as E, InstanceKind, Primitive as P, Stmt};
+
+        #[derive(Clone)]
+        struct Cone {
+            /// prim instances this cone reads with NO stability contract
+            reads: HashSet<usize>,
+            /// EVERY prim instance this cone reads, stability contract
+            /// or not: the activity-gate sensitivity masks are built
+            /// from this set — a stability contract says a value
+            /// cannot move INTRA-edge, but gating asks whether it
+            /// moved ACROSS edges, where stable reads change like any
+            /// other (using `reads` here was the unsound shortcut)
+            reads_all: HashSet<usize>,
+            /// transitive def closure (inst, def), incl. the root
+            defs: HashSet<(usize, StrId)>,
+            /// root def's own expr node count (share-census units)
+            mass: u64,
+            /// hoist-poison bitmask (0 = pure/hoistable):
+            /// 1=port read, 2=foreign/task ref, 4=non-arena-inline prim
+            poison: u8,
+        }
+        impl Default for Cone {
+            fn default() -> Self {
+                Cone {
+                    reads: HashSet::new(),
+                    reads_all: HashSet::new(),
+                    defs: HashSet::new(),
+                    mass: 0,
+                    poison: 0,
+                }
+            }
+        }
+        impl Cone {
+            fn pure(&self) -> bool {
+                self.poison == 0
+            }
+            fn absorb(&mut self, o: &Cone) {
+                self.reads.extend(o.reads.iter().copied());
+                self.reads_all.extend(o.reads_all.iter().copied());
+                self.defs.extend(o.defs.iter().copied());
+                self.poison |= o.poison;
+            }
+        }
+
+        // the exporter ships prims as Other{name} (prim.rs classifies
+        // by the same strings); the enum variants are matched too in
+        // case the exporter ever starts using them
+        fn cat(p: &P, s: &dyn Fn(StrId) -> String) -> &'static str {
+            match p {
+                P::Reg { .. } => "reg",
+                P::ConfigReg { .. } => "configreg",
+                P::CReg { .. } => "creg",
+                P::Wire { .. } => "wire",
+                P::Fifo { .. } => "fifo",
+                P::RegFile { .. } => "regfile",
+                P::Bram { .. } => "bram",
+                P::Other { name } => {
+                    let n = s(*name);
+                    if n.starts_with("ConfigReg") {
+                        "configreg"
+                    } else if n.starts_with("CReg") {
+                        "creg"
+                    } else if n.starts_with("Reg") {
+                        "reg"
+                    } else if n.contains("FIFO") {
+                        "fifo"
+                    } else if n.contains("Wire") {
+                        "wire"
+                    } else if n.starts_with("RegFile") {
+                        "regfile"
+                    } else if n.starts_with("BRAM") {
+                        "bram"
+                    } else {
+                        "other"
+                    }
+                }
+                _ => "other",
+            }
+        }
+        fn stable_read(pc: &'static str, m: &str) -> bool {
+            pc == "configreg" || (pc == "fifo" && m.starts_with("i_"))
+        }
+        fn expr_mass(e: &E) -> u64 {
+            let mut n = 1u64;
+            match e {
+                E::MethCall { args, .. } | E::Prim { args, .. } | E::ForeignCall { args, .. } => {
+                    for a in args {
+                        n += expr_mass(a);
+                    }
+                }
+                E::If {
+                    cond, then_, else_, ..
+                } => {
+                    n += expr_mass(cond) + expr_mass(then_) + expr_mass(else_);
+                }
+                E::Case {
+                    scrutinee,
+                    arms,
+                    default,
+                    ..
+                } => {
+                    n += expr_mass(scrutinee) + expr_mass(default);
+                    for (_, a) in arms {
+                        n += expr_mass(a);
+                    }
+                }
+                _ => {}
+            }
+            n
+        }
+        fn child<'a>(
+            d: &'a trs_ir::Design,
+            inst_envs: &HashMap<usize, InstEnv>,
+            inst: usize,
+            name: StrId,
+        ) -> Option<(usize, &'a InstanceKind)> {
+            let ie = inst_envs.get(&inst)?;
+            let gi = *ie.children.get(&name)?;
+            let k = &d.modules[ie.mir]
+                .instances
+                .iter()
+                .find(|i| i.name == name)?
+                .kind;
+            Some((gi, k))
+        }
+
+        struct Ctx<'a> {
+            itp: &'a Interp,
+            inst_envs: &'a HashMap<usize, InstEnv>,
+            prim_cat: HashMap<usize, &'static str>,
+            cone_memo: HashMap<(usize, StrId), Cone>,
+            write_memo: HashMap<(usize, StrId), HashSet<usize>>,
+        }
+
+        fn walk_expr(cx: &mut Ctx, inst: usize, e: &E, out: &mut Cone) {
+            match e {
+                E::Def(n) => {
+                    let c = cone(cx, inst, *n);
+                    out.absorb(&c);
+                    out.defs.insert((inst, *n));
+                }
+                E::MethCall {
+                    instance,
+                    method,
+                    args,
+                    ..
+                } => {
+                    for a in args {
+                        walk_expr(cx, inst, a, out);
+                    }
+                    match child(&cx.itp.d, cx.inst_envs, inst, *instance) {
+                        Some((gi, InstanceKind::Bvi(_))) => {
+                            // Opaque external-engine read: never hoistable.
+                            cx.prim_cat.insert(gi, "bvi");
+                            out.reads.insert(gi);
+                            out.poison |= 4;
+                        }
+                        Some((gi, InstanceKind::Prim(p))) => {
+                            let s = |n: StrId| cx.itp.s(n).to_string();
+                            let pc = cat(p, &s);
+                            cx.prim_cat.insert(gi, pc);
+                            if !stable_read(pc, cx.itp.s(*method)) {
+                                out.reads.insert(gi);
+                            }
+                            out.reads_all.insert(gi);
+                            // hoist purity: the read must be an
+                            // arena-inline load for THIS instance
+                            let ie = &cx.inst_envs[&inst];
+                            let inline_ok = ie.reg_slot.contains_key(instance)
+                                || ie.wire_slot.contains_key(instance)
+                                || ie.creg_slot.contains_key(instance)
+                                || ie.fifo_slot.contains_key(instance);
+                            if !inline_ok {
+                                out.poison |= 4;
+                            }
+                        }
+                        Some((gi, InstanceKind::Module(_))) => {
+                            // value methods inline LAZILY (child frame,
+                            // result expr, defs on demand) — the true
+                            // cone is the RESULT's closure only.
+                            // Walking the whole body drags in arg-
+                            // dependent defs the emitted code never
+                            // evaluates (over-poisoning; Ravi's catch)
+                            let cmir = cx.inst_envs[&gi].mir;
+                            let mm = cx.itp.d.modules[cmir]
+                                .methods
+                                .iter()
+                                .find(|m| m.name == *method)
+                                .cloned();
+                            if let Some(mm) = mm {
+                                if let Some(res) = &mm.result {
+                                    walk_expr(cx, gi, res, out);
+                                }
+                            }
+                        }
+                        None => {}
+                    }
+                }
+                E::Prim { args, .. } => {
+                    // No prim traps or has an effect of its own -- a
+                    // zero divisor gives a defined result -- so a
+                    // cone containing one is hoistable, and only the
+                    // arguments can poison it.
+                    for a in args {
+                        walk_expr(cx, inst, a, out);
+                    }
+                }
+                E::ForeignCall { args, .. } => {
+                    out.poison |= 2;
+                    for a in args {
+                        walk_expr(cx, inst, a, out);
+                    }
+                }
+                E::If {
+                    cond, then_, else_, ..
+                } => {
+                    walk_expr(cx, inst, cond, out);
+                    walk_expr(cx, inst, then_, out);
+                    walk_expr(cx, inst, else_, out);
+                }
+                E::Case {
+                    scrutinee,
+                    arms,
+                    default,
+                    ..
+                } => {
+                    walk_expr(cx, inst, scrutinee, out);
+                    for (_, a) in arms {
+                        walk_expr(cx, inst, a, out);
+                    }
+                    walk_expr(cx, inst, default, out);
+                }
+                // ports poison hoistability: method args are
+                // call-site-specific, EN ports mutate DURING the edge
+                // (unmodeled by the read-sets), and a hoisted frame has
+                // no port bindings at all
+                E::Port(n) => {
+                    // classify: MethodArg = call-site-specific (bit 1),
+                    // MethodEnable = intra-edge mutable EN (bit 8),
+                    // Reset/Clock/Parameter = frame-independent (bit 16
+                    // for now: admissible once the lowering resolves
+                    // them outside their home frame)
+                    let mir = cx.inst_envs[&inst].mir;
+                    let kind = cx.itp.d.modules[mir]
+                        .inputs
+                        .iter()
+                        .find(|pt| pt.name == *n)
+                        .map(|pt| pt.kind);
+                    out.poison |= match kind {
+                        Some(trs_ir::PortKind::MethodEnable) => 8,
+                        Some(trs_ir::PortKind::Reset)
+                        | Some(trs_ir::PortKind::Clock)
+                        | Some(trs_ir::PortKind::ClockGate) => 16,
+                        _ => 1,
+                    };
+                }
+                E::TaskValue { .. } => {
+                    out.poison |= 2;
+                }
+                _ => {}
+            }
+        }
+        // defs (and their cones) referenced by a body statement,
+        // EXPRESSION side only — actions' state effects live in
+        // stmt_writes
+        fn walk_stmt_defs(cx: &mut Ctx, inst: usize, st: &Stmt, out: &mut Cone) {
+            match st {
+                Stmt::Def { expr, .. } => walk_expr(cx, inst, expr, out),
+                Stmt::Action(a) | Stmt::AvAction { action: a, .. } => match a {
+                    A::MethCall {
+                        cond,
+                        args,
+                        instance,
+                        method,
+                        ..
+                    } => {
+                        walk_expr(cx, inst, cond, out);
+                        for x in args {
+                            walk_expr(cx, inst, x, out);
+                        }
+                        // a child ACTION method's body may read further
+                        // defs (in the child's frame)
+                        if let Some((gi, InstanceKind::Module(_))) =
+                            child(&cx.itp.d, cx.inst_envs, inst, *instance)
+                        {
+                            let cmir = cx.inst_envs[&gi].mir;
+                            let mm = cx.itp.d.modules[cmir]
+                                .methods
+                                .iter()
+                                .find(|m| m.name == *method)
+                                .cloned();
+                            if let Some(mm) = mm {
+                                for st2 in &mm.body {
+                                    walk_stmt_defs(cx, gi, st2, out);
+                                }
+                            }
+                        }
+                    }
+                    A::Foreign { cond, args, .. } | A::Task { cond, args, .. } => {
+                        walk_expr(cx, inst, cond, out);
+                        for x in args {
+                            walk_expr(cx, inst, x, out);
+                        }
+                    }
+                },
+                Stmt::Cond { cond, then_, else_ } => {
+                    walk_expr(cx, inst, cond, out);
+                    for s in then_ {
+                        walk_stmt_defs(cx, inst, s, out);
+                    }
+                    for s in else_ {
+                        walk_stmt_defs(cx, inst, s, out);
+                    }
+                }
+            }
+        }
+        fn cone(cx: &mut Ctx, inst: usize, n: StrId) -> Cone {
+            if let Some(c) = cx.cone_memo.get(&(inst, n)) {
+                return c.clone();
+            }
+            // defs are a DAG; placeholder guards pathological input
+            cx.cone_memo.insert((inst, n), Cone::default());
+            let mir = cx.inst_envs[&inst].mir;
+            let mut c = Cone::default();
+            c.defs.insert((inst, n));
+            let dd = cx.itp.d.modules[mir]
+                .defs
+                .iter()
+                .find(|d| d.name == n)
+                .cloned();
+            if let Some(dd) = dd {
+                c.mass = expr_mass(&dd.expr);
+                walk_expr(cx, inst, &dd.expr, &mut c);
+            } else {
+                // not in any def table: a SYNTHETIC ActionValue result,
+                // bound only inside the rule performing the call —
+                // context-bound like an arg port, never hoist/share
+                // (RadixSort: hoisting a slice of AVMeth_dut_response_get
+                // into another rule's section has no binding to read)
+                c.poison |= 1;
+            }
+            cx.cone_memo.insert((inst, n), c.clone());
+            c
+        }
+        // prim instances an action body (rule or action method) writes
+        fn stmt_writes(cx: &mut Ctx, inst: usize, stmts: &[Stmt], out: &mut HashSet<usize>) {
+            for st in stmts {
+                match st {
+                    Stmt::Action(a) | Stmt::AvAction { action: a, .. } => {
+                        if let A::MethCall {
+                            instance, method, ..
+                        } = a
+                        {
+                            match child(&cx.itp.d, cx.inst_envs, inst, *instance) {
+                                Some((gi, InstanceKind::Bvi(_))) => {
+                                    cx.prim_cat.insert(gi, "bvi");
+                                    out.insert(gi);
+                                }
+                                Some((gi, InstanceKind::Prim(p))) => {
+                                    let s = |n: StrId| cx.itp.s(n).to_string();
+                                    cx.prim_cat.insert(gi, cat(p, &s));
+                                    out.insert(gi);
+                                }
+                                Some((gi, InstanceKind::Module(_))) => {
+                                    let key = (gi, *method);
+                                    if let Some(w) = cx.write_memo.get(&key) {
+                                        out.extend(w.iter().copied());
+                                    } else {
+                                        cx.write_memo.insert(key, HashSet::new());
+                                        let cmir = cx.inst_envs[&gi].mir;
+                                        let mm = cx.itp.d.modules[cmir]
+                                            .methods
+                                            .iter()
+                                            .find(|m| m.name == *method)
+                                            .cloned();
+                                        let mut w = HashSet::new();
+                                        if let Some(mm) = mm {
+                                            stmt_writes(cx, gi, &mm.body, &mut w);
+                                        }
+                                        out.extend(w.iter().copied());
+                                        cx.write_memo.insert(key, w);
+                                    }
+                                }
+                                None => {}
+                            }
+                        }
+                    }
+                    Stmt::Cond { then_, else_, .. } => {
+                        stmt_writes(cx, inst, then_, out);
+                        stmt_writes(cx, inst, else_, out);
+                    }
+                    Stmt::Def { .. } => {}
+                }
+            }
+        }
+
+        let mut cx = Ctx {
+            itp: self,
+            inst_envs,
+            prim_cat: HashMap::new(),
+            cone_memo: HashMap::new(),
+            write_memo: HashMap::new(),
+        };
+
+        // one body resolver for rule specs AND auto-fire pseudo-specs
+        // (whose synthetic rule_idx must never index rules): the
+        // method body is the section body, so its cones and write
+        // sets analyze exactly like a rule's
+        let spec_body = |o: usize| -> Vec<Stmt> {
+            let sp = &specs[o];
+            let mir = inst_envs[&sp.inst].mir;
+            match &sp.autofire {
+                Some(af) => self.d.modules[mir].methods[af.method_idx].body.clone(),
+                None => self.d.modules[mir].rules[sp.rule_idx].body.to_vec(),
+            }
+        };
+        // per-ordinal exec write sets (all rules, once)
+        let mut exec_writes: Vec<Vec<usize>> = Vec::with_capacity(specs_lite.len());
+        let mut write_sets: Vec<HashSet<usize>> = Vec::with_capacity(specs_lite.len());
+        for (o, &(inst, _ridx)) in specs_lite.iter().enumerate() {
+            let body = spec_body(o);
+            let mut w = HashSet::new();
+            stmt_writes(&mut cx, inst, &body, &mut w);
+            let mut v: Vec<usize> = w.iter().copied().collect();
+            v.sort_unstable();
+            exec_writes.push(v);
+            write_sets.push(w);
+        }
+
+        let mut def_reads: HashMap<(usize, StrId), Vec<usize>> = HashMap::new();
+        let mut hoists: Vec<Vec<Vec<(usize, StrId)>>> = Vec::with_capacity(nodes.len());
+        // EVERY exec body is outlined: the edge fn calls the module's
+        // compiled body, it does not carry a copy.  A design's .so is
+        // a caller of the objects its modules compiled to, and the
+        // dials that used to choose per body -- outline iff "large
+        // and shares little" -- chose between two different answers
+        // to "where does this code live", which is not a tuning
+        // question.
+        let mut outlined_execs: std::collections::HashSet<usize> =
+            (0..specs_lite.len()).collect();
+        let mut tot_recompute = 0u64;
+        let mut tot_saved = 0u64;
+        let mut tot_gaps = 0usize;
+        let mut tot_legal = 0usize;
+        let mut tot_hoists = 0usize;
+        let mut kills: HashMap<&'static str, usize> = HashMap::new();
+        let mut poisoned: HashMap<&'static str, (usize, u64)> = HashMap::new();
+        for (k, comp_nodes) in nodes.iter().enumerate() {
+            // per-section body cones (exec sections only; scheds share
+            // via the latched CF/WF/eager mechanism)
+            let sections: Vec<Option<(Cone, usize)>> = comp_nodes
+                .iter()
+                .map(|&(is_exec, o)| {
+                    if !is_exec {
+                        return None;
+                    }
+                    let (inst, _ridx) = specs_lite[o];
+                    let body = spec_body(o);
+                    let mut c = Cone::default();
+                    for st in body.iter() {
+                        walk_stmt_defs(&mut cx, inst, st, &mut c);
+                    }
+                    Some((c, o))
+                })
+                .collect();
+            // outline selection.  First pass: the SHARABLE def set
+            // over ALL exec bodies (pure, unslotted, 2+ consumers) —
+            // what a body would forfeit by leaving the mega-function.
+            let mut all_counts: HashMap<(usize, StrId), usize> = HashMap::new();
+            for sec in sections.iter().flatten() {
+                for &d0 in &sec.0.defs {
+                    *all_counts.entry(d0).or_insert(0) += 1;
+                }
+            }
+            let sharable: HashMap<(usize, StrId), u64> = all_counts
+                .iter()
+                .filter(|(_, &c)| c >= 2)
+                .filter_map(|(&(di, dn), _)| {
+                    let dc = cone(&mut cx, di, dn);
+                    (dc.mass > 0 && dc.pure() && {
+                        let iev = &inst_envs[&di];
+                        !iev.eager_slot.contains_key(&dn) && !iev.cfwf_slot.contains_key(&dn)
+                    })
+                    .then_some(((di, dn), dc.mass))
+                })
+                .collect();
+            // replication count per (mir, rule_idx): k instances of
+            // the same module-type rule inline the same body k times
+            // into the mega-edge, while ONE outlined body serves all
+            // of them (per-module-type dedup)
+            let mut type_reps: HashMap<(usize, usize), u64> = HashMap::new();
+            for (sec, &(_, o)) in sections.iter().zip(comp_nodes.iter()) {
+                if sec.is_some() {
+                    let (inst, ridx) = specs_lite[o];
+                    let mir = inst_envs[&inst].mir;
+                    *type_reps.entry((mir, ridx)).or_insert(0) += 1;
+                }
+            }
+            // second pass: outline iff large AND shares little.  The
+            // floor amortizes over replication (grid v3: 1024 program
+            // tiles inlined the same body 1024x — 202s link, 166s of
+            // LLVM IR passes; Bluesim calls per-TYPE class methods).
+            // Intra-tile sharing scales with k on both sides of the
+            // comparison, so only the floor divides; k=1 designs keep
+            // every existing decision.
+            for (sec, &(_, o)) in sections.iter().zip(comp_nodes.iter()) {
+                if let Some((c, _)) = sec {
+                    let body_mass: u64 = c
+                        .defs
+                        .iter()
+                        .map(|&(di, dn)| cone(&mut cx, di, dn).mass)
+                        .sum();
+                    let shared_mass: u64 = c.defs.iter().filter_map(|d0| sharable.get(d0)).sum();
+                    let (inst, ridx) = specs_lite[o];
+                    let k = type_reps
+                        .get(&(inst_envs[&inst].mir, ridx))
+                        .copied()
+                        .unwrap_or(1)
+                        .max(1);
+                    if stats && body_mass > 400 {
+                        eprintln!(
+                            "trs edge-ssa: body o={o} mass={body_mass} \
+                             shared={shared_mass} reps={k}"
+                        );
+                    }
+                }
+            }
+            // consumers per (inst, def), section indices in order.
+            // corder pins the def processing order deterministically
+            // (HashMap iteration is process-seeded, and c.defs is a
+            // HashSet, so both levels need pinning): first-consumer-
+            // section major, (di, dn) within a section.  The ORDER
+            // ITSELF is arbitrary — what matters is the topo pass
+            // below, which puts deps before users per prelude so arm
+            // expansion finds them in edge.shared instead of
+            // re-emitting cones exponentially.
+            let mut consumers: HashMap<(usize, StrId), Vec<usize>> = HashMap::new();
+            let mut corder: Vec<(usize, StrId)> = Vec::new();
+            for (p, (sec, &(_, o))) in sections.iter().zip(comp_nodes.iter()).enumerate() {
+                if outlined_execs.contains(&o) {
+                    continue;
+                }
+                if let Some((c, _)) = sec {
+                    let mut ds: Vec<(usize, StrId)> = c.defs.iter().copied().collect();
+                    ds.sort_unstable();
+                    for d0 in ds {
+                        let e = consumers.entry(d0).or_default();
+                        if e.is_empty() {
+                            corder.push(d0);
+                        }
+                        e.push(p);
+                    }
+                }
+            }
+            let mut comp_hoists: Vec<Vec<(usize, StrId)>> = vec![Vec::new(); comp_nodes.len()];
+            let mut comp_saved = 0u64;
+            let mut comp_recompute = 0u64;
+            let mut shared_defs = 0usize;
+            for (di, dn) in corder {
+                let ps = &consumers[&(di, dn)];
+                if ps.len() < 2 {
+                    continue;
+                }
+                let dc = cone(&mut cx, di, dn);
+                if dc.mass == 0 {
+                    continue; // body-local temp, not in the def table
+                }
+                shared_defs += 1;
+                comp_recompute += dc.mass * (ps.len() as u64 - 1);
+                if dc.poison != 0 {
+                    for (bit, name) in [
+                        (1u8, "arg-port"),
+                        (2, "foreign"),
+                        (4, "prim"),
+                        (8, "en-port"),
+                        (16, "rst-clk-port"),
+                    ] {
+                        if dc.poison & bit != 0 {
+                            let e = poisoned.entry(name).or_insert((0usize, 0u64));
+                            e.0 += 1;
+                            e.1 += dc.mass * (ps.len() as u64 - 1);
+                        }
+                    }
+                }
+                // legality stats (anchor re-anchors on kill, anchor's
+                // own writes included: the emitter post-evicts)
+                let mut anchor = ps[0];
+                for &pj in &ps[1..] {
+                    tot_gaps += 1;
+                    let killer = (anchor..pj).find_map(|q| {
+                        sections[q].as_ref().and_then(|(_, o)| {
+                            write_sets[*o].intersection(&dc.reads).next().copied()
+                        })
+                    });
+                    match killer {
+                        None => {
+                            tot_legal += 1;
+                            comp_saved += dc.mass;
+                        }
+                        Some(gi) => {
+                            *kills
+                                .entry(cx.prim_cat.get(&gi).copied().unwrap_or("?"))
+                                .or_insert(0) += 1;
+                            anchor = pj;
+                        }
+                    }
+                }
+                // emitter tables: only PURE, UNSLOTTED defs are cached/
+                // hoisted (latched slots cover CF/WF/eager; impure cones
+                // must never evaluate unconditionally)
+                if !dc.pure() {
+                    continue;
+                }
+                let iev = &inst_envs[&di];
+                if iev.eager_slot.contains_key(&dn) || iev.cfwf_slot.contains_key(&dn) {
+                    continue;
+                }
+                let mut reads: Vec<usize> = dc.reads.iter().copied().collect();
+                reads.sort_unstable();
+                def_reads.insert((di, dn), reads);
+                // emitter-exact hoist walk: cache state tracks the
+                // driver (pre/post-eviction on write intersection;
+                // self-killing consumers never hoist — body-position
+                // semantics)
+                let mut cached = false;
+                let mut pi = 0usize; // next consumer index in ps
+                for (q, sec) in sections.iter().enumerate() {
+                    let is_consumer = pi < ps.len() && ps[pi] == q;
+                    let self_kill = sec.as_ref().is_some_and(|(_, o)| {
+                        write_sets[*o].intersection(&dc.reads).next().is_some()
+                    });
+                    if is_consumer {
+                        pi += 1;
+                        if !cached && !self_kill {
+                            comp_hoists[q].push((di, dn));
+                            tot_hoists += 1;
+                            cached = true;
+                        }
+                    }
+                    if self_kill {
+                        cached = false; // post-evict
+                    }
+                }
+            }
+            // topo-order each section's hoist prelude: deps before
+            // users (Kahn; the ready set pops in pinned-corder position,
+            // so the result is deterministic).  A dep materialized
+            // before its user is found in edge.shared when lazy_mux
+            // expands the user's arms — without that, BOTH arms of every
+            // bit-test diamond re-expand the dep's cone and chained
+            // folds (countOnes-style d_k = If(bit_k, d_k+1 +1, d_k+1))
+            // emit 2^k-1 copies: memq's pinned order drew k=16 (47MB IR,
+            // ir-passes 17s) where the old seed-random order drew k
+            // stochastically (the historical ~13% bimodal link tail).
+            for hq in comp_hoists.iter_mut() {
+                if hq.len() < 2 {
+                    continue;
+                }
+                let pos: HashMap<(usize, StrId), usize> = hq
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .map(|(i, d)| (d, i))
+                    .collect();
+                // dep edges restricted to this prelude (cross-section
+                // deps are already in edge.shared: a dep's consumer set
+                // is a superset of its user's, so it anchors no later)
+                let deps: Vec<Vec<usize>> = hq
+                    .iter()
+                    .map(|&(di, dn)| {
+                        let dc = cone(&mut cx, di, dn);
+                        let mut v: Vec<usize> = dc
+                            .defs
+                            .iter()
+                            .filter(|&&d| d != (di, dn))
+                            .filter_map(|d| pos.get(d).copied())
+                            .collect();
+                        v.sort_unstable();
+                        v
+                    })
+                    .collect();
+                let mut indeg: Vec<usize> = deps.iter().map(|v| v.len()).collect();
+                let mut users: Vec<Vec<usize>> = vec![Vec::new(); hq.len()];
+                for (u, ds) in deps.iter().enumerate() {
+                    for &d in ds {
+                        users[d].push(u);
+                    }
+                }
+                let mut ready: std::collections::BTreeSet<usize> = indeg
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &n)| n == 0)
+                    .map(|(i, _)| i)
+                    .collect();
+                let mut order: Vec<usize> = Vec::with_capacity(hq.len());
+                while let Some(&i) = ready.iter().next() {
+                    ready.remove(&i);
+                    order.push(i);
+                    for &u in &users[i] {
+                        indeg[u] -= 1;
+                        if indeg[u] == 0 {
+                            ready.insert(u);
+                        }
+                    }
+                }
+                if order.len() < hq.len() {
+                    // cycle residue (unexpected for pure defs): append
+                    // in pinned order — still deterministic
+                    let inorder: HashSet<usize> = order.iter().copied().collect();
+                    order.extend((0..hq.len()).filter(|i| !inorder.contains(i)));
+                }
+                let reordered: Vec<(usize, StrId)> = order.iter().map(|&i| hq[i]).collect();
+                *hq = reordered;
+            }
+            tot_recompute += comp_recompute;
+            tot_saved += comp_saved;
+            if stats && shared_defs > 0 {
+                eprintln!(
+                    "trs edge-ssa: comp {k}: sections={} shared-defs={shared_defs} \
+                     mass shareable={comp_saved}/{comp_recompute}",
+                    comp_nodes.len()
+                );
+            }
+            hoists.push(comp_hoists);
+        }
+        if stats {
+            let mut ks: Vec<_> = kills.iter().collect();
+            ks.sort_by(|a, b| b.1.cmp(a.1));
+            let ks: Vec<String> = ks.iter().map(|(c, n)| format!("{c}={n}")).collect();
+            eprintln!(
+                "trs edge-ssa: TOTAL gaps legal={tot_legal}/{tot_gaps} \
+                 mass shareable={tot_saved}/{tot_recompute} hoists={tot_hoists} \
+                 kills: {}",
+                ks.join(" ")
+            );
+            let mut po: Vec<_> = poisoned.iter().collect();
+            po.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+            let po: Vec<String> = po
+                .iter()
+                .map(|(n, (c, m))| format!("{n}={c}(mass {m})"))
+                .collect();
+            eprintln!("trs edge-ssa: poisoned shared defs: {}", po.join(" "));
+        }
+        // ---- activity gating: sensitivity masks + dirty write masks ----
+        // Armed only for single-row untraced plans (multi-comp designs
+        // would need a cross-comp roll point; alts append variant rows
+        // and fail the row check).  A section is gateable only when its
+        // whole read cone — CF, WF, eager defs, plus the CF cones of
+        // its transitive ME inhibitors (explicit slot loads outside the
+        // def closure) — is pure arena-inline prim reads: poison bits
+        // 1/2/4/8 (ports, foreign/task/trap, boxed prims, EN reads) all
+        // mark inputs the dirty bitmap cannot see.  Reset/clock/param
+        // port reads (bit 16) are admissible: the runtime saturates the
+        // bitmaps on reset activity, clocks/params are domain-constant.
+        // Masks use Cone.reads_all (a stability contract bounds INTRA-
+        // edge movement; gating asks about CROSS-edge movement).
+        // OPT-IN (TRS_GATING=1): the Flute A/B measured the honest
+        // null — on an ACTIVE CPU core the Ir-dominant cones are the
+        // pipeline's own and they are genuinely dirty on busy AND on
+        // memory stalls (the fetch path keeps running), so the
+        // skippable mass is the small periphery cones (~2-4% of edge
+        // Ir) while guards+marks add ~38% more branches and an I1
+        // point.  Gating pays only for designs with LARGE idle
+        // subsystems; the dirty-model machinery (masks, marks,
+        // sabotage tripwire) stays sealed and available.
+        let gating_on = gate.is_some()
+            && nodes.len() == 1
+            && !self.vcd_trace
+            && std::env::var("TRS_GATING").as_deref() == Ok("1");
+        // ...and so is every sched section: the edge fn is a
+        // dispatcher that TESTS and CALLS, never a monolith that
+        // inlines.  It used to be a dial -- the Flute A/B measured
+        // outlining at 0.68x of the inline shape, from lost
+        // cross-section SSA sharing and 372 calls/edge -- and that
+        // cost is now simply paid.
+        //
+        // A traced plan still inlines: its recording slots shift the
+        // whole layout, so its sections are not the module's code in
+        // the first place.
+        let outline_sched = !self.vcd_trace;
+        // outlined sections cannot consume spine SSA: a hoisted def
+        // computed in the dispatcher does not dominate (or even reach)
+        // another function's body — sections recompute pure shared
+        // cones locally and reload slot-carried defs (def()'s existing
+        // fallbacks, the same lattice standalone sched fns lower with)
+        if outline_sched {
+            for comp in hoists.iter_mut() {
+                for q in comp.iter_mut() {
+                    q.clear();
+                }
+            }
+        }
+        let mut gate_masks: Vec<Option<Vec<(u32, u64)>>> = Vec::new();
+        let mut dirty_sync: Vec<Vec<(u32, u64)>> = Vec::new();
+        let mut dirty_bypass: Vec<Vec<(u32, u64)>> = Vec::new();
+        if gating_on {
+            const SAFE: [&str; 7] = [
+                "reg",
+                "configreg",
+                "creg",
+                "wire",
+                "fifo",
+                "regfile",
+                "bram",
+            ];
+            // same-cycle-visible classes: wires (readers see this
+            // edge's write), CReg later ports, FIFOs conservatively as
+            // a class (cat does not distinguish loopy/bypass variants)
+            const BYPASS: [&str; 3] = ["wire", "creg", "fifo"];
+            // bit per WRITTEN instance: an instance nothing writes
+            // cannot go dirty (autonomous-tick prims are excluded by
+            // the SAFE-cat check on the read side)
+            let mut written_all: Vec<usize> =
+                write_sets.iter().flat_map(|w| w.iter().copied()).collect();
+            written_all.sort_unstable();
+            written_all.dedup();
+            let bit_of: HashMap<usize, u32> = written_all
+                .iter()
+                .enumerate()
+                .map(|(i, &gi)| (gi, i as u32))
+                .collect();
+            let pairs = |bits: &std::collections::BTreeSet<u32>| {
+                let mut out: Vec<(u32, u64)> = Vec::new();
+                for &b in bits {
+                    let (w, m) = (b / 64, 1u64 << (b % 64));
+                    match out.last_mut() {
+                        Some((lw, lm)) if *lw == w => *lm |= m,
+                        _ => out.push((w, m)),
+                    }
+                }
+                out
+            };
+            // cf-slot -> owner ordinal, for the inhibitor closure
+            let cf_owner: HashMap<u32, usize> = specs
+                .iter()
+                .enumerate()
+                .map(|(o, sp)| (sp.cf_slot, o))
+                .collect();
+            for (o, sp) in specs.iter().enumerate() {
+                // write masks (every ordinal, autofire included)
+                let mut sync = std::collections::BTreeSet::new();
+                let mut byp = std::collections::BTreeSet::new();
+                for &gi in &exec_writes[o] {
+                    let b = bit_of[&gi];
+                    sync.insert(b);
+                    if cx.prim_cat.get(&gi).is_some_and(|c| BYPASS.contains(c)) {
+                        byp.insert(b);
+                    }
+                }
+                dirty_sync.push(pairs(&sync));
+                dirty_bypass.push(pairs(&byp));
+                // read mask: autofire pseudo-specs have no sched
+                // section to gate
+                if sp.autofire.is_some() {
+                    gate_masks.push(None);
+                    continue;
+                }
+                // transitive inhibitor closure over ordinals (an
+                // inhibited CF reads the inhibitor's latched CF, which
+                // its own inhibitors shaped, and so on)
+                let mut need: Vec<usize> = vec![o];
+                let mut seen: HashSet<usize> = need.iter().copied().collect();
+                let mut qi = 0;
+                while qi < need.len() {
+                    let q = need[qi];
+                    qi += 1;
+                    for sl in &specs[q].inhibit_slots {
+                        if let Some(&oo) = cf_owner.get(sl) {
+                            if seen.insert(oo) {
+                                need.push(oo);
+                            }
+                        }
+                    }
+                }
+                let mut c = Cone::default();
+                for (qi2, &q) in need.iter().enumerate() {
+                    let qs = &specs[q];
+                    let mir = inst_envs[&qs.inst].mir;
+                    let r = &self.d.modules[mir].rules[qs.rule_idx];
+                    c.absorb(&cone(&mut cx, qs.inst, r.can_fire));
+                    if qi2 == 0 {
+                        // own rule only: WF + eager defs
+                        c.absorb(&cone(&mut cx, qs.inst, r.will_fire));
+                        for &e in &qs.eager {
+                            c.absorb(&cone(&mut cx, qs.inst, e));
+                        }
+                    }
+                }
+                let inhibitors_resolved = specs[o]
+                    .inhibit_slots
+                    .iter()
+                    .all(|sl| cf_owner.contains_key(sl));
+                let reads_safe = c
+                    .reads_all
+                    .iter()
+                    .all(|gi| cx.prim_cat.get(gi).is_some_and(|pc| SAFE.contains(pc)));
+                if c.poison & 0b1111 != 0 || !reads_safe || !inhibitors_resolved {
+                    if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                        eprintln!(
+                            "trs gate: ordinal {o} UNGATED poison={:#b} \
+                             safe={reads_safe} inh={inhibitors_resolved}",
+                            c.poison
+                        );
+                    }
+                    gate_masks.push(None);
+                    continue;
+                }
+                let bits: std::collections::BTreeSet<u32> = c
+                    .reads_all
+                    .iter()
+                    .filter_map(|gi| bit_of.get(gi).copied())
+                    .collect();
+                gate_masks.push(Some(pairs(&bits)));
+            }
+            // TRS_GATE_MASK_CENSUS=1: per watched instance, how many
+            // gated masks contain its bit — the hot-bit poisoning
+            // census (a high-fanin instance that changes every cycle
+            // defeats every mask it appears in)
+            if std::env::var_os("TRS_GATE_MASK_CENSUS").is_some() {
+                let mut fanin: HashMap<u32, usize> = HashMap::new();
+                for gm in gate_masks.iter().flatten() {
+                    for &(w, m) in gm {
+                        for b in 0..64u32 {
+                            if m & (1 << b) != 0 {
+                                *fanin.entry(w * 64 + b).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
+                let mut rows: Vec<(usize, u32)> = fanin.iter().map(|(&b, &c)| (c, b)).collect();
+                rows.sort_unstable_by(|a, b| b.cmp(a));
+                for (c, bit) in rows.iter().take(25) {
+                    let gi = written_all[*bit as usize];
+                    eprintln!(
+                        "trs gate census: bit {bit} in {c} masks — {}",
+                        self.insts[gi].path
+                    );
+                }
+            }
+            if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                let gated = gate_masks.iter().filter(|m| m.is_some()).count();
+                let bits: usize = gate_masks
+                    .iter()
+                    .flatten()
+                    .map(|m| {
+                        m.iter()
+                            .map(|&(_, b)| b.count_ones() as usize)
+                            .sum::<usize>()
+                    })
+                    .sum();
+                eprintln!(
+                    "trs gate: {gated}/{} sections gated, {} state bits, \
+                     {} mask bits total",
+                    gate_masks.len(),
+                    written_all.len(),
+                    bits
+                );
+            }
+            // SABOTAGE WITNESS (validation hook, not a product knob):
+            // clear ONE dirty-sync bit that some gated cone actually
+            // watches — a deliberately incomplete dirty model.  The
+            // corpus/battery must classify the affected design DIFF;
+            // if it does not, the tripwire is not trustworthy.
+            if std::env::var_os("TRS_GATING_SABOTAGE").is_some() {
+                'sab: for o in 0..dirty_sync.len() {
+                    for pi in 0..dirty_sync[o].len() {
+                        let (w, m) = dirty_sync[o][pi];
+                        let watched: u64 = gate_masks
+                            .iter()
+                            .flatten()
+                            .flat_map(|gm| gm.iter())
+                            .filter(|&&(gw, _)| gw == w)
+                            .map(|&(_, gm)| gm)
+                            .fold(0, |a, b| a | b);
+                        let hit = m & watched;
+                        if hit != 0 {
+                            let bit = hit.trailing_zeros();
+                            dirty_sync[o][pi].1 &= !(1u64 << bit);
+                            eprintln!(
+                                "trs gating SABOTAGE: dropped dirty bit \
+                                 {} (word {w}) from ordinal {o}'s sync \
+                                 mask — expect byte DIFFs",
+                                w * 64 + bit
+                            );
+                            break 'sab;
+                        }
+                    }
+                }
+            }
+        }
+
+        // export keep-set (the compiled tier: slot stores survive
+        // only for COMPILED consumers — inhibitor loads and outlined
+        // bodies; the slot-level debug contract is not part of the
+        // edge-SSA artifact surface)
+        let mut export_slots: std::collections::HashSet<u32> = specs
+            .iter()
+            .flat_map(|sp| sp.inhibit_slots.iter().copied())
+            .collect();
+        // gating consumers: a SKIPPED section's slots are the only
+        // carrier of its values, so every CF/WF/eager store must
+        // survive elision (readers hit def()'s slot fallbacks on
+        // edge-cache miss — the miss is NEW: ungated edges always
+        // insert into the cache).  The epilogue and exec-site bypass
+        // ORs also load every WF slot.  Same keep-set as has_early.
+        if gating_on || outline_sched {
+            for e in inst_envs.values() {
+                export_slots.extend(e.cfwf_slot.values().copied());
+                export_slots.extend(e.eager_slot.values().map(|&(b, _)| b));
+            }
+        }
+        // interp-side consumers: with any early (clock-crossing) rule,
+        // the PG_FINAL pass reads compiled CF slots (inhibitors via
+        // latched_or_arena) and eager/WF defs via eval's arena
+        // fallthrough — keep them all (early designs are rare; the
+        // cost is per-edge scalar stores)
+        if has_early {
+            for e in inst_envs.values() {
+                export_slots.extend(e.cfwf_slot.values().copied());
+                export_slots.extend(e.eager_slot.values().map(|&(b, _)| b));
+            }
+        }
+        for &o in &outlined_execs {
+            export_slots.insert(specs[o].wf_slot);
+            let (inst, _ridx) = specs_lite[o];
+            let body = spec_body(o);
+            let mut c = Cone::default();
+            for st in body.iter() {
+                walk_stmt_defs(&mut cx, inst, st, &mut c);
+            }
+            for &(di, dn) in &c.defs {
+                let iev = &inst_envs[&di];
+                if let Some(&slot) = iev.cfwf_slot.get(&dn) {
+                    export_slots.insert(slot);
+                }
+                if di == inst {
+                    if let Some(&(base, _w)) = iev.eager_slot.get(&dn) {
+                        export_slots.insert(base);
+                    }
+                }
+            }
+        }
+        trs_codegen::abi::EdgeSsaPlan {
+            nodes: nodes.to_vec(),
+            exec_writes,
+            def_reads,
+            hoists,
+            outlined_execs,
+            wire_clears: Vec::new(),
+            creg_copies: Vec::new(),
+            bram_ticks: Vec::new(),
+            // dynamic-scheduling variants are the CALLER's to fill
+            // (jit_plan owns guard/inhibitor resolution); the plan
+            // tables above already cover any variant rows appended to
+            // `nodes` — this fn is row-uniform
+            alt_rows: Vec::new(),
+            sched_over: Vec::new(),
+            export_slots,
+            outline_sched,
+            gate: gating_on.then_some(gate).flatten(),
+            gate_masks,
+            dirty_sync,
+            dirty_bypass,
+        }
+    }
+
+    /// Call-site tables when the artifact supplied none: re-derive them
+    /// by trial lowering (needs LLVM).  None = the plan is off, run
+    /// interpreted (and Emit requests record their ineligibility).
+    #[cfg(feature = "jit")]
+    fn trial_protos(
+        &mut self,
+        inst_envs: &HashMap<usize, InstEnv>,
+        specs: &[RuleSpec],
+        now_slot: u32,
+        request: &JitRequest,
+        trace: bool,
+    ) -> Option<Vec<FnProtos>> {
+        let env = PlanEnv {
+            d: &self.d,
+            insts: inst_envs,
+            now_slot,
+            gate_scratch: None,
+        };
+        let t0 = std::time::Instant::now();
+        match trial_lower(&env, specs) {
+            Ok(p) => {
+                if std::env::var_os("TRS_JIT_TIME").is_some() {
+                    eprintln!("trs jit: trial lower {:?}", t0.elapsed());
+                }
+                Some(p)
+            }
+            Err(e) => {
+                if let JitRequest::Emit { .. } = request {
+                    self.jit_emit_result = Some(crate::AotEmit::Ineligible(e.to_string()));
+                }
+                if trace {
+                    eprintln!("trs jit: off ({e})");
+                }
+                None
+            }
+        }
+    }
+
+    /// No compile tier without `jit`: an artifact that loads without
+    /// baked protos (pre-protos layouts are refused by the rev gate, so
+    /// this is the artifact-load-failed path) runs interpreted.
+    #[cfg(not(feature = "jit"))]
+    fn trial_protos(
+        &mut self,
+        _inst_envs: &HashMap<usize, InstEnv>,
+        _specs: &[RuleSpec],
+        _now_slot: u32,
+        _request: &JitRequest,
+        trace: bool,
+    ) -> Option<Vec<FnProtos>> {
+        if trace {
+            eprintln!("trs jit: off (no artifact protos and no compile tier)");
+        }
+        None
+    }
+
+    /// Build the JIT plan for the resolved compositions, or None to run
+    /// fully interpreted.  Called once from prime().
+    pub(crate) fn jit_plan(&mut self, rcomps: &[RComp]) -> Option<JitPlans> {
+        let request = std::mem::take(&mut self.jit_request);
+        // RunCore sidecar bookkeeping (validation form): an Emit plan
+        // encodes its post-attach arena image at the tail for the
+        // linker CLI to write beside the artifact; a Path load under
+        // TRS_RUNCORE_CHECK=1 cross-checks its freshly built arena
+        // against that image bit-for-bit
+        let runcore_emit = matches!(request, JitRequest::Emit { .. });
+        let runcore_sidecar: Option<std::path::PathBuf> = match &request {
+            JitRequest::Load {
+                src: ArtifactSource::Path(p),
+            } => Some(p.with_extension("arena")),
+            _ => None,
+        };
+        // early (clock-crossing) rules run interpreted in the PG_FINAL
+        // pass and read compiled CF/eager slots — edge-SSA store
+        // elision must keep those stores (see edge_ssa_plan)
+        let has_early = rcomps.iter().any(|rc| !rc.early.is_empty());
+        // direct-BDPI registries (task #22): baked-mode call emission
+        // reads these; set-once, idempotent
+        let _ = trs_codegen::abi::STDIO_CB.set(jit_stdio_cb as usize);
+        if let Some(b) = &self.bdpi {
+            // registry keys are C names (what call sites resolve)
+            let m: std::collections::HashMap<String, usize> = b
+                .syms()
+                .iter()
+                .map(|(n, &a)| {
+                    let c = self
+                        .d
+                        .foreign_funcs
+                        .iter()
+                        .find(|ff| self.s(ff.name) == n)
+                        .map(|ff| self.s(ff.c_name).to_string())
+                        .unwrap_or_else(|| n.clone());
+                    (c, a)
+                })
+                .collect();
+            let _ = trs_codegen::abi::BDPI_SYMS.set(m);
+        }
+        // TRS_JIT=1 arms the hybrid; "0"/"off"/empty count as UNSET
+        // (the old presence-only check made TRS_JIT=0 turn the JIT ON)
+        let jit_env_on = std::env::var("TRS_JIT")
+            .map(|v| !(v.is_empty() || v == "0" || v == "off"))
+            .unwrap_or(false);
+        if matches!(request, JitRequest::Run) && !jit_env_on && !self.jit_armed {
+            return None;
+        }
+        let trace = std::env::var_os("TRS_JIT_TRACE").is_some();
+        // BATCH waveform runs (-V / +bscvcd / +bscfst) stay fully
+        // interpreted: compiled call sites don't maintain the boxed
+        // prims' VCD bookkeeping (FIFO D_IN), so a compiled plan under
+        // a runtime dump produced waveforms that were both wrong and
+        // thread-timing nondeterministic.  wave_engine survives the
+        // wave_pending take in prime (the old wave_pending check here
+        // was dead — prime consumes it before planning).  Link-time
+        // TRACED artifacts (the VCS/Verilator opt-in model) are the
+        // fast path for dumps.
+        if self.wave_engine || self.wave_pending.is_some() {
+            if trace {
+                eprintln!("trs jit: off (wave engine)");
+            }
+            return None;
+        }
+        // batch auto-fire of always_enabled top methods compiles ONLY
+        // as edge-SSA artifact emission — pseudo exec sections at the
+        // methods' cut anchors in the node stream — or a Load of such
+        // an artifact.  The in-process JIT tier, TRS_EDGE_SSA=0, and
+        // traced plans keep the documented interp fallback (their
+        // node streams carry no anchors), mirroring the
+        // dynamic-scheduling gate below.
+        let edge_ssa_on = std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0");
+        let have_af = !self.autofire.is_empty();
+        let af_compiled = have_af
+            && match &request {
+                JitRequest::Emit { .. } => edge_ssa_on && !self.vcd_trace,
+                JitRequest::Load { .. } => true,
+                JitRequest::Run => false,
+            };
+        if have_af && !af_compiled {
+            if trace {
+                eprintln!("trs jit: off (top always_enabled autofire)");
+            }
+            return None;
+        }
+        // dynamic-scheduling alternatives compile ONLY as edge-SSA
+        // artifact emission — per-alternative bodies behind a
+        // guard-dispatch prologue INSIDE each comp's edge fn — or a
+        // Load of such an artifact (the dispatch ships in the .so;
+        // the loader needs no variant plan).  Every other mode keeps
+        // the interp fallback: the in-process JIT tier and
+        // TRS_EDGE_SSA=0 emission drive standalone sched fns whose
+        // inhibitor slots bake the BASE order (wrong under a selected
+        // alternative), and traced plans would need per-variant
+        // recording.  The alternative cap bounds edge-fn growth
+        // (bodies multiply per alternative).
+        let have_alts = rcomps.iter().any(|rc| !rc.alts.is_empty());
+        let alts_capped = rcomps.iter().all(|rc| rc.alts.len() <= 16);
+        let alts_compiled = have_alts
+            && alts_capped
+            && match &request {
+                JitRequest::Emit { .. } => edge_ssa_on && !self.vcd_trace,
+                JitRequest::Load { .. } => true,
+                JitRequest::Run => false,
+            };
+        if have_alts && !alts_compiled {
+            if trace {
+                eprintln!("trs jit: off (dynamic schedule)");
+            }
+            return None;
+        }
+
+        let mut sl = crate::startup::StartupLap::new();
+        let mut nslots: u32 = 0;
+        let alloc = |n: &mut u32, words: u32| {
+            let s = *n;
+            *n += words;
+            s
+        };
+
+        // ---- pass A: collect scheduled rules (NO allocation) ----
+        // Schedule order defines ordinals and shared-cone ownership;
+        // slots are handed out in pass B per instance in
+        // module-canonical order, so twin instances of one module type
+        // get identical region-relative layouts (code dedup).
+        struct RuleInfo {
+            inst: usize,
+            rule_idx: usize,
+            ordinal: usize,
+            cf_slot: u32,
+            wf_slot: u32,
+            eager: Vec<StrId>,
+            shared: Vec<StrId>,
+        }
+        let mut rules: Vec<RuleInfo> = Vec::new();
+        let mut rule_ord: HashMap<(usize, RuleRef), usize> = HashMap::new();
+        for rc in rcomps {
+            // clock-crossing "early" rules never enter the compiled
+            // edge walk: the general loop's after-edge pass (PG_FINAL)
+            // runs them interpreted over the same arena-backed state,
+            // exactly like a cold exec cell — so they are SKIPPED here
+            // (kept out of rule_ord and the node stream), not refused.
+            // The central fast loop already bails on early comps.
+            // eager defs owned by entries already walked in THIS comp,
+            // per instance: later rules of the same instance may load
+            // their slots instead of re-expanding the cone
+            let mut owned_so_far: HashMap<usize, Vec<StrId>> = HashMap::new();
+            for en in &rc.entries {
+                for &node in &en.nodes {
+                    let SchedNode::Sched(r) = node else { continue };
+                    let r = r.rule();
+                    if rc.early.contains(&(en.inst, r)) {
+                        continue; // after-edge pass runs it interpreted
+                    }
+                    if rule_ord.contains_key(&(en.inst, r)) {
+                        continue;
+                    }
+                    let module = self.module_of(en.inst);
+                    let mir = self.mods[module].ir;
+                    // interface-method node in a segment: nothing to
+                    // latch — the interp skips these identically (an
+                    // external caller latches EN/args at call time;
+                    // uncalled methods read EN as 0 through their
+                    // arena slots), so the compiled walk omits them
+                    let ri = r.idx();
+                    let shared = owned_so_far.get(&en.inst).cloned().unwrap_or_default();
+                    owned_so_far
+                        .entry(en.inst)
+                        .or_default()
+                        .extend(en.eager.iter().copied());
+                    rule_ord.insert((en.inst, r), rules.len());
+                    rules.push(RuleInfo {
+                        inst: en.inst,
+                        rule_idx: ri,
+                        ordinal: rules.len(),
+                        cf_slot: 0,
+                        wf_slot: 0,
+                        eager: en.eager.clone(),
+                        shared,
+                    });
+                    let _ = mir;
+                }
+            }
+            // alternative interleavings reference the same segment
+            // space as the base entries; a rule reachable ONLY
+            // through an alternative still needs an ordinal.  Its
+            // base-order share claims don't transfer, so it makes
+            // none (the sched section re-expands its cone) — the
+            // per-alternative override below never widens a claim.
+            for alt in &rc.alts {
+                for en in &alt.entries {
+                    for &node in &en.nodes {
+                        let SchedNode::Sched(r) = node else { continue };
+                        let r = r.rule();
+                        if rc.early.contains(&(en.inst, r)) || rule_ord.contains_key(&(en.inst, r))
+                        {
+                            continue;
+                        }
+                        let module = self.module_of(en.inst);
+                        let ri = r.idx();
+                        rule_ord.insert((en.inst, r), rules.len());
+                        rules.push(RuleInfo {
+                            inst: en.inst,
+                            rule_idx: ri,
+                            ordinal: rules.len(),
+                            cf_slot: 0,
+                            wf_slot: 0,
+                            eager: en.eager.clone(),
+                            shared: Vec::new(),
+                        });
+                    }
+                }
+            }
+        }
+        let mut per_inst_rules: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (k, ri) in rules.iter().enumerate() {
+            per_inst_rules.entry(ri.inst).or_default().push(k);
+        }
+        for v in per_inst_rules.values_mut() {
+            v.sort_by_key(|&k| rules[k].rule_idx);
+        }
+
+        // ---- outline selection (TRS_JIT_SPLIT=<thresh> opt-in) ----
+        // per module type: which def pieces become helper fns, and
+        // which of those are per-instant memoizable.  Eager-set defs
+        // are excluded: a helper body hitting the eager-slot fast path
+        // could read slots whose owners have not run yet.
+        let split_thresh: Option<u32> = std::env::var("TRS_JIT_SPLIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|&t| t > 0);
+        let outlined_sel: HashMap<(usize, StrId), (u32, bool, Vec<StrId>)> = if let Some(th) =
+            split_thresh
+        {
+            let mut exemplar: HashMap<usize, usize> = HashMap::new();
+            for i in 0..self.insts.len() {
+                if let InstKind::User { module, .. } = &self.insts[i].kind {
+                    exemplar.entry(self.mods[*module].ir).or_insert(i);
+                }
+            }
+            let mut eager_excl: std::collections::HashSet<(usize, StrId)> = Default::default();
+            for ri in &rules {
+                let mir = self.mods[self.module_of(ri.inst)].ir;
+                for &e in &ri.eager {
+                    eager_excl.insert((mir, e));
+                }
+            }
+            let insts = &self.insts;
+            let mods = &self.mods;
+            let ex2 = exemplar.clone();
+            let kind = move |m: usize, name: StrId| -> ChildRef {
+                let Some(&ex) = ex2.get(&m) else {
+                    return ChildRef::Opaque;
+                };
+                let InstKind::User { children, .. } = &insts[ex].kind else {
+                    return ChildRef::Opaque;
+                };
+                let Some(&ci) = children.iter().find(|(k, _)| **k == name).map(|(_, v)| v) else {
+                    return ChildRef::Opaque;
+                };
+                match &insts[ci].kind {
+                    InstKind::Prim(p) => ChildRef::Prim(match p.arena_kind() {
+                        Some(ArenaKind::Reg { .. }) => ChildClass::Reg,
+                        Some(ArenaKind::ConfigReg { .. }) => ChildClass::CfgReg,
+                        Some(ArenaKind::Wire { .. }) => ChildClass::Wire,
+                        // attachment is not a stability reclassification:
+                        // BypassWire keeps the opaque class it had when
+                        // unattached (any upgrade is its own rung)
+                        Some(ArenaKind::BypassWire { .. }) => ChildClass::Other,
+                        Some(ArenaKind::Fifo { loopy, .. }) => ChildClass::Fifo { loopy },
+                        // arena-backed but NO stability contract and
+                        // reads can WARN (bounds): the split analyzer
+                        // treats it like an opaque prim
+                        Some(ArenaKind::RegFile { .. }) => ChildClass::Other,
+                        // arena-backed; reads are begin-of-instant
+                        // (out changes only at tick) but keep the
+                        // conservative class until the compiled tier
+                        // exploits it
+                        Some(ArenaKind::Bram { .. }) => ChildClass::Other,
+                        // live port-chained reads: never stable
+                        Some(ArenaKind::CReg5 { .. }) => ChildClass::Other,
+                        // begin-of-instant reads, but keep the
+                        // conservative class (no stability claim yet)
+                        Some(ArenaKind::Counter { .. }) => ChildClass::Other,
+                        None => ChildClass::Other,
+                    }),
+                    InstKind::User { module, .. } => ChildRef::User(mods[*module].ir),
+                }
+            };
+            let mut an = ConeAnalyzer::new(&self.d, &kind, th);
+            let mut sel = HashMap::new();
+            let mut mirs: Vec<usize> = exemplar.keys().copied().collect();
+            mirs.sort_unstable();
+            for mir in mirs {
+                for (name, pi) in an.module(mir) {
+                    if pi.outlined && !eager_excl.contains(&(mir, name)) {
+                        // self.mods[mir].defs is the prebuilt name index
+                        let w = self.mods[mir]
+                            .defs
+                            .get(&name)
+                            .map(|&i| self.d.modules[mir].defs[i].width.max(1))
+                            .unwrap_or(1);
+                        let stable = pi.stable && pi.ports.is_empty();
+                        sel.insert((mir, name), (w, stable, pi.ports.clone()));
+                    }
+                }
+            }
+            if trace {
+                eprintln!(
+                    "trs jit: split thresh={th}: {} pieces ({} memoized)",
+                    sel.len(),
+                    sel.values().filter(|(_, st, _)| *st).count()
+                );
+            }
+            sel
+        } else {
+            HashMap::new()
+        };
+
+        sl.lap("plan passA (rule collect)");
+        // ---- pass B: DFS subtree-contiguous allocation ----
+        // Every slot an instance's compiled code touches (its prims,
+        // ENs, rule cf/wf/eager, and everything in its submodule
+        // subtree) lands in one contiguous region, at offsets that are
+        // uniform across instances of the same module type.
+        // Schedule-affinity arena layout (rung 38): each allocation
+        // group below orders its blocks by (rank, name) instead of
+        // name alone, packing co-touched state onto shared D1 lines.
+        // Ranks come from each module's OWN rules and cones.
+        //
+        // Rung 38 took them from the DESIGN's composition walk, which
+        // packs co-touched state onto shared cache lines and makes a
+        // fragment's slot offsets depend on who instantiated it -- so
+        // the same fragment at the same parameters laid out two ways
+        // in two designs and their objects could not be shared.  Class
+        // overlap across a family of related designs was 28.6%; it is
+        // 94.6% now.  The packing did not pay for that: on a large
+        // design, the distinct 64B lines an edge touches came out
+        // within 0.1% of design-ordered -- fragment-local is, if
+        // anything, slightly tighter.
+        //
+        // The design-wide walk stays, for liveness only: rung 40 prunes
+        // EN slots to the ones some reader loads, and that IS a
+        // property of the whole design.  Only its ranks are dropped.
+        let (_design_ranks, live_en) = self.layout_touch_ranks(rcomps);
+        let touch_rank = self.layout_ranks_fragment_local();
+        // rung 40 (keep-fires tier split): fast plans allocate EN slots
+        // only for enables some runtime reader actually loads — the
+        // walk above covers every tier's readers (rule CF/WF cones and
+        // bodies incl. early rules, eager defs, child method bodies,
+        // autofire).  keep-fires method-WF defs are never evaluated at
+        // runtime, so their EN reads never execute: an unallocated slot
+        // drops the per-edge zeroing AND every call-site store for free
+        // (compiled and interp stores are `if let Some(slot)`; interp
+        // reads fall through to 0 — the value an untouched zeroed slot
+        // would hold).  Traced plans keep every slot: VCD selection
+        // under keep-fires reads them (the plan hash keys on vcd_trace).
+        // Precedent: Bluesim's SimMakeCBlocks init_port zeroes only
+        // used ENs; Verilator DCEs keep-fires nets in non-trace builds.
+        let en_prune = !self.vcd_trace;
+        let mut en_pruned_any = false;
+        let mut inst_envs: HashMap<usize, InstEnv> = HashMap::new();
+        let mut attach: Vec<(usize, u32)> = Vec::new(); // (prim inst, base)
+        let reset_node_slot: Vec<u32> = (0..self.rst_asserted.len())
+            .map(|_| alloc(&mut nslots, 1))
+            .collect();
+        // the dispatcher stamps the current instant here at every edge
+        let now_slot = alloc(&mut nslots, 1);
+        // memo stamp slots initialize to u64::MAX (0 == instant 0)
+        let mut memo_stamp_slots: Vec<u32> = Vec::new();
+        let mut is_child = vec![false; self.insts.len()];
+        for i in 0..self.insts.len() {
+            if let InstKind::User { children, .. } = &self.insts[i].kind {
+                for (_, &c) in children.iter() {
+                    is_child[c] = true;
+                }
+            }
+        }
+        enum Walk {
+            Enter(usize),
+            Exit(usize),
+        }
+        let mut stack: Vec<Walk> = (0..self.insts.len())
+            .rev()
+            .filter(|&i| !is_child[i] && matches!(self.insts[i].kind, InstKind::User { .. }))
+            .map(Walk::Enter)
+            .collect();
+        let mut subtree: HashMap<usize, (u32, u32)> = HashMap::new();
+        let mut dfs_order: Vec<usize> = Vec::new();
+        // traced artifacts: per-module VCD var selection (the same walk
+        // the writer uses) drives recording-slot allocation below
+        let rec_mvs: HashMap<usize, std::rc::Rc<crate::ModVars>> = if self.vcd_trace {
+            (0..self.mods.len())
+                .map(|mi| (mi, self.vcd_mod_vars(mi)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let mut rec_inits: Vec<(u32, u64)> = Vec::new();
+        while let Some(w) = stack.pop() {
+            let i = match w {
+                Walk::Exit(i) => {
+                    subtree.get_mut(&i).expect("exit before enter").1 = nslots;
+                    continue;
+                }
+                Walk::Enter(i) => i,
+            };
+            let InstKind::User {
+                module,
+                children,
+                resets,
+                params,
+                str_params,
+                gates,
+                ..
+            } = &self.insts[i].kind
+            else {
+                continue;
+            };
+            dfs_order.push(i);
+            let region_start = nslots;
+            // The reset table, FIRST in the region so its offset is 0
+            // for every instance of every type.  One word per reset
+            // port, holding the design-global slot that drives it.
+            // Per-instance data at a type-uniform offset is what lets
+            // one compiled body serve instances wired to different
+            // reset nodes: the body loads the slot from here instead of
+            // baking it, and so does not depend on the design it was
+            // compiled in.  Filled below, once the ports are known.
+            let reset_tbl = alloc(&mut nslots, resets.len() as u32);
+            let module = *module;
+            let mir = self.mods[module].ir;
+            let children: HashMap<StrId, usize> = children.iter().map(|(k, v)| (*k, *v)).collect();
+            let mut reg_slot = HashMap::new();
+            let mut wire_slot = HashMap::new();
+            let mut bypass_slot = HashMap::new();
+            let mut creg_slot = HashMap::new();
+            let mut fifo_slot = HashMap::new();
+            let mut regfile_slot = HashMap::new();
+            let mut bram_slot = HashMap::new();
+            let mut creg5_slot = HashMap::new();
+            let mut counter_slot = HashMap::new();
+            // deterministic iteration: slot assignment must match a
+            // fresh planning walk at artifact load time.  Order = the
+            // module type's schedule first-touch rank (rung 38), name-
+            // sorted within a rank and for untouched prims.
+            let mut kids: Vec<(StrId, usize)> = children.iter().map(|(&k, &v)| (k, v)).collect();
+            // by NAME, not by StrId: an id indexes the enclosing design's
+            // string table, so the same two names tie-break differently in
+            // a fragment linked alone than in a design that contains it --
+            // which moved a slot, and with it the region-relative offset
+            // the signature hashes (the sig has always used the string).
+            // Only prims tying on touch_rank can observe it, which is why
+            // it stayed hidden: 2 of 26 bypass wires in the first design
+            // measured.
+            kids.sort_unstable_by(|&(an, ac), &(bn, bc)| {
+                let rank = |n: StrId| touch_rank.get(&(mir, n)).copied().unwrap_or(u32::MAX);
+                rank(an)
+                    .cmp(&rank(bn))
+                    .then_with(|| self.d.strings[an as usize].cmp(&self.d.strings[bn as usize]))
+                    .then_with(|| ac.cmp(&bc))
+            });
+            for &(name, ci) in &kids {
+                let InstKind::Prim(p) = &self.insts[ci].kind else {
+                    continue;
+                };
+                match p.arena_kind() {
+                    Some(ArenaKind::Reg { width }) => {
+                        let base = alloc(&mut nslots, width.div_ceil(64).max(1));
+                        reg_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::Wire { width }) => {
+                        let base = alloc(&mut nslots, 1 + width.max(1).div_ceil(64));
+                        wire_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::BypassWire { width }) => {
+                        let base = alloc(&mut nslots, width.max(1).div_ceil(64));
+                        bypass_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::ConfigReg { width }) => {
+                        let words = width.max(1).div_ceil(64);
+                        let base = alloc(&mut nslots, 2 * words + 1);
+                        creg_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    // traced plans keep FIFOs boxed: the D_IN port var
+                    // dumps the last ATTEMPTED enq value (dummyval),
+                    // maintained only by the boxed enq path, which
+                    // inline compiled enqs bypass (CReg5/Counter
+                    // precedent)
+                    Some(ArenaKind::Fifo { .. }) if self.vcd_trace => {}
+                    Some(ArenaKind::Fifo {
+                        width,
+                        size,
+                        guard,
+                        loopy,
+                    }) => {
+                        let words = width.max(1).div_ceil(64);
+                        let base = alloc(&mut nslots, 7 + size * words);
+                        fifo_slot.insert(name, (base, width, size, guard, loopy));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::RegFile { width, lo, hi }) => {
+                        let words = width.max(1).div_ceil(64);
+                        let entries = (hi - lo + 1) as u32;
+                        let base = alloc(&mut nslots, 2 + words * (1 + entries));
+                        regfile_slot.insert(name, (base, width, lo, hi));
+                        attach.push((ci, base));
+                    }
+                    // traced plans keep CRegs boxed: the per-port VCD
+                    // bookkeeping (EN/D_IN history) lives in the boxed
+                    // write path, which inline compiled writes bypass
+                    Some(ArenaKind::CReg5 { .. }) if self.vcd_trace => {}
+                    Some(ArenaKind::CReg5 { width }) => {
+                        let base = alloc(&mut nslots, 2 * width.max(1).div_ceil(64));
+                        creg5_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    // traced plans keep Counters boxed: the port VCD
+                    // bookkeeping (a/b/c/f values + stamps) lives in
+                    // the boxed action path, which inline adds bypass
+                    Some(ArenaKind::Counter { .. }) if self.vcd_trace => {}
+                    Some(ArenaKind::Counter { width }) => {
+                        let w = width.max(1).div_ceil(64);
+                        let base = alloc(&mut nslots, 4 * w + 4);
+                        counter_slot.insert(name, (base, width));
+                        attach.push((ci, base));
+                    }
+                    Some(ArenaKind::Bram {
+                        width,
+                        size,
+                        chunk_size,
+                        num_wens,
+                        dual,
+                        pipelined,
+                    }) => {
+                        let w = width.max(1).div_ceil(64);
+                        let wenw = num_wens.max(1).div_ceil(64);
+                        let pw = 3 + wenw + 4 * w;
+                        let ports = if dual { 2 } else { 1 };
+                        let base = alloc(&mut nslots, pw * ports + (size as u32) * w);
+                        bram_slot.insert(
+                            name,
+                            (base, width, size, chunk_size, num_wens, dual, pipelined),
+                        );
+                        attach.push((ci, base));
+                    }
+                    None => {}
+                }
+            }
+            // VCD recording slots (traced artifacts): one block per
+            // declared member def (undet-initialized, the writer's
+            // never-evaluated default), plus per-method port blocks —
+            // EN time (u64::MAX = never), every argument, the result
+            let mut rec_defs: HashMap<StrId, (u32, u32)> = HashMap::new();
+            let mut rec_meths: HashMap<StrId, RecMeth> = HashMap::new();
+            if let Some(mv) = rec_mvs.get(&module) {
+                let irm = &self.d.modules[mir];
+                let mut meth_names: Vec<StrId> = Vec::new();
+                for var in mv.members.iter().chain(mv.ports.iter()) {
+                    match &var.src {
+                        crate::VcdSrc::Def(n) => {
+                            let w = var.width.max(1);
+                            let base = alloc(&mut nslots, w.div_ceil(64));
+                            let u = Value::undet(w);
+                            for (k, l) in u.limbs64().iter().enumerate() {
+                                rec_inits.push((base + k as u32, *l));
+                            }
+                            rec_defs.insert(*n, (base, var.width));
+                        }
+                        crate::VcdSrc::PortEn(mn)
+                        | crate::VcdSrc::PortArg(mn, _)
+                        | crate::VcdSrc::PortRes(mn) => {
+                            if !meth_names.contains(mn) {
+                                meth_names.push(*mn);
+                            }
+                        }
+                        crate::VcdSrc::Reset(_) => {}
+                    }
+                }
+                for mn in meth_names {
+                    let Some(me) = irm.methods.iter().find(|me| me.name == mn) else {
+                        continue;
+                    };
+                    let t = alloc(&mut nslots, 1);
+                    rec_inits.push((t, u64::MAX));
+                    // every arg gets a slot (the submodule port dump
+                    // reads args the module-scope selection skipped)
+                    let args: Vec<(u32, u32)> = me
+                        .args
+                        .iter()
+                        .map(|a| {
+                            let w = a.width.max(1);
+                            let b = alloc(&mut nslots, w.div_ceil(64));
+                            for k in 0..w.div_ceil(64) {
+                                rec_inits.push((b + k, 0));
+                            }
+                            (b, a.width)
+                        })
+                        .collect();
+                    let res = me.result.as_ref().map(|r| {
+                        let w = match r {
+                            Expr::Def(n) => irm
+                                .defs
+                                .iter()
+                                .find(|d| d.name == *n)
+                                .map(|d| d.width)
+                                .unwrap_or(0),
+                            Expr::Port(n) => irm
+                                .inputs
+                                .iter()
+                                .find(|p| p.name == *n)
+                                .map(|p| p.width)
+                                .unwrap_or(0),
+                            e => e.width(),
+                        }
+                        .max(1);
+                        let b = alloc(&mut nslots, w.div_ceil(64));
+                        for k in 0..w.div_ceil(64) {
+                            rec_inits.push((b + k, 0));
+                        }
+                        (b, w)
+                    });
+                    rec_meths.insert(mn, RecMeth { t, args, res });
+                }
+            }
+            let reset_slot: HashMap<StrId, u32> = resets
+                .iter()
+                .map(|(port, node)| (*port, reset_node_slot[*node]))
+                .collect();
+            // Index the ports BY NAME, and publish that order into
+            // the table reserved at the region start.  `resets` is a
+            // HashMap, so "the instance's own order" -- what this used
+            // to enumerate -- is a hash order: different per map, so
+            // two instances of one type numbered their ports
+            // differently and split into separate classes, and the
+            // EMITTING process numbered them differently from the
+            // LOADING one, which is a wrong answer rather than a
+            // missed share (the object indexes the table by the
+            // ordinal it was compiled with; the load fills the table
+            // in its own order).  Only fragments with two or more
+            // reset ports could see it -- the measured mean is 1.02 --
+            // which is why it stayed hidden until a BVI output reset
+            // put a derived reset alongside the default one.
+            //
+            // The name, not the StrId: a StrId is a position in one
+            // design's string table.  Sorting by it would be
+            // deterministic within a design and disagree between two.
+            let mut rorder: Vec<(StrId, usize)> =
+                resets.iter().map(|(&p, &n)| (p, n)).collect();
+            rorder.sort_by(|a, b| self.s(a.0).cmp(self.s(b.0)).then(a.0.cmp(&b.0)));
+            let reset_ord: HashMap<StrId, u32> = rorder
+                .iter()
+                .enumerate()
+                .map(|(k, (port, _))| (*port, k as u32))
+                .collect();
+            for (k, (_, node)) in rorder.iter().enumerate() {
+                rec_inits.push((reset_tbl + k as u32, reset_node_slot[*node] as u64));
+            }
+            // EN_* slots (zeroed per dispatch, stored by compiled call
+            // sites); fast plans allocate only the LIVE-read ones —
+            // see en_prune above (rung 40)
+            let mut en_slot = HashMap::new();
+            let mut enps: Vec<StrId> = self.mods[module]
+                .ports
+                .iter()
+                .filter(|&(_, &(_w, kind))| kind == ir::PortKind::MethodEnable)
+                .map(|(&pn, _)| pn)
+                .collect();
+            // by NAME: a StrId is a position in the enclosing design's
+            // string table, and `intern` hands a string the id of the
+            // FIRST file that used it -- so two modules sharing a
+            // method name reorder each other's ports between a
+            // fragment linked alone and a design containing it.  These
+            // slots are hashed into the signature's layout half, so an
+            // order that moves files the object under a name no other
+            // design looks for.
+            enps.sort_unstable_by(|&a, &b| {
+                self.d.strings[a as usize]
+                    .cmp(&self.d.strings[b as usize])
+                    .then(a.cmp(&b))
+            });
+            for pname in enps {
+                if en_prune && !live_en.contains(&(mir, pname)) {
+                    en_pruned_any = true;
+                    continue;
+                }
+                en_slot.insert(pname, alloc(&mut nslots, 1));
+            }
+            // per-rule cf/wf slots in module-canonical rule order, then
+            // the instance's eager-def UNION in sorted order: eager
+            // attachment (first-Sched-node) can split differently
+            // between twin instances, but the union and this layout
+            // stay type-uniform (dedup depends on it)
+            let mut cfwf_slot = HashMap::new();
+            let mut eager_slot: HashMap<StrId, (u32, u32)> = HashMap::new();
+            if let Some(rks) = per_inst_rules.get(&i) {
+                // rule pairs in first-touch order (rung 38); ties and
+                // untouched rules keep module-canonical order
+                let mut rks2: Vec<usize> = rks.clone();
+                rks2.sort_by_key(|&k| {
+                    let rr = &self.d.modules[mir].rules[rules[k].rule_idx];
+                    touch_rank
+                        .get(&(mir, rr.can_fire))
+                        .copied()
+                        .unwrap_or(u32::MAX)
+                });
+                for &k in &rks2 {
+                    let cf_slot = alloc(&mut nslots, 1);
+                    let wf_slot = alloc(&mut nslots, 1);
+                    let rr = &self.d.modules[mir].rules[rules[k].rule_idx];
+                    cfwf_slot.insert(rr.can_fire, cf_slot);
+                    cfwf_slot.insert(rr.will_fire, wf_slot);
+                    rules[k].cf_slot = cf_slot;
+                    rules[k].wf_slot = wf_slot;
+                }
+                let mut union: Vec<StrId> = Vec::new();
+                for &k in rks {
+                    for &e in &rules[k].eager {
+                        if !union.contains(&e) {
+                            union.push(e);
+                        }
+                    }
+                }
+                // rank first, then NAME -- the StrId tie-break this
+                // used is the enclosing design's numbering (see the EN
+                // ports above)
+                union.sort_unstable_by(|&a, &b| {
+                    let rank = |e: StrId| touch_rank.get(&(mir, e)).copied().unwrap_or(u32::MAX);
+                    rank(a)
+                        .cmp(&rank(b))
+                        .then_with(|| self.d.strings[a as usize].cmp(&self.d.strings[b as usize]))
+                        .then(a.cmp(&b))
+                });
+                for e in union {
+                    let Some(ed) = self.mods[mir]
+                        .defs
+                        .get(&e)
+                        .map(|&i| &self.d.modules[mir].defs[i])
+                    else {
+                        if trace {
+                            eprintln!("trs jit: off (eager def unknown)");
+                        }
+                        return None;
+                    };
+                    let ew = ed.width.max(1);
+                    let base = alloc(&mut nslots, ew.div_ceil(64));
+                    eager_slot.insert(e, (base, ew));
+                }
+            }
+            // memo slots for outlined stable defs of this module type
+            // (sorted: type-uniform offsets, part of the dedup sig)
+            let mut memo_slot: HashMap<StrId, (u32, u32)> = HashMap::new();
+            {
+                let mut ms: Vec<(StrId, u32)> = outlined_sel
+                    .iter()
+                    .filter(|((m, _), (_, st, _))| *m == mir && *st)
+                    .map(|((_, dn), (w, _, _))| (*dn, *w))
+                    .collect();
+                // by NAME -- "type-uniform offsets" is what the
+                // comment above promises, and a StrId sort does not
+                // deliver it across designs (see the EN ports above)
+                ms.sort_unstable_by(|a, b| {
+                    self.d.strings[a.0 as usize]
+                        .cmp(&self.d.strings[b.0 as usize])
+                        .then(a.cmp(b))
+                });
+                for (dn, w) in ms {
+                    let base = alloc(&mut nslots, 1 + w.div_ceil(64));
+                    memo_slot.insert(dn, (base, w));
+                    memo_stamp_slots.push(base);
+                }
+            }
+            subtree.insert(i, (region_start, 0));
+            stack.push(Walk::Exit(i));
+            for &(_, c) in kids.iter().rev() {
+                if matches!(self.insts[c].kind, InstKind::User { .. }) {
+                    stack.push(Walk::Enter(c));
+                }
+            }
+            // constant-valued input ports and parameters — the compiled
+            // mirror of the interpreter's Port/Param fallthrough
+            // (uncalled MethodArg reads 0, unbound clock/gate/reset-kind
+            // ports read 1, numeric params read their bound value).
+            // Dynamic bindings stay out: bound gates evaluate in the
+            // parent (MCD), EN/reset ports have arena slots, string
+            // params are marker values, and unslotted method enables
+            // stay ineligible rather than folding to a wrong constant.
+            // A BOUND value the u64 fold cannot carry (wide args,
+            // Real's marker width) must stay out of the unbound-port
+            // arms below too — the interp resolves `params` before any
+            // read-as-1/0 fallthrough, so folding such a name as
+            // "unbound" bakes a wrong constant (sysWideModArgPortTest,
+            // sysTwoLevelReal2); unfolded means Ineligible -> interp.
+            let mut port_consts: HashMap<StrId, (u32, u64)> = HashMap::new();
+            let mut real_consts: HashMap<StrId, u64> = HashMap::new();
+            let mut wide_consts: HashMap<StrId, (u32, Vec<u32>)> = HashMap::new();
+            for (&pn, pv) in params {
+                if pv.width >= 1 && pv.width <= 64 {
+                    // handled below as an arg_slot -- the value is
+                    // seeded into the arena, not folded into the body
+                } else if let Some(r) = pv.as_real() {
+                    // real params ride as f64 bits (task-arg carrier)
+                    real_consts.insert(pn, r.to_bits());
+                }
+                // wide values need no branch here: they are arg_slots
+                // below, seeded limb by limb
+            }
+            // A module ARGUMENT is a value the parent chose, not a
+            // property of the type -- so it becomes a slot in this
+            // instance's region, seeded with that value, rather than a
+            // constant folded into the body.  That is what lets one
+            // type be one object however many valuations it has.
+            //
+            // Every argument the MODULE declares gets a slot, supplied
+            // or not.  Allocating only the ones this parent passed
+            // would make the layout a property of the instantiation,
+            // and a fragment linked alone (no parent, nothing
+            // supplied) would lay out differently from the same
+            // fragment inside a design -- which is the one thing the
+            // unit is defined not to do.  Unsupplied reads 0, which is
+            // what the fallthrough below would have baked anyway.
+            //
+            // A module argument is a MethodArg-kind input that no
+            // method claims: bsc records both the same way, and this
+            // is the rule topbind uses to find what `+NAME=' binds.
+            let claimed: std::collections::HashSet<StrId> = self.d.modules[mir]
+                .methods
+                .iter()
+                .flat_map(|me| me.args.iter().map(|a| a.name))
+                .collect();
+            let mut argp: Vec<(StrId, u32)> = self.d.modules[mir]
+                .inputs
+                .iter()
+                .filter(|q| {
+                    q.kind == trs_ir::PortKind::MethodArg
+                        && !claimed.contains(&q.name)
+                        && q.width >= 1
+                })
+                .map(|q| (q.name, q.width))
+                .collect();
+            // by NAME -- a StrId is a position in this design's string
+            // table, and these offsets are hashed into the signature
+            argp.sort_by(|a, b| self.s(a.0).cmp(self.s(b.0)).then(a.0.cmp(&b.0)));
+            let mut arg_slot: HashMap<StrId, (u32, u32)> = HashMap::new();
+            for (pn, w) in argp {
+                // wider than a word takes several: a 96-bit argument
+                // was the last carrier that still had to bake, and a
+                // value is a value whatever its width
+                let words = w.div_ceil(64);
+                let base = alloc(&mut nslots, words);
+                if let Some(pv) = params.get(&pn) {
+                    for (k, &l) in pv.limbs64().iter().enumerate().take(words as usize) {
+                        rec_inits.push((base + k as u32, l));
+                    }
+                } else {
+                    for k in 0..words {
+                        rec_inits.push((base + k, 0));
+                    }
+                }
+                arg_slot.insert(pn, (base, w));
+            }
+            // String arguments, the same way: a zero-width unclaimed
+            // MethodArg input.  Declared-set again, not supplied-set,
+            // so the layout is the module's and not the parent's.  A
+            // zero-width Bits argument would land here too; it reads
+            // through the numeric fallthrough below and never through
+            // a string context, so an unused slot is all it costs.
+            let mut strp: Vec<StrId> = self.d.modules[mir]
+                .inputs
+                .iter()
+                .filter(|q| {
+                    q.kind == trs_ir::PortKind::MethodArg
+                        && !claimed.contains(&q.name)
+                        && q.width == 0
+                })
+                .map(|q| q.name)
+                .collect();
+            strp.sort_by(|a, b| self.s(*a).cmp(self.s(*b)).then(a.cmp(b)));
+            // gate slots, from the module's DECLARED gate ports so the
+            // layout is the type's and not the instantiation's
+            let mut gatep: Vec<StrId> = self.d.modules[mir]
+                .inputs
+                .iter()
+                .filter(|q| q.kind == trs_ir::PortKind::ClockGate)
+                .map(|q| q.name)
+                .collect();
+            gatep.sort_by(|a, b| self.s(*a).cmp(self.s(*b)).then(a.cmp(b)));
+            let mut gate_slot: HashMap<StrId, u32> = HashMap::new();
+            for pn in gatep {
+                let base = alloc(&mut nslots, 1);
+                // an ungated clock reads 1; the edge fn overwrites
+                // this every edge for a gate that is actually bound
+                rec_inits.push((base, 1));
+                gate_slot.insert(pn, base);
+            }
+            let mut str_slot: HashMap<StrId, u32> = HashMap::new();
+            for pn in strp {
+                let base = alloc(&mut nslots, 1);
+                let v = str_params.get(&pn).map(|&sid| sid as u64).unwrap_or(0);
+                rec_inits.push((base, v));
+                str_slot.insert(pn, base);
+            }
+            // CHECKED: every value a parent supplied reaches the body
+            // through a slot, never through the code.
+            //
+            // The slot sets come from what the MODULE declares -- an
+            // unclaimed MethodArg port, width >= 1 to `arg_slot` and
+            // width 0 to `str_slot`, which between them cover every
+            // width -- while `params` is what a PARENT bound, keyed by
+            // walking that same declared list positionally against the
+            // instantiation's args.
+            //
+            // They coincide because of how the exporter ORDERS the
+            // list: `insEnc = insEnc0 ++ enInsEnc` (`SimExportIR.hs`)
+            // puts every module argument (`AAI_Port`, `AAI_Clock`,
+            // `AAI_Reset` -- and `AAI_Port` is the only one that
+            // becomes MethodArg) ahead of every MethodEnable, so a
+            // positional walk over the args cannot reach an enable,
+            // and a method's own arguments are qualified by the method
+            // name and so never collide with a module argument's.
+            //
+            // That is a fact about one Haskell function, not an
+            // invariant of the IR -- the .bir could express the other
+            // shape and a reader has no way to reject it.  If it ever
+            // stops holding, the value falls through to `port_consts`
+            // and BAKES: one instance's argument frozen into an object
+            // every instance of the type then shares -- a wrong
+            // answer, and one that needs two instantiations at
+            // different values to show itself.  So check it here,
+            // where both sets are in hand, and refuse the compiled
+            // tier rather than emit that object.
+            //
+            // CLAIMED ports are exempt, and are the reason this is a
+            // check and not an assertion: `topbind` binds an
+            // always_enabled method's arguments on the TOP, as
+            // `+<method>.<arg>=value` (sysTopAlwaysEn binds
+            // `setStep_v`), and those land in `params` too.  They are
+            // method arguments, not module arguments -- no parent can
+            // bind one, since a parent drives a method by CALLING it
+            // -- so they reach `params` only on a top, whose object is
+            // the design's own and shared with nothing.  Baking them
+            // is correct.
+            let unheld = |pn: &StrId| {
+                !arg_slot.contains_key(pn)
+                    && !str_slot.contains_key(pn)
+                    && !claimed.contains(pn)
+            };
+            if let Some((&pn, _)) = params.iter().find(|(pn, _)| unheld(pn)) {
+                eprintln!(
+                    "trs jit: off (module argument `{}' of {} was bound by its \
+                     parent but the module declares no port to hold it, so its \
+                     value would bake into an object shared by every instance)",
+                    self.s(pn),
+                    self.s(self.d.modules[mir].name),
+                );
+                return None;
+            }
+            if let Some((&pn, _)) = str_params.iter().find(|(pn, _)| unheld(pn)) {
+                eprintln!(
+                    "trs jit: off (string module argument `{}' of {} was bound \
+                     by its parent but the module declares no port to hold it)",
+                    self.s(pn),
+                    self.s(self.d.modules[mir].name),
+                );
+                return None;
+            }
+            // A Real reaches the params loop as a value of NO width,
+            // so it lands in `real_consts` up there -- but its PORT is
+            // 64 bits wide, so it also gets a slot, and the slot is
+            // what the lowering reads.  Same for a wide value in
+            // `wide_consts`.  Those leftover copies must not keep the
+            // VALUE in the dedup identity, or the object would serve
+            // every valuation and still be named for one.
+            //
+            // `real_consts` stays anyway, because it is doing a second
+            // job: like `str_consts` it is the TYPE MARKER that makes
+            // a foreign call pass this argument as a double, and
+            // dropping it printed the f64 bit pattern as an integer.
+            // Only its value leaves the identity -- the signature
+            // hashes its keys.  A wide value carries no such marker,
+            // so its copy simply goes.
+            wide_consts.retain(|k, _| !arg_slot.contains_key(k));
+
+            for (&pn, &(w, kind)) in &self.mods[module].ports {
+                if port_consts.contains_key(&pn)
+                    || arg_slot.contains_key(&pn)
+                    || params.contains_key(&pn)
+                    || en_slot.contains_key(&pn)
+                    || reset_slot.contains_key(&pn)
+                    || gates.contains_key(&pn)
+                    || str_params.contains_key(&pn)
+                {
+                    continue;
+                }
+                match kind {
+                    trs_ir::PortKind::MethodArg => {
+                        // LOGICAL width, zero included: the interp's
+                        // fallback masks from_u64(0, _) to the empty
+                        // vector, so a zero-width port must not become
+                        // a width-1 value (review finding)
+                        port_consts.insert(pn, (w, 0));
+                    }
+                    trs_ir::PortKind::MethodEnable => {}
+                    _ => {
+                        port_consts.insert(pn, (w, if w == 0 { 0 } else { 1 }));
+                    }
+                }
+            }
+            // Verilog models this instance imports DIRECTLY.  A BVI
+            // child is a prim, so it never appears in `inst_envs` and
+            // the User-child walks below skip it silently; the build
+            // graph still needs the edge, because compiling the
+            // fragment runs its reset window and that instantiates
+            // the model.
+            let mut bvi_needs: Vec<(String, String)> = children
+                .values()
+                .filter_map(|ci| self.bvi_ident.get(ci).cloned())
+                .collect();
+            bvi_needs.sort();
+            bvi_needs.dedup();
+            // TRS_SLOT_DUMP (was TRS_BYPASS_DUMP, which now understates it)
+            if std::env::var_os("TRS_SLOT_DUMP").is_some() {
+                let mname = self.d.strings[self.d.modules[mir].name as usize].clone();
+                // every name-keyed map the LAYOUT half of the signature
+                // hashes, as (kind, name, region-relative offset).  A
+                // slot that moves between a fragment built alone and
+                // the same fragment in a design is the whole defect
+                // class -- the object stays correct and gets filed
+                // under a name nobody looks for -- and it is invisible
+                // without a dump like this one.
+                let rel = |b: u32| b as i64 - region_start as i64;
+                let nm = |k: StrId| self.d.strings[k as usize].clone();
+                let mut v: Vec<(String, String, i64, u32)> = Vec::new();
+                for (&k, &(b, w)) in &bypass_slot {
+                    v.push(("bypass".into(), nm(k), rel(b), w));
+                }
+                for (&k, &b) in &en_slot {
+                    v.push(("en".into(), nm(k), rel(b), 1));
+                }
+                for (&k, &(b, w)) in &eager_slot {
+                    v.push(("eager".into(), nm(k), rel(b), w));
+                }
+                for (&k, &(b, w)) in &memo_slot {
+                    v.push(("memo".into(), nm(k), rel(b), w));
+                }
+                for (&k, &(b, w)) in &reg_slot {
+                    v.push(("reg".into(), nm(k), rel(b), w));
+                }
+                // the three that carry what a parent supplies.  They
+                // are the newest entries in the layout half and so the
+                // likeliest to move, and an unfilled gate slot reads
+                // the seeded 1 -- silently ungated -- so being able to
+                // see they exist at all is worth the four lines.
+                for (&k, &(b, w)) in &arg_slot {
+                    v.push(("arg".into(), nm(k), rel(b), w));
+                }
+                for (&k, &b) in &str_slot {
+                    v.push(("str".into(), nm(k), rel(b), 0));
+                }
+                for (&k, &b) in &gate_slot {
+                    v.push(("gate".into(), nm(k), rel(b), 1));
+                }
+                v.sort();
+                for (kind, n, off, w) in v {
+                    eprintln!("slotdump {mname} {kind} {n} off={off} w={w}");
+                }
+            }
+            inst_envs.insert(
+                i,
+                InstEnv {
+                    mir,
+                    bvi_needs,
+                    // assigned once the subtree signatures exist
+                    class_id: 0,
+                    children,
+                    reg_slot,
+                    wire_slot,
+                    bypass_slot,
+                    creg_slot,
+                    fifo_slot,
+                    regfile_slot,
+                    bram_slot,
+                    creg5_slot,
+                    counter_slot,
+                    reset_slot,
+                    reset_ord,
+                    reset_tbl,
+                    en_slot,
+                    cfwf_slot,
+                    eager_slot,
+                    memo_slot,
+                    arg_slot,
+                    str_slot,
+                    gate_slot,
+                    port_consts,
+                    real_consts,
+                    gates: gates.clone(),
+                    str_consts: str_params.clone(),
+                    wide_consts,
+                    rec_defs,
+                    rec_meths,
+                    region: (region_start, 0),
+                },
+            );
+        }
+        // the interp-side strict trap (lib.rs EN fallthrough) fires
+        // only when a pruned plan is actually in effect
+        self.jit_en_pruned = en_pruned_any;
+        // subtree extents (known only after the whole subtree walked)
+        for (i, &(s0, s1)) in &subtree {
+            if let Some(e) = inst_envs.get_mut(i) {
+                e.region = (s0, s1);
+            }
+        }
+
+        sl.lap("plan passB (slot alloc + inst envs)");
+        // baked always-fire bits + dedup classes first (Load
+        // requests): skip the WILL_FIRE alias walks (they force lazy
+        // expr decodes) and the class derivation below.  Gated on the
+        // salted hash, so everything here is exactly what derivation
+        // would produce (same design, same trace mode, same layout
+        // rev) — the in-process-compile fallback stays consistent if
+        // aot_load fails later.
+        let mut baked: Option<(Vec<u8>, Vec<(usize, Vec<usize>)>)> = None;
+        if let JitRequest::Load { src } = &request {
+            let mut psl = crate::startup::StartupLap::new();
+            baked = aot_plan_b(
+                src,
+                self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
+            );
+            if baked.is_some() {
+                psl.lap("plan-b (baked decode)");
+            }
+        }
+        let (baked_af, baked_classes) = match baked {
+            Some((a, c)) => (Some(a), Some(c)),
+            None => (None, None),
+        };
+        // ---- per-instance subtree signatures (exec dedup classes) ----
+        // Two instances share compiled exec bodies iff their signatures
+        // match.  The sig must cover EVERY input the exec lowering
+        // reads: module type, region-relative slot layout (all maps),
+        // reset-table indices, and the user children recursively.
+        //
+        // Everything in it is named the way the TYPE sees it, never the
+        // way this design happens to number things -- the module by
+        // name rather than by its position in the module list, slots
+        // relative to the region, resets by table index.  That is what
+        // lets the signature name an emitted symbol: two designs
+        // instantiating one type at one valuation agree on it.
+        // (Stage-2a made twin IR raw-identical; the sweep + twin test
+        // referee this invariant.)  Consumed by the class derivation
+        // (skipped when classes are baked) and by helper symbol names
+        // (only when outlining selected pieces).
+        let sig_strings = self.d.strings.clone();
+        // TRS_SIG_TRACE=<module>: dump the running signature after each
+        // component for that type's instances.  Two designs that should
+        // agree on a type and do not are diffed by finding the first
+        // component that differs -- which is how the StrId keys were
+        // caught.  Off by default: it is 24 extra finishes an instance.
+        let sig_trace = std::env::var("TRS_SIG_TRACE").ok();
+        let tracing = sig_trace.is_some();
+        let inst_sig: HashMap<usize, u64> = if baked_classes.is_none() || !outlined_sel.is_empty() {
+            use std::hash::{Hash, Hasher};
+            let mut sigs: HashMap<usize, u64> = HashMap::new();
+            let mut input_sigs: HashMap<usize, u64> = HashMap::new();
+            let mut layout_sigs: HashMap<usize, u64> = HashMap::new();
+            // input -> (layout, the instance that set it): equal inputs
+            // must agree on layout
+            let mut layout_of: HashMap<u64, (u64, usize)> = HashMap::new();
+            // one report per input, not per instance: a violation on a
+            // widely instantiated type would otherwise bury itself
+            let mut layout_reported: HashSet<u64> = HashSet::new();
+            for &i in dfs_order.iter().rev() {
+                let e = &inst_envs[&i];
+                // The signature splits in two, and the split is the
+                // contract per-fragment compilation rests on.
+                //
+                // INPUT is what the fragment IS: its type, what it
+                // says, the parameters and bound gates it was
+                // instantiated with, and its children's inputs.  These
+                // legitimately differ between two instances of one
+                // type.
+                //
+                // LAYOUT is where everything sits, region-relative.
+                // This must be a FUNCTION of the input: a fragment laid
+                // out differently because of where it sits in the
+                // design could not be compiled once and reused.  The
+                // whole-design walk gives us that today by construction
+                // rather than by contract, so it is checked below.
+                let mut hi = std::collections::hash_map::DefaultHasher::new();
+                let mut hl = std::collections::hash_map::DefaultHasher::new();
+                let mut snap: Vec<u64> = Vec::new();
+                // every key in this signature is a StrId -- a position
+                // in THIS design's string table -- so hash the name it
+                // stands for.  Two designs number their strings
+                // differently, and a signature that hashed the number
+                // would describe the design rather than the type.
+                let sname = |id: u32| {
+                    sig_strings
+                        .get(id as usize)
+                        .map(String::as_str)
+                        .unwrap_or("")
+                };
+                self.d
+                    .strings
+                    .get(self.d.modules[e.mir].name as usize)
+                    .map(String::as_str)
+                    .unwrap_or("")
+                    .hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // and what the module SAYS, not only what it is called.
+                // Within one design a name identifies one module, so
+                // intra-design dedup never needed this; a symbol named
+                // for the signature outlives the design, and two
+                // revisions of a module share a name.  Zero for a
+                // module that reached here without a file behind it.
+                self.d.modules[e.mir].content_hash.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                (e.region.1 - e.region.0).hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let r0 = e.region.0;
+                let mut m1: Vec<_> = e
+                    .reg_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m1.sort_unstable();
+                m1.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m2: Vec<_> = e
+                    .wire_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m2.sort_unstable();
+                m2.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // BypassWire: read by the exec lowering (lower.rs
+                // reaches for the base and width), so the sig's own
+                // contract -- cover EVERY input the lowering reads --
+                // requires it.  It was absent: the omission was latent
+                // rather than live, because a type's bypass children
+                // and their allocation order come from the module, so
+                // the slots agreed whenever everything else did.  That
+                // is the derived-not-contracted hazard again, and it
+                // also meant the layout check below could not see them.
+                let mut m21: Vec<_> = e
+                    .bypass_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m21.sort_unstable();
+                m21.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m3: Vec<_> = e
+                    .creg_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m3.sort_unstable();
+                m3.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m4: Vec<_> = e
+                    .fifo_slot
+                    .iter()
+                    .map(|(&k, &(b, w, sz, g, lp))| (sname(k), b - r0, w, sz, g, lp))
+                    .collect();
+                m4.sort_unstable();
+                m4.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m5: Vec<_> = e.en_slot.iter().map(|(&k, &b)| (sname(k), b - r0)).collect();
+                m5.sort_unstable();
+                m5.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m6: Vec<_> = e.cfwf_slot.iter().map(|(&k, &b)| (sname(k), b - r0)).collect();
+                m6.sort_unstable();
+                m6.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m7: Vec<_> = e
+                    .eager_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m7.sort_unstable();
+                m7.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // reset nodes are design-global, but compiled code
+                // reaches them through the region-relative reset table,
+                // so what the body depends on is the port's INDEX in
+                // that table -- not which node the design wired it to.
+                // Hashing the index rather than the slot is what lets
+                // two designs share one body for a type whose reset
+                // comes from different nodes in each.
+                let mut m8: Vec<_> = e.reset_ord.iter().map(|(&k, &i)| (sname(k), i)).collect();
+                m8.sort_unstable();
+                m8.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                (e.reset_tbl - r0).hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m9: Vec<_> = e
+                    .memo_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m9.sort_unstable();
+                m9.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // Everything a parent supplies: WHERE it sits, into
+                // the LAYOUT half, and never what it is.  That is the
+                // whole change -- two instantiations of one type at
+                // different values now agree on the signature, so
+                // they are one object.  These go in the layout half
+                // because a slot's offset is genuinely part of the
+                // code; the value that gets seeded into it is not.
+                let mut m22: Vec<_> = e
+                    .arg_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m22.sort_unstable();
+                m22.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m23: Vec<_> = e
+                    .str_slot
+                    .iter()
+                    .map(|(&k, &b)| (sname(k), b - r0))
+                    .collect();
+                m23.sort_unstable();
+                m23.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m24: Vec<_> = e
+                    .gate_slot
+                    .iter()
+                    .map(|(&k, &b)| (sname(k), b - r0))
+                    .collect();
+                m24.sort_unstable();
+                m24.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m11: Vec<_> = e
+                    .port_consts
+                    .iter()
+                    .map(|(&k, &(w, v))| (sname(k), w, v))
+                    .collect();
+                m11.sort_unstable();
+                m11.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // names, not values: the value is in a slot now, and
+                // the map survives only as the pass-as-double type
+                // marker (see `real_consts` above)
+                let mut m12: Vec<_> = e.real_consts.keys().map(|&k| sname(k)).collect();
+                m12.sort_unstable();
+                m12.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // gate wiring pins the sig: owner slots are ABSOLUTE in
+                // deduped bodies, so instances gated differently (other
+                // owner, other expr) must never share exec code
+                // the gate PORT NAMES, not the wiring.  This used to
+                // hash the owner's global instance index and the
+                // Debug rendering of the gate expression -- an index
+                // into one design's instance list, and a string full
+                // of raw StrIds, so no two designs could ever agree
+                // and no two instances under different gates could
+                // share a body.  The value lives in a slot now, so
+                // the wiring is not part of what the body IS.
+                let mut m13: Vec<_> = e.gates.keys().map(|&k| sname(k)).collect();
+                m13.sort_unstable();
+                m13.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // the NAMES of the string ports, not their texts: a
+                // string argument is a value the parent supplies and
+                // now lives in a slot, so hashing the text would keep
+                // specializing on exactly the thing we just moved out
+                // of the body
+                let mut m14: Vec<_> = e.str_consts.keys().map(|&k| sname(k)).collect();
+                m14.sort_unstable();
+                m14.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m15: Vec<_> = e
+                    .wide_consts
+                    .iter()
+                    .map(|(&k, (w, l))| (sname(k), *w, l.clone()))
+                    .collect();
+                m15.sort_unstable();
+                m15.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // the sig must cover every input the exec lowering
+                // reads (handoff rule): regfile regions included
+                let mut m10: Vec<_> = e
+                    .regfile_slot
+                    .iter()
+                    .map(|(&k, &(b, w, lo, hi))| (sname(k), b - r0, w, lo, hi))
+                    .collect();
+                m10.sort_unstable();
+                m10.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m19: Vec<_> = e
+                    .creg5_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m19.sort_unstable();
+                m19.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m20: Vec<_> = e
+                    .counter_slot
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m20.sort_unstable();
+                m20.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m18: Vec<_> = e
+                    .bram_slot
+                    .iter()
+                    .map(|(&k, &(b, w, sz, cs, nw, du, pl))| (sname(k), b - r0, w, sz, cs, nw, du, pl))
+                    .collect();
+                m18.sort_unstable();
+                m18.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // traced artifacts: recording layout is an exec input
+                let mut m16: Vec<_> = e
+                    .rec_defs
+                    .iter()
+                    .map(|(&k, &(b, w))| (sname(k), b - r0, w))
+                    .collect();
+                m16.sort_unstable();
+                m16.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut m17: Vec<_> = e
+                    .rec_meths
+                    .iter()
+                    .map(|(&k, rm)| {
+                        (
+                            sname(k),
+                            rm.t - r0,
+                            rm.args
+                                .iter()
+                                .map(|&(b, w)| (b - r0, w))
+                                .collect::<Vec<_>>(),
+                            rm.res.map(|(b, w)| (b - r0, w)),
+                        )
+                    })
+                    .collect();
+                m17.sort_unstable();
+                m17.hash(&mut hl);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                let mut kids: Vec<_> = e
+                    .children
+                    .iter()
+                    .filter_map(|(&n, &c)| input_sigs.get(&c).map(|&sg| (sname(n), sg)))
+                    .collect();
+                kids.sort_unstable();
+                kids.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                // `kids` covers USER children only -- a BVI import is
+                // a prim and has no InstEnv -- so the imported models
+                // are hashed here.  The BODY cannot differ over them
+                // (every BVI call goes through the site table, which
+                // the design's plan materialises), but the manifest
+                // row is per class and has to name one set of models,
+                // so the class must mean one.  Derived-not-contracted
+                // otherwise: the contract lives in the fragment's own
+                // BIR, hence in its content hash, and the forwarded
+                // parameters resolve to constants of the fragment --
+                // which is an argument that it agrees today, not one
+                // that it must.
+                e.bvi_needs.hash(&mut hi);
+                if tracing { snap.push(hi.finish() ^ hl.finish().rotate_left(1)) }
+                if let Some(want) = &sig_trace {
+                    let nm = sig_strings
+                        .get(self.d.modules[e.mir].name as usize)
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    if nm == want {
+                        eprintln!("sig {nm} inst {i}: {snap:016x?}");
+                    }
+                }
+                let (isig, lsig) = (hi.finish(), hl.finish());
+                match layout_of.get(&isig) {
+                    Some(&(prev, other)) if prev != lsig && layout_reported.insert(isig) => {
+                        // Position-dependent layout: the same fragment,
+                        // at the same parameters, laid out two ways.
+                        // Per-type code is addressed off one region
+                        // base, so one of the two bodies would be
+                        // reading the other's slots -- and a per-
+                        // fragment object built from either would be
+                        // wrong for the other design.  A compiler bug,
+                        // not a configuration.
+                        eprintln!(
+                            "trs: layout is not a function of the fragment: \
+                             instances {other} and {i} of `{}' share inputs \
+                             but lay out differently ({prev:016x} vs \
+                             {lsig:016x})",
+                            self.d.name(self.d.modules[e.mir].name)
+                        );
+                    }
+                    Some(_) => {}
+                    None => {
+                        layout_of.insert(isig, (lsig, i));
+                    }
+                }
+                input_sigs.insert(i, isig);
+                layout_sigs.insert(i, lsig);
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (isig, lsig).hash(&mut h);
+                sigs.insert(i, h.finish());
+            }
+            sigs
+        } else {
+            HashMap::new()
+        };
+        // Dense class ids: one per distinct (module type, signature).
+        // Anything emitted ONCE and shared between instances has to be
+        // keyed by this rather than by the module type -- a shared body
+        // bakes the exemplar's parameters, and instances of one type
+        // differ in exactly those.  With no signatures (the artifact
+        // load path, which derives no classes and lowers nothing) every
+        // instance of a type lands in one id, as before.
+        {
+            let mut next = 0usize;
+            let mut seen: HashMap<(usize, u64), usize> = HashMap::new();
+            let mut iis: Vec<usize> = inst_envs.keys().copied().collect();
+            iis.sort_unstable();
+            for i in iis {
+                let mir = inst_envs[&i].mir;
+                let sg = inst_sig.get(&i).copied().unwrap_or(0);
+                let id = *seen.entry((mir, sg)).or_insert_with(|| {
+                    let v = next;
+                    next += 1;
+                    v
+                });
+                if let Some(e) = inst_envs.get_mut(&i) {
+                    e.class_id = id;
+                }
+            }
+        }
+
+
+        // any Exec node of a RULE must belong to a scheduled rule
+        // above; interface-method Exec nodes are no-ops (skipped by
+        // the interp and by comp_nodes below)
+        for rc in rcomps {
+            for en in &rc.entries {
+                let module = self.module_of(en.inst);
+                for &node in &en.nodes {
+                    let SchedNode::Exec(r) = node else { continue };
+                    let r = r.rule();
+                    let mir = self.mods[module].ir;
+                    if r.idx() >= self.d.modules[mir].rules.len() {
+                        continue;
+                    }
+                    if rc.early.contains(&(en.inst, r)) {
+                        continue; // after-edge pass runs it interpreted
+                    }
+                    if !rule_ord.contains_key(&(en.inst, r)) {
+                        if trace {
+                            eprintln!("trs jit: off (exec without sched)");
+                        }
+                        return None;
+                    }
+                }
+            }
+        }
+
+        sl.lap("plan sigs (inst_sig hashing)");
+        // one design-wide spec list (ordinal order)
+        let mut specs = Vec::new();
+        // per ordinal: (ME-inhibitor slot count, per-comp base cross
+        // slots) — the compiled-alts variant builder recomposes
+        // inhibitors as ME + other comps' base cross + this comp's
+        // ALTERNATIVE cross (a union over interleavings would inhibit
+        // rules that do not precede the victim in the selected order)
+        let mut sched_parts: Vec<(usize, Vec<Vec<u32>>)> = Vec::new();
+        for ri in &rules {
+            let mir = inst_envs[&ri.inst].mir;
+            let rr = &self.d.modules[mir].rules[ri.rule_idx];
+            let module = self.module_of(ri.inst);
+            let mut inhibit_slots = Vec::new();
+            for other in &rr.me_inhibits {
+                let other_ri = other.idx();
+                let other_cf = self.d.modules[mir].rules[other_ri].can_fire;
+                match inst_envs[&ri.inst].cfwf_slot.get(&other_cf) {
+                    Some(&s) => inhibit_slots.push(s),
+                    None => {
+                        if trace {
+                            eprintln!("trs jit: off (unslotted ME inhibitor)");
+                        }
+                        return None;
+                    }
+                }
+            }
+            let me_len = inhibit_slots.len();
+            let mut cross_by_comp: Vec<Vec<u32>> = Vec::with_capacity(rcomps.len());
+            for rc in rcomps {
+                let mut cv = Vec::new();
+                if let Some(cs) = rc.cross.get(&(ri.inst, RuleRef(ri.rule_idx as u32))) {
+                    for (oi, ocf) in cs {
+                        match inst_envs.get(oi).and_then(|e| e.cfwf_slot.get(ocf)) {
+                            Some(&s) => cv.push(s),
+                            None => {
+                                if trace {
+                                    eprintln!("trs jit: off (unslotted cross inhibitor)");
+                                }
+                                return None;
+                            }
+                        }
+                    }
+                }
+                inhibit_slots.extend(cv.iter().copied());
+                cross_by_comp.push(cv);
+            }
+            sched_parts.push((me_len, cross_by_comp));
+            // always-fire detection (task #23): the WILL_FIRE def
+            // resolves (through Def aliases) to a constant-true value.
+            // Only WF is the truth: bsc bakes preemption/urgency gating
+            // into the WF def EXPRESSION (WF_a = CF_a && !WF_b), never
+            // into me_inhibits — a const-true CAN_FIRE says nothing
+            // (sysEspositoPreempt/sysRegFileVector regression).
+            let always_fire = if let Some(af) = &baked_af {
+                af.get(ri.ordinal).is_some_and(|&b| b != 0)
+            } else {
+                // self.mods[mir].defs is the prebuilt name index
+                let didx = &self.mods[mir].defs;
+                let const_true = |name: StrId| -> bool {
+                    let defs = &self.d.modules[mir].defs;
+                    let mut cur = name;
+                    for _ in 0..32 {
+                        let Some(dd) = didx.get(&cur).map(|&i| &defs[i]) else {
+                            return false;
+                        };
+                        match &*dd.expr {
+                            trs_ir::Expr::Const { limbs, .. } => {
+                                return limbs.iter().any(|&l| l != 0)
+                            }
+                            trs_ir::Expr::Def(n) => cur = *n,
+                            _ => return false,
+                        }
+                    }
+                    false
+                };
+                inhibit_slots.is_empty() && const_true(rr.will_fire)
+            };
+            specs.push(RuleSpec {
+                always_fire,
+                inst: ri.inst,
+                rule_idx: ri.rule_idx,
+                inhibit_slots,
+                cf_slot: ri.cf_slot,
+                wf_slot: ri.wf_slot,
+                eager: ri.eager.clone(),
+                shared: ri.shared.clone(),
+                label: format!("i{}_{}", ri.inst, ri.ordinal),
+                share_label: exec_class_label(
+                    &self.d,
+                    self.mods[self.module_of(ri.inst)].ir,
+                    ri.rule_idx,
+                    inst_sig.contains_key(&ri.inst),
+                ),
+                ordinal: ri.ordinal as u32,
+                sched_foreign_origin: 0,
+                sched_prim_origin: 0,
+                autofire: None,
+            });
+        }
+        // auto-fired always_enabled top methods: appended PSEUDO-SPECS,
+        // one per method in interface order — deterministic, so Emit
+        // and Load derive identical ordinals/tokens and PlanB never
+        // needs to carry them (its always_fire vec grows matching
+        // trailing `true`s, read back only for rule ordinals).
+        // always_fire skips the WF gate; the exec section inlines the
+        // method body at its anchor (lower.rs autofire_section); the
+        // synthetic rule_idx keys the dedup classes uniquely and must
+        // never index rules (every consumer branches on autofire).
+        let n_rule_specs = specs.len();
+        if af_compiled {
+            let top_inst = 0usize;
+            let tmir = self.mods[self.module_of(top_inst)].ir;
+            for (afi, (mname, argv)) in self.autofire.clone().iter().enumerate() {
+                let Some(mi) = self.d.modules[tmir].method_idx(*mname) else {
+                    if trace {
+                        eprintln!("trs jit: off (autofire method missing)");
+                    }
+                    return None;
+                };
+                let m = &self.d.modules[tmir].methods[mi];
+                if m.args.len() != argv.len() {
+                    if trace {
+                        eprintln!("trs jit: off (autofire argv mismatch)");
+                    }
+                    return None;
+                }
+                let mut av: Vec<(u32, Vec<u64>)> = Vec::new();
+                for (pa, v) in m.args.iter().zip(argv) {
+                    let words = (pa.width.max(1) as usize).div_ceil(64);
+                    let mut limbs = v.limbs64().to_vec();
+                    limbs.resize(words, 0);
+                    av.push((pa.width, limbs));
+                }
+                let o = specs.len();
+                specs.push(RuleSpec {
+                    always_fire: true,
+                    inst: top_inst,
+                    rule_idx: usize::MAX - afi,
+                    inhibit_slots: Vec::new(),
+                    cf_slot: 0,
+                    wf_slot: 0,
+                    eager: Vec::new(),
+                    shared: Vec::new(),
+                    label: format!("af{afi}_{o}"),
+                    // an auto-fired top method belongs to the DESIGN's
+                    // top module, so there is no cross-design class to
+                    // name; the spec label is already the right scope
+                    share_label: format!("af{afi}_{o}"),
+                    ordinal: o as u32,
+                    sched_foreign_origin: 0,
+                    sched_prim_origin: 0,
+                    autofire: Some(trs_codegen::abi::AfSpec {
+                        method_idx: mi,
+                        method: *mname,
+                        argv: av,
+                    }),
+                });
+                sched_parts.push((0, vec![Vec::new(); rcomps.len()]));
+            }
+        }
+        // edge-SSA shareability analysis (task #24 M1,
+        // TRS_EDGE_SSA_STATS=1): for every def consumed by 2+ exec
+        // bodies in a composition, decide gap-wise whether the value
+        // computed at the first consumer's position is still valid at
+        // each later consumer — i.e. no intervening exec writes state
+        // the def's cone reads UNSTABLY.  Stability is value-level prim
+        // contract only (doctrine d97b7e4a): ConfigReg reads and FIFO
+        // i_* views see begin-of-instant state, so intervening writes
+        // to them cannot kill; everything else (plain Reg, wires,
+        // immediate FIFO views, RegFile/BRAM/unknown prims) kills on
+        // any intervening action.  Output sizes the cross-rule sharing
+        // an SSA edge lowering may legally perform — the emitter's
+        // classification table.
+        if std::env::var_os("TRS_EDGE_SSA_STATS").is_some() {
+            let nodes: Vec<Vec<(bool, usize)>> = rcomps
+                .iter()
+                .map(|rc| {
+                    let mut v = Vec::new();
+                    for en in &rc.entries {
+                        for &node in &en.nodes {
+                            let (is_exec, r) = match node {
+                                SchedNode::Sched(r) => (false, r.rule()),
+                                SchedNode::Exec(r) => (true, r.rule()),
+                            };
+                            if rc.early.contains(&(en.inst, r)) {
+                                continue;
+                            }
+                            if let Some(&o) = rule_ord.get(&(en.inst, r)) {
+                                v.push((is_exec, o));
+                            }
+                        }
+                    }
+                    v
+                })
+                .collect();
+            let _ = self.edge_ssa_plan(&inst_envs, &nodes, &specs, has_early, true, None);
+        }
+        // sharing census (TRS_JIT_SHARE_STATS=1): how many defs are
+        // consumed by 2+ rules of the same module — the cross-rule
+        // recompute mass the memo/#25 lever would save per edge
+        if std::env::var_os("TRS_JIT_SHARE_STATS").is_some() {
+            use trs_ir::Expr as E;
+            fn refs(e: &E, out: &mut Vec<StrId>) {
+                match e {
+                    E::Def(n) => out.push(*n),
+                    E::MethCall { args, .. }
+                    | E::Prim { args, .. }
+                    | E::ForeignCall { args, .. } => {
+                        for a in args {
+                            refs(a, out);
+                        }
+                    }
+                    E::If {
+                        cond, then_, else_, ..
+                    } => {
+                        refs(cond, out);
+                        refs(then_, out);
+                        refs(else_, out);
+                    }
+                    E::Case {
+                        scrutinee,
+                        arms,
+                        default,
+                        ..
+                    } => {
+                        refs(scrutinee, out);
+                        for (_, a) in arms {
+                            refs(a, out);
+                        }
+                        refs(default, out);
+                    }
+                    _ => {}
+                }
+            }
+            let mut mirs: Vec<usize> = inst_envs.values().map(|e| e.mir).collect();
+            mirs.sort_unstable();
+            mirs.dedup();
+            for mir in mirs {
+                let m = &self.d.modules[mir];
+                let by: HashMap<StrId, usize> = m
+                    .defs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, d)| (d.name, i))
+                    .collect();
+                // transitive def set per rule (cf+wf+body)
+                let mut counts: HashMap<StrId, u32> = HashMap::new();
+                let mut own: HashMap<StrId, u32> = HashMap::new();
+                for d in &m.defs {
+                    let mut r = Vec::new();
+                    refs(&d.expr, &mut r);
+                    let mut n = 0u32;
+                    fn sz(e: &E, n: &mut u32) {
+                        *n += 1;
+                        match e {
+                            E::MethCall { args, .. }
+                            | E::Prim { args, .. }
+                            | E::ForeignCall { args, .. } => {
+                                for a in args {
+                                    sz(a, n);
+                                }
+                            }
+                            E::If {
+                                cond, then_, else_, ..
+                            } => {
+                                sz(cond, n);
+                                sz(then_, n);
+                                sz(else_, n);
+                            }
+                            E::Case {
+                                scrutinee,
+                                arms,
+                                default,
+                                ..
+                            } => {
+                                sz(scrutinee, n);
+                                for (_, a) in arms {
+                                    sz(a, n);
+                                }
+                                sz(default, n);
+                            }
+                            _ => {}
+                        }
+                    }
+                    sz(&d.expr, &mut n);
+                    own.insert(d.name, n);
+                }
+                for r in &m.rules {
+                    let mut seen: std::collections::HashSet<StrId> = Default::default();
+                    let mut work: Vec<StrId> = vec![r.can_fire, r.will_fire];
+                    for st in r.body.iter() {
+                        match st {
+                            trs_ir::Stmt::Def { expr, .. } => refs(expr, &mut work),
+                            trs_ir::Stmt::Action(a) | trs_ir::Stmt::AvAction { action: a, .. } => {
+                                use trs_ir::Action as A;
+                                match a {
+                                    A::MethCall { cond, args, .. } => {
+                                        refs(cond, &mut work);
+                                        for x in args {
+                                            refs(x, &mut work);
+                                        }
+                                    }
+                                    A::Foreign { cond, args, .. } => {
+                                        refs(cond, &mut work);
+                                        for x in args {
+                                            refs(x, &mut work);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    while let Some(n) = work.pop() {
+                        if !seen.insert(n) {
+                            continue;
+                        }
+                        if let Some(&di) = by.get(&n) {
+                            refs(&m.defs[di].expr, &mut work);
+                        }
+                    }
+                    for n in seen {
+                        *counts.entry(n).or_insert(0) += 1;
+                    }
+                }
+                let shared: Vec<_> = counts.iter().filter(|(_, &c)| c >= 2).collect();
+                let mass: u64 = shared
+                    .iter()
+                    .map(|(n, &c)| own.get(n).copied().unwrap_or(0) as u64 * (c as u64 - 1))
+                    .sum();
+                let total: u64 = own.values().map(|&v| v as u64).sum();
+                eprintln!(
+                    "trs share: mir={mir} rules={} defs={} shared(2+ rules)={} \
+                     recompute-mass={mass} (module DAG mass {total})",
+                    m.rules.len(),
+                    m.defs.len(),
+                    shared.len()
+                );
+            }
+        }
+
+        sl.lap("plan specs");
+        // ---- exec dedup classes: one compiled body per class ----
+        let mut classes: Vec<(usize, Vec<usize>)> = baked_classes.unwrap_or_default();
+        if classes.is_empty() {
+            let mut key_to_class: HashMap<(u64, usize, Vec<(bool, u32)>), usize> = HashMap::new();
+            // per-INSTANCE memo: rebuilding the own-slot set per spec was
+            // O(rules x cfwf-slots) — 26ms of FloatTest's startup
+            let mut own_by_inst: HashMap<usize, (std::collections::HashSet<u32>, u32)> =
+                HashMap::new();
+            for (o, sp) in specs.iter().enumerate() {
+                // the compiled body bakes always_fire and inhibitor slot
+                // LOADS; own-region slots are region-relative in codegen
+                // (twins share safely), foreign-instance slots are
+                // absolute (twins must not share) — the key mirrors that
+                let (own, r0) = own_by_inst.entry(sp.inst).or_insert_with(|| {
+                    let ie = &inst_envs[&sp.inst];
+                    (ie.cfwf_slot.values().copied().collect(), ie.region.0)
+                });
+                let (own, r0) = (&*own, *r0);
+                let mut inh: Vec<(bool, u32)> = sp
+                    .inhibit_slots
+                    .iter()
+                    .map(|&sl| {
+                        if own.contains(&sl) {
+                            (true, sl - r0)
+                        } else {
+                            (false, sl)
+                        }
+                    })
+                    .collect();
+                inh.sort_unstable();
+                let key = (inst_sig[&sp.inst], sp.rule_idx, inh);
+                let c = *key_to_class.entry(key).or_insert_with(|| {
+                    classes.push((o, Vec::new()));
+                    classes.len() - 1
+                });
+                classes[c].1.push(o);
+            }
+        }
+        if trace {
+            eprintln!(
+                "trs jit: {} exec bodies in {} dedup classes",
+                specs.len(),
+                classes.len()
+            );
+        }
+
+        let comp_nodes: Vec<Option<Vec<JitNode>>> = rcomps
+            .iter()
+            .enumerate()
+            .map(|(rci, rc)| {
+                let mut nodes = Vec::new();
+                // auto-fire anchors (interp parity): Exec cuts that
+                // precede every node-bearing top segment fire before
+                // the walk; the rest after their entry's nodes
+                let af_node = |mi: &usize| JitNode::Exec((n_rule_specs + *mi) as u32);
+                if af_compiled {
+                    if let Some(idxs) = self.autofire_pre.get(&rci) {
+                        nodes.extend(idxs.iter().map(af_node));
+                    }
+                }
+                for (ei, en) in rc.entries.iter().enumerate() {
+                    for &node in &en.nodes {
+                        let (r, is_sched) = match node {
+                            SchedNode::Sched(r) => (r.rule(), true),
+                            SchedNode::Exec(r) => (r.rule(), false),
+                        };
+                        // early rules run in THIS comp's PG_FINAL pass
+                        // interpreted — emitting them here would double-
+                        // run a rule that another comp scheduled (and
+                        // gave an ordinal to) normally
+                        if rc.early.contains(&(en.inst, r)) {
+                            continue;
+                        }
+                        // interface-method nodes have no ordinal:
+                        // they are no-ops in the edge walk (interp
+                        // parity — nothing to latch or execute)
+                        let Some(&ord) = rule_ord.get(&(en.inst, r)) else {
+                            continue;
+                        };
+                        let ord = ord as u32;
+                        nodes.push(if is_sched {
+                            JitNode::Sched(ord)
+                        } else {
+                            JitNode::Exec(ord)
+                        });
+                    }
+                    if af_compiled {
+                        if let Some(idxs) = self.autofire_at.get(&(rci, ei)) {
+                            nodes.extend(idxs.iter().map(af_node));
+                        }
+                    }
+                }
+                Some(nodes)
+            })
+            .collect();
+        // TRS_LAYOUT_CENSUS=1|<path>: dump the fused schedule's arena
+        // access sequence (sched cones + exec bodies, inlined child
+        // methods included) plus the instance region table, then stop.
+        // The offline model scores layout candidates on distinct D1
+        // lines per edge BEFORE any allocator change is built (rung 38
+        // constraint of record: TOTAL touches, rule bodies included,
+        // not just the sched phase).
+        if let Some(cpath) = std::env::var_os("TRS_LAYOUT_CENSUS") {
+            self.layout_census(rcomps, &specs, &inst_envs, &comp_nodes, nslots, &cpath);
+            eprintln!("trs jit: layout census written; stopping (census mode)");
+            std::process::exit(0);
+        }
+        // sorted: HashMap order is process-seeded, and this order is baked
+        // into the edge fns' EN-zeroing store sequence (deterministic IR)
+        let mut en_slots: Vec<u32> = inst_envs
+            .values()
+            .flat_map(|e| e.en_slot.values().copied())
+            .collect();
+        en_slots.sort_unstable();
+
+        // ---- helper fns for outlined pieces (split opt-in) ----
+        // v1: only module types whose instances all share one subtree
+        // sig (helper symbols are sig-keyed); shared JIT/AOT lowering,
+        // resolution differs (baked addresses vs .so symbols)
+        let mut helper_specs: Vec<HelperSpec> = Vec::new();
+        if !outlined_sel.is_empty() && !specs.is_empty() {
+            let mut mir_sigs: HashMap<usize, std::collections::HashSet<u64>> = HashMap::new();
+            let mut exemplar: HashMap<usize, usize> = HashMap::new();
+            let mut iis: Vec<usize> = inst_envs.keys().copied().collect();
+            iis.sort_unstable();
+            for i in iis {
+                let e = &inst_envs[&i];
+                mir_sigs.entry(e.mir).or_default().insert(inst_sig[&i]);
+                exemplar.entry(e.mir).or_insert(i);
+            }
+            // by NAME, both halves: `mir` is a position in this
+            // design's module list and `dn` a position in its string
+            // table, so this order -- which decides the order helper
+            // fns are emitted into an object -- was the design's, not
+            // the type's
+            let mut keys: Vec<(usize, StrId)> = outlined_sel.keys().copied().collect();
+            keys.sort_unstable_by(|a, b| {
+                let mn = |m: usize| &self.d.strings[self.d.modules[m].name as usize];
+                mn(a.0)
+                    .cmp(mn(b.0))
+                    .then_with(|| self.d.strings[a.1 as usize].cmp(&self.d.strings[b.1 as usize]))
+                    .then(a.cmp(b))
+            });
+            for (mir, dn) in keys {
+                if mir_sigs.get(&mir).map(|x| x.len()) != Some(1) {
+                    continue;
+                }
+                let ex = exemplar[&mir];
+                let (w, st, ref pnames) = outlined_sel[&(mir, dn)];
+                let mut ports: Vec<(StrId, u32)> = Vec::new();
+                let mut ok = true;
+                for &pn in pnames {
+                    let m = &self.d.modules[mir];
+                    let w = m
+                        .inputs
+                        .iter()
+                        .find(|q| q.name == pn)
+                        .map(|q| q.width)
+                        .or_else(|| {
+                            m.methods.iter().find_map(|me| {
+                                me.args.iter().find(|q| q.name == pn).map(|q| q.width)
+                            })
+                        });
+                    match w {
+                        Some(w) => ports.push((pn, w.max(1))),
+                        None => ok = false,
+                    }
+                }
+                if !ok {
+                    continue;
+                }
+                helper_specs.push(HelperSpec {
+                    mir,
+                    def: dn,
+                    width: w,
+                    // the def's NAME, not its StrId.  A StrId is a
+                    // position in this design's string table, so the
+                    // same helper came out as hlp_<sig>_43 in one
+                    // design and hlp_<sig>_17 in another -- an
+                    // emitted symbol carrying a coordinate, which is
+                    // the one place the defect cannot stay latent:
+                    // reuse across designs asks for a symbol the
+                    // object does not define.
+                    sym: format!(
+                        "hlp_{}_{}",
+                        self.d
+                            .strings
+                            .get(self.d.modules[mir].name as usize)
+                            .map(String::as_str)
+                            .unwrap_or(""),
+                        self.d
+                            .strings
+                            .get(dn as usize)
+                            .map(|s| s
+                                .chars()
+                                .map(|c| if c.is_ascii_alphanumeric() || c == '_' {
+                                    c
+                                } else {
+                                    '.'
+                                })
+                                .collect::<String>())
+                            .unwrap_or_default()
+                    ),
+                    inst: ex,
+                    memo_slot: if st {
+                        Some(inst_envs[&ex].memo_slot[&dn].0)
+                    } else {
+                        None
+                    },
+                    ports,
+                });
+            }
+        }
+        let refs_sym: HelperMap = helper_specs
+            .iter()
+            .map(|h| {
+                (
+                    (h.mir, h.def),
+                    (HelperRef::Sym(h.sym.clone()), h.width, h.ports.clone()),
+                )
+            })
+            .collect();
+        // ---- activity-gating dirty region (geometry only; ARMING is
+        // the edge plan's decision) ----
+        // Allocated for EVERY request kind so Emit and Load agree on
+        // the arena length (the artifact bakes nslots and refuses a
+        // mismatch): CURRENT dirty words, NEXT dirty words, last-WF
+        // bits.  Bits cover all instances (pessimistic — masks only
+        // ever use written ones); a few hundred bytes at CPU scale.
+        let gate_layout = {
+            let words = (self.insts.len() as u32).div_ceil(64).max(1);
+            let lastwf_words = (specs.len() as u32).div_ceil(64).max(1);
+            let cur_base = alloc(&mut nslots, words);
+            let next_base = alloc(&mut nslots, words);
+            let lastwf_base = alloc(&mut nslots, lastwf_words);
+            let scratch = alloc(&mut nslots, 1);
+            trs_codegen::abi::GateLayout {
+                cur_base,
+                next_base,
+                lastwf_base,
+                words,
+                lastwf_words,
+                rule_bit_base: self.insts.len() as u32,
+                scratch,
+            }
+        };
+        // Load attempt FIRST: an artifact carrying protos skips
+        // trial_lower entirely (0.32s of sudoku startup); any failure
+        // falls back to in-process compilation (which trials below)
+        sl.lap("plan classes+nodes");
+        let mut preloaded: Option<(Vec<CompiledSched>, Vec<CompiledExec>)> = None;
+        let mut tick_level_flag: u64 = 0;
+        let mut protos_opt: Option<Vec<FnProtos>> = None;
+        let mut fused_opt: Option<Vec<usize>> = None;
+        if let JitRequest::Load { src } = &request {
+            match aot_load(
+                src,
+                // trace-salted: a traced plan (recording slots shift
+                // the whole layout) must never accept an untraced
+                // artifact, and vice versa
+                self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
+                &specs,
+                &classes,
+                split_thresh.unwrap_or(0),
+                comp_nodes.len(),
+                &self
+                    .bdpi
+                    .as_ref()
+                    .map(|b| {
+                        b.syms()
+                            .iter()
+                            .map(|(n, &a)| {
+                                // syms key by BSV name; globals by c_name
+                                let c = self
+                                    .d
+                                    .foreign_funcs
+                                    .iter()
+                                    .find(|ff| self.s(ff.name) == n)
+                                    .map(|ff| self.s(ff.c_name).to_string())
+                                    .unwrap_or_else(|| n.clone());
+                                (format!("trs_bdpi_{c}"), a)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+            ) {
+                Ok((sch, exe, pr, fu, wt)) => {
+                    preloaded = Some((sch, exe));
+                    protos_opt = Some(pr);
+                    fused_opt = Some(fu);
+                    tick_level_flag = wt;
+                }
+                Err(e) => {
+                    // mode-mismatch fallbacks are by design (an untraced
+                    // artifact run under -V, or vice versa): keep the
+                    // note out of captured test output
+                    if e != TRACE_MODE_MISMATCH || trace {
+                        eprintln!(
+                            "trs: artifact {}: {e}; compiling in-process instead",
+                            src.display()
+                        );
+                    }
+                }
+            }
+        }
+        sl.lap("aot load (dlopen+gates+dlsym)");
+        // eligibility + call-site tables via trial lowering (link, run,
+        // and artifact-fallback paths; skipped on successful loads)
+        let artifact_loaded = protos_opt.is_some();
+        let protos: Vec<FnProtos> = match protos_opt {
+            Some(p) => p,
+            None => match self.trial_protos(&inst_envs, &specs, now_slot, &request, trace) {
+                Some(p) => p,
+                None => return None,
+            },
+        };
+
+        // Where each rule's exec half begins in its ONE call-site table
+        // is an output of the lowering, not of the plan, so it is copied
+        // onto the specs here -- the single point both proto sources
+        // (artifact-loaded and trial-lowered) pass through.  Every exec
+        // lowering reads it from its spec; if two paths disagreed the
+        // sites would collide silently rather than fail, so there is
+        // exactly one writer and it is this one.
+        for (sp, pr) in specs.iter_mut().zip(&protos) {
+            sp.sched_prim_origin = pr.sched_prim_origin;
+            sp.sched_foreign_origin = pr.sched_foreign_origin;
+        }
+
+        // A boundary fn's call sites live in its CALLER's table, at a
+        // block whose offset is baked into the one shared body -- so
+        // every member of a dedup class must lay its tables out
+        // identically.  Membership already implies same module type,
+        // same rule, same region-relative slots and same baked params
+        // (inst_sig), so a divergence means the key stopped covering
+        // something the lowering reads, or the walk became
+        // nondeterministic.  That is a compiler bug, not a property of
+        // the design: fail loudly at link time rather than silently
+        // mis-index a table at run time, and never fall back -- a
+        // fallback would turn the bug into unexplained slowness.
+        for (rep, members) in &classes {
+            let r = &protos[*rep];
+            for &m in members {
+                let p = &protos[m];
+                // The EXEC halves must match: one body serves the
+                // whole class and addresses [0, sched_origin), so
+                // every member must agree on both that range's LENGTH
+                // and its contents.
+                //
+                // The sched halves need not, and DO not.  A sched fn
+                // is per-ordinal and nothing shares it, and its size
+                // follows how the design's schedule split shared
+                // eager defs between an instance's rules: `early' is
+                // per (instance, rule) in the composition, so the
+                // eager walk reaches different cones for different
+                // instances of one type.  That is design context, and
+                // no class key could cover it -- widening the key
+                // would split a module type into two classes, which
+                // one object per type refuses.
+                //
+                // Putting exec FIRST is what confines the difference
+                // to the half where it does no harm; it used to sit
+                // second and inherit the sched half's
+                // design-dependent size as its origin.
+                let (ro, po) = (r.sched_prim_origin as usize, p.sched_prim_origin as usize);
+                let (rf, pf) = (r.sched_foreign_origin as usize, p.sched_foreign_origin as usize);
+                let shaped = po == ro
+                    && pf == rf
+                    && p.prims[..po].iter().zip(&r.prims[..ro]).all(|(a, b)| {
+                        a.method == b.method
+                            && a.port == b.port
+                            && a.arg_widths == b.arg_widths
+                            && a.ret_width == b.ret_width
+                            && a.is_action == b.is_action
+                    })
+                    && p.foreign[..pf].iter().zip(&r.foreign[..rf]).all(|(a, b)| {
+                        a.func == b.func && a.ret_width == b.ret_width && a.args == b.args
+                    });
+                if !shaped {
+                    // Say WHICH sites disagree and on what.  The
+                    // assert below names two ordinals, which localises
+                    // nothing: these are a rep and a member the
+                    // signature called identical, so the useful fact
+                    // is the first input it stopped covering.  Only
+                    // the differing entries, and only a few -- the
+                    // tables run to thousands on a large design, and
+                    // the first disagreement is the one to read.
+                    let nm = |i: usize| {
+                        self.insts
+                            .get(i)
+                            .map(|x| x.path.clone())
+                            .unwrap_or_else(|| format!("<inst {i}?>"))
+                    };
+                    let mir = self.mods[self.module_of(specs[*rep].inst)].ir;
+                    eprintln!(
+                        "dedupdiff {}.{}: rep {} vs member {}",
+                        self.d.name(self.d.modules[mir].name),
+                        self.d.name(self.d.modules[mir].rules[specs[*rep].rule_idx].name),
+                        nm(specs[*rep].inst),
+                        nm(specs[m].inst)
+                    );
+                    // sched_origin IS the exec half's length, so
+                    // origins that differ mean the two bodies do not
+                    // even address the same NUMBER of sites
+                    if po != ro || pf != rf {
+                        eprintln!(
+                            "  exec half is {ro} prim / {rf} foreign sites for \
+                             the rep, {po} / {pf} for the member"
+                        );
+                    }
+                    for k in 0..ro.min(po) {
+                        let (a, b) = (&r.prims[k], &p.prims[k]);
+                        if a.method == b.method
+                            && a.port == b.port
+                            && a.arg_widths == b.arg_widths
+                            && a.ret_width == b.ret_width
+                            && a.is_action == b.is_action
+                        {
+                            continue;
+                        }
+                        eprintln!(
+                            "  prim site {k}: rep {}.{} (inst {}) vs member {}.{} (inst {})",
+                            nm(a.inst), self.s(a.method), a.port,
+                            nm(b.inst), self.s(b.method), b.port
+                        );
+                    }
+                    for k in 0..rf.min(pf) {
+                        let (a, b) = (&r.foreign[k], &p.foreign[k]);
+                        if a.func == b.func && a.ret_width == b.ret_width && a.args == b.args {
+                            continue;
+                        }
+                        eprintln!("  foreign site {k}: rep {} vs member {}", a.func, b.func);
+                    }
+                }
+                assert!(
+                    shaped,
+                    "trs: dedup class rep ordinal {rep} and member {m} \
+                     (instances {} and {}) share a compiled body but \
+                     lay out different call-site tables \
+                     (prim {}/{}, foreign {}/{}).  Baked block offsets \
+                     would mis-index; the dedup key no longer covers \
+                     everything the lowering reads.",
+                    specs[*rep].inst,
+                    specs[m].inst,
+                    r.prims.len(),
+                    p.prims.len(),
+                    r.foreign.len(),
+                    p.foreign.len(),
+                );
+            }
+        }
+
+        // trs link: emit the artifact .so and stop (nothing runs)
+        #[cfg(not(feature = "jit"))]
+        if let JitRequest::Emit { .. } = &request {
+            self.jit_emit_result = Some(crate::AotEmit::Failed(
+                "this build has no compile tier (feature `jit`)".into(),
+            ));
+            return None;
+        }
+        #[cfg(feature = "jit")]
+        if let JitRequest::Emit { so, exe } = &request {
+            // whole-edge SSA emission (task #24, opt-in): build the
+            // legality tables the edge emitter consumes
+            // DEFAULT ON for AOT links (the compiled fast tier);
+            // TRS_EDGE_SSA=0 restores the classic emission
+            let mut nodes_for_plan: Vec<Vec<(bool, usize)>> = comp_nodes
+                .iter()
+                .map(|ns| {
+                    ns.as_ref()
+                        .map(|ns| {
+                            ns.iter()
+                                .map(|n| match *n {
+                                    JitNode::Sched(o) => (false, o as usize),
+                                    JitNode::Exec(o) => (true, o as usize),
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                })
+                .collect();
+            // compiled dynamic-scheduling variants (Emit only — a Load
+            // runs the dispatch already baked into the artifact): one
+            // appended plan row per (composition, alternative), plus
+            // the order-derived sched overrides for that row.  Guard
+            // evaluation order = declaration order (interp parity:
+            // first match wins, none matching walks the base row).
+            struct AltVar {
+                comp: usize,
+                guard_inst: usize,
+                guard: trs_ir::Expr,
+                nodes: Vec<(bool, usize)>,
+                over: HashMap<usize, trs_codegen::abi::SchedOver>,
+            }
+            let mut alt_vars: Vec<AltVar> = Vec::new();
+            if alts_compiled {
+                for (k, rc) in rcomps.iter().enumerate() {
+                    for alt in &rc.alts {
+                        let mut vnodes: Vec<(bool, usize)> = Vec::new();
+                        // owned-earlier eager defs per instance in
+                        // THIS interleaving: base share claims only
+                        // survive where the owner still runs earlier
+                        let mut owned: HashMap<usize, std::collections::HashSet<StrId>> =
+                            HashMap::new();
+                        let mut over: HashMap<usize, trs_codegen::abi::SchedOver> = HashMap::new();
+                        for en in &alt.entries {
+                            for &node in &en.nodes {
+                                let (r, is_sched) = match node {
+                                    SchedNode::Sched(r) => (r.rule(), true),
+                                    SchedNode::Exec(r) => (r.rule(), false),
+                                };
+                                if rc.early.contains(&(en.inst, r)) {
+                                    continue;
+                                }
+                                let Some(&o) = rule_ord.get(&(en.inst, r)) else {
+                                    continue;
+                                };
+                                vnodes.push((!is_sched, o));
+                                if !is_sched {
+                                    continue;
+                                }
+                                // inhibitors: ME + the OTHER comps'
+                                // base cross + this alternative's own
+                                // cross (never the base order's)
+                                let (me_len, ref cbc) = sched_parts[o];
+                                let mut inh: Vec<u32> = specs[o].inhibit_slots[..me_len].to_vec();
+                                for (j, cv) in cbc.iter().enumerate() {
+                                    if j != k {
+                                        inh.extend(cv.iter().copied());
+                                    }
+                                }
+                                if let Some(cs) = alt.cross.get(&(en.inst, r)) {
+                                    for (oi, ocf) in cs {
+                                        match inst_envs.get(oi).and_then(|e| e.cfwf_slot.get(ocf)) {
+                                            Some(&s) => inh.push(s),
+                                            None => {
+                                                if trace {
+                                                    eprintln!(
+                                                        "trs jit: off (unslotted \
+                                                         alt cross inhibitor)"
+                                                    );
+                                                }
+                                                return None;
+                                            }
+                                        }
+                                    }
+                                }
+                                let shared: Vec<StrId> = specs[o]
+                                    .shared
+                                    .iter()
+                                    .filter(|d| owned.get(&en.inst).is_some_and(|s| s.contains(d)))
+                                    .copied()
+                                    .collect();
+                                over.insert(
+                                    o,
+                                    trs_codegen::abi::SchedOver {
+                                        inhibit_slots: inh,
+                                        shared,
+                                    },
+                                );
+                                owned
+                                    .entry(en.inst)
+                                    .or_default()
+                                    .extend(en.eager.iter().copied());
+                            }
+                        }
+                        alt_vars.push(AltVar {
+                            comp: k,
+                            guard_inst: alt.guard_inst,
+                            guard: alt.guard.clone(),
+                            nodes: vnodes,
+                            over,
+                        });
+                    }
+                }
+            }
+            let base_rows = nodes_for_plan.len();
+            let mut alt_row_refs: Vec<Vec<trs_codegen::abi::AltRow>> = vec![Vec::new(); base_rows];
+            let mut sched_over_rows: Vec<HashMap<usize, trs_codegen::abi::SchedOver>> =
+                vec![HashMap::new(); base_rows];
+            // per appended row: its composition (tick-table inheritance)
+            let mut alt_row_comp: Vec<usize> = Vec::new();
+            for av in alt_vars {
+                let row = nodes_for_plan.len();
+                nodes_for_plan.push(av.nodes);
+                sched_over_rows.push(av.over);
+                alt_row_comp.push(av.comp);
+                alt_row_refs[av.comp].push(trs_codegen::abi::AltRow {
+                    row,
+                    guard_inst: av.guard_inst,
+                    guard: av.guard,
+                });
+            }
+            let mk_edge_plan = || {
+                (std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0")).then(|| {
+                    let mut plan = self.edge_ssa_plan(
+                        &inst_envs,
+                        &nodes_for_plan,
+                        &specs,
+                        has_early,
+                        false,
+                        Some(gate_layout),
+                    );
+                    // traced artifacts keep wire ticks boxed: the tick
+                    // latches `written` for the VCD dump (and clears
+                    // valid through the slot), which a compiled clear
+                    // inside the edge fn would starve
+                    if !self.vcd_trace {
+                        let cov = self.prim_tick_coverage(&inst_envs, rcomps);
+                        plan.wire_clears = cov.wire_clears;
+                        plan.creg_copies = cov.creg_copies;
+                        plan.bram_ticks = cov.bram_ticks;
+                    }
+                    if !alt_row_comp.is_empty() {
+                        plan.alt_rows = alt_row_refs.clone();
+                        plan.sched_over = sched_over_rows.clone();
+                        // variant rows inherit their composition's
+                        // tick tables (ticks are per comp, not per
+                        // interleaving); rows were appended in
+                        // alt_row_comp order.  Length guard: traced
+                        // plans leave the tables empty (and decline
+                        // alts anyway) — never mis-index rows.
+                        if plan.wire_clears.len() == base_rows {
+                            for &c in &alt_row_comp {
+                                let wc = plan.wire_clears[c].clone();
+                                let cc = plan.creg_copies[c].clone();
+                                let bt = plan.bram_ticks[c].clone();
+                                plan.wire_clears.push(wc);
+                                plan.creg_copies.push(cc);
+                                plan.bram_ticks.push(bt);
+                            }
+                        }
+                    }
+                    plan
+                })
+            };
+            // bake what this emit derived: a Load of the artifact
+            // decodes these instead of re-deriving (see PlanB)
+            let plan_b_bytes = plan_b_encode(&specs, &classes);
+            let bdpi_names: Vec<String> = {
+                let mut v: Vec<String> = self
+                    .d
+                    .foreign_funcs
+                    .iter()
+                    .map(|f| self.s(f.c_name).to_string())
+                    .filter(|n| !crate::is_lib_bdpi(n))
+                    .collect();
+                v.sort_unstable();
+                v.dedup();
+                v
+            };
+            // No replan loop: nothing is inlined into the edge fn, so
+            // there is no mega-function to bound and no victims to
+            // choose.  The loop existed to walk the outline dial up
+            // until the edge fit a budget -- one measurement, one
+            // re-emit, repeat -- and every body it could have
+            // outlined is outlined from the start now.
+            let result = aot_emit(
+                &self.d,
+                &inst_envs,
+                &specs,
+                now_slot,
+                &classes,
+                &helper_specs,
+                &refs_sym,
+                split_thresh.unwrap_or(0),
+                &protos,
+                &comp_nodes,
+                &en_slots,
+                so,
+                exe.as_ref(),
+                // trace-salted: a traced plan (recording slots shift
+                // the whole layout) must never accept an untraced
+                // artifact, and vice versa
+                self.bir_hash ^ (self.vcd_trace as u64 * 0x5452_4143_4544),
+                self.bir_hash,
+                self.plan_a_bytes.as_deref().unwrap_or(&[]),
+                &plan_b_bytes,
+                mk_edge_plan().as_ref(),
+                &bdpi_names,
+            );
+            // RunCore sidecar (validation form): build the arena the
+            // link would hand a boot — the SAME four steps as the load
+            // tail below (alloc, attach, reset levels, memo stamps;
+            // drift between the two sites is exactly what the
+            // TRS_RUNCORE_CHECK load comparison exists to catch) — and
+            // stash its encoding for the linker CLI.  The box is
+            // leaked: prims are now slot-aware and the link process
+            // exits without touching them again.
+            if result.is_ok() {
+                let mut arena = vec![0u64; nslots as usize].into_boxed_slice();
+                let arena_ptr = arena.as_mut_ptr();
+                for &(ci, slot) in &attach {
+                    if let InstKind::Prim(p) = &mut self.insts[ci].kind {
+                        p.arena_attach(unsafe { arena_ptr.add(slot as usize) });
+                    }
+                }
+                for (node, &slot) in reset_node_slot.iter().enumerate() {
+                    unsafe { *arena_ptr.add(slot as usize) = (!self.rst_asserted[node]) as u64 };
+                }
+                for &slot in &memo_stamp_slots {
+                    unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
+                }
+                // activity gating: dirty bitmaps start ALL-ONES so the
+                // first edges recompute every cone (slots hold no
+                // trustworthy values yet); harmless if the artifact
+                // was linked ungated (nothing reads the words)
+                for i in 0..gate_layout.words {
+                    unsafe {
+                        *arena_ptr.add((gate_layout.cur_base + i) as usize) = u64::MAX;
+                        *arena_ptr.add((gate_layout.next_base + i) as usize) = u64::MAX;
+                    }
+                }
+                self.jit_arena_ptr = arena_ptr;
+                self.jit_arena_len = nslots as usize;
+                self.jit_gate = Some((
+                    gate_layout.cur_base,
+                    gate_layout.next_base,
+                    gate_layout.words,
+                ));
+                self.runcore_pending = self.runcore_image_encode();
+                // Boot-descriptor stage A: capture what only the emit
+                // can see — per-comp tick coverage (needs inst_envs)
+                // and the BRAM warn-registry rows the attach loop just
+                // wrote (keyed back to relative slots).  prime's
+                // post-plan hook (runcore_desc_finish) assembles the
+                // full v2 descriptor from this plus its clock/comp
+                // state.
+                if self.runcore_pending.is_some() {
+                    let covered = self.prim_tick_coverage(&inst_envs, rcomps).covered_all;
+                    let reg = crate::prim::bram_warn_rows();
+                    let mut warns: Vec<(u64, u32, String)> = attach
+                        .iter()
+                        .filter_map(|&(_, slot)| {
+                            let key = unsafe { arena_ptr.add(slot as usize) } as usize;
+                            reg.get(&key)
+                                .map(|(name, bits)| (slot as u64, *bits, name.clone()))
+                        })
+                        .collect();
+                    warns.sort_by_key(|w| w.0);
+                    let nprims = self
+                        .insts
+                        .iter()
+                        .filter(|i| matches!(i.kind, InstKind::Prim(_)))
+                        .count();
+                    // bounce-reachable prims: every inst a compiled
+                    // prim call site can name.  BTreeSet: the sidecar
+                    // rows must be deterministic (byte-stable sidecars
+                    // are a witness invariant).
+                    let slot_of: HashMap<usize, u64> =
+                        attach.iter().map(|&(ci, slot)| (ci, slot as u64)).collect();
+                    let mut sites: std::collections::BTreeSet<usize> = Default::default();
+                    for p in &protos {
+                        for pc in p.prims.iter() {
+                            sites.insert(pc.inst);
+                        }
+                    }
+                    // mem-file prims join the PRIMS rows (the boot's
+                    // overlay drives them through the same restored
+                    // structs); their load requests become LOADS rows
+                    // in construction order
+                    let load_rows = self.runcore_live_loads();
+                    sites.extend(load_rows.iter().map(|r| r.0 as usize));
+                    let prim_rows = sites
+                        .iter()
+                        .map(|&ci| {
+                            let Some(&slot) = slot_of.get(&ci) else {
+                                return Err("prim call site on an unattached prim".to_string());
+                            };
+                            let InstKind::Prim(p) = &self.insts[ci].kind else {
+                                return Err("prim call site on a non-prim inst".to_string());
+                            };
+                            match p.runcore_seed() {
+                                Some((tag, words, strs)) => Ok((ci as u64, slot, tag, words, strs)),
+                                None => Err(format!(
+                                    "prim call site without a native \
+                                     servicer ({})",
+                                    self.insts[ci].path
+                                )),
+                            }
+                        })
+                        .collect::<Result<Vec<_>, String>>();
+                    if prof::on() {
+                        eprintln!(
+                            "trs prof: prims {nprims} attached {} (boxed {})",
+                            attach.len(),
+                            nprims - attach.len(),
+                        );
+                    }
+                    self.runcore_stage_a = Some(RunCoreStageA {
+                        covered,
+                        edge_ssa: std::env::var("TRS_EDGE_SSA").as_deref() != Ok("0"),
+                        // attach lists exactly the slot-allocated prims
+                        boxed: nprims != attach.len(),
+                        prim_rows,
+                        warns,
+                        load_rows,
+                    });
+                }
+                std::mem::forget(arena);
+            }
+            self.jit_emit_result = Some(match result {
+                Ok(()) => crate::AotEmit::Compiled,
+                Err(EmitFail::Ineligible(e)) => crate::AotEmit::Ineligible(e),
+                Err(EmitFail::Infra(e)) => crate::AotEmit::Failed(e),
+                // the unbounded second pass cannot report over-budget
+            });
+            return None;
+        }
+
+        let n = specs.len();
+        let nworkers = jit_workers(n);
+
+        // SCHED functions compile eagerly (blocking, parallel): they
+        // run on every edge and the cone-sharing keeps them small
+        let chunk = n.div_ceil(nworkers).max(1);
+        // deferred: Load requests only need addresses if the artifact
+        // fails to load (in-process fallback) — never compile helpers
+        // just to throw them away at every artifact startup
+        #[cfg(feature = "jit")]
+        let compile_helpers_now = |inst_envs: &HashMap<usize, InstEnv>| -> HelperMap {
+            if helper_specs.is_empty() {
+                return HelperMap::new();
+            }
+            trs_codegen::lower::llvm_init_once();
+            let env = PlanEnv {
+                d: &self.d,
+                insts: inst_envs,
+                now_slot,
+                gate_scratch: None,
+            };
+            let pseudo = specs[0].clone();
+            let t0 = std::time::Instant::now();
+            match compile_helpers(&env, &helper_specs, &refs_sym, &pseudo) {
+                Ok(addrs) => {
+                    if std::env::var_os("TRS_JIT_TIME").is_some() {
+                        eprintln!(
+                            "trs jit: {} helpers compiled {:?}",
+                            helper_specs.len(),
+                            t0.elapsed()
+                        );
+                    }
+                    let am: HashMap<String, usize> = addrs.into_iter().collect();
+                    helper_specs
+                        .iter()
+                        .map(|h| {
+                            (
+                                (h.mir, h.def),
+                                (HelperRef::Addr(am[&h.sym]), h.width, h.ports.clone()),
+                            )
+                        })
+                        .collect()
+                }
+                Err(e) => {
+                    if trace {
+                        eprintln!("trs jit: helpers off ({e})");
+                    }
+                    HelperMap::new()
+                }
+            }
+        };
+
+        #[cfg(feature = "jit")]
+        let helpers_addr: HelperMap = if preloaded.is_some() {
+            HelperMap::new()
+        } else {
+            compile_helpers_now(&inst_envs)
+        };
+        // no compile tier: helper addresses only matter to in-process
+        // sched compilation, which the stub below refuses anyway
+        #[cfg(not(feature = "jit"))]
+        let helpers_addr = HelperMap::new();
+        let jit_helpers: Option<&HelperMap> = (!helpers_addr.is_empty()).then_some(&helpers_addr);
+        let (scheds, preexecs) = if let Some((s, e)) = preloaded {
+            (s, Some(e))
+        } else {
+            (
+                aot_or_jit_scheds(
+                    self,
+                    &inst_envs,
+                    &specs,
+                    now_slot,
+                    jit_helpers,
+                    nworkers,
+                    trace,
+                )?,
+                None,
+            )
+        };
+
+        let exec_args: Vec<(u64, u32)> = specs
+            .iter()
+            .map(|sp| {
+                let r0 = inst_envs[&sp.inst].region.0 as u64;
+                (r0, sp.ordinal)
+            })
+            .collect();
+        let nclasses = classes.len();
+        // batches are the stop-flag granularity: one whole share per
+        // worker made JitPlans::drop join wait for the FULL body
+        // compile (the fleet) — cap so teardown latency is bounded
+        // by a few class compiles, not the design size
+        let cchunk = nclasses.div_ceil(nworkers).clamp(1, 8);
+        sl.lap("plan tail (protos/scheds)");
+        let lazy = Arc::new(LazyJit {
+            design: if preexecs.is_some() {
+                None
+            } else {
+                Some(self.d.clone())
+            },
+            insts: inst_envs,
+            specs,
+            now_slot,
+            exec_args,
+            protos,
+            classes,
+            helpers: Arc::new(helpers_addr),
+            scheds,
+            next_batch: std::sync::atomic::AtomicUsize::new(0),
+            batch_size: cchunk,
+            cold: std::sync::atomic::AtomicUsize::new(if preexecs.is_some() {
+                0
+            } else {
+                nclasses
+            }),
+            stop: std::sync::atomic::AtomicBool::new(false),
+            cells: (0..n).map(|_| OnceLock::new()).collect(),
+        });
+        self.jit_shared = Some(lazy.clone());
+        sl.lap("lazyjit build");
+
+        let mut workers = Vec::new();
+        match preexecs {
+            Some(execs) => {
+                // artifact bodies: every cell warm from the start
+                for (i, ce) in execs.into_iter().enumerate() {
+                    let _ = lazy.cells[i].set(ce);
+                }
+            }
+            None => {
+                // bodies compile in the background; cold bodies interpret
+                for _ in 0..nworkers {
+                    let lz = lazy.clone();
+                    workers.push(std::thread::spawn(move || lz.work()));
+                }
+                if std::env::var_os("TRS_JIT_SYNC").is_some() {
+                    let t0 = std::time::Instant::now();
+                    while (0..n).any(|i| lazy.cells[i].get().is_none()) {
+                        std::thread::yield_now();
+                    }
+                    if std::env::var_os("TRS_JIT_TIME").is_some() {
+                        eprintln!("trs jit: sync body compile {:?}", t0.elapsed());
+                    }
+                }
+            }
+        }
+
+        // allocate + wire the arena
+        let mut arena = vec![0u64; nslots as usize].into_boxed_slice();
+        let arena_ptr = arena.as_mut_ptr();
+        for (ci, slot) in attach {
+            if let InstKind::Prim(p) = &mut self.insts[ci].kind {
+                p.arena_attach(unsafe { arena_ptr.add(slot as usize) });
+            }
+        }
+        for (node, &slot) in reset_node_slot.iter().enumerate() {
+            unsafe { *arena_ptr.add(slot as usize) = (!self.rst_asserted[node]) as u64 };
+        }
+        for &slot in &memo_stamp_slots {
+            unsafe { *arena_ptr.add(slot as usize) = u64::MAX };
+        }
+        // activity gating: bitmaps start ALL-ONES (see the Emit-path
+        // twin); the runtime saturates them again on reset activity
+        for i in 0..gate_layout.words {
+            unsafe {
+                *arena_ptr.add((gate_layout.cur_base + i) as usize) = u64::MAX;
+                *arena_ptr.add((gate_layout.next_base + i) as usize) = u64::MAX;
+            }
+        }
+        self.jit_arena_ptr = arena_ptr;
+        self.jit_arena_len = nslots as usize;
+        self.jit_reset_slots = reset_node_slot;
+        self.jit_gate = Some((
+            gate_layout.cur_base,
+            gate_layout.next_base,
+            gate_layout.words,
+        ));
+        // two-fill bake gate: perturb every mem-file data region
+        // (post-attach, pre-advance) so the window capture can prove
+        // the rest of the state independent of file content
+        if let Some(pat) = self.runcore_bake_fill {
+            for inst in &mut self.insts {
+                if let InstKind::Prim(p) = &mut inst.kind {
+                    if p.runcore_load().is_some() && p.runcore_slot().is_some() {
+                        p.runcore_fill_region(pat);
+                    }
+                }
+            }
+        }
+        if trace {
+            eprintln!(
+                "trs jit: on ({} rules, {} slots, {} compositions)",
+                rules.len(),
+                nslots,
+                comp_nodes.len()
+            );
+        }
+        let exec_fallback: Vec<(usize, RuleRef, u32)> = {
+            let mut v = Vec::with_capacity(rules.len());
+            for ri in &rules {
+                let mir = lazy.insts[&ri.inst].mir;
+                v.push((ri.inst, RuleRef(ri.rule_idx as u32), ri.wf_slot));
+            }
+            v
+        };
+        // interpreted bodies resolve fire signals and schedule-position
+        // defs straight from the arena (same values the native scheds
+        // stored; matches the proven full-interpreter eager semantics)
+        // every bound gate, with the slot the child reads it from
+        self.jit_gate_fills = lazy
+            .insts
+            .iter()
+            .flat_map(|(_, e)| {
+                e.gate_slot.iter().filter_map(|(&port, &slot)| {
+                    e.gates
+                        .get(&port)
+                        .map(|(owner, ex)| (*owner, ex.clone(), slot))
+                })
+            })
+            .collect();
+        self.jit_eager_slots = lazy
+            .insts
+            .iter()
+            .flat_map(|(&i, e)| {
+                e.cfwf_slot
+                    .iter()
+                    .map(move |(&d, &s)| ((i, d), (s, 1u32)))
+                    .chain(
+                        e.eager_slot
+                            .iter()
+                            .map(move |(&d, &(b, w))| ((i, d), (b, w))),
+                    )
+            })
+            .collect();
+        // interp method calls during body fallback must write EN slots
+        // through so native scheds see them
+        self.jit_en_slots = lazy
+            .insts
+            .iter()
+            .flat_map(|(&i, e)| e.en_slot.iter().map(move |(&p, &s)| ((i, p), s)))
+            .collect();
+        // traced artifacts: initialize the recording slots, flatten the
+        // per-instance tables for the runtime recorder/writer, and seed
+        // slots from any pre-plan recordings (hybrid warm-up slices ran
+        // interpreted into the maps) — the slot is the single authority
+        // from here on, so seeded map entries are dropped
+        for &(slot, v) in &rec_inits {
+            unsafe { *arena_ptr.add(slot as usize) = v };
+        }
+        self.jit_rec_defs = lazy
+            .insts
+            .iter()
+            .flat_map(|(&i, e)| e.rec_defs.iter().map(move |(&n, &sl)| ((i, n), sl)))
+            .collect();
+        self.jit_rec_meths = lazy
+            .insts
+            .iter()
+            .flat_map(|(&i, e)| {
+                e.rec_meths.iter().map(move |(&n, rm)| {
+                    (
+                        (i, n),
+                        crate::RecSlots {
+                            t: rm.t,
+                            args: rm.args.clone(),
+                            res: rm.res,
+                        },
+                    )
+                })
+            })
+            .collect();
+        let keys: Vec<_> = self.jit_rec_defs.keys().cloned().collect();
+        for (i, n) in keys {
+            if let Some(v) = self.vcd_def_vals.remove(&(i, n)) {
+                let (base, w) = self.jit_rec_defs[&(i, n)];
+                let vv = v.zext(w.max(1));
+                unsafe {
+                    for (k, l) in vv
+                        .limbs64()
+                        .iter()
+                        .enumerate()
+                        .take((w.max(1) as usize).div_ceil(64))
+                    {
+                        *arena_ptr.add(base as usize + k) = *l;
+                    }
+                }
+            }
+        }
+        let keys: Vec<_> = self.jit_rec_meths.keys().cloned().collect();
+        for (i, n) in keys {
+            let rs = self.jit_rec_meths[&(i, n)].clone();
+            if let Some((t, argv)) = self.vcd_meth_calls.remove(&(i, n)) {
+                unsafe { *arena_ptr.add(rs.t as usize) = t };
+                for (a, &(base, w)) in argv.iter().zip(&rs.args) {
+                    let vv = a.clone().zext(w.max(1));
+                    unsafe {
+                        for (k, l) in vv
+                            .limbs64()
+                            .iter()
+                            .enumerate()
+                            .take((w.max(1) as usize).div_ceil(64))
+                        {
+                            *arena_ptr.add(base as usize + k) = *l;
+                        }
+                    }
+                }
+            }
+            if let Some(v) = self.vcd_meth_results.remove(&(i, n)) {
+                if let Some((base, w)) = rs.res {
+                    let vv = v.zext(w.max(1));
+                    unsafe {
+                        for (k, l) in vv
+                            .limbs64()
+                            .iter()
+                            .enumerate()
+                            .take((w.max(1) as usize).div_ceil(64))
+                        {
+                            *arena_ptr.add(base as usize + k) = *l;
+                        }
+                    }
+                }
+            }
+        }
+        // RunCore sidecar, validation form: the post-attach image is
+        // deterministic (the slot walk is process-stable — AOT dedup
+        // depends on it — and prim constructors write fixed state).
+        // The Emit branch above stashed its own construction's
+        // encoding; a checked load rebuilds classically HERE and
+        // compares bit-for-bit.  The boot path that TRUSTS the image
+        // lands on top of this witness.
+        let _ = runcore_emit;
+        let mut runcore_desc = None;
+        // gate on a SUCCESSFUL artifact load: fallback runs (trace-
+        // mode mismatch, layout drift) execute freshly compiled code,
+        // so the sidecar's claims are about a run that isn't happening
+        // — checking them there is witness noise (panel finding)
+        if artifact_loaded && std::env::var_os("TRS_RUNCORE_CHECK").is_some() {
+            if let Some(p) = &runcore_sidecar {
+                runcore_desc = self.runcore_image_check(p);
+            }
+        }
+        sl.lap("arena+flatmaps+workers");
+        let covered_ticks = if tick_level_flag >= 2 {
+            self.prim_tick_coverage(&lazy.insts, rcomps).covered_all
+        } else if tick_level_flag == 1 {
+            self.prim_tick_coverage(&lazy.insts, rcomps).covered_wire
+        } else {
+            vec![Default::default(); rcomps.len()]
+        };
+        Some(JitPlans {
+            _arena: arena,
+            arena_ptr,
+            comp_nodes,
+            en_slots,
+            now_slot,
+            lazy,
+            workers,
+            exec_fallback,
+            covered_ticks,
+            runcore_desc,
+            fused: {
+                let cell = std::sync::OnceLock::new();
+                if let Some(fu) = fused_opt {
+                    let _ = cell.set(fu);
+                }
+                cell
+            },
+        })
+    }
+}
+
+/// Rung-38 locality census walker: collects the arena slots the
+/// compiled code touches for one schedule node, mirroring lowering's
+/// access behavior — other rules' CF/WF and eager defs are SLOT LOADS
+/// (recorded, not expanded), the node's own cone expands, and child
+/// METHOD calls recurse (inlined child bodies are where a hierarchical
+/// design's exec-phase traffic lives).  Indexed prims (RegFile/BRAM/
+/// FIFO) count a bounded footprint: their interiors are contiguous
+/// under any allocation order, so they cannot distinguish candidates.
+struct LcWalk<'a> {
+    it: &'a Interp,
+    envs: &'a HashMap<usize, InstEnv>,
+    seen_defs: std::collections::HashSet<(usize, StrId)>,
+    /// memo key carries is_action (lockstep with LcRank): a value
+    /// visit walks ready+result only and must not suppress a later
+    /// action visit's body walk
+    seen_meths: std::collections::HashSet<(usize, StrId, bool)>,
+    /// (slot base, word footprint, class): 0 = prim data, 1 = indexed
+    /// prim (bounded), 2 = def/fire-signal slot
+    out: Vec<(u32, u32, u8)>,
+    /// touches that leave the arena (boxed prims, foreign servicing)
+    boxed: u32,
+    /// rung-40 liveness: EN ports actually READ by evaluated code
+    /// (Port loads against en_slot entries) and defs actually visited
+    /// — the RUNTIME live set, vs the table read-set (bsc's -keep-fires
+    /// keeps defs in the .ba that nothing evaluates)
+    en_reads: std::collections::HashSet<(usize, StrId)>,
+    live_defs: std::collections::HashSet<(usize, StrId)>,
+    /// MethCall/Foreign encountered inside the CURRENT walk (impurity
+    /// witness for the eager-mirror classification)
+    impure: bool,
+}
+
+impl<'a> LcWalk<'a> {
+    fn prim_touch(&mut self, inst: usize, name: StrId) -> bool {
+        let Some(env) = self.envs.get(&inst) else {
+            return false;
+        };
+        let t = if let Some(&(b, w)) = env.reg_slot.get(&name) {
+            Some((b, w.max(1).div_ceil(64), 0u8))
+        } else if let Some(&(b, w)) = env.wire_slot.get(&name) {
+            Some((b, 1 + w.max(1).div_ceil(64), 0))
+        } else if let Some(&(b, w)) = env.bypass_slot.get(&name) {
+            Some((b, w.max(1).div_ceil(64), 0))
+        } else if let Some(&(b, w)) = env.creg_slot.get(&name) {
+            Some((b, (2 * w.max(1).div_ceil(64) + 1).min(8), 0))
+        } else if let Some(t) = env.fifo_slot.get(&name) {
+            Some((t.0, 8, 1))
+        } else if let Some(t) = env.regfile_slot.get(&name) {
+            Some((t.0, 8, 1))
+        } else if let Some(t) = env.bram_slot.get(&name) {
+            Some((t.0, 8, 1))
+        } else if let Some(&(b, w)) = env.creg5_slot.get(&name) {
+            Some((b, (2 * w.max(1).div_ceil(64)).min(8), 0))
+        } else if let Some(&(b, w)) = env.counter_slot.get(&name) {
+            Some((b, (4 * w.max(1).div_ceil(64) + 4).min(8), 0))
+        } else {
+            None
+        };
+        match t {
+            Some(x) => {
+                self.out.push(x);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn meth(
+        &mut self,
+        inst: usize,
+        child: StrId,
+        method: StrId,
+        args: &[trs_ir::Expr],
+        is_action: bool,
+    ) {
+        // arguments evaluate in the CALLER's context
+        for a in args {
+            self.expr(inst, a);
+        }
+        if self.prim_touch(inst, child) {
+            return;
+        }
+        let Some(env) = self.envs.get(&inst) else {
+            return;
+        };
+        let Some(&ci) = env.children.get(&child) else {
+            return;
+        };
+        match &self.it.insts[ci].kind {
+            InstKind::Prim(_) => self.boxed += 1,
+            InstKind::User { .. } => {
+                if !self.seen_meths.insert((ci, method, is_action)) {
+                    return;
+                }
+                let Some(cenv) = self.envs.get(&ci) else {
+                    return;
+                };
+                let it = self.it;
+                let m = &it.d.modules[cenv.mir];
+                if let Some(me) = m.methods.iter().find(|me| me.name == method) {
+                    if let Some(r) = &me.ready {
+                        self.expr(ci, r);
+                    }
+                    if is_action {
+                        for st in &me.body {
+                            self.stmt(ci, st);
+                        }
+                    }
+                    if let Some(res) = &me.result {
+                        self.expr(ci, res);
+                    }
+                }
+            }
+        }
+    }
+
+    fn def(&mut self, inst: usize, name: StrId) {
+        if !self.seen_defs.insert((inst, name)) {
+            return;
+        }
+        self.live_defs.insert((inst, name));
+        // fire signals and schedule-position defs of OTHER rules load
+        // their arena slots — the compiled code never re-expands them
+        if let Some(env) = self.envs.get(&inst) {
+            if let Some(&s) = env.cfwf_slot.get(&name) {
+                self.out.push((s, 1, 2));
+                return;
+            }
+            if let Some(&(b, w)) = env.eager_slot.get(&name) {
+                self.out.push((b, w.max(1).div_ceil(64), 2));
+                return;
+            }
+        }
+        let it = self.it;
+        let module = it.module_of(inst);
+        let mir = it.mods[module].ir;
+        let Some(&di) = it.mods[module].defs.get(&name) else {
+            return;
+        };
+        let e: &trs_ir::Expr = &it.d.modules[mir].defs[di].expr;
+        self.expr(inst, e);
+    }
+
+    fn expr(&mut self, inst: usize, e: &trs_ir::Expr) {
+        use trs_ir::Expr as E;
+        match e {
+            E::Def(n) => self.def(inst, *n),
+            E::MethCall {
+                instance,
+                method,
+                args,
+                ..
+            } => {
+                self.impure = true;
+                self.meth(inst, *instance, *method, args, false)
+            }
+            // lockstep with LcRank: a MethValue re-evaluates the child
+            // method's result cone at runtime, so the census must see
+            // its reads too (TaskValue reads the paired Task action's
+            // cookie store — nothing to walk)
+            E::MethValue {
+                instance, method, ..
+            } => {
+                self.impure = true;
+                self.meth(inst, *instance, *method, &[], false)
+            }
+            E::TaskValue { .. } => {}
+            E::ForeignCall { args, .. } => {
+                self.impure = true;
+                self.boxed += 1;
+                for a in args {
+                    self.expr(inst, a);
+                }
+            }
+            E::Prim { args, .. } => {
+                for a in args {
+                    self.expr(inst, a);
+                }
+            }
+            E::If {
+                cond, then_, else_, ..
+            } => {
+                self.expr(inst, cond);
+                self.expr(inst, then_);
+                self.expr(inst, else_);
+            }
+            E::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
+                self.expr(inst, scrutinee);
+                for (_, a) in arms {
+                    self.expr(inst, a);
+                }
+                self.expr(inst, default);
+            }
+            E::Clock { osc, gate } => {
+                self.expr(inst, osc);
+                self.expr(inst, gate);
+            }
+            E::Reset { wire } => self.expr(inst, wire),
+            E::Port(p) => {
+                // classify by the module PORT TABLE, not by en_slot
+                // presence: recording only slot-backed reads made the
+                // census circular with the allocation it audits — a
+                // pruned-but-read EN was invisible by construction
+                // (external review)
+                let module = self.it.module_of(inst);
+                if self.it.mods[module]
+                    .ports
+                    .get(p)
+                    .is_some_and(|&(_w, k)| k == trs_ir::PortKind::MethodEnable)
+                {
+                    self.en_reads.insert((inst, *p));
+                }
+            }
+            E::Const { .. }
+            | E::Param(_)
+            | E::Str(_)
+            | E::Real(_)
+            | E::Gate { .. }
+            | E::ClockOut { .. } => {}
+        }
+    }
+
+    fn stmt(&mut self, inst: usize, st: &trs_ir::Stmt) {
+        use trs_ir::Stmt as S;
+        match st {
+            S::Def { expr, .. } => self.expr(inst, expr),
+            S::Action(a) => self.action(inst, a),
+            S::AvAction { action, .. } => self.action(inst, action),
+            S::Cond { cond, then_, else_ } => {
+                self.expr(inst, cond);
+                for s in then_ {
+                    self.stmt(inst, s);
+                }
+                for s in else_ {
+                    self.stmt(inst, s);
+                }
+            }
+        }
+    }
+
+    fn action(&mut self, inst: usize, a: &trs_ir::Action) {
+        use trs_ir::Action as A;
+        match a {
+            A::MethCall {
+                instance,
+                method,
+                cond,
+                args,
+                ..
+            } => {
+                self.expr(inst, cond);
+                self.meth(inst, *instance, *method, args, true);
+            }
+            A::Foreign { cond, args, .. } | A::Task { cond, args, .. } => {
+                self.boxed += 1;
+                self.expr(inst, cond);
+                for x in args {
+                    self.expr(inst, x);
+                }
+            }
+        }
+    }
+}
+
+impl Interp {
+    /// Rung-38 locality census (TRS_LAYOUT_CENSUS): dump the instance
+    /// region table and, per composition, the per-node arena access
+    /// sequence.  See the jit_plan hook for the contract.
+    fn layout_census(
+        &self,
+        rcomps: &[RComp],
+        specs: &[RuleSpec],
+        inst_envs: &HashMap<usize, InstEnv>,
+        comp_nodes: &[Option<Vec<JitNode>>],
+        nslots: u32,
+        out_path: &std::ffi::OsStr,
+    ) {
+        use std::io::Write;
+        let p = if out_path == "1" {
+            std::path::PathBuf::from("layout-census.txt")
+        } else {
+            std::path::PathBuf::from(out_path)
+        };
+        let f = std::fs::File::create(&p)
+            .unwrap_or_else(|e| panic!("layout census {}: {e}", p.display()));
+        let mut f = std::io::BufWriter::new(f);
+        writeln!(f, "NSLOTS {nslots}").unwrap();
+        let mut iis: Vec<usize> = inst_envs.keys().copied().collect();
+        iis.sort_unstable();
+        for i in iis {
+            let e = &inst_envs[&i];
+            writeln!(
+                f,
+                "INST {i} {} {} {} {}",
+                e.region.0, e.region.1, e.mir, self.insts[i].path
+            )
+            .unwrap();
+        }
+        // rung-40 liveness aggregation: what the compiled artifact
+        // actually evaluates (vs what bsc's -keep-fires left in the
+        // table) — EN ports with at least one LIVE reader, and the
+        // live def set
+        let mut live_en: std::collections::HashSet<(usize, StrId)> =
+            std::collections::HashSet::new();
+        let mut live_defs: std::collections::HashSet<(usize, StrId)> =
+            std::collections::HashSet::new();
+        for (rci, nodes) in comp_nodes.iter().enumerate() {
+            let Some(nodes) = nodes else { continue };
+            let rc = &rcomps[rci];
+            writeln!(f, "COMP {rci} clk={} pos={}", rc.clk, rc.posedge).unwrap();
+            for (seq, node) in nodes.iter().enumerate() {
+                let (s, is_sched) = match node {
+                    JitNode::Sched(s) => (*s as usize, true),
+                    JitNode::Exec(s) => (*s as usize, false),
+                };
+                let Some(sp) = specs.get(s) else { continue };
+                let mut w = LcWalk {
+                    it: self,
+                    envs: inst_envs,
+                    seen_defs: std::collections::HashSet::new(),
+                    seen_meths: std::collections::HashSet::new(),
+                    out: Vec::new(),
+                    boxed: 0,
+                    en_reads: std::collections::HashSet::new(),
+                    live_defs: std::collections::HashSet::new(),
+                    impure: false,
+                };
+                let mir = inst_envs[&sp.inst].mir;
+                if is_sched {
+                    for &sl in &sp.inhibit_slots {
+                        w.out.push((sl, 1, 2));
+                    }
+                    if sp.autofire.is_none() {
+                        let rr = &self.d.modules[mir].rules[sp.rule_idx];
+                        // the rule's OWN cone expands (mark its defs
+                        // seen so the slot-stop shortcut doesn't fire)
+                        w.seen_defs.insert((sp.inst, rr.can_fire));
+                        w.seen_defs.insert((sp.inst, rr.will_fire));
+                        let module = self.module_of(sp.inst);
+                        for name in [rr.can_fire, rr.will_fire] {
+                            if let Some(&di) = self.mods[module].defs.get(&name) {
+                                let e: &trs_ir::Expr = &self.d.modules[mir].defs[di].expr;
+                                w.expr(sp.inst, e);
+                            }
+                        }
+                        for &en in &sp.eager {
+                            w.seen_defs.insert((sp.inst, en));
+                            if let Some(&di) = self.mods[module].defs.get(&en) {
+                                let e: &trs_ir::Expr = &self.d.modules[mir].defs[di].expr;
+                                w.expr(sp.inst, e);
+                            }
+                            if let Some(&(b, ew)) = inst_envs[&sp.inst].eager_slot.get(&en) {
+                                w.out.push((b, ew.max(1).div_ceil(64), 2));
+                            }
+                        }
+                    }
+                    w.out.push((sp.cf_slot, 1, 2));
+                    w.out.push((sp.wf_slot, 1, 2));
+                } else {
+                    w.out.push((sp.wf_slot, 1, 2));
+                    if sp.autofire.is_none() {
+                        let rr = &self.d.modules[mir].rules[sp.rule_idx];
+                        let body: &Vec<trs_ir::Stmt> = &rr.body;
+                        for st in body {
+                            w.stmt(sp.inst, st);
+                        }
+                    }
+                }
+                write!(
+                    f,
+                    "N {seq} {} {s} {} {} ",
+                    if is_sched { 'S' } else { 'E' },
+                    sp.inst,
+                    w.boxed
+                )
+                .unwrap();
+                for (b, ww, c) in &w.out {
+                    write!(f, "{b}:{ww}:{c} ").unwrap();
+                }
+                writeln!(f).unwrap();
+                live_en.extend(w.en_reads.iter().copied());
+                live_defs.extend(w.live_defs.iter().copied());
+            }
+        }
+        // dynamic-schedule alternates: the allocation walk unions
+        // their guards and entries into live_en (layout_touch_ranks),
+        // so the census LIVE column must see them too — otherwise an
+        // alt-only reader prints live=0 alloc=1 and pollutes the
+        // skippable count (external review).  Same LcWalk, no per-node
+        // N lines: alts-free census output stays byte-identical.
+        for rc in rcomps {
+            for alt in &rc.alts {
+                let mut w = LcWalk {
+                    it: self,
+                    envs: inst_envs,
+                    seen_defs: std::collections::HashSet::new(),
+                    seen_meths: std::collections::HashSet::new(),
+                    out: Vec::new(),
+                    boxed: 0,
+                    en_reads: std::collections::HashSet::new(),
+                    live_defs: std::collections::HashSet::new(),
+                    impure: false,
+                };
+                w.expr(alt.guard_inst, &alt.guard);
+                for en in &alt.entries {
+                    let inst = en.inst;
+                    let module = self.module_of(inst);
+                    let Some(env) = inst_envs.get(&inst) else {
+                        continue;
+                    };
+                    let mir = env.mir;
+                    for &eg in &en.eager {
+                        w.seen_defs.insert((inst, eg));
+                        if let Some(&di) = self.mods[module].defs.get(&eg) {
+                            w.expr(inst, &self.d.modules[mir].defs[di].expr);
+                        }
+                    }
+                    for node in &en.nodes {
+                        let (r, is_sched) = match node {
+                            SchedNode::Sched(r) => (r.rule(), true),
+                            SchedNode::Exec(r) => (r.rule(), false),
+                        };
+                        let ri = r.idx();
+                        let rr = &self.d.modules[mir].rules[ri];
+                        if is_sched {
+                            for name in [rr.can_fire, rr.will_fire] {
+                                w.seen_defs.insert((inst, name));
+                                if let Some(&di) = self.mods[module].defs.get(&name) {
+                                    w.expr(inst, &self.d.modules[mir].defs[di].expr);
+                                }
+                            }
+                        } else {
+                            let body: &Vec<trs_ir::Stmt> = &rr.body;
+                            for st in body {
+                                w.stmt(inst, st);
+                            }
+                        }
+                    }
+                }
+                live_en.extend(w.en_reads.iter().copied());
+                live_defs.extend(w.live_defs.iter().copied());
+            }
+        }
+        // ---- rung-39 enable-store census ----
+        // The compiled edge zeroes EVERY MethodEnable slot of every
+        // instance, one u64 store each, every edge.  Classify each EN:
+        // READ = the owning module references the port in any
+        // expression (Port(p) loads in WF cones/inhibitors — lower.rs
+        // Port lowering; the reference's own backend zeroes ONLY these,
+        // SimMakeCBlocks getEnWFPort init_port); STAY1 = some call site
+        // provably stores 1 every edge (always-fire caller with a
+        // const-true call condition at a top-level statement, or an
+        // autofire pseudo-spec), making the slot constant after the
+        // first edge.  Conservative on nesting: calls under Stmt::Cond
+        // are not counted stay-1.
+        {
+            fn pe(e: &trs_ir::Expr, out: &mut std::collections::HashSet<StrId>) {
+                use trs_ir::Expr as E;
+                match e {
+                    E::Port(p) => {
+                        out.insert(*p);
+                    }
+                    E::MethCall { args, .. }
+                    | E::ForeignCall { args, .. }
+                    | E::Prim { args, .. } => {
+                        for a in args {
+                            pe(a, out)
+                        }
+                    }
+                    E::If {
+                        cond, then_, else_, ..
+                    } => {
+                        pe(cond, out);
+                        pe(then_, out);
+                        pe(else_, out);
+                    }
+                    E::Case {
+                        scrutinee,
+                        arms,
+                        default,
+                        ..
+                    } => {
+                        pe(scrutinee, out);
+                        for (_, a) in arms {
+                            pe(a, out);
+                        }
+                        pe(default, out);
+                    }
+                    E::Clock { osc, gate } => {
+                        pe(osc, out);
+                        pe(gate, out);
+                    }
+                    E::Reset { wire } => pe(wire, out),
+                    _ => {}
+                }
+            }
+            fn pa(a: &trs_ir::Action, out: &mut std::collections::HashSet<StrId>) {
+                use trs_ir::Action as A;
+                match a {
+                    A::MethCall { cond, args, .. }
+                    | A::Foreign { cond, args, .. }
+                    | A::Task { cond, args, .. } => {
+                        pe(cond, out);
+                        for x in args {
+                            pe(x, out)
+                        }
+                    }
+                }
+            }
+            fn ps(s: &trs_ir::Stmt, out: &mut std::collections::HashSet<StrId>) {
+                use trs_ir::Stmt as S;
+                match s {
+                    S::Def { expr, .. } => pe(expr, out),
+                    S::Action(a) | S::AvAction { action: a, .. } => pa(a, out),
+                    S::Cond { cond, then_, else_ } => {
+                        pe(cond, out);
+                        for x in then_ {
+                            ps(x, out);
+                        }
+                        for x in else_ {
+                            ps(x, out);
+                        }
+                    }
+                }
+            }
+            let mut port_refs: HashMap<usize, std::collections::HashSet<StrId>> = HashMap::new();
+            for env in inst_envs.values() {
+                let mir = env.mir;
+                if port_refs.contains_key(&mir) {
+                    continue;
+                }
+                let mut set = std::collections::HashSet::new();
+                let m = &self.d.modules[mir];
+                for dd in &m.defs {
+                    pe(&dd.expr, &mut set);
+                }
+                for rr in &m.rules {
+                    let body: &Vec<trs_ir::Stmt> = &rr.body;
+                    for st in body {
+                        ps(st, &mut set);
+                    }
+                }
+                for me in &m.methods {
+                    if let Some(r) = &me.ready {
+                        pe(r, &mut set);
+                    }
+                    if let Some(r) = &me.result {
+                        pe(r, &mut set);
+                    }
+                    for st in &me.body {
+                        ps(st, &mut set);
+                    }
+                }
+                port_refs.insert(mir, set);
+            }
+            // string -> id reverse map, once
+            let sid: HashMap<&str, StrId> = self
+                .d
+                .strings
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.as_str(), i as StrId))
+                .collect();
+            let mut stay1: std::collections::HashSet<(usize, StrId)> =
+                std::collections::HashSet::new();
+            for sp in specs {
+                if let Some(af) = &sp.autofire {
+                    if let Some(id) = self.en_id_at(sp.inst, af.method) {
+                        stay1.insert((sp.inst, id));
+                    }
+                    continue;
+                }
+                if !sp.always_fire {
+                    continue;
+                }
+                let Some(env) = inst_envs.get(&sp.inst) else {
+                    continue;
+                };
+                let mir = env.mir;
+                let rr = &self.d.modules[mir].rules[sp.rule_idx];
+                let body: &Vec<trs_ir::Stmt> = &rr.body;
+                for st in body {
+                    let trs_ir::Stmt::Action(trs_ir::Action::MethCall {
+                        instance,
+                        method,
+                        cond,
+                        ..
+                    }) = st
+                    else {
+                        continue;
+                    };
+                    let ctrue = matches!(
+                        cond,
+                        trs_ir::Expr::Const { limbs, .. }
+                            if limbs.iter().any(|&l| l != 0)
+                    );
+                    if !ctrue {
+                        continue;
+                    }
+                    let Some(&ci) = env.children.get(instance) else {
+                        continue;
+                    };
+                    if let Some(id) = self.en_id_at(ci, *method) {
+                        stay1.insert((ci, id));
+                    }
+                }
+            }
+            let (mut n_en, mut n_alloc, mut n_read, mut n_live, mut n_stay1, mut n_dead_or_stay1) =
+                (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+            let mut iis2: Vec<usize> = inst_envs.keys().copied().collect();
+            iis2.sort_unstable();
+            for i in iis2 {
+                let env = &inst_envs[&i];
+                let refs = port_refs.get(&env.mir);
+                // enumerate the module PORT TABLE, not env.en_slot:
+                // iterating the post-pruning slot map made every
+                // counted EN live by construction, so a wrongly-pruned
+                // EN was invisible and "allocated == live-counted" was
+                // never a completeness proof (external review) — a
+                // pruned port now prints with alloc=0 and slot '-'
+                let module = self.module_of(i);
+                let mut ens: Vec<StrId> = self.mods[module]
+                    .ports
+                    .iter()
+                    .filter(|&(_, &(_w, k))| k == trs_ir::PortKind::MethodEnable)
+                    .map(|(&p, _)| p)
+                    .collect();
+                ens.sort_unstable();
+                for pname in ens {
+                    let slot = env.en_slot.get(&pname).copied();
+                    let read = refs.is_some_and(|r| r.contains(&pname));
+                    let live = live_en.contains(&(i, pname));
+                    let s1 = stay1.contains(&(i, pname));
+                    n_en += 1;
+                    n_alloc += slot.is_some() as usize;
+                    n_read += read as usize;
+                    n_live += live as usize;
+                    n_stay1 += s1 as usize;
+                    n_dead_or_stay1 += (!live || s1) as usize;
+                    writeln!(
+                        f,
+                        "EN {i} {} read={} live={} stay1={} alloc={} {}",
+                        slot.map_or("-".into(), |s| s.to_string()),
+                        read as u8,
+                        live as u8,
+                        s1 as u8,
+                        slot.is_some() as u8,
+                        self.s(pname)
+                    )
+                    .unwrap();
+                }
+            }
+            // per-edge store totals for the main comp: EN zeroing
+            // (design-wide list, every comp), CF/WF stores (2 per Sched
+            // node), eager stores (words)
+            for (rci, nodes) in comp_nodes.iter().enumerate() {
+                let Some(nodes) = nodes else { continue };
+                let (mut nsched, mut eagw) = (0usize, 0usize);
+                for node in nodes {
+                    if let JitNode::Sched(sn) = node {
+                        nsched += 1;
+                        if let Some(sp) = specs.get(*sn as usize) {
+                            if let Some(env) = inst_envs.get(&sp.inst) {
+                                for e in &sp.eager {
+                                    if let Some(&(_, w)) = env.eager_slot.get(e) {
+                                        eagw += w.max(1).div_ceil(64) as usize;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                writeln!(
+                    f,
+                    "STORESUM comp={rci} en_zero={n_alloc} cfwf_words={} eager_words={eagw}",
+                    2 * nsched
+                )
+                .unwrap();
+            }
+            writeln!(
+                f,
+                "ENSUM total={n_en} alloc={n_alloc} table_read={n_read} LIVE_read={n_live} stay1={n_stay1} skippable_notlive_or_stay1={n_dead_or_stay1}"
+            )
+            .unwrap();
+            writeln!(f, "LIVEDEFS {}", live_defs.len()).unwrap();
+        }
+        eprintln!("trs jit: layout census -> {}", p.display());
+    }
+}
+
+/// Rung-38 pre-pass: per-module-TYPE first-touch ranks from a slot-free
+/// walk of the compositions (allocation has not happened yet, so this
+/// is the census walker with a name-stop instead of a slot-stop).
+/// Memoization is TYPE-keyed — twin instances contribute identical
+/// local patterns, which is exactly the type-uniformity the allocator
+/// needs — so the walk is O(module types), not O(instances), and adds
+/// nothing measurable to artifact boot.
+struct LcRank<'a> {
+    it: &'a Interp,
+    /// per-mir names that are rule fire signals or eager defs: the
+    /// compiled code loads their slots instead of expanding, so the
+    /// walk marks and stops there (the owning rule's own cone is
+    /// expanded explicitly by the driver, bypassing the stop)
+    stop: HashMap<usize, std::collections::HashSet<StrId>>,
+    rank: HashMap<(usize, StrId), u32>,
+    n: u32,
+    seen_defs: std::collections::HashSet<(usize, StrId)>,
+    /// memo key carries is_action: a value visit walks ready+result
+    /// only, so it must not suppress a later ACTION visit's body walk
+    /// (the body's EN reads would be invisibly pruned)
+    seen_meths: std::collections::HashSet<(usize, StrId, bool)>,
+    /// Rule bodies already walked.  Separate from `seen_meths`: a rule
+    /// is a position and a method a name, and one set cannot key both
+    /// without an index aliasing an unrelated name id.
+    seen_rules: std::collections::HashSet<(usize, RuleRef)>,
+    /// rung 40: EN ports the walked cones actually load — the fast
+    /// tier allocates slots only for these (keyed by mir: twin
+    /// instances must stay layout-identical for dedup)
+    live_en: std::collections::HashSet<(usize, StrId)>,
+}
+
+impl<'a> LcRank<'a> {
+    fn mark(&mut self, mir: usize, name: StrId) {
+        if let std::collections::hash_map::Entry::Vacant(v) = self.rank.entry((mir, name)) {
+            v.insert(self.n);
+            self.n += 1;
+        }
+    }
+
+    fn mir_of(&self, inst: usize) -> usize {
+        let module = self.it.module_of(inst);
+        self.it.mods[module].ir
+    }
+
+    fn meth(
+        &mut self,
+        inst: usize,
+        child: StrId,
+        method: StrId,
+        args: &[trs_ir::Expr],
+        is_action: bool,
+    ) {
+        for a in args {
+            self.expr(inst, a);
+        }
+        let InstKind::User { children, .. } = &self.it.insts[inst].kind else {
+            return;
+        };
+        let Some(&ci) = children.get(&child) else {
+            return;
+        };
+        match &self.it.insts[ci].kind {
+            InstKind::Prim(_) => {
+                let mir = self.mir_of(inst);
+                self.mark(mir, child);
+            }
+            InstKind::User { .. } => {
+                let cmir = self.mir_of(ci);
+                if !self.seen_meths.insert((cmir, method, is_action)) {
+                    return;
+                }
+                let it = self.it;
+                let m = &it.d.modules[cmir];
+                if let Some(me) = m.methods.iter().find(|me| me.name == method) {
+                    if let Some(r) = &me.ready {
+                        self.expr(ci, r);
+                    }
+                    if is_action {
+                        for st in &me.body {
+                            self.stmt(ci, st);
+                        }
+                    }
+                    if let Some(res) = &me.result {
+                        self.expr(ci, res);
+                    }
+                }
+            }
+        }
+    }
+
+    fn def(&mut self, inst: usize, name: StrId) {
+        let mir = self.mir_of(inst);
+        if !self.seen_defs.insert((mir, name)) {
+            return;
+        }
+        if self.stop.get(&mir).is_some_and(|s| s.contains(&name)) {
+            self.mark(mir, name);
+            return;
+        }
+        let it = self.it;
+        let module = it.module_of(inst);
+        let Some(&di) = it.mods[module].defs.get(&name) else {
+            return;
+        };
+        let e: &trs_ir::Expr = &it.d.modules[mir].defs[di].expr;
+        self.expr(inst, e);
+    }
+
+    fn expr(&mut self, inst: usize, e: &trs_ir::Expr) {
+        use trs_ir::Expr as E;
+        match e {
+            E::Def(n) => self.def(inst, *n),
+            E::MethCall {
+                instance,
+                method,
+                args,
+                ..
+            } => self.meth(inst, *instance, *method, args, false),
+            // the value half of an ActionValue call re-evaluates the
+            // child method's RESULT cone at runtime (compiled
+            // value_call, interp call_value), so its EN reads are live
+            // even when the paired action call is not reachable from
+            // this walk's roots (external review: the empty arm was a
+            // liveness hole)
+            E::MethValue {
+                instance, method, ..
+            } => self.meth(inst, *instance, *method, &[], false),
+            // a TaskValue reads the paired Task action's cookie store
+            // (ctx locals), never a method cone — nothing to walk
+            E::TaskValue { .. } => {}
+            E::ForeignCall { args, .. } => {
+                for a in args {
+                    self.expr(inst, a);
+                }
+            }
+            E::Prim { args, .. } => {
+                for a in args {
+                    self.expr(inst, a);
+                }
+            }
+            E::If {
+                cond, then_, else_, ..
+            } => {
+                self.expr(inst, cond);
+                self.expr(inst, then_);
+                self.expr(inst, else_);
+            }
+            E::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
+                self.expr(inst, scrutinee);
+                for (_, a) in arms {
+                    self.expr(inst, a);
+                }
+                self.expr(inst, default);
+            }
+            E::Clock { osc, gate } => {
+                self.expr(inst, osc);
+                self.expr(inst, gate);
+            }
+            E::Reset { wire } => self.expr(inst, wire),
+            E::Port(p) => {
+                // rung 40: a loaded MethodEnable port is a LIVE enable —
+                // fast plans allocate slots only for these
+                let module = self.it.module_of(inst);
+                if self.it.mods[module]
+                    .ports
+                    .get(p)
+                    .is_some_and(|&(_w, k)| k == trs_ir::PortKind::MethodEnable)
+                {
+                    let mir = self.it.mods[module].ir;
+                    self.live_en.insert((mir, *p));
+                }
+            }
+            E::Const { .. }
+            | E::Param(_)
+            | E::Str(_)
+            | E::Real(_)
+            | E::Gate { .. }
+            | E::ClockOut { .. } => {}
+        }
+    }
+
+    fn stmt(&mut self, inst: usize, st: &trs_ir::Stmt) {
+        use trs_ir::Stmt as S;
+        match st {
+            S::Def { expr, .. } => self.expr(inst, expr),
+            S::Action(a) => self.action(inst, a),
+            S::AvAction { action, .. } => self.action(inst, action),
+            S::Cond { cond, then_, else_ } => {
+                self.expr(inst, cond);
+                for s in then_ {
+                    self.stmt(inst, s);
+                }
+                for s in else_ {
+                    self.stmt(inst, s);
+                }
+            }
+        }
+    }
+
+    fn action(&mut self, inst: usize, a: &trs_ir::Action) {
+        use trs_ir::Action as A;
+        match a {
+            A::MethCall {
+                instance,
+                method,
+                cond,
+                args,
+                ..
+            } => {
+                self.expr(inst, cond);
+                self.meth(inst, *instance, *method, args, true);
+            }
+            A::Foreign { cond, args, .. } | A::Task { cond, args, .. } => {
+                self.expr(inst, cond);
+                for x in args {
+                    self.expr(inst, x);
+                }
+            }
+        }
+    }
+}
+
+impl Interp {
+    /// Rung-38: derive the per-module-TYPE first-touch rank map the
+    /// arena allocator orders its groups by.  See LcRank.
+    /// Affinity ranks computed from each module's OWN rules and cones,
+    /// so a fragment lays out identically in every design.
+    ///
+    /// Rung 38 ranks by first touch in the DESIGN's composition walk.
+    /// That packs co-touched state onto shared cache lines, and it
+    /// makes a fragment's slot offsets depend on the order whoever
+    /// instantiated it happens to touch its rules -- so the same
+    /// fragment at the same parameters lays out two ways in two
+    /// designs, and their compiled objects cannot be shared.  Measured
+    /// on the TA controller family: inputs agree on 96-98% of classes,
+    /// layouts on 16-60%.
+    ///
+    /// This walks each module type alone, in its own rule order, with
+    /// one of its instances used only to resolve names.  Marks landing
+    /// on OTHER module types are dropped: every type is walked exactly
+    /// once and keeps only its own, so nothing depends on the order
+    /// the types are visited -- which is what makes the result
+    /// design-independent rather than merely deterministic.
+    ///
+    /// Counters restart per type.  Ranks are only ever compared within
+    /// one module's allocation groups, so a global sequence would say
+    /// nothing extra and would reintroduce cross-type ordering.
+    fn layout_ranks_fragment_local(&self) -> HashMap<(usize, StrId), u32> {
+        let mut exemplar: std::collections::BTreeMap<usize, usize> =
+            std::collections::BTreeMap::new();
+        for i in 0..self.insts.len() {
+            if matches!(self.insts[i].kind, InstKind::User { .. }) {
+                exemplar.entry(self.mods[self.module_of(i)].ir).or_insert(i);
+            }
+        }
+        let mut out: HashMap<(usize, StrId), u32> = HashMap::new();
+        for (&mir, &inst) in &exemplar {
+            // a rule's fire signals are slot-served: the walk marks
+            // them and stops, the same contract the design-wide walk
+            // has, so cones do not re-expand a neighbour's rule
+            let mut stop = HashMap::new();
+            let fires: std::collections::HashSet<StrId> = self.d.modules[mir]
+                .rules
+                .iter()
+                .flat_map(|r| [r.can_fire, r.will_fire])
+                .collect();
+            stop.insert(mir, fires);
+            let mut w = LcRank {
+                it: self,
+                stop,
+                rank: HashMap::new(),
+                n: 0,
+                seen_defs: std::collections::HashSet::new(),
+                seen_meths: std::collections::HashSet::new(),
+                seen_rules: std::collections::HashSet::new(),
+                live_en: std::collections::HashSet::new(),
+            };
+            for r in &self.d.modules[mir].rules {
+                w.mark(mir, r.can_fire);
+                w.mark(mir, r.will_fire);
+                w.def(inst, r.can_fire);
+                for st in r.body.iter() {
+                    w.stmt(inst, st);
+                }
+            }
+            for (k, v) in w.rank {
+                if k.0 == mir {
+                    out.insert(k, v);
+                }
+            }
+        }
+        out
+    }
+
+    fn layout_touch_ranks(
+        &self,
+        rcomps: &[RComp],
+    ) -> (
+        HashMap<(usize, StrId), u32>,
+        std::collections::HashSet<(usize, StrId)>,
+    ) {
+        // name-stop sets: every rule's CF/WF and every entry's eager
+        // defs, unioned per module type — across BASE AND ALTERNATE
+        // entries (dynamic-schedule alternates execute at runtime like
+        // base entries, so their fire signals are slot-served stops
+        // and their cones are walk roots; external review: the walk
+        // previously covered base entries only)
+        let mut stop: HashMap<usize, std::collections::HashSet<StrId>> = HashMap::new();
+        {
+            let mut add_stops = |en: &REntry| {
+                let module = self.module_of(en.inst);
+                let mir = self.mods[module].ir;
+                let s = stop.entry(mir).or_default();
+                for &e in &en.eager {
+                    s.insert(e);
+                }
+                for node in &en.nodes {
+                    let r = match node {
+                        SchedNode::Sched(r) | SchedNode::Exec(r) => r.rule(),
+                    };
+                    let rr = &self.d.modules[mir].rules[r.idx()];
+                    s.insert(rr.can_fire);
+                    s.insert(rr.will_fire);
+                }
+            };
+            for rc in rcomps {
+                for en in &rc.entries {
+                    add_stops(en);
+                }
+                for alt in &rc.alts {
+                    for en in &alt.entries {
+                        add_stops(en);
+                    }
+                }
+            }
+        }
+        // one entry's walk, shared verbatim by the base loop, the
+        // alternates loop, and the stop-free audit walker below so the
+        // enumerations cannot drift
+        fn walk_entry(w: &mut LcRank, en: &REntry) {
+            let it = w.it;
+            let inst = en.inst;
+            let module = it.module_of(inst);
+            let mir = it.mods[module].ir;
+            for &e in &en.eager {
+                w.mark(mir, e);
+                // own-position expansion bypasses the name-stop
+                w.seen_defs.insert((mir, e));
+                if let Some(&di) = it.mods[module].defs.get(&e) {
+                    let ex: &trs_ir::Expr = &it.d.modules[mir].defs[di].expr;
+                    w.expr(inst, ex);
+                }
+            }
+            for node in &en.nodes {
+                let (r, is_sched) = match node {
+                    SchedNode::Sched(r) => (r.rule(), true),
+                    SchedNode::Exec(r) => (r.rule(), false),
+                };
+                let ri = r.idx();
+                let rr = &it.d.modules[mir].rules[ri];
+                if is_sched {
+                    w.mark(mir, rr.can_fire);
+                    w.mark(mir, rr.will_fire);
+                    for name in [rr.can_fire, rr.will_fire] {
+                        w.seen_defs.insert((mir, name));
+                        if let Some(&di) = it.mods[module].defs.get(&name) {
+                            let ex: &trs_ir::Expr = &it.d.modules[mir].defs[di].expr;
+                            w.expr(inst, ex);
+                        }
+                    }
+                } else if !w.seen_rules.insert((mir, r)) {
+                    // twin instance: this type's exec body walked
+                    continue;
+                } else {
+                    let body: &Vec<trs_ir::Stmt> = &rr.body;
+                    for st in body {
+                        w.stmt(inst, st);
+                    }
+                }
+            }
+        }
+        let mut w = LcRank {
+            seen_rules: std::collections::HashSet::new(),
+            it: self,
+            stop,
+            rank: HashMap::new(),
+            n: 0,
+            seen_defs: std::collections::HashSet::new(),
+            seen_meths: std::collections::HashSet::new(),
+            live_en: std::collections::HashSet::new(),
+        };
+        for rc in rcomps {
+            for en in &rc.entries {
+                walk_entry(&mut w, en);
+            }
+        }
+        // dynamic-schedule alternates: guards evaluate and the winning
+        // alternative's entries execute at runtime on every tier (the
+        // interp edge walk, and the compiled per-edge guard dispatch),
+        // so their cones are liveness roots too.  Walked AFTER all
+        // base entries so alts-free designs keep byte-identical ranks;
+        // rc.alts is a Vec — deterministic order.  Guards are
+        // contractually pure register cones, but walking them is free
+        // defense-in-depth against a guard that reads an EN.
+        for rc in rcomps {
+            for alt in &rc.alts {
+                w.expr(alt.guard_inst, &alt.guard);
+                for en in &alt.entries {
+                    walk_entry(&mut w, en);
+                }
+            }
+        }
+        // autofire pseudo-specs invoke top-instance methods outside any
+        // rule; their cones are runtime readers too (the comp-node
+        // census skips them, liveness must not)
+        let top_mir = self.mods[self.module_of(0)].ir;
+        for (mname, _argv) in &self.autofire {
+            if !w.seen_meths.insert((top_mir, *mname, true)) {
+                continue;
+            }
+            if let Some(me) = self.d.modules[top_mir]
+                .methods
+                .iter()
+                .find(|m| m.name == *mname)
+            {
+                if let Some(r) = &me.ready {
+                    w.expr(0, r);
+                }
+                for st in &me.body {
+                    w.stmt(0, st);
+                }
+                if let Some(res) = &me.result {
+                    w.expr(0, res);
+                }
+            }
+        }
+        // clock-gate cones evaluate interp-side in the OWNER instance's
+        // context (lower.rs Port lowering bails dynamic ones) — retain
+        // their EN reads conservatively (external review: never let a
+        // gate-cone reader be pruned).  A SEPARATE walker: the gates
+        // map iterates in process-seeded order, so it must not touch
+        // the schedule-affinity ranks; live_en is a set, where order
+        // cannot matter.
+        let mut gw = LcRank {
+            seen_rules: std::collections::HashSet::new(),
+            it: self,
+            stop: HashMap::new(),
+            rank: HashMap::new(),
+            n: 0,
+            seen_defs: std::collections::HashSet::new(),
+            seen_meths: std::collections::HashSet::new(),
+            live_en: std::collections::HashSet::new(),
+        };
+        for inst in &self.insts {
+            if let InstKind::User { gates, .. } = &inst.kind {
+                for (owner, g) in gates.values() {
+                    gw.expr(*owner, g);
+                }
+            }
+        }
+        w.live_en.extend(gw.live_en);
+        // always-on plan-time audit (external review): re-derive the
+        // reader set with a STOP-FREE walker over the same roots and
+        // assert it adds nothing.  Name-stops elide exactly the cones
+        // whose defs are themselves walk roots (eager defs and rule
+        // fire signals are slot-served), so any EN the stop-free walk
+        // reaches that live_en lacks is a stop/root-duality bug in
+        // this function — fail the PLAN loudly (every compiled tier
+        // passes through here: in-process JIT, Emit at link time, and
+        // Load re-planning at artifact boot) instead of letting
+        // compiled lowering trap later or the interpreter read a
+        // wrong 0.  Derived before allocation and without consulting
+        // any slot map, so it cannot inherit the census's circularity
+        // (the post-allocation LIVE census counts through en_slot and
+        // is a determinism witness, never a completeness proof).
+        // Armed only when pruning will happen: traced plans allocate
+        // every EN slot, so a miss there cannot miscompile.
+        if !self.vcd_trace {
+            let mut aw = LcRank {
+                it: self,
+                stop: HashMap::new(),
+                rank: HashMap::new(),
+                n: 0,
+                seen_defs: std::collections::HashSet::new(),
+                seen_meths: std::collections::HashSet::new(),
+                seen_rules: std::collections::HashSet::new(),
+                live_en: std::collections::HashSet::new(),
+            };
+            for rc in rcomps {
+                for en in &rc.entries {
+                    walk_entry(&mut aw, en);
+                }
+                for alt in &rc.alts {
+                    aw.expr(alt.guard_inst, &alt.guard);
+                    for en in &alt.entries {
+                        walk_entry(&mut aw, en);
+                    }
+                }
+            }
+            for (mname, _argv) in &self.autofire {
+                if !aw.seen_meths.insert((top_mir, *mname, true)) {
+                    continue;
+                }
+                if let Some(me) = self.d.modules[top_mir]
+                    .methods
+                    .iter()
+                    .find(|m| m.name == *mname)
+                {
+                    if let Some(r) = &me.ready {
+                        aw.expr(0, r);
+                    }
+                    for st in &me.body {
+                        aw.stmt(0, st);
+                    }
+                    if let Some(res) = &me.result {
+                        aw.expr(0, res);
+                    }
+                }
+            }
+            for inst in &self.insts {
+                if let InstKind::User { gates, .. } = &inst.kind {
+                    for (owner, g) in gates.values() {
+                        aw.expr(*owner, g);
+                    }
+                }
+            }
+            let mut missing: Vec<String> = aw
+                .live_en
+                .difference(&w.live_en)
+                .map(|&(mir, p)| {
+                    format!(
+                        "{}.{}",
+                        self.d.strings[self.d.modules[mir].name as usize],
+                        self.d.strings[p as usize]
+                    )
+                })
+                .collect();
+            if !missing.is_empty() {
+                missing.sort();
+                panic!(
+                    "trs: BUG: rung-40 EN liveness audit: {} \
+                     runtime-reachable enable read(s) missing from the \
+                     allocation walk: {:?} — report this (stop/root \
+                     duality in layout_touch_ranks)",
+                    missing.len(),
+                    missing
+                );
+            }
+        }
+        (w.rank, w.live_en)
+    }
+}

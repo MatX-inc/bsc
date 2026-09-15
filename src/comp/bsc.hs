@@ -11,7 +11,8 @@ import System.FilePath(takeDirectory)
 import System.IO(hFlush, stdout, hPutStr, stderr, hGetContents, hClose, hSetBuffering, BufferMode(LineBuffering))
 import System.IO(hSetEncoding, utf8)
 import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExecuteMode, setFileMode, getFileStatus, fileAccess)
-import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory)
+import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory,
+                        makeAbsolute)
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, toLower, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
@@ -117,6 +118,7 @@ import AConv(aConv)
 import IDropRules(iDropRules)
 import ARankMethCalls(aRankMethCalls)
 import AState(aState)
+import AIntraCycleStability(aWarnDynamicInstArgs)
 import ARenameIO(aRenameIO)
 import ASchedule(AScheduleInfo(..), AScheduleErrInfo(..), aSchedule)
 import AAddScheduleDefs(aAddScheduleDefs)
@@ -140,8 +142,9 @@ import VPIWrappers(genVPIWrappers, genVPIRegistrationArray)
 import DPIWrappers(genDPIWrappers)
 import SimCCBlock
 import SimExpand(simExpand, simCheckPackage)
-import SimPackage(SimSystem(..))
+import SimPackage(SimSystem(..), SimSchedule(..))
 import SimPackageOpt(simPackageOpt)
+import qualified Data.ByteString.Lazy as L
 import SimMakeCBlocks(simMakeCBlocks)
 import SimCOpt(simCOpt)
 import SimBlocksToC(simBlocksToC)
@@ -1121,6 +1124,14 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  atsPackage =
     do
+       -- warn about dynamic (intra-cycle-varying) submodule arguments:
+       -- Verilog wires module arguments combinationally, with no
+       -- scheduling relationship to the rules that compute them, so a
+       -- submodule can observe such a value outside the atomic rule
+       -- semantics.  (Bluesim refuses these outright, EBSimDynamicArg.)
+       let dyn_arg_warns = aWarnDynamicInstArgs atsPackage
+       when (not (null dyn_arg_warns)) $ bsWarning errh dyn_arg_warns
+
        -- Read in foreign function info from .ba files for
        -- all foreign functions used in the design, and build a
        -- map to be used when generating verilog
@@ -1340,6 +1351,17 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        sim_system <- simExpand errh flags toplevel abis
        time <- dump errh flags time0 DFsimExpand dumpnames sim_system
 
+       -- dynamic scheduling selects the execution order per cycle,
+       -- while this code generator bakes in one static order
+       let has_dyn_sched =
+               any (not . null . ss_alts) (ssys_schedules sim_system)
+       when has_dyn_sched $
+            bsError errh
+                [(noPosition,
+                  EGeneric ("This design uses dynamic scheduling " ++
+                            "(-sched-dynamic), which the Bluesim code " ++
+                            "generator cannot execute"))]
+
        -- extract file dependency structure and determine if any
        -- existing bluesim packages can reuse existing object files
        -- (in -c mode, all files are always regenerated)
@@ -1354,6 +1376,20 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        sim_system_opt <- simPackageOpt errh flags sim_system
        time <- dump errh flags time DFsimPackageOpt dumpnames sim_system_opt
 
+       genModuleC_cxx errh flags dumpnames time toplevel prefix reused
+                       sim_system_opt
+
+genModuleC_cxx :: ErrorHandle
+               -> Flags
+               -> DumpNames
+               -> TimeInfo
+               -> String
+               -> String
+               -> [String]
+               -> SimSystem
+               -> IO (TimeInfo, [String], [String], TimeInfo)
+genModuleC_cxx errh flags dumpnames time toplevel prefix reused sim_system_opt =
+    do
        -- convert SimPackages and SimSchedules to SimCCBlocks and SimCCScheds
        start flags DFsimMakeCBlocks
        let (simblocks, simCCscheds, clk_groups, gate_info, top_id) =
@@ -1536,6 +1572,7 @@ simLink errh flags toplevel afilenames cfilenames = do
     let ofiles = gen_ofiles ++
                  user_ofiles ++ compiled_user_ofiles ++
                  ofiles_reused
+
     t <- dump errh flags t_before_compilations DFbluesimcompile dumpnames
               ofiles
 

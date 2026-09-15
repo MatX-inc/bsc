@@ -1,0 +1,100 @@
+{
+  "verilog_name": "BviXing",
+  "clocks": [
+    {
+      "name": "sclk",
+      "osc_port": "SCLK",
+      "gate_port": null,
+      "tick_port": "sclk"
+    },
+    {
+      "name": "dclk",
+      "osc_port": "DCLK",
+      "gate_port": null,
+      "tick_port": "dclk"
+    }
+  ],
+  "resets": [
+    {
+      "name": "rst",
+      "port": "RST_N",
+      "active_low": true
+    }
+  ],
+  "params": {},
+  "ports": [
+    {
+      "name": "SCLK",
+      "dir": "input",
+      "width": 1,
+      "kind": "clock"
+    },
+    {
+      "name": "DCLK",
+      "dir": "input",
+      "width": 1,
+      "kind": "clock"
+    },
+    {
+      "name": "RST_N",
+      "dir": "input",
+      "width": 1,
+      "kind": "reset"
+    },
+    {
+      "name": "EN_send",
+      "dir": "input",
+      "width": 1,
+      "kind": "enable"
+    },
+    {
+      "name": "s_din",
+      "dir": "input",
+      "width": 8,
+      "kind": "method_arg"
+    },
+    {
+      "name": "SREG",
+      "dir": "output",
+      "width": 8,
+      "kind": "method_result"
+    },
+    {
+      "name": "DREG",
+      "dir": "output",
+      "width": 8,
+      "kind": "method_result"
+    }
+  ],
+  "methods": [
+    {
+      "name": "send",
+      "kind": "action",
+      "clock": "sclk",
+      "args": [
+        "s_din"
+      ],
+      "results": [],
+      "enable": "EN_send",
+      "rdy": null,
+      "shadow_group": null
+    },
+    {
+      "name": "recv",
+      "kind": "value",
+      "clock": "dclk",
+      "args": [],
+      "results": [
+        "DREG"
+      ],
+      "enable": null,
+      "rdy": null,
+      "shadow_group": null
+    }
+  ],
+  "paths": [],
+  "dag_order": [
+    "send",
+    "recv"
+  ]
+}

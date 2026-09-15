@@ -1,0 +1,8686 @@
+//! BIR -> LLVM IR lowering (feature `llvm`).
+//!
+//! Hybrid P2 slice (DESIGN.md §10): per-rule native functions running
+//! inside the interpreter's event loop, over a shared u64 state arena
+//! (plain sync registers of any width, reset-port levels, per-rule
+//! CF/WF, and schedule-position "eager" defs; wide state takes
+//! ceil(width/64) consecutive slots).  Each eligible rule compiles to
+//!
+//!   sched_<label>(arena: *mut u64)
+//!     — evaluates the CAN_FIRE/WILL_FIRE cone (expanding defs as SSA),
+//!       applies inhibitor slots, stores CF/WF and the entry's eager
+//!       defs to their slots (the C++ schedule_posedge position);
+//!   exec_<label>(arena: *mut u64, env: *mut c_void) -> i32
+//!     — loads WF, executes the body: SSA defs, conditional register
+//!       stores, Cond control flow; $display-family statements call
+//!       back into the interpreter (`ForeignCb`).  A nonzero callback
+//!       return unwinds immediately (reserved for genuine aborts —
+//!       NEVER $finish/$stop, which complete the edge; the runtime
+//!       loops stop at the slice boundary).  Returns nonzero iff
+//!       aborted.
+//!
+//! Values are native LLVM iN integers of their exact BSV width — LLVM
+//! legalizes arbitrary widths — so no masking and no 64-bit cap.
+//! Shift semantics mirror Value::shl/lshr/ashr (overflow to zero /
+//! sign-fill; LLVM's shift-amount poison is guarded); Quot/Rem give
+//! all ones on a zero divisor, as the interpreter does.
+//! Ineligibility is an Err from the trial lowering — the caller falls
+//! back to the interpreter per design.
+
+use std::collections::HashMap;
+
+use inkwell::builder::Builder;
+use inkwell::context::Context;
+use inkwell::module::Module;
+use inkwell::types::{FunctionType, IntType};
+use inkwell::values::{FunctionValue, GlobalValue, IntValue, PointerValue};
+use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
+use trs_ir::{Action, Design, Expr, PrimOp, Stmt, StrId};
+
+pub use crate::abi::*;
+
+fn nope<T>(why: impl Into<String>) -> Result<T, Ineligible> {
+    Err(Ineligible(why.into()))
+}
+
+/// Variant name for ineligibility notes: the catch-alls must say WHICH
+/// expression kind they refused, or the sweep's why= column lumps every
+/// unlowered variant into one unactionable bucket.
+fn expr_kind(e: &Expr) -> &'static str {
+    match e {
+        Expr::Const { .. } => "Const",
+        Expr::Def(..) => "Def",
+        Expr::Port(..) => "Port",
+        Expr::Param(..) => "Param",
+        Expr::MethCall { .. } => "MethCall",
+        Expr::MethValue { .. } => "MethValue",
+        Expr::TaskValue { .. } => "TaskValue",
+        Expr::ForeignCall { .. } => "ForeignCall",
+        Expr::Str(..) => "Str",
+        Expr::Clock { .. } => "Clock",
+        Expr::Real(..) => "Real",
+        Expr::Reset { .. } => "Reset",
+        Expr::Gate { .. } => "Gate",
+        Expr::ClockOut { .. } => "ClockOut",
+        Expr::Prim { .. } => "Prim",
+        Expr::If { .. } => "If",
+        Expr::Case { .. } => "Case",
+    }
+}
+
+fn words_for(w: u32) -> u32 {
+    w.div_ceil(64)
+}
+
+/// Compile a batch of rules for one (module type, instance) pair.
+/// All-or-nothing per call: any ineligible rule fails the whole batch.
+/// LLVM global state (target registry, MCJIT linkage) must initialize
+/// exactly once before engines are created on worker threads — the
+/// per-call init inside create_jit_execution_engine races otherwise.
+pub fn llvm_init_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        inkwell::targets::Target::initialize_native(
+            &inkwell::targets::InitializationConfig::default(),
+        )
+        .expect("LLVM native target init");
+        // force MCJIT linkage and any lazy registry state on one thread
+        let ctx = Context::create();
+        let m = ctx.create_module("trs_init");
+        let _ = m.create_jit_execution_engine(OptimizationLevel::None);
+    });
+}
+
+/// Eligibility check: run the full lowering into a throwaway context
+/// (no engine, no LLVM codegen — ~ms per rule) so ineligibility is
+/// decided synchronously before any compiled dispatch is planned.
+/// Returns each rule's call-site tables.
+pub fn trial_lower(env: &PlanEnv, specs: &[RuleSpec]) -> Result<Vec<FnProtos>, Ineligible> {
+    let ctx = Context::create();
+    let (module, cbs) = make_module(&ctx, None);
+    let mut protos = Vec::with_capacity(specs.len());
+    for spec in specs {
+        let mut lc = Lower {
+            env,
+            ctx: &ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            outlined: None,
+            helper_self: None,
+            dedup: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
+            share_sym: None,
+            site_origin: 0,
+            foreign_origin: 0,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+            edge: None,
+        };
+        // one table per rule, exec half FIRST: the shared half sits at
+        // a fixed 0 so a shared body's baked indices mean the same
+        // thing for every member of its class, and the per-ordinal
+        // sched half takes the variable offset.  The tables are NOT
+        // reset between the halves.
+        lc.lower_exec()?;
+        let sched_foreign_origin = lc.foreign_stmts.len() as u32;
+        let sched_prim_origin = lc.prim_calls.len() as u32;
+        lc.lower_sched()?;
+        protos.push(FnProtos {
+            foreign: lc.foreign_stmts,
+            prims: lc.prim_calls,
+            sched_foreign_origin,
+            sched_prim_origin,
+        });
+    }
+    Ok(protos)
+}
+
+/// How compiled code reaches the runtime callbacks: the JIT bakes the
+/// addresses as constant pointers; AOT objects (and the trial
+/// lowering) load them from named pointer-globals the loader fills
+/// after dlopen — no --export-dynamic on the host binary.
+#[derive(Clone, Copy)]
+enum CbAddr<'ctx> {
+    Baked(PointerValue<'ctx>),
+    Global(GlobalValue<'ctx>),
+}
+
+#[derive(Clone, Copy)]
+struct Callbacks<'ctx> {
+    cb_ty: FunctionType<'ctx>,
+    prim_ty: FunctionType<'ctx>,
+    cb: CbAddr<'ctx>,
+    prim: CbAddr<'ctx>,
+}
+
+fn make_module<'ctx>(
+    ctx: &'ctx Context,
+    baked: Option<(ForeignCb, PrimCb)>,
+) -> (Module<'ctx>, Callbacks<'ctx>) {
+    let module = ctx.create_module("trs_rules");
+    let i64t = ctx.i64_type();
+    let i32t = ctx.i32_type();
+    let ptrt = ctx.ptr_type(AddressSpace::default());
+    // (env, ordinal, site, args, out): a site is named by its rule and
+    // its index in that rule's ONE table, so neither side owns a bit
+    // layout, no field can overflow, and there is no second table for
+    // an outlined callee's block to land in by mistake
+    let site_args = [
+        ptrt.into(),
+        i32t.into(),
+        i32t.into(),
+        ptrt.into(),
+        ptrt.into(),
+    ];
+    let cb_ty = i32t.fn_type(&site_args, false);
+    let prim_ty = ctx.void_type().fn_type(&site_args, false);
+    let (cb, prim) = match baked {
+        Some((f, p)) => {
+            let addr =
+                |a: usize| CbAddr::Baked(i64t.const_int(a as u64, false).const_to_pointer(ptrt));
+            (addr(f as usize), addr(p as usize))
+        }
+        None => {
+            // declaration only (no initializer): every chunk object
+            // references these; the meta object DEFINES them once
+            let global = |name: &str| CbAddr::Global(module.add_global(ptrt, None, name));
+            (global("trs_cb_foreign"), global("trs_cb_prim"))
+        }
+    };
+    (
+        module,
+        Callbacks {
+            cb_ty,
+            prim_ty,
+            cb,
+            prim,
+        },
+    )
+}
+
+/// Widest integer type the default middle-end pipeline accepts; wider
+/// modules skip it (backend codegen still runs).  65536 is a measured
+/// >90s wedge; 4096 keeps every realistic datapath optimized.
+const IR_PASS_WIDTH_CAP: u32 = 4096;
+
+/// Max integer bit-width appearing as an instruction result type.
+/// Wide values only exist by being ASSEMBLED (zext/shl/or chains from
+/// arena slots), so result types are a complete witness.
+/// Largest single function in the module, in IR instructions — the
+/// O1 size tier's measurement (see run_ir_passes).
+fn module_max_fn_insns(module: &Module) -> u64 {
+    let mut max = 0u64;
+    let mut f = module.get_first_function();
+    while let Some(func) = f {
+        let mut insns = 0u64;
+        for bb in func.get_basic_blocks() {
+            let mut ins = bb.get_first_instruction();
+            while let Some(i) = ins {
+                insns += 1;
+                ins = i.get_next_instruction();
+            }
+        }
+        max = max.max(insns);
+        f = func.get_next_function();
+    }
+    max
+}
+
+fn module_max_int_width(module: &Module) -> u32 {
+    let mut w = 0;
+    let mut f = module.get_first_function();
+    while let Some(func) = f {
+        for bb in func.get_basic_blocks() {
+            let mut ins = bb.get_first_instruction();
+            while let Some(i) = ins {
+                if let inkwell::types::AnyTypeEnum::IntType(t) = i.get_type() {
+                    w = w.max(t.get_bit_width());
+                }
+                ins = i.get_next_instruction();
+            }
+        }
+        f = func.get_next_function();
+    }
+    w
+}
+
+/// Running census of emitted IR, filled DURING construction: one
+/// single-function walk as each function completes, so every block is
+/// visited exactly once across the whole build.  Feeds the
+/// run_ir_passes size tier and width cap without post-hoc module
+/// walks, the TRS_JIT_TIME census, and the planner's mass-estimate
+/// calibration (tracked actuals against cone-mass predictions).
+#[derive(Default)]
+pub(crate) struct IrTally {
+    /// (name, instructions, blocks) per completed function
+    pub per_fn: Vec<(String, u64, u64)>,
+    /// max integer result width seen (see module_max_int_width)
+    pub max_width: u32,
+}
+
+impl IrTally {
+    pub fn add(&mut self, func: inkwell::values::FunctionValue) {
+        let name = func.get_name().to_string_lossy().into_owned();
+        let mut insns = 0u64;
+        let mut blocks = 0u64;
+        for bb in func.get_basic_blocks() {
+            blocks += 1;
+            let mut ins = bb.get_first_instruction();
+            while let Some(i) = ins {
+                insns += 1;
+                if let inkwell::types::AnyTypeEnum::IntType(t) = i.get_type() {
+                    self.max_width = self.max_width.max(t.get_bit_width());
+                }
+                ins = i.get_next_instruction();
+            }
+        }
+        self.per_fn.push((name, insns, blocks));
+    }
+    /// tally every not-yet-seen function in the module (used once for
+    /// the helper batch, whose lowering is shared with the JIT path)
+    pub fn add_all(&mut self, module: &Module) {
+        let seen: std::collections::HashSet<String> =
+            self.per_fn.iter().map(|(n, _, _)| n.clone()).collect();
+        let mut f = module.get_first_function();
+        while let Some(func) = f {
+            let next = func.get_next_function();
+            if func.count_basic_blocks() > 0
+                && !seen.contains(func.get_name().to_string_lossy().as_ref())
+            {
+                self.add(func);
+            }
+            f = next;
+        }
+    }
+}
+
+/// Run the LLVM middle-end pipeline on a module when TRS_JIT_OPT
+/// asks for optimization.  The engine/object paths only apply BACKEND
+/// codegen opts; without this the IR pass pipeline (GVN, instcombine,
+/// SimplifyCFG, jump threading) never runs at all.
+/// `tracked`: the construction-time census, when the caller built one
+/// (the one-module design object) — the width cap and size tier then
+/// read tracked totals instead of re-walking the module.
+/// The AOT pipeline, pass by pass, each with a constructional reason
+/// (per Ravi: no generic levels — enable specific optimizations based
+/// on what we know about our output).  Our IR is loop-free straight-
+/// line arena load/store code, so the O-bundles' loop machinery is
+/// pure compile time; what pays is:
+///   inline           — flatten scheds/helpers into the fused edges
+///                      (the whole point of one-module emission)
+///   early-cse<memssa>— kill the redundant arena loads section
+///                      lowering emits back-to-back
+///   instcombine      — fold slot GEP chains, masks, extends
+///   simplifycfg      — collapse guard diamonds
+///   jump-threading   — collapse case-cone branch LADDERS (without
+///                      this, DFT64's 24k-block body reaches the
+///                      backend un-collapsed and TailDuplicator's
+///                      PHI search runs for minutes-to-hours:
+///                      default<O1> measured 772.8s vs 55.0s here)
+///   gvn, dse         — cross-section load/store redundancy the
+///                      edge-SSA plan's doctrine keeps conservative
+///   instcombine,
+///   simplifycfg      — clean up what gvn/jump-threading exposed
+/// Measured against default<O3> on the five witness shapes (all
+/// byte-exact): links 13.7->10.6s (FloatTest), 27.4->23.0
+/// (BRAM0Test), ties on the rest — and RUNTIME improves too
+/// (FloatTest 70.7->63.1ms).  The "no superlinear-in-size pass" claim
+/// that retired the old O1 shape tier was FALSIFIED at Toooba scale:
+/// early-cse<memssa>'s dominated-use rewrites are superlinear in
+/// FUNCTION size (the monolithic edge fn wedged >39min, DNF).  The
+/// replacements: the dispatcher outlines sched sections into bounded
+/// functions (EdgeSsaPlan::outline_sched), and the O1 size tier below
+/// is REINSTATED for stragglers — default<O1> runs EarlyCSE WITHOUT
+/// MemorySSA (no dominated-use rewriting) and measured 1.78s runtime
+/// vs O3's 1.83s / O0's 2.74s on the opt ladder, so the tier costs ~3%
+/// on the module it demotes instead of optnone's 1.5x.
+/// instcombine must be spelled no-verify-fixpoint: the textual pass
+/// defaults to max-iterations=1 and ABORTS on non-convergence.
+const AOT_PIPELINE: &str = "cgscc(inline),function(early-cse<memssa>,\
+    instcombine<no-verify-fixpoint>,simplifycfg,jump-threading,gvn,dse,\
+    instcombine<no-verify-fixpoint>,simplifycfg)";
+
+/// The size-tier pipeline for a module carrying a function over the
+/// insn budget: LLVM 18.1's OWN default<O1> expansion (generated via
+/// opt -passes='default<O1>' -print-pipeline-passes) with EXACTLY
+/// MemCpyOptPass removed (and opt's trailing verify/BitcodeWriterPass
+/// stripped).  MemCpyOpt was measured as the single most expensive
+/// pass in the Toooba link (254s of a 478s block on this box; 877s
+/// on its predecessor) hunting copy/fill structure in code our
+/// lowering emits as unrolled word stores — while the rest of the O1
+/// bundle is load-bearing: a minimal 3-pass tier and a +sroa variant
+/// both regressed runtime +2.75% Ir / +7% wall (lever-1 ledger), and
+/// this string measures +0.01% Ir vs default<O1> with byte parity
+/// and a 20:30 -> 15:57 relink (-22%).  Pinned literally so the tier
+/// is REPRODUCIBLE across LLVM upgrades; REGENERATE AND RE-AUDIT the
+/// expansion when the LLVM major changes (the parser rejects unknown
+/// passes loudly and falls back, so a stale string cannot silently
+/// miscompile — it silently deoptimizes, which the version rung's
+/// A/B catches).
+const AOT_DEMOTED_PIPELINE: &str =
+    "annotation2metadata,forceattrs,inferattrs,coro-early,function<eager-\
+    inv>(lower-expect,simplifycfg<bonus-inst-threshold=1;no-forward-swit\
+    ch-cond;no-switch-range-to-icmp;no-switch-to-lookup;keep-loops;no-ho\
+    ist-common-insts;no-sink-common-insts;speculate-blocks;simplify-cond\
+    -branch>,sroa<modify-cfg>,early-cse<>),openmp-opt,ipsccp,called-valu\
+    e-propagation,globalopt,function<eager-inv>(mem2reg,instcombine<max-\
+    iterations=1;no-use-loop-info;no-verify-fixpoint>,simplifycfg<bonus-\
+    inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-swit\
+    ch-to-lookup;keep-loops;no-hoist-common-insts;no-sink-common-insts;s\
+    peculate-blocks;simplify-cond-branch>),always-inline,require<globals\
+    -aa>,function(invalidate<aa>),require<profile-summary>,cgscc(devirt<\
+    4>(inline,function-attrs<skip-non-recursive-function-attrs>,function\
+    <eager-inv;no-rerun>(sroa<modify-cfg>,early-cse<memssa>,simplifycfg<\
+    bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;n\
+    o-switch-to-lookup;keep-loops;no-hoist-common-insts;no-sink-common-i\
+    nsts;speculate-blocks;simplify-cond-branch>,instcombine<max-iteratio\
+    ns=1;no-use-loop-info;no-verify-fixpoint>,libcalls-shrinkwrap,simpli\
+    fycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-\
+    icmp;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-sink-co\
+    mmon-insts;speculate-blocks;simplify-cond-branch>,reassociate,loop-m\
+    ssa(loop-instsimplify,loop-simplifycfg,licm<no-allowspeculation>,loo\
+    p-rotate<header-duplication;no-prepare-for-lto>,licm<allowspeculatio\
+    n>,simple-loop-unswitch<no-nontrivial;trivial>),simplifycfg<bonus-in\
+    st-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch\
+    -to-lookup;keep-loops;no-hoist-common-insts;no-sink-common-insts;spe\
+    culate-blocks;simplify-cond-branch>,instcombine<max-iterations=1;no-\
+    use-loop-info;no-verify-fixpoint>,loop(loop-idiom,indvars,loop-delet\
+    ion,loop-unroll-full),sroa<modify-cfg>,sccp,bdce,instcombine<max-ite\
+    rations=1;no-use-loop-info;no-verify-fixpoint>,coro-elide,adce,simpl\
+    ifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to\
+    -icmp;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-sink-c\
+    ommon-insts;speculate-blocks;simplify-cond-branch>,instcombine<max-i\
+    terations=1;no-use-loop-info;no-verify-fixpoint>),function-attrs,fun\
+    ction(require<should-not-run-function-passes>),coro-split)),deadarge\
+    lim,coro-cleanup,globalopt,globaldce,elim-avail-extern,rpo-function-\
+    attrs,recompute-globalsaa,function<eager-inv>(float2int,lower-consta\
+    nt-intrinsics,loop(loop-rotate<header-duplication;no-prepare-for-lto\
+    >,loop-deletion),loop-distribute,inject-tli-mappings,loop-vectorize<\
+    no-interleave-forced-only;vectorize-forced-only;>,infer-alignment,lo\
+    op-load-elim,instcombine<max-iterations=1;no-use-loop-info;no-verify\
+    -fixpoint>,simplifycfg<bonus-inst-threshold=1;forward-switch-cond;sw\
+    itch-range-to-icmp;switch-to-lookup;no-keep-loops;hoist-common-insts\
+    ;sink-common-insts;speculate-blocks;simplify-cond-branch>,vector-com\
+    bine,instcombine<max-iterations=1;no-use-loop-info;no-verify-fixpoin\
+    t>,loop-unroll<O1>,transform-warning,sroa<preserve-cfg>,infer-alignm\
+    ent,instcombine<max-iterations=1;no-use-loop-info;no-verify-fixpoint\
+    >,loop-mssa(licm<allowspeculation>),alignment-from-assumptions,loop-\
+    sink,instsimplify,div-rem-pairs,tailcallelim,simplifycfg<bonus-inst-\
+    threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to\
+    -lookup;keep-loops;no-hoist-common-insts;no-sink-common-insts;specul\
+    ate-blocks;simplify-cond-branch>),globaldce,constmerge,cg-profile,re\
+    l-lookup-table-converter,function(annotation-remarks)";
+
+fn run_ir_passes(module: &Module, tracked: Option<&IrTally>) -> Result<(), Ineligible> {
+    // TRS_JIT_OPT forces a generic level (A/B tool); the AOT default
+    // is the bespoke pipeline; the JIT engine path runs none (its
+    // backend codegen opts suffice for warm-up-bound sessions)
+    let pipeline = match std::env::var("TRS_JIT_OPT").as_deref() {
+        Ok(l @ ("1" | "2" | "3")) => format!("default<O{l}>"),
+        Ok(_) => return Ok(()),
+        Err(_) if AOT_MODE.with(|m| m.get()) => {
+            // width cap on the DEFAULT pipeline only: LLVM's known-bits
+            // reasoning is quadratic in integer width, and one i65536
+            // body wedges the pipeline for minutes (sysInit65536Bit
+            // AOT link timeout).  An explicit TRS_JIT_OPT still forces.
+            let width = tracked
+                .map(|t| t.max_width)
+                .unwrap_or_else(|| module_max_int_width(module));
+            if width > IR_PASS_WIDTH_CAP {
+                return Ok(());
+            }
+            // demoted size tier (the DEFAULT pipeline only — explicit
+            // TRS_JIT_OPT / TRS_JIT_PIPELINE still force): a function
+            // over the budget is pathological (one giant cone the
+            // dispatcher could not split), and feeding it to
+            // early-cse<memssa> risks the measured superlinear wedge.
+            // AOT_DEMOTED_PIPELINE runs EarlyCSE without MemorySSA
+            // and stays near-linear; the demoted module keeps
+            // ~O3-class runtime (opt-ladder: O1 1.78s vs O3 1.83s vs
+            // O0 2.74s, and the lever-1 ccg A/B guards the swap away
+            // from default<O1>).  TRS_JIT_FN_INSN_BUDGET overrides
+            // the threshold; 0 disables the tier.
+            let fn_budget: u64 = std::env::var("TRS_JIT_FN_INSN_BUDGET")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2_000_000);
+            let max_fn = if fn_budget > 0 {
+                module_max_fn_insns(module)
+            } else {
+                0
+            };
+            if fn_budget > 0 && max_fn > fn_budget {
+                if std::env::var_os("TRS_JIT_TRACE").is_some() {
+                    eprintln!(
+                        "trs jit: a function measures {max_fn} insns \
+                         (budget {fn_budget}) — module drops to the \
+                         demoted size tier (reduced explicit pipeline)"
+                    );
+                }
+                AOT_DEMOTED_PIPELINE.to_string()
+            } else {
+                AOT_PIPELINE.to_string()
+            }
+        }
+        Err(_) => return Ok(()),
+    };
+    let tm = aot_target_machine()?;
+    let opts = inkwell::passes::PassBuilderOptions::create();
+    if std::env::var_os("TRS_JIT_NOVEC").is_some() {
+        opts.set_loop_vectorization(false);
+        opts.set_loop_slp_vectorization(false);
+    }
+    // link-rung instrumentation: name the passes inside the ir-passes
+    // block (the dominant link phase at Toooba scale).  inkwell has no
+    // TimePasses API; inject LLVM's own flag once — the new-PM
+    // StandardInstrumentations honor the -time-passes cl::opt and
+    // print the timing report to stderr.  Unset, empty, or =0 leaves
+    // timing OFF (external review: any set value used to enable it,
+    // including =0); any other value turns the global cl::opt on for
+    // the REST OF THE PROCESS — there is no un-parse, so later calls
+    // keep timing even if the variable changes (the Once only guards
+    // the unsafe flag parse against the chunked path's parallel
+    // workers).  Built as a one-shot CLI diagnostic; per-action scoped
+    // instrumentation belongs to the persistent-worker rung.
+    if std::env::var_os("TRS_JIT_TIME_PASSES").is_some_and(|v| !v.is_empty() && v != "0") {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let args = [c"trs".as_ptr(), c"-time-passes".as_ptr()];
+            unsafe {
+                inkwell::llvm_sys::support::LLVMParseCommandLineOptions(
+                    args.len() as i32,
+                    args.as_ptr(),
+                    std::ptr::null(),
+                );
+            }
+        });
+    }
+    // debugging escape: run an arbitrary pipeline string instead
+    // (miscompile bisection — e.g. "default<O1>,gvn")
+    let pipeline = std::env::var("TRS_JIT_PIPELINE").unwrap_or(pipeline);
+    module.run_passes(&pipeline, &tm, opts).map_err(|e| {
+        // LOUD on stderr, not just the Ineligible fallback chain: a
+        // rejected pipeline string (an LLVM upgrade renaming a pass in
+        // AOT_PIPELINE) would otherwise degrade every run to the
+        // interpreter silently.  See the upgrade ritual on
+        // AOT_PIPELINE / tools/pipeline-matrix.py.
+        eprintln!(
+            "trs: WARNING: IR pass pipeline rejected ({e}); \
+             artifact compilation will fall back"
+        );
+        Ineligible(format!("IR passes: {e}"))
+    })
+}
+
+/// Pre-pass dump point, honoured by every AOT emission path.  Which
+/// path runs is a tuning decision, so a knob that works on only one of
+/// them silently does nothing in the configuration bazel builds --
+/// which was the case here: TRS_JIT_DUMP reached the JIT paths and no
+/// AOT path at all.  TRS_JIT_DUMP_PRE is an alias, so a recipe written
+/// against the one-module path keeps working.
+fn dump_pre() -> bool {
+    std::env::var_os("TRS_JIT_DUMP").is_some() || std::env::var_os("TRS_JIT_DUMP_PRE").is_some()
+}
+
+/// Post-pass dump point: the same module after run_ir_passes, for
+/// telling what the passes did from what the lowering emitted.
+fn dump_post() -> bool {
+    std::env::var_os("TRS_JIT_DUMP_POST").is_some()
+}
+
+fn finish_engine(
+    module: Module<'static>,
+) -> Result<inkwell::execution_engine::ExecutionEngine<'static>, Ineligible> {
+    if std::env::var_os("TRS_JIT_DUMP").is_some() {
+        eprintln!("{}", module.print_to_string().to_string());
+    }
+    run_ir_passes(&module, None)?;
+    let opt = opt_level();
+    let ee = module
+        .create_jit_execution_engine(opt)
+        .map_err(|e| Ineligible(format!("LLVM JIT engine: {e}")))?;
+    Ok(ee)
+}
+
+/// Compile the SCHED functions for a batch of rules (eager: they run
+/// on every edge).  All-or-nothing per call.
+pub fn compile_scheds(
+    env: &PlanEnv,
+    specs: &[RuleSpec],
+    outlined: Option<&HelperMap>,
+    foreign_cb: ForeignCb,
+    prim_cb: PrimCb,
+) -> Result<Vec<CompiledSched>, Ineligible> {
+    let ctx: &'static Context = Box::leak(Box::new(Context::create()));
+    let (module, cbs) = make_module(ctx, Some((foreign_cb, prim_cb)));
+    for spec in specs {
+        let mut lc = Lower {
+            env,
+            ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            site_origin: spec.sched_prim_origin,
+            foreign_origin: spec.sched_foreign_origin,
+            outlined: None,
+            helper_self: None,
+            dedup: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
+            share_sym: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+            edge: None,
+        };
+        lc.lower_sched()?;
+    }
+    let ee = finish_engine(module)?;
+    let mut out = Vec::new();
+    // the call-site tables live once per rule in FnProtos; the
+    // trampolines index those, so nothing is kept per function here
+    for spec in specs {
+        let addr = ee
+            .get_function_address(&format!("sched_{}", spec.label))
+            .map_err(|e| Ineligible(format!("sched fn address: {e}")))?;
+        out.push(CompiledSched {
+            sched: unsafe { std::mem::transmute::<usize, _>(addr as usize) },
+        });
+    }
+    std::mem::forget(ee);
+    Ok(out)
+}
+
+/// Compile the EXEC (body) functions for a batch of rules (lazy: they
+/// run only when the rule fires; an uncompiled body interprets).
+pub fn compile_execs(
+    env: &PlanEnv,
+    specs: &[RuleSpec],
+    outlined: Option<&HelperMap>,
+    foreign_cb: ForeignCb,
+    prim_cb: PrimCb,
+) -> Result<Vec<CompiledExec>, Ineligible> {
+    let ctx: &'static Context = Box::leak(Box::new(Context::create()));
+    let (module, cbs) = make_module(ctx, Some((foreign_cb, prim_cb)));
+    for spec in specs {
+        let mut lc = Lower {
+            env,
+            ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            site_origin: 0,
+            foreign_origin: 0,
+            outlined: None,
+            helper_self: None,
+            dedup: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
+            share_sym: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+            edge: None,
+        };
+        lc.lower_exec()?;
+    }
+    let ee = finish_engine(module)?;
+    let mut out = Vec::new();
+    for spec in specs {
+        let addr = ee
+            .get_function_address(&format!("exec_{}", spec.label))
+            .map_err(|e| Ineligible(format!("exec fn address: {e}")))?;
+        out.push(CompiledExec {
+            exec: unsafe { std::mem::transmute::<usize, _>(addr as usize) },
+        });
+    }
+    std::mem::forget(ee);
+    Ok(out)
+}
+
+/// Default is -O0 (DESIGN.md §6: iterate-run starts fast; -O0 halves
+/// LLVM time and costs ~4% sim speed on compute-bound loops);
+/// TRS_JIT_OPT=1/2/3 raises it for both JIT and AOT emission.
+fn opt_level() -> OptimizationLevel {
+    match std::env::var("TRS_JIT_OPT").as_deref() {
+        Ok("0") => OptimizationLevel::None,
+        Ok("1") => OptimizationLevel::Less,
+        Ok("2") => OptimizationLevel::Default,
+        Ok("3") => OptimizationLevel::Aggressive,
+        // ARTIFACTS default to O1: the measured ladder (O0 2.74s /
+        // O1 1.78s / O2 1.82s / O3 1.83s run; links 5.9/7.6/8.5/7.9)
+        // shows O1 captures the whole win on this workload.  The JIT
+        // keeps O0 for compile latency.
+        _ if AOT_MODE.with(|m| m.get()) => OptimizationLevel::Less,
+        _ => OptimizationLevel::None,
+    }
+}
+
+/// A gate expression a compiled read may re-expand: static cones only
+/// (constants, parameters, and pure combinationals over them).  Defs
+/// are excluded because the interp's gate eval prefers their LATCHED
+/// values; prim-state chases (Gate, method reads, flattened
+/// $CLK_GATE_OUT ports) are excluded pending schedule-time gate slots.
+fn gate_static(e: &Expr) -> bool {
+    match e {
+        Expr::Const { .. } | Expr::Param(_) => true,
+        Expr::Prim { args, .. } => args.iter().all(gate_static),
+        Expr::If {
+            cond, then_, else_, ..
+        } => gate_static(cond) && gate_static(then_) && gate_static(else_),
+        Expr::Case {
+            scrutinee,
+            arms,
+            default,
+            ..
+        } => {
+            gate_static(scrutinee)
+                && arms.iter().all(|(_, a)| gate_static(a))
+                && gate_static(default)
+        }
+        _ => false,
+    }
+}
+
+/// The portable tuning baseline for the architecture this runs on.
+///
+/// A CPU name belongs to one architecture: LLVM ignores a name its
+/// target does not recognize and warns once per module, which loses the
+/// baseline and buries the log.  On x86-64, v3 measures within noise of
+/// host-native on the bench pool (wide-value memcpy code is the only
+/// vector consumer).  Elsewhere the empty string leaves the choice to
+/// LLVM, whose per-triple default is the portable one.
+fn portable_cpu() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
+        "x86-64-v3"
+    } else {
+        ""
+    }
+}
+
+fn aot_target_machine() -> Result<inkwell::targets::TargetMachine, Ineligible> {
+    use inkwell::targets::{CodeModel, RelocMode, Target, TargetMachine};
+    llvm_init_once();
+    let triple = TargetMachine::get_default_triple();
+    let target =
+        Target::from_triple(&triple).map_err(|e| Ineligible(format!("LLVM target: {e}")))?;
+    // Artifact code generation targets a PORTABLE baseline by default:
+    // artifacts are cached and shipped (.so, trs link --exe), and the
+    // load gates check design identity, not CPU features — a
+    // host-native artifact from an AVX-512 box SIGILLs elsewhere with
+    // no fallback.  TRS_JIT_CPU overrides: "native" restores host
+    // tuning, or any LLVM cpu name (x86-64, x86-64-v4, znver4...).
+    let cpu_env = std::env::var("TRS_JIT_CPU").ok();
+    let (cpu, feats) = match cpu_env.as_deref() {
+        Some("native") => (
+            TargetMachine::get_host_cpu_name().to_string(),
+            TargetMachine::get_host_cpu_features().to_string(),
+        ),
+        Some(name) => (name.to_string(), String::new()),
+        None => (portable_cpu().to_string(), String::new()),
+    };
+    target
+        .create_target_machine(
+            &triple,
+            &cpu,
+            &feats,
+            opt_level(),
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| Ineligible("LLVM target machine creation failed".into()))
+}
+
+/// AOT: the fingerprint object.  The loader checks these globals before
+/// trusting the artifact's baked slot numbers.
+pub fn compile_meta_object(
+    bir_hash: u64,
+    bir_hash_raw: u64,
+    split_thresh: u64,
+    protos: &[u8],
+    edge_tick_level: u64,
+    bdpi_names: &[String],
+    snap: &[u8],
+    plan_a: &[u8],
+    plan_b: &[u8],
+) -> Result<Vec<u8>, Ineligible> {
+    let ctx = Context::create();
+    let module = ctx.create_module("trs_meta");
+    let i64t = ctx.i64_type();
+    let ptrt = ctx.ptr_type(AddressSpace::default());
+    let h = module.add_global(i64t, None, "trs_bir_hash");
+    h.set_initializer(&i64t.const_int(bir_hash, false));
+    // the UNSALTED design identity: trace-independent consumers (the
+    // embedded snap, the baked PlanA) gate on this — trs_bir_hash is
+    // trace-salted and belongs to aot_load's mode check
+    let hr = module.add_global(i64t, None, "trs_bir_hash_raw");
+    hr.set_initializer(&i64t.const_int(bir_hash_raw, false));
+    let r = module.add_global(i64t, None, "trs_layout_rev");
+    r.set_initializer(&i64t.const_int(crate::abi::baked_layout_rev(), false));
+    // split threshold changes the arena layout (memo slots): the
+    // loader must plan with the SAME value or refuse the artifact
+    let t = module.add_global(i64t, None, "trs_split_thresh");
+    t.set_initializer(&i64t.const_int(split_thresh, false));
+    // edge fns contain compiled ticks: the loader skips the interp
+    // tick loop's covered entries per this level (absent in old
+    // artifacts -> loader reads 0).  1 = wire clears only (historic);
+    // 2 = wire clears + CReg copies + BRAM port ticks.
+    let wt = module.add_global(i64t, None, "trs_edge_wire_ticks");
+    wt.set_initializer(&i64t.const_int(edge_tick_level, false));
+    // single definition of the callback pointer-globals every chunk
+    // object references; the loader fills them after dlopen
+    for name in [
+        "trs_cb_foreign",
+        "trs_cb_prim",
+        "trs_cb_stdio",
+        // task #58: BDPI call sites null-check their callee and trap
+        // through this pointer when the import's .so never provided it
+        "trs_cb_bdpi_missing",
+    ] {
+        let g = module.add_global(ptrt, None, name);
+        g.set_initializer(&ptrt.const_null());
+    }
+    // compiled-BRAM-tick helper pointer (edge fns call through it;
+    // the loader fills it with abi::trs_bram_tick)
+    let bt = module.add_global(i64t, None, "trs_bram_tick_cb");
+    bt.set_initializer(&i64t.const_zero());
+    // direct-BDPI callee pointers, filled by the loader from the
+    // artifact's companion .bdpi.so
+    for n in bdpi_names {
+        let g = module.add_global(ptrt, None, &format!("trs_bdpi_{n}"));
+        g.set_initializer(&ptrt.const_null());
+    }
+    // per-ordinal call-site tables: loading decodes these instead of
+    // re-running trial_lower
+    let pl = module.add_global(i64t, None, "trs_protos_len");
+    pl.set_initializer(&i64t.const_int(protos.len() as u64, false));
+    let arr = ctx.const_string(protos, false);
+    let pg = module.add_global(arr.get_type(), None, "trs_protos");
+    pg.set_initializer(&arr);
+    // the design snapshot rides INSIDE the artifact: a --code run
+    // decodes the design from here and never opens the .bir (full-AOT
+    // load doctrine: the .bir is the debug/link sidecar, not a
+    // runtime dependency).  len 0 = not embedded (encode failed);
+    // the loader falls back to the .bir path.
+    let sl = module.add_global(i64t, None, "trs_snap_len");
+    sl.set_initializer(&i64t.const_int(snap.len() as u64, false));
+    let sarr = ctx.const_string(snap, false);
+    let sg = module.add_global(sarr.get_type(), None, "trs_snap");
+    sg.set_initializer(&sarr);
+    // prime()'s derived schedule (see trs-interp PlanA): a --code run
+    // decodes this instead of re-deriving
+    let al = module.add_global(i64t, None, "trs_plan_a_len");
+    al.set_initializer(&i64t.const_int(plan_a.len() as u64, false));
+    let aarr = ctx.const_string(plan_a, false);
+    let ag = module.add_global(aarr.get_type(), None, "trs_plan_a");
+    ag.set_initializer(&aarr);
+    // jit_plan's derived specs + dedup classes (see trs-interp PlanB):
+    // slot numbers depend on trace mode, so the loader gates this on
+    // the SALTED hash (trs_bir_hash), unlike the snap and PlanA
+    let bl = module.add_global(i64t, None, "trs_plan_b_len");
+    bl.set_initializer(&i64t.const_int(plan_b.len() as u64, false));
+    let barr = ctx.const_string(plan_b, false);
+    let bg = module.add_global(barr.get_type(), None, "trs_plan_b");
+    bg.set_initializer(&barr);
+    let tm = aot_target_machine()?;
+    let buf = tm
+        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+        .map_err(|e| Ineligible(format!("meta object emit: {e}")))?;
+    Ok(buf.as_slice().to_vec())
+}
+
+/// Lower a batch of helper functions into one module.  Same-batch
+/// helpers call each other by symbol (module-local); the HelperMap may
+/// also carry cross-references.  Returns nothing extra: callers either
+/// finish a JIT engine or emit an object from the module.
+fn lower_helpers<'ctx>(
+    env: &PlanEnv,
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    cbs: Callbacks<'ctx>,
+    specs: &[HelperSpec],
+    refs: &HelperMap,
+    pseudo: &RuleSpec,
+) -> Result<(), Ineligible> {
+    for hs in specs {
+        let mut lc = Lower {
+            env,
+            ctx,
+            module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec: pseudo,
+            // helpers carry no callback sites (v1)
+            site_origin: 0,
+            foreign_origin: 0,
+            outlined: Some(refs),
+            helper_self: Some((hs.mir, hs.def)),
+            dedup: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
+            share_sym: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+            edge: None,
+        };
+        lc.lower_helper(hs)
+            .map_err(|e| Ineligible(format!("{} (def {}): {e}", hs.sym, hs.def)))?;
+        if !lc.foreign_stmts.is_empty() || !lc.prim_calls.is_empty() {
+            return Err(Ineligible(format!(
+                "helper piece has callback sites (analysis bug): {}",
+                hs.sym
+            )));
+        }
+    }
+    Ok(())
+}
+
+thread_local! {
+    /// Realized boundary map for the current emission (see
+    /// abi::BoundaryReq); consulted by the three cross-module call-site
+    /// arms.  None makes every lookup miss before any IR is emitted,
+    /// which is the state while the map itself is being realized.
+    static BOUNDARY: std::cell::RefCell<Option<BoundaryMap>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Clears the boundary map on every design-emission exit path
+/// (including ?-returns), so a stale map never leaks into a later
+/// helper/trial/JIT compile on this thread.
+struct BoundaryGuard;
+impl Drop for BoundaryGuard {
+    fn drop(&mut self) {
+        BOUNDARY.with(|b| *b.borrow_mut() = None);
+    }
+}
+
+/// Boundary-tax experiment: emit standalone per-method functions for
+/// the selected module type and return the realized map (symbol,
+/// result width, declared args per (mir, method, kind)).  A method
+/// whose lowering fails or records callback sites (foreign/task/
+/// boxed-prim trampolines — their tokens would dangle from the
+/// sentinel spec) stays INLINE: its function is deleted, the map
+/// omits it, and every call site falls back to the default path.
+/// Fold a boundary lowering's outcome and the subtree check into one
+/// verdict, so the caller has a single reason string to report.
+fn lower_res_check(
+    r: Result<u32, Ineligible>,
+    outside: bool,
+    sub: Option<(u32, u32)>,
+) -> Result<u32, String> {
+    match r {
+        Err(e) => Err(format!("{e}")),
+        Ok(_) if sub.is_none() => Err("no region for exemplar".to_string()),
+        Ok(_) if outside => Err("call site outside the fragment's subtree".to_string()),
+        Ok(w) => Ok(w),
+    }
+}
+
+fn lower_boundary_fns<'ctx>(
+    env: &PlanEnv,
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    cbs: Callbacks<'ctx>,
+    reqs: &[BoundaryReq],
+    refs: Option<&HelperMap>,
+    // sharded emission: the fns are called from OTHER objects, so the
+    // definitions must survive the static link (still not dlsym'd —
+    // -Bsymbolic-functions binds them intra-.so)
+    external: bool,
+) -> BoundaryMap {
+    // sentinel spec: inst matches NO frame, so the spec-owned eager
+    // publish/reload arms in def() stay as cold as they are in the
+    // inline path's child frames (child inst != owning rule inst)
+    let bspec = RuleSpec {
+        inst: usize::MAX,
+        rule_idx: usize::MAX,
+        // a sentinel spec: never emitted as an exec class
+        share_label: String::new(),
+        inhibit_slots: Vec::new(),
+        cf_slot: 0,
+        wf_slot: 0,
+        always_fire: false,
+        eager: Vec::new(),
+        shared: Vec::new(),
+        label: "boundary".to_string(),
+        ordinal: 0,
+        sched_foreign_origin: 0,
+        sched_prim_origin: 0,
+        autofire: None,
+    };
+    let mut map = BoundaryMap::default();
+    for rq in reqs {
+        let mut lc = Lower {
+            env,
+            ctx,
+            module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec: &bspec,
+            // a boundary fn numbers from the base its caller gave it
+            site_origin: 0,
+            foreign_origin: 0,
+            outlined: refs,
+            helper_self: None,
+            dedup: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
+            share_sym: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+            edge: None,
+        };
+        // A cone that records call sites is fine: they become templates
+        // the caller materialises into its own table (BoundaryFn).  What
+        // is NOT fine is a site naming an instance outside this
+        // fragment's subtree -- the delta would not be a delta -- so
+        // that one method stays inline.
+        let sub = env.insts.get(&rq.exemplar).map(|ie| ie.region);
+        let rebase =
+            |inst: usize| -> Option<usize> { (inst >= rq.exemplar).then_some(inst - rq.exemplar) };
+        let outside = lc
+            .prim_calls
+            .iter()
+            .map(|p| p.inst)
+            .chain(lc.foreign_stmts.iter().map(|f| f.inst))
+            .any(|i| rebase(i).is_none());
+        match lower_res_check(lc.lower_boundary_fn(rq, external), outside, sub) {
+            Ok(ret_w) => {
+                let prim_sites = lc
+                    .prim_calls
+                    .iter()
+                    .map(|p| PrimCallSpec {
+                        inst: rebase(p.inst).expect("checked above"),
+                        ..p.clone()
+                    })
+                    .collect();
+                let foreign_sites = lc
+                    .foreign_stmts
+                    .iter()
+                    .map(|f| ForeignSpec {
+                        inst: rebase(f.inst).expect("checked above"),
+                        ..f.clone()
+                    })
+                    .collect();
+                map.insert(
+                    (rq.class_id, rq.method, rq.kind),
+                    BoundaryFn {
+                        sym: rq.sym.clone(),
+                        ret_width: ret_w,
+                        args: rq.args.clone(),
+                        prim_sites,
+                        foreign_sites,
+                    },
+                );
+            }
+            Err(why) => {
+                eprintln!("trs boundary: {} stays inline: {why}", rq.sym);
+                if let Some(f) = module.get_function(&rq.sym) {
+                    unsafe { f.delete() };
+                }
+            }
+        }
+    }
+    map
+}
+
+/// The emission's outcome.
+pub enum DesignObject {
+    Object(Vec<u8>),
+    /// design object first, then one object per module type in
+    /// ascending mir order — the caller appends meta.o and links them
+    Objects(Vec<Vec<u8>>),
+}
+
+/// One per-type module of the sharded emission: the type's outlined
+/// helper pieces, its boundary method fns (External — cross-object
+/// callees), and its exec class reps, lowered in that order.  The
+/// boundary fns lower with NO map installed (child cones inline),
+/// matching the phase-1 trial exactly — the realized entries are then
+/// checked against the trial's map, so a drift can never produce
+/// mismatched declaration types in other modules; the FULL map is
+/// installed only for the exec reps (their cross-type method calls
+/// divert).  gate_scratch rides in `env` — an outlined rep's write
+/// marks are consumed by the design module's edge spine, so the
+/// legacy chunked arm's gate_scratch:None would silently break gating.
+#[allow(clippy::too_many_arguments)]
+fn compile_class_module(
+    env: &PlanEnv,
+    helpers: &[HelperSpec],
+    reqs: &[BoundaryReq],
+    reps: &[RuleSpec],
+    refs: &HelperMap,
+    pseudo: &RuleSpec,
+    full_map: &BoundaryMap,
+    mir: usize,
+) -> Result<Vec<u8>, Ineligible> {
+    let _am = crate::abi::AotModeGuard::set();
+    let ctx = Context::create();
+    let (module, cbs) = make_module(&ctx, None);
+    let refs_opt = (!refs.is_empty()).then_some(refs);
+    let _bguard = BoundaryGuard;
+    if !helpers.is_empty() {
+        lower_helpers(env, &ctx, &module, cbs, helpers, refs, pseudo)
+            .map_err(|e| Ineligible(format!("shard mir {mir} helpers: {e}")))?;
+    }
+    if !reqs.is_empty() {
+        let local = lower_boundary_fns(env, &ctx, &module, cbs, reqs, refs_opt, true);
+        // the phase-1 trial decided the map every other module lowered
+        // against; a divergence here would mean call sites elsewhere
+        // declared a type this module never defined — fail loudly
+        for rq in reqs {
+            let k = (rq.class_id, rq.method, rq.kind);
+            if local.get(&k) != full_map.get(&k) {
+                return Err(Ineligible(format!(
+                    "shard mir {mir}: boundary realization drift on {}",
+                    rq.sym
+                )));
+            }
+        }
+    }
+    BOUNDARY.with(|b| *b.borrow_mut() = Some(full_map.clone()));
+    for spec in reps {
+        let mut lc = Lower {
+            env,
+            ctx: &ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            // exec is first in the rule's one call-site table
+            site_origin: 0,
+            foreign_origin: 0,
+            outlined: refs_opt,
+            helper_self: None,
+            dedup: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
+            share_sym: Some(spec.share_label.clone()),
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+            edge: None,
+        };
+        lc.lower_exec()
+            .map_err(|e| Ineligible(format!("shard mir {mir} exec: {e}")))?;
+        // The SCHED half is NOT here, and that is not an oversight.
+        //
+        // A rule's body is the module's code; deciding WHEN it fires
+        // is the design's.  The sched half computes CAN_FIRE/WILL_FIRE
+        // and latches the schedule-position defs its entry owns, and
+        // both depend on whole-design scheduling: which of an
+        // instance's rules the composition marks EARLY (`comp.early`
+        // is per (instance, rule), so two instances of one type can
+        // differ) decides which cones the eager walk reaches, and so
+        // how many defs that entry latches.
+        //
+        // It was briefly emitted here under the class symbol, on the
+        // strength of a measurement -- 354 designs, 5,930 class
+        // members, no disagreement.  The corpus was not the
+        // specification: in a design instantiating one type thirty
+        // times over, two of those instances DO differ (one rule's
+        // table came to 3 prim sites at one instance and 1 at
+        // another, exec halves identical), and a shared body then
+        // indexes a table that does not match.  Nor can the dedup
+        // key simply be widened to separate them -- that splits a
+        // module type into two classes, which one-object-per-type
+        // refuses.
+        //
+        // So sched fns are per ORDINAL and live in the design module.
+        // The module's object still holds everything that is the
+        // module's: its exec bodies, boundary methods and helpers.
+    }
+    if dump_pre() {
+        eprintln!("; ==== trs shard: mir {mir} ====");
+        eprintln!("{}", module.print_to_string().to_string());
+    }
+    run_ir_passes(&module, None)?;
+    if dump_post() {
+        eprintln!("; ==== trs shard: mir {mir} (post) ====");
+        eprintln!("{}", module.print_to_string().to_string());
+    }
+    let tm = aot_target_machine()?;
+    let buf = tm
+        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+        .map_err(|e| Ineligible(format!("shard mir {mir} object emit: {e}")))?;
+    // TRS_TYPE_OBJ_DIR: write each type module out under its module
+    // NAME, not its mir -- a mir is a position in this design's module
+    // list, so the same type numbers differently in another design and
+    // the two would not line up.  The name is what makes objects from
+    // two designs comparable, which is the whole reason to dump them:
+    // per-fragment compilation is only possible if a type's object does
+    // not depend on which design it was compiled in.
+    if let Some(dir) = std::env::var_os("TRS_TYPE_OBJ_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        // the module NAME and nothing else, which is exactly what the
+        // real emission writes -- a dump under a different name would
+        // not be the file whose reuse this diagnostic exists to check.
+        // A mir is a position in this design's module list, so it
+        // numbers differently in the next design and cannot appear.
+        let name = env
+            .d
+            .strings
+            .get(env.d.modules[mir].name as usize)
+            .cloned()
+            .unwrap_or_else(|| format!("mir{mir}"));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!("trs shard: {}: {e}", dir.display());
+        } else {
+            let obj = dir.join(format!("{name}.o"));
+            if let Err(e) = std::fs::write(&obj, buf.as_slice()) {
+                eprintln!("trs shard: {}: {e}", obj.display());
+            }
+            // the IR alongside it: an object diff says THAT two designs
+            // disagree, the IR says where
+            let ll = dir.join(format!("{name}.ll"));
+            if let Err(e) = std::fs::write(&ll, module.print_to_string().to_bytes()) {
+                eprintln!("trs shard: {}: {e}", ll.display());
+            }
+        }
+    }
+    Ok(buf.as_slice().to_vec())
+}
+
+/// AOT emission, and the only strategy: the design splits into a
+/// DESIGN module (sched fns, fused
+/// edge fns, fn tables, gate geometry) plus one module per module
+/// TYPE (see compile_type_module), pass pipelines running in parallel
+/// (per-type workers + the design module on this thread), linked by
+/// the caller exactly like the one-module artifact with meta.o
+/// appended.  Cross-module method calls ride the boundary ABI
+/// (step-1 measured: +0.32% Ir, wall neutral-or-better on the
+/// specimen; the Toooba control +0.031%).  Byte-determinism: fragment objects in ascending
+/// class order, jobs chunked contiguously, output order [design, asc].
+/// Everything outside a class's own identity that changes the object it
+/// compiles to: the arena/ABI revision, and the codegen knobs.  A class
+/// signature says what the fragment IS; this says what this trs would
+/// make of it.  Both are in the cache key, so a rev bump or a changed
+/// knob misses rather than serving an object built under the old one.
+/// TRS_* variables that say what HAPPENED rather than change what is
+/// emitted, and so are not part of an object's identity.
+///
+/// A deny-list on purpose.  An allow-list has to be extended whenever
+/// a knob is added, and forgetting means two different codegens share
+/// an object NAME -- a wrong object, the one failure this must not
+/// have.  Getting the deny-list wrong costs a spurious miss instead,
+/// which is only a rebuild.  (Not hypothetical: the first version
+/// matched TRS_JIT/TRS_EDGE/TRS_CHUNK prefixes and silently missed
+/// TRS_NO_FUSION, which changes what is emitted.)
+const REPORTING_ONLY: &[&str] = &[
+    "TRS_JIT_TIME",
+    "TRS_JIT_TIME_PASSES",
+    "TRS_JIT_DUMP",
+    "TRS_JIT_TRACE",
+    "TRS_JIT_SHARE_STATS",
+    "TRS_JIT_SPLIT_WHY",
+    "TRS_EDGE_SSA_STATS",
+    "TRS_SIG_TRACE",
+    "TRS_TYPE_OBJ_DIR",
+    "TRS_LAYOUT_CENSUS",
+    "TRS_GATE_MASK_CENSUS",
+    "TRS_PROF",
+    "TRS_STARTUP_TIME",
+    "TRS_RUNCORE_CHECK",
+    // worker count: changes how long, not what
+    "TRS_JIT_THREADS",
+    // paths, and the reuse directories themselves -- an object cannot
+    // be keyed on where it was found
+    "TRS_OBJ_IN",
+    "TRS_OBJ_OUT",
+    "TRS_VLT_CACHE",
+    "TRS_VLT_BUILD",
+    "TRS_CC",
+    "TRS_CAPI_SO",
+];
+
+/// Whether this variable is part of an object's identity.  Exposed so
+/// the class manifest can report the same set a compile would salt
+/// with -- a generator has to emit the flags it saw, or the compile
+/// looks for files the manifest never named.
+pub fn salted_knob(k: &str) -> bool {
+    k.starts_with("TRS_") && !REPORTING_ONLY.contains(&k)
+}
+
+pub fn obj_salt() -> String {
+    let mut knobs: Vec<(String, String)> = std::env::vars()
+        .filter(|(k, _)| salted_knob(k))
+        .collect();
+    knobs.sort();
+    let mut src = format!("rev={}\n", crate::abi::baked_layout_rev());
+    for (k, v) in knobs {
+        src.push_str(&format!("{k}={v}\n"));
+    }
+    trs_ir::sha256::digest_hex(src.as_bytes())[..16].to_string()
+}
+
+/// Where prebuilt class objects come from and where new ones go.
+///
+/// `TRS_OBJ_IN` is a `:`-separated list of directories to READ,
+/// each one another design's declared output; nothing is ever written
+/// to them.  `TRS_OBJ_OUT` is the one directory this WRITES, and
+/// it is never read.  That asymmetry is the point: an action declares
+/// the inputs it consumes and the output it produces, and a build
+/// system can see both.  A single directory read and written by every
+/// design would be neither -- shared mutable state, racy between
+/// concurrent compiles, and a stale entry under a right-looking name
+/// is a wrong object rather than a missed hit.
+struct ObjIo {
+    ins: Vec<std::path::PathBuf>,
+    out: Option<std::path::PathBuf>,
+    salt: String,
+}
+
+/// The file naming the codegen configuration a directory of objects
+/// was built with.
+///
+/// The salt used to be IN each object's filename, so an object built
+/// with different knobs simply had a different name and could never
+/// be mistaken for this one.  Object names carry no salt now -- that
+/// is what makes them predictable from the .bir -- so the
+/// configuration has to be declared by the directory instead, and
+/// declared means checked: a directory is one configuration, and
+/// reading objects out of a directory built with other knobs would
+/// produce a wrong object under a correct-looking name.
+const SALT_MARK: &str = ".trs-objdir-salt";
+
+impl ObjIo {
+    /// Refuse an input directory whose objects were built with
+    /// different codegen knobs.  Loud: a mismatched directory is a
+    /// build-graph error, and silently skipping it would show up only
+    /// as a mysteriously cold cache.
+    fn check_dirs(&self) -> Result<(), Ineligible> {
+        for d in self.ins.iter().chain(self.out.iter()) {
+            let mark = d.join(SALT_MARK);
+            match std::fs::read_to_string(&mark) {
+                Ok(got) if got.trim() == self.salt => {}
+                Ok(got) => {
+                    return Err(Ineligible(format!(
+                        "{}: objects there were built with codegen knobs {}, \
+                         but this compile is {}.  One directory is one \
+                         configuration.",
+                        d.display(),
+                        got.trim(),
+                        self.salt
+                    )))
+                }
+                // no marker: an empty or fresh directory, fine to use
+                Err(_) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The first input directory holding this class, if any.
+    fn read(&self, module: &str) -> Option<Vec<u8>> {
+        self.ins
+            .iter()
+            .find_map(|d| std::fs::read(obj_name(d, module)).ok())
+    }
+
+    /// Publish a freshly compiled class.  Best effort and silent: the
+    /// object is already in hand, so a failure here costs the next
+    /// build a hit, not this one its correctness.  tmp + rename so a
+    /// concurrent reader of this directory never sees a partial file.
+    fn write(&self, module: &str, bytes: &[u8]) {
+        let Some(dir) = &self.out else { return };
+        // stamp the configuration the first time we publish here
+        let mark = dir.join(SALT_MARK);
+        if !mark.exists() {
+            let _ = std::fs::write(&mark, &self.salt);
+        }
+        let p = obj_name(dir, module);
+        let tmp = p.with_extension(format!("tmp{}", std::process::id()));
+        if std::fs::write(&tmp, bytes).is_ok() {
+            let _ = std::fs::rename(&tmp, &p);
+        } else {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
+/// The file a class object is named by.  Two designs that instantiate a
+/// type identically name the same file, which is the whole point --
+/// 80-89% of an expensive compile is these objects, and a controller
+/// family shares 96% of them.
+///
+/// Read and write are deliberately SEPARATE (see `ObjIo`).  A
+/// single directory that an action both reads and writes is mutable
+/// state shared between builds: an undeclared input and an undeclared
+/// output at once, racy between concurrent designs, and a stale entry
+/// under a correct-looking name is a wrong object rather than a missed
+/// hit.  Inputs are directories the caller declares and this never
+/// writes; the output is one directory this only writes.
+/// One .ba, one .bir, one .o -- so the object is named for its module
+/// and nothing else.
+///
+/// The signature is gone because there is nothing left for it to
+/// distinguish: a module type compiles to exactly one object, and a
+/// name a build system can PREDICT from the .bir is what removes the
+/// need to discover object names at all (the manifest existed because
+/// a fragment's valuation, and hence its object's name, was not known
+/// until its parent elaborated).
+///
+/// The salt is gone from the NAME for the same reason, but it has not
+/// gone away: it identifies the codegen configuration, which belongs
+/// in the output directory the caller chooses -- `build/a/mkFoo.o` and
+/// `build/b/mkFoo.o`, the way every other compiler separates them --
+/// not in a filename the build graph then cannot predict.
+///
+/// What the signature also carried was the module's content hash,
+/// which stopped a design linking an object built from a different
+/// revision of the same .bir.  That job moves to the build system's
+/// file dependency, which is where it belongs under declared inputs
+/// and where `foo.o` vs `foo.c` has always kept it.
+fn obj_name(dir: &std::path::Path, module: &str) -> std::path::PathBuf {
+    dir.join(format!("{module}.o"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn compile_design_objects_split(
+    env: &PlanEnv,
+    specs: &[RuleSpec],
+    rep_ords: &[usize],
+    helper_specs: &[HelperSpec],
+    refs: &HelperMap,
+    fused: &[FusedComp],
+    edge_plan: Option<&EdgeSsaPlan>,
+    boundary_reqs: &[BoundaryReq],
+    nworkers: usize,
+) -> Result<DesignObject, Ineligible> {
+    let t_low = std::time::Instant::now();
+    let refs_opt = (!refs.is_empty()).then_some(refs);
+    // phase 1: realize the boundary map -- the eligibility/width
+    // decisions every module lowers against.  The class modules
+    // re-lower the same fns (ms-scale) and verify.
+    //
+    // This was one throwaway module over every request in the design,
+    // and reads like a design-wide pre-pass that per-fragment
+    // compilation would have to unpick.  It is not one in substance: a
+    // request is realized with the boundary map UNSET, so its cones
+    // inline their callees rather than diverting, and nothing it
+    // produces depends on any other request's outcome.  The batching
+    // was convenience.
+    //
+    // So realize per CLASS, which is what a fragment compiled on its
+    // own would do with the classes beneath it -- and, since the
+    // pieces are independent, on the workers rather than serially
+    // ahead of them.
+    let mut by_class: std::collections::BTreeMap<usize, Vec<BoundaryReq>> =
+        std::collections::BTreeMap::new();
+    for rq in boundary_reqs {
+        by_class.entry(rq.class_id).or_default().push(rq.clone());
+    }
+    let realize_jobs: Vec<Vec<BoundaryReq>> = by_class.into_values().collect();
+    let realize_n = realize_jobs.len();
+    let rchunk = realize_jobs.len().div_ceil(nworkers.max(1)).max(1);
+    let full_map: BoundaryMap = std::thread::scope(|sc| {
+        let mut hs = Vec::new();
+        for group in realize_jobs.chunks(rchunk) {
+            hs.push(sc.spawn(move || {
+                let ctx = Context::create();
+                let (module, cbs) = make_module(&ctx, None);
+                let _bg = BoundaryGuard;
+                let mut out = BoundaryMap::new();
+                for reqs in group {
+                    out.extend(lower_boundary_fns(
+                        env, &ctx, &module, cbs, reqs, refs_opt, false,
+                    ));
+                }
+                out
+            }));
+        }
+        let mut merged = BoundaryMap::new();
+        for h in hs {
+            merged.extend(h.join().expect("boundary realization thread"));
+        }
+        merged
+    });
+    if std::env::var_os("TRS_JIT_TIME").is_some() {
+        eprintln!(
+            "trs shard: boundary realization {:?} ({} fragment objects, {} workers)",
+            t_low.elapsed(),
+            realize_n,
+            nworkers.max(1)
+        );
+    }
+    let with_sites = full_map
+        .values()
+        .filter(|b| !b.prim_sites.is_empty() || !b.foreign_sites.is_empty())
+        .count();
+    let nsites: usize = full_map
+        .values()
+        .map(|b| b.prim_sites.len() + b.foreign_sites.len())
+        .sum();
+    eprintln!(
+        "trs shard: {} of {} boundary method fns realized \
+         ({with_sites} carrying {nsites} call-site templates)",
+        full_map.len(),
+        boundary_reqs.len()
+    );
+    // partition by module type (ascending mir = deterministic)
+    // Partition by CLASS, not by module type.
+    //
+    // A type's classes are its parameter valuations, and two designs
+    // instantiate a type at overlapping but rarely identical sets of
+    // them.  Grouping every class of a type into one object makes that
+    // object depend on the SET this design happened to use, even
+    // though each body in it is design-independent: two designs
+    // sharing a valuation emit the same symbols and the same code in
+    // objects that differ, and neither can be reused for the other.
+    // The class is the unit that is the same in both, so it is the
+    // unit emitted.
+    //
+    // Helpers are declared per module type, but only ever for a type
+    // whose instances all share one signature (helper symbols are
+    // sig-keyed, jit.rs), so a helper's type has exactly one class and
+    // lands in it unambiguously.
+    let mut class_of_mir: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
+    for ie in env.insts.values() {
+        class_of_mir.entry(ie.mir).or_insert(ie.class_id);
+    }
+    // (helpers, boundary fns, exec reps, mir)
+    type ClassJob = (Vec<HelperSpec>, Vec<BoundaryReq>, Vec<RuleSpec>, usize);
+    let mut per_class: std::collections::BTreeMap<usize, ClassJob> =
+        std::collections::BTreeMap::new();
+    let slot = |m: &mut std::collections::BTreeMap<usize, ClassJob>,
+                    c: usize,
+                    mir: usize| {
+        let e = m
+            .entry(c)
+            .or_insert_with(|| (Vec::new(), Vec::new(), Vec::new(), mir));
+        e.3 = mir;
+    };
+    for hs in helper_specs {
+        let Some(&c) = class_of_mir.get(&hs.mir) else {
+            return Err(Ineligible(format!("shard: helper mir {} unknown", hs.mir)));
+        };
+        slot(&mut per_class, c, hs.mir);
+        per_class.get_mut(&c).expect("just inserted").0.push(hs.clone());
+    }
+    for rq in boundary_reqs {
+        slot(&mut per_class, rq.class_id, rq.mir);
+        per_class
+            .get_mut(&rq.class_id)
+            .expect("just inserted")
+            .1
+            .push(rq.clone());
+    }
+    for &o in rep_ords {
+        let inst = specs[o].inst;
+        let Some(ie) = env.insts.get(&inst) else {
+            return Err(Ineligible(format!("shard: rep inst {inst} unknown")));
+        };
+        slot(&mut per_class, ie.class_id, ie.mir);
+        per_class
+            .get_mut(&ie.class_id)
+            .expect("just inserted")
+            .2
+            .push(specs[o].clone());
+    }
+    // One .o per module type -- checked, because the NAME now assumes
+    // it.  Objects are named for their module alone, so two classes of
+    // one type would write the same file and silently keep whichever
+    // finished last.
+    //
+    // An object is named for its module and nothing else, so a type
+    // that produced two of them would have the second silently
+    // overwrite the first -- a body serving instances it was not
+    // compiled for, which is a wrong answer with no diagnostic.
+    //
+    // Everything a parent supplies is a value in the instance's own
+    // region now, gates included, so what remains that could still
+    // split a type is a difference in what it instantiates BENEATH
+    // it: the signature covers a fragment's children, and two
+    // instances whose subtrees differ are genuinely different code.
+    // Zero designs of 894 measured hit this.  Refuse rather than
+    // emit, and name the type, so the next reader has the one fact
+    // that localises it.
+    {
+        let mut seen: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for (cid, (_, _, _, mir)) in per_class.iter() {
+            if let Some(prev) = seen.insert(*mir, *cid) {
+                let nm = env
+                    .d
+                    .strings
+                    .get(env.d.modules[*mir].name as usize)
+                    .cloned()
+                    .unwrap_or_else(|| format!("mir{mir}"));
+                return Err(Ineligible(format!(
+                    "module `{nm}' compiles to more than one object \
+                     (dedup classes {prev} and {cid}), but objects are \
+                     named for their module alone.  Something about this \
+                     type is still per-instantiation: everything a parent \
+                     supplies is a slot now, so look at what the two \
+                     instances instantiate beneath them."
+                )));
+            }
+        }
+    }
+    // phase 2a: the design module — the sched fns, the fused edge
+    // fns, the dispatch tables and the glue, with the full map
+    // installed (their method-call sites divert).  NO
+    // helpers/boundary/reps: those are the module's, and live in the
+    // module's object.
+    //
+    // A sched fn is the design's, and here is why the split falls
+    // there.  A rule's BODY is the module's code -- the same
+    // statements whatever instantiates it -- but deciding when the
+    // rule fires is a whole-design question, and the sched half
+    // answers it: it evaluates the condition cones, applies the
+    // inhibitors the schedule chose, and latches the eager defs its
+    // entry was given to own.  Which of an instance's rules the
+    // composition marks EARLY is per (instance, rule), so two
+    // instances of one module type genuinely differ, and no class
+    // key can cover the difference: it is not a property of the
+    // module at all.
+    let ctx = Context::create();
+    let (module, cbs) = make_module(&ctx, None);
+    let mut tally = IrTally::default();
+    let _bguard = BoundaryGuard;
+    BOUNDARY.with(|b| *b.borrow_mut() = Some(full_map.clone()));
+    // Which ordinals need a standalone sched fn: every one the edge
+    // plan does not cover, plus every one it covers by CALLING (the
+    // outlined form) rather than by inlining the section.  An
+    // ordinal can be both -- outlined in one row and inlined in a
+    // variant row whose `sched_over' rewrote its inhibitors -- and
+    // then it is emitted, because some row calls it.
+    let mut covered: std::collections::HashSet<usize> = Default::default();
+    let mut called: std::collections::HashSet<usize> = Default::default();
+    if let Some(p) = edge_plan {
+        for (row, ns) in p.nodes.iter().enumerate() {
+            for &(is_exec, o) in ns {
+                if is_exec {
+                    continue;
+                }
+                covered.insert(o);
+                let row_specific = p.sched_over.get(row).is_some_and(|m| m.contains_key(&o));
+                if p.outline_sched && specs[o].autofire.is_none() && !row_specific {
+                    called.insert(o);
+                }
+            }
+        }
+    }
+    for (o, spec) in specs.iter().enumerate() {
+        if covered.contains(&o) && !called.contains(&o) {
+            continue;
+        }
+        let mut lc = Lower {
+            env,
+            ctx: &ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            // A Lower emitting the sched half ALONE numbers its call
+            // sites from zero, so it has to be told where that half
+            // begins in the rule's one table: the exec half is first,
+            // at 0, and this follows it.  Zero here reported a sched
+            // site as an EXEC site -- the wrong callee, silently.
+            site_origin: spec.sched_prim_origin,
+            foreign_origin: spec.sched_foreign_origin,
+            outlined: refs_opt,
+            helper_self: None,
+            dedup: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
+            // per ordinal, so `sched_i{inst}_{ordinal}' and not a
+            // class symbol -- but still region-relative and taking
+            // (arena, env, base, ordinal), which costs nothing and
+            // keeps one calling convention for both halves
+            share_sym: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+            edge: None,
+        };
+        lc.lower_sched()?;
+    }
+    match edge_plan {
+        Some(p) => lower_edge_ssa(
+            env,
+            &ctx,
+            &module,
+            cbs,
+            specs,
+            refs_opt,
+            p,
+            fused,
+        )?,
+        None => {
+            let _ = lower_fused(&ctx, &module, fused);
+        }
+    }
+    // measured edge budget BEFORE any pass pipeline runs (one-module
+    // contract: an over-budget module never reaches the passes)
+    // ordinal fn tables: exec reps live in per-type modules — declare
+    // the emitted ones so their table entries become link relocations
+    // instead of null ("elided"), which the loader would stub to a
+    // panic.  Only rep ordinals are ever read from the exec table.
+    {
+        let ptrt = ctx.ptr_type(AddressSpace::default());
+        let i64t = ctx.i64_type();
+        let i32t = ctx.i32_type();
+        let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
+        for &o in rep_ords {
+            let name = format!("exec_{}", specs[o].share_label);
+            if module.get_function(&name).is_none() {
+                module.add_function(&name, exec_ty, None);
+            }
+        }
+        let is_rep: std::collections::HashSet<usize> = rep_ords.iter().copied().collect();
+        let fnptr = |name: String| {
+            module
+                .get_function(&name)
+                .map(|f| f.as_global_value().as_pointer_value())
+                .unwrap_or_else(|| ptrt.const_null())
+        };
+        // sched fns are this module's own, one per ordinal: a null
+        // entry means the edge plan inlined that section.
+        let scheds: Vec<_> = specs
+            .iter()
+            .map(|sp| fnptr(format!("sched_{}", sp.label)))
+            .collect();
+        // Only rep ordinals are read from this table, and a non-rep
+        // must stay null: its CLASS symbol resolves (its rep defined
+        // it), so looking up by name alone would quietly fill entries
+        // that used to be elided.
+        let execs: Vec<_> = specs
+            .iter()
+            .enumerate()
+            .map(|(o, sp)| {
+                if is_rep.contains(&o) {
+                    fnptr(format!("exec_{}", sp.share_label))
+                } else {
+                    ptrt.const_null()
+                }
+            })
+            .collect();
+        let edges: Vec<_> = (0..fused.len())
+            .map(|k| fnptr(format!("edge_c{k}")))
+            .collect();
+        for (name, vals) in [
+            ("trs_sched_tab", scheds),
+            ("trs_exec_tab", execs),
+            ("trs_edge_tab", edges),
+        ] {
+            let arr = ptrt.const_array(&vals);
+            let g = module.add_global(arr.get_type(), None, name);
+            g.set_initializer(&arr);
+            let l = module.add_global(i64t, None, &format!("{name}_len"));
+            l.set_initializer(&i64t.const_int(vals.len() as u64, false));
+        }
+    }
+    tally.add_all(&module);
+    let timing = std::env::var_os("TRS_JIT_TIME").is_some();
+    if timing {
+        eprintln!(
+            "trs shard: design lowering {:?} ({} fragment modules)",
+            t_low.elapsed(),
+            per_class.len()
+        );
+    }
+    let dumping = dump_pre();
+    // dumped here rather than inside the pipeline below: the workers
+    // print the per-module IR, and this keeps the design module ahead
+    // of it
+    if dumping {
+        eprintln!("; ==== trs shard: design ====");
+        eprintln!("{}", module.print_to_string().to_string());
+    }
+    // eprintln! is atomic per call, so one module's IR never interleaves
+    // with another's, but nothing orders the modules themselves -- a
+    // single worker restores the [design, mir asc] order documented
+    // above, and a dump is not a run whose speed matters
+    let nworkers = if dumping { 1 } else { nworkers };
+    // phase 2b: per-class pipelines on workers, the design pipeline on
+    // this thread (its Context cannot move), all overlapped
+    let jobs: Vec<(usize, ClassJob)> = per_class.into_iter().collect();
+    // Placeholder spec for helper lowering.  It is never read: a helper
+    // that emits a callback site is rejected in lower_helpers, so nothing
+    // reaches spec-derived state (the same reasoning the dynamic-schedule
+    // guard Lower records).  It is built rather than taken from specs,
+    // which is empty for a design with no rules -- and such a design is
+    // still worth sharding, since boundary requests come from a module's
+    // METHODS, not its rules.
+    let pseudo = RuleSpec {
+        inst: usize::MAX,
+        rule_idx: usize::MAX,
+        // a sentinel spec: never emitted as an exec class
+        share_label: String::new(),
+        inhibit_slots: Vec::new(),
+        cf_slot: 0,
+        wf_slot: 0,
+        always_fire: false,
+        eager: Vec::new(),
+        shared: Vec::new(),
+        label: "split-placeholder".to_string(),
+        ordinal: 0,
+        sched_foreign_origin: 0,
+        sched_prim_origin: 0,
+        autofire: None,
+    };
+    // Read from declared inputs, write to a declared output; never the
+    // same directory, and never a directory this both reads and writes.
+    let io = {
+        let salt = obj_salt();
+        let ins: Vec<std::path::PathBuf> = std::env::var("TRS_OBJ_IN")
+            .ok()
+            .into_iter()
+            .flat_map(|v| {
+                v.split(':')
+                    .filter(|p| !p.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let out = std::env::var_os("TRS_OBJ_OUT").map(std::path::PathBuf::from);
+        if let Some(d) = &out {
+            if let Err(e) = std::fs::create_dir_all(d) {
+                return Err(Ineligible(format!("{}: {e}", d.display())));
+            }
+        }
+        (!ins.is_empty() || out.is_some()).then_some(ObjIo { ins, out, salt })
+    };
+    if let Some(io) = &io {
+        io.check_dirs()?;
+    }
+    let io = &io;
+    // The phase below runs the DESIGN module's pass pipeline on this
+    // thread while the workers compile classes, so its wall time is a
+    // MAX of the two, not a sum -- reading it as "the class half" was
+    // wrong, and a design whose classes all come from inputs can show
+    // an unchanged phase because the design module still has to run.
+    // Time them apart.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let cls_ns = AtomicU64::new(0);
+    let des_ns = AtomicU64::new(0);
+    let (cls_ns, des_ns) = (&cls_ns, &des_ns);
+    let chunk = jobs.len().div_ceil(nworkers.max(1)).max(1);
+    let t0 = std::time::Instant::now();
+    let (design_obj, class_objs) = std::thread::scope(|sc| {
+        let mut handles = Vec::new();
+        for group in jobs.chunks(chunk) {
+            let pseudo = &pseudo;
+            let full_map = &full_map;
+            handles.push(sc.spawn(move || {
+                let wenv = PlanEnv {
+                    now_slot: env.now_slot,
+                    d: env.d,
+                    insts: env.insts,
+                    gate_scratch: env.gate_scratch,
+                };
+                let mut out = Vec::new();
+                for (cid, (hs, rqs, reps, mir)) in group {
+                    // A class object does not depend on the design it
+                    // was compiled in -- that is what the rest of this
+                    // file was for -- so one built for another design
+                    // is this design's object too.
+                    let name = wenv
+                        .d
+                        .strings
+                        .get(wenv.d.modules[*mir].name as usize)
+                        .cloned()
+                        .unwrap_or_else(|| format!("mir{mir}"));
+                    if let Some(io) = io {
+                        if let Some(bytes) = io.read(&name) {
+                            out.push((*cid, Ok(bytes), true));
+                            continue;
+                        }
+                    }
+                    let tc = std::time::Instant::now();
+                    let r = compile_class_module(
+                        &wenv, hs, rqs, reps, refs, pseudo, full_map, *mir,
+                    );
+                    cls_ns.fetch_add(tc.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    if let (Some(io), Ok(bytes)) = (io, &r) {
+                        io.write(&name, bytes);
+                    }
+                    out.push((*cid, r, false));
+                }
+                out
+            }));
+        }
+        let td = std::time::Instant::now();
+        let design: Result<Vec<u8>, Ineligible> = (|| {
+            run_ir_passes(&module, Some(&tally))?;
+            if dump_post() {
+                eprintln!("; ==== trs shard: design (post) ====");
+                eprintln!("{}", module.print_to_string().to_string());
+            }
+            let tm = aot_target_machine()?;
+            let buf = tm
+                .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+                .map_err(|e| Ineligible(format!("shard design object emit: {e}")))?;
+            Ok(buf.as_slice().to_vec())
+        })();
+        des_ns.store(td.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        let mut typed: Vec<(usize, Result<Vec<u8>, Ineligible>, bool)> = Vec::new();
+        for h in handles {
+            typed.extend(h.join().expect("shard compile thread"));
+        }
+        (design, typed)
+    });
+    let mut objs = vec![design_obj?];
+    let mut typed: Vec<(usize, Vec<u8>)> = Vec::new();
+    let mut hits = 0usize;
+    for (cid, r, hit) in class_objs {
+        if hit {
+            hits += 1;
+        }
+        typed.push((cid, r?));
+    }
+    if io.is_some() {
+        eprintln!(
+            "trs shard: {hits} of {} fragment objects reused from inputs ({:.0}%)",
+            typed.len(),
+            100.0 * hits as f64 / typed.len().max(1) as f64
+        );
+    }
+    typed.sort_by_key(|(cid, _)| *cid);
+    objs.extend(typed.into_iter().map(|(_, o)| o));
+    if timing {
+        eprintln!(
+            "trs shard: parallel pipelines + emit {:?} ({} objects; \
+             design module {:.1}s, class work {:.1}s summed over workers)",
+            t0.elapsed(),
+            objs.len(),
+            des_ns.load(Ordering::Relaxed) as f64 / 1e9,
+            cls_ns.load(Ordering::Relaxed) as f64 / 1e9
+        );
+    }
+    Ok(DesignObject::Objects(objs))
+}
+
+/// JIT: compile a helper batch into one engine; returns (sym, addr).
+/// Same-batch helpers call each other by module-local symbol.
+pub fn compile_helpers(
+    env: &PlanEnv,
+    specs: &[HelperSpec],
+    refs: &HelperMap,
+    pseudo: &RuleSpec,
+) -> Result<Vec<(String, usize)>, Ineligible> {
+    let ctx: &'static Context = Box::leak(Box::new(Context::create()));
+    let (module, cbs) = make_module(ctx, None);
+    lower_helpers(env, ctx, &module, cbs, specs, refs, pseudo)?;
+    if std::env::var_os("TRS_JIT_DUMP").is_some() {
+        eprintln!("{}", module.print_to_string().to_string());
+    }
+    let ee = finish_engine(module)?;
+    let mut out = Vec::with_capacity(specs.len());
+    for hs in specs {
+        let addr = ee
+            .get_function_address(&hs.sym)
+            .map_err(|e| Ineligible(format!("helper fn address: {e}")))?;
+        out.push((hs.sym.clone(), addr as usize));
+    }
+    std::mem::forget(ee);
+    Ok(out)
+}
+
+/// AOT: emit the helper batch as one PIC object (symbols resolve at
+/// artifact link time).
+pub fn compile_helpers_object(
+    env: &PlanEnv,
+    specs: &[HelperSpec],
+    refs: &HelperMap,
+    pseudo: &RuleSpec,
+) -> Result<Vec<u8>, Ineligible> {
+    let ctx = Context::create();
+    let (module, cbs) = make_module(&ctx, None);
+    lower_helpers(env, &ctx, &module, cbs, specs, refs, pseudo)?;
+    run_ir_passes(&module, None)?;
+    let tm = aot_target_machine()?;
+    let buf = tm
+        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+        .map_err(|e| Ineligible(format!("helper object emit: {e}")))?;
+    Ok(buf.as_slice().to_vec())
+}
+
+fn lower_fused<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    comps: &[FusedComp],
+) -> Vec<String> {
+    let i64t = ctx.i64_type();
+    let i32t = ctx.i32_type();
+    let ptrt = ctx.ptr_type(AddressSpace::default());
+    let sched_ty = ctx
+        .void_type()
+        .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
+    let exec_ty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
+    let b = ctx.create_builder();
+    let mut syms = Vec::with_capacity(comps.len());
+    for (k, comp) in comps.iter().enumerate() {
+        let sym = format!("edge_c{k}");
+        let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into()], false);
+        let func = module.add_function(&sym, fnty, None);
+        let entry = ctx.append_basic_block(func, "entry");
+        b.position_at_end(entry);
+        let arena = func.get_nth_param(0).unwrap().into_pointer_value();
+        let envp = func.get_nth_param(1).unwrap().into_pointer_value();
+        let now = func.get_nth_param(2).unwrap().into_int_value();
+        // now stamp + EN zeroing, inline
+        let gep = |slot: u32| unsafe {
+            b.build_gep(i64t, arena, &[i64t.const_int(slot as u64, false)], "s")
+                .unwrap()
+        };
+        b.build_store(gep(comp.now_slot), now).unwrap();
+        for &en in &comp.en_slots {
+            b.build_store(gep(en), i64t.const_zero()).unwrap();
+        }
+        let callee = |r: &HelperRef, ty: inkwell::types::FunctionType<'ctx>| match r {
+            HelperRef::Addr(a) => (
+                None,
+                Some(i64t.const_int(*a as u64, false).const_to_pointer(ptrt)),
+                ty,
+            ),
+            HelperRef::Sym(name) => (
+                Some(
+                    module
+                        .get_function(name)
+                        .unwrap_or_else(|| module.add_function(name, ty, None)),
+                ),
+                None,
+                ty,
+            ),
+        };
+        let mut stop_bbs = Vec::new();
+        for n in &comp.nodes {
+            match n {
+                FusedNode::Sched(r, base, ord) => {
+                    let (f_, p_, ty) = callee(r, sched_ty);
+                    let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                        arena.into(),
+                        envp.into(),
+                        i64t.const_int(*base, false).into(),
+                        i32t.const_int(*ord as u64, false).into(),
+                    ];
+                    match (f_, p_) {
+                        (Some(f_), _) => {
+                            b.build_call(f_, &args, "s").unwrap();
+                        }
+                        (_, Some(p_)) => {
+                            b.build_indirect_call(ty, p_, &args, "s").unwrap();
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                FusedNode::Exec(r, base, ord) => {
+                    let (f_, p_, ty) = callee(r, exec_ty);
+                    let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                        arena.into(),
+                        envp.into(),
+                        i64t.const_int(*base, false).into(),
+                        i32t.const_int(*ord as u64, false).into(),
+                    ];
+                    let cs = match (f_, p_) {
+                        (Some(f_), _) => b.build_call(f_, &args, "e").unwrap(),
+                        (_, Some(p_)) => b.build_indirect_call(ty, p_, &args, "e").unwrap(),
+                        _ => unreachable!(),
+                    };
+                    let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
+                        unreachable!()
+                    };
+                    let stop = b
+                        .build_int_compare(
+                            IntPredicate::NE,
+                            rv.into_int_value(),
+                            i32t.const_zero(),
+                            "st",
+                        )
+                        .unwrap();
+                    let cont = ctx.append_basic_block(func, "c");
+                    let halt = ctx.append_basic_block(func, "h");
+                    b.build_conditional_branch(stop, halt, cont).unwrap();
+                    stop_bbs.push(halt);
+                    b.position_at_end(cont);
+                }
+            }
+        }
+        b.build_return(Some(&i32t.const_zero())).unwrap();
+        for h in stop_bbs {
+            b.position_at_end(h);
+            b.build_return(Some(&i32t.const_int(1, false))).unwrap();
+        }
+        syms.push(sym);
+    }
+    syms
+}
+
+/// Activity-gating dirty test at the builder's position: OR of
+/// (CURRENT dirty word & mask word) over the mask pairs, compared
+/// against zero — i1 "some input moved since this cone last ran".
+fn gate_test<'ctx>(
+    b: &Builder<'ctx>,
+    i64t: inkwell::types::IntType<'ctx>,
+    arena: PointerValue<'ctx>,
+    g: &crate::abi::GateLayout,
+    mask: &[(u32, u64)],
+) -> IntValue<'ctx> {
+    let mut acc = i64t.const_zero();
+    for &(w, m) in mask {
+        let p = unsafe {
+            b.build_gep(
+                i64t,
+                arena,
+                &[i64t.const_int((g.cur_base + w) as u64, false)],
+                "gw",
+            )
+            .unwrap()
+        };
+        let v = b.build_load(i64t, p, "gv").unwrap().into_int_value();
+        let a = b.build_and(v, i64t.const_int(m, false), "ga").unwrap();
+        acc = b.build_or(acc, a, "go").unwrap();
+    }
+    b.build_int_compare(IntPredicate::NE, acc, i64t.const_zero(), "gd")
+        .unwrap()
+}
+
+/// Whole-edge SSA emission (task #24 M2): one edge_c<k> per
+/// composition with every sched/exec section lowered INLINE, sharing
+/// an EdgeCtx value cache across sections — latched CF/WF/eager values
+/// replace slot loads, and hoisted pure shared defs replace cross-rule
+/// cone recomputation (evicted on intervening writes).  Same symbols
+/// and signature as lower_fused, so the loader and runtime are
+/// untouched.  Every existing slot STORE is preserved (interp/debug
+/// contract).
+///
+/// Under `plan.outline_sched` (the dispatcher structure) sched
+/// sections are NOT inlined: each lowers into its own bounded internal
+/// noinline function and the edge fn becomes a test-and-call
+/// dispatcher over them — the link-scaling shape (LLVM's function
+/// passes stay linear per function); combined with gating, a skipped
+/// section's code is never even fetched.  With gating armed (either
+/// structure), maximal runs of consecutive gated sections sit behind
+/// an outer union-mask group guard.
+#[allow(clippy::too_many_arguments)]
+fn lower_edge_ssa<'ctx>(
+    env: &PlanEnv,
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    cbs: Callbacks<'ctx>,
+    specs: &[RuleSpec],
+    outlined: Option<&HelperMap>,
+    plan: &EdgeSsaPlan,
+    fused: &[FusedComp],
+) -> Result<(), Ineligible> {
+    let i64t = ctx.i64_type();
+    let i32t = ctx.i32_type();
+    let ptrt = ctx.ptr_type(AddressSpace::default());
+    let writes: Vec<std::collections::HashSet<usize>> = plan
+        .exec_writes
+        .iter()
+        .map(|v| v.iter().copied().collect())
+        .collect();
+    // activity gating: export the bitmap geometry — the slim RunCore
+    // boot saturates the bitmaps after mem-file overlays, and the
+    // symbol's presence marks a gated artifact for A/B introspection
+    if let Some(g) = &plan.gate {
+        let arr = i64t.const_array(&[
+            i64t.const_int(g.cur_base as u64, false),
+            i64t.const_int(g.next_base as u64, false),
+            i64t.const_int(g.words as u64, false),
+        ]);
+        let gg = module.add_global(i64t.array_type(3), None, "trs_gate_geom");
+        gg.set_initializer(&arr);
+    }
+    let exports_rc = std::rc::Rc::new(plan.export_slots.clone());
+    for (k, comp) in fused.iter().enumerate() {
+        let sym = format!("edge_c{k}");
+        let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into()], false);
+        let func = module.add_function(&sym, fnty, None);
+        let entry = ctx.append_basic_block(func, "entry");
+        let stop_bb = ctx.append_basic_block(func, "stop");
+        let b = ctx.create_builder();
+        b.position_at_end(entry);
+        let arena = func.get_nth_param(0).unwrap().into_pointer_value();
+        let envp = func.get_nth_param(1).unwrap().into_pointer_value();
+        let now = func.get_nth_param(2).unwrap().into_int_value();
+        let gep = |slot: u32| unsafe {
+            b.build_gep(i64t, arena, &[i64t.const_int(slot as u64, false)], "s")
+                .unwrap()
+        };
+        b.build_store(gep(comp.now_slot), now).unwrap();
+        for &en in &comp.en_slots {
+            b.build_store(gep(en), i64t.const_zero()).unwrap();
+        }
+        // activity gating: roll the dirty bitmaps — CURRENT = NEXT
+        // (last edge's writes), NEXT = 0.  Same-cycle writers (wires,
+        // bypass prims) OR into CURRENT mid-edge; the epilogue refills
+        // NEXT from WF | last-WF per rule.
+        if let Some(g) = &plan.gate {
+            for i in 0..g.words {
+                let n = b.build_load(i64t, gep(g.next_base + i), "gn").unwrap();
+                b.build_store(gep(g.cur_base + i), n).unwrap();
+                b.build_store(gep(g.next_base + i), i64t.const_zero())
+                    .unwrap();
+            }
+            // defensive: the write-mark scratch is consumed-and-cleared
+            // at every exec call site; a clean edge start costs one store
+            b.build_store(gep(g.scratch), i64t.const_zero()).unwrap();
+        }
+
+        // dynamic-scheduling dispatch (compiled alts): evaluate the
+        // guards in declaration order against pre-edge state — pure
+        // register/const cones by the SchedAlt exporter contract —
+        // and branch to the first match's body; none matching walks
+        // the base row.  Interp parity: Value::as_bool is "nonzero",
+        // so the taken test is a plain != 0 on the guard value.
+        let alt_refs: &[crate::abi::AltRow] = plan.alt_rows.get(k).map(|v| &v[..]).unwrap_or(&[]);
+        let mut bodies = Vec::new();
+        if alt_refs.is_empty() {
+            bodies.push((k, entry));
+        } else {
+            let gspec = specs
+                .first()
+                .ok_or_else(|| Ineligible("alts plan without specs".into()))?;
+            let mut chk = entry;
+            for (vi, ar) in alt_refs.iter().enumerate() {
+                let body_bb = ctx.append_basic_block(func, &format!("alt{vi}"));
+                let next_bb = ctx.append_basic_block(func, &format!("chk{vi}"));
+                // the guard Lower never reaches spec-derived state
+                // (pure cone, no tokens/foreign) — any spec anchors it
+                let mut lcg = Lower {
+                    env,
+                    ctx,
+                    module,
+                    builder: ctx.create_builder(),
+                    cbs,
+                    spec: gspec,
+                    site_origin: 0,
+                    foreign_origin: 0,
+                    // no helper memoization on the guard path: a
+                    // memo filled at this extra pre-edge evaluation
+                    // point would serve stale values to the body's
+                    // own cone reads later in the instant
+                    outlined: None,
+                    helper_self: None,
+                    dedup: None,
+                    bnd_prim_site: None,
+                    bnd_foreign_site: None,
+                    reset_ptrs: HashMap::new(),
+                    share_sym: None,
+                    foreign_stmts: Vec::new(),
+                    prim_calls: Vec::new(),
+                    edge: None,
+                };
+                lcg.builder.position_at_end(chk);
+                let mut gf = Frame {
+                    arena,
+                    envp: Some(envp),
+                    inst: ar.guard_inst,
+                    method_idx: None,
+                    args: HashMap::new(),
+                    ssa: HashMap::new(),
+                    chunks: HashMap::new(),
+                    expanding: Vec::new(),
+                    thunks: HashMap::new(),
+                    av_widths: HashMap::new(),
+                    dead_defs: Default::default(),
+                    tasks: HashMap::new(),
+                    av_slots: HashMap::new(),
+                    av_args: HashMap::new(),
+                    is_exec: false,
+                    depth: 0,
+                };
+                let gv = lcg.expr_scalar(&mut gf, &ar.guard)?;
+                // SchedAlt contract: the guard cone is pure (register
+                // and const reads only).  A callback emitted here
+                // would carry gspec's tokens — wrong rule, wrong
+                // proto — so refuse LOUDLY instead of miswiring.
+                if !lcg.foreign_stmts.is_empty() || !lcg.prim_calls.is_empty() {
+                    return Err(Ineligible(
+                        "alts guard cone is not pure (callback emitted)".into(),
+                    ));
+                }
+                let nz = lcg
+                    .builder
+                    .build_int_compare(IntPredicate::NE, gv, gv.get_type().const_zero(), "g")
+                    .unwrap();
+                lcg.builder
+                    .build_conditional_branch(nz, body_bb, next_bb)
+                    .unwrap();
+                bodies.push((ar.row, body_bb));
+                chk = next_bb;
+            }
+            bodies.push((k, chk));
+        }
+        for (row, start) in bodies {
+            let mut edge_ctx = EdgeCtx {
+                exports: exports_rc.clone(),
+                ..Default::default()
+            };
+            let mut cur = start;
+            // guard grouping (gating armed): a maximal run of
+            // consecutive gated sched sections gets ONE outer test on
+            // the union of its masks — union clean means every member
+            // is clean (members' inputs are all in the union, and CUR
+            // only changes at exec consume sites, which break runs), so
+            // the whole run of calls is skipped on one branch.  Inner
+            // per-section tests still discriminate when the union is
+            // dirty.  run_end: run head index -> last member index.
+            let mut run_end: HashMap<usize, usize> = HashMap::new();
+            if plan.gate.is_some() {
+                let ns = &plan.nodes[row];
+                let gated = |s: usize| {
+                    let (ie, oo) = ns[s];
+                    !ie && specs[oo].autofire.is_none()
+                        && plan
+                            .gate_masks
+                            .get(oo)
+                            .and_then(|m| m.as_ref())
+                            .is_some_and(|m| !m.is_empty())
+                };
+                let mut s = 0;
+                while s < ns.len() {
+                    if gated(s) {
+                        let mut e = s;
+                        while e + 1 < ns.len() && gated(e + 1) {
+                            e += 1;
+                        }
+                        if e > s {
+                            run_end.insert(s, e);
+                        }
+                        s = e + 1;
+                    } else {
+                        s += 1;
+                    }
+                }
+            }
+            if std::env::var_os("TRS_JIT_TRACE").is_some() && !run_end.is_empty() {
+                let members: usize = run_end.iter().map(|(&s0, &e)| e - s0 + 1).sum();
+                let gated_total = plan.nodes[row]
+                    .iter()
+                    .filter(|&&(ie, oo)| {
+                        !ie && plan
+                            .gate_masks
+                            .get(oo)
+                            .and_then(|m| m.as_ref())
+                            .is_some_and(|m| !m.is_empty())
+                    })
+                    .count();
+                eprintln!(
+                    "trs jit: edge_c{k} row {row}: {} group guards \
+                     cover {members} of {gated_total} gated sections",
+                    run_end.len()
+                );
+            }
+            let mut run_close: Option<(usize, inkwell::basic_block::BasicBlock<'ctx>)> = None;
+            for (s, &(is_exec, o)) in plan.nodes[row].iter().enumerate() {
+                let base_spec = &specs[o];
+                // order-derived sched overrides (variant rows only):
+                // ME inhibitors and owned-earlier share claims follow
+                // the selected interleaving, not the base order
+                let spec_owned: RuleSpec;
+                let spec: &RuleSpec = match plan.sched_over.get(row).and_then(|m| m.get(&o)) {
+                    Some(ov) if !is_exec => {
+                        spec_owned = RuleSpec {
+                            inhibit_slots: ov.inhibit_slots.clone(),
+                            shared: ov.shared.clone(),
+                            ..base_spec.clone()
+                        };
+                        &spec_owned
+                    }
+                    _ => base_spec,
+                };
+                let mut lc = Lower {
+                    env,
+                    ctx,
+                    module,
+                    builder: ctx.create_builder(),
+                    cbs,
+                    spec,
+                    site_origin: if is_exec { 0 } else { spec.sched_prim_origin },
+                    foreign_origin: if is_exec { 0 } else { spec.sched_foreign_origin },
+                    outlined,
+                    helper_self: None,
+                    dedup: None,
+                    bnd_prim_site: None,
+                    bnd_foreign_site: None,
+                    reset_ptrs: HashMap::new(),
+                    share_sym: None,
+                    foreign_stmts: Vec::new(),
+                    prim_calls: Vec::new(),
+                    edge: Some(std::mem::take(&mut edge_ctx)),
+                };
+                lc.builder.position_at_end(cur);
+                // hoist prelude: shared pure defs whose first consumer is
+                // this section, computed unconditionally on the spine (so
+                // the values dominate every later section)
+                for &(hi, hd) in &plan.hoists[row][s] {
+                    let mut hf = Frame {
+                        arena,
+                        envp: Some(envp),
+                        inst: hi,
+                        method_idx: None,
+                        args: HashMap::new(),
+                        ssa: HashMap::new(),
+                        chunks: HashMap::new(),
+                        expanding: Vec::new(),
+                        thunks: HashMap::new(),
+                        av_widths: HashMap::new(),
+                        dead_defs: Default::default(),
+                        tasks: HashMap::new(),
+                        av_slots: HashMap::new(),
+                        av_args: HashMap::new(),
+                        is_exec: true,
+                        depth: 0,
+                    };
+                    let v = lc.def(&mut hf, hd)?;
+                    lc.edge.as_mut().unwrap().shared.insert((hi, hd), v);
+                }
+                let mut f = Frame {
+                    arena,
+                    envp: Some(envp),
+                    inst: spec.inst,
+                    method_idx: None,
+                    args: HashMap::new(),
+                    ssa: HashMap::new(),
+                    chunks: HashMap::new(),
+                    expanding: Vec::new(),
+                    thunks: HashMap::new(),
+                    av_widths: HashMap::new(),
+                    dead_defs: Default::default(),
+                    tasks: HashMap::new(),
+                    av_slots: HashMap::new(),
+                    av_args: HashMap::new(),
+                    is_exec,
+                    depth: 0,
+                };
+                if is_exec {
+                    // PRE-evict (review-fleet critical finding): a rule
+                    // whose own actions invalidate a shared def must not
+                    // consume the pre-body value — tsort body-position
+                    // semantics.  The plan already refuses to HOIST at
+                    // self-killing sections; this refuses CONSUMPTION of
+                    // earlier anchors too.
+                    {
+                        let ws = &writes[o];
+                        lc.edge.as_mut().unwrap().shared.retain(|key, _| {
+                            plan.def_reads
+                                .get(key)
+                                .is_some_and(|rs| rs.iter().all(|gi| !ws.contains(gi)))
+                        });
+                    }
+                    if plan.outlined_execs.contains(&o) {
+                        // Always: call the module's own compiled body
+                        // (it gates itself on the stored WF slot;
+                        // stores are all kept).  The edge fn carries
+                        // no copy of a rule body -- that is what lets
+                        // a design be linked from the objects its
+                        // modules compiled to.
+                        //
+                        // Built from the SPEC, the same way the sched
+                        // call below is.  It used to come from the
+                        // FusedComp stream for a base row and from a
+                        // parallel per-ordinal map for a variant row
+                        // (which has no stream to index) -- two
+                        // hand-maintained constructions of the same
+                        // triple, which is exactly how they drifted:
+                        // the stream was moved to the class symbol and
+                        // the map was left emitting `exec_i{inst}_{ord}',
+                        // a name nothing defines.  It stayed hidden
+                        // while variant-row execs were only outlined
+                        // when a size dial fired.
+                        //
+                        // `share_label' is a function of (module,
+                        // rule), which every member of a class shares,
+                        // so the rep indirection those two used was
+                        // redundant as well.
+                        let exec_ty = i32t
+                            .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
+                        let ebase = env
+                            .insts
+                            .get(&spec.inst)
+                            .map(|ie| ie.region.0 as u64)
+                            .unwrap_or(0);
+                        let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                            arena.into(),
+                            envp.into(),
+                            i64t.const_int(ebase, false).into(),
+                            i32t.const_int(spec.ordinal as u64, false).into(),
+                        ];
+                        let ename = format!("exec_{}", spec.share_label);
+                        let cf = module
+                            .get_function(&ename)
+                            .unwrap_or_else(|| module.add_function(&ename, exec_ty, None));
+                        let cs = lc.builder.build_call(cf, &args, "oe").unwrap();
+                        let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
+                            return Err(Ineligible("outlined exec returned void".into()));
+                        };
+                        let stop = lc
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::NE,
+                                rv.into_int_value(),
+                                i32t.const_zero(),
+                                "st",
+                            )
+                            .unwrap();
+                        let cont = ctx.append_basic_block(func, "oc");
+                        lc.builder
+                            .build_conditional_branch(stop, stop_bb, cont)
+                            .unwrap();
+                        lc.builder.position_at_end(cont);
+                    } else {
+                        lc.exec_section(&mut f, func, stop_bb)?;
+                    }
+                    // evict shares whose cone the body may have invalidated
+                    let ws = &writes[o];
+                    lc.edge.as_mut().unwrap().shared.retain(|key, _| {
+                        plan.def_reads
+                            .get(key)
+                            .is_some_and(|rs| rs.iter().all(|gi| !ws.contains(gi)))
+                    });
+                } else {
+                    // outer group guard at a run head: one union test
+                    // covers every gated call in the run (see run_end)
+                    if let Some(&re) = run_end.get(&s) {
+                        let g = plan.gate.as_ref().unwrap();
+                        let mut union: Vec<(u32, u64)> = Vec::new();
+                        for si in s..=re {
+                            let (_, oo) = plan.nodes[row][si];
+                            for &(w, m) in plan.gate_masks[oo].as_ref().unwrap() {
+                                match union.iter_mut().find(|(uw, _)| *uw == w) {
+                                    Some((_, um)) => *um |= m,
+                                    None => union.push((w, m)),
+                                }
+                            }
+                        }
+                        union.sort_unstable_by_key(|&(w, _)| w);
+                        let dirty = gate_test(&lc.builder, i64t, arena, g, &union);
+                        let orun = ctx.append_basic_block(func, "orun");
+                        let ocont = ctx.append_basic_block(func, "ocont");
+                        lc.builder
+                            .build_conditional_branch(dirty, orun, ocont)
+                            .unwrap();
+                        lc.builder.position_at_end(orun);
+                        run_close = Some((re, ocont));
+                    }
+                    // activity gating: pure sched cones sit behind a
+                    // dirty test — (mask AND current-dirty) == 0 means
+                    // no input moved since this section last ran, so
+                    // its CF/WF/eager slots already hold the values a
+                    // recompute would produce (determinism), and the
+                    // whole section is jumped over
+                    let gm = plan
+                        .gate
+                        .as_ref()
+                        .and_then(|_| plan.gate_masks.get(o))
+                        .and_then(|m| m.as_ref())
+                        .filter(|m| !m.is_empty());
+                    // A variant row's sched section is NOT the module's
+                    // code: `sched_over' rewrites its ME inhibitors and
+                    // owned-earlier share claims to follow the selected
+                    // interleaving, so it differs from the body the
+                    // module's object defines.  Those stay inline;
+                    // calling the module's symbol for them ran the base
+                    // order and gave wrong answers (the sysDynSched
+                    // family).
+                    let row_specific = !is_exec
+                        && plan.sched_over.get(row).is_some_and(|m| m.contains_key(&o));
+                    if plan.outline_sched && spec.autofire.is_none() && !row_specific {
+                        // dispatcher structure: the sched body lives in
+                        // its own bounded function (internal + noinline
+                        // — function passes stay linear per function,
+                        // and the inliner must not rebuild the
+                        // monolith); the edge fn tests and calls.
+                        // Cross-section values travel through their
+                        // CF/WF/eager slots: the plan widened the
+                        // export keep-set and emptied the hoist tables,
+                        // and gate_no_latch keeps this section's SSA
+                        // out of any cross-function cache — the same
+                        // slot fallbacks a skipped gated section
+                        // relies on (def()'s existing lattice, the one
+                        // standalone sched fns lower with).
+                        // The edge CALLS the sched fn rather than
+                        // emitting a copy of the section inline --
+                        // but the callee is this design's own
+                        // per-ordinal `sched_i{inst}_{ordinal}', not
+                        // a class symbol in the module's object: the
+                        // sched half answers when a rule fires, and
+                        // that is a whole-design question.
+                        //
+                        // Cross-section values travel through their
+                        // CF/WF/eager slots: the plan widened the
+                        // export keep-set and emptied the hoist
+                        // tables, which is the same lattice a
+                        // standalone sched fn lowers with.
+                        let gname = format!("sched_{}", spec.label);
+                        let gty = ctx.void_type().fn_type(
+                            &[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()],
+                            false,
+                        );
+                        let gfunc = module
+                            .get_function(&gname)
+                            .unwrap_or_else(|| module.add_function(&gname, gty, None));
+                        let base = env
+                            .insts
+                            .get(&spec.inst)
+                            .map(|ie| ie.region.0 as u64)
+                            .unwrap_or(0);
+                        let cargs: [inkwell::values::BasicMetadataValueEnum; 4] = [
+                            arena.into(),
+                            envp.into(),
+                            i64t.const_int(base, false).into(),
+                            i32t.const_int(spec.ordinal as u64, false).into(),
+                        ];
+                        match gm {
+                            Some(mask) => {
+                                let g = plan.gate.as_ref().unwrap();
+                                let dirty = gate_test(&lc.builder, i64t, arena, g, mask);
+                                let run_bb = ctx.append_basic_block(func, "grun");
+                                let cont_bb = ctx.append_basic_block(func, "gcont");
+                                lc.builder
+                                    .build_conditional_branch(dirty, run_bb, cont_bb)
+                                    .unwrap();
+                                lc.builder.position_at_end(run_bb);
+                                lc.builder.build_call(gfunc, &cargs, "").unwrap();
+                                lc.builder.build_unconditional_branch(cont_bb).unwrap();
+                                lc.builder.position_at_end(cont_bb);
+                            }
+                            None => {
+                                lc.builder.build_call(gfunc, &cargs, "").unwrap();
+                            }
+                        }
+                    } else {
+                        match gm {
+                            Some(mask) => {
+                                let g = plan.gate.as_ref().unwrap();
+                                let dirty = gate_test(&lc.builder, i64t, arena, g, mask);
+                                let run_bb = ctx.append_basic_block(func, "grun");
+                                let cont_bb = ctx.append_basic_block(func, "gcont");
+                                lc.builder
+                                    .build_conditional_branch(dirty, run_bb, cont_bb)
+                                    .unwrap();
+                                lc.builder.position_at_end(run_bb);
+                                lc.edge.as_mut().unwrap().gate_no_latch = true;
+                                lc.sched_section(&mut f)?;
+                                lc.edge.as_mut().unwrap().gate_no_latch = false;
+                                lc.builder.build_unconditional_branch(cont_bb).unwrap();
+                                lc.builder.position_at_end(cont_bb);
+                            }
+                            None => lc.sched_section(&mut f)?,
+                        }
+                    }
+                }
+                // activity gating, consume the write-mark scratch: a
+                // watched write actually happened in this body (regs:
+                // value moved; wires/fifos/cregs: action taken) — OR
+                // the rule's write mask into NEXT (next-edge readers)
+                // and its same-cycle-visible subset into CURRENT
+                // (later-in-edge readers), then clear the scratch so
+                // the next body starts clean.
+                if is_exec && plan.gate.is_some() {
+                    let g = plan.gate.as_ref().unwrap();
+                    let gp = |slot: u32| unsafe {
+                        lc.builder
+                            .build_gep(i64t, arena, &[i64t.const_int(slot as u64, false)], "gs")
+                            .unwrap()
+                    };
+                    let sync = plan.dirty_sync.get(o).map(|v| &v[..]).unwrap_or(&[]);
+                    if !sync.is_empty() {
+                        let s = lc
+                            .builder
+                            .build_load(i64t, gp(g.scratch), "gsv")
+                            .unwrap()
+                            .into_int_value();
+                        let nz = lc
+                            .builder
+                            .build_int_compare(IntPredicate::NE, s, i64t.const_zero(), "gsn")
+                            .unwrap();
+                        let do_bb = ctx.append_basic_block(func, "gdo");
+                        let done_bb = ctx.append_basic_block(func, "gdn");
+                        lc.builder
+                            .build_conditional_branch(nz, do_bb, done_bb)
+                            .unwrap();
+                        lc.builder.position_at_end(do_bb);
+                        for &(w, m) in sync {
+                            let p = gp(g.next_base + w);
+                            let old = lc
+                                .builder
+                                .build_load(i64t, p, "gno")
+                                .unwrap()
+                                .into_int_value();
+                            let nv = lc
+                                .builder
+                                .build_or(old, i64t.const_int(m, false), "gnn")
+                                .unwrap();
+                            lc.builder.build_store(p, nv).unwrap();
+                        }
+                        if let Some(byp) = plan.dirty_bypass.get(o) {
+                            for &(w, m) in byp {
+                                let p = gp(g.cur_base + w);
+                                let old = lc
+                                    .builder
+                                    .build_load(i64t, p, "gco")
+                                    .unwrap()
+                                    .into_int_value();
+                                let nv = lc
+                                    .builder
+                                    .build_or(old, i64t.const_int(m, false), "gcn")
+                                    .unwrap();
+                                lc.builder.build_store(p, nv).unwrap();
+                            }
+                        }
+                        lc.builder.build_unconditional_branch(done_bb).unwrap();
+                        lc.builder.position_at_end(done_bb);
+                        lc.builder
+                            .build_store(gp(g.scratch), i64t.const_zero())
+                            .unwrap();
+                    }
+                }
+                // close an outer group guard at its run's last member:
+                // the dirty path rejoins the skip path's continuation
+                if let Some((re, ocont)) = run_close {
+                    if re == s {
+                        lc.builder.build_unconditional_branch(ocont).unwrap();
+                        lc.builder.position_at_end(ocont);
+                        run_close = None;
+                    }
+                }
+                cur = lc.builder.get_insert_block().unwrap();
+                edge_ctx = lc.edge.take().unwrap();
+            }
+            let bend = ctx.create_builder();
+            bend.position_at_end(cur);
+            // compiled wire ticks: end-of-edge valid-bit clears
+            if let Some(clears) = plan.wire_clears.get(row) {
+                for &slot in clears {
+                    let gepw = unsafe {
+                        bend.build_gep(i64t, arena, &[i64t.const_int(slot as u64, false)], "wc")
+                            .unwrap()
+                    };
+                    bend.build_store(gepw, i64t.const_zero()).unwrap();
+                }
+            }
+            // compiled CReg ticks: copy the live value into the registered
+            // value (the whole untraced semantics of CReg::tick)
+            if let Some(copies) = plan.creg_copies.get(row) {
+                for &(base, words) in copies {
+                    for i in 0..words {
+                        let s = unsafe {
+                            bend.build_gep(
+                                i64t,
+                                arena,
+                                &[i64t.const_int((base + i) as u64, false)],
+                                "cs",
+                            )
+                            .unwrap()
+                        };
+                        let v = bend.build_load(i64t, s, "cv").unwrap();
+                        let d = unsafe {
+                            bend.build_gep(
+                                i64t,
+                                arena,
+                                &[i64t.const_int((base + words + i) as u64, false)],
+                                "cd",
+                            )
+                            .unwrap()
+                        };
+                        bend.build_store(d, v).unwrap();
+                    }
+                }
+            }
+            // compiled BRAM ticks: one helper call per port tick, through
+            // the trs_bram_tick_cb pointer-global (filled at load).  Call
+            // order preserves the rc.ticks walk — the cross-port bypass
+            // reads the other port's just-latched written_at.
+            if let Some(ticks) = plan.bram_ticks.get(row) {
+                if !ticks.is_empty() {
+                    // external declaration: the meta object owns the single
+                    // definition (loader fills it after dlopen)
+                    let cbg = module
+                        .get_global("trs_bram_tick_cb")
+                        .unwrap_or_else(|| module.add_global(i64t, None, "trs_bram_tick_cb"));
+                    let fp64 = bend
+                        .build_load(i64t, cbg.as_pointer_value(), "btc")
+                        .unwrap()
+                        .into_int_value();
+                    let fp = bend.build_int_to_ptr(fp64, ptrt, "btp").unwrap();
+                    let tick_ty = ctx.void_type().fn_type(
+                        &[
+                            ptrt.into(),
+                            i64t.into(),
+                            i64t.into(),
+                            i64t.into(),
+                            i64t.into(),
+                        ],
+                        false,
+                    );
+                    for a in ticks {
+                        bend.build_indirect_call(
+                            tick_ty,
+                            fp,
+                            &[
+                                arena.into(),
+                                now.into(),
+                                i64t.const_int(a[0], false).into(),
+                                i64t.const_int(a[1], false).into(),
+                                i64t.const_int(a[2], false).into(),
+                            ],
+                            "bt",
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+            bend.build_return(Some(&i32t.const_int(0, false))).unwrap();
+        }
+        let bstop = ctx.create_builder();
+        bstop.position_at_end(stop_bb);
+        bstop.build_return(Some(&i32t.const_int(1, false))).unwrap();
+    }
+    Ok(())
+}
+
+/// JIT: compile fused edge functions (baked callee addresses) into
+/// one engine; returns per-comp fn addresses.
+pub fn compile_fused(comps: &[FusedComp]) -> Result<Vec<usize>, Ineligible> {
+    llvm_init_once();
+    let ctx: &'static Context = Box::leak(Box::new(Context::create()));
+    let module = ctx.create_module("trs_fused");
+    let syms = lower_fused(ctx, &module, comps);
+    if std::env::var_os("TRS_JIT_DUMP").is_some() {
+        eprintln!("{}", module.print_to_string().to_string());
+    }
+    let ee = finish_engine(module)?;
+    let mut out = Vec::with_capacity(syms.len());
+    for sym in &syms {
+        let a = ee
+            .get_function_address(sym)
+            .map_err(|e| Ineligible(format!("fused fn address: {e}")))?;
+        out.push(a as usize);
+    }
+    std::mem::forget(ee);
+    Ok(out)
+}
+
+/// AOT: emit the fused edge functions as one PIC object (symbol
+/// callees resolve at artifact link).
+pub fn compile_fused_object(comps: &[FusedComp]) -> Result<Vec<u8>, Ineligible> {
+    let ctx = Context::create();
+    let module = ctx.create_module("trs_fused");
+    let _ = lower_fused(&ctx, &module, comps);
+    run_ir_passes(&module, None)?;
+    let tm = aot_target_machine()?;
+    let buf = tm
+        .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
+        .map_err(|e| Ineligible(format!("fused object emit: {e}")))?;
+    Ok(buf.as_slice().to_vec())
+}
+
+/// Cross-section value cache for whole-edge SSA emission (task #24).
+/// Lives for one composition's edge function; sections hand it forward.
+/// Insertions happen ONLY at points that dominate every later section
+/// (section top level / the driver's hoist prelude) — never from
+/// inside def() recursion, so arm-local values can never leak.
+#[derive(Default)]
+struct EdgeCtx<'ctx> {
+    /// slots whose stores must SURVIVE export elision: CF slots read
+    /// by inhibitor loads, WF/eager slots read by outlined bodies.
+    /// Everything else is dead weight in the per-fragment compile
+    /// (Ravi: speed first — the slot-level debug contract is not part
+    /// of the edge-SSA artifact surface).
+    /// (Rc: under sched outlining every section's fresh EdgeCtx shares
+    /// the one keep-set — the clone is a pointer bump, not a rebuild)
+    exports: std::rc::Rc<std::collections::HashSet<u32>>,
+    /// position-latched values: CF/WF and eager defs at their compute
+    /// position — what the arena slots hold.  NEVER evicted (eviction
+    /// would change latched semantics, not just performance).
+    latched: HashMap<(usize, StrId), IntValue<'ctx>>,
+    /// speculative cross-rule shares (unslotted body defs, hoisted by
+    /// the driver); the driver evicts after any exec section whose
+    /// write-set intersects the def's unstable-read set.
+    shared: HashMap<(usize, StrId), IntValue<'ctx>>,
+    /// activity gating: the CURRENT section body sits behind a dirty
+    /// test and may be SKIPPED at runtime — its SSA values do not
+    /// dominate later sections, so it must not publish position-
+    /// latched values (readers fall back to slot loads, which a
+    /// skipped section leaves holding last edge's — correct — values)
+    gate_no_latch: bool,
+}
+
+struct Lower<'a, 'ctx> {
+    env: &'a PlanEnv<'a>,
+    ctx: &'ctx Context,
+    module: &'a Module<'ctx>,
+    builder: Builder<'ctx>,
+    cbs: Callbacks<'ctx>,
+    spec: &'a RuleSpec,
+    /// whole-edge SSA cache; None outside edge-function emission.
+    /// Owned by the section's Lower and handed back to the driver.
+    edge: Option<EdgeCtx<'ctx>>,
+    /// where this function's sites begin in its RULE's table.  A rule
+    /// has one table and each function numbers from zero, so an exec
+    /// lowering that did not just follow its own sched lowering starts
+    /// at the origin trial_lower recorded.  Zero for a sched fn.
+    site_origin: u32,
+    foreign_origin: u32,
+    /// outlined def pieces callable from this lowering (None while the
+    /// helper set itself is being compiled bottom-up)
+    outlined: Option<&'a HelperMap>,
+    /// the piece being lowered right now (its own def must expand
+    /// inline, not self-call)
+    helper_self: Option<(usize, StrId)>,
+    /// exec dedup mode: (subtree region of spec.inst, base param,
+    /// ordinal param).  In-region slots address as base + (slot -
+    /// region.0); callback sites report the runtime ordinal.  None =
+    /// baked absolute addressing (sched fns, trial).
+    dedup: Option<(u32, u32, IntValue<'ctx>, IntValue<'ctx>)>,
+    /// While lowering a shared boundary fn: the site bases its caller
+    /// passed, one per call-site table (the two have independent index
+    /// spaces).  Each is the first index of the block the caller
+    /// reserved, so a site adds its own index.  None in a rule body,
+    /// which indexes its own table from zero.
+    bnd_prim_site: Option<IntValue<'ctx>>,
+    bnd_foreign_site: Option<IntValue<'ctx>>,
+    /// (instance, reset port) -> pointer to the arena word holding that
+    /// port's level, resolved through the instance's reset table.  The
+    /// key carries the instance because inlining a child's cone moves
+    /// the frame onto a descendant, which has a reset table of its own.
+    /// Emitted into the function's ENTRY block on first use, so a port
+    /// read a hundred times costs one load: the table entry is a
+    /// function of the base parameter alone, which does not change.
+    reset_ptrs: HashMap<(usize, StrId), PointerValue<'ctx>>,
+    /// AOT: emit BOTH halves of the rule under the CLASS symbol
+    /// instead of the spec's own.  The in-process JIT lowers every spec separately
+    /// into one module, so it must keep per-spec names; a per-type
+    /// object holds one body per class and names it for the class, so
+    /// that two designs emit the same symbol for the same code.
+    share_sym: Option<String>,
+    foreign_stmts: Vec<ForeignSpec>,
+    prim_calls: Vec<PrimCallSpec>,
+}
+
+/// Per-scope lowering state: the arena pointer, the instance whose
+/// names resolve here, and the SSA maps.  Method inlining opens a
+/// fresh child Frame (its defs may depend on the call's arguments, so
+/// the memo cannot be shared).
+/// A lowered value.
+///
+/// Wide values are carried word-decomposed rather than as a single `iN`:
+/// bsc lowers struct build/select to Concat/Extract, so these are only
+/// ever assembled, moved and taken apart, and materialising them makes
+/// LLVM legalise every operation over them (measured ~7x on a 5600-bit
+/// pack/select/unpack function).  Element `i` of `Wide` is bits
+/// `[i*W, (i+1)*W)` of the value, `W` being the target's word size, so
+/// the representation needs no separate layout.
+///
+/// This is the return type of `expr`, deliberately, rather than an
+/// opt-in alternative to it: an operator that has not been taught about
+/// chunks must say so by calling `as_scalar`, which makes every
+/// materialisation a visible decision instead of a silent default.
+#[derive(Debug, Clone)]
+enum Val<'ctx> {
+    Scalar(IntValue<'ctx>),
+    Wide(Vec<IntValue<'ctx>>),
+}
+
+/// Is word-decomposed lowering on?  `TRS_CHUNK_WIDE=0` turns it off so
+/// the two lowerings can be compared on the same binary.
+fn chunking_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| !matches!(std::env::var("TRS_CHUNK_WIDE").as_deref(), Ok("0")))
+}
+
+/// Width of word `i` of a `total`-bit decomposition; the last word is
+/// short when the width is not a whole number of words.
+fn word_width_at(i: u32, total: u32, w: u32) -> u32 {
+    let lo = i * w;
+    if lo >= total {
+        0
+    } else {
+        w.min(total - lo)
+    }
+}
+
+impl<'ctx> Val<'ctx> {
+    /// The value as a single integer, packing if it is decomposed.  This
+    /// is the escape hatch that keeps operators which need the whole
+    /// value -- wide arithmetic included, rare but legal Bluespec --
+    /// working unchanged.
+    fn as_scalar(self, lc: &mut Lower<'_, 'ctx>, width: u32) -> IntValue<'ctx> {
+        match self {
+            Val::Scalar(v) => v,
+            Val::Wide(ws) => lc.pack(&ws, width),
+        }
+    }
+
+    /// The decomposition, or None when this is a plain scalar.
+    fn words(&self) -> Option<&[IntValue<'ctx>]> {
+        match self {
+            Val::Wide(ws) => Some(ws),
+            Val::Scalar(_) => None,
+        }
+    }
+}
+
+struct Frame<'ctx> {
+    arena: PointerValue<'ctx>,
+    /// env pointer (exec functions only)
+    envp: Option<PointerValue<'ctx>>,
+    /// the instance names resolve against
+    inst: usize,
+    /// Some(mi) while inlining method mi of `inst` (foreign-statement
+    /// tokens must name the container body)
+    method_idx: Option<usize>,
+    /// method argument port name -> (value, width) for the current call
+    args: HashMap<StrId, (IntValue<'ctx>, u32)>,
+    /// def name -> computed value (cone memo or body locals)
+    ssa: HashMap<StrId, IntValue<'ctx>>,
+    /// def name -> word-decomposed binding.  A name here has NOT been
+    /// packed; `def()` packs on demand and caches into `ssa`, while
+    /// `expr()` hands the words straight to consumers that understand
+    /// them.  Without this the decomposition dies at the first binding,
+    /// since every later reference goes through a name.
+    chunks: HashMap<StrId, Vec<IntValue<'ctx>>>,
+    /// defs currently being expanded (cycle guard)
+    expanding: Vec<StrId>,
+    /// defs whose positioned binding lived inside a conditional arm
+    /// and died at the join: post-arm references must NOT re-expand
+    /// the def table (the stmt's positioned expr may differ) — they
+    /// make the design ineligible instead
+    dead_defs: std::collections::HashSet<StrId>,
+    /// ActionValue task results by cookie (Expr::TaskValue reads):
+    /// (value, width)
+    tasks: HashMap<u32, (IntValue<'ctx>, u32)>,
+    /// method arg values latched at inline AV call sites, gated on the
+    /// call condition (select(cond, v, 0) — the interp's per-edge
+    /// latched-if-called-else-0), keyed by (child instance name, arg
+    /// port name).  Expr::MethValue result cones read them.
+    av_args: HashMap<(StrId, StrId), (IntValue<'ctx>, u32)>,
+    /// join-safe ActionValue task results (value alloca, width), keyed
+    /// by the bound def/temp name and by the cookie's synthetic key:
+    /// the interp's ctx.locals persists past a Cond join, so a task
+    /// executed inside an arm is readable after it — the alloca
+    /// initializes to the undet pattern (what a never-run arm's read
+    /// yields) and stores at task execution
+    av_slots: HashMap<StrId, (PointerValue<'ctx>, u32)>,
+    /// effectful-eval def memos (value alloca, valid-flag alloca):
+    /// evaluate at FIRST dynamic reference this invocation, reuse
+    /// after — even across Cond joins where the ssa binding dies
+    thunks: HashMap<StrId, (PointerValue<'ctx>, PointerValue<'ctx>)>,
+    /// widths of SYNTHETIC ActionValue result defs (in no def table
+    /// — expr_width would otherwise fail on a direct reference)
+    av_widths: HashMap<StrId, u32>,
+    /// exec-body scope (reloads eager slots) vs sched scope (stores them)
+    is_exec: bool,
+    /// inline depth (method-call recursion guard)
+    depth: u32,
+}
+
+impl<'a, 'ctx> Lower<'a, 'ctx> {
+    /// Callable pointer for a runtime callback: the baked constant, or
+    /// a load from the named global (AOT; filled by the loader).
+    fn cb_callee(&self, a: CbAddr<'ctx>) -> PointerValue<'ctx> {
+        match a {
+            CbAddr::Baked(p) => p,
+            CbAddr::Global(g) => self
+                .builder
+                .build_load(
+                    self.ctx.ptr_type(AddressSpace::default()),
+                    g.as_pointer_value(),
+                    "cbp",
+                )
+                .unwrap()
+                .into_pointer_value(),
+        }
+    }
+
+    fn ie(&self, inst: usize) -> Result<&'a InstEnv, Ineligible> {
+        match self.env.insts.get(&inst) {
+            Some(e) => Ok(e),
+            None => nope("instance outside the plan"),
+        }
+    }
+
+    fn rule(&self) -> &trs_ir::Rule {
+        let mir = self.env.insts[&self.spec.inst].mir;
+        &self.env.d.modules[mir].rules[self.spec.rule_idx]
+    }
+
+    fn ity(&self, w: u32) -> IntType<'ctx> {
+        // callers guarantee w >= 1 (zero widths are Ineligible earlier)
+        self.ctx
+            .custom_width_int_type(std::num::NonZeroU32::new(w.max(1)).unwrap())
+            .unwrap_or_else(|e| panic!("trs jit: int type i{w}: {e}"))
+    }
+
+    fn def_width(&self, inst: usize, name: StrId) -> Result<u32, Ineligible> {
+        let ie = self.ie(inst)?;
+        if ie.cfwf_slot.contains_key(&name) {
+            return Ok(1);
+        }
+        let m = &self.env.d.modules[ie.mir];
+        match m.def(name) {
+            Some(d) if d.width >= 1 => Ok(d.width),
+            Some(_) => Ok(0), // zero-width def: the empty bit-vector
+            None => Err(Ineligible(format!(
+                "unknown def (width): {}",
+                self.env.d.strings[name as usize]
+            ))),
+        }
+    }
+
+    fn expr_width(&self, f: &Frame<'ctx>, e: &Expr) -> Result<u32, Ineligible> {
+        match e {
+            Expr::Def(n) => match f.av_widths.get(n) {
+                Some(&w) => Ok(w),
+                None => self.def_width(f.inst, *n),
+            },
+            Expr::Port(p) => match f.args.get(p) {
+                Some(&(_, w)) => Ok(w),
+                None => {
+                    let ie = self.ie(f.inst)?;
+                    if ie.real_consts.contains_key(p) {
+                        return Ok(64); // f64 bits carrier
+                    }
+                    if let Some(&(w, _)) = ie.wide_consts.get(p) {
+                        return Ok(w);
+                    }
+                    // a module argument: its width is the module's
+                    // declaration, carried on the slot
+                    if let Some(&(_, w)) = ie.arg_slot.get(p) {
+                        return Ok(w);
+                    }
+                    Ok(ie.port_consts.get(p).map_or(1, |&(w, _)| w)) // reset/EN ports read 1 bit
+                }
+            },
+            Expr::Param(p) => {
+                let ie = self.ie(f.inst)?;
+                if let Some(&(_, w)) = ie.arg_slot.get(p) {
+                    return Ok(w);
+                }
+                if ie.real_consts.contains_key(p) {
+                    return Ok(64); // f64 bits carrier
+                }
+                if let Some(&(w, _)) = ie.wide_consts.get(p) {
+                    return Ok(w);
+                }
+                if let Some(&(_, w)) = ie.arg_slot.get(p) {
+                    return Ok(w);
+                }
+                match ie.port_consts.get(p) {
+                    Some(&(w, _)) => Ok(w),
+                    None => nope("parameter not constant-lowerable"),
+                }
+            }
+            Expr::Real(_) => Ok(64), // f64 bits carrier
+            Expr::Gate { .. } => Ok(1),
+            Expr::Const { width, .. }
+            | Expr::MethCall { width, .. }
+            | Expr::MethValue { width, .. }
+            | Expr::TaskValue { width, .. }
+            | Expr::ForeignCall { width, .. }
+            | Expr::Prim { width, .. }
+            | Expr::If { width, .. }
+            | Expr::Case { width, .. } => Ok(*width), // 0 = empty bit-vector
+            _ => nope(format!("expression kind not compilable: {}", expr_kind(e))),
+        }
+    }
+
+    /// Resize `v` (of width `from`) to width `to`.
+    fn to_w(&self, v: IntValue<'ctx>, from: u32, to: u32, signed: bool) -> IntValue<'ctx> {
+        use std::cmp::Ordering::*;
+        // zero-width values are the constant empty bit-vector: any
+        // resize of one is 0, and a resize TO width 0 is the i1-carried
+        // zero (ity(0) = i1).  from.max(1) is v's actual LLVM type.
+        if from == 0 || to == 0 {
+            return self.ity(to).const_zero();
+        }
+        match from.cmp(&to) {
+            Equal => v,
+            Greater => self
+                .builder
+                .build_int_truncate(v, self.ity(to), "tr")
+                .unwrap(),
+            Less => {
+                if signed {
+                    self.builder
+                        .build_int_s_extend(v, self.ity(to), "sx")
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_int_z_extend(v, self.ity(to), "zx")
+                        .unwrap()
+                }
+            }
+        }
+    }
+
+    /// i1 truthiness of a width-w value.  A zero-width value is the
+    /// empty bit-vector — constant false, whatever bit its i1 carrier
+    /// happens to hold.
+    fn nonzero(&self, v: IntValue<'ctx>, w: u32) -> IntValue<'ctx> {
+        if w == 0 {
+            return self.ctx.bool_type().const_zero();
+        }
+        self.builder
+            .build_int_compare(IntPredicate::NE, v, self.ity(w).const_zero(), "nz")
+            .unwrap()
+    }
+
+    /// The rule ordinal a callback site in this function reports.  A
+    /// shared body (an exec fn deduped across a module type, a
+    /// boundary fn) serves many ordinals and takes one at run time;
+    /// anything else names its own.
+    fn site_ordinal(&self) -> IntValue<'ctx> {
+        match self.dedup {
+            Some((_, _, _, ord)) => ord,
+            None => self
+                .ctx
+                .i32_type()
+                .const_int(self.spec.ordinal as u64, false),
+        }
+    }
+
+    /// Where call site `local` sits in the table it reports into.  A
+    /// boundary fn's sites land in the block its caller reserved, so
+    /// the caller's base is added; every other function indexes its
+    /// own table from zero.
+    fn site_index(&self, base: Option<IntValue<'ctx>>, origin: u32, local: u32) -> IntValue<'ctx> {
+        let idx = self
+            .ctx
+            .i32_type()
+            .const_int((origin + local) as u64, false);
+        match base {
+            Some(b) => self.builder.build_int_add(b, idx, "site").unwrap(),
+            None => idx,
+        }
+    }
+
+    fn slot_ptr(&self, f: &Frame<'ctx>, slot: u32) -> PointerValue<'ctx> {
+        let i64t = self.ctx.i64_type();
+        let idx = self.slot_index(slot);
+        unsafe { self.builder.build_gep(i64t, f.arena, &[idx], "sp").unwrap() }
+    }
+
+    /// Arena index for a slot: region-relative through the base param
+    /// in exec dedup mode (globals like now/reset stay absolute).
+    fn slot_index(&self, slot: u32) -> IntValue<'ctx> {
+        let i64t = self.ctx.i64_type();
+        if let Some((r0, r1, base, _)) = self.dedup {
+            if slot >= r0 && slot < r1 {
+                return self
+                    .builder
+                    .build_int_add(base, i64t.const_int((slot - r0) as u64, false), "rsl")
+                    .unwrap();
+            }
+        }
+        i64t.const_int(slot as u64, false)
+    }
+
+    /// Pointer to the word holding reset port `port` of `inst`.
+    ///
+    /// A reset node is design-global and sits ahead of every region, so
+    /// its slot cannot be baked into code that is shared by module
+    /// type: two designs wire one type to different nodes.  The
+    /// instance's reset table, first in its region, holds the slot; one
+    /// region-relative load reaches it, and the result is the address
+    /// every read of that port then uses.
+    ///
+    /// The load goes in the function's ENTRY block, not at the use
+    /// site.  Its only input is the base parameter, which is constant
+    /// for the call, so a port read under a branch or in a loop still
+    /// pays exactly once -- and LLVM never has to prove the table does
+    /// not alias the arena writes that follow.
+    fn reset_ptr(&mut self, f: &Frame<'ctx>, port: StrId) -> Result<PointerValue<'ctx>, Ineligible> {
+        let inst = f.inst;
+        if let Some(&p) = self.reset_ptrs.get(&(inst, port)) {
+            return Ok(p);
+        }
+        let ie = self.ie(inst)?;
+        let (tbl, ord) = (ie.reset_tbl, *ie.reset_ord.get(&port).ok_or_else(|| {
+            Ineligible(format!("reset port {port} has no reset-table index"))
+        })?);
+        let i64t = self.ctx.i64_type();
+        let here = self.builder.get_insert_block().expect("builder placed");
+        let entry = here
+            .get_parent()
+            .and_then(|fun| fun.get_first_basic_block())
+            .expect("function with an entry block");
+        match entry.get_terminator() {
+            Some(t) => self.builder.position_before(&t),
+            None => self.builder.position_at_end(entry),
+        }
+        // the table entry: an absolute slot, read region-relative
+        let slot = self.load_word(f, tbl + ord);
+        let ptr = unsafe {
+            self.builder
+                .build_gep(i64t, f.arena, &[slot], "rstp")
+                .unwrap()
+        };
+        self.builder.position_at_end(here);
+        self.reset_ptrs.insert((inst, port), ptr);
+        Ok(ptr)
+    }
+
+    /// Load one raw arena word.
+    fn load_word(&self, f: &Frame<'ctx>, slot: u32) -> IntValue<'ctx> {
+        let p = self.slot_ptr(f, slot);
+        self.builder
+            .build_load(self.ctx.i64_type(), p, "ld")
+            .unwrap()
+            .into_int_value()
+    }
+
+    fn store_word(&self, f: &Frame<'ctx>, slot: u32, v: IntValue<'ctx>) {
+        let p = self.slot_ptr(f, slot);
+        self.builder.build_store(p, v).unwrap();
+    }
+
+    /// A width-`w` state read as words, one load per word.  The arena is
+    /// word-sloted, so the decomposition is what the loads already
+    /// produce -- packing them only to have a consumer take them apart
+    /// again is the round trip this avoids.
+    fn load_words(&self, f: &Frame<'ctx>, base: u32, w: u32) -> Vec<IntValue<'ctx>> {
+        let ws = self.word_bits();
+        let n = ((w + ws - 1) / ws) as u32;
+        let mut out = Vec::with_capacity(n as usize);
+        for k in 0..n {
+            let word = self.load_word(f, base + k);
+            let cw = ws.min(w - k * ws);
+            out.push(self.to_w(word, 64, cw, false));
+        }
+        out
+    }
+
+    /// Load a width-w value from ceil(w/64) consecutive slots.
+    fn load_val(&self, f: &Frame<'ctx>, base: u32, w: u32) -> IntValue<'ctx> {
+        if w <= 64 {
+            let word = self.load_word(f, base);
+            return self.to_w(word, 64, w, false);
+        }
+        let t = self.ity(w);
+        let mut acc = t.const_zero();
+        for k in 0..words_for(w) {
+            let word = self.load_word(f, base + k);
+            let wide = self.builder.build_int_z_extend(word, t, "wz").unwrap();
+            let sh = t.const_int((64 * k) as u64, false);
+            let pos = self.builder.build_left_shift(wide, sh, "wsh").unwrap();
+            acc = self.builder.build_or(acc, pos, "wor").unwrap();
+        }
+        acc
+    }
+
+    /// Load a width-w value whose first slot is base + idx*ceil(w/64)
+    /// with idx only known at run time (FIFO first: data[fst]).
+    fn load_val_dyn(
+        &self,
+        f: &Frame<'ctx>,
+        base: u32,
+        idx: IntValue<'ctx>,
+        w: u32,
+    ) -> IntValue<'ctx> {
+        let i64t = self.ctx.i64_type();
+        let words = w.max(1).div_ceil(64);
+        let scaled = self
+            .builder
+            .build_int_mul(idx, i64t.const_int(words as u64, false), "fsc")
+            .unwrap();
+        let bidx = self.slot_index(base);
+        let off = self.builder.build_int_add(scaled, bidx, "foff").unwrap();
+        if w <= 64 {
+            let p = unsafe {
+                self.builder
+                    .build_gep(i64t, f.arena, &[off], "fdp")
+                    .unwrap()
+            };
+            let word = self
+                .builder
+                .build_load(i64t, p, "fdl")
+                .unwrap()
+                .into_int_value();
+            return self.to_w(word, 64, w, false);
+        }
+        let t = self.ity(w);
+        let mut acc = t.const_zero();
+        for k in 0..words {
+            let ok = self
+                .builder
+                .build_int_add(off, i64t.const_int(k as u64, false), "fok")
+                .unwrap();
+            let p = unsafe { self.builder.build_gep(i64t, f.arena, &[ok], "fdp").unwrap() };
+            let word = self
+                .builder
+                .build_load(i64t, p, "fdl")
+                .unwrap()
+                .into_int_value();
+            let wide = self.builder.build_int_z_extend(word, t, "wz").unwrap();
+            let sh = t.const_int((64 * k) as u64, false);
+            let pos = self.builder.build_left_shift(wide, sh, "wsh").unwrap();
+            acc = self.builder.build_or(acc, pos, "wor").unwrap();
+        }
+        acc
+    }
+
+    /// Store a width-w value at base + idx*ceil(w/64) with idx only
+    /// known at run time (FIFO enq: data[(fst+elems)%size]).
+    #[allow(dead_code)]
+    fn store_val_dyn(
+        &self,
+        f: &Frame<'ctx>,
+        base: u32,
+        idx: IntValue<'ctx>,
+        w: u32,
+        v: IntValue<'ctx>,
+    ) {
+        let i64t = self.ctx.i64_type();
+        let words = w.max(1).div_ceil(64);
+        let scaled = self
+            .builder
+            .build_int_mul(idx, i64t.const_int(words as u64, false), "fsc")
+            .unwrap();
+        let bidx = self.slot_index(base);
+        let off = self.builder.build_int_add(scaled, bidx, "foff").unwrap();
+        let t = self.ity(w.max(1));
+        for k in 0..words {
+            let ok = self
+                .builder
+                .build_int_add(off, i64t.const_int(k as u64, false), "fok")
+                .unwrap();
+            let p = unsafe { self.builder.build_gep(i64t, f.arena, &[ok], "fdp").unwrap() };
+            let word = if w <= 64 {
+                self.to_w(v, w, 64, false)
+            } else {
+                let sh = t.const_int((64 * k) as u64, false);
+                let shifted = self.builder.build_right_shift(v, sh, false, "fsh").unwrap();
+                self.builder
+                    .build_int_truncate(shifted, i64t, "ftr")
+                    .unwrap()
+            };
+            self.builder.build_store(p, word).unwrap();
+        }
+    }
+
+    /// Store a word-decomposed value: one store per word, no slicing.
+    /// The packed form is never built, which is the other half of the
+    /// round trip `load_words` removes at the read end.
+    fn store_words(&self, f: &Frame<'ctx>, base: u32, w: u32, ws: &[IntValue<'ctx>]) {
+        let wb = self.word_bits();
+        for (k, v) in ws.iter().enumerate() {
+            let cw = word_width_at(k as u32, w, wb);
+            if cw == 0 {
+                break;
+            }
+            let word = self.to_w(*v, cw, 64, false);
+            self.store_word(f, base + k as u32, word);
+        }
+    }
+
+    /// Store a width-w value into ceil(w/64) consecutive slots.
+    fn store_val(&self, f: &Frame<'ctx>, base: u32, w: u32, v: IntValue<'ctx>) {
+        if w <= 64 {
+            let word = self.to_w(v, w, 64, false);
+            self.store_word(f, base, word);
+            return;
+        }
+        let t = self.ity(w);
+        for k in 0..words_for(w) {
+            let sh = t.const_int((64 * k) as u64, false);
+            let piece = self.builder.build_right_shift(v, sh, false, "psh").unwrap();
+            let word = self
+                .builder
+                .build_int_truncate(piece, self.ctx.i64_type(), "ptr")
+                .unwrap();
+            self.store_word(f, base + k, word);
+        }
+    }
+
+    /// Constant of width w from the BIR's LE 32-bit limbs.
+    fn cval(&self, w: u32, limbs32: &[u32]) -> IntValue<'ctx> {
+        let mut words = vec![0u64; words_for(w) as usize];
+        for (i, &l) in limbs32.iter().enumerate() {
+            if i / 2 < words.len() {
+                words[i / 2] |= (l as u64) << (32 * (i % 2));
+            }
+        }
+        self.ity(w).const_int_arbitrary_precision(&words)
+    }
+
+    /// Read bits `[lo, hi]` out of a word-decomposed value.  Returns
+    /// None for a scalar source, or when the field reaches past the last
+    /// word (the caller's zero-extension rules then apply).
+    fn extract_words(
+        &mut self,
+        src: &Val<'ctx>,
+        lo: u32,
+        hi: u32,
+        srcw: u32,
+        width: u32,
+    ) -> Option<IntValue<'ctx>> {
+        let words = src.words()?.to_vec();
+        let w = self.word_bits();
+        let (wi, wj) = (lo / w, hi / w);
+        if wj as usize >= words.len() {
+            return None;
+        }
+        let off = lo % w;
+        // A field spans wj - wi + 1 words, which for a value wider
+        // than two of them has a middle: every word in the range
+        // contributes, each at its own offset.
+        let mut acc = self.ity(width).const_zero();
+        for wk in wi..=wj {
+            let wkw = word_width_at(wk, srcw, w);
+            if wkw == 0 {
+                continue;
+            }
+            let src_lo = wk * w;
+            let word = words[wk as usize];
+            // the first word carries the field from `off`; shifting
+            // in the word's own type keeps the amount in range
+            let (part, k) = if src_lo < lo {
+                let sh = self.ity(wkw).const_int(u64::from(lo - src_lo), false);
+                let got = self.builder.build_right_shift(word, sh, false, "wx");
+                (got.unwrap(), 0)
+            } else {
+                (word, src_lo - lo)
+            };
+            if k >= width {
+                continue;
+            }
+            let pz = self.to_w(part, wkw, width, false);
+            let placed = if k == 0 {
+                pz
+            } else {
+                let ks = self.ity(width).const_int(u64::from(k), false);
+                self.builder.build_left_shift(pz, ks, "wxh").unwrap()
+            };
+            acc = self.builder.build_or(acc, placed, "wxo").unwrap();
+        }
+        Some(self.to_w(acc, width, width, false))
+    }
+
+    /// Pack a word-decomposed value into a single integer.
+    fn pack(&mut self, words: &[IntValue<'ctx>], width: u32) -> IntValue<'ctx> {
+        let w = self.word_bits();
+        let ty = self.ity(width);
+        let mut acc = ty.const_zero();
+        for (i, v) in words.iter().enumerate() {
+            let lo = (i as u32) * w;
+            if lo >= width {
+                break;
+            }
+            let cw = w.min(width - lo);
+            let wide = self.to_w(*v, cw, width, false);
+            let placed = if lo == 0 {
+                wide
+            } else {
+                let k = ty.const_int(u64::from(lo), false);
+                self.builder.build_left_shift(wide, k, "pk").unwrap()
+            };
+            acc = self.builder.build_or(acc, placed, "po").unwrap();
+        }
+        acc
+    }
+
+    /// The target's native integer width (see crate::chunk).
+    fn word_bits(&self) -> u32 {
+        let dl = self.module.get_data_layout();
+        crate::chunk::word_bits(dl.as_str().to_string_lossy().as_ref(), 64)
+    }
+
+    /// How many words a value of `width` bits decomposes into.
+    fn word_count(&self, width: u32) -> usize {
+        let w = self.word_bits();
+        ((width + w - 1) / w) as usize
+    }
+
+    /// Lower an expression, keeping it word-decomposed where that is
+    /// natural.  Callers needing a single integer say so via
+    /// `Val::as_scalar`.
+    fn expr(&mut self, f: &mut Frame<'ctx>, e: &Expr) -> Result<Val<'ctx>, Ineligible> {
+        // TRS_CHUNK_WIDE=0 forces every value packed, for A/B against
+        // the pre-decomposition lowering.  Checked once per process.
+        if !chunking_enabled() {
+            return Ok(Val::Scalar(self.expr_scalar(f, e)?));
+        }
+        let word = self.word_bits();
+        if let Expr::Def(n) = e {
+            if let Some(ws) = f.chunks.get(n) {
+                return Ok(Val::Wide(ws.clone()));
+            }
+        }
+        if let Expr::Prim {
+            op: PrimOp::Concat,
+            args,
+            width,
+        } = e
+        {
+            if *width > word {
+                if let Some(ws) = self.concat_words(f, args, *width)? {
+                    return Ok(Val::Wide(ws));
+                }
+            }
+        }
+        if let Expr::If {
+            width,
+            cond,
+            then_,
+            else_,
+        } = e
+        {
+            if *width > word {
+                let cw = self.expr_width(f, cond)?;
+                let c0 = self.expr_scalar(f, cond)?;
+                let cz = self.nonzero(c0, cw);
+                if let Some(v) = self.wide_mux(f, *width, cz, then_, else_)? {
+                    return Ok(v);
+                }
+            }
+        }
+        // A wide register read is already word-shaped in the arena: take
+        // the loads as the decomposition rather than packing them only
+        // for a consumer to slice them apart again.
+        if let Expr::MethCall {
+            width,
+            instance,
+            method,
+            args,
+            ..
+        } = e
+        {
+            if *width > word && args.is_empty() {
+                let mname = self.env.d.strings[*method as usize].clone();
+                if matches!(mname.as_str(), "read" | "get" | "_read") {
+                    let slot = self.ie(f.inst)?.reg_slot.get(instance).copied();
+                    if let Some((base, rw)) = slot {
+                        if rw == *width {
+                            return Ok(Val::Wide(self.load_words(f, base, rw)));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Val::Scalar(self.expr_scalar(f, e)?))
+    }
+
+    /// Build a concat's operands straight into word slots, so the packed
+    /// form is never constructed.
+    fn concat_words(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        args: &[Expr],
+        width: u32,
+    ) -> Result<Option<Vec<IntValue<'ctx>>>, Ineligible> {
+        let w = self.word_bits();
+        // operand bit positions, first arg most significant
+        let mut spans = Vec::with_capacity(args.len());
+        let mut hi = width;
+        for a in args {
+            let aw = self.expr_width(f, a)?;
+            if aw > hi {
+                return Ok(None);
+            }
+            hi -= aw;
+            spans.push((hi, aw));
+        }
+        if hi != 0 {
+            return Ok(None);
+        }
+        let nw = self.word_count(width);
+        let mut out = Vec::with_capacity(nw);
+        for i in 0..nw {
+            let clo = (i as u32) * w;
+            let cw = w.min(width - clo);
+            let cty = self.ity(cw);
+            let mut acc: Option<IntValue<'ctx>> = None;
+            for (&(olo, ow), a) in spans.iter().zip(args.iter()) {
+                if ow == 0 || olo >= clo + cw || olo + ow <= clo {
+                    continue;
+                }
+                let v = self.expr_scalar(f, a)?;
+                // widen to a type that can hold the shift, then trim
+                let tw = cw.max(ow) + w;
+                let vz = self.to_w(v, ow, tw, false);
+                let sh = i64::from(olo) - i64::from(clo);
+                let tty = self.ity(tw);
+                let moved = if sh >= 0 {
+                    let k = tty.const_int(sh as u64, false);
+                    self.builder.build_left_shift(vz, k, "kl").unwrap()
+                } else {
+                    let k = tty.const_int((-sh) as u64, false);
+                    self.builder.build_right_shift(vz, k, false, "kr").unwrap()
+                };
+                let piece = self.to_w(moved, tw, cw, false);
+                acc = Some(match acc {
+                    None => piece,
+                    Some(p) => self.builder.build_or(p, piece, "ko").unwrap(),
+                });
+            }
+            out.push(acc.unwrap_or_else(|| cty.const_zero()));
+        }
+        Ok(Some(out))
+    }
+
+    /// Lower an expression to an iN value of its BSV width.
+    fn expr_scalar(&mut self, f: &mut Frame<'ctx>, e: &Expr) -> Result<IntValue<'ctx>, Ineligible> {
+        // string-typed expressions lower uniformly as i64 ids wherever
+        // they appear (def bindings, cones, muxes) — the consumers
+        // (StrDyn foreign args, string Eq, concat) understand the
+        // carrier; concat inside a pure value cone stays ineligible
+        // (no task context)
+        if self.expr_is_str(f, e) {
+            return self.str_expr(f, e, None);
+        }
+        match e {
+            Expr::Const { width, limbs } => {
+                if *width == 0 {
+                    // the empty bit-vector: value is always 0, carried
+                    // as i1 (ity(0)); the interp's Value width-0 masks
+                    // every op to 0 identically
+                    return Ok(self.ity(0).const_zero());
+                }
+                Ok(self.cval(*width, limbs))
+            }
+            Expr::Def(n) => self.def(f, *n),
+            Expr::Port(p) => {
+                if let Some(&(v, _)) = f.args.get(p) {
+                    return Ok(v);
+                }
+                let ie = self.ie(f.inst)?;
+                if ie.reset_slot.contains_key(p) {
+                    // shared-by-type code reaches the design's reset
+                    // node through the instance's table; a design-local
+                    // lowering (sched fns, trial) bakes the slot, which
+                    // is correct there and one load cheaper
+                    let word = if self.dedup.is_some() {
+                        let ptr = self.reset_ptr(f, *p)?;
+                        self.builder
+                            .build_load(self.ctx.i64_type(), ptr, "rstld")
+                            .unwrap()
+                            .into_int_value()
+                    } else {
+                        self.load_word(f, ie.reset_slot[p])
+                    };
+                    return Ok(self.to_w(word, 64, 1, false));
+                }
+                if let Some(&slot) = ie.en_slot.get(p) {
+                    let word = self.load_word(f, slot);
+                    return Ok(self.to_w(word, 64, 1, false));
+                }
+                // rung-40 tripwire (external review): a MethodEnable
+                // port reaching lowering WITHOUT a slot means the
+                // liveness pre-pass missed a runtime reader — never
+                // fall through toward a silent 0; fail loudly naming
+                // the port so a reach mismatch is a bug report, not a
+                // miscompile.  (Pruned plans only: traced plans keep
+                // every EN slot, so this arm is unreachable there.)
+                if self.env.d.modules[ie.mir]
+                    .inputs
+                    .iter()
+                    .any(|q| q.name == *p && q.kind == trs_ir::PortKind::MethodEnable)
+                {
+                    panic!(
+                        "trs: BUG: enable port '{}' was pruned by the \
+                         fast-plan liveness walk but is read by compiled \
+                         lowering — report this (rung-40 EN pruning)",
+                        self.env.d.strings[*p as usize]
+                    );
+                }
+                // a module argument: a load from this instance's
+                // region, where it used to be a folded constant
+                if let Some(&(base, w)) = ie.arg_slot.get(p) {
+                    if w == 0 {
+                        return Ok(self.ity(0).const_zero());
+                    }
+                    return Ok(self.load_val(f, base, w));
+                }
+                if let Some(&(w, v)) = ie.port_consts.get(p) {
+                    if w == 0 {
+                        return Ok(self.ity(0).const_zero()); // empty bit-vector
+                    }
+                    return Ok(self.cval(w, &[v as u32, (v >> 32) as u32]));
+                }
+                if let Some(&bits) = ie.real_consts.get(p) {
+                    return Ok(self.ctx.i64_type().const_int(bits, false));
+                }
+                if let Some((w, limbs)) = ie.wide_consts.get(p) {
+                    let (w, limbs) = (*w, limbs.clone());
+                    return Ok(self.cval(w, &limbs));
+                }
+                // input clock-gate port bound at instantiation: the
+                // interp evaluates the recorded gate expr in the OWNER
+                // instance's context, where LATCHED defs win over
+                // recomputation — a compiled re-expansion only matches
+                // when the cone is static (no defs, no prim-state
+                // chases), so dynamic gates stay interp until gate
+                // values get schedule-time slots (mcd_Rand measured a
+                // cross-domain divergence with live re-expansion)
+                // A gate is a value in this instance's own region,
+                // put there by the design-level edge fn once per
+                // edge.  It used to be re-expanded here in the
+                // OWNER's frame, which baked the parent's slots into
+                // a body meant to serve every instance -- and, being
+                // a live re-read rather than a latch, diverged across
+                // clock domains, which is why a dynamic gate was
+                // refused rather than compiled.  Both go away
+                // together: one load, and dynamic gates are ordinary.
+                if let Some(&slot) = ie.gate_slot.get(p) {
+                    let word = self.load_word(f, slot);
+                    return Ok(self.to_w(word, 64, 1, false));
+                }
+                nope("port read outside args/reset/EN/consts")
+            }
+            Expr::Param(p) => {
+                let ie = self.ie(f.inst)?;
+                // FIRST: `real_consts` still holds a value, but only
+                // as a type marker -- the live value is in the slot,
+                // and checking the marker first served the exemplar's
+                // constant to every instance
+                if let Some(&(base, w)) = ie.arg_slot.get(p) {
+                    if w == 0 {
+                        return Ok(self.ity(0).const_zero());
+                    }
+                    return Ok(self.load_val(f, base, w));
+                }
+                if let Some(&bits) = ie.real_consts.get(p) {
+                    return Ok(self.ctx.i64_type().const_int(bits, false));
+                }
+                if let Some((w, limbs)) = ie.wide_consts.get(p) {
+                    let (w, limbs) = (*w, limbs.clone());
+                    return Ok(self.cval(w, &limbs));
+                }
+                if let Some(&(base, w)) = ie.arg_slot.get(p) {
+                    if w == 0 {
+                        return Ok(self.ity(0).const_zero());
+                    }
+                    return Ok(self.load_val(f, base, w));
+                }
+                match ie.port_consts.get(p) {
+                    Some(&(0, _)) => Ok(self.ity(0).const_zero()),
+                    Some(&(w, v)) => Ok(self.cval(w, &[v as u32, (v >> 32) as u32])),
+                    None => nope("parameter not constant-lowerable"),
+                }
+            }
+            Expr::Real(r) => {
+                // reals ride as i64 f64-bits; only Real-marked foreign
+                // args (and real params) consume them, so the bits never
+                // mix into integer arithmetic
+                Ok(self.ctx.i64_type().const_int(r.to_bits(), false))
+            }
+            Expr::Gate { instance, clock } => {
+                // a submodule's output clock gate (AMGate): prim
+                // children answer gate_out() through the trampoline
+                // (GATE_OUT_METHOD sentinel); user children evaluate
+                // their recorded ifc gate expr in the child's frame; no
+                // recorded gate = ungated (constant 1) — all three
+                // mirror the interp's Expr::Gate
+                let ie = self.ie(f.inst)?;
+                let Some(&child) = ie.children.get(instance) else {
+                    return nope("gate read on unknown child");
+                };
+                if self.env.insts.contains_key(&child) {
+                    let cie = self.ie(child)?;
+                    let cmod = &self.env.d.modules[cie.mir];
+                    let g = cmod
+                        .ifc_clock_gates
+                        .iter()
+                        .find(|(n, _)| n == clock)
+                        .map(|(_, e)| e.clone());
+                    return match g {
+                        Some(e) => {
+                            // same latch-semantics restriction as bound
+                            // input gates, except a direct child prim
+                            // gate chase (Expr::Gate) is a LIVE read on
+                            // both engines and stays eligible
+                            if !gate_static(&e) && !matches!(e, Expr::Gate { .. }) {
+                                return nope("dynamic ifc gate (latch semantics)");
+                            }
+                            let mut cf = self.child_frame(f, child, None)?;
+                            self.expr_scalar(&mut cf, &e)
+                        }
+                        None => Ok(self.ity(1).const_int(1, false)),
+                    };
+                }
+                match self.emit_prim_call(f, child, GATE_OUT_METHOD, 0, &[], 1, false)? {
+                    Some(v) => Ok(v),
+                    None => nope("gate_out returned no value"),
+                }
+            }
+            Expr::MethCall {
+                width,
+                instance,
+                method,
+                port,
+                args,
+            } => self.value_call(f, *width, *instance, *method, *port, args),
+            Expr::MethValue {
+                width,
+                instance,
+                method,
+            } => {
+                // the returned value of an ActionValue method: the
+                // interp calls call_value with no args — identical to a
+                // no-arg value method read (port 0)
+                self.value_call(f, *width, *instance, *method, 0, &[])
+            }
+            Expr::If {
+                width,
+                cond,
+                then_,
+                else_,
+            } => {
+                let wc = self.expr_width(f, cond)?;
+                let c = self.expr_scalar(f, cond)?;
+                let cz = self.nonzero(c, wc);
+                // bsc LIFTS shared updates into mux dataflow; lowering
+                // every If as a branch diamond re-manufactures control
+                // flow LLVM's capped speculation cannot fully undo (the
+                // monster bodies' 14k branches).  Pure, small arms keep
+                // bsc's shape: evaluate both, one select.  Arms with
+                // possible side effects (callbacks, unexpanded defs)
+                // stay lazy, matching the interpreter.
+                const SPEC_CAP: u32 = 64;
+                let spec = self
+                    .pure_size(f, then_, SPEC_CAP)
+                    .zip(self.pure_size(f, else_, SPEC_CAP));
+                if spec.is_some() {
+                    let wt = self.expr_width(f, then_)?;
+                    let tv0 = self.expr_scalar(f, then_)?;
+                    let tv = self.to_w(tv0, wt, (*width).max(1), false);
+                    let we = self.expr_width(f, else_)?;
+                    let ev0 = self.expr_scalar(f, else_)?;
+                    let ev = self.to_w(ev0, we, (*width).max(1), false);
+                    return Ok(self
+                        .builder
+                        .build_select(cz, tv, ev, "sel")
+                        .unwrap()
+                        .into_int_value());
+                }
+                if let Some(v) = self.wide_mux(f, *width, cz, then_, else_)? {
+                    return Ok(v.as_scalar(self, *width));
+                }
+                self.lazy_mux(f, *width, cz, then_, else_)
+            }
+            Expr::Case {
+                width,
+                scrutinee,
+                arms,
+                default,
+            } => {
+                // one LLVM switch (backend lowers dense arms to a jump
+                // table — the compare ladder was O(arms) per eval and
+                // dominated the big decision-tree bodies); arms keep
+                // the lazy_mux_fn discipline: scoped SSA, own blocks,
+                // phi at the merge
+                let w = (*width).max(1);
+                let ws = self.expr_width(f, scrutinee)?;
+                // interp semantics (lib.rs Case eval): a scrutinee wider
+                // than 64 bits NEVER matches an arm (as_u64 compare is
+                // gated on width <= 64) — lower the default only.  Keys
+                // outside ws bits can't match either (the interp compares
+                // the untruncated u64), and truncating them into the
+                // switch could alias or duplicate cases.
+                if ws > 64 {
+                    let wd = self.expr_width(f, default)?;
+                    let dv = self.expr_scalar(f, default)?;
+                    return Ok(self.to_w(dv, wd, w, false));
+                }
+                let sv = self.expr_scalar(f, scrutinee)?;
+                let func = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
+                let def_bb = self.ctx.append_basic_block(func, "cd");
+                let merge_bb = self.ctx.append_basic_block(func, "cj");
+                let arm_bbs: Vec<_> = arms
+                    .iter()
+                    .map(|_| self.ctx.append_basic_block(func, "ca"))
+                    .collect();
+                let representable = |k: u64| ws >= 64 || k < (1u64 << ws);
+                let cases: Vec<_> = arms
+                    .iter()
+                    .zip(&arm_bbs)
+                    .filter(|((k, _), _)| representable(*k))
+                    .map(|((k, _), &bb)| (self.ity(ws).const_int_arbitrary_precision(&[*k]), bb))
+                    .collect();
+                self.builder.build_switch(sv, def_bb, &cases).unwrap();
+                let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+                let mut incoming: Vec<(IntValue<'ctx>, _)> = Vec::new();
+                for ((_, arm), &bb) in arms.iter().zip(&arm_bbs) {
+                    self.builder.position_at_end(bb);
+                    let wa = self.expr_width(f, arm)?;
+                    let av0 = self.expr_scalar(f, arm)?;
+                    let av = self.to_w(av0, wa, w, false);
+                    f.ssa = saved.clone();
+                    incoming.push((av, self.builder.get_insert_block().unwrap()));
+                    self.builder.build_unconditional_branch(merge_bb).unwrap();
+                }
+                self.builder.position_at_end(def_bb);
+                let wd = self.expr_width(f, default)?;
+                let dv0 = self.expr_scalar(f, default)?;
+                let dv = self.to_w(dv0, wd, w, false);
+                f.ssa = saved;
+                incoming.push((dv, self.builder.get_insert_block().unwrap()));
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                self.builder.position_at_end(merge_bb);
+                let phi = self.builder.build_phi(self.ity(w), "cv").unwrap();
+                for (v, bb) in &incoming {
+                    phi.add_incoming(&[(v, *bb)]);
+                }
+                Ok(phi.as_basic_value().into_int_value())
+            }
+            Expr::TaskValue { width, cookie } => {
+                // load the join-safe slot when the task has one — valid
+                // from any block, unlike the tphi value, which only
+                // dominates its own arm
+                if let Some(&(p, vw)) = f.av_slots.get(&(0x8000_0000u32 | *cookie)) {
+                    let v = self
+                        .builder
+                        .build_load(self.ity(vw), p, "tval")
+                        .unwrap()
+                        .into_int_value();
+                    return Ok(self.to_w(v, vw, (*width).max(1), false));
+                }
+                match f.tasks.get(cookie) {
+                    Some(&(v, vw)) => Ok(self.to_w(v, vw, (*width).max(1), false)),
+                    None => nope("task value before its task"),
+                }
+            }
+            Expr::Prim { op, width, args } => self.prim(f, *op, *width, args),
+            Expr::ForeignCall { width, func, args } => {
+                self.bdpi_value_call(f, (*width).max(1), *func, args)
+            }
+            _ => nope(format!("expression kind not compilable: {}", expr_kind(e))),
+        }
+    }
+
+    /// Direct BDPI value call (task #22): the interpreter's integer-
+    /// slot ABI emitted inline — Bits by i64, Wide/Poly as i32-limb
+    /// buffers, wide/poly returns via an out-pointer first arg; stdio
+    /// flushes around the call keep printf/$display interleaving
+    /// byte-exact.  System tasks and library-provided imports are not
+    /// in the registry/globals and stay ineligible (v1 posture).
+    fn bdpi_value_call(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        width: u32,
+        func: StrId,
+        args: &[Expr],
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        let Some(ff) = self.bdpi_import(func) else {
+            return nope("foreign value call without BDPI import");
+        };
+        if Self::bdpi_lits_ok(&ff, args) {
+            return self.bdpi_emit(f, width, &ff, args);
+        }
+        // dynamic CString arg: boxed trampoline call — the interp's
+        // foreign_value falls through to bdpi_call, which marshals
+        // Arg::Str for CString params
+        match self.emit_foreign(f, func, args, &[], width, None)? {
+            Some(v) => Ok(v),
+            None => nope("BDPI value call returned no value"),
+        }
+    }
+
+    /// Every FT::CString parameter is bound to a literal Expr::Str —
+    /// the precondition for the direct bdpi_emit fast path.
+    fn bdpi_lits_ok(ff: &trs_ir::ForeignFunc, args: &[Expr]) -> bool {
+        ff.args
+            .iter()
+            .zip(args)
+            .all(|(t, a)| !matches!(t, trs_ir::ForeignType::CString) || matches!(a, Expr::Str(_)))
+    }
+
+    /// The design's BDPI import for `func`, if any (system tasks and
+    /// unknown names return None).
+    fn bdpi_import(&self, func: StrId) -> Option<trs_ir::ForeignFunc> {
+        self.env
+            .d
+            .foreign_funcs
+            .iter()
+            .find(|ff| ff.name == func)
+            .cloned()
+    }
+
+    /// Direct BDPI call at the current insertion point (no condition
+    /// handling here — callers gate action calls themselves).
+    fn bdpi_emit(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        width: u32,
+        ff: &trs_ir::ForeignFunc,
+        args: &[Expr],
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        use trs_ir::ForeignType as FT;
+        let ff = ff.clone();
+        let c_name = self.env.d.strings[ff.c_name as usize].clone();
+        let i64t = self.ctx.i64_type();
+        let i32t = self.ctx.i32_type();
+        let ptrt = self.ctx.ptr_type(AddressSpace::default());
+        let baked = matches!(self.cbs.cb, CbAddr::Baked(_));
+        // callee pointer
+        let callee: PointerValue<'ctx> = if baked {
+            let Some(&addr) = BDPI_SYMS.get().and_then(|m| m.get(&c_name)) else {
+                return nope("BDPI symbol not loaded");
+            };
+            i64t.const_int(addr as u64, false).const_to_pointer(ptrt)
+        } else {
+            let gname = format!("trs_bdpi_{c_name}");
+            let g = self
+                .module
+                .get_global(&gname)
+                .unwrap_or_else(|| self.module.add_global(ptrt, None, &gname));
+            self.builder
+                .build_load(ptrt, g.as_pointer_value(), "bdf")
+                .unwrap()
+                .into_pointer_value()
+        };
+        // task #58 (external-review design): the loader leaves
+        // trs_bdpi_<name> NULL when no companion .so provides the
+        // import — a call through it was the field segfault (ip=0).
+        // Null-check the call site and branch to a noreturn trap that
+        // names the import: dead imports stay harmless (never called,
+        // never trapped), and an executed missing import dies as
+        // loudly as the interp guard.  Baked (JIT) callees are
+        // resolved constants and already nope when missing.
+        if !baked {
+            let func = self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_parent()
+                .unwrap();
+            let trap_bb = self.ctx.append_basic_block(func, "bdpi_missing");
+            let ok_bb = self.ctx.append_basic_block(func, "bdpi_ok");
+            let is_null = self.builder.build_is_null(callee, "bdn").unwrap();
+            self.builder
+                .build_conditional_branch(is_null, trap_bb, ok_bb)
+                .unwrap();
+            self.builder.position_at_end(trap_bb);
+            let nname = format!("trs_bdpiname_{c_name}");
+            let ng = self.module.get_global(&nname).unwrap_or_else(|| {
+                let arr = self.ctx.const_string(c_name.as_bytes(), true);
+                let g = self.module.add_global(arr.get_type(), None, &nname);
+                g.set_initializer(&arr);
+                g.set_constant(true);
+                // private: this diagnostic string is per-module local —
+                // a design emits many objects, and with default External
+                // linkage each exported a strong definition and the
+                // cc -shared link died on the duplicates (external
+                // review); nothing looks the symbol up, the pointer is
+                // only passed by value to the trap callback
+                g.set_linkage(inkwell::module::Linkage::Private);
+                g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+                g
+            });
+            let tg = self
+                .module
+                .get_global("trs_cb_bdpi_missing")
+                .unwrap_or_else(|| self.module.add_global(ptrt, None, "trs_cb_bdpi_missing"));
+            let tcb = self
+                .builder
+                .build_load(ptrt, tg.as_pointer_value(), "bdt")
+                .unwrap()
+                .into_pointer_value();
+            let trap_ty = self.ctx.void_type().fn_type(&[ptrt.into()], false);
+            self.builder
+                .build_indirect_call(trap_ty, tcb, &[ng.as_pointer_value().into()], "bdmiss")
+                .unwrap();
+            self.builder.build_unreachable().unwrap();
+            self.builder.position_at_end(ok_bb);
+        }
+        let stdio: PointerValue<'ctx> = if baked {
+            let Some(&addr) = STDIO_CB.get() else {
+                return nope("stdio cb not registered");
+            };
+            i64t.const_int(addr as u64, false).const_to_pointer(ptrt)
+        } else {
+            let g = self
+                .module
+                .get_global("trs_cb_stdio")
+                .unwrap_or_else(|| self.module.add_global(ptrt, None, "trs_cb_stdio"));
+            self.builder
+                .build_load(ptrt, g.as_pointer_value(), "bds")
+                .unwrap()
+                .into_pointer_value()
+        };
+        let stdio_ty = self.ctx.void_type().fn_type(&[i64t.into()], false);
+        let flush = |lc: &Self, phase: u64| {
+            lc.builder
+                .build_indirect_call(
+                    stdio_ty,
+                    stdio,
+                    &[i64t.const_int(phase, false).into()],
+                    "fl",
+                )
+                .unwrap();
+        };
+
+        // marshal
+        let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
+        let mut slots: Vec<inkwell::values::BasicMetadataValueEnum> = Vec::new();
+        let store_limbs = |lc: &Self, v: IntValue<'ctx>, w: u32| {
+            let n32 = (w.max(1) as u64 + 31) / 32;
+            let buf = lc.entry_alloca(i32t, n32, "bb");
+            for k in 0..n32 {
+                let piece = if k == 0 {
+                    v
+                } else {
+                    let sh = lc.ity(w).const_int(32 * k, false);
+                    lc.builder.build_right_shift(v, sh, false, "bs").unwrap()
+                };
+                let word = lc.to_w(piece, w, 32, false);
+                let ip = unsafe {
+                    lc.builder
+                        .build_gep(i32t, buf, &[i64t.const_int(k, false)], "bi")
+                        .unwrap()
+                };
+                // volatile: external C code reads this memory; an
+                // in-process default<O2> deleted the (correct) buffer
+                // traffic around the opaque call — repro preserved,
+                // system opt on identical IR does NOT reproduce
+                let st = lc.builder.build_store(ip, word).unwrap();
+                st.set_volatile(true).unwrap();
+            }
+            buf
+        };
+        // wide/poly return: out-pointer first
+        let ret_buf = match ff.ret {
+            FT::Wide(n) => Some((n.max(1) as u64 + 31) / 32),
+            FT::Poly => Some((width as u64 + 31) / 32),
+            _ => None,
+        }
+        .map(|n32| {
+            let buf = self.entry_alloca(i32t, n32, "bo");
+            ptys.push(ptrt.into());
+            slots.push(buf.into());
+            (buf, n32)
+        });
+        if args.len() != ff.args.len() {
+            return nope("BDPI arg count mismatch");
+        }
+        for (k, ft) in ff.args.iter().enumerate() {
+            match ft {
+                FT::Bits(_) => {
+                    let wa = self.expr_width(f, &args[k])?;
+                    let v = self.expr_scalar(f, &args[k])?;
+                    ptys.push(i64t.into());
+                    slots.push(self.to_w(v, wa, 64, false).into());
+                }
+                FT::Wide(m) => {
+                    let wa = self.expr_width(f, &args[k])?;
+                    let v0 = self.expr_scalar(f, &args[k])?;
+                    let v = self.to_w(v0, wa, (*m).max(1), false);
+                    ptys.push(ptrt.into());
+                    slots.push(store_limbs(self, v, (*m).max(1)).into());
+                }
+                FT::Poly => {
+                    let wa = self.expr_width(f, &args[k])?;
+                    let v = self.expr_scalar(f, &args[k])?;
+                    ptys.push(ptrt.into());
+                    slots.push(store_limbs(self, v, wa.max(1)).into());
+                }
+                FT::CString => {
+                    let Expr::Str(sid) = &args[k] else {
+                        return nope("BDPI string arg not a literal");
+                    };
+                    let text = self.env.d.strings[*sid as usize].clone();
+                    // named for the TEXT, not the string id: the id is
+                    // a position in this design's table, and the
+                    // comment below is right that the content is a
+                    // pure function of the literal -- so the name
+                    // should be too.  Private linkage probably kept
+                    // this one out of the symbol table anyway, but a
+                    // name carrying a coordinate is the defect class
+                    // this pass exists to remove, and arguing each
+                    // instance benign is how the others survived.
+                    let gname = format!(
+                        "trs_bdpistr_{:016x}",
+                        {
+                            use std::hash::{Hash, Hasher};
+                            let mut h = std::collections::hash_map::DefaultHasher::new();
+                            text.hash(&mut h);
+                            h.finish()
+                        }
+                    );
+                    let g = self.module.get_global(&gname).unwrap_or_else(|| {
+                        let arr = self.ctx.const_string(text.as_bytes(), true);
+                        let g = self.module.add_global(arr.get_type(), None, &gname);
+                        g.set_initializer(&arr);
+                        g.set_constant(true);
+                        // per-module duplicate must stay LOCAL: two
+                        // objects whose code passes the same literal
+                        // would otherwise both export a strong
+                        // definition and kill the multi-object link
+                        // (same class as the trs_bdpiname fix); the
+                        // content is a pure function of the design
+                        // string table, and the pointer is only
+                        // passed by value
+                        g.set_linkage(inkwell::module::Linkage::Private);
+                        g.set_unnamed_address(inkwell::values::UnnamedAddress::Global);
+                        g
+                    });
+                    ptys.push(ptrt.into());
+                    slots.push(g.as_pointer_value().into());
+                }
+                FT::Void => return nope("void BDPI argument"),
+            }
+        }
+
+        flush(self, 0);
+        let fnty = i64t.fn_type(&ptys, false);
+        let cs = self
+            .builder
+            .build_indirect_call(fnty, callee, &slots, "bdc")
+            .unwrap();
+        flush(self, 1);
+        let raw = match cs.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(rv) => rv.into_int_value(),
+            _ => i64t.const_zero(),
+        };
+        match ff.ret {
+            FT::Void => Ok(self.ity(width).const_zero()),
+            FT::Bits(n) => {
+                let nn = n.clamp(1, 64);
+                let masked = self.to_w(raw, 64, nn, false);
+                Ok(self.to_w(masked, nn, width, false))
+            }
+            FT::Wide(_) | FT::Poly => {
+                let (buf, n32) = ret_buf.unwrap();
+                let mut acc = self.ity(width).const_zero();
+                for k in 0..n32.min((width as u64 + 31) / 32) {
+                    let ip = unsafe {
+                        self.builder
+                            .build_gep(i32t, buf, &[i64t.const_int(k, false)], "br")
+                            .unwrap()
+                    };
+                    let w32 = self
+                        .builder
+                        .build_load(i32t, ip, "brl")
+                        .unwrap()
+                        .into_int_value();
+                    w32.as_instruction().unwrap().set_volatile(true).unwrap();
+                    let ext = self.to_w(w32, 32, width, false);
+                    let sh = self.ity(width).const_int(32 * k, false);
+                    let shifted = self.builder.build_left_shift(ext, sh, "brs").unwrap();
+                    acc = self.builder.build_or(acc, shifted, "bro").unwrap();
+                }
+                Ok(acc)
+            }
+            FT::CString => nope("BDPI string return"),
+        }
+    }
+
+    /// A value-method call in an expression: arena register/wire reads
+    /// on prim children, inlined result cones on user-module children.
+    fn value_call(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        width: u32,
+        instance: StrId,
+        method: StrId,
+        port: u32,
+        args: &[Expr],
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        let ie = self.ie(f.inst)?;
+        let mname = self.env.d.strings[method as usize].clone();
+        if let Some(&(base, rw)) = ie.reg_slot.get(&instance) {
+            if !matches!(mname.as_str(), "read" | "get" | "_read") || !args.is_empty() {
+                return nope("non-read register method in expression");
+            }
+            if rw != width {
+                return nope("register read width mismatch");
+            }
+            return Ok(self.load_val(f, base, rw));
+        }
+        if let Some(&(base, ww)) = ie.wire_slot.get(&instance) {
+            return match mname.as_str() {
+                "whas" => {
+                    let word = self.load_word(f, base);
+                    Ok(self.to_w(word, 64, 1, false))
+                }
+                "wget" if ww >= 1 && ww == width => Ok(self.load_val(f, base + 1, ww)),
+                _ => nope("wire read mismatch"),
+            };
+        }
+        if let Some(&(base, ww)) = ie.bypass_slot.get(&instance) {
+            return match mname.as_str() {
+                // always-written by contract: whas is constant true
+                "whas" => {
+                    let one = self.ctx.i64_type().const_int(1, false);
+                    Ok(self.to_w(one, 64, 1, false))
+                }
+                "wget" | "read" if ww >= 1 && ww == width => Ok(self.load_val(f, base, ww)),
+                _ => nope("bypass wire read mismatch"),
+            };
+        }
+        if let Some(&(base, rw)) = ie.creg_slot.get(&instance) {
+            if !matches!(mname.as_str(), "read" | "get" | "_read") || !args.is_empty() {
+                return nope("non-read ConfigReg method in expression");
+            }
+            if rw != width {
+                return nope("ConfigReg read width mismatch");
+            }
+            // read = (written_at == now) ? old : current — exactly the
+            // interpreter's begin-of-instant rule
+            let words = rw.max(1).div_ceil(64);
+            let old = self.load_val(f, base, rw);
+            let cur = self.load_val(f, base + words, rw);
+            let wat = self.load_word(f, base + 2 * words);
+            let now = self.load_word(f, self.env.now_slot);
+            let wr = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, wat, now, "cregwr")
+                .unwrap();
+            return Ok(self
+                .builder
+                .build_select(wr, old, cur, "cregv")
+                .unwrap()
+                .into_int_value());
+        }
+        if let Some(&(base, fw, _size, _g, loopy)) = ie.fifo_slot.get(&instance) {
+            if !args.is_empty() {
+                return nope("FIFO value method with args");
+            }
+            let i64t = self.ctx.i64_type();
+            let load = |k: u32| self.load_word(f, base + k);
+            // begin-of-instant element count for the i_ variants:
+            // (enq_at==now || deq_at==now || clear_at==now)
+            //   ? saved_elems : elems   (FifoType::Simple only)
+            let inst_elems = |lc: &Self| -> IntValue<'ctx> {
+                let now = lc.load_word(f, lc.env.now_slot);
+                let mut any = lc
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, load(3), now, "fe")
+                    .unwrap();
+                for k in [4u32, 5] {
+                    let c = lc
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, load(k), now, "fe")
+                        .unwrap();
+                    any = lc.builder.build_or(any, c, "feo").unwrap();
+                }
+                lc.builder
+                    .build_select(any, load(1), load(0), "fsel")
+                    .unwrap()
+                    .into_int_value()
+            };
+            let cmp_w1 = |lc: &Self, pred, a: IntValue<'ctx>, b: IntValue<'ctx>| {
+                let c = lc.builder.build_int_compare(pred, a, b, "fc").unwrap();
+                lc.builder.build_int_z_extend(c, lc.ity(1), "fb").unwrap()
+            };
+            return match mname.as_str() {
+                "first" if fw == width => {
+                    let fst = load(2);
+                    Ok(self.load_val_dyn(f, base + 7, fst, fw))
+                }
+                "notFull" if width == 1 => Ok(cmp_w1(
+                    self,
+                    IntPredicate::ULT,
+                    load(0),
+                    i64t.const_int(_size as u64, false),
+                )),
+                "notEmpty" if width == 1 => {
+                    Ok(cmp_w1(self, IntPredicate::NE, load(0), i64t.const_zero()))
+                }
+                "i_notFull" if width == 1 => {
+                    // loopy i_* read LIVE elems: a same-instant deq
+                    // reopens the fifo (the interp drops the
+                    // begin-of-instant select for FifoType::Loopy)
+                    let e = if loopy { load(0) } else { inst_elems(self) };
+                    Ok(cmp_w1(
+                        self,
+                        IntPredicate::ULT,
+                        e,
+                        i64t.const_int(_size as u64, false),
+                    ))
+                }
+                "i_notEmpty" if width == 1 => {
+                    let e = if loopy { load(0) } else { inst_elems(self) };
+                    Ok(cmp_w1(self, IntPredicate::NE, e, i64t.const_zero()))
+                }
+                _ => nope("FIFO value method mismatch"),
+            };
+        }
+        if let Some(&(base, rw, lo, hi)) = ie.regfile_slot.get(&instance) {
+            // RegFile sub: in-range reads inline over the dense image
+            // with the ONE-DEEP same-instant bypass; out-of-range takes
+            // the trampoline (bounds warning on stdout + undet) — the
+            // B2 cold-path shape.
+            if mname.as_str() != "sub" || args.len() != 1 {
+                return nope("regfile method mismatch");
+            }
+            if rw != width {
+                return nope("regfile read width mismatch");
+            }
+            let Some(&child) = ie.children.get(&instance) else {
+                return nope("call on unknown child");
+            };
+            let i64t = self.ctx.i64_type();
+            let aw = self.expr_width(f, &args[0])?;
+            let a0 = self.expr_scalar(f, &args[0])?;
+            let a = self.to_w(a0, aw, 64, false);
+            let inlo = self
+                .builder
+                .build_int_compare(IntPredicate::UGE, a, i64t.const_int(lo, false), "rflo")
+                .unwrap();
+            let inhi = self
+                .builder
+                .build_int_compare(IntPredicate::ULE, a, i64t.const_int(hi, false), "rfhi")
+                .unwrap();
+            let inb = self.builder.build_and(inlo, inhi, "rfin").unwrap();
+            let func = self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_parent()
+                .unwrap();
+            let fast_bb = self.ctx.append_basic_block(func, "rff");
+            let slow_bb = self.ctx.append_basic_block(func, "rfs");
+            let join_bb = self.ctx.append_basic_block(func, "rfj");
+            self.builder
+                .build_conditional_branch(inb, fast_bb, slow_bb)
+                .unwrap();
+
+            self.builder.position_at_end(fast_bb);
+            let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+            let words = rw.max(1).div_ceil(64);
+            let upd_at = self.load_word(f, base);
+            let upd_addr = self.load_word(f, base + 1);
+            let now = self.load_word(f, self.env.now_slot);
+            let at_now = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, upd_at, now, "rfan")
+                .unwrap();
+            let same_a = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, upd_addr, a, "rfsa")
+                .unwrap();
+            let byp = self.builder.build_and(at_now, same_a, "rfb").unwrap();
+            let pv = self.load_val(f, base + 2, rw);
+            let idx = self
+                .builder
+                .build_int_sub(a, i64t.const_int(lo, false), "rfi")
+                .unwrap();
+            let dv = self.load_val_dyn(f, base + 2 + words, idx, rw);
+            let fv = self
+                .builder
+                .build_select(byp, pv, dv, "rfv")
+                .unwrap()
+                .into_int_value();
+            f.ssa = saved.clone();
+            let f_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(join_bb).unwrap();
+
+            self.builder.position_at_end(slow_bb);
+            let sv = self
+                .emit_prim_call(f, child, method, port, args, width, false)?
+                .expect("value prim call returns");
+            f.ssa = saved;
+            let s_end = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(join_bb).unwrap();
+
+            self.builder.position_at_end(join_bb);
+            let phi = self.builder.build_phi(self.ity(rw), "rfp").unwrap();
+            phi.add_incoming(&[(&fv, f_end), (&sv, s_end)]);
+            return Ok(phi.as_basic_value().into_int_value());
+        }
+        if let Some(&(base, bw, _sz, _cs, nw, _dual, pipelined)) = ie.bram_slot.get(&instance) {
+            // BRAM reads return REGISTERED state (out, or out2 when
+            // pipelined) — a plain load, no bounds or bypass logic
+            // (addressing happened at put/tick)
+            let port_b = match mname.as_str() {
+                "read" | "a_read" => false,
+                "b_read" => true,
+                _ => return nope("bram value method mismatch"),
+            };
+            if bw != width || !args.is_empty() {
+                return nope("bram read shape mismatch");
+            }
+            let w = bw.max(1).div_ceil(64);
+            let wenw = nw.max(1).div_ceil(64);
+            let pw = 3 + wenw + 4 * w;
+            let off =
+                base + if port_b { pw } else { 0 } + 3 + wenw + (if pipelined { 3 } else { 2 }) * w;
+            return Ok(self.load_val(f, off, bw));
+        }
+        if let Some(&(base, cw)) = ie.creg5_slot.get(&instance) {
+            // a CReg's only value method is a port read, and it returns
+            // the LIVE value (schedule order makes port k's read see
+            // earlier ports' writes)
+            if cw != width {
+                return nope("creg read width mismatch");
+            }
+            return Ok(self.load_val(f, base, cw));
+        }
+        if let Some(&(base, cw)) = ie.counter_slot.get(&instance) {
+            // Counter reads are begin-of-instant: the first same-
+            // instant action snapshotted the pre-action value (stamped
+            // by saved_at).  No suppress check — the reference has
+            // none (in-reset reads see the live/reset value).
+            if !matches!(mname.as_str(), "value" | "_read") {
+                return nope("counter value method mismatch");
+            }
+            if cw != width || !args.is_empty() {
+                return nope("counter read shape mismatch");
+            }
+            let w = cw.max(1).div_ceil(64);
+            let now = self.load_word(f, self.env.now_slot);
+            let sat = self.load_word(f, base + 2 * w);
+            let same = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, sat, now, "cnr")
+                .unwrap();
+            let sv = self.load_val(f, base + w, cw);
+            let cur = self.load_val(f, base, cw);
+            return Ok(self
+                .builder
+                .build_select(same, sv, cur, "cnv")
+                .unwrap()
+                .into_int_value());
+        }
+        // other prim children: trampoline into the interpreter's prim
+        let Some(&child) = ie.children.get(&instance) else {
+            return nope("call on unknown child");
+        };
+        if !self.env.insts.contains_key(&child) {
+            let v = self
+                .emit_prim_call(f, child, method, port, args, width, false)?
+                .expect("value prim call returns");
+            return Ok(v);
+        }
+        // user-module child: inline the method's result cone
+        if port != 0 {
+            return nope("multi-ported user method");
+        }
+        let cie = self.ie(child)?;
+        let cmod = &self.env.d.modules[cie.mir];
+        let Some((mi, m)) = cmod
+            .methods
+            .iter()
+            .enumerate()
+            .find(|(_, m)| m.name == method)
+        else {
+            return nope("unknown method on child");
+        };
+        // the interp's call_value evaluates the method's RESULT expr
+        // for Value and ActionValue methods alike; an Expr::MethValue
+        // read arrives with NO args (the action side carried them).
+        // The one asymmetry: the interp may see caller-latched arg
+        // values in its Port fallthrough, which a fully-compiled design
+        // never latches — so an AV result whose cone reads its own arg
+        // ports stays ineligible.
+        if m.kind != trs_ir::MethodKind::Value
+            && !(m.kind == trs_ir::MethodKind::ActionValue && args.is_empty())
+        {
+            return nope("non-value method in expression");
+        }
+        let Some(res) = m.result.clone() else {
+            return nope("value method without result");
+        };
+        if !args.is_empty() && args.len() != m.args.len() {
+            return nope("method arg count mismatch");
+        }
+        let margs = m.args.clone();
+        let mut cf = self.child_frame(f, child, Some(mi))?;
+        if m.kind == trs_ir::MethodKind::ActionValue {
+            // arg ports in the result cone read exactly what the interp
+            // reads at THIS evaluation site: the per-edge latch when the
+            // call was inlined earlier in this frame (select(cond, v, 0)
+            // captured at the call site), else the uncalled-MethodArg
+            // 0-fold via the Port fallthrough — sched-position hoists
+            // evaluate BEFORE the call and legitimately read 0
+            for pa in &margs {
+                if let Some(&(lv, lw)) = f.av_args.get(&(instance, pa.name)) {
+                    cf.args.insert(pa.name, (lv, lw));
+                }
+            }
+        }
+        for (a, p) in args.iter().zip(&margs) {
+            let wa = self.expr_width(f, a)?;
+            let v0 = self.expr_scalar(f, a)?;
+            let v = self.to_w(v0, wa, p.width, false);
+            cf.args.insert(p.name, (v, p.width));
+        }
+        // boundary-tax experiment: the result cone becomes a real call
+        // when this (type, method) is in the realized map, the frame
+        // carries an env pointer, and every declared arg is bound (an
+        // unbound port must keep nope-ing exactly like the inline path
+        // — dispatch may not drift with the flag)
+        let bkind = if m.kind == trs_ir::MethodKind::ActionValue {
+            3
+        } else {
+            0
+        };
+        if let Some(bnd) = self.boundary_hit(cie.class_id, method, bkind) {
+            let (sym, brw, bargs) = (bnd.sym.clone(), bnd.ret_width, bnd.args.clone());
+            if let Some(envp) = f.envp {
+                if bargs.iter().all(|(p, _)| cf.args.contains_key(p)) {
+                    let i64t = self.ctx.i64_type();
+                    let i32t = self.ctx.i32_type();
+                    let ptrt = self.ctx.ptr_type(AddressSpace::default());
+                    let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![
+                        ptrt.into(),
+                        ptrt.into(),
+                        i64t.into(),
+                        i32t.into(),
+                        i32t.into(),
+                        i32t.into(),
+                    ];
+                    for (_, pw) in &bargs {
+                        ptys.push(self.ity(*pw).into());
+                    }
+                    let bty = self.ity(brw).fn_type(&ptys, false);
+                    let base = self.slot_index(cie.region.0);
+                    let (psite, fsite) = self.boundary_site_bases(&bnd, child)?;
+                    let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                        f.arena.into(),
+                        envp.into(),
+                        base.into(),
+                        self.site_ordinal().into(),
+                        psite.into(),
+                        fsite.into(),
+                    ];
+                    for (pn, pw) in &bargs {
+                        let (v, vw) = cf.args[pn];
+                        bargv.push(self.to_w(v, vw, *pw, false).into());
+                    }
+                    let bf = self
+                        .module
+                        .get_function(&sym)
+                        .unwrap_or_else(|| self.module.add_function(&sym, bty, None));
+                    let cs = self.builder.build_call(bf, &bargv, "bnd").unwrap();
+                    let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
+                        return nope("boundary fn returned void");
+                    };
+                    let out = self.to_w(rv.into_int_value(), brw, width, false);
+                    self.rec_meth_result(&cf, child, method, out)?;
+                    return Ok(out);
+                }
+            }
+        }
+        let rw = self.expr_width(&cf, &res)?;
+        let v = self.expr_scalar(&mut cf, &res)?;
+        // call_value zero-extends the result to the caller's width
+        let out = self.to_w(v, rw, width, false);
+        self.rec_meth_result(&cf, child, method, out)?;
+        Ok(out)
+    }
+
+    /// Branch-based mux: evaluate exactly one arm (interpreter If
+    /// semantics), joining with a phi.  Defs memoized inside an arm are
+    /// discarded after it — their SSA values would not dominate uses
+    /// outside the arm.
+    fn lazy_mux(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        width: u32,
+        cz: IntValue<'ctx>,
+        then_: &Expr,
+        else_: &Expr,
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        self.lazy_mux_fn(f, width, cz, then_, &|lc, f| {
+            let wx = lc.expr_width(f, else_)?;
+            // TODO: a wide mux arm could stay decomposed and select
+            // per word; today it materialises.  That is where the
+            // i5600-shaped select/phi cost still lives.
+            let v = lc.expr_scalar(f, else_)?;
+            Ok(lc.to_w(v, wx, width, false))
+        })
+    }
+
+    /// Node count of a pure, speculation-safe expression: consts,
+    /// ssa-resident defs (already computed in this function), inline
+    /// arena-prim reads, arithmetic, and nested pure If/Case.  None =
+    /// impure (possible side effects / unexpanded def) or over cap.
+    fn pure_size(&self, f: &Frame<'ctx>, e: &Expr, cap: u32) -> Option<u32> {
+        use trs_ir::Expr as E;
+        if cap == 0 {
+            return None;
+        }
+        let sub2 = |a: &Expr, b: &Expr| -> Option<u32> {
+            let ca = self.pure_size(f, a, cap - 1)?;
+            let cb = self.pure_size(f, b, cap.checked_sub(1 + ca)?)?;
+            Some(1 + ca + cb)
+        };
+        match e {
+            E::Const { .. } | E::Real(_) => Some(1),
+            E::Def(n) => f.ssa.contains_key(n).then_some(1),
+            E::Port(p) => {
+                if f.args.contains_key(p) {
+                    return Some(1);
+                }
+                let ie = self.ie(f.inst).ok()?;
+                (ie.reset_slot.contains_key(p) || ie.en_slot.contains_key(p)).then_some(1)
+            }
+            E::MethCall {
+                instance,
+                method,
+                args,
+                ..
+            } => {
+                if !args.is_empty() {
+                    // dynamic-arg reads (RegFile.sub etc.) may warn
+                    return None;
+                }
+                let ie = self.ie(f.inst).ok()?;
+                let mname = &self.env.d.strings[*method as usize];
+                let ok = (ie.reg_slot.contains_key(instance)
+                    || ie.creg_slot.contains_key(instance))
+                    && matches!(mname.as_str(), "read" | "get" | "_read")
+                    || ie.wire_slot.contains_key(instance)
+                        && matches!(mname.as_str(), "whas" | "wget")
+                    || ie.bypass_slot.contains_key(instance)
+                        && matches!(mname.as_str(), "whas" | "wget" | "read")
+                    || ie.fifo_slot.contains_key(instance)
+                        && matches!(
+                            mname.as_str(),
+                            "first" | "notFull" | "notEmpty" | "i_notFull" | "i_notEmpty"
+                        );
+                ok.then_some(2)
+            }
+            E::Prim { args, .. } => {
+                // Every prim is total: even Quot/Rem have a defined
+                // result for a zero divisor, so any of them can be
+                // evaluated in an arm the design does not select.
+                let mut total = 1u32;
+                for a in args {
+                    total += self.pure_size(f, a, cap.checked_sub(total)?)?;
+                }
+                Some(total)
+            }
+            E::If {
+                cond, then_, else_, ..
+            } => {
+                let cc = self.pure_size(f, cond, cap - 1)?;
+                let rest = sub2(then_, else_)?;
+                (cc + rest <= cap).then_some(cc + rest)
+            }
+            E::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
+                let mut total = 1 + self.pure_size(f, scrutinee, cap - 1)?;
+                for (_, a) in arms {
+                    total += self.pure_size(f, a, cap.checked_sub(total)?)?;
+                }
+                total += self.pure_size(f, default, cap.checked_sub(total)?)?;
+                (total <= cap).then_some(total)
+            }
+            _ => None,
+        }
+    }
+
+    /// A mux whose arms are wider than a word: one phi per word instead
+    /// of a single wide phi.  A wide phi/select is the shape that costs
+    /// most under legalisation (measured: a 5600-bit select/unpack
+    /// function went 2.41s -> 0.35s once word-decomposed), and both arms
+    /// are already decomposed by the time they reach the join.
+    fn wide_mux(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        width: u32,
+        cz: IntValue<'ctx>,
+        then_: &Expr,
+        else_: &Expr,
+    ) -> Result<Option<Val<'ctx>>, Ineligible> {
+        if !chunking_enabled() || width <= self.word_bits() {
+            return Ok(None);
+        }
+        let func = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let then_bb = self.ctx.append_basic_block(func, "wmt");
+        let else_bb = self.ctx.append_basic_block(func, "wme");
+        let join_bb = self.ctx.append_basic_block(func, "wmj");
+        self.builder
+            .build_conditional_branch(cz, then_bb, else_bb)
+            .unwrap();
+
+        let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+        let saved_c = f.chunks.clone();
+
+        self.builder.position_at_end(then_bb);
+        let tw = self.words_of(f, then_, width)?;
+        f.ssa = saved.clone();
+        f.chunks = saved_c.clone();
+        let t_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+
+        self.builder.position_at_end(else_bb);
+        let ew = self.words_of(f, else_, width)?;
+        f.ssa = saved;
+        f.chunks = saved_c;
+        let e_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+
+        self.builder.position_at_end(join_bb);
+        let w = self.word_bits();
+        let n = self.word_count(width);
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let cw = word_width_at(i as u32, width, w);
+            let phi = self.builder.build_phi(self.ity(cw), "wmp").unwrap();
+            phi.add_incoming(&[(&tw[i], t_end), (&ew[i], e_end)]);
+            out.push(phi.as_basic_value().into_int_value());
+        }
+        Ok(Some(Val::Wide(out)))
+    }
+
+    /// An expression as exactly `word_count(width)` words, decomposing a
+    /// scalar result if the producer did not already.
+    fn words_of(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        e: &Expr,
+        width: u32,
+    ) -> Result<Vec<IntValue<'ctx>>, Ineligible> {
+        let ew = self.expr_width(f, e)?;
+        match self.expr(f, e)? {
+            Val::Wide(ws) if ws.len() == self.word_count(width) => Ok(ws),
+            other => {
+                let v = other.as_scalar(self, ew);
+                let v = self.to_w(v, ew, width, false);
+                Ok(self.split_words(v, width))
+            }
+        }
+    }
+
+    /// Cut a packed value into words.
+    fn split_words(&mut self, v: IntValue<'ctx>, width: u32) -> Vec<IntValue<'ctx>> {
+        let w = self.word_bits();
+        let ty = self.ity(width);
+        let mut out = Vec::with_capacity(self.word_count(width));
+        for i in 0..self.word_count(width) {
+            let lo = (i as u32) * w;
+            let cw = word_width_at(i as u32, width, w);
+            let sh = ty.const_int(u64::from(lo), false);
+            let r = self.builder.build_right_shift(v, sh, false, "sw").unwrap();
+            out.push(self.to_w(r, width, cw, false));
+        }
+        out
+    }
+
+    fn lazy_mux_fn(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        width: u32,
+        cz: IntValue<'ctx>,
+        then_: &Expr,
+        else_gen: &dyn Fn(
+            &mut Lower<'a, 'ctx>,
+            &mut Frame<'ctx>,
+        ) -> Result<IntValue<'ctx>, Ineligible>,
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        let func = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let then_bb = self.ctx.append_basic_block(func, "mt");
+        let else_bb = self.ctx.append_basic_block(func, "me");
+        let join_bb = self.ctx.append_basic_block(func, "mj");
+        self.builder
+            .build_conditional_branch(cz, then_bb, else_bb)
+            .unwrap();
+
+        self.builder.position_at_end(then_bb);
+        let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+        let wt = self.expr_width(f, then_)?;
+        let tv0 = self.expr_scalar(f, then_)?;
+        let tv = self.to_w(tv0, wt, width, false);
+        f.ssa = saved.clone();
+        let t_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+
+        self.builder.position_at_end(else_bb);
+        let ev = else_gen(self, f)?;
+        f.ssa = saved;
+        let e_end = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(join_bb).unwrap();
+
+        self.builder.position_at_end(join_bb);
+        let phi = self.builder.build_phi(self.ity(width), "mphi").unwrap();
+        phi.add_incoming(&[(&tv, t_end), (&ev, e_end)]);
+        Ok(phi.as_basic_value().into_int_value())
+    }
+
+    /// Compile a call-site into the prim trampoline: marshal argument
+    /// words to a stack buffer, call, read result words back.  Needs
+    /// the env pointer — sched functions carry it too.
+    fn emit_prim_call(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        prim_inst: usize,
+        method: StrId,
+        port: u32,
+        args: &[Expr],
+        ret_width: u32,
+        is_action: bool,
+    ) -> Result<Option<IntValue<'ctx>>, Ineligible> {
+        let Some(envp) = f.envp else {
+            return nope("prim call without env pointer");
+        };
+        let mut arg_widths = Vec::new();
+        let mut vals = Vec::new();
+        for a in args {
+            let wa = self.expr_width(f, a)?;
+            let v = self.expr_scalar(f, a)?;
+            arg_widths.push(wa);
+            vals.push((v, wa));
+        }
+        // physical layout is w.max(1) words per argument, matching the
+        // callback decode exactly — a zero-width argument occupies one
+        // stored zero word (review finding: a 0-word argument
+        // desynchronized the buffer walk into an out-of-bounds read)
+        let total_words: u32 = arg_widths
+            .iter()
+            .map(|&w| words_for(w.max(1)))
+            .sum::<u32>()
+            .max(1);
+        let out_words = words_for(ret_width.max(1));
+        let i64t = self.ctx.i64_type();
+        let abuf = self
+            .builder
+            .build_array_alloca(i64t, i64t.const_int(total_words as u64, false), "pa")
+            .unwrap();
+        let obuf = self
+            .builder
+            .build_array_alloca(i64t, i64t.const_int(out_words as u64, false), "po")
+            .unwrap();
+        let mut off = 0u32;
+        for (v, wa) in vals {
+            let words = words_for(wa.max(1));
+            for k in 0..words {
+                let sh = self.ity(wa).const_int((64 * k) as u64, false);
+                let piece = if k == 0 {
+                    v
+                } else {
+                    self.builder.build_right_shift(v, sh, false, "pp").unwrap()
+                };
+                let word = self.to_w(piece, wa, 64, false);
+                let idx = i64t.const_int((off + k) as u64, false);
+                let p = unsafe { self.builder.build_gep(i64t, abuf, &[idx], "pap").unwrap() };
+                self.builder.build_store(p, word).unwrap();
+            }
+            off += words;
+        }
+        let Ok(local) = u32::try_from(self.prim_calls.len()) else {
+            return nope("prim call-site count exceeds the 32-bit site field");
+        };
+        self.prim_calls.push(PrimCallSpec {
+            inst: prim_inst,
+            method,
+            port,
+            arg_widths,
+            ret_width: if is_action { 0 } else { ret_width },
+            is_action,
+        });
+        let ordv = self.site_ordinal();
+        let sitev = self.site_index(self.bnd_prim_site, self.site_origin, local);
+        let prim_callee = self.cb_callee(self.cbs.prim);
+        self.builder
+            .build_indirect_call(
+                self.cbs.prim_ty,
+                prim_callee,
+                &[
+                    envp.into(),
+                    ordv.into(),
+                    sitev.into(),
+                    abuf.into(),
+                    obuf.into(),
+                ],
+                "pc",
+            )
+            .unwrap();
+        if is_action && ret_width == 0 {
+            return Ok(None);
+        }
+        // reassemble the result from out words
+        let w = ret_width;
+        let t = self.ity(w);
+        let mut acc = t.const_zero();
+        for k in 0..words_for(w) {
+            let idx = i64t.const_int(k as u64, false);
+            let p = unsafe { self.builder.build_gep(i64t, obuf, &[idx], "pop").unwrap() };
+            let word = self
+                .builder
+                .build_load(i64t, p, "pol")
+                .unwrap()
+                .into_int_value();
+            if w <= 64 {
+                acc = self.to_w(word, 64, w, false);
+            } else {
+                let wide = self.builder.build_int_z_extend(word, t, "pwz").unwrap();
+                let sh = t.const_int((64 * k) as u64, false);
+                let pos = self.builder.build_left_shift(wide, sh, "pws").unwrap();
+                acc = self.builder.build_or(acc, pos, "pwo").unwrap();
+            }
+        }
+        Ok(Some(acc))
+    }
+
+    fn child_frame(
+        &self,
+        f: &Frame<'ctx>,
+        child: usize,
+        method_idx: Option<usize>,
+    ) -> Result<Frame<'ctx>, Ineligible> {
+        if f.depth >= 32 {
+            return nope("method inline depth");
+        }
+        Ok(Frame {
+            arena: f.arena,
+            envp: f.envp,
+            inst: child,
+            method_idx,
+            args: HashMap::new(),
+            ssa: HashMap::new(),
+            chunks: HashMap::new(),
+            expanding: Vec::new(),
+            thunks: HashMap::new(),
+            av_widths: HashMap::new(),
+            dead_defs: Default::default(),
+            tasks: HashMap::new(),
+            av_slots: HashMap::new(),
+            av_args: HashMap::new(),
+            is_exec: f.is_exec,
+            depth: f.depth + 1,
+        })
+    }
+
+    /// Lower a def reference: body locals / cone memo, then this
+    /// instance's fire-signal slots, then eager-def slots (exec bodies
+    /// reload the schedule-time value), then table expansion.
+    /// Static entry-block alloca: non-entry array allocas are DYNAMIC
+    /// to LLVM (per-execution stack bumps, SROA-hostile — and the O2+
+    /// pipeline miscompiled the BDPI buffer pattern built that way).
+    fn entry_alloca(
+        &self,
+        elem: inkwell::types::IntType<'ctx>,
+        count: u64,
+        name: &str,
+    ) -> PointerValue<'ctx> {
+        let func = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let entry = func.get_first_basic_block().unwrap();
+        let b = self.ctx.create_builder();
+        match entry.get_first_instruction() {
+            Some(i) => b.position_before(&i),
+            None => b.position_at_end(entry),
+        }
+        b.build_array_alloca(elem, elem.const_int(count, false), name)
+            .unwrap()
+    }
+
+    /// Whether evaluating `e` is OBSERVABLE: a dynamic-address prim
+    /// read (RegFile.sub prints a bounds warning when the address is
+    /// out of range) or a trapping op (Quot/Rem by a dynamic zero).
+    /// Such cones must evaluate exactly as often as the interpreter
+    /// evaluates them — see def_thunk.
+    fn effectful_expr(
+        &self,
+        inst: usize,
+        e: &Expr,
+        seen: &mut std::collections::HashSet<(usize, StrId)>,
+    ) -> bool {
+        use trs_ir::Expr as E;
+        match e {
+            E::Def(n) => {
+                if !seen.insert((inst, *n)) {
+                    return false;
+                }
+                let Some(ie) = self.env.insts.get(&inst) else {
+                    return true;
+                };
+                let m = &self.env.d.modules[ie.mir];
+                m.def(*n)
+                    .is_some_and(|d| self.effectful_expr(inst, &d.expr, seen))
+            }
+            E::MethCall {
+                instance,
+                method,
+                args,
+                ..
+            } => {
+                if args.iter().any(|a| self.effectful_expr(inst, a, seen)) {
+                    return true;
+                }
+                let Some(ie) = self.env.insts.get(&inst) else {
+                    return true;
+                };
+                let Some(&child) = ie.children.get(instance) else {
+                    return true;
+                };
+                if let Some(ce) = self.env.insts.get(&child) {
+                    // inlined module: a value call evaluates the
+                    // result closure only
+                    let cm = &self.env.d.modules[ce.mir];
+                    return cm
+                        .method_idx(*method)
+                        .and_then(|mi| cm.methods[mi].result.as_ref())
+                        .is_some_and(|r| self.effectful_expr(child, r, seen));
+                }
+                // prim child: dynamic-arg value reads may warn —
+                // except a FULL-RANGE RegFile (mkRegFileFull), where
+                // every representable address is in [lo, hi] and the
+                // bounds warning is unreachable (sudoku's hot LUTs:
+                // thunking those cost 2.4x)
+                if args.is_empty() {
+                    return false;
+                }
+                if let Some(&(_, _, lo, hi)) = ie.regfile_slot.get(instance) {
+                    // full coverage is judged against the ADDRESS
+                    // WIDTH: every aw-bit address must land in
+                    // [lo, hi] (a power-of-two SIZE with a wider
+                    // address port still warns — sysMips ram_arr)
+                    let aw = match &args[0] {
+                        E::Def(dn) => self.def_width(inst, *dn).unwrap_or(0),
+                        a => a.width(),
+                    };
+                    let full = (1..=64).contains(&aw)
+                        && lo == 0
+                        && hi >= if aw == 64 { u64::MAX } else { (1u64 << aw) - 1 };
+                    return !full;
+                }
+                true
+            }
+            // A prim is observable only through its arguments: they
+            // are all total and none has a side effect of its own.
+            E::Prim { args, .. } => args.iter().any(|a| self.effectful_expr(inst, a, seen)),
+            // BDPI value calls: nominally pure, but observable when the
+            // C side prints or keeps state — the planner already
+            // poisons ForeignCall cones; match it (review fleet)
+            E::ForeignCall { args, .. } => true || args.is_empty(),
+            E::If {
+                cond, then_, else_, ..
+            } => {
+                self.effectful_expr(inst, cond, seen)
+                    || self.effectful_expr(inst, then_, seen)
+                    || self.effectful_expr(inst, else_, seen)
+            }
+            E::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
+                self.effectful_expr(inst, scrutinee, seen)
+                    || arms.iter().any(|(_, a)| self.effectful_expr(inst, a, seen))
+                    || self.effectful_expr(inst, default, seen)
+            }
+            E::Clock { osc, gate } => {
+                self.effectful_expr(inst, osc, seen) || self.effectful_expr(inst, gate, seen)
+            }
+            E::Reset { wire } => self.effectful_expr(inst, wire, seen),
+            _ => false,
+        }
+    }
+
+    /// Expand an effectful-eval def through a first-reference memo:
+    /// entry allocas hold (value, valid); every reference checks the
+    /// flag and only the first evaluates.  This is the interpreter's
+    /// ctx.locals semantics in dominance-correct form — a plain ssa
+    /// memo dies at Cond joins, and RE-expanding a def whose cone
+    /// warns (RegFile bounds) re-fires the warning (sysMips: 116
+    /// warnings vs the reference's 66).
+    fn def_thunk(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        n: StrId,
+        dex: &Expr,
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        let w = self.expr_width(f, dex)?.max(1);
+        let ty = self.ity(w);
+        let i8t = self.ctx.i8_type();
+        let (vp, gp) = match f.thunks.get(&n) {
+            Some(&t) => t,
+            None => {
+                let vp = self.entry_alloca(ty, 1, "thv");
+                let gp = self.entry_alloca(i8t, 1, "thg");
+                // the valid flag initializes FALSE at function entry
+                // (the init must dominate every reference site)
+                let b = self.ctx.create_builder();
+                match gp.as_instruction().and_then(|i| i.get_next_instruction()) {
+                    Some(next) => b.position_before(&next),
+                    None => {
+                        let entry = self
+                            .builder
+                            .get_insert_block()
+                            .unwrap()
+                            .get_parent()
+                            .unwrap()
+                            .get_first_basic_block()
+                            .unwrap();
+                        b.position_at_end(entry);
+                    }
+                }
+                b.build_store(gp, i8t.const_zero()).unwrap();
+                f.thunks.insert(n, (vp, gp));
+                (vp, gp)
+            }
+        };
+        let func = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let g = self
+            .builder
+            .build_load(i8t, gp, "thok")
+            .unwrap()
+            .into_int_value();
+        let ok = self
+            .builder
+            .build_int_compare(IntPredicate::NE, g, i8t.const_zero(), "thok0")
+            .unwrap();
+        let ev_bb = self.ctx.append_basic_block(func, "thev");
+        let jn_bb = self.ctx.append_basic_block(func, "thjn");
+        self.builder
+            .build_conditional_branch(ok, jn_bb, ev_bb)
+            .unwrap();
+        self.builder.position_at_end(ev_bb);
+        // the eval block is CONDITIONAL: nested def expansions memoized
+        // during the cone eval are defined only on this path and must
+        // not leak past the join (review-fleet confirmed dominance
+        // hazard — same save/restore discipline as lazy_mux arms)
+        let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+        f.expanding.push(n);
+        let v = self.expr_scalar(f, dex)?;
+        f.expanding.pop();
+        f.ssa = saved;
+        // schedule-position slot store (mirrors the plain expansion
+        // path): the owning sched fn publishes the eager slot at its
+        // first — and only — evaluation
+        if !f.is_exec && f.inst == self.spec.inst && self.spec.eager.contains(&n) {
+            if let Some(&(base, w)) = self.ie(f.inst)?.eager_slot.get(&n) {
+                if self.edge.as_ref().is_none_or(|e| e.exports.contains(&base)) {
+                    edge_ssa_count(3, 0);
+                    self.store_val(f, base, w, v);
+                }
+            }
+        }
+        self.builder.build_store(vp, v).unwrap();
+        self.builder
+            .build_store(gp, i8t.const_int(1, false))
+            .unwrap();
+        self.builder.build_unconditional_branch(jn_bb).unwrap();
+        self.builder.position_at_end(jn_bb);
+        let out = self
+            .builder
+            .build_load(ty, vp, "thval")
+            .unwrap()
+            .into_int_value();
+        f.ssa.insert(n, out);
+        self.rec_def(f, n, out);
+        Ok(out)
+    }
+
+    /// TRACED artifacts: mirror a def's computed value into its VCD
+    /// recording slot (the interp's vcd_def_vals recording).  A no-op
+    /// unless the instance declares the def (rec tables are empty in
+    /// untraced artifacts — zero cost).
+    fn rec_def(&mut self, f: &Frame<'ctx>, n: StrId, v: IntValue<'ctx>) {
+        let Ok(ie) = self.ie(f.inst) else { return };
+        let Some(&(base, w)) = ie.rec_defs.get(&n) else {
+            return;
+        };
+        let vw = v.get_type().get_bit_width();
+        let vv = self.to_w(v, vw, w.max(1), false);
+        self.store_val(f, base, w.max(1), vv);
+    }
+
+    /// TRACED artifacts: mirror an inlined user-child method call into
+    /// its VCD recording slots (call time + argument ports), the
+    /// interp's vcd_meth_calls.  Emit inside the taken branch only.
+    fn rec_meth_call(
+        &mut self,
+        cf: &Frame<'ctx>,
+        child: usize,
+        method: StrId,
+        argv: &[(IntValue<'ctx>, u32)],
+    ) -> Result<(), Ineligible> {
+        let rm = match self.ie(child)?.rec_meths.get(&method) {
+            Some(rm) => rm.clone(),
+            None => return Ok(()),
+        };
+        let now = self.load_word(cf, self.env.now_slot);
+        self.store_word(cf, rm.t, now);
+        for ((v, _), &(base, w)) in argv.iter().zip(&rm.args) {
+            let vw = v.get_type().get_bit_width();
+            let vv = self.to_w(*v, vw, w.max(1), false);
+            self.store_val(cf, base, w.max(1), vv);
+        }
+        Ok(())
+    }
+
+    /// TRACED artifacts: record a value/AV method's returned value
+    /// (the interp's vcd_meth_results).
+    fn rec_meth_result(
+        &mut self,
+        cf: &Frame<'ctx>,
+        child: usize,
+        method: StrId,
+        v: IntValue<'ctx>,
+    ) -> Result<(), Ineligible> {
+        let res = match self.ie(child)?.rec_meths.get(&method) {
+            Some(rm) => rm.res,
+            None => return Ok(()),
+        };
+        if let Some((base, w)) = res {
+            let vw = v.get_type().get_bit_width();
+            let vv = self.to_w(v, vw, w.max(1), false);
+            self.store_val(cf, base, w.max(1), vv);
+        }
+        Ok(())
+    }
+
+    /// Join-safe slot for an ActionValue task binding: an entry alloca
+    /// initialized to the undet pattern (Value::undet — what the interp
+    /// yields when the binding arm never ran), stored at task execution.
+    /// Post-join references load it, mirroring the interp's body-wide
+    /// ctx.locals.
+    /// The interp's Value::undet pattern (0xAA..., masked to width) as
+    /// an LLVM constant.
+    fn undet_const(&self, w: u32) -> IntValue<'ctx> {
+        let mut words = vec![0xAAAA_AAAA_AAAA_AAAAu64; words_for(w.max(1)) as usize];
+        let rem = w % 64;
+        if w != 0 && rem != 0 {
+            let last = words.len() - 1;
+            words[last] &= (1u64 << rem) - 1;
+        }
+        if w == 0 {
+            words = vec![0];
+        }
+        self.ity(w).const_int_arbitrary_precision(&words)
+    }
+
+    fn av_slot(&mut self, f: &mut Frame<'ctx>, n: StrId, w: u32) -> PointerValue<'ctx> {
+        if let Some(&(p, _)) = f.av_slots.get(&n) {
+            return p;
+        }
+        let ty = self.ity(w);
+        let p = self.entry_alloca(ty, 1, "avsl");
+        // undet init must dominate every reference site (same
+        // discipline as the thunk valid-flag init)
+        let mut words = vec![0xAAAA_AAAA_AAAA_AAAAu64; words_for(w) as usize];
+        let rem = w % 64;
+        if rem != 0 {
+            let last = words.len() - 1;
+            words[last] &= (1u64 << rem) - 1;
+        }
+        let undet = ty.const_int_arbitrary_precision(&words);
+        let b = self.ctx.create_builder();
+        match p.as_instruction().and_then(|i| i.get_next_instruction()) {
+            Some(next) => b.position_before(&next),
+            None => {
+                let entry = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap()
+                    .get_first_basic_block()
+                    .unwrap();
+                b.position_at_end(entry);
+            }
+        }
+        b.build_store(p, undet).unwrap();
+        f.av_slots.insert(n, (p, w));
+        p
+    }
+
+    fn def(&mut self, f: &mut Frame<'ctx>, n: StrId) -> Result<IntValue<'ctx>, Ineligible> {
+        if let Some(v) = f.ssa.get(&n) {
+            return Ok(*v);
+        }
+        if let Some(ws) = f.chunks.get(&n).cloned() {
+            let w = self.def_width(f.inst, n).unwrap_or(0);
+            if w > 0 {
+                let v = self.pack(&ws, w);
+                f.ssa.insert(n, v);
+                return Ok(v);
+            }
+        }
+        if f.dead_defs.contains(&n) {
+            // an ActionValue task binding survives the join through its
+            // slot (interp parity: ctx.locals is body-wide; undet when
+            // the arm never ran)
+            if let Some(&(p, w)) = f.av_slots.get(&n) {
+                let out = self
+                    .builder
+                    .build_load(self.ity(w), p, "avesc")
+                    .unwrap()
+                    .into_int_value();
+                return Ok(out);
+            }
+            return Err(Ineligible(format!(
+                "def escaped conditional arm: {}",
+                self.env.d.strings[n as usize]
+            )));
+        }
+        // whole-edge SSA cache: a value latched (CF/WF/eager at its
+        // schedule position) or legally shared by an earlier section of
+        // this edge function replaces the slot load / cone re-expansion.
+        // Frames with bound method args are excluded: their defs may be
+        // call-site-specific.
+        if f.args.is_empty() {
+            if let Some(e) = &self.edge {
+                if let Some(v) = e
+                    .latched
+                    .get(&(f.inst, n))
+                    .or_else(|| e.shared.get(&(f.inst, n)))
+                {
+                    let v = *v;
+                    f.ssa.insert(n, v);
+                    return Ok(v);
+                }
+            }
+        }
+        let ie = self.ie(f.inst)?;
+        // other rules' fire signals read their (already computed) slots;
+        // this rule's own CF/WF must expand its cone instead — the sched
+        // fn is what computes those slots
+        // auto-fire pseudo-specs have no rule (synthetic rule_idx) and
+        // no own CF/WF — every fire signal reads its computed slot
+        let own = f.inst == self.spec.inst && self.spec.autofire.is_none() && {
+            let r = self.rule();
+            n == r.can_fire || n == r.will_fire
+        };
+        if !own {
+            if let Some(&slot) = ie.cfwf_slot.get(&n) {
+                edge_ssa_count(0, 1);
+                let word = self.load_word(f, slot);
+                return Ok(self.to_w(word, 64, 1, false));
+            }
+        }
+        // schedule-position (eager) defs live in arena slots, but ONLY
+        // the rule's own frame may touch them: inlined callee frames
+        // must recompute (their instances' owning entries may not have
+        // run yet, and C++ method bodies recompute at call time).
+        // Within the own frame: exec bodies reload (bsc's def tsort
+        // guarantees the owner's schedule position precedes any body
+        // alias), and sched fns reload defs owned by strictly earlier
+        // entries (spec.shared) — the cone-dedup that keeps shared
+        // solver cones from expanding into every rule's IR.
+        if f.inst == self.spec.inst {
+            if let Some(&(base, w)) = ie.eager_slot.get(&n) {
+                let own_eager = self.spec.eager.contains(&n);
+                if f.is_exec || (!own_eager && self.spec.shared.contains(&n)) {
+                    edge_ssa_count(if f.is_exec { 1 } else { 2 }, w.div_ceil(64) as usize);
+                    return Ok(self.load_val(f, base, w));
+                }
+            }
+        }
+        // outlined piece: call its helper — compiled once per module
+        // type, base-relative, with a per-instant memo inside when the
+        // piece is stable.  The callee's region base is the caller's
+        // base shifted by the (type-uniform) subtree offset.
+        if let Some(out) = self.outlined {
+            if self.helper_self == Some((ie.mir, n)) {
+                // lowering this piece's own body: fall through to expand
+            } else if let Some((href, w, hports)) = out.get(&(ie.mir, n)) {
+                // parameterized pieces need every port bound in this
+                // frame; otherwise expand inline as before
+                let bound = hports.iter().all(|(p, _)| f.args.contains_key(p));
+                if !bound {
+                    // fall through to inline expansion below
+                } else {
+                    let w = *w;
+                    let i64t = self.ctx.i64_type();
+                    let ptrt = self.ctx.ptr_type(AddressSpace::default());
+                    let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
+                        vec![ptrt.into(), ptrt.into(), i64t.into()];
+                    for (_, pw) in hports {
+                        ptys.push(self.ity(*pw).into());
+                    }
+                    let hty = self.ity(w).fn_type(&ptys, false);
+                    let callee_base = self.slot_index(self.ie(f.inst)?.region.0);
+                    let envp = f
+                        .envp
+                        .ok_or_else(|| Ineligible("helper needs env".into()))?;
+                    let mut hargs: Vec<inkwell::values::BasicMetadataValueEnum> =
+                        vec![f.arena.into(), envp.into(), callee_base.into()];
+                    for (pn, pw) in hports {
+                        let (v, vw) = f.args[pn];
+                        hargs.push(self.to_w(v, vw, *pw, false).into());
+                    }
+                    let cs = match href {
+                        HelperRef::Addr(a) => {
+                            let fp = i64t.const_int(*a as u64, false).const_to_pointer(ptrt);
+                            self.builder
+                                .build_indirect_call(hty, fp, &hargs, "hlp")
+                                .unwrap()
+                        }
+                        HelperRef::Sym(name) => {
+                            let hf = self
+                                .module
+                                .get_function(name)
+                                .unwrap_or_else(|| self.module.add_function(name, hty, None));
+                            self.builder.build_call(hf, &hargs, "hlp").unwrap()
+                        }
+                    };
+                    let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
+                        return nope("helper returned void");
+                    };
+                    let v = rv.into_int_value();
+                    f.ssa.insert(n, v);
+                    self.rec_def(f, n, v);
+                    return Ok(v);
+                }
+            }
+        }
+        if f.expanding.contains(&n) {
+            return nope("cyclic def");
+        }
+        let m = &self.env.d.modules[ie.mir];
+        let Some(d) = m.def(n) else {
+            let chain: Vec<&str> = f
+                .expanding
+                .iter()
+                .map(|&x| self.env.d.strings[x as usize].as_str())
+                .collect();
+            return Err(Ineligible(format!(
+                "unknown def (expand): {} in {} (exec={} args={} chain={})",
+                self.env.d.strings[n as usize],
+                self.spec.label,
+                f.is_exec,
+                f.args.len(),
+                chain.join(" <- "),
+            )));
+        };
+        let dex = d.expr.clone();
+        {
+            let mut seen = std::collections::HashSet::new();
+            if self.effectful_expr(f.inst, &dex, &mut seen) {
+                return self.def_thunk(f, n, &dex);
+            }
+        }
+        f.expanding.push(n);
+        let v = self.expr_scalar(f, &dex)?;
+        f.expanding.pop();
+        f.ssa.insert(n, v);
+        self.rec_def(f, n, v);
+        // schedule-position defs are visible to exec bodies via the
+        // arena — stored only by the OWNING rule's sched fn (an inlined
+        // frame writing call-time values would corrupt them)
+        if !f.is_exec && f.inst == self.spec.inst && self.spec.eager.contains(&n) {
+            if let Some(&(base, w)) = self.ie(f.inst)?.eager_slot.get(&n) {
+                if self.edge.as_ref().is_none_or(|e| e.exports.contains(&base)) {
+                    edge_ssa_count(3, 0);
+                    self.store_val(f, base, w, v);
+                }
+            }
+        }
+        Ok(v)
+    }
+
+    fn prim(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        op: PrimOp,
+        width: u32,
+        args: &[Expr],
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        // a zero-width result is the empty bit-vector, always 0: the
+        // interp masks every op back to zero at width 0.  A central
+        // early return keeps the invariant where per-op lowering would
+        // break it (Not of i1 0 is i1 1; Sra computes width-1, which
+        // underflows) — prim exprs are pure, so skipping the args is
+        // safe (review finding)
+        if width == 0 {
+            return Ok(self.ity(0).const_zero());
+        }
+        // string equality: the interp compares marker limbs, i.e. the
+        // ids — an i64 id compare is the exact mirror (both engines
+        // treat distinct ids as unequal regardless of text)
+        if op == PrimOp::Eq && args.len() == 2 && self.expr_is_str(f, &args[0]) {
+            let a = self.str_expr(f, &args[0], None)?;
+            let b = self.str_expr(f, &args[1], None)?;
+            return Ok(self
+                .builder
+                .build_int_compare(IntPredicate::EQ, a, b, "seq")
+                .unwrap());
+        }
+        match op {
+            PrimOp::And | PrimOp::Or | PrimOp::Xor | PrimOp::Add | PrimOp::Sub | PrimOp::Mul => {
+                let mut it = args.iter();
+                let first = it.next().ok_or_else(|| Ineligible("no args".into()))?;
+                let w0 = self.expr_width(f, first)?;
+                let a0 = self.expr_scalar(f, first)?;
+                let mut acc = self.to_w(a0, w0, width, false);
+                for a in it {
+                    let wa = self.expr_width(f, a)?;
+                    let v0 = self.expr_scalar(f, a)?;
+                    let v = self.to_w(v0, wa, width, false);
+                    acc = match op {
+                        PrimOp::And => self.builder.build_and(acc, v, "and").unwrap(),
+                        PrimOp::Or => self.builder.build_or(acc, v, "or").unwrap(),
+                        PrimOp::Xor => self.builder.build_xor(acc, v, "xor").unwrap(),
+                        PrimOp::Add => self.builder.build_int_add(acc, v, "add").unwrap(),
+                        PrimOp::Sub => self.builder.build_int_sub(acc, v, "sub").unwrap(),
+                        PrimOp::Mul => self.builder.build_int_mul(acc, v, "mul").unwrap(),
+                        _ => unreachable!(),
+                    };
+                }
+                Ok(acc)
+            }
+            PrimOp::Not => {
+                let w0 = self.expr_width(f, &args[0])?;
+                let v0 = self.expr_scalar(f, &args[0])?;
+                let v = self.to_w(v0, w0, width, false);
+                Ok(self.builder.build_not(v, "not").unwrap())
+            }
+            PrimOp::Neg => {
+                let w0 = self.expr_width(f, &args[0])?;
+                let v0 = self.expr_scalar(f, &args[0])?;
+                let v = self.to_w(v0, w0, width, false);
+                Ok(self.builder.build_int_neg(v, "neg").unwrap())
+            }
+            PrimOp::Eq | PrimOp::Ult | PrimOp::Ule => {
+                let wx = self.expr_width(f, &args[0])?;
+                let wy = self.expr_width(f, &args[1])?;
+                let wm = wx.max(wy);
+                let x0 = self.expr_scalar(f, &args[0])?;
+                let y0 = self.expr_scalar(f, &args[1])?;
+                let x = self.to_w(x0, wx, wm, false);
+                let y = self.to_w(y0, wy, wm, false);
+                let p = match op {
+                    PrimOp::Eq => IntPredicate::EQ,
+                    PrimOp::Ult => IntPredicate::ULT,
+                    _ => IntPredicate::ULE,
+                };
+                Ok(self.builder.build_int_compare(p, x, y, "uc").unwrap())
+            }
+            PrimOp::Slt | PrimOp::Sle => {
+                let wx = self.expr_width(f, &args[0])?;
+                let wy = self.expr_width(f, &args[1])?;
+                let wm = wx.max(wy);
+                let x0 = self.expr_scalar(f, &args[0])?;
+                let y0 = self.expr_scalar(f, &args[1])?;
+                let x = self.to_w(x0, wx, wm, true);
+                let y = self.to_w(y0, wy, wm, true);
+                let p = if op == PrimOp::Slt {
+                    IntPredicate::SLT
+                } else {
+                    IntPredicate::SLE
+                };
+                Ok(self.builder.build_int_compare(p, x, y, "sc").unwrap())
+            }
+            PrimOp::Shl | PrimOp::Lshr | PrimOp::Ashr => {
+                let ws = self.expr_width(f, &args[0])?;
+                if ws != width {
+                    return nope("shift result width differs from source");
+                }
+                let x = self.expr_scalar(f, &args[0])?;
+                let wa = self.expr_width(f, &args[1])?;
+                let s0 = self.expr_scalar(f, &args[1])?;
+                // compare/clamp the amount in 64 bits, then bring to iW
+                let s64 = self.to_w(s0, wa, 64, false);
+                let wc = self.ctx.i64_type().const_int(width as u64, false);
+                let big = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGE, s64, wc, "sb")
+                    .unwrap();
+                match op {
+                    PrimOp::Shl | PrimOp::Lshr => {
+                        let zero64 = self.ctx.i64_type().const_zero();
+                        let samt64 = self
+                            .builder
+                            .build_select(big, zero64, s64, "sa")
+                            .unwrap()
+                            .into_int_value();
+                        let samt = self.to_w(samt64, 64, width, false);
+                        let r = if op == PrimOp::Shl {
+                            self.builder.build_left_shift(x, samt, "shl").unwrap()
+                        } else {
+                            self.builder
+                                .build_right_shift(x, samt, false, "lshr")
+                                .unwrap()
+                        };
+                        let zero = self.ity(width).const_zero();
+                        Ok(self
+                            .builder
+                            .build_select(big, zero, r, "shz")
+                            .unwrap()
+                            .into_int_value())
+                    }
+                    _ => {
+                        // ashr: clamp to width-1 — sign-fill for any
+                        // amount >= width, matching Value::ashr
+                        let maxs = self.ctx.i64_type().const_int((width - 1) as u64, false);
+                        let samt64 = self
+                            .builder
+                            .build_select(big, maxs, s64, "aa")
+                            .unwrap()
+                            .into_int_value();
+                        let samt = self.to_w(samt64, 64, width, false);
+                        Ok(self
+                            .builder
+                            .build_right_shift(x, samt, true, "ashr")
+                            .unwrap())
+                    }
+                }
+            }
+            PrimOp::Extract => {
+                // args: [val, hi, lo]; the result width is static, so
+                // only lo matters (hi = lo + width - 1); bits beyond the
+                // source read as zero (Value::extract)
+                let ws = self.expr_width(f, &args[0])?;
+                if let (Expr::Const { limbs: hi, .. }, Expr::Const { limbs: lo, .. }) =
+                    (&args[1], &args[2])
+                {
+                    let (hi, lo) = (
+                        *hi.first().unwrap_or(&0) as u64,
+                        *lo.first().unwrap_or(&0) as u64,
+                    );
+                    if hi < lo || hi - lo + 1 != width as u64 {
+                        return nope("extract bounds/width mismatch");
+                    }
+                    if lo >= ws as u64 {
+                        return Ok(self.ity(width).const_zero());
+                    }
+                    // A word-decomposed source is read straight out of
+                    // the word(s) the field lands in, so the packed value
+                    // is never built.  Most fields sit inside one word;
+                    // one straddling a boundary takes the tail of the
+                    // low word and the head of the high one.
+                    let src = self.expr(f, &args[0])?;
+                    if let Some(v) = self.extract_words(&src, lo as u32, hi as u32, ws, width) {
+                        return Ok(v);
+                    }
+                    let x = src.as_scalar(self, ws);
+                    let sh = self.ity(ws).const_int(lo, false);
+                    let r = self.builder.build_right_shift(x, sh, false, "ex").unwrap();
+                    return Ok(self.to_w(r, ws, width, false));
+                }
+                // dynamic bounds: Value::extract takes bits lo..=hi
+                // (source-clamped), i.e. min(hi-lo+1, width) result bits
+                let i64t = self.ctx.i64_type();
+                let x = self.expr_scalar(f, &args[0])?;
+                let wh = self.expr_width(f, &args[1])?;
+                let hi0 = self.expr_scalar(f, &args[1])?;
+                let hi64 = self.to_w(hi0, wh, 64, false);
+                let wl = self.expr_width(f, &args[2])?;
+                let lo0 = self.expr_scalar(f, &args[2])?;
+                let lo64 = self.to_w(lo0, wl, 64, false);
+                // shifted = lo >= ws ? 0 : x >> lo, widened to the result
+                let wsc = i64t.const_int(ws as u64, false);
+                let big = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGE, lo64, wsc, "exb")
+                    .unwrap();
+                let zero64 = i64t.const_zero();
+                let samt64 = self
+                    .builder
+                    .build_select(big, zero64, lo64, "exa")
+                    .unwrap()
+                    .into_int_value();
+                let samt = self.to_w(samt64, 64, ws, false);
+                let sh = self
+                    .builder
+                    .build_right_shift(x, samt, false, "exd")
+                    .unwrap();
+                let zerows = self.ity(ws).const_zero();
+                let sh = self
+                    .builder
+                    .build_select(big, zerows, sh, "exz")
+                    .unwrap()
+                    .into_int_value();
+                let shifted = self.to_w(sh, ws, width, false);
+                // mask to min(hi-lo+1, width) bits; hi < lo reads as zero
+                let hlt = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, hi64, lo64, "exh")
+                    .unwrap();
+                let n = self.builder.build_int_sub(hi64, lo64, "exn").unwrap();
+                let n = self
+                    .builder
+                    .build_int_add(n, i64t.const_int(1, false), "exn1")
+                    .unwrap();
+                let wc = i64t.const_int(width as u64, false);
+                let bign = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGE, n, wc, "exbn")
+                    .unwrap();
+                let count = self
+                    .builder
+                    .build_select(bign, wc, n, "exc")
+                    .unwrap()
+                    .into_int_value();
+                // mask = allones >> (width - count); count >= 1 here
+                // (hi >= lo), so the shift amount is < width
+                let msh64 = self.builder.build_int_sub(wc, count, "exms").unwrap();
+                let msh = self.to_w(msh64, 64, width, false);
+                let allones = self.ity(width).const_all_ones();
+                let mask = self
+                    .builder
+                    .build_right_shift(allones, msh, false, "exmk")
+                    .unwrap();
+                let r = self.builder.build_and(shifted, mask, "exr").unwrap();
+                let zerow = self.ity(width).const_zero();
+                Ok(self
+                    .builder
+                    .build_select(hlt, zerow, r, "exf")
+                    .unwrap()
+                    .into_int_value())
+            }
+            PrimOp::Concat => {
+                // left-to-right, first arg highest.  Zero-width members
+                // contribute nothing and are skipped; the first real
+                // member seeds acc UNSHIFTED — otherwise a full-width
+                // member (its siblings all zero-width) would emit
+                // `shl iW acc, W`, which is LLVM poison
+                let t = self.ity(width);
+                let mut acc: Option<IntValue<'ctx>> = None;
+                let mut total = 0u32;
+                for a in args {
+                    let wa = self.expr_width(f, a)?;
+                    let v0 = self.expr_scalar(f, a)?;
+                    if wa == 0 {
+                        continue;
+                    }
+                    let v = self.to_w(v0, wa, width, false);
+                    total += wa;
+                    if total > width {
+                        return nope("concat width overflow");
+                    }
+                    acc = Some(match acc {
+                        None => v,
+                        Some(prev) => {
+                            // prev holds >= 1 bit, so wa <= width - 1
+                            let sh = t.const_int(wa as u64, false);
+                            let shifted = self.builder.build_left_shift(prev, sh, "cc").unwrap();
+                            self.builder.build_or(shifted, v, "co").unwrap()
+                        }
+                    });
+                }
+                if total != width {
+                    return nope("concat width mismatch");
+                }
+                Ok(acc.unwrap_or_else(|| t.const_zero()))
+            }
+            PrimOp::ZeroExt => {
+                let ws = self.expr_width(f, &args[0])?;
+                let v = self.expr_scalar(f, &args[0])?;
+                Ok(self.to_w(v, ws, width, false))
+            }
+            PrimOp::SignExt => {
+                let ws = self.expr_width(f, &args[0])?;
+                let v = self.expr_scalar(f, &args[0])?;
+                Ok(self.to_w(v, ws, width, true))
+            }
+            PrimOp::Quot | PrimOp::Rem => {
+                // Unsigned, and a zero divisor gives ALL ONES at the
+                // operation's width -- `Value::quot' in trs-interp
+                // and `safe_quot' in Bluesim define the same result,
+                // and the reasoning for the value is in value.rs.
+                //
+                // Branch-free, and it has to be: LLVM's `udiv' by
+                // zero is immediate UB, so the division must never
+                // execute with the zero.  Substituting 1 for a zero
+                // divisor keeps it total and the outer select
+                // discards what that computed.  Staying one
+                // expression also keeps the whole thing a pure
+                // arithmetic op the optimizer may hoist, sink or drop
+                // like any other -- which is what lets the planner
+                // speculate it.
+                let wx = self.expr_width(f, &args[0])?;
+                let wy = self.expr_width(f, &args[1])?;
+                let x0 = self.expr_scalar(f, &args[0])?;
+                let y0 = self.expr_scalar(f, &args[1])?;
+                let wm = wx.max(wy).max(width);
+                let x = self.to_w(x0, wx, wm, false);
+                let y = self.to_w(y0, wy, wm, false);
+                let ity = self.ity(wm);
+                let z = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, y, ity.const_zero(), "dz")
+                    .unwrap();
+                let d = self
+                    .builder
+                    .build_select(z, ity.const_int(1, false), y, "dsafe")
+                    .unwrap()
+                    .into_int_value();
+                let r = if op == PrimOp::Quot {
+                    self.builder.build_int_unsigned_div(x, d, "quot").unwrap()
+                } else {
+                    self.builder.build_int_unsigned_rem(x, d, "rem").unwrap()
+                };
+                // all ones at the WIDER working width truncates to all
+                // ones at the result width, so one constant serves
+                let r = self
+                    .builder
+                    .build_select(z, ity.const_all_ones(), r, "divz")
+                    .unwrap()
+                    .into_int_value();
+                Ok(self.to_w(r, wm, width, false))
+            }
+            _ => nope(format!("prim op {op:?} not compilable")),
+        }
+    }
+
+    /// sched_<label>(arena): cone eval, inhibitors, CF/WF + eager stores.
+    fn lower_sched(&mut self) -> Result<(), Ineligible> {
+        let ptrt = self.ctx.ptr_type(AddressSpace::default());
+        let i32t = self.ctx.i32_type();
+        let i64t = self.ctx.i64_type();
+        // sched fns take (arena, env, region base index, ordinal),
+        // exactly as exec fns do: in-region state addresses relative
+        // to base and callback sites report the runtime ordinal, so
+        // ONE body serves every instance of the class.  The call-site
+        // origins stay BAKED -- unlike the region, they are constant
+        // across a class (the dedup invariant asserts the sched
+        // origins are equal, since each is the shared exec half's
+        // length).
+        let fnty = self
+            .ctx
+            .void_type()
+            .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
+        let func = self.module.add_function(
+            &format!(
+                "sched_{}",
+                self.share_sym.as_deref().unwrap_or(&self.spec.label)
+            ),
+            fnty,
+            None,
+        );
+        let bb = self.ctx.append_basic_block(func, "entry");
+        self.builder.position_at_end(bb);
+        let region = self.ie(self.spec.inst)?.region;
+        self.dedup = Some((
+            region.0,
+            region.1,
+            func.get_nth_param(2).unwrap().into_int_value(),
+            func.get_nth_param(3).unwrap().into_int_value(),
+        ));
+        // one Lower emits one function; the reset pointers are SSA
+        // values in it, so they must never outlive it
+        self.reset_ptrs.clear();
+        let mut f = Frame {
+            arena: func.get_nth_param(0).unwrap().into_pointer_value(),
+            envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
+            inst: self.spec.inst,
+            method_idx: None,
+            args: HashMap::new(),
+            ssa: HashMap::new(),
+            chunks: HashMap::new(),
+            expanding: Vec::new(),
+            thunks: HashMap::new(),
+            av_widths: HashMap::new(),
+            dead_defs: Default::default(),
+            tasks: HashMap::new(),
+            av_slots: HashMap::new(),
+            av_args: HashMap::new(),
+            is_exec: false,
+            depth: 0,
+        };
+        self.sched_section(&mut f)?;
+        self.builder.build_return(None).unwrap();
+        Ok(())
+    }
+
+    /// The sched body at the builder's current position: cone eval,
+    /// inhibitors, CF/WF + eager stores.  Reused by the whole-edge SSA
+    /// emitter (one section per Sched node); every value computed here
+    /// is at the section's top level, so recording it in the edge
+    /// cache is dominance-safe.
+    fn sched_section(&mut self, f: &mut Frame<'ctx>) -> Result<(), Ineligible> {
+        if self.spec.autofire.is_some() {
+            // auto-fire pseudo-spec: nothing to latch — the method
+            // executes unconditionally at its Exec anchor
+            return Ok(());
+        }
+        let r = self.rule().clone();
+        // EFFECTFUL eager defs latch FIRST, in list order — the
+        // interpreter evaluates REntry::eager into the latch before
+        // the entry's nodes, and for these evaluation order and count
+        // are observable (RegFile bounds warnings, Quot/Rem traps).
+        // Pure eager defs stay lazy: the cones reach them on demand
+        // and the leftover loop below publishes unreached slots.
+        for &e in &self.spec.eager {
+            if !self.ie(self.spec.inst)?.eager_slot.contains_key(&e) {
+                return nope("eager def without slot");
+            }
+            let m = &self.env.d.modules[self.ie(f.inst)?.mir];
+            let Some(d) = m.def(e) else {
+                continue;
+            };
+            let dex = d.expr.clone();
+            let mut seen = std::collections::HashSet::new();
+            if self.effectful_expr(f.inst, &dex, &mut seen) {
+                self.def(f, e)?; // stores the slot on compute
+            }
+        }
+        let mut cf = self.def(f, r.can_fire)?; // i1
+        for &slot in &self.spec.inhibit_slots {
+            edge_ssa_count(0, 1);
+            let other = self.load_word(f, slot);
+            let nz = self.nonzero(other, 64);
+            let zero = self.ctx.bool_type().const_zero();
+            cf = self
+                .builder
+                .build_select(nz, zero, cf, "inh")
+                .unwrap()
+                .into_int_value();
+        }
+        let keep =
+            |e: &Option<EdgeCtx>, slot: u32| e.as_ref().is_none_or(|e| e.exports.contains(&slot));
+        if keep(&self.edge, self.spec.cf_slot) {
+            let cf64 = self.to_w(cf, 1, 64, false);
+            self.store_word(f, self.spec.cf_slot, cf64);
+        }
+        // the WF cone reads the (inhibited) latched CF, not the raw cone
+        f.ssa.insert(r.can_fire, cf);
+        let wf = self.def(f, r.will_fire)?;
+        if keep(&self.edge, self.spec.wf_slot) {
+            let wf64 = self.to_w(wf, 1, 64, false);
+            self.store_word(f, self.spec.wf_slot, wf64);
+        }
+        // eager defs the cones did not reach still need their slots
+        // stored (later rules' cones or bodies may reload them)
+        let mut eager_vals = Vec::new();
+        for &e in &self.spec.eager {
+            let v = self.def(f, e)?; // def() stores to the slot on compute
+            eager_vals.push((e, v));
+        }
+        // edge cache: CF/WF and eager defs are POSITION-LATCHED values
+        // (what the slots hold); later sections read them in place of
+        // slot loads.  Never evicted — eviction would change latched
+        // semantics, not just performance.
+        if self.edge.is_some() && !self.edge.as_ref().unwrap().gate_no_latch {
+            let inst = self.spec.inst;
+            let e = self.edge.as_mut().unwrap();
+            e.latched.insert((inst, r.can_fire), cf);
+            e.latched.insert((inst, r.will_fire), wf);
+            for (n, v) in eager_vals {
+                e.latched.insert((inst, n), v);
+            }
+        }
+        Ok(())
+    }
+
+    /// exec_<label>(arena, env) -> i32: WF-gated body execution.
+    fn lower_exec(&mut self) -> Result<(), Ineligible> {
+        let ptrt = self.ctx.ptr_type(AddressSpace::default());
+        let i32t = self.ctx.i32_type();
+        let i64t = self.ctx.i64_type();
+        // exec fns take (arena, env, region base index, ordinal, prim
+        // site base, foreign site base): in-region state addresses are
+        // relative to base, callback sites report the runtime ordinal,
+        // and site indices are relative to the two bases -- so ONE
+        // compiled body serves every instance of the class, including
+        // instances whose sched half is a different size (see
+        // CompiledExec for why that size varies)
+        let fnty = i32t.fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
+        let func = self
+            .module
+            .add_function(
+                &format!(
+                    "exec_{}",
+                    self.share_sym.as_deref().unwrap_or(&self.spec.label)
+                ),
+                fnty,
+                None,
+            );
+        let entry = self.ctx.append_basic_block(func, "entry");
+        let stop_bb = self.ctx.append_basic_block(func, "stop");
+
+        self.builder.position_at_end(entry);
+        let region = self.ie(self.spec.inst)?.region;
+        self.dedup = Some((
+            region.0,
+            region.1,
+            func.get_nth_param(2).unwrap().into_int_value(),
+            func.get_nth_param(3).unwrap().into_int_value(),
+        ));
+        // one Lower emits one function; the reset pointers are SSA
+        // values in it, so they must never outlive it
+        self.reset_ptrs.clear();
+        let mut f = Frame {
+            arena: func.get_nth_param(0).unwrap().into_pointer_value(),
+            envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
+            inst: self.spec.inst,
+            method_idx: None,
+            args: HashMap::new(),
+            ssa: HashMap::new(),
+            chunks: HashMap::new(),
+            expanding: Vec::new(),
+            thunks: HashMap::new(),
+            av_widths: HashMap::new(),
+            dead_defs: Default::default(),
+            tasks: HashMap::new(),
+            av_slots: HashMap::new(),
+            av_args: HashMap::new(),
+            is_exec: true,
+            depth: 0,
+        };
+        self.exec_section(&mut f, func, stop_bb)?;
+        self.builder
+            .build_return(Some(&i32t.const_int(0, false)))
+            .unwrap();
+        self.builder.position_at_end(stop_bb);
+        self.builder
+            .build_return(Some(&i32t.const_int(1, false)))
+            .unwrap();
+        Ok(())
+    }
+
+    /// The WF gate + body at the builder's current position; leaves the
+    /// builder at the section's continuation block.  $finish paths jump
+    /// to `stop_bb` (owned by the caller).  Reused by the whole-edge
+    /// SSA emitter, where the gate reads the sched's latched WF value
+    /// instead of the slot.
+    fn exec_section(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func: FunctionValue<'ctx>,
+        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> Result<(), Ineligible> {
+        if let Some(af) = self.spec.autofire.clone() {
+            return self.autofire_section(f, func, stop_bb, &af);
+        }
+        let r = self.rule().clone();
+        let body_bb = self.ctx.append_basic_block(func, "body");
+        let cont_bb = self.ctx.append_basic_block(func, "cont");
+        if self.spec.always_fire {
+            // WILL_FIRE == const true: no gate (Ravi's static case)
+            self.builder.build_unconditional_branch(body_bb).unwrap();
+        } else {
+            let latched = self
+                .edge
+                .as_ref()
+                .and_then(|e| e.latched.get(&(self.spec.inst, r.will_fire)))
+                .copied();
+            let fire = match latched {
+                Some(v) => self.nonzero(v, 1),
+                None => {
+                    edge_ssa_count(0, 1);
+                    let wf = self.load_word(f, self.spec.wf_slot);
+                    self.nonzero(wf, 64)
+                }
+            };
+            self.builder
+                .build_conditional_branch(fire, body_bb, cont_bb)
+                .unwrap();
+        }
+
+        self.builder.position_at_end(body_bb);
+        self.stmts(f, func, &r.body, stop_bb)?;
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+        self.builder.position_at_end(cont_bb);
+        Ok(())
+    }
+
+    /// Auto-fired always_enabled top method (pseudo-spec): the body
+    /// inlines at its Exec anchor with EN latched, constant argument
+    /// values (the baked bindings), and the sibling RDY_<m> wrap — the
+    /// compiled twin of the interpreter's call_action at the cut.
+    /// always_fire on the pseudo-spec skipped the WF gate; only RDY
+    /// gates the body (the C++ check_rdy wrapper), absent = ready.
+    fn autofire_section(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func: FunctionValue<'ctx>,
+        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+        af: &crate::abi::AfSpec,
+    ) -> Result<(), Ineligible> {
+        let ie = self.ie(f.inst)?;
+        let mir = ie.mir;
+        let m = &self.env.d.modules[mir].methods[af.method_idx];
+        if !matches!(m.kind, trs_ir::MethodKind::Action) {
+            return nope("auto-fire on a non-Action method");
+        }
+        if !m.always_enabled || m.args.len() != af.argv.len() {
+            return nope("auto-fire spec out of step with the method");
+        }
+        let (margs, body, mname, men) = (m.args.clone(), m.body.clone(), m.name, m.en);
+        // sibling RDY lookup — same rule as the interp's always_en_rdy
+        // and the parent-call inline: no RDY method exported = constant
+        // ready
+        let rdy = m.rdy.and_then(|id| {
+            self.env.d.modules[mir]
+                .methods
+                .iter()
+                .enumerate()
+                .find(|(_, mm)| mm.name == id)
+                .map(|(mi, mm)| (mi, mm.result.clone()))
+        });
+        let en_slot = men.and_then(|id| ie.en_slot.get(&id).copied());
+        // callee frame on the top itself, args bound to the baked
+        // constants (limbs pre-normalized to ceil(width/64) words)
+        let mut cf = self.child_frame(f, f.inst, Some(af.method_idx))?;
+        for (pa, (_, limbs)) in margs.iter().zip(&af.argv) {
+            let v = self
+                .ity(pa.width.max(1))
+                .const_int_arbitrary_precision(limbs);
+            cf.args.insert(pa.name, (v, pa.width));
+        }
+        if let Some(slot) = en_slot {
+            let one = self.ctx.i64_type().const_int(1, false);
+            self.store_word(&cf, slot, one);
+        }
+        let rec_argv: Vec<_> = margs
+            .iter()
+            .filter_map(|pa| cf.args.get(&pa.name).copied())
+            .collect();
+        self.rec_meth_call(&cf, f.inst, mname, &rec_argv)?;
+        let sk_bb = self.ctx.append_basic_block(func, "afsk");
+        match rdy {
+            Some((mi_r, Some(res))) => {
+                let mut rf = self.child_frame(f, f.inst, Some(mi_r))?;
+                let r = self.expr_scalar(&mut rf, &res)?;
+                let rz = self.nonzero(r, 1);
+                let bd_bb = self.ctx.append_basic_block(func, "afrdy");
+                self.builder
+                    .build_conditional_branch(rz, bd_bb, sk_bb)
+                    .unwrap();
+                self.builder.position_at_end(bd_bb);
+            }
+            Some((_, None)) => return nope("RDY method without result"),
+            None => {}
+        }
+        self.stmts(&mut cf, func, &body, stop_bb)?;
+        self.builder.build_unconditional_branch(sk_bb).unwrap();
+        self.builder.position_at_end(sk_bb);
+        Ok(())
+    }
+
+    /// One outlined def piece: iN hlp(arena, env, base).  Base-relative
+    /// addressing throughout (shared across instances of the type);
+    /// stable pieces get a per-instant memo prologue over [stamp,
+    /// value] slots in the instance region.
+    fn lower_helper(&mut self, hs: &HelperSpec) -> Result<(), Ineligible> {
+        let ptrt = self.ctx.ptr_type(AddressSpace::default());
+        let i64t = self.ctx.i64_type();
+        let w = hs.width.max(1);
+        let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> =
+            vec![ptrt.into(), ptrt.into(), i64t.into()];
+        for (_, pw) in &hs.ports {
+            ptys.push(self.ity(*pw).into());
+        }
+        let fnty = self.ity(w).fn_type(&ptys, false);
+        // an earlier helper may have DECLARED this symbol at a call
+        // site; adding a same-named function would silently rename the
+        // definition (sym.1) and leave the declaration bodyless —
+        // define into the existing declaration instead
+        let func = self
+            .module
+            .get_function(&hs.sym)
+            .unwrap_or_else(|| self.module.add_function(&hs.sym, fnty, None));
+        let entry = self.ctx.append_basic_block(func, "entry");
+        self.builder.position_at_end(entry);
+        let region = self.ie(hs.inst)?.region;
+        self.dedup = Some((
+            region.0,
+            region.1,
+            func.get_nth_param(2).unwrap().into_int_value(),
+            // helpers carry no callback sites (v1), so no site ever
+            // reads this ordinal -- but keep it the ABI's type
+            self.ctx.i32_type().const_zero(),
+        ));
+        // one Lower emits one function; the reset pointers are SSA
+        // values in it, so they must never outlive it
+        self.reset_ptrs.clear();
+        let mut args: HashMap<StrId, (IntValue<'ctx>, u32)> = HashMap::new();
+        for (k, (pn, pw)) in hs.ports.iter().enumerate() {
+            args.insert(
+                *pn,
+                (
+                    func.get_nth_param(3 + k as u32).unwrap().into_int_value(),
+                    *pw,
+                ),
+            );
+        }
+        let mut f = Frame {
+            arena: func.get_nth_param(0).unwrap().into_pointer_value(),
+            envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
+            inst: hs.inst,
+            method_idx: None,
+            args,
+            ssa: HashMap::new(),
+            chunks: HashMap::new(),
+            expanding: Vec::new(),
+            thunks: HashMap::new(),
+            av_widths: HashMap::new(),
+            dead_defs: Default::default(),
+            tasks: HashMap::new(),
+            av_slots: HashMap::new(),
+            av_args: HashMap::new(),
+            is_exec: true,
+            depth: 0,
+        };
+        let (hit_bb, miss_bb) = if hs.memo_slot.is_some() {
+            (
+                Some(self.ctx.append_basic_block(func, "hit")),
+                Some(self.ctx.append_basic_block(func, "miss")),
+            )
+        } else {
+            (None, None)
+        };
+        if let (Some(ms), Some(hit), Some(miss)) = (hs.memo_slot, hit_bb, miss_bb) {
+            let stamp = self.load_word(&f, ms);
+            let now = self.load_word(&f, self.env.now_slot);
+            let eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, stamp, now, "mhit")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(eq, hit, miss)
+                .unwrap();
+            self.builder.position_at_end(hit);
+            let cached = self.load_val(&f, ms + 1, w);
+            self.builder.build_return(Some(&cached)).unwrap();
+            self.builder.position_at_end(miss);
+        }
+        let v = self.def(&mut f, hs.def)?;
+        if let Some(ms) = hs.memo_slot {
+            self.store_val(&f, ms + 1, w, v);
+            let now = self.load_word(&f, self.env.now_slot);
+            self.store_word(&f, ms, now);
+        }
+        self.builder.build_return(Some(&v)).unwrap();
+        Ok(())
+    }
+
+    /// Boundary-tax experiment: the realized entry for (type, method,
+    /// kind) when a boundary map is active for this emission.
+    /// Reserve a block in each of this function's call-site tables for
+    /// a boundary call on `child`, materialising the callee's templates
+    /// into them with that child's absolute instances, and return the
+    /// (prim, foreign) site bases to hand the callee.  Each is this
+    /// function's own base offset to the block just reserved, so a site
+    /// inside the callee adds its index and lands in OUR table.
+    fn boundary_site_bases(
+        &mut self,
+        bf: &BoundaryFn,
+        child: usize,
+    ) -> Result<(IntValue<'ctx>, IntValue<'ctx>), Ineligible> {
+        let fits = |base: usize, n: usize| u32::try_from(base + n).is_ok();
+        if !fits(self.prim_calls.len(), bf.prim_sites.len())
+            || !fits(self.foreign_stmts.len(), bf.foreign_sites.len())
+        {
+            return nope("boundary block exceeds the 32-bit site field");
+        }
+        let pbase = self.prim_calls.len() as u32;
+        let fbase = self.foreign_stmts.len() as u32;
+        for p in &bf.prim_sites {
+            self.prim_calls.push(PrimCallSpec {
+                inst: child + p.inst,
+                ..p.clone()
+            });
+        }
+        for f in &bf.foreign_sites {
+            self.foreign_stmts.push(ForeignSpec {
+                inst: child + f.inst,
+                ..f.clone()
+            });
+        }
+        // our own base in each table (zero unless we are ourselves a
+        // boundary fn writing into a caller's block) plus the offset of
+        // the block just reserved
+        Ok((
+            self.site_index(self.bnd_prim_site, self.site_origin, pbase),
+            self.site_index(self.bnd_foreign_site, self.foreign_origin, fbase),
+        ))
+    }
+
+    /// The boundary fn serving a CALLEE's dedup class.  Keyed by
+    /// class rather than module type: a shared body bakes the
+    /// exemplar's parameters, and instances of one type differ in
+    /// exactly those.
+    fn boundary_hit(&self, class_id: usize, method: StrId, kind: u8) -> Option<BoundaryFn> {
+        BOUNDARY.with(|b| {
+            b.borrow()
+                .as_ref()
+                .and_then(|m| m.get(&(class_id, method, kind)).cloned())
+        })
+    }
+
+    /// One boundary method function.  ABI, with `s` = the triple
+    /// (ordinal, prim_site_base, foreign_site_base) -- the rule whose
+    /// call-site tables a site here reports into, and the caller's own
+    /// offset to the block it reserved in each of its two tables (see
+    /// `BoundaryFn::prim_sites`):
+    ///   kind 0: iN  sym(arena, env, base, s, args...)       value result
+    ///   kind 3: iN  sym(arena, env, base, s, args...)       AV result cone
+    ///   kind 1: i32 sym(arena, env, base, s, args...)       action body
+    ///   kind 2: i32 sym(arena, env, base, s, out, args...)  AV body+result
+    /// Base-relative addressing throughout (one fn serves every
+    /// instance of the type); the i32 status is 1 when a $finish path
+    /// fired (the caller branches to its stop block).  internal +
+    /// noinline: the boundary must survive the pipeline for the tax to
+    /// be measurable.  Returns the result width recorded in the map.
+    fn lower_boundary_fn(&mut self, rq: &BoundaryReq, external: bool) -> Result<u32, Ineligible> {
+        let ptrt = self.ctx.ptr_type(AddressSpace::default());
+        let i32t = self.ctx.i32_type();
+        let i64t = self.ctx.i64_type();
+        let m = &self.env.d.modules[rq.mir].methods[rq.mi];
+        let body = m.body.clone();
+        let result = m.result.clone();
+        let region = self.ie(rq.exemplar)?.region;
+        // result width first (it shapes the fn type): a width-only walk
+        // over a frame of dummy zero-constant args — no IR is emitted
+        let ret_w = if rq.kind == 1 {
+            0
+        } else {
+            let Some(res) = &result else {
+                return nope("boundary method without result");
+            };
+            let mut dargs: HashMap<StrId, (IntValue<'ctx>, u32)> = HashMap::new();
+            for (pn, pw) in &rq.args {
+                dargs.insert(*pn, (self.ity(*pw).const_zero(), *pw));
+            }
+            let df = Frame {
+                arena: ptrt.const_null(),
+                envp: Some(ptrt.const_null()),
+                inst: rq.exemplar,
+                method_idx: Some(rq.mi),
+                args: dargs,
+                ssa: HashMap::new(),
+                chunks: HashMap::new(),
+                expanding: Vec::new(),
+                thunks: HashMap::new(),
+                av_widths: HashMap::new(),
+                dead_defs: Default::default(),
+                tasks: HashMap::new(),
+                av_slots: HashMap::new(),
+                av_args: HashMap::new(),
+                is_exec: true,
+                depth: 0,
+            };
+            self.expr_width(&df, res)?.max(1)
+        };
+        let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![
+            ptrt.into(),
+            ptrt.into(),
+            i64t.into(),
+            i32t.into(),
+            i32t.into(),
+            i32t.into(),
+        ];
+        if rq.kind == 2 {
+            ptys.push(ptrt.into());
+        }
+        for (_, pw) in &rq.args {
+            ptys.push(self.ity(*pw).into());
+        }
+        let fnty = match rq.kind {
+            0 | 3 => self.ity(ret_w).fn_type(&ptys, false),
+            _ => i32t.fn_type(&ptys, false),
+        };
+        let func = self.module.add_function(&rq.sym, fnty, None);
+        if !external {
+            func.set_linkage(inkwell::module::Linkage::Internal);
+        }
+        let ni = self.ctx.create_enum_attribute(
+            inkwell::attributes::Attribute::get_named_enum_kind_id("noinline"),
+            0,
+        );
+        func.add_attribute(inkwell::attributes::AttributeLoc::Function, ni);
+        let entry = self.ctx.append_basic_block(func, "entry");
+        self.builder.position_at_end(entry);
+        self.dedup = Some((
+            region.0,
+            region.1,
+            func.get_nth_param(2).unwrap().into_int_value(),
+            func.get_nth_param(3).unwrap().into_int_value(),
+        ));
+        // one Lower emits one function; the reset pointers are SSA
+        // values in it, so they must never outlive it
+        self.reset_ptrs.clear();
+        self.bnd_prim_site = Some(func.get_nth_param(4).unwrap().into_int_value());
+        self.bnd_foreign_site = Some(func.get_nth_param(5).unwrap().into_int_value());
+        // Parameter layout: 0 arena, 1 env, 2 region base, 3 ordinal,
+        // 4 prim site base, 5 foreign site base, then (kind 2 only) the
+        // out pointer at BND_OUT, then the method's arguments.  Both
+        // the out read and the argument offset come from the one
+        // constant: a kind 2 whose two disagree is a type panic deep in
+        // the lowering rather than anything the caller can see.
+        const BND_OUT: u32 = 6;
+        let nfix: u32 = if rq.kind == 2 { BND_OUT + 1 } else { BND_OUT };
+        let mut args: HashMap<StrId, (IntValue<'ctx>, u32)> = HashMap::new();
+        for (k, (pn, pw)) in rq.args.iter().enumerate() {
+            args.insert(
+                *pn,
+                (
+                    func.get_nth_param(nfix + k as u32)
+                        .unwrap()
+                        .into_int_value(),
+                    *pw,
+                ),
+            );
+        }
+        let mut f = Frame {
+            arena: func.get_nth_param(0).unwrap().into_pointer_value(),
+            envp: Some(func.get_nth_param(1).unwrap().into_pointer_value()),
+            inst: rq.exemplar,
+            method_idx: Some(rq.mi),
+            args,
+            ssa: HashMap::new(),
+            chunks: HashMap::new(),
+            expanding: Vec::new(),
+            thunks: HashMap::new(),
+            av_widths: HashMap::new(),
+            dead_defs: Default::default(),
+            tasks: HashMap::new(),
+            av_slots: HashMap::new(),
+            av_args: HashMap::new(),
+            is_exec: true,
+            depth: 0,
+        };
+        match rq.kind {
+            0 | 3 => {
+                let res = result.as_ref().unwrap();
+                let rw = self.expr_width(&f, res)?;
+                let v = self.expr_scalar(&mut f, res)?;
+                let out = self.to_w(v, rw, ret_w, false);
+                self.builder.build_return(Some(&out)).unwrap();
+            }
+            1 => {
+                let stop_bb = self.ctx.append_basic_block(func, "stop");
+                self.stmts(&mut f, func, &body, stop_bb)?;
+                self.builder
+                    .build_return(Some(&i32t.const_int(0, false)))
+                    .unwrap();
+                self.builder.position_at_end(stop_bb);
+                self.builder
+                    .build_return(Some(&i32t.const_int(1, false)))
+                    .unwrap();
+            }
+            2 => {
+                let stop_bb = self.ctx.append_basic_block(func, "stop");
+                self.stmts(&mut f, func, &body, stop_bb)?;
+                let res = result.as_ref().unwrap();
+                let rw = self.expr_width(&f, res)?;
+                let v = self.expr_scalar(&mut f, res)?;
+                let vv = self.to_w(v, rw, ret_w, false);
+                let outp = func.get_nth_param(BND_OUT).unwrap().into_pointer_value();
+                for k in 0..words_for(ret_w) {
+                    let piece = if k == 0 {
+                        vv
+                    } else {
+                        let sh = self.ity(ret_w).const_int((64 * k) as u64, false);
+                        self.builder
+                            .build_right_shift(vv, sh, false, "bws")
+                            .unwrap()
+                    };
+                    let word = self.to_w(piece, ret_w, 64, false);
+                    let idx = i64t.const_int(k as u64, false);
+                    let p = unsafe { self.builder.build_gep(i64t, outp, &[idx], "bwp").unwrap() };
+                    self.builder.build_store(p, word).unwrap();
+                }
+                self.builder
+                    .build_return(Some(&i32t.const_int(0, false)))
+                    .unwrap();
+                self.builder.position_at_end(stop_bb);
+                self.builder
+                    .build_return(Some(&i32t.const_int(1, false)))
+                    .unwrap();
+            }
+            k => return nope(&format!("boundary kind {k}")),
+        }
+        Ok(ret_w)
+    }
+
+    /// Marshal a foreign call site: numeric args as word runs (strings
+    /// ride the spec table), call, optionally read back result words.
+    /// Returns the result value for tasks (ret_width > 0).
+    /// Statically real-typed expressions: the shapes whose interp
+    /// evaluation yields a REAL_MARKER Value (val_arg -> Arg::Real).
+    /// Reals reach simulation only as literals, parameters, and muxes/
+    /// defs over those, so the classification is decidable at lowering.
+    fn expr_is_real(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        self.expr_is_real_in(f, e, &mut Vec::new())
+    }
+
+    fn expr_is_real_in(&self, f: &Frame<'ctx>, e: &Expr, seen: &mut Vec<StrId>) -> bool {
+        match e {
+            Expr::Real(_) => true,
+            Expr::Param(p) | Expr::Port(p) => self
+                .ie(f.inst)
+                .map(|ie| ie.real_consts.contains_key(p))
+                .unwrap_or(false),
+            Expr::If { then_, else_, .. } => {
+                self.expr_is_real_in(f, then_, seen) || self.expr_is_real_in(f, else_, seen)
+            }
+            Expr::Case { arms, default, .. } => {
+                arms.iter().any(|(_, a)| self.expr_is_real_in(f, a, seen))
+                    || self.expr_is_real_in(f, default, seen)
+            }
+            Expr::Def(n) => {
+                if seen.contains(n) {
+                    return false; // cycle guard
+                }
+                let Ok(ie) = self.ie(f.inst) else {
+                    return false;
+                };
+                let m = &self.env.d.modules[ie.mir];
+                let Some(d) = m.def(*n) else {
+                    return false;
+                };
+                seen.push(*n);
+                let r = self.expr_is_real_in(f, &d.expr, seen);
+                seen.pop();
+                r
+            }
+            _ => false,
+        }
+    }
+
+    /// Statically string-typed expressions: the shapes whose interp
+    /// evaluation yields a STR_MARKER Value (val_arg -> Arg::Str).
+    /// Strings are literals, string params, muxes/defs over those,
+    /// marker-passthrough width adjustments, and StringConcat results.
+    fn expr_is_str(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        self.expr_is_str_in(f, e, &mut Vec::new())
+    }
+
+    fn expr_is_str_in(&self, f: &Frame<'ctx>, e: &Expr, seen: &mut Vec<StrId>) -> bool {
+        match e {
+            Expr::Str(_) => true,
+            Expr::Param(p) | Expr::Port(p) => self
+                .ie(f.inst)
+                .map(|ie| ie.str_consts.contains_key(p) || ie.str_slot.contains_key(p))
+                .unwrap_or(false),
+            Expr::If { then_, else_, .. } => {
+                self.expr_is_str_in(f, then_, seen) || self.expr_is_str_in(f, else_, seen)
+            }
+            Expr::Case { arms, default, .. } => {
+                arms.iter().any(|(_, a)| self.expr_is_str_in(f, a, seen))
+                    || self.expr_is_str_in(f, default, seen)
+            }
+            Expr::Def(n) => {
+                if seen.contains(n) {
+                    return false; // cycle guard
+                }
+                let Ok(ie) = self.ie(f.inst) else {
+                    return false;
+                };
+                let m = &self.env.d.modules[ie.mir];
+                let Some(d) = m.def(*n) else {
+                    return false;
+                };
+                seen.push(*n);
+                let r = self.expr_is_str_in(f, &d.expr, seen);
+                seen.pop();
+                r
+            }
+            Expr::Prim {
+                op: PrimOp::StringConcat,
+                ..
+            } => true,
+            Expr::Prim {
+                op: PrimOp::ZeroExt | PrimOp::SignExt,
+                args,
+                ..
+            } => args
+                .first()
+                .is_some_and(|a| self.expr_is_str_in(f, a, seen)),
+            _ => false,
+        }
+    }
+
+    /// Does a string expression contain a StringConcat anywhere —
+    /// including through Def table expansion?  Concat interns per
+    /// evaluation, so it must never run on an unselected mux arm.
+    fn contains_concat(&self, f: &Frame<'ctx>, e: &Expr) -> bool {
+        self.contains_concat_in(f, e, &mut Vec::new())
+    }
+
+    fn contains_concat_in(&self, f: &Frame<'ctx>, e: &Expr, seen: &mut Vec<StrId>) -> bool {
+        match e {
+            Expr::Prim {
+                op: PrimOp::StringConcat,
+                ..
+            } => true,
+            Expr::Prim { args, .. } => args.iter().any(|a| self.contains_concat_in(f, a, seen)),
+            Expr::If {
+                cond, then_, else_, ..
+            } => {
+                self.contains_concat_in(f, cond, seen)
+                    || self.contains_concat_in(f, then_, seen)
+                    || self.contains_concat_in(f, else_, seen)
+            }
+            Expr::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
+                self.contains_concat_in(f, scrutinee, seen)
+                    || arms
+                        .iter()
+                        .any(|(_, a)| self.contains_concat_in(f, a, seen))
+                    || self.contains_concat_in(f, default, seen)
+            }
+            Expr::Def(n) => {
+                // a positioned binding is already a pure id; only an
+                // unbound def's table expansion could re-run a concat
+                if f.ssa.contains_key(n) {
+                    return false;
+                }
+                if seen.contains(n) {
+                    return false; // cycle guard
+                }
+                let Ok(ie) = self.ie(f.inst) else {
+                    return false;
+                };
+                let m = &self.env.d.modules[ie.mir];
+                let Some(d) = m.def(*n) else {
+                    return false;
+                };
+                seen.push(*n);
+                let r = self.contains_concat_in(f, &d.expr, seen);
+                seen.pop();
+                r
+            }
+            _ => false,
+        }
+    }
+
+    /// Lower a string-typed expression to its i64 string id (the
+    /// compiled carrier for the interp's str_ref marker Value).
+    fn str_expr(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        e: &Expr,
+        stop_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        let i64t = self.ctx.i64_type();
+        match e {
+            Expr::Str(sid) => Ok(i64t.const_int(*sid as u64, false)),
+            Expr::Param(p) | Expr::Port(p) => {
+                let ie = self.ie(f.inst)?;
+                // a load, where this used to be the exemplar's own
+                // interned id baked into a body every instance shares
+                if let Some(&base) = ie.str_slot.get(p) {
+                    return Ok(self.load_word(f, base));
+                }
+                match ie.str_consts.get(p) {
+                    Some(&sid) => Ok(i64t.const_int(sid as u64, false)),
+                    None => nope("non-string port in string context"),
+                }
+            }
+            Expr::If {
+                cond, then_, else_, ..
+            } => {
+                // arms evaluate eagerly (select), which is only sound
+                // for PURE ids — a StringConcat in an arm would intern
+                // on the unselected path too, diverging from the
+                // interp's selected-arm-only evaluation (review
+                // finding); such shapes stay ineligible until arms get
+                // real control flow
+                if self.contains_concat(f, then_) || self.contains_concat(f, else_) {
+                    return nope("string concat under a mux arm");
+                }
+                let wc = self.expr_width(f, cond)?;
+                let c = self.expr_scalar(f, cond)?;
+                let cz = self.nonzero(c, wc);
+                let tv = self.str_expr(f, then_, stop_bb)?;
+                let ev = self.str_expr(f, else_, stop_bb)?;
+                Ok(self
+                    .builder
+                    .build_select(cz, tv, ev, "ssel")
+                    .unwrap()
+                    .into_int_value())
+            }
+            Expr::Case {
+                scrutinee,
+                arms,
+                default,
+                ..
+            } => {
+                if arms.iter().any(|(_, a)| self.contains_concat(f, a))
+                    || self.contains_concat(f, default)
+                {
+                    return nope("string concat under a mux arm");
+                }
+                let ws = self.expr_width(f, scrutinee)?;
+                // interp mirror: wide scrutinees never match an arm
+                if ws > 64 {
+                    return self.str_expr(f, default, stop_bb);
+                }
+                let sv = self.expr_scalar(f, scrutinee)?;
+                let mut acc = self.str_expr(f, default, stop_bb)?;
+                for (k, a) in arms {
+                    if ws < 64 && *k >= (1u64 << ws) {
+                        continue; // key not representable: never matches
+                    }
+                    let kv = self.ity(ws).const_int(*k, false);
+                    let hit = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, sv, kv, "scse")
+                        .unwrap();
+                    let av = self.str_expr(f, a, stop_bb)?;
+                    acc = self
+                        .builder
+                        .build_select(hit, av, acc, "scsl")
+                        .unwrap()
+                        .into_int_value();
+                }
+                Ok(acc)
+            }
+            Expr::Def(n) => {
+                // same resolution order as numeric def(): the POSITIONED
+                // ssa binding wins (a Stmt::Def bound the id at its
+                // statement position — table re-expansion would observe
+                // later state mutations and re-run concat effects), then
+                // dead-def refusal, then table expansion (review finding)
+                if let Some(v) = f.ssa.get(n) {
+                    return Ok(*v);
+                }
+                if f.dead_defs.contains(n) {
+                    if let Some(&(p, w)) = f.av_slots.get(n) {
+                        let out = self
+                            .builder
+                            .build_load(self.ity(w), p, "savesc")
+                            .unwrap()
+                            .into_int_value();
+                        return Ok(out);
+                    }
+                    return nope("string def escaped conditional arm");
+                }
+                let ie = self.ie(f.inst)?;
+                let m = &self.env.d.modules[ie.mir];
+                let Some(d) = m.def(*n) else {
+                    return nope("unknown string def");
+                };
+                if f.expanding.contains(n) {
+                    return nope("string def cycle");
+                }
+                let dex = d.expr.clone();
+                f.expanding.push(*n);
+                let r = self.str_expr(f, &dex, stop_bb);
+                f.expanding.pop();
+                let v = r?;
+                f.ssa.insert(*n, v);
+                Ok(v)
+            }
+            Expr::Prim {
+                op: PrimOp::ZeroExt | PrimOp::SignExt,
+                args,
+                ..
+            } => {
+                // marker passthrough: width adjustments of string
+                // values are identity in the interp
+                self.str_expr(f, &args[0], stop_bb)
+            }
+            Expr::Prim {
+                op: PrimOp::StringConcat,
+                args,
+                ..
+            } => {
+                // per-evaluation intern through the callback, exactly
+                // the interp's intern_dyn; pure value cones (e.g.
+                // string Eq) have no stop block, and the concat
+                // callback never requests a stop
+                match self.emit_foreign(f, STRING_CONCAT_FUNC, args, &[], 64, stop_bb)? {
+                    Some(v) => Ok(v),
+                    None => nope("string concat returned no value"),
+                }
+            }
+            _ => nope("expression not string-lowerable"),
+        }
+    }
+
+    fn emit_foreign(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func_id: StrId,
+        args: &[Expr],
+        signed: &[bool],
+        ret_width: u32,
+        stop_bb: Option<inkwell::basic_block::BasicBlock<'ctx>>,
+    ) -> Result<Option<IntValue<'ctx>>, Ineligible> {
+        let Some(envp) = f.envp else {
+            return nope("foreign call without env pointer");
+        };
+        let i64t = self.ctx.i64_type();
+        let mut spec_args = Vec::new();
+        let mut vals = Vec::new();
+        for (i, a) in args.iter().enumerate() {
+            if let Expr::Str(sid) = a {
+                spec_args.push(FArgSpec::Str(*sid));
+                continue;
+            }
+            if self.expr_is_real(f, a) {
+                // i64 f64-bits value, one marshaled word; the spec's
+                // Real tag makes the decode rebuild Arg::Real
+                let v = self.expr_scalar(f, a)?;
+                spec_args.push(FArgSpec::Real);
+                vals.push((v, 64));
+                continue;
+            }
+            if self.expr_is_str(f, a) {
+                // i64 string id, one marshaled word; the spec's StrDyn
+                // tag makes the decode resolve it to Arg::Str
+                let v = self.str_expr(f, a, stop_bb)?;
+                spec_args.push(FArgSpec::StrDyn);
+                vals.push((v, 64));
+                continue;
+            }
+            let wa = self.expr_width(f, a)?;
+            let v = self.expr_scalar(f, a)?;
+            spec_args.push(FArgSpec::Num {
+                width: wa,
+                signed: signed.get(i).copied().unwrap_or(false),
+            });
+            vals.push((v, wa));
+        }
+        // the foreign decode reads w.max(1) words per numeric arg, so a
+        // zero-width arg still occupies ONE (zero) word in the buffer —
+        // its spec width stays 0 so the formatter sees the interp's
+        // width-0 Value
+        let total_words: u32 = vals
+            .iter()
+            .map(|&(_, w)| words_for(w.max(1)))
+            .sum::<u32>()
+            .max(1);
+        let out_words = words_for(ret_width.max(1));
+        let abuf = self
+            .builder
+            .build_array_alloca(i64t, i64t.const_int(total_words as u64, false), "fa")
+            .unwrap();
+        let obuf = self
+            .builder
+            .build_array_alloca(i64t, i64t.const_int(out_words as u64, false), "fo")
+            .unwrap();
+        let mut off = 0u32;
+        for (v, wa) in vals {
+            for k in 0..words_for(wa.max(1)) {
+                let sh = self.ity(wa).const_int((64 * k) as u64, false);
+                let piece = if k == 0 {
+                    v
+                } else {
+                    self.builder.build_right_shift(v, sh, false, "fp").unwrap()
+                };
+                let word = self.to_w(piece, wa, 64, false);
+                let idx = i64t.const_int((off + k) as u64, false);
+                let p = unsafe { self.builder.build_gep(i64t, abuf, &[idx], "fap").unwrap() };
+                self.builder.build_store(p, word).unwrap();
+            }
+            off += words_for(wa.max(1));
+        }
+        let Ok(local) = u32::try_from(self.foreign_stmts.len()) else {
+            return nope("foreign call-site count exceeds the 32-bit site field");
+        };
+        self.foreign_stmts.push(ForeignSpec {
+            inst: f.inst,
+            func: func_id,
+            ret_width,
+            args: spec_args,
+        });
+        let ordv = self.site_ordinal();
+        let sitev = self.site_index(self.bnd_foreign_site, self.foreign_origin, local);
+        let cb_callee = self.cb_callee(self.cbs.cb);
+        let call = self
+            .builder
+            .build_indirect_call(
+                self.cbs.cb_ty,
+                cb_callee,
+                &[
+                    envp.into(),
+                    ordv.into(),
+                    sitev.into(),
+                    abuf.into(),
+                    obuf.into(),
+                ],
+                "fcb",
+            )
+            .unwrap();
+        let inkwell::values::ValueKind::Basic(rv) = call.try_as_basic_value() else {
+            return nope("callback returned void");
+        };
+        // outside a task context there is no abort target; the callback
+        // contract reserves the nonzero return for genuine aborts and
+        // nothing requests one today, so the result is ignored there
+        if let Some(sb) = stop_bb {
+            let stop = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::NE,
+                    rv.into_int_value(),
+                    self.ctx.i32_type().const_int(0, false),
+                    "fst",
+                )
+                .unwrap();
+            let func = self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_parent()
+                .unwrap();
+            let cont_bb = self.ctx.append_basic_block(func, "fcont");
+            self.builder
+                .build_conditional_branch(stop, sb, cont_bb)
+                .unwrap();
+            self.builder.position_at_end(cont_bb);
+        }
+        if ret_width == 0 {
+            return Ok(None);
+        }
+        let t = self.ity(ret_width);
+        let mut acc = t.const_zero();
+        for k in 0..words_for(ret_width) {
+            let idx = i64t.const_int(k as u64, false);
+            let p = unsafe { self.builder.build_gep(i64t, obuf, &[idx], "fop").unwrap() };
+            let word = self
+                .builder
+                .build_load(i64t, p, "fol")
+                .unwrap()
+                .into_int_value();
+            if ret_width <= 64 {
+                acc = self.to_w(word, 64, ret_width, false);
+            } else {
+                let wide = self.builder.build_int_z_extend(word, t, "fwz").unwrap();
+                let sh = t.const_int((64 * k) as u64, false);
+                let pos = self.builder.build_left_shift(wide, sh, "fws").unwrap();
+                acc = self.builder.build_or(acc, pos, "fwo").unwrap();
+            }
+        }
+        Ok(Some(acc))
+    }
+
+    /// Lower a statement list (rule body or Cond arm); `stop_bb`
+    /// receives control when a callback requests stop.
+    fn stmts(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func: FunctionValue<'ctx>,
+        list: &[Stmt],
+        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> Result<(), Ineligible> {
+        let mut it = list.iter().peekable();
+        while let Some(st) = it.next() {
+            match st {
+                Stmt::Def { name, expr } => {
+                    f.dead_defs.remove(name);
+                    match self.expr(f, expr)? {
+                        Val::Wide(ws) => {
+                            // stays decomposed for the whole body; a
+                            // consumer wanting it whole gets it via def()
+                            f.chunks.insert(*name, ws);
+                        }
+                        Val::Scalar(v) => {
+                            f.ssa.insert(*name, v);
+                            self.rec_def(f, *name, v);
+                        }
+                    }
+                }
+                Stmt::Action(a) => self.action(f, func, a, stop_bb)?,
+                Stmt::AvAction { def, action } => match action {
+                    Action::Task {
+                        func: tf,
+                        cookie,
+                        temp,
+                        width,
+                        cond,
+                        args,
+                        signed,
+                        ..
+                    } => {
+                        let v = self.task_call(
+                            f, func, *tf, *cookie, *temp, *width, cond, args, signed, stop_bb,
+                        )?;
+                        f.av_widths.insert(*def, (*width).max(1));
+                        f.dead_defs.remove(def);
+                        f.ssa.insert(*def, v);
+                        self.rec_def(f, *def, v);
+                        // join-safe binding for the AvAction def itself
+                        let dp = self.av_slot(f, *def, (*width).max(1));
+                        self.builder.build_store(dp, v).unwrap();
+                    }
+                    Action::MethCall {
+                        instance,
+                        method,
+                        port,
+                        cond,
+                        args,
+                    } => {
+                        // ActionValue method on a prim child (trampoline)
+                        // or a user-module child (inline)
+                        let ie = self.ie(f.inst)?;
+                        let Some(&child) = ie.children.get(instance) else {
+                            return nope("avaction on unknown child");
+                        };
+                        if ie.reg_slot.contains_key(instance) || ie.wire_slot.contains_key(instance)
+                        {
+                            return nope("avaction on reg/wire instance");
+                        }
+                        if self.env.insts.contains_key(&child) {
+                            // user-module child: inline the ActionValue
+                            // method body under the call condition
+                            // (action protocol: EN stored first), then
+                            // evaluate the result expr in the child
+                            // frame; the skip path binds undet zeros
+                            // exactly like the interpreter
+                            if *port != 0 {
+                                return nope("multi-ported user actionvalue method");
+                            }
+                            let cie = self.ie(child)?;
+                            let cmod = &self.env.d.modules[cie.mir];
+                            let Some((mi, m)) = cmod
+                                .methods
+                                .iter()
+                                .enumerate()
+                                .find(|(_, m)| m.name == *method)
+                            else {
+                                return nope("unknown actionvalue method on child");
+                            };
+                            if m.kind != trs_ir::MethodKind::ActionValue {
+                                return nope("non-actionvalue avaction method");
+                            }
+                            // (* always_enabled *): the body is gated on
+                            // the sibling RDY_<m> method at call time —
+                            // the RESULT still evaluates when the body
+                            // is skipped (the C++ returns the stale
+                            // port value).  No RDY exported = ready.
+                            let rdy_id = m.always_enabled.then_some(m.rdy).flatten();
+                            if args.len() != m.args.len() {
+                                return nope("method arg count mismatch");
+                            }
+                            let Some(result) = m.result.clone() else {
+                                return nope("actionvalue method without result");
+                            };
+                            let margs = m.args.clone();
+                            let body = m.body.clone();
+                            let en_slot = m.en.and_then(|id| cie.en_slot.get(&id).copied());
+                            let mut cf = self.child_frame(f, child, Some(mi))?;
+                            let wc = self.expr_width(f, cond)?;
+                            let c = self.expr_scalar(f, cond)?;
+                            let cz = self.nonzero(c, wc);
+                            for (a, pa) in args.iter().zip(&margs) {
+                                let wa = self.expr_width(f, a)?;
+                                let v0 = self.expr_scalar(f, a)?;
+                                let v = self.to_w(v0, wa, pa.width, false);
+                                cf.args.insert(pa.name, (v, pa.width));
+                                // per-edge arg latch for later
+                                // Expr::MethValue reads: the interp's
+                                // latched map holds the value iff the
+                                // method was CALLED this edge, else the
+                                // uncalled-MethodArg fallthrough reads 0
+                                let z = self.ity(pa.width.max(1)).const_zero();
+                                let lv = self
+                                    .builder
+                                    .build_select(cz, v, z, "avarg")
+                                    .unwrap()
+                                    .into_int_value();
+                                f.av_args.insert((*instance, pa.name), (lv, pa.width));
+                            }
+                            let go_bb = self.ctx.append_basic_block(func, "avmgo");
+                            let sk_bb = self.ctx.append_basic_block(func, "avmsk");
+                            let jn_bb = self.ctx.append_basic_block(func, "avmjn");
+                            self.builder
+                                .build_conditional_branch(cz, go_bb, sk_bb)
+                                .unwrap();
+                            self.builder.position_at_end(go_bb);
+                            if let Some(slot) = en_slot {
+                                let one = self.ctx.i64_type().const_int(1, false);
+                                self.store_word(&cf, slot, one);
+                            }
+                            let rec_argv: Vec<_> = margs
+                                .iter()
+                                .filter_map(|pa| cf.args.get(&pa.name).copied())
+                                .collect();
+                            self.rec_meth_call(&cf, child, *method, &rec_argv)?;
+                            // boundary-tax experiment: body + result
+                            // become one real call — the out buffer
+                            // carries the result back, the i32 status
+                            // routes $finish paths to stop_bb.  AE
+                            // methods never enter the map, so the rdy
+                            // gate never coexists with a hit.
+                            let bhit = self.boundary_hit(cie.class_id, *method, 2).filter(|bn| {
+                                rdy_id.is_none()
+                                    && f.envp.is_some()
+                                    && bn.args.iter().all(|(p, _)| cf.args.contains_key(p))
+                            });
+                            let mut brv: Option<IntValue<'ctx>> = None;
+                            if let Some(bnd) = bhit {
+                                let (sym, brw, bargs) =
+                                    (bnd.sym.clone(), bnd.ret_width, bnd.args.clone());
+                                let envp = f.envp.unwrap();
+                                let i64t = self.ctx.i64_type();
+                                let i32t = self.ctx.i32_type();
+                                let ptrt = self.ctx.ptr_type(AddressSpace::default());
+                                let obuf = self.entry_alloca(i64t, words_for(brw) as u64, "avbo");
+                                let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![
+                                    ptrt.into(),
+                                    ptrt.into(),
+                                    i64t.into(),
+                                    i32t.into(),
+                                    i32t.into(),
+                                    i32t.into(),
+                                    ptrt.into(),
+                                ];
+                                let base = self.slot_index(cie.region.0);
+                                let (psite, fsite) = self.boundary_site_bases(&bnd, child)?;
+                                let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                                    f.arena.into(),
+                                    envp.into(),
+                                    base.into(),
+                                    self.site_ordinal().into(),
+                                    psite.into(),
+                                    fsite.into(),
+                                    obuf.into(),
+                                ];
+                                for (pn, pw) in &bargs {
+                                    ptys.push(self.ity(*pw).into());
+                                    let (v, vw) = cf.args[pn];
+                                    bargv.push(self.to_w(v, vw, *pw, false).into());
+                                }
+                                let bty = i32t.fn_type(&ptys, false);
+                                let bf = self
+                                    .module
+                                    .get_function(&sym)
+                                    .unwrap_or_else(|| self.module.add_function(&sym, bty, None));
+                                let cs = self.builder.build_call(bf, &bargv, "bndav").unwrap();
+                                let inkwell::values::ValueKind::Basic(st) = cs.try_as_basic_value()
+                                else {
+                                    return nope("boundary av fn returned void");
+                                };
+                                let ok = self
+                                    .builder
+                                    .build_int_compare(
+                                        IntPredicate::EQ,
+                                        st.into_int_value(),
+                                        i32t.const_zero(),
+                                        "avbok",
+                                    )
+                                    .unwrap();
+                                let ok_bb = self.ctx.append_basic_block(func, "avbokb");
+                                self.builder
+                                    .build_conditional_branch(ok, ok_bb, stop_bb)
+                                    .unwrap();
+                                self.builder.position_at_end(ok_bb);
+                                let t = self.ity(brw);
+                                let mut acc = t.const_zero();
+                                for k in 0..words_for(brw) {
+                                    let idx = i64t.const_int(k as u64, false);
+                                    let p = unsafe {
+                                        self.builder.build_gep(i64t, obuf, &[idx], "avbp").unwrap()
+                                    };
+                                    let word = self
+                                        .builder
+                                        .build_load(i64t, p, "avbl")
+                                        .unwrap()
+                                        .into_int_value();
+                                    if brw <= 64 {
+                                        acc = self.to_w(word, 64, brw, false);
+                                    } else {
+                                        let wide = self
+                                            .builder
+                                            .build_int_z_extend(word, t, "avbz")
+                                            .unwrap();
+                                        let sh = t.const_int((64 * k) as u64, false);
+                                        let pos = self
+                                            .builder
+                                            .build_left_shift(wide, sh, "avbs")
+                                            .unwrap();
+                                        acc = self.builder.build_or(acc, pos, "avbor").unwrap();
+                                    }
+                                }
+                                brv = Some(acc);
+                            } else if let Some(rid) = rdy_id {
+                                // EN and recording landed; only the
+                                // body waits on RDY — the result expr
+                                // below evaluates on both paths.  SSA
+                                // bindings from the gated body must not
+                                // leak past the join (dominance); the
+                                // result re-expands or reads undet-init
+                                // AV slots, the interp's skip semantics
+                                let saved_ssa = cf.ssa.clone();
+                                let r = self.value_call(f, 1, *instance, rid, 0, &[])?;
+                                let rz = self.nonzero(r, 1);
+                                let bd_bb = self.ctx.append_basic_block(func, "avmrdy");
+                                let rs_bb = self.ctx.append_basic_block(func, "avmres");
+                                self.builder
+                                    .build_conditional_branch(rz, bd_bb, rs_bb)
+                                    .unwrap();
+                                self.builder.position_at_end(bd_bb);
+                                self.stmts(&mut cf, func, &body, stop_bb)?;
+                                // escaped-conditional-arm protocol for
+                                // every binding the gated body created:
+                                // mirror it into an undet-init entry
+                                // alloca (store HERE, where the value
+                                // dominates) and mark it dead, so
+                                // post-join reads reload the slot —
+                                // undet when the body was skipped, the
+                                // interp's empty-locals fallback
+                                let newly: Vec<(StrId, IntValue<'ctx>)> = cf
+                                    .ssa
+                                    .iter()
+                                    .filter(|(k, _)| !saved_ssa.contains_key(k))
+                                    .map(|(k, v)| (*k, *v))
+                                    .collect();
+                                for (k, v) in newly {
+                                    let w = v.get_type().get_bit_width();
+                                    let p = self.av_slot(&mut cf, k, w);
+                                    self.builder.build_store(p, v).unwrap();
+                                    cf.dead_defs.insert(k);
+                                }
+                                self.builder.build_unconditional_branch(rs_bb).unwrap();
+                                self.builder.position_at_end(rs_bb);
+                                cf.ssa = saved_ssa;
+                            } else {
+                                self.stmts(&mut cf, func, &body, stop_bb)?;
+                            }
+                            // the AvAction def is a SYNTHETIC temp — it
+                            // is in no def table (def_width fails), so
+                            // the binding width is the RESULT's width,
+                            // like the interpreter ("the callee's result
+                            // already has the declared width")
+                            let rv = match brv {
+                                Some(v) => v,
+                                None => self.expr_scalar(&mut cf, &result)?,
+                            };
+                            self.rec_meth_result(&cf, child, *method, rv)?;
+                            // the interp records the def only on the
+                            // executed path (skip leaves prior value)
+                            self.rec_def(f, *def, rv);
+                            let wd = rv.get_type().get_bit_width();
+                            let g_end = self.builder.get_insert_block().unwrap();
+                            self.builder.build_unconditional_branch(jn_bb).unwrap();
+                            self.builder.position_at_end(sk_bb);
+                            // the interp binds Value::undet (the masked
+                            // 0xAA... pattern) when the call condition is
+                            // false — NOT zero (review finding: the old
+                            // comment claimed parity while binding 0)
+                            let undet = self.undet_const(wd);
+                            let s_end = self.builder.get_insert_block().unwrap();
+                            self.builder.build_unconditional_branch(jn_bb).unwrap();
+                            self.builder.position_at_end(jn_bb);
+                            let phi = self.builder.build_phi(self.ity(wd), "avmphi").unwrap();
+                            phi.add_incoming(&[(&rv, g_end), (&undet, s_end)]);
+                            f.av_widths.insert(*def, wd);
+                            f.dead_defs.remove(def);
+                            let pv = phi.as_basic_value().into_int_value();
+                            f.ssa.insert(*def, pv);
+                            // join-safe mirror (like the Task arm): an
+                            // always_enabled RDY gate restores the SSA
+                            // map after the gated body, so later reads
+                            // of this binding reload from the slot
+                            let dp = self.av_slot(f, *def, wd);
+                            self.builder.build_store(dp, pv).unwrap();
+                            continue;
+                        }
+                        let wd = self.def_width(f.inst, *def).unwrap_or(1);
+                        let wc = self.expr_width(f, cond)?;
+                        let c = self.expr_scalar(f, cond)?;
+                        let cz = self.nonzero(c, wc);
+                        let go_bb = self.ctx.append_basic_block(func, "avgo");
+                        let sk_bb = self.ctx.append_basic_block(func, "avsk");
+                        let jn_bb = self.ctx.append_basic_block(func, "avjn");
+                        self.builder
+                            .build_conditional_branch(cz, go_bb, sk_bb)
+                            .unwrap();
+                        self.builder.position_at_end(go_bb);
+                        // the trampoline routes is_action to call_action,
+                        // which never writes the out buffer, and no prim
+                        // implements an AV method (the interp panics):
+                        // refuse rather than read uninitialized words
+                        return nope("prim actionvalue method (no trampoline AV path)");
+                        #[allow(unreachable_code)]
+                        let v = self
+                            .emit_prim_call(f, child, *method, *port, args, wd, true)?
+                            .expect("av prim call returns");
+                        let g_end = self.builder.get_insert_block().unwrap();
+                        self.builder.build_unconditional_branch(jn_bb).unwrap();
+                        self.builder.position_at_end(sk_bb);
+                        let undet = self.ity(wd).const_zero();
+                        let s_end = self.builder.get_insert_block().unwrap();
+                        self.builder.build_unconditional_branch(jn_bb).unwrap();
+                        self.builder.position_at_end(jn_bb);
+                        let phi = self.builder.build_phi(self.ity(wd), "avphi").unwrap();
+                        phi.add_incoming(&[(&v, g_end), (&undet, s_end)]);
+                        f.av_widths.insert(*def, wd);
+                        f.dead_defs.remove(def);
+                        f.ssa.insert(*def, phi.as_basic_value().into_int_value());
+                    }
+                    Action::Foreign {
+                        func: ffn,
+                        cond,
+                        args,
+                        ..
+                    } => {
+                        // BDPI ActionValue import: direct call under
+                        // the condition, result phi-bound to the def
+                        let Some(imp) = self.bdpi_import(*ffn) else {
+                            return nope("foreign actionvalue without BDPI import");
+                        };
+                        let wd = self.def_width(f.inst, *def).unwrap_or(1);
+                        let wc = self.expr_width(f, cond)?;
+                        let c = self.expr_scalar(f, cond)?;
+                        let cz = self.nonzero(c, wc);
+                        let go_bb = self.ctx.append_basic_block(func, "bvgo");
+                        let sk_bb = self.ctx.append_basic_block(func, "bvsk");
+                        let jn_bb = self.ctx.append_basic_block(func, "bvjn");
+                        self.builder
+                            .build_conditional_branch(cz, go_bb, sk_bb)
+                            .unwrap();
+                        self.builder.position_at_end(go_bb);
+                        let v = self.bdpi_emit(f, wd, &imp, args)?;
+                        let g_end = self.builder.get_insert_block().unwrap();
+                        self.builder.build_unconditional_branch(jn_bb).unwrap();
+                        self.builder.position_at_end(sk_bb);
+                        let z = self.ity(wd).const_zero();
+                        let s_end = self.builder.get_insert_block().unwrap();
+                        self.builder.build_unconditional_branch(jn_bb).unwrap();
+                        self.builder.position_at_end(jn_bb);
+                        let phi = self.builder.build_phi(self.ity(wd), "bvphi").unwrap();
+                        phi.add_incoming(&[(&v, g_end), (&z, s_end)]);
+                        f.av_widths.insert(*def, wd);
+                        f.dead_defs.remove(def);
+                        f.ssa.insert(*def, phi.as_basic_value().into_int_value());
+                    }
+                    _ => return nope("actionvalue kind in body"),
+                },
+                Stmt::Cond { cond, then_, else_ } => {
+                    // MERGE a run of consecutive Conds with the
+                    // IDENTICAL port-pure condition: bsc emits one
+                    // reset-guard Cond per task group, and defs bound
+                    // in one arm are used by later same-guard arms —
+                    // the interpreter executes them as one guarded
+                    // sequence, so the lowering must too (otherwise
+                    // the defs "escape" and the design stays
+                    // interpreted)
+                    let mut then_run: Vec<&[Stmt]> = vec![then_];
+                    let mut else_run: Vec<&[Stmt]> = vec![else_];
+                    if Self::port_pure(cond) {
+                        while let Some(Stmt::Cond {
+                            cond: c2,
+                            then_: t2,
+                            else_: e2,
+                        }) = it.peek()
+                        {
+                            if c2 == cond {
+                                then_run.push(t2);
+                                else_run.push(e2);
+                                it.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    let wc = self.expr_width(f, cond)?;
+                    let c = self.expr_scalar(f, cond)?;
+                    let cz = self.nonzero(c, wc);
+                    let then_bb = self.ctx.append_basic_block(func, "then");
+                    let else_bb = self.ctx.append_basic_block(func, "else");
+                    let join_bb = self.ctx.append_basic_block(func, "join");
+                    self.builder
+                        .build_conditional_branch(cz, then_bb, else_bb)
+                        .unwrap();
+                    self.builder.position_at_end(then_bb);
+                    let st_t = self.cond_arm_run(f, func, &then_run, stop_bb)?;
+                    self.builder.build_unconditional_branch(join_bb).unwrap();
+                    self.builder.position_at_end(else_bb);
+                    let st_e = self.cond_arm_run(f, func, &else_run, stop_bb)?;
+                    self.builder.build_unconditional_branch(join_bb).unwrap();
+                    self.builder.position_at_end(join_bb);
+                    // idempotent-task arm bindings: re-materialize at
+                    // the join (dominates all later uses)
+                    let truth = Expr::Const {
+                        width: 1,
+                        limbs: vec![1],
+                    };
+                    for (d, a) in st_t.into_iter().chain(st_e) {
+                        let Action::Task {
+                            func: tf5,
+                            cookie,
+                            temp,
+                            width,
+                            args,
+                            signed,
+                            ..
+                        } = a
+                        else {
+                            continue;
+                        };
+                        let name = self.env.d.strings[tf5 as usize].clone();
+                        let v = if matches!(name.as_str(), "$time" | "$stime") {
+                            let now = self.load_word(f, self.env.now_slot);
+                            self.to_w(now, 64, width.max(1), false)
+                        } else {
+                            // run-constant, side-effect-free: re-call
+                            self.task_call(
+                                f, func, tf5, cookie, temp, width, &truth, &args, &signed, stop_bb,
+                            )?
+                        };
+                        if let Some(t) = temp {
+                            f.dead_defs.remove(&t);
+                            f.ssa.insert(t, v);
+                        }
+                        f.dead_defs.remove(&d);
+                        f.ssa.insert(d, v);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A conditional foreign ActionValue task: call under cond, bind the
+    /// cookie/temp (undet-zero when skipped, like a fresh ctx read).
+    #[allow(clippy::too_many_arguments)]
+    fn task_call(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func: FunctionValue<'ctx>,
+        tf: StrId,
+        cookie: u32,
+        temp: Option<StrId>,
+        width: u32,
+        cond: &Expr,
+        args: &[Expr],
+        signed: &[bool],
+        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> Result<IntValue<'ctx>, Ineligible> {
+        let w = width.max(1);
+        // join-safe slots FIRST (undet-initialized at entry): the
+        // interp binds nothing on a false condition, so a later read
+        // sees undet (or a previous execution's value) — the stores
+        // happen only on the TAKEN path (review finding: the old
+        // unconditional store of the phi wrote 0 over undet on skip)
+        let ck = 0x8000_0000u32 | cookie;
+        let cp = self.av_slot(f, ck, w);
+        let tp = temp.map(|t| self.av_slot(f, t, w));
+        let wc = self.expr_width(f, cond)?;
+        let c = self.expr_scalar(f, cond)?;
+        let cz = self.nonzero(c, wc);
+        let go_bb = self.ctx.append_basic_block(func, "tgo");
+        let sk_bb = self.ctx.append_basic_block(func, "tsk");
+        let jn_bb = self.ctx.append_basic_block(func, "tjn");
+        self.builder
+            .build_conditional_branch(cz, go_bb, sk_bb)
+            .unwrap();
+        self.builder.position_at_end(go_bb);
+        let v = self
+            .emit_foreign(f, tf, args, signed, w, Some(stop_bb))?
+            .expect("task returns");
+        self.builder.build_store(cp, v).unwrap();
+        if let Some(tp) = tp {
+            self.builder.build_store(tp, v).unwrap();
+        }
+        self.builder.build_unconditional_branch(jn_bb).unwrap();
+        self.builder.position_at_end(sk_bb);
+        self.builder.build_unconditional_branch(jn_bb).unwrap();
+        self.builder.position_at_end(jn_bb);
+        // the slot is the single source of truth at the join: executed
+        // value, or the preserved previous/undet contents on skip —
+        // exactly the interp's locals-then-latched-then-undet order
+        let out = self
+            .builder
+            .build_load(self.ity(w), cp, "tval")
+            .unwrap()
+            .into_int_value();
+        f.tasks.insert(cookie, (out, w));
+        if let Some(t) = temp {
+            f.ssa.insert(t, out);
+        }
+        Ok(out)
+    }
+
+    /// Conditions safe to evaluate ONCE for a run of merged Conds:
+    /// ports/consts/prims only — no Def refs, no method calls, so the
+    /// value cannot change between the original per-Cond evaluations.
+    fn port_pure(e: &Expr) -> bool {
+        match e {
+            Expr::Const { .. } | Expr::Port(_) => true,
+            Expr::Prim { args, .. } => args.iter().all(Self::port_pure),
+            Expr::If {
+                cond, then_, else_, ..
+            } => Self::port_pure(cond) && Self::port_pure(then_) && Self::port_pure(else_),
+            _ => false,
+        }
+    }
+
+    /// One merged arm region over a run of same-condition Conds.
+    /// Returns the arm's instant-stable ($time-class) bindings for
+    /// re-materialization at the caller's join block.
+    fn cond_arm_run(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func: FunctionValue<'ctx>,
+        lists: &[&[Stmt]],
+        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> Result<Vec<(StrId, Action)>, Ineligible> {
+        let merged: Vec<Stmt> = lists.iter().flat_map(|l| l.iter().cloned()).collect();
+        self.cond_arm(f, func, &merged, stop_bb)
+    }
+
+    /// A Cond arm: positioned defs (Stmt::Def / AvAction) bind INSIDE
+    /// the arm and die at the join (dominance).  bsc's tsort scoping
+    /// keeps their uses arm-local in practice; a post-arm reference
+    /// would silently re-expand the def TABLE, whose expr may differ
+    /// from the positioned stmt — so dead bindings are tracked and
+    /// referencing one makes the design ineligible (loud, not wrong).
+    fn cond_arm(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func: FunctionValue<'ctx>,
+        list: &[Stmt],
+        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> Result<Vec<(StrId, Action)>, Ineligible> {
+        // arm bindings split two ways.  IDEMPOTENT tasks ($time-class:
+        // instant-stable; plusargs-class: run-constant, side-effect-
+        // free) are RE-MATERIALIZED by the caller at the JOIN block
+        // (dominates all later uses — cross-arm dataflow of these is
+        // the common reset-guard shape).  Everything else dies at the
+        // join and post-arm references make the design ineligible.
+        fn idempotent(name: &str) -> bool {
+            matches!(
+                name,
+                "$time" | "$stime" | "$test$plusargs" | "$value$plusargs"
+            )
+        }
+        fn bound(
+            strings: &[String],
+            list: &[Stmt],
+            dead: &mut Vec<StrId>,
+            stable: &mut Vec<(StrId, Action)>,
+        ) {
+            for st in list {
+                match st {
+                    Stmt::Def { name, .. } => dead.push(*name),
+                    Stmt::AvAction { def, action } => match action {
+                        Action::Task { func, .. }
+                            if idempotent(strings[*func as usize].as_str()) =>
+                        {
+                            stable.push((*def, action.clone()));
+                        }
+                        Action::Task { temp: Some(t), .. } => {
+                            dead.push(*def);
+                            dead.push(*t);
+                        }
+                        _ => dead.push(*def),
+                    },
+                    Stmt::Cond { then_, else_, .. } => {
+                        bound(strings, then_, dead, stable);
+                        bound(strings, else_, dead, stable);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // arm-local bindings + table defs expanded inside the arm must
+        // not leak (dominance)
+        let saved = f.ssa.clone();
+        let r = self.stmts(f, func, list, stop_bb);
+        f.ssa = saved;
+        let mut dead = Vec::new();
+        let mut stable = Vec::new();
+        bound(&self.env.d.strings, list, &mut dead, &mut stable);
+        for n in dead {
+            f.dead_defs.insert(n);
+        }
+        r.map(|_| stable)
+    }
+
+    /// Activity gating: OR an i1 into the shared write-mark scratch
+    /// word.  Emitted at arena-inline prim WRITE sites (the only prims
+    /// gated cones can watch), with per-site accuracy: regs and
+    /// ConfigRegs pass old!=new, wires/FIFOs pass the taken condition.
+    /// The exec call site consumes the word into the dirty bitmaps.
+    fn gate_mark(&mut self, f: &mut Frame<'ctx>, changed: IntValue<'ctx>) {
+        let Some(slot) = self.env.gate_scratch else {
+            return;
+        };
+        let i64t = self.ctx.i64_type();
+        let old = self.load_word(f, slot);
+        let z = self
+            .builder
+            .build_int_z_extend(changed, i64t, "gmz")
+            .unwrap();
+        let nv = self.builder.build_or(old, z, "gmo").unwrap();
+        self.store_word(f, slot, nv);
+    }
+
+    fn action(
+        &mut self,
+        f: &mut Frame<'ctx>,
+        func: FunctionValue<'ctx>,
+        a: &Action,
+        stop_bb: inkwell::basic_block::BasicBlock<'ctx>,
+    ) -> Result<(), Ineligible> {
+        match a {
+            Action::MethCall {
+                instance,
+                method,
+                port,
+                cond,
+                args,
+            } => {
+                let ie = self.ie(f.inst)?;
+                let mname = self.env.d.strings[*method as usize].clone();
+                let wc = self.expr_width(f, cond)?;
+                let c = self.expr_scalar(f, cond)?;
+                let cz = self.nonzero(c, wc);
+
+                if let Some(&(base, rw)) = ie.reg_slot.get(instance) {
+                    if !matches!(mname.as_str(), "write" | "set" | "put" | "_write")
+                        || args.len() != 1
+                    {
+                        return nope("non-write register action");
+                    }
+                    let wv = self.expr_width(f, &args[0])?;
+                    let v0 = self.expr_scalar(f, &args[0])?;
+                    let v = self.to_w(v0, wv, rw, false);
+                    // the value is evaluated eagerly either way — the
+                    // old wr/sk branch protected only the store.
+                    // Branchless: store(select(cond, new, old)); the
+                    // monsters' 14k branches are mostly these.
+                    // The whole read-select-write is word-shaped: the
+                    // arena holds words, so packing the old value only
+                    // to select against it and slice it back apart is
+                    // the round trip word decomposition removes.  This
+                    // is the shape that dominated the widest functions
+                    // measured (load 88 words, select, store 88 words).
+                    let gating = self.env.gate_scratch.is_some();
+                    // the packed pair, needed only by the gate mark
+                    let mut cmp: Option<(IntValue<'ctx>, IntValue<'ctx>)> = None;
+                    if chunking_enabled() && rw > self.word_bits() {
+                        let oldw = self.load_words(f, base, rw);
+                        let neww = self.split_words(v, rw);
+                        let mut selw = Vec::with_capacity(oldw.len());
+                        for (nv, ov) in neww.iter().zip(oldw.iter()) {
+                            selw.push(
+                                self.builder
+                                    .build_select(cz, *nv, *ov, "wselw")
+                                    .unwrap()
+                                    .into_int_value(),
+                            );
+                        }
+                        self.store_words(f, base, rw, &selw);
+                        if gating {
+                            let s = self.pack(&selw, rw);
+                            let o = self.pack(&oldw, rw);
+                            cmp = Some((s, o));
+                        }
+                    } else {
+                        let old = self.load_val(f, base, rw);
+                        let sel = self
+                            .builder
+                            .build_select(cz, v, old, "wsel")
+                            .unwrap()
+                            .into_int_value();
+                        self.store_val(f, base, rw, sel);
+                        cmp = Some((sel, old));
+                    }
+                    // gating: value-accurate mark (sel==old covers
+                    // both "not fired" and "rewrote the same value" —
+                    // the fires != dirty distinction the census proved)
+                    if gating {
+                        if let Some((sel, old)) = cmp {
+                            let ne = self
+                                .builder
+                                .build_int_compare(IntPredicate::NE, sel, old, "gne")
+                                .unwrap();
+                            self.gate_mark(f, ne);
+                        }
+                    }
+                    return Ok(());
+                }
+                if let Some(&(base, rw)) = ie.creg_slot.get(instance) {
+                    if !matches!(mname.as_str(), "write" | "set" | "put" | "_write")
+                        || args.len() != 1
+                    {
+                        return nope("non-write ConfigReg action");
+                    }
+                    // inline write under the action-condition branch
+                    // (write sites are arm-multiplied: branchless paid
+                    // loads+stores at every site every firing, a
+                    // measured regression; taken-path inline still
+                    // eliminates the trampoline).  Boxed semantics: the
+                    // instant's FIRST write snapshots old.  Layout:
+                    // [old (w), cur (w), written_at].
+                    let words = rw.max(1).div_ceil(64);
+                    let wv = self.expr_width(f, &args[0])?;
+                    let v0 = self.expr_scalar(f, &args[0])?;
+                    let v = self.to_w(v0, wv, rw, false);
+                    let wr_bb = self.ctx.append_basic_block(func, "cwr");
+                    let sk_bb = self.ctx.append_basic_block(func, "csk");
+                    self.builder
+                        .build_conditional_branch(cz, wr_bb, sk_bb)
+                        .unwrap();
+                    self.builder.position_at_end(wr_bb);
+                    let cur = self.load_val(f, base + words, rw);
+                    let wat = self.load_word(f, base + 2 * words);
+                    let now = self.load_word(f, self.env.now_slot);
+                    let first = self
+                        .builder
+                        .build_int_compare(IntPredicate::NE, wat, now, "cwf")
+                        .unwrap();
+                    let old = self.load_val(f, base, rw);
+                    let old2 = self
+                        .builder
+                        .build_select(first, cur, old, "cwo")
+                        .unwrap()
+                        .into_int_value();
+                    self.store_val(f, base, rw, old2);
+                    self.store_val(f, base + words, rw, v);
+                    self.store_word(f, base + 2 * words, now);
+                    // gating: taken path, value-accurate vs the live value
+                    if self.env.gate_scratch.is_some() {
+                        let ne = self
+                            .builder
+                            .build_int_compare(IntPredicate::NE, v, cur, "gcne")
+                            .unwrap();
+                        self.gate_mark(f, ne);
+                    }
+                    self.builder.build_unconditional_branch(sk_bb).unwrap();
+                    self.builder.position_at_end(sk_bb);
+                    return Ok(());
+                }
+                if let Some(&(base, rw, lo, hi)) = ie.regfile_slot.get(instance) {
+                    if mname.as_str() != "upd" || args.len() != 2 {
+                        return nope("non-upd RegFile action");
+                    }
+                    let Some(&child) = ie.children.get(instance) else {
+                        return nope("call on unknown child");
+                    };
+                    // taken-path inline (ConfigReg rule); out-of-range
+                    // bounces to the boxed prim (warning + drop), which
+                    // is arena-authoritative already
+                    let i64t = self.ctx.i64_type();
+                    let words = rw.max(1).div_ceil(64);
+                    let aw = self.expr_width(f, &args[0])?;
+                    let a0 = self.expr_scalar(f, &args[0])?;
+                    let a = self.to_w(a0, aw, 64, false);
+                    let wv = self.expr_width(f, &args[1])?;
+                    let v0 = self.expr_scalar(f, &args[1])?;
+                    let vv = self.to_w(v0, wv, rw, false);
+                    let wr_bb = self.ctx.append_basic_block(func, "rfw");
+                    let fast_bb = self.ctx.append_basic_block(func, "rfwf");
+                    let slow_bb = self.ctx.append_basic_block(func, "rfws");
+                    let done_bb = self.ctx.append_basic_block(func, "rfwd");
+                    self.builder
+                        .build_conditional_branch(cz, wr_bb, done_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(wr_bb);
+                    let inlo = self
+                        .builder
+                        .build_int_compare(IntPredicate::UGE, a, i64t.const_int(lo, false), "rfwlo")
+                        .unwrap();
+                    let inhi = self
+                        .builder
+                        .build_int_compare(IntPredicate::ULE, a, i64t.const_int(hi, false), "rfwhi")
+                        .unwrap();
+                    let inb = self.builder.build_and(inlo, inhi, "rfwin").unwrap();
+                    self.builder
+                        .build_conditional_branch(inb, fast_bb, slow_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(fast_bb);
+                    // one-deep bypass bookkeeping, branchless within the
+                    // taken path: snapshot prev on the instant's first
+                    // upd (or on an address change); the header stores
+                    // are idempotent when not-first
+                    let upd_at = self.load_word(f, base);
+                    let upd_addr = self.load_word(f, base + 1);
+                    let now = self.load_word(f, self.env.now_slot);
+                    let at_now = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, upd_at, now, "rfwan")
+                        .unwrap();
+                    let same_a = self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, upd_addr, a, "rfwsa")
+                        .unwrap();
+                    let not_first = self.builder.build_and(at_now, same_a, "rfwnf").unwrap();
+                    let idx = self
+                        .builder
+                        .build_int_sub(a, i64t.const_int(lo, false), "rfwi")
+                        .unwrap();
+                    let dcur = self.load_val_dyn(f, base + 2 + words, idx, rw);
+                    let oldprev = self.load_val(f, base + 2, rw);
+                    let newprev = self
+                        .builder
+                        .build_select(not_first, oldprev, dcur, "rfwp")
+                        .unwrap()
+                        .into_int_value();
+                    self.store_val(f, base + 2, rw, newprev);
+                    self.store_word(f, base, now);
+                    self.store_word(f, base + 1, a);
+                    self.store_val_dyn(f, base + 2 + words, idx, rw, vv);
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(slow_bb);
+                    let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+                    self.emit_prim_call(f, child, *method, *port, args, 0, true)?;
+                    f.ssa = saved;
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(done_bb);
+                    return Ok(());
+                }
+                if let Some(&(base, bw, sz, _cs, nw, dual, _pl)) = ie.bram_slot.get(instance) {
+                    // put latches the pending update into the port
+                    // header (the tick applies it); in-range is pure
+                    // stores, out-of-range bounces to the boxed prim
+                    // for the bounds warning
+                    let port_b = match mname.as_str() {
+                        "put" | "a_put" => false,
+                        "b_put" => true,
+                        _ => return nope("non-put BRAM action"),
+                    };
+                    if args.len() != 3 || (port_b && !dual) {
+                        return nope("bram put shape mismatch");
+                    }
+                    let Some(&child) = ie.children.get(instance) else {
+                        return nope("call on unknown child");
+                    };
+                    let i64t = self.ctx.i64_type();
+                    let w = bw.max(1).div_ceil(64);
+                    let wenw = nw.max(1).div_ceil(64);
+                    let pw = 3 + wenw + 4 * w;
+                    let pb = base + if port_b { pw } else { 0 };
+                    let ww = self.expr_width(f, &args[0])?;
+                    let w0 = self.expr_scalar(f, &args[0])?;
+                    let wens = self.to_w(w0, ww, nw.max(1), false);
+                    let aw = self.expr_width(f, &args[1])?;
+                    let a0 = self.expr_scalar(f, &args[1])?;
+                    let a = self.to_w(a0, aw, 64, false);
+                    let vw = self.expr_width(f, &args[2])?;
+                    let v0 = self.expr_scalar(f, &args[2])?;
+                    let vv = self.to_w(v0, vw, bw.max(1), false);
+                    let go_bb = self.ctx.append_basic_block(func, "bpg");
+                    let fast_bb = self.ctx.append_basic_block(func, "bpf");
+                    let slow_bb = self.ctx.append_basic_block(func, "bps");
+                    let done_bb = self.ctx.append_basic_block(func, "bpd");
+                    self.builder
+                        .build_conditional_branch(cz, go_bb, done_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(go_bb);
+                    let inb = self
+                        .builder
+                        .build_int_compare(IntPredicate::ULT, a, i64t.const_int(sz, false), "bpin")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(inb, fast_bb, slow_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(fast_bb);
+                    let now = self.load_word(f, self.env.now_slot);
+                    self.store_word(f, pb, now);
+                    self.store_word(f, pb + 1, a);
+                    self.store_val(f, pb + 3, nw.max(1), wens);
+                    self.store_val(f, pb + 3 + wenw, bw.max(1), vv);
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(slow_bb);
+                    let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+                    self.emit_prim_call(f, child, *method, *port, args, 0, true)?;
+                    f.ssa = saved;
+                    self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                    self.builder.position_at_end(done_bb);
+                    return Ok(());
+                }
+                if let Some(&(base, cw)) = ie.creg5_slot.get(instance) {
+                    // branchless port write: value = select(cond, v, old).
+                    // A CReg's only action method is a port write.
+                    if args.is_empty() {
+                        return nope("CReg write without a value");
+                    }
+                    let vw = self.expr_width(f, &args[0])?;
+                    let v0 = self.expr_scalar(f, &args[0])?;
+                    let vv = self.to_w(v0, vw, cw.max(1), false);
+                    let oldv = self.load_val(f, base, cw.max(1));
+                    let selv = self
+                        .builder
+                        .build_select(cz, vv, oldv, "cgw")
+                        .unwrap()
+                        .into_int_value();
+                    self.store_val(f, base, cw.max(1), selv);
+                    return Ok(());
+                }
+                if let Some(&(base, fw, size, guarded, loopy)) =
+                    ie.fifo_slot.get(instance).copied().as_ref()
+                {
+                    let is_enq = mname.as_str() == "enq";
+                    let is_deq = mname.as_str() == "deq";
+                    if (is_enq || is_deq) && size > 0 {
+                        // taken-path inline (ConfigReg rule: keep the
+                        // action-condition branch); guard-warning slow
+                        // path bounces to the boxed prim, which
+                        // refresh()es from the arena first
+                        let i64t = self.ctx.i64_type();
+                        let words = fw.max(1).div_ceil(64);
+                        let v = if is_enq && fw > 0 {
+                            let wv = self.expr_width(f, &args[0])?;
+                            let v0 = self.expr_scalar(f, &args[0])?;
+                            Some(self.to_w(v0, wv, fw, false))
+                        } else {
+                            None
+                        };
+                        let go_bb = self.ctx.append_basic_block(func, "fgo");
+                        let warn_bb = self.ctx.append_basic_block(func, "fwr");
+                        let fast_bb = self.ctx.append_basic_block(func, "fft");
+                        let sk_bb = self.ctx.append_basic_block(func, "fsk");
+                        self.builder
+                            .build_conditional_branch(cz, go_bb, sk_bb)
+                            .unwrap();
+                        self.builder.position_at_end(go_bb);
+                        // gating: an executed enq/deq moves fifo state
+                        // (level, elements, bypass headers) — mark taken
+                        if self.env.gate_scratch.is_some() {
+                            let t = self.ctx.bool_type().const_int(1, false);
+                            self.gate_mark(f, t);
+                        }
+                        let elems = self.load_word(f, base);
+                        let saved = self.load_word(f, base + 1);
+                        let other_at = self.load_word(f, base + if is_enq { 4 } else { 3 });
+                        let now = self.load_word(f, self.env.now_slot);
+                        let szc = i64t.const_int(size as u64, false);
+                        let zero = i64t.const_zero();
+                        let (lim, slim) = if is_enq { (szc, szc) } else { (zero, zero) };
+                        let bad = self
+                            .builder
+                            .build_int_compare(IntPredicate::EQ, elems, lim, "fb")
+                            .unwrap();
+                        // loopy enq drops the begin-of-instant
+                        // disqualifier: enq-when-begin-full succeeds
+                        // if a same-instant deq freed a slot (deq
+                        // keeps it — only Bypass drops the deq-side
+                        // clause, and Bypass stays boxed)
+                        let warn = if guarded && !(is_enq && loopy) {
+                            let same = self
+                                .builder
+                                .build_int_compare(IntPredicate::EQ, other_at, now, "fs")
+                                .unwrap();
+                            let sbad = self
+                                .builder
+                                .build_int_compare(IntPredicate::EQ, saved, slim, "fsb")
+                                .unwrap();
+                            let g = self.builder.build_and(same, sbad, "fg").unwrap();
+                            self.builder.build_or(bad, g, "fw").unwrap()
+                        } else {
+                            bad
+                        };
+                        // in-reset suppress (post-clear, until deassert):
+                        // bounce to the boxed prim, whose action_method
+                        // no-ops — the fast path must not stamp or write
+                        let sup = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::NE,
+                                self.load_word(f, base + 6),
+                                i64t.const_zero(),
+                                "fsp",
+                            )
+                            .unwrap();
+                        let warn = self.builder.build_or(warn, sup, "fws").unwrap();
+                        self.builder
+                            .build_conditional_branch(warn, warn_bb, fast_bb)
+                            .unwrap();
+                        // slow path: boxed prim (bookkeeping + println)
+                        self.builder.position_at_end(warn_bb);
+                        let targs: Vec<Expr> = if v.is_some() {
+                            vec![args[0].clone()]
+                        } else {
+                            vec![]
+                        };
+                        let _ = self.emit_prim_call(
+                            f,
+                            *ie.children
+                                .get(instance)
+                                .ok_or_else(|| Ineligible("fifo child missing".into()))?,
+                            *method,
+                            *port,
+                            &targs,
+                            0,
+                            true,
+                        )?;
+                        self.builder.build_unconditional_branch(sk_bb).unwrap();
+                        // fast path: header bookkeeping + ring update
+                        self.builder.position_at_end(fast_bb);
+                        let osame = self
+                            .builder
+                            .build_int_compare(IntPredicate::NE, other_at, now, "fon")
+                            .unwrap();
+                        let saved2 = self
+                            .builder
+                            .build_select(osame, elems, saved, "fsv")
+                            .unwrap()
+                            .into_int_value();
+                        self.store_word(f, base + 1, saved2);
+                        self.store_word(f, base + if is_enq { 3 } else { 4 }, now);
+                        let fst = self.load_word(f, base + 2);
+                        if is_enq {
+                            let idx0 = self.builder.build_int_add(fst, elems, "fi").unwrap();
+                            let idx = if size.is_power_of_two() {
+                                self.builder
+                                    .build_and(
+                                        idx0,
+                                        i64t.const_int((size - 1) as u64, false),
+                                        "fim",
+                                    )
+                                    .unwrap()
+                            } else {
+                                self.builder
+                                    .build_int_unsigned_rem(idx0, szc, "fim")
+                                    .unwrap()
+                            };
+                            let dv = match v {
+                                Some(v) => v,
+                                None => self.ity(1).const_zero(),
+                            };
+                            self.store_val_dyn(f, base + 7, idx, fw.max(1), dv);
+                            let e2 = self
+                                .builder
+                                .build_int_add(elems, i64t.const_int(1, false), "fe2")
+                                .unwrap();
+                            self.store_word(f, base, e2);
+                        } else {
+                            let f1 = self
+                                .builder
+                                .build_int_add(fst, i64t.const_int(1, false), "ff1")
+                                .unwrap();
+                            let f2 = if size.is_power_of_two() {
+                                self.builder
+                                    .build_and(f1, i64t.const_int((size - 1) as u64, false), "ffm")
+                                    .unwrap()
+                            } else {
+                                self.builder.build_int_unsigned_rem(f1, szc, "ffm").unwrap()
+                            };
+                            self.store_word(f, base + 2, f2);
+                            let e2 = self
+                                .builder
+                                .build_int_sub(elems, i64t.const_int(1, false), "fe2")
+                                .unwrap();
+                            self.store_word(f, base, e2);
+                        }
+                        self.builder.build_unconditional_branch(sk_bb).unwrap();
+                        self.builder.position_at_end(sk_bb);
+                        return Ok(());
+                    }
+                    // clear and anything else: boxed prim below
+                }
+                if let Some(&(base, cw)) = ie.counter_slot.get(instance) {
+                    if matches!(mname.as_str(), "addA" | "incrA" | "addB" | "incrB")
+                        && args.len() == 1
+                    {
+                        // taken-path inline (ConfigReg rule); in-reset
+                        // suppress bounces to the boxed prim, whose
+                        // action_method no-ops — the fast path must not
+                        // stamp or write.  Boxed semantics: save-if-
+                        // first BEFORE the val update, stamp + store
+                        // the arg, wrapping add masked to width.
+                        let Some(&child) = ie.children.get(instance) else {
+                            return nope("call on unknown child");
+                        };
+                        let is_a = matches!(mname.as_str(), "addA" | "incrA");
+                        let w = cw.max(1).div_ceil(64);
+                        let i64t = self.ctx.i64_type();
+                        let vw = self.expr_width(f, &args[0])?;
+                        let v0 = self.expr_scalar(f, &args[0])?;
+                        let vv = self.to_w(v0, vw, cw.max(1), false);
+                        let go_bb = self.ctx.append_basic_block(func, "cng");
+                        let fast_bb = self.ctx.append_basic_block(func, "cnf");
+                        let slow_bb = self.ctx.append_basic_block(func, "cnsl");
+                        let done_bb = self.ctx.append_basic_block(func, "cnd");
+                        self.builder
+                            .build_conditional_branch(cz, go_bb, done_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(go_bb);
+                        let sup = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::NE,
+                                self.load_word(f, base + 4 * w + 3),
+                                i64t.const_zero(),
+                                "cnsp",
+                            )
+                            .unwrap();
+                        self.builder
+                            .build_conditional_branch(sup, slow_bb, fast_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(slow_bb);
+                        let saved: HashMap<StrId, IntValue<'ctx>> = f.ssa.clone();
+                        self.emit_prim_call(f, child, *method, *port, args, 0, true)?;
+                        f.ssa = saved;
+                        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                        self.builder.position_at_end(fast_bb);
+                        let now = self.load_word(f, self.env.now_slot);
+                        let sat = self.load_word(f, base + 2 * w);
+                        let first = self
+                            .builder
+                            .build_int_compare(IntPredicate::NE, sat, now, "cnfr")
+                            .unwrap();
+                        let val = self.load_val(f, base, cw.max(1));
+                        let oldsv = self.load_val(f, base + w, cw.max(1));
+                        let sv = self
+                            .builder
+                            .build_select(first, val, oldsv, "cnsv")
+                            .unwrap()
+                            .into_int_value();
+                        self.store_val(f, base + w, cw.max(1), sv);
+                        self.store_word(f, base + 2 * w, now);
+                        let (voff, toff) = if is_a {
+                            (base + 2 * w + 1, base + 3 * w + 1)
+                        } else {
+                            (base + 3 * w + 2, base + 4 * w + 2)
+                        };
+                        self.store_val(f, voff, cw.max(1), vv);
+                        self.store_word(f, toff, now);
+                        let sum = self.builder.build_int_add(val, vv, "cnad").unwrap();
+                        self.store_val(f, base, cw.max(1), sum);
+                        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+                        self.builder.position_at_end(done_bb);
+                        return Ok(());
+                    }
+                    // setC/setF and anything else: boxed prim below
+                    // (slot-aware — it sees the inline-written a/b
+                    // values and stamps in the arena)
+                }
+                if let Some(&(base, ww)) = ie.wire_slot.get(instance) {
+                    if !matches!(mname.as_str(), "wset" | "send") {
+                        return nope("non-wset wire action");
+                    }
+                    let v = if ww >= 1 && !args.is_empty() {
+                        let wv = self.expr_width(f, &args[0])?;
+                        let v0 = self.expr_scalar(f, &args[0])?;
+                        Some(self.to_w(v0, wv, ww, false))
+                    } else {
+                        None
+                    };
+                    // gating: wire writes are fire-edge dirtiness —
+                    // condition-accurate (a same-value rewrite still
+                    // marks; the wire's revert-to-default transition is
+                    // covered because the mark propagates to NEXT)
+                    self.gate_mark(f, cz);
+                    // branchless wset: valid |= cond; value = select
+                    let ov = self.load_word(f, base);
+                    let cz64 = self
+                        .builder
+                        .build_int_z_extend(cz, self.ctx.i64_type(), "wsz")
+                        .unwrap();
+                    let nv = self.builder.build_or(ov, cz64, "wsv").unwrap();
+                    self.store_word(f, base, nv);
+                    if let Some(v) = v {
+                        let oldv = self.load_val(f, base + 1, ww);
+                        let selv = self
+                            .builder
+                            .build_select(cz, v, oldv, "wvv")
+                            .unwrap()
+                            .into_int_value();
+                        self.store_val(f, base + 1, ww, selv);
+                    }
+                    return Ok(());
+                }
+                if let Some(&(base, ww)) = ie.bypass_slot.get(instance) {
+                    if !matches!(mname.as_str(), "wset" | "write") {
+                        return nope("non-wset bypass wire action");
+                    }
+                    // gating: same fire-edge dirtiness contract as
+                    // RWire wset (mark the taken condition)
+                    self.gate_mark(f, cz);
+                    // branchless conditional store; no valid word to
+                    // maintain (whas is const-true by contract) and a
+                    // zero-width wset (no argument) moves no state
+                    if ww >= 1 && !args.is_empty() {
+                        let wv = self.expr_width(f, &args[0])?;
+                        let v0 = self.expr_scalar(f, &args[0])?;
+                        let v = self.to_w(v0, wv, ww, false);
+                        let oldv = self.load_val(f, base, ww);
+                        let selv = self
+                            .builder
+                            .build_select(cz, v, oldv, "bwv")
+                            .unwrap()
+                            .into_int_value();
+                        self.store_val(f, base, ww, selv);
+                    }
+                    return Ok(());
+                }
+
+                let Some(&child) = ie.children.get(instance) else {
+                    return nope("action on unknown child");
+                };
+                // other prim children: trampoline under the condition
+                if !self.env.insts.contains_key(&child) {
+                    let go_bb = self.ctx.append_basic_block(func, "pgo");
+                    let sk_bb = self.ctx.append_basic_block(func, "psk");
+                    self.builder
+                        .build_conditional_branch(cz, go_bb, sk_bb)
+                        .unwrap();
+                    self.builder.position_at_end(go_bb);
+                    // gating: a trampolined action on a prim whose
+                    // VALUE reads are arena-inline (a watched class —
+                    // e.g. fifo clear, size-0 fifos) mutates watched
+                    // state outside the inline arms above: mark taken
+                    if self.env.gate_scratch.is_some()
+                        && (ie.reg_slot.contains_key(instance)
+                            || ie.creg_slot.contains_key(instance)
+                            || ie.wire_slot.contains_key(instance)
+                            || ie.bypass_slot.contains_key(instance)
+                            || ie.fifo_slot.contains_key(instance))
+                    {
+                        let t = self.ctx.bool_type().const_int(1, false);
+                        self.gate_mark(f, t);
+                    }
+                    self.emit_prim_call(f, child, *method, *port, args, 0, true)?;
+                    self.builder.build_unconditional_branch(sk_bb).unwrap();
+                    self.builder.position_at_end(sk_bb);
+                    return Ok(());
+                }
+                // user-module child: inline the action method body under
+                // the call condition, storing EN first (the C++ enable
+                // protocol — conflicting rules' WFs read it later)
+                if *port != 0 {
+                    return nope("multi-ported user action method");
+                }
+                let cie = self.ie(child)?;
+                let cmod = &self.env.d.modules[cie.mir];
+                let Some((mi, m)) = cmod
+                    .methods
+                    .iter()
+                    .enumerate()
+                    .find(|(_, m)| m.name == *method)
+                else {
+                    return nope("unknown action method on child");
+                };
+                // a plain Action call may target an ActionValue method
+                // with its result discarded — the interp's call_action
+                // executes the body either way
+                if !matches!(
+                    m.kind,
+                    trs_ir::MethodKind::Action | trs_ir::MethodKind::ActionValue
+                ) {
+                    return nope("value method as action");
+                }
+                // (* always_enabled *): the caller-side RDY was dropped,
+                // so the body is gated on the sibling RDY_<m> value
+                // method at call time (the C++ check_rdy wrapper); EN
+                // still lands when the caller fires. No RDY method
+                // exported = constant ready.
+                let rdy_id = m.always_enabled.then_some(m.rdy).flatten();
+                if args.len() != m.args.len() {
+                    return nope("method arg count mismatch");
+                }
+                let margs = m.args.clone();
+                let body = m.body.clone();
+                let en_slot = m.en.and_then(|id| cie.en_slot.get(&id).copied());
+
+                let mut cf = self.child_frame(f, child, Some(mi))?;
+                for (a, pa) in args.iter().zip(&margs) {
+                    let wa = self.expr_width(f, a)?;
+                    let v0 = self.expr_scalar(f, a)?;
+                    let v = self.to_w(v0, wa, pa.width, false);
+                    cf.args.insert(pa.name, (v, pa.width));
+                }
+                let go_bb = self.ctx.append_basic_block(func, "mgo");
+                let sk_bb = self.ctx.append_basic_block(func, "msk");
+                self.builder
+                    .build_conditional_branch(cz, go_bb, sk_bb)
+                    .unwrap();
+                self.builder.position_at_end(go_bb);
+                if let Some(slot) = en_slot {
+                    let one = self.ctx.i64_type().const_int(1, false);
+                    self.store_word(&cf, slot, one);
+                }
+                let rec_argv: Vec<_> = margs
+                    .iter()
+                    .filter_map(|pa| cf.args.get(&pa.name).copied())
+                    .collect();
+                self.rec_meth_call(&cf, child, *method, &rec_argv)?;
+                if let Some(rid) = rdy_id {
+                    // EN is already latched; only the body waits on RDY
+                    let r = self.value_call(f, 1, *instance, rid, 0, &[])?;
+                    let rz = self.nonzero(r, 1);
+                    let bd_bb = self.ctx.append_basic_block(func, "mrdy");
+                    self.builder
+                        .build_conditional_branch(rz, bd_bb, sk_bb)
+                        .unwrap();
+                    self.builder.position_at_end(bd_bb);
+                }
+                // boundary-tax experiment: the body becomes a real call
+                // (EN store + recording stayed above; the callee's i32
+                // status routes $finish paths to stop_bb).  An Action
+                // call on an ActionValue method runs the kind-2 fn and
+                // discards the out buffer, like the interp's
+                // call_action.  AE methods are excluded from the map,
+                // so the rdy gate never coexists with a hit.
+                let bkind = if matches!(m.kind, trs_ir::MethodKind::ActionValue) {
+                    2u8
+                } else {
+                    1u8
+                };
+                let bhit = self.boundary_hit(cie.class_id, *method, bkind).filter(|bn| {
+                    f.envp.is_some() && bn.args.iter().all(|(p, _)| cf.args.contains_key(p))
+                });
+                match bhit {
+                    Some(bnd) => {
+                        let (sym, brw, bargs) = (bnd.sym.clone(), bnd.ret_width, bnd.args.clone());
+                        let envp = f.envp.unwrap();
+                        let i64t = self.ctx.i64_type();
+                        let i32t = self.ctx.i32_type();
+                        let ptrt = self.ctx.ptr_type(AddressSpace::default());
+                        let mut ptys: Vec<inkwell::types::BasicMetadataTypeEnum> = vec![
+                            ptrt.into(),
+                            ptrt.into(),
+                            i64t.into(),
+                            i32t.into(),
+                            i32t.into(),
+                            i32t.into(),
+                        ];
+                        let base = self.slot_index(cie.region.0);
+                        let (psite, fsite) = self.boundary_site_bases(&bnd, child)?;
+                        let mut bargv: Vec<inkwell::values::BasicMetadataValueEnum> = vec![
+                            f.arena.into(),
+                            envp.into(),
+                            base.into(),
+                            self.site_ordinal().into(),
+                            psite.into(),
+                            fsite.into(),
+                        ];
+                        if bkind == 2 {
+                            ptys.push(ptrt.into());
+                            let obuf = self.entry_alloca(i64t, words_for(brw.max(1)) as u64, "bo");
+                            bargv.push(obuf.into());
+                        }
+                        for (pn, pw) in &bargs {
+                            ptys.push(self.ity(*pw).into());
+                            let (v, vw) = cf.args[pn];
+                            bargv.push(self.to_w(v, vw, *pw, false).into());
+                        }
+                        let bty = i32t.fn_type(&ptys, false);
+                        let bf = self
+                            .module
+                            .get_function(&sym)
+                            .unwrap_or_else(|| self.module.add_function(&sym, bty, None));
+                        let cs = self.builder.build_call(bf, &bargv, "bnda").unwrap();
+                        let inkwell::values::ValueKind::Basic(rv) = cs.try_as_basic_value() else {
+                            return nope("boundary action fn returned void");
+                        };
+                        let ok = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::EQ,
+                                rv.into_int_value(),
+                                i32t.const_zero(),
+                                "bok",
+                            )
+                            .unwrap();
+                        self.builder
+                            .build_conditional_branch(ok, sk_bb, stop_bb)
+                            .unwrap();
+                    }
+                    None => {
+                        // the inlined body executes inside a conditional
+                        // block: caller-frame defs expanded here must not
+                        // leak either — cf is fresh, so only its own
+                        // scope is at stake
+                        self.stmts(&mut cf, func, &body, stop_bb)?;
+                        self.builder.build_unconditional_branch(sk_bb).unwrap();
+                    }
+                }
+                self.builder.position_at_end(sk_bb);
+                Ok(())
+            }
+            Action::Foreign {
+                func: ff,
+                cond,
+                args,
+                signed,
+                ..
+            } => {
+                let wc = self.expr_width(f, cond)?;
+                let c = self.expr_scalar(f, cond)?;
+                let cz = self.nonzero(c, wc);
+                let go_bb = self.ctx.append_basic_block(func, "fgo");
+                let sk_bb = self.ctx.append_basic_block(func, "fsk");
+                self.builder
+                    .build_conditional_branch(cz, go_bb, sk_bb)
+                    .unwrap();
+                self.builder.position_at_end(go_bb);
+                match self.bdpi_import(*ff) {
+                    // user BDPI action: direct call (task #22); dynamic
+                    // CString args take the boxed trampoline instead
+                    Some(imp) if Self::bdpi_lits_ok(&imp, args) => {
+                        self.bdpi_emit(f, 1, &imp, args)?;
+                    }
+                    _ => {
+                        self.emit_foreign(f, *ff, args, signed, 0, Some(stop_bb))?;
+                    }
+                }
+                self.builder.build_unconditional_branch(sk_bb).unwrap();
+                self.builder.position_at_end(sk_bb);
+                Ok(())
+            }
+            Action::Task {
+                func: tf,
+                cookie,
+                temp,
+                width,
+                cond,
+                args,
+                signed,
+                ..
+            } => {
+                self.task_call(
+                    f, func, *tf, *cookie, *temp, *width, cond, args, signed, stop_bb,
+                )?;
+                Ok(())
+            }
+            _ => nope("action kind not compilable"),
+        }
+    }
+}
+
+/// Smoke-level check that LLVM is usable: build `i64 add(i64,i64)`, JIT it,
+/// call it.  Exercised by `cargo test -p trs-codegen --features llvm`.
+pub fn llvm_smoke_test() -> Result<u64, String> {
+    let ctx = Context::create();
+    let module = ctx.create_module("trs_smoke");
+    let builder = ctx.create_builder();
+    let i64t = ctx.i64_type();
+    let fnt = i64t.fn_type(&[i64t.into(), i64t.into()], false);
+    let f = module.add_function("add", fnt, None);
+    let bb = ctx.append_basic_block(f, "entry");
+    builder.position_at_end(bb);
+    let a = f.get_nth_param(0).unwrap().into_int_value();
+    let b = f.get_nth_param(1).unwrap().into_int_value();
+    let sum = builder
+        .build_int_add(a, b, "sum")
+        .map_err(|e| e.to_string())?;
+    builder
+        .build_return(Some(&sum))
+        .map_err(|e| e.to_string())?;
+    let ee = module
+        .create_jit_execution_engine(OptimizationLevel::Aggressive)
+        .map_err(|e| e.to_string())?;
+    let add = unsafe { ee.get_function::<unsafe extern "C" fn(u64, u64) -> u64>("add") }
+        .map_err(|e| e.to_string())?;
+    Ok(unsafe { add.call(40, 2) })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn jit_round_trip() {
+        assert_eq!(super::llvm_smoke_test().unwrap(), 42);
+    }
+
+    #[test]
+    fn proto_tags_round_trip_and_fail_closed() {
+        use super::{decode_protos, encode_protos, FArgSpec, FnProtos, ForeignSpec};
+        let protos = vec![FnProtos {
+            foreign: vec![ForeignSpec {
+                inst: 3,
+                func: 7,
+                ret_width: 64,
+                args: vec![
+                    FArgSpec::Str(11),
+                    FArgSpec::Num {
+                        width: 0,
+                        signed: false,
+                    },
+                    FArgSpec::Num {
+                        width: 65,
+                        signed: true,
+                    },
+                    FArgSpec::Real,
+                    FArgSpec::StrDyn,
+                ],
+            }],
+            prims: vec![],
+            // one table per rule: the exec half starts after the one
+            // foreign site the sched half took
+            sched_foreign_origin: 1,
+            sched_prim_origin: 0,
+        }];
+        let bytes = encode_protos(&protos);
+        let back = decode_protos(&bytes).expect("round trip");
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].sched_foreign_origin, 1);
+        assert_eq!(back[0].sched_prim_origin, 0);
+        let args = &back[0].foreign[0].args;
+        assert!(matches!(args[0], FArgSpec::Str(11)));
+        assert!(matches!(
+            args[1],
+            FArgSpec::Num {
+                width: 0,
+                signed: false
+            }
+        ));
+        assert!(matches!(
+            args[2],
+            FArgSpec::Num {
+                width: 65,
+                signed: true
+            }
+        ));
+        assert!(matches!(args[3], FArgSpec::Real));
+        assert!(matches!(args[4], FArgSpec::StrDyn));
+        // an unknown tag is a corrupted or future-format artifact:
+        // decode must fail CLOSED, never fall open as Num
+        let mut bad = encode_protos(&protos);
+        // first arg record's tag word: protos_count(4) foreign_count(4)
+        // inst(4) func(4) ret(4) argc(4) -> tag at byte offset 24
+        let tag_off = 4 + 4 + 4 + 4 + 4 + 4;
+        bad[tag_off] = 9;
+        assert!(super::decode_protos(&bad).is_none());
+    }
+}

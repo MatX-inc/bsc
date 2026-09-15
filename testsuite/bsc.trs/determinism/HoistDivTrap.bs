@@ -1,0 +1,52 @@
+package HoistDivTrap (sysHoistDivTrap) where
+
+-- .bs translation of src/trs/tests/regress/HoistDivTrap.bsv (the
+-- regress ladder gates its byte parity; here it is a determinism
+-- specimen — hoisted guarded division whose prelude placement must
+-- be identical on every link, and whose trap guard must survive
+-- prelude reordering).
+--
+-- Original: hoisted shared cones must not contain trapping ops
+-- (review-fleet major finding).  q = x % den is consumed by two
+-- rules guarded on den /= 0; den stays 0 the whole run, the rules
+-- correctly never fire — but a buggy emitter that hoists q onto the
+-- edge spine and evaluates it unconditionally traps: SIGFPE.
+
+{-# verilog sysHoistDivTrap #-}
+sysHoistDivTrap :: Module Empty
+sysHoistDivTrap =
+    module
+        cyc :: Reg (Bit 16)
+        cyc <- mkReg 0
+        den :: Reg (Bit 8)
+        den <- mkReg 0
+        x :: Reg (Bit 8)
+        x <- mkReg 7
+        a :: Reg (Bit 8)
+        a <- mkReg 0
+        b :: Reg (Bit 8)
+        b <- mkReg 0
+
+        let q :: Bit 8
+            q = x % den
+
+        rules
+          "ra":
+            when den /= 0
+              ==> a := a + q
+
+          "rb":
+            when den /= 0
+              ==> b := b ^ q
+
+          "tick":
+            when True
+              ==> action
+                      cyc := cyc + 1
+                      if cyc == 4 then
+                        action
+                          { $display "a=%h b=%h" a b;
+                            $finish 0;
+                          }
+                       else
+                        noAction

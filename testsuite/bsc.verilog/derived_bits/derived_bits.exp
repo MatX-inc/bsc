@@ -71,6 +71,7 @@ compile_verilog_pass Decoder.bs "" "-opt-undetermined-vals -unspecified-to x -ha
 
 # If mkDecoder.v does not simplify correctly, conditionals and/or Xs
 # may appear in the generated output.
+if { $vtest == 1 } {
 string_does_not_occur mkDecoder.v "xxxx"
 string_does_not_occur mkDecoder.v "unspecified value"
 string_does_not_occur mkDecoder.v "\?"
@@ -86,3 +87,4 @@ find_n_strings mkTestNoopTernary.v "?" 0
 find_regexp mkTestNoopTernary.v {assign _read = r ;}
 find_regexp mkTestNoopTernary.v {assign r\$D_IN = _write_1 ;}
 
+}

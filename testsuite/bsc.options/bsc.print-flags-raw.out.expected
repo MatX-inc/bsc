@@ -95,6 +95,7 @@ Flags {
 	ruleNameCheck = True,
 	satBackend = SAT_Yices,
 	schedConds = True,
+	schedDynamic = False,
 	schedDOT = False,
 	schedQueries = [],
 	showCSyntax = False,

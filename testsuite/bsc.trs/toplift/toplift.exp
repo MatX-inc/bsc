@@ -1,0 +1,145 @@
+# WHEN a top-level parameter's value is supplied, and what happens
+# when two answers disagree.
+#
+# The sweep already runs these designs with bindings and compares
+# their output (<top>.trsonly.expected).  What it cannot express is
+# the timing contract, which is what this checks:
+#
+#   link-none      a link with nothing supplied must SUCCEED.  The
+#                  value is a slot the RUN seeds, so the link settles
+#                  the layout and the run settles the value; a build
+#                  step has no business knowing a simulation's inputs.
+#   run-required   ...and the run must then refuse to start without
+#                  them, naming each by type, or a deferred parameter
+#                  reads zero in silence.
+#   link-supplied  what the link WAS given is recorded and used when
+#                  the run says nothing.
+#   override       a run value replaces the link's, per name, leaving
+#                  the others alone.
+#   compiled       an overridden run still uses the compiled object.
+#                  This is the one that would regress silently: a
+#                  bound value used to be folded into the bodies and
+#                  salted into the design hash, so any run that
+#                  supplied one threw the .so away and fell back to
+#                  interpreting -- same answers, quietly slower.
+#                  --only-compiled refuses to run interpreted, so it
+#                  fails outright if that comes back.
+#   dup            two bindings for one name on ONE command line is a
+#                  typo, not an override, and is still refused.
+
+proc trs_toplift_binding_test { trs name top } {
+    global srcdir subdir bsc
+
+    bsc_initialize
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
+    set log "$name.tl-out"
+    set flags "-no-show-timestamps -no-show-version"
+    set trsbir [file join [file dirname $bsc] trs-bir]
+    set work "$name.wk"
+    file delete -force $work
+    file mkdir $work
+
+    if { [catch {exec sh -c "$bsc $flags -sim -u -g $top $name.bsv > $log 2>&1 && $trsbir $top.ba >> $log 2>&1"}] } {
+        fail "toplift bindings: compile/export of $name (log `$log')"
+        cd $here
+        return
+    }
+
+    # a link that supplies nothing at all
+    if { [catch {exec sh -c "$trs link $top.bir -o $work/none >> $log 2>&1"}] } {
+        fail "toplift bindings: a link with no bindings was refused (log `$log')"
+        cd $here
+        return
+    }
+    pass "toplift bindings: a link may supply nothing"
+
+    # ...and the run demands them, naming each by TYPE
+    set rc [catch {exec sh -c "$trs run $work/none.bir 2> $work/req.txt"}]
+    set fh [open $work/req.txt]; set req [read $fh]; close $fh
+    if { $rc == 0 } {
+        fail "toplift bindings: the run started with nothing supplied"
+    } elseif { ![regexp {requires bindings for} $req]
+               || ![regexp {nm \(String\)} $req] || ![regexp {r \(Real\)} $req] } {
+        fail "toplift bindings: unhelpful refusal: $req"
+    } else {
+        pass "toplift bindings: the run requires what the link deferred"
+    }
+
+    # a link that supplies all three
+    if { [catch {exec sh -c "$trs link $top.bir '+nm=linked' +r=2.5 +k=9 -o $work/baked >> $log 2>&1"}] } {
+        fail "toplift bindings: link with bindings (log `$log')"
+        cd $here
+        return
+    }
+    set ok 1
+    if { [catch {exec sh -c "cd $work && TRS=$trs ./baked > baked.txt 2>&1"}] } {
+        fail "toplift bindings: artifact run (log `$work/baked.txt')"
+        set ok 0
+    } else {
+        set fh [open $work/baked.txt]; set got [read $fh]; close $fh
+        if { ![regexp {nm=linked r=2.500000 k=9} $got] } {
+            fail "toplift bindings: the link's values were not used: $got"
+            set ok 0
+        } else {
+            pass "toplift bindings: the link's values are used when the run says nothing"
+        }
+    }
+
+    # a run value replaces the link's, per name
+    if { $ok } {
+        if { [catch {exec sh -c "cd $work && TRS=$trs ./baked '+nm=overridden' > ov.txt 2>&1"}] } {
+            fail "toplift bindings: override run"
+        } else {
+            set fh [open $work/ov.txt]; set got [read $fh]; close $fh
+            if { ![regexp {nm=overridden r=2.500000 k=9} $got] } {
+                fail "toplift bindings: expected only nm to change: $got"
+            } else {
+                pass "toplift bindings: a run value overrides the link's, per name"
+            }
+        }
+    }
+
+    # and an overridden run still uses the compiled object
+    if { $ok } {
+        if { [catch {exec sh -c "$trs compile $work/baked.bir -o $work/baked.so >> $log 2>&1"}] } {
+            fail "toplift bindings: compile (log `$log')"
+        } elseif { [catch {exec sh -c "cd $work && TRS=$trs ./baked --only-compiled '+nm=x' +r=9.25 +k=1 > oc.txt 2>&1"}] } {
+            set fh [open $work/oc.txt]; set got [read $fh]; close $fh
+            fail "toplift bindings: an overridden run lost the compiled tier: $got"
+        } else {
+            set fh [open $work/oc.txt]; set got [read $fh]; close $fh
+            if { ![regexp {nm=x r=9.250000 k=1} $got] } {
+                fail "toplift bindings: compiled override wrong: $got"
+            } else {
+                pass "toplift bindings: an overridden run still uses the compiled object"
+            }
+        }
+    }
+
+    # two bindings for one name on one command line is a typo
+    set rc [catch {exec sh -c "$trs run $work/none.bir '+nm=a' '+nm=b' +r=1.0 +k=1 2> $work/dup.txt"}]
+    set fh [open $work/dup.txt]; set dup [read $fh]; close $fh
+    if { $rc == 0 || ![regexp {conflicting bindings} $dup] } {
+        fail "toplift bindings: a duplicate binding was not refused: $dup"
+    } else {
+        pass "toplift bindings: a duplicate binding on one command line is refused"
+    }
+
+    file delete -force $work
+    foreach f [glob -nocomplain $top.bir $log] { file delete -force $f }
+    cd $here
+}
+
+global env
+set trs_cmd "trs"
+if { [info exists env(TRS)] } { set trs_cmd $env(TRS) }
+
+if { [catch {exec sh -c "command -v $trs_cmd"}] } {
+    unsupported "trs top-level parameter bindings (trs not installed)"
+} elseif { [catch {exec sh -c "$trs_cmd features | grep -qw jit"}] } {
+    unsupported "trs top-level parameter bindings (trs built without the jit feature)"
+} else {
+    trs_toplift_binding_test $trs_cmd TopStrReal sysTopStrReal
+}

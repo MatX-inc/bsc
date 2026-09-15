@@ -1,0 +1,5 @@
+[0] acc=000000000000000000000000 inc=03 big=0123456789abcdef0fedcba9
+[1] acc=0123456789abcdef0fedcbac inc=03 big=0123456789abcdef0fedcba9
+[2] acc=02468acf13579bde1fdb9758 inc=03 big=0123456789abcdef0fedcba9
+[3] acc=0369d0369d0369cd2fc96304 inc=03 big=0123456789abcdef0fedcba9
+[4] acc=048d159e26af37bc3fb72eb0 inc=03 big=0123456789abcdef0fedcba9

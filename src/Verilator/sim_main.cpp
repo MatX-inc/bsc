@@ -111,11 +111,11 @@ int main (int argc, char **argv, char **env) {
     while (! Verilated::gotFinish ()) {
 
 	TOP->CLK = 0;
-	step(TOP,5);
+	step(TOP, 5);
 	if (Verilated::gotFinish ()) break;
 
 	TOP->CLK = 1;
-	step(TOP,5);
+	step(TOP, 5);
     }
 
     TOP->final ();    // Done simulating

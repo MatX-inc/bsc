@@ -21,6 +21,7 @@ compile_verilog_fail_error MakeNameDynamicString.bsv G0012
 # that are ultimately generated
 
 compile_verilog_pass ReaderModuleTest.bs {} {-dATS}
+if { $vtest == 1 } {
 
 # Check that mkReaderModuleTestInner has a submodule called "count"
 find_n_strings mkReaderModuleTestInner.v {reg [15 : 0] count;} 1
@@ -28,6 +29,7 @@ find_n_strings mkReaderModuleTestInner.v {reg [15 : 0] count;} 1
 # Check that mkReaderModuleTestOuter has submodules "count" and "inner"
 find_n_strings mkReaderModuleTestOuter.v {reg [15 : 0] count;} 1
 find_n_strings mkReaderModuleTestOuter.v {mkReaderModuleTestInner inner(} 1
+}
 
 # -----
 

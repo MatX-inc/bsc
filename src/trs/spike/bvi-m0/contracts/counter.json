@@ -1,0 +1,28 @@
+{
+  "verilog_name": "BviCounter",
+  "clocks": [
+    {"name": "clk", "osc_port": "CLK", "gate_port": null, "tick_port": "clk"}
+  ],
+  "resets": [
+    {"name": "rst", "port": "RST_N", "active_low": true}
+  ],
+  "params": {},
+  "ports": [
+    {"name": "CLK",      "dir": "input",  "width": 1, "kind": "clock"},
+    {"name": "RST_N",    "dir": "input",  "width": 1, "kind": "reset"},
+    {"name": "EN_bump",  "dir": "input",  "width": 1, "kind": "enable"},
+    {"name": "bump_amt", "dir": "input",  "width": 8, "kind": "method_arg"},
+    {"name": "count",    "dir": "output", "width": 8, "kind": "method_result"},
+    {"name": "RDY_bump", "dir": "output", "width": 1, "kind": "rdy"}
+  ],
+  "methods": [
+    {"name": "bump", "kind": "action", "clock": "clk",
+     "args": ["bump_amt"], "results": [], "enable": "EN_bump", "rdy": "RDY_bump",
+     "shadow_group": null},
+    {"name": "read", "kind": "value", "clock": "clk",
+     "args": [], "results": ["count"], "enable": null, "rdy": null,
+     "shadow_group": null}
+  ],
+  "paths": [],
+  "dag_order": ["bump", "read"]
+}

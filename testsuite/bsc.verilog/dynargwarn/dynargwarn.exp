@@ -1,0 +1,12 @@
+# Tests for the dynamic-module-argument warning (G0129): a state
+# instance's Port argument whose expression cone contains a source
+# that is proven to vary within a clock cycle (wire reads, rule fire
+# signals, ActionValue results) is wired combinationally in the
+# generated Verilog with no scheduling relationship to its writers,
+# so the submodule can observe it outside the atomic rule semantics.
+# Register/constant-fed arguments (including through pure operators)
+# stay silent.
+
+compile_verilog_pass_warning DynArgWire.bsv G0129
+
+compile_verilog_pass_no_warning DynArgReg.bsv

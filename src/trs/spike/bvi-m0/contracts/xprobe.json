@@ -1,0 +1,63 @@
+{
+  "verilog_name": "BviXProbe",
+  "clocks": [
+    {
+      "name": "clk",
+      "osc_port": "CLK",
+      "gate_port": null,
+      "tick_port": "clk"
+    }
+  ],
+  "resets": [
+    {
+      "name": "rst",
+      "port": "RST_N",
+      "active_low": true
+    }
+  ],
+  "params": {},
+  "ports": [
+    {
+      "name": "CLK",
+      "dir": "input",
+      "width": 1,
+      "kind": "clock"
+    },
+    {
+      "name": "RST_N",
+      "dir": "input",
+      "width": 1,
+      "kind": "reset"
+    },
+    {
+      "name": "RDYX",
+      "dir": "output",
+      "width": 1,
+      "kind": "rdy"
+    },
+    {
+      "name": "Q",
+      "dir": "output",
+      "width": 8,
+      "kind": "method_result"
+    }
+  ],
+  "methods": [
+    {
+      "name": "get",
+      "kind": "value",
+      "clock": "clk",
+      "args": [],
+      "results": [
+        "Q"
+      ],
+      "enable": null,
+      "rdy": "RDYX",
+      "shadow_group": null
+    }
+  ],
+  "paths": [],
+  "dag_order": [
+    "get"
+  ]
+}

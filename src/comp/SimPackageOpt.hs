@@ -4,7 +4,7 @@ import Flags
 import SimPackage
 import ASyntax
 import ASyntaxUtil
-import AOpt(aExpandDynSel, aInsertCaseDef)
+import AOptCase(aExpandDynSel, aInsertCaseDef)
 import Prim
 import IntLit
 import IntegerUtil(aaaa)

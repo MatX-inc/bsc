@@ -1,0 +1,30 @@
+[package]
+name = "trs"
+description = "TRS driver: link planner, JIT/AOT builder, native runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "trs"
+path = "src/main.rs"
+
+[dependencies]
+trs-ir = { path = "../trs-ir" }
+trs-vlt = { path = "../trs-vlt" }
+trs-interp = { path = "../trs-interp" }
+trs-kernel = { path = "../trs-kernel" }
+trs-rt = { path = "../trs-rt" }
+trs-wave = { path = "../trs-wave" }
+trs-codegen = { path = "../trs-codegen" }
+libc = "0.2"
+
+[features]
+llvm = ["trs-codegen/llvm"]
+# AOT artifact loading without LLVM (lean environments): artifacts
+# built elsewhere still run at full compiled speed
+aot = ["trs-interp/aot"]
+# hybrid JIT in the interpreter (TRS_JIT=1 at runtime) + artifact
+# emission (trs link)
+jit = ["aot", "trs-interp/jit"]

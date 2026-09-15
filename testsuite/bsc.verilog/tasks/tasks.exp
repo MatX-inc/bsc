@@ -193,8 +193,10 @@ test_c_veri_bsv_separately LogicBetweenTasks3 sysLogicBetweenTasks3.out.expected
 # unsettled value as 'x'es, verilator shows its deterministic 2-state
 # stale value; see sysLogicBetweenTasks3.v-bug.out.expected.verilator.)
 #
+if { $vtest == 1 } {
 copy sysLogicBetweenTasks3.v.out sysLogicBetweenTasks3.v-bug.out
 check_verilog_output sysLogicBetweenTasks3.v-bug.out sysLogicBetweenTasks3.v-bug.out.expected ""
+}
 
 # The above examples are about logic between tasks in the same module.
 # That situation can be made to work, with proper inserting of zero-delay.

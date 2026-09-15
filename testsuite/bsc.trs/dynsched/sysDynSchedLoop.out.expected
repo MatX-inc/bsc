@@ -1,0 +1,24 @@
+0: b get = 0
+0: d get = 0
+1: c put 2 saw 0
+1: a put 1 saw 0
+r: acc <= 1
+r: acc <= 2
+2: b get = 0
+2: d get = 0
+3: c put 4 saw 0
+3: a put 3 saw 0
+r: acc <= 4
+r: acc <= 6
+4: b get = 0
+4: d get = 0
+5: c put 6 saw 0
+5: a put 5 saw 0
+r: acc <= 9
+r: acc <= 12
+6: b get = 0
+6: d get = 0
+7: c put 8 saw 0
+7: a put 7 saw 0
+r: acc <= 16
+r: acc <= 20

@@ -1,0 +1,5 @@
+refuse=G0084
+engine=aot
+golden=sysResetInv.v.out.expected
+filter=\$finish
+filter=is -1431655766$

@@ -68,5 +68,6 @@ install clean full_clean:
 	$(MAKE)  -C Verilog.Vivado   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C bluetcl    PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C bluesim    PREFIX=$(PREFIX)  $@
+	$(MAKE)  -C trs   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C Verilator  PREFIX=$(PREFIX)  $@
 

@@ -1,0 +1,11 @@
+[package]
+name = "trs-vlt"
+description = "BVI import: verilate-or-cache pipeline (metadata adapters, shim generation, model build)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+trs-ir = { path = "../trs-ir" }
+libc = "0.2"

@@ -23,7 +23,7 @@ compile_verilog_pass ArrayDecl_TopLevel.bsv
 
 # Test that incorrect size is detected
 compile_verilog_fail ArrayDecl_WrongSize.bsv
-compare_file ArrayDecl_WrongSize.bsv.bsc-vcomp-out
+if { $vtest == 1 } { compare_file ArrayDecl_WrongSize.bsv.bsc-vcomp-out }
 
 # Test that incorrect size is detected in subarrays
 compile_verilog_fail MultiArrayDecl_WrongSize.bsv
@@ -31,7 +31,7 @@ compare_file MultiArrayDecl_WrongSize.bsv.bsc-vcomp-out
 
 # Test that expressions are checked for size
 compile_verilog_fail ArrayDecl_Expr_WrongSize.bsv
-compare_file ArrayDecl_Expr_WrongSize.bsv.bsc-vcomp-out
+if { $vtest == 1 } { compare_file ArrayDecl_Expr_WrongSize.bsv.bsc-vcomp-out }
 
 # Same for multi-dimension arrays
 compile_verilog_fail MultiArrayDecl_Expr_WrongSize.bsv
@@ -54,7 +54,7 @@ compile_verilog_pass ArrayDecl_Bind.bsv
 # Test that the size of the returned array is checked against the
 # declared dimension
 compile_verilog_fail ArrayDecl_Bind_WrongSize.bsv
-compare_file ArrayDecl_Bind_WrongSize.bsv.bsc-vcomp-out
+if { $vtest == 1 } { compare_file ArrayDecl_Bind_WrongSize.bsv.bsc-vcomp-out }
 
 # Test that declaration of multiple variables is allowed to bind
 # to all of the variables
@@ -68,7 +68,7 @@ compile_verilog_pass ArrayDecl_Bind_ExtraVar_ArrayType.bsv
 
 # Test that wrong sizes in later variables are detected
 compile_verilog_fail ArrayDecl_Bind_ExtraVar_WrongSize.bsv
-compare_file ArrayDecl_Bind_ExtraVar_WrongSize.bsv.bsc-vcomp-out
+if { $vtest == 1 } { compare_file ArrayDecl_Bind_ExtraVar_WrongSize.bsv.bsc-vcomp-out }
 
 # -----
 
@@ -78,7 +78,7 @@ compile_verilog_pass ArrayDecl_ExtraVar.bsv
 
 # Test that wrong sizes in later variables are detected
 compile_verilog_fail ArrayDecl_ExtraVar_WrongSize.bsv
-compare_file ArrayDecl_ExtraVar_WrongSize.bsv.bsc-vcomp-out
+if { $vtest == 1 } { compare_file ArrayDecl_ExtraVar_WrongSize.bsv.bsc-vcomp-out }
 
 # -----
 

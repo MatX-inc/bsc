@@ -11,6 +11,7 @@ module SimPackage(
                   MethodOrderMap,
 
                   SimSchedule(..),
+                  SimSchedAlt(..),
                   SchedNode(..), getSchedNodeId,
                   DisjointRulesDB,
 
@@ -119,6 +120,21 @@ data SimSchedule = SimSchedule
     , ss_sched_order :: [SchedNode]
     , ss_domain_info_map :: DomainInfoMap
     , ss_early_rules :: [ARuleId]
+    -- dynamic scheduling (-sched-dynamic): guarded alternative orders,
+    -- selected per edge against pre-edge state; when a fact is present
+    -- the base graph/order above have the inactive constraint's edges
+    -- dropped (trs backend only)
+    , ss_alts :: [SimSchedAlt]
+    }
+  deriving (Show)
+
+-- One guarded alternative flattening of the merged schedule graph
+data SimSchedAlt = SimSchedAlt
+    { ssa_guard_path :: String  -- instance path of the module the guard
+                                -- reads ("" = the top module)
+    , ssa_guard :: AExpr        -- register reads and constants only
+    , ssa_sched_graph :: [(SchedNode, [SchedNode])]
+    , ssa_sched_order :: [SchedNode]
     }
   deriving (Show)
 
