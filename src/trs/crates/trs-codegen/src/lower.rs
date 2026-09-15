@@ -516,6 +516,22 @@ fn run_ir_passes(module: &Module, tracked: Option<&IrTally>) -> Result<(), Ineli
     })
 }
 
+/// Pre-pass dump point, honoured by every AOT emission path.  Which
+/// path runs is a tuning decision, so a knob that works on only one of
+/// them silently does nothing in the configuration bazel builds --
+/// which was the case here: TRS_JIT_DUMP reached the JIT paths and no
+/// AOT path at all.  TRS_JIT_DUMP_PRE is an alias, so a recipe written
+/// against the one-module path keeps working.
+fn dump_pre() -> bool {
+    std::env::var_os("TRS_JIT_DUMP").is_some() || std::env::var_os("TRS_JIT_DUMP_PRE").is_some()
+}
+
+/// Post-pass dump point: the same module after run_ir_passes, for
+/// telling what the passes did from what the lowering emitted.
+fn dump_post() -> bool {
+    std::env::var_os("TRS_JIT_DUMP_POST").is_some()
+}
+
 fn finish_engine(
     module: Module<'static>,
 ) -> Result<inkwell::execution_engine::ExecutionEngine<'static>, Ineligible> {
@@ -1122,7 +1138,15 @@ fn compile_class_module(
         // The module's object still holds everything that is the
         // module's: its exec bodies, boundary methods and helpers.
     }
+    if dump_pre() {
+        eprintln!("; ==== trs shard: mir {mir} ====");
+        eprintln!("{}", module.print_to_string().to_string());
+    }
     run_ir_passes(&module, None)?;
+    if dump_post() {
+        eprintln!("; ==== trs shard: mir {mir} (post) ====");
+        eprintln!("{}", module.print_to_string().to_string());
+    }
     let tm = aot_target_machine()?;
     let buf = tm
         .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
@@ -1704,6 +1728,19 @@ pub fn compile_design_objects_split(
             per_class.len()
         );
     }
+    let dumping = dump_pre();
+    // dumped here rather than inside the pipeline below: the workers
+    // print the per-module IR, and this keeps the design module ahead
+    // of it
+    if dumping {
+        eprintln!("; ==== trs shard: design ====");
+        eprintln!("{}", module.print_to_string().to_string());
+    }
+    // eprintln! is atomic per call, so one module's IR never interleaves
+    // with another's, but nothing orders the modules themselves -- a
+    // single worker restores the [design, mir asc] order documented
+    // above, and a dump is not a run whose speed matters
+    let nworkers = if dumping { 1 } else { nworkers };
     // phase 2b: per-class pipelines on workers, the design pipeline on
     // this thread (its Context cannot move), all overlapped
     let jobs: Vec<(usize, ClassJob)> = per_class.into_iter().collect();
@@ -1815,6 +1852,10 @@ pub fn compile_design_objects_split(
         let td = std::time::Instant::now();
         let design: Result<Vec<u8>, Ineligible> = (|| {
             run_ir_passes(&module, Some(&tally))?;
+            if dump_post() {
+                eprintln!("; ==== trs shard: design (post) ====");
+                eprintln!("{}", module.print_to_string().to_string());
+            }
             let tm = aot_target_machine()?;
             let buf = tm
                 .write_to_memory_buffer(&module, inkwell::targets::FileType::Object)
