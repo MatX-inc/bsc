@@ -20,9 +20,12 @@ A user builds a simulation the way they build a C program.
         trs shard: N of N fragment objects reused from inputs (100%)
 
   Nothing recompiled.  The design `.so` is a CALLER: its edge fn is a
-  dispatcher over `exec_{module}_{rule}` and `sched_{module}_{rule}`,
-  each defined in the module's own object, and it carries no copy of
-  any body.
+  dispatcher over `exec_{module}_{rule}`, each defined in the
+  module's own object, and it carries no copy of any rule body.
+- **What the design contributes is the SCHEDULE**, and only that: the
+  edge fn, the dispatch tables, the glue, and one `sched_` fn per
+  (instance, rule) deciding when that rule fires.  A rule's body is
+  the module's; when it fires is the design's (section 6e).
 
 That is the whole user-visible model, and it holds whatever the top
 contains.  The rest of this document is how it was reached and what it
@@ -258,9 +261,9 @@ built alone and the same fragment inside a design, and those two are
 required to be byte-identical.  An early version allocated only the
 supplied arguments and failed exactly that way.
 
-Measured on one controller design, the same build before and after:
+Measured on one large design, the same build before and after:
 
-| TAControllerBurn16Test | before | after |
+| one large design | before | after |
 | --- | ---: | ---: |
 | objects emitted | 99 | **67** |
 | distinct module types | 67 | 67 |
@@ -299,7 +302,7 @@ very sharing that was unsound then -- and answers `a=3 b=7`, because
 the value the body multiplies by is a load from the instance's arena
 rather than an immediate.
 
-Worth recording alongside: a controller compile of this family is 329
+Worth recording alongside: a compile in that family is 329
 SECONDS.  The 6.6 hours in section 1 is what the monolithic strategy
 cost on the same family, and that figure has been quoted since;
 per-type emission retired it, per-class did not bring it back, and
@@ -448,9 +451,9 @@ six designs mixes pairs that share almost everything with pairs that can
 share nothing, and answers neither question.  Measured WITHIN a family
 (section 6a), specialization costs nothing -- 96.1% of classes shared
 against 94.3% of types, so the sharper identity matches MORE often, not
-less.  Measured across families it is irrelevant, because TA and RE
-instantiate different module types and would not share generically
-either.  Overlap is a property of a family, and pooling destroyed it.
+less.  Measured across families it is irrelevant, because two
+families instantiate different module types and would not share
+generically either.  Overlap is a property of a family, and pooling destroyed it.
 
 Whichever way the trade goes, the generic path is real work: those
 constants are folded today (`port_consts` is "the compiled mirror of the
@@ -567,39 +570,39 @@ The case for this work rested on two unmeasured numbers: how much of a
 compile is cacheable, and how much two designs overlap.  Both are now
 measured, on the designs that cost real time.
 
-**Where the time goes.**  `TRS_JIT_TIME` over the expensive controller
-units (each 1:52 to 2:25):
+**Where the time goes.**  `TRS_JIT_TIME` over the expensive units of
+one family (each 1:52 to 2:25), plus two cheap ones for contrast:
 
 | design | trial lower | design module | class modules | class share |
 | --- | --: | --: | --: | --: |
-| TAControllerCsrLatencyReport | 331s | 37.5s | 5,988s | 88.9% |
-| TAControllerBurnTest | 338s | 42.7s | 5,966s | 88.5% |
-| TAControllerUserSpecialsScriptedTest | 396s | 36.0s | 5,962s | 83.1% |
-| TAControllerUserSpecialsFrontDoorScriptedTest | 388s | 34.9s | 5,999s | 87.6% |
-| REControllerCsrLatencyReport | 331s | 31.4s | 6,971s | 80.1% |
-| REControllerUserSpecials{,FrontDoor}ScriptedTest | 388s | 31.7s | 6,980s | 89.2% |
-| TABroadcastCsrLatencyReport | 6s | 266.3s | 104s | 7.3% |
-| REBroadcastCsrLatencyReport | 3s | 83.0s | 42s | 7.5% |
+| 1 | 331s | 37.5s | 5,988s | 88.9% |
+| 2 | 338s | 42.7s | 5,966s | 88.5% |
+| 3 | 396s | 36.0s | 5,962s | 83.1% |
+| 4 | 388s | 34.9s | 5,999s | 87.6% |
+| 5 | 331s | 31.4s | 6,971s | 80.1% |
+| 6 | 388s | 31.7s | 6,980s | 89.2% |
+| 7 | 6s | 266.3s | 104s | 7.3% |
+| 8 | 3s | 83.0s | 42s | 7.5% |
 
 **80-89% of an expensive compile is the per-class half.**  The design
 module -- the part that can never be cached -- is 31 to 43 SECONDS, under
-1%.  The two Broadcast designs inverse that completely, at 7%: they are
-the cheap ones, and reasoning about the expensive units from them would
+1%.  The last two designs invert that completely, at 7%: they are the
+cheap ones, and reasoning about the expensive units from them would
 have been badly wrong.
 
 **How much two designs overlap.**  Class overlap within a family, as a
 percentage of the smaller design:
 
-|  | BurnTest | CsrLat | USFrontDoor | USScripted | Broadcast |
-| --- | --: | --: | --: | --: | --: |
-| TA family | -- | 96% | 96% | 96% | 1% |
-| front door vs back door | | | 98% | | |
+|  | unit 2 | unit 3 | unit 4 | cheap unit |
+| --- | --: | --: | --: | --: |
+| against unit 1 | 96% | 96% | 96% | 1% |
+| two near-identical variants | | 98% | | |
 
-Four of the expensive TA units are 96-98% the same design.  Broadcast
-shares 1% with its own family despite the name.  TA against RE is 37% at
-best and 0% for Broadcast, because they largely instantiate different
-module types -- that ceiling is not specialization, and going generic
-would not lift it.
+Four of the expensive units in one family are 96-98% the same design.
+The cheap unit shares 1% with that family despite sitting in it.  One
+family against another is 37% at best and 0% for the cheap unit,
+because they largely instantiate different module types -- that
+ceiling is not specialization, and going generic would not lift it.
 
 These are CLASS overlaps, measured while a type could still be several
 classes.  The TYPE overlap for the same family was 94.3% against
@@ -609,7 +612,7 @@ specialization paid for itself.  It does not survive the 0-of-337M folding measu
 sharing of 3.42x as many objects, and the estimate below reads the same
 either way.
 
-**So, for the TA controller family of four:**
+**So, for that family of four:**
 
 | | |
 | --- | --: |
@@ -811,6 +814,48 @@ section genuinely is not the module's code -- calling the module's
 symbol for it runs the base order, which the `sysDynSched` family
 catches.
 
+## 6e. The sched half is the design's, and why
+
+A rule compiles to two halves.  The EXEC half is the body -- the
+actions the rule takes -- and it is the module's code: the same
+statements whatever instantiates it, which is why one compiled body
+serves every instance of a type and lives in the type's object.  The
+SCHED half computes CAN_FIRE/WILL_FIRE, applies the inhibitors the
+schedule chose, and latches the eager defs its entry was given to
+own.
+
+That half was briefly moved into the module's object too, under the
+same class symbol (rev 36).  It cannot live there.  Which of an
+instance's rules the composition marks EARLY is per (instance, rule),
+and the eager-def attachment walk skips early rules, so the walk
+reaches different cones for two instances of ONE module type and
+their sched halves genuinely differ.  Widening the dedup key cannot
+rescue it: that splits a module type into two classes, and one object
+per type refuses to emit two.
+
+The evidence is a replicated array, which is the shape that makes it
+visible: a module instantiating one type thirty times over, where for
+one of that type's rules the call-site table came to 3 prim sites at
+one instance and 1 at another, EXEC halves identical.  Where the class
+invariant did not catch it, the shared body ran and indexed a member's
+table past its end -- site 7 of a 7-entry table, reached from the
+edge fn.  Neither shape appears in the corpus at all; both are
+ordinary BSV.
+
+It was not a measurement that was wrong, it was the decision to take
+one: 354 designs and 5,930 class members agreed, and that was
+reported as a reason to share.  Corpus agreement is not a
+specification -- the design has to be correct for any input
+BSC can produce, and profiling only picks between plans that are
+already correct.
+
+So sched fns are per ordinal, named `sched_i{inst}_{ordinal}`, and
+emitted into the design module beside the edge fn that calls them.
+The contract is unchanged in substance -- every module still compiles
+to an object, any module can still be the top, a design is still
+linked from objects -- but the object holds the module's BODIES, and
+the design holds its schedule.
+
 ## 7. The one number still missing
 
 What de-inlining costs at RUN time, at scale.  Outlining is
@@ -821,8 +866,8 @@ the call-based form is the semantics whatever the number says.
 What is known: 0.68x on Flute from the old A/B, and the corpus cannot
 refine it (only five designs run 50ms or longer; median 1.13x, best
 0.87x -- i.e. one got FASTER, which is how little signal there is).
-The measurement wants the controller family in the playground, whose
-worst function is a replicated child cone.
+The measurement wants the large designs in the downstream tree,
+whose worst function is a replicated child cone.
 
 It matters for one decision only: whether link-time re-inlining is
 worth building, and which callees it should target.  Until then the

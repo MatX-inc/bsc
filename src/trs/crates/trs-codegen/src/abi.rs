@@ -417,13 +417,17 @@ pub enum FArgSpec {
 }
 
 /// A compiled rule sched function: (arena, env, region base index,
-/// ordinal) -- the same shape as `CompiledExec`, and for the same
-/// reason.  A sched body was the last piece of a module's code still
-/// addressing the arena ABSOLUTELY, which made it specific to one
-/// instance in one design: two instances of a type differed only by
-/// their region offset, and so had to be emitted twice.  Region
-/// relative, one body serves them all, and it can live in the
-/// module's own object.
+/// ordinal) -- the same shape as `CompiledExec`, so that both halves
+/// of a rule are called the same way and a sched body addresses its
+/// region RELATIVE to the base it is handed rather than baking one
+/// instance's offsets.
+///
+/// Unlike an exec body it is still emitted per ordinal, into the
+/// DESIGN's module: what a sched fn computes is when the rule fires,
+/// and that depends on the whole-design schedule -- which of an
+/// instance's rules are marked early decides which eager defs this
+/// entry latches, and that differs between two instances of one
+/// module type.
 pub struct CompiledSched {
     pub sched: unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32),
 }
@@ -734,6 +738,30 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     import), and the liveness walk grew MethValue result cones and
 //     dynamic-schedule alternates (live_en can only grow, but baked
 //     slot layouts change).  26: live-EN-only fast slots (rung 40).
+// 37: an object holds every EXEC body of its module, and the edge
+//     fn calls them.  Three changes, none of which a rev-36 object
+//     can be told apart from:
+//     (a) every dedup class gets a representative, so a module's
+//     object carries all its bodies rather than only the ones this
+//     design's edge plan happened not to absorb;
+//     (b) nothing is inlined into the edge fn, so a section that
+//     used to be a design-local copy at site origin 0 is now a call
+//     numbered from that half's real origin;
+//     (c) the sched half went BACK to the design module, one fn per
+//     ordinal under `sched_i{inst}_{ordinal}', after rev 36 moved it
+//     into the per-type object under the class symbol.  It cannot
+//     live there: `early' is per (instance, rule) in the design's
+//     composition, so the eager-def walk reaches different cones for
+//     two instances of one module type and their sched halves
+//     genuinely differ -- observed where one type is instantiated
+//     thirty times, as a 3-vs-1 prim count between two of them.  The
+//     class symbol a rev-36 design links against is simply not
+//     emitted any more.
+//     A rev-36 object mixed with a rev-37 design disagrees about
+//     which call site an index names -- the failure is an
+//     out-of-range prim index in the callback trampoline, not a
+//     wrong answer, but it is the same class and the rev is what
+//     stops it.
 // 36: a sched fn takes (arena, env, region base, ordinal) and
 //     addresses its region RELATIVE to that base, exactly as an exec
 //     fn has since rev 29.  It was the last piece of a module's own
@@ -821,10 +849,11 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     (layout_ranks_fragment_local) instead of the design's
 //     composition walk, so slot offsets inside a fragment no longer
 //     depend on who instantiated it.  Slot numbering shifts for every
-//     design.  Measured on TAControllerBurnTest: 19,119 distinct 64B
-//     lines per edge against 19,136 design-ordered and 19,128
-//     unordered -- the packing is a wash and the sharing is not, with
-//     class overlap across the TA family going 28.6% -> 94.6%.
+//     design.  Measured on a large design: the distinct 64B lines
+//     an edge touches came out within 0.1% of both design-ordered
+//     and unordered, so the packing is a wash -- and the sharing is
+//     not, with class overlap across a family of related designs
+//     going 28.6% -> 94.6%.
 // 30: every instance's region opens with a reset table -- one word
 //     per reset port, holding the design-global slot that drives it.
 //     Slot numbering therefore shifts, and shared-by-type code reads
@@ -847,7 +876,7 @@ pub type BoundaryMap = HashMap<(usize, StrId, u8), BoundaryFn>;
 //     its caller did not reserve its block in.  Rule bodies take
 //     their ordinal where they took a token base, and boundary fns
 //     take a site base in place of each packed token seed.
-pub const AOT_LAYOUT_REV: u64 = 36;
+pub const AOT_LAYOUT_REV: u64 = 37;
 
 /// The revision stamped into artifacts being EMITTED.  Equal to
 /// [`AOT_LAYOUT_REV`] except under the test-only TRS_TEST_LAYOUT_REV

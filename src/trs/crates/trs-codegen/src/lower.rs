@@ -1084,17 +1084,16 @@ fn compile_class_module(
     }
     BOUNDARY.with(|b| *b.borrow_mut() = Some(full_map.clone()));
     for spec in reps {
-        let mut mk = |exec: bool| Lower {
+        let mut lc = Lower {
             env,
             ctx: &ctx,
             module: &module,
             builder: ctx.create_builder(),
             cbs,
             spec,
-            // exec is first in the rule's one call-site table, so it
-            // starts at 0 and the sched half follows it
-            site_origin: if exec { 0 } else { spec.sched_prim_origin },
-            foreign_origin: if exec { 0 } else { spec.sched_foreign_origin },
+            // exec is first in the rule's one call-site table
+            site_origin: 0,
+            foreign_origin: 0,
             outlined: refs_opt,
             helper_self: None,
             dedup: None,
@@ -1106,19 +1105,34 @@ fn compile_class_module(
             prim_calls: Vec::new(),
             edge: None,
         };
-        mk(true)
-            .lower_exec()
+        lc.lower_exec()
             .map_err(|e| Ineligible(format!("shard mir {mir} exec: {e}")))?;
-        // The SCHED half too, so the object holds all of the module's
-        // own code.  Emitted unconditionally, even when this design's
-        // edge fuses and inlines the sched section instead: whether
-        // to fuse is a property of the DESIGN, and an object that
-        // gained or lost a function depending on the design it was
-        // first built in would not be the same object for the next
-        // one.  A fused design simply never calls it.
-        mk(false)
-            .lower_sched()
-            .map_err(|e| Ineligible(format!("shard mir {mir} sched: {e}")))?;
+        // The SCHED half is NOT here, and that is not an oversight.
+        //
+        // A rule's body is the module's code; deciding WHEN it fires
+        // is the design's.  The sched half computes CAN_FIRE/WILL_FIRE
+        // and latches the schedule-position defs its entry owns, and
+        // both depend on whole-design scheduling: which of an
+        // instance's rules the composition marks EARLY (`comp.early`
+        // is per (instance, rule), so two instances of one type can
+        // differ) decides which cones the eager walk reaches, and so
+        // how many defs that entry latches.
+        //
+        // It was briefly emitted here under the class symbol, on the
+        // strength of a measurement -- 354 designs, 5,930 class
+        // members, no disagreement.  The corpus was not the
+        // specification: in a design instantiating one type thirty
+        // times over, two of those instances DO differ (one rule's
+        // table came to 3 prim sites at one instance and 1 at
+        // another, exec halves identical), and a shared body then
+        // indexes a table that does not match.  Nor can the dedup
+        // key simply be widened to separate them -- that splits a
+        // module type into two classes, which one-object-per-type
+        // refuses.
+        //
+        // So sched fns are per ORDINAL and live in the design module.
+        // The module's object still holds everything that is the
+        // module's: its exec bodies, boundary methods and helpers.
     }
     run_ir_passes(&module, None)?;
     let tm = aot_target_machine()?;
@@ -1539,23 +1553,85 @@ pub fn compile_design_objects_split(
             }
         }
     }
-    // phase 2a: the design module — the fused edge fns, the dispatch
-    // tables and the glue, with the full map installed (their
-    // method-call sites divert).  NO helpers/boundary/reps, and no
-    // sched fns either: like exec bodies, a sched fn belongs to the
-    // module whose rule it is and lives in that module's object under
-    // the class symbol, so this module only declares the ones its
-    // tables point at.
+    // phase 2a: the design module — the sched fns, the fused edge
+    // fns, the dispatch tables and the glue, with the full map
+    // installed (their method-call sites divert).  NO
+    // helpers/boundary/reps: those are the module's, and live in the
+    // module's object.
     //
-    // That is the whole of what a design contributes now.  Everything
-    // a module can be compiled from is in the module's own object,
-    // which is what lets a top be linked from objects like any other
-    // translation unit.
+    // A sched fn is the design's, and here is why the split falls
+    // there.  A rule's BODY is the module's code -- the same
+    // statements whatever instantiates it -- but deciding when the
+    // rule fires is a whole-design question, and the sched half
+    // answers it: it evaluates the condition cones, applies the
+    // inhibitors the schedule chose, and latches the eager defs its
+    // entry was given to own.  Which of an instance's rules the
+    // composition marks EARLY is per (instance, rule), so two
+    // instances of one module type genuinely differ, and no class
+    // key can cover the difference: it is not a property of the
+    // module at all.
     let ctx = Context::create();
     let (module, cbs) = make_module(&ctx, None);
     let mut tally = IrTally::default();
     let _bguard = BoundaryGuard;
     BOUNDARY.with(|b| *b.borrow_mut() = Some(full_map.clone()));
+    // Which ordinals need a standalone sched fn: every one the edge
+    // plan does not cover, plus every one it covers by CALLING (the
+    // outlined form) rather than by inlining the section.  An
+    // ordinal can be both -- outlined in one row and inlined in a
+    // variant row whose `sched_over' rewrote its inhibitors -- and
+    // then it is emitted, because some row calls it.
+    let mut covered: std::collections::HashSet<usize> = Default::default();
+    let mut called: std::collections::HashSet<usize> = Default::default();
+    if let Some(p) = edge_plan {
+        for (row, ns) in p.nodes.iter().enumerate() {
+            for &(is_exec, o) in ns {
+                if is_exec {
+                    continue;
+                }
+                covered.insert(o);
+                let row_specific = p.sched_over.get(row).is_some_and(|m| m.contains_key(&o));
+                if p.outline_sched && specs[o].autofire.is_none() && !row_specific {
+                    called.insert(o);
+                }
+            }
+        }
+    }
+    for (o, spec) in specs.iter().enumerate() {
+        if covered.contains(&o) && !called.contains(&o) {
+            continue;
+        }
+        let mut lc = Lower {
+            env,
+            ctx: &ctx,
+            module: &module,
+            builder: ctx.create_builder(),
+            cbs,
+            spec,
+            // A Lower emitting the sched half ALONE numbers its call
+            // sites from zero, so it has to be told where that half
+            // begins in the rule's one table: the exec half is first,
+            // at 0, and this follows it.  Zero here reported a sched
+            // site as an EXEC site -- the wrong callee, silently.
+            site_origin: spec.sched_prim_origin,
+            foreign_origin: spec.sched_foreign_origin,
+            outlined: refs_opt,
+            helper_self: None,
+            dedup: None,
+            bnd_prim_site: None,
+            bnd_foreign_site: None,
+            reset_ptrs: HashMap::new(),
+            // per ordinal, so `sched_i{inst}_{ordinal}' and not a
+            // class symbol -- but still region-relative and taking
+            // (arena, env, base, ordinal), which costs nothing and
+            // keeps one calling convention for both halves
+            share_sym: None,
+            foreign_stmts: Vec::new(),
+            prim_calls: Vec::new(),
+            edge: None,
+        };
+        lc.lower_sched()?;
+    }
     match edge_plan {
         Some(p) => lower_edge_ssa(
             env,
@@ -1595,30 +1671,11 @@ pub fn compile_design_objects_split(
                 .map(|f| f.as_global_value().as_pointer_value())
                 .unwrap_or_else(|| ptrt.const_null())
         };
-        // declare the class sched symbols so their table entries
-        // become link relocations into the per-type objects
-        let sched_ty = ctx
-            .void_type()
-            .fn_type(&[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()], false);
-        for &o in rep_ords {
-            let name = format!("sched_{}", specs[o].share_label);
-            if module.get_function(&name).is_none() {
-                module.add_function(&name, sched_ty, None);
-            }
-        }
-        // Read at the rep and fanned out to members by the loader,
-        // exactly as the exec table is: one body serves the class, so
-        // a non-rep entry must stay null rather than resolve by name.
+        // sched fns are this module's own, one per ordinal: a null
+        // entry means the edge plan inlined that section.
         let scheds: Vec<_> = specs
             .iter()
-            .enumerate()
-            .map(|(o, sp)| {
-                if is_rep.contains(&o) {
-                    fnptr(format!("sched_{}", sp.share_label))
-                } else {
-                    ptrt.const_null()
-                }
-            })
+            .map(|sp| fnptr(format!("sched_{}", sp.label)))
             .collect();
         // Only rep ordinals are read from this table, and a non-rep
         // must stay null: its CLASS symbol resolves (its rep defined
@@ -2456,20 +2513,20 @@ fn lower_edge_ssa<'ctx>(
                         // slot fallbacks a skipped gated section
                         // relies on (def()'s existing lattice, the one
                         // standalone sched fns lower with).
-                        // The sched half is the MODULE's code, so
-                        // the edge calls the module's compiled body --
-                        // `sched_{module}_{rule}', defined in that
-                        // module's own object -- rather than emitting
-                        // a copy of the section here.  A design .so
-                        // calls what its modules compiled to; it does
-                        // not carry its own duplicates of them.
+                        // The edge CALLS the sched fn rather than
+                        // emitting a copy of the section inline --
+                        // but the callee is this design's own
+                        // per-ordinal `sched_i{inst}_{ordinal}', not
+                        // a class symbol in the module's object: the
+                        // sched half answers when a rule fires, and
+                        // that is a whole-design question.
                         //
                         // Cross-section values travel through their
                         // CF/WF/eager slots: the plan widened the
                         // export keep-set and emptied the hoist
                         // tables, which is the same lattice a
                         // standalone sched fn lowers with.
-                        let gname = format!("sched_{}", spec.share_label);
+                        let gname = format!("sched_{}", spec.label);
                         let gty = ctx.void_type().fn_type(
                             &[ptrt.into(), ptrt.into(), i64t.into(), i32t.into()],
                             false,

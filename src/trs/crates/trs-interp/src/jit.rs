@@ -1152,12 +1152,13 @@ fn aot_emit(
                         ns.iter()
                             .map(|n| match *n {
                                 JitNode::Sched(o) => {
+                                    // per ORDINAL, not per class: the
+                                    // sched half depends on the
+                                    // design's schedule, so it stays
+                                    // in the design module
                                     let sp = &specs[o as usize];
                                     FusedNode::Sched(
-                                        HelperRef::Sym(format!(
-                                            "sched_{}",
-                                            specs[rep_of[o as usize]].share_label
-                                        )),
+                                        HelperRef::Sym(format!("sched_{}", sp.label)),
                                         inst_envs[&sp.inst].region.0 as u64,
                                         sp.ordinal,
                                     )
@@ -1682,33 +1683,25 @@ fn aot_load(
         let sched_tab = tab(b"trs_sched_tab", b"trs_sched_tab_len", specs.len());
         let exec_tab = tab(b"trs_exec_tab", b"trs_exec_tab_len", specs.len());
         let edge_tab = tab(b"trs_edge_tab", b"trs_edge_tab_len", ncomps);
-        // sched fns: one symbol per dedup class, shared by its
-        // members, read at the REP and fanned out -- the same shape
-        // as the exec bodies below, because a sched fn now lives in
-        // the same per-type object and under the same class symbol.
-        let mut scheds: Vec<CompiledSched> = (0..specs.len())
-            .map(|_| CompiledSched {
-                sched: missing_sched,
-            })
-            .collect();
-        for (rep, members) in classes {
+        // sched fns: one per ORDINAL, in the design's own module --
+        // unlike an exec body, the sched half is a function of the
+        // design's schedule, so there is no class symbol to share.
+        let mut scheds = Vec::with_capacity(specs.len());
+        for (o, spec) in specs.iter().enumerate() {
             let sf = match sched_tab {
-                Some(t) if t[*rep] != 0 => std::mem::transmute::<
+                Some(t) if t[o] != 0 => std::mem::transmute::<
                     usize,
                     unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32),
-                >(t[*rep]),
+                >(t[o]),
                 Some(_) => missing_sched,
-                None if specs[*rep].share_label.is_empty() => missing_sched,
                 None => lib
                     .get::<unsafe extern "C" fn(*mut u64, *mut core::ffi::c_void, u64, u32)>(
-                        format!("sched_{}\0", specs[*rep].share_label).as_bytes(),
+                        format!("sched_{}\0", spec.label).as_bytes(),
                     )
                     .map(|f| *f)
                     .unwrap_or(missing_sched),
             };
-            for &m in members {
-                scheds[m] = CompiledSched { sched: sf };
-            }
+            scheds.push(CompiledSched { sched: sf });
         }
         // exec bodies: one symbol per dedup class, shared by members
         let mut execs: Vec<Option<CompiledExec>> = (0..specs.len()).map(|_| None).collect();
@@ -4430,12 +4423,11 @@ impl Interp {
         // fragment's slot offsets depend on who instantiated it -- so
         // the same fragment at the same parameters laid out two ways
         // in two designs and their objects could not be shared.  Class
-        // overlap across the TA controller family was 28.6%; it is
-        // 94.6% now.  The packing did not pay for that: on
-        // TAControllerBurnTest, distinct 64B lines over an edge's
-        // total touches are 19,119 fragment-local against 19,136
-        // design-ordered -- fragment-local is, if anything, slightly
-        // tighter.
+        // overlap across a family of related designs was 28.6%; it is
+        // 94.6% now.  The packing did not pay for that: on a large
+        // design, the distinct 64B lines an edge touches came out
+        // within 0.1% of design-ordered -- fragment-local is, if
+        // anything, slightly tighter.
         //
         // The design-wide walk stays, for liveness only: rung 40 prunes
         // EN slots to the ones some reader loads, and that IS a
@@ -6353,39 +6345,38 @@ impl Interp {
             let r = &protos[*rep];
             for &m in members {
                 let p = &protos[m];
-                // BOTH halves must match.  One compiled body of each
-                // serves the whole class -- they live together in the
-                // module's object under the class symbol -- so every
-                // member has to agree on the whole table: its length,
-                // where the halves meet, and the contents.
+                // The EXEC halves must match: one body serves the
+                // whole class and addresses [0, sched_origin), so
+                // every member must agree on both that range's LENGTH
+                // and its contents.
                 //
-                // The sched half was exempt while it was per-ordinal
-                // and nothing shared it.  The reason given then was
-                // that its size follows how the DESIGN's schedule
-                // split shared eager defs between an instance's
-                // rules, which is design context no class key covers.
-                // That remains possible in principle -- a shared def
-                // attaches to whichever of an instance's rules the
-                // schedule reaches first -- and is now a refusal
-                // rather than a silent difference, because sharing a
-                // sched body the members do not agree on would run
-                // one instance's schedule for another.  Measured over
-                // 354 designs and 5,930 class members: zero
-                // disagreements.
+                // The sched halves need not, and DO not.  A sched fn
+                // is per-ordinal and nothing shares it, and its size
+                // follows how the design's schedule split shared
+                // eager defs between an instance's rules: `early' is
+                // per (instance, rule) in the composition, so the
+                // eager walk reaches different cones for different
+                // instances of one type.  That is design context, and
+                // no class key could cover it -- widening the key
+                // would split a module type into two classes, which
+                // one object per type refuses.
+                //
+                // Putting exec FIRST is what confines the difference
+                // to the half where it does no harm; it used to sit
+                // second and inherit the sched half's
+                // design-dependent size as its origin.
                 let (ro, po) = (r.sched_prim_origin as usize, p.sched_prim_origin as usize);
                 let (rf, pf) = (r.sched_foreign_origin as usize, p.sched_foreign_origin as usize);
                 let shaped = po == ro
                     && pf == rf
-                    && p.prims.len() == r.prims.len()
-                    && p.foreign.len() == r.foreign.len()
-                    && p.prims.iter().zip(&r.prims).all(|(a, b)| {
+                    && p.prims[..po].iter().zip(&r.prims[..ro]).all(|(a, b)| {
                         a.method == b.method
                             && a.port == b.port
                             && a.arg_widths == b.arg_widths
                             && a.ret_width == b.ret_width
                             && a.is_action == b.is_action
                     })
-                    && p.foreign.iter().zip(&r.foreign).all(|(a, b)| {
+                    && p.foreign[..pf].iter().zip(&r.foreign[..rf]).all(|(a, b)| {
                         a.func == b.func && a.ret_width == b.ret_width && a.args == b.args
                     });
                 if !shaped {
