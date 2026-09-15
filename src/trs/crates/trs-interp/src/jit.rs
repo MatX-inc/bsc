@@ -19,7 +19,7 @@ use prim::ArenaKind;
 use trs_codegen::abi::{
     decode_protos, encode_protos, CompiledExec, CompiledSched, FArgSpec, FnProtos, ForeignCb,
     FusedComp, FusedNode, HelperMap, HelperRef, HelperSpec, InstEnv, PlanEnv, PrimCb, RecMeth,
-    RuleSpec, SigfpeCb, AOT_LAYOUT_REV,
+    RuleSpec, AOT_LAYOUT_REV,
 };
 #[cfg(feature = "jit")]
 use trs_codegen::lower::{
@@ -93,12 +93,6 @@ pub(crate) mod prof {
             g(&FOREIGN_CALLS),
         );
     }
-}
-
-/// Zero-divisor trap for compiled Quot/Rem: raise SIGFPE like the
-/// interpreter (Value::quot) and native division.
-pub(crate) unsafe extern "C" fn jit_sigfpe_cb() {
-    libc::raise(libc::SIGFPE);
 }
 
 /// Prim-method trampoline: unmarshal per the call-site table, invoke
@@ -369,7 +363,6 @@ impl LazyJit {
                 &reps,
                 Some(&self.helpers),
                 jit_foreign_cb,
-                jit_sigfpe_cb,
                 jit_prim_cb,
             )
             .unwrap_or_else(|e| {
@@ -1027,7 +1020,7 @@ fn aot_or_jit_scheds(
                         now_slot,
                         gate_scratch: None,
                     };
-                    compile_scheds(&env, c, helpers, jit_foreign_cb, jit_sigfpe_cb, jit_prim_cb)
+                    compile_scheds(&env, c, helpers, jit_foreign_cb, jit_prim_cb)
                 })
             })
             .collect::<Vec<_>>()
@@ -1635,7 +1628,6 @@ fn aot_load(
         // an unfilled callee is exactly what the trap guards.
         for (name, addr) in [
             (&b"trs_cb_foreign"[..], jit_foreign_cb as ForeignCb as usize),
-            (&b"trs_cb_sigfpe"[..], jit_sigfpe_cb as SigfpeCb as usize),
             (&b"trs_cb_prim"[..], jit_prim_cb as PrimCb as usize),
             (&b"trs_cb_stdio"[..], jit_stdio_cb as usize),
             (&b"trs_cb_bdpi_missing"[..], missing_bdpi_trap as usize),
@@ -3159,15 +3151,11 @@ impl Interp {
                         None => {}
                     }
                 }
-                E::Prim { op, args, .. } => {
-                    // review-fleet finding: Quot/Rem lower with an
-                    // unconditional zero-divisor SIGFPE trap — a
-                    // hoisted cone would evaluate it on edges where
-                    // the guarding rules are disabled.  Trapping ops
-                    // poison hoistability.
-                    if matches!(op, trs_ir::PrimOp::Quot | trs_ir::PrimOp::Rem) {
-                        out.poison |= 2;
-                    }
+                E::Prim { args, .. } => {
+                    // No prim traps or has an effect of its own -- a
+                    // zero divisor gives a defined result -- so a
+                    // cone containing one is hoistable, and only the
+                    // arguments can poison it.
                     for a in args {
                         walk_expr(cx, inst, a, out);
                     }

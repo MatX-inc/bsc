@@ -649,7 +649,7 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
             bail("corrupt protos table");
             return None;
         };
-        // callback globals: foreign/prim/stdio/sigfpe.  BDPI globals
+        // callback globals: foreign/prim/stdio.  BDPI globals
         // cannot exist (any foreign import is an eligibility gate).
         // ALL of these bail on a miss (external review): the sidecar
         // boot bypasses aot_load, so a tolerant fill here would arm a
@@ -672,12 +672,6 @@ pub fn try_boot(so: &str, max_cycles: u64, plusargs: &[String]) -> Option<i32> {
             **g = crate::jit::jit_stdio_cb as usize;
         } else {
             bail("no stdio callback global");
-            return None;
-        }
-        if let Ok(g) = lib.get::<*mut usize>(b"trs_cb_sigfpe") {
-            **g = crate::jit::jit_sigfpe_cb as usize;
-        } else {
-            bail("no sigfpe callback global");
             return None;
         }
         // compiled-BRAM-tick helper (level-2 tick artifacts): pure

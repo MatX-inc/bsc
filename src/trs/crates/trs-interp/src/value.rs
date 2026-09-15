@@ -84,19 +84,32 @@ impl std::ops::DerefMut for Limbs {
 pub const STR_MARKER: u32 = u32::MAX;
 pub const REAL_MARKER: u32 = u32::MAX - 1;
 
-/// Reference Bluesim performs native integer division, so a zero divisor
-/// kills the process with SIGFPE (bsc.misc/divmod expects exactly that);
-/// reproduce the trap rather than inventing a result value.
-fn raise_sigfpe() -> ! {
-    extern "C" {
-        fn raise(sig: std::ffi::c_int) -> std::ffi::c_int;
-    }
-    unsafe {
-        raise(8 /* SIGFPE */);
-    }
-    // SIGFPE terminates by default; if the caller blocked it, mirror the
-    // C++'s undefined-behavior death as best we can
-    std::process::abort();
+/// The result of a division or remainder by a zero divisor: all ones,
+/// at the width the operation produces.
+///
+/// Verilog answers X here.  Neither this nor Bluesim has an X, so both
+/// define the case as all ones -- see `safe_quot'/`safe_rem' in
+/// src/bluesim/bs_prim_ops.h, which this matches.  All ones is the
+/// choice because a well-defined remainder can never produce it: for
+/// b != 0, a % b <= b - 1 <= 2^w - 2.  So an all-ones remainder is an
+/// unambiguous marker that a zero divisor was seen, and the quotient
+/// uses the same value for consistency.
+///
+/// A defined result also keeps division PURE, which the compiled path
+/// relies on: a cone holding one can be hoisted or speculated, because
+/// evaluating it where the design would not is unobservable.
+///
+/// The width is the OPERATION's, which is not always an operand's: bsc
+/// types a quotient to the dividend and a remainder to the divisor
+/// (primQuot :: Bit k -> Bit n -> Bit k, primRem :: Bit k -> Bit n ->
+/// Bit n), and the two can differ.
+fn div_by_zero(w: u32) -> Value {
+    let mut v = Value {
+        width: w,
+        limbs: Limbs::filled(nlimbs(w).max(1), u64::MAX),
+    };
+    v.mask();
+    v
 }
 
 fn nlimbs(width: u32) -> usize {
@@ -280,7 +293,7 @@ impl Value {
         if self.limbs.len() == 1 && o.limbs.len() == 1 {
             let d = o.limbs[0];
             if d == 0 {
-                raise_sigfpe();
+                return div_by_zero(w);
             }
             return Value::from_u64(w, self.limbs[0] / d);
         }
@@ -291,7 +304,7 @@ impl Value {
         if self.limbs.len() == 1 && o.limbs.len() == 1 {
             let d = o.limbs[0];
             if d == 0 {
-                raise_sigfpe();
+                return div_by_zero(w);
             }
             return Value::from_u64(w, self.limbs[0] % d);
         }
@@ -303,7 +316,7 @@ impl Value {
         let mut q = Value::zero(w);
         let mut r = Value::zero(self.width.max(o.width) + 1);
         if o.is_zero() {
-            raise_sigfpe();
+            return (div_by_zero(w), div_by_zero(w));
         }
         for i in (0..self.width).rev() {
             r = r.shl_bits(1);

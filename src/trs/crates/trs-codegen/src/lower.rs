@@ -22,8 +22,8 @@
 //! Values are native LLVM iN integers of their exact BSV width — LLVM
 //! legalizes arbitrary widths — so no masking and no 64-bit cap.
 //! Shift semantics mirror Value::shl/lshr/ashr (overflow to zero /
-//! sign-fill; LLVM's shift-amount poison is guarded); Quot/Rem raise
-//! SIGFPE on a zero divisor like the interpreter and native division.
+//! sign-fill; LLVM's shift-amount poison is guarded); Quot/Rem give
+//! all ones on a zero divisor, as the interpreter does.
 //! Ineligibility is an Err from the trial lowering — the caller falls
 //! back to the interpreter per design.
 
@@ -152,16 +152,14 @@ enum CbAddr<'ctx> {
 #[derive(Clone, Copy)]
 struct Callbacks<'ctx> {
     cb_ty: FunctionType<'ctx>,
-    fpe_ty: FunctionType<'ctx>,
     prim_ty: FunctionType<'ctx>,
     cb: CbAddr<'ctx>,
-    fpe: CbAddr<'ctx>,
     prim: CbAddr<'ctx>,
 }
 
 fn make_module<'ctx>(
     ctx: &'ctx Context,
-    baked: Option<(ForeignCb, SigfpeCb, PrimCb)>,
+    baked: Option<(ForeignCb, PrimCb)>,
 ) -> (Module<'ctx>, Callbacks<'ctx>) {
     let module = ctx.create_module("trs_rules");
     let i64t = ctx.i64_type();
@@ -179,33 +177,26 @@ fn make_module<'ctx>(
         ptrt.into(),
     ];
     let cb_ty = i32t.fn_type(&site_args, false);
-    let fpe_ty = ctx.void_type().fn_type(&[], false);
     let prim_ty = ctx.void_type().fn_type(&site_args, false);
-    let (cb, fpe, prim) = match baked {
-        Some((f, s, p)) => {
+    let (cb, prim) = match baked {
+        Some((f, p)) => {
             let addr =
                 |a: usize| CbAddr::Baked(i64t.const_int(a as u64, false).const_to_pointer(ptrt));
-            (addr(f as usize), addr(s as usize), addr(p as usize))
+            (addr(f as usize), addr(p as usize))
         }
         None => {
             // declaration only (no initializer): every chunk object
             // references these; the meta object DEFINES them once
             let global = |name: &str| CbAddr::Global(module.add_global(ptrt, None, name));
-            (
-                global("trs_cb_foreign"),
-                global("trs_cb_sigfpe"),
-                global("trs_cb_prim"),
-            )
+            (global("trs_cb_foreign"), global("trs_cb_prim"))
         }
     };
     (
         module,
         Callbacks {
             cb_ty,
-            fpe_ty,
             prim_ty,
             cb,
-            fpe,
             prim,
         },
     )
@@ -546,11 +537,10 @@ pub fn compile_scheds(
     specs: &[RuleSpec],
     outlined: Option<&HelperMap>,
     foreign_cb: ForeignCb,
-    sigfpe_cb: SigfpeCb,
     prim_cb: PrimCb,
 ) -> Result<Vec<CompiledSched>, Ineligible> {
     let ctx: &'static Context = Box::leak(Box::new(Context::create()));
-    let (module, cbs) = make_module(ctx, Some((foreign_cb, sigfpe_cb, prim_cb)));
+    let (module, cbs) = make_module(ctx, Some((foreign_cb, prim_cb)));
     for spec in specs {
         let mut lc = Lower {
             env,
@@ -597,11 +587,10 @@ pub fn compile_execs(
     specs: &[RuleSpec],
     outlined: Option<&HelperMap>,
     foreign_cb: ForeignCb,
-    sigfpe_cb: SigfpeCb,
     prim_cb: PrimCb,
 ) -> Result<Vec<CompiledExec>, Ineligible> {
     let ctx: &'static Context = Box::leak(Box::new(Context::create()));
-    let (module, cbs) = make_module(ctx, Some((foreign_cb, sigfpe_cb, prim_cb)));
+    let (module, cbs) = make_module(ctx, Some((foreign_cb, prim_cb)));
     for spec in specs {
         let mut lc = Lower {
             env,
@@ -772,7 +761,6 @@ pub fn compile_meta_object(
     // object references; the loader fills them after dlopen
     for name in [
         "trs_cb_foreign",
-        "trs_cb_sigfpe",
         "trs_cb_prim",
         "trs_cb_stdio",
         // task #58: BDPI call sites null-check their callee and trap
@@ -4754,14 +4742,10 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                         );
                 ok.then_some(2)
             }
-            E::Prim { op, args, .. } => {
-                // Quot/Rem lower with an unconditional divisor-zero trap
-                // check: speculating them in an unselected arm SIGFPEs
-                // where the interp (evaluating only the taken arm) does
-                // not — the canonical `b == 0 ? 0 : a % b` guard
-                if matches!(op, PrimOp::Quot | PrimOp::Rem) {
-                    return None;
-                }
+            E::Prim { args, .. } => {
+                // Every prim is total: even Quot/Rem have a defined
+                // result for a zero divisor, so any of them can be
+                // evaluated in an arm the design does not select.
                 let mut total = 1u32;
                 for a in args {
                     total += self.pure_size(f, a, cap.checked_sub(total)?)?;
@@ -5174,10 +5158,9 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 }
                 true
             }
-            E::Prim { op, args, .. } => {
-                matches!(op, PrimOp::Quot | PrimOp::Rem)
-                    || args.iter().any(|a| self.effectful_expr(inst, a, seen))
-            }
+            // A prim is observable only through its arguments: they
+            // are all total and none has a side effect of its own.
+            E::Prim { args, .. } => args.iter().any(|a| self.effectful_expr(inst, a, seen)),
             // BDPI value calls: nominally pure, but observable when the
             // C side prints or keeps state — the planner already
             // poisons ForeignCall cones; match it (review fleet)
@@ -5902,8 +5885,20 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 Ok(self.to_w(v, ws, width, true))
             }
             PrimOp::Quot | PrimOp::Rem => {
-                // unsigned; zero divisor raises SIGFPE like the
-                // interpreter (Value::quot) and native division
+                // Unsigned, and a zero divisor gives ALL ONES at the
+                // operation's width -- `Value::quot' in trs-interp
+                // and `safe_quot' in Bluesim define the same result,
+                // and the reasoning for the value is in value.rs.
+                //
+                // Branch-free, and it has to be: LLVM's `udiv' by
+                // zero is immediate UB, so the division must never
+                // execute with the zero.  Substituting 1 for a zero
+                // divisor keeps it total and the outer select
+                // discards what that computed.  Staying one
+                // expression also keeps the whole thing a pure
+                // arithmetic op the optimizer may hoist, sink or drop
+                // like any other -- which is what lets the planner
+                // speculate it.
                 let wx = self.expr_width(f, &args[0])?;
                 let wy = self.expr_width(f, &args[1])?;
                 let x0 = self.expr_scalar(f, &args[0])?;
@@ -5911,33 +5906,28 @@ impl<'a, 'ctx> Lower<'a, 'ctx> {
                 let wm = wx.max(wy).max(width);
                 let x = self.to_w(x0, wx, wm, false);
                 let y = self.to_w(y0, wy, wm, false);
+                let ity = self.ity(wm);
                 let z = self
                     .builder
-                    .build_int_compare(IntPredicate::EQ, y, self.ity(wm).const_zero(), "dz")
+                    .build_int_compare(IntPredicate::EQ, y, ity.const_zero(), "dz")
                     .unwrap();
-                let func = self
+                let d = self
                     .builder
-                    .get_insert_block()
+                    .build_select(z, ity.const_int(1, false), y, "dsafe")
                     .unwrap()
-                    .get_parent()
-                    .unwrap();
-                let trap_bb = self.ctx.append_basic_block(func, "divz");
-                let ok_bb = self.ctx.append_basic_block(func, "divok");
-                self.builder
-                    .build_conditional_branch(z, trap_bb, ok_bb)
-                    .unwrap();
-                self.builder.position_at_end(trap_bb);
-                let fpe_callee = self.cb_callee(self.cbs.fpe);
-                self.builder
-                    .build_indirect_call(self.cbs.fpe_ty, fpe_callee, &[], "fpe")
-                    .unwrap();
-                self.builder.build_unreachable().unwrap();
-                self.builder.position_at_end(ok_bb);
+                    .into_int_value();
                 let r = if op == PrimOp::Quot {
-                    self.builder.build_int_unsigned_div(x, y, "quot").unwrap()
+                    self.builder.build_int_unsigned_div(x, d, "quot").unwrap()
                 } else {
-                    self.builder.build_int_unsigned_rem(x, y, "rem").unwrap()
+                    self.builder.build_int_unsigned_rem(x, d, "rem").unwrap()
                 };
+                // all ones at the WIDER working width truncates to all
+                // ones at the result width, so one constant serves
+                let r = self
+                    .builder
+                    .build_select(z, ity.const_all_ones(), r, "divz")
+                    .unwrap()
+                    .into_int_value();
                 Ok(self.to_w(r, wm, width, false))
             }
             _ => nope(format!("prim op {op:?} not compilable")),

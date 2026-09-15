@@ -7,8 +7,9 @@
 #
 # CountShare is the chained-fold shared-cone shape whose EMITTED SIZE
 # was order-dependent before the topo fix (2^k-1 arm re-expansion of
-# countOnes-style folds); HoistDivTrap covers guarded hoisted
-# division (the trap guard must survive prelude reordering).  Each
+# countOnes-style folds); HoistDivTrap covers a guarded division in a
+# hoisted prelude, where the divisor can be zero on the path the
+# hoist evaluates.  Each
 # artifact also runs once against a golden .out.expected so the
 # specimen designs stay honest.
 #
