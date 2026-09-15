@@ -334,3 +334,22 @@ snapshot decode ~20 ms (single-thread streaming format).  TYPE-KEYED
 ANALYSIS stays queued for the scale arc (loop-rolled spine wants its
 stride-regular regions) but is no longer the startup fix — at N=32 it
 buys ~3 ms.
+
+## Profiling trs-bir (Haskell), and why -fprof-late
+
+The exporter is Haskell, so profiling it means a GHC profiling build,
+and the choice of cost-centre flavour changes the answer rather than
+just the overhead.  `-fprof-auto` inserts cost centres before the
+optimiser, and they block the very inlining they are measuring: one
+export went 72s -> 129s under it, and ~27% of the profile was
+attributed to a deserialisation monad that -O2 inlines away entirely
+in the build that ships.  `-fprof-late` inserts them after the
+optimiser, so the profile describes the code that actually runs.
+Prefer it, and fall back to `-fprof-auto` only when a name comes back
+as `<no location info>`.
+
+Two mechanical notes.  GHC needs `-rtsopts` at link time for `+RTS -p`
+to be accepted at all — the default link is RtsOptsSafeOnly, which
+refuses it.  And profiled objects want their own suffixes
+(`-osuf p_o -hisuf p_hi`) so they can sit beside the normal ones
+instead of forcing a full rebuild on every switch.
