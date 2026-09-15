@@ -100,7 +100,6 @@ neg NegValueArgPath sysNegValueArgPath "value-method argument"
 neg NegSharedOut sysNegSharedOut "shared by more than one"
 neg NegOutClock sysNegOutClock "gated output clock"
 neg NegOutReset sysNegOutReset "single output reset"
-neg NegVPregArg sysNegVPregArg "(\*reg\*)"
 neg NegClocklessAction sysNegClocklessAction "has no clock"
 # dynamic Port args never reach the trs refusal: bsc's own G0058
 # (dynamic module arguments) fires first, at code generation

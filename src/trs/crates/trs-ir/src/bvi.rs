@@ -22,9 +22,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::StrId;
 
-/// Port property bit: `(*reg*)` on an input (latched-on-arrival).  The
-/// exporter refuses these in v1; carried so the refusal can be asserted
-/// at decode too and so a future lift needs no schema change.
+/// Port property bit: `(*reg*)` on an input -- the port feeds a
+/// register inside the imported module with no intermediate logic.
+///
+/// Nothing in the runtime acts on it, and nothing needs to: the
+/// register lives in the Verilog the model evaluates, and the edge
+/// commit publishes the argument vector before it drives the clock
+/// levels, so the register captures exactly what the calling rules
+/// drove.  What the property adds is the promise that the port has NO
+/// combinational path to any output, which only makes the declared
+/// cones -- which include every argument of the owning method --
+/// conservative.  Carried for the observe-mode checker.
 pub const BVI_PROP_REG: u32 = 1;
 /// Port property bit: `(*inhigh*)` enable.  Such an enable has NO
 /// physical port on the model; it appears in the port table for method

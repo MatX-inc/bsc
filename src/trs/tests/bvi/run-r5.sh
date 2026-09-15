@@ -119,6 +119,7 @@ differ PosClocks sysPosClocks
 # Pin: drop the oracle's x-valued startup lines, byte-compare the rest.
 XFILTER='=x$' differ PosGate sysPosGate
 differ PosRst sysPosRst
+differ PosRegArg sysPosRegArg
 differ PosParams sysPosParams
 differ PosMix sysPosMix
 differ PosTwins sysPosTwins

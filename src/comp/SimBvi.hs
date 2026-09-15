@@ -325,9 +325,7 @@ deriveBvi avi =
             [ "port argument '" ++ vpName vp ++
               "' is not a compile-time constant (dynamic port arguments " ++
               "are not supported): " ++ ppReadable e
-            | (vp, e) <- port_args, isNothing (constVal e) ] ++
-            [ "port argument '" ++ vpName vp ++ "' is marked (*reg*)"
-            | (vp, _) <- port_args, VPreg `elem` vpProps vp ]
+            | (vp, e) <- port_args, isNothing (constVal e) ]
 
         params = [ (n, v)
                  | (i, n, e) <- param_args
@@ -351,8 +349,16 @@ deriveBvi avi =
                      | (_, vn) <- out_rst_list ]
         oclk_ports = [ (getVNameString osc, 1, BviOutput, KClock, 0)
                      | (_, osc, _) <- out_clk_list ]
+        -- (*reg*) on an input says the port feeds a register with no
+        -- intermediate logic, so it has no combinational path to any
+        -- output.  That weakens the dependency contract rather than
+        -- adding a requirement -- the register is in the imported
+        -- Verilog, which the runtime evaluates -- so the property is
+        -- carried for the checker and nothing acts on it.
+        vpregBit vp = if VPreg `elem` vpProps vp then bviPropReg else 0
+
         carg_ports = [ (vpName vp, aTypeWidthI (aType e), BviInput,
-                        KConstArg, 0)
+                        KConstArg, vpregBit vp)
                      | (vp, e) <- port_args ]
 
         aTypeWidthI (ATBit n) = n
@@ -374,19 +380,13 @@ deriveBvi avi =
             , any ((/= 1) . length) (vf_inputs f) ||
               length (concat (vf_inputs f)) /= length (concat argTss) ]
 
-        vpreg_refusals =
-            [ "argument port '" ++ vpName vp ++ "' of method '" ++
-              getIdBaseString (vf_name f) ++ "' is marked (*reg*)" ++
-              " ((*reg*) input args are not supported)"
-            | (f, aps, _, _) <- meth_port_details, (vp, _) <- aps
-            , VPreg `elem` vpProps vp ]
-
         meth_ports =
-            concat [ [ (vpName vp, aTypeWidthI t, BviInput, KMethodArg, 0)
+            concat [ [ (vpName vp, aTypeWidthI t, BviInput, KMethodArg,
+                        vpregBit vp)
                      | (vp, t) <- aps ] ++
                      [ (vpName vp, 1, BviInput, KEnable,
                         if VPinhigh `elem` vpProps vp then bviPropInhigh
-                        else 0)
+                        else vpregBit vp)
                      | Just vp <- [en] ] ++
                      [ (vpName vp, aTypeWidthI t, BviOutput, KMethodResult, 0)
                      | (vp, t) <- outs ]
@@ -587,7 +587,7 @@ deriveBvi avi =
         path_refusals = mapMaybe pathRefusal all_paths
 
         refusals = early_refusals ++ param_refusals ++
-                   meth_arg_group_refusals ++ vpreg_refusals ++
+                   meth_arg_group_refusals ++
                    alias_refusals ++ method_refusals ++
                    path_port_refusals ++ path_refusals
 
