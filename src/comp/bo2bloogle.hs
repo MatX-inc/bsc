@@ -9,7 +9,7 @@ import CSyntax
 import CType (isTConArrow, isTConPair)
 import Control.Applicative (liftA2)
 import Control.Category ((>>>))
-import Control.Monad (forM_, void)
+import Control.Monad (forM_, unless, void)
 import Control.Monad.Except (ExceptT (..), MonadError (..), runExceptT)
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.Reader (MonadReader (..), ReaderT, asks, runReaderT)
@@ -334,8 +334,10 @@ printDefn (Cclass _ _ ik args _ tyFuns fields) = do
             <> ["=", asHS ca_rhs]
         )
   forM_ fields $ \(CField {cf_name, cf_type}) ->
-    catch 1 ("converting " <> getIdBaseString cf_name) $ do
-      hsPrintWords [asHS cf_name, "::", asHS cf_type]
+    -- Skip the | operator: it is reserved in Bloogle's Haskell input syntax.
+    unless (getIdBaseString cf_name == "|") $
+      catch 1 ("converting " <> getIdBaseString cf_name) $ do
+        hsPrintWords [asHS cf_name, "::", asHS cf_type]
 printDefn (Cinstance {}) =
   error "unreachable: (Bin CDefn) never produces Cinstance"
 printDefn (CValueSign {}) =
