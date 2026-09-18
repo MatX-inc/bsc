@@ -129,25 +129,36 @@ public:
     bytes_emitted += 15;  // "$upscope $end"
   }
 
-  void write_def(unsigned int num, const char* name, unsigned int width)
+  void write_def(unsigned int num, const char* name, unsigned int width,
+                 tWaveKind kind, const char* type_name)
   {
     if (num >= handles.size())
     {
       handles.resize(num + 1, 0);
       widths.resize(num + 1, 0);
     }
-    if (handles[num] != 0)
-    {
-      // an additional definition of the same id is an alias
-      fstWriterCreateVar(ctx, FST_VT_VCD_REG, FST_VD_IMPLICIT,
-                         widths[num], name, handles[num]);
-      return;
-    }
-    if (width == 0)
+    enum fstVarType vt = (kind == WAVE_STATE) ? FST_VT_VCD_REG
+                                              : FST_VT_VCD_WIRE;
+    enum fstVarDir vd = (kind == WAVE_INPUT)  ? FST_VD_INPUT
+                      : (kind == WAVE_OUTPUT) ? FST_VD_OUTPUT
+                      :                         FST_VD_IMPLICIT;
+    // an additional definition of the same id is an alias
+    bool alias = (handles[num] != 0);
+    if (!alias && width == 0)
       width = 1;
-    handles[num] = fstWriterCreateVar(ctx, FST_VT_VCD_REG, FST_VD_IMPLICIT,
-                                      width, name, 0);
-    widths[num] = width;
+    unsigned int w = alias ? widths[num] : width;
+    fstHandle h = alias ? handles[num] : 0;
+    // the type name rides in the supplemental-type record that VHDL
+    // front ends use; the VHDL-specific fields stay unset
+    fstHandle created = (type_name != NULL)
+      ? fstWriterCreateVar2(ctx, vt, vd, w, name, h, type_name,
+                            FST_SVT_NONE, FST_SDT_NONE)
+      : fstWriterCreateVar(ctx, vt, vd, w, name, h);
+    if (!alias)
+    {
+      handles[num] = created;
+      widths[num] = width;
+    }
     bytes_emitted += strlen(name) + 18;  // "$var reg N ! ... $end"
   }
 

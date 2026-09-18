@@ -173,7 +173,11 @@ data Flags = Flags {
         -- (getIOPropsA) instead of the netlist measurement; off by default
         -- so the emitted Verilog is unchanged
         semanticPortsComment :: Bool,
-        stableVerilog :: Bool
+        stableVerilog :: Bool,
+        -- whether Bluesim waveform dumps include the values the compiler
+        -- introduced (unnamed and expression-named defs) alongside the
+        -- design's own registers, ports and rule fires
+        waveIncludeInternals :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

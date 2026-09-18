@@ -753,44 +753,44 @@ class MOD_BRAM : public Module
       printf("<BRAM with %llu entries>\n", (unsigned long long) last_word + 1);
     }
   }
-  unsigned int dump_VCD_defs(unsigned int num)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
   {
     // Memory contents are not dumped, only ports
     vcd_num = vcd_reserve_ids(sim_hdl, dual_port ? 10 : 5);
     unsigned int n = vcd_num;
     vcd_write_scope_start(sim_hdl, inst_name);
     if (dual_port) {
-      vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLKA", 1);
+      vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLKA", 1, WAVE_CLOCK, "Clock");
       vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "ENA", 1);
+      vcd_write_def(sim_hdl, n++, "ENA", 1, WAVE_INPUT, "Bool");
       vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "WEA", num_wens);
+      vcd_write_def(sim_hdl, n++, "WEA", num_wens, WAVE_INPUT, NULL);
       vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "ADDRA", addr_bits);
+      vcd_write_def(sim_hdl, n++, "ADDRA", addr_bits, WAVE_INPUT, wave_port_type(port_types, "ADDR"));
       vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "DIA", data_bits);
-      vcd_write_def(sim_hdl, n++, "DOA", data_bits);
-      vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_1), "CLKB", 1);
+      vcd_write_def(sim_hdl, n++, "DIA", data_bits, WAVE_INPUT, wave_port_type(port_types, "DI"));
+      vcd_write_def(sim_hdl, n++, "DOA", data_bits, WAVE_OUTPUT, wave_port_type(port_types, "DO"));
+      vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_1), "CLKB", 1, WAVE_CLOCK, "Clock");
       vcd_set_clock(sim_hdl, n, __clk_handle_1);
-      vcd_write_def(sim_hdl, n++, "ENB", 1);
+      vcd_write_def(sim_hdl, n++, "ENB", 1, WAVE_INPUT, "Bool");
       vcd_set_clock(sim_hdl, n, __clk_handle_1);
-      vcd_write_def(sim_hdl, n++, "WEB", num_wens);
+      vcd_write_def(sim_hdl, n++, "WEB", num_wens, WAVE_INPUT, NULL);
       vcd_set_clock(sim_hdl, n, __clk_handle_1);
-      vcd_write_def(sim_hdl, n++, "ADDRB", addr_bits);
+      vcd_write_def(sim_hdl, n++, "ADDRB", addr_bits, WAVE_INPUT, wave_port_type(port_types, "ADDR"));
       vcd_set_clock(sim_hdl, n, __clk_handle_1);
-      vcd_write_def(sim_hdl, n++, "DIB", data_bits);
-      vcd_write_def(sim_hdl, n++, "DOB", data_bits);
+      vcd_write_def(sim_hdl, n++, "DIB", data_bits, WAVE_INPUT, wave_port_type(port_types, "DI"));
+      vcd_write_def(sim_hdl, n++, "DOB", data_bits, WAVE_OUTPUT, wave_port_type(port_types, "DO"));
     } else {
-      vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK", 1);
+      vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK", 1, WAVE_CLOCK, "Clock");
       vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "EN", 1);
+      vcd_write_def(sim_hdl, n++, "EN", 1, WAVE_INPUT, "Bool");
       vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "WE", num_wens);
+      vcd_write_def(sim_hdl, n++, "WE", num_wens, WAVE_INPUT, NULL);
       vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "ADDR", addr_bits);
+      vcd_write_def(sim_hdl, n++, "ADDR", addr_bits, WAVE_INPUT, wave_port_type(port_types, "ADDR"));
       vcd_set_clock(sim_hdl, n, __clk_handle_0);
-      vcd_write_def(sim_hdl, n++, "DI", data_bits);
-      vcd_write_def(sim_hdl, n++, "DO", data_bits);
+      vcd_write_def(sim_hdl, n++, "DI", data_bits, WAVE_INPUT, wave_port_type(port_types, "DI"));
+      vcd_write_def(sim_hdl, n++, "DO", data_bits, WAVE_OUTPUT, wave_port_type(port_types, "DO"));
     }
     vcd_write_scope_end(sim_hdl);
     return n;

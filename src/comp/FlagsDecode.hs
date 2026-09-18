@@ -635,6 +635,7 @@ defaultFlags bluespecdir = Flags {
         dumpFormats = ["vcd"],
         dumps = [],
         elabOnly = False,
+        waveIncludeInternals = True,
         enablePoisonPills = False,
         entry = Nothing,
         expandATSlimit = 20,
@@ -1865,6 +1866,10 @@ externalFlags = [
               "waveform formats to compile into the simulation " ++
               "(comma-separated subset of vcd,fst,fsdb; or none)", Visible)),
 
+        ("wave-include-internals",
+         (Toggle (\f x -> f {waveIncludeInternals=x}) (Just (\f -> (waveIncludeInternals f, True))),
+          "include compiler-introduced values in Bluesim waveform dumps", Visible)),
+
         ("vsim",
          let setFn f s = case setBackend f Verilog of
                            Left f' -> Left $ f' {vsim = Just s}
@@ -2017,6 +2022,7 @@ showFlagsRaw flags =
           ("doICheck", show (doICheck flags)),
           ("dumpAll", show (dumpAll flags)),
           ("dumpFormats", show (dumpFormats flags)),
+          ("waveIncludeInternals", show (waveIncludeInternals flags)),
           ("dumps", show (dumps flags)),
           ("elabOnly", show (elabOnly flags)),
           ("enablePoisonPills", show (enablePoisonPills flags)),

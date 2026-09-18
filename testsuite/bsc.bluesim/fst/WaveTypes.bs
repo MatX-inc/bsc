@@ -1,0 +1,75 @@
+package WaveTypes where
+
+-- A design whose waveform carries every kind of signal the dumper
+-- names: registers of struct, union, enum, Maybe and Vector types, a
+-- wire, a FIFO, rule fires, and a synthesized submodule.  One shared
+-- core, instantiated by a separate top module per link configuration.
+
+import FIFO
+import Vector
+
+data Color = Red | Green | Blue
+  deriving (Bits, Eq)
+
+struct Pixel =
+  { x :: UInt 8
+  ; y :: UInt 8
+  ; color :: Color }
+  deriving (Bits, Eq)
+
+data Cell = Px Pixel | Idx (UInt 16) | Empty
+  deriving (Bits, Eq)
+
+interface Stash =
+  push :: Pixel -> Action
+  top :: Pixel
+  depth :: UInt 8
+
+{-# verilog mkStash #-}
+mkStash :: Module Stash
+mkStash =
+  module
+    q :: FIFO Pixel <- mkFIFO
+    cnt :: Reg (UInt 8) <- mkReg 0
+    last :: Reg Pixel <- mkReg (Pixel { x = 0; y = 0; color = Red })
+    rules
+      "drain": when True ==> do
+        last := q.first
+        q.deq
+        cnt := cnt + 1
+    interface
+      push p = q.enq p
+      top = last
+      depth = cnt
+
+{-# verilog mkWaveTypesCore #-}
+mkWaveTypesCore :: Module Empty
+mkWaveTypesCore =
+  module
+    stash :: Stash <- mkStash
+    cell :: Reg Cell <- mkReg Empty
+    maybeIdx :: Reg (Maybe (UInt 16)) <- mkReg Invalid
+    palette :: Reg (Vector 4 Color) <- mkReg (replicate Red)
+    tick :: Reg (UInt 16) <- mkReg 0
+    w :: RWire (UInt 16) <- mkRWire
+    rules
+      "step": when True ==> do
+        tick := tick + 1
+        stash.push (Pixel { x = truncate tick; y = truncate (tick + 1); color = Green })
+        cell := Idx tick
+        maybeIdx := Valid tick
+        w.wset tick
+        palette := rotate palette
+      "done": when tick == 20 ==> $finish 0
+
+{-# verilog sysWaveTypes #-}
+sysWaveTypes :: Module Empty
+sysWaveTypes =
+  module
+    core :: Empty <- mkWaveTypesCore
+
+{-# verilog sysWaveTypesTrim #-}
+sysWaveTypesTrim :: Module Empty
+sysWaveTypesTrim =
+  module
+    core :: Empty <- mkWaveTypesCore

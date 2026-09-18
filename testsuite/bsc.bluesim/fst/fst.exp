@@ -86,7 +86,7 @@ if { $ctest == 1 } {
         # the hierarchy and signals are all present
         find_regexp sysFstDump.fst-vcd {\$scope module main \$end}
         find_regexp sysFstDump.fst-vcd {\$scope module core \$end}
-        find_regexp sysFstDump.fst-vcd {\$var reg 1 \S+ CLK \$end}
+        find_regexp sysFstDump.fst-vcd {\$var wire 1 \S+ CLK \$end}
         find_regexp sysFstDump.fst-vcd {\$var reg 8 \S+ counter \$end}
         find_regexp sysFstDump.fst-vcd {\$var reg 48 \S+ mid \$end}
         find_regexp sysFstDump.fst-vcd {\$var reg 128 \S+ wide \$end}
@@ -128,6 +128,59 @@ if { $ctest == 1 } {
 
     sim_output sysFstDump {+bscvcd}
     string_occurs sysFstDump.out "Error: this model was not built with VCD support (rebuild with -dump-formats vcd)"
+
+    # -------------------------
+    # what each signal is, and its type, are recorded in the dump: the
+    # kind as VCD's reg/wire (state vs. everything else), and in FST
+    # also the port direction and the Bluespec type name
+
+    compile_object_pass WaveTypes.bs sysWaveTypes
+    link_objects_pass sysWaveTypes sysWaveTypes {-dump-formats vcd,fst}
+    sim_output sysWaveTypes {+bscfst=sysWaveTypes.fst}
+    compare_file sysWaveTypes.out
+    file_nonempty sysWaveTypes.fst
+
+    if { $fst2vcd != 0 } {
+        fst_to_vcd $fst2vcd sysWaveTypes.fst sysWaveTypes.fst-vcd
+        # register contents are reg, ports, wires and rule fires are wire
+        find_regexp sysWaveTypes.fst-vcd {\$var reg 20 \S+ cell \$end}
+        find_regexp sysWaveTypes.fst-vcd {\$var wire 16 \S+ w \$end}
+        find_regexp sysWaveTypes.fst-vcd {\$var wire 1 \S+ RST_N \$end}
+        find_regexp sysWaveTypes.fst-vcd {\$var wire 18 \S+ D_IN \$end}
+        # a compiler-introduced value, a wire like any other def
+        find_regexp sysWaveTypes.fst-vcd {\$var wire 8 \S+ cnt___d3 \$end}
+    }
+
+    if { $fstscopes != 0 } {
+        fst_hierarchy $fstscopes sysWaveTypes.fst sysWaveTypes.fst-hier
+        # type names, in BSV syntax whatever the source flavour
+        string_occurs sysWaveTypes.fst-hier "var 20 cell reg : WaveTypes::Cell"
+        string_occurs sysWaveTypes.fst-hier "var 17 maybeIdx reg : Maybe#(UInt#(16))"
+        string_occurs sysWaveTypes.fst-hier "var 8 palette reg : Vector::Vector#(4, WaveTypes::Color)"
+        string_occurs sysWaveTypes.fst-hier "var 16 tick reg : UInt#(16)"
+        string_occurs sysWaveTypes.fst-hier "var 16 w wire : UInt#(16)"
+        string_occurs sysWaveTypes.fst-hier "var 1 CLK wire : Clock"
+        string_occurs sysWaveTypes.fst-hier "var 1 RST_N wire : Reset"
+        # a primitive's ports carry their direction and the instance's type
+        string_occurs sysWaveTypes.fst-hier "var 18 D_IN wire input : WaveTypes::Pixel"
+        string_occurs sysWaveTypes.fst-hier "var 18 D_OUT wire output : WaveTypes::Pixel"
+        string_occurs sysWaveTypes.fst-hier "var 1 ENQ wire input : Bool"
+        string_occurs sysWaveTypes.fst-hier "var 18 arr_1 reg : WaveTypes::Pixel"
+        # compiler-introduced values have a kind but no type
+        string_occurs sysWaveTypes.fst-hier "var 8 cnt___d3 wire"
+    }
+
+    # -no-wave-include-internals leaves the compiler-introduced values out
+    link_objects_pass sysWaveTypesTrim sysWaveTypesTrim {-dump-formats vcd,fst -no-wave-include-internals}
+    sim_output sysWaveTypesTrim {+bscfst=sysWaveTypesTrim.fst}
+    compare_file sysWaveTypesTrim.out sysWaveTypes.out.expected
+    if { $fstscopes != 0 } {
+        fst_hierarchy $fstscopes sysWaveTypesTrim.fst sysWaveTypesTrim.fst-hier
+        string_does_not_occur sysWaveTypesTrim.fst-hier "cnt___d3"
+        string_does_not_occur sysWaveTypesTrim.fst-hier "__h"
+        string_occurs sysWaveTypesTrim.fst-hier "var 8 cnt reg : UInt#(8)"
+        string_occurs sysWaveTypesTrim.fst-hier "var 20 cell reg : WaveTypes::Cell"
+    }
 
     # -------------------------
     # model built with both VCD and FST support

@@ -139,10 +139,12 @@ public:
     fprintf(file, "$upscope $end\n");
   }
 
-  void write_def(unsigned int num, const char* name, unsigned int width)
+  void write_def(unsigned int num, const char* name, unsigned int width,
+                 tWaveKind kind, const char* /* no place in VCD */)
   {
     FileTarget dest(file);
-    dest.write_string("$var reg %d ", width);
+    dest.write_string("$var %s %d ", (kind == WAVE_STATE) ? "reg" : "wire",
+                      width);
     put_id(num);
     dest.write_string(" %s $end\n", name);
   }
@@ -682,7 +684,7 @@ void vcd_add_clock_def(tSimStateHdl simHdl,
 		       Module* module, const char* s, unsigned int num)
 {
   if (match_hierarchy(module,s))
-    (simHdl->vcd).writer->write_def(num, s, 1);
+    (simHdl->vcd).writer->write_def(num, s, 1, WAVE_CLOCK, "Clock");
 }
 
 void vcd_set_clock(tSimStateHdl simHdl, unsigned int num, tClock handle)
@@ -714,7 +716,27 @@ void vcd_write_def(tSimStateHdl simHdl,
 		   const char* name,
 		   unsigned int width)
 {
-  (simHdl->vcd).writer->write_def(num, name, width);
+  (simHdl->vcd).writer->write_def(num, name, width, WAVE_STATE, NULL);
+}
+
+void vcd_write_def(tSimStateHdl simHdl,
+		   unsigned int num,
+		   const char* name,
+		   unsigned int width,
+		   tWaveKind kind,
+		   const char* type_name)
+{
+  (simHdl->vcd).writer->write_def(num, name, width, kind, type_name);
+}
+
+const char* wave_port_type(const char* const* port_types, const char* port)
+{
+  if (port_types == NULL)
+    return NULL;
+  for (const char* const* p = port_types; p[0] != NULL && p[1] != NULL; p += 2)
+    if (!strcmp(p[0], port))
+      return p[1];
+  return NULL;
 }
 
 void vcd_advance(tSimStateHdl simHdl, bool immediate)

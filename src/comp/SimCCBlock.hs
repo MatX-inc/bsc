@@ -2,6 +2,9 @@
 module SimCCBlock( SBId
                  , SBMap
                  , SimCCBlock(..)
+                 , SimPort
+                 , SimPortKind(..)
+                 , WaveGen(..)
                  , SimCCSched(..)
                  , SimCCClockGroup(..)
                  , SimCCReset(..)
@@ -51,7 +54,9 @@ import ASyntax
 import ASyntaxUtil
 import SimDomainInfo(DomainId)
 import Wires(ClockDomain, noClockDomain, writeClockDomain)
-import VModInfo(VName(..), vName_to_id)
+import VModInfo(VName(..), vName_to_id, getVNameString)
+import ISyntax(IType)
+import PVPrint(pvpString)
 import CCSyntax
 import ForeignFunctions
 import SimPrimitiveModules
@@ -93,6 +98,55 @@ moduleType sb args = userType (pfxMod ++ (fst (sb_naming_fn sb args)))
 -- Group rules/methods by domains
 type SBFnSet = (Maybe ClockDomain, [(AId, SimCCFn)])
 
+-- The role of a method port, which fixes its direction in a waveform dump
+data SimPortKind = SPK_Enable | SPK_Arg | SPK_Return
+  deriving (Eq, Show)
+
+instance PPrint SimPortKind where
+  pPrint _ _ k = text (show k)
+
+instance NFData SimPortKind where
+  rnf k = k `seq` ()
+
+-- A method port: its C type, def id, Verilog port name, role, and the
+-- source type the design recorded for it (Nothing when it recorded none)
+type SimPort = (AType, AId, VName, SimPortKind, Maybe IType)
+
+-- What the waveform-dump code generation covers
+data WaveGen = WaveGen { wg_dump :: Bool       -- any dump code at all (-dump-formats)
+                       , wg_internals :: Bool  -- compiler-introduced defs (-wave-include-internals)
+                       }
+
+-- What a dumped signal is; mirrors tWaveKind in the Bluesim kernel
+data WaveKind = WK_State | WK_Wire | WK_Internal | WK_Fire
+              | WK_Input | WK_Output | WK_Clock | WK_Reset
+  deriving (Eq)
+
+waveKindC :: WaveKind -> CCExpr
+waveKindC k = var $ case k of
+                      WK_State    -> "WAVE_STATE"
+                      WK_Wire     -> "WAVE_WIRE"
+                      WK_Internal -> "WAVE_INTERNAL"
+                      WK_Fire     -> "WAVE_FIRE"
+                      WK_Input    -> "WAVE_INPUT"
+                      WK_Output   -> "WAVE_OUTPUT"
+                      WK_Clock    -> "WAVE_CLOCK"
+                      WK_Reset    -> "WAVE_RESET"
+
+-- A type name as recorded in waveform dumps: BSV syntax regardless of
+-- the source flavour, so every consumer sees one spelling
+waveTypeName :: IType -> String
+waveTypeName = pvpString
+
+-- One signal a module dumps: its C type, id, whether it is a method
+-- port (ports and defs are separate C namespaces), kind, and type name
+data VCDSignal = VCDSignal { vs_type :: AType
+                           , vs_id :: AId
+                           , vs_isPort :: Bool
+                           , vs_kind :: WaveKind
+                           , vs_srcType :: Maybe String
+                           }
+
 -- A SimCCBlock represents a class that implements some subset
 -- of the simulation logic for a module.  Typically, there is
 -- a SimCCBlock that implements the fast module core, and other
@@ -107,7 +161,7 @@ data SimCCBlock =
              , sb_parameters :: [(AType,AId,Bool)] -- instantiation parameters
              , sb_resetDefs :: [(AType,AId)]       -- reset values
              -- method enable, argument and return value ports
-             , sb_methodPorts :: [(AType,AId,VName)]
+             , sb_methodPorts :: [SimPort]
              , sb_publicDefs :: [(AType,AId)]      -- defs available outside
              , sb_privateDefs :: [(AType,AId)]     -- defs private to the block
              , sb_rules :: [SBFnSet]               -- functions for rules
@@ -127,6 +181,8 @@ data SimCCBlock =
              , sb_inputClocks :: [(AId,ClockDomain)]
              -- clock gate numbering
              , sb_gateMap :: [AExpr]  -- numbering is [0..]
+             -- source types of submodule instance ports, by instance
+             , sb_instPortTypes :: [(AId, [(VName, IType)])]
              }
 
 instance Eq SimCCBlock where
@@ -148,6 +204,7 @@ instance Eq SimCCBlock where
                , (sb_outputResets a) == (sb_outputResets b)
                , (sb_inputClocks a) == (sb_inputClocks b)
                , (sb_gateMap a) == (sb_gateMap b)
+               , (sb_instPortTypes a) == (sb_instPortTypes b)
                ]
 
 instance Show SimCCBlock where
@@ -169,6 +226,7 @@ instance Show SimCCBlock where
                          , show (sb_outputResets sb)
                          , show (sb_inputClocks sb)
                          , show (sb_gateMap sb)
+                         , show (sb_instPortTypes sb)
                          ]
             in "SimCCBlock {" ++ intercalate ", " fields ++ "}"
 
@@ -535,7 +593,7 @@ primBlocks :: [SimCCBlock]
 primBlocks =
   let mods = [ (name, (f name mod)) | (name, mod, f, _) <- primMap ]
       mkMod n (name,fn) = SimCCBlock n name fn
-                              [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] []
+                              [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] []
   in zipWith mkMod [1..] mods
 
 -- Test if a block is one of the primitive blocks
@@ -1420,19 +1478,19 @@ mkWideInitList wide_defs =
 -- For ports, we initialize one-bit ports to False, so that
 -- all enables and readys are covered.  For wide ports, we set the size
 -- and clear the data.
-mkPortInit :: (AType,AId,VName) -> [CCFragment]
-mkPortInit ((ATBit 1),_,vn) =
+mkPortInit :: SimPort -> [CCFragment]
+mkPortInit ((ATBit 1),_,vn,_,_) =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkBool False) ]
-mkPortInit ((ATBit n),_,vn) | n > 64 =
+mkPortInit ((ATBit n),_,vn,_,_) | n > 64 =
   let p = aPortIdToC (vName_to_id vn)
   in [ stmt $ p `cDot` "setSize" `cCall` [ mkUInt32 n ]
      , stmt $ p `cDot` "clear" `cCall` []
      ]
-mkPortInit ((ATBit n),_,vn) | n > 32 =
+mkPortInit ((ATBit n),_,vn,_,_) | n > 32 =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkUInt64 0) ]
-mkPortInit ((ATBit n),_,vn) =
+mkPortInit ((ATBit n),_,vn,_,_) =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkUInt32 0) ]
-mkPortInit (t@(ATTuple _),_,vn) =
+mkPortInit (t@(ATTuple _),_,vn,_,_) =
   let p = aPortIdToC (vName_to_id vn)
   in [ stmt $ p `cDot` "setSize" `cCall` [ mkUInt32 $ aSize t ]
      , stmt $ p `cDot` "clear" `cCall` []
@@ -1565,9 +1623,12 @@ mkSubCall inst fn args lval =
        (Just lhs) -> lhs `assign` rhs
        Nothing    -> stmt $ rhs
 
-mkVCDDef :: Map.Map (Bool, AId) ClockDomain -> (AType, AId, Bool) -> [CCFragment]
-mkVCDDef clk_map (ty,aid,isPort) =
-  let name      = getIdBaseString aid
+mkVCDDef :: Map.Map (Bool, AId) ClockDomain -> VCDSignal -> [CCFragment]
+mkVCDDef clk_map sig =
+  let ty        = vs_type sig
+      aid       = vs_id sig
+      isPort    = vs_isPort sig
+      name      = getIdBaseString aid
       def       = if isPort then (aPortIdToC aid) else (aDefIdToC aid)
       -- we lookup based on the AId in a map made by calling "defs_written"
       -- this requires that the Ids be paired with whether it is a port
@@ -1578,7 +1639,8 @@ mkVCDDef clk_map (ty,aid,isPort) =
                     (Just d) -> [ stmt $ (var "vcd_set_clock") `cCall`
                                   [ var "sim_hdl", var "num",  var (mkClkDefName d) ] ]
                     Nothing  -> []
-      args = [var "sim_hdl"] ++ (mkVCDCallArgs VCDDef ty name def)
+      args = [var "sim_hdl"] ++ (mkVCDCallArgs VCDDef ty name def) ++
+             [waveKindC (vs_kind sig), maybe (var "NULL") mkStr (vs_srcType sig)]
       write_def = [ stmt $ (var "vcd_write_def") `cCall` args ]
 
   in set_lag ++ write_def
@@ -1628,7 +1690,7 @@ simCCBlockToClassDeclaration genVCD sb_map sb =
       mpdefs      = [ decl $ (aTypeToCType ty) (aPortIdToCLval arg_id)
                     | (ty, arg_id, True) <- sb_parameters sb ] ++
                     [ decl $ (aTypeToCType ty) (aPortIdToCLval (vName_to_id vn))
-                    | (ty,_,vn) <- sb_methodPorts sb ]
+                    | (ty,_,vn,_,_) <- sb_methodPorts sb ]
       port_defs   = [ comment "Port definitions" (public mpdefs)]
       pdefs       = [ decl $ (aTypeToCType ty) (aDefIdToCLval id)
                     | (ty,id) <- sb_publicDefs sb ]
@@ -1765,10 +1827,11 @@ symOrd (str1,sym1) (str2,sym2) =
                       GT -> GT
               GT -> GT
 
-simCCBlockToClassDefinition :: Bool -> SBMap -> M.Map (Bool,AId) ClockDomain ->
+simCCBlockToClassDefinition :: WaveGen -> SBMap -> M.Map (Bool,AId) ClockDomain ->
                                SimCCBlock -> StmtsConv
-simCCBlockToClassDefinition genVCD sb_map sch_map sb =
-  do let scope = Just (pfxMod ++ (sb_name sb))
+simCCBlockToClassDefinition wave_gen sb_map sch_map sb =
+  do let genVCD = wg_dump wave_gen
+         scope = Just (pfxMod ++ (sb_name sb))
          state_defs = map (addSBArgs sb_map) (sb_state sb)
          task_id_set = S.fromList (sb_taskDefs sb)
          pub_def_inits = mapMaybe (mkCtorInit task_id_set) (sb_publicDefs sb)
@@ -1781,7 +1844,7 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
                                    [ (getIdString i, SymPort i (aSize t))
                                    | (t, i, True) <- sb_parameters sb ] ++
                                    [ (getIdString i, SymPort i (aSize t))
-                                   | (t, _, vn) <- sb_methodPorts sb
+                                   | (t, _, vn, _, _) <- sb_methodPorts sb
                                    , let i = vName_to_id vn ] ++
                                    [ (getIdString i, SymDef i (aSize t))
                                    | (t, i) <- sb_publicDefs sb
@@ -1932,22 +1995,54 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
                                            then Nothing
                                            else Just inst
                                          | (sub,inst,_) <- sb_state sb ])
-         cmp_def (_,i1,_) (_,i2,_) = i1 `cmpIdByName` i2
+         cmp_def a b = (vs_id a) `cmpIdByName` (vs_id b)
          is_string_type (ATString _) = True
          is_string_type _            = False
+         -- the compiler's own values: unnamed or expression-named
+         -- temporaries, and the lifted copies it names after the source
+         -- value they hold (IdP_keep, the "__h" defs)
+         def_kind i | isFire i                  = WK_Fire
+                    | isOkId i && not (isKeepId i) = WK_Wire
+                    | otherwise                 = WK_Internal
          members = if not genVCD then [] else sortBy cmp_def $
-                          [ (t,i,True)
+                          [ VCDSignal t i True WK_Reset (Just "Reset")
                           | (t,i) <- (sb_resetDefs sb)
                           ] ++
-                          [ (t,i,False)
+                          [ VCDSignal t i False k
+                                      (if k == WK_Fire then Just "Bool" else Nothing)
                           | (t,i) <- ((sb_privateDefs sb) ++
                                       (sb_publicDefs sb))
                           , not (is_string_type t)
+                          , let k = def_kind i
+                          , wg_internals wave_gen || k /= WK_Internal
                           ]
+         port_kind SPK_Enable = WK_Input
+         port_kind SPK_Arg    = WK_Input
+         port_kind SPK_Return = WK_Output
+         port_type SPK_Enable _ = Just "Bool"
+         port_type _ mt         = fmap waveTypeName mt
          ports = if not genVCD then [] else sortBy cmp_def
-                        [ (t,vName_to_id vn,True)
-                        | (t,_,vn) <- sb_methodPorts sb ]
+                        [ VCDSignal t (vName_to_id vn) True (port_kind k) (port_type k mt)
+                        | (t,_,vn,k,mt) <- sb_methodPorts sb ]
          num_ids = (length members) + (length ports) + (length prims)
+
+         -- each primitive's port types, handed to its dump_VCD_defs as a
+         -- NULL-terminated table of port-name / type-name pairs
+         inst_types = [ (inst, pts)
+                      | inst <- prims
+                      , Just pts <- [lookup inst (sb_instPortTypes sb)]
+                      , not (null pts) ]
+         types_name inst = "wave_types_" ++ aUnqualInstIdToString inst
+         type_tables = [ static $ constant . array . ptr . constant . char $
+                           (mkVar (types_name inst)) `assign`
+                             (mkInitBraces
+                                (concat [ [mkStr (getVNameString vn), mkStr (waveTypeName t)]
+                                        | (vn, t) <- sortBy (\a b -> compare (fst a) (fst b)) pts ]
+                                 ++ [var "NULL"]))
+                       | (inst, pts) <- inst_types ]
+         types_arg inst = if isJust (lookup inst inst_types)
+                          then var (types_name inst)
+                          else var "NULL"
 
          -- vcd definitions function
 
@@ -1966,7 +2061,9 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
                                                                         , (var "bk_clock_vcd_num") `cCall` [var "sim_hdl", var "clk"]
                                                                         ])
                         ]
-         clk_aliases = [ stmt $ (var "vcd_write_def") `cCall` [var "sim_hdl",num,name,sz]
+         clk_aliases = [ stmt $ (var "vcd_write_def") `cCall`
+                                  [var "sim_hdl", num, name, sz,
+                                   waveKindC WK_Clock, mkStr "Clock"]
                        | (port, dom) <- sb_inputClocks sb
                        , let clk = var (mkClkDefName dom)
                        , let num = (var "bk_clock_vcd_num") `cCall` [var "sim_hdl", clk]
@@ -1974,7 +2071,7 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
                        , let sz = mkUInt32 1
                        ]
          prim_calls = [ mkSubCall inst "dump_VCD_defs"
-                                       [var "num"]
+                                       [var "num", types_arg inst]
                                        (Just (mkVar "num"))
                         | inst <- prims ]
          sub_calls = [ mkSubCall inst "dump_VCD_defs"
@@ -2002,6 +2099,7 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
                   clk_aliases ++
                   member_calls ++
                   port_calls ++
+                  type_tables ++
                   prim_calls ++
                   (if (null sub_calls)
                    then []
@@ -2020,7 +2118,7 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
          def_name  (Just x) i = x `cDot` (aUnqualDefIdToString i)
          port_name Nothing  i = aPortIdToC i
          port_name (Just x) i = x `cDot` (aUnqualPortIdToString i)
-         vcd_write ct (ty,aid,isPort) =
+         vcd_write ct (VCDSignal ty aid isPort _ _) =
            let name        = getIdBaseString aid
                name_fn     = if isPort then port_name else def_name
                def         = name_fn Nothing aid
@@ -2029,12 +2127,12 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
                          ([var "sim_hdl"] ++ (mkVCDCallArgs ct ty name def))
               , (stmt backing_def) `assign` def
               ]
-         vcd_write_x (ty,aid,isPort) =
+         vcd_write_x (VCDSignal ty aid isPort _ _) =
            let name_fn = if isPort then port_name else def_name
                def     = name_fn Nothing aid
            in  stmt $ (var "vcd_write_x") `cCall`
                         ([var "sim_hdl"] ++ (mkVCDCallArgs VCDX ty "" def))
-         vcd_write_changed target@(ty,aid,isPort) =
+         vcd_write_changed target@(VCDSignal _ aid isPort _ _) =
            let name_fn     = if isPort then port_name else def_name
                def         = name_fn Nothing aid
                backing_def = name_fn (Just (var "backing")) aid
@@ -2286,8 +2384,8 @@ instance PPrint SimCCReset where
 -- NFData instances (needed by phase dumping routines)
 
 instance NFData SimCCBlock where
-  rnf (SimCCBlock n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19) =
-    rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19
+  rnf (SimCCBlock n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20) =
+    rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 `seq` rnf n20
 
 instance NFData SimCCFn where
   rnf (SimCCFn n a r b) = rnf4 n a r b

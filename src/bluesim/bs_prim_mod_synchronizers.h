@@ -113,7 +113,7 @@ class MOD_Sync2 : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 3);
     vcd_write_scope_start(sim_hdl, inst_name);
@@ -210,7 +210,7 @@ class MOD_Sync15 : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 3);
     vcd_write_scope_start(sim_hdl, inst_name);
@@ -304,7 +304,7 @@ class MOD_Sync1 : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
     vcd_write_scope_start(sim_hdl, inst_name);
@@ -403,7 +403,7 @@ class MOD_SyncPulse : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 4);
     vcd_write_scope_start(sim_hdl, inst_name);
@@ -583,7 +583,7 @@ class MOD_SyncHandshake : public Module
     dump_val(sRDY, 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 12);
     unsigned int n = vcd_num;
@@ -781,7 +781,7 @@ class MOD_SyncReg : public Module
     putchar('\n');
     sync.dump_state(indent + 2);
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
     vcd_write_scope_start(sim_hdl, inst_name);
@@ -1158,7 +1158,7 @@ class MOD_SyncFIFO : public Module
       dClrSync.dump_state(indent + 2);
     }
   }
-  unsigned int dump_VCD_defs(unsigned int num)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, depth + 13);
     unsigned int n = vcd_num;
@@ -1428,7 +1428,7 @@ class MOD_DualPortRam : public Module
   {
     // Memory contents are not dumped
   }
-  unsigned int dump_VCD_defs(unsigned int num)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
   {
     // Memory contents are not dumped
     return (num);
@@ -1538,7 +1538,7 @@ class MOD_LatchCrossingReg : public Module
     dump_val(sFlop, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     char buf[128];
     vcd_num = vcd_reserve_ids(sim_hdl, 2);

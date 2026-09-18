@@ -75,7 +75,7 @@ class MOD_ClockMux : public Module
   {
   }
 
-  unsigned int dump_VCD_defs(unsigned int num) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
   {
     return (num);
   }
@@ -231,7 +231,7 @@ class MOD_ClockSelect : public Module
   {
   }
 
-  unsigned int dump_VCD_defs(unsigned int num) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
   {
     return (num);
   }
