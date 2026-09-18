@@ -402,6 +402,8 @@ executable fstcheck
 
 executable fstscopes
   import: common_exes
+  build-depends:
+    containers   >=0.6.7,
   ghc-options: -main-is Main_fstscopes
   main-is: fstscopes.hs
 

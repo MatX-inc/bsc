@@ -56,7 +56,9 @@ import SimDomainInfo(DomainId)
 import Wires(ClockDomain, noClockDomain, writeClockDomain)
 import VModInfo(VName(..), vName_to_id, getVNameString)
 import ISyntax(IType)
-import PVPrint(pvpString)
+import PVPrint(PVPrint, pvpString)
+import Position(Position, getPosition, getPositionFile, getPositionLine, noPosition)
+import InstNodes(InstScope(..), emptyInstScope, scopeLocalName)
 import CCSyntax
 import ForeignFunctions
 import SimPrimitiveModules
@@ -115,6 +117,7 @@ type SimPort = (AType, AId, VName, SimPortKind, Maybe IType)
 -- What the waveform-dump code generation covers
 data WaveGen = WaveGen { wg_dump :: Bool       -- any dump code at all (-dump-formats)
                        , wg_internals :: Bool  -- compiler-introduced defs (-wave-include-internals)
+                       , wg_hierarchy :: Bool  -- scopes by source instance (-wave-source-hierarchy)
                        }
 
 -- What a dumped signal is; mirrors tWaveKind in the Bluesim kernel
@@ -135,7 +138,7 @@ waveKindC k = var $ case k of
 
 -- A type name as recorded in waveform dumps: BSV syntax regardless of
 -- the source flavour, so every consumer sees one spelling
-waveTypeName :: IType -> String
+waveTypeName :: (PVPrint a) => a -> String
 waveTypeName = pvpString
 
 -- One signal a module dumps: its C type, id, whether it is a method
@@ -183,6 +186,10 @@ data SimCCBlock =
              , sb_gateMap :: [AExpr]  -- numbering is [0..]
              -- source types of submodule instance ports, by instance
              , sb_instPortTypes :: [(AId, [(VName, IType)])]
+             -- the module's contents as the source arranges them
+             , sb_scopes :: InstScope
+             -- where the module is defined
+             , sb_position :: Position
              }
 
 instance Eq SimCCBlock where
@@ -594,6 +601,7 @@ primBlocks =
   let mods = [ (name, (f name mod)) | (name, mod, f, _) <- primMap ]
       mkMod n (name,fn) = SimCCBlock n name fn
                               [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] []
+                              (emptyInstScope (mk_homeless_id name)) noPosition
   in zipWith mkMod [1..] mods
 
 -- Test if a block is one of the primitive blocks
@@ -1599,11 +1607,17 @@ dumpFnProto scope with_handle fn_name =
       iarg = [unsigned . int $ (mkVar "indent")]
   in function void (mkVar (prefix ++ fn_name)) (harg ++ iarg)
 
+-- dump_VCD_defs(levels, name, inst_file, inst_line): name is what the
+-- instance's scope is called (NULL for its own instance name), and
+-- inst_file:inst_line where it is instantiated (NULL when unknown)
 vcdHdrFnProto :: Maybe String -> CCFragment
 vcdHdrFnProto scope =
   let prefix = maybe "" (++ "::") scope
   in function (unsigned . int) (mkVar (prefix ++ "dump_VCD_defs"))
-                               [ unsigned . int $ (mkVar "levels") ]
+                               [ unsigned . int $ (mkVar "levels")
+                               , ptr . constant . char $ (mkVar "name")
+                               , ptr . constant . char $ (mkVar "inst_file")
+                               , unsigned . int $ (mkVar "inst_line") ]
 
 vcdDumpFnProto :: SimCCBlock -> Maybe String -> String -> Bool -> CCFragment
 vcdDumpFnProto sb scope name with_levels =
@@ -1623,13 +1637,20 @@ mkSubCall inst fn args lval =
        (Just lhs) -> lhs `assign` rhs
        Nothing    -> stmt $ rhs
 
+-- The signal defined with the next id (num++)
 mkVCDDef :: Map.Map (Bool, AId) ClockDomain -> VCDSignal -> [CCFragment]
 mkVCDDef clk_map sig =
+    mkVCDDefAt clk_map (getIdBaseString (vs_id sig)) (var "num") (cPostInc (var "num")) sig
+
+-- The signal defined under the given name with the given id; the id
+-- expression appears twice (for the clock association and the
+-- definition), so a post-increment goes in the second
+mkVCDDefAt :: Map.Map (Bool, AId) ClockDomain -> String -> CCExpr -> CCExpr
+           -> VCDSignal -> [CCFragment]
+mkVCDDefAt clk_map name id_expr id_expr' sig =
   let ty        = vs_type sig
       aid       = vs_id sig
       isPort    = vs_isPort sig
-      name      = getIdBaseString aid
-      def       = if isPort then (aPortIdToC aid) else (aDefIdToC aid)
       -- we lookup based on the AId in a map made by calling "defs_written"
       -- this requires that the Ids be paired with whether it is a port
       -- (since ports and defs are in separate namespaces)
@@ -1637,10 +1658,13 @@ mkVCDDef clk_map sig =
       dom       = M.lookup aid' clk_map
       set_lag   = case dom of
                     (Just d) -> [ stmt $ (var "vcd_set_clock") `cCall`
-                                  [ var "sim_hdl", var "num",  var (mkClkDefName d) ] ]
+                                  [ var "sim_hdl", id_expr,  var (mkClkDefName d) ] ]
                     Nothing  -> []
-      args = [var "sim_hdl"] ++ (mkVCDCallArgs VCDDef ty name def) ++
-             [waveKindC (vs_kind sig), maybe (var "NULL") mkStr (vs_srcType sig)]
+      size_arg  = case ty of
+                    (ATString Nothing) -> mkUInt32 0
+                    _                  -> mkUInt32 (aSize ty)
+      args = [ var "sim_hdl", id_expr', mkStr name, size_arg
+             , waveKindC (vs_kind sig), maybe (var "NULL") mkStr (vs_srcType sig) ]
       write_def = [ stmt $ (var "vcd_write_def") `cCall` args ]
 
   in set_lag ++ write_def
@@ -2071,11 +2095,11 @@ simCCBlockToClassDefinition wave_gen sb_map sch_map sb =
                        , let sz = mkUInt32 1
                        ]
          prim_calls = [ mkSubCall inst "dump_VCD_defs"
-                                       [var "num", types_arg inst]
+                                       [var "num", types_arg inst, var "NULL"]
                                        (Just (mkVar "num"))
                         | inst <- prims ]
          sub_calls = [ mkSubCall inst "dump_VCD_defs"
-                                      [var "l"]
+                                      [var "l", var "NULL", var "NULL", mkUInt32 0]
                                       (Just (mkVar "num"))
                         | inst <- sub_modules ]
          member_calls = concatMap (mkVCDDef clk_map) members
@@ -2086,27 +2110,106 @@ simCCBlockToClassDefinition wave_gen sb_map sch_map sb =
          vcd_recurse =
            [ decl $ (unsigned . int) $ (mkVar "l") `assign` new_l ] ++
            sub_calls
-         -- the module name is recorded as the scope's component type;
-         -- formats that can express it (FST) make it visible to viewers
+
+         -- a source position as scope-stem arguments (file, line)
+         stem_args p | getPositionLine p > 0 && not (null (getPositionFile p)) =
+                         [ mkStr (getPositionFile p)
+                         , mkUInt32 (toInteger (getPositionLine p)) ]
+                     | otherwise = [ var "NULL", mkUInt32 0 ]
+         -- the module name is recorded as the scope's component type and
+         -- the module's definition as its source stem; formats that can
+         -- express them (FST) make them visible to viewers.  The scope
+         -- is called what the caller asked, else the instance name.
          scope_start = [ stmt $ (var "vcd_write_scope_start") `cCall`
-                                  [ var "sim_hdl", var "inst_name"
-                                  , mkStr (sb_name sb) ] ]
+                                  ([ var "sim_hdl"
+                                   , cTernary (var "name") (var "name") (var "inst_name")
+                                   , mkStr (sb_name sb) ] ++
+                                   stem_args (sb_position sb) ++
+                                   [ var "inst_file", var "inst_line" ]) ]
          scope_end = [ stmt $ (var "vcd_write_scope_end") `cCall` [var "sim_hdl"] ]
+
+         -- with -wave-source-hierarchy the state elements and rules go
+         -- into the scopes of the source instances they belong to, the
+         -- state under its source name, the rule's fires in a scope of
+         -- the rule's name; whatever the source hierarchy does not
+         -- place stays at the module's own scope
+         hier = wg_hierarchy wave_gen && genVCD
+         inst_by_name = M.fromList [ (getIdBaseString inst, inst)
+                                   | (_, inst, _) <- sb_state sb ]
+         all_states sc = is_states sc ++ concatMap all_states (is_children sc)
+         all_rules sc = is_rules sc ++ concatMap all_rules (is_children sc)
+         placed_insts = S.fromList [ getIdBaseString flat | (_, flat) <- all_states (sb_scopes sb) ]
+         placed_fires = S.fromList [ getIdBaseString (f r)
+                                   | (_, r) <- all_rules (sb_scopes sb)
+                                   , f <- [mkIdWillFire, mkIdCanFire] ]
+         state_call mname pos inst
+           | inst `elem` prims =
+               [ mkSubCall inst "dump_VCD_defs"
+                           [var "num", types_arg inst, name_arg]
+                           (Just (mkVar "num")) ]
+           | otherwise =
+               [ if_cond ((var "levels") `cNe` (mkUInt32 1))
+                         (block [ mkSubCall inst "dump_VCD_defs"
+                                            ([new_l, name_arg] ++ stem_args pos)
+                                            (Just (mkVar "num")) ])
+                         Nothing ]
+           where name_arg = maybe (var "NULL") mkStr mname
+         nested_scope nm mcomp pos body =
+           [ stmt $ (var "vcd_write_scope_start") `cCall`
+                      ([ var "sim_hdl", mkStr nm, maybe (var "NULL") mkStr mcomp
+                       , var "NULL", mkUInt32 0 ] ++ stem_args pos) ] ++
+           body ++ scope_end
+         -- the ids of the module's own signals are fixed by their order
+         -- in members ++ ports (the value dumping walks the same order),
+         -- so a signal defined out of that order is defined at its
+         -- fixed id, and num is moved past them all before the
+         -- primitives' definitions
+         indexed = zip [0 :: Integer ..] (members ++ ports)
+         def_at (i, sig) nm =
+           let id_expr = (var "vcd_num") `cAdd` (mkUInt32 i)
+           in  mkVCDDefAt clk_map nm id_expr id_expr sig
+         fire_defs nm f rule =
+           concat [ def_at (i, sig) nm
+                  | (i, sig) <- indexed, vs_kind sig == WK_Fire
+                  , getIdBaseString (vs_id sig) == getIdBaseString (f rule) ]
+         rule_scope (nm, rule) =
+           case fire_defs "WILL_FIRE" mkIdWillFire rule ++ fire_defs "CAN_FIRE" mkIdCanFire rule of
+             [] -> []
+             fires -> nested_scope (scopeLocalName nm) Nothing (getPosition nm) fires
+         scope_body sc =
+           concat [ state_call (Just (scopeLocalName nm)) (getPosition nm) inst
+                  | (nm, flat) <- is_states sc
+                  , Just inst <- [M.lookup (getIdBaseString flat) inst_by_name] ] ++
+           concatMap rule_scope (is_rules sc) ++
+           concat [ nested_scope (scopeLocalName (is_name c)) (fmap waveTypeName (is_type c))
+                                 (getPosition (is_name c)) (scope_body c)
+                  | c <- is_children sc ]
+         hier_members = concat [ def_at (i, m) (getIdBaseString (vs_id m))
+                               | (i, m) <- indexed
+                               , not (vs_kind m == WK_Fire &&
+                                      S.member (getIdBaseString (vs_id m)) placed_fires) ] ++
+                        [ (mkVar "num") `assign`
+                            ((var "vcd_num") `cAdd` (mkUInt32 (toInteger (length indexed)))) ]
+         hier_unplaced = concat [ state_call Nothing noPosition inst
+                                | inst <- prims ++ sub_modules
+                                , not (S.member (getIdBaseString inst) placed_insts) ]
+
          vcd_dump_defs_body =
            block (scope_start ++
                   num_init ++
                   clk_def_loop ++
                   clk_aliases ++
-                  member_calls ++
-                  port_calls ++
+                  (if hier then hier_members else member_calls ++ port_calls) ++
                   type_tables ++
-                  prim_calls ++
-                  (if (null sub_calls)
-                   then []
-                   else [ if_cond ((var "levels") `cNe` (mkUInt32 1))
-                                  (block vcd_recurse)
-                                  Nothing
-                        ]) ++
+                  (if hier
+                   then scope_body (sb_scopes sb) ++ hier_unplaced
+                   else prim_calls ++
+                        (if (null sub_calls)
+                         then []
+                         else [ if_cond ((var "levels") `cNe` (mkUInt32 1))
+                                        (block vcd_recurse)
+                                        Nothing
+                              ])) ++
                   scope_end ++
                   [ ret (Just (var "num")) ]
                   )
@@ -2384,8 +2487,8 @@ instance PPrint SimCCReset where
 -- NFData instances (needed by phase dumping routines)
 
 instance NFData SimCCBlock where
-  rnf (SimCCBlock n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20) =
-    rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 `seq` rnf n20
+  rnf (SimCCBlock n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20 n21 n22) =
+    rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 `seq` rnf3 n20 n21 n22
 
 instance NFData SimCCFn where
   rnf (SimCCFn n a r b) = rnf4 n a r b

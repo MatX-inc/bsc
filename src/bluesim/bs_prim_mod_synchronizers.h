@@ -113,10 +113,12 @@ class MOD_Sync2 : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 3);
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, vcd_num,   "dSyncReg1", 1);
     vcd_write_def(sim_hdl, vcd_num+1, "dSyncReg2", 1);
     vcd_write_def(sim_hdl, vcd_num+2, "sSyncReg",  1);
@@ -210,10 +212,12 @@ class MOD_Sync15 : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 3);
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, vcd_num,   "dSyncReg1", 1);
     vcd_write_def(sim_hdl, vcd_num+1, "dSyncReg2", 1);
     vcd_write_def(sim_hdl, vcd_num+2, "sSyncReg",  1);
@@ -304,10 +308,12 @@ class MOD_Sync1 : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, vcd_num,   "dSyncReg1", 1);
     vcd_write_def(sim_hdl, vcd_num+1, "sSyncReg",  1);
     vcd_write_scope_end(sim_hdl);
@@ -403,10 +409,12 @@ class MOD_SyncPulse : public Module
     dump_val(sSyncReg.read(), 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 4);
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, vcd_num,   "dSyncReg1", 1);
     vcd_write_def(sim_hdl, vcd_num+1, "dSyncReg2", 1);
     vcd_write_def(sim_hdl, vcd_num+2, "dSyncPulse", 1);
@@ -583,11 +591,13 @@ class MOD_SyncHandshake : public Module
     dump_val(sRDY, 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 12);
     unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, n++, "dSyncReg1", 1);
     vcd_write_def(sim_hdl, n++, "dSyncReg2", 1);
     vcd_write_def(sim_hdl, n++, "dLastState", 1);
@@ -781,10 +791,12 @@ class MOD_SyncReg : public Module
     putchar('\n');
     sync.dump_state(indent + 2);
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, vcd_num,   "dD_OUT", bits);
     vcd_write_def(sim_hdl, vcd_num+1, "sDataSyncIn", bits);
     unsigned int n = sync.dump_VCD_defs(vcd_num + 2);
@@ -1158,12 +1170,14 @@ class MOD_SyncFIFO : public Module
       dClrSync.dump_state(indent + 2);
     }
   }
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, depth + 13);
     unsigned int n = vcd_num;
     char buf[16];
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, n++, "FULL_N", 1);
     vcd_write_def(sim_hdl, n++, "EMPTY_N", 1);
     vcd_write_def(sim_hdl, n++, "dEnqPtr", idx_bits+1);
@@ -1428,8 +1442,10 @@ class MOD_DualPortRam : public Module
   {
     // Memory contents are not dumped
   }
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     // Memory contents are not dumped
     return (num);
   }
@@ -1538,13 +1554,15 @@ class MOD_LatchCrossingReg : public Module
     dump_val(sFlop, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     char buf[128];
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
-    snprintf(buf,128,"%s$L_OUT",inst_name);
+    snprintf(buf,128,"%s$L_OUT",wave_name);
     vcd_write_def(sim_hdl, vcd_num,   buf, bits);
-    snprintf(buf,128,"%s$Q_OUT",inst_name);
+    snprintf(buf,128,"%s$Q_OUT",wave_name);
     vcd_write_def(sim_hdl, vcd_num+1, buf, bits);
     return (vcd_num + 2);
   }

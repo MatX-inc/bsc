@@ -42,6 +42,7 @@ import Wires
 import Pragma
 import ASyntax
 import ISyntax(IType)
+import InstNodes(InstTree)
 import ASyntaxUtil
 import AScheduleInfo
 import ABinUtil(InstModMap,ABinMap)
@@ -92,6 +93,8 @@ data SimPackage =
              , sp_external_wires :: VWireInfo -- carryover?
              -- source types of the module's ports, as the design recorded them
              , sp_external_wire_types :: M.Map VName IType
+             -- the source instance hierarchy the state and rules came from
+             , sp_inst_tree :: InstTree
              , sp_reset_list :: [(ResetId, AReset)] -- carryover?
              , sp_state_instances :: AVInstMap
              -- inst and mod name of noinline functions as modules
@@ -243,8 +246,8 @@ instance Eq SimPackage where
         )
 
 instance NFData SimPackage where
-    rnf (SimPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20) =
-        rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 `seq` rnf n20
+    rnf (SimPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 n20 n21) =
+        rnf19 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18 n19 `seq` rnf2 n20 n21
 
 instance NFData SimSchedule where
     rnf ssched =

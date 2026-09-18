@@ -182,6 +182,34 @@ if { $ctest == 1 } {
         string_occurs sysWaveTypesTrim.fst-hier "var 20 cell reg : WaveTypes::Cell"
     }
 
+    # -wave-source-hierarchy places state and rules in the scopes of the
+    # source instances they belong to (the inlined mkPair as a scope of
+    # its own, each rule as a scope holding its fires), and records where
+    # each scope's module is defined and instantiated; the signals' ids
+    # and values are unaffected by the placement
+    link_objects_pass sysWaveTypesSrc sysWaveTypesSrc {-dump-formats vcd,fst -wave-source-hierarchy -no-wave-include-internals -keep-fires}
+    sim_output sysWaveTypesSrc {+bscfst=sysWaveTypesSrc.fst}
+    compare_file sysWaveTypesSrc.out sysWaveTypes.out.expected
+    if { $fstscopes != 0 } {
+        fst_hierarchy $fstscopes sysWaveTypesSrc.fst sysWaveTypesSrc.fst-hier
+        find_regexp sysWaveTypesSrc.fst-hier {scope core mkWaveTypesCore defined \S*WaveTypes.bs:\d+ instantiated \S*WaveTypes.bs:\d+}
+        find_regexp sysWaveTypesSrc.fst-hier {scope pair WaveTypes::Pair instantiated \S*WaveTypes.bs:\d+}
+        find_regexp sysWaveTypesSrc.fst-hier {scope step - instantiated \S*WaveTypes.bs:\d+}
+        string_occurs sysWaveTypesSrc.fst-hier "var 1 WILL_FIRE wire : Bool"
+        string_occurs sysWaveTypesSrc.fst-hier "var 4 lo reg : UInt#(4)"
+        string_does_not_occur sysWaveTypesSrc.fst-hier "pair_lo"
+        string_does_not_occur sysWaveTypesSrc.fst-hier "WILL_FIRE_RL"
+    }
+    fstcheck_pass sysWaveTypesSrc.fst {-c "main.top.core.pair.lo equals 5 @50" \
+                                       -c "main.top.core.pair.hi equals 1 @170" \
+                                       -c "main.top.core.pair.carry.WILL_FIRE exists" \
+                                       -c "main.top.core.stash.drain.WILL_FIRE exists" \
+                                       -c "main.top.core.stash.cnt exists" \
+                                       -c "main.top.core.tick equals 5 @50"}
+    sim_output sysWaveTypesSrc {+bscvcd=sysWaveTypesSrc.vcd}
+    string_occurs sysWaveTypesSrc.vcd {$scope module pair $end}
+    string_occurs sysWaveTypesSrc.vcd {$scope module carry $end}
+
     # -------------------------
     # model built with both VCD and FST support
 

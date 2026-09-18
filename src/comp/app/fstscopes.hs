@@ -13,6 +13,7 @@ module Main_fstscopes(main) where
 -- record, which contains a union that the FFI cannot express.
 
 import Control.Monad(when)
+import qualified Data.Map as M
 import Foreign.Ptr
 import Foreign.C.Types
 import Foreign.C.String
@@ -49,6 +50,10 @@ foreign import ccall unsafe "bsc_fsthier_var_direction_name"
     hierVarDirectionName :: Ptr FstHier -> IO CString
 foreign import ccall unsafe "bsc_fsthier_attr_name"
     hierAttrName :: Ptr FstHier -> IO CString
+foreign import ccall unsafe "bsc_fsthier_attr_arg"
+    hierAttrArg :: Ptr FstHier -> IO CULLong
+foreign import ccall unsafe "bsc_fsthier_attr_path"
+    hierAttrPath :: Ptr FstHier -> IO CULLong
 
 main :: IO ()
 main = do
@@ -68,27 +73,36 @@ dumpHierarchy fname = do
   printEntries ctx
   fstReaderClose ctx
 
--- Each variable prints as
+-- Each scope prints as
+--   scope <name> <component|-> [defined <file>:<line>] [instantiated <file>:<line>]
+-- and each variable as
 --   var <width> <name> [(alias)] <reg|wire|...> [<direction>] [: <type>]
--- where the type is the name recorded by the writer, when there is one
--- (it arrives as an attribute entry just ahead of its variable).
+-- where the type is the name recorded by the writer, when there is one.
+-- A variable's type and a scope's source stems arrive as attribute
+-- entries just ahead of the entry they describe.
 printEntries :: Ptr FstReader -> IO ()
-printEntries ctx = loop Nothing
+printEntries ctx = loop M.empty Nothing Nothing Nothing
   where
-    loop pending_type = do
+    loop paths pending_type pending_src pending_inst = do
       h <- fstReaderIterateHier ctx
       when (h /= nullPtr) $ do
         kind <- hierKind h
+        let stem label (Just (path, line)) =
+                " " ++ label ++ " " ++ M.findWithDefault "?" path paths ++ ":" ++ show line
+            stem _ Nothing = ""
+            continue = loop paths Nothing Nothing Nothing
         case kind of
           0 -> do name <- hierScopeName h >>= peekCString
                   compPtr <- hierScopeComponent h
                   comp <- if compPtr == nullPtr
                           then return "-"
                           else peekCString compPtr
-                  putStrLn ("scope " ++ name ++ " " ++ comp)
-                  loop Nothing
+                  putStrLn ("scope " ++ name ++ " " ++ comp ++
+                            stem "defined" pending_src ++
+                            stem "instantiated" pending_inst)
+                  continue
           1 -> do putStrLn "upscope"
-                  loop Nothing
+                  continue
           2 -> do name <- hierVarName h >>= peekCString
                   len <- hierVarLength h
                   alias <- hierVarIsAlias h
@@ -101,7 +115,19 @@ printEntries ctx = loop Nothing
                             (if alias /= 0 then " (alias)" else "") ++
                             " " ++ vt ++ dir ++
                             maybe "" (" : " ++) pending_type)
-                  loop Nothing
+                  continue
           4 -> do t <- hierAttrName h >>= peekCString
-                  loop (Just t)
-          _ -> loop pending_type
+                  loop paths (Just t) pending_src pending_inst
+          5 -> do p <- hierAttrName h >>= peekCString
+                  n <- hierAttrArg h
+                  loop (M.insert (fromIntegral n) p paths) pending_type pending_src pending_inst
+          6 -> do st <- stemOf h
+                  loop paths pending_type (Just st) pending_inst
+          7 -> do st <- stemOf h
+                  loop paths pending_type pending_src (Just st)
+          _ -> loop paths pending_type pending_src pending_inst
+    stemOf :: Ptr FstHier -> IO (Integer, Integer)
+    stemOf h = do
+      path <- hierAttrPath h
+      line <- hierAttrArg h
+      return (fromIntegral path, fromIntegral line)

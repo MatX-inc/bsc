@@ -35,7 +35,12 @@ public:
   // of the module the scope is an instance of) may be NULL when it
   // is not known; formats without a place for it ignore it.
   virtual void write_header(const char* timescale) = 0;
-  virtual void start_scope(const char* name, const char* module_type) = 0;
+  // src_file/src_line locate the scope's module definition and
+  // inst_file/inst_line its instantiation, when known (NULL/0 when
+  // not); formats without a place for them ignore them.
+  virtual void start_scope(const char* name, const char* module_type,
+                           const char* src_file, unsigned int src_line,
+                           const char* inst_file, unsigned int inst_line) = 0;
   virtual void end_scope() = 0;
   // Defining the same num again creates an alias of the earlier signal.
   // kind says what the signal is (tWaveKind, bs_wave_kind.h) and

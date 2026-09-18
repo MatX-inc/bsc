@@ -636,6 +636,7 @@ defaultFlags bluespecdir = Flags {
         dumps = [],
         elabOnly = False,
         waveIncludeInternals = True,
+        waveSourceHierarchy = False,
         enablePoisonPills = False,
         entry = Nothing,
         expandATSlimit = 20,
@@ -1870,6 +1871,10 @@ externalFlags = [
          (Toggle (\f x -> f {waveIncludeInternals=x}) (Just (\f -> (waveIncludeInternals f, True))),
           "include compiler-introduced values in Bluesim waveform dumps", Visible)),
 
+        ("wave-source-hierarchy",
+         (Toggle (\f x -> f {waveSourceHierarchy=x}) (showIfTrue waveSourceHierarchy),
+          "nest Bluesim waveform dumps by source instance, not synthesized module", Visible)),
+
         ("vsim",
          let setFn f s = case setBackend f Verilog of
                            Left f' -> Left $ f' {vsim = Just s}
@@ -2023,6 +2028,7 @@ showFlagsRaw flags =
           ("dumpAll", show (dumpAll flags)),
           ("dumpFormats", show (dumpFormats flags)),
           ("waveIncludeInternals", show (waveIncludeInternals flags)),
+          ("waveSourceHierarchy", show (waveSourceHierarchy flags)),
           ("dumps", show (dumps flags)),
           ("elabOnly", show (elabOnly flags)),
           ("enablePoisonPills", show (enablePoisonPills flags)),

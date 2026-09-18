@@ -115,8 +115,15 @@ public:
     bytes_emitted += 120;
   }
 
-  void start_scope(const char* name, const char* module_type)
+  void start_scope(const char* name, const char* module_type,
+                   const char* src_file, unsigned int src_line,
+                   const char* inst_file, unsigned int inst_line)
   {
+    // the source stems attach to the scope that follows them
+    if (src_file != NULL)
+      fstWriterSetSourceStem(ctx, src_file, src_line, 0);
+    if (inst_file != NULL)
+      fstWriterSetSourceInstantiationStem(ctx, inst_file, inst_line, 0);
     // the module type is recorded as the scope's component name,
     // where viewers (and fstReaderIterateHier) can retrieve it
     fstWriterSetScope(ctx, FST_ST_VCD_MODULE, name, module_type);

@@ -129,7 +129,8 @@ public:
     dest.write_string("$timescale\n\t%s\n$end\n", timescale);
   }
 
-  void start_scope(const char* name, const char* /* no place in VCD */)
+  void start_scope(const char* name, const char* /* no place in VCD */,
+                   const char*, unsigned int, const char*, unsigned int)
   {
     fprintf(file, "$scope module %s $end\n", name);
   }
@@ -697,13 +698,22 @@ void vcd_set_clock(tSimStateHdl simHdl, unsigned int num, tClock handle)
 
 void vcd_write_scope_start(tSimStateHdl simHdl, const char* name)
 {
-  (simHdl->vcd).writer->start_scope(name, NULL);
+  (simHdl->vcd).writer->start_scope(name, NULL, NULL, 0, NULL, 0);
 }
 
 void vcd_write_scope_start(tSimStateHdl simHdl,
 			   const char* name, const char* module_type)
 {
-  (simHdl->vcd).writer->start_scope(name, module_type);
+  (simHdl->vcd).writer->start_scope(name, module_type, NULL, 0, NULL, 0);
+}
+
+void vcd_write_scope_start(tSimStateHdl simHdl,
+			   const char* name, const char* module_type,
+			   const char* src_file, unsigned int src_line,
+			   const char* inst_file, unsigned int inst_line)
+{
+  (simHdl->vcd).writer->start_scope(name, module_type,
+				    src_file, src_line, inst_file, inst_line);
 }
 
 void vcd_write_scope_end(tSimStateHdl simHdl)
