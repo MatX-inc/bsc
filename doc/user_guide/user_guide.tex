@@ -4720,6 +4720,23 @@ they hold) are dumped too, alongside the design's own signals; the
 {\bf\tt -no-wave-include-internals} flag, given when linking with
 {\bf\tt -sim}, leaves them out.
 
+The dump's scopes follow the synthesized hierarchy: one scope per
+synthesized module instance, holding every signal of that module,
+with the state elements of the modules inlined into it under their
+flattened names (an instance {\bf\tt p} of an inlined module with a
+register {\bf\tt lo} appears as {\bf\tt p\_lo}).  The
+{\bf\tt -wave-source-hierarchy} flag, given when linking with
+{\bf\tt -sim}, arranges them as the source does instead: each
+inlined module instance (and each loop body that instantiates state)
+becomes a scope of its own, holding its state elements under their
+source names ({\bf\tt p.lo}), and each rule becomes a scope holding its
+{\bf\tt WILL\_FIRE} and {\bf\tt CAN\_FIRE} signals (which exist when
+linking with {\bf\tt -keep-fires}).  An instance of a library module
+whose only content is one state element is that state element.  In
+either arrangement an FST file records, for each scope, where its
+module is defined and where it is instantiated, for viewers that
+show source locations.
+
 The Verilog system task {\bf\tt \$dumpvars} may be used with no arguments
 to request VCD for all variables.  Selective dumping with this task
 is not supported at this time.  The Verilog system tasks {\bf\tt \$dumpon}

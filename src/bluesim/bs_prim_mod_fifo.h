@@ -260,12 +260,14 @@ class MOD_Fifo : public Module
     }
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, size + 6 + (bits > 0 ? 1 : 0));
     unsigned int n = vcd_num;
     char buf[16];
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK", 1, WAVE_CLOCK, "Clock");
     vcd_write_def(sim_hdl, n++, "RST", 1, WAVE_RESET, "Reset");
     vcd_write_def(sim_hdl, n++, "FULL_N", 1, WAVE_OUTPUT, "Bool");

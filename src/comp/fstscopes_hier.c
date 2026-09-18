@@ -9,7 +9,10 @@
 
 /* 0 = scope, 1 = upscope, 2 = var, 4 = a variable's type-name
  * attribute (written by fstWriterCreateVar2 just before the variable
- * it describes), 3 = anything else */
+ * it describes), 5 = a source path being named, 6 = the source stem
+ * and 7 = the instantiation stem of the scope that follows (written by
+ * fstWriterSetSourceStem and fstWriterSetSourceInstantiationStem),
+ * 3 = anything else */
 int bsc_fsthier_kind(struct fstHier *h)
 {
     switch (h->htyp) {
@@ -17,10 +20,28 @@ int bsc_fsthier_kind(struct fstHier *h)
     case FST_HT_UPSCOPE: return 1;
     case FST_HT_VAR:     return 2;
     case FST_HT_ATTRBEGIN:
-        return (h->u.attr.typ == FST_AT_MISC &&
-                h->u.attr.subtype == FST_MT_SUPVAR) ? 4 : 3;
+        if (h->u.attr.typ != FST_AT_MISC) return 3;
+        switch (h->u.attr.subtype) {
+        case FST_MT_SUPVAR:      return 4;
+        case FST_MT_PATHNAME:    return 5;
+        case FST_MT_SOURCESTEM:  return 6;
+        case FST_MT_SOURCEISTEM: return 7;
+        default:                 return 3;
+        }
     default:             return 3;
     }
+}
+
+/* a path-name attribute's number, a stem's line */
+unsigned long long bsc_fsthier_attr_arg(struct fstHier *h)
+{
+    return h->u.attr.arg;
+}
+
+/* the path number a stem refers to */
+unsigned long long bsc_fsthier_attr_path(struct fstHier *h)
+{
+    return h->u.attr.arg_from_name;
 }
 
 const char *bsc_fsthier_attr_name(struct fstHier *h)

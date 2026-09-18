@@ -52,6 +52,9 @@ codeGenOptionDescr flags is_top =
               -- likewise the compiler-introduced values are either dumped
               -- or absent from the generated dump code
               (if (waveIncludeInternals flags) then [] else ["no-wave-internals"]) ++
+              -- and the dump's scopes follow either the source or the
+              -- synthesized hierarchy
+              (if (waveSourceHierarchy flags) then ["wave-source-hierarchy"] else []) ++
               -- ASAny lowering happens at codegen time (SimPackageOpt and
               -- SimBlocksToC read unSpecTo), so an object generated under
               -- a different -unspecified-to must not be reused: its bytes

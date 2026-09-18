@@ -104,11 +104,13 @@ class MOD_SyncReset: public Module
   {
     printf("%*s%s:\n", indent, "", inst_name);
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
     unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK", 1);
     vcd_write_def(sim_hdl, n++, "IN_RST", 1);
     vcd_write_def(sim_hdl, n++, "OUT_RST", 1);
@@ -238,10 +240,12 @@ class MOD_InitialReset: public Module
   {
     printf("%*s%s:\n", indent, "", inst_name);
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 3);
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_scope_end(sim_hdl);
     return (vcd_num + 3);
   }
@@ -337,10 +341,12 @@ class MOD_MakeReset: public Module
     dump_val(rst, 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, vcd_num, "rst", 1);
     vcd_write_scope_end(sim_hdl);
     return (vcd_num + 1);
@@ -441,10 +447,12 @@ class MOD_MakeReset0: public Module
     dump_val(rst, 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, vcd_num, "rst", 1);
     vcd_write_scope_end(sim_hdl);
     return (vcd_num + 1);
@@ -551,7 +559,8 @@ class MOD_ResetMux : public Module
     // no state dump
   }
 
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL) const
   {
     // no VCD output
     return (num);
@@ -622,7 +631,8 @@ class MOD_ResetEither : public Module
     // no state dump
   }
 
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL) const
   {
     // no VCD output
     return (num);
@@ -671,7 +681,8 @@ class MOD_ResetToBool : public Module
     // no state dump
   }
 
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL) const
   {
     // no VCD output
     return (num);

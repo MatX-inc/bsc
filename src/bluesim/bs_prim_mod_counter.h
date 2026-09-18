@@ -165,12 +165,14 @@ class MOD_Counter : public Module
     dump_val(val, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 9);
     unsigned int n = vcd_num;
-    vcd_write_def(sim_hdl, n++, inst_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_def(sim_hdl, n++, wave_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_set_clock(sim_hdl, n, __clk_handle_0);
     vcd_write_def(sim_hdl, n++, "ADDA", 1, WAVE_INPUT, "Bool");
     vcd_set_clock(sim_hdl, n, __clk_handle_0);

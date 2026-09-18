@@ -171,7 +171,12 @@ data Flags = Flags {
         -- whether Bluesim waveform dumps include the values the compiler
         -- introduced (unnamed and expression-named defs) alongside the
         -- design's own registers, ports and rule fires
-        waveIncludeInternals :: Bool
+        waveIncludeInternals :: Bool,
+        -- whether Bluesim waveform dumps nest the contents of inlined
+        -- module instances (and rules) in scopes under their source
+        -- names, rather than listing everything flat under the
+        -- synthesized module
+        waveSourceHierarchy :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

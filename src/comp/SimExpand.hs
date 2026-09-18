@@ -266,6 +266,7 @@ simExpandABin errh flags (abi,ver) = do
                      sp_clock_domains = apkg_clock_domains apkg,
                      sp_external_wires = apkg_external_wires apkg,
                      sp_external_wire_types = apkg_external_wire_types apkg,
+                     sp_inst_tree = apkg_inst_tree apkg,
                      sp_reset_list = apkg_reset_list apkg,
                      sp_state_instances = mkAVInstMap insts,
                      sp_noinline_instances = noinline_instances,

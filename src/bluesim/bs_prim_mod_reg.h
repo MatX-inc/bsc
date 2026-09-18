@@ -153,10 +153,12 @@ class MOD_Reg : public Module
     dump_val(value, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_write_def(sim_hdl, vcd_num, inst_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
+    vcd_write_def(sim_hdl, vcd_num, wave_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
     return (vcd_num + 1);
   }
   void dump_VCD(tVCDDumpType dt, MOD_Reg<T>& backing)
@@ -344,12 +346,14 @@ class MOD_RegAligned : public Module
     dump_val(value, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 4);
     unsigned int n = vcd_num;
-    vcd_write_def(sim_hdl, n++, inst_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_def(sim_hdl, n++, wave_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK", 1, WAVE_CLOCK, "Clock");
     vcd_write_def(sim_hdl, n++, "RST", 1, WAVE_RESET, "Reset");
     vcd_set_clock(sim_hdl, n, __clk_handle_1);
@@ -575,10 +579,12 @@ class MOD_ConfigReg : public Module
     dump_val(value, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_write_def(sim_hdl, vcd_num, inst_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
+    vcd_write_def(sim_hdl, vcd_num, wave_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
     return (vcd_num + 1);
   }
   void dump_VCD(tVCDDumpType dt, MOD_ConfigReg<T>& backing)
@@ -745,10 +751,12 @@ class MOD_RegTwo : public Module
     dump_val(value, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 1);
-    vcd_write_def(sim_hdl, vcd_num, inst_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
+    vcd_write_def(sim_hdl, vcd_num, wave_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
     return (vcd_num + 1);
   }
   void dump_VCD(tVCDDumpType dt, MOD_RegTwo<T>& backing)
@@ -986,8 +994,10 @@ class MOD_CReg : public Module
     dump_val(value, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     // There are 3*ports signals the submodule scope (Q_OUT, EN, D_IN)
     // and one signal in the parent scope (alias for Q_OUT)
     // but aliases re-use the same number, so we reserve 3*ports
@@ -995,13 +1005,13 @@ class MOD_CReg : public Module
     unsigned int num = vcd_num;
 
     // don't increment the num, we'll reuse it for the alias
-    vcd_write_def(sim_hdl, num, inst_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
+    vcd_write_def(sim_hdl, num, wave_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
 
     // buffer for auto-generating the signal names
     // (longest name is Q_OUT_# plus room for null terminator)
     char buf[17];
 
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     for (unsigned int i = 0; i < ports; i++) {
       // start with Q_OUT, so that the alias' number is reused
       snprintf(buf, sizeof(buf), "Q_OUT_%u", i);

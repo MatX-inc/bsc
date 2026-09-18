@@ -209,7 +209,8 @@ convertModuleBlock flags sb_map ff_map clk_map wdef_mod_map reused top_blk write
         -- generated code in large/replicated designs.
         genVCD = any (`elem` ["vcd", "fst"]) (dumpFormats flags)
         wave_gen = WaveGen { wg_dump = genVCD
-                           , wg_internals = waveIncludeInternals flags }
+                           , wg_internals = waveIncludeInternals flags
+                           , wg_hierarchy = waveSourceHierarchy flags }
 
         -- class declaration (for the H file)
         class_decl = simCCBlockToClassDeclaration genVCD sb_map sb
@@ -566,7 +567,8 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
         vcd_hdr_def    = define vcd_hdr_proto
                                 (if genVCD
                                  then block [ mkDumpCall top_blk "dump_VCD_defs"
-                                                         [ vcd_depth ]]
+                                                         [ vcd_depth, var "NULL"
+                                                         , var "NULL", mkUInt32 0 ]]
                                  else block [ no_vcd_err ])
         backing_fn sb  = (var ((sb_name sb) ++ "_backing")) `cCall` [ var "sim_hdl" ]
         vcd_proto      = function void (mkScopedVar "dump_VCD") [ dump_type ]

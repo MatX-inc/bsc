@@ -15,7 +15,8 @@ import Pragma
 import Prim
 import SimPrimitiveModules
 import Id
-import Position(noPosition)
+import Position(noPosition, getPosition)
+import InstNodes(instScopes)
 import FStringCompat(mkFString, concatFString)
 import PreStrings(fsUnderscore, fsEmpty)
 import SCC(tsort)
@@ -438,6 +439,8 @@ onePackageToBlock flags name_map full_meth_map ss pkg =
                               input_clks
                               gate_map
                               inst_port_types
+                              (instScopes True modId (sp_inst_tree pkg))
+                              (getPosition modId)
   in sim_block
 
 -- Get the name of the SimPackage's module as a String

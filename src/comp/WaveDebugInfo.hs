@@ -9,12 +9,13 @@
 -- (registers, FIFOs, wires, ... -- one entry per primitive instance),
 -- the synthesized submodule instances, each rule's CAN_FIRE and
 -- WILL_FIRE, and each method's ports.  For each, "synthpath" is the
--- signal's path in the dump (scope names then the signal name, as
--- Bluesim emits them) and "bsvpath" is its path in the source: the
--- instance names down through the inlined modules, ending in the
--- entity's own name.  "type" names the signal's Bluespec type, in the
--- spelling the dump records; "file", "line" and "column" locate the
--- entity in the source.
+-- signal's path in a dump of the synthesized hierarchy (scope names
+-- then the signal name, as Bluesim emits them) and "bsvpath" its path
+-- in the source: the instance names down through the inlined modules,
+-- ending in the entity's own name -- which is also its path in a dump
+-- made with -wave-source-hierarchy, for state elements and rule fires.
+-- "type" names the signal's Bluespec type, in the spelling the dump
+-- records; "file", "line" and "column" locate the entity in the source.
 --
 -- "types" describes every type named by a signal, and the types those
 -- reach: kind, width in bits, and for structs, unions and enums where
@@ -32,7 +33,7 @@
 -- be reduced.  A vector's element 0 is lowest.
 module WaveDebugInfo (waveDebugInfo) where
 
-import Data.List(sortBy, nub)
+import Data.List(nub)
 import Data.Maybe(mapMaybe, isJust)
 import Data.Bits(shiftL, testBit)
 import Data.Char(isDigit)
@@ -61,7 +62,7 @@ import VModInfo
 import ASyntax
 import ABin(ABinEitherModInfo, abemi_apkg)
 import ABinUtil(HierMap)
-import InstNodes(InstNode(..), InstTree, isHiddenAll, isHiddenKP, nodeChildren)
+import InstNodes(InstScope(..), instScopes, scopeLocalName)
 
 -- ---------------
 -- JSON
@@ -149,10 +150,9 @@ data Design = Design { d_hier :: HierMap
                      , d_hide :: Bool  -- leave out {-# hide #-}'d instances
                      }
 
--- The source name an instance node displays: its display name when
--- the elaborator recorded one (e.g. for loop bodies), else its own
+-- The source name an instance, state element or rule displays
 localName :: Id -> String
-localName = getIdBaseString . addIdDisplayName
+localName = scopeLocalName
 
 -- The signals of one synthesized module and, recursively, of the
 -- synthesized modules it instantiates.  `scope` is the module's scope
@@ -166,44 +166,20 @@ moduleSignals d scope bsv modname =
             submods = M.fromList (fst (M.findWithDefault ([], []) modname (d_hier d)))
             prims = M.fromList [ (getIdBaseString (avi_vname avi), avi)
                                | avi <- apkg_state_instances apkg ]
-            fromTree = concatMap (treeSignals d scope bsv submods prims)
-                                 (treeChildren (apkg_inst_tree apkg))
+            scopes = instScopes (d_hide d) (apkg_name apkg) (apkg_inst_tree apkg)
             ports = concatMap (portSignals apkg scope bsv) (apkg_interface apkg)
-        in  ports ++ fromTree
+        in  ports ++ scopeSignals d scope bsv submods prims scopes
 
-treeChildren :: InstTree -> [InstNode]
-treeChildren t = sortBy cmpNode (M.elems t)
-  where cmpNode a b = cmpIdByName (node_name a) (node_name b)
-
--- A state element or rule sits under a Loc node carrying its source
--- name, whose single child carries the name the dump uses (a library
--- module's hidden wrapper instance in between, such as mkReg's, is
--- looked through).  Any other Loc is an inlined module instance (or a
--- loop body), one more level of the source path.
-treeSignals :: Design -> [String] -> [String] -> M.Map String String
-            -> M.Map String AVInst -> InstNode -> [Signal]
-treeSignals d scope bsv submods prims node =
-    case node of
-      Loc {}
-        | d_hide d && isHiddenAll node -> []
-        | otherwise ->
-            case nodeChildren (d_hide d) node of
-              [StateVar { node_name = flat }] ->
-                  stateSignals d scope bsv submods prims (node_name node) flat
-              [Rule { node_name = rule }] ->
-                  ruleSignals scope bsv (node_name node) rule
-              children
-                | node_ignore node || (d_hide d && isHiddenKP node) ->
-                    concatMap recurse (sortBy cmpNode children)
-                | otherwise ->
-                    concatMap (treeSignals d scope (bsv ++ [localName (node_name node)]) submods prims)
-                              (sortBy cmpNode children)
-      StateVar { node_name = flat } ->
-          stateSignals d scope bsv submods prims flat flat
-      Rule { node_name = rule } ->
-          ruleSignals scope bsv rule rule
-  where recurse = treeSignals d scope bsv submods prims
-        cmpNode a b = cmpIdByName (node_name a) (node_name b)
+-- The signals of the source-level scopes of a module (see InstScope):
+-- its state elements and rules, then those of the inlined instances,
+-- each one more level of the source path
+scopeSignals :: Design -> [String] -> [String] -> M.Map String String
+             -> M.Map String AVInst -> InstScope -> [Signal]
+scopeSignals d scope bsv submods prims sc =
+    concat [ stateSignals d scope bsv submods prims name flat | (name, flat) <- is_states sc ] ++
+    concat [ ruleSignals scope bsv name rule | (name, rule) <- is_rules sc ] ++
+    concat [ scopeSignals d scope (bsv ++ [scopeLocalName (is_name c)]) submods prims c
+           | c <- is_children sc ]
 
 -- A rule's fire signals are dumped at the module's scope under the
 -- rule's elaborated name (RL_...); the source knows the rule by its

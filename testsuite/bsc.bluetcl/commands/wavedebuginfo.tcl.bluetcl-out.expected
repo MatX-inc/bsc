@@ -13,28 +13,8 @@ wavedebuginfo.json
       "prim": "RegN",
       "type": "WaveTypes::Cell",
       "file": "WaveTypes.bs",
-      "line": 80,
+      "line": 103,
       "column": 4
-    },
-    {
-      "synthpath": ["main", "top", "WILL_FIRE_RL_done"],
-      "bsvpath": ["done", "WILL_FIRE"],
-      "kind": "fire",
-      "rule": "done",
-      "type": "Bool",
-      "file": "WaveTypes.bs",
-      "line": 97,
-      "column": 6
-    },
-    {
-      "synthpath": ["main", "top", "CAN_FIRE_RL_done"],
-      "bsvpath": ["done", "CAN_FIRE"],
-      "kind": "fire",
-      "rule": "done",
-      "type": "Bool",
-      "file": "WaveTypes.bs",
-      "line": 97,
-      "column": 6
     },
     {
       "synthpath": ["main", "top", "maybeIdx"],
@@ -43,7 +23,7 @@ wavedebuginfo.json
       "prim": "RegN",
       "type": "Maybe#(UInt#(16))",
       "file": "WaveTypes.bs",
-      "line": 81,
+      "line": 104,
       "column": 4
     },
     {
@@ -53,7 +33,7 @@ wavedebuginfo.json
       "prim": "RegN",
       "type": "WaveTypes::Packet",
       "file": "WaveTypes.bs",
-      "line": 86,
+      "line": 109,
       "column": 4
     },
     {
@@ -63,7 +43,7 @@ wavedebuginfo.json
       "prim": "RegN",
       "type": "Vector::Vector#(4, WaveTypes::Color)",
       "file": "WaveTypes.bs",
-      "line": 82,
+      "line": 105,
       "column": 4
     },
     {
@@ -73,7 +53,7 @@ wavedebuginfo.json
       "prim": "RegN",
       "type": "WaveTypes::Source",
       "file": "WaveTypes.bs",
-      "line": 85,
+      "line": 108,
       "column": 4
     },
     {
@@ -82,7 +62,7 @@ wavedebuginfo.json
       "kind": "module",
       "module": "mkStash",
       "file": "WaveTypes.bs",
-      "line": 79,
+      "line": 102,
       "column": 4
     },
     {
@@ -93,7 +73,7 @@ wavedebuginfo.json
       "method": "push",
       "type": "WaveTypes::Pixel",
       "file": "WaveTypes.bs",
-      "line": 59,
+      "line": 82,
       "column": 0
     },
     {
@@ -104,7 +84,7 @@ wavedebuginfo.json
       "method": "push",
       "type": "Bool",
       "file": "WaveTypes.bs",
-      "line": 59,
+      "line": 82,
       "column": 0
     },
     {
@@ -115,7 +95,7 @@ wavedebuginfo.json
       "method": "push",
       "type": "Bool",
       "file": "WaveTypes.bs",
-      "line": 59,
+      "line": 82,
       "column": 0
     },
     {
@@ -126,7 +106,7 @@ wavedebuginfo.json
       "method": "top",
       "type": "WaveTypes::Pixel",
       "file": "WaveTypes.bs",
-      "line": 59,
+      "line": 82,
       "column": 0
     },
     {
@@ -137,7 +117,7 @@ wavedebuginfo.json
       "method": "top",
       "type": "Bool",
       "file": "WaveTypes.bs",
-      "line": 59,
+      "line": 82,
       "column": 0
     },
     {
@@ -148,7 +128,7 @@ wavedebuginfo.json
       "method": "depth",
       "type": "UInt#(8)",
       "file": "WaveTypes.bs",
-      "line": 59,
+      "line": 82,
       "column": 0
     },
     {
@@ -159,7 +139,7 @@ wavedebuginfo.json
       "method": "depth",
       "type": "Bool",
       "file": "WaveTypes.bs",
-      "line": 59,
+      "line": 82,
       "column": 0
     },
     {
@@ -169,28 +149,8 @@ wavedebuginfo.json
       "prim": "RegN",
       "type": "UInt#(8)",
       "file": "WaveTypes.bs",
-      "line": 63,
+      "line": 86,
       "column": 4
-    },
-    {
-      "synthpath": ["main", "top", "stash", "WILL_FIRE_RL_drain"],
-      "bsvpath": ["stash", "drain", "WILL_FIRE"],
-      "kind": "fire",
-      "rule": "drain",
-      "type": "Bool",
-      "file": "WaveTypes.bs",
-      "line": 66,
-      "column": 6
-    },
-    {
-      "synthpath": ["main", "top", "stash", "CAN_FIRE_RL_drain"],
-      "bsvpath": ["stash", "drain", "CAN_FIRE"],
-      "kind": "fire",
-      "rule": "drain",
-      "type": "Bool",
-      "file": "WaveTypes.bs",
-      "line": 66,
-      "column": 6
     },
     {
       "synthpath": ["main", "top", "stash", "last"],
@@ -199,7 +159,7 @@ wavedebuginfo.json
       "prim": "RegN",
       "type": "WaveTypes::Pixel",
       "file": "WaveTypes.bs",
-      "line": 64,
+      "line": 87,
       "column": 4
     },
     {
@@ -209,27 +169,27 @@ wavedebuginfo.json
       "prim": "FIFO2",
       "type": "WaveTypes::Pixel",
       "file": "WaveTypes.bs",
-      "line": 62,
+      "line": 85,
       "column": 4
     },
     {
-      "synthpath": ["main", "top", "WILL_FIRE_RL_step"],
-      "bsvpath": ["step", "WILL_FIRE"],
+      "synthpath": ["main", "top", "stash", "WILL_FIRE_RL_drain"],
+      "bsvpath": ["stash", "drain", "WILL_FIRE"],
       "kind": "fire",
-      "rule": "step",
+      "rule": "drain",
       "type": "Bool",
       "file": "WaveTypes.bs",
-      "line": 88,
+      "line": 89,
       "column": 6
     },
     {
-      "synthpath": ["main", "top", "CAN_FIRE_RL_step"],
-      "bsvpath": ["step", "CAN_FIRE"],
+      "synthpath": ["main", "top", "stash", "CAN_FIRE_RL_drain"],
+      "bsvpath": ["stash", "drain", "CAN_FIRE"],
       "kind": "fire",
-      "rule": "step",
+      "rule": "drain",
       "type": "Bool",
       "file": "WaveTypes.bs",
-      "line": 88,
+      "line": 89,
       "column": 6
     },
     {
@@ -239,7 +199,7 @@ wavedebuginfo.json
       "prim": "RegN",
       "type": "UInt#(16)",
       "file": "WaveTypes.bs",
-      "line": 83,
+      "line": 106,
       "column": 4
     },
     {
@@ -249,8 +209,128 @@ wavedebuginfo.json
       "prim": "RWire",
       "type": "UInt#(16)",
       "file": "WaveTypes.bs",
-      "line": 84,
+      "line": 107,
       "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "WILL_FIRE_RL_done"],
+      "bsvpath": ["done", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "done",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 122,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "CAN_FIRE_RL_done"],
+      "bsvpath": ["done", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "done",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 122,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "WILL_FIRE_RL_step"],
+      "bsvpath": ["step", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "step",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 112,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "CAN_FIRE_RL_step"],
+      "bsvpath": ["step", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "step",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 112,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "pair_hi"],
+      "bsvpath": ["pair", "hi"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "WaveTypes.bs",
+      "line": 66,
+      "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "pair_lo"],
+      "bsvpath": ["pair", "lo"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "WaveTypes.bs",
+      "line": 65,
+      "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "WILL_FIRE_RL_pair_carry"],
+      "bsvpath": ["pair", "carry", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "carry",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 69,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "CAN_FIRE_RL_pair_carry"],
+      "bsvpath": ["pair", "carry", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "carry",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 69,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "pair_d"],
+      "bsvpath": ["pair", "d", "_r"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "DReg.bs",
+      "line": 17,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "pair_d_1"],
+      "bsvpath": ["pair", "d", "_wire"],
+      "kind": "state",
+      "prim": "RWire",
+      "type": "UInt#(4)",
+      "file": "DReg.bs",
+      "line": 19,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "WILL_FIRE_RL_pair_d__dreg_update"],
+      "bsvpath": ["pair", "d", "_dreg_update", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "_dreg_update",
+      "type": "Bool",
+      "file": "DReg.bs",
+      "line": 21,
+      "column": 13
+    },
+    {
+      "synthpath": ["main", "top", "CAN_FIRE_RL_pair_d__dreg_update"],
+      "bsvpath": ["pair", "d", "_dreg_update", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "_dreg_update",
+      "type": "Bool",
+      "file": "DReg.bs",
+      "line": 21,
+      "column": 13
     }
   ],
   "types": {
@@ -284,21 +364,6 @@ wavedebuginfo.json
           "type": "void",
           "width": 0,
           "tag": 2
-        }
-      ]
-    },
-    "Bool": {
-      "kind": "enum",
-      "width": 1,
-      "layout": "derived",
-      "members": [
-        {
-          "name": "False",
-          "value": 0
-        },
-        {
-          "name": "True",
-          "value": 1
         }
       ]
     },
@@ -443,6 +508,21 @@ wavedebuginfo.json
         }
       ]
     },
+    "Bool": {
+      "kind": "enum",
+      "width": 1,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "False",
+          "value": 0
+        },
+        {
+          "name": "True",
+          "value": 1
+        }
+      ]
+    },
     "UInt#(8)": {
       "kind": "primary",
       "width": 8
@@ -450,6 +530,10 @@ wavedebuginfo.json
     "UInt#(16)": {
       "kind": "primary",
       "width": 16
+    },
+    "UInt#(4)": {
+      "kind": "primary",
+      "width": 4
     },
     "void": {
       "kind": "primary",

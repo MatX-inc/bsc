@@ -67,6 +67,14 @@ extern void vcd_write_scope_start(tSimStateHdl simHdl, const char* name);
 extern void vcd_write_scope_start(tSimStateHdl simHdl,
 				  const char* name,
 				  const char* module_type);
+/* also records where the scope's module is defined (src_file:src_line)
+ * and where it is instantiated (inst_file:inst_line), each when the
+ * file is non-NULL, for formats that can express it (FST) */
+extern void vcd_write_scope_start(tSimStateHdl simHdl,
+				  const char* name,
+				  const char* module_type,
+				  const char* src_file, unsigned int src_line,
+				  const char* inst_file, unsigned int inst_line);
 extern void vcd_write_scope_end(tSimStateHdl simHdl);
 /* Define a signal.  The four-argument form records it as register
  * contents of unknown type. */

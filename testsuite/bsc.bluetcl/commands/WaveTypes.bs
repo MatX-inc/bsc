@@ -3,10 +3,11 @@ package WaveTypes where
 -- A design whose waveform carries every kind of signal the dumper
 -- names: registers of struct, union, enum, Maybe and Vector types and
 -- of types with hand-written Bits instances, a wire, a FIFO, rule
--- fires, and a synthesized submodule.  One shared core, instantiated
--- by a separate top module per link configuration.
+-- fires, a synthesized submodule and an inlined one.  One shared core,
+-- instantiated by a separate top module per link configuration.
 
 import FIFO
+import DReg
 import Vector
 
 data Color = Red | Green | Blue
@@ -50,6 +51,28 @@ instance Bits Packet 9 where
     Narrow f -> (1 :: Bit 1) ++ f ++ (0 :: Bit 2)
   unpack b = if b[8:8] == 0 then Wide b[7:0] else Narrow b[7:2]
 
+interface Pair =
+  bump :: Action
+  total :: UInt 8
+
+-- A module that is not synthesized separately: its contents are
+-- inlined into the module instantiating it, and appear in a dump
+-- under its instance name.  mkDReg is a library module whose only
+-- content is a register.
+mkPair :: Module Pair
+mkPair =
+  module
+    lo :: Reg (UInt 4) <- mkReg 0
+    hi :: Reg (UInt 4) <- mkReg 0
+    d :: Reg (UInt 4) <- mkDReg 0
+    rules
+      "carry": when lo == 15 ==> hi := hi + 1
+    interface
+      bump = do
+        lo := lo + 1
+        d := lo
+      total = zeroExtend hi * 16 + zeroExtend lo
+
 interface Stash =
   push :: Pixel -> Action
   top :: Pixel
@@ -84,9 +107,11 @@ mkWaveTypesCore =
     w :: RWire (UInt 16) <- mkRWire
     source :: Reg Source <- mkReg Zeros
     packet :: Reg Packet <- mkReg (Wide 0)
+    pair :: Pair <- mkPair
     rules
       "step": when True ==> do
         tick := tick + 1
+        pair.bump
         source := unpack (truncate (pack tick))
         packet := if (pack tick)[0:0] == 1 then Narrow (truncate (pack tick)) else Wide (truncate (pack tick))
         stash.push (Pixel { x = truncate tick; y = truncate (tick + 1); color = Green })

@@ -75,8 +75,10 @@ class MOD_ClockMux : public Module
   {
   }
 
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL) const
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     return (num);
   }
 
@@ -231,8 +233,10 @@ class MOD_ClockSelect : public Module
   {
   }
 
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL) const
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     return (num);
   }
   void dump_VCD(tVCDDumpType /* unused */,

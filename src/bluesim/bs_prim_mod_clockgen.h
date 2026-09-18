@@ -37,9 +37,11 @@ class MOD_ClockGen : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL) const
   {
-    vcd_write_scope_start(sim_hdl, inst_name);
+    const char* wave_name = (name != NULL) ? name : inst_name;
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK_OUT", 1);
     vcd_write_scope_end(sim_hdl);
     return (num);
@@ -151,11 +153,13 @@ class MOD_MakeClock : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
     unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK_OUT", 1);
     vcd_write_def(sim_hdl, n++, "CLK_GATE_OUT", 1);
     vcd_write_def(sim_hdl, n++, "CLK_VAL_OUT", 1);
@@ -252,11 +256,13 @@ class MOD_ClockInverter : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 4);
     unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, n++, "CLK_IN", 1);
     vcd_write_def(sim_hdl, n++, "CLK_GATE_IN", 1);
     vcd_write_def(sim_hdl, n++, "PREEDGE", 1);
@@ -413,11 +419,13 @@ class MOD_ClockDivider : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
     unsigned int n = vcd_num;
-    vcd_write_scope_start(sim_hdl, inst_name);
+    vcd_write_scope_start(sim_hdl, wave_name);
     vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_1), "CLK_IN", 1);
     vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK_OUT", 1);
     vcd_write_def(sim_hdl, n++, "RST", 1);

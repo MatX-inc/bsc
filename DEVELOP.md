@@ -155,7 +155,8 @@ only three things differ between the runs, and all are neutralized:
 * **Codegen-time flags** that shape the emitted bytes must be part of the
   descriptor, or reuse would silently mix them: `keep-fires`, the wave-dump
   on/off state, whether the dump includes compiler-introduced values
-  (`-wave-include-internals`), and `-unspecified-to` (ASAny is lowered at
+  (`-wave-include-internals`), whether it is arranged by source instance
+  (`-wave-source-hierarchy`), and `-unspecified-to` (ASAny is lowered at
   codegen time by `SimPackageOpt`/`SimBlocksToC`) are all recorded; a
   mismatch on any of them makes `isStale` regenerate instead of reuse.
 

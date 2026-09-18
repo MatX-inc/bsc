@@ -39,10 +39,12 @@ class MOD_Probe : public Module
     dump_val(value, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     char* buf = NULL;
-    int sz = asprintf(&buf, "%s$PROBE", inst_name);
+    int sz = asprintf(&buf, "%s$PROBE", wave_name);
     if (sz < 0)
       perror("dump_VCD_defs: asprintf");
     vcd_num = vcd_reserve_ids(sim_hdl, 1);
@@ -120,8 +122,10 @@ class MOD_ProbeWire : public Module
   void dump_state(unsigned int indent)
   {
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL,
+                              const char* name = NULL)
   {
+    const char* wave_name = (name != NULL) ? name : inst_name;
     return vcd_num;
   }
   void dump_VCD(tVCDDumpType dt, MOD_ProbeWire<T>& backing)
