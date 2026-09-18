@@ -475,12 +475,20 @@ describeType errh flags symtab t =
 
     -- the members' tag values, when what tells them apart is a range of
     -- bits small enough to enumerate: the range, and per member the
-    -- values of those bits that select it
+    -- values of those bits that select it.  A lone member is selected
+    -- by an empty range at the top of the value (the derived instance's
+    -- zero-width tag).
     tagTable :: [Member] -> Maybe ((Integer, Integer), [[Integer]])
     tagTable members = do
         whens <- mapM mb_when members
         let supp = S.unions (map bitExprSupport whens)
-        if S.null supp then Nothing else do
+            always (BConst _ 1) = True
+            always _ = False
+        if S.null supp
+          then case (typeBits, whens) of
+                 (Just w, [e]) | always e -> Just ((w, w), [[0]])
+                 _ -> Nothing
+          else do
           let lo = S.findMin supp
               hi = S.findMax supp + 1
               tw = hi - lo
