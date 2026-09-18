@@ -12,6 +12,7 @@
 #include "bluesim_types.h"
 #include "bs_wide_data.h"
 #include "bs_module.h"
+#include "bs_wave_kind.h"
 
 typedef enum { VCD_DUMP_NONE
 	     , VCD_DUMP_XS
@@ -67,10 +68,24 @@ extern void vcd_write_scope_start(tSimStateHdl simHdl,
 				  const char* name,
 				  const char* module_type);
 extern void vcd_write_scope_end(tSimStateHdl simHdl);
+/* Define a signal.  The four-argument form records it as register
+ * contents of unknown type. */
 extern void vcd_write_def(tSimStateHdl simHdl,
 			  unsigned int num,
 			  const char* name,
 			  unsigned int width);
+extern void vcd_write_def(tSimStateHdl simHdl,
+			  unsigned int num,
+			  const char* name,
+			  unsigned int width,
+			  tWaveKind kind,
+			  const char* type_name);
+/* The type of one of a primitive's ports, looked up in the table the
+ * generated parent passes to its dump_VCD_defs: alternating port-name
+ * and type-name strings, NULL-terminated, or NULL when the parent
+ * recorded no types.  Returns NULL for a port not in the table. */
+extern const char* wave_port_type(const char* const* port_types,
+				  const char* port);
 extern void vcd_advance(tSimStateHdl simHdl, bool immediate);
 extern void vcd_output_at_time(tSimStateHdl simHdl, tTime time);
 extern void vcd_write_x(tSimStateHdl simHdl,

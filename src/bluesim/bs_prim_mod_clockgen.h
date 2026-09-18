@@ -37,7 +37,7 @@ class MOD_ClockGen : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
   {
     vcd_write_scope_start(sim_hdl, inst_name);
     vcd_write_def(sim_hdl, bk_clock_vcd_num(sim_hdl, __clk_handle_0), "CLK_OUT", 1);
@@ -151,7 +151,7 @@ class MOD_MakeClock : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
     unsigned int n = vcd_num;
@@ -252,7 +252,7 @@ class MOD_ClockInverter : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 4);
     unsigned int n = vcd_num;
@@ -413,7 +413,7 @@ class MOD_ClockDivider : public Module
   void dump_state(unsigned int /* unused */, bool with_label=true) const
   {
   }
-  unsigned int dump_VCD_defs(unsigned int num)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
     unsigned int n = vcd_num;

@@ -167,7 +167,11 @@ data Flags = Flags {
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
         warnMethodUrgency :: Bool,
-        warnUndetPred :: Bool
+        warnUndetPred :: Bool,
+        -- whether Bluesim waveform dumps include the values the compiler
+        -- introduced (unnamed and expression-named defs) alongside the
+        -- design's own registers, ports and rule fires
+        waveIncludeInternals :: Bool
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

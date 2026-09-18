@@ -291,16 +291,25 @@ onePackageToBlock flags name_map full_meth_map ss pkg =
       -- ----------
       -- gather all method ports
       meth_map  = findModMeth full_meth_map class_name
-      meth_ens  = [ (aTBool, vName_to_id vn, vn)
+      port_type vn = M.lookup vn (sp_external_wire_types pkg)
+      meth_ens  = [ (aTBool, vName_to_id vn, vn, SPK_Enable, Nothing)
                   | ((Just vn),_,_,_,_) <- M.elems meth_map
                   ]
-      meth_args = concat [ ins | (_,ins,_,_,_) <- M.elems meth_map ]
-      meth_rets = [ (rt, n, vn)
+      meth_args = [ (t, i, vn, SPK_Arg, port_type vn)
+                  | (_,ins,_,_,_) <- M.elems meth_map
+                  , (t, i, vn) <- ins
+                  ]
+      meth_rets = [ (rt, n, vn, SPK_Return, port_type vn)
                   | (n, (_,_,(Just (rt,vn)),_,_)) <- M.toList meth_map
                   ]
       -- Sort by base name so the order doesn't depend on the AId map order
       -- (AId's Ord follows run-dependent interned-FString order).
-      ports = sortOn (\(_,a,_) -> getIdBaseString a) (meth_ens ++ meth_args ++ meth_rets)
+      ports = sortOn (\(_,a,_,_,_) -> getIdBaseString a) (meth_ens ++ meth_args ++ meth_rets)
+
+      -- the recorded source types of each instance's ports, for the
+      -- waveform dump of the primitives
+      inst_port_types = [ (avi_vname avi, M.toList (avi_port_types avi))
+                        | avi <- raw_avis ]
 
       -- ----------
       -- clock domains
@@ -428,6 +437,7 @@ onePackageToBlock flags name_map full_meth_map ss pkg =
                               (map fst output_resets)
                               input_clks
                               gate_map
+                              inst_port_types
   in sim_block
 
 -- Get the name of the SimPackage's module as a String

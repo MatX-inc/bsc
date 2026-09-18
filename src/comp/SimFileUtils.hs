@@ -49,6 +49,9 @@ codeGenOptionDescr flags is_top =
               -- not matter, only whether any is enabled
               (if (any (`elem` ["vcd", "fst"]) (dumpFormats flags))
                then [] else ["no-wave-dump"]) ++
+              -- likewise the compiler-introduced values are either dumped
+              -- or absent from the generated dump code
+              (if (waveIncludeInternals flags) then [] else ["no-wave-internals"]) ++
               -- ASAny lowering happens at codegen time (SimPackageOpt and
               -- SimBlocksToC read unSpecTo), so an object generated under
               -- a different -unspecified-to must not be reused: its bytes

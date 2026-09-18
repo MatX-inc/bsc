@@ -151,12 +151,12 @@ moveDefsOntoStack flags instmodmap (blocks,scheds) =
                              | b <- blocks
                              , let defs = (sb_publicDefs b) ++
                                           (sb_privateDefs b) ++
-                                          [(t,i) | (t,i,_) <- sb_methodPorts b]
+                                          [(t,i) | (t,i,_,_,_) <- sb_methodPorts b]
                              , (ty,aid) <- defs
                              ]
 
       -- record which Ids are for ports
-      port_set = S.fromList [ (sb_id b, aid) | b <- blocks, (_,aid,_) <- sb_methodPorts b ]
+      port_set = S.fromList [ (sb_id b, aid) | b <- blocks, (_,aid,_,_,_) <- sb_methodPorts b ]
 
       -- record which Ids are for ATaskAction
       atask_set = S.fromList [ (sb_id b, aid) | b <- blocks, aid <- sb_taskDefs b ]
@@ -274,7 +274,7 @@ moveDefsOntoStack flags instmodmap (blocks,scheds) =
                 , let sbid  = sb_id b
                 , let pubs  = filter ((isNotDeleted sbid) . snd) (sb_publicDefs b)
                 , let privs = filter ((isNotDeleted sbid) . snd) (sb_privateDefs b)
-                , let ports = filter ((isNotDeleted sbid) . sndOf3) (sb_methodPorts b)
+                , let ports = filter (\(_,i,_,_,_) -> isNotDeleted sbid i) (sb_methodPorts b)
                 , let rls   = [ (mcd, mapSnd (moveDefs (Just sbid)) fns)
                               | (mcd, fns) <- sb_rules b
                               ]

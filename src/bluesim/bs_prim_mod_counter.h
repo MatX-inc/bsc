@@ -165,30 +165,30 @@ class MOD_Counter : public Module
     dump_val(val, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 9);
     unsigned int n = vcd_num;
-    vcd_write_def(sim_hdl, n++, inst_name, bits);
+    vcd_write_def(sim_hdl, n++, inst_name, bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT"));
     vcd_write_scope_start(sim_hdl, inst_name);
     vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "ADDA", 1);
+    vcd_write_def(sim_hdl, n++, "ADDA", 1, WAVE_INPUT, "Bool");
     vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "DATA_A", bits);
+    vcd_write_def(sim_hdl, n++, "DATA_A", bits, WAVE_INPUT, wave_port_type(port_types, "Q_OUT"));
     vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "ADDB", 1);
+    vcd_write_def(sim_hdl, n++, "ADDB", 1, WAVE_INPUT, "Bool");
     vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "DATA_B", bits);
+    vcd_write_def(sim_hdl, n++, "DATA_B", bits, WAVE_INPUT, wave_port_type(port_types, "Q_OUT"));
     vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "SETC", 1);
+    vcd_write_def(sim_hdl, n++, "SETC", 1, WAVE_INPUT, "Bool");
     vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "DATA_C", bits);
+    vcd_write_def(sim_hdl, n++, "DATA_C", bits, WAVE_INPUT, wave_port_type(port_types, "Q_OUT"));
     vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "SETF", 1);
+    vcd_write_def(sim_hdl, n++, "SETF", 1, WAVE_INPUT, "Bool");
     vcd_set_clock(sim_hdl, n, __clk_handle_0);
-    vcd_write_def(sim_hdl, n++, "DATA_F", bits);
-    vcd_write_def(sim_hdl, vcd_num, "q_state", bits); // alias
-    vcd_write_def(sim_hdl, vcd_num, "Q_OUT", bits); // alias
+    vcd_write_def(sim_hdl, n++, "DATA_F", bits, WAVE_INPUT, wave_port_type(port_types, "Q_OUT"));
+    vcd_write_def(sim_hdl, vcd_num, "q_state", bits, WAVE_STATE, wave_port_type(port_types, "Q_OUT")); // alias
+    vcd_write_def(sim_hdl, vcd_num, "Q_OUT", bits, WAVE_OUTPUT, wave_port_type(port_types, "Q_OUT")); // alias
     vcd_write_scope_end(sim_hdl);
     return (vcd_num + 9);
   }

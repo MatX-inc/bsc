@@ -86,7 +86,7 @@ simBlocksToC flags time top_block def_clk def_rst
             [ (sb_id sb, wide_defs) |
                   sb <- mod_blocks,
                   let defs = sb_publicDefs sb ++ sb_privateDefs sb,
-                  let ports = [ (t,vName_to_id vn) | (t,_,vn) <- sb_methodPorts sb ],
+                  let ports = [ (t,vName_to_id vn) | (t,_,vn,_,_) <- sb_methodPorts sb ],
                   let wide_defs = map snd $ filter isWideDef (defs ++ ports) ]
         wdef_inst_map =
             M.fromList
@@ -208,13 +208,15 @@ convertModuleBlock flags sb_map ff_map clk_map wdef_mod_map reused top_blk write
         -- with -dump-formats none it is stubbed out, dropping a lot of
         -- generated code in large/replicated designs.
         genVCD = any (`elem` ["vcd", "fst"]) (dumpFormats flags)
+        wave_gen = WaveGen { wg_dump = genVCD
+                           , wg_internals = waveIncludeInternals flags }
 
         -- class declaration (for the H file)
         class_decl = simCCBlockToClassDeclaration genVCD sb_map sb
 
         -- method definitions (for the CXX file)
         (method_defs, state) =
-            runState (simCCBlockToClassDefinition genVCD sb_map dom_map sb)
+            runState (simCCBlockToClassDefinition wave_gen sb_map dom_map sb)
                      (initialState ff_map wdef_inst_map (unSpecTo flags))
         lit_defs = mkLiteralDecls (nub (literals state))
         str_defs = mkStringDecls (M.toList (str_map state))

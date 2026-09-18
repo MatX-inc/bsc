@@ -33,7 +33,7 @@ HEADERS = bluesim_kernel_api.h \
           bs_symbol.h \
           bs_system_tasks.h \
           bs_mem_defines.h bs_mem_file.h bs_range_tracker.h \
-          bs_vcd.h bs_module.h bs_target.h \
+          bs_wave_kind.h bs_vcd.h bs_module.h bs_target.h \
           bs_model.h
 
 # These ld export maps get copies to the inst/lib/Bluesim area

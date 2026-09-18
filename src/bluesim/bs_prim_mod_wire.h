@@ -84,15 +84,15 @@ class MOD_Wire : public Module
       dump_val(value, bits);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 1);
     if (shift_vcd)
       vcd_set_clock(sim_hdl, vcd_num, __clk_handle_0);
     if (bits > 0)
-      vcd_write_def(sim_hdl, vcd_num, inst_name, bits);
+      vcd_write_def(sim_hdl, vcd_num, inst_name, bits, WAVE_WIRE, wave_port_type(port_types, (bits > 0) ? "WGET" : "WHAS"));
     else
-      vcd_write_def(sim_hdl, vcd_num, inst_name, 1);  // pulse wire
+      vcd_write_def(sim_hdl, vcd_num, inst_name, 1, WAVE_WIRE, wave_port_type(port_types, (bits > 0) ? "WGET" : "WHAS"));  // pulse wire
     return (vcd_num + 1);
   }
   void dump_VCD(tVCDDumpType dt, MOD_Wire<T>& backing)

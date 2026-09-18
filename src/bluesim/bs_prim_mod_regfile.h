@@ -464,7 +464,7 @@ class MOD_RegFile : public Module
     }
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int num)
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL)
   {
     // Memory contents are not dumped
     // Please update ../lib/tcllib/bluespec/Waves.tcl proc correct_regfile_names

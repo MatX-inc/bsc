@@ -104,7 +104,7 @@ class MOD_SyncReset: public Module
   {
     printf("%*s%s:\n", indent, "", inst_name);
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 2);
     unsigned int n = vcd_num;
@@ -238,7 +238,7 @@ class MOD_InitialReset: public Module
   {
     printf("%*s%s:\n", indent, "", inst_name);
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 3);
     vcd_write_scope_start(sim_hdl, inst_name);
@@ -337,7 +337,7 @@ class MOD_MakeReset: public Module
     dump_val(rst, 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 1);
     vcd_write_scope_start(sim_hdl, inst_name);
@@ -441,7 +441,7 @@ class MOD_MakeReset0: public Module
     dump_val(rst, 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 1);
     vcd_write_scope_start(sim_hdl, inst_name);
@@ -551,7 +551,7 @@ class MOD_ResetMux : public Module
     // no state dump
   }
 
-  unsigned int dump_VCD_defs(unsigned int num) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
   {
     // no VCD output
     return (num);
@@ -622,7 +622,7 @@ class MOD_ResetEither : public Module
     // no state dump
   }
 
-  unsigned int dump_VCD_defs(unsigned int num) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
   {
     // no VCD output
     return (num);
@@ -671,7 +671,7 @@ class MOD_ResetToBool : public Module
     // no state dump
   }
 
-  unsigned int dump_VCD_defs(unsigned int num) const
+  unsigned int dump_VCD_defs(unsigned int num, const char* const* port_types = NULL) const
   {
     // no VCD output
     return (num);

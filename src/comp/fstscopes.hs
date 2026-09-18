@@ -43,6 +43,12 @@ foreign import ccall unsafe "bsc_fsthier_var_length"
     hierVarLength :: Ptr FstHier -> IO CUInt
 foreign import ccall unsafe "bsc_fsthier_var_is_alias"
     hierVarIsAlias :: Ptr FstHier -> IO CInt
+foreign import ccall unsafe "bsc_fsthier_var_type_name"
+    hierVarTypeName :: Ptr FstHier -> IO CString
+foreign import ccall unsafe "bsc_fsthier_var_direction_name"
+    hierVarDirectionName :: Ptr FstHier -> IO CString
+foreign import ccall unsafe "bsc_fsthier_attr_name"
+    hierAttrName :: Ptr FstHier -> IO CString
 
 main :: IO ()
 main = do
@@ -62,23 +68,40 @@ dumpHierarchy fname = do
   printEntries ctx
   fstReaderClose ctx
 
+-- Each variable prints as
+--   var <width> <name> [(alias)] <reg|wire|...> [<direction>] [: <type>]
+-- where the type is the name recorded by the writer, when there is one
+-- (it arrives as an attribute entry just ahead of its variable).
 printEntries :: Ptr FstReader -> IO ()
-printEntries ctx = do
-  h <- fstReaderIterateHier ctx
-  when (h /= nullPtr) $ do
-    kind <- hierKind h
-    case kind of
-      0 -> do name <- hierScopeName h >>= peekCString
-              compPtr <- hierScopeComponent h
-              comp <- if compPtr == nullPtr
-                      then return "-"
-                      else peekCString compPtr
-              putStrLn ("scope " ++ name ++ " " ++ comp)
-      1 -> putStrLn "upscope"
-      2 -> do name <- hierVarName h >>= peekCString
-              len <- hierVarLength h
-              alias <- hierVarIsAlias h
-              putStrLn ("var " ++ show len ++ " " ++ name ++
-                        (if alias /= 0 then " (alias)" else ""))
-      _ -> return ()
-    printEntries ctx
+printEntries ctx = loop Nothing
+  where
+    loop pending_type = do
+      h <- fstReaderIterateHier ctx
+      when (h /= nullPtr) $ do
+        kind <- hierKind h
+        case kind of
+          0 -> do name <- hierScopeName h >>= peekCString
+                  compPtr <- hierScopeComponent h
+                  comp <- if compPtr == nullPtr
+                          then return "-"
+                          else peekCString compPtr
+                  putStrLn ("scope " ++ name ++ " " ++ comp)
+                  loop Nothing
+          1 -> do putStrLn "upscope"
+                  loop Nothing
+          2 -> do name <- hierVarName h >>= peekCString
+                  len <- hierVarLength h
+                  alias <- hierVarIsAlias h
+                  vt <- hierVarTypeName h >>= peekCString
+                  dirPtr <- hierVarDirectionName h
+                  dir <- if dirPtr == nullPtr
+                         then return ""
+                         else fmap (' ' :) (peekCString dirPtr)
+                  putStrLn ("var " ++ show len ++ " " ++ name ++
+                            (if alias /= 0 then " (alias)" else "") ++
+                            " " ++ vt ++ dir ++
+                            maybe "" (" : " ++) pending_type)
+                  loop Nothing
+          4 -> do t <- hierAttrName h >>= peekCString
+                  loop (Just t)
+          _ -> loop pending_type

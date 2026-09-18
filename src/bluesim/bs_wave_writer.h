@@ -14,6 +14,7 @@
 
 #include "bluesim_types.h"
 #include "bs_wide_data.h"
+#include "bs_wave_kind.h"
 
 // Waveform dumper version, shared by all formats
 static const unsigned int bs_wave_major_rev = 2;
@@ -36,10 +37,15 @@ public:
   virtual void write_header(const char* timescale) = 0;
   virtual void start_scope(const char* name, const char* module_type) = 0;
   virtual void end_scope() = 0;
-  // Defining the same num again creates an alias of the earlier signal
+  // Defining the same num again creates an alias of the earlier signal.
+  // kind says what the signal is (tWaveKind, bs_wave_kind.h) and
+  // type_name is its Bluespec type, or NULL when not recorded; a format
+  // records whichever of the two it has a place for.
   virtual void write_def(unsigned int num,
                          const char* name,
-                         unsigned int width) = 0;
+                         unsigned int width,
+                         tWaveKind kind,
+                         const char* type_name) = 0;
   virtual void end_definitions() = 0;
 
   // Time stamps and $dump* task markers.  Calls arrive in the order:

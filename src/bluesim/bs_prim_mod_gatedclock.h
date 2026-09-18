@@ -89,7 +89,7 @@ class MOD_GatedClock : public Module
     dump_val(PORT_CLK_GATE_OUT, 1);
     putchar('\n');
   }
-  unsigned int dump_VCD_defs(unsigned int /* num */)
+  unsigned int dump_VCD_defs(unsigned int /* num */, const char* const* port_types = NULL)
   {
     vcd_num = vcd_reserve_ids(sim_hdl, 1);
     vcd_write_scope_start(sim_hdl, inst_name);
