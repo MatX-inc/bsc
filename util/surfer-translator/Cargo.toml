@@ -1,0 +1,30 @@
+# Surfer translator plugin for Bluesim waveform dumps.  Built as a
+# WebAssembly module for Surfer's extism plugin interface:
+#
+#   cargo build --release --target wasm32-unknown-unknown
+#
+# and installed by copying (or linking)
+# target/wasm32-unknown-unknown/release/bsc_wave_translator.wasm into a
+# .surfer/translators/ directory that Surfer searches.
+[package]
+name = "bsc_wave_translator"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+extism-pdk = "1.4.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The plugin ABI types, at the Surfer revision the plugin is built for
+surfer-translation-types = { git = "https://gitlab.com/surfer-project/surfer.git", rev = "d8ece80b92047b1313154006b88ee74a3ad2886e", features = ["wasm_plugins"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+# Stand-alone, whatever directory tree it is placed in
+[workspace]
