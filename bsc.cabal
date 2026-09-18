@@ -177,6 +177,7 @@ library
     GraphPaths
     GraphUtil
     GraphWrapper
+    GroundCType
     HTcl
     IConv
     IConvLet
