@@ -46,6 +46,8 @@ struct DebugInfo {
 #[derive(Deserialize)]
 struct Signal {
     synthpath: Vec<String>,
+    #[serde(default)]
+    bsvpath: Vec<String>,
     #[serde(rename = "type")]
     ty: Option<String>,
 }
@@ -109,7 +111,9 @@ struct TagRange {
 
 struct Loaded {
     info: DebugInfo,
-    // dump path ("main.top.core.cell") -> the signal's type name
+    // dump path ("main.top.core.cell") -> the signal's type name, under
+    // both the synthesized and the source hierarchy's spelling (the dump
+    // follows one or the other)
     type_by_path: HashMap<String, String>,
 }
 
@@ -129,12 +133,23 @@ fn load(wave_path: &str) {
     let Ok(info) = serde_json::from_slice::<DebugInfo>(&bytes) else {
         return;
     };
-    let type_by_path = info
-        .signals
-        .iter()
-        .filter_map(|s| s.ty.clone().map(|t| (s.synthpath.join("."), t)))
-        .collect();
+    let type_by_path = paths_to_types(&info);
     *slot = Some(Loaded { info, type_by_path });
+}
+
+fn paths_to_types(info: &DebugInfo) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for s in &info.signals {
+        let Some(t) = &s.ty else { continue };
+        map.insert(s.synthpath.join("."), t.clone());
+        if !s.bsvpath.is_empty() {
+            // the source path is relative to the top module's scope
+            let mut path = s.synthpath[..2.min(s.synthpath.len())].to_vec();
+            path.extend(s.bsvpath.iter().cloned());
+            map.entry(path.join(".")).or_insert_with(|| t.clone());
+        }
+    }
+    map
 }
 
 // ---------------------------------------------------------------------
@@ -661,11 +676,7 @@ mod tests {
         .unwrap();
         let json = &text[text.find('{').unwrap()..];
         let info: DebugInfo = serde_json::from_str(json).unwrap();
-        let type_by_path = info
-            .signals
-            .iter()
-            .filter_map(|s| s.ty.clone().map(|t| (s.synthpath.join("."), t)))
-            .collect();
+        let type_by_path = paths_to_types(&info);
         Loaded { info, type_by_path }
     }
 
@@ -784,6 +795,15 @@ mod tests {
         assert_eq!(
             l.type_by_path.get("main.top.cell").map(String::as_str),
             Some("WaveTypes::Cell")
+        );
+        // an inlined instance's register, under either hierarchy's path
+        assert_eq!(
+            l.type_by_path.get("main.top.pair_lo").map(String::as_str),
+            Some("UInt#(4)")
+        );
+        assert_eq!(
+            l.type_by_path.get("main.top.pair.lo").map(String::as_str),
+            Some("UInt#(4)")
         );
     }
 }
