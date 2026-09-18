@@ -6,6 +6,7 @@ bsc_compile TestSchedErr.bsv {-verilog -elab}
 bsc_compile TaggedUnionPoly.bsv
 bsc_compile WireTypes.bsv {-verilog -elab}
 bsc_compile SplitPortsTest.bs {-verilog -elab}
+bsc_compile WaveTypes.bs {-sim -elab}
 bsc_compile ClockTest.bsv {-verilog -elab}
 
 set sedPosition {-e /position.*%/s/\[0-9\]/N/g}
@@ -50,6 +51,12 @@ bluetcl_run_compare_pass module.tcl
 
 # Test "module wiretypemap" (VCD type-correlation map)
 bluetcl_run_compare_pass wiretypemap.tcl
+
+# Test "module wavedebuginfo" (JSON debug info for waveform dumps).
+# The output is the same in both syntaxes, and source positions are
+# compared without their directories.
+set sedFileDir {-e {s|"file": ".*/|"file": "|}}
+bluetcl_run_compare_pass wavedebuginfo.tcl wavedebuginfo.tcl.bluetcl-out.expected wavedebuginfo.tcl.bluetcl-out.expected {} $sedFileDir
 
 # Coverage: SplitPorts sub-interface with collapsed method arg
 bluetcl_run_compare_pass splitports.tcl

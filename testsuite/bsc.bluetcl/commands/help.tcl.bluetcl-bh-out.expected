@@ -37,6 +37,7 @@ Subcommands:
   ports <module>                Show the ports of a module
   porttypes <module>            Show the types of the ports of a module
   wiretypemap <module>          Map wire names to source types, for VCD correlation
+  wavedebuginfo <module> <file> Write JSON debug information for a design's waveform dumps
   list                          List the loaded modules
   methodconditions <module>     Show the method predicates of a module
 ----------

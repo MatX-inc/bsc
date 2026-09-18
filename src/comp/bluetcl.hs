@@ -74,6 +74,8 @@ import VModInfo
 import ADumpSchedule
 import BackendNamingConventions
 import WireAnalysis(getWireTypeMap)
+import WaveDebugInfo(waveDebugInfo)
+import FileIOUtil(writeFileCatch)
 
 import TclParseUtils
 
@@ -981,6 +983,7 @@ moduleGrammar = (tclcmd "module" namespace helpStr "") .+.
                        , rulesGrammar, ifcGrammar, methodsGrammar
                        , bflagsGrammar
                        , portsGrammar, porttypesGrammar, wiretypemapGrammar
+                       , wavedebuginfoGrammar
                        , listGrammar
                        , methodConditionsGrammar
                        ])
@@ -1010,6 +1013,12 @@ moduleGrammar = (tclcmd "module" namespace helpStr "") .+.
                   "Map wire names to source types, for VCD correlation"
                   "") .+.
               (arg "module" StringArg "module name")
+          wavedebuginfoGrammar =
+              (kw "wavedebuginfo"
+                  "Write JSON debug information for a design's waveform dumps"
+                  "") .+.
+              (arg "module" StringArg "top module name") .+.
+              (arg "file" StringArg "output file")
 
 
 bflagsGrammar :: HTclCmdGrammar
@@ -1221,6 +1230,25 @@ tclModule ["wiretypemap",modname] = do
            let apkg = abemi_apkg abmi
                mkEntryObj (name, t) = TLst [TStr name, TStr (pfpString t)]
            return $ TLst $ map mkEntryObj $ getWireTypeMap apkg
+------
+-- Debug information for the waveforms of the design under `modname`:
+-- which dumped signal is which source entity, and the bit layouts of
+-- their types.  The layouts need the design's packages loaded, for
+-- their type definitions.
+tclModule ["wavedebuginfo", modname, file] = do
+  g <- readIORef globalVar
+  case (tp_mods g) of
+    Nothing -> ioError $ userError "No module has been loaded"
+    Just (_, hierMap, _, _, _, abmis) -> do
+      when (isNothing (lookup modname abmis)) $
+          ioError $ userError ("Module " ++ quote modname ++ " is not loaded")
+      _ <- tclPackage ("load" : nub (map (abemi_src_name . snd) abmis))
+      g' <- readIORef globalVar
+      case (waveDebugInfo (tp_flags g') (tp_symtab g') hierMap abmis modname) of
+        Left errs -> do reportErrorsToTcl [] errs
+                        return $ TLst []
+        Right json -> do writeFileCatch globalErrHandle file json
+                         return $ TStr file
 ------
 tclModule ["flags",modname] = do
   if (isPrimitiveModule modname)

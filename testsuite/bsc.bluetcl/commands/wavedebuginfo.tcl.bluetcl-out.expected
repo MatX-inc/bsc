@@ -1,0 +1,379 @@
+-sim
+mkStash mkWaveTypesCore
+wavedebuginfo.json
+{
+  "format": "bsc-wave-debug-info",
+  "version": 1,
+  "top": "mkWaveTypesCore",
+  "signals": [
+    {
+      "synthpath": ["main", "top", "cell"],
+      "bsvpath": ["cell"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "WaveTypes::Cell",
+      "file": "WaveTypes.bs",
+      "line": 50,
+      "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "WILL_FIRE_RL_done"],
+      "bsvpath": ["done", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "done",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 63,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "CAN_FIRE_RL_done"],
+      "bsvpath": ["done", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "done",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 63,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "maybeIdx"],
+      "bsvpath": ["maybeIdx"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "Maybe#(UInt#(16))",
+      "file": "WaveTypes.bs",
+      "line": 51,
+      "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "palette"],
+      "bsvpath": ["palette"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "Vector::Vector#(4, WaveTypes::Color)",
+      "file": "WaveTypes.bs",
+      "line": 52,
+      "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "stash"],
+      "bsvpath": ["stash"],
+      "kind": "module",
+      "module": "mkStash",
+      "file": "WaveTypes.bs",
+      "line": 49,
+      "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "stash", "push_1"],
+      "bsvpath": ["stash", "push", "arg1"],
+      "kind": "port",
+      "role": "arg",
+      "method": "push",
+      "type": "WaveTypes::Pixel",
+      "file": "WaveTypes.bs",
+      "line": 29,
+      "column": 0
+    },
+    {
+      "synthpath": ["main", "top", "stash", "EN_push"],
+      "bsvpath": ["stash", "push", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "push",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 29,
+      "column": 0
+    },
+    {
+      "synthpath": ["main", "top", "stash", "RDY_push"],
+      "bsvpath": ["stash", "push", "RDY"],
+      "kind": "port",
+      "role": "ready",
+      "method": "push",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 29,
+      "column": 0
+    },
+    {
+      "synthpath": ["main", "top", "stash", "top"],
+      "bsvpath": ["stash", "top"],
+      "kind": "port",
+      "role": "result",
+      "method": "top",
+      "type": "WaveTypes::Pixel",
+      "file": "WaveTypes.bs",
+      "line": 29,
+      "column": 0
+    },
+    {
+      "synthpath": ["main", "top", "stash", "RDY_top"],
+      "bsvpath": ["stash", "top", "RDY"],
+      "kind": "port",
+      "role": "ready",
+      "method": "top",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 29,
+      "column": 0
+    },
+    {
+      "synthpath": ["main", "top", "stash", "depth"],
+      "bsvpath": ["stash", "depth"],
+      "kind": "port",
+      "role": "result",
+      "method": "depth",
+      "type": "UInt#(8)",
+      "file": "WaveTypes.bs",
+      "line": 29,
+      "column": 0
+    },
+    {
+      "synthpath": ["main", "top", "stash", "RDY_depth"],
+      "bsvpath": ["stash", "depth", "RDY"],
+      "kind": "port",
+      "role": "ready",
+      "method": "depth",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 29,
+      "column": 0
+    },
+    {
+      "synthpath": ["main", "top", "stash", "cnt"],
+      "bsvpath": ["stash", "cnt"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(8)",
+      "file": "WaveTypes.bs",
+      "line": 33,
+      "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "stash", "WILL_FIRE_RL_drain"],
+      "bsvpath": ["stash", "drain", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "drain",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 36,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "stash", "CAN_FIRE_RL_drain"],
+      "bsvpath": ["stash", "drain", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "drain",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 36,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "stash", "last"],
+      "bsvpath": ["stash", "last"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "WaveTypes::Pixel",
+      "file": "WaveTypes.bs",
+      "line": 34,
+      "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "stash", "q"],
+      "bsvpath": ["stash", "q"],
+      "kind": "state",
+      "prim": "FIFO2",
+      "type": "WaveTypes::Pixel",
+      "file": "WaveTypes.bs",
+      "line": 32,
+      "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "WILL_FIRE_RL_step"],
+      "bsvpath": ["step", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "step",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 56,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "CAN_FIRE_RL_step"],
+      "bsvpath": ["step", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "step",
+      "type": "Bool",
+      "file": "WaveTypes.bs",
+      "line": 56,
+      "column": 6
+    },
+    {
+      "synthpath": ["main", "top", "tick"],
+      "bsvpath": ["tick"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(16)",
+      "file": "WaveTypes.bs",
+      "line": 53,
+      "column": 4
+    },
+    {
+      "synthpath": ["main", "top", "w"],
+      "bsvpath": ["w"],
+      "kind": "state",
+      "prim": "RWire",
+      "type": "UInt#(16)",
+      "file": "WaveTypes.bs",
+      "line": 54,
+      "column": 4
+    }
+  ],
+  "types": {
+    "WaveTypes::Cell": {
+      "kind": "union",
+      "width": 20,
+      "layout": "derived",
+      "tag": {
+        "lo": 18,
+        "hi": 20
+      },
+      "members": [
+        {
+          "name": "Px",
+          "type": "WaveTypes::Pixel",
+          "width": 18,
+          "tag": 0,
+          "lo": 0,
+          "hi": 18
+        },
+        {
+          "name": "Idx",
+          "type": "UInt#(16)",
+          "width": 16,
+          "tag": 1,
+          "lo": 0,
+          "hi": 16
+        },
+        {
+          "name": "Empty",
+          "type": "void",
+          "width": 0,
+          "tag": 2,
+          "lo": 0,
+          "hi": 0
+        }
+      ]
+    },
+    "Bool": {
+      "kind": "enum",
+      "width": 1,
+      "members": [
+        {
+          "name": "False",
+          "value": 0
+        },
+        {
+          "name": "True",
+          "value": 1
+        }
+      ]
+    },
+    "Maybe#(UInt#(16))": {
+      "kind": "union",
+      "width": 17,
+      "layout": "derived",
+      "tag": {
+        "lo": 16,
+        "hi": 17
+      },
+      "members": [
+        {
+          "name": "Invalid",
+          "type": "void",
+          "width": 0,
+          "tag": 0,
+          "lo": 0,
+          "hi": 0
+        },
+        {
+          "name": "Valid",
+          "type": "UInt#(16)",
+          "width": 16,
+          "tag": 1,
+          "lo": 0,
+          "hi": 16
+        }
+      ]
+    },
+    "Vector::Vector#(4, WaveTypes::Color)": {
+      "kind": "vector",
+      "width": 8,
+      "length": 4,
+      "elem": "WaveTypes::Color",
+      "stride": 2
+    },
+    "WaveTypes::Pixel": {
+      "kind": "struct",
+      "width": 18,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "x",
+          "type": "UInt#(8)",
+          "width": 8,
+          "lo": 10,
+          "hi": 18
+        },
+        {
+          "name": "y",
+          "type": "UInt#(8)",
+          "width": 8,
+          "lo": 2,
+          "hi": 10
+        },
+        {
+          "name": "color",
+          "type": "WaveTypes::Color",
+          "width": 2,
+          "lo": 0,
+          "hi": 2
+        }
+      ]
+    },
+    "UInt#(8)": {
+      "kind": "primary",
+      "width": 8
+    },
+    "UInt#(16)": {
+      "kind": "primary",
+      "width": 16
+    },
+    "void": {
+      "kind": "primary",
+      "width": 0
+    },
+    "WaveTypes::Color": {
+      "kind": "enum",
+      "width": 2,
+      "members": [
+        {
+          "name": "Red",
+          "value": 0
+        },
+        {
+          "name": "Green",
+          "value": 1
+        },
+        {
+          "name": "Blue",
+          "value": 2
+        }
+      ]
+    }
+  }
+}
