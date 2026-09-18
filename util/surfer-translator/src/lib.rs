@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use extism_pdk::{host_fn, plugin_fn, FnResult, Json};
 use serde::Deserialize;
 use surfer_translation_types::plugin_types::TranslateParams;
-use surfer_translation_types::translator::WaveSource;
+use surfer_translation_types::translator::{TrueName, VariableNameInfo, WaveSource};
 use surfer_translation_types::{
     SubFieldTranslationResult, TranslationPreference, TranslationResult, ValueKind, ValueRepr,
     VariableInfo, VariableMeta, VariableValue,
@@ -43,6 +43,9 @@ struct DebugInfo {
     types: HashMap<String, TypeDesc>,
 }
 
+/// One of the design's own signals: its path in a dump of the synthesized
+/// hierarchy and in the source (also its path in a dump made with
+/// -wave-source-hierarchy), what it is, and where the source declares it
 #[derive(Deserialize)]
 struct Signal {
     synthpath: Vec<String>,
@@ -50,6 +53,10 @@ struct Signal {
     bsvpath: Vec<String>,
     #[serde(rename = "type")]
     ty: Option<String>,
+    kind: Option<String>,
+    file: Option<String>,
+    line: Option<usize>,
+    column: Option<usize>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -111,10 +118,12 @@ struct TagRange {
 
 struct Loaded {
     info: DebugInfo,
-    // dump path ("main.top.core.cell") -> the signal's type name, under
-    // both the synthesized and the source hierarchy's spelling (the dump
-    // follows one or the other)
-    type_by_path: HashMap<String, String>,
+    // dump path ("main.top.core.cell") -> the signal, under both the
+    // synthesized and the source hierarchy's spelling (the dump follows
+    // one or the other)
+    signal_by_path: HashMap<String, usize>,
+    // source files read so far, split into lines (None: unreadable)
+    sources: HashMap<String, Option<Vec<String>>>,
 }
 
 static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
@@ -133,23 +142,48 @@ fn load(wave_path: &str) {
     let Ok(info) = serde_json::from_slice::<DebugInfo>(&bytes) else {
         return;
     };
-    let type_by_path = paths_to_types(&info);
-    *slot = Some(Loaded { info, type_by_path });
+    *slot = Some(Loaded::new(info));
 }
 
-fn paths_to_types(info: &DebugInfo) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for s in &info.signals {
-        let Some(t) = &s.ty else { continue };
-        map.insert(s.synthpath.join("."), t.clone());
-        if !s.bsvpath.is_empty() {
-            // the source path is relative to the top module's scope
-            let mut path = s.synthpath[..2.min(s.synthpath.len())].to_vec();
-            path.extend(s.bsvpath.iter().cloned());
-            map.entry(path.join(".")).or_insert_with(|| t.clone());
+impl Loaded {
+    fn new(info: DebugInfo) -> Loaded {
+        let mut signal_by_path = HashMap::new();
+        for (i, s) in info.signals.iter().enumerate() {
+            signal_by_path.insert(s.synthpath.join("."), i);
+            if !s.bsvpath.is_empty() {
+                // the source path is relative to the top module's scope
+                let mut path = s.synthpath[..2.min(s.synthpath.len())].to_vec();
+                path.extend(s.bsvpath.iter().cloned());
+                signal_by_path.entry(path.join(".")).or_insert(i);
+            }
+        }
+        Loaded {
+            info,
+            signal_by_path,
+            sources: HashMap::new(),
         }
     }
-    map
+
+    fn signal_at(&self, path: &str) -> Option<&Signal> {
+        self.signal_by_path
+            .get(path)
+            .map(|&i| &self.info.signals[i])
+    }
+
+    fn type_at(&self, path: &str) -> Option<&str> {
+        self.signal_at(path).and_then(|s| s.ty.as_deref())
+    }
+
+    /// The lines of a source file, read once through the host
+    fn source_lines(&mut self, file: &str) -> Option<&[String]> {
+        self.sources
+            .entry(file.to_string())
+            .or_insert_with(|| {
+                let text = String::from_utf8(host_read_file(file)?).ok()?;
+                Some(text.lines().map(str::to_string).collect())
+            })
+            .as_deref()
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -175,7 +209,104 @@ fn type_of(loaded: &Loaded, variable: &VariableMeta<(), ()>) -> Option<String> {
         return Some(t.clone());
     }
     let path = variable.var.full_path().join(".");
-    loaded.type_by_path.get(&path).cloned()
+    loaded.type_at(&path).map(str::to_string)
+}
+
+/// A file's bytes, through the host; the native test build has no host
+/// and reads the file system instead
+#[cfg(not(test))]
+fn host_read_file(path: &str) -> Option<Vec<u8>> {
+    unsafe { read_file(path.to_string()) }.ok()
+}
+
+#[cfg(test)]
+fn host_read_file(path: &str) -> Option<Vec<u8>> {
+    std::fs::read(path).ok()
+}
+
+// ---------------------------------------------------------------------
+// Names
+
+/// A compiler-introduced value: bsc names its intermediate results
+/// `<name>__h<n>` (a value lifted out of a rule) or `<name>__d<n>` (an
+/// unnamed subexpression)
+fn is_compiler_temporary(name: &str) -> bool {
+    ["__h", "__d"].iter().any(|marker| {
+        name.match_indices(marker)
+            .any(|(i, _)| name[i + marker.len()..].starts_with(|c: char| c.is_ascii_digit()))
+    })
+}
+
+/// The line of source declaring an entity, split around the identifier
+/// that starts at `column` (0-based, as bsc counts); a quoted name (a
+/// rule's) is taken whole
+fn split_source_line(line: &str, column: usize) -> (String, String, String) {
+    let chars: Vec<char> = line.chars().collect();
+    let start = column.min(chars.len());
+    let end = if chars.get(start) == Some(&'"') {
+        chars[start + 1..]
+            .iter()
+            .position(|&c| c == '"')
+            .map_or(chars.len(), |i| start + i + 2)
+    } else {
+        chars[start..]
+            .iter()
+            .position(|&c| !(c.is_alphanumeric() || c == '_' || c == '$'))
+            .map_or(chars.len(), |i| start + i)
+    };
+    (
+        chars[..start].iter().collect(),
+        chars[start..end].iter().collect(),
+        chars[end..].iter().collect(),
+    )
+}
+
+/// How the variable list should present a variable: the design's own
+/// signals ahead of everything else, a compiler temporary hidden, and a
+/// signal whose dumped name is not its source name shown by the source
+/// line that declares it
+fn name_info(loaded: &mut Loaded, variable: &VariableMeta<(), ()>) -> Option<VariableNameInfo> {
+    let path = variable.var.full_path().join(".");
+    let Some(&index) = loaded.signal_by_path.get(&path) else {
+        return is_compiler_temporary(&variable.var.name).then_some(VariableNameInfo {
+            true_name: None,
+            priority: Some(-1),
+            visible: Some(false),
+        });
+    };
+    let signal = &loaded.info.signals[index];
+    let priority = match signal.kind.as_deref() {
+        Some("state") | Some("module") => 2,
+        Some("port") | Some("fire") => 1,
+        _ => 0,
+    };
+    let source_name = signal.bsvpath.last().cloned();
+    let true_name = match (source_name, &signal.file, signal.line, signal.column) {
+        (Some(name), Some(file), Some(line), Some(column)) if name != variable.var.name => {
+            let file = file.clone();
+            let (before, this, after) = match loaded
+                .source_lines(&file)
+                .and_then(|lines| lines.get(line.wrapping_sub(1)))
+            {
+                Some(text) => split_source_line(text, column),
+                // the file is not at hand: the source name alone
+                None => (String::new(), name, String::new()),
+            };
+            Some(TrueName::SourceCode {
+                line_number: line,
+                before,
+                this,
+                after,
+                file: Some(file),
+            })
+        }
+        _ => None,
+    };
+    Some(VariableNameInfo {
+        true_name,
+        priority: Some(priority),
+        visible: None,
+    })
 }
 
 fn layout_known(desc: &TypeDesc) -> bool {
@@ -635,6 +766,15 @@ pub fn translates(variable: VariableMeta<(), ()>) -> FnResult<TranslationPrefere
 }
 
 #[plugin_fn]
+pub fn variable_name_info(variable: VariableMeta<(), ()>) -> FnResult<Option<VariableNameInfo>> {
+    let mut slot = LOADED.lock().unwrap();
+    let Some(loaded) = slot.as_mut() else {
+        return Ok(None);
+    };
+    Ok(name_info(loaded, &variable))
+}
+
+#[plugin_fn]
 pub fn variable_info(variable: VariableMeta<(), ()>) -> FnResult<VariableInfo> {
     let slot = LOADED.lock().unwrap();
     let Some(loaded) = slot.as_ref() else {
@@ -676,8 +816,18 @@ mod tests {
         .unwrap();
         let json = &text[text.find('{').unwrap()..];
         let info: DebugInfo = serde_json::from_str(json).unwrap();
-        let type_by_path = paths_to_types(&info);
-        Loaded { info, type_by_path }
+        Loaded::new(info)
+    }
+
+    // a variable at the given dump scope, as Surfer hands it to the plugin
+    fn meta(scope: &str, name: &str) -> VariableMeta<(), ()> {
+        serde_json::from_value(serde_json::json!({
+            "var": {"path": {"strs": scope.split('.').collect::<Vec<_>>(), "id": null},
+                    "name": name, "id": null, "index": null},
+            "num_bits": null, "variable_type": null, "variable_type_name": null,
+            "index": null, "direction": null, "enum_map": {}, "encoding": "BitVector"
+        }))
+        .unwrap()
     }
 
     fn flat(r: &TranslationResult) -> String {
@@ -792,18 +942,61 @@ mod tests {
             VariableInfo::Compound { subfields } => assert_eq!(subfields.len(), 3),
             _ => panic!("struct should be compound"),
         }
-        assert_eq!(
-            l.type_by_path.get("main.top.cell").map(String::as_str),
-            Some("WaveTypes::Cell")
-        );
+        assert_eq!(l.type_at("main.top.cell"), Some("WaveTypes::Cell"));
         // an inlined instance's register, under either hierarchy's path
+        assert_eq!(l.type_at("main.top.pair_lo"), Some("UInt#(4)"));
+        assert_eq!(l.type_at("main.top.pair.lo"), Some("UInt#(4)"));
+    }
+
+    #[test]
+    fn names() {
+        let mut l = fixture();
+        // the state of the design outranks its fires, which outrank the rest
+        let state = name_info(&mut l, &meta("main.top", "cell")).unwrap();
+        assert_eq!(state.priority, Some(2));
+        assert!(state.true_name.is_none());
+        let fire = name_info(&mut l, &meta("main.top", "WILL_FIRE_RL_step")).unwrap();
+        assert_eq!(fire.priority, Some(1));
+        // a flattened name is shown by its source name (the file is not
+        // readable here, so the name alone)
+        match fire.true_name {
+            Some(TrueName::SourceCode {
+                this,
+                line_number,
+                file,
+                ..
+            }) => {
+                assert_eq!(this, "WILL_FIRE");
+                assert!(line_number > 0);
+                assert_eq!(file.as_deref(), Some("WaveTypes.bs"));
+            }
+            other => panic!("unexpected true name: {other:?}"),
+        }
+        // a compiler temporary is hidden; anything else unknown is left alone
+        let tmp = name_info(&mut l, &meta("main.top", "cnt___d3")).unwrap();
+        assert_eq!((tmp.priority, tmp.visible), (Some(-1), Some(false)));
+        assert!(name_info(&mut l, &meta("main.top", "CLK")).is_none());
+        assert!(is_compiler_temporary("x__h944"));
+        assert!(!is_compiler_temporary("my__data"));
+    }
+
+    #[test]
+    fn source_line_split() {
         assert_eq!(
-            l.type_by_path.get("main.top.pair_lo").map(String::as_str),
-            Some("UInt#(4)")
+            split_source_line("    lo :: Reg (UInt 4) <- mkReg 0", 4),
+            (
+                "    ".into(),
+                "lo".into(),
+                " :: Reg (UInt 4) <- mkReg 0".into()
+            )
         );
         assert_eq!(
-            l.type_by_path.get("main.top.pair.lo").map(String::as_str),
-            Some("UInt#(4)")
+            split_source_line("      \"carry\": when lo == 15 ==> hi := hi + 1", 6),
+            (
+                "      ".into(),
+                "\"carry\"".into(),
+                ": when lo == 15 ==> hi := hi + 1".into()
+            )
         );
     }
 }
