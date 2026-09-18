@@ -473,7 +473,7 @@ checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
 [[package]]
 name = "surfer-translation-types"
 version = "0.7.0"
-source = "git+https://gitlab.com/surfer-project/surfer.git?rev=d8ece80b92047b1313154006b88ee74a3ad2886e#d8ece80b92047b1313154006b88ee74a3ad2886e"
+source = "git+https://github.com/MatX-inc/surfer.git?branch=william%2Fbluespec-support#1253bc13c9c006db73ce4cd22794bd93ce78707d"
 dependencies = [
  "derive_more",
  "ecolor",
