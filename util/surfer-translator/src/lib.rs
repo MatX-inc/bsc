@@ -6,7 +6,9 @@
 //! With that file beside the dump as `<dump>.debug.json`, this plugin
 //! shows a struct as its named fields, a tagged union as its active
 //! variant and that variant's fields, an enum as its constructor name and
-//! a vector as its elements.
+//! a vector as its elements.  A layout is a bit range per member where
+//! the type's `Bits` instance is that simple, and otherwise an expression
+//! over the packed value, which the plugin evaluates.
 //!
 //! A signal's type is taken from the dump's type name when the dump has
 //! one (FST), else from the debug information's entry for the signal's
@@ -62,6 +64,11 @@ struct TypeDesc {
     stride: Option<u64>,
 }
 
+/// A member's place in the packed value.  Its own bits are the range
+/// `lo..hi` or the expression `bits`; a union arm or enum constant is
+/// selected by the type's tag bits equalling `tag` or one of `tags` (for
+/// an enum, by the whole value equalling `value` or one of `values`), or
+/// else by the expression `when` being 1.
 #[derive(Deserialize, Clone)]
 struct Member {
     name: String,
@@ -70,8 +77,28 @@ struct Member {
     width: Option<u64>,
     lo: Option<u64>,
     hi: Option<u64>,
+    bits: Option<Expr>,
     tag: Option<u64>,
+    #[serde(default)]
+    tags: Vec<u64>,
     value: Option<u64>,
+    #[serde(default)]
+    values: Vec<u64>,
+    when: Option<Expr>,
+}
+
+/// An expression over the packed value, as the exporter writes it: the
+/// operation, its operands, a constant's bits, an extract's range, and
+/// the result width where the operands do not imply it
+#[derive(Deserialize, Clone)]
+struct Expr {
+    op: String,
+    width: Option<u64>,
+    bits: Option<String>,
+    hi: Option<u64>,
+    lo: Option<u64>,
+    #[serde(default)]
+    args: Vec<Expr>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -137,7 +164,7 @@ fn type_of(loaded: &Loaded, variable: &VariableMeta<(), ()>) -> Option<String> {
 }
 
 fn layout_known(desc: &TypeDesc) -> bool {
-    desc.layout.as_deref() == Some("derived")
+    matches!(desc.layout.as_deref(), Some("derived") | Some("custom"))
 }
 
 /// Whether the plugin has anything to add over Surfer's own formatting
@@ -199,8 +226,12 @@ fn bits_of(value: &VariableValue, width: usize) -> String {
     if raw.len() >= width {
         raw[raw.len() - width..].to_string()
     } else {
-        let fill = raw.chars().next().filter(|c| matches!(c, 'x' | 'z' | 'u')).unwrap_or('0');
-        let mut s: String = std::iter::repeat(fill).take(width - raw.len()).collect();
+        let fill = raw
+            .chars()
+            .next()
+            .filter(|c| matches!(c, 'x' | 'z' | 'u'))
+            .unwrap_or('0');
+        let mut s: String = std::iter::repeat_n(fill, width - raw.len()).collect();
         s.push_str(&raw);
         s
     }
@@ -220,6 +251,176 @@ fn as_number(bits: &str) -> Option<u64> {
         return Some(0);
     }
     u64::from_str_radix(bits, 2).ok()
+}
+
+// ---------------------------------------------------------------------
+// Expressions over the packed value
+
+fn to_u128(bits: &str) -> Option<u128> {
+    if bits.is_empty() {
+        return Some(0);
+    }
+    if bits.len() > 128 {
+        return None;
+    }
+    u128::from_str_radix(bits, 2).ok()
+}
+
+fn to_i128(bits: &str) -> Option<i128> {
+    let v = to_u128(bits)?;
+    if bits.starts_with('1') && bits.len() < 128 {
+        Some(v as i128 - (1i128 << bits.len()))
+    } else {
+        Some(v as i128)
+    }
+}
+
+/// `v` as exactly `width` bits
+fn from_u128(v: u128, width: u64) -> String {
+    let s = format!("{v:b}");
+    let width = width as usize;
+    if s.len() >= width {
+        s[s.len() - width..].to_string()
+    } else {
+        format!("{}{}", "0".repeat(width - s.len()), s)
+    }
+}
+
+/// The value of an expression for the packed bits `arg`, or None where
+/// it is a don't-care (or wider than this evaluator's arithmetic)
+fn eval(e: &Expr, arg: &str) -> Option<String> {
+    let arg1 = |i: usize| eval(e.args.get(i)?, arg);
+    let bitwise = |f: fn(bool, bool) -> bool| -> Option<String> {
+        let a = arg1(0)?;
+        let b = arg1(1)?;
+        if a.len() != b.len() {
+            return None;
+        }
+        Some(
+            a.chars()
+                .zip(b.chars())
+                .map(|(x, y)| if f(x == '1', y == '1') { '1' } else { '0' })
+                .collect(),
+        )
+    };
+    let compare = |f: fn(&str, &str) -> Option<bool>| -> Option<String> {
+        Some(if f(&arg1(0)?, &arg1(1)?)? {
+            "1".into()
+        } else {
+            "0".into()
+        })
+    };
+    let arith = |f: fn(u128, u128) -> u128| -> Option<String> {
+        let w = e.width?;
+        Some(from_u128(f(to_u128(&arg1(0)?)?, to_u128(&arg1(1)?)?), w))
+    };
+    match e.op.as_str() {
+        "arg" => Some(arg.to_string()),
+        "const" => e.bits.clone(),
+        "undet" => None,
+        "extract" => {
+            let x = arg1(0)?;
+            Some(slice(&x, e.lo?, e.hi? + 1))
+        }
+        "concat" => {
+            let mut s = String::new();
+            for a in &e.args {
+                s.push_str(&eval(a, arg)?);
+            }
+            Some(s)
+        }
+        "if" => {
+            if arg1(0)?.contains('1') {
+                arg1(1)
+            } else {
+                arg1(2)
+            }
+        }
+        "case" => {
+            let scrutinee = arg1(0)?;
+            for arm in e.args[2..].chunks(2) {
+                if eval(&arm[0], arg)? == scrutinee {
+                    return eval(&arm[1], arg);
+                }
+            }
+            arg1(1)
+        }
+        "not" => Some(
+            arg1(0)?
+                .chars()
+                .map(|c| if c == '1' { '0' } else { '1' })
+                .collect(),
+        ),
+        "and" => bitwise(|a, b| a && b),
+        "or" => bitwise(|a, b| a || b),
+        "xor" => bitwise(|a, b| a != b),
+        "eq" => compare(|a, b| Some(a == b)),
+        "ult" => compare(|a, b| Some(to_u128(a)? < to_u128(b)?)),
+        "ule" => compare(|a, b| Some(to_u128(a)? <= to_u128(b)?)),
+        "slt" => compare(|a, b| Some(to_i128(a)? < to_i128(b)?)),
+        "sle" => compare(|a, b| Some(to_i128(a)? <= to_i128(b)?)),
+        "zext" | "trunc" => {
+            let x = arg1(0)?;
+            let w = e.width? as usize;
+            Some(if x.len() >= w {
+                x[x.len() - w..].to_string()
+            } else {
+                format!("{}{}", "0".repeat(w - x.len()), x)
+            })
+        }
+        "sext" => {
+            let x = arg1(0)?;
+            let w = e.width? as usize;
+            let fill = x.chars().next().unwrap_or('0');
+            Some(if x.len() >= w {
+                x[x.len() - w..].to_string()
+            } else {
+                format!("{}{}", fill.to_string().repeat(w - x.len()), x)
+            })
+        }
+        "add" => arith(|a, b| a.wrapping_add(b)),
+        "sub" => arith(|a, b| a.wrapping_sub(b)),
+        "mul" => arith(|a, b| a.wrapping_mul(b)),
+        "neg" => Some(from_u128(to_u128(&arg1(0)?)?.wrapping_neg(), e.width?)),
+        "sl" => arith(|a, b| if b >= 128 { 0 } else { a << b }),
+        "srl" => arith(|a, b| if b >= 128 { 0 } else { a >> b }),
+        "sra" => {
+            let a = to_i128(&arg1(0)?)?;
+            let b = to_u128(&arg1(1)?)?.min(127);
+            Some(from_u128((a >> b) as u128, e.width?))
+        }
+        _ => None,
+    }
+}
+
+/// A member's own bits within `bits`: its range, else its expression
+fn member_bits(m: &Member, bits: &str) -> Option<String> {
+    match (m.lo, m.hi, &m.bits) {
+        (Some(lo), Some(hi), _) => Some(slice(bits, lo, hi)),
+        (_, _, Some(e)) => eval(e, bits),
+        _ => None,
+    }
+}
+
+/// The member the packed `bits` are: told apart by the tag bits (the
+/// type's tag range for a union, the whole value for an enum) when the
+/// description gives tag values, else by each member's own test
+fn active_member(desc: &TypeDesc, bits: &str) -> Option<usize> {
+    let tag = match &desc.tag {
+        Some(t) => as_number(&slice(bits, t.lo, t.hi)),
+        None => as_number(bits),
+    };
+    let by_tag = |m: &Member| match tag {
+        Some(v) => {
+            m.tag == Some(v) || m.tags.contains(&v) || m.value == Some(v) || m.values.contains(&v)
+        }
+        None => false,
+    };
+    let by_when = |m: &Member| match &m.when {
+        Some(e) => eval(e, bits).is_some_and(|v| v.contains('1')),
+        None => false,
+    };
+    desc.members.iter().position(|m| by_tag(m) || by_when(m))
 }
 
 fn raw(bits: &str) -> TranslationResult {
@@ -293,13 +494,11 @@ fn decode(loaded: &Loaded, name: &str, bits: &str, depth: u32) -> TranslationRes
         r.subfields = not_present(loaded, name, depth).subfields;
         return r;
     }
-    let member_bits = |m: &Member| match (m.lo, m.hi) {
-        (Some(lo), Some(hi)) => slice(bits, lo, hi),
-        _ => String::new(),
-    };
-    let member_value = |m: &Member, b: &str| match &m.ty {
-        Some(t) => decode(loaded, t, b, depth + 1),
-        None => raw(b),
+    // a member's value; a don't-care shows as absent
+    let member_value = |m: &Member| match (member_bits(m, bits), &m.ty) {
+        (Some(b), Some(t)) => decode(loaded, t, &b, depth + 1),
+        (Some(b), None) => raw(&b),
+        (None, _) => not_present_leaf(),
     };
     match desc.kind.as_str() {
         "struct" if layout_known(desc) => TranslationResult {
@@ -309,17 +508,13 @@ fn decode(loaded: &Loaded, name: &str, bits: &str, depth: u32) -> TranslationRes
                 .iter()
                 .map(|m| SubFieldTranslationResult {
                     name: m.name.clone(),
-                    result: member_value(m, &member_bits(m)),
+                    result: member_value(m),
                 })
                 .collect(),
             kind: ValueKind::Normal,
         },
         "union" if layout_known(desc) => {
-            let tag = desc
-                .tag
-                .as_ref()
-                .and_then(|t| as_number(&slice(bits, t.lo, t.hi)));
-            let active = tag.and_then(|v| desc.members.iter().position(|m| m.tag == Some(v)));
+            let active = active_member(desc, bits);
             let subfields = desc
                 .members
                 .iter()
@@ -334,7 +529,7 @@ fn decode(loaded: &Loaded, name: &str, bits: &str, depth: u32) -> TranslationRes
                                 kind: ValueKind::Normal,
                             }
                         } else {
-                            member_value(m, &member_bits(m))
+                            member_value(m)
                         }
                     } else {
                         match &m.ty {
@@ -353,19 +548,17 @@ fn decode(loaded: &Loaded, name: &str, bits: &str, depth: u32) -> TranslationRes
                     subfields,
                     kind: ValueKind::Normal,
                 },
-                // a tag encoding no constructor uses
+                // an encoding no constructor uses
                 None => TranslationResult {
-                    val: ValueRepr::String(format!("?tag {}", tag.map_or("-".to_string(), |v| v.to_string()))),
+                    val: ValueRepr::String(format!("?{bits}")),
                     subfields,
                     kind: ValueKind::Warn,
                 },
             }
         }
-        "enum" => match as_number(bits)
-            .and_then(|v| desc.members.iter().find(|m| m.value == Some(v)))
-        {
-            Some(m) => TranslationResult {
-                val: ValueRepr::String(m.name.clone()),
+        "enum" => match active_member(desc, bits) {
+            Some(idx) => TranslationResult {
+                val: ValueRepr::String(desc.members[idx].name.clone()),
                 subfields: vec![],
                 kind: ValueKind::Normal,
             },
@@ -381,7 +574,12 @@ fn decode(loaded: &Loaded, name: &str, bits: &str, depth: u32) -> TranslationRes
                 subfields: (0..n)
                     .map(|i| SubFieldTranslationResult {
                         name: format!("[{i}]"),
-                        result: decode(loaded, elem, &slice(bits, i * stride, (i + 1) * stride), depth + 1),
+                        result: decode(
+                            loaded,
+                            elem,
+                            &slice(bits, i * stride, (i + 1) * stride),
+                            depth + 1,
+                        ),
                     })
                     .collect(),
                 kind: ValueKind::Normal,
@@ -434,7 +632,9 @@ pub fn variable_info(variable: VariableMeta<(), ()>) -> FnResult<VariableInfo> {
 }
 
 #[plugin_fn]
-pub fn translate(TranslateParams { variable, value }: TranslateParams) -> FnResult<TranslationResult> {
+pub fn translate(
+    TranslateParams { variable, value }: TranslateParams,
+) -> FnResult<TranslationResult> {
     let slot = LOADED.lock().unwrap();
     let width = variable.num_bits.unwrap_or(0) as usize;
     let bits = bits_of(&value, width);
@@ -496,10 +696,7 @@ mod tests {
         let l = fixture();
         // Pixel { x = 1; y = 2; color = Green }
         let r = decode(&l, "WaveTypes::Pixel", "000000010000001001", 0);
-        assert_eq!(
-            flat(&r),
-            "struct{x=00000001, y=00000010, color=\"Green\"}"
-        );
+        assert_eq!(flat(&r), "struct{x=00000001, y=00000010, color=\"Green\"}");
     }
 
     #[test]
@@ -523,13 +720,48 @@ mod tests {
     fn maybe_and_vector() {
         let l = fixture();
         let r = decode(&l, "Maybe#(UInt#(16))", "10000000000000011", 0);
-        assert_eq!(flat(&r), "enum Valid{Invalid=\"\", Valid=0000000000000011}".replace("Invalid=\"\"", "Invalid=-"));
+        assert_eq!(
+            flat(&r),
+            "enum Valid{Invalid=\"\", Valid=0000000000000011}".replace("Invalid=\"\"", "Invalid=-")
+        );
         // [Red, Green, Blue, Red] with element 0 lowest
         let r = decode(&l, "Vector::Vector#(4, WaveTypes::Color)", "00100100", 0);
         assert_eq!(
             flat(&r),
             "array{[0]=\"Red\", [1]=\"Green\", [2]=\"Blue\", [3]=\"Red\"}"
         );
+    }
+
+    #[test]
+    fn hand_written_instances() {
+        let l = fixture();
+        // Source: Alu's payload shares the bits that tell the arms apart
+        let r = decode(&l, "WaveTypes::Source", "010", 0);
+        assert_eq!(flat(&r), "enum Alu{Zeros=-, Alu=1, VecMem=-, Other=-}");
+        let r = decode(&l, "WaveTypes::Source", "001", 0);
+        assert_eq!(flat(&r), "enum Alu{Zeros=-, Alu=0, VecMem=-, Other=-}");
+        let r = decode(&l, "WaveTypes::Source", "110", 0);
+        assert!(flat(&r).starts_with("enum Other{"));
+        // Packet: the short arm's payload is not right-aligned
+        let r = decode(&l, "WaveTypes::Packet", "110101100", 0);
+        assert_eq!(flat(&r), "enum Narrow{Wide=-, Narrow=101011}");
+        let r = decode(&l, "WaveTypes::Packet", "010101100", 0);
+        assert_eq!(flat(&r), "enum Wide{Wide=10101100, Narrow=-}");
+        assert!(decodes(&l, "WaveTypes::Source"));
+    }
+
+    #[test]
+    fn expressions() {
+        let e: Expr = serde_json::from_str(
+            r#"{"op":"if","args":[{"op":"eq","width":1,"args":[{"op":"extract","hi":3,"lo":2,"args":[{"op":"arg"}]},{"op":"const","bits":"10"}]},
+                                  {"op":"add","width":4,"args":[{"op":"arg"},{"op":"const","bits":"0001"}]},
+                                  {"op":"sext","width":6,"args":[{"op":"extract","hi":1,"lo":0,"args":[{"op":"arg"}]}]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(eval(&e, "1011").as_deref(), Some("1100"));
+        assert_eq!(eval(&e, "0010").as_deref(), Some("111110"));
+        let u: Expr = serde_json::from_str(r#"{"op":"undet","width":2}"#).unwrap();
+        assert_eq!(eval(&u, "00"), None);
     }
 
     #[test]
@@ -549,6 +781,9 @@ mod tests {
             VariableInfo::Compound { subfields } => assert_eq!(subfields.len(), 3),
             _ => panic!("struct should be compound"),
         }
-        assert_eq!(l.type_by_path.get("main.top.cell").map(String::as_str), Some("WaveTypes::Cell"));
+        assert_eq!(
+            l.type_by_path.get("main.top.cell").map(String::as_str),
+            Some("WaveTypes::Cell")
+        );
     }
 }

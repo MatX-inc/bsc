@@ -7,8 +7,8 @@ as its constructor name, a vector as its elements.
 
 It reads the debug information that bluetcl's `module wavedebuginfo`
 writes for the design -- the bit layout of every type the signals name,
-and which dumped signal is which source entity -- from `<dump>.debug.json`
-beside the dump.  A signal's type comes from the dump itself when the dump
+hand-written `Bits` instances included, and which dumped signal is which
+source entity -- from `<dump>.debug.json` beside the dump.  A signal's type comes from the dump itself when the dump
 records it (FST, with `-dump-formats fst`), else from the debug
 information's entry for the signal's path (VCD).
 
