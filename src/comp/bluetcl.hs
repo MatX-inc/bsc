@@ -1244,11 +1244,9 @@ tclModule ["wavedebuginfo", modname, file] = do
           ioError $ userError ("Module " ++ quote modname ++ " is not loaded")
       _ <- tclPackage ("load" : nub (map (abemi_src_name . snd) abmis))
       g' <- readIORef globalVar
-      case (waveDebugInfo (tp_flags g') (tp_symtab g') hierMap abmis modname) of
-        Left errs -> do reportErrorsToTcl [] errs
-                        return $ TLst []
-        Right json -> do writeFileCatch globalErrHandle file json
-                         return $ TStr file
+      json <- waveDebugInfo globalErrHandle (tp_flags g') (tp_symtab g') hierMap abmis modname
+      writeFileCatch globalErrHandle file json
+      return $ TStr file
 ------
 tclModule ["flags",modname] = do
   if (isPrimitiveModule modname)

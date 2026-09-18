@@ -2,6 +2,6 @@
 
 CONFDIR = $(realpath ../..)
 
-DONTKEEPFILES = *.filtered BOUTDIR
+DONTKEEPFILES = *.filtered BOUTDIR wavedebuginfo.json
 
 include $(CONFDIR)/clean.mk

@@ -12,7 +12,7 @@
 --  * if c 0 e  --> {n-bits}c & e
 --  * flatten & (in asyntax)?
 --  * check for name conflict in the generated IEFace
-module IExpand(iExpand) where
+module IExpand(iExpand, iExpandBitFunction) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
 import Prelude hiding ((<>))
@@ -243,6 +243,27 @@ gateDefaultClock = elem "-hack-gate-default-clock" progArgs
 
 iExpandPref :: String
 iExpandPref = "__h"
+
+-----------------------------------------------------------------------------
+
+-- iExpandBitFunction
+--   Reduce a function over bit vectors, applied to a symbolic argument,
+--   to normal form: an expression over the argument (an ICMethArg named
+--   arg_id) in which only the primitives the evaluator could not fold
+--   remain.  This is how a type's Bits instance is turned into the bit
+--   layout of its values (see WaveLayout).
+iExpandBitFunction :: ErrorHandle -> Flags ->
+                      SymTab -> M.Map Id HExpr ->
+                      IATFCache ->
+                      Id -> IType -> HExpr ->
+                      IO HExpr
+iExpandBitFunction errh flags symt alldefs atf_cache arg_id arg_ty f = do
+  let def_id = mkId noPosition (mkFString "bitfunction")
+      arg = ICon arg_id (ICMethArg { iConType = arg_ty })
+  go <- runG errh flags symt alldefs atf_cache def_id False [] $ do
+          (P _ e, _) <- evalUHNF (IAps f [] [arg])
+          unheapAll e
+  return (goutput go)
 
 -----------------------------------------------------------------------------
 
