@@ -1,1 +1,3 @@
 target/
+# local [patch] overrides for building against an unpublished Surfer checkout
+.cargo/
