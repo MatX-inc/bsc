@@ -353,9 +353,10 @@ fn info_of(loaded: &Loaded, name: &str, depth: u32) -> VariableInfo {
             },
             _ => VariableInfo::Bits,
         },
-        // Surfer draws a Bool field as a level from its value being "0" or
-        // not, so only a value rendered as a bit may be declared Bool; an
-        // enum's constructor names are text
+        // Bool is drawn as a level: Surfer draws a Bool field low when its
+        // text is "0" or "false" (in any case), high otherwise, so the
+        // constructor names False and True serve as they are.  Other enums'
+        // constructor names are text.
         "enum" if is_bool(name) => VariableInfo::Bool,
         "enum" => VariableInfo::String,
         _ => match desc.width {
@@ -712,12 +713,6 @@ fn decode(loaded: &Loaded, name: &str, bits: &str, depth: u32) -> TranslationRes
                 },
             }
         }
-        // Bool as the level Surfer draws it by, not as its constructor name
-        "enum" if is_bool(name) && bits.len() == 1 => TranslationResult {
-            val: ValueRepr::Bit(bits.chars().next().unwrap_or('x')),
-            subfields: vec![],
-            kind: ValueKind::Normal,
-        },
         "enum" => match active_member(desc, bits) {
             Some(idx) => TranslationResult {
                 val: ValueRepr::String(desc.members[idx].name.clone()),
@@ -848,7 +843,6 @@ mod tests {
 
     fn flat(r: &TranslationResult) -> String {
         let own = match &r.val {
-            ValueRepr::Bit(c) => c.to_string(),
             ValueRepr::Bits(_, b) => b.clone(),
             ValueRepr::String(s) => format!("\"{s}\""),
             ValueRepr::Struct => "struct".into(),
@@ -943,11 +937,11 @@ mod tests {
     }
 
     #[test]
-    fn bool_is_a_level() {
+    fn bool_is_a_level_named_by_its_constructor() {
         let l = fixture();
         assert!(matches!(info_of(&l, "Bool", 0), VariableInfo::Bool));
-        assert_eq!(flat(&decode(&l, "Bool", "1", 0)), "1");
-        assert_eq!(flat(&decode(&l, "Bool", "0", 0)), "0");
+        assert_eq!(flat(&decode(&l, "Bool", "1", 0)), "\"True\"");
+        assert_eq!(flat(&decode(&l, "Bool", "0", 0)), "\"False\"");
         // other enums are text
         assert!(matches!(
             info_of(&l, "WaveTypes::Color", 0),

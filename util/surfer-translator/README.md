@@ -21,7 +21,10 @@ is shown by the source line declaring it (read relative to Surfer's
 working directory, else by the source name alone), with the file in the
 variable's tooltip.  Hiding and the file need a Surfer built from the
 MatX fork's `william/bluespec-support` branch; an older Surfer ignores
-those two fields and shows everything.
+those two fields and shows everything.  A `Bool` reads `True` or
+`False` and is drawn as a level, which also needs the fork's Surfer:
+an older Surfer draws a level low only for the text `0`, so it draws
+`False` high.
 
 Build with the `wasm32-unknown-unknown` target installed
 (`rustup target add wasm32-unknown-unknown`):
