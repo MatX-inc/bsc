@@ -1,45 +1,257 @@
 # TRS: a Rust/LLVM simulation backend for BSC
 
-Status: design proposal (drafted under the working name "Bluesim 3",
-since renamed to "TRS").  This document is grounded in the current implementation — file
-references point at the code on the `vlink-regen` branch (PR #2), which this
-work builds on.
+Status: normative architecture and migration plan.  The document began as
+the "Bluesim 3" proposal (since renamed to "TRS"); historical source
+references are retained where they explain the semantic contract, while §0
+and the revised phasing govern the current hierarchy-first implementation.
+
+The operational assignment for the feasibility gate is
+[P0-HANDOFF.md](P0-HANDOFF.md): pinned inputs, prototype scope, oracle policy,
+measurable acceptance checks, deliverables, and review/stop conditions.
+
+## 0. Binding architecture rules
+
+This section is normative.  It is an architecture reset after the first TRS
+implementation demonstrated semantic coverage but allowed whole-design
+planning and code generation to become the default.  When this section
+conflicts with later historical prose, [BIR.md](BIR.md), a handoff document,
+or the current implementation, this section wins until the other material is
+updated.
+
+1. **Correctness is non-negotiable.**  TRS must preserve BSC's scheduled TRS
+   semantics and the applicable observable Bluesim contract.  Dynamic
+   scheduling uses the Verilog-backend reference specified in rule 5.
+   A scale or throughput win never excuses a semantic difference.
+2. **Hierarchy is the canonical representation and execution model.**  A
+   synthesized module is the unit of export, verification, interpretation,
+   compilation, and reuse.  A design is an instance graph that binds those
+   module artifacts.  **There is no global execution schedule.**  Neither
+   export, link, code generation, nor runtime may construct a whole-design
+   rule graph/order, a compressed `(instance, segment)` order, or an
+   equivalent cross-hierarchy execution plan.  Renaming it a composition,
+   boundary plan, dispatch table, or transient worklist does not exempt it.
+3. **Scaling is an acceptance criterion, not a later optimization.**  For N
+   identical instances, module-local analysis, interpreter preparation, LLVM
+   lowering, optimization, and machine-code emission happen once per unique
+   module specialization, not N times.  Binding and orchestration metadata
+   may grow with instances and their boundary surface; it must not grow
+   with instances times module-internal rule or def count.  This does not
+   eliminate the per-instance state or runtime work needed to execute N
+   physical instances; it forbids duplicating their executable plans.
+4. **The interpreter is the executable base.**  It is the first complete
+   implementation of every semantic feature, runs the same hierarchical
+   module artifacts as compiled engines, and remains a production-capable
+   per-module or per-segment fallback.  JIT and AOT replace module executors;
+   they do not replace the architecture.
+5. **Scheduling belongs to modules, including dynamic scheduling.**  BSC
+   records module-local scheduling decisions and the guarded legal
+   alternatives that require run-time selection.  Each module's scheduler
+   coordinates its own work and its immediate children's declared boundary
+   interactions, recursively.  TRS evaluates alternative guards against
+   pre-edge state and obeys the exported contracts; it does not rerun BSC's
+   conflict/SAT reasoning.  Independent choices stay local to their instances,
+   never a Cartesian product of whole-design alternative schedules.
+   **The required dynamic-scheduling capability is parity with BSC's Verilog
+   backend at the pinned reference revision**, within the stated TRS scope.
+   Supporting every theoretically possible dynamic schedule is not a goal.
+6. **`import "BVI"` is a first-class boundary implementation.**  A BVI module
+   participates through the same scheduling, clock, reset, method, and path
+   contract as a synthesized BSV module, while its body is opaque and may be
+   executed by a Verilator-backed module executor.  Verilation is a build
+   step; running an artifact is load-only.  BDPI remains the foreign-function
+   boundary, distinct from BVI module execution.
+7. **Optimizations come after the hierarchical baseline passes.**  Inlining,
+   bounded boundary fusion, and layout coalescing are optional transforms
+   over the canonical hierarchy.  Crossing a synthesis boundary
+   requires measured benefit, an explicit profitability rule, a bounded
+   cache/invalidation cost, and a retained generic hierarchical path.  An
+   optimizer may specialize a bounded region; it may not make the specialized
+   form the only executable form or reconstruct a global schedule.  The
+   no-global-schedule rule also applies with optimization flags enabled.
+8. **Architecture exceptions are explicit.**  A change that violates one of
+   these rules must identify the violated rule, publish the scale and runtime
+   measurements that justify it, state the new bound, and receive design
+   review before landing.  An optimization flag is not an exception approval.
+   Passing the semantic corpus alone is insufficient.
+
+The permanent scale gates are:
+
+- repeated-instance ladders report constant module-local work per unique
+  specialization and bounded growth of binding/orchestration metadata;
+- a leaf body edit leaves generic parent module artifacts unchanged when the
+  boundary contract is unchanged;
+- every interpreter, JIT, and AOT execution path, including optimized paths,
+  constructs no global rule or segment schedule, even transiently; baseline
+  compilation also contains no whole-design LLVM module or instance-expanded
+  copy of module-local executable IR;
+- mixed interpreted/compiled/BVI designs pass the same semantic and ordering
+  tests as single-engine designs; and
+- diagnostics expose unique modules, instances, module-local segments,
+  declared boundary interactions, per-instance dynamic choices, per-module
+  lowering count, emitted code bytes, and every cross-boundary specialization.
+
+### 0.1 Hierarchical feasibility gate
+
+Before production migration begins, P0 must demonstrate that the proposed
+boundary model can express the complete required semantic surface.  Verilog is
+evidence that hierarchical hardware descriptions can execute, but it is not
+this proof: elaboration, static event scheduling, and simulator-specific
+flattening do not demonstrate a reusable interpreter/compiler ABI, guarded
+dynamic scheduling, mixed executors, or the required scale bounds.
+
+For this gate, **fully hierarchical** has a precise meaning:
+
+- every separately synthesized BSV module and every BVI module is an opaque
+  executable boundary; non-synthesized source structure may be elaborated
+  inside its owning artifact;
+- a parent artifact may depend on a child's versioned interface and schedule
+  contract, but may not inspect, embed, or copy the child's rules, defs,
+  schedule nodes, state layout, or executable IR;
+- each module schedules only its own rules and immediate-child boundary
+  interactions; children own their internal scheduling, recursively at every
+  depth, rather than exporting all descendant segments to an ancestor;
+- the shared kernel may hold the instance registry, time/event queue,
+  clock/reset routing, and observation buffers, but no design-wide ordering
+  graph or traversal of rules, segments, or descendant boundary operations;
+- module execution may suspend and resume at declared boundary interactions,
+  but no module or kernel may first assemble the suspended work into a
+  whole-design order, either statically or anew on each edge; and
+- boundary events must describe genuine interface obligations.  Exposing
+  every internal rule/segment as a nominal interface event, or wrapping the
+  entire design in a new top-level scheduler, does not preserve hierarchy.
+
+A global **time/event queue** is allowed; a global **within-edge execution
+schedule** is not.  The queue delivers time, clock, reset, and external
+events to opaque module endpoints.  It is not a place to enqueue a flattened
+sequence of every descendant's rule or segment execution.  Module-local
+worklists and a generic call stack/trampoline are allowed.  A diagnostic
+execution trace may record the order that occurred, but may not become an
+input plan for execution.  The boundary protocol's sufficiency is what P0
+must establish, not an assumption made by this document.
+
+The open question is not whether hierarchical state and code can execute:
+Bluesim already provides those.  It is whether a reusable local protocol can
+replace the global scheduling closure for every required semantic interaction
+while meeting the representation/preparation bounds.  Hierarchical does not
+mean calling each module once per cycle or completing a child atomically;
+multiple boundary interactions and local suspension/resumption are allowed.
+P0 must construct and justify that protocol, or produce a minimized
+counterexample identifying the missing contract information.  Coordination
+scaling is part of this gate; throughput tuning comes later and is not a
+semantic feasibility assumption.
+
+P0 builds a deliberately unoptimized hierarchical interpreter spike using
+the proposed module-executor ABI.  It must include a minimized executable
+witness for every distinct cross-boundary semantic interaction, not merely a
+representative application.  The initial proof matrix is:
+
+| Semantic obligation | Required hierarchical witness |
+| --- | --- |
+| Static scheduling | Nested action, value, and action-value calls with RDY/EN, conflicts, urgency, and pre-edge reads; child work between two parent interactions without collecting descendant segments |
+| Combinational behavior | Cross-boundary value dependencies and declared combinational paths, including rejection of illegal cycles |
+| Dynamic scheduling | Verilog-backend-supported guarded behavior across parent/child or sibling boundaries and many independently choosing instances, without any global order or Cartesian product |
+| State and effects | One-rule-at-a-time visibility, timestamp/shadow behavior, cross-boundary ME inhibition, primitives, BDPI, system tasks, and deterministic effect/stop ordering through local contracts |
+| Time | Multiple, derived, and gated clocks; reset sequencing; crossing rules; coincident edges; and event tie-breaking |
+| Foreign modules | BSV above and below BVI, with RDY/EN, combinational paths, same-cycle observation, clock/reset delivery, and batched Verilator commit |
+| Observability | Interactive reads/writes and VCD/FST event ordering without a second backing model or body flattening |
+
+The matrix is closed against the BIR schema, runtime primitive catalog, and
+supported BVI contract: every operation must be classified as module-local,
+expressible in the boundary contract, or owned by the global time/event
+kernel.  An unclassified operation is a failed architecture proof, not
+permission to peek through the boundary.  Constructs that reduce to an
+already witnessed interaction need a documented reduction and a regression
+test; genuinely new interactions need another executable witness.
+
+P0 passes only when all of the following hold:
+
+1. the spike matches the applicable Bluesim or Verilog oracle for the proof
+   matrix and focused differential corpus, with an explicit semantic
+   specification for cases neither oracle supports.  Dynamic scheduling uses
+   BSC-generated Verilog as the primary reference: its supported behavior is
+   the target, not a more general scheduler.  An independent specification
+   must not expand that dynamic-scheduling scope beyond the Verilog backend;
+2. a compositional argument explains why the protocol preserves each
+   interaction under child substitution and arbitrary nesting, backed by
+   executable witnesses; passing examples alone is not a completeness proof;
+3. structural checks and instrumentation establish that export, preparation,
+   link, and execution never construct a global rule/segment graph or order,
+   including body-free compressed plans, temporary plans, and per-edge plans;
+4. repeated-instance ladders prepare each unique specialization once;
+   nesting-depth ladders do not accumulate descendant schedules at ancestors;
+   internal-rule-count ladders may increase the changed module's own artifact
+   and work, but not an ancestor's scheduling representation when the
+   boundary contract stays the same.  Count runtime boundary transitions,
+   dependency revisits, and alternative evaluations as well: the protocol
+   needs justified bounds in terms of executed work and declared interface
+   dependencies, not hidden whole-design searches or enumeration of
+   independent instances' choice combinations;
+5. a child can be replaced between interpreter, test-double, and BVI
+   executors without changing its generic parent artifact;
+6. a child-body-only edit does not rebuild that generic parent; and
+7. unsupported cases fail closed with a boundary-capability diagnostic and
+   never fall back to a global scheduler or flattening.  Rejecting a required
+   case keeps P0 blocked; it does not satisfy the completeness gate.
+
+The spike may be slow and disposable; its boundary semantics and evidence
+are not.  If the gate fails, revise BIR or the executor/boundary contract and
+repeat P0.  Do not begin the production interpreter or any LLVM work while a
+known semantic class still requires global scheduling or whole-design
+expansion.  Bluesim and the legacy flat TRS engine may run separately as
+oracles; none of their merged schedules, order-derived inhibitors, or plans
+may be consumed by the hierarchical engine or used as its preparation step.
 
 ## 1. Goals
 
-1. **Faster than Verilator, and better scaling with design size.**
-   Single-thread throughput first; a credible path to multi-threading second.
-2. **Fast build turnaround.**  Code generation and linking must not be the
+1. **Same semantics, no global schedule.**  Execute bsc's module-local
+   scheduling decisions and interface contracts, including guarded dynamic
+   behavior at parity with its Verilog backend, and preserve TRS
+   (one-rule-at-a-time) semantics and the applicable observable Bluesim
+   contract, validated against the existing testsuite and the designated
+   Verilog reference for dynamic scheduling.
+2. **Hierarchical scaling with design size.**  Module-local work scales with
+   unique module specializations; design-level work scales with instance
+   boundaries, not replicated internal rules.  This applies to the
+   interpreter, JIT, AOT, debug metadata, and waveforms.
+3. **Fast build turnaround.**  Code generation and linking must not be the
    bottleneck of the edit-compile-run loop.  Today the generated-C++ → g++
    path dominates link time for large designs; the replacement generates
-   machine code directly through LLVM, in parallel, with content-addressed
-   caching, and offers a JIT mode with no object files at all.
-3. **Same semantics.**  Execute the static schedule computed by bsc and
-   implement TRS (one-rule-at-a-time) semantics exactly as today's Bluesim
-   does, validated against the existing testsuite.
-4. **Hierarchical code generation.**  Per-module compilation units that are
+   machine code directly through LLVM, in parallel by module, with
+   content-addressed artifacts, and offers a JIT mode with no object files at
+   all.
+4. **Faster than Verilator.**  Single-thread throughput first; a credible path
+   to multi-threading second.  Runtime throughput work follows the
+   hierarchy/scaling gates rather than replacing them.
+5. **Hierarchical execution and code generation.**  Per-module units that are
    reusable across instantiations and cacheable across links — extending the
    staged-codegen model of PR #2 (`-c` is point codegen, link is the closure)
    — instead of today's design-wide monolithic schedule file.
-5. **First-class waveforms.**  VCD *and* FST output, carrying full module
+6. **Interpreter-first, mixed-engine execution.**  Any module may execute in
+   the interpreter, JIT/AOT code, or a BVI adapter without changing the
+   design's scheduling semantics.
+7. **First-class BVI and BDPI compatibility.**  Run supported `import "BVI"`
+   modules through a stable boundary contract and a build-time Verilator
+   adapter; preserve the existing BDPI C ABI.
+8. **First-class waveforms.**  VCD *and* FST output, carrying full module
    hierarchy/definition information, without the current "backing model"
    double-instantiation cost.
-6. **Aggressive state inlining.**  Registers and wires become plain struct
+9. **Module-local state optimization.**  Registers and wires become plain struct
    fields / SSA values with direct loads and stores, not objects with method
    calls; only primitives with genuinely stateful protocols (FIFOs, BRAMs,
    synchronizers, clock generators) remain runtime calls.
-7. **Drop-in compatibility.**  Keep the `bk_*` kernel C ABI and the
+10. **Drop-in compatibility.**  Keep the `bk_*` kernel C ABI and the
    `bluesim.tcl`/bluetcl driver working unchanged; keep BDPI, `$display`
    formatting, and plusargs.
 
 Non-goals: the SystemC wrapper (dropped by decision 2026-07-08), 4-state
 simulation (Bluesim is 2-state today), save/restore checkpointing (does
-not exist today either), Verilog co-simulation.
+not exist today either), and general-purpose event-kernel co-simulation
+outside the declared BVI boundary contract.
 
 ## 2. Where Bluesim stands today
 
-A condensed map of the current implementation; this is what we must be
-equivalent to, and what we are replacing.
+A condensed map of the reference implementation.  Its observable semantics
+must be preserved; its global scheduling machinery must not be reproduced.
 
 ### 2.1 Compile pipeline
 
@@ -70,6 +282,17 @@ user-guide text), and object reuse exists (`SimFileUtils.hs`), but **the
 schedule is a design-wide monolith**: it grows with the whole design, is
 regenerated on any change, and is the worst compile unit for g++ (one huge
 function full of cross-module member accesses).
+
+At synthesis boundaries, Bluesim's module classes, state, rule/method
+bodies, and submodule instances are already hierarchical.  Its principal
+non-hierarchical execution mechanism is the scheduling closure: the merged
+rule order plus instance-qualified fire-condition computations, ME
+inhibitors, primitive tick ordering, and per-edge callbacks
+(`SimMakeCBlocks::mkRuleSchedStmts`, `mkScheduleStmts`, `mkOneSchedule`).
+Replacing that closure with a compressed global segment order would retain
+the same architectural problem.  Separate compilation and body-independent
+artifact invalidation also need their own gates; per-module C++ files alone
+do not establish them (see [BOUNDARY-CONTRACT.md](docs/BOUNDARY-CONTRACT.md)).
 
 ### 2.2 Execution model (the TRS contract)
 
@@ -145,78 +368,81 @@ Run side:
 
 ## 3. Architecture overview
 
+```mermaid
+flowchart TD
+    BSC["bsc: elaborate and schedule each module"] --> FRAG["one BIR fragment per synthesis boundary"]
+    FRAG --> LINK["TRS link: instance graph and parent/child bindings"]
+    LINK --> INTERP["interpreter module executors"]
+    LINK --> NATIVE["JIT/AOT module executors"]
+    LINK --> BVI["BVI/Verilator module executors"]
+    INTERP --> KERNEL["shared time/events, runtime, waves, and bk_* API"]
+    NATIVE --> KERNEL
+    BVI --> KERNEL
 ```
-                bsc (Haskell, unchanged front/middle)
-   .bsv ──► elaboration/scheduling ──► .ba  (APackage + AScheduleInfo)
-                                        │
-                                        │  NEW: SimExportIR  (-trs codegen)
-                                        ▼
-                                 .bir  (design: module bodies ┌──────────────┐
-                      + segmented schedules + compositions)  │ user C/C++   │
-                                        │                    │ BDPI objects │
-                                        ▼                    └──────┬───────┘
-        ┌──────────────────────── trs (Rust) ─────────────────────┼──────┐
-        │  ir: load/verify  ─►  plan: link closure, inline choices  │      │
-        │                   ─►  codegen: LLVM IR per module (parallel)     │
-        │        │                        │                                │
-        │        │             ┌──────────┴──────────┐                     │
-        │        │             ▼                     ▼                     │
-        │        │      ORC JIT (dev loop)   AOT .o + content cache        │
-        │        │             └──────────┬──────────┘                     │
-        │        ▼                        ▼                                │
-        │  kernel + rt + wave (Rust staticlib)  ──►  link                  │
-        └──────────────────────────────┬───────────────────────────────────┘
-                                       ▼
-                     <top>.so exporting bk_* C ABI   +  <top> native runner
-                     (bluetcl/bluesim.tcl unchanged)    (no tcl dependency)
-```
+
+The three executor kinds are interchangeable at a module boundary.  One
+design may mix all three.  The link product contains the instance graph,
+parent/child endpoint bindings, and references to reusable module artifacts.
+Each BSV artifact owns its local scheduler; BVI fulfills the same declared
+boundary protocol without exposing its internals.  There is no design-level
+schedule, including an order over body-free instance/segment references.
 
 Split of responsibilities:
 
-- **bsc keeps** everything through scheduling — evaluation, rule splitting,
-  urgency/earliness computation, `CAN_FIRE`/`WILL_FIRE` def insertion.  A new
-  small Haskell module (`SimExportIR.hs`) serializes the per-module
-  post-schedule data to a stable, documented format.  bsc's semantic
-  knowledge is not reimplemented.
-- **trs owns** everything downstream: the link closure, schedule merging,
-  optimization, code generation, runtime, and waveforms.  It is a standalone
-  Rust program invoked by `bsc` exactly where `simLink`/`genModuleC` runs
-  today (and usable directly by build systems).
+- **bsc keeps** evaluation, rule splitting, urgency/earliness computation,
+  `CAN_FIRE`/`WILL_FIRE` insertion, conflict reasoning, and the proof of legal
+  guarded dynamic-schedule alternatives.  Scheduler-internal analysis is not
+  reconstructed downstream.
+- **BIR export is per synthesis boundary.**  One `.ba` produces one module
+  fragment without loading or copying child bodies.  The fragment carries
+  the module-local executable IR, local schedule, boundary contract, and
+  references to child module contracts.
+- **trs link owns binding, not flattening.**  It follows fragment references,
+  builds the instance graph, binds clocks/resets/methods/BDPI functions, and
+  validates endpoint contracts.  It neither merges descendant schedules nor
+  topologically sorts their rules, segments, or interface operations into a
+  design-wide plan.  It must not read bodies to derive qualified fire cones,
+  inhibitor pairs, tick lists, or generated edge functions.
+- **module executors own bodies and scheduling.**  The interpreter and LLVM
+  engines implement the same module-executor contract.  A module coordinates
+  its immediate children only through their declared endpoints; those
+  children do the same recursively.  The BVI adapter implements the contract
+  for an opaque Verilog module.  The shared kernel delivers time/events and
+  does not choose individual rule or segment execution order.
 
 ### 3.1 Why a new exchange format instead of reading `.ba`
 
 `.ba` is a bespoke lazy Haskell binary encoding with structure sharing,
 defined by `Bin` instances over bsc's internal types (`BinData.hs`,
 `GenABin.hs`).  A Rust reader would be version-locked to bsc's internals and
-break on every datatype change.  Instead, bsc gains an export pass emitting
-**BIR** (Bluesim IR): CBOR with an explicit schema version, containing only
-what simulation needs.  Note the `.ba` already drops information Bluesim
-must recompute (e.g. `UseCond`s are not round-tripped,
-`GenABin.hs:404-408`), so `.ba` was never a complete interface either; BIR
-makes the actual contract explicit and testable.  The full format is
-specified in [BIR.md](BIR.md); serialization is `serialise`/`cborg` on the
-Haskell side (the one new dependency, aligned with the cabalization path;
-packaged by Debian/Ubuntu) and `ciborium`/serde on the Rust side.
+break on every datatype change.  Instead, the TRS exporter emits **BIR**
+(Bluesim IR): versioned CBOR containing only what simulation needs.  Note the
+`.ba` already drops information Bluesim must recompute (e.g. `UseCond`s are
+not round-tripped, `GenABin.hs:404-408`), so `.ba` was never a complete
+interface either; BIR makes the actual contract explicit and testable.  The
+legacy format is described in [BIR.md](BIR.md); P0 must justify and document
+the replacement boundary protocol and schema before freezing them.
 
-**The export point is post-`simExpand`/`simPackageOpt`** — bsc already runs
-both at link time before anything C++-specific happens
-(`bsc.hs:1274-1313`), so all schedule *merging* and the per-module IR
-cleanups stay in Haskell, and the Rust side never reimplements them.  What
-bsc exports:
+The unit of export is one synthesized module, matching one `.ba`.  Exporting
+that module must not read a child's executable body.  A fragment contains:
 
-- **Per module (instantiation-independent, cacheable):** inputs, clock
-  domains, resets; state instances (primitive kind or module ref, constant
-  instantiation args — Bluesim already requires this,
-  `SimExpand.hs:2158-2195` — plus the `sSB` method-order pairs); local defs
-  including `CAN_FIRE_*`/`WILL_FIRE_*`; rules and methods with bodies
-  **pre-linearized** by bsc (`tsortActionsAndDefs` ordering, so intra-rule
-  method-order semantics also stay in Haskell); and the module's
-  **segmented schedule** (§5.2) with per-rule intra-module ME inhibitors.
-- **Per link:** the instance map, BDPI signatures, and the
-  **compositions** — per-(clock, edge) interleavings of (instance, segment)
-  references, plus the composition-level facts that don't factor by module
-  type: cross-module disjointness pairs, cross-instance tick order, and
-  clock-crossing rules.
+- the module boundary contract: method signatures and scheduling relations,
+  clocks, resets, paths, parameters, and child contract references;
+- instantiation-independent state layout, defs, rules, methods, local
+  schedule segments, and guarded local alternatives already justified by
+  bsc's scheduler;
+- primitive and BDPI references; and
+- for `import "BVI"`, an opaque BVI contract plus deterministic Verilator
+  build inputs, never a synthesized BSV body.
+
+At link, TRS follows the fragment closure and creates only design-specific
+bindings: instance identities and state, clock/reset wiring, foreign-function
+bindings, and parent/child endpoint connections.  Local ordering and inhibit
+obligations remain in the owning module's artifact and boundary protocol;
+link resolves their endpoints, not a transitive execution order.  Binding
+metadata must remain proportional to the instance graph and declared
+boundary surface.  It may not contain a global rule/segment composition,
+qualified internal-rule inhibitor pairs, or copies of module bodies.
 
 Expressions and actions mirror `AExpr`/`AAction` (`ASyntax.hs:936-1148`)
 after `simPackageOpt`: prim ops, constants, def/port/param refs, method
@@ -226,48 +452,71 @@ pretty-prints it for diff-testing against bsc's own dump flags.
 
 ## 4. Execution semantics in trs
 
-Identical to today, restated as the invariants the code generator must
-uphold:
+The observable semantics are unchanged.  These are obligations for the
+recursive module protocol, not instructions to retain Bluesim's algorithms:
 
-1. Per (clock, edge), execute the flattened earliness order: compute fire
-   conditions at `Sched` nodes, conditionally run rule bodies at `Exec`
-   nodes, in place.
-2. `WILL_FIRE` per Esposito; ME inhibitors for disjoint rules executed
-   earlier in the same edge (destructive-execution correctness patch).
+1. Per (clock, edge), each module follows bsc's local scheduling decisions
+   and coordinates with immediate children through declared boundary
+   dependencies.  The resulting execution must be legal and observationally
+   equivalent without first constructing its global order.  For guarded
+   alternatives, obtain the specified pre-edge guard values before affected
+   execution can alter them, then select locally.  No persistent, transient,
+   or per-edge global rule/segment schedule is permitted.
+2. `WILL_FIRE` per Esposito; preserve the exclusion/snapshot semantics that
+   ME inhibitors enforce for destructive execution.  Fire-condition cones
+   and internal rule identities remain module-local.  Cross-boundary
+   obligations must be expressible as declared protocol state, not as a
+   global list of qualified rule-to-rule inhibitors.  P0 must prove this.
 3. Intra-rule action/def ordering per `MethodOrderMap` (`sSB`).
 4. Begin-of-cycle shadows for the read-after-write primitives (ConfigReg,
    RegTwo, CReg ports, crossing regs, FIFO `i_*` methods, RegFile
    forwarding); everything else reads live state.
-5. Primitive ticks after rules, producers before consumers
-   (`sortTickCalls`, `SimMakeCBlocks.hs:646-680`); then the guarded
-   reset-tick block.
-6. Clock-crossing rules in the after-edge function at FINAL priority.
+5. Preserve primitive tick and reset semantics, including rules-before-tick
+   and required producer/consumer ordering (`sortTickCalls`).  Each module
+   owns its primitive ticks and reset work; cross-boundary dependencies use
+   hierarchical phase/handshake obligations, not a flat design-wide tick or
+   reset execution list.  The exact protocol is a P0 proof obligation.
+6. Clock-crossing rules retain their after-edge/FINAL-phase semantics, but
+   execute in their owning modules, not one flattened after-edge function.
 7. Event ordering by `(time, group, slot, clock#)` exactly as
    `priority.cxx` packs it — this is observable through `$display`
    interleaving across domains and must match.
+8. Choosing interpreter, JIT/AOT, or BVI execution for a module is not
+   semantically observable.  Boundary calls, observation frontiers, BVI
+   commit points, and mixed-engine clocks/resets obey the same order.
+9. Observable effects, including BDPI, `$display`, and `$finish`/`$stop`
+   suppression, preserve their required ordering through module contracts.
+   Recovering the old global schedule solely to order effects is forbidden.
+   If a contract cannot express the required ordering, P0 fails and that
+   contract must be revised before migration proceeds.
 
-The plan is to encode these as a *semantics test kit* first (see §10):
-a reference interpreter over BIR that the LLVM backend is differentially
-tested against, and both against today's Bluesim.
+These are encoded in a *semantics test kit* first (see §10): the hierarchical
+interpreter is tested against Bluesim where applicable, with BSC-generated
+Verilog primary for dynamic-scheduling parity.  Compiled and BVI module
+executors are tested against the interpreter and the relevant Verilog oracle.
+Do not require a broader dynamic scheduler than the reference Verilog backend.
 
-## 5. Code generation
+## 5. Module execution and code generation
 
 ### 5.1 State layout: inline registers and wires
 
-Each module becomes an LLVM struct type; each instance a field (or array of
-fields for replicated instances) inside its parent — the whole design is
-**one contiguous state allocation** with statically known offsets.
+Each BSV module has an instantiation-independent state-layout descriptor.
+Every executor receives an instance-relative state handle; generated module
+code may not bake an instance path, a design-wide slot number, or a child's
+absolute address into its generic body.  The instance allocator may pack
+module state blocks into one arena for locality, but that packing is link
+metadata, not part of module code identity.  A BVI instance carries an opaque
+executor handle behind the same ownership boundary.
 
 - `Reg`/`RegU`/`RegA`, `ConfigReg`, `RWire`/`Wire`/`PulseWire`, `BypassWire`,
   `CReg`, `Probe`, `Counter`, `RegTwo` are **not objects**: their storage is
   plain fields (`iN` for N ≤ 64, `[n x i32]`/`iN` beyond).  Reads are loads,
   writes are stores; the schedule order supplies register semantics.
-  ConfigReg/RegTwo/CReg keep their small shadow fields with the same
-  timestamp-free trick where possible: because the schedule is static, the
-  codegen *knows* whether a same-cycle earlier write can reach a read and can
-  materialize the shadow only when the schedule actually requires it — most
-  ConfigRegs degrade to plain Regs after this analysis (today's runtime pays
-  the `bk_is_same_time` check on every access, unconditionally).
+  ConfigReg/RegTwo/CReg retain the shadow/timestamp behavior required for
+  correctness in the interpreter baseline.  Later codegen may remove checks
+  only with a module-local proof valid for every legal dynamic alternative
+  and boundary interaction.  Missing proof retains the generic behavior;
+  it is not a reason to consult or construct a global schedule.
 - Wires zero their valid bits at edge start (fused with the existing
   enable-zeroing pass over a contiguous region — a few `memset`-like stores)
   or, when a wire's writer and readers are all in one domain segment and the
@@ -284,50 +533,67 @@ fields for replicated instances) inside its parent — the whole design is
   storage in state structs for layout stability; no heap, no `WideData`
   objects, no `wop_*` out-parameters.
 
-### 5.2 Hierarchical code generation
+### 5.2 Hierarchical execution and code generation
 
-The unit of code generation is the **module** (as in PR #2's `-c` model),
-not the design — and the schedule arrives already factored that way
-(BIR.md §4), so codegen never re-derives hierarchy from a flat order:
+The unit of executable work is the **module**, not the design.  This is true
+before LLVM exists:
 
-- **Segments are computed by bsc and exported per module type.**  A
-  module's rules interact with the outside world only through its
-  interface methods; every cross-boundary constraint attaches to a method
-  node, which the merge fuses into the calling parent's rules
-  (`SimExpand.hs:1040-1076`).  Cutting the module's own schedule order at
-  its method-node positions yields ≤ methods+1 **segments** regardless of
-  rule count.  A tile with 200 internal rules and 6 interface methods is
-  at most 7 segments; a 64-tile grid contributes ≤ 448 top-level schedule
-  entries instead of 12,800.  The tile's internal scheduling never
-  becomes manifest at the top level.
-- Codegen emits `seg_<Mod>_<domain>_<edge>_<k>(state*)` per segment, per
-  module type.  The per-domain edge function is the **composition**: a
-  short driver of (instance, segment) calls that scales with instances ×
-  methods, not instances × rules.  Worst-case coupling degrades to more,
-  smaller segments — never to a semantic change.
-- Two facts don't factor by module type and ride the composition instead:
-  cross-module ME-inhibitor pairs (parent↔child disjointness derived
-  through method use, `combineSchedDRDB`, `SimExpand.hs:1362-1429`) become
-  per-instance inhibit inputs, constant-folded when the instantiation
-  context makes them dead; and cross-instance tick ordering.  Intra-module
-  inhibitors are fixed by the module's own segment order and bake into the
-  shared per-module code.
-- Rule bodies and methods are per-module LLVM functions; method calls across
-  module boundaries are direct calls with the callee's state pointer — and
-  since the whole design is one LLVM program at link, **cross-module inlining
-  is an optimization-pass decision, not a translation-unit boundary**.  Small
-  value methods (the `_read` of an inlined reg, RDY exprs) disappear
-  entirely.
-- Per-module code is emitted into its own LLVM module keyed by
-  `(module, codegen options, BIR hash)` → object cache.  Instantiating the
-  same BSV module N times costs one codegen.  The only always-regenerated
-  pieces are the composition drivers (mirroring PR #2: "the top module,
-  the schedule, and the model files are always generated by the link").
+- A **module artifact** contains one boundary contract, one local state
+  layout, local rules/methods/defs, and local schedule segments.  Preparing
+  it for interpretation or lowering it to LLVM happens once per unique
+  `(module content, parameter specialization, executor options)` key.
+- An **instance record** contains only identity, a state handle, clock/reset
+  bindings, child bindings, and module-local protocol state.  It references a
+  shared module artifact and executor.  It never owns a copied rule body,
+  def cone, optimized IR graph, or generated function.
+- A **module-local scheduling protocol** coordinates the module's own work
+  and its immediate children's declared boundary interactions.  A child may
+  suspend/resume while remaining opaque; its parent cannot enumerate the
+  child's internal segments or collect the schedules of its descendants.
+  Only endpoint bindings and instance-local protocol state are added per
+  instantiation.  There is no design-level boundary plan or segment order.
+- **Guarded alternatives** belong to the owning module's scheduler, with
+  choice state per instance.  Dependencies involving siblings are mediated
+  by their parent through the contracts, recursively; they never become a
+  global Cartesian product or whole-domain alternative order.  The
+  interpreter and compiled dispatch use the same protocol.
+- **Calls cross a stable module-executor ABI.**  A parent passes an instance
+  handle and typed method arguments to the child's executor.  The generic
+  parent artifact depends on the child's boundary contract, not its body.
+  Consequently a child-body edit does not change the generic parent artifact.
+- **LLVM is per module.**  Baseline JIT and AOT produce one LLVM module/object
+  per module specialization plus small design-specific binding data.  There
+  is no baseline whole-design LLVM module, mega-edge function, or later pass
+  whose input already contains every instance's internal schedule.
+- **BVI uses the same seam.**  A BVI executor is opaque module code with the
+  declared schedule/path/clock/reset contract.  Parent modules and the kernel
+  use the declared executor operations, including observation and commit,
+  without inspecting the BVI body or reconstructing its internal schedule.
+
+Segments are an internal implementation detail of one module's executor.
+Public endpoints express method, phase, ordering, and observation obligations,
+not the identities of the segments that implement them.  A module with more
+internal work but the same contract may take longer to execute; it must not
+enlarge any ancestor's scheduling representation.  Real interface coupling
+may increase local coordination work, but cannot be handled by flattening
+the coupled subtree.  Whether the complete semantic surface admits such a
+protocol is the P0 question; this section does not assume that it does.
+
+Cross-module inlining and bounded boundary fusion are **specialization
+passes**, disabled in the baseline.  A specialization is a separate overlay
+keyed by the exact body closure it incorporates; it must be
+reported by plan diagnostics and may be dropped without affecting the
+generic artifact.  It cannot be used to claim that hierarchical compilation
+works, and it cannot become the fallback for an unsupported feature.
+Design-wide edge compilation, transitive subtree schedule merging, and
+global rule/segment planning are not permitted specialization passes.
+Body/call optimizations do not transfer ownership of descendant schedules.
 
 ### 5.3 Fire-condition and rule optimization
 
-All standard LLVM scalar optimization applies after inlining, but the
-schedule-aware wins come from our own passes over BIR before LLVM:
+After the hierarchical gates pass, LLVM scalar optimization applies within
+a module.  The following are later module-local optimization opportunities,
+not assumptions needed by the interpreter or scheduling protocol:
 
 - **Dead-def pruning per cone**: only defs feeding a `WILL_FIRE`, an action
   argument/condition, or a wave-visible signal are materialized; others fold
@@ -351,33 +617,68 @@ imported C functions keep their exact current C ABI (including the
 `Direct`/`Buffered` return styles and polymorphic `unsigned int*` marshaling,
 `ForeignFunctions.hs:305-341`) so existing user C code links unchanged.
 
+### 5.5 BVI module execution
+
+An `import "BVI"` fragment carries a stable contract derived from `VModInfo`:
+physical ports, typed parameters, methods and RDY/EN relationships, method
+scheduling relations, clocks, resets, and declared combinational paths.
+That contract lets bsc schedule a BSV parent against the module without
+seeing its implementation.  Its sufficiency for TRS's recursive runtime
+protocol, including dynamic scheduling and mixed execution, must be proved
+in P0; frontend separate scheduling alone does not establish that result.
+
+The initial BVI executor uses Verilator behind a narrow C ABI.  Method calls
+stage input/enable changes; value and ready reads are observation frontiers;
+and one batched commit point applies non-clock inputs, coincident clock edges,
+and enable clearing in the defined timeslice order.  Reset delivery, output
+clocks, `$display`/`$finish`, plusargs, timing events, and fatal containment
+are part of the executor contract and are tested in mixed hierarchies.
+Model-internal delayed events remain owned by that model; the shared kernel
+may deliver its declared next-time wakeup and boundary events, but does not
+extract or merge its internal event/execution schedule with BSV schedules.
+
+Verilation occurs only during an explicit build/link action and produces a
+content-addressed per-module-specialization artifact.  A simulation run is
+load-only and does not need Verilator or source files.  Unsupported BVI
+surface is rejected at contract export or build with a precise diagnostic;
+support is expanded by extending this executor, not by weakening hierarchy
+or falling back to a whole-design Verilog translation.
+
 ## 6. Compile-time strategy
 
 This is a first-class requirement, not a byproduct.
 
-- **No C++ in the loop.**  IR is constructed in memory and lowered by LLVM
-  directly to objects.  We skip: text generation, g++ parsing (~500 KB of
-  primitive headers per TU today), template instantiation, and EH/RTTI
-  bookkeeping.  For a mid-size design where today's link spends minutes in
-  g++, LLVM -O1 on already-clean IR is expected to be an order of magnitude
-  faster; -O0+JIT nearly free.
+- **No C++ in the BSV-module loop.**  Module IR is constructed in memory and
+  lowered by LLVM directly to objects.  We skip text generation, g++ parsing,
+  template instantiation, and EH/RTTI bookkeeping for BSV modules.  A BVI
+  executor may use Verilator/C++ in its separate content-addressed build step;
+  it is not part of every TRS relink or run.
 - **Parallel by module.**  One LLVM context/module per BSV module, codegen
-  and object emission fanned across cores (rayon).  Today only the g++ step
-  parallelizes (`-parallel-sim-link`), and the biggest TU (the schedule)
-  serializes the tail.  Segmented schedules (§5.2) break that tail up.
-- **Content-addressed object cache.**  Key = BIR hash ⊕ codegen options ⊕
-  trs version, mirroring PR #2's `StaleUtils` conventions ("missing product
-  is never fresh; equal times are fresh") but by content, not mtime, so
-  rebuilding an unchanged module is a cache hit even after `touch`.  This
-  extends `-c` point codegen naturally: `bsc -sim -c mkFoo` can emit
-  `mkFoo.o` via trs, and link reuses it — same mental model, same flags,
-  as the Verilog side of PR #2.
-- **Two execution modes.**
-  - **JIT (default for iterate-run):** ORC/LLJIT, lazy per-segment
-    compilation at -O0/-O1 — simulation starts in milliseconds after link
-    planning; hot segments can be recompiled at higher opt while idle.
+  and object emission fanned across cores.  No whole-design LLVM context or
+  mega-edge function may serialize the tail.
+- **Content-addressed module artifacts.**  Identity includes module BIR,
+  boundary ABI revision, parameter specialization, executor/codegen options,
+  and TRS version.  `bsc -trs -c` exposes deterministic module outputs;
+  `bsc -trs -e` binds them.  Bazel or another build system owns persistent
+  caching in split builds; the direct one-shot flow may maintain a local
+  project cache, but both consume the same artifact identity.
+- **Link work stays link work.**  Instance-graph construction, binding,
+  endpoint validation, clock/reset routing, and final packaging happen at
+  link.  There is no design-wide schedule merge, graph sort, or segment-plan
+  generation, even when it would emit only references.  Module analysis,
+  interpreter preparation, BVI verilation, and LLVM lowering do not move to
+  link merely because the direct flow can do everything in one process.
+- **Three BSV execution modes.**
+  - **Interpreter (architectural baseline):** complete semantics, instant
+    startup, mixed-mode fallback, and differential oracle.
+  - **JIT:** ORC/LLJIT compilation per module or segment at -O0/-O1; hot
+    module artifacts may be replaced by higher-tier implementations without
+    changing bindings.
   - **AOT (default for `bsc -o`)**: emit objects, link the `.so` +
     runner; -O2/-O3 for long-running regressions.
+- **BVI is orthogonal to the three modes.**  A BVI module selects its own
+  opaque executor while BSV siblings may independently be interpreted, JITed,
+  or AOT compiled.
 - **Tiered effort knobs** surfaced as flags (`-sim-opt 0..3`), because "run
   a 10-second smoke test" and "run a 10-hour soak" deserve different
   compile budgets.
@@ -387,17 +688,25 @@ This is a first-class requirement, not a byproduct.
 A port of the current kernel's *semantics* with its accidental complexity
 removed:
 
+- Module-owned scheduling: the kernel delivers a clock/phase event to the
+  appropriate module endpoints.  Their schedulers coordinate local work and
+  immediate children recursively, including local guarded choices.  The
+  kernel does not walk a design-wide instance/segment order or select which
+  internal rule fires.  The concrete suspend/resume/phase protocol is frozen
+  only after P0 proves its semantics and scaling.
 - Event queue: binary heap of `(time, packed priority)` exactly reproducing
   `priority.cxx` packing (observable ordering).  Handlers are enum variants,
-  not fn pointers, so the hot path (clock edge → segment calls) is a direct
-  match and call.
+  dispatching time/clock/reset/external events to opaque endpoints.  It must
+  not be repurposed as a global per-edge queue of rule/segment work.  Shared
+  time coordination is distinct from within-edge module scheduling.
 - Clocks: periodic waveforms and aperiodic derived clocks with
   `trigger_clock_edge` from generator primitives, `combinational_at`
   bookkeeping for wave time-correction, edge counters/limits for
   bluetcl `step`.
-- Reset: global `reset_tick_requests` counter gating a per-edge reset block;
-  async resets act immediately; generated resets defer to end-of-timeslice —
-  as today (`reset.cxx`).
+- Reset: shared accounting may track pending reset work, but each module
+  owns reset propagation and ticks through its local connections.  Preserve
+  immediate async assertion and specified end-of-timeslice transitions
+  (`reset.cxx`); do not generate a design-wide reset execution block.
 - Threading: the kernel itself is single-threaded and synchronous; the
   `bk_advance`/`bk_sync` async protocol is provided by an optional driver
   thread in the compat layer (bluetcl expects it), not baked into the core.
@@ -412,15 +721,14 @@ removed:
 One `wave` subsystem with two writers behind a trait; both fed by the same
 change-capture machinery.
 
-- **Change capture without a backing model.**  Codegen knows every store to
-  wave-visible state.  In wave-enabled builds it emits, at each commit point,
-  a compare-and-append into a per-domain **change buffer** (signal id, new
-  value) — no second model instance, no full-hierarchy walk per timeslice.
-  Signals whose writes are unconditional every cycle (clocks, counters) can
-  opt into periodic snapshotting instead.  Wave-disabled builds pay zero: the
-  instrumentation is a codegen variant, selected at link (JIT mode can
-  re-lower segments when `$dumpvars` first fires, so even "wave-capable"
-  binaries pay nothing until enabled).
+- **Change capture without a backing model.**  The module-executor contract
+  exposes wave-visible changes: the interpreter records semantic writes,
+  compiled modules emit compare-and-append operations at commit points, and
+  BVI executors sample declared observable outputs at their batched commit.
+  All feed a per-domain **change buffer** (instance, signal id, new value),
+  with no second model and no full-hierarchy walk per timeslice.  Wave-disabled
+  executors pay zero; enabling waves may select or JIT a wave-instrumented
+  module variant without changing its scheduling contract or parent bindings.
 - **Time correction** (combinational values appearing after the previous
   edge) is kept: each signal carries its driving-clock association; the
   buffered changes flush once a timeslice's `combinational_at` frontier
@@ -441,13 +749,15 @@ change-capture machinery.
 
 ## 9. Performance versus Verilator: why this can win
 
-Structural advantages we inherit from Bluespec + TRS:
+Potential advantages of retaining rule-level information, to be measured
+after the hierarchy/semantic gates pass:
 
-- **The schedule is computed once, by the compiler.**  Verilator evaluates a
-  levelized combinational netlist and re-evaluates fanout cones; Bluesim
-  executes ~one branch + one body per rule per cycle, and dead rules cost a
-  single well-predicted branch.  There is no convergence loop, no eval/trigger
-  bookkeeping.
+- **Module-local scheduling decisions are computed once, by bsc.**  The
+  runtime executes those decisions and their guarded alternatives through
+  local protocols.  It need not reconstruct rule intent from a lowered
+  netlist or build a design-wide schedule.  This is not a claim of zero
+  scheduling overhead: boundary coordination, dynamic choices, and BVI
+  settling have real costs that P0 must expose and later benchmarks measure.
 - **Coarse grain.**  Rules are much bigger than gates; the work per branch
   decision is larger, and the state accesses within a rule body are
   register-allocatable SSA after inlining.
@@ -458,65 +768,111 @@ Structural advantages we inherit from Bluespec + TRS:
 
 What we must do well to actually win (and how):
 
-- **Cross-module inlining** (§5.2) — Verilator gets this from generating one
-  C++ program; we get it inside LLVM at link, with a whole-design view.
-- **Memory locality** — one contiguous state allocation, fields ordered by
-  schedule-adjacency (rules touching them are neighbors in execution order),
-  hot/cold splitting (wave shadows and rarely-used state segregated).
-- **No per-access overhead** — no `bk_is_same_time` timestamp checks on the
-  common path (statically resolved, §5.1), no virtual calls, no symbol/name
-  machinery in the hot path.
+- **Cheap module boundaries** — stable direct-call/trampoline paths, compact
+  instance handles, typed argument slots, and batched boundary transitions.
+  Boundary cost is measured before cross-module inlining is considered.
+- **Memory locality without code coupling** — instance state blocks may be
+  arena-packed and hot/cold split, but module executors use relative layout
+  and remain reusable across designs and instance positions.
+- **Low per-access overhead where locally provable** — remove redundant
+  timestamp checks only under the proof requirements in §5.1; retain them
+  otherwise.  Tune call dispatch and keep symbol/name machinery out of the
+  hot path without requiring a static global order.
 - **Wave capture that doesn't tax non-wave runs** (§8) — today VCD-capable is
   always paid for (backing model allocated when dumping starts, dump walk per
   slice).
-- **Scaling**: compile is per-module and cached (Verilator recompiles the
-  world), and the runtime's flat state + segment structure is the natural
-  substrate for later **partitioned parallel execution**: per clock domain
-  first (independent by construction outside crossing rules), then
-  rule-graph partitioning within a domain (conflict-free segments with
-  private commit buffers).  Parallelism is explicitly phase 6 — single-thread
-  wins come first, and Verilator's multithread mode is the bar for the
-  parallel phase, not the serial one.
+- **Scaling**: compilation and executable IR are per unique module
+  specialization.  Local scheduling protocols and parent/child bindings are
+  also the substrate for later **partitioned parallel execution**: per clock
+  domain first, then conflict-free boundary regions with private commit buffers.
+  Parallelism is explicitly phase 6; it does not justify flattening earlier.
+- **Selective specialization, only when measured** — after the generic path
+  is competitive and passes scale gates, a hot boundary may be fused or
+  inlined under the rules in §0 and §5.2.  Benchmark reports include both the
+  speedup and the added build time, code bytes, memory, and invalidation fanout.
 
-Benchmark plan: the testsuite's larger designs plus external cores that
-already build with bsc (Piccolo/Flute-class RISC-V SoCs, Ethernet/DMA-style
-designs), measured three ways — wall-clock cycles/sec, link-to-first-cycle
-latency, and full edit-relink-rerun loop — against current Bluesim and
-Verilator (`--threads 1` and best-N) on the same RTL.
+Benchmark plan: the testsuite's larger designs, repeated-instance ladders,
+and external cores that already build with bsc (Piccolo/Flute-class RISC-V
+SoCs, Ethernet/DMA-style designs).  Measure cycles/sec, link-to-first-cycle,
+edit-relink-rerun latency, peak build/run memory, executable/IR bytes, and
+the slope of each metric as identical instances are added.  Compare against
+current Bluesim and Verilator (`--threads 1` and best-N) on the same RTL.
 
 ## 10. Phasing
 
-- **P0 — BIR export + loader.**  `SimExportIR.hs` (reusing `SimExpand` /
-  `simPackageOpt`, which already run at link time) serializes the
-  post-merge system per [BIR.md](BIR.md), using `serialise`/`cborg` — the
-  one new Haskell dependency, adopted on the cabalization path; Rust `ir`
-  crate loads/verifies/dumps; golden-file diffs against bsc dumps.
-  Deliverable: every testsuite `.ba` round-trips.
-- **P1 — Reference interpreter.**  Tree-walking evaluator over BIR with the
-  §4 semantics, wired to kernel + rt + `$display`.  Slow but complete; it is
-  the differential oracle.  Deliverable: testsuite `bsc.bluesim` cases pass
-  bit-identically (stdout diff) vs current Bluesim.
-- **P2 — LLVM codegen, single domain.**  Registers/wires inlined; flat (not
-  yet segmented) schedule function; JIT mode; kernel `bk_*` cdylib; VCD.
-  Deliverable: interpreter-vs-JIT differential green; first perf numbers.
-- **P3 — Full surface.**  MCD (derived/gated clocks, synchronizers,
-  crossing rules), resets, full primitive set, BDPI, bluetcl parity,
-  native runner.  Deliverable: full testsuite parity.
-- **P4 — Hierarchical codegen + caching.**  Domain segments, per-module
-  object cache, `-c` integration per PR #2 conventions, AOT mode, FST.
-- **P5 — Performance program.**  Layout, branch metadata, small-FIFO
-  inlining, wave-capture tuning; publish benchmark suite vs Verilator.
+- **P0 — Prove hierarchical completeness, then freeze contracts.**  Inventory
+  the BIR schema, runtime primitives, and BVI contract; build the unoptimized
+  executor-ABI spike and close every row of the §0.1 proof matrix.  Add route
+  assertions and instance-count/depth/internal-size/leaf-edit gates.  Audit
+  every preparation path as well as runtime: no global rule/segment schedule
+  may be constructed, compressed, cached, or used to derive local plans.
+  Keep the existing whole-design engine only as a separate differential
+  reference, never an implementation fallback or source of dispatch data.
+  Deliverable: the compositional argument and executable evidence for every
+  required semantic interaction, measured scale curves, and synchronized
+  DESIGN.md, BIR.md, executor, and BVI contracts.  P1 is blocked until this
+  gate passes.
+- **P1 — Hierarchical interpreter and module-local dynamic scheduling.**
+  Load one fragment per module, share prepared module artifacts, allocate
+  per-instance state, and execute through recursive parent/child protocols.  Guarded
+  alternatives select locally; there is no whole-domain alternative order.
+  Deliverable: static suites pass against Bluesim and dynamic-schedule suites
+  match the supported Verilog-backend behavior, while repeated-instance
+  module-local preparation work stays constant.
+- **P2 — Complete interpreter surface and mixed BVI.**  MCD, derived/gated
+  clocks, resets, crossing rules, primitives, BDPI, system tasks, interactive
+  API, waveforms, and the Verilator-backed BVI executor all run through the
+  same hierarchy.  Deliverable: full semantic corpus plus BVI/Verilog oracle
+  tests, including interpreted BSV above and below BVI boundaries.
+- **P3 — Per-module LLVM executors.**  Implement JIT and AOT for the module
+  executor ABI, with deterministic `-c` artifacts and small `-e` binding.
+  Unsupported operations fall back at module/segment granularity to P1,
+  never to a monolithic design compiler.  Deliverable: mixed interpreter/JIT/
+  AOT/BVI parity and constant lowering/emission count across instance ladders.
+- **P4 — Make hierarchy the only default architecture.**  Switch the product
+  default after P1-P3 gates hold, quarantine then remove the whole-design
+  schedule merger, compressed composition planner, lowerer, mega-edge path,
+  and instance-derived code identities.  Deliverable: no production execution
+  path, including an optimized path, can construct a global schedule.
+- **P5 — Measured performance program.**  Module-local SSA/layout work,
+  branch metadata, small-primitive lowering, wave tuning, and then explicit
+  boundary specializations where total-cost benchmarks justify them.
 - **P6 — Parallel execution.**  (The SystemC wrapper was dropped from
   scope: trs will not provide one.)
+
+No phase may land a flat production path with a promise to recover hierarchy
+later.  Existing flat engines and experiments may remain only as isolated
+reference tooling; a developer or optimization flag does not make them
+eligible dependencies of the hierarchical product.  Later performance work
+does not authorize reintroducing a global rule or segment schedule.
 
 ## 11. Risks and mitigations
 
 - **Semantics drift** (ME inhibitors, timestamp shadows, `$display`
   ordering, event tie-breaking): mitigated by the interpreter-first plan and
-  bit-identical stdout/VCD differential testing; the priority packing and
-  earliness flattening are ported, not reinvented.
-- **BIR schema churn**: versioned schema, decode-time validation, and the
-  exporter lives in bsc's tree so datatype changes break the build, not the
+  the comparator policy in P0-HANDOFF.md: Bluesim parity where applicable and
+  Verilog-backend parity for dynamic scheduling.  The hierarchical scheduler
+  must preserve the designated reference behavior; it does not invent a
+  more general scheduling policy or rely only on final-state agreement.
+- **Architecture regression hidden by parity**: a monolithic implementation
+  can be semantically perfect and still violate the product requirement.
+  A body-free segment composition can violate it too.  Structural route
+  checks and instance-count/depth/internal-size/leaf-edit tests are required
+  CI gates, reviewed alongside parity; smaller global plans still fail.
+- **Protocol incompleteness**: a fixed one-call-per-cycle module interface
+  may be too weak for cross-boundary interleavings, ME inhibition, or effects.
+  P0 must test a resumable/phase-aware local protocol and justify composition
+  at every depth.  A counterexample blocks the gate and drives a contract
+  revision; it does not justify a global scheduling fallback.
+- **Boundary under-specification**: a child body, BVI model, or dynamic
+  alternative may depend on information absent from its contract.  Decode
+  verification, mixed-engine differential tests, BVI observation checks, and
+  fail-closed unsupported diagnostics prevent silent substitution.
+- **Module ABI churn**: the executor ABI and state-layout contract carry
+  explicit revisions in artifact identities; mismatches fail before run and
+  never fall back to body inlining.
+- **BIR schema churn**: versioned schema, decode-time validation, and paired
+  exporter/loader tests make datatype changes break the build rather than the
   wire format silently.
 - **LLVM API churn / packaging**: pin via `inkwell`/`llvm-sys` (LLVM 18
   validated in-tree; llvm-sys tracks LLVM 8-22); prerequisites are
@@ -527,15 +883,10 @@ Verilator (`--threads 1` and best-N) on the same RTL.
   production JIT is ORC LLJIT via `llvm_sys::orc2` behind a thin wrapper
   of our own (the raw C API is marked experimental; the unsafe surface is
   confined to one module).
-- **Haskell serialization dependency**: `serialise`/`cborg` are
-  Well-Typed-maintained and Debian/Ubuntu-packaged, but they are bsc's
-  first external serialization dependency; adopted as part of the
-  cabalization effort, with the encoder isolated in `SimExportIR.hs` so a
-  hand-rolled CBOR fallback (~150 lines over `bytestring`) remains
-  possible if packaging friction appears.
-- **Haskell-side maintenance**: `SimExportIR.hs` is small (serialization
-  only) and colocated with `SimPackage`; the heavy semantic passes it reuses
-  (`SimExpand`, checks) already exist.
+- **Verilator variability for BVI**: pin and capability-check the supported
+  Verilator range, derive model metadata from stable generated build products,
+  include tool/source/parameter identities in build keys, and test load-only
+  artifacts across supported versions.
 - **`$display` fidelity**: the format engine is ported with its tests; the
   descriptor-string contract is preserved.
 - **fst-writer maturity**: it is young; we keep the writer behind a trait,
@@ -554,8 +905,9 @@ src/trs/               Rust workspace (this directory)
                             tasks, plusargs, wide-data helpers
     trs-wave/             change capture, VCD writer, FST writer
     trs-codegen/          LLVM lowering (feature "llvm", needs llvm-18-dev)
+    trs-vlt/              BVI contract adapter and Verilator build products
     trs/                  CLI: link planner, JIT/AOT driver, native runner
-src/comp/SimExportIR.hs     (P0) BIR exporter, invoked from the -trs path
+  trs-bir/                one-.ba-to-one-BIR-fragment exporter
 ```
 
 `cargo build` in `src/trs` builds everything except `trs-codegen`
@@ -600,10 +952,12 @@ textual `.ll` and shells out to clang/llc; (C) BIR export + Rust codegen
   post-elaboration simulation IR exported by the frontend; CIRCT tried
   direct HW→LLVM lowering and abandoned it for a mid-level IR (Arc ≈ BIR).
 - **What the Haskell option got right** was folded back into the design:
-  the export moved to post-`simExpand`/`simPackageOpt` so schedule merging
-  and rule linearization stay in Haskell (§3.1), and the schedule is
-  exported hierarchically (§5.2, BIR.md §4) so no scheduling semantics are
-  re-derived in Rust.
+  each `.ba` exports an already-scheduled module fragment, including local
+  rule/method order and any scheduler-proved guarded alternatives (§3.1).
+  TRS binds endpoints and executes those facts through recursive module-local
+  scheduling protocols; it does not re-run the compiler's conflict/SAT
+  reasoning, merge a design-wide rule/segment schedule, or flatten executable
+  bodies across instances.
 
 Revisit if: the JIT loop is dropped as a requirement *and* sustaining
 maintainers are Haskell-only (then (B) against the existing C++ runtime is
