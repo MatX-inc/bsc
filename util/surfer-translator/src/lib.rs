@@ -580,8 +580,9 @@ fn active_member(desc: &TypeDesc, bits: &str) -> Option<usize> {
     desc.members.iter().position(|m| by_tag(m) || by_when(m))
 }
 
-fn raw(bits: &str) -> TranslationResult {
-    let kind = if bits.chars().all(|c| c == '0' || c == '1') {
+/// Normal for a fully known value, else the kind of unknown in it
+fn kind_of(bits: &str) -> ValueKind {
+    if bits.chars().all(|c| c == '0' || c == '1') {
         ValueKind::Normal
     } else if bits.contains('x') {
         ValueKind::Undef
@@ -589,11 +590,14 @@ fn raw(bits: &str) -> TranslationResult {
         ValueKind::HighImp
     } else {
         ValueKind::Warn
-    };
+    }
+}
+
+fn raw(bits: &str) -> TranslationResult {
     TranslationResult {
         val: ValueRepr::Bits(bits.len() as u32, bits.to_string()),
         subfields: vec![],
-        kind,
+        kind: kind_of(bits),
     }
 }
 
@@ -644,13 +648,22 @@ fn decode(loaded: &Loaded, name: &str, bits: &str, depth: u32) -> TranslationRes
     let Some(desc) = resolve(loaded, name) else {
         return raw(bits);
     };
-    if depth > 32 || !bits.chars().all(|c| c == '0' || c == '1') {
-        // an unknown or partly-unknown value: shown raw, with its
-        // structure marked absent
+    // raw, with the structure marked absent: too deep to decode, or a
+    // union or enum with unknown bits, which select no constructor
+    let raw_absent = || {
         let mut r = raw(bits);
         r.subfields = not_present(loaded, name, depth).subfields;
-        return r;
+        r
+    };
+    if depth > 32 {
+        return raw_absent();
     }
+    // A struct or vector with unknown bits still decodes member by
+    // member, each member showing its own bits (one computed by an
+    // expression rather than sliced is absent); the whole carries the
+    // kind of unknown.
+    let kind = kind_of(bits);
+    let known = matches!(kind, ValueKind::Normal);
     // a member's value; a don't-care shows as absent
     let member_value = |m: &Member| match (member_bits(m, bits), &m.ty) {
         (Some(b), Some(t)) => decode(loaded, t, &b, depth + 1),
@@ -668,8 +681,10 @@ fn decode(loaded: &Loaded, name: &str, bits: &str, depth: u32) -> TranslationRes
                     result: member_value(m),
                 })
                 .collect(),
-            kind: ValueKind::Normal,
+            kind,
         },
+        "union" if layout_known(desc) && !known => raw_absent(),
+        "enum" if !known => raw(bits),
         "union" if layout_known(desc) => {
             let active = active_member(desc, bits);
             let subfields = desc
@@ -739,7 +754,7 @@ fn decode(loaded: &Loaded, name: &str, bits: &str, depth: u32) -> TranslationRes
                         ),
                     })
                     .collect(),
-                kind: ValueKind::Normal,
+                kind,
             },
             _ => raw(bits),
         },
@@ -950,11 +965,29 @@ mod tests {
     }
 
     #[test]
-    fn unknown_bits_stay_raw() {
+    fn unknown_bits_decode_member_by_member() {
         let l = fixture();
-        let r = decode(&l, "WaveTypes::Pixel", "xxxxxxxxxxxxxxxxxx", 0);
+        // a struct's fields each show their own bits, known or not
+        let r = decode(&l, "WaveTypes::Pixel", "00000001xxxxxxxx01", 0);
         assert!(matches!(r.kind, ValueKind::Undef));
+        assert_eq!(flat(&r), "struct{x=00000001, y=xxxxxxxx, color=\"Green\"}");
+        let r = decode(&l, "WaveTypes::Pixel", "xxxxxxxxxxxxxxxxxx", 0);
+        assert_eq!(flat(&r), "struct{x=xxxxxxxx, y=xxxxxxxx, color=xx}");
+        // so do a vector's elements
+        let r = decode(&l, "Vector::Vector#(4, WaveTypes::Color)", "xx100100", 0);
+        assert_eq!(
+            flat(&r),
+            "array{[0]=\"Red\", [1]=\"Green\", [2]=\"Blue\", [3]=xx}"
+        );
+        // a union selects no arm: raw, with the arms absent
+        let r = decode(&l, "WaveTypes::Cell", "zzzzzzzzzzzzzzzzzzzz", 0);
+        assert!(matches!(r.kind, ValueKind::HighImp));
+        assert!(matches!(r.val, ValueRepr::Bits(..)));
         assert_eq!(r.subfields.len(), 3);
+        assert!(r
+            .subfields
+            .iter()
+            .all(|s| matches!(s.result.val, ValueRepr::NotPresent)));
     }
 
     #[test]
