@@ -6,12 +6,13 @@
         hs = pkgs.haskell.packages.ghc967;
       in
       {
-        default = pkgs.mkShell {
+        default = hs.shellFor {
           # Compiler, vendored-solver and Tcl deps all come from the package.
-          inputsFrom = [ self.packages.${system}.default ];
+          packages = _: [ self.packages.${system}.default ];
           # Dev-only tools: cabal, HLS (matching the package set's GHC), and
           # the testsuite deps.
           nativeBuildInputs = [
+            hs.ghcid
             hs.haskell-language-server
             pkgs.cabal-install
             pkgs.dejagnu
