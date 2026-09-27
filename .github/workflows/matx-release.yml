@@ -65,6 +65,7 @@ jobs:
       ghc_version: 9.6.7
       hls_version: 2.13.0.0
       timeout_override: ${{ matrix.timeout_override }}
+      bluehs: true
       # push-trigger runs (inputs empty) use the committed default
       matx_verilator_mode: ${{ inputs.verilator_mode || 'ratchet' }}
     secrets: inherit
@@ -83,6 +84,7 @@ jobs:
       ghc_version: 9.6.7
       hls_version: 2.13.0.0
       timeout_override: ${{ matrix.timeout_override }}
+      bluehs: true
       brew_update: ${{ matrix.brew_update }}
       # No macOS verilator leg: the deployed simulator is linux-x86_64,
       # the 3-core/7GB macOS runners OOM under verilator g++, and their
