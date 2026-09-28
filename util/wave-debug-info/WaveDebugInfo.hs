@@ -31,16 +31,20 @@
 -- significant; a union's tag above the widest payload, each payload
 -- right-aligned), "custom", or "unknown" when the instance could not
 -- be reduced.  A vector's element 0 is lowest.
-module WaveDebugInfo (waveDebugInfo) where
+module WaveDebugInfo (waveDebugInfo, phase) where
 
 import Data.Maybe(mapMaybe, isJust)
+import Control.Exception(evaluate)
+import Control.Monad(when)
+import Data.Time.Clock(getCurrentTime, diffUTCTime)
+import System.IO(hPutStrLn, stderr)
 import Data.Bits(shiftL, testBit)
 import Data.Char(isDigit)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
 import Error(ErrorHandle)
-import Flags(Flags, tclShowHidden)
+import Flags(Flags, tclShowHidden, verbose)
 import Position(getPositionFile, getPositionLine,
                 getPositionColumn, noPosition)
 import TclUtils(isRealPosition)
@@ -573,6 +577,19 @@ typesJson errh flags symtab roots = do
 
 -- ---------------
 
+-- Runs a step, and under -v reports how long it took, the step's result
+-- forced as far as the given measure takes it
+phase :: Flags -> String -> (a -> Int) -> IO a -> IO a
+phase flags name measure act
+  | not (verbose flags) = act
+  | otherwise = do
+      t0 <- getCurrentTime
+      x <- act
+      _ <- evaluate (measure x)
+      t1 <- getCurrentTime
+      hPutStrLn stderr ("wavedebuginfo: " ++ name ++ ": " ++ show (diffUTCTime t1 t0))
+      return x
+
 -- The JSON text of the debug information for the design under `top`,
 -- whose scope path in the dump is main.top
 waveDebugInfo :: ErrorHandle -> Flags -> SymTab -> HierMap -> [(String, ABinEitherModInfo)]
@@ -581,10 +598,18 @@ waveDebugInfo errh flags symtab hier mods top = do
     let design = Design { d_hier = hier
                         , d_mods = M.fromList mods
                         , d_hide = not (tclShowHidden flags) }
-        signals = moduleSignals design ["main", "top"] [] top
-        roots = distinct (mapMaybe sig_type signals)
-    types <- typesJson errh flags symtab roots
-    return $ render $
+    _ <- phase flags "decoding the modules" id $
+        return (sum [ M.size (apkg_inst_tree p) + length (apkg_state_instances p) + length (apkg_interface p) + length (apkg_rules p)
+                    | (_, abmi) <- mods, let p = abemi_apkg abmi ])
+    signals <- phase flags "computing the signals" (\ ss -> length (concatMap (\ s -> sig_synth s ++ sig_bsv s ++ [sig_kind s]) ss)) $
+        return (moduleSignals design ["main", "top"] [] top)
+    _ <- phase flags "rendering the signals" length $ return (render (JArr (map signalJson signals)))
+    let roots = distinct (mapMaybe sig_type signals)
+    types <- phase flags "type layouts" (const 0) $ typesJson errh flags symtab roots
+    when (verbose flags) $
+        hPutStrLn stderr ("wavedebuginfo: " ++ show (length signals) ++ " signals, " ++
+                          show (length roots) ++ " types named by them")
+    phase flags "rendering" length $ return $ render $
           JObj [ ("format", JStr "bsc-wave-debug-info")
                , ("version", JNum 1)
                , ("top", JStr top)

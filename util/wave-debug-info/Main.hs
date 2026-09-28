@@ -29,7 +29,7 @@ import ABin(abemi_src_name)
 import ABinUtil(getABIHierarchy)
 import SimCCBlock(SimCCBlock(..), primBlocks)
 import FileIOUtil(writeFileCatch)
-import WaveDebugInfo(waveDebugInfo)
+import WaveDebugInfo(waveDebugInfo, phase)
 import WaveLayout(distinct)
 
 main :: IO ()
@@ -57,7 +57,7 @@ run flagArgs top out = do
                           exitFailure
 
     -- the design's elaboration files, from the top module down
-    (_, hierMap, _, _, _, _, abmis_by_name) <-
+    (_, hierMap, _, _, _, _, abmis_by_name) <- phase flags "loading the elaboration" (\ (_, _, _, _, _, _, ms) -> length ms) $
         convExceptTToIO errh $
           getABIHierarchy errh (verbose flags) (ifcPath flags) (Just be)
                           (map sb_name primBlocks) top []
@@ -74,7 +74,7 @@ run flagArgs top out = do
             CImpSign (getIdString iid) False bo_sig
         cpack = CPackage (mk_homeless_id "wavedebuginfo") (Right []) []
                          (sortImportedSignatures (map mkCImp bininfos)) [] [] []
-    symtab <- mkSymTab errh cpack
+    symtab <- phase flags "loading the packages" (const 0) $ mkSymTab errh cpack
 
     json <- waveDebugInfo errh flags symtab hierMap abmis top
-    writeFileCatch errh out json
+    phase flags "writing" (const 0) $ writeFileCatch errh out json
