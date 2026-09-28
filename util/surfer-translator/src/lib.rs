@@ -122,27 +122,45 @@ struct Loaded {
     // synthesized and the source hierarchy's spelling (the dump follows
     // one or the other)
     signal_by_path: HashMap<String, usize>,
-    // source files read so far, split into lines (None: unreadable)
-    sources: HashMap<String, Option<Vec<String>>>,
 }
 
+// The plugin's state, behind locks that are never held across a call
+// into the host: a host error traps the plugin without unwinding, so a
+// lock held at that moment would stay held for the rest of the session.
 static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
+// source files read so far, split into lines (None: unreadable)
+static SOURCES: Mutex<Option<HashMap<String, Option<Vec<String>>>>> = Mutex::new(None);
 
 fn load(wave_path: &str) {
     let path = format!("{wave_path}.debug.json");
-    let mut slot = LOADED.lock().unwrap();
-    *slot = None;
-    let exists = unsafe { file_exists(path.clone()) }.unwrap_or(false);
-    if !exists {
-        return;
+    let info =
+        host_read_file(&path).and_then(|bytes| serde_json::from_slice::<DebugInfo>(&bytes).ok());
+    *LOADED.lock().unwrap() = info.map(Loaded::new);
+    *SOURCES.lock().unwrap() = None;
+}
+
+/// A line of a source file (1-based), read once through the host
+fn source_line(file: &str, line: usize) -> Option<String> {
+    let index = line.checked_sub(1)?;
+    let cached = SOURCES
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|sources| sources.get(file))
+        .map(|lines| lines.as_ref().and_then(|lines| lines.get(index).cloned()));
+    if let Some(found) = cached {
+        return found;
     }
-    let Ok(bytes) = (unsafe { read_file(path) }) else {
-        return;
-    };
-    let Ok(info) = serde_json::from_slice::<DebugInfo>(&bytes) else {
-        return;
-    };
-    *slot = Some(Loaded::new(info));
+    let lines = host_read_file(file)
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|text| text.lines().map(str::to_string).collect::<Vec<_>>());
+    let found = lines.as_ref().and_then(|lines| lines.get(index).cloned());
+    SOURCES
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(file.to_string(), lines);
+    found
 }
 
 impl Loaded {
@@ -160,7 +178,6 @@ impl Loaded {
         Loaded {
             info,
             signal_by_path,
-            sources: HashMap::new(),
         }
     }
 
@@ -172,17 +189,6 @@ impl Loaded {
 
     fn type_at(&self, path: &str) -> Option<&str> {
         self.signal_at(path).and_then(|s| s.ty.as_deref())
-    }
-
-    /// The lines of a source file, read once through the host
-    fn source_lines(&mut self, file: &str) -> Option<&[String]> {
-        self.sources
-            .entry(file.to_string())
-            .or_insert_with(|| {
-                let text = String::from_utf8(host_read_file(file)?).ok()?;
-                Some(text.lines().map(str::to_string).collect())
-            })
-            .as_deref()
     }
 }
 
@@ -212,10 +218,15 @@ fn type_of(loaded: &Loaded, variable: &VariableMeta<(), ()>) -> Option<String> {
     loaded.type_at(&path).map(str::to_string)
 }
 
-/// A file's bytes, through the host; the native test build has no host
-/// and reads the file system instead
+/// A file's bytes, through the host, None where there is no such file;
+/// the native test build has no host and reads the file system instead
 #[cfg(not(test))]
 fn host_read_file(path: &str) -> Option<Vec<u8>> {
+    // The host reports a missing file as an error, which traps the
+    // plugin, so only a file that exists is read
+    if !unsafe { file_exists(path.to_string()) }.unwrap_or(false) {
+        return None;
+    }
     unsafe { read_file(path.to_string()) }.ok()
 }
 
@@ -261,17 +272,33 @@ fn split_source_line(line: &str, column: usize) -> (String, String, String) {
     )
 }
 
-/// How the variable list should present a variable: the design's own
-/// signals ahead of everything else, a compiler temporary hidden, and a
-/// signal whose dumped name is not its source name shown by the source
-/// line that declares it
-fn name_info(loaded: &mut Loaded, variable: &VariableMeta<(), ()>) -> Option<VariableNameInfo> {
+/// How the variable list should present a variable, short of reading its
+/// source: rank, hiding, and where the source declares it under another
+/// name
+struct NameFacts {
+    priority: i32,
+    visible: Option<bool>,
+    declared: Option<Declaration>,
+}
+
+/// A signal's declaration, whose line names it
+struct Declaration {
+    name: String,
+    file: String,
+    line: usize,
+    column: usize,
+}
+
+/// The design's own signals rank ahead of everything else, a compiler
+/// temporary is hidden, and a signal whose dumped name is not its source
+/// name is shown by the source line that declares it
+fn name_facts(loaded: &Loaded, variable: &VariableMeta<(), ()>) -> Option<NameFacts> {
     let path = variable.var.full_path().join(".");
     let Some(&index) = loaded.signal_by_path.get(&path) else {
-        return is_compiler_temporary(&variable.var.name).then_some(VariableNameInfo {
-            true_name: None,
-            priority: Some(-1),
+        return is_compiler_temporary(&variable.var.name).then_some(NameFacts {
+            priority: -1,
             visible: Some(false),
+            declared: None,
         });
     };
     let signal = &loaded.info.signals[index];
@@ -281,32 +308,52 @@ fn name_info(loaded: &mut Loaded, variable: &VariableMeta<(), ()>) -> Option<Var
         _ => 0,
     };
     let source_name = signal.bsvpath.last().cloned();
-    let true_name = match (source_name, &signal.file, signal.line, signal.column) {
+    let declared = match (source_name, &signal.file, signal.line, signal.column) {
         (Some(name), Some(file), Some(line), Some(column)) if name != variable.var.name => {
-            let file = file.clone();
-            let (before, this, after) = match loaded
-                .source_lines(&file)
-                .and_then(|lines| lines.get(line.wrapping_sub(1)))
-            {
-                Some(text) => split_source_line(text, column),
-                // the file is not at hand: the source name alone
-                None => (String::new(), name, String::new()),
-            };
-            Some(TrueName::SourceCode {
-                line_number: line,
-                before,
-                this,
-                after,
-                file: Some(file),
+            Some(Declaration {
+                name,
+                file: file.clone(),
+                line,
+                column,
             })
         }
         _ => None,
     };
-    Some(VariableNameInfo {
-        true_name,
-        priority: Some(priority),
+    Some(NameFacts {
+        priority,
         visible: None,
+        declared,
     })
+}
+
+impl NameFacts {
+    /// The name info, with the declaring line read from the source (the
+    /// file is not always at hand: then the source name alone)
+    fn resolve(self) -> VariableNameInfo {
+        let true_name = self.declared.map(|d| {
+            let (before, this, after) = match source_line(&d.file, d.line) {
+                Some(text) => split_source_line(&text, d.column),
+                None => (String::new(), d.name, String::new()),
+            };
+            TrueName::SourceCode {
+                line_number: d.line,
+                before,
+                this,
+                after,
+                file: Some(d.file),
+            }
+        });
+        VariableNameInfo {
+            true_name,
+            priority: Some(self.priority),
+            visible: self.visible,
+        }
+    }
+}
+
+#[cfg(test)]
+fn name_info(loaded: &Loaded, variable: &VariableMeta<(), ()>) -> Option<VariableNameInfo> {
+    name_facts(loaded, variable).map(NameFacts::resolve)
 }
 
 fn layout_known(desc: &TypeDesc) -> bool {
@@ -774,7 +821,10 @@ pub fn name() -> FnResult<String> {
 pub fn set_wave_source(Json(source): Json<Option<WaveSource>>) -> FnResult<()> {
     match source {
         Some(WaveSource::File(path)) => load(&path),
-        _ => *LOADED.lock().unwrap() = None,
+        _ => {
+            *LOADED.lock().unwrap() = None;
+            *SOURCES.lock().unwrap() = None;
+        }
     }
     Ok(())
 }
@@ -793,11 +843,15 @@ pub fn translates(variable: VariableMeta<(), ()>) -> FnResult<TranslationPrefere
 
 #[plugin_fn]
 pub fn variable_name_info(variable: VariableMeta<(), ()>) -> FnResult<Option<VariableNameInfo>> {
-    let mut slot = LOADED.lock().unwrap();
-    let Some(loaded) = slot.as_mut() else {
-        return Ok(None);
+    // the facts under the lock; the source line, a host call, after it
+    let facts = {
+        let slot = LOADED.lock().unwrap();
+        let Some(loaded) = slot.as_ref() else {
+            return Ok(None);
+        };
+        name_facts(loaded, &variable)
     };
-    Ok(name_info(loaded, &variable))
+    Ok(facts.map(NameFacts::resolve))
 }
 
 #[plugin_fn]
@@ -1007,12 +1061,12 @@ mod tests {
 
     #[test]
     fn names() {
-        let mut l = fixture();
+        let l = fixture();
         // the state of the design outranks its fires, which outrank the rest
-        let state = name_info(&mut l, &meta("main.top", "cell")).unwrap();
+        let state = name_info(&l, &meta("main.top", "cell")).unwrap();
         assert_eq!(state.priority, Some(2));
         assert!(state.true_name.is_none());
-        let fire = name_info(&mut l, &meta("main.top", "WILL_FIRE_RL_step")).unwrap();
+        let fire = name_info(&l, &meta("main.top", "WILL_FIRE_RL_step")).unwrap();
         assert_eq!(fire.priority, Some(1));
         // a flattened name is shown by its source name (the file is not
         // readable here, so the name alone)
@@ -1030,9 +1084,13 @@ mod tests {
             other => panic!("unexpected true name: {other:?}"),
         }
         // a compiler temporary is hidden; anything else unknown is left alone
-        let tmp = name_info(&mut l, &meta("main.top", "cnt___d3")).unwrap();
+        let tmp = name_info(&l, &meta("main.top", "cnt___d3")).unwrap();
         assert_eq!((tmp.priority, tmp.visible), (Some(-1), Some(false)));
-        assert!(name_info(&mut l, &meta("main.top", "CLK")).is_none());
+        assert!(name_info(&l, &meta("main.top", "CLK")).is_none());
+        // a source file that is not there resolves to the name alone,
+        // and is remembered as unreadable
+        assert_eq!(source_line("/nonexistent/WaveTypes.bs", 3), None);
+        assert_eq!(source_line("/nonexistent/WaveTypes.bs", 3), None);
         assert!(is_compiler_temporary("x__h944"));
         assert!(!is_compiler_temporary("my__data"));
     }
