@@ -301,63 +301,75 @@ data Member = Member { mb_name :: String
                      , mb_when :: Maybe BitExpr        -- 1 iff the value is this member
                      , mb_bits :: Maybe BitExpr }      -- the member's own bits
 
--- The description of one type, and the types its members name
-describeType :: ErrorHandle -> Flags -> SymTab -> CType -> IO (Maybe JValue, [CType])
-describeType errh flags symtab t =
+-- What describing one type takes: the types its members name, the
+-- packages its layout queries import, the queries, and the finishing
+-- step that turns the queries' results into the description
+data Prep = Prep { p_more :: [CType]
+                 , p_pkgs :: [Id]
+                 , p_queries :: [Query]
+                 , p_finish :: [(String, BitExpr)] -> JValue }
+
+prepareType :: Flags -> SymTab -> CType -> Maybe Prep
+prepareType flags symtab t =
     case analyzeType flags symtab t of
-      Left _ -> return (Nothing, [])
-      Right ta -> describe ta
+      Left _ -> Nothing
+      Right ta -> prepare ta
   where
     width = maybe JNull JNum
     typeBits = case analyzeType flags symtab t of
                  Right ta -> getWidth ta
                  Left _ -> Nothing
+    plain more json = Just (Prep more [] [] (const json))
+    -- the queries a type poses, once its width is known
+    posed queries = maybe [] queries typeBits
 
-    describe :: TypeAnalysis -> IO (Maybe JValue, [CType])
-    describe ta@(Primary {}) =
-        return (Just (JObj [("kind", JStr "primary"), ("width", width (getWidth ta))]), [])
-    describe (Alias _ _ _ target) =
-        return (Just (JObj [("kind", JStr "alias"), ("target", JStr (typeName target))]),
-                [target])
-    describe ta@(Struct _ _ _ _ fields _) = do
+    prepare :: TypeAnalysis -> Maybe Prep
+    prepare ta@(Primary {}) =
+        plain [] (JObj [("kind", JStr "primary"), ("width", width (getWidth ta))])
+    prepare (Alias _ _ _ target) =
+        plain [target] (JObj [("kind", JStr "alias"), ("target", JStr (typeName target))])
+    prepare (Struct _ _ _ _ fields _) =
         let fws = [ (i, qualToType qt, fw) | (i, qt, fw) <- fields ]
             members = [ Member (getIdBaseString i) (Just ft) fw Nothing Nothing Nothing
                       | (i, ft, fw) <- fws ]
             queries w = [ q | (n, (i, _, Just fw)) <- zip [0 :: Int ..] fws, fw > 0
                             , let q = Query (valName n) w fw (\ b -> packed (CSelect (unpacked b) i)) ]
-        members' <- layout queries members
-        -- a derived instance concatenates the fields, first field highest
-        let derivedRanges =
+            -- a derived instance concatenates the fields, first field highest
+            derivedRanges =
                 case (typeBits, sequence [ fw | (_, _, fw) <- fws ]) of
                   (Just total, Just ws) ->
                       let his = scanl (-) total ws
                       in  Just (zip (drop 1 his) his)
                   _ -> Nothing
-            derived = case derivedRanges of
-                        Just rs -> and [ Just r == fixedRange m | (m, r) <- zip members' rs ]
-                        Nothing -> False
-        return (Just (JObj [ ("kind", JStr "struct")
-                           , ("width", width typeBits)
-                           , ("layout", JStr (layoutStr (layoutOf members' derived)))
-                           , ("members", JArr (map (memberJson Nothing) members')) ]),
-                [ ft | (_, ft, _) <- fws ])
-    describe (Enum qi cons _) = do
+            finish results =
+                let members' = attach results members
+                    derived = case derivedRanges of
+                                Just rs -> and [ Just r == fixedRange m | (m, r) <- zip members' rs ]
+                                Nothing -> False
+                in  JObj [ ("kind", JStr "struct")
+                         , ("width", width typeBits)
+                         , ("layout", JStr (layoutStr (layoutOf members' derived)))
+                         , ("members", JArr (map (memberJson Nothing) members')) ]
+        in  Just (Prep [ ft | (_, ft, _) <- fws ] (typePackages t) (posed queries) finish)
+    prepare (Enum qi cons _) =
         let members = [ Member (getIdBaseString c) Nothing Nothing (fmap conTag (tagInfo symtab qi c)) Nothing Nothing
                       | c <- cons ]
             queries w = [ Query (isName n) w 1 (isCon (CPCon c []))
                         | (n, c) <- zip [0 :: Int ..] cons ]
-        members' <- layout queries members
-        let table = tagTable members'
-            derived = case table of
-                        Just ((0, hi), sels) ->
-                            Just hi == typeBits &&
-                            and [ map Just sel == [mb_derivedTag m] | (m, sel) <- zip members' sels ]
-                        _ -> False
-        return (Just (JObj [ ("kind", JStr "enum")
-                           , ("width", width typeBits)
-                           , ("layout", JStr (layoutStr (layoutOf members' derived)))
-                           , ("members", JArr (memberJsons "value" "values" table members')) ]), [])
-    describe (TaggedUnion qi _ _ _ arms _) = do
+            finish results =
+                let members' = attach results members
+                    table = tagTable members'
+                    derived = case table of
+                                Just ((0, hi), sels) ->
+                                    Just hi == typeBits &&
+                                    and [ map Just sel == [mb_derivedTag m] | (m, sel) <- zip members' sels ]
+                                _ -> False
+                in  JObj [ ("kind", JStr "enum")
+                         , ("width", width typeBits)
+                         , ("layout", JStr (layoutStr (layoutOf members' derived)))
+                         , ("members", JArr (memberJsons "value" "values" table members')) ]
+        in  Just (Prep [] (typePackages t) (posed queries) finish)
+    prepare (TaggedUnion qi _ _ _ arms _) =
         let members = [ Member (getIdBaseString c) (Just at) aw (fmap conTag (tagInfo symtab qi c)) Nothing Nothing
                       | (c, at, aw) <- arms ]
             queries w = concat
@@ -365,28 +377,29 @@ describeType errh flags symtab t =
                   [ Query (valName n) w pw (payloadOf c)
                   | Just pw <- [aw], pw > 0 ]
                 | (n, (c, at, aw)) <- zip [0 :: Int ..] arms ]
-        members' <- layout queries members
-        -- a derived instance puts the tag above the widest payload, each
-        -- payload right-aligned
-        let table = tagTable members'
-            payload = maximum (0 : [ pw | Member { mb_width = Just pw } <- members' ])
-            derived = case table of
-                        Just ((lo, hi), sels) ->
-                            lo == payload && Just hi == typeBits &&
-                            and [ map Just sel == [mb_derivedTag m] &&
-                                  (mb_width m == Just 0 || fixedRange m == fmap (\ pw -> (0, pw)) (mb_width m))
-                                | (m, sel) <- zip members' sels ]
-                        _ -> False
-            tag_range = case table of
-                          Just ((lo, hi), _) -> [("tag", JObj [("lo", JNum lo), ("hi", JNum hi)])]
-                          Nothing -> []
-        return (Just (JObj $ [ ("kind", JStr "union")
-                             , ("width", width typeBits)
-                             , ("layout", JStr (layoutStr (layoutOf members' derived))) ] ++
-                             tag_range ++
-                             [ ("members", JArr (memberJsons "tag" "tags" table members')) ]),
-                [ at | (_, at, _) <- arms ])
-    describe ta@(Vector _ len elt _) =
+            finish results =
+                let members' = attach results members
+                    -- a derived instance puts the tag above the widest payload,
+                    -- each payload right-aligned
+                    table = tagTable members'
+                    payload = maximum (0 : [ pw | Member { mb_width = Just pw } <- members' ])
+                    derived = case table of
+                                Just ((lo, hi), sels) ->
+                                    lo == payload && Just hi == typeBits &&
+                                    and [ map Just sel == [mb_derivedTag m] &&
+                                          (mb_width m == Just 0 || fixedRange m == fmap (\ pw -> (0, pw)) (mb_width m))
+                                        | (m, sel) <- zip members' sels ]
+                                _ -> False
+                    tag_range = case table of
+                                  Just ((lo, hi), _) -> [("tag", JObj [("lo", JNum lo), ("hi", JNum hi)])]
+                                  Nothing -> []
+                in  JObj $ [ ("kind", JStr "union")
+                           , ("width", width typeBits)
+                           , ("layout", JStr (layoutStr (layoutOf members' derived))) ] ++
+                           tag_range ++
+                           [ ("members", JArr (memberJsons "tag" "tags" table members')) ]
+        in  Just (Prep [ at | (_, at, _) <- arms ] (typePackages t) (posed queries) finish)
+    prepare ta@(Vector _ len elt _) =
         let w = getWidth ta
             n = case len of
                   TCon (TyNum v _) -> Just v
@@ -394,12 +407,12 @@ describeType errh flags symtab t =
             stride = case (w, n) of
                        (Just total, Just k) | k > 0 -> Just (total `div` k)
                        _ -> Nothing
-        in  return (Just (JObj $ [ ("kind", JStr "vector")
-                                 , ("width", width w)
-                                 , ("length", width n)
-                                 , ("elem", JStr (typeName elt))
-                                 , ("stride", width stride) ]), [elt])
-    describe _ = return (Nothing, [])
+        in  plain [elt] (JObj $ [ ("kind", JStr "vector")
+                                , ("width", width w)
+                                , ("length", width n)
+                                , ("elem", JStr (typeName elt))
+                                , ("stride", width stride) ])
+    prepare _ = Nothing
 
     -- the queries, in the type's source syntax
     pos = noPosition
@@ -419,22 +432,11 @@ describeType errh flags symtab t =
     isUnitType (TCon (TyCon i _ _)) = i == idPrimUnit
     isUnitType _ = False
 
-    -- run the queries (when the type's width is known) and attach their
-    -- results to the members
-    layout :: (Integer -> [Query]) -> [Member] -> IO [Member]
-    layout queries members =
-        case typeBits of
-          Nothing -> return members
-          Just w -> do
-              let qs = queries w
-              results <- if null qs then return [Right []]
-                         else reduceQueries errh flags [(typePackages t, qs)]
-              case results of
-                [Right rs] ->
-                    let get n = lookup n rs
-                    in  return [ m { mb_when = get (isName n), mb_bits = get (valName n) }
-                               | (n, m) <- zip [0 :: Int ..] members ]
-                _ -> return members
+    -- the members with their queries' results
+    attach :: [(String, BitExpr)] -> [Member] -> [Member]
+    attach results members =
+        [ m { mb_when = lookup (isName n) results, mb_bits = lookup (valName n) results }
+        | (n, m) <- zip [0 :: Int ..] members ]
 
     layoutOf members derived
       | derived = LayoutDerived
@@ -533,20 +535,23 @@ tagInfo symtab ty con =
       Nothing   -> Nothing
 
 -- Every type the signals name, and every type those reach, described
--- once each, keyed by name
+-- once each, keyed by name.  The descriptions are prepared first, so
+-- that every type's layout queries reduce together.
 typesJson :: ErrorHandle -> Flags -> SymTab -> [CType] -> IO JValue
-typesJson errh flags symtab roots = fmap JObj (go S.empty [] roots)
+typesJson errh flags symtab roots = do
+    let preps = collect S.empty [] roots
+    results <- reduceQueries errh flags [ (p_pkgs p, p_queries p) | (_, p) <- preps ]
+    return (JObj [ (name, p_finish p (either (const []) id r)) | ((name, p), r) <- zip preps results ])
   where
-    go _ acc [] = return (reverse acc)
-    go seen acc (t:ts)
-      | S.member name seen = go seen acc ts
-      | otherwise = do
-          (mdesc, more) <- describeType errh flags symtab t
-          let seen' = S.insert name seen
-          case mdesc of
-            Nothing   -> go seen' acc ts
-            Just desc -> go seen' ((name, desc) : acc) (ts ++ more)
+    collect _ acc [] = reverse acc
+    collect seen acc (t:ts)
+      | S.member name seen = collect seen acc ts
+      | otherwise =
+          case prepareType flags symtab t of
+            Nothing -> collect seen' acc ts
+            Just p -> collect seen' ((name, p) : acc) (ts ++ p_more p)
       where name = typeName t
+            seen' = S.insert name seen
 
 -- ---------------
 

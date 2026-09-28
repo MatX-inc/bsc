@@ -16,10 +16,12 @@ module WaveLayout(Query(..), BitExpr(..), reduceQueries,
 import qualified Control.Exception as CE
 import Control.Monad(forM, when)
 import Data.Bits((.&.), (.|.), xor, shiftL, shiftR, testBit, complement)
-import Data.List(foldl')
+import Data.List(foldl', nub)
+import Data.Maybe(catMaybes)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import System.Exit(ExitCode)
+import System.IO(hPutStrLn, stderr)
 
 import Error(ErrorHandle)
 import Flags(Flags)
@@ -158,30 +160,56 @@ evalBitExpr e0 arg = go e0
 -- ---------------
 
 -- Reduce batches of queries, each batch over types from the given
--- packages, to expressions over the argument.  A failure (a type the
--- queries cannot see, an instance the evaluator cannot reduce) fails
--- its whole batch, with the compiler's message.
+-- packages, to expressions over the argument: one result list per
+-- batch, in order, holding the queries that reduced.  All batches go
+-- through the front end together, since its cost is in the imported
+-- packages, not the queries; a query the evaluator cannot reduce is
+-- left out of its batch's list, with the reason on stderr.  Should the
+-- combined package itself fail (a type error in a generated query),
+-- the batches are reduced one at a time instead, and a failing batch
+-- is reported as a whole.
 reduceQueries :: ErrorHandle -> Flags -> [([Id], [Query])]
               -> IO [Either String [(String, BitExpr)]]
-reduceQueries errh flags batches = go M.empty M.empty batches
+reduceQueries errh flags batches = do
+    let pkgs = nub (concatMap fst batches)
+        -- one name space for the queries of all batches
+        tagged = [ (k, q { q_name = "q" ++ show k ++ "_" ++ q_name q }, q_name q)
+                 | (k, (_, qs)) <- zip [0 :: Int ..] batches, q <- qs ]
+    r <- if null tagged then return (Right (M.empty, M.empty, []))
+         else attempt (reduce errh flags M.empty M.empty pkgs [ q | (_, q, _) <- tagged ])
+    case r of
+      Right (_, _, results) -> do
+          let byName = M.fromList results
+          return [ Right [ (name, e) | (k', q, name) <- tagged, k' == k
+                                     , Just e <- [M.lookup (q_name q) byName] ]
+                 | (k, _) <- zip [0 :: Int ..] batches ]
+      Left msg -> do
+          hPutStrLn stderr ("wavedebuginfo: reducing every type's layout at once failed (" ++
+                            msg ++ "); reducing them one at a time")
+          go M.empty M.empty batches
   where
     -- the packages read so far are reused by the next batch
     go _ _ [] = return []
     go binmap hashmap ((pkgs, qs) : rest) = do
-        r <- (fmap Right (reduce errh flags binmap hashmap pkgs qs))
-               `CE.catches`
-                 [ CE.Handler (\ (CE.ErrorCall msg) -> return (Left msg))
-                 , CE.Handler (\ (e :: ExitCode) -> return (Left (show e))) ]
+        r <- attempt (reduce errh flags binmap hashmap pkgs qs)
         case r of
           Right (binmap', hashmap', res) -> do
               rest' <- go binmap' hashmap' rest
-              return (res : rest')
+              return (Right res : rest')
           Left msg -> do
               rest' <- go binmap hashmap rest
               return (Left msg : rest')
 
+-- A computation's result, or the compiler's message when it fails
+attempt :: IO a -> IO (Either String a)
+attempt act =
+    (fmap Right act)
+      `CE.catches`
+        [ CE.Handler (\ (CE.ErrorCall msg) -> return (Left msg))
+        , CE.Handler (\ (e :: ExitCode) -> return (Left (show e))) ]
+
 reduce :: ErrorHandle -> Flags -> BinMap HeapData -> HashMap -> [Id] -> [Query]
-       -> IO (BinMap HeapData, HashMap, Either String [(String, BitExpr)])
+       -> IO (BinMap HeapData, HashMap, [(String, BitExpr)])
 reduce errh flags binmap0 hashmap0 pkgs qs = do
     let pos = noPosition
         pkgId = mkId pos (mkFString "WaveLayout")
@@ -228,23 +256,29 @@ reduce errh flags binmap0 hashmap0 pkgs qs = do
 
     -- evaluate each query's wrapper module; its method's value is the
     -- normal form over the method's argument
+    let wrappers = M.fromList [ (getIdBaseString (mod_nm wi), wi) | wi <- gens ]
+        defs = M.fromList [ (getIdBaseString i, d) | d@(IDef i _ _ _) <- ipkg_defs imod ]
     results <- forM qs $ \ q -> do
         let name = q_name q
-            wis = [ wi | wi <- gens, getIdBaseString (mod_nm wi) == "module_" ++ name ]
-            defOf wi = [ d | d@(IDef i _ _ _) <- ipkg_defs imod
-                           , getIdBaseString i == getIdBaseString (wrapped_mod wi) ]
-        case [ (wi, d) | wi <- wis, d <- defOf wi ] of
-          [(wi, def)] -> do
-              em <- iExpand errh flags isymt alldefs atf True (wi_prags wi) def
-              let dmap = M.fromList [ (i, e) | IDef i _ e _ <- imod_local_defs em ]
-                  vals = [ inlineDefs dmap e
-                         | IEFace { ief_name = i, ief_value = Just (e, _) } <- imod_interface em
-                         , not (isRdyId i), getIdBaseString i == name ]
-              case vals of
-                [e] -> return (fmap ((,) name . simplify) (toBitExpr e))
-                _ -> return (Left ("query " ++ name ++ " has no value"))
-          _ -> return (Left ("query " ++ name ++ " not found"))
-    return (binmap, hashmap, sequence results)
+        r <- attempt $
+          case M.lookup ("module_" ++ name) wrappers >>= \ wi ->
+               fmap ((,) wi) (M.lookup (getIdBaseString (wrapped_mod wi)) defs) of
+            Just (wi, def) -> do
+                em <- iExpand errh flags isymt alldefs atf True (wi_prags wi) def
+                let dmap = M.fromList [ (i, e) | IDef i _ e _ <- imod_local_defs em ]
+                    vals = [ inlineDefs dmap e
+                           | IEFace { ief_name = i, ief_value = Just (e, _) } <- imod_interface em
+                           , not (isRdyId i), getIdBaseString i == name ]
+                case vals of
+                  [e] -> either (CE.throwIO . CE.ErrorCall) (return . simplify) (toBitExpr e)
+                  _ -> CE.throwIO (CE.ErrorCall "the wrapper has no value")
+            Nothing -> CE.throwIO (CE.ErrorCall "the query was not wrapped")
+        case r of
+          Right e -> return (Just (name, e))
+          Left msg -> do
+              hPutStrLn stderr ("wavedebuginfo: layout query " ++ name ++ ": " ++ msg)
+              return Nothing
+    return (binmap, hashmap, catMaybes results)
 
 -- The expression with the module's local definitions substituted in
 inlineDefs :: M.Map Id (IExpr HeapData) -> IExpr HeapData -> IExpr HeapData
