@@ -13,15 +13,15 @@ records it (FST, with `-dump-formats fst`), else from the debug
 information's entry for the signal's path (VCD).
 
 The plugin also shapes the variable list: the design's own signals
-(registers, ports, rule fires) sort ahead of everything else, the
+(registers, ports, rule fires) sort ahead of everything else, and the
 compiler's intermediate values (`…__h<n>`, `…__d<n>`) are hidden until
-the filter menu's "Show hidden" is ticked, and a signal whose dumped name
-is not its source name -- a flattened `pair_lo`, a `WILL_FIRE_RL_step` --
-is shown by the source line declaring it (read relative to Surfer's
-working directory, else by the source name alone), with the file in the
-variable's tooltip.  Hiding and the file need a Surfer built from the
-MatX fork's `william/bluespec-support` branch; an older Surfer ignores
-those two fields and shows everything.  A `Bool` reads `True` or
+the filter menu's "Show hidden" is ticked.  Variables keep their dumped
+names: a Bluespec signal's declaration site, often inside an inlined
+library module, does not identify it the way the flattened name does,
+so the plugin does not offer Surfer's source-line "true names".  Hiding
+needs a Surfer built from the MatX fork's `william/bluespec-support`
+branch; an older Surfer ignores the field and shows everything.  A
+`Bool` reads `True` or
 `False` and is drawn as a level, which also needs the fork's Surfer:
 an older Surfer draws a level low only for the text `0`, so it draws
 `False` high.

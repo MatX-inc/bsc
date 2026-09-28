@@ -20,7 +20,7 @@ use std::sync::Mutex;
 use extism_pdk::{host_fn, plugin_fn, FnResult, Json};
 use serde::Deserialize;
 use surfer_translation_types::plugin_types::TranslateParams;
-use surfer_translation_types::translator::{TrueName, VariableNameInfo, WaveSource};
+use surfer_translation_types::translator::{VariableNameInfo, WaveSource};
 use surfer_translation_types::{
     SubFieldTranslationResult, TranslationPreference, TranslationResult, ValueKind, ValueRepr,
     VariableInfo, VariableMeta, VariableValue,
@@ -45,7 +45,8 @@ struct DebugInfo {
 
 /// One of the design's own signals: its path in a dump of the synthesized
 /// hierarchy and in the source (also its path in a dump made with
-/// -wave-source-hierarchy), what it is, and where the source declares it
+/// -wave-source-hierarchy), and what it is.  The source position the
+/// debug information also carries is not used here.
 #[derive(Deserialize)]
 struct Signal {
     synthpath: Vec<String>,
@@ -54,9 +55,6 @@ struct Signal {
     #[serde(rename = "type")]
     ty: Option<String>,
     kind: Option<String>,
-    file: Option<String>,
-    line: Option<usize>,
-    column: Option<usize>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -124,43 +122,16 @@ struct Loaded {
     signal_by_path: HashMap<String, usize>,
 }
 
-// The plugin's state, behind locks that are never held across a call
+// The plugin's state, behind a lock that is never held across a call
 // into the host: a host error traps the plugin without unwinding, so a
 // lock held at that moment would stay held for the rest of the session.
 static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
-// source files read so far, split into lines (None: unreadable)
-static SOURCES: Mutex<Option<HashMap<String, Option<Vec<String>>>>> = Mutex::new(None);
 
 fn load(wave_path: &str) {
     let path = format!("{wave_path}.debug.json");
     let info =
         host_read_file(&path).and_then(|bytes| serde_json::from_slice::<DebugInfo>(&bytes).ok());
     *LOADED.lock().unwrap() = info.map(Loaded::new);
-    *SOURCES.lock().unwrap() = None;
-}
-
-/// A line of a source file (1-based), read once through the host
-fn source_line(file: &str, line: usize) -> Option<String> {
-    let index = line.checked_sub(1)?;
-    let cached = SOURCES
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|sources| sources.get(file))
-        .map(|lines| lines.as_ref().and_then(|lines| lines.get(index).cloned()));
-    if let Some(found) = cached {
-        return found;
-    }
-    let lines = host_read_file(file)
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .map(|text| text.lines().map(str::to_string).collect::<Vec<_>>());
-    let found = lines.as_ref().and_then(|lines| lines.get(index).cloned());
-    SOURCES
-        .lock()
-        .unwrap()
-        .get_or_insert_with(HashMap::new)
-        .insert(file.to_string(), lines);
-    found
 }
 
 impl Loaded {
@@ -248,112 +219,30 @@ fn is_compiler_temporary(name: &str) -> bool {
     })
 }
 
-/// The line of source declaring an entity, split around the identifier
-/// that starts at `column` (0-based, as bsc counts); a quoted name (a
-/// rule's) is taken whole
-fn split_source_line(line: &str, column: usize) -> (String, String, String) {
-    let chars: Vec<char> = line.chars().collect();
-    let start = column.min(chars.len());
-    let end = if chars.get(start) == Some(&'"') {
-        chars[start + 1..]
-            .iter()
-            .position(|&c| c == '"')
-            .map_or(chars.len(), |i| start + i + 2)
-    } else {
-        chars[start..]
-            .iter()
-            .position(|&c| !(c.is_alphanumeric() || c == '_' || c == '$'))
-            .map_or(chars.len(), |i| start + i)
-    };
-    (
-        chars[..start].iter().collect(),
-        chars[start..end].iter().collect(),
-        chars[end..].iter().collect(),
-    )
-}
-
-/// How the variable list should present a variable, short of reading its
-/// source: rank, hiding, and where the source declares it under another
-/// name
-struct NameFacts {
-    priority: i32,
-    visible: Option<bool>,
-    declared: Option<Declaration>,
-}
-
-/// A signal's declaration, whose line names it
-struct Declaration {
-    name: String,
-    file: String,
-    line: usize,
-    column: usize,
-}
-
-/// The design's own signals rank ahead of everything else, a compiler
-/// temporary is hidden, and a signal whose dumped name is not its source
-/// name is shown by the source line that declares it
-fn name_facts(loaded: &Loaded, variable: &VariableMeta<(), ()>) -> Option<NameFacts> {
+/// How the variable list should present a variable: the design's own
+/// signals ahead of everything else, and a compiler temporary hidden.
+/// Variables keep their dumped names: a Bluespec signal's declaration
+/// site, often inside an inlined library module, does not identify it
+/// the way the flattened name does.
+fn name_info(loaded: &Loaded, variable: &VariableMeta<(), ()>) -> Option<VariableNameInfo> {
     let path = variable.var.full_path().join(".");
-    let Some(&index) = loaded.signal_by_path.get(&path) else {
-        return is_compiler_temporary(&variable.var.name).then_some(NameFacts {
-            priority: -1,
+    let Some(signal) = loaded.signal_at(&path) else {
+        return is_compiler_temporary(&variable.var.name).then_some(VariableNameInfo {
+            true_name: None,
+            priority: Some(-1),
             visible: Some(false),
-            declared: None,
         });
     };
-    let signal = &loaded.info.signals[index];
     let priority = match signal.kind.as_deref() {
         Some("state") | Some("module") => 2,
         Some("port") | Some("fire") => 1,
         _ => 0,
     };
-    let source_name = signal.bsvpath.last().cloned();
-    let declared = match (source_name, &signal.file, signal.line, signal.column) {
-        (Some(name), Some(file), Some(line), Some(column)) if name != variable.var.name => {
-            Some(Declaration {
-                name,
-                file: file.clone(),
-                line,
-                column,
-            })
-        }
-        _ => None,
-    };
-    Some(NameFacts {
-        priority,
+    Some(VariableNameInfo {
+        true_name: None,
+        priority: Some(priority),
         visible: None,
-        declared,
     })
-}
-
-impl NameFacts {
-    /// The name info, with the declaring line read from the source (the
-    /// file is not always at hand: then the source name alone)
-    fn resolve(self) -> VariableNameInfo {
-        let true_name = self.declared.map(|d| {
-            let (before, this, after) = match source_line(&d.file, d.line) {
-                Some(text) => split_source_line(&text, d.column),
-                None => (String::new(), d.name, String::new()),
-            };
-            TrueName::SourceCode {
-                line_number: d.line,
-                before,
-                this,
-                after,
-                file: Some(d.file),
-            }
-        });
-        VariableNameInfo {
-            true_name,
-            priority: Some(self.priority),
-            visible: self.visible,
-        }
-    }
-}
-
-#[cfg(test)]
-fn name_info(loaded: &Loaded, variable: &VariableMeta<(), ()>) -> Option<VariableNameInfo> {
-    name_facts(loaded, variable).map(NameFacts::resolve)
 }
 
 fn layout_known(desc: &TypeDesc) -> bool {
@@ -821,10 +710,7 @@ pub fn name() -> FnResult<String> {
 pub fn set_wave_source(Json(source): Json<Option<WaveSource>>) -> FnResult<()> {
     match source {
         Some(WaveSource::File(path)) => load(&path),
-        _ => {
-            *LOADED.lock().unwrap() = None;
-            *SOURCES.lock().unwrap() = None;
-        }
+        _ => *LOADED.lock().unwrap() = None,
     }
     Ok(())
 }
@@ -843,15 +729,11 @@ pub fn translates(variable: VariableMeta<(), ()>) -> FnResult<TranslationPrefere
 
 #[plugin_fn]
 pub fn variable_name_info(variable: VariableMeta<(), ()>) -> FnResult<Option<VariableNameInfo>> {
-    // the facts under the lock; the source line, a host call, after it
-    let facts = {
-        let slot = LOADED.lock().unwrap();
-        let Some(loaded) = slot.as_ref() else {
-            return Ok(None);
-        };
-        name_facts(loaded, &variable)
+    let slot = LOADED.lock().unwrap();
+    let Some(loaded) = slot.as_ref() else {
+        return Ok(None);
     };
-    Ok(facts.map(NameFacts::resolve))
+    Ok(name_info(loaded, &variable))
 }
 
 #[plugin_fn]
@@ -1066,52 +948,15 @@ mod tests {
         let state = name_info(&l, &meta("main.top", "cell")).unwrap();
         assert_eq!(state.priority, Some(2));
         assert!(state.true_name.is_none());
+        // a flattened name keeps its dumped name
         let fire = name_info(&l, &meta("main.top", "WILL_FIRE_RL_step")).unwrap();
         assert_eq!(fire.priority, Some(1));
-        // a flattened name is shown by its source name (the file is not
-        // readable here, so the name alone)
-        match fire.true_name {
-            Some(TrueName::SourceCode {
-                this,
-                line_number,
-                file,
-                ..
-            }) => {
-                assert_eq!(this, "WILL_FIRE");
-                assert!(line_number > 0);
-                assert_eq!(file.as_deref(), Some("WaveTypes.bs"));
-            }
-            other => panic!("unexpected true name: {other:?}"),
-        }
+        assert!(fire.true_name.is_none());
         // a compiler temporary is hidden; anything else unknown is left alone
         let tmp = name_info(&l, &meta("main.top", "cnt___d3")).unwrap();
         assert_eq!((tmp.priority, tmp.visible), (Some(-1), Some(false)));
         assert!(name_info(&l, &meta("main.top", "CLK")).is_none());
-        // a source file that is not there resolves to the name alone,
-        // and is remembered as unreadable
-        assert_eq!(source_line("/nonexistent/WaveTypes.bs", 3), None);
-        assert_eq!(source_line("/nonexistent/WaveTypes.bs", 3), None);
         assert!(is_compiler_temporary("x__h944"));
         assert!(!is_compiler_temporary("my__data"));
-    }
-
-    #[test]
-    fn source_line_split() {
-        assert_eq!(
-            split_source_line("    lo :: Reg (UInt 4) <- mkReg 0", 4),
-            (
-                "    ".into(),
-                "lo".into(),
-                " :: Reg (UInt 4) <- mkReg 0".into()
-            )
-        );
-        assert_eq!(
-            split_source_line("      \"carry\": when lo == 15 ==> hi := hi + 1", 6),
-            (
-                "      ".into(),
-                "\"carry\"".into(),
-                ": when lo == 15 ==> hi := hi + 1".into()
-            )
-        );
     }
 }
