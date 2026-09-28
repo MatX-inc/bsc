@@ -13,7 +13,8 @@ import Control.Monad(foldM, when)
 import qualified Data.Map as M
 import System.Environment(getArgs, lookupEnv)
 import System.Exit(exitFailure)
-import System.IO(hPutStrLn, stderr)
+import System.IO(hPutStrLn, stderr, withBinaryFile, IOMode(WriteMode))
+import qualified Data.ByteString.Builder as B
 
 import Error(initErrorHandle, convExceptTToIO, bsWarning, bsError)
 import Flags(Flags(..), verbose)
@@ -28,7 +29,6 @@ import MakeSymTab(mkSymTab)
 import ABin(abemi_src_name)
 import ABinUtil(getABIHierarchy)
 import SimCCBlock(SimCCBlock(..), primBlocks)
-import FileIOUtil(writeFileCatch)
 import WaveDebugInfo(waveDebugInfo, phase)
 import WaveLayout(distinct)
 
@@ -77,4 +77,4 @@ run flagArgs top out = do
     symtab <- phase flags "loading the packages" (const 0) $ mkSymTab errh cpack
 
     json <- waveDebugInfo errh flags symtab hierMap abmis top
-    phase flags "writing" (const 0) $ writeFileCatch errh out json
+    phase flags "writing" (const 0) $ withBinaryFile out WriteMode (\ h -> B.hPutBuilder h json)

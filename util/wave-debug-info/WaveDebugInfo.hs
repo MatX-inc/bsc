@@ -33,7 +33,10 @@
 -- be reduced.  A vector's element 0 is lowest.
 module WaveDebugInfo (waveDebugInfo, phase) where
 
+import Data.List(intersperse)
 import Data.Maybe(mapMaybe, isJust)
+import qualified Data.ByteString.Builder as B
+import qualified Data.ByteString.Lazy as BL
 import Control.Exception(evaluate)
 import Control.Monad(when)
 import Data.Time.Clock(getCurrentTime, diffUTCTime)
@@ -80,39 +83,44 @@ data JValue = JObj [(String, JValue)]
             | JBool Bool
             | JNull
 
-render :: JValue -> String
-render v = go 0 v ++ "\n"
+-- The document's bytes, laid out for reading: scalar arrays on one
+-- line, objects and other arrays one member per line.  A Builder, so
+-- that a large design's document is emitted in one pass rather than
+-- assembled as a String.
+render :: JValue -> B.Builder
+render v = go 0 v <> B.char7 '\n'
   where
-    go :: Int -> JValue -> String
+    go :: Int -> JValue -> B.Builder
     go _ (JStr s)  = quote s
-    go _ (JNum n)  = show n
-    go _ (JBool b) = if b then "true" else "false"
-    go _ JNull     = "null"
-    go _ (JArr []) = "[]"
-    go _ (JObj []) = "{}"
+    go _ (JNum n)  = B.integerDec n
+    go _ (JBool b) = B.string7 (if b then "true" else "false")
+    go _ JNull     = B.string7 "null"
+    go _ (JArr []) = B.string7 "[]"
+    go _ (JObj []) = B.string7 "{}"
     go ind (JArr vs)
-      | all scalar vs = "[" ++ commas (map (go ind) vs) ++ "]"
-      | otherwise = "[\n" ++ lines' (ind + 2) (map (go (ind + 2)) vs) ++
-                    "\n" ++ pad ind ++ "]"
+      | all scalar vs = B.char7 '[' <> joined (B.string7 ", ") (map (go ind) vs) <> B.char7 ']'
+      | otherwise = B.string7 "[\n" <> lines' (ind + 2) (map (go (ind + 2)) vs) <>
+                    B.char7 '\n' <> pad ind <> B.char7 ']'
     go ind (JObj kvs) =
-      "{\n" ++ lines' (ind + 2) [ quote k ++ ": " ++ go (ind + 2) x
-                                | (k, x) <- kvs ] ++
-      "\n" ++ pad ind ++ "}"
+      B.string7 "{\n" <> lines' (ind + 2) [ quote k <> B.string7 ": " <> go (ind + 2) x
+                                          | (k, x) <- kvs ] <>
+      B.char7 '\n' <> pad ind <> B.char7 '}'
     scalar (JArr _) = False
     scalar (JObj _) = False
     scalar _        = True
-    commas = foldr1' (\a b -> a ++ ", " ++ b)
-    lines' ind xs = foldr1' (\a b -> a ++ ",\n" ++ b) (map (pad ind ++) xs)
-    foldr1' _ [] = ""
-    foldr1' f xs = foldr1 f xs
-    pad n = replicate n ' '
-    quote s = "\"" ++ concatMap esc s ++ "\""
-    esc '"'  = "\\\""
-    esc '\\' = "\\\\"
-    esc '\n' = "\\n"
-    esc '\t' = "\\t"
-    esc c | c < ' ' = "\\u" ++ hex4 (fromEnum c)
-          | otherwise = [c]
+    joined sep = mconcat . intersperse sep
+    lines' ind xs = joined (B.string7 ",\n") (map (pad ind <>) xs)
+    pad n = B.string7 (replicate n ' ')
+    -- most strings need no escaping and go out in one piece
+    quote s | any needsEsc s = B.char7 '"' <> foldMap esc s <> B.char7 '"'
+            | otherwise = B.char7 '"' <> B.stringUtf8 s <> B.char7 '"'
+    needsEsc c = c == '"' || c == '\\' || c < ' '
+    esc '"'  = B.string7 "\\\""
+    esc '\\' = B.string7 "\\\\"
+    esc '\n' = B.string7 "\\n"
+    esc '\t' = B.string7 "\\t"
+    esc c | c < ' ' = B.string7 ("\\u" ++ hex4 (fromEnum c))
+          | otherwise = B.charUtf8 c
     hex4 n = let h = "0123456789abcdef"
              in  [ h !! ((n `div` d) `mod` 16) | d <- [4096, 256, 16, 1] ]
 
@@ -133,13 +141,15 @@ data Signal = Signal { sig_synth :: [String]   -- path in the dump
 typeName :: CType -> String
 typeName = pvpString
 
-signalJson :: Signal -> JValue
-signalJson s =
+-- `nameOf` renders a type's name; the caller shares one rendering per
+-- type across the many signals that name it
+signalJson :: (CType -> String) -> Signal -> JValue
+signalJson nameOf s =
     JObj $ [ ("synthpath", JArr (map JStr (sig_synth s)))
            , ("bsvpath", JArr (map JStr (sig_bsv s)))
            , ("kind", JStr (sig_kind s)) ]
            ++ sig_detail s
-           ++ maybe [] (\t -> [("type", JStr (typeName t))]) (sig_type s)
+           ++ maybe [] (\t -> [("type", JStr (nameOf t))]) (sig_type s)
            ++ maybe [] posJson (sig_pos s)
   where posJson i =
           let p = getPosition i
@@ -577,6 +587,10 @@ typesJson errh flags symtab roots = do
 
 -- ---------------
 
+-- The length of a builder's output, forcing it
+rendered :: B.Builder -> Int
+rendered = fromIntegral . BL.length . B.toLazyByteString
+
 -- Runs a step, and under -v reports how long it took, the step's result
 -- forced as far as the given measure takes it
 phase :: Flags -> String -> (a -> Int) -> IO a -> IO a
@@ -590,10 +604,10 @@ phase flags name measure act
       hPutStrLn stderr ("wavedebuginfo: " ++ name ++ ": " ++ show (diffUTCTime t1 t0))
       return x
 
--- The JSON text of the debug information for the design under `top`,
+-- The JSON bytes of the debug information for the design under `top`,
 -- whose scope path in the dump is main.top
 waveDebugInfo :: ErrorHandle -> Flags -> SymTab -> HierMap -> [(String, ABinEitherModInfo)]
-              -> String -> IO String
+              -> String -> IO B.Builder
 waveDebugInfo errh flags symtab hier mods top = do
     let design = Design { d_hier = hier
                         , d_mods = M.fromList mods
@@ -601,17 +615,20 @@ waveDebugInfo errh flags symtab hier mods top = do
     _ <- phase flags "decoding the modules" id $
         return (sum [ M.size (apkg_inst_tree p) + length (apkg_state_instances p) + length (apkg_interface p) + length (apkg_rules p)
                     | (_, abmi) <- mods, let p = abemi_apkg abmi ])
+    let signals0 = moduleSignals design ["main", "top"] [] top
+        roots = distinct (mapMaybe sig_type signals0)
+        names = M.fromList [ (t, typeName t) | t <- roots ]
+        nameOf t = M.findWithDefault (typeName t) t names
     signals <- phase flags "computing the signals" (\ ss -> length (concatMap (\ s -> sig_synth s ++ sig_bsv s ++ [sig_kind s]) ss)) $
-        return (moduleSignals design ["main", "top"] [] top)
-    _ <- phase flags "rendering the signals" length $ return (render (JArr (map signalJson signals)))
-    let roots = distinct (mapMaybe sig_type signals)
+        return signals0
+    _ <- phase flags "rendering the signals" rendered $ return (render (JArr (map (signalJson nameOf) signals)))
     types <- phase flags "type layouts" (const 0) $ typesJson errh flags symtab roots
     when (verbose flags) $
         hPutStrLn stderr ("wavedebuginfo: " ++ show (length signals) ++ " signals, " ++
                           show (length roots) ++ " types named by them")
-    phase flags "rendering" length $ return $ render $
+    phase flags "rendering" rendered $ return $ render $
           JObj [ ("format", JStr "bsc-wave-debug-info")
                , ("version", JNum 1)
                , ("top", JStr top)
-               , ("signals", JArr (map signalJson signals))
+               , ("signals", JArr (map (signalJson nameOf) signals))
                , ("types", types) ]
