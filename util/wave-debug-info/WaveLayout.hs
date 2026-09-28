@@ -11,12 +11,12 @@
 -- hand-written instance reduces to whatever its code computes, which
 -- is reported as an expression the reader can evaluate.
 module WaveLayout(Query(..), BitExpr(..), reduceQueries,
-                  bitExprWidth, evalBitExpr, bitExprSupport) where
+                  bitExprWidth, evalBitExpr, bitExprSupport, distinct) where
 
 import qualified Control.Exception as CE
 import Control.Monad(forM, when)
 import Data.Bits((.&.), (.|.), xor, shiftL, shiftR, testBit, complement)
-import Data.List(foldl', nub)
+import Data.List(foldl')
 import Data.Maybe(catMaybes)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -171,7 +171,7 @@ evalBitExpr e0 arg = go e0
 reduceQueries :: ErrorHandle -> Flags -> [([Id], [Query])]
               -> IO [Either String [(String, BitExpr)]]
 reduceQueries errh flags batches = do
-    let pkgs = nub (concatMap fst batches)
+    let pkgs = distinct (concatMap fst batches)
         -- one name space for the queries of all batches
         tagged = [ (k, q { q_name = "q" ++ show k ++ "_" ++ q_name q }, q_name q)
                  | (k, (_, qs)) <- zip [0 :: Int ..] batches, q <- qs ]
@@ -199,6 +199,16 @@ reduceQueries errh flags batches = do
           Left msg -> do
               rest' <- go binmap hashmap rest
               return (Left msg : rest')
+
+-- The list without repeats, first occurrences in their order (nub is
+-- quadratic; a design's signal list runs to hundreds of thousands)
+distinct :: Ord a => [a] -> [a]
+distinct = go S.empty
+  where
+    go _ [] = []
+    go seen (x : xs)
+      | S.member x seen = go seen xs
+      | otherwise = x : go (S.insert x seen) xs
 
 -- A computation's result, or the compiler's message when it fails
 attempt :: IO a -> IO (Either String a)

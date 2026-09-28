@@ -33,7 +33,6 @@
 -- be reduced.  A vector's element 0 is lowest.
 module WaveDebugInfo (waveDebugInfo) where
 
-import Data.List(nub)
 import Data.Maybe(mapMaybe, isJust)
 import Data.Bits(shiftL, testBit)
 import Data.Char(isDigit)
@@ -498,7 +497,7 @@ prepareType flags symtab t =
 
 -- The packages whose definitions a type refers to
 typePackages :: CType -> [Id]
-typePackages = nub . go
+typePackages = distinct . go
   where
     go (TCon (TyCon i _ _)) | not (null (getIdQualString i)) = [mkId noPosition (getIdQual i)]
     go (TAp a b) = go a ++ go b
@@ -564,7 +563,7 @@ waveDebugInfo errh flags symtab hier mods top = do
                         , d_mods = M.fromList mods
                         , d_hide = not (tclShowHidden flags) }
         signals = moduleSignals design ["main", "top"] [] top
-        roots = nub (mapMaybe sig_type signals)
+        roots = distinct (mapMaybe sig_type signals)
     types <- typesJson errh flags symtab roots
     return $ render $
           JObj [ ("format", JStr "bsc-wave-debug-info")

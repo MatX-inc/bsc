@@ -10,7 +10,6 @@
 module Main(main) where
 
 import Control.Monad(foldM, when)
-import Data.List(nub)
 import qualified Data.Map as M
 import System.Environment(getArgs, lookupEnv)
 import System.Exit(exitFailure)
@@ -31,6 +30,7 @@ import ABinUtil(getABIHierarchy)
 import SimCCBlock(SimCCBlock(..), primBlocks)
 import FileIOUtil(writeFileCatch)
 import WaveDebugInfo(waveDebugInfo)
+import WaveLayout(distinct)
 
 main :: IO ()
 main = do
@@ -64,12 +64,12 @@ run flagArgs top out = do
     let abmis = [ (n, mi) | (n, (mi, _)) <- abmis_by_name ]
 
     -- the packages the design's modules come from, for their types
-    let pkgs = nub (map (abemi_src_name . snd) abmis)
+    let pkgs = distinct (map (abemi_src_name . snd) abmis)
         load (binmap, hashmap, ps) p = do
             (binmap', hashmap', _, new) <- readBin errh flags Nothing binmap hashmap (mk_homeless_id p)
             return (binmap', hashmap', new ++ ps)
     (binmap, _, ps_read) <- foldM load (M.empty :: BinMap HeapData, M.empty, []) pkgs
-    let bininfos = [ bi | i <- nub ps_read, Just bi <- [M.lookup (getIdString i) binmap] ]
+    let bininfos = [ bi | i <- distinct ps_read, Just bi <- [M.lookup (getIdString i) binmap] ]
         mkCImp (_, _, bo_sig, IPackage { ipkg_name = iid }, _) =
             CImpSign (getIdString iid) False bo_sig
         cpack = CPackage (mk_homeless_id "wavedebuginfo") (Right []) []
