@@ -45,18 +45,23 @@ instScopes hide top tree = scopeOf top Nothing (M.elems tree)
     -- of a vector of like instances keep apart.
     childItems :: [InstNode] -> [Item]
     childItems nodes =
-        let alts = [ (itemsOf n, if unnamed n then Just (kept n) else Nothing) | n <- nodes ]
+        let alts = map itemsOf nodes
             counts = M.fromListWith (+) [ (itemName it, 1 :: Int) | (its, _) <- alts, it <- its ]
             clashes its = any (\ it -> M.findWithDefault 0 (itemName it) counts > 1) its
             choose (its, Just alt) | clashes its = alt
             choose (its, _) = its
         in  concatMap choose alts
 
-    itemsOf :: InstNode -> [Item]
+    -- A node's items and, for a node whose name is left out, the
+    -- alternative of keeping it as a scope.  Both come from one walk of
+    -- the node's subtree: a vector of like instances nests such nodes
+    -- as deep as its length, and walking each level twice would double
+    -- the work at every level.
+    itemsOf :: InstNode -> ([Item], Maybe [Item])
     itemsOf node =
         case node of
           Loc {}
-            | hide && isHiddenAll node -> []
+            | hide && isHiddenAll node -> ([], Nothing)
             | otherwise ->
                 -- a state element or rule sits under a Loc carrying its
                 -- source name (a library module's hidden wrapper in
@@ -64,18 +69,22 @@ instScopes hide top tree = scopeOf top Nothing (M.elems tree)
                 -- inlined instance, unless the elaborator marked it as
                 -- adding nothing to the path or its name is left out
                 -- (see childItems)
-                case nodeChildren hide node of
-                  [StateVar { node_name = flat }] -> [ScopeState (node_name node) flat]
-                  [Rule { node_name = rule }] -> [ScopeRule (node_name node) rule]
-                  children
-                    | node_ignore node || (hide && isHiddenKP node) || unnamed node ->
-                        childItems (sortBy cmpNode children)
-                    | otherwise -> kept node
-          StateVar { node_name = flat } -> [ScopeState flat flat]
-          Rule { node_name = rule } -> [ScopeRule rule rule]
+                let children = nodeChildren hide node
+                    s = scopeOf (node_name node) (node_type node) children
+                    kept = [fold s]
+                    alt = if unnamed node then Just kept else Nothing
+                in  case children of
+                      [StateVar { node_name = flat }] -> ([ScopeState (node_name node) flat], alt)
+                      [Rule { node_name = rule }] -> ([ScopeRule (node_name node) rule], alt)
+                      _ | node_ignore node || (hide && isHiddenKP node) || unnamed node -> (spliced s, alt)
+                        | otherwise -> (kept, Nothing)
+          StateVar { node_name = flat } -> ([ScopeState flat flat], Nothing)
+          Rule { node_name = rule } -> ([ScopeRule rule rule], Nothing)
 
-    -- the Loc as a scope of its own
-    kept node = [fold (scopeOf (node_name node) (node_type node) (nodeChildren hide node))]
+    -- the scope's contents as items of the enclosing scope
+    spliced s = [ ScopeState n f | (n, f) <- is_states s ] ++
+                [ ScopeRule n r | (n, r) <- is_rules s ] ++
+                map ScopeChild (is_children s)
 
     itemName (ScopeState n _) = scopeLocalName n
     itemName (ScopeRule n _) = scopeLocalName n
