@@ -6,14 +6,16 @@
 -- The document has two parts.
 --
 -- "signals" lists the design's own signals: the state elements
--- (registers, FIFOs, wires, ... -- one entry per primitive instance),
--- the synthesized submodule instances, each rule's CAN_FIRE and
--- WILL_FIRE, and each method's ports.  For each, "synthpath" is the
--- signal's path in a dump of the synthesized hierarchy (scope names
--- then the signal name, as Bluesim emits them) and "bsvpath" its path
--- in the source: the instance names down through the inlined modules,
--- ending in the entity's own name -- which is also its path in a dump
--- made with -wave-source-hierarchy, for state elements and rule fires.
+-- (registers, FIFOs, wires, ... -- one entry per primitive instance,
+-- and one per port of it the dump shows), the synthesized submodule
+-- instances, each rule's CAN_FIRE and WILL_FIRE, and each method's
+-- ports.  For each, "synthpath" is the signal's path in a dump of the
+-- synthesized hierarchy (scope names then the signal name, as the
+-- selected backend spells them; see PrimSignals) and "bsvpath" its
+-- path in the source: the instance names down through the inlined
+-- modules, ending in the entity's own name -- which is also its path
+-- in a Bluesim dump made with -wave-source-hierarchy, for state
+-- elements and rule fires.
 -- "type" names the signal's Bluespec type, in the spelling the dump
 -- records; "file", "line" and "column" locate the entity in the source.
 --
@@ -72,6 +74,7 @@ import ASyntax
 import ABin(ABinEitherModInfo, abemi_apkg)
 import ABinUtil(HierMap)
 import InstScopes(InstScope(..), instScopes, scopeLocalName)
+import PrimSignals(PrimPort(..), primSignals)
 
 -- ---------------
 -- JSON
@@ -164,6 +167,7 @@ signalJson nameOf s =
 data Design = Design { d_hier :: HierMap
                      , d_mods :: M.Map String ABinEitherModInfo
                      , d_hide :: Bool  -- leave out {-# hide #-}'d instances
+                     , d_flags :: Flags
                      }
 
 -- The source name an instance, state element or rule displays
@@ -215,10 +219,11 @@ tBool :: CType
 tBool = iToCT itBool
 
 -- A state element is a synthesized submodule instance (a scope of its
--- own, whose contents follow) or a primitive instance.  The dump names
--- a primitive by its flattened instance name, either as a signal (a
--- register's contents) or as a scope holding its ports (a FIFO); the
--- entry records which primitive, and the type of its contents.
+-- own, whose contents follow) or a primitive instance.  A primitive's
+-- entry is the signal carrying its contents (a register's value) or,
+-- when the dump has none, its scope (a FIFO); it records which
+-- primitive, and the type of its contents.  The primitive's ports
+-- follow it, each named in the source by the port.
 stateSignals :: Design -> [String] -> [String] -> M.Map String String
              -> M.Map String AVInst -> Id -> Id -> [Signal]
 stateSignals d scope bsv submods prims name flat =
@@ -236,8 +241,14 @@ stateSignals d scope bsv submods prims name flat =
                     let vmi = avi_vmi avi
                         prim = getVNameString (vName vmi)
                         ty = fmap iToCT (primDataType avi)
-                    in  [ Signal synth (bsv ++ [local]) "state"
-                                 [("prim", JStr prim)] ty (Just name) ]
+                        (value, ports) = primSignals (d_flags d) avi
+                    in  Signal (scope ++ maybe [flatname] id value) (bsv ++ [local]) "state"
+                               [("prim", JStr prim)] ty (Just name)
+                        : [ Signal (scope ++ pp_path p) (bsv ++ [local, pp_port p]) "port"
+                                   [ ("role", JStr (pp_role p)), ("method", JStr (pp_method p))
+                                   , ("prim", JStr prim) ]
+                                   (fmap iToCT (pp_type p)) (Just name)
+                          | p <- ports ]
                 Nothing ->
                     [ Signal synth (bsv ++ [local]) "state" [] Nothing (Just name) ]
 
@@ -611,7 +622,8 @@ waveDebugInfo :: ErrorHandle -> Flags -> SymTab -> HierMap -> [(String, ABinEith
 waveDebugInfo errh flags symtab hier mods top = do
     let design = Design { d_hier = hier
                         , d_mods = M.fromList mods
-                        , d_hide = not (tclShowHidden flags) }
+                        , d_hide = not (tclShowHidden flags)
+                        , d_flags = flags }
     _ <- phase flags "decoding the modules" id $
         return (sum [ M.size (apkg_inst_tree p) + length (apkg_state_instances p) + length (apkg_interface p) + length (apkg_rules p)
                     | (_, abmi) <- mods, let p = abemi_apkg abmi ])
