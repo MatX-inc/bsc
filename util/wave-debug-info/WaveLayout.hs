@@ -236,8 +236,13 @@ reduce errh flags binmap0 hashmap0 pkgs qs = do
         cpkg0 = CPackage pkgId (Right []) [ CImpId False p | p <- pkgs ]
                          [] [] (CPragma (Pnoinline (map qId qs)) : map qdef qs) []
 
-    -- the front end, as bsc runs it on a source package
-    (cpkg1, binmap, hashmap) <- readImports errh flags binmap0 hashmap0 cpkg0
+    -- the front end, as bsc runs it on a source package, except that the
+    -- imports show every definition rather than their exports: a type's
+    -- pack and unpack may name constructors and types their package keeps
+    -- to itself
+    (cpkg1e, binmap, hashmap) <- readImports errh flags binmap0 hashmap0 cpkg0
+    let bins = M.elems binmap
+        cpkg1 = replaceImportedSignatures cpkg1e [ bo | (_, _, bo, _, _) <- bins ]
     symt00 <- mkSymTab errh cpkg1
     (cpkgF, symt0, funcs) <- genFuncWrap errh flags True cpkg1 symt00
     (cpkgW, gens) <- genWrap errh flags [] True cpkgF symt0
@@ -252,18 +257,13 @@ reduce errh flags binmap0 hashmap0 pkgs qs = do
     imod0 <- iConvPackage errh flags symt (mergeCATFCaches atfT atfC) [] cpkg3
 
     -- link against the imported packages
-    let bins = M.elems binmap
-        binmods = [ (ipkg, hash) | (_, _, _, ipkg, hash) <- bins ]
+    let binmods = [ (ipkg, hash) | (_, _, _, ipkg, hash) <- bins ]
         redirects = mkDictRedirects (mkDictBuckets binmods) imod0 binmods
         (imod1, alldefsList) = fixupDefs redirects imod0 binmods
         imod = iSimplify (iSimpDicts imod1)
         alldefs = M.fromList [ (i, e) | IDef i _ e _ <- alldefsList ]
         atf = foldl' mergeIATFCaches (ipkg_atf_cache imod)
                      [ ipkg_atf_cache m | (m, _) <- binmods ]
-    -- the evaluator sees every definition, not only the exported ones
-    isymt <- mkSymTab errh
-               (replaceImportedSignatures cpkg2 [ bo | (_, _, bo, _, _) <- bins ])
-
     -- evaluate each query's wrapper module; its method's value is the
     -- normal form over the method's argument
     let wrappers = M.fromList [ (getIdBaseString (mod_nm wi), wi) | wi <- gens ]
@@ -274,7 +274,7 @@ reduce errh flags binmap0 hashmap0 pkgs qs = do
           case M.lookup ("module_" ++ name) wrappers >>= \ wi ->
                fmap ((,) wi) (M.lookup (getIdBaseString (wrapped_mod wi)) defs) of
             Just (wi, def) -> do
-                em <- iExpand errh flags isymt alldefs atf True (wi_prags wi) def
+                em <- iExpand errh flags symt alldefs atf True (wi_prags wi) def
                 let dmap = M.fromList [ (i, e) | IDef i _ e _ <- imod_local_defs em ]
                     vals = [ inlineDefs dmap e
                            | IEFace { ief_name = i, ief_value = Just (e, _) } <- imod_interface em

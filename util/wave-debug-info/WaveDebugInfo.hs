@@ -49,10 +49,13 @@ import IType(IType, iToCT)
 import ISyntaxUtil(itBool)
 import CSyntax
 import Undefined(UndefKind(..))
-import PreIds(idPack, idUnpack, idTrue, idFalse, idPrimUnit)
+import PreIds(idPack, idUnpack, idTrue, idFalse)
 import FStringCompat(mkFString)
 import WaveLayout
-import Pred(qualToType)
+import Pred(qualToType, Qual(..))
+import Assump(Assump(..))
+import Scheme(Scheme(..))
+import CType(getArrows, leftTyCon, isTypeUnit, TyCon(..), TISort(..), StructSubType(..))
 import PVPrint(pvpString)
 import SymTab(SymTab, ConInfo(..), findCon)
 import ConTagInfo(ConTagInfo(..))
@@ -353,7 +356,7 @@ prepareType flags symtab t =
     prepare (Enum qi cons _) =
         let members = [ Member (getIdBaseString c) Nothing Nothing (fmap conTag (tagInfo symtab qi c)) Nothing Nothing
                       | c <- cons ]
-            queries w = [ Query (isName n) w 1 (isCon (CPCon c []))
+            queries w = [ Query (isName n) w 1 (isCon (CPCon c (replicate (conArity qi c) (CPAny pos))))
                         | (n, c) <- zip [0 :: Int ..] cons ]
             finish results =
                 let members' = attach results members
@@ -371,11 +374,13 @@ prepareType flags symtab t =
     prepare (TaggedUnion qi _ _ _ arms _) =
         let members = [ Member (getIdBaseString c) (Just at) aw (fmap conTag (tagInfo symtab qi c)) Nothing Nothing
                       | (c, at, aw) <- arms ]
+            -- a constructor of several anonymous fields has no one
+            -- payload expression to pack, so only its tag is asked for
             queries w = concat
-                [ Query (isName n) w 1 (isCon (CPCon c (payloadPat at))) :
+                [ Query (isName n) w 1 (isCon (CPCon c (replicate (conArity qi c) (CPAny pos)))) :
                   [ Query (valName n) w pw (payloadOf c)
-                  | Just pw <- [aw], pw > 0 ]
-                | (n, (c, at, aw)) <- zip [0 :: Int ..] arms ]
+                  | Just pw <- [aw], pw > 0, conArity qi c == 1 ]
+                | (n, (c, _, aw)) <- zip [0 :: Int ..] arms ]
             finish results =
                 let members' = attach results members
                     -- a derived instance puts the tag above the widest payload,
@@ -422,14 +427,24 @@ prepareType flags symtab t =
     isCon pat b = Ccase pos (unpacked b)
                     [ CCaseArm pat [] (packed (CCon idTrue []))
                     , CCaseArm (CPAny pos) [] (packed (CCon idFalse [])) ]
-    payloadPat at | isUnitType at = []
-                  | otherwise = [CPAny pos]
     payloadOf c b = let x = mkId pos (mkFString "payload")
                     in  Ccase pos (unpacked b)
                           [ CCaseArm (CPCon c [CPVar x]) [] (packed (CVar x))
                           , CCaseArm (CPAny pos) [] (CAny pos UDontCare) ]
-    isUnitType (TCon (TyCon i _ _)) = i == idPrimUnit
-    isUnitType _ = False
+
+    -- the arguments a pattern for the constructor has to supply, as the
+    -- type checker counts them from the constructor's declared type:
+    -- none for a declared unit payload, one per field for anonymous
+    -- fields, else one
+    conArity :: Id -> Id -> Int
+    conArity ty c =
+        case conInfo symtab ty c of
+          Just (ConInfo { ci_assump = _ :>: Forall _ (_ :=> ct) }) ->
+              case fst (getArrows ct) of
+                [argTy] | isTypeUnit argTy -> 0
+                        | Just (TyCon _ _ (TIstruct (SDataCon _ False) fs)) <- leftTyCon argTy -> length fs
+                _ -> 1
+          Nothing -> 1
 
     -- the members with their queries' results
     attach :: [(String, BitExpr)] -> [Member] -> [Member]
@@ -523,15 +538,19 @@ bitExprJson (BCase s d arms) =
 bitExprJson (BOp op w es) =
     JObj [("op", JStr op), ("width", JNum w), ("args", JArr (map bitExprJson es))]
 
--- The packing information of a constructor of the given type
-tagInfo :: SymTab -> Id -> Id -> Maybe ConTagInfo
-tagInfo symtab ty con =
+-- The symbol table's entry for a constructor of the given type
+conInfo :: SymTab -> Id -> Id -> Maybe ConInfo
+conInfo symtab ty con =
     case findCon symtab con of
-      Just [ci] -> Just (ci_taginfo ci)
+      Just [ci] -> Just ci
       Just cis  -> case [ ci | ci <- cis, qualEq ty (ci_id ci) ] of
-                     [ci] -> Just (ci_taginfo ci)
+                     [ci] -> Just ci
                      _    -> Nothing
       Nothing   -> Nothing
+
+-- The packing information of a constructor of the given type
+tagInfo :: SymTab -> Id -> Id -> Maybe ConTagInfo
+tagInfo symtab ty con = fmap ci_taginfo (conInfo symtab ty con)
 
 -- Every type the signals name, and every type those reach, described
 -- once each, keyed by name.  The descriptions are prepared first, so
