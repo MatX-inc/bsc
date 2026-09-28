@@ -1,6 +1,6 @@
 # Waveform debug information
 
-`wavedebuginfo.hs` writes the debug information for a design's waveform
+`Main.hs` writes the debug information for a design's waveform
 dumps as JSON: which dumped signal is which source-level entity, and how
 the Bluespec types of those signals lay out in bits. Surfer's Bluespec
 translator (`util/surfer-translator`) reads it beside the dump.
@@ -9,7 +9,7 @@ It is a bluehs script (see `util/bluehs/README.md`): it runs against the
 compiled bsc library, so it reads the elaboration files that the same
 build of bsc wrote, and needs no compiler change.
 
-    util/bluehs/bluehs util/wave-debug-info/wavedebuginfo.hs \
+    util/bluehs/bluehs -iutil/wave-debug-info util/wave-debug-info/Main.hs \
         -sim -p <bdir>:+ <top module> <output.json>
 
 The bsc flags name the backend whose elaboration to read (`-sim` or
