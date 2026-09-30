@@ -1,8 +1,7 @@
 module TypeCheck(cTypeCheck,
                  cCtxReduceDef, cCtxReduceIO,
                  topExpr,
-                 qualifyClassDefaults,
-                 CATFCache, mergeCATFCaches
+                 qualifyClassDefaults
                 ) where
 
 import Data.List
@@ -33,31 +32,30 @@ import CFreeVars(getFVC, getFTCC)
 import Util(separate, apFst, quote)
 
 cTypeCheck :: ErrorHandle -> Flags -> SymTab -> CPackage ->
-             IO (CPackage, Bool, S.Set Id, CATFCache)
+             IO (CPackage, Bool, S.Set Id)
 cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns includes) = do
-    (typecheckedDefns, typeWarns, usedPkgs, haveErrors, atfCache) <- tiDefns errh symtab flags defns
+    (typecheckedDefns, typeWarns, usedPkgs, haveErrors) <- tiDefns errh symtab flags defns
 
     -- Issue type warnings
     when (not (null typeWarns)) $ bsWarning errh typeWarns
 
     return (CPackage name exports imports impsigs fixs typecheckedDefns includes,
             haveErrors,
-            usedPkgs,
-            atfCache)
+            usedPkgs)
 
 
 -- type check top-level definitions in parallel (since they are independent)
 tiDefns :: ErrorHandle -> SymTab -> Flags -> [CDefn] ->
-           IO ([CDefn], [WMsg], S.Set Id, Bool, CATFCache)
+           IO ([CDefn], [WMsg], S.Set Id, Bool)
 tiDefns errh s flags ds = do
   let ai = allowIncoherentMatches flags
-  let checkDef d = (defErr, warns, usedPkgs, atfCache)
+  let checkDef d = (defErr, warns, usedPkgs)
         where ti_res = runTI flags ai s $ tiOneDef d
-              (warns, usedPkgs, atfCache) = (tiWarnings ti_res, tiUsedPackages ti_res, tiATFCache ti_res)
+              (warns, usedPkgs) = (tiWarnings ti_res, tiUsedPackages ti_res)
               defErr = case tiResult ti_res of
                           (Left emsgs)  -> Left emsgs
                           (Right cdefn) -> rmFreeTypeVars cdefn
-  let (checks, wss, pkgss, atfCaches) = unzip4 (map checkDef ds)
+  let (checks, wss, pkgss) = unzip3 (map checkDef ds)
   let (errors, ds') = apFst concat $ separate checks
   let have_errors = not (null errors)
   let mkErrorDef (Left _)  (CValueSign (CDef i t _)) = Just (mkPoisonedCDefn i t)
@@ -67,15 +65,14 @@ tiDefns errh s flags ds = do
       mkErrorDef (Right _) _ = Nothing
   let error_defs = catMaybes (zipWith mkErrorDef checks ds)
   let (double_error_msgs, error_defs') =
-          apFst concat $ separate $ map (\(x,_,_,_) -> x) (map checkDef error_defs)
+          apFst concat $ separate $ map (\(x,_,_) -> x) (map checkDef error_defs)
   -- Accumulate all used packages (only from the first round, poison pills don't use new symbols)
   let allUsedPkgs = S.unions pkgss
-  let mergedATFCache = foldl mergeCATFCaches M.empty atfCaches
   -- XXX: we give up - some type signatures are bogus
   when ((not (null double_error_msgs)) || (have_errors && not (enablePoisonPills flags))) $
       bsError errh (nub errors) -- the underyling error should be in errors
   when (have_errors && enablePoisonPills flags) $ bsErrorNoExit errh errors
-  return (ds' ++ error_defs', concat wss, allUsedPkgs, have_errors, mergedATFCache)
+  return (ds' ++ error_defs', concat wss, allUsedPkgs, have_errors)
 
 nullAssump :: [Assump]
 nullAssump = []
