@@ -1,5 +1,8 @@
 {-# LANGUAGE CPP #-}
 module Depend(chkDeps, parseFile, chkParse, doCPP, genDepend, genFileDepend,
+              -- the discovery interface (bscdeps) walks the same package
+              -- closure that -u walks, so it consumes these directly
+              findPackages, PkgInfo(..), CompileStatus(..),
               outlaw_sv_kws_as_classic_ids) where
 
 import Data.Maybe(isJust)

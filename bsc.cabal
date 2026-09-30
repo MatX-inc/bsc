@@ -664,6 +664,16 @@ executable bsc2bsv
   ghc-options: -main-is Main_bsc2bsv
   main-is: bsc2bsv.hs
 
+-- The P1 dependency-discovery interface (doc/engine-first-plan.md): the
+-- package closure `bsc -u` would walk, as machine-readable lines, for an
+-- external build coordinator.  A thin client over the library's Depend.
+executable bscdeps
+  import: common_exes
+  build-depends:
+    directory >=1.3.8.5,
+  ghc-options: -main-is Main_bscdeps
+  main-is: bscdeps.hs
+
 executable bsv2bsc
   import: common_exes
   ghc-options: -main-is Main_bsv2bsc
