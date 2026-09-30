@@ -19,6 +19,7 @@ import Distribution.Simple.SetupHooks
 import Distribution.Types.BuildInfo (targetBuildDepends)
 import Distribution.Types.Component (componentBuildInfo)
 import Distribution.Types.Dependency (depPkgName)
+import Distribution.Types.UnqualComponentName (unUnqualComponentName)
 import Distribution.System (OS (..))
 import Distribution.Utils.Path
   ( interpretSymbolicPathCWD,
@@ -69,6 +70,14 @@ isMainLib :: Component -> Bool
 isMainLib (CLib Library {libName = LMainLibName}) = True
 isMainLib _ = False
 
+-- | The bsc-common sublibrary: the home of the generated modules, the
+-- vendored C sources, and the Tcl and solver link configuration, now that
+-- the main library is a facade over the four sublibraries.
+isCommonLib :: Component -> Bool
+isCommonLib (CLib Library {libName = LSubLibName n}) =
+  unUnqualComponentName n == "bsc-common"
+isCommonLib _ = False
+
 -- | Run the action only if the target files don't already exist.
 needing :: [FilePath] -> IO () -> IO ()
 needing targets act = do
@@ -88,7 +97,7 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
     -- Declare that the modules are generated.
     preConfComponentHook :: Maybe PreConfComponentHook
     preConfComponentHook = Just $ \inputs -> do
-      if isMainLib inputs.component
+      if isCommonLib inputs.component
         then
           pure $
             PreConfComponentOutputs
@@ -126,7 +135,7 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
           deps =
             map (unPackageName . depPkgName) $
               targetBuildDepends (componentBuildInfo (targetComponent env.targetInfo))
-      when (isMainLib (targetComponent env.targetInfo)) $ do
+      when (isCommonLib (targetComponent env.targetInfo)) $ do
         registerRule_ "BuildSystem.hs" $
           staticRule
             ( mkCommand
@@ -242,13 +251,14 @@ solverSetupHooks = noSetupHooks {configureHooks}
                       -- an rpath is the whole of what either platform needs
                       -- to resolve them, and these artifacts run where they
                       -- are built, which makes the build tree's own
-                      -- directories the right answer. Naming it on the
-                      -- library alone is enough: the executables that link
-                      -- the library inherit its ldOptions, and injecting it
-                      -- per component instead passes each -rpath twice.
+                      -- directories the right answer. The facade library's
+                      -- ldOptions are inherited by the executables that link
+                      -- it; bsc-common needs its own because its dynamic
+                      -- object is what records the solver dependencies.
                       ldOptions =
                         [ "-Wl,-rpath," <> dir
-                          | isMainLib inputs.component,
+                          | isMainLib inputs.component
+                              || isCommonLib inputs.component,
                             dir <- dirs
                         ]
                     }
@@ -284,7 +294,7 @@ tclSetupHooks = noSetupHooks {configureHooks}
       let platform arg = readProcess "sh" ["platform.sh", arg] ""
       let trim = f . f where f = reverse . dropWhile isSpace
       let getArgs flag = fmap (drop (length flag)) . filter (flag `isPrefixOf`)
-      if isMainLib inputs.component
+      if isCommonLib inputs.component
         then do
           tclInc <- words <$> platform "tclinc"
           tclLibs <- words <$> platform "tcllibs"

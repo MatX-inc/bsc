@@ -21,7 +21,14 @@ custom-setup
     filepath    >=1.4.301.0,
     process     >=1.6.19.0,
 
-library
+-- Shared settings of the four sublibraries. The carve into
+-- bsc-common / bsc-semantic / bsc-verilog / bsc-bluesim is derived from
+-- the module import graph at this revision (doc/engine-first-plan.md,
+-- section 2): a module reached from exactly one producer's entry modules
+-- belongs to that producer; anything shared sinks to bsc-common. The
+-- public library below re-exports every module, so executables and
+-- external consumers are unchanged.
+common lib-defaults
   build-depends:
     array        >=0.5.8.0,
     base         >=4.18.3.0,
@@ -55,11 +62,6 @@ library
   -- modules the generated Warmup then imports.
   if impl(ghc >= 9.10)
     build-depends: ghc-internal
-  extra-libraries: z
-  if os(osx)
-    extra-libraries: c++
-  else
-    extra-libraries: stdc++
   ghc-options: -Wall -Wno-orphans -Wno-name-shadowing -Wno-unused-matches
   hs-source-dirs:
     src/Parsec,
@@ -69,6 +71,15 @@ library
     src/vendor/htcl,
     src/vendor/stp/HaskellIfc,
     src/vendor/yices/v2.6/HaskellIfc,
+
+library bsc-common
+  import: lib-defaults
+  visibility: private
+  extra-libraries: z
+  if os(osx)
+    extra-libraries: c++
+  else
+    extra-libraries: stdc++
   c-sources:
     src/comp/fstscopes_hier.c,
     src/vendor/htcl/haskell.c,
@@ -79,39 +90,25 @@ library
     src/libfst_config,
     src/vendor/libfst/src,
   exposed-modules:
-    AAddSchedAssumps
-    AAddScheduleDefs
     ABin
     ABinUtil
-    ACheck
     ACleanup
     AConv
-    ADropDefs
     ADropUndet
-    ADumpSchedule
     ADumpScheduleInfo
-    AExpand
     AExpr2STP
     AExpr2Util
     AExpr2Yices
-    ANoInline
-    AOpt
     APaths
     APrims
     AProofs
     ARankMethCalls
     ARemoveAssumps
-    ARenameIO
     ASchedule
     AScheduleInfo
-    AState
     ASyntax
     ASyntaxUtil
-    ATaskSplice
     AUses
-    AVeriQuirks
-    AVerilog
-    AVerilogUtil
     Assump
     BDD
     BExpr
@@ -120,17 +117,11 @@ library
     Bag
     Balanced
     BinData
-    BinParse
-    BinUtil
-    BluesimLoader
     BoolExp
     BoolOpt
     BuildSystem
     BuildVersion
     CCSyntax
-    CFreeVars
-    CPPLineDirectives
-    CSubst
     CSyntax
     CSyntaxTypes
     CSyntaxUtil
@@ -140,13 +131,8 @@ library
     Classic
     ConTagInfo
     CondTree
-    ContextErrors
-    CtxRed
     DOT
-    DPIWrappers
     DefProp
-    Depend
-    Deriving
     DisjointTest
     DynamicMap
     EquivalenceClass
@@ -160,30 +146,20 @@ library
     FileIOUtil
     FileNameUtil
     Fixity
-    FixupDefs
     Flags
     FlagsDecode
     ForeignFunctions
     GHCPretty
     GenABin
-    GenBin
     GenForeign
-    GenFuncWrap
-    GenSign
-    GenWrap
     GenWrapUtils
     GlobPattern
     GraphMap
     GraphPaths
     GraphUtil
     GraphWrapper
-    GroundCType
     HTcl
-    IConv
-    IConvLet
     IDropRules
-    IExpand
-    IExpandUtils
     IInline
     IInlineFmt
     IInlineUtil
@@ -192,45 +168,114 @@ library
     IOUtil
     IPrims
     ISimpDicts
-    ISimplify
-    ISplitIf
     IStateLoc
     ISyntax
-    ISyntaxCheck
     ISyntaxSubst
     ISyntaxUtil
-    ISyntaxXRef
     ITransform
     IType
-    IWireSet
     Id
     IdPrint
-    IfcBetterInfo
-    InferKind
-    InlineCReg
-    InlineReg
-    InlineWires
     InstNodes
     IntLit
     IntegerUtil
     Intervals
-    KIMisc
-    LambdaCalc
-    LambdaCalcUtil
     Lex
-    LiftDicts
     ListMap
     ListUtil
     Literal
     Log2
     MVarStrict
-    MakeSymTab
     PFPrint
     PPrint
     PVPrint
-    Params
-    Parse
     ParseOp
+    Position
+    Pragma
+    PreIds
+    PreStrings
+    Pred
+    Pretty
+    Prim
+    ProofObligation
+    RSchedule
+    RealUtil
+    SAT
+    SCC
+    STP
+    STPFFI
+    SchedInfo
+    Scheme
+    SignalNaming
+    Sort
+    SpeedyString
+    StdPrel
+    Subst
+    SymTab
+    SystemCheck
+    SystemVerilogKeywords
+    SystemVerilogTokens
+    TclUtils
+    TopUtils
+    Type
+    TypeOps
+    Undefined
+    Unify
+    Util
+    VCD
+    VFileName
+    VModInfo
+    Verilog
+    Version
+    Warmup
+    WaveCheck
+    WireAnalysis
+    Wires
+    Yices
+    YicesFFI
+
+library bsc-semantic
+  import: lib-defaults
+  visibility: private
+  build-depends: bsc:bsc-common
+  exposed-modules:
+    AAddSchedAssumps
+    AAddScheduleDefs
+    ADropDefs
+    ADumpSchedule
+    ANoInline
+    ARenameIO
+    ATaskSplice
+    BinParse
+    BinUtil
+    CFreeVars
+    CPPLineDirectives
+    CSubst
+    ContextErrors
+    CtxRed
+    Depend
+    Deriving
+    FixupDefs
+    GenBin
+    GenFuncWrap
+    GenSign
+    GenWrap
+    GroundCType
+    IConv
+    IConvLet
+    IExpand
+    IExpandUtils
+    ISimplify
+    ISplitIf
+    ISyntaxCheck
+    ISyntaxXRef
+    IWireSet
+    IfcBetterInfo
+    InferKind
+    KIMisc
+    LiftDicts
+    MakeSymTab
+    Parse
     Parsec
     ParsecChar
     ParsecCombinator
@@ -246,30 +291,59 @@ library
     Parser.Classic.CParser
     Parser.Classic.Warnings
     PoisonUtils
-    Position
-    Pragma
     PragmaCheck
-    PreIds
-    PreStrings
-    Pred
     Pred2STP
     Pred2Yices
     PredTrie
-    Pretty
-    Prim
-    ProofObligation
-    RSchedule
-    RealUtil
-    SAL
-    SAT
     SATPred
-    SCC
     SEMonad
-    STP
-    STPFFI
-    SchedInfo
-    Scheme
-    SignalNaming
+    Simplify
+    SolvedBinds
+    SystemVerilogPreprocess
+    SystemVerilogScanner
+    TCMisc
+    TCPat
+    TCheck
+    TIMonad
+    TclParseUtils
+    TmpNam
+    TypeAnalysis
+    TypeAnalysisTclUtil
+    TypeCheck
+
+library bsc-verilog
+  import: lib-defaults
+  visibility: private
+  build-depends: bsc:bsc-common
+  exposed-modules:
+    AState
+    AVeriQuirks
+    AVerilog
+    AVerilogUtil
+    DPIWrappers
+    InlineCReg
+    InlineReg
+    InlineWires
+    VFinalCleanup
+    VIOProps
+    VPIWrappers
+    VPrims
+    VStableRenumber
+    VVerilogDollar
+
+library bsc-bluesim
+  import: lib-defaults
+  visibility: private
+  build-depends: bsc:bsc-common
+  exposed-modules:
+    ACheck
+    AExpand
+    AOpt
+    BluesimLoader
+    LambdaCalc
+    LambdaCalcUtil
+    Params
+    SAL
     SimBlocksToC
     SimCCBlock
     SimCOpt
@@ -280,54 +354,269 @@ library
     SimPackage
     SimPackageOpt
     SimPrimitiveModules
-    Simplify
-    SolvedBinds
-    Sort
-    SpeedyString
     StaleUtils
-    StdPrel
-    Subst
-    SymTab
     Synthesize
     SystemCWrapper
-    SystemCheck
-    SystemVerilogKeywords
-    SystemVerilogPreprocess
-    SystemVerilogScanner
-    SystemVerilogTokens
-    TCMisc
-    TCPat
-    TCheck
-    TIMonad
-    TclParseUtils
-    TclUtils
-    TmpNam
-    TopUtils
-    Type
-    TypeAnalysis
-    TypeAnalysisTclUtil
-    TypeCheck
-    TypeOps
-    Undefined
-    Unify
-    Util
-    VCD
-    VFileName
     VFileUtils
-    VFinalCleanup
-    VIOProps
-    VModInfo
-    VPIWrappers
-    VPrims
-    VStableRenumber
-    VVerilogDollar
-    Verilog
-    Version
-    Warmup
-    WaveCheck
-    WireAnalysis
-    Wires
-    Yices
+
+library
+  build-depends:
+    base >=4.18.3.0,
+    bsc:bsc-common,
+    bsc:bsc-semantic,
+    bsc:bsc-verilog,
+    bsc:bsc-bluesim,
+  default-language: GHC2021
+  reexported-modules:
+    AAddSchedAssumps,
+    AAddScheduleDefs,
+    ABin,
+    ABinUtil,
+    ACheck,
+    ACleanup,
+    AConv,
+    ADropDefs,
+    ADropUndet,
+    ADumpSchedule,
+    ADumpScheduleInfo,
+    AExpand,
+    AExpr2STP,
+    AExpr2Util,
+    AExpr2Yices,
+    ANoInline,
+    AOpt,
+    APaths,
+    APrims,
+    AProofs,
+    ARankMethCalls,
+    ARemoveAssumps,
+    ARenameIO,
+    ASchedule,
+    AScheduleInfo,
+    AState,
+    ASyntax,
+    ASyntaxUtil,
+    ATaskSplice,
+    AUses,
+    AVeriQuirks,
+    AVerilog,
+    AVerilogUtil,
+    Assump,
+    BDD,
+    BExpr,
+    Backend,
+    BackendNamingConventions,
+    Bag,
+    Balanced,
+    BinData,
+    BinParse,
+    BinUtil,
+    BluesimLoader,
+    BoolExp,
+    BoolOpt,
+    BuildSystem,
+    BuildVersion,
+    CCSyntax,
+    CFreeVars,
+    CPPLineDirectives,
+    CSubst,
+    CSyntax,
+    CSyntaxTypes,
+    CSyntaxUtil,
+    CType,
+    CVPrint,
+    Changed,
+    Classic,
+    ConTagInfo,
+    CondTree,
+    ContextErrors,
+    CtxRed,
+    DOT,
+    DPIWrappers,
+    DefProp,
+    Depend,
+    Deriving,
+    DisjointTest,
+    DynamicMap,
+    EquivalenceClass,
+    Error,
+    ErrorMonad,
+    ErrorUtil,
+    Eval,
+    Exceptions,
+    FSTRead,
+    FStringCompat,
+    FileIOUtil,
+    FileNameUtil,
+    Fixity,
+    FixupDefs,
+    Flags,
+    FlagsDecode,
+    ForeignFunctions,
+    GHCPretty,
+    GenABin,
+    GenBin,
+    GenForeign,
+    GenFuncWrap,
+    GenSign,
+    GenWrap,
+    GenWrapUtils,
+    GlobPattern,
+    GraphMap,
+    GraphPaths,
+    GraphUtil,
+    GraphWrapper,
+    GroundCType,
+    HTcl,
+    IConv,
+    IConvLet,
+    IDropRules,
+    IExpand,
+    IExpandUtils,
+    IInline,
+    IInlineFmt,
+    IInlineUtil,
+    ILift,
+    IOMutVar,
+    IOUtil,
+    IPrims,
+    ISimpDicts,
+    ISimplify,
+    ISplitIf,
+    IStateLoc,
+    ISyntax,
+    ISyntaxCheck,
+    ISyntaxSubst,
+    ISyntaxUtil,
+    ISyntaxXRef,
+    ITransform,
+    IType,
+    IWireSet,
+    Id,
+    IdPrint,
+    IfcBetterInfo,
+    InferKind,
+    InlineCReg,
+    InlineReg,
+    InlineWires,
+    InstNodes,
+    IntLit,
+    IntegerUtil,
+    Intervals,
+    KIMisc,
+    LambdaCalc,
+    LambdaCalcUtil,
+    Lex,
+    LiftDicts,
+    ListMap,
+    ListUtil,
+    Literal,
+    Log2,
+    MVarStrict,
+    MakeSymTab,
+    PFPrint,
+    PPrint,
+    PVPrint,
+    Params,
+    Parse,
+    ParseOp,
+    Parsec,
+    ParsecChar,
+    ParsecCombinator,
+    ParsecExpr,
+    ParsecPrim,
+    Parser.BSV,
+    Parser.BSV.CVParser,
+    Parser.BSV.CVParserAssertion,
+    Parser.BSV.CVParserCommon,
+    Parser.BSV.CVParserImperative,
+    Parser.BSV.CVParserUtil,
+    Parser.Classic,
+    Parser.Classic.CParser,
+    Parser.Classic.Warnings,
+    PoisonUtils,
+    Position,
+    Pragma,
+    PragmaCheck,
+    PreIds,
+    PreStrings,
+    Pred,
+    Pred2STP,
+    Pred2Yices,
+    PredTrie,
+    Pretty,
+    Prim,
+    ProofObligation,
+    RSchedule,
+    RealUtil,
+    SAL,
+    SAT,
+    SATPred,
+    SCC,
+    SEMonad,
+    STP,
+    STPFFI,
+    SchedInfo,
+    Scheme,
+    SignalNaming,
+    SimBlocksToC,
+    SimCCBlock,
+    SimCOpt,
+    SimDomainInfo,
+    SimExpand,
+    SimFileUtils,
+    SimMakeCBlocks,
+    SimPackage,
+    SimPackageOpt,
+    SimPrimitiveModules,
+    Simplify,
+    SolvedBinds,
+    Sort,
+    SpeedyString,
+    StaleUtils,
+    StdPrel,
+    Subst,
+    SymTab,
+    Synthesize,
+    SystemCWrapper,
+    SystemCheck,
+    SystemVerilogKeywords,
+    SystemVerilogPreprocess,
+    SystemVerilogScanner,
+    SystemVerilogTokens,
+    TCMisc,
+    TCPat,
+    TCheck,
+    TIMonad,
+    TclParseUtils,
+    TclUtils,
+    TmpNam,
+    TopUtils,
+    Type,
+    TypeAnalysis,
+    TypeAnalysisTclUtil,
+    TypeCheck,
+    TypeOps,
+    Undefined,
+    Unify,
+    Util,
+    VCD,
+    VFileName,
+    VFileUtils,
+    VFinalCleanup,
+    VIOProps,
+    VModInfo,
+    VPIWrappers,
+    VPrims,
+    VStableRenumber,
+    VVerilogDollar,
+    Verilog,
+    Version,
+    Warmup,
+    WaveCheck,
+    WireAnalysis,
+    Wires,
+    Yices,
     YicesFFI
 
 common common_exes
