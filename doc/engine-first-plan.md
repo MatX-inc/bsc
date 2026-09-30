@@ -47,14 +47,14 @@ records (measured CI economics; the adversarial review trail).
 
 | Sublibrary | Products | Owns |
 | --- | --- | --- |
-| `bsc-common` | none (supporting) | shared IR (CSyntax/ISyntax/ASyntax), binary codecs, `Flags`, positions and diagnostics, neutral utilities |
+| `bsc-core` | none (supporting) | shared IR (CSyntax/ISyntax/ASyntax), binary codecs, `Flags`, positions and diagnostics, neutral utilities |
 | `bsc-semantic` | `.bo` + `.ba` (coupled) | parse, imports, typecheck, elaboration (`iExpand`), scheduling, semantic port properties (`getIOPropsA`), wrapper finalization, `.bo`/`.ba` serialization |
 | `bsc-verilog` | `.v` and associated files | `.ba` reading for emission, Verilog lowering, optimization, naming, rendering, requested filters, netlist port measurement (`getIOProps`) |
 | `bsc-bluesim` | `.cxx` + `.h` (co-products) | hierarchy loading, simulation lowering, Bluesim scheduling, BDPI declarations, rendering |
 
 Executables remain thin clients in `src/comp/app`, depending on all four.
-`bsc-common` may split further later; start with one. `VIOProps.hs`
-splits: `getIOPropsA` and shared helpers into `bsc-semantic`/`bsc-common`;
+`bsc-core` may split further later; start with one. `VIOProps.hs`
+splits: `getIOPropsA` and shared helpers into `bsc-semantic`/`bsc-core`;
 `getIOProps` into `bsc-verilog`.
 
 **Fingerprints.** Generated per component at build time from the cabal
@@ -67,7 +67,7 @@ F(component) = H( fingerprint schema + generator identity,
                   F(each dependency component) )
 ```
 
-Never a git revision or a GHC ABI hash. `bsc-common` has a fingerprint
+Never a git revision or a GHC ABI hash. `bsc-core` has a fingerprint
 that enters each producer's `F` recursively but keys no action of its own.
 The registry of fingerprints is generated during the build and embedded in
 that exact compiler; producer modules do not import the registry (the
@@ -158,7 +158,7 @@ build-time fingerprint generator, and the embedded registry.
 
 **Exit** (an invalidation report demonstrates all of): a Verilog-only edit
 moves only `F(bsc-verilog)`; a Bluesim-only edit only `F(bsc-bluesim)`;
-evaluator/typechecker edits move `F(bsc-semantic)`; a `bsc-common` edit
+evaluator/typechecker edits move `F(bsc-semantic)`; a `bsc-core` edit
 moves all dependents; a driver-only edit moves no producer fingerprint; an
 unchanged regenerated artifact stops downstream invalidation. The whole
 suite passes.
