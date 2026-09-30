@@ -481,6 +481,47 @@ assignment; and the layout choice (3.2) is a taste decision with a Hackage
 consequence. The mechanical part of step 0 (S0.1-S0.4) is uncontroversial
 and can start in parallel with the review if Ravi wants the clock running.
 
+## Addendum 1 (2026-09-30, later): the .ba should store no stage's flags as instructions
+
+Refines 4.3 and 4.4 after reading the consumers.
+
+Facts. (1) The only behavioral reader of abmi_flags is the `-c` mode
+(vCodeGen / vGenMods in app/bsc.hs), which regenerates Verilog from a .ba
+with the codegen-semantic flags taken from the file and 13 environment
+fields overridden from the invocation. (2) The Bluesim path does the
+opposite by design, in the driver's own words: it generates under the
+invocation's flags and records the flags that shape the emitted bytes in a
+codegen reuse descriptor (SimFileUtils.codeGenOptionDescr), so a mismatched
+object is regenerated rather than reused. That is the fingerprint model,
+already in the tree. (3) The reason the Verilog path stores flags at all is
+the `(* options *)` pragma: genModule applies it through
+FlagsDecode.updateFlags and the module-specific result is what gets
+written; in `-c` mode the source is not reread, so the driver cannot
+recover the pragma's contribution. A module property is riding along
+inside invocation state. (4) remapFlagsPaths scrubs machine-specific paths
+from the record before writing: the record was already corrupting content
+identity. (5) bluetcl's `module flags` query is the only other reader
+(introspection).
+
+Proposal. The .ba's envelope (plan P4) carries exactly two flag-shaped
+things: provenance (the producer's fingerprint plus the effective ElabFlags
+and SchedFlags that produced the payload) and the module-declared options
+(the `(* options *)` contribution, as the pragma strings or as the delta it
+induces on the curated records). No backend flags are stored anywhere in
+the file. The driver supplies backend flags, combines them with the
+module-declared options, and they key the backend action's identity, which
+generalizes the Bluesim descriptor to every backend. The payload (APackage,
+AScheduleInfo, pragmas, type, method dump, path info) contains no flags.
+
+Consequences. `-c` regeneration matches the original compile whenever the
+command line and the module's declared options match, which is what a cache
+wants; reproducing old output without remembering one's flags becomes a
+recorded-invocation feature of the build system's action log, not of the
+artifact. bluetcl's `module flags` reports provenance plus module options
+instead of a full record, a visible behavior change. Reviewer: is there any
+consumer, in the tree or in MatX flows, that depends on backend flags read
+back from a .ba?
+
 ## Appendix A. Proposed partition of the 250 library modules (B0 @ 9306c345)
 
 | component | modules | imports from (import-edge counts) |
