@@ -22,10 +22,10 @@ custom-setup
     process     >=1.6.19.0,
 
 -- Shared settings of the four sublibraries. The carve into
--- bsc-common / bsc-semantic / bsc-verilog / bsc-bluesim is derived from
+-- bsc-core / bsc-semantic / bsc-verilog / bsc-bluesim is derived from
 -- the module import graph at this revision (doc/engine-first-plan.md,
 -- section 2): a module reached from exactly one producer's entry modules
--- belongs to that producer; anything shared sinks to bsc-common. The
+-- belongs to that producer; anything shared sinks to bsc-core. The
 -- public library below re-exports every module, so executables and
 -- external consumers are unchanged.
 common lib-defaults
@@ -72,7 +72,7 @@ common lib-defaults
     src/vendor/stp/HaskellIfc,
     src/vendor/yices/v2.6/HaskellIfc,
 
-library bsc-common
+library bsc-core
   import: lib-defaults
   visibility: private
   extra-libraries: z
@@ -237,7 +237,7 @@ library bsc-common
 library bsc-semantic
   import: lib-defaults
   visibility: private
-  build-depends: bsc:bsc-common
+  build-depends: bsc:bsc-core
   exposed-modules:
     AAddSchedAssumps
     AAddScheduleDefs
@@ -314,7 +314,7 @@ library bsc-semantic
 library bsc-verilog
   import: lib-defaults
   visibility: private
-  build-depends: bsc:bsc-common
+  build-depends: bsc:bsc-core
   exposed-modules:
     AState
     AVeriQuirks
@@ -334,7 +334,7 @@ library bsc-verilog
 library bsc-bluesim
   import: lib-defaults
   visibility: private
-  build-depends: bsc:bsc-common
+  build-depends: bsc:bsc-core
   exposed-modules:
     ACheck
     AExpand
@@ -362,7 +362,7 @@ library bsc-bluesim
 library
   build-depends:
     base >=4.18.3.0,
-    bsc:bsc-common,
+    bsc:bsc-core,
     bsc:bsc-semantic,
     bsc:bsc-verilog,
     bsc:bsc-bluesim,

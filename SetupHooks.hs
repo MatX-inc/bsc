@@ -70,13 +70,13 @@ isMainLib :: Component -> Bool
 isMainLib (CLib Library {libName = LMainLibName}) = True
 isMainLib _ = False
 
--- | The bsc-common sublibrary: the home of the generated modules, the
+-- | The bsc-core sublibrary: the home of the generated modules, the
 -- vendored C sources, and the Tcl and solver link configuration, now that
 -- the main library is a facade over the four sublibraries.
-isCommonLib :: Component -> Bool
-isCommonLib (CLib Library {libName = LSubLibName n}) =
-  unUnqualComponentName n == "bsc-common"
-isCommonLib _ = False
+isCoreLib :: Component -> Bool
+isCoreLib (CLib Library {libName = LSubLibName n}) =
+  unUnqualComponentName n == "bsc-core"
+isCoreLib _ = False
 
 -- | Run the action only if the target files don't already exist.
 needing :: [FilePath] -> IO () -> IO ()
@@ -97,7 +97,7 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
     -- Declare that the modules are generated.
     preConfComponentHook :: Maybe PreConfComponentHook
     preConfComponentHook = Just $ \inputs -> do
-      if isCommonLib inputs.component
+      if isCoreLib inputs.component
         then
           pure $
             PreConfComponentOutputs
@@ -135,7 +135,7 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
           deps =
             map (unPackageName . depPkgName) $
               targetBuildDepends (componentBuildInfo (targetComponent env.targetInfo))
-      when (isCommonLib (targetComponent env.targetInfo)) $ do
+      when (isCoreLib (targetComponent env.targetInfo)) $ do
         registerRule_ "BuildSystem.hs" $
           staticRule
             ( mkCommand
@@ -253,12 +253,12 @@ solverSetupHooks = noSetupHooks {configureHooks}
                       -- are built, which makes the build tree's own
                       -- directories the right answer. The facade library's
                       -- ldOptions are inherited by the executables that link
-                      -- it; bsc-common needs its own because its dynamic
+                      -- it; bsc-core needs its own because its dynamic
                       -- object is what records the solver dependencies.
                       ldOptions =
                         [ "-Wl,-rpath," <> dir
                           | isMainLib inputs.component
-                              || isCommonLib inputs.component,
+                              || isCoreLib inputs.component,
                             dir <- dirs
                         ]
                     }
@@ -294,7 +294,7 @@ tclSetupHooks = noSetupHooks {configureHooks}
       let platform arg = readProcess "sh" ["platform.sh", arg] ""
       let trim = f . f where f = reverse . dropWhile isSpace
       let getArgs flag = fmap (drop (length flag)) . filter (flag `isPrefixOf`)
-      if isCommonLib inputs.component
+      if isCoreLib inputs.component
         then do
           tclInc <- words <$> platform "tclinc"
           tclLibs <- words <$> platform "tcllibs"
