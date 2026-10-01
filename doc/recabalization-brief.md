@@ -400,69 +400,87 @@ R7. The 66 root imports are a real source change; the make build accepts
 them unchanged because its Warmup exists.
 R8. Shared GHC job server (`semaphore: True`) is new to this build; if it
 misbehaves, fall back to `jobs: 1` with `-j` per package.
-## Appendix A. Partition, Revision 2 (B0 @ 9306c345)
+## Revision 2.1 (2026-10-01, after G1)
 
-Three one-line source moves assumed (3.5). Placements by call site rather than module name: IConv, IConvLet, GroundCType, LiftDicts, ISimpDicts, ISimplify run before genBinFile (typecheck); ARenameIO, ADropDefs, Synthesize are called only by the Verilog path (verilog); AOpt and AExpand are the shared optimizer (aopt); ACheck and Params import only core (core); ISyntaxCheck imports IExpandUtils and the typechecker (elab); BinParse and TclParseUtils are parser helpers (parse); RSchedule, AUses, AScheduleInfo, ADumpScheduleInfo and AExpr2STP/AExpr2Yices/AExpr2Util stay in core because ABin, AScheduleInfo and SAT import them; CFreeVars and ISyntaxXRef are core because Parser.Classic.Warnings and FixupDefs import them.
+- G1 passed on the first attempt with the Revision 2 shape: cabal build all,
+  twelve packages, eleven executables, 3:44 wall, 733 s CPU, no fixes
+  needed. In bsc-core the generated Warmup compiled third, after only the
+  two trivial generated modules, and before every real module.
+- Two corrections to Revision 2's analysis came from the builders: the
+  partition script had never seen bird-track imports in the eleven literate
+  modules (SEMonad is imported by three CVParser modules and is now in
+  bsc-parse), and Version.hs is a core root (its only import is the
+  generated BuildVersion). 76 root imports were added in all: 65 library
+  roots plus 11 executable roots.
+- A real bug in the hook design surfaced on the first partition change:
+  Warmup was generated from installedPkgs of the LocalBuildInfo, the
+  snapshot cabal-install takes at configure time, and cabal-install does
+  not reconfigure a dependent when a dependency's exposed-modules change
+  (in-place unit ids are stable). The dependent kept importing modules its
+  dependency no longer exposed. Fixed by reading the current package-db
+  stack with getInstalledPackages inside the rule computation; reproduced
+  and repaired on the evidence toy and on this tree without a clean.
+- Ravi's decision: the minimal separation that enables caching at the .bo
+  and .ba level, nothing finer. bsc-aopt holds AOpt, AExpand and ACheck so
+  an optimizer edit moves only the backends. The scheduling analyses,
+  schedule result types and solver bridges stay in core, because the
+  scheduler needs the solver bridges (so they cannot ride with the
+  optimizer without re-keying .ba production) and the .ba codec and both
+  backends need the schedule types (so they cannot live in the scheduler
+  without making the backends depend on the frontend stack). bsc-ba depends
+  on core only. The seven Bin instances for ASyntax types moved from
+  BinData to GenABin: the .bo carries no ASyntax values, so the .bo codec
+  no longer imports ASyntax.
+- Recorded follow-ups, not done here: separate the schedule result types
+  from the AUses and RSchedule algorithms (Codex finding 10), which the
+  planned two-file .ba (elaborated design and schedule as separate
+  artifacts, several schedules per design) makes necessary and which would
+  move the algorithms into bsc-schedule; Depend is orchestration that the
+  Shake layer absorbs (P5) and stays in bsc-parse for now, which is why
+  parse depends on the .ba codec (isStaleABinFile); the pre- and
+  post-schedule ASyntax passes split along the same line when the artifact
+  does.
+- Gates after G1 (G2, G3, G5, then G1'') are reported in the gate report,
+  not here.
 
-| component | modules | imports from (import-edge counts) |
-| --- | --- | --- |
-| bsc-core | 127 | (none) |
-| bsc-bo | 2 | bsc-core (24) |
-| bsc-ba | 4 | bsc-core (51) |
-| bsc-parse | 22 | bsc-ba (1), bsc-core (53) |
-| bsc-typecheck | 33 | bsc-core (426) |
-| bsc-elab | 12 | bsc-core (175), bsc-typecheck (7) |
-| bsc-schedule | 14 | bsc-core (161), bsc-elab (4), bsc-typecheck (3) |
-| bsc-aopt | 2 | bsc-core (26) |
-| bsc-verilog | 17 | bsc-aopt (2), bsc-core (165) |
-| bsc-bluesim | 17 | bsc-aopt (2), bsc-ba (6), bsc-core (178) |
+## Appendix A. Partition, Revision 2.1 (B0 @ 9306c345), generated from util/recabal/manifest.json
 
-Total 250 modules. Edges outside the intended DAG after the three one-line source moves: none.
+| component | modules | depends on | import edges into each dependency |
+| --- | --- | --- | --- |
+| bsc-core | 126 | (none) | (none) |
+| bsc-aopt | 3 | bsc-core | bsc-core (37) |
+| bsc-bo | 2 | bsc-core | bsc-core (25) |
+| bsc-ba | 4 | bsc-core | bsc-core (52) |
+| bsc-parse | 23 | bsc-core, bsc-ba | bsc-core (141), bsc-ba (1) |
+| bsc-typecheck | 32 | bsc-core | bsc-core (440) |
+| bsc-elab | 12 | bsc-core, bsc-typecheck | bsc-core (178), bsc-typecheck (7) |
+| bsc-schedule | 14 | bsc-core, bsc-typecheck, bsc-elab | bsc-core (172), bsc-typecheck (3), bsc-elab (4) |
+| bsc-verilog | 17 | bsc-core, bsc-aopt | bsc-core (177), bsc-aopt (2) |
+| bsc-bluesim | 17 | bsc-core, bsc-ba, bsc-aopt | bsc-core (182), bsc-ba (6), bsc-aopt (2) |
 
-**bsc-core (127):** ACheck ADumpScheduleInfo AExpr2STP AExpr2Util AExpr2Yices APrims AScheduleInfo ASyntax ASyntaxUtil AUses Assump BDD BExpr Backend BackendNamingConventions Bag Balanced BinData BoolExp BoolOpt BuildSystem BuildVersion CCSyntax CFreeVars CSubst CSyntax CSyntaxTypes CSyntaxUtil CType CVPrint Changed Classic ConTagInfo CondTree DOT DefProp DynamicMap EquivalenceClass Error ErrorMonad ErrorUtil Eval Exceptions FSTRead FStringCompat FileIOUtil FileNameUtil Fixity Flags FlagsDecode ForeignFunctions GHCPretty GenWrapUtils GlobPattern GraphMap GraphPaths GraphUtil GraphWrapper HTcl IOMutVar IOUtil IPrims IStateLoc ISyntax ISyntaxSubst ISyntaxUtil ISyntaxXRef IType Id IdPrint InstNodes IntLit IntegerUtil Intervals Lex ListMap ListUtil Literal Log2 MVarStrict PFPrint PPrint PVPrint Params ParseOp Position Pragma PreIds PreStrings Pred Pretty Prim ProofObligation RSchedule RealUtil SAT SCC STP STPFFI SchedInfo Scheme SignalNaming Sort SpeedyString StdPrel Subst SymTab SystemCheck SystemVerilogKeywords SystemVerilogTokens TclUtils TopUtils Type TypeOps Undefined Unify Util VCD VFileName VModInfo Verilog Version Warmup WaveCheck Wires Yices YicesFFI
+Total 250 modules; 1429 cross-component import edges, all inside the declared DAG.
+
+Placements decided by driver call sites or by their own imports rather than by name: IConv, IConvLet, GroundCType, LiftDicts, ISimpDicts, ISimplify run before genBinFile (typecheck); ARenameIO, ADropDefs, Synthesize are called only by the Verilog path (verilog); AOpt and AExpand are the optimizer both backends run and ACheck the checker run beside it (aopt); SEMonad is imported by the literate CVParser modules (parse); ISyntaxCheck imports IExpandUtils and the typechecker (elab); BinParse and TclParseUtils are parser helpers (parse); the scheduling analyses, schedule result types and ASyntax solver bridges (AUses, RSchedule, AScheduleInfo, ADumpScheduleInfo, AExpr2STP, AExpr2Yices, AExpr2Util, SAT) stay in core because the scheduler, the .ba codec and both backends all need them and the types are not yet separable from the algorithms; Params, CFreeVars, ISyntaxXRef, TopUtils, ForeignFunctions and BinData are core by their imports.
+
+**bsc-core (126):** ADumpScheduleInfo AExpr2STP AExpr2Util AExpr2Yices APrims AScheduleInfo ASyntax ASyntaxUtil AUses Assump BDD BExpr Backend BackendNamingConventions Bag Balanced BinData BoolExp BoolOpt BuildSystem BuildVersion CCSyntax CFreeVars CSubst CSyntax CSyntaxTypes CSyntaxUtil CType CVPrint Changed Classic ConTagInfo CondTree DOT DefProp DynamicMap EquivalenceClass Error ErrorMonad ErrorUtil Eval Exceptions FSTRead FStringCompat FileIOUtil FileNameUtil Fixity Flags FlagsDecode ForeignFunctions GHCPretty GenWrapUtils GlobPattern GraphMap GraphPaths GraphUtil GraphWrapper HTcl IOMutVar IOUtil IPrims IStateLoc ISyntax ISyntaxSubst ISyntaxUtil ISyntaxXRef IType Id IdPrint InstNodes IntLit IntegerUtil Intervals Lex ListMap ListUtil Literal Log2 MVarStrict PFPrint PPrint PVPrint Params ParseOp Position Pragma PreIds PreStrings Pred Pretty Prim ProofObligation RSchedule RealUtil SAT SCC STP STPFFI SchedInfo Scheme SignalNaming Sort SpeedyString StdPrel Subst SymTab SystemCheck SystemVerilogKeywords SystemVerilogTokens TclUtils TopUtils Type TypeOps Undefined Unify Util VCD VFileName VModInfo Verilog Version Warmup WaveCheck Wires Yices YicesFFI
+
+**bsc-aopt (3):** ACheck AExpand AOpt
 
 **bsc-bo (2):** BinUtil GenBin
 
 **bsc-ba (4):** ABin ABinUtil GenABin GenForeign
 
-**bsc-parse (22):** BinParse CPPLineDirectives Depend Parse Parsec ParsecChar ParsecCombinator ParsecExpr ParsecPrim Parser.BSV Parser.BSV.CVParser Parser.BSV.CVParserAssertion Parser.BSV.CVParserCommon Parser.BSV.CVParserImperative Parser.BSV.CVParserUtil Parser.Classic Parser.Classic.CParser Parser.Classic.Warnings SystemVerilogPreprocess SystemVerilogScanner TclParseUtils TmpNam
+**bsc-parse (23):** BinParse CPPLineDirectives Depend Parse Parsec ParsecChar ParsecCombinator ParsecExpr ParsecPrim Parser.BSV Parser.BSV.CVParser Parser.BSV.CVParserAssertion Parser.BSV.CVParserCommon Parser.BSV.CVParserImperative Parser.BSV.CVParserUtil Parser.Classic Parser.Classic.CParser Parser.Classic.Warnings SEMonad SystemVerilogPreprocess SystemVerilogScanner TclParseUtils TmpNam
 
-**bsc-typecheck (33):** ContextErrors CtxRed Deriving FixupDefs GenFuncWrap GenSign GenWrap GroundCType IConv IConvLet ISimpDicts ISimplify IfcBetterInfo InferKind KIMisc LiftDicts MakeSymTab PoisonUtils PragmaCheck Pred2STP Pred2Yices PredTrie SATPred SEMonad Simplify SolvedBinds TCMisc TCPat TCheck TIMonad TypeAnalysis TypeAnalysisTclUtil TypeCheck
+**bsc-typecheck (32):** ContextErrors CtxRed Deriving FixupDefs GenFuncWrap GenSign GenWrap GroundCType IConv IConvLet ISimpDicts ISimplify IfcBetterInfo InferKind KIMisc LiftDicts MakeSymTab PoisonUtils PragmaCheck Pred2STP Pred2Yices PredTrie SATPred Simplify SolvedBinds TCMisc TCPat TCheck TIMonad TypeAnalysis TypeAnalysisTclUtil TypeCheck
 
 **bsc-elab (12):** AConv IDropRules IExpand IExpandUtils IInline IInlineFmt IInlineUtil ILift ISplitIf ISyntaxCheck ITransform IWireSet
 
 **bsc-schedule (14):** AAddSchedAssumps AAddScheduleDefs ACleanup ADropUndet ADumpSchedule ANoInline APaths AProofs ARankMethCalls ARemoveAssumps ASchedule ATaskSplice DisjointTest WireAnalysis
 
-**bsc-aopt (2):** AExpand AOpt
-
 **bsc-verilog (17):** ADropDefs ARenameIO AState AVeriQuirks AVerilog AVerilogUtil DPIWrappers InlineCReg InlineReg InlineWires Synthesize VFinalCleanup VIOProps VPIWrappers VPrims VStableRenumber VVerilogDollar
 
 **bsc-bluesim (17):** BluesimLoader LambdaCalc LambdaCalcUtil SAL SimBlocksToC SimCCBlock SimCOpt SimDomainInfo SimExpand SimFileUtils SimMakeCBlocks SimPackage SimPackageOpt SimPrimitiveModules StaleUtils SystemCWrapper VFileUtils
-
-### Cross-component edges (importer -> imported), excluding edges into bsc-core
-
-- bsc-bluesim -> bsc-aopt: LambdaCalcUtil->AOpt, SimPackageOpt->AOpt
-- bsc-bluesim -> bsc-ba: SimCOpt->ABinUtil, SimExpand->ABin, SimExpand->ABinUtil, SimFileUtils->ABinUtil, SimPackage->ABinUtil, VFileUtils->ABin
-- bsc-elab -> bsc-typecheck: IExpand->IConv, IExpand->IfcBetterInfo, IExpand->TIMonad, IExpand->TypeCheck, IExpandUtils->IConv, ISyntaxCheck->TCMisc, ISyntaxCheck->TIMonad
-- bsc-parse -> bsc-ba: Depend->ABinUtil
-- bsc-schedule -> bsc-elab: AAddSchedAssumps->AConv, AAddSchedAssumps->IExpand, AAddSchedAssumps->IExpandUtils, AAddSchedAssumps->ISplitIf
-- bsc-schedule -> bsc-typecheck: AAddSchedAssumps->IConv, AAddSchedAssumps->TIMonad, AAddSchedAssumps->TypeCheck
-- bsc-verilog -> bsc-aopt: Synthesize->AExpand, Synthesize->AOpt
-
-### Warmup roots per component (modules importing nothing from their own component), excluding generated modules
-
-- bsc-core: 9 roots, 0 already import Warmup, 9 need the one-line import: Balanced CondTree DynamicMap GlobPattern HTcl ListUtil SystemVerilogKeywords SystemVerilogTokens VCD
-- bsc-bo: 1 roots, 0 already import Warmup, 1 need the one-line import: GenBin
-- bsc-ba: 1 roots, 0 already import Warmup, 1 need the one-line import: ABin
-- bsc-parse: 12 roots, 2 already import Warmup, 10 need the one-line import: CPPLineDirectives ParsecPrim Parser.BSV.CVParser Parser.BSV.CVParserAssertion Parser.BSV.CVParserCommon Parser.BSV.CVParserImperative Parser.BSV.CVParserUtil Parser.Classic.Warnings SystemVerilogPreprocess SystemVerilogScanner
-- bsc-typecheck: 16 roots, 1 already import Warmup, 15 need the one-line import: FixupDefs GroundCType IConvLet ISimpDicts ISimplify IfcBetterInfo KIMisc PoisonUtils PragmaCheck Pred2STP Pred2Yices PredTrie Simplify SolvedBinds TIMonad
-- bsc-elab: 3 roots, 0 already import Warmup, 3 need the one-line import: IDropRules IInlineUtil IWireSet
-- bsc-schedule: 11 roots, 0 already import Warmup, 11 need the one-line import: AAddScheduleDefs ADropUndet ADumpSchedule ANoInline APaths AProofs ARankMethCalls ARemoveAssumps ATaskSplice DisjointTest WireAnalysis
-- bsc-aopt: 1 roots, 0 already import Warmup, 1 need the one-line import: AExpand
-- bsc-verilog: 11 roots, 0 already import Warmup, 11 need the one-line import: ADropDefs ARenameIO AVeriQuirks DPIWrappers InlineCReg InlineWires Synthesize VFinalCleanup VPrims VStableRenumber VVerilogDollar
-- bsc-bluesim: 4 roots, 0 already import Warmup, 4 need the one-line import: LambdaCalcUtil SimDomainInfo SimPrimitiveModules StaleUtils
-
-Root imports to add in total: 66.
 
 ## Appendix B. Evidence pointers
 
