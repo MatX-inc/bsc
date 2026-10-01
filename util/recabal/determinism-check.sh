@@ -47,10 +47,11 @@ m=json.load(open(sys.argv[1]))
 comps=m['components'] if isinstance(m,dict) and 'components' in m else m
 for c in (comps if isinstance(comps,list) else comps.values()):
     mods=c['modules'] if isinstance(c,dict) else c
+    roots=m.get('source_roots',['src/comp']) if isinstance(m,dict) else ['src/comp']
     for mod in mods:
         if mod in ('Warmup','BuildSystem','BuildVersion'): continue
-        p='src/comp/'+mod.replace('.','/')+'.hs'
-        if os.path.exists(p): print(p); break
+        hits=[r+'/'+mod.replace('.','/')+'.hs' for r in roots if os.path.exists(r+'/'+mod.replace('.','/')+'.hs')]
+        if hits: print(hits[0]); break
 PY
 while read -r f; do echo "-- determinism-check marker" >> "$f"; done < "$OUT/leaf-modules.txt"
 build EDIT; snapshot EDIT
