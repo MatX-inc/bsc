@@ -1,6 +1,7 @@
 module GroundCType(groundCTypeEnabled, internGroundCType,
                    isGroundNodeId, groundCTypeStats) where
 
+import Warmup ()
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
 import Data.IORef(IORef, newIORef, readIORef, modifyIORef',

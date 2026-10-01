@@ -11,6 +11,7 @@ module IWireSet(
     wsToProps
 ) where
 
+import Warmup ()
 -- Clock and reset tracking sets
 
 import Wires

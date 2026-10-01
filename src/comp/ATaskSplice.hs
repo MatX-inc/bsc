@@ -1,4 +1,5 @@
 module ATaskSplice(aTaskSplice) where
+import Warmup ()
 import ASyntax
 import ASyntaxUtil
 import Id

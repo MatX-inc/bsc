@@ -4,6 +4,7 @@ Preprocessor for SystemVerilog
 
 > module SystemVerilogPreprocess(preprocess) where
 
+> import Warmup ()
 > import Data.List
 > import Data.Char(isLetter, isDigit)
 > import Control.Monad (when)

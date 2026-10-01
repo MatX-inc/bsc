@@ -5,6 +5,7 @@ module AExpand (
                 expandAPackage
                 ) where
 
+import Warmup ()
 import Data.List(foldl', group, sort, sortOn, nub, genericLength)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -17,7 +18,6 @@ import Prim
 import ASyntax
 import ASyntaxUtil
 import VModInfo
-import AConv(isLocalAId)
 --import Util(traces)
 --import Debug.Trace
 
@@ -413,8 +413,8 @@ xaSRemoveUnused stable keepFires pkg =
 -- This is an AX-version of collDefs (from when there was an AXSyntax).
 
 -- Is there a difference between xcollDefs/collDefs?
---  * collDefs checks for isLocalAId (which is defined by AConv as
---    starting with "_d") and automatically keeps all other defs
+--  * collDefs checks for isLocalAId (defined in ASyntaxUtil) and
+--    automatically keeps all other defs
 --  * xcollDefs does no checks (and thus all defs are fair game to be
 --    dropped), but it takes keepFires as an argument and checks for
 --    "(not keepFires) || (not (isFire i))" so as not to remove rule

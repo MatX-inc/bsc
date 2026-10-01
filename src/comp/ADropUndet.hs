@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 module ADropUndet(aDropUndet) where
 
+import Warmup ()
 import qualified Data.Map.Lazy as M
 import Error(ErrMsg(..), ErrorHandle, bsErrorUnsafe, internalError)
 import PPrint

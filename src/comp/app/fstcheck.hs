@@ -1,5 +1,6 @@
 module Main_fstcheck(main) where
 
+import Warmup ()
 -- Check assertions against an FST waveform file, with the same
 -- checks and behavior as vcdcheck has for VCD files: the FST is read
 -- into the VCD command representation (FSTRead) and the checks run

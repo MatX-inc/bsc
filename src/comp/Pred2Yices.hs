@@ -4,6 +4,7 @@ module Pred2Yices(
        solvePred
 ) where
 
+import Warmup ()
 import Control.Monad(when)
 import Control.Monad.State(StateT, liftIO, gets, get, put, runStateT)
 import qualified Data.Map as M

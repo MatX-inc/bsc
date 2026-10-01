@@ -4,6 +4,7 @@ Scanner for SystemVerilog
 
 > module SystemVerilogScanner(scan) where
 
+> import Warmup ()
 > import Data.Char
 > import Data.List
 > import Numeric(readDec, readFloat)

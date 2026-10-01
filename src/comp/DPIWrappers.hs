@@ -1,5 +1,6 @@
 module DPIWrappers ( genDPIWrappers ) where
 
+import Warmup ()
 import Verilog(VDPI(..), VDPIType(..))
 import CCSyntax
 import Error(ErrorHandle)

@@ -22,6 +22,7 @@ module LambdaCalcUtil(
 
 ) where
 
+import Warmup ()
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Control.Monad(when)

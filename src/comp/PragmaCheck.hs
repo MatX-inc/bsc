@@ -6,6 +6,7 @@ module PragmaCheck ( checkModuleArgPragmas,
                      applyDefaultArgAttrs
                    ) where
 
+import Warmup ()
 import qualified Data.Map as M
 
 import Control.Monad(msum)

@@ -3,6 +3,7 @@ module IConvLet(
                 docycles, reorderDs, unpoly
             ) where
 
+import Warmup ()
 import qualified Data.List as List
 
 import Util(mapSnd)

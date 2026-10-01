@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, TypeSynonymInstances #-}
 module AProofs (aCheckProofs) where
 
+import Warmup ()
 import Control.Monad.State
 
 import Error(ErrorHandle)

@@ -11,6 +11,7 @@
 >     -- modifier
 >     adjust)
 > where
+> import Warmup ()
 > import Prelude hiding (lookup
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)

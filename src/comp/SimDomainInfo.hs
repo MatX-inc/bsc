@@ -1,5 +1,6 @@
 module SimDomainInfo where
 
+import Warmup ()
 import Util(mapFst)
 
 import ASyntax(AId, AExpr, AClock(..), ARuleId)

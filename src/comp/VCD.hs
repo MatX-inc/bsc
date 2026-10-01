@@ -8,6 +8,7 @@ module VCD ( VCD, parseVCD, parseVCDSize, formatVCD
            , to_VCDValue, to_X_VCDValue
            ) where
 
+import Warmup ()
 -- This is a simple VCD file parsing and writing utility.
 --
 -- It is designed to treat VCD files as a list of individual VCD

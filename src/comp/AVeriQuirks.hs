@@ -1,5 +1,6 @@
 module AVeriQuirks (aVeriQuirks) where
 
+import Warmup ()
 import Data.List( tails, partition)
 import Data.Maybe(catMaybes)
 import IntegerUtil(integerAnd, integerOr)

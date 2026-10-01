@@ -4,6 +4,7 @@ module APaths(
               aPathsPreSched, aPathsPostSched
              ) where
 
+import Warmup ()
 -- ========================================================================
 -- APaths
 --

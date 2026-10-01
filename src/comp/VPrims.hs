@@ -1,4 +1,5 @@
 module VPrims(viWidth, vMux, vPriMux, vPriEnc, verilogInstancePrefix) where
+import Warmup ()
 import Util(itos)
 import Verilog
 

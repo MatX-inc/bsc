@@ -1,5 +1,6 @@
 module ARankMethCalls(aRankMethCalls) where
 
+import Warmup ()
 import Data.List
 import Data.Maybe
 import Control.Monad(when)

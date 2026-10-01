@@ -2,6 +2,7 @@ module FixupDefs(fixupDefs, updDef,
                  DictBuckets, mkDictBuckets,
                  DictRedirects, mkDictRedirects) where
 
+import Warmup ()
 import Control.Monad.State.Strict(State, evalState, gets, modify)
 import Data.List(nub)
 import Data.Maybe(isJust)

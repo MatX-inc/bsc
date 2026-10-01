@@ -1,4 +1,5 @@
 module IInlineUtil(iSubst, iSubstWhen, iSubstIfc) where
+import Warmup ()
 import qualified Data.Map as M
 
 import ErrorUtil(internalError)

@@ -6,6 +6,7 @@ module KIMisc(
         unifyDef,
         groundK) where
 
+import Warmup ()
 import Data.List(union)
 import Data.Maybe(fromMaybe)
 import Control.Monad(when, ap, liftM)

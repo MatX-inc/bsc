@@ -1,4 +1,5 @@
 module VVerilogDollar (removeDollarsFromVerilog) where
+import Warmup ()
 import Id
 import FStringCompat
 import PreStrings (fsDollar)
