@@ -28,6 +28,5 @@ TCPat.hs
 TCheck.hs
 TIMonad.hs
 TypeAnalysis.hs
-TypeAnalysisTclUtil.hs
 TypeCheck.hs
 bsc-typecheck.cabal

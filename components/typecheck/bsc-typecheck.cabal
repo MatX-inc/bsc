@@ -83,7 +83,6 @@ library
     TCheck
     TIMonad
     TypeAnalysis
-    TypeAnalysisTclUtil
     TypeCheck
   other-modules:
     Warmup

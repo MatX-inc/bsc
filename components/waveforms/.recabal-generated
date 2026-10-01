@@ -1,0 +1,7 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+FSTRead.hs
+SetupHooks.hs
+VCD.hs
+WaveCheck.hs
+waveforms.cabal

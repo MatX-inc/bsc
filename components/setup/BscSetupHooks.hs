@@ -19,7 +19,10 @@
 --   for each library and executable component;
 --
 -- * in bsc-core only, on its main library: the generated BuildSystem and
---   BuildVersion modules and the Tcl link configuration;
+--   BuildVersion modules;
+--
+-- * in htcl only, on its main library: the Tcl include and link
+--   configuration (platform.sh), for the vendored binding and its C shim;
 --
 -- * in each solver binding package (bsc-stp, bsc-yices), on its main
 --   library: the build of that vendored solver and its link configuration.
@@ -116,13 +119,19 @@ isMainLib (CLib Library {libName = LMainLibName}) = True
 isMainLib _ = False
 
 -- | Whether the hooks are running in the bsc-core package: the home of the
--- generated BuildSystem and BuildVersion modules, the vendored C sources,
--- and the Tcl link configuration. It is its own package because
+-- generated BuildSystem and BuildVersion modules. It is its own package because
 -- cabal-install builds a Hooks package as a single unit and allows no
 -- sublibraries in it (brief, F1); the other components and the facade with
 -- the executables are Hooks packages beside it that share these hooks.
 isBscCore :: PackageDescription -> Bool
 isBscCore pd = pkgName (package pd) == mkPackageName "bsc-core"
+
+-- | Whether the hooks are running in the htcl package: the vendored Tcl
+-- binding (HTcl.hs, haskell.c), the one place the Tcl headers and
+-- libraries are needed. The flags reach bluetcl through the package
+-- database like the solver flags do.
+isHtcl :: PackageDescription -> Bool
+isHtcl pd = pkgName (package pd) == mkPackageName "htcl"
 
 -- | Run the action only if the target files don't already exist.
 needing :: [FilePath] -> IO () -> IO ()
@@ -475,7 +484,8 @@ solverLibDir solver = do
   callProcess "make" ["-C", solverSrc solver, "install", "PREFIX=" <> scratch]
   canonicalizePath (solverLibPath solver)
 
--- | The hooks to link to Tcl, on the main library of bsc-core only.
+-- | The hooks to compile against and link to Tcl, on the main library of
+-- htcl only.
 tclSetupHooks :: SetupHooks
 tclSetupHooks = noSetupHooks {configureHooks}
   where
@@ -486,7 +496,7 @@ tclSetupHooks = noSetupHooks {configureHooks}
       let platform arg = readProcess "sh" [repoRoot </> "platform.sh", arg] ""
       let trim = f . f where f = reverse . dropWhile isSpace
       let getArgs flag = fmap (drop (length flag)) . filter (flag `isPrefixOf`)
-      if isBscCore (LBC.localPkgDescr inputs.packageBuildDescr)
+      if isHtcl (LBC.localPkgDescr inputs.packageBuildDescr)
         && isMainLib inputs.component
         then do
           tclInc <- words <$> platform "tclinc"
