@@ -31,7 +31,7 @@ build() {  # name args...
 clean() { rm -rf dist-newstyle/build dist-newstyle/cache dist-newstyle/packagedb dist-newstyle/tmp; }
 compare() {  # a b
     if diff -q "$OUT/$1.sha256" "$OUT/$2.sha256" >/dev/null; then echo "IDENTICAL: $1 vs $2"; return 0
-    else echo "DIFFER: $1 vs $2"; diff "$OUT/$1.sha256" "$OUT/$2.sha256" | grep '^[<>]' | awk '{print $NF}' | sort -u | head -40 > "$OUT/diff-$1-$2.txt"; sed 's/^/   /' "$OUT/diff-$1-$2.txt"; return 1; fi
+    else echo "DIFFER: $1 vs $2"; diff "$OUT/$1.sha256" "$OUT/$2.sha256" | grep '^[<>]' | awk '{print $NF}' | sort -u > "$OUT/diff-$1-$2.txt"; echo "   $(wc -l < "$OUT/diff-$1-$2.txt") files differ; first 20:"; head -20 "$OUT/diff-$1-$2.txt" | sed 's/^/   /'; return 1; fi
 }
 fail=0
 clean; build A; snapshot A
