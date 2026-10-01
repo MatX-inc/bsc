@@ -5,7 +5,7 @@ cabal-version: 3.14
 -- file are symlinks into src/ (doc/recabalization-brief.md, 3.3).
 name: bsc-aopt
 version: 2026.1
-synopsis: Bluespec Compiler: the ASyntax optimizer both backends run
+synopsis: The ASyntax optimizer both backends run (AOpt, AExpand) and the ASyntax checker run beside it (ACheck); a backend-side component so that an optimizer edit never re-keys .bo or .ba production
 license: BSD-3-Clause
 build-type: Hooks
 tested-with: GHC == 9.14.1
@@ -55,6 +55,7 @@ library
     TypeSynonymInstances,
   ghc-options: -Wall -Wno-orphans -Wno-name-shadowing -Wno-unused-matches
   exposed-modules:
+    ACheck
     AExpand
     AOpt
   other-modules:

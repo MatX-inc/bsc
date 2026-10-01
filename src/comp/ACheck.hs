@@ -1,5 +1,6 @@
 module ACheck(aMCheck, aSMCheck, aSignalCheck, aSMethCheck) where
 
+import Warmup ()
 import Util(allSame)
 import PPrint
 import IntLit

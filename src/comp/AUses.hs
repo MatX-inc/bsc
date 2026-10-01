@@ -63,6 +63,7 @@ module AUses(
               ruleMethodUsesToUUs
              ) where
 
+import Warmup ()
 import Eval
 import ASyntax
 import ASyntaxUtil

@@ -67,7 +67,6 @@ library
     ../../src/libfst_config,
     ../../src/vendor/libfst/src,
   exposed-modules:
-    ACheck
     ADumpScheduleInfo
     AExpr2STP
     AExpr2Util

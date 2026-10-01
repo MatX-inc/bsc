@@ -1002,3 +1002,123 @@ instance Bin VFunction where
                    return (VFunction i r d s)
 
 -- ----------
+
+-- ----------
+-- Bin instances for the ASyntax types that only the .ba file carries (the
+-- .bo stores no ASyntax values), moved here from BinData so that the .bo
+-- codec does not depend on the ASyntax layer.
+
+instance Bin AClock where
+    writeBytes (AClock osc gate) = do toBin osc; toBin gate
+    readBytes = do osc <- fromBin
+                   gate <- fromBin
+                   return (AClock osc gate)
+
+instance Bin AReset where
+    writeBytes (AReset wire) = toBin wire
+    readBytes = do { wire <- fromBin; return (AReset wire) }
+
+instance Bin AInout where
+    writeBytes (AInout wire) = toBin wire
+    readBytes = do { wire <- fromBin; return (AInout wire) }
+
+instance Bin AType where
+    writeBytes (ATBit sz)         = do putI 0; toBin sz
+    writeBytes (ATString sz)      = do putI 1; toBin sz
+    writeBytes (ATReal)           = do putI 2;
+    writeBytes (ATArray sz t)     = do putI 3; toBin sz; toBin t
+    writeBytes (ATAbstract i szs) = do putI 4; toBin i; toBin szs
+    writeBytes (ATTuple ts)       = do putI 5; toBin ts
+    readBytes = do
+        i <- getI
+        case i of
+          0 -> do sz <- fromBin; return (ATBit sz)
+          1 -> do sz <- fromBin; return (ATString sz)
+          2 -> do return ATReal
+          3 -> do sz <- fromBin; t <- fromBin; return (ATArray sz t)
+          4 -> do i <- fromBin; szs <- fromBin; return (ATAbstract i szs)
+          5 -> do ts <- fromBin; return (ATTuple ts)
+          n -> internalError $ "GenABin.Bin(AType).readBytes: " ++ show n
+
+instance Bin AExpr where
+    writeBytes (APrim i t op args) = section "AExpr" $
+        do putI 0; toBin i; toBin t; toBin op; toBin args
+    writeBytes (AMethCall t obj meth args) = section "AExpr" $
+        do putI 1; toBin t; toBin obj; toBin meth; toBin args
+    writeBytes (AMethValue t obj meth) = section "AExpr" $
+        do putI 2; toBin t; toBin obj; toBin meth
+    writeBytes (ANoInlineFunCall t obj fun args) = section "AExpr" $
+        do putI 3; toBin t; toBin obj; toBin fun; toBin args
+    writeBytes (AFunCall t obj fun isC args) = section "AExpr" $
+        do putI 4; toBin t; toBin obj; toBin fun; toBin isC; toBin args
+    writeBytes (ATaskValue t obj fun isC cookie) = section "AExpr" $
+        do putI 5; toBin t; toBin obj; toBin fun; toBin isC; toBin cookie
+    writeBytes (ASPort t i)    = section "AExpr" $ do putI  6; toBin t; toBin i
+    writeBytes (ASParam t i)   = section "AExpr" $ do putI  7; toBin t; toBin i
+    writeBytes (ASDef t i)     = section "AExpr" $ do putI  8; toBin t; toBin i
+    writeBytes (ASInt i t val) = section "AExpr" $ do putI  9; toBin i; toBin t; toBin val
+    writeBytes (ASStr i t str) = section "AExpr" $ do putI 10; toBin i; toBin t; toBin str
+    writeBytes (ASAny t me)       = section "AExpr" $ do putI 11; toBin t; toBin me
+    writeBytes (ASClock t clk) = section "AExpr" $ do putI 12; toBin t; toBin clk
+    writeBytes (ASReset t rst) = section "AExpr" $ do putI 13; toBin t; toBin rst
+    writeBytes (AMGate t obj clk) = section "AExpr" $ do putI 14; toBin t; toBin obj; toBin clk
+    writeBytes (ASInout t iot) = section "AExpr" $ do putI 15; toBin t; toBin iot
+    writeBytes (ASReal i t val) = section "AExpr" $ do putI 16; toBin i; toBin t; toBin val
+    writeBytes (ATupleSel t e idx) = section "AExpr" $ do putI 17; toBin t; toBin e; toBin idx
+    writeBytes (ATuple t es) = section "AExpr" $ do putI 18; toBin t; toBin es
+    readBytes = do
+        i <- getI
+        case i of
+          0  -> do { i <- fromBin; t <- fromBin; op <- fromBin;
+                     args <- fromBin; return (APrim i t op args); }
+          1  -> do { t <- fromBin; obj <- fromBin; meth <- fromBin;
+                     args <- fromBin; return (AMethCall t obj meth args); }
+          2  -> do { t <- fromBin; obj <- fromBin; meth <- fromBin;
+                     return (AMethValue t obj meth); }
+          3  -> do { t <- fromBin; obj <- fromBin; fun <- fromBin;
+                     args <- fromBin;
+                     return (ANoInlineFunCall t obj fun args); }
+          4  -> do { t <- fromBin; obj <- fromBin; fun <- fromBin;
+                     isC <- fromBin; args <- fromBin;
+                     return (AFunCall t obj fun isC args); }
+          5  -> do { t <- fromBin; obj <- fromBin; fun <- fromBin;
+                     isC <- fromBin; cookie <- fromBin;
+                     return (ATaskValue t obj fun isC cookie); }
+          6  -> do t <- fromBin; i <- fromBin; return (ASPort t i)
+          7  -> do t <- fromBin; i <- fromBin; return (ASParam t i)
+          8  -> do t <- fromBin; i <- fromBin; return (ASDef t i)
+          9  -> do { i <- fromBin; t <- fromBin; val <- fromBin;
+                     return (ASInt i t val) }
+          10 -> do { i <- fromBin; t <- fromBin; str <- fromBin;
+                     return (ASStr i t str) }
+          11 -> do t <- fromBin; me <- fromBin; return (ASAny t me)
+          12 -> do t <- fromBin; clk <- fromBin; return (ASClock t clk)
+          13 -> do t <- fromBin; rst <- fromBin; return (ASReset t rst)
+          14 -> do { t <- fromBin; obj <- fromBin; clk <- fromBin;
+                     return (AMGate t obj clk); }
+          15 -> do t <- fromBin; iot <- fromBin; return (ASInout t iot)
+          16 -> do { i <- fromBin; t <- fromBin; val <- fromBin;
+                     return (ASReal i t val) }
+          17 -> do { t <- fromBin; e <- fromBin; idx <- fromBin;
+                     return (ATupleSel t e idx) }
+          18 -> do { t <- fromBin; es <- fromBin;
+                     return (ATuple t es) }
+          n  -> internalError $ "GenABin.Bin(IExpr).readBytes: " ++ show n
+    -- toBin e = Out [AExp e] ()
+    -- fromBin = readShared
+
+instance Bin ANoInlineFun where
+    writeBytes (ANoInlineFun s ts ps mi) = do toBin s; toBin ts; toBin ps; toBin mi
+    readBytes = do s <- fromBin
+                   ts <- fromBin
+                   ps <- fromBin
+                   mi <- fromBin
+                   return (ANoInlineFun s ts ps mi)
+
+instance Bin ADef where
+    writeBytes (ADef i t e p) = do toBin i; toBin t; toBin e; toBin p
+    readBytes = do i <- fromBin
+                   t <- fromBin
+                   e <- fromBin
+                   p <- fromBin
+                   return (ADef i t e p)

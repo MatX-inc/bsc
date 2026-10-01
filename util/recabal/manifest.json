@@ -120,7 +120,6 @@
       "synopsis": "Bluespec Compiler: shared core (syntax trees, utilities, Flags, solver bindings)",
       "depends": [],
       "modules": [
-        "ACheck",
         "ADumpScheduleInfo",
         "AExpr2STP",
         "AExpr2Util",
@@ -272,6 +271,19 @@
       }
     },
     {
+      "name": "bsc-aopt",
+      "dir": "components/aopt",
+      "depends": [
+        "bsc-core"
+      ],
+      "synopsis": "The ASyntax optimizer both backends run (AOpt, AExpand) and the ASyntax checker run beside it (ACheck); a backend-side component so that an optimizer edit never re-keys .bo or .ba production",
+      "modules": [
+        "ACheck",
+        "AExpand",
+        "AOpt"
+      ]
+    },
+    {
       "name": "bsc-bo",
       "dir": "components/bo",
       "synopsis": "Bluespec Compiler: the .bo codec",
@@ -420,18 +432,6 @@
         "ATaskSplice",
         "DisjointTest",
         "WireAnalysis"
-      ]
-    },
-    {
-      "name": "bsc-aopt",
-      "dir": "components/aopt",
-      "synopsis": "Bluespec Compiler: the ASyntax optimizer both backends run",
-      "depends": [
-        "bsc-core"
-      ],
-      "modules": [
-        "AExpand",
-        "AOpt"
       ]
     },
     {
