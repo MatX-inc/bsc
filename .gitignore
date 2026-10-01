@@ -20,3 +20,6 @@ vagrant-out/
 .ghc.environment.*
 cabal.project.local
 __pycache__/
+
+# bsc-engine (doc/engine-first-plan.md): Shake database, outside build/ and inst/
+.bsc-engine/

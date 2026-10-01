@@ -23,6 +23,12 @@
     "cabal_file": "bsc.cabal",
     "executable_hs_source_dirs": "src/comp/app"
   },
+  "extra_packages": {
+    "_comment": "Packages of the project that are not compiler components and not generated: hand-maintained .cabal files, listed in cabal.project after the components. The orchestration engine (doc/engine-first-plan.md) lives here.",
+    "dirs": [
+      "engine"
+    ]
+  },
   "source_roots": [
     "src/comp",
     "src/comp/Libs",

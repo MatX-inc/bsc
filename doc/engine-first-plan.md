@@ -1,7 +1,9 @@
 # bsc orchestration and rebuild: implementation plan
 
-Status: **Revision 3** — 2026-09-30. Plan of record; concise by design.
-Supersedes Revision 2 (the externally drafted plan document reviewed in the
+Status: **Revision 3.1** — 2026-10-01. Plan of record; concise by design.
+Revision 3.1 records the component structure as built (sixteen packages,
+not four sublibraries), the P1 delivery, and the follow-ups P1 surfaced;
+the phases are unchanged. Revision 3 superseded Revision 2 (the externally drafted plan document reviewed in the
 2026-09-30 adversarial round). This document carries decisions, phases,
 exit criteria, and the acceptance matrix. Rationale, measured economics,
 and requirement derivations live in `doc/testsuite-after-shake.md` (v1.3),
@@ -22,8 +24,11 @@ records (measured CI economics; the adversarial review trail).
   artifact schemas, and result envelopes stay independent of its database
   format. No second generic engine is built and no cheap future core swap
   is promised; reopen conditions are as recorded in the review round.
-- **Component structure: four cabal sublibraries** of the single `bsc`
-  package (§2). The fingerprint unit is the cabal library.
+- **Component structure: one cabal package per component**, sixteen at
+  Revision 2.3 of `doc/recabalization-brief.md` (its Appendix A is the
+  partition of record; §2 below is the original four-way sketch and its
+  mapping). cabal-install builds a Hooks package as one unit and admits no
+  sublibraries in it, so the fingerprint unit is the cabal package.
 - **Legacy option: resolved.** `-semantic-ports-comment`
   (`src/comp/Flags.hs:173`, off by default) selects only the source of the
   Verilog "Ports:" comment. `.bo`/`.ba` port properties are unconditionally
@@ -43,7 +48,16 @@ records (measured CI economics; the adversarial review trail).
   predicted test selection. Periodic uncached sweeps are cache
   verification, not scoping, and bypass every cache layer.
 
-## 2. The four sublibraries
+## 2. The four sublibraries (sketch) and the packages as built
+
+The four-way sketch below was the Revision 3 design; the carve was done as
+packages (the brief's Revision 2 to 2.3): `bsc-core` is core plus the
+leaves it shed (`bsc-stp`, `bsc-yices`, `htcl`, `waveforms`); the sketch's
+`bsc-semantic` is `bsc-parse`, `bsc-typecheck`, `bsc-sat`, `bsc-elab`,
+`bsc-schedule` with the codecs `bsc-bo` and `bsc-ba` as their own
+components; `bsc-aopt` is the optimizer both backends run; `bsc-verilog`
+and `bsc-bluesim` are as sketched; `bsc-bluetcl` holds the bluetcl glue.
+The carve rule and the fingerprint definition below are unchanged.
 
 | Sublibrary | Products | Owns |
 | --- | --- | --- |
@@ -148,8 +162,10 @@ library win.**
 
 ### P3 — The carve and selective fingerprints
 
-**Deliver:** the four-sublibrary restructuring of `bsc.cabal` (§2), the
-build-time fingerprint generator, and the embedded registry.
+**Deliver:** the component restructuring (done, as packages: brief
+Revisions 2 to 2.3), the build-time fingerprint generator, and the
+embedded registry. P1's `--compiler-key closure` is the hand-written
+preview of what the generator produces.
 
 - Move stage orchestration per the carve rule; split `VIOProps.hs`;
   isolate `BuildVersion` from `F`.
@@ -262,3 +278,78 @@ From the 2026-09-30 adversarial round; full statements in RFC v0.24
 - Evidence anchors: `src/comp/Flags.hs:173`;
   `src/comp/app/bsc.hs:1011-1023, 1261-1266, 1626-1628`;
   `src/comp/ABinUtil.hs:511-516`; `src/Libraries/Base*/Makefile`.
+
+## P1 delivered: the libraries as one Shake graph (2026-10-01)
+
+Package `engine/` (bsc-engine, a Hooks package like the components, so it
+gets Warmup and the project's determinism settings; depends on shake
+0.19.9, which builds with GHC 9.14.1 from Hackage with no overrides).
+`bsc-engine libraries [targets]` reproduces src/Libraries' Makefiles:
+one discovery per library directory (bscdeps on each root: packages with
+their resolution, imports, includes, foreign imports and the probe paths
+that lost), one non-recursive bsc worker per package depending on exactly
+the .bo files of its imports, the Prelude bootstrap (-no-use-prelude for
+Prelude.bs and PreludeBSV.bsv), the Base3 roots and their flags, the
+Contexts.defines copy, tconcheck, bo2bloogle and the install of
+everything in BUILDDIR. Every output has one producer: a package defined
+in two directories fails the build where `-u` would silently recompile it
+from the later source into the shared directory; a binary resolution no
+earlier directory produces (a stale build directory) fails likewise.
+
+Exit criteria, measured with the make-built compiler and tools:
+
+| criterion | result |
+| --- | --- |
+| one-worker and N-worker builds produce equivalent installations | identical, 131 of 131 files and the bloogle text; N workers 24 s, one worker 46 s |
+| no output races | unique-producer check; the two-directory case (HList in Base3-Misc and Base3-Contexts) fails with the two names |
+| a newly shadowing search-path file changes resolution | the probe paths are tracked (doesFileExist), so the plan re-runs; a same-directory .bsv beside a .bs is reported by `plan`; a cross-directory shadow is the two-producer failure above |
+| unchanged rebuild | 0.2 s, no bsc or bscdeps run |
+| one library source edit | only that package and its dependents recompile (Counter.bs: 1 package) |
+| against the make build (same compiler) | Base1 and Base2 byte-identical; the Base3 packages differ, see the finding below |
+
+Findings:
+
+- **.bo bytes depend on batching.** make compiles Base3 with `bsc -u` in
+  one process; the engine compiles each package in its own process, as
+  make itself does for Base1 and Base2 (which match byte for byte). The
+  32 Base3 files differ only in typeclass-dictionary names (`_tcdictN`)
+  and the hashes over them: the typechecker monad's unique supply
+  (TIMonad.hs:446) is not reset between the packages one process
+  compiles, nor between the top-level definitions of one package.
+  Per-package compilation is the deterministic choice and the one the
+  engine uses; definition-local dictionary naming is the typechecker
+  change that would make a .bo's bytes for one definition independent of
+  its neighbours (content cutoff needs it).
+- **A selective compiler key works at P1.** `--compiler-key closure` keys
+  the library actions on the object files of the .bo producer's closure
+  (bsc-core, bsc-stp, bsc-yices, bsc-sat, bsc-bo, bsc-ba, bsc-parse,
+  bsc-typecheck) plus the driver's own, read from the dist-newstyle tree
+  the compiler was built in, instead of the bsc binary. With object
+  determinism those objects are byte-identical across a backend edit:
+  a backend-only edit (VVerilogDollar.hs) costs a 3.2 s compiler rebuild and a 0.20 s library check with no package recompiled; a typechecker edit whose object is unchanged (an unused binding dropped at -O2) also recompiles nothing; a real typechecker change (an error-message string) re-keys all 128 packages (19 s); after a revert the compiler objects are byte-identical again and a change-based run still recompiles once, which is what P2's content-addressed store removes. This previews P3; it is written down rather than
+  generated from the component graph, which is why it is not the default.
+- **Two orchestrators in one tree corrupt it.** A `cabal build` left
+  running by a dying session overlapped a later one and rewrote objects
+  under it (rename races on .dyn_o.tmp, a core object with a hash no clean
+  build produces). The engine behaved correctly (a core object changed, so
+  everything re-keyed) but the experiment had to be redone on a clean
+  tree. Plan requirement 5 (concurrent coordinators need separate
+  materialization roots or exclusive locking) applies to the compiler
+  build as much as to the engine.
+
+What P1 does not do: TAGS (btags), the `depends` targets (bluetcl
+makedepend; discovery replaces them), and anything about designs or
+`bsc -u` (P5).
+
+Follow-ups P1 surfaced, in the plan's terms: atomic publication of .bo
+outputs (bsc writes them in place; the engine must stage and rename:
+requirement 2); bloogle's output off the install prefix until install;
+BuildVersion out of the closure key (P3); definition-local dictionary
+naming (cutoff); the .bo import hash chain hashes the import's bytes, so
+any byte change in an import re-keys every dependent under a content-keyed
+system, while cross-package inlining (ISimplify) means the right boundary
+is the exported interface plus the unfoldings exposed for inlining, not
+the interface alone (a later design item); `-u` with several roots. Two
+acceptance rows adopted from the 2026-10-01 engine-selection review:
+restart after deleting the engine database restores from artifacts; an
+interrupted publication exposes no partial result as complete.
