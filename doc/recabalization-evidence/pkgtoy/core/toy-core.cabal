@@ -1,0 +1,12 @@
+cabal-version: 3.14
+name: toy-core
+version: 0.1
+build-type: Hooks
+custom-setup
+  setup-depends: base, Cabal ^>=3.16, Cabal-hooks ^>=3.16, toy-setup
+library
+  hs-source-dirs: .
+  exposed-modules: CoreM
+  other-modules: Warmup
+  build-depends: base, containers
+  default-language: GHC2021
