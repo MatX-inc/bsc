@@ -45,6 +45,7 @@ library
     unix         >=2.8.6.0,
     -- Component dependencies: the DAG of the brief's Appendix A.
     bsc-core,
+    bsc-sat,
   if impl(ghc >= 9.10)
     build-depends: ghc-internal
   default-language: GHC2021

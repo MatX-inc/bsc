@@ -19,8 +19,10 @@
 --   for each library and executable component;
 --
 -- * in bsc-core only, on its main library: the generated BuildSystem and
---   BuildVersion modules, the vendored solvers, and the Tcl link
---   configuration.
+--   BuildVersion modules and the Tcl link configuration;
+--
+-- * in each solver binding package (bsc-stp, bsc-yices), on its main
+--   library: the build of that vendored solver and its link configuration.
 --
 -- No hook writes into src/comp or anywhere else outside dist-newstyle and
 -- the components' autogen directories; the make build generates its own
@@ -30,7 +32,7 @@ module BscSetupHooks (bscSetupHooks) where
 import Control.Monad (forM, forM_, unless, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Char (isSpace)
-import Data.List (isPrefixOf, nub, sort)
+import Data.List (find, isPrefixOf, nub, sort)
 import qualified Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe)
 import Distribution.Compiler (CompilerFlavor (..))
@@ -115,7 +117,7 @@ isMainLib _ = False
 
 -- | Whether the hooks are running in the bsc-core package: the home of the
 -- generated BuildSystem and BuildVersion modules, the vendored C sources,
--- and the Tcl and solver link configuration. It is its own package because
+-- and the Tcl link configuration. It is its own package because
 -- cabal-install builds a Hooks package as a single unit and allows no
 -- sublibraries in it (brief, F1); the other components and the facade with
 -- the executables are Hooks packages beside it that share these hooks.
@@ -390,8 +392,8 @@ writeBuildVersionHs autogenDir = do
   script <- makeAbsolute (repoRoot </> "src" </> "comp" </> "update-build-version.sh")
   callCreateProcess (proc script []) {cwd = Just dir, env = Just env}
 
--- | The hooks that make the vendored solvers available, on the main library
--- of bsc-core only.
+-- | The hooks that make a vendored solver available, on the main library of
+-- its binding package (bsc-stp, bsc-yices) only.
 --
 -- The solvers are shared libraries, so the Haskell library's dynamic object --
 -- which is what ghci and runghc load -- carries them as recorded dependencies
@@ -412,54 +414,66 @@ solverSetupHooks = noSetupHooks {configureHooks}
     -- staged anywhere and there is no copy to go missing.
     preConfComponentHook :: Maybe PreConfComponentHook
     preConfComponentHook = Just $ \inputs ->
-      if isBscCore (LBC.localPkgDescr inputs.packageBuildDescr)
-        && isMainLib inputs.component
-        then do
-          dirs <- solverLibDirs
+      case solverOf (LBC.localPkgDescr inputs.packageBuildDescr) of
+        Just solver | isMainLib inputs.component -> do
+          dir <- solverLibDir solver
           pure $
             PreConfComponentOutputs
               { componentDiff =
                   buildInfoComponentDiff
                     (componentName inputs.component)
                     ( emptyBuildInfo
-                        { extraLibs = ["stp", "yices"],
-                          extraLibDirs = map makeSymbolicPath dirs,
+                        { extraLibs = [solverLib solver],
+                          extraLibDirs = [makeSymbolicPath dir],
                           -- The solvers record themselves as @rpath/...@, so
                           -- an rpath is the whole of what either platform needs
                           -- to resolve them, and these artifacts run where they
                           -- are built, which makes the build tree's own
                           -- directories the right answer. The library's
                           -- ldOptions and extra-libraries are registered with
-                          -- the package and reach every executable that links
-                          -- it, in the facade package as well, through the
-                          -- package database (brief, F5); the dynamic object is
-                          -- what records the solver dependencies.
-                          ldOptions = ["-Wl,-rpath," <> dir | dir <- dirs]
+                          -- the package and reach every library and executable
+                          -- that links it, however many packages up, through
+                          -- the package database (brief, F5); the dynamic
+                          -- object is what records the solver dependencies.
+                          ldOptions = ["-Wl,-rpath," <> dir]
                         }
                     )
               }
-        else pure $ noPreConfComponentOutputs inputs
+        _ -> pure $ noPreConfComponentOutputs inputs
 
--- | Build the vendored solvers and return the directories holding them.
---
--- The make targets are no-ops once the libraries are up to date, and the
--- libraries are where the make build leaves them, so nothing is staged and
--- nothing can go missing between a configure and a build. The paths are
--- canonicalized so that the link flags and the rpath carry no @..@.
-solverLibDirs :: IO [FilePath]
-solverLibDirs = do
-  scratch <- canonicalizePath (repoRoot </> "dist-newstyle" </> "solver-prefix")
-  forM_ solvers $ \(sub, _) ->
-    callProcess "make" ["-C", sub, "install", "PREFIX=" <> scratch]
-  mapM (canonicalizePath . snd) solvers
+-- | A vendored solver: the package that binds it, the library it links, the
+-- vendored source tree whose make builds it, and where that leaves the
+-- library. Adding a solver is adding a row here and a binding package in the
+-- manifest; replacing one is removing them.
+data Solver = Solver
+  { solverPackage :: String,
+    solverLib :: String,
+    solverSrc :: FilePath,
+    solverLibPath :: FilePath
+  }
 
-solvers :: [(FilePath, FilePath)]
+solvers :: [Solver]
 solvers =
-  [ (vendor </> "stp", vendor </> "stp" </> "lib"),
-    (vendor </> "yices", vendor </> "yices" </> "lib")
+  [ Solver "bsc-stp" "stp" (vendor </> "stp") (vendor </> "stp" </> "lib"),
+    Solver "bsc-yices" "yices" (vendor </> "yices") (vendor </> "yices" </> "lib")
   ]
   where
     vendor = repoRoot </> "src" </> "vendor"
+
+solverOf :: PackageDescription -> Maybe Solver
+solverOf pd = find ((== pkgName (package pd)) . mkPackageName . solverPackage) solvers
+
+-- | Build a vendored solver and return the directory holding its library.
+--
+-- The make target is a no-op once the library is up to date, and the
+-- library is where the make build leaves it, so nothing is staged and
+-- nothing can go missing between a configure and a build. The path is
+-- canonicalized so that the link flags and the rpath carry no @..@.
+solverLibDir :: Solver -> IO FilePath
+solverLibDir solver = do
+  scratch <- canonicalizePath (repoRoot </> "dist-newstyle" </> "solver-prefix")
+  callProcess "make" ["-C", solverSrc solver, "install", "PREFIX=" <> scratch]
+  canonicalizePath (solverLibPath solver)
 
 -- | The hooks to link to Tcl, on the main library of bsc-core only.
 tclSetupHooks :: SetupHooks

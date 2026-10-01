@@ -19,10 +19,7 @@ LiftDicts.hs
 MakeSymTab.hs
 PoisonUtils.hs
 PragmaCheck.hs
-Pred2STP.hs
-Pred2Yices.hs
 PredTrie.hs
-SATPred.hs
 SetupHooks.hs
 Simplify.hs
 SolvedBinds.hs

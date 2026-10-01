@@ -1,9 +1,6 @@
 # Written by util/recabal/gen.py.  Every path below, relative to this
 # directory, was generated and is removed when the manifest drops it.
 ADumpScheduleInfo.hs
-AExpr2STP.hs
-AExpr2Util.hs
-AExpr2Yices.hs
 APrims.hs
 AScheduleInfo.hs
 ASyntax.hs
@@ -92,10 +89,7 @@ Prim.hs
 ProofObligation.hs
 RSchedule.hs
 RealUtil.hs
-SAT.hs
 SCC.hs
-STP.hs
-STPFFI.hs
 SchedInfo.hs
 Scheme.hs
 SetupHooks.hs
@@ -122,6 +116,4 @@ Verilog.hs
 Version.hs
 WaveCheck.hs
 Wires.hs
-Yices.hs
-YicesFFI.hs
 bsc-core.cabal

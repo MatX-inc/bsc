@@ -5,6 +5,9 @@ packages:
   .
   components/setup
   components/core
+  components/stp
+  components/yices
+  components/sat
   components/aopt
   components/bo
   components/ba

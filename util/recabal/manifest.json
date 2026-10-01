@@ -1,5 +1,5 @@
 {
-  "_comment": "Data for util/recabal/gen.py. Specification: doc/recabalization-brief.md Revision 2, sections 3.1-3.5 and Appendix A (partition of MatX-inc/bsc release-devel-B0 @ 9306c345). Components are listed in dependency order; every entry of depends names an earlier component.",
+  "_comment": "Data for util/recabal/gen.py. Specification: doc/recabalization-brief.md Revisions 2 to 2.2, sections 3.1-3.5 and Appendix A (partition of MatX-inc/bsc release-devel-B0 @ 9306c345). Components are listed in dependency order; every entry of depends names an earlier component.",
   "expected_module_count": 250,
   "cabal_version": "3.14",
   "package_version": "2026.1",
@@ -117,13 +117,10 @@
     {
       "name": "bsc-core",
       "dir": "components/core",
-      "synopsis": "Bluespec Compiler: shared core (syntax trees, utilities, Flags, solver bindings)",
+      "synopsis": "Bluespec Compiler: shared core (syntax trees, utilities, Flags)",
       "depends": [],
       "modules": [
         "ADumpScheduleInfo",
-        "AExpr2STP",
-        "AExpr2Util",
-        "AExpr2Yices",
         "APrims",
         "AScheduleInfo",
         "ASyntax",
@@ -214,10 +211,7 @@
         "ProofObligation",
         "RSchedule",
         "RealUtil",
-        "SAT",
         "SCC",
-        "STP",
-        "STPFFI",
         "SchedInfo",
         "Scheme",
         "SignalNaming",
@@ -243,9 +237,7 @@
         "Version",
         "Warmup",
         "WaveCheck",
-        "Wires",
-        "Yices",
-        "YicesFFI"
+        "Wires"
       ],
       "extras": {
         "extra-libraries": [
@@ -271,10 +263,50 @@
       }
     },
     {
+      "name": "bsc-stp",
+      "dir": "components/stp",
+      "synopsis": "Bluespec Compiler: the STP solver binding; the hooks build the vendored STP and link it. Independent of the compiler.",
+      "depends": [],
+      "modules": [
+        "STP",
+        "STPFFI"
+      ]
+    },
+    {
+      "name": "bsc-yices",
+      "dir": "components/yices",
+      "synopsis": "Bluespec Compiler: the Yices solver binding; the hooks build the vendored Yices and link it. Independent of the compiler.",
+      "depends": [],
+      "modules": [
+        "Yices",
+        "YicesFFI"
+      ]
+    },
+    {
+      "name": "bsc-sat",
+      "dir": "components/sat",
+      "synopsis": "Bluespec Compiler: the solver layer: the translations of ASyntax expressions and CType predicates to the solvers, and the SAT facade over them",
+      "depends": [
+        "bsc-core",
+        "bsc-stp",
+        "bsc-yices"
+      ],
+      "modules": [
+        "AExpr2STP",
+        "AExpr2Util",
+        "AExpr2Yices",
+        "Pred2STP",
+        "Pred2Yices",
+        "SAT",
+        "SATPred"
+      ]
+    },
+    {
       "name": "bsc-aopt",
       "dir": "components/aopt",
       "depends": [
-        "bsc-core"
+        "bsc-core",
+        "bsc-sat"
       ],
       "synopsis": "The ASyntax optimizer both backends run (AOpt, AExpand) and the ASyntax checker run beside it (ACheck); a backend-side component so that an optimizer edit never re-keys .bo or .ba production",
       "modules": [
@@ -348,7 +380,8 @@
       "dir": "components/typecheck",
       "synopsis": "Bluespec Compiler: the type checker and the .bo producer passes",
       "depends": [
-        "bsc-core"
+        "bsc-core",
+        "bsc-sat"
       ],
       "modules": [
         "ContextErrors",
@@ -370,10 +403,7 @@
         "MakeSymTab",
         "PoisonUtils",
         "PragmaCheck",
-        "Pred2STP",
-        "Pred2Yices",
         "PredTrie",
-        "SATPred",
         "Simplify",
         "SolvedBinds",
         "TCMisc",
@@ -415,7 +445,8 @@
       "depends": [
         "bsc-core",
         "bsc-typecheck",
-        "bsc-elab"
+        "bsc-elab",
+        "bsc-sat"
       ],
       "modules": [
         "AAddSchedAssumps",
