@@ -153,7 +153,6 @@ import Data.IORef(IORef, newIORef, readIORef, modifyIORef)
 import Data.List(isPrefixOf)
 import System.IO.Unsafe(unsafePerformIO)
 
-import ErrorUtil
 
 word32_size, word64_size :: Int
 word32_size = finiteBitSize (0 :: Word32)
@@ -785,3 +784,11 @@ foreign import ccall "stdio.h"
   fclose :: Ptr CFile -> IO ()
 
 ------------------------------------------------------------------------
+
+-- | Report a misuse of the binding (an argument outside the solver's domain)
+-- or a status the solver should never return. The binding does not depend
+-- on the compiler, so this is 'error' rather than ErrorUtil.internalError;
+-- bsc's top level (Exceptions.bsCatch) prints an uncaught ErrorCall to
+-- stderr and exits 1.
+internalError :: String -> a
+internalError msg = errorWithoutStackTrace ("Internal error in the Yices binding: " ++ msg)
