@@ -1,0 +1,1 @@
+../../src/comp/SimDomainInfo.hs

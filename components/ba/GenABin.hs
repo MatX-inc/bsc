@@ -1,0 +1,1 @@
+../../src/comp/GenABin.hs

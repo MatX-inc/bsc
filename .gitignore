@@ -19,3 +19,4 @@ vagrant-out/
 # settings
 .ghc.environment.*
 cabal.project.local
+__pycache__/
