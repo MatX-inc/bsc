@@ -9,7 +9,6 @@ module WaveCheck ( FileNum, file1, file2
 -- consumes a stream of VCDCmds (parsed from VCD text, or converted
 -- from an FST file by FSTRead) and runs the checkers given with -c.
 
-import Error(internalError)
 import VCD
 
 import Data.List(intercalate, isPrefixOf)
@@ -658,3 +657,10 @@ checkStream cmds fname stream =
                                                  [ "  " ++ (show t) | t <- M.keys stranded ]
                            ]
     in msgs3 ++ smsgs
+
+-- | Report an impossible state (a file number no checker was given, a
+-- checker that failed to initialize). This module depends on nothing in the
+-- compiler, so this is 'error' rather than Error.internalError; the
+-- waveform tools' top level prints an uncaught ErrorCall and exits 1.
+internalError :: String -> a
+internalError msg = errorWithoutStackTrace ("Internal error in the waveform checker: " ++ msg)
