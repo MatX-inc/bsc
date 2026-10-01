@@ -455,26 +455,96 @@ misbehaves, fall back to `jobs: 1` with `-j` per package.
 - Gates after G1 (G2, G3, G5, G1'') are reported in the gate report, not
   here.
 
-## Appendix A. Partition, Revision 2.1 (B0 @ 9306c345), generated from util/recabal/manifest.json
+## Revision 2.2 (2026-10-01, the solver carve)
+
+- Ravi's decision: carve the solvers out of bsc-core, because the solvers
+  are going to be extended or replaced. Three packages. bsc-stp (STP,
+  STPFFI) and bsc-yices (Yices, YicesFFI) are the raw FFI bindings from the
+  vendored HaskellIfc directories and depend on no bsc package. bsc-sat
+  (SAT, AExpr2STP, AExpr2Yices, AExpr2Util, Pred2STP, Pred2Yices, SATPred)
+  is every translation of a compiler IR to a solver plus the SAT facade, on
+  core and the two bindings. typecheck (SATPred, which TCMisc uses for
+  proviso solving), aopt (AOpt) and schedule (AProofs, ADumpSchedule,
+  DisjointTest) depend on bsc-sat; no backend does. Core goes from 126 to
+  118 modules, typecheck from 32 to 29; the facade surface is the same 250.
+- Why the bindings are leaves: their only import from the compiler was
+  ErrorUtil.internalError, 17 call sites. Each binding now defines a local
+  internalError as errorWithoutStackTrace with an "Internal error in the
+  STP/Yices binding" prefix. The behaviour delta is confined to binding
+  misuse, a compiler bug by construction: ErrorUtil.internalError printed
+  the "Internal Bluespec Compiler Error" banner with the version and exited
+  1 from inside the thunk; the binding now throws ErrorCall, which bsc's
+  top-level handler (Exceptions.bsCatch) prints and exits 1 on. REVIEW-PENDING
+- Hooks: the vendored solver build and link configuration moved from
+  bsc-core's main library to the main library of each binding package,
+  keyed by package name through a table (data Solver in BscSetupHooks.hs).
+  Adding a solver is a row in that table and a component in the manifest;
+  replacing one is removing them. Observed on the first build: both makes
+  ran concurrently under cabal -j into the shared solver prefix without
+  conflict, and the rpath the leaf packages record reached the facade
+  executables three packages up (RUNPATH lists both solver directories,
+  ldd resolves libstp.so.1 and libyices.so.2.6), so the package-database
+  propagation of F5 holds at any depth.
+- What still leaks: the solver choice is the SATFlag type in Flags
+  (SAT_Yices, SAT_STP) with satBackend and useProvisoSAT. Adding a solver
+  adds a constructor there, a core edit, until the Flags re-architecture
+  (section 4) gives bsc-sat its own curated flag type. This is the first
+  concrete instance of the per-component flags argument.
+- Fingerprint consequence: DisjointTest, AProofs and AOpt results depend on
+  solver behaviour, so F(bsc-schedule) and F(bsc-aopt) now include
+  F(bsc-sat), which includes F(bsc-stp) and F(bsc-yices), as distinct
+  inputs instead of the solver being folded into F(bsc-core). A core edit
+  no longer re-runs the vendored solver build at configure time, and a
+  solver bump rebuilds the binding, bsc-sat and their dependents, not core.
+- Gates on the carve: G1 (incremental from the Revision 2.1 tree) 2:18
+  wall, no fixes; verify --strict: 13 components, 2176 import edges inside
+  the DAG, 79 component roots all importing Warmup; G2 inventory identical
+  (131 files), content against the B0 oracle as before (embedded paths and
+  version strings); G3 unchanged (78 paths named, the same 34 unlisted
+  probes); G5 smoke PASS, utils PASS. G1PP-PENDING
+- How the carve-up proceeds from here: each carve is one short series that
+  builds at every commit. A source series first, only if the move needs
+  one (here, the bindings' error reporter; earlier, the AState re-exports
+  and isLocalAId); then the manifest change with its generated files and
+  any hook change in one commit; then `gen.py appendix` into this document
+  and the gate record. gen.py gained `appendix` for that. The next carves
+  on the list: the schedule result types out of the AUses and RSchedule
+  algorithms (needed for the two-file .ba), Depend out of parse into the
+  orchestration layer, and the per-component flag types of section 4. Each
+  is a cache boundary for the Shake layer: a package's fingerprint is its
+  sources plus its dependencies' fingerprints, and an action's identity
+  names the fingerprints of the packages that implement it, so the finer
+  the carve, the smaller the rebuild and the re-run.
+
+## Appendix A. Partition, Revision 2.2 (B0 @ 9306c345), generated from util/recabal/manifest.json by `gen.py appendix`
 
 | component | modules | depends on | import edges into each dependency |
 | --- | --- | --- | --- |
-| bsc-core | 126 | (none) | (none) |
-| bsc-aopt | 3 | bsc-core | bsc-core (37) |
-| bsc-bo | 2 | bsc-core | bsc-core (25) |
-| bsc-ba | 4 | bsc-core | bsc-core (52) |
-| bsc-parse | 23 | bsc-core, bsc-ba | bsc-core (141), bsc-ba (1) |
-| bsc-typecheck | 32 | bsc-core | bsc-core (440) |
-| bsc-elab | 12 | bsc-core, bsc-typecheck | bsc-core (178), bsc-typecheck (7) |
-| bsc-schedule | 14 | bsc-core, bsc-typecheck, bsc-elab | bsc-core (172), bsc-typecheck (3), bsc-elab (4) |
-| bsc-verilog | 17 | bsc-core, bsc-aopt | bsc-core (177), bsc-aopt (2) |
-| bsc-bluesim | 17 | bsc-core, bsc-ba, bsc-aopt | bsc-core (182), bsc-ba (6), bsc-aopt (2) |
+| bsc-core | 118 | (none) | (none) |
+| bsc-stp | 2 | (none) | (none) |
+| bsc-yices | 2 | (none) | (none) |
+| bsc-sat | 7 | bsc-core, bsc-stp, bsc-yices | bsc-core (51), bsc-stp (3), bsc-yices (3) |
+| bsc-aopt | 3 | bsc-core, bsc-sat | bsc-core (37), bsc-sat (1) |
+| bsc-bo | 2 | bsc-core | bsc-core (24) |
+| bsc-ba | 4 | bsc-core | bsc-core (51) |
+| bsc-parse | 23 | bsc-core, bsc-ba | bsc-core (128), bsc-ba (1) |
+| bsc-typecheck | 29 | bsc-core, bsc-sat | bsc-core (414), bsc-sat (1) |
+| bsc-elab | 12 | bsc-core, bsc-typecheck | bsc-core (177), bsc-typecheck (7) |
+| bsc-schedule | 14 | bsc-core, bsc-typecheck, bsc-elab, bsc-sat | bsc-core (157), bsc-typecheck (3), bsc-elab (4), bsc-sat (5) |
+| bsc-verilog | 17 | bsc-core, bsc-aopt | bsc-core (167), bsc-aopt (2) |
+| bsc-bluesim | 17 | bsc-core, bsc-ba, bsc-aopt | bsc-core (178), bsc-ba (6), bsc-aopt (2) |
 
-Total 250 modules; 1429 cross-component import edges, all inside the declared DAG.
+Total 250 modules; 1422 cross-component import edges, all inside the declared DAG.
 
-Placements decided by driver call sites or by their own imports rather than by name: IConv, IConvLet, GroundCType, LiftDicts, ISimpDicts, ISimplify run before genBinFile (typecheck); ARenameIO, ADropDefs, Synthesize are called only by the Verilog path (verilog); AOpt and AExpand are the optimizer both backends run and ACheck the checker run beside it (aopt); SEMonad is imported by the literate CVParser modules (parse); ISyntaxCheck imports IExpandUtils and the typechecker (elab); BinParse and TclParseUtils are parser helpers (parse); the scheduling analyses, schedule result types and ASyntax solver bridges (AUses, RSchedule, AScheduleInfo, ADumpScheduleInfo, AExpr2STP, AExpr2Yices, AExpr2Util, SAT) stay in core because the scheduler, the .ba codec and both backends all need them and the types are not yet separable from the algorithms; Params, CFreeVars, ISyntaxXRef, TopUtils, ForeignFunctions and BinData are core by their imports.
+Placements decided by driver call sites or by their own imports rather than by name: IConv, IConvLet, GroundCType, LiftDicts, ISimpDicts, ISimplify run before genBinFile (typecheck); ARenameIO, ADropDefs, Synthesize are called only by the Verilog path (verilog); AOpt and AExpand are the optimizer both backends run and ACheck the checker run beside it (aopt); SEMonad is imported by the literate CVParser modules (parse); ISyntaxCheck imports IExpandUtils and the typechecker (elab); BinParse and TclParseUtils are parser helpers (parse); the raw solver bindings (STP, STPFFI; Yices, YicesFFI) import nothing from the compiler and are the two packages a solver is added to or replaced in (stp, yices); the translations of ASyntax expressions and CType predicates to the solvers and the SAT facade over them are one layer (sat), which is why typecheck, aopt and schedule depend on it and no backend does; the scheduling analyses and schedule result types (AUses, RSchedule, AScheduleInfo, ADumpScheduleInfo) stay in core because the scheduler, the .ba codec and both backends all need them and the types are not yet separable from the algorithms; Params, CFreeVars, ISyntaxXRef, TopUtils, ForeignFunctions and BinData are core by their imports.
 
-**bsc-core (126):** ADumpScheduleInfo AExpr2STP AExpr2Util AExpr2Yices APrims AScheduleInfo ASyntax ASyntaxUtil AUses Assump BDD BExpr Backend BackendNamingConventions Bag Balanced BinData BoolExp BoolOpt BuildSystem BuildVersion CCSyntax CFreeVars CSubst CSyntax CSyntaxTypes CSyntaxUtil CType CVPrint Changed Classic ConTagInfo CondTree DOT DefProp DynamicMap EquivalenceClass Error ErrorMonad ErrorUtil Eval Exceptions FSTRead FStringCompat FileIOUtil FileNameUtil Fixity Flags FlagsDecode ForeignFunctions GHCPretty GenWrapUtils GlobPattern GraphMap GraphPaths GraphUtil GraphWrapper HTcl IOMutVar IOUtil IPrims IStateLoc ISyntax ISyntaxSubst ISyntaxUtil ISyntaxXRef IType Id IdPrint InstNodes IntLit IntegerUtil Intervals Lex ListMap ListUtil Literal Log2 MVarStrict PFPrint PPrint PVPrint Params ParseOp Position Pragma PreIds PreStrings Pred Pretty Prim ProofObligation RSchedule RealUtil SAT SCC STP STPFFI SchedInfo Scheme SignalNaming Sort SpeedyString StdPrel Subst SymTab SystemCheck SystemVerilogKeywords SystemVerilogTokens TclUtils TopUtils Type TypeOps Undefined Unify Util VCD VFileName VModInfo Verilog Version Warmup WaveCheck Wires Yices YicesFFI
+**bsc-core (118):** ADumpScheduleInfo APrims AScheduleInfo ASyntax ASyntaxUtil AUses Assump BDD BExpr Backend BackendNamingConventions Bag Balanced BinData BoolExp BoolOpt BuildSystem BuildVersion CCSyntax CFreeVars CSubst CSyntax CSyntaxTypes CSyntaxUtil CType CVPrint Changed Classic ConTagInfo CondTree DOT DefProp DynamicMap EquivalenceClass Error ErrorMonad ErrorUtil Eval Exceptions FSTRead FStringCompat FileIOUtil FileNameUtil Fixity Flags FlagsDecode ForeignFunctions GHCPretty GenWrapUtils GlobPattern GraphMap GraphPaths GraphUtil GraphWrapper HTcl IOMutVar IOUtil IPrims IStateLoc ISyntax ISyntaxSubst ISyntaxUtil ISyntaxXRef IType Id IdPrint InstNodes IntLit IntegerUtil Intervals Lex ListMap ListUtil Literal Log2 MVarStrict PFPrint PPrint PVPrint Params ParseOp Position Pragma PreIds PreStrings Pred Pretty Prim ProofObligation RSchedule RealUtil SCC SchedInfo Scheme SignalNaming Sort SpeedyString StdPrel Subst SymTab SystemCheck SystemVerilogKeywords SystemVerilogTokens TclUtils TopUtils Type TypeOps Undefined Unify Util VCD VFileName VModInfo Verilog Version Warmup WaveCheck Wires
+
+**bsc-stp (2):** STP STPFFI
+
+**bsc-yices (2):** Yices YicesFFI
+
+**bsc-sat (7):** AExpr2STP AExpr2Util AExpr2Yices Pred2STP Pred2Yices SAT SATPred
 
 **bsc-aopt (3):** ACheck AExpand AOpt
 
@@ -484,7 +554,7 @@ Placements decided by driver call sites or by their own imports rather than by n
 
 **bsc-parse (23):** BinParse CPPLineDirectives Depend Parse Parsec ParsecChar ParsecCombinator ParsecExpr ParsecPrim Parser.BSV Parser.BSV.CVParser Parser.BSV.CVParserAssertion Parser.BSV.CVParserCommon Parser.BSV.CVParserImperative Parser.BSV.CVParserUtil Parser.Classic Parser.Classic.CParser Parser.Classic.Warnings SEMonad SystemVerilogPreprocess SystemVerilogScanner TclParseUtils TmpNam
 
-**bsc-typecheck (32):** ContextErrors CtxRed Deriving FixupDefs GenFuncWrap GenSign GenWrap GroundCType IConv IConvLet ISimpDicts ISimplify IfcBetterInfo InferKind KIMisc LiftDicts MakeSymTab PoisonUtils PragmaCheck Pred2STP Pred2Yices PredTrie SATPred Simplify SolvedBinds TCMisc TCPat TCheck TIMonad TypeAnalysis TypeAnalysisTclUtil TypeCheck
+**bsc-typecheck (29):** ContextErrors CtxRed Deriving FixupDefs GenFuncWrap GenSign GenWrap GroundCType IConv IConvLet ISimpDicts ISimplify IfcBetterInfo InferKind KIMisc LiftDicts MakeSymTab PoisonUtils PragmaCheck PredTrie Simplify SolvedBinds TCMisc TCPat TCheck TIMonad TypeAnalysis TypeAnalysisTclUtil TypeCheck
 
 **bsc-elab (12):** AConv IDropRules IExpand IExpandUtils IInline IInlineFmt IInlineUtil ILift ISplitIf ISyntaxCheck ITransform IWireSet
 

@@ -10,7 +10,7 @@ the shared library settings.  This script is the only writer of
     components/<short>/SetupHooks.hs        three lines, importing bsc-setup
     components/<short>/<Module/Path>.{hs,lhs}  the symlink farm into src/ (3.3)
     components/<short>/.recabal-generated   the paths written there
-    cabal.project                           the twelve packages, build settings
+    cabal.project                           the component packages, build settings
     bsc.cabal                               the facade package: header and
                                             executables kept, libraries rewritten
 
@@ -980,6 +980,43 @@ def cmd_verify(m, strict):
 
 # ----------------------------------------------------------------------------
 
+# ----------------------------------------------------------------------------
+# appendix: the partition as Markdown, for doc/recabalization-brief.md
+
+def cmd_appendix(m):
+    """Print the table of components (size, dependencies, import edges into
+    each dependency) and the module list of every component.  The brief's
+    Appendix A is this output under a hand-written placements paragraph; the
+    counts here are what verify (d) checks."""
+    owner = m["_owner"]
+    gen = generated(m)
+    imports = component_imports(m)
+    total_edges = 0
+    rows = []
+    for comp in m["components"]:
+        edges = {}
+        for mod, imps in imports[comp["name"]].items():
+            for imp in imps:
+                if imp in gen or imp not in owner:
+                    continue
+                dest = owner[imp]
+                if dest != comp["name"]:
+                    edges[dest] = edges.get(dest, 0) + 1
+        total_edges += sum(edges.values())
+        deps = ", ".join(comp["depends"]) or "(none)"
+        into = ", ".join(f"{d} ({edges.get(d, 0)})" for d in comp["depends"]) or "(none)"
+        rows.append(f"| {comp['name']} | {len(comp['modules'])} | {deps} | {into} |")
+    total = sum(len(c["modules"]) for c in m["components"])
+    out = ["| component | modules | depends on | import edges into each dependency |",
+           "| --- | --- | --- | --- |"] + rows
+    out += ["", f"Total {total} modules; {total_edges} cross-component import edges, all inside the declared DAG.", ""]
+    for comp in m["components"]:
+        out.append(f"**{comp['name']} ({len(comp['modules'])}):** " + " ".join(sorted(comp["modules"])))
+        out.append("")
+    print("\n".join(out).rstrip())
+    return 0
+
+
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--manifest", default=str(MANIFEST), metavar="PATH",
@@ -988,10 +1025,13 @@ def main(argv):
     sub.add_parser("generate", help="write the component packages, cabal.project and bsc.cabal")
     v = sub.add_parser("verify", help="check the tree against the manifest; exit 1 on failure")
     v.add_argument("--strict", action="store_true", help="fail on the known DAG edges and on missing Warmup roots")
+    sub.add_parser("appendix", help="print the partition table and module lists (brief, Appendix A) as Markdown")
     args = ap.parse_args(argv)
     m = load_manifest(args.manifest)
     if args.cmd == "generate":
         return cmd_generate(m)
+    if args.cmd == "appendix":
+        return cmd_appendix(m)
     return cmd_verify(m, args.strict)
 
 
