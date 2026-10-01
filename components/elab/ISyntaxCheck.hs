@@ -1,0 +1,1 @@
+../../src/comp/ISyntaxCheck.hs

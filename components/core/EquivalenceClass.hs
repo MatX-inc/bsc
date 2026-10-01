@@ -1,0 +1,1 @@
+../../src/comp/EquivalenceClass.hs

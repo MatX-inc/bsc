@@ -1,0 +1,27 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+BinParse.hs
+CPPLineDirectives.hs
+Depend.hs
+Parse.hs
+Parsec.hs
+ParsecChar.hs
+ParsecCombinator.hs
+ParsecExpr.hs
+ParsecPrim.hs
+Parser/BSV.hs
+Parser/BSV/CVParser.lhs
+Parser/BSV/CVParserAssertion.lhs
+Parser/BSV/CVParserCommon.lhs
+Parser/BSV/CVParserImperative.lhs
+Parser/BSV/CVParserUtil.lhs
+Parser/Classic.hs
+Parser/Classic/CParser.hs
+Parser/Classic/Warnings.hs
+SEMonad.hs
+SetupHooks.hs
+SystemVerilogPreprocess.lhs
+SystemVerilogScanner.lhs
+TclParseUtils.hs
+TmpNam.hs
+bsc-parse.cabal

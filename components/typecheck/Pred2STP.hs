@@ -1,0 +1,1 @@
+../../src/comp/Pred2STP.hs

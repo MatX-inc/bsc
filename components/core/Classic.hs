@@ -1,0 +1,1 @@
+../../src/comp/Classic.hs

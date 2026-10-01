@@ -1,0 +1,8 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+ABin.hs
+ABinUtil.hs
+GenABin.hs
+GenForeign.hs
+SetupHooks.hs
+bsc-ba.cabal

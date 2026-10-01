@@ -1,0 +1,1 @@
+../../src/comp/InlineReg.hs

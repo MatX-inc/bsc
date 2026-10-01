@@ -1,0 +1,1 @@
+../../src/vendor/yices/v2.6/HaskellIfc/YicesFFI.hs

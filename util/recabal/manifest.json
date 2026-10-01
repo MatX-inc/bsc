@@ -1,0 +1,495 @@
+{
+  "_comment": "Data for util/recabal/gen.py. Specification: doc/recabalization-brief.md Revision 2, sections 3.1-3.5 and Appendix A (partition of MatX-inc/bsc release-devel-B0 @ 9306c345). Components are listed in dependency order; every entry of depends names an earlier component.",
+  "expected_module_count": 250,
+  "cabal_version": "3.14",
+  "package_version": "2026.1",
+  "license": "BSD-3-Clause",
+  "tested_with": "GHC == 9.14.1",
+  "min_ghc": "9.14",
+  "setup": {
+    "name": "bsc-setup",
+    "dir": "components/setup",
+    "hooks_module": "BscSetupHooks",
+    "hooks_value": "bscSetupHooks"
+  },
+  "setup_depends": [
+    "base        >=4.18.3.0",
+    "Cabal       ^>=3.16",
+    "Cabal-hooks ^>=3.16",
+    "bsc-setup"
+  ],
+  "facade": {
+    "name": "bsc",
+    "cabal_file": "bsc.cabal",
+    "executable_hs_source_dirs": "src/comp/app"
+  },
+  "source_roots": [
+    "src/comp",
+    "src/comp/Libs",
+    "src/comp/GHC/posix",
+    "src/Parsec",
+    "src/vendor/htcl",
+    "src/vendor/stp/HaskellIfc",
+    "src/vendor/yices/v2.6/HaskellIfc"
+  ],
+  "source_skip_dirs": [
+    "src/comp/app"
+  ],
+  "source_extensions": [
+    ".hs",
+    ".lhs"
+  ],
+  "generated_modules": [
+    "Warmup",
+    "BuildSystem",
+    "BuildVersion"
+  ],
+  "excluded_sources": {
+    "src/comp/bo2bloogle.hs": "standalone tool (Main), built by src/comp/Makefile, not a library module",
+    "src/comp/tconcheck.hs": "standalone tool (Main), built by src/comp/Makefile, not a library module",
+    "src/Parsec/ParsecLanguage.hs": "vendored Parsec module the compiler does not import (not in the baseline bsc.cabal)",
+    "src/Parsec/ParsecPerm.hs": "vendored Parsec module the compiler does not import (not in the baseline bsc.cabal)",
+    "src/Parsec/ParsecToken.hs": "vendored Parsec module the compiler does not import (not in the baseline bsc.cabal)"
+  },
+  "known_dag_edges": {
+    "_comment": "Cross-DAG import edges the three source moves of brief 3.5 remove (AState re-exports; isLocalAId to ASyntaxUtil; makeGenFuncId to GenWrapUtils). verify reports them as warnings until they are gone; --strict fails on them.",
+    "edges": [
+      [
+        "AState",
+        "ASchedule"
+      ],
+      [
+        "AExpand",
+        "AConv"
+      ],
+      [
+        "ADropDefs",
+        "AConv"
+      ],
+      [
+        "Depend",
+        "GenFuncWrap"
+      ]
+    ]
+  },
+  "library_defaults": {
+    "_comment": "The former common lib-defaults stanza of bsc.cabal, copied with its bounds.",
+    "build-depends": [
+      "array        >=0.5.8.0",
+      "base         >=4.18.3.0",
+      "ghc-bignum   >=1.3",
+      "bytestring   >=0.11.5.4",
+      "containers   >=0.6.7",
+      "deepseq      >=1.4.8.1",
+      "directory    >=1.3.8.5",
+      "filepath     >=1.4.301.0",
+      "integer-gmp  >=1.1",
+      "mtl          >=2.3.1",
+      "old-locale   ^>=1.0.0.7",
+      "old-time     ^>=1.1.1.0",
+      "process      >=1.6.19.0",
+      "regex-compat ^>=0.95.2.2",
+      "split        ^>=0.2.5",
+      "strict-concurrency ^>=0.2.4.3",
+      "syb          ^>=0.7.2",
+      "text         >=2.0.2",
+      "time         >=1.12.2",
+      "unix         >=2.8.6.0"
+    ],
+    "conditional-build-depends": [
+      {
+        "if": "impl(ghc >= 9.10)",
+        "build-depends": [
+          "ghc-internal"
+        ]
+      }
+    ],
+    "default-language": "GHC2021",
+    "default-extensions": [
+      "BangPatterns",
+      "FlexibleContexts",
+      "FlexibleInstances",
+      "TypeSynonymInstances"
+    ],
+    "ghc-options": "-Wall -Wno-orphans -Wno-name-shadowing -Wno-unused-matches"
+  },
+  "components": [
+    {
+      "name": "bsc-core",
+      "dir": "components/core",
+      "synopsis": "Bluespec Compiler: shared core (syntax trees, utilities, Flags, solver bindings)",
+      "depends": [],
+      "modules": [
+        "ACheck",
+        "ADumpScheduleInfo",
+        "AExpr2STP",
+        "AExpr2Util",
+        "AExpr2Yices",
+        "APrims",
+        "AScheduleInfo",
+        "ASyntax",
+        "ASyntaxUtil",
+        "AUses",
+        "Assump",
+        "BDD",
+        "BExpr",
+        "Backend",
+        "BackendNamingConventions",
+        "Bag",
+        "Balanced",
+        "BinData",
+        "BoolExp",
+        "BoolOpt",
+        "BuildSystem",
+        "BuildVersion",
+        "CCSyntax",
+        "CFreeVars",
+        "CSubst",
+        "CSyntax",
+        "CSyntaxTypes",
+        "CSyntaxUtil",
+        "CType",
+        "CVPrint",
+        "Changed",
+        "Classic",
+        "ConTagInfo",
+        "CondTree",
+        "DOT",
+        "DefProp",
+        "DynamicMap",
+        "EquivalenceClass",
+        "Error",
+        "ErrorMonad",
+        "ErrorUtil",
+        "Eval",
+        "Exceptions",
+        "FSTRead",
+        "FStringCompat",
+        "FileIOUtil",
+        "FileNameUtil",
+        "Fixity",
+        "Flags",
+        "FlagsDecode",
+        "ForeignFunctions",
+        "GHCPretty",
+        "GenWrapUtils",
+        "GlobPattern",
+        "GraphMap",
+        "GraphPaths",
+        "GraphUtil",
+        "GraphWrapper",
+        "HTcl",
+        "IOMutVar",
+        "IOUtil",
+        "IPrims",
+        "IStateLoc",
+        "ISyntax",
+        "ISyntaxSubst",
+        "ISyntaxUtil",
+        "ISyntaxXRef",
+        "IType",
+        "Id",
+        "IdPrint",
+        "InstNodes",
+        "IntLit",
+        "IntegerUtil",
+        "Intervals",
+        "Lex",
+        "ListMap",
+        "ListUtil",
+        "Literal",
+        "Log2",
+        "MVarStrict",
+        "PFPrint",
+        "PPrint",
+        "PVPrint",
+        "Params",
+        "ParseOp",
+        "Position",
+        "Pragma",
+        "PreIds",
+        "PreStrings",
+        "Pred",
+        "Pretty",
+        "Prim",
+        "ProofObligation",
+        "RSchedule",
+        "RealUtil",
+        "SAT",
+        "SCC",
+        "STP",
+        "STPFFI",
+        "SchedInfo",
+        "Scheme",
+        "SignalNaming",
+        "Sort",
+        "SpeedyString",
+        "StdPrel",
+        "Subst",
+        "SymTab",
+        "SystemCheck",
+        "SystemVerilogKeywords",
+        "SystemVerilogTokens",
+        "TclUtils",
+        "TopUtils",
+        "Type",
+        "TypeOps",
+        "Undefined",
+        "Unify",
+        "Util",
+        "VCD",
+        "VFileName",
+        "VModInfo",
+        "Verilog",
+        "Version",
+        "Warmup",
+        "WaveCheck",
+        "Wires",
+        "Yices",
+        "YicesFFI"
+      ],
+      "extras": {
+        "extra-libraries": [
+          "z"
+        ],
+        "extra-libraries-osx": [
+          "c++"
+        ],
+        "extra-libraries-other": [
+          "stdc++"
+        ],
+        "c-sources": [
+          "src/comp/fstscopes_hier.c",
+          "src/vendor/htcl/haskell.c",
+          "src/vendor/libfst/src/fastlz.c",
+          "src/vendor/libfst/src/fstapi.c",
+          "src/vendor/libfst/src/lz4.c"
+        ],
+        "include-dirs": [
+          "src/libfst_config",
+          "src/vendor/libfst/src"
+        ]
+      }
+    },
+    {
+      "name": "bsc-bo",
+      "dir": "components/bo",
+      "synopsis": "Bluespec Compiler: the .bo codec",
+      "depends": [
+        "bsc-core"
+      ],
+      "modules": [
+        "BinUtil",
+        "GenBin"
+      ]
+    },
+    {
+      "name": "bsc-ba",
+      "dir": "components/ba",
+      "synopsis": "Bluespec Compiler: the .ba codec",
+      "depends": [
+        "bsc-core"
+      ],
+      "modules": [
+        "ABin",
+        "ABinUtil",
+        "GenABin",
+        "GenForeign"
+      ]
+    },
+    {
+      "name": "bsc-parse",
+      "dir": "components/parse",
+      "synopsis": "Bluespec Compiler: the BSV and Classic parsers",
+      "depends": [
+        "bsc-core",
+        "bsc-ba"
+      ],
+      "modules": [
+        "BinParse",
+        "CPPLineDirectives",
+        "Depend",
+        "Parse",
+        "Parsec",
+        "ParsecChar",
+        "ParsecCombinator",
+        "ParsecExpr",
+        "ParsecPrim",
+        "Parser.BSV",
+        "Parser.BSV.CVParser",
+        "Parser.BSV.CVParserAssertion",
+        "Parser.BSV.CVParserCommon",
+        "Parser.BSV.CVParserImperative",
+        "Parser.BSV.CVParserUtil",
+        "Parser.Classic",
+        "Parser.Classic.CParser",
+        "Parser.Classic.Warnings",
+        "SEMonad",
+        "SystemVerilogPreprocess",
+        "SystemVerilogScanner",
+        "TclParseUtils",
+        "TmpNam"
+      ]
+    },
+    {
+      "name": "bsc-typecheck",
+      "dir": "components/typecheck",
+      "synopsis": "Bluespec Compiler: the type checker and the .bo producer passes",
+      "depends": [
+        "bsc-core"
+      ],
+      "modules": [
+        "ContextErrors",
+        "CtxRed",
+        "Deriving",
+        "FixupDefs",
+        "GenFuncWrap",
+        "GenSign",
+        "GenWrap",
+        "GroundCType",
+        "IConv",
+        "IConvLet",
+        "ISimpDicts",
+        "ISimplify",
+        "IfcBetterInfo",
+        "InferKind",
+        "KIMisc",
+        "LiftDicts",
+        "MakeSymTab",
+        "PoisonUtils",
+        "PragmaCheck",
+        "Pred2STP",
+        "Pred2Yices",
+        "PredTrie",
+        "SATPred",
+        "Simplify",
+        "SolvedBinds",
+        "TCMisc",
+        "TCPat",
+        "TCheck",
+        "TIMonad",
+        "TypeAnalysis",
+        "TypeAnalysisTclUtil",
+        "TypeCheck"
+      ]
+    },
+    {
+      "name": "bsc-elab",
+      "dir": "components/elab",
+      "synopsis": "Bluespec Compiler: static elaboration (IExpand through AConv)",
+      "depends": [
+        "bsc-core",
+        "bsc-typecheck"
+      ],
+      "modules": [
+        "AConv",
+        "IDropRules",
+        "IExpand",
+        "IExpandUtils",
+        "IInline",
+        "IInlineFmt",
+        "IInlineUtil",
+        "ILift",
+        "ISplitIf",
+        "ISyntaxCheck",
+        "ITransform",
+        "IWireSet"
+      ]
+    },
+    {
+      "name": "bsc-schedule",
+      "dir": "components/schedule",
+      "synopsis": "Bluespec Compiler: the scheduler and the pre-.ba ASyntax passes",
+      "depends": [
+        "bsc-core",
+        "bsc-typecheck",
+        "bsc-elab"
+      ],
+      "modules": [
+        "AAddSchedAssumps",
+        "AAddScheduleDefs",
+        "ACleanup",
+        "ADropUndet",
+        "ADumpSchedule",
+        "ANoInline",
+        "APaths",
+        "AProofs",
+        "ARankMethCalls",
+        "ARemoveAssumps",
+        "ASchedule",
+        "ATaskSplice",
+        "DisjointTest",
+        "WireAnalysis"
+      ]
+    },
+    {
+      "name": "bsc-aopt",
+      "dir": "components/aopt",
+      "synopsis": "Bluespec Compiler: the ASyntax optimizer both backends run",
+      "depends": [
+        "bsc-core"
+      ],
+      "modules": [
+        "AExpand",
+        "AOpt"
+      ]
+    },
+    {
+      "name": "bsc-verilog",
+      "dir": "components/verilog",
+      "synopsis": "Bluespec Compiler: the Verilog backend",
+      "depends": [
+        "bsc-core",
+        "bsc-aopt"
+      ],
+      "modules": [
+        "ADropDefs",
+        "ARenameIO",
+        "AState",
+        "AVeriQuirks",
+        "AVerilog",
+        "AVerilogUtil",
+        "DPIWrappers",
+        "InlineCReg",
+        "InlineReg",
+        "InlineWires",
+        "Synthesize",
+        "VFinalCleanup",
+        "VIOProps",
+        "VPIWrappers",
+        "VPrims",
+        "VStableRenumber",
+        "VVerilogDollar"
+      ]
+    },
+    {
+      "name": "bsc-bluesim",
+      "dir": "components/bluesim",
+      "synopsis": "Bluespec Compiler: the Bluesim backend",
+      "depends": [
+        "bsc-core",
+        "bsc-ba",
+        "bsc-aopt"
+      ],
+      "modules": [
+        "BluesimLoader",
+        "LambdaCalc",
+        "LambdaCalcUtil",
+        "SAL",
+        "SimBlocksToC",
+        "SimCCBlock",
+        "SimCOpt",
+        "SimDomainInfo",
+        "SimExpand",
+        "SimFileUtils",
+        "SimMakeCBlocks",
+        "SimPackage",
+        "SimPackageOpt",
+        "SimPrimitiveModules",
+        "StaleUtils",
+        "SystemCWrapper",
+        "VFileUtils"
+      ]
+    }
+  ]
+}
