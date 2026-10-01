@@ -537,11 +537,75 @@ misbehaves, fall back to `jobs: 1` with `-j` per package.
   names the fingerprints of the packages that implement it, so the finer
   the carve, the smaller the rebuild and the re-run.
 
-## Appendix A. Partition, Revision 2.2 (B0 @ 9306c345), generated from util/recabal/manifest.json by `gen.py appendix`
+## Revision 2.3 (2026-10-01, the Tcl and waveform carves)
+
+- Ravi's decisions: carve out the Tcl binding and the waveform tools;
+  both are compiler-independent and expected to leave the tree, so they
+  are named for that future, without the bsc- prefix: `htcl` and
+  `waveforms`. Everything that depends on the compiler keeps the prefix.
+  The bluetcl glue is its own component, `bsc-bluetcl`, because bluetcl is
+  already a product of its own; see the follow-up below for making it a
+  package with its executable.
+- `htcl` (1): HTcl with its C shim (src/vendor/htcl/haskell.c), depending
+  on nothing in bsc. The Tcl include and link hook (platform.sh: tclinc,
+  tcllibs, tclversion and the TCL85/TCL9 macros) moved from bsc-core's
+  main library to htcl's, keyed by package name; HTcl.hs is the only
+  module that needs the macros and haskell.c the only C that needs the
+  headers. The Tcl libraries reach the bluetcl executable through the
+  package database as the solver libraries do.
+- `waveforms` (3): VCD, WaveCheck, FSTRead with the vendored libfst C
+  sources (fastlz, fstapi, lz4), fstscopes_hier.c, the libfst include
+  directories and zlib, depending on nothing in bsc. WaveCheck's only
+  compiler import was Error(internalError), four sites; it now has a local
+  reporter over errorWithoutStackTrace like the solver bindings. No
+  compiler component imports any of the three; showrules, vcdcheck and
+  fstcheck do, and fstscopes reaches libfst through the C.
+- `bsc-bluetcl` (3): TclUtils (from core), TypeAnalysisTclUtil (from
+  typecheck), BluesimLoader (from bluesim), imported only by the bluetcl
+  executable; depends on core, htcl, typecheck and bluesim. With it,
+  typecheck and bluesim no longer carry Tcl: bsc-typecheck goes from 29 to
+  28 modules and bsc-bluesim from 17 to 16. TclUtils and BluesimLoader
+  became component roots and gained the Warmup import.
+- bsc-core goes from 118 to 113 modules and now carries no C sources, no
+  include directories and no link configuration beyond the libstdc++ the
+  B0 bsc.cabal gave every stanza (its reason is not recorded; left as
+  found). Its hooks are the GHC guard, Warmup, and BuildSystem/BuildVersion.
+- The determinism gate's marker edit now finds each component's module
+  across every source root, so the vendored leaves (htcl, stp, yices) get
+  an edit-and-revert round too; before, components whose modules live
+  outside src/comp were silently skipped by that round.
+- Gates: G1 cabal build all 3:59 wall / 791 s CPU, no errors; verify --strict clean (16 components, 247 farm links, every root imports Warmup); make build of the same tree at the same commit 1:10 incremental; G2 inventory identical to the B0 oracle (131 files) and 131 of 131 libraries byte-identical against this tree's make-built bsc at the same commit; G3 unchanged (78 names, the same 34 unlisted probes); G5 smoke PASS (1:44, 72 expected passes in the final summary) and utils PASS (0:32, 113); G1'' PASS: parallel A (291 s) = parallel B (254 s) = serial C (530 s) = parallel A2 = the build after a marker edit in each of the 16 components (now including HTcl, STP and Yices under src/vendor) and revert (27 s and 26 s), 1200 files hashed each time, 23:41 for the five builds.
+- Follow-up recorded: a `bluetcl` package holding bsc-bluetcl's three
+  modules and the bluetcl executable (bluetcl_Main.hs, bluetcl_shim.c,
+  BlueTcl.hs) would give the product its own package and remove the only
+  executable in the facade with its own C source; it needs executable
+  stanzas in the generator and the test harness's bluetcl path to follow.
+  Until then the glue library is bsc-bluetcl, since a library package named
+  bluetcl beside an executable of that name in another package would make
+  the bare target name ambiguous.
+- On the two target ASTs Ravi asked about: Verilog can move to bsc-verilog
+  after three mechanical moves, none of which touches the .ba format: the
+  Bin instances for the Verilog AST in GenABin (VProgram down to VCaseArm)
+  are dead, since no .ba record holds a Verilog value (the records are
+  APackage, AScheduleInfo, PProp, VPathInfo, CQType, Flags and
+  ForeignFunction); the keyword and identifier predicates vKeywords and
+  vIsValidIdent, which PragmaCheck, IExpandUtils and FlagsDecode import,
+  belong beside SystemVerilogKeywords in the base layer; and
+  mkDPIDeclarations (ForeignFunction to VDPI) belongs in DPIWrappers.
+  CCSyntax cannot move to bsc-bluesim while the Verilog backend's DPI and
+  VPI wrapper generators emit C through it and ForeignFunctions (imported
+  by the .ba codec, typecheck and elab) maps foreign types to C types with
+  it; splitting ForeignFunctions into the descriptor and the two
+  declaration generators would leave CCSyntax shared by the two backends
+  only, a small package of its own or part of the backend-shared component.
+
+## Appendix A. Partition, Revision 2.3 (B0 @ 9306c345), generated from util/recabal/manifest.json by `gen.py appendix`
 
 | component | modules | depends on | import edges into each dependency |
 | --- | --- | --- | --- |
-| bsc-core | 118 | (none) | (none) |
+| htcl | 1 | (none) | (none) |
+| waveforms | 3 | (none) | (none) |
+| bsc-core | 113 | (none) | (none) |
 | bsc-stp | 2 | (none) | (none) |
 | bsc-yices | 2 | (none) | (none) |
 | bsc-sat | 7 | bsc-core, bsc-stp, bsc-yices | bsc-core (51), bsc-stp (3), bsc-yices (3) |
@@ -549,17 +613,22 @@ misbehaves, fall back to `jobs: 1` with `-j` per package.
 | bsc-bo | 2 | bsc-core | bsc-core (24) |
 | bsc-ba | 4 | bsc-core | bsc-core (51) |
 | bsc-parse | 23 | bsc-core, bsc-ba | bsc-core (128), bsc-ba (1) |
-| bsc-typecheck | 29 | bsc-core, bsc-sat | bsc-core (414), bsc-sat (1) |
+| bsc-typecheck | 28 | bsc-core, bsc-sat | bsc-core (404), bsc-sat (1) |
 | bsc-elab | 12 | bsc-core, bsc-typecheck | bsc-core (177), bsc-typecheck (7) |
 | bsc-schedule | 14 | bsc-core, bsc-typecheck, bsc-elab, bsc-sat | bsc-core (157), bsc-typecheck (3), bsc-elab (4), bsc-sat (5) |
 | bsc-verilog | 17 | bsc-core, bsc-aopt | bsc-core (167), bsc-aopt (2) |
-| bsc-bluesim | 17 | bsc-core, bsc-ba, bsc-aopt | bsc-core (178), bsc-ba (6), bsc-aopt (2) |
+| bsc-bluesim | 16 | bsc-core, bsc-ba, bsc-aopt | bsc-core (175), bsc-ba (6), bsc-aopt (2) |
+| bsc-bluetcl | 3 | bsc-core, htcl, bsc-typecheck, bsc-bluesim | bsc-core (24), htcl (3), bsc-typecheck (1), bsc-bluesim (1) |
 
-Total 250 modules; 1422 cross-component import edges, all inside the declared DAG.
+Total 250 modules; 1438 cross-component import edges, all inside the declared DAG.
 
-Placements decided by driver call sites or by their own imports rather than by name: IConv, IConvLet, GroundCType, LiftDicts, ISimpDicts, ISimplify run before genBinFile (typecheck); ARenameIO, ADropDefs, Synthesize are called only by the Verilog path (verilog); AOpt and AExpand are the optimizer both backends run and ACheck the checker run beside it (aopt); SEMonad is imported by the literate CVParser modules (parse); ISyntaxCheck imports IExpandUtils and the typechecker (elab); BinParse and TclParseUtils are parser helpers (parse); the raw solver bindings (STP, STPFFI; Yices, YicesFFI) import nothing from the compiler and are the two packages a solver is added to or replaced in (stp, yices); the translations of ASyntax expressions and CType predicates to the solvers and the SAT facade over them are one layer (sat), which is why typecheck, aopt and schedule depend on it and no backend does; the scheduling analyses and schedule result types (AUses, RSchedule, AScheduleInfo, ADumpScheduleInfo) stay in core because the scheduler, the .ba codec and both backends all need them and the types are not yet separable from the algorithms; Params, CFreeVars, ISyntaxXRef, TopUtils, ForeignFunctions and BinData are core by their imports.
+Placements decided by driver call sites or by their own imports rather than by name: IConv, IConvLet, GroundCType, LiftDicts, ISimpDicts, ISimplify run before genBinFile (typecheck); ARenameIO, ADropDefs, Synthesize are called only by the Verilog path (verilog); AOpt and AExpand are the optimizer both backends run and ACheck the checker run beside it (aopt); SEMonad is imported by the literate CVParser modules (parse); ISyntaxCheck imports IExpandUtils and the typechecker (elab); BinParse and TclParseUtils are parser helpers (parse); the Tcl binding (HTcl with its C shim) and the waveform readers and checker (VCD, WaveCheck, FSTRead with the vendored libfst) import nothing from the compiler and are named without the bsc- prefix because they are expected to leave the tree (htcl, waveforms); the bluetcl glue (TclUtils, TypeAnalysisTclUtil, BluesimLoader) is imported only by the bluetcl executable (bluetcl); the raw solver bindings (STP, STPFFI; Yices, YicesFFI) import nothing from the compiler and are the two packages a solver is added to or replaced in (stp, yices); the translations of ASyntax expressions and CType predicates to the solvers and the SAT facade over them are one layer (sat), which is why typecheck, aopt and schedule depend on it and no backend does; the scheduling analyses and schedule result types (AUses, RSchedule, AScheduleInfo, ADumpScheduleInfo) stay in core because the scheduler, the .ba codec and both backends all need them and the types are not yet separable from the algorithms; Params, CFreeVars, ISyntaxXRef, TopUtils, ForeignFunctions and BinData are core by their imports.
 
-**bsc-core (118):** ADumpScheduleInfo APrims AScheduleInfo ASyntax ASyntaxUtil AUses Assump BDD BExpr Backend BackendNamingConventions Bag Balanced BinData BoolExp BoolOpt BuildSystem BuildVersion CCSyntax CFreeVars CSubst CSyntax CSyntaxTypes CSyntaxUtil CType CVPrint Changed Classic ConTagInfo CondTree DOT DefProp DynamicMap EquivalenceClass Error ErrorMonad ErrorUtil Eval Exceptions FSTRead FStringCompat FileIOUtil FileNameUtil Fixity Flags FlagsDecode ForeignFunctions GHCPretty GenWrapUtils GlobPattern GraphMap GraphPaths GraphUtil GraphWrapper HTcl IOMutVar IOUtil IPrims IStateLoc ISyntax ISyntaxSubst ISyntaxUtil ISyntaxXRef IType Id IdPrint InstNodes IntLit IntegerUtil Intervals Lex ListMap ListUtil Literal Log2 MVarStrict PFPrint PPrint PVPrint Params ParseOp Position Pragma PreIds PreStrings Pred Pretty Prim ProofObligation RSchedule RealUtil SCC SchedInfo Scheme SignalNaming Sort SpeedyString StdPrel Subst SymTab SystemCheck SystemVerilogKeywords SystemVerilogTokens TclUtils TopUtils Type TypeOps Undefined Unify Util VCD VFileName VModInfo Verilog Version Warmup WaveCheck Wires
+**htcl (1):** HTcl
+
+**waveforms (3):** FSTRead VCD WaveCheck
+
+**bsc-core (113):** ADumpScheduleInfo APrims AScheduleInfo ASyntax ASyntaxUtil AUses Assump BDD BExpr Backend BackendNamingConventions Bag Balanced BinData BoolExp BoolOpt BuildSystem BuildVersion CCSyntax CFreeVars CSubst CSyntax CSyntaxTypes CSyntaxUtil CType CVPrint Changed Classic ConTagInfo CondTree DOT DefProp DynamicMap EquivalenceClass Error ErrorMonad ErrorUtil Eval Exceptions FStringCompat FileIOUtil FileNameUtil Fixity Flags FlagsDecode ForeignFunctions GHCPretty GenWrapUtils GlobPattern GraphMap GraphPaths GraphUtil GraphWrapper IOMutVar IOUtil IPrims IStateLoc ISyntax ISyntaxSubst ISyntaxUtil ISyntaxXRef IType Id IdPrint InstNodes IntLit IntegerUtil Intervals Lex ListMap ListUtil Literal Log2 MVarStrict PFPrint PPrint PVPrint Params ParseOp Position Pragma PreIds PreStrings Pred Pretty Prim ProofObligation RSchedule RealUtil SCC SchedInfo Scheme SignalNaming Sort SpeedyString StdPrel Subst SymTab SystemCheck SystemVerilogKeywords SystemVerilogTokens TopUtils Type TypeOps Undefined Unify Util VFileName VModInfo Verilog Version Warmup Wires
 
 **bsc-stp (2):** STP STPFFI
 
@@ -575,7 +644,7 @@ Placements decided by driver call sites or by their own imports rather than by n
 
 **bsc-parse (23):** BinParse CPPLineDirectives Depend Parse Parsec ParsecChar ParsecCombinator ParsecExpr ParsecPrim Parser.BSV Parser.BSV.CVParser Parser.BSV.CVParserAssertion Parser.BSV.CVParserCommon Parser.BSV.CVParserImperative Parser.BSV.CVParserUtil Parser.Classic Parser.Classic.CParser Parser.Classic.Warnings SEMonad SystemVerilogPreprocess SystemVerilogScanner TclParseUtils TmpNam
 
-**bsc-typecheck (29):** ContextErrors CtxRed Deriving FixupDefs GenFuncWrap GenSign GenWrap GroundCType IConv IConvLet ISimpDicts ISimplify IfcBetterInfo InferKind KIMisc LiftDicts MakeSymTab PoisonUtils PragmaCheck PredTrie Simplify SolvedBinds TCMisc TCPat TCheck TIMonad TypeAnalysis TypeAnalysisTclUtil TypeCheck
+**bsc-typecheck (28):** ContextErrors CtxRed Deriving FixupDefs GenFuncWrap GenSign GenWrap GroundCType IConv IConvLet ISimpDicts ISimplify IfcBetterInfo InferKind KIMisc LiftDicts MakeSymTab PoisonUtils PragmaCheck PredTrie Simplify SolvedBinds TCMisc TCPat TCheck TIMonad TypeAnalysis TypeCheck
 
 **bsc-elab (12):** AConv IDropRules IExpand IExpandUtils IInline IInlineFmt IInlineUtil ILift ISplitIf ISyntaxCheck ITransform IWireSet
 
@@ -583,7 +652,9 @@ Placements decided by driver call sites or by their own imports rather than by n
 
 **bsc-verilog (17):** ADropDefs ARenameIO AState AVeriQuirks AVerilog AVerilogUtil DPIWrappers InlineCReg InlineReg InlineWires Synthesize VFinalCleanup VIOProps VPIWrappers VPrims VStableRenumber VVerilogDollar
 
-**bsc-bluesim (17):** BluesimLoader LambdaCalc LambdaCalcUtil SAL SimBlocksToC SimCCBlock SimCOpt SimDomainInfo SimExpand SimFileUtils SimMakeCBlocks SimPackage SimPackageOpt SimPrimitiveModules StaleUtils SystemCWrapper VFileUtils
+**bsc-bluesim (16):** LambdaCalc LambdaCalcUtil SAL SimBlocksToC SimCCBlock SimCOpt SimDomainInfo SimExpand SimFileUtils SimMakeCBlocks SimPackage SimPackageOpt SimPrimitiveModules StaleUtils SystemCWrapper VFileUtils
+
+**bsc-bluetcl (3):** BluesimLoader TclUtils TypeAnalysisTclUtil
 
 ## Appendix B. Evidence pointers
 
@@ -644,9 +715,9 @@ Placements decided by driver call sites or by their own imports rather than by n
 15. Evidence ledger. ACCEPTED. Facts carry labels; toys are checked in;
     raw logs of 2026-09-30 were lost to a reboot and F8 stays [reported].
 
-## Appendix D. What is left in bsc-core (Revision 2.2), by cluster
+## Appendix D. What is left in bsc-core (Revision 2.3), by cluster
 
-118 modules, 50,405 lines (generated Warmup counted at 718). Levels are
+113 modules, 47,618 lines (generated Warmup counted at 718) after Revision 2.3 took the Tcl layer (D14) and the waveform tools (D15) out; both rows are kept below, marked carved, so the table still reads against the 2.2 discussion. Levels are
 the longest import chain inside core (0 = imports nothing in core); the
 import DAG inside core is strictly layered base < CSyntax and types <
 ISyntax < ASyntax, with the interface and annotation types (Pragma,
@@ -670,6 +741,6 @@ in Appendix A's sense.
 | D11 interface and foreign descriptors | VModInfo, ForeignFunctions, BinData | 3,011 | VModInfo: every component but bo; ForeignFunctions: ba 4, vlog 4, bsim 3, elab, tc; BinData: bo, ba | BinData (the Bin class and the instances for C and I types) is the codec substrate the two codecs share; ForeignFunctions imports both target ASTs (D12) |
 | D12 target ASTs | Verilog, VFileName, CCSyntax | 2,591 | Verilog: vlog 7, ba (GenABin), elab (IExpandUtils), tc (PragmaCheck), FlagsDecode, ForeignFunctions; CCSyntax: bsim 4, vlog 2 (DPIWrappers, VPIWrappers), ForeignFunctions | Verilog cannot go to bsc-verilog while GenABin, IExpandUtils and PragmaCheck import it; CCSyntax cannot go to bsc-bluesim while the Verilog DPI/VPI wrappers emit C through it |
 | D13 graph and boolean algorithms | GraphMap, GraphPaths, GraphUtil, GraphWrapper, DOT, BDD, BoolExp, BoolOpt | 1,544 | sched (all four graph modules, DOT), elab (BoolExp, BoolOpt, GraphWrapper), aopt (BoolExp), vlog, bsim, tc (GraphWrapper) | pure algorithms; would ride with D2 |
-| D14 Tcl | HTcl, TclUtils | 1,535 | bluetcl; TypeAnalysisTclUtil (tc); BluesimLoader (bsim) | the Tcl link hook and src/vendor/htcl/haskell.c leave core; TypeAnalysisTclUtil and BluesimLoader are bluetcl-side code that would move with it |
-| D15 waveforms | VCD, WaveCheck, FSTRead | 1,252 | none in the compiler; showrules, vcdcheck, fstcheck (and fstscopes through the C) | the libfst C sources (fastlz, fstapi, lz4), fstscopes_hier.c, the libfst include dirs and zlib leave core; the cheapest carve, zero compiler consumers |
+| D14 Tcl (carved in 2.3: htcl, bsc-bluetcl) | HTcl, TclUtils | 1,535 | bluetcl; TypeAnalysisTclUtil (tc); BluesimLoader (bsim) | the Tcl link hook and src/vendor/htcl/haskell.c leave core; TypeAnalysisTclUtil and BluesimLoader are bluetcl-side code that would move with it |
+| D15 waveforms (carved in 2.3: waveforms) | VCD, WaveCheck, FSTRead | 1,252 | none in the compiler; showrules, vcdcheck, fstcheck (and fstscopes through the C) | the libfst C sources (fastlz, fstapi, lz4), fstscopes_hier.c, the libfst include dirs and zlib leave core; the cheapest carve, zero compiler consumers |
 | D16 driver utilities | TopUtils | 367 | ba, bsim, parse, sat, sched, vlog; bsc, bscdeps, bluetcl, fstcheck, showrules, vcdcheck | imports ASyntax, ISyntax, CVPrint and the tokens: a grab bag of driver helpers that each component would need to stop importing before it could move |
