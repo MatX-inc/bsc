@@ -52,20 +52,10 @@ library
     FlexibleInstances,
     TypeSynonymInstances,
   ghc-options: -Wall -Wno-orphans -Wno-name-shadowing -Wno-unused-matches
-  extra-libraries: z
   if os(osx)
     extra-libraries: c++
   else
     extra-libraries: stdc++
-  c-sources:
-    ../../src/comp/fstscopes_hier.c,
-    ../../src/vendor/htcl/haskell.c,
-    ../../src/vendor/libfst/src/fastlz.c,
-    ../../src/vendor/libfst/src/fstapi.c,
-    ../../src/vendor/libfst/src/lz4.c,
-  include-dirs:
-    ../../src/libfst_config,
-    ../../src/vendor/libfst/src,
   exposed-modules:
     ADumpScheduleInfo
     APrims
@@ -106,7 +96,6 @@ library
     ErrorUtil
     Eval
     Exceptions
-    FSTRead
     FStringCompat
     FileIOUtil
     FileNameUtil
@@ -121,7 +110,6 @@ library
     GraphPaths
     GraphUtil
     GraphWrapper
-    HTcl
     IOMutVar
     IOUtil
     IPrims
@@ -170,18 +158,15 @@ library
     SystemCheck
     SystemVerilogKeywords
     SystemVerilogTokens
-    TclUtils
     TopUtils
     Type
     TypeOps
     Undefined
     Unify
     Util
-    VCD
     VFileName
     VModInfo
     Verilog
     Version
     Warmup
-    WaveCheck
     Wires

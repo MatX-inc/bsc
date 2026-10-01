@@ -4,6 +4,8 @@
 packages:
   .
   components/setup
+  components/htcl
+  components/waveforms
   components/core
   components/stp
   components/yices
@@ -17,6 +19,7 @@ packages:
   components/schedule
   components/verilog
   components/bluesim
+  components/bluetcl
 
 -- Parity with the make build (src/comp/Makefile GHCOPTLEVEL = -O2), for every
 -- package of the project.

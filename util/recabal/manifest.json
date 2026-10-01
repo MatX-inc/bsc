@@ -1,5 +1,5 @@
 {
-  "_comment": "Data for util/recabal/gen.py. Specification: doc/recabalization-brief.md Revisions 2 to 2.2, sections 3.1-3.5 and Appendix A (partition of MatX-inc/bsc release-devel-B0 @ 9306c345). Components are listed in dependency order; every entry of depends names an earlier component.",
+  "_comment": "Data for util/recabal/gen.py. Specification: doc/recabalization-brief.md Revisions 2 to 2.3, sections 3.1-3.5 and Appendix A (partition of MatX-inc/bsc release-devel-B0 @ 9306c345). Components are listed in dependency order; every entry of depends names an earlier component.",
   "expected_module_count": 250,
   "cabal_version": "3.14",
   "package_version": "2026.1",
@@ -115,6 +115,46 @@
   },
   "components": [
     {
+      "name": "htcl",
+      "dir": "components/htcl",
+      "synopsis": "Haskell Tcl binding (the vendored htcl) with its C shim; the hooks supply the Tcl include and link flags. Independent of the compiler and expected to leave the tree, hence no bsc- prefix.",
+      "depends": [],
+      "modules": [
+        "HTcl"
+      ],
+      "extras": {
+        "c-sources": [
+          "src/vendor/htcl/haskell.c"
+        ]
+      }
+    },
+    {
+      "name": "waveforms",
+      "dir": "components/waveforms",
+      "synopsis": "Waveform reading and checking (VCD, and FST through the vendored libfst) for the waveform tools. Independent of the compiler and expected to leave the tree, hence no bsc- prefix.",
+      "depends": [],
+      "modules": [
+        "FSTRead",
+        "VCD",
+        "WaveCheck"
+      ],
+      "extras": {
+        "extra-libraries": [
+          "z"
+        ],
+        "c-sources": [
+          "src/comp/fstscopes_hier.c",
+          "src/vendor/libfst/src/fastlz.c",
+          "src/vendor/libfst/src/fstapi.c",
+          "src/vendor/libfst/src/lz4.c"
+        ],
+        "include-dirs": [
+          "src/libfst_config",
+          "src/vendor/libfst/src"
+        ]
+      }
+    },
+    {
       "name": "bsc-core",
       "dir": "components/core",
       "synopsis": "Bluespec Compiler: shared core (syntax trees, utilities, Flags)",
@@ -159,7 +199,6 @@
         "ErrorUtil",
         "Eval",
         "Exceptions",
-        "FSTRead",
         "FStringCompat",
         "FileIOUtil",
         "FileNameUtil",
@@ -174,7 +213,6 @@
         "GraphPaths",
         "GraphUtil",
         "GraphWrapper",
-        "HTcl",
         "IOMutVar",
         "IOUtil",
         "IPrims",
@@ -223,42 +261,25 @@
         "SystemCheck",
         "SystemVerilogKeywords",
         "SystemVerilogTokens",
-        "TclUtils",
         "TopUtils",
         "Type",
         "TypeOps",
         "Undefined",
         "Unify",
         "Util",
-        "VCD",
         "VFileName",
         "VModInfo",
         "Verilog",
         "Version",
         "Warmup",
-        "WaveCheck",
         "Wires"
       ],
       "extras": {
-        "extra-libraries": [
-          "z"
-        ],
         "extra-libraries-osx": [
           "c++"
         ],
         "extra-libraries-other": [
           "stdc++"
-        ],
-        "c-sources": [
-          "src/comp/fstscopes_hier.c",
-          "src/vendor/htcl/haskell.c",
-          "src/vendor/libfst/src/fastlz.c",
-          "src/vendor/libfst/src/fstapi.c",
-          "src/vendor/libfst/src/lz4.c"
-        ],
-        "include-dirs": [
-          "src/libfst_config",
-          "src/vendor/libfst/src"
         ]
       }
     },
@@ -411,7 +432,6 @@
         "TCheck",
         "TIMonad",
         "TypeAnalysis",
-        "TypeAnalysisTclUtil",
         "TypeCheck"
       ]
     },
@@ -503,7 +523,6 @@
         "bsc-aopt"
       ],
       "modules": [
-        "BluesimLoader",
         "LambdaCalc",
         "LambdaCalcUtil",
         "SAL",
@@ -520,6 +539,22 @@
         "StaleUtils",
         "SystemCWrapper",
         "VFileUtils"
+      ]
+    },
+    {
+      "name": "bsc-bluetcl",
+      "dir": "components/bluetcl",
+      "synopsis": "Bluespec Compiler: the bluetcl library: Tcl views of the compiler's data (TclUtils, TypeAnalysisTclUtil) and the Bluesim model loader; the glue the bluetcl executable is built from",
+      "depends": [
+        "bsc-core",
+        "htcl",
+        "bsc-typecheck",
+        "bsc-bluesim"
+      ],
+      "modules": [
+        "BluesimLoader",
+        "TclUtils",
+        "TypeAnalysisTclUtil"
       ]
     }
   ]
