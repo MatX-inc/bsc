@@ -8,6 +8,7 @@ module ADumpScheduleInfo(
                          RuleConflictType(..)
                         ) where
 
+import Warmup ()
 import ASyntax(AId, AExpr)
 
 -- -------------------------

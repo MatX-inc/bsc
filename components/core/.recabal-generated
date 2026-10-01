@@ -1,6 +1,5 @@
 # Written by util/recabal/gen.py.  Every path below, relative to this
 # directory, was generated and is removed when the manifest drops it.
-ACheck.hs
 ADumpScheduleInfo.hs
 AExpr2STP.hs
 AExpr2Util.hs

@@ -5,13 +5,13 @@ packages:
   .
   components/setup
   components/core
+  components/aopt
   components/bo
   components/ba
   components/parse
   components/typecheck
   components/elab
   components/schedule
-  components/aopt
   components/verilog
   components/bluesim
 
