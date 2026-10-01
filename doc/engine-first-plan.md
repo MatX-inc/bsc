@@ -313,13 +313,21 @@ Findings:
   one process; the engine compiles each package in its own process, as
   make itself does for Base1 and Base2 (which match byte for byte). The
   32 Base3 files differ only in typeclass-dictionary names (`_tcdictN`)
-  and the hashes over them: the typechecker monad's unique supply
-  (TIMonad.hs:446) is not reset between the packages one process
-  compiles, nor between the top-level definitions of one package.
-  Per-package compilation is the deterministic choice and the one the
-  engine uses; definition-local dictionary naming is the typechecker
-  change that would make a .bo's bytes for one definition independent of
-  its neighbours (content cutoff needs it).
+  and the hashes over them. The names are positional: `newDict` and
+  `newVar` draw from the typechecker's per-package counter `tsNextTyVar`
+  (TIMonad.hs; reset to 1000 by `runTI`), which type variables,
+  temporaries and dictionaries share, so a dictionary's name is the
+  number of fresh things minted before it in that package's typecheck.
+  Under `-u` the package is typechecked against in-memory imports rather
+  than their .bo files and the consumption differs, non-uniformly (CBus's
+  23 names shift by 0 to 13, SquareRoot's by -3000 to +1894,
+  ModuleContext's not at all), so .bo bytes depend on how the package was
+  reached. Per-package compilation is the deterministic choice and the
+  one the engine uses; naming dictionaries from the definition they
+  belong to (and their position within it) instead of a package-wide
+  counter is the typechecker change that would make a .bo's bytes for one
+  definition independent of its neighbours and of batching (content
+  cutoff and an in-process worker both need it).
 - **A selective compiler key works at P1.** `--compiler-key closure` keys
   the library actions on the object files of the .bo producer's closure
   (bsc-core, bsc-stp, bsc-yices, bsc-sat, bsc-bo, bsc-ba, bsc-parse,

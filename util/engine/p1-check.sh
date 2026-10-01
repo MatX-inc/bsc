@@ -72,7 +72,7 @@ if [ -f "$OUT/oracle-vs-engine.diff" ]; then
   while read -r f; do p=${f%.*}; if ls src/Libraries/Base1/"$p".bs* src/Libraries/Base2/"$p".bs* >/dev/null 2>&1; then b12=$((b12+1)); else b3=$((b3+1)); fi; done < "$OUT/oracle-vs-engine.diff"
 fi
 [ "$b12" -eq 0 ] && ok "Base1/Base2 outputs identical to make's per-file compiles" || bad "$b12 Base1/Base2 outputs differ from make"
-echo "note  $b3 Base3 outputs differ from make's -u batch compile (expected until the typechecker's unique supply is reset per package)"
+echo "note  $b3 Base3 outputs differ from make's -u batch compile (expected until dictionary names are definition-local (plan, P1 record))"
 echo "== 5. second run does nothing"
 run noop -j 1 --prefix "$OUT/inst1" --shake-dir "$OUT/shake1" || bad "no-op run failed"
 [ "$(grep -c -E '^cd .*; .*/bsc(deps)? ' "$OUT/noop.log")" -eq 0 ] && ok "no compiler or discovery invocations on an unchanged tree" || bad "unchanged tree ran the compiler"

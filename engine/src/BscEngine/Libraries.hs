@@ -41,7 +41,7 @@ module BscEngine.Libraries
 import Warmup ()
 
 import Control.Monad (forM, forM_, unless, when)
-import Data.List (isPrefixOf, sort, sortOn)
+import Data.List (intercalate, isPrefixOf, sort, sortOn)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Development.Shake
@@ -279,31 +279,42 @@ rules env = do
         dir = libs </> name
     -- bsc and bscdeps require the -bdir directory to exist
     liftIO (createDirectoryIfMissing True buildDir)
-    -- the earlier directories' outputs are what -u resolves imports to
+    -- The earlier directories' plans are needed for the unique-producer
+    -- check only. Discovery resolves a cross-directory import through the
+    -- earlier directories' SOURCES (they follow "." on the search path), so
+    -- it needs none of their outputs and every directory's discovery can run
+    -- at once; the compile actions keep -p . and depend on the imports' .bo.
     earlierPlans <- forM (earlier name) $ \e -> do
       pl <- askOracle (Discover (ldName e))
       pure (e, pl)
-    need (concat [planOutputs env e pl | (e, pl) <- earlierPlans])
     compilerKey env (envBscDeps env)
     roots <- case ldRoots ld of
       EverySource -> do
         fs <- getDirectoryFiles dir ["*.bs", "*.bsv"]
         pure (sort fs)
       Root r -> pure [r]
-    results <- forM roots $ \root -> do
-      let flags = commonFlags env ++ ldFlags ld ++ concat [fl | (f, fl) <- ldFileFlags ld, f == root]
+    let discoveryPath = intercalate ":" ("." : [libs </> ldName e | e <- earlier name])
+        discoveryFlags = ["-stdlib-names", "-bdir", buildDir, "-p", discoveryPath, "-vsearch", buildDir] ++ envUserFlags env
+    results <- forP roots $ \root -> do
+      let flags = discoveryFlags ++ ldFlags ld ++ concat [fl | (f, fl) <- ldFileFlags ld, f == root]
       Stdout out <- command [Cwd dir, EchoStdout False] (envBscDeps env) (flags ++ [root])
       pure (root, out)
     -- negative dependencies: every candidate path that lost a resolution
     let probes = S.toList (S.fromList (concatMap (probesOf . snd) results))
     forM_ probes $ \p -> doesFileExist (if isAbsolute p then p else dir </> p)
-    -- the plan: the union over the roots; a package is one source file
-    let srcPkgs = M.elems (M.fromListWith merge [(pkgName p, p) | (_, out) <- results, Right ps <- [parseBscDeps out], p <- ps])
+    -- the plan: the union over the roots; a package is one source file.
+    -- A package whose source is in this directory is local (this directory
+    -- compiles it); one found in an earlier directory's sources, or as a
+    -- binary in the build directory, is external and must be produced by an
+    -- earlier directory.
+    let allPkgs = M.elems (M.fromListWith merge [(pkgName p, p) | (_, out) <- results, Right ps <- [parseBscDeps out], p <- ps])
         merge a b
           | pkgSrc a == pkgSrc b = a {pkgImports = nubSort (pkgImports a ++ pkgImports b)}
           | otherwise = error ("bsc-engine: " ++ name ++ ": package " ++ pkgName a ++ " resolved to both "
                                ++ pkgSrc a ++ " and " ++ pkgSrc b ++ " from different roots")
-        bins = nubSort (concatMap (binsOf . snd) results)
+        isLocal p = takeDirectory (pkgSrc p) == "."
+        srcPkgs = filter isLocal allPkgs
+        bins = nubSort (map pkgName (filter (not . isLocal) allPkgs) ++ concatMap (binsOf . snd) results)
     forM_ results $ \(root, out) -> case parseBscDeps out of
       Left err -> fail ("bsc-engine: bscdeps on " ++ dir </> root ++ ": " ++ err)
       Right _ -> pure ()
@@ -315,12 +326,12 @@ rules env = do
     unless (null clashes) $
       fail (unlines ("bsc-engine: a package is defined in two library directories (the shared build directory would have two producers for its .bo):"
                      : [ "  " ++ n ++ ": " ++ d ++ " and " ++ name | (n, d) <- clashes ]))
-    -- every binary resolution must be produced by an earlier directory
+    -- every external resolution must be produced by an earlier directory
     let producedEarlier = S.fromList (M.keys earlierSrc)
         orphans = [b | b <- bins, not (b `S.member` producedEarlier)]
     unless (null orphans) $
-      fail (unlines (("bsc-engine: " ++ name ++ " resolved these packages to binaries in " ++ buildDir
-                      ++ " that no earlier library directory produces (stale build directory?):")
+      fail (unlines (("bsc-engine: " ++ name ++ " imports these packages from outside its own directory"
+                      ++ " and no earlier library directory produces them (a stale .bo in " ++ buildDir ++ "?):")
                      : map ("  " ++) orphans))
     pure (Plan name (sortOn pkgName srcPkgs) bins)
 
@@ -410,7 +421,7 @@ rules env = do
       pl <- askPlan (ldName ld)
       liftIO $ do
         putStrLn (ldName ld ++ ": " ++ show (length (planSrc pl)) ++ " packages, "
-                  ++ show (length (planBin pl)) ++ " binaries imported")
+                  ++ show (length (planBin pl)) ++ " from earlier directories")
         forM_ (planSrc pl) $ \p ->
           putStrLn ("  " ++ pkgName p ++ " <- " ++ pkgSrc p
                     ++ (if null (pkgImports p) then "" else "  imports " ++ unwords (pkgImports p))
