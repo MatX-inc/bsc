@@ -100,7 +100,6 @@ import qualified Foreign.Concurrent as F
 
 import Control.Concurrent.MVar.Strict
 
-import ErrorUtil(internalError)
 import System.Posix.Env(getEnvDefault)
 --import Util(traceM)
 
@@ -735,3 +734,11 @@ deleteExprs = mapM_ deleteExpr
 
 setFlag :: Ptr SContext -> Char -> IO ()
 setFlag c f = vc_setFlag c (castCharToCChar f)
+
+-- | Report a misuse of the binding (an argument outside the solver's domain)
+-- or a status the solver should never return. The binding does not depend
+-- on the compiler, so this is 'error' rather than ErrorUtil.internalError;
+-- bsc's top level (Exceptions.bsCatch) prints an uncaught ErrorCall to
+-- stderr and exits 1.
+internalError :: String -> a
+internalError msg = errorWithoutStackTrace ("Internal error in the STP binding: " ++ msg)
