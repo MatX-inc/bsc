@@ -332,8 +332,14 @@ def render_cabal_project(m):
         f"package {m['setup']['name']}",
         "  optimization: 0",
         "",
+        "-- -fobject-determinism: parity with src/comp/Makefile (GHCOBJDET), which",
+        "-- adds it whenever GHC offers it (9.14+; every package here requires 9.14).",
+        "-- Without it two clean builds differ in object code while agreeing on every",
+        "-- interface: nondeterministic uniques, which also perturb inlining and",
+        "-- strictness decisions. program-options applies to every component of every",
+        "-- local package, executables and test suites included.",
         "program-options",
-        "  ghc-options: -j",
+        "  ghc-options: -j -fobject-determinism",
         "",
     ]
     return "\n".join(L)
