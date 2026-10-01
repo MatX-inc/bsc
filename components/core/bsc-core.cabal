@@ -5,7 +5,7 @@ cabal-version: 3.14
 -- file are symlinks into src/ (doc/recabalization-brief.md, 3.3).
 name: bsc-core
 version: 2026.1
-synopsis: Bluespec Compiler: shared core (syntax trees, utilities, Flags, solver bindings)
+synopsis: Bluespec Compiler: shared core (syntax trees, utilities, Flags)
 license: BSD-3-Clause
 build-type: Hooks
 tested-with: GHC == 9.14.1
@@ -68,9 +68,6 @@ library
     ../../src/vendor/libfst/src,
   exposed-modules:
     ADumpScheduleInfo
-    AExpr2STP
-    AExpr2Util
-    AExpr2Yices
     APrims
     AScheduleInfo
     ASyntax
@@ -161,10 +158,7 @@ library
     ProofObligation
     RSchedule
     RealUtil
-    SAT
     SCC
-    STP
-    STPFFI
     SchedInfo
     Scheme
     SignalNaming
@@ -191,5 +185,3 @@ library
     Warmup
     WaveCheck
     Wires
-    Yices
-    YicesFFI
