@@ -516,6 +516,71 @@ misbehaves, fall back to `jobs: 1` with `-j` per package.
   names the fingerprints of the packages that implement it, so the finer
   the carve, the smaller the rebuild and the re-run.
 
+## Revision 2.2 (2026-10-01, the solver carve)
+
+- Ravi's decision: carve the solvers out, because the solver set is going
+  to be extended or replaced. Three packages (Appendix A): bsc-stp and
+  bsc-yices hold the raw bindings (STP, STPFFI; Yices, YicesFFI) and
+  depend on no bsc package; bsc-sat holds the translations of ASyntax
+  expressions and CType predicates to the solvers (AExpr2STP, AExpr2Yices,
+  AExpr2Util, Pred2STP, Pred2Yices, SATPred) and the SAT facade, and
+  depends on core, stp and yices. bsc-core goes from 126 to 118 modules
+  and bsc-typecheck from 32 to 29; typecheck, aopt and schedule depend on
+  bsc-sat; no backend does. The solver layer was a leaf slice of core:
+  nothing else in core imported it, so no other module list changed.
+- The bindings imported ErrorUtil for internalError, their only import
+  from the compiler. Each now defines its own over errorWithoutStackTrace
+  (092d9355). The difference is the banner: ErrorUtil.internalError prints
+  the "Internal Bluespec Compiler Error" text with the version and throws
+  ExitFailure 1 from unsafePerformIO; the local one throws ErrorCall. Both
+  front ends handle both at the top level the same way (Exceptions.bsCatch
+  prints the message and exits 1; HTcl.htclErrorCatcher turns either into
+  a Tcl error) and no handler between the solver layer and the top catches
+  one and not the other, so an internal error inside a binding still ends
+  the run with exit 1, with a shorter message.
+- The solver configure hook moved with the bindings (1d53ca52): it ran on
+  bsc-core's main library and built and linked both vendored solvers; it
+  runs on the main library of each binding package, keyed by package name
+  through a table, and builds and links that solver only. The ld-options
+  and extra-libraries registered with a leaf package reach every library
+  and executable above it through the package database: the facade's bsc
+  carries NEEDED libstp.so.1 and libyices.so.2.6 and both rpaths, and
+  bsc-core's InstalledPackageInfo no longer mentions a solver. The two
+  vendor makes can now run concurrently under cabal -j; they install
+  different files into the shared solver-prefix/lib/SAT and `install -d`
+  of the common directory is idempotent.
+- What this buys for fingerprints: a core edit no longer re-runs the
+  vendor solver build at configure time, and a solver bump re-keys the
+  binding package and its consumers (sat, typecheck, aopt, schedule, and
+  what is above them), not core. DisjointTest, AProofs and AOpt results
+  depend on solver behaviour; the solver identity is now a distinct input
+  to F(bsc-schedule) and F(bsc-aopt) rather than something folded into
+  F(bsc-core).
+- Where it still leaks: the solver choice is the SATFlag type in Flags
+  (SAT_Yices, SAT_STP) with satBackend and useProvisoSAT. Adding a solver
+  adds a constructor there, a core edit, until the Flags re-architecture
+  (section 4) gives bsc-sat its own curated flag type. This is the first
+  concrete instance of the per-component flags argument.
+- Gates on 1d53ca52 (plus the two doc commits): G1 cabal build all,
+  incremental after the partition change, 2:18 wall / 388 s CPU, 99
+  modules recompiled, no errors; verify --strict clean (2176 edges inside
+  the DAG, 79 roots all importing Warmup); the make build of the same tree
+  compiles the edited bindings (incremental make install-src 0:58); G2
+  layout identical to the B0 oracle (131 files) and, against this tree's
+  own make-built bsc at the same source state, 131/131 byte-identical
+  libraries, the first time the cabal-built and make-built compilers were
+  compared at one source state and agreed on every .bo and .ba; G3
+  unchanged (same 78 names, same 34 unlisted probes); G5 smoke PASS (1:36,
+  72 expected passes in this run's DejaGNU summary, 218 timed steps) and
+  utils PASS (0:33, 113 expected passes, 186 steps); G1'' PASS: parallel A (240 s) = parallel B (250 s) = serial C (549 s) = parallel A2 = the build after a marker edit per component and revert (26 s each), 1176 files hashed each time; 23:19 for the five builds.
+- Appendix D inventories what is left in bsc-core by cluster, with each
+  cluster's consumers and what carving it out would remove from core, as
+  the input to the next carve decisions. The two with no compiler
+  consumers are the waveform tools (D15, which carry the libfst C sources
+  and zlib) and the command-line decoder (FlagsDecode in D5); the Tcl
+  layer (D14) carries the Tcl link hook; the IR layers (D7+D8, D9, D10)
+  are the large split and are strictly layered.
+
 ## Appendix A. Partition, Revision 2.2 (B0 @ 9306c345), generated from util/recabal/manifest.json by `gen.py appendix`
 
 | component | modules | depends on | import edges into each dependency |
@@ -622,3 +687,33 @@ Placements decided by driver call sites or by their own imports rather than by n
 14. Sequencing. ACCEPTED as the default (D8), Ravi's to override.
 15. Evidence ledger. ACCEPTED. Facts carry labels; toys are checked in;
     raw logs of 2026-09-30 were lost to a reboot and F8 stays [reported].
+
+## Appendix D. What is left in bsc-core (Revision 2.2), by cluster
+
+118 modules, 50,405 lines (generated Warmup counted at 718). Levels are
+the longest import chain inside core (0 = imports nothing in core); the
+import DAG inside core is strictly layered base < CSyntax and types <
+ISyntax < ASyntax, with the interface and annotation types (Pragma,
+SchedInfo, VModInfo, Prim, Wires, DefProp) sitting at the lowest layer
+that needs them. "Consumers" are the components (and executables)
+importing a cluster's modules directly; counts are modules per consumer
+in Appendix A's sense.
+
+| cluster | modules | lines | consumers outside core | what carving it out would remove from core |
+| --- | --- | --- | --- | --- |
+| D1 build identity | BuildSystem, BuildVersion, Version, Warmup (generated) | 779 | ba, bsim, parse, sched; bsc, fstcheck, showrules, vcdcheck | nothing; stays with whatever owns ErrorUtil |
+| D2 base utilities | Bag, Balanced, Sort, SCC, ListMap, ListUtil, DynamicMap, CondTree, Log2, IntegerUtil, RealUtil, Util, IOUtil, IOMutVar, MVarStrict, SpeedyString, FStringCompat, GlobPattern, Exceptions, SystemCheck, FileNameUtil, FileIOUtil, Eval, Changed, EquivalenceClass, Intervals, ErrorUtil | 3,432 | every component | a bsc-base beneath everything; FileIOUtil and SystemCheck import Error, so Error's position decides whether they belong here |
+| D3 diagnostics and printing | Pretty, GHCPretty, PPrint, PVPrint, PFPrint, Classic, Position, Error, ErrorMonad | 6,405 | every component | Error (4,740 lines, the whole message catalogue) imports Flags, Position and Classic; it is the module most edited for user-facing reasons and every component depends on it, so a message change re-keys everything until Error is split into the type and the catalogue |
+| D4 identifiers and names | Id, IdPrint, Fixity, PreStrings, PreIds, Literal, IntLit | 2,537 | every component | with D2 and D3, the base layer; IdPrint imports Lex (keyword tests), the one upward edge |
+| D5 Flags | Flags, Backend, FlagsDecode | 2,673 | Flags: every component; FlagsDecode: bsc, bluetcl, bscdeps, bsv2bsc only | FlagsDecode (2,257 lines, the command line) is driver code no library imports; Flags itself is the re-architecture of section 4 |
+| D6 lexing tables | Lex, SystemVerilogKeywords, SystemVerilogTokens, ParseOp | 1,939 | parse (Lex 4, tokens 3, keywords 2); bsc2bsv; ParseOp: bsc only | Lex is imported by CSyntax, CVPrint and IdPrint, so it stays below the C layer; ParseOp (operator fixity resolution) is driver code |
+| D7 source AST (CSyntax) | CSyntax, CSyntaxTypes, CSyntaxUtil, CFreeVars, CSubst, CVPrint, GenWrapUtils, Pragma, SchedInfo, Undefined, ConTagInfo | 5,649 | parse 7, tc 20, bo 2, elab 2, ba 1, sched 1; bsc, bsc2bsv, bluetcl | a bsc-csyntax package: the .bo payload's type (with D8) |
+| D8 types and inference substrate | CType, Type, TypeOps, Pred, Subst, Unify, Scheme, Assump, SymTab, StdPrel | 4,076 | tc 22 (CType) to 3 (Unify); elab (SymTab, CType); sat (CType, Pred, Type); parse (CType, Type); ba (CType) | belongs with D7 (Pred imports CSyntax and CVPrint; IType and ISyntaxUtil import StdPrel) |
+| D9 internal IR (ISyntax) | IType, ISyntax, ISyntaxUtil, ISyntaxSubst, ISyntaxXRef, IPrims, IStateLoc, InstNodes, BExpr, DefProp, Wires, Prim | 6,630 | elab 12, tc 5, bo 2, sched 2; Prim: aopt, bsim, sat, vlog too | a bsc-isyntax package above D7/D8: the elaborator's input and the .bo payload's values |
+| D10 ASyntax and schedule results | ASyntax, ASyntaxUtil, APrims, AUses, RSchedule, AScheduleInfo, ADumpScheduleInfo, ProofObligation, Params, SignalNaming, BackendNamingConventions | 5,985 | sched 14, bsim 15, vlog 12, sat 4, ba 3, aopt 3, elab 1 | a bsc-asyntax package above D9: the .ba payload's type; AUses and RSchedule are the algorithms that move to bsc-schedule once the schedule types are separated (Codex finding 10) |
+| D11 interface and foreign descriptors | VModInfo, ForeignFunctions, BinData | 3,011 | VModInfo: every component but bo; ForeignFunctions: ba 4, vlog 4, bsim 3, elab, tc; BinData: bo, ba | BinData (the Bin class and the instances for C and I types) is the codec substrate the two codecs share; ForeignFunctions imports both target ASTs (D12) |
+| D12 target ASTs | Verilog, VFileName, CCSyntax | 2,591 | Verilog: vlog 7, ba (GenABin), elab (IExpandUtils), tc (PragmaCheck), FlagsDecode, ForeignFunctions; CCSyntax: bsim 4, vlog 2 (DPIWrappers, VPIWrappers), ForeignFunctions | Verilog cannot go to bsc-verilog while GenABin, IExpandUtils and PragmaCheck import it; CCSyntax cannot go to bsc-bluesim while the Verilog DPI/VPI wrappers emit C through it |
+| D13 graph and boolean algorithms | GraphMap, GraphPaths, GraphUtil, GraphWrapper, DOT, BDD, BoolExp, BoolOpt | 1,544 | sched (all four graph modules, DOT), elab (BoolExp, BoolOpt, GraphWrapper), aopt (BoolExp), vlog, bsim, tc (GraphWrapper) | pure algorithms; would ride with D2 |
+| D14 Tcl | HTcl, TclUtils | 1,535 | bluetcl; TypeAnalysisTclUtil (tc); BluesimLoader (bsim) | the Tcl link hook and src/vendor/htcl/haskell.c leave core; TypeAnalysisTclUtil and BluesimLoader are bluetcl-side code that would move with it |
+| D15 waveforms | VCD, WaveCheck, FSTRead | 1,252 | none in the compiler; showrules, vcdcheck, fstcheck (and fstscopes through the C) | the libfst C sources (fastlz, fstapi, lz4), fstscopes_hier.c, the libfst include dirs and zlib leave core; the cheapest carve, zero compiler consumers |
+| D16 driver utilities | TopUtils | 367 | ba, bsim, parse, sat, sched, vlog; bsc, bscdeps, bluetcl, fstcheck, showrules, vcdcheck | imports ASyntax, ISyntax, CVPrint and the tokens: a grab bag of driver helpers that each component would need to stop importing before it could move |
