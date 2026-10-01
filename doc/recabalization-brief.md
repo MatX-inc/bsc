@@ -440,8 +440,20 @@ misbehaves, fall back to `jobs: 1` with `-j` per package.
   parse depends on the .ba codec (isStaleABinFile); the pre- and
   post-schedule ASyntax passes split along the same line when the artifact
   does.
-- Gates after G1 (G2, G3, G5, then G1'') are reported in the gate report,
-  not here.
+- G1'' found a pre-existing parity gap, not a property of the carve: two
+  clean parallel builds differed in 297 object files and every executable
+  while every .hi was identical. src/comp/Makefile has passed
+  -fobject-determinism since GHC 9.14 added it (its comment: nondeterministic
+  uniques also perturb inlining and strictness, so builds differ in the
+  performance of the bsc they produce); the B0 bsc.cabal never did, so the
+  cabal build at B0 was never object-deterministic. The generated project
+  file now passes the flag to every component (80d01b45). With it, G1''
+  passes: parallel A = parallel B = serial C = parallel A2 = the build after
+  a marker edit and revert, 1152 files each. Warmup is therefore necessary
+  for the interface-load order and -fobject-determinism for the object
+  code; the gate measures the two together.
+- Gates after G1 (G2, G3, G5, G1'') are reported in the gate report, not
+  here.
 
 ## Appendix A. Partition, Revision 2.1 (B0 @ 9306c345), generated from util/recabal/manifest.json
 
