@@ -40,12 +40,16 @@ import Distribution.ModuleName (ModuleName)
 import Distribution.Package (mkPackageName, pkgName)
 import Distribution.Pretty (prettyShow)
 import Distribution.Simple.Compiler (compilerFlavor, compilerVersion)
+import Distribution.Simple.Configure (getInstalledPackages)
 import Distribution.Simple.LocalBuildInfo
   ( hostPlatform,
-    installedPkgs,
     interpretSymbolicPathLBI,
     localPkgDescr,
+    mbWorkDirLBI,
+    withPackageDB,
+    withPrograms,
   )
+import qualified Distribution.Simple.LocalBuildInfo as LBI
 import Distribution.Simple.PackageIndex (lookupUnitId)
 import Distribution.Simple.Setup (fromFlagOrDefault)
 import Distribution.Simple.SetupHooks
@@ -185,8 +189,8 @@ wantsWarmup _ = False
 -- interface-load order; see GHC.Core.Rules, Note [Overall plumbing for
 -- rules]). Every component root imports it (brief, 3.4), so the barrier
 -- holds for the whole unit. The module is generated against this build's
--- compiler and this build's resolved dependencies, read from Cabal's
--- installed package index, not from the Makefile's package list.
+-- compiler and this build's resolved dependencies, read from the package
+-- databases at build time, not from the Makefile's package list.
 --
 -- Only the DIRECT dependencies are used: the transitive closure would name
 -- modules of packages GHC is not given, which it refuses as hidden. In-place
@@ -223,12 +227,32 @@ warmupSetupHooks = noSetupHooks {configureHooks, buildHooks}
           clbi = env.targetInfo.targetCLBI
           verbosity = buildingWhatVerbosity env.buildingWhat
       when (wantsWarmup (targetComponent env.targetInfo)) $ do
+        -- The package databases are read here, at build time, not taken from
+        -- the configure-time snapshot in installedPkgs lbi. cabal-install does
+        -- not reconfigure a package when a dependency's exposed-modules
+        -- change (an in-place unit id such as bsc-core-2026.1-inplace is
+        -- stable), so the snapshot goes stale as soon as modules move between
+        -- packages, and a Warmup generated from it imports modules its
+        -- dependency no longer exposes. This computation re-runs on every
+        -- build, after the dependencies were registered, so the index is
+        -- current; and because the module list is an argument of the rule's
+        -- command, Cabal re-runs the rule when the list changes. This is the
+        -- body of Cabal's getInstalledPackagesById, with die' for its
+        -- exception.
+        index <-
+          liftIO $
+            getInstalledPackages
+              verbosity
+              (LBI.compiler lbi)
+              (mbWorkDirLBI lbi)
+              (withPackageDB lbi)
+              (withPrograms lbi)
         -- The index holds the external packages and every in-place library
         -- built before this component, which Cabal's build order guarantees
         -- for the dependencies; a dependency missing from it would make an
         -- incomplete Warmup, so it is an error rather than a gap.
         direct <- liftIO . forM (componentPackageDeps clbi) $ \(unit, _) ->
-          case lookupUnitId (installedPkgs lbi) unit of
+          case lookupUnitId index unit of
             Just ipi -> pure ipi
             Nothing ->
               die' verbosity $
