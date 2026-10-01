@@ -314,20 +314,30 @@ Findings:
   make itself does for Base1 and Base2 (which match byte for byte). The
   32 Base3 files differ only in typeclass-dictionary names (`_tcdictN`)
   and the hashes over them. The names are positional: `newDict` and
-  `newVar` draw from the typechecker's per-package counter `tsNextTyVar`
-  (TIMonad.hs; reset to 1000 by `runTI`), which type variables,
-  temporaries and dictionaries share, so a dictionary's name is the
-  number of fresh things minted before it in that package's typecheck.
-  Under `-u` the package is typechecked against in-memory imports rather
-  than their .bo files and the consumption differs, non-uniformly (CBus's
-  23 names shift by 0 to 13, SquareRoot's by -3000 to +1894,
-  ModuleContext's not at all), so .bo bytes depend on how the package was
-  reached. Per-package compilation is the deterministic choice and the
-  one the engine uses; naming dictionaries from the definition they
-  belong to (and their position within it) instead of a package-wide
-  counter is the typechecker change that would make a .bo's bytes for one
-  definition independent of its neighbours and of batching (content
-  cutoff and an in-process worker both need it).
+  `newVar` draw from the typechecker's counter `tsNextTyVar`, which `runTI`
+  resets to 1000 for every top-level definition (TypeCheck.hs typechecks
+  each definition in its own `runTI`), so a dictionary's name is the
+  number of fresh things minted before it within that definition. What
+  differs between a `-u` batch and a one-shot compile is process history:
+  `SpeedyString` orders interned strings by intern id, `Id`'s `Ord` follows
+  it, and context reduction iterates Id-keyed maps, so the order in which
+  strings were first seen by the process decides how many fresh variables
+  a definition mints. An experiment that ordered `SString` by content made
+  the batched and one-shot CBus.bo byte-identical and left the ten
+  name-bearing testsuite dumps unchanged (only two bluetcl `depend`
+  listings changed order), confirming the mechanism; it is not the fix
+  (Ravi: intern-id ordering stays for speed; the leak is closed where
+  intern order reaches an output, by ordering by name at those
+  iteration sites). A second, independent leak: the batched
+  ModuleCollect.bo carries a source position from LBus.bsv, which it never
+  imports, because Depend parses the whole closure first and hash-consed
+  CType nodes keep the position of whichever file created them; CType.hs
+  names the remedy (a per-session reset of ccState, ctRnfSeen,
+  GroundCType's tables and every memo keyed on names or intern ids).
+  Per-package compilation is the deterministic choice and the one the
+  engine uses; the two leak closures are what make `-u` output, and an
+  in-process worker's output, equal to one-shot output, measured by the
+  parity gate (131 of 131 against make's `-u` build) and the testsuite.
 - **A selective compiler key works at P1.** `--compiler-key closure` keys
   the library actions on the object files of the .bo producer's closure
   (bsc-core, bsc-stp, bsc-yices, bsc-sat, bsc-bo, bsc-ba, bsc-parse,
@@ -352,8 +362,9 @@ makedepend; discovery replaces them), and anything about designs or
 Follow-ups P1 surfaced, in the plan's terms: atomic publication of .bo
 outputs (bsc writes them in place; the engine must stage and rename:
 requirement 2); bloogle's output off the install prefix until install;
-BuildVersion out of the closure key (P3); definition-local dictionary
-naming (cutoff); the .bo import hash chain hashes the import's bytes, so
+BuildVersion out of the closure key (P3); closing the intern-order
+leaks (iteration sites, per-session memo reset) so batched and one-shot
+.bo bytes agree, the worker's prerequisite; the .bo import hash chain hashes the import's bytes, so
 any byte change in an import re-keys every dependent under a content-keyed
 system, while cross-package inlining (ISimplify) means the right boundary
 is the exported interface plus the unfoldings exposed for inlining, not
