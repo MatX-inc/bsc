@@ -20,6 +20,7 @@ packages:
   components/verilog
   components/bluesim
   components/bluetcl
+  engine
 
 -- Parity with the make build (src/comp/Makefile GHCOPTLEVEL = -O2), for every
 -- package of the project.
