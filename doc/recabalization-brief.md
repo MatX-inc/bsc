@@ -473,8 +473,13 @@ misbehaves, fall back to `jobs: 1` with `-j` per package.
   STP/Yices binding" prefix. The behaviour delta is confined to binding
   misuse, a compiler bug by construction: ErrorUtil.internalError printed
   the "Internal Bluespec Compiler Error" banner with the version and exited
-  1 from inside the thunk; the binding now throws ErrorCall, which bsc's
-  top-level handler (Exceptions.bsCatch) prints and exits 1 on. REVIEW-PENDING
+  1 from inside the thunk; the binding now throws ErrorCall. Both front
+  ends treat the two alike at the top level (Exceptions.bsCatch in bsc and
+  showrules prints the message and exits 1; HTcl.htclErrorCatcher turns
+  either into a Tcl error) and no handler between the solver layer and the
+  top catches one and not the other (SAT.hs catches SomeException around
+  the Yices version probe only), so an internal error inside a binding
+  still ends the run with exit 1, with a shorter message.
 - Hooks: the vendored solver build and link configuration moved from
   bsc-core's main library to the main library of each binding package,
   keyed by package name through a table (data Solver in BscSetupHooks.hs).
@@ -496,12 +501,28 @@ misbehaves, fall back to `jobs: 1` with `-j` per package.
   inputs instead of the solver being folded into F(bsc-core). A core edit
   no longer re-runs the vendored solver build at configure time, and a
   solver bump rebuilds the binding, bsc-sat and their dependents, not core.
-- Gates on the carve: G1 (incremental from the Revision 2.1 tree) 2:18
-  wall, no fixes; verify --strict: 13 components, 2176 import edges inside
-  the DAG, 79 component roots all importing Warmup; G2 inventory identical
-  (131 files), content against the B0 oracle as before (embedded paths and
-  version strings); G3 unchanged (78 paths named, the same 34 unlisted
-  probes); G5 smoke PASS, utils PASS. G1PP-PENDING
+- Gates on the carve (1d53ca52): G1 (incremental from the Revision 2.1
+  tree) 2:18 wall / 388 s CPU, 99 modules recompiled, no fixes; verify
+  --strict: 13 components, 2176 import edges inside the DAG, 79 component
+  roots all importing Warmup; the make build of the same tree compiles the
+  edited bindings (incremental make install-src, 0:58); G2 inventory
+  identical to the B0 oracle (131 files), content against the oracle as
+  before (embedded paths and version strings), and against this tree's own
+  make-built bsc at the same source state 131 of 131 libraries
+  byte-identical, the first time the cabal-built and make-built compilers
+  were compared at one source state and agreed on every .bo and .ba; G3
+  unchanged (78 paths named, the same 34 unlisted probes); G5 smoke PASS
+  (1:36) and utils PASS (0:33); G1'' PASS: parallel A (240 s) = parallel B
+  (250 s) = serial C (549 s) = parallel A2 = the build after a marker edit
+  per component and revert (26 s each), 1176 files hashed each time, 23:19
+  for the five builds.
+- Appendix D inventories what is left in bsc-core by cluster, with each
+  cluster's consumers and what carving it out would remove from core, as
+  the input to the next carve decisions. The two with no compiler
+  consumers are the waveform tools (D15, which carry the libfst C sources
+  and zlib) and the command-line decoder (FlagsDecode in D5); the Tcl
+  layer (D14) carries the Tcl link hook; the IR layers (D7+D8, D9, D10)
+  are the large split and are strictly layered.
 - How the carve-up proceeds from here: each carve is one short series that
   builds at every commit. A source series first, only if the move needs
   one (here, the bindings' error reporter; earlier, the AState re-exports
@@ -515,71 +536,6 @@ misbehaves, fall back to `jobs: 1` with `-j` per package.
   sources plus its dependencies' fingerprints, and an action's identity
   names the fingerprints of the packages that implement it, so the finer
   the carve, the smaller the rebuild and the re-run.
-
-## Revision 2.2 (2026-10-01, the solver carve)
-
-- Ravi's decision: carve the solvers out, because the solver set is going
-  to be extended or replaced. Three packages (Appendix A): bsc-stp and
-  bsc-yices hold the raw bindings (STP, STPFFI; Yices, YicesFFI) and
-  depend on no bsc package; bsc-sat holds the translations of ASyntax
-  expressions and CType predicates to the solvers (AExpr2STP, AExpr2Yices,
-  AExpr2Util, Pred2STP, Pred2Yices, SATPred) and the SAT facade, and
-  depends on core, stp and yices. bsc-core goes from 126 to 118 modules
-  and bsc-typecheck from 32 to 29; typecheck, aopt and schedule depend on
-  bsc-sat; no backend does. The solver layer was a leaf slice of core:
-  nothing else in core imported it, so no other module list changed.
-- The bindings imported ErrorUtil for internalError, their only import
-  from the compiler. Each now defines its own over errorWithoutStackTrace
-  (092d9355). The difference is the banner: ErrorUtil.internalError prints
-  the "Internal Bluespec Compiler Error" text with the version and throws
-  ExitFailure 1 from unsafePerformIO; the local one throws ErrorCall. Both
-  front ends handle both at the top level the same way (Exceptions.bsCatch
-  prints the message and exits 1; HTcl.htclErrorCatcher turns either into
-  a Tcl error) and no handler between the solver layer and the top catches
-  one and not the other, so an internal error inside a binding still ends
-  the run with exit 1, with a shorter message.
-- The solver configure hook moved with the bindings (1d53ca52): it ran on
-  bsc-core's main library and built and linked both vendored solvers; it
-  runs on the main library of each binding package, keyed by package name
-  through a table, and builds and links that solver only. The ld-options
-  and extra-libraries registered with a leaf package reach every library
-  and executable above it through the package database: the facade's bsc
-  carries NEEDED libstp.so.1 and libyices.so.2.6 and both rpaths, and
-  bsc-core's InstalledPackageInfo no longer mentions a solver. The two
-  vendor makes can now run concurrently under cabal -j; they install
-  different files into the shared solver-prefix/lib/SAT and `install -d`
-  of the common directory is idempotent.
-- What this buys for fingerprints: a core edit no longer re-runs the
-  vendor solver build at configure time, and a solver bump re-keys the
-  binding package and its consumers (sat, typecheck, aopt, schedule, and
-  what is above them), not core. DisjointTest, AProofs and AOpt results
-  depend on solver behaviour; the solver identity is now a distinct input
-  to F(bsc-schedule) and F(bsc-aopt) rather than something folded into
-  F(bsc-core).
-- Where it still leaks: the solver choice is the SATFlag type in Flags
-  (SAT_Yices, SAT_STP) with satBackend and useProvisoSAT. Adding a solver
-  adds a constructor there, a core edit, until the Flags re-architecture
-  (section 4) gives bsc-sat its own curated flag type. This is the first
-  concrete instance of the per-component flags argument.
-- Gates on 1d53ca52 (plus the two doc commits): G1 cabal build all,
-  incremental after the partition change, 2:18 wall / 388 s CPU, 99
-  modules recompiled, no errors; verify --strict clean (2176 edges inside
-  the DAG, 79 roots all importing Warmup); the make build of the same tree
-  compiles the edited bindings (incremental make install-src 0:58); G2
-  layout identical to the B0 oracle (131 files) and, against this tree's
-  own make-built bsc at the same source state, 131/131 byte-identical
-  libraries, the first time the cabal-built and make-built compilers were
-  compared at one source state and agreed on every .bo and .ba; G3
-  unchanged (same 78 names, same 34 unlisted probes); G5 smoke PASS (1:36,
-  72 expected passes in this run's DejaGNU summary, 218 timed steps) and
-  utils PASS (0:33, 113 expected passes, 186 steps); G1'' PASS: parallel A (240 s) = parallel B (250 s) = serial C (549 s) = parallel A2 = the build after a marker edit per component and revert (26 s each), 1176 files hashed each time; 23:19 for the five builds.
-- Appendix D inventories what is left in bsc-core by cluster, with each
-  cluster's consumers and what carving it out would remove from core, as
-  the input to the next carve decisions. The two with no compiler
-  consumers are the waveform tools (D15, which carry the libfst C sources
-  and zlib) and the command-line decoder (FlagsDecode in D5); the Tcl
-  layer (D14) carries the Tcl link hook; the IR layers (D7+D8, D9, D10)
-  are the large split and are strictly layered.
 
 ## Appendix A. Partition, Revision 2.2 (B0 @ 9306c345), generated from util/recabal/manifest.json by `gen.py appendix`
 
