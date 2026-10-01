@@ -1,5 +1,6 @@
 module PoisonUtils where
 
+import Warmup ()
 -- utilities for generating and working with "poisoned" definitions
 
 import Id

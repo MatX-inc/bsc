@@ -47,6 +47,7 @@ module ParsecPrim
                    , ioToParser
                  ) where
 
+import Warmup ()
 import Prelude
 import Data.List
 import qualified Control.Applicative as App(Applicative(..), Alternative(..))

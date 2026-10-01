@@ -1,4 +1,5 @@
 module Simplify(simplify) where
+import Warmup ()
 import Data.List(partition, sortOn)
 import Util(mapSnd)
 import ListMap(lookupWithDefault)

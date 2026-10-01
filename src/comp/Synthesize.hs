@@ -1,5 +1,6 @@
 module Synthesize(aSynthesize) where
 
+import Warmup ()
 import Data.List(transpose, sort, sortBy, genericLength, nub)
 import Data.Ord(comparing)
 import Control.Monad(when, zipWithM, zipWithM_)

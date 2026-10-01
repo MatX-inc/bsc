@@ -1,6 +1,7 @@
 -- Simplify lifted dicts so they can be inlined by isimplify
 module ISimpDicts(iSimpDicts) where
 
+import Warmup ()
 import qualified Data.Map as M
 
 import ISyntax

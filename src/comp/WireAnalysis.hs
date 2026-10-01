@@ -27,6 +27,7 @@
 -- dict can index by VCD wire name and match whichever form appears.
 module WireAnalysis (getWireTypeMap) where
 
+import Warmup ()
 import Data.List(nub)
 import qualified Data.Map as M
 

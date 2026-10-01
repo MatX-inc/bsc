@@ -1,5 +1,6 @@
 module VFinalCleanup (finalCleanup) where
 
+import Warmup ()
 import Data.List(nub)
 import qualified Data.Map as M
 import qualified Data.Set as S

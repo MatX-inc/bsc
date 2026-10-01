@@ -1,4 +1,4 @@
-module AConv (aConv, aTypeConv, isLocalAId) where
+module AConv (aConv, aTypeConv) where
 
 import Util(itos, headOrErr, initOrErr, lastOrErr, log2, concatMapM, makePairs)
 import qualified Data.Map as M
@@ -51,10 +51,6 @@ import InstNodes(mkInstTree)
 
 aconvPref :: String
 aconvPref = "__d"
-
--- This is used by AExpand
-isLocalAId :: Id -> Bool
-isLocalAId i = isBadId i || isFromRHSId i
 
 -- =====
 

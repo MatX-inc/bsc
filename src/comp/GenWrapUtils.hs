@@ -29,6 +29,11 @@ addInternalProp lid = addIdProp lid IdPGeneratedIfc
 isGenId :: Id -> Bool
 isGenId i = hasIdProp i IdPGeneratedIfc
 
+-- naming convention for the module generated to wrap a noinline function
+-- (used by GenFuncWrap and, to predict the generated name, by Depend)
+makeGenFuncId :: Id -> Id
+makeGenFuncId i = mkIdPre (mkFString "module_") i
+
 
 -- ====================
 -- Field and module rename utilities

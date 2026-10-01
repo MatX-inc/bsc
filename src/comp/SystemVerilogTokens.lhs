@@ -6,6 +6,7 @@ Token types: representation passed from the scanner to the parser
 >                            SV_Numeric_Base(..), svNumericBaseValue,
 >                            svTokenToString) where
 
+> import Warmup ()
 > import Position
 > import Error(internalError, ErrMsg)
 > import SystemVerilogKeywords

@@ -1,5 +1,6 @@
 module Parser.Classic.Warnings(classicWarnings) where
 
+import Warmup ()
 import Control.Monad(when)
 import Control.Monad.Reader(ReaderT, runReaderT, ask, local)
 import Control.Monad.Writer(Writer, runWriter, tell, listen, censor)

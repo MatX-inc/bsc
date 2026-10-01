@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 module Main_bscdeps(main) where
 
+import Warmup ()
 -- The machine-readable dependency-discovery interface of delivery-plan
 -- phase P1 (doc/engine-first-plan.md): report the transitive package
 -- closure that `bsc -u` would walk -- post-preprocessing imports, with the

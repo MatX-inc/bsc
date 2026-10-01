@@ -9,6 +9,7 @@
 
 module BlueTcl where
 
+import Warmup ()
 
 import HTcl
 

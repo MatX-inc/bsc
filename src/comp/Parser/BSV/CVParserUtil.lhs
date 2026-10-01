@@ -1,5 +1,6 @@
 > module Parser.BSV.CVParserUtil where
 
+> import Warmup ()
 > import Parser.BSV.CVParserCommon
 
 parse multiple 'parser's.  each time, try parsing 'terminator' first; if

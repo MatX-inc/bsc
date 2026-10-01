@@ -1,5 +1,6 @@
 module VStableRenumber(stableRenumberVProgram) where
 
+import Warmup ()
 import Data.Char(isDigit, ord)
 import Data.List(foldl', dropWhileEnd)
 import Data.Maybe(listToMaybe, mapMaybe)

@@ -36,9 +36,8 @@ import PFPrint
 import VModInfo
 import ASyntax
 import ASyntaxUtil
-import ASchedule(AScheduleInfo(..), ExclusiveRulesDB(..), areRulesExclusive,
-                 MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..))
-import AUses(useDropCond)
+import AScheduleInfo(AScheduleInfo(..), ExclusiveRulesDB(..), areRulesExclusive)
+import AUses(MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..), useDropCond)
 import AVerilogUtil(vNameToTask)
 import RSchedule(RAT, ratToNestedLists)
 import Wires(WireProps(..))

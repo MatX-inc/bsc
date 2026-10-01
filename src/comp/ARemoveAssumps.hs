@@ -1,5 +1,6 @@
 module ARemoveAssumps(aRemoveAssumps) where
 
+import Warmup ()
 import ASyntax
 import ASyntaxUtil
 import ErrorUtil(internalError)

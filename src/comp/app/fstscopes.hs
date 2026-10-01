@@ -1,6 +1,7 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 module Main_fstscopes(main) where
 
+import Warmup ()
 -- Dump an FST waveform file's hierarchy -- scopes with their
 -- component (module type) names, and variables -- as stable text.
 -- This is used by the testsuite to check the hierarchy that Bluesim's

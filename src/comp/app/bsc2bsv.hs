@@ -1,5 +1,6 @@
 module Main_bsc2bsv(main) where
 
+import Warmup ()
 import System.Environment
 import qualified Control.Exception as CE
 
