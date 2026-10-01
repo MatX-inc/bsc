@@ -33,7 +33,7 @@ import qualified Data.Map as M
 
 -- Bluespec imports
 import Util(quote, concatMapM, concatUnzip3, lastOrErr, fromJustOrErr, fst3,
-            thd, readOrErr)
+            thd, readOrErr, stableOrdNub)
 import IOUtil(getEnvDef)
 
 import Util(mapFst, mapSnd)
@@ -1208,7 +1208,9 @@ tclModule ["porttypes",modname] = do
            (arginfo, ifcinfo) <- getModPortInfo apkg pps tifc
            let h_arg_types = concatMap dispPortsModArg arginfo
                h_ifc_types = concatMap dispPortsIfc ifcinfo
-           return $ TLst $ nub (h_arg_types ++ h_ifc_types)
+           -- dedup must not be quadratic: a module can have thousands
+           -- of ports, one entry each
+           return $ TLst $ stableOrdNub (h_arg_types ++ h_ifc_types)
 ------
 tclModule ["wiretypemap",modname] = do
   if (isPrimitiveModule modname)
@@ -1219,8 +1221,14 @@ tclModule ["wiretypemap",modname] = do
        Nothing -> return $ TLst []
        Just abmi -> do
            let apkg = abemi_apkg abmi
-               mkEntryObj (name, t) = TLst [TStr name, TStr (pfpString t)]
-           return $ TLst $ map mkEntryObj $ getWireTypeMap apkg
+               entries = getWireTypeMap apkg
+               -- render each distinct type once: a large module has many
+               -- wires but few distinct types, and pfpString would
+               -- otherwise dominate, re-run per entry
+               typeObjs = M.fromList [ (t, TStr (pfpString t))
+                                     | (_, t) <- entries ]
+               mkEntryObj (name, t) = TLst [TStr name, typeObjs M.! t]
+           return $ TLst $ map mkEntryObj entries
 ------
 tclModule ["flags",modname] = do
   if (isPrimitiveModule modname)
@@ -3577,9 +3585,10 @@ getModPortInfo apkg pps tifc = do
     let ifc' :: [AIFace]
         ifc' = apkg_interface apkg
         -- need to filter out ready methods that are always ready
+        -- (precomputed form: one query per interface field)
+        isARdy = mkIsAlwaysRdy pps
         notAlwaysRdy :: AIFace -> Bool
-        notAlwaysRdy aif = let mid = aif_name aif
-                           in not $ (isRdyId mid) && (isAlwaysRdy pps mid)
+        notAlwaysRdy aif = not (isARdy (aif_name aif))
         ifc = filter notAlwaysRdy ifc'
 
     -- interface hierarchy

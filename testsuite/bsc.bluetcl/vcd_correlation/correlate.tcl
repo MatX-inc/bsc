@@ -103,13 +103,24 @@ proc correlate { label vars dutScope typeDict } {
     return $hitCount
 }
 
+# One wiretypemap per module, however many scopes it appears at --
+# the map is keyed by module name, so instances share it.
+set typeDictCache [dict create]
+proc typeDictFor { modName } {
+    global typeDictCache
+    if { ![dict exists $typeDictCache $modName] } {
+        set typeDict [dict create]
+        foreach entry [module wiretypemap $modName] {
+            dict set typeDict [lindex $entry 0] [lindex $entry 1]
+        }
+        dict set typeDictCache $modName $typeDict
+    }
+    return [dict get $typeDictCache $modName]
+}
+
 set totalHits 0
 foreach { modName dutScope } $::env(MOD_AT_LIST) {
-    set tmap [module wiretypemap $modName]
-    set typeDict [dict create]
-    foreach entry $tmap {
-        dict set typeDict [lindex $entry 0] [lindex $entry 1]
-    }
+    set typeDict [typeDictFor $modName]
     puts "##### module: $modName  @  $dutScope #####"
     if { [llength $veriVars] > 0 } {
         incr totalHits [correlate "Verilog" $veriVars $dutScope $typeDict]
