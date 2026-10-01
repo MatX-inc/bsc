@@ -1,0 +1,13 @@
+cabal-version: 3.14
+name: toy-setup
+version: 0.1
+build-type: Simple
+library
+  exposed-modules: ToyHooks
+  build-depends: base, Cabal ^>=3.16, Cabal-hooks ^>=3.16, directory, filepath
+  default-language: GHC2021
+  hs-source-dirs: .
+  -- -O0: at -O1 the StaticPointers-based rules left floated closures
+  -- unresolved when linking the setup executable (undefined reference to
+  -- rfsB_closure); cause not yet diagnosed (brief, R2).
+  ghc-options: -O0

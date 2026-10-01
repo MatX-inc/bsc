@@ -1,605 +1,524 @@
-# bsc recabalization brief: packages, per-component Warmup, the fingerprint carve, and a Flags re-architecture
+# bsc recabalization brief, Revision 2: packages, per-component Warmup, the fingerprint carve, and a Flags re-architecture
 
-Revision 1, 2026-09-30. Base: MatX-inc/bsc release-devel-B0 @ 9306c345.
-Author: Claude (gate session on Ravi's PVM), from measurements and toy
-reproductions made today. Status: FOR ADVERSARIAL CRITIQUE before execution.
+Revision 2, 2026-10-01. Base: MatX-inc/bsc release-devel-B0 @ 9306c345.
+Author: Claude (gate session on Ravi's PVM). Supersedes Revision 1 plus
+Addendum 1 (2026-09-30, commits 9f4ceb5b and 96f13139), after Codex's
+adversarial review of 2026-09-30 (fifteen findings; the review text is in
+the KB draft "KB: REVIEW REQUEST — bsc recabalization + Flags
+re-architecture brief (B0)"; Appendix D answers each finding). Status:
+specification for the amended step-0 experiment Codex's verdict
+conditionally endorsed. Ravi's standing instructions for the experiment:
+GHC 9.14, bit-identical objects, and a Warmup that actually takes effect in
+every component; performance measurement is handled by Ravi separately and
+is not a gate here.
 
-## 0. What this is and what we want from the reviewer
+## 0. What changed since Revision 1
 
-The four-sublibrary carve of bsc.cabal (commit 6c282ad7, "bsc.cabal: carve
-the library into four sublibraries") was gated today and cannot build as
-designed, for two reasons that are properties of cabal-install and GHC, not
-typos. Fixing them changes the shape of the work: the compiler becomes a
-family of cabal packages, each with its own generated Warmup module, on
-disjoint source directories. Ravi's direction meanwhile moved the carve
-from "packaging that mirrors the plan's four producers" to "packaging whose
-units are the fingerprints we want to move independently", which is finer
-(nine components), and raised a Flags re-architecture that makes those
-fingerprints precise.
-
-This brief lays out the verified facts (section 1), the decisions already
-taken (section 2), the proposed step 0 (section 3), the Flags proposal
-(section 4), how fingerprints and identity relate to cabal units (section
-5), and the open risks (section 6). Section 7 is the execution plan.
-Appendix A is the exact module partition.
-
-Reviewer, please attack in particular:
-
-1. The claim that per-component Warmup restores the make build's
-   bit-deterministic output. The 6/6 validation in "KB: bsc toolchain" was
-   for one GHC --make over 252 modules. Nine GHC processes, each with a
-   Warmup covering its direct dependencies (in-place ones included), is a
-   different experiment. Is there a reason it would not hold, or a cheaper
-   arrangement that does?
-2. Packages versus sublibraries: is there any cabal-install mechanism we
-   missed that gives per-component builds to a Hooks package, or per-
-   component generated modules to a Simple package, without writing into
-   the source tree?
-3. The Flags re-architecture: the partition of 141 fields into per-
-   component records, the treatment of the 44 shared fields, and whether
-   the .ba should store anything but the backend's curated record.
-4. The DAG itself (Appendix A): the three one-line source moves and the
-   placements that differ from the module names' natural reading.
-5. Symlink farms versus directory moves for the disjoint source layout.
+- The partition is corrected from driver call sites, not import edges
+  alone: the .bo producer runs IConv, IConvLet, GroundCType, LiftDicts,
+  ISimpDicts and ISimplify before genBinFile, so they are bsc-typecheck;
+  aRenameIO, aDropDefs and aSynthesize are called only from the Verilog
+  path, so they are bsc-verilog; AOpt and AExpand are the ASyntax optimizer
+  both backends run (Bluesim through aOptAPackageLite, aExpandDynSel and
+  aInsertCaseDef), so they form bsc-aopt; ACheck, Params and ISyntaxCheck
+  are placed by their own imports (core, core, elab). Ten components plus
+  setup and facade. Zero edges outside the DAG (Appendix A).
+- Warmup gets a contract (section 3.4): one hidden module named Warmup per
+  package, generated from direct dependencies with the public compatibility
+  Warmup excluded, and an import edge from every component root, 66
+  one-line source additions the generator verifies. The facade package is
+  Hooks too, so the executables get the same treatment.
+- No hook writes into src/comp. The make build generates its own Warmup
+  and BuildVersion as it does today.
+- Package invalidation and action identity are kept apart (section 3.6).
+  The experiment makes no selective-reuse claim; cache keys stay
+  whole-execution until producer closures are audited.
+- Determinism is a gate with a definition (G1''), not an assertion.
+- Flags and the .ba envelope move off the critical path (sections 4 and 5)
+  and carry Codex's corrections: effective options are per action closure,
+  the Verilog link path's reuse check needs a descriptor, pragma timing is
+  observable, the codec takes neutral metadata.
+- Sequencing follows the plan of record: the experiment does not gate the
+  P1 and P2 library win.
+- Evidence is checked in (doc/recabalization-evidence) and labeled;
+  the scratch copies and raw logs of 2026-09-30 were lost to a reboot.
 
 ## 1. Verified facts
 
-F1. cabal-install builds a Hooks package as one unit and rejects
-sublibraries in it. Message at plan time, before any compilation:
+Labels: [source] independently checkable in the pinned tree or the pinned
+cabal/GHC sources; [toy] reproduced on this machine with the checked-in toy;
+[reported] measured here once, raw log lost.
 
-    Internal libraries only supported with per-component builds.
-    Per-component builds were disabled because build-type is Hooks
+F1 [source]. cabal-install 3.16.1.0 builds a Hooks package as one unit and
+rejects sublibraries in it: "Internal libraries only supported with
+per-component builds. Per-component builds were disabled because build-type
+is Hooks." ProjectPlanning.hs: "Custom and Hooks are not implemented"; the
+`per-component` project setting can only disable the mode. Consequence: no
+sublibrary carve of any granularity can live inside a Hooks package.
 
-Source (cabal-install 3.16.1.0, cabal-install/src/Distribution/Client/
-ProjectPlanning.hs): "Custom and Hooks are not implemented. Implementing
-per-component builds with Custom would require us to create a new
-'ElabSetup' type, and teach all of the code paths how to handle it." The
-Hooks case adds CuzHooksBuildType, and checkPerPackageOk dies on any
-sublibrary, private or public. The project setting `per-component` can only
-disable the mode. cabal master (fetched today) keeps the exclusion with a
-TODO pointing at haskell/cabal issue 9986, "Make Setup a separate
-component", open, last touched 2024-05-08. Consequence: no sublibrary carve
-of any granularity can live inside a Hooks package.
+F2 [source]. BuildSystem, BuildVersion and Warmup are imported by core leaf
+modules (Bag, Classic, Changed, EquivalenceClass, BDD, GraphPaths,
+Exceptions, Fixity, SEMonad, RealUtil, Log2, Version, STPFFI, YicesFFI) and
+by SimBlocksToC and the executables. Warmup must be a home module of the
+component it serves (F7); BuildSystem and BuildVersion are ordinary
+imports and could live anywhere below their importers.
 
-F2. The generated modules must stay with core. BuildSystem, BuildVersion
-and Warmup are imported by core leaf modules: Bag, Classic, Changed,
-EquivalenceClass, BDD, GraphPaths, Exceptions, Fixity, SEMonad, RealUtil,
-Log2, Version, and by SimBlocksToC, STPFFI, YicesFFI, app/bsc.hs and
-app/BlueTcl.hs. So the Hooks build type cannot be pushed below core into a
-tiny helper package (Warmup's whole point is being a home module of the
-component that imports it; see F7).
+F3 [toy, source]. GHC's finder resolves an unqualified import from the home
+unit's source path before it consults packages. Two sublibraries listing
+one shared directory each compiled a private copy of the module they
+imported from a dependency; -Wmissing-home-modules only warned; the
+executable failed with "Couldn't match expected type 'pkgb-0.1:b-y:M1.T'
+with actual type 'T' ... defined in package 'pkga-0.1'". Consequence: each
+component needs a disjoint source directory, and a cross-DAG import then
+fails with "Could not find module", which is the DAG check at build time.
+Toy: doc/recabalization-evidence/shadowtest.
 
-F3. Components cannot share hs-source-dirs. GHC's finder resolves an
-unqualified import from the home unit's source path before it consults
-packages. Reproduced with a toy (GHC 9.14.1, cabal-install 3.16.1.0): two
-sublibraries both listing a shared directory each compiled a private copy of
-the module they imported from a dependency; -Wmissing-home-modules only
-warned; the executable failed with
+F4 [source]. `hs-source-dirs: ../dir` is the `relative-path-outside`
+check warning at build time. Moot for the layout in 3.3, where no path
+leaves its package.
 
-    Couldn't match expected type 'pkgb-0.1:b-y:M1.T' with actual type 'T'
-      'pkgb-0.1:b-y:M1.T' is defined in 'M1' in package 'pkgb-0.1:b-y'
-      'T' is defined in 'M1' in package 'pkga-0.1'
+F5 [toy]. A dependency library's `ld-options` reach an executable in
+another package through the package database (RUNPATH observed on the
+toy's executable). Only bsc-core needs the solver rpath hook. Linux only;
+macOS and ghci/runghc loading are not covered by the toy.
 
-That is what would happen to Id, CSyntax and every core module inside each
-producer. With disjoint directories the same toy builds and runs, and a
-cross-DAG import fails with "Could not find module": GHC then enforces the
-component graph at build time. Consequence: the carve's "no source file
-moves" premise does not hold; every component needs a disjoint source
-directory (symlink farm generated from the manifest, or git mv).
+F6 [toy]. A Hooks package's `setup-depends` may name a local library in
+the same project, and a hook generates a per-package Warmup from Cabal's
+installed package index using the component's direct dependencies
+(componentPackageDeps looked up in installedPkgs), in-place ones included;
+the dependent toy package's Warmup contained `import CoreM ()`. The shared
+hooks library was built at -O0 after an optimized build failed to link
+(`undefined reference to rfsB_closure`); the cause is undiagnosed (R2).
+Toy: doc/recabalization-evidence/pkgtoy.
 
-F4. `hs-source-dirs: ../dir` outside a package directory is only the
-`relative-path-outside` warning at build time (Cabal's
-PackageDescription.Check.Paths marks it PackageBuildWarning). sdist will
-not work with it; nothing else cares.
+F7 [source]. Warmup imports every exposed module of every dependency
+package (715 lines on this GHC for the make build's package list) so that
+the whole external interface set enters GHC's EPS in one order before any
+other module compiles; without it, `ghc --make -jN` object output varies
+with scheduling (GHC.Core.Rules, "Note [Overall plumbing for rules]").
+Today only twelve leaf modules import it, which suffices because every
+other module of the monolith lies above those leaves. In a component, the
+roots are different modules (Appendix A lists them), and GHC schedules a
+root that does not import Warmup independently of it. The barrier exists
+only where every root of the compiled unit imports the local Warmup.
 
-F5. A dependency library's `ld-options` reach an executable in another
-package through the package database: in the toy, `-Wl,-rpath,/opt/fake`
-on pkga's library appeared as RUNPATH on pkgb's executable. So the solver
-rpath hook only needs to run for the package holding the FFI modules and C
-sources; executables elsewhere need no hooks.
+F8 [reported]. The plain make build of B0 with GHC 9.14.1 (`make -j8
+GHCJOBS=12 GHCRTSFLAGS='+RTS -M8G -A128m -RTS' install-src`) passed in
+2:00.76 wall, 479.5 s CPU, 4.6 GB peak RSS, -O2, 252 modules; inst/lib/
+Libraries held 131 files: 128 .bo, 2 .ba (foreign-function artifacts
+from Randomizable's BDPI imports, version-bearing), 1 .defines. The
+installed layout is the G2 oracle; the timing is not a gate here.
 
-F6. A Hooks package's `setup-depends` may name a local library in the same
-cabal.project, and a hook can generate a per-package Warmup from Cabal's
-installed package index. Toy: packages toy-core and toy-sem (both Hooks,
-`setup-depends: ..., toy-setup`), a facade toy (Simple, reexported-modules,
-executable). cabal compiled each package's setup executable against the
-local toy-setup, each package received its own autogen Warmup listing every
-exposed module of its direct dependencies (componentPackageDeps looked up
-in installedPkgs), and toy-sem's Warmup contained `import CoreM ()` from the
-in-place toy-core. The facade's executable ran. Two details learned: the
-generator must use direct dependencies, not the transitive closure (GHC
-refuses modules of hidden packages); and the shared hooks library must be
-built at -O0, since with optimization the StaticPointers-based rules left
-floated closures unresolved at link time (`undefined reference to
-rfsB_closure`).
+F9 [source]. Import graph at 9306c345 over the 250 library modules plus
+app/, cross-checked against the driver's call sites (which pass runs
+where, before which artifact is written). Appendix A is the result. The
+stackings elab above typecheck (IExpand imports TIMonad, TypeCheck and
+IConv) and schedule above elab (AAddSchedAssumps imports TypeCheck,
+IExpand, ISplitIf, AConv) are genuine. Nothing in typecheck, elab or
+schedule reaches a parse-exclusive module. The backends reach core, the
+.ba codec and bsc-aopt.
 
-F7. What Warmup is. update-warmup.sh writes `module Warmup where` followed
-by `import M ()` for every exposed module of every dependency package (715
-lines on this GHC for the make build's package list). Every leaf module
-imports it, so it is compiled first, and the whole external interface set,
-hence every rewrite rule and instance, enters GHC's EPS in one order before
-parallel compilation starts. Without it, `ghc --make -jN` object output
-varies with thread scheduling (GHC.Core.Rules, "Note [Overall plumbing for
-rules]"). It works only as a home module of the component being compiled:
-importing an already-compiled Warmup loads its interface and its orphans,
-not the 715 interfaces behind it. Consequence: in a carved build every
-component needs its own Warmup, generated against that component's direct
-dependencies, in-place packages included, since bsc-core's own interfaces
-carry instances and rules too.
+F10 [source, approximate]. `data Flags` has 141 record fields; 77 modules
+import Flags. Token-level reference counts per component: core 16, bo 3,
+ba 4, parse 14, typecheck 13, elab 18, schedule 25, verilog 22, bluesim 29,
+driver 63; 44 fields referenced by two or more components; 11 by none
+outside Flags and FlagsDecode. These are reference counts, not action read
+sets (section 4).
 
-F8. The plain make build of release-devel-B0 @ 9306c345 with GHC 9.14.1
-(`make -j8 GHCJOBS=12 GHCRTSFLAGS='+RTS -M8G -A128m -RTS' install-src`)
-passes in 2:00.76 wall, 479.5 s CPU (462.2 user + 17.4 sys), 4.6 GB peak
-RSS, -O2, 252 modules. inst/lib/Libraries holds 131 files (128 .bo, 2 .ba,
-1 .defines). This is the G2 layout oracle, and it means a full compiler
-rebuild is a two-minute event on this machine.
+F11 [source]. ABinModInfo stores the full Flags (minus dump flags and
+verbosity) through a hand-written `Bin Flags` instance, path-scrubbed by
+remapFlagsPaths. Readers: vGenMods in app/bsc.hs regenerates Verilog from
+a .ba with the stored codegen-semantic flags and 13 environment fields
+overridden; it is reached from `-c` AND from the ordinary Verilog link path
+for missing or stale .v files, where VFileUtils states "no options
+descriptor (for now): a .v generated under different codegen flags is
+reused as long as it is newer than the .ba"; BlueTcl's `module flags`
+query reads them. The Bluesim path generates under the invocation's flags
+and records the ones that shape the output in SimFileUtils'
+codeGenOptionDescr. The `(* options *)` pragma is applied in genModule via
+FlagsDecode.updateFlags after earlier package work, so a pragma option that
+only affects an already-run stage is accepted and ineffective today.
 
-F9. Import graph at 9306c345 (analyzer over the 250 library modules plus
-app/). The 6c282ad7 partition has zero cross-producer violations. A finer
-parse / typecheck / elab / schedule carve is admitted by the graph with
-three one-line source moves and a handful of placements (Appendix A).
-Genuine stackings, not helper leaks: IExpand imports TIMonad and TypeCheck,
-IConv imports TCMisc and TIMonad, ISyntaxCheck imports TCMisc and TIMonad
-(elab above typecheck); AAddSchedAssumps imports TypeCheck, TIMonad,
-IExpand, IExpandUtils, ISplitIf, IConv and AConv (schedule above elab: it
-typechecks and elaborates the assumption expressions it generates). Nothing
-in typecheck, elab or schedule reaches a parse-exclusive module, so parse is
-a sibling. The backends reach only core and the .ba codec.
+## 2. Decisions taken (Ravi)
 
-F10. Flags today. `data Flags` in src/comp/Flags.hs has 141 record fields.
-77 modules import Flags. Distinct fields referenced per proposed component
-(token-level analysis, approximate): core 16, bo 3, ba 4, parse 14,
-typecheck 13, elab 18, schedule 25, verilog 22, bluesim 29, driver (app/)
-63. Fields used by exactly one component: driver 31, bluesim 13, schedule
-13, elab 11, verilog 9, typecheck 5, parse 2, core 2. Fields used by two or
-more components: 44; the widest are entry (7 components), backend (7),
-stableVerilog (5), ifcPath (5). Eleven fields are referenced by no module
-outside Flags and FlagsDecode.
+D1. bsc-core, not bsc-common (commit 252c1442).
+D2. bsc-bo and bsc-ba are their own components; the files carry fingerprints.
+D3. The carve is drawn at fingerprints, not at today's serialization points.
+D4. Per-component Warmup is required.
+D5. The evaluator component is bsc-elab.
+D6. Packages, accepted with reluctance; symlink farms rather than moves
+    for now; the nine-way carve, now ten with bsc-aopt, on this branch.
+D7 (2026-10-01). Performance baselines and comparisons are Ravi's;
+    the gates here are GHC 9.14, object determinism and Warmup efficacy.
+D8 (2026-10-01, default taken by Claude, overridable). Codex's finding 14
+    is accepted: the experiment does not gate P1 and P2; Flags and the
+    .ba migration are later series.
 
-F11. What the .ba stores from Flags and why. ABinModInfo carries
-`abmi_flags :: Flags` (and ABinModSchedErrInfo `abmsei_flags`), written by
-GenABin's hand-maintained `instance Bin Flags` that serializes the record
-field by field (its comment: "should automatically verify no typos at
-compile-time XXX"), except dump flags and verbosity, which write nothing.
-Paths are scrubbed by remapFlagsPaths before writing. Readers: (a) app/
-bsc.hs, when generating Verilog from a .ba, builds `cgflags = (abmi_flags
-abmi) { bdir, vdir, infoDir, ifcPath, verbosity, showCodeGen,
-showElabProgress, printFlags, printFlagsHidden, printFlagsRaw, timeStamps,
-showVersion, updCheck = the invocation's }` with the comment "Codegen-
-SEMANTIC flags come from the .ba itself: they were recorded there at the
-original compile with any (* options *) pragma applied, so the regenerated
-output matches that compile by construction. Only environment/output flags
-follow this invocation." (b) app/BlueTcl.hs answers `module flags <mod>`
-queries from `abemi_flags`. Nothing else reads them. So the stored flags
-are, in the plan's vocabulary, the backend action's effective options, and
-the 13-field override list is a hand-maintained partition of Flags into
-"codegen-semantic" and "environment".
-
-## 2. Decisions already taken (Ravi, 2026-09-30)
-
-D1. The shared component is bsc-core, not bsc-common. It holds the IRs
-(CSyntax, ISyntax, ASyntax, the Verilog AST, VModInfo), the codec
-primitive BinData, Id/Type/Pred/SymTab, and the Error/Position/Flags
-infrastructure. "common" names a position in the import graph; "core" names
-a role and a criterion for what does not belong. Commit 252c1442 on the
-branch renames it.
-
-D2. The .bo and .ba serializers are their own components, bsc-bo and
-bsc-ba, because the files carry fingerprints and a format change must move
-everything that reads or writes them.
-
-D3. The carve is drawn at fingerprints, not at today's serialization
-points. A boundary between elab and schedule keys no product today; it is
-drawn so that a scheduler edit moves only F(schedule), and it is the hook
-for a post-elaboration cache later.
-
-D4. Per-component Warmup is required (Ravi: "Warmup is the nasty one.
-Though I guess we really need per component warmup in the new world").
-
-D5. The evaluator component is bsc-elab (bsc's own vocabulary: `-elab-only`,
-`-show-elab-progress`; "eval" appears only in trace flags, "expand" only in
-internal names).
-
-Not yet decided: packages (Ravi: "Packages makes me sad. Should they?");
-symlink farms versus directory moves; whether to do the nine-way carve on
-this branch or the four-way first.
-
-## 3. Proposed step 0: recabalization
+## 3. The amended step 0
 
 ### 3.1 Shape
 
-One cabal package per component, every producer package `build-type:
-Hooks`, one shared hooks library, one Simple facade:
-
-    bsc-setup      Simple  library only; the hooks logic (today's
-                           SetupHooks.hs generalized); compiled -O0
-    bsc-core       Hooks   125 modules; C sources (libfst, fstscopes_hier,
-                           htcl haskell.c); Tcl and solver hooks; generated
-                           BuildSystem, BuildVersion, Warmup
+    bsc-setup      Simple  hooks library, -O0 (explicit exception to optimization: 2)
+    bsc-core       Hooks   127 modules; C sources; Tcl and solver hooks; generated BuildSystem, BuildVersion, Warmup (public)
     bsc-bo         Hooks   GenBin, BinUtil
     bsc-ba         Hooks   ABin, ABinUtil, GenABin, GenForeign
     bsc-parse      Hooks   22 modules
-    bsc-typecheck  Hooks   27 modules
-    bsc-elab       Hooks   18 modules
-    bsc-schedule   Hooks   16 modules
-    bsc-verilog    Hooks   14 modules
-    bsc-bluesim    Hooks   22 modules
-    bsc            Simple  reexported-modules: the original 250 names;
-                           the 11 executables; the 3 test suites
+    bsc-typecheck  Hooks   33 modules (the .bo producer: through IConv and ISimplify)
+    bsc-elab       Hooks   12 modules (IExpand through AConv)
+    bsc-schedule   Hooks   14 modules (the pre-.ba ASyntax stage; ASchedule and its satellites)
+    bsc-aopt       Hooks   AOpt, AExpand (the ASyntax optimizer both backends run)
+    bsc-verilog    Hooks   17 modules (includes ARenameIO, ADropDefs, Synthesize)
+    bsc-bluesim    Hooks   17 modules
+    bsc            Hooks   facade: reexported-modules = the original 250 names; the 11 executables; the 3 test suites
 
-Every Hooks package's SetupHooks.hs is three lines importing bsc-setup.
-Each such package gets a hidden `other-modules: Warmup` generated by the
-hook from its direct dependencies (F6, F7). Only bsc-core runs the Tcl and
-solver hooks and generates BuildSystem and BuildVersion; its `ld-options`
-rpath reaches every executable (F5). cabal.project lists the packages and
-centralizes ghc-options; `optimization: 2` for all local packages (parity
-with GHCOPTLEVEL = -O2 in the make build).
+Every Hooks package has a three-line SetupHooks.hs importing bsc-setup.
+cabal.project lists the twelve packages, sets `optimization: 2` and
+`ghc-options: -j` for all of them, `jobs: $ncpus` and `semaphore: True` so
+the GHC processes share one job server, and `tested-with: GHC == 9.14.1`
+is stated in every package. Every package carries
+`if impl(ghc < 9.14) buildable: False` and bsc-setup's configure hook
+fails with a readable message on any other compiler, so a wrong GHC is a
+clear error, not a mysterious one.
 
-Why packages and not sublibraries: F1 forbids sublibraries in a Hooks
-package, F7 requires hooks in every component. The alternative, a Simple
-package with sublibraries whose committed five-line Warmups CPP-include
-import lists that one small Hooks package writes into the source tree, is
-possible and not recommended: a build writing into the tree so another
-package can include it.
+Why packages: F1 forbids sublibraries in a Hooks package and F7 requires a
+hook in every component. Codex's alternative, checked-in Warmups for the
+pinned toolchain with Simple sublibraries, is noted as viable; Ravi chose
+packages (D6).
 
-Why Hooks at all: of the four hook jobs, BuildSystem could be a CPP
-conditional and Tcl could be `pkgconfig-depends` plus reading the version
-from tcl.h; BuildVersion could be a committed placeholder plus script. The
-solvers (absolute rpath into the build tree, since dist-newstyle has no
-install layout the make build's `$ORIGIN/../lib/SAT` could use) and Warmup
-(generation against the resolved dependency set, per component) genuinely
-need build-time hooks or an external pre-step, and an external pre-step
-breaks the "cabal build just works" property the bench harness measures.
+### 3.2 Why bsc-aopt exists
 
-### 3.2 Source layout
+The Verilog driver path calls asCheck, aRenameIO, aDropDefs, aOpt and
+aSynthesize (app/bsc.hs 1197-1235). aRenameIO, aDropDefs and aSynthesize
+have no other callers, so they are Verilog passes. AOpt is different:
+`aOpt`, its 130-line Verilog driver pass, is Verilog-only, but the Bluesim
+side runs the optimizer too, in a lighter configuration: LambdaCalcUtil's
+aOptAPackageLite is expandAPackage, aOptPackage1 and aOptFinalPass, and
+SimPackageOpt's aExpandDynSel and aInsertCaseDef sit on the same
+expression machinery. The three Bluesim-used exports reach about 85 of the
+module's roughly 90 top-level definitions. So the module is shared; only
+the pass is not. Putting it in core would move every fingerprint on an
+optimizer edit; putting it in bsc-verilog would make Bluesim depend on the
+Verilog backend. A later source split can move `aOpt` itself into
+bsc-verilog and leave the machinery in bsc-aopt. AExpand is imported only by
+AOpt and Synthesize and goes with AOpt.
 
-Each package is a directory holding its .cabal, its SetupHooks.hs and its
-sources, so `hs-source-dirs: .` and no path leaves the package (F4 becomes
-moot). Two ways to populate the source directories:
+### 3.3 Source layout
 
-- Symlink farm. `components/<name>/<Module/Path>.hs -> ../../src/comp/...`
-  generated by a checked-in script from one manifest, with a verify mode
-  (every module in exactly one component, every link resolves, no
-  unaccounted source under the roots). Canonical files stay in src/comp,
-  src/comp/Libs, src/comp/GHC/posix, src/Parsec and the vendor HaskellIfc
-  directories; the make path is untouched; bench.sh's marker edits to
-  src/comp/*.hs still work. A module changing component is one symlink.
-- Directory moves. `git mv` into the component directories and extend the
-  make path's -i list. A component becomes a directory, blame survives,
-  and it is the only layout `cabal sdist` (and therefore a Hackage day)
-  accepts. It churns 250 files while the partition is still being argued.
+Each package is a directory holding its .cabal, SetupHooks.hs and a
+symlink farm of its modules: `components/<name>/<Module/Path>.hs ->
+../../src/comp/...` (and the Libs, GHC/posix, Parsec and vendor HaskellIfc
+roots), generated from one manifest with a verify mode: every library
+module in exactly one component, every link resolves, no unaccounted
+source under the roots, every component root imports Warmup (3.4).
+`hs-source-dirs: .`; no path leaves the package. Canonical files stay
+where the make build expects them. Generated modules are never in the farm
+and hooks never write into src/comp; make generates its own Warmup.hs and
+BuildVersion.hs as today. Codex's correction stands: cabal's sdist
+dereferences in-package symlinks, so the farm is not a Hackage blocker;
+fresh-checkout bootstrap is "run the generator", checked in CI by
+regenerating and diffing.
 
-Recommendation: symlink farm now, moves when the partition has settled
-(P3). Either way the generated modules are not in the farm: the hook
-writes them to the autogen directory (and, as today, copies Warmup.hs and
-BuildVersion.hs into src/comp for the make build), so a stale src/comp copy
-can never shadow a package's own.
+### 3.4 The Warmup contract
 
-### 3.3 The manifest and the generator
+1. Every Hooks package has a hidden `other-modules: Warmup`, generated by
+   its hook into the autogen directory. bsc-core's Warmup is additionally
+   exposed, as the baseline exposes it, and the facade re-exports that one.
+2. Content: `import M ()` for every exposed module of every DIRECT
+   dependency package, external and in-place, sorted by module name, with
+   the module name `Warmup` excluded (so a child never imports the public
+   compatibility module into itself). The header records the resolved unit
+   ids of the dependencies.
+3. Every component root, defined as a module that imports nothing from its
+   own component, carries `import Warmup ()`. Inside a package this
+   resolves to the local hidden module (home modules win, F3); inside the
+   monolithic make build it resolves to make's Warmup, so the same source
+   serves both builds. Generated modules (BuildSystem, BuildVersion) are
+   exempt: they import nothing external. 66 root imports are needed today;
+   Appendix A lists them per component, and the generator recomputes roots
+   from the graph and fails verification when one lacks the import.
+4. The facade package's executables are roots of their own package; each
+   app/*.hs gains the same import, and the facade's hook generates its
+   Warmup like any other package.
 
-One manifest (component name, build type, module list, component deps,
-extra fields such as c-sources) generates: every .cabal file, cabal.project,
-the farm, and the verify report. The module lists are the ones in Appendix
-A, derived from the import graph; the generator refuses a manifest whose
-induced component graph has an edge outside the declared DAG, so the check
-that produced "zero violations" today becomes a build-time gate.
+### 3.5 The three source moves
 
-### 3.4 The three source moves and the placements
+Unchanged from Revision 1 and still the only non-Warmup source edits:
+AState imports its ASchedule re-exports from AScheduleInfo and AUses
+directly; isLocalAId moves from AConv to ASyntaxUtil; makeGenFuncId moves
+from GenFuncWrap to GenWrapUtils.
 
-See Appendix A. Moves: AState's import list (types re-exported by ASchedule
-but defined in AScheduleInfo and AUses); isLocalAId from AConv to
-ASyntaxUtil; makeGenFuncId from GenFuncWrap to GenWrapUtils. Placements:
-BinParse and TclParseUtils are parser helpers (bsc-parse); LiftDicts
-imports IConv (bsc-elab); RSchedule, AUses, AScheduleInfo,
-ADumpScheduleInfo and AExpr2STP/AExpr2Yices/AExpr2Util stay in bsc-core
-because ABin, AScheduleInfo and SAT import them; CFreeVars and ISyntaxXRef
-are core because Parser.Classic.Warnings and FixupDefs import them. With
-these, the induced graph has no edge outside the DAG below (F9, Appendix
-A):
+### 3.6 Package invalidation versus action identity
 
-    bsc-core <- bsc-bo, bsc-ba, bsc-verilog
-    bsc-core, bsc-ba <- bsc-parse, bsc-bluesim
-    bsc-core <- bsc-typecheck <- bsc-elab <- bsc-schedule
-    everything <- bsc (facade)
+The table below says which PACKAGE fingerprints an edit moves. It is not
+a statement about producer actions: the .bo action also executes code in
+bsc-parse and the driver, the Verilog action executes bsc-aopt and
+bsc-verilog under driver orchestration, and so on. Producer action closures
+are audited in P3, after the orchestration move; until then cache keys are
+whole-execution (plan P2) and this experiment claims no selective reuse.
 
-### 3.5 What an edit moves (the point of the exercise)
+    edit in         moves F of (packages)
+    bsc-schedule    schedule
+    bsc-elab        elab, schedule
+    bsc-typecheck   typecheck, elab, schedule
+    bsc-parse       parse
+    bsc-aopt        aopt, verilog, bluesim
+    bsc-verilog     verilog
+    bsc-bluesim     bluesim
+    bsc-bo          bo
+    bsc-ba          ba, parse, bluesim
+    bsc-core        everything
 
-    edit in            moves F of
-    bsc-schedule       schedule
-    bsc-elab           elab, schedule
-    bsc-typecheck      typecheck, elab, schedule
-    bsc-parse          parse
-    bsc-verilog        verilog
-    bsc-bluesim        bluesim
-    bsc-bo             bo, typecheck, elab, schedule (writers) -- see 4.5
-    bsc-ba             ba, parse, schedule, bluesim
-    bsc-core           everything
+Codex is right that core's radius is conservative rather than unavoidable:
+RSchedule and AUses mix shared types with algorithms, and splitting types
+from algorithms would shrink core. That is a later refinement, measured
+against real edit traffic.
 
-Core is where the IRs live, so its blast radius is unavoidable; splitting
-utilities out of core would not shrink it, since everything depends on the
-IRs anyway. The plan's product-identity cutoff (equal regenerated content
-stops downstream work) still applies within a moved fingerprint.
+### 3.7 Gates
 
-### 3.6 Gates for step 0
-
-G1  cabal build all: every package, the facade, all 11 executables
-    including bscdeps; GHC reports no cross-DAG import (F3 makes this a
-    build failure, not a check).
-G1' facade surface: reexported-modules is exactly the original 250 names.
-G1'' determinism: build twice from clean; every .o/.hi and every
-    executable bit-identical. (New; see risk R1.)
-G2  make -C src/Libraries build install with the cabal-built bsc; installed
-    layout identical to the oracle (F8), and .bo/.ba content compared.
-G3  bscdeps in src/Libraries/Base3-Contexts against bsc -u (strace the
-    file probes).
-G4  util/rebuild-bench/bench.sh: null, clean-outputs, verilog-edit,
-    library-edit, then the full set; compare with the monolithic B0 cabal
-    build measured once as the baseline.
-G5  cabal test smoke, cabal test utils; the full DejaGNU suite before
+G1  cabal build all with GHC 9.14.1: twelve packages, eleven executables
+    including bscdeps. Cross-DAG imports fail as "Could not find module".
+G1' Surface: the facade's reexported-modules are exactly the original 250
+    names; every package's module list matches the manifest; the generator's
+    verify mode passes on the checked-in tree.
+G1'' Determinism (Ravi's gate). From a clean dist-newstyle: build A with
+    the project's parallel settings; build B the same; build C with
+    `jobs: 1`, no semaphore and `-j1`. Hash every .o, .hi, .dyn_o, .dyn_hi
+    and every executable; A, B and C must be identical. Then an incremental
+    run: append a marker comment to one leaf module per component, rebuild,
+    revert and rebuild, and compare with A again. Failure here is a design
+    stop, not a mechanical fix; the first suspects are a root without the
+    Warmup import (the verifier should have caught it), interface content
+    of in-place dependencies not covered by the direct-dependency rule, or
+    the Main modules of the facade.
+G2  make -C src/Libraries build install with the cabal-built bsc bound
+    explicitly (BSC=, and tconcheck/bo2bloogle from the make-installed
+    inst/bin, their provenance recorded); installed inventory identical to
+    the oracle including the two foreign .ba files; .bo and .ba content
+    compared, BuildVersion-derived bytes accounted for separately.
+G3  bscdeps in src/Libraries/Base3-Contexts versus the file probes of
+    bsc -u (strace), as a smoke test of the discovery interface.
+G4  Performance: not a gate here (D7). The checked-in bench harness needs
+    repair before anyone relies on it: bind BSC to the cabal-built binary,
+    start the compiler and bsc-only stages from equivalent states, fail on
+    any failed stage.
+G5  cabal test smoke, cabal test utils; the whole DejaGNU suite before
     adoption.
 
-## 4. Flags re-architecture
+### 3.8 Execution
 
-### 4.1 Problem
-
-Flags is one 141-field record in bsc-core imported by 77 modules (F10).
-Every flag addition, including a Verilog-only one, changes bsc-core and so
-moves every fingerprint. The record is also the backend action's effective
-options as stored in the .ba (F11), so a typecheck-only flag addition
-changes the .ba format and the hand-written Bin instance. And the driver
-already maintains, by hand, the partition of Flags into codegen-semantic
-and environment fields (the 13-field override in cgflags).
-
-### 4.2 Proposal
-
-- Each component owns a curated record of the flags it reads:
-  ParseFlags, TypecheckFlags, ElabFlags, SchedFlags, VerilogFlags,
-  BluesimFlags, and a small DiagFlags in core for what every component
-  reads (verbosity, warning and error control, the `entry` and `backend`
-  selectors; F10 found 44 shared fields, most of them shared between two
-  or three neighbours rather than by all).
-- The driver package owns the full `Flags`: FlagsDecode (command line,
-  defaults, help text, `(* options *)` pragma application, remapPathPrefix)
-  moves out of core into the bsc package, and Flags becomes a record of
-  the component records plus the driver-only fields (31 of the 141 are
-  driver-only today). Components never see the full record.
-- Shared fields that a component needs are fields of its own record; the
-  driver fills every copy from one command-line value. Duplication is the
-  price of independence; the alternative, a shared record in core, makes
-  every shared flag addition a core change again.
-- Each component record derives a canonical serialization used for both
-  .ba storage and fingerprinting, replacing the hand-written `Bin Flags`.
-
-### 4.3 What it buys
-
-- action = H(kind, F(producer), effective options, inputs) gets precise
-  effective options: the .bo action is keyed by TypecheckFlags (and
-  ParseFlags), the .ba action by ElabFlags and SchedFlags, the Verilog
-  action by VerilogFlags. A Verilog flag no longer moves the .bo key.
-- A flag addition changes the owning component and the driver, not core.
-- The .ba stores the backend's curated records (VerilogFlags, BluesimFlags,
-  the codegen part of DiagFlags) instead of the whole Flags. The 13-field
-  override disappears structurally: environment fields are not in those
-  records at all. bluetcl's `module flags` reports the stored records.
-- The `Bin Flags` typo hazard the code comments on goes away.
-
-### 4.4 Open questions for the reviewer
-
-- Should any non-codegen flag remain in the .ba? Evidence says no
-  consumer reads one (F11), but bluetcl's `module flags <mod> all` shows
-  whatever is stored, and users may rely on seeing, say, the scheduling
-  flags a module was compiled with. Storing SchedFlags too costs nothing.
-- `(* options *)` applies per-module flag overrides inside genModule. With
-  curated records the pragma must be applied to the driver's Flags and
-  re-projected; is there a case where a pragma changes a flag read by a
-  stage that already ran?
-- Field-level analysis is token-based (approximate); the executable plan
-  needs an exact per-module read set, which GHC's -ddump-minimal-imports
-  plus record-field usage can give.
-
-### 4.5 Sequencing and cost
-
-After step 0 compiles (G1 green), as its own series: it touches the
-signatures of most of the 77 modules and is behavior-preserving, so the
-whole testsuite is the gate. It is source-level work, not packaging, and it
-is what turns the carve's fingerprints from "which component changed" into
-"which options changed".
-
-## 5. Identity, fingerprints, packages, Hackage
-
-- A cabal unit id is a stable name, not a content hash: in-place packages
-  are `bsc-core-2026.1-inplace`, and even store unit ids hash the sdist and
-  the configuration, not the semantics the plan wants (a body-only bug fix
-  must move F). So the plan's F stays as defined: computed by the build
-  from the component's actual inputs and its dependencies' F, never a git
-  revision or a GHC ABI hash. With one Hooks package per component, each
-  package's hook has exactly that component's sources, options and
-  dependency set in hand, can compute F and emit a `Fingerprint` autogen
-  module; the facade's hook collects them. This dissolves the registry
-  problem in the plan's fingerprint section.
-- Packages versus sublibraries as identity: both give stable unit ids and
-  module provenance in GHC's messages (`bsc-core-2026.1` versus
-  `bsc-2026.1:bsc-core`). Packages additionally have their own PackageId,
-  build process, dist directory, `cabal repl`/haddock target and HLS
-  support (HLS has handled multi-package projects well for years and
-  sublibraries poorly). The identity is marginally better; the reason for
-  packages is F1 and F7, not identity.
-- Hackage, if that day comes: a package family (bsc, bsc-core, bsc-parse,
-  ...) is the conventional and legible rendering; think ghc-lib, lsp,
-  amazonka. Sublibraries render as one package page with components and
-  weaker tooling. sdist requires real files inside each package directory,
-  so the symlink farm becomes directory moves on that day; nothing else
-  changes.
-- If cabal issue 9986 lands and Hooks packages gain per-component builds,
-  the packages collapse back into sublibraries by concatenating files.
-
-## 6. Risks and open questions
-
-R1. Determinism under per-component Warmup is asserted, not measured. Gate
-G1'' measures it. If it fails, candidates are: Warmup must also cover
-transitive dependencies (the hook can compute the closure and expose the
-packages), or the executables' Main modules need Warmup too (today they are
-compiled in the same --make as everything; in the carve each Main compiles
-alone in the Simple facade, which has no hooks).
-R2. The shared hooks library needs -O0 (F6). Confirm this is the
-StaticPointers floating issue and not something the real hooks would also
-hit at -O0.
-R3. Null-build overhead: ten packages means ten file-monitor checks and,
-when anything changed, per-package setup invocations. bench.sh's null
-scenario measures it against the monolithic baseline.
-R4. Symlink farms: fine on Linux and macOS, not on Windows (not a target);
-error messages show the farm path (editors follow the link).
-R5. The facade's 250-name guarantee is a gate; bluehs and the testsuite
-depend on it.
-R6. The P3 orchestration move (genModuleVerilog / genModuleC sequencing
-and the getIOPropsA call site out of app/bsc.hs) is unchanged by this
-brief and still needed for the driver-only-edit acceptance row.
-R7. Flags re-architecture scope: 77 modules' signatures; the analysis is
-approximate until done with the compiler's help (4.4).
-
-## 7. Execution plan
-
-Step 0 (this branch, claude/bsc-testsuite-cabal-dejagnu-cscgl9, on top of
-the applied series and the two extra commits):
-
-  S0.1  manifest + generator (cabal files, cabal.project, farm, verify)
-  S0.2  bsc-setup library from SetupHooks.hs (per-package Warmup via the
-        installed package index; Tcl/solver/BuildSystem/BuildVersion for
-        bsc-core only; -O0)
-  S0.3  the three one-line source moves
-  S0.4  G1 loop (one commit per mechanical fix, compiler error quoted)
-  S0.5  G1', G1'' (determinism), G2, G3, G5, then G4 alone
+  S0.1  manifest + generator (cabal files, cabal.project, farm, verify incl. roots)
+  S0.2  bsc-setup from SetupHooks.hs: per-package Warmup per 3.4; Tcl, solver,
+        BuildSystem, BuildVersion for bsc-core only; GHC version check; -O0
+  S0.3  the three source moves (3.5) and the 66 root imports (3.4)
+  S0.4  G1 loop: one commit per mechanical fix, compiler error quoted; a
+        design-level failure stops and reports
+  S0.5  G1', G1'', G2, G3, G5
   S0.6  push; gate report
 
-Then: the Flags series (section 4), then the plan's P0 measurements on the
-carved build, then P1 onward as written.
+The experiment runs on branch claude/bsc-testsuite-cabal-dejagnu-cscgl9
+on top of the applied series. It does not gate P1 or P2 (D8).
 
-Recommendation on "critique or execute": critique first, for three
-reasons. R1 is a claim the whole design leans on and only a build can
-settle; the Flags partition is a proposal without an exact field
-assignment; and the layout choice (3.2) is a taste decision with a Hackage
-consequence. The mechanical part of step 0 (S0.1-S0.4) is uncontroversial
-and can start in parallel with the review if Ravi wants the clock running.
+## 4. Flags re-architecture (later series, not on the critical path)
 
-## Addendum 1 (2026-09-30, later): the .ba should store no stage's flags as instructions
+Problem as in Revision 1: one 141-field record in core, imported by 77
+modules, serialized into the .ba by hand, with the driver hand-maintaining
+the codegen-versus-environment partition.
 
-Refines 4.3 and 4.4 after reading the consumers.
+Direction, amended by Codex's findings 3 and 8:
 
-Facts. (1) The only behavioral reader of abmi_flags is the `-c` mode
-(vCodeGen / vGenMods in app/bsc.hs), which regenerates Verilog from a .ba
-with the codegen-semantic flags taken from the file and 13 environment
-fields overridden from the invocation. (2) The Bluesim path does the
-opposite by design, in the driver's own words: it generates under the
-invocation's flags and records the flags that shape the emitted bytes in a
-codegen reuse descriptor (SimFileUtils.codeGenOptionDescr), so a mismatched
-object is regenerated rather than reused. That is the fingerprint model,
-already in the tree. (3) The reason the Verilog path stores flags at all is
-the `(* options *)` pragma: genModule applies it through
-FlagsDecode.updateFlags and the module-specific result is what gets
-written; in `-c` mode the source is not reread, so the driver cannot
-recover the pragma's contribution. A module property is riding along
-inside invocation state. (4) remapFlagsPaths scrubs machine-specific paths
-from the record before writing: the record was already corrupting content
-identity. (5) bluetcl's `module flags` query is the only other reader
-(introspection).
+- A normalized invocation is the source of truth: command line, defaults,
+  remapPathPrefix, and the module-declared options from `(* options *)`,
+  with their precedence, repetition and application point specified.
+- Effective options are defined PER ACTION over the action's closure, not
+  per component: the .bo action's options are whatever parse, typecheck,
+  IConv, LiftDicts, ISimplify and the driver orchestration read; the .ba
+  action's include elab and schedule; the Verilog action's include the
+  driver's Verilog path, bsc-aopt and bsc-verilog. Component views are
+  projections of the invocation; a field needed by two components is a
+  field of both views, filled from one value.
+- The read sets come from the compiler, not from token counts: exact
+  per-module field usage (for example from -ddump-minimal-imports plus
+  record-field selectors), then closure over the call graph of each
+  action. F10 is the sizing estimate, not the table.
+- Pragma timing is preserved: the invocation-effective and module-effective
+  views keep today's application point; options that cannot affect an
+  already-run stage stay accepted-and-ineffective until a separate change
+  warns on them. updateFlags does not run adjustFinalFlags today, and that
+  stays as it is in this series.
+- Codecs serialize neutral versioned metadata, never stage-owned record
+  types, so bsc-ba keeps depending on core only.
 
-Proposal. The .ba's envelope (plan P4) carries exactly two flag-shaped
-things: provenance (the producer's fingerprint plus the effective ElabFlags
-and SchedFlags that produced the payload) and the module-declared options
-(the `(* options *)` contribution, as the pragma strings or as the delta it
-induces on the curated records). No backend flags are stored anywhere in
-the file. The driver supplies backend flags, combines them with the
-module-declared options, and they key the backend action's identity, which
-generalizes the Bluesim descriptor to every backend. The payload (APackage,
-AScheduleInfo, pragmas, type, method dump, path info) contains no flags.
+Payoff unchanged: precise action keys, flag additions that move their owner
+and the driver rather than core, and the hand-written `Bin Flags` gone.
 
-Consequences. `-c` regeneration matches the original compile whenever the
-command line and the module's declared options match, which is what a cache
-wants; reproducing old output without remembering one's flags becomes a
-recorded-invocation feature of the build system's action log, not of the
-artifact. bluetcl's `module flags` reports provenance plus module options
-instead of a full record, a visible behavior change. Reviewer: is there any
-consumer, in the tree or in MatX flows, that depends on backend flags read
-back from a .ba?
+## 5. The .ba envelope (later series; Addendum 1 amended)
 
-## Appendix A. Proposed partition of the 250 library modules (B0 @ 9306c345)
+- The payload (APackage, AScheduleInfo, pragmas including PPoptions, type,
+  method dump, path info) stores no effective invocation configuration.
+- The envelope carries provenance (producer fingerprint, effective .ba
+  action options as neutral metadata) and the module-declared options.
+  Module-declared options are not inert provenance: they enter the
+  identity of every downstream action, since they may set backend options.
+- Backend flags come from the driver, combined with the module-declared
+  options, and key the backend action. One effective-backend descriptor
+  serves direct compile, `-c`, and link-time regeneration, and the Verilog
+  link path's reuse check (today "newer than the .ba") gains that
+  descriptor, mirroring SimFileUtils.
+- Both the module and the scheduling-error variants, and the foreign-
+  function variant, carry the envelope. Exact-version rejection stays
+  until the replacement is implemented and tested (plan P4).
+- bluetcl's `module flags` reports the stored metadata; that and old-.ba
+  compatibility are an explicit format migration, not a refactor.
+- External consumers of stored flags (MatX flows, bluehs) are not audited.
+
+## 6. Identity, fingerprints, packages
+
+- A cabal unit id is a stable name, not F. Each package's hook has that
+  package's sources, options and dependency set and can emit a
+  Fingerprint module; the facade, now Hooks, can collect them. Not
+  implemented in step 0: F needs the actual generated and CPP inputs, the
+  recipe, the external implementation dependencies, the generator identity,
+  and BuildVersion excluded, and a generated module must not hash itself.
+  That is P3 work, after this experiment.
+- Expectations, not earned benefits: HLS behavior with twelve packages,
+  null-build overhead, Hackage legibility, collapse back to sublibraries if
+  cabal issue 9986 lands.
+
+## 7. Risks
+
+R1. Determinism under per-component Warmup is measured by G1'', not
+assumed. Candidate causes on failure listed under G1''.
+R2. bsc-setup at -O0 is a workaround for an undiagnosed link failure; the
+toy preserves the reproduction.
+R3. Twelve packages' configure and file-monitor overhead; measured by
+Ravi's harness, not here.
+R4. Symlink farms: Linux and macOS only; error messages show the farm path.
+R5. The 250-name surface is G1'.
+R6. The P3 orchestration move is unchanged and still needed for the
+driver-only-edit acceptance row and for action closures.
+R7. The 66 root imports are a real source change; the make build accepts
+them unchanged because its Warmup exists.
+R8. Shared GHC job server (`semaphore: True`) is new to this build; if it
+misbehaves, fall back to `jobs: 1` with `-j` per package.
+## Appendix A. Partition, Revision 2 (B0 @ 9306c345)
+
+Three one-line source moves assumed (3.5). Placements by call site rather than module name: IConv, IConvLet, GroundCType, LiftDicts, ISimpDicts, ISimplify run before genBinFile (typecheck); ARenameIO, ADropDefs, Synthesize are called only by the Verilog path (verilog); AOpt and AExpand are the shared optimizer (aopt); ACheck and Params import only core (core); ISyntaxCheck imports IExpandUtils and the typechecker (elab); BinParse and TclParseUtils are parser helpers (parse); RSchedule, AUses, AScheduleInfo, ADumpScheduleInfo and AExpr2STP/AExpr2Yices/AExpr2Util stay in core because ABin, AScheduleInfo and SAT import them; CFreeVars and ISyntaxXRef are core because Parser.Classic.Warnings and FixupDefs import them.
 
 | component | modules | imports from (import-edge counts) |
 | --- | --- | --- |
-| bsc-core | 125 | (none) |
+| bsc-core | 127 | (none) |
 | bsc-bo | 2 | bsc-core (24) |
 | bsc-ba | 4 | bsc-core (51) |
 | bsc-parse | 22 | bsc-ba (1), bsc-core (53) |
-| bsc-typecheck | 27 | bsc-core (339) |
-| bsc-elab | 18 | bsc-core (262), bsc-typecheck (7) |
-| bsc-schedule | 16 | bsc-core (170), bsc-elab (5), bsc-typecheck (2) |
-| bsc-verilog | 14 | bsc-core (143) |
-| bsc-bluesim | 22 | bsc-ba (6), bsc-core (231) |
+| bsc-typecheck | 33 | bsc-core (426) |
+| bsc-elab | 12 | bsc-core (175), bsc-typecheck (7) |
+| bsc-schedule | 14 | bsc-core (161), bsc-elab (4), bsc-typecheck (3) |
+| bsc-aopt | 2 | bsc-core (26) |
+| bsc-verilog | 17 | bsc-aopt (2), bsc-core (165) |
+| bsc-bluesim | 17 | bsc-aopt (2), bsc-ba (6), bsc-core (178) |
 
-Edges outside the intended DAG after the three one-line source moves: none.
+Total 250 modules. Edges outside the intended DAG after the three one-line source moves: none.
 
-The three source moves this assumes (each a one-line change plus an import list):
+**bsc-core (127):** ACheck ADumpScheduleInfo AExpr2STP AExpr2Util AExpr2Yices APrims AScheduleInfo ASyntax ASyntaxUtil AUses Assump BDD BExpr Backend BackendNamingConventions Bag Balanced BinData BoolExp BoolOpt BuildSystem BuildVersion CCSyntax CFreeVars CSubst CSyntax CSyntaxTypes CSyntaxUtil CType CVPrint Changed Classic ConTagInfo CondTree DOT DefProp DynamicMap EquivalenceClass Error ErrorMonad ErrorUtil Eval Exceptions FSTRead FStringCompat FileIOUtil FileNameUtil Fixity Flags FlagsDecode ForeignFunctions GHCPretty GenWrapUtils GlobPattern GraphMap GraphPaths GraphUtil GraphWrapper HTcl IOMutVar IOUtil IPrims IStateLoc ISyntax ISyntaxSubst ISyntaxUtil ISyntaxXRef IType Id IdPrint InstNodes IntLit IntegerUtil Intervals Lex ListMap ListUtil Literal Log2 MVarStrict PFPrint PPrint PVPrint Params ParseOp Position Pragma PreIds PreStrings Pred Pretty Prim ProofObligation RSchedule RealUtil SAT SCC STP STPFFI SchedInfo Scheme SignalNaming Sort SpeedyString StdPrel Subst SymTab SystemCheck SystemVerilogKeywords SystemVerilogTokens TclUtils TopUtils Type TypeOps Undefined Unify Util VCD VFileName VModInfo Verilog Version Warmup WaveCheck Wires Yices YicesFFI
 
-1. AState imports AScheduleInfo(..), ExclusiveRulesDB, areRulesExclusive, MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..) from ASchedule; every one is defined in AScheduleInfo.hs or AUses.hs (both bsc-core) and only re-exported by ASchedule. Import them from their defining modules.
-2. isLocalAId (two lines in AConv) is used by AExpand (bsc-bluesim) and ADropDefs (bsc-schedule). Move it to ASyntaxUtil (bsc-core).
-3. Depend (bsc-parse) imports makeGenFuncId from GenFuncWrap (bsc-typecheck). Move makeGenFuncId to GenWrapUtils (bsc-core).
+**bsc-bo (2):** BinUtil GenBin
 
-Placements that differ from the natural reading of a module's name: BinParse and TclParseUtils are parser helpers (bsc-parse); LiftDicts imports IConv (bsc-elab); RSchedule, AUses, AScheduleInfo, ADumpScheduleInfo, AExpr2STP/AExpr2Yices/AExpr2Util stay in bsc-core because ABin, AScheduleInfo and SAT (all core) import them; CFreeVars and ISyntaxXRef are core because Parser.Classic.Warnings and FixupDefs import them.
+**bsc-ba (4):** ABin ABinUtil GenABin GenForeign
 
-### bsc-core (125)
+**bsc-parse (22):** BinParse CPPLineDirectives Depend Parse Parsec ParsecChar ParsecCombinator ParsecExpr ParsecPrim Parser.BSV Parser.BSV.CVParser Parser.BSV.CVParserAssertion Parser.BSV.CVParserCommon Parser.BSV.CVParserImperative Parser.BSV.CVParserUtil Parser.Classic Parser.Classic.CParser Parser.Classic.Warnings SystemVerilogPreprocess SystemVerilogScanner TclParseUtils TmpNam
 
-ADumpScheduleInfo AExpr2STP AExpr2Util AExpr2Yices APrims AScheduleInfo ASyntax ASyntaxUtil AUses Assump BDD BExpr Backend BackendNamingConventions Bag Balanced BinData BoolExp BoolOpt BuildSystem BuildVersion CCSyntax CFreeVars CSubst CSyntax CSyntaxTypes CSyntaxUtil CType CVPrint Changed Classic ConTagInfo CondTree DOT DefProp DynamicMap EquivalenceClass Error ErrorMonad ErrorUtil Eval Exceptions FSTRead FStringCompat FileIOUtil FileNameUtil Fixity Flags FlagsDecode ForeignFunctions GHCPretty GenWrapUtils GlobPattern GraphMap GraphPaths GraphUtil GraphWrapper HTcl IOMutVar IOUtil IPrims IStateLoc ISyntax ISyntaxSubst ISyntaxUtil ISyntaxXRef IType Id IdPrint InstNodes IntLit IntegerUtil Intervals Lex ListMap ListUtil Literal Log2 MVarStrict PFPrint PPrint PVPrint ParseOp Position Pragma PreIds PreStrings Pred Pretty Prim ProofObligation RSchedule RealUtil SAT SCC STP STPFFI SchedInfo Scheme SignalNaming Sort SpeedyString StdPrel Subst SymTab SystemCheck SystemVerilogKeywords SystemVerilogTokens TclUtils TopUtils Type TypeOps Undefined Unify Util VCD VFileName VModInfo Verilog Version Warmup WaveCheck Wires Yices YicesFFI
+**bsc-typecheck (33):** ContextErrors CtxRed Deriving FixupDefs GenFuncWrap GenSign GenWrap GroundCType IConv IConvLet ISimpDicts ISimplify IfcBetterInfo InferKind KIMisc LiftDicts MakeSymTab PoisonUtils PragmaCheck Pred2STP Pred2Yices PredTrie SATPred SEMonad Simplify SolvedBinds TCMisc TCPat TCheck TIMonad TypeAnalysis TypeAnalysisTclUtil TypeCheck
 
-### bsc-bo (2)
+**bsc-elab (12):** AConv IDropRules IExpand IExpandUtils IInline IInlineFmt IInlineUtil ILift ISplitIf ISyntaxCheck ITransform IWireSet
 
-BinUtil GenBin
+**bsc-schedule (14):** AAddSchedAssumps AAddScheduleDefs ACleanup ADropUndet ADumpSchedule ANoInline APaths AProofs ARankMethCalls ARemoveAssumps ASchedule ATaskSplice DisjointTest WireAnalysis
 
-### bsc-ba (4)
+**bsc-aopt (2):** AExpand AOpt
 
-ABin ABinUtil GenABin GenForeign
+**bsc-verilog (17):** ADropDefs ARenameIO AState AVeriQuirks AVerilog AVerilogUtil DPIWrappers InlineCReg InlineReg InlineWires Synthesize VFinalCleanup VIOProps VPIWrappers VPrims VStableRenumber VVerilogDollar
 
-### bsc-parse (22)
+**bsc-bluesim (17):** BluesimLoader LambdaCalc LambdaCalcUtil SAL SimBlocksToC SimCCBlock SimCOpt SimDomainInfo SimExpand SimFileUtils SimMakeCBlocks SimPackage SimPackageOpt SimPrimitiveModules StaleUtils SystemCWrapper VFileUtils
 
-BinParse CPPLineDirectives Depend Parse Parsec ParsecChar ParsecCombinator ParsecExpr ParsecPrim Parser.BSV Parser.BSV.CVParser Parser.BSV.CVParserAssertion Parser.BSV.CVParserCommon Parser.BSV.CVParserImperative Parser.BSV.CVParserUtil Parser.Classic Parser.Classic.CParser Parser.Classic.Warnings SystemVerilogPreprocess SystemVerilogScanner TclParseUtils TmpNam
+### Cross-component edges (importer -> imported), excluding edges into bsc-core
 
-### bsc-typecheck (27)
-
-ContextErrors CtxRed Deriving FixupDefs GenFuncWrap GenSign GenWrap IfcBetterInfo InferKind KIMisc MakeSymTab PoisonUtils PragmaCheck Pred2STP Pred2Yices PredTrie SATPred SEMonad Simplify SolvedBinds TCMisc TCPat TCheck TIMonad TypeAnalysis TypeAnalysisTclUtil TypeCheck
-
-### bsc-elab (18)
-
-AConv GroundCType IConv IConvLet IDropRules IExpand IExpandUtils IInline IInlineFmt IInlineUtil ILift ISimpDicts ISimplify ISplitIf ISyntaxCheck ITransform IWireSet LiftDicts
-
-### bsc-schedule (16)
-
-AAddSchedAssumps AAddScheduleDefs ACleanup ADropDefs ADropUndet ADumpSchedule ANoInline APaths AProofs ARankMethCalls ARemoveAssumps ARenameIO ASchedule ATaskSplice DisjointTest WireAnalysis
-
-### bsc-verilog (14)
-
-AState AVeriQuirks AVerilog AVerilogUtil DPIWrappers InlineCReg InlineReg InlineWires VFinalCleanup VIOProps VPIWrappers VPrims VStableRenumber VVerilogDollar
-
-### bsc-bluesim (22)
-
-ACheck AExpand AOpt BluesimLoader LambdaCalc LambdaCalcUtil Params SAL SimBlocksToC SimCCBlock SimCOpt SimDomainInfo SimExpand SimFileUtils SimMakeCBlocks SimPackage SimPackageOpt SimPrimitiveModules StaleUtils Synthesize SystemCWrapper VFileUtils
-
-## Appendix B. Cross-component edges (importer -> imported), for review
-
+- bsc-bluesim -> bsc-aopt: LambdaCalcUtil->AOpt, SimPackageOpt->AOpt
 - bsc-bluesim -> bsc-ba: SimCOpt->ABinUtil, SimExpand->ABin, SimExpand->ABinUtil, SimFileUtils->ABinUtil, SimPackage->ABinUtil, VFileUtils->ABin
-- bsc-elab -> bsc-typecheck: IConv->TCMisc, IConv->TIMonad, IExpand->IfcBetterInfo, IExpand->TIMonad, IExpand->TypeCheck, ISyntaxCheck->TCMisc, ISyntaxCheck->TIMonad
+- bsc-elab -> bsc-typecheck: IExpand->IConv, IExpand->IfcBetterInfo, IExpand->TIMonad, IExpand->TypeCheck, IExpandUtils->IConv, ISyntaxCheck->TCMisc, ISyntaxCheck->TIMonad
 - bsc-parse -> bsc-ba: Depend->ABinUtil
-- bsc-schedule -> bsc-elab: AAddSchedAssumps->AConv, AAddSchedAssumps->IConv, AAddSchedAssumps->IExpand, AAddSchedAssumps->IExpandUtils, AAddSchedAssumps->ISplitIf
-- bsc-schedule -> bsc-typecheck: AAddSchedAssumps->TIMonad, AAddSchedAssumps->TypeCheck
+- bsc-schedule -> bsc-elab: AAddSchedAssumps->AConv, AAddSchedAssumps->IExpand, AAddSchedAssumps->IExpandUtils, AAddSchedAssumps->ISplitIf
+- bsc-schedule -> bsc-typecheck: AAddSchedAssumps->IConv, AAddSchedAssumps->TIMonad, AAddSchedAssumps->TypeCheck
+- bsc-verilog -> bsc-aopt: Synthesize->AExpand, Synthesize->AOpt
 
-## Appendix C. Evidence pointers
+### Warmup roots per component (modules importing nothing from their own component), excluding generated modules
 
-- Branch state: 61fbcb92 (0001), c0f9338e (0002), bc35d31c (0003),
-  bc1b0abb (doc/engine-first-plan.md added from the gate kit), 252c1442
-  (bsc-common -> bsc-core).
-- cabal-install source consulted: tag cabal-install-v3.16.1.0 and master,
-  ProjectPlanning.hs; Cabal/src/Distribution/PackageDescription/Check/
-  Paths.hs.
-- Toys (session scratchpad): shadowtest (F3, F5), pkgtoy (F6).
-- Oracle build log and timing (F8); Libraries listing saved for G2.
-- KB drafts: "KB: bsc four-sublibrary carve gates (B0)" (gate record),
-  "KB: bsc four-sublibrary carve patch (B0)" (patch payload), "KB: bsc
-  engine-first implementation plan (full text)" (plan of record).
+- bsc-core: 9 roots, 0 already import Warmup, 9 need the one-line import: Balanced CondTree DynamicMap GlobPattern HTcl ListUtil SystemVerilogKeywords SystemVerilogTokens VCD
+- bsc-bo: 1 roots, 0 already import Warmup, 1 need the one-line import: GenBin
+- bsc-ba: 1 roots, 0 already import Warmup, 1 need the one-line import: ABin
+- bsc-parse: 12 roots, 2 already import Warmup, 10 need the one-line import: CPPLineDirectives ParsecPrim Parser.BSV.CVParser Parser.BSV.CVParserAssertion Parser.BSV.CVParserCommon Parser.BSV.CVParserImperative Parser.BSV.CVParserUtil Parser.Classic.Warnings SystemVerilogPreprocess SystemVerilogScanner
+- bsc-typecheck: 16 roots, 1 already import Warmup, 15 need the one-line import: FixupDefs GroundCType IConvLet ISimpDicts ISimplify IfcBetterInfo KIMisc PoisonUtils PragmaCheck Pred2STP Pred2Yices PredTrie Simplify SolvedBinds TIMonad
+- bsc-elab: 3 roots, 0 already import Warmup, 3 need the one-line import: IDropRules IInlineUtil IWireSet
+- bsc-schedule: 11 roots, 0 already import Warmup, 11 need the one-line import: AAddScheduleDefs ADropUndet ADumpSchedule ANoInline APaths AProofs ARankMethCalls ARemoveAssumps ATaskSplice DisjointTest WireAnalysis
+- bsc-aopt: 1 roots, 0 already import Warmup, 1 need the one-line import: AExpand
+- bsc-verilog: 11 roots, 0 already import Warmup, 11 need the one-line import: ADropDefs ARenameIO AVeriQuirks DPIWrappers InlineCReg InlineWires Synthesize VFinalCleanup VPrims VStableRenumber VVerilogDollar
+- bsc-bluesim: 4 roots, 0 already import Warmup, 4 need the one-line import: LambdaCalcUtil SimDomainInfo SimPrimitiveModules StaleUtils
+
+Root imports to add in total: 66.
+
+## Appendix B. Evidence pointers
+
+- Branch: 61fbcb92 (0001), c0f9338e (0002), bc35d31c (0003), bc1b0abb
+  (plan of record added), 252c1442 (bsc-core rename), 9f4ceb5b and
+  96f13139 (Revision 1 and Addendum 1), this commit (Revision 2 and the
+  checked-in toys under doc/recabalization-evidence).
+- cabal-install tag cabal-install-v3.16.1.0: ProjectPlanning.hs,
+  SrcDist.hs; Cabal PackageDescription.Check.Paths.
+- Driver call sites: app/bsc.hs lines 497-586 (.bo producer passes),
+  715 (genBinFile), 774-988 (elab and schedule passes), 1110/1139
+  (genABinFile), 1197-1235 (Verilog path passes), 1227 (aOpt), 2258
+  (link-path vGenMods); VFileUtils.hs 13-38; SimFileUtils
+  codeGenOptionDescr; FlagsDecode.updateFlags (bsc.hs 764).
+- KB drafts: "KB: REVIEW REQUEST — bsc recabalization + Flags
+  re-architecture brief (B0)" (Revision 1, Codex's review, this revision's
+  response block); "KB: bsc four-sublibrary carve gates (B0)"; "KB: bsc
+  engine-first implementation plan (full text)"; "KB: bsc toolchain".
+
+## Appendix C. Codex findings 1-15 and what Revision 2 does with them
+
+1. Warmup barrier. ACCEPTED. The contract in 3.4 adds the root edges (66
+   today), the generator verifies them, and G1'' measures the result with
+   parallel, serial and incremental builds.
+2. Packages not proven necessary. ACCEPTED as a choice (D6); the
+   checked-in-Warmup alternative is recorded in 3.1.
+3. Field counts are not action options. ACCEPTED. Section 4 defines
+   effective options per action closure from compiler-derived read sets;
+   the .bo producer's true closure (IConv, LiftDicts, ISimplify, ISimpDicts)
+   is now also reflected in the partition.
+4. Import DAG is not the execution graph. ACCEPTED in substance. Call-site
+   analysis moved aRenameIO, aDropDefs, Synthesize to bsc-verilog and
+   created bsc-aopt; 3.6 separates package invalidation from action
+   identity; no selective-reuse claim is made. The three helper moves and
+   the 250-name equality stand.
+5. Writeback and sdist. ACCEPTED. No hook writes into src/comp; make keeps
+   its own generators; the sdist symlink claim is withdrawn.
+6. Warmup export contract. ACCEPTED. Same-name hidden Warmup per package,
+   public one from bsc-core only, excluded from generated import lists
+   (3.4); G1' checks the surface.
+7. .ba consumer audit. ACCEPTED. The Verilog link path is a second reader;
+   section 5 adds the reuse descriptor and treats the change as a format
+   migration; external consumers are marked unaudited.
+8. Pragma timing. ACCEPTED. Section 4 preserves the application point and
+   the ineffective-option behavior; adjustFinalFlags unchanged.
+9. Envelope specification. ACCEPTED. Neutral versioned metadata; PPoptions
+   stays in the payload; module options enter downstream identity; all
+   three artifact variants covered.
+10. Core radius. ACCEPTED as a refinement (3.6).
+11. Facade hook and fingerprint generation. ACCEPTED. The facade is Hooks;
+    fingerprint generation is deferred to P3 with the listed requirements;
+    bsc-setup's -O0 is stated as an exception.
+12. Library build emits .ba. ACCEPTED. G2 inventories the foreign .ba
+    files; the plan's ".bo-only" statement needs the qualification.
+13. Harness. ACCEPTED. Performance is not a gate here (D7); the repairs are
+    listed under G4 for whoever runs it.
+14. Sequencing. ACCEPTED as the default (D8), Ravi's to override.
+15. Evidence ledger. ACCEPTED. Facts carry labels; toys are checked in;
+    raw logs of 2026-09-30 were lost to a reboot and F8 stays [reported].

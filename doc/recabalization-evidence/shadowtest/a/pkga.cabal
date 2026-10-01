@@ -1,0 +1,11 @@
+cabal-version: 3.4
+name: pkga
+version: 0.1
+build-type: Simple
+library
+  -- F5: a dependency's ld-options reach a cross-package executable (RUNPATH)
+  ld-options: -Wl,-rpath,/opt/fake-solver-dir
+  hs-source-dirs: ../shared
+  exposed-modules: M1
+  build-depends: base
+  default-language: GHC2021
