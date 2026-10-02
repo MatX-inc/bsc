@@ -27,7 +27,7 @@ import Prelude hiding ((<>))
 
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.List(intersperse)
+import Data.List(intersperse, sortBy)
 import Util(thd)
 import Eval
 
@@ -38,7 +38,7 @@ import Id(cmpIdByName)
 import ASyntax
 import AUses
 import VModInfo(VSchedInfo)
-import RSchedule(RAT)
+import RSchedule(RAT, ratInUseOrder)
 
 
 -- ========================================================================
@@ -87,11 +87,15 @@ instance PPrint AScheduleInfo where
             (let ppWarn = vcat . map text . lines
              in  vcat (map (ppWarn . thd) (asi_warnings asi))) $+$
             text "-- method uses map" $+$
-            pPrint d 0 (asi_method_uses_map asi) $+$
+            -- methods by name, as the allocation table prints them
+            foldr ($+$) empty [ pPrint d 0 m <+> text "->" <+> pPrint d 0 us
+                 | (m, us) <- sortBy (\ (x, _) (y, _) -> compare (ppString x) (ppString y))
+                                     (M.toList (asi_method_uses_map asi)) ] $+$
             text "-- rule uses map" $+$
             pPrint d 0 (asi_rule_uses_map asi) $+$
             text "-- resource allocation table" $+$
-            pPrint d 0 (asi_resource_alloc_table asi)
+            pPrint d 0 (ratInUseOrder (asi_method_uses_map asi)
+                                      (asi_resource_alloc_table asi))
             -- no dump of DBs, sched graph and order
             )
 

@@ -115,6 +115,7 @@ import ARankMethCalls(aRankMethCalls)
 import AState(aState)
 import ARenameIO(aRenameIO)
 import ASchedule(AScheduleInfo(..), AScheduleErrInfo(..), aSchedule)
+import RSchedule(ratInUseOrder)
 import AAddScheduleDefs(aAddScheduleDefs)
 import APaths(aPathsPreSched, aPathsPostSched)
 import AProofs(aCheckProofs)
@@ -858,7 +859,8 @@ genModule
     stats flags DFschedule amod_sched
     start flags DFresources
     t <- dump errh flags t DFresources dumpnames
-         (asi_resource_alloc_table schedule_info)
+         (ratInUseOrder (asi_method_uses_map schedule_info)
+                        (asi_resource_alloc_table schedule_info))
     start flags DFvschedinfo
     t <- dump errh flags t DFvschedinfo dumpnames (asi_v_sched_info schedule_info)
 
