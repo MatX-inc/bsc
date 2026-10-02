@@ -1,6 +1,7 @@
 # bsc orchestration and rebuild: implementation plan
 
-Status: **Revision 3.1** — 2026-10-01. Plan of record; concise by design.
+Status: **Revision 3.2** — 2026-10-02. Plan of record; concise by design.
+Revision 3.2 adds the leak-1 closure record and the type-table design notes to the P1 section.
 Revision 3.1 records the component structure as built (sixteen packages,
 not four sublibraries), the P1 delivery, and the follow-ups P1 surfaced;
 the phases are unchanged. Revision 3 superseded Revision 2 (the externally drafted plan document reviewed in the
@@ -338,6 +339,91 @@ Findings:
   engine uses; the two leak closures are what make `-u` output, and an
   in-process worker's output, equal to one-shot output, measured by the
   parity gate (131 of 131 against make's `-u` build) and the testsuite.
+- **Leak 1 is closed (2026-10-02): five sites, five directed tests.**
+  The intern-order leak reached the .bo through five pieces of code, each
+  found by diffing a one-shot compile against the same file compiled
+  inside make's `-u` batch and tracing the typechecker's solve order to
+  the first divergence. (1) The instance trie enumerated a node's
+  branches in `Map` order on a Free query; `TyCon`'s `Ord` is `Id`'s,
+  which is intern order, and context reduction instantiates every
+  candidate with fresh type variables before matching, so the candidate
+  order set the counter at every later dictionary (78fd7a68). (2) Three
+  topological sorts broke ties by `Id`: the let nesting in IConv, the
+  definition order in Simplify, the binding groups in TCheck;
+  `SCC.tsortStable` breaks ties by input position (da16cae5). (3) The
+  context join grouped joinable predicates by a key whose `Ord` is
+  intern order, and the first group with a joinable pair decided the
+  retry order of residuals and so the order of a definition's
+  dictionary bindings; `Util.joinByFstStable` keeps first-occurrence
+  order (1c651c14). (4) The imperative desugaring listed a block's
+  updated variables with `S.toList`, so the tuple that threads them
+  through a loop or branch had intern-ordered components, visible from
+  the typechecker's output onward; they are now listed by the name's
+  first occurrence in the file's token stream, which is what intern
+  order was for a one-shot compile, so no expected output moves (update
+  position and declaration position were each tried first and each
+  moved some bluetcl hierarchy outputs: a loop variable reused by a
+  later loop, or first seen in an earlier module, keeps its place only
+  under first sighting) (59f09807). (5)
+  The built-in `Add` rules rebuilt a cancelled sum from a bag of terms in
+  `Type` order; `fromAddTerms` now lists the terms by a content-only
+  comparison. This one re-presents two unsatisfiable-proviso diagnostics
+  (`Bug782_Div_*_noProvisos`: `Add#(ri, a__, sz3)` becomes
+  `Add#(a__, ri, sz3)`, and one residual is reduced from the other
+  side), so it is held back, uncommitted, until Ravi decides whether
+  those two expected outputs may change; the pair orientation in
+  `genNumEqInsts` has the same character (four more diagnostics) and is
+  left as it is. Each fix landed with a probe in
+  `testsuite/bsc.binary/batching`: the probe is compiled on its own and
+  inside a `-u` batch behind a scrambler package that interns the
+  relevant names in the opposite order, and the two dumps must agree;
+  every probe fails on the compiler before its fix and passes after it.
+  Measured as make's `-u` batch against the engine's per-package build
+  with the same compiler, over the 131 library files: 32 Base3 files
+  differed before, 29 after the trie fix (names in 16), 29 after the
+  sorts (names in 16; the sort leak was real but not the dominant
+  symptom), 29 after the join fix (names in 3), 29 after the parser fix
+  (names in 0, one commutative-sum flip left in FloatingPoint), and,
+  with the held-back numeric fix, 29 with not one dump line left that is
+  not a hash. What differs now is leak 2 only: position numbers inside
+  hash-consed CType nodes, and the import hashes that propagate from
+  them; the batched .bo files carry source-file names they never import
+  (Arbiter.bsv appears in fifteen Base3-Misc packages, LBus.bo carries
+  CBus.bsv and ModuleCollect.bsv, FloatingPoint.bo carries
+  SquareRoot.bsv). On a cleaned suite tree, against the pre-fix compiler
+  as baseline, the smoke, typechecker, bluetcl, binary and gensign
+  groups show no new failure for the committed fixes; the earlier
+  per-round runs had left compiled intermediates in the tree and
+  under-reported, which is why the baseline run exists.
+- **Leak 2 and the type tables: design (2026-10-02, for review).**
+  Tiers by what an entry depends on: values (structure and structural
+  metadata; valid forever), names (anything containing a qualified tycon;
+  valid while the owning definition is in force), compile (the current
+  package's own tycons, fresh variables, dictionary names, iteration
+  order, occurrence positions). Positions belong to an occurrence tier
+  under the value tier: the cons table holds position-free value nodes,
+  and construction returns the caller's own spine stamped with the
+  shared id (`ccAtCaller` generalized from leaves to ap nodes), so ids
+  are identity, the spine is provenance, nothing position-bearing is
+  ever shared, and the .bo writer writes spines. IType is already in
+  this shape (positions stripped on entry; the expression layer owns
+  them). Lifetime: a name-keyed leaf stores a payload the name does not
+  determine across an edit, so a persistent process returns stale
+  payloads after a reload; `testsuite/bsc.bluetcl/reload` shows it today
+  (a struct member printed with the old synonym expansion beside a width
+  computed from the new one) and is registered as an expected failure
+  until tycon leaves are keyed on name plus a hash of the normalized
+  payload, which makes the arena a cache that can be flushed but never
+  wrong. Per-thread arenas are not available to pure construction code
+  and become unnecessary once nodes are value-only; a sequential worker
+  flushes at compile boundaries with a monotone id counter. The ground
+  numeric verdict cache is per typechecker run today (one per top-level
+  definition) and is the one table worth making worker-global and later
+  persistent (P2). Interning beyond ground nodes, keyed by names as
+  IType does, comes after the spine. The worker is also a test lever: a
+  worker-mode suite run is a history fuzzer, and the acceptance test is
+  the libraries and the suite built with and without the worker,
+  byte-identical.
 - **A selective compiler key works at P1.** `--compiler-key closure` keys
   the library actions on the object files of the .bo producer's closure
   (bsc-core, bsc-stp, bsc-yices, bsc-sat, bsc-bo, bsc-ba, bsc-parse,
@@ -362,9 +448,10 @@ makedepend; discovery replaces them), and anything about designs or
 Follow-ups P1 surfaced, in the plan's terms: atomic publication of .bo
 outputs (bsc writes them in place; the engine must stage and rename:
 requirement 2); bloogle's output off the install prefix until install;
-BuildVersion out of the closure key (P3); closing the intern-order
-leaks (iteration sites, per-session memo reset) so batched and one-shot
-.bo bytes agree, the worker's prerequisite; the .bo import hash chain hashes the import's bytes, so
+BuildVersion out of the closure key (P3); closing leak 2 (positions on
+hash-consed CType nodes: the occurrence spine) and keying the type
+tables on content (the reload test), so batched, one-shot and worker
+.bo bytes agree, the worker's prerequisite (leak 1 is closed, see above); the .bo import hash chain hashes the import's bytes, so
 any byte change in an import re-keys every dependent under a content-keyed
 system, while cross-package inlining (ISimplify) means the right boundary
 is the exported interface plus the unfoldings exposed for inlining, not
