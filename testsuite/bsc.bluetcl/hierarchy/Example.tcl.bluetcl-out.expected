@@ -88,7 +88,6 @@ Command: browseinst detail 2
 X(BSVModule)   = mkExample
 X(BSVPath)     = zow
 X(DEBUG)       = BLeaf zow RWire Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RWire
@@ -118,7 +117,6 @@ Command: browseinst detail 8
 X(BSVModule)   = mkExample
 X(BSVPath)     = mkZow zow2
 X(DEBUG)       = BLeaf zow2 RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -137,7 +135,6 @@ Command: browseinst detail 4
 X(BSVModule)   = mkExample
 X(BSVPath)     = xx
 X(DEBUG)       = BINode xx Just ((Vector::Vector#(3, Reg#(Bit#(5)))))
-X(IfcPosition) = Example.bsv 13 4
 X(Interface)   = Vector::Vector#(3, Reg#(Bit#(5)))
 X(LocalPath)   = xx
 X(Name)        = xx
@@ -151,7 +148,6 @@ Command: browseinst detail 9
 X(BSVModule)   = mkExample
 X(BSVPath)     = xx _element_1
 X(DEBUG)       = BLeaf _element_1 RegUN Just ((Reg#(Bit#(5))))
-X(IfcPosition) = Example.bsv 13 14
 X(Interface)   = Reg#(Bit#(5))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -167,7 +163,6 @@ Command: browseinst detail 10
 X(BSVModule)   = mkExample
 X(BSVPath)     = xx _element_2
 X(DEBUG)       = BLeaf _element_2 RegUN Just ((Reg#(Bit#(5))))
-X(IfcPosition) = Example.bsv 13 14
 X(Interface)   = Reg#(Bit#(5))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -183,7 +178,6 @@ Command: browseinst detail 11
 X(BSVModule)   = mkExample
 X(BSVPath)     = xx _element_0
 X(DEBUG)       = BLeaf _element_0 RegUN Just ((Reg#(Bit#(5))))
-X(IfcPosition) = Example.bsv 13 14
 X(Interface)   = Reg#(Bit#(5))
 X(LocalPath)   = 
 X(Module)      = RegUN
@@ -202,7 +196,6 @@ Command: browseinst detail 5
 X(BSVModule)   = mkExample
 X(BSVPath)     = ww
 X(DEBUG)       = BINode ww Just ((Vector::Vector#(3, Reg#(Bit#(5)))))
-X(IfcPosition) = Example.bsv 13 4
 X(Interface)   = Vector::Vector#(3, Reg#(Bit#(5)))
 X(LocalPath)   = ww
 X(Name)        = ww
@@ -216,7 +209,6 @@ Command: browseinst detail 12
 X(BSVModule)   = mkExample
 X(BSVPath)     = ww _element_1
 X(DEBUG)       = BLeaf _element_1 RWire Just ((Reg#(Bit#(5))))
-X(IfcPosition) = Example.bsv 13 14
 X(Interface)   = Reg#(Bit#(5))
 X(LocalPath)   = 
 X(Module)      = RWire
@@ -232,7 +224,6 @@ Command: browseinst detail 13
 X(BSVModule)   = mkExample
 X(BSVPath)     = ww _element_2
 X(DEBUG)       = BLeaf _element_2 RWire Just ((Reg#(Bit#(5))))
-X(IfcPosition) = Example.bsv 13 14
 X(Interface)   = Reg#(Bit#(5))
 X(LocalPath)   = 
 X(Module)      = RWire
@@ -248,7 +239,6 @@ Command: browseinst detail 14
 X(BSVModule)   = mkExample
 X(BSVPath)     = ww _element_0
 X(DEBUG)       = BLeaf _element_0 RWire Just ((Reg#(Bit#(5))))
-X(IfcPosition) = Example.bsv 13 14
 X(Interface)   = Reg#(Bit#(5))
 X(LocalPath)   = 
 X(Module)      = RWire
@@ -280,7 +270,6 @@ Command: browseinst detail 15
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop z_0
 X(DEBUG)       = BLeaf z_0 RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -296,7 +285,6 @@ Command: browseinst detail 16
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop z_1
 X(DEBUG)       = BLeaf z_1 RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -312,7 +300,6 @@ Command: browseinst detail 17
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop z_2
 X(DEBUG)       = BLeaf z_2 RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -359,7 +346,6 @@ Command: browseinst detail 21
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_0 x
 X(DEBUG)       = BLeaf x RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -406,7 +392,6 @@ Command: browseinst detail 26
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_0 Loop Body_0 y
 X(DEBUG)       = BLeaf y RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -450,7 +435,6 @@ Command: browseinst detail 28
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_0 Loop Body_1 y
 X(DEBUG)       = BLeaf y RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -494,7 +478,6 @@ Command: browseinst detail 30
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_0 Loop Body_2 y
 X(DEBUG)       = BLeaf y RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -538,7 +521,6 @@ Command: browseinst detail 32
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_1 x
 X(DEBUG)       = BLeaf x RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -585,7 +567,6 @@ Command: browseinst detail 37
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_1 Loop Body_0 y
 X(DEBUG)       = BLeaf y RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -629,7 +610,6 @@ Command: browseinst detail 39
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_1 Loop Body_1 y
 X(DEBUG)       = BLeaf y RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -673,7 +653,6 @@ Command: browseinst detail 41
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_1 Loop Body_2 y
 X(DEBUG)       = BLeaf y RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -717,7 +696,6 @@ Command: browseinst detail 43
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_2 x
 X(DEBUG)       = BLeaf x RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -764,7 +742,6 @@ Command: browseinst detail 48
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_2 Loop Body_0 y
 X(DEBUG)       = BLeaf y RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -808,7 +785,6 @@ Command: browseinst detail 50
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_2 Loop Body_1 y
 X(DEBUG)       = BLeaf y RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -852,7 +828,6 @@ Command: browseinst detail 52
 X(BSVModule)   = mkExample
 X(BSVPath)     = Loop Body_2 Loop Body_2 y
 X(DEBUG)       = BLeaf y RegN Just ((Reg#(Bool)))
-X(IfcPosition) = Zow.bsv 6 4
 X(Interface)   = Reg#(Bool)
 X(LocalPath)   = 
 X(Module)      = RegN
