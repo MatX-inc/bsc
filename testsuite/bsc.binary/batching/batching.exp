@@ -23,8 +23,10 @@
 #              of terms in Type order, so a solved variable's type listed
 #              the same terms in different orders
 #
-# The hash line is excluded while hash-consed CType nodes still carry
-# positions from the first file that built them (the open position leak).
+#   PosOrder   hash-consed CType nodes carried the positions of the first
+#              file that built them, so a batched .bo named source files it
+#              never imported; the dumps are compared whole, hash line
+#              included, which is the .bo's bytes
 
 # dumpbo is an internal tool: the suite only locates it for internal
 # checks, so locate it here and report the comparison as unsupported
@@ -43,7 +45,10 @@ proc batching_find_dumpbo {} {
     return 1
 }
 
-proc batching_pair { probe root scramble } {
+# whole: 1 compares the whole dump, hash line included, which is the
+# .bo's bytes; 0 excludes the hash line (kept for probes written while
+# positions still leaked)
+proc batching_pair { probe root scramble {whole 1} } {
     set bo "[file rootname $probe].bo"
     set oneshot "[file rootname $probe].oneshot.dumpbo-out"
     set have_dumpbo [batching_find_dumpbo]
@@ -59,7 +64,11 @@ proc batching_pair { probe root scramble } {
     compile_pass $root
     if { $have_dumpbo } {
         dumpbo $bo
-        compare_file_filtered [make_dumpbo_output_name $bo] $oneshot {-e /^Hash:/d}
+        if { $whole } {
+            compare_file [make_dumpbo_output_name $bo] $oneshot
+        } else {
+            compare_file_filtered [make_dumpbo_output_name $bo] $oneshot {-e /^Hash:/d}
+        }
     } else {
         unsupported "`$bo' one-shot and batched dumps compared (dumpbo not found)"
     }
@@ -70,3 +79,4 @@ batching_pair JoinOrder.bsv JoinOrderRoot.bsv JoinOrderScramble.bsv
 batching_pair LetOrder.bs LetOrderRoot.bs LetOrderScramble.bs
 batching_pair LoopOrder.bsv LoopOrderRoot.bsv LoopOrderScramble.bsv
 batching_pair NumOrder.bsv NumOrderRoot.bsv NumOrderScramble.bsv
+batching_pair PosOrder.bsv PosOrderRoot.bsv PosOrderScramble.bsv

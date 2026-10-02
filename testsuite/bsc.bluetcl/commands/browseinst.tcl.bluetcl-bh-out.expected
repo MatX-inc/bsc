@@ -58,7 +58,6 @@ Command: browseinst detail 2
 X(BSVModule)   = mkM
 X(BSVPath)     = r1
 X(DEBUG)       = BMod r1 Just ((Prelude.Reg Prelude.Bool))
-X(IfcPosition) = Test.bsv 102 12
 X(Interface)   = Prelude.Reg Prelude.Bool
 X(LocalPath)   = 
 X(Module)      = mkM
@@ -74,7 +73,6 @@ Command: browseinst detail 7
 X(BSVModule)   = mkM
 X(BSVPath)     = r1 ptr
 X(DEBUG)       = BLeaf ptr RegN Just ((Prelude.Reg Prelude.Bool))
-X(IfcPosition) = Test.bsv 102 12
 X(Interface)   = Prelude.Reg Prelude.Bool
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -90,7 +88,6 @@ Command: browseinst detail 8
 X(BSVModule)   = mkM
 X(BSVPath)     = r1 r1
 X(DEBUG)       = BLeaf r1 RegN Just ((Prelude.Reg Prelude.Bool))
-X(IfcPosition) = Test.bsv 102 12
 X(Interface)   = Prelude.Reg Prelude.Bool
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -106,7 +103,6 @@ Command: browseinst detail 9
 X(BSVModule)   = mkM
 X(BSVPath)     = r1 r2
 X(DEBUG)       = BLeaf r2 RegN Just ((Prelude.Reg Prelude.Bool))
-X(IfcPosition) = Test.bsv 102 12
 X(Interface)   = Prelude.Reg Prelude.Bool
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -153,7 +149,6 @@ Command: browseinst detail 3
 X(BSVModule)   = mkM
 X(BSVPath)     = r2
 X(DEBUG)       = BMod r2 Just ((Prelude.Reg Prelude.Bool))
-X(IfcPosition) = Test.bsv 102 12
 X(Interface)   = Prelude.Reg Prelude.Bool
 X(LocalPath)   = 
 X(Module)      = mkM
@@ -169,7 +164,6 @@ Command: browseinst detail 12
 X(BSVModule)   = mkM
 X(BSVPath)     = r2 ptr
 X(DEBUG)       = BLeaf ptr RegN Just ((Prelude.Reg Prelude.Bool))
-X(IfcPosition) = Test.bsv 102 12
 X(Interface)   = Prelude.Reg Prelude.Bool
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -185,7 +179,6 @@ Command: browseinst detail 13
 X(BSVModule)   = mkM
 X(BSVPath)     = r2 r1
 X(DEBUG)       = BLeaf r1 RegN Just ((Prelude.Reg Prelude.Bool))
-X(IfcPosition) = Test.bsv 102 12
 X(Interface)   = Prelude.Reg Prelude.Bool
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -201,7 +194,6 @@ Command: browseinst detail 14
 X(BSVModule)   = mkM
 X(BSVPath)     = r2 r2
 X(DEBUG)       = BLeaf r2 RegN Just ((Prelude.Reg Prelude.Bool))
-X(IfcPosition) = Test.bsv 102 12
 X(Interface)   = Prelude.Reg Prelude.Bool
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -258,7 +250,6 @@ Command: browseinst detail 5
 X(BSVModule)   = mkT
 X(BSVPath)     = mb
 X(DEBUG)       = BLeaf mb VFoo Just ((Test.Foo (Prelude.Bit 4)))
-X(IfcPosition) = Test.bsv 92 4
 X(Interface)   = Test.Foo (Prelude.Bit 4)
 X(LocalPath)   = 
 X(Module)      = VFoo
