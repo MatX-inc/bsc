@@ -95,7 +95,7 @@ aAddSchedAssumps apkg schedule schedinfo = (apkg'', schedinfo')
         newRat = M.unionWithKey (newRatErr oldRat newRatEntries) oldRat newRatEntries
         newUseMap = M.unionWith (mergeUseMapData)
                       (asi_method_uses_map schedinfo)
-                      (M.fromListWith (mergeUseMapData) newUseMapEntries)
+                      (M.fromListWith (flip mergeUseMapData) newUseMapEntries)
         schedinfo' = schedinfo { asi_method_uses_map = newUseMap,
                                  asi_resource_alloc_table = newRat }
 
@@ -202,7 +202,7 @@ aAddCFConditionWires errh r alldefs flags apkg schedinfo =
         newRat = M.unionWithKey (newRatErr oldRat newRatEntries) oldRat newRatEntries
         newUseMap = M.unionWith (mergeUseMapData)
                       (asi_method_uses_map schedinfo)
-                      (M.fromListWith (mergeUseMapData) newUseMapEntries)
+                      (M.fromListWith (flip mergeUseMapData) newUseMapEntries)
 
 useInfoToRatEntry :: (ARuleId, MethodId, UniqueUse)
                   -> (MethodId, M.Map UniqueUse Integer)

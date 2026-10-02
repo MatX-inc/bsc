@@ -11,7 +11,7 @@ module AState(
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-import Data.List(transpose, sortBy, partition,
+import Data.List(transpose, sortBy, sortOn, partition,
             unzip4, groupBy, intersect,
             genericLength)
 import Data.Ord(comparing)
@@ -906,11 +906,19 @@ mkBlob stable mMap omMultMap (method@(MethodId obj met), usedPorts0) =
       -- Create the mapping (port_num, [uses]) -- the inverse of the
       -- mapping "usedPorts" found in RAT, which is a list of pairs
       -- that map uses to ports.  Then strip out just the [uses].
+      -- the uses in the use map's order (the order the scheduler met
+      -- them), which decides the order of the enable's terms and of the
+      -- mux's arms; the allocation table is a map and would give Ord,
+      -- i.e. string-intern, order
+      useIdx = M.fromList (zip (map fst methodUses) [0 :: Int ..])
+      usedPortsOrdered =
+          sortOn (\ (u, _) -> M.findWithDefault maxBound u useIdx) usedPorts
+
       portUses :: [[UniqueUse]]
       portUses = M.elems $
-                     -- use "flip" to preserve the order of uses?
+                     -- "flip" preserves the order of the uses
                      M.fromListWith (flip (++))
-                               [(port, [uUse]) | (uUse,port) <- usedPorts]
+                               [(port, [uUse]) | (uUse,port) <- usedPortsOrdered]
 
       -- ---------------
       -- Prepare the info for this method from MethodUsesMap

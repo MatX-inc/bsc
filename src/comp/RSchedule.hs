@@ -21,9 +21,9 @@ FlexibleInstances is necessary.
 -- This module exports the data type RAT (resource allocation table) and
 -- the function "rSchedule" which is used by ASchedule to create the RAT.
 --
-module RSchedule(rSchedule, RAT, ratToNestedLists) where
+module RSchedule(rSchedule, RAT, ratToNestedLists, ratInUseOrder) where
 
-import Data.List((\\),partition,sortBy)
+import Data.List((\\),partition,sortBy,sortOn)
 import Data.Ord(comparing)
 import Data.Maybe(maybeToList)
 import Control.Monad(when)
@@ -66,6 +66,14 @@ sortRatList = sortBy cmp
 
 ratToNestedLists :: RAT -> [(MethodId, [(UniqueUse, Integer)])]
 ratToNestedLists = sortRatList . M.toList . M.map M.toList
+
+-- the table with each method's uses in the use map's order (the order the
+-- scheduler met them); the table itself is a map, which would give Ord,
+-- i.e. string-intern, order
+ratInUseOrder :: MethodUsesMap -> RAT -> [(MethodId, [(UniqueUse, Integer)])]
+ratInUseOrder mum rat = [ (m, sortOn (pos m) us) | (m, us) <- ratToNestedLists rat ]
+  where pos m (u, _) = M.findWithDefault maxBound u (idx m)
+        idx m = M.fromList (zip (map (useDropCond . fst) (M.findWithDefault [] m mum)) [0 :: Int ..])
 
 instance PPrint RAT where
   pPrint d p = pPrint d p . ratToNestedLists
@@ -136,10 +144,14 @@ rSchedule' stable moduleId rFlag rMaxs areSimult mu@(mId, uses0) =
         g :: UUGraph
         g = uuGraph areSimult uses rMax
 
+        -- the uses in the use map's order (the order the scheduler met
+        -- them); the graph is a map and would give string-intern order
+        order = map fst uses
+
         dropEdges =
             case rFlag of
                 RFoff -> -- don't reschedule
-                         errDropEdges mId rMax
+                         errDropEdges mId rMax order
                 RFsimple -> -- reschedule
                             -- arbitrate resource (drop edge in graph)
                             simpleDropEdges stable moduleId areSimult (mId, uses) rMax
@@ -158,7 +170,7 @@ rSchedule' stable moduleId rFlag rMaxs areSimult mu@(mId, uses0) =
            then let uses_c | stable    = sortBy (comparing (ppString . fst)) uses
                            | otherwise = uses
                 in  return (M.singleton mId (M.fromList (zip (map fst uses_c) [1..])), [])
-           else do (colors, drops) <- color stable rMax dropEdges g
+           else do (colors, drops) <- color stable rMax dropEdges order g
                    return (M.singleton mId colors, drops)
 
 
@@ -231,14 +243,19 @@ verifySC g = mapM_ err [(v,v',r) | (v,ns) <- G.toList g,
 -- ==============================
 -- Error messages
 
-errDropEdges :: MethodId -> Integer -> b -> UUGraph -> ErrorMonad a
-errDropEdges mId rMax _ g = EMError [eResources mId rMax g]
+errDropEdges :: MethodId -> Integer -> [UniqueUse] -> b -> UUGraph -> ErrorMonad a
+errDropEdges mId rMax order _ g = EMError [eResources mId rMax order g]
 
-eResources :: MethodId -> Integer -> UUGraph -> EMsg
-eResources mId rMax g =
+eResources :: MethodId -> Integer -> [UniqueUse] -> UUGraph -> EMsg
+eResources mId rMax order g =
     (getMIdPosition mId,
      EResources (ppString mId) rMax
-         (map (\u -> (ppString u, prPosition (getUUPos u))) (G.vertices g)))
+         (map (\u -> (ppString u, prPosition (getUUPos u))) (inOrder order g)))
+
+-- the graph's vertices in the given order
+inOrder :: [UniqueUse] -> UUGraph -> [UniqueUse]
+inOrder order g = let vs = S.fromList (G.vertices g)
+                  in  [ v | v <- order, v `S.member` vs ]
 
 -- XXX It would be nice if EArbitrate had position info
 eArbitrate :: Id -> (RuleId, RuleId) -> EMsg
@@ -255,10 +272,11 @@ simpleDropEdges :: Bool -> Id -> (RuleId -> RuleId -> Bool) ->
                    Integer -> StkL -> UUGraph -> ErrorMonad (StkL, UUGraph)
 simpleDropEdges stable moduleId areSimult (mId,uses) rMax st g =
     if all null droppable || any sameRule rs
-    then errDropEdges mId rMax st g
+    then errDropEdges mId rMax order st g
     else EMWarning warn (st',g')
-    where droppable0 = [map fromActionOf w
-                       | v <- G.vertices g, v' <- G.neighbors g v,
+    where order = map fst uses
+          droppable0 = [map fromActionOf w
+                       | v <- inOrder order g, v' <- inOrder order g,
                        w <- maybeToList (G.lookup (v,v') g), all isActionOf w]
           -- under -stable-verilog, WHICH all-ActionOf edge is dropped
           -- follows the edge's text, not vertex (interning) order
@@ -280,37 +298,39 @@ simpleDropEdges stable moduleId areSimult (mId,uses) rMax st g =
           fromActionOf _ = internalError "fromActionOf"
           isActionOf (ActionOf _) = True
           isActionOf _            = False
-          warn = (eResources mId rMax g) : (map (eArbitrate moduleId) allDrops)
+          warn = (eResources mId rMax order g) : (map (eArbitrate moduleId) allDrops)
 
 
 -- ==============================
 -- Function: color
 
 color :: Bool -> Integer -> (StkL -> UUGraph -> ErrorMonad (StkL, UUGraph)) ->
-         UUGraph -> ErrorMonad (M.Map UniqueUse Integer, [RRM])
-color stable rMax dropEdges g
-    | rMax > 0 = colorFw stable rMax dropEdges [] g >>= colorBk [1..rMax] M.empty []
+         [UniqueUse] -> UUGraph -> ErrorMonad (M.Map UniqueUse Integer, [RRM])
+color stable rMax dropEdges order g
+    | rMax > 0 = colorFw stable rMax dropEdges order [] g >>= colorBk [1..rMax] M.empty []
     | otherwise = return (M.fromList [(v,1) | v <- G.vertices g], [])
 
 
 -- forward pass: generate stack of colorable vertices and dropped edges
+-- (the vertices are tried in the use map's order, which decides which
+-- use gets which port)
 colorFw :: Bool -> Integer -> (StkL -> UUGraph -> ErrorMonad (StkL, UUGraph)) ->
-           StkL -> UUGraph -> ErrorMonad StkL
-colorFw stable rMax dropEdges st g
+           [UniqueUse] -> StkL -> UUGraph -> ErrorMonad StkL
+colorFw stable rMax dropEdges order st g
     | G.null g = return st
     | otherwise =
         -- under -stable-verilog the vertex scan follows the uses' text,
-        -- not GraphMap key (interning) order, so WHICH use is peeled
-        -- first -- and hence the RAT color each use receives -- is a
-        -- pure function of the graph
+        -- not the use map's order, so WHICH use is peeled first -- and
+        -- hence the RAT color each use receives -- is a pure function of
+        -- the graph
         let vs | stable    = sortBy (comparing ppString) (G.vertices g)
-               | otherwise = G.vertices g
+               | otherwise = inOrder order g
         in
         case partition (colorable rMax g) vs of
-            (cv:_, _) -> colorFw stable rMax dropEdges
+            (cv:_, _) -> colorFw stable rMax dropEdges order
                              (Vertex (cv, G.neighbors g cv) : st)
                              (G.deleteVertex g cv)
-            (_, _) -> dropEdges st g >>= (uncurry $ colorFw stable rMax dropEdges)
+            (_, _) -> dropEdges st g >>= (uncurry $ colorFw stable rMax dropEdges order)
 
 
 -- backward pass: pick up vertices and color them

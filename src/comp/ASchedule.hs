@@ -597,7 +597,10 @@ aSchedule_step1 errh flags prefix pps amod = do
   -- as well as the inverse map about how each method is used
   -- both maps are returned in the SchedInfo for use by later passes
   let (ruleUseMap, methodUseMap, new_defs) =
-          tr "let buildUseMaps" $ buildUseMaps defs rules state
+          -- walked in elaboration order, the module's rules and then its
+          -- methods (the scheduler's own list puts the interface first):
+          -- the order the method uses are numbered in
+          tr "let buildUseMaps" $ buildUseMaps defs (userRules ++ interfaceRules) state
 
   -- add in the new definitions (so we don't have to change code below)
   let defs' = tr "let defs" $ defs ++ new_defs
