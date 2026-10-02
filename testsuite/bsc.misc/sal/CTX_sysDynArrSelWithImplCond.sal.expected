@@ -28,6 +28,7 @@ BEGIN
 	     [[ i : [0..3] ] def_fs_0_first____d1 ] WITH [1] := def_fs_1_first____d2
 	     WITH [2] := def_fs_2_first____d3
 	     WITH [3] := def_fs_3_first____d4
+    IN LET def_idx___d6 : Bit{2}!T = CTX_RegN{2}!meth_read(state0.inst_idx)
     IN ArrayPrim1{Bit{8}!T;4,2}!arrSelect(def_ARR_fs_0_first_fs_1_first_fs_2_first_fs_3_first___d5,
 					  def_idx__h515) ;
   

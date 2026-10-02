@@ -122,8 +122,11 @@ aNoInline flags apkg =
           insts' <- mapMAExprs (liftAExpr False) insts
 
           -- get back the final list of defs
-          -- (original defs with lifting, plus any new defs)
-          defs' <- gets nis_defs
+          -- (original defs with lifting, plus any new defs); the state
+          -- conses them, so reverse to keep the package's order, which is
+          -- elaboration order and which the later tie-breaks by list
+          -- position preserve (see local_defs in AConv)
+          defs' <- gets (reverse . nis_defs)
 
           -- now that all ANoInlineFunCall are top-level defs,
           -- assign instance names to each one

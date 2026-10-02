@@ -35,7 +35,6 @@ rule_RL_r0_sysTb =
 	 ; (def_c2___d6 :: Bit #51) = meth_read_RegN (inst_c2__sysTb state0)
 	 ; (def_c1___d5 :: Bit #51) = meth_read_RegN (inst_c1__sysTb state0)
 	 ; (def_gcd_RDY_start____d1 :: Bool) = meth_RDY_start_sysMethods (inst_gcd__sysTb state0)
-	 ; (def_add___d7 :: Bit #51) = noinline_add def_c1___d5 (3 :: Bit #51)
 	 ; (def_add___d8 :: Bit #51) = noinline_add def_c2___d6 (2 :: Bit #51)
 	 ; (def_state_EQ_0___d3 :: Bool) = primEQ def_state__h505 (0 :: Bit #2)
 	 ; (def_gcd_RDY_start_AND_state_EQ_0___d4 :: Bool) = def_gcd_RDY_start____d1 && def_state_EQ_0___d3

@@ -65,7 +65,7 @@ import IntegerUtil
 import qualified Data.Map as M
 import qualified Data.Set as S
 import GraphUtil(reverseMap, extractOneCycle_map)
-import SCC(tsort)
+import SCC(tsortStable)
 
 --import Debug.Trace
 --import Util(traces)
@@ -140,12 +140,6 @@ vForeignBlock :: VConvtOpts -> ForeignFuncMap ->
 vForeignBlock vco ffmap ds (_, []) = Nothing
 vForeignBlock vco ffmap ds (clks, fcalls) =
   let
-      -- make a def map
-      def_map = M.fromList [(i, d) | d@(ADef i _ _ _) <- ds]
-      findDef i = let err = internalError ("vForeignBlock findDef: " ++
-                                           ppReadable i)
-                  in  M.findWithDefault err i def_map
-
       -- make a def dependency map
       dep_map = M.fromList [(i, aVars d) | d@(ADef i _ _ _) <- ds]
       -- make a reverse dependency map
@@ -165,8 +159,9 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
         where idKey i = (getIdBaseString i, getIdQualString i)
       inline_def_ids0 = av_depend_defs `intersect` fcall_depend_defs
 
-      -- convert from the ids back to the defs
-      inline_defs = map findDef inline_def_ids
+      -- the defs to inline, in definition order
+      inline_def_set = S.fromList inline_def_ids
+      inline_defs = [ d | d@(ADef i _ _ _) <- ds, i `S.member` inline_def_set ]
 
       -- tsort these inlined defs among the fcalls
       fcalls_and_defs = tsortForeignCallsAndDefs (vco_stable vco) inline_defs fcalls
@@ -220,7 +215,7 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
                                vi_body = always_stmt }])++
            (if null asses then [] else ass_stmts),
 
-           inline_def_ids)
+           map adef_objid inline_defs)
 
 vForeignCall :: VConvtOpts -> AForeignCall -> ForeignFuncMap -> VStmt
 vForeignCall vco f@(AForeignCall aid taskid (c:es) ids resets) ffmap =
@@ -306,8 +301,12 @@ tsortForeignCallsAndDefs stable ds fcalls =
         -- * "Left key" to represent a def (by it's name)
         -- * "Right Integer" to represent an fcall (by it's position)
 
-        -- The use of Left and Right was chosen to make Defs lower in
-        -- the Ord order than ForeignCalls.  This way, tsort puts them first.
+        -- The nodes are listed defs first, in definition order, then the
+        -- fcalls in their order, and tsortStable breaks ties by that
+        -- position: so where the edges leave the choice open, defs come
+        -- before fcalls and each kind keeps its order.  (Ord on AId is
+        -- string-intern order, which depends on what the process has
+        -- compiled before, so it must not decide anything here.)
 
         -- Under -stable-verilog the def-node key carries the id's TEXT
         -- first, so the tsort tie-break among ready defs (SCC's PSQ
@@ -342,7 +341,6 @@ tsortForeignCallsAndDefs stable ds fcalls =
         -- ForeignCalls
 
         -- give the fcalls a unique number and make a mapping
-        -- (numbering in order sets the Ord order for tsort)
 
         numbered_fcalls :: [(Integer, AForeignCall)]
         numbered_fcalls = zip [1..] fcalls
@@ -357,7 +355,6 @@ tsortForeignCallsAndDefs stable ds fcalls =
         -- ForeignCall-to-ForeignCall edges
         -- (to maintain the user-specified order of the ForeignCalls)
 
-        -- (are these still needed now that we use Ord to bias tsort?)
         fcall_edges =
           case (uncons numbered_fcalls) of
             Nothing -> []
@@ -416,8 +413,10 @@ tsortForeignCallsAndDefs stable ds fcalls =
             map_insertManyWith union (def_fcall_edges) $
             M.fromList def_edges
 
-        -- Convert the graph to the format expected by tsort.
-        g_edges = M.toList g
+        -- the graph as tsortStable wants it: nodes in the order that
+        -- breaks ties, each with its edges
+        nodes = map (Left . adef_objid) ds ++ map (Right . fst) numbered_fcalls
+        g_edges = [ (n, M.findWithDefault [] n g) | n <- nodes ]
 
         -- ----------
         -- convert a graph node back into a def/action
@@ -427,8 +426,8 @@ tsortForeignCallsAndDefs stable ds fcalls =
         convertNode (Right n) = Right (getFCall n)
 
     in
-        -- tsort returns Left if there is a loop, Right if sorted.
-        case (tsort g_edges) of
+        -- tsortStable returns Left if there is a loop, Right if sorted.
+        case (tsortStable g_edges) of
             Right is -> map convertNode is
             Left (scc:_) ->
                 let path = extractOneCycle_map g scc

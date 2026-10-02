@@ -23,7 +23,6 @@ BEGIN
     IN LET def_c2___d6 : Bit{51}!T = CTX_RegN{51}!meth_read(state0.inst_c2)
     IN LET def_c1___d5 : Bit{51}!T = CTX_RegN{51}!meth_read(state0.inst_c1)
     IN LET def_gcd_RDY_start____d1 : BOOLEAN = CTX_sysMethods!meth_RDY_start(state0.inst_gcd)
-    IN LET def_add___d7 : Bit{51}!T = CTX_module_add!fn(def_c1___d5, Bit{51}!mkConst(3))
     IN LET def_add___d8 : Bit{51}!T = CTX_module_add!fn(def_c2___d6, Bit{51}!mkConst(2))
     IN LET def_state_EQ_0___d3 : BOOLEAN = Prim1{2}!primEQ(def_state__h505, Bit{2}!mkConst(0))
     IN LET def_gcd_RDY_start_AND_state_EQ_0___d4 : BOOLEAN =

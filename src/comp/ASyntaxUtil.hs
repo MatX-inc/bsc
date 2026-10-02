@@ -9,7 +9,7 @@ import qualified Data.Map as M
 import Prim
 import PPrint
 import IntLit
-import SCC(tsort)
+import SCC(tsort, tsortStable)
 import Util(separate)
 import Data.List(nub, sortOn, genericIndex, genericDrop)
 import Data.Maybe(mapMaybe, fromMaybe)
@@ -740,9 +740,12 @@ tsortADefs stable ds =
                     Left is -> internalError ("tsortADefs: cyclic " ++
                                    ppReadable (map (map snd) is) ++ ppReadable ds)
                     Right is -> map snd is
+          -- otherwise ties (defs the dependencies leave unordered) keep
+          -- the definition order; tsort would break them by AId, which
+          -- is string-intern order
           | otherwise =
               let g = zip ds_ids deps
-              in  case tsort g of
+              in  case tsortStable g of
                     Left is -> internalError ("tsortADefs: cyclic " ++
                                    ppReadable is ++ ppReadable ds)
                     Right is -> is
