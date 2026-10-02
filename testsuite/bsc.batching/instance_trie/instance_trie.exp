@@ -1,0 +1,10 @@
+# Issue: a Free query of the instance trie walked a node's branches in
+# Data.Map order over Maybe TyCon, which is string-intern order, and the
+# fresh type variables that context reduction numbers in that order name
+# every later dictionary in the .bo.
+# Fix: each trie node keeps and enumerates its keys in first-item order.
+# Pull request: https://github.com/MatX-inc/bsc/pull/184
+# Probe: TrieOrder's polymorphic module context leaves Free IsModule queries;
+# its .bo must dump the same alone and behind TrieOrderScramble (Module first).
+
+batching_bo_pair TrieOrder.bsv TrieOrderRoot.bsv TrieOrderScramble.bsv
