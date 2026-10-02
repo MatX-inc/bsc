@@ -185,7 +185,7 @@ aOpt errh flags pkg0 = do
 
     -- CSE defs
     --
-    let ds3 = joinDefs stable optjoin ds2
+    let ds3 = joinDefs optjoin ds2
     when debug $
       traceM ("trace defs, post joinDefs (ds3): " ++ ppReadable ds3)
     let pkg6 = pkg5 { aspkg_values = ds3 }
@@ -441,40 +441,18 @@ aOptInstArg bflgs _ = aExp bflgs
 -- If any local id has the same definition (expr) as a previously
 -- encountered id, then change the def of the second occurrence to be
 -- just a reference to the first.
-joinDefs :: Bool -> Bool -> [ADef] -> [ADef]
-joinDefs _ False ds = ds
-joinDefs False True dsx = reverse (snd (foldl add (M.empty, []) dsx))
-  where add :: (M.Map AExpr ADef, [ADef]) -> ADef -> (M.Map AExpr ADef,[ADef])
-        add (m, ds) d@(ADef _ _ (ASInt _ _ _) _) = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASDef _ _) _)   = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASStr _ _ _) _) = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASPort _ _) _)  = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASParam _ _) _) = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASAny _ _) _)   = (m, d:ds)
-        add (m, ds) d@(ADef ie _ e props)            =
-                case M.lookup e m of
-                Nothing
-                    | hasIdProp ie IdP_enable  -> (m, d:ds)
-                    | defPropsHasNoCSE props   -> (m, d:ds)
-                    | otherwise                -> (M.insert e d m, d:ds)
-                -- a NoCSE def must not be merged in either direction:
-                -- it can neither BE the surviving name nor be rewritten
-                -- into an alias of one (-keep-method-conds relies on the
-                -- COND def keeping its own full expression); before this
-                -- guard, a NoCSE def whose twin happened to precede it
-                -- in (interning-order-sensitive) def order was silently
-                -- collapsed
-                Just (ADef i t _ p)
-                    | defPropsHasNoCSE props -> (m, d:ds)
-                    | otherwise -> -- traces ("adding simple assignment: " ++ ppReadable (ie,i)) $
-                                   (m, (ADef ie t (ASDef t i) p) : ds)
--- Under -stable-verilog the surviving name of each expression class is
--- chosen by name QUALITY (keep > user-visible > generated ids, via
--- idQuality) with the lexicographically least name breaking ties -- a
--- pure function of the class, independent of traversal order -- instead
--- of first-come-wins over the (interning-order-sensitive) def list.
-joinDefs True True dsx = map rewrite dsx
-  where -- the RHS shapes joinDefs never touches (same as the fold above)
+-- The surviving name of each expression class is chosen by name QUALITY
+-- (keep > user-visible > generated ids, via idQuality), the
+-- lexicographically least name breaking ties: a pure function of the
+-- class.  First-come-wins over the def list made the choice depend on
+-- the list's order, which until the position tie-break was intern order,
+-- and with it would have let a kept name (-keep-method-conds) lose to
+-- an earlier generated twin.  (After B-Lang-org/bsc#1104's survivor
+-- rule, here unconditional.)
+joinDefs :: Bool -> [ADef] -> [ADef]
+joinDefs False ds = ds
+joinDefs True dsx = map rewrite dsx
+  where -- the RHS shapes that are never merged
         shapeOK (ASInt _ _ _)  = False
         shapeOK (ASDef _ _)    = False
         shapeOK (ASStr _ _ _)  = False
@@ -482,23 +460,24 @@ joinDefs True True dsx = map rewrite dsx
         shapeOK (ASParam _ _)  = False
         shapeOK (ASAny _ _)    = False
         shapeOK _              = True
-        -- enable defs cannot BE the surviving name but -- exactly like
-        -- the first-come fold -- are still rewritten as aliases of it;
-        -- NoCSE defs are never merged in either direction
+        -- enable defs cannot be the surviving name but are still
+        -- rewritten as aliases of it; NoCSE defs are never merged in
+        -- either direction
         repCandidate (ADef ie _ e props) =
             shapeOK e && not (hasIdProp ie IdP_enable)
                       && not (defPropsHasNoCSE props)
-        rank d = (idQuality (Just (adef_objid d)),
+        -- among names of equal quality a rule's firing signal (WILL_FIRE_,
+        -- CAN_FIRE_) is the one readers look for; then the least name
+        rank d = (idQuality (Just (adef_objid d)), isFire (adef_objid d),
                   Down (getIdString (adef_objid d)))
         better d1 d2 = if rank d1 >= rank d2 then d1 else d2
-        -- strict: with the lazy map every duplicate chains a `better'
-        -- thunk on the class's entry, and the first lookup would force
-        -- the whole chain at once
+        -- strict: with a lazy map every duplicate chains a `better'
+        -- thunk on the class's entry
         reps = MS.fromListWith better
                    [ (adef_expr d, d) | d <- dsx, repCandidate d ]
         rewrite d@(ADef ie _ e props)
             | shapeOK e,
-              not (defPropsHasNoCSE props),  -- never merged, like the fold
+              not (defPropsHasNoCSE props),
               Just (ADef i t _ p) <- M.lookup e reps,
               i /= ie
             = ADef ie t (ASDef t i) p
