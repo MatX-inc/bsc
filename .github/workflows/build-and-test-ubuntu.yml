@@ -359,7 +359,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7]
     env:
-      MATX_VERILATOR_RELEASE: build-20260701_1
+      MATX_VERILATOR_RELEASE: build-20261002_2
     steps:
       - uses: actions/checkout@v6
 
@@ -374,11 +374,6 @@ jobs:
           curl -sSfL "https://github.com/MatX-inc/verilator/releases/download/${MATX_VERILATOR_RELEASE}/${ASSET}" \
                | tar xz -C "$HOME"
           echo "$HOME/inst/bin" >> "$GITHUB_PATH"
-          # The release's verilated.mk bakes the build host's python
-          # (python3.11); shim it to whatever python3 the runner has
-          mkdir -p "$HOME/pyshim"
-          ln -sf "$(command -v python3)" "$HOME/pyshim/python3.11"
-          echo "$HOME/pyshim" >> "$GITHUB_PATH"
 
       - name: Assert deployed-verilator pin
         run: |
@@ -387,7 +382,7 @@ jobs:
           # version literal together with MATX_VERILATOR_RELEASE.
           test "$(command -v verilator)" = "$HOME/inst/bin/verilator"
           verilator --version
-          verilator --version | grep -qF 'Verilator 5.048'
+          verilator --version | grep -qF 'Verilator 5.052'
 
       - name: Download bsc
         uses: actions/download-artifact@v8
