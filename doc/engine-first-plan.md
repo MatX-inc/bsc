@@ -367,13 +367,11 @@ Findings:
   under first sighting) (59f09807). (5)
   The built-in `Add` rules rebuilt a cancelled sum from a bag of terms in
   `Type` order; `fromAddTerms` now lists the terms by a content-only
-  comparison. This one re-presents two unsatisfiable-proviso diagnostics
-  (`Bug782_Div_*_noProvisos`: `Add#(ri, a__, sz3)` becomes
-  `Add#(a__, ri, sz3)`, and one residual is reduced from the other
-  side), so it is held back, uncommitted, until Ravi decides whether
-  those two expected outputs may change; the pair orientation in
-  `genNumEqInsts` has the same character (four more diagnostics) and is
-  left as it is. Each fix landed with a probe in
+  comparison (d9f13a5f). It re-presents two unsatisfiable-proviso
+  diagnostics (`Bug782_Div_*_noProvisos`) from the other side of the
+  cancellation; Ravi approved those two expected-output changes on
+  2026-10-02. The pair orientation in `genNumEqInsts` has the same
+  character (four more diagnostics) and is left as it is. Each fix landed with a probe in
   `testsuite/bsc.binary/batching`: the probe is compiled on its own and
   inside a `-u` batch behind a scrambler package that interns the
   relevant names in the opposite order, and the two dumps must agree;
@@ -383,9 +381,8 @@ Findings:
   differed before, 29 after the trie fix (names in 16), 29 after the
   sorts (names in 16; the sort leak was real but not the dominant
   symptom), 29 after the join fix (names in 3), 29 after the parser fix
-  (names in 0, one commutative-sum flip left in FloatingPoint), and,
-  with the held-back numeric fix, 29 with not one dump line left that is
-  not a hash. What differs now is leak 2 only: position numbers inside
+  (names in 0, one commutative-sum flip left in FloatingPoint), and 29
+  after the numeric fix with not one dump line left that is not a hash. What differs now is leak 2 only: position numbers inside
   hash-consed CType nodes, and the import hashes that propagate from
   them; the batched .bo files carry source-file names they never import
   (Arbiter.bsv appears in fifteen Base3-Misc packages, LBus.bo carries
