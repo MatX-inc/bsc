@@ -1,4 +1,4 @@
-module SCC(scc, getCycles, tsort, tsortWith, Graph) where
+module SCC(scc, getCycles, tsort, tsortStable, tsortWith, Graph) where
 
 -- Compute strongly connected components.
 -- The graph is represented as a list of (node, neighbour list) pairs.
@@ -97,6 +97,15 @@ otsort ns =
 -- tree shape among equal priorities); unchanged from before tsortWith.
 tsort :: Ord node => [Node node] -> Either [[node]] [node]
 tsort = tsortWith (const (Nothing :: Maybe ()))
+
+-- the same sort with ties broken by position in the input list, so the
+-- result is a function of the input alone (Ord on Id is string-intern
+-- order, which depends on what the process has already seen).  The def
+-- lists the back end sorts come from AConv in elaboration order and the
+-- passes in between keep their relative order, so this keeps elaboration
+-- order through the pipeline.
+tsortStable :: Ord node => [Node node] -> Either [[node]] [node]
+tsortStable = tsortWith (Just . snd)
 
 -- Topological sort with an optional tie-break key, computed from each
 -- node and its position in the input list.  With a key, the queue's
