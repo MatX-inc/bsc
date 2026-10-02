@@ -30,10 +30,24 @@ import Pred(Pred(..), Class(inputPositions), expandSyn)
 -- Keys in the map are Maybe TyCon:
 --   Just tc  -- this instance has constructor tc at this position
 --   Nothing  -- this instance has a type variable at this position
+--
+-- A node also keeps its keys in the order in which their first item
+-- appears in the build list, and every enumeration of a node's
+-- branches (a Free query, allItems) follows that order, never the
+-- map's.  The map orders TyCons by Id, and Id order is string-intern
+-- order: it depends on which names the process has already seen, so
+-- it differs between a one-shot compile and a batched one.  The
+-- enumeration order is observable: context reduction instantiates
+-- each candidate instance with fresh type variables before trying
+-- it, so the order decides the variable counter at every later
+-- dictionary, and those numbers are names in the .bo.  First
+-- appearance in the build list is declaration order (imports in
+-- their sorted order, then the package's own instances), which is a
+-- function of the sources alone.
 -- ---------------------------------------------------------------------------
 
 data PredTrie a = Leaf [a]
-                | Node (M.Map (Maybe TyCon) (PredTrie a))
+                | Node (M.Map (Maybe TyCon) (PredTrie a)) [Maybe TyCon]
 
 -- ---------------------------------------------------------------------------
 -- Building the trie
@@ -67,30 +81,33 @@ buildRaw _ [] = internalError "PredTrie.buildRaw: empty list"
 -- An empty trie with the right depth for a given key.
 emptyForKey :: [Maybe TyCon] -> PredTrie a
 emptyForKey []    = Leaf []
-emptyForKey (_:_) = Node M.empty
+emptyForKey (_:_) = Node M.empty []
 
--- Insert one item into the trie.
+-- Insert one item into the trie.  buildRaw folds from the right, so
+-- the items arrive last to first and a key's final move to the front
+-- of the order list is made by its first item; the list therefore
+-- ends up in first-appearance order.
 insertItem :: (a -> [Maybe TyCon]) -> a -> PredTrie a -> PredTrie a
 insertItem keyOf item = go (keyOf item)
   where
     go []     (Leaf ys) = Leaf (item : ys)
-    go (k:ks) (Node m)  =
+    go (k:ks) (Node m ord)  =
         let sub  = M.findWithDefault (emptyForKey ks) k m
             sub' = go ks sub
-        in  Node (M.insert k sub' m)
+        in  Node (M.insert k sub' m) (k : filter (/= k) ord)
     go key trie = internalError ("PredTrie.insertItem: key/trie depth mismatch" ++
                                  " (key remaining=" ++ show (length key) ++
                                  ", trie=" ++ trieShape trie ++ ")")
 
 trieShape :: PredTrie a -> String
 trieShape (Leaf xs) = "Leaf[" ++ show (length xs) ++ "]"
-trieShape (Node _)  = "Node"
+trieShape (Node _ _) = "Node"
 
 -- | Sort the items in each leaf using a whole-list sorting function.
 -- Use this once at build time so that lookupPredTrie returns items in order.
 sortTrieLeaves :: ([a] -> [a]) -> PredTrie a -> PredTrie a
 sortTrieLeaves f (Leaf xs) = Leaf (f xs)
-sortTrieLeaves f (Node m)  = Node (M.map (sortTrieLeaves f) m)
+sortTrieLeaves f (Node m ord) = Node (M.map (sortTrieLeaves f) m) ord
 
 -- ---------------------------------------------------------------------------
 -- Querying the trie
@@ -117,10 +134,10 @@ data QueryElem = Free | Bound | Con TyCon
 -- unification will filter to the actual matches.
 lookupPredTrie :: [QueryElem] -> PredTrie a -> [a]
 lookupPredTrie []     (Leaf xs) = xs
-lookupPredTrie []     (Node _)  = internalError "PredTrie.lookupPredTrie: query too short"
+lookupPredTrie []     (Node _ _) = internalError "PredTrie.lookupPredTrie: query too short"
 lookupPredTrie (_:_)  (Leaf []) = []   -- empty trie at any depth: no instances
 lookupPredTrie (_:_)  (Leaf _)  = internalError "PredTrie.lookupPredTrie: query too long (items at leaf)"
-lookupPredTrie (q:qs) (Node m)  =
+lookupPredTrie (q:qs) (Node m ord) =
     case q of
         -- Concrete constructor: check same-constructor instances first, then
         -- catch-alls (Nothing branch).
@@ -128,19 +145,17 @@ lookupPredTrie (q:qs) (Node m)  =
         -- Rigid variable: only catch-all instances can match.
         Bound   -> descend Nothing
         -- Free metavar: any instance could match.  Return concrete-constructor
-        -- branches before the Nothing (catch-all) branch so that more-specific
-        -- instances are encountered first by the type checker's scan.
-        -- (M.elems would put Nothing first since Nothing < Just in Map order.)
-        Free    -> let (_, m_nothing, justBranches) = M.splitLookup Nothing m
-                   in  concatMap (lookupPredTrie qs) (M.elems justBranches)
-                       ++ maybe [] (lookupPredTrie qs) m_nothing
+        -- branches, in declaration order, before the Nothing (catch-all)
+        -- branch so that more-specific instances are encountered first by
+        -- the type checker's scan.
+        Free    -> concat [ descend k | k@(Just _) <- ord ] ++ descend Nothing
   where
     descend k = maybe [] (lookupPredTrie qs) (M.lookup k m)
 
 -- | Collect ALL items stored in the trie (e.g. for getInsts).
 allItems :: PredTrie a -> [a]
 allItems (Leaf xs) = xs
-allItems (Node m)  = concatMap allItems (M.elems m)
+allItems (Node m ord) = concat [ maybe [] allItems (M.lookup k m) | k <- ord ]
 
 -- ---------------------------------------------------------------------------
 -- Trie key and query building for class predicates
