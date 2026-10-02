@@ -58,7 +58,8 @@ import Prim hiding(PrimArg(..))
 
 import Util(Hash, hashInit, nextHashByte, showHash)
 
-import Data.List(sort, intercalate)
+import Data.List(sort, sortBy, intercalate)
+import Data.Ord(comparing)
 import Control.Monad(replicateM, liftM, ap)
 import Data.Array.IArray()
 import Data.Array.Unboxed
@@ -680,13 +681,27 @@ instance (Bin a, Bin b) => Bin (Either a b) where
                    1 -> do { y <- fromBin; return (Right y) }
                    n -> internalError $ "BinData.Bin(Either a b).readBytes: " ++ show n
 
+-- Maps and sets are written in an order that depends on their keys'
+-- content alone.  The container's own order is the key's Ord, and for
+-- a key built on Id or IType that is string-intern order, which
+-- depends on which names the process has already seen, so the same
+-- map serialized differently in a one-shot compile and in a batch (the
+-- IPackage's associated-type-function cache was the case found: the
+-- reader rebuilds the map, so the decoded content was identical and
+-- only the bytes, and so the hash chain, differed).  Each key is
+-- encoded on its own, outside the stream's sharing state, and the
+-- entries are written in the order of those encodings.
 instance (Ord a, Bin a, Bin b) => Bin (M.Map a b) where
-    writeBytes omap = toBin (M.toList omap)
+    writeBytes omap = toBin (orderByEncoding fst (M.toList omap))
     readBytes       = do { ms <- fromBin; return (M.fromList ms) }
 
 instance (Ord a, Bin a) => Bin (S.Set a) where
-    writeBytes set = toBin (S.toList set)
+    writeBytes set = toBin (orderByEncoding id (S.toList set))
     readBytes      = do { ss <- fromBin; return (S.fromList ss) }
+
+orderByEncoding :: Bin k => (x -> k) -> [x] -> [x]
+orderByEncoding key xs =
+    map snd (sortBy (comparing fst) [ (encode (key x), x) | x <- xs ])
 
 -- ---------
 -- Bin Ids, Positions, etc.
@@ -1225,7 +1240,11 @@ instance (Bin a, Ord a) => Bin (SchedInfo a) where
 instance (Bin a, Ord a) => Bin (MethodConflictInfo a) where
     writeBytes mci@(MethodConflictInfo cfs sbs mes ps sbrs cs exts) =
         section "MethodConflictInfo" $
-        do let meths = extractFromMethodConflictInfo mci
+        -- the method array in an order the methods' content determines:
+        -- extractFromMethodConflictInfo lists a Set, whose order for Ids
+        -- is string-intern order (see the Map and Set instances above),
+        -- and the array's order is the bit matrices' order
+        do let meths = orderByEncoding id (extractFromMethodConflictInfo mci)
                arr :: Array Int a
                arr = listArray (0,length(meths)-1) meths
                arr_map = M.fromList (zip meths [0..])
