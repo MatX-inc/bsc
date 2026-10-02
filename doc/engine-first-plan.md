@@ -392,6 +392,52 @@ Findings:
   groups show no new failure for the committed fixes; the earlier
   per-round runs had left compiled intermediates in the tree and
   under-reported, which is why the baseline run exists.
+- **Leak 2 is closed for the library build (2026-10-02): the occurrence
+  spine, plus two serialization orders it uncovered.** CType's cons table
+  now holds value nodes with no positions anywhere inside (leaves entered
+  at noPosition, ap nodes built over canonical children, every node kept
+  by id), and both constructors return the caller's own spine stamped
+  with the value's id; GroundCType enters its leaves the same way
+  (e7f7951a). That is `ccAtCaller` extended from leaves to every node;
+  ids stay identity and nothing position-bearing is shared through the
+  table. With it the batched files stopped naming source files they
+  never import, and the parity count went from 29 to 16. The rest was
+  not positions: a .bo serializes maps and sets by iterating them, so
+  key order, intern order for Ids and ITypes, reached the bytes while
+  the decoded content stayed identical (the IPackage's
+  associated-type-function cache: 28 bytes in CBus.bo no printer showed,
+  found by tracing the writer), and a module's method-conflict table
+  listed its methods from a Set to index its bit matrices. Maps, sets
+  and that array are now written in the order of their keys' own
+  encodings (180e5efb). Result: make's `-u` batch and the engine's
+  per-package build agree on all 131 library files, byte for byte; the
+  PosOrder probe (ground types the scrambler also writes) fails on the
+  pre-spine compiler and passes after it, and every probe in
+  `bsc.binary/batching` now compares its dumps whole, hash line included;
+  the gate's step 4 is a hard check. One expected-output change: bluetcl's
+  `IfcPosition`, printed from a type rebuilt from an IType, was the first
+  construction's leaked position (in the tests the module's interface
+  declaration, not the instance); with value nodes the line is omitted
+  and eight bsc.bluetcl outputs lose it. A real value for it, the
+  declared type's position carried through elaboration into the
+  instance tree, belongs with the .ba format work.
+- **The typed form (Ravi, 2026-10-02; not now).** `Type_ ann` with
+  `Type_ Position` the occurrence and `Type_ ()` the value: constructors
+  that hold a position directly hold the annotation instead, and those
+  that reach one through an Id take it from the identifier at
+  construction and keep the identifier sanitized, as IType does. The key
+  is annotation-free by construction and Ids inside types are identity
+  everywhere. `Type_ ()` is IType's shape, so this is the same move as
+  interning beyond ground nodes and is done with it, not before.
+- **Delivery (Ravi, 2026-10-02): separate PRs, tested without the
+  engine.** Each determinism fix goes out as its own PR against
+  upstream's head where its code exists there (the trie, the sorts, the
+  join, the parser, the numeric sums, the serialization order), built
+  with the make path and checked with the batching probes and the five
+  test groups against a baseline on a cleaned tree; the spine is fork
+  only and stacks on `release-devel-B0` with the minimal PRs it needs
+  (the harness and the trie fix). The batching probes need only `bsc -u`
+  against one-shot compiles, so none of the detection depends on Shake.
 - **Leak 2 and the type tables: design (2026-10-02, for review).**
   Tiers by what an entry depends on: values (structure and structural
   metadata; valid forever), names (anything containing a qualified tycon;
