@@ -321,6 +321,20 @@ joinByFst =
     groupBy (\ (x,_) (y,_) -> x==y) .
     sortBy (\ (x,_) (y,_) -> x `compare` y)
 
+-- | The groups of joinByFst, in the order in which their keys first
+-- occur, each keeping its elements' order.  joinByFst orders the
+-- groups by the key, and for a key built on Id that is string-intern
+-- order, which depends on which names the process has already seen;
+-- use this where the group order is observable.
+joinByFstStable :: (Ord a) => [(a, b)] -> [(a, [b])]
+joinByFstStable xs =
+    let groups = M.fromListWith (flip (++)) [ (k, [v]) | (k, v) <- xs ]
+        firstKeys _ [] = []
+        firstKeys seen ((k, _) : rest)
+            | S.member k seen = firstKeys seen rest
+            | otherwise       = k : firstKeys (S.insert k seen) rest
+    in  [ (k, M.findWithDefault [] k groups) | k <- firstKeys S.empty xs ]
+
 mergeWith :: (Ord b) => (a -> a -> a) -> [(b, a)] -> [(b, a)] -> [(b, a)]
 mergeWith f = mergeWithCmp cmpFst f'
     where f' (k,v) (_,v') = (k, v `f` v')
