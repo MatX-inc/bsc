@@ -33,15 +33,15 @@ rg :: ABSTRACT:  Prelude.VReg = RegUN
 				port types=D_IN -> Prelude.Bit 8
 					   Q_OUT -> Prelude.Bit 8
 -- AP local definitions
+rg___d1 :: Bit 8;
+rg___d1  = rg.read;
+-- IdProp rg___d1[IdP_from_rhs]
 rg_PLUS_8___d2 :: Bit 8;
 rg_PLUS_8___d2  = rg___d1 + 8'd8;
 -- IdProp rg_PLUS_8___d2[IdP_from_rhs]
 rg_MINUS_1___d3 :: Bit 8;
 rg_MINUS_1___d3  = rg___d1 - 8'd1;
 -- IdProp rg_MINUS_1___d3[IdP_from_rhs]
-rg___d1 :: Bit 8;
-rg___d1  = rg.read;
--- IdProp rg___d1[IdP_from_rhs]
 -- AP rules
 rule RL_r "r":
  when 1'd1

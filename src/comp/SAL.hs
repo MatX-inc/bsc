@@ -55,6 +55,7 @@ convAPackageToSAL errh flags apkg0 | (apkg_is_wrapped apkg0) =
         ds    = apkg_local_defs apkg
         ifcs  = apkg_interface apkg
         defmap = M.fromList [ (i, d) | d@(ADef i _ _ _) <- ds ]
+        deforder = M.fromList (zip [ i | ADef i _ _ _ <- ds ] [0 :: Int ..])
 
         -- there should be one value method, and its constant RDY
         fn_defs =
@@ -76,7 +77,7 @@ convAPackageToSAL errh flags apkg0 | (apkg_is_wrapped apkg0) =
                   -- get all the defs used by the return value
                   uses = getAExprDefs defmap M.empty [ret_e]
 
-                  body = runCM defmap M.empty argset $ do
+                  body = runCM defmap deforder M.empty argset $ do
                            ret_expr <- convAExpr ret_e
                            ds <- mapM convUse (M.toList uses)
                            return $ sLet ds ret_expr
@@ -113,6 +114,7 @@ convAPackageToSAL errh flags apkg0 =
         ifcs  = apkg_interface apkg
         inps  = getAPackageInputs apkg
         defmap = M.fromList [ (i, d) | d@(ADef i _ _ _) <- ds ]
+        deforder = M.fromList (zip [ i | ADef i _ _ _ <- ds ] [0 :: Int ..])
         instmap = M.fromList [ (inst, (vn, ps, mtmap))
                                  | avi <- avis,
                                    let inst = avi_vname avi,
@@ -124,13 +126,13 @@ convAPackageToSAL errh flags apkg0 =
         state_defs = makeModTypeDecl inps avis
 
         -- define the ctor (call submod ctors with inst args)
-        ctor_defs = makeModCtorDecl defmap inps avis
+        ctor_defs = makeModCtorDecl defmap deforder inps avis
 
         -- define each rule as a fn
-        rule_defs = map (convARule defmap instmap mmap) rs
+        rule_defs = map (convARule defmap deforder instmap mmap) rs
 
         -- define each method as a fn
-        ifc_defs = concatMap (convAIFace defmap instmap mmap) ifcs
+        ifc_defs = concatMap (convAIFace defmap deforder instmap mmap) ifcs
 
         -- context Id
         ctx_id = ctxId modId
@@ -829,9 +831,9 @@ makeModTypeDecl inps avis =
 
 -- -------------------------
 
-makeModCtorDecl :: DefMap -> [(AAbstractInput, VArgInfo)] -> [AVInst] ->
+makeModCtorDecl :: DefMap -> M.Map AId Int -> [(AAbstractInput, VArgInfo)] -> [AVInst] ->
                    [SDefn]
-makeModCtorDecl defmap inps avis =
+makeModCtorDecl defmap deforder inps avis =
     let
         -- ports/params are Bit type
         getInputInfo (AAI_Port (i, t), Port {}) =
@@ -863,7 +865,7 @@ makeModCtorDecl defmap inps avis =
             return (accum_fs', accum_uses')
 
         (inst_fs, letdefs) =
-            runCM defmap M.empty S.empty $ do
+            runCM defmap deforder M.empty S.empty $ do
               (fs, uses) <- foldM mkInstField ([], M.empty) (reverse avis)
               ds <- mapM convUse (M.toList uses)
               return (fs, ds)
@@ -880,10 +882,10 @@ makeModCtorDecl defmap inps avis =
 
 -- -------------------------
 
-convARule :: DefMap -> InstMap -> MethodOrderMap -> ARule -> SDefn
-convARule defmap instmap mmap r@(ARule rId _ _ _ p as _ _) =
+convARule :: DefMap -> M.Map AId Int -> InstMap -> MethodOrderMap -> ARule -> SDefn
+convARule defmap deforder instmap mmap r@(ARule rId _ _ _ p as _ _) =
   let
-      body = runCM defmap instmap S.empty $ convRuleActions mmap p as
+      body = runCM defmap deforder instmap S.empty $ convRuleActions mmap p as
   in
       SDValue (ruleId rId) (ruleType modType) $
         sLam [(stateId, modType)] $
@@ -891,10 +893,10 @@ convARule defmap instmap mmap r@(ARule rId _ _ _ p as _ _) =
 
 -- -------------------------
 
-convAIFace :: DefMap -> InstMap -> MethodOrderMap -> AIFace -> [SDefn]
+convAIFace :: DefMap -> M.Map AId Int -> InstMap -> MethodOrderMap -> AIFace -> [SDefn]
 
 -- TODO: support multiple method output ports
-convAIFace defmap instmap mmap
+convAIFace defmap deforder instmap mmap
            iface@(AIDef methId _ _ p (ADef _ ret_t ret_e _) _ _) =
   let
       args = aIfaceArgs iface
@@ -907,7 +909,7 @@ convAIFace defmap instmap mmap
       -- get all the defs used by the return value
       uses = getAExprDefs defmap M.empty [ret_e]
 
-      body = runCM defmap instmap argset $ do
+      body = runCM defmap deforder instmap argset $ do
                  ret_expr <- convAExpr ret_e
                  ds <- mapM convUse (M.toList uses)
                  return $ sLet ds ret_expr
@@ -916,7 +918,7 @@ convAIFace defmap instmap mmap
          sLam (arg_infos ++ [(stateId, modType)]) $
            body]
 
-convAIFace defmap instmap mmap
+convAIFace defmap deforder instmap mmap
            iface@(AIAction _ _ p methId rs _) =
   let
       args = aIfaceArgs iface
@@ -925,7 +927,7 @@ convAIFace defmap instmap mmap
       arg_infos = map (\(i,t) -> (methArgId i, convAType t)) args
       arg_types = map snd arg_infos
 
-      body = runCM defmap instmap argset $
+      body = runCM defmap deforder instmap argset $
                convAIFaceBody mmap methId rs Nothing
   in
       [SDValue (modMethId methId) (actionMethType arg_types modType voidType) $
@@ -933,7 +935,7 @@ convAIFace defmap instmap mmap
            body]
 
 -- TODO: support multiple method output ports
-convAIFace defmap instmap mmap
+convAIFace defmap deforder instmap mmap
            iface@(AIActionValue _ _ p methId rs (ADef _ def_t def_e _) _) =
   let
       args = aIfaceArgs iface
@@ -945,7 +947,7 @@ convAIFace defmap instmap mmap
       arg_infos = map (\(i,t) -> (methArgId i, convAType t)) args
       arg_types = map snd arg_infos
 
-      body = runCM defmap instmap argset $
+      body = runCM defmap deforder instmap argset $
                convAIFaceBody mmap methId rs (Just def_e)
   in
       [SDValue (modMethId methId) (actionMethType arg_types modType ret_ty) $
@@ -954,7 +956,7 @@ convAIFace defmap instmap mmap
 
 -- ignore clocks, resets, inouts
 -- XXX do we need to make clock gates available?
-convAIFace _ _ _ _ = []
+convAIFace _ _ _ _ _ = []
 
 
 -- the common conversion for the body of Action and ActionValue methods
@@ -1001,6 +1003,8 @@ convAIFaceBody mmap methId rs m_ret = do
 data ConvState =
     ConvState {
         defMap :: DefMap,
+        -- each def's position in the module's definition list
+        defOrder :: M.Map AId Int,
         instMap :: InstMap,
         -- the arguments to a method, when converting in a method body
         argSet :: S.Set AId,
@@ -1014,9 +1018,10 @@ data ConvState =
 
 type CM = State ConvState
 
-runCM :: DefMap -> InstMap -> S.Set AId -> (CM a) -> a
-runCM defmap instmap argset fn =
+runCM :: DefMap -> M.Map AId Int -> InstMap -> S.Set AId -> (CM a) -> a
+runCM defmap deforder instmap argset fn =
     let state0 = ConvState { defMap  = defmap,
+                             defOrder = deforder,
                              instMap = instmap,
                              argSet  = argset,
                              uniqueNum = 1,
@@ -1066,6 +1071,7 @@ convActions :: Bool -> [AId] -> MethodOrderMap ->
                CM SExpr
 convActions isRule predefined_defs mmap p as m_ret = do
   defmap <- gets defMap
+  deforder <- gets defOrder
 
   -- get the current state/num, because we'll be changing them
   prev_state_expr <- gets curState
@@ -1085,7 +1091,7 @@ convActions isRule predefined_defs mmap p as m_ret = do
 
       -- order the defs and actions
       (ordered_stmts, avmap) =
-          tsortActionsAndDefs mmap defmap uses as
+          tsortActionsAndDefs mmap defmap deforder uses as
 
   -- merge statements with common conditions into blocks
   let ordered_blocks = mergeStmts defmap ordered_stmts

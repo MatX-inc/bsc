@@ -192,14 +192,16 @@ tsortDefs errh ds = sorted_defs
     uses :: [(AId,[AId])]
     uses = map (\ (ADef i _ e _) -> (i, aVars e)) ds
     --
-    -- sort the ds into dependency order
+    -- sort the ds into dependency order, keeping the definition order
+    -- where the dependencies leave it open (tsort would break those ties
+    -- by AId, which is string-intern order)
     -- (tsort the ids and use a map of id-to-def to quickly convert
     --  the sorted ids back into sorted defs)
     def_ids :: S.Set AId -- the Ids which are defined on the LHS
     def_ids = S.fromList (map fst uses)
     g = [(i, nub (filter (`S.member` def_ids) is)) | (i, is) <- uses]
     sorted_def_ids =
-        case tsort g of
+        case tsortStable g of
         Left is ->
             bsErrorUnsafe errh
                 [(noPosition, ECombCycle (map pfpString (concat is)))]
