@@ -3268,8 +3268,13 @@ chkERec _ = False
 -- extract untyped let-defs and sort them into interdependent groups
 doSCC :: [CDefl] -> [[Impl]]
 doSCC ds =
-        let g = [ (i, S.toList (snd (getFVDl d) `S.intersection` is)) | d@(CLValue i _ _) <- ds ]                -- XXX CLMatch
-            is = S.fromList (map fst g)
+        -- dependency lists in definition order, so that scc's traversal
+        -- depends on the input alone (see SCC.tsortStable)
+        let ids = [ i | CLValue i _ _ <- ds ]                -- XXX CLMatch
+            idIndex = M.fromList (zip ids [0 :: Int ..])
+            inDefOrder = sortOn (\j -> M.findWithDefault maxBound j idIndex)
+            g = [ (i, inDefOrder (S.toList (snd (getFVDl d) `S.intersection` is))) | d@(CLValue i _ _) <- ds ]
+            is = S.fromList ids
             iss = scc g
             get i = (i, (headOrErr ("TCheck.doSCC: missing CLValue " ++
                                     pfpString i)

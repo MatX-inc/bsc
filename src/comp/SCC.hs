@@ -1,4 +1,4 @@
-module SCC(scc, getCycles, tsort, Graph) where
+module SCC(scc, getCycles, tsort, tsortStable, Graph) where
 
 -- Compute strongly connected components.
 -- The graph is represented as a list of (node, neighbour list) pairs.
@@ -6,6 +6,7 @@ module SCC(scc, getCycles, tsort, Graph) where
 -- Original code by John Launchbury.
 
 import Data.List(partition, sort, foldl')
+import Data.Maybe(mapMaybe)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Balanced hiding (lookup)
@@ -112,6 +113,45 @@ ntsort g =
 
 
 type TSPSQ node = PSQ node Int
+
+-- A topological sort whose only tie-break is position in the input
+-- list: of the nodes that the edges leave unordered, the one listed
+-- first comes first, so the result is a function of the input alone.
+-- tsort breaks ties by the node's Ord instead; for Id that is
+-- string-intern order, which depends on which names the process has
+-- already seen, so the same input sorts differently in a one-shot
+-- compile and in a batch.  Use this one wherever the order reaches an
+-- output, such as the nesting of emitted definitions.  Edges to nodes
+-- outside the list are ignored, as tsort ignores them; a self-edge is
+-- a cycle, as for tsort.
+tsortStable :: Ord node => [Node node] -> Either [[node]] [node]
+tsortStable g =
+    let nodes = map fst g
+        im = M.fromList (zip nodes [0 :: Int ..])
+        toInt n = M.lookup n im
+        back = M.fromList (zip [0 :: Int ..] nodes)
+        fromInt i = M.findWithDefault (internalError "SCC.tsortStable: index") i back
+        depSets = M.fromListWith S.union
+                      [ (i, S.fromList (mapMaybe toInt ns)) | (n, ns) <- g, Just i <- [toInt n] ]
+        dependents = M.fromListWith S.union
+                         [ (d, S.singleton i) | (i, ds) <- M.toList depSets, d <- S.toList ds ]
+        ready0 = S.fromList [ i | (i, ds) <- M.toList depSets, S.null ds ]
+        counts0 = M.map S.size depSets
+        go ready counts acc =
+            case S.minView ready of
+              Nothing -> reverse acc
+              Just (i, ready') ->
+                  let ss = S.toList (M.findWithDefault S.empty i dependents)
+                      step (r, c) s = let c' = M.adjust (subtract 1) s c
+                                      in  if M.findWithDefault 1 s c' == 0 then (S.insert s r, c') else (r, c')
+                      (ready'', counts') = foldl' step (ready', counts) ss
+                  in  go ready'' counts' (i : acc)
+        order = go ready0 counts0 []
+    in  if length order == M.size depSets
+          then Right (map fromInt order)
+          else case otsort g of
+                 Left cs -> Left cs
+                 Right _ -> internalError "SCC.tsortStable: cycle without cycles"
 
 loop :: (Ord node) => (node -> [node]) -> TSPSQ node -> [node] -> Either [[node]] [node]
 loop inputs psq ns =

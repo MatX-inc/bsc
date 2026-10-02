@@ -10,6 +10,10 @@
 #   TrieOrder  the instance trie enumerated candidate instances in TyCon
 #              order on a Free query, and context reduction mints fresh
 #              variables per candidate, so dictionary numbers followed it
+#   LetOrder   let nesting, definition order and binding groups were
+#              topologically sorted with Id as the tie-break
+#
+#
 # The hash line is excluded while hash-consed CType nodes still carry
 # positions from the first file that built them (the open position leak).
 
@@ -53,3 +57,4 @@ proc batching_pair { probe root scramble } {
 }
 
 batching_pair TrieOrder.bsv TrieOrderRoot.bsv TrieOrderScramble.bsv
+batching_pair LetOrder.bs LetOrderRoot.bs LetOrderScramble.bs
