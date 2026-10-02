@@ -1,0 +1,15 @@
+package LetOrderScramble(aa2, aa, zz2, zz) where
+
+-- Parsed before LetOrder in the batch: interns the names in the opposite
+-- order from LetOrder's text.
+aa2 :: Integer
+aa2 = 0
+
+aa :: Integer
+aa = 0
+
+zz2 :: Integer
+zz2 = 0
+
+zz :: Integer
+zz = 0

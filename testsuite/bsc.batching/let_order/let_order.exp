@@ -1,0 +1,10 @@
+# Issue: SCC.tsort broke ties by Ord Id, which is string-intern order, so the
+# let nesting in IConv, the def order in Simplify's selectSimple and the
+# binding groups in TCheck's doSCC reached the .bo in first-sighting order.
+# Fix: the three sites use SCC.tsortStable, which breaks ties by input position.
+# Pull request: https://github.com/MatX-inc/bsc/pull/185
+# Probe: LetOrder's .bo dump alone versus behind LetOrderScramble, which interns
+# its names the other way; unfixed, the batched dump nests the two independent
+# local bindings and orders the two top-level definitions the other way round.
+
+batching_bo_pair LetOrder.bs LetOrderRoot.bs LetOrderScramble.bs
