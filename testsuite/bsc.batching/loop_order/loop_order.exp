@@ -1,0 +1,10 @@
+# Issue: the BSV parser's imperative desugaring listed a block's updated
+# variables in Ord Id order, i.e. string-intern order, so the tuple that
+# threads them through the desugared code, and the .bo, depended on what
+# the process had compiled before.
+# Fix: the variables are listed by each name's first sighting in the file.
+# Pull request: https://github.com/MatX-inc/bsc/pull/187
+# Probe: LoopOrder's loop updates zz and aa; behind LoopOrderScramble, which
+# interns aa first, the unfixed batched .bo dump swaps the tuple's components.
+
+batching_bo_pair LoopOrder.bsv LoopOrderRoot.bsv LoopOrderScramble.bsv
