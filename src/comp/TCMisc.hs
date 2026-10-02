@@ -391,7 +391,10 @@ joinCtxs bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
   where blob_list = [((c, n, boolCompress (map not bs) ts), vp) |
                      vp@(VPred _ (PredWithPositions (IsIn c ts) _ _)) <- vps,
                      (n, bs) <- zip [0..] (funDeps c)]
-        joined_blob_list = joinByFst blob_list
+        -- groups in first-occurrence order: the first group with a
+        -- joinable pair decides which join happens first, and the
+        -- key's Ord (class name, types) is intern order
+        joined_blob_list = joinByFstStable blob_list
         matchPreds n (VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
                      (VPred i' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
           let bs = funDeps c !! n
