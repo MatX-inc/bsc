@@ -4,11 +4,11 @@
 # with N workers and with one worker must install byte-identical files; a
 # second run must do nothing; a shadowing or doubly-defined package must
 # change the plan or fail loudly, never race; an edit to one source must
-# recompile only what its content changes. Also reports how the engine's
-# per-package outputs compare with a make-built installation (Base1 and
-# Base2, which make compiles per file, must be identical; the Base3
-# directories, which make compiles inside one `bsc -u` process, differ in
-# typeclass-dictionary names: FACT 24 in the gates record).
+# recompile only what its content changes; and the engine's per-package
+# outputs must be byte-identical to a make-built installation by the same
+# compiler, including the Base3 directories that make compiles inside one
+# `bsc -u` process (the intern-order and position leaks that once made
+# batched and one-shot .bo files differ are closed: plan, P1 record).
 #
 # Run from the repository root with the compiler built (cabal build all) and
 # a make-built installation to compare with:
@@ -65,14 +65,12 @@ run build1 -j 1 --prefix "$OUT/inst1" --shake-dir "$OUT/shake1" || bad "1-worker
 echo "== 3. N-worker and 1-worker installations"
 if compare "$OUT/instN/lib/Libraries" "$OUT/inst1/lib/Libraries" "N-vs-1"; then ok "N-worker and 1-worker installations identical"; else bad "N-worker and 1-worker installations differ"; fi
 cmp -s "$OUT/instN/lib/bloogle/bluespec.txt" "$OUT/inst1/lib/bloogle/bluespec.txt" && ok "bloogle identical" || bad "bloogle differs"
-echo "== 4. against the make-built oracle (informational for Base3: -u batching, FACT 24)"
-compare "$ORACLE/lib/Libraries" "$OUT/inst1/lib/Libraries" "oracle-vs-engine" > "$OUT/oracle.txt"; cat "$OUT/oracle.txt"
-b12=0; b3=0
-if [ -f "$OUT/oracle-vs-engine.diff" ]; then
-  while read -r f; do p=${f%.*}; if ls src/Libraries/Base1/"$p".bs* src/Libraries/Base2/"$p".bs* >/dev/null 2>&1; then b12=$((b12+1)); else b3=$((b3+1)); fi; done < "$OUT/oracle-vs-engine.diff"
+echo "== 4. against the make-built oracle (same compiler): batched and per-package builds must agree"
+if compare "$ORACLE/lib/Libraries" "$OUT/inst1/lib/Libraries" "oracle-vs-engine" > "$OUT/oracle.txt"; then
+  cat "$OUT/oracle.txt"; ok "every installed file identical to the make build"
+else
+  cat "$OUT/oracle.txt"; bad "installed files differ from the make build: $(tr '\n' ' ' < "$OUT/oracle-vs-engine.diff")"
 fi
-[ "$b12" -eq 0 ] && ok "Base1/Base2 outputs identical to make's per-file compiles" || bad "$b12 Base1/Base2 outputs differ from make"
-echo "note  $b3 Base3 outputs differ from make's -u batch compile (expected until the intern-order and CType position leaks are closed: plan, P1 record)"
 echo "== 5. second run does nothing"
 run noop -j 1 --prefix "$OUT/inst1" --shake-dir "$OUT/shake1" || bad "no-op run failed"
 [ "$(grep -c -E '^cd .*; .*/bsc(deps)? ' "$OUT/noop.log")" -eq 0 ] && ok "no compiler or discovery invocations on an unchanged tree" || bad "unchanged tree ran the compiler"
