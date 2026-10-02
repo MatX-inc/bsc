@@ -5942,7 +5942,8 @@ parse tokens into CSyntax
 >     do let initPos | null tokens = initialPosition filename
 >                    | otherwise = start_position (head tokens)
 >        result <- runParser (pPackageWithWarnings defaultPkgName)
->                  (emptyParserState errh flags) initPos tokens
+>                  ((emptyParserState errh flags) { firstSeen = firstSightings tokens })
+>                  initPos tokens
 >        case result of
 >          Left  errs         -> bsError errh errs
 >          Right (pkg, warns) -> return (pkg, warns)
