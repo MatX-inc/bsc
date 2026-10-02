@@ -1,0 +1,55 @@
+# The .bo of a package must not depend on what else the process parsed or
+# compiled before it.  Each probe is compiled on its own and then inside a
+# `bsc -u` batch whose root also imports a scrambler package that the
+# dependency pass parses first.  The scrambler mentions, in the opposite
+# order from the probe's own text, the names whose string-intern order once
+# decided an ordering inside the compiler, so the two compiles see
+# different intern orders.  The dumps of the probe's .bo must agree.
+#
+# Each probe targets one closed leak (doc/engine-first-plan.md, P1 record):
+#   TrieOrder  the instance trie enumerated candidate instances in TyCon
+#              order on a Free query, and context reduction mints fresh
+#              variables per candidate, so dictionary numbers followed it
+# The hash line is excluded while hash-consed CType nodes still carry
+# positions from the first file that built them (the open position leak).
+
+# dumpbo is an internal tool: the suite only locates it for internal
+# checks, so locate it here and report the comparison as unsupported
+# when it is not installed
+proc batching_find_dumpbo {} {
+    global env
+    global dumpbo
+    if { [info exists dumpbo] } { return 1 }
+    if { [info exists env(DUMPBO)] && [file exists $env(DUMPBO)] } {
+        set dumpbo [absolute_filename $env(DUMPBO)]
+        return 1
+    }
+    set found [which dumpbo]
+    if { $found == 0 } { return 0 }
+    set dumpbo $found
+    return 1
+}
+
+proc batching_pair { probe root scramble } {
+    set bo "[file rootname $probe].bo"
+    set oneshot "[file rootname $probe].oneshot.dumpbo-out"
+    set have_dumpbo [batching_find_dumpbo]
+    erase $bo
+    erase "[file rootname $scramble].bo"
+    erase "[file rootname $root].bo"
+    compile_pass $probe {} 1
+    if { $have_dumpbo } {
+        dumpbo $bo
+        move [make_dumpbo_output_name $bo] $oneshot
+    }
+    erase $bo
+    compile_pass $root
+    if { $have_dumpbo } {
+        dumpbo $bo
+        compare_file_filtered [make_dumpbo_output_name $bo] $oneshot {-e /^Hash:/d}
+    } else {
+        unsupported "`$bo' one-shot and batched dumps compared (dumpbo not found)"
+    }
+}
+
+batching_pair TrieOrder.bsv TrieOrderRoot.bsv TrieOrderScramble.bsv
