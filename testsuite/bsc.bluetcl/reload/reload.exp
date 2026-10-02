@@ -1,0 +1,15 @@
+# Reloading a redefined package in one bluetcl process must show the new
+# definition (see stale.tcl).  The two versions are compiled into their own
+# directories and the first is put in place before the script runs.
+#
+# Known bug: the second query shows the struct's member with the first
+# version's synonym expansion (Bit#(8)) next to a width computed from the
+# second (20).  A memo keyed on the synonym's name alone survives the
+# reload.  The expected output is the correct one; the comparison is
+# registered as an expected failure until the type tables are keyed on
+# content (doc/engine-first-plan.md, P1 record, leak closure).
+
+compile_pass v1/StaleT.bsv {-bdir v1}
+compile_pass v2/StaleT.bsv {-bdir v2}
+copy v1/StaleT.bo StaleT.bo
+bluetcl_run_bsv_compare_pass_bug stale.tcl {} {} {} "stale synonym payload after a package reload"
