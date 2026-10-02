@@ -15,6 +15,9 @@
 #              and so the order of the dictionary bindings, followed it
 #   LetOrder   let nesting, definition order and binding groups were
 #              topologically sorted with Id as the tie-break
+#   LoopOrder  the imperative desugaring listed the variables a loop or
+#              branch updates in Id order, which is the order of the tuple
+#              it threads them through
 #
 #
 # The hash line is excluded while hash-consed CType nodes still carry
@@ -62,3 +65,4 @@ proc batching_pair { probe root scramble } {
 batching_pair TrieOrder.bsv TrieOrderRoot.bsv TrieOrderScramble.bsv
 batching_pair JoinOrder.bsv JoinOrderRoot.bsv JoinOrderScramble.bsv
 batching_pair LetOrder.bs LetOrderRoot.bs LetOrderScramble.bs
+batching_pair LoopOrder.bsv LoopOrderRoot.bsv LoopOrderScramble.bsv

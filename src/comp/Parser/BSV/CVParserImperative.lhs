@@ -290,7 +290,8 @@ instances.
 
 > convImperativeStmtsToCExpr blockPos flags atEnd (s@(ISBeginEnd pos stmts) : rest) =
 >     do pushState
->        let updatedVars = S.toList $ getUFVISs stmts
+>        decls <- get
+>        let updatedVars = orderUpdatedVarsIn decls $ getUFVISs stmts
 >            resultExp = mkTuple pos $ map CVar updatedVars
 >            newFlags = flags { stmtContext = ISCExpression,
 >                               endKeyword = Just "end" }
@@ -331,8 +332,9 @@ instances.
 
 > convImperativeStmtsToCExpr blockPos flags atEnd (ISIf pos conds consStmts altStmts : rest) =
 >     do pushState
+>        decls <- get
 >        let altStmtsUpdVars = maybe S.empty getUFVISs altStmts
->            updatedVars = S.toList (getUFVISs consStmts `S.union` altStmtsUpdVars)
+>            updatedVars = orderUpdatedVarsIn decls (getUFVISs consStmts `S.union` altStmtsUpdVars)
 >            resultExpr = mkTuple pos $ map CVar updatedVars
 >            resultStmts = [ISNakedExpr pos resultExpr]
 >            altStmtsWithResult = maybe resultStmts (++ resultStmts) altStmts
@@ -379,9 +381,10 @@ XXX perhaps should see whether the following few clauses could share code
 
 > convImperativeStmtsToCExpr blockPos flags atEnd (ISCase casePos subject arms dfltArm : rest) =
 >     do pushState
+>        decls <- get
 >        let rightHandSides = concat ([conseq | (pos, tests, conseq) <- arms] ++
 >                                     [conseq | (pos, conseq) <- maybeToList dfltArm])
->            updatedVars = S.toList (getUFVISs rightHandSides)
+>            updatedVars = orderUpdatedVarsIn decls (getUFVISs rightHandSides)
 >            resultExpr = mkTuple casePos $ map CVar updatedVars
 >            convArm (armPos, tests, conseq) =
 >                do pushState
@@ -421,7 +424,7 @@ XXX perhaps should see whether the following few clauses could share code
 >                       -- rightHandSides =
 >                       --        concat ([conseq | (pos, pat, tests, conseq) <- arms] ++
 >                        --                [conseq | (pos, conseq) <- maybeToList dfltArm])
->                       -- updatedVarList = S.toList updatedVars
+>                       -- updatedVarList = orderUpdatedVars updatedVars
 >                       -- variables bound in the patterns
 >                       -- allPatternVars =
 >                       --    S.unions [getPV pat | (pos, pat, tests, conseq) <- arms]
@@ -444,7 +447,7 @@ XXX perhaps should see whether the following few clauses could share code
 >            convDfltArm (armPos, conseq) =
 >                convArm (armPos, CPAny armPos, [], conseq)
 >        -- bindings to avoid capturing any of capturedVars
->        --capturedVarBindings <- mapM mkCapturedBinding (S.toList capturedVars)
+>        --capturedVarBindings <- mapM mkCapturedBinding (orderUpdatedVars capturedVars)
 >        caseArms <- mapM convArm arms
 >        dfltArms <- mapM convDfltArm (maybeToList dfltArm)
 >        let allArms = caseArms ++ dfltArms
@@ -454,12 +457,13 @@ XXX perhaps should see whether the following few clauses could share code
 > convImperativeStmtsToCExpr blockPos flags atEnd (ISCaseTagged casePos subject
 >                                            arms dfltArm : rest) =
 >     do pushState
+>        decls <- get
 >        let rightHandSides = concat ([conseq
 >                                      | (pos, pat, tests, conseq) <- arms] ++
 >                                     [conseq
 >                                      | (pos, conseq) <- maybeToList dfltArm])
 >            updatedVars = getUFVISs rightHandSides
->            updatedVarList = S.toList updatedVars
+>            updatedVarList = orderUpdatedVarsIn decls updatedVars
 >            -- variables bound in the patterns
 >            allPatternVars = S.unions
 >                             [getPV pat | (pos, pat, tests, conseq) <- arms]
@@ -499,7 +503,7 @@ XXX perhaps should see whether the following few clauses could share code
 >            convMDfltArm (Just (armPos, conseq)) =
 >                convArm (armPos, CPAny armPos, [], conseq)
 >        -- bindings to avoid capturing any of capturedVars
->        capturedVarBindings <- mapM mkCapturedBinding (S.toList capturedVars)
+>        capturedVarBindings <- mapM mkCapturedBinding (orderUpdatedVarsIn decls capturedVars)
 >        caseArms <- mapM convArm arms
 >        dfltArms <- mapM convMDfltArm [dfltArm]
 >        let allArms = caseArms ++ dfltArms
@@ -511,7 +515,8 @@ XXX perhaps should see whether the following few clauses could share code
 
 > convImperativeStmtsToCExpr blockPos flags atEnd wh@(ISWhile pos cond whbody : rest) =
 >     do pushState
->        let updatedVars = S.toList $ getUFVISs whbody
+>        decls <- get
+>        let updatedVars = orderUpdatedVarsIn decls $ getUFVISs whbody
 >            f = idF pos
 >            resultExp = mkTuple pos $ map CVar updatedVars
 >            patVars = pMkTuple pos $ map CPVar updatedVars
@@ -750,7 +755,8 @@ endfunction
 >          _ -> internalError ("convImperativeStmtsToCStmts ISBeginEnd: " ++ show e)
 >    else
 >     do pushState
->        let updatedVars = S.toList $ getUFVISs stmts
+>        decls <- get
+>        let updatedVars = orderUpdatedVarsIn decls $ getUFVISs stmts
 >            resultExp = mkTuple pos $ map CVar updatedVars
 >        varTypes <- mapM getDeclInfo updatedVars
 >--        let resultType = CQType [] $ tMkTuple pos $ map fromJust varTypes
@@ -770,7 +776,8 @@ endfunction
 > convImperativeStmtsToCStmts c_mt_me@(context,_,_) atEnd (ISAction pos stmts : rest)
 >     | isActionContext context =
 >         do pushState
->            let updatedVars = S.toList $ getUFVISs stmts
+>            decls <- get
+>            let updatedVars = orderUpdatedVarsIn decls $ getUFVISs stmts
 >                resultExp = mkTuple pos $ map CVar updatedVars
 >                stmtsWithTail | null updatedVars = stmts
 >                              | otherwise = stmts ++ [ISReturn pos (Just resultExp)]
@@ -814,7 +821,8 @@ endfunction
 >          _ -> internalError ("convImperativeStmtsToCStmts ISWhile: " ++ show e)
 >    else
 >     do pushState
->        let updatedVars = S.toList $ getUFVISs whbody
+>        decls <- get
+>        let updatedVars = orderUpdatedVarsIn decls $ getUFVISs whbody
 >            f = idF pos
 >            (mVar, preds) = contextMonadInfo pos context
 >            resultExp = mkTuple pos $ map CVar updatedVars
@@ -876,8 +884,9 @@ endfunction
 >          _ -> internalError ("convImperativeStmtsToCStmts ISIf: " ++ show e)
 >    else
 >     do pushState
+>        decls <- get
 >        let altStmtsUpdVars = maybe S.empty getUFVISs altStmts
->            updatedVars = S.toList (getUFVISs consStmts `S.union` altStmtsUpdVars)
+>            updatedVars = orderUpdatedVarsIn decls (getUFVISs consStmts `S.union` altStmtsUpdVars)
 >            resultExpr = mkTuple pos $ map CVar updatedVars
 >            consStmtsWithResult = consStmts ++ [ISReturn pos (Just resultExpr)]
 >            altStmtsWithResult = (maybe [] (\x->x) altStmts)++ [ISReturn pos (Just resultExpr)]
@@ -943,10 +952,11 @@ endfunction
 >          _ -> internalError ("convImperativeStmtsToCStmts ISCase: " ++ show e)
 >    else
 >     do pushState
+>        decls <- get
 >        let rightHandSides = concat ([conseq | (pos, tests, conseq) <- arms]
 >                                     ++ [conseq | (pos, conseq)
 >                                                  <- maybeToList dfltArm])
->            updatedVars = S.toList (getUFVISs rightHandSides)
+>            updatedVars = orderUpdatedVarsIn decls (getUFVISs rightHandSides)
 >            resultExpr = mkTuple casePos $ map CVar updatedVars
 >            convArm (armPos, tests, conseq) =
 >                do pushState
@@ -1023,10 +1033,11 @@ endfunction
 >          _ -> internalError ("convImperativeStmtsToCStmts ISCaseTagged: " ++ show e)
 >    else
 >     do pushState
+>        decls <- get
 >        let rightHandSides = concat ([conseq | (pos, pat, tests, conseq) <- arms] ++
 >                                     [conseq | (pos, conseq) <- maybeToList dfltArm])
 >            updatedVars = getUFVISs rightHandSides
->            updatedVarList = S.toList updatedVars
+>            updatedVarList = orderUpdatedVarsIn decls updatedVars
 >            -- variables bound in the patterns
 >            allPatternVars = S.unions [getPV pat | (pos, pat, tests, conseq) <- arms]
 >            -- pattern vars which are updated in some places -- must not capture
@@ -1063,7 +1074,7 @@ endfunction
 >            convMDfltArm (Just (armPos, conseq)) =
 >                convArm (armPos, CPAny armPos, [], conseq)
 >        -- bindings to avoid capturing any of capturedVars
->        capturedVarBindings <- mapM mkCapturedBinding (S.toList capturedVars)
+>        capturedVarBindings <- mapM mkCapturedBinding (orderUpdatedVarsIn decls capturedVars)
 >        caseArms <- mapM convArm arms
 >        dfltArms <- mapM convMDfltArm [dfltArm]
 >        let allArms = caseArms ++ dfltArms
@@ -2730,17 +2741,17 @@ XXX   Detecting function argument collisions TBD
 >        detectUnassignedUses src
 >        return [stmt]
 > checkImperativeStmt mi stmt@(ISBeginEnd pos body) =
->     do let assignedFreeVars = S.toList (getUFVISs body)
+>     do assignedFreeVars <- orderUpdatedVarsM (getUFVISs body)
 >        mapM_ detectUndeclaredVarOrFunction assignedFreeVars
 >        mapM_ (\var -> assign pos var ATNormal) assignedFreeVars
 >        return [stmt]
 > checkImperativeStmt mi stmt@(ISAction pos body) =
->     do let assignedFreeVars = S.toList (getUFVISs body)
+>     do assignedFreeVars <- orderUpdatedVarsM (getUFVISs body)
 >        mapM_ detectUndeclaredVarOrFunction assignedFreeVars
 >        mapM_ (\var -> assign pos var ATNormal) assignedFreeVars
 >        return [stmt]
 > checkImperativeStmt mi stmt@(ISActionValue pos body) =
->     do let assignedFreeVars = S.toList (getUFVISs body)
+>     do assignedFreeVars <- orderUpdatedVarsM (getUFVISs body)
 >        mapM_ detectUndeclaredVarOrFunction assignedFreeVars
 >        mapM_ (\var -> assign pos var ATNormal) assignedFreeVars
 >        return [stmt]
@@ -2771,14 +2782,11 @@ XXX   Detecting function argument collisions TBD
 >                   when (assigned && uninitialized)
 >                            (cvtWarn pos (EAssignNotInAllPaths (pvpString var)))
 >        -- XXX does not detect variables assigned only in one branch
->        mapM_ detectUndeclaredVarOrFunction
->              (S.toList assignedFreeVarSetUnion)
->        mapM_ detectUnassigned (S.toList assignedFreeVarSetOneBranch)
->        mapM_ (\var -> assign pos var ATNormal)
->              (S.toList assignedFreeVarSetUnion)
+>        orderUpdatedVarsM (assignedFreeVarSetUnion) >>= mapM_ detectUndeclaredVarOrFunction
+>        orderUpdatedVarsM (assignedFreeVarSetOneBranch) >>= mapM_ detectUnassigned
+>        orderUpdatedVarsM (assignedFreeVarSetUnion) >>= mapM_ (\var -> assign pos var ATNormal)
 >        popState --(jes)
->        mapM_ (\var -> assign pos var ATNormal)
->              (S.toList (assignedFreeVarSetUnion `S.difference` (getPatVars cond)))
+>        orderUpdatedVarsM ((assignedFreeVarSetUnion `S.difference` (getPatVars cond))) >>= mapM_ (\var -> assign pos var ATNormal)
 >        return [stmt]
 > checkImperativeStmt mi stmt@(ISCase pos subject [] Nothing) =
 >     cvtErr pos EEmptyCase
@@ -2797,9 +2805,9 @@ XXX   Detecting function argument collisions TBD
 >                   uninitialized <- isUninitialized var
 >                   when (not assigned) (cvtErr pos (EAssignNotInAllPaths (pvpString var)))
 >                   when (assigned && uninitialized) (cvtWarn pos (EAssignNotInAllPaths (pvpString var)))
->        mapM_ detectUndeclaredVarOrFunction (S.toList assignedFreeVarSetUnion)
->        mapM_ detectUnassigned (S.toList assignedFreeVarSetNotAllPaths)
->        mapM_ (\var -> assign pos var ATNormal) (S.toList assignedFreeVarSetUnion)
+>        orderUpdatedVarsM (assignedFreeVarSetUnion) >>= mapM_ detectUndeclaredVarOrFunction
+>        orderUpdatedVarsM (assignedFreeVarSetNotAllPaths) >>= mapM_ detectUnassigned
+>        orderUpdatedVarsM (assignedFreeVarSetUnion) >>= mapM_ (\var -> assign pos var ATNormal)
 >        return [stmt]
 > checkImperativeStmt mi stmt@(ISCaseTagged pos subject [] Nothing) =
 >     cvtErr pos EEmptyCase
@@ -2828,12 +2836,12 @@ XXX   Detecting function argument collisions TBD
 >            warnShadowPatternVars (pos, pat, _, conseq) =
 >               do pushState
 >                  declareAndAssignVarsInPattern pat
->                  mapM_ detectUndeclaredVarOrFunction (S.toList $ getUFVISs conseq)
+>                  orderUpdatedVarsM (getUFVISs conseq) >>= mapM_ detectUndeclaredVarOrFunction
 >                  popState
 >        mapM_ warnShadowPatternVars arms
->        -- mapM_ detectUndeclaredVarOrFunction (S.toList assignedFreeVarSetUnion)
->        mapM_ detectUnassigned (S.toList assignedFreeVarSetNotAllPaths)
->        mapM_ (\var -> assign pos var ATNormal) (S.toList assignedFreeVarSetUnion)
+>        -- mapM_ detectUndeclaredVarOrFunction (orderUpdatedVars assignedFreeVarSetUnion)
+>        orderUpdatedVarsM (assignedFreeVarSetNotAllPaths) >>= mapM_ detectUnassigned
+>        orderUpdatedVarsM (assignedFreeVarSetUnion) >>= mapM_ (\var -> assign pos var ATNormal)
 >        return [stmt]
 > checkImperativeStmt mi stmt@(ISTypeclass pos _ name provisos dependencies params _ functions) =
 >     do return [stmt]
