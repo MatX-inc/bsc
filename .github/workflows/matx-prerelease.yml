@@ -45,17 +45,51 @@ jobs:
           fi
           jq -r '"HEAD_SHA=\(.head_sha)\nHEAD_BRANCH=\(.head_branch)"' <<<"$run" >> "$GITHUB_ENV"
 
+      # The build artifacts are named for the GHC the run built with, which the
+      # run's dispatch chose (matx-release.yml's ghc_version). Read the names
+      # off the run rather than hard-coding a GHC here, so publishing needs no
+      # second statement of which GHC a release was built with. (A download by
+      # pattern would not do: a single match is extracted with no artifact-named
+      # directory, so the name is never on disk.)
+      - name: Find the build artifacts and the GHC that made them
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          names=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts" --paginate --jq '.artifacts[].name')
+          ghc=""
+          for pair in "ubuntu-22.04:UBUNTU_ARTIFACT" "macos-15:MACOS_ARTIFACT"; do
+            os=${pair%%:*}
+            var=${pair#*:}
+            matched=$(grep -E "^${os//./\\.} ghc-[^ ]+ build\$" <<<"$names" || true)
+            if [ "$(grep -c . <<<"$matched")" -ne 1 ]; then
+              echo "Expected exactly one '${os} ghc-<version> build' artifact in run ${RUN_ID}; found: ${matched:-none}" >&2
+              exit 1
+            fi
+            this=${matched#* ghc-}
+            this=${this% build}
+            if [ -n "$ghc" ] && [ "$this" != "$ghc" ]; then
+              echo "The platforms were built with different GHCs: ${ghc} and ${this}" >&2
+              exit 1
+            fi
+            ghc=$this
+            echo "${var}=${matched}" >> "$GITHUB_ENV"
+          done
+          echo "GHC=${ghc}" >> "$GITHUB_ENV"
+
       - name: Download Ubuntu build artifact
         uses: actions/download-artifact@v6
         with:
-          name: "ubuntu-22.04 ghc-9.6.7 build"
+          name: ${{ env.UBUNTU_ARTIFACT }}
           run-id: ${{ inputs.run_id }}
           github-token: ${{ github.token }}
           path: linux-x86_64
       - name: Download macOS build artifact
         uses: actions/download-artifact@v6
         with:
-          name: "macos-15 ghc-9.6.7 build"
+          name: ${{ env.MACOS_ARTIFACT }}
           run-id: ${{ inputs.run_id }}
           github-token: ${{ github.token }}
           path: darwin-aarch64
@@ -81,7 +115,7 @@ jobs:
               --prerelease \
               --target "$HEAD_SHA" \
               --title "${TITLE:-$tag}" \
-              --notes "Pre-release of matx-release run [${RUN_ID}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}) (branch \`${HEAD_BRANCH}\`, commit ${HEAD_SHA})." \
+              --notes "Pre-release of matx-release run [${RUN_ID}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}) (branch \`${HEAD_BRANCH}\`, commit ${HEAD_SHA}), built with GHC ${GHC}." \
               "bsc-linux-x86_64-${date}_${try}.tar.gz" \
               "bsc-darwin-aarch64-${date}_${try}.tar.gz"
-          echo "Published pre-release [\`${tag}\`](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}) from run ${RUN_ID} (branch \`${HEAD_BRANCH}\`)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published pre-release [\`${tag}\`](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}) from run ${RUN_ID} (branch \`${HEAD_BRANCH}\`, GHC ${GHC})" >> "$GITHUB_STEP_SUMMARY"
