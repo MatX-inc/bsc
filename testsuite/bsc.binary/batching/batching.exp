@@ -19,6 +19,9 @@
 #              branch updates in Id order, which is the order of the tuple
 #              it threads them through
 #
+#   NumOrder   the built-in Add rules rebuilt a cancelled sum from a bag
+#              of terms in Type order, so a solved variable's type listed
+#              the same terms in different orders
 #
 # The hash line is excluded while hash-consed CType nodes still carry
 # positions from the first file that built them (the open position leak).
@@ -66,3 +69,4 @@ batching_pair TrieOrder.bsv TrieOrderRoot.bsv TrieOrderScramble.bsv
 batching_pair JoinOrder.bsv JoinOrderRoot.bsv JoinOrderScramble.bsv
 batching_pair LetOrder.bs LetOrderRoot.bs LetOrderScramble.bs
 batching_pair LoopOrder.bsv LoopOrderRoot.bsv LoopOrderScramble.bsv
+batching_pair NumOrder.bsv NumOrderRoot.bsv NumOrderScramble.bsv
