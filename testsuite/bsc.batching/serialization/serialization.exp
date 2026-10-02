@@ -1,0 +1,10 @@
+# Issue: BinData wrote a Map or Set by iterating it, so entries keyed on Id or
+# IType (the IPackage type-function cache, a module's method-conflict table)
+# came out in string-intern order, which depends on the names already seen.
+# Fix: each key is encoded on its own and the entries follow those encodings.
+# Pull request: https://github.com/MatX-inc/bsc/pull/189
+# Probe: SerOrder's two structs give its type-function cache two entries keyed
+# by name; SerOrderScramble interns the names in the other order, and the
+# one-shot and batched .bo dumps must agree, hash included.
+
+batching_bo_pair SerOrder.bsv SerOrderRoot.bsv SerOrderScramble.bsv
