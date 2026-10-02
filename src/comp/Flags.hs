@@ -118,6 +118,11 @@ data Flags = Flags {
         showCSyntax :: Bool,
         showCodeGen :: Bool,
         showElabProgress :: Bool,
+        -- string-intern ids handed out from the top down, so that every
+        -- order taken from Ord on an Id reverses (a leak detector; the
+        -- switch itself is read from the raw command line in SpeedyString,
+        -- because interning begins before the flags are decoded)
+        reverseInternOrder :: Bool,
         showIESyntax :: Bool,
         showISyntax :: Bool,
         showModuleUse :: Bool,
