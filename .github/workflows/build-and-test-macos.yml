@@ -102,7 +102,9 @@ jobs:
 
           # Also build and install the extra utilities (vcdcheck,
           # fstscopes, showrules, ...); the testsuite uses fstscopes,
-          # when available, to check FST waveform dumps
+          # when available, to check FST waveform dumps; the testsuite's
+          # internal checks need dumpbo, dumpba, bsc2bsv and vcdcheck, which
+          # install-extra installs via install-utils
           make -C src/comp -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M4500M -A128m -RTS' install-extra
 
           if [ "${{ inputs.bluehs }}" = true ]; then
@@ -199,6 +201,7 @@ jobs:
       - name: Run testsuite
         env:
           CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache
+          DO_INTERNAL_CHECKS: 1
         run: |
           # Use ccache to avoid recompiling generated .cxx every run.
           ccache --zero-stats --max-size 500M
