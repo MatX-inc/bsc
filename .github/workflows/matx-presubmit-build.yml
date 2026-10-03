@@ -15,6 +15,11 @@ name: MatX presubmit build
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
+  # ci/ branches build on push as well, so a change to this workflow can be
+  # exercised before it reaches the default branch.
+  push:
+    branches:
+      - 'ci/**'
   workflow_dispatch:
     inputs:
       ref:
@@ -40,7 +45,7 @@ env:
 jobs:
   build:
     name: "Build: ubuntu-24.04 ghc-9.6.7"
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
