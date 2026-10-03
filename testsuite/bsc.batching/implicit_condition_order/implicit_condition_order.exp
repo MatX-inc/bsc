@@ -3,7 +3,8 @@
 # came out in string-intern order in the Verilog, the Bluesim C++ and the .ba.
 # Fix: the PSet behind Pred keeps its terms in first-insertion order, the
 # order the evaluator met them, and the conjunction is built in that order.
-# Pull request to follow.
+#
+# Pull request: https://github.com/MatX-inc/bsc/pull/207
 # Probe: a rule with an explicit condition and implicit conditions from three
 # FIFOs and two submodules' ActionValue methods, and a method with two more.
 # The Verilog is the same with and without -reverse-intern-order, and
