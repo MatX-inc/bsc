@@ -17,7 +17,7 @@ module StdPrel(
 import qualified Bag as B
 import qualified Data.Set as S
 
-import Util(log2, ordPair, integerSqrt, take3OrErr)
+import Util(log2, ordPairBy, integerSqrt, take3OrErr)
 import Data.List(sortBy)
 import FStringCompat(getFString)
 import Position
@@ -1054,8 +1054,10 @@ genNumEqInsts symT _ _ p@(IsIn c [t, t'])
   where -- look up the class, rather than construct it, for better sharing
         clsAdd' = mustFindClass symT (CTypeclass idAdd)
         clsMul' = mustFindClass symT (CTypeclass idMul)
-        -- tA should have more structure since TAp sorts first
-        (tA, tB) = ordPair (t, t')
+        -- tA should have more structure since TAp sorts first; the order
+        -- is by shape and names, never by intern id, so which side is
+        -- decomposed does not depend on what the process has seen before
+        (tA, tB) = ordPairBy cmpTypeShape (t, t')
         (tcon, args) = splitTAp tA
 
 -- If one is a variable and the other has no tyvars, it's safe to unify them
@@ -1074,7 +1076,7 @@ genNumEqInsts symT bvs (Just dvs) (IsIn c [t1, t2])
       let p = IsIn c [tA, tA], let r = mkNumInstBody (predToType p) =
         --trace ("NumEq " ++ ppReadable (r, p)) $
         [ mkInst r ([] :=> p) (Just idPrelude) ]
-  where (tA, tB) = ordPair (t1, t2)
+  where (tA, tB) = ordPairBy cmpTypeShape (t1, t2)
 
 genNumEqInsts _ _ _ _ = []
 
