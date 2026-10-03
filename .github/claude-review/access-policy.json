@@ -1,0 +1,12 @@
+{
+  "environment": "claude-pr-review",
+  "authors": [
+    "nanavati"
+  ],
+  "requesters": [
+    "nanavati"
+  ],
+  "approvers": [
+    "nanavati"
+  ]
+}

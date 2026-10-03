@@ -1,0 +1,110 @@
+{
+  "title": "PR review structured output",
+  "description": "First-pass review output; the renderer controls publication.",
+  "type": "object",
+  "required": ["summary", "findings", "suppressed"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "description": "Top-level review summary, posted even when findings is empty."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Findings eligible for publication after review; may be empty.",
+      "items": {
+        "type": "object",
+        "required": [
+          "severity",
+          "confidence",
+          "file",
+          "line",
+          "anchor",
+          "title",
+          "claim",
+          "evidence",
+          "why_it_matters",
+          "suggested_fix_or_check",
+          "skeptic_rebuttal",
+          "why_rebuttal_fails"
+        ],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["important", "question", "nit"],
+            "description": "Correctness defect, unresolved question, or minor issue."
+          },
+          "confidence": {
+            "type": "string",
+            "enum": ["high", "medium"]
+          },
+          "file": {
+            "type": "string",
+            "description": "Repo-relative path of the primary anchor."
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "New-side line number, used to disambiguate anchor matches; 0 for file-level findings."
+          },
+          "anchor": {
+            "type": "string",
+            "description": "Exact changed RIGHT-side line, including indentation; empty for file-level findings."
+          },
+          "title": {
+            "type": "string",
+            "description": "Short title, under about 120 characters."
+          },
+          "claim": {
+            "type": "string",
+            "description": "Defect, unknown, or minor issue in one or two sentences."
+          },
+          "evidence": {
+            "type": "string",
+            "description": "Code references grounding the claim, with file:line citations."
+          },
+          "why_it_matters": {
+            "type": "string"
+          },
+          "suggested_fix_or_check": {
+            "type": "string"
+          },
+          "suggestion": {
+            "type": "string",
+            "description": "Optional exact replacement for the anchored line; omit for questions, file-level findings, or multiline fixes."
+          },
+          "skeptic_rebuttal": {
+            "type": "string",
+            "description": "The strongest argument that this finding is wrong or already handled."
+          },
+          "why_rebuttal_fails": {
+            "type": "string",
+            "description": "Source-grounded reason the rebuttal fails."
+          }
+        }
+      }
+    },
+    "suppressed": {
+      "type": "array",
+      "description": "Rejected candidates and their reasons, including candidates dropped for budget.",
+      "items": {
+        "type": "object",
+        "required": ["title", "severity", "why_dropped"],
+        "properties": {
+          "title": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer", "minimum": 0 },
+          "severity": {
+            "type": "string",
+            "enum": ["important", "question", "nit"]
+          },
+          "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+          "skeptic_rebuttal": { "type": "string" },
+          "why_dropped": {
+            "type": "string",
+            "description": "Failed review gate or other reason for suppression."
+          }
+        }
+      }
+    }
+  }
+}
