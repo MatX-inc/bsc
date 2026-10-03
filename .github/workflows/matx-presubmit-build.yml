@@ -1,0 +1,92 @@
+name: MatX presubmit build
+
+# Builds every pull request with the GHC the release CI and the upstream CI
+# use (9.6.7), on Ubuntu, without running the testsuite: a fast check that a
+# change compiles with that compiler before it goes any further.  Local
+# development uses a newer GHC whose Prelude exports names 9.6's does not,
+# which is how an unimported foldl' reached the determinism gate.
+#
+# pull_request_target runs this file from the default branch, so it covers
+# pull requests against any base branch (det/*, release-devel-B0, main)
+# without each branch having to carry it.  The job checks out the pull
+# request's merge commit and only reads the repository: no secrets,
+# contents: read, same-repository pull requests only.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to build (empty = the branch this is dispatched from)
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GHC_VERSION: 9.6.7
+
+jobs:
+  build:
+    name: "Build: ubuntu-24.04 ghc-9.6.7"
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/merge', github.event.pull_request.number) || (inputs.ref || github.ref) }}
+          submodules: true
+      - name: Install dependencies
+        run: |
+          sudo .github/workflows/install_dependencies_ubuntu.sh
+      # Don't rely on the VM to pick the GHC version
+      - name: Install GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: ${{ env.GHC_VERSION }}
+          cabal: recommended
+      # Until BSC uses cabal to build, pre-install these packages
+      - name: Install Haskell dependencies
+        run: |
+          cabal update
+          cabal v1-install old-time regex-compat split strict-concurrency syb
+      # Same key family as build-and-test-ubuntu.yml and the determinism
+      # gate, so a pull request restores the latest ccache either saved.
+      - name: CCache cache files
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/ccache
+          key: build-ubuntu-24.04-ghc-${{ env.GHC_VERSION }}-ccache-${{ github.sha }}
+          restore-keys: |
+            build-ubuntu-24.04-ghc-${{ env.GHC_VERSION }}-ccache-
+      - name: Build
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/ccache
+        run: |
+          ccache --zero-stats --max-size 250M
+          export PATH=/usr/lib/ccache:$PATH
+
+          CORES=$(nproc)
+          echo "Cores: ${CORES}"
+
+          # Generate package info
+          export BSC_BUILD_PKGINFO=1
+
+          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
+          make -C src/comp install-utils
+      - name: CCache stats
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/ccache
+        run: ccache --show-stats
