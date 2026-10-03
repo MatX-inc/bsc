@@ -136,7 +136,9 @@ data Flags = Flags {
         -- string-intern ids handed out from the top down, so that every
         -- order taken from Ord on an Id reverses (a leak detector; the
         -- switch itself is read from the raw command line in SpeedyString,
-        -- because interning begins before the flags are decoded)
+        -- because interning begins before the flags are decoded; and it is
+        -- the one field GenABin does not record in the .ba, since a .ba
+        -- written under it must equal one written without it)
         reverseInternOrder :: Bool,
         showIESyntax :: Bool,
         showISyntax :: Bool,

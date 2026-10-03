@@ -553,6 +553,11 @@ instance Bin MsgListFlag where
         n -> internalError $ "GenABin.Bin(MsgListFlag).readBytes: " ++ show n
 
 -- should automatically verify no typos at compile-time XXX
+-- Every field of Flags is recorded in the .ba except reverseInternOrder
+-- (a_103): that flag's contract is that it changes no output, so a .ba
+-- written with it must equal one written without it; it is read back as
+-- False.  The flag still lives in Flags so that a build keyed on the flag
+-- set keeps the two modes apart.
 instance Bin Flags where
     writeBytes (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
@@ -618,7 +623,7 @@ instance Bin Flags where
           do
              toBin a_090; toBin a_091; toBin a_092; toBin a_093; toBin a_094;
              toBin a_095; toBin a_096; toBin a_097; toBin a_098; toBin a_099;
-             toBin a_100; toBin a_101; toBin a_102; toBin a_103; toBin a_104
+             toBin a_100; toBin a_101; toBin a_102; {- a_103: not recorded -} toBin a_104
         {-# NOINLINE wr_chunk7 #-}
         wr_chunk7 =
           do
@@ -727,7 +732,7 @@ instance Bin Flags where
           do
              a_090 <- fromBin; a_091 <- fromBin; a_092 <- fromBin; a_093 <- fromBin; a_094 <- fromBin;
              a_095 <- fromBin; a_096 <- fromBin; a_097 <- fromBin; a_098 <- fromBin; a_099 <- fromBin;
-             a_100 <- fromBin; a_101 <- fromBin; a_102 <- fromBin; a_103 <- fromBin; a_104 <- fromBin
+             a_100 <- fromBin; a_101 <- fromBin; a_102 <- fromBin; a_103 <- return False; a_104 <- fromBin
              return (a_090, a_091, a_092, a_093, a_094, a_095, a_096, a_097,
                      a_098, a_099, a_100, a_101, a_102, a_103, a_104)
         {-# NOINLINE rd_chunk7 #-}
