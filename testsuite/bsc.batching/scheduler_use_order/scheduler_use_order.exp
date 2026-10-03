@@ -1,0 +1,12 @@
+# Issue: the scheduler's method-use maps (AUses), the allocator's walk of them
+# (RSchedule) and AState's enable/mux port lists were in Ord Id (intern) order.
+# Fix: AUses numbers each use where its elaboration-order walk first meets
+# it and every later pass keeps that order.
+# Pull request: https://github.com/MatX-inc/bsc/pull/198
+# Probe: each module's Verilog alone versus behind two scramblers that intern
+# its names the other way; before the fix EnableOrder's enable terms and mux
+# arms swap and ArbOrder's arbiter (-resource-simple) conflicts another pair.
+
+batching_verilog_pair EnableOrder.bsv mkEnableOrder EnableOrderTop.bsv mkEnableOrderTop {EnableOrderScrambleA.bsv EnableOrderScrambleB.bsv}
+
+batching_verilog_pair ArbOrder.bsv mkArbOrder ArbOrderTop.bsv mkArbOrderTop {ArbOrderScrambleA.bsv ArbOrderScrambleB.bsv} {-resource-simple}

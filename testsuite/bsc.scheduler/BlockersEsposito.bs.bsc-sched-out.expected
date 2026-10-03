@@ -62,13 +62,13 @@ order: [RL_Blocker,
 -----
 
 === resources (BlockersEsposito sysBlockersEsposito):
-[(arrs_0.upd, [(arrs_0.upd 1'd1 1'd0, 1), (arrs_0.upd 1'd1 1'd1, 1)]),
- (arrs_1.upd, [(arrs_1.upd 1'd1 1'd0, 1), (arrs_1.upd 1'd1 1'd1, 1)]),
- (arrs_2.upd, [(arrs_2.upd 1'd1 1'd0, 1), (arrs_2.upd 1'd1 1'd1, 1)]),
- (arrs_3.upd, [(arrs_3.upd 1'd1 1'd0, 1), (arrs_3.upd 1'd1 1'd1, 1)]),
- (arrs_4.upd, [(arrs_4.upd 1'd1 1'd0, 1), (arrs_4.upd 1'd1 1'd1, 1)]),
- (arrs_5.upd, [(arrs_5.upd 1'd1 1'd0, 1), (arrs_5.upd 1'd1 1'd1, 1)]),
- (arrs_6.upd, [(arrs_6.upd 1'd1 1'd0, 1), (arrs_6.upd 1'd1 1'd1, 1)])]
+[(arrs_0.upd, [(arrs_0.upd 1'd1 1'd1, 1), (arrs_0.upd 1'd1 1'd0, 1)]),
+ (arrs_1.upd, [(arrs_1.upd 1'd1 1'd1, 1), (arrs_1.upd 1'd1 1'd0, 1)]),
+ (arrs_2.upd, [(arrs_2.upd 1'd1 1'd1, 1), (arrs_2.upd 1'd1 1'd0, 1)]),
+ (arrs_3.upd, [(arrs_3.upd 1'd1 1'd1, 1), (arrs_3.upd 1'd1 1'd0, 1)]),
+ (arrs_4.upd, [(arrs_4.upd 1'd1 1'd1, 1), (arrs_4.upd 1'd1 1'd0, 1)]),
+ (arrs_5.upd, [(arrs_5.upd 1'd1 1'd1, 1), (arrs_5.upd 1'd1 1'd0, 1)]),
+ (arrs_6.upd, [(arrs_6.upd 1'd1 1'd1, 1), (arrs_6.upd 1'd1 1'd0, 1)])]
 
 -----
 
