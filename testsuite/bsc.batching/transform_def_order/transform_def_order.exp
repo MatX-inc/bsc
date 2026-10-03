@@ -16,7 +16,8 @@
 # entry as it is first seen and emits both lists by that number, and the
 # survivor of a CSE class is the best-named def and, of equally good
 # names, the first sighted.  The Maps are kept for the lookups only.
-# Pull request to follow.
+#
+# Pull request: https://github.com/MatX-inc/bsc/pull/211
 # Probe: mkCseOrder sums two pairs of method arguments; mkDefMapOrder has
 # a rule whose case puts three enqs under conditions, which with
 # -keep-method-conds become NoCSE COND_ defs numbered in call order, and
