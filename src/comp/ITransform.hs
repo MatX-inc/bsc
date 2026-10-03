@@ -20,12 +20,12 @@ import Prelude hiding ((<>))
 
 import Control.Monad(foldM, forM)
 import Control.Monad.State.Strict(State, runState, gets, get, put)
-import Data.List((\\))
+import Data.List((\\), sortBy)
+import Data.Ord(comparing)
 import qualified Data.Map.Strict as M
-import qualified Data.Set as S
 
 import IntegerUtil(mask, integerAnd)
-import Util(log2, itos, appFstM, snd3, makePairs, flattenPairs,
+import Util(log2, itos, appFstM, makePairs, flattenPairs,
             fromJustOrErr)
 import PPrint
 import IntLit
@@ -1416,19 +1416,26 @@ data TState a = TState {
         -- Source of unique numbers to append to generated names
         idNo :: Integer,
 
+        -- Sighting counter for def_map: each def is numbered as it is
+        -- added, so the defs can come out in the order they were seen
+        defNo :: !Int,
+
         -- A map of package defs.  When ICValue is encountered, the def is
         -- looked up in this map and the assigned expression is inlined.
         -- The defprops are kept to be used in the fixup step that happens
         -- between processing defs and processing the rest of the module.
-        def_map :: M.Map Id (IType, IExpr a, [DefProp]),
+        -- The Int is the def's sighting number (see defNo).
+        def_map :: M.Map Id (IType, IExpr a, [DefProp], Int),
 
         -- A CSE map, from an expr "e" to a tuple of info for the canonical
         -- def ("defname") to represent it:
         --   * an expr to use to refer to the def ("ICValue defname")
         --   * the def ("IDef defname deftype e")
+        --   * the number the def was made with (idNo at the time), which
+        --     is the order the exprs were first seen
         -- When the monad is run, because all exprs are inlined and then CSE'd
         -- back up, the defs for the package will come from this map.
-        cse_map :: M.Map (IExpr a) (IExpr a, IDef a)
+        cse_map :: M.Map (IExpr a) (IExpr a, IDef a, Integer)
         }
 
 type T b a = State (TState a) b
@@ -1440,15 +1447,28 @@ runT errh flags no prefix xforms =
                            , flags = flags
                            , prefix = prefix
                            , idNo = no
+                           , defNo = 0
                            , def_map = M.empty
                            , cse_map = M.empty
                            }
     in case runState xforms initState of
          (x, ts) ->
-              let defs_from_cse = map (snd . snd) (M.toList (cse_map ts))
+              -- The defs come out in the order their entries were made:
+              -- the CSE defs in the order the exprs were first seen while
+              -- transforming the module's defs in their given order, then
+              -- the NoCSE defs in that given order.  Not in the Maps' key
+              -- order: Ord IExpr and Ord Id bottom out in string-intern
+              -- order, which would put the defs in the order the process
+              -- first met the names at their leaves.  The Maps are kept
+              -- for the lookups only.
+              let bySighting :: Ord n => [(n, d)] -> [d]
+                  bySighting = map snd . sortBy (comparing fst)
+                  defs_from_cse =
+                      bySighting [ (n, d) | (_, d, n) <- M.elems (cse_map ts) ]
                   non_cse_defs =
-                      [ IDef i t e props
-                        | (i, (t, e, props)) <- M.toList (def_map ts)
+                      bySighting
+                      [ (n, IDef i t e props)
+                        | (i, (t, e, props, n)) <- M.toList (def_map ts)
                         , defPropsHasNoCSE props
                       ]
                   defs = defs_from_cse ++ non_cse_defs
@@ -1466,13 +1486,13 @@ newExprT t e = do
   ts <- get
   cmap <- gets cse_map
   case (M.lookup e cmap) of
-    Just (e', _) -> return e'
+    Just (e', _, _) -> return e'
     Nothing -> do
         n <- gets idNo
         let i = setBadId $ mkId noPosition (mkFString ((prefix ts) ++ itos n))
             e' = ICon i (ICValue t e)
             d = IDef i t e []  -- props get lost here, but restored in iTransRenameIdsInDef
-            cmap' = M.insert e (e', d) cmap
+            cmap' = M.insert e (e', d, n) cmap
             !n'   = n + 1
         cmap' `seq` put $ ts { idNo = n', cse_map = cmap' }
         -- traceM ("newExprT " ++ ppString e ++ " -> " ++ ppString (e',d))
@@ -1482,11 +1502,14 @@ addDefT :: Id -> IType -> IExpr a -> [DefProp] -> T () a
 addDefT i t e p = do
   -- traceM $ "addDefT " ++ ppString i ++ " " ++ ppString e
   ts <- get
-  let dmap' = M.insert i (t,e,p) (def_map ts)
-  dmap' `seq` put $ ts {def_map = dmap' }
+  let !n = defNo ts
+      -- a def added again keeps its first sighting's number
+      keepFirst (t', e', p', _) (_, _, _, n0) = (t', e', p', n0)
+      dmap' = M.insertWith keepFirst i (t,e,p,n) (def_map ts)
+  dmap' `seq` put $ ts { def_map = dmap', defNo = n + 1 }
 
 getDefT :: Id -> T (Maybe (IExpr a)) a
-getDefT i = get >>= (return . fmap snd3 . M.lookup i . def_map)
+getDefT i = get >>= (return . fmap (\ (_, e, _, _) -> e) . M.lookup i . def_map)
 
 {- we don't need uEq because we use a progress check instead now
 -- the uEq check is tuned to what we need to do to fix
@@ -1697,22 +1720,29 @@ iTransFixupDefNames flags = do
       old_defmap = def_map transform_state
       old_csemap = cse_map transform_state
 
-      -- For each CSE name, the set of CSE-able defs that replaced it,
-      -- stored as a quality-ranked Set so picking the best Id is O(log n).
-      -- DefP_NoCSE defs are excluded at build time; missing keys map to
-      -- the cse_name identity via iTransRenameId's findWithDefault.
-      cse_ids_map :: M.Map Id (S.Set (Int, Id))
+      -- For each CSE name, the CSE-able def whose name replaces it: the
+      -- best-named one (idQuality), and of equally good names the one
+      -- sighted first (the lowest sighting number).  Never Ord Id, which
+      -- is string-intern order: the surviving name reaches the .ba and
+      -- the Verilog.  DefP_NoCSE defs are excluded at build time; missing
+      -- keys map to the cse_name identity via iTransRenameId's
+      -- findWithDefault.
+      cse_ids_map :: M.Map Id (Int, Int, Id)
       cse_ids_map =
-          M.fromListWith S.union $
+          M.fromListWith better $
                [ ( cse_name
-                 , S.singleton (idQuality (Just def_name), def_name) )
-                 | (def_name, (_, ICon cse_name _value@(ICValue {}), props))
+                 , (idQuality (Just def_name), n, def_name) )
+                 | (def_name, (_, ICon cse_name _value@(ICValue {}), props, n))
                        <- M.toList old_defmap
                  , not (defPropsHasNoCSE props) ]
+      better new@(q1, n1, _) old@(q2, n2, _)
+          | q1 > q2   = new
+          | q1 < q2   = old
+          | n1 < n2   = new
+          | otherwise = old
 
-      -- The best Id is the maximum of the quality-ordered set.
       rename_map :: M.Map Id Id
-      rename_map = M.map (snd . S.findMax) cse_ids_map
+      rename_map = M.map (\ (_, _, i) -> i) cse_ids_map
 
       -- function to rename ICValue references (to use the new CSE name)
       rename_expr = iTransRenameIdsInExpr rename_map
@@ -1727,13 +1757,13 @@ iTransFixupDefNames flags = do
       --    * the def name and expr are updated
       new_csemap =
           M.fromList
-               [ (rename_expr e, (rename_expr ref, rename_def def))
-                 | (e, (ref, def)) <- M.toList old_csemap ]
+               [ (rename_expr e, (rename_expr ref, rename_def def, n))
+                 | (e, (ref, def, n)) <- M.toList old_csemap ]
 
       -- fix up the defs to refer to new CSE name in their exprs
       -- (the def names themselves are unchanged)
       new_defmap =
-          let mapFn (ty, e, props) = (ty, rename_expr e, props)
+          let mapFn (ty, e, props, n) = (ty, rename_expr e, props, n)
           in  M.map mapFn old_defmap
 
       new_state :: TState a

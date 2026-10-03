@@ -1,0 +1,192 @@
+# Issue: ITransform's runT handed the module's defs on from its two Maps
+# with M.toList: the CSE map, keyed by IExpr, and then the def map (the
+# NoCSE defs, the COND_ wires among them), keyed by Id; its choice of the
+# name that survives a CSE class broke ties between equally good names by
+# Ord Id; the evaluator's eqPtrs handed the expanded module's defs on
+# with M.elems over a Map keyed by the expression; and iSortDs, which
+# orders the defs ITransform sees, broke its topological-sort ties by Ord
+# Id.  Ord IExpr and Ord Id bottom out in string-intern order, so the def
+# lists of the expanded and transformed module and the surviving names
+# came out in the order the process had first met the names at the
+# leaves: a `bsc -u' batch or an unrelated edit could reorder them, and
+# -reverse-intern-order did.
+# Fix: eqPtrs emits the canonical heap cells in heap order (the cell
+# number, the order the evaluator allocated them); iSortDs sorts on list
+# positions, so its ties go by position; ITransform numbers each map
+# entry as it is first seen and emits both lists by that number, and the
+# survivor of a CSE class is the best-named def and, of equally good
+# names, the first sighted.  The Maps are kept for the lookups only.
+# Pull request to follow.
+# Probe: mkCseOrder sums two pairs of method arguments; mkDefMapOrder has
+# a rule whose case puts three enqs under conditions, which with
+# -keep-method-conds become NoCSE COND_ defs numbered in call order, and
+# two user-named defs that the evaluator leaves distinct and ITransform
+# merges.  The `-- imod local defs' sections of each module's -dexpanded
+# and -dtransform dumps (eqPtrs' and ITransform's def lists) are compared
+# alone versus behind scramblers that intern the argument names
+# (mkCseOrder) or the COND_ names (mkDefMapOrder) the other way, and with
+# versus without -reverse-intern-order; and in every compile the sums
+# must come in the order the method writes them, the COND_ defs in the
+# order the rule makes the calls, and the merged def must carry the name
+# sighted first.  Before the fix the lists flip in the batched and the
+# reversed compiles, and the reversed compile keeps the other name.
+
+# Write the `-- imod local defs' section(s) of DUMP, an IModule dump, to OUT.
+proc imod_local_defs { dump out } {
+    global srcdir
+    global subdir
+    set dir [file join [absolute $srcdir] $subdir]
+    set in [open [file join $dir $dump]]
+    set fh [open [file join $dir $out] w]
+    set keep 0
+    while { [gets $in line] >= 0 } {
+        if { [string match "-- imod local defs*" $line] } { set keep 1 }
+        if { [string match "-- imod rules*" $line] } { set keep 0 }
+        if { $keep } { puts $fh $line }
+    }
+    close $in
+    close $fh
+}
+
+# The names of the defs in the first `-- imod local defs' section of
+# DEFS, in order.
+proc def_names { defs } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $defs]]
+    set names [list]
+    set sections 0
+    while { [gets $fh line] >= 0 } {
+        if { [string match "-- imod local defs*" $line] } {
+            incr sections
+            if { $sections > 1 } { break }
+        } elseif { [regexp {^(\S+) ::} $line -> name] } {
+            lappend names $name
+        }
+    }
+    close $fh
+    return $names
+}
+
+# The PATTERNS (regexps) in the order of their first match in DEFS, for
+# those that match.
+proc first_matches { defs patterns } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $defs]]
+    set text [read $fh]
+    close $fh
+    set found [list]
+    foreach pat $patterns {
+        if { [regexp -indices -- $pat $text idx] } {
+            lappend found [list [lindex $idx 0] $pat]
+        }
+    }
+    set order [list]
+    foreach f [lsort -integer -index 0 $found] {
+        lappend order [lindex $f 1]
+    }
+    return $order
+}
+
+# mkCseOrder: the sum of aa and ab must come before the sum of zz and zy,
+# the order the method writes them.
+proc expect_sums_in_write_order { defs } {
+    set expected [list {put_aa put_ab} {put_zz put_zy}]
+    set order [first_matches $defs $expected]
+    if { $order eq $expected } {
+        pass "the sums in `$defs' are in the order the method writes them"
+    } else {
+        fail "the sums in `$defs' are in the order `$order'"
+    }
+}
+
+# mkDefMapOrder: the COND_ defs must come in the order rone makes the
+# calls (their numbers), and the merged def must be named first, the
+# name sighted first, not second.
+proc expect_conds_in_call_order { defs } {
+    set expected [list COND_RL_rone_fa_enq_1 COND_RL_rone_fb_enq_2 COND_RL_rone_fc_enq_3]
+    set conds [lsearch -all -inline -glob [def_names $defs] COND_RL_*]
+    if { $conds eq $expected } {
+        pass "the COND_ defs in `$defs' are in the order the rule makes the calls"
+    } else {
+        fail "the COND_ defs in `$defs' are in the order `$conds'"
+    }
+}
+
+proc expect_first_sighted_survivor { defs } {
+    set names [def_names $defs]
+    set first [lsearch -regexp $names {^first__h[0-9]+$}]
+    set second [lsearch -regexp $names {^second__h[0-9]+$}]
+    if { $first >= 0 && $second < 0 } {
+        pass "the merged def in `$defs' carries the name sighted first"
+    } elseif { $second >= 0 } {
+        fail "the merged def in `$defs' carries the name sighted second"
+    } else {
+        fail "no merged def named first or second in `$defs'"
+    }
+}
+
+set dumps "-dexpanded=expanded_%m.out -dtransform=transform_%m.out"
+
+# -----
+# The def lists of the expanded (eqPtrs) and transformed (ITransform CSE
+# map) module: mkCseOrder alone, behind the two scramblers, and reversed.
+
+erase CseOrder.bo
+compile_verilog_pass CseOrder.bsv mkCseOrder $dumps
+imod_local_defs expanded_mkCseOrder.out mkCseOrder.oneshot.expanded-defs.out
+imod_local_defs transform_mkCseOrder.out mkCseOrder.oneshot.transform-defs.out
+
+erase CseOrder.bo
+erase CseOrderScrambleA.bo
+erase CseOrderScrambleB.bo
+compile_verilog_pass CseOrderTop.bsv mkCseOrderTop $dumps
+imod_local_defs expanded_mkCseOrder.out mkCseOrder.batch.expanded-defs.out
+imod_local_defs transform_mkCseOrder.out mkCseOrder.batch.transform-defs.out
+compare_file mkCseOrder.batch.expanded-defs.out mkCseOrder.oneshot.expanded-defs.out
+compare_file mkCseOrder.batch.transform-defs.out mkCseOrder.oneshot.transform-defs.out
+
+erase CseOrder.bo
+compile_verilog_pass CseOrder.bsv mkCseOrder "$dumps -reverse-intern-order"
+imod_local_defs expanded_mkCseOrder.out mkCseOrder.reversed.expanded-defs.out
+imod_local_defs transform_mkCseOrder.out mkCseOrder.reversed.transform-defs.out
+compare_file mkCseOrder.reversed.expanded-defs.out mkCseOrder.oneshot.expanded-defs.out
+compare_file mkCseOrder.reversed.transform-defs.out mkCseOrder.oneshot.transform-defs.out
+
+foreach shape [list oneshot batch reversed] {
+    expect_sums_in_write_order mkCseOrder.$shape.expanded-defs.out
+    expect_sums_in_write_order mkCseOrder.$shape.transform-defs.out
+}
+
+# -----
+# The NoCSE defs (ITransform's def map) and the CSE survivor:
+# mkDefMapOrder alone, behind the two scramblers, and reversed.
+
+set conds "-keep-method-conds"
+
+erase DefMapOrder.bo
+compile_verilog_pass DefMapOrder.bsv mkDefMapOrder "$dumps $conds"
+imod_local_defs expanded_mkDefMapOrder.out mkDefMapOrder.oneshot.expanded-defs.out
+imod_local_defs transform_mkDefMapOrder.out mkDefMapOrder.oneshot.transform-defs.out
+
+erase DefMapOrder.bo
+erase DefMapOrderScrambleA.bo
+erase DefMapOrderScrambleC.bo
+compile_verilog_pass DefMapOrderTop.bsv mkDefMapOrderTop "$dumps $conds"
+imod_local_defs expanded_mkDefMapOrder.out mkDefMapOrder.batch.expanded-defs.out
+imod_local_defs transform_mkDefMapOrder.out mkDefMapOrder.batch.transform-defs.out
+compare_file mkDefMapOrder.batch.expanded-defs.out mkDefMapOrder.oneshot.expanded-defs.out
+compare_file mkDefMapOrder.batch.transform-defs.out mkDefMapOrder.oneshot.transform-defs.out
+
+erase DefMapOrder.bo
+compile_verilog_pass DefMapOrder.bsv mkDefMapOrder "$dumps $conds -reverse-intern-order"
+imod_local_defs expanded_mkDefMapOrder.out mkDefMapOrder.reversed.expanded-defs.out
+imod_local_defs transform_mkDefMapOrder.out mkDefMapOrder.reversed.transform-defs.out
+compare_file mkDefMapOrder.reversed.expanded-defs.out mkDefMapOrder.oneshot.expanded-defs.out
+compare_file mkDefMapOrder.reversed.transform-defs.out mkDefMapOrder.oneshot.transform-defs.out
+
+foreach shape [list oneshot batch reversed] {
+    expect_conds_in_call_order mkDefMapOrder.$shape.transform-defs.out
+    expect_first_sighted_survivor mkDefMapOrder.$shape.transform-defs.out
+}
