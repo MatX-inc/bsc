@@ -5,7 +5,7 @@ Error: "Unsatisfiable_TSub.bsv", line 5, column 15: (T0030)
   Given type:
     function Bool f(Bit#(n) x1)
   The following provisos are needed:
-    Add#(n, TAdd#(4, a__), 0)
+    Add#(4, a__, TSub#(0, n))
       Introduced at the following locations:
 	"Unsatisfiable_TSub.bsv", line 6, column 11
   The type variables are from the following positions:
