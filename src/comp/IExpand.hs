@@ -637,7 +637,7 @@ removeInlinedPositions flags imod0 =
              isv_resets = [ (i, rmReset r) | (i, r) <- isv_resets sv ] }
 
     rmPred :: HPred -> HPred
-    rmPred (PConj ps) = PConj (S.map rmPTerm ps)
+    rmPred (PConj ps) = PConj (psFromList (map rmPTerm (psToList ps)))
 
     rmPTerm :: PTerm HeapData -> PTerm HeapData
     rmPTerm (PAtom e) = PAtom (rmExpr e)
@@ -1420,7 +1420,10 @@ iExpandMethod' implicitCond curClk (i, bi, outs, e0) p0 = do
                                 isActionType methType ->
                              do (P p1 e1', ws_a) <- evalUHNF e1
                                 (P p2 e2', ws_b) <- evalUHNF e2
-                                return (P (pConjs [p0, p1, p2]) (IAps f ts [e1', e2']),
+                                -- the pair is (value, action); the action's
+                                -- conditions go first, as the method body
+                                -- meets them (its return comes last)
+                                return (P (pConjs [p0, p2, p1]) (IAps f ts [e1', e2']),
                                         wsJoin ws_a ws_b)
                          _ -> do (P p' e', ws1) <- walkNF e0
                                  return (P (pConj p0 p') e', ws1)
@@ -2379,7 +2382,7 @@ evalPred' :: PMap -> HPred -> G ((HExpr, HWireSet), PMap)
 evalPred' m (PConj ps) = do
   let f (rs, m) p = do (r, m') <- evalPTerm m p
                        return (r:rs, m')
-  (ress, m') <- foldM f ([], m) (S.toList ps)
+  (ress, m') <- foldM f ([], m) (psToList ps)
   let (es, wss) = unzip (reverse ress)
       res = (foldr ieAnd iTrue es, wsJoinMany wss)
   --traceM ("evalPred " ++ ppReadable es)
@@ -2748,17 +2751,19 @@ nfError str e = do
     e' <- unheapAll e
     eNoNF e'
 
+-- As in walkNF's recurse, the conditions the walk finds inside the
+-- expression go before the ones its evaluation to WHNF lifted (p0).
 evalNF :: HExpr -> G (PExpr, HWireSet)
 evalNF e = do
   (P p0 e') <- eval1 e
   (P p e'', ws) <- walkNF e'
-  return (P (pConj p0 p) e'', ws)
+  return (P (pConj p p0) e'', ws)
 
 evalUHNF :: HExpr -> G (PExpr, HWireSet)
 evalUHNF e = do
   (_, P p0 e') <- evalUH e
   (P p e'', ws) <- walkNF e'
-  return (P (pConj p0 p) e'', ws)
+  return (P (pConj p p0) e'', ws)
 
 -- Compute an expression to NF.
 -- NF can involve suspended primitives.
@@ -2792,6 +2797,12 @@ walkNF e =
                       else (P p o, ws)) -- (mapIExprPositionConservative cross (n,o)), ws))
             _ -> return (pn, ws)
 
+        -- p0 is the predicate already on the cell for u: the conditions
+        -- lifted while it was evaluated to WHNF (from its head and from the
+        -- sub-expressions that were not shared) go after the ones this walk
+        -- finds inside it, which belong to the shared sub-expressions met
+        -- earlier in the source: an action's earlier statements, a call's
+        -- arguments.
         recurse p0 u =
             case u of
                 -- remove PrimSetSelPosition
@@ -2807,7 +2818,7 @@ walkNF e =
                     (P pe e', ws_e) <- walkNF e
                     p_if <- pIf c' pt pe
                     let p = pc `pConj` p_if
-                    upd (pConj p0 p) (ieIfx ty c' t' e') (wsJoinMany [ws_c, ws_t, ws_e])
+                    upd (pConj p p0) (ieIfx ty c' t' e') (wsJoinMany [ws_c, ws_t, ws_e])
 
                 IAps f@(ICon _ (ICPrim _ PrimCase))
                          [sz_idx, elem_ty]
@@ -2844,7 +2855,7 @@ walkNF e =
                         (ps, wss) <- mapAndUnzipM mapFn cells
                         let e' = IAps f ts [arr_e, idx_e']
                         let p = pConjs [pidx, pSel idx_e' idx_sz ps]
-                        upd (pConj p0 p) e' (wsJoinMany (ws_idx:wss))
+                        upd (pConj p p0) e' (wsJoinMany (ws_idx:wss))
                       _ -> internalError ("walkNF: dynsel: arr = " ++
                                           ppReadable arr_e)
 
@@ -2853,18 +2864,18 @@ walkNF e =
                     (P pe2 e2', ws2) <- walkNF e2
                     p_if <- pIf e1' pe2 pTrue
                     let p = pe1 `pConj` p_if
-                    upd (pConj p0 p) (ieAnd e1' e2') (wsJoin ws1 ws2)
+                    upd (pConj p p0) (ieAnd e1' e2') (wsJoin ws1 ws2)
 
                 IAps f@(ICon _ (ICPrim _ PrimBOr)) _ [e1, e2] -> do
                     (P pe1 e1', ws1) <- walkNF e1
                     (P pe2 e2', ws2) <- walkNF e2
                     p_if <- pIf e1' pTrue pe2
                     let p = pe1 `pConj` p_if
-                    upd (pConj p0 p) (ieOr e1' e2') (wsJoin ws1 ws2)
+                    upd (pConj p p0) (ieOr e1' e2') (wsJoin ws1 ws2)
 
                 IAps f@(ICon _ (ICPrim _ p)) ts es | realPrimOp p -> do
                     (p, es', ws) <- walkList walkNF es
-                    upd (pConj p0 p) (IAps f ts es') ws -- (map (mapIExprPosition cross) (zip es es'))) ws
+                    upd (pConj p p0) (IAps f ts es') ws -- (map (mapIExprPosition cross) (zip es es'))) ws
 
                 IAps f@(ICon i_sel (ICSel { })) ts es -> do
                     (p, es', ws) <- walkList walkNF es
@@ -2886,7 +2897,7 @@ walkNF e =
                                                         "Reset: " ++ ppReadable r ++
                                                         "Clock gate: " ++ ppReadable p_gate)
                             when uIsAction $ addClkGateUse c
-                            upd (pConjs [p0, p, p_gate]) (IAps f ts es') (wsAddReset r (wsAddClock c ws))
+                            upd (pConjs [p, p0, p_gate]) (IAps f ts es') (wsAddReset r (wsAddClock c ws))
 
                     case es' of
                         st@(ICon i (ICStateVar { iVar = v })) : _ ->
@@ -2894,11 +2905,11 @@ walkNF e =
 
                         -- foreign function has no additional clocks
                         ff@(ICon i (ICForeign { })) : _ ->
-                            upd (pConj p0 p) (IAps f ts es') ws
+                            upd (pConj p p0) (IAps f ts es') ws
 
                         -- This is for the preservation of the clock-gating signal
                         -- XXX is adding the clock to the wire set redundant?
-                        clk@(ICon i (ICClock { iClock = c })) : _  -> upd (pConj p0 p) (IAps f ts es') (wsAddClock c ws)
+                        clk@(ICon i (ICClock { iClock = c })) : _  -> upd (pConj p p0) (IAps f ts es') (wsAddClock c ws)
 
                         -- We can be selecting the avValue or avAction from an ActionValue method,
                         -- or a tuple member out of the result of calling a method with multiple outputs,
@@ -2908,7 +2919,7 @@ walkNF e =
                                i_sel == idPrimFst ||
                                i_sel == idPrimSnd) -> do
                           do (P p' e', ws) <- walkNF e
-                             upd (pConj p0 p') (IAps f ts [e']) ws
+                             upd (pConj p' p0) (IAps f ts [e']) ws
 
                         _ ->    do when doDebug $ traceM "not stvar or foreign\n"
                                    when doDebug $ traceM (show u ++ "\n")
@@ -2917,12 +2928,12 @@ walkNF e =
 
                 IAps f@(ICon i (ICForeign { })) ts es -> do
                     (p, es', ws) <- walkList walkNF es
-                    upd (pConj p0 p) (IAps f ts es') ws
+                    upd (pConj p p0) (IAps f ts es') ws
 
                 IAps f@(ICon i (ICPrim _ PrimWhenPred)) _ [(ICon _ (ICPred _ p)), e] -> do
                    _ <- internalError ("PrimWhenPred" ++ ppReadable e)
                    (P p' e', ws) <- walkNF e
-                   upd (pConjs [p0, p, p']) e' ws
+                   upd (pConjs [p, p', p0]) e' ws
 
                 IAps f@(ICon _ (ICTuple {})) ts [e1, e2] -> do
                     (P pe1 e1', ws1) <- walkNF e1
@@ -2938,7 +2949,7 @@ walkNF e =
                     (p, es', ws) <- walkList walkNF es
                     -- XXX A hack to allow polymorphic methods
                     case f' of
-                        IAps (ICon _ (ICSel { })) _ _ -> upd (pConjs [p0, pf, p]) (IAps f' ts es') (wsJoin ws ws')
+                        IAps (ICon _ (ICSel { })) _ _ -> upd (pConjs [pf, p, p0]) (IAps f' ts es') (wsJoin ws ws')
                         _ ->
                                 do when doDebug $ traceM ("ap:\n" ++ show f' ++ "\n" ++ show ts ++ "\n" ++ show es')
                                    nfError "walkNF ap" u
@@ -3771,7 +3782,14 @@ conAp' i (ICPrim _ PrimWhen) _ (T t : E p : E e : as) = do
         -- XXX This will also check compiler-generated PrimWhen for rules/methods
         canLift <- canLiftCond p'
         when (not canLift) $ deferErrors [(getIdPosition i, EInvalidWhen)]
-        addPredG p'' $ evalAp "PrimWhen" e as
+        -- The conditions met inside the guarded expression go before this
+        -- one: a method's "when" sits over its arguments, and the lifting
+        -- done before evaluation puts a later statement's "when" over the
+        -- earlier statements of an action block, so this is the order the
+        -- source meets them (arguments before the call, first statement
+        -- first).
+        (P p_e e') <- evalAp "PrimWhen" e as
+        return (P (pConj p_e p'') e')
 conAp' _ (ICPrim _ PrimWhen) _ as = internalError ("compAp' PrimWhen: " ++ ppReadable as)
 
 -- When (represents implicit conditions)
@@ -3795,7 +3813,8 @@ conAp' _ (ICPrim _ PrimSeqCond) _ as0@(T t1 : T _ : E e1 : E e2 : as) = do
    -- forcing bit-arrays is a nice side effect
    (_, P p e) <- evalUH e1
    p_buried <- getBuriedPreds e
-   let p_tot = pConj p p_buried
+   -- the conditions still inside e before the ones its evaluation lifted
+   let p_tot = pConj p_buried p
    addPredG p_tot $ evalAp "PrimSeqCond" e2 as
 
 conAp' _ (ICPrim _ PrimImpCondOf) fe (T t : E e : as) = do
@@ -3809,7 +3828,7 @@ conAp' _ (ICPrim _ PrimImpCondOf) fe (T t : E e : as) = do
   p_buried <- getBuriedPreds e'
   -- This line is needed to simplify away if-exprs so that we return the
   -- simplest expression (so it won't pick up unnecessary implicit conditions)
-  pFinal <- normPConj $ pConj p (pConj p' p_buried)
+  pFinal <- normPConj $ pConjs [p, p_buried, p']
   -- XXX This conversion produces the aggressive form
   -- XXX we should get the choice of aggressive vs conservative from the
   -- XXX context, or at least via an argument to impCondOf?
@@ -4733,11 +4752,13 @@ conAp' _ c e as = internalError ("conAp':\n" ++ show c ++ "\n" ++ ppReadable (mk
 -- impCondOf, which can be called on expressions of non-primitive type.
 --
 getBuriedPreds :: HExpr -> G HPred
+-- As in walkNF, the conditions found inside an expression go before the
+-- ones already lifted to its cell or its PrimWhenPred.
 getBuriedPreds r@(IRefT {}) = do
   --traceM("getBuriedPreds: following ref")
   (P p' e') <- unheap (pExpr r)
   p'' <- getBuriedPreds e'
-  return (pConj p' p'')
+  return (pConj p'' p')
 getBuriedPreds (IAps (ICon _ (ICPrim _ PrimIf)) _ [cnd,thn,els]) = do
   --traceM("getBuriedPreds: pIf")
   pthn <- getBuriedPreds thn
@@ -4758,7 +4779,7 @@ getBuriedPreds (IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect)) tys
   --traceM("getBuriedPreds: arr-sel ref")
   (P p' arr') <- unheap (pExpr arr)
   p'' <- getBuriedPreds (IAps ic tys [arr', idx])
-  return (pConj p' p'')
+  return (pConj p'' p')
 getBuriedPreds (IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect))
                   [elem_ty, ITNum idx_sz]
                   [(ICon _ (ICLazyArray _ arr u)), idx]) = do
@@ -4777,7 +4798,7 @@ getBuriedPreds (IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect)) tys args) = do
 getBuriedPreds (IAps (ICon _ (ICPrim _ PrimWhenPred)) _ [(ICon _ (ICPred _ p')), e']) = do
   --traceM("getBuriedPreds: when")
   p'' <- getBuriedPreds e'
-  return (pConj p' p'')
+  return (pConj p'' p')
 getBuriedPreds (IAps a@(ICon _ (ICPrim _ PrimBAnd)) b [e1, e2]) = do
   --traceM("getBuriedPreds: AND")
   p1 <- getBuriedPreds e1
@@ -4878,7 +4899,7 @@ getBuriedPredsForced es = do
 -- XXX Would be obsoleted by a PPrint version that follows heap refs
 
 ppPConjRefs :: HPred -> G ()
-ppPConjRefs (PConj ps) = mapM_ ppPTermRefs (S.toList ps)
+ppPConjRefs (PConj ps) = mapM_ ppPTermRefs (psToList ps)
 
 ppPTermRefs :: PTerm HeapData -> G ()
 ppPTermRefs (PAtom e) = ppExprRefs e

@@ -158,7 +158,7 @@ doTraceATFCacheMiss = doTraceATFCache || elem "-trace-atf-cache-miss" progArgs
 type HPred = Pred HeapData
 
 pAtom :: IExpr a -> Pred a
-pAtom e = if isTrue e then pTrue else PConj (S.singleton (PAtom e))
+pAtom e = if isTrue e then pTrue else PConj (psSingleton (PAtom e))
 
 -- we're wrapping this in the G monad because pIf' should be in IO
 -- using unsafePeformIO inside of it is a performance hack
@@ -181,33 +181,33 @@ pIf' c t e = pIf'' c t e
 pIf'' :: HExpr -> HPred -> HPred -> HPred
 pIf'' (IAps (ICon _ (ICPrim _ PrimBNot)) [] [c]) t e = pIf' c e t
 pIf'' c t@(PConj ts) e@(PConj es) =
-    let te = ts `S.intersection` es
-        ts' = ts `S.difference` te
-        es' = es `S.difference` te
+    let te = ts `psIntersection` es
+        ts' = ts `psDifference` te
+        es' = es `psDifference` te
     in  if ts' == es' then t
-        else PConj (S.insert (PIf c (PConj ts') (PConj es')) te)
+        else PConj (psInsert (PIf c (PConj ts') (PConj es')) te)
 
 pSel :: HExpr -> Integer -> [HPred] -> HPred
 pSel idx idx_sz es =
   let getP (PConj p) = p
-      common_ps = foldr1 S.intersection (map getP es)
-      ps' = map (\ e -> (getP e) `S.difference` common_ps) es
-  in  if (all S.null ps')
+      common_ps = foldr1 psIntersection (map getP es)
+      ps' = map (\ e -> (getP e) `psDifference` common_ps) es
+  in  if (all psNull ps')
       then PConj common_ps
-      else PConj (S.insert (PSel idx idx_sz (map PConj ps')) common_ps)
+      else PConj (psInsert (PSel idx idx_sz (map PConj ps')) common_ps)
 
 pConj :: Pred a -> Pred a -> Pred a
 pConj p1@(PConj ts1) p2@(PConj ts2)
-  | S.null ts1 && S.null ts2 = pTrue
-  | S.null ts1 = p2
-  | S.null ts2 = p1
-  | otherwise = PConj (ts1 `S.union` ts2)
+  | psNull ts1 && psNull ts2 = pTrue
+  | psNull ts1 = p2
+  | psNull ts2 = p1
+  | otherwise = PConj (ts1 `psUnion` ts2)
 
 pConjs :: [Pred a] -> Pred a
 pConjs ps
-  | S.null pset = pTrue
+  | psNull pset = pTrue
   | otherwise = PConj pset
-  where pset = S.unions [ ts | PConj ts <- ps, not (S.null ts) ]
+  where pset = psUnions [ ts | PConj ts <- ps, not (psNull ts) ]
 
 isPAtom :: PTerm a -> Bool
 isPAtom (PAtom _) = True
@@ -229,39 +229,48 @@ normPConj p = return $ normPConj' p
 normPConj' :: HPred -> HPred
 normPConj' (PConj ps) =
     let
-        un (PConj ps) = S.toList ps
+        un (PConj ps) = psToList ps
 
         f p@(PAtom _) = if p `elem` as then [] else [p]
         f (PIf c (PConj ts) (PConj es)) = un (pIf' c ts_norm es_norm)
-          where ts' = map f (S.toList ts)
-                ts_norm = PConj (S.fromList (concat ts'))
-                es' = map f (S.toList es)
-                es_norm = PConj (S.fromList (concat es'))
+          where ts' = map f (psToList ts)
+                ts_norm = PConj (psFromList (concat ts'))
+                es' = map f (psToList es)
+                es_norm = PConj (psFromList (concat es'))
         f (PSel idx idx_sz es) = un (pSel idx idx_sz es_norm)
           where es' = map (map f . un) es
-                es_norm = map (PConj . S.fromList . concat) es'
+                es_norm = map (PConj . psFromList . concat) es'
 
         -- the atoms
-        (as, if_or_sels) = partition isPAtom (S.toList ps)
+        (as, if_or_sels) = partition isPAtom (psToList ps)
+
+        -- the keys of a merge in the order they were first met
+        -- (M.toList would give Ord order, which is intern order for Ids)
+        inOrder :: (Ord k) => [k] -> M.Map k v -> [(k, v)]
+        inOrder ks m = [ (k, v) | k <- psToList (psFromList ks),
+                                  Just v <- [M.lookup k m] ]
 
         -- merge all the PIf with common conditions
-        ifmap = M.fromListWith pairConj
-                    [(c, (t, e)) | PIf c t e <- if_or_sels ]
-        mifs = [ PIf c t e | (c, (t, e)) <- M.toList ifmap ]
+        -- (fromListWith applies its function as f new old; flipped so
+        -- that the earlier PIf's terms come before the later's)
+        ifs = [(c, (t, e)) | PIf c t e <- if_or_sels ]
+        ifmap = M.fromListWith (flip pairConj) ifs
+        mifs = [ PIf c t e | (c, (t, e)) <- inOrder (map fst ifs) ifmap ]
         -- remove the atoms that are already covered, and simplify
         mifs' = map f mifs
 
         -- merge all the PSel with common indices
-        selmap = M.fromListWith listConj
-                     [((idx, idx_sz), es) | PSel idx idx_sz es <- if_or_sels ]
-        msels = [ PSel idx idx_sz es | ((idx, idx_sz), es) <- M.toList selmap ]
+        sels = [((idx, idx_sz), es) | PSel idx idx_sz es <- if_or_sels ]
+        selmap = M.fromListWith (flip listConj) sels
+        msels = [ PSel idx idx_sz es
+                     | ((idx, idx_sz), es) <- inOrder (map fst sels) selmap ]
         -- remove the atoms that are already covered, and simplify
         msels' = map f msels
 
-    in PConj (S.fromList (as ++ concat mifs' ++ concat msels'))
+    in PConj (psFromList (as ++ concat mifs' ++ concat msels'))
 
 predToIExpr :: Pred a -> IExpr a
-predToIExpr (PConj es) = foldr (ieAnd . pTermToIExpr) iTrue (S.toList es)
+predToIExpr (PConj es) = foldr (ieAnd . pTermToIExpr) iTrue (psToList es)
 
 pTermToIExpr :: PTerm a -> IExpr a
 pTermToIExpr (PAtom e) = e
@@ -278,7 +287,7 @@ instance PPrint PExpr where
     pPrint d prec (P p e) = pPrint d prec (iePrimWhen (iGetType e) (predToIExpr p) e)
 
 pExprToHExpr :: PExpr -> HExpr
-pExprToHExpr (P (PConj s) e) | S.null s = e
+pExprToHExpr (P (PConj s) e) | psNull s = e
 pExprToHExpr (P p e) = iePrimWhenPred (iGetType e) p e
 
 ---------------------------------------------------------------------------
@@ -3531,7 +3540,7 @@ instance Wireable (PTerm HeapData) where
                                     return (?jn (ws1:wss))
 
 instance Wireable HPred where
-  extractWires (PConj ps) = do wss <- mapM extractWires (S.toList ps)
+  extractWires (PConj ps) = do wss <- mapM extractWires (psToList ps)
                                return (?jn wss)
 
 instance Wireable PExpr where

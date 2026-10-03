@@ -2,7 +2,6 @@ module ISyntaxUtil where
 
 import System.IO(Handle, BufferMode(..))
 import qualified Data.Map as M
-import qualified Data.Set as S
 import Data.Maybe(fromMaybe)
 import Util(flattenPairs)
 import IntLit
@@ -511,7 +510,7 @@ iePrimWhen t p e =
         IAps icPrimWhen [t] [p, e]
 
 pTrue :: Pred a
-pTrue = PConj S.empty
+pTrue = PConj psEmpty
 
 iePrimWhenPred :: IType -> Pred a -> IExpr a -> IExpr a
 iePrimWhenPred t p e =
