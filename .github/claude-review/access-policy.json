@@ -1,11 +1,6 @@
 {
   "environment": "claude-pr-review",
-  "authors": [
-    "nanavati"
-  ],
-  "requesters": [
-    "nanavati"
-  ],
+  "organization": "MatX-inc",
   "approvers": [
     "nanavati"
   ]

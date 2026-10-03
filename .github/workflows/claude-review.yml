@@ -1,6 +1,6 @@
 name: Claude PR Review
 
-# Author-restricted, personally approved, static first-pass PR reviewer.
+# MatX-member-only, personally approved, static first-pass PR reviewer.
 #
 # The model is granted only read tools and returns validated JSON; it posts nothing. A
 # deterministic renderer (scripts/render_comment.py) decides publication: it writes the full
@@ -10,14 +10,15 @@ name: Claude PR Review
 # output posts nothing.
 #
 # WHEN IT RUNS:
-#   - automatic first-pass review for an approved author's non-draft same-repo PR;
+#   - automatic first-pass review for a MatX member's non-draft same-repo PR;
 #   - catch-up on pushes only until first delivery, capped at two retry notices;
-#   - @claude-review comments or default-branch manual dispatch for approved authors.
-# Every path requires approved initial/current requesters and a protected environment
-# with exactly the configured required User approvers. The initial policy enrolls only nanavati.
-# Review is disabled until the protected environment has its required User reviewer.
-# Acknowledgment, API secret access, and posting happen only after personal approval.
-# The API key must exist ONLY as a claude-pr-review environment secret.
+#   - @claude-review comments or default-branch manual dispatch for eligible PRs.
+# Preflight checks human identity syntax and the exact personal User approvers;
+# it only queues the protected job, never establishes organization membership.
+# After nanavati's environment approval, the protected job verifies the author,
+# original requester, and current requester are active MatX-inc members.
+# No acknowledgment, PR checkout, model call, or posting runs before that check.
+# Both credentials exist ONLY as claude-pr-review environment secrets.
 #
 # Never use pull_request_target here — it grants elevated secret access to untrusted PR code.
 
@@ -46,7 +47,7 @@ jobs:
       actions: read # read the protected environment configuration
       pull-requests: read # `gh pr view` on the workflow_dispatch path only
     outputs:
-      authorized: ${{ steps.gate.outputs.authorized }}
+      ready: ${{ steps.gate.outputs.ready }}
       is_mention: ${{ steps.resolve.outputs.is_mention }}
       comment_id: ${{ steps.resolve.outputs.comment_id }}
       catchup_blocked: ${{ steps.catchup.outputs.blocked }}
@@ -87,7 +88,7 @@ jobs:
           TRIGGER='@claude-review'
 
           is_cross="false"
-          # A mention selects an on-demand run; it never bypasses author/requester approval.
+          # A mention selects an on-demand run; it never bypasses membership or personal approval.
           is_mention="false"
           resolve_from_gh() { # $1 = PR number; sets author/base_ref/head_sha/is_cross
             local data
@@ -113,7 +114,7 @@ jobs:
             # A fork head repo differs from this repo. (Fork PRs get no secrets and can't be fetched
             # by branch name from origin — handled by the fork skip below.)
             if [ -n "$E_HEAD_REPO" ] && [ "$E_HEAD_REPO" != "$REPO" ]; then is_cross="true"; fi
-            # Allowlist + trusted reviewer come from the DEFAULT (protected) branch, never the PR's
+            # Membership policy + trusted reviewer come from the DEFAULT (protected) branch, never the PR's
             # chosen base: a committer can create an unprotected `evil-base` with themselves in
             # access-policy.json + malicious scripts and target a PR at it, so the base is not a trust anchor.
             allowlist_ref="$DEFAULT_BRANCH"
@@ -132,7 +133,7 @@ jobs:
             num="$C_ISSUE_NUMBER"
             is_mention="true"
             resolve_from_gh "$num"
-            # Allowlist + trusted reviewer from the DEFAULT (protected) branch (see above); review the
+            # Policy + trusted reviewer from the DEFAULT (protected) branch (see above); review the
             # PR head (code as data).
             allowlist_ref="$DEFAULT_BRANCH"
             review_checkout_ref="$head_sha"
@@ -173,7 +174,7 @@ jobs:
             echo "trusted_ref=$trusted_ref"
           } >> "$GITHUB_OUTPUT"
 
-      # Allowlist source: the default/protected branch for production events, never the PR's
+      # Policy source: the default/protected branch for production events, never the PR's
       # chosen base or head; manual dispatch is restricted to that default branch too.
       # Skipped for non-trigger comments (skip=true) so an ordinary repo comment doesn't clone the
       # tree just to no-op.
@@ -184,28 +185,9 @@ jobs:
           ref: ${{ steps.resolve.outputs.allowlist_ref || github.event.repository.default_branch }}
           fetch-depth: 1
 
-      - name: Check approved author and initial/current requesters
-        id: identities
-        if: steps.resolve.outputs.skip != 'true'
-        env:
-          PR_AUTHOR: ${{ steps.resolve.outputs.pr_author }}
-          INITIAL_REQUESTER: ${{ github.actor }}
-          REQUESTER: ${{ github.triggering_actor || github.actor }}
-        run: |
-          set -euo pipefail
-          if [ ! -f .github/claude-review/scripts/check_authorization.py ]; then
-            echo "authorized=false" >> "$GITHUB_OUTPUT"
-            echo "Trusted authorization machinery is absent; reviewer disabled." >&2
-            exit 0
-          fi
-          python3 .github/claude-review/scripts/check_authorization.py \
-            --policy .github/claude-review/access-policy.json \
-            --author "$PR_AUTHOR" --requester "$REQUESTER" \
-            --initial-requester "$INITIAL_REQUESTER" --identities-only >> "$GITHUB_OUTPUT"
-
-      - name: Verify protected environment has the approved required User reviewers
+      - name: Preflight human identities and exact protected-environment User approvers
         id: gate
-        if: steps.identities.outputs.authorized == 'true'
+        if: steps.resolve.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -214,26 +196,31 @@ jobs:
           REQUESTER: ${{ github.triggering_actor || github.actor }}
         run: |
           set -euo pipefail
+          if [ ! -f .github/claude-review/scripts/check_authorization.py ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Trusted preflight machinery is absent; reviewer disabled." >&2
+            exit 0
+          fi
           metadata="$RUNNER_TEMP/claude-review-environment.json"
           if ! gh api "repos/$REPO/environments/claude-pr-review" > "$metadata"; then
-            echo "authorized=false" >> "$GITHUB_OUTPUT"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "Protected environment cannot be verified; reviewer disabled." >&2
             exit 0
           fi
           python3 .github/claude-review/scripts/check_authorization.py \
             --policy .github/claude-review/access-policy.json \
             --author "$PR_AUTHOR" --requester "$REQUESTER" \
-            --initial-requester "$INITIAL_REQUESTER" \
+            --initial-requester "$INITIAL_REQUESTER" --preflight \
             --environment-file "$metadata" >> "$GITHUB_OUTPUT"
 
       # Catch-up runs only while nothing was delivered, under the two-notice retry cap, and
-      # after authorization (unapproved pushes skip the API sweep). API error = stay blocked.
+      # after approval preflight. Membership is checked inside the protected job. API error = blocked.
       - name: Check catch-up delivery state
         id: catchup
         if: >-
           steps.resolve.outputs.skip != 'true'
           && steps.resolve.outputs.action == 'synchronize'
-          && steps.gate.outputs.authorized == 'true'
+          && steps.gate.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -258,15 +245,14 @@ jobs:
     concurrency:
       group: claude-review-${{ needs.authorization-gate.outputs.pr_number || github.run_id }} # run_id: skipped-gate runs get their own group
       cancel-in-progress: false
-    # Author and both initial/current requesters are authorized on every path.
-    # The gate verified that the environment has exactly the approved User reviewers;
-    # GitHub's environment approval runs before any step, acknowledgment, or secret use.
+    # Preflight only queues this job. GitHub requires personal approval before startup,
+    # then the first trusted helper verifies active membership for all three identities.
     if: >-
       !cancelled()
       && needs.authorization-gate.result == 'success'
       && needs.authorization-gate.outputs.skip != 'true'
       && needs.authorization-gate.outputs.catchup_blocked != 'true'
-      && needs.authorization-gate.outputs.authorized == 'true'
+      && needs.authorization-gate.outputs.ready == 'true'
     environment: claude-pr-review
     runs-on: ${{ vars.GH_UBUNTU_RUNNER || 'ubuntu-24.04' }}
     # Above the worst-case sum of the bounded model steps; a hang must not leave an ack dangling.
@@ -279,9 +265,32 @@ jobs:
       id-token: write # REQUIRED — claude-code-action mints an OIDC token to authenticate
       pull-requests: write # read PR title/body/commits; post one bounded review comment
     steps:
+      - name: Checkout trusted default-branch membership gate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .review-authorization
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify current active MatX-inc membership before any review actions
+        id: memberships
+        env:
+          MATX_ORG_MEMBERS_READ_TOKEN: ${{ secrets.MATX_ORG_MEMBERS_READ_TOKEN }}
+          PR_AUTHOR: ${{ needs.authorization-gate.outputs.pr_author }}
+          INITIAL_REQUESTER: ${{ github.actor }}
+          REQUESTER: ${{ github.triggering_actor || github.actor }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          set -euo pipefail
+          python3 .review-authorization/.github/claude-review/scripts/check_authorization.py \
+            --policy .review-authorization/.github/claude-review/access-policy.json \
+            --author "$PR_AUTHOR" --requester "$REQUESTER" \
+            --initial-requester "$INITIAL_REQUESTER" --memberships >> "$GITHUB_OUTPUT"
+
       - name: React + post the ack comment
         id: ack
-        if: needs.authorization-gate.outputs.is_mention == 'true'
+        if: steps.memberships.outputs.authorized == 'true' && needs.authorization-gate.outputs.is_mention == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -300,6 +309,7 @@ jobs:
 
       # The gate rejects all cross-repository/fork heads before this protected job.
       - name: Checkout reviewer + code under review
+        if: steps.memberships.outputs.authorized == 'true'
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # original: v5
         with:
           # Review the resolved PR head SHA on every path. Executable reviewer machinery is
@@ -315,6 +325,7 @@ jobs:
       # `CLAUDE.md` from the base branch, so every model step passes `--setting-sources user
       # --strict-mcp-config`. Files the model only reads stay the PR's version.
       - name: Pin reviewer machinery + strip PR auto-exec config (PR content stays review input)
+        if: steps.memberships.outputs.authorized == 'true'
         env:
           TRUSTED_REF: ${{ needs.authorization-gate.outputs.trusted_ref }}
         run: |
@@ -329,6 +340,7 @@ jobs:
       # Sanity check that the trusted scaffolding is in place (it is, after the overlay above / on the
       # default branch for dispatch). If somehow absent, skip cleanly rather than red-check the PR.
       - name: Verify reviewer scaffolding present
+        if: steps.memberships.outputs.authorized == 'true'
         id: precheck
         run: |
           if [ -f .github/claude-review/scripts/make_review_packet.py ] && [ -f .github/claude-review/REVIEW.md ]; then
@@ -344,7 +356,7 @@ jobs:
 
       - name: Resolve diff base/head
         id: diff
-        if: steps.precheck.outputs.ok == 'true'
+        if: steps.memberships.outputs.authorized == 'true' && steps.precheck.outputs.ok == 'true'
         env:
           BASE_REF: ${{ needs.authorization-gate.outputs.base_ref }}
           HEAD_SHA: ${{ needs.authorization-gate.outputs.head_sha }}
@@ -370,7 +382,7 @@ jobs:
           echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
 
       - name: Build review packet
-        if: steps.precheck.outputs.ok == 'true'
+        if: steps.memberships.outputs.authorized == 'true' && steps.precheck.outputs.ok == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -400,7 +412,7 @@ jobs:
       # have it read .git/config and exfiltrate the token via `summary` (which the renderer posts). All
       # authenticated git fetches (overlay, diff base/head) have already run above.
       - name: Scrub git credentials before the model reads the tree
-        if: steps.precheck.outputs.ok == 'true'
+        if: steps.memberships.outputs.authorized == 'true' && steps.precheck.outputs.ok == 'true'
         run: |
           git config --local --unset-all "http.https://github.com/.extraheader" || true
           git config --local --unset-all credential.helper || true
@@ -409,7 +421,7 @@ jobs:
       # `--setting-sources user` (fixed in 2.1.211).
       - name: Install Claude Code CLI (pinned)
         id: cli
-        if: steps.precheck.outputs.ok == 'true'
+        if: steps.memberships.outputs.authorized == 'true' && steps.precheck.outputs.ok == 'true'
         run: |
           set -euo pipefail
           curl -fsSL https://claude.ai/install.sh | bash -s -- 2.1.284
@@ -427,7 +439,7 @@ jobs:
         # which bypasses continue-on-error and posts nothing). A STEP timeout fails the step instead,
         # so continue-on-error below degrades it to a clean skip rather than a cancelled job.
         timeout-minutes: 30
-        if: steps.precheck.outputs.ok == 'true'
+        if: steps.memberships.outputs.authorized == 'true' && steps.precheck.outputs.ok == 'true'
         # A run that returns no structured output (e.g. it exhausts --max-turns) makes the action
         # fail; soft-fail it so the reviewer degrades to a silent skip (render keys off
         # structured_output being present) rather than a red check on the reviewed PR.
@@ -466,7 +478,7 @@ jobs:
       # render keeps the uncovered findings and flags it — never a red check.
       - name: Prepare verify pass
         id: prep_verify
-        if: steps.precheck.outputs.ok == 'true'
+        if: steps.memberships.outputs.authorized == 'true' && steps.precheck.outputs.ok == 'true'
         env:
           EXEC_FILE: ${{ steps.review.outputs.execution_file }}
         run: |
@@ -485,7 +497,7 @@ jobs:
       - name: Claude verify — attempt 1 (adversarial; posts nothing)
         id: verify1
         timeout-minutes: 20 # bound a silent CLI stall (see the review step); degrades via continue-on-error
-        if: steps.precheck.outputs.ok == 'true' && steps.prep_verify.outputs.has_findings == 'true'
+        if: steps.memberships.outputs.authorized == 'true' && steps.precheck.outputs.ok == 'true' && steps.prep_verify.outputs.has_findings == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@a92e7c70a4da9793dc164451d829089dc057a464 # original: v1
         with:
@@ -520,7 +532,7 @@ jobs:
 
       - name: Collect verdicts — attempt 1
         id: collect1
-        if: steps.precheck.outputs.ok == 'true' && steps.prep_verify.outputs.has_findings == 'true'
+        if: steps.memberships.outputs.authorized == 'true' && steps.precheck.outputs.ok == 'true' && steps.prep_verify.outputs.has_findings == 'true'
         env:
           EXEC_FILE: ${{ steps.verify1.outputs.execution_file }}
         run: |
@@ -539,6 +551,7 @@ jobs:
         id: verify2
         timeout-minutes: 20 # bound a silent CLI stall (see the review step); degrades via continue-on-error
         if: >-
+          steps.memberships.outputs.authorized == 'true' &&
           steps.precheck.outputs.ok == 'true'
           && steps.prep_verify.outputs.has_findings == 'true'
           && steps.collect1.outputs.complete != 'true'
@@ -556,6 +569,7 @@ jobs:
       # attempt 1 already established for an index it didn't re-cover.
       - name: Collect verdicts — attempt 2
         if: >-
+          steps.memberships.outputs.authorized == 'true' &&
           steps.precheck.outputs.ok == 'true'
           && steps.prep_verify.outputs.has_findings == 'true'
           && steps.collect1.outputs.complete != 'true'
@@ -569,7 +583,7 @@ jobs:
 
       - name: Render review (job summary + review payload + fallback comment)
         id: render
-        if: always() && steps.precheck.outputs.ok == 'true'
+        if: steps.memberships.outputs.authorized == 'true' && always() && steps.precheck.outputs.ok == 'true'
         # Soft-fail: any unexpected render error degrades to "nothing posted" (the post step keys on
         # review-payload.json existing), never a red check on the PR.
         continue-on-error: true
@@ -602,7 +616,7 @@ jobs:
       # produced no usable output, so this step skips then.
       - name: Post review (inline comments; fall back to one comment)
         id: post
-        if: steps.precheck.outputs.ok == 'true' && hashFiles('review-payload.json') != ''
+        if: steps.memberships.outputs.authorized == 'true' && steps.precheck.outputs.ok == 'true' && hashFiles('review-payload.json') != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ needs.authorization-gate.outputs.pr_number }}
@@ -663,6 +677,7 @@ jobs:
       # one notice for an undelivered run. Cancellations report too — nothing else will.
       - name: Report the outcome (edit mention ack / notice an undelivered run)
         if: >-
+          steps.memberships.outputs.authorized == 'true' &&
           always() && (
             steps.ack.outputs.ack_id != ''
             || (steps.post.outputs.outcome != 'posted'

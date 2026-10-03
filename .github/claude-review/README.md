@@ -3,7 +3,8 @@
 A static first-pass reviewer ported from `MatX-inc/matx` to `MatX-inc/bsc`.
 The review workflow is `.github/workflows/claude-review.yml`;
 `.github/workflows/claude-review-tests.yml` validates its Python pipeline. Both
-require the same author/requester policy and personal environment approval. This
+require active MatX-inc organization membership for authors/requesters and
+personal environment approval by `nanavati`. This
 directory owns the review policy, schemas, pipeline, and access policy.
 
 ## Review pipeline
@@ -42,21 +43,33 @@ with a two-notice retry cap; after delivery, request a fresh pass explicitly.
 Manual review dispatch accepts a PR number and must use the default branch.
 A mention never bypasses author/requester restrictions.
 
-`access-policy.json` separately lists approved PR authors, initial/current
-requesters, and personal approvers. The initial policy allows only `nanavati` in
-all three roles. Both workflows read the helper and policy from the default
-branch on every path, so a PR or alternate dispatch branch cannot enroll itself.
-Reruns require both the original requester and the person initiating the rerun
-to be approved. Empty lists disable the workflows. Change these lists only in a
-normal reviewed default-branch PR.
+`access-policy.json` names `MatX-inc` as the eligible organization and `nanavati`
+as the personal approver. The PR author, original requester, and current
+requester (including reruns) must each be a **current active MatX-inc member**.
+Organization owners qualify; outside collaborators, pending invitations, removed
+members, and bot identities do not. Private membership qualifies, so public
+membership listings and `author_association` are not used as authorization.
+Both workflows load the helper and policy from the default branch; a PR or
+alternate dispatch branch cannot authorize itself.
 
-Before any model, comment-writing, or Python test job starts, a read-only gate
-checks those identities and fetches the existing `claude-pr-review` environment
-configuration. It requires exactly the policy's named **User** reviewers; missing
-metadata, absent reviewers, teams, unexpected users, or API failure deny the
-run. The protected job then waits for GitHub's actual environment approval. A
-mention acknowledgment is posted only after that approval; requesting a run is
-not approval to execute it.
+The read-only preflight validates human identity syntax and the existing
+`claude-pr-review` environment's exact required **User** reviewer set. Its output
+is only readiness to request personal approval, never membership authorization.
+Missing metadata, absent reviewers, teams, unexpected users, or API failure stop
+the run before it queues a protected job.
+An otherwise valid nonmember request can reach the personal approval queue;
+approval still cannot bypass the membership check below.
+
+After GitHub's actual `nanavati` environment approval, the protected job loads
+the trusted default-branch helper and checks all three memberships using a
+dedicated organization credential. Each API response must identify the expected
+user and organization, have `state: active`, `role: member` or `admin`, and a
+human `User`. Duplicate logins are checked once within that run; later runs check
+again. Missing or expired credentials, HTTP errors, pending/removed membership,
+and malformed responses deny authorization. Only a successful check allows
+acknowledgment, PR checkout, model execution, test code, or any posting, including
+failure/outcome notices. A failed check posts nothing; inspect its Actions step.
+Personal approval does not substitute for verified membership.
 
 An organization owner/repository admin must separately:
 
@@ -64,12 +77,12 @@ An organization owner/repository admin must separately:
    `MatX-inc/bsc`.
 2. Open **bsc → Settings → Environments → New environment**, create the exact
    name `claude-pr-review`, enable **Required reviewers**, and select only the
-   policy's approvers (initially `nanavati`). Do not include teams or extra users:
+   policy's approvers (`nanavati`). Do not include teams or extra users:
    GitHub requires any one listed reviewer, so those would offer an alternate
    approval path. Disable administrator bypass in the environment settings.
    Leave **Prevent self-review** unchecked if `nanavati` must personally approve
-   runs they initiated; with only that requester/approver, blocking self-review
-   leaves nobody eligible to approve.
+   runs they initiate. Other MatX members may initiate eligible runs, but only
+   `nanavati` supplies the required personal approval.
 3. In that environment's deployment branch rules, choose selected branches/tags
    and allow `main` plus the literal `refs/pull/*/merge` pattern. Main-only rules
    block `pull_request` jobs; issue comments and default-branch dispatch use main.
@@ -80,10 +93,22 @@ An organization owner/repository admin must separately:
    name. A repository/organization secret could be used by a modified workflow
    without the approval environment; it would defeat approval-gated API access.
    Never store its value in source or chat.
-5. Permit the pinned checkout and `anthropics/claude-code-action` revisions in
+5. Add **`MATX_ORG_MEMBERS_READ_TOKEN` only as a `claude-pr-review` environment
+   secret**. Recommended: create a fine-grained GitHub PAT owned by an active
+   MatX-inc member, with resource owner **MatX-inc** and organization permission
+   **Members: read**. No repository code/write permission is needed for this
+   credential. Complete any MatX organization token approval/SSO requirements,
+   and renew it before expiration. A correctly minted, current GitHub App token
+   with organization Members: read is also supported; such tokens expire and
+   must be refreshed before use. Remove repository copies and exclude bsc from
+   organization bindings of this secret name, just as for the API key.
+   GitHub Actions' repository `GITHUB_TOKEN` cannot grant organization Members:
+   read; the helper never falls back to it or uses public-member visibility.
+   See [Get organization membership](https://docs.github.com/rest/orgs/members#get-organization-membership-for-a-user).
+6. Permit the pinned checkout and `anthropics/claude-code-action` revisions in
    the organization's Actions policy. Ensure `GH_UBUNTU_RUNNER`, if inherited,
    refers to an available runner; the fallback is GitHub-hosted `ubuntu-24.04`.
-6. Protect the default branch so the executable reviewer and access policy can
+7. Protect the default branch so the executable reviewer and access policy can
    change only through the required human review process.
 
 Required-reviewer protection for a private/internal repository needs an eligible
@@ -97,8 +122,8 @@ release, and mirror workflows are unchanged.
 The review action needs `id-token: write` for GitHub app authentication. The
 workflow separately uses GitHub's generated token for metadata and bounded PR
 posting. The model steps use an Anthropic API key; the separate conversational
-MatX `@claude` assistant's OAuth secret is not used here. No personal access token
-or GHC installation is required for the reviewer.
+MatX `@claude` assistant's OAuth secret is not used here. The separate organization
+membership credential above is required; GHC is not needed by the reviewer.
 
 The workflow pins Claude CLI `2.1.284`, model `claude-opus-4-8`, and effort `xhigh`
 to match the inspected MatX reviewer. Verify that the configured Anthropic
@@ -127,7 +152,10 @@ tools. Signing is not used to create commits.
 This reviewer retains an internal, trusted-input assumption. Enabling external
 fork/untrusted PR review needs a separately hardened design; do not remove the
 fork gate or switch to `pull_request_target` to pass secrets to external code.
-Protect the default branch carrying the executable reviewer and author policy.
+Protect the default branch carrying the executable reviewer and membership policy.
+The membership token is passed only to the trusted membership-check step and its
+`gh api` subprocess environment, never command arguments or later model/test
+steps. API output and credential-bearing errors are captured and not printed.
 
 ## Local validation
 
@@ -142,7 +170,8 @@ python3 .github/claude-review/scripts/make_review_packet.py \
 
 The Python pipeline is standard-library-only. Tests cover packet docs, BSC
 routing, structured-output extraction, verifier result merging, inline anchors,
-rendering, and delivery state. It has no Bazel dependency.
+rendering, delivery state, active/private organization membership, all three
+requester/author identities, credential failures, and duplicate API checks. It has no Bazel dependency.
 
 Merge setup to the default branch before testing production comment triggers:
 GitHub loads that workflow from the default branch and the reviewer overlays
@@ -150,9 +179,10 @@ trusted machinery before using it. On a small eligible same-repository PR,
 request a review and complete the configured approval. Check the gate, review
 packet, model output, and delivery in **Actions → Claude PR Review**. A clean
 review skips verification; candidate findings exercise the independent pass.
-Then test the automatic trigger for an approved author's non-draft PR.
+Then test the automatic trigger for a MatX member's non-draft PR, followed by
+`nanavati`'s personal environment approval.
 
-The GitHub app, environment secret, model access, approval protections, and
+The GitHub app, both environment-only secrets, model access, approval protections, and
 actual personal approval are external requirements; local unit tests cannot
 establish those settings. On the initial setup PR, trusted default-branch
 authorization machinery is not present yet, so both new workflows safely skip.
