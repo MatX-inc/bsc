@@ -1,8 +1,10 @@
 module IInline(iInline, iSortDs) where
 import Data.List(group, sort, nub)
+import Data.Maybe(mapMaybe)
 import Util
 import qualified Data.Set as S
 import qualified Data.Map as M
+import qualified Data.IntMap as IM
 import SCC(tsort)
 import PPrint
 import ErrorUtil
@@ -19,17 +21,30 @@ iInline :: Bool -> IModule a -> IModule a
 iInline inlSimp = iInline1 . iInlineS inlSimp -- . iSortDs
 --iInline inlSimp = iInlineAll
 
--- Sort definitions in dependency order
+-- Sort the defs in dependency order, breaking the ties between
+-- independent defs by their position in the list, so that the order
+-- coming in (heap order from the evaluator, which is elaboration order)
+-- is the order going out as far as the dependencies allow.  The sort runs
+-- on the positions: tsort breaks ties with the node's Ord, and for Id that
+-- is string-intern order, which depends on which names the process has
+-- already met.  The passes after this one keep the list's order, so this
+-- order is the one ITransform first sights the defs in.
 iSortDs :: IModule a -> IModule a
 iSortDs imod@(IModule { imod_local_defs = ds }) =
-    let g = [(i, fdVars e) | IDef i _ e _ <- ds ]
-        m = M.fromList [(i, d) | d@(IDef i _ _ _) <- ds]
-        get i = case M.lookup i m of
-                Nothing -> internalError ("iSortDs: lookup: " ++ ppReadable i)
+    let nds = zip [0 :: Int ..] ds
+        pos = M.fromList [ (i, n) | (n, IDef i _ _ _) <- nds ]
+        -- a reference to anything but a local def orders nothing here
+        deps e = mapMaybe (\ i -> M.lookup i pos) (fdVars e)
+        g = [ (n, deps e) | (n, IDef _ _ e _) <- nds ]
+        m = IM.fromList nds
+        get n = case IM.lookup n m of
+                Nothing -> internalError ("iSortDs: lookup: " ++ ppReadable n)
                 Just d -> d
+        name n = let IDef i _ _ _ = get n in i
         ds' = case tsort g of
-                Left iss -> internalError ("iSortDs: cyclic definition: " ++ ppReadable iss)
-                Right is -> map get is
+                Left nss -> internalError ("iSortDs: cyclic definition: " ++
+                                           ppReadable (map (map name) nss))
+                Right ns -> map get ns
     in  imod { imod_local_defs = ds' }
 
 

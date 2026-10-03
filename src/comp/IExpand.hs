@@ -276,11 +276,13 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       -- a list of just the pointers
       ptrs0 = IM.keys iheap
       -- CSE the pointers and return a map from old pointers to the remaining
-      -- canonical ones.  The pointers are returned in tsorted order.
-      -- The tsort does a non-circularity check, which is a property we
+      -- canonical ones.  The canonical pointers come back in heap order,
+      -- the order the evaluator allocated the cells, which is the order
+      -- of the module's local defs from here on.  eqPtrs tsorts the
+      -- pointers for its non-circularity check, which is a property we
       -- expect in IModule, but the function "pDef" below also relies on it
       -- (since "pDef" and "m" are recursively built)
-      (tsorted_cse_ptrs, ptr_map) = eqPtrs iheap ptrs0
+      (cse_ptrs, ptr_map) = eqPtrs iheap ptrs0
       -- function for translating old pointers to new ones
       ptran p = IM.findWithDefault p p ptr_map
 
@@ -331,7 +333,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       -- a map from the new pointers to their expressions
       --    Actually, a map to a pair of an expression and maybe an IDef;
       --    if the expr is a def reference, the maybe contains the def.
-      ptr_info = [ (p, pDef p) | p <- tsorted_cse_ptrs ]
+      ptr_info = [ (p, pDef p) | p <- cse_ptrs ]
 
       -- a lookup function for the "ptr_info" map,
       -- returning just the expression to replace the ptr reference
@@ -548,7 +550,8 @@ removeInlinedPositions flags imod0 =
 -- to IDefs in the resulting IModule.
 
 -- eqPtrs has two outputs:
--- 1. a tsorted list of the heap pointers (used to build the output module)
+-- 1. the canonical heap pointers, one per distinct expression, in heap
+--    order (used to build the output module's local defs, in that order)
 -- 2. a heap-reference to heap-reference map that seems to be used to do
 -- some sort of heap compression and/or CSE (is this still useful)?
 eqPtrs :: IM.IntMap HeapCell -> [HeapPointer] ->
@@ -633,10 +636,17 @@ eqPtrs heap ptrs =
                         (\acc e c0 -> improve e c0 acc)
                         (dsm0, ptrm0)
                         dsm0
-    in  --traces (show (length ptrs, length (M.elems dsm))) $
+        -- The canonicals in heap order (the cell number is the order the
+        -- evaluator allocated the cells, which is elaboration order), not
+        -- in the Map's key order: Ord HExpr bottoms out in Ord Id, the
+        -- string-intern order, which would put the defs of the expanded
+        -- module in the order the process first met the names at their
+        -- leaves.  The Map is kept for the lookups above only.
+        cse_ptrs = sort (M.elems dsm)
+    in  --traces (show (length ptrs, length cse_ptrs)) $
         --traces (show (IM.toList ptrm)) $
-        --traces (show (M.elems dsm)) $
-        (M.elems dsm, ptrm)
+        --traces (show cse_ptrs) $
+        (cse_ptrs, ptrm)
 
 
 -----------------------------------------------------------------------------
