@@ -4,6 +4,7 @@ module Main_bsc(main, hmain) where
 -- Haskell libs
 import Prelude
 import System.Environment(getArgs, getProgName)
+import SpeedyString(internTable)
 import System.Process(runInteractiveProcess, waitForProcess)
 import System.Process(system)
 import System.Exit(ExitCode(ExitFailure, ExitSuccess))
@@ -217,6 +218,7 @@ hmain args = do
         DBlueSrc flags src ->
             do { setFlags flags; doWarnings; showPreamble flags;
                  main' errh flags src;
+                 printInternTable;
                  exitOK errh }
         DVerLink flags top verSrcFiles abinFiles cSrcFiles ->
             do { setFlags flags; doWarnings; showPreamble flags;
@@ -227,6 +229,22 @@ hmain args = do
                  simLink errh flags top abinFiles cSrcFiles;
                  exitOK errh }
 
+
+-- -print-intern-order (a trace flag: it changes no artifact): every
+-- interned string with its id, in id order, after a header with the count
+-- and the id range (from 0 normally, up to maxBound under
+-- -reverse-intern-order)
+printInternTable :: IO ()
+printInternTable = do
+  progArgs <- getArgs
+  when ("-print-intern-order" `elem` progArgs) $ do
+    table <- internTable
+    let ids = case table of
+                [] -> "none"
+                _  -> show (fst (head table)) ++ ".." ++ show (fst (last table))
+    putStrLn ("intern order: " ++ show (length table) ++ " strings, ids " ++ ids)
+    mapM_ (\ (i, s) -> putStrLn (show i ++ " " ++ show s)) table
+    hFlush stdout
 
 main' :: ErrorHandle -> Flags -> String -> IO ()
 main' errh flags name =  do
