@@ -6,6 +6,7 @@ module InlineReg (
 import Data.List(partition, sortBy)
 import Data.Ord(comparing)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import IntLit
 import IntegerUtil(aaaa)
 import Util(itos)
@@ -46,8 +47,9 @@ vInlineReg errh flags avis =
         vco = flagsToVco flags
         stable = stableVerilog flags
         -- Under -stable-verilog, the clock/reset domain groups are
-        -- ordered by the printed text of their keys; the Map iteration
-        -- order is Ord AExpr, which bottoms out in interning order.
+        -- ordered by the printed text of their keys; otherwise they
+        -- stay in the order partitionBy lists them, which is the order
+        -- the instance list first meets each key.
         stableGroups :: [(AExpr, v)] -> [(AExpr, v)]
         stableGroups gs = if stable
                           then sortBy (comparing (\ (k, _) -> (ppString k, exprIdText k))) gs
@@ -64,14 +66,14 @@ vInlineReg errh flags avis =
 
         -- make a map from clock to the RegNs and RegUNs in that clock
         ns_and_uns_by_clock =
-            stableGroups (M.toList (partitionByClock errh regns_and_reguns))
+            stableGroups (partitionByClock errh regns_and_reguns)
 
         -- translate the partitioned RegN/RegUNs into always blocks
         ns_and_uns_items = map (vInlineN errh vco stable) ns_and_uns_by_clock
 
         -- make a map from clock and reset to the RegAs for that pair
         as_by_clock_and_reset =
-            stableGroups2 (M.toList (partitionByClockAndReset errh regas))
+            stableGroups2 (partitionByClockAndReset errh regas)
 
         -- translate the partitioned RegAs into always blocks
         as_items = map (vInlineA vco) as_by_clock_and_reset
@@ -144,7 +146,7 @@ vInlineN errh vco stable (clk, avis) =
                           else gs
         body_items =
             -- put a comment here "initialized registers"
-            map (translateRegN vco) (stableGroups (M.toList regns_by_reset)) ++
+            map (translateRegN vco) (stableGroups regns_by_reset) ++
             -- put a comment here "uninitialized registers"
             map (translateRegUN vco) reguns
 
@@ -255,31 +257,45 @@ translateRegUN vco avi = mkENAssignment avi
 
 
 -- ==============================
+-- partition reg instances by a key (their clock, reset or both)
+
+-- The groups come out in the order the instance list first meets each
+-- key, and each group keeps the list's order, so the always blocks
+-- follow the registers as the caller lists them (AVerilog sorts the
+-- instances by name).  A Map keyed by the expression would list the
+-- groups in Ord AExpr order, which bottoms out in Ord Id, the
+-- string-intern order, and so depends on what else the process
+-- compiled first.
+partitionBy :: (Ord k) => (AVInst -> k) -> [AVInst] -> [(k, [AVInst])]
+partitionBy key avis =
+    let groups = M.fromListWith (flip (++)) [ (key avi, [avi]) | avi <- avis ]
+        firstSightings _ [] = []
+        firstSightings seen (k:ks)
+            | k `S.member` seen = firstSightings seen ks
+            | otherwise = k : firstSightings (S.insert k seen) ks
+        keys = firstSightings S.empty (map key avis)
+    in  [ (k, groups M.! k) | k <- keys ]
+
+-- ==============================
 -- partition reg instances by their clock
 
-partitionByClock :: ErrorHandle -> [AVInst] -> M.Map AExpr [AVInst]
-partitionByClock errh avis =
-    let mkPair avi = (getRegClock errh avi, [avi])
-    in  M.fromListWith (flip (++)) (map mkPair avis)
+partitionByClock :: ErrorHandle -> [AVInst] -> [(AExpr, [AVInst])]
+partitionByClock errh = partitionBy (getRegClock errh)
 
 
 -- ==============================
 -- partition reg instances by their reset
 
-partitionByReset :: ErrorHandle -> [AVInst] -> M.Map AExpr [AVInst]
-partitionByReset errh avis =
-    let mkPair avi = (getRegReset errh avi, [avi])
-    in  M.fromListWith (flip (++)) (map mkPair avis)
+partitionByReset :: ErrorHandle -> [AVInst] -> [(AExpr, [AVInst])]
+partitionByReset errh = partitionBy (getRegReset errh)
 
 
 -- ==============================
 -- partition reg instances by their clock and reset (for RegA)
 
-partitionByClockAndReset :: ErrorHandle -> [AVInst] -> M.Map (AExpr, AExpr) [AVInst]
-partitionByClockAndReset errh avis =
-    let mkPair avi = let clk_rst = (getRegClock errh avi, getRegReset errh avi)
-                     in  (clk_rst, [avi])
-    in  M.fromListWith (flip (++)) (map mkPair avis)
+partitionByClockAndReset :: ErrorHandle -> [AVInst] -> [((AExpr, AExpr), [AVInst])]
+partitionByClockAndReset errh =
+    partitionBy (\avi -> (getRegClock errh avi, getRegReset errh avi))
 
 
 -- ==============================
