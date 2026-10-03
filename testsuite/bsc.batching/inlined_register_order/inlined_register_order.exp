@@ -4,8 +4,14 @@
 # Fix: the groups come out in the order the module's instance list, which
 # the Verilog lists by name, first meets each clock or reset.
 # Pull request: to follow.
-# Probe: registers on three clocks, two resets on one, RegAs in the opposite
-# order; the Verilog is the same with and without the flag, in that order.
+# Probe: registers on three clocks, two resets on one of them, RegAs on the
+# three clocks in the opposite order.  The Verilog is the same with and
+# without -reverse-intern-order, and compiled alone and behind
+# InlinedRegisterOrderScramble, a module with the same clock and reset
+# arguments declared with clkM before clkZ, which a batch compiles first so
+# that the port names CLK_clkM and RST_N_rstM are created before CLK_clkZ
+# and RST_N_rstZ; in every compile the always blocks and reset groups
+# follow the instance list.
 
 # the event of every always block in the file, in file order
 proc always_events { v } {
@@ -42,6 +48,8 @@ set mod mkInlinedRegisterOrder
 
 reverse_intern_same_verilog $src $mod
 
+batching_verilog_pair $src $mod InlinedRegisterOrderTop.bsv mkInlinedRegisterOrderTop {InlinedRegisterOrderScramble.bsv}
+
 # by name, the first registers are on clkM, CLK, clkZ (with RST_N met
 # before rstA2 on CLK), and the first RegAs on clkZ, CLK, clkM
 set expected_events [list \
@@ -57,15 +65,19 @@ set expected_resets [list \
     RST_N_rstZ RST_N RST_N_rstM \
 ]
 
-set events [always_events $mod.normal.v]
-if { $events eq $expected_events } {
-    pass "the always blocks follow the order of the registers in the instance list"
-} else {
-    fail "the always blocks are in the order `$events'"
-}
-set resets [reset_tests $mod.normal.v]
-if { $resets eq $expected_resets } {
-    pass "the reset groups follow the order of the registers in the instance list"
-} else {
-    fail "the reset groups are in the order `$resets'"
+# $mod.normal.v and $mod.oneshot.v are the plain compiles, $mod.v the
+# batched one (the reversed one was overwritten by it).
+foreach v [list $mod.normal.v $mod.oneshot.v $mod.v] {
+    set events [always_events $v]
+    if { $events eq $expected_events } {
+        pass "the always blocks in `$v' follow the order of the registers in the instance list"
+    } else {
+        fail "the always blocks in `$v' are in the order `$events'"
+    }
+    set resets [reset_tests $v]
+    if { $resets eq $expected_resets } {
+        pass "the reset groups in `$v' follow the order of the registers in the instance list"
+    } else {
+        fail "the reset groups in `$v' are in the order `$resets'"
+    }
 }
