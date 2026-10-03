@@ -5142,10 +5142,8 @@ bsc.typechecker/numeric/Bug782_Div_mkDivide_noProvisos.bsv.bsc-out	numeq-ordpair
 bsc.typechecker/numeric/Bug782_Div_mkDivide_noProvisos.bsv.bsc-out.diff-out	only-one-side	only in the reversed archive; harness diff written because Bug782_Div_mkDivide_noProvisos.bsv.bsc-out mismatched its expected output (that file: numeq-ordpair-orientation)
 bsc.typechecker/numeric/Bug782_TLM2BRAM.bsv.bsc-out	weak-context-tyvar-sort	messages/text
 bsc.typechecker/numeric/Bug782_TLM2BRAM.bsv.bsc-out.diff-out	only-one-side	only in the reversed archive; harness diff written because Bug782_TLM2BRAM.bsv.bsc-out mismatched its expected output (that file: weak-context-tyvar-sort)
-bsc.typechecker/numeric/Mul_Elimination1.bsv.bsc-out.diff-out	only-one-side	only in the reversed archive; harness diff written because Mul_Elimination1.bsv.bsc-out mismatched its expected output (that file: numeq-ordpair-orientation)
 bsc.typechecker/numeric/Unsatisfiable_Inferred.bsv.bsc-out	weak-context-tyvar-sort	messages/text
 bsc.typechecker/numeric/Unsatisfiable_Inferred.bsv.bsc-out.diff-out	only-one-side	only in the reversed archive; harness diff written because Unsatisfiable_Inferred.bsv.bsc-out mismatched its expected output (that file: weak-context-tyvar-sort)
-bsc.typechecker/numeric/Unsatisfiable_TSub.bsv.bsc-out.diff-out	only-one-side	only in the reversed archive; harness diff written because Unsatisfiable_TSub.bsv.bsc-out mismatched its expected output (that file: numeq-ordpair-orientation)
 bsc.typechecker/primtcons/ExpSizeOf_FieldSyn_Unbound_NoCtx.bs.bsc-out	numeq-ordpair-orientation	messages/text; also weak-context-tyvar-sort
 bsc.typechecker/primtcons/ExpSizeOf_FieldSyn_Unbound_NoCtx.bs.bsc-out.diff-out	only-one-side	only in the reversed archive; harness diff written because ExpSizeOf_FieldSyn_Unbound_NoCtx.bs.bsc-out mismatched its expected output (that file: numeq-ordpair-orientation)
 bsc.typechecker/primtcons/ExpSizeOf_VectorIfc.bsv.bsc-vcomp-out	emsg-sort-noposition	messages/text
