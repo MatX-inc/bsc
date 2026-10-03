@@ -11,7 +11,14 @@
 # own; the clocks the Bluesim model defines, in order, must be the same with
 # and without -reverse-intern-order.  (The model's schedule functions still
 # follow a Map in SimMakeCBlocks, a separate issue, so the whole model is not
-# compared here.)
+# compared here.)  The batch analogue for this site is a sibling, not a
+# package compiled earlier: SimExpand runs when the model is linked and
+# interns the names as it reads the .ba files, so SimClockDomainsTop puts
+# SimClockDomainsScramble, the same clocks and crossing registers declared
+# in the opposite order, before the probe, and the top's model must define
+# each instance's clocks together, the scrambler's first and the probe's in
+# the probe's own order; before the fix the two instances' crossing-register
+# clocks were interleaved.
 
 set src SimClockDomains.bsv
 set mod sysSimClockDomains
@@ -59,3 +66,67 @@ if { $n == 6 } {
 sim_model $src $mod {-reverse-intern-order}
 clock_defines $model $clocks
 compare_file $clocks $normal
+
+# ---------------
+# The probe linked under a top beside the scrambler
+
+set top SimClockDomainsTop.bsv
+set topmod sysSimClockDomainsTop
+set scramble SimClockDomainsScramble.bsv
+set topclocks "$topmod.clocks.out"
+
+# the clock names of a clock_defines file, in order
+proc clock_names { out } {
+    global srcdir
+    global subdir
+    set names [list]
+    set in [open [file join [absolute $srcdir] $subdir $out]]
+    while { [gets $in line] >= 0 } {
+        if { [regexp {"([^"]*)"} $line -> name] } {
+            lappend names $name
+        }
+    }
+    close $in
+    return $names
+}
+
+# the names of the clocks of instance INST, with the instance prefix removed
+proc instance_clocks { names inst } {
+    set found [list]
+    foreach name $names {
+        if { [string first "$inst." $name] == 0 } {
+            lappend found [string range $name [string length "$inst."] end]
+        }
+    }
+    return $found
+}
+
+erase "[file rootname $top].bo"
+erase "[file rootname $scramble].bo"
+erase "$topmod.ba"
+erase "mkSimClockDomainsScramble.ba"
+erase "model_$topmod.cxx"
+compile_object_pass $top $topmod
+link_objects_pass $topmod $topmod
+clock_defines "model_$topmod.cxx" $topclocks
+
+set names [clock_names $topclocks]
+set s_clocks [instance_clocks $names s]
+set p_clocks [instance_clocks $names p]
+set expected [concat [list CLK] \
+                  [lmap c $s_clocks { string cat "s." $c }] \
+                  [lmap c $p_clocks { string cat "p." $c }]]
+if { $names == $expected } {
+    pass "the top's model defines CLK, then the scrambler's clocks, then the probe's"
+} else {
+    fail "the top's model defines its clocks in the order $names"
+}
+
+# the probe's clocks, in the probe's own order (its default clock is the
+# top's CLK)
+set normal_names [lrange [clock_names $normal] 1 end]
+if { $p_clocks == $normal_names } {
+    pass "the probe's clocks under the top are in the probe's own order"
+} else {
+    fail "the probe's clocks under the top are $p_clocks, alone $normal_names"
+}
