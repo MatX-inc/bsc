@@ -1,0 +1,15 @@
+# Issue: CType's hash-cons table kept one node per ground structure, children
+# included, so an ap node held the children of whichever construction reached
+# the table first, positions and all; in a `bsc -u` batch the dependency pass
+# parses the whole closure first, so a package's .bo carried positions from
+# files it never imports, and the import hash chain spread the difference.
+# Fix: canonical nodes are position-free values (leaves at noPosition, ap
+# nodes over canonical children); a constructor returns the caller's own
+# occurrence stamped with the value's id.
+# Pull request: none yet; the fix is the engine branch's commit
+# "CType: hash-consed nodes are values; constructors return the caller's occurrence".
+# Probe: PosOrder writes ground types that PosOrderScramble also writes, so in
+# the batch their nodes are first built from the scrambler's file; the one-shot
+# and batched .bo dumps must agree, hash included.
+
+batching_bo_pair PosOrder.bsv PosOrderRoot.bsv PosOrderScramble.bsv

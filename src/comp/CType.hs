@@ -249,15 +249,15 @@ type CType = Type
 -- TyStr leaf is keyed on its value alone.  Soundness rests on the
 -- same one-tycon-per-qualified-name invariant as Eq TyCon.
 --
--- Lifetime: the tables are process-global and never reset, so in a
--- multi-package process a shared leaf carries a position that depends
--- on compile order.  Output is semantically identical either way, but
--- .bo bytes are not reproducible per input.  A per-session reset would
--- fix that, and would also be needed before reloading a redefined
--- package in one process, where a name-keyed memo goes stale in
--- semantics and not just positions.  It would have to cover ccState,
--- ctRnfSeen, GroundCType's gctState and ptrTable, and any later memo
--- that is keyed on type names or intern ids.
+-- Lifetime: the tables are process-global and never reset.  Positions
+-- no longer depend on that (canonical nodes carry none; see CCState),
+-- so .bo bytes are reproducible per input across batching.  What the
+-- lifetime still leaves open is reloading a redefined package in one
+-- process, where a name-keyed leaf carries a payload the name no
+-- longer determines (testsuite/bsc.bluetcl/reload shows it); the
+-- remedy is keying leaves on the payload as well, or a reset covering
+-- ccState, ctRnfSeen, GroundCType's gctState and ptrTable, and any
+-- later memo that is keyed on type names or intern ids.
 
 -- A fused ap key holds two ids as base-2^31 digits, so consing needs
 -- a 64-bit Int.  All of bsc's supported platforms have one.
@@ -385,15 +385,35 @@ ccFusable :: Int -> Bool
 ccFusable i = i < 0x80000000
 
 -- the intern state: canonical ap nodes by fused child ids, canonical
--- leaves by CCKey, and the next id.  Ids are arrival-order, so
--- nothing observable may depend on them beyond identity (see
--- ccAtCaller).
-data CCState = CCState !(IM.IntMap Type) !(M.Map CCKey Type)
+-- leaves by CCKey, every canonical node by its id, and the next id.
+-- Ids are arrival-order, so nothing observable may depend on them
+-- beyond identity (see ccAtCaller).
+--
+-- Value and occurrence.  A canonical node is a value: it carries no
+-- position anywhere inside it (leaves are stored at noPosition, and
+-- an ap node is built over the canonical children, so the table is
+-- position-free by induction).  What a constructor hands back is an
+-- occurrence: the caller's own children under a node stamped with
+-- the value's id.  Ids are identity (cmp's shortcut, the groundness
+-- induction, apSub's identity on ground nodes); the spine is
+-- provenance, and it is never shared through the table.  So the
+-- position an occurrence carries is the one its own source wrote, or
+-- none when it was built from canonical nodes, and the table's
+-- lifetime cannot change it: before this, an ap hit returned the
+-- table's node with whichever file's children built it first, and a
+-- .bo compiled in a batch carried positions from files it never
+-- imported.
+data CCState = CCState !(IM.IntMap Type) !(M.Map CCKey Type) !(IM.IntMap Type)
                        {-# UNPACK #-} !Int
 
 {-# NOINLINE ccState #-}
 ccState :: IORef CCState
-ccState = unsafePerformIO $ newIORef (CCState IM.empty M.empty 0)
+ccState = unsafePerformIO $ newIORef (CCState IM.empty M.empty IM.empty 0)
+
+-- the canonical node for an id; every id handed out has one
+ccCanonById :: IM.IntMap Type -> Int -> Type
+ccCanonById byId i =
+    IM.findWithDefault (internalError ("CType.ccCanonById: no canonical node for id " ++ show i)) i byId
 
 -- normTAp's redex shapes: a primitive type-function head over literal
 -- children.  These must never cons.  apSub rebuilds interior nodes
@@ -427,20 +447,25 @@ mkTAp f a
         then do bump cnRefuseRedex; return (TAp_ (-1) f a)
         else do
           let key = ccFuse fi ai
-          CCState apm _ _ <- readIORef ccState
+          CCState apm _ _ _ <- readIORef ccState
           case IM.lookup key apm of
-            Just canon -> do bump cnConsApHit; return canon
+            Just canon -> do bump cnConsApHit; return (atCaller canon)
             Nothing -> do
               (canon, isNew) <- atomicModifyIORef' ccState (insAp key)
               bump (if isNew then cnConsApNew else cnConsApHit)
-              return canon
+              return (atCaller canon)
   where
-    -- f and a carry ids, so they are the canonical table nodes
-    insAp key st@(CCState apm lm n) =
+    -- the occurrence: the caller's children under the value's id
+    atCaller canon = TAp_ (typeCanonId canon) f a
+    -- the value: the canonical children (position-free) under a new id
+    insAp key st@(CCState apm lm byId n) =
         case IM.lookup key apm of
           Just c  -> (st, (c, False))
-          Nothing -> let c = TAp_ n f a
-                     in  (CCState (IM.insert key c apm) lm (n+1), (c, True))
+          Nothing -> let fi = typeCanonId f
+                         ai = typeCanonId a
+                         c = TAp_ n (ccCanonById byId fi) (ccCanonById byId ai)
+                     in  (CCState (IM.insert key c apm) lm (IM.insert n c byId) (n+1),
+                          (c, True))
 
 -- Exceptions that must reach the top rather than demote the leaf to a
 -- raw node.  Asynchronous ones are not ours to swallow, and
@@ -482,7 +507,7 @@ mkTCon tc
           | otherwise -> do bump cnRefuseKeyErr; return (TCon_ (-1) tc)
         Right Nothing -> do bump cnRefuseLeaf; return (TCon_ (-1) tc)
         Right (Just key) -> do
-          CCState _ lm _ <- readIORef ccState
+          CCState _ lm _ _ <- readIORef ccState
           case M.lookup key lm of
             Just canon -> do bump cnConsConHit; return (ccAtCaller canon tc)
             Nothing -> do
@@ -490,27 +515,32 @@ mkTCon tc
               bump (if isNew then cnConsConNew else cnConsConHit)
               return (ccAtCaller canon tc)
   where
-    insLeaf key st@(CCState apm lm n) =
+    insLeaf key st@(CCState apm lm byId n) =
         case M.lookup key lm of
           Just c  -> (st, (c, False))
           -- the canonical node carries the normalized payload, so the
           -- two spellings of one payload become the same value and
-          -- the payload-free key has nothing left to conflate
-          Nothing -> let c = TCon_ n (ccTidyTyCon tc)
-                     in  (CCState apm (M.insert key c lm) (n+1), (c, True))
+          -- the payload-free key has nothing left to conflate; it
+          -- carries no position, since it is a value, not an
+          -- occurrence (see CCState)
+          Nothing -> let c = TCon_ n (ccSetTyConPos (ccTidyTyCon tc) noPosition)
+                     in  (CCState apm (M.insert key c lm) (IM.insert n c byId) (n+1),
+                          (c, True))
 
 -- Share by id, but hand back the caller's position.  A canonical leaf
 -- is one value, not one occurrence: the key covers the value, kind and
 -- sort tag because Eq TyCon does, and Eq ignores positions.
 -- Diagnostics do not.  So if a leaf kept the position of whichever
 -- occurrence arrived first, it would report a kind error or an unused
--- import against the wrong line, or against the wrong file.
+-- import against the wrong line, or against the wrong file.  The ap
+-- constructor does the same for interior nodes (see CCState: value
+-- and occurrence).
 --
 -- The id and the normalized sort survive, so cmp's shortcut, the
 -- groundness induction and the payload canonicalization above are all
--- unaffected.  Only one claim weakens: equal ids now mean equal
--- values rather than a single heap object, and equal values is all
--- that any consumer of an id relies on.
+-- unaffected.  Only one claim weakens: equal ids mean equal values
+-- rather than a single heap object, and equal values is all that any
+-- consumer of an id relies on.
 ccAtCaller :: Type -> TyCon -> Type
 ccAtCaller (TCon_ n c) tc = TCon_ n (ccSetTyConPos c (getPosition tc))
 ccAtCaller t _ = t
@@ -551,7 +581,7 @@ cTypeConsStats = do
     rleaf <- readIORef cnRefuseLeaf
     rkey <- readIORef cnRefuseKeyErr
     rredex <- readIORef cnRefuseRedex
-    CCState _ _ n <- readIORef ccState
+    CCState _ _ _ n <- readIORef ccState
     return [ ("ctype.tap_built", tap)
            , ("ctype.tcon_built", tcon)
            , ("ctype.cons_ap_hit", aphit)

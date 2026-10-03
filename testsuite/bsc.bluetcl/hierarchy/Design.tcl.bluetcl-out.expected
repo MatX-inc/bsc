@@ -156,7 +156,6 @@ Command: browseinst detail 7
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_0 the_g
 X(DEBUG)       = BLeaf the_g RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -205,7 +204,6 @@ Command: browseinst detail 13
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_0 Loop Body_0 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -277,7 +275,6 @@ Command: browseinst detail 17
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_0 Loop Body_1 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -349,7 +346,6 @@ Command: browseinst detail 21
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_0 Loop Body_2 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -421,7 +417,6 @@ Command: browseinst detail 25
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_0 Loop Body_3 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -492,7 +487,6 @@ Command: browseinst detail 29
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_1 the_g
 X(DEBUG)       = BLeaf the_g RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -541,7 +535,6 @@ Command: browseinst detail 35
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_1 Loop Body_0 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -613,7 +606,6 @@ Command: browseinst detail 39
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_1 Loop Body_1 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -685,7 +677,6 @@ Command: browseinst detail 43
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_1 Loop Body_2 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -757,7 +748,6 @@ Command: browseinst detail 47
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_1 Loop Body_3 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -828,7 +818,6 @@ Command: browseinst detail 51
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_2 the_g
 X(DEBUG)       = BLeaf the_g RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -877,7 +866,6 @@ Command: browseinst detail 57
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_2 Loop Body_0 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -949,7 +937,6 @@ Command: browseinst detail 61
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_2 Loop Body_1 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -1021,7 +1008,6 @@ Command: browseinst detail 65
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_2 Loop Body_2 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -1093,7 +1079,6 @@ Command: browseinst detail 69
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_2 Loop Body_3 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -1164,7 +1149,6 @@ Command: browseinst detail 73
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_3 the_g
 X(DEBUG)       = BLeaf the_g RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -1213,7 +1197,6 @@ Command: browseinst detail 79
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_3 Loop Body_0 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -1285,7 +1268,6 @@ Command: browseinst detail 83
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_3 Loop Body_1 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -1357,7 +1339,6 @@ Command: browseinst detail 87
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_3 Loop Body_2 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN
@@ -1429,7 +1410,6 @@ Command: browseinst detail 91
 X(BSVModule)   = mkDesign
 X(BSVPath)     = Loop the_x_3 Loop Body_3 the_z
 X(DEBUG)       = BLeaf the_z RegN Just ((Reg#(Bit#(8))))
-X(IfcPosition) = Design.bsv 18 4
 X(Interface)   = Reg#(Bit#(8))
 X(LocalPath)   = 
 X(Module)      = RegN

@@ -12,7 +12,7 @@ import System.IO.Unsafe(unsafePerformIO)
 import System.Mem.StableName(StableName, makeStableName, hashStableName,
                              eqStableName)
 
-import Id(Id, getIdBase, getIdQual)
+import Id(Id, getIdBase, getIdQual, setIdPosition)
 import CType(Type(..), TyCon(..), TISort(..), splitTAp)
 import TypeOps(opNumT, opStrT, isPrimTFunName)
 import Pred(Instantiate(..))
@@ -56,12 +56,11 @@ import PreStrings(fsEmpty)
 -- ids, a TCon leaf on its qualifier and base name (exactly what idEq
 -- compares), and a TyNum or TyStr leaf on its value.  So
 -- canonicalization conflates exactly what Eq Type already conflates.
--- A canonical node keeps the positions of whichever occurrence
--- reached the table first, which is the same conflation that
--- .bo-imported types already exhibit.  A literal that comes from
--- evaluating a type function gets noPosition.  Typecheck errors
--- anchor on the position lists of VPred and PredWithPositions, which
--- live outside the type.
+-- A canonical node carries no positions: it is a value, not an
+-- occurrence (the leaves are entered at noPosition, as CType's own
+-- table does), so which occurrence reached the table first is not
+-- observable.  Typecheck errors anchor on the position lists of VPred
+-- and PredWithPositions, which live outside the type.
 --
 -- A type is refused (Nothing) when interning cannot establish
 -- identity cheaply or cannot guarantee a symbol-table-independent
@@ -291,14 +290,18 @@ walk' syns t0 = gctBump cnGCTWalkNodes >>
                   Nothing -> return Nothing
                   Just ks -> do
                       e0 <- nodeEntry (GCTCon (getIdQual i) (getIdBase i))
-                                      (TCon tc)
+                                      (TCon (leafAt noPosition tc))
                       e  <- foldM app e0 ks
                       return (Just e)
-          TCon tc@(TyNum n _) | null as -> Just <$> nodeEntry (GCTNum n) (TCon tc)
-          TCon tc@(TyStr s _) | null as -> Just <$> nodeEntry (GCTStr s) (TCon tc)
+          TCon (TyNum n _) | null as -> Just <$> nodeEntry (GCTNum n) (TCon (TyNum n noPosition))
+          TCon (TyStr s _) | null as -> Just <$> nodeEntry (GCTStr s) (TCon (TyStr s noPosition))
           _ -> return Nothing   -- TVar/TGen/TDefMonad/ill-kinded
   where
     app (k1, c1) (k2, c2) = nodeEntry (GCTAp k1 k2) (TAp c1 c2)
+    -- the canonical leaf for a tycon: the same value at no position
+    leafAt pos (TyCon i k sort) = TyCon (setIdPosition pos i) k sort
+    leafAt pos (TyNum n _) = TyNum n pos
+    leafAt pos (TyStr s _) = TyStr s pos
     walkArgs sy ts = do
         mks <- mapM (walk sy) ts
         return (sequence mks)
