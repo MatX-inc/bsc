@@ -1,0 +1,19 @@
+package LetOrder(zz, aa, cc, f) where
+
+-- Top-level simple definitions: the simplifier orders them.
+zz :: Integer
+zz = 1
+
+aa :: Integer
+aa = 2
+
+cc :: Integer
+cc = zz + aa
+
+-- Local untyped bindings: the typechecker groups them by dependency and
+-- conversion to ISyntax nests the lets.
+f :: Integer -> Integer
+f x = let zz2 = x + 1
+          aa2 = x + 2
+          cc2 = aa2 + zz2
+      in  cc2 + zz2 + aa2
