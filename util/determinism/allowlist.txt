@@ -146,15 +146,25 @@ bsc.assertions/properties/sysSemanticsTest.ba.dumpba-out	iexpand-pconj-set-order
 bsc.batching/def_order/ForeignOrderTop.bsv.bsc-vcomp-out	genwrap-ppmap-order	messages/text; also depend-map-order
 bsc.batching/def_order/SelectOrderTopAB.bsv.bsc-vcomp-out	genwrap-ppmap-order	messages/text; also depend-map-order
 bsc.batching/def_order/SelectOrderTopBA.bsv.bsc-vcomp-out	genwrap-ppmap-order	messages/text; also depend-map-order
+bsc.batching/implicit_condition_order/ImplicitConditionOrder.bo	genwrap-ppmap-order	bo binary; new probe directory (postdates the baseline); the mkPopper wrapper block moves
+bsc.batching/implicit_condition_order/ImplicitConditionOrder.bo.dumpbo-out	genwrap-ppmap-order	bo dump; new probe directory; the mkPopper wrapper block moves
+bsc.batching/implicit_condition_order/ImplicitConditionOrderTop.bo	linked-hash-transitive	bo binary; new probe directory; only the import hash of ImplicitConditionOrder.bo
+bsc.batching/implicit_condition_order/ImplicitConditionOrderTop.bo.dumpbo-out	linked-hash-transitive	bo dump; new probe directory; only the import hash of ImplicitConditionOrder.bo
+bsc.batching/implicit_condition_order/ImplicitConditionOrderTop.bsv.bsc-vcomp-out	depend-map-order	messages/text; new probe directory; the scrambler's compile lines move after the probe's
+bsc.batching/inlined_register_order/InlinedRegisterOrderTop.bsv.bsc-vcomp-out	depend-map-order	messages/text; new probe directory; the scrambler's compile lines move after the probe's
 bsc.batching/instance_trie/TrieOrderRoot.bsv.bsc-out	depend-map-order	messages/text
 bsc.batching/join_order/JoinOrderRoot.bsv.bsc-out	depend-map-order	messages/text
 bsc.batching/let_order/LetOrderRoot.bs.bsc-out	depend-map-order	messages/text
 bsc.batching/loop_order/LoopOrderRoot.bsv.bsc-out	depend-map-order	messages/text
+bsc.batching/mutually_exclusive_order/MutuallyExclusiveOrderTop.bsv.bsc-vcomp-out	depend-map-order	messages/text; new probe directory; the scrambler's compile lines move after the probe's
 bsc.batching/numeq_orientation/Bug782_Div_OK_BatchTop.bsv.bsc-out	depend-map-order	bsc-out of a -u compile: the 'compiling' lines follow the dependency walker's Map order
 bsc.batching/numeric_sum/NumOrderRoot.bsv.bsc-out	depend-map-order	messages/text
 bsc.batching/scheduler_use_order/ArbOrderTop.bsv.bsc-vcomp-out	genwrap-ppmap-order	messages/text; also depend-map-order
 bsc.batching/scheduler_use_order/EnableOrderTop.bsv.bsc-vcomp-out	genwrap-ppmap-order	messages/text; also depend-map-order
 bsc.batching/serialization/SerOrderRoot.bsv.bsc-out	depend-map-order	messages/text
+bsc.batching/sim_clock_domains/mkSimClockDomainsScramble.ba	pending-ba	ba binary; new probe directory; plain dumpba text identical in both runs
+bsc.batching/sim_clock_domains/model_sysSimClockDomainsTop.cxx	new-sim-sched-stmt-map-order	bluesim cxx; new probe directory; the schedule_posedge_* functions in reversed order, the bk_get_or_define_clock order (the probe's own check) identical
+bsc.batching/sim_clock_domains/sysSimClockDomains.ba.dumpba-out	new-ba-dump-ruleuses-map-order	ba dump; new probe directory; dump-time only: the .ba is byte-identical
 bsc.bluesim/debugging/mkGCD.ba	pending-ba	ba binary; plain dumpba text identical in both runs; the bytes differ only through BinData.hs:640-645 (Bin (Map/Set) = toList, i.e. Id-keyed maps are written in Ord Id order); which map is not pinned
 bsc.bluesim/debugging/mkMCDTest.ba	pending-ba	ba binary; plain dumpba text identical in both runs; the bytes differ only through BinData.hs:640-645 (Bin (Map/Set) = toList, i.e. Id-keyed maps are written in Ord Id order); which map is not pinned
 bsc.bluesim/debugging/mkMCDTest.ba.dumpba-out	new-ba-dump-ruleuses-map-order	ba dump; dump-time only: dumpba printed the rule-uses map under TEST_BSC_OPTIONS; the .ba content is identical
