@@ -6,16 +6,19 @@ The classifier's roots table, from the 2026-10-03 baseline (bsc at
 the counts are the differing files of each kind the root accounted for on
 that date, and `site` is where the order is taken in `src/comp`.  Roots
 marked `(noise)` are not compiler ordering and are covered by `ignore.txt`
-instead.  The counts go stale as the list shrinks; the ids and sites do not.
+instead.  Roots marked `(closed, #N)` were fixed by that pull request, with a
+directed probe under `testsuite/bsc.batching`; an entry still carrying a
+closed id differs through another root.  The counts go stale as the list
+shrinks; the ids and sites do not.
 
 | root | v | cxx/h | ba | bo | msgs | total | site |
 |---|---|---|---|---|---|---|---|
 | new-simcopt-sched-local-decl-order | 0 | 997 | 0 | 0 | 0 | 997 | SimCOpt.hs:181-189 (move_map = M.fromListWith (++) [... \| ((sbid,aid), |
 | new-ba-dump-ruleuses-map-order | 0 | 0 | 884 | 0 | 0 | 884 | AUses.hs:205-233 (toListMethodExprUses/toListMethodActionUses/toListFF |
-| me-pairs-ordpair | 130 | 385 | 122 | 0 | 10 | 647 | ASchedule.hs:2531 (nub (map ordPair (concatMap mkAllPairs sps)) in ext |
-| iexpand-pconj-set-order | 194 | 200 | 91 | 0 | 6 | 491 | IExpandUtils.hs:265 (predToIExpr folds S.toList es) |
+| me-pairs-ordpair (closed, #206) | 130 | 385 | 122 | 0 | 10 | 647 | ASchedule.hs:2531 (nub (map ordPair (concatMap mkAllPairs sps)) in ext |
+| iexpand-pconj-set-order (closed, #207) | 194 | 200 | 91 | 0 | 6 | 491 | IExpandUtils.hs:265 (predToIExpr folds S.toList es) |
 | genwrap-ppmap-order | 0 | 0 | 0 | 232 | 88 | 320 | GenWrap.hs:310 (moduledefs <- concatMapM (getDef generating ds) (M.toL |
-| inlinereg-partition-by-clock | 154 | 0 | 0 | 0 | 13 | 167 | InlineReg.hs:38,44,114 (M.toList (partitionByClock / partitionByClockA |
+| inlinereg-partition-by-clock (closed, #208) | 154 | 0 | 0 | 0 | 13 | 167 | InlineReg.hs:38,44,114 (M.toList (partitionByClock / partitionByClockA |
 | rule-use-map-id-order | 0 | 0 | 16 | 0 | 142 | 158 | AUses.hs:460-469 (rumToMethodUseMap: M.Map Id (M.Map Id [UniqueUse]) b |
 | new-sim-sched-def-set-order | 0 | 140 | 0 | 0 | 0 | 140 | SimMakeCBlocks.hs:1126-1127 (mkRuleSchedStmts: ids = S.toList $ getExp |
 | new-sim-sched-stmt-map-order | 0 | 109 | 0 | 0 | 0 | 109 | SimMakeCBlocks.hs:184 (schedules = mapMaybe mkOneSchedule (M.toList st |
@@ -50,7 +53,7 @@ instead.  The counts go stale as the list shrinks; the ids and sites do not.
 | weak-context-tyvar-sort | 0 | 0 | 0 | 0 | 7 | 7 | ContextErrors.hs:547 (tvars = nub $ sort $ ... with Ord TyVar = (tv_nu |
 | emsg-sort-noposition | 0 | 0 | 0 | 0 | 7 | 7 | Error.hs:1265-1266 (prEMsgList sortBy cmpEMsg on Position) |
 | none-test-generated-vectors (noise) | 0 | 6 | 0 | 0 | 0 | 6 |  |
-| new-sim-domain-map-clock-order | 0 | 6 | 0 | 0 | 0 | 6 | SimExpand.hs:825 (domains = M.toList dmap) and :868 (map extractCSI do |
+| new-sim-domain-map-clock-order (closed, #205) | 0 | 6 | 0 | 0 | 0 | 6 | SimExpand.hs:825 (domains = M.toList dmap) and :868 (map extractCSI do |
 | new-binary-systemc-exe (noise) | 0 | 0 | 0 | 0 | 6 | 6 |  |
 | none-build-timestamp (noise) | 0 | 5 | 0 | 0 | 0 | 5 |  |
 | new-testsuite-random-seed (noise) | 5 | 0 | 0 | 0 | 0 | 5 | testsuite/bsc.interra/operators/Arith/generate/gen.pl:3 ($seed = srand |
