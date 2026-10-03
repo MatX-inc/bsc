@@ -73,7 +73,7 @@ import Error(internalError, ErrMsg(..),
              ErrorHandle, initErrorHandle, setErrorHandleFlags,
              bsError, bsWarning, bsMessage,
              exitFail, exitOK, exitFailWith)
-import Position(noPosition, cmdPosition, remapPositionFile)
+import Position(noPosition, cmdPosition, remapFileName)
 import CVPrint
 import Id
 import Backend
@@ -678,8 +678,8 @@ compilePackage
 
     -- Generate binary version of the internal tree .bo file
     let bin_filename = putInDir (bdir flags) name binSuffix
-    let remapP = remapPositionFile (remapPathPrefix flags)
-    genBinFile errh remapP bin_filename bi_sig bo_sig imodr
+    let remapF = remapFileName (remapPathPrefix flags)
+    genBinFile errh remapF bin_filename bi_sig bo_sig imodr
 
     -- Print one message for the two files
     let rel_binname = getRelativeFilePath bin_filename
@@ -1047,7 +1047,7 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                   Nothing -> "Elaborated module file created: "
                   Just be ->
                       "Elaborated " ++ ppString be ++ " module file created: "
-           remapP = remapPositionFile (remapPathPrefix flags)
+           remapF = remapFileName (remapPathPrefix flags)
            remapS = remapPath (remapPathPrefix flags)
            modinfo = ABinModInfo {
                           abmi_path = remapS prefix,
@@ -1064,7 +1064,7 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                                              then vprog else Nothing
                      }
            abin = ABinMod modinfo (bscVersionStr True)
-       genABinFile errh remapP afilename abin
+       genABinFile errh remapF afilename abin
        unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
        dump errh flags t DFwriteABin dumpnames afilename
 
@@ -1081,7 +1081,7 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
        let afilename = mkAName (bdir flags) prefix modstr
            afilename_rel = getRelativeFilePath afilename
            abinPrintPrefix = "Elaborated error module file created: "
-           remapP = remapPositionFile (remapPathPrefix flags)
+           remapF = remapFileName (remapPathPrefix flags)
            remapS = remapPath (remapPathPrefix flags)
            modinfo = ABinModSchedErrInfo {
                           abmsei_path          = remapS prefix,
@@ -1093,7 +1093,7 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
                           abmsei_flags         = remapFlagsPaths remapPath flags
                      }
            abin = ABinModSchedErr modinfo (bscVersionStr True)
-       genABinFile errh remapP afilename abin
+       genABinFile errh remapF afilename abin
        unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
        dump errh flags t DFwriteABin dumpnames afilename
 
