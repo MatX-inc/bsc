@@ -5,7 +5,8 @@
 # edges of different clocks in clock-number order and steps clock 0.
 # Fix: SimExpand carries the domains in the order the hierarchy walk meets
 # them: the module's own domains as the package lists them, then each
-# instance's, instances in declaration order.  Pull request to follow.
+# instance's, instances in declaration order.
+# Pull request: https://github.com/MatX-inc/bsc/pull/205
 # Probe: a design with the default clock, two absolute clocks and a divided
 # clock, with crossing registers between them that bring in domains of their
 # own; the clocks the Bluesim model defines, in order, must be the same with
