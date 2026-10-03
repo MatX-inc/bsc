@@ -65,7 +65,7 @@ import IntegerUtil
 import qualified Data.Map as M
 import qualified Data.Set as S
 import GraphUtil(reverseMap, extractOneCycle_map)
-import SCC(tsortStable)
+import SCC(tsort, tsortStable)
 
 --import Debug.Trace
 --import Util(traces)
@@ -149,19 +149,19 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
       av_depend_defs = getAVDependDefs rev_dep_map fcalls
       -- find the defs which fcalls depend on
       fcall_depend_defs = getFCallDependDefs dep_map fcalls
-      -- the intersection of these lists is the defs that we need to inline.
-      -- Under -stable-verilog the list is canonicalized by the ids' text:
-      -- it arrives in Ord AId (interning) order from the closure Sets and
-      -- becomes the foreign-block group's reg-declaration order.
-      inline_def_ids
-        | vco_stable vco = sortBy (comparing idKey) inline_def_ids0
-        | otherwise      = inline_def_ids0
-        where idKey i = (getIdBaseString i, getIdQualString i)
-      inline_def_ids0 = av_depend_defs `intersect` fcall_depend_defs
+      -- the intersection of these lists is the defs that we need to inline
+      inline_def_ids = av_depend_defs `intersect` fcall_depend_defs
 
-      -- the defs to inline, in definition order
+      -- the defs to inline, in definition order; under -stable-verilog
+      -- the list is instead canonicalized by the ids' text.  Either way
+      -- it becomes the foreign-block group's reg-declaration order and
+      -- the tie-break order of the tsort below.
       inline_def_set = S.fromList inline_def_ids
-      inline_defs = [ d | d@(ADef i _ _ _) <- ds, i `S.member` inline_def_set ]
+      inline_defs0 = [ d | d@(ADef i _ _ _) <- ds, i `S.member` inline_def_set ]
+      inline_defs
+        | vco_stable vco = sortBy (comparing (idKey . adef_objid)) inline_defs0
+        | otherwise      = inline_defs0
+        where idKey i = (getIdBaseString i, getIdQualString i)
 
       -- tsort these inlined defs among the fcalls
       fcalls_and_defs = tsortForeignCallsAndDefs (vco_stable vco) inline_defs fcalls
@@ -308,11 +308,13 @@ tsortForeignCallsAndDefs stable ds fcalls =
         -- string-intern order, which depends on what the process has
         -- compiled before, so it must not decide anything here.)
 
-        -- Under -stable-verilog the def-node key carries the id's TEXT
-        -- first, so the tsort tie-break among ready defs (SCC's PSQ
-        -- pops equal-priority nodes in Ord order) is interning-history
-        -- independent; with the flag off the constant text component
-        -- makes the key order-isomorphic to bare Ord AId.
+        -- Under -stable-verilog the sort is instead tsort, whose
+        -- tie-break among ready defs is Ord on the node (SCC's PSQ pops
+        -- equal-priority nodes in Ord order), and the def-node key
+        -- carries the id's TEXT first so that order is interning-history
+        -- independent.  With the flag off the constant text component
+        -- makes the key order-isomorphic to bare Ord AId, which
+        -- tsortStable's position key then overrides.
         mkKey i | stable    = ((getIdBaseString i, getIdQualString i), i)
                 | otherwise = (("", ""), i)
 
@@ -415,8 +417,14 @@ tsortForeignCallsAndDefs stable ds fcalls =
 
         -- the graph as tsortStable wants it: nodes in the order that
         -- breaks ties, each with its edges
-        nodes = map (Left . adef_objid) ds ++ map (Right . fst) numbered_fcalls
+        nodes = map (Left . mkKey . adef_objid) ds ++
+                map (Right . fst) numbered_fcalls
         g_edges = [ (n, M.findWithDefault [] n g) | n <- nodes ]
+
+        -- -stable-verilog: B0's text order (tsort, ties by Ord on the
+        -- keyed node); otherwise the star's definition order
+        sorted | stable    = tsort g_edges
+               | otherwise = tsortStable g_edges
 
         -- ----------
         -- convert a graph node back into a def/action
@@ -426,8 +434,8 @@ tsortForeignCallsAndDefs stable ds fcalls =
         convertNode (Right n) = Right (getFCall n)
 
     in
-        -- tsortStable returns Left if there is a loop, Right if sorted.
-        case (tsortStable g_edges) of
+        -- the tsort returns Left if there is a loop, Right if sorted.
+        case sorted of
             Right is -> map convertNode is
             Left (scc:_) ->
                 let path = extractOneCycle_map g scc
