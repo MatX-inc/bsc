@@ -43,12 +43,15 @@ proc reset_tests { v } {
     return $resets
 }
 
+# On release-devel-B0 -stable-verilog is on by default and sorts the inlined-register
+# groups by their keys' text instead,
+# so the probe compiles with -no-stable-verilog, the path the fix changes.
 set src InlinedRegisterOrder.bsv
 set mod mkInlinedRegisterOrder
 
-reverse_intern_same_verilog $src $mod
+reverse_intern_same_verilog $src $mod {-no-stable-verilog}
 
-batching_verilog_pair $src $mod InlinedRegisterOrderTop.bsv mkInlinedRegisterOrderTop {InlinedRegisterOrderScramble.bsv}
+batching_verilog_pair $src $mod InlinedRegisterOrderTop.bsv mkInlinedRegisterOrderTop {InlinedRegisterOrderScramble.bsv} {-no-stable-verilog}
 
 # by name, the first registers are on clkM, CLK, clkZ (with RST_N met
 # before rstA2 on CLK), and the first RegAs on clkZ, CLK, clkM

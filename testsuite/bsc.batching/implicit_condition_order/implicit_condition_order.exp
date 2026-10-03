@@ -12,12 +12,15 @@
 # declares the probe's five instance names the other way round, which a
 # batch parses first so that p2 is interned before p1; in every compile the
 # conjuncts are in the order the rule body meets them.
+# On release-devel-B0 -stable-verilog is on by default and renumbers the
+# _ETC___dN defs (the conjuncts' order is the same either way),
+# so the probe compiles with -no-stable-verilog, the path the fix changes.
 set src ImplicitConditionOrder.bsv
 set mod sysImplicitConditionOrder
 
-reverse_intern_same_verilog $src $mod
+reverse_intern_same_verilog $src $mod {-no-stable-verilog}
 
-batching_verilog_pair $src $mod ImplicitConditionOrderTop.bsv mkImplicitConditionOrderTop {ImplicitConditionOrderScramble.bsv}
+batching_verilog_pair $src $mod ImplicitConditionOrderTop.bsv mkImplicitConditionOrderTop {ImplicitConditionOrderScramble.bsv} {-no-stable-verilog}
 
 # In every compile the rule's conjuncts are in the order its body meets
 # them, inQ.first, p1.pop, p2.pop, outQ.enq, sideQ.enq (before the fix the
