@@ -1,0 +1,71 @@
+# Issue: InlineReg grouped inlined registers by clock, and by reset within
+# a clock, in Maps keyed by those expressions; Ord AExpr bottoms out in
+# Ord Id, so the always blocks and reset groups came out in intern order.
+# Fix: the groups come out in the order the module's instance list, which
+# the Verilog lists by name, first meets each clock or reset.
+# Pull request: to follow.
+# Probe: registers on three clocks, two resets on one, RegAs in the opposite
+# order; the Verilog is the same with and without the flag, in that order.
+
+# the event of every always block in the file, in file order
+proc always_events { v } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $v]]
+    set events [list]
+    while { [gets $fh line] >= 0 } {
+        if { [regexp {^\s*always\s*@\s*\((.*)\)\s*$} $line -> ev] } {
+            lappend events $ev
+        }
+    }
+    close $fh
+    return $events
+}
+
+# the reset tested by every `if (RST == `BSV_RESET_VALUE)', in file order
+proc reset_tests { v } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $v]]
+    set resets [list]
+    while { [gets $fh line] >= 0 } {
+        if { [regexp {^\s*if \((\w+) == `BSV_RESET_VALUE\)} $line -> rst] } {
+            lappend resets $rst
+        }
+    }
+    close $fh
+    return $resets
+}
+
+set src InlinedRegisterOrder.bsv
+set mod mkInlinedRegisterOrder
+
+reverse_intern_same_verilog $src $mod
+
+# by name, the first registers are on clkM, CLK, clkZ (with RST_N met
+# before rstA2 on CLK), and the first RegAs on clkZ, CLK, clkM
+set expected_events [list \
+    "posedge CLK_clkM" \
+    "posedge CLK" \
+    "posedge CLK_clkZ" \
+    "posedge CLK_clkZ or `BSV_RESET_EDGE RST_N_rstZ" \
+    "posedge CLK or `BSV_RESET_EDGE RST_N" \
+    "posedge CLK_clkM or `BSV_RESET_EDGE RST_N_rstM" \
+]
+set expected_resets [list \
+    RST_N_rstM RST_N RST_N_rstA2 RST_N_rstZ \
+    RST_N_rstZ RST_N RST_N_rstM \
+]
+
+set events [always_events $mod.normal.v]
+if { $events eq $expected_events } {
+    pass "the always blocks follow the order of the registers in the instance list"
+} else {
+    fail "the always blocks are in the order `$events'"
+}
+set resets [reset_tests $mod.normal.v]
+if { $resets eq $expected_resets } {
+    pass "the reset groups follow the order of the registers in the instance list"
+} else {
+    fail "the reset groups are in the order `$resets'"
+}
