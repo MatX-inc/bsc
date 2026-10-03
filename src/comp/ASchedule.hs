@@ -2527,8 +2527,13 @@ extractMEPairsSP sps =
         mkAllPairs (SPSchedule _) = []
         mkAllPairs (SPMutuallyExclusive ids) = mkMEPairs ids
         mkAllPairs (SPConflictFree ids) = []
+        -- A pair keeps the attribute's own order (the group named earlier
+        -- first): its first group hosts the check and is named first in
+        -- the message, so orienting it with ordPair (Ord Id, intern order)
+        -- let that depend on what the process had compiled before.
+        sameMEPair (a, b) (c, d) = (a, b) == (c, d) || (a, b) == (d, c)
     in
-        nub (map ordPair (concatMap mkAllPairs sps))
+        nubBy sameMEPair (concatMap mkAllPairs sps)
 
 extractCFPairsSP :: [ASchedulePragma] -> [(ARuleId,ARuleId)]
 extractCFPairsSP sps =
