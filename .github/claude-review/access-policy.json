@@ -1,0 +1,7 @@
+{
+  "environment": "claude-pr-review",
+  "organization": "MatX-inc",
+  "approvers": [
+    "nanavati"
+  ]
+}

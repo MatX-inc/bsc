@@ -1,0 +1,31 @@
+{
+  "title": "PR review verify-pass verdicts",
+  "description": "Verification output; the renderer drops refuted findings.",
+  "type": "object",
+  "required": ["verdicts"],
+  "properties": {
+    "verdicts": {
+      "type": "array",
+      "description": "One verdict for every candidate index in the verify packet.",
+      "items": {
+        "type": "object",
+        "required": ["index", "refuted", "reason"],
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Candidate index from the verify packet."
+          },
+          "refuted": {
+            "type": "boolean",
+            "description": "Whether the finding is refuted under the verify prompt's criteria."
+          },
+          "reason": {
+            "type": "string",
+            "description": "One-line verdict rationale with file:line evidence."
+          }
+        }
+      }
+    }
+  }
+}
