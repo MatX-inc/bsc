@@ -3,7 +3,7 @@
 # Ord Id, so the always blocks and reset groups came out in intern order.
 # Fix: the groups come out in the order the module's instance list, which
 # the Verilog lists by name, first meets each clock or reset.
-# Pull request: to follow.
+# Pull request: https://github.com/MatX-inc/bsc/pull/208
 # Probe: registers on three clocks, two resets on one of them, RegAs on the
 # three clocks in the opposite order.  The Verilog is the same with and
 # without -reverse-intern-order, and compiled alone and behind
