@@ -26,7 +26,7 @@ import ASyntax
 import ASyntaxUtil
 import GenWrapUtils(isGenId, dropGenSuffixId)
 import Prim
-import Data.List(genericLength, nub)
+import Data.List(sortOn, genericLength, nub)
 import Data.Maybe(fromMaybe)
 import VModInfo(lookupOutputClockWires, lookupOutputResetWire,
                 lookupIfcInoutWire, vArgs, VArgInfo(..))
@@ -67,6 +67,17 @@ data AState = AState {
         errHandle :: ErrorHandle,
         varNo :: !Int, -- for new variable names
         cseMap :: CSEMap, -- for CSE
+        -- the creation sequence of every def in cseMap and ieDefMap.  aDo
+        -- walks the module's rules, instance arguments and methods in the
+        -- order the IModule lists them and converts a local def the first
+        -- time something refers to it, so this sequence is the module's
+        -- elaboration order; the local defs are emitted in it (local_defs
+        -- in aDo) rather than in the maps' order, which is Ord Id, that is
+        -- string-intern order: the order in which the process first saw
+        -- each name, so it depends on what was compiled before this module
+        -- (testsuite/bsc.verilog/batching).
+        seqNo :: !Int,
+        defSeq :: M.Map Id Int,
         stVarMap :: IdMap, -- I-expr names to A-expr names
         ieDefMap :: IEDefMap, -- accumulated definitions
         flags :: Flags, -- to hold the flags on the Monad
@@ -83,6 +94,8 @@ aInitState errh svm flags =
              errHandle = errh,
              varNo = 1,
              cseMap = M.empty,
+             seqNo = 0,
+             defSeq = M.empty,
              stVarMap = svm,
              ieDefMap = M.empty,
              flags = flags,
@@ -111,7 +124,9 @@ newAIdFromAExpr p expr = do
 addMap :: AExpr -> AId -> AType -> M ()
 addMap e i t = do
         s <- get
-        put (s { cseMap = M.insert e (i, t, e) (cseMap s) })
+        put (s { cseMap = M.insert e (i, t, e) (cseMap s),
+                 seqNo = seqNo s + 1,
+                 defSeq = M.insert i (seqNo s) (defSeq s) })
 
 transId :: Id -> M Id
 transId i = do s <- get
@@ -123,7 +138,9 @@ getDA = liftM ieDefMap (get)
 addDA :: Id -> AExpr -> [DefProp] -> M ()
 addDA i e p = do s <- get
                  -- traceM $ "addDa adding " ++ ppReadable (i,p)
-                 put (s { ieDefMap = M.insert i (e,p) (ieDefMap s) })
+                 put (s { ieDefMap = M.insert i (e,p) (ieDefMap s),
+                          seqNo = seqNo s + 1,
+                          defSeq = M.insertWith (\ _ old -> old) i (seqNo s) (defSeq s) })
 
 addWarning :: WMsg -> M ()
 addWarning w = do s <- get
@@ -242,6 +259,10 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
 
         defMap <- getDA
         cseMap <- getMap
+        seqMap <- gets defSeq
+        let seqOf i = M.findWithDefault maxBound i seqMap
+            inCreationOrder :: [(Id, a)] -> [(Id, a)]
+            inCreationOrder = sortOn (seqOf . fst)
         -- traceM $ "defMap = " ++ ppReadable defMap
         -- traceM $ "cseMap = " ++ ppReadable cseMap
 
@@ -258,7 +279,7 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
                 in  M.fromListWith  combineFn
                         [ (cse_name, (ty, [(def_name, props)]))
                           | (def_name, ((ASDef ty cse_name), props))
-                                <- M.toList defMap ]
+                                <- inCreationOrder (M.toList defMap) ]
 
             rename_map :: M.Map AId (AType, AId)
             rename_map =
@@ -293,13 +314,22 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
             local_defs =
                 let defs_from_cse =
                         -- XXX props are lost on CSE'd defs
-                        [ ADef (rename_id i) t (aSubst subst_map e) []
+                        [ (i, ADef (rename_id i) t (aSubst subst_map e) [])
                           | (_, (i, t, e)) <- M.toList cseMap ]
                     non_cse_defs =
-                        [ ADef i (ae_type e) (aSubst subst_map e) props
+                        [ (i, ADef i (ae_type e) (aSubst subst_map e) props)
                           | (i, (e, props)) <- M.toList defMap,
                             defPropsHasNoCSE props ]
-                in  defs_from_cse ++ non_cse_defs
+                    -- in creation order, i.e. elaboration order (the maps
+                    -- would give Ord Id, string-intern, order).  The passes
+                    -- that follow keep the relative order of the defs they
+                    -- have no reason to move: the dependency sorts (AExpand,
+                    -- ASyntaxUtil) break their ties by list position with
+                    -- SCC.tsortStable, ANoInline restores the order its
+                    -- state conses, and AVerilog emits the always blocks in
+                    -- list order; so of two defs nothing orders, the one
+                    -- elaborated first comes first in the generated code.
+                in  map snd (inCreationOrder (defs_from_cse ++ non_cse_defs))
 
         reset_list <- mapM (\ir -> do ar <- aReset ir
                                       return (getResetId ir, ar))
