@@ -1,0 +1,308 @@
+name: Determinism Gate
+
+# Runs the testsuite twice in the same tree, normally and with
+# -reverse-intern-order, archives every generated file after each group,
+# and compares the two archives byte for byte against the allow-list in
+# util/determinism/.  See util/determinism/README.md.
+#
+# Not run on pull_request: a full pass of the suite takes about an hour on
+# 32 cores, and the gate needs two passes.  Trigger it by hand, or push to
+# a det/** branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      groups:
+        description: >-
+          Testsuite groups to gate, space separated (e.g. "scheduler names").
+          Empty means all groups, split into the bundles below.
+        required: false
+        default: ''
+        type: string
+      os:
+        description: >-
+          Runner image (ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm,
+          ubuntu-26.04, ubuntu-26.04-arm)
+        required: false
+        default: ubuntu-24.04
+        type: string
+  push:
+    branches:
+      - 'det/**'
+
+concurrency:
+  # A new push to the same det/ branch supersedes the run in progress.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # reminder: keep in step with ghc_version in ci.yml
+  GHC_VERSION: 9.6.7
+
+jobs:
+
+  # ------------------------------
+  # Decide which bundles run.  The bundles split the 30 testsuite groups
+  # into five sets of roughly equal test count (6224 to 6268 tests each,
+  # from the 2026-10-03 counts; interra alone is 5742, so five is the
+  # smallest number of bundles that balances).  The groups input narrows
+  # each bundle to the groups asked for and drops bundles left empty.
+
+  plan:
+    name: "Plan"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      os: ${{ inputs.os || 'ubuntu-24.04' }}
+    env:
+      BUNDLES: |
+        1  interra if compile binary doc                                   # 6226 tests
+        2  verilog bugs names driver preprocessor                          # 6245 tests
+        3  lib bsv_examples scheduler arrays options bsc_examples          # 6268 tests
+        4  long_tests evaluator bluesim misc real                          # 6245 tests
+        5  mcd typechecker syntax codegen bluetcl assertions vcdcheck showrules synthesize  # 6224 tests
+      REQUESTED: ${{ inputs.groups }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build the matrix
+        id: plan
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, sys
+
+          bundles = []
+          for line in os.environ["BUNDLES"].splitlines():
+              line = line.split("#", 1)[0].strip()
+              if line:
+                  name, *groups = line.split()
+                  bundles.append((name, groups))
+          known = [g for _, gs in bundles for g in gs]
+
+          requested = os.environ.get("REQUESTED", "").split()
+          unknown = [g for g in requested if g not in known]
+          if unknown:
+              print(f"::error::unknown group(s): {' '.join(unknown)}; "
+                    f"known groups: {' '.join(sorted(known))}")
+              sys.exit(1)
+
+          # A testsuite directory that no bundle names is a group the gate
+          # would silently skip: say so, but do not fail.
+          dirs = sorted(p.name[len("bsc."):]
+                        for p in pathlib.Path("testsuite").glob("bsc.*") if p.is_dir())
+          missing = [d for d in dirs if d not in known]
+          if missing:
+              print(f"::warning::testsuite groups in no bundle: {' '.join(missing)}")
+
+          include = []
+          for name, groups in bundles:
+              chosen = [g for g in groups if not requested or g in requested]
+              if chosen:
+                  include.append({"bundle": name, "groups": " ".join(chosen)})
+          if not include:
+              print("::error::no bundle left to run")
+              sys.exit(1)
+
+          matrix = json.dumps({"include": include})
+          print(matrix)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"matrix={matrix}\n")
+          PY
+
+  # ------------------------------
+  # Build bsc and the utils, as the Build job of build-and-test-ubuntu.yml
+  # does, and hand inst to the gate jobs.
+
+  build:
+    name: "Build: ${{ needs.plan.outputs.os }}"
+    needs: plan
+    runs-on: ${{ needs.plan.outputs.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - name: Install dependencies
+        run: |
+          sudo .github/workflows/install_dependencies_ubuntu.sh
+      # Don't rely on the VM to pick the GHC version
+      # (and don't assume that GHCup is already installed on the runner)
+      - name: Install GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: ${{ env.GHC_VERSION }}
+          cabal: recommended
+      # Until BSC uses cabal to build, pre-install these packages
+      - name: Install Haskell dependencies
+        run: |
+          cabal update
+          cabal v1-install old-time regex-compat split strict-concurrency syb
+      # Same key family as build-and-test-ubuntu.yml, so a det/ branch
+      # restores the latest ccache that the main CI saved.
+      - name: CCache cache files
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/ccache
+          key: build-${{ needs.plan.outputs.os }}-ghc-${{ env.GHC_VERSION }}-ccache-${{ github.sha }}
+          restore-keys: |
+            build-${{ needs.plan.outputs.os }}-ghc-${{ env.GHC_VERSION }}-ccache-
+      - name: Build
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/ccache
+        run: |
+          ccache --zero-stats --max-size 250M
+          export PATH=/usr/lib/ccache:$PATH
+
+          CORES=$(nproc)
+          echo "Cores: ${CORES}"
+
+          # Generate package info
+          export BSC_BUILD_PKGINFO=1
+
+          # An STP test hangs on the ARM runners
+          if [[ "${{ needs.plan.outputs.os }}" == *-arm ]]; then
+              export STP_STUB=1
+            fi
+
+          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
+          # the gate's internal checks need dumpbo, dumpba, bsc2bsv and vcdcheck
+          make -C src/comp install-utils
+          tar czf inst.tar.gz inst
+      - name: CCache stats
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/ccache
+        run: ccache --show-stats
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: determinism-gate-inst-${{ needs.plan.outputs.os }}
+          path: inst.tar.gz
+
+  # ------------------------------
+  # One job per bundle: two passes over the bundle's groups, then the
+  # comparison.  The job fails on compare.py's exit code (1 new difference,
+  # 2 stale allow-list entry, 3 usage or I/O error).
+
+  gate:
+    name: "Gate ${{ matrix.bundle }}: ${{ matrix.groups }}"
+    needs: [ plan, build ]
+    runs-on: ${{ needs.plan.outputs.os }}
+    # Two serial passes over a fifth of the suite; a full pass is about an
+    # hour on 32 cores and up to two hours on a hosted runner.
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      ONLY_GROUPS: ${{ matrix.groups }}
+      GATE_OUT: ${{ github.workspace }}/gate-out
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: "sudo .github/workflows/install_dependencies_testsuite_ubuntu.sh"
+
+      - name: Download bsc
+        uses: actions/download-artifact@v8
+        with:
+          name: determinism-gate-inst-${{ needs.plan.outputs.os }}
+      - name: Install bsc
+        run: "tar xzf inst.tar.gz"
+
+      # Same key family as the Test job of build-and-test-ubuntu.yml, so a
+      # det/ branch restores the latest ccache that the main CI saved.
+      - name: CCache cache files
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/ccache
+          key: test-${{ needs.plan.outputs.os }}-ghc-${{ env.GHC_VERSION }}-ccache-${{ github.sha }}
+          restore-keys: |
+            test-${{ needs.plan.outputs.os }}-ghc-${{ env.GHC_VERSION }}-ccache-
+
+      - name: Run the gate
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/ccache
+          TEST_RELEASE: ${{ github.workspace }}/inst
+          # the dumpbo/dumpba outputs are part of what the gate compares
+          DO_INTERNAL_CHECKS: 1
+        run: |
+          # Use ccache to avoid recompiling generated .cxx every pass.
+          ccache --zero-stats --max-size 500M
+          export PATH=/usr/lib/ccache:$PATH
+
+          # Use the LLVM linker as the C++ linker
+          # for a moderate build-time speedup over ld.bfd
+          export LINKER=lld
+          export LDFLAGS="-Wl,-fuse-ld=$LINKER"
+
+          # Use -O0 for significantly faster C++ compiles (which more
+          # than make up for slower simulations).  Objects and executables
+          # are not compared, so this changes nothing the gate looks at.
+          export CXXFLAGS="-O0"
+
+          echo "Groups: ${ONLY_GROUPS}"
+          util/determinism/run-gate.sh
+
+      # Show ccache stats so we can see what the hit-rate is like.
+      - name: CCache stats
+        if: always()
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/ccache
+        run: ccache --show-stats
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "## Determinism gate, bundle ${{ matrix.bundle }}"
+            echo
+            echo "Groups: \`${ONLY_GROUPS}\`"
+            echo
+            for kind in differ new stale ignored outofscope; do
+              f="${GATE_OUT}/compare.${kind}"
+              if [ -f "$f" ]; then
+                echo "- ${kind}: $(wc -l < "$f")"
+              fi
+            done
+            for kind in new stale; do
+              f="${GATE_OUT}/compare.${kind}"
+              if [ -s "$f" ]; then
+                echo
+                echo "### ${kind} (first 100)"
+                echo '```'
+                head -100 "$f"
+                echo '```'
+              fi
+            done
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # The archives are gigabytes; keep only both copies of each file
+      # that differs and is not allowed, which is what a fix needs to see.
+      - name: Collect the new differences
+        if: failure()
+        run: |
+          cd "${GATE_OUT}" || exit 0
+          if [ -s compare.new ] && [ -d normal ] && [ -d reversed ]; then
+            cut -f1 compare.new | sed -e 's|^\./||' \
+              | awk '{ print "normal/" $0; print "reversed/" $0 }' \
+              | tar czf new-files.tar.gz --ignore-failed-read -T -
+            ls -l new-files.tar.gz
+          fi
+
+      - name: Upload compare outputs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: determinism-gate-${{ needs.plan.outputs.os }}-bundle-${{ matrix.bundle }}
+          if-no-files-found: warn
+          path: |
+            gate-out/**
+            !gate-out/normal/**
+            !gate-out/reversed/**
