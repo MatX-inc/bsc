@@ -1,0 +1,11 @@
+# Issue: a rule's or method's implicit conditions sat in a Set of PTerms whose
+# Ord goes through Ord Id, so the && chain built for CAN_FIRE/WILL_FIRE/RDY
+# came out in string-intern order in the Verilog, the Bluesim C++ and the .ba.
+# Fix: the PSet behind Pred keeps its terms in first-insertion order, the
+# order the evaluator met them, and the conjunction is built in that order.
+# Pull request to follow.
+# Probe: a rule with an explicit condition and implicit conditions from three
+# FIFOs and two submodules' ActionValue methods, with and without the flag.
+
+reverse_intern_same_verilog ImplicitConditionOrder.bsv sysImplicitConditionOrder
+reverse_intern_same_verilog ImplicitConditionOrder.bsv mkPopper
