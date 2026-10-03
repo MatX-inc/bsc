@@ -88,7 +88,7 @@ import Prelude hiding ((<>))
 
 import System.IO(Handle)
 import qualified Data.Map as M
-import Data.List(intercalate)
+import Data.List(intercalate, foldl')
 
 import qualified Data.Array as Array
 import IntLit
