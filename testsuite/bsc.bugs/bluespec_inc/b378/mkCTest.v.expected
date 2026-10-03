@@ -73,29 +73,29 @@ module mkCTest(CLK,
   assign the_cnd$EN = 1'b0 ;
 
   // register the_y
-  always@(WILL_FIRE_RL_zig or WILL_FIRE_RL_zag or WILL_FIRE_RL_zug)
+  always@(WILL_FIRE_RL_zag or WILL_FIRE_RL_zig or WILL_FIRE_RL_zug)
   begin
     case (1'b1) // synopsys parallel_case
-      WILL_FIRE_RL_zig: the_y$D_IN = 4'd1;
       WILL_FIRE_RL_zag: the_y$D_IN = 4'd2;
+      WILL_FIRE_RL_zig: the_y$D_IN = 4'd1;
       WILL_FIRE_RL_zug: the_y$D_IN = 4'd4;
       default: the_y$D_IN = 4'b1010 /* unspecified value */ ;
     endcase
   end
-  assign the_y$EN = WILL_FIRE_RL_zig || WILL_FIRE_RL_zag || WILL_FIRE_RL_zug ;
+  assign the_y$EN = WILL_FIRE_RL_zag || WILL_FIRE_RL_zig || WILL_FIRE_RL_zug ;
 
   // submodule the_z
-  always@(WILL_FIRE_RL_zig or WILL_FIRE_RL_zag or WILL_FIRE_RL_zug)
+  always@(WILL_FIRE_RL_zag or WILL_FIRE_RL_zig or WILL_FIRE_RL_zug)
   begin
     case (1'b1) // synopsys parallel_case
-      WILL_FIRE_RL_zig: the_z$D_IN = 4'd1;
       WILL_FIRE_RL_zag: the_z$D_IN = 4'd2;
+      WILL_FIRE_RL_zig: the_z$D_IN = 4'd1;
       WILL_FIRE_RL_zug: the_z$D_IN = 4'd4;
       default: the_z$D_IN = 4'b1010 /* unspecified value */ ;
     endcase
   end
   assign the_z$ENQ =
-	     WILL_FIRE_RL_zig || WILL_FIRE_RL_zag || WILL_FIRE_RL_zug ;
+	     WILL_FIRE_RL_zag || WILL_FIRE_RL_zig || WILL_FIRE_RL_zug ;
   assign the_z$DEQ = 1'b0 ;
   assign the_z$CLR = 1'b0 ;
 

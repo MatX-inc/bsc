@@ -1,0 +1,32 @@
+# Issue: extractMEPairsSP (ASchedule.hs) oriented each mutually_exclusive
+# pair with ordPair, Ord Id, so intern order chose the rule hosting the
+# __me_check rule (its number), the check's && operand order and the R0001
+# message's position and set order, in the Verilog, Bluesim C++ and .ba.
+# Fix: a pair keeps the attribute's own order, the group named earlier
+# first, deduplicated without regard to orientation.
+# Pull request: https://github.com/MatX-inc/bsc/pull/206
+# Probe: an attribute names two rules against their declaration order.  The
+# -keep-fires Verilog is the same with and without -reverse-intern-order,
+# and compiled alone and behind MutuallyExclusiveOrderScramble, a module
+# with rules of the same two names declared the other way round, which a
+# batch compiles first so that the rule names are created in that order;
+# in every compile the check is on the rule the attribute names first.
+set src MutuallyExclusiveOrder.bsv
+set mod sysMutuallyExclusiveOrder
+
+reverse_intern_same_verilog $src $mod {-keep-fires}
+
+batching_verilog_pair $src $mod MutuallyExclusiveOrderTop.bsv mkMutuallyExclusiveOrderTop {MutuallyExclusiveOrderScramble.bsv} {-keep-fires}
+
+# In every compile the check is hosted on namedFirst, the group the
+# attribute names first: the check rule carries that rule's number (the
+# second rule, 1), namedFirst's predicate is the first && operand, the
+# message sits at namedFirst's column in the attribute and names its set
+# first.  $mod.normal.v and $mod.oneshot.v are the plain compiles, $mod.v
+# the batched one (the reversed one was overwritten by it).
+foreach v [list $mod.normal.v $mod.oneshot.v $mod.v] {
+    find_regexp $v {// rule __me_check_1$}
+    find_regexp $v {if \(goNamedFirst && goDeclaredFirst\)}
+    find_regexp $v {line 21, column 29: \(R0001\)}
+    find_regexp $v {ME sets \[RL_namedFirst\] and}
+}

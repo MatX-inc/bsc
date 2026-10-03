@@ -1,0 +1,22 @@
+# Issue: independent defs were ordered by AId (string-intern order) in the def
+# sorts of AExpand, ASyntaxUtil and the Verilog, lambda-calculus and SAL
+# foreign-call blocks, and in the def list AConv built from its maps.
+# Fix: SCC.tsortStable breaks ties by input position and AConv emits its defs
+# in elaboration order, so the output order depends on the design alone.
+# Pull request: https://github.com/MatX-inc/bsc/pull/195
+# Probe: each module's Verilog alone versus behind two scramblers; unfixed,
+# ForeignOrder's inlined defs and SelectOrder's select blocks come out swapped.
+
+batching_verilog_pair ForeignOrder.bsv mkForeignOrder ForeignOrderTop.bsv mkForeignOrderTop {ForeignOrderScrambleA.bsv ForeignOrderScrambleB.bsv}
+
+# SelectOrder's two select always blocks tie in the def sort; batch order
+# B, A broke the old tie by AId, and A, B the def list order AConv took
+# from its maps, so the probe is run behind both tops.
+batching_verilog_pair SelectOrder.bsv mkSelectOrder SelectOrderTopBA.bsv mkSelectOrderTopBA {SelectOrderScrambleA.bsv SelectOrderScrambleB.bsv}
+
+erase SelectOrder.bo
+erase SelectOrderScrambleA.bo
+erase SelectOrderScrambleB.bo
+erase mkSelectOrder.v
+compile_verilog_pass SelectOrderTopAB.bsv mkSelectOrderTopAB
+compare_file mkSelectOrder.v mkSelectOrder.oneshot.v

@@ -1,0 +1,10 @@
+# Issue: the built-in Add rules rebuilt a cancelled numeric sum from a bag
+# of terms listed in Type's Ord, which compares type variables by Id, that
+# is by string-intern order; the solved width came back as m + n in one
+# compile and n + m in another, and that type reached the .bo.
+# Fix: fromAddTerms orders the terms by cmpTypeShape, by content alone.
+# Pull request: https://github.com/MatX-inc/bsc/pull/188
+# The probe zero-extends one bit to n + (m + 2) bits, alone and behind a
+# scrambler that interns m before n; the two .bo dumps must be identical.
+
+batching_bo_pair NumOrder.bsv NumOrderRoot.bsv NumOrderScramble.bsv

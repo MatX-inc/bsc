@@ -1,0 +1,10 @@
+# Issue: joinCtxs grouped the joinable predicates with joinByFst, which
+# sorts the groups by key, and the key's Ord (class, then types) is
+# string-intern order; the order of the dictionary bindings a definition
+# emits followed it, so a one-shot compile and a `bsc -u` batch differed.
+# Fix: Util.joinByFstStable keeps the groups in first-occurrence order.
+# Pull request: https://github.com/MatX-inc/bsc/pull/186
+# Probe: a reduced GrayCounter compiled alone and behind a scrambler that
+# interns IsModule before Add must dump the same .bo, hash included.
+
+batching_bo_pair JoinOrder.bsv JoinOrderRoot.bsv JoinOrderScramble.bsv

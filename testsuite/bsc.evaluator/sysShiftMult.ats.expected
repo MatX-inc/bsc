@@ -45,21 +45,21 @@ y :: ABSTRACT:  Prelude.VReg = RegN
 			       port types=D_IN -> Prelude.Bit 32
 					  Q_OUT -> Prelude.Bit 32
 -- AP local definitions
-x_BITS_28_TO_0_CONCAT_0___d5 :: Bit 32;
-x_BITS_28_TO_0_CONCAT_0___d5  = x_BITS_28_TO_0___h154 ++ 3'd0;
--- IdProp x_BITS_28_TO_0_CONCAT_0___d5[IdP_from_rhs]
+x___d1 :: Bit 32;
+x___d1  = x.read;
+-- IdProp x___d1[IdP_from_rhs]
+x_BITS_29_TO_0___h131 :: Bit 30;
+x_BITS_29_TO_0___h131  = extract x___d1 32'd29 32'd0;
+-- IdProp x_BITS_29_TO_0___h131[IdP_keep]
 x_BITS_29_TO_0_CONCAT_0___d3 :: Bit 32;
 x_BITS_29_TO_0_CONCAT_0___d3  = x_BITS_29_TO_0___h131 ++ 2'd0;
 -- IdProp x_BITS_29_TO_0_CONCAT_0___d3[IdP_from_rhs]
 x_BITS_28_TO_0___h154 :: Bit 29;
 x_BITS_28_TO_0___h154  = extract x___d1 32'd28 32'd0;
 -- IdProp x_BITS_28_TO_0___h154[IdP_keep]
-x_BITS_29_TO_0___h131 :: Bit 30;
-x_BITS_29_TO_0___h131  = extract x___d1 32'd29 32'd0;
--- IdProp x_BITS_29_TO_0___h131[IdP_keep]
-x___d1 :: Bit 32;
-x___d1  = x.read;
--- IdProp x___d1[IdP_from_rhs]
+x_BITS_28_TO_0_CONCAT_0___d5 :: Bit 32;
+x_BITS_28_TO_0_CONCAT_0___d5  = x_BITS_28_TO_0___h154 ++ 3'd0;
+-- IdProp x_BITS_28_TO_0_CONCAT_0___d5[IdP_from_rhs]
 -- AP rules
 rule RL_unnamed "":
  when 1'd1

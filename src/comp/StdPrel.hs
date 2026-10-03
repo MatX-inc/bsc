@@ -17,7 +17,9 @@ module StdPrel(
 import qualified Bag as B
 import qualified Data.Set as S
 
-import Util(log2, ordPair, integerSqrt, take3OrErr)
+import Util(log2, ordPairBy, integerSqrt, take3OrErr)
+import Data.List(sortBy)
+import FStringCompat(getFString)
 import Position
 import ErrorUtil(internalError)
 import Id
@@ -292,14 +294,52 @@ toAddTerms (TAp (TAp tc t1) t2)
     | tc == tSub = unionAddTerms (toAddTerms t1) (invertAddTerms (toAddTerms t2))
 toAddTerms t = singletonAddTerms t
 
+-- The rebuilt sum lists its terms in cmpTypeShape order: the bag's own
+-- order is Type's Ord, which for type variables is string-intern order,
+-- so the same remainder would be rebuilt as m + n in one compile and as
+-- n + m in another, and that type is what a solved variable is bound to.
 fromAddTerms :: AddTerms -> Type
 fromAddTerms (AddTerms 0 add_b sub_b) =
-    mkAddType (B.toList add_b) (B.toList sub_b)
+    mkAddType (termList add_b) (termList sub_b)
 fromAddTerms (AddTerms i add_b sub_b) =
     let it = cTNum (abs i) noPosition  -- XXX better position?
     in  if (i > 0)
-        then mkAddType (it : B.toList add_b) (B.toList sub_b)
-        else mkAddType (B.toList add_b)      (it : B.toList sub_b)
+        then mkAddType (it : termList add_b) (termList sub_b)
+        else mkAddType (termList add_b)      (it : termList sub_b)
+
+termList :: B.Bag Type -> [Type]
+termList = sortBy cmpTypeShape . B.toList
+
+-- An ordering on types that depends on their content alone: the
+-- constructor classes in the order Type's Ord uses (TAp before TCon
+-- before TVar, so "more structure first" still holds), then children,
+-- names as strings, literals by value.  Type's own Ord compares Ids by
+-- intern id, which depends on which names the process has already
+-- seen; it must not decide anything that reaches an output.
+cmpTypeShape :: Type -> Type -> Ordering
+cmpTypeShape (TAp f1 a1) (TAp f2 a2) = cmpTypeShape f1 f2 <> cmpTypeShape a1 a2
+cmpTypeShape (TAp _ _)   _           = LT
+cmpTypeShape _           (TAp _ _)   = GT
+cmpTypeShape (TCon c1)   (TCon c2)   = cmpTyConShape c1 c2
+cmpTypeShape (TCon _)    _           = LT
+cmpTypeShape _           (TCon _)    = GT
+cmpTypeShape (TVar v1)   (TVar v2)   =
+    compare (tv_num v1, getIdString (tv_name v1)) (tv_num v2, getIdString (tv_name v2))
+cmpTypeShape (TVar _)    _           = LT
+cmpTypeShape _           (TVar _)    = GT
+cmpTypeShape (TGen _ n1) (TGen _ n2) = compare n1 n2
+cmpTypeShape (TGen _ _)  _           = LT
+cmpTypeShape _           (TGen _ _)  = GT
+cmpTypeShape (TDefMonad _) (TDefMonad _) = EQ
+
+cmpTyConShape :: TyCon -> TyCon -> Ordering
+cmpTyConShape (TyCon i1 _ _) (TyCon i2 _ _) = compare (getIdString i1) (getIdString i2)
+cmpTyConShape (TyCon {})     _              = LT
+cmpTyConShape _              (TyCon {})     = GT
+cmpTyConShape (TyNum n1 _)   (TyNum n2 _)   = compare n1 n2
+cmpTyConShape (TyNum {})     _              = LT
+cmpTyConShape _              (TyNum {})     = GT
+cmpTyConShape (TyStr s1 _)   (TyStr s2 _)   = compare (getFString s1) (getFString s2)
 
 mkAddType :: [Type] -> [Type] -> Type
 mkAddType add_ts sub_ts =
@@ -1014,8 +1054,10 @@ genNumEqInsts symT _ _ p@(IsIn c [t, t'])
   where -- look up the class, rather than construct it, for better sharing
         clsAdd' = mustFindClass symT (CTypeclass idAdd)
         clsMul' = mustFindClass symT (CTypeclass idMul)
-        -- tA should have more structure since TAp sorts first
-        (tA, tB) = ordPair (t, t')
+        -- tA should have more structure since TAp sorts first; the order
+        -- is by shape and names, never by intern id, so which side is
+        -- decomposed does not depend on what the process has seen before
+        (tA, tB) = ordPairBy cmpTypeShape (t, t')
         (tcon, args) = splitTAp tA
 
 -- If one is a variable and the other has no tyvars, it's safe to unify them
@@ -1034,7 +1076,7 @@ genNumEqInsts symT bvs (Just dvs) (IsIn c [t1, t2])
       let p = IsIn c [tA, tA], let r = mkNumInstBody (predToType p) =
         --trace ("NumEq " ++ ppReadable (r, p)) $
         [ mkInst r ([] :=> p) (Just idPrelude) ]
-  where (tA, tB) = ordPair (t1, t2)
+  where (tA, tB) = ordPairBy cmpTypeShape (t1, t2)
 
 genNumEqInsts _ _ _ _ = []
 

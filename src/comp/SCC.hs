@@ -1,11 +1,12 @@
-module SCC(scc, getCycles, tsort, Graph) where
+module SCC(scc, getCycles, tsort, tsortStable, tsortWith, Graph) where
 
 -- Compute strongly connected components.
 -- The graph is represented as a list of (node, neighbour list) pairs.
 -- A list of list of nodes is returned, each connected.
 -- Original code by John Launchbury.
 
-import Data.List(partition, sort, foldl')
+import Data.List(partition, sortOn, foldl')
+import Data.Maybe(mapMaybe)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Balanced hiding (lookup)
@@ -91,38 +92,55 @@ otsort ns =
 
 ------
 
--- sort a graph topologically
--- note that this is *not* a stable sort
+-- sort a graph topologically; not a stable sort.  Of the nodes the edges
+-- leave unordered, the queue decides (by Ord in the typical case, by its
+-- tree shape among equal priorities); unchanged from before tsortWith.
 tsort :: Ord node => [Node node] -> Either [[node]] [node]
-tsort = ntsort
--- reverts to otsort if ntsort looks buggy (see note below)
--- tsort = otsort
+tsort = tsortWith (const (Nothing :: Maybe ()))
 
--- XXX ntsort [(1, [2, 3, 4]), (5, [3, 2, 4])] = Left [[1,5]]
--- XXX fixed by falling back to otsort, but should be fixed in ntsort?
-ntsort :: Ord node => [Node node] -> Either [[node]] [node]
-ntsort g =
-    let psq = fromOrdList [ n :-> length ns | (n, ns) <- sort g ]
+-- the same sort with ties broken by position in the input list, so the
+-- result is a function of the input alone (Ord on Id is string-intern
+-- order, which depends on what the process has already seen).  The def
+-- lists the back end sorts come from AConv in elaboration order and the
+-- passes in between keep their relative order, so this keeps elaboration
+-- order through the pipeline.
+tsortStable :: Ord node => [Node node] -> Either [[node]] [node]
+tsortStable = tsortWith (Just . snd)
+
+-- Topological sort with an optional tie-break key, computed from each
+-- node and its position in the input list.  With a key, the queue's
+-- priority is (in-degree, key, node), so of the ready nodes the least
+-- key comes first whatever the tournament tree's own tie rule (which
+-- depends on the tree's shape: a sort keyed on position but tied by the
+-- tree is not even idempotent, and the synthesize pass re-sorts inside a
+-- fixpoint loop).  Without a key the priority is the in-degree alone and
+-- the tree decides ties as it always has, so tsort's results are
+-- unchanged.  Edges to nodes outside the list, and cycles, send it back
+-- to otsort, whose cycle report is accurate (the queue walk reports every
+-- unsorted node as one cycle, e.g. for [(1, [2, 3, 4]), (5, [3, 2, 4])]).
+tsortWith :: (Ord node, Ord k) => ((node, Int) -> Maybe k) -> [Node node] -> Either [[node]] [node]
+tsortWith prio g =
+    let ixs = M.fromList (zip (map fst g) [0 :: Int ..])
+        keyOf n = fmap (\ i -> (prio (n, i), n)) (M.lookup n ixs)
+        priority k@(tie, _) deg = (deg, fmap (const k) tie)
+        psq = fromOrdList [ k :-> priority k p | (k, p) <- sortOn fst [ (k, length ns) | (n, ns) <- g, Just k <- [keyOf n] ] ]
         m = M.fromListWith (++) [ (d, [s]) | (s, ds) <- g, d <- ds ]
-        get n = case M.lookup n m of Just ns -> ns; Nothing -> []
-    in        {- loop get psq [] -} -- XXX: leads to buggy cycles
-        case loop get psq [] of
+        dependents n = mapMaybe keyOf (M.findWithDefault [] n m)
+    in  case loop dependents psq [] of
         Right ns -> Right ns
-        Left _ -> otsort g  -- revert to old version to get accurate cycles
+        Left _ -> otsort g
 
+type TieKey k node = (Maybe k, node)
 
-type TSPSQ node = PSQ node Int
-
-loop :: (Ord node) => (node -> [node]) -> TSPSQ node -> [node] -> Either [[node]] [node]
-loop inputs psq ns =
+loop :: (Ord node, Ord k) => (node -> [TieKey k node]) -> PSQ (TieKey k node) (Int, Maybe (TieKey k node)) -> [node] -> Either [[node]] [node]
+loop dependents psq ns =
     case minView psq of
     Empty -> Right (reverse ns)
-    Min (n :-> 0) psq' -> loop inputs (decrList (inputs n) psq') (n:ns)
-    _ -> Left [map key (toOrdList psq)]
+    Min ((_, n) :-> (0, _)) psq' -> loop dependents (decrList (dependents n) psq') (n:ns)
+    _ -> Left [ [ n | (_, n) :-> _ <- toOrdList psq ] ]
 
-decrList :: (Ord node) => [node] -> TSPSQ node -> TSPSQ node
-decrList ns pqs = foldl' (flip decr) pqs ns
-  where decr n pqs = adjust (subtract 1) n pqs
+decrList :: (Ord k, Ord t) => [k] -> PSQ k (Int, t) -> PSQ k (Int, t)
+decrList ks pqs = foldl' (flip (adjust (\ (d, t) -> (d - 1, t)))) pqs ks
 
 ------
 

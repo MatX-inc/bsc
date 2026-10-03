@@ -17,6 +17,8 @@ import Control.Monad.State.Strict(State, StateT, evalState, evalStateT, liftIO,
 import Data.List(sortBy, genericLength, sort, transpose, partition, groupBy, nub)
 import Util(mapFst)
 import qualified Data.Map as M
+import qualified Data.Map.Strict as MS
+import Data.Ord(Down(..))
 import qualified Data.Set as S
 import Util(allSame, flattenPairs, makePairs, remOrdDup, integerToBits,
             itos, eqSnd, cmpSnd, nubByFst, map_insertManyWith,
@@ -430,24 +432,47 @@ aOptInstArg bflgs _ = aExp bflgs
 -- If any local id has the same definition (expr) as a previously
 -- encountered id, then change the def of the second occurrence to be
 -- just a reference to the first.
+-- The surviving name of each expression class is chosen by name QUALITY
+-- (keep > user-visible > generated ids, via idQuality), the
+-- lexicographically least name breaking ties: a pure function of the
+-- class.  First-come-wins over the def list made the choice depend on
+-- the list's order, which until the position tie-break was intern order,
+-- and with it would have let a kept name (-keep-method-conds) lose to
+-- an earlier generated twin.  (After B-Lang-org/bsc#1104's survivor
+-- rule, here unconditional.)
 joinDefs :: Bool -> [ADef] -> [ADef]
 joinDefs False ds = ds
-joinDefs True dsx = reverse (snd (foldl add (M.empty, []) dsx))
-  where add :: (M.Map AExpr ADef, [ADef]) -> ADef -> (M.Map AExpr ADef,[ADef])
-        add (m, ds) d@(ADef _ _ (ASInt _ _ _) _) = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASDef _ _) _)   = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASStr _ _ _) _) = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASPort _ _) _)  = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASParam _ _) _) = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASAny _ _) _)   = (m, d:ds)
-        add (m, ds) d@(ADef ie _ e props)            =
-                case M.lookup e m of
-                Nothing
-                    | hasIdProp ie IdP_enable  -> (m, d:ds)
-                    | defPropsHasNoCSE props   -> (m, d:ds)
-                    | otherwise                -> (M.insert e d m, d:ds)
-                Just (ADef i t _ p) -> -- traces ("adding simple assignment: " ++ ppReadable (ie,i)) $
-                                     (m, (ADef ie t (ASDef t i) p) : ds)
+joinDefs True dsx = map rewrite dsx
+  where -- the RHS shapes that are never merged
+        shapeOK (ASInt _ _ _)  = False
+        shapeOK (ASDef _ _)    = False
+        shapeOK (ASStr _ _ _)  = False
+        shapeOK (ASPort _ _)   = False
+        shapeOK (ASParam _ _)  = False
+        shapeOK (ASAny _ _)    = False
+        shapeOK _              = True
+        -- enable defs cannot be the surviving name but are still
+        -- rewritten as aliases of it; NoCSE defs are never merged in
+        -- either direction
+        repCandidate (ADef ie _ e props) =
+            shapeOK e && not (hasIdProp ie IdP_enable)
+                      && not (defPropsHasNoCSE props)
+        -- among names of equal quality a rule's firing signal (WILL_FIRE_,
+        -- CAN_FIRE_) is the one readers look for; then the least name
+        rank d = (idQuality (Just (adef_objid d)), isFire (adef_objid d),
+                  Down (getIdString (adef_objid d)))
+        better d1 d2 = if rank d1 >= rank d2 then d1 else d2
+        -- strict: with a lazy map every duplicate chains a `better'
+        -- thunk on the class's entry
+        reps = MS.fromListWith better
+                   [ (adef_expr d, d) | d <- dsx, repCandidate d ]
+        rewrite d@(ADef ie _ e props)
+            | shapeOK e,
+              not (defPropsHasNoCSE props),
+              Just (ADef i t _ p) <- M.lookup e reps,
+              i /= ie
+            = ADef ie t (ASDef t i) p
+            | otherwise = d
 
 -- if the expression is a primitive with 1-bit type, optimize it as
 -- a boolean expression

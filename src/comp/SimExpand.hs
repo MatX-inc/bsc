@@ -394,7 +394,14 @@ data CombSchedInfo = CombSchedInfo
       csi_sched_map :: SchedMap,
       csi_rule_rel_map :: RuleRelationMap,
       -- clock domain info (rules, clocked submods, resets)
-      csi_domain_info_map :: DomainInfoMap
+      csi_domain_info_map :: DomainInfoMap,
+      -- the keys of csi_domain_info_map in the order the hierarchy walk
+      -- first met them: this module's own domains as the package lists
+      -- them, then the domains each submodule instance brings in, the
+      -- instances in declaration order (a Map keyed by DomainId would
+      -- iterate in Ord Id order of the instance qualifiers, which is
+      -- string-intern order)
+      csi_domain_order :: [DomainId]
     }
   deriving (Eq, Show)
 
@@ -430,7 +437,7 @@ reverseConflictMap cmap = reverseMap cmap
 -- ----------
 
 makeDomainMaps :: [AClockDomain] -> [ARule] -> [AVInst] -> [AIFace] ->
-                  (DomainIdMap, DomainInfoMap)
+                  (DomainIdMap, DomainInfoMap, [DomainId])
 makeDomainMaps cds rs insts iface =
     let
         -- convert a domain to its DomainId
@@ -553,10 +560,20 @@ makeDomainMaps cds rs insts iface =
             in M.unionWith joinDomainInfo outclk_map dmap_with_clks_rules_prims
 
       -- ----------
+      -- the domains in the order the package lists them, then any that
+      -- only a rule names (the primitives and output clocks can only
+      -- name domains from the list)
+
+        dom_order =
+            nub $ [ domainToDomainId cd | (cd, _) <- cds ] ++
+                  [ domainToDomainId (getWPropDomain (arule_id r) (arule_wprops r))
+                      | r <- rs ]
+
+      -- ----------
       -- return the result
 
     in
-        (domain_id_map, dmap_with_clks_rules_prims_outclks)
+        (domain_id_map, dmap_with_clks_rules_prims_outclks, dom_order)
 
 
 -- This assumes no duplicates (uses ++ instead of `union`)
@@ -820,9 +837,18 @@ splitCSIByClock topifc csi =
            let sorted_clks = sortBy cmp_clk aclks
            in  headOrErr "splitCSIByClock: no clocks found" sorted_clks
 
+        -- the domains in discovery order; the schedules, and so the
+        -- clocks in the generated model, follow this list
         domains :: [(DomainId, DomainInfo)]
         --domains = filter clocks_something $ M.toList dmap
-        domains = M.toList dmap
+        domains =
+            let order = csi_domain_order csi
+            in  if (length order /= M.size dmap)
+                then internalError ("splitCSIByClock: domain order " ++
+                                    ppReadable order ++
+                                    " does not cover the domains " ++
+                                    ppReadable (M.keys dmap))
+                else [ (cd, findDomainInfo dmap cd) | cd <- order ]
 
         -- for each domain, extract the CSI for that domain
         extractCSI (cd, dinfo) =
@@ -835,6 +861,7 @@ splitCSIByClock topifc csi =
                          csi_drdb = extractDRDB cd_rules_and_meths,
                          csi_sched_map = extractSchedMap cd_rules_and_meths,
                          csi_domain_info_map = M.singleton cd dinfo,
+                         csi_domain_order = [cd],
                          csi_rule_rel_map = extractRuleRelMap cd_rules_and_meths
                       }
             in (aclk, csi)
@@ -930,10 +957,14 @@ combineSchedInfos abis hiermap instmap pu_map curmod smap =
               Just ([],_) -> M.insert curmod curmod_csi smap
               Just (insts, _) ->
                 let
+                    -- the fold meets the instances last to first, so
+                    -- the domains each one brings in are put before
+                    -- those met so far, which leaves them in
+                    -- declaration order
                     foldfunc :: (String, String) ->
-                                (ABinModInfo, CombSchedInfo, CSIMap) ->
-                                (ABinModInfo, CombSchedInfo, CSIMap)
-                    foldfunc (inst, mod) (p_abi, p_csi, smap) =
+                                (ABinModInfo, CombSchedInfo, CSIMap, [DomainId]) ->
+                                (ABinModInfo, CombSchedInfo, CSIMap, [DomainId])
+                    foldfunc (inst, mod) (p_abi, p_csi, smap, inst_doms) =
                       let s_abi = getABI mod abis
                           smap' = combineSchedInfos
                                       abis hiermap instmap pu_map mod smap
@@ -944,20 +975,26 @@ combineSchedInfos abis hiermap instmap pu_map curmod smap =
                       in
                         if (mod `elem` prim_names)
                         then
-                          let csi' = combinePrimClocks dom_id_map p_csi
-                                                       inst (getAVInst inst)
-                                                       mod
-                          in (p_abi, csi', smap)
+                          let (csi', new_doms) =
+                                  combinePrimClocks dom_id_map p_csi
+                                                    inst (getAVInst inst)
+                                                    mod
+                          in (p_abi, csi', smap, new_doms ++ inst_doms)
                         else
-                          let csi' = combineCombSchedInfo use_map dom_id_map
-                                                          p_abi p_csi
-                                                          inst (getAVInst inst)
-                                                          s_abi s_csi
-                          in (p_abi, csi', smap')
-                    (_, combined_csi, new_smap) =
-                        foldr foldfunc (curmod_abi, curmod_csi, smap) insts
+                          let (csi', new_doms) =
+                                  combineCombSchedInfo use_map dom_id_map
+                                                       p_abi p_csi
+                                                       inst (getAVInst inst)
+                                                       s_abi s_csi
+                          in (p_abi, csi', smap', new_doms ++ inst_doms)
+                    (_, combined_csi, new_smap, combined_inst_doms) =
+                        foldr foldfunc (curmod_abi, curmod_csi, smap, []) insts
+                    combined_csi' =
+                        combined_csi { csi_domain_order =
+                                           csi_domain_order curmod_csi ++
+                                           combined_inst_doms }
                 in
-                    M.insert curmod combined_csi new_smap
+                    M.insert curmod combined_csi' new_smap
 
 
 -- Given a module ABI, construct the initial CSI for the module,
@@ -986,7 +1023,7 @@ makeCSIForModule curmod_abi =
         curmod_rules   = apkg_rules           curmod_apkg
         curmod_insts   = apkg_state_instances curmod_apkg
         curmod_iface   = apkg_interface       curmod_apkg
-        (curmod_dom_id_map, curmod_dmap) =
+        (curmod_dom_id_map, curmod_dmap, curmod_dom_order) =
             makeDomainMaps curmod_domains curmod_rules
                 curmod_insts curmod_iface
 
@@ -995,7 +1032,8 @@ makeCSIForModule curmod_abi =
                   csi_drdb = curmod_drdb,
                   csi_sched_map = curmod_sched_map,
                   csi_rule_rel_map = curmod_rule_rel_map,
-                  csi_domain_info_map = curmod_dmap
+                  csi_domain_info_map = curmod_dmap,
+                  csi_domain_order = curmod_dom_order
               }
     in
         -- return the domain Id map separately
@@ -1012,11 +1050,14 @@ makeCSIForModule curmod_abi =
 
 -- Function to merge one submodule's CombSchedInfo into its parent's info.
 -- This will be folded across all the submodule instances in a parent mod.
+-- Also returns the domains of the child which remain their own domains
+-- in the parent, in the child's order; the fold in combineSchedInfos
+-- adds them to the parent's domain order.
 combineCombSchedInfo :: ParentUseMap -> DomainIdMap ->
                         ABinModInfo -> CombSchedInfo ->
                         String -> AVInst ->
                         ABinModInfo -> CombSchedInfo ->
-                        CombSchedInfo
+                        (CombSchedInfo, [DomainId])
 combineCombSchedInfo use_map domain_id_map parent_abi parent_csi
                      inst avinst child_abi child_csi =
     -- for each node of parent that references a method of the submod,
@@ -1059,42 +1100,48 @@ combineCombSchedInfo use_map domain_id_map parent_abi parent_csi
                                child_meth_set
                                (csi_rule_rel_map parent_csi)
                                (csi_rule_rel_map child_csi)
-        comb_domain_info_map =
+        (comb_domain_info_map, new_domains) =
             combineDomainInfoMap inst avinst
                                  domain_id_map
                                  (csi_domain_info_map parent_csi)
                                  (csi_domain_info_map child_csi)
+                                 (csi_domain_order child_csi)
     in
-        CombSchedInfo {
+        (CombSchedInfo {
             csi_conflicts = comb_conflicts,
             csi_drdb = comb_drdb,
             csi_sched_map = comb_sched_map,
             csi_rule_rel_map = comb_rule_rel_db,
-            csi_domain_info_map = comb_domain_info_map
-        }
+            csi_domain_info_map = comb_domain_info_map,
+            csi_domain_order = csi_domain_order parent_csi
+         },
+         new_domains)
 
 
 -- Function to merge one submodule's CombSchedInfo into its parent's info.
 -- This will be folded across all the submodule instances in a parent mod.
 combinePrimClocks :: DomainIdMap -> CombSchedInfo -> String -> AVInst ->
-                     String -> CombSchedInfo
+                     String -> (CombSchedInfo, [DomainId])
 combinePrimClocks domain_id_map parent_csi inst avinst mod =
     let
         -- combine the domain info for the primitive
-        comb_domain_info_map =
+        (comb_domain_info_map, new_domains) =
           case (getPrimDomainInfo avinst mod) of
             (Just (new_avinst, prim_domains, prim_output_clks)) ->
-              combineDomainInfoMap inst new_avinst
-                                   domain_id_map
-                                   (csi_domain_info_map parent_csi)
-                                   (snd (makeDomainMaps prim_domains
-                                                        [] -- no rules
-                                                        [] -- no subinstances
-                                                        prim_output_clks))
+              let (_, prim_dmap, prim_dom_order) =
+                      makeDomainMaps prim_domains
+                                     [] -- no rules
+                                     [] -- no subinstances
+                                     prim_output_clks
+              in  combineDomainInfoMap inst new_avinst
+                                       domain_id_map
+                                       (csi_domain_info_map parent_csi)
+                                       prim_dmap prim_dom_order
 
             Nothing ->  -- nothing to add, so pass parent through
-              csi_domain_info_map parent_csi
-    in parent_csi { csi_domain_info_map = comb_domain_info_map }
+              (csi_domain_info_map parent_csi, [])
+    in (parent_csi { csi_domain_info_map = comb_domain_info_map },
+        new_domains)
 
 -- ----------
 
@@ -1102,11 +1149,17 @@ combinePrimClocks domain_id_map parent_csi inst avinst mod =
 -- a submodule into its parent module's CombSchedInfo.
 
 
+-- Returns the merged map and the child domains that stay their own
+-- domains in the parent (those not joined to a parent domain through an
+-- input or output clock), as the parent will know them, in the order the
+-- child met them.
 combineDomainInfoMap :: String -> AVInst ->
-                        DomainIdMap -> DomainInfoMap -> DomainInfoMap ->
-                        DomainInfoMap
+                        DomainIdMap -> DomainInfoMap ->
+                        DomainInfoMap -> [DomainId] ->
+                        (DomainInfoMap, [DomainId])
 combineDomainInfoMap inst avinst
-                     parent_id_map parent_info_map child_info_map =
+                     parent_id_map parent_info_map
+                     child_info_map child_order =
     let
         -- - remove the nodes for methods
         --   (calling rules in parent module will have the appropriate domain)
@@ -1353,7 +1406,12 @@ combineDomainInfoMap inst avinst
 
         subst_child_info_map = M.fromListWith joinDomainInfo subst_qual_child_edges_no_outclks
         combinedInfo = M.unionWith joinDomainInfo subst_child_info_map subst_parent_info_map
-    in  combinedInfo
+
+        -- the child's domains which are new to the parent
+        new_domains = [ d | d <- map (qualifyChildDomainId inst) child_order
+                          , d `M.member` subst_child_info_map
+                          , not (d `M.member` parent_info_map) ]
+    in  (combinedInfo, new_domains)
 
 
 combineSchedDRDB :: String -> [(SchedNode,[SchedNode])] -> S.Set AId ->
