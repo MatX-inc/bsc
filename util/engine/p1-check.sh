@@ -13,14 +13,35 @@
 # Run from the repository root with the compiler built (cabal build all) and
 # a make-built installation to compare with:
 #   ORACLE=/path/to/inst   (default: ./inst; needs bin/bsc, bin/bo2bloogle,
-#                           bin/tconcheck and lib/Libraries)
+#                           bin/tconcheck and lib/Libraries built as below)
 #   OUT=results dir        (default: p1-results/<timestamp>)
 # The engine is bound to the oracle's bsc so that the comparison is about
 # orchestration, not compiler identity; bscdeps comes from the cabal build.
 # The shared build directory build/bsvlib is used (the .bo files embed its
 # path) and restored from a snapshot at the end.
+#
+# Paths in the outputs. bsc stores its invocation directory in every .bo and
+# .ba: the main source as pwd///file (FileNameUtil.createEncodedFullFilePath,
+# bsc.hs), and in each importer the importee's source path and a hash of its
+# .bo, so the difference cascades through the import graph. Two trees
+# therefore agree byte for byte only when both compile with
+# -remap-path-prefix (772993f6) mapping their own root to one name. Every
+# bsc-engine run here passes
+#   --bsc-flags '-remap-path-prefix <this tree>=/TREE'
+# and the oracle's libraries must have been built the same way, after its
+# usual make install:
+#   rm -rf build/bsvlib && make -C src/Libraries install PREFIX=<inst> \
+#     BSCFLAGS='-remap-path-prefix <oracle tree>=/TREE'
+# (common.mk appends its own flags to BSCFLAGS). That is checked before
+# anything is built: the oracle's Prelude.bo must store
+# /TREE/src/Libraries/Base1/Prelude.bs, and no oracle file may still carry
+# a pwd///file path. The comparison itself is as strict as before: every
+# installed file byte-identical, no normalisation. (The libraries' .ba files
+# are foreign-import files holding only the source path; an elaborated
+# module's .ba also stores the compiler's lib directory, which is in the
+# oracle's tree on both sides and would then need that tree remapped too.)
 set -uo pipefail
-TOP=$(pwd)
+TOP=$(pwd -P)   # the physical path: what bsc stores and the remap must match
 ORACLE="${ORACLE:-$TOP/inst}"
 OUT="${OUT:-$TOP/p1-results/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
@@ -29,8 +50,15 @@ ENGINE=$(cabal list-bin bsc-engine) || die "cabal list-bin bsc-engine failed"
 BSCDEPS=$(cabal list-bin bscdeps) || die "cabal list-bin bscdeps failed"
 for t in bsc bo2bloogle tconcheck; do [ -x "$ORACLE/bin/$t" ] || die "oracle tool missing: $ORACLE/bin/$t"; done
 [ -d "$ORACLE/lib/Libraries" ] || die "oracle Libraries missing under $ORACLE/lib/Libraries"
+REMAP="-remap-path-prefix $TOP=/TREE"
+# the oracle must store tree-relative paths, or step 4 would compare directory names
+grep -a -q -F '/TREE/src/Libraries/Base1/Prelude.bs' "$ORACLE/lib/Libraries/Prelude.bo" \
+  || die "oracle $ORACLE stores '$(strings -n 8 "$ORACLE/lib/Libraries/Prelude.bo" | grep -m1 'Prelude\.bs$')' for Prelude.bs, not /TREE/src/Libraries/Base1/Prelude.bs: rebuild its libraries with BSCFLAGS='-remap-path-prefix <its tree>=/TREE' (see the header)"
+residual=$(grep -a -l -E '///[^/[:cntrl:]]+\.bsv?' "$ORACLE"/lib/Libraries/*.b[oa] | head -3)
+[ -z "$residual" ] || die "oracle files still store an invocation directory (pwd///file), so not every package was compiled with the remap: $(echo $residual)"
+echo "oracle: $ORACLE; remap: $REMAP"
 BUILDDIR="$TOP/build/bsvlib"
-COMMON=(--bsc "$ORACLE/bin/bsc" --bscdeps "$BSCDEPS" --bo2bloogle "$ORACLE/bin/bo2bloogle" --tconcheck "$ORACLE/bin/tconcheck")
+COMMON=(--bsc "$ORACLE/bin/bsc" --bscdeps "$BSCDEPS" --bo2bloogle "$ORACLE/bin/bo2bloogle" --tconcheck "$ORACLE/bin/tconcheck" --bsc-flags "$REMAP")
 fail=0
 ok() { echo "PASS  $*"; }
 bad() { echo "FAIL  $*"; fail=1; }
