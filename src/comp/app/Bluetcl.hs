@@ -189,7 +189,7 @@ instance Show TclP where
 initState ::  TclP
 initState =
     let
-        pid = mk_homeless_id "BlueTcl"
+        pid = mk_homeless_id "Bluetcl"
     in TclP { tp_flags    = defaultFlags ""
             , tp_binmap   = M.empty
             , tp_hashmap  = M.empty
