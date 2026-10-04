@@ -35,7 +35,7 @@ module BackendNamingConventions
     ) where
 
 import Data.Char(isAlphaNum)
-import Data.List(nub)
+import Util(stableOrdNub)
 import Data.Maybe(mapMaybe)
 
 import FStringCompat
@@ -549,9 +549,9 @@ instPortMapCollisions (AVInst { avi_vname = inst_id, avi_vmi = vminfo }) =
         mod_str = getVNameString (vName vminfo)
         pos = getIdPosition inst_id
     in  [ (pos, EInstPortSpellingClash inst_str mod_str (getFString fs)
-                                       (nub meth_ports))
+                                       (stableOrdNub meth_ports))
         | (fs, meth_ports) <- M.toList by_spelling,
-          length (nub (map snd meth_ports)) > 1 ]
+          length (stableOrdNub (map snd meth_ports)) > 1 ]
 
 -- ==============================
 -- The final spelling of an instance port
