@@ -2,7 +2,7 @@ module Simplify(simplify) where
 import Data.List(partition)
 import Util(mapSnd)
 import ListMap(lookupWithDefault)
-import qualified Data.Map as M
+import qualified IdMap as M
 import PPrint(PPrint, ppReadable, ppString)
 import ErrorUtil(internalError)
 import Id(Id, isKeepId, isDictId)
