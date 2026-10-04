@@ -203,7 +203,11 @@ library
     IType
     IWireSet
     Id
+    IdMap
+    IdMap.Strict
+    IdOrd
     IdPrint
+    IdSet
     IfcBetterInfo
     InferKind
     InlineCReg

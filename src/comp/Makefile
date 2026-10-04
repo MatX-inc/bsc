@@ -298,6 +298,7 @@ GHCOPTDEBUGFLAGS = $(GHCOPTFLAGS) $(GHCDEBUG)
 #clean build has no BuildVersion.hs
 SOURCES_WO_EXTRA_BUILDVERSION = \
 	*.hs *.lhs \
+	IdMap/*.hs \
 	Parser/*.hs Parser/BSV/*.lhs Parser/Classic/*.hs \
 	Libs/*.hs \
 	GHC/posix/*.hs \

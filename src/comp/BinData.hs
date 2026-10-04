@@ -4,6 +4,11 @@
 {-# LANGUAGE ScopedTypeVariables, BangPatterns #-}
 {-# LANGUAGE PatternSynonyms, OverloadedLists, TypeFamilies #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
+-- The IDMAP_AUDIT build (IdOrd.hs) makes the Bin IdMap/IdSet instances
+-- below deferred type errors by design; without this, -Werror stops it here.
+#ifdef IDMAP_AUDIT
+{-# OPTIONS_GHC -Wwarn=deferred-type-errors #-}
+#endif
 module BinData ( Byte
                , putBs, putB, putI
                , getN, getB, getI -- , getBytesRead
@@ -41,6 +46,10 @@ import IOUtil(progArgs)
 import FStringCompat
 import PreIds(idDefaultClock)
 import Id
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 import Position
 import VModInfo
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..),
@@ -687,6 +696,18 @@ instance (Ord a, Bin a, Bin b) => Bin (M.Map a b) where
 instance (Ord a, Bin a) => Bin (S.Set a) where
     writeBytes set = toBin (S.toList set)
     readBytes      = do { ss <- fromBin; return (S.fromList ss) }
+
+-- The exact-Id containers write the same bytes as the Map/Set instances
+-- above, through their blind lists, so that the type swap changes no
+-- .bo/.ba byte; the .ba/.bo commit (plan P4(6)) flips both to the ByName
+-- lists.
+instance (Bin v) => Bin (IdMap v) where
+    writeBytes m = toBin (IdMap.toList m)
+    readBytes    = do { ms <- fromBin; return (IdMap.fromList ms) }
+
+instance Bin IdSet where
+    writeBytes s = toBin (IdSet.toList s)
+    readBytes    = do { ss <- fromBin; return (IdSet.fromList ss) }
 
 -- ---------
 -- Bin Ids, Positions, etc.
