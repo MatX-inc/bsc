@@ -1201,7 +1201,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Inline CReg modules (replacing with Reg modules)
        start flags DFcreg
        let asmodNoCReg
-               | removeCReg flags = aInlineCReg asmodNoWires
+               | removeCReg flags = aInlineCReg flags asmodNoWires
                | otherwise = asmodNoWires
        asCheck flags asmodNoCReg "ainlinecreg"
        t <- dump errh flags t DFcreg dumpnames asmodNoCReg

@@ -40,6 +40,7 @@ import ASchedule(AScheduleInfo(..), ExclusiveRulesDB(..), areRulesExclusive,
                  MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..))
 import AUses(useDropCond)
 import AVerilogUtil(vNameToTask)
+import BackendNamingConventions(InstPortInfo, instPortInfo, statePortIdFromInfo)
 import RSchedule(RAT, ratToNestedLists)
 import Wires(WireProps(..))
 import Data.Maybe (listToMaybe)
@@ -65,6 +66,10 @@ astAndPref = "_dand"
 type OrderMap = M.Map ARuleId Int
 
 type AExprSubst = [(AExpr, AExpr)]
+
+-- the function that names a port of a state instance
+-- (see "portId" in aState')
+type PortIdFn = AId -> AId -> Maybe Integer -> MethodPart -> AId
 
 -- ---------------
 
@@ -193,6 +198,29 @@ aState' flags pps schedule_info apkg = do
         vmi_map =
             let mkVMIPair avi = (avi_vname avi, avi_vmi avi)
             in  M.fromList (map mkVMIPair vs)
+
+        -- the port spelling of each instance (see BackendNamingConventions)
+        inst_port_info :: M.Map AId InstPortInfo
+        inst_port_info =
+            let mkInfoPair avi = (avi_vname avi, instPortInfo flags avi)
+            in  M.fromList (map mkInfoPair vs)
+
+        -- The Id for a port of a state instance: "o" is the instance (as
+        -- the method call or the AVInst names it), "m" the method, "ino"
+        -- the copy of a method with multiplicity, "part" the argument,
+        -- enable or result.  The Id has the position and properties of
+        -- "mkMethId o m ino part" and, as its string, the name of the
+        -- Verilog wire that the back end connects to the port: "r$D_IN"
+        -- for "r$write_1", "r" for "r$read" of an inlined register,
+        -- "f$FULL_N" for both "f$notFull" and "f$i_notFull".  The ports
+        -- of the instances that aInlineWires and aInlineCReg remove keep
+        -- the method spelling, which those passes look up.
+        portId :: PortIdFn
+        portId o m ino part =
+            case (M.lookup o inst_port_info) of
+              Just info -> statePortIdFromInfo info o m ino part
+              -- not a state instance: nothing to spell differently
+              Nothing -> mkMethId o m ino part
 
     let
         (ASchedule _ earliness_order_unfiltered) = asi_schedule schedule_info
@@ -413,8 +441,11 @@ aState' flags pps schedule_info apkg = do
 
         exclusive_rules_db = asi_exclusive_rules_db schedule_info
 
+        -- The muxes for args, enables, and outputs are built from the
+        -- method uses (the blobs); the ports they define and reference
+        -- are named by "portId", so the ASPackage uses the Verilog port
+        -- names from here on.
         -- XXX redo construction of muxes for args, enables, and outputs:
-        -- XXX use the fieldinfo to create the right names (and ARenameIO goes away)
         -- XXX can construct the enables and outputs separately from the args
         -- XXX the fieldinfo will also identify which are value, action, and AV methods
 
@@ -424,14 +455,14 @@ aState' flags pps schedule_info apkg = do
 
         -- muxes for values (definitions)
         (emux_selss, emux_valss, emux_outss, esss) =
-            unzip4 (map (mkEmuxssExpr exclusive_rules_db value_method_ids om) ers)
+            unzip4 (map (mkEmuxssExpr portId exclusive_rules_db value_method_ids om) ers)
 
         -- muxes for actions
         -- (we don't need a substitution for actionvalue value calls,
         --  because there is no multiplicity for action/actionvalue methods,
         --  so any value calls can be converted to use of the one port)
         (amux_selss, amux_valss, amux_outss, _) =
-            unzip4 (map (mkEmuxssAction exclusive_rules_db value_method_ids om) ars)
+            unzip4 (map (mkEmuxssAction portId exclusive_rules_db value_method_ids om) ars)
 
         mux_sel_defs = concat emux_selss ++ concat amux_selss
         mux_val_defs = concat emux_valss ++ concat amux_valss
@@ -443,7 +474,7 @@ aState' flags pps schedule_info apkg = do
         esubmap = M.fromList $ genAliases (mux_sel_defs)
         mux_defs = map (aSubst esubmap)  mux_defsRed
 
-        enas = concatMap mkEnabless ars
+        enas = concatMap (mkEnabless portId) ars
 
         -- substitution of value method calls to instance outputs
         substs = M.fromList (concat esss)
@@ -451,9 +482,9 @@ aState' flags pps schedule_info apkg = do
         -- actionvalue method value references can be unconditionally converted
         subst :: AExpr -> Maybe AExpr
         subst (AMethValue vt modId methId) =
-            Just (ASPort vt (mkMethId modId methId Nothing (MethodResult Nothing)))
+            Just (ASPort vt (portId modId methId Nothing (MethodResult Nothing)))
         subst (ATupleSel vt (AMethValue _ modId methId) idx) =
-            Just (ASPort vt (mkMethId modId methId Nothing (MethodResult (Just idx))))
+            Just (ASPort vt (portId modId methId Nothing (MethodResult (Just idx))))
         -- substitute AMOsc, AMGate, AMReset references with their port
         subst (AMGate gt modId clkId) =
             Just (mkOutputGatePort vmi_map modId clkId)
@@ -464,7 +495,7 @@ aState' flags pps schedule_info apkg = do
                   let ino = do mult <- M.lookup (modId, methId) omMultMap
                                -- send unused calls of multi-ported methods to port 0
                                toMaybe (mult > 1) 0
-                  in Just (ASPort vt (mkMethId modId methId ino (MethodResult Nothing)))
+                  in Just (ASPort vt (portId modId methId ino (MethodResult Nothing)))
               me' -> me'
         subst e@(ATupleSel vt (AMethCall _ modId methId es) idx) =
             case (M.lookup e substs) of
@@ -472,7 +503,7 @@ aState' flags pps schedule_info apkg = do
                   let ino = do mult <- M.lookup (modId, methId) omMultMap
                                -- send unused calls of multi-ported methods to port 0
                                toMaybe (mult > 1) 0
-                  in Just (ASPort vt (mkMethId modId methId ino (MethodResult (Just idx))))
+                  in Just (ASPort vt (portId modId methId ino (MethodResult (Just idx))))
               me' -> me'
         -- AMethValue, AMGate and AMethCall should cover it
         subst e = Nothing
@@ -519,18 +550,25 @@ aState' flags pps schedule_info apkg = do
         dvars = S.fromList [ i | ADef i _ _ _ <- defs' ]
 
         -- all possible method inputs & outputs
-        allmvars :: [(AId, AType, Bool)]
-        allmvars = genModVars vs omMultMap
+        allmvars :: [(AId, AId, AType, Bool)]
+        allmvars = genModVars portId vs omMultMap
 
         -- all undefined method inputs and outputs
-        mvars :: [(AId, AType, Bool)]
-        mvars = [ (ui, t, a) | (ui, t, a) <- allmvars,
-                               not (ui `S.member` dvars)]
+        mvars :: [(AId, AId, AType, Bool)]
+        mvars = [ (ui, mi, t, a) | (ui, mi, t, a) <- allmvars,
+                                   not (ui `S.member` dvars)]
 
         -- undefined state outputs
-        svars = [ (i, t) | (i, t, False) <- mvars ]
+        svars = [ (i, t) | (i, _, t, False) <- mvars ]
 
+        -- special wires (output clocks, their gates, and output resets)
         wvars = map fst2of3 (concatMap getSpecialOutputs vs)
+
+        -- one entry per output port, keeping the first occurrence: several
+        -- methods can read the same port (notFull and i_notFull of FIFOF_),
+        -- and a method can read the port of a special wire (a BVI method
+        -- whose port is an output clock's gate)
+        state_outputs = stableOrdNub (svars ++ wvars)
 
         -- unconnected signals
         edefs = concatMap tieToZero mvars
@@ -591,7 +629,7 @@ aState' flags pps schedule_info apkg = do
                            aspkg_inputs          = inputIds,
                            aspkg_inouts          = inoutIds,
                            aspkg_state_instances =  vs'',
-                           aspkg_state_outputs   = (svars ++ wvars) ,
+                           aspkg_state_outputs   = state_outputs ,
                            aspkg_values          = defs'',
                            aspkg_inout_values    = iot_defs,
                            aspkg_foreign_calls   = fblocks' ,
@@ -652,19 +690,21 @@ aState' flags pps schedule_info apkg = do
 
 
 -------------------------
-genModVars :: [AVInst] -> M.Map (AId, AId) Integer -> [(AId, AType, Bool)]
-genModVars vs omMultMap = allmvars
+genModVars :: PortIdFn -> [AVInst] -> M.Map (AId, AId) Integer ->
+              [(AId, AId, AType, Bool)]
+genModVars portId vs omMultMap = allmvars
     where
         getMultUse om = M.findWithDefault 0 om omMultMap
-        -- For all ports to submodules, make a 3-tuple:
-        --  * port signal name uniquified for multiplicity
+        -- For all ports to submodules, make a 4-tuple:
+        --  * port signal name uniquified for multiplicity (portId)
+        --  * the same port in the method spelling (mkMethId)
         --  * the type of the signal
         --  * whether the signal is  an input to module.
         --
         -- XXX This is WRONG since the uniquifier for multiple methods
         -- XXX is added to the instance name rather than the method name.
         allmvars =
-            [(uniqueId, portType, isEnable) |
+            [(uniqueId, methPortId, portType, isEnable) |
                 -- for all submodules (get the module Id,
                 -- the method arg types, and the Verilog port names)
                 (AVInst { avi_vname = modId,
@@ -698,15 +738,21 @@ genModVars vs omMultMap = allmvars
                 -- uniquifiers for multiple ports
                 -- (if only one copy, then the list just contains 0)
                 ino <- map (toMaybe (mult > 1)) [ 0 .. (getMultUse (modId, methId) - 1) `max` 0 ],
-                let uniqueId = (mkMethId modId methId ino meth_part)]
+                let uniqueId = (portId modId methId ino meth_part),
+                let methPortId = (mkMethId modId methId ino meth_part)]
 
-tieToZero :: (AId,AType,Bool) -> [ADef]
-tieToZero (_,_,False) = []
-tieToZero (aid,ty@ATBit{ atb_size= size} ,True) = [ADef{ adef_objid = aid,
-                                                         adef_type = ty,
-                                                         adef_expr = expr,
-                                                         adef_props = []}]
-    where expr = ASInt{ ae_objid = aid, ae_type = ty, ae_ival = if (size == 1) then (ilBin 0) else (ilHex 0)}
+-- An unconnected input port is tied to zero.  The def is named by the
+-- port's Verilog spelling; the constant keeps the method spelling as its
+-- object id, as it had when the def was renamed after the fact (the
+-- object id of a constant takes part in the ordering of expressions,
+-- which AOpt relies on, so changing it is a separate change).
+tieToZero :: (AId,AId,AType,Bool) -> [ADef]
+tieToZero (_,_,_,False) = []
+tieToZero (aid,mid,ty@ATBit{ atb_size= size} ,True) = [ADef{ adef_objid = aid,
+                                                             adef_type = ty,
+                                                             adef_expr = expr,
+                                                             adef_props = []}]
+    where expr = ASInt{ ae_objid = mid, ae_type = ty, ae_ival = if (size == 1) then (ilBin 0) else (ilHex 0)}
 tieToZero x = internalError( "tieToZero: " ++ ppReadable x)
 
 -- get the count of the method uses  key is Inst, method  data is count
@@ -1025,35 +1071,35 @@ mkBlob stable mMap omMultMap (method@(MethodId obj met), usedPorts0) =
 --  * an expression substitution to replace old expressions with uses
 --    of the new definitions
 
-mkEmuxss :: ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
+mkEmuxss :: PortIdFn -> ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
             ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob ->
             ([ADef], [ADef], [ADef], AExprSubst)
-mkEmuxss tl cnd rdb value_method_ids om (((o, m), f), emrss) =
-    let genfunct = mkEmuxs tl cnd rdb value_method_ids om o m
+mkEmuxss portId tl cnd rdb value_method_ids om (((o, m), f), emrss) =
+    let genfunct = mkEmuxs portId tl cnd rdb value_method_ids om o m
         (sel_dss, val_dss, out_dss, sss) = unzip4 (zipWith genfunct (map (toMaybe f) [0..]) emrss)
     in  (concat sel_dss, concat val_dss, concat out_dss, concat sss)
 
 -- XXX The "const aTrue" suggests that the use is unconditional.
 -- XXX This assumption might change some if we fix Bug 37 with
 -- XXX conditional def/use analysis.
-mkEmuxssExpr :: ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
+mkEmuxssExpr :: PortIdFn -> ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
              -> ([ADef], [ADef], [ADef], AExprSubst)
-mkEmuxssExpr = mkEmuxss id (const aTrue)
+mkEmuxssExpr portId = mkEmuxss portId id (const aTrue)
 
-mkEmuxssAction :: ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
+mkEmuxssAction :: PortIdFn -> ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
                -> ([ADef], [ADef], [ADef], AExprSubst)
-mkEmuxssAction = mkEmuxss tail head
+mkEmuxssAction portId = mkEmuxss portId tail head
 
 -- ---------------
 
 -- This function produces a set of muxes per port
 -- (that is, per copy of the method on a single state instance)
 
-mkEmuxs :: ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
+mkEmuxs :: PortIdFn -> ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
            ExclusiveRulesDB -> [AId] -> OrderMap ->
            AId -> AId -> Maybe Integer -> MethPortBlob ->
            ([ADef], [ADef], [ADef], AExprSubst)
-mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
+mkEmuxs portId tl cnd rdb value_method_ids om o m ino emrs =
     let
         -- Break each MethPortBlob into a list of the expressions for
         -- each argument, and then transpose the entire structure to
@@ -1078,7 +1124,7 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
         -- the list of different expressions for that port, to separately
         -- mux the values for each.  Result: new defs for the mux wiring.
         def_tuples = zipWith (\(argN, portM) ->
-                                  mkEmux rdb value_method_ids om ino o m argN portM)
+                                  mkEmux portId rdb value_method_ids om ino o m argN portM)
                          portCoords arg_blobs
         (sel_defs, val_defs, out_defs) = concatUnzip3 def_tuples
 
@@ -1086,9 +1132,9 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
             case aType e of
                 ATTuple ats ->
                     [ (ATupleSel at e idx,
-                       ASPort at $ mkMethId o m ino $ MethodResult (Just idx))
+                       ASPort at $ portId o m ino $ MethodResult (Just idx))
                     | (idx, at) <- zip [1..] ats ]
-                at -> [ (e, ASPort at $ mkMethId o m ino $ MethodResult Nothing) ]
+                at -> [ (e, ASPort at $ portId o m ino $ MethodResult Nothing) ]
 
         -- Replace the method call with the output port of the method
         subst = concatMap mkPortSubsts emrs
@@ -1102,6 +1148,7 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
 -- This function does the actual work.  It considers the muxing of
 -- values for one argument of the method at a time.
 -- Inputs:
+--  * portId = the function that names a port of a state instance
 --  * ino = the number of the port being arbitrated for
 --  * o = the instance name
 --  * m = the method name
@@ -1117,13 +1164,13 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
 --  * A list of new definitions for the values to be selected in the mux
 --  * The definition for the output of the mux
 --
-mkEmux :: ExclusiveRulesDB -> [AId] -> OrderMap ->
+mkEmux :: PortIdFn -> ExclusiveRulesDB -> [AId] -> OrderMap ->
           Maybe Integer -> AId -> AId -> Integer -> Maybe Integer ->
           [(AExpr, AExpr, Maybe [ARuleId])] -> ([ADef], [ADef], [ADef])
-mkEmux exclusive_rules_db value_method_ids om ino o m argN portM [(e, _, _)] =
+mkEmux portId exclusive_rules_db value_method_ids om ino o m argN portM [(e, _, _)] =
     -- Only one input to the mux
-    ([], [], [ ADef (argId ino o m argN portM) (aType e) e [] ])
-mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_) =
+    ([], [], [ ADef (portId o m ino (MethodArg argN portM)) (aType e) e [] ])
+mkEmux portId exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_) =
     -- Multiple inputs
     let
         -- ---------------
@@ -1273,15 +1320,19 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         -- The new Id defs for the mux selector control signals
         sel_defs = concatMap mkSel ers'
 
-        -- The Id of this argument
+        -- The Id of this argument in the method spelling: the stem of
+        -- the MUX_ selector and value names (and the object id of the mux)
         i = argId ino o m argN portM
+
+        -- The port that the mux defines
+        i_port = portId o m ino (MethodArg argN portM)
 
         -- The new def for the result of the mux
         -- default_pair is an explicit default conditions for the mux ASAny
         out_def :: ADef
-        out_def = ADef i t (APrim i t
-                               (if usePri then PrimPriMux else PrimMux)
-                               (mux_pairs ++ default_pair) ) []
+        out_def = ADef i_port t (APrim i t
+                                    (if usePri then PrimPriMux else PrimMux)
+                                    (mux_pairs ++ default_pair) ) []
 
         -- The uses used in predicates (should not be > 1)
         pred_uses = [ v | (v, _, Nothing) <- ers ]
@@ -1294,7 +1345,7 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
                             ppReadable (o, m, map fst3 ers))
         else (sel_defs, val_defs, [out_def])
 
-mkEmux _ _ _ _ _ _ _ _ _ = internalError "mkEMux"
+mkEmux _ _ _ _ _ _ _ _ _ _ = internalError "mkEMux"
 
 -- create a default expresson for a mux from the conditions
 mkDefaultPair :: AType -> [AExpr] -> [AExpr]
@@ -1306,12 +1357,17 @@ mkDefaultPair t aexprs = [APrim  defaultAId (ATBit 1) PrimBNot [orCond] , ASAny 
 -- Function: mkEnabless
 --
 
-mkEnabless :: MethBlob -> [ADef]
-mkEnabless (((o, m), f), emrss) = concat (zipWith (mkEnables o m) (map (toMaybe f) [0..]) emrss)
+mkEnabless :: PortIdFn -> MethBlob -> [ADef]
+mkEnabless portId (((o, m), f), emrss) =
+    concat (zipWith (mkEnables portId o m) (map (toMaybe f) [0..]) emrss)
 
-mkEnables :: AId -> AId -> Maybe Integer -> MethPortBlob -> [ADef]
-mkEnables o m ino emrs =
-        let mi = mkMethId o m ino MethodEnable
+mkEnables :: PortIdFn -> AId -> AId -> Maybe Integer -> MethPortBlob -> [ADef]
+mkEnables portId o m ino emrs =
+        let -- the enable in the method spelling: the stem of the names
+            -- of the _dor/_dand defs
+            mi = mkMethId o m ino MethodEnable
+            -- the enable port, which the def defines
+            mi_port = portId o m ino MethodEnable
             (dss, ess) = unzip (zipWith mkE emrs [1..])
             mkE :: (AExpr, Maybe [ARuleId]) -> Integer -> ([ADef], [AExpr])
             mkE (AMethCall _ _ _ (ASInt _ _ (IntLit _ _ 1) : _), Just is) _ =
@@ -1334,8 +1390,8 @@ mkEnables o m ino emrs =
                   (dor ++ [dand], [ASDef aTBool iand])
             mkE _ _ = ([], [])
         in case (concat dss, concat ess) of
-            ([ADef i _ e p], [ASDef _ i']) | i == i' -> [ADef mi aTBool e p] -- pass on props?
-            (ds, es)                               -> ds ++ [ADef mi aTBool (aOrs es) []]
+            ([ADef i _ e p], [ASDef _ i']) | i == i' -> [ADef mi_port aTBool e p] -- pass on props?
+            (ds, es)                               -> ds ++ [ADef mi_port aTBool (aOrs es) []]
 
 
 -- ==============================
