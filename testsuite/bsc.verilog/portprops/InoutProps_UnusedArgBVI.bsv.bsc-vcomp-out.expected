@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InoutProps_UnusedArgBVI.bsv
 code generation for sysInoutProps_UnusedArgBVI starts
+Elaborated module file created: sysInoutProps_UnusedArgBVI.bmod
 === IOproperties (InoutProps_UnusedArgBVI sysInoutProps_UnusedArgBVI):
 Name                         I/O  size props
 CLK                            I     1 clock
@@ -11,5 +12,5 @@ io_arg                        IO    32 inout
 -----
 
 Verilog file created: sysInoutProps_UnusedArgBVI.v
-Elaborated module file created: sysInoutProps_UnusedArgBVI.ba
+Schedule file created: sysInoutProps_UnusedArgBVI.bsched
 All packages are up to date.

@@ -97,8 +97,10 @@ if {$ctest == 1} {
 touch DummyModule.bsv
 compile_object_pass DummyModule.bsv "" "-bdir bfiles"
 find_n_strings [make_bsc_ccomp_output_name DummyModule.bsv] \
-               "Elaborated module file created: bfiles/mkDummyModule.ba" 1
-files_exist { bfiles/mkDummyModule.ba }
+               "Elaborated module file created: bfiles/mkDummyModule.bmod" 1
+find_n_strings [make_bsc_ccomp_output_name DummyModule.bsv] \
+               "Schedule file created: bfiles/mkDummyModule.bsched" 1
+files_exist { bfiles/mkDummyModule.bmod bfiles/mkDummyModule.bsched }
 }
 
 if {$ctest == 1} {
@@ -190,7 +192,7 @@ files_exist {vfiles/vpi_wrapper_my_time.h vfiles/vpi_wrapper_my_time.c}
 nukedir vfiles_link
 mkdir vfiles_link
 
-link_verilog_pass {srcfiles/my_time.ba} {sysGCD} {-vsearch vfiles:+ -vdir vfiles_link}
+link_verilog_pass {srcfiles/my_time.bdpi} {sysGCD} {-vsearch vfiles:+ -vdir vfiles_link}
 files_exist {vfiles/vpi_wrapper_my_time.o vfiles_link/vpi_startup_array.o}
 
 # ---
@@ -198,7 +200,7 @@ files_exist {vfiles/vpi_wrapper_my_time.o vfiles_link/vpi_startup_array.o}
 
 erase_many {vfiles/vpi_*.o vpi_*.{c,h,o}}
 
-link_verilog_pass {srcfiles/my_time.ba} {sysGCD} {-vsearch vfiles:+}
+link_verilog_pass {srcfiles/my_time.bdpi} {sysGCD} {-vsearch vfiles:+}
 files_exist {vfiles/vpi_wrapper_my_time.o vpi_startup_array.o}
 
 } else {
@@ -315,8 +317,8 @@ compile_fail_error NoOptUndet_UnspecToX.bsv S0075 1 \
 compile_fail_error NoOptUndet_UnspecToZ.bsv S0075 1 \
     {-verilog -no-opt-undetermined-vals -unspecified-to Z}
 
-link_objects_fail_error m.ba mkBluesimLink_UnspecToX S0043 1 {-unspecified-to x}
-link_objects_fail_error m.ba mkBluesimLink_UnspecToZ S0043 1 {-unspecified-to z}
+link_objects_fail_error m.bsched mkBluesimLink_UnspecToX S0043 1 {-unspecified-to x}
+link_objects_fail_error m.bsched mkBluesimLink_UnspecToZ S0043 1 {-unspecified-to z}
 
 
 ## Test that BSC_OPTIONS are used
@@ -350,7 +352,7 @@ if { $vtest == 1 } {
 # Test -q
 
 copy my_time.c.keep my_time.c
-test_c_veri_bsv_modules_options_separately GCD {} {-q} {} {} {} {-q my_time.c my_time.ba} {} {}
+test_c_veri_bsv_modules_options_separately GCD {} {-q} {} {} {} {-q my_time.c my_time.bdpi} {} {}
 
 if { $ctest == 1 } {
     compare_file [make_bsc_ccomp_output_name GCD.bsv] empty.expected

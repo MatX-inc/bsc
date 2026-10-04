@@ -1,6 +1,7 @@
 checking package dependencies
 compiling PredicateConflicts.bs
 code generation for sysPredicateConflicts starts
+Elaborated module file created: sysPredicateConflicts.bmod
 Warning: "PredicateConflicts.bs", line 7, column 0: (G0010)
   Rule "foo" was treated as more urgent than "bar". Conflicts:
     "foo" cannot fire before "bar": calls to y.write vs. y.read
@@ -41,5 +42,5 @@ Logical execution order: foo, bar
 
 =====================================================
 Verilog file created: sysPredicateConflicts.v
-Elaborated module file created: sysPredicateConflicts.ba
+Schedule file created: sysPredicateConflicts.bsched
 All packages are up to date.

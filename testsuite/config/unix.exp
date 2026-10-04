@@ -1579,12 +1579,19 @@ proc bsc_link_objects { objects toplevel { options "" } } {
     set output [make_bsc_ccomp_output_name $toplevel]
     set exefile [make_cexe_name $toplevel ]
 
-    # add .ba extension for each object which doesn't already have an extension
+    # Resolve bare names to module pairs first, then foreign-function metadata.
+    # Keep .ba as a fallback for explicitly retained legacy fixtures.
     set mods []
     foreach obj $objects {
         set idx [string last "." $obj]
         if { $idx == -1 } {
-          lappend mods $obj.ba
+          if { [file exists "$obj.bmod"] && [file exists "$obj.bsched"] } {
+              lappend mods $obj.bmod
+          } elseif { [file exists "$obj.bdpi"] } {
+              lappend mods $obj.bdpi
+          } else {
+              lappend mods $obj.ba
+          }
         } else {
           lappend mods $obj
         }
@@ -1599,7 +1606,7 @@ proc bsc_link_objects { objects toplevel { options "" } } {
     return [expr $status == 0]
 }
 
-# -sim -c codegen (generate a module's code from its elaborated .ba file)
+# -sim -c codegen (generate a module's code from its .bmod/.bsched pair)
 # returns true iff code generation succeeded for all modules
 proc bsc_gen_modules { modules { options "" } } {
     global bsc
@@ -1623,18 +1630,82 @@ proc bsc_gen_modules { modules { options "" } } {
     return $ok
 }
 
-# The .ba -> .v determinism check, applied at the point of generation:
-# a Verilog compile writes the .ba by default now, so each .v the
+# The module pair -> .v determinism check, applied at the point of generation:
+# a Verilog compile writes the pair by default, so each .v the
 # compile just created (read off its log, so stale files in shared
-# test directories are never picked up) is regenerated from that .ba
+# test directories are never picked up) is regenerated from that pair
 # with the -c codegen mode -- a fresh bsc process, with a fresh
 # string-interning history -- and must come back byte-identical.
-# -c takes the codegen-semantic flags (including any (* options *)
-# pragma) from the .ba itself, so nothing needs to be replayed.
+# Artifacts contain no invocation flags, so pass the original options again.
+# Drop mode selectors, output locations, and link input files while preserving
+# generation options, their quoted operands, and RTS options verbatim.
+proc module_codegen_options { options } {
+    set result {}
+    set skip_operand 0
+    set keep_operands 0
+    set in_rts 0
+    foreach word [regexp -all -inline {(?:[^\s"'\\]|\\.|"[^"]*"|'[^']*')+} $options] {
+        if { $skip_operand } {
+            set skip_operand 0
+            continue
+        }
+        if { $keep_operands > 0 } {
+            incr keep_operands -1
+            lappend result $word
+            continue
+        }
+        if { $word == "+RTS" } { set in_rts 1 }
+        if { $in_rts } {
+            lappend result $word
+            if { $word == "-RTS" } { set in_rts 0 }
+            continue
+        }
+        switch -- $word {
+            -g - -e - -c - -schedule - -o - -vdir - -simdir {
+                set skip_operand 1
+            }
+            -u - -no-u - -sim - -no-sim - -verilog - -no-verilog -
+            -systemc - -no-systemc - -synthesize - -no-synthesize -
+            -elab - -no-elab - -elab-only - -no-elab-only {
+                # The regeneration command selects its own mode below.
+            }
+            -D - -I - -L - -Xc - -Xc++ - -Xcpp - -Xl - -Xv -
+            -bdir - -fdir - -i - -info-dir - -l - -p - -remap-path-prefix -
+            -reset-prefix - -verilog-filter - -vsearch - -vsim {
+                # A path or pass-through operand can look like an input file.
+                set keep_operands 1
+                lappend result $word
+            }
+            -show-rule-rel {
+                set keep_operands 2
+                lappend result $word
+            }
+            default {
+                if { ![regexp {\.(ba|bmod|bsched|c|cc|cpp|cxx|o|a|so|v)["']?$} $word] } {
+                    lappend result $word
+                }
+            }
+        }
+    }
+    return [join $result " "]
+}
+
+# Source options pragmas can affect Verilog generation after the saved
+# materialization result. Tests declare those options for each generated
+# module here, without also adding them to the source compile command.
+# The test directory is part of the key so unrelated modules cannot inherit
+# another test's options. Elaboration and scheduling options need no replay.
+proc set_verilog_regen_options { module options } {
+    global subdir verilog_regen_options
+    set key [list $subdir $module]
+    set verilog_regen_options($key) $options
+}
+
 proc check_verilog_regen { logfile {options ""} } {
     global srcdir
     global subdir
     global xfail_flag
+    global verilog_regen_options
 
     # a pending setup_xfail arms the CALLER's next result; emitting a
     # result here would consume it (turning a known-bug test into an
@@ -1642,7 +1713,7 @@ proc check_verilog_regen { logfile {options ""} } {
     if { $xfail_flag != 0 } { return }
 
     # skip when the invocation makes the comparison meaningless:
-    # stable naming opted out, no .v (-elab-only) or no .ba (-no-elab)
+    # stable naming opted out, no .v (-elab-only) or no pair (-no-elab)
     # written, relocated outputs, or a post-processed .v
     foreach optout [list {-no-stable-verilog} {-elab-only} {-no-elab} \
                         {-vdir} {-bdir} {-verilog-filter}] {
@@ -1656,28 +1727,34 @@ proc check_verilog_regen { logfile {options ""} } {
     set log [read $ofh]
     close $ofh
 
+    set replay_options [module_codegen_options $options]
     foreach {full vfile} [regexp -all -inline -line \
                               {^Verilog file created: (\S+\.v)$} $log] {
         set modname [file rootname [file tail $vfile]]
-        if { ![file exists [file join $testdir "$modname.v"]] || \
-                 ![file exists [file join $testdir "$modname.ba"]] } { continue }
+        if { ![file exists [file join $testdir "$modname.v"]] } { continue }
+        if { ![file exists [file join $testdir "$modname.bmod"]] || \
+             ![file exists [file join $testdir "$modname.bsched"]] } {
+            fail "regenerating $modname.v requires $modname.bmod and $modname.bsched"
+            continue
+        }
         set rgdir "regenv_$modname"
         file delete -force [file join $testdir $rgdir]
         file mkdir [file join $testdir $rgdir]
-        set opts "-vdir $rgdir -no-show-timestamps -no-show-version -verilog -c $modname"
-        # a test that raises the RTS limits for its design (the perf
-        # blowup tests cap the stack) needs the same budget for the regen
-        if { [regexp -- {\+RTS .*?-RTS} $options rtsopts] } {
-            append opts " $rtsopts"
+        set opts $replay_options
+        set key [list $subdir $modname]
+        if { [info exists verilog_regen_options($key)] } {
+            # Module pragmas override the invocation's options.
+            append opts " $verilog_regen_options($key)"
         }
+        append opts " -vdir $rgdir -no-show-timestamps -no-show-version -verilog -c $modname"
         if [ gen_basic_output $opts "$modname.bsc-regen-out" ] {
             if { [file exists [file join $testdir $rgdir "$modname.v"]] } {
                 compare_file $rgdir/$modname.v $modname.v "check_verilog_regen"
             } else {
-                fail "regen of `$modname.ba' produced no $modname.v"
+                fail "regen of `$modname.bmod/$modname.bsched' produced no $modname.v"
             }
         } else {
-            fail "regenerating $modname.v from `$modname.ba' (bsc -c)"
+            fail "regenerating $modname.v from `$modname.bmod/$modname.bsched' (bsc -c)"
         }
         # remove the scratch directory (so no per-test cleanup is needed)
         file delete -force [file join $testdir $rgdir]
@@ -1708,7 +1785,7 @@ proc bsc_compile_verilog { source { module "" } { options "" } } {
     set status [exec_with_log "bsc_compile_verilog" "$cmd" 2]
     cd $here
     if { $status == 0 } {
-        check_verilog_regen $output $options
+        check_verilog_regen $output "[vsim_implied_bsc_flags] $options"
     }
     return [expr $status == 0]
 }
@@ -2049,8 +2126,8 @@ proc dumpba_pass { source xfail } {
     }
 }
 
-# Return the list of synthesised modules for which a .ba file is
-# expected after a verilog compile.  Only -elab compiles produce .ba.
+# Return the list of synthesised modules whose artifact pairs should be
+# checked after a Verilog compile. Explicit -elab requests this check.
 proc verilog_ba_modules { module options } {
     if {[regexp -- {(^| )-elab( |$)} $options]} {
         return $module
@@ -2062,8 +2139,8 @@ proc verilog_ba_modules { module options } {
 
 # check the .bi and .bo files generated by source.
 # `modules' is a (possibly empty) list of synthesised modules for
-# which a .ba file is expected; pass it for sim compiles, which
-# always produce .ba, and for verilog compiles invoked with -elab.
+# which a .bmod/.bsched pair is expected; pass it for sim compiles, which
+# always produce the pair, and for Verilog compiles invoked with -elab.
 proc check_intermediate_files { source xfail {options ""} {modules ""} } {
 
     if [regexp -- {-bdir ([^ ]+)} $options bdirflag bdir] then {
@@ -2082,24 +2159,31 @@ proc check_intermediate_files { source xfail {options ""} {modules ""} } {
         set test_dir [file join [absolute $srcdir] $subdir]
         foreach module $modules {
             if {$module == ""} { continue }
-            if {$bdir != ""} {
-                set ba_file "$bdir/$module.ba"
-            } else {
-                set ba_file "$module.ba"
+            set pair_complete 1
+            foreach suffix {bmod bsched} {
+                if {$bdir != ""} {
+                    set artifact_file "$bdir/$module.$suffix"
+                } else {
+                    set artifact_file "$module.$suffix"
+                }
+                # Resolve relative to the test's subdir (bsc_compile_*
+                # cd's back to srcdir after running bsc, so a bare relative
+                # path would miss the file).
+                if {[file pathtype $artifact_file] eq "relative"} {
+                    set check_path [file join $test_dir $artifact_file]
+                } else {
+                    set check_path $artifact_file
+                }
+                if {[file exists $check_path]} {
+                    pass "Intermediate file `$artifact_file' exists"
+                } else {
+                    fail "Intermediate file `$artifact_file' should exist"
+                    set pair_complete 0
+                }
             }
-            # Resolve relative to the test's subdir (bsc_compile_*
-            # cd's back to srcdir after running bsc, so a bare relative
-            # path would miss the file).
-            if {[file pathtype $ba_file] eq "relative"} {
-                set check_path [file join $test_dir $ba_file]
-            } else {
-                set check_path $ba_file
-            }
-            if {[file exists $check_path]} {
-                pass "Intermediate file `$ba_file' exists"
+            # Either member loads the complete pair; check it once.
+            if {$pair_complete} {
                 dumpba_pass $check_path $xfail
-            } else {
-                fail "Intermediate file `$ba_file' should exist"
             }
         }
     }
@@ -2196,9 +2280,9 @@ proc compile_object_pass { source { module "" } {options "" }} {
       incr_stat "compile_object_pass"
 
       if [bsc_compile_to_object $source $module $options] then {
-          pass "module `$module' in `$source' compiles to `$module.ba'"
+          pass "module `$module' in `$source' compiles to `$module.bmod/$module.bsched'"
       } else {
-          fail "module `$module' in `$source' should compile to `$module.ba'"
+          fail "module `$module' in `$source' should compile to `$module.bmod/$module.bsched'"
       }
 
       check_intermediate_files $source $current_xfail $options $module
@@ -2220,7 +2304,7 @@ proc compile_object_pass_warning { source tag {expcount 1} {module ""} {options 
       if [bsc_compile_to_object $source $module $options] then {
           find_n_warning $output $tag $expcount
       } else {
-          fail "module `$module' in `$source' should compile to `$module.ba'"
+          fail "module `$module' in `$source' should compile to `$module.bmod/$module.bsched'"
       }
 
       check_intermediate_files $source $current_xfail $options $module
@@ -2235,9 +2319,9 @@ proc compile_object_fail { source { module "" } {options "" }} {
       incr_stat "compile_object_fail"
 
       if [bsc_compile_to_object $source $module $options] then {
-          fail "module `$module' in `$source' shouldn't compile to `$module.ba'"
+          fail "module `$module' in `$source' shouldn't compile to `$module.bmod/$module.bsched'"
       } else {
-          pass "module `$module' in `$source' doesn't compile to `$module.ba'"
+          pass "module `$module' in `$source' doesn't compile to `$module.bmod/$module.bsched'"
       }
    }
 }
@@ -2295,7 +2379,7 @@ proc link_objects_pass { objects toplevel {options ""}} {
     }
 }
 
-# generate code for modules from their .ba files (-sim -c)
+# generate code for modules from their .bmod/.bsched pairs (-sim -c)
 proc gen_modules_pass { modules {options ""}} {
     global ctest
 
@@ -3509,22 +3593,23 @@ proc check_block_codegen_modules { modules link_options } {
         return
     }
     set here [absolute $srcdir]
+    set replay_options [module_codegen_options $link_options]
     foreach mod $modules {
         # only handle bsc-generated modules: a bare module name or an explicit
-        # ".ba".  Skip anything else in the module list (pre-built objects,
+        # artifact. Skip anything else in the module list (pre-built objects,
         # C/C++ sources, etc.).
         set ext [file extension $mod]
-        if { ($ext != "") && ($ext != ".ba") } { continue }
+        if { ($ext != "") && ($ext != ".bmod") &&
+             ($ext != ".bsched") && ($ext != ".ba") } { continue }
         set modname [file rootname $mod]
         set bcgdir "blockcg_$modname"
         mkdir $bcgdir
         # Use bsc_gen_modules directly (not gen_modules_pass) so that entries
         # which cannot stand alone as a -c root -- e.g. an imported "BDPI"
         # function rather than a synthesized submodule -- are silently
-        # skipped rather than reported as failures.  (Elaboration-affecting
-        # options are already baked into the .ba that -c reads, so they need
-        # not be replayed here.)
-        if { [bsc_gen_modules [list $modname] "-simdir $bcgdir"] && \
+        # skipped rather than reported as failures. Generation options belong
+        # to the invocation, so repeat the enclosing link's options here.
+        if { [bsc_gen_modules [list $modname] "$replay_options -simdir $bcgdir"] && \
              [file exists [file join $here $subdir $modname.cxx]] && \
              [file exists [file join $here $subdir $bcgdir $modname.cxx]] } {
             compare_file $bcgdir/$modname.cxx $modname.cxx "check_block_codegen"
@@ -3748,7 +3833,7 @@ proc compile_object_fail_error { source tag {expcount 1} { module "" } {options 
       set output [make_bsc_ccomp_output_name $source]
 
       if [bsc_compile_to_object $source $module $options] then {
-          fail "module `$module' in `$source' shouldn't compile to `$module.ba'"
+          fail "module `$module' in `$source' shouldn't compile to `$module.bmod/$module.bsched'"
           check_intermediate_files $source 0 $options
       } else {
           find_n_error $output $tag $expcount

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling BypassReg.bsv
 code generation for sysBypassReg starts
+Elaborated module file created: sysBypassReg.bmod
 === schedule (BypassReg sysBypassReg):
 parallel: [esposito: [_write -> [], _read -> [], RL_the_r_propagate -> []]]
 order: [_write, _read, RL_the_r_propagate]
@@ -55,5 +56,5 @@ Logical execution order: _write, _read, the_r_propagate
 
 ============================================
 Verilog file created: sysBypassReg.v
-Elaborated module file created: sysBypassReg.ba
+Schedule file created: sysBypassReg.bsched
 All packages are up to date.

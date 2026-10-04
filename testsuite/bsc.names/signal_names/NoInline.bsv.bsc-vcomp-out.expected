@@ -39,8 +39,9 @@ clock domain = Just (0), resets = []
 
 -----
 
+Elaborated module file created: sysNoInline.bmod
 Verilog file created: sysNoInline.v
-Elaborated module file created: sysNoInline.ba
+Schedule file created: sysNoInline.bsched
 code generation for module_fnNoInline starts
 === ATS (NoInline module_fnNoInline):
 APackage module_fnNoInline -- function
@@ -85,6 +86,7 @@ method (RDY_fnNoInline, [])RDY_fnNoInline clocked_by (no_clock) reset_by (no_res
 
 -----
 
+Elaborated module file created: module_fnNoInline.bmod
 Verilog file created: module_fnNoInline.v
-Elaborated module file created: module_fnNoInline.ba
+Schedule file created: module_fnNoInline.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling APkgProps_VMux.bsv
 code generation for mkVMuxLookup starts
+Elaborated module file created: mkVMuxLookup.bmod
 === APackageIOproperties (APkgProps_VMux mkVMuxLookup):
 Name                         I/O  size props
 get                            O     8
@@ -24,8 +25,9 @@ get_i                          I     3
 -----
 
 Verilog file created: mkVMuxLookup.v
-Elaborated module file created: mkVMuxLookup.ba
+Schedule file created: mkVMuxLookup.bsched
 code generation for mkVMuxWired starts
+Elaborated module file created: mkVMuxWired.bmod
 === APackageIOproperties (APkgProps_VMux mkVMuxWired):
 Name                         I/O  size props
 data_out                       O     8
@@ -49,8 +51,9 @@ EN_data_in                     I     1 unused
 -----
 
 Verilog file created: mkVMuxWired.v
-Elaborated module file created: mkVMuxWired.ba
+Schedule file created: mkVMuxWired.bsched
 code generation for sysAPkgProps_VMux starts
+Elaborated module file created: sysAPkgProps_VMux.bmod
 Warning: "APkgProps_VMux.bsv", line 80, column 8: (G0010)
   Rule "peek" was treated as more urgent than "pB". Conflicts:
     "peek" cannot fire before "pB":
@@ -97,5 +100,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysAPkgProps_VMux.v
-Elaborated module file created: sysAPkgProps_VMux.ba
+Schedule file created: sysAPkgProps_VMux.bsched
 All packages are up to date.

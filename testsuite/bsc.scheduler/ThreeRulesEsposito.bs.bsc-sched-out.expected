@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ThreeRulesEsposito.bs
 code generation for sysThreeRulesEsposito starts
+Elaborated module file created: sysThreeRulesEsposito.bmod
 === schedule (ThreeRulesEsposito sysThreeRulesEsposito):
 parallel: [esposito: [RL_setT -> [], RL_setF -> [RL_setT], RL_flip -> [RL_setF, RL_setT]]]
 order: [RL_setT, RL_setF, RL_flip]
@@ -42,5 +43,5 @@ Warning: "ThreeRulesEsposito.bs", line 18, column 15: (G0021)
 Warning: "ThreeRulesEsposito.bs", line 21, column 15: (G0021)
   According to the generated schedule, rule `flip' can never fire.
 Verilog file created: sysThreeRulesEsposito.v
-Elaborated module file created: sysThreeRulesEsposito.ba
+Schedule file created: sysThreeRulesEsposito.bsched
 All packages are up to date.

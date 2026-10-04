@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ResourceOneRuleOK.bs
 code generation for sysResourceOneRuleOK starts
+Elaborated module file created: sysResourceOneRuleOK.bmod
 === schedule (ResourceOneRuleOK sysResourceOneRuleOK):
 parallel: [esposito: [RL_Good -> []]]
 order: [RL_Good]
@@ -31,5 +32,5 @@ Logical execution order: Good
 
 ====================================================
 Verilog file created: sysResourceOneRuleOK.v
-Elaborated module file created: sysResourceOneRuleOK.ba
+Schedule file created: sysResourceOneRuleOK.bsched
 All packages are up to date.

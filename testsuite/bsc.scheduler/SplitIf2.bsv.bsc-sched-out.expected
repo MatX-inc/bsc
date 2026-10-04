@@ -8,6 +8,7 @@ Warning: "SplitIf2.bsv", line 6, column 8: (G0020)
       $display) at the following positions:
 	  "SplitIf2.bsv", line 25, column 7
 	  "SplitIf2.bsv", line 30, column 7
+Elaborated module file created: mkSplitIf2_Test.bmod
 Warning: "SplitIf2.bsv", line 6, column 8: (G0010)
   Rule "toggle1" was treated as more urgent than "xfer". Conflicts:
     "toggle1" cannot fire before "xfer": calls to r1.write vs. r1.read
@@ -62,8 +63,9 @@ Logical execution order: toggle1, toggle2, xfer
 Warning: "SplitIf2.bsv", line 6, column 8: (G0022)
   According to the generated schedule, method `xfer' is never ready.
 Verilog file created: mkSplitIf2_Test.v
-Elaborated module file created: mkSplitIf2_Test.ba
+Schedule file created: mkSplitIf2_Test.bsched
 code generation for sysSplitIf2 starts
+Elaborated module file created: sysSplitIf2.bmod
 === schedule (SplitIf2 sysSplitIf2):
 parallel: [esposito: [RL_toggleDir -> [], RL_r -> [], RL_incr -> [], RL_done -> []]]
 order: [RL_r, RL_toggleDir, RL_done, RL_incr]
@@ -110,5 +112,5 @@ Logical execution order: r, toggleDir, done, incr
 
 ===========================================
 Verilog file created: sysSplitIf2.v
-Elaborated module file created: sysSplitIf2.ba
+Schedule file created: sysSplitIf2.bsched
 All packages are up to date.

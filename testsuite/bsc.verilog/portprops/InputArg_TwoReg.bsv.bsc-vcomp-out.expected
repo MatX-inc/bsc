@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InputArg_TwoReg.bsv
 code generation for sysInputArg_TwoReg starts
+Elaborated module file created: sysInputArg_TwoReg.bmod
 === IOproperties (InputArg_TwoReg sysInputArg_TwoReg):
 Name                         I/O  size props
 b                              I    16 reg
@@ -11,5 +12,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysInputArg_TwoReg.v
-Elaborated module file created: sysInputArg_TwoReg.ba
+Schedule file created: sysInputArg_TwoReg.bsched
 All packages are up to date.

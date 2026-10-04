@@ -1,8 +1,9 @@
 checking package dependencies
 compiling RuleNameInAddRules1.bsv
 code generation for sysRuleNameInAddRules1 starts
+Elaborated module file created: sysRuleNameInAddRules1.bmod
 Warning: "RuleNameInAddRules1.bsv", line 12, column 15: (G0021)
   According to the generated schedule, rule `r2' can never fire.
 Verilog file created: sysRuleNameInAddRules1.v
-Elaborated module file created: sysRuleNameInAddRules1.ba
+Schedule file created: sysRuleNameInAddRules1.bsched
 All packages are up to date.

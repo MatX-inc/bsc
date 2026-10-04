@@ -5,6 +5,7 @@ Compilation message: "LiteralEqOrd.bsv", line 13, column 11: w == y
 Compilation message: "LiteralEqOrd.bsv", line 20, column 11: w > x
 Compilation message: "LiteralEqOrd.bsv", line 23, column 11: w <= z
 Compilation message: "LiteralEqOrd.bsv", line 30, column 11: w > v
+Elaborated module file created: sysLiteralEqOrd.bmod
 Verilog file created: sysLiteralEqOrd.v
-Elaborated module file created: sysLiteralEqOrd.ba
+Schedule file created: sysLiteralEqOrd.bsched
 All packages are up to date.

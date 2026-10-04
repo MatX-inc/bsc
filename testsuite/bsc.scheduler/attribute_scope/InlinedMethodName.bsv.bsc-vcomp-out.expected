@@ -13,6 +13,7 @@ Warning: "InlinedMethodName.bsv", line 31, column 29: (G0123)
   During elaboration of `m' at "InlinedMethodName.bsv", line 15, column 8.
   During elaboration of `sysTopMethodNameTopModule1' at
   "InlinedMethodName.bsv", line 14, column 8.
+Elaborated module file created: sysTopMethodNameTopModule1.bmod
 Warning: "InlinedMethodName.bsv", line 14, column 8: (G0010)
   Rule "r1" was treated as more urgent than "m_r". Conflicts:
     "r1" cannot fire before "m_r": calls to m_rg1.write vs. m_rg1.read
@@ -24,5 +25,5 @@ Warning: "InlinedMethodName.bsv", line 14, column 8: (G0010)
 Warning: "InlinedMethodName.bsv", line 32, column 9: (G0021)
   According to the generated schedule, rule `m_r' can never fire.
 Verilog file created: sysTopMethodNameTopModule1.v
-Elaborated module file created: sysTopMethodNameTopModule1.ba
+Schedule file created: sysTopMethodNameTopModule1.bsched
 All packages are up to date.

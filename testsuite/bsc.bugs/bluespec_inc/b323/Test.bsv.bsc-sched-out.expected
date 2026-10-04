@@ -1,6 +1,7 @@
 checking package dependencies
 compiling Test.bsv
 code generation for mkFoo starts
+Elaborated module file created: mkFoo.bmod
 === schedule (Test mkFoo):
 parallel: [esposito: [RL_zero -> [], RL_grter_four -> [], RL_non_zero -> []]]
 order: [RL_zero, RL_grter_four, RL_non_zero]
@@ -39,5 +40,5 @@ Logical execution order: zero, grter_four, non_zero
 
 =====================================
 Verilog file created: mkFoo.v
-Elaborated module file created: mkFoo.ba
+Schedule file created: mkFoo.bsched
 All packages are up to date.

@@ -30,6 +30,7 @@ code generation for sysBuildModule starts
 [TIME] elab progress: Finished rule (exit)
 [TIME] elab progress: Elaborating interface
 [TIME] elab progress: Finished elaborating module `sysBuildModule'
+Elaborated module file created: sysBuildModule.bmod
 Verilog file created: sysBuildModule.v
-Elaborated module file created: sysBuildModule.ba
+Schedule file created: sysBuildModule.bsched
 All packages are up to date.

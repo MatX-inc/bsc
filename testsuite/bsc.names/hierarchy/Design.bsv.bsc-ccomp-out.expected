@@ -187,5 +187,6 @@ Instantiation tree
 				    [Loc xyz_3 False (Just (Prelude.Empty))
 				        { [Loc baz False (Just (()))
 					      { Rule RL_the_x_3_xyz_3_baz } ] } ] } ] } ] } ] } ] } ] }
-Elaborated module file created: mkDesign.ba
+Elaborated module file created: mkDesign.bmod
+Schedule file created: mkDesign.bsched
 All packages are up to date.

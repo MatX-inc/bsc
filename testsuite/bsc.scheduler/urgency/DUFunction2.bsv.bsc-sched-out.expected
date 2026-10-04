@@ -1,6 +1,7 @@
 checking package dependencies
 compiling DUFunction2.bsv
 code generation for sysDUFunction2 starts
+Elaborated module file created: sysDUFunction2.bmod
 Warning: "DUFunction2.bsv", line 19, column 8: (G0010)
   Rule "doit" was treated as more urgent than "doit_1". Conflicts:
     "doit" cannot fire before "doit_1": calls to outf.enq vs. outf.enq
@@ -162,5 +163,5 @@ Logical execution order: clearGo,
 
 ==============================================
 Verilog file created: sysDUFunction2.v
-Elaborated module file created: sysDUFunction2.ba
+Schedule file created: sysDUFunction2.bsched
 All packages are up to date.

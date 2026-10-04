@@ -1,6 +1,7 @@
 checking package dependencies
 compiling SextTest_sat-yices.bsv
 code generation for sysSextTest starts
+Elaborated module file created: sysSextTest.bmod
 Warning: "SextTest_sat-yices.bsv", line 22, column 8: (G0010)
   Rule "aa" was treated as more urgent than "bb". Conflicts:
     "aa" cannot fire before "bb": calls to uc.write vs. uc.read
@@ -52,5 +53,5 @@ Logical execution order: aa, ab, bb
 Warning: "SextTest_sat-yices.bsv", line 40, column 10: (G0021)
   According to the generated schedule, rule `bb' can never fire.
 Verilog file created: sysSextTest.v
-Elaborated module file created: sysSextTest.ba
+Schedule file created: sysSextTest.bsched
 All packages are up to date.

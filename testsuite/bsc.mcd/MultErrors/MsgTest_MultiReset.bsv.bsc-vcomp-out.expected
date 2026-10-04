@@ -16,6 +16,7 @@ Warning: "MsgTest_MultiReset.bsv", line 19, column 9: (G0043)
   9.
   During elaboration of `sysMsgTest_MultiReset' at "MsgTest_MultiReset.bsv",
   line 8, column 8.
+Elaborated module file created: sysMsgTest_MultiReset.bmod
 Verilog file created: sysMsgTest_MultiReset.v
-Elaborated module file created: sysMsgTest_MultiReset.ba
+Schedule file created: sysMsgTest_MultiReset.bsched
 All packages are up to date.

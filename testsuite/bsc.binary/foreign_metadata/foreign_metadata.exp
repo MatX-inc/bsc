@@ -1,0 +1,9 @@
+# Exercise the new metadata format and source-free consumers.
+set script [file normalize [file join [file dirname [info script]] test.sh]]
+set status [catch {exec env "BSC=[which_bsc]" bash $script 2>@1} output]
+verbose -log $output
+if {$status == 0} {
+    pass "foreign .bdpi metadata"
+} else {
+    fail "foreign .bdpi metadata"
+}

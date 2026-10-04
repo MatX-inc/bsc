@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ArraySelectImplCondTest_sat-yices.bsv
 code generation for sysArraySelectImplCondTest starts
+Elaborated module file created: sysArraySelectImplCondTest.bmod
 Warning: "ArraySelectImplCondTest_sat-yices.bsv", line 33, column 8: (G0010)
   Rule "aa" was treated as more urgent than "bb". Conflicts:
     "aa" cannot fire before "bb": calls to uc.write vs. uc.read
@@ -81,5 +82,5 @@ Logical execution order: aa, ab, bb
 Warning: "ArraySelectImplCondTest_sat-yices.bsv", line 58, column 10: (G0021)
   According to the generated schedule, rule `bb' can never fire.
 Verilog file created: sysArraySelectImplCondTest.v
-Elaborated module file created: sysArraySelectImplCondTest.ba
+Schedule file created: sysArraySelectImplCondTest.bsched
 All packages are up to date.

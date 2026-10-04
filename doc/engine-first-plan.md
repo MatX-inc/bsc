@@ -1,5 +1,25 @@
 # bsc orchestration and rebuild: implementation plan
 
+Current implementation update (2026-10-03): synthesized modules use `.bmod`
+and `.bsched`; foreign imports use `.bdpi`. The unchanged `.bmod` format is
+`bsc-bmod-20261003-2`. The `.bsched` format, `bsc-bsched-20261003-5`, binds to
+that module's payload hash and stores scheduling results plus the compiled
+materialization IR delta and any resulting schedule changes. Readers replay
+these results without rerunning common materialization under new options.
+Neither artifact stores invocation flags. Rescheduling with new options writes
+a new `.bsched` from the same `.bmod`; backend generation uses its invocation's
+options. The library engine tracks `.bo`
+and `.bdpi` coproducts and repairs missing foreign metadata by rebuilding the
+owning package. Package outputs are registered as native Shake output groups,
+so missing `.bdpi` siblings share one producer with the `.bo`. A source-only
+discovery pass determines those groups before the build pass, using the same
+persistent oracle database. It still invokes the compiler once per package. Within the
+compiler, the master driver now projects phase-specific Flags and shared
+RunFlags/RunOptions; independent phase invocations and cache keys remain
+future work. The historical `.ba` discussion below describes the earlier
+baseline; legacy `.ba` reading is retained.
+
+
 Status: **Revision 3.2** — 2026-10-02. Plan of record; concise by design.
 Revision 3.2 adds the leak-1 closure record and the type-table design notes to the P1 section.
 Revision 3.1 records the component structure as built (sixteen packages,

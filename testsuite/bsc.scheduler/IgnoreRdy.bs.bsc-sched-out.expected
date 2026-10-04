@@ -1,6 +1,7 @@
 checking package dependencies
 compiling IgnoreRdy.bs
 code generation for mkBar starts
+Elaborated module file created: mkBar.bmod
 === schedule (IgnoreRdy mkBar):
 parallel: [esposito: [bar -> [], glurph -> []]]
 order: [bar, glurph]
@@ -47,8 +48,9 @@ Logical execution order: bar, glurph
 
 =====================================
 Verilog file created: mkBar.v
-Elaborated module file created: mkBar.ba
+Schedule file created: mkBar.bsched
 code generation for sysIgnoreRdy starts
+Elaborated module file created: sysIgnoreRdy.bmod
 === schedule (IgnoreRdy sysIgnoreRdy):
 parallel: [esposito: [foo -> [], RL_do_glurph -> []]]
 order: [foo, RL_do_glurph]
@@ -87,5 +89,5 @@ Logical execution order: foo, do_glurph
 
 ============================================
 Verilog file created: sysIgnoreRdy.v
-Elaborated module file created: sysIgnoreRdy.ba
+Schedule file created: sysIgnoreRdy.bsched
 All packages are up to date.

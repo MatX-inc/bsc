@@ -1045,10 +1045,10 @@ tclModule ["load",topname] = do
   when (topname `elem` prim_names) $
        ioError $ userError ("Cannot load " ++ quote topname ++
                             ": it is a primitive module")
-  -- getABIHierarchy calls GenABin.readABinFile to read a .ba file
+  -- Materialize module artifacts using the current Bluetcl flags.
   (topmodId, hierMap, instModMap, ffuncMap, _, foreign_mods, abmis_by_name)
       <- convExceptTToIO globalErrHandle $
-         getABIHierarchy globalErrHandle
+         getABIHierarchy globalErrHandle flags
                          (verbose flags) (ifcPath flags) (Just gen_backend)
                          prim_names topname []
   let modnames = map fst abmis_by_name

@@ -14,6 +14,7 @@ Warning: "MultipleResetsForRule.bsv", line 27, column 9: (G0043)
   column 9.
   During elaboration of `sysMultipleResetsForRule' at
   "MultipleResetsForRule.bsv", line 19, column 8.
+Elaborated module file created: sysMultipleResetsForRule.bmod
 Verilog file created: sysMultipleResetsForRule.v
-Elaborated Verilog module file created: sysMultipleResetsForRule.ba
+Schedule file created: sysMultipleResetsForRule.bsched
 All packages are up to date.

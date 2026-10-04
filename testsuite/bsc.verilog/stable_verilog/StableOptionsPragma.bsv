@@ -1,5 +1,5 @@
-// regen must honor the module's recorded codegen flags (the .ba carries
-// the options pragma): regression for -c taking flags from the .ba
+// The source compile applies this module's options pragma. Replay must
+// receive -keep-fires explicitly to produce the same Verilog.
 (* synthesize *)
 (* options = "-keep-fires" *)
 module sysStableOptionsPragma();

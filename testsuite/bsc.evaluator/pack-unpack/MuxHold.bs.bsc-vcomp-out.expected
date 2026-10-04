@@ -1,6 +1,7 @@
 checking package dependencies
 compiling MuxHold.bs
 code generation for mkMuxHold starts
+Elaborated module file created: mkMuxHold.bmod
 Verilog file created: mkMuxHold.v
-Elaborated module file created: mkMuxHold.ba
+Schedule file created: mkMuxHold.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling SuppressTest3.bsv
 code generation for sysWarnings starts
+Elaborated module file created: sysWarnings.bmod
 Verilog file created: sysWarnings.v
-Elaborated module file created: sysWarnings.ba
+Schedule file created: sysWarnings.bsched
 All packages are up to date.

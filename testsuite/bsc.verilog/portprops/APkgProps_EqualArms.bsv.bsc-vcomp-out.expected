@@ -1,6 +1,7 @@
 checking package dependencies
 compiling APkgProps_EqualArms.bsv
 code generation for mkEqualArmsSink starts
+Elaborated module file created: mkEqualArmsSink.bmod
 === APackageIOproperties (APkgProps_EqualArms mkEqualArmsSink):
 Name                         I/O  size props
 RDY_put                        O     1 const
@@ -24,8 +25,9 @@ EN_put                         I     1
 -----
 
 Verilog file created: mkEqualArmsSink.v
-Elaborated module file created: mkEqualArmsSink.ba
+Schedule file created: mkEqualArmsSink.bsched
 code generation for sysAPkgProps_EqualArms starts
+Elaborated module file created: sysAPkgProps_EqualArms.bmod
 Warning: "APkgProps_EqualArms.bsv", line 33, column 8: (G0117)
   Rule `rb' shadows the effects of `put2' when they execute in the same clock
   cycle. Affected method calls:
@@ -54,5 +56,5 @@ EN_put2                        I     1
 -----
 
 Verilog file created: sysAPkgProps_EqualArms.v
-Elaborated module file created: sysAPkgProps_EqualArms.ba
+Schedule file created: sysAPkgProps_EqualArms.bsched
 All packages are up to date.

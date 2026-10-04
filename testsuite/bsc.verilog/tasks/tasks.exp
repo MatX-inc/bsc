@@ -122,8 +122,8 @@ compile_pass EmptyTasksWorkaround.bsv
 # The test is able to use a common expected output for Bluesim and
 # Verilog by adjusting the timestamps for Verilog.  As a result,
 # the elaborated code is different between the two backends, so
-# .ba files cannot be re-used, and separate test procedure calls
-# are needed (because "test_c_veri_bsv" reuses the .ba files).
+# module pairs cannot be re-used, and separate test procedure calls
+# are needed (because "test_c_veri_bsv" reuses the module pairs).
 #
 test_c_veri_bsv_separately LogicBetweenTasks sysLogicBetweenTasks.out.expected
 
@@ -246,7 +246,7 @@ test_c_veri_bsv RepeatedTask_OneRule3
 # make sure the SystemVerilog assertion tasks compile in both flows
 compile_verilog_pass AssertTasks.bsv
 compile_object_pass  AssertTasks.bsv
-link_objects_pass sysAssertTasks.ba sysAssertTasks
+link_objects_pass sysAssertTasks.bsched sysAssertTasks
 
 # make sure $error / $fatal work as expected
 if {$ctest == 1} {

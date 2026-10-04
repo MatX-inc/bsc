@@ -6,6 +6,7 @@ Warning: "PromoteTest4.bsv", line 15, column 8: (G0020)
   unpredictable order during Verilog simulations.
       Top-level interface method `m2' calls a system function (e.g., $display)
       at "PromoteTest4.bsv", line 38, column 7
+Elaborated module file created: sysWarnings.bmod
 Warning: "PromoteTest4.bsv", line 15, column 8: (G0010)
   Rule "m1" was treated as more urgent than "r3". Conflicts:
     "m1" cannot fire before "r3": calls to rg3.write vs. rg3.read
@@ -20,5 +21,5 @@ Warning: "PromoteTest4.bsv", line 15, column 8: (G0117)
     rg1.write
   To silence this warning, use the `-no-warn-action-shadowing' flag.
 Verilog file created: sysWarnings.v
-Elaborated module file created: sysWarnings.ba
+Schedule file created: sysWarnings.bsched
 All packages are up to date.

@@ -29,7 +29,8 @@ import Wires(WireProps(..), ClockDomain)
 import Pragma(PProp(..), isAlwaysEn, isEnWhenRdy, RulePragma(..),
               getDefaultClockArg, getDefaultResetArg)
 import ASyntax
-import ASyntaxUtil(aSubst, findAExprs, exprFold)
+import ASyntaxUtil(findAExprs, exprFold)
+import ASimParams(aInlineSimParams)
 import AScheduleInfo
 import AUses(MethodId(..))
 import Params(isConstAExpr)
@@ -68,7 +69,7 @@ simExpand errh flags topname fabis = do
 
     (topmodId, hiermap, instmap, ffuncmap, filemap, _, emodinfos_used_by_name)
         <- convExceptTToIO errh $
-           getABIHierarchy errh (verbose flags) (ifcPath flags) (Just Bluesim)
+           getABIHierarchy errh flags (verbose flags) (ifcPath flags) (Just Bluesim)
                            prim_names topname fabis
 
     modinfos_used_by_name <- convExceptTToIO errh $
@@ -2224,26 +2225,11 @@ checkSplitMethods errh apkg = do
 simExpandParams :: ErrorHandle -> APackage -> IO APackage
 simExpandParams errh apkg =
     let
-        defs = apkg_local_defs apkg
-        dmap = M.fromList [ (i, aSubst dmap e) | ADef i _ e _ <- defs ]
+        apkg' = aInlineSimParams apkg
         port_ids = [ i | AAI_Port (i,_) <- apkg_inputs apkg ]
-
-        inlineArg (Param {}, expr) = aSubst dmap expr
-        inlineArg (Port {},  expr) = aSubst dmap expr
-        inlineArg (_,        expr) = expr
-
-        inlineArgs avi =
-            let varginfo = vArgs (avi_vmi avi)
-                es = avi_iargs avi
-                es' = map inlineArg (zip varginfo es)
-            in  avi { avi_iargs = es' }
-
-        insts = apkg_state_instances apkg
-        insts' = map inlineArgs insts
-        apkg' = apkg { apkg_state_instances = insts' }
-
+        insts' = apkg_state_instances apkg'
         emsgs = concatMap (checkInstArgs port_ids) insts'
-    in        if (null emsgs)
+    in  if (null emsgs)
         then return apkg'
         else bsError errh emsgs
 

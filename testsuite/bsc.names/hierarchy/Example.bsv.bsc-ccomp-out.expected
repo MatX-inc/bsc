@@ -126,5 +126,6 @@ Instantiation tree
 	        { [Loc zow2 False (Just ((Prelude.Reg Prelude.Bool)))
 		      { [Loc (H) _r False (Just ((¶Prelude®¶.¶VReg®¶ 1)))
 			    { StateVar Zow_inst_mkZow_zow2 } ] } ] } ] } ] }
-Elaborated module file created: mkExample.ba
+Elaborated module file created: mkExample.bmod
+Schedule file created: mkExample.bsched
 All packages are up to date.

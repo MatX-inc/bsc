@@ -1,6 +1,7 @@
 checking package dependencies
 compiling GuardedRules.bsv
 code generation for mkGuardedRules starts
+Elaborated module file created: mkGuardedRules.bmod
 === schedule (GuardedRules mkGuardedRules):
 parallel: [esposito: [RL_incr -> [],
 		      RL_incr_1 -> [],
@@ -598,5 +599,5 @@ Logical execution order: incr,
 
 ==============================================
 Verilog file created: mkGuardedRules.v
-Elaborated module file created: mkGuardedRules.ba
+Schedule file created: mkGuardedRules.bsched
 All packages are up to date.

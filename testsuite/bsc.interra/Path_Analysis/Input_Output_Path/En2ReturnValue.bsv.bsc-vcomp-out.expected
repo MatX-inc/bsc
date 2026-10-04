@@ -1,6 +1,7 @@
 checking package dependencies
 compiling En2ReturnValue.bsv
 code generation for mkEn2ReturnValue starts
+Elaborated module file created: mkEn2ReturnValue.bmod
 === pathsPostSched (En2ReturnValue mkEn2ReturnValue):
 Combinational paths from inputs to outputs:
   EN_start -> result
@@ -8,5 +9,5 @@ Combinational paths from inputs to outputs:
 -----
 
 Verilog file created: mkEn2ReturnValue.v
-Elaborated module file created: mkEn2ReturnValue.ba
+Schedule file created: mkEn2ReturnValue.bsched
 All packages are up to date.

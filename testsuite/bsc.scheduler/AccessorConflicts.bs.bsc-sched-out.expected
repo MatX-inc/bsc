@@ -1,6 +1,7 @@
 checking package dependencies
 compiling AccessorConflicts.bs
 code generation for sysAccessorConflicts starts
+Elaborated module file created: sysAccessorConflicts.bmod
 === schedule (AccessorConflicts sysAccessorConflicts):
 parallel: [esposito: [s -> [], g -> []]]
 order: [g, s]
@@ -36,5 +37,5 @@ Logical execution order: g, s
 
 ====================================================
 Verilog file created: sysAccessorConflicts.v
-Elaborated module file created: sysAccessorConflicts.ba
+Schedule file created: sysAccessorConflicts.bsched
 All packages are up to date.

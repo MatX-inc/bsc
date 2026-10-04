@@ -8,6 +8,7 @@ Usage:
   bsc [flags] -sim -g mod -u file.bsv      to recursively compile to Bluesim objects
   bsc [flags] -sim -e topmodule            to link objects into a Bluesim binary
   bsc [flags] -systemc -e topmodule        to link objects into a SystemC model
+  bsc [flags] -schedule module.bmod        to schedule a saved module to .bsched
 
 Compiler flags:
 -D macro                define a macro for the BSV or Verilog preprocessor
@@ -20,16 +21,16 @@ Compiler flags:
 -Xl arg                 pass argument to the C/C++ linker
 -Xv arg                 pass argument to the Verilog link process
 -aggressive-conditions  construct implicit conditions aggressively
--bdir dir               output directory for .bo and .ba files
--c module               generate code for ``module'' from its elaborated .ba file
+-bdir dir               output directory for .bo, .bmod, .bsched and .bdpi files
+-c module               generate code for ``module'' from its .bmod/.bsched files
 -check-assert           test assertions with the Assert library
 -continue-after-errors  aggressively continue compilation after an error has been detected
 -cpp                    preprocess the source with the C preprocessor
 -demote-errors list     treat a list of errors as warnings (``:'' sep list of tags)
 -dump-formats formats   waveform formats to compile into the simulation (comma-separated subset of vcd,fst,fsdb; or none)
 -e module               top-level module for simulation
--elab                   generate a .ba file after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)
--elab-only              stop after elaboration: write .ba files but generate no code (-c or linking generates it later)
+-elab                   generate .bmod/.bsched files after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)
+-elab-only              stop before code generation: write .bmod/.bsched files (-c or linking generates code later)
 -fdir dir               working directory for relative file paths during elaboration
 -g module               generate code for ``module'' (requires -sim or -verilog)
 -help                   generate help message
@@ -47,7 +48,7 @@ Compiler flags:
 -promote-warnings list  treat a list of warnings as errors (``:'' sep list of tags)
 -q                      same as -quiet
 -quiet                  be less talkative
--remap-path-prefix from=to remap FROM path prefixes to TO in paths stored in generated .bo and .ba files (for reproducible builds)
+-remap-path-prefix from=to remap FROM path prefixes to TO in paths stored in generated .bo, .bmod, .bsched and .bdpi files (for reproducible builds)
 -remove-dollar          remove dollar signs from Verilog identifiers
 -remove-empty-rules     remove rules whose bodies have no actions
 -remove-false-rules     remove rules whose condition is provably false
@@ -59,6 +60,7 @@ Compiler flags:
 -sat-stp                use STP SMT for disjoint testing and SAT
 -sat-yices              use Yices SMT for disjoint testing and SAT
 -sched-dot              generate .dot files with schedule information
+-schedule               schedule one .bmod file to a sibling .bsched using the current invocation options
 -show-compiles          show recompilations
 -show-elab-progress     display trace as modules, rules, methods are elaborated
 -show-method-bvi        show BVI format method schedule information in the generated code

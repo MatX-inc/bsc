@@ -1,6 +1,7 @@
 checking package dependencies
 compiling SuppressTest4.bsv
 code generation for sysWarnings starts
+Elaborated module file created: sysWarnings.bmod
 Warning: "SuppressTest4.bsv", line 15, column 8: (G0036)
   Rule "r1" will appear to fire before "r2" when both fire in the same clock
   cycle, affecting:
@@ -11,5 +12,5 @@ Warning: "SuppressTest4.bsv", line 15, column 8: (G0117)
     rg1.write
   To silence this warning, use the `-no-warn-action-shadowing' flag.
 Verilog file created: sysWarnings.v
-Elaborated module file created: sysWarnings.ba
+Schedule file created: sysWarnings.bsched
 All packages are up to date.

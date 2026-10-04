@@ -21,18 +21,21 @@ import qualified Data.Map as DM
 import TmpNam(tmpNam, localTmpNam)
 import SCC(tsort)
 import Flags
+import qualified PhaseConfig as PC
+import qualified PhaseConfigLegacy as PL
 import Backend
 import Pragma(Pragma(..),PProp(..))
 import Position(noPosition, filePosition)
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, bsError,
-             exitFailWith, bsWarning, WMsg)
+             exitFailWith, bsWarning, WMsg, withErrorHandleFlags)
 import PFPrint
 import FStringCompat
 import Lex
 import Parse
 import FileNameUtil(hasDotSuf, dropSuf, baseName, dirName,
                     bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix,
-                    mkAName, mkVName, mkVPIHName, mkVPICName,
+                    bdpiSuffix, bmodSuffix, bschedSuffix,
+                    mkBDPIName, mkBModName, mkBSchedName, mkVName, mkVPIHName, mkVPICName,
                     createEncodedFullFilePath)
 import FileIOUtil(readFilesPath, readBinFilePath, readFileCatch, writeFileCatch,
                   removeFileCatch)
@@ -88,7 +91,7 @@ getModificationTime' file =
 chkDeps :: ErrorHandle -> Flags -> String -> IO [(FilePath, CPackage, [WMsg])]
 chkDeps errh flags name = do
         let gflags = [ mkId noPosition (mkFString s) | s <- genName flags ]
-        (pkg, _, warns) <- parseFile errh flags False name
+        (pkg, _, warns) <- parseFile errh (PC.parseConfig flags) False name
         pi <- getInfo errh flags gflags name pkg warns
         let initMap = DM.singleton (pkgName pi) pi
         (errs, piMap) <- transClose errh flags ([], initMap) (imports pi)
@@ -131,7 +134,7 @@ getPkgInfo errh flags pname =
           case mfile of
             Nothing -> return Nothing
             Just (_, fname) -> do
-                (pkg, _, warns) <- parseFile errh flags True fname
+                (pkg, _, warns) <- parseFile errh (PC.parseConfig flags) True fname
                 pi <- getInfo errh flags [] fname pkg warns
                 -- parseFile checks package name matches filename (fatal error)
                 return (Just pi)
@@ -228,19 +231,21 @@ getGenFs :: Flags -> PkgInfo -> [String]
 getGenFs flags pi =
     let prefix = dirName (fileName pi) ++ "/"
         getName = getIdString . unQualId
-        mkABinFileName i = mkAName (bdir flags) prefix (getName i)
+        mkForeignFileName i = mkBDPIName (bdir flags) prefix (getName i)
+        mkModuleFileNames i = [mkBModName (bdir flags) prefix (getName i),
+                              mkBSchedName (bdir flags) prefix (getName i)]
         mkVerFileName i = mkVName (vdir flags) prefix (getName i)
         mkVPIFileNames i = [ mkVPIHName (vdir flags) prefix (getName i),
                              mkVPICName (vdir flags) prefix (getName i) ]
         -- files common to all backends
-        foreign_abin_files = map mkABinFileName (foreigns pi)
+        foreign_bdpi_files = map mkForeignFileName (foreigns pi)
     in case backend flags of
          Just Bluesim ->
-            let mod_abin_files = map mkABinFileName (gens pi)
-            in  foreign_abin_files ++ mod_abin_files
+            let mod_abin_files = concatMap mkModuleFileNames (gens pi)
+            in  foreign_bdpi_files ++ mod_abin_files
          Just Verilog ->
             let -- with -elab-only, no .v is written, so a compile is up
-                -- to date without them (the .ba files are checked instead)
+                -- to date without them (the module pair is checked instead)
                 mod_ver_files = if (elabOnly flags)
                                 then []
                                 else map mkVerFileName (gens pi)
@@ -258,12 +263,12 @@ getGenFs flags pi =
                                     else concatMap mkVPIFileNames (foreigns pi)
                 mod_abin_files =
                     if (genABin flags)
-                    then map mkABinFileName (gens pi)
+                    then concatMap mkModuleFileNames (gens pi)
                     else []
-            in  foreign_abin_files ++ foreign_vpi_files ++
+            in  foreign_bdpi_files ++ foreign_vpi_files ++
                 mod_ver_files ++ mod_abin_files
          Nothing ->
-            foreign_abin_files
+            foreign_bdpi_files
 
 -- Update the compile status in all the PkgInfo.
 -- Transforms UpToDate -> Recompile when dependencies require it.
@@ -280,13 +285,15 @@ chkUpd flags doneMap resultList (pi:pis) = do
         --putStrLn (show genfs)
         genfsClks <- mapM getModTime genfs
         incfsClks <- mapM getModTime incfs
-        -- a .ba that exists (and is fresh by timestamp) is still not a
+        -- A module pair that exists (and is fresh by timestamp) is not a
         -- valid generated product if it cannot be read (another BSC
         -- version's format) or was elaborated for an incompatible backend
-        -- (a Verilog-tagged .ba left by "-verilog -g" must not satisfy a
+        -- (a Verilog-tagged pair left by "-verilog -g" must not satisfy a
         -- -sim compile, or vice versa); codegen must run again
         staleAbins <- mapM (isStaleABinFile (backend flags))
-                          (filter (hasDotSuf abinSuffix) genfs)
+                          [f | f <- genfs,
+                               any (\suffix -> hasDotSuf suffix f)
+                                   [abinSuffix, bdpiSuffix, bmodSuffix, bschedSuffix]]
         let needGenUpd = any (srcMod pi >) genfsClks || or staleAbins
             needIncUpd = any (lastMod pi <) incfsClks
         --putStrLn (show (fileName pi, genfs, map (srcMod pi >) genfsClks))
@@ -325,9 +332,11 @@ getModTime f = CE.catch (getModificationTime' f >>= return . Just) handler
 
 -----
 
-doCPP :: ErrorHandle -> Flags -> String -> IO String
-doCPP errh flags name =
-    if cpp flags
+doCPP :: ErrorHandle -> PC.PhaseConfig PC.ParseFlags -> String -> IO String
+doCPP errh config name =
+    withErrorHandleFlags errh (PL.legacyFlags config) $
+    let flags = PL.legacyFlags config
+    in if cpp flags
     then do
         tempName <- tmpNam
         topNameRoot <- localTmpNam
@@ -370,9 +379,12 @@ flags in the CC variable, for example CC="cc -g", then it will work.
 -- Returns CPackage, TimeInfo, and warnings for passing to compilation
 -- If fatal_name_mismatch is True, package name mismatch causes bsError (aborts)
 -- If False, it's just a bsWarning
-parseFile :: ErrorHandle -> Flags -> Bool -> FilePath -> IO (CPackage, TimeInfo, [WMsg])
-parseFile errh flags fatal_name_mismatch fname = do
-    let isClassic = hasDotSuf bscSrcSuffix fname
+parseFile :: ErrorHandle -> PC.PhaseConfig PC.ParseFlags -> Bool -> FilePath ->
+             IO (CPackage, TimeInfo, [WMsg])
+parseFile errh config fatal_name_mismatch fname =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
+        isClassic = hasDotSuf bscSrcSuffix fname
 
     t <- getNow
     let dumpnames = (Just (baseName (dropSuf fname)), Nothing, Nothing)
@@ -382,11 +394,11 @@ parseFile errh flags fatal_name_mismatch fname = do
     let fname_encoded = createEncodedFullFilePath fname pwd
 
     start flags DFcpp
-    file <- doCPP errh flags fname_encoded
+    file <- doCPP errh config fname_encoded
     _ <- dumpStr errh flags t DFcpp dumpnames file
 
     -- parseSrc handles its own dump stages (DFparsed, DFvpp, etc.)
-    (pkg@(CPackage i _ _ _ _ _ _), t', warns) <- parseSrc isClassic errh flags fname_encoded file
+    (pkg@(CPackage i _ _ _ _ _ _), t', warns) <- parseSrc isClassic errh config fname_encoded file
 
     -- Check for package name mismatch
     let reportMismatch = if fatal_name_mismatch then bsError else bsWarning
@@ -407,7 +419,7 @@ parseFile errh flags fatal_name_mismatch fname = do
     return (pkg, t', warns)
 
 -- wrapper to detect file encoding errors (which are detected lazily)
-parseSrc :: Bool -> ErrorHandle -> Flags -> String -> String ->
+parseSrc :: Bool -> ErrorHandle -> PC.PhaseConfig PC.ParseFlags -> String -> String ->
             IO (CPackage, TimeInfo, [WMsg])
 parseSrc classic errh flags filename inp = CE.handleJust isEncErr handleErr $ parseSrc' classic errh flags filename inp
     where isEncErr :: CE.IOException -> Maybe CE.IOException
@@ -415,12 +427,13 @@ parseSrc classic errh flags filename inp = CE.handleJust isEncErr handleErr $ pa
                      | otherwise = Nothing
           handleErr _ = bsError errh [(filePosition $ mkFString filename, ENotUTF8)]
 
-parseSrc' :: Bool -> ErrorHandle -> Flags -> String -> String ->
+parseSrc' :: Bool -> ErrorHandle -> PC.PhaseConfig PC.ParseFlags -> String -> String ->
             IO (CPackage, TimeInfo, [WMsg])
-parseSrc' True errh flags filename inp = do
+parseSrc' True errh config filename inp = do
   -- Classic parser
   t <- getNow
-  let dumpnames = (Just (baseName (dropSuf filename)), Nothing, Nothing)
+  let flags = PL.legacyFlags config
+      dumpnames = (Just (baseName (dropSuf filename)), Nothing, Nothing)
   start flags DFparsed
   let lflags = LFlags { lf_is_stdlib = stdlibNames flags,
                         lf_allow_sv_kws = not outlaw_sv_kws_as_classic_ids }
@@ -429,9 +442,9 @@ parseSrc' True errh flags filename inp = do
                       let ws = classicWarnings pkg
                       return (pkg, t, ws)
       Left errs -> bsError errh errs
-parseSrc' False errh flags filename inp =
+parseSrc' False errh config filename inp =
   -- BSV parser
-  bsvParseString errh flags filename (baseName $ dropSuf filename) inp
+  bsvParseString errh (PL.legacyFlags config) filename (baseName $ dropSuf filename) inp
 
 chkParse :: Parser [Token] a -> [Token] -> Either [EMsg] a
 chkParse p ts =
@@ -444,7 +457,7 @@ chkParse p ts =
 findPackages :: ErrorHandle -> Flags -> FilePath -> IO ([EMsg],[PkgInfo])
 findPackages errh flags name = do
   let gflags = [ mkId noPosition (mkFString s) | s <- genName flags ]
-  (pkg, _, warns) <- parseFile errh flags True name
+  (pkg, _, warns) <- parseFile errh (PC.parseConfig flags) True name
   pi <- getInfo errh flags gflags name pkg warns
   (errs, piMap) <- transClose errh flags ([], DM.singleton (pkgName pi) pi) (imports pi)
   return (errs, DM.elems piMap)

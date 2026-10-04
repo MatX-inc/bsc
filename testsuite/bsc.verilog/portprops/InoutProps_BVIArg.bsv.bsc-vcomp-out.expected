@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InoutProps_BVIArg.bsv
 code generation for sysInoutProps_BVIArg starts
+Elaborated module file created: sysInoutProps_BVIArg.bmod
 === IOproperties (InoutProps_BVIArg sysInoutProps_BVIArg):
 Name                         I/O  size props
 CLK                            I     1 clock
@@ -11,5 +12,5 @@ io_arg                        IO    32 inout
 -----
 
 Verilog file created: sysInoutProps_BVIArg.v
-Elaborated module file created: sysInoutProps_BVIArg.ba
+Schedule file created: sysInoutProps_BVIArg.bsched
 All packages are up to date.

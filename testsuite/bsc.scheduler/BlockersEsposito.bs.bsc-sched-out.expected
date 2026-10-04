@@ -1,6 +1,7 @@
 checking package dependencies
 compiling BlockersEsposito.bs
 code generation for sysBlockersEsposito starts
+Elaborated module file created: sysBlockersEsposito.bmod
 Warning: "BlockersEsposito.bs", line 12, column 0: (G0010)
   Rule "Blocker" was treated as more urgent than "Victim". Conflicts:
     "Blocker" cannot fire before "Victim": calls to arrs_0.upd vs. arrs_0.upd
@@ -139,5 +140,5 @@ Warning: "BlockersEsposito.bs", line 23, column 19: (G0021)
 Warning: "BlockersEsposito.bs", line 23, column 19: (G0021)
   According to the generated schedule, rule `Victim_6' can never fire.
 Verilog file created: sysBlockersEsposito.v
-Elaborated module file created: sysBlockersEsposito.ba
+Schedule file created: sysBlockersEsposito.bsched
 All packages are up to date.

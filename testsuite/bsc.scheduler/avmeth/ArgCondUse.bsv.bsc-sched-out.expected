@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ArgCondUse.bsv
 code generation for mkArgCondUse starts
+Elaborated module file created: mkArgCondUse.bmod
 === schedule (ArgCondUse mkArgCondUse):
 parallel: [esposito: [m -> []]]
 order: [m]
@@ -30,5 +31,5 @@ Logical execution order: m
 
 ============================================
 Verilog file created: mkArgCondUse.v
-Elaborated module file created: mkArgCondUse.ba
+Schedule file created: mkArgCondUse.bsched
 All packages are up to date.

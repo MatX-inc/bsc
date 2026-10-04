@@ -38,7 +38,7 @@ import FileNameUtil(hasDotSuf, takeSuf,
                     objSuffix, arSuffix,
                     verSuffix, verSuffix2, verSuffix3, verSuffix4, verSuffix5,
                     vhdlSuffix, vhdlSuffix2,
-                    abinSuffix)
+                    abinSuffix, bmodSuffix, bschedSuffix, bdpiSuffix)
 
 -- For error messages
 import Error(internalError, EMsg, WMsg, ErrMsg(..),
@@ -69,7 +69,10 @@ isBlueSrcFile s = hasDotSuf bscSrcSuffix s
                || hasDotSuf bsvSrcSuffix s
 
 isABinFile :: String -> Bool
-isABinFile s = hasDotSuf abinSuffix s
+isABinFile s = hasDotSuf bdpiSuffix s
+           || hasDotSuf abinSuffix s
+           || hasDotSuf bmodSuffix s
+           || hasDotSuf bschedSuffix s
 
 isHDLSrcFile :: String -> Bool
 isHDLSrcFile s = isVerSrcFile s
@@ -124,6 +127,7 @@ usage prog =
             , ("[flags] -sim -g mod -u file." ++ bsvSrcSuffix, "to recursively compile to Bluesim objects")
             , ("[flags] -sim -e topmodule", "to link objects into a Bluesim binary")
             , ("[flags] -systemc -e topmodule", "to link objects into a SystemC model")
+            , ("[flags] -schedule module.bmod", "to schedule a saved module to .bsched")
             ]
 
 exitWithUsage :: ErrorHandle -> String -> IO ()
@@ -149,6 +153,8 @@ data Decoded = DHelp Flags       -- Display the public help message
              | DSimLink Flags String [String] [String]
                -- modules to generate code for (-c) and ABin files
              | DCodeGen Flags [String] [String]
+               -- schedule one saved unscheduled module
+             | DSched Flags FilePath
 
 decodeArgs :: String -> [String] -> String -> ([WMsg], Decoded)
 decodeArgs prog args cdir =
@@ -160,6 +166,10 @@ decodeArgs prog args cdir =
        then (warnings, DHelpHidden flags)
        else if "h" `elem` sets || "help" `elem` sets
             then (warnings, DHelp flags)
+            else if "schedule" `elem` sets
+                 then (warnings, if null errors
+                                 then checkScheduleFlags flags anames
+                                 else DError errors)
             else if (null errors)
                  then if (null anames)
                       then if ((printFlags flags) ||
@@ -167,7 +177,7 @@ decodeArgs prog args cdir =
                                (printFlagsRaw flags))
                            then (warnings, DNoSrc flags)
                            else
-                           -- -c mode needs no file names; the .ba files
+                           -- -c mode needs no file names; the module files
                            -- are found by module name on the search path
                            if not (null (codegenNames flags))
                            then (warnings, checkCodeGenFlags flags [])
@@ -215,7 +225,7 @@ decodeArgs prog args cdir =
                                                     ELinkFilesWithSrc name known_ext_names)]
                                               else DError [(cmdPosition,
                                                             EUnrecognizedCmdLineText (head names))])
-                             -- -c mode consumes only .ba files; this must
+                             -- -c mode consumes only module artifacts; this must
                              -- come before the all-HDL case below, so that
                              -- "-c mkFoo foo.v" errors rather than being
                              -- treated as implicit-Verilog linking
@@ -249,10 +259,28 @@ decodeArgs prog args cdir =
                  else (warnings, DError errors)
 
 
+-- The mode selector is recorded by decodeFlags separately from phase options.
+checkScheduleFlags :: Flags -> [String] -> Decoded
+checkScheduleFlags flags names = checkNamesForFlag names $
+    if bdir flags /= Nothing
+    then DError [(cmdPosition, EGeneric
+             "-schedule writes its .bsched file beside the input .bmod file; -bdir is not supported in this mode.")]
+    else if not (null (genName flags)) || not (null (codegenNames flags)) ||
+       entry flags /= Nothing || updCheck flags || elabOnly flags ||
+       preprocessOnly flags
+    then DError [(cmdPosition, EGeneric
+             ("-schedule cannot be combined with source compilation, " ++
+              "code generation, or linking flags."))]
+    else case names of
+        [filename] | hasDotSuf bmodSuffix filename -> DSched flags filename
+        _ -> DError [(cmdPosition, EGeneric
+                 "-schedule requires exactly one .bmod file.")]
+
+
 -- check that the flags are OK for compiling Bluespec src file
 checkBSrcFlags :: Flags -> String -> Decoded
 checkBSrcFlags flags filename =
-    -- -c generates from .ba files, not from source
+    -- -c generates from module artifacts, not from source
     if not (null (codegenNames flags))
     then DError [(cmdPosition, EGenWithSrcFile filename)]
     else
@@ -268,9 +296,9 @@ checkBSrcFlags flags filename =
         if (removeVerilogDollar flags && (backend flags /= Just Verilog))
         then DError [(cmdPosition, EDollarNoVerilog)]
         else
-        -- -elab-only stops compilation at the .ba; for Bluesim (or no
+        -- -elab-only stops compilation at the module pair; for Bluesim (or no
         -- backend) stopping there is already the behavior, so the flag
-        -- is accepted with any backend.  Suppressing the .ba as well
+        -- is accepted with any backend. Suppressing the module pair as well
         -- would leave nothing generated.
         if (elabOnly flags && (backend flags /= Nothing)
                            && not (genABin flags))
@@ -345,7 +373,7 @@ checkLinkFlags flags names =
         else DError [(cmdPosition, ENoBackendLinking)]
 
 
--- check that the flags are OK for the .ba -> code generation mode (-c)
+-- check the flags for code generation from module artifacts (-c)
 checkCodeGenFlags :: Flags -> [String] -> Decoded
 checkCodeGenFlags flags names =
     let (anames, bad_names) = partition isABinFile names
@@ -357,11 +385,11 @@ checkCodeGenFlags flags names =
         bad_name_errs = map errBadName bad_names
     in  -- check for flags after file names
         checkNamesForFlag bad_names $
-        -- -c consumes only .ba files (C and HDL files belong to link mode)
+        -- -c consumes module artifacts (C and HDL files belong to link mode)
         if not (null bad_names)
         then DError bad_name_errs
         else
-        -- -g compiles and generates from source, not from .ba
+        -- -g compiles and generates from source, not from module artifacts
         if not (null (genName flags))
         then DError [(cmdPosition, EGenNamesForLinking (genName flags))]
         else
@@ -1206,7 +1234,7 @@ externalFlags = [
         ("bdir",
          (Arg "dir" (\f s -> Left (f {bdir = Just s}))
                                         (Just (FRTMaybeString bdir)),
-          "output directory for .bo and .ba files", Visible)),
+          "output directory for .bo, .bmod, .bsched and .bdpi files", Visible)),
 
         ("bias-method-scheduling",
          (Toggle (\f x -> f {biasMethodScheduling=x}) (showIfTrue biasMethodScheduling),
@@ -1214,7 +1242,7 @@ externalFlags = [
 
         ("c",
          (Arg "module" (\f s -> Left (f {codegenNames = codegenNames f ++ [s]})) (Just (FRTListString codegenNames)),
-          "generate code for `module' from its elaborated .ba file", Visible)),
+          "generate code for `module' from its .bmod/.bsched files", Visible)),
 
         ("check-assert",
          (Toggle (\f x -> f {testAssert=x}) (showIfTrue testAssert),
@@ -1261,11 +1289,11 @@ externalFlags = [
 
         ("elab",
          (Toggle (\f x -> f {genABin=x}) (showIfTrue genABin),
-          "generate a .ba file after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)", Visible)),
+          "generate .bmod/.bsched files after elaboration and scheduling (on by default with -sim, -verilog and -systemc; -no-elab suppresses)", Visible)),
 
         ("elab-only",
          (Toggle (\f x -> f {elabOnly=x}) (showIfTrue elabOnly),
-          "stop after elaboration: write .ba files but generate no code (-c or linking generates it later)", Visible)),
+          "stop before code generation: write .bmod/.bsched files (-c or linking generates code later)", Visible)),
 
         ("expand-ATS-limit",
          (Arg "n"
@@ -1552,7 +1580,7 @@ externalFlags = [
               (Just (FRTListString (map (\(from, to) -> from ++ "=" ++ to)
                                        . remapPathPrefix))),
           "remap FROM path prefixes to TO in paths stored in generated" ++
-          " .bo and .ba files (for reproducible builds)", Visible)),
+          " .bo, .bmod, .bsched and .bdpi files (for reproducible builds)", Visible)),
 
         ("remove-dollar",
          (Toggle (\f x -> f { removeVerilogDollar = x }) (showIfTrue removeVerilogDollar),
@@ -1600,6 +1628,10 @@ externalFlags = [
         ("sched-dot",
          (Toggle (\f x -> f {schedDOT=x}) (showIfTrue schedDOT),
           "generate .dot files with schedule information", Visible)),
+
+        ("schedule",
+         (NoArg Left Nothing,
+          "schedule one .bmod file to a sibling .bsched using the current invocation options", Visible)),
 
         ("semantic-ports-comment",
          (Toggle (\f x -> f {semanticPortsComment=x})

@@ -7,12 +7,11 @@ import Pragma
 import Id
 import CSyntax
 import PPrint
-import ABin (ABin(..), ABinForeignFuncInfo(..))
-import GenABin(genABinFile)
+import GenBDPI(BDPI(..), genBDPIFile)
 import Position(remapPositionFile)
 import ForeignFunctions(ForeignFunction(..), mkForeignFunction)
 import Version(bscVersionStr)
-import FileNameUtil(mkAName, getRelativeFilePath)
+import FileNameUtil(mkBDPIName, getRelativeFilePath)
 import TopUtils(putStrLnF)
 
 import Control.Monad(unless)
@@ -32,21 +31,20 @@ genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
                             i `elem` foreignIds ]
         foreignInfos = map extractForeignFuncInfo foreignDefs
 
-        genABin info@(src_id, foreign_func) =
-            let ffinfo = ABinForeignFuncInfo src_id foreign_func
-                abin = ABinForeignFunc ffinfo (bscVersionStr True)
+        genBDPI info@(src_id, foreign_func) =
+            let metadata = BDPI src_id foreign_func (bscVersionStr True)
                 -- generate the filename
-                afilename_base = getIdString (ff_name foreign_func)
-                afilename = mkAName (bdir flags) prefix afilename_base
-                afilename_rel = getRelativeFilePath afilename
+                filename_base = getIdString (ff_name foreign_func)
+                filename = mkBDPIName (bdir flags) prefix filename_base
+                filename_rel = getRelativeFilePath filename
                 -- user message
-                abinPrintPrefix = "Foreign import file created: "
+                printPrefix = "Foreign import file created: "
             in  do
                    -- write the file with full path
-                   genABinFile errh (remapPositionFile (remapPathPrefix flags)) afilename abin
+                   genBDPIFile errh (remapPositionFile (remapPathPrefix flags)) filename metadata
                    -- report the file to the user with relative path
                    -- (typically just the filename, for current directory)
-                   unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
+                   unless (quiet flags) $ putStrLnF $ printPrefix ++ filename_rel
                    -- return the info, for dumping
                    return info
 
@@ -64,7 +62,7 @@ genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
     in
         if (not (null duplicates))
         then bsError errh (map mkDupErr duplicates)
-        else mapM genABin foreignInfos
+        else mapM genBDPI foreignInfos
 
 
 -- After typechecking, the import should contain a CForeignFuncCT expression

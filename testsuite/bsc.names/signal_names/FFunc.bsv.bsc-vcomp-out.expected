@@ -1,6 +1,6 @@
 checking package dependencies
 compiling FFunc.bsv
-Foreign import file created: fnFFunc.ba
+Foreign import file created: fnFFunc.bdpi
 VPI wrapper files created: vpi_wrapper_fnFFunc.{c,h}
 code generation for sysFFunc starts
 === ATS (FFunc sysFFunc):
@@ -41,6 +41,7 @@ clock domain = Just (0), resets = []
 
 -----
 
+Elaborated module file created: sysFFunc.bmod
 Verilog file created: sysFFunc.v
-Elaborated module file created: sysFFunc.ba
+Schedule file created: sysFFunc.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling RemTest_sat-stp.bsv
 code generation for sysRemTest starts
+Elaborated module file created: sysRemTest.bmod
 Warning: "RemTest_sat-stp.bsv", line 10, column 8: (G0010)
   Rule "aa" was treated as more urgent than "bb". Conflicts:
     "aa" cannot fire before "bb": calls to uc.write vs. uc.read
@@ -80,5 +81,5 @@ Logical execution order: aa, ab, ac, ad, ae, bb
 Warning: "RemTest_sat-stp.bsv", line 38, column 10: (G0021)
   According to the generated schedule, rule `bb' can never fire.
 Verilog file created: sysRemTest.v
-Elaborated module file created: sysRemTest.ba
+Schedule file created: sysRemTest.bsched
 All packages are up to date.

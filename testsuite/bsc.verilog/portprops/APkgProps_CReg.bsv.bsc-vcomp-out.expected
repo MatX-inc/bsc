@@ -1,6 +1,7 @@
 checking package dependencies
 compiling APkgProps_CReg.bsv
 code generation for sysAPkgProps_CReg starts
+Elaborated module file created: sysAPkgProps_CReg.bmod
 === APackageIOproperties (APkgProps_CReg sysAPkgProps_CReg):
 Name                         I/O  size props
 rdA0                           O     8 reg
@@ -36,5 +37,5 @@ EN_wrA0                        I     1
 -----
 
 Verilog file created: sysAPkgProps_CReg.v
-Elaborated module file created: sysAPkgProps_CReg.ba
+Schedule file created: sysAPkgProps_CReg.bsched
 All packages are up to date.

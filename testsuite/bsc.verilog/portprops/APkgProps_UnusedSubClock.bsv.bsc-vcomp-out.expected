@@ -1,6 +1,7 @@
 checking package dependencies
 compiling APkgProps_UnusedSubClock.bsv
 code generation for sysAPkgProps_UnusedSubClock starts
+Elaborated module file created: sysAPkgProps_UnusedSubClock.bmod
 === APackageIOproperties (APkgProps_UnusedSubClock sysAPkgProps_UnusedSubClock):
 Name                         I/O  size props
 pass                           O     8
@@ -24,5 +25,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysAPkgProps_UnusedSubClock.v
-Elaborated module file created: sysAPkgProps_UnusedSubClock.ba
+Schedule file created: sysAPkgProps_UnusedSubClock.bsched
 All packages are up to date.

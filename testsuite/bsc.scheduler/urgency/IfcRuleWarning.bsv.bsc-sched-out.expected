@@ -1,6 +1,7 @@
 checking package dependencies
 compiling IfcRuleWarning.bsv
 code generation for sysIfcRuleWarning starts
+Elaborated module file created: sysIfcRuleWarning.bmod
 Warning: "IfcRuleWarning.bsv", line 6, column 8: (G0010)
   Rule "bar" was treated as more urgent than "baz". Conflicts:
     "bar" cannot fire before "baz": calls to the_r.write vs. the_r.read
@@ -40,5 +41,5 @@ Logical execution order: bar, baz
 
 =================================================
 Verilog file created: sysIfcRuleWarning.v
-Elaborated module file created: sysIfcRuleWarning.ba
+Schedule file created: sysIfcRuleWarning.bsched
 All packages are up to date.

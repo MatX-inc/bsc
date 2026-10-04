@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InterfaceOrderingResource.bs
 code generation for sysInterfaceOrderingResource starts
+Elaborated module file created: sysInterfaceOrderingResource.bmod
 Warning: "InterfaceOrderingResource.bs", line 10, column 0: (G0010)
   Rule "act" was treated as more urgent than "write". Conflicts:
     "act" cannot fire before "write": calls to r.write vs. r.read
@@ -40,5 +41,5 @@ Logical execution order: act, write
 
 ============================================================
 Verilog file created: sysInterfaceOrderingResource.v
-Elaborated module file created: sysInterfaceOrderingResource.ba
+Schedule file created: sysInterfaceOrderingResource.bsched
 All packages are up to date.

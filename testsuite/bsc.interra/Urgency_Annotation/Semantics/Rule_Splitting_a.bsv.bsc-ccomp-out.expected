@@ -1,8 +1,9 @@
 checking package dependencies
 compiling Rule_Splitting_a.bsv
 code generation for mkRule_Splitting_a starts
+Elaborated module file created: mkRule_Splitting_a.bmod
 Warning: "Rule_Splitting_a.bsv", line 23, column 10: (G0021)
   According to the generated schedule, rule `test_rule_1_F_F_T' can never
   fire.
-Elaborated module file created: mkRule_Splitting_a.ba
+Schedule file created: mkRule_Splitting_a.bsched
 All packages are up to date.

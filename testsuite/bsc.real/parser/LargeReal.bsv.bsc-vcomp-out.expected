@@ -5,6 +5,7 @@ Compilation message: "LargeReal.bsv", line 15, column 20: inf = Infinity
 Compilation message: "LargeReal.bsv", line 16, column 21: zero = 0.0
 Compilation message: "LargeReal.bsv", line 17, column 21: inf2 = Infinity
 Compilation message: "LargeReal.bsv", line 18, column 22: zero2 = 0.0
+Elaborated module file created: sysLargeReal.bmod
 Verilog file created: sysLargeReal.v
-Elaborated module file created: sysLargeReal.ba
+Schedule file created: sysLargeReal.bsched
 All packages are up to date.

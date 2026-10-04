@@ -1,6 +1,7 @@
 checking package dependencies
 compiling MuxMethods1.bsv
 code generation for mkMuxMethods1 starts
+Elaborated module file created: mkMuxMethods1.bmod
 === pathsPostSched (MuxMethods1 mkMuxMethods1):
 Combinational paths from inputs to outputs:
   (setInput1_a, setInput2_a, EN_setInput1, EN_setInput2) -> getOutput
@@ -9,5 +10,5 @@ Combinational paths from inputs to outputs:
 -----
 
 Verilog file created: mkMuxMethods1.v
-Elaborated module file created: mkMuxMethods1.ba
+Schedule file created: mkMuxMethods1.bsched
 All packages are up to date.

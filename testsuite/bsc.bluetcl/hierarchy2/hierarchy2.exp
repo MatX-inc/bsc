@@ -1,6 +1,7 @@
 
 if { $vtest } {
 
+    set_verilog_regen_options sysEHRReg {-keep-fires}
 
     set files [glob -nocomplain [file join $::subdir "*.bsv"]]
 

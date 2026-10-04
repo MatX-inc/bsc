@@ -1,6 +1,7 @@
 checking package dependencies
 compiling WUrgencyChoice1.bs
 code generation for mkWUrgencyChoice1 starts
+Elaborated module file created: mkWUrgencyChoice1.bmod
 Warning: "WUrgencyChoice1.bs", line 24, column 0: (G0010)
   Rule "One" was treated as more urgent than "Two". Conflicts:
     "One" cannot fire before "Two": calls to x.write vs. x.read
@@ -34,5 +35,5 @@ Warning: "WUrgencyChoice1.bs", line 50, column 22: (G0021)
 Warning: "WUrgencyChoice1.bs", line 60, column 22: (G0021)
   According to the generated schedule, rule `Four' can never fire.
 Verilog file created: mkWUrgencyChoice1.v
-Elaborated module file created: mkWUrgencyChoice1.ba
+Schedule file created: mkWUrgencyChoice1.bsched
 All packages are up to date.

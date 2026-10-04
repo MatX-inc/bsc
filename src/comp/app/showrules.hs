@@ -4,6 +4,8 @@ module Main_showrules(main) where
 import Warmup ()
 import Exceptions(bsCatch)
 import Version
+import qualified Flags as F
+import FlagsDecode(defaultFlags)
 import FileNameUtil(hasDotSuf, hasNoSuffix, vcdSuffix)
 import ABinUtil(getABIHierarchy, assertNoSchedErr, InstModMap, HierMap)
 import Position(noPosition)
@@ -299,15 +301,17 @@ hmain argv = do
           -- handle errors and/or request for help and version info
           checkCmdLine errh opts args emsgs
 
-          -- read in .ba file data
+          -- Read module artifacts using this tool's current defaults.
           let top_mod = fromJust (optTopModule opts)
               verbose = optVerbose opts
               ba_path = optBAPath opts
+              toolFlags = F.setVerbose verbose $
+                  (defaultFlags bluespecdir) { F.ifcPath = ba_path }
           let prim_names = map sb_name primBlocks
           when (verbose) $ putStrLn "Reading design data from .ba files..."
           (_, hier_map, inst_map, _, _, _, abemis_by_name)
               <- convExceptTToIO errh $
-                 getABIHierarchy errh verbose ba_path Nothing prim_names top_mod []
+                 getABIHierarchy errh toolFlags verbose ba_path Nothing prim_names top_mod []
           abmis_by_name <- convExceptTToIO errh $ assertNoSchedErr abemis_by_name
 
           -- analyze design in preparation for VCD interpretation

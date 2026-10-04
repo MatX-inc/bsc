@@ -38,7 +38,7 @@ test_veri_only_bsv ModulePort_WithStaticValue_TopLevel \
 # Bluesim fails to link, at the moment
 # XXX should it treat the value as 0? or give a user error?
 compile_object_pass ModulePort_WithStaticValue_TopLevel.bsv
-link_objects_pass_bug sysModulePort_WithStaticValue_TopLevel.ba \
+link_objects_pass_bug sysModulePort_WithStaticValue_TopLevel.bsched \
     sysModulePort_WithStaticValue_TopLevel
 
 # ----------

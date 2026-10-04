@@ -42,6 +42,7 @@ import Warmup ()
 
 import Control.Monad (forM, forM_, unless, when)
 import Data.List (intercalate, isPrefixOf, sort, sortOn)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import Development.Shake
@@ -105,7 +106,7 @@ data Pkg = Pkg
   , pkgSrc :: FilePath            -- ^ relative to the library directory, as bscdeps printed it
   , pkgImports :: [String]
   , pkgIncludes :: [FilePath]
-  , pkgForeigns :: [String]       -- ^ each produces NAME.ba beside the .bo
+  , pkgForeigns :: [String]       -- ^ each produces NAME.bdpi beside the .bo
   }
   deriving stock (Show, Eq, Generic)
   deriving anyclass (Hashable, Binary, NFData)
@@ -148,8 +149,8 @@ data Paths = Paths
 -- whole-compiler key.
 --
 -- @closure@: an experimental preview of P3. The .bo producer runs parse,
--- typecheck (with the solver layer) and the two codecs (the .ba codec for the
--- foreign-function .ba files, and Depend's staleness check), on top of core
+-- typecheck (with the solver layer) and the two codecs (the .bdpi codec for
+-- foreign-function metadata, and Depend's staleness check), on top of core
 -- and the driver; the backends, the evaluator and the scheduler never run for
 -- a library package. So the key is the object files of exactly those
 -- components, plus the driver's own, found under the dist-newstyle tree the
@@ -185,7 +186,7 @@ commonFlags :: Paths -> [String]
 commonFlags e = ["-stdlib-names", "-bdir", envBuildDir e, "-p", ".", "-vsearch", envBuildDir e] ++ envUserFlags e
 
 outputsOf :: Paths -> Pkg -> [FilePath]
-outputsOf e p = (envBuildDir e </> pkgName p <.> "bo") : [envBuildDir e </> f <.> "ba" | f <- pkgForeigns p]
+outputsOf e p = (envBuildDir e </> pkgName p <.> "bo") : [envBuildDir e </> f <.> "bdpi" | f <- pkgForeigns p]
 
 planOutputs :: Paths -> LibDir -> Plan -> [FilePath]
 planOutputs e ld pl = concatMap (outputsOf e) (planSrc pl) ++ [envBuildDir e </> dst | (_, dst) <- ldExtraOutputs ld]
@@ -253,6 +254,9 @@ runLibraries cfg = do
         }
       opts = shakeOptions
         { shakeFiles = maybe (error "shake-dir") id (cfgShakeDir cfg)
+        -- Previous databases treated foreign metadata as independent file
+        -- rules. Those identities must not survive the grouped producer.
+        , shakeVersion = "libraries-grouped-outputs-1"
         , shakeThreads = cfgJobs cfg
         , shakeChange = ChangeModtimeAndDigest
         , shakeVerbosity = if cfgVerbose cfg then Verbose else Info
@@ -260,16 +264,24 @@ runLibraries cfg = do
         , shakeColor = False
         , shakeProgress = const (pure ())
         }
+  -- Foreign names need not match their package name, so discovery must
+  -- supply the complete output groups before Shake registers file rules.
+  -- Both passes share the oracle database; unchanged discovery is reused.
+  plansRef <- newIORef []
+  shake opts $ do
+    discover <- discoveryRules env
+    action $ do
+      plans <- forP libDirs (discover . ldName)
+      liftIO (writeIORef plansRef plans)
+  plans <- readIORef plansRef
   shake opts $ do
     want (cfgTargets cfg)
-    rules env
+    rules env (M.fromList [(planDir pl, pl) | pl <- plans])
 
-rules :: Paths -> Rules ()
-rules env = do
+discoveryRules :: Paths -> Rules (String -> Action Plan)
+discoveryRules env = do
   let buildDir = envBuildDir env
       libs = envLibs env
-      installDir = envPrefix env </> "lib" </> "Libraries"
-      bloogleDir = envPrefix env </> "lib" </> "bloogle"
 
   -- Discovery: the plan of one library directory. Re-run when any of its
   -- sources, any probe path, the tools, the flags or an earlier directory's
@@ -334,24 +346,27 @@ rules env = do
                       ++ " and no earlier library directory produces them (a stale .bo in " ++ buildDir ++ "?):")
                      : map ("  " ++) orphans))
     pure (Plan name (sortOn pkgName srcPkgs) bins)
+  pure (discover . Discover)
 
-  let askPlan name = discover (Discover name)
+rules :: Paths -> M.Map String Plan -> Rules ()
+rules env registeredPlans = do
+  let buildDir = envBuildDir env
+      libs = envLibs env
+      installDir = envPrefix env </> "lib" </> "Libraries"
+      bloogleDir = envPrefix env </> "lib" </> "bloogle"
+  discover <- discoveryRules env
+  let askPlan name = do
+        current <- discover name
+        unless (M.lookup name registeredPlans == Just current) $
+          fail ("bsc-engine: discovery changed while registering " ++ name ++
+                "; run the build again")
+        pure current
 
-      -- the producer of an output in BUILDDIR, searching the directories in
-      -- BUILD_ORDER (asking a later directory builds the earlier ones first)
-      producerOf :: FilePath -> Action (LibDir, Pkg)
-      producerOf out = go libDirs
-        where
-          go [] = fail ("bsc-engine: no library directory produces " ++ out)
-          go (ld : rest) = do
-            pl <- askPlan (ldName ld)
-            case [p | p <- planSrc pl, out `elem` outputsOf env p] of
-              (p : _) -> pure (ld, p)
-              [] -> go rest
-
-      compile :: FilePath -> Action ()
-      compile out = do
-        (ld, p) <- producerOf out
+      compile :: LibDir -> Pkg -> [FilePath] -> Action ()
+      compile ld p outs = do
+        -- Retain the discovery dependency in the producer and reject an
+        -- output-topology change between discovery and rule registration.
+        _ <- askPlan (ldName ld)
         let dir = libs </> ldName ld
             flags = commonFlags env ++ ldFlags ld ++ concat [fl | (f, fl) <- ldFileFlags ld, f == pkgSrc p]
         compilerKey env (envBsc env)
@@ -361,25 +376,18 @@ rules env = do
         need [buildDir </> i <.> "bo" | i <- pkgImports p]
         liftIO (createDirectoryIfMissing True buildDir)
         command_ [Cwd dir] (envBsc env) (flags ++ [pkgSrc p])
-        -- the co-products (foreign-function .ba files) are declared, and
-        -- their presence checked, so that a missing one is a failure here
-        -- rather than a surprise at install
-        let outs = outputsOf env p
-        produces (filter (/= out) outs)
+        -- The group owns every output. Check all of them before publishing
+        -- the successful action, including foreign-function metadata.
         forM_ outs $ \o -> do
           ok <- liftIO (doesFileExistIO o)
           unless ok $ fail ("bsc-engine: compiling " ++ pkgSrc p ++ " did not produce " ++ o)
 
-  -- every .bo and .ba in BUILDDIR is produced by compiling its package; a
-  -- demanded .ba whose .bo is current but which is itself missing recompiles
-  -- the package (deterministic, so the .bo is unchanged)
-  (buildDir </> "*.bo") %> compile
-  (buildDir </> "*.ba") %> \out -> do
-    (_, p) <- producerOf out
-    let bo = buildDir </> pkgName p <.> "bo"
-    need [bo]
-    ok <- liftIO (doesFileExistIO out)
-    unless ok $ compile bo
+  -- Any missing sibling invalidates the same producer, even when several
+  -- siblings are requested concurrently. `produces` is unsuitable here:
+  -- its extra outputs must never be independently `need`ed by Shake.
+  forM_ libDirs $ \ld ->
+    forM_ (maybe [] planSrc (M.lookup (ldName ld) registeredPlans)) $ \p ->
+      outputsOf env p &%> compile ld p
 
   -- files a directory copies into BUILDDIR as they are (Contexts.defines)
   forM_ libDirs $ \ld -> forM_ (ldExtraOutputs ld) $ \(srcFile, dst) ->

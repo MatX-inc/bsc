@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ERuleAssertion.bs
 code generation for mkGCD starts
+Elaborated module file created: mkGCD.bmod
 Warning: "ERuleAssertion.bs", line 26, column 0: (G0010)
   Rule "Swap" was treated as more urgent than "Subtract". Conflicts:
     "Swap" cannot fire before "Subtract":
@@ -17,4 +18,4 @@ Error: "ERuleAssertion.bs", line 43, column 10: (G0005)
 	       result -> [],
 	       RL_Swap -> [],
 	       RL_Subtract -> [RL_Swap]]
-Elaborated error module file created: mkGCD.ba
+Schedule error file created: mkGCD.bsched

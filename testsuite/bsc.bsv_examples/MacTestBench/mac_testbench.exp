@@ -25,21 +25,21 @@ if { $ctest == 1 } {
 
 # Bluesim can't handle these tests because they import foreign Verilog
 
-set common_objs { mkTbTop.ba
-                  mkMiiPhyLayer.ba
-                  mkMiiPhyLayerRx.ba
-                  mkMiiPhyLayerTx.ba
-                  mkCrcCalculator.ba
-	          module_calculateCrcNext.ba }
+set common_objs { mkTbTop.bsched
+                  mkMiiPhyLayer.bsched
+                  mkMiiPhyLayerRx.bsched
+                  mkMiiPhyLayerTx.bsched
+                  mkCrcCalculator.bsched
+	          module_calculateCrcNext.bsched }
 
 compile_object_pass TbEnv.bsv mkTbEnv -let-gen
 link_objects_fail_error \
-    "mkTbEnv.ba mkScoreboard.ba $common_objs" \
+    "mkTbEnv.bsched mkScoreboard.bsched $common_objs" \
     mkTbEnv G0084 1
 
 compile_object_pass SimpleSwitch.bsv
 link_objects_fail_error \
-    "mkSimpleSwitch.ba mkDummyScoreboard.ba $common_objs" \
+    "mkSimpleSwitch.bsched mkDummyScoreboard.bsched $common_objs" \
     mkSimpleSwitch G0084 1
 
 }

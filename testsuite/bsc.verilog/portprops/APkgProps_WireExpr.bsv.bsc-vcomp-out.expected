@@ -1,6 +1,7 @@
 checking package dependencies
 compiling APkgProps_WireExpr.bsv
 code generation for sysAPkgProps_WireExpr starts
+Elaborated module file created: sysAPkgProps_WireExpr.bmod
 === APackageIOproperties (APkgProps_WireExpr sysAPkgProps_WireExpr):
 Name                         I/O  size props
 same                           O     8 reg
@@ -26,5 +27,5 @@ RST_N                          I     1 unused
 -----
 
 Verilog file created: sysAPkgProps_WireExpr.v
-Elaborated module file created: sysAPkgProps_WireExpr.ba
+Schedule file created: sysAPkgProps_WireExpr.bsched
 All packages are up to date.

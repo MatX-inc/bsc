@@ -1,6 +1,7 @@
 checking package dependencies
 compiling MutEx.bsv
 code generation for mkMutEx starts
+Elaborated module file created: mkMutEx.bmod
 === schedule (MutEx mkMutEx):
 parallel: [esposito: [RL_r1 -> [], RL_r2 -> [], RL_done -> []]]
 order: [RL_r1, RL_r2, RL_done]
@@ -43,5 +44,5 @@ Logical execution order: r1, r2, done
 
 =======================================
 Verilog file created: mkMutEx.v
-Elaborated module file created: mkMutEx.ba
+Schedule file created: mkMutEx.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling LessThanTest_sat-stp.bsv
 code generation for sysLessThanTest starts
+Elaborated module file created: sysLessThanTest.bmod
 Warning: "LessThanTest_sat-stp.bsv", line 10, column 8: (G0010)
   Rule "aa" was treated as more urgent than "bb". Conflicts:
     "aa" cannot fire before "bb": calls to uc.write vs. uc.read
@@ -52,5 +53,5 @@ Logical execution order: aa, ab, bb
 Warning: "LessThanTest_sat-stp.bsv", line 26, column 10: (G0021)
   According to the generated schedule, rule `bb' can never fire.
 Verilog file created: sysLessThanTest.v
-Elaborated module file created: sysLessThanTest.ba
+Schedule file created: sysLessThanTest.bsched
 All packages are up to date.

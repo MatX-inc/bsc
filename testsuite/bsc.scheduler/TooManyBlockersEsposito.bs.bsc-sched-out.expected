@@ -1,6 +1,7 @@
 checking package dependencies
 compiling TooManyBlockersEsposito.bs
 code generation for sysTooManyBlockersEsposito starts
+Elaborated module file created: sysTooManyBlockersEsposito.bmod
 Warning: "TooManyBlockersEsposito.bs", line 14, column 0: (G0010)
   Rule "Blocker" was treated as more urgent than "Victim". Conflicts:
     "Blocker" cannot fire before "Victim": calls to arrs_0.upd vs. arrs_0.upd
@@ -283,5 +284,5 @@ Warning: "TooManyBlockersEsposito.bs", line 25, column 19: (G0021)
 Warning: "TooManyBlockersEsposito.bs", line 25, column 19: (G0021)
   According to the generated schedule, rule `Victim_15' can never fire.
 Verilog file created: sysTooManyBlockersEsposito.v
-Elaborated module file created: sysTooManyBlockersEsposito.ba
+Schedule file created: sysTooManyBlockersEsposito.bsched
 All packages are up to date.

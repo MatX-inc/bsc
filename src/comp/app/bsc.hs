@@ -40,15 +40,15 @@ import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
 import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remapPath,
-                    mkAName, mkVName, mkVPICName, mkDPICName,
+                    mkBModName, mkBSchedName, mkVName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
                     bscSrcSuffix, binSuffix,
                     hSuffix, cSuffix, cxxSuffix, cppSuffix, ccSuffix,
                     objSuffix, useSuffix,
                     genFileName, createEncodedFullFilePath,
-                    getFullFilePath, getRelativeFilePath)
-import FileIOUtil(writeFileCatch, readFileMaybe, removeFileCatch,
+                    getFullFilePath, getRelativeFilePath, moduleArtifactInputs)
+import FileIOUtil(writeFileCatch, readFileMaybe, readBinaryFileCatch, removeFileCatch,
                   readFilePath)
 import TopUtils
 import SystemCheck(doSystemCheck)
@@ -60,10 +60,11 @@ import IOUtil(getEnvDef, progArgs)
 import Exceptions(bsCatch)
 import Flags(
         Flags(..),
-        remapFlagsPaths,
         DumpFlag(..),
         hasDump,
         verbose, extraVerbose, quiet)
+import qualified PhaseConfig as PC
+import qualified PhaseConfigLegacy as PL
 import FlagsDecode(
         Decoded(..),
         decodeArgs,
@@ -74,11 +75,12 @@ import FlagsDecode(
         exitWithHelp,
         exitWithHelpHidden)
 import Error(internalError, ErrMsg(..),
-             ErrorHandle, initErrorHandle, setErrorHandleFlags,
+             ErrorHandle, initErrorHandle, setErrorHandleFlags, withErrorHandleFlags,
              bsError, bsWarning, bsMessage,
              exitFail, exitOK, exitFailWith)
 import Position(noPosition, cmdPosition, remapPositionFile)
 import CVPrint
+import CSyntax(CQType, CImportedSignature)
 import Id
 import Backend
 import Pragma
@@ -87,7 +89,7 @@ import Deriving(derive)
 import SymTab
 import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
                   getPackagesUsedInTypes)
-import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
+import TypeCheck(cCtxReduceIO, cTypeCheck, CATFCache, mergeCATFCaches)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
@@ -115,7 +117,11 @@ import ITransform(iTransform)
 import IInline(iInline)
 import IInlineFmt(iInlineFmt)
 import Params(iParams)
-import ASyntax(APackage(..), ASPackage(..),
+import AModule(AModuleInfo(..), AModule(..), ASModule(..), BSched(..),
+               toBSchedInfo, toBSchedErrInfo)
+import ASchedulePatch(diffASchedulePatch, applyASchedulePatch)
+import BinData(encodeWith)
+import ASyntax(APackage(..), ASPackage(..), AVInst,
                ppeAPackage,
                getAPackageFieldInfos)
 import ASyntaxUtil(getForeignCallNames)
@@ -126,6 +132,7 @@ import ARankMethCalls(aRankMethCalls)
 import AState(aState)
 import ARenameIO(aRenameIO)
 import ASchedule(AScheduleInfo(..), AScheduleErrInfo(..), aSchedule)
+import AScheduleInfo(erdbToList)
 import RSchedule(ratInUseOrder)
 import AAddScheduleDefs(aAddScheduleDefs)
 import APaths(aPathsPreSched, aPathsPostSched)
@@ -139,9 +146,11 @@ import VFinalCleanup(finalCleanup)
 import Synthesize(aSynthesize)
 import ABin(ABin(..), ABinModInfo(..), ABinForeignFuncInfo(..),
            ABinModSchedErrInfo(..))
-import ABinUtil(readAndCheckABin, readAndCheckABinPathCatch, getABIHierarchy,
+import ABinUtil(readAndCheckABin, readAndCheckABinPathCatch, readAndCheckForeignPathCatch, getABIHierarchy,
                 assertNoSchedErr)
-import GenABin(genABinFile)
+import GenModule(genBModFile, genBSchedFile, readBModFile, reconstructModule,
+                 diffAMaterializePatch)
+import AScheduleRelations(methodBeforeRuleEdges)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap,
                         mkImportDeclarations, isPoly)
 import VPIWrappers(genVPIWrappers, genVPIRegistrationArray)
@@ -166,7 +175,8 @@ import ATaskSplice(aTaskSplice)
 import ADumpSchedule (MethodDumpInfo, aDumpSchedule, aDumpScheduleErr,
                       dumpMethodInfo, dumpMethodBVIInfo)
 import ANoInline (aNoInline)
-import AAddSchedAssumps(aAddSchedAssumps,aAddCFConditionWires)
+import AAddSchedAssumps(getCFConditionWireTemplate)
+import ASchedMaterialize(aAddSchedAssumpsWith, aAddCFConditionWiresWith)
 import ARemoveAssumps(aRemoveAssumps)
 import ADropUndet(aDropUndet)
 import SAT(checkSATFlags)
@@ -266,6 +276,10 @@ hmain args = do
             do { setFlags flags; doWarnings; showPreamble flags;
                  codeGen errh flags mods abinFiles;
                  exitOK errh }
+        DSched flags filename ->
+            do { setFlags flags; doWarnings; showPreamble flags;
+                 scheduleStoredModule errh flags filename;
+                 exitOK errh }
 
 
 -- -print-intern-order (a trace flag: it changes no artifact): every
@@ -350,7 +364,7 @@ compile_with_deps errh flags name = do
 
 compile_no_deps :: ErrorHandle -> Flags -> String -> IO (Bool)
 compile_no_deps errh flags name = do
-    (pkg, t, parse_warns) <- parseFile errh flags False name
+    (pkg, t, parse_warns) <- parseFile errh (PC.parseConfig flags) False name
 
     -- Show warnings for this file
     when (not $ null parse_warns) $ bsWarning errh parse_warns
@@ -360,45 +374,29 @@ compile_no_deps errh flags name = do
 
 -------------------------------------------------------------------------
 
-compilePackage ::
-    ErrorHandle ->
-    Flags ->
-    TimeInfo ->
-    BinMap HeapData ->
-    HashMap ->
-    String ->
-    CPackage ->
-    IO (Bool, BinMap HeapData, HashMap)
-compilePackage
-    errh
-    flags                -- user switches
-    tStart
-    binmap0
-    hashmap0
-    name_orig -- String --
-    min@(CPackage pkgId _ _ _ _ _ _) = do
+-- Frontend phase boundaries retain only their own configuration.  The legacy
+-- algorithms still accept Flags; constructing that view here prevents options
+-- belonging to later phases from reaching preparation, typechecking or lowering.
+data PreparedPackage = PreparedPackage
+    { preparedContext :: CPackage,
+      preparedInstances :: CPackage,
+      preparedSymTab :: SymTab,
+      preparedImports :: [CImportedSignature],
+      preparedBinMap :: BinMap HeapData,
+      preparedHashMap :: HashMap,
+      preparedFunctions :: [(Id, Id, Id, [Id], CQType)],
+      preparedWrappers :: [WrapInfo],
+      preparedTypePackages :: S.Set Id,
+      preparedContextPackages :: S.Set Id,
+      preparedContextCache :: CATFCache
+    }
 
-    -- Set syntax mode for the compilation pipeline (error messages, printing, etc.)
-    setSyntax (if hasDotSuf bscSrcSuffix name_orig then CLASSIC else BSV)
-
-    -- Encode the file path for internal use
-    pwd <- getCurrentDirectory
-    let name = createEncodedFullFilePath name_orig pwd
-        dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
-
-    clkTime <- getClockTime
-    epochTime <- getPOSIXTime
-
-    -- Values needed for the Environment module
-    let env =
-            [("compilerVersion",iMkString $ bscVersionStr True),
-             ("date",                iMkString $ show clkTime),
-             ("epochTime",      iMkLitSize 32 $ floor epochTime),
-             ("buildVersion",   iMkLitSize 32 $ buildnum),
-             ("genPackageName", iMkString $ getIdBaseString pkgId),
-             ("testAssert",        iMkRealBool $ testAssert flags)
-            ]
-
+preparePackage :: ErrorHandle -> PC.PhaseConfig PC.ReduceFlags ->
+                  TimeInfo -> DumpNames -> BinMap HeapData -> HashMap ->
+                  CPackage -> IO (TimeInfo, PreparedPackage)
+preparePackage errh config tStart dumpnames binmap0 hashmap0 min =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
     start flags DFimports
     -- Read imported signatures
     (mimp@(CPackage _ _ imps impsigs _ _ _), binmap, hashmap)
@@ -479,15 +477,28 @@ compilePackage
     let minst = cConvInst errh symt mctx
     t <- dump errh flags t DFconvinst dumpnames minst
 
-    -- Type check and insert dictionaries
-    start flags DFtypecheck
-    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh flags symt minst
-    --putStr (ppReadable mod)
-    t <- dump errh flags t DFtypecheck dumpnames mod
+    return (t, PreparedPackage mctx minst symt impsigs binmap hashmap
+                               funcs gens pkgsUsedInTypes
+                               pkgsUsedInCtxReduce atfCacheFromCtxReduce)
 
-    --when (early flags) $ return ()
-    let prefix = dirName name ++ "/"
+typeCheckPackage :: ErrorHandle -> PC.PhaseConfig PC.TypecheckFlags ->
+                    DumpFlag -> TimeInfo -> DumpNames -> SymTab -> CPackage ->
+                    IO (TimeInfo, CPackage, Bool, S.Set Id, CATFCache)
+typeCheckPackage errh config stage tStart dumpnames symt pkg =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
+    start flags stage
+    (checked, errors, usedPackages, atfCache) <- cTypeCheck errh flags symt pkg
+    t <- dump errh flags tStart stage dumpnames checked
+    return (t, checked, errors, usedPackages, atfCache)
 
+internalPackage :: ErrorHandle -> PC.PhaseConfig PC.InternalFlags ->
+                TimeInfo -> DumpNames -> String -> SymTab -> CATFCache ->
+                CPackage -> IO (TimeInfo, IPackage HeapData)
+internalPackage errh config tStart dumpnames prefix symt combinedATFCache mod =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
+        t = tStart
     -- Generate wrapper info for foreign function imports
     -- (this always happens, even when not generating for modules)
     start flags DFgenforeign
@@ -526,12 +537,80 @@ compilePackage
     -- Convert to internal abstract syntax
     --------------------------------------------
     start flags DFinternal
-    let combinedATFCache = mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce
     imod <- iConvPackage errh flags symt combinedATFCache lifted_defs mod_lifted
     t <- dump errh flags t DFinternal dumpnames imod
     when (showISyntax flags) (putStrLnF (show imod))
-    iPCheck flags symt imod "internal"
+    iPCheck config symt imod "internal"
     stats flags DFinternal imod
+
+    return (t, imod)
+
+-- The Environment package is linked during conversion to internal syntax.
+-- Capture its time values at the same point in the driver as before, with only
+-- Internal phase options visible.
+packageEnvironment :: PC.PhaseConfig PC.InternalFlags -> Id -> IO [(String, IExpr a)]
+packageEnvironment config pkgId = do
+    clkTime <- getClockTime
+    epochTime <- getPOSIXTime
+    return [("compilerVersion", iMkString $ bscVersionStr True),
+            ("date",            iMkString $ show clkTime),
+            ("epochTime",       iMkLitSize 32 $ floor epochTime),
+            ("buildVersion",    iMkLitSize 32 $ buildnum),
+            ("genPackageName",  iMkString $ getIdBaseString pkgId),
+            ("testAssert",      iMkRealBool $ PC.internalTestAssert (PC.phaseFlags config))]
+
+compilePackage ::
+    ErrorHandle ->
+    Flags ->
+    TimeInfo ->
+    BinMap HeapData ->
+    HashMap ->
+    String ->
+    CPackage ->
+    IO (Bool, BinMap HeapData, HashMap)
+compilePackage
+    errh
+    flags                -- user switches
+    tStart
+    binmap0
+    hashmap0
+    name_orig -- String --
+    min@(CPackage pkgId _ _ _ _ _ _) = do
+
+    -- Set syntax mode for the compilation pipeline (error messages, printing, etc.)
+    setSyntax (if hasDotSuf bscSrcSuffix name_orig then CLASSIC else BSV)
+
+    -- Encode the file path for internal use
+    pwd <- getCurrentDirectory
+    let name = createEncodedFullFilePath name_orig pwd
+        dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
+
+    let prepareConfig = PC.reduceConfig flags
+        typeCheckConfig = PC.typecheckConfig flags
+        internalConfig = PC.internalConfig flags
+    env <- packageEnvironment internalConfig pkgId
+
+    (t, PreparedPackage
+          { preparedContext = mctx,
+            preparedInstances = minst,
+            preparedSymTab = symt,
+            preparedImports = impsigs,
+            preparedBinMap = binmap,
+            preparedHashMap = hashmap,
+            preparedFunctions = funcs,
+            preparedWrappers = gens,
+            preparedTypePackages = pkgsUsedInTypes,
+            preparedContextPackages = pkgsUsedInCtxReduce,
+            preparedContextCache = atfCacheFromCtxReduce }) <-
+        preparePackage errh prepareConfig tStart dumpnames binmap0 hashmap0 min
+
+    (t, mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <-
+        typeCheckPackage errh typeCheckConfig DFtypecheck t dumpnames symt minst
+
+    let prefix = dirName name ++ "/"
+        combinedATFCache = mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce
+    (t, imod) <- internalPackage errh internalConfig t dumpnames prefix symt
+                             combinedATFCache mod
 
     -- Read binary interface files
     start flags DFbinary
@@ -593,18 +672,18 @@ compilePackage
     let dictRedirects = mkDictRedirects dictBuckets imod binmods
     let (imodf, alldefsList) = fixupDefs dictRedirects imod binmods
     let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
-    iPCheck flags symt imodf "fixup"
+    iPCheck internalConfig symt imodf "fixup"
     t <- dump errh flags t DFfixup dumpnames imodf
 
     start flags DFisimpdicts
     let imodsd = iSimpDicts imodf
-    iPCheck flags symt imodsd "isimpdicts"
+    iPCheck internalConfig symt imodsd "isimpdicts"
     t <- dump errh flags t DFisimpdicts dumpnames imodsd
 
     start flags DFisimplify
     let imods :: IPackage HeapData
         imods = iSimplify imodsd
-    iPCheck flags symt imods "isimplify"
+    iPCheck internalConfig symt imods "isimplify"
     t <- dump errh flags t DFisimplify dumpnames imods
     stats flags DFisimplify imods
 
@@ -693,7 +772,8 @@ compilePackage
             -- but multiple-error-reporting chose to keep going;
             -- since it will already appear as a user error, no need for
             -- an internal error
-            (idef, ok2) <- compileCDefToIDef errh flags dumpnames' symt imods def
+            (idef, ok2) <- compileCDefToIDef errh prepareConfig typeCheckConfig internalConfig
+                                dumpnames' symt imods def
 
             t <- getNow
             start flags DFwrapper_fixup
@@ -783,11 +863,46 @@ genModule
                   in  getPosition i
     flags <- updateFlags errh def_pos [ s | PPoptions ss <- pps, s <- ss ] flags0
 
-    let modstr = getIdString (unQualId (mod_nm wi))
+    withErrorHandleFlags errh flags $ do
+        let modstr = getIdString (unQualId (mod_nm wi))
 
-    when (verbose flags) $ putStrLnF ("*****")
-    when (showCodeGen flags || verbose flags) $ putStrLnF ("code generation for " ++ modstr ++ " starts")
-    t <- getNow
+        when (verbose flags) $ putStrLnF ("*****")
+        when (showCodeGen flags || verbose flags) $ putStrLnF ("code generation for " ++ modstr ++ " starts")
+        t <- getNow
+
+        let info = AModuleInfo {
+                       ami_name = mod_nm wi,
+                       ami_original_type = orig_cqt wi,
+                       ami_pragmas = [p | p <- pps, not (isOptionsPragma p)],
+                       ami_is_function = fwrapper,
+                       ami_source_prefix = prefix,
+                       ami_source_package = srcName
+                   }
+        (t, amod) <- elaborateModule errh (PC.elabConfig flags) info dumpnames symt alldefs atf_cache t def
+        target <- if genABin flags
+                  then fmap Just (writeBMod errh (PC.elabConfig flags) amod)
+                  else return Nothing
+        (t, scheduled) <- scheduleModule errh (PC.schedConfig flags) dumpnames target t amod
+        (t, materialized) <- materializeModule errh (PC.materializeConfig flags) dumpnames t
+                                (amod_cf_template amod) scheduled
+        emitModule errh flags wi dumpnames symt target amod scheduled t materialized
+
+
+isOptionsPragma :: PProp -> Bool
+isOptionsPragma (PPoptions _) = True
+isOptionsPragma _ = False
+
+
+-- Elaborate to the unscheduled checkpoint. The phase ends after ASyntax
+-- cleanup; path analysis belongs to scheduling and is rebuilt for each run.
+elaborateModule :: ErrorHandle -> PC.PhaseConfig PC.ElabFlags -> AModuleInfo -> DumpNames -> SymTab ->
+                   M.Map Id (IExpr HeapData) -> IATFCache -> TimeInfo ->
+                   IDef HeapData -> IO (TimeInfo, AModule)
+elaborateModule errh config info dumpnames symt alldefs atf_cache t def =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
+        pps = ami_pragmas info
+        fwrapper = ami_is_function info
 
     -- "run" it
     start flags DFexpanded
@@ -912,6 +1027,28 @@ genModule
     sal_ctx <- convAPackageToSAL errh flags amod_clean
     t <- dump errh flags t DFdumpSAL dumpnames sal_ctx
 
+    -- Preserve exactly the interface facts used by the existing wrapper,
+    -- rather than trying to recover them from the scheduled ASyntax.
+    let true_ifc_ids = [ i | IEFace i _ (Just (e, _)) _ _ _ <- ifc,
+                            isTrue e || isAlwaysRdy pps i ]
+    cf_template <- getCFConditionWireTemplate errh symt alldefs flags amod_clean
+    return (t, AModule info amod_clean true_ifc_ids cf_template)
+
+
+-- Schedule and validate the module, including the schedule-dependent path
+-- information. Backend lowering is separate so it can follow reconstruction
+-- from a module and its saved schedule.
+scheduleModule :: ErrorHandle -> PC.PhaseConfig PC.SchedFlags -> DumpNames -> Maybe (FilePath, String) ->
+                  TimeInfo -> AModule ->
+                  IO (TimeInfo, ASModule)
+scheduleModule errh config dumpnames target t amod =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
+        info = amod_info amod
+        pps = ami_pragmas info
+        prefix = ami_source_prefix info
+        amod_clean = amod_body amod
+
     -- Build path graph for everything except rules
     start flags DFpathsPreSched
     (pathGraphInfo, urgency_pairs) <- aPathsPreSched errh flags amod_clean
@@ -933,12 +1070,12 @@ genModule
                                                   amod_clean schedule_info
                                  dump errh flags t DFdumpschedule dumpnames ()
                          else return t
-                    -- generate a .ba file, if requested
-                    t <- if (genABin flags)
-                         then writeABinSchedErr errh pps flags dumpnames t
-                                  prefix modstr srcName (orig_cqt wi)
-                                  schedule_info amod_clean
-                         else return t
+                    -- Preserve the failed schedule alongside its input.
+                    t <- case target of
+                           Just (filename, hash) ->
+                             writeBSchedError errh config dumpnames t filename
+                                              hash schedule_info
+                           Nothing -> return t
                     exitFail errh
     t <- dump errh flags t DFschedule dumpnames (asi_schedule schedule_info)
     stats flags DFschedule amod_sched
@@ -978,6 +1115,32 @@ genModule
     vPathInfo <- aPathsPostSched flags pps amod_check pathGraphInfo schedule_final
     t <- dump errh flags t DFpathsPostSched dumpnames vPathInfo
 
+    return (t, ASModule {
+                   smod_info = info,
+                   smod_body = amod_check,
+                   smod_schedule = schedule_info_updated,
+                   smod_method_order =
+                       if relaxMethodEarliness flags then [] else
+                           methodBeforeRuleEdges amod_clean
+                               (asi_rule_uses_map schedule_info_updated),
+                   smod_wrapper_schedule = asi_v_sched_info schedule_info,
+                   smod_method_dump = methodConflict,
+                   smod_path_info = vPathInfo,
+                   smod_true_methods = amod_true_methods amod
+               })
+
+
+-- Lower a validated scheduled module for emission. The primitive template
+-- was captured in .bmod, so these passes need no evaluator environment.
+materializeModule :: ErrorHandle -> PC.PhaseConfig PC.MaterializeFlags -> DumpNames -> TimeInfo -> Maybe AVInst -> ASModule ->
+                     IO (TimeInfo, ASModule)
+materializeModule errh config dumpnames t cf_template scheduled =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
+        amod_check = smod_body scheduled
+        schedule_info_updated = smod_schedule scheduled
+        schedule_final = asi_schedule schedule_info_updated
+
     -- lift all no-inline func calls and assign instance names to them
     start flags DFnoinline
     let amod_noinline = aNoInline flags amod_check
@@ -985,11 +1148,11 @@ genModule
 
     -- add scheduling assumptions (ME, CF, etc.) to APackage (in two steps)
     start flags DFaddSchedAssumps
-    (amod_wires, sched_info')
-        <- aAddCFConditionWires errh symt alldefs flags
-                                amod_noinline schedule_info_updated
+    let (amod_wires, sched_info') =
+            aAddCFConditionWiresWith cf_template amod_noinline schedule_info_updated
     let (amod_assumps, sched_info'') =
-            aAddSchedAssumps amod_wires schedule_final sched_info'
+            aAddSchedAssumpsWith (remapPositionFile (remapPathPrefix flags))
+                                amod_wires schedule_final sched_info'
     aCheck flags amod_assumps "addSchedAssumps"
     t <- dump errh flags t DFaddSchedAssumps dumpnames
              (amod_assumps,
@@ -1011,6 +1174,27 @@ genModule
 
     -- the amod doesn't change beyond this point
     let amod_final = amod_no_undet
+
+    return (t, scheduled {
+                   smod_body = amod_final,
+                   smod_schedule = sched_info''
+               })
+
+
+-- Keep output and the legacy wrapper continuation outside the phase records.
+emitModule :: ErrorHandle -> Flags -> WrapInfo -> DumpNames -> SymTab ->
+              Maybe (FilePath, String) -> AModule -> ASModule -> TimeInfo ->
+              ASModule -> IO CDefn
+emitModule errh flags wi dumpnames symt target amod unlowered t scheduled = do
+    let info = smod_info scheduled
+        pps = ami_pragmas info
+        prefix = ami_source_prefix info
+        modstr = getIdString (unQualId (ami_name info))
+        fwrapper = ami_is_function info
+        amod_final = smod_body scheduled
+        sched_info'' = smod_schedule scheduled
+        methodConflict = smod_method_dump scheduled
+        vPathInfo = smod_path_info scheduled
 
     -- save wireinfo
     let wireinfo = apkg_external_wires amod_final
@@ -1044,27 +1228,26 @@ genModule
             getIOPropsA flags pps (Just sched_info'') amod_final
     t <- dump errh flags t DFAPackageIOproperties dumpnames aioprops
 
-    -- With -elab-only, the Verilog backend stops at the .ba, like the
+    -- With -elab-only, the Verilog backend stops at the artifact pair, like the
     -- Bluesim backend: genModuleVerilog is not run at all, and a later
-    -- -c or link generates the .v from the .ba.  The wrapper keeps its
+    -- -c or link generates the .v from the pair.  The wrapper keeps its
     -- port properties either way -- they come from the APackage above,
     -- not from the netlist -- so a parent compiled against an
     -- -elab-only .bo deduces exactly what the direct compile deduces.
     t <- if (backend flags == Just Verilog && not (elabOnly flags))
          then do (t', _vfilenames)
                      <- genModuleVerilog
-                           errh pps flags dumpnames t prefix modstr
+                           errh pps (PC.verilogGenConfig flags) dumpnames t prefix modstr
                            blurb methodConflictBlurb methodConflictBVI
                            vPathInfo sched_info'' aioprops amod_final
                  return t'
          else return t
 
-    t <- if (genABin flags)
-         then writeABin errh pps flags dumpnames t prefix
-                  modstr srcName (orig_cqt wi)
-                  sched_info'' methodConflict vPathInfo
-                  amod_final
-         else return t
+    t <- case target of
+           Just output -> writeScheduledModule errh (PC.schedConfig flags)
+                              (PC.materializeConfig flags) dumpnames t output
+                              amod unlowered scheduled
+           Nothing -> return t
 
     -- Wrapper generation
     start flags DFwrappergen
@@ -1072,11 +1255,11 @@ genModule
     -- ids of value methods with constant True output
     -- (any rdy signals in this list don't need to be wired up
     -- in the wrapper; it can assume a value of 1)
-    let true_ifc_ids  = [ i | IEFace i _ (Just (e, t)) _ _ _ <- ifc, isTrue e || isAlwaysRdy pps i ]
+    let true_ifc_ids = smod_true_methods scheduled
     def <- (deffun wi)
                  fwrapper
                  wireinfo
-                 (asi_v_sched_info schedule_info)
+                 (smod_wrapper_schedule scheduled)
                  vPathInfo
                  veriPortProps
                  symt
@@ -1088,78 +1271,120 @@ genModule
     return (def)
 
 
-writeABin :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
-             String -> String -> String -> CQType ->
-             AScheduleInfo -> MethodDumpInfo -> VPathInfo ->
-             APackage -> IO (TimeInfo)
-writeABin errh pps flags dumpnames t prefix modstr srcName oqt
-          sched_info methodConflict vPathInfo amod =
-    do
-       start flags DFwriteABin
-
-       -- Don't generate .ba file if the backend is Bluesim and the
-       -- module has features not supported by Bluesim.
-       -- XXX For Verilog, this currently does nothing, but it could be
-       -- XXX made to taint the .ba and issue a warning.
-       amod_for_abin
-           <- simCheckPackage errh (backend flags == Just Bluesim) amod
-
-       -- generate the abin file
-       let afilename = mkAName (bdir flags) prefix modstr
-           afilename_rel = getRelativeFilePath afilename
-           backend = apkg_backend amod_for_abin
-           abinPrintPrefix =
-              case (backend) of
-                  Nothing -> "Elaborated module file created: "
-                  Just be ->
-                      "Elaborated " ++ ppString be ++ " module file created: "
-           remapP = remapPositionFile (remapPathPrefix flags)
-           remapS = remapPath (remapPathPrefix flags)
-           modinfo = ABinModInfo {
-                          abmi_path = remapS prefix,
-                          abmi_src_name = remapS srcName,
-                          --abmi_time = now,
-                          abmi_apkg        = amod_for_abin,
-                          abmi_aschedinfo  = sched_info,
-                          abmi_pps         = pps,
-                          abmi_oqt         = oqt,
-                          abmi_method_dump = methodConflict,
-                          abmi_pathinfo = vPathInfo,
-                          abmi_flags       = remapFlagsPaths remapPath flags
-                     }
-           abin = ABinMod modinfo (bscVersionStr True)
-       genABinFile errh remapP afilename abin
-       unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
-       dump errh flags t DFwriteABin dumpnames afilename
+-- Write the evaluator-independent input before scheduling. The hash binds
+-- every successful or failed .bsched to these exact bytes.
+writeBMod :: ErrorHandle -> PC.PhaseConfig PC.ElabFlags -> AModule -> IO (FilePath, String)
+writeBMod errh config amod =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
+        info = amod_info amod
+        prefix = ami_source_prefix info
+        modstr = getIdString (unQualId (ami_name info))
+        filename = mkBModName (bdir flags) prefix modstr
+        scheduleFilename = mkBSchedName (bdir flags) prefix modstr
+        remapP = remapPositionFile (remapPathPrefix flags)
+        remapS = remapPath (remapPathPrefix flags)
+        storedInfo = info {
+            ami_source_prefix = remapS prefix,
+            ami_source_package = remapS (ami_source_package info)
+        }
+    hash <- genBModFile errh remapP filename (amod { amod_info = storedInfo })
+    unless (quiet flags) $ putStrLnF $
+        "Elaborated module file created: " ++ getRelativeFilePath filename
+    return (scheduleFilename, hash)
 
 
-writeABinSchedErr :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
-                     String -> String -> String -> CQType ->
-                     AScheduleErrInfo -> APackage -> IO (TimeInfo)
-writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
-                  sched_info amod =
-    do
-       start flags DFwriteABin
+writeScheduledModule :: ErrorHandle -> PC.PhaseConfig PC.SchedFlags ->
+                        PC.PhaseConfig PC.MaterializeFlags -> DumpNames -> TimeInfo ->
+                        (FilePath, String) -> AModule -> ASModule -> ASModule ->
+                        IO TimeInfo
+writeScheduledModule errh config materializeConfig dumpnames t (filename, hash) amod scheduled lowered =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
+        remapP = remapPositionFile (remapPathPrefix flags)
+        before = amod_body amod
+        after = smod_body scheduled
+        impossible message = internalError ("writeScheduledModule: " ++ message)
+    start flags DFwriteABin
+    checked <- simCheckPackage errh (backend flags == Just Bluesim) (smod_body lowered)
+    patch <- either impossible return (diffASchedulePatch before after)
+    replayed <- either impossible return (applyASchedulePatch before patch)
+    -- Eq on ASyntax deliberately ignores some IDs/source metadata. Check
+    -- the full encoding too before committing the compact representation.
+    unless (encodeWith remapP replayed == encodeWith remapP after) $
+        impossible "schedule patch changed encoded module metadata"
+    materialization <- either impossible return
+        (diffAMaterializePatch remapP after checked)
+    let originalSchedule = toBSchedInfo (smod_schedule scheduled)
+        finalSchedule = toBSchedInfo (smod_schedule lowered)
+        changedSchedule
+            | encodeWith remapP originalSchedule == encodeWith remapP finalSchedule = Nothing
+            | otherwise = Just finalSchedule
+    let result = BSched {
+            bs_module_hash = hash,
+            bs_patch = patch,
+            bs_schedule = originalSchedule,
+            bs_materialization = materialization,
+            bs_final_schedule = changedSchedule,
+            bs_method_order = smod_method_order scheduled,
+            bs_wrapper_schedule = smod_wrapper_schedule scheduled,
+            bs_method_dump = smod_method_dump scheduled,
+            bs_path_info = smod_path_info scheduled,
+            bs_backend = apkg_backend checked
+        }
+    reconstructed <- either impossible return (reconstructModule errh materializeConfig amod result)
+    case reconstructed of
+      ABinMod modinfo _ -> do
+        let restored = abmi_aschedinfo modinfo
+            direct = smod_schedule lowered
+        unless (encodeWith remapP (abmi_apkg modinfo, toBSchedInfo restored) ==
+                encodeWith remapP (checked, toBSchedInfo direct)) $
+            impossible "reconstructed module differs from direct compilation"
+        -- The reconstructed cache may use a different source-position
+        -- representative for the same Id. Compare every relation using Id
+        -- equality, as its consumers do, while checking all saved fields
+        -- byte for byte above.
+        unless (erdbToList (asi_exclusive_rules_db restored) ==
+                erdbToList (asi_exclusive_rules_db direct)) $
+            impossible "reconstructed rule exclusivity differs from direct compilation"
+      _ -> impossible "successful scheduling reconstructed an error artifact"
+    genBSchedFile errh remapP filename result
+    unless (quiet flags) $ putStrLnF $
+        "Schedule file created: " ++ getRelativeFilePath filename
+    dump errh flags t DFwriteABin dumpnames filename
 
-       -- generate the abin file
-       let afilename = mkAName (bdir flags) prefix modstr
-           afilename_rel = getRelativeFilePath afilename
-           abinPrintPrefix = "Elaborated error module file created: "
-           remapP = remapPositionFile (remapPathPrefix flags)
-           remapS = remapPath (remapPathPrefix flags)
-           modinfo = ABinModSchedErrInfo {
-                          abmsei_path          = remapS prefix,
-                          abmsei_src_name      = remapS srcName,
-                          abmsei_apkg          = amod,
-                          abmsei_aschederrinfo = sched_info,
-                          abmsei_pps           = pps,
-                          abmsei_oqt           = oqt,
-                          abmsei_flags         = remapFlagsPaths remapPath flags
-                     }
-           abin = ABinModSchedErr modinfo (bscVersionStr True)
-       genABinFile errh remapP afilename abin
-       unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
-       dump errh flags t DFwriteABin dumpnames afilename
+
+writeBSchedError :: ErrorHandle -> PC.PhaseConfig PC.SchedFlags -> DumpNames -> TimeInfo ->
+                    FilePath -> String -> AScheduleErrInfo -> IO TimeInfo
+writeBSchedError errh config dumpnames t filename hash schedule =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
+    start flags DFwriteABin
+    let remapP = remapPositionFile (remapPathPrefix flags)
+    genBSchedFile errh remapP filename (BSchedError hash (toBSchedErrInfo schedule))
+    unless (quiet flags) $ putStrLnF $
+        "Schedule error file created: " ++ getRelativeFilePath filename
+    dump errh flags t DFwriteABin dumpnames filename
+
+
+-- A saved elaboration can be scheduled without loading any .bo files or
+-- constructing an evaluator. The schedule is always written beside its
+-- input so the pair remains independently loadable.
+scheduleStoredModule :: ErrorHandle -> Flags -> FilePath -> IO ()
+scheduleStoredModule errh invocation filename = do
+    flags <- checkSATFlags errh invocation
+    bytes <- readBinaryFileCatch errh noPosition filename
+    let (amod, hash) = readBModFile errh filename bytes
+        info = amod_info amod
+        target = (dropSuf filename ++ ".bsched", hash)
+        modstr = getIdString (unQualId (ami_name info))
+        dumpnames = (Nothing, Just (ami_source_package info), Just modstr)
+    t <- getNow
+    (t, scheduled) <- scheduleModule errh (PC.schedConfig flags) dumpnames (Just target) t amod
+    (t, lowered) <- materializeModule errh (PC.materializeConfig flags) dumpnames t (amod_cf_template amod) scheduled
+    _ <- writeScheduledModule errh (PC.schedConfig flags)
+             (PC.materializeConfig flags) dumpnames t target amod scheduled lowered
+    return ()
 
 
 -- ===============
@@ -1167,7 +1392,7 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
 
 genModuleVerilog :: ErrorHandle
                  -> [PProp]
-                 -> Flags
+                 -> PC.PhaseConfig PC.VerilogGenFlags
                  -> DumpNames
                  -> TimeInfo
                  -> String -- prefix
@@ -1181,11 +1406,12 @@ genModuleVerilog :: ErrorHandle
                  -> APackage
                  -> IO (TimeInfo,
                         [VFileName]) -- the Verilog files written
-genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
+genModuleVerilog errh pprops config dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  aioprops atsPackage =
-    do
-       -- Read in foreign function info from .ba files for
+    withErrorHandleFlags errh (PL.legacyFlags config) $ do
+       let flags = PL.legacyFlags config
+       -- Read in foreign function info from .bdpi files (or legacy .ba) for
        -- all foreign functions used in the design, and build a
        -- map to be used when generating verilog
        start flags DFforeignMap
@@ -1193,7 +1419,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
            readABin ffname =
                let err = (noPosition,
                           EMissingABinForeignFuncFile ffname moduleName)
-               in  readAndCheckABinPathCatch errh
+               in  readAndCheckForeignPathCatch errh flags
                        (verbose flags) (ifcPath flags) (Just Verilog)
                        ffname err
        abis <- mapM readABin foreign_func_names
@@ -1398,16 +1624,17 @@ writeVFileCatch errh flags (VFileName fn) s = do
 -- ===============
 -- genModuleC
 
--- might as well inline this into simLink (no need to be separate)
+-- Generate C++ sources before host compilation and linking.
 genModuleC :: ErrorHandle
-           -> Flags
+           -> PC.PhaseConfig PC.BluesimGenFlags
            -> DumpNames
            -> TimeInfo
            -> String
            -> [(String, ABin)]
            -> IO (TimeInfo, [String], [String], TimeInfo)
-genModuleC errh flags dumpnames time0 toplevel abis =
-    do
+genModuleC errh config dumpnames time0 toplevel abis =
+    withErrorHandleFlags errh (PL.legacyFlags config) $ do
+       let flags = PL.legacyFlags config
        pwd <- getCurrentDirectory
        let name = createEncodedFullFilePath "placeholder" pwd
            prefix = (dirName name) ++ "/"
@@ -1536,12 +1763,12 @@ genModuleC errh flags dumpnames time0 toplevel abis =
 -- ===============
 -- CodeGen
 
--- The -c mode: generate code for a module from its elaborated (.ba)
--- file, the middle stage of the three-stage flow (elaborate -> codegen ->
+-- The -c mode: generate code for a module from its .bmod/.bsched
+-- pair, the middle stage of the three-stage flow (elaborate -> codegen ->
 -- link).  For Bluesim this reuses the front half of simLink, which under
 -- blockCodegen generates each module's C++ as a reusable block (no
 -- schedule or top-level wrapper) and skips compiling and linking.  For
--- Verilog each named module's .v is generated from its own .ba alone.
+-- Verilog each named module's .v is generated from its own pair alone.
 codeGen :: ErrorHandle -> Flags -> [String] -> [String] -> IO ()
 codeGen errh flags mods abinFiles =
     case (backend flags) of
@@ -1549,15 +1776,16 @@ codeGen errh flags mods abinFiles =
       _ -> let flags' = flags { blockCodegen = True }
            in  mapM_ (\m -> simLink errh flags' m abinFiles []) mods
 
--- Generate each named module's Verilog from its elaborated (.ba) file:
--- from a .ba given on the command line when one defines the module, and
+-- Generate each named module's Verilog from its module/schedule pair:
+-- from an artifact given on the command line when it defines the module, and
 -- otherwise found by module name on the search path.  Root-only, which
 -- is Verilog's native granularity: a module's .v needs only its own
 -- ABinModInfo (children are referenced by name).
 vCodeGen :: ErrorHandle -> Flags -> [String] -> [String] -> IO ()
 vCodeGen errh flags mods afilenames = do
     tStart <- getNow
-    user_abis <- mapM (readAndCheckABin errh (Just Verilog)) (nub afilenames)
+    user_abis <- mapM (readAndCheckABin errh flags (Just Verilog))
+                     (nub (map (last . moduleArtifactInputs) afilenames))
     let abinModName (ABinMod mi _) =
             getIdString (unQualId (apkg_name (abmi_apkg mi)))
         abinModName _ = ""
@@ -1567,7 +1795,7 @@ vCodeGen errh flags mods afilenames = do
               ((fn, abin):_) -> return (fn, abin)
               [] -> let err = (cmdPosition,
                                EMissingABinModFile name Nothing)
-                    in  readAndCheckABinPathCatch errh
+                    in  readAndCheckABinPathCatch errh flags
                             (verbose flags) (ifcPath flags) (Just Verilog)
                             name err
         assertMod (fn, ABinMod mi _) = return (fn, mi)
@@ -1578,23 +1806,22 @@ vCodeGen errh flags mods afilenames = do
                            EWrongABinTypeExpectedModule fn Nothing)]
     named_abis <- mapM findMod mods
     abmis <- mapM assertMod named_abis
-    _ <- vGenMods errh flags tStart abmis
+    _ <- vGenMods errh (PC.verilogGenConfig flags) tStart abmis
     return ()
 
--- Generate Verilog for modules from their elaborated (.ba) files,
+-- Generate Verilog for modules from their module/schedule pairs,
 -- reconstructing the inputs of genModuleVerilog from each ABinModInfo.
--- Codegen-semantic flags come from the .ba, not from this invocation;
--- see cgflags below.  The Bluesim path takes the opposite approach: it
--- generates under the invocation's flags and records the ones that
--- shape the emitted bytes in the codegen reuse descriptor
--- (SimFileUtils.codeGenOptionDescr), so a mismatched object is
--- regenerated rather than reused.
-vGenMods :: ErrorHandle -> Flags -> TimeInfo -> [(String, ABinModInfo)] ->
+-- Code generation uses this invocation's options. The artifacts contain
+-- module and scheduling results, so the caller controls each new emission.
+vGenMods :: ErrorHandle -> PC.PhaseConfig PC.VerilogGenFlags ->
+            TimeInfo -> [(String, ABinModInfo)] ->
             IO (TimeInfo, [VFileName])
-vGenMods errh flags t0 abmis = do
+vGenMods errh config t0 abmis =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
     pwd <- getCurrentDirectory
     -- output goes to the current directory unless -vdir overrides it
-    -- (a .ba's own directory is typically -bdir, which is not where
+    -- (an artifact's own directory is typically -bdir, which is not where
     -- generated Verilog belongs)
     let prefix = dirName (createEncodedFullFilePath "placeholder" pwd) ++ "/"
         genV (t, vfns_so_far) (_, abmi) = do
@@ -1607,36 +1834,15 @@ vGenMods errh flags t0 abmis = do
             blurb <- mkGenFileHeader flags
             let apkg = abmi_apkg abmi
                 pps = abmi_pps abmi
-                -- Codegen-SEMANTIC flags come from the .ba itself: they
-                -- were recorded there at the original compile with any
-                -- (* options *) pragma applied (see genModule), so the
-                -- regenerated output matches that compile by
-                -- construction.  Only environment/output flags follow
-                -- this invocation.
-                cgflags = (abmi_flags abmi) {
-                              bdir = bdir flags,
-                              vdir = vdir flags,
-                              infoDir = infoDir flags,
-                              ifcPath = ifcPath flags,
-                              verbosity = verbosity flags,
-                              showCodeGen = showCodeGen flags,
-                              showElabProgress = showElabProgress flags,
-                              printFlags = printFlags flags,
-                              printFlagsHidden = printFlagsHidden flags,
-                              printFlagsRaw = printFlagsRaw flags,
-                              timeStamps = timeStamps flags,
-                              showVersion = showVersion flags,
-                              updCheck = updCheck flags
-                          }
                 methodConflict = abmi_method_dump abmi
                 methodConflictBlurb
-                  | methodConf cgflags =
+                  | methodConf flags =
                       ["Method conflict info:"]
                       ++ lines (pretty 78 78
-                                  (vcat (dumpMethodInfo cgflags methodConflict)))
+                                  (vcat (dumpMethodInfo flags methodConflict)))
                   | otherwise = []
                 methodConflictBVI
-                  | methodBVI cgflags =
+                  | methodBVI flags =
                       ["BVI format method schedule info:"]
                       ++ lines (pretty 78 78
                                   (vcat (dumpMethodBVIInfo methodConflict)))
@@ -1644,11 +1850,11 @@ vGenMods errh flags t0 abmis = do
                 pathinfo = abmi_pathinfo abmi
                 aschedinfo = abmi_aschedinfo abmi
                 -- recompute the APackage-derived port properties from the
-                -- .ba's own contents, so a regenerated .v matches the
+                -- pair's own contents, so a regenerated .v matches the
                 -- original compile's under -semantic-ports-comment too
-                (aioprops, _) = getIOPropsA cgflags pps (Just aschedinfo) apkg
+                (aioprops, _) = getIOPropsA flags pps (Just aschedinfo) apkg
             (t', vfns) <-
-                genModuleVerilog errh pps cgflags dumpnames t prefix modstr
+                genModuleVerilog errh pps config dumpnames t prefix modstr
                     blurb methodConflictBlurb methodConflictBVI
                     pathinfo aschedinfo aioprops apkg
             return (t', vfns_so_far ++ vfns)
@@ -1675,9 +1881,9 @@ simLink errh flags toplevel afilenames cfilenames = do
     let dumpnames = (Nothing, Nothing, Nothing)
 
     -- in case the user listed the same file twice
-    -- (they could still have given two .ba for the same module,
+    -- (they could still have given two pairs for the same module,
     -- and simExpand will check for that)
-    let afilenames_unique = nub afilenames
+    let afilenames_unique = nub (map (last . moduleArtifactInputs) afilenames)
     let cfilenames_unique = nub cfilenames
 
     -- check that .c and .o files listed on the command-line exist
@@ -1689,14 +1895,14 @@ simLink errh flags toplevel afilenames cfilenames = do
 
     -- read in the abin files (check hash and that they are C files)
     start flags DFreadelab
-    let read_abin_fn = readAndCheckABin errh (Just Bluesim)
+    let read_abin_fn = readAndCheckABin errh flags (Just Bluesim)
     abis <- mapM read_abin_fn afilenames_unique
     t <- dump errh flags t DFreadelab dumpnames (map fst abis)
 
     -- generate the files, get back a list of files to be compiled
     -- and a list of files which have already been compiled
     (t, to_compile, to_reuse, creation_time)
-        <- genModuleC errh flags dumpnames t toplevel abis
+        <- genModuleC errh (PC.bluesimGenConfig flags) dumpnames t toplevel abis
     let t_before_compilations = t
 
     -- print a message to the user that we are reusing the files
@@ -1721,13 +1927,13 @@ simLink errh flags toplevel afilenames cfilenames = do
           return ([], [])
         else if (jobs > 1)
         then do
-          compileParallelCFiles errh flags False
+          compileParallelCFiles errh (PC.hostCompileConfig flags) False
               toplevel gen_cfiles user_cfiles
         else do
-          ofiles0 <- mapM (compileBluesimCFile errh flags) gen_cfiles
+          ofiles0 <- mapM (compileBluesimCFile errh (PC.hostCompileConfig flags)) gen_cfiles
           t <- timestampStr flags "compile generated C++ files" t
 
-          ofiles1 <- mapM (compileUserCFile errh flags False) user_cfiles
+          ofiles1 <- mapM (compileUserCFile errh (PC.hostCompileConfig flags) False) user_cfiles
           t <- timestampStr flags "compile user-provided C/C++ files" t
 
           return (ofiles0, ofiles1)
@@ -1741,7 +1947,7 @@ simLink errh flags toplevel afilenames cfilenames = do
     -- there is nothing to link; otherwise link a Bluesim executable
     start flags DFbluesimlink
     when (not (genSysC flags) && not (blockCodegen flags)) $
-      cxxLink errh flags toplevel ofiles creation_time
+      cxxLink errh (PC.bluesimLinkConfig flags) toplevel ofiles creation_time
     t <- dump errh flags t DFbluesimlink dumpnames toplevel
 
     -- final verbose message
@@ -1772,8 +1978,11 @@ reuseBluesimCFile flags oName = do
 
 -- compile a Bluesim generated CXX file
 -- returns the name of the object file created
-compileBluesimCFile :: ErrorHandle -> Flags -> String -> IO String
-compileBluesimCFile errh flags cName = do
+compileBluesimCFile :: ErrorHandle -> PC.PhaseConfig PC.HostCompileFlags ->
+                      String -> IO String
+compileBluesimCFile errh config cName =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
     (cmd, oName, msg) <- cmdCompileBluesimCFile flags cName
     execCmd errh flags cmd
     unless (quiet flags) $ putStrLnF msg
@@ -1821,8 +2030,11 @@ cmdCompileBluesimCFile flags cName = do
     return (cmd, oName, msg)
 
 -- returns the name of the object file created
-compileVPICFile :: ErrorHandle -> Flags -> [String] -> String -> IO String
-compileVPICFile errh flags incdirs cName = do
+compileVPICFile :: ErrorHandle -> PC.PhaseConfig PC.HostCompileFlags ->
+                   [String] -> String -> IO String
+compileVPICFile errh config incdirs cName =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
     let oName = mkObjName Nothing "" (dropSuf cName)
     -- show is used for quoting
     let incflags = map (("-I"++) . show) (cIncPath flags) ++
@@ -1850,8 +2062,11 @@ compileVPICFile errh flags incdirs cName = do
     return oName
 
 -- returns the name of the object file created
-compileUserCFile :: ErrorHandle -> Flags -> Bool -> String -> IO String
-compileUserCFile errh flags forVerilog cName = do
+compileUserCFile :: ErrorHandle -> PC.PhaseConfig PC.HostCompileFlags ->
+                    Bool -> String -> IO String
+compileUserCFile errh config forVerilog cName =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
     (cmd, oName, msg) <- cmdCompileUserCFile flags forVerilog cName
     execCmd errh flags cmd
     unless (quiet flags) $ putStrLnF msg
@@ -1887,12 +2102,16 @@ cmdCompileUserCFile flags forVerilog cName = do
     return (cmd, oName, msg)
 
 -- Compile Bluesim and user C/C++ files in parallel, using "make"
-compileParallelCFiles :: ErrorHandle -> Flags -> Bool ->
+compileParallelCFiles :: ErrorHandle -> PC.PhaseConfig PC.HostCompileFlags -> Bool ->
                          String -> [String] -> [String] ->
                          IO ([String], [String])
 -- avoid having "make" report "nothing to be done"
-compileParallelCFiles errh flags forVerilog toplevel [] [] = return ([], [])
-compileParallelCFiles errh flags forVerilog toplevel gen_cNames user_cNames = do
+compileParallelCFiles errh config forVerilog toplevel [] [] =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    return ([], [])
+compileParallelCFiles errh config forVerilog toplevel gen_cNames user_cNames =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
     let mkBluesimRule cName = do
           (cmd, oName, msg) <- cmdCompileBluesimCFile flags cName
           let esc_oName = escMakeTarget oName
@@ -2057,8 +2276,11 @@ execCmd errh flags cmd = do
 
 
 -- link object files into a shared library
-cxxLink :: ErrorHandle -> Flags -> String -> [String] -> TimeInfo -> IO ()
-cxxLink errh flags toplevel names creation_time = do
+cxxLink :: ErrorHandle -> PC.PhaseConfig PC.BluesimLinkFlags ->
+           String -> [String] -> TimeInfo -> IO ()
+cxxLink errh config toplevel names creation_time =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
     -- Construct the Bluesim object names
     let bsimLibDir = (bluespecDir flags) ++ "/Bluesim/"
         bsim_names = [ bsimLibDir ++ "lib" ++ name ++ ".a"
@@ -2160,7 +2382,7 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
         prefix = (dirName name) ++ "/"
 
     -- in case the user listed the same file twice
-    let afilenames_unique = nub afilenames
+    let afilenames_unique = nub (map (last . moduleArtifactInputs) afilenames)
     let cfilenames_unique = nub cfilenames
 
     -- check that .c and .o files listed on the command-line exist
@@ -2172,13 +2394,13 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
 
     -- read in the abin files (check hash and that they are Verilog files)
     start flags DFreadelab
-    let read_abin_fn = readAndCheckABin errh (Just Verilog)
+    let read_abin_fn = readAndCheckABin errh flags (Just Verilog)
     user_abis <- mapM read_abin_fn afilenames_unique
 
-    -- see if .ba files exist for the top-level of this design
+    -- see if module artifacts exist for the top-level of this design
     let prim_names = map sb_name primBlocks
     mhier0 <- runExceptT $
-              getABIHierarchy errh
+              getABIHierarchy errh flags
                   (verbose flags) (ifcPath flags) (Just Verilog)
                   prim_names topmod_name user_abis
 
@@ -2194,7 +2416,7 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     (ffuncs, mod_abmis) <-
         case (mhier) of
           Left _ -> do
-            -- this design doesn't exist as .ba file
+            -- this design's module artifacts could not be loaded
             --traceM("Elaboration files not loaded for this design")
             -- resort to what we know from the command line
 
@@ -2224,9 +2446,9 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
                           [(cmdPosition,
                             EMultipleABinFilesForName link_name file_names)]
 
-            -- without the design's .ba hierarchy, the staleness of
+            -- without the design's module hierarchy, the staleness of
             -- generated Verilog cannot be checked; warn and use the .v
-            -- files as found (module .ba files given explicitly on the
+            -- files as found (module artifacts given explicitly on the
             -- command line are still regenerated from, below)
             bsWarning errh
                 [(cmdPosition, WNoABinForVerilogRegen topmod_name)]
@@ -2252,7 +2474,7 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     t <- dump errh flags t DFreadelab dumpnames
              (map (pfpString . ff_name) ffuncs ++ map fst mod_abmis)
 
-    -- Regenerate any module .v that is missing or older than its .ba, and
+    -- Regenerate any module .v missing or older than either artifact, and
     -- reuse the rest, so a link is self-sufficient regardless of which
     -- subset was pre-generated (with -c or an earlier compile).  A module
     -- whose .v was given explicitly on the command line is the user's to
@@ -2276,17 +2498,18 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
     (stale_abmis, reused_vs) <-
         partitionStaleVerilogMods flags prefix checked_abmis
     mapM_ (reuseVerilogFile flags . snd) reused_vs
-    (t, gen_vfilenames) <- vGenMods errh flags t stale_abmis
+    (t, gen_vfilenames) <- vGenMods errh (PC.verilogGenConfig flags) t stale_abmis
     let vfilenames = vfilenames0 ++ map fst reused_vs ++ gen_vfilenames
 
     -- generate files for the foreign functions
     start flags DFcompileVPI
-    (t, ofiles) <- vGenFFuncs errh flags t prefix cfilenames_unique ffuncs
+    (t, ofiles) <- vGenFFuncs errh (PC.foreignGenConfig flags)
+                      (PC.hostCompileConfig flags) t prefix cfilenames_unique ffuncs
     t <- dump errh flags t DFcompileVPI dumpnames ofiles
 
     -- pass the info to vSimLink: array, location of files, -I, -L, -l
     start flags DFveriloglink
-    vSimLink errh flags topmod_name prefix vfilenames ofiles
+    vSimLink errh (PC.verilogLinkConfig flags) topmod_name prefix vfilenames ofiles
     t <- dump errh flags t DFveriloglink dumpnames
              ((map vfnString vfilenames) ++ ofiles)
 
@@ -2303,9 +2526,11 @@ vLink errh flags topmod_name vfilenames0 afilenames cfilenames = do
 --   - the command-line flag -vsim
 --   - the environment variable BSC_VERILOG_SIM
 --   - any auto-detected simulator
-vSimLink ::  ErrorHandle -> Flags ->
+vSimLink ::  ErrorHandle -> PC.PhaseConfig PC.VerilogLinkFlags ->
              String -> String -> [VFileName] -> [String] -> IO ()
-vSimLink errh flags toplevel prefix vfiles ofiles = do
+vSimLink errh config toplevel prefix vfiles ofiles =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
     build_script <- getVerilogSim errh flags
     let bsdir = bluespecDir flags
         libdirflags = map ("-L "++) (cLibPath flags)
@@ -2404,11 +2629,14 @@ checkSimScript dir script =
 
 -- ===============
 
-vGenFFuncs :: ErrorHandle -> Flags -> TimeInfo -> String ->
+vGenFFuncs :: ErrorHandle -> PC.PhaseConfig PC.ForeignGenFlags ->
+              PC.PhaseConfig PC.HostCompileFlags -> TimeInfo -> String ->
               [String] -> [ForeignFunction] ->
               IO (TimeInfo, [String])
-vGenFFuncs errh flags t prefix cfilenames_unique [] = return (t,[])
-vGenFFuncs errh flags t prefix cfilenames_unique ffuncs = do
+vGenFFuncs errh config hostConfig t prefix cfilenames_unique ffuncs =
+  withErrorHandleFlags errh (PL.legacyFlags config) $ do
+    let flags = PL.legacyFlags config
+    if null ffuncs then return (t, []) else do
       (t, vpiarray_filenames) <-
         if (useDPI flags) then return (t, [])
         else do
@@ -2425,7 +2653,7 @@ vGenFFuncs errh flags t prefix cfilenames_unique ffuncs = do
                                                 hasDotSuf ccSuffix f
                                          )
                                          cfilenames_unique
-      ofiles2 <- mapM (compileUserCFile errh flags True) cfiles1
+      ofiles2 <- mapM (compileUserCFile errh hostConfig True) cfiles1
       t <- timestampStr flags "compile user-provided C files" t
 
       (t, ofiles3) <-
@@ -2472,56 +2700,13 @@ vGenFFuncs errh flags t prefix cfilenames_unique ffuncs = do
           let vpidirs = S.toList (S.fromList (map takeDirectory vpiwrapper_filenames))
 
           -- include the vpi registration array file
-          wrapper_files <- mapM (compileVPICFile errh flags []) vpiwrapper_filenames
-          array_files <- mapM (compileVPICFile errh flags vpidirs) vpiarray_filenames
+          wrapper_files <- mapM (compileVPICFile errh hostConfig []) vpiwrapper_filenames
+          array_files <- mapM (compileVPICFile errh hostConfig vpidirs) vpiarray_filenames
           let files = wrapper_files ++ array_files
           t <- timestampStr flags "compile VPI wrapper files" t
           return (t, files)
 
       return (t, ofiles1 ++ ofiles2 ++ ofiles3)
-
--- ===============
-
-{-
-vGenMods :: TimeInfo -> Flags -> [(String, ABinModInfo)] ->
-            IO (TimeInfo, [VFileName])
-vGenMods t0 flags abmis = do
-    -- function to generate an individual module
-    let genV (t, vfilenames_so_far) (filename, abmi@(ABinModInfo {})) = do
-            let modId = apkg_name (abmi_apkg abmi)
-                modstr = getIdString (unQualId modId)
-            -- XXX should the file and package name be set?
-            let dumpnames = (Nothing, Nothing, Just modstr)
-            -- verbose message
-            when (verbose flags) $ putStrLnF ("*****")
-            when (showCodeGen flags || verbose flags) $
-                putStrLnF ("Verilog generation for " ++ modstr ++ " starts")
-            -- prepare directory info
-            pwd <- getCurrentDirectory
-            let filename' = createEncodedFullFilePath filename pwd
-                prefix = dirName filename' ++ "/"
-            -- call into the regular flow
-            blurb <- mkGenFileHeader flags
-            let apkg = abmi_apkg abmi
-                pps = abmi_pps abmi
-                methodConflict = abmi_method_dump abmi
-                methodConflictBlurb
-                  | methodConf flags =
-                      ["Method conflict info:"]
-                      ++ lines (pretty 78 78
-                                   (vcat (dumpMethodInfo flags methodConflict)))
-                  | otherwise = []
-                pathinfo = abmi_pathinfo abmi
-                aschedinfo = abmi_aschedinfo abmi
-            (t, _, _) <-
-                genModuleVerilog pps flags dumpnames t prefix modstr
-                    blurb methodConflictBlurb pathinfo aschedinfo apkg
-            -- result
-            return (t, vfilenames ++ vfilenames_so_far)
-
-    -- generate the Verilog files
-    foldM genV (t0,[]) abmis
--}
 
 -- ===============
 
@@ -2532,40 +2717,49 @@ missingUserFiles flags cSrcFiles = filterM cantFind cSrcFiles
 
 -- ===============
 
-compileCDefToIDef :: ErrorHandle -> Flags -> DumpNames -> SymTab ->
+compileCDefToIDef :: ErrorHandle ->
+                     PC.PhaseConfig PC.ReduceFlags ->
+                     PC.PhaseConfig PC.TypecheckFlags ->
+                     PC.PhaseConfig PC.InternalFlags -> DumpNames -> SymTab ->
                      IPackage a -> CDefn -> IO (IDef a, Bool)
-compileCDefToIDef errh flags dumpnames symt ipkg def =
+compileCDefToIDef errh prepareConfig typeCheckConfig internalConfig dumpnames symt ipkg def =
  do
-    let pkgid = ipkg_name ipkg
+    let prepareFlags = PL.legacyFlags prepareConfig
+        internalFlags = PL.legacyFlags internalConfig
+        pkgid = ipkg_name ipkg
     let cpkg0 = CPackage pkgid (Left []) [] [] [] [def] []
     t <- getNow
 
-    start flags DFwrapper_ctxreduce
-    (cpkg_ctx, _, _) <- cCtxReduceIO errh flags symt cpkg0
-    t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
+    (t, cpkg_ctx) <- withErrorHandleFlags errh prepareFlags $ do
+        start prepareFlags DFwrapper_ctxreduce
+        (cpkg_ctx, _, _) <- cCtxReduceIO errh prepareFlags symt cpkg0
+        t <- dump errh prepareFlags t DFwrapper_ctxreduce dumpnames cpkg_ctx
+        return (t, cpkg_ctx)
 
-    start flags DFwrapper_typecheck
-    (cpkg_chk, tcErrors, _usedPkgs, _wrapperATFCache) <- cTypeCheck errh flags symt cpkg_ctx
-    t <- dump errh flags t DFwrapper_typecheck dumpnames cpkg_chk
+    (t, cpkg_chk, tcErrors, _usedPkgs, _wrapperATFCache) <-
+        typeCheckPackage errh typeCheckConfig DFwrapper_typecheck t dumpnames symt cpkg_ctx
 
-    start flags DFwrapper_simplified
-    let cpkg_simp = simplify flags cpkg_chk
-        def' = case cpkg_simp of
-                 (CPackage _ _ _ _ _ [d] _) -> d
-                 _ -> internalError "compileCDefToIDef: unexpected number of defs"
-    t <- dump errh flags t DFwrapper_simplified dumpnames cpkg_simp
+    idef <- withErrorHandleFlags errh internalFlags $ do
+        start internalFlags DFwrapper_simplified
+        let cpkg_simp = simplify internalFlags cpkg_chk
+            def' = case cpkg_simp of
+                     (CPackage _ _ _ _ _ [d] _) -> d
+                     _ -> internalError "compileCDefToIDef: unexpected number of defs"
+        t <- dump errh internalFlags t DFwrapper_simplified dumpnames cpkg_simp
 
-    start flags DFwrapper_internal
-    let idef = iConvDef errh flags symt ipkg def'
-    t <- dump errh flags t DFwrapper_internal dumpnames idef
+        start internalFlags DFwrapper_internal
+        let idef = iConvDef errh internalFlags symt ipkg def'
+        t <- dump errh internalFlags t DFwrapper_internal dumpnames idef
+        return idef
 
     return (idef, not tcErrors)
 
 -- ===============
 
-iPCheck :: Flags -> SymTab -> IPackage a -> String -> IO ()
-iPCheck flags symt ipkg desc = -- deepseq ipkg $
-        if doICheck flags && not (tCheckIPackage flags symt ipkg)
+iPCheck :: PC.PhaseConfig PC.InternalFlags -> SymTab -> IPackage a -> String -> IO ()
+iPCheck config symt ipkg desc = -- deepseq ipkg $
+    let flags = PL.legacyFlags config
+    in  if doICheck flags && not (tCheckIPackage flags symt ipkg)
             then internalError (
                 "internal typecheck failed (iPCheck after " ++
                 desc ++ ")")

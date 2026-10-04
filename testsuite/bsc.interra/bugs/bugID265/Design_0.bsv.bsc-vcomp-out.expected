@@ -1,6 +1,7 @@
 checking package dependencies
 compiling Design_0.bsv
 code generation for mkDesign_in starts
+Elaborated module file created: mkDesign_in.bmod
 Verilog file created: mkDesign_in.v
-Elaborated module file created: mkDesign_in.ba
+Schedule file created: mkDesign_in.bsched
 All packages are up to date.

@@ -1,8 +1,17 @@
 # Written by util/recabal/gen.py.  Every path below, relative to this
 # directory, was generated and is removed when the manifest drops it.
+ADropUndet.hs
 ADumpScheduleInfo.hs
+AMaterializePatch.hs
+AModule.hs
+ANoInline.hs
 APrims.hs
+ARemoveAssumps.hs
+ASchedMaterialize.hs
 AScheduleInfo.hs
+ASchedulePatch.hs
+AScheduleRelations.hs
+ASimParams.hs
 ASyntax.hs
 ASyntaxUtil.hs
 AUses.hs
@@ -77,6 +86,8 @@ PPrint.hs
 PVPrint.hs
 Params.hs
 ParseOp.hs
+PhaseConfig.hs
+PhaseConfigLegacy.hs
 Position.hs
 Pragma.hs
 PreIds.hs

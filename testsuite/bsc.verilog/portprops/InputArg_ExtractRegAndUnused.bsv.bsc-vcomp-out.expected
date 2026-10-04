@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InputArg_ExtractRegAndUnused.bsv
 code generation for sysInputArg_ExtractRegAndUnused starts
+Elaborated module file created: sysInputArg_ExtractRegAndUnused.bmod
 === IOproperties (InputArg_ExtractRegAndUnused sysInputArg_ExtractRegAndUnused):
 Name                         I/O  size props
 b                              I    16 reg
@@ -11,5 +12,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysInputArg_ExtractRegAndUnused.v
-Elaborated module file created: sysInputArg_ExtractRegAndUnused.ba
+Schedule file created: sysInputArg_ExtractRegAndUnused.bsched
 All packages are up to date.

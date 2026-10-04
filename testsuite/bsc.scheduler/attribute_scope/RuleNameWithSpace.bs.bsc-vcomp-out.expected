@@ -1,6 +1,7 @@
 checking package dependencies
 compiling RuleNameWithSpace.bs
 code generation for sysRuleNameWithSpace starts
+Elaborated module file created: sysRuleNameWithSpace.bmod
 Warning: "RuleNameWithSpace.bs", line 5, column 0: (G0010)
   Rule "r1" was treated as more urgent than "r2_with_space". Conflicts:
     "r1" cannot fire before "r2_with_space": calls to rg.write vs. rg.read
@@ -8,5 +9,5 @@ Warning: "RuleNameWithSpace.bs", line 5, column 0: (G0010)
 Warning: "RuleNameWithSpace.bs", line 13, column 8: (G0021)
   According to the generated schedule, rule `r2_with_space' can never fire.
 Verilog file created: sysRuleNameWithSpace.v
-Elaborated module file created: sysRuleNameWithSpace.ba
+Schedule file created: sysRuleNameWithSpace.bsched
 All packages are up to date.

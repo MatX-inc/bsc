@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ValueMethodEx1.bsv
 code generation for mkTloop starts
+Elaborated module file created: mkTloop.bmod
 === schedule (ValueMethodEx1 mkTloop):
 parallel: [esposito: [a -> [], b -> [], RL_copy_it -> []]]
 order: [a, RL_copy_it, b]
@@ -50,8 +51,9 @@ Logical execution order: a, copy_it, b
 
 =======================================
 Verilog file created: mkTloop.v
-Elaborated module file created: mkTloop.ba
+Schedule file created: mkTloop.bsched
 code generation for sysTloop starts
+Elaborated module file created: sysTloop.bmod
 === schedule (ValueMethodEx1 sysTloop):
 parallel: [esposito: [RL_count -> [], RL_quit -> [], RL_poke -> [], RL_yell -> []]]
 order: [RL_quit, RL_poke, RL_count, RL_yell]
@@ -97,5 +99,5 @@ Logical execution order: quit, poke, count, yell
 
 ========================================
 Verilog file created: sysTloop.v
-Elaborated module file created: sysTloop.ba
+Schedule file created: sysTloop.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling SBRCount.bsv
 code generation for mkSBRCount starts
+Elaborated module file created: mkSBRCount.bmod
 Warning: "SBRCount.bsv", line 7, column 8: (G0117)
   Rule `incCount' shadows the effects of `driveCounter' when they execute in
   the same clock cycle. Affected method calls:
@@ -60,5 +61,5 @@ Logical execution order: readCount, driveCounter, incCount
 
 ==========================================
 Verilog file created: mkSBRCount.v
-Elaborated module file created: mkSBRCount.ba
+Schedule file created: mkSBRCount.bsched
 All packages are up to date.

@@ -25,31 +25,31 @@ copy common.c.keep common.c
 # Basic tests for value functions
 
 copy values.c.keep values.c
-set value_abins { string_compare.ba and32.ba and128.ba andN.ba const_narrow.ba const_wide.ba }
+set value_abins { string_compare.bdpi and32.bdpi and128.bdpi andN.bdpi const_narrow.bdpi const_wide.bdpi }
 test_c_veri_bsv_multi_options TestValues mkTestValues "$value_abins common.c values.c" {} {} {} $iverilog_bug 1 1 {} {+Hi}
 
 # -----
 # Basic tests for action functions
 
 copy actions.c.keep actions.c
-set action_abins { action_function.ba tick.ba }
-test_c_veri_bsv_multi_options TestActions mkTestActions "$action_abins andN.ba const_wide.ba const_narrow.ba common.c actions.c values.c" {} {} {} $iverilog_bug 1 1 {} {+Hi}
+set action_abins { action_function.bdpi tick.bdpi }
+test_c_veri_bsv_multi_options TestActions mkTestActions "$action_abins andN.bdpi const_wide.bdpi const_narrow.bdpi common.c actions.c values.c" {} {} {} $iverilog_bug 1 1 {} {+Hi}
 
 # -----
 # Basic tests for actionvalue functions
 
 copy actionvalues.c.keep actionvalues.c
-set actionvalue_abins { av_narrow.ba av_wide.ba av_poly.ba srandom.ba random_narrow.ba random_wide.ba }
+set actionvalue_abins { av_narrow.bdpi av_wide.bdpi av_poly.bdpi srandom.bdpi random_narrow.bdpi random_wide.bdpi }
 # The BDPI import `srandom' collides with the SystemVerilog built-in
 # method of the same name under DPI linkage (which the harness implies
 # for verilator); Verilator hits an internal error at link time.  The
 # import name is the point of the test, so it cannot be renamed.
 verinorun verilator "BDPI import `srandom' collides with the SV built-in srandom under DPI (Verilator internal error at link)"
-test_c_veri_bsv_multi_options TestActionValues mkTestActionValues "$actionvalue_abins const_narrow.ba const_wide.ba common.c actionvalues.c values.c" {} {} {} $iverilog_bug 1 1 {} {+Hi}
+test_c_veri_bsv_multi_options TestActionValues mkTestActionValues "$actionvalue_abins const_narrow.bdpi const_wide.bdpi common.c actionvalues.c values.c" {} {} {} $iverilog_bug 1 1 {} {+Hi}
 verinorun_end
 
 # Test the case where the values are unused
-test_c_veri_bsv_multi_options TestActionValuesUnusedValue mkTestActionValuesUnusedValue "av_narrow.ba av_wide.ba av_poly.ba const_narrow.ba const_wide.ba common.c actionvalues.c values.c" {} {} {} $iverilog_bug 1 1
+test_c_veri_bsv_multi_options TestActionValuesUnusedValue mkTestActionValuesUnusedValue "av_narrow.bdpi av_wide.bdpi av_poly.bdpi const_narrow.bdpi const_wide.bdpi common.c actionvalues.c values.c" {} {} {} $iverilog_bug 1 1
 
 # -----
 # Tests for functions in methods (of synthesized module)
@@ -57,18 +57,18 @@ test_c_veri_bsv_multi_options TestActionValuesUnusedValue mkTestActionValuesUnus
 # This test is expected to fail in Verilog, since the order of task calls in
 # different modules is undefined.
 
-test_c_veri_bsv_multi_options TestMethods mkTestMethodsTB "mkTestMethodsDUT av_narrow.ba av_wide.ba av_poly.ba $action_abins const_narrow.ba const_wide.ba and32.ba and128.ba andN.ba common.c actionvalues.c actions.c values.c" {} {} {} $verilog_compiler 1 1 {} {+Hi}
+test_c_veri_bsv_multi_options TestMethods mkTestMethodsTB "mkTestMethodsDUT av_narrow.bdpi av_wide.bdpi av_poly.bdpi $action_abins const_narrow.bdpi const_wide.bdpi and32.bdpi and128.bdpi andN.bdpi common.c actionvalues.c actions.c values.c" {} {} {} $verilog_compiler 1 1 {} {+Hi}
 
 # -----
 # Tests for uses in multiple rules, including in rule conditions and
 # in conditional actions inside a rule
 
-test_c_veri_bsv_multi_options TestMultipleRules mkTestMultipleRules "av_narrow.ba av_wide.ba av_poly.ba const_narrow.ba const_wide.ba and32.ba and128.ba andN.ba common.c actionvalues.c values.c" {} {} {} $iverilog_bug 1 1 {} {+Hi}
+test_c_veri_bsv_multi_options TestMultipleRules mkTestMultipleRules "av_narrow.bdpi av_wide.bdpi av_poly.bdpi const_narrow.bdpi const_wide.bdpi and32.bdpi and128.bdpi andN.bdpi common.c actionvalues.c values.c" {} {} {} $iverilog_bug 1 1 {} {+Hi}
 
 # -----
 # Test for functions lifted to rule conditions via -agressive-conditions
 
-test_c_veri_bsv_multi_options TestAggressiveConditions mkTestAggressiveConditions "av_narrow.ba av_wide.ba av_poly.ba const_narrow.ba const_wide.ba and32.ba and128.ba andN.ba common.c actionvalues.c values.c" "-aggressive-conditions -dATS=mkTestAggressiveConditions-ats.txt" {} {} $iverilog_bug 1 1
+test_c_veri_bsv_multi_options TestAggressiveConditions mkTestAggressiveConditions "av_narrow.bdpi av_wide.bdpi av_poly.bdpi const_narrow.bdpi const_wide.bdpi and32.bdpi and128.bdpi andN.bdpi common.c actionvalues.c values.c" "-aggressive-conditions -dATS=mkTestAggressiveConditions-ats.txt" {} {} $iverilog_bug 1 1
 
 # look to see that the condition for rule "r1" is just AND of the notFull
 # signals, and not a more complicated expression involving the TASK signals
@@ -90,7 +90,7 @@ compile_object_fail_error TestInstParam.bsv G0053
 compile_fail_error MultipleImports.bsv T0091
 
 # Test imports from separate files used in the same design?
-# (Can only be caught at link-time when given all the .ba files)
+# (Can only be caught at link-time when given all the .bdpi files)
 # ...
 
 # -----

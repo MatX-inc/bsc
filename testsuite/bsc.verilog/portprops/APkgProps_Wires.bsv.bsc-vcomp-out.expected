@@ -1,6 +1,7 @@
 checking package dependencies
 compiling APkgProps_Wires.bsv
 code generation for sysAPkgProps_Wires starts
+Elaborated module file created: sysAPkgProps_Wires.bmod
 === APackageIOproperties (APkgProps_Wires sysAPkgProps_Wires):
 Name                         I/O  size props
 RDY_setV                       O     1 const
@@ -38,5 +39,5 @@ EN_deadSet                     I     1 unused
 -----
 
 Verilog file created: sysAPkgProps_Wires.v
-Elaborated module file created: sysAPkgProps_Wires.ba
+Schedule file created: sysAPkgProps_Wires.bsched
 All packages are up to date.

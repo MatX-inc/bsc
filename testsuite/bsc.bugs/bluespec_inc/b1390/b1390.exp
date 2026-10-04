@@ -1,5 +1,8 @@
 if { $vtest == 1 } {
 
+set_verilog_regen_options mkTest {-no-inline-rwire}
+set_verilog_regen_options mkTest2 {-no-inline-rwire}
+
 compile_verilog_pass Test.bsv
 compare_file Test.bsv.bsc-vcomp-out
 compare_file mkTest.sched

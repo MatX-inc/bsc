@@ -1,6 +1,7 @@
 checking package dependencies
 compiling Bug1619A.bsv
 code generation for sysBug1619A starts
+Elaborated module file created: sysBug1619A.bmod
 === schedule (Bug1619A sysBug1619A):
 parallel: [esposito: [RL_high_priority -> [],
 		      RL_normal -> [RL_high_priority],
@@ -48,5 +49,5 @@ Logical execution order: high_priority, normal, normal_1, normal_2
 
 ===========================================
 Verilog file created: sysBug1619A.v
-Elaborated module file created: sysBug1619A.ba
+Schedule file created: sysBug1619A.bsched
 All packages are up to date.

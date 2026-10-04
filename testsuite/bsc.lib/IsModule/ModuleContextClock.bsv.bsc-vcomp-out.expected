@@ -2,6 +2,7 @@ checking package dependencies
 compiling ModuleContextClock.bsv
 code generation for mkTestWrapper2 starts
 Compilation message: "ModuleContextClock.bsv", line 23, column 13: 1
+Elaborated module file created: mkTestWrapper2.bmod
 Verilog file created: mkTestWrapper2.v
-Elaborated module file created: mkTestWrapper2.ba
+Schedule file created: mkTestWrapper2.bsched
 All packages are up to date.

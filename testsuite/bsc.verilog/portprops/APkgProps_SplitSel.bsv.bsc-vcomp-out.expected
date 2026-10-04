@@ -1,6 +1,7 @@
 checking package dependencies
 compiling APkgProps_SplitSel.bsv
 code generation for mkAPkgProps_SplitSel_Sub starts
+Elaborated module file created: mkAPkgProps_SplitSel_Sub.bmod
 === APackageIOproperties (APkgProps_SplitSel mkAPkgProps_SplitSel_Sub):
 Name                         I/O  size props
 get_x                          O     8 reg
@@ -24,8 +25,9 @@ RST_N                          I     1 unused
 -----
 
 Verilog file created: mkAPkgProps_SplitSel_Sub.v
-Elaborated module file created: mkAPkgProps_SplitSel_Sub.ba
+Schedule file created: mkAPkgProps_SplitSel_Sub.bsched
 code generation for sysAPkgProps_SplitSel starts
+Elaborated module file created: sysAPkgProps_SplitSel.bmod
 === APackageIOproperties (APkgProps_SplitSel sysAPkgProps_SplitSel):
 Name                         I/O  size props
 outx                           O     8 reg
@@ -51,5 +53,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysAPkgProps_SplitSel.v
-Elaborated module file created: sysAPkgProps_SplitSel.ba
+Schedule file created: sysAPkgProps_SplitSel.bsched
 All packages are up to date.

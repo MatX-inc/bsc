@@ -1,4 +1,4 @@
-// Fixtures for link-time regeneration of Verilog from .ba
+// Fixtures for link-time regeneration of Verilog from .bmod/.bsched pairs
 
 (* synthesize *)
 module mkRSub(Reg#(Bit#(8)));

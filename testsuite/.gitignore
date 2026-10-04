@@ -13,7 +13,10 @@ testrun.html
 
 # BSC objects
 *.bo
+*.bdpi
 *.ba
+*.bmod
+*.bsched
 
 # C/C++ objects
 *.o

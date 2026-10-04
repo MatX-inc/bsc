@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InoutProps_ArgToIfcHier.bsv
 code generation for sysArgToIfcLeaf starts
+Elaborated module file created: sysArgToIfcLeaf.bmod
 === IOproperties (InoutProps_ArgToIfcHier sysArgToIfcLeaf):
 Name                         I/O  size props
 CLK                            I     1 unused
@@ -12,8 +13,9 @@ io_ifc                        IO    32 inout
 -----
 
 Verilog file created: sysArgToIfcLeaf.v
-Elaborated module file created: sysArgToIfcLeaf.ba
+Schedule file created: sysArgToIfcLeaf.bsched
 code generation for sysInoutProps_ArgToIfcHier starts
+Elaborated module file created: sysInoutProps_ArgToIfcHier.bmod
 === IOproperties (InoutProps_ArgToIfcHier sysInoutProps_ArgToIfcHier):
 Name                         I/O  size props
 CLK                            I     1 clock
@@ -25,5 +27,5 @@ io_ifc                        IO    32 inout
 -----
 
 Verilog file created: sysInoutProps_ArgToIfcHier.v
-Elaborated module file created: sysInoutProps_ArgToIfcHier.ba
+Schedule file created: sysInoutProps_ArgToIfcHier.bsched
 All packages are up to date.

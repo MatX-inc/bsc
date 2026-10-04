@@ -61,13 +61,10 @@ library
     AAddSchedAssumps
     AAddScheduleDefs
     ACleanup
-    ADropUndet
     ADumpSchedule
-    ANoInline
     APaths
     AProofs
     ARankMethCalls
-    ARemoveAssumps
     ASchedule
     ATaskSplice
     DisjointTest

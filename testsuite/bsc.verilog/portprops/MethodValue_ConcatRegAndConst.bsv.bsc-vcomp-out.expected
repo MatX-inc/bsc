@@ -1,6 +1,7 @@
 checking package dependencies
 compiling MethodValue_ConcatRegAndConst.bsv
 code generation for sysMethodValue_ConcatRegAndConst starts
+Elaborated module file created: sysMethodValue_ConcatRegAndConst.bmod
 === IOproperties (MethodValue_ConcatRegAndConst sysMethodValue_ConcatRegAndConst):
 Name                         I/O  size props
 m                              O    16
@@ -12,5 +13,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysMethodValue_ConcatRegAndConst.v
-Elaborated module file created: sysMethodValue_ConcatRegAndConst.ba
+Schedule file created: sysMethodValue_ConcatRegAndConst.bsched
 All packages are up to date.

@@ -1,8 +1,8 @@
 #
-# Tests for link-time regeneration of Verilog from .ba files:
+# Tests for link-time regeneration of Verilog from .bmod/.bsched pairs:
 # "bsc -verilog -e top" regenerates any module .v that is missing or
-# older than its .ba, reuses the rest, and warns (and links with the .v
-# files as found) when the design's .ba hierarchy is unavailable.
+# older than either member of its pair, reuses the rest, and warns (and links
+# with the .v files as found) when the artifact hierarchy is unavailable.
 #
 
 # run "bsc -verilog -e" capturing output; expect success
@@ -16,7 +16,7 @@ proc vlink_run { toplevel output {files ""} } {
 }
 
 # -------------------------
-# Elaborate the design (writes .v and .ba for both modules)
+# Elaborate the design (writes .v and .bmod/.bsched for both modules)
 
 compile_verilog_pass VRegen.bsv sysVRegenTb
 
@@ -42,13 +42,15 @@ if { $vtest == 1 } {
 }
 
 # -------------------------
-# A .v older than its .ba is regenerated; others are reused
+# A .v older than either member of its pair is regenerated; others are reused.
 
-exec sleep 1
-exec touch [file join [absolute $srcdir] $subdir mkRSub.ba]
-vlink_run sysVRegenTb vlink3.bsc-out
-find_regexp vlink3.bsc-out {Verilog file created: mkRSub\.v}
-find_regexp vlink3.bsc-out {Verilog file reused: sysVRegenTb\.v}
+foreach suffix {bmod bsched} {
+    exec sleep 1
+    exec touch [file join [absolute $srcdir] $subdir mkRSub.$suffix]
+    vlink_run sysVRegenTb vlink3-$suffix.bsc-out
+    find_regexp vlink3-$suffix.bsc-out {Verilog file created: mkRSub\.v}
+    find_regexp vlink3-$suffix.bsc-out {Verilog file reused: sysVRegenTb\.v}
+}
 
 # -------------------------
 # Nothing stale: everything is reused, and the .v files are untouched
@@ -60,44 +62,50 @@ compare_file mkRSub.v mkRSub-before.v
 
 # -------------------------
 # A .v given explicitly on the command line is never regenerated,
-# even when it is older than its .ba
+# even when it is older than its .bsched
 
 exec sleep 1
-exec touch [file join [absolute $srcdir] $subdir mkRSub.ba]
+exec touch [file join [absolute $srcdir] $subdir mkRSub.bsched]
 vlink_run sysVRegenTb vlink5.bsc-out {mkRSub.v}
 find_regexp_fail vlink5.bsc-out {Verilog file created: mkRSub\.v}
 
 # (bring it back up to date for any later steps)
 vlink_run sysVRegenTb vlink5b.bsc-out
+find_regexp vlink5b.bsc-out {Verilog file created: mkRSub\.v}
+find_regexp vlink5b.bsc-out {Verilog file reused: sysVRegenTb\.v}
 
 # -------------------------
-# The .ba check is all-or-nothing per design: if any module's .ba is
-# missing (here a submodule's, while the top's is present), the link
+# The artifact check is all-or-nothing per design: if any module's pair
+# is missing (here a submodule's, while the top's is present), the link
 # warns and uses the .v files as found -- it never half-regenerates a
 # design it cannot fully see -- and still succeeds
 
-erase mkRSub.ba
+erase mkRSub.bmod
+erase mkRSub.bsched
 vlink_run sysVRegenTb vlink7.bsc-out
 find_n_strings vlink7.bsc-out {Warning: Command line: (S0099)} 1
 find_regexp_fail vlink7.bsc-out {Verilog file created}
 find_regexp_fail vlink7.bsc-out {Verilog file reused}
 
-# ... and the same from the other direction: the top's .ba missing
+# ... and the same from the other direction: the top's artifact pair missing
 # while the submodule's is present
 
 compile_verilog_pass VRegen.bsv sysVRegenTb
-erase sysVRegenTb.ba
+erase sysVRegenTb.bmod
+erase sysVRegenTb.bsched
 vlink_run sysVRegenTb vlink8.bsc-out
 find_n_strings vlink8.bsc-out {Warning: Command line: (S0099)} 1
 find_regexp_fail vlink8.bsc-out {Verilog file created}
 find_regexp_fail vlink8.bsc-out {Verilog file reused}
 
 # -------------------------
-# With no .ba hierarchy available, the link warns and uses the .v
+# With no artifact hierarchy available, the link warns and uses the .v
 # files as found (the pre-regeneration behavior)
 
-erase sysVRegenTb.ba
-erase mkRSub.ba
+erase sysVRegenTb.bmod
+erase sysVRegenTb.bsched
+erase mkRSub.bmod
+erase mkRSub.bsched
 vlink_run sysVRegenTb vlink6.bsc-out
 find_n_strings vlink6.bsc-out {Warning: Command line: (S0099)} 1
 find_regexp_fail vlink6.bsc-out {Verilog file created}

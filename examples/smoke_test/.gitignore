@@ -1,6 +1,8 @@
 *.bi
 *.bo
 *.ba
+*.bmod
+*.bsched
 *.cxx
 *.h
 *.o

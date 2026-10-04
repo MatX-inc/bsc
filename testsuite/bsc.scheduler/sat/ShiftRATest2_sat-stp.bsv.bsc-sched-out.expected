@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ShiftRATest2_sat-stp.bsv
 code generation for sysShiftRATest starts
+Elaborated module file created: sysShiftRATest.bmod
 Warning: "ShiftRATest2_sat-stp.bsv", line 12, column 8: (G0010)
   Rule "aa" was treated as more urgent than "bb". Conflicts:
     "aa" cannot fire before "bb": calls to uc.write vs. uc.read
@@ -66,5 +67,5 @@ Logical execution order: aa, ab, bb
 Warning: "ShiftRATest2_sat-stp.bsv", line 29, column 10: (G0021)
   According to the generated schedule, rule `bb' can never fire.
 Verilog file created: sysShiftRATest.v
-Elaborated module file created: sysShiftRATest.ba
+Schedule file created: sysShiftRATest.bsched
 All packages are up to date.

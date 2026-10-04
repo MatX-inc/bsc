@@ -1,6 +1,7 @@
 checking package dependencies
 compiling GCD_t1.bs
 code generation for sysGCD starts
+Elaborated module file created: sysGCD.bmod
 === schedule (GCD_t1 sysGCD):
 parallel: [esposito: [RL_init -> [], RL_gcd_flip -> [], RL_gcd_stop -> [], RL_gcd_sub -> []]]
 order: [RL_init, RL_gcd_flip, RL_gcd_stop, RL_gcd_sub]
@@ -53,5 +54,5 @@ Logical execution order: init, gcd_flip, gcd_stop, gcd_sub
 
 ======================================
 Verilog file created: sysGCD.v
-Elaborated module file created: sysGCD.ba
+Schedule file created: sysGCD.bsched
 All packages are up to date.

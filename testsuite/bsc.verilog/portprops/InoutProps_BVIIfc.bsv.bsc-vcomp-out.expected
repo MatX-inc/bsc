@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InoutProps_BVIIfc.bsv
 code generation for sysInoutProps_BVIIfc starts
+Elaborated module file created: sysInoutProps_BVIIfc.bmod
 === IOproperties (InoutProps_BVIIfc sysInoutProps_BVIIfc):
 Name                         I/O  size props
 CLK                            I     1 clock
@@ -11,5 +12,5 @@ io_ifc                        IO    32 inout
 -----
 
 Verilog file created: sysInoutProps_BVIIfc.v
-Elaborated module file created: sysInoutProps_BVIIfc.ba
+Schedule file created: sysInoutProps_BVIIfc.bsched
 All packages are up to date.

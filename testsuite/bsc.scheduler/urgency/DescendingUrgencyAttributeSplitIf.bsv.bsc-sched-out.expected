@@ -1,6 +1,7 @@
 checking package dependencies
 compiling DescendingUrgencyAttributeSplitIf.bsv
 code generation for sysDescendingUrgencyAttributeSplitIf starts
+Elaborated module file created: sysDescendingUrgencyAttributeSplitIf.bmod
 === schedule (DescendingUrgencyAttributeSplitIf sysDescendingUrgencyAttributeSplitIf):
 parallel: [esposito: [RL_test_rule_2_T_T -> [],
 		      RL_test_rule_2_T_F -> [],
@@ -57,5 +58,5 @@ Logical execution order: test_rule_2_T_T,
 Warning: "DescendingUrgencyAttributeSplitIf.bsv", line 14, column 8: (G0021)
   According to the generated schedule, rule `test_rule_1' can never fire.
 Verilog file created: sysDescendingUrgencyAttributeSplitIf.v
-Elaborated module file created: sysDescendingUrgencyAttributeSplitIf.ba
+Schedule file created: sysDescendingUrgencyAttributeSplitIf.bsched
 All packages are up to date.

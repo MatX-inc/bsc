@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InoutProps_TwoArgToIfc.bsv
 code generation for sysInoutProps_TwoArgToIfc starts
+Elaborated module file created: sysInoutProps_TwoArgToIfc.bmod
 === IOproperties (InoutProps_TwoArgToIfc sysInoutProps_TwoArgToIfc):
 Name                         I/O  size props
 CLK                            I     1 unused
@@ -14,5 +15,5 @@ io_b                          IO    16 inout
 -----
 
 Verilog file created: sysInoutProps_TwoArgToIfc.v
-Elaborated module file created: sysInoutProps_TwoArgToIfc.ba
+Schedule file created: sysInoutProps_TwoArgToIfc.bsched
 All packages are up to date.

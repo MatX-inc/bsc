@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ResourceTwoRulesCond.bsv
 code generation for sysResourceTwoRulesCond starts
+Elaborated module file created: sysResourceTwoRulesCond.bmod
 Warning: "ResourceTwoRulesCond.bsv", line 6, column 8: (G0003)
   Arbitrating in module `sysResourceTwoRulesCond' between rules `RL_contend'
   and `RL_contend_1'.
@@ -240,5 +241,5 @@ Warning: "ResourceTwoRulesCond.bsv", line 15, column 12: (G0021)
 Warning: "ResourceTwoRulesCond.bsv", line 15, column 12: (G0021)
   According to the generated schedule, rule `contend_3' can never fire.
 Verilog file created: sysResourceTwoRulesCond.v
-Elaborated module file created: sysResourceTwoRulesCond.ba
+Schedule file created: sysResourceTwoRulesCond.bsched
 All packages are up to date.

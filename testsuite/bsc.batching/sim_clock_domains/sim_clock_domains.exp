@@ -14,7 +14,7 @@
 # follow a Map in SimMakeCBlocks, a separate issue, so the whole model is not
 # compared here.)  The batch analogue for this site is a sibling, not a
 # package compiled earlier: SimExpand runs when the model is linked and
-# interns the names as it reads the .ba files, so SimClockDomainsTop puts
+# interns the names as it reads the module pairs, so SimClockDomainsTop puts
 # SimClockDomainsScramble, the same clocks and crossing registers declared
 # in the opposite order, before the probe, and the top's model must define
 # each instance's clocks together, the scrambler's first and the probe's in
@@ -27,10 +27,11 @@ set model "model_$mod.cxx"
 set clocks "$mod.clocks.out"
 set normal "$mod.clocks.normal.out"
 
-# generate the .ba and link it into a Bluesim model, under the given options
+# Generate the .bmod/.bsched pair and link a Bluesim model with these options.
 proc sim_model { src mod options } {
     erase "[file rootname $src].bo"
-    erase "$mod.ba"
+    erase "$mod.bmod"
+    erase "$mod.bsched"
     erase "model_$mod.cxx"
     compile_object_pass $src $mod $options
     link_objects_pass $mod $mod $options
@@ -104,8 +105,10 @@ proc instance_clocks { names inst } {
 
 erase "[file rootname $top].bo"
 erase "[file rootname $scramble].bo"
-erase "$topmod.ba"
-erase "mkSimClockDomainsScramble.ba"
+erase "$topmod.bmod"
+erase "$topmod.bsched"
+erase "mkSimClockDomainsScramble.bmod"
+erase "mkSimClockDomainsScramble.bsched"
 erase "model_$topmod.cxx"
 compile_object_pass $top $topmod
 link_objects_pass $topmod $topmod

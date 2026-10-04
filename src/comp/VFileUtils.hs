@@ -4,25 +4,27 @@ import Flags(Flags(..))
 import ABin(ABinModInfo(..))
 import ASyntax(apkg_name)
 import Id(unQualId, getIdString)
-import FileNameUtil(genFileName, mkVName, getFullFilePath, getRelativeFilePath)
+import FileNameUtil(genFileName, mkVName, getFullFilePath, getRelativeFilePath,
+                    moduleArtifactInputs)
 import StaleUtils(allFreshVs)
 import VFileName
 
 import Data.Either(partitionEithers)
 
 -- Check whether generated Verilog files are up to date with respect to
--- their elaborated (.ba) files.  The Verilog analogue of SimFileUtils,
+-- their module (.bmod/.bsched) files. The Verilog analogue of SimFileUtils,
 -- built on the same StaleUtils conventions, with deliberate differences:
 --   * no transitive invalidation: a parent's .v refers to child modules
 --     by name only, so a stale child never invalidates a fresh parent
---   * no version check: a .ba that loads is current-version by
+--   * no version check: a module pair that loads is current-version by
 --     construction (decodeABin rejects other versions when it is read)
---   * no options descriptor (for now): a .v generated under different
---     codegen flags is reused as long as it is newer than the .ba
+--   * no options descriptor: as before, a .v generated under different
+--     codegen flags is reused as long as it is newer than its inputs
 
 -- Split modules into (stale: regenerate, fresh: reuse the .v).  A
 -- module's .v is stale when it is missing from the location BSC would
--- write it (per -vdir and the prefix) or is older than its .ba.  Fresh
+-- write it (per -vdir and the prefix) or is older than either artifact.
+-- Legacy .ba inputs use the same check against their single file. Fresh
 -- modules are returned as (full path for the simulator, relative name
 -- for reporting), mirroring writeVerilog's two uses of the file name.
 partitionStaleVerilogMods :: Flags -> String
@@ -34,8 +36,9 @@ partitionStaleVerilogMods flags prefix abmis = do
           vName_init <- genFileName mkVName (vdir flags) prefix modstr
           let vName = getFullFilePath vName_init
               vNameRel = getRelativeFilePath vName_init
-          fresh <- allFreshVs bafile [vName]
-          return $ if fresh
+          fresh_inputs <- mapM (\f -> allFreshVs f [vName])
+                               (moduleArtifactInputs bafile)
+          return $ if and fresh_inputs
                    then Right (VFileName vName, vNameRel)
                    else Left (bafile, abmi)
     results <- mapM checkOne abmis

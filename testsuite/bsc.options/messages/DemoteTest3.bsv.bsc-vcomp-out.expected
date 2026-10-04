@@ -1,6 +1,7 @@
 checking package dependencies
 compiling DemoteTest3.bsv
 code generation for sysErrors starts
+Elaborated module file created: sysErrors.bmod
 Warning: Unknown position: (S0080)
   1 warnings were suppressed.
 Error: Unknown position: (G0027)

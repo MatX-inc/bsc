@@ -1,6 +1,7 @@
 checking package dependencies
 compiling DescendingUrgencyAttributeForLoop.bsv
 code generation for sysDescendingUrgencyAttributeForLoop starts
+Elaborated module file created: sysDescendingUrgencyAttributeForLoop.bmod
 === schedule (DescendingUrgencyAttributeForLoop sysDescendingUrgencyAttributeForLoop):
 parallel: [esposito: [RL_test_rule_1 -> [],
 		      RL_test_rule_2 -> [RL_test_rule_1],
@@ -59,5 +60,5 @@ Warning: "DescendingUrgencyAttributeForLoop.bsv", line 9, column 10: (G0021)
 Warning: "DescendingUrgencyAttributeForLoop.bsv", line 9, column 10: (G0021)
   According to the generated schedule, rule `test_rule_2_2' can never fire.
 Verilog file created: sysDescendingUrgencyAttributeForLoop.v
-Elaborated module file created: sysDescendingUrgencyAttributeForLoop.ba
+Schedule file created: sysDescendingUrgencyAttributeForLoop.bsched
 All packages are up to date.

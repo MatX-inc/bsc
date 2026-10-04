@@ -1,6 +1,7 @@
 checking package dependencies
 compiling SplitTupleMethodTest_sat-stp.bsv
 code generation for mkValSub starts
+Elaborated module file created: mkValSub.bmod
 === schedule (SplitTupleMethodTest_sat-stp mkValSub):
 parallel: [esposito: [get -> []]]
 order: [get]
@@ -30,8 +31,9 @@ Logical execution order: get
 
 ========================================
 Verilog file created: mkValSub.v
-Elaborated module file created: mkValSub.ba
+Schedule file created: mkValSub.bsched
 code generation for mkAVSub starts
+Elaborated module file created: mkAVSub.bmod
 === schedule (SplitTupleMethodTest_sat-stp mkAVSub):
 parallel: [esposito: [get -> []]]
 order: [get]
@@ -61,8 +63,9 @@ Logical execution order: get
 
 =======================================
 Verilog file created: mkAVSub.v
-Elaborated module file created: mkAVSub.ba
+Schedule file created: mkAVSub.bsched
 code generation for sysSplitTupleMethodTest starts
+Elaborated module file created: sysSplitTupleMethodTest.bmod
 === schedule (SplitTupleMethodTest_sat-stp sysSplitTupleMethodTest):
 parallel: [esposito: [RL_aa -> [], RL_ab -> [], RL_cc -> []]]
 order: [RL_aa, RL_ab, RL_cc]
@@ -106,5 +109,5 @@ Logical execution order: aa, ab, cc
 
 =======================================================
 Verilog file created: sysSplitTupleMethodTest.v
-Elaborated module file created: sysSplitTupleMethodTest.ba
+Schedule file created: sysSplitTupleMethodTest.bsched
 All packages are up to date.

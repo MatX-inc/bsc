@@ -1,10 +1,11 @@
 checking package dependencies
 compiling RuleMethClash.bsv
 code generation for sysRuleMethClash starts
+Elaborated module file created: sysRuleMethClash.bmod
 Warning: "RuleMethClash.bsv", line 6, column 8: (G0010)
   Rule "incr" was treated as more urgent than "incr". Conflicts:
     "incr" cannot fire before "incr": calls to rg.write vs. rg.read
     "incr" cannot fire before "incr": calls to rg.write vs. rg.read
 Verilog file created: sysRuleMethClash.v
-Elaborated module file created: sysRuleMethClash.ba
+Schedule file created: sysRuleMethClash.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling WMissingRule1.bs
 code generation for mkWMissingRule1 starts
+Elaborated module file created: mkWMissingRule1.bmod
 Warning: "WMissingRule1.bs", line 24, column 0: (G0010)
   Rule "One" was treated as more urgent than "Two". Conflicts:
     "One" cannot fire before "Two": calls to y.write vs. y.read
@@ -44,5 +45,5 @@ Warning: "WMissingRule1.bs", line 58, column 22: (G0021)
 Warning: "WMissingRule1.bs", line 65, column 22: (G0021)
   According to the generated schedule, rule `Four' can never fire.
 Verilog file created: mkWMissingRule1.v
-Elaborated module file created: mkWMissingRule1.ba
+Schedule file created: mkWMissingRule1.bsched
 All packages are up to date.

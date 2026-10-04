@@ -2,5 +2,6 @@ checking package dependencies
 compiling PrintType2.bsv
 code generation for sysPrintType2 starts
 Compilation message: Bit#(17)
-Elaborated module file created: sysPrintType2.ba
+Elaborated module file created: sysPrintType2.bmod
+Schedule file created: sysPrintType2.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling AVArgUse_SBR.bsv
 code generation for mkAVArgUse_SBR starts
+Elaborated module file created: mkAVArgUse_SBR.bmod
 === schedule (AVArgUse_SBR mkAVArgUse_SBR):
 parallel: [esposito: [m -> []]]
 order: [m]
@@ -30,8 +31,9 @@ Logical execution order: m
 
 ==============================================
 Verilog file created: mkAVArgUse_SBR.v
-Elaborated module file created: mkAVArgUse_SBR.ba
+Schedule file created: mkAVArgUse_SBR.bsched
 code generation for sysAVArgUse_SBR starts
+Elaborated module file created: sysAVArgUse_SBR.bmod
 Warning: "AVArgUse_SBR.bsv", line 22, column 8: (G0117)
   Rule `rA' shadows the effects of `rB' when they execute in the same clock
   cycle. Affected method calls:
@@ -72,5 +74,5 @@ Logical execution order: rB, rA
 
 ===============================================
 Verilog file created: sysAVArgUse_SBR.v
-Elaborated module file created: sysAVArgUse_SBR.ba
+Schedule file created: sysAVArgUse_SBR.bsched
 All packages are up to date.

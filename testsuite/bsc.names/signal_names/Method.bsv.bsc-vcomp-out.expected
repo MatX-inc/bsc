@@ -67,6 +67,7 @@ clock domain = Just (0), resets = [0]
 
 -----
 
+Elaborated module file created: sysMethod.bmod
 Verilog file created: sysMethod.v
-Elaborated module file created: sysMethod.ba
+Schedule file created: sysMethod.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling MethodValue_OneReg.bsv
 code generation for sysMethodValue_OneReg starts
+Elaborated module file created: sysMethodValue_OneReg.bmod
 === IOproperties (MethodValue_OneReg sysMethodValue_OneReg):
 Name                         I/O  size props
 m                              O    16 reg
@@ -12,5 +13,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysMethodValue_OneReg.v
-Elaborated module file created: sysMethodValue_OneReg.ba
+Schedule file created: sysMethodValue_OneReg.bsched
 All packages are up to date.

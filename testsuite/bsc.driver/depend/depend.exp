@@ -35,8 +35,8 @@ compare_file $outfile "$outfile.expected.2"
 }
 
 # -----
-# Test that .ba files are checked when the -elab flag is used with the
-# Verilog backend and BSV files are recompiled if any .ba file has changed
+# Test that both halves of a module pair are checked with -elab and the
+# Verilog backend, and missing either half forces recompilation.
 # (Bug 1818)
 
 if { $vtest == 1 } {
@@ -46,32 +46,39 @@ set outfile [make_bsc_vcomp_output_name VerilogElab.bsv]
 compile_verilog_pass VerilogElab.bsv {} {-elab}
 compare_file $outfile
 
-# make sure time passes for the change to be noticed
-exec sleep 1
-erase sysVerilogElab.ba
-
-compile_verilog_pass VerilogElab.bsv {} {-elab}
-compare_file $outfile
+foreach suffix {bmod bsched} {
+    # Leave the other half present so each missing-file check is exercised.
+    exec sleep 1
+    erase sysVerilogElab.$suffix
+    compile_verilog_pass VerilogElab.bsv {} {-elab}
+    compare_file $outfile
+    files_exist {sysVerilogElab.bmod sysVerilogElab.bsched}
+}
 
 }
 
 # -----
-# Test that an up-to-date .ba elaborated for a different backend does not
+# Test that an up-to-date pair elaborated for a different backend does not
 # satisfy the generated-file check: after a Verilog compile of a
 # backend-specific module (with -elab), a Bluesim compile with -u must
-# re-elaborate rather than leave the Verilog-tagged .ba in place to fail
+# re-elaborate rather than leave the Verilog-tagged schedule in place to fail
 # the Bluesim link with a backend mismatch (S0042)
 
 if { $ctest == 1 && $vtest == 1 } {
 
 compile_verilog_pass CrossElab.bsv sysCrossElab {-elab}
 find_regexp [make_bsc_vcomp_output_name CrossElab.bsv] \
-    {Elaborated Verilog module file created: sysCrossElab\.ba}
+    {Elaborated module file created: sysCrossElab\.bmod}
+find_regexp [make_bsc_vcomp_output_name CrossElab.bsv] \
+    {Schedule file created: sysCrossElab\.bsched}
 
-# recompiling for Bluesim must regenerate the .ba, not skip codegen
+# Recompiling for Bluesim must regenerate both files, not skip codegen.
 compile_object_pass CrossElab.bsv sysCrossElab
 find_regexp [make_bsc_ccomp_output_name CrossElab.bsv] \
-    {Elaborated Bluesim module file created: sysCrossElab\.ba}
+    {Elaborated module file created: sysCrossElab\.bmod}
+find_regexp [make_bsc_ccomp_output_name CrossElab.bsv] \
+    {Schedule file created: sysCrossElab\.bsched}
+files_exist {sysCrossElab.bmod sysCrossElab.bsched}
 
 # and the Bluesim link succeeds
 link_objects_pass {} sysCrossElab
@@ -79,18 +86,18 @@ link_objects_pass {} sysCrossElab
 }
 
 # -----
-# With the Verilog backend, .ba files are now written by default
+# With the Verilog backend, module pairs are written by default
 # (-elab is on, as it has always been for -sim); -no-elab suppresses them
 
 if { $vtest == 1 } {
 
 set outfile [make_bsc_vcomp_output_name VerilogElab.bsv]
 
-erase sysVerilogElab.ba
+foreach suffix {bmod bsched} { erase sysVerilogElab.$suffix }
 compile_verilog_pass VerilogElab.bsv {} {}
-files_exist sysVerilogElab.ba
+files_exist {sysVerilogElab.bmod sysVerilogElab.bsched}
 
-erase sysVerilogElab.ba
+foreach suffix {bmod bsched} { erase sysVerilogElab.$suffix }
 # -no-elab must come after -verilog, since the backend flag turns -elab on;
 # compile_verilog_pass puts user options first, so run bsc directly
 set noelab_out [make_bsc_output_name VerilogElabNoElab]
@@ -100,10 +107,13 @@ if [ gen_basic_output {-no-show-timestamps -no-show-version -verilog -no-elab -u
     fail "VerilogElab should compile with -verilog -no-elab"
 }
 find_regexp_fail $noelab_out {Elaborated}
-if { [file exists [file join [absolute $srcdir] $subdir sysVerilogElab.ba]] } {
-    fail "sysVerilogElab.ba should not exist with -no-elab"
-} else {
-    pass "sysVerilogElab.ba correctly absent with -no-elab"
+find_regexp_fail $noelab_out {Schedule file created}
+foreach suffix {bmod bsched} {
+    if { [file exists [file join [absolute $srcdir] $subdir sysVerilogElab.$suffix]] } {
+        fail "sysVerilogElab.$suffix should not exist with -no-elab"
+    } else {
+        pass "sysVerilogElab.$suffix correctly absent with -no-elab"
+    }
 }
 
 }
@@ -136,8 +146,17 @@ if { $vtest == 1 } {
 # section tests (the harness implies -use-dpi under verilator, which
 # generates no wrapper files at all)
 
-# Compile, generating .h and .c
+# Compile, generating foreign metadata and the .h and .c wrappers.
 compile_verilog_pass BDPI.bsv {} {-no-use-dpi}
+files_exist {my_C_or.bdpi}
+
+# Removing the foreign metadata must invalidate the package too.
+erase {my_C_or.bdpi}
+exec sleep 1
+compile_verilog_pass BDPI.bsv {} {-u -no-use-dpi}
+find_n_strings [make_bsc_vcomp_output_name BDPI.bsv] \
+    {Foreign import file created: my_C_or.bdpi} 1
+files_exist {my_C_or.bdpi}
 
 # Remove the .c
 erase {vpi_wrapper_my_C_or.c}

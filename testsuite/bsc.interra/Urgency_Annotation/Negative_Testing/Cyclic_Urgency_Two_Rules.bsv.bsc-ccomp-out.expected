@@ -1,6 +1,7 @@
 checking package dependencies
 compiling Cyclic_Urgency_Two_Rules.bsv
 code generation for mkCyclic_Urgency_Two_Rules starts
+Elaborated module file created: mkCyclic_Urgency_Two_Rules.bmod
 Error: "Cyclic_Urgency_Two_Rules.bsv", line 6, column 8: (G0030)
   A cycle was detected in the urgency requirements for this module:
     `RL_test_rule_1' -> `RL_test_rule_2' -> `RL_test_rule_1'
@@ -13,4 +14,4 @@ Error: "Cyclic_Urgency_Two_Rules.bsv", line 6, column 8: (G0030)
     user urgencies located at the following positions:
       "Cyclic_Urgency_Two_Rules.bsv", line 17, column 27
       "Cyclic_Urgency_Two_Rules.bsv", line 17, column 40
-Elaborated error module file created: mkCyclic_Urgency_Two_Rules.ba
+Schedule error file created: mkCyclic_Urgency_Two_Rules.bsched

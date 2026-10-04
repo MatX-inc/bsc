@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ResourceOneRuleCSEnoSC.bs
 code generation for sysResourceOneRuleCSEnoSC starts
+Elaborated module file created: sysResourceOneRuleCSEnoSC.bmod
 Error: "ResourceOneRuleCSEnoSC.bs", line 15, column 17: (G0004)
   Rule `RL_unnamed' uses methods that conflict in parallel:
     q.enq(...)
@@ -22,4 +23,4 @@ Predicate: q.i_notFull
  
 
 =========================================================
-Elaborated error module file created: sysResourceOneRuleCSEnoSC.ba
+Schedule error file created: sysResourceOneRuleCSEnoSC.bsched

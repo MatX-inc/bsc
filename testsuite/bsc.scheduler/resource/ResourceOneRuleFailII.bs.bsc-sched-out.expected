@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ResourceOneRuleFailII.bs
 code generation for sysResourceOneRuleFailII starts
+Elaborated module file created: sysResourceOneRuleFailII.bmod
 Error: "ResourceOneRuleFailII.bs", line 24, column 8: (G0002)
   `a.sub' needs more than 5 ports for the following uses:
       `a.sub 8'd0' at "ResourceOneRuleFailII.bs", line 24, column 8
@@ -24,4 +25,4 @@ Predicate: True
  
 
 ========================================================
-Elaborated error module file created: sysResourceOneRuleFailII.ba
+Schedule error file created: sysResourceOneRuleFailII.bsched

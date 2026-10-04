@@ -1,4 +1,4 @@
-# Test that -remap-path-prefix makes .bo/.ba output independent of the
+# Test that -remap-path-prefix makes .bo/.bmod/.bsched output independent of the
 # build directory: the same sources compiled from two different
 # directories produce byte-identical files with no embedded build paths.
 
@@ -21,5 +21,5 @@ if { $status != 0 } {
 } elseif { [catch {exec diff -u $expected_file $output_file} diff_err] } {
     fail "remap-path: output differs from expected"
 } else {
-    pass "remap-path: deterministic .bo/.ba across build directories"
+    pass "remap-path: deterministic .bo/.bmod/.bsched across build directories"
 }

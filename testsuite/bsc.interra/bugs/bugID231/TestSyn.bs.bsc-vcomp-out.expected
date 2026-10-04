@@ -1,6 +1,7 @@
 checking package dependencies
 compiling TestSyn.bs
 code generation for mkStack starts
+Elaborated module file created: mkStack.bmod
 Verilog file created: mkStack.v
-Elaborated module file created: mkStack.ba
+Schedule file created: mkStack.bsched
 All packages are up to date.

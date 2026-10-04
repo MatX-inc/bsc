@@ -2,6 +2,7 @@ checking package dependencies
 compiling ./BypassFIFO.bsv
 compiling GetUrgency.bsv
 code generation for mkGetTest starts
+Elaborated module file created: mkGetTest.bmod
 === schedule (GetUrgency mkGetTest):
 parallel: [esposito: [RL_enq -> [],
 		      RL_bypass_fifo_doResult -> [],
@@ -85,5 +86,5 @@ Logical execution order: enq,
 
 =========================================
 Verilog file created: mkGetTest.v
-Elaborated module file created: mkGetTest.ba
+Schedule file created: mkGetTest.bsched
 All packages are up to date.

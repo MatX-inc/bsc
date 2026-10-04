@@ -1,6 +1,7 @@
 checking package dependencies
 compiling APkgProps_EnFold.bsv
 code generation for mkEnFoldShared starts
+Elaborated module file created: mkEnFoldShared.bmod
 Warning: "APkgProps_EnFold.bsv", line 21, column 8: (G0010)
   Rule "m" was treated as more urgent than "r". Conflicts:
     "m" cannot fire before "r": calls to rg.write vs. rg.read
@@ -26,8 +27,9 @@ EN_m                           I     1 unused
 -----
 
 Verilog file created: mkEnFoldShared.v
-Elaborated module file created: mkEnFoldShared.ba
+Schedule file created: mkEnFoldShared.bsched
 code generation for mkEnFoldLast starts
+Elaborated module file created: mkEnFoldLast.bmod
 === APackageIOproperties (APkgProps_EnFold mkEnFoldLast):
 Name                         I/O  size props
 RDY_set1                       O     1 const
@@ -61,5 +63,5 @@ EN_set2                        I     1 unused
 -----
 
 Verilog file created: mkEnFoldLast.v
-Elaborated module file created: mkEnFoldLast.ba
+Schedule file created: mkEnFoldLast.bsched
 All packages are up to date.

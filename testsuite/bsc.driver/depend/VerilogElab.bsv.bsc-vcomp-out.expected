@@ -1,6 +1,7 @@
 checking package dependencies
 compiling VerilogElab.bsv
 code generation for sysVerilogElab starts
+Elaborated module file created: sysVerilogElab.bmod
 Verilog file created: sysVerilogElab.v
-Elaborated module file created: sysVerilogElab.ba
+Schedule file created: sysVerilogElab.bsched
 All packages are up to date.

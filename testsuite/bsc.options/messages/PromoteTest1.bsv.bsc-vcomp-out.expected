@@ -6,6 +6,7 @@ Warning: "PromoteTest1.bsv", line 15, column 8: (G0020)
   unpredictable order during Verilog simulations.
       Top-level interface method `m2' calls a system function (e.g., $display)
       at "PromoteTest1.bsv", line 38, column 7
+Elaborated module file created: sysWarnings.bmod
 Error: "PromoteTest1.bsv", line 15, column 8: (G0010)
   Rule "m1" was treated as more urgent than "r3". Conflicts:
     "m1" cannot fire before "r3": calls to rg3.write vs. rg3.read

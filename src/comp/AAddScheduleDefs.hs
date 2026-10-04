@@ -4,6 +4,7 @@ import Warmup ()
 import ASyntax
 import ASyntaxUtil
 import AScheduleInfo
+import ASchedulePatch (scheduleRuleGuard, scheduleIfcRuleGuards)
 import AUses
 import Flags
 import Pragma
@@ -315,18 +316,12 @@ replaceReadyExpr _ _ x = x
 -- Replace the predicate in a rule with a reference to the
 -- rule's CAN_FIRE def.
 replaceRulePredicate :: ARule -> ARule
-replaceRulePredicate r =
-  let cf_id = mkIdCanFire (aRuleName r)
-  in r { arule_pred = (aBoolVar cf_id) }
+replaceRulePredicate = scheduleRuleGuard
 
 -- Replace the predicate in all the rules of a method with a
 -- reference to the rule's CAN_FIRE def.
 replaceIfcRulePredicates :: AIFace -> AIFace
-replaceIfcRulePredicates m@(AIAction { aif_body = rs }) =
-  m { aif_body = map replaceRulePredicate rs }
-replaceIfcRulePredicates m@(AIActionValue { aif_body = rs }) =
-  m { aif_body = map replaceRulePredicate rs }
-replaceIfcRulePredicates m = m
+replaceIfcRulePredicates = scheduleIfcRuleGuards
 
  -- -------------------------
 

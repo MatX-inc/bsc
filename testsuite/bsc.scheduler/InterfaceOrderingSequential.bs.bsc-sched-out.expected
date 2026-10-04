@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InterfaceOrderingSequential.bs
 code generation for sysInterfaceOrderingSequential starts
+Elaborated module file created: sysInterfaceOrderingSequential.bmod
 === schedule (InterfaceOrderingSequential sysInterfaceOrderingSequential):
 parallel: [esposito: [act -> [], RL_write -> []]]
 order: [RL_write, act]
@@ -36,5 +37,5 @@ Logical execution order: write, act
 
 ==============================================================
 Verilog file created: sysInterfaceOrderingSequential.v
-Elaborated module file created: sysInterfaceOrderingSequential.ba
+Schedule file created: sysInterfaceOrderingSequential.bsched
 All packages are up to date.

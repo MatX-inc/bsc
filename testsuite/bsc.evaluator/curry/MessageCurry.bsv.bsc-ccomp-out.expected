@@ -3,5 +3,6 @@ compiling MessageCurry.bsv
 code generation for mkMessageCurry starts
 Compilation message: "MessageCurry.bsv", line 14, column 36: a
 Compilation message: "MessageCurry.bsv", line 14, column 54: b
-Elaborated module file created: mkMessageCurry.ba
+Elaborated module file created: mkMessageCurry.bmod
+Schedule file created: mkMessageCurry.bsched
 All packages are up to date.

@@ -4,6 +4,7 @@ compiling ./X86_Datatypes.bsv
 compiling ./BaseTypes.bsv
 compiling IBuffer2.bsv
 code generation for mkIBuffer starts
+Elaborated module file created: mkIBuffer.bmod
 === schedule (IBuffer2 mkIBuffer):
 parallel: [esposito: [handleIBufferRequest -> [],
 		      flushAddress -> [],
@@ -274,5 +275,5 @@ Logical execution order: handleIBufferRequest,
 
 =========================================
 Verilog file created: mkIBuffer.v
-Elaborated module file created: mkIBuffer.ba
+Schedule file created: mkIBuffer.bsched
 All packages are up to date.

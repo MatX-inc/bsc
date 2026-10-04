@@ -1,6 +1,7 @@
 checking package dependencies
 compiling OutputClockAndReset.bsv
 code generation for sysOutputClockAndReset starts
+Elaborated module file created: sysOutputClockAndReset.bmod
 === IOproperties (OutputClockAndReset sysOutputClockAndReset):
 Name                         I/O  size props
 CLK_clk_out                    O     1 clock
@@ -13,5 +14,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysOutputClockAndReset.v
-Elaborated module file created: sysOutputClockAndReset.ba
+Schedule file created: sysOutputClockAndReset.bsched
 All packages are up to date.

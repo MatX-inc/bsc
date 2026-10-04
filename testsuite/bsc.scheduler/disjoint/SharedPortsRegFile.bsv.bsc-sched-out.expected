@@ -1,6 +1,7 @@
 checking package dependencies
 compiling SharedPortsRegFile.bsv
 code generation for sysSharedPortsRegFile starts
+Elaborated module file created: sysSharedPortsRegFile.bmod
 Warning: "SharedPortsRegFile.bsv", line 4, column 8: (G0010)
   Rule "do1" was treated as more urgent than "do2". Conflicts:
     "do1" cannot fire before "do2": calls to rg.write vs. rg.read
@@ -42,5 +43,5 @@ Logical execution order: do1, do2
 
 =====================================================
 Verilog file created: sysSharedPortsRegFile.v
-Elaborated module file created: sysSharedPortsRegFile.ba
+Schedule file created: sysSharedPortsRegFile.bsched
 All packages are up to date.

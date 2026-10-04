@@ -9,7 +9,10 @@ DONTKEEPFILES ?= xxxx
 TRYDELFILES = $(wildcard \
 	*.bi \
 	*.bo \
+	*.bdpi \
 	*.ba \
+	*.bmod \
+	*.bsched \
 	*inline-reg \
 	*c_sim \
 	*.c \

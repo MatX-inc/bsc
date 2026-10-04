@@ -8,6 +8,7 @@ Warning: "APkgProps_Foreign.bsv", line 15, column 8: (G0020)
       $display) at "APkgProps_Foreign.bsv", line 19, column 7
       Top-level interface method `mixed' calls a system function (e.g.,
       $display) at "APkgProps_Foreign.bsv", line 24, column 7
+Elaborated module file created: sysAPkgProps_Foreign.bmod
 === APackageIOproperties (APkgProps_Foreign sysAPkgProps_Foreign):
 Name                         I/O  size props
 RDY_disp                       O     1 const
@@ -39,5 +40,5 @@ EN_mixed                       I     1
 -----
 
 Verilog file created: sysAPkgProps_Foreign.v
-Elaborated module file created: sysAPkgProps_Foreign.ba
+Schedule file created: sysAPkgProps_Foreign.bsched
 All packages are up to date.

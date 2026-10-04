@@ -151,17 +151,16 @@ compile_verilog_fail_error MethodSchedToExec_SecondMethod.bsv G0095
 # Test that compilation for the Bluesim backend fails
 compile_object_fail_error RuleBetweenMethods.bsv G0096
 # Test that compilation for Verilog succeeds, with a warning
-# (and generate .ba files)
+# (and generate module pairs)
 compile_verilog_pass_warning RuleBetweenMethods.bsv G0096 1 "" {-elab}
-# Test that the .ba files were tainted to be Verilog only
-# We could look for "Elaborated Verilog module file created: mkTest.ba"
-# but to be more robust:
+# Test that the saved schedules were tainted to be Verilog only by
+# attempting to link the same pairs with each backend.
 if {$vtest == 1} {
 link_objects_fail_error \
-    {sysRuleBetweenMethods.ba mkRuleBetweenMethods_Sub.ba} \
+    {sysRuleBetweenMethods.bsched mkRuleBetweenMethods_Sub.bsched} \
     sysRuleBetweenMethods S0042
 link_verilog_pass \
-    {sysRuleBetweenMethods.ba mkRuleBetweenMethods_Sub.ba} \
+    {sysRuleBetweenMethods.bsched mkRuleBetweenMethods_Sub.bsched} \
     sysRuleBetweenMethods
 }
 
@@ -202,23 +201,22 @@ compare_file \
 # -----
 
 # Test that compilation for Verilog succeeds, with a warning
-# (and generate .ba files)
+# (and generate module pairs)
 
 compile_verilog_pass_warning RuleBetweenMethods_TwoRulesDisjoint.bsv G0100 1 "" {-elab}
 compile_verilog_pass_warning RuleBetweenMethods_TwoRulesConflict.bsv G0100 1 "" {-elab}
 compile_verilog_pass_warning RuleBetweenMethods_TwoRulesBothDirsDisjoint.bsv G0101 1 "" {-elab}
 
-# Test that the .ba files were tainted to be Verilog only
-# We could look for "Elaborated Verilog module file created: mkTest.ba"
-# but to be more robust:
+# Test that the saved schedules were tainted to be Verilog only by
+# attempting to link the same pairs with each backend.
 if {$vtest == 1} {
 link_objects_fail_error \
-    {sysRuleBetweenMethods_TwoRulesDisjoint.ba \
-     mkRuleBetweenMethods_TwoRulesDisjoint_Sub.ba} \
+    {sysRuleBetweenMethods_TwoRulesDisjoint.bsched \
+     mkRuleBetweenMethods_TwoRulesDisjoint_Sub.bsched} \
     sysRuleBetweenMethods_TwoRulesDisjoint S0042
 link_verilog_pass \
-    {sysRuleBetweenMethods_TwoRulesDisjoint.ba \
-     mkRuleBetweenMethods_TwoRulesDisjoint_Sub.ba} \
+    {sysRuleBetweenMethods_TwoRulesDisjoint.bsched \
+     mkRuleBetweenMethods_TwoRulesDisjoint_Sub.bsched} \
     sysRuleBetweenMethods_TwoRulesDisjoint
 }
 
@@ -264,7 +262,7 @@ compile_object_fail_error RuleBetweenMethods_CFAttrNoCommonMethod.bsv G0100
 # check to make sure that the arbitrary ordering edges for CF and ME
 # assertion checking do not introduce new combsched errors
 compile_object_pass MECombSched.bsv
-link_objects_pass sysMECombSched.ba sysMECombSched
+link_objects_pass sysMECombSched.bsched sysMECombSched
 
 # Also check for rules which are determined ME by BSC (not given by the user).
 # If such rules call submodule methods with rules between them, we need to
@@ -273,7 +271,7 @@ link_objects_pass sysMECombSched.ba sysMECombSched
 # XXX note that this test only works is arb edges are picked in the
 # XXX expected direction -- need a way to confirm that
 compile_object_pass RuleBetweenMethods_MEWithFFEdges.bsv
-link_objects_pass sysRuleBetweenMethods_MEWithFFEdges.ba \
+link_objects_pass sysRuleBetweenMethods_MEWithFFEdges.bsched \
     sysRuleBetweenMethods_MEWithFFEdges
 
 # -----

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ResourcePredicates.bs
 code generation for sysResourcePredicates starts
+Elaborated module file created: sysResourcePredicates.bmod
 Warning: "ResourcePredicates.bs", line 9, column 0: (G0010)
   Rule "A" was treated as more urgent than "B". Conflicts:
     "A" cannot fire before "B":
@@ -45,5 +46,5 @@ Logical execution order: A, B
 
 =====================================================
 Verilog file created: sysResourcePredicates.v
-Elaborated module file created: sysResourcePredicates.ba
+Schedule file created: sysResourcePredicates.bsched
 All packages are up to date.

@@ -4,24 +4,30 @@ module ABinUtil (
                  readAndCheckABin,
                  readAndCheckABinPath,
                  readAndCheckABinPathCatch,
+                 readAndCheckForeignPathCatch,
                  isStaleABinFile,
                  ) where
 
 import Data.List(nub, partition)
 import Data.Maybe(isJust, fromJust)
 import Control.Monad(when)
-import qualified Data.ByteString as BS
 import Control.Monad.Except(ExceptT, throwError)
 import Control.Monad.State(StateT, runStateT, lift, get, put)
+import System.Directory(doesFileExist)
+import System.Exit(ExitCode)
+import System.IO.Error(ioeGetErrorString)
 
 import Version(bscVersionStr)
 import Backend
-import FileNameUtil(abinSuffix)
+import Flags(Flags)
+import qualified PhaseConfig as PC
+import FileNameUtil(abinSuffix, bdpiSuffix, bmodSuffix, bschedSuffix, hasDotSuf, dropSuf)
 import FileIOUtil(readBinaryFileCatch, readBinFilePath, readBinaryFileMaybe)
 import Util(fromMaybeM)
 
 import Error(internalError, EMsg, EMsgs(..), ErrMsg(..),
              ErrorHandle, bsError, bsWarning, convExceptTToIO)
+import Eval(rnf)
 import Id(Id, getIdString)
 import Position(cmdPosition, noPosition, getPosition)
 import PPrint
@@ -31,10 +37,14 @@ import VModInfo(vName, getVNameString)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap)
 import ABin
 import GenABin(readABinFile, readABinFileMaybe)
+import GenBDPI(BDPI(..), readBDPIFile, readBDPIFileMaybe)
+import GenModule(readModulePair, readBModFileMaybe, readBSchedFileMaybe)
+import AModule(AModule(..), BSched(..))
 
 import qualified Control.Exception as CE
 
 import qualified Data.Map as M
+import qualified Data.ByteString as B
 
 --import Debug.Trace(traceM)
 
@@ -63,9 +73,9 @@ type ABinMap = M.Map String FilePath
 
 -- ---------------
 
--- Monad for reading in .ba files
+-- Monad for reading module and foreign metadata artifacts
 --
--- When linking Verilog, we want to try reading in a .ba hierarchy,
+-- When linking Verilog, we want to try reading the artifact hierarchy,
 -- but fall back to using .v files if it fails.
 -- Therefore, ExceptT is used to catch errors.  Serious failures can
 -- still be reported immediately, via IO -- such as file version mismatch,
@@ -76,6 +86,7 @@ type M = StateT MState (ExceptT EMsgs IO)
 -- monad state
 data MState = MState {
          m_errHandle :: ErrorHandle
+       , m_flags :: Flags
        , m_verbose :: Bool
        , m_ifc_path :: [String]
        , m_backend :: Maybe Backend
@@ -128,12 +139,12 @@ putHierMap m = get >>= \s -> put (s { m_foundmod_map = m })
 
 -- prim_names = list of primtives which don't need .ba files
 getABIHierarchy ::
-    ErrorHandle -> Bool -> [String] -> (Maybe Backend) ->
+    ErrorHandle -> Flags -> Bool -> [String] -> (Maybe Backend) ->
     [String] -> String -> [(String, ABin)] ->
     ExceptT EMsgs IO
         (Id, HierMap, InstModMap, ForeignFuncMap, ABinMap, [String],
          [(String, (ABinEitherModInfo, String))])
-getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
+getABIHierarchy errh flags be_verbose ifc_path backend prim_names topname fabis = do
     -- pair the abis with their module name
     let
         pair_with_name (f,abi) = (getIdString (getABIName abi), (f,abi))
@@ -142,6 +153,7 @@ getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
     -- create the initial state
     let state0 = MState {
                      m_errHandle = errh,
+                     m_flags = flags,
                      m_verbose = be_verbose,
                      m_ifc_path = ifc_path,
                      m_backend = backend,
@@ -156,7 +168,8 @@ getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
         no_mod_children m = (m,([],[]))
         start_hiermap = M.fromList (map no_mod_children existing_mods)
         start_ffuncmap = M.empty
-        start_filemap = M.fromList [ (n,f) | (n,(f,_)) <- fabis_by_name ]
+        start_filemap = M.fromList [ (n,f) | (n,(f,abi)) <- fabis_by_name,
+                                           isModuleABI abi ]
 
     (topmodId, end_state)
         <- runStateT (followABIHierarchy Nothing topname) state0
@@ -386,16 +399,17 @@ findForeignFuncABI parent ffuncname = do
                           EWrongABinTypeExpectedForeignFunc ffuncname parent)])
 
 
--- The first two arguments are for better reporting of errors.
--- The first is whether this is a module being looked up (not a foreignfunc).
+-- The first argument selects the module or foreign-function namespace.
 -- The second indicates whether we are looking for the top module (Nothing)
 -- or a module instantiated by another module in the design (Just parent).
 findABI :: Bool -> Maybe String -> String -> M ABin
 findABI isMod mparent lookup_name = do
-    -- first, try to find it in the provided modules
+    -- A module and foreign function may share a name. Keep the other kind
+    -- available for its own lookup, even when both were provided explicitly.
     abis <- getABIs
     let (found_abis, other_abis) =
-            partition (\ (i,a) -> i == lookup_name) abis
+            partition (\ (i,(_,abi)) -> i == lookup_name &&
+                                       isModuleABI abi == isMod) abis
     case found_abis of
         [(_,(_,abi))] -> setABIs other_abis >> return abi
         [] -> do -- try to find the module in the path
@@ -404,7 +418,19 @@ findABI isMod mparent lookup_name = do
                 ifc_path   = m_ifc_path s
                 backend    = m_backend s
                 errh       = m_errHandle s
-                err = if (isMod)
+                flags      = m_flags s
+                -- Preserve the wrong-kind diagnostic for an explicit input
+                -- only when no artifact in the requested namespace is found.
+                wrongKindProvided = any ((== lookup_name) . fst) abis
+                err = if wrongKindProvided
+                      then (cmdPosition,
+                            if isMod
+                            then EWrongABinTypeExpectedModule lookup_name mparent
+                            else case mparent of
+                              Just parent -> EWrongABinTypeExpectedForeignFunc
+                                                 lookup_name parent
+                              Nothing -> internalError "findABI: ffunc mparent")
+                      else if (isMod)
                       then (cmdPosition,
                             EMissingABinModFile lookup_name mparent)
                       else
@@ -415,9 +441,11 @@ findABI isMod mparent lookup_name = do
                          Nothing -> internalError "findABI: ffunc mparent"
             (file, abi) <-
                 fromMaybeM (throwError (EMsgs [err])) $
-                lift $ readAndCheckABinPath errh be_verbose ifc_path backend
+                lift $ readAndCheckArtifactPath isMod errh flags be_verbose ifc_path backend
                            lookup_name
-            recordFile lookup_name file
+            -- This map is consumed by module code-generation reuse checks;
+            -- foreign metadata must not replace a same-named module's path.
+            when isMod $ recordFile lookup_name file
             return abi
         files -> let fnames = map (fst . snd) files
                  in  throwError
@@ -451,6 +479,11 @@ hierMapToInstModMap hiermap topmod =
 
 -- ===============
 
+isModuleABI :: ABin -> Bool
+isModuleABI (ABinMod {}) = True
+isModuleABI (ABinModSchedErr {}) = True
+isModuleABI (ABinForeignFunc {}) = False
+
 getABIName :: ABin -> Id
 -- for modules, the abiname is qualified and ends in "_"
 getABIName (ABinMod modinfo _) = apkg_name (abmi_apkg modinfo)
@@ -463,52 +496,177 @@ getABIName (ABinForeignFunc funcinfo _) =
 
 -- ===============
 
--- given a relative filename for an ABin file,
+-- Given a module pair member, foreign metadata file, or legacy ABin file,
 -- returns the filename and the contents
-readAndCheckABin :: ErrorHandle -> Maybe Backend -> String -> IO (String, ABin)
-readAndCheckABin errh backend filename = do
-    contents <- readBinaryFileCatch errh noPosition filename
-    abin <- either (bsError errh) return $
-                decodeABin errh backend filename contents
-    return (filename,abin)
+readAndCheckABin :: ErrorHandle -> Flags -> Maybe Backend -> String -> IO (String, ABin)
+readAndCheckABin errh flags backend filename = do
+    (canonical, abi) <-
+        if hasDotSuf bmodSuffix filename || hasDotSuf bschedSuffix filename
+        then readModulePair errh (PC.materializeConfig flags) filename
+        else do contents <- readBinaryFileCatch errh noPosition filename
+                abi <- if hasDotSuf bdpiSuffix filename
+                       then loadBDPI errh filename contents
+                       else return (fst (readABinFile errh filename contents))
+                return (filename, abi)
+    checked <- either (bsError errh) return (checkABin backend canonical abi)
+    return (canonical, checked)
 
--- given a module name, looks through the path for the ABin file,
--- returns the filename and the contents
-readAndCheckABinPath :: ErrorHandle ->
-                        Bool -> [String] -> (Maybe Backend) -> String ->
-                        (ExceptT EMsgs IO) (Maybe (String, ABin))
-readAndCheckABinPath errh be_verbose path backend mod_name = do
-    let binname = mod_name ++ "." ++ abinSuffix
-    mread <- lift $ readBinFilePath errh noPosition be_verbose binname path
-    case mread of
+-- Keep the existing hierarchy API while foreign metadata has its own format.
+bdpiToABin :: BDPI -> ABin
+bdpiToABin bdpi =
+    ABinForeignFunc
+        (ABinForeignFuncInfo (bdpi_src_name bdpi) (bdpi_foreign_func bdpi))
+        (bdpi_version bdpi)
+
+-- Force the complete payload before returning it to a backend. Preserve
+-- cancellation and diagnostics already reported by the version checks.
+loadBDPI :: ErrorHandle -> FilePath -> B.ByteString -> IO ABin
+loadBDPI errh filename bytes = load `CE.catch` handler
+  where
+    load = do
+        let bdpi = readBDPIFile errh filename bytes
+        _ <- CE.evaluate (rnf bdpi)
+        return (bdpiToABin bdpi)
+    handler :: CE.SomeException -> IO ABin
+    handler exception =
+        case CE.fromException exception :: Maybe CE.AsyncException of
+          Just _ -> CE.throwIO exception
+          Nothing -> case CE.fromException exception :: Maybe ExitCode of
+            Just _ -> CE.throwIO exception
+            Nothing -> bsError errh [(noPosition, EFileReadFailure filename
+                ("invalid foreign metadata artifact: " ++ CE.displayException exception))]
+
+-- Search for a module pair in each directory, falling back to a legacy .ba
+-- there. A readable pair with a missing/bad partner is an error; an unreadable
+-- candidate is warned about and skipped, just as for legacy path searches.
+-- Pair members are never taken from different directories.
+readAndCheckABinPath :: ErrorHandle -> Flags ->
+                        Bool -> [String] -> Maybe Backend -> String ->
+                        ExceptT EMsgs IO (Maybe (String, ABin))
+readAndCheckABinPath = readAndCheckArtifactPath True
+
+data ArtifactCandidate = ModulePairCandidate String Bool Bool
+                       | BDPICandidate String
+                       | LegacyABinCandidate String
+
+readAndCheckArtifactPath :: Bool -> ErrorHandle -> Flags ->
+                           Bool -> [String] -> Maybe Backend -> String ->
+                           ExceptT EMsgs IO (Maybe (String, ABin))
+readAndCheckArtifactPath isModule errh flags be_verbose path backend mod_name = do
+    candidates <- lift $ fmap concat (mapM findCandidate path)
+    selected <- lift $ findReadable candidates
+    case selected of
       Nothing -> return Nothing
-      Just (contents, filename) -> do
-          case (decodeABin errh backend binname contents) of
-            Left msgs -> throwError (EMsgs msgs)
-            Right abi -> do
-                -- check that the file contains the module of the expected name
-                let file_mod_name = getIdString (getABIName abi)
-                if (file_mod_name == mod_name)
-                    then return $ Just (filename, abi)
-                    else throwError
-                           (EMsgs [(noPosition,
-                                   EABinNameMismatch mod_name filename file_mod_name)])
+      Just (candidate, load) -> do
+        let chosen = candidateName candidate
+            others = filter (/= chosen) (map candidateName candidates)
+        when (length candidates > 1) $
+            lift $ bsWarning errh
+                [(noPosition, WMultipleFilesInPath chosen others)]
+        (canonical, raw) <- lift load
+        abi <- either (throwError . EMsgs) return (checkABin backend canonical raw)
+        let file_mod_name = getIdString (getABIName abi)
+        if file_mod_name == mod_name
+          then return (Just (canonical, abi))
+          else throwError (EMsgs [(noPosition,
+                   EABinNameMismatch mod_name canonical file_mod_name)])
+  where
+    binname suffix = mod_name ++ "." ++ suffix
+    filename dir suffix = dir ++ "/" ++ binname suffix
+    candidateName (ModulePairCandidate dir _ _) = filename dir bschedSuffix
+    candidateName (BDPICandidate dir) = filename dir bdpiSuffix
+    candidateName (LegacyABinCandidate dir) = filename dir abinSuffix
+
+    findCandidate dir = do
+        hasSchedule <- if isModule
+                       then doesFileExist (filename dir bschedSuffix)
+                       else return False
+        hasModule <- if isModule
+                     then doesFileExist (filename dir bmodSuffix)
+                     else return False
+        if hasSchedule || hasModule
+          then return [ModulePairCandidate dir hasModule hasSchedule]
+          else do hasBDPI <- if isModule
+                             then return False
+                             else doesFileExist (filename dir bdpiSuffix)
+                  if hasBDPI
+                    then return [BDPICandidate dir]
+                    else do hasLegacy <- doesFileExist (filename dir abinSuffix)
+                            return [LegacyABinCandidate dir | hasLegacy]
+
+    findReadable [] = return Nothing
+    findReadable (candidate:rest) = do
+        load <- readCandidate candidate
+        case load of
+          Just action -> return (Just (candidate, action))
+          Nothing -> findReadable rest
+
+    readCandidate candidate@(ModulePairCandidate dir hasModule hasSchedule) = do
+        -- Readability failures retain the existing S0088 warning. Skip the
+        -- entire pair so its other half cannot be selected a second time.
+        -- Absent siblings are left for readModulePair to diagnose as errors.
+        scheduleReadable <- readableIfPresent dir bschedSuffix hasSchedule
+        moduleReadable <- if scheduleReadable
+                          then readableIfPresent dir bmodSuffix hasModule
+                          else return False
+        return $ if scheduleReadable && moduleReadable
+                 then Just (readModulePair errh (PC.materializeConfig flags)
+                                (candidateName candidate))
+                 else Nothing
+    readCandidate (BDPICandidate dir) = do
+        -- Prefer the dedicated format within each search directory. Decode
+        -- only after selecting it, so corrupt metadata cannot fall back to .ba.
+        found <- readBinFilePath errh noPosition be_verbose (binname bdpiSuffix) [dir]
+        return $ case found of
+          Nothing -> Nothing
+          Just (contents, name) ->
+              Just (do abi <- loadBDPI errh name contents
+                       return (name, abi))
+    readCandidate (LegacyABinCandidate dir) = do
+        found <- readBinFilePath errh noPosition be_verbose (binname abinSuffix) [dir]
+        return $ case found of
+          Nothing -> Nothing
+          Just (contents, name) ->
+              Just (return (name, fst (readABinFile errh name contents)))
+
+    readableIfPresent _ _ False = return True
+    readableIfPresent dir suffix True = do
+        let name = filename dir suffix
+            handler :: CE.IOException -> IO Bool
+            handler ioe = do
+                bsWarning errh [(noPosition,
+                    WFileExistsButUnreadable name (ioeGetErrorString ioe))]
+                return False
+            -- Use a strict read so the probe closes its handle before the
+            -- pair reader runs and catches failures anywhere in the file.
+            probe = do
+                _ <- B.readFile name
+                when be_verbose $ putStrLn ("read " ++ name)
+                return True
+        probe `CE.catch` handler
 
 readAndCheckABinPathCatch ::
-    ErrorHandle -> Bool -> [String] -> (Maybe Backend) -> String -> EMsg ->
+    ErrorHandle -> Flags -> Bool -> [String] -> (Maybe Backend) -> String -> EMsg ->
     IO (String, ABin)
-readAndCheckABinPathCatch errh be_verbose path backend mod_name errmsg = do
+readAndCheckABinPathCatch errh flags be_verbose path backend mod_name errmsg = do
     mabi <- convExceptTToIO errh $
-            readAndCheckABinPath errh be_verbose path backend mod_name
+            readAndCheckABinPath errh flags be_verbose path backend mod_name
     case mabi of
       Nothing -> bsError errh [errmsg]
       Just abi -> return abi
 
-decodeABin :: ErrorHandle -> Maybe Backend -> String -> BS.ByteString ->
-              Either [EMsg] ABin
-decodeABin errh backend filename contents =
-    let (abi, _) = readABinFile errh filename contents
-    in
+-- Foreign metadata prefers .bdpi, with legacy .ba fallback in each directory.
+-- This lookup is separate from modules; the namespaces may share a basename.
+readAndCheckForeignPathCatch ::
+    ErrorHandle -> Flags -> Bool -> [String] -> Maybe Backend -> String -> EMsg ->
+    IO (String, ABin)
+readAndCheckForeignPathCatch errh flags be_verbose path backend name errmsg = do
+    found <- convExceptTToIO errh $
+        readAndCheckArtifactPath False errh flags be_verbose path backend name
+    maybe (bsError errh [errmsg]) return found
+
+checkABin :: Maybe Backend -> String -> ABin -> Either [EMsg] ABin
+checkABin backend filename abi =
       -- XXX do something to check the sig?
       -- XXX check that each module has the signature of the others?
       -- does the ABI BSC version match?
@@ -519,7 +677,7 @@ decodeABin errh backend filename contents =
       else
           -- does the backend match?
           case (abi) of
-            -- foreign funcs .ba-files aren't specific to a backend
+            -- Foreign metadata is independent of the backend.
             (ABinForeignFunc {}) -> Right abi
             -- check the backend
             (ABinMod modinfo _) ->
@@ -535,31 +693,51 @@ decodeABin errh backend filename contents =
             -- from this point
             (ABinModSchedErr {}) -> Right abi
 
--- Tolerant counterpart of the decodeABin checks, for deciding whether
--- an existing .ba file can be used by the current compilation: it must
+-- Tolerant counterpart of the reader checks, for deciding whether
+-- existing artifacts can be used by the current compilation: they must
 -- be readable, in the current format and BSC version, and elaborated
 -- for a compatible backend.  A missing file returns False (not stale);
 -- absence is the timestamp check's concern.  Used by the -u
--- recompilation check, where an unusable .ba (e.g. one left by
+-- recompilation check, where an unusable artifact (e.g. one left by
 -- "-verilog -g" when compiling with -sim, or written by another BSC
 -- version) must force re-elaboration rather than be trusted as an
 -- up-to-date generated product.
 isStaleABinFile :: Maybe Backend -> String -> IO Bool
-isStaleABinFile be fname = do
-    mbytes <- readBinaryFileMaybe fname
-    case mbytes of
-      Nothing -> return False
-      Just bytes ->
-          let beOf (ABinMod mi _) = apkg_backend (abmi_apkg mi)
-              beOf (ABinModSchedErr mi _) = apkg_backend (abmsei_apkg mi)
-              beOf (ABinForeignFunc {}) = Nothing
-              stale = case readABinFileMaybe bytes of
-                        Nothing -> True
-                        Just abin ->
-                            (ab_version abin /= bscVersionStr True) ||
-                            not (backendMatches be (beOf abin))
-          in  CE.evaluate stale `CE.catch` handler
-  where handler :: CE.SomeException -> IO Bool
-        handler _ = return True
+isStaleABinFile be fname = check `CE.catch` handler
+  where
+    check
+      | hasDotSuf bmodSuffix fname || hasDotSuf bschedSuffix fname = do
+          let stem = dropSuf fname
+          mb <- readBinaryFileMaybe (stem ++ "." ++ bmodSuffix)
+          ms <- readBinaryFileMaybe (stem ++ "." ++ bschedSuffix)
+          case (mb, ms) of
+            (Just b, Just s) -> CE.evaluate $
+                case (readBModFileMaybe b, readBSchedFileMaybe s) of
+                  (Just (amod, hash), Just sched) ->
+                    let scheduleBackend = case sched of
+                          BSched {} -> bs_backend sched
+                          BSchedError {} -> apkg_backend (amod_body amod)
+                    in hash /= bs_module_hash sched ||
+                       not (backendMatches be scheduleBackend)
+                  _ -> True
+            _ -> return True
+      | otherwise = do
+          mbytes <- readBinaryFileMaybe fname
+          case mbytes of
+            Nothing -> return False
+            Just bytes -> CE.evaluate $
+              case if hasDotSuf bdpiSuffix fname
+                   then case readBDPIFileMaybe bytes of
+                          Nothing -> Nothing
+                          Just bdpi -> rnf bdpi `seq` Just (bdpiToABin bdpi)
+                   else readABinFileMaybe bytes of
+                Nothing -> True
+                Just abin -> ab_version abin /= bscVersionStr True ||
+                             not (backendMatches be (beOf abin))
+    beOf (ABinMod mi _) = apkg_backend (abmi_apkg mi)
+    beOf (ABinModSchedErr mi _) = apkg_backend (abmsei_apkg mi)
+    beOf (ABinForeignFunc {}) = Nothing
+    handler :: CE.SomeException -> IO Bool
+    handler _ = return True
 
 -- ===============

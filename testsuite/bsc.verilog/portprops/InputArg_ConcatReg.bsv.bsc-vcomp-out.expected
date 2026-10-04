@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InputArg_ConcatReg.bsv
 code generation for sysInputArg_ConcatReg starts
+Elaborated module file created: sysInputArg_ConcatReg.bmod
 === IOproperties (InputArg_ConcatReg sysInputArg_ConcatReg):
 Name                         I/O  size props
 b                              I    16 reg
@@ -11,5 +12,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysInputArg_ConcatReg.v
-Elaborated module file created: sysInputArg_ConcatReg.ba
+Schedule file created: sysInputArg_ConcatReg.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ResourceOneRuleSC.bs
 code generation for sysResourceOneRuleSC starts
+Elaborated module file created: sysResourceOneRuleSC.bmod
 Error: "ResourceOneRuleSC.bs", line 13, column 14: (G0004)
   Rule `RL_unnamed' uses methods that conflict in parallel:
     r.write(...)
@@ -22,4 +23,4 @@ Predicate: True
  
 
 ====================================================
-Elaborated error module file created: sysResourceOneRuleSC.ba
+Schedule error file created: sysResourceOneRuleSC.bsched

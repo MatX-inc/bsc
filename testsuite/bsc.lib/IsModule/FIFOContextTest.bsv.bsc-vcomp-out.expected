@@ -2,6 +2,7 @@ checking package dependencies
 compiling FIFOContextTest.bsv
 code generation for mkFIFOContextTest starts
 Compilation message: "FIFOContextTest.bsv", line 34, column 42: Final state was: 7
+Elaborated module file created: mkFIFOContextTest.bmod
 Verilog file created: mkFIFOContextTest.v
-Elaborated module file created: mkFIFOContextTest.ba
+Schedule file created: mkFIFOContextTest.bsched
 All packages are up to date.

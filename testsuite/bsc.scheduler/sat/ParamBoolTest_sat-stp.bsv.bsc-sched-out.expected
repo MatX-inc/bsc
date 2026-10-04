@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ParamBoolTest_sat-stp.bsv
 code generation for sysParamBoolTest starts
+Elaborated module file created: sysParamBoolTest.bmod
 Warning: "ParamBoolTest_sat-stp.bsv", line 5, column 8: (G0010)
   Rule "aa" was treated as more urgent than "bb". Conflicts:
     "aa" cannot fire before "bb": calls to uc.write vs. uc.read
@@ -50,5 +51,5 @@ Logical execution order: aa, ab, bb
 Warning: "ParamBoolTest_sat-stp.bsv", line 19, column 9: (G0021)
   According to the generated schedule, rule `bb' can never fire.
 Verilog file created: sysParamBoolTest.v
-Elaborated module file created: sysParamBoolTest.ba
+Schedule file created: sysParamBoolTest.bsched
 All packages are up to date.

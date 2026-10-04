@@ -16,14 +16,14 @@ for d in dirA dirB; do
     (
         cd "$d"
         # one compile via -u (exercises the import/dependency path),
-        # one elaboration to .ba
+        # one elaboration and schedule to .bmod/.bsched
         $BSC -remap-path-prefix "$PWD=." -u Bar.bsv
         $BSC -remap-path-prefix "$PWD=." -sim -g mkFoo Foo.bsv
     ) > "$d.log" 2>&1
 done
 
 status=0
-for f in Foo.bo Bar.bo mkFoo.ba; do
+for f in Foo.bo Bar.bo mkFoo.bmod mkFoo.bsched; do
     if cmp -s dirA/"$f" dirB/"$f"; then
         echo "IDENTICAL $f"
     else
@@ -33,7 +33,7 @@ for f in Foo.bo Bar.bo mkFoo.ba; do
 done
 
 # no residual build-directory path may survive in any output
-for f in dirA/Foo.bo dirA/Bar.bo dirA/mkFoo.ba; do
+for f in dirA/Foo.bo dirA/Bar.bo dirA/mkFoo.bmod dirA/mkFoo.bsched; do
     if grep -qF "$(pwd)/dirA" "$f"; then
         echo "RESIDUAL-PATH $f"
         status=1
@@ -45,12 +45,14 @@ done
 # repeatability on one machine: a re-run in place is byte-identical
 ( cd dirA && $BSC -remap-path-prefix "$PWD=." -sim -g mkFoo Foo.bsv ) \
     > dirA-rerun.log 2>&1
-if cmp -s dirA/mkFoo.ba dirB/mkFoo.ba; then
-    echo "REPEATABLE mkFoo.ba"
-else
-    echo "NOT-REPEATABLE mkFoo.ba"
-    status=1
-fi
+for f in mkFoo.bmod mkFoo.bsched; do
+    if cmp -s dirA/"$f" dirB/"$f"; then
+        echo "REPEATABLE $f"
+    else
+        echo "NOT-REPEATABLE $f"
+        status=1
+    fi
+done
 
 # absolute-path invocation: the stored source name must be remapped
 # cleanly, with no invented trailing separator (a marker-free path must
@@ -62,24 +64,26 @@ cp Foo.bsv Bar.bsv dirC/
     $BSC -remap-path-prefix "$PWD=." -u Bar.bsv
     $BSC -remap-path-prefix "$PWD=." -sim -g mkFoo "$PWD/Foo.bsv"
 ) > dirC.log 2>&1
-if grep -qa "\./Foo.bsv/" dirC/mkFoo.ba; then
-    echo "TRAILING-SLASH dirC/mkFoo.ba"
-    status=1
-else
-    echo "NO-TRAILING-SLASH dirC/mkFoo.ba"
-fi
-if grep -qa "$(pwd)/dirC" dirC/mkFoo.ba; then
-    echo "RESIDUAL-PATH dirC/mkFoo.ba"
-    status=1
-else
-    echo "CLEAN dirC/mkFoo.ba"
-fi
-# the absolute invocation must produce the same bytes as the relative one
-if cmp -s dirC/mkFoo.ba dirA/mkFoo.ba; then
-    echo "IDENTICAL-ABS mkFoo.ba"
-else
-    echo "DIFFER-ABS mkFoo.ba"
-    status=1
-fi
+for f in mkFoo.bmod mkFoo.bsched; do
+    if grep -qa "\./Foo.bsv/" dirC/"$f"; then
+        echo "TRAILING-SLASH dirC/$f"
+        status=1
+    else
+        echo "NO-TRAILING-SLASH dirC/$f"
+    fi
+    if grep -qa "$(pwd)/dirC" dirC/"$f"; then
+        echo "RESIDUAL-PATH dirC/$f"
+        status=1
+    else
+        echo "CLEAN dirC/$f"
+    fi
+    # the absolute invocation must produce the same bytes as the relative one
+    if cmp -s dirC/"$f" dirA/"$f"; then
+        echo "IDENTICAL-ABS $f"
+    else
+        echo "DIFFER-ABS $f"
+        status=1
+    fi
+done
 
 exit $status

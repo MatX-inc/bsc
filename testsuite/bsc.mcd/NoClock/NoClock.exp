@@ -24,18 +24,20 @@ test_c_veri_bsv OutputNoClock
 compile_verilog_pass_warning FixupRule_NoDefaultClock.bsv G0129
 string_does_not_occur [make_bsc_vcomp_output_name FixupRule_NoDefaultClock.bsv] \
     {(G0023)}
-# the Verilog compile leaves an up-to-date generic .ba, which the -sim
-# compile would reuse (skipping elaboration and its warning); remove it
-erase sysFixupRule_NoDefaultClock.ba
+# The Verilog compile leaves an up-to-date module pair, which the -sim
+# compile would reuse (skipping elaboration and its warning); remove both.
+erase sysFixupRule_NoDefaultClock.bmod
+erase sysFixupRule_NoDefaultClock.bsched
 compile_object_pass_warning FixupRule_NoDefaultClock.bsv G0129
 link_objects_pass {} sysFixupRule_NoDefaultClock
 
 compile_verilog_pass_warning FixupRule_NoClock.bsv G0129
 string_does_not_occur [make_bsc_vcomp_output_name FixupRule_NoClock.bsv] \
     {(G0023)}
-# the Verilog compile leaves an up-to-date generic .ba, which the -sim
-# compile would reuse (skipping elaboration and its warning); remove it
-erase sysFixupRule_NoClock.ba
+# The Verilog compile leaves an up-to-date module pair, which the -sim
+# compile would reuse (skipping elaboration and its warning); remove both.
+erase sysFixupRule_NoClock.bmod
+erase sysFixupRule_NoClock.bsched
 compile_object_pass_warning FixupRule_NoClock.bsv G0129
 link_objects_pass {} sysFixupRule_NoClock
 

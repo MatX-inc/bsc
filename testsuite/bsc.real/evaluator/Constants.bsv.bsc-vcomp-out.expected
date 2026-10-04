@@ -2,6 +2,7 @@ checking package dependencies
 compiling Constants.bsv
 code generation for sysConstants starts
 Compilation message: "Constants.bsv", line 11, column 19: pi = 3.141592653589793
+Elaborated module file created: sysConstants.bmod
 Verilog file created: sysConstants.v
-Elaborated module file created: sysConstants.ba
+Schedule file created: sysConstants.bsched
 All packages are up to date.

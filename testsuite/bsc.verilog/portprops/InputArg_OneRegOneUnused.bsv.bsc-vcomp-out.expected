@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InputArg_OneRegOneUnused.bsv
 code generation for mkInputArg_OneRegOneUnused_Sub starts
+Elaborated module file created: mkInputArg_OneRegOneUnused_Sub.bmod
 === IOproperties (InputArg_OneRegOneUnused mkInputArg_OneRegOneUnused_Sub):
 Name                         I/O  size props
 RDY_m                          O     1 const
@@ -13,8 +14,9 @@ EN_m                           I     1 unused
 -----
 
 Verilog file created: mkInputArg_OneRegOneUnused_Sub.v
-Elaborated module file created: mkInputArg_OneRegOneUnused_Sub.ba
+Schedule file created: mkInputArg_OneRegOneUnused_Sub.bsched
 code generation for sysInputArg_OneRegOneUnused starts
+Elaborated module file created: sysInputArg_OneRegOneUnused.bmod
 === IOproperties (InputArg_OneRegOneUnused sysInputArg_OneRegOneUnused):
 Name                         I/O  size props
 b                              I    16 reg
@@ -25,5 +27,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysInputArg_OneRegOneUnused.v
-Elaborated module file created: sysInputArg_OneRegOneUnused.ba
+Schedule file created: sysInputArg_OneRegOneUnused.bsched
 All packages are up to date.

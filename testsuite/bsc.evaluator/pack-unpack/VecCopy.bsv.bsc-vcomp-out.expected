@@ -1,6 +1,7 @@
 checking package dependencies
 compiling VecCopy.bsv
 code generation for mkVecCopy starts
+Elaborated module file created: mkVecCopy.bmod
 Verilog file created: mkVecCopy.v
-Elaborated module file created: mkVecCopy.ba
+Schedule file created: mkVecCopy.bsched
 All packages are up to date.

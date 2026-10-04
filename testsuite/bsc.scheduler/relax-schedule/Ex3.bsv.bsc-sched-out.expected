@@ -1,6 +1,7 @@
 checking package dependencies
 compiling Ex3.bsv
 code generation for mkEx3 starts
+Elaborated module file created: mkEx3.bmod
 === schedule (Ex3 mkEx3):
 parallel: [esposito: [a -> [], c -> [], e -> [], RL_b -> [], RL_d -> []]]
 order: [a, RL_b, c, RL_d, e]
@@ -70,5 +71,5 @@ Logical execution order: a, b, c, d, e
 
 =====================================
 Verilog file created: mkEx3.v
-Elaborated module file created: mkEx3.ba
+Schedule file created: mkEx3.bsched
 All packages are up to date.

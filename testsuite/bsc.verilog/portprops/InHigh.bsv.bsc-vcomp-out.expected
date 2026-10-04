@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InHigh.bsv
 code generation for mkSub starts
+Elaborated module file created: mkSub.bmod
 === IOproperties (InHigh mkSub):
 Name                         I/O  size props
 result                         O     1 reg
@@ -11,8 +12,9 @@ RST_N                          I     1 unused
 -----
 
 Verilog file created: mkSub.v
-Elaborated module file created: mkSub.ba
+Schedule file created: mkSub.bsched
 code generation for mkTop starts
+Elaborated module file created: mkTop.bmod
 Warning: "InHigh.bsv", line 26, column 11: (G0015)
   Instance `s' requires the following method to be always enabled, but the
   condition for executing the method could not be proven to be always True:
@@ -32,8 +34,9 @@ EN_start                       I     1 inhigh
 -----
 
 Verilog file created: mkTop.v
-Elaborated module file created: mkTop.ba
+Schedule file created: mkTop.bsched
 code generation for mkTest1 starts
+Elaborated module file created: mkTest1.bmod
 Warning: "InHigh.bsv", line 41, column 11: (G0015)
   Instance `t' requires the following method to be always enabled, but the
   condition for executing the method could not be proven to be always True:
@@ -49,8 +52,9 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: mkTest1.v
-Elaborated module file created: mkTest1.ba
+Schedule file created: mkTest1.bsched
 code generation for mkTest2 starts
+Elaborated module file created: mkTest2.bmod
 Warning: "InHigh.bsv", line 51, column 11: (G0015)
   Instance `t' requires the following method to be always enabled, but the
   condition for executing the method could not be proven to be always True:
@@ -66,5 +70,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: mkTest2.v
-Elaborated module file created: mkTest2.ba
+Schedule file created: mkTest2.bsched
 All packages are up to date.

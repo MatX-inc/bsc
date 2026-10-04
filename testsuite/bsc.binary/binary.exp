@@ -4,6 +4,7 @@ if [info exists env(GHCRTS)] {
 
 set env(GHCRTS) "-M1.2G"
 
+set_verilog_regen_options sysManyMeths {-no-show-method-conf}
 compile_verilog_pass ManyMeths.bsv
 
 if [info exists ghcrts_save] {

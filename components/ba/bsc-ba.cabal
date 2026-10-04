@@ -58,6 +58,8 @@ library
     ABin
     ABinUtil
     GenABin
+    GenBDPI
     GenForeign
+    GenModule
   other-modules:
     Warmup

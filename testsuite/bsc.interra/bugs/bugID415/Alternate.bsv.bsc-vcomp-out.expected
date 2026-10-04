@@ -1,6 +1,7 @@
 checking package dependencies
 compiling Alternate.bsv
 code generation for mkAlternate starts
+Elaborated module file created: mkAlternate.bmod
 Verilog file created: mkAlternate.v
-Elaborated module file created: mkAlternate.ba
+Schedule file created: mkAlternate.bsched
 All packages are up to date.

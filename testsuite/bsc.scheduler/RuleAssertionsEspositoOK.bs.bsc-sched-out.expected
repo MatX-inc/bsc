@@ -1,6 +1,7 @@
 checking package dependencies
 compiling RuleAssertionsEspositoOK.bs
 code generation for sysRuleAssertionsEspositoOK starts
+Elaborated module file created: sysRuleAssertionsEspositoOK.bmod
 === schedule (RuleAssertionsEspositoOK sysRuleAssertionsEspositoOK):
 parallel: [esposito: [RL_setT -> [], RL_setF -> [RL_setT], RL_flip -> [RL_setF, RL_setT]]]
 order: [RL_setT, RL_setF, RL_flip]
@@ -42,5 +43,5 @@ Warning: "RuleAssertionsEspositoOK.bs", line 17, column 15: (G0021)
 Warning: "RuleAssertionsEspositoOK.bs", line 20, column 15: (G0021)
   According to the generated schedule, rule `flip' can never fire.
 Verilog file created: sysRuleAssertionsEspositoOK.v
-Elaborated module file created: sysRuleAssertionsEspositoOK.ba
+Schedule file created: sysRuleAssertionsEspositoOK.bsched
 All packages are up to date.

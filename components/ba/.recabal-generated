@@ -3,6 +3,8 @@
 ABin.hs
 ABinUtil.hs
 GenABin.hs
+GenBDPI.hs
 GenForeign.hs
+GenModule.hs
 SetupHooks.hs
 bsc-ba.cabal

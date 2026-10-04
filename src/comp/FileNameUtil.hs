@@ -20,7 +20,8 @@ import Util(rTake)
 -- Names
 
 -- various suffixes
-bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix, cSuffix,
+bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix, bdpiSuffix,
+  bmodSuffix, bschedSuffix, cSuffix,
   cxxSuffix, cppSuffix, ccSuffix, hSuffix, comodSuffix, objSuffix, arSuffix,
   soSuffix, verSuffix, verSuffix2, verSuffix3, verSuffix4, verSuffix5,
   verSuffix6, vhdlSuffix, vhdlSuffix2, useSuffix, scheduleSuffix, dotSuffix,
@@ -29,6 +30,9 @@ bscSrcSuffix = "bs"
 bsvSrcSuffix = "bsv"
 binSuffix = "bo"
 abinSuffix = "ba"
+bdpiSuffix = "bdpi"
+bmodSuffix = "bmod"
+bschedSuffix = "bsched"
 cSuffix   = "c"
 cxxSuffix = "cxx"
 cppSuffix = "cpp"
@@ -64,10 +68,14 @@ mkPre (Just d)  _ = d ++ "/"
 --   pre = otherwise a default prefix (for the current dir?)
 --   s   = a base filename string
 -- append a dot suffix for the type of file
-mkVName, mkAName, mkSchedName, mkCxxName, mkCName, mkHName, mkObjName,
+mkVName, mkAName, mkBDPIName, mkBModName, mkBSchedName, mkSchedName,
+  mkCxxName, mkCName, mkHName, mkObjName,
   mkSoName, mkDOTName, mkMakeName :: Maybe String -> String -> String -> String
 mkVName     m pre s = mkPre m pre ++ s ++ "." ++ verSuffix
 mkAName     m pre s = mkPre m pre ++ s ++ "." ++ abinSuffix
+mkBDPIName  m pre s = mkPre m pre ++ s ++ "." ++ bdpiSuffix
+mkBModName   m pre s = mkPre m pre ++ s ++ "." ++ bmodSuffix
+mkBSchedName m pre s = mkPre m pre ++ s ++ "." ++ bschedSuffix
 mkSchedName m pre s = mkPre m pre ++ s ++ "." ++ scheduleSuffix
 mkCxxName   m pre s = mkPre m pre ++ s ++ "." ++ cxxSuffix
 mkCName     m pre s = mkPre m pre ++ s ++ "." ++ cSuffix
@@ -116,6 +124,16 @@ hasPrefix pre name = length name > length pre && take (length pre) name == pre
 
 hasDotSuf :: String -> String -> Bool
 hasDotSuf suf name = hasSuf ('.':suf) name
+
+-- Both files contribute to a scheduled module. Keep their paths together
+-- when checking generated code for staleness, regardless of which member
+-- was supplied on the command line. Foreign-function .bdpi and legacy .ba
+-- files stand alone.
+moduleArtifactInputs :: FilePath -> [FilePath]
+moduleArtifactInputs file
+    | hasDotSuf bmodSuffix file || hasDotSuf bschedSuffix file =
+        [dropSuf file ++ "." ++ suffix | suffix <- [bmodSuffix, bschedSuffix]]
+    | otherwise = [file]
 
 dropSuf :: String -> String
 dropSuf s = dropSufChar '.' s

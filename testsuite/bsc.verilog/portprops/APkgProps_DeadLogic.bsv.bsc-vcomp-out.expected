@@ -6,6 +6,7 @@ Warning: "APkgProps_DeadLogic.bsv", line 14, column 8: (G0020)
   unpredictable order during Verilog simulations.
       Top-level interface method `log' calls a system function (e.g.,
       $display) at "APkgProps_DeadLogic.bsv", line 19, column 7
+Elaborated module file created: sysAPkgProps_DeadLogic.bmod
 === APackageIOproperties (APkgProps_DeadLogic sysAPkgProps_DeadLogic):
 Name                         I/O  size props
 RDY_log                        O     1 const
@@ -29,5 +30,5 @@ EN_log                         I     1 unused
 -----
 
 Verilog file created: sysAPkgProps_DeadLogic.v
-Elaborated module file created: sysAPkgProps_DeadLogic.ba
+Schedule file created: sysAPkgProps_DeadLogic.bsched
 All packages are up to date.

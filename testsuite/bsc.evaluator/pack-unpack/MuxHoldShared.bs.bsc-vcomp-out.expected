@@ -1,6 +1,7 @@
 checking package dependencies
 compiling MuxHoldShared.bs
 code generation for mkMuxHoldShared starts
+Elaborated module file created: mkMuxHoldShared.bmod
 Verilog file created: mkMuxHoldShared.v
-Elaborated module file created: mkMuxHoldShared.ba
+Schedule file created: mkMuxHoldShared.bsched
 All packages are up to date.

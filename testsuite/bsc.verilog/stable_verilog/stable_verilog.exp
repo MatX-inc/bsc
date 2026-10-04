@@ -1,16 +1,16 @@
 #
 # -stable-verilog: deterministic Verilog emission.  Each design compiles
 # with the flag, the direct .v is stashed, and the module is regenerated
-# from its .ba with -c (which takes codegen-semantic flags -- including
-# -stable-verilog and any (* options *) pragma -- from the .ba itself);
-# the two .v files must be byte-identical.  The designs are the trigger
+# from its .bmod/.bsched pair with -c and explicit matching codegen options;
+# module options pragmas are supplied again at replay. The two .v files
+# must be byte-identical. The designs are the trigger
 # cases from the dormant-nondeterminism audit: reset-domain always-block
 # groups, foreign-block def order, noinline __f wires, options-pragma
 # regen, _dm mint names, -resource-simple edge drops and coloring, and
 # the >16-uses port-splay fast path.
 #
 
-proc sv_regen_identical { testname mod } {
+proc sv_regen_identical { testname mod {options {-stable-verilog}} } {
     global srcdir subdir
     set here [absolute $srcdir]
     cd [file join $here $subdir]
@@ -20,7 +20,7 @@ proc sv_regen_identical { testname mod } {
         return
     }
     file rename -force "$mod.v" "$mod.v.direct"
-    set opts "-no-show-timestamps -no-show-version -verilog -c $mod"
+    set opts "-no-show-timestamps -no-show-version $options -verilog -c $mod"
     # gen_basic_output resolves $srcdir against the working directory and
     # enters $subdir itself, so it has to be called from the root
     cd $here
@@ -50,16 +50,18 @@ compile_verilog_pass StableNoInline.bsv {} {-stable-verilog}
 sv_regen_identical "noinline __f regen identical" sysStableNoInline
 sv_regen_identical "noinline function module regen identical" module_nadd
 
+set_verilog_regen_options sysStableOptionsPragma {-keep-fires}
 compile_verilog_pass StableOptionsPragma.bsv {} {-stable-verilog}
-sv_regen_identical "options-pragma (-keep-fires) regen identical" sysStableOptionsPragma
-# the pragma's -keep-fires must reach BOTH sides: fires present in the regen
+sv_regen_identical "options-pragma (-keep-fires) regen identical" sysStableOptionsPragma {-stable-verilog -keep-fires}
+# The pragma affects the source compile; replay receives -keep-fires explicitly.
 find_regexp sysStableOptionsPragma.v {WILL_FIRE_RL_r1}
 
+set_verilog_regen_options sysStableOptIfMux {-opt-if-mux}
 compile_verilog_pass StableOptIfMux.bsv {} {-stable-verilog}
-sv_regen_identical "-opt-if-mux _dm regen identical" sysStableOptIfMux
+sv_regen_identical "-opt-if-mux _dm regen identical" sysStableOptIfMux {-stable-verilog -opt-if-mux}
 
 compile_verilog_pass StableResource.bsv {} {-stable-verilog}
-sv_regen_identical "-resource-simple regen identical" sysStableResource
+sv_regen_identical "-resource-simple regen identical" sysStableResource {-stable-verilog -resource-simple}
 
 compile_verilog_pass StableWide.bs {} {-stable-verilog}
 sv_regen_identical ">16-uses port splay regen identical" sysStableWide
@@ -69,27 +71,31 @@ sv_regen_identical ">16-uses port splay regen identical" sysStableWide
 compile_verilog_pass StableDpiName.bsv {} {-stable-verilog -use-dpi}
 find_regexp sysStableDpiName.v {f__h1}
 find_regexp_fail sysStableDpiName.v {f__h2}
-sv_regen_identical "BDPI name exclusion regen identical" sysStableDpiName
+sv_regen_identical "BDPI name exclusion regen identical" sysStableDpiName {-stable-verilog -use-dpi}
 
 # --- the two trigger designs, without the flag -------------------------
 # These two designs were the audit's triggers for the disease: without
-# the flag, a direct compile and a `-c` regeneration from the .ba used to
+# the flag, a direct compile and a `-c` regeneration used to
 # differ (StableDivergeTasks: foreign-block decl order and ___dN
 # renumbering; StableDivergeResets: reset-domain always-block groups),
 # and this file once pinned that divergence to show the flag was not
 # vacuous.  The sites are now deterministic at the source (the def list
 # follows elaboration order, the inlined-register groups follow the
 # instance list), so the regen is byte-identical with the flag off as
-# well; that is what is pinned now.  The regen inherits the recorded flag
-# from the .ba, so no flag is passed to -c.
+# well; that is what is pinned now. Replay receives -no-stable-verilog
+# explicitly, just as the source compile does.
 
 compile_verilog_pass StableDivergeTasks.bsv {} {-no-stable-verilog}
-sv_regen_identical "without the flag, tasks design regen identical" sysStableDivergeTasks
+sv_regen_identical "without the flag, tasks design regen identical" sysStableDivergeTasks {-no-stable-verilog}
 
 compile_verilog_pass StableDivergeResets.bsv {} {-no-stable-verilog}
-sv_regen_identical "without the flag, reset design regen identical" sysStableDivergeResets
+sv_regen_identical "without the flag, reset design regen identical" sysStableDivergeResets {-no-stable-verilog}
 
 # and the same designs are byte-identical WITH the flag
+# compile_verilog_pass uses -u, which does not track changed options.
+# Remove the package objects so these direct compiles use the new flag.
+erase StableDivergeTasks.bo
+erase StableDivergeResets.bo
 compile_verilog_pass StableDivergeTasks.bsv {} {-stable-verilog}
 sv_regen_identical "with the flag, tasks design regen identical" sysStableDivergeTasks
 

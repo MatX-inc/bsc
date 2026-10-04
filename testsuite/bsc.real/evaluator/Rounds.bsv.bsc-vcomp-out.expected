@@ -25,6 +25,7 @@ Compilation message: "Rounds.bsv", line 72, column 27: round -1.7 = -2
 Compilation message: "Rounds.bsv", line 73, column 27: ceil  -1.7 = -1
 Compilation message: "Rounds.bsv", line 74, column 27: floor -1.7 = -2
 Compilation message: "Rounds.bsv", line 75, column 27: trunc -1.7 = -1
+Elaborated module file created: sysRounds.bmod
 Verilog file created: sysRounds.v
-Elaborated module file created: sysRounds.ba
+Schedule file created: sysRounds.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling RuleNameInForLoop3.bsv
 code generation for sysRuleNameInForLoop3 starts
+Elaborated module file created: sysRuleNameInForLoop3.bmod
 Warning: "RuleNameInForLoop3.bsv", line 4, column 8: (G0010)
   Rule "r2_1" was treated as more urgent than "r4_1". Conflicts:
     "r2_1" cannot fire before "r4_1": calls to rg_1.write vs. rg_1.read
@@ -22,5 +23,5 @@ Warning: "RuleNameInForLoop3.bsv", line 30, column 12: (G0021)
 Warning: "RuleNameInForLoop3.bsv", line 30, column 12: (G0021)
   According to the generated schedule, rule `r4_3' can never fire.
 Verilog file created: sysRuleNameInForLoop3.v
-Elaborated module file created: sysRuleNameInForLoop3.ba
+Schedule file created: sysRuleNameInForLoop3.bsched
 All packages are up to date.

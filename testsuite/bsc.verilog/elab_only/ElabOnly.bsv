@@ -1,5 +1,5 @@
 // Fixtures for the -elab-only flag (a -verilog compile that writes
-// only .ba files, deferring the .v to -c or the linking stage)
+// only .bmod/.bsched pairs, deferring the .v to -c or the linking stage)
 
 (* synthesize *)
 module mkESub(Reg#(Bit#(8)));

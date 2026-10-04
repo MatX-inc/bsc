@@ -57,6 +57,7 @@ clock domain = Just (0), resets = []
 
 -----
 
+Elaborated module file created: sysDummyInRuleQual.bmod
 Verilog file created: sysDummyInRuleQual.v
-Elaborated module file created: sysDummyInRuleQual.ba
+Schedule file created: sysDummyInRuleQual.bsched
 All packages are up to date.

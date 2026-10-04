@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InputGate_OnlyInMethodReady.bsv
 code generation for sysInputGate_OnlyInMethodReady starts
+Elaborated module file created: sysInputGate_OnlyInMethodReady.bmod
 === IOproperties (InputGate_OnlyInMethodReady sysInputGate_OnlyInMethodReady):
 Name                         I/O  size props
 RDY_set                        O     1
@@ -14,5 +15,5 @@ EN_set                         I     1
 -----
 
 Verilog file created: sysInputGate_OnlyInMethodReady.v
-Elaborated module file created: sysInputGate_OnlyInMethodReady.ba
+Schedule file created: sysInputGate_OnlyInMethodReady.bsched
 All packages are up to date.

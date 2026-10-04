@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ImpCond.bsv
 code generation for sysImpCond starts
+Elaborated module file created: sysImpCond.bmod
 === schedule (ImpCond sysImpCond):
 parallel: [esposito: [RL_r -> []]]
 order: [RL_r]
@@ -43,5 +44,5 @@ Logical execution order: r
 
 ==========================================
 Verilog file created: sysImpCond.v
-Elaborated module file created: sysImpCond.ba
+Schedule file created: sysImpCond.bsched
 All packages are up to date.

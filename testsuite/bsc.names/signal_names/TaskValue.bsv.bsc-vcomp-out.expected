@@ -42,6 +42,7 @@ clock domain = Just (0), resets = []
 
 -----
 
+Elaborated module file created: sysTaskValue.bmod
 Verilog file created: sysTaskValue.v
-Elaborated module file created: sysTaskValue.ba
+Schedule file created: sysTaskValue.bsched
 All packages are up to date.

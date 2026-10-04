@@ -12,6 +12,92 @@ GHC 9.14, bit-identical objects, and a Warmup that actually takes effect in
 every component; performance measurement is handled by Ravi separately and
 is not a gate here.
 
+## Module artifact update, 2026-10-03
+
+The module-stage carve on `engine-dev` supersedes the proposed flag envelope
+in section 5. An unscheduled `.bmod` and its `.bsched` replace module `.ba`
+output. Neither artifact stores invocation flags or `options` pragmas.
+Scheduling and backend generation receive options from their current
+invocation; source `options` pragmas still apply during direct compilation.
+The schedule retains the concrete constraints selected by the scheduler,
+including method-before-rule constraints, without storing the options that
+selected them. It also retains the compiled results of common materialization
+as an IR delta, together with any resulting schedule changes. Reading the pair
+replays these results; it does not rerun `aNoInline` or `aDropUndet` under the
+reader's options. This preserves the original instantiation and choices for
+unspecified values without saving flags. Running `bsc -schedule` on the same `.bmod` with
+new scheduling or materialization options produces a new `.bsched`; the
+unscheduled `.bmod` is unchanged. Backend generation still uses its current
+invocation's options. Legacy `.ba` reading and the `.bo` format remain unchanged.
+
+Foreign imports now emit a dedicated `.bdpi` file containing the source
+identifier, foreign link name and argument/result representation, plus the
+compiler version. Both DPI and VPI consume this metadata. Readers prefer
+`.bdpi` within each search directory and retain foreign `.ba` compatibility;
+a corrupt selected `.bdpi` is an error, not a reason to fall back. Module and
+foreign artifacts can therefore share a basename without sharing a suffix.
+
+All current artifacts use the existing `BinData` binary codec with explicit
+`Bin` instances and sharing tables for identifiers, strings, positions and
+types. New formats have distinct versioned headers: the module header remains
+`bsc-bmod-20261003-2`, while the schedule header is `bsc-bsched-20261003-5`.
+`.bsched` binds to its `.bmod` payload hash and stores scheduling and
+materialization deltas rather than a second complete module body. The
+foreign-type codec is shared with legacy `.ba` without changing that encoding.
+Proposed `.bparsed` and `.breduced` artifacts
+are not implemented by this work.
+
+The master driver now projects the effective CLI configuration into concrete
+`ParseFlags`, `ReduceFlags`, `TypecheckFlags`, `InternalFlags`, `ElabFlags`,
+`SchedFlags`, `MaterializeFlags`, `VerilogGenFlags`, `BluesimGenFlags`,
+`HostCompileFlags`, `VerilogLinkFlags`, `BluesimLinkFlags`, and `ForeignGenFlags`
+records. It projects again after module `options` pragmas are applied.
+`PhaseConfig` combines one phase record with shared `RunFlags` and
+`RunOptions`. Flags affect primary artifacts or whether the phase succeeds;
+Options cover observation such as verbosity, timing and ordinary dumps.
+Warning suppression, promotion and demotion remain in `RunFlags`; this work
+makes no assumption about diagnostic replay. Diagnostic policy is scoped to
+phase calls, including exceptional exits.
+
+These are typed orchestration boundaries. Existing implementation passes
+still accept legacy `Flags`, reconstructed only from explicit phase fields
+and fixed defaults by `PhaseConfigLegacy`. The records retain neither the
+original `Flags` nor a closure over it. The Shake engine still invokes
+whole-package compiler processes; independent phase invocations and the
+proposed frontend checkpoint formats are subsequent work. Tool environments
+and remaining raw argument probes also need explicit treatment before these
+records can define complete cache keys.
+
+Nested evaluator typechecking has a separate caller-selected policy:
+`TypeSolverFlags` forwards only the SAT backend, proviso-SAT setting and
+stack limit. `internalTypecheckFlags` explicitly fixes coherent matching,
+no inferred-let generalization and no poison-pill recovery. Reflection,
+type normalization and the captured RWire check use this policy; the legacy
+generated-wrapper compilation is left as-is pending its removal.
+
+The intended replacement for generated wrappers is a wrapper/synthesize
+type class parameterized by wrapper style. Its compiled unwrapping code can
+remain in `.bo` once module-specific data is externalized: the function takes
+a synthesized instance or instantiation descriptor, rather than capturing
+`VModInfo` or a schedule. `.bmod` and `.bsched` provide that instance's data.
+Moving the existing wrapper generator into the evaluator would only be an
+intermediate step, not the intended final design. This replacement is not
+implemented here.
+
+Nothing serializes these configurations into module artifacts. No flag
+sidecar or cache-key implementation is introduced. Backend linking retains
+the existing reuse behavior: Verilog checks output freshness against both
+pair members, and Bluesim checks version, freshness and `codeGenOptionDescr`.
+Legacy `.ba` inputs use their single-file timestamp. These checks are not
+complete phase keys; in particular, Verilog freshness does not account for
+changed backend options. Explicit `-c` regenerates under the current
+invocation's options. The intended dump policy is to execute the relevant
+phase even on a cache hit,
+compare primary artifacts with the cached result, and invalidate a mismatched
+key-to-result association while preserving evidence. That policy is not yet
+implemented. The source observations and migration proposal below describe
+the earlier baseline and naming.
+
 ## 0. What changed since Revision 1
 
 - The partition is corrected from driver call sites, not import edges

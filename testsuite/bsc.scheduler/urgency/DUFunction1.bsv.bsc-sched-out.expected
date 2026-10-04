@@ -1,6 +1,7 @@
 checking package dependencies
 compiling DUFunction1.bsv
 code generation for sysDUFunction1 starts
+Elaborated module file created: sysDUFunction1.bmod
 === schedule (DUFunction1 sysDUFunction1):
 parallel: [esposito: [setGo -> [],
 		      clearGo -> [],
@@ -142,5 +143,5 @@ Logical execution order: clearGo,
 
 ==============================================
 Verilog file created: sysDUFunction1.v
-Elaborated module file created: sysDUFunction1.ba
+Schedule file created: sysDUFunction1.bsched
 All packages are up to date.

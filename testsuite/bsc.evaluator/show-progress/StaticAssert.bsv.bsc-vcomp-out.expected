@@ -14,6 +14,7 @@ code generation for sysStaticAssert starts
 [TIME] elab progress: (Loop) Finished module
 [TIME] elab progress: Elaborating interface
 [TIME] elab progress: Finished elaborating module `sysStaticAssert'
+Elaborated module file created: sysStaticAssert.bmod
 Verilog file created: sysStaticAssert.v
-Elaborated module file created: sysStaticAssert.ba
+Schedule file created: sysStaticAssert.bsched
 All packages are up to date.

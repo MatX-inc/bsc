@@ -13,7 +13,7 @@ import ASyntax
 import AUses(MethodId(..), UniqueUse(..), UseCond(..), RuleUses(..), ucTrue)
 import AScheduleInfo
 import ADumpScheduleInfo(RuleConflictType)
-import ForeignFunctions
+import GenBDPI ()
 import Flags(Flags(..), DumpFlag(..), ResourceFlag(..), SATFlag(..),
              MsgListFlag(..), Verbosity(..))
 import InstNodes(InstNode(..))
@@ -242,31 +242,6 @@ instance Bin AAbstractInput where
          2 -> do r <- fromBin; return (AAI_Reset r)
          3 -> do r <- fromBin; n <- fromBin; return (AAI_Inout r n)
          n -> internalError $ "GenABin.Bin(AAbstractInfo).readBytes: " ++ show n
-
--- ----------
--- Bin ForeignFunction
-
-instance Bin ForeignType where
-    writeBytes Void        = do putI 0
-    writeBytes (Narrow n)  = do putI 1; toBin n
-    writeBytes (Wide n)    = do putI 2; toBin n
-    writeBytes Polymorphic = do putI 3
-    writeBytes StringPtr   = do putI 4
-    readBytes = do i <- getI
-                   case i of
-                     0 -> return Void
-                     1 -> do n <- fromBin; return (Narrow n)
-                     2 -> do n <- fromBin; return (Wide n)
-                     3 -> return Polymorphic
-                     4 -> return StringPtr
-                     n -> internalError $ "GenABin.Bin(ForeignType).readBytes: " ++ show n
-
-instance Bin ForeignFunction where
-    writeBytes (FF name rt args) = do toBin name; toBin rt; toBin args
-    readBytes = do name <- fromBin
-                   rt   <- fromBin
-                   args <- fromBin
-                   return (FF name rt args)
 
 -- ----------
 -- Bin AVInst

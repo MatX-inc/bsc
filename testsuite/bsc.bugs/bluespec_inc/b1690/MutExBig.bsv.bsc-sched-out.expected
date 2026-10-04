@@ -1,6 +1,7 @@
 checking package dependencies
 compiling MutExBig.bsv
 code generation for sysMutExBig starts
+Elaborated module file created: sysMutExBig.bmod
 Warning: "MutExBig.bsv", line 4, column 8: (G0010)
   Rule "r1" was treated as more urgent than "r4". Conflicts:
     "r1" cannot fire before "r4": calls to x.write vs. x.read
@@ -100,5 +101,5 @@ Logical execution order: r1, r2, r3, r4, done, r1y, r2y, r3y, r4y, r5y
 
 ===========================================
 Verilog file created: sysMutExBig.v
-Elaborated module file created: sysMutExBig.ba
+Schedule file created: sysMutExBig.bsched
 All packages are up to date.

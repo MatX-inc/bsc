@@ -1,6 +1,7 @@
 checking package dependencies
 compiling SeqEx1.bsv
 code generation for mkSeqEx1 starts
+Elaborated module file created: mkSeqEx1.bmod
 === schedule (SeqEx1 mkSeqEx1):
 parallel: [esposito: [a -> [], b -> [], RL_c -> [], RL_d -> [RL_c]]]
 order: [b, RL_c, RL_d, a]
@@ -56,5 +57,5 @@ Logical execution order: b, c, d, a
 
 ========================================
 Verilog file created: mkSeqEx1.v
-Elaborated module file created: mkSeqEx1.ba
+Schedule file created: mkSeqEx1.bsched
 All packages are up to date.

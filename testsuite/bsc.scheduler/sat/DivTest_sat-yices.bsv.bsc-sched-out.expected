@@ -1,6 +1,7 @@
 checking package dependencies
 compiling DivTest_sat-yices.bsv
 code generation for sysDivTest starts
+Elaborated module file created: sysDivTest.bmod
 Warning: "DivTest_sat-yices.bsv", line 10, column 8: (G0010)
   Rule "aa" was treated as more urgent than "bb". Conflicts:
     "aa" cannot fire before "bb": calls to uc.write vs. uc.read
@@ -90,5 +91,5 @@ Logical execution order: aa, ab, ac, ad, ae, af, bb
 Warning: "DivTest_sat-yices.bsv", line 40, column 10: (G0021)
   According to the generated schedule, rule `bb' can never fire.
 Verilog file created: sysDivTest.v
-Elaborated module file created: sysDivTest.ba
+Schedule file created: sysDivTest.bsched
 All packages are up to date.

@@ -5,6 +5,7 @@ Warning: "RuleFalse.bsv", line 5, column 8: (G0023)
   The condition for rule `never' is always false. Removing...
 Warning: "RuleFalse.bsv", line 9, column 8: (G0023)
   The condition for rule `tricky' is always false. Removing...
+Elaborated module file created: sysRuleFalse.bmod
 Verilog file created: sysRuleFalse.v
-Elaborated module file created: sysRuleFalse.ba
+Schedule file created: sysRuleFalse.bsched
 All packages are up to date.

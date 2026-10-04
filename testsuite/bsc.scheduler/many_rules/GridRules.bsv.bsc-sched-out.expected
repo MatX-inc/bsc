@@ -1,6 +1,7 @@
 checking package dependencies
 compiling GridRules.bsv
 code generation for mkGridRules starts
+Elaborated module file created: mkGridRules.bmod
 Warning: "GridRules.bsv", line 15, column 8: (G0036)
   Rule "flow_w_63" will appear to fire before "flow_e_63" when both fire in
   the same clock cycle, affecting:
@@ -5654,5 +5655,5 @@ Logical execution order: flow_n,
 
 ===========================================
 Verilog file created: mkGridRules.v
-Elaborated module file created: mkGridRules.ba
+Schedule file created: mkGridRules.bsched
 All packages are up to date.

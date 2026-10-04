@@ -1,6 +1,7 @@
 checking package dependencies
 compiling APkgProps_Args.bsv
 code generation for sysAPkgProps_Args starts
+Elaborated module file created: sysAPkgProps_Args.bmod
 === APackageIOproperties (APkgProps_Args sysAPkgProps_Args):
 Name                         I/O  size props
 get                            O     8 reg
@@ -26,5 +27,5 @@ RST_N                          I     1 unused
 -----
 
 Verilog file created: sysAPkgProps_Args.v
-Elaborated module file created: sysAPkgProps_Args.ba
+Schedule file created: sysAPkgProps_Args.bsched
 All packages are up to date.

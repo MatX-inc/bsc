@@ -57,9 +57,18 @@ library
   else
     extra-libraries: stdc++
   exposed-modules:
+    ADropUndet
     ADumpScheduleInfo
+    AMaterializePatch
+    AModule
+    ANoInline
     APrims
+    ARemoveAssumps
+    ASchedMaterialize
     AScheduleInfo
+    ASchedulePatch
+    AScheduleRelations
+    ASimParams
     ASyntax
     ASyntaxUtil
     AUses
@@ -136,6 +145,8 @@ library
     PVPrint
     Params
     ParseOp
+    PhaseConfig
+    PhaseConfigLegacy
     Position
     Pragma
     PreIds

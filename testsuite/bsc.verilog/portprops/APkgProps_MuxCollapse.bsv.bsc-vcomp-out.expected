@@ -1,6 +1,7 @@
 checking package dependencies
 compiling APkgProps_MuxCollapse.bsv
 code generation for sysAPkgProps_MuxCollapse starts
+Elaborated module file created: sysAPkgProps_MuxCollapse.bmod
 === APackageIOproperties (APkgProps_MuxCollapse sysAPkgProps_MuxCollapse):
 Name                         I/O  size props
 pick                           O     8 reg
@@ -24,5 +25,5 @@ pick_c                         I     1 unused
 -----
 
 Verilog file created: sysAPkgProps_MuxCollapse.v
-Elaborated module file created: sysAPkgProps_MuxCollapse.ba
+Schedule file created: sysAPkgProps_MuxCollapse.bsched
 All packages are up to date.

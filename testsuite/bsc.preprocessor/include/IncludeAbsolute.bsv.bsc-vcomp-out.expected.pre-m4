@@ -2,6 +2,7 @@ checking package dependencies
 compiling IncludeAbsolute.bsv
 code generation for sysIncludeAbsolute starts
 Compilation message: "CURDIR/subdir/defines2", line 1, column 11: subdir/defines2
+Elaborated module file created: sysIncludeAbsolute.bmod
 Verilog file created: sysIncludeAbsolute.v
-Elaborated module file created: sysIncludeAbsolute.ba
+Schedule file created: sysIncludeAbsolute.bsched
 All packages are up to date.

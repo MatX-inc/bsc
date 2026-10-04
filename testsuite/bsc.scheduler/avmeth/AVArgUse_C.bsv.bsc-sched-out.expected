@@ -1,6 +1,7 @@
 checking package dependencies
 compiling AVArgUse_C.bsv
 code generation for mkAVArgUse_C starts
+Elaborated module file created: mkAVArgUse_C.bmod
 === schedule (AVArgUse_C mkAVArgUse_C):
 parallel: [esposito: [m -> []]]
 order: [m]
@@ -30,8 +31,9 @@ Logical execution order: m
 
 ============================================
 Verilog file created: mkAVArgUse_C.v
-Elaborated module file created: mkAVArgUse_C.ba
+Schedule file created: mkAVArgUse_C.bsched
 code generation for sysAVArgUse_C starts
+Elaborated module file created: sysAVArgUse_C.bmod
 Warning: "AVArgUse_C.bsv", line 19, column 8: (G0010)
   Rule "rA" was treated as more urgent than "rB". Conflicts:
     "rA" cannot fire before "rB":
@@ -76,5 +78,5 @@ Logical execution order: rA, rB
 Warning: "AVArgUse_C.bsv", line 30, column 10: (G0021)
   According to the generated schedule, rule `rB' can never fire.
 Verilog file created: sysAVArgUse_C.v
-Elaborated module file created: sysAVArgUse_C.ba
+Schedule file created: sysAVArgUse_C.bsched
 All packages are up to date.

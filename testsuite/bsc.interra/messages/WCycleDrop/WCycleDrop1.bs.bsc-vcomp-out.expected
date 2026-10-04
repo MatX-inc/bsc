@@ -1,6 +1,7 @@
 checking package dependencies
 compiling WCycleDrop1.bs
 code generation for mkWCycleDrop1 starts
+Elaborated module file created: mkWCycleDrop1.bmod
 Warning: "WCycleDrop1.bs", line 30, column 0: (G0009)
   The scheduling phase created a conflict between the following rules:
       `RL_One' and `RL_Two'
@@ -34,5 +35,5 @@ Warning: "WCycleDrop1.bs", line 30, column 0: (G0117)
 Warning: "WCycleDrop1.bs", line 54, column 22: (G0021)
   According to the generated schedule, rule `Two' can never fire.
 Verilog file created: mkWCycleDrop1.v
-Elaborated module file created: mkWCycleDrop1.ba
+Schedule file created: mkWCycleDrop1.bsched
 All packages are up to date.

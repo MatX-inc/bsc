@@ -17,6 +17,7 @@ Warning: "MsgTest_ClockOfMultiClock.bsv", line 24, column 8: (G0038)
   During elaboration of `sysMsgTest_ClockOfMultiClock' at
   "MsgTest_ClockOfMultiClock.bsv", line 8, column 8.
 Compilation message: "MsgTest_ClockOfMultiClock.bsv", line 25, column 15: True
+Elaborated module file created: sysMsgTest_ClockOfMultiClock.bmod
 Verilog file created: sysMsgTest_ClockOfMultiClock.v
-Elaborated module file created: sysMsgTest_ClockOfMultiClock.ba
+Schedule file created: sysMsgTest_ClockOfMultiClock.bsched
 All packages are up to date.

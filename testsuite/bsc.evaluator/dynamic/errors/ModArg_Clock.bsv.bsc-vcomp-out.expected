@@ -1,8 +1,9 @@
 checking package dependencies
 compiling ModArg_Clock.bsv
 code generation for mkSub_ModArg_Clock starts
+Elaborated module file created: mkSub_ModArg_Clock.bmod
 Verilog file created: mkSub_ModArg_Clock.v
-Elaborated module file created: mkSub_ModArg_Clock.ba
+Schedule file created: mkSub_ModArg_Clock.bsched
 code generation for sysModArg_Clock starts
 Error: "ModArg_Clock.bsv", line 17, column 8: (G0071)
   Input clock `clk_in' of submodule `s' is instantiated with a dynamic

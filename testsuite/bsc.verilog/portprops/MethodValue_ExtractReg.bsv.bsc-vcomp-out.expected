@@ -1,6 +1,7 @@
 checking package dependencies
 compiling MethodValue_ExtractReg.bsv
 code generation for sysMethodValue_ExtractReg starts
+Elaborated module file created: sysMethodValue_ExtractReg.bmod
 === IOproperties (MethodValue_ExtractReg sysMethodValue_ExtractReg):
 Name                         I/O  size props
 m                              O    16 reg
@@ -12,5 +13,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysMethodValue_ExtractReg.v
-Elaborated module file created: sysMethodValue_ExtractReg.ba
+Schedule file created: sysMethodValue_ExtractReg.bsched
 All packages are up to date.

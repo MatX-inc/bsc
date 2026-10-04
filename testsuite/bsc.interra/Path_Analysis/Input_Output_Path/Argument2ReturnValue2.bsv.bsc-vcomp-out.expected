@@ -1,6 +1,7 @@
 checking package dependencies
 compiling Argument2ReturnValue2.bsv
 code generation for mkArgument2ReturnValue2 starts
+Elaborated module file created: mkArgument2ReturnValue2.bmod
 === pathsPostSched (Argument2ReturnValue2 mkArgument2ReturnValue2):
 Combinational paths from inputs to outputs:
   start_inp -> start
@@ -8,5 +9,5 @@ Combinational paths from inputs to outputs:
 -----
 
 Verilog file created: mkArgument2ReturnValue2.v
-Elaborated module file created: mkArgument2ReturnValue2.ba
+Schedule file created: mkArgument2ReturnValue2.bsched
 All packages are up to date.

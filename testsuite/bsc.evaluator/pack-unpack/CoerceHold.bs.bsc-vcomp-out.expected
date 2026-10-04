@@ -1,6 +1,7 @@
 checking package dependencies
 compiling CoerceHold.bs
 code generation for mkCoerceHold starts
+Elaborated module file created: mkCoerceHold.bmod
 Verilog file created: mkCoerceHold.v
-Elaborated module file created: mkCoerceHold.ba
+Schedule file created: mkCoerceHold.bsched
 All packages are up to date.

@@ -69,14 +69,16 @@ isStale flags prefix ba_map top_pkg pkg =
     else let name = getIdBaseString (sp_name pkg)
          in case (M.lookup name ba_map) of
               Nothing        -> internalError $ "isStale: unknown package " ++ name
-              (Just ba_file) -> do h_file <- genFileName mkHName (cdir flags) "" name
-                                   o_file <- genFileName mkObjName (cdir flags) "" name
-                                   fresh_time <- allFreshVs ba_file [h_file, o_file]
-                                   cg_opt <- readCodeGenOptionDescr h_file
-                                   let is_top = (sp_name pkg) == top_pkg
-                                       cg_tgt = Just ("/* " ++ (codeGenOptionDescr flags is_top) ++ " */")
-                                       stale_options = cg_opt /= cg_tgt
-                                   return $ (not fresh_time) || stale_options
+              (Just ba_file) -> do
+                   h_file <- genFileName mkHName (cdir flags) "" name
+                   o_file <- genFileName mkObjName (cdir flags) "" name
+                   fresh_inputs <- mapM (\f -> allFreshVs f [h_file, o_file])
+                                        (moduleArtifactInputs ba_file)
+                   cg_opt <- readCodeGenOptionDescr h_file
+                   let is_top = (sp_name pkg) == top_pkg
+                       cg_tgt = Just ("/* " ++ (codeGenOptionDescr flags is_top) ++ " */")
+                       stale_options = cg_opt /= cg_tgt
+                   return $ (not (and fresh_inputs)) || stale_options
 
 remove_stale :: M.Map String [String] -> [String] -> [String] -> [String]
 remove_stale _     []   _      = []

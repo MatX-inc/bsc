@@ -1,10 +1,11 @@
 checking package dependencies
 compiling EGeneric.bs
 code generation for mkTest starts
+Elaborated module file created: mkTest.bmod
 Error: "EGeneric.bs", line 29, column 10: (G0004)
   Rule `RL_Assign_x' uses methods that conflict in parallel:
     x.write(...)
   and
     x.write(...)
   For the complete expressions use the flag `-show-range-conflict'.
-Elaborated error module file created: mkTest.ba
+Schedule error file created: mkTest.bsched

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ResourceTwoRules.bs
 code generation for sysResourceTwoRules starts
+Elaborated module file created: sysResourceTwoRules.bmod
 Warning: "ResourceTwoRules.bs", line 19, column 0: (G0003)
   Arbitrating in module `sysResourceTwoRules' between rules `RL_Contender' and
   `RL_Contender_1'.
@@ -88,5 +89,5 @@ Logical execution order: Contender,
 Warning: "ResourceTwoRules.bs", line 23, column 26: (G0021)
   According to the generated schedule, rule `Contender_1' can never fire.
 Verilog file created: sysResourceTwoRules.v
-Elaborated module file created: sysResourceTwoRules.ba
+Schedule file created: sysResourceTwoRules.bsched
 All packages are up to date.

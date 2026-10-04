@@ -1,6 +1,7 @@
 checking package dependencies
 compiling RuleNameNonAlphanumClash3.bsv
 code generation for sysRuleNameNonAlphanumClash3 starts
+Elaborated module file created: sysRuleNameNonAlphanumClash3.bmod
 Warning: "RuleNameNonAlphanumClash3.bsv", line 2, column 8: (G0010)
   Rule "r1_1" was treated as more urgent than "r2". Conflicts:
     "r1_1" cannot fire before "r2": calls to rg2.write vs. rg2.read
@@ -8,5 +9,5 @@ Warning: "RuleNameNonAlphanumClash3.bsv", line 2, column 8: (G0010)
 Warning: "RuleNameNonAlphanumClash3.bsv", line 16, column 9: (G0021)
   According to the generated schedule, rule `r2' can never fire.
 Verilog file created: sysRuleNameNonAlphanumClash3.v
-Elaborated module file created: sysRuleNameNonAlphanumClash3.ba
+Schedule file created: sysRuleNameNonAlphanumClash3.bsched
 All packages are up to date.

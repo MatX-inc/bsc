@@ -1,6 +1,7 @@
 checking package dependencies
 compiling InputArg_Unused.bsv
 code generation for sysInputArg_Unused starts
+Elaborated module file created: sysInputArg_Unused.bmod
 === IOproperties (InputArg_Unused sysInputArg_Unused):
 Name                         I/O  size props
 b                              I    16 unused
@@ -11,5 +12,5 @@ RST_N                          I     1 unused
 -----
 
 Verilog file created: sysInputArg_Unused.v
-Elaborated module file created: sysInputArg_Unused.ba
+Schedule file created: sysInputArg_Unused.bsched
 All packages are up to date.

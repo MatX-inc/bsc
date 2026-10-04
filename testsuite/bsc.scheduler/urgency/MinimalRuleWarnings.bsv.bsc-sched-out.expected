@@ -1,6 +1,7 @@
 checking package dependencies
 compiling MinimalRuleWarnings.bsv
 code generation for sysMinimalRuleWarnings starts
+Elaborated module file created: sysMinimalRuleWarnings.bmod
 Warning: "MinimalRuleWarnings.bsv", line 1, column 8: (G0010)
   Rule "theRuleOne" was treated as more urgent than "theRuleTwo". Conflicts:
     "theRuleOne" cannot fire before "theRuleTwo":
@@ -69,5 +70,5 @@ Logical execution order: theRuleOne, theRuleTwo, theRuleThree, theRuleFour
 
 ======================================================
 Verilog file created: sysMinimalRuleWarnings.v
-Elaborated module file created: sysMinimalRuleWarnings.ba
+Schedule file created: sysMinimalRuleWarnings.bsched
 All packages are up to date.

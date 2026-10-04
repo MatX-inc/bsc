@@ -24,7 +24,7 @@ test_c_veri_bsv SameFamily
 # Test that we generate correct code for the wide method port in this testcase
 if {$ctest == 1} {
 compile_object_pass WideMethod.bsv mkTb
-link_objects_pass mkTb.ba mkTb
+link_objects_pass mkTb.bsched mkTb
 }
 
 # Test parsing of memory file with CRs (ala Windows)
@@ -43,10 +43,10 @@ test_c_veri_bsv ArithShift
 # the top-level.
 if {$ctest == 1} {
 compile_object_pass ModuleArg.bsv sysModuleArg
-link_objects_fail_error sysModuleArg.ba sysModuleArg G0099
+link_objects_fail_error sysModuleArg.bsched sysModuleArg G0099
 
 compile_object_pass ModuleParam.bsv sysModuleParam
-link_objects_fail_error sysModuleParam.ba sysModuleParam G0099
+link_objects_fail_error sysModuleParam.bsched sysModuleParam G0099
 }
 
 # Test sparse RegFileLoad support for very large RegFiles
@@ -60,14 +60,14 @@ test_c_only_bsv ClkTest
 # only some of which are inlined into the schedule function.
 if {$ctest == 1} {
 compile_object_pass GenerateTest3.bsv mkGenerateTest3
-link_objects_pass mkGenerateTest3.ba mkGenerateTest3
+link_objects_pass mkGenerateTest3.bsched mkGenerateTest3
 }
 
 # Test that we generate correct code for renaming a
 # wide method port.
 if {$ctest == 1} {
 compile_object_pass Bug.bsv mkBug
-link_objects_pass mkBug.ba mkBug
+link_objects_pass mkBug.bsched mkBug
 }
 
 # Test that wide module argument ports get initialized (Bug #1611)

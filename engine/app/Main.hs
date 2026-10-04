@@ -28,7 +28,7 @@ usage prog = unlines
   , "  --top DIR          repository root (default: the nearest ancestor of the"
   , "                     working directory holding src/Libraries)"
   , "  --prefix DIR       install prefix (default: TOP/inst; PREFIX)"
-  , "  --builddir DIR     where .bo/.ba are built (default: TOP/build/bsvlib; BUILDDIR)"
+  , "  --builddir DIR     where .bo/.bdpi are built (default: TOP/build/bsvlib; BUILDDIR)"
   , "  --bsc PATH         the compiler (default: PREFIX/bin/bsc; BSC)"
   , "  --bscdeps PATH     the discovery tool (default: beside bsc, else PATH)"
   , "  --bo2bloogle PATH  (default: PREFIX/bin/bo2bloogle; BO2BLOOGLE)"

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling BoolTest_sat-stp.bsv
 code generation for sysBoolTest starts
+Elaborated module file created: sysBoolTest.bmod
 Warning: "BoolTest_sat-stp.bsv", line 9, column 8: (G0010)
   Rule "aa" was treated as more urgent than "bb". Conflicts:
     "aa" cannot fire before "bb": calls to uc.write vs. uc.read
@@ -48,5 +49,5 @@ Logical execution order: aa, ab, bb
 Warning: "BoolTest_sat-stp.bsv", line 25, column 10: (G0021)
   According to the generated schedule, rule `bb' can never fire.
 Verilog file created: sysBoolTest.v
-Elaborated module file created: sysBoolTest.ba
+Schedule file created: sysBoolTest.bsched
 All packages are up to date.

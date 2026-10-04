@@ -1,6 +1,7 @@
 checking package dependencies
 compiling SplitIfMeth.bsv
 code generation for mkSplitIfMeth starts
+Elaborated module file created: mkSplitIfMeth.bmod
 === schedule (SplitIfMeth mkSplitIfMeth):
 parallel: [esposito: [a1_T -> [], a1_F -> [], a2 -> []]]
 order: [a1_T, a2, a1_F]
@@ -45,5 +46,5 @@ Logical execution order: a1_T, a2, a1_F
 
 =============================================
 Verilog file created: mkSplitIfMeth.v
-Elaborated module file created: mkSplitIfMeth.ba
+Schedule file created: mkSplitIfMeth.bsched
 All packages are up to date.

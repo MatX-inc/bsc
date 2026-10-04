@@ -1,0 +1,9 @@
+# Exercise file identity and code generation in a fresh temporary directory.
+set script [file normalize [file join [file dirname [info script]] test.sh]]
+set status [catch {exec env "BSC=[which_bsc]" bash $script 2>@1} output]
+verbose -log $output
+if {$status == 0} {
+    pass "module .bmod/.bsched split"
+} else {
+    fail "module .bmod/.bsched split"
+}

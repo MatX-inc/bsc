@@ -1,6 +1,7 @@
 checking package dependencies
 compiling RuleMethodConflict.bsv
 code generation for sysRuleMethodConflict starts
+Elaborated module file created: sysRuleMethodConflict.bmod
 Warning: "RuleMethodConflict.bsv", line 38, column 8: (G0010)
   Rule "get" was treated as more urgent than "put". Conflicts:
     "get" cannot fire before "put":
@@ -49,5 +50,5 @@ Logical execution order: get, put
 Warning: "RuleMethodConflict.bsv", line 44, column 8: (G0021)
   According to the generated schedule, rule `put' can never fire.
 Verilog file created: sysRuleMethodConflict.v
-Elaborated module file created: sysRuleMethodConflict.ba
+Schedule file created: sysRuleMethodConflict.bsched
 All packages are up to date.

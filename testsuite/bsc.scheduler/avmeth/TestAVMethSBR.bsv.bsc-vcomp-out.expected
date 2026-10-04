@@ -1,6 +1,7 @@
 checking package dependencies
 compiling TestAVMethSBR.bsv
 code generation for sysTestAVMethSBR starts
+Elaborated module file created: sysTestAVMethSBR.bmod
 Warning: "TestAVMethSBR.bsv", line 14, column 8: (G0036)
   Rule "rA" will appear to fire before "rB" when both fire in the same clock
   cycle, affecting:
@@ -11,5 +12,5 @@ Warning: "TestAVMethSBR.bsv", line 14, column 8: (G0117)
     dut.m
   To silence this warning, use the `-no-warn-action-shadowing' flag.
 Verilog file created: sysTestAVMethSBR.v
-Elaborated module file created: sysTestAVMethSBR.ba
+Schedule file created: sysTestAVMethSBR.bsched
 All packages are up to date.

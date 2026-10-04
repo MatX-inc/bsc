@@ -1,11 +1,13 @@
 checking package dependencies
 compiling DynamicInstArg.bsv
 code generation for mkDynamicInstArg_Sub starts
+Elaborated module file created: mkDynamicInstArg_Sub.bmod
 Verilog file created: mkDynamicInstArg_Sub.v
-Elaborated module file created: mkDynamicInstArg_Sub.ba
+Schedule file created: mkDynamicInstArg_Sub.bsched
 code generation for sysDynamicInstArg starts
 Warning: "DynamicInstArg.bsv", line 12, column 10: (S0015)
   The lambda-calculus dump does not support dynamic module arguments: b
+Elaborated module file created: sysDynamicInstArg.bmod
 Verilog file created: sysDynamicInstArg.v
-Elaborated module file created: sysDynamicInstArg.ba
+Schedule file created: sysDynamicInstArg.bsched
 All packages are up to date.

@@ -1,6 +1,7 @@
 checking package dependencies
 compiling Ex5.bsv
 code generation for mkEx5 starts
+Elaborated module file created: mkEx5.bmod
 Warning: "Ex5.bsv", line 8, column 8: (G0009)
   The scheduling phase created a conflict between the following rules:
       `a' and `b'
@@ -66,5 +67,5 @@ Logical execution order: b, c, a
 
 =====================================
 Verilog file created: mkEx5.v
-Elaborated module file created: mkEx5.ba
+Schedule file created: mkEx5.bsched
 All packages are up to date.

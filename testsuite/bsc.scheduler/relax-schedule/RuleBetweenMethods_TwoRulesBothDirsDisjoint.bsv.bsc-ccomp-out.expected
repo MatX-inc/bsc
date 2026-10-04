@@ -1,8 +1,10 @@
 checking package dependencies
 compiling RuleBetweenMethods_TwoRulesBothDirsDisjoint.bsv
 code generation for mkRuleBetweenMethods_TwoRulesBothDirsDisjoint_Sub starts
-Elaborated module file created: mkRuleBetweenMethods_TwoRulesBothDirsDisjoint_Sub.ba
+Elaborated module file created: mkRuleBetweenMethods_TwoRulesBothDirsDisjoint_Sub.bmod
+Schedule file created: mkRuleBetweenMethods_TwoRulesBothDirsDisjoint_Sub.bsched
 code generation for sysRuleBetweenMethods_TwoRulesBothDirsDisjoint starts
+Elaborated module file created: sysRuleBetweenMethods_TwoRulesBothDirsDisjoint.bmod
 Error: "RuleBetweenMethods_TwoRulesBothDirsDisjoint.bsv", line 9, column 9: (G0101)
   The rules `RL_top_rule_A' and `RL_top_rule_B' require dynamic scheduling,
   which is not supported by Bluesim. This is because the rules use methods
@@ -18,4 +20,4 @@ Error: "RuleBetweenMethods_TwoRulesBothDirsDisjoint.bsv", line 9, column 9: (G01
   direction are as follows:
     (s1.m1, s1.m2)
       RL_sub_rule
-Elaborated error module file created: sysRuleBetweenMethods_TwoRulesBothDirsDisjoint.ba
+Schedule error file created: sysRuleBetweenMethods_TwoRulesBothDirsDisjoint.bsched

@@ -14,5 +14,4 @@ $(BUILDDIR):
 
 .PHONY: clean full_clean
 clean full_clean:
-	@rm -f *.bi *.bo *.ba vpi_wrapper* *.info *~
-
+	@rm -f *.bi *.bo *.ba *.bdpi vpi_wrapper* *.info *~

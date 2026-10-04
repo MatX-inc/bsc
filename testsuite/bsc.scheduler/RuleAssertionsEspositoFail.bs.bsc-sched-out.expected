@@ -1,6 +1,7 @@
 checking package dependencies
 compiling RuleAssertionsEspositoFail.bs
 code generation for sysRuleAssertionsEspositoFail starts
+Elaborated module file created: sysRuleAssertionsEspositoFail.bmod
 Error: "RuleAssertionsEspositoFail.bs", line 17, column 48: (G0005)
   The assertion `fire_when_enabled' failed for rule `RL_setF'
   because it is blocked by rule
@@ -35,4 +36,4 @@ Blocking rules: setF, setT
 Logical execution order: setT, setF, flip
 
 =============================================================
-Elaborated error module file created: sysRuleAssertionsEspositoFail.ba
+Schedule error file created: sysRuleAssertionsEspositoFail.bsched

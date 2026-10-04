@@ -13,7 +13,7 @@ proc mesa_cleanup {} {
   erase sysTestMesa.v.vcd
 
   cd [file join $here $subdir]
-  set files [glob -nocomplain *.bi *.bo *.ba *.o *.v]
+  set files [glob -nocomplain *.bi *.bo *.bmod *.bsched *.bdpi *.ba *.o *.v]
   cd $here 
 
   foreach file $files {
@@ -99,4 +99,3 @@ mesa_save_outputs circ
 
 compile_pass MesaCircLpmQ.bsv
 compile_pass MesaFlexLpmQ.bsv
-

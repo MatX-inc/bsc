@@ -1,10 +1,10 @@
 if { ($ctest == 1) && ($systemctest == 1) } {
 
 compile_object_pass GCD.bsv
-create_systemc_objects_pass mkGCD.ba mkGCD
+create_systemc_objects_pass mkGCD.bsched mkGCD
 
 compile_object_pass TbGCD.bsv
-create_systemc_objects_pass mkTbGCD.ba mkTbGCD
+create_systemc_objects_pass mkTbGCD.bsched mkTbGCD
 
 build_systemc_executable_pass top top.sc {mkTbGCD mkGCD}
 

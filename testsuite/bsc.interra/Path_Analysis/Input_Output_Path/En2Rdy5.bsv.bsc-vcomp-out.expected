@@ -1,6 +1,7 @@
 checking package dependencies
 compiling En2Rdy5.bsv
 code generation for mkEn2Rdy5 starts
+Elaborated module file created: mkEn2Rdy5.bmod
 === pathsPostSched (En2Rdy5 mkEn2Rdy5):
 Combinational paths from inputs to outputs:
   EN_start -> RDY_result
@@ -8,5 +9,5 @@ Combinational paths from inputs to outputs:
 -----
 
 Verilog file created: mkEn2Rdy5.v
-Elaborated module file created: mkEn2Rdy5.ba
+Schedule file created: mkEn2Rdy5.bsched
 All packages are up to date.

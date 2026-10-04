@@ -53,6 +53,8 @@ import FStringCompat
 import PreStrings(fsUnderscore)
 import PreIds
 import Flags
+import qualified PhaseConfig as PC
+import qualified PhaseConfigLegacy as PL
 import SymTab(SymTab)
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle,
              recordHandleOpen, recordHandleClose)
@@ -4003,9 +4005,9 @@ conAp' i (ICPrim _ PrimStringOf) _ [T t, _] = internalError ("PrimStringOf unsim
 -- synonym-expansion - no other synonyms should survive in the evaluator
 -- XXX using iToCT here means we're assuming the type is not polymorphic
 conAp' i (ICPrim _ PrimTypeOf) _ [T t, _] = do
-   flags <- getFlags
+   typeFlags <- PL.internalTypecheckFlags . PC.typeSolverFlags <$> getFlags
    symt <- getSymTab
-   return $ pExpr (icType i (iConvT flags symt (iToCT t)))
+   return $ pExpr (icType i (iConvT typeFlags symt (iToCT t)))
 
 -- Primitives that should be used downstream
 conAp' _ (ICPrim _ PrimZeroExt) _ [t2@(T t), t1, t3, e] =
@@ -5846,26 +5848,28 @@ evalCExpr tag ce it as = do
 cExprToIExpr :: String -> CExpr -> IType -> G HExpr
 cExprToIExpr tag ce it = do
   --traceM("evalCExpr " ++ tag ++ "; ce: " ++ show ce ++ "; ct: " ++ show ct ++ "; as: " ++ show as)
-  flags <- getFlags
+  -- These closed compiler-generated expressions contain no implicit local
+  -- definitions. Their typechecking policy is fixed; only solver settings
+  -- come from the surrounding elaboration.
+  typeFlags <- PL.internalTypecheckFlags . PC.typeSolverFlags <$> getFlags
   r <- getSymTab
   let err_tag = "evalCExpr " ++ tag
   -- built-in typeclass reflection only uses coherent typeclasses
   -- XXX there may be a corner case if we depend on user code that requires
   -- XXX incoherent matching
   let ct = iToCT it
-  let ti_res = TM.runTI flags False r (topExpr ct ce)
+  let ti_res = TM.runTI typeFlags False r (topExpr ct ce)
   case TM.tiResult ti_res of
     Left errs -> internalError (err_tag ++ " errors: " ++ ppReadable errs)
     Right (ps, ce') -> do
-      let convT = iConvT flags r
+      let convT = iConvT typeFlags r
           newATFs = M.mapKeys (\(i, ts) -> (i, map convT ts))
                               (M.map convT (TM.tiATFCache ti_res))
       mergeATFCache newATFs
       when (not (null ps)) $ internalError (err_tag ++ " unreduced: " ++ ppReadable ps)
       env <- getDefEnv
       errh <- getErrHandle
-      flags <- getFlags
-      let ie = iConvExpr errh flags r env ce'
+      let ie = iConvExpr errh typeFlags r env ce'
       --traceM(err_tag ++ "; ce': " ++ ppReadable ce')
       --traceM(err_tag ++ "; ie: " ++ ppReadable ie)
       ie' <- case ie of

@@ -1,22 +1,24 @@
 # -----
-# Test that BSC warns if the search path contains multiple .ba files
+# Test that BSC warns if the search path contains multiple .bmod/.bsched pairs
 # by the same name
 
 if { $ctest == 1 } {
 
-# Compile a design with two modules, to generate .ba files
+# Compile a design with two modules, to generate .bmod/.bsched pairs
 compile_object_pass TbGCD.bsv
 
-# Make subdirs with a copy of the imported .ba file
+# Make subdirs with a copy of the imported .bmod/.bsched pair
 mkdir libdir1
 mkdir libdir2
-copy mkGCD.ba libdir1
-copy mkGCD.ba libdir2
+copy mkGCD.bmod libdir1
+copy mkGCD.bsched libdir1
+copy mkGCD.bmod libdir2
+copy mkGCD.bsched libdir2
 
 # Make one unreadable (Bug 1010)
-chmod {u-r} libdir1/mkGCD.ba
+chmod {u-r} libdir1/mkGCD.bsched
 
-# Try linking with three .ba files in the path
+# Try linking with three artifact pairs in the path
 link_objects_pass {} mkTbGCD {-p libdir1:+:libdir2}
 
 # Check that we get warnings (S0088, S0089)
@@ -25,7 +27,7 @@ compare_file mkTbGCD.bsc-ccomp-out
 }
 
 # -----
-# Test that BSC errors if a .ba file is read that does not contain
+# Test that BSC errors if an artifact pair is read that does not contain
 # the expected module
 
 if { $ctest == 1 } {
@@ -33,7 +35,8 @@ if { $ctest == 1 } {
 compile_object_pass WrongMod.bsv
 compile_object_pass WrongTop.bsv
 
-move mkWrongMod.ba mkRightMod.ba
+move mkWrongMod.bmod mkRightMod.bmod
+move mkWrongMod.bsched mkRightMod.bsched
 
 link_objects_fail {} mkWrongTop
 

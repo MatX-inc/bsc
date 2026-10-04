@@ -15,8 +15,8 @@
 # Value functions
 
 copy logic.c.keep logic.c
-test_c_veri_bsv_multi BDPIBit8 mkBDPIBit8 { my_and.ba my_C_or.ba logic.c }
-test_c_veri_bsv_multi BDPINonBit_Bool mkBDPINonBit_Bool { my_and.ba my_xor.ba logic.c }
+test_c_veri_bsv_multi BDPIBit8 mkBDPIBit8 { my_and.bdpi my_C_or.bdpi logic.c }
+test_c_veri_bsv_multi BDPINonBit_Bool mkBDPINonBit_Bool { my_and.bdpi my_xor.bdpi logic.c }
 
 # Non-bitifiable types should have a clean error
 # Test for arg and result
@@ -29,7 +29,7 @@ compile_fail_error BDPINonBitRes_Integer.bsv T0089
 
 copy convert.c.keep convert.c
 make_pass "-f convert.mk" convert.o
-set convertmods { my_stoi.ba convert.o }
+set convertmods { my_stoi.bdpi convert.o }
 test_c_veri_bsv_multi BDPIStringArg mkBDPIStringArg $convertmods
 test_c_veri_bsv_multi BDPIDynamicStringArg mkBDPIDynamicStringArg $convertmods
 
@@ -41,10 +41,10 @@ compile_fail_error BDPIActionValueStringResult.bsv T0087
 # Action and ActionValue functions
 
 copy actions.c.keep actions.c
-set actionmods { my_display.ba actions.c }
-set actionvaluemods1 { my_time.ba actions.c }
-set actionvaluemods2 { my_wide_time.ba actions.c }
-set actionvaluemods3 { poly_action.ba actions.c }
+set actionmods { my_display.bdpi actions.c }
+set actionvaluemods1 { my_time.bdpi actions.c }
+set actionvaluemods2 { my_wide_time.bdpi actions.c }
+set actionvaluemods3 { poly_action.bdpi actions.c }
 test_c_veri_bsv_multi BDPIAction mkBDPIAction $actionmods
 test_c_veri_bsv_multi BDPIPrimAction mkBDPIPrimAction $actionmods
 test_c_veri_bsv_multi BDPIActionValue mkBDPIActionValue $actionvaluemods1
@@ -64,21 +64,21 @@ test_c_veri_bsv_multi BDPIActionValue_ mkBDPIActionValue_ $actionvaluemods1
 # polymorphic-BDPI convention.
 
 copy dupctx.c.keep dupctx.c
-test_c_veri_bsv_multi BDPICtx mkBDPICtx { bit_dup.ba dupctx.c }
+test_c_veri_bsv_multi BDPICtx mkBDPICtx { bit_dup.bdpi dupctx.c }
 
 compile_verilog_fail BDPICtxViolated.bsv T0031
 
 # -----
 
 copy wide.c.keep wide.c
-test_c_veri_bsv_multi BDPIBit97 mkBDPIBit97 { popcount.ba wide.c }
-test_c_veri_bsv_multi BDPIWideResult mkBDPIWideResult { four_copies.ba wide.c }
+test_c_veri_bsv_multi BDPIBit97 mkBDPIBit97 { popcount.bdpi wide.c }
+test_c_veri_bsv_multi BDPIWideResult mkBDPIWideResult { four_copies.bdpi wide.c }
 
 # ---------------
 # Functions with polymorphic data
 
 copy poly.c.keep poly.c
-test_c_veri_bsv_multi BDPIBitN mkBDPIBitN { poly_add.ba poly.c }
+test_c_veri_bsv_multi BDPIBitN mkBDPIBitN { poly_add.bdpi poly.c }
 
 # ---------------
 # ActionValue outputs through logic to system tasks
@@ -90,24 +90,24 @@ test_c_veri_bsv_multi BDPIActionValueWithLogic mkBDPIActionValueWithLogic $actio
 # Passing a struct from BSV to C
 
 copy struct.c.keep struct.c
-test_c_veri_bsv_multi BDPIPassingStruct mkBDPIPassingStruct {modify_struct.ba struct.c}
+test_c_veri_bsv_multi BDPIPassingStruct mkBDPIPassingStruct {modify_struct.bdpi struct.c}
 
 # ---------------
 # Test that link names can start with a capital letter
 
 test_c_veri_bsv_multi BDPI_CapitalLinkName mkBDPI_CapitalLinkName \
-    { MyAnd.ba my_C_or.ba logic.c }
+    { MyAnd.bdpi my_C_or.bdpi logic.c }
 
 # ---------------
 # Test for an ActionValue return by a pointer to a method output port
 
 copy xbuf.c.keep xbuf.c
-test_c_veri_bsv_multi Bug mkBug {xbuf.ba xbuf.c}
+test_c_veri_bsv_multi Bug mkBug {xbuf.bdpi xbuf.c}
 
 # ---------------
 # Test for handling of arguments between 33 and 64 bits
 
 copy incr64.c.keep incr64.c
-test_c_veri_bsv_multi BDPIArg64 mkBDPIArg64 {func64.ba incr64.c}
+test_c_veri_bsv_multi BDPIArg64 mkBDPIArg64 {func64.bdpi incr64.c}
 
 # ---------------

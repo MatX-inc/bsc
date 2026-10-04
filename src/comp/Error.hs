@@ -9,7 +9,7 @@ module Error(
              internalError,
 
              -- initialize the error handler
-             ErrorHandle, initErrorHandle, setErrorHandleFlags,
+             ErrorHandle, initErrorHandle, setErrorHandleFlags, withErrorHandleFlags,
 
              -- update the error handler state when files are opened/closed
              recordHandleOpen, recordHandleClose, closeOpenHandles,
@@ -191,6 +191,23 @@ setErrorHandleFlags ref flags = do
                     suppressionSet = toMsgSet (F.suppressWarnings flags)
                   }
   writeErrorState ref new_state
+
+-- A phase may have a different diagnostic policy (for example, from a
+-- module's options pragma). Restore the caller's policy on success or
+-- failure, while retaining accumulated diagnostics and open-handle state.
+withErrorHandleFlags :: ErrorHandle -> F.Flags -> IO a -> IO a
+withErrorHandleFlags ref flags action =
+  CE.bracket acquire restore (const action)
+  where
+    acquire = do
+      state <- readErrorState ref
+      setErrorHandleFlags ref flags
+      return (promotionSet state, demotionSet state, suppressionSet state)
+    restore (promotion, demotion, suppression) = do
+      state <- readErrorState ref
+      writeErrorState ref (state { promotionSet = promotion,
+                                  demotionSet = demotion,
+                                  suppressionSet = suppression })
 
 readErrorState :: ErrorHandle -> IO ErrorState
 readErrorState (ErrorHandle ref) = readIORef ref
@@ -4327,7 +4344,7 @@ getErrorText (EMissingUserFile filename path) =
 
 getErrorText (EMissingABinForeignFuncFile ffunc_name using_module) =
     (System 46, empty,
-     s2par ("No elaboration file (.ba) was provided for " ++
+     s2par ("No foreign-function file (.bdpi or legacy .ba) was provided for " ++
             "the foreign function " ++ ishow ffunc_name ++
             " used in the module " ++ ishow using_module ++ ".")
      )

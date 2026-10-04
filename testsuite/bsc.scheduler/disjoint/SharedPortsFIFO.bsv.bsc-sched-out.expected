@@ -1,6 +1,7 @@
 checking package dependencies
 compiling SharedPortsFIFO.bsv
 code generation for sysSharedPortsFIFO starts
+Elaborated module file created: sysSharedPortsFIFO.bmod
 === schedule (SharedPortsFIFO sysSharedPortsFIFO):
 parallel: [esposito: [RL_do_enq -> [], RL_do_otherwise -> []]]
 order: [RL_do_enq, RL_do_otherwise]
@@ -38,5 +39,5 @@ Logical execution order: do_enq, do_otherwise
 
 ==================================================
 Verilog file created: sysSharedPortsFIFO.v
-Elaborated module file created: sysSharedPortsFIFO.ba
+Schedule file created: sysSharedPortsFIFO.bsched
 All packages are up to date.

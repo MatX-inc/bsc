@@ -1,11 +1,12 @@
 checking package dependencies
 compiling ExecutionOrderAttr_Method.bsv
 code generation for sysExecutionOrderAttr_Method starts
+Elaborated module file created: sysExecutionOrderAttr_Method.bmod
 Warning: "ExecutionOrderAttr_Method.bsv", line 7, column 8: (G0117)
   Rule `m' shadows the effects of `r1' when they execute in the same clock
   cycle. Affected method calls:
     rg.write
   To silence this warning, use the `-no-warn-action-shadowing' flag.
 Verilog file created: sysExecutionOrderAttr_Method.v
-Elaborated module file created: sysExecutionOrderAttr_Method.ba
+Schedule file created: sysExecutionOrderAttr_Method.bsched
 All packages are up to date.

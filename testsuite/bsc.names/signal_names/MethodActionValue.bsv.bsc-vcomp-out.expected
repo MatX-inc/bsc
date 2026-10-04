@@ -50,8 +50,9 @@ method (RDY_m, [])RDY_m clocked_by (default_clock) reset_by (no_reset);
 
 -----
 
+Elaborated module file created: mkMethodActionValue_Sub.bmod
 Verilog file created: mkMethodActionValue_Sub.v
-Elaborated module file created: mkMethodActionValue_Sub.ba
+Schedule file created: mkMethodActionValue_Sub.bsched
 code generation for sysMethodActionValue starts
 === ATS (MethodActionValue sysMethodActionValue):
 APackage sysMethodActionValue
@@ -109,6 +110,7 @@ clock domain = Just (0), resets = []
 
 -----
 
+Elaborated module file created: sysMethodActionValue.bmod
 Verilog file created: sysMethodActionValue.v
-Elaborated module file created: sysMethodActionValue.ba
+Schedule file created: sysMethodActionValue.bsched
 All packages are up to date.

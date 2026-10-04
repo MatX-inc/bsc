@@ -1,6 +1,7 @@
 checking package dependencies
 compiling DenseRules.bsv
 code generation for mkDenseRules starts
+Elaborated module file created: mkDenseRules.bmod
 Warning: "DenseRules.bsv", line 7, column 8: (G0010)
   Rule "bump" was treated as more urgent than "bump_1". Conflicts:
     "bump" cannot fire before "bump_1":
@@ -4772,5 +4773,5 @@ Logical execution order: bump,
 
 ============================================
 Verilog file created: mkDenseRules.v
-Elaborated module file created: mkDenseRules.ba
+Schedule file created: mkDenseRules.bsched
 All packages are up to date.

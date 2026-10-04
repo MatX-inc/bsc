@@ -1,8 +1,10 @@
 checking package dependencies
 compiling RuleBetweenMethods_TwoRulesDisjoint.bsv
 code generation for mkRuleBetweenMethods_TwoRulesDisjoint_Sub starts
-Elaborated module file created: mkRuleBetweenMethods_TwoRulesDisjoint_Sub.ba
+Elaborated module file created: mkRuleBetweenMethods_TwoRulesDisjoint_Sub.bmod
+Schedule file created: mkRuleBetweenMethods_TwoRulesDisjoint_Sub.bsched
 code generation for sysRuleBetweenMethods_TwoRulesDisjoint starts
+Elaborated module file created: sysRuleBetweenMethods_TwoRulesDisjoint.bmod
 Error: "RuleBetweenMethods_TwoRulesDisjoint.bsv", line 30, column 9: (G0100)
   The rules `RL_top_rule_1' and `RL_top_rule_3' require dynamic scheduling,
   which is not supported by Bluesim. This is because the rules use methods
@@ -20,4 +22,4 @@ Error: "RuleBetweenMethods_TwoRulesDisjoint.bsv", line 30, column 9: (G0100)
     execution order because of calls to rg12.write vs. rg12.read
     (RL_top_rule_2, RL_top_rule_3)
     execution order because of calls to rg23.write vs. rg23.read
-Elaborated error module file created: sysRuleBetweenMethods_TwoRulesDisjoint.ba
+Schedule error file created: sysRuleBetweenMethods_TwoRulesDisjoint.bsched

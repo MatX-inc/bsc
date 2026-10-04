@@ -1,6 +1,7 @@
 checking package dependencies
 compiling IfcIfcWarning.bsv
 code generation for sysIfcIfcWarning starts
+Elaborated module file created: sysIfcIfcWarning.bmod
 === schedule (IfcIfcWarning sysIfcIfcWarning):
 parallel: [esposito: [bar -> [], baz -> []]]
 order: [bar, baz]
@@ -42,5 +43,5 @@ Logical execution order: bar, baz
 
 ================================================
 Verilog file created: sysIfcIfcWarning.v
-Elaborated module file created: sysIfcIfcWarning.ba
+Schedule file created: sysIfcIfcWarning.bsched
 All packages are up to date.

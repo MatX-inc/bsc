@@ -1,0 +1,6 @@
+#include <stdint.h>
+
+uint32_t mkSameName(uint32_t value)
+{
+    return value + 7;
+}

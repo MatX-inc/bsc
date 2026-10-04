@@ -1,6 +1,7 @@
 checking package dependencies
 compiling RuleNeverFires.bsv
 code generation for sysRuleNeverFires starts
+Elaborated module file created: sysRuleNeverFires.bmod
 Warning: "RuleNeverFires.bsv", line 3, column 8: (G0010)
   Rule "always_fires" was treated as more urgent than
   "never_fires". Conflicts:
@@ -11,5 +12,5 @@ Warning: "RuleNeverFires.bsv", line 3, column 8: (G0010)
 Warning: "RuleNeverFires.bsv", line 11, column 8: (G0021)
   According to the generated schedule, rule `never_fires' can never fire.
 Verilog file created: sysRuleNeverFires.v
-Elaborated module file created: sysRuleNeverFires.ba
+Schedule file created: sysRuleNeverFires.bsched
 All packages are up to date.

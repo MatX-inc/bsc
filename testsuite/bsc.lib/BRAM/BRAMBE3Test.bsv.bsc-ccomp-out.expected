@@ -10,7 +10,8 @@ Warning: "BRAMCore.bsv", line 275, column 51: (S0015)
   During elaboration of `dut0' at "BRAMBE3Test.bsv", line 9, column 39.
   During elaboration of `sysBRAMBE3Test' at "BRAMBE3Test.bsv", line 8, column
   8.
-Elaborated module file created: sysBRAMBE3Test.ba
+Elaborated module file created: sysBRAMBE3Test.bmod
+Schedule file created: sysBRAMBE3Test.bsched
 Warning: "BRAMBE3Test.bsv", line 2, column 8: (T0157)
   Package `GetPut' is imported but not used
 Warning: "BRAMBE3Test.bsv", line 3, column 8: (T0157)

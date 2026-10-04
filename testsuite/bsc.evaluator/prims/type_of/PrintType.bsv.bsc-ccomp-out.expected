@@ -2,5 +2,6 @@ checking package dependencies
 compiling PrintType.bsv
 code generation for sysPrintType starts
 Compilation message: Bool
-Elaborated module file created: sysPrintType.ba
+Elaborated module file created: sysPrintType.bmod
+Schedule file created: sysPrintType.bsched
 All packages are up to date.

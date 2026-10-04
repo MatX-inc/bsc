@@ -171,7 +171,7 @@ find_regexp [make_bsc_ccomp_output_name mkBlockCodegen] \
 compile_no_source_fail_error "c_with_entry" \
     {-sim -c mkBlockCodegen -e mkBlockCodegen} S0096
 
-# -c generates from .ba files, not from source
+# -c generates from .bmod/.bsched pairs, not from source
 compile_fail_error BlockCodegen.bsv S0097 1 {-sim -c mkBlockCodegen}
 
 # -c is not supported with -systemc

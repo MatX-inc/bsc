@@ -1,8 +1,9 @@
 checking package dependencies
 compiling RuleNameAcrossSubModule2.bsv
 code generation for sysRuleNameAcrossSubModule2 starts
+Elaborated module file created: sysRuleNameAcrossSubModule2.bmod
 Warning: "RuleNameAcrossSubModule2.bsv", line 26, column 9: (G0021)
   According to the generated schedule, rule `m_b_r2' can never fire.
 Verilog file created: sysRuleNameAcrossSubModule2.v
-Elaborated module file created: sysRuleNameAcrossSubModule2.ba
+Schedule file created: sysRuleNameAcrossSubModule2.bsched
 All packages are up to date.

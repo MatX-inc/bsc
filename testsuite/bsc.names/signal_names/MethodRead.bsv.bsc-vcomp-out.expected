@@ -57,6 +57,7 @@ clock domain = Just (0), resets = []
 
 -----
 
+Elaborated module file created: sysMethodRead.bmod
 Verilog file created: sysMethodRead.v
-Elaborated module file created: sysMethodRead.ba
+Schedule file created: sysMethodRead.bsched
 All packages are up to date.

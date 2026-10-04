@@ -1,6 +1,7 @@
 checking package dependencies
 compiling PutUrgency2.bsv
 code generation for mkPutTest2 starts
+Elaborated module file created: mkPutTest2.bmod
 === schedule (PutUrgency2 mkPutTest2):
 parallel: [esposito: [RL_display_output -> [], put -> [RL_display_output]]]
 order: [RL_display_output, put]
@@ -42,5 +43,5 @@ Logical execution order: display_output, put
 
 ==========================================
 Verilog file created: mkPutTest2.v
-Elaborated module file created: mkPutTest2.ba
+Schedule file created: mkPutTest2.bsched
 All packages are up to date.

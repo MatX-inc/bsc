@@ -1,6 +1,7 @@
 checking package dependencies
 compiling Bug1619B.bsv
 code generation for sysBug1619B starts
+Elaborated module file created: sysBug1619B.bmod
 Warning: "Bug1619B.bsv", line 2, column 8: (G0010)
   Rule "high_priority" was treated as more urgent than "normal". Conflicts:
     "high_priority" cannot fire before "normal": calls to x.write vs. x.read
@@ -60,5 +61,5 @@ Logical execution order: high_priority, normal, normal_1, normal_2
 
 ===========================================
 Verilog file created: sysBug1619B.v
-Elaborated module file created: sysBug1619B.ba
+Schedule file created: sysBug1619B.bsched
 All packages are up to date.

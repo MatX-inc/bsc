@@ -83,6 +83,8 @@ import PPrint
 -- import PVPrint
 import PFPrint
 import Flags
+import qualified PhaseConfig as PC
+import qualified PhaseConfigLegacy as PL
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, MsgContext,
              bsError, bsWarning, bsErrorWithContext, bsWarningWithContext,
              bsErrorWithContextNoExit, exitFail, closeOpenHandles)
@@ -2630,9 +2632,10 @@ fullTypeNormalizer flags symt cache t@(ITAp _ _)
         canNorm (ITAp f a)       = canNorm f && canNorm a
         canNorm _                = True
         normTFun t =
-          let t' = tracep doTraceATFCacheMiss
+          let typeFlags = PL.internalTypecheckFlags (PC.typeSolverFlags flags)
+              t' = tracep doTraceATFCacheMiss
                      ("fullTypeNormalizer - ATF cache miss: " ++ ppReadable t)
-                     (iConvT flags symt $ iToCT t)
+                     (iConvT typeFlags symt $ iToCT t)
           in case splitITAp t' of
                ((ITCon _ _ (TIatf {})), _) -> internalError $
                     "fullTypeNormalizer - unsimplified: " ++ ppReadable (t,t')

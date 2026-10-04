@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ValueMethodEx2.bsv
 code generation for mkValueMethodEx2Mod1 starts
+Elaborated module file created: mkValueMethodEx2Mod1.bmod
 === schedule (ValueMethodEx2 mkValueMethodEx2Mod1):
 parallel: [esposito: [m1 -> [], m2 -> [], RL_r -> []]]
 order: [m1, RL_r, m2]
@@ -50,8 +51,9 @@ Logical execution order: m1, r, m2
 
 ====================================================
 Verilog file created: mkValueMethodEx2Mod1.v
-Elaborated module file created: mkValueMethodEx2Mod1.ba
+Schedule file created: mkValueMethodEx2Mod1.bsched
 code generation for mkValueMethodEx2Mod2 starts
+Elaborated module file created: mkValueMethodEx2Mod2.bmod
 === schedule (ValueMethodEx2 mkValueMethodEx2Mod2):
 parallel: [esposito: [m1 -> [], RL_r -> [], m2 -> []]]
 order: [m1, RL_r, m2]
@@ -101,5 +103,5 @@ Logical execution order: m1, r, m2
 
 ====================================================
 Verilog file created: mkValueMethodEx2Mod2.v
-Elaborated module file created: mkValueMethodEx2Mod2.ba
+Schedule file created: mkValueMethodEx2Mod2.bsched
 All packages are up to date.

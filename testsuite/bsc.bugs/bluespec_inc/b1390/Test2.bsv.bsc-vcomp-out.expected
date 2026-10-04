@@ -1,7 +1,8 @@
 checking package dependencies
 compiling Test2.bsv
 code generation for mkTest2 starts
+Elaborated module file created: mkTest2.bmod
 Schedule dump file created: mkTest2.sched
 Verilog file created: mkTest2.v
-Elaborated module file created: mkTest2.ba
+Schedule file created: mkTest2.bsched
 All packages are up to date.

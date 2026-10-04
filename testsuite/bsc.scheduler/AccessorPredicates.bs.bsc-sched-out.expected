@@ -1,6 +1,7 @@
 checking package dependencies
 compiling AccessorPredicates.bs
 code generation for sysAccessorPredicates starts
+Elaborated module file created: sysAccessorPredicates.bmod
 === schedule (AccessorPredicates sysAccessorPredicates):
 parallel: [esposito: [s -> [], g -> []]]
 order: [s, g]
@@ -35,5 +36,5 @@ Logical execution order: s, g
 
 =====================================================
 Verilog file created: sysAccessorPredicates.v
-Elaborated module file created: sysAccessorPredicates.ba
+Schedule file created: sysAccessorPredicates.bsched
 All packages are up to date.

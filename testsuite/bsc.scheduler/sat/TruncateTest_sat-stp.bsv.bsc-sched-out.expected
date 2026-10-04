@@ -1,6 +1,7 @@
 checking package dependencies
 compiling TruncateTest_sat-stp.bsv
 code generation for sysAddTest starts
+Elaborated module file created: sysAddTest.bmod
 Warning: "TruncateTest_sat-stp.bsv", line 10, column 8: (G0010)
   Rule "aa" was treated as more urgent than "bb". Conflicts:
     "aa" cannot fire before "bb": calls to uc.write vs. uc.read
@@ -51,5 +52,5 @@ Logical execution order: aa, ab, bb
 Warning: "TruncateTest_sat-stp.bsv", line 30, column 10: (G0021)
   According to the generated schedule, rule `bb' can never fire.
 Verilog file created: sysAddTest.v
-Elaborated module file created: sysAddTest.ba
+Schedule file created: sysAddTest.bsched
 All packages are up to date.

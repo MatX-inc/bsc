@@ -15,6 +15,7 @@ Warning: "TopMethodNameSubModuleClash.bsv", line 33, column 29: (G0123)
   column 8.
   During elaboration of `sysTopMethodNameSubModuleClash' at
   "TopMethodNameSubModuleClash.bsv", line 14, column 8.
+Elaborated module file created: sysTopMethodNameSubModuleClash.bmod
 Warning: "TopMethodNameSubModuleClash.bsv", line 14, column 8: (G0010)
   Rule "mymethod1" was treated as more urgent than "m_r". Conflicts:
     "mymethod1" cannot fire before "m_r": calls to m_rg1.write vs. m_rg1.read
@@ -26,5 +27,5 @@ Warning: "TopMethodNameSubModuleClash.bsv", line 14, column 8: (G0010)
     "m_r" cannot fire before "sub_mymethod2":
       calls to m_rg2.write vs. m_rg2.read
 Verilog file created: sysTopMethodNameSubModuleClash.v
-Elaborated module file created: sysTopMethodNameSubModuleClash.ba
+Schedule file created: sysTopMethodNameSubModuleClash.bsched
 All packages are up to date.

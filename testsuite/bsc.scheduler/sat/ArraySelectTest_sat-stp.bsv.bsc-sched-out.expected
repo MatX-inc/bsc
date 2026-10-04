@@ -1,6 +1,7 @@
 checking package dependencies
 compiling ArraySelectTest_sat-stp.bsv
 code generation for sysArraySelectTest starts
+Elaborated module file created: sysArraySelectTest.bmod
 Warning: "ArraySelectTest_sat-stp.bsv", line 6, column 8: (G0010)
   Rule "aa" was treated as more urgent than "bb". Conflicts:
     "aa" cannot fire before "bb": calls to uc.write vs. uc.read
@@ -59,5 +60,5 @@ Logical execution order: aa, ab, bb
 Warning: "ArraySelectTest_sat-stp.bsv", line 32, column 10: (G0021)
   According to the generated schedule, rule `bb' can never fire.
 Verilog file created: sysArraySelectTest.v
-Elaborated module file created: sysArraySelectTest.ba
+Schedule file created: sysArraySelectTest.bsched
 All packages are up to date.

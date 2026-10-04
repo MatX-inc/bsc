@@ -1,6 +1,6 @@
 #
 # Tests for the -c codegen mode with the Verilog backend:
-# "bsc -verilog -c M" generates M.v from M.ba, and only M.v (root-only).
+# "bsc -verilog -c M" generates only M.v from M.bmod/M.bsched (root-only).
 # The output is byte-identical to the .v the -g compile produces from the
 # same elaboration (the testsuite passes -no-show-timestamps
 # -no-show-version, so generated headers are deterministic).
@@ -40,7 +40,7 @@ proc vgen_pass { module { options "" } } {
 }
 
 # -------------------------
-# Elaborate a two-level design; -verilog writes .v and .ba for each module
+# Elaborate a two-level design; -verilog writes .v and a pair for each module.
 
 compile_verilog_pass GenMode.bsv mkGenSub
 compile_verilog_pass GenMode.bsv mkGenTop
@@ -50,14 +50,14 @@ copy mkGenSub.v mkGenSub-from-g.v
 copy mkGenTop.v mkGenTop-from-g.v
 
 # -------------------------
-# Regenerate each module's .v from its .ba alone, into a separate
+# Regenerate each module's .v from its pair alone, into a separate
 # directory; the result is byte-identical to the -g output, and root-only
 # (no other module's files, no link artifacts)
 
 mkdir gendir
 vgen_pass mkGenSub {-vdir gendir}
 files_exist { gendir/mkGenSub.v }
-files_dont_exist { gendir/mkGenTop.v gendir/mkGenSub.ba mkGenSub.cexe }
+files_dont_exist { gendir/mkGenTop.v gendir/mkGenSub.bmod gendir/mkGenSub.bsched mkGenSub.cexe }
 compare_file gendir/mkGenSub.v mkGenSub-from-g.v
 
 mkdir gendir2
@@ -81,7 +81,7 @@ if { $vtest == 1 } {
 }
 
 # -------------------------
-# A .ba elaborated for the Bluesim backend is rejected by -verilog -c
+# A pair elaborated for the Bluesim backend is rejected by -verilog -c.
 
 if { $ctest == 1 } {
     compile_object_pass GenMode.bsv mkGenC
