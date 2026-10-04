@@ -693,6 +693,7 @@ data ErrMsg =
         | ESVPNoClosingParen String
         | ESVPNoId String
         | ENotUTF8
+        | EBadUnbasedUnsized Char Char  -- ^ '0 or '1, char glued to it
 
         -- Type checker and static elaboration errors
 
@@ -1892,6 +1893,11 @@ getErrorText (WUnusedDef i) =
      s2par ("Definition of " ++ quote i ++ " is not used."))
 getErrorText ENotUTF8 =
     (Parse 224, empty, s2par "File encoding is not UTF-8")
+getErrorText (EBadUnbasedUnsized d c) =
+    (Parse 225, empty,
+     s2par ("The unbased unsized literal " ++ ['\'', d] ++
+            " cannot be immediately followed by " ++ show c ++ ".  " ++
+            "If they are separate tokens, add a space between them."))
 
 -- Type check and elaboration errors
 
