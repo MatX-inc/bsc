@@ -20,10 +20,11 @@ import Prelude hiding ((<>))
 
 import Data.List(find)
 import Data.Maybe(isNothing, isJust)
-import qualified Data.Map as M
 import Eval(NFData(..), rnf8)
 import PPrint
 import Id
+import IdMap(IdMap)
+import qualified IdMap as M
 import Pred(Class(..), Qual(..))
 import Assump
 import Scheme(Scheme(..))
@@ -36,8 +37,6 @@ import ConTagInfo
 import ErrorUtil(internalError)
 
 --import Debug.Trace
-
-type IdMap a = M.Map Id a
 
 data VarInfo
         = VarInfo {
