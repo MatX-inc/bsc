@@ -8,21 +8,23 @@ module CSubst (
 import CSyntax
 import Util(mapSnd)
 import Id(Id)
+import IdMap(IdMap)
+import qualified IdMap
+import qualified IdSet
 import CFreeVars (getPV, getLDefs)
 import qualified Data.Map as M
-import qualified IdSet
 
 
 -- --------------------
 
 -- (type ctor qualifier map, value ctor qualifier, variable map, tyvar map)
-type CSEnv = (M.Map Id Id, M.Map Id Id, M.Map Id CExpr, M.Map TyVar Type)
+type CSEnv = (IdMap Id, IdMap Id, IdMap CExpr, M.Map TyVar Type)
 
 rmVarId :: CSEnv -> Id -> CSEnv
-rmVarId (ctmap, cmap, vmap, vtmap) i = (ctmap, cmap, M.delete i vmap, vtmap)
+rmVarId (ctmap, cmap, vmap, vtmap) i = (ctmap, cmap, IdMap.delete i vmap, vtmap)
 
 rmVarIds :: CSEnv -> [Id] -> CSEnv
-rmVarIds (ctmap, cmap, vmap, vtmap) is = (ctmap, cmap, foldr M.delete vmap is, vtmap)
+rmVarIds (ctmap, cmap, vmap, vtmap) is = (ctmap, cmap, foldr IdMap.delete vmap is, vtmap)
 
 -- --------------------
 
@@ -31,7 +33,7 @@ class CSubst a where
 
 cSubstN :: (CSubst a) => CSEnv -> a -> a
 cSubstN r@(m1,m2,m3,m4) e =
-    if (M.null m1 && M.null m2 && M.null m3 && M.null m4)
+    if (IdMap.null m1 && IdMap.null m2 && IdMap.null m3 && M.null m4)
     then e
     else cSubst r e
 
@@ -46,14 +48,14 @@ instance (CSubst a, CSubst b) => CSubst (a, b) where
     cSubst r (x, y) = (cSubst r x, cSubst r y)
 
 cSubstConId :: CSEnv -> Id -> Id
-cSubstConId (_,cmap,_,_) i = M.findWithDefault i i cmap
+cSubstConId (_,cmap,_,_) i = IdMap.findWithDefault i i cmap
 
 cSubstMConId :: CSEnv -> Maybe Id -> Maybe Id
 cSubstMConId r (Just i) = Just (cSubstConId r i)
 cSubstMConId r Nothing  = Nothing
 
 cSubstTConId :: CSEnv -> Id -> Id
-cSubstTConId (ctmap,_,_,_) i = M.findWithDefault i i ctmap
+cSubstTConId (ctmap,_,_,_) i = IdMap.findWithDefault i i ctmap
 
 cSubstMTConId :: CSEnv -> Maybe Id -> Maybe Id
 cSubstMTConId r (Just i) = Just (cSubstTConId r i)
@@ -100,7 +102,7 @@ instance CSubst CRule where
 
 cSubstQualsN :: CSEnv -> [CQual] -> [CQual]
 cSubstQualsN env@(m1,m2,m3,m4) qs =
-    if (M.null m1 && M.null m2 && M.null m3 && M.null m4)
+    if (IdMap.null m1 && IdMap.null m2 && IdMap.null m3 && M.null m4)
     then qs
     else snd $ cSubstQuals env qs
 
@@ -162,7 +164,7 @@ instance CSubst CExpr where
     cSubst r e@(CAny {}) = e
     cSubst (_,_,vmap,_) (CVar i) =
         -- use the variable map
-        M.findWithDefault (CVar i) i vmap
+        IdMap.findWithDefault (CVar i) i vmap
     cSubst r (CApply f es) = CApply (cSubst r f) (cSubst r es)
     cSubst r (CTaskApply f es) = CTaskApply (cSubst r f) (cSubst r es)
     cSubst r (CTaskApplyT f t es) =

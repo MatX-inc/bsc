@@ -10,6 +10,7 @@ import Data.Maybe(catMaybes)
 import Control.Monad(when)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdMap
 import qualified IdSet
 
 import PFPrint
@@ -193,9 +194,9 @@ qualifyClassDefaults errh symt ds =
                         vset = IdSet.unions vsets
                         tset = IdSet.unions (map getFTCC fdefaults)
                         -- make the mappings
-                        cmap = M.fromList (map mkCQual (IdSet.toList cset))
-                        vmap = M.fromList (map mkVQual (IdSet.toList vset))
-                        tmap = M.fromList (map mkTQual (IdSet.toList tset))
+                        cmap = IdMap.fromList (map mkCQual (IdSet.toList cset))
+                        vmap = IdMap.fromList (map mkVQual (IdSet.toList vset))
+                        tmap = IdMap.fromList (map mkTQual (IdSet.toList tset))
                         -- substitute into the clauses
                         fdefaults' = cSubstN (tmap,cmap,vmap,M.empty) fdefaults
                     in  (CField fi fps fqt fdefaults' foqt)
