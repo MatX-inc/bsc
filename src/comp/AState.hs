@@ -743,9 +743,8 @@ genModVars portId vs omMultMap = allmvars
 
 -- An unconnected input port is tied to zero.  The def is named by the
 -- port's Verilog spelling; the constant keeps the method spelling as its
--- object id, as it had when the def was renamed after the fact (the
--- object id of a constant takes part in the ordering of expressions,
--- which AOpt relies on, so changing it is a separate change).
+-- object id (the object id of a constant takes part in the ordering of
+-- expressions, which AOpt relies on, so changing it is a separate change).
 tieToZero :: (AId,AId,AType,Bool) -> [ADef]
 tieToZero (_,_,_,False) = []
 tieToZero (aid,mid,ty@ATBit{ atb_size= size} ,True) = [ADef{ adef_objid = aid,

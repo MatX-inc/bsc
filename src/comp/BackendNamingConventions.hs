@@ -1,6 +1,5 @@
 module BackendNamingConventions
     (
-     createVerilogNameMap,
      createVerilogNameMapForAVInst,
      instPortMap,
      xLateIdUsingFStringMap,
@@ -475,7 +474,7 @@ inlinedCRegInst flags avi = (removeCReg flags) && (isCRegInst avi)
 -- ==============================
 -- Create a Verilog name map
 
--- For all instantiated submodules, create a mapping of identifiers
+-- For an instantiated submodule, create a mapping of identifiers
 -- "inst$methodpart" to the Verilog signal names "inst$vport" which
 -- will be connected to the ports of the instantiated module.
 -- For example, the map might contain these pairs:
@@ -485,14 +484,13 @@ inlinedCRegInst flags avi = (removeCReg flags) && (isCRegInst avi)
 --     ("the_arr$sub", "the_arr$D_OUT_1"),
 --     ("the_arr_1$sub_1", "the_arr$ADDR_2"),
 --     ("the_arr_1$sub", "the_arr$D_OUT_2")]
+-- AState consults the map (through "statePortId") when it names the
+-- connections to the instance, so the ASPackage carries the Verilog
+-- names from the start; the Verilog back end re-derives the same
+-- spelling per instance from the VModInfo.
 
 -- XXX consider not generating mappings from a string to itself,
 -- XXX to save memory and lookup time
-
-createVerilogNameMap :: Flags -> ASPackage -> M.Map FString FString
-createVerilogNameMap flags aspkg =
-    let vinsts = aspkg_state_instances aspkg
-    in  M.fromList (concatMap (createVerilogNameMapForAVInst flags) vinsts)
 
 -- create a map for one instance
 createVerilogNameMapForAVInst :: Flags -> AVInst -> [(FString, FString)]
@@ -733,7 +731,7 @@ getFStringForVerilogPair (vname, proplist) =
 -- xLate functions
 --
 
--- For use with the map from "createVerilogNameMap"
+-- For use with the map from "createVerilogNameMapForAVInst" / "instPortMap"
 
 xLateIdUsingFStringMap :: M.Map FString FString -> Id -> Id
 xLateIdUsingFStringMap fsmap id =

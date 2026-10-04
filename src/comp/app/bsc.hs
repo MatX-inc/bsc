@@ -122,7 +122,6 @@ import AConv(aConv)
 import IDropRules(iDropRules)
 import ARankMethCalls(aRankMethCalls)
 import AState(aState)
-import ARenameIO(aRenameIO)
 import ASchedule(AScheduleInfo(..), AScheduleErrInfo(..), aSchedule)
 import AAddScheduleDefs(aAddScheduleDefs)
 import APaths(aPathsPreSched, aPathsPostSched)
@@ -1207,17 +1206,9 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        t <- dump errh flags t DFcreg dumpnames asmodNoCReg
        stats flags DFrwire asmodNoCReg
 
-       -- Rename submodule ports from the method-notation to the actual
-       -- Verilog port names
-       start flags DFrenameio
-       let armod = aRenameIO flags asmodNoCReg
-       asCheck flags armod "renameio"
-       t <- dump errh flags t DFrenameio dumpnames armod
-       stats flags DFrenameio armod
-
        -- drop unused defs
        start flags DFadropdefs
-       let adropmod = aDropDefs armod
+       let adropmod = aDropDefs asmodNoCReg
        asCheck flags adropmod "adropdefs"
        t <- dump errh flags t DFadropdefs dumpnames adropmod
        stats flags DFadropdefs adropmod
