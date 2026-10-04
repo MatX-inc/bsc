@@ -15,10 +15,12 @@
 
 > import Data.List
 > import Data.Maybe
-> import qualified Data.Map as M
+> import IdMap(IdMap)
+> import qualified IdMap as M
 > import IdSet(IdSet)
 > import qualified IdSet as S
 > import Debug.Trace(trace)
+> import GHC.Exts(lazy)
 
 > import Parsec hiding(getPosition)
 > import Error(internalError, EMsg, WMsg, ErrMsg(..), ErrorHandle)
@@ -1172,12 +1174,12 @@ make either an if-then-else expression on an appropriate case expression
 THE IMPERATIVE STATEMENT CONVERSION MONAD
 
 > type DeclarationInfo = (Position, [IdProp], Maybe CType, [CPred])
-> type DeclaredVars = M.Map Id DeclarationInfo
+> type DeclaredVars = IdMap DeclarationInfo
 > data AssignmentType = ATUninitialized | ATNormal deriving (Show)
 > type AssignmentInfo = (Position, AssignmentType)
-> type AssignedVars = M.Map Id AssignmentInfo
-> type SequenceInfo = M.Map Id ImperativeStatement
-> type PropertyInfo = M.Map Id ImperativeStatement
+> type AssignedVars = IdMap AssignmentInfo
+> type SequenceInfo = IdMap ImperativeStatement
+> type PropertyInfo = IdMap ImperativeStatement
 > type StmtChecker = ISContext -> [ImperativeStatement] -> ISConvMonad [ImperativeStatement]
 > type StmtConverter = (ISContext, Maybe CType, Maybe CExpr) -> Bool -> [ImperativeStatement] -> ISConvMonad [CStmt]
 > type ExprConverter = Position -- start of block
@@ -1334,11 +1336,22 @@ saying whether or not the declaration is local
 >         extract (Just (_, _, typ, preds), _) = Just (typ, preds)
 >     return $ extract $ findDecl var $ issDeclared state
 
+Evaluation-order pin (P3 Phase A, the IdMap swap).  The inserted map cell
+is a thunk; when it is forced, Data.Map.insert evaluates the key `var'
+first and the previous frame `a' second, and the keys of a frame are
+therefore built (and their strings interned) newest first.  With IdMap's
+insert wrapper GHC shares the two branches of the frame match in a join
+point that is strict in `a' and evaluates `a' before the key, which
+reverses that order and so the string-intern ids of every variable
+declared in a block.  `lazy' hides the strictness in `a' from that
+analysis and keeps the Data.Map order.  It goes away with the commit
+that makes the variable order explicit (plan P5, orderUpdatedVarsIn).
+
 > assign :: Position -> Id -> AssignmentType -> ISConvMonad ()
 > assign pos var atype = modify
 >     $ \state -> let (a, as) = unconsOrErr "CVParserCommon.assign: missing decl frame" $
 >                                 (issAssigned state)
->                 in state { issAssigned = (M.insert var (pos, atype) a):as}
+>                 in state { issAssigned = (M.insert var (pos, atype) (lazy a)):as}
 
 > isAssigned :: Id -> ISConvMonad Bool
 > isAssigned var = do
@@ -1370,8 +1383,7 @@ saying whether or not the declaration is local
 > getDeclaredVars = do
 >     dss <- gets issDeclared
 >     let declaredVars = headOrErr "CVParserCommon.getDeclaredVars" dss
->     -- boundary coercion: DeclaredVars is still a Data.Map (P3 Phase A)
->     return $ S.fromSet (M.keysSet declaredVars)
+>     return $ M.keysSet declaredVars
 
 > defaultModuleMonadInfo :: Position -> (CType, [CPred])
 > defaultModuleMonadInfo pos = (mVar, [CPred (CTypeclass (idIsModuleAt pos)) [mVar, cVar]])
