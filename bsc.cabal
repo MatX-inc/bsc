@@ -101,7 +101,6 @@ library
     AProofs
     ARankMethCalls
     ARemoveAssumps
-    ARenameIO
     ASchedule
     AScheduleInfo
     AState

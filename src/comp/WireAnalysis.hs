@@ -15,7 +15,7 @@
 --
 -- For each submodule wire we emit every candidate name a VCD might use,
 -- so a single map serves both Verilog and Bluesim correlation:
---   * inst$port   (Verilog flat, post-renameio)
+--   * inst$port   (Verilog flat, as AState names the connection)
 --   * inst.port   (Bluesim scope-relative; correlator concatenates while
 --                  descending into the sub-scope)
 --   * inst        (Verilog reg-Q_OUT shortcut, when reg)
@@ -199,7 +199,7 @@ getWireTypeMap apkg =
         in  concatMap mkCandidates (M.toList (avi_port_types avi))
 
     -- When aInlineWires removes an RWire/BypassWire AVInst, the wires
-    -- that remain in the post-renameio Verilog are <inst>$wget (data,
+    -- that remain in the generated Verilog are <inst>$wget (data,
     -- typed) and <inst>$whas (Bool). Emit these as candidates so the
     -- VCD correlator picks them up. Bluesim doesn't inline wires
     -- (simExpand reads APackage directly), so the .wget/.whas forms
