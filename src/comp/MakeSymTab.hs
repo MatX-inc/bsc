@@ -970,16 +970,16 @@ checkATFParams :: ErrorHandle -> Id -> [Id] -> CFunDeps -> [CAssocDepFun] -> ()
 checkATFParams errh className vs fds ats =
     if null errs then () else bsErrorUnsafe errh errs
   where
-    vs_set = S.fromList vs
+    vs_set = IdSet.fromList vs
     paramErrs = [ (getPosition ca_name,
                 EATFDeclParamMismatch (pfpString className)
                   (pfpString ca_name) (map pfpString vs) (pfpString badV))
              | CAssocDepFun ca_name ca_params ca_rhs <- ats
              , badV <-
                  -- Check params are class type variables
-                 [ p | p <- ca_params, not (S.member p vs_set) ] ++
+                 [ p | p <- ca_params, not (IdSet.member p vs_set) ] ++
                  -- Check RHS is a class type variable
-                 [ ca_rhs | not (S.member ca_rhs vs_set) ]
+                 [ ca_rhs | not (IdSet.member ca_rhs vs_set) ]
              ]
     dupErrs = [ (getPosition ca_name,
                 EATFDeclDuplicateParam (pfpString ca_name) (pfpString p))
@@ -999,11 +999,11 @@ checkATFParams errh className vs fds ats =
                 EATFResultNotDetermined (pfpString ca_name)
                   (pfpString ca_rhs) (map pfpString ca_params))
              | CAssocDepFun ca_name ca_params ca_rhs <- ats
-             , let param_set = S.fromList ca_params
+             , let param_set = IdSet.fromList ca_params
                    -- Check: exists a fundep (srcs, tgts) where
                    -- all srcs are in param_set and ca_rhs is in tgts
                    isDetermined = any (\(srcs, tgts) ->
-                       all (`S.member` param_set) srcs &&
+                       all (`IdSet.member` param_set) srcs &&
                        ca_rhs `elem` tgts) fds
              , not isDetermined
              ]
@@ -1019,19 +1019,19 @@ mkATFTIs mi src_pkg classId vs ks ats =
                , atf_param_idxs = p_idxs
                , atf_target_idx = t_idx }) src_pkg)
     | CAssocDepFun ca_name ca_params ca_rhs <- ats
-    , let param_ks = [ M.findWithDefault KStar p vs_kind_map | p <- ca_params ]
-          result_k = M.findWithDefault KStar ca_rhs vs_kind_map
+    , let param_ks = [ IdMap.findWithDefault KStar p vs_kind_map | p <- ca_params ]
+          result_k = IdMap.findWithDefault KStar ca_rhs vs_kind_map
           atf_k    = foldr Kfun result_k param_ks
           atf_i    = qual mi ca_name
           p_idxs   = [ get_idx p | p <- ca_params ]
           t_idx    = get_idx ca_rhs
     ]
-  where vs_kind_map = M.fromList (zip vs ks)
-        vs_idx_map  = M.fromList (zip vs [0..])
+  where vs_kind_map = IdMap.fromList (zip vs ks)
+        vs_idx_map  = IdMap.fromList (zip vs [0..])
         get_idx v = fromJustOrErr
           ("mkATFTIs: variable " ++ ppReadable v ++
            " not found in class " ++ ppReadable classId)
-          (M.lookup v vs_idx_map)
+          (IdMap.lookup v vs_idx_map)
 
 qual :: Maybe Id -> Id -> Id
 qual Nothing i = i
@@ -1134,8 +1134,8 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
         -- a list of all False leads to useless work.
         bss2 = [ map (mkFunDep2 rs1 rs2) vs | (rs1, rs2) <- fds ]
         qi = qual mi i
-        vs_kind_map = M.fromList (zip vs ks)
-        vs_idx_map  = M.fromList (zip vs [0 :: Int ..])
+        vs_kind_map = IdMap.fromList (zip vs ks)
+        vs_idx_map  = IdMap.fromList (zip vs [0 :: Int ..])
         atf_infos =
           [ (TyCon atf_i (Just atf_k)
                  (TIatf { atf_class_id   = qi
@@ -1143,8 +1143,8 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
                         , atf_target_idx = t_idx }),
              p_idxs, t_idx)
           | CAssocDepFun ca_name ca_params ca_rhs <- ats
-          , let param_ks = [ M.findWithDefault KStar p vs_kind_map | p <- ca_params ]
-                result_k = M.findWithDefault KStar ca_rhs vs_kind_map
+          , let param_ks = [ IdMap.findWithDefault KStar p vs_kind_map | p <- ca_params ]
+                result_k = IdMap.findWithDefault KStar ca_rhs vs_kind_map
                 atf_k    = foldr Kfun result_k param_ks
                 atf_i    = qual mi ca_name
                 p_idxs   = [ get_idx p | p <- ca_params ]
@@ -1153,7 +1153,7 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
         get_idx v = fromJustOrErr
           ("getTI CIclass: variable " ++ ppReadable v ++
            " not found in class " ++ ppReadable qi)
-          (M.lookup v vs_idx_map)
+          (IdMap.lookup v vs_idx_map)
         mkClass genInsts' getInsts' =
           Class {
             name = CTypeclass qi,
