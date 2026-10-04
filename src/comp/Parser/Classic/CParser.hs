@@ -653,6 +653,8 @@ pPragma = l L_lpragma ..+ pPragma'  +.. l L_rpragma
                     ||! literal (mkFString "clock_prefix") ..+ eq ..+ varString >>- PPCLK
                     ||! literal (mkFString "gate_prefix") ..+ eq ..+ varString >>- PPGATE
                     ||! literal (mkFString "reset_prefix") ..+ eq ..+ varString >>- PPRSTN
+                    -- comment to carry through to the generated Verilog
+                    ||! literal (mkFString "doc") ..+ eq ..+ pString >>- PPdoc
         pProps = eq ..+ l L_lcurl ..+ sepBy1 pProp cm +.. l L_rcurl
         pProp = literal (mkFString "alwaysReady") .> PPalwaysReady []
             ||! literal (mkFString "noReady") .> PPalwaysReady []                -- deprecated

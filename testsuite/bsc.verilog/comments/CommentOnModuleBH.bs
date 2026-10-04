@@ -1,0 +1,5 @@
+package CommentOnModuleBH where
+
+{-# synthesize sysCommentOnModuleBH { doc = "foo\nbar", doc = "quux" } #-}
+sysCommentOnModuleBH :: Module Empty
+sysCommentOnModuleBH = module {}

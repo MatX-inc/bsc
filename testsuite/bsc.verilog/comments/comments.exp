@@ -22,6 +22,35 @@ if {$vtest == 1} {
 `ifdef BSV_ASSIGNMENT_DELAY}
 }
 
+# Same, in Classic syntax, via the synthesize and properties pragmas
+compile_verilog_pass CommentOnModuleBH.bs
+if {$vtest == 1} {
+    find_regexp sysCommentOnModuleBH.v {
+// No combinational paths from inputs to outputs
+//
+//
+// foo
+// bar
+// quux
+//
+//
+
+`ifdef BSV_ASSIGNMENT_DELAY}
+}
+
+compile_verilog_pass CommentOnModuleBHProperties.bs
+if {$vtest == 1} {
+    find_regexp sysCommentOnModuleBHProperties.v {
+// No combinational paths from inputs to outputs
+//
+//
+// glurph bloop
+//
+//
+
+`ifdef BSV_ASSIGNMENT_DELAY}
+}
+
 # ----------
 # Test comment on a module which is not synthesized, but inlined
 # into a larger design

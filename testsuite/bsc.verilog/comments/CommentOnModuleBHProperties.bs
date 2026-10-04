@@ -1,0 +1,5 @@
+package CommentOnModuleBHProperties where
+
+{-# properties sysCommentOnModuleBHProperties = { synthesize, doc = "glurph bloop" } #-}
+sysCommentOnModuleBHProperties :: Module Empty
+sysCommentOnModuleBHProperties = module {}
