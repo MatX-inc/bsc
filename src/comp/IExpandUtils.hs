@@ -77,6 +77,7 @@ import Debug.Trace(traceM)
 import qualified Data.Array as Array
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdMap
 
 import Eval
 import PPrint
@@ -2990,7 +2991,7 @@ insertCExprCache ce it e = do
 -- Scheduling attributes are updated to account for changes in the names.
 cleanupFinalRules :: Flags -> IRules a -> IRules a
 cleanupFinalRules flags (IRules sps rs) = IRules sps' (reverse rs')
-  where (_, id_rename_map, rs') = foldl foldFn (S.empty, M.empty, []) rs
+  where (_, id_rename_map, rs') = foldl foldFn (S.empty, IdMap.empty, []) rs
         -- rename Ids in the attributes, but keep their original positions
         -- (we want the Ids to point to the user-written names in the source)
         sps' = substSchedPragmaIds id_rename_map sps
@@ -3012,7 +3013,7 @@ cleanupFinalRules flags (IRules sps rs) = IRules sps' (reverse rs')
                 new_i = mkIdRule (setIdBaseString i fs')
                 -- update the rename map
                 -- (always necessary, because we always add RL_
-                rename_map' = M.insert i new_i rename_map
+                rename_map' = IdMap.insert i new_i rename_map
                 rs' = (( r { irule_name = new_i } ):rs)
             in
                 (seen', rename_map', rs')
