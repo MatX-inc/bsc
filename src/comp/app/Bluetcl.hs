@@ -7,7 +7,7 @@
    - Commands
 -}
 
-module BlueTcl where
+module Bluetcl where
 
 
 import HTcl
