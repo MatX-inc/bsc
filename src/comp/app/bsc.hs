@@ -721,10 +721,9 @@ compilePackage
 
     -- Check for unused imports by combining packages from all three sources
     let (CPackage _ _ imports _ _ _ _) = mctx
-        -- boundary coercion: the other three sets are still Data.Set (P3 Phase A)
-        allUsedPkgs = S.unions [IdSet.toSet pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
+        allUsedPkgs = IdSet.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
         importedPkgs = [i | (CImpId _ i) <- imports]
-        unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
+        unusedPkgs = filter (\pkg -> not (IdSet.member pkg allUsedPkgs)) importedPkgs
         unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]
     when (not (null unusedWarns)) $ bsWarning errh unusedWarns
 

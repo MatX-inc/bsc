@@ -9,8 +9,8 @@ import Data.List
 import Data.Maybe(catMaybes)
 import Control.Monad(when)
 import qualified Data.Map as M
-import qualified Data.Set as S
 import qualified IdMap
+import IdSet(IdSet)
 import qualified IdSet
 
 import PFPrint
@@ -36,7 +36,7 @@ import CFreeVars(getFVC, getFTCC)
 import Util(separate, apFst, quote)
 
 cTypeCheck :: ErrorHandle -> Flags -> SymTab -> CPackage ->
-             IO (CPackage, Bool, S.Set Id, CATFCache)
+             IO (CPackage, Bool, IdSet, CATFCache)
 cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns includes) = do
     (typecheckedDefns, typeWarns, usedPkgs, haveErrors, atfCache) <- tiDefns errh symtab flags defns
 
@@ -51,7 +51,7 @@ cTypeCheck errh flags symtab (CPackage name exports imports impsigs fixs defns i
 
 -- type check top-level definitions in parallel (since they are independent)
 tiDefns :: ErrorHandle -> SymTab -> Flags -> [CDefn] ->
-           IO ([CDefn], [WMsg], S.Set Id, Bool, CATFCache)
+           IO ([CDefn], [WMsg], IdSet, Bool, CATFCache)
 tiDefns errh s flags ds = do
   let ai = allowIncoherentMatches flags
   let checkDef d = (defErr, warns, usedPkgs, atfCache)
@@ -72,7 +72,7 @@ tiDefns errh s flags ds = do
   let (double_error_msgs, error_defs') =
           apFst concat $ separate $ map (\(x,_,_,_) -> x) (map checkDef error_defs)
   -- Accumulate all used packages (only from the first round, poison pills don't use new symbols)
-  let allUsedPkgs = S.unions pkgss
+  let allUsedPkgs = IdSet.unions pkgss
   let mergedATFCache = foldl mergeCATFCaches M.empty atfCaches
   -- XXX: we give up - some type signatures are bogus
   when ((not (null double_error_msgs)) || (have_errors && not (enablePoisonPills flags))) $

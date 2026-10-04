@@ -35,6 +35,8 @@ import Prelude hiding ((<>))
 import PFPrint
 import Id
 import IdPrint
+import IdSet(IdSet)
+import qualified IdSet
 import Position
 import CSyntax(CExpr(..))
 import CType
@@ -86,7 +88,7 @@ data TStatePersistent = TStatePersistent {
    -- or only for marked typeclasses
    tsAllowIncoherent :: Bool,
    tsWarns :: [WMsg], -- accumulated warning messages
-   tsUsedPackages :: S.Set Id, -- packages from which symbols were used
+   tsUsedPackages :: IdSet, -- packages from which symbols were used
    tsATFCache :: CATFCache
 }
 
@@ -169,7 +171,7 @@ initPersistentState flags ai s = TStatePersistent {
     tsWarns = [],
     tsAllowIncoherent = ai,
     tsRecoveredErrors = [],
-    tsUsedPackages = S.empty,
+    tsUsedPackages = IdSet.empty,
     tsATFCache = M.empty
   }
 
@@ -186,7 +188,7 @@ initRecoverState = TStateRecover {
 data TIResult a = TIResult {
     tiResult       :: Either [EMsg] a,
     tiWarnings     :: [WMsg],
-    tiUsedPackages :: S.Set Id,
+    tiUsedPackages :: IdSet,
     tiATFCache     :: CATFCache
   }
 
@@ -290,7 +292,7 @@ twarn w = lift (modify (addWarning w))
 recordPackageUse :: Maybe Id -> TI ()
 recordPackageUse Nothing = return ()  -- no package to record
 recordPackageUse (Just pkg) = lift (modify (addPackage pkg))
-  where addPackage pkg s = s { tsUsedPackages = S.insert pkg (tsUsedPackages s) }
+  where addPackage pkg s = s { tsUsedPackages = IdSet.insert pkg (tsUsedPackages s) }
 
 recordATFResult :: Id -> [Type] -> Type -> TI ()
 recordATFResult atfId args result =

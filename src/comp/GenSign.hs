@@ -3,6 +3,7 @@ import Data.List((\\), sortBy, unionBy, groupBy, partition)
 import Data.Maybe(mapMaybe)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdSet(IdSet)
 import qualified IdSet
 import Control.Monad(when)
 
@@ -36,7 +37,7 @@ import TypeCheck(qualifyClassDefaults)
 
 -- only exports what the user asked to export
 -- (auto-exports everything if the user said nothing)
-genUserSign :: ErrorHandle -> SymTab -> CPackage -> IO (CSignature, S.Set Id)
+genUserSign :: ErrorHandle -> SymTab -> CPackage -> IO (CSignature, IdSet)
 genUserSign errh symtab cpkg@(CPackage pkgName _ _ _ _ _ _) =
     -- XXX should we internal error on any errors or warnings?
     case (genSign errh False symtab cpkg) of
@@ -47,7 +48,7 @@ genUserSign errh symtab cpkg@(CPackage pkgName _ _ _ _ _ _) =
             -- 1. Items from imported packages that end up in exports (export foo, where foo is from Pkg)
             let usedPkgsFromItems = getPackagesUsedByExports pkgName sign
             -- 2. Explicit package re-exports (export Pkg::*)
-            let usedPkgs = S.union usedPkgsFromItems reexportedPkgs
+            let usedPkgs = IdSet.union usedPkgsFromItems reexportedPkgs
             return (sign, usedPkgs)
 
 -- export everything as visible (for internal use in the evaluator)
@@ -68,7 +69,7 @@ genEverythingSign errh symtab cpkg =
 
 -- Returns: Either errors (signature, warnings, packages used by non-empty re-exports)
 genSign :: ErrorHandle -> Bool -> SymTab -> CPackage ->
-           Either [EMsg] (CSignature, [WMsg], S.Set Id)
+           Either [EMsg] (CSignature, [WMsg], IdSet)
 genSign errh exportAll symt
         pkg@(CPackage currentPkg exportList imps impsigs fixs ds0 includes) =
     let
@@ -641,7 +642,7 @@ qualifyExports exclude symt exps =
 -- so this function takes the symbol table, as a way to check whether
 -- the unqualified name refers to the qualified name that we are exporting)
 -- Returns: (expanded exports, errors, set of packages with non-empty re-exports)
-expandPkgExports :: SymTab -> [CImportedSignature] -> [CExport] -> ([CExport], [EMsg], S.Set Id)
+expandPkgExports :: SymTab -> [CImportedSignature] -> [CExport] -> ([CExport], [EMsg], IdSet)
 expandPkgExports symt impsigs exps =
     let
         unqualTypeIsThisOne i =
@@ -693,7 +694,7 @@ expandPkgExports symt impsigs exps =
 
         (results, errs) = separate $ map expandOne exps
         (expandedLists, maybePkgs) = unzip results
-        usedPkgs = S.fromList $ mapMaybe id maybePkgs
+        usedPkgs = IdSet.fromList $ mapMaybe id maybePkgs
     in
         (concat expandedLists, errs, usedPkgs)
 
@@ -741,11 +742,11 @@ classToIClass i k (Class { csig=tvs, super=ps, funDeps2=bss2,
 -- Only tracks re-exported items (from other packages). Local exports are already
 -- tracked during type checking (Phase 2). For re-exports, only record the package
 -- of the item itself, not types within its definition.
-getPackagesUsedByExports :: Id -> CSignature -> S.Set Id
+getPackagesUsedByExports :: Id -> CSignature -> IdSet
 getPackagesUsedByExports currentPkg (CSignature _ _ _ defns) =
     let allPkgs = mapMaybe getPackageFromDefn defns
         externalPkgs = filter (/= currentPkg) allPkgs
-    in  S.fromList externalPkgs
+    in  IdSet.fromList externalPkgs
   where
     -- Get the package qualifier from a qualified Id
     getIdPackage :: Id -> Maybe Id
