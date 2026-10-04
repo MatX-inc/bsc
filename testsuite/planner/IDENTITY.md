@@ -1,10 +1,18 @@
-# Legacy verdict identity: the first D1 slice
+# Legacy verdict identity and planned check identity
 
 This importer establishes a conservative baseline for the migration. It is
 **not completion of D1's shared semantic check identity**, and it does not
 claim that all PASS/FAIL transitions can be matched to the same legacy ID.
 The planner and Buck2 backend must eventually identify the assertion being
 tested independently of the message used to report its result.
+
+The initial `plan` command now emits a separate `source-site-check-v1` identity:
+the suite-relative script, one-based source-command/loop-expansion address,
+and assertion role. It is independent of outcomes and labels; repeated internal
+checks refer to distinct producer invocations. It remains scoped to a frozen
+source topology and configuration. See [PLAN.md](PLAN.md) for the exact
+stability contract. The `.sum` importer described below is unchanged; an
+oracle-side mapping between these schemes is still required to complete D1.
 
 ## What is identified
 

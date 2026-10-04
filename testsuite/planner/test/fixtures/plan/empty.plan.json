@@ -1,0 +1,20 @@
+{
+  "schema": "bsc-testsuite-test-plan",
+  "version": 1,
+  "identity": "source-site-check-v1",
+  "dependency_policy": "completion",
+  "workspace_policy": "fresh-shared",
+  "workspace_flow": "snapshot_chain",
+  "configuration": {
+    "name": "golden",
+    "internal_checks": true,
+    "compiler_options": []
+  },
+  "scenarios": [
+    {
+      "test": "bsc.plan/empty.exp",
+      "steps": [],
+      "checks": []
+    }
+  ]
+}

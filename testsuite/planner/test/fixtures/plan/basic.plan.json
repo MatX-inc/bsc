@@ -1,0 +1,198 @@
+{
+  "schema": "bsc-testsuite-test-plan",
+  "version": 1,
+  "identity": "source-site-check-v1",
+  "dependency_policy": "completion",
+  "workspace_policy": "fresh-shared",
+  "workspace_flow": "snapshot_chain",
+  "configuration": {
+    "name": "golden",
+    "internal_checks": true,
+    "compiler_options": []
+  },
+  "scenarios": [
+    {
+      "test": "bsc.plan/basic.exp",
+      "steps": [
+        {
+          "id": {
+            "test": "bsc.plan/basic.exp",
+            "site": [
+              1
+            ],
+            "role": "compile"
+          },
+          "origin": {
+            "file": "bsc.plan/basic.exp",
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "operation": {
+            "kind": "bsc-compile",
+            "source": "Example.bs",
+            "options": [],
+            "compile_dependencies": true
+          },
+          "inputs": [
+            {
+              "kind": "suite-file",
+              "path": "bsc.plan/Example.bs"
+            },
+            {
+              "kind": "suite-directory",
+              "path": "bsc.plan"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "workspace",
+              "kind": "directory",
+              "path": "."
+            },
+            {
+              "name": "status",
+              "kind": "process-status",
+              "path": null
+            },
+            {
+              "name": "transcript",
+              "kind": "transcript",
+              "path": "Example.bs.bsc-out"
+            }
+          ],
+          "tools": [
+            "bsc"
+          ],
+          "depends_on": [],
+          "cacheability": "cacheable-local-only"
+        },
+        {
+          "id": {
+            "test": "bsc.plan/basic.exp",
+            "site": [
+              1
+            ],
+            "role": "object-load"
+          },
+          "origin": {
+            "file": "bsc.plan/basic.exp",
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "operation": {
+            "kind": "internal-load",
+            "object": "Example.bo"
+          },
+          "inputs": [
+            {
+              "kind": "produced",
+              "step": {
+                "test": "bsc.plan/basic.exp",
+                "site": [
+                  1
+                ],
+                "role": "compile"
+              },
+              "output": "workspace",
+              "subpath": null
+            },
+            {
+              "kind": "produced",
+              "step": {
+                "test": "bsc.plan/basic.exp",
+                "site": [
+                  1
+                ],
+                "role": "compile"
+              },
+              "output": "workspace",
+              "subpath": "Example.bo"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "workspace",
+              "kind": "directory",
+              "path": "."
+            },
+            {
+              "name": "status",
+              "kind": "process-status",
+              "path": null
+            },
+            {
+              "name": "transcript",
+              "kind": "transcript",
+              "path": "Example.bo.dumpbo-out"
+            }
+          ],
+          "tools": [
+            "dumpbo"
+          ],
+          "depends_on": [
+            {
+              "test": "bsc.plan/basic.exp",
+              "site": [
+                1
+              ],
+              "role": "compile"
+            }
+          ],
+          "cacheability": "cacheable-local-only"
+        }
+      ],
+      "checks": [
+        {
+          "id": {
+            "test": "bsc.plan/basic.exp",
+            "site": [
+              1
+            ],
+            "role": "compile.result"
+          },
+          "origin": {
+            "file": "bsc.plan/basic.exp",
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "producer": {
+            "test": "bsc.plan/basic.exp",
+            "site": [
+              1
+            ],
+            "role": "compile"
+          },
+          "expectation": "tool-succeeds",
+          "class": "ordinary"
+        },
+        {
+          "id": {
+            "test": "bsc.plan/basic.exp",
+            "site": [
+              1
+            ],
+            "role": "object-load.result"
+          },
+          "origin": {
+            "file": "bsc.plan/basic.exp",
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "producer": {
+            "test": "bsc.plan/basic.exp",
+            "site": [
+              1
+            ],
+            "role": "object-load"
+          },
+          "expectation": "tool-succeeds",
+          "class": "internal"
+        }
+      ]
+    }
+  ]
+}

@@ -7,6 +7,7 @@ build-type: Simple
 extra-source-files:
   README.md
   IDENTITY.md
+  PLAN.md
   scripts/capture-baselines.py
   scripts/capture_lifecycle.py
   scripts/check-tcl-boundaries.py
@@ -19,6 +20,10 @@ extra-source-files:
   test/check_timing_report.py
   test/check_capture_lifecycle.py
   test/check_hidden_evidence.py
+  test/check_cli_plan.py
+  test/fixtures/plan/*.tcl
+  test/fixtures/plan/*.json
+  test/fixtures/plan/*.txt
 
 common defaults
   default-language: Haskell2010
@@ -36,6 +41,8 @@ library
     BscTestsuite.Verdict
     BscTestsuite.Tcl
     BscTestsuite.Census
+    BscTestsuite.TestPlan
+    BscTestsuite.Lower
 
 executable bsc-test-plan
   import: defaults
@@ -48,5 +55,5 @@ test-suite planner-tests
   type: exitcode-stdio-1.0
   hs-source-dirs: test
   main-is: Main.hs
-  other-modules: VerdictTest, CensusTest
+  other-modules: VerdictTest, CensusTest, TestPlanTest, LowerTest, PlanGoldenTest
   build-depends: bsc-testsuite-planner, process

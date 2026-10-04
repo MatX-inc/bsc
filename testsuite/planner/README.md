@@ -1,8 +1,8 @@
 # BSC testsuite planner bootstrap
 
-This independent Haskell package starts the Stage 1 migration with strict
-population comparison and a source census. It does not execute tests or emit
-Buck2 targets yet. DejaGNU and make remain the execution backend.
+This independent Haskell package provides strict population comparison, a Tcl
+source census, and an initial compile-only semantic planner. It does not execute
+tests or emit Buck2 targets yet. DejaGNU and make remain the execution backend.
 
 Run these commands from the repository root. GHC 9.6.7 or newer is required;
 the package uses only GHC boot libraries and needs no Hackage downloads.
@@ -18,10 +18,27 @@ cabal run -v0 --offline --project-dir=testsuite/planner bsc-test-plan -- census 
 cabal run -v0 --offline --project-dir=testsuite/planner bsc-test-plan -- census --json testsuite
 ```
 
+`plan --config NAME --suite-root ROOT TARGET` lowers a supported `.exp`, a
+`bsc.*` group, or the whole suite to versioned TestPlan JSON. If any selected
+script is unsupported, the command reports its location and emits no plan.
+`explain PLAN.json CHECK-ID` shows one check and all its prerequisites.
+Internal checks default to enabled. The initial vocabulary is package
+compilation, internal object loading, scalar assignments, and finite loops;
+see [PLAN.md](PLAN.md) for configuration, exact restrictions, and the schema's
+execution and identity boundaries.
+
+The Haskell test suite includes plan and explanation goldens. To additionally
+test the real command-line interface:
+
+```sh
+PLANNER=$(cabal list-bin --project-dir=testsuite/planner bsc-test-plan)
+python3 testsuite/planner/test/check_cli_plan.py "$PLANNER"
+```
+
 The census reads source without executing Tcl, shell commands, or test programs.
 It reports lexical command sites and unsupported script bodies with their
-locations. **Every command is not yet semantically lowered.** These are source
-inventory counts, not PASS/XFAIL/FAIL counts. Inactive long-test templates are
+locations. This lexical census does not assess the new lowerer's supported
+subset. These are source inventory counts, not PASS/XFAIL/FAIL counts. Inactive long-test templates are
 reported separately; `fullparallel` enables the active `.exp` symlinks.
 
 To compare top-level lexical command and word boundaries against Tcl's native

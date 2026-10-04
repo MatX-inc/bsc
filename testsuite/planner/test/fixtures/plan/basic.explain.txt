@@ -1,0 +1,31 @@
+Check v1:18:bsc.plan/basic.exp:1:object-load.result
+Configuration: golden
+Class: internal
+Expectation: tool-succeeds
+Origin: bsc.plan/basic.exp:1:1 (offset 0)
+Workspace: fresh-shared, snapshot_chain
+Prerequisites execute after dependencies complete, regardless of exit status.
+
+Step v1:18:bsc.plan/basic.exp:1:compile
+  Origin: bsc.plan/basic.exp:1:1 (offset 0)
+  Operation: compile Example.bs; dependencies enabled; options (none); suppress version and timestamps
+  Tools: bsc (complete installation identity required)
+  Cacheability: cacheable-local-only
+  Depends on: (none)
+  Input: suite file bsc.plan/Example.bs (including absence)
+  Input: suite directory bsc.plan
+  Output: workspace (directory): .
+  Output: status (process-status)
+  Output: transcript (transcript): Example.bs.bsc-out
+
+Step v1:18:bsc.plan/basic.exp:1:object-load
+  Origin: bsc.plan/basic.exp:1:1 (offset 0)
+  Operation: load intermediate object Example.bo
+  Tools: dumpbo (complete installation identity required)
+  Cacheability: cacheable-local-only
+  Depends on: v1:18:bsc.plan/basic.exp:1:compile
+  Input: step v1:18:bsc.plan/basic.exp:1:compile output workspace
+  Input: step v1:18:bsc.plan/basic.exp:1:compile output workspace member Example.bo
+  Output: workspace (directory): .
+  Output: status (process-status)
+  Output: transcript (transcript): Example.bo.dumpbo-out

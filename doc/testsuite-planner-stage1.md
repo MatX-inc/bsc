@@ -1,5 +1,38 @@
 # Testsuite planner and Buck2 migration: Stage 1
 
+## Current planner slice
+
+The initial semantic planner now provides a versioned TestPlan model, strict
+JSON validation, `plan`, and `explain`. It lowers package compile pass/fail
+checks, their optional internal object loads, audited scalar assignments, and
+finite single-variable loops. Dependencies preserve completion order and
+workspace snapshots; internal checks remain attached to producer invocations.
+Unsupported scripts reject the entire selected plan with source locations.
+
+Source-addressed IDs are independent of outcomes, result labels, comments, and
+whitespace. They are scoped to a frozen source topology and configuration, not
+general semantic hashes. Golden plans and explanations cover basic compilation,
+negative compilation, repeated flag variants, and empty discovered scripts.
+
+The [plan contract](../testsuite/planner/PLAN.md) defines the accepted subset and
+its limits. Simulator operations, golden-output comparisons, expected-failure
+phases, explicit file mutations/recompilation scenarios, tool/input binding,
+the DejaGNU identity bridge, and Buck2 execution are still pending. The earlier
+population and measurement results below describe the bootstrap and remain
+historical validation evidence; planning alone reports no compiler verdicts.
+
+Current planning coverage is 57 of 866 active scripts: 54 contain 93 ordinary
+and 93 internal planned assertions; three contain no assertions and remain in
+the population. The other 809 scripts report explicit unsupported-construct
+errors. Whole-suite planning emits no partial JSON. Ordinary check IDs remain
+the same when the internal-check configuration is disabled.
+
+The Haskell suite, plan/explanation goldens, CLI checks, suite layout checks,
+and whitespace checks passed. A fresh native Tcl comparison again matched all
+866 scripts, 6,189 top-level commands, and 18,133 words. Legacy discovery remains
+unchanged. No compiler or legacy harness code changed in this planner slice;
+the full compiler testsuite was not rerun for it.
+
 ## Base and scope
 
 Started 2026-10-04 on `codex/testsuite-planner-stage1`, based on
@@ -284,8 +317,8 @@ Initial source census, before enabling long tests:
 | Active `bsc.*` `.exp` files | 861 | 10,266 | 637 | 0 |
 | Including five inactive templates | 866 | 10,283 | 639 | 0 |
 
-These are source inventory counts, not executed checks. All semantic lowering
-remains unimplemented. The 864 tracked `.exp` files include three infrastructure
+These are historical source inventory counts, not executed checks or current
+semantic lowering coverage. The 864 tracked `.exp` files include three infrastructure
 files outside `bsc.*`: `config/unix.exp`, `lib/bsc.exp`, and `site.exp`. The test
 population is separate from them; enabling long tests produces 866 scripts.
 Local detailed census: `testsuite/.stage1-validation/census-before-long-tests.json`.
@@ -411,10 +444,11 @@ report. The measurement monitor is paused.
 1. Model the three random generators and their seeds explicitly so both lanes
    can test identical generated inputs. Preserve the raw diagnostic differences
    until that contract is implemented; do not suppress them to obtain equality.
-2. Add outcome-independent semantic check IDs and mapping from DejaGNU. Complete
-   the semantic catalogue of `config/unix.exp` and `config/verilog.tcl`.
-3. Add versioned TestPlan semantics, static Tcl evaluation, `plan` and `explain`,
-   golden plans, and extend differential coverage to nested-script evaluation.
+2. Map the planned check identities to DejaGNU observations. Complete the
+   semantic catalogue of `config/unix.exp` and `config/verilog.tcl`.
+3. Extend the current TestPlan model and static lowering to comparisons,
+   expected-failure phases, backend operations, and ordered file mutations.
+   Extend golden plans and differential coverage with each supported construct.
 4. Pin a dated Buck2 binary and prelude. First test a trivial action against
    `bazel-remote`: verify a cache hit after daemon restart, then a miss after
    changing the toolchain-key platform property. The CI default is a per-job

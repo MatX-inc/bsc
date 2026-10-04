@@ -2,7 +2,7 @@
 -- or command is run. Backslash Unicode escapes follow Tcl 8.6's BMP result.
 module BscTestsuite.Tcl
   ( SourcePos(..), TclError(..), WordKind(..), Word(..), Command(..), Script(..)
-  , parseScript, parseScriptAt, parseListAt, staticWord
+  , parseScript, parseScriptAt, parseListAt, staticWord, resolveScalarWord
   ) where
 
 import Prelude hiding (Word)
@@ -40,6 +40,38 @@ data Mode = ScriptWords Bool | ListWords
 
 staticWord :: Word -> Maybe String
 staticWord = wordValue
+
+-- | Resolve only scalar variable substitutions in an already parsed word.
+-- Command substitution, array access, and argument expansion are deliberately
+-- rejected. Escape decoding shares the lexical reader's Tcl 8.6 implementation.
+resolveScalarWord :: (String -> Maybe String) -> Word -> Either TclError String
+resolveScalarWord lookupVariable w
+  | wordKind w == Expanded = Left (TclError (wordPosition w) "argument expansion is not supported")
+  | Just value <- staticWord w = Right value
+  | otherwise = go [] (Input (wordText w) (wordBodyPosition w))
+  where
+    go acc i = case remaining i of
+      [] -> Right (concat (reverse acc))
+      '[':_ -> failure i "command substitution is not supported"
+      '\\':_ -> let (value, rest) = backslash i in go (value:acc) rest
+      '$':'{':_ ->
+        let start = advanceN 2 i
+            name = takeWhile (/= '}') (remaining start)
+            rest = advanceN (length name) start
+        in case remaining rest of
+          '}':_ -> variableValue acc i name (advance rest)
+          _ -> failure i "missing closing brace in variable name"
+      '$':_ ->
+        let start = advance i
+            name = takeWhile (\c -> isAlphaNum c || c == '_' || c == ':') (remaining start)
+            rest = advanceN (length name) start
+        in if null name then go ("$":acc) start else case remaining rest of
+          '(' : _ -> failure i "array substitution is not supported"
+          _ -> variableValue acc i name rest
+      c:_ -> go ([c]:acc) (advance i)
+    variableValue acc i name rest = case lookupVariable name of
+      Nothing -> failure i ("unbound or unsupported scalar variable: " ++ name)
+      Just value -> go (value:acc) rest
 
 parseScript :: FilePath -> String -> Either TclError Script
 parseScript path = parseScriptAt (SourcePos path 1 1 0)
