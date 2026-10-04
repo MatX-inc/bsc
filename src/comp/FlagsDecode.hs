@@ -562,6 +562,7 @@ traceflags = [
           "trace-profile",
           "trace-pcmap",
           "trace-pcmaps",
+          "print-intern-order",
           "trace-ralloc",
           "trace-uugraph",
           "trace-scgraph",
@@ -719,6 +720,7 @@ defaultFlags bluespecdir = Flags {
         showCSyntax = False,
         showCodeGen = False,
         showElabProgress = False,
+        reverseInternOrder = False,
         showIESyntax = False,
         showISyntax = False,
         showModuleUse = False,
@@ -1617,6 +1619,10 @@ externalFlags = [
         ("show-csyntax",
          (Toggle (\f x -> f {showCSyntax = x}) (showIfTrue showCSyntax),
           "show CSyntax", Hidden)),
+
+        ("reverse-intern-order",
+         (Toggle (\f x -> f {reverseInternOrder = x}) (showIfTrue reverseInternOrder),
+          "hand out string-intern ids from the top down, reversing every order taken from Ord on an Id (a leak detector)", Hidden)),
 
         ("show-elab-progress",
          (Toggle (\f x -> f {showElabProgress = x}) (showIfTrue showElabProgress),

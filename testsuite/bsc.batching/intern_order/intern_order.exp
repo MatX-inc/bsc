@@ -1,0 +1,63 @@
+# Issue: every order taken from Ord on an Id is string-intern order, the id
+# SpeedyString gave the string when the process first saw it, which a
+# `bsc -u` batch or an unrelated edit changes; nothing exposed that.
+# Fix: -reverse-intern-order hands the ids out from maxBound down, reversing
+# every such order; -print-intern-order lists the interned strings by id.
+# Pull request: https://github.com/MatX-inc/bsc/pull/199
+# Probe: one compile both ways: ids run 0 up then maxBound down, the strings
+# are the same set, and the reversed listing is the normal one backwards.
+
+proc intern_listing { out } {
+    global srcdir
+    global subdir
+    set fh [open [file join [absolute $srcdir] $subdir $out]]
+    set low ""
+    set high ""
+    set lines [list]
+    while { [gets $fh line] >= 0 } {
+        if { [regexp {^intern order: ([0-9]+) strings, ids ([0-9]+)\.\.([0-9]+)$} $line -> count lo hi] } {
+            set low $lo
+            set high $hi
+            continue
+        }
+        if { $low ne "" && [regexp {^([0-9]+) (".*")$} $line -> id str] } {
+            lappend lines $str
+        }
+    }
+    close $fh
+    return [list $low $high $lines]
+}
+
+set src InternOrder.bsv
+set out [make_bsc_output_name $src]
+
+erase InternOrder.bo
+compile_pass $src {-print-intern-order}
+move $out normal.out
+lassign [intern_listing normal.out] normal_low normal_high normal_strings
+
+erase InternOrder.bo
+compile_pass $src {-print-intern-order -reverse-intern-order}
+move $out reversed.out
+lassign [intern_listing reversed.out] reversed_low reversed_high reversed_strings
+
+if { $normal_low eq "0" } {
+    pass "normal run hands the ids out from 0 up"
+} else {
+    fail "normal run hands the ids out from `$normal_low', not 0"
+}
+if { $reversed_high eq "9223372036854775807" } {
+    pass "reversed run hands the ids out from maxBound down"
+} else {
+    fail "reversed run hands the ids out from `$reversed_high', not maxBound"
+}
+if { [llength $normal_strings] > 100 && [lsort $normal_strings] eq [lsort $reversed_strings] } {
+    pass "both runs intern the same [llength $normal_strings] strings"
+} else {
+    fail "the two runs intern different strings ([llength $normal_strings] vs [llength $reversed_strings])"
+}
+if { $reversed_strings eq [lreverse $normal_strings] } {
+    pass "the reversed listing is the normal one read backwards"
+} else {
+    fail "the reversed listing is not the normal one read backwards"
+}
