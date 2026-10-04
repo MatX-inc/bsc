@@ -559,11 +559,16 @@ aState' flags pps schedule_info apkg = do
                                    not (ui `S.member` dvars)]
 
         -- undefined state outputs
-        -- (one entry per output port: several methods can read the same
-        -- port, such as notFull and i_notFull of FIFOF_)
-        svars = stableOrdNub [ (i, t) | (i, _, t, False) <- mvars ]
+        svars = [ (i, t) | (i, _, t, False) <- mvars ]
 
+        -- special wires (output clocks, their gates, and output resets)
         wvars = map fst2of3 (concatMap getSpecialOutputs vs)
+
+        -- one entry per output port, keeping the first occurrence: several
+        -- methods can read the same port (notFull and i_notFull of FIFOF_),
+        -- and a method can read the port of a special wire (a BVI method
+        -- whose port is an output clock's gate)
+        state_outputs = stableOrdNub (svars ++ wvars)
 
         -- unconnected signals
         edefs = concatMap tieToZero mvars
@@ -624,7 +629,7 @@ aState' flags pps schedule_info apkg = do
                            aspkg_inputs          = inputIds,
                            aspkg_inouts          = inoutIds,
                            aspkg_state_instances =  vs'',
-                           aspkg_state_outputs   = (svars ++ wvars) ,
+                           aspkg_state_outputs   = state_outputs ,
                            aspkg_values          = defs'',
                            aspkg_inout_values    = iot_defs,
                            aspkg_foreign_calls   = fblocks' ,
