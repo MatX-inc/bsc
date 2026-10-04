@@ -645,8 +645,8 @@ batchSolveNumericPreds es rs = do
             -- their arrival order, which flows onward into retry order,
             -- inferred contexts, and error messages
             residualsWithout discharged =
-                let ds = S.fromList [ i | ((VPred i _), _) <- discharged ]
-                in  [ vp | vp@(VPred i _) <- rs, i `S.notMember` ds ]
+                let ds = IdSet.fromList [ i | ((VPred i _), _) <- discharged ]
+                in  [ vp | vp@(VPred i _) <- rs, i `IdSet.notMember` ds ]
             -- Prove each pending pred from the definition's givens, as
             -- the per-predicate code did.  Ground preds are closed
             -- arithmetic: they are queried with no assumptions at all,
