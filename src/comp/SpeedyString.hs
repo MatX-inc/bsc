@@ -1,4 +1,3 @@
-{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE BangPatterns #-}
 module SpeedyString(SString, toString, fromString, (++), concat, filter,
                     internTable) where
@@ -9,30 +8,59 @@ import IOMutVar(MutableVar, newVar, readVar, writeVar)
 import System.IO.Unsafe(unsafePerformIO)
 import System.Environment(getArgs, lookupEnv)
 import qualified Data.IntMap.Strict as M
+import Data.List(sortOn)
 -- import qualified NotSoSpeedyString
 import ErrorUtil (internalError)
 import qualified Data.Generics as Generic
 
 
-data SString = SString !Int -- unique id
-   deriving (Generic.Data, Generic.Typeable)
+-- An interned string.  There is one SString per distinct string in the
+-- process (fromString returns the one made when the string was first
+-- seen), so each field is stored once per string, and an SString never
+-- consults the intern table to be read or compared.
+--
+--   ss_id   the unique id, handed out in first-sighting order (or from
+--           maxBound down under -reverse-intern-order); Eq and Ord
+--           compare it and nothing else
+--   ss_str  the string itself, for toString
+--
+-- Two Word64 fields are reserved after ss_id, before ss_str, for the
+-- fingerprint stream (ss_hash, ss_fp), so that change only appends
+-- them to this constructor; the pattern sites it then widens are Eq,
+-- Ord, toString, newSString and internTable below, and no other.
+data SString = SString {-# UNPACK #-} !Int  -- ss_id
+                       !String              -- ss_str
 
 instance Eq SString where
-    (SString i) == (SString i') = i == i'
+    (SString i _) == (SString i' _) = i == i'
 
 -- note that Ord is not the usual string ordering
 instance Ord SString where
-    compare (SString i) (SString i') = compare i i'
+    compare (SString i _) (SString i' _) = compare i i'
 
 instance Show SString where
     show = show . toString
 
+-- Generic traversals (everywhere, listify) treat an interned string as a
+-- leaf: there is nothing inside it to rewrite, a derived instance would
+-- walk every character of every identifier the Verilog AST passes have
+-- to visit, and a rewrite of the cached string would not re-intern it.
+instance Generic.Data SString where
+    gfoldl _ z s = z s
+    gunfold _ _ _ = internalError "SpeedyString: gunfold"
+    toConstr _ = sstringConstr
+    dataTypeOf _ = sstringDataType
+
+sstringDataType :: Generic.DataType
+sstringDataType = Generic.mkDataType "SpeedyString.SString" [sstringConstr]
+
+sstringConstr :: Generic.Constr
+sstringConstr = Generic.mkConstr sstringDataType "SString" [] Generic.Prefix
+
 -- public
 
 toString :: SString -> String
-toString (SString id) = unsafePerformIO $
-                        do m <- readVar strings
-                           return $ M.findWithDefault err id m
+toString (SString _ s) = s
 
 fromString :: String -> SString
 fromString s = unsafePerformIO $
@@ -53,18 +81,12 @@ filter pred s = fromString $ Prelude.filter pred (toString s)
 newSString :: String -> SString
 newSString s = unsafePerformIO $
                do id <- freshInt
-                  let ss = SString id
-                  sm <- readVar strings
+                  let ss = SString id s
                   ssm <- readVar sstrings
-                  let !sm'  = M.insert id s sm
-                      !ssm' = M.insertWith (Prelude.++)
+                  let !ssm' = M.insertWith (Prelude.++)
                                           (hashStr s) [(s,ss)] ssm
-                  writeVar strings sm'
                   writeVar sstrings ssm'
                   return ss
-
-err :: a
-err = internalError "SpeedyString: inconsistent representation"
 
 --toNotSoSpeedyString :: SString -> NotSoSpeedyString.SString
 --toNotSoSpeedyString speedy = NotSoSpeedyString.fromString (toString speedy)
@@ -74,9 +96,6 @@ err = internalError "SpeedyString: inconsistent representation"
 --    fromString (NotSoSpeedyString.toString not_so_speedy)
 
 -- internal representation
-
-strings :: MutableVar (M.IntMap String)
-strings = unsafePerformIO $ newVar (M.empty)
 
 sstrings :: MutableVar (M.IntMap [(String, SString)])
 sstrings = unsafePerformIO $ newVar (M.empty)
@@ -112,7 +131,9 @@ freshInt = do fresh <- readVar nextInt
 -- read here from the raw command line and environment.
 -- every interned string with its id, in id order (for -print-intern-order)
 internTable :: IO [(Int, String)]
-internTable = fmap M.toAscList (readVar strings)
+internTable = do
+    ssm <- readVar sstrings
+    return (sortOn fst [ (i, s) | bucket <- M.elems ssm, (s, SString i _) <- bucket ])
 
 reverseIntern :: Bool
 reverseIntern = unsafePerformIO $ do
