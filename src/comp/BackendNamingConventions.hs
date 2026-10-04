@@ -8,12 +8,14 @@ module BackendNamingConventions
 
      inlinedRegInst, inlinedWireInst, inlinedBypassWireInst, inlinedCRegInst,
      verilogPortFString, statePortId,
+     InstPortInfo, instPortInfo, statePortIdFromInfo,
 
      isRegInst, isClockCrossingRegInst,
      isRegN, isRegUN, isRegA, isRegAligned,
      getRegClock, getRegReset, getRegInit, getRegWidth,
      mkDIN, mkEN, mkQOUT,
      qoutPortStr,
+     regReadId, regWriteId,
      regReadResId, regWriteEnId, regWriteArgId,
 
      isRWire, isRWire0, isBypassWire, isBypassWire0, isClockCrossingBypassWire,
@@ -86,7 +88,7 @@ isBypassWire0 avi = getAVDefName avi == bypasswire0
 
 -- ---------------
 -- Names of RWire methods
--- (inlining happens before methods are renamed to ports)
+-- (the ports of an inlined wire keep the method spelling: see statePortId)
 
 rwireSetStr, rwireGetStr, rwireHasStr :: String
 rwireSetStr = "wset"
@@ -128,7 +130,7 @@ isCRegInst avi = (isCRegN avi) || (isCRegUN avi) || (isCRegA avi)
 
 -- ---------------
 -- Names of CReg methods
--- (inlining happens before methods are renamed to ports)
+-- (the ports of an inlined CReg keep the method spelling: see statePortId)
 
 cregReadStr, cregWriteStr :: Int -> String
 cregReadStr  n = "port" ++ show (n::Int) ++ "__read"
@@ -325,7 +327,7 @@ mkPortNameFStr v_port_name v_inst_name =
                    mkFString v_port_name]
 
 -- ---------------
--- Given a port name mapping (produced in ARenameIO),
+-- Given a port name mapping (see createVerilogNameMapForAVInst),
 -- update it so that "r$Q_OUT" is shortened to just "r"
 
 updateVerilogNameMapForReg :: AVInst ->
@@ -528,6 +530,18 @@ verilogPortFString flags avi m ino part =
     xLateFStringUsingFStringMap (instPortMap flags avi)
                                 (mkMethStr (avi_vname avi) m ino part)
 
+-- What statePortId needs to know about one instance: whether its ports
+-- keep the method spelling (the instances that aInlineWires and
+-- aInlineCReg remove) and, if not, the map from method spelling to
+-- Verilog spelling (instPortMap).  A caller that mints many ids for the
+-- same instance computes this once (AState keeps one per instance).
+type InstPortInfo = (Bool, M.Map FString FString)
+
+instPortInfo :: Flags -> AVInst -> InstPortInfo
+instPortInfo flags avi =
+    ((inlinedWireInst flags avi) || (inlinedCRegInst flags avi),
+     instPortMap flags avi)
+
 -- The AId for a port of instance "avi" as it appears in the ASPackage.
 -- "o" is the object id that the caller already gives to mkMethId (the
 -- instance name, or the object of a method call on the instance); the
@@ -536,11 +550,15 @@ verilogPortFString flags avi m ino part =
 -- aInlineWires and aInlineCReg will remove keep the method spelling,
 -- which is what those passes look up and what remains in the generated
 -- Verilog for them.
-statePortId :: Flags -> AVInst -> Id -> Id -> Maybe Integer -> MethodPart -> AId
-statePortId flags avi o m ino part
-    | (inlinedWireInst flags avi) || (inlinedCRegInst flags avi) = meth_id
-    | otherwise = setIdBase meth_id (verilogPortFString flags avi m ino part)
+statePortIdFromInfo :: InstPortInfo -> Id -> Id -> Maybe Integer -> MethodPart -> AId
+statePortIdFromInfo (keeps_meth_spelling, port_map) o m ino part
+    | keeps_meth_spelling = meth_id
+    | otherwise = setIdBase meth_id
+                      (xLateFStringUsingFStringMap port_map (mkMethStr o m ino part))
   where meth_id = mkMethId o m ino part
+
+statePortId :: Flags -> AVInst -> Id -> Id -> Maybe Integer -> MethodPart -> AId
+statePortId flags avi = statePortIdFromInfo (instPortInfo flags avi)
 
 -- ==============================
 -- Clock primitives
