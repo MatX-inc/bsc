@@ -1,0 +1,10 @@
+checking package dependencies
+compiling Coll3.bs
+code generation for sysColl3 starts
+Error: "Coll3.bs", line 21, column 8: (G0134)
+  Ports of instance `m' of the imported module `VColl3' share the internal
+  name `sub_1': port `VAL' of method `sub_1' and port `D_OUT_2' of method
+  `sub'. A port is named by its method, followed by the copy number of a
+  method with multiplicity and the argument number, so a method whose name
+  matches a copy or an argument of another method cannot be imported beside
+  it. Rename one of the methods.

@@ -1,0 +1,26 @@
+package Coll6 where
+
+-- No multiplicity involved: argument 1 of the action method `set' is
+-- spelled set_1 (port D_IN), as is the result of the value method named
+-- set_1 (port VAL).  One G0134 error.
+interface VColl6 =
+    set   :: Bit 8 -> PrimAction
+    set_1 :: Bit 8
+
+vMkColl6 :: Module VColl6
+vMkColl6 =
+    module verilog "VColl6" "CLK" {
+        set    = "D_IN" "EN";
+        set_1  = "VAL";
+    } [ set <> set, set_1 <> set_1, set_1 < set ]
+
+{-# verilog sysColl6 #-}
+sysColl6 :: Module Empty
+sysColl6 =
+    module
+        m :: VColl6 <- vMkColl6
+        r :: Reg (Bit 8) <- mkReg 0
+        r2 :: Reg (Bit 8) <- mkReg 0
+        rules
+            "useSet": when True ==> fromPrimAction (m.set r)
+            "useSet1": when True ==> r2 := m.set_1

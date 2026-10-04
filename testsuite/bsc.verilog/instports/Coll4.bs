@@ -1,0 +1,28 @@
+package Coll4 where
+
+-- Input-side collision: an action method NAMED upd_1 beside a 2-ported
+-- action method `upd'.  Copy 1 of `upd' spells its arguments upd_1_1,
+-- upd_1_2 and its enable EN_upd_1; so does the method `upd_1'.  Three
+-- G0134 errors, one per shared spelling.
+interface VColl4 =
+    upd   :: Bit 4 -> Bit 8 -> PrimAction
+    upd_1 :: Bit 4 -> Bit 8 -> PrimAction
+    get   :: Bit 8
+
+vMkColl4 :: Module VColl4
+vMkColl4 =
+    module verilog "VColl4" "CLK" {
+        upd[2] = "ADDR" "D_IN" "WE";
+        upd_1  = "A1" "D1" "WE1";
+        get    = "OUT";
+    } [ upd <> upd, upd_1 <> upd_1, upd <> upd_1, get < upd, get < upd_1, get <> get ]
+
+{-# verilog sysColl4 #-}
+sysColl4 :: Module Empty
+sysColl4 =
+    module
+        m :: VColl4 <- vMkColl4
+        r :: Reg (Bit 8) <- mkReg 0
+        rules
+            "useUpd": when True ==> action { fromPrimAction (m.upd (r[3:0]) r); fromPrimAction (m.upd (r[7:4]) (r + 1)); r := r + 1 }
+            "useUpd1": when True ==> fromPrimAction (m.upd_1 (r[3:0]) m.get)
