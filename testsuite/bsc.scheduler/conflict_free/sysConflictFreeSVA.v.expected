@@ -108,9 +108,9 @@ module sysConflictFreeSVA(CLK,
   // Error: "ConflictFreeSVA.bs", line 17, column 20: (R0002)
   //   Conflict-free rules RL_odd and RL_even called conflicting methods enq and
   //   enq of module instance fifo.
-  always@(*)
+  always@(posedge CLK)
   if (RST_N != `BSV_RESET_VALUE)
-    assert(!(WILL_FIRE_RL_odd && WILL_FIRE_RL_even));
+    assert property (!(WILL_FIRE_RL_odd && WILL_FIRE_RL_even));
   `endif
 endmodule  // sysConflictFreeSVA
 

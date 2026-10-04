@@ -137,7 +137,7 @@ vForeignBlock vco ffmap ds (clks, all_fcalls) =
       (sva_fcalls, fcalls) =
           partition ((== idSvaRuntimeCheck) . afc_name) all_fcalls
       sva_items = if null sva_fcalls then []
-                  else [VMIfdef "FORMAL" (map (vSvaRuntimeCheck vco) sva_fcalls)]
+                  else [VMIfdef "FORMAL" (map (vSvaRuntimeCheck vco clks) sva_fcalls)]
 
       -- make a def map
       def_map = M.fromList [(i, d) | d@(ADef i _ _ _) <- ds]
@@ -216,18 +216,20 @@ vForeignBlock vco ffmap ds (clks, all_fcalls) =
            inline_def_ids)
 
 -- An assertion that a runtime check never fires, commented with the message
--- that the check reports.  It uses @(*) because formal tools like
--- SymbiYosys step a whole clock cycle at once, so it can't sample at
--- negedge like the simulation check does.
-vSvaRuntimeCheck :: VConvtOpts -> AForeignCall -> VMItem
-vSvaRuntimeCheck vco (AForeignCall { afc_args = (c:es), afc_resets = resets }) =
-    VMComment msg $
-      VMStmt { vi_translate_off = False,
-               vi_body = Valways (VAt VEEStar body) }
-  where assertion = VImmAssert (mkVEUnOp VNot (vExpr vco c))
+-- that the check reports.  The clock comes from an always block, rather than
+-- a clocking event in the assertion, because open-source Yosys only accepts
+-- the former.  There's one block for each oscillator of the clock domain:
+-- they tick together, but some of them might be gated off.
+vSvaRuntimeCheck :: VConvtOpts -> [AExpr] -> AForeignCall -> VMItem
+vSvaRuntimeCheck vco clks (AForeignCall { afc_args = (c:es), afc_resets = resets }) =
+    VMComment msg (VMGroup False [map clocked clks])
+  where assertion = VAssertProperty (mkVEUnOp VNot (vExpr vco c))
         body = foldr (Vif . mkNotEqualsReset . vExpr vco) assertion resets
+        clocked clk =
+            VMStmt { vi_translate_off = False,
+                     vi_body = Valways (VAt (VEEposedge (vExpr vco clk)) body) }
         msg = concat [ lines s | ASStr { ae_strval = s } <- es ]
-vSvaRuntimeCheck _ call =
+vSvaRuntimeCheck _ _ call =
     internalError ("vSvaRuntimeCheck: " ++ ppReadable call)
 
 vForeignCall :: VConvtOpts -> AForeignCall -> ForeignFuncMap -> VStmt

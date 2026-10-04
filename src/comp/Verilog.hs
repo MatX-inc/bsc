@@ -507,7 +507,8 @@ data VStmt
         | Vdumpvars Int [VId]           -- appears unused
         | VTask VId [VExpr] -- calling a verilog system task as a Bluespec foreign function of type Action
         | VAssert VEventExpr [VExpr]
-        | VImmAssert VExpr -- immediate assertion
+        -- concurrent assertion, clocked by the enclosing always block
+        | VAssertProperty VExpr
         | VZeroDelay -- injecting an explicit (0-tick) delay for synchronization purposes
         deriving (Eq, Show, Generic.Data, Generic.Typeable)
 
@@ -560,7 +561,8 @@ instance PPrint VStmt where
         pPrint d p (VTask task es) = pPrint d 0 task <> text "(" <> commaList d es <> text ");"
 
         pPrint d p (VAssert ev es) = ppAssert d p ev es
-        pPrint d p (VImmAssert e) = text "assert(" <> pPrint d 0 e <> text ");"
+        pPrint d p (VAssertProperty e) =
+            text "assert property (" <> pPrint d 0 e <> text ");"
 
 
         pPrint d p  VZeroDelay     = text "#0;"
@@ -579,7 +581,7 @@ instance NFData VStmt where
     rnf (Vdumpvars lvl vars) = rnf2 lvl vars
     rnf (VTask tid exprs) = rnf2 tid exprs
     rnf (VAssert ev exprs) = rnf2 ev exprs
-    rnf (VImmAssert expr) = rnf expr
+    rnf (VAssertProperty expr) = rnf expr
     rnf VZeroDelay = ()
 
 ppAssert :: PDetail -> Int -> VEventExpr -> [VExpr] -> Doc
@@ -789,7 +791,6 @@ data VEventExpr
         | VEEnegedge VExpr
         | VEE VExpr
         | VEEMacro String VExpr
-        | VEEStar -- @(*)
         deriving (Eq, Show, Generic.Data, Generic.Typeable)
 
 instance PPrint VEventExpr where
@@ -802,7 +803,6 @@ instance PPrint VEventExpr where
         pPrint d p (VEEnegedge e) = text "negedge" <+> pPrint d 10 e
         pPrint d p (VEE e) = pPrint d p e
         pPrint d p (VEEMacro s e) = text ("`" ++ s) <+> pPrint d (p+1) e
-        pPrint d p VEEStar = text "*"
 
 instance NFData VEventExpr where
     rnf (VEEOr e1 e2) = rnf2 e1 e2
@@ -810,7 +810,6 @@ instance NFData VEventExpr where
     rnf (VEEnegedge expr) = rnf expr
     rnf (VEE expr) = rnf expr
     rnf (VEEMacro s expr) = rnf2 s expr
-    rnf VEEStar = ()
 
 data VExpr
         = VEConst Integer

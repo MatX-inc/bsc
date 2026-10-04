@@ -133,9 +133,9 @@ module sysMutuallyExclusiveSVA(CLK,
   // Error: "MutuallyExclusiveSVA.bs", line 25, column 21: (R0001)
   //   Mutually exclusive rules (from the ME sets [RL_set_A] and [RL_reset] ) fired
   //   in the same clock cycle.
-  always@(*)
+  always@(posedge CLK)
   if (RST_N != `BSV_RESET_VALUE)
-    assert(!(big_counter == 4'd0 && WILL_FIRE_RL_reset));
+    assert property (!(big_counter == 4'd0 && WILL_FIRE_RL_reset));
   `endif
 endmodule  // sysMutuallyExclusiveSVA
 

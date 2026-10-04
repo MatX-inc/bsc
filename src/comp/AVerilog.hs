@@ -1867,7 +1867,7 @@ instance VUse VStmt where
     vuses (Vdumpvars _ _) = []
     vuses (VTask _ es) = vuses es
     vuses (VAssert e es) = vuses e ++ vuses es
-    vuses (VImmAssert e) = vuses e
+    vuses (VAssertProperty e) = vuses e
     vuses (VZeroDelay) = []
 
 instance VUse VLValue where
@@ -1889,7 +1889,6 @@ instance VUse VEventExpr where
     vuses (VEEnegedge e) = vuses e
     vuses (VEE e) = vuses e
     vuses (VEEMacro s e) = vuses e
-    vuses VEEStar = []
 
 instance VUse VExpr where
     vuses (VEConst _) = []

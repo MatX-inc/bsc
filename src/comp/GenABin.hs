@@ -908,7 +908,7 @@ instance Bin VStmt where
     writeBytes (VTask i es)      = do putI 11; toBin i; toBin es
     writeBytes (VAssert e es)    = do putI 12; toBin e; toBin es
     writeBytes (VZeroDelay)      = do putI 13
-    writeBytes (VImmAssert e)    = do putI 14; toBin e
+    writeBytes (VAssertProperty e) = do putI 14; toBin e
     readBytes = do
       i <- getI
       case i of
@@ -928,7 +928,7 @@ instance Bin VStmt where
         11 -> do i <- fromBin; es <- fromBin; return (VTask i es)
         12 -> do e <- fromBin; es <- fromBin; return (VAssert e es)
         13 -> return VZeroDelay
-        14 -> do e <- fromBin; return (VImmAssert e)
+        14 -> do e <- fromBin; return (VAssertProperty e)
         n -> internalError $ "GenABin(VStmt).readBytes: " ++ show n
 
 instance Bin VEventExpr where
@@ -937,7 +937,6 @@ instance Bin VEventExpr where
     writeBytes (VEEnegedge e) = do putI 2; toBin e
     writeBytes (VEE e)        = do putI 3; toBin e
     writeBytes (VEEMacro s e) = do putI 4; toBin s; toBin e
-    writeBytes (VEEStar)      = do putI 5
     readBytes = do
       i <- getI
       case i of
@@ -946,7 +945,6 @@ instance Bin VEventExpr where
         2 -> do e <- fromBin; return (VEEnegedge e)
         3 -> do e <- fromBin; return (VEE e)
         4 -> do s <- fromBin; e <- fromBin; return (VEEMacro s e)
-        5 -> return VEEStar
         n -> internalError $ "GenABin(VEventExpr).readBytes: " ++ show n
 
 instance Bin VCaseArm where
