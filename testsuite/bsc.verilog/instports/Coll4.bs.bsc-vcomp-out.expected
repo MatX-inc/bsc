@@ -1,0 +1,24 @@
+checking package dependencies
+compiling Coll4.bs
+code generation for sysColl4 starts
+Error: "Coll4.bs", line 24, column 8: (G0134)
+  Ports of instance `m' of the imported module `VColl4' share the internal
+  name `upd_1_1': port `ADDR_2' of method `upd' and port `A1' of method
+  `upd_1'. A port is named by its method, followed by the copy number of a
+  method with multiplicity and the argument number, so a method whose name
+  matches a copy or an argument of another method cannot be imported beside
+  it. Rename one of the methods.
+Error: "Coll4.bs", line 24, column 8: (G0134)
+  Ports of instance `m' of the imported module `VColl4' share the internal
+  name `upd_1_2': port `D_IN_2' of method `upd' and port `D1' of method
+  `upd_1'. A port is named by its method, followed by the copy number of a
+  method with multiplicity and the argument number, so a method whose name
+  matches a copy or an argument of another method cannot be imported beside
+  it. Rename one of the methods.
+Error: "Coll4.bs", line 24, column 8: (G0134)
+  Ports of instance `m' of the imported module `VColl4' share the internal
+  name `EN_upd_1': port `WE_2' of method `upd' and port `WE1' of method
+  `upd_1'. A port is named by its method, followed by the copy number of a
+  method with multiplicity and the argument number, so a method whose name
+  matches a copy or an argument of another method cannot be imported beside
+  it. Rename one of the methods.
