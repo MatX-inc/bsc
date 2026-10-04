@@ -1,0 +1,111 @@
+name: MatX presubmit build
+
+# Builds every pull request with the GHC the release CI and the upstream CI
+# use (9.6.7), on Ubuntu, without running the testsuite: a fast check that a
+# change compiles with that compiler before it goes any further.  Local
+# development uses a newer GHC whose Prelude exports names 9.6's does not,
+# which is how an unimported foldl' reached the determinism gate.
+#
+# The trigger is pull_request, not pull_request_target.  A pull_request_target
+# job runs in the base branch's cache scope, and this job executes the pull
+# request's own Makefiles and scripts; a pull request could therefore write
+# the ccache that matx-release.yml restores through the shared key prefix
+# (CodeQL: actions/cache-poisoning/poisonable-step).  Under pull_request the
+# job runs with a read-only token in the pull request's own cache scope, so
+# nothing it does reaches a cache another workflow trusts.
+#
+# The price is coverage: a pull_request job runs the workflow file found in
+# the pull request's merge commit, so this runs for a pull request whose base
+# or head carries this file.  Pull requests against main are covered once it
+# lands there; a stack based elsewhere (det/*, release-devel-B0) is covered by
+# carrying this file in the stack's root, or by a manifest cherry-pick onto
+# the release branch.  The job only reads the repository: contents: read, no
+# secrets, and the ccache step restores without saving.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  # ci/ branches build on push as well, so a change to this workflow can be
+  # exercised before it reaches the default branch.
+  push:
+    branches:
+      - 'ci/**'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to build (empty = the branch this is dispatched from)
+        required: false
+        default: ''
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GHC_VERSION: 9.6.7
+
+jobs:
+  build:
+    name: "Build: ubuntu-24.04 ghc-9.6.7"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # pull_request and push check out the event's own ref (the merge
+          # commit, or the pushed branch); a dispatch may name another ref.
+          ref: ${{ inputs.ref || github.ref }}
+          submodules: true
+      - name: Install dependencies
+        run: |
+          sudo .github/workflows/install_dependencies_ubuntu.sh
+      # Don't rely on the VM to pick the GHC version
+      - name: Install GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: ${{ env.GHC_VERSION }}
+          cabal: recommended
+      # Until BSC uses cabal to build, pre-install these packages
+      - name: Install Haskell dependencies
+        run: |
+          cabal update
+          cabal v1-install old-time regex-compat split strict-concurrency syb
+      # Same key family as build-and-test-ubuntu.yml and the determinism
+      # gate, so a pull request restores the latest ccache either saved.
+      # Restore only: this job never writes a cache.  Under pull_request a
+      # save would land in the pull request's own scope, useful to nobody
+      # and charged against the repository's cache quota.
+      - name: CCache cache files
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ github.workspace }}/ccache
+          key: build-ubuntu-24.04-ghc-${{ env.GHC_VERSION }}-ccache-${{ github.sha }}
+          restore-keys: |
+            build-ubuntu-24.04-ghc-${{ env.GHC_VERSION }}-ccache-
+      - name: Build
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/ccache
+        run: |
+          ccache --zero-stats --max-size 250M
+          export PATH=/usr/lib/ccache:$PATH
+
+          CORES=$(nproc)
+          echo "Cores: ${CORES}"
+
+          # Generate package info
+          export BSC_BUILD_PKGINFO=1
+
+          make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS' install-src
+          make -C src/comp install-utils
+      - name: CCache stats
+        env:
+          CCACHE_DIR: ${{ github.workspace }}/ccache
+        run: ccache --show-stats
