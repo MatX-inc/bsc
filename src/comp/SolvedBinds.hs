@@ -16,10 +16,11 @@ import Prelude hiding ((<>))
 
 import Data.List(union, partition)
 import Data.Maybe(listToMaybe)
-import qualified Data.Map.Strict as M
+import qualified IdMap.Strict as M
 
 import ErrorUtil(internalError)
 import Id
+import IdMap(IdMap)
 import IdSet(IdSet)
 import qualified IdSet as S
 import CSyntax
@@ -87,9 +88,9 @@ data SolvedBinds = SolvedBinds {
   recursiveIds :: IdSet,
   nonRecursiveIds :: IdSet,
   incoherentIds :: IdSet,
-  bindClasses :: M.Map Id Class,                   -- class per bind (for allowIncoherent check)
-  bindTypes :: M.Map Id Type,                      -- type per bind (for diagnostic messages)
-  directIncoherences :: M.Map Id DirectIncoherence -- root cause per directly-incoherent bind
+  bindClasses :: IdMap Class,                   -- class per bind (for allowIncoherent check)
+  bindTypes :: IdMap Type,                      -- type per bind (for diagnostic messages)
+  directIncoherences :: IdMap DirectIncoherence -- root cause per directly-incoherent bind
 } deriving (Show)
 
 instance Types SolvedBinds where

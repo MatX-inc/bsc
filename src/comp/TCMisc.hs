@@ -20,6 +20,7 @@ import Data.List
 import Control.Monad(foldM, when)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdMap
 import qualified IdSet
 import System.IO.Unsafe(unsafePerformIO)
 
@@ -334,16 +335,16 @@ warnTransitiveIncoherent sbs = do
   where
     diagnoseOne typeMap diMap clsMap i = do
       ai <- getAllowIncoherent
-      case M.lookup i clsMap >>= allowIncoherent of
+      case IdMap.lookup i clsMap >>= allowIncoherent of
         Just True -> return ()   -- incoherent class: suppress
         mallow    ->
           let msg = (pos, WTransitiveIncoherentMatch tStr rootPredStr rootInstStr)
           in  if fromMaybe ai mallow then twarn msg else err msg
       where
         t  = fromJustOrErr "warnTransitiveIncoherent: id not in bindTypes"
-                           (M.lookup i typeMap)
+                           (IdMap.lookup i typeMap)
         di = fromJustOrErr "warnTransitiveIncoherent: id not in directIncoherences"
-                           (M.lookup i diMap)
+                           (IdMap.lookup i diMap)
         pos = diPos di
         (rootPredStr, rootInstStr) = let (np, ni) = niceTypes (diPred di, diInst di)
                                      in (pfpString np, pfpString ni)
