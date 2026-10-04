@@ -5,6 +5,7 @@ import Data.List
 import Control.Monad(when, unless)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdSet
 import qualified GraphWrapper as GW
 import Data.Ix(range)
 
@@ -3257,7 +3258,7 @@ tiDefls type_env defs = do
 -- find untyped definitions which refer to themselves
 chkIRec :: [Impl] -> [Id]
 chkIRec [(i, (cs, me))] =
-    if S.member i (snd (getFVDl (CLValue i cs me))) then [i] else []
+    if IdSet.member i (snd (getFVDl (CLValue i cs me))) then [i] else []
 chkIRec ics = map fst ics
 
 {- Unused:
@@ -3268,8 +3269,8 @@ chkERec _ = False
 -- extract untyped let-defs and sort them into interdependent groups
 doSCC :: [CDefl] -> [[Impl]]
 doSCC ds =
-        let g = [ (i, S.toList (snd (getFVDl d) `S.intersection` is)) | d@(CLValue i _ _) <- ds ]                -- XXX CLMatch
-            is = S.fromList (map fst g)
+        let g = [ (i, IdSet.toList (snd (getFVDl d) `IdSet.intersection` is)) | d@(CLValue i _ _) <- ds ]                -- XXX CLMatch
+            is = IdSet.fromList (map fst g)
             iss = scc g
             get i = (i, (headOrErr ("TCheck.doSCC: missing CLValue " ++
                                     pfpString i)

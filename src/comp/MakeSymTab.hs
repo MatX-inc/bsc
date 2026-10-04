@@ -17,6 +17,8 @@ import Control.Monad(when)
 import Control.Monad.Except(throwError)
 import qualified Data.Set as S
 import qualified Data.Map as M
+import IdSet(IdSet)
+import qualified IdSet
 
 import Data.Either(partitionEithers)
 import PredTrie
@@ -125,7 +127,7 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
         (simp, impClsErrs) = foldl (addImpSyms errh insts) (spre, []) impsigs
 
         -- all types available to this packaged (predefined and imported)
-        preIds = S.fromList (map fst (getAllTypes simp))
+        preIds = IdSet.fromList (map fst (getAllTypes simp))
 
         -- ---------------
         -- Errors
@@ -134,15 +136,15 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
         tdefs = filter isTDef ds
         -- the qualified and unqualified names of the types defined here,
         -- plus types already defined
-        dids = S.unions (map (getVD mi) tdefs) `S.union` preIds
+        dids = IdSet.unions (map (getVD mi) tdefs) `IdSet.union` preIds
 
         -- multiple definitions for the same Id
         dis = filter ((> 1) . length) . group . sort . concatMap getVDefIds $ ds
         -- undefined type references
-        uids = S.toList (S.unions (map getFTCDn ds) `S.difference` dids)
+        uids = IdSet.toList (IdSet.unions (map getFTCDn ds) `IdSet.difference` dids)
 
         -- check for recursive type synonyms
-        type_syn_map = [ (iKName i, S.toList $ getFTyCons t)
+        type_syn_map = [ (iKName i, IdSet.toList $ getFTyCons t)
                              | (Ctype i _ t) <- tdefs ]
         rec_type_syn_sccs = case (tsort type_syn_map) of
                               Right _ -> []
@@ -307,26 +309,26 @@ updTypes r t = t
 -- Runs after mkSymTab but before type checking, capturing type synonym
 -- uses before they are expanded away. Type synonyms are expanded recursively
 -- to find all transitively referenced packages.
-getPackagesUsedInTypes :: SymTab -> CPackage -> S.Set Id
+getPackagesUsedInTypes :: SymTab -> CPackage -> IdSet
 getPackagesUsedInTypes symtab (CPackage _ _ _ _ _ ds _) =
-    let directTyCons = S.unions (map getFTCDn ds)
-    in  S.unions (map (getPackagesForType symtab) (S.toList directTyCons))
+    let directTyCons = IdSet.unions (map getFTCDn ds)
+    in  IdSet.unions (map (getPackagesForType symtab) (IdSet.toList directTyCons))
 
 -- For a type constructor, get its source package and recursively expand
 -- if it's a type synonym. Non-synonym types (data, struct, abstract) are
 -- not recursed into. Returns empty set for local types (ti_pkg = Nothing).
-getPackagesForType :: SymTab -> Id -> S.Set Id
+getPackagesForType :: SymTab -> Id -> IdSet
 getPackagesForType symtab tycon =
     case findType symtab tycon of
         Just (TypeInfo { ti_pkg = Just pkg, ti_sort = TItype _ rhs }) ->
             -- Type synonym from imported package: record package and recurse
             let rhsTyCons = getFTyCons rhs
-                recursivePkgs = S.unions (map (getPackagesForType symtab) (S.toList rhsTyCons))
-            in  S.insert pkg recursivePkgs
+                recursivePkgs = IdSet.unions (map (getPackagesForType symtab) (IdSet.toList rhsTyCons))
+            in  IdSet.insert pkg recursivePkgs
         Just (TypeInfo { ti_pkg = Just pkg }) ->
             -- Non-synonym from imported package: record package only
-            S.singleton pkg
-        _ -> S.empty  -- Not found or local type (ti_pkg = Nothing)
+            IdSet.singleton pkg
+        _ -> IdSet.empty  -- Not found or local type (ti_pkg = Nothing)
 
 -- ---------------
 
@@ -1459,8 +1461,8 @@ addImpSyms errh insts (s, errs0) (CImpSign name qf (CSignature pkgName _ _ ds)) 
 -----
 
 -- Get defined variables
-getVD :: Id -> CDefn -> S.Set Id
-getVD mi d = S.fromList (is ++ map (qualId mi) is)
+getVD :: Id -> CDefn -> IdSet
+getVD mi d = IdSet.fromList (is ++ map (qualId mi) is)
   where is = getVDefIds d
 
 -----

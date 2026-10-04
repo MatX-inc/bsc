@@ -20,6 +20,7 @@ import Data.List
 import Control.Monad(foldM, when)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdSet
 import System.IO.Unsafe(unsafePerformIO)
 
 import Util
@@ -326,9 +327,9 @@ mkATFClassPred tag posType cls pIdxs tIdx atfArgs targetType = do
 warnTransitiveIncoherent :: SolvedBinds -> TI SolvedBinds
 warnTransitiveIncoherent sbs = do
     let sbs' = computeTransitiveIncoherent sbs
-        newlyIncoherent = getIncoherentIds sbs' `S.difference` getIncoherentIds sbs
+        newlyIncoherent = getIncoherentIds sbs' `IdSet.difference` getIncoherentIds sbs
     mapM_ (diagnoseOne (bindTypes sbs') (directIncoherences sbs') (bindClasses sbs'))
-          (S.toList newlyIncoherent)
+          (IdSet.toList newlyIncoherent)
     return sbs'
   where
     diagnoseOne typeMap diMap clsMap i = do

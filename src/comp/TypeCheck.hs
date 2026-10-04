@@ -10,6 +10,7 @@ import Data.Maybe(catMaybes)
 import Control.Monad(when)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdSet
 
 import PFPrint
 import Id
@@ -188,13 +189,13 @@ qualifyClassDefaults errh symt ds =
         qualDef (Cclass incoh cps ik is deps ats fs) =
             let qualField (CField fi fps fqt fdefaults foqt) =
                     let (csets, vsets) = unzip $ map getFVC fdefaults
-                        cset = S.unions csets
-                        vset = S.unions vsets
-                        tset = S.unions (map getFTCC fdefaults)
+                        cset = IdSet.unions csets
+                        vset = IdSet.unions vsets
+                        tset = IdSet.unions (map getFTCC fdefaults)
                         -- make the mappings
-                        cmap = M.fromList (map mkCQual (S.toList cset))
-                        vmap = M.fromList (map mkVQual (S.toList vset))
-                        tmap = M.fromList (map mkTQual (S.toList tset))
+                        cmap = M.fromList (map mkCQual (IdSet.toList cset))
+                        vmap = M.fromList (map mkVQual (IdSet.toList vset))
+                        tmap = M.fromList (map mkTQual (IdSet.toList tset))
                         -- substitute into the clauses
                         fdefaults' = cSubstN (tmap,cmap,vmap,M.empty) fdefaults
                     in  (CField fi fps fqt fdefaults' foqt)

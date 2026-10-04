@@ -10,7 +10,7 @@ import Util(mapSnd)
 import Id(Id)
 import CFreeVars (getPV, getLDefs)
 import qualified Data.Map as M
-import qualified Data.Set as S
+import qualified IdSet
 
 
 -- --------------------
@@ -347,6 +347,6 @@ getDeflVars :: CDefl -> [Id]
 getDeflVars d = getLDefs d
 
 getPatVars :: CPat -> [Id]
-getPatVars = S.toList . getPV
+getPatVars = IdSet.toList . getPV
 
 -- --------------------

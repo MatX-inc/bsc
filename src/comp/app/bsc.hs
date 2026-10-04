@@ -30,6 +30,7 @@ import Control.Concurrent.MVar(newEmptyMVar, putMVar, takeMVar)
 import qualified Control.Exception as CE
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdSet
 
 import ListMap(lookupWithDefault)
 import SCC(scc)
@@ -720,7 +721,8 @@ compilePackage
 
     -- Check for unused imports by combining packages from all three sources
     let (CPackage _ _ imports _ _ _ _) = mctx
-        allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
+        -- boundary coercion: the other three sets are still Data.Set (P3 Phase A)
+        allUsedPkgs = S.unions [IdSet.toSet pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
         importedPkgs = [i | (CImpId _ i) <- imports]
         unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
         unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]

@@ -15,6 +15,8 @@ import IOUtil(progArgs)
 import System.IO.Unsafe(unsafePerformIO)
 import qualified Data.Set as S
 import qualified Data.List as List
+import IdSet(IdSet)
+import qualified IdSet
 
 import Util(fromJustOrErr)
 import qualified SCC(tsort,Graph)
@@ -487,16 +489,16 @@ iConvLet errh flags r env pvs ds = answer
         d_ids = [ i | (CLValueSign (CDefT i _ _ _) _) <- ds ]
         env' = let addFn i e = addVar i (IVar i) e
                in  foldr addFn env d_ids
-        is :: S.Set Id
-        is = S.fromList d_ids
+        is :: IdSet
+        is = IdSet.fromList d_ids
         graph :: SCC.Graph Id -- [(Id,[Id])]
         graph = [(i, local_is) |
                    d@(CLValueSign (CDefT i _ _ _) _) <- ds,
                    -- self-recursion is caught by unrec, below
                    let local_is =
                          filter ((/=) i)
-                           (S.toList
-                              ((snd (getFVDl d)) `S.intersection` is))]
+                           (IdSet.toList
+                              ((snd (getFVDl d)) `IdSet.intersection` is))]
         ds' :: [CDefl]
         ds' = case loop_test of
                 Left cycles -> internalError "iConvLet.cycles"
@@ -505,7 +507,7 @@ iConvLet errh flags r env pvs ds = answer
         loop_test = SCC.tsort graph
         unrec :: CDefl -> CDefl
         unrec d@(CLValueSign (CDefT i vs qt@(CQType ctx ft) cs) me) =
-           if S.member i (snd (getFVDl d)) then
+           if IdSet.member i (snd (getFVDl d)) then
            let answer =
                 let prim_fix_pos = CVar (idPrimFix (getPosition i))
                     rlet = Cletrec [CLValueSign funbind []] (CApply (CTApply prim_fix_pos [ft]) [CVar _f])

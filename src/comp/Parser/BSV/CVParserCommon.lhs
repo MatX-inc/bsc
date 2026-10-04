@@ -15,8 +15,9 @@
 
 > import Data.List
 > import Data.Maybe
-> import qualified Data.Set as S
 > import qualified Data.Map as M
+> import IdSet(IdSet)
+> import qualified IdSet as S
 > import Debug.Trace(trace)
 
 > import Parsec hiding(getPosition)
@@ -34,7 +35,7 @@
 > import CVPrint
 > import qualified SEMonad
 > import Pragma
-> import Util (headOrErr, unconsOrErr, set_insertMany, toMaybe, apRight)
+> import Util (headOrErr, unconsOrErr, toMaybe, apRight)
 
 type of the BSV parser
 
@@ -908,7 +909,7 @@ one would then need to be careful about variable shadowing
 > }
 
 
-> type FreeVarSet = S.Set Id
+> type FreeVarSet = IdSet
 
 get free variables from statement or right-hand-side of assignment
 
@@ -1026,14 +1027,14 @@ get free variables updated by a statement
 > getUFVIS (ISContinue pos) = S.empty
 > getUFVIS (ISClassicDefns pos body) = internalError "CVParserCommon.getUFVIS ISClassicDefns"
 
-> getUFVdef :: Maybe (a, [ImperativeStatement]) -> S.Set Id
+> getUFVdef :: Maybe (a, [ImperativeStatement]) -> IdSet
 > getUFVdef Nothing = S.empty
 > getUFVdef (Just (pos,ss)) = getUFVISs ss
 
-> getUFVcase :: [(a, b, [ImperativeStatement])] -> S.Set Id
+> getUFVcase :: [(a, b, [ImperativeStatement])] -> IdSet
 > getUFVcase as = S.unions (map (\ (x,y,z) -> getUFVISs z) as)
 
-> getUFVtcase :: [(a, b, c, [ImperativeStatement])] -> S.Set Id
+> getUFVtcase :: [(a, b, c, [ImperativeStatement])] -> IdSet
 > getUFVtcase as = S.unions (map (\ (w,x,y,z) -> getUFVISs z) as)
 
 get free variables updated by a list of statements (i.e. omitting updates of
@@ -1045,7 +1046,7 @@ variables declared earlier in the list)
 >                 case stmt of
 >                   ISDecl _ vars _  _ ->
 >                       let names = getIdOrTupleNames vars
->                       in  (updates, set_insertMany names decls)
+>                       in  (updates, S.insertMany names decls)
 >                   ISPatEq _ pat _ -> (updates, S.union (getPV pat) decls)
 >                   ISPatBind _ pat _ -> (updates, S.union (getPV pat) decls)
 >                   _ -> (updates `S.union` (getUFVIS stmt `S.difference` decls), decls)
@@ -1357,7 +1358,7 @@ saying whether or not the declaration is local
 >         hasUninit _ = False
 >     return $ isAssigned' ass
 
-> getNormallyAssignedVars :: ISConvMonad (S.Set Id)
+> getNormallyAssignedVars :: ISConvMonad IdSet
 > getNormallyAssignedVars = do
 >     ass <- gets issAssigned
 >     let assignedVars = headOrErr "CVParserCommon.getNormallyAssignedVars" ass
@@ -1365,11 +1366,12 @@ saying whether or not the declaration is local
 >                        [v | (v, (pos, ATNormal)) <- M.toList assignedVars]
 >     return normallyAssignedVars
 
-> getDeclaredVars :: ISConvMonad (S.Set Id)
+> getDeclaredVars :: ISConvMonad IdSet
 > getDeclaredVars = do
 >     dss <- gets issDeclared
 >     let declaredVars = headOrErr "CVParserCommon.getDeclaredVars" dss
->     return $ M.keysSet declaredVars
+>     -- boundary coercion: DeclaredVars is still a Data.Map (P3 Phase A)
+>     return $ S.fromSet (M.keysSet declaredVars)
 
 > defaultModuleMonadInfo :: Position -> (CType, [CPred])
 > defaultModuleMonadInfo pos = (mVar, [CPred (CTypeclass (idIsModuleAt pos)) [mVar, cVar]])

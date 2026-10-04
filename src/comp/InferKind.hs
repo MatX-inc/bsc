@@ -1,11 +1,11 @@
 {-# LANGUAGE PatternGuards #-}
 module InferKind(inferKinds) where
 import Data.List((\\))
-import qualified Data.Set as S
 import qualified Data.Map as M
 import Util(map_insertMany)
 import Error(internalError, EMsg, ErrMsg(..))
 import Id
+import qualified IdSet
 import CSyntax
 import CType(mkKFun)
 import CFreeVars(getFQTyVars, getCPTyVars)
@@ -98,7 +98,7 @@ inferKDefn as (Cclass _ ps ik vs _ ats fs) = do
     (v_as, mk) <- unifyDefArgs i con_k vs
     -- there may be additional variables in the superclass
     -- XXX we should confirm that they are dependent utimately on "vs"
-    let pvs = concatMap (S.toList . getCPTyVars) ps \\ vs
+    let pvs = concatMap (IdSet.toList . getCPTyVars) ps \\ vs
     pv_as <- mapM makeAssump pvs
     let as' = map_insertMany (v_as ++ pv_as) as
         doField field = do
@@ -165,7 +165,7 @@ kcCQTypeStar as (CQType ps t) = do
 
 
 getFQTyVarsL :: CQType -> [Id]
-getFQTyVarsL qt = S.toList (getFQTyVars qt)
+getFQTyVarsL qt = IdSet.toList (getFQTyVars qt)
 
 mustFindK :: Id -> M.Map Id Kind -> Kind
 mustFindK i m | (Just k) <- M.lookup i m = k

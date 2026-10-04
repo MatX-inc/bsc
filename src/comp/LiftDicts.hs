@@ -5,6 +5,8 @@ import Control.Monad(when, zipWithM)
 import Control.Monad.State.Strict
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import IdSet(IdSet)
+import qualified IdSet
 import Debug.Trace(traceM)
 
 import Error(ErrorHandle)
@@ -497,13 +499,14 @@ instance LiftDicts CDef where
     CDefT i vs cqt <$> liftDicts p m cs
   liftDicts _ _ def = internalError $ "LiftDicts - unexpected CDef: " ++ ppReadable def
 
-shadowBindings :: S.Set Id -> InlineMap -> InlineMap
-shadowBindings s m = M.withoutKeys m s
+shadowBindings :: IdSet -> InlineMap -> InlineMap
+-- boundary coercion: InlineMap is still a Data.Map (P3 Phase A)
+shadowBindings s m = M.withoutKeys m (IdSet.toSet s)
 
 instance LiftDicts CClause where
   liftDicts p m (CClause ps qs e) = do
     let p' = p `S.union` S.fromList [ i | CPVar i <- ps, isDictId i ]
-        pvs = S.unions $ map getPV ps
+        pvs = IdSet.unions $ map getPV ps
         m' = shadowBindings pvs m
     (qs', m'') <- processCQuals p' m' qs
     e' <- liftDicts p' m'' e
@@ -590,7 +593,7 @@ processCDeflsSeq p m (d:ds) = do
       processCDeflsSeq p m' ds
     Keep d'' -> do
       let i = getLName d''
-      let m' = shadowBindings (S.singleton i) m
+      let m' = shadowBindings (IdSet.singleton i) m
       let p' = if isDictId i then S.insert i p else p
       (ds', m'') <- processCDeflsSeq p' m' ds
       return (d'':ds', m'')
@@ -605,8 +608,9 @@ instance LiftDicts CExpr where
   -- dictionary expression referencing one is (correctly) not lifted,
   -- rather than tripping the top-level-known internalError below.
   liftDicts p m (Cletrec ds e) = do
-    let vs = S.fromList [ getLName d | d <- ds ]
-        m' = shadowBindings vs m
+    let names = [ getLName d | d <- ds ]
+        vs = S.fromList names
+        m' = shadowBindings (IdSet.fromList names) m
         p' = p `S.union` S.filter isDictId vs
     ds' <- liftDicts p' m' ds
     e'  <- liftDicts p' m' e

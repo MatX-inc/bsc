@@ -7,7 +7,7 @@
 > import Data.List(mapAccumL, group, groupBy, intercalate, sort, partition, nub)
 > import Data.Maybe
 > import Control.Monad
-> import qualified Data.Set as S
+> import qualified IdSet as S
 > -- import Debug.Trace
 
 > import Parsec hiding(getPosition)

@@ -3,6 +3,7 @@ import Data.List((\\), sortBy, unionBy, groupBy, partition)
 import Data.Maybe(mapMaybe)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdSet
 import Control.Monad(when)
 
 import PFPrint
@@ -145,7 +146,7 @@ genSign errh exportAll symt
         -- For Cclass (exported with (..)), all ATFs are included.
         -- For CIclass (exported without (..)), only independently exported ATFs.
         -- ATF names in CIclass ats are already qualified (by genDefSign).
-        def = S.fromList ([ i | (Right i) <- map getName ss ] ++
+        def = IdSet.fromList ([ i | (Right i) <- map getName ss ] ++
                           [ qualId currentPkg (ca_name at)
                           | Cclass  _ _ _ _ _ ats _ <- ss, at <- ats ] ++
                           [ ca_name at
@@ -156,7 +157,7 @@ genSign errh exportAll symt
         ssFVs = map (\s -> (s, getFTCDn s)) ss
 
         -- use: set of the type constructors used in ss
-        use = S.unions (map snd ssFVs)
+        use = IdSet.unions (map snd ssFVs)
 
         -- isHiddenDef: whether the constructors of the type def are visible
         isHiddenDef (Cdata { cd_visible =  vis }) = not vis
@@ -168,10 +169,10 @@ genSign errh exportAll symt
         --          and unnamed defs (like pragmas and instances))
         useLoci :: M.Map Id [Id]
         useLoci = M.fromList [ (var, def_names)
-                              | var <- S.toList use
+                              | var <- IdSet.toList use
                               , let def_names = [ i | (def, fvs) <- ssFVs
                                                     , not (isHiddenDef def)
-                                                    , var `S.member` fvs
+                                                    , var `IdSet.member` fvs
                                                     , (Right i) <- [getName def] ]
                               , not (null def_names) ]
 
@@ -189,7 +190,7 @@ genSign errh exportAll symt
                                 -- for simplicity, we ignore all prelude
                                 -- qualified types
                                 fsCurrentPkg /= fsPrelude,
-                                i <- S.toList (S.difference use def),
+                                i <- IdSet.toList (IdSet.difference use def),
                                 -- only consider Ids from this package
                                 getIdQFString i == Just fsCurrentPkg,
                                 {- not (isTCId i), -} td <- tdef i ]

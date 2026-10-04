@@ -4,9 +4,9 @@ import Control.Monad(when)
 import Control.Monad.Reader(ReaderT, runReaderT, ask, local)
 import Control.Monad.Writer(Writer, runWriter, tell, listen, censor)
 import Data.Maybe
-import qualified Data.Set as S
-import qualified Data.Map as M
-import Data.Set(Set, (\\))
+import qualified IdMap as M
+import IdSet(IdSet, (\\))
+import qualified IdSet as S
 
 import CFreeVars
 import CSyntax
@@ -17,7 +17,7 @@ import Position
 import Util(concatMapM, fromJustOrErr)
 
 -- ReaderT (bound variables) $ Writer (used variables)
-type ClassicWarnM = ReaderT (Set Id) (Writer (Set Id))
+type ClassicWarnM = ReaderT IdSet (Writer IdSet)
 
 classicWarnings :: CPackage -> [WMsg]
 classicWarnings (CPackage _ _ _ _ _ ds _) = concatMap getWarnings ds
@@ -65,7 +65,7 @@ classicWarnDefn (CIValueSign {}) = return []
 useId :: Id -> ClassicWarnM ()
 useId i = tell $ S.singleton i
 
-withBindings :: Set Id -> ClassicWarnM [WMsg] -> ClassicWarnM [WMsg]
+withBindings :: IdSet -> ClassicWarnM [WMsg] -> ClassicWarnM [WMsg]
 withBindings bindings m = do
   bound <- ask
   let shadowed = bound `S.intersection` bindings
