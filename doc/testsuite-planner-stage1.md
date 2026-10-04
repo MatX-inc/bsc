@@ -2,36 +2,131 @@
 
 ## Current planner slice
 
-The initial semantic planner now provides a versioned TestPlan model, strict
-JSON validation, `plan`, and `explain`. It lowers package compile pass/fail
-checks, their optional internal object loads, audited scalar assignments, and
-finite single-variable loops. Dependencies preserve completion order and
-workspace snapshots; internal checks remain attached to producer invocations.
-Unsupported scripts reject the entire selected plan with source locations.
+The semantic planner provides a version 3 TestPlan model, strict JSON
+validation, `plan`, `explain`, and supported-invocation `correlate`. A plan
+contains configuration and scripts; each script contains semantic tests or
+located unsupported/unresolved items.
+The current test kind is package compilation with an expected success or
+failure. `Procedures.hs` shares its meaning through `compilationTest`, used by
+`compilePass` and `compileFail`; it derives the optional internal object check
+for expected-success tests from global configuration. The check is not another
+planned test. The flat core has no steps, action graph, workspace snapshots,
+or cache policy, and Haskell procedures need not mirror Tcl helpers one for one.
 
-Source-addressed IDs are independent of outcomes, result labels, comments, and
-whitespace. They are scoped to a frozen source topology and configuration, not
-general semantic hashes. Golden plans and explanations cover basic compilation,
-negative compilation, repeated flag variants, and empty discovered scripts.
+`Lower.hs` statically evaluates audited scalar assignments and finite
+single-variable loops, then adapts supported declarations to semantic tests.
+Unknown constructs remain visible. Known unsupported test helpers do not
+discard adjacent supported tests; opaque setup and mutations make dependent
+declarations unresolved. Unknown assignments invalidate variable values.
+Independent scripts still lower. A parse error is a located unplanned item,
+but later source in that malformed script cannot be recovered.
+
+Test IDs contain the script and a positive file-local number, without an
+assertion role. The counter resets in each `.exp` and advances only for
+recognized `compile_pass`/`compile_fail` invocations, including calls whose
+arguments cannot be lowered. Those calls reserve numbered planning issues;
+other unsupported constructs remain unnumbered. Assignments, loop structure,
+comments, whitespace, result labels, and outcomes do not advance the counter.
+Repeated loop invocations remain distinct tests. The identity is
+`file-test-number-v1`, and selectors use `v3:LENGTH:FILE:NUMBER`. Numbers refer
+to a frozen supported-invocation sequence; they are not semantic hashes. The
+full plan and configuration still determine test meaning.
+
+The opt-in direct harness logging uses the same numbering boundary, excluding
+calls from procedure wrappers. `correlate` matches
+numbered tests to that evidence, then checks source file and line, procedure
+family, typed resolved arguments, internal-check policy, and expected
+result-role sequence. Compilation and internal object-load
+results retain the same parent test ID. These checks prevent a shared counter
+from silently hiding source or expansion drift.
 
 The [plan contract](../testsuite/planner/PLAN.md) defines the accepted subset and
 its limits. Simulator operations, golden-output comparisons, expected-failure
-phases, explicit file mutations/recompilation scenarios, tool/input binding,
-the DejaGNU identity bridge, and Buck2 execution are still pending. The earlier
-population and measurement results below describe the bootstrap and remain
-historical validation evidence; planning alone reports no compiler verdicts.
+phases, explicit file mutations/recompilation scenarios, complete input closure
+and tool binding, a whole-suite DejaGNU identity bridge, and Buck2 execution
+are still pending. Opaque setup and unknown expansion remain explicit gaps;
+unsupported constructs alone do not block correlation of supported tests.
+The earlier baseline and measurement sections below remain historical
+validation evidence; planning alone reports no compiler verdicts.
 
-Current planning coverage is 57 of 866 active scripts: 54 contain 93 ordinary
-and 93 internal planned assertions; three contain no assertions and remain in
-the population. The other 809 scripts report explicit unsupported-construct
-errors. Whole-suite planning emits no partial JSON. Ordinary check IDs remain
-the same when the internal-check configuration is disabled.
+`plan` emits JSON and exits successfully even with unsupported or unresolved
+items; diagnostics and separate counts go to stderr. Argument, configuration,
+selection, and I/O errors remain fatal. Counts describe planned tests,
+unsupported constructs, and unresolved items, not runtime assertions. `explain`
+describes a test's semantic obligations or a numbered issue's reason and
+source origin. `correlate PLAN.json LOG-DIRECTORY-OR-FILE` reads `testrun.log`
+files recursively from a directory or a specified log. It emits readable
+`MATCH`/`SKIP` rows, counts, and problems; it has no JSON-report mode in this slice.
+Missing or inconsistent markers, script errors,
+missing/extra or mismatched invocations, unexpected result roles, and non-PASS
+ordinary results make it fail. Numbered planning issues are explicitly skipped.
 
-The Haskell suite, plan/explanation goldens, CLI checks, suite layout checks,
-and whitespace checks passed. A fresh native Tcl comparison again matched all
-866 scripts, 6,189 top-level commands, and 18,133 words. Legacy discovery remains
-unchanged. No compiler or legacy harness code changed in this planner slice;
-the full compiler testsuite was not rerun for it.
+The version 1 trace protocol does not record global compiler options, so `correlate` rejects
+nonempty `configCompilerOptions` (the JSON configuration `compiler_options`
+field). Empty global options do not verify the tool installation or ambient
+configuration. Correlation establishes declaration correspondence, not full
+configuration equivalence.
+
+The refreshed v3 inventory retains all 866 active scripts and produces 344
+planned tests across 169 scripts, 5,211 unsupported items, and 625 unresolved
+items. There are 54 nonempty scripts containing only planned tests and three
+empty scripts. Of the 1,006 numbered items, 344 are planned tests and 662 are
+planning issues; the other 5,174 issues are unnumbered. All per-script number
+sequences are contiguous. Internal checks enabled and disabled produce
+exactly identical script items and IDs, with the policy retained in
+configuration. These counts include visible declarations only; they do not
+count tests hidden inside unsupported control flow or establish correspondence
+with legacy result lines.
+
+The direct-log implementation passes the full Haskell planner suite and the
+CLI plan, import, and correlation regressions. Five harness regressions check
+numbering, source locations, both tool-name variants, wrapper exclusion,
+internal-result ownership, unchanged verdicts and return values, and explicit
+multiline and incomplete-call gaps. These use real DejaGNU procedures with
+stub compiler operations.
+
+Focused real compiler runs also pass: `b1213` correlates one planned test with
+two PASS results when internal checks are enabled and one when disabled. Its
+traced and untraced runs have identical summary verdicts. `gh894` passes both
+its expected-compilation-failure and diagnostic-comparison assertions;
+correlation matches the compilation and leaves the unsupported comparison
+unnumbered.
+
+A full `make -j128 -C testsuite fullparallel` run with `BSC_TEST_TRACE=1`,
+internal checks, and SystemC enabled completed in 740.22 seconds: 25,591 PASS,
+134 XFAIL, and zero unexpected results. All 866 scripts were captured, with
+the compiler installation and test sources unchanged throughout the run.
+The plan, independent discovery manifest, and imported summaries contain
+exactly the same script population.
+
+All 344 planned tests correlate, including 344 compilation results and 282
+internal object-load results. All 626 observations pass. There are no missing
+invocations, malformed logs, or source, argument, or result-role mismatches.
+The correlator skips 662 numbered planning issues; those legacy tests ran,
+but their semantics have not yet been translated or verified by correlation.
+The strict correlation command returns nonzero for two extra invocations
+caused by supported compile calls inside unimplemented `if` bodies:
+`bsc.driver/depend/depend.exp:65` and
+`bsc.names/portRenaming/misc/misc.exp:29`. In the first script the hidden call
+also shifts the numbers of later skipped calls; skipped IDs do not prove
+correspondence. These are lowering gaps, not a whole-suite semantic or Buck2
+parity result. Evidence is retained under
+`testsuite/.stage1-validation/full-direct-identifiers-20261004/`.
+
+Earlier validation of the unchanged supporting tools passed six
+hidden-evidence regressions, 13 timing tests, and eight capture-lifecycle tests.
+The native Tcl comparison matched all 866 scripts, 6,189 top-level commands,
+and 18,133 words; it checks lexical boundaries, not semantic coverage.
+
+The previous version 1 planner covered 57 of 866 active scripts: 54 contained
+93 ordinary and 93 internal planned assertions; three were empty. Its other
+809 scripts rejected the selected plan. Those figures describe the superseded
+action model and all-or-nothing behavior, not current semantic coverage.
+The v1 Haskell suite, plan/explanation goldens, CLI checks, suite layout checks,
+and whitespace checks passed. Its native Tcl comparison matched all 866
+scripts, 6,189 top-level commands, and 18,133 words. These are historical
+validation results, not validation of the later semantic redesigns. Existing
+compiler goldens remain unchanged by this planner redesign.
 
 ## Base and scope
 
@@ -61,8 +156,10 @@ identities. For example, `compile_pass` changes its label on failure and
 `exit_status` emits the shared label `Exit status` on success. The importer
 therefore uses a versioned **legacy** identity `(exp, exact label, occurrence)`.
 Changed labels are conservatively reported as removed and added checks. See
-[`IDENTITY.md`](../testsuite/planner/IDENTITY.md). Semantic invocation/assertion
-IDs and an oracle-side mapping remain required before Buck2 parity is claimed.
+[`IDENTITY.md`](../testsuite/planner/IDENTITY.md). Semantic tests now have
+file-local IDs, with opt-in direct logging and checked mapping for supported
+compile-test invocations. Broader runtime observation semantics and a Buck2
+backend remain required before Buck2 parity is claimed.
 
 ## Local evidence location
 
@@ -114,13 +211,51 @@ The baseline capture preserves these logs alongside the `.sum` files; the
 current importer reads verdict summaries only.
 
 Use these existing traces when building the harness catalogue and validating
-lowering: associate observed operations with checks, then compare the planner's
-steps, flags, ordering, and transcript handling with the oracle's execution.
-Inspect trace coverage before adding instrumentation. A command is not a check:
+lowering: associate observed operations with checks, then compare semantic
+procedure obligations, flags, ordering, and transcript handling with the
+oracle's execution.
+The opt-in logging below adds structured invocation and role boundaries
+that command text alone cannot reliably supply. A command is not a check:
 one compile command can produce both a compilation verdict and an
 intermediate-file assertion. The harness source remains necessary to establish
 expectations, phase-specific failures, implicit inputs, and unexecuted branches.
 Logged commands are evidence for the semantic TestPlan, not its definition.
+
+## Opt-in supported-test provenance
+
+`BSC_TEST_TRACE=1` enables small logging helpers directly in
+`testsuite/config/unix.exp`. DejaGNU's per-file `bsc_init` and `bsc_finish`
+hooks delimit each script and reset its counter. `compile_pass` and
+`compile_fail` call the helpers directly with one caller `info frame` for
+source location; procedure-wrapper calls are excluded. The helpers write
+metadata to existing `testrun.log` files. Ordinary summary output and the
+legacy importer retain their existing contracts.
+
+Metadata lines start with `BSC-TEST: ` and contain positional Tcl lists:
+`script 1 FILE INTERNAL`, `begin N PROC SOURCEFILE LINE ARGLIST`,
+`role N object-load`, `end N`, and `finish COUNT`. The decoder parses these
+as data. Ordinary final verdicts between `begin` and `end` are authoritative;
+an explicit role marker precedes internal object checks. The final `finish`
+record supplies the invocation count. Missing or inconsistent markers and
+script errors are reported as problems.
+
+`correlate` checks this evidence against the plan using the same typed argument
+lowering as planning. Expected-success compilation has a `compilation` result
+and, when enabled, an `object-load` result. Expected compilation failure still
+expects the harness assertion to pass; `XFAIL` is not silently accepted without
+explicit expected-failure semantics. The report keeps skipped numbered issues
+visible. Scripts with only unnumbered unsupported items need no logged
+invocations, while supplied logs are still checked for extra supported calls.
+
+The initial decoder supports single-line verdicts only. Unhandled multiline
+metadata emits an unsupported marker and correlation rejects the log. There
+is no claim of arbitrary Tcl wrapper or call-stack support.
+
+This is a common-case correspondence check for the supported subset. It does
+not infer arbitrary Tcl execution, turn unsupported wrappers into supported
+tests, or establish whole-suite/Buck2 parity. Command logs, strict legacy
+population comparisons, and the broader semantic catalogue remain useful
+alongside it.
 
 ## Repeated labels and stateful tests
 
@@ -203,15 +338,17 @@ start with an empty cache and reuse it through successive revisions. LLVM
 can execute multiple `RUN` commands sharing a per-test temporary path. These
 support using a structured scenario, not inferring dependencies from labels.
 
-Initially lower each genuine mutate/recompile scenario into one ordered action
-with a fresh private workspace, explicit operations, and separate per-phase
-verdicts. Preserve its shared intermediate state within the scenario and apply
-`never` cache policy to the scenario and dependent checks. Do not use output
-retention to share state across suite invocations. Buck2
+Future semantic scenarios must preserve ordered mutations, shared intermediate
+state, and per-phase observations. When a scenario executes, the backend must
+ensure its internal compiler invocations run as intended. Whether the complete
+deterministic scenario can reuse a cached result is a separate question that
+depends on complete inputs, tool identity, and observable behavior. Multiple
+compiler invocations alone do not justify a blanket cache prohibition. Do not
+use output retention to share state across suite invocations. Buck2
 [`local_only` and `allow_cache_upload`](https://buck2.build/docs/api/build/AnalysisActions/)
-control placement and uploading, not all cache reuse; the backend must also
-prevent daemon and remote result reuse and verify that the compiler phases
-actually execute. That enforcement remains unimplemented.
+control placement and uploading; locality is separate from cache eligibility.
+Backend cache policy and verification remain unimplemented and do not belong
+in the core semantic test model.
 
 ## Validation and configuration
 
@@ -444,10 +581,11 @@ report. The measurement monitor is paused.
 1. Model the three random generators and their seeds explicitly so both lanes
    can test identical generated inputs. Preserve the raw diagnostic differences
    until that contract is implemented; do not suppress them to obtain equality.
-2. Map the planned check identities to DejaGNU observations. Complete the
-   semantic catalogue of `config/unix.exp` and `config/verilog.tcl`.
-3. Extend the current TestPlan model and static lowering to comparisons,
-   expected-failure phases, backend operations, and ordered file mutations.
+2. Extend the supported compile-test provenance mapping to the remaining
+   planned tests and runtime observations. Complete the semantic catalogue of
+   `config/unix.exp` and `config/verilog.tcl`.
+3. Extend semantic procedures and static lowering to comparisons,
+   expected-failure phases, backend-specific tests, and shared-state scenarios.
    Extend golden plans and differential coverage with each supported construct.
 4. Pin a dated Buck2 binary and prelude. First test a trivial action against
    `bazel-remote`: verify a cache hit after daemon restart, then a miss after

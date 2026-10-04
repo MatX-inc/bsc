@@ -1,8 +1,8 @@
 module CensusTest (runTests) where
 
 import Prelude hiding (Word)
-import BscTestsuite.Census
-import BscTestsuite.Tcl
+import Census
+import Tcl
 import Control.Exception (bracket)
 import Control.Monad (forM_, unless)
 import Data.Char (ord)

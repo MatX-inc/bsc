@@ -1,4 +1,4 @@
-# Legacy verdict identity and planned check identity
+# Legacy verdict identity and planned test identity
 
 This importer establishes a conservative baseline for the migration. It is
 **not completion of D1's shared semantic check identity**, and it does not
@@ -6,13 +6,75 @@ claim that all PASS/FAIL transitions can be matched to the same legacy ID.
 The planner and Buck2 backend must eventually identify the assertion being
 tested independently of the message used to report its result.
 
-The initial `plan` command now emits a separate `source-site-check-v1` identity:
-the suite-relative script, one-based source-command/loop-expansion address,
-and assertion role. It is independent of outcomes and labels; repeated internal
-checks refer to distinct producer invocations. It remains scoped to a frozen
-source topology and configuration. See [PLAN.md](PLAN.md) for the exact
-stability contract. The `.sum` importer described below is unchanged; an
-oracle-side mapping between these schemes is still required to complete D1.
+The version 3 `plan` command emits the separate `file-test-number-v1` identity:
+the suite-relative script and a positive test number, with no assertion role.
+The counter resets in each `.exp` and advances only for recognized
+`compile_pass` and `compile_fail` invocations, including calls whose arguments
+cannot be lowered. Those calls retain their reserved IDs as planning issues;
+other unsupported constructs have a null ID and do not advance the counter.
+The selector is `v3:LENGTH:FILE:NUMBER`, where length counts Unicode characters
+in the path. Assignments and loop structure do not consume numbers; each
+supported invocation expanded from a loop does. Outcomes, labels, comments,
+whitespace, and internal-check settings do not choose IDs.
+
+Numbers are stable only within a frozen supported-invocation sequence. Adding
+a supported call or changing loop expansion can renumber later tests; changing
+arguments can preserve a number while changing its meaning. The full plan and
+configuration determine test meaning. See [PLAN.md](PLAN.md) for the exact
+contract. The `.sum` importer described below is unchanged. The opt-in
+provenance bridge now checks supported invocations and their observations, but
+does not complete D1 or establish whole-suite parity.
+
+One planned test can imply several runtime assertions. An expected-success
+compilation test derives its optional internal object check from the global
+`internal_checks` setting. That check is not a separate test or test number.
+The v3 core records semantic tests and issues, not operations, assertion nodes,
+or an action graph. Planned-test and issue counts therefore cannot be compared
+directly with legacy PASS/FAIL totals.
+
+## Supported-invocation provenance
+
+Set `BSC_TEST_TRACE=1` when running the legacy harness to enable direct
+logging in `testsuite/config/unix.exp`. DejaGNU's per-file `bsc_init` and
+`bsc_finish` hooks delimit scripts and reset the counter. `compile_pass` and
+`compile_fail` call small helpers directly, using one caller `info frame` for
+source location. Calls from procedure wrappers are excluded from numbering.
+The planner and harness therefore count the same supported boundary without
+promising arbitrary wrapper or call-stack interpretation.
+
+Metadata is written to `testrun.log` as `BSC-TEST: ` followed by a positional
+Tcl list, parsed as data. Version 1 records are `script 1 FILE INTERNAL`,
+`begin N PROC SOURCEFILE LINE ARGLIST`, `role N object-load`, `end N`, and
+`finish COUNT`. Ordinary final verdicts between `begin` and `end` supply the
+results; their default compilation role changes at an explicit internal-check
+role marker. The object load retains the compilation's parent test number.
+No separate result records or sidecar files are required.
+
+`bsc-test-plan correlate PLAN.json LOG-DIRECTORY-OR-FILE` reads `testrun.log`
+files recursively from a directory or reads a specified log. It uses the
+number to find candidates and validates source file and line, procedure family,
+typed resolved arguments, internal-check policy, and expected role order. The readable
+report includes `MATCH`/`SKIP` rows, counts, and explicit problems. Numbered
+unplanned calls are reported as skipped; unnumbered unsupported constructs do
+not block supported-subset correlation. Missing/extra or mismatched
+invocations, missing/inconsistent markers, script errors, unexpected result roles, and non-PASS
+ordinary results make the command fail. `XFAIL` does not stand in for modeled
+expected-failure semantics.
+
+The initial decoder supports single-line verdicts only. Unhandled multiline
+metadata emits an unsupported marker and makes correlation fail. The log
+protocol is deliberately limited to these common direct calls.
+
+The version 1 trace protocol does not record global compiler options, so `correlate` rejects
+plans whose configuration `compiler_options` field is nonempty. An empty
+field does not verify the compiler installation or ambient configuration.
+The result establishes declaration correspondence, not full configuration
+equivalence.
+
+The extra checks matter because counters alone can silently pair unrelated
+invocations after expansion drift. Opaque setup and unknown expansion remain
+explicit coverage gaps. Provenance does not rewrite the label identities of
+archived `.sum` files or provide a Buck2 execution backend.
 
 ## What is identified
 
@@ -47,12 +109,13 @@ paths, and separate assertions whose parameters are absent from the label.
 Some source scripts also repeat the same assertion. None is deduplicated.
 The reproducible inventory is `scripts/audit-repeated-labels.py`.
 
-Future semantic identities must distinguish scenario, configuration variant,
-ordered phase, and assertion role. An internal check belongs to a specific
+Future runtime observation identities must distinguish scenario, configuration
+variant, ordered phase, and assertion role. An internal check belongs to a specific
 producer invocation and artifact version, not merely to the producer's display
 label. For example, `dumpbo` after each of three compilations of the same source
 is three child observations, even when all three filenames and labels match.
-Attach the checker role and logical artifact to that producer identity.
+Attach the checker role and logical artifact to that producer's runtime
+observation identity, without turning each assertion into a planned test.
 Explicit checks such as `vcdcheck` also need their predicate and source origin;
 they are not necessarily children of the last compiler invocation.
 
@@ -67,10 +130,12 @@ current harness's `.ba` existence assertion is ordinary; its subsequent
 
 Stateful recompile tests must retain ordered mutations and artifact versions
 inside one fresh scenario workspace. Preserve individual observations even
-when compiler arguments repeat. Such scenarios require enforced uncached
-execution, including dependent assertions; an action-cache hit cannot prove
-that the compiler's own dependency checking ran. Backend implementation and
-verification of these contracts remain pending.
+when compiler arguments repeat. When a scenario executes, its internal compiler
+invocations must exercise the compiler's own dependency checking. Reusing a
+cached result for the complete scenario is a separate decision: a deterministic
+scenario with complete inputs may be cacheable. Execution locality does not
+determine cache eligibility. Backend implementation and verification of these
+contracts remain pending; the semantic core assigns no cache policy.
 
 Some harness helpers use different messages for success and failure. For
 example, `compile_pass` reports “compiles” or “should compile”. Such a
@@ -120,7 +185,9 @@ part of a label, while empty separator lines at its end are removed. Thus
 trailing blank message lines and message content that imitates record or
 footer framing cannot be recovered unambiguously. Counter checks catch
 many such ambiguities, but this format is not a lossless event protocol.
-A future structured observer must record the actual event boundaries.
+The opt-in harness logging delimits supported invocations, but its initial
+decoder also supports only single-line verdicts. It does not remove this
+limitation from historical `.sum` inputs.
 
 Similarly, a file cut exactly after a valid footer cannot reveal that it
 was truncated. The run orchestrator must require successful process
@@ -171,7 +238,7 @@ semantic IDs require a distinct identity version and an explicit bridge.
 
 ## Library API
 
-`BscTestsuite.Verdict` exports the data constructors and these entry points:
+`Verdict` exports the data constructors and these entry points:
 
 ```haskell
 parseSummary       :: String -> FilePath -> FilePath -> String -> Either String Manifest

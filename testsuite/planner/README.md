@@ -1,8 +1,9 @@
 # BSC testsuite planner bootstrap
 
 This independent Haskell package provides strict population comparison, a Tcl
-source census, and an initial compile-only semantic planner. It does not execute
-tests or emit Buck2 targets yet. DejaGNU and make remain the execution backend.
+source census, an initial compile-only semantic planner, and supported-test
+provenance correlation. It does not execute tests or emit Buck2 targets yet.
+DejaGNU and make remain the execution backend.
 
 Run these commands from the repository root. GHC 9.6.7 or newer is required;
 the package uses only GHC boot libraries and needs no Hackage downloads.
@@ -18,13 +19,19 @@ cabal run -v0 --offline --project-dir=testsuite/planner bsc-test-plan -- census 
 cabal run -v0 --offline --project-dir=testsuite/planner bsc-test-plan -- census --json testsuite
 ```
 
-`plan --config NAME --suite-root ROOT TARGET` lowers a supported `.exp`, a
-`bsc.*` group, or the whole suite to versioned TestPlan JSON. If any selected
-script is unsupported, the command reports its location and emits no plan.
-`explain PLAN.json CHECK-ID` shows one check and all its prerequisites.
-Internal checks default to enabled. The initial vocabulary is package
-compilation, internal object loading, scalar assignments, and finite loops;
-see [PLAN.md](PLAN.md) for configuration, exact restrictions, and the schema's
+`plan --config NAME --suite-root ROOT TARGET` lowers a `.exp`, a `bsc.*` group,
+or the whole suite to version 3 semantic TestPlan JSON. Supported tests and
+located unsupported or unresolved items remain in source order. The command
+emits JSON and exits successfully for an incomplete plan, with diagnostics and
+counts on stderr; configuration, selection, and I/O errors remain fatal.
+Counts describe planned tests, unsupported constructs, and unresolved items,
+not runtime assertions. `explain PLAN.json TEST-OR-ISSUE-ID` describes one test's
+semantic obligations or one numbered issue's reason, with its source origin.
+
+Internal checks default to enabled and are derived by semantic procedures for
+expected-success compilation tests; they are not separate planned tests. The
+initial lowerer supports package compilation, audited scalar assignments, and
+finite loops. See [PLAN.md](PLAN.md) for the exact restrictions, v3 schema, and
 execution and identity boundaries.
 
 The Haskell test suite includes plan and explanation goldens. To additionally
@@ -33,7 +40,12 @@ test the real command-line interface:
 ```sh
 PLANNER=$(cabal list-bin --project-dir=testsuite/planner bsc-test-plan)
 python3 testsuite/planner/test/check_cli_plan.py "$PLANNER"
+python3 testsuite/planner/test/check_provenance.py
+python3 testsuite/planner/test/check_cli_correlate.py "$PLANNER"
 ```
+
+The direct-logging and correlation checks use installed Tcl and DejaGNU framework
+procedures with stub compiler calls. They do not run the compiler suite.
 
 The census reads source without executing Tcl, shell commands, or test programs.
 It reports lexical command sites and unsupported script bodies with their
@@ -57,6 +69,91 @@ comparison. It rejects empty corpora, parse errors, and all mismatches. Native
 Tcl folds constant argument expansions differently from our lexical `Expanded`
 word; such an input fails explicitly, and is not silently excluded. This gate
 does not validate semantic evaluation of nested script bodies.
+
+## Structure and reading guide
+
+The library modules live directly under `src/`. Start with the data types in
+`TestPlan.hs`, then `Procedures.hs` for what those tests mean. Next read
+`Lower.hs` for Tcl adaptation and `app/Main.hs` for command dispatch, selection,
+and reporting. For legacy correlation, read the small logging helpers and
+their direct calls in `testsuite/config/unix.exp`. The adapter uses `Tcl.hs` to read commands and words with source
+positions, statically evaluates audited assignments and finite loops, and
+adapts compilation declarations through the semantic procedures. Unsupported test
+procedures are retained without discarding adjacent supported tests. Opaque
+setup can make later declarations unresolved, and unknown assignments
+invalidate values instead of allowing stale substitution. `Tcl` is a lexical
+reader with limited scalar substitution support; it does not run Tcl.
+
+A plan contains configuration and scripts; script items contain
+tests or located planning issues. A test has a file-local test number, origin, and
+kind, currently compilation plus its expected result. `Procedures.hs` shares
+the meaning of `compilePass` and `compileFail` through `compilationTest`,
+including the derived internal-check obligation. These Haskell functions need
+not correspond one for one to Tcl helpers. The core contains no execution
+steps, action graph, workspace snapshots, or cache policy. Input and tool
+binding, shared-state execution, and cache safety remain backend work.
+Read the JSON codec and lexical parser last unless investigating serialization
+or Tcl syntax; they are supporting machinery rather than the test vocabulary.
+
+Two separate paths support migration: `Census.hs` inventories lexical source
+sites without proving they can be lowered, while `Verdict.hs` imports and
+strictly compares legacy DejaGNU summaries. Verdict identities and plan test
+identities remain separate. Opt-in provenance provides a checked bridge for
+supported compile-test invocations; see [IDENTITY.md](IDENTITY.md). A successful
+plan or supported-subset correlation does not establish whole-suite execution
+parity with the legacy harness.
+
+## Correlate supported tests with the legacy harness
+
+IDs use the `file-test-number-v1` identity: the suite-relative `.exp` path and a
+positive number. The counter resets for each script and advances only for
+recognized `compile_pass`/`compile_fail` invocations. A recognized call reserves
+a number even if static argument lowering fails. Other unsupported constructs
+have no number. Repeated loop invocations remain distinct, and internal object
+checks retain their parent test number. `explain` selectors have the form
+`v3:LENGTH:FILE:NUMBER`, such as `v3:18:bsc.plan/basic.exp:1`.
+
+Set `BSC_TEST_TRACE=1` when running the legacy suite to enable direct logging
+in `testsuite/config/unix.exp`. The existing baseline capture workflow below
+supplies the required suite settings and monitoring. DejaGNU's per-file tool
+hooks, `bsc_init` and `bsc_finish`, delimit each script. `compile_pass` and
+`compile_fail` call small logging helpers directly and supply one caller frame
+for source location. Calls from procedure wrappers are excluded from numbering.
+Metadata and ordinary verdicts stay in `testrun.log`; no separate trace files
+are created.
+
+Create a plan with the same internal-check setting and no global
+`--compiler-option` arguments, then:
+
+```sh
+BSC_TEST_TRACE=1 \
+  python3 testsuite/planner/scripts/capture-baselines.py \
+  --internal-checks 1 --runs 1 \
+  --output-dir testsuite/.stage1-validation/trace-baseline
+PLANNER=$(cabal list-bin --project-dir=testsuite/planner bsc-test-plan)
+"$PLANNER" correlate plan.json testsuite/.stage1-validation/trace-baseline/run-1
+```
+
+The capture requires the built compiler and supplemental tools described
+below. The version 1 trace protocol does not record global compiler options,
+so `correlate` rejects a nonempty plan `compiler_options` field. Even
+with that field empty, correlation does not verify the tool installation or
+ambient configuration; it establishes declaration correspondence, not full
+configuration equivalence.
+
+The second argument is a directory searched recursively for `testrun.log`
+files, or a specific log file. The readable report contains `MATCH`/`SKIP` rows,
+counts, and problems. Correlation checks source file and line, procedure
+family, resolved arguments, internal-check policy, and the expected
+compilation/object-load result roles. Ordinary final verdicts between the
+invocation markers are authoritative; internal checks have an explicit role
+marker. The initial decoder supports single-line verdicts only. Unhandled
+multiline metadata produces an unsupported marker and fails correlation.
+Missing or inconsistent markers, script errors, missing/extra or mismatched
+invocations, unexpected roles, and non-PASS ordinary results also fail. Numbered planning
+issues are skipped explicitly; unnumbered unsupported constructs alone do not
+block the supported tests. Unknown expansion and opaque setup remain coverage
+gaps. See [PLAN.md](PLAN.md) for the data protocol and exact boundary.
 
 ## Capture validation runs
 
@@ -211,8 +308,8 @@ repeated Bluesim execution labels. It does not infer semantic equivalence or
 deduplicate assertions. Reviewed causes and limitations are in the Stage 1
 status document.
 
-See [IDENTITY.md](IDENTITY.md) for legacy identity limitations and the future
-semantic-ID contract, and the [Stage 1 status](../../doc/testsuite-planner-stage1.md)
+See [IDENTITY.md](IDENTITY.md) for legacy identity limitations and the semantic
+test-ID contract, and the [Stage 1 status](../../doc/testsuite-planner-stage1.md)
 for rule placement, evidence, and remaining gates.
 
 On a machine whose Cabal repository has never been initialized, Cabal may try

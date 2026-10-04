@@ -1,12 +1,20 @@
--- | An intentionally non-semantic census. Recognising Tcl syntax does not
--- mean a test has been lowered: every command is reported as unsupported.
-module BscTestsuite.Census
+-- | Discover test scripts and inventory their Tcl syntax for migration work.
+--
+-- This module uses Tcl's lexical reader to report commands and inspect known
+-- script-body positions, without running the harness. The CLI also reuses its
+-- active-file discovery for planning, including enabled long-test symlinks.
+--
+-- The inventory is deliberately independent of Lower's accepted vocabulary.
+-- Its "not-yet-lowered" site markers describe lexical observations, not a
+-- semantic coverage verdict. Neither parsing a file nor counting its commands
+-- proves that it can be planned, executed, or matched to DejaGNU results.
+module Census
   ( CensusSite(..), CensusReport(..), censusText, censusFile, censusTree
   , censusTreeIncludingTemplates, renderCensusJson, renderCensusText
   ) where
 
 import Prelude hiding (Word)
-import BscTestsuite.Tcl
+import Tcl
 import Control.Monad (filterM, forM)
 import Data.Char (isDigit, ord)
 import Data.List (group, intercalate, isPrefixOf, isSuffixOf, sort)

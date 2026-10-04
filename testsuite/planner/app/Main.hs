@@ -1,3 +1,20 @@
+-- | Command-line I/O for the testsuite migration tools.
+--
+-- The commands separate planning, correspondence, and legacy comparison:
+--
+-- * plan: discover/read scripts with Census, lower Tcl with Lower, and
+--   serialize semantic tests and explicit unsupported/unresolved items.
+--   explain reads that plan back and describes a test or issue.
+-- * correlate: check a saved plan against opt-in legacy-harness observations
+--   of supported invocations, using numbers plus source and argument checks.
+-- * import-sum/compare: use Verdict to preserve and compare legacy DejaGNU
+--   observations while the new planner is being developed.
+--
+-- Census also exposes a lexical inventory; successful parsing there does not
+-- mean that Lower supports a script. A structurally valid plan preserves every
+-- selected script, including issues that prevent individual tests being planned.
+-- No command here executes compiler tests or submits work to Buck2. A backend
+-- and correspondence for the wider test vocabulary remain separate work.
 module Main (main) where
 
 import Control.Exception (IOException, catch)
@@ -12,10 +29,12 @@ import System.FilePath
   , splitDirectories, takeExtension, takeFileName )
 import System.IO (hPutStrLn, stderr)
 
-import BscTestsuite.Census
-import BscTestsuite.Lower
-import qualified BscTestsuite.TestPlan as Plan
-import BscTestsuite.Verdict
+import Census
+import Correlate
+import Lower
+import Procedures (explainTest)
+import qualified TestPlan as Plan
+import Verdict
 
 main :: IO ()
 main = (getArgs >>= run) `catch` ioErrorReport
@@ -29,7 +48,16 @@ run ["census", "--json", path] = census path >>= putStrLn . renderCensusJson
 run ("plan":arguments) = planCommand arguments
 run ["explain", planPath, identifier] = do
   plan <- readFile planPath >>= checked . Plan.decodePlan
-  checked (Plan.explainCheck plan identifier) >>= putStr
+  checked (explainTest plan identifier) >>= putStr
+run ["correlate", planPath, logPath] = do
+  plan <- readFile planPath >>= checked . Plan.decodePlan
+  files <- testLogFiles logPath
+  traces <- fmap concat $ forM files $ \file -> do
+    contents <- readFile file
+    checked (decodeTestLog file contents)
+  report <- checked (correlatePlan plan traces)
+  putStr (renderCorrelation report)
+  if null (correlationProblems report) then pure () else exitWith (ExitFailure 1)
 run ["import-sum", "--config", config, "--suite-root", root,
      "--expected", expected, summaries, output] = do
   suiteRoot <- makeAbsolute root
@@ -71,7 +99,8 @@ usage = unlines
   [ "Usage: bsc-test-plan census [--json] TESTSUITE-OR-EXP"
   , "       bsc-test-plan plan --config NAME --suite-root ROOT"
   , "         [--internal-checks 0|1] [--compiler-option OPTION]... TARGET"
-  , "       bsc-test-plan explain PLAN.json CHECK-ID"
+  , "       bsc-test-plan explain PLAN.json TEST-OR-ISSUE-ID"
+  , "       bsc-test-plan correlate PLAN.json LOG-DIRECTORY-OR-FILE"
   , "       bsc-test-plan import-sum --config NAME --suite-root ORIGINAL-ROOT"
   , "         --expected TEST-LIST SUMMARY-TREE OUTPUT.json"
   , "       bsc-test-plan compare --expected TEST-LIST BASELINE.json CANDIDATE.json"
@@ -80,7 +109,12 @@ usage = unlines
   , "SUMMARY-TREE preserves the test directory layout, containing testrun.sum."
   , "The census reports lexical sites, not successful semantic lowering."
   , "import-sum uses conservative legacy identities; see IDENTITY.md."
-  , "plan writes versioned JSON only if every selected script lowers."
+  , "plan writes semantic tests and explicit unsupported/unresolved items as JSON."
+  , "Issues and planned/unsupported/unresolved counts are reported on stderr."
+  , "A structurally valid plan succeeds even when it contains issues."
+  , "explain accepts a v3:LENGTH:FILE:NUMBER test or numbered issue identifier."
+  , "correlate matches supported invocations and their result roles to a saved plan."
+  , "It reads BSC-TEST markers and single-line verdicts from ordinary testrun.log files."
   , "TARGET is the suite root, a bsc.* group, or one .exp file."
   , "Internal checks default to enabled. Compiler options are explicit inputs."
   ]
@@ -137,13 +171,12 @@ planCommand arguments = do
   inputs <- forM files $ \file -> do
     source <- readFile file
     pure (makeRelative root file, source)
-  case lowerPlan configuration inputs of
-    Left issues -> do
-      mapM_ (hPutStrLn stderr . renderIssue) issues
-      hPutStrLn stderr ("No plan emitted: " ++ show (length issues) ++ " of " ++
-        show (length files) ++ " selected scripts could not be lowered.")
-      exitWith (ExitFailure 2)
-    Right plan -> putStrLn (Plan.encodePlan plan)
+  plan <- checked (lowerPlan configuration inputs)
+  mapM_ (hPutStrLn stderr . renderIssue) (Plan.planIssues plan)
+  let (planned, unsupported, unresolved) = Plan.planCounts plan
+  hPutStrLn stderr ("Plan: " ++ show planned ++ " planned, " ++
+    show unsupported ++ " unsupported, " ++ show unresolved ++ " unresolved.")
+  putStr (Plan.encodePlan plan)
 
 checked :: Either String a -> IO a
 checked = either (die . ("bsc-test-plan: " ++)) pure
@@ -175,3 +208,28 @@ summaryFiles root = walk root
           then walk path
           else pure [path | directory /= root && not isDirectory && not symbolic
                           && takeFileName path == "testrun.sum"]
+
+-- A directory may contain one ordinary testrun.log per test group. Never
+-- follow symlinks and accidentally mix a second run into the selected logs.
+testLogFiles :: FilePath -> IO [FilePath]
+testLogFiles root = do
+  symbolic <- pathIsSymbolicLink root
+  if symbolic then die "correlate: symbolic links are not accepted" else pure ()
+  directory <- doesDirectoryExist root
+  if directory then walk root else do
+    exists <- doesFileExist root
+    if exists
+      then pure [root]
+      else die "correlate: expected a log directory or file"
+  where
+    walk directory = do
+      names <- sort <$> listDirectory directory
+      fmap concat $ forM names $ \name -> do
+        let path = directory </> name
+        symbolic <- pathIsSymbolicLink path
+        nested <- doesDirectoryExist path
+        if symbolic then pure []
+          else if nested then walk path
+          else do
+            file <- doesFileExist path
+            pure [path | file && takeFileName path == "testrun.log"]

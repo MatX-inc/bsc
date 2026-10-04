@@ -1,6 +1,6 @@
 module VerdictTest (runTests) where
 
-import BscTestsuite.Verdict
+import Verdict
 import Control.Monad (unless)
 import Data.List (isInfixOf)
 import System.Exit (exitFailure)

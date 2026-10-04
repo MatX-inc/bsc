@@ -1,6 +1,16 @@
--- | Strict import and comparison for the legacy DejaGNU result identity.
--- This is deliberately not the planner's eventual semantic check identity.
-module BscTestsuite.Verdict
+-- | Preserve legacy DejaGNU observations while the execution backend changes.
+--
+-- Per-directory summaries become manifests containing discoveries, individual
+-- verdicts, and diagnostics. Validation checks summary totals and the expected
+-- test population before comparison; repeated labels retain an occurrence
+-- number instead of being merged.
+--
+-- This path is independent of TestPlan. Legacy identities use exact labels,
+-- which can change with the outcome, whereas planned checks use source sites.
+-- Mapping those identities still needs an explicit bridge. The text summary
+-- format also cannot recover arbitrary ambiguous multiline messages, and two
+-- equal manifests can contain the same failures: equality alone is not a pass.
+module Verdict
   ( Disposition(..), CheckId(..), Verdict(..), DiagnosticKind(..), Diagnostic(..)
   , Manifest(..), Difference(..)
   , parseSummary, mergeManifests, validateManifest, validateDiscovery

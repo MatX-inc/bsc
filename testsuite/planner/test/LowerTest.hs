@@ -1,8 +1,9 @@
 module LowerTest (runTests) where
 
-import BscTestsuite.Lower
-import BscTestsuite.Tcl (SourcePos(..))
-import BscTestsuite.TestPlan
+import Lower
+import Procedures (compilePass, compileFail, internalChecksFor, InternalCheck(..), explainTest, supportedProcedures)
+import Tcl (SourcePos(..))
+import TestPlan
 import Control.Monad (forM_, unless)
 import Data.List (intercalate, isInfixOf, nub)
 import System.Exit (ExitCode(..))
@@ -14,102 +15,111 @@ runTests = do
   evaluationTests
   differentialTests
   identityTests
-  rejectionTests
-  putStrLn "Test-plan lowering, identity, and rejection tests passed."
+  partialPlanTests
+  unsupportedTests
+  putStrLn "Semantic procedures, Tcl adaptation, identity, and partial-plan tests passed."
 
 check :: String -> Bool -> IO ()
 check label ok = unless ok (ioError (userError ("LowerTest: " ++ label)))
 
 config :: PlanConfig
-config = PlanConfig
-  { configName = "lowering-test"
-  , configInternalChecks = True
-  , configCompilerOptions = []
-  }
+config = PlanConfig "lowering-test" True []
 
 testPath :: FilePath
 testPath = "bsc.plan/example.exp"
 
-loweredWith :: PlanConfig -> String -> Scenario
-loweredWith options input = case lowerTest options testPath input of
-  Left issue -> error ("LowerTest fixture did not lower: " ++ renderIssue issue)
-  Right scenario -> scenario
+loweredWith :: PlanConfig -> String -> TestPlan
+loweredWith options input = case lowerPlan options [(testPath, input)] of
+  Left err -> error ("LowerTest fixture did not lower: " ++ err)
+  Right plan -> plan
 
-lowered :: String -> Scenario
+lowered :: String -> TestPlan
 lowered = loweredWith config
 
-compileSteps :: Scenario -> [Step]
-compileSteps scenario =
-  [step | step <- scenarioSteps scenario, BscCompile _ _ _ <- [stepOperation step]]
+compilations :: TestPlan -> [Compilation]
+compilations plan = [compilation | test <- plannedTests plan,
+                                  CompilationTest compilation _ <- [testKind test]]
 
-compilations :: Scenario -> [(FilePath, [String])]
-compilations scenario =
-  [(source, flags) | step <- compileSteps scenario,
-                    BscCompile source flags _ <- [stepOperation step]]
-
-ordinaryChecks :: Scenario -> [Check]
-ordinaryChecks = filter ((== Ordinary) . checkClass) . scenarioChecks
-
-internalChecks :: Scenario -> [Check]
-internalChecks = filter ((== Internal) . checkClass) . scenarioChecks
+sourceOptions :: TestPlan -> [(FilePath, [String])]
+sourceOptions = map (\c -> (compilationSource c, compilationOptions c)) . compilations
 
 compileTests :: IO ()
 compileTests = do
   let success = lowered "compile_pass Good.bs\n"
       failure = lowered "compile_fail Bad.bs\n"
-      noInternal = loweredWith (config { configInternalChecks = False })
-        "compile_pass Good.bs\n"
-  check "successful compilation has its source and flags"
-    (compilations success == [("Good.bs", [])])
-  check "compile_pass expects compiler success"
-    (map checkExpectation (ordinaryChecks success) == [ToolSucceeds])
-  check "compile_fail expects compiler failure"
-    (map checkExpectation (ordinaryChecks failure) == [ToolFails])
-  check "internal loading is an explicit operation following compilation"
-    (map stepOperation (scenarioSteps success) ==
-      [stepOperation (head (compileSteps success)), InternalLoad "Good.bo"])
-  check "internal loading has its own success assertion"
-    (map checkExpectation (internalChecks success) == [ToolSucceeds])
-  check "expected compiler failures do not acquire an internal load"
-    (length (scenarioSteps failure) == 1 && null (internalChecks failure))
-  check "configuration can disable internal loading and assertions"
-    (length (scenarioSteps noInternal) == 1 && null (internalChecks noInternal))
-  check "every assertion names a producer in the scenario"
-    (all (\assertion -> checkProducer assertion `elem` map stepId (scenarioSteps success))
-      (scenarioChecks success))
-  check "single-compile scenarios require local execution"
-    (all ((== LocalOnly) . stepCacheability) (scenarioSteps success))
-  check "operations declare the source or produced workspace they consume"
-    (all (not . null . stepInputs) (scenarioSteps success))
-  check "legacy nodeps defaults to compiling dependencies"
-    ([dependencies | step <- compileSteps success,
-                     BscCompile _ _ dependencies <- [stepOperation step]] == [True])
+      noInternalConfig = config { configInternalChecks = False }
+      noInternal = loweredWith noInternalConfig "compile_pass Good.bs\n"
+      successKind = testKind (head (plannedTests success))
+      failureKind = testKind (head (plannedTests failure))
+  check "compile_pass describes an expected-success package compilation"
+    (successKind == CompilationTest (Compilation "Good.bs" [] True) CompileSucceeds)
+  check "compile_fail describes an expected-failure package compilation"
+    (failureKind == CompilationTest (Compilation "Bad.bs" [] True) CompileFails)
+  check "internal object inspection belongs to the expected-success test"
+    (internalChecksFor config successKind == Right [ObjectLoads "Good.bo"])
+  check "expected compiler failures have no automatic object inspection"
+    (internalChecksFor config failureKind == Right [])
+  check "internal-check policy changes obligations without changing tests"
+    (plannedTests noInternal == plannedTests success &&
+     internalChecksFor noInternalConfig successKind == Right [])
+  let origin = SourcePos testPath 1 1 0
+      identifier = Identifier testPath 1
+      invocation = Compilation "Good.bs" [] True
+  check "Tcl compile_pass uses the shared semantic procedure"
+    (compilePass config identifier origin invocation == Right (head (plannedTests success)))
+  check "semantic compileFail does not need a Tcl source adapter"
+    (fmap testKind (compileFail config identifier origin invocation) ==
+      Right (CompilationTest invocation CompileFails))
+  check "only implemented semantic procedures reserve invocation numbers"
+    (supportedProcedures == ["compile_pass", "compile_fail"])
+  check "resolved invocation adapter agrees with source lowering"
+    (lowerInvocation config identifier origin "compile_pass" ["Good.bs"] ==
+      Right (head (plannedTests success)))
+  let later = Identifier testPath 8
+  check "resolved invocations retain later numbers, options, dependencies and expectation"
+    (lowerInvocation config later origin "compile_fail" ["Bad.bs", "-v", "1"] ==
+      Right (Test later origin (CompilationTest (Compilation "Bad.bs" ["-v"] False) CompileFails)))
+  forM_ [("compile_pass", ["Good.bs", "-unknown"]),
+         ("compile_pass", []), ("compile_verilog_pass", ["Good.bs"])] $ \(name, args) ->
+    check "resolved invocation adapter rejects unsupported calls"
+      (case lowerInvocation config identifier origin name args of
+        Left _ -> True
+        Right _ -> False)
+  check "semantic constructors reject invalid identities and origins"
+    (case compilePass config (Identifier "../invalid.exp" 0)
+            (SourcePos "other.exp" 0 0 (-1)) invocation of
+      Left _ -> True
+      Right _ -> False)
+  check "deliberately missing sources remain valid negative tests"
+    (planCounts (lowered "compile_fail DoesNotExist.bs") == (1,0,0))
   let dependencyModes = lowered $ unlines
-        [ "compile_pass WithDependencies.bs {} 0"
-        , "compile_pass WithoutDependencies.bs {} 1"
-        ]
-  check "legacy nodeps 0 and 1 explicitly select dependency compilation"
-    ([dependencies | step <- compileSteps dependencyModes,
-                     BscCompile _ _ dependencies <- [stepOperation step]] == [True, False])
+        ["compile_pass WithDependencies.bs {} 0", "compile_pass WithoutDependencies.bs {} 1"]
+  check "nodeps is inverted into a positive dependency-compilation choice"
+    (map compilationDependencies (compilations dependencyModes) == [True, False])
   let several = lowered "compile_pass First.bs\ncompile_fail Second.bs\n"
-      steps = scenarioSteps several
-  check "sequences preserve compiler invocation order"
-    (map fst (compilations several) == ["First.bs", "Second.bs"])
-  check "multi-compile sequences disable caching for every operation"
-    (all ((== Never) . stepCacheability) steps)
-  check "sequence operations depend on their immediate predecessor"
-    (and [stepId previous `elem` stepDependsOn next
-         | (previous, next) <- zip steps (drop 1 steps)])
-  check "the first operation has no predecessor"
-    (null (stepDependsOn (head steps)))
+  check "multiple declarations retain their source order and test kinds"
+    (map compilationSource (compilations several) == ["First.bs", "Second.bs"] &&
+     planCounts several == (2,0,0))
   let configured = loweredWith
         (config { configCompilerOptions = ["-v", "-let-gen"] })
-        "compile_pass Configured.bs {-no-let-gen -dinternal}\n"
-  check "configuration flags precede invocation flags without deduplication"
-    (compilations configured ==
-      [("Configured.bs", ["-v", "-let-gen", "-no-let-gen", "-dinternal"])])
-  check "legacy BSV source names are accepted"
-    (compilations (lowered "compile_pass Existing.bsv") == [("Existing.bsv", [])])
+        "compile_pass Configured.bs {-v -no-let-gen -dinternal}\n"
+  check "configuration flags precede local flags with duplicates preserved"
+    (sourceOptions configured ==
+      [("Configured.bs", ["-v", "-let-gen", "-v", "-no-let-gen", "-dinternal"])])
+  check "legacy BSV sources are accepted"
+    (sourceOptions (lowered "compile_pass Existing.bsv") == [("Existing.bsv", [])])
+  let unsupportedOptions = success { planScripts = [ScriptPlan testPath
+        [Planned (head (plannedTests success)) { testKind = CompilationTest
+          (Compilation "Good.bs" ["-bdir", "elsewhere"] True) CompileSucceeds }]] }
+  check "explanation rejects semantics not supported by the current procedures"
+    (validatePlan unsupportedOptions == Right () &&
+     case explainTest unsupportedOptions (renderIdentifier identifier) of
+       Left _ -> True
+       Right _ -> False)
+  check "internal-check derivation also rejects unsupported artifact redirection"
+    (case internalChecksFor config (testKind (head (plannedTests unsupportedOptions))) of
+       Left _ -> True
+       Right _ -> False)
 
 evaluationTests :: IO ()
 evaluationTests = do
@@ -120,14 +130,14 @@ evaluationTests = do
         , "compile_pass ${stem}.$extension \"$flags -let-gen\""
         ]
   check "scalar variables interpolate in bare and quoted words"
-    (compilations interpolated == [("Example.bs", ["-v", "-let-gen"])])
+    (sourceOptions interpolated == [("Example.bs", ["-v", "-let-gen"])])
   let variants = lowered $ unlines
         [ "foreach flags {{} {-v} {-v}} {"
         , "  compile_pass Example.bs $flags"
         , "}"
         ]
   check "foreach list parsing preserves empty and repeated flag variants"
-    (compilations variants ==
+    (sourceOptions variants ==
       [("Example.bs", []), ("Example.bs", ["-v"]), ("Example.bs", ["-v"])])
   let nested = lowered $ unlines
         [ "set variants {{} {-v}}"
@@ -136,7 +146,7 @@ evaluationTests = do
         , "}"
         ]
   check "nested loops expand in Tcl execution order"
-    (compilations nested ==
+    (sourceOptions nested ==
       [("One.bs", []), ("One.bs", ["-v"]),
        ("Two.bs", []), ("Two.bs", ["-v"])])
   let empty = lowered $ unlines
@@ -144,20 +154,20 @@ evaluationTests = do
         , "compile_pass After.bs"
         ]
   check "an empty foreach performs no body invocation"
-    (compilations empty == [("After.bs", [])])
+    (sourceOptions empty == [("After.bs", [])])
   let assignment = lowered $ unlines
         [ "set source Before.bs"
         , "foreach unused {first second} {set source After.bs}"
         , "compile_pass $source"
         ]
   check "foreach scalar assignments remain visible after the loop"
-    (compilations assignment == [("After.bs", [])])
+    (sourceOptions assignment == [("After.bs", [])])
   let lastValue = lowered $ unlines
         [ "foreach source {One.bs Two.bs} {}"
         , "compile_pass $source"
         ]
   check "foreach leaves its variable bound to the final element"
-    (compilations lastValue == [("Two.bs", [])])
+    (sourceOptions lastValue == [("Two.bs", [])])
 
 -- These fixed scripts run only against inert stubs. Never evaluate repository
 -- test scripts: the oracle here checks language semantics, not compiler results.
@@ -178,8 +188,7 @@ differentialTests = forM_ fixtures $ \input -> do
       expected =
         [intercalate "|" (flags ++ ["-no-show-timestamps", "-no-show-version"] ++
            (if dependencies then ["-u"] else []) ++ [source])
-        | step <- compileSteps (lowered input)
-        , BscCompile source flags dependencies <- [stepOperation step]]
+        | Compilation source flags dependencies <- compilations (lowered input)]
   (exitCode, output, errors) <- readProcessWithExitCode "tclsh" [] (prelude ++ input ++ "\n")
   check ("inert Tcl oracle succeeds: " ++ show input)
     (exitCode == ExitSuccess && null errors)
@@ -199,86 +208,146 @@ differentialTests = forM_ fixtures $ \input -> do
 identityTests :: IO ()
 identityTests = do
   let original = lowered $ unlines
-        [ "set flags {-v}"
-        , "foreach source {One.bs Two.bs} {compile_pass $source $flags}"
-        ]
+        ["set flags {-v}", "foreach source {One.bs Two.bs} {compile_pass $source $flags}"]
       spaced = lowered $ unlines
-        [ "# A comment before the same program."
-        , ""
-        , "  set flags {-v}; # A comment after the assignment."
+        [ "# The same program with comments."
+        , "  set flags {-v}; # comment"
         , "foreach source {One.bs Two.bs} {"
-        , "  # The body still has one command."
+        , "  # one command"
         , "  compile_pass   $source   $flags"
         , "}"
         ]
-  check "harmless whitespace and comments preserve operation identities"
-    (map stepId (scenarioSteps original) == map stepId (scenarioSteps spaced))
-  check "harmless whitespace and comments preserve assertion identities"
-    (map checkId (scenarioChecks original) == map checkId (scenarioChecks spaced))
-  let success = lowered "compile_pass Same.bs\n"
-      failure = lowered "compile_fail Same.bs\n"
-      changed = lowered "compile_pass Changed.bs {-v}\n"
-      noInternal = loweredWith (config { configInternalChecks = False })
-        "compile_pass Same.bs\n"
-  check "expected pass versus fail does not rename the compiler operation"
-    (map stepId (compileSteps success) == map stepId (compileSteps failure))
-  check "expected pass versus fail does not rename the ordinary assertion"
-    (map checkId (ordinaryChecks success) == map checkId (ordinaryChecks failure))
-  check "source and flag edits retain source-address identities"
-    (map stepId (compileSteps success) == map stepId (compileSteps changed) &&
-     map checkId (ordinaryChecks success) == map checkId (ordinaryChecks changed))
-  check "internal-check policy does not rename the ordinary work"
-    (map stepId (compileSteps success) == map stepId (compileSteps noInternal) &&
-     map checkId (ordinaryChecks success) == map checkId (ordinaryChecks noInternal))
-  let duplicate = lowered "foreach source {Same.bs Same.bs} {compile_pass $source}\n"
-      operationIds = map stepId (scenarioSteps duplicate)
-      assertionIds = map checkId (scenarioChecks duplicate)
-  check "repeated loop values produce distinct compiler invocations"
-    (length (compileSteps duplicate) == 2 &&
-     length (nub (map stepId (compileSteps duplicate))) == 2)
-  check "all operation and assertion identities are unique across loop iterations"
-    (length (nub (operationIds ++ assertionIds)) == length operationIds + length assertionIds)
-  check "automatic internal work stays associated with its compiler source address"
-    (and [identifierSite (stepId compiler) == identifierSite (checkId assertion)
-         | (compiler, assertion) <- zip (compileSteps duplicate) (internalChecks duplicate)])
-  let other = case lowerTest config "bsc.plan/other.exp" "compile_pass Same.bs\n" of
-        Left issue -> error (renderIssue issue)
-        Right scenario -> scenario
-  check "test paths distinguish otherwise identical source addresses"
-    (map stepId (compileSteps success) /= map stepId (compileSteps other))
+      ids = map testId . plannedTests
+  check "comments and whitespace preserve test identities" (ids original == ids spaced)
+  let unrelated = lowered $ unlines
+        [ "set unused ignored", "set flags {-v}"
+        , "compile_verilog_pass Ignored.bs"
+        , "foreach source {One.bs Two.bs} {set unused ignored; compile_pass $source $flags}"
+        ]
+  check "unrelated assignments and unsupported helpers do not renumber tests"
+    (ids original == ids unrelated && map issueId (planIssues unrelated) == [Nothing])
+  let opaqueHelper = lowered "compile_pass First.bs; unknown_helper; compile_fail Second.bs"
+      counted plan = [identifier | script <- planScripts plan, item <- scriptItems script,
+                        Just identifier <- [case item of
+                          Planned test -> Just (testId test)
+                          Unplanned issue -> issueId issue]]
+  check "arbitrary unsupported helpers do not consume a number when they block later tests"
+    (map identifierNumber (counted opaqueHelper) == [1,2] &&
+     map (fmap identifierNumber . issueId) (planIssues opaqueHelper) == [Nothing, Just 2])
+  let success = lowered "compile_pass Same.bs"
+      failure = lowered "compile_fail Same.bs"
+      changed = lowered "compile_pass Changed.bs {-v}"
+  check "expected outcome, source and flags do not rename the invocation"
+    (ids success == ids failure && ids success == ids changed)
+  let duplicate = lowered "foreach source {Same.bs Same.bs} {compile_pass $source}"
+  check "repeated loop values describe distinct tests"
+    (length (nub (ids duplicate)) == 2 &&
+     map identifierNumber (ids duplicate) == [1,2])
+  let other = either error id (lowerPlan config [("bsc.plan/other.exp", "compile_pass Same.bs")])
+  check "script paths distinguish identical invocation numbers" (ids success /= ids other)
+  let files = either error id (lowerPlan config
+        [(testPath, "compile_pass One.bs; compile_fail Two.bs"),
+         ("bsc.plan/other.exp", "compile_pass Three.bs")])
+  check "invocation counters restart in every script"
+    (map (identifierNumber . testId) (plannedTests files) == [1,2,1])
 
-rejectionTests :: IO ()
-rejectionTests = do
-  forM_ unsupported $ \(label, input) -> do
-    let positioned = "# The unsupported construct begins below.\n" ++ input ++ "\n"
-    case lowerTest config testPath positioned of
-      Right _ -> check (label ++ " must not produce a plan") False
-      Left issue -> do
-        let position = issuePosition issue
-        check (label ++ " has the logical test path") (sourceFile position == testPath)
-        check (label ++ " has a source line and column")
-          (sourceLine position >= 2 && sourceColumn position >= 1)
-        check (label ++ " names its construct and reason")
-          (not (null (issueConstruct issue)) && not (null (issueReason issue)))
-        check (label ++ " renders a located diagnostic")
-          (testPath `isInfixOf` renderIssue issue && issueReason issue `isInfixOf` renderIssue issue)
-  case lowerPlan config
-    [("bsc.plan/good.exp", "compile_pass Good.bs"),
-     ("bsc.plan/bad.exp", "exec forbidden")] of
-    Right _ -> check "one unsupported test rejects the whole requested plan" False
-    Left issues -> check "whole-plan failure identifies the unsupported test"
-      (any ((== "bsc.plan/bad.exp") . sourceFile . issuePosition) issues)
-  case lowerPlan config
-    [("bsc.plan/a.exp", "compile_pass A.bs"),
-     ("bsc.plan/b.exp", "compile_fail B.bs")] of
-    Left issues -> ioError (userError (unlines (map renderIssue issues)))
-    Right plan -> check "all supported inputs appear in the complete plan"
-      (length (planScenarios plan) == 2)
-  forM_ [config { configName = "" }, config { configCompilerOptions = ["-unknown"] }] $ \badConfig ->
-    check "invalid configuration is rejected before producing a scenario"
-      (case lowerTest badConfig testPath "compile_pass Good.bs" of
+partialPlanTests :: IO ()
+partialPlanTests = do
+  let mixed = lowered $ unlines
+        ["compile_pass Before.bs", "compile_verilog_pass Other.bs", "compile_pass After.bs"]
+  check "unsupported test kinds preserve independent tests on both sides"
+    (planCounts mixed == (2,1,0) &&
+     map compilationSource (compilations mixed) == ["Before.bs", "After.bs"])
+  check "known diagnostic tests do not poison subsequent independent tests"
+    (planCounts (lowered "compile_fail_error Bad.bs T0001; compile_pass Good.bs") == (1,1,0))
+  let opaque = lowered $ unlines
+        ["compile_pass Before.bs", "exec forbidden", "compile_pass After.bs"]
+  check "opaque effects preserve the prefix and mark subsequent tests unresolved"
+    (planCounts opaque == (1,1,1) &&
+     "unsupported item" `isInfixOf` issueReason (last (planIssues opaque)))
+  let stale = lowered $ unlines
+        [ "set source Before.bs", "set source $missing"
+        , "compile_pass Independent.bs", "compile_pass $source"
+        ]
+  check "unresolved assignments invalidate old values without poisoning independent literals"
+    (planCounts stale == (1,0,2) &&
+     map compilationSource (compilations stale) == ["Independent.bs"])
+  let recovered = lowered $ unlines
+        ["set source $missing", "set source Good.bs", "compile_pass $source"]
+  check "a later known assignment restores that scalar"
+    (planCounts recovered == (1,0,1))
+  let reserved = lowered "set outdir elsewhere; compile_pass Good.bs"
+      substitution = lowered "compile_pass [exec forbidden]; compile_pass Good.bs"
+  check "reserved state and command substitutions leave setup unknown"
+    (planCounts reserved == (0,1,1) && planCounts substitution == (0,1,1))
+  forM_ ["compile_pass A.bs {[set ::source New.bs]}",
+         "compile_pass $srcdir {[set ::source New.bs]}",
+         "compile_verilog_pass A.bs {} {[set ::source New.bs]}",
+         "compile_pass A.bs {-v; set ::source New.bs}"] $ \invocation -> do
+    let secondParse = lowered ("set source Old.bs\n" ++ invocation ++ "\ncompile_pass $source")
+    check "second-pass Tcl effects invalidate later declarations"
+      (null (plannedTests secondParse) && length (planIssues secondParse) == 2 &&
+       issueKind (last (planIssues secondParse)) == UnresolvedDependency)
+  let loop = lowered $ unlines
+        [ "foreach source {A.bs B.bs} {"
+        , "  compile_pass $source {-unknown}"
+        , "  compile_pass $source"
+        , "}"
+        ]
+  check "unsupported invocations are counted separately in every loop iteration"
+    (planCounts loop == (2,2,0) &&
+     map (fmap identifierNumber . issueId) (planIssues loop) == [Just 1, Just 3])
+  check "loop successes follow numbers reserved for unsupported invocations"
+    (map (identifierNumber . testId) (plannedTests loop) == [2,4])
+  let failedCalls = lowered "compile_pass; compile_fail $missing; compile_pass Later.bs"
+  check "wrong arity and unresolved arguments both reserve invocation numbers"
+    (map (fmap identifierNumber . issueId) (planIssues failedCalls) ==
+      [Just 1, Just 2, Just 3])
+  let numberedIssue = head (planIssues loop)
+  check "numbered issues can be explained"
+    (case issueId numberedIssue >>= either (const Nothing) Just . explainTest loop . renderIdentifier of
+      Just description -> "unsupported" `isInfixOf` description
+      Nothing -> False)
+  let independent = either error id (lowerPlan config
+        [(testPath, "compile_pass {broken"), ("bsc.plan/good.exp", "compile_pass Good.bs")])
+  check "a syntax error retains its script and permits other scripts to lower"
+    (length (planScripts independent) == 2 && planCounts independent == (1,1,0) &&
+     map issueId (planIssues independent) == [Nothing])
+  -- Empty loop bodies must still consume the finite static expansion budget.
+  let values = unwords (replicate 320 "x")
+      large = lowered ("foreach x {" ++ values ++ "} {foreach y {" ++ values ++ "} {}}")
+  check "nested empty loops cannot evade the expansion bound"
+    (planCounts large == (0,1,0) &&
+     "remaining commands and iterations were not inspected" `isInfixOf`
+       issueReason (head (planIssues large)))
+  let doubling = lowered ("set x x; foreach i {" ++ unwords (replicate 24 "1") ++
+        "} {set x \"$x $x\"}; foreach i $x {}; compile_pass Independent.bs")
+  check "scalar expansion is bounded before parsing the resulting list"
+    (any (isInfixOf "expanded scalar exceeds" . issueReason) (planIssues doubling))
+  forM_ ["{}", "{odd\ncommand}", "{odd\tcommand}"] $ \command -> do
+    let unusual = lowered (command ++ "; compile_pass Good.bs")
+    check "unusual command names remain representable issues"
+      (planCounts unusual == (0,1,1) && decodePlan (encodePlan unusual) == Right unusual)
+  forM_ [config { configName = "" }, config { configCompilerOptions = ["-unknown"] }] $ \bad ->
+    check "invalid global configuration remains a fatal invocation error"
+      (case lowerPlan bad [(testPath, "compile_pass Good.bs")] of
         Left _ -> True
         Right _ -> False)
+
+unsupportedTests :: IO ()
+unsupportedTests = forM_ unsupported $ \(label, input) -> do
+  let positioned = "# The unsupported construct begins below.\n" ++ input ++ "\n"
+      plan = lowered positioned
+  check (label ++ " is retained as an issue") (not (null (planIssues plan)))
+  forM_ (planIssues plan) $ \issue -> do
+    let position = issuePosition issue
+    check (label ++ " has the logical test path") (sourceFile position == testPath)
+    check (label ++ " has a source line and column")
+      (sourceLine position >= 2 && sourceColumn position >= 1)
+    check (label ++ " names its construct and reason")
+      (not (null (issueConstruct issue)) && not (null (issueReason issue)))
+    check (label ++ " renders a located diagnostic")
+      (testPath `isInfixOf` renderIssue issue && issueReason issue `isInfixOf` renderIssue issue)
   where
     unsupported =
       [ ("command substitution", "compile_pass [exec forbidden]")

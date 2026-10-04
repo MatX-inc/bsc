@@ -1,6 +1,16 @@
--- | A lexical reader for standard Tcl 8.6, not an interpreter. No source file
--- or command is run. Backslash Unicode escapes follow Tcl 8.6's BMP result.
-module BscTestsuite.Tcl
+-- | Read Tcl 8.6 syntax without running Tcl commands or sourcing files.
+--
+-- Commands and words retain both their source positions and raw spelling, so
+-- Census can inventory scripts and Lower can report unsupported constructs at
+-- their origin. A word also carries its decoded value when no substitution is
+-- needed; nested command syntax can be recorded without executing it.
+--
+-- Parsing accepts more syntax than the planner can lower. The only evaluation
+-- helper here resolves scalar substitutions through a caller-supplied lookup;
+-- Lower owns the variable environment and decides which commands are allowed.
+-- Arrays, command execution, and ambient Tcl state are not interpreted here.
+-- Escape decoding follows Tcl 8.6, including its BMP Unicode escape result.
+module Tcl
   ( SourcePos(..), TclError(..), WordKind(..), Word(..), Command(..), Script(..)
   , parseScript, parseScriptAt, parseListAt, staticWord, resolveScalarWord
   ) where

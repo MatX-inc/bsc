@@ -1,7 +1,7 @@
 -- Parser-only companion to native-tcl-boundaries.c; never evaluates Tcl.
 module Main (main) where
 
-import BscTestsuite.Tcl
+import Tcl
 import Control.Exception (evaluate)
 import Control.Monad (forM_)
 import Data.Array (listArray, (!))

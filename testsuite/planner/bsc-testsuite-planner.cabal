@@ -21,9 +21,12 @@ extra-source-files:
   test/check_capture_lifecycle.py
   test/check_hidden_evidence.py
   test/check_cli_plan.py
+  test/check_provenance.py
+  test/check_cli_correlate.py
   test/fixtures/plan/*.tcl
   test/fixtures/plan/*.json
   test/fixtures/plan/*.txt
+  test/fixtures/provenance/*.tcl
 
 common defaults
   default-language: Haskell2010
@@ -38,11 +41,13 @@ library
   import: defaults
   hs-source-dirs: src
   exposed-modules:
-    BscTestsuite.Verdict
-    BscTestsuite.Tcl
-    BscTestsuite.Census
-    BscTestsuite.TestPlan
-    BscTestsuite.Lower
+    Verdict
+    Tcl
+    Census
+    TestPlan
+    Procedures
+    Lower
+    Correlate
 
 executable bsc-test-plan
   import: defaults
@@ -55,5 +60,5 @@ test-suite planner-tests
   type: exitcode-stdio-1.0
   hs-source-dirs: test
   main-is: Main.hs
-  other-modules: VerdictTest, CensusTest, TestPlanTest, LowerTest, PlanGoldenTest
+  other-modules: VerdictTest, CensusTest, TestPlanTest, LowerTest, PlanGoldenTest, CorrelateTest
   build-depends: bsc-testsuite-planner, process

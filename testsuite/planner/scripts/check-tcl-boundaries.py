@@ -107,7 +107,7 @@ def compare(repo, work, ghc):
     if not paths:
         raise ValueError("no active testsuite/bsc.* .exp files found")
     before = checksum(repo, paths)
-    lexer = PLANNER / "src/BscTestsuite/Tcl.hs"
+    lexer = PLANNER / "src/Tcl.hs"
     lexer_before = hashlib.sha256(lexer.read_bytes()).hexdigest()
     print(f"Comparing {len(paths)} active .exp files; no Tcl evaluation.",
           flush=True)
