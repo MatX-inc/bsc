@@ -2,8 +2,12 @@ module BackendNamingConventions
     (
      createVerilogNameMap,
      createVerilogNameMapForAVInst,
+     instPortMap,
      xLateIdUsingFStringMap,
      xLateFStringUsingFStringMap,
+
+     inlinedRegInst, inlinedWireInst, inlinedBypassWireInst, inlinedCRegInst,
+     verilogPortFString, statePortId,
 
      isRegInst, isClockCrossingRegInst,
      isRegN, isRegUN, isRegA, isRegAligned,
@@ -38,7 +42,7 @@ import PreStrings(fsDollar, fsUnderscore, fsEnable)
 import PreIds(idVReg)
 import Error
 import PPrint
-import Flags(Flags, removeReg, removeCross)
+import Flags(Flags, removeReg, removeCross, removeRWire, removeCReg)
 
 import Position(Position, getPosition, noPosition)
 
@@ -432,6 +436,41 @@ cregToReg old_avi =
                }
 
 -- ==============================
+-- Inlined instances
+
+-- Which submodule instances the Verilog back end removes, so that no
+-- instance-port wires are generated for them:
+--   * registers are inlined by vInlineReg (AVerilog) under "removeReg"
+--   * RWire, RWire0, BypassWire and BypassWire0 instances are inlined by
+--     aInlineWires under "removeRWire"
+--   * CReg instances are inlined by aInlineCReg under "removeCReg"
+-- A clock-crossing register or BypassWire is only inlined when crossing
+-- primitives are inlined as well ("removeCross").
+-- These predicates are the one definition of those decisions, shared by
+-- the passes above and by the port-spelling functions below.
+
+inlinedRegInst :: Flags -> AVInst -> Bool
+inlinedRegInst flags avi =
+    (removeReg flags) && (isRegInst avi) &&
+    ((not (isClockCrossingRegInst avi)) || (removeCross flags))
+
+-- the BypassWire instances that aInlineWires removes
+-- (the pass only runs under "removeRWire", which is not tested here)
+inlinedBypassWireInst :: Flags -> AVInst -> Bool
+inlinedBypassWireInst flags avi =
+    (isBypassWire avi) &&
+    ((not (isClockCrossingBypassWire avi)) || (removeCross flags))
+
+inlinedWireInst :: Flags -> AVInst -> Bool
+inlinedWireInst flags avi =
+    (removeRWire flags) &&
+    ((isRWire avi) || (isRWire0 avi) || (isBypassWire0 avi) ||
+     (inlinedBypassWireInst flags avi))
+
+inlinedCRegInst :: Flags -> AVInst -> Bool
+inlinedCRegInst flags avi = (removeCReg flags) && (isCRegInst avi)
+
+-- ==============================
 -- Create a Verilog name map
 
 -- For all instantiated submodules, create a mapping of identifiers
@@ -462,11 +501,46 @@ createVerilogNameMapForAVInst flags avi@(AVInst { avi_vname = inst_id,
         -- create a special map for register instance (without $Q_OUT)
         reg_map = updateVerilogNameMapForReg avi default_map
         -- choose which to return
-        result = if ((removeReg flags) && (isRegInst avi) && ((not (isClockCrossingRegInst avi)) || (removeCross flags)))
+        result = if (inlinedRegInst flags avi)
                  then reg_map
                  else default_map
     in  -- trace("result =" ++ (ppReadable result)) $
         result
+
+-- the map for one instance, keyed by the method spelling (mkMethStr)
+instPortMap :: Flags -> AVInst -> M.Map FString FString
+instPortMap flags avi = M.fromList (createVerilogNameMapForAVInst flags avi)
+
+-- ==============================
+-- The final spelling of an instance port
+
+-- The name of the Verilog signal connected to the port of instance "avi"
+-- that method "m" (copy "ino", part "part") uses: the value that
+-- createVerilogNameMapForAVInst gives for the method spelling of that
+-- port.  So "r$write_1" becomes "r$D_IN"; "r$read" becomes "r" when the
+-- register is inlined (else "r$Q_OUT"); a method of multiplicity > 1 gets
+-- "_<copy+1>" appended; and an always-enabled (inhigh) enable gets the
+-- "_AlwaysEnabled" suffix that AVerilog looks for.  If the map has no
+-- entry for the port, the method spelling itself is returned, as a lookup
+-- in the map would do.
+verilogPortFString :: Flags -> AVInst -> Id -> Maybe Integer -> MethodPart -> FString
+verilogPortFString flags avi m ino part =
+    xLateFStringUsingFStringMap (instPortMap flags avi)
+                                (mkMethStr (avi_vname avi) m ino part)
+
+-- The AId for a port of instance "avi" as it appears in the ASPackage.
+-- "o" is the object id that the caller already gives to mkMethId (the
+-- instance name, or the object of a method call on the instance); the
+-- result has the position and properties of the mkMethId id and the
+-- Verilog spelling as its base.  The ports of the instances that
+-- aInlineWires and aInlineCReg will remove keep the method spelling,
+-- which is what those passes look up and what remains in the generated
+-- Verilog for them.
+statePortId :: Flags -> AVInst -> Id -> Id -> Maybe Integer -> MethodPart -> AId
+statePortId flags avi o m ino part
+    | (inlinedWireInst flags avi) || (inlinedCRegInst flags avi) = meth_id
+    | otherwise = setIdBase meth_id (verilogPortFString flags avi m ino part)
+  where meth_id = mkMethId o m ino part
 
 -- ==============================
 -- Clock primitives
