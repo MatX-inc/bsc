@@ -1,0 +1,10 @@
+# Reloading a redefined package in one bluetcl process must show the new
+# definition (see stale.tcl).  The two versions are compiled from their own
+# directories (bsc writes each .bo beside its source) and the first is put
+# in place before the script runs.  The packages are in BH syntax and the
+# script runs in BH syntax.
+
+compile_pass v1/StaleT.bs
+compile_pass v2/StaleT.bs
+copy v1/StaleT.bo StaleT.bo
+bluetcl_run_bh_compare_pass stale.tcl
