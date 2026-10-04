@@ -538,6 +538,8 @@ data ErrMsg =
         | EPortNotValidIdentFromMethod String String
 
         | EPortNamesClashArgAndIfc String String String Position
+        | EInstPortSpellingClash String String String [(String, String)]
+          -- ^ instance, imported module, shared name, (method, port) pairs
 
         | EExternalVarAssign !String -- ^ assignment to external var ... forbidden
         | ENonTerminalFunctionAssign !String !(Maybe String) -- ^ assignment to function ... must be last statement in block; perhaps you forgot ...?
@@ -4142,6 +4144,18 @@ getErrorText (WSVStdIdentExternal name) =
             "and cannot be renamed in the generated Verilog.  Some tools " ++
             "(for example verilator) will fail to parse code that uses " ++
             "this name.  Consider renaming it in the source."))
+
+getErrorText (EInstPortSpellingClash inst mod name meth_ports) =
+    (Generate 134, empty,
+     s2par ("Ports of instance " ++ quote inst ++ " of the imported module " ++
+            quote mod ++ " share the internal name " ++ quote name ++ ": " ++
+            unwordsAnd [ "port " ++ quote p ++ " of method " ++ quote m
+                       | (m, p) <- meth_ports ] ++
+            ".  A port is named by its method, followed by the copy " ++
+            "number of a method with multiplicity and the argument " ++
+            "number, so a method whose name matches a copy or an " ++
+            "argument of another method cannot be imported beside it.  " ++
+            "Rename one of the methods."))
 
 
 ---------------------------------------------------------------------------

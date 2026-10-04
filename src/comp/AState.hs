@@ -40,7 +40,8 @@ import ASchedule(AScheduleInfo(..), ExclusiveRulesDB(..), areRulesExclusive,
                  MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..))
 import AUses(useDropCond)
 import AVerilogUtil(vNameToTask)
-import BackendNamingConventions(InstPortInfo, instPortInfo, statePortIdFromInfo)
+import BackendNamingConventions(InstPortInfo, instPortInfo, statePortIdFromInfo,
+                                instPortMapCollisions)
 import RSchedule(RAT, ratToNestedLists)
 import Wires(WireProps(..))
 import Data.Maybe (listToMaybe)
@@ -221,6 +222,15 @@ aState' flags pps schedule_info apkg = do
               Just info -> statePortIdFromInfo info o m ino part
               -- not a state instance: nothing to spell differently
               Nothing -> mkMethId o m ino part
+
+    -- Two ports of one instance can have the same method spelling (a
+    -- method "sub_1" beside a method "sub" with multiplicity 2), and the
+    -- port map in inst_port_info would then spell one of them as the
+    -- other's Verilog port.  Report every such collision before any
+    -- port id is minted.
+    case (concatMap instPortMapCollisions vs) of
+      [] -> return ()
+      emsgs -> EMError emsgs
 
     let
         (ASchedule _ earliness_order_unfiltered) = asi_schedule schedule_info
