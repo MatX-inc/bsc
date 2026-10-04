@@ -714,7 +714,7 @@ genModVars portId vs omMultMap = allmvars
         -- XXX This is WRONG since the uniquifier for multiple methods
         -- XXX is added to the instance name rather than the method name.
         allmvars =
-            [(uniqueId, methPortId, portType, isEnable) |
+            [(uniqueId, methPortId, portType, isInput) |
                 -- for all submodules (get the module Id,
                 -- the method arg types, and the Verilog port names)
                 (AVInst { avi_vname = modId,
@@ -730,9 +730,10 @@ genModVars portId vs omMultMap = allmvars
                 --
                 -- for each part of the method, produce a triple of
                 -- the method part, the type of the associated port,
-                -- and a boolean if it is the enable part (of an action meth)
+                -- and whether the port is an input of the instance (an
+                -- argument or the enable; a result is an output)
                 --
-                (meth_part, portType, isEnable) <-
+                (meth_part, portType, isInput) <-
                     -- argument triples — one per (argN, portM) input port,
                     -- preserving the source-language grouping of argTypes
                     [ (MethodArg argN portM, argType, True)
