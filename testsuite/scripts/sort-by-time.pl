@@ -40,7 +40,7 @@ $median_time=$alltimes[int((scalar@alltimes)/2)];
 
 
 #print STDERR "median_time $median_time\n";
-open FI,"find . -name '*.exp' | grep '^\\./$ARGV[0]\\.' | " 
+open FI,"find . -path './.*' -prune -o -name '*.exp' -print | grep '^\\./$ARGV[0]\\.' | "
   or die "finding exp files failed";
 
 #print STDERR "reading lines\n";
@@ -81,8 +81,8 @@ sub get_time {
 
 sub simple_output {
   if ($ARGV[0]){
-    exec "find . -name '*.exp' | grep '^\\./$ARGV[0]\\.'";
+    exec "find . -path './.*' -prune -o -name '*.exp' -print | grep '^\\./$ARGV[0]\\.'";
   } else {
-    exec 'find','.','-name','*.exp';
+    exec 'find','.','-path','./.*','-prune','-o','-name','*.exp','-print';
   }
 }

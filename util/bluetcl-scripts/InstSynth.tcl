@@ -24,6 +24,8 @@
 # Usage:
 #   % package require InstSynth
 #   % namespace import ::InstSynth::*
+#   # Generation selects BSV query syntax for the Bluetcl session. Call it
+#   # before other queries freeze a session started in Bluehs syntax.
 #   # To create the "generated include" file for a package with a
 #   # typeclass for overloading of a module (Step 2)
 #   # Output in <package>.include.bsv (note file is erased with this invocation
@@ -57,6 +59,7 @@ namespace eval InstSynth {
     # generate the typeclass and a default instance for module
     proc genTypeClass { package modules } {
         variable fileExt
+        useBsvSyntax
 
         # check that package is there and loadable
         condLoadPackages $package
@@ -82,6 +85,7 @@ namespace eval InstSynth {
 
     proc genSpecificInst { package module types } {
         variable fileExt
+        useBsvSyntax
         # check that package is there and loadable
         condLoadPackages $package
 
@@ -245,6 +249,7 @@ namespace eval InstSynth {
     }
 
     proc genSynthMod { package module types } {
+        useBsvSyntax
         condLoadPackages $package
         set suff [typeToStr $types]
 
@@ -311,6 +316,18 @@ namespace eval InstSynth {
 
     ################################################################
     # interface to bluetcl
+    # This generator consumes and emits BSV types. Select BSV before querying:
+    # even syntax get freezes the session. An already-frozen BSV session is
+    # usable; reject frozen Bluehs before opening or truncating output files.
+    proc useBsvSyntax {} {
+        if {![catch {Bluetcl::syntax set bsv}]} {
+            return
+        }
+        if {[Bluetcl::syntax get] ne "Bluespec SystemVerilog"} {
+            error "InstSynth requires BSV syntax; call Bluetcl::syntax set bsv before querying Bluetcl"
+        }
+    }
+
     proc getModuleDetail { package module } {
         set funcs [Bluetcl::defs func $package]
         set det ""

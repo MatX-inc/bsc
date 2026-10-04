@@ -98,8 +98,8 @@ proc time_walk {} {
     } else {
         #depending on exactly how --outdir is used, this may or may not do the right thing.
         #  it does do the right thing if outdir is not set, or if it "."
-        verbose -log " running (find . -name [file tail [time_file]] ) out of this directory: [pwd]"
-        verbose -log [exec find . -name [file tail [time_file]] -exec cat \{\} \; | perl -C $collator ] 0
+        verbose -log " running (find . -path './.*' -prune -o -name [file tail [time_file]] ) out of this directory: [pwd]"
+        verbose -log [exec find . -path {./.*} -prune -o -name [file tail [time_file]] -exec cat \{\} \; | perl -C $collator ] 0
     }
 }
 

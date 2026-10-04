@@ -6,6 +6,6 @@
 #this script
 
 if [ -z $1 ]
-then find . -name '*.exp'
-else find . -name '*.exp' | grep '^\./'"$1"'\.' | perl scripts/sort-by-time.pl
+then find . -path './.*' -prune -o -name '*.exp' -print
+else find . -path './.*' -prune -o -name '*.exp' -print | grep '^\./'"$1"'\.' | perl scripts/sort-by-time.pl
 fi

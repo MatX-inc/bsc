@@ -119,6 +119,25 @@ namespace eval ::portUtil {
         }
         return $errReturn
     }
+
+    # This wrapper expands one packed result port using its Bluespec type.
+    # Older Bluetcl metadata exposed {result PORT}; current metadata exposes
+    # {results {{{port PORT} {size WIDTH}}}} even for an unsplit result.
+    proc getResultPort { portInfo } {
+        set result [getElem "result" $portInfo]
+        if {$result != ""} {
+            return $result
+        }
+
+        set results [take [getElem "results" $portInfo]]
+        if {[llength $results] == 0} {
+            return ""
+        }
+        if {[llength $results] != 1} {
+            error "Cannot expand method '[lindex $portInfo 1]': multiple result ports are not supported"
+        }
+        return [getElem "port" [take $results]]
+    }
     
 
     ######################################################################
@@ -401,7 +420,7 @@ namespace eval ::portUtil {
                     
                     # TODO: assert args = "args"
                     # move result from line2 into args of line1
-                    lappend line1 [list ready [getElem "result" $line2]]
+                    lappend line1 [list ready [getResultPort $line2]]
                     incr i
                 }
             }
@@ -462,7 +481,7 @@ namespace eval ::portUtil {
         }
         
         ########################################
-        set result  [getElem "result" $portInfo]
+        set result  [getResultPort $portInfo]
         if { $result != "" } {
             # arg1 => method {ActionValue#(Bit#(4)) method9 Bit#(4)}
             # arg2 => method ifcB_method9 ........{args} {result ifcB_method9}

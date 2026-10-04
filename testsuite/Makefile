@@ -120,7 +120,7 @@ realclean: clean
 	-rm -f groups.list 
 	-rm -f *.tar.gz
 	-rm -f bsc.log*
-	-rm -f `find . -name '*~' -o -name 'core'`
+	-find . -path './.*' -prune -o \( -name '*~' -o -name 'core' \) -exec rm -f '{}' +
 	-rm -f testrun.html
 
 .PHONY:	submakefiles

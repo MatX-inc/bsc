@@ -1,0 +1,4 @@
+packages: .
+
+-- This bootstrap package uses only the packages shipped with GHC.
+active-repositories: :none

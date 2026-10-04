@@ -1,0 +1,52 @@
+cabal-version: 2.4
+name: bsc-testsuite-planner
+version: 0.1.0.0
+synopsis: Testsuite population audit and migration planner for BSC
+license: BSD-3-Clause
+build-type: Simple
+extra-source-files:
+  README.md
+  IDENTITY.md
+  scripts/capture-baselines.py
+  scripts/capture_lifecycle.py
+  scripts/check-tcl-boundaries.py
+  scripts/audit-repeated-labels.py
+  scripts/install-bluetcl-extras.py
+  scripts/report-timings.py
+  test/native-tcl-boundaries.c
+  test/TclBoundaryProbe.hs
+  test/check_cli_import.py
+  test/check_timing_report.py
+  test/check_capture_lifecycle.py
+  test/check_hidden_evidence.py
+
+common defaults
+  default-language: Haskell2010
+  ghc-options: -Wall
+  build-depends:
+    base >= 4.18 && < 5,
+    containers,
+    directory,
+    filepath
+
+library
+  import: defaults
+  hs-source-dirs: src
+  exposed-modules:
+    BscTestsuite.Verdict
+    BscTestsuite.Tcl
+    BscTestsuite.Census
+
+executable bsc-test-plan
+  import: defaults
+  hs-source-dirs: app
+  main-is: Main.hs
+  build-depends: bsc-testsuite-planner
+
+test-suite planner-tests
+  import: defaults
+  type: exitcode-stdio-1.0
+  hs-source-dirs: test
+  main-is: Main.hs
+  other-modules: VerdictTest, CensusTest
+  build-depends: bsc-testsuite-planner, process
