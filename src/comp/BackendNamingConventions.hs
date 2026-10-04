@@ -2,6 +2,7 @@ module BackendNamingConventions
     (
      createVerilogNameMapForAVInst,
      instPortMap,
+     instPortMapCollisions,
      xLateIdUsingFStringMap,
      xLateFStringUsingFStringMap,
 
@@ -34,6 +35,7 @@ module BackendNamingConventions
     ) where
 
 import Data.Char(isAlphaNum)
+import Data.List(nub)
 import Data.Maybe(mapMaybe)
 
 import FStringCompat
@@ -510,6 +512,46 @@ createVerilogNameMapForAVInst flags avi@(AVInst { avi_vname = inst_id,
 -- the map for one instance, keyed by the method spelling (mkMethStr)
 instPortMap :: Flags -> AVInst -> M.Map FString FString
 instPortMap flags avi = M.fromList (createVerilogNameMapForAVInst flags avi)
+
+-- The method spellings of two ports of one instance can coincide: a port
+-- is spelled by its method name with the copy number of a method with
+-- multiplicity, the argument number and the "EN_" prefix of an enable
+-- attached (mkMethStr, createMapForOneMeth), so with a method "sub" of
+-- multiplicity 2 and a method named "sub_1", copy 1 of "sub" and the
+-- result of "sub_1" are both "m$sub_1".  instPortMap keeps one Verilog
+-- port per spelling, so every id minted for the other port would name
+-- the wrong wire and the generated Verilog would declare that wire twice.
+-- For each spelling of the instance's ports that stands for more than
+-- one Verilog port, this returns an error naming the methods and ports
+-- involved.  The entries are the ones createMapForVMod prefixes with the
+-- instance name; the rewrite of the map for an inlined register
+-- (updateVerilogNameMapForReg) only merges equal values, so the result
+-- does not depend on the flags.  AState raises these errors for every
+-- instance before it mints any port id, so the later consumers of the
+-- map (AVerilogUtil, VIOProps and VFinalCleanup, all run after AState)
+-- never see a colliding one.
+instPortMapCollisions :: AVInst -> [EMsg]
+instPortMapCollisions (AVInst { avi_vname = inst_id, avi_vmi = vminfo }) =
+    let -- (method spelling, (method name, Verilog port)) for each port
+        entries :: [(FString, (String, String))]
+        entries = [ (meth_fs, (getIdBaseString m, getFString port_fs))
+                  | Method { vf_name = m, vf_mult = mult, vf_inputs = ins,
+                             vf_outputs = outs, vf_enable = me }
+                        <- vFields vminfo,
+                    let (meth_fss, port_fss) =
+                            createMapForOneMeth m mult ins outs me,
+                    (meth_fs, port_fs) <- zip meth_fss port_fss ]
+        -- the (method, port) pairs of each spelling, in declaration order
+        by_spelling :: M.Map FString [(String, String)]
+        by_spelling =
+            M.fromListWith (flip (++)) [ (fs, [mp]) | (fs, mp) <- entries ]
+        inst_str = getIdString inst_id
+        mod_str = getVNameString (vName vminfo)
+        pos = getIdPosition inst_id
+    in  [ (pos, EInstPortSpellingClash inst_str mod_str (getFString fs)
+                                       (nub meth_ports))
+        | (fs, meth_ports) <- M.toList by_spelling,
+          length (nub (map snd meth_ports)) > 1 ]
 
 -- ==============================
 -- The final spelling of an instance port
