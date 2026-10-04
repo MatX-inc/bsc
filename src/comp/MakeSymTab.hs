@@ -17,6 +17,8 @@ import Control.Monad(when)
 import Control.Monad.Except(throwError)
 import qualified Data.Set as S
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import IdSet(IdSet)
 import qualified IdSet
 
@@ -893,7 +895,7 @@ mustConvCQType r _ qt =
     Left msg -> internalError ("mustConvCQType:\n" ++ ppReadable msg)
 
 mkTypeSyms :: ErrorHandle
-           -> (Id -> [Id]) -> Maybe Id -> Maybe Id -> M.Map Id Kind -> [CDefn] -> QInsts
+           -> (Id -> [Id]) -> Maybe Id -> Maybe Id -> IdMap Kind -> [CDefn] -> QInsts
            -> SymTab -> (SymTab, [EMsg])
 mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
     let importedTypeInfos = concatMap (getTI errh maybePackageName src_pkg r iks) defs
@@ -909,7 +911,7 @@ mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
         r = addClasses mkQuals (addTypes mkQuals s importedTypeInfos) cls
     in  (r, concat errss)
 
-getTI :: ErrorHandle -> Maybe Id -> Maybe Id -> SymTab -> M.Map Id Kind -> CDefn -> [(Id, TypeInfo)]
+getTI :: ErrorHandle -> Maybe Id -> Maybe Id -> SymTab -> IdMap Kind -> CDefn -> [(Id, TypeInfo)]
 getTI errh mi src_pkg r iks (Ctype ik vs ct) = [(i, TypeInfo (Just i) k vs (TItype n ct') src_pkg)]
   where i = qual mi (iKName ik)
         k = getK iks ik
@@ -1035,9 +1037,9 @@ qual :: Maybe Id -> Id -> Id
 qual Nothing i = i
 qual (Just mi) i = qualId mi i
 
-getK :: M.Map Id Kind -> IdK -> Kind
+getK :: IdMap Kind -> IdK -> Kind
 getK iks ik =
-    case M.lookup (iKName ik) iks of
+    case IdMap.lookup (iKName ik) iks of
     Just k -> k
     Nothing ->
         case ik of
@@ -1105,7 +1107,7 @@ overlapErrors pairCmp tagged trie = nub errs
 
 -- ---------------
 
-getCls :: ErrorHandle -> Maybe Id -> Maybe Id -> M.Map Id Kind -> SymTab ->
+getCls :: ErrorHandle -> Maybe Id -> Maybe Id -> IdMap Kind -> SymTab ->
           -- class components
           Maybe Bool -> [CPred] -> IdK -> [Id] -> CFunDeps -> [CAssocDepFun] ->
           CFields ->
@@ -1445,7 +1447,7 @@ addImpSyms errh insts (s, errs0) (CImpSign name qf (CSignature pkgName _ _ ds)) 
                 if qf
                 then [name]
                 else mkDefaultQuals name
-            (s1, errs1) = mkTypeSyms errh mkQuals Nothing src_pkg M.empty ds insts s
+            (s1, errs1) = mkTypeSyms errh mkQuals Nothing src_pkg IdMap.empty ds insts s
             s2 = symAddFields mkQuals mi src_pkg s1 ds
             -- NOTE: methods (symAddVars) before top-level values (addVars
             -- of getTopVars below): this order is LOAD-BEARING, exactly as
