@@ -61,8 +61,18 @@ compare_file_filter_ids GridRules.bsv.bsc-sched-out
 # dilute the margins.  Plain -verilog is essential: -elab/-sim set
 # genABin, which deliberately reverts disjointness testing to the
 # full-pair sweep for RuleRelationDB completeness.
+#
+# bsc_compile_verilog is called directly, as the other -KILL tests do
+# (bsc.if, bsc.options, bsc.evaluator): compile_verilog_pass would also
+# run the DO_INTERNAL_CHECKS dumpbo check on SparseRules.bo, and a -KILL
+# compile exits inside module generation, before the .bo is written.
 set env(BSC_ALLOC_LIMIT_MB) 91000
-compile_verilog_pass SparseRules.bsv mkSparseRules {-KILLschedule}
+incr_stat "compile_verilog_pass"
+if [bsc_compile_verilog SparseRules.bsv mkSparseRules {-KILLschedule}] then {
+    pass "module `mkSparseRules' in `SparseRules.bsv' schedules under the allocation cap"
+} else {
+    fail "module `mkSparseRules' in `SparseRules.bsv' should schedule under the allocation cap"
+}
 unset env(BSC_ALLOC_LIMIT_MB)
 
 }
