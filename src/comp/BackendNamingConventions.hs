@@ -1,15 +1,21 @@
 module BackendNamingConventions
     (
-     createVerilogNameMap,
      createVerilogNameMapForAVInst,
+     instPortMap,
+     instPortMapCollisions,
      xLateIdUsingFStringMap,
      xLateFStringUsingFStringMap,
+
+     inlinedRegInst, inlinedWireInst, inlinedBypassWireInst, inlinedCRegInst,
+     verilogPortFString, statePortId,
+     InstPortInfo, instPortInfo, statePortIdFromInfo,
 
      isRegInst, isClockCrossingRegInst,
      isRegN, isRegUN, isRegA, isRegAligned,
      getRegClock, getRegReset, getRegInit, getRegWidth,
      mkDIN, mkEN, mkQOUT,
      qoutPortStr,
+     regReadId, regWriteId,
      regReadResId, regWriteEnId, regWriteArgId,
 
      isRWire, isRWire0, isBypassWire, isBypassWire0, isClockCrossingBypassWire,
@@ -29,6 +35,7 @@ module BackendNamingConventions
     ) where
 
 import Data.Char(isAlphaNum)
+import Util(stableOrdNub)
 import Data.Maybe(mapMaybe)
 
 import FStringCompat
@@ -38,7 +45,7 @@ import PreStrings(fsDollar, fsUnderscore, fsEnable)
 import PreIds(idVReg)
 import Error
 import PPrint
-import Flags(Flags, removeReg, removeCross)
+import Flags(Flags, removeReg, removeCross, removeRWire, removeCReg)
 
 import Position(Position, getPosition, noPosition)
 
@@ -82,7 +89,7 @@ isBypassWire0 avi = getAVDefName avi == bypasswire0
 
 -- ---------------
 -- Names of RWire methods
--- (inlining happens before methods are renamed to ports)
+-- (the ports of an inlined wire keep the method spelling: see statePortId)
 
 rwireSetStr, rwireGetStr, rwireHasStr :: String
 rwireSetStr = "wset"
@@ -124,7 +131,7 @@ isCRegInst avi = (isCRegN avi) || (isCRegUN avi) || (isCRegA avi)
 
 -- ---------------
 -- Names of CReg methods
--- (inlining happens before methods are renamed to ports)
+-- (the ports of an inlined CReg keep the method spelling: see statePortId)
 
 cregReadStr, cregWriteStr :: Int -> String
 cregReadStr  n = "port" ++ show (n::Int) ++ "__read"
@@ -321,7 +328,7 @@ mkPortNameFStr v_port_name v_inst_name =
                    mkFString v_port_name]
 
 -- ---------------
--- Given a port name mapping (produced in ARenameIO),
+-- Given a port name mapping (see createVerilogNameMapForAVInst),
 -- update it so that "r$Q_OUT" is shortened to just "r"
 
 updateVerilogNameMapForReg :: AVInst ->
@@ -432,9 +439,44 @@ cregToReg old_avi =
                }
 
 -- ==============================
+-- Inlined instances
+
+-- Which submodule instances the Verilog back end removes, so that no
+-- instance-port wires are generated for them:
+--   * registers are inlined by vInlineReg (AVerilog) under "removeReg"
+--   * RWire, RWire0, BypassWire and BypassWire0 instances are inlined by
+--     aInlineWires under "removeRWire"
+--   * CReg instances are inlined by aInlineCReg under "removeCReg"
+-- A clock-crossing register or BypassWire is only inlined when crossing
+-- primitives are inlined as well ("removeCross").
+-- These predicates are the one definition of those decisions, shared by
+-- the passes above and by the port-spelling functions below.
+
+inlinedRegInst :: Flags -> AVInst -> Bool
+inlinedRegInst flags avi =
+    (removeReg flags) && (isRegInst avi) &&
+    ((not (isClockCrossingRegInst avi)) || (removeCross flags))
+
+-- the BypassWire instances that aInlineWires removes
+-- (the pass only runs under "removeRWire", which is not tested here)
+inlinedBypassWireInst :: Flags -> AVInst -> Bool
+inlinedBypassWireInst flags avi =
+    (isBypassWire avi) &&
+    ((not (isClockCrossingBypassWire avi)) || (removeCross flags))
+
+inlinedWireInst :: Flags -> AVInst -> Bool
+inlinedWireInst flags avi =
+    (removeRWire flags) &&
+    ((isRWire avi) || (isRWire0 avi) || (isBypassWire0 avi) ||
+     (inlinedBypassWireInst flags avi))
+
+inlinedCRegInst :: Flags -> AVInst -> Bool
+inlinedCRegInst flags avi = (removeCReg flags) && (isCRegInst avi)
+
+-- ==============================
 -- Create a Verilog name map
 
--- For all instantiated submodules, create a mapping of identifiers
+-- For an instantiated submodule, create a mapping of identifiers
 -- "inst$methodpart" to the Verilog signal names "inst$vport" which
 -- will be connected to the ports of the instantiated module.
 -- For example, the map might contain these pairs:
@@ -444,14 +486,13 @@ cregToReg old_avi =
 --     ("the_arr$sub", "the_arr$D_OUT_1"),
 --     ("the_arr_1$sub_1", "the_arr$ADDR_2"),
 --     ("the_arr_1$sub", "the_arr$D_OUT_2")]
+-- AState consults the map (through "statePortId") when it names the
+-- connections to the instance, so the ASPackage carries the Verilog
+-- names from the start; the Verilog back end re-derives the same
+-- spelling per instance from the VModInfo.
 
 -- XXX consider not generating mappings from a string to itself,
 -- XXX to save memory and lookup time
-
-createVerilogNameMap :: Flags -> ASPackage -> M.Map FString FString
-createVerilogNameMap flags aspkg =
-    let vinsts = aspkg_state_instances aspkg
-    in  M.fromList (concatMap (createVerilogNameMapForAVInst flags) vinsts)
 
 -- create a map for one instance
 createVerilogNameMapForAVInst :: Flags -> AVInst -> [(FString, FString)]
@@ -462,11 +503,102 @@ createVerilogNameMapForAVInst flags avi@(AVInst { avi_vname = inst_id,
         -- create a special map for register instance (without $Q_OUT)
         reg_map = updateVerilogNameMapForReg avi default_map
         -- choose which to return
-        result = if ((removeReg flags) && (isRegInst avi) && ((not (isClockCrossingRegInst avi)) || (removeCross flags)))
+        result = if (inlinedRegInst flags avi)
                  then reg_map
                  else default_map
     in  -- trace("result =" ++ (ppReadable result)) $
         result
+
+-- the map for one instance, keyed by the method spelling (mkMethStr)
+instPortMap :: Flags -> AVInst -> M.Map FString FString
+instPortMap flags avi = M.fromList (createVerilogNameMapForAVInst flags avi)
+
+-- The method spellings of two ports of one instance can coincide: a port
+-- is spelled by its method name with the copy number of a method with
+-- multiplicity, the argument number and the "EN_" prefix of an enable
+-- attached (mkMethStr, createMapForOneMeth), so with a method "sub" of
+-- multiplicity 2 and a method named "sub_1", copy 1 of "sub" and the
+-- result of "sub_1" are both "m$sub_1".  instPortMap keeps one Verilog
+-- port per spelling, so every id minted for the other port would name
+-- the wrong wire and the generated Verilog would declare that wire twice.
+-- For each spelling of the instance's ports that stands for more than
+-- one Verilog port, this returns an error naming the methods and ports
+-- involved.  The entries are the ones createMapForVMod prefixes with the
+-- instance name; the rewrite of the map for an inlined register
+-- (updateVerilogNameMapForReg) only merges equal values, so the result
+-- does not depend on the flags.  AState raises these errors for every
+-- instance before it mints any port id, so the later consumers of the
+-- map (AVerilogUtil, VIOProps and VFinalCleanup, all run after AState)
+-- never see a colliding one.
+instPortMapCollisions :: AVInst -> [EMsg]
+instPortMapCollisions (AVInst { avi_vname = inst_id, avi_vmi = vminfo }) =
+    let -- (method spelling, (method name, Verilog port)) for each port
+        entries :: [(FString, (String, String))]
+        entries = [ (meth_fs, (getIdBaseString m, getFString port_fs))
+                  | Method { vf_name = m, vf_mult = mult, vf_inputs = ins,
+                             vf_outputs = outs, vf_enable = me }
+                        <- vFields vminfo,
+                    let (meth_fss, port_fss) =
+                            createMapForOneMeth m mult ins outs me,
+                    (meth_fs, port_fs) <- zip meth_fss port_fss ]
+        -- the (method, port) pairs of each spelling, in declaration order
+        by_spelling :: M.Map FString [(String, String)]
+        by_spelling =
+            M.fromListWith (flip (++)) [ (fs, [mp]) | (fs, mp) <- entries ]
+        inst_str = getIdString inst_id
+        mod_str = getVNameString (vName vminfo)
+        pos = getIdPosition inst_id
+    in  [ (pos, EInstPortSpellingClash inst_str mod_str (getFString fs)
+                                       (stableOrdNub meth_ports))
+        | (fs, meth_ports) <- M.toList by_spelling,
+          length (stableOrdNub (map snd meth_ports)) > 1 ]
+
+-- ==============================
+-- The final spelling of an instance port
+
+-- The name of the Verilog signal connected to the port of instance "avi"
+-- that method "m" (copy "ino", part "part") uses: the value that
+-- createVerilogNameMapForAVInst gives for the method spelling of that
+-- port.  So "r$write_1" becomes "r$D_IN"; "r$read" becomes "r" when the
+-- register is inlined (else "r$Q_OUT"); a method of multiplicity > 1 gets
+-- "_<copy+1>" appended; and an always-enabled (inhigh) enable gets the
+-- "_AlwaysEnabled" suffix that AVerilog looks for.  If the map has no
+-- entry for the port, the method spelling itself is returned, as a lookup
+-- in the map would do.
+verilogPortFString :: Flags -> AVInst -> Id -> Maybe Integer -> MethodPart -> FString
+verilogPortFString flags avi m ino part =
+    xLateFStringUsingFStringMap (instPortMap flags avi)
+                                (mkMethStr (avi_vname avi) m ino part)
+
+-- What statePortId needs to know about one instance: whether its ports
+-- keep the method spelling (the instances that aInlineWires and
+-- aInlineCReg remove) and, if not, the map from method spelling to
+-- Verilog spelling (instPortMap).  A caller that mints many ids for the
+-- same instance computes this once (AState keeps one per instance).
+type InstPortInfo = (Bool, M.Map FString FString)
+
+instPortInfo :: Flags -> AVInst -> InstPortInfo
+instPortInfo flags avi =
+    ((inlinedWireInst flags avi) || (inlinedCRegInst flags avi),
+     instPortMap flags avi)
+
+-- The AId for a port of instance "avi" as it appears in the ASPackage.
+-- "o" is the object id that the caller already gives to mkMethId (the
+-- instance name, or the object of a method call on the instance); the
+-- result has the position and properties of the mkMethId id and the
+-- Verilog spelling as its base.  The ports of the instances that
+-- aInlineWires and aInlineCReg will remove keep the method spelling,
+-- which is what those passes look up and what remains in the generated
+-- Verilog for them.
+statePortIdFromInfo :: InstPortInfo -> Id -> Id -> Maybe Integer -> MethodPart -> AId
+statePortIdFromInfo (keeps_meth_spelling, port_map) o m ino part
+    | keeps_meth_spelling = meth_id
+    | otherwise = setIdBase meth_id
+                      (xLateFStringUsingFStringMap port_map (mkMethStr o m ino part))
+  where meth_id = mkMethId o m ino part
+
+statePortId :: Flags -> AVInst -> Id -> Id -> Maybe Integer -> MethodPart -> AId
+statePortId flags avi = statePortIdFromInfo (instPortInfo flags avi)
 
 -- ==============================
 -- Clock primitives
@@ -641,7 +773,7 @@ getFStringForVerilogPair (vname, proplist) =
 -- xLate functions
 --
 
--- For use with the map from "createVerilogNameMap"
+-- For use with the map from "createVerilogNameMapForAVInst" / "instPortMap"
 
 xLateIdUsingFStringMap :: M.Map FString FString -> Id -> Id
 xLateIdUsingFStringMap fsmap id =
