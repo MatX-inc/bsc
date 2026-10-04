@@ -2,9 +2,9 @@
 
 -- Launcher for bluetcl. The Haskell RTS is started by the normal hs-main, then
 -- we hand control to Tcl via a small C shim (bluetcl_shim.c) that runs Tcl_Main
--- and registers the Bluespec commands exported from Bluetcl. (The Makefile build
--- instead uses a C main + -no-hs-main + htcl_initHaskellRTS; doing it from a
--- Haskell main lets cabal build this as an ordinary executable.)
+-- and registers the Bluespec commands exported from Bluetcl. (Earlier, a C main
+-- built with -no-hs-main started the RTS through htcl_initHaskellRTS; a Haskell
+-- main lets bluetcl build like every other executable.)
 module Main (main) where
 
 import Bluetcl () -- force the blueshell_Init_Foreign export to be linked in

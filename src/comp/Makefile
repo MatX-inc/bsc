@@ -166,10 +166,9 @@ PACKAGES = \
 # in make mode where it follows dependencies (use GHCMAKEFLAGS).
 #
 # MAINSRC is the source file holding a target's main module. The program
-# entry files live in app/, separate from the library modules bsc.cabal
-# exposes, and their names do not always match the executable, so each
-# target names its own. Anything not listed keeps its main beside the
-# library modules.
+# entry files live in app/, separate from the library modules, and their
+# names do not always match the executable, so each target names its own.
+# Anything not listed keeps its main beside the library modules.
 MAINSRC = $@.hs
 bsc bsc2bsv bsv2bsc dumpbo dumpba vcdcheck showrules: MAINSRC = app/$@.hs
 bluetcl: MAINSRC = app/bluetcl_Main.hs
@@ -380,9 +379,8 @@ showrules: $(SOURCES)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
 
-# bluetcl has a Haskell main that hands control to Tcl through a C shim,
-# which is how the cabal executable is built too, so there is one entry
-# point to maintain rather than two.
+# bluetcl has a Haskell main that hands control to Tcl through a C shim, so
+# the RTS comes up the ordinary way and there is one entry point to maintain.
 .PHONY: bluetcl
 bluetcl: app/bluetcl_Main.hs app/Bluetcl.hs app/bluetcl_shim.c $(SOURCES)
 	$(PREBUILDCOMMAND)
