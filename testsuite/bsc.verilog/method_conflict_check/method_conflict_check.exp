@@ -1,0 +1,39 @@
+#
+# A simulation check that two conflicting interface methods are never
+# enabled in the same cycle.
+#
+# A parent compiled by bsc cannot violate this -- the scheduler enforces the
+# annotation -- so the check exists for instantiators written directly in
+# Verilog, which nothing polices.  Without it the failure surfaces only as a
+# downstream complaint that does not name the cause (for these modules,
+# "Enqueuing to a full fifo").
+#
+
+# ----------
+# Two methods that conflict through a shared FIFO's enq: the check is
+# emitted, guarded by both enables, and only once -- the pair is reported
+# in one direction, not both.
+
+compile_verilog_pass MethodConflict.bsv mkMethodConflict
+
+find_n_strings mkMethodConflict.v {EN_a && EN_b} 1
+
+find_regexp mkMethodConflict.v \
+    {conflict and may not be enabled in the same clock cycle}
+
+# The check must be invisible to synthesis
+
+find_regexp mkMethodConflict.v {synopsys translate_off}
+
+# ----------
+# The same shape with no shared resource: nothing conflicts, so no check
+
+compile_verilog_pass NoConflict.bsv mkNoConflict
+
+find_regexp_fail mkNoConflict.v \
+    {conflict and may not be enabled in the same clock cycle}
+
+# ----------
+# The task itself is $display or $error depending on -system-verilog-output;
+# that is buildVerilogTask's existing desugaring for older simulators and is
+# not tested here.
