@@ -22,6 +22,13 @@ compile_fail_error UnbasedUnsizedGluedDigit.bs P0225
 # An escape sequence that decodes to 0 is just a bad Char literal
 compile_fail_error UnbasedUnsizedEscape.bs P0000
 
+# Type errors mention the literal, not what it desugars to
+compile_fail_error UnbasedUnsizedTypeBool.bs T0159
+compare_file UnbasedUnsizedTypeBool.bs.bsc-out
+compile_fail_error UnbasedUnsizedTypeUInt.bsv T0159
+compare_file UnbasedUnsizedTypeUInt.bsv.bsc-out
+compile_fail_error UnbasedUnsizedTypeApply.bs T0159
+
 # -----
 
 # This tests defaulting of the Literal class

@@ -799,6 +799,7 @@ data ErrMsg =
         | WIncoherentMatch String String
         | WOrphanInst String
         | WTransitiveIncoherentMatch String String String
+        | EUnbasedUnsizedType String String String -- ^ literal, expected type, unpack hint
         | EModInstWrongArgs [Position]
         | EAmbiguous [(String, Position, [(String, [Position])])]
         | EAmbiguousExplCtx [Doc] [Doc] Doc
@@ -3020,6 +3021,14 @@ getErrorText (WTransitiveIncoherentMatch pred root_pred root_inst) =
      s2par ("Proviso " ++ pred ++ " is satisfied by a dictionary that transitively " ++
             "depends on an incoherent match of " ++ root_pred ++
             " against instance " ++ root_inst))
+
+getErrorText (EUnbasedUnsizedType lit t hint) =
+    (Type 159, empty,
+     s2par ("The unbased unsized literal " ++ lit ++ " must have a Bit type, " ++
+            "but here it is expected to have type:") $$
+     nest 2 (text t) $$
+     s2par ("To get a value of some other type in the Bits class, use " ++
+            hint ++ "."))
 
 -- Generation Errors
 

@@ -1011,9 +1011,8 @@ char = lcp "<char>" (\p x -> case x of L_char c -> Just (CLit (CLiteral p (LChar
 
 unbasedUnsized :: CParser CExpr
 unbasedUnsized = lcp "<unbased-unsized>" (\p x -> case x of
-    L_unbasedUnsized True  -> Just (cVar (idConstAllBitsSetAt p))
-    L_unbasedUnsized False -> Just (cVar (idConstAllBitsUnsetAt p))
-    _                      -> Nothing)
+    L_unbasedUnsized b -> Just (cVar (idUnbasedUnsizedAt p b))
+    _                  -> Nothing)
 
 hide :: CParser ()
 hide = literal fsHide

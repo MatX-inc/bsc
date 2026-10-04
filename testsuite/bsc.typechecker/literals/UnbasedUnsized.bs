@@ -45,3 +45,7 @@ zeroChar = '0'
 
 oneChar :: Char
 oneChar = '1'
+
+-- unpack gets a value of some other Bits type
+onesU :: UInt 8
+onesU = unpack '1
