@@ -21,6 +21,7 @@ import System.IO(IOMode(..), hPutChar, hClose, stdout, hFlush)
 import Data.Maybe(fromMaybe)
 import Data.List(delete, find)
 import qualified Data.Set as S
+import qualified IdSet
 
 import ASyntax
 import Error(internalError, showWarningList, getErrMsgTag, ErrMsg(..),
@@ -386,14 +387,14 @@ removeADefMethodPredsByRuleId :: [Id] -> [ADef] -> [ADef]
 removeADefMethodPredsByRuleId [] ds = ds
 removeADefMethodPredsByRuleId dropped_rule_ids ds =
     let
-        dropped_id_set = S.fromList dropped_rule_ids
+        dropped_id_set = IdSet.fromList dropped_rule_ids
 
         isRuleProp (DefP_Rule {}) = True
         isRuleProp _              = False
 
         isForDroppedRule ps =
             case (find isRuleProp ps) of
-              Just (DefP_Rule r) -> r `S.member` dropped_id_set
+              Just (DefP_Rule r) -> r `IdSet.member` dropped_id_set
               _ -> internalError ("MethodPred with no DefP_Rule")
 
         dropDef (ADef i _ _ ps) =
