@@ -17,6 +17,8 @@ import qualified Data.Set as S
 import qualified Data.List as List
 import IdSet(IdSet)
 import qualified IdSet
+import IdMap(IdMap)
+import qualified IdMap
 
 import Util(fromJustOrErr)
 import qualified SCC(tsort,Graph)
@@ -59,7 +61,7 @@ import IConvLet(docycles, reorderDs, unpoly)
 -- XXX that's passed around (read-only state like ErrorHandle, Flags, SymTab
 -- XXX and possibly writeable state like the Env and scope variables)
 
-type Env a = M.Map Id (IExpr a)
+type Env a = IdMap (IExpr a)
 
 -- The lifted dictionaries accumulated by LiftDicts arrive as ready
 -- IDefs; they are appended to the package's definitions, and (through
@@ -70,7 +72,7 @@ iConvPackage :: ErrorHandle -> Flags -> SymTab ->
 iConvPackage errh flags r ctypeATFCache liftedDefs (CPackage pi _ _ _ _ ds _) =
     return (IPackage pi [] ps ds' itypeATFCache)
   where ds' = concatMap (iConvD errh flags pi r env pvs) ds ++ liftedDefs
-        env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds'])
+        env = IdMap.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds'])
         pvs = map IVar tmpVarIds
         ps = [ qualP p | CPragma p <- ds ]
         qualP (Pproperties i ps) = Pproperties (qualId pi i) ps
@@ -82,7 +84,7 @@ iConvPackage errh flags r ctypeATFCache liftedDefs (CPackage pi _ _ _ _ ds _) =
 
 iConvDef :: ErrorHandle -> Flags -> SymTab -> IPackage a -> CDefn -> IDef a
 iConvDef errh flags r (IPackage pi _ _ ds _) def =
-    let env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds])
+    let env = IdMap.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds])
         pvs = map IVar tmpVarIds
     in  case iConvD errh flags pi r env pvs def of
         [d] -> d
@@ -91,7 +93,7 @@ iConvDef errh flags r (IPackage pi _ _ ds _) def =
 iConvVar :: Flags -> SymTab -> Env a -> Id -> IExpr a
 iConvVar flags r env i =
         --trace ("lookup " ++ ppReadable i ++ show env) $
-        case M.lookup i env of
+        case IdMap.lookup i env of
         Just (IVar i') -> IVar (setIdPosition (getIdPosition i) i')
         Just e  -> e
         Nothing ->
@@ -153,7 +155,7 @@ iConvTask r i it =
 addVar :: Id -> IExpr a -> Env a -> Env a
 addVar i e t =
         --trace ("add " ++ ppReadable (i,e)) $
-        M.insert i e t
+        IdMap.insert i e t
 
 type IPVars a = [IExpr a]
 

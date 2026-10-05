@@ -31,6 +31,8 @@ import qualified Control.Exception as CE
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified IdSet
+import IdMap(IdMap)
+import qualified IdMap
 
 import ListMap(lookupWithDefault)
 import SCC(scc)
@@ -590,7 +592,7 @@ compilePackage
     -- every imported def each time
     let dictRedirects = mkDictRedirects dictBuckets imod binmods
     let (imodf, alldefsList) = fixupDefs dictRedirects imod binmods
-    let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
+    let alldefs = IdMap.fromList [(i, e) | IDef i _ e _ <- alldefsList]
     iPCheck flags symt imodf "fixup"
     t <- dump errh flags t DFfixup dumpnames imodf
 
@@ -756,7 +758,7 @@ genModule ::
     String -> -- prefix
     String -> -- source package name
     SymTab ->
-    M.Map Id (IExpr HeapData) ->
+    IdMap (IExpr HeapData) ->
     IATFCache ->
     IDef HeapData ->
     IO (CDefn)

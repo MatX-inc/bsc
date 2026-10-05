@@ -77,6 +77,7 @@ import Debug.Trace(traceM)
 import qualified Data.Array as Array
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
 import qualified IdMap
 import qualified IdSet
 
@@ -503,7 +504,7 @@ data GStateRO = GStateRO {
         errHandle :: !ErrorHandle,
         symtab :: !SymTab,
         -- lazy because computing the defenv may be expensive and (often) unnecessary
-        defenv :: M.Map Id HExpr,
+        defenv :: IdMap HExpr,
         -- selector indices (selNo of pack, selNo of unpack, numSel) of the
         -- Bits class methods, looked up in the symbol table once per
         -- elaboration instead of once per held-coercion creation; lazy so
@@ -619,7 +620,7 @@ data GState = GState {
         }
 
 initGState :: ErrorHandle -> Flags ->
-              SymTab -> M.Map Id HExpr ->
+              SymTab -> IdMap HExpr ->
               IATFCache ->
               Id -> Bool -> [PProp] ->
               GState
@@ -713,7 +714,7 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            goutput :: a }
 
 runG :: ErrorHandle -> Flags ->
-        SymTab -> M.Map Id HExpr ->
+        SymTab -> IdMap HExpr ->
         IATFCache ->
         Id -> Bool -> [PProp] -> G a ->
         IO (GOutput a)
@@ -2678,7 +2679,7 @@ getSymTab = do s <- get
                return (symtab (ro s))
 
 {-# INLINE getDefEnv #-}
-getDefEnv :: G (M.Map Id HExpr)
+getDefEnv :: G (IdMap HExpr)
 getDefEnv = do s <- get
                return (defenv (ro s))
 

@@ -255,7 +255,7 @@ iExpandPref = "__h"
 --   except when they are simple enough to be inlined.
 --   The actual elaboration work is done by iExpandModuleDef
 iExpand :: ErrorHandle -> Flags ->
-           SymTab -> M.Map Id HExpr ->
+           SymTab -> IdMap HExpr ->
            IATFCache ->
            Bool -> [PProp] -> HDef ->
            IO (IModule HeapData)

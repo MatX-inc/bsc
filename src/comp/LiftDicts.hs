@@ -7,6 +7,8 @@ import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import IdSet(IdSet)
 import qualified IdSet
+import IdMap(IdMap)
+import qualified IdMap.Strict as IdMap
 import Debug.Trace(traceM)
 
 import Error(ErrorHandle)
@@ -116,11 +118,11 @@ data LState a = LState {
   -- references to imported definitions do.  The bodies here are
   -- placeholders; fixupDefs later ties all references to the real
   -- definitions.
-  convEnv :: M.Map Id (IExpr a),
+  convEnv :: IdMap (IExpr a),
   -- Information about instances that do not appear in the symbol table.
   -- These are converted instance definitions that were added by convinst
   -- but never incorporated into the symbol table.
-  localInstInfo :: M.Map Id ([TyVar], CType),
+  localInstInfo :: IdMap ([TyVar], CType),
   -- Base names of the package's top-level definitions, so lifted-dict
   -- names never collide with a user definition (a user def named
   -- _lifted_dictN is legal)
@@ -147,7 +149,7 @@ initLState errh fs r (CPackage mi exps imps impsigs fixs ds includes) = LState {
   packageName = mi,
   symt = r
 }
-  where instInfo = M.fromList [ (i, (vs, t))
+  where instInfo = IdMap.fromList [ (i, (vs, t))
                               | CValueSign (CDefT i vs (CQType [] t) _) <- ds,
                                 isDictFun t ]
         -- Reference nodes for the package's converted-instance
@@ -155,7 +157,7 @@ initLState errh fs r (CPackage mi exps imps impsigs fixs ds includes) = LState {
         -- give their real definitions (the iConvVS formula).  The
         -- entries are lazy; only the ones a lifted dictionary actually
         -- references are ever forced.
-        instConvEnv = M.mapWithKey mkRef instInfo
+        instConvEnv = IdMap.mapWithKey mkRef instInfo
         mkRef i (vs, t) =
             let it = foldr (\ (TyVar v _ k) acc -> ITForAll v (iConvK k) acc)
                            (iConvT fs r t) vs
@@ -168,7 +170,7 @@ getTopNameInfo i = do
     r <- gets symt
     return $ lookupLifted ltmap <|> lookupLocal localMap <|> lookupSymTab r
   where lookupLifted = fmap (\t -> ([], t)) . M.lookup i
-        lookupLocal  = M.lookup i
+        lookupLocal  = IdMap.lookup i
         lookupSymTab = fmap handleVarInfo . flip findVar i
         handleVarInfo vi@(VarInfo {}) = (tyVars, t')
           where (_ :>: Forall ks qt) = vi_assump vi
@@ -371,7 +373,7 @@ handleDict incoherent p t e = do
                 dictPool = M.insertWith (\new old -> old ++ new) it [(lift_i, ie)] (dictPool s),
                 liftedDefs = IDef lift_i it ie props : liftedDefs s,
                 liftedTypes = M.insert lift_i t (liftedTypes s),
-                convEnv = M.insert lift_i ref (convEnv s) })
+                convEnv = IdMap.insert lift_i ref (convEnv s) })
             recordC lift_i
             return $ Right lift_i
 

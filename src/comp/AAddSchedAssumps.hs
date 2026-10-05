@@ -23,6 +23,7 @@ import VModInfo(VMethodConflictInfo, vSched)
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import PreIds
 import qualified Data.Map as M
+import IdMap(IdMap)
 import qualified Data.Set as S
 import PPrint
 import Pragma(ASchedulePragma)
@@ -169,7 +170,7 @@ mkCFAssump ruleMethodMap instSchedMap r1 r2 = concat $ M.elems overlapMap
 -- | Rule to the methods it uses (with conditions)
 type RuleMethCondMap = M.Map ARuleId [(MethodId, AExpr)]
 
-aAddCFConditionWires :: ErrorHandle -> SymTab -> M.Map AId HExpr -> Flags ->
+aAddCFConditionWires :: ErrorHandle -> SymTab -> IdMap HExpr -> Flags ->
                         APackage -> AScheduleInfo ->
                         IO (APackage, AScheduleInfo)
 aAddCFConditionWires errh r alldefs flags apkg schedinfo =
@@ -219,7 +220,7 @@ buildMethCondList uses = M.toList (M.fromListWith aOr uses')
 -- | We need a function that will take an id and make us the RWire instance we want.
 -- It's a little more complicated than you might expect
 getRWireInstFn :: ErrorHandle -> Flags -> SymTab ->
-                  M.Map AId HExpr -> IO (Id -> AVInst)
+                  IdMap HExpr -> IO (Id -> AVInst)
 getRWireInstFn errh flags r alldefs = do
   let blobT = TAp tModule tEmpty
   case TIM.tiResult $ (TIM.runTI flags False r (topExpr blobT (CVar id__mkRWireSubmodule))) of
