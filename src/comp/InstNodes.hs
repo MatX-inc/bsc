@@ -13,6 +13,8 @@ import Prelude hiding ((<>))
 import Data.Function(on)
 import Data.List(sortBy,groupBy,isPrefixOf)
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import Data.Ord(comparing)
 import Control.Monad.State
 
@@ -38,7 +40,7 @@ doTraceTree = elem "-trace-inst-tree" progArgs
 
 -- -----------------------------------------------------------
 
-type InstTree = M.Map Id InstNode
+type InstTree = IdMap InstNode
 
 data InstNode = StateVar { node_name :: Id } |
                 Rule   { node_name :: Id } |
@@ -95,20 +97,20 @@ flattenInstNode (StateVar i) = [(i, [])]
 flattenInstNode (Rule i) = [(i, [])]
 flattenInstNode (Loc i ct _ _ _ children) = mapSnd ((:) (i, ct)) (flattenInstTree children)
 
-flattenInstTree :: M.Map k InstNode -> [(Id, [(Id, Maybe CType)])]
-flattenInstTree tree = concatMap flattenInstNode (M.elems tree)
+flattenInstTree :: InstTree -> [(Id, [(Id, Maybe CType)])]
+flattenInstTree tree = concatMap flattenInstNode (IdMap.elems tree)
 
 -- -----------------------------------------------------------
 -- Trees with 1 child and an ignore flag are reduced
 compressIgnoredChildren :: InstTree -> InstTree
 compressIgnoredChildren tree = cs
   where
-    cs = case (M.assocs tree) of
+    cs = case (IdMap.assocs tree) of
           [(_, l@(Loc {}))] | node_ignore l -> compressIgnoredChildren (node_children l)
           xs -> process  xs
     --
     -- Main merge function
-    process = (M.fromList .
+    process = (IdMap.fromList .
                (concatMap uniqGroup) .
                (groupBy ((==) `on` (node_name . snd))) .
                (sortBy (comparein `on` snd)) .
@@ -127,7 +129,7 @@ compressIgnoredChildren tree = cs
     --
     -- promote children of Loc with ignore attribute
     promoteChildren :: (Id,InstNode) -> [(Id,InstNode)]
-    promoteChildren (x, l@(Loc {})) | node_ignore l, isBadId x = M.toList $ node_children l
+    promoteChildren (x, l@(Loc {})) | node_ignore l, isBadId x = IdMap.toList $ node_children l
     promoteChildren x = [x]
     --
     -- after groupBy add numeric suffix for any Loc names which are the same
@@ -143,7 +145,7 @@ compressIgnoredChildren tree = cs
     --
     removeSingletonBodies ::  (Id,InstNode) -> (Id,InstNode)
     removeSingletonBodies (id,l@(Loc {node_name = n,
-                                     node_children = x })) | isBodyName n, (M.size x) == 1 = head $ M.toList x
+                                     node_children = x })) | isBodyName n, IdMap.size x == 1 = IdMap.onlyEntry x
       where isBodyName :: Id -> Bool
             isBodyName i = isPrefixOf (getFString fsBody) (getIdBaseString i)
     removeSingletonBodies xs = xs
@@ -151,27 +153,27 @@ compressIgnoredChildren tree = cs
 -- -----------------------------------------------------------
 
 mkNodeTree :: InstNode -> InstTree
-mkNodeTree n = M.singleton (node_name n) n
+mkNodeTree n = IdMap.singleton (node_name n) n
 
 mkSingleTree :: InstNode -> [InstLoc] -> InstTree
 mkSingleTree n [] = mkNodeTree n
 
 mkSingleTree node locs@((name,ty,Nothing,ign,ign_name):rest) =  mkSingleTree node' rest
   where node' = Loc name (Just ty) ign ign_name False child
-        child = M.singleton (node_name node) node
+        child = IdMap.singleton (node_name node) node
 
 mkSingleTree node ((name,ty,Just i,ign,ign_name):rest) = mkSingleTree node' rest
   where num_name = addSuffix name i
         node' = Loc num_name (Just ty) ign ign_name False child
-        child = M.singleton (node_name node) node
+        child = IdMap.singleton (node_name node) node
 
 -- -----------------------------------------------------------
 -- merge are used in construction to create a tree structure from [[]]
 mergeTrees :: InstTree -> InstTree -> InstTree
-mergeTrees t1 t2 = M.unionWith mergeNodes t1 t2
+mergeTrees t1 t2 = IdMap.unionWith mergeNodes t1 t2
 
 mergeTreeList :: [InstTree] -> InstTree
-mergeTreeList = foldr mergeTrees M.empty
+mergeTreeList = foldr mergeTrees IdMap.empty
 
 -- merge nodes in parallel InstTrees (used to turn single tree in shared tree)
 mergeNodes :: InstNode -> InstNode -> InstNode
@@ -289,7 +291,7 @@ isHidden' True _ y@(Loc  {node_name = i }) | isHideAllId i = True
 isHidden' True _ _ = False
 isHidden' _ _    y | isUniquifier True y = False
 isHidden' _ True y@(Loc  {node_name = i }) |isHideId i =
-         case (M.elems $ node_children y) of
+         case (IdMap.elems $ node_children y) of
                   [StateVar {}] -> False
                   _             -> True
 isHidden' _ False y@(Loc  {node_name = i })| isHideId i          = True
@@ -326,17 +328,17 @@ nodeChildren :: Bool -> InstNode -> [InstNode]
 nodeChildren hide i =
  let result = nodeChildren' hide i
  in case (result) of
-    [x@(Loc {})] | (isHidden x && hide) -> (M.elems $ node_children x)
+    [x@(Loc {})] | (isHidden x && hide) -> (IdMap.elems $ node_children x)
     _                                   -> result
 
 nodeChildren' :: Bool -> InstNode -> [InstNode]
-nodeChildren' False i@(Loc {}) = M.elems $ node_children i
+nodeChildren' False i@(Loc {}) = IdMap.elems $ node_children i
 nodeChildren' True i@(Loc {}) =
   let getList x | isHiddenAll x = []
-      getList x@(Loc {}) | isHiddenKP x = concatMap getList (M.elems $ node_children x)
+      getList x@(Loc {}) | isHiddenKP x = concatMap getList (IdMap.elems $ node_children x)
       getList x | isHiddenKP x = []
       getList x = [x]
-  in concatMap getList (M.elems $ node_children i)
+  in concatMap getList (IdMap.elems $ node_children i)
 
 nodeChildren' _ _ = []
 

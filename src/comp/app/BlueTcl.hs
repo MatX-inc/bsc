@@ -30,6 +30,7 @@ import System.Mem(performGC)
 import System.Posix.Signals
 import Text.Regex
 import qualified Data.Map as M
+import qualified IdMap
 
 -- Bluespec imports
 import Util(quote, concatMapM, concatUnzip3, lastOrErr, fromJustOrErr, fst3,
@@ -2342,7 +2343,7 @@ getKind (BLeaf {}) = "Primitive"
 getInstTreeList :: Bool -> InstTree -> [InstNode]
 getInstTreeList hide t =
  let result = getInstTreeList' hide t
-     getMyChildren x = concatMap promote (M.elems $ node_children x)
+     getMyChildren x = concatMap promote (IdMap.elems $ node_children x)
      promote x@(Loc {node_name = nm, node_ignore = True}) | isBadId nm = getMyChildren x
      promote x                                                         = [x]
  in case (result) of
@@ -2351,16 +2352,16 @@ getInstTreeList hide t =
     _                                      -> result
 
 getInstTreeList' :: Bool -> InstTree -> [InstNode]
-getInstTreeList' False t = processInstNodes $ (sortBy comparein (M.elems t))
+getInstTreeList' False t = processInstNodes $ (sortBy comparein (IdMap.elems t))
 getInstTreeList' True  t =
   let getList x | isHiddenAll x = []
       getList x@(Loc {}) | isHiddenKP x    = concatMap getList (sortBy comparein (getMyChildren x))
       getList x | isHiddenKP x = []
       getList x = [x]
-      getMyChildren x = concatMap promote (M.elems $ node_children x)
+      getMyChildren x = concatMap promote (IdMap.elems $ node_children x)
       promote x@(Loc {node_name = nm, node_ignore = True}) | isBadId nm = getMyChildren x
       promote x                                                         = [x]
-  in processInstNodes $ concatMap getList (sortBy comparein (concatMap promote (M.elems t)))
+  in processInstNodes $ concatMap getList (sortBy comparein (concatMap promote (IdMap.elems t)))
 
 -- sort before processing to get better orders
 processInstNodes :: [InstNode] -> [InstNode]
@@ -3310,7 +3311,7 @@ remove_yield t =
 
 makeSubmoduleIfcMap :: Bool -> InstTree -> M.Map Id Type
 makeSubmoduleIfcMap hide inst_tree =
-    M.fromList (concatMap getTypes (M.elems inst_tree))
+    M.fromList (concatMap getTypes (IdMap.elems inst_tree))
  where
    getTypes i@(Loc { node_type = mt }) =
        case (nodeChildren hide i) of
