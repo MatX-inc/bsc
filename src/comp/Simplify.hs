@@ -2,11 +2,12 @@ module Simplify(simplify) where
 import Data.List(partition)
 import Util(mapSnd)
 import ListMap(lookupWithDefault)
-import qualified Data.Set as S
-import qualified Data.Map as M
+import qualified IdMap as M
 import PPrint(PPrint, ppReadable, ppString)
 import ErrorUtil(internalError)
 import Id(Id, isKeepId, isDictId)
+import IdSet(IdSet)
+import qualified IdSet as S
 import CSyntax hiding(cLetRec)
 import CSyntaxTypes()
 import CSyntaxUtil(isCPVar)
@@ -330,16 +331,16 @@ selectSimpleL r lds =
 -- different from *bound* variables, e.g., consider:
 --   let f x y = ... in ...
 -- where the *bound* variables are [f] and *captured* variables are [f, x, y]
-capturedVarsCDefl :: CDefl -> S.Set Id
+capturedVarsCDefl :: CDefl -> IdSet
 capturedVarsCDefl (CLValueSign def _) = capturedVarsCDef def
 capturedVarsCDefl (CLMatch pat e) = getPV pat
 capturedVarsCDefl (CLValue var clauses _) =
     S.unions (S.singleton var : map capturedVarsClause clauses)
 
-capturedVarsCDef :: CDef -> S.Set Id
+capturedVarsCDef :: CDef -> IdSet
 capturedVarsCDef (CDefT var _ _ clauses) =
     S.unions (S.singleton var : map capturedVarsClause clauses)
 capturedVarsCDef (CDef _ _ _) = internalError "Simplify.capturedVarsCDef: CDef"
 
-capturedVarsClause :: CClause -> S.Set Id
+capturedVarsClause :: CClause -> IdSet
 capturedVarsClause (CClause pats _ _) = S.unions (map getPV pats)

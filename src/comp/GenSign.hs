@@ -1,8 +1,11 @@
 module GenSign(genUserSign, genEverythingSign) where
 import Data.List((\\), sortBy, unionBy, groupBy, partition)
 import Data.Maybe(mapMaybe)
-import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 import Control.Monad(when)
 
 import PFPrint
@@ -35,7 +38,7 @@ import TypeCheck(qualifyClassDefaults)
 
 -- only exports what the user asked to export
 -- (auto-exports everything if the user said nothing)
-genUserSign :: ErrorHandle -> SymTab -> CPackage -> IO (CSignature, S.Set Id)
+genUserSign :: ErrorHandle -> SymTab -> CPackage -> IO (CSignature, IdSet)
 genUserSign errh symtab cpkg@(CPackage pkgName _ _ _ _ _ _) =
     -- XXX should we internal error on any errors or warnings?
     case (genSign errh False symtab cpkg) of
@@ -46,7 +49,7 @@ genUserSign errh symtab cpkg@(CPackage pkgName _ _ _ _ _ _) =
             -- 1. Items from imported packages that end up in exports (export foo, where foo is from Pkg)
             let usedPkgsFromItems = getPackagesUsedByExports pkgName sign
             -- 2. Explicit package re-exports (export Pkg::*)
-            let usedPkgs = S.union usedPkgsFromItems reexportedPkgs
+            let usedPkgs = IdSet.union usedPkgsFromItems reexportedPkgs
             return (sign, usedPkgs)
 
 -- export everything as visible (for internal use in the evaluator)
@@ -67,7 +70,7 @@ genEverythingSign errh symtab cpkg =
 
 -- Returns: Either errors (signature, warnings, packages used by non-empty re-exports)
 genSign :: ErrorHandle -> Bool -> SymTab -> CPackage ->
-           Either [EMsg] (CSignature, [WMsg], S.Set Id)
+           Either [EMsg] (CSignature, [WMsg], IdSet)
 genSign errh exportAll symt
         pkg@(CPackage currentPkg exportList imps impsigs fixs ds0 includes) =
     let
@@ -110,7 +113,7 @@ genSign errh exportAll symt
 
         -- a map containing entries for all (qualified) Ids to be exported,
         -- and indicating whether it was exported with (..)
-        em = M.fromList (map mkExp exps)
+        em = IdMap.fromList (map mkExp exps)
         -- create the entries, and sanity check the exports
         mkExp e | hasEmptyQual (eName e) =
             internalError ("mkExp: not qualified: " ++ ppReadable (eName e))
@@ -123,7 +126,7 @@ genSign errh exportAll symt
         --         Nothing     (not exported)
         --         Just True   (exported with (..))
         --         Just False  (exported without (..))
-        look i = M.lookup i em
+        look i = IdMap.lookup i em
 
         -- insts: imported typeclass instances
         --        (no longer necessary since we transitively close imports)
@@ -145,7 +148,7 @@ genSign errh exportAll symt
         -- For Cclass (exported with (..)), all ATFs are included.
         -- For CIclass (exported without (..)), only independently exported ATFs.
         -- ATF names in CIclass ats are already qualified (by genDefSign).
-        def = S.fromList ([ i | (Right i) <- map getName ss ] ++
+        def = IdSet.fromList ([ i | (Right i) <- map getName ss ] ++
                           [ qualId currentPkg (ca_name at)
                           | Cclass  _ _ _ _ _ ats _ <- ss, at <- ats ] ++
                           [ ca_name at
@@ -156,7 +159,7 @@ genSign errh exportAll symt
         ssFVs = map (\s -> (s, getFTCDn s)) ss
 
         -- use: set of the type constructors used in ss
-        use = S.unions (map snd ssFVs)
+        use = IdSet.unions (map snd ssFVs)
 
         -- isHiddenDef: whether the constructors of the type def are visible
         isHiddenDef (Cdata { cd_visible =  vis }) = not vis
@@ -166,12 +169,12 @@ genSign errh exportAll symt
         -- useLoci: map from used variable to definitions where it's used
         --          (excepting data defs with non-visible constructors,
         --          and unnamed defs (like pragmas and instances))
-        useLoci :: M.Map Id [Id]
-        useLoci = M.fromList [ (var, def_names)
-                              | var <- S.toList use
+        useLoci :: IdMap [Id]
+        useLoci = IdMap.fromList [ (var, def_names)
+                              | var <- IdSet.toList use
                               , let def_names = [ i | (def, fvs) <- ssFVs
                                                     , not (isHiddenDef def)
-                                                    , var `S.member` fvs
+                                                    , var `IdSet.member` fvs
                                                     , (Right i) <- [getName def] ]
                               , not (null def_names) ]
 
@@ -189,7 +192,7 @@ genSign errh exportAll symt
                                 -- for simplicity, we ignore all prelude
                                 -- qualified types
                                 fsCurrentPkg /= fsPrelude,
-                                i <- S.toList (S.difference use def),
+                                i <- IdSet.toList (IdSet.difference use def),
                                 -- only consider Ids from this package
                                 getIdQFString i == Just fsCurrentPkg,
                                 {- not (isTCId i), -} td <- tdef i ]
@@ -200,8 +203,8 @@ genSign errh exportAll symt
                                     (Left _, Left _) -> EQ
 
         -- ATF declarations per locally-defined class (for classToIClass).
-        classDeclaredAts :: M.Map Id [CAssocDepFun]
-        classDeclaredAts = M.fromList
+        classDeclaredAts :: IdMap [CAssocDepFun]
+        classDeclaredAts = IdMap.fromList
             [ (qualId currentPkg (iKName ik), ats)
             | Cclass _ _ ik _ _ ats _ <- ds ]
 
@@ -215,7 +218,7 @@ genSign errh exportAll symt
                                                  ppReadable i)
                        Just cl ->
                            -- Qualify ATF names and pass them to classToIClass.
-                           let rawAts = M.findWithDefault [] i classDeclaredAts
+                           let rawAts = IdMap.findWithDefault [] i classDeclaredAts
                                ats = map (\(CAssocDepFun name params rhs) ->
                                            CAssocDepFun (qualTId symt name) params rhs) rawAts
                            in [classToIClass i k cl ats ms (findPoss i)]
@@ -235,7 +238,7 @@ genSign errh exportAll symt
                  Nothing -> internalError "genSign"
             where -- positions of the uses which necessitated exporting this def
                   -- XXX we could get rid of this
-                  findPoss i = case (M.lookup i useLoci) of
+                  findPoss i = case (IdMap.lookup i useLoci) of
                                  Just us -> map getIdPosition us
                                  Nothing -> [noPosition]
                                     -- XXX when not "exportAll",
@@ -268,7 +271,7 @@ genSign errh exportAll symt
             let unexpName = pfpString (unQualId name)
                 err = internalError ("GenSign.genSign.mkTypeNotExported (" ++
                                      pfpString name ++ ")")
-                defIds = M.findWithDefault err name useLoci
+                defIds = IdMap.findWithDefault err name useLoci
                 defNamesPos = [(pfpString (unQualId name), getIdPosition name)
                                   | name <- defIds]
             in  ETypeNotExported unexpName defNamesPos
@@ -281,7 +284,7 @@ genSign errh exportAll symt
             [(getIdPosition name, mkETypeNotExported name)
                 | name <- missingExportNames,
                   -- has uses which aren't hidden
-                  name `M.member` useLoci]
+                  name `IdMap.member` useLoci]
 
         errors = packageErrors ++ missingExports ++ badExports
 
@@ -297,7 +300,7 @@ genSign errh exportAll symt
 {-
         trace ("\nexps=\n" ++ ppReadable exps ++
                "\n\ndefs=\n" ++ ppReadable ds ++
-               "\n\nem=\n" ++ ppReadable (M.toList em) ++
+               "\n\nem=\n" ++ ppReadable (IdMap.toList em) ++
                "\n\nss=\n" ++ ppReadable ss ++
                "\n\nudef=\n" ++ ppReadable udef ++
                "\n\nss'=\n" ++ ppReadable ss' ++ "\n\n") $
@@ -640,7 +643,7 @@ qualifyExports exclude symt exps =
 -- so this function takes the symbol table, as a way to check whether
 -- the unqualified name refers to the qualified name that we are exporting)
 -- Returns: (expanded exports, errors, set of packages with non-empty re-exports)
-expandPkgExports :: SymTab -> [CImportedSignature] -> [CExport] -> ([CExport], [EMsg], S.Set Id)
+expandPkgExports :: SymTab -> [CImportedSignature] -> [CExport] -> ([CExport], [EMsg], IdSet)
 expandPkgExports symt impsigs exps =
     let
         unqualTypeIsThisOne i =
@@ -692,7 +695,7 @@ expandPkgExports symt impsigs exps =
 
         (results, errs) = separate $ map expandOne exps
         (expandedLists, maybePkgs) = unzip results
-        usedPkgs = S.fromList $ mapMaybe id maybePkgs
+        usedPkgs = IdSet.fromList $ mapMaybe id maybePkgs
     in
         (concat expandedLists, errs, usedPkgs)
 
@@ -740,11 +743,11 @@ classToIClass i k (Class { csig=tvs, super=ps, funDeps2=bss2,
 -- Only tracks re-exported items (from other packages). Local exports are already
 -- tracked during type checking (Phase 2). For re-exports, only record the package
 -- of the item itself, not types within its definition.
-getPackagesUsedByExports :: Id -> CSignature -> S.Set Id
+getPackagesUsedByExports :: Id -> CSignature -> IdSet
 getPackagesUsedByExports currentPkg (CSignature _ _ _ defns) =
     let allPkgs = mapMaybe getPackageFromDefn defns
         externalPkgs = filter (/= currentPkg) allPkgs
-    in  S.fromList externalPkgs
+    in  IdSet.fromList externalPkgs
   where
     -- Get the package qualifier from a qualified Id
     getIdPackage :: Id -> Maybe Id

@@ -18,10 +18,12 @@ import Data.List(sortBy, genericLength, sort, transpose, partition, groupBy, nub
 import Data.Ord(Down(..), comparing)
 import Util(mapFst)
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import qualified Data.Map.Strict as MS
 import qualified Data.Set as S
 import Util(allSame, flattenPairs, makePairs, remOrdDup, integerToBits,
-            itos, eqSnd, cmpSnd, nubByFst, map_insertManyWith,
+            itos, eqSnd, cmpSnd, nubByFst,
             headOrErr, initOrErr, lastOrErr, unconsOrErr)
 import IntegerUtil(integerSelect)
 import PPrint
@@ -125,7 +127,7 @@ aOpt errh flags pkg0 = do
         --
         pkg1B =
             let ds = aspkg_values pkg1A
-                dmap = M.fromList [ (i, e) | (ADef i _ e _) <- ds ]
+                dmap = IdMap.fromList [ (i, e) | (ADef i _ e _) <- ds ]
                 findFn = makeFindFn "AOpt.aInsertCase" dmap
                 ds' = map (aInsertCaseDef False findFn) ds
             in  pkg1A { aspkg_values = ds' }
@@ -274,9 +276,9 @@ optExprBFlag = BFlags {
 -- to be concatenated.  By storing those in the monad, we need not
 -- plumb the new definitions around.
 
-type DefMap = (M.Map AId AExpr)
+type DefMap = IdMap AExpr
 
-type UseMap = (M.Map AId Int)
+type UseMap = IdMap Int
 
 data OState = OState { o_nextid :: Integer,
                        o_defs   :: [ADef],
@@ -288,8 +290,8 @@ data OState = OState { o_nextid :: Integer,
 initOState :: OState
 initOState = OState { o_nextid = 1,
                       o_defs   = [],
-                      o_defmap = M.empty,
-                      o_usemap = M.empty
+                      o_defmap = IdMap.empty,
+                      o_usemap = IdMap.empty
                     }
 
 type O a = State OState a
@@ -300,8 +302,8 @@ addDef ::  ADef -> O ()
 addDef d@(ADef aid t e _) = do
   s <- get
   let uses    = (aid,0) : map (\i -> (i,1)) (aVars e)
-      defmap' = M.insert aid e (o_defmap s)
-      usemap' = map_insertManyWith (+) uses (o_usemap s)
+      defmap' = IdMap.insert aid e (o_defmap s)
+      usemap' = IdMap.insertManyWith (+) uses (o_usemap s)
   defmap' `seq` usemap' `seq`
    put s { o_defs   = d:o_defs s,
            o_defmap = defmap',
@@ -318,7 +320,7 @@ getDefs = do
 clearDefs :: O ()
 clearDefs = do
   s <- get
-  put s { o_defmap = M.empty, o_defs = [], o_usemap = M.empty }
+  put s { o_defmap = IdMap.empty, o_defs = [], o_usemap = IdMap.empty }
 
 -- make a new name with the next uniquifier appended to the prefix ("_dm")
 -- XX only used with the mux opt which is turned off!
@@ -334,7 +336,7 @@ newName = do
 
 -- looks upa given definition
 lookupDef :: AId -> O ( Maybe AExpr )
-lookupDef aid = gets o_defmap >>= return . M.lookup aid
+lookupDef aid = gets o_defmap >>= return . IdMap.lookup aid
 
 -- returns a function on the given state:
 --   given an Id, look it up in the map, and return its expression,
@@ -346,10 +348,10 @@ findDef = do
 
 makeFindFn :: String -> DefMap -> (AId -> AExpr)
 makeFindFn str dmap v =
-  case M.lookup v dmap of
+  case IdMap.lookup v dmap of
     Just e -> e
     Nothing -> internalError(str ++ " inconsistent: " ++
-                             ppReadable (v, M.toList dmap))
+                             ppReadable (v, IdMap.toList dmap))
 
 
 -- Start the map off with the non-def uses
@@ -358,7 +360,7 @@ setNonDefUses ss fs = do
   let vuses = aVars ss
   let fuses = aVars fs
   let uses = map (\i -> (i,1)) (vuses ++ fuses)
-  let newMap = M.fromListWith (+) uses
+  let newMap = IdMap.fromListWith (+) uses
   s <- get
   put s { o_usemap = newMap }
 
@@ -366,9 +368,9 @@ findUse :: O (AId -> Bool)
 findUse = do
   umap <- gets o_usemap
   return
-    (\ v -> case M.lookup v umap of
+    (\ v -> case IdMap.lookup v umap of
               Just i  -> (i == 1)
-              Nothing -> internalError("AOpt.findUse inconsistent" ++ ppReadable (v, M.toList umap))
+              Nothing -> internalError("AOpt.findUse inconsistent" ++ ppReadable (v, IdMap.toList umap))
     )
 
 {-
@@ -617,7 +619,7 @@ aMuxOpt bflgs e@(_) = return e
 aExpandDynSelASPkg :: ASPackage -> ASPackage
 aExpandDynSelASPkg pkg0 =
     let ds = aspkg_values pkg0
-        dmap = M.fromList [ (i, e) | (ADef i _ e _) <- ds ]
+        dmap = IdMap.fromList [ (i, e) | (ADef i _ e _) <- ds ]
         findFn = makeFindFn "AOpt.aExpandDynSel" dmap
     in  aExpandDynSel False findFn pkg0
 

@@ -6,6 +6,7 @@ import Data.List(partition)
 import PFPrint
 import IntLit(IntLit(..))
 import qualified Data.Map as M
+import qualified IdMap
 import qualified Data.Set as S
 import BackendNamingConventions
 import Error(internalError, EMsg, WMsg)
@@ -120,7 +121,7 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
         -- create a map of the rwire values methods to the signals which
         -- now carry their values (whether new def or subst of existing def)
         -- (this will be used to replace ASPort uses with ASDef uses)
-        rmap = M.fromList [(i, ASDef t i) | (i, t) <- wire_svars]
+        rmap = IdMap.fromList [(i, ASDef t i) | (i, t) <- wire_svars]
 
         -- functions for making the defs for RWire and BypassWire
         mkRW0 :: AVInst -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg])

@@ -4,8 +4,9 @@ import ASyntax
 
 import ErrorUtil(internalError)
 
-import qualified Data.Set as S
-import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
+import qualified IdSet
 import Prim
 import PPrint
 import IntLit
@@ -478,14 +479,14 @@ instance AExprs APackage where
 -- substitute into b using a map from AIds to AExprs
 -- defined in terms of mapAExprs
 
-type EMap a = M.Map AId a
+type EMap a = IdMap a
 
 aSubst :: (AExprs a) => EMap AExpr -> a -> a
 aSubst m = mapAExprs xsub
   where xsub :: AExpr -> AExpr
-        xsub x@(ASPort _ i) = M.findWithDefault x i m
-        xsub x@(ASParam _ i) = M.findWithDefault x i m
-        xsub x@(ASDef _ i) = M.findWithDefault x i m
+        xsub x@(ASPort _ i) = IdMap.findWithDefault x i m
+        xsub x@(ASParam _ i) = IdMap.findWithDefault x i m
+        xsub x@(ASDef _ i) = IdMap.findWithDefault x i m
         xsub (APrim aid t p es) = APrim aid t p (aSubst m es)
         xsub (AMethCall t i meth es) = AMethCall t i meth (aSubst m es)
         xsub (ATuple t es) = ATuple t (aSubst m es)
@@ -716,21 +717,21 @@ tsortADefs :: Bool -> [ADef] -> [ADef]
 tsortADefs stable ds =
     let
         ds_ids = (map adef_objid ds)
-        s = S.fromList ds_ids
-        deps = map ((filter (`S.member` s)) . aVars . adef_expr) ds
+        s = IdSet.fromList ds_ids
+        deps = map ((filter (`IdSet.member` s)) . aVars . adef_expr) ds
     -- m is OrdMap of (AId of ADef, ADef) from input ADefs
-        m = M.fromList (zip ds_ids ds)
+        m = IdMap.fromList (zip ds_ids ds)
     -- get i is OrdMap lookup giving ADef in m from AId
-        get i = case M.lookup i m of Just d -> d; Nothing -> internalError "tsortADefs: get"
+        get i = case IdMap.lookup i m of Just d -> d; Nothing -> internalError "tsortADefs: get"
     -- decorate ids so Ord compares in text order; the text order is
     -- precomputed as a strict Int rank so that graph keys stay small
     -- (string keys on every edge overflow the stack on large designs)
-        rank :: M.Map AId Int
-        rank = M.fromList
+        rank :: IdMap Int
+        rank = IdMap.fromList
                  (zip (sortOn (\ i -> (getIdBaseString i, getIdQualString i))
                               ds_ids)
                       [0..])
-        key i = case M.lookup i rank of
+        key i = case IdMap.lookup i rank of
                   Just r -> r `seq` (r, i)
                   Nothing -> internalError "tsortADefs: rank"
         sorted_ids

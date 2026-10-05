@@ -16,11 +16,13 @@ import Prelude hiding ((<>))
 
 import Data.List(union, partition)
 import Data.Maybe(listToMaybe)
-import qualified Data.Set as S
-import qualified Data.Map.Strict as M
+import qualified IdMap.Strict as M
 
 import ErrorUtil(internalError)
 import Id
+import IdMap(IdMap)
+import IdSet(IdSet)
+import qualified IdSet as S
 import CSyntax
 import CSyntaxTypes()
 import CFreeVars(getFVE)
@@ -45,7 +47,7 @@ data DirectIncoherence = DirectIncoherence {
 
 data SolvedBind = SolvedBind {
   bind :: Bind,
-  freeVars :: S.Set Id,
+  freeVars :: IdSet,
   isRecursive :: Bool,
   isIncoherent :: Bool,
   solvedClass :: Maybe Class  -- the class this bind resolves (for allowIncoherent check)
@@ -81,14 +83,14 @@ addBindDeps is sb = sb { freeVars = foldr S.insert (freeVars sb) is }
 -- Collection of bindings categorized by recursion
 -- nonRecursiveBinds are maintained in topologically sorted order
 data SolvedBinds = SolvedBinds {
-  recursiveBinds :: [(Bind, S.Set Id)], -- binding and free variables
-  nonRecursiveBinds :: [(Bind, S.Set Id)],
-  recursiveIds :: S.Set Id,
-  nonRecursiveIds :: S.Set Id,
-  incoherentIds :: S.Set Id,
-  bindClasses :: M.Map Id Class,                   -- class per bind (for allowIncoherent check)
-  bindTypes :: M.Map Id Type,                      -- type per bind (for diagnostic messages)
-  directIncoherences :: M.Map Id DirectIncoherence -- root cause per directly-incoherent bind
+  recursiveBinds :: [(Bind, IdSet)], -- binding and free variables
+  nonRecursiveBinds :: [(Bind, IdSet)],
+  recursiveIds :: IdSet,
+  nonRecursiveIds :: IdSet,
+  incoherentIds :: IdSet,
+  bindClasses :: IdMap Class,                   -- class per bind (for allowIncoherent check)
+  bindTypes :: IdMap Type,                      -- type per bind (for diagnostic messages)
+  directIncoherences :: IdMap DirectIncoherence -- root cause per directly-incoherent bind
 } deriving (Show)
 
 instance Types SolvedBinds where
@@ -245,5 +247,5 @@ getRecursiveDefls = map (mkDefl . fst) . recursiveBinds
 getNonRecursiveDefls :: SolvedBinds -> [CDefl]
 getNonRecursiveDefls = map (mkDefl . fst) . nonRecursiveBinds
 
-getIncoherentIds :: SolvedBinds -> S.Set Id
+getIncoherentIds :: SolvedBinds -> IdSet
 getIncoherentIds = incoherentIds

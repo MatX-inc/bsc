@@ -5,6 +5,9 @@ import Data.List
 import Control.Monad(when, unless)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
+import qualified IdSet
 import qualified GraphWrapper as GW
 import Data.Ix(range)
 
@@ -2783,11 +2786,11 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
                 -- Inline simple bindings in both categories
                 (vmap_rec, rem_rec) = simplifyDictBindings rec_defls
                 (vmap_nonrec, rem_nonrec) = simplifyDictBindings nonrec_defls
-                vmap = M.union vmap_rec vmap_nonrec
+                vmap = IdMap.union vmap_rec vmap_nonrec
 
                 -- we're only substituting variables, not constructors
                 s :: CSEnv
-                s = (M.empty, M.empty, vmap, M.empty)
+                s = (IdMap.empty, IdMap.empty, vmap, M.empty)
                 alts''' = cSubstN s alts''
                 me''' = cSubstQualsN s me''
                 rem_rec' = cSubstN s rem_rec
@@ -2827,7 +2830,7 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
 -- benefit.  In rev 2904, he commented it out, due to a bug.  In his
 -- code, a simple binding included functions.  We don't include those,
 -- and thus don't have to deal with recursive bindings.
-simplifyDictBindings :: [CDefl] -> (M.Map Id CExpr, [CDefl])
+simplifyDictBindings :: [CDefl] -> (IdMap CExpr, [CDefl])
 simplifyDictBindings all_bs =
     let
         (simple_bs, rem_bs0) = partition simpleD all_bs
@@ -2847,8 +2850,8 @@ simplifyDictBindings all_bs =
         defpairs =
             [ (i, e)
               | (CLValueSign (CDefT i _ _ [CClause _ _ e]) _) <- simple_bs ]
-        defmap = M.fromList defpairs
-        isdef i = i `M.member` defmap
+        defmap = IdMap.fromList defpairs
+        isdef i = i `IdMap.member` defmap
         usegraph = [ (i, is) | (i, e) <- defpairs,
                                let is0 = fvSetToFreeVars (getFVE e),
                                let is = filter isdef is0 ]
@@ -2858,12 +2861,12 @@ simplifyDictBindings all_bs =
               Left sccs ->
                   internalError ("ordered_def_ids: " ++ ppReadable sccs)
 
-        mkEnv vm = (M.empty, M.empty, vm, M.empty)
+        mkEnv vm = (IdMap.empty, IdMap.empty, vm, M.empty)
 
         vmap = let fn accum_map i =
-                      let e0 = fromJustOrErr "vmap" (M.lookup i defmap)
-                      in  M.insert i (cSubst (mkEnv accum_map) e0) accum_map
-               in  foldl fn M.empty ordered_def_ids
+                      let e0 = fromJustOrErr "vmap" (IdMap.lookup i defmap)
+                      in  IdMap.insert i (cSubst (mkEnv accum_map) e0) accum_map
+               in  foldl fn IdMap.empty ordered_def_ids
     in
        (vmap, cSubstN (mkEnv vmap) rem_bs0)
 
@@ -3130,12 +3133,12 @@ tiImpls recursive as ibs = do
                   -- Inline simple dictionary bindings in both categories
                   (vmap_rec, rem_rec) = simplifyDictBindings rec_defls
                   (vmap_nonrec, rem_nonrec) = simplifyDictBindings nonrec_defls
-                  vmap = M.union vmap_rec vmap_nonrec
+                  vmap = IdMap.union vmap_rec vmap_nonrec
 
                   -- substitute for the simple dict bindings (vmap)
                   -- and for the new generic variable names (gs_map)
                   csenv :: CSEnv
-                  csenv = (M.empty, M.empty, vmap, M.fromList gs_map)
+                  csenv = (IdMap.empty, IdMap.empty, vmap, M.fromList gs_map)
                   alts' = cSubstN csenv alts
                   me' = cSubstQualsN csenv me
                   -- the dict bindings can refer to "gs"
@@ -3257,7 +3260,7 @@ tiDefls type_env defs = do
 -- find untyped definitions which refer to themselves
 chkIRec :: [Impl] -> [Id]
 chkIRec [(i, (cs, me))] =
-    if S.member i (snd (getFVDl (CLValue i cs me))) then [i] else []
+    if IdSet.member i (snd (getFVDl (CLValue i cs me))) then [i] else []
 chkIRec ics = map fst ics
 
 {- Unused:
@@ -3268,8 +3271,8 @@ chkERec _ = False
 -- extract untyped let-defs and sort them into interdependent groups
 doSCC :: [CDefl] -> [[Impl]]
 doSCC ds =
-        let g = [ (i, S.toList (snd (getFVDl d) `S.intersection` is)) | d@(CLValue i _ _) <- ds ]                -- XXX CLMatch
-            is = S.fromList (map fst g)
+        let g = [ (i, IdSet.toList (snd (getFVDl d) `IdSet.intersection` is)) | d@(CLValue i _ _) <- ds ]                -- XXX CLMatch
+            is = IdSet.fromList (map fst g)
             iss = scc g
             get i = (i, (headOrErr ("TCheck.doSCC: missing CLValue " ++
                                     pfpString i)

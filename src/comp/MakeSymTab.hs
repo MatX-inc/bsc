@@ -17,6 +17,10 @@ import Control.Monad(when)
 import Control.Monad.Except(throwError)
 import qualified Data.Set as S
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 
 import Data.Either(partitionEithers)
 import PredTrie
@@ -125,7 +129,7 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
         (simp, impClsErrs) = foldl (addImpSyms errh insts) (spre, []) impsigs
 
         -- all types available to this packaged (predefined and imported)
-        preIds = S.fromList (map fst (getAllTypes simp))
+        preIds = IdSet.fromList (map fst (getAllTypes simp))
 
         -- ---------------
         -- Errors
@@ -134,15 +138,15 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
         tdefs = filter isTDef ds
         -- the qualified and unqualified names of the types defined here,
         -- plus types already defined
-        dids = S.unions (map (getVD mi) tdefs) `S.union` preIds
+        dids = IdSet.unions (map (getVD mi) tdefs) `IdSet.union` preIds
 
         -- multiple definitions for the same Id
         dis = filter ((> 1) . length) . group . sort . concatMap getVDefIds $ ds
         -- undefined type references
-        uids = S.toList (S.unions (map getFTCDn ds) `S.difference` dids)
+        uids = IdSet.toList (IdSet.unions (map getFTCDn ds) `IdSet.difference` dids)
 
         -- check for recursive type synonyms
-        type_syn_map = [ (iKName i, S.toList $ getFTyCons t)
+        type_syn_map = [ (iKName i, IdSet.toList $ getFTyCons t)
                              | (Ctype i _ t) <- tdefs ]
         rec_type_syn_sccs = case (tsort type_syn_map) of
                               Right _ -> []
@@ -307,26 +311,26 @@ updTypes r t = t
 -- Runs after mkSymTab but before type checking, capturing type synonym
 -- uses before they are expanded away. Type synonyms are expanded recursively
 -- to find all transitively referenced packages.
-getPackagesUsedInTypes :: SymTab -> CPackage -> S.Set Id
+getPackagesUsedInTypes :: SymTab -> CPackage -> IdSet
 getPackagesUsedInTypes symtab (CPackage _ _ _ _ _ ds _) =
-    let directTyCons = S.unions (map getFTCDn ds)
-    in  S.unions (map (getPackagesForType symtab) (S.toList directTyCons))
+    let directTyCons = IdSet.unions (map getFTCDn ds)
+    in  IdSet.unions (map (getPackagesForType symtab) (IdSet.toList directTyCons))
 
 -- For a type constructor, get its source package and recursively expand
 -- if it's a type synonym. Non-synonym types (data, struct, abstract) are
 -- not recursed into. Returns empty set for local types (ti_pkg = Nothing).
-getPackagesForType :: SymTab -> Id -> S.Set Id
+getPackagesForType :: SymTab -> Id -> IdSet
 getPackagesForType symtab tycon =
     case findType symtab tycon of
         Just (TypeInfo { ti_pkg = Just pkg, ti_sort = TItype _ rhs }) ->
             -- Type synonym from imported package: record package and recurse
             let rhsTyCons = getFTyCons rhs
-                recursivePkgs = S.unions (map (getPackagesForType symtab) (S.toList rhsTyCons))
-            in  S.insert pkg recursivePkgs
+                recursivePkgs = IdSet.unions (map (getPackagesForType symtab) (IdSet.toList rhsTyCons))
+            in  IdSet.insert pkg recursivePkgs
         Just (TypeInfo { ti_pkg = Just pkg }) ->
             -- Non-synonym from imported package: record package only
-            S.singleton pkg
-        _ -> S.empty  -- Not found or local type (ti_pkg = Nothing)
+            IdSet.singleton pkg
+        _ -> IdSet.empty  -- Not found or local type (ti_pkg = Nothing)
 
 -- ---------------
 
@@ -891,7 +895,7 @@ mustConvCQType r _ qt =
     Left msg -> internalError ("mustConvCQType:\n" ++ ppReadable msg)
 
 mkTypeSyms :: ErrorHandle
-           -> (Id -> [Id]) -> Maybe Id -> Maybe Id -> M.Map Id Kind -> [CDefn] -> QInsts
+           -> (Id -> [Id]) -> Maybe Id -> Maybe Id -> IdMap Kind -> [CDefn] -> QInsts
            -> SymTab -> (SymTab, [EMsg])
 mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
     let importedTypeInfos = concatMap (getTI errh maybePackageName src_pkg r iks) defs
@@ -907,7 +911,7 @@ mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
         r = addClasses mkQuals (addTypes mkQuals s importedTypeInfos) cls
     in  (r, concat errss)
 
-getTI :: ErrorHandle -> Maybe Id -> Maybe Id -> SymTab -> M.Map Id Kind -> CDefn -> [(Id, TypeInfo)]
+getTI :: ErrorHandle -> Maybe Id -> Maybe Id -> SymTab -> IdMap Kind -> CDefn -> [(Id, TypeInfo)]
 getTI errh mi src_pkg r iks (Ctype ik vs ct) = [(i, TypeInfo (Just i) k vs (TItype n ct') src_pkg)]
   where i = qual mi (iKName ik)
         k = getK iks ik
@@ -966,16 +970,16 @@ checkATFParams :: ErrorHandle -> Id -> [Id] -> CFunDeps -> [CAssocDepFun] -> ()
 checkATFParams errh className vs fds ats =
     if null errs then () else bsErrorUnsafe errh errs
   where
-    vs_set = S.fromList vs
+    vs_set = IdSet.fromList vs
     paramErrs = [ (getPosition ca_name,
                 EATFDeclParamMismatch (pfpString className)
                   (pfpString ca_name) (map pfpString vs) (pfpString badV))
              | CAssocDepFun ca_name ca_params ca_rhs <- ats
              , badV <-
                  -- Check params are class type variables
-                 [ p | p <- ca_params, not (S.member p vs_set) ] ++
+                 [ p | p <- ca_params, not (IdSet.member p vs_set) ] ++
                  -- Check RHS is a class type variable
-                 [ ca_rhs | not (S.member ca_rhs vs_set) ]
+                 [ ca_rhs | not (IdSet.member ca_rhs vs_set) ]
              ]
     dupErrs = [ (getPosition ca_name,
                 EATFDeclDuplicateParam (pfpString ca_name) (pfpString p))
@@ -995,11 +999,11 @@ checkATFParams errh className vs fds ats =
                 EATFResultNotDetermined (pfpString ca_name)
                   (pfpString ca_rhs) (map pfpString ca_params))
              | CAssocDepFun ca_name ca_params ca_rhs <- ats
-             , let param_set = S.fromList ca_params
+             , let param_set = IdSet.fromList ca_params
                    -- Check: exists a fundep (srcs, tgts) where
                    -- all srcs are in param_set and ca_rhs is in tgts
                    isDetermined = any (\(srcs, tgts) ->
-                       all (`S.member` param_set) srcs &&
+                       all (`IdSet.member` param_set) srcs &&
                        ca_rhs `elem` tgts) fds
              , not isDetermined
              ]
@@ -1015,27 +1019,27 @@ mkATFTIs mi src_pkg classId vs ks ats =
                , atf_param_idxs = p_idxs
                , atf_target_idx = t_idx }) src_pkg)
     | CAssocDepFun ca_name ca_params ca_rhs <- ats
-    , let param_ks = [ M.findWithDefault KStar p vs_kind_map | p <- ca_params ]
-          result_k = M.findWithDefault KStar ca_rhs vs_kind_map
+    , let param_ks = [ IdMap.findWithDefault KStar p vs_kind_map | p <- ca_params ]
+          result_k = IdMap.findWithDefault KStar ca_rhs vs_kind_map
           atf_k    = foldr Kfun result_k param_ks
           atf_i    = qual mi ca_name
           p_idxs   = [ get_idx p | p <- ca_params ]
           t_idx    = get_idx ca_rhs
     ]
-  where vs_kind_map = M.fromList (zip vs ks)
-        vs_idx_map  = M.fromList (zip vs [0..])
+  where vs_kind_map = IdMap.fromList (zip vs ks)
+        vs_idx_map  = IdMap.fromList (zip vs [0..])
         get_idx v = fromJustOrErr
           ("mkATFTIs: variable " ++ ppReadable v ++
            " not found in class " ++ ppReadable classId)
-          (M.lookup v vs_idx_map)
+          (IdMap.lookup v vs_idx_map)
 
 qual :: Maybe Id -> Id -> Id
 qual Nothing i = i
 qual (Just mi) i = qualId mi i
 
-getK :: M.Map Id Kind -> IdK -> Kind
+getK :: IdMap Kind -> IdK -> Kind
 getK iks ik =
-    case M.lookup (iKName ik) iks of
+    case IdMap.lookup (iKName ik) iks of
     Just k -> k
     Nothing ->
         case ik of
@@ -1103,7 +1107,7 @@ overlapErrors pairCmp tagged trie = nub errs
 
 -- ---------------
 
-getCls :: ErrorHandle -> Maybe Id -> Maybe Id -> M.Map Id Kind -> SymTab ->
+getCls :: ErrorHandle -> Maybe Id -> Maybe Id -> IdMap Kind -> SymTab ->
           -- class components
           Maybe Bool -> [CPred] -> IdK -> [Id] -> CFunDeps -> [CAssocDepFun] ->
           CFields ->
@@ -1130,8 +1134,8 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
         -- a list of all False leads to useless work.
         bss2 = [ map (mkFunDep2 rs1 rs2) vs | (rs1, rs2) <- fds ]
         qi = qual mi i
-        vs_kind_map = M.fromList (zip vs ks)
-        vs_idx_map  = M.fromList (zip vs [0 :: Int ..])
+        vs_kind_map = IdMap.fromList (zip vs ks)
+        vs_idx_map  = IdMap.fromList (zip vs [0 :: Int ..])
         atf_infos =
           [ (TyCon atf_i (Just atf_k)
                  (TIatf { atf_class_id   = qi
@@ -1139,8 +1143,8 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
                         , atf_target_idx = t_idx }),
              p_idxs, t_idx)
           | CAssocDepFun ca_name ca_params ca_rhs <- ats
-          , let param_ks = [ M.findWithDefault KStar p vs_kind_map | p <- ca_params ]
-                result_k = M.findWithDefault KStar ca_rhs vs_kind_map
+          , let param_ks = [ IdMap.findWithDefault KStar p vs_kind_map | p <- ca_params ]
+                result_k = IdMap.findWithDefault KStar ca_rhs vs_kind_map
                 atf_k    = foldr Kfun result_k param_ks
                 atf_i    = qual mi ca_name
                 p_idxs   = [ get_idx p | p <- ca_params ]
@@ -1149,7 +1153,7 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
         get_idx v = fromJustOrErr
           ("getTI CIclass: variable " ++ ppReadable v ++
            " not found in class " ++ ppReadable qi)
-          (M.lookup v vs_idx_map)
+          (IdMap.lookup v vs_idx_map)
         mkClass genInsts' getInsts' =
           Class {
             name = CTypeclass qi,
@@ -1443,7 +1447,7 @@ addImpSyms errh insts (s, errs0) (CImpSign name qf (CSignature pkgName _ _ ds)) 
                 if qf
                 then [name]
                 else mkDefaultQuals name
-            (s1, errs1) = mkTypeSyms errh mkQuals Nothing src_pkg M.empty ds insts s
+            (s1, errs1) = mkTypeSyms errh mkQuals Nothing src_pkg IdMap.empty ds insts s
             s2 = symAddFields mkQuals mi src_pkg s1 ds
             -- NOTE: methods (symAddVars) before top-level values (addVars
             -- of getTopVars below): this order is LOAD-BEARING, exactly as
@@ -1459,8 +1463,8 @@ addImpSyms errh insts (s, errs0) (CImpSign name qf (CSignature pkgName _ _ ds)) 
 -----
 
 -- Get defined variables
-getVD :: Id -> CDefn -> S.Set Id
-getVD mi d = S.fromList (is ++ map (qualId mi) is)
+getVD :: Id -> CDefn -> IdSet
+getVD mi d = IdSet.fromList (is ++ map (qualId mi) is)
   where is = getVDefIds d
 
 -----

@@ -27,6 +27,10 @@ import Prelude hiding ((<>))
 
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 import Data.List(intersperse)
 import Util(thd)
 import Eval
@@ -176,7 +180,7 @@ instance PPrint AScheduleErrInfo where
 --   (This is a superset which also takes into account rule executions
 --    that have been forced to be exclusive due to conflicts etc.)
 newtype ExclusiveRulesDB =
-    ExclusiveRulesDB (M.Map ARuleId (S.Set ARuleId, S.Set ARuleId))
+    ExclusiveRulesDB (IdMap (IdSet, IdSet))
 
 instance NFData ExclusiveRulesDB where
   rnf (ExclusiveRulesDB m) = rnf m
@@ -188,8 +192,8 @@ instance NFData ExclusiveRulesDB where
 -- disjointness.
 areRulesExclusive :: ExclusiveRulesDB -> ARuleId -> ARuleId -> Bool
 areRulesExclusive (ExclusiveRulesDB exclusive_fmap) r1 r2 =
-    let (disj_set, excl_set) = M.findWithDefault (S.empty, S.empty) r1 exclusive_fmap
-    in (S.member r2 disj_set) || (S.member r2 excl_set)
+    let (disj_set, excl_set) = IdMap.findWithDefault (IdSet.empty, IdSet.empty) r1 exclusive_fmap
+    in (IdSet.member r2 disj_set) || (IdSet.member r2 excl_set)
 
 -- Are the CAN_FIRE signals of the rules exclusive?
 -- (Used in Bluesim backend for short-circuiting the CF computation,
@@ -197,18 +201,18 @@ areRulesExclusive (ExclusiveRulesDB exclusive_fmap) r1 r2 =
 -- execution of a mutually exclusive rule -- for which no sched edge exists.)
 areRulesDisjoint :: ExclusiveRulesDB -> ARuleId -> ARuleId -> Bool
 areRulesDisjoint (ExclusiveRulesDB exclusive_fmap) r1 r2 =
-    let (disj_set, _) = M.findWithDefault (S.empty, S.empty) r1 exclusive_fmap
-    in  S.member r2 disj_set
+    let (disj_set, _) = IdMap.findWithDefault (IdSet.empty, IdSet.empty) r1 exclusive_fmap
+    in  IdSet.member r2 disj_set
 
 erdbToList :: ExclusiveRulesDB -> [(ARuleId,([ARuleId],[ARuleId]))]
 erdbToList (ExclusiveRulesDB exclusive_map) =
-    let conv (r, (d_set, e_set)) = (r, (S.toList d_set, S.toList e_set))
-    in  map conv (M.toList exclusive_map)
+    let conv (r, (d_set, e_set)) = (r, (IdSet.toList d_set, IdSet.toList e_set))
+    in  map conv (IdMap.toList exclusive_map)
 
 erdbFromList :: [(ARuleId,([ARuleId],[ARuleId]))] -> ExclusiveRulesDB
 erdbFromList xs =
-    let conv (r, (ds, es)) = (r, (S.fromList ds, S.fromList es))
-    in  ExclusiveRulesDB (M.fromList (map conv xs))
+    let conv (r, (ds, es)) = (r, (IdSet.fromList ds, IdSet.fromList es))
+    in  ExclusiveRulesDB (IdMap.fromList (map conv xs))
 
 instance Show ExclusiveRulesDB where
     show erdb = show (erdbToList erdb)

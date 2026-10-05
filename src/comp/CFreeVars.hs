@@ -35,8 +35,10 @@ module CFreeVars (
                   getVDefIds
    ) where
 
-import qualified Data.Set as S
-import Util(set_deleteMany)
+import qualified Data.Set as Set
+
+import IdSet(IdSet)
+import qualified IdSet as S
 
 import Id
 import ErrorUtil(internalError)
@@ -54,7 +56,7 @@ import CType(typeclassId)
 -- two separate sets.
 
 -- constructor set, variable set
-type FVSet = (S.Set Id, S.Set Id)
+type FVSet = (IdSet, IdSet)
 
 fvSetToFreeVars :: FVSet -> [Id]
 fvSetToFreeVars (_, v_set) = S.toList v_set
@@ -79,14 +81,14 @@ deleteV i (cs, vs) = (cs, S.delete i vs)
 
 -- delete many bound variables
 deleteManyV :: [Id] -> FVSet -> FVSet
-deleteManyV is (cs, vs) = (cs, set_deleteMany is vs)
+deleteManyV is (cs, vs) = (cs, S.deleteMany is vs)
 
 -- delete a set of bound variables
-minusVS :: FVSet -> S.Set Id -> FVSet
+minusVS :: FVSet -> IdSet -> FVSet
 minusVS (cs, vs1) vs2 = (cs, vs1 `S.difference` vs2)
 
 -- add a set of constructors
-plusCS :: FVSet -> S.Set Id -> FVSet
+plusCS :: FVSet -> IdSet -> FVSet
 plusCS (cs1, vs) cs2 = (cs1 `S.union` cs2, vs)
 
 -- add a variable
@@ -184,7 +186,7 @@ getFVE (Cattributes _) = emptyFVS
 -- Get the vars from a list of defls from letseq (not letrec).
 -- Returns the bound def names (to be removed from the free vars of later
 -- expressions or statements) and the free vars from those defs.
-getFVSeqDefls :: [CDefl] -> (S.Set Id, FVSet)
+getFVSeqDefls :: [CDefl] -> (IdSet, FVSet)
 getFVSeqDefls let_arms =
     let get_def_fve (defs_above, free_vars_above) let_arm =
             (defs_above `S.union` S.fromList (getLDefs let_arm),
@@ -247,7 +249,7 @@ getFVO (CRand e) = getFVE e
 getFVO (CRator _ i) = singletonV i  -- XXX should we return operators?
 
 -- Get type constructors
-getFTCE :: CExpr -> S.Set Id
+getFTCE :: CExpr -> IdSet
 getFTCE (CLam _ e) = getFTCE e
 getFTCE (CLamT _ t e) = getFTCE e `S.union` getFQTyCons t
 getFTCE (Cletseq defs expr) = S.unions (getFTCE expr : map getFTCDl defs)
@@ -308,7 +310,7 @@ getFTCE (Cattributes _) = S.empty
 
 -- since there is no worry about name binding, this can just be mapped over
 -- the statement list (no folding involved)
-getFTCStmt :: CStmt -> S.Set Id
+getFTCStmt :: CStmt -> IdSet
 getFTCStmt (CSBindT p me _ t e) =
     S.unions [getFQTyCons t, getPT p, getFTCE e, getMFTC me]
 getFTCStmt (CSBind p me _ e) =
@@ -317,13 +319,13 @@ getFTCStmt (CSletseq ds) = S.unions (map getFTCDl ds)
 getFTCStmt (CSletrec ds) = S.unions (map getFTCDl ds)
 getFTCStmt (CSExpr _ e) = getFTCE e
 
-getFTCMStmt :: CMStmt -> S.Set Id
+getFTCMStmt :: CMStmt -> IdSet
 getFTCMStmt (CMStmt s) = getFTCStmt s
 getFTCMStmt (CMrules e) = getFTCE e
 getFTCMStmt (CMinterface e) = getFTCE e
 getFTCMStmt (CMTupleInterface _ es) = S.unions (map getFTCE es)
 
-getFTCO :: COp -> S.Set Id
+getFTCO :: COp -> IdSet
 getFTCO (CRand e) = getFTCE e
 getFTCO (CRator _ _) = S.empty
 
@@ -334,7 +336,7 @@ getLDefs (CLValue i _ _) = [i]
 getLDefs (CLMatch p _) = S.toList (getPV p)
 
 {-
-getFVQuals :: [CQual] -> S.Set Id
+getFVQuals :: [CQual] -> IdSet
 getFVQuals qs = trace ("qs: " ++ ppReadable qs) $
                 trace ("result: " ++ ppReadable (S.toList result)) $ result
  where result = getFVQuals' qs
@@ -347,13 +349,13 @@ getFVQuals (CQGen _ p e:qs) =
         `plusCS` (getPC p)
 getFVQuals (CQFilter e:qs) = getFVE e  `unionFVS`  getFVQuals qs
 
-getVQuals :: [CQual] -> S.Set Id
+getVQuals :: [CQual] -> IdSet
 getVQuals [] = S.empty
 getVQuals (CQGen _ p e:qs) = getPV p `S.union` getVQuals qs
 getVQuals (CQFilter e:qs) = getVQuals qs
 
 -- Get variables bound in a pattern
-getPV :: CPat -> S.Set Id
+getPV :: CPat -> IdSet
 getPV (CPCon _ ps) = S.unions (map getPV ps)
 getPV (CPstruct _ _ ips) = S.unions (map (getPV . snd) ips)
 getPV (CPVar i) = S.singleton i
@@ -366,7 +368,7 @@ getPV (CPConTs _ _ _ ps) = S.unions (map getPV ps)
 getPV (CPOper _) = internalError "CFreeVars.getPV: CPOper"
 
 -- Get (constructor and field) identifiers used in a pattern
-getPC :: CPat -> S.Set Id
+getPC :: CPat -> IdSet
 getPC (CPCon i ps) = S.insert i (S.unions (map getPC ps))
 getPC (CPstruct _ i ips) =
     -- XXX we don't return fields
@@ -385,7 +387,7 @@ getPC (CPOper ops) =
     in  S.unions (map getPCO ops)
 
 -- Get type constructors used in a pattern
-getPT :: CPat -> S.Set Id
+getPT :: CPat -> IdSet
 getPT (CPCon _ ps) = S.unions (map getPT ps)
 getPT (CPstruct {}) = S.empty
 getPT (CPVar {}) = S.empty
@@ -401,13 +403,13 @@ getPT (CPCon1 ti _ _) = S.singleton ti
 getPT (CPConTs ti _ ts ps) =
     S.insert ti (S.unions (map getFTyCons ts ++ map getPT ps))
 
-getPTs :: [CPat] -> S.Set Id
+getPTs :: [CPat] -> IdSet
 getPTs ps = S.unions (map getPT ps)
 
-getPCs :: [CPat] -> S.Set Id
+getPCs :: [CPat] -> IdSet
 getPCs ps = S.unions (map getPC ps)
 
-getPVs :: [CPat] -> S.Set Id
+getPVs :: [CPat] -> IdSet
 getPVs ps = S.unions (map getPV ps)
 
 -- Note that the def names themselves are included in the set.
@@ -448,31 +450,31 @@ getMFVE :: Maybe CExpr -> FVSet
 getMFVE Nothing = emptyFVS
 getMFVE (Just e) = getFVE e
 
-getFTCDl :: CDefl -> S.Set Id
+getFTCDl :: CDefl -> IdSet
 getFTCDl (CLValueSign d me) = getFTCD d `S.union` getFTCQuals me
 getFTCDl (CLValue _ cs me) =
     S.unions (map getFTCC cs) `S.union` getFTCQuals me
 getFTCDl (CLMatch p e) = getPT p `S.union` getFTCE e
 
-getFTCD :: CDef -> S.Set Id
+getFTCD :: CDef -> IdSet
 getFTCD (CDef _ t cs) = S.unions (map getFTCC cs) `S.union` getFQTyCons t
 getFTCD (CDefT _ _ t cs) = S.unions (map getFTCC cs) `S.union` getFQTyCons t
 
-getFTCC :: CClause -> S.Set Id
+getFTCC :: CClause -> IdSet
 getFTCC (CClause ps qs e) =
     getPTs ps `S.union` getFTCQuals qs `S.union` getFTCE e
 
-getFTCR :: CRule -> S.Set Id
+getFTCR :: CRule -> IdSet
 getFTCR (CRule _ n qs e) =
         getMFTC n `S.union` (getFTCQuals qs `S.union` getFTCE e)
 getFTCR (CRuleNest _ n qs rs) =
         getMFTC n `S.union` (getFTCQuals qs `S.union` S.unions (map getFTCR rs))
 
-getMFTC :: Maybe CExpr -> S.Set Id
+getMFTC :: Maybe CExpr -> IdSet
 getMFTC Nothing = S.empty
 getMFTC (Just e) = getFTCE e
 
-getFTCQuals :: [CQual] -> S.Set Id
+getFTCQuals :: [CQual] -> IdSet
 getFTCQuals qs =
     -- since we don't worry about name binding, map is OK (instead of fold)
     let getFTCQual (CQGen t p e) =
@@ -481,29 +483,29 @@ getFTCQuals qs =
     in  S.unions (map getFTCQual qs)
 
 {-
-getFVQTs :: CQType -> S.Set Id
-getFVQTs t = set_deleteMany (getQTyVars t) (getFVQT t)
+getFVQTs :: CQType -> IdSet
+getFVQTs t = S.deleteMany (getQTyVars t) (getFVQT t)
 
 getQTyVars :: CQType -> [Id]
 getQTyVars t = [ i | i <- S.toList (getFVQT t), getIdKind i == IKTyVar ]
 
-getFVQT :: CQType -> S.Set Id
+getFVQT :: CQType -> IdSet
 getFVQT (CQType ps t) = S.unions (getFVT t : map (\ (c, ts) -> S.insert c (S.unions (map getFVT ts))) ps)
 
-getFVT :: CType -> S.Set Id
+getFVT :: CType -> IdSet
 getFVT (TVar (TyVar i _ _)) = S.singleton i
 getFVT (TCon (TyCon i _ _)) = S.singleton i
 getFVT (TAp t t') = S.union (getFVT t) (getFVT t')
 getFVT (TGen _ _) = S.empty
 -}
 
-getFQTyCons :: CQType -> S.Set Id
+getFQTyCons :: CQType -> IdSet
 getFQTyCons (CQType ps t) = S.unions (getFTyCons t : map getCPTyCons ps)
 
-getCPTyCons :: CPred -> S.Set Id
+getCPTyCons :: CPred -> IdSet
 getCPTyCons (CPred (CTypeclass c) ts) = S.insert c (S.unions (map getFTyCons ts))
 
-getFTyCons :: CType -> S.Set Id
+getFTyCons :: CType -> IdSet
 getFTyCons (TVar (TyVar i _ _)) = S.empty
 getFTyCons (TCon (TyCon i _ _)) = S.singleton i
 getFTyCons (TCon (TyNum _ _)) = S.empty
@@ -512,13 +514,13 @@ getFTyCons (TAp t t') = S.union (getFTyCons t) (getFTyCons t')
 getFTyCons (TGen _ _) = S.empty
 getFTyCons (TDefMonad _) = S.empty  -- internalError "getFTyCons: TDefMonad"
 
-getFQTyVars :: CQType -> S.Set Id
+getFQTyVars :: CQType -> IdSet
 getFQTyVars (CQType ps t) = S.unions (getFTyVars t : map getCPTyVars ps)
 
-getCPTyVars :: CPred -> S.Set Id
+getCPTyVars :: CPred -> IdSet
 getCPTyVars (CPred c ts) = S.unions (map getFTyVars ts)
 
-getFTyVars :: CType -> S.Set Id
+getFTyVars :: CType -> IdSet
 getFTyVars (TVar (TyVar i _ _)) = S.singleton i
 getFTyVars (TCon (TyCon i _ _)) = S.empty
 getFTyVars (TCon (TyNum _ _)) = S.empty
@@ -532,25 +534,25 @@ getFTyVars (TDefMonad _) = S.empty  -- internalError "getFTyVars: TDefMonad"
 -- TyVars get folded (by S. unions) into one (as opposed to
 -- some failing equality due to some different but insignificant
 -- meta information on the TyVar)
-getFQTyVarsT :: CQType -> S.Set TyVar
-getFQTyVarsT (CQType ps t) = S.unions (getFTyVarsT t : map getCPTyVarsT ps)
+getFQTyVarsT :: CQType -> Set.Set TyVar
+getFQTyVarsT (CQType ps t) = Set.unions (getFTyVarsT t : map getCPTyVarsT ps)
 
-getCPTyVarsT :: CPred -> S.Set TyVar
-getCPTyVarsT (CPred c ts) = S.unions (map getFTyVarsT ts)
+getCPTyVarsT :: CPred -> Set.Set TyVar
+getCPTyVarsT (CPred c ts) = Set.unions (map getFTyVarsT ts)
 
-getFTyVarsT :: CType -> S.Set TyVar
-getFTyVarsT (TVar i) = S.singleton i
-getFTyVarsT (TCon (TyCon i _ _)) = S.empty
-getFTyVarsT (TCon (TyNum _ _)) = S.empty
-getFTyVarsT (TCon (TyStr _ _)) = S.empty
-getFTyVarsT (TAp t t') = S.union (getFTyVarsT t) (getFTyVarsT t')
-getFTyVarsT (TGen _ _) = S.empty
+getFTyVarsT :: CType -> Set.Set TyVar
+getFTyVarsT (TVar i) = Set.singleton i
+getFTyVarsT (TCon (TyCon i _ _)) = Set.empty
+getFTyVarsT (TCon (TyNum _ _)) = Set.empty
+getFTyVarsT (TCon (TyStr _ _)) = Set.empty
+getFTyVarsT (TAp t t') = Set.union (getFTyVarsT t) (getFTyVarsT t')
+getFTyVarsT (TGen _ _) = Set.empty
 getFTyVarsT (TDefMonad _) = internalError "getFTyVars: TDefMonad"
 
 
 
 -- Get Free TyCons
-getFTCDn :: CDefn -> S.Set Id
+getFTCDn :: CDefn -> IdSet
 getFTCDn (CValueSign d) = getFTCD d
 getFTCDn (CValue _ cs) = S.unions (map getFTCC cs)
 getFTCDn (Cprimitive _ t) = getFQTyCons t
@@ -579,7 +581,7 @@ getFTCDn (CItype i vs useposs) = S.empty
 getFTCDn (CIclass incoh ps i vs fds atfs _ useposs) =
       S.unions (map getCPTyCons ps) `S.union` S.fromList (map ca_name atfs)
 
-getFTDer :: CDeriving -> S.Set Id
+getFTDer :: CDeriving -> IdSet
 getFTDer (CStock tcs) = S.fromList (map typeclassId tcs)
 getFTDer (CVia tc _) = S.singleton (typeclassId tc)
 

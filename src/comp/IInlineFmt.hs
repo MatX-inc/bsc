@@ -13,7 +13,7 @@ import Control.Monad.State
 import Error(EMsg, ErrorHandle, bsError)
 import Position(noPosition)
 import CType(TISort(..), StructSubType(..))
-import qualified Data.Map as M
+import qualified IdMap
 -- import Debug.Trace(trace)
 
 type F a = StateT (Int, [IDef a]) (ExceptT EMsg (IO))
@@ -627,9 +627,9 @@ iInlineFmtsT :: ((IExpr a) -> Bool) -> IModule a -> IModule a
 iInlineFmtsT tst imod@(IModule { imod_local_defs = ds,
                                  imod_rules      = rs,
                                  imod_interface  = ifc}) =
-    let smap = M.fromList [ (i, iSubstWhen tst smap dmap e) | IDef i t e _ <- ds, (t == itFmt) ] -- inline any def of type Fmt
+    let smap = IdMap.fromList [ (i, iSubstWhen tst smap dmap e) | IDef i t e _ <- ds, (t == itFmt) ] -- inline any def of type Fmt
         ds' = iDefsMap (iSubstWhen tst smap dmap) ds
-        dmap = M.fromList [ (i, e) | IDef i t e _ <- ds' ]
+        dmap = IdMap.fromList [ (i, e) | IDef i t e _ <- ds' ]
         ifc' = map (iSubstIfc smap dmap) ifc
         rs' = irulesMap (iSubstWhen tst smap dmap) rs
         state_vars' = [ (name, sv { isv_iargs = es' })

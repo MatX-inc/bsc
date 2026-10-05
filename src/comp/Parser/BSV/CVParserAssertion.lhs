@@ -19,7 +19,7 @@ Look at transAssertStmt for a template.
 > import Control.Monad
 > import Control.Monad.Except
 > import Control.Monad.State
-> import qualified Data.Map as M
+> import qualified IdMap as M
 
 > import Parser.BSV.CVParserCommon
 > import CSyntax

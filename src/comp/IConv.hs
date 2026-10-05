@@ -15,6 +15,10 @@ import IOUtil(progArgs)
 import System.IO.Unsafe(unsafePerformIO)
 import qualified Data.Set as S
 import qualified Data.List as List
+import IdSet(IdSet)
+import qualified IdSet
+import IdMap(IdMap)
+import qualified IdMap
 
 import Util(fromJustOrErr)
 import qualified SCC(tsort,Graph)
@@ -57,7 +61,7 @@ import IConvLet(docycles, reorderDs, unpoly)
 -- XXX that's passed around (read-only state like ErrorHandle, Flags, SymTab
 -- XXX and possibly writeable state like the Env and scope variables)
 
-type Env a = M.Map Id (IExpr a)
+type Env a = IdMap (IExpr a)
 
 -- The lifted dictionaries accumulated by LiftDicts arrive as ready
 -- IDefs; they are appended to the package's definitions, and (through
@@ -68,7 +72,7 @@ iConvPackage :: ErrorHandle -> Flags -> SymTab ->
 iConvPackage errh flags r ctypeATFCache liftedDefs (CPackage pi _ _ _ _ ds _) =
     return (IPackage pi [] ps ds' itypeATFCache)
   where ds' = concatMap (iConvD errh flags pi r env pvs) ds ++ liftedDefs
-        env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds'])
+        env = IdMap.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds'])
         pvs = map IVar tmpVarIds
         ps = [ qualP p | CPragma p <- ds ]
         qualP (Pproperties i ps) = Pproperties (qualId pi i) ps
@@ -80,7 +84,7 @@ iConvPackage errh flags r ctypeATFCache liftedDefs (CPackage pi _ _ _ _ ds _) =
 
 iConvDef :: ErrorHandle -> Flags -> SymTab -> IPackage a -> CDefn -> IDef a
 iConvDef errh flags r (IPackage pi _ _ ds _) def =
-    let env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds])
+    let env = IdMap.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds])
         pvs = map IVar tmpVarIds
     in  case iConvD errh flags pi r env pvs def of
         [d] -> d
@@ -89,7 +93,7 @@ iConvDef errh flags r (IPackage pi _ _ ds _) def =
 iConvVar :: Flags -> SymTab -> Env a -> Id -> IExpr a
 iConvVar flags r env i =
         --trace ("lookup " ++ ppReadable i ++ show env) $
-        case M.lookup i env of
+        case IdMap.lookup i env of
         Just (IVar i') -> IVar (setIdPosition (getIdPosition i) i')
         Just e  -> e
         Nothing ->
@@ -151,7 +155,7 @@ iConvTask r i it =
 addVar :: Id -> IExpr a -> Env a -> Env a
 addVar i e t =
         --trace ("add " ++ ppReadable (i,e)) $
-        M.insert i e t
+        IdMap.insert i e t
 
 type IPVars a = [IExpr a]
 
@@ -487,16 +491,16 @@ iConvLet errh flags r env pvs ds = answer
         d_ids = [ i | (CLValueSign (CDefT i _ _ _) _) <- ds ]
         env' = let addFn i e = addVar i (IVar i) e
                in  foldr addFn env d_ids
-        is :: S.Set Id
-        is = S.fromList d_ids
+        is :: IdSet
+        is = IdSet.fromList d_ids
         graph :: SCC.Graph Id -- [(Id,[Id])]
         graph = [(i, local_is) |
                    d@(CLValueSign (CDefT i _ _ _) _) <- ds,
                    -- self-recursion is caught by unrec, below
                    let local_is =
                          filter ((/=) i)
-                           (S.toList
-                              ((snd (getFVDl d)) `S.intersection` is))]
+                           (IdSet.toList
+                              ((snd (getFVDl d)) `IdSet.intersection` is))]
         ds' :: [CDefl]
         ds' = case loop_test of
                 Left cycles -> internalError "iConvLet.cycles"
@@ -505,7 +509,7 @@ iConvLet errh flags r env pvs ds = answer
         loop_test = SCC.tsort graph
         unrec :: CDefl -> CDefl
         unrec d@(CLValueSign (CDefT i vs qt@(CQType ctx ft) cs) me) =
-           if S.member i (snd (getFVDl d)) then
+           if IdSet.member i (snd (getFVDl d)) then
            let answer =
                 let prim_fix_pos = CVar (idPrimFix (getPosition i))
                     rlet = Cletrec [CLValueSign funbind []] (CApply (CTApply prim_fix_pos [ft]) [CVar _f])

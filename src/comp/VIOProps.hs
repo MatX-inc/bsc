@@ -5,6 +5,10 @@ import Data.Ord(comparing)
 import Data.Maybe(catMaybes, isNothing, fromMaybe, isJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 import Util
 import Eval(NFData(..), rnf)
 import Flags
@@ -99,17 +103,17 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
 
         -- lookup the definition for an id
         getDef :: AId -> ADef
-        getDef i = M.findWithDefault err i defMap
+        getDef i = IdMap.findWithDefault err i defMap
             where err = internalError ("getIOProps.getDef failed: " ++
                                        ppString (i, defMap))
 
         -- mapping from ids to their defs
-        defMap = M.union (M.fromList [(i, d) | d@(ADef i _ _ _) <- ds ])
+        defMap = IdMap.union (IdMap.fromList [(i, d) | d@(ADef i _ _ _) <- ds ])
                          -- XXX do the two maps ever mix?  can we defined
                          -- XXX getIOProps to only work with the ioDefMap?
                          ioDefMap
 
-        ioDefMap = M.fromList [(i, d) | d@(ADef i _ _ _) <- io_ds ]
+        ioDefMap = IdMap.fromList [(i, d) | d@(ADef i _ _ _) <- io_ds ]
 
         -- ----------
         -- construct the VeriPortProp list for an output
@@ -143,7 +147,7 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
         getOEP _                                 = []
 
         -- build table of wire properties for the state element outputs
-        wireMap_out :: M.Map AId [VeriPortProp]
+        wireMap_out :: IdMap [VeriPortProp]
         wireMap_out =
             let submod_pairs =
                     -- clock and reset outputs
@@ -187,15 +191,15 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
                 inout_pairs =
                     [ (i, [VPinout])
                       | (i,_) <- ios,
-                        isNothing (M.lookup i ioDefMap) ]
+                        isNothing (IdMap.lookup i ioDefMap) ]
             in
-                M.unions [M.fromList submod_pairs,
-                          M.fromList input_pairs,
-                          M.fromList inout_pairs]
+                IdMap.unions [IdMap.fromList submod_pairs,
+                              IdMap.fromList input_pairs,
+                              IdMap.fromList inout_pairs]
 
         getOVProp :: AId -> [VeriPortProp]
         getOVProp i =
-            case (M.lookup i wireMap_out) of
+            case (IdMap.lookup i wireMap_out) of
                 Just ps -> ps
                 Nothing ->
                     -- since we added the module inputs to the map,
@@ -220,7 +224,7 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
 
         -- a list the signals which are connected to
         -- submodule input ports (method arguments and enables)
-        wireMap_in :: M.Map Id [VeriPortProp]
+        wireMap_in :: IdMap [VeriPortProp]
         wireMap_in =
             let submod_pairs =
                     -- submodule method inputs
@@ -287,12 +291,12 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
                     [ (i, [VPinout]) |
                           ADef _ _ e _ <- io_ds, i <- aVars e ]
             in
-                M.fromList (submod_pairs ++ output_pairs ++
+                IdMap.fromList (submod_pairs ++ output_pairs ++
                             inout_sink_pairs)
 
         -- use a map to limit search over all definition
         -- key is AId data is list of defs where key is used.
-        defuseMap :: M.Map AId (S.Set AId)
+        defuseMap :: IdMap IdSet
         defuseMap = getDefUses ds
 
         -- given a signal, this determines its props
@@ -300,8 +304,8 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
         -- order (Set order is Ord AId = interning order); the joined
         -- prop list's order reaches the emitted Ports comment
         userList uset | stableVerilog flags =
-                          sortBy (comparing getIdBaseString) (S.toList uset)
-                      | otherwise = S.toList uset
+                          sortBy (comparing getIdBaseString) (IdSet.toList uset)
+                      | otherwise = IdSet.toList uset
 
         getSignalInProp :: AId -> [VeriPortProp]
         getSignalInProp i =
@@ -316,14 +320,14 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
                 -- on defs in ASPackage), we check both sources and merge.
 
                 wiremap_props =
-                    case (M.lookup i wireMap_in) of
+                    case (IdMap.lookup i wireMap_in) of
                         Just ps -> ps
                         Nothing -> [VPunused]
 
                 defuse_props =
-                    let user_set = M.findWithDefault (S.empty) i defuseMap
+                    let user_set = IdMap.findWithDefault (IdSet.empty) i defuseMap
                     in -- is it unused?
-                       if (S.null user_set)
+                       if (IdSet.null user_set)
                        then [VPunused]
                        else
                          -- determine if the uses are "direct"
@@ -358,7 +362,7 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
         getIOProp i =
             -- if it's an interface Inout, then treat it like an output;
             -- otherwise, it's an argument Inout, so treat it like an input
-            case M.lookup i ioDefMap of
+            case IdMap.lookup i ioDefMap of
               Just _  -> getOProp i
               Nothing -> getIProp i
 
@@ -399,15 +403,15 @@ joinInProps pss =
 -- recomputation becomes a problem.  But it's likely that the number of
 -- defs being followed is small, so this seems like the right trade-off.
 --
-getDefUses :: [ADef] -> M.Map AId (S.Set AId)
-getDefUses defs = foldl addDef M.empty defs
+getDefUses :: [ADef] -> IdMap IdSet
+getDefUses defs = foldl addDef IdMap.empty defs
   where
-    addDef :: M.Map AId (S.Set AId) -> ADef -> M.Map AId (S.Set AId)
+    addDef :: IdMap IdSet -> ADef -> IdMap IdSet
     addDef m0 def@(ADef def_id _ def_e _) = foldl (addUses) m0 used
       where
         used = aVars def_e
-        addUses :: M.Map AId (S.Set AId) -> AId -> M.Map AId (S.Set AId)
-        addUses m use_id = M.insertWith S.union use_id (S.singleton def_id) m
+        addUses :: IdMap IdSet -> AId -> IdMap IdSet
+        addUses m use_id = IdMap.insertWith IdSet.union use_id (IdSet.singleton def_id) m
 
 
 okUse :: AId -> AExpr -> Bool
@@ -731,22 +735,22 @@ getIOPropsA _flags pps mschedinfo apkg =
         -- structures shared by the property deductions below
 
         -- map from state instance name to its VModInfo
-        vmiMap :: M.Map AId VModInfo
-        vmiMap = M.fromList [ (avi_vname v, avi_vmi v) | v <- vs ]
+        vmiMap :: IdMap VModInfo
+        vmiMap = IdMap.fromList [ (avi_vname v, avi_vmi v) | v <- vs ]
 
         -- find the VFieldInfo for a method of a state instance
         -- (method ids in AMethCall/ACall are qualified; vf_name is not)
         findMethodA :: AId -> AId -> Maybe VFieldInfo
         findMethodA obj meth = do
-            vmi <- M.lookup obj vmiMap
+            vmi <- IdMap.lookup obj vmiMap
             case [ m | m@(Method {}) <- vFields vmi,
                        vf_name m == unQualId meth ] of
               (m:_) -> Just m
               []    -> Nothing
 
         -- the local defs and the interface value defs, by id
-        defMapA :: M.Map AId ADef
-        defMapA = M.fromList ([ (i, d) | d@(ADef i _ _ _) <- ds ] ++
+        defMapA :: IdMap ADef
+        defMapA = IdMap.fromList ([ (i, d) | d@(ADef i _ _ _) <- ds ] ++
                               [ (i, d) | f <- ifc,
                                          d@(ADef i _ _ _) <- ifcValueDef f ])
 
@@ -769,12 +773,12 @@ getIOPropsA _flags pps mschedinfo apkg =
             isRWire v || isRWire0 v ||
             isBypassWire v || isBypassWire0 v
 
-        wireInstSet :: S.Set AId
-        wireInstSet = S.fromList [ avi_vname v | v <- vs, isWireInstance v ]
+        wireInstSet :: IdSet
+        wireInstSet = IdSet.fromList [ avi_vname v | v <- vs, isWireInstance v ]
 
         isWireMeth :: String -> AId -> AId -> Bool
         isWireMeth str obj meth =
-            (obj `S.member` wireInstSet) &&
+            (obj `IdSet.member` wireInstSet) &&
             (getIdBaseString (unQualId meth) == str)
 
         isWireSet, isWireGet, isWireHas :: AId -> AId -> Bool
@@ -804,9 +808,9 @@ getIOPropsA _flags pps mschedinfo apkg =
 
         -- the setters of each wire instance: the WILL_FIRE of the
         -- calling rule, the condition, and the data arguments
-        wireSetters :: M.Map AId [(AId, AExpr, [AExpr])]
+        wireSetters :: IdMap [(AId, AExpr, [AExpr])]
         wireSetters =
-            M.fromListWith (++)
+            IdMap.fromListWith (++)
                 [ (aact_objid a, [(mkIdWillFire (arule_id r), c, es)]) |
                       r <- rs, a@(ACall {}) <- arule_actions r,
                       isWireSet (aact_objid a) (acall_methid a),
@@ -816,7 +820,7 @@ getIOPropsA _flags pps mschedinfo apkg =
         -- the setters whose rules can ever fire
         liveWireSetters :: AId -> [(AId, AExpr, [AExpr])]
         liveWireSetters inst =
-            [ s | s@(wf, _, _) <- M.findWithDefault [] inst wireSetters,
+            [ s | s@(wf, _, _) <- IdMap.findWithDefault [] inst wireSetters,
                   isLiveWF wf ]
 
         -- The data expression carried by a wire, when it is uniquely
@@ -855,7 +859,7 @@ getIOPropsA _flags pps mschedinfo apkg =
         -- setters (e.g. rules split over a condition) make it 1
         wireHasVal :: AId -> Maybe Integer
         wireHasVal inst =
-            let setters = M.findWithDefault [] inst wireSetters
+            let setters = IdMap.findWithDefault [] inst wireSetters
                 conj :: (AId, AExpr, [AExpr]) -> Maybe Integer
                 conj (wf, c, _) =
                     case (evalDefA wf, evalConstA c) of
@@ -895,8 +899,8 @@ getIOPropsA _flags pps mschedinfo apkg =
         -- not InlineCReg will inline it, so the deduced properties do
         -- not depend on the inlining flags.
 
-        cregInstSet :: S.Set AId
-        cregInstSet = S.fromList [ avi_vname v | v <- vs, isCRegInst v ]
+        cregInstSet :: IdSet
+        cregInstSet = IdSet.fromList [ avi_vname v | v <- vs, isCRegInst v ]
 
         -- the number of ports on the primitive CReg (see InlineCReg)
         cregPorts :: Int
@@ -905,7 +909,7 @@ getIOPropsA _flags pps mschedinfo apkg =
         -- identify a call to a CReg method: Just (port, is_read)
         cregMeth :: AId -> AId -> Maybe (Int, Bool)
         cregMeth obj meth
-            | obj `S.member` cregInstSet =
+            | obj `IdSet.member` cregInstSet =
                 let s = getIdBaseString (unQualId meth)
                 in  case ([ (n, True) | n <- [0..cregPorts-1],
                                         s == cregReadStr n ] ++
@@ -1007,11 +1011,11 @@ getIOPropsA _flags pps mschedinfo apkg =
         evalConstA _ = Nothing
 
         -- evaluation of defs, memoized (the map's values are lazy)
-        evalDefMemo :: M.Map AId (Maybe Integer)
-        evalDefMemo = M.map (evalConstA . adef_expr) defMapA
+        evalDefMemo :: IdMap (Maybe Integer)
+        evalDefMemo = IdMap.map (evalConstA . adef_expr) defMapA
 
         evalDefA :: AId -> Maybe Integer
-        evalDefA i = fromMaybe Nothing (M.lookup i evalDefMemo)
+        evalDefA i = fromMaybe Nothing (IdMap.lookup i evalDefMemo)
 
         evalPrimA :: PrimOp -> [AExpr] -> Maybe Integer
         evalPrimA p [e] | (p == PrimBNot) || (p == PrimInv) =
@@ -1048,7 +1052,7 @@ getIOPropsA _flags pps mschedinfo apkg =
         -- expressions after inlining.
         derefA :: AExpr -> AExpr
         derefA e@(ASDef _ i) =
-            maybe e (derefA . adef_expr) (M.lookup i defMapA)
+            maybe e (derefA . adef_expr) (IdMap.lookup i defMapA)
         derefA e@(AMethCall _ obj meth _)
             | isWireGet obj meth = fromMaybe e (wireDataExpr obj)
             | Just (n, True) <- cregMeth obj meth = derefCregRead obj n e
@@ -1177,7 +1181,7 @@ getIOPropsA _flags pps mschedinfo apkg =
             M.findWithDefault [] (getIdString i) wireMapA_out
         -- follow defs (memoized)
         getOutPropsA (ASDef _ i) =
-            M.findWithDefault [] i outDefPropsMemo
+            IdMap.findWithDefault [] i outDefPropsMemo
         -- constant values
         getOutPropsA (ASParam _ _) = [VPconst]
         getOutPropsA (ASInt _ _ _) = [VPconst]
@@ -1222,8 +1226,8 @@ getIOPropsA _flags pps mschedinfo apkg =
                        _   -> []
 
         -- properties of defs, memoized (the map's values are lazy)
-        outDefPropsMemo :: M.Map AId [VeriPortProp]
-        outDefPropsMemo = M.map (getOutPropsA . adef_expr) defMapA
+        outDefPropsMemo :: IdMap [VeriPortProp]
+        outDefPropsMemo = IdMap.map (getOutPropsA . adef_expr) defMapA
 
         -- the declared properties common to all of a method's output
         -- ports (used when a reference does not select a single port;
@@ -1250,7 +1254,7 @@ getIOPropsA _flags pps mschedinfo apkg =
         -- output clock (mirrors getSpecialOutputs' mkGatePort)
         gatePropsA :: AId -> AId -> [VeriPortProp]
         gatePropsA obj clk =
-            case M.lookup obj vmiMap of
+            case IdMap.lookup obj vmiMap of
               Just vmi ->
                   case lookup clk (output_clocks (vClk vmi)) of
                     Just (Just (_, Just (_, ps))) -> VPclockgate : ps
@@ -1434,7 +1438,7 @@ getIOPropsA _flags pps mschedinfo apkg =
         hasMuxableCall e =
             or [ not (null (vf_inputs m)) |
                      (obj, meth) <- exprCalls e,
-                     not (obj `S.member` wireInstSet),
+                     not (obj `IdSet.member` wireInstSet),
                      Just m@(Method {}) <- [findMethodA obj meth] ]
 
         actionUses :: AId -> AAction -> [(SigKey, AUse)]
@@ -1729,8 +1733,8 @@ getIOPropsA _flags pps mschedinfo apkg =
                                (asi_resource_alloc_table si)
                 edb = asi_exclusive_rules_db si
                 (ASchedule _ rev_exec_order) = asi_schedule si
-                omPos :: M.Map AId Integer
-                omPos = M.fromList (zip rev_exec_order [0..])
+                omPos :: IdMap Integer
+                omPos = IdMap.fromList (zip rev_exec_order [0..])
                 (a_cls, a_enf, a_drop) =
                     unzip3 (map (blobArms edb omPos) action_blobs)
                 a_map = M.fromList (concat a_cls)
@@ -1741,7 +1745,7 @@ getIOPropsA _flags pps mschedinfo apkg =
                 sel_uses = concatMap snd e_results
             in  (a_map, en_set, drop_set, e_map, sel_uses)
 
-        blobArms :: ExclusiveRulesDB -> M.Map AId Integer -> MethBlob
+        blobArms :: ExclusiveRulesDB -> IdMap Integer -> MethBlob
                  -> ([((AId, AId, AId), ArmClass)],
                      [(AId, AId, AId)],
                      [(AId, AId, AId)])
@@ -1815,7 +1819,7 @@ getIOPropsA _flags pps mschedinfo apkg =
                         then
                           -- arms split per rule, in priority order,
                           -- as in mkEmux's "order"
-                          let arms = [ (M.findWithDefault 0 r omPos,
+                          let arms = [ (IdMap.findWithDefault 0 r omPos,
                                         (key r, selVal e r)) |
                                            (e, Just rs) <- uses, r <- rs ]
                               cls = muxWalk
@@ -1848,7 +1852,7 @@ getIOPropsA _flags pps mschedinfo apkg =
         -- the surviving muxes reference.  Under a priority mux the
         -- arms are split per user (as in mkEmux's "order"), so the
         -- fates of an expression's split arms are joined.
-        exprBlobArms :: ExclusiveRulesDB -> M.Map AId Integer -> MethBlob
+        exprBlobArms :: ExclusiveRulesDB -> IdMap Integer -> MethBlob
                      -> ([(AExpr, ArmClass)], [(SigKey, AUse)])
         exprBlobArms edb omPos (_, port_blobs) =
             let results = map portArms port_blobs
@@ -1857,7 +1861,7 @@ getIOPropsA _flags pps mschedinfo apkg =
             -- the control signal of a user: RDY for an interface
             -- value method, WILL_FIRE for a rule or action method
             -- (as in mkEmux's willfireId)
-            userSelId r | r `S.member` valueMethodSet = mkRdyId r
+            userSelId r | r `IdSet.member` valueMethodSet = mkRdyId r
                         | otherwise = mkIdWillFire r
 
             -- the selector value of an arm: the OR of its users'
@@ -1902,12 +1906,12 @@ getIOPropsA _flags pps mschedinfo apkg =
                           -- a user without an order position (an
                           -- interface value method) cannot be placed
                           -- in the priority; be conservative
-                          | any (`M.notMember` omPos) arm_rules =
+                          | any (`IdMap.notMember` omPos) arm_rules =
                               ([ ((e, rs), ArmMuxed) |
                                      (e, Just rs) <- uses ],
                                False)
                           | otherwise =
-                              let arms = [ (M.findWithDefault 0 r omPos,
+                              let arms = [ (IdMap.findWithDefault 0 r omPos,
                                             ((e, [r]), selVal [r])) |
                                                (e, Just rs) <- uses,
                                                r <- rs ]
@@ -1944,9 +1948,9 @@ getIOPropsA _flags pps mschedinfo apkg =
 
         -- interface value methods, whose muxes select on the RDY
         -- signal instead of the WILL_FIRE (as in aState)
-        valueMethodSet :: S.Set AId
+        valueMethodSet :: IdSet
         valueMethodSet =
-            S.fromList [ i | (AIDef { aif_value = (ADef i _ _ _) }) <- ifc ]
+            IdSet.fromList [ i | (AIDef { aif_value = (ADef i _ _ _) }) <- ifc ]
 
         -- Classify a mux's arms, given in the mux's arm order.  The
         -- netlist realizes the mux as a selection chain whose first

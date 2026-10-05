@@ -2,6 +2,8 @@ module AConv (aConv, aTypeConv, isLocalAId) where
 
 import Util(itos, headOrErr, initOrErr, lastOrErr, log2, concatMapM, makePairs)
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import Control.Monad(when, liftM, forM, zipWithM)
 import Control.Monad.Except(throwError)
 import Control.Monad.State(StateT, runStateT, gets, get, put)
@@ -63,29 +65,27 @@ isLocalAId i = isBadId i || isFromRHSId i
 
 type CSEMap = M.Map AExpr (AId, AType, AExpr)
 
-type IEDefMap = M.Map Id (AExpr, [DefProp])
+type IEDefMap = IdMap (AExpr, [DefProp])
 data AState = AState {
         errHandle :: ErrorHandle,
         varNo :: !Int, -- for new variable names
         cseMap :: CSEMap, -- for CSE
-        stVarMap :: IdMap, -- I-expr names to A-expr names
+        stVarMap :: IdMap Id, -- I-expr names to A-expr names
         ieDefMap :: IEDefMap, -- accumulated definitions
         flags :: Flags, -- to hold the flags on the Monad
         wmsgs :: [WMsg] -- to hold accumulated warnings
         }
 
-type IdMap = M.Map Id Id
-
 type M = ReaderT Bool (StateT AState (Either EMsg))
 
-aInitState :: ErrorHandle -> IdMap -> Flags -> AState
+aInitState :: ErrorHandle -> IdMap Id -> Flags -> AState
 aInitState errh svm flags =
     AState {
              errHandle = errh,
              varNo = 1,
              cseMap = M.empty,
              stVarMap = svm,
-             ieDefMap = M.empty,
+             ieDefMap = IdMap.empty,
              flags = flags,
              wmsgs = []
            }
@@ -125,7 +125,7 @@ getDA = liftM ieDefMap (get)
 addDA :: Id -> AExpr -> [DefProp] -> M ()
 addDA i e p = do s <- get
                  -- traceM $ "addDa adding " ++ ppReadable (i,p)
-                 put (s { ieDefMap = M.insert i (e,p) (ieDefMap s) })
+                 put (s { ieDefMap = IdMap.insert i (e,p) (ieDefMap s) })
 
 addWarning :: WMsg -> M ()
 addWarning w = do s <- get
@@ -260,7 +260,7 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
                 in  M.fromListWith  combineFn
                         [ (cse_name, (ty, [(def_name, props)]))
                           | (def_name, ((ASDef ty cse_name), props))
-                                <- M.toList defMap ]
+                                <- IdMap.toList defMap ]
 
             rename_map :: M.Map AId (AType, AId)
             rename_map =
@@ -283,10 +283,12 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
                                Nothing -> name
 
             -- replace refs to CSE'd names with references to the new name
-            subst_map :: M.Map AId AExpr
+            -- rename_map stays a Data.Map until the CSE-naming comparator
+            -- lands (plan e.3); fromMap is the migration boundary
+            subst_map :: IdMap AExpr
             subst_map =
                 let mapFn (ty, new_name) = ASDef ty new_name
-                in  M.map mapFn rename_map
+                in  IdMap.fromMap (M.map mapFn rename_map)
 
         --traceM("rename_map = " ++ ppReadable (M.toList rename_map))
         --traceM("subst_map = " ++ ppReadable (M.toList subst_map))
@@ -299,7 +301,7 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
                           | (_, (i, t, e)) <- M.toList cseMap ]
                     non_cse_defs =
                         [ ADef i (ae_type e) (aSubst subst_map e) props
-                          | (i, (e, props)) <- M.toList defMap,
+                          | (i, (e, props)) <- IdMap.toList defMap,
                             defPropsHasNoCSE props ]
                 in  defs_from_cse ++ non_cse_defs
 
@@ -741,7 +743,7 @@ aEDef :: Id -> IExpr a -> [DefProp] -> M AExpr
 aEDef i e ps = do
         da <- getDA
         -- traceM $ "aEDef " ++ ppReadable (i,e,ps)
-        case M.lookup i da of
+        case IdMap.lookup i da of
          Just (a, _) -> do
            return a
          Nothing -> do
@@ -1048,10 +1050,10 @@ extractRules (IRules sps rs) = rs
 -- #############################################################################
 
 
-makeIdMap :: [Id] -> IdMap
-makeIdMap ids = M.fromList (zip ids ids)
+makeIdMap :: [Id] -> IdMap Id
+makeIdMap ids = IdMap.fromList (zip ids ids)
 
--- makeIdMap :: [Id] -> IdMap
+-- makeIdMap :: [Id] -> IdMap Id
 -- makeIdMap = M.fromList . concatMap numGroup . sortGroup le
 --   where le i1 i2 = nonum (getIdString i1) <= nonum (getIdString i2)
 --         nonum = reverse . tail . dropWhile isDigit . reverse
@@ -1059,9 +1061,9 @@ makeIdMap ids = M.fromList (zip ids ids)
 --         numGroup is = zipWith (\ i n -> (i, mkIdPost (noNumId i) (concatFString [fsUnderscore, mkNumFString n]))) is [0..]
 --         noNumId i = mkId (getIdPosition i) (mkFString (nonum (getIdString i)))
 
-trId :: IdMap -> Id -> Id
+trId :: IdMap Id -> Id -> Id
 trId m i =
-    case M.lookup i m of
+    case IdMap.lookup i m of
     Just i' -> setIdPosition (getIdPosition i) i'
     Nothing -> internalError ("trId " ++ ppReadable i)
 

@@ -10,6 +10,8 @@ module DisjointTest(
 
 import qualified Data.Set as S
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import Control.Monad(foldM {- , when -})
 import Data.List (genericIndex)
 
@@ -167,13 +169,13 @@ checkDisjointRulePair s@(DTS_STP m stp_state) p = do
 
 -- -------------------------
 
-type MEMap  = M.Map ARuleId [Integer] -- map rid to a list of me sets
+type MEMap  = IdMap [Integer] -- map rid to a list of me sets
 type METest = M.Map (Integer,Integer) (Maybe Bool)
 
 
 checkMERulePair :: (MEMap, METest) -> (ARuleId,ARuleId) -> Maybe Bool
 checkMERulePair (me_map, me_test) (rule1,rule2) =
-  case (M.lookup rule1 me_map, M.lookup rule2 me_map) of
+  case (IdMap.lookup rule1 me_map, IdMap.lookup rule2 me_map) of
           (Just nums1, Just nums2) -> checkMEPairs me_test nums1 nums2
           _                        -> Nothing
 
@@ -191,7 +193,7 @@ checkMEPairs me_test (num1:rest) nums2 =
 
 
 makeMETest :: [ASchedulePragma] -> (MEMap, METest)
-makeMETest spms = fst $ foldl addMESPM ((M.empty, M.empty), 0) spms
+makeMETest spms = fst $ foldl addMESPM ((IdMap.empty, M.empty), 0) spms
 
 addMESPM :: ((MEMap, METest), Integer) -> ASchedulePragma ->
             ((MEMap, METest), Integer)
@@ -216,15 +218,15 @@ addMEIds s idss =
 
 addMEId :: Integer -> MEMap -> ARuleId -> MEMap
 addMEId num me_map id = do
-  case (M.lookup id me_map) of
-      Just nums -> M.insert id (num:nums) me_map
-      Nothing   -> M.insert id [num]      me_map
+  case (IdMap.lookup id me_map) of
+      Just nums -> IdMap.insert id (num:nums) me_map
+      Nothing   -> IdMap.insert id [num]      me_map
 
 -- -------------------------
 -- Disjoint testing can be avoided if there is no overlap i the logic cones of each rule,
 -- that is f(as) == 1 and g(bs) == 1 can be satisfied if set as /= set bs
 -- we build a map containing the support set (as, bs) for each Aid,  rule
-type DSupportMap =  M.Map AId (S.Set ASupport)
+type DSupportMap =  IdMap (S.Set ASupport)
 data ASupport = DMethod AId AId -- state port
                 | DLeaf AId
                 | DDef ADef AId
@@ -241,7 +243,7 @@ isLeafDef (DTask _)      = True
 isLeafDef (DDef _ _)     = False
 
 lookupSupport :: DSupportMap -> AId -> (S.Set ASupport)
-lookupSupport m d = M.findWithDefault err d m
+lookupSupport m d = IdMap.findWithDefault err d m
     where err = error $ "DisjointTests findSupport, bad lookup: " ++ show d
                 ++ "\n" ++ show m
 
@@ -249,17 +251,17 @@ buildSupportMap :: [ADef] -> [AVInst] -> [(ARuleId, [AExpr], Maybe ARuleId)] -> 
 buildSupportMap adefs avis rs = --trace ("XXX support map:" ++ ppReadable res) $
                                 res
   where
-    res = foldl generator M.empty [(id,es) | (id,es,_) <- rs]
+    res = foldl generator IdMap.empty [(id,es) | (id,es,_) <- rs]
     --
-    idToDef:: M.Map AId ADef
-    idToDef     = M.fromList [ (id, def) | def@(ADef id _ _ _) <- adefs]
+    idToDef:: IdMap ADef
+    idToDef     = IdMap.fromList [ (id, def) | def@(ADef id _ _ _) <- adefs]
     err i = error $ "DisjointTest::buildSupportMap Invalid lookup in idtodefmap: " ++ show i ++ "\n" ++ show idToDef
     --
-    portMap :: M.Map AId VModInfo
-    portMap = M.fromList [(avi_vname avi, avi_vmi avi) | avi <- avis]
+    portMap :: IdMap VModInfo
+    portMap = IdMap.fromList [(avi_vname avi, avi_vmi avi) | avi <- avis]
     --
     generator :: (AExprs a) => DSupportMap -> (AId,a) -> DSupportMap
-    generator m (id, es) | M.member id m = m
+    generator m (id, es) | IdMap.member id m = m
                          | otherwise = m''
       where
         fanins = findAExprs findSupport es
@@ -268,11 +270,11 @@ buildSupportMap adefs avis rs = --trace ("XXX support map:" ++ ppReadable res) $
         --
         localSupports = S.fromList $ filter isLeafDef fanins
         childSupports = S.unions $ map (lookupSupport m') faninIds
-        m'' = M.insert id (localSupports `S.union` childSupports) m'
+        m'' = IdMap.insert id (localSupports `S.union` childSupports) m'
     --
     findSupport                                          :: AExpr -> [ASupport]
     findSupport e@(ASDef _ i)                            = [DDef def i]
-        where def = M.findWithDefault (err i) i idToDef
+        where def = IdMap.findWithDefault (err i) i idToDef
     findSupport e@(APrim { ae_args = es})                = findAExprs findSupport es
     findSupport e@(AMethCall {ae_args = es})             =
       case getMethodOutputPorts portMap (ae_objid e) (ameth_id e) of

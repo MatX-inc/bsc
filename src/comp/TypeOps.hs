@@ -1,17 +1,18 @@
 module TypeOps(isPrimTFunName, opNumT, opStrT) where
 -- common routines for handling numeric and string types
 
-import qualified Data.Set as S
 import Id
+import IdSet(IdSet)
+import qualified IdSet
 import PreIds(idTAdd, idTSub, idTMul, idTDiv, idTLog, idTExp, idTMax, idTMin, idTStrCat, idTNumToStr)
 import Util(divC, log2)
 import FStringCompat(FString, concatFString)
 
 isPrimTFunName :: Id -> Bool
-isPrimTFunName i = i `S.member` primTFunNames
+isPrimTFunName i = i `IdSet.member` primTFunNames
 
-primTFunNames :: S.Set Id
-primTFunNames = S.fromList (numOpNames ++ strOpNames)
+primTFunNames :: IdSet
+primTFunNames = IdSet.fromList (numOpNames ++ strOpNames)
 
 -- do a numeric type operation on a list of arguments
 -- note that we have to validate that the result is going to

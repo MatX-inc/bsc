@@ -6,6 +6,7 @@ module InlineReg (
 import Data.List(partition, sortBy)
 import Data.Ord(comparing)
 import qualified Data.Map as M
+import qualified IdMap
 import IntLit
 import IntegerUtil(aaaa)
 import Util(itos)
@@ -194,7 +195,7 @@ mkInitialAssignments flags avis =
             let id = (mkQOUT avi)
                 -- tag the VId with the instance that would have existed without inlining.
                 -- XXX we pass in an empty rewiring map because registers have no inouts
-                (_, vminst, _) = vState flags M.empty avi
+                (_, vminst, _) = vState flags IdMap.empty avi
                 qout = VLId (VId (getIdString id) id (Just vminst))
                 val = case (getRegWidth avi) of
                         ASInt { ae_ival = IntLit { ilValue = width } }

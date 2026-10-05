@@ -30,6 +30,9 @@ import Control.Concurrent.MVar(newEmptyMVar, putMVar, takeMVar)
 import qualified Control.Exception as CE
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdSet
+import IdMap(IdMap)
+import qualified IdMap
 
 import ListMap(lookupWithDefault)
 import SCC(scc)
@@ -336,7 +339,7 @@ compile_with_deps errh flags name = do
     _ <- dump errh flags t DFdepend dumpnames (map fst3 pkgs)
 
     -- compile them
-    (ok, _, _) <- foldM comp (True, M.empty, M.empty) pkgs
+    (ok, _, _) <- foldM comp (True, M.empty, IdMap.empty) pkgs
 
     when (verb) $
       if ok then
@@ -352,7 +355,7 @@ compile_no_deps errh flags name = do
     -- Show warnings for this file
     when (not $ null parse_warns) $ bsWarning errh parse_warns
 
-    (ok, _, _) <- compilePackage errh flags t M.empty M.empty name pkg
+    (ok, _, _) <- compilePackage errh flags t M.empty IdMap.empty name pkg
     return ok
 
 -------------------------------------------------------------------------
@@ -589,7 +592,7 @@ compilePackage
     -- every imported def each time
     let dictRedirects = mkDictRedirects dictBuckets imod binmods
     let (imodf, alldefsList) = fixupDefs dictRedirects imod binmods
-    let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
+    let alldefs = IdMap.fromList [(i, e) | IDef i _ e _ <- alldefsList]
     iPCheck flags symt imodf "fixup"
     t <- dump errh flags t DFfixup dumpnames imodf
 
@@ -720,9 +723,9 @@ compilePackage
 
     -- Check for unused imports by combining packages from all three sources
     let (CPackage _ _ imports _ _ _ _) = mctx
-        allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
+        allUsedPkgs = IdSet.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
         importedPkgs = [i | (CImpId _ i) <- imports]
-        unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
+        unusedPkgs = filter (\pkg -> not (IdSet.member pkg allUsedPkgs)) importedPkgs
         unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]
     when (not (null unusedWarns)) $ bsWarning errh unusedWarns
 
@@ -755,7 +758,7 @@ genModule ::
     String -> -- prefix
     String -> -- source package name
     SymTab ->
-    M.Map Id (IExpr HeapData) ->
+    IdMap (IExpr HeapData) ->
     IATFCache ->
     IDef HeapData ->
     IO (CDefn)

@@ -30,6 +30,8 @@ import System.Mem(performGC)
 import System.Posix.Signals
 import Text.Regex
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 
 -- Bluespec imports
 import Util(quote, concatMapM, concatUnzip3, lastOrErr, fromJustOrErr, fst3,
@@ -193,7 +195,7 @@ initState =
         pid = mk_homeless_id "BlueTcl"
     in TclP { tp_flags    = defaultFlags ""
             , tp_binmap   = M.empty
-            , tp_hashmap  = M.empty
+            , tp_hashmap  = IdMap.empty
             , tp_symtab   = emptySymtab
             , tp_cpack    = (CPackage pid (Right []) [] [] [] [] [])
             , tp_mods     = Nothing
@@ -683,7 +685,7 @@ tclPackage ["depend"] = do
 tclPackage ["clear"] = do
   let clrCPkg (CPackage pid _ _ _ _ _ _) = (CPackage pid (Right []) [] [] [] [] [])
   modifyIORef globalVar (\gv -> gv { tp_binmap  = M.empty,
-                                     tp_hashmap = M.empty,
+                                     tp_hashmap = IdMap.empty,
                                      tp_symtab  = emptySymtab,
                                      tp_cpack   = clrCPkg (tp_cpack gv) })
   return $ TLst []
@@ -1497,7 +1499,7 @@ tclSubmodule ["full",modname] =
                       instpos = getPosition instId
                       docs = findDocs submodname
                       -- some internal probes won't be found, so use Maybe
-                      mtifc = M.lookup instId ifc_map
+                      mtifc = IdMap.lookup instId ifc_map
                   (arginfo, ifcinfo) <- getSubmodPortInfo mtifc avi
                   let vmethod_sis = get_method_to_signal_map (avi_vmi avi)
                   let h_ports = concatMap dispPortsModArg arginfo ++
@@ -1546,7 +1548,7 @@ tclSubmodule ["ports",modname] =
                       instId = avi_vname avi
                       instname = getIdString instId
                       -- some internal probes won't be found, so use Maybe
-                      mtifc = M.lookup instId ifc_map
+                      mtifc = IdMap.lookup instId ifc_map
                   (arginfo, ifcinfo) <- getSubmodPortInfo mtifc avi
                   let hifcs = map dispIfc ifcinfo
                       hargs = map dispModArg arginfo
@@ -1578,7 +1580,7 @@ tclSubmodule ["porttypes",modname] =
                       instId = avi_vname avi
                       instname = getIdString instId
                       -- some internal probes won't be found, so use Maybe
-                      mtifc = M.lookup instId ifc_map
+                      mtifc = IdMap.lookup instId ifc_map
                   (arginfo, ifcinfo) <- getSubmodPortInfo mtifc avi
                   let hargs = concatMap dispPortsModArg arginfo
                       hifcs = concatMap dispPortsIfc ifcinfo
@@ -2342,7 +2344,7 @@ getKind (BLeaf {}) = "Primitive"
 getInstTreeList :: Bool -> InstTree -> [InstNode]
 getInstTreeList hide t =
  let result = getInstTreeList' hide t
-     getMyChildren x = concatMap promote (M.elems $ node_children x)
+     getMyChildren x = concatMap promote (IdMap.elems $ node_children x)
      promote x@(Loc {node_name = nm, node_ignore = True}) | isBadId nm = getMyChildren x
      promote x                                                         = [x]
  in case (result) of
@@ -2351,16 +2353,16 @@ getInstTreeList hide t =
     _                                      -> result
 
 getInstTreeList' :: Bool -> InstTree -> [InstNode]
-getInstTreeList' False t = processInstNodes $ (sortBy comparein (M.elems t))
+getInstTreeList' False t = processInstNodes $ (sortBy comparein (IdMap.elems t))
 getInstTreeList' True  t =
   let getList x | isHiddenAll x = []
       getList x@(Loc {}) | isHiddenKP x    = concatMap getList (sortBy comparein (getMyChildren x))
       getList x | isHiddenKP x = []
       getList x = [x]
-      getMyChildren x = concatMap promote (M.elems $ node_children x)
+      getMyChildren x = concatMap promote (IdMap.elems $ node_children x)
       promote x@(Loc {node_name = nm, node_ignore = True}) | isBadId nm = getMyChildren x
       promote x                                                         = [x]
-  in processInstNodes $ concatMap getList (sortBy comparein (concatMap promote (M.elems t)))
+  in processInstNodes $ concatMap getList (sortBy comparein (concatMap promote (IdMap.elems t)))
 
 -- sort before processing to get better orders
 processInstNodes :: [InstNode] -> [InstNode]
@@ -3308,9 +3310,9 @@ remove_yield t =
 ----------------------------------------------------
 -- Submodule interface types
 
-makeSubmoduleIfcMap :: Bool -> InstTree -> M.Map Id Type
+makeSubmoduleIfcMap :: Bool -> InstTree -> IdMap Type
 makeSubmoduleIfcMap hide inst_tree =
-    M.fromList (concatMap getTypes (M.elems inst_tree))
+    IdMap.fromList (concatMap getTypes (IdMap.elems inst_tree))
  where
    getTypes i@(Loc { node_type = mt }) =
        case (nodeChildren hide i) of
@@ -3427,20 +3429,20 @@ mgetIfcHierarchy instId raw_fields tifc = do
     case (maifc) of
       Just (Interface _ _ _ _ ifc_fs _) -> mapM (getField emptyId) ifc_fs
           where
-            ifc_map = M.fromList raw_fields
+            ifc_map = IdMap.fromList raw_fields
 
             -- get the AIF for a flattened name
             lookupAIF :: Id -> ExceptT String IO RawIfcField
             lookupAIF i =
-                case (M.lookup i ifc_map) of
+                case (IdMap.lookup i ifc_map) of
                   Just aif -> return aif
                   _ -> throwError ("getIfcHierarhcy: not in map: " ++
-                                   ppReadable (instId, i, M.keys ifc_map))
+                                   ppReadable (instId, i, IdMap.keys ifc_map))
             -- get the AIF for its RDY method, if it exists
             lookupRdyAIF i =
                 let -- XXX is there a better way to find the rdy name?
                     rdy_i = mkRdyId i
-                in  M.lookup rdy_i ifc_map
+                in  IdMap.lookup rdy_i ifc_map
 
             -- append to the prefix
             addToPrefix pre suf =

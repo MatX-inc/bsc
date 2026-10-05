@@ -21,6 +21,7 @@ import Control.Monad(filterM)
 import Control.Exception(bracketOnError)
 import Data.List(delete,find,isPrefixOf)
 import qualified Data.Map as M
+import qualified IdMap
 
 -- import Debug.Trace(traceM)
 
@@ -89,11 +90,11 @@ remove_stale feeds pkgs (x:xs) =
 
 analyzeBluesimDependencies :: Flags -> SimSystem -> FilePath -> IO [String]
 analyzeBluesimDependencies flags sim_system prefix =
-    do let pkgs = M.elems (ssys_packages sim_system)
+    do let pkgs = IdMap.elems (ssys_packages sim_system)
            ba_map = ssys_filemap sim_system
            influences pkg = let pname = getIdBaseString (sp_name pkg)
                                 insts = [ name
-                                        | i <- M.elems (sp_state_instances pkg)
+                                        | i <- IdMap.elems (sp_state_instances pkg)
                                         , let name = getVNameString (vName (avi_vmi i))
                                         , not (isPrimitiveModule name)
                                         ]

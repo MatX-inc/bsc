@@ -6,6 +6,8 @@ import Control.Monad(when, zipWithM, zipWithM_)
 import Control.Monad.State(State, runState, gets, get, put)
 import Debug.Trace
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 
 import Util(integerToBits, makePairs, log2, itos)
 import PPrint
@@ -52,11 +54,11 @@ aSynthesize flags p@(ASPackage { aspkg_values = ds }) =
 -- XXX - assuming foreign function calls need not be touched because state variable instantiations are not touched
 aImprove :: Bool -> ASPackage -> ASPackage
 aImprove stable p@(ASPackage { aspkg_values = ds }) =
-    let inline :: M.Map AId AExpr
-        inline = M.fromList [ (i, e) | ADef i _ e _ <- ds, isSimple e ]
+    let inline :: IdMap AExpr
+        inline = IdMap.fromList [ (i, e) | ADef i _ e _ <- ds, isSimple e ]
         repl :: AExpr -> AExpr
         repl e@(ASDef _ i) =
-                case M.lookup i inline of
+                case IdMap.lookup i inline of
                 Just e' -> e'
                 Nothing -> e
         repl (APrim aid t p es) = APrim aid t p (map repl es)
@@ -92,7 +94,7 @@ data SState = SState {
                 cse_map :: (M.Map AExpr AId),
                 -- map of defs which have been deemed "simple"
                 -- (references to these can be inlined with the expression)
-                simple_map :: (M.Map AId AExpr)
+                simple_map :: IdMap AExpr
               }
 
 type S a = State SState a
@@ -108,14 +110,14 @@ addDef v e props = do
               then cmap
               else M.insert e v cmap
       smap' = case isSimple e of
-                True -> M.insert v e smap
+                True -> IdMap.insert v e smap
                 _ -> smap
   put $ state { defs = ds', cse_map = cmap', simple_map = smap' }
 
 getSimple :: AId -> AExpr -> S AExpr
 getSimple v e = do
   smap <- gets simple_map
-  return $ M.findWithDefault e v smap
+  return $ IdMap.findWithDefault e v smap
 
 findExpr :: AExpr -> S (Maybe AId)
 findExpr e = do
@@ -144,7 +146,7 @@ synDefs stable ds =
                              uniqueId = 1,
                              defs = [],
                              cse_map = M.empty,
-                             simple_map = M.empty
+                             simple_map = IdMap.empty
                            }
     in  fst $ runState (synDefsS (tsortADefs stable ds)) initState
 

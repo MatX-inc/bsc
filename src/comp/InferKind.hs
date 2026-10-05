@@ -1,11 +1,11 @@
 {-# LANGUAGE PatternGuards #-}
 module InferKind(inferKinds) where
 import Data.List((\\))
-import qualified Data.Set as S
-import qualified Data.Map as M
-import Util(map_insertMany)
 import Error(internalError, EMsg, ErrMsg(..))
 import Id
+import IdMap(IdMap)
+import qualified IdMap as M
+import qualified IdSet
 import CSyntax
 import CType(mkKFun)
 import CFreeVars(getFQTyVars, getCPTyVars)
@@ -16,7 +16,7 @@ import PFPrint
 --import Debug.Trace
 
 
-inferKinds :: Id -> SymTab -> [CDefn] -> Either EMsg (M.Map Id Kind)
+inferKinds :: Id -> SymTab -> [CDefn] -> Either EMsg (IdMap Kind)
 inferKinds mi s ds = run $ do
     let get (Ctype ik _ _) = getIK ik
         get (Cdata { cd_name = name }) = getIK name
@@ -60,7 +60,7 @@ convertPKindToKind (PKfun l r) = do l' <- convertPKindToKind l
                                     r' <- convertPKindToKind r
                                     return (Kfun l' r')
 
-type Assumps = M.Map Id Kind
+type Assumps = IdMap Kind
 
 makeAssump :: Id -> KI (Id, Kind)
 makeAssump i = do v <- newKVar (Just i); return (i, v)
@@ -70,7 +70,7 @@ inferKDefn as (Ctype ik vs ct) = do
     let i = iKName ik
         con_k = mustFindK i as
     (as', mk) <- unifyDefArgs i con_k vs
-    ctk <- kcCType (map_insertMany as' as) ct
+    ctk <- kcCType (M.insertMany as' as) ct
     unifyDefAlias i con_k as' mk ct ctk
 inferKDefn as (Cdata { cd_name = ik,
                        cd_type_vars = vs,
@@ -78,18 +78,18 @@ inferKDefn as (Cdata { cd_name = ik,
     let i = iKName ik
         con_k = mustFindK i as
     (as', mk) <- unifyDefArgs i con_k vs
-    let as'' = map_insertMany as' as
+    let as'' = M.insertMany as' as
     mapM_ (\ summand -> kcCTypeStar as'' (cis_arg_type summand)) cs
     unifyDefStar i con_k as' mk
 inferKDefn as (Cstruct _ _ ik vs fs _) = do
     let i = iKName ik
         con_k = mustFindK i as
     (as', mk) <- unifyDefArgs i con_k vs
-    let as'' = map_insertMany as' as
+    let as'' = M.insertMany as' as
         doField field = do
                 let vs' = getFQTyVarsL (cf_type field) \\ vs
                 as''' <- mapM makeAssump vs'
-                kcCQTypeStar (map_insertMany as''' as'') (cf_type field)
+                kcCQTypeStar (M.insertMany as''' as'') (cf_type field)
     mapM_ doField fs
     unifyDefStar i con_k as' mk
 inferKDefn as (Cclass _ ps ik vs _ ats fs) = do
@@ -98,13 +98,13 @@ inferKDefn as (Cclass _ ps ik vs _ ats fs) = do
     (v_as, mk) <- unifyDefArgs i con_k vs
     -- there may be additional variables in the superclass
     -- XXX we should confirm that they are dependent utimately on "vs"
-    let pvs = concatMap (S.toList . getCPTyVars) ps \\ vs
+    let pvs = concatMap (IdSet.toList . getCPTyVars) ps \\ vs
     pv_as <- mapM makeAssump pvs
-    let as' = map_insertMany (v_as ++ pv_as) as
+    let as' = M.insertMany (v_as ++ pv_as) as
         doField field = do
                 let fvs = getFQTyVarsL (cf_type field) \\ (vs ++ pvs)
                 fv_as <- mapM makeAssump fvs
-                kcCQTypeStar (map_insertMany fv_as as') (cf_type field)
+                kcCQTypeStar (M.insertMany fv_as as') (cf_type field)
     mapM_ doField fs
     mapM_ (inferCPred as') ps
     -- Constrain the kind of each associated type function constructor
@@ -113,7 +113,7 @@ inferKDefn as (Cclass _ ps ik vs _ ats fs) = do
     unifyDefStar i con_k v_as mk
 inferKDefn as (Cinstance qt@(CQType ps t) _) = do
     as' <- mapM makeAssump (getFQTyVarsL qt)
-    let as'' = map_insertMany as' as
+    let as'' = M.insertMany as' as
     mapM_ (inferCPred as'') ps
     kcCTypeStar as'' t
 inferKDefn _ _ = return ()
@@ -165,8 +165,8 @@ kcCQTypeStar as (CQType ps t) = do
 
 
 getFQTyVarsL :: CQType -> [Id]
-getFQTyVarsL qt = S.toList (getFQTyVars qt)
+getFQTyVarsL qt = IdSet.toList (getFQTyVars qt)
 
-mustFindK :: Id -> M.Map Id Kind -> Kind
+mustFindK :: Id -> IdMap Kind -> Kind
 mustFindK i m | (Just k) <- M.lookup i m = k
 mustFindK i m = internalError ("InferKind.mustFindK" ++ show i)

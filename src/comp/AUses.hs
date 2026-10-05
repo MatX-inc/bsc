@@ -68,6 +68,10 @@ import ASyntax
 import ASyntaxUtil
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 import Position
 import Id
 import FStringCompat
@@ -199,38 +203,38 @@ useDropCond a = a
 -- Data Types: ActionUses, ExprUses
 
 -- map from a submodule to a map from methods (on the module) to their uses
-type MethodExprUses = M.Map Id (M.Map Id (M.Map AExpr UseCond))
-type MethodActionUses = M.Map Id (M.Map Id [AAction])
+type MethodExprUses = IdMap (IdMap (M.Map AExpr UseCond))
+type MethodActionUses = IdMap (IdMap [AAction])
 
 toListMethodExprUses :: MethodExprUses -> [(MethodId, [UniqueUse])]
 toListMethodExprUses mus =
     [ (MethodId objId methId, map (\ (e,c) -> UUExpr e c) (M.toList uses))
-          | (objId, methmap) <- M.toList mus,
-            (methId, uses) <- M.toList methmap ]
+          | (objId, methmap) <- IdMap.toList mus,
+            (methId, uses) <- IdMap.toList methmap ]
 
 toListMethodActionUses :: MethodActionUses -> [(MethodId, [UniqueUse])]
 toListMethodActionUses mus =
     [ (MethodId objId methId, map UUAction uses)
-          | (objId, methmap) <- M.toList mus,
-            (methId, uses) <- M.toList methmap ]
+          | (objId, methmap) <- IdMap.toList mus,
+            (methId, uses) <- IdMap.toList methmap ]
 
 -- ----------
 
 type FFuncId = AId
 
 -- map from a foreign function to its uses
-type FFuncExprUses = M.Map FFuncId (M.Map AExpr UseCond)
-type FFuncActionUses = M.Map FFuncId [AAction]
+type FFuncExprUses = IdMap (M.Map AExpr UseCond)
+type FFuncActionUses = IdMap [AAction]
 
 toListFFExprUses :: FFuncExprUses -> [(FFuncId, [UniqueUse])]
 toListFFExprUses fus =
     [ (fId, map (\ (e,c) -> UUExpr e c) (M.toList uses))
-          | (fId, uses) <- M.toList fus ]
+          | (fId, uses) <- IdMap.toList fus ]
 
 toListFFActionUses :: FFuncActionUses -> [(FFuncId, [UniqueUse])]
 toListFFActionUses fus =
     [ (fId, map UUAction uses)
-          | (fId, uses) <- M.toList fus ]
+          | (fId, uses) <- IdMap.toList fus ]
 
 -- ----------
 
@@ -238,23 +242,23 @@ type ExprUses = (MethodExprUses, FFuncExprUses)
 type ActionUses = (MethodActionUses, FFuncActionUses)
 
 noExprUses :: ExprUses
-noExprUses = (M.empty, M.empty)
+noExprUses = (IdMap.empty, IdMap.empty)
 
 singleMethodExprUse :: AId -> AMethodId -> AExpr -> UseCond -> ExprUses
 singleMethodExprUse i m e c =
-    (M.singleton i (M.singleton m (M.singleton e c)),
-     M.empty)
+    (IdMap.singleton i (IdMap.singleton m (M.singleton e c)),
+     IdMap.empty)
 
 singleMethodActionUse :: AId -> AMethodId -> AAction -> ActionUses
 singleMethodActionUse i m a =
-    (M.singleton i (M.singleton m [a]),
-     M.empty)
+    (IdMap.singleton i (IdMap.singleton m [a]),
+     IdMap.empty)
 
 singleFFuncExprUse :: AId -> AExpr -> UseCond -> ExprUses
-singleFFuncExprUse i e c = (M.empty, M.singleton i (M.singleton e c))
+singleFFuncExprUse i e c = (IdMap.empty, IdMap.singleton i (M.singleton e c))
 
 singleFFuncActionUse :: AId -> AAction -> ActionUses
-singleFFuncActionUse i a = (M.empty, M.singleton i [a])
+singleFFuncActionUse i a = (IdMap.empty, IdMap.singleton i [a])
 
 getMethodExprUses :: ExprUses -> MethodExprUses
 getMethodExprUses = fst
@@ -270,9 +274,9 @@ getFFuncActionUses = snd
 
 lookupMethodActionUse :: MethodId -> MethodActionUses -> Maybe [AAction]
 lookupMethodActionUse (MethodId objId methId) objmap =
-    case (M.lookup objId objmap) of
+    case (IdMap.lookup objId objmap) of
       Nothing -> Nothing
-      Just methmap ->  M.lookup methId methmap
+      Just methmap ->  IdMap.lookup methId methmap
 
 -- ----------
 
@@ -287,10 +291,10 @@ mergeExprUses uss =
       mergeUsesFn us1 us2 = M.unionWith orUseCond us1 us2
 
       mergeMethodUses :: [MethodExprUses] -> MethodExprUses
-      mergeMethodUses ms = M.unionsWith (M.unionWith mergeUsesFn) ms
+      mergeMethodUses ms = IdMap.unionsWith (IdMap.unionWith mergeUsesFn) ms
 
       mergeFFuncUses :: [FFuncExprUses] -> FFuncExprUses
-      mergeFFuncUses fs = M.unionsWith mergeUsesFn fs
+      mergeFFuncUses fs = IdMap.unionsWith mergeUsesFn fs
 
       (muss, fuss) = unzip uss
   in
@@ -302,10 +306,10 @@ mergeActionUses uss =
       mergeUsesFn = (++)
 
       mergeMethodUses :: [MethodActionUses] -> MethodActionUses
-      mergeMethodUses ms = M.unionsWith (M.unionWith mergeUsesFn) ms
+      mergeMethodUses ms = IdMap.unionsWith (IdMap.unionWith mergeUsesFn) ms
 
       mergeFFuncUses :: [FFuncActionUses] -> FFuncActionUses
-      mergeFFuncUses fs = M.unionsWith mergeUsesFn fs
+      mergeFFuncUses fs = IdMap.unionsWith mergeUsesFn fs
 
       (muss, fuss) = unzip uss
   in
@@ -319,10 +323,10 @@ mergeExprUsesM uss = do
       mergeUsesFnM us1 us2 = map_unionWithM orUseCondM us1 us2
 
       mergeMethodUsesM :: [MethodExprUses] -> UCM (MethodExprUses)
-      mergeMethodUsesM ms = map_unionsWithM (map_unionWithM mergeUsesFnM) ms
+      mergeMethodUsesM ms = IdMap.unionsWithM (IdMap.unionWithM mergeUsesFnM) ms
 
       mergeFFuncUsesM :: [FFuncExprUses] -> UCM (FFuncExprUses)
-      mergeFFuncUsesM fs = map_unionsWithM mergeUsesFnM fs
+      mergeFFuncUsesM fs = IdMap.unionsWithM mergeUsesFnM fs
 
       (muss, fuss) = unzip uss
   merged_mus <- mergeMethodUsesM muss
@@ -338,16 +342,16 @@ addUseCond dm c (mus, fus) =
         isFalseCond c' = (c' == ucFalse)
 
         filterNullMethUses us =
-            let us' = M.map (M.filter (not . M.null)) us
-            in  M.filter (not . M.null) us'
+            let us' = IdMap.map (IdMap.filter (not . M.null)) us
+            in  IdMap.filter (not . IdMap.null) us'
         addCondMethUses us =
-            let mapMethUses fn = M.map (M.map fn)
+            let mapMethUses fn = IdMap.map (IdMap.map fn)
                 dropFalse = M.filter (not . isFalseCond)
             in  filterNullMethUses (mapMethUses (dropFalse . M.map addUC) us)
 
-        filterNullFFUses us = M.filter (not . M.null) us
+        filterNullFFUses us = IdMap.filter (not . M.null) us
         addCondFFUses us =
-            let mapFFUses fn = M.map fn
+            let mapFFUses fn = IdMap.map fn
                 dropFalse = M.filter (not . isFalseCond)
             in  filterNullFFUses (mapFFUses (dropFalse . M.map addUC) us)
 
@@ -358,19 +362,19 @@ addUseCond dm c (mus, fus) =
 -- only used in eDomain
 intersectUses :: ExprUses -> ExprUses -> ExprUses
 intersectUses (mus1, fus1) (mus2, fus2) = (mus', fus')
-  where mus' = M.intersectionWith (M.intersectionWith M.intersection) mus1 mus2
-        fus' = M.intersectionWith (M.intersection) fus1 fus2
+  where mus' = IdMap.intersectionWith (IdMap.intersectionWith M.intersection) mus1 mus2
+        fus' = IdMap.intersectionWith (M.intersection) fus1 fus2
 
 -- return only uses unique to the first set
 -- even if only the condition is different
 -- only used in eDomain
 minusUses :: ExprUses -> ExprUses -> ExprUses
 minusUses (mus1, fus1) (mus2, fus2) = (mus', fus')
-  where mus' = M.differenceWith mapmapdiff mus1 mus2
-        fus' = M.differenceWith mapdiff fus1 fus2
+  where mus' = IdMap.differenceWith mapmapdiff mus1 mus2
+        fus' = IdMap.differenceWith mapdiff fus1 fus2
 
-        mapmapdiff s1 s2 = toMaybe (not (M.null s')) s'
-          where s' = M.differenceWith mapdiff s1 s2
+        mapmapdiff s1 s2 = toMaybe (not (IdMap.null s')) s'
+          where s' = IdMap.differenceWith mapdiff s1 s2
         mapdiff s1 s2 = toMaybe (not (M.null s')) s'
           where s' = s1 `M.difference` s2
 
@@ -423,13 +427,13 @@ ruleMethodUsesToUUs (RuleUses pus rus wus) =
 -- This is paired with the rule's predicate to save the effort of a
 -- separate lookup when computing the full condition for a method call
 -- (the condition of the call AND'd with the rule's predicate).
-type RuleUsesMap = M.Map RuleId (AExpr, RuleUses)
+type RuleUsesMap = IdMap (AExpr, RuleUses)
 
 -- This is still around for ASchedule to idenitfy common Action uses
 -- between two rules, for warning about arbitrary earliness.
 -- XXX A more abstract entry point might be good?
 rumGetActionUses :: RuleUsesMap -> ARuleId -> ActionUses
-rumGetActionUses m r = case M.lookup r m of
+rumGetActionUses m r = case IdMap.lookup r m of
               Just (_, RuleUses _ _ range) -> range
               _ -> errNotInUseMap r
 
@@ -438,53 +442,53 @@ rumGetActionUses m r = case M.lookup r m of
 -- whether a rule uses foreign functions
 rumRuleUsesFF :: RuleUsesMap -> ARuleId -> Bool
 rumRuleUsesFF m r =
-    case M.lookup r m of
+    case IdMap.lookup r m of
       Just (_, RuleUses preds domain range) ->
-          let eUsesFF = not . M.null . getFFuncExprUses
-              aUsesFF = not . M.null . getFFuncActionUses
+          let eUsesFF = not . IdMap.null . getFFuncExprUses
+              aUsesFF = not . IdMap.null . getFFuncActionUses
           in  eUsesFF preds || eUsesFF domain || aUsesFF range
       _ -> errNotInUseMap r
 
 -- convert a RuleUseMap to a map from rule Id to the list of Ids of
 -- submodules whose methods are used by the rule
-rumToObjectMap :: RuleUsesMap -> M.Map ARuleId (S.Set Id)
+rumToObjectMap :: RuleUsesMap -> IdMap IdSet
 rumToObjectMap m =
    let usesToObjIds (_, RuleUses preds domain range) =
-           let eObjIds = M.keysSet . getMethodExprUses
-               aObjIds = M.keysSet . getMethodActionUses
-           in  S.unions [eObjIds preds, eObjIds domain, aObjIds range]
-   in  M.map usesToObjIds m
+           let eObjIds = IdMap.keysSet . getMethodExprUses
+               aObjIds = IdMap.keysSet . getMethodActionUses
+           in  IdSet.unions [eObjIds preds, eObjIds domain, aObjIds range]
+   in  IdMap.map usesToObjIds m
 
 -- convert a RuleUseMap to a map from rule Id to the methods that
 -- the rule uses (grouped by submodule Id) mapped to their uses
 rumToMethodUseMap :: RuleUsesMap ->
-                     M.Map ARuleId (AExpr, M.Map Id (M.Map Id [UniqueUse]))
+                     IdMap (AExpr, IdMap (IdMap [UniqueUse]))
 rumToMethodUseMap m =
     let usesToMethMap (pred, RuleUses preds domain range) =
             let toE (e, c) = UUExpr e c
                 toA a = UUAction a
-                convE = M.map (M.map (map toE . M.toList)) . getMethodExprUses
-                convA = M.map (M.map (map toA)) . getMethodActionUses
-            in  (pred, M.unionsWith (M.unionWith (++)) [convE preds, convE domain, convA range])
-    in  M.map usesToMethMap m
+                convE = IdMap.map (IdMap.map (map toE . M.toList)) . getMethodExprUses
+                convA = IdMap.map (IdMap.map (map toA)) . getMethodActionUses
+            in  (pred, IdMap.unionsWith (IdMap.unionWith (++)) [convE preds, convE domain, convA range])
+    in  IdMap.map usesToMethMap m
 
 -- a map from the submodules that a rule calls methods on
 -- to the set of methods which are used
-rumGetMethodIdMap :: RuleUsesMap -> ARuleId -> M.Map Id (S.Set Id)
+rumGetMethodIdMap :: RuleUsesMap -> ARuleId -> IdMap IdSet
 rumGetMethodIdMap m r =
-    case M.lookup r m of
+    case IdMap.lookup r m of
       Just (_, RuleUses preds domain range) ->
-          let convE us = M.map (M.keysSet) (getMethodExprUses us)
-              convA us = M.map (M.keysSet) (getMethodActionUses us)
-          in  M.unionsWith (S.union) [convE preds, convE domain, convA range]
+          let convE us = IdMap.map (IdMap.keysSet) (getMethodExprUses us)
+              convA us = IdMap.map (IdMap.keysSet) (getMethodActionUses us)
+          in  IdMap.unionsWith (IdSet.union) [convE preds, convE domain, convA range]
       _ -> errNotInUseMap r
 
 -- a list of all the submodule methods that a rule uses
 -- (a flattened version of "rumGetMethodIdMap")
 rumGetMethodIds :: RuleUsesMap -> ARuleId -> [MethodId]
 rumGetMethodIds m r = [ MethodId objId methId
-                        | (objId, methset) <- M.toList $ rumGetMethodIdMap m r,
-                          methId <- S.toList methset ]
+                        | (objId, methset) <- IdMap.toList $ rumGetMethodIdMap m r,
+                          methId <- IdSet.toList methset ]
 
 -- ==============================
 -- Expr collection monad
@@ -494,8 +498,8 @@ rumGetMethodIds m r = [ MethodId objId methId
 -- conditions that can be expressed with linear defs were instead being
 -- expressed with expontential defs.
 
-type DefMap = M.Map AId AExpr
-type DefUseMap = M.Map AId ExprUses
+type DefMap = IdMap AExpr
+type DefUseMap = IdMap ExprUses
 
 -- condition under which an AExpr is used
 -- since AExprs do not contain their condition (unlike AActions)
@@ -515,7 +519,7 @@ getDefMap = liftM defMap get
 getDefUses:: AId -> UCM (ExprUses)
 getDefUses i = do
   um <- liftM defUseMap $ get
-  case (M.lookup i um) of
+  case (IdMap.lookup i um) of
     Just uses -> do
         -- traceM ("getDefUses hit:" ++ ppReadable i)
         return uses
@@ -523,10 +527,10 @@ getDefUses i = do
       -- traceM ("getDefUses miss: " ++ ppReadable (i, M.size um))
       dm <- getDefMap
       let err = errNoDef i
-      let e = M.findWithDefault err i dm
+      let e = IdMap.findWithDefault err i dm
       uses <- eDomain e
       s <- get
-      let um' = M.insert i uses (defUseMap s)
+      let um' = IdMap.insert i uses (defUseMap s)
       put (s { defUseMap = um' })
       -- traceM ("getDefUses: " ++ ppReadable (i, e, uses))
       return uses
@@ -537,8 +541,8 @@ initUCState defs = UCState {
                      new_defs = [],
                      -- is throwing away props incorrect?
                      cseMap = M.fromList [(e, (i,t)) | ADef i t e _props <- defs ],
-                     defMap = M.fromList [(i, e) | ADef i _ e _props <- defs ],
-                     defUseMap = M.empty
+                     defMap = IdMap.fromList [(i, e) | ADef i _ e _props <- defs ],
+                     defUseMap = IdMap.empty
                    }
 
 runUCState :: [ADef] -> UCM a -> (a, [ADef])
@@ -689,10 +693,10 @@ andUseCond dm e c = andUseCond' dm Nothing e c
 
 andUseCond' :: DefMap -> Maybe AExpr -> AExpr -> UseCond -> UseCond
 andUseCond' dm _ d@(ASDef _ i) uc =
-    andUseCond' dm (Just d) (M.findWithDefault err i dm) uc
+    andUseCond' dm (Just d) (IdMap.findWithDefault err i dm) uc
   where err = internalError ("AUses.andUseCond - unknown def: " ++ ppReadable i)
 andUseCond' dm _ (APrim _ _ PrimBNot [e]) uc = doBNot Nothing e
-  where doBNot _ d@(ASDef _ i) = doBNot (Just d) (M.findWithDefault (err i) i dm)
+  where doBNot _ d@(ASDef _ i) = doBNot (Just d) (IdMap.findWithDefault (err i) i dm)
         doBNot _ (APrim _ _ PrimEQ [x, ASInt _ _ i]) = doNEq x i uc
         doBNot (Just d) _ = addFalse d uc  -- don't inline the def
         doBNot Nothing e' = addFalse e' uc
@@ -702,7 +706,7 @@ andUseCond' dm _ e uc | length es > 1 =
     {-# SCC "aucFold" #-} foldl' (flip (andUseCond' dm Nothing)) uc es
   where es = getAnds Nothing e
         getAnds _ (APrim _ _ PrimBAnd es') = concatMap (getAnds Nothing) es'
-        getAnds _ d@(ASDef _ i) = getAnds (Just d) (M.findWithDefault (err i) i dm)
+        getAnds _ d@(ASDef _ i) = getAnds (Just d) (IdMap.findWithDefault (err i) i dm)
         getAnds (Just d) _ = [d]  -- don't inline the def
         getAnds Nothing e' = [e']
         err i = internalError ("AUses.andUseCond - unknown def: " ++ ppReadable i)
@@ -758,7 +762,7 @@ buildUseMaps defs rules avis = (rum, mum, reverse new_defs)
                return (rum, mum)
 
 ruleUsesMap :: [Rule] -> UCM RuleUsesMap
-ruleUsesMap rules = liftM M.fromList (mapM f rules)
+ruleUsesMap rules = liftM IdMap.fromList (mapM f rules)
   where f r = do ru <- rUses r
                  let rp = aAnds (rulePred r)
                  return (ruleName r, (rp, ru))
@@ -905,7 +909,7 @@ eDomainArray idx_e (APrim _ _ PrimBuildArray es) = do
 eDomainArray idx_e (ASDef _ i) = do
   -- XXX can we memoize results?
   dm <- getDefMap
-  let arr_e' = M.findWithDefault (errNoDef i) i dm
+  let arr_e' = IdMap.findWithDefault (errNoDef i) i dm
   eDomainArray idx_e arr_e'
 eDomainArray _ arr_e =
   internalError ("eDomainArray: unhandled: " ++ ppReadable arr_e)
@@ -976,7 +980,7 @@ createMethodUsesMap rmap avis = do
 invertRuleUsesMap :: RuleUsesMap -> MethodUsesMap
 invertRuleUsesMap rMap =
     foldr (uncurry (M.insertWith mergeUseMapData)) M.empty $
-    [cvt rId uses | (rId, (_, RuleUses pUses rUses wUses)) <- M.toList rMap,
+    [cvt rId uses | (rId, (_, RuleUses pUses rUses wUses)) <- IdMap.toList rMap,
                     let pMUses = getMethodUUExprs pUses,
                     let rMUses = getMethodUUExprs rUses,
                     let wMUses = getMethodUUActions wUses,

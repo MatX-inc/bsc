@@ -6,8 +6,10 @@
 > import Data.Maybe
 > import Control.Monad
 > import Control.Monad.State
-> import qualified Data.Set as S
+> import qualified Data.Set as Set
 > import qualified Data.Map as M
+> import IdSet(IdSet)
+> import qualified IdSet as S
 
 > import Parsec hiding (getPosition)
 
@@ -1435,17 +1437,17 @@ some of these restrictions could be lifted if we made the compiler more clever
 (e.g. sharing input port between methods that conflict)
 
 >        let addOutputPort pos port (inputs, outputs, errs) = (inputs, outputs', errs')
->              where outputs' = S.insert port outputs
->                    errs' = if (port `S.member` inputs) then
+>              where outputs' = Set.insert port outputs
+>                    errs' = if (port `Set.member` inputs) then
 >                               (pos, EBVIInputOutputOverlap str):errs
 >                            else errs
 >                    str = getVNameString port
 >            addInput pos name (inputs, outputs, errs) = (inputs', outputs, errs'')
->              where inputs' = S.insert name inputs
->                    errs' = if (name `S.member` inputs) then
+>              where inputs' = Set.insert name inputs
+>                    errs' = if (name `Set.member` inputs) then
 >                               (pos, EBVIInputOverlap str):errs
 >                            else errs
->                    errs'' = if (name `S.member` outputs) then
+>                    errs'' = if (name `Set.member` outputs) then
 >                                (pos, EBVIInputOutputOverlap str):errs'
 >                             else errs'
 >                    str = getVNameString name
@@ -1485,7 +1487,7 @@ some of these restrictions could be lifted if we made the compiler more clever
 >            chkBVIPorts (ISBVI pos (BVI_interface (_,_,stmts))) ioerrs = ioerrs'
 >               where ioerrs' = foldr chkBVIPorts ioerrs stmts
 >            chkBVIPorts _ ioerrs = ioerrs
->        let (_,_,errs) = foldr chkBVIPorts (S.empty, S.empty, []) bvis1
+>        let (_,_,errs) = foldr chkBVIPorts (Set.empty, Set.empty, []) bvis1
 >        when (not (null errs)) $ cvtErrs errs
 
 Extract each type of statement, making sure to preserve the order
@@ -2375,7 +2377,7 @@ Check for use of unassigned variables; if any are found, report errors
 >        when (declared && (not assigned || uninitialized))
 >                 (cvtErr (getIdPosition var) (EUseBeforeAssign (pvpString var)))
 
-> getPatVars :: [CQual] -> S.Set Id
+> getPatVars :: [CQual] -> IdSet
 > getPatVars qs = S.unions [getPV pat | (CQGen _ pat _) <- qs]
 
 > declareAndAssignVarsInPattern :: CPat -> ISConvMonad ()
@@ -2787,7 +2789,7 @@ XXX   Detecting function argument collisions TBD
 >        let assignedFreeVarSets = [getUFVISs conseq | (pos, test, conseq) <- arms] ++
 >                                  [getUFVISs conseq | (pos, conseq) <- maybeToList dfltArm]
 >            assignedFreeVarSetUnion = S.unions assignedFreeVarSets
->            assignedFreeVarSetIntersection = set_intersectMany assignedFreeVarSets
+>            assignedFreeVarSetIntersection = S.intersectMany assignedFreeVarSets
 >            assignedFreeVarSetNotAllPaths = (assignedFreeVarSetUnion
 >                                             `S.difference`
 >                                             assignedFreeVarSetIntersection)
@@ -2810,7 +2812,7 @@ XXX   Detecting function argument collisions TBD
 >                                  [getUFVISs conseq
 >                                   | (_, conseq) <- maybeToList dfltArm]
 >            assignedFreeVarSetUnion = S.unions assignedFreeVarSets
->            assignedFreeVarSetIntersection = set_intersectMany assignedFreeVarSets
+>            assignedFreeVarSetIntersection = S.intersectMany assignedFreeVarSets
 >            assignedFreeVarSetNotAllPaths = (assignedFreeVarSetUnion
 >                                             `S.difference`
 >                                             assignedFreeVarSetIntersection)

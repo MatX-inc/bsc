@@ -51,7 +51,6 @@ module Pragma(
 import Prelude hiding ((<>))
 #endif
 
-import qualified Data.Map as M
 import Data.Maybe(listToMaybe)
 import Data.List(sort)
 import qualified Data.Generics as Generic
@@ -60,6 +59,8 @@ import Eval(NFData(..), rnf, rnf2, rnf3)
 import PPrint
 import PVPrint
 import Id
+import IdMap(IdMap)
+import qualified IdMap
 import PreIds(idDefaultClock, idDefaultReset)
 import ErrorUtil(internalError)
 import Util(itos, doubleQuote, findDup)
@@ -532,7 +533,7 @@ setpos id1 id2 = setIdPosition (getIdPosition id1) id2
 
 -- --------------------
 
-type SPIdMap = M.Map Id Id
+type SPIdMap = IdMap Id
 
 substSchedPragmaIds :: SPIdMap -> [ISchedulePragma] -> [ISchedulePragma]
 substSchedPragmaIds idmap sps =
@@ -540,7 +541,7 @@ substSchedPragmaIds idmap sps =
         -- preserve the position of the original Id
         -- (still point to the name that the user wrote in the source)
         substId id1 =
-            case (M.lookup id1 idmap) of
+            case (IdMap.lookup id1 idmap) of
                 Just id2 -> setpos id1 id2
                 Nothing  -> id1
     in

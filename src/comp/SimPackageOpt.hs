@@ -8,16 +8,16 @@ import AOpt(aExpandDynSel, aInsertCaseDef)
 import Prim
 import IntLit
 import IntegerUtil(aaaa)
-import Util(mapSndM, map_mapM)
+import Util(mapSndM)
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import Id(isFromRHSId, dummy_id, mkIdCanFire, mkIdWillFire)
 import Position(noPosition)
 import Data.Maybe
 import PPrint
 
-import qualified Data.Map as M
-import qualified Data.Set as S
-import Util(map_insertManyWith)
+import IdMap(IdMap)
+import qualified IdMap
+import qualified IdSet
 
 -- import Debug.Trace
 
@@ -25,9 +25,9 @@ import Util(map_insertManyWith)
 
 simPackageOpt :: ErrorHandle -> Flags -> SimSystem -> IO SimSystem
 simPackageOpt errh flags ss = do
-  let pkgs0 = M.toList (ssys_packages ss)
+  let pkgs0 = IdMap.toList (ssys_packages ss)
   pkgs1 <- mapSndM (pkgOpt errh flags) pkgs0
-  return $ ss { ssys_packages = M.fromList pkgs1 }
+  return $ ss { ssys_packages = IdMap.fromList pkgs1 }
 
 pkgOpt :: ErrorHandle -> Flags -> SimPackage -> IO SimPackage
 pkgOpt errh flags pkg0 = do
@@ -75,23 +75,23 @@ combine_uses (Only _) (Only _) = Multiple
 combine_uses Multiple  _       = Multiple
 combine_uses _        Multiple = Multiple
 
-collectUses :: DefMap -> [AId] -> M.Map AId UseInfo
-collectUses defmap used_vars = collectUses' use_map0 S.empty used_vars
+collectUses :: DefMap -> [AId] -> IdMap UseInfo
+collectUses defmap used_vars = collectUses' use_map0 IdSet.empty used_vars
   where -- consider the vars we start with as "multiple"
-        use_map0 = M.fromList [ (v, Multiple) | v <- used_vars ]
+        use_map0 = IdMap.fromList [ (v, Multiple) | v <- used_vars ]
         collectUses' m s [] = m
-        collectUses' m s (v:vs) | (S.member v s) =
+        collectUses' m s (v:vs) | (IdSet.member v s) =
             -- we've already visited this def
             collectUses' m s vs
         collectUses' m s (v:vs) =
             -- some vars are not defs
-            case (M.lookup v defmap) of
+            case (IdMap.lookup v defmap) of
               Nothing -> collectUses' m s vs
               Just d@(ADef i _ _ _) ->
                   let new_vs = aVars d
                       new_uses = [ (new_v, Only i) | new_v <- new_vs ]
-                      m' = map_insertManyWith combine_uses new_uses m
-                      s' = S.insert v s
+                      m' = IdMap.insertManyWith combine_uses new_uses m
+                      s' = IdSet.insert v s
                   in  collectUses' m' s' (new_vs ++ vs)
 
 -- This is inlining defs that were created during AConv.
@@ -109,7 +109,7 @@ inlineDefs :: SimPackage -> SimPackage
 inlineDefs pkg =
   let
       def_map0 = sp_local_defs pkg
-      defs0 = M.toList def_map0
+      defs0 = IdMap.toList def_map0
 
       used_in_rule = concatMap aVars (sp_rules pkg)
       used_in_method = concatMap aVars (sp_interface pkg)
@@ -145,26 +145,26 @@ inlineDefs pkg =
       dangerous = [ i | (i,d) <- defs0, isNotOk d ]
 
       -- don't inline these
-      keep = S.fromList (used_vars ++ dangerous)
+      keep = IdSet.fromList (used_vars ++ dangerous)
 
       -- construct a substitution
-      subst = M.fromList [ (i, adef_expr (fromJust md))
-                         | (i,(Only _)) <- M.toList use_map
+      subst = IdMap.fromList [ (i, adef_expr (fromJust md))
+                         | (i,(Only _)) <- IdMap.toList use_map
                          , isFromRHSId i
-                         , not (i `S.member` keep)
-                         , let md = M.lookup i (sp_local_defs pkg)
+                         , not (i `IdSet.member` keep)
+                         , let md = IdMap.lookup i (sp_local_defs pkg)
                          , isJust md
                          ]
 
       defs1 = mapMaybe (processDef use_map subst) defs0
-  in pkg { sp_local_defs = M.fromList defs1 }
+  in pkg { sp_local_defs = IdMap.fromList defs1 }
 
-processDef :: M.Map AId UseInfo -> M.Map AId AExpr ->
+processDef :: IdMap UseInfo -> IdMap AExpr ->
               (AId, ADef) -> Maybe (AId, ADef)
 processDef use_map subst (name,def) =
-  let has_subst = name `M.member` subst
-      has_use = name `M.member` use_map
-      doSubst (ASDef _ i) = (\e -> exprMap doSubst e) <$> M.lookup i subst
+  let has_subst = name `IdMap.member` subst
+      has_use = name `IdMap.member` use_map
+      doSubst (ASDef _ i) = (\e -> exprMap doSubst e) <$> IdMap.lookup i subst
       doSubst _           = Nothing
       opt d@(ADef _ _ e _) = d { adef_expr = exprMap doSubst e }
   in if has_subst
@@ -251,7 +251,7 @@ expandDynSel pkg =
       defmap0 = sp_local_defs pkg
       findFn i = adef_expr (findDef defmap0 i)
 
-      defmap1 = M.map (aExpandDynSel True findFn) defmap0
+      defmap1 = IdMap.map (aExpandDynSel True findFn) defmap0
 
       -- because method return values are not lifted to local defs,
       -- we need to expand dynamic array selection there, too
@@ -279,7 +279,7 @@ insertCase pkg =
       defmap0 = sp_local_defs pkg
       findFn i = adef_expr (findDef defmap0 i)
 
-      defmap1 = M.map (aInsertCaseDef True findFn) defmap0
+      defmap1 = IdMap.map (aInsertCaseDef True findFn) defmap0
 
       -- because method return values are not lifted to local defs,
       -- we need to infer case expressions there, too
@@ -349,7 +349,7 @@ convertASAny errh flags apkg = do
   ss' <- mapMAExprs cvtASAnyExpr ss
   rs' <- mapMAExprs cvtASAnyExpr rs
   ifc' <- mapMAExprs cvtASAnyExpr ifc
-  dmap' <- map_mapM (mapMAExprs cvtASAnyExpr) dmap
+  dmap' <- IdMap.mapMValues (mapMAExprs cvtASAnyExpr) dmap
 
   return $ apkg { sp_state_instances = ss'
                 , sp_rules = rs'

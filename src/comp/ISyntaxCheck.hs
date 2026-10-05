@@ -6,6 +6,8 @@ module ISyntaxCheck(iGetKind,
 import Data.List (mapAccumL)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
 import qualified EquivalenceClass as EC
 
 import ErrorUtil(internalError)
@@ -106,7 +108,7 @@ eqTypeNum flags symt r@(E _ _ ecRaw _) t1 t2
     let numEqCls = mustFindClass symt (CTypeclass idNumEq)
         (r', t1') = convType r t1
         (rWithT2@(E _ _ _ (PredEnv _ m s)), t2') = convType r' t2
-        boundTVs = M.elems m
+        boundTVs = IdMap.elems m
         -- For each numeric-kind EC class, emit a spanning tree of
         -- equalities (n-1 pairs, not all n*(n-1)/2) --- satisfy chases
         -- transitively via unification, so this is enough.
@@ -261,10 +263,10 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
 
 -------
 
-data Env = E (M.Map Id IType) (M.Map Id IKind) (EC.EquivClasses IType) PredEnv
+data Env = E (IdMap IType) (IdMap IKind) (EC.EquivClasses IType) PredEnv
 
 emptyEnv :: Env
-emptyEnv = E M.empty M.empty EC.empty emptyPredEnv
+emptyEnv = E IdMap.empty IdMap.empty EC.empty emptyPredEnv
 
 addDict :: SymTab -> IType -> Env -> Env
 addDict symt t e@(E tm km eqs ps) =
@@ -329,34 +331,34 @@ atfEqsFromDict symt dictType =
 addT :: SymTab -> Id -> IType -> Env -> Env
 addT symt i t (E tm km eqs ps) =
     trace_icheck ("addT: " ++ ppReadable i ++ " :: " ++ ppReadable t) $
-    addDict symt t $ E (M.insert i t tm) km eqs ps
+    addDict symt t $ E (IdMap.insert i t tm) km eqs ps
 
 addK :: Id -> IKind -> Env -> Env
-addK i k (E tm km eqs ps) = E tm (M.insert i k km) eqs ps
+addK i k (E tm km eqs ps) = E tm (IdMap.insert i k km) eqs ps
 
 findT :: Id -> Env -> IType
 findT i (E tm _ _ _) =
-    case M.lookup i tm of
+    case IdMap.lookup i tm of
         Just t -> t
-        Nothing -> internalError ("ISyntaxCheck.findT " ++ ppString i ++ "\n" ++ ppReadable (M.toList tm))
+        Nothing -> internalError ("ISyntaxCheck.findT " ++ ppString i ++ "\n" ++ ppReadable (IdMap.toList tm))
 
 findK :: Id -> Env -> Maybe IKind
-findK i (E _ km _ _) = M.lookup i km
+findK i (E _ km _ _) = IdMap.lookup i km
 
 instance PPrint Env where
     pPrint d _ (E tm km eqs ps) =
         text "Env" <+>
-        (pPrint d 0 (M.toList tm) $$
-         pPrint d 0 (M.toList km) $$
+        (pPrint d 0 (IdMap.toList tm) $$
+         pPrint d 0 (IdMap.toList km) $$
          pPrint d 0 (EC.classes eqs) $$
          text "PredEnv")
 
 ------
 
-data PredEnv = PredEnv Int (M.Map Id TyVar) (S.Set Pred.Pred)
+data PredEnv = PredEnv Int (IdMap TyVar) (S.Set Pred.Pred)
 
 emptyPredEnv :: PredEnv
-emptyPredEnv = PredEnv 0 M.empty S.empty
+emptyPredEnv = PredEnv 0 IdMap.empty S.empty
 
 convType :: Env -> IType -> (Env, Type)
 convType _ (ITForAll i k t) = internalError ("convType: ITForAll " ++ ppReadable (i, k, t))
@@ -365,12 +367,12 @@ convType r (ITAp t1 t2) =
         (r'', t2') = convType r' t2
     in  (r'', TAp t1' t2')
 convType r@(E tm km eqs (PredEnv n m s)) (ITVar i) =
-    case (M.lookup i m) of
+    case (IdMap.lookup i m) of
       Just tyvar -> (r, TVar tyvar)
       Nothing ->
           let k = fromJustOrErr ("findK: " ++ ppReadable (r, i)) $ findK i r
               tyvar = TyVar i n (iToCK k)
-              r' = E tm km eqs (PredEnv (n+1) (M.insert i tyvar m) s)
+              r' = E tm km eqs (PredEnv (n+1) (IdMap.insert i tyvar m) s)
           in  (r', TVar tyvar)
 convType r (ITCon i k s) = (r, TCon (TyCon i (Just (iToCK k)) s))
 convType r (ITNum n) = (r, TCon (TyNum n noPosition))

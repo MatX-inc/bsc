@@ -1,8 +1,10 @@
 module ISimplify(iSimplify) where
 
 import Data.List((\\), findIndex)
-import qualified Data.Map as M
-import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 import Util(fromJustOrErr)
 import IOUtil(progArgs)
 import PreIds(idPack, idUnpack)
@@ -89,7 +91,7 @@ iSimpAp n e [] [] = e -- iSimp has already been called
 iSimpAp n f ts es = IAps f ts es
 
 selectTuple :: (NFData a) => Int -> IExpr a -> Maybe (IExpr a)
-selectTuple k (ICon di (ICDef { iConDef = def@(IAps (ICon _ (ICTuple { })) _ ms) })) | di `notElem` dVars e = Just e
+selectTuple k (ICon di (ICDef { iConDef = def@(IAps (ICon _ (ICTuple { })) _ ms) })) | di `IdSet.notMember` dVars e = Just e
   where e = ms !! k
 selectTuple k (IAps (ICon iii (ICDef { iConDef = body })) ts []) =
         -- trace ("getTuple " ++ ppReadable (iii,body)) $
@@ -104,7 +106,7 @@ selectTuple _ _ = Nothing
 selectDictMethod :: (NFData a) => Id -> IExpr a -> Maybe (IExpr a)
 selectDictMethod meth (ICon di (ICDef { iConDef = IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms }))
     | Just k <- findIndex (qualEq meth) fs, k < length ms,
-      let e = ms !! k, di `notElem` dVars e = Just e
+      let e = ms !! k, di `IdSet.notMember` dVars e = Just e
 selectDictMethod meth (IAps (ICon _ (ICDef { iConDef = body })) ts []) =
         case iSimpAp False body ts [] of
         IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms
@@ -196,12 +198,12 @@ gVars (IRefT _ _ _ _) = []
 -- dVars (ICon _ _) = []
 -- dVars (IRefT _ _ _ _) = []
 
-dVars :: IExpr a -> S.Set Id
-dVars e = dVars' S.empty e
+dVars :: IExpr a -> IdSet
+dVars e = dVars' IdSet.empty e
 
 -- auxiliary function to guard against circular traversals
 -- and to accumulate definitions that have been processed
-dVars' :: S.Set Id -> IExpr a -> S.Set Id
+dVars' :: IdSet -> IExpr a -> IdSet
 dVars' ids (ILam _ _ e) = dVars' ids e
 dVars' ids (IVar _) = ids
 dVars' ids (ILAM _ _ e) = dVars' ids e
@@ -209,8 +211,8 @@ dVars' ids (ILAM _ _ e) = dVars' ids e
 -- same definitions over and over again across f and es.
 dVars' ids (IAps f _ es) = foldl dVars' (dVars' ids f) es
 -- guarding against circular traversal
-dVars' ids (ICon i (ICDef { })) | i `S.member` ids = ids
-dVars' ids (ICon i (ICDef {iConDef = e})) = dVars' (S.insert i ids) e
+dVars' ids (ICon i (ICDef { })) | i `IdSet.member` ids = ids
+dVars' ids (ICon i (ICDef {iConDef = e})) = dVars' (IdSet.insert i ids) e
 dVars' ids (ICon _ _) = ids
 dVars' ids (IRefT _ _ _ _) = ids
 
@@ -235,12 +237,12 @@ onlySimple e = False
 
 fixUpDefs :: [IDef a] -> [IDef a]
 fixUpDefs ds =
-    let m = M.fromList [ (i, e) | IDef i _ e _ <- ds ]
+    let m = IdMap.fromList [ (i, e) | IDef i _ e _ <- ds ]
     in  iDefsMap (fixUp m) ds
 
-fixUp :: M.Map Id (IExpr a) -> IExpr a -> IExpr a
+fixUp :: IdMap (IExpr a) -> IExpr a -> IExpr a
 fixUp m (ILam i t e) = ILam i t (fixUp m e)
 fixUp m (ILAM i k e) = ILAM i k (fixUp m e)
 fixUp m (IAps f ts es) = IAps (fixUp m f) ts (map (fixUp m) es)
-fixUp m (ICon i (ICDef t d)) = ICon i (ICDef t (M.findWithDefault d i m))
+fixUp m (ICon i (ICDef t d)) = ICon i (ICDef t (IdMap.findWithDefault d i m))
 fixUp m e = e

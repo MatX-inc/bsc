@@ -15,9 +15,12 @@
 
 > import Data.List
 > import Data.Maybe
-> import qualified Data.Set as S
-> import qualified Data.Map as M
+> import IdMap(IdMap)
+> import qualified IdMap as M
+> import IdSet(IdSet)
+> import qualified IdSet as S
 > import Debug.Trace(trace)
+> import GHC.Exts(lazy)
 
 > import Parsec hiding(getPosition)
 > import Error(internalError, EMsg, WMsg, ErrMsg(..), ErrorHandle)
@@ -34,7 +37,7 @@
 > import CVPrint
 > import qualified SEMonad
 > import Pragma
-> import Util (headOrErr, unconsOrErr, set_insertMany, toMaybe, apRight)
+> import Util (headOrErr, unconsOrErr, toMaybe, apRight)
 
 type of the BSV parser
 
@@ -908,7 +911,7 @@ one would then need to be careful about variable shadowing
 > }
 
 
-> type FreeVarSet = S.Set Id
+> type FreeVarSet = IdSet
 
 get free variables from statement or right-hand-side of assignment
 
@@ -1026,14 +1029,14 @@ get free variables updated by a statement
 > getUFVIS (ISContinue pos) = S.empty
 > getUFVIS (ISClassicDefns pos body) = internalError "CVParserCommon.getUFVIS ISClassicDefns"
 
-> getUFVdef :: Maybe (a, [ImperativeStatement]) -> S.Set Id
+> getUFVdef :: Maybe (a, [ImperativeStatement]) -> IdSet
 > getUFVdef Nothing = S.empty
 > getUFVdef (Just (pos,ss)) = getUFVISs ss
 
-> getUFVcase :: [(a, b, [ImperativeStatement])] -> S.Set Id
+> getUFVcase :: [(a, b, [ImperativeStatement])] -> IdSet
 > getUFVcase as = S.unions (map (\ (x,y,z) -> getUFVISs z) as)
 
-> getUFVtcase :: [(a, b, c, [ImperativeStatement])] -> S.Set Id
+> getUFVtcase :: [(a, b, c, [ImperativeStatement])] -> IdSet
 > getUFVtcase as = S.unions (map (\ (w,x,y,z) -> getUFVISs z) as)
 
 get free variables updated by a list of statements (i.e. omitting updates of
@@ -1045,7 +1048,7 @@ variables declared earlier in the list)
 >                 case stmt of
 >                   ISDecl _ vars _  _ ->
 >                       let names = getIdOrTupleNames vars
->                       in  (updates, set_insertMany names decls)
+>                       in  (updates, S.insertMany names decls)
 >                   ISPatEq _ pat _ -> (updates, S.union (getPV pat) decls)
 >                   ISPatBind _ pat _ -> (updates, S.union (getPV pat) decls)
 >                   _ -> (updates `S.union` (getUFVIS stmt `S.difference` decls), decls)
@@ -1171,12 +1174,12 @@ make either an if-then-else expression on an appropriate case expression
 THE IMPERATIVE STATEMENT CONVERSION MONAD
 
 > type DeclarationInfo = (Position, [IdProp], Maybe CType, [CPred])
-> type DeclaredVars = M.Map Id DeclarationInfo
+> type DeclaredVars = IdMap DeclarationInfo
 > data AssignmentType = ATUninitialized | ATNormal deriving (Show)
 > type AssignmentInfo = (Position, AssignmentType)
-> type AssignedVars = M.Map Id AssignmentInfo
-> type SequenceInfo = M.Map Id ImperativeStatement
-> type PropertyInfo = M.Map Id ImperativeStatement
+> type AssignedVars = IdMap AssignmentInfo
+> type SequenceInfo = IdMap ImperativeStatement
+> type PropertyInfo = IdMap ImperativeStatement
 > type StmtChecker = ISContext -> [ImperativeStatement] -> ISConvMonad [ImperativeStatement]
 > type StmtConverter = (ISContext, Maybe CType, Maybe CExpr) -> Bool -> [ImperativeStatement] -> ISConvMonad [CStmt]
 > type ExprConverter = Position -- start of block
@@ -1333,11 +1336,22 @@ saying whether or not the declaration is local
 >         extract (Just (_, _, typ, preds), _) = Just (typ, preds)
 >     return $ extract $ findDecl var $ issDeclared state
 
+Evaluation-order pin (P3 Phase A, the IdMap swap).  The inserted map cell
+is a thunk; when it is forced, Data.Map.insert evaluates the key `var'
+first and the previous frame `a' second, and the keys of a frame are
+therefore built (and their strings interned) newest first.  With IdMap's
+insert wrapper GHC shares the two branches of the frame match in a join
+point that is strict in `a' and evaluates `a' before the key, which
+reverses that order and so the string-intern ids of every variable
+declared in a block.  `lazy' hides the strictness in `a' from that
+analysis and keeps the Data.Map order.  It goes away with the commit
+that makes the variable order explicit (plan P5, orderUpdatedVarsIn).
+
 > assign :: Position -> Id -> AssignmentType -> ISConvMonad ()
 > assign pos var atype = modify
 >     $ \state -> let (a, as) = unconsOrErr "CVParserCommon.assign: missing decl frame" $
 >                                 (issAssigned state)
->                 in state { issAssigned = (M.insert var (pos, atype) a):as}
+>                 in state { issAssigned = (M.insert var (pos, atype) (lazy a)):as}
 
 > isAssigned :: Id -> ISConvMonad Bool
 > isAssigned var = do
@@ -1357,7 +1371,7 @@ saying whether or not the declaration is local
 >         hasUninit _ = False
 >     return $ isAssigned' ass
 
-> getNormallyAssignedVars :: ISConvMonad (S.Set Id)
+> getNormallyAssignedVars :: ISConvMonad IdSet
 > getNormallyAssignedVars = do
 >     ass <- gets issAssigned
 >     let assignedVars = headOrErr "CVParserCommon.getNormallyAssignedVars" ass
@@ -1365,7 +1379,7 @@ saying whether or not the declaration is local
 >                        [v | (v, (pos, ATNormal)) <- M.toList assignedVars]
 >     return normallyAssignedVars
 
-> getDeclaredVars :: ISConvMonad (S.Set Id)
+> getDeclaredVars :: ISConvMonad IdSet
 > getDeclaredVars = do
 >     dss <- gets issDeclared
 >     let declaredVars = headOrErr "CVParserCommon.getDeclaredVars" dss

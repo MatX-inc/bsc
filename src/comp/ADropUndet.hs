@@ -1,7 +1,9 @@
 {-# LANGUAGE CPP #-}
 module ADropUndet(aDropUndet) where
 
-import qualified Data.Map.Lazy as M
+-- the def map is knot-tied through avmap: IdMap is the lazy map
+import IdMap(IdMap)
+import qualified IdMap
 import Error(ErrMsg(..), ErrorHandle, bsErrorUnsafe, internalError)
 import PPrint
 import Position
@@ -33,13 +35,13 @@ import Prim
 --
 aDropUndet :: ErrorHandle -> Flags -> APackage -> APackage
 aDropUndet errh flags apkg =
-    let defmap = M.fromList $
+    let defmap = IdMap.fromList $
                    map (\d -> (adef_objid d, adef_expr d)) $
                      apkg_local_defs apkg
     in  mapAExprs (fixUndet errh flags defmap) apkg
 
 
-fixUndet :: ErrorHandle -> Flags -> M.Map AId AExpr -> AExpr -> AExpr
+fixUndet :: ErrorHandle -> Flags -> IdMap AExpr -> AExpr -> AExpr
 fixUndet errh flags defmap = g
   where
         -- whether to pick values for undets without a recommended value
@@ -48,8 +50,8 @@ fixUndet errh flags defmap = g
         tgt = unSpecTo flags
 
         -- construct a map of whether each def contains an AVValue
-        avmap :: M.Map AId Bool
-        avmap = M.map (hasNoActionValue avmap) defmap
+        avmap :: IdMap Bool
+        avmap = IdMap.map (hasNoActionValue avmap) defmap
 
         -- recursively apply "f" to an expression
         g = exprMap f
@@ -90,13 +92,13 @@ mkUnspec errh tgt t =
         ASInt defaultAId t (ilHex val)
 
 
-canFixUndet :: Flags -> M.Map AId Bool -> AExpr -> Bool
+canFixUndet :: Flags -> IdMap Bool -> AExpr -> Bool
 canFixUndet flags avmap e =
     if (optUndet flags && (backend flags == Just Verilog))
     then True
     else hasNoActionValue avmap e
 
-hasNoActionValue :: M.Map AId Bool -> AExpr -> Bool
+hasNoActionValue :: IdMap Bool -> AExpr -> Bool
 hasNoActionValue avm (APrim { ae_args = es }) = all (hasNoActionValue avm) es
 hasNoActionValue avm (AMethCall { ae_args = es }) = all (hasNoActionValue avm) es
 hasNoActionValue avm (AMethValue {}) = False
@@ -108,7 +110,7 @@ hasNoActionValue avm (ATaskValue {}) = False
 hasNoActionValue avm (ASPort {}) = True
 hasNoActionValue avm (ASParam {}) = True
 hasNoActionValue avm (ASDef { ae_objid = i }) =
-    case (M.lookup i avm) of
+    case (IdMap.lookup i avm) of
       Just b -> b
       Nothing -> internalError ("hasNoActionValue: ASDef: " ++ ppReadable i)
 hasNoActionValue avm (ASInt {}) = True

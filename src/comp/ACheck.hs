@@ -9,7 +9,8 @@ import ASyntax
 import ASyntaxUtil
 import Params(isConstAExpr)
 import Data.Maybe(isNothing)
-import qualified Data.Set as S
+import IdSet(IdSet)
+import qualified IdSet
 import Data.List(foldl', genericLength)
 import PreIds(idInout_)
 import Debug.Trace
@@ -44,10 +45,10 @@ aSMCheck asp =
 
 -- make sure a wire is never defined twice in an ASPackage
 chkDupWires :: ASPackage -> Bool
-chkDupWires asp = tracePP "chkDupWires" dup_set (S.null dup_set)
-  where (dup_set, _) = foldl' step_sets (S.empty, S.empty) all_names
-        step_sets (dup_set, name_set) i | i `S.member` name_set = (S.insert i dup_set, name_set)
-                                        | otherwise = (dup_set, S.insert i name_set)
+chkDupWires asp = tracePP "chkDupWires" dup_set (IdSet.null dup_set)
+  where (dup_set, _) = foldl' step_sets (IdSet.empty, IdSet.empty) all_names
+        step_sets (dup_set, name_set) i | i `IdSet.member` name_set = (IdSet.insert i dup_set, name_set)
+                                        | otherwise = (dup_set, IdSet.insert i name_set)
         def_names  = [ i | ADef i _ _ _ <- aspkg_values asp ]
         state_outs = map fst (aspkg_state_outputs asp)
         params     = map fst (aspkg_parameters asp)
@@ -414,19 +415,19 @@ aSignalCheck (ASPackage _ fmod ps _ is ios insts souts ds iods fs _ _ _) =
 
         exprs = fexprs ++ iexprs ++ dexprs ++ iodexprs
         -- build set from the list
-        defSet   = S.fromList defs
-        portSet  = S.fromList ports
-        paramSet = S.fromList params
+        defSet   = IdSet.fromList defs
+        portSet  = IdSet.fromList ports
+        paramSet = IdSet.fromList params
 
     in
         checkUses defSet portSet paramSet exprs
 
 
 -- return The list of all names not referenced in the given environments
-checkUses :: S.Set AId -> S.Set AId -> S.Set AId -> [AExpr] -> [AId]
+checkUses :: IdSet -> IdSet -> IdSet -> [AExpr] -> [AId]
 checkUses ds is ps es = concatMap (checkUse ds is ps) es
 
-checkUse :: S.Set AId -> S.Set AId -> S.Set AId -> AExpr -> [AId]
+checkUse :: IdSet -> IdSet -> IdSet -> AExpr -> [AId]
 checkUse ds is ps (APrim _ _ _ es)     = checkUses ds is ps es
 checkUse ds is ps (AMethCall _ i m es) = checkUses ds is ps es  -- XXX check i and m ?
 checkUse ds is ps (AMethValue _ i m)   = [] -- XXX check i and m ?
@@ -436,9 +437,9 @@ checkUse ds is ps (ANoInlineFunCall _ _ _ es) = checkUses ds is ps es
 checkUse ds is ps (AFunCall { ae_args = es }) = checkUses ds is ps es
 -- because all of the expressions used are used by the ATaskAction
 checkUse ds is ps (ATaskValue { })     = []
-checkUse ds is ps (ASPort _ i)         = if (S.member i is) then [] else [i]
-checkUse ds is ps (ASParam _ i)        = if (S.member i ps) then [] else [i]
-checkUse ds is ps (ASDef _ i)          = if (S.member i ds) then [] else [i]
+checkUse ds is ps (ASPort _ i)         = if (IdSet.member i is) then [] else [i]
+checkUse ds is ps (ASParam _ i)        = if (IdSet.member i ps) then [] else [i]
+checkUse ds is ps (ASDef _ i)          = if (IdSet.member i ds) then [] else [i]
 checkUse ds is ps (ASInt _ _ _)        = []
 checkUse ds is ps (ASReal _ _ _)       = []
 checkUse ds is ps (ASStr _ _ _)        = []

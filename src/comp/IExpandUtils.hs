@@ -77,6 +77,9 @@ import Debug.Trace(traceM)
 import qualified Data.Array as Array
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
+import qualified IdSet
 
 import Eval
 import PPrint
@@ -501,7 +504,7 @@ data GStateRO = GStateRO {
         errHandle :: !ErrorHandle,
         symtab :: !SymTab,
         -- lazy because computing the defenv may be expensive and (often) unnecessary
-        defenv :: M.Map Id HExpr,
+        defenv :: IdMap HExpr,
         -- selector indices (selNo of pack, selNo of unpack, numSel) of the
         -- Bits class methods, looked up in the symbol table once per
         -- elaboration instead of once per held-coercion creation; lazy so
@@ -518,14 +521,14 @@ data GStateRO = GStateRO {
 data GState = GState {
         stepNo       :: !Integer, -- evaluation step
         nextWarnStep :: !Integer, -- next step to issue an evaluation warning at
-        profilingMap :: !(M.Map Id (M.Map Position Int)), -- map from definitions to number of entries for profiling
+        profilingMap :: !(IdMap (M.Map Position Int)), -- map from definitions to number of entries for profiling
 
         stateNo      :: !Int, -- unique number for state variables
 
         -- Stores the pair "(x, next unique number to start with)".
         -- When "x" is instantiated a second time, to be named "x_1",
         -- we update the map to contain both "(x, 2)" and "(x_1, 1)".
-        stateNameMap :: !(M.Map Id Int),
+        stateNameMap :: !(IdMap Int),
 
         -- Track names used within hierarchy for unquification of name of instances & loops
         stateLocMap    :: !StateLocMap,
@@ -533,7 +536,7 @@ data GState = GState {
         -- comments on submodule instances
         -- mapping an instance name to its user-added comments
         -- XXX we use Id, just to have a position around; String would do
-        commentsMap    :: !(M.Map Id [String]),
+        commentsMap    :: !(IdMap [String]),
 
         ffcallNo       :: !Int,   -- to generate unique names for ActionValue foreign function calls
 
@@ -593,13 +596,13 @@ data GState = GState {
         -- entries are parent -> list of children
         clk_ancestry_map :: !(M.Map HClock [HClock]),
         -- the clock/reset for input ports
-        port_wires    :: !(M.Map Id (HClock, HReset)),
+        port_wires    :: !(IdMap (HClock, HReset)),
 
         -- record whether the design is specific to a backend
         backend_specific :: !Bool,
 
         -- cache partially-evaluated top-level definitions
-        defCache :: !(M.Map Id HExpr),
+        defCache :: !(IdMap HExpr),
 
         -- cache dynamically evaluated CSyntax expressions
         cexprCache :: !(M.Map (CExpr, IType) HExpr),
@@ -617,7 +620,7 @@ data GState = GState {
         }
 
 initGState :: ErrorHandle -> Flags ->
-              SymTab -> M.Map Id HExpr ->
+              SymTab -> IdMap HExpr ->
               IATFCache ->
               Id -> Bool -> [PProp] ->
               GState
@@ -634,9 +637,9 @@ initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
         gs = GState { stepNo = 0,
                       nextWarnStep = redStepsWarnInterval flags,
                       stateNo = 0,
-                      stateNameMap = M.empty,
+                      stateNameMap = IdMap.empty,
                       stateLocMap = M.empty,
-                      commentsMap = M.empty,
+                      commentsMap = IdMap.empty,
                       ffcallNo = 0,
                       newClockId = initClockId,
                       newClockDomain = initClockDomain,
@@ -649,7 +652,7 @@ initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
                       rules = iREmpty,
                       newRuleSuffix = 0,
                       schedNameScope = emptySchedNameScope,
-                      profilingMap = M.empty,
+                      profilingMap = IdMap.empty,
                       clock_domains = M.empty,
                       all_resets = [],
                       in_clock_info = [],
@@ -667,9 +670,9 @@ initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
                       in_reset_clk_info = M.empty,
                       domain_to_boundary_id_map = M.empty,
                       clk_ancestry_map = M.empty,
-                      port_wires = M.empty,
+                      port_wires = IdMap.empty,
                       backend_specific = False,
-                      defCache = M.empty,
+                      defCache = IdMap.empty,
                       cexprCache = M.empty,
                       savedRules = [],
                       badEvaluation = False,
@@ -703,7 +706,7 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_rules :: HRules,
                            go_steps :: Integer,
                            go_hp :: HeapPointer,
-                           go_profile :: M.Map Id (M.Map Position Int),
+                           go_profile :: IdMap (M.Map Position Int),
                            go_comments_map :: [(Id,[String])],
                            go_backend_specific :: Bool,
                            go_ffcallNo :: Int,
@@ -711,7 +714,7 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            goutput :: a }
 
 runG :: ErrorHandle -> Flags ->
-        SymTab -> M.Map Id HExpr ->
+        SymTab -> IdMap HExpr ->
         IATFCache ->
         Id -> Bool -> [PProp] -> G a ->
         IO (GOutput a)
@@ -761,7 +764,7 @@ runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
                      go_steps = stepNo gs',
                      go_hp = hp gs',
                      go_profile = profilingMap gs',
-                     go_comments_map = M.toList (commentsMap gs'),
+                     go_comments_map = IdMap.toList (commentsMap gs'),
                      go_backend_specific = backend_specific gs',
                      go_ffcallNo = ffcallNo gs',
                      go_atfCache = atfCache gs',
@@ -816,7 +819,7 @@ step i = do s <- get
             if (doProfile) then do
               let prof = profilingMap s
               let pos_map = M.singleton (getPosition i) 1
-              let prof' = M.insertWith (M.unionWith (+)) i pos_map prof
+              let prof' = IdMap.insertWith (M.unionWith (+)) i pos_map prof
               put (s' { profilingMap = prof' })
              else put s'
 
@@ -874,7 +877,7 @@ addRules rs = do
       -- there should be no conflicts, when using remIStateLocPrefix
       conflictFn v1 v2 = internalError
                              ("addRules: conflict: " ++ ppReadable (v1,v2))
-      cur_nameMap' = map_insertManyWith conflictFn new_map_entries cur_nameMap
+      cur_nameMap' = IdMap.insertManyWith conflictFn new_map_entries cur_nameMap
       curFrame' = SchedNameFrame cur_ns cur_cnt cur_nameMap' Nothing
       newScope = (curFrame' : frames)
   --traceM("ADD: rs2 = " ++ ppReadable rs2)
@@ -892,7 +895,7 @@ addRules rs = do
           else (IRules (sps2 ++ sps1) (rs2 ++ rs1))
   put (s { rules = new_rules } )
 
-checkAddRulesAttributes :: IStateLoc -> M.Map Id SchedNameInfo -> IRules a ->
+checkAddRulesAttributes :: IStateLoc -> IdMap SchedNameInfo -> IRules a ->
                            G (IRules a)
 checkAddRulesAttributes cur_ns idMap (IRules sps rs) =
   let
@@ -906,16 +909,16 @@ checkAddRulesAttributes cur_ns idMap (IRules sps rs) =
       -- "sps" will have been adjusted for uniquifiers in sync with "rs".)
 
       -- names of the rules being added (global names)
-      definedIds = S.fromList $ map getIRuleId rs
+      definedIds = IdSet.fromList $ map getIRuleId rs
 
       -- this folds over the attr names
       checkFn i accum@(accum_warns, accum_errs, accum_badIds) =
-        if (S.member i definedIds)
+        if (IdSet.member i definedIds)
         then accum
         else
           -- remove the hierarchy prefix
           let i' = remIStateLocPrefix cur_ns i
-          in  case (M.lookup i' idMap) of
+          in  case (IdMap.lookup i' idMap) of
                 Nothing ->
                     (accum_warns, ((mkErr i'):accum_errs), (i:accum_badIds))
                 Just (SNI_Method False) ->
@@ -972,7 +975,7 @@ data SchedNameFrame =
              -- names available at this scope
              -- (populated by the parent, if any names remain visible,
              -- then with new names as they are added in the current scope)
-             snf_nameMap :: M.Map Id SchedNameInfo,
+             snf_nameMap :: IdMap SchedNameInfo,
              -- whether we are currently evaluating inside a rule/ifc;
              -- this should be Nothing when pushing/popping a frame
              snf_elabProgress :: Maybe ElabProgress
@@ -986,7 +989,7 @@ instance PPrint SchedNameFrame where
           pPrint d p m
         where ig = snf_ignoreCount snf
               ns = snf_istateloc snf
-              m = M.toList $ snf_nameMap snf
+              m = IdMap.toList $ snf_nameMap snf
               ep = snf_elabProgress snf
 
 data ElabProgress =
@@ -1050,7 +1053,7 @@ pushTopModuleSchedNameScope t = do
   let ifcName = iGetIfcName $ iGetModIfcType t
       methNames = getIfcFlatMethodNames symt ifcName
       -- use True to indicate that these are top-level methods
-      newNameMap = M.fromList [ (m, SNI_Method True) | m <- methNames ]
+      newNameMap = IdMap.fromList [ (m, SNI_Method True) | m <- methNames ]
       newFrame = SchedNameFrame [] 0 newNameMap Nothing
   s <- get
   let -- the old scope should be empty, so ignore it
@@ -1079,7 +1082,7 @@ pushModuleSchedNameScope ns resTy = do
       methNames = case mIfcName of
                     Nothing -> []
                     Just ifcName -> getIfcFlatMethodNames symt ifcName
-      newNameMap = M.fromList [ (m, SNI_Method False) | m <- methNames ]
+      newNameMap = IdMap.fromList [ (m, SNI_Method False) | m <- methNames ]
       newFrame = SchedNameFrame ns 0 newNameMap Nothing
       -- if this is an "ignore" level, just update the old scope
       newScope = if ign
@@ -1208,7 +1211,7 @@ popModuleSchedNameScope = do
             mkParentPair (i, SNI_Method {}) = Nothing
             mkParentPair (i, SNI_Rule ui) = Just (rem_prefix ui, SNI_Rule ui)
             -- update the parent frame
-            new_map_entries = mapMaybe mkParentPair (M.toList cur_nameMap)
+            new_map_entries = mapMaybe mkParentPair (IdMap.toList cur_nameMap)
             -- there should not be conflicts
             -- XXX ignored levels can have conflicts when we try add to add
             -- XXX what was copied from the parent; this might argue for
@@ -1218,7 +1221,7 @@ popModuleSchedNameScope = do
             conflictFn v1 v2 = internalError
                                  ("popModuleSchedNameScope: conflict: "
                                   ++ ppReadable (v1,v2))
-            parent_nameMap' = map_insertManyWith conflictFn
+            parent_nameMap' = IdMap.insertManyWith conflictFn
                                   new_map_entries parent_nameMap
             parentFrame' =
                 SchedNameFrame parent_ns parent_cnt parent_nameMap' parent_ep
@@ -1247,7 +1250,7 @@ addSubmodComments name [] = return ()
 addSubmodComments name comments =
     do s <- get
        let oldmap = commentsMap s
-       let newmap = M.insert name comments oldmap
+       let newmap = IdMap.insert name comments oldmap
        put (s { commentsMap = newmap })
 
 {-
@@ -1274,14 +1277,14 @@ addPort :: Id -> HClock -> HReset -> G ()
 addPort port_id hclk hrst = do
     s <- get
     let cmap = port_wires s
-        cmap' = M.insert port_id (hclk, hrst) cmap
+        cmap' = IdMap.insert port_id (hclk, hrst) cmap
     put s { port_wires = cmap' }
 
 getPortWires :: Id -> G HWireSet
 getPortWires port_id = do
     s <- get
     let cmap = port_wires s
-    case (M.lookup port_id cmap) of
+    case (IdMap.lookup port_id cmap) of
         Nothing           -> return $ wsEmpty
         Just (hclk, hrst) -> return $ wsJoin (wsClock hclk) (wsReset hrst)
 
@@ -2183,14 +2186,14 @@ uniqueStateName :: Id -> G Id
 uniqueStateName i = do
   s <- get
   let snmap = stateNameMap s
-  case (M.lookup i snmap) of
+  case (IdMap.lookup i snmap) of
     Nothing -> -- id is unused
-     do let snmap' = M.insert i (1 :: Int) snmap
+     do let snmap' = IdMap.insert i (1 :: Int) snmap
         put (s {stateNameMap = snmap'})
         return i
-    Just n -> let loop n = case M.lookup i' snmap of
-                               Nothing -> do let snmap'  = M.insert i (n+1) snmap
-                                             let snmap'' = M.insert i' (1 :: Int) snmap'
+    Just n -> let loop n = case IdMap.lookup i' snmap of
+                               Nothing -> do let snmap'  = IdMap.insert i (n+1) snmap
+                                             let snmap'' = IdMap.insert i' (1 :: Int) snmap'
                                              put (s {stateNameMap = snmap''})
                                              return i'
                                -- already used i_n
@@ -2676,7 +2679,7 @@ getSymTab = do s <- get
                return (symtab (ro s))
 
 {-# INLINE getDefEnv #-}
-getDefEnv :: G (M.Map Id HExpr)
+getDefEnv :: G (IdMap HExpr)
 getDefEnv = do s <- get
                return (defenv (ro s))
 
@@ -2874,9 +2877,9 @@ toHeap _   _ e@(ICon _ _)      _ = return e
 toHeap _   _ e@(IRefT _ _ _ _) _ = return e
 toHeap tag t e cell_name = do
         -- these errors have never happened, disable checks for now.
-        when (doDebugFreeVars && not (S.null (fVars e))) $
+        when (doDebugFreeVars && not (IdSet.null (fVars e))) $
              internalError ("toHeap: fv " ++ ppReadable (fVars e) ++ ppReadable e)
-        when (doDebugFreeVars && not (S.null (ftVars e))) $
+        when (doDebugFreeVars && not (IdSet.null (ftVars e))) $
              internalError ("toHeap: ftv " ++ ppReadable (ftVars e) ++ ppReadable e)
         addHeapUnev tag t e cell_name
 
@@ -2949,7 +2952,7 @@ cacheDef i t e | unCacheableType t = return e
 cacheDef i t e@(IAps _ _ _) = do
   s <- get
   let m = defCache s
-  case (M.lookup i m) of
+  case (IdMap.lookup i m) of
     Just e' -> do when doTraceDefCache $
                     -- e' should be a constant or heap reference,
                     -- so it should be cheap to print
@@ -2957,7 +2960,7 @@ cacheDef i t e@(IAps _ _ _) = do
                   return e'
     Nothing -> do e' <- toHeap "cache-def" t e (Just i)
                   s <- get
-                  let m' = M.insert i e' m
+                  let m' = IdMap.insert i e' m
                   put (s { defCache = m' })
                   when doTraceDefCache $
                     traceM ("cache miss: " ++ ppReadable (i, t))
@@ -2990,7 +2993,7 @@ insertCExprCache ce it e = do
 -- Scheduling attributes are updated to account for changes in the names.
 cleanupFinalRules :: Flags -> IRules a -> IRules a
 cleanupFinalRules flags (IRules sps rs) = IRules sps' (reverse rs')
-  where (_, id_rename_map, rs') = foldl foldFn (S.empty, M.empty, []) rs
+  where (_, id_rename_map, rs') = foldl foldFn (S.empty, IdMap.empty, []) rs
         -- rename Ids in the attributes, but keep their original positions
         -- (we want the Ids to point to the user-written names in the source)
         sps' = substSchedPragmaIds id_rename_map sps
@@ -3012,7 +3015,7 @@ cleanupFinalRules flags (IRules sps rs) = IRules sps' (reverse rs')
                 new_i = mkIdRule (setIdBaseString i fs')
                 -- update the rename map
                 -- (always necessary, because we always add RL_
-                rename_map' = M.insert i new_i rename_map
+                rename_map' = IdMap.insert i new_i rename_map
                 rs' = (( r { irule_name = new_i } ):rs)
             in
                 (seen', rename_map', rs')
@@ -3373,7 +3376,7 @@ getMethodsWithWires e =
             in  return [(instId, methId, mstr, clk_dom, clk, rst)]
         ?mkport = \ i -> do
           port_wire_map <- lift get >>= return . port_wires
-          let (clk, rst) = fromMaybe (noClock, noReset) (M.lookup i port_wire_map)
+          let (clk, rst) = fromMaybe (noClock, noReset) (IdMap.lookup i port_wire_map)
               clk_dom = getClockDomain clk
               mstr = getIdBaseString i
           return [(emptyId, i, mstr, clk_dom, clk, rst)]
