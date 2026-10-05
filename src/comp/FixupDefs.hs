@@ -7,6 +7,8 @@ import Data.List(nub)
 import Data.Maybe(isJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
 import PFPrint
 import ErrorUtil(internalError)
 import IOUtil(progArgs)
@@ -44,7 +46,7 @@ getDictEv props = case defPropsDictEvidence props of
 -- The evidence identity (and interned type) of every lifted dictionary
 -- in scope -- imported or local -- keyed by name; the verification
 -- procedure reads kid identities from here.
-type EvMap = M.Map Id (IType, Maybe DictEv)
+type EvMap = IdMap (IType, Maybe DictEv)
 
 -- The lifted dictionaries of the imported packages that carry an
 -- evidence identity, bucketed by their interned type
@@ -81,7 +83,7 @@ mkDictBuckets ipkgs =
 -- a different def.  Computed once per compile over the dictionary
 -- defs only; fixUp then redirects by plain Id lookup, with no
 -- per-occurrence type work.
-type DictRedirects = M.Map Id Id
+type DictRedirects = IdMap Id
 
 -- The redirect map for a whole compile, computed ONCE (in
 -- "compilePackage") over the package's own post-liftdicts defs plus
@@ -96,7 +98,7 @@ mkDictRedirects :: DictBuckets -> IPackage a -> [(IPackage a, String)]
                 -> DictRedirects
 mkDictRedirects buckets (IPackage _ _ _ ds _) ipkgs =
     let ads = concat (ds : [ ds' | (IPackage _ _ _ ds' _, _) <- ipkgs ])
-        evmap = M.fromList [ (i, (t, getDictEv props))
+        evmap = IdMap.fromList [ (i, (t, getDictEv props))
                            | IDef i t _ props <- ads, isLiftedDict i ]
     in  mkRedirects buckets evmap
 
@@ -118,9 +120,9 @@ mkDictRedirects buckets (IPackage _ _ _ ds _) ipkgs =
 -- refusing (never trusting) a revisited pair.
 mkRedirects :: DictBuckets -> EvMap -> DictRedirects
 mkRedirects buckets evmap =
-    M.fromList (concat (evalState (mapM tryRedirect dicts) M.empty))
+    IdMap.fromList (concat (evalState (mapM tryRedirect dicts) M.empty))
   where
-    dicts = [ (i, t) | (i, (t, Just _)) <- M.toList evmap ]
+    dicts = [ (i, t) | (i, (t, Just _)) <- IdMap.toList evmap ]
 
     tryRedirect :: (Id, IType) -> State (M.Map (Id, Id) Bool) [(Id, Id)]
     tryRedirect (i, t) =
@@ -147,7 +149,7 @@ mkRedirects buckets evmap =
           case memoized of
             Just r -> return r
             Nothing -> do
-              r <- case (M.lookup i1 evmap, M.lookup i2 evmap) of
+              r <- case (IdMap.lookup i1 evmap, IdMap.lookup i2 evmap) of
                      (Just (t1, Just ev1), Just (t2, Just ev2)) ->
                          verifyEv (S.insert (i1, i2) visited) t1 ev1 t2 ev2
                      _ -> return False
@@ -174,10 +176,10 @@ mkRedirects buckets evmap =
 -- canonical def instead.
 redirectDictProps :: DictRedirects -> IDef a -> IDef a
 redirectDictProps redirects d@(IDef i t e props)
-  | M.null redirects = d
+  | IdMap.null redirects = d
   | otherwise = IDef i t e (map upd props)
   where upd (DefP_DictKids ks) =
-            DefP_DictKids [ M.findWithDefault k k redirects | k <- ks ]
+            DefP_DictKids [ IdMap.findWithDefault k k redirects | k <- ks ]
         upd p = p
 
 -- ===============
@@ -215,7 +217,7 @@ fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
 
         -- Create a recursive data structure by populating the map "m"
         -- with defs created using the map itself
-        m = M.fromList [ (i, e) | (IDef i _ e _) <- ads' ]
+        m = IdMap.fromList [ (i, e) | (IDef i _ e _) <- ads' ]
         ads' = map (redirectDictProps redirects)
                    (iDefsMap (fixUp redirects m) ads)
 
@@ -223,7 +225,7 @@ fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
         ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
         ds' = map (redirectDictProps redirects)
                   (iDefsMap (fixUp redirects m) ds)
-        dropDict i t = case M.lookup i redirects of
+        dropDict i t = case IdMap.lookup i redirects of
                          Just _ -> tracep trace_drop_dicts
                                        ("dropDict: " ++ ppReadable (i, t))
                                        True
@@ -272,16 +274,16 @@ updDef redirects d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
 
 -- ===============
 
-fixUp :: DictRedirects -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
+fixUp :: DictRedirects -> IdMap (IExpr a) -> IExpr a -> IExpr a
 fixUp r m (ILam i t e) = ILam i t (fixUp r m e)
 fixUp r m (ILAM i k e) = ILAM i k (fixUp r m e)
 fixUp r m (IAps f ts es) = IAps (fixUp r m f) ts (map (fixUp r m) es)
 fixUp r m (ICon i (ICDef t _)) =
-    let i' = M.findWithDefault i i r
+    let i' = IdMap.findWithDefault i i r
     in  ICon i' (ICDef t (get m i'))
 fixUp _ _ e = e
 
-get :: M.Map Id (IExpr a) -> Id -> IExpr a
+get :: IdMap (IExpr a) -> Id -> IExpr a
 get m i = let value = get2 m i
               pos = (getIdPosition i)
           in -- trace("LookupX "
@@ -289,13 +291,13 @@ get m i = let value = get2 m i
                 -- ++ (ppReadable (updateIExprPosition pos value))) $
              (updateIExprPosition pos value)
 
-get2 :: M.Map Id (IExpr a) -> Id -> IExpr a
+get2 :: IdMap (IExpr a) -> Id -> IExpr a
 get2 m i =
-    case M.lookup i m of
+    case IdMap.lookup i m of
     Just e -> e
     Nothing -> internalError (
         "fixupDefs.get: "
         ++ pfpString i ++ "\n"
-        ++ ppReadable (map fst (M.toList m)))
+        ++ ppReadable (map fst (IdMap.toList m)))
 
 -- ===============
