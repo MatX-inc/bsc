@@ -1,0 +1,6 @@
+package SymlinkTop (top) where
+
+import SymlinkMiddle
+
+top :: Bit 8
+top = middle

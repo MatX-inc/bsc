@@ -8,19 +8,26 @@ from pathlib import Path
 import sys
 
 
-def snapshot(prefix):
+def snapshot(prefix, trees=()):
     ignored = {prefix + suffix for suffix in
                (".snapshot.json", ".json", ".stdout", ".stderr")}
     ignored.update(("testrun.log", "testrun.sum"))
     result = {}
     # Child directories belong to independent fullparallel test workers.
     # These invocations write their outputs only in the current fixture.
-    for path in sorted(Path(".").iterdir()):
+    paths = set(Path(".").iterdir())
+    # Selected fixture trees let alias tests watch the real target bytes too.
+    # Do not recurse by default: neighbouring directories can have independent
+    # fullparallel workers, and following arbitrary symlinks could leave this
+    # fixture or encounter a cycle.
+    for tree in trees:
+        paths.update(Path(tree).rglob("*"))
+    for path in sorted(paths):
         name = path.as_posix()
         if name in ignored:
             continue
         if path.is_symlink():
-            result[name] = ["symlink", str(path.readlink())]
+            result[name] = ["symlink", path.lstat().st_mtime_ns, str(path.readlink())]
         elif path.is_file():
             stat = path.stat()
             result[name] = ["file", stat.st_mtime_ns,
@@ -37,7 +44,7 @@ def require(condition, message):
 
 def check(args):
     before = json.loads(Path(args.prefix + ".snapshot.json").read_text())
-    after = snapshot(args.prefix)
+    after = snapshot(args.prefix, args.tree)
     changed = [name for name in sorted(before.keys() | after.keys())
                if before.get(name) != after.get(name)]
     require(not changed, "Query changed fixture files: " + ", ".join(changed))
@@ -69,6 +76,16 @@ def check(args):
         require(Path(name).resolve() in absent, "Missing absence dependency: " + name)
     for role in args.role:
         require(any(item["role"] == role for item in requirements), "Missing role: " + role)
+    # Unlike --input/--missing, these assertions intentionally do not resolve
+    # paths. A report must preserve the spelling of an alias and attach it to
+    # the correct edge, including transitive imports read from object metadata.
+    for owner, role, policy, kind, exists, path in args.candidate:
+        require(exists in ("true", "false"), "Candidate existence must be true or false")
+        expected = {"path": path, "kind": kind, "exists": exists == "true"}
+        require(any(item["owner"] == owner and item["role"] == role
+                    and item["policy"] == policy and expected in item["candidates"]
+                    for item in requirements),
+                "Missing exact candidate: " + repr((owner, role, policy, expected)))
     outputs = {Path(name).resolve() for name in report["potential_outputs"]}
     for name in args.output:
         require(Path(name).resolve() in outputs, "Missing potential output: " + name)
@@ -87,16 +104,21 @@ def check(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("snapshot").add_argument("prefix")
+    snapshotter = commands.add_parser("snapshot")
+    snapshotter.add_argument("prefix")
+    snapshotter.add_argument("--tree", action="append", default=[])
     checker = commands.add_parser("check")
     checker.add_argument("prefix")
     checker.add_argument("--mode", required=True)
     checker.add_argument("--complete", choices=("true", "false"), required=True)
+    checker.add_argument("--tree", action="append", default=[])
+    checker.add_argument("--candidate", nargs=6, action="append", default=[],
+                         metavar=("OWNER", "ROLE", "POLICY", "KIND", "EXISTS", "PATH"))
     for option in ("input", "missing", "role", "output", "boundary"):
         checker.add_argument("--" + option, action="append", default=[])
     args = parser.parse_args()
     if args.command == "snapshot":
-        Path(args.prefix + ".snapshot.json").write_text(json.dumps(snapshot(args.prefix)))
+        Path(args.prefix + ".snapshot.json").write_text(json.dumps(snapshot(args.prefix, args.tree)))
     else:
         check(args)
 

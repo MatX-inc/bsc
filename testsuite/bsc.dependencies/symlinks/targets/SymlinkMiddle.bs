@@ -1,0 +1,6 @@
+package SymlinkMiddle (middle) where
+
+import SymlinkLeaf
+
+middle :: Bit 8
+middle = value

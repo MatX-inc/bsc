@@ -1,0 +1,54 @@
+# A file alias supplies the explicit source, and a directory alias supplies
+# its imports. Querying must preserve those spellings without creating objects
+# or changing either the links or the recursively watched target files.
+set dependency_test_directory [file dirname [file normalize [info script]]]
+source [file join $dependency_test_directory .. dependencies.tcl]
+
+set here [pwd]
+cd $dependency_test_directory
+file delete -force SymlinkTop.bs search binaries objects
+file mkdir objects
+file link -symbolic SymlinkTop.bs targets/SymlinkTop.bs
+file link -symbolic search targets
+file link -symbolic binaries objects
+cd $here
+
+check_dependencies $dependency_test_directory symlink-source {
+    -u -p search:+ -bdir objects SymlinkTop.bs
+} {
+    --mode source --complete true
+    --candidate SymlinkTop.bs compilation-source required source true SymlinkTop.bs
+    --candidate SymlinkTop.bs package-import:SymlinkMiddle source-or-object source true search/SymlinkMiddle.bs
+    --candidate search/SymlinkMiddle.bs package-import:SymlinkLeaf source-or-object source true search/SymlinkLeaf.bs
+    --candidate SymlinkTop.bs package-import:SymlinkMiddle source-or-object object false objects/SymlinkMiddle.bo
+    --output objects/SymlinkTop.bo
+} {targets objects}
+
+# The same invocation must really compile through the aliases. These objects
+# become the inputs for a second query, rather than placeholder object files.
+compile_pass SymlinkTop.bs {-p search:+ -bdir objects}
+if {[do_internal_checks]} {
+    dumpbo_pass objects/SymlinkMiddle.bo 0
+    dumpbo_pass objects/SymlinkLeaf.bo 0
+}
+
+# A dangling source alias is an absent source candidate. The compatible object
+# remains usable, and its binary import of SymlinkLeaf must be discovered via
+# the directory alias. Tcl's file-link command refuses nonexistent targets.
+set here [pwd]
+cd $dependency_test_directory
+exec ln -s absent-source.bs objects/SymlinkMiddle.bs
+cd $here
+
+check_dependencies $dependency_test_directory symlink-object {
+    -u -p binaries:+ SymlinkTop.bs
+} {
+    --mode source --complete true
+    --candidate SymlinkTop.bs compilation-source required source true SymlinkTop.bs
+    --candidate SymlinkTop.bs package-import:SymlinkMiddle source-or-object source false binaries/SymlinkMiddle.bs
+    --candidate SymlinkTop.bs package-import:SymlinkMiddle source-or-object object true binaries/SymlinkMiddle.bo
+    --candidate binaries/SymlinkMiddle.bo package-import:SymlinkLeaf one-of object true binaries/SymlinkLeaf.bo
+    --output SymlinkTop.bo
+} {targets objects}
+
+compile_pass SymlinkTop.bs {-p binaries:+}
