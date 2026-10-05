@@ -1127,11 +1127,16 @@ expVal e = e
 expValConcat :: forall a . KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE expValConcat :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE expValConcat :: IExpr PostElab -> IExpr PostElab #-}
--- (the recursive calls under a GADT match are typed at the outer phase, so
--- that the per-phase specialisations apply to them)
-expValConcat (ICon _ (ICValue { iValDef = e })) = expValConcat @a e
+-- (an ICValue's payload is at PostElab by its type, so the recursion
+-- under that match goes through the PostElab copy directly; the Elab
+-- specialisation, where the arm is inaccessible, then carries no
+-- dictionary for it)
+expValConcat (ICon _ (ICValue { iValDef = e })) = expValConcatPost e
 expValConcat (IAps p@(ICon _ (ICPrim _ PrimConcat)) ts es) = IAps p ts (map expVal es)
 expValConcat e = e
+
+expValConcatPost :: IExpr PostElab -> IExpr PostElab
+expValConcatPost = expValConcat
 
 -------------------------
 
@@ -1220,8 +1225,12 @@ expValAndOrCmp :: forall a . KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE expValAndOrCmp :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE expValAndOrCmp :: IExpr PostElab -> IExpr PostElab #-}
 expValAndOrCmp (IAps e ts es) = IAps e ts (map expValAndOrCmp es)
-expValAndOrCmp (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) | isAndOrCmp p = expValAndOrCmp @a e
+-- (the ICValue arm recurses through the PostElab copy, as expValConcat's does)
+expValAndOrCmp (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) | isAndOrCmp p = expValAndOrCmpPost e
 expValAndOrCmp e = e
+
+expValAndOrCmpPost :: IExpr PostElab -> IExpr PostElab
+expValAndOrCmpPost = expValAndOrCmp
 
 isAndOrCmp :: PrimOp -> Bool
 isAndOrCmp p = p `elem` [PrimBAnd, PrimBOr, PrimBNot, PrimEQ, PrimULT, PrimULE, PrimSLT, PrimSLE]
