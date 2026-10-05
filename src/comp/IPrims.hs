@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 module IPrims(doPrimOp) where
 
 import Error(internalError, ErrMsg)

@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 {-# LANGUAGE MonoLocalBinds #-}
 -- Simplify lifted dicts so they can be inlined by isimplify
 module ISimpDicts(iSimpDicts) where
