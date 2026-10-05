@@ -6,9 +6,10 @@ module AExpand (
                 ) where
 
 import Data.List(foldl', group, sort, sortOn, nub, genericLength)
-import qualified Data.Map as M
+import IdMap(IdMap)
 import qualified IdMap
-import qualified Data.Set as S
+import IdSet(IdSet)
+import qualified IdSet
 import PFPrint
 import Position(noPosition)
 import SCC
@@ -31,10 +32,10 @@ data ExpandData a2 = ExpandData{
                              skeepFire :: Bool,
                              sexpnond  :: Bool,
                              sexpcheap :: Bool,
-                             suses     :: M.Map Id Int,
-                             skeeps    :: S.Set Id,
+                             suses     :: IdMap Int,
+                             skeeps    :: IdSet,
                              sss       :: [AVInst],
-                             sinstVars :: S.Set AId,
+                             sinstVars :: IdSet,
                              sws       :: [AId],
                              sfs       :: a2,
                              -- test function for expansion
@@ -168,9 +169,9 @@ aExpDefs errh stable keepFires expnond expcheap expTest sigInfo os ios muxes (ss
         edata = -- traces( "keepids: " ++ ppReadable keepIds ) $
                 ExpandData { skeepFire = keepFires, sexpnond = expnond,
                              sexpcheap = expcheap, suses = usemap,
-                             skeeps = (S.fromList keepIds),
+                             skeeps = (IdSet.fromList keepIds),
                              sss = ss',
-                             sinstVars = S.fromList (aVars ss'),
+                             sinstVars = IdSet.fromList (aVars ss'),
                              sws = ws', sfs = fs',
                              sexpandTest = expTest}
     in
@@ -199,16 +200,16 @@ tsortDefs stable errh ds = sorted_defs
     -- sort the ds into dependency order
     -- (tsort the ids and use a map of id-to-def to quickly convert
     --  the sorted ids back into sorted defs)
-    def_ids :: S.Set AId -- the Ids which are defined on the LHS
-    def_ids = S.fromList (map fst uses)
-    edges = [(i, nub (filter (`S.member` def_ids) is)) | (i, is) <- uses]
+    def_ids :: IdSet -- the Ids which are defined on the LHS
+    def_ids = IdSet.fromList (map fst uses)
+    edges = [(i, nub (filter (`IdSet.member` def_ids) is)) | (i, is) <- uses]
     -- text order precomputed as a strict Int rank; see ASyntaxUtil.tsortADefs
-    rank :: M.Map AId Int
-    rank = M.fromList
+    rank :: IdMap Int
+    rank = IdMap.fromList
              (zip (sortOn (\ i -> (getIdBaseString i, getIdQualString i))
                           (map fst edges))
                   [0..])
-    key i = case M.lookup i rank of
+    key i = case IdMap.lookup i rank of
               Just r -> r `seq` (r, i)
               Nothing -> internalError "tsortDefs: rank"
     sorted_def_ids
@@ -224,16 +225,16 @@ tsortDefs stable errh ds = sorted_defs
                 bsErrorUnsafe errh
                     [(noPosition, ECombCycle (map pfpString (concat is)))]
             Right is -> is
-    omap = M.fromList [ (i, d) | d@(ADef i _ _ _) <- ds ]
+    omap = IdMap.fromList [ (i, d) | d@(ADef i _ _ _) <- ds ]
     sorted_defs = map (getDef omap) sorted_def_ids
 
 
-createUseMap ::  [AId] -> ([AVInst], [AId], [ADef], [AForeignBlock]) -> M.Map Id Int
+createUseMap ::  [AId] -> ([AVInst], [AId], [ADef], [AForeignBlock]) -> IdMap Int
 createUseMap  muxes (ss', ws', ds', fs') = usemap
     where
         -- create a map from names to the number of uses
         -- (either not in the map, 1 for one use, or 2 for two or more uses)
-        usemap = (M.fromList . map xLen . group . sort)
+        usemap = (IdMap.fromList . map xLen . group . sort)
                      (aCollectUses ss' ws' muxes ds' fs')
         --
         xLen :: [a] -> (a, Int)
@@ -312,19 +313,19 @@ aRemoveUnused stable apkg =
 
 -- collect used definitions (and everything they use)
 collDefs :: Bool -> [AId] -> [ADef] -> [ADef]
-collDefs stable used ds = coll (S.fromList used) [] (reverse (tsortADefs stable ds))
+collDefs stable used ds = coll (IdSet.fromList used) [] (reverse (tsortADefs stable ds))
   where coll _    rs [] = rs
         coll used rs (d@(ADef i _ e _) : ds) =
                 if isLocalAId i
                    && not (isKeepId i)
-                   && not (S.member i used) then
+                   && not (IdSet.member i used) then
                     --traces ("drop-coll " ++ ppString i) $
                     coll used rs ds
                 else
                     -- forced: a run of kept defs never consults the set
                     -- (the guard short-circuits on isLocalAId), so a lazy
                     -- accumulator would chain one thunk per def
-                    let used' = foldl' (flip S.insert) used (aVars e)
+                    let used' = foldl' (flip IdSet.insert) used (aVars e)
                     in  used' `seq` coll used' (d:rs) ds
 
 
@@ -424,11 +425,11 @@ xaSRemoveUnused stable keepFires pkg =
 
 xcollDefs :: Bool -> Bool -> [AId] -> [ADef] -> [ADef]
 xcollDefs stable keepFires used ds = --traces( "xCollDefs: " ++ ppReadable used ) $
-                              coll (S.fromList used) [] (reverse (tsortADefs stable ds))
+                              coll (IdSet.fromList used) [] (reverse (tsortADefs stable ds))
   where coll _    rs [] = rs
         coll used rs (d@(ADef i _ e _) : ds) =
             if (((not keepFires)  || (not (isFire i)))
-                && (not (S.member i used))
+                && (not (IdSet.member i used))
                 && (not (hasIdProp i IdP_keepEvenUnused))
                ) then
                 --traces ("\n drop-coll " ++ ppString i ++ " " ++ ppReadable (hasIdProp i IdPCanFire)) $
@@ -436,7 +437,7 @@ xcollDefs stable keepFires used ds = --traces( "xCollDefs: " ++ ppReadable used 
                 else
                     -- forced, like collDefs: keepFires fire defs can also
                     -- skip the set consultation, so keep the accumulator strict
-                    let used' = foldl' (flip S.insert) used (aVars e)
+                    let used' = foldl' (flip IdSet.insert) used (aVars e)
                     in  used' `seq` coll used' (d:rs) ds
 
 
@@ -602,16 +603,16 @@ getExprSize (AMGate t i c)           = ([c],  1,1) -- XXX ? c is not unique to t
 -- either 1 or 2, depending on whether it is used once or many times.
 -- If the Id to be looked up is not in the map, then getUses returns 0.
 
-getUses :: M.Map Id Int -> Id -> Int
-getUses m i = M.findWithDefault 0 i m
+getUses :: IdMap Int -> Id -> Int
+getUses m i = IdMap.findWithDefault 0 i m
 
 
 -- ==============================
 -- Function: getDef
 
-getDef :: M.Map Id ADef -> Id -> ADef
+getDef :: IdMap ADef -> Id -> ADef
 getDef m i =
-    M.findWithDefault (internalError ("AExpand.getDef " ++ ppString i)) i m
+    IdMap.findWithDefault (internalError ("AExpand.getDef " ++ ppString i)) i m
 
 
 -- ==============================
@@ -732,7 +733,7 @@ expand edata edefs (ADef i t e ps : ds) nds =
             nuse = getUses uses i
 
             -- build list of new definitions
-            nds' = if nuse == 0 && not (S.member i keep)
+            nds' = if nuse == 0 && not (IdSet.member i keep)
                then nds
                 else ADef i t e' ps : nds
 
@@ -761,7 +762,7 @@ aoptExpandTest edata i e =
        (not (isKeepId i)) &&
        inlineable e &&
        ((nuse > 0 && isSimple expcheap e) || ((nuse == 1) && (isSmall e))) &&
-       (isConst e || not (i `S.member` instVars)) ||
+       (isConst e || not (i `IdSet.member` instVars)) ||
        mustInline e
        )
 
@@ -771,16 +772,16 @@ expandAPackage :: ErrorHandle -> Bool -> APackage -> APackage
 expandAPackage errh stable apkg = apkgN
     where sorted_defs = tsortDefs stable errh (apkg_local_defs apkg)
           -- generate a always used def map, since predicates are not yet generated
-          usemap = M.fromList ([ (i,2) | (ADef i _ _ _) <- sorted_defs])
+          usemap = IdMap.fromList ([ (i,2) | (ADef i _ _ _) <- sorted_defs])
           --
           edata = ExpandData {
             skeepFire = False   -- Not present
             ,sexpnond = False -- not used
             ,sexpcheap = True -- not used
             ,suses = usemap
-            ,skeeps = (S.empty)
+            ,skeeps = (IdSet.empty)
             ,sss = []    -- not used
-            ,sinstVars = S.empty  -- not used (sss is empty)
+            ,sinstVars = IdSet.empty  -- not used (sss is empty)
             ,sws = []   -- not used
             ,sfs = ((apkg_rules apkg), (apkg_interface apkg))
             ,sexpandTest = aSeriExpandTest
