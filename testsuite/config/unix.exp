@@ -2797,6 +2797,8 @@ proc compare_file_core { filename expected output } {
 
 # compare 2 files, first filtering through a sed script
 proc compare_file_filtered { output {expected ""} {bre_options ""} {ere_options ""} } {
+    global srcdir
+    global subdir
 
     if {[string compare $expected ""] == 0} {
 	set expected "$output.expected"
@@ -2810,7 +2812,14 @@ proc compare_file_filtered { output {expected ""} {bre_options ""} {ere_options 
 
     compare_file $ofiltered $efiltered "compare_file_filtered"
 
-    file delete -force $efiltered $ofiltered
+    # The sed proc writes the filtered files in the test's directory
+    # ($srcdir/$subdir) and comes back to $srcdir, so delete them by the
+    # same names.  Under the top-level runtest the current directory is
+    # the testsuite root, where relative names miss them (every serial
+    # run left the pair behind); under a per-directory runtest subdir is
+    # '.' and either spelling works.
+    set dir [file join [absolute $srcdir] $subdir]
+    file delete -force [file join $dir $efiltered] [file join $dir $ofiltered]
 }
 
 proc compare_file_filter_ids { output {expected ""} {bre_options ""} {ere_options ""} } {
