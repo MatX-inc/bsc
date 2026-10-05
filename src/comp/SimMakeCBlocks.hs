@@ -25,6 +25,8 @@ import Data.Maybe(mapMaybe, isJust, fromJust, fromMaybe, maybeToList)
 import Data.List(partition, nub, union, find, sortBy, sortOn, (\\))
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdMap
+import qualified IdSet
 
 -- import Debug.Trace
 
@@ -76,7 +78,7 @@ simMakeCBlocks :: Flags -> SimSystem ->
                   ([SimCCBlock], [SimCCSched], [SimCCClockGroup], SimCCGateInfo, SBId)
 simMakeCBlocks flags sim_system =
   let pkg_map  = ssys_packages sim_system
-      pkgs     = M.elems pkg_map
+      pkgs     = IdMap.elems pkg_map
       scheds   = ssys_schedules sim_system
       inst_map = ssys_instmap sim_system
 
@@ -103,7 +105,7 @@ simMakeCBlocks flags sim_system =
       -- build blocks
 
       -- build the top package separately
-      top_pkg       = fromJust (M.lookup (ssys_top sim_system) pkg_map)
+      top_pkg       = fromJust (IdMap.lookup (ssys_top sim_system) pkg_map)
       top_block    = onePackageToBlock flags name_map full_mmap sim_system top_pkg
       top_block_id = sb_id top_block
 
@@ -224,7 +226,7 @@ getExprIds in_sched def_map known ((ASDef _ id):es) =
      isIdWillFire id && not (in_sched)
   then getExprIds in_sched def_map known es
   else let known' = id `S.insert` known
-       in case M.lookup id def_map of
+       in case IdMap.lookup id def_map of
          (Just def) -> getExprIds in_sched def_map known' ((adef_expr def):es)
          Nothing    -> getExprIds in_sched def_map known' es
 getExprIds in_sched def_map known (_:es) = getExprIds in_sched def_map known es
@@ -247,11 +249,11 @@ onePackageToBlock flags name_map full_meth_map ss pkg =
       reset_list       = sp_reset_list pkg
       gate_map         = sp_gate_map pkg
 
-      raw_defs   = M.elems def_map
+      raw_defs   = IdMap.elems def_map
       -- alphabetize the avis, by inst Id
       raw_avis   = let -- Ord on Id is broken, so use cmpIdByName
                        cmpFn a b = fst a `cmpIdByName` fst b
-                   in  map snd $ sortBy cmpFn $ M.toList avinst_map
+                   in  map snd $ sortBy cmpFn $ IdMap.toList avinst_map
 
       -- ----------
       -- the SimCCBlock state info
@@ -568,7 +570,7 @@ cvtIFace modId pps def_map meth_map method_order_map reset_list m =
                    -- the port name
                    port_id  = prt vn
                    -- find all the defs needed to compute the return value
-                   def_map' = M.insert ret_id ret_def def_map
+                   def_map' = IdMap.insert ret_id ret_def def_map
                    ret_expr = ASDef ret_type ret_id
                    val_ids = getExprIds False def_map' S.empty [ret_expr]
                    -- convert the body to SimCCFnStmts
@@ -930,13 +932,13 @@ mkGateInfo pkg_map top_gates inst_map scheds =
                     Maybe (String, [(Int, Either Bool AId)])
       mkGateInfo (inst, mod) =
           let modId = mk_homeless_id mod
-          in  case (M.lookup modId pkg_map) of
+          in  case (IdMap.lookup modId pkg_map) of
                 Just pkg ->
                     let gate_map = zip [0..] (sp_gate_map pkg)
                     in  Just (inst, map (mkOneGateInfo inst) gate_map)
                 _ | isPrimitiveModule mod -> Nothing
                 _ -> internalError ("mkGateInfo: " ++ mod ++ "\n" ++
-                                    ppReadable (M.keys pkg_map))
+                                    ppReadable (IdMap.keys pkg_map))
   in
       mapMaybe mkGateInfo (M.toList inst_map)
 
@@ -1693,21 +1695,21 @@ mkMERuleInhibits top_vmeth_set sched_order disjoint_map =
     let
         -- value methods can't change state, so they don't need to inhibit
 
-        foldfunc :: (IdSet, [(AId,[AId])]) -> SchedNode ->
-                    (IdSet, [(AId,[AId])])
+        foldfunc :: (IdSet.IdSet, [(AId,[AId])]) -> SchedNode ->
+                    (IdSet.IdSet, [(AId,[AId])])
         foldfunc (seen_exec_nodes, res) (Exec r) =
             if (S.member r top_vmeth_set)
             then (seen_exec_nodes, res)
-            else (S.insert r seen_exec_nodes, res)
+            else (IdSet.insert r seen_exec_nodes, res)
         foldfunc (seen_exec_nodes, res) (Sched r) =
-            case (M.lookup r disjoint_map) of
+            case (IdMap.lookup r disjoint_map) of
                 Nothing -> (seen_exec_nodes, res)
                 Just dset ->
-                    let inhibit_set = S.intersection dset seen_exec_nodes
-                        new_res = (r, S.toList inhibit_set)
+                    let inhibit_set = IdSet.intersection dset seen_exec_nodes
+                        new_res = (r, IdSet.toList inhibit_set)
                     in  (seen_exec_nodes, new_res:res)
     in
-        M.fromList $ reverse $ snd $ foldl foldfunc (S.empty, []) sched_order
+        M.fromList $ reverse $ snd $ foldl foldfunc (IdSet.empty, []) sched_order
 
 
 -- ===============

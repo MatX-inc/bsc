@@ -50,25 +50,26 @@ import ForeignFunctions(ForeignFuncMap)
 import Control.Monad(when)
 import Data.List(groupBy)
 import qualified Data.Map as M
+import IdMap(IdMap)
 import qualified IdMap
-import qualified IdSet
+import IdSet(IdSet)
 import qualified Data.Set as S
 
 -- import Debug.Trace
 
 -- This is a map from AId to the ADef which defines the value for that AId
-type DefMap = M.Map AId ADef
+type DefMap = IdMap ADef
 
 -- This is a map from AId of an instantiated submodule to its information
-type AVInstMap = M.Map AId AVInst
+type AVInstMap = IdMap AVInst
 
 -- map from submodule instance name to a set of pairs of method names
 -- where the first method must execute before the second
 -- (when executed sequentially for atomic execution in one action)
-type MethodOrderMap = M.Map AId (S.Set (AId, AId))
+type MethodOrderMap = IdMap (S.Set (AId, AId))
 
 -- map from package Ids to SimPackages
-type PackageMap = M.Map Id SimPackage
+type PackageMap = IdMap SimPackage
 
 data SimSystem =
   SimSystem { ssys_packages    :: PackageMap
@@ -110,7 +111,7 @@ data SimPackage =
   deriving (Show)
 
 -- Trimmed version of ExclusiveRulesDB, to hold just the disjoint info
-type DisjointRulesDB = M.Map ARuleId (S.Set ARuleId)
+type DisjointRulesDB = IdMap IdSet
 
 data SimSchedule = SimSchedule
     { ss_clock :: AClock
@@ -153,7 +154,7 @@ instance PPrint SimPackage where
         pPrint d 0 (sp_reset_list spkg) $+$
         text "-- SP state elements" $+$
         foldr ($+$) (text "")
-            (map (pPrint d 0) (M.elems (sp_state_instances spkg))) $+$
+            (map (pPrint d 0) (IdMap.elems (sp_state_instances spkg))) $+$
         text "-- SP noinline elements" $+$
         foldr ($+$) (text "")
             (map (pPrint d 0) (sp_noinline_instances spkg)) $+$
@@ -161,7 +162,7 @@ instance PPrint SimPackage where
         ppMethodOrderMap d (sp_method_order_map spkg) $+$
         text "-- SP local definitions" $+$
         foldr ($+$) (text "")
-            (map (pPrint d 0) (M.elems (sp_local_defs spkg))) $+$
+            (map (pPrint d 0) (IdMap.elems (sp_local_defs spkg))) $+$
         text "-- SP rules" $+$
         foldr ($+$) (text "") (map (pPrint d 0) (sp_rules spkg)) $+$
         text "-- SP scheduling pragmas" $+$
@@ -183,7 +184,7 @@ ppMethodOrderMap d mmap =
                               nest 4 (foldr ($+$) (text "")
                                           (map (pPrint d 0) (S.toList mset)))
     in  foldr ($+$) (text "")
-            (map ppOneInst (M.toList mmap))
+            (map ppOneInst (IdMap.toList mmap))
 
 
 instance PPrint SimSchedule where
@@ -272,6 +273,23 @@ instance (Ord a, AExprs b) => AExprs (M.Map a b) where
     -- find
     findAExprs f m = findAExprs f (M.elems m)
 
+-- The IdMap twin (sp_local_defs, sp_state_instances).  The monadic map
+-- applies its effects, and findAExprs collects, in the blind (intern)
+-- order of the generic instance above; convertASAny (SimPackageOpt)
+-- mints fresh names in that effect order, so a name-ordered traversal
+-- is the Bluesim output-class decision (plan c6, P4(3)), not this swap.
+instance AExprs b => AExprs (IdMap b) where
+    mapAExprs f m = let (ks,vs) = unzip (IdMap.toList m)
+                        vs'     = mapAExprs f vs
+                    in IdMap.fromList (zip ks vs')
+    -- monadic
+    mapMAExprs f m =
+        do let (ks,vs) = unzip (IdMap.toList m)
+           vs' <- mapMAExprs f vs
+           return $ IdMap.fromList (zip ks vs')
+    -- find
+    findAExprs f m = findAExprs f (IdMap.elems m)
+
 instance AExprs SimPackage where
     mapAExprs f pack = pack {
         sp_interface = mapAExprs f (sp_interface pack),
@@ -304,7 +322,7 @@ instance AExprs SimPackage where
 
 findPkg :: PackageMap -> Id -> SimPackage
 findPkg pkg_map id =
-    case M.lookup id pkg_map of
+    case IdMap.lookup id pkg_map of
       Just pkg -> pkg
       Nothing  -> internalError ("SimPackage.findPkg: cannot find " ++
                                    ppReadable id)
@@ -316,28 +334,28 @@ findSubPkg ss parent path =
   where findIt p []     = Just p
         findIt p (x:xs) = let avi      = findAVInst (sp_state_instances p) x
                               mod_name = vName_to_id (vName (avi_vmi avi))
-                              sub      = M.lookup mod_name (ssys_packages ss)
+                              sub      = IdMap.lookup mod_name (ssys_packages ss)
                           in case sub of
                                (Just s) -> findIt s xs
                                Nothing  -> Nothing
 
 findDef :: DefMap -> AId -> ADef
 findDef def_map id =
-    case M.lookup id def_map of
+    case IdMap.lookup id def_map of
         Just def -> def
         Nothing  -> internalError ("SimPackage.findDef: cannot find " ++
                                    ppReadable id)
 
 findAVInst :: AVInstMap -> AId -> AVInst
 findAVInst avinst_map id =
-    case M.lookup id avinst_map of
+    case IdMap.lookup id avinst_map of
         Just avi -> avi
         Nothing -> internalError ("SimPackage.findAVInst: cannot find " ++
                                   ppReadable id)
 
 findMethodOrderSet :: MethodOrderMap -> AId -> S.Set (AId, AId)
 findMethodOrderSet mmap id =
-    case M.lookup id mmap of
+    case IdMap.lookup id mmap of
         Just mset -> mset
         Nothing -> internalError ("SimPackage.findMethodOrderSet: " ++
                                   "cannot find " ++ ppReadable id)
@@ -407,11 +425,6 @@ getPortInfo pps aif =
 -- -----
 
 exclRulesDBToDisjRulesDB :: ExclusiveRulesDB -> DisjointRulesDB
-exclRulesDBToDisjRulesDB (ExclusiveRulesDB emap) =
-    -- toSet: DisjointRulesDB is converted with the Bluesim modules (plan P3 phase D)
-    let e_edges = IdMap.toList emap
-        convEdge (r,(ds,es)) = (r, IdSet.toSet ds)
-        d_edges = map convEdge e_edges
-    in  M.fromList d_edges
+exclRulesDBToDisjRulesDB (ExclusiveRulesDB emap) = IdMap.map fst emap
 
 -- -----

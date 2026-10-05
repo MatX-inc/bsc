@@ -8,6 +8,7 @@ import Control.Monad (when, guard, msum {-, mapM_ -})
 import Debug.Trace
 import qualified Data.Map as M
 import qualified IdMap
+import qualified IdSet
 import qualified Data.Set as S
 
 import IOUtil(progArgs)
@@ -96,7 +97,7 @@ simExpand errh flags topname fabis = do
                bsError errh [(noPosition, EBSimTopLevelArgOrParam False (top_args ++ top_params))]
 
     simpkgs <- mapM (simExpandABin errh flags) (map snd modinfos_used_by_name)
-    let pkg_map = M.fromList (map (\p -> (sp_name p,p)) simpkgs)
+    let pkg_map = IdMap.fromList (map (\p -> (sp_name p,p)) simpkgs)
 
     -- record default clock and reset for top module
     -- (when an argument is designated as the default clock/reset, its
@@ -1404,16 +1405,16 @@ combineSchedDRDB inst parent_use_map child_meth_set parent_map child_map =
         -- which requires qualifying all the nodes of the child
         -- (but don't include methods)
         isMethId i = i `S.member` child_meth_set
-        child_edges = mapSnd S.toList (M.toList child_map)
+        child_edges = mapSnd IdSet.toList (IdMap.toList child_map)
         child_rule_edges =
             let -- first remove edges from method Ids
                 edges' = filter (not . isMethId . fst) child_edges
             in  -- then remove edges to method Ids
                 map (\ (n,ns) -> (n, filter (not . isMethId) ns)) edges'
         -- qualify the remaining edges
-        qual_child_edges = mapSnd (S.fromList) $
+        qual_child_edges = mapSnd (IdSet.fromList) $
                                qualifyChildDRDBGraph inst child_rule_edges
-        start_comb_map = (M.fromList qual_child_edges) `M.union` parent_map
+        start_comb_map = (IdMap.fromList qual_child_edges) `IdMap.union` parent_map
 
         -- the disjoint map should be the same in both directions,
         -- so no need to reverse it!
@@ -1432,16 +1433,16 @@ combineSchedDRDB inst parent_use_map child_meth_set parent_map child_map =
 
         findDisjointChildRules :: AId -> [AId]
         findDisjointChildRules methId =
-            case (M.lookup methId child_map) of
+            case (IdMap.lookup methId child_map) of
                 Nothing -> []
-                Just nset -> filter (not . isMethId) (S.toList nset)
+                Just nset -> filter (not . isMethId) (IdSet.toList nset)
 
         findDisjointParentRules :: AId -> [AId]
         findDisjointParentRules methId =
-            case (M.lookup methId child_map) of
+            case (IdMap.lookup methId child_map) of
                 Nothing -> []
                 Just nset ->
-                    let meths = filter isMethId (S.toList nset)
+                    let meths = filter isMethId (IdSet.toList nset)
                         lookupMeth m =
                             case (M.lookup m rev_flat_use_map) of
                                 Nothing -> []
@@ -1457,9 +1458,9 @@ combineSchedDRDB inst parent_use_map child_meth_set parent_map child_map =
                                               (findDisjointChildRules useId)
                         parent_disjoints = findDisjointParentRules useId
                         disjoints = child_disjoints ++ parent_disjoints
-                        edges = [(parentId, S.fromList disjoints)] ++
-                                [(d, S.singleton parentId) | d <- disjoints]
-                    in  M.unionWith S.union (M.fromListWith S.union edges) dmap
+                        edges = [(parentId, IdSet.fromList disjoints)] ++
+                                [(d, IdSet.singleton parentId) | d <- disjoints]
+                    in  IdMap.unionWith IdSet.union (IdMap.fromListWith IdSet.union edges) dmap
             in  foldr handleUse dmap uses
     in
         foldr handleParentNode start_comb_map (M.toList flat_use_map)
@@ -1873,16 +1874,16 @@ qualifyChildMethodId inst (MethodId objId methId) =
 -- Functions for creating the maps in SimPackage
 
 mkDefMap :: [ADef] -> DefMap
-mkDefMap ds = M.fromList $ map (\d -> (adef_objid d,d)) ds
+mkDefMap ds = IdMap.fromList $ map (\d -> (adef_objid d,d)) ds
 
 mkAVInstMap :: [AVInst] -> AVInstMap
-mkAVInstMap avis = M.fromList $ map (\inst -> (avi_vname inst, inst)) avis
+mkAVInstMap avis = IdMap.fromList $ map (\inst -> (avi_vname inst, inst)) avis
 
 mkMethodOrderMap :: [AVInst] -> MethodOrderMap
 mkMethodOrderMap avis =
     let mkMethodOrderSet avi =
             S.fromList $ sSB (methodConflictInfo (vSched (avi_vmi avi)))
-    in  M.fromList $ map (\avi -> (avi_vname avi, mkMethodOrderSet avi)) avis
+    in  IdMap.fromList $ map (\avi -> (avi_vname avi, mkMethodOrderSet avi)) avis
 
 
 -- ===============

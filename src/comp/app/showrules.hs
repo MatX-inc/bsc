@@ -49,6 +49,7 @@ import Data.List.Split(wordsBy)
 import Data.Maybe(isJust, fromJust, fromMaybe, mapMaybe, catMaybes)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdMap
 import qualified Data.ByteString.Lazy.Char8 as C
 import Text.Regex
 
@@ -495,7 +496,7 @@ mkMorphState opts instmap hiermap abmis_by_name top_mod =
            actionmap = M.fromListWith (M.unionWith (++)) write_conds
 
            -- construct a map from defs to exprs
-           mkDefMap abmi = M.fromList $ map (\d -> (adef_objid d,d))
+           mkDefMap abmi = IdMap.fromList $ map (\d -> (adef_objid d,d))
                                             (apkg_local_defs (abmi_apkg abmi))
            moddefmap = M.map mkDefMap abmimap
 
@@ -1449,7 +1450,7 @@ lookupId smap vmap at pfx i =
 lookupAExpr :: String -> DefMap -> AId -> Maybe AExpr
 lookupAExpr pfx defmap i =
     do let i' = setIdQualString i ""
-       def <- M.lookup i' defmap
+       def <- IdMap.lookup i' defmap
        return (adef_expr def)
 
 -- Get a list of alternative AExprs in which to look for the value
