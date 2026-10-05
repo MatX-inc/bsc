@@ -350,21 +350,35 @@ subPair :: (IExpr a -> Changed (IExpr a)) -> (IExpr a, IExpr a)
 subPair esubFn (a, b) = changed2 (,) a b (esubFn a) (esubFn b)
 
 -- Internal expression substitution with contexts
-{-# SPECIALIZE eSubstWith :: KnownPhase a => EmptyExpr a -> EmptyType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => SingleExpr a -> EmptyType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => EmptyExpr a -> SingleType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => SingleExpr a -> SingleType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => EmptyExpr a -> SingleTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => SingleExpr a -> SingleTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => BatchExpr a -> EmptyType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => EmptyExpr a -> BatchType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => SingleExpr a -> BatchType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => EmptyExpr a -> BatchTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => SingleExpr a -> BatchTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => BatchExpr a -> SingleType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => BatchExpr a -> BatchType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: KnownPhase a => BatchExpr a -> BatchTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-eSubstWith :: (KnownPhase a, ExprSubstCtx ectx a, TypeSubstCtx tctx)
+{-# SPECIALIZE eSubstWith :: EmptyExpr PreElab -> EmptyType -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: EmptyExpr Elab -> EmptyType -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: SingleExpr PreElab -> EmptyType -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: SingleExpr Elab -> EmptyType -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: EmptyExpr PreElab -> SingleType -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: EmptyExpr Elab -> SingleType -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: SingleExpr PreElab -> SingleType -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: SingleExpr Elab -> SingleType -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: EmptyExpr PreElab -> SingleTypeNorm -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: EmptyExpr Elab -> SingleTypeNorm -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: SingleExpr PreElab -> SingleTypeNorm -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: SingleExpr Elab -> SingleTypeNorm -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: BatchExpr PreElab -> EmptyType -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: BatchExpr Elab -> EmptyType -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: EmptyExpr PreElab -> BatchType -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: EmptyExpr Elab -> BatchType -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: SingleExpr PreElab -> BatchType -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: SingleExpr Elab -> BatchType -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: EmptyExpr PreElab -> BatchTypeNorm -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: EmptyExpr Elab -> BatchTypeNorm -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: SingleExpr PreElab -> BatchTypeNorm -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: SingleExpr Elab -> BatchTypeNorm -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: BatchExpr PreElab -> SingleType -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: BatchExpr Elab -> SingleType -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: BatchExpr PreElab -> BatchType -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: BatchExpr Elab -> BatchType -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+{-# SPECIALIZE eSubstWith :: BatchExpr PreElab -> BatchTypeNorm -> S.Set Id -> IExpr PreElab -> Changed (IExpr PreElab) #-}
+{-# SPECIALIZE eSubstWith :: BatchExpr Elab -> BatchTypeNorm -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
+eSubstWith :: forall a ectx tctx . (KnownPhase a, ExprSubstCtx ectx a, TypeSubstCtx tctx)
            => ectx -> tctx -> S.Set Id -> IExpr a -> Changed (IExpr a)
 eSubstWith ectx tctx allIds e
     | ctxIsEmpty ectx && ctxIsEmpty tctx = Unchanged
@@ -377,7 +391,9 @@ eSubstWith ectx tctx allIds e
       changed1 (changedOrId $ ctxNorm tctx) $ tSubstWith tctx allIds t
     -- sub needs to be polymorphic because the context type can change at
     -- ctxAdd (to batch) or ctxRemove (to single or empty) for both contexts
-    sub :: (KnownPhase a, ExprSubstCtx ectx' a, TypeSubstCtx tctx') => ectx' -> tctx' -> S.Set Id -> IExpr a -> Changed (IExpr a)
+    -- (but not in the phase: it uses the caller's KnownPhase a, so that the
+    -- per-phase specialisations of eSubstWith specialise it too)
+    sub :: (ExprSubstCtx ectx' a, TypeSubstCtx tctx') => ectx' -> tctx' -> S.Set Id -> IExpr a -> Changed (IExpr a)
     sub ectx tctx allIds ee@(ILam i t e) =
       case lookupVar i ectx of
         Just _ ->
@@ -429,6 +445,8 @@ eSubstWith ectx tctx allIds e
 -- Public API: single expression substitution
 {-# INLINE eSubst #-}
 eSubst :: KnownPhase a => Id -> IExpr a -> IExpr a -> IExpr a
+{-# SPECIALISE eSubst :: Id -> IExpr PreElab -> IExpr PreElab -> IExpr PreElab #-}
+{-# SPECIALISE eSubst :: Id -> IExpr Elab -> IExpr Elab -> IExpr Elab #-}
 eSubst i x e
     | Changed e' <- result = e'
     | otherwise = e
@@ -439,6 +457,8 @@ eSubst i x e
 -- Public API: type substitution in expression
 {-# INLINE etSubst #-}
 etSubst :: forall a. KnownPhase a => Id -> IType -> IExpr a -> IExpr a
+{-# SPECIALISE etSubst :: Id -> IType -> IExpr PreElab -> IExpr PreElab #-}
+{-# SPECIALISE etSubst :: Id -> IType -> IExpr Elab -> IExpr Elab #-}
 etSubst i t e
     | Changed e' <- result = e'
     | otherwise = e
@@ -448,6 +468,8 @@ etSubst i t e
 -- Public API: batch expression and type substitution, with normalization
 {-# INLINE eSubstBatch #-}
 eSubstBatch :: forall a. KnownPhase a => (IType -> Changed IType) -> M.Map Id (IExpr a) -> M.Map Id IType -> IExpr a -> IExpr a
+{-# SPECIALISE eSubstBatch :: (IType -> Changed IType) -> M.Map Id (IExpr PreElab) -> M.Map Id IType -> IExpr PreElab -> IExpr PreElab #-}
+{-# SPECIALISE eSubstBatch :: (IType -> Changed IType) -> M.Map Id (IExpr Elab) -> M.Map Id IType -> IExpr Elab -> IExpr Elab #-}
 eSubstBatch norm exprMap typeMap e
     | exprSize == 0 && typeSize == 0 = e
     | Changed e' <- result = e'
