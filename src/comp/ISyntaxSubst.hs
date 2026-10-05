@@ -294,11 +294,6 @@ etSubstIConInfo tsubFn _ ii@(ICVerilog { }) =
 -- ICType: iConType is always itType (no free variables), only substitute iType
 etSubstIConInfo tsubFn _ ii@(ICType { }) =
   changed1 (\t' -> ii { iType = t' }) (tsubFn (iType ii))
--- ICUndet: substitute iConType and recurse into optional expression
-etSubstIConInfo tsubFn esubFn ii@(ICUndet { imVal = mval }) =
-  changed2 (\ct mv -> ii { iConType = ct, imVal = mv })
-           (iConType ii) mval
-           (tsubFn (iConType ii)) (mapMaybeChanged esubFn mval)
 -- ICClock: recurse into clock wires (iConType is always Bit 1, no substitution needed)
 etSubstIConInfo _tsubFn esubFn ii@(ICClock { iClock = clk }) =
   changed1 (\clk' -> ii { iClock = clk' }) (subClk esubFn clk)
