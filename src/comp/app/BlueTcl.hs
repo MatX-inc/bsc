@@ -30,6 +30,7 @@ import System.Mem(performGC)
 import System.Posix.Signals
 import Text.Regex
 import qualified Data.Map as M
+import IdMap(IdMap)
 import qualified IdMap
 
 -- Bluespec imports
@@ -1498,7 +1499,7 @@ tclSubmodule ["full",modname] =
                       instpos = getPosition instId
                       docs = findDocs submodname
                       -- some internal probes won't be found, so use Maybe
-                      mtifc = M.lookup instId ifc_map
+                      mtifc = IdMap.lookup instId ifc_map
                   (arginfo, ifcinfo) <- getSubmodPortInfo mtifc avi
                   let vmethod_sis = get_method_to_signal_map (avi_vmi avi)
                   let h_ports = concatMap dispPortsModArg arginfo ++
@@ -1547,7 +1548,7 @@ tclSubmodule ["ports",modname] =
                       instId = avi_vname avi
                       instname = getIdString instId
                       -- some internal probes won't be found, so use Maybe
-                      mtifc = M.lookup instId ifc_map
+                      mtifc = IdMap.lookup instId ifc_map
                   (arginfo, ifcinfo) <- getSubmodPortInfo mtifc avi
                   let hifcs = map dispIfc ifcinfo
                       hargs = map dispModArg arginfo
@@ -1579,7 +1580,7 @@ tclSubmodule ["porttypes",modname] =
                       instId = avi_vname avi
                       instname = getIdString instId
                       -- some internal probes won't be found, so use Maybe
-                      mtifc = M.lookup instId ifc_map
+                      mtifc = IdMap.lookup instId ifc_map
                   (arginfo, ifcinfo) <- getSubmodPortInfo mtifc avi
                   let hargs = concatMap dispPortsModArg arginfo
                       hifcs = concatMap dispPortsIfc ifcinfo
@@ -3309,9 +3310,9 @@ remove_yield t =
 ----------------------------------------------------
 -- Submodule interface types
 
-makeSubmoduleIfcMap :: Bool -> InstTree -> M.Map Id Type
+makeSubmoduleIfcMap :: Bool -> InstTree -> IdMap Type
 makeSubmoduleIfcMap hide inst_tree =
-    M.fromList (concatMap getTypes (IdMap.elems inst_tree))
+    IdMap.fromList (concatMap getTypes (IdMap.elems inst_tree))
  where
    getTypes i@(Loc { node_type = mt }) =
        case (nodeChildren hide i) of
@@ -3428,20 +3429,20 @@ mgetIfcHierarchy instId raw_fields tifc = do
     case (maifc) of
       Just (Interface _ _ _ _ ifc_fs _) -> mapM (getField emptyId) ifc_fs
           where
-            ifc_map = M.fromList raw_fields
+            ifc_map = IdMap.fromList raw_fields
 
             -- get the AIF for a flattened name
             lookupAIF :: Id -> ExceptT String IO RawIfcField
             lookupAIF i =
-                case (M.lookup i ifc_map) of
+                case (IdMap.lookup i ifc_map) of
                   Just aif -> return aif
                   _ -> throwError ("getIfcHierarhcy: not in map: " ++
-                                   ppReadable (instId, i, M.keys ifc_map))
+                                   ppReadable (instId, i, IdMap.keys ifc_map))
             -- get the AIF for its RDY method, if it exists
             lookupRdyAIF i =
                 let -- XXX is there a better way to find the rdy name?
                     rdy_i = mkRdyId i
-                in  M.lookup rdy_i ifc_map
+                in  IdMap.lookup rdy_i ifc_map
 
             -- append to the prefix
             addToPrefix pre suf =
