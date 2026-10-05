@@ -1928,7 +1928,7 @@ newState b ui t tss vi ns es = do
        domain_edges = ancestors ++ map swap ancestors ++
                       siblings  ++ map swap siblings
        domain_edges' = [(a, [b]) | (a, b) <- domain_edges]
-       domain_graph = [(n,n,es) | (n, es) <- M.toList $ M.fromListWith (++) domain_edges']
+       domain_graph = [(n,n,es) | (n, es) <- IdMap.toList $ IdMap.fromListWith (++) domain_edges']
        domain_sccs = stronglyConnComp domain_graph
        domain_groups = [ vs | CyclicSCC vs <- domain_sccs ]
 
