@@ -89,7 +89,17 @@ iConvVar flags r env i =
                 case findVar r i of
                 Just (VarInfo VarPrim (_ :>: sc) _ _) -> ICon i (ICPrim (iConvSc flags r sc) (toPrim i))
                 Just (VarInfo (VarForg name tvns mps) (_ :>: sc) _ _) ->
-                        let t = iConvSc flags r sc
+                        let -- numeric contexts are checked at each
+                            -- application by the typechecker and their
+                            -- (content-free) dictionaries dropped at the
+                            -- CApply clause elsewhere, so the foreign's
+                            -- type is the base type without dictionary
+                            -- arrows; any other provisos (noinline's
+                            -- WrapField, pre-resolution) convert as-is
+                            Forall ks (ps :=> qt) = sc
+                            t = if all isNumericForeignPred ps
+                                then iConvSc flags r (Forall ks ([] :=> qt))
+                                else iConvSc flags r sc
                             -- inputs are grouped per argument;
                             -- foreign functions have one (unsplit) port per argument,
                             -- so each inner list is a singleton.
