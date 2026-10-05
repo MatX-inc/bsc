@@ -1285,10 +1285,8 @@ convAExpr (ASParam t i) = do
   -- XXX not from the sequenced state?
   return $ SStructSel stateVar (paramFieldId i)
 
--- if we know what value will be picked, use that
-convAExpr (ASAny _ (Just e)) = convAExpr e
--- otherwise, use a primitive to express that it's an unknown
-convAExpr (ASAny t Nothing) = return $ anyVar t
+-- use a primitive to express that it's an unknown
+convAExpr (ASAny t) = return $ anyVar t
 
 convAExpr (APrim _ t p args) = convAPrim p t args
 

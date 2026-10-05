@@ -46,7 +46,7 @@ import VModInfo(vName, vArgs, vFields, vSched,
                 getVArgInfoName, getVNameString)
 import SchedInfo
 import ASyntax
-import ASyntaxUtil(aMethCalls, aMethValues, aTaskValues, aSubst, mapAExprs, exprMap)
+import ASyntaxUtil(aMethCalls, aMethValues, aTaskValues, aSubst)
 import AOpt(aOptAPackageLite)
 import Params(isConstAExpr)
 
@@ -60,10 +60,6 @@ lcAPackageProcess errh flags apkg = (
   .
   -- some optimzations
   aOptAPackageLite errh flags
-  .
-  -- inline ASAny suggestions
-  -- (AExpand and AOpt assume that this has happened)
-  inlineUndet
   .
   -- in exprs for method return values, lift actionvalue return value
   -- references to their own defs, so that the actionvalue can be
@@ -1021,11 +1017,7 @@ updateAExprTypes mty (ASDef _ i) = do
 updateAExprTypes _ e@(ASPort t i) = return e
 updateAExprTypes _ e@(ASParam t i) = return e
 
--- if we know what value will be picked, update that
-updateAExprTypes mty (ASAny i (Just e)) = do
-  e' <- updateAExprTypes mty e
-  return (ASAny i (Just e'))
-updateAExprTypes _ e@(ASAny t Nothing) = return e
+updateAExprTypes _ e@(ASAny t) = return e
 
 updateAExprTypes mty (APrim i t p args) = updateAPrimTypes mty p i t args
 
@@ -1213,19 +1205,6 @@ updateAPrim_BitsBits :: AId -> AType -> PrimOp -> [AExpr] -> UTM AExpr
 updateAPrim_BitsBits i t p as = do
   as' <- mapM updateAExprTypes_Bits as
   return (APrim i t p as')
-
--- -------------------------
-
--- This is a lite version of "aDropUndet" (since we don't want to replace
--- all ASAny, just those with suggested values)
-
-inlineUndet :: APackage -> APackage
-inlineUndet = mapAExprs g
-  where
-    g = exprMap f
-
-    f (ASAny _ (Just e)) = Just (g e)
-    f _                  = Nothing
 
 -- -------------------------
 

@@ -478,8 +478,8 @@ reduceFmt e =
                return (IAps ici [itAction] [cond, e0', e1'])
         -- eliminate Fmt ifs when one half is a don't care
         -- we are treating Fmt like Integer or String rather than Bit#(n)
-        reduce rm_args False (IAps (ICon _ (ICPrim _ PrimIf)) _ [cond, e0, (ICon _ (ICUndet it _ _))]) | it == itFmt = return e0
-        reduce rm_args False (IAps (ICon _ (ICPrim _ PrimIf)) _ [cond, (ICon _ (ICUndet it _ _)), e1]) | it == itFmt = return e1
+        reduce rm_args False (IAps (ICon _ (ICPrim _ PrimIf)) _ [cond, e0, (ICon _ (ICUndet it _))]) | it == itFmt = return e0
+        reduce rm_args False (IAps (ICon _ (ICPrim _ PrimIf)) _ [cond, (ICon _ (ICUndet it _)), e1]) | it == itFmt = return e1
         -- move "if" expressions outside of Fmt concat operations
         reduce rm_args False x@(IAps cc@(ICon _ (ICPrim _ PrimFmtConcat)) tc
                       [(IAps ci@(ICon _ (ICPrim _ PrimIf)) ti [cond, e0, e1]), e2]) =
