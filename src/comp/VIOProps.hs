@@ -390,7 +390,7 @@ okUse i (ASStr _ _ _)                     = True
 okUse i (ASPort _ _)                      = True
 okUse i (ASParam _ _)                     = True
 okUse i (ASDef _ _)                       = True
-okUse i (ASAny _ _)                       = True
+okUse i (ASAny _)                         = True
 okUse i e                                 = internalError ("getIOProps.okUse " ++ show (i,e))
 
 

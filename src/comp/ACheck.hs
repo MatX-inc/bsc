@@ -442,8 +442,7 @@ checkUse ds is ps (ASDef _ i)          = if (S.member i ds) then [] else [i]
 checkUse ds is ps (ASInt _ _ _)        = []
 checkUse ds is ps (ASReal _ _ _)       = []
 checkUse ds is ps (ASStr _ _ _)        = []
-checkUse ds is ps (ASAny _ Nothing)    = []
-checkUse ds is ps (ASAny _ (Just e))   = internalError ("aSignalCheck surviving ASAny: " ++ ppReadable e)
+checkUse ds is ps (ASAny _)            = []
 checkUse ds is ps (ASClock _ (AClock { aclock_osc = osc, aclock_gate = gate})) =
                                        (checkUse ds is ps osc) ++ (checkUse ds is ps gate)
 checkUse ds is ps (ASReset _ (AReset { areset_wire = wire })) =

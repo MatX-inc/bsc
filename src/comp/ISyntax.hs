@@ -793,7 +793,7 @@ data IConInfo a =
           --   - user-inserted (IUDontCare)
           --   - unreachable _ (IUNotUsed) (needed for some expression data structs)
           --   - pattern matching failure (IUNoMatch)
-        | ICUndet { iConType :: IType, iuKind :: UndefKind, imVal :: Maybe (IExpr a) }
+        | ICUndet { iConType :: IType, iuKind :: UndefKind }
           -- numeric integer literal
         | ICInt { iConType :: IType, iVal :: IntLit }
           -- numeric real literal
@@ -823,8 +823,6 @@ data IConInfo a =
           -- and does not appear in IPackage
           -- XXX consider renaming it to ICModDef?
         | ICValue { iConType :: IType, iValDef :: IExpr a }
-          -- module arguments that are interfaces -- NO LONGER SUPPORTED
-        | ICIFace { iConType :: IType, ifcTyId :: Id, ifcIds :: [(Id, Integer, Bool)] }
           -- a constructor containing rule pragmas, which is used in the
           -- arguments to PrimRule.
           -- only exists before expansion
@@ -890,21 +888,20 @@ ordC (ICMethArg { }) = 16
 ordC (ICModPort { }) = 17
 ordC (ICModParam { }) = 18
 ordC (ICValue { }) = 19
-ordC (ICIFace { }) = 20
-ordC (ICRuleAssert { }) = 21
-ordC (ICSchedPragmas { }) = 22
-ordC (ICClock { }) = 23
-ordC (ICReset { }) = 24
-ordC (ICInout { }) = 25
-ordC (ICLazyArray { }) = 26
-ordC (ICName { }) = 27
-ordC (ICAttrib { }) = 28
-ordC (ICPosition { }) = 29
-ordC (ICType { }) = 30
-ordC (ICPred { }) = 31
-ordC (ICMethod { }) = 32
-ordC (ICLazyPack { }) = 33
-ordC (ICLazyUnpack { }) = 34
+ordC (ICRuleAssert { }) = 20
+ordC (ICSchedPragmas { }) = 21
+ordC (ICClock { }) = 22
+ordC (ICReset { }) = 23
+ordC (ICInout { }) = 24
+ordC (ICLazyArray { }) = 25
+ordC (ICName { }) = 26
+ordC (ICAttrib { }) = 27
+ordC (ICPosition { }) = 28
+ordC (ICType { }) = 29
+ordC (ICPred { }) = 30
+ordC (ICMethod { }) = 31
+ordC (ICLazyPack { }) = 32
+ordC (ICLazyUnpack { }) = 33
 
 instance Eq (IConInfo a) where
     x == y  =  cmpC x y == EQ
@@ -933,7 +930,7 @@ cmpC c1 c2 =
         ICVerilog { iConType = t1, vInfo = s1 } ->
             -- ignores method types and whether they are user imports or not
             compare (t1, s1) (iConType c2, vInfo c2)
-        ICUndet { iConType = t1, imVal = mval1 } -> compare (t1, mval1) (iConType c2, imVal c2)
+        ICUndet { iConType = t1 } -> compare t1 (iConType c2)
         ICInt { iConType = t1, iVal = i1 } -> compare (t1, i1) (iConType c2, iVal c2)
         ICReal { iConType = t1, iReal = r1 } -> compare (t1, r1) (iConType c2, iReal c2)
         ICString { iConType = t1, iStr = s1 } -> compare (t1, s1) (iConType c2, iStr c2)
@@ -946,7 +943,6 @@ cmpC c1 c2 =
         ICMethArg { } -> EQ
         ICModPort { } -> EQ
         ICModParam { } -> EQ
-        ICIFace { ifcTyId = ti1, ifcIds = is1 } -> compare (ti1, is1) (ifcTyId c2, ifcIds c2)
         ICRuleAssert { iAsserts = asserts } -> compare asserts (iAsserts c2)
         ICSchedPragmas { iPragmas = pragmas } -> compare pragmas (iPragmas c2)
         ICMethod { iInputNames = inames1, iOutputNames = outnames1, iMethod = meth1 } ->
@@ -976,12 +972,12 @@ cmpC c1 c2 =
         ICPred {iPred = p1 } -> compare p1 (iPred c2)
 
 -- The payloads whose comparison in cmpC can reach a Double: an ICReal
--- itself, and the payloads whose compared fields embed an IExpr (ICUndet's
--- imVal, ICMethod's iMethod, ICPred's predicate, the lazy pack/unpack
--- originals), which may contain one.  compare on Double is not reflexive
--- (NaN), so cmpE's shortcut for a node compared with itself does not apply
--- to them.  Every constructor whose compared fields embed an IExpr or a
--- Double belongs in this list.
+-- itself, and the payloads whose compared fields embed an IExpr (ICMethod's
+-- iMethod, ICPred's predicate, the lazy pack/unpack originals), which may
+-- contain one.  compare on Double is not reflexive (NaN), so cmpE's
+-- shortcut for a node compared with itself does not apply to them.  Every
+-- constructor whose compared fields embed an IExpr or a Double belongs in
+-- this list.
 cmpCReachesReal :: IConInfo a -> Bool
 cmpCReachesReal (ICReal { }) = True
 cmpCReachesReal (ICUndet { }) = True
@@ -1015,7 +1011,6 @@ aVars (ILAM i _ e) = S.insert i (aVars e)
 aVars (IAps f ts es) = (aVars f) `S.union`
                         (S.unions (map fTVars ts)) `S.union`
                         (S.unions (map aVars es))
-aVars (ICon _ (ICUndet {imVal = Just e})) = aVars e
 aVars (ICon _ _) = S.empty  -- XXX
 aVars (IRefT _ _ _ _) = S.empty
 
@@ -1027,7 +1022,6 @@ fVars (ILam i _ e) = S.delete i (fVars e)
 fVars (IVar i) = S.singleton i
 fVars (ILAM _ _ e) = fVars e
 fVars (IAps f ts es) = fVars f `S.union` (S.unions (map fVars es))
-fVars (ICon _ (ICUndet {imVal = Just e})) = fVars e
 fVars (ICon _ _) = S.empty
 fVars (IRefT _ _ _ _) = S.empty
 
@@ -1044,7 +1038,6 @@ fdVars' (ILAM _ _ e) = fdVars' e
 fdVars' (IAps f ts es) = fdVars' f `S.union` (S.unions (map fdVars' es))
 fdVars' (ICon i (ICDef { })) = S.singleton i
 fdVars' (ICon i (ICValue { })) = S.singleton i
-fdVars' (ICon i (ICUndet {imVal = Just e})) = fdVars' e
 fdVars' (ICon _ _) = S.empty
 fdVars' (IRefT _ _ _ _) = S.empty
 
@@ -1057,7 +1050,6 @@ ftVars (IVar i) = S.empty
 ftVars (ILAM i _ e) = S.delete i (ftVars e)
 ftVars (IAps f ts es) = (ftVars f) `S.union` (S.unions (map fTVars ts))
                                      `S.union` (S.unions (map ftVars es))
-ftVars (ICon _ (ICUndet {imVal = Just e})) = ftVars e
 ftVars (ICon _ _) = S.empty                -- XXX
 ftVars (IRefT _ _ _ _) = S.empty
 
@@ -1217,15 +1209,13 @@ instance PPrint (IExpr a) where
     pPrint d p (IAps (ILam i t e') [] (e:es)) = pparen (p > 0) $
         (text "let" <+> ppDef d (IDef i t e [])) $+$
         (text "in  " <> pPrint d 0 (iAps e' es))
-    pPrint d p (ICon i (ICUndet t _ Nothing)) = text "_ :: " <+> pPrint d maxPrec t
-    pPrint d p (ICon i (ICUndet t _ (Just v))) = text "_[" <> pPrint d maxPrec v <> text "]"
+    pPrint d p (ICon i (ICUndet t _)) = text "_ :: " <+> pPrint d maxPrec t
     pPrint d@PDReadable p (ICon i (ICDef _ _)) = ppId d i <> text "="
     pPrint d@PDReadable p (ICon i (ICVerilog { vInfo = vi })) = pparen True $ text "verilog" <+> pPrint d 0 vi
     pPrint d@PDReadable p (ICon i (ICIs _ _)) = ppId d i <> text "?"
     pPrint d@PDReadable p (ICon i (ICOut _ _)) = text "out" <> ppId d i
     pPrint d@PDReadable p (ICon i (ICSel _ _ _)) = text "." <> ppId d i
     pPrint d@PDReadable _ (ICon i (ICPrim _ p)) = text (show p)
-    pPrint d@PDReadable _ (ICon i (ICIFace _ _ is)) = ppId d i <> text"{" <> sep (map (pPrint d 10) is) <> text "}"
     pPrint d@PDReadable _ (ICon i (ICLazyArray {})) = ppId d i <> text "[Array]"
     -- distinguish held coercions from an application of the bare
     -- primitive (they only ever print from diagnostics, so show the
@@ -1290,7 +1280,7 @@ instance NFData (IConInfo a) where
     rnf (ICTuple x1 x2) = rnf2 x1 x2
     rnf (ICSel x1 x2 x3) = rnf3 x1 x2 x3
     rnf (ICVerilog x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
-    rnf (ICUndet x1 x2 x3) = rnf3 x1 x2 x3
+    rnf (ICUndet x1 x2) = rnf2 x1 x2
     rnf (ICInt x1 x2) = rnf2 x1 x2
     rnf (ICReal x1 x2) = rnf2 x1 x2
     rnf (ICString x1 x2) = rnf2 x1 x2
@@ -1303,7 +1293,6 @@ instance NFData (IConInfo a) where
     -- rnf (ICValue x1 x2) = rnf2 x1 x2
     -- XXX the above line causes cycles somehow so, like ICDef, we don't enter ICValue
     rnf (ICValue x1 x2) = ()
-    rnf (ICIFace x1 x2 x3) = rnf3 x1 x2 x3
     rnf (ICRuleAssert x1 x2) = rnf2 x1 x2
     rnf (ICSchedPragmas x1 x2) = rnf2 x1 x2
     rnf (ICMethod x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
@@ -1475,8 +1464,7 @@ showTypelessCI (ICSel {iConType = t, selNo = i, numSel = j}) = "(ICSel _ " ++ (s
 showTypelessCI (ICLazyPack {lzOrig = o}) = "(ICLazyPack _ [" ++ showTypeless o ++ "])"
 showTypelessCI (ICLazyUnpack {lzOrig = o}) = "(ICLazyUnpack _ [" ++ showTypeless o ++ "])"
 showTypelessCI (ICVerilog {iConType = t, isUserImport = ui, vInfo = v, vMethTs = vts}) = "(ICVerilog _ " ++ {--(show v)--} "<vmodinfo>" ++ " [_])"
-showTypelessCI (ICUndet {iConType = t, iuKind = k, imVal = Nothing}) = "(ICUndet _ _ )"
-showTypelessCI (ICUndet {iConType = t, iuKind = k, imVal = Just v})  = "(ICUndet _ _ [" ++ ppReadable v ++ "])"
+showTypelessCI (ICUndet {iConType = t, iuKind = k}) = "(ICUndet _ _ )"
 showTypelessCI (ICInt {iConType = t, iVal = v}) = "(ICInt _ " ++ (show v) ++ ")"
 showTypelessCI (ICReal {iConType = t, iReal = v}) = "(ICReal _ " ++ (show v) ++ ")"
 showTypelessCI (ICString {iConType = t, iStr = s}) = "(ICString _ " ++ (show s) ++ ")"
@@ -1487,7 +1475,6 @@ showTypelessCI (ICMethArg {iConType = t}) = "(ICMethArg _ )"
 showTypelessCI (ICModPort {iConType = t}) = "(ICModPort _ )"
 showTypelessCI (ICModParam {iConType = t}) = "(ICModParam _ )"
 showTypelessCI (ICValue {iConType = t, iValDef = e}) = "(ICValue)"
-showTypelessCI (ICIFace {iConType = t, ifcTyId = i, ifcIds = ids}) = "(ICIFace _ " ++ (show i) ++ " " ++ (show ids) ++ ")"
 showTypelessCI (ICRuleAssert {iConType = t, iAsserts = rps}) = "(ICRuleAssert _ " ++ (show rps) ++ ")"
 showTypelessCI (ICSchedPragmas {iConType = t, iPragmas = sps}) = "(ICSchedPragmas _ " ++ (show sps) ++ ")"
 showTypelessCI (ICMethod {iConType = t, iInputNames = ins, iOutputNames = outs, iMethod = m }) = "(ICMethod " ++ (show ins) ++ " " ++ (show outs) ++ " " ++ (ppReadable m) ++ ")"
