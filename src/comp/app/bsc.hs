@@ -339,7 +339,7 @@ compile_with_deps errh flags name = do
     _ <- dump errh flags t DFdepend dumpnames (map fst3 pkgs)
 
     -- compile them
-    (ok, _, _) <- foldM comp (True, M.empty, M.empty) pkgs
+    (ok, _, _) <- foldM comp (True, M.empty, IdMap.empty) pkgs
 
     when (verb) $
       if ok then
@@ -355,7 +355,7 @@ compile_no_deps errh flags name = do
     -- Show warnings for this file
     when (not $ null parse_warns) $ bsWarning errh parse_warns
 
-    (ok, _, _) <- compilePackage errh flags t M.empty M.empty name pkg
+    (ok, _, _) <- compilePackage errh flags t M.empty IdMap.empty name pkg
     return ok
 
 -------------------------------------------------------------------------

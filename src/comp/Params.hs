@@ -6,7 +6,8 @@ module Params(
               isConstIExpr, isConstAExpr
              ) where
 
-import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, bsError)
 import PPrint
 import Id
@@ -44,8 +45,8 @@ iParams errh imod =
         -- create a map of ids and the exprs they inline to
         -- (with each expr already itself inlined completely)
         -- (assuming that "ds" is tsorted)
-        --dmap :: M.Map Id (IExpr a)
-        dmap = M.fromList [ (i, iSubst dmap e) | IDef i _ e _ <- ds ]
+        --dmap :: IdMap (IExpr a)
+        dmap = IdMap.fromList [ (i, iSubst dmap e) | IDef i _ e _ <- ds ]
 
         ss' = map (inlineParams dmap) ss
         imod' = imod { imod_state_insts = ss' }
@@ -57,7 +58,7 @@ iParams errh imod =
         else bsError errh emsgs
 
 
-inlineParams :: M.Map Id (IExpr a) -> (Id, IStateVar a) -> (Id, IStateVar a)
+inlineParams :: IdMap (IExpr a) -> (Id, IStateVar a) -> (Id, IStateVar a)
 inlineParams dmap (inst, svar) =
     let
         -- get the relevant fields from the IStateVar
@@ -104,11 +105,11 @@ checkParams (inst, svar) =
 
 
 -- XXX copied from IInline; consider putting it in one place?
-iSubst :: M.Map Id (IExpr a) -> IExpr a -> IExpr a
+iSubst :: IdMap (IExpr a) -> IExpr a -> IExpr a
 iSubst m e = sub e
   where sub (IAps f ts es) = IAps (sub f) ts (map sub es)
         sub d@(ICon i _) =
-            case M.lookup i m of
+            case IdMap.lookup i m of
             Nothing -> d
             Just e -> e
         sub ee = internalError ("iSubst: " ++ ppReadable ee)

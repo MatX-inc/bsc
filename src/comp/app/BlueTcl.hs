@@ -194,7 +194,7 @@ initState =
         pid = mk_homeless_id "BlueTcl"
     in TclP { tp_flags    = defaultFlags ""
             , tp_binmap   = M.empty
-            , tp_hashmap  = M.empty
+            , tp_hashmap  = IdMap.empty
             , tp_symtab   = emptySymtab
             , tp_cpack    = (CPackage pid (Right []) [] [] [] [] [])
             , tp_mods     = Nothing
@@ -684,7 +684,7 @@ tclPackage ["depend"] = do
 tclPackage ["clear"] = do
   let clrCPkg (CPackage pid _ _ _ _ _ _) = (CPackage pid (Right []) [] [] [] [] [])
   modifyIORef globalVar (\gv -> gv { tp_binmap  = M.empty,
-                                     tp_hashmap = M.empty,
+                                     tp_hashmap = IdMap.empty,
                                      tp_symtab  = emptySymtab,
                                      tp_cpack   = clrCPkg (tp_cpack gv) })
   return $ TLst []

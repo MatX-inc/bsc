@@ -8,6 +8,8 @@ module BinUtil (
 
 import Control.Monad(when, foldM)
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import Flags(Flags,
              ifcPath,
              enablePoisonPills,
@@ -26,7 +28,7 @@ import FileNameUtil(binSuffix)
 import FileIOUtil(readBinFilePath)
 import GenBin(readBinFile)
 import Util(fromJustOrErr, fromMaybeM,
-            map_insertManyWith, map_insertManyWithKeyM)
+            map_insertManyWith)
 
 
 -- =========================
@@ -41,7 +43,7 @@ type BinFile a = ( String       -- filename
 
 -- a map of the hashes for a package (associated with the source)
 -- (more than one hash indicates a mismatch error)
-type HashMap = M.Map Id (String, [Id])
+type HashMap = IdMap (String, [Id])
 
 -- a map containing the binfiles that have been loaded, indexed by pkg name
 type BinMap a = M.Map String (BinFile a)
@@ -244,7 +246,7 @@ mergeHashes errh hashmap binId binhash impHashes =
                       bin_pair = (binId, (binhash, [binId]))
                   in  (bin_pair : imp_pairs)
   in
-      map_insertManyWithKeyM mergeFn new_pairs hashmap
+      IdMap.insertManyWithKeyM mergeFn new_pairs hashmap
 
 
 -- =========================
@@ -256,10 +258,10 @@ mergeHashes errh hashmap binId binhash impHashes =
 replaceImportedSignatures :: CPackage -> [CSignature] -> CPackage
 replaceImportedSignatures (CPackage i exps imps impsigs fixs defs includes) newsigs =
     CPackage i exps imps impsigs' fixs defs includes
-  where sigMap = M.fromList [(i, sig) | sig@(CSignature i _ _ _) <- newsigs]
+  where sigMap = IdMap.fromList [(i, sig) | sig@(CSignature i _ _ _) <- newsigs]
         impsigs' = map replaceSig impsigs
         replaceSig (CImpSign n q (CSignature i _ _ _)) =
             let errstr = "replaceImportedSignatures: missing sig: " ++ ppReadable i
-            in  CImpSign n q (fromJustOrErr errstr (M.lookup i sigMap))
+            in  CImpSign n q (fromJustOrErr errstr (IdMap.lookup i sigMap))
 
 -- =========================
