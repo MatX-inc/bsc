@@ -59,7 +59,7 @@ rule_RL_add_em_sysStructs =
 	 ; (guard2 :: Bool) = guard1 && (fst3 act2)
 	 ; (state2 :: MOD_sysStructs) = state1 { inst_s__sysStructs = snd3 act2 }
 	 }
-     in mktuple ((bitToBool def_s__h444) && guard2) state2 ());
+     in mktuple ((bitToBool def_s__h425) && guard2) state2 ());
 
 rule_RL_tss_sysStructs :: MOD_sysStructs -> (Bool, MOD_sysStructs, ());
 rule_RL_tss_sysStructs =
@@ -69,8 +69,8 @@ rule_RL_tss_sysStructs =
 	 ; (act1 :: (Bool, MOD_RegUN #12, ())) =
 	       meth_write_RegUN
 		   (primConcat
-			((primExtract def_t2___d6 (11 :: Bit #32) (4 :: Bit #32)) :: Bit #8)
-			((primExtract def_t1___d8 (3 :: Bit #32) (0 :: Bit #32)) :: Bit #4))
+			((primExtract def_t2__h571 (11 :: Bit #32) (4 :: Bit #32)) :: Bit #8)
+			((primExtract def_t1__h584 (3 :: Bit #32) (0 :: Bit #32)) :: Bit #4))
 		   (inst_t2__sysStructs state0)
 	 ; (guard1 :: Bool) = fst3 act1
 	 ; (state1 :: MOD_sysStructs) = state0 { inst_t2__sysStructs = snd3 act1 }
