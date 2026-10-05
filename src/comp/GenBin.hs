@@ -1,4 +1,6 @@
+{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
 module GenBin(genBinFile, readBinFile) where
 
@@ -32,13 +34,13 @@ headerBS :: B.ByteString
 headerBS = B.pack header
 
 genBinFile :: ErrorHandle -> (Position -> Position) ->
-              String -> CSignature -> CSignature -> IPackage a -> IO ()
+              String -> CSignature -> CSignature -> IPackage PreElab -> IO ()
 genBinFile errh remapP fn bi_sig bo_sig ipkg =
     writeBinaryFileCatch errh fn
         (header ++ encodeWith remapP (bi_sig, bo_sig, ipkg))
 
 readBinFile :: ErrorHandle -> String -> B.ByteString ->
-               IO (CSignature, CSignature, IPackage a, String)
+               IO (CSignature, CSignature, IPackage PreElab, String)
 readBinFile errh nm s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS
@@ -533,7 +535,7 @@ instance Bin Pragma where
 -- ----------
 -- Bin IPackage
 
-instance Bin (IPackage a) where
+instance Bin (IPackage PreElab) where
     writeBytes pkg =
         section "IPackage" $
         do toBin (ipkg_name pkg)
@@ -557,7 +559,7 @@ instance Bin (IPackage a) where
 -- ----------
 -- Bin IDef
 
-instance Bin (IDef a) where
+instance Bin (IDef PreElab) where
     writeBytes (IDef i ty e p) =
         section "IDef" $
         do toBin i; toBin ty; toBin e ; toBin p
@@ -571,13 +573,12 @@ instance Bin (IDef a) where
 -- ----------
 -- Bin IExpr
 
-instance Bin (IExpr a) where
+instance Bin (IExpr PreElab) where
     writeBytes (ILam i t e)   = do putI 0; toBin i; toBin t; toBin e
     writeBytes (IAps e ts es) = do putI 1; toBin e; toBin ts; toBin es
     writeBytes (IVar i)       = do putI 2; toBin i
     writeBytes (ILAM i k e)   = do putI 3; toBin i; toBin k; toBin e
     writeBytes (ICon i ic)    = do putI 4; toBin i; toBin ic
-    writeBytes (IRefT _ _ _ _) = internalError "GenBin.Bin(IExpr).writeBytes: IRefT"
     readBytes = do tag <- getI
                    case tag of
                      0 -> do i <- fromBin
@@ -609,7 +610,7 @@ instance Bin ConTagInfo where
 -- ----------
 -- Bin IConInfo
 
-instance Bin (IConInfo a) where
+instance Bin (IConInfo PreElab) where
     writeBytes (ICDef t _)      = do putI 0; toBin t
     writeBytes (ICPrim t p)     = do putI 1; toBin t; toBin (fromEnum p)
     writeBytes (ICForeign t n isC ps tvns Nothing) =
@@ -634,34 +635,6 @@ instance Bin (IConInfo a) where
     writeBytes (ICAttrib t pps) = do putI 17; toBin t; toBin pps;
     writeBytes (ICPosition t pos) = do putI 18; toBin t; toBin pos
     writeBytes (ICType t it)    = do putI 19; toBin t; toBin it
-    writeBytes (ICValue _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICValue"
-    writeBytes (ICMethArg _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICMethArg"
-    writeBytes (ICModPort _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICModPort"
-    writeBytes (ICModParam _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICModParam"
-    writeBytes (ICStateVar _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICStateVar"
-    writeBytes (ICClock _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICClock"
-    writeBytes (ICReset _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICReset"
-    writeBytes (ICInout _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICInout"
-    writeBytes (ICLazyArray _ _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyArray"
-    writeBytes (ICLazyPack {}) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyPack"
-    writeBytes (ICLazyUnpack {}) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyUnpack"
-    writeBytes (ICPred _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICPred"
-    writeBytes (ICHandle { }) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICHandle"
-    writeBytes (ICMethod { }) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICMethod"
     readBytes = do tag <- getI
                    t <- fromBin
                    case tag of

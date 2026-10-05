@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
+{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE CPP #-}
 module IDropRules (iDropRules) where
 
@@ -37,14 +39,14 @@ import PPrint
 -- because the backend can't deal with methods
 -- that have empty action bodies
 --
-iDropRules :: ErrorHandle -> Flags -> IModule a -> IO (IModule a)
+iDropRules :: ErrorHandle -> Flags -> IModule PostElab -> IO (IModule PostElab)
 iDropRules errh flags imod0 = do
   imod1 <- dropFalseRules errh flags imod0
   imod2 <- dropEmptyRules errh flags imod1
   warnUndetPreds errh flags imod2
   return imod2
 
-dropFalseRules :: ErrorHandle -> Flags -> IModule a -> IO (IModule a)
+dropFalseRules :: ErrorHandle -> Flags -> IModule PostElab -> IO (IModule PostElab)
 dropFalseRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
                                           imod_local_defs = ds }) = do
     -- identify false rules
@@ -83,7 +85,7 @@ dropFalseRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
                   }
 
 
-dropEmptyRules :: ErrorHandle -> Flags -> IModule a -> IO (IModule a)
+dropEmptyRules :: ErrorHandle -> Flags -> IModule PostElab -> IO (IModule PostElab)
 dropEmptyRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
                                           imod_local_defs = ds }) = do
     -- identify empty rules which do not preempt other rules (in sps)
@@ -126,7 +128,7 @@ dropEmptyRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
 
 
 -- will the rule never fire
-isFalseRule :: IRule a -> Bool
+isFalseRule :: IRule PostElab -> Bool
 isFalseRule (IRule { irule_pred =
                (ICon _ (ICInt { iVal = (IntLit { ilValue = 0 }) }))
                    } )
@@ -134,18 +136,18 @@ isFalseRule (IRule { irule_pred =
 isFalseRule _ = False
 
 -- is the rule a result of splitting
-isSplitRule :: IRule a -> Bool
+isSplitRule :: IRule PostElab -> Bool
 isSplitRule r = isSplitRuleId (getIRuleId r)
 
 -- is the rule a noAction rule
-isNoActionRule :: IRule a -> Bool
+isNoActionRule :: IRule PostElab -> Bool
 isNoActionRule (IRule {
        irule_body = (ICon _ (ICPrim { primOp = PrimNoActions })) } )
     = True
 isNoActionRule _ = False
 
 
-removeIDefMethodPredsByRuleId :: [Id] -> [IDef a] -> [IDef a]
+removeIDefMethodPredsByRuleId :: [Id] -> [IDef PostElab] -> [IDef PostElab]
 removeIDefMethodPredsByRuleId [] ds = ds
 removeIDefMethodPredsByRuleId dropped_rule_ids ds =
     let
@@ -166,7 +168,7 @@ removeIDefMethodPredsByRuleId dropped_rule_ids ds =
         filter (not . dropDef) ds
 
 
-warnUndetPreds :: ErrorHandle -> Flags -> IModule a -> IO ()
+warnUndetPreds :: ErrorHandle -> Flags -> IModule PostElab -> IO ()
 warnUndetPreds errh flags imod | not (warnUndetPred flags) = return ()
 warnUndetPreds errh flags imod@(IModule { imod_rules = (IRules _ rs),
                                           imod_interface = ms,
@@ -175,13 +177,12 @@ warnUndetPreds errh flags imod@(IModule { imod_rules = (IRules _ rs),
         hmap = M.fromList [ (i, findUndets e) | (IDef i _ e _) <- ds ]
 
         -- this returns a list of positions for any undet values found
-        findUndets :: IExpr a -> [Position]
+        findUndets :: IExpr PostElab -> [Position]
         findUndets (IAps f _ as) = findUndets f ++ concatMap findUndets as
         findUndets (ICon i (ICUndet {})) = [getPosition i]
         findUndets (ICon i (ICValue {})) =
             fromJustOrErr ("findUndets: " ++ ppReadable i) $ M.lookup i hmap
         findUndets (ICon _ _) = []
-        findUndets e = internalError ("warnUndetCond: " ++ ppReadable e)
 
 {-      -- for trace output of an expression containing an undet
         dmap = M.fromList [ (i, e) | (IDef i _ e _) <- ds ]
