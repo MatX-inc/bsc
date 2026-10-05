@@ -194,7 +194,18 @@ main = do
       _ -> return ()
     args <- getArgs
     -- bsc can raise exception,  catch them here  print the message and exit out.
-    bsCatch (hmain args)
+    bsCatch (hmain args) `finally` ctypeStatsDump
+
+-- -trace-ctype-stats: the construction, interning and conversion-memo
+-- counters, on every exit path so that a failing compile still reports
+-- what it built
+ctypeStatsDump :: IO ()
+ctypeStatsDump =
+    when ("-trace-ctype-stats" `elem` progArgs) $ do
+      stats <- concat <$> sequence [cTypeConsStats, groundCTypeStats,
+                                    iConvTStats, binTypeStats]
+      mapM_ (\ (k, v) -> putStrLnF ("CTYPE-STAT " ++ k ++ " " ++ show v))
+            stats
 
 -- Use with hugs top level
 hmain :: [String] -> IO ()
