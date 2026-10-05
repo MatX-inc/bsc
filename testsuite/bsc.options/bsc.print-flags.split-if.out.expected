@@ -18,6 +18,7 @@ Flags:
     -show-timestamps
     -show-version
     -split-if
+    -stable-verilog
     -steps 1000000
     -steps-max-intervals 10
     -steps-warn-interval 100000
