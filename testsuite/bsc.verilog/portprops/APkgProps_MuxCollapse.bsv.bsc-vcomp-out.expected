@@ -24,4 +24,5 @@ pick_c                         I     1 unused
 -----
 
 Verilog file created: sysAPkgProps_MuxCollapse.v
+Elaborated module file created: sysAPkgProps_MuxCollapse.ba
 All packages are up to date.
