@@ -1,4 +1,6 @@
+{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
 module GenBin(genBinFile, readBinFile, readBinFileStrict, readBinPackage) where
 
@@ -39,7 +41,7 @@ headerBS = B.pack header
 -- decodes it; the signatures, the package header and the per-def
 -- names, types and properties are decoded at load.
 genBinFile :: ErrorHandle -> (Position -> Position) ->
-              String -> CSignature -> CSignature -> IPackage a -> IO ()
+              String -> CSignature -> CSignature -> IPackage PreElab -> IO ()
 genBinFile errh remapP fn bi_sig bo_sig ipkg =
     let poisoned = any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]
     in writeBinaryFileCatch errh fn
@@ -49,7 +51,7 @@ genBinFile errh remapP fn bi_sig bo_sig ipkg =
 -- computed here (eagerly) from the raw bytes: it does not depend on
 -- which parts of the package the consumer later forces.
 readBinWith :: Bool -> ErrorHandle -> String -> B.ByteString ->
-               IO (CSignature, CSignature, IPackage a, Bool, String)
+               IO (CSignature, CSignature, IPackage PreElab, Bool, String)
 readBinWith strict errh nm s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS
@@ -64,12 +66,12 @@ readBinWith strict errh nm s =
 
 -- The package, with its poison-pill status, def bodies decoded lazily
 readBinPackage :: ErrorHandle -> String -> B.ByteString ->
-                  IO (CSignature, CSignature, IPackage a, Bool, String)
+                  IO (CSignature, CSignature, IPackage PreElab, Bool, String)
 readBinPackage = readBinWith False
 
 -- The package with lazily decoded def bodies
 readBinFile :: ErrorHandle -> String -> B.ByteString ->
-               IO (CSignature, CSignature, IPackage a, String)
+               IO (CSignature, CSignature, IPackage PreElab, String)
 readBinFile errh nm s = do
     (bi_sig, bo_sig, ipkg, _, hash) <- readBinWith False errh nm s
     return (bi_sig, bo_sig, ipkg, hash)
@@ -77,14 +79,14 @@ readBinFile errh nm s = do
 -- Everything decoded and validated at once (for tools that print the
 -- whole package, and for tests)
 readBinFileStrict :: ErrorHandle -> String -> B.ByteString ->
-                     IO (CSignature, CSignature, IPackage a, String)
+                     IO (CSignature, CSignature, IPackage PreElab, String)
 readBinFileStrict errh nm s = do
     (bi_sig, bo_sig, ipkg, _, hash) <- readBinWith True errh nm s
     return (bi_sig, bo_sig, ipkg, hash)
 
 -- Whether any def body contains a poisoned-def primitive (computed by
 -- the writer, so that the importer need not decode the bodies)
-hasPoisonPill :: IExpr a -> Bool
+hasPoisonPill :: IExpr PreElab -> Bool
 hasPoisonPill (ILam _ _ e)  = hasPoisonPill e
 hasPoisonPill (ILAM _ _ e)  = hasPoisonPill e
 hasPoisonPill (IAps f _ es) = any hasPoisonPill (f:es)
@@ -580,9 +582,9 @@ instance Bin Pragma where
 -- The package as stored in a .bo: the eager header (name, depends,
 -- pragmas, the writer-computed poison flag), the defs (each body a
 -- lazy chunk) and the ATF cache.
-data BoPackage a = BoPackage Bool (IPackage a)
+data BoPackage = BoPackage Bool (IPackage PreElab)
 
-instance Bin (BoPackage a) where
+instance Bin BoPackage where
     writeBytes (BoPackage poisoned pkg) =
         section "IPackage" $
         do toBin (ipkg_name pkg)
@@ -611,7 +613,7 @@ instance Bin (BoPackage a) where
 
 -- The body is a lazy chunk: decoded on first force (by elaboration,
 -- simplification or a dump), never by the import itself.
-instance Bin (IDef a) where
+instance Bin (IDef PreElab) where
     writeBytes (IDef i ty e p) =
         section "IDef" $
         do toBin i; toBin ty; toBinLazy e ; toBin p
@@ -625,13 +627,12 @@ instance Bin (IDef a) where
 -- ----------
 -- Bin IExpr
 
-instance Bin (IExpr a) where
+instance Bin (IExpr PreElab) where
     writeBytes (ILam i t e)   = do putI 0; toBin i; toBin t; toBin e
     writeBytes (IAps e ts es) = do putI 1; toBin e; toBin ts; toBin es
     writeBytes (IVar i)       = do putI 2; toBin i
     writeBytes (ILAM i k e)   = do putI 3; toBin i; toBin k; toBin e
     writeBytes (ICon i ic)    = do putI 4; toBin i; toBin ic
-    writeBytes (IRefT _ _ _ _) = internalError "GenBin.Bin(IExpr).writeBytes: IRefT"
     readBytes = do tag <- getI
                    case tag of
                      0 -> do i <- fromBin
@@ -663,7 +664,7 @@ instance Bin ConTagInfo where
 -- ----------
 -- Bin IConInfo
 
-instance Bin (IConInfo a) where
+instance Bin (IConInfo PreElab) where
     writeBytes (ICDef t _)      = do putI 0; toBin t
     writeBytes (ICPrim t p)     = do putI 1; toBin t; toBin (fromEnum p)
     writeBytes (ICForeign t n isC ps tvns Nothing) =
@@ -688,34 +689,6 @@ instance Bin (IConInfo a) where
     writeBytes (ICAttrib t pps) = do putI 17; toBin t; toBin pps;
     writeBytes (ICPosition t pos) = do putI 18; toBin t; toBin pos
     writeBytes (ICType t it)    = do putI 19; toBin t; toBin it
-    writeBytes (ICValue _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICValue"
-    writeBytes (ICMethArg _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICMethArg"
-    writeBytes (ICModPort _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICModPort"
-    writeBytes (ICModParam _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICModParam"
-    writeBytes (ICStateVar _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICStateVar"
-    writeBytes (ICClock _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICClock"
-    writeBytes (ICReset _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICReset"
-    writeBytes (ICInout _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICInout"
-    writeBytes (ICLazyArray _ _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyArray"
-    writeBytes (ICLazyPack {}) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyPack"
-    writeBytes (ICLazyUnpack {}) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICLazyUnpack"
-    writeBytes (ICPred _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICPred"
-    writeBytes (ICHandle { }) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICHandle"
-    writeBytes (ICMethod { }) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICMethod"
     readBytes = do tag <- getI
                    t <- fromBin
                    case tag of

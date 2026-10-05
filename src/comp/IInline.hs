@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
+{-# LANGUAGE MonoLocalBinds #-}
 module IInline(iInline, iSortDs) where
 import Data.List(group, sort, nub)
 import Util
@@ -15,12 +17,12 @@ import Data.Maybe(catMaybes)
 -- import Debug.Trace(trace)
 
 
-iInline :: Bool -> IModule a -> IModule a
+iInline :: Bool -> IModule PostElab -> IModule PostElab
 iInline inlSimp = iInline1 . iInlineS inlSimp -- . iSortDs
 --iInline inlSimp = iInlineAll
 
 -- Sort definitions in dependency order
-iSortDs :: IModule a -> IModule a
+iSortDs :: IModule PostElab -> IModule PostElab
 iSortDs imod@(IModule { imod_local_defs = ds }) =
     let g = [(i, fdVars e) | IDef i _ e _ <- ds ]
         m = M.fromList [(i, d) | d@(IDef i _ _ _) <- ds]
@@ -34,7 +36,7 @@ iSortDs imod@(IModule { imod_local_defs = ds }) =
 
 
 -- Inline definitions that are simple
-iInlineS :: Bool -> IModule a -> IModule a
+iInlineS :: Bool -> IModule PostElab -> IModule PostElab
 iInlineS False m = m
 iInlineS True imod@(IModule { imod_local_defs = ds,
                               imod_rules      = rs,
@@ -74,23 +76,23 @@ iInlineS True imod@(IModule { imod_local_defs = ds,
                imod_interface   = ifc',
                imod_state_insts = state_vars' }
 
-ruleVars :: IRules a -> [Id]
+ruleVars :: IRules PostElab -> [Id]
 ruleVars (IRules sps rs) = concatMap leafVars rs
     where leafVars r = iValVars (irule_pred r) ++ iValVars (irule_body r)
 
-varVars :: (a, IStateVar b) -> [Id]
+varVars :: (a, IStateVar PostElab) -> [Id]
 varVars (_, IStateVar { isv_iargs = es }) =
         let vs = concatMap iValVars es
         in  vs ++ vs                -- XXX
 
 -- Inline definitions used once
-iInline1 :: IModule a -> IModule a
+iInline1 :: IModule PostElab -> IModule PostElab
 iInline1 = iInlineUseLimit 1
 
 -- iInlineAll :: IModule a -> IModule a
 -- iInlineAll = iInlineUseLimit 100000
 
-iInlineUseLimit :: Int -> IModule a -> IModule a
+iInlineUseLimit :: Int -> IModule PostElab -> IModule PostElab
 iInlineUseLimit use_limit
                 imod@(IModule { imod_state_insts = itvs,
                                 imod_local_defs  = ds,
@@ -142,11 +144,10 @@ iInlineUseLimit use_limit
                           imod_state_insts = state_vars' }
     in new_imod
 
-iValVars :: IExpr a -> [Id]
+iValVars :: IExpr PostElab -> [Id]
 iValVars (IAps e _ es) = iValVars e ++ concatMap iValVars es
 iValVars (ICon i (ICValue { })) = [i]
 iValVars (ICon _ _) = []
-iValVars e = internalError ("iValVars: " ++ ppReadable e)
 
 -- #############################################################################
 -- #
@@ -154,7 +155,7 @@ iValVars e = internalError ("iValVars: " ++ ppReadable e)
 
 -- zshow   (IAps (ICon _ (ICPrim _ PrimFmtConcat)) _ [e0, e1]) = text "(FmtConcat "  <+> (zshow e0) <+> (zshow e1) <+> text ")"
 -- zshow x@(IAps (ICon _ (ICPrim _ PrimIf)) _ [cond, e0, e1]) = text "(? " <> (zshow e0) <+> text " : " <+> (zshow e1) <+> text ")"
--- zshow   (IAps (ICon fid f@(ICForeign {fcallNo = n, iConType = ict})) ts es) = text (pfpString (unQualId fid)) <> text (show n) <> text "# (" <> sep (map zshow es) <> text ")"
+-- zshow   (IAps (ICon fid f@(ICForeign {fcallNo = n, ictForeign = ict})) ts es) = text (pfpString (unQualId fid)) <> text (show n) <> text "# (" <> sep (map zshow es) <> text ")"
 -- zshow   (IAps _ _ [e]) | isAVFFWithFmts e = text("<ZZ ") <> (zshow e) <> text(">")
 -- zshow   (IAps icJoinActions _ es@(a:b:rest))  = text("action { ") <> sep (map zshow es) <> text("} endaction")
 -- zshow   (ICon _ ICString {iStr = xx}) = text ("\"" ++ xx ++ "\"")

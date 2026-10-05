@@ -1,4 +1,6 @@
+{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE CPP #-}
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 {-# LANGUAGE ImplicitParams, PatternGuards, ScopedTypeVariables #-}
 {-# LANGUAGE BangPatterns #-}
 module ITransform(
@@ -56,18 +58,17 @@ import BoolOpt
 -- use the special-purpose boolean optimizer to optimize a boolean expression
 -- instead of the general-purpose iTransExpr
 -- will use BDDs for boolean optimization when -opt-bool is set (like optIRule)
-iTransBoolExpr :: Flags -> IExpr a -> IExpr a
+iTransBoolExpr :: KnownPhase a => Flags -> IExpr a -> IExpr a
 iTransBoolExpr flags = optBoolExpr (optBool flags)
 
 -----------------------------------------------------------------------------
 
-iTransExpr :: ErrorHandle -> IExpr a -> (IExpr a, Bool)
+iTransExpr :: KnownPhase a => ErrorHandle -> IExpr a -> (IExpr a, Bool)
 iTransExpr errh =
     let ?errh = errh
     in iTransExpr'
 
-iTransExpr' :: (?errh :: ErrorHandle) =>
-               IExpr a -> (IExpr a, Bool)
+iTransExpr' :: (KnownPhase a, ?errh :: ErrorHandle) => IExpr a -> (IExpr a, Bool)
 iTransExpr' (IAps f ts es) = iTrAp emptyCtx f ts es
 iTransExpr' e = (e, False)
 
@@ -81,13 +82,13 @@ iTransExprLoop e =
 -}
 -----------------------------------------------------------------------------
 
-iTransform :: ErrorHandle -> Flags -> String -> IModule a -> IModule a
+iTransform :: ErrorHandle -> Flags -> String -> IModule PostElab -> IModule PostElab
 iTransform errh flags prefix =
           iInline False .                -- XXX only for debug
         iTransform1 1 errh flags prefix . iSortDs
 
 iTransform1 :: Integer -> ErrorHandle -> Flags -> String ->
-               IModule a -> IModule a
+               IModule PostElab -> IModule PostElab
 iTransform1 no errh flags prefix imod@(IModule { imod_state_insts = itvs,
                                                  imod_local_defs  = ds,
                                                  imod_rules       = rs,
@@ -109,20 +110,20 @@ iTransform1 no errh flags prefix imod@(IModule { imod_state_insts = itvs,
                           itvs
             return (itvs', rs', ifc')
 
-iTrIfc :: IEFace a -> T (IEFace a) a
+iTrIfc :: IEFace PostElab -> T (IEFace PostElab)
 iTrIfc (IEFace i its met mrs wp fi)
     = do met' <- forM met (appFstM  $ iTrExprL emptyCtx [])
          mrs' <- forM mrs iTrRules
          return (IEFace i its met' mrs' wp fi)
 
-iTrDef :: IDef a -> T () a
+iTrDef :: IDef PostElab -> T ()
 iTrDef def@(IDef i t e p) = do
           -- traceM ("iTrDef start " ++ ppReadable def)
         e' <- iTrExprL emptyCtx [] e
         -- traceM ("iTrDef process " ++ ppReadable (i, e', expVal e'))
         addDefT i t e' p
 
-iTrRule :: IRule a -> T (IRule a) a
+iTrRule :: IRule PostElab -> T (IRule PostElab)
 iTrRule r = do
         doBO <- getDoBO
         let ctx = emptyCtx
@@ -134,15 +135,15 @@ iTrRule r = do
         -- traceM("iTrRule body " ++ ppReadable (irule_name r, e'))
         return $ r { irule_pred = c'', irule_body = e' }
 
-iTrRules :: IRules a -> T (IRules a) a
+iTrRules :: IRules PostElab -> T (IRules PostElab)
 iTrRules (IRules sps rs) = do
         rs' <- mapM iTrRule rs
         return (IRules sps rs')
 
-iTrExprL :: Ctx a -> [(IExpr a, Integer)] -> IExpr a -> T (IExpr a) a
+iTrExprL :: Ctx PostElab -> [(IExpr PostElab, Integer)] -> IExpr PostElab -> T (IExpr PostElab)
 iTrExprL ctx idxs e = expandHRef e >>= iTrExpr ctx idxs
 
-iTrExpr :: Ctx a -> [(IExpr a, Integer)] -> IExpr a -> T (IExpr a) a
+iTrExpr :: Ctx PostElab -> [(IExpr PostElab, Integer)] -> IExpr PostElab -> T (IExpr PostElab)
 iTrExpr ctx idxs (IAps pif@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) = do
         doBO <- getDoBO
         cnd1 <- iTrExpr ctx [] (expValShallow cnd)
@@ -205,7 +206,7 @@ iTrExpr ctx idxs (IAps f ts es) = do
 iTrExpr ctx idxs (ICon _ (ICUndet t _)) | t == itAction = return icNoActions
 iTrExpr ctx idxs e = return e
 
-expandHRef :: IExpr a -> T (IExpr a) a
+expandHRef :: IExpr PostElab -> T (IExpr PostElab)
 expandHRef (IAps f ts es) = do
         f' <- expandHRef f
         es' <- mapM expandHRef es
@@ -218,7 +219,7 @@ expandHRef e@(ICon i (ICValue { })) = do
 expandHRef e = return e        -- XXX
 --expandHRef e = internalError ("expandHRef " ++ ppReadable e)
 
-iTrExpr' :: Ctx a -> [(IExpr a, Integer)] -> IExpr a -> [IType] -> [IExpr a] -> T (IExpr a) a
+iTrExpr' :: Ctx PostElab -> [(IExpr PostElab, Integer)] -> IExpr PostElab -> [IType] -> [IExpr PostElab] -> T (IExpr PostElab)
 iTrExpr' ctx idxs f ts es = do
         errh <- gets errHandle
         let (et, trans) = let ?errh = errh
@@ -239,7 +240,7 @@ iTrExpr' ctx idxs f ts es = do
                 else
                     return e
 
-runCSE :: IExpr a -> T (IExpr a) a
+runCSE :: IExpr PostElab -> T (IExpr PostElab)
 runCSE e@(IAps _ _ _) = do
   -- This used to recurse on the arguments, but we don't need to do that,
   -- because "runCSE" is called from iTrExpr, which already recurses on the
@@ -255,20 +256,18 @@ runCSE e = return e
 -- recursively transform an expression
 -- noting that a nontrivial transformation has happened
 {-# INLINE iTrAp2 #-}
-iTrAp2 :: (?errh :: ErrorHandle) =>
+iTrAp2 :: (KnownPhase a, ?errh :: ErrorHandle) =>
           Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
 iTrAp2 ctx e ts es = (iTrApExp ctx e ts es, True)
 
 -- transform an expression, forgetting whether an transformation
 -- was done or not - used for recursive transformation
 {-# INLINE iTrApExp #-}
-iTrApExp :: (?errh :: ErrorHandle) =>
-            Ctx a -> IExpr a -> [IType] -> [IExpr a] -> IExpr a
+iTrApExp :: (KnownPhase a, ?errh :: ErrorHandle) => Ctx a -> IExpr a -> [IType] -> [IExpr a] -> IExpr a
 iTrApExp ctx e ts es = fst (iTrAp ctx e ts es)
 
 -- transform an expression, if it is an application
-iTrExprIfAp :: (?errh :: ErrorHandle) =>
-               Ctx a -> IExpr a -> (IExpr a, Bool)
+iTrExprIfAp :: (KnownPhase a, ?errh :: ErrorHandle) => Ctx a -> IExpr a -> (IExpr a, Bool)
 iTrExprIfAp ctx (IAps f ts es) = iTrAp ctx f ts es
 iTrExprIfAp _   e              = (e,False)
 
@@ -277,8 +276,7 @@ iTrExprIfAp _   e              = (e,False)
 -- The arguments need to be unfolded when they are matched against IAps nodes,
 -- since these are already CSEed.
 -- Returns a flag indicating whether the expression changed or not
-iTrAp :: (?errh :: ErrorHandle) =>
-         Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
+iTrAp :: (KnownPhase a, ?errh :: ErrorHandle) => Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
 
 -- eliminate null actions
 iTrAp ctx (ICon _ (ICPrim _ PrimJoinActions)) _ [ICon _ (ICPrim _ PrimNoActions), e] = (e, True)
@@ -1102,7 +1100,7 @@ iTrAp ctx c@(ICon _ (ICPrim _ p)) ts as | canDoOp = (e, True)
 iTrAp ctx f ts es = iTrApTail ctx f ts es
 
 -- constant folding
-iTrApTail :: Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
+iTrApTail :: KnownPhase a => Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
 iTrApTail ctx c@(ICon _ (ICPrim _ p)) ts as | canDoOp = (e, True)
   where (canDoOp, e) = case (doPrimOp (getIExprPosition c) p ts as) of
                            Just (Right res) -> (True, res)
@@ -1110,20 +1108,20 @@ iTrApTail ctx c@(ICon _ (ICPrim _ p)) ts as | canDoOp = (e, True)
 
 iTrApTail ctx f ts es = (IAps f ts es, False)
 
-expVal :: IExpr a -> IExpr a
+expVal :: KnownPhase a => IExpr a -> IExpr a
 expVal (ICon _ (ICValue { iValDef = e })) = e
 expVal e = e
 
 -- Like expVal but expands concats one level deeper, so that
 -- the patterns can match things like ((a ++ (select..)) ++ (select..))
-expValConcat :: IExpr a -> IExpr a
+expValConcat :: KnownPhase a => IExpr a -> IExpr a
 expValConcat (ICon _ (ICValue { iValDef = e })) = expValConcat e
 expValConcat (IAps p@(ICon _ (ICPrim _ PrimConcat)) ts es) = IAps p ts (map expVal es)
 expValConcat e = e
 
 -------------------------
 
-findConcatBreaks :: Integer -> IExpr a -> IExpr a ->
+findConcatBreaks :: KnownPhase a => Integer -> IExpr a -> IExpr a ->
                     [(Integer, IExpr a, IExpr a)]
 findConcatBreaks sz eA@(IAps (ICon _ (ICPrim _ PrimConcat))
                           [ITNum itA1, ITNum itA2, ITNum itA3] [eA1, eA2]) eB =
@@ -1140,7 +1138,7 @@ findConcatBreaks sz eA eB@(IAps (ICon _ (ICPrim _ PrimConcat))
 findConcatBreaks sz eA eB = [(sz, eA, eB)]
 
 
-splitConstExpr :: Integer -> Integer -> IExpr a  -> Maybe (IExpr a, IExpr a)
+splitConstExpr :: KnownPhase a => Integer -> Integer -> IExpr a  -> Maybe (IExpr a, IExpr a)
 splitConstExpr n n2 (ICon _ ic@(ICInt { iVal = IntLit { ilValue = c } })) =
     let c1 = iMkLit (aitBit (mkNumConT n)) (c `div` 2^n2)
         c2 = iMkLit (aitBit (mkNumConT n2)) (mask n2 c)
@@ -1188,18 +1186,18 @@ splitConstExpr _ _ _ = Nothing
 -- piece is first demanded where it was first computed before, forces no
 -- Id earlier than before; it only removes repeated expansions, merges
 -- and comparisons.
-data Opnd a = Opnd (IExpr a) [IExpr a] [IExpr a]
+data Opnd a = Opnd (IExpr a) [ExprKey a] [ExprKey a]
 
-opnd :: IExpr a -> Opnd a
+opnd :: KnownPhase a => IExpr a -> Opnd a
 opnd c = let e = expValAndOrCmp c
          in  Opnd e (bTerms e) (bTerms (ieNot e))
 
-addT :: IExpr a -> Ctx a -> Ctx a
+addT :: KnownPhase a => IExpr a -> Ctx a -> Ctx a
 addT e ctx = addTOpnd (opnd e) ctx
 
-addTOpnd :: Opnd a -> Ctx a -> Ctx a
+addTOpnd :: KnownPhase a => Opnd a -> Ctx a -> Ctx a
 addTOpnd (Opnd e ts _) (Ctx vs be) = Ctx (addEqs e vs) (bAddTerms ts be)
-  where addEqs (IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })]) vs = M.insert i v vs
+  where addEqs (IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })]) vs = M.insert (ExprKey i) v vs
         -- XXX case for when the const is on the left?
         -- XXX case for (e1 == e2), when e1 or e2 exists in the set, add the other as the same val
         addEqs (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) vs = addEqs e1 (addEqs e2 vs)
@@ -1210,10 +1208,10 @@ addTOpnd (Opnd e ts _) (Ctx vs be) = Ctx (addEqs e vs) (bAddTerms ts be)
         addNEqs (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) vs = addEqs e vs
         addNEqs _ vs = vs
 
-addF :: IExpr a -> Ctx a -> Ctx a
+addF :: KnownPhase a => IExpr a -> Ctx a -> Ctx a
 addF e ctx = addT (ieNot e) ctx
 
-expValAndOrCmp :: IExpr a -> IExpr a
+expValAndOrCmp :: KnownPhase a => IExpr a -> IExpr a
 expValAndOrCmp (IAps e ts es) = IAps e ts (map expValAndOrCmp es)
 expValAndOrCmp (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) | isAndOrCmp p = expValAndOrCmp e
 expValAndOrCmp e = e
@@ -1221,7 +1219,7 @@ expValAndOrCmp e = e
 isAndOrCmp :: PrimOp -> Bool
 isAndOrCmp p = p `elem` [PrimBAnd, PrimBOr, PrimBNot, PrimEQ, PrimULT, PrimULE, PrimSLT, PrimSLE]
 
-expValShallow :: IExpr a -> IExpr a
+expValShallow :: KnownPhase a => IExpr a -> IExpr a
 expValShallow (IAps e ts es) = IAps e ts (map expValShallow es)
 expValShallow (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) | p == PrimBNot = expValShallow e
                                                                                   | isAndOrCmp p = e
@@ -1235,33 +1233,33 @@ expValAndOr (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) 
 expValAndOr e = e
 -}
 
-isTOpnd :: Ctx a -> Opnd a -> Bool
+isTOpnd :: KnownPhase a => Ctx a -> Opnd a -> Bool
 isTOpnd (Ctx vs be) (Opnd e ts _) =
             bImpliesTerms be ts ||
             case e of
             IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })] ->
 --                traces ("isT EQ" ++ ppReadable (i, v, M.toList vs)) $
-                case M.lookup i vs of
+                case M.lookup (ExprKey i) vs of
                 Just k -> v == k
                 Nothing -> False
             IAps (ICon _ (ICPrim _ PrimBNot)) _ [IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })]] ->
 --                traces ("isT NE" ++ ppReadable (i, v, M.toList vs)) $
-                case M.lookup i vs of
+                case M.lookup (ExprKey i) vs of
                 Just k -> v /= k
                 Nothing -> False
             _ -> False
 
 
-isFOpnd :: Ctx a -> Opnd a -> Bool
+isFOpnd :: KnownPhase a => Ctx a -> Opnd a -> Bool
 isFOpnd (Ctx vs be) (Opnd e _ nts) =
             bImpliesTerms be nts ||
             case e of
             IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })] ->
-                case M.lookup i vs of
+                case M.lookup (ExprKey i) vs of
                 Just k -> v /= k
                 Nothing -> False
             IAps (ICon _ (ICPrim _ PrimBNot)) _ [IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })]] ->
-                case M.lookup i vs of
+                case M.lookup (ExprKey i) vs of
                 Just k -> v == k
                 Nothing -> False
             _ -> False
@@ -1279,16 +1277,17 @@ isF _ _ = False
 -----------------------------------------------------------------------------
 
 -- The BExpr is a formula of what we know is true
-data Ctx a = Ctx (M.Map (IExpr a) IValue) (BExpr a)
+-- (the map is keyed by the structural order of expressions)
+data Ctx a = Ctx (M.Map (ExprKey a) IValue) (BExpr a)
 type IValue = Integer
 
-emptyCtx :: Ctx a
+emptyCtx :: KnownPhase a => Ctx a
 emptyCtx = Ctx M.empty bNothing
 
 instance PPrint (Ctx a) where
     pPrint d p (Ctx es be) =
         (text "Ctx " $+$ text "  ")
-         <> (pPrint d 0 (M.toList es) $+$
+         <> (pPrint d 0 [ (unExprKey k, v) | (k, v) <- M.toList es ] $+$
              pPrint d 0 be)
 
 {-
@@ -1322,20 +1321,20 @@ getMaskTail mask size | zeroes_gcd > 1 =
         ones_gcd   = gcd (mask+1) power
         power      = 2^size
 
-isZero :: IExpr a -> Bool
+isZero :: KnownPhase a => IExpr a -> Bool
 isZero (ICon _ (ICInt { iVal = IntLit { ilValue = 0 } })) = True
 isZero _ = False
 
-isOne :: IExpr a -> Bool
+isOne :: KnownPhase a => IExpr a -> Bool
 isOne (ICon _ (ICInt { iVal = IntLit { ilValue = 1 } })) = True
 isOne _ = False
 
-isAllOnes :: IExpr a -> Bool
-isAllOnes (ICon _ (ICInt { iConType = ITAp b (ITNum i), iVal = IntLit { ilValue = n } })) = b == itBit && 2^i == n+1
+isAllOnes :: KnownPhase a => IExpr a -> Bool
+isAllOnes (ICon _ (ICInt { ictInt = ITAp b (ITNum i), iVal = IntLit { ilValue = n } })) = b == itBit && 2^i == n+1
 isAllOnes _ = False
 
-isAlmost :: IExpr a -> Bool
-isAlmost (ICon _ (ICInt { iConType = ITAp b (ITNum i), iVal = IntLit { ilValue = n } })) = b == itBit && 2^i == n+2
+isAlmost :: KnownPhase a => IExpr a -> Bool
+isAlmost (ICon _ (ICInt { ictInt = ITAp b (ITNum i), iVal = IntLit { ilValue = n } })) = b == itBit && 2^i == n+2
 isAlmost _ = False
 
 iLog2 :: Integer -> Maybe Integer
@@ -1345,28 +1344,28 @@ iLog2 i =
         else
              Nothing
 
-inc :: IExpr a -> IExpr a
+inc :: KnownPhase a => IExpr a -> IExpr a
 inc (ICon i c@(ICInt { iVal = il@(IntLit { ilValue = n }) })) =
     -- GHC emits a warning below because it's forgotten that 'c' must be
     -- an ICInt
     ICon i (c { iVal = il { ilValue = n+1 } })
 inc iexpr = internalError ("ITransform.inc: " ++ ppString iexpr)
 
-mkZero :: IType -> IExpr a
+mkZero :: KnownPhase a => IType -> IExpr a
 mkZero t = iMkLit (aitBit t) 0
 
 -- match undefined values
-isUndet :: IExpr a -> Bool
+isUndet :: KnownPhase a => IExpr a -> Bool
 isUndet (ICon _ (ICUndet {})) = True
 isUndet _ = False
 
 -- Guard optimizations that are not valid in the presence of implicit conditions.
-noRefs :: IExpr a -> Bool
+noRefs :: KnownPhase a => IExpr a -> Bool
 noRefs (IRefT {})    = False
 noRefs (IAps f _ es) = all noRefs (f:es)
 noRefs _             = True
 
-isIfElseOfIConInt :: IExpr a -> Bool
+isIfElseOfIConInt :: KnownPhase a => IExpr a -> Bool
 isIfElseOfIConInt (IAps (ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) =
     isIfElseOfIConInt' thn && isIfElseOfIConInt' els
   where
@@ -1378,25 +1377,25 @@ isIfElseOfIConInt (IAps (ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) =
 isIfElseOfIConInt (ICon _ (ICValue { iValDef = e })) = isIfElseOfIConInt e
 isIfElseOfIConInt _ = False
 
-isConstExprForPrim :: PrimOp -> IExpr a -> Bool
+isConstExprForPrim :: KnownPhase a => PrimOp -> IExpr a -> Bool
 isConstExprForPrim prim (IAps (ICon _ (ICPrim _ p)) _ [e1,e2]) =
     (p == prim) && ((isIConInt e1) || (isIConInt e2))
 isConstExprForPrim _ _ = False
 
-constPart :: IExpr a -> IExpr a
+constPart :: KnownPhase a => IExpr a -> IExpr a
 constPart (IAps (ICon _ (ICPrim _ p)) _ [e1,e2])
     | isIConInt e1 = e1
     | isIConInt e2 = e2
     | otherwise    = internalError "constPart: no const part found!"
 constPart _ = internalError "constPart: expected a binary primitive op"
 
-nonConstPart :: IExpr a -> IExpr a
+nonConstPart :: KnownPhase a => IExpr a -> IExpr a
 nonConstPart (IAps (ICon _ (ICPrim _ p)) _ [e1,e2]) =
     if (isIConInt e1) then e2 else e1  -- note: e2 may also be a constant!
 nonConstPart _ = internalError "nonConstPart: expected a binary primitive op"
 
 -- More accurate (and faster) equality by ignoring ICValue
-eqE :: IExpr a -> IExpr a -> Bool
+eqE :: KnownPhase a => IExpr a -> IExpr a -> Bool
 eqE (IAps e1 ts1 es1)                    (IAps e2 ts2 es2)                    = eqE e1 e2 && ts1 == ts2 && and (zipWith eqE es1 es2)
 eqE (ICon i1 (ICValue { iValDef = e1 })) (ICon i2 (ICValue { iValDef = e2 })) = i1 == i2
 eqE (ICon _  (ICValue { iValDef = e1 }))                               e2     = eqE e1 e2
@@ -1405,7 +1404,7 @@ eqE                               e1                                   e2     = 
 
 -----------------------------------------------------------------------------
 
-data TState a = TState {
+data TState = TState {
         errHandle :: ErrorHandle,
         flags :: Flags,
 
@@ -1418,7 +1417,7 @@ data TState a = TState {
         -- looked up in this map and the assigned expression is inlined.
         -- The defprops are kept to be used in the fixup step that happens
         -- between processing defs and processing the rest of the module.
-        def_map :: M.Map Id (IType, IExpr a, [DefProp]),
+        def_map :: M.Map Id (IType, IExpr PostElab, [DefProp]),
 
         -- A CSE map, from an expr "e" to a tuple of info for the canonical
         -- def ("defname") to represent it:
@@ -1426,14 +1425,14 @@ data TState a = TState {
         --   * the def ("IDef defname deftype e")
         -- When the monad is run, because all exprs are inlined and then CSE'd
         -- back up, the defs for the package will come from this map.
-        cse_map :: M.Map (IExpr a) (IExpr a, IDef a)
+        cse_map :: M.Map (IExpr PostElab) (IExpr PostElab, IDef PostElab)
         }
 
-type T b a = State (TState a) b
+type T b = State TState b
 
-runT :: ErrorHandle -> Flags -> Integer -> String -> T b a -> (b, [IDef a])
+runT :: ErrorHandle -> Flags -> Integer -> String -> T b -> (b, [IDef PostElab])
 runT errh flags no prefix xforms =
-    let initState :: TState a
+    let initState :: TState
         initState = TState { errHandle = errh
                            , flags = flags
                            , prefix = prefix
@@ -1452,14 +1451,14 @@ runT errh flags no prefix xforms =
                   defs = defs_from_cse ++ non_cse_defs
               in  (x, defs)
 
-getDoBO :: T Bool a
+getDoBO :: T Bool
 getDoBO = do
   flgs <- gets flags
   return (optBool flgs)
 
 -- Create a CSE def for an expression, returning a reference;
 -- if a def already exists for this expression, return the existing reference.
-newExprT :: IType -> IExpr a -> T (IExpr a) a
+newExprT :: IType -> IExpr PostElab -> T (IExpr PostElab)
 newExprT t e = do
   ts <- get
   cmap <- gets cse_map
@@ -1476,14 +1475,14 @@ newExprT t e = do
         -- traceM ("newExprT " ++ ppString e ++ " -> " ++ ppString (e',d))
         return e'
 
-addDefT :: Id -> IType -> IExpr a -> [DefProp] -> T () a
+addDefT :: Id -> IType -> IExpr PostElab -> [DefProp] -> T ()
 addDefT i t e p = do
   -- traceM $ "addDefT " ++ ppString i ++ " " ++ ppString e
   ts <- get
   let dmap' = M.insert i (t,e,p) (def_map ts)
   dmap' `seq` put $ ts {def_map = dmap' }
 
-getDefT :: Id -> T (Maybe (IExpr a)) a
+getDefT :: Id -> T (Maybe (IExpr PostElab))
 getDefT i = get >>= (return . fmap snd3 . M.lookup i . def_map)
 
 {- we don't need uEq because we use a progress check instead now
@@ -1512,10 +1511,10 @@ uEq' e1 e2 = e1 == e2
 
 -----------------------------------------------------------------------------
 
-optBoolExpr :: Bool -> IExpr a -> IExpr a
+optBoolExpr :: KnownPhase a => Bool -> IExpr a -> IExpr a
 optBoolExpr moreBoolOpt = optBoolExprN 8 moreBoolOpt
 
-optBoolExprN :: Int -> Bool -> IExpr a -> IExpr a
+optBoolExprN :: KnownPhase a => Int -> Bool -> IExpr a -> IExpr a
 optBoolExprN nvars moreBoolOpt =
         fromBE .
         (if moreBoolOpt then tryHard nvars else sSimplify) .
@@ -1523,32 +1522,32 @@ optBoolExprN nvars moreBoolOpt =
         (if moreBoolOpt then aOptCmp else sOptCmp) .
         expValAndOrCmp
 
-tryHard :: Int -> BoolExp (IExpr a) -> BoolExp (IExpr a)
+tryHard :: Int -> BoolExp (ExprKey a) -> BoolExp (ExprKey a)
 tryHard nvars e =
         case optBoolExprQM nvars e of                -- Don't try more than 8 variables.
         Nothing -> {-trace ("tryHard too big " ++ ppReadable e) $ -} aSimplify e
         Just e' -> {-trace (ppReadable(e, e')) -} e'
 
-fromBE :: BoolExp (IExpr a) -> IExpr a
+fromBE :: KnownPhase a => BoolExp (ExprKey a) -> IExpr a
 fromBE (And e1 e2)   = ieAnd (fromBE e1) (fromBE e2)
 fromBE (Or  e1 e2)   = ieOr  (fromBE e1) (fromBE e2)
 fromBE (Not e)       = ieNot (fromBE e)
 fromBE (If e1 e2 e3) = ieIf itBit1 (fromBE e1) (fromBE e2) (fromBE e3)
-fromBE (Var e)       = e
+fromBE (Var e)       = unExprKey e
 fromBE TT            = iTrue
 fromBE FF            = iFalse
 
-toBE :: IExpr a -> BoolExp (IExpr a)
+toBE :: KnownPhase a => IExpr a -> BoolExp (ExprKey a)
 toBE (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2])   = And (toBE e1) (toBE e2)
 toBE (IAps (ICon _ (ICPrim _ PrimBOr))  _ [e1, e2])   = Or  (toBE e1) (toBE e2)
 toBE (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e])        = Not (toBE e)
 toBE (IAps (ICon _ (ICPrim _ PrimIf))   _ [e1,e2,e3]) = If (toBE e1) (toBE e2) (toBE e3)
 toBE e | e == iTrue  = TT
        | e == iFalse = FF
-       | otherwise   = Var e
+       | otherwise   = Var (ExprKey e)
 
 -- A quick hack for optimizing comparisons
-sOptCmp :: IExpr a -> IExpr a
+sOptCmp :: KnownPhase a => IExpr a -> IExpr a
 sOptCmp e =
     let collEQs (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = collEQs e1 ++ collEQs e2
         collEQs (IAps (ICon _ (ICPrim _ PrimEQ))   _ [v, ICon _ (ICInt { iVal = IntLit { ilValue = i } })]) = [(v, i)]
@@ -1565,7 +1564,7 @@ sOptCmp e =
 
         remAbsurd e (IAps (ICon _ (ICPrim _ PrimBNot)) _
                         [IAps (ICon _ (ICPrim _ PrimEQ)) _
-                                [v, ICon _ (ICInt { iConType = ITAp bit (ITNum vn), iVal = IntLit { ilValue = i } })]] : es)
+                                [v, ICon _ (ICInt { ictInt = ITAp bit (ITNum vn), iVal = IntLit { ilValue = i } })]] : es)
                 | bit == itBit && vn <= 8 = loop ([0..2^vn-1] \\ [i]) es
                   where loop [] [] = iFalse
                         loop _  [] = e
@@ -1579,14 +1578,14 @@ sOptCmp e =
 
     in  remAbs (remNE (collEQs e) e)
 
-aOptCmp :: IExpr a -> IExpr a
+aOptCmp :: KnownPhase a => IExpr a -> IExpr a
 aOptCmp e =
         --trace ("optCmp:\n" ++ ppReadable e) $
         let (_, e') = optE M.empty e
         in  --(if e/=e' then traces (ppReadable (e, e')) else id)
             e'
 
-optE :: ValMap a -> IExpr a -> (ValMap a, IExpr a)
+optE :: KnownPhase a => ValMap a -> IExpr a -> (ValMap a, IExpr a)
 optE m e0@(IAps p@(ICon _ (ICPrim _ PrimBAnd)) ts [e1, e2]) =
 -- XXX this can't be the best way
         let (m1, e2') = optE m  e2
@@ -1597,12 +1596,12 @@ optE m e0@(IAps p@(ICon _ (ICPrim _ PrimBAnd)) ts [e1, e2]) =
                 let (m1, e1') = optE m  e1
                     (m2, e2') = optE m1 e2
                 in  (m2, IAps p ts [e1', e2'])
-optE m e@(IAps p@(ICon _ (ICPrim _ cmp)) _ [v, ICon _ (ICInt { iConType = t, iVal = IntLit { ilValue = i } })])
+optE m e@(IAps p@(ICon _ (ICPrim _ cmp)) _ [v, ICon _ (ICInt { ictInt = t, iVal = IntLit { ilValue = i } })])
   | isCmp cmp
   , (Just n) <- getBit t
   = doCmp m e cmp v n i True
 optE m e@(IAps (ICon _ (ICPrim _ PrimBNot)) _
-                [IAps p@(ICon _ (ICPrim _ cmp)) ts [v, ICon _ (ICInt { iConType = t, iVal = IntLit { ilValue = i } })]])
+                [IAps p@(ICon _ (ICPrim _ cmp)) ts [v, ICon _ (ICInt { ictInt = t, iVal = IntLit { ilValue = i } })]])
   | isCmp cmp
   , (Just n) <- getBit t
   = doCmp m e cmp v n i False
@@ -1611,14 +1610,14 @@ optE m e =
         Nothing -> (m, e)
         Just i -> (m, iMkLit (iGetType e) i)
 
-type ValMap a = M.Map (IExpr a) ValueSet
+type ValMap a = M.Map (ExprKey a) ValueSet
 
 vmAdd :: IExpr a -> ValueSet -> ValMap a -> ValMap a
-vmAdd k vs m = M.insert k vs m
+vmAdd k vs m = M.insert (ExprKey k) vs m
 
-vmGet :: IExpr a -> ValMap a -> ValueSet
+vmGet :: KnownPhase a => IExpr a -> ValMap a -> ValueSet
 vmGet v m =
-    case M.lookup v m of
+    case M.lookup (ExprKey v) m of
     Just vs -> vs
     Nothing -> vsUniv v
 
@@ -1626,7 +1625,7 @@ vmGet v m =
 
 type ValueSet = VSetInteger
 
-vsUniv :: IExpr a -> ValueSet
+vsUniv :: KnownPhase a => IExpr a -> ValueSet
 vsUniv (ICon i (ICValue { iValDef = IAps (ICon _ (ICPrim _ PrimRange)) _
                                         [ICon _ (ICInt { iVal = IntLit { ilValue = lo } }), ICon _ (ICInt { iVal = IntLit { ilValue = hi } }), _] })) =
         --traces ("interval " ++ ppReadable (i,lo,hi)) $
@@ -1638,7 +1637,7 @@ vsUniv e =
         Nothing -> internalError "vsUniv"
 
 vsGetSingleton :: IExpr a -> ValMap a -> Maybe Integer
-vsGetSingleton e m = M.lookup e m >>= vGetSing
+vsGetSingleton e m = M.lookup (ExprKey e) m >>= vGetSing
 
 isCmp :: PrimOp -> Bool
 isCmp PrimEQ = True
@@ -1656,7 +1655,7 @@ cmpToVS n i False PrimULE = vFromTo i (2^n-1)
 cmpToVS _ _ _     prim    =
     internalError ("ITransform.cmpToVS: " ++ ppString prim)
 
-doCmp :: ValMap a -> IExpr a -> PrimOp -> IExpr a -> Integer -> Integer -> Bool -> (ValMap a,IExpr a)
+doCmp :: KnownPhase a => ValMap a -> IExpr a -> PrimOp -> IExpr a -> Integer -> Integer -> Bool -> (ValMap a,IExpr a)
 doCmp m e cmp v n i norm =
         let vs = vmGet v m
             tvs = cmpToVS n i norm cmp
@@ -1686,7 +1685,7 @@ getBit _ = Nothing
 -- Some of these defs are marked as not-CSE-able, so we keep those defs
 -- separate.
 --
-iTransFixupDefNames :: forall a . Flags -> T () a
+iTransFixupDefNames :: Flags -> T ()
 iTransFixupDefNames flags = do
   transform_state <- get
   let
@@ -1732,14 +1731,14 @@ iTransFixupDefNames flags = do
           let mapFn (ty, e, props) = (ty, rename_expr e, props)
           in  M.map mapFn old_defmap
 
-      new_state :: TState a
+      new_state :: TState
       new_state = transform_state { def_map = new_defmap,
                                     cse_map = new_csemap }
   put new_state
 
 -- given a map from old to new identifiers, replace all occurrences
 -- of the old identifier with the new in a given expression
-iTransRenameIdsInExpr :: M.Map Id Id -> IExpr a -> IExpr a
+iTransRenameIdsInExpr :: M.Map Id Id -> IExpr PostElab -> IExpr PostElab
 iTransRenameIdsInExpr rename_map expr@(ICon name value@(ICValue {})) =
     let renamed_value_def = iTransRenameIdsInExpr rename_map (iValDef value)
         new_value = value { iValDef = renamed_value_def }
@@ -1755,7 +1754,7 @@ iTransRenameIdsInExpr rename_map expr = expr
 -- including the name being defined
 -- XXX This loses the props.  If the name is not renamed, we can keep
 -- XXX the old props; if it's renamed, we need to be given the new props.
-iTransRenameIdsInDef :: M.Map Id Id -> IDef a -> IDef a
+iTransRenameIdsInDef :: M.Map Id Id -> IDef PostElab -> IDef PostElab
 iTransRenameIdsInDef rename_map (IDef name typ expr _) =
     let renamed_expr = iTransRenameIdsInExpr rename_map expr
         renamed_name = iTransRenameId rename_map name

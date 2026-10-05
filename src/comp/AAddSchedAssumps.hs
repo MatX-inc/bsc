@@ -11,7 +11,7 @@ import ASyntax
 import ASyntaxUtil
 import ISyntax
 import ISyntaxUtil hiding (noReset)
-import IExpandUtils(HExpr, HeapData)
+
 import IExpand(iExpand)
 import ISplitIf(iSplitIf)
 import AConv(aConv)
@@ -169,7 +169,7 @@ mkCFAssump ruleMethodMap instSchedMap r1 r2 = concat $ M.elems overlapMap
 -- | Rule to the methods it uses (with conditions)
 type RuleMethCondMap = M.Map ARuleId [(MethodId, AExpr)]
 
-aAddCFConditionWires :: ErrorHandle -> SymTab -> M.Map AId HExpr -> Flags ->
+aAddCFConditionWires :: ErrorHandle -> SymTab -> M.Map AId (IExpr PreElab) -> Flags ->
                         APackage -> AScheduleInfo ->
                         IO (APackage, AScheduleInfo)
 aAddCFConditionWires errh r alldefs flags apkg schedinfo =
@@ -219,14 +219,14 @@ buildMethCondList uses = M.toList (M.fromListWith aOr uses')
 -- | We need a function that will take an id and make us the RWire instance we want.
 -- It's a little more complicated than you might expect
 getRWireInstFn :: ErrorHandle -> Flags -> SymTab ->
-                  M.Map AId HExpr -> IO (Id -> AVInst)
+                  M.Map AId (IExpr PreElab) -> IO (Id -> AVInst)
 getRWireInstFn errh flags r alldefs = do
   let blobT = TAp tModule tEmpty
   case TIM.tiResult $ (TIM.runTI flags False r (topExpr blobT (CVar id__mkRWireSubmodule))) of
     Left errs -> internalError (ppReadable errs)
     Right (_,e') -> do
       let iexpr = iConvExpr errh flags r alldefs e'
-      let def :: IDef HeapData
+      let def :: IDef PreElab
           def = IDef id_x (iGetType iexpr) iexpr []
       let flags' = flags { showElabProgress = False }
       iepkg <- iExpand errh flags' r alldefs M.empty False [] def
