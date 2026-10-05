@@ -6103,15 +6103,40 @@ instance HeapToDef HExpr where
     hToDef _ (ICon i (ICMethArg t)) = ICon i (ICMethArg t)
     hToDef _ (ICon i (ICModPort t)) = ICon i (ICModPort t)
     hToDef _ (ICon i (ICModParam t)) = ICon i (ICModParam t)
-    -- Binders and the constants of the phases before and during
-    -- elaboration (ICDef, ICIs, ICOut, ICVerilog, ICMethod, ICPred, ...)
-    -- have no form after it; the evaluator's invariant is that none
-    -- reaches the result, and a downstream pass would fail on one (as
-    -- Params did on an ICDef), so fail where the invariant is supposed
-    -- to hold
-    hToDef _ e =
-        internalError ("hToDef: expression escaped elaboration: " ++
-                       showTypeless e)
+    -- The binders and the constants of the phases before and during
+    -- elaboration have no form after it.  They are all accessible at
+    -- Elab, the type of this instance's input, so the types cannot
+    -- exclude them here: this edge is where the evaluator's invariant
+    -- (none reaches the result) is checked, one arm per variant and no
+    -- wildcard, so that a variant added to a later phase is an
+    -- incomplete-pattern warning here instead of a silent runtime
+    -- failure.  (A downstream pass failed on an escapee before, as
+    -- Params did on an ICDef.)  These arms refuse what the types admit;
+    -- they are not fallbacks for cases the types exclude.
+    hToDef _ e@(ILam {}) = escapedElab "ILam" e
+    hToDef _ e@(IVar {}) = escapedElab "IVar" e
+    hToDef _ e@(ILAM {}) = escapedElab "ILAM" e
+    -- the constants of the phases with binders (PreElab and Elab)
+    hToDef _ e@(ICon _ (ICDef {})) = escapedElab "ICDef" e
+    hToDef _ e@(ICon _ (ICIs {})) = escapedElab "ICIs" e
+    hToDef _ e@(ICon _ (ICOut {})) = escapedElab "ICOut" e
+    hToDef _ e@(ICon _ (ICVerilog {})) = escapedElab "ICVerilog" e
+    hToDef _ e@(ICon _ (ICRuleAssert {})) = escapedElab "ICRuleAssert" e
+    hToDef _ e@(ICon _ (ICSchedPragmas {})) = escapedElab "ICSchedPragmas" e
+    hToDef _ e@(ICon _ (ICName {})) = escapedElab "ICName" e
+    hToDef _ e@(ICon _ (ICAttrib {})) = escapedElab "ICAttrib" e
+    hToDef _ e@(ICon _ (ICPosition {})) = escapedElab "ICPosition" e
+    hToDef _ e@(ICon _ (ICType {})) = escapedElab "ICType" e
+    -- the constants of elaboration itself
+    hToDef _ e@(ICon _ (ICHandle {})) = escapedElab "ICHandle" e
+    hToDef _ e@(ICon _ (ICMethod {})) = escapedElab "ICMethod" e
+    hToDef _ e@(ICon _ (ICPred {})) = escapedElab "ICPred" e
+
+-- an expression with no form after elaboration reached the rebuild
+escapedElab :: String -> HExpr -> a
+escapedElab what e =
+    internalError ("hToDef: " ++ what ++ " escaped elaboration: " ++
+                   showTypeless e)
 
 instance HeapToDef HStateVar where
     type Rebuilt HStateVar = IStateVar PostElab
