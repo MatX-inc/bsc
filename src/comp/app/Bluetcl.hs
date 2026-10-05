@@ -4282,7 +4282,6 @@ find_vmodinfo ipkg = concatMap defVMIs (ipkg_defs ipkg)
     exprVMIs (ILAM _ _ body) = exprVMIs body
     exprVMIs (ICon _ (ICVerilog { vInfo = vmi })) = [vmi]
     exprVMIs (ICon _ (ICDef { iConDef = body })) = exprVMIs body
-    exprVMIs (ICon _ (ICUndet { imVal = Just body })) = exprVMIs body
     exprVMIs (ICon _ _) = []
     exprVMIs (IRefT {}) = []
 

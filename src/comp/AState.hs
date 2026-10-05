@@ -1298,7 +1298,7 @@ mkEmux _ _ _ _ _ _ _ _ _ = internalError "mkEMux"
 
 -- create a default expresson for a mux from the conditions
 mkDefaultPair :: AType -> [AExpr] -> [AExpr]
-mkDefaultPair t aexprs = [APrim  defaultAId (ATBit 1) PrimBNot [orCond] , ASAny t Nothing]
+mkDefaultPair t aexprs = [APrim  defaultAId (ATBit 1) PrimBNot [orCond] , ASAny t]
     where (conds,_) = unzip $ makePairs aexprs
           orCond = aOrs conds
 

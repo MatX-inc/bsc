@@ -23,7 +23,6 @@ iSubstWhen tst subMap defMap e = sub e
                                      (M.lookup i defMap)
               in ICon i (val { iValDef = ev })
             Just e -> if tst e then e else d
-        sub u@(ICon i (ICUndet t k (Just v))) = ICon i (ICUndet t k (Just (sub v)))
         sub c@(ICon {}) = c
         sub ee = internalError ("iSubstWhen: " ++ ppReadable ee)
 
