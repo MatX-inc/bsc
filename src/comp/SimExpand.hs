@@ -7,7 +7,9 @@ import Data.List (partition, union, nub, sort, sortBy, delete)
 import Control.Monad (when, guard, msum {-, mapM_ -})
 import Debug.Trace
 import qualified Data.Map as M
+import IdMap(IdMap)
 import qualified IdMap
+import IdSet(IdSet)
 import qualified IdSet
 import qualified Data.Set as S
 
@@ -308,7 +310,7 @@ simExpandSched abis0 hiermap instmap topmod = do
                 urgency_order = map getSchedNodeId sched_nodes
                 earliness_order = map getSchedNodeId exec_nodes
                 find_conflicts i =
-                    M.findWithDefault [] i (csi_conflicts csi)
+                    IdMap.findWithDefault [] i (csi_conflicts csi)
                 conflict_pairs =
                     map (\i -> (i,find_conflicts i)) urgency_order
                 asched = ASchedule [ASchedEsposito conflict_pairs]
@@ -448,7 +450,7 @@ type SchedMap = M.Map SchedNode [SchedNode]
 -- The Esposito scheduler is a list of rules/methods paired with the
 -- more urgent rules/methods that block it.  This pairing we will store
 -- as a map, for better update and access.
-type ConflictMap = M.Map AId [AId]
+type ConflictMap = IdMap [AId]
 
 -- ------
 
@@ -465,7 +467,19 @@ reverseSchedMap smap = M.mapKeys unFSN $ M.map (map unFSN) $ reverseMap smap'
   where smap' = M.mapKeys FSN $ M.map (map FSN) smap
 
 reverseConflictMap :: ConflictMap -> ConflictMap
-reverseConflictMap cmap = reverseMap cmap
+reverseConflictMap cmap = reverseIdMap cmap
+
+-- GraphUtil.reverseMap for an IdMap: the reversed edge lists are built
+-- in the blind (intern) order of the input map, as reverseMap builds them
+-- in Data.Map's key order.
+reverseIdMap :: IdMap [AId] -> IdMap [AId]
+reverseIdMap m =
+    let edges = IdMap.toList m
+        startEdge (e1,_) = (e1, [])
+        reverseEdge (e1,es) = [(e2,[e1]) | e2 <- es]
+        rev_edges = map startEdge edges ++
+                    concatMap reverseEdge edges
+    in IdMap.fromListWith (++) rev_edges
 
 -- ----------
 
@@ -886,10 +900,10 @@ splitCSIByClock topifc csi =
 
         extractSchedMap :: [ARuleId] -> SchedMap
         extractSchedMap cd_rs =
-            let cd_rs_set = S.fromList cd_rs
+            let cd_rs_set = IdSet.fromList cd_rs
                 -- func to see if a SchedNode is in the domain
                 inDomain :: SchedNode -> Bool
-                inDomain sn = (getSchedNodeId sn) `S.member` cd_rs_set
+                inDomain sn = (getSchedNodeId sn) `IdSet.member` cd_rs_set
 
                 -- flatten to a list
                 es = M.toList smap
@@ -1012,7 +1026,7 @@ makeCSIForModule curmod_abi =
 
         curmod_conflicts =
             case (asi_schedule curmod_aschedinfo) of
-                (ASchedule [ASchedEsposito cs] _) -> M.fromList cs
+                (ASchedule [ASchedEsposito cs] _) -> IdMap.fromList cs
                 x -> internalError ("curmod_conflicts: " ++ ppReadable x)
 
         curmod_drdb = exclRulesDBToDisjRulesDB $
@@ -1080,7 +1094,7 @@ combineCombSchedInfo use_map domain_id_map parent_abi parent_csi
         -- schedule graph and conflicts (even the methods not used by
         -- any parent rules), so we need to know which are the method Ids
         child_apkg = abmi_apkg child_abi
-        child_meth_set = S.fromList $ map aif_name (apkg_interface child_apkg)
+        child_meth_set = IdSet.fromList $ map aif_name (apkg_interface child_apkg)
 
         -- combine each part of the CSI
         comb_sched_map = combineSchedMap inst parent_uses
@@ -1396,7 +1410,7 @@ combineDomainInfoMap inst avinst
     in  combinedInfo
 
 
-combineSchedDRDB :: String -> [(SchedNode,[SchedNode])] -> S.Set AId ->
+combineSchedDRDB :: String -> [(SchedNode,[SchedNode])] -> IdSet ->
                     DisjointRulesDB -> DisjointRulesDB ->
                     DisjointRulesDB
 combineSchedDRDB inst parent_use_map child_meth_set parent_map child_map =
@@ -1404,7 +1418,7 @@ combineSchedDRDB inst parent_use_map child_meth_set parent_map child_map =
         -- start by adding all nodes in the child map to the parent map,
         -- which requires qualifying all the nodes of the child
         -- (but don't include methods)
-        isMethId i = i `S.member` child_meth_set
+        isMethId i = i `IdSet.member` child_meth_set
         child_edges = mapSnd IdSet.toList (IdMap.toList child_map)
         child_rule_edges =
             let -- first remove edges from method Ids
@@ -1426,10 +1440,10 @@ combineSchedDRDB inst parent_use_map child_meth_set parent_map child_map =
                     (getSchedNodeId snode,
                      map getSchedNodeId (filter (not . isSchedNode) ns))
                 flat_edges = map convEdge parent_use_map
-            in  foldr (uncurry (M.insertWith union)) M.empty flat_edges
+            in  foldr (uncurry (IdMap.insertWith union)) IdMap.empty flat_edges
 
         -- but we do need to reverse the use map
-        rev_flat_use_map = reverseMap flat_use_map
+        rev_flat_use_map = reverseIdMap flat_use_map
 
         findDisjointChildRules :: AId -> [AId]
         findDisjointChildRules methId =
@@ -1444,7 +1458,7 @@ combineSchedDRDB inst parent_use_map child_meth_set parent_map child_map =
                 Just nset ->
                     let meths = filter isMethId (IdSet.toList nset)
                         lookupMeth m =
-                            case (M.lookup m rev_flat_use_map) of
+                            case (IdMap.lookup m rev_flat_use_map) of
                                 Nothing -> []
                                 Just parent_ns -> parent_ns
                     in  foldr union [] (map lookupMeth meths)
@@ -1463,15 +1477,15 @@ combineSchedDRDB inst parent_use_map child_meth_set parent_map child_map =
                     in  IdMap.unionWith IdSet.union (IdMap.fromListWith IdSet.union edges) dmap
             in  foldr handleUse dmap uses
     in
-        foldr handleParentNode start_comb_map (M.toList flat_use_map)
+        foldr handleParentNode start_comb_map (IdMap.toList flat_use_map)
 
 
-combineSchedRuleRelDB :: String -> [(SchedNode,[SchedNode])] -> S.Set AId ->
+combineSchedRuleRelDB :: String -> [(SchedNode,[SchedNode])] -> IdSet ->
                          RuleRelationMap -> RuleRelationMap ->
                          RuleRelationMap
 combineSchedRuleRelDB inst parent_use_map child_meth_set parent_map child_map =
     let
-        isMethId i = i `S.member` child_meth_set
+        isMethId i = i `IdSet.member` child_meth_set
 
         -- combine sched and exec nodes of parent rules and
         -- remove uses of sched node (RDY signals) and flatten to just AId
@@ -1480,17 +1494,17 @@ combineSchedRuleRelDB inst parent_use_map child_meth_set parent_map child_map =
                     (getSchedNodeId snode,
                      map getSchedNodeId (filter (not . isSchedNode) ns))
                 flat_edges = map convEdge parent_use_map
-            in  foldr (uncurry (M.insertWith union)) M.empty flat_edges
+            in  foldr (uncurry (IdMap.insertWith union)) IdMap.empty flat_edges
 
         -- reverse to make it a map from child Id to parent uses
-        rev_flat_use_map = reverseMap flat_use_map
+        rev_flat_use_map = reverseIdMap flat_use_map
 
         -- make a new set of edges (with possible duplicates) by qualifying
         -- children IDs and replacing methods with parent rules that call them
 
         expandMeth i =
             if (isMethId i)
-            then case (M.lookup i rev_flat_use_map) of
+            then case (IdMap.lookup i rev_flat_use_map) of
                    Nothing -> []
                    Just parent_ns -> parent_ns
             else [qualifyChildId inst i]
@@ -1510,15 +1524,15 @@ combineSchedRuleRelDB inst parent_use_map child_meth_set parent_map child_map =
         map_insertManyWith unionRuleRelationInfo new_map_pairs parent_map
 
 
-combineSchedConflicts :: String -> [(SchedNode,[SchedNode])] -> S.Set AId ->
+combineSchedConflicts :: String -> [(SchedNode,[SchedNode])] -> IdSet ->
                          ConflictMap -> ConflictMap -> ConflictMap
 combineSchedConflicts inst parent_uses child_meth_set parent_cs child_cs =
     let
         -- start by adding all conflicts in the child list to the parent list,
         -- which requires qualifying all the conflicts of the child
         -- (but don't add conflicts from or to methods!)
-        isMethId i = i `S.member` child_meth_set
-        child_edges = M.toList child_cs
+        isMethId i = i `IdSet.member` child_meth_set
+        child_edges = IdMap.toList child_cs
         child_rule_edges =
             let -- first remove edges from method nodes
                 edges' = filter (not . isMethId . fst) child_edges
@@ -1527,7 +1541,7 @@ combineSchedConflicts inst parent_uses child_meth_set parent_cs child_cs =
         -- qualify the remaining edges
         qual_child_edges = qualifyChildConflictGraph inst child_rule_edges
         -- add them to the parent
-        start_comb_cs = M.union (M.fromList qual_child_edges) parent_cs
+        start_comb_cs = IdMap.union (IdMap.fromList qual_child_edges) parent_cs
 
         -- for finding incoming edges, reverse the child list
         -- XXX are we constructing this more than once, if we instantiate
@@ -1540,7 +1554,7 @@ combineSchedConflicts inst parent_uses child_meth_set parent_cs child_cs =
 
         findBlockees :: AId -> [AId]
         findBlockees methId =
-            case (M.lookup methId rev_child_cmap) of
+            case (IdMap.lookup methId rev_child_cmap) of
                 Nothing -> []
                     -- value methods will not be found, so don't error
                     --internalError ("findBlockees: " ++ ppReadable methId)
@@ -1589,20 +1603,20 @@ combineSchedConflicts inst parent_uses child_meth_set parent_cs child_cs =
                             else id
                     in
                         trace_dump $
-                        M.unionWith (++) (M.fromListWith (++) edges) cmap
+                        IdMap.unionWith (++) (IdMap.fromListWith (++) edges) cmap
             in  foldr handleUse cmap uses
     in
         foldr handleParentNode start_comb_cs parent_uses
 
 
-combineSchedMap :: String -> [(SchedNode,[SchedNode])] -> S.Set AId ->
+combineSchedMap :: String -> [(SchedNode,[SchedNode])] -> IdSet ->
                    SchedMap -> SchedMap -> SchedMap
 combineSchedMap inst parent_uses child_meth_set parent_smap child_smap =
     let
         -- start by adding all nodes in the child to the parent,
         -- which requires qualifying all the nodes of the child
         -- (but don't add edges from or to methods!)
-        isMethSN sn = (getSchedNodeId sn) `S.member` child_meth_set
+        isMethSN sn = (getSchedNodeId sn) `IdSet.member` child_meth_set
         child_edges = M.toList child_smap
         child_rule_edges =
             let -- first remove edges from method nodes
@@ -1699,7 +1713,7 @@ findUses use_map rdy_map inst snode =
 -- a ready method is associated, we can create an authoritative map by
 -- looking at the def references of the individual methods.
 
-type RdyMap = M.Map AId AId
+type RdyMap = IdMap AId
 
 mkRdyMap :: ABinModInfo -> RdyMap
 mkRdyMap abi =
@@ -1719,17 +1733,17 @@ mkRdyMap abi =
                          _ -> internalError
                                 ("mkRdyMap: pred is not a def or const: " ++
                                  ppReadable (name, pred_e))
-    in  M.fromList $ concatMap mkPair ifcs
+    in  IdMap.fromList $ concatMap mkPair ifcs
 
 -- This takes a Rdy Id and returns the Id of the method for which it
 -- is the Rdy.
 findRdyMeth :: RdyMap -> AId -> AId
 findRdyMeth rdy_map rdyId =
-    case M.lookup rdyId rdy_map of
+    case IdMap.lookup rdyId rdy_map of
         Just mId -> mId
         Nothing -> internalError ("SimExpand.findRdyMeth: cannot find " ++
                                   ppReadable rdyId ++
-                                  ppReadable (M.toList rdy_map))
+                                  ppReadable (IdMap.toList rdy_map))
 
 
 -- ===============
@@ -1946,7 +1960,7 @@ mkParentUseMap parent_abi =
         ifc_defs = [d | (AIDef { aif_value = d }) <- ifcs] ++
                    [d | (AIActionValue { aif_value = d }) <- ifcs]
         defs = ifc_defs ++ local_defs
-        defUseMap = M.fromList [(d, eDomain defUseMap e) | ADef d _ e _<- defs]
+        defUseMap = IdMap.fromList [(d, eDomain defUseMap e) | ADef d _ e _<- defs]
 
         use_infos = (concatMap cvtIfc ifcs) ++ (map cvtARule rs)
 
@@ -1984,7 +1998,7 @@ mkParentUseMap parent_abi =
 
 -- Returns the (pred uses, body uses) for a given rule/method useinfo.
 -- A use is a method Id on a particular instance (instId, methId).
-rUses :: M.Map AId [(AId,AId)] -> UseInfo -> ([(AId,AId)], [(AId,AId)])
+rUses :: IdMap [(AId,AId)] -> UseInfo -> ([(AId,AId)], [(AId,AId)])
 rUses m (UseInfo _ pred_reads body_reads body_writes) =
     let
         body_action_uses = mergeUses $ map (aUses m) body_writes
@@ -1998,7 +2012,7 @@ mergeUses = stableOrdNub . concat
 
 -- Returns the method uses in an action.
 -- A use is a method Id on a particular instance (instId, methId)
-aUses :: M.Map AId [(AId,AId)] -> AAction -> [(AId,AId)]
+aUses :: IdMap [(AId,AId)] -> AAction -> [(AId,AId)]
 aUses m a@(ACall i mi es) =
     [(i, unQualId mi)] ++ mergeUses (map (eDomain m) es)
 aUses m a@(AFCall i _ _ es isAssump) =
@@ -2008,7 +2022,7 @@ aUses m a@(ATaskAction i _ _ _ es _ _ isAssump) =
 
 -- Returns the method uses in an expression.
 -- A use is a method Id on a particular instance (instId, methId)
-eDomain :: M.Map AId [(AId,AId)] -> AExpr -> [(AId,AId)]
+eDomain :: IdMap [(AId,AId)] -> AExpr -> [(AId,AId)]
 eDomain m (APrim _ _ _ es) = mergeUses $ map (eDomain m) es
 eDomain m e@(AMethCall _ i mi es) =
     mergeUses ([(i, unQualId mi)] : map (eDomain m) es)
@@ -2020,10 +2034,10 @@ eDomain m (ANoInlineFunCall _ _ _ es) = mergeUses $ map (eDomain m) es
 eDomain m (AFunCall _ _ _ _ es) = mergeUses $ map (eDomain m) es
 eDomain _ e@(ASPort _ i) = []
 eDomain _ e@(ASParam _ i) = []
-eDomain m (ASDef _ d) = M.findWithDefault err d m
+eDomain m (ASDef _ d) = IdMap.findWithDefault err d m
     where err = internalError $
                 "SimExpand.eDomain: no definition for " ++ ppReadable d ++
-                    ppReadable (M.toList m)
+                    ppReadable (IdMap.toList m)
 eDomain _ (ASInt _ _ _) = []
 eDomain _ (ASReal _ _ _) = []
 eDomain _ (ASStr _ _ _) = []
@@ -2403,10 +2417,10 @@ getArgsAndParams modInfo =
 findGates :: [AAbstractInput] -> [AIFace] -> [ADef]  -> [AExpr]
 findGates is fs ds =
     let
-        in_gate_map = S.fromList [ g | (AAI_Clock _ (Just g)) <- is ]
+        in_gate_map = IdSet.fromList [ g | (AAI_Clock _ (Just g)) <- is ]
 
         findGate e@(AMGate {}) gs                             = (e:gs)
-        findGate e@(ASPort t i) gs | (S.member i in_gate_map) = (e:gs)
+        findGate e@(ASPort t i) gs | (IdSet.member i in_gate_map) = (e:gs)
         findGate e gs                                         = gs
 
         def_gate_uses = findAExprs (exprFold findGate []) ds
