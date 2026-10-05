@@ -9,6 +9,7 @@ module AState(
               ) where
 
 import qualified Data.Map as M
+import qualified IdMap
 import qualified Data.Set as S
 
 import Data.List(transpose, sortBy, partition,
@@ -481,7 +482,7 @@ aState' flags pps schedule_info apkg = do
         --
         -- filter out the redundant def from the new definitions
         -- leave the mux_val_defs since these may not have good names.
-        esubmap = M.fromList $ genAliases (mux_sel_defs)
+        esubmap = IdMap.fromList $ genAliases (mux_sel_defs)
         mux_defs = map (aSubst esubmap)  mux_defsRed
 
         enas = concatMap (mkEnabless portId) ars

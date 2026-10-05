@@ -7,6 +7,7 @@ import Data.List(partition)
 import PPrint
 import IntLit(IntLit(..))
 import qualified Data.Map as M
+import qualified IdMap
 import qualified Data.Set as S
 import Flags(Flags)
 import Position(noPosition)
@@ -85,7 +86,7 @@ aInlineCReg flags pkg@(ASPackage { aspkg_state_instances = vs,
         -- create a map of the CReg output ports to the signals which
         -- now carry their values
         -- (this will be used to replace ASPort uses with ASDef uses)
-        portmap = M.fromList [(i, ASDef t i) | (i, t) <- creg_svars]
+        portmap = IdMap.fromList [(i, ASDef t i) | (i, t) <- creg_svars]
 
         -- function for making the tuple for a CReg
         mkCR :: AVInst -> (AId, [AId], AVInst, [(AId, AType)], [ADef])

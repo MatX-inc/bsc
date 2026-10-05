@@ -7,6 +7,7 @@ import Data.List (partition, union, nub, sort, sortBy, delete)
 import Control.Monad (when, guard, msum {-, mapM_ -})
 import Debug.Trace
 import qualified Data.Map as M
+import qualified IdMap
 import qualified Data.Set as S
 
 import IOUtil(progArgs)
@@ -2167,7 +2168,7 @@ simExpandParams :: ErrorHandle -> APackage -> IO APackage
 simExpandParams errh apkg =
     let
         defs = apkg_local_defs apkg
-        dmap = M.fromList [ (i, aSubst dmap e) | ADef i _ e _ <- defs ]
+        dmap = IdMap.fromList [ (i, aSubst dmap e) | ADef i _ e _ <- defs ]
         port_ids = [ i | AAI_Port (i,_) <- apkg_inputs apkg ]
 
         inlineArg (Param {}, expr) = aSubst dmap expr

@@ -2,6 +2,7 @@ module AConv (aConv, aTypeConv, isLocalAId) where
 
 import Util(itos, headOrErr, initOrErr, lastOrErr, log2, concatMapM, makePairs)
 import qualified Data.Map as M
+import qualified IdMap
 import Control.Monad(when, liftM, forM, zipWithM)
 import Control.Monad.Except(throwError)
 import Control.Monad.State(StateT, runStateT, gets, get, put)
@@ -283,10 +284,12 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
                                Nothing -> name
 
             -- replace refs to CSE'd names with references to the new name
-            subst_map :: M.Map AId AExpr
+            -- rename_map stays a Data.Map until the CSE-naming comparator
+            -- lands (plan e.3); fromMap is the migration boundary
+            subst_map :: IdMap.IdMap AExpr
             subst_map =
                 let mapFn (ty, new_name) = ASDef ty new_name
-                in  M.map mapFn rename_map
+                in  IdMap.fromMap (M.map mapFn rename_map)
 
         --traceM("rename_map = " ++ ppReadable (M.toList rename_map))
         --traceM("subst_map = " ++ ppReadable (M.toList subst_map))

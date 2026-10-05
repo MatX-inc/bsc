@@ -7,6 +7,7 @@ module AExpand (
 
 import Data.List(foldl', group, sort, sortOn, nub, genericLength)
 import qualified Data.Map as M
+import qualified IdMap
 import qualified Data.Set as S
 import PFPrint
 import Position(noPosition)
@@ -181,7 +182,7 @@ aExpDefs errh stable keepFires expnond expcheap expTest sigInfo os ios muxes (ss
         --                    ++ "keep schids" ++ ppReadable keepSchIds
         --       ) $
         -- do the expansion
-        expand edata M.empty sorted_defs []
+        expand edata IdMap.empty sorted_defs []
 
 
 -- Topologically sort defs.
@@ -739,7 +740,7 @@ expand edata edefs (ADef i t e ps : ds) nds =
 
             -- create the new map here
             edefs' = if doExpand then
-                         M.insert i e' edefs
+                         IdMap.insert i e' edefs
                      else
                          edefs
         in
@@ -786,7 +787,7 @@ expandAPackage errh stable apkg = apkgN
             }
           --
           -- do the expansion
-          (_,_, defs, (rules,ifc)) = expand edata M.empty sorted_defs []
+          (_,_, defs, (rules,ifc)) = expand edata IdMap.empty sorted_defs []
           -- rebuild the package
           apkgN = aRemoveUnused stable $ apkg { apkg_local_defs = defs,
                                          apkg_rules = rules,

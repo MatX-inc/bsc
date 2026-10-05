@@ -23,6 +23,7 @@ module LambdaCalcUtil(
 ) where
 
 import qualified Data.Map as M
+import qualified IdMap
 import qualified Data.Set as S
 import Control.Monad(when)
 import Control.Monad.State(State, runState, gets, get, put)
@@ -78,7 +79,7 @@ chkAPackage :: String -> APackage -> Maybe [EMsg]
 chkAPackage dump_name apkg =
     let
         defs = apkg_local_defs apkg
-        dmap = M.fromList [ (i, aSubst dmap e) | ADef i _ e _ <- defs ]
+        dmap = IdMap.fromList [ (i, aSubst dmap e) | ADef i _ e _ <- defs ]
         port_ids = [ i | AAI_Port (i,_) <- apkg_inputs apkg ]
 
         inlineArg (Param {}, expr) = aSubst dmap expr
