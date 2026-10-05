@@ -29,10 +29,20 @@ import Prim
 -- than once can flatten it once and share the result.
 
 bNothing :: KnownPhase a => BExpr a
+{-# SPECIALISE bNothing :: BExpr Elab #-}
+{-# SPECIALISE bNothing :: BExpr PostElab #-}
 bAdd :: KnownPhase a => IExpr a -> BExpr a -> BExpr a
+{-# SPECIALISE bAdd :: IExpr Elab -> BExpr Elab -> BExpr Elab #-}
+{-# SPECIALISE bAdd :: IExpr PostElab -> BExpr PostElab -> BExpr PostElab #-}
 bImplies :: KnownPhase a => BExpr a -> IExpr a -> Bool
+{-# SPECIALISE bImplies :: BExpr Elab -> IExpr Elab -> Bool #-}
+{-# SPECIALISE bImplies :: BExpr PostElab -> IExpr PostElab -> Bool #-}
 bImpliesB :: KnownPhase a => BExpr a -> BExpr a -> Bool
+{-# SPECIALISE bImpliesB :: BExpr Elab -> BExpr Elab -> Bool #-}
+{-# SPECIALISE bImpliesB :: BExpr PostElab -> BExpr PostElab -> Bool #-}
 bTerms :: KnownPhase a => IExpr a -> [ExprKey a]
+{-# SPECIALISE bTerms :: IExpr Elab -> [ExprKey Elab] #-}
+{-# SPECIALISE bTerms :: IExpr PostElab -> [ExprKey PostElab] #-}
 bAddTerms :: [ExprKey a] -> BExpr a -> BExpr a
 bImpliesTerms :: BExpr a -> [ExprKey a] -> Bool
 
@@ -101,14 +111,20 @@ bImpliesB b (A es) = all (bImplies b . unExprKey) es
 bTerms = getAnds . norm
 
 getAnds :: KnownPhase a => IExpr a -> [ExprKey a]
+{-# SPECIALISE getAnds :: IExpr Elab -> [ExprKey Elab] #-}
+{-# SPECIALISE getAnds :: IExpr PostElab -> [ExprKey PostElab] #-}
 getAnds (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = mergeOrdNoDup (getAnds e1) (getAnds e2)
 getAnds e = [ExprKey e]
 
 norm :: KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE norm :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE norm :: IExpr PostElab -> IExpr PostElab #-}
 norm (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) = invert e
 norm e = e
 
 invert :: KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE invert :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE invert :: IExpr PostElab -> IExpr PostElab #-}
 invert (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = ieOr  (invert e1) (invert e2)
 invert (IAps (ICon _ (ICPrim _ PrimBOr )) _ [e1, e2]) = ieAnd (invert e1) (invert e2)
 invert (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]     ) = e
