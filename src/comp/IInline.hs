@@ -1,8 +1,8 @@
 module IInline(iInline, iSortDs) where
 import Data.List(group, sort, nub)
 import Util
-import qualified Data.Set as S
-import qualified Data.Map as M
+import qualified IdSet
+import qualified IdMap
 import SCC(tsort)
 import PPrint
 import ErrorUtil
@@ -23,8 +23,8 @@ iInline inlSimp = iInline1 . iInlineS inlSimp -- . iSortDs
 iSortDs :: IModule a -> IModule a
 iSortDs imod@(IModule { imod_local_defs = ds }) =
     let g = [(i, fdVars e) | IDef i _ e _ <- ds ]
-        m = M.fromList [(i, d) | d@(IDef i _ _ _) <- ds]
-        get i = case M.lookup i m of
+        m = IdMap.fromList [(i, d) | d@(IDef i _ _ _) <- ds]
+        get i = case IdMap.lookup i m of
                 Nothing -> internalError ("iSortDs: lookup: " ++ ppReadable i)
                 Just d -> d
         ds' = case tsort g of
@@ -39,9 +39,9 @@ iInlineS False m = m
 iInlineS True imod@(IModule { imod_local_defs = ds,
                               imod_rules      = rs,
                               imod_interface  = ifc}) =
-    let smap = M.fromList [ (i, iSubst smap dmap e) | IDef i _ e _ <- ds, not (isKeepId i), simple e ]
+    let smap = IdMap.fromList [ (i, iSubst smap dmap e) | IDef i _ e _ <- ds, not (isKeepId i), simple e ]
         ds' = iDefsMap (iSubst smap dmap) ds
-        dmap = M.fromList [ (i, e) | IDef i t e _ <- ds' ]
+        dmap = IdMap.fromList [ (i, e) | IDef i t e _ <- ds' ]
         ifc' = map (iSubstIfc smap dmap) ifc
         rs' = irulesMap (iSubst smap dmap) rs
         state_vars' = [ (name, sv { isv_iargs = es' })
@@ -104,34 +104,34 @@ iInlineUseLimit use_limit
              ++ [ i | (IDef i _ _ _) <- ds, keepEvenUnused i]
         keepEvenUnused :: Id -> Bool
         keepEvenUnused i = hasIdProp i IdP_keepEvenUnused
-        defids = S.fromList [ i | IDef i _ _ _ <- ds ]
-        dm = M.fromList ([(i, e) | IDef i _ e _ <- ds ] ++
+        defids = IdSet.fromList [ i | IDef i _ _ _ <- ds ]
+        dm = IdMap.fromList ([(i, e) | IDef i _ e _ <- ds ] ++
                          [ (i, e) | (IEFace i _ (Just (e,_)) _ _ _) <- ifc ])
-        get i = case M.lookup i dm of (Just e) -> e; _-> internalError ("iInlineUseLimit " ++ ppString use_limit ++ ": " ++ ppReadable i)
+        get i = case IdMap.lookup i dm of (Just e) -> e; _-> internalError ("iInlineUseLimit " ++ ppString use_limit ++ ": " ++ ppReadable i)
         step allIds done [] = allIds
         step allIds done (i:pend) =
-                if i `S.member` done then
+                if i `IdSet.member` done then
                     step allIds done pend
                 else
                     let is = iValVars (get i)
                     in  -- trace ("add " ++ ppReadable (i, is)) $
-                        step (is ++ allIds) (S.insert i done) (nub is ++ pend)
-        dis = step is S.empty (remOrdDup (sort is))
-        ics = [ (i, length is) | is@(i:_) <- group (sort dis), i `S.member` defids ]
-        onemap = M.fromList [ (i, iSubst onemap dmap (get i))
+                        step (is ++ allIds) (IdSet.insert i done) (nub is ++ pend)
+        dis = step is IdSet.empty (remOrdDup (sort is))
+        ics = [ (i, length is) | is@(i:_) <- group (sort dis), i `IdSet.member` defids ]
+        onemap = IdMap.fromList [ (i, iSubst onemap dmap (get i))
                              | (i, n_uses) <- ics, not (isKeepId i),
                                n_uses <= use_limit ]
         ds' = iDefsMap (iSubst onemap dmap) ds
         ifc' = map (iSubstIfc onemap dmap) ifc
         rs' = irulesMap (iSubst onemap dmap) rs
-        uses = M.fromList ics
-        getc' i = M.findWithDefault 0 i uses
+        uses = IdMap.fromList ics
+        getc' i = IdMap.findWithDefault 0 i uses
         getc i = {- trace ("getc: " ++ ppReadable (i, getc' i)) $ -} getc' i
         ds'' = filter (\ (IDef i _ _ _) ->
                         let uses = getc i in
                         (keepEvenUnused i || uses > 0 && isKeepId i)
                         || uses > use_limit) ds'
-        dmap = M.fromList [(i, e) | IDef i t e _ <- ds']
+        dmap = IdMap.fromList [(i, e) | IDef i t e _ <- ds']
         state_vars' = [ (name, sv { isv_iargs = es' })
                       | (name, sv@(IStateVar { isv_iargs = es }))
                             <- imod_state_insts imod,
