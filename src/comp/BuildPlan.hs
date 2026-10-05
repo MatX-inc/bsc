@@ -16,9 +16,26 @@
 -- 'declareInputs' attaches an inspectable input contract to opaque work whose
 -- actual reads happen inside that work, without moving those reads earlier
 -- during execution.
+--
+-- Interpreter invariants:
+--
+-- * 'observe' reads in both interpretations. IO passed to 'perform', 'produce',
+--   'performResult', and 'withResult' runs only during execution. Callers must
+--   classify their IO honestly; the types do not enforce read-only actions.
+-- * 'declareInputs', file requirements, and report facts are discovery-only.
+--   In execution 'requireFiles' returns [], never a runtime lookup result.
+-- * Bind distributes the continuation into every 'select' alternative.
+--   'independently', 'independentlyStateT', 'runStatePlan', 'planResult',
+--   'traverseState', and 'declareInputs' bound that duplication to their scope.
+-- * Discovery state belongs to each branch. Independent state scopes restore
+--   their actual incoming planning state; final execution aggregates stay
+--   opaque. Neither skipped production nor failed reads supply invented values.
+-- * Cached reads may share immutable values, but each use still visits its
+--   requirements with its own conditions. A path-only visited set would lose
+--   that provenance. 'abort' records an incomplete boundary and ends its branch.
 module BuildPlan
-    ( BuildPlan, observe, perform, produce, choose, select, noAlternative, independently
-    , breadthFirst, declareInputs
+    ( BuildPlan, observe, perform, produce, abort, choose, select, noAlternative, independently
+    , declareInputs
     , BuildResult, performResult, planResult, withResult, requireResult, executeResultPlan
     , TraversalOrder(..), traverseState, selectStateT, independentlyStateT
     , runStatePlan, withCachedRead
@@ -62,7 +79,7 @@ data BuildPlan a where
     Return :: a -> BuildPlan a
     Observe :: String -> IO b -> (b -> BuildPlan a) -> BuildPlan a
     Perform :: IO () -> BuildPlan a -> BuildPlan a
-    Produce :: String -> IO b -> (b -> BuildPlan a) -> BuildPlan a
+    Abort :: String -> E.SomeException -> BuildPlan a
     Select :: String -> Int -> [BuildPlan a] -> BuildPlan a
     NoAlternative :: String -> BuildPlan a
     Independent :: [BuildPlan ()] -> BuildPlan a -> BuildPlan a
@@ -77,6 +94,8 @@ data BuildPlan a where
     WithCachedRead :: Ord k => (k -> String) -> (k -> IO v) ->
         ((k -> BuildPlan v) -> BuildPlan a) -> BuildPlan a
     DeclareInputs :: BuildPlan () -> BuildPlan a -> BuildPlan a
+    RequireFiles :: String -> String -> String -> [(String, FilePath)] -> [String] ->
+        ([DependencyCandidate] -> BuildPlan a) -> BuildPlan a
     RequirementFact :: DependencyRequirement -> BuildPlan a -> BuildPlan a
     OutputFacts :: [FilePath] -> BuildPlan a -> BuildPlan a
     NoteFact :: String -> BuildPlan a -> BuildPlan a
@@ -94,8 +113,7 @@ instance Monad BuildPlan where
     Observe label action next >>= after =
         Observe label action (\value -> next value >>= after)
     Perform action next >>= after = Perform action (next >>= after)
-    Produce label action next >>= after =
-        Produce label action (\value -> next value >>= after)
+    Abort reason exception >>= _ = Abort reason exception
     -- Distributing bind is essential: discovery continues separately with
     -- each real branch result, including branch-local StateT state.
     Select label selected branches >>= after =
@@ -115,6 +133,8 @@ instance Monad BuildPlan where
     WithCachedRead label action body >>= after =
         WithCachedRead label action (\readInput -> body readInput >>= after)
     DeclareInputs inputs next >>= after = DeclareInputs inputs (next >>= after)
+    RequireFiles owner role policy paths notes next >>= after =
+        RequireFiles owner role policy paths notes (\candidates -> next candidates >>= after)
     RequirementFact fact next >>= after = RequirementFact fact (next >>= after)
     OutputFacts facts next >>= after = OutputFacts facts (next >>= after)
     NoteFact fact next >>= after = NoteFact fact (next >>= after)
@@ -128,13 +148,21 @@ observe label action = Observe label action Return
 
 -- | Perform a side effect whose result carries no information. Discovery
 -- suppresses the action without even evaluating it, and continues with ().
+-- Incidental failures retain their execution behavior; for deliberate failure
+-- control flow, use 'abort' so discovery also ends that branch.
 perform :: IO () -> BuildPlan ()
 perform action = Perform action (Return ())
 
 -- | Perform expensive or effectful production of a value. Discovery cannot
 -- continue with that value, so records an open boundary and stops this branch.
 produce :: String -> IO a -> BuildPlan a
-produce label action = Produce label action Return
+produce label action = performResult (pure action) >>= requireResult label
+
+-- | Fail deliberately with an exception during execution. Discovery records
+-- the reason and ends this branch without forcing the exception. Enclose an
+-- abortable action in 'independently' when later work is independent of it.
+abort :: E.Exception e => String -> e -> BuildPlan a
+abort reason exception = Abort reason (E.toException exception)
 
 -- | Execute an action carried by an execution result. Discovery never forces
 -- the action or its input handle, and returns an unavailable result. Dependencies
@@ -246,22 +274,6 @@ withCachedRead = WithCachedRead
 independently :: [BuildPlan ()] -> BuildPlan ()
 independently branches = Independent branches (Return ())
 
--- | Visit work in breadth-first order during execution. Each step returns the
--- children to append to the queue; execution remains sequential and fail-fast.
--- The caller supplies any cycle detection or already-visited policy.
---
--- Discovery follows each alternative's actual children independently, keeping
--- their branch conditions rather than combining alternative queues. A blocked
--- step does not hide its siblings or the continuation after the traversal.
-breadthFirst :: (s -> BuildPlan [s]) -> [s] -> BuildPlan ()
-breadthFirst step seeds = do
-    _ <- traverseState BreadthFirst visit () seeds
-    return ()
-  where
-    visit () seed = do
-        children <- step seed
-        return (Right ((), children))
-
 -- | Traverse a dynamically discovered graph with explicit state. Execution
 -- threads each successful step's state into the next queued step and stops at
 -- the first error. The selected queue order preserves the caller's runtime
@@ -290,17 +302,14 @@ traverseState order step initial seeds =
 declareInputs :: BuildPlan () -> BuildPlan ()
 declareInputs inputs = DeclareInputs inputs (Return ())
 
+-- | Probe and report input candidates only during discovery. Execution leaves
+-- all requirement metadata unevaluated and supplies [] to the continuation.
+-- Candidate metadata may describe additional discovery alternatives, but the
+-- runtime lookup and its selected branch must not depend on this result.
 requireFiles :: String -> String -> String -> [(String, FilePath)] -> [String]
              -> BuildPlan [DependencyCandidate]
-requireFiles owner role policy paths notes = do
-    candidates <- observe (owner ++ ": " ++ role) $ mapM candidate paths
-    reportRequirement (Requirement owner role policy candidates notes)
-    return candidates
-  where
-    candidate (kind, path)
-      | kind `elem` ["directory-tree", "include-search-directory"] =
-          directoryCandidate kind path
-      | otherwise = fileCandidate kind path
+requireFiles owner role policy paths notes =
+    RequireFiles owner role policy paths notes Return
 
 reportRequirement :: DependencyRequirement -> BuildPlan ()
 reportRequirement fact = RequirementFact fact (Return ())
@@ -318,7 +327,7 @@ executePlan :: BuildPlan a -> IO a
 executePlan (Return value) = return value
 executePlan (Observe _ action next) = action >>= executePlan . next
 executePlan (Perform action next) = action >> executePlan next
-executePlan (Produce _ action next) = action >>= executePlan . next
+executePlan (Abort _ exception) = E.throwIO exception
 executePlan (Select label selected branches)
   | selected < 0 = invalidSelection label selected
   | otherwise = case drop selected branches of
@@ -354,6 +363,7 @@ executePlan (WithCachedRead label action body) = do
     readInput <- newCachedReader label action
     executePlan (body readInput)
 executePlan (DeclareInputs _ next) = executePlan next
+executePlan (RequireFiles _ _ _ _ _ next) = executePlan (next [])
 executePlan (RequirementFact _ next) = executePlan next
 executePlan (OutputFacts _ next) = executePlan next
 executePlan (NoteFact _ next) = executePlan next
@@ -451,8 +461,9 @@ discoverDependencies mode plan = do
         walk conditions (Observe label action next) =
             checked label (action >>= E.evaluate) (visit conditions . next)
         walk conditions (Perform _ next) = visit conditions next
-        walk _ (Produce label _ _) =
-            addIncomplete ("Dependency discovery requires skipped production: " ++ label)
+        walk _ (Abort reason _) =
+            checked "Cannot inspect build-plan abort" (forceText reason) $ \_ ->
+                addIncomplete reason
         walk conditions (Select label _ branches) =
             checked "Cannot inspect build-plan choice"
                 (forceText label >> E.evaluate (length branches)) $ \count -> do
@@ -503,6 +514,14 @@ discoverDependencies mode plan = do
         walk conditions (DeclareInputs inputs next) = do
             visit conditions inputs
             visit conditions next
+        walk conditions (RequireFiles owner role policy paths notes next) =
+            let candidate (kind, path)
+                  | kind `elem` ["directory-tree", "include-search-directory"] =
+                      directoryCandidate kind path
+                  | otherwise = fileCandidate kind path
+            in checked (owner ++ ": " ++ role) (mapM candidate paths) $ \candidates ->
+                visit conditions (reportRequirement
+                    (Requirement owner role policy candidates notes) >> next candidates)
         walk conditions (RequirementFact fact next) =
             -- A lazy binary reader can leave failures in names or candidates.
             -- Force report metadata while still inside this branch's exception

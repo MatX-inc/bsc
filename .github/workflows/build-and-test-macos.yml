@@ -89,6 +89,7 @@ jobs:
           export BSC_BUILD_PKGINFO=1
           # Include interpreter regressions in the test installation.
           export BSC_BUILD_TESTS=1
+          export BSC_BUILD_EXTRA=1
 
           make -j ${CORES} GHCJOBS=2 GHCRTSFLAGS='+RTS -M4500M -A128m -RTS' install-src
           tar czf inst.tar.gz inst

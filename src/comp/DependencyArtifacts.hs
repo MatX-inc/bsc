@@ -39,6 +39,9 @@ import VModInfo (vName, getVNameString)
 data ArtifactActions checked generated compiled linked = ArtifactActions
     { checkArtifactInputs :: IO checked
     , readArtifactInputs :: checked -> [(FilePath, ABin)] -> IO checked
+    -- Discovery never enters this callback: its checked and hierarchy inputs
+    -- are execution results. Keep it as a plan so Bluesim reuse composes with
+    -- generation; planModule declares that reuse contract separately below.
     , generateArtifacts :: checked -> [(FilePath, ABin)] ->
                            Either EMsgs ABIHierarchy -> BuildPlan generated
     , compileArtifacts :: generated -> IO compiled
@@ -100,22 +103,22 @@ artifactPlan errh flags backend' top baFiles vFiles cFiles actions = do
     -- These stage contracts depend only on invocation inputs. Emit them in
     -- independent scopes before metadata reads, so a rejected .ba cannot hide
     -- an unrelated toolchain, explicit input, or known output.
-    independently [requirements | (_, requirements) <- plannedStages]
+    declareInputs $ independently [requirements | (_, requirements) <- plannedStages]
     decoded <- forM (nub baFiles) $ \path -> do
         result <- observe ("read elaboration " ++ path) $
             tryArtifactRead (readAndCheckABin errh (Just backend') path)
         case result of
             Right abi -> return [abi]
             Left exception -> do
-                incomplete ("Cannot discover elaboration dependencies from " ++ path ++
-                            ": " ++ E.displayException exception)
-                perform (E.throwIO exception)
+                independently [abort
+                    ("Cannot discover elaboration dependencies from " ++ path ++
+                     ": " ++ E.displayException exception) exception]
                 return []
     let explicit = concat decoded
     ready <- performResult (readArtifactInputs actions <$> checked <*> pure explicit)
     -- Explicit foreign records also participate in Verilog's fallback when a
     -- complete design hierarchy cannot be loaded.
-    forM_ explicit $ \(_, abi) -> case abi of
+    declareInputs $ forM_ explicit $ \(_, abi) -> case abi of
         ABinForeignFunc f _ -> planFunction (getIdString (ff_name (abffi_foreign_func f)))
         _ -> return ()
     hierarchy <- getABIHierarchy errh (verbose flags) (ifcPath flags) (Just backend')
@@ -164,7 +167,7 @@ artifactPlan errh flags backend' top baFiles vFiles cFiles actions = do
             [("verilog", path </> (name ++ ".v")) | path <- vPath flags]
             ["Conventional module filename candidates; explicit Verilog files or other files in the search trees may define this module. These alternatives require simulator resolution and do not include .ba."]
         return ()
-    planArtifact path name abi = case abi of
+    planArtifact path name abi = declareInputs $ case abi of
         ABinMod m version -> planModule path name version (abmi_apkg m)
         ABinModSchedErr m version -> do
             note ("Elaboration metadata for " ++ name ++ " records a scheduling error; it is not a usable replacement for a successful elaboration artifact.")

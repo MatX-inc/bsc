@@ -139,8 +139,10 @@ naming a source does not allow a planner to substitute an arbitrary object.
 
 `CompilerInvocation` constructs one `BuildPlan` for a source, Bluesim, or Verilog
 invocation. The driver then chooses `executePlan` or `discoverDependencies`
-from the command-line output mode. Source and binary import resolution,
-elaboration hierarchy loading, and artifact stage selection are shared.
+from the command-line output mode. Source import resolution, elaboration
+hierarchy loading, and artifact stage selection are shared. Binary compilation
+and dependency inspection share the import traversal; compilation loads and
+validates full objects in IO, while inspection reads their import metadata.
 
 `SourceCompile` owns package compilation and `GenModule` owns elaboration,
 scheduling, and module output. `SimLink` and `VerilogLink` own their link plans;
@@ -157,6 +159,14 @@ If it reaches `produce`, it records an incomplete boundary and suspends that
 branch. Independent branches remain inspectable. These API boundaries do not
 prove arbitrary IO actions pure or read-only: callers must classify actions
 correctly and describe their input requirements.
+
+`requireFiles` probes candidate files only during discovery and returns an
+empty candidate list during execution. Runtime lookup therefore supplies its
+own actual result as branch zero; probed candidates add discovery alternatives
+without controlling execution. Other report facts and `declareInputs` are also
+discovery-only. `abort` throws during execution and records an incomplete
+boundary while ending its branch during discovery; independent sibling scopes
+can still be inspected.
 
 `performResult` carries the result of an execution-only action in `BuildResult`.
 Discovery skips the action and returns an unavailable handle, so subsequent
@@ -206,6 +216,15 @@ or manage references. Caching decoded object metadata avoids repeated decoding
 of shared imports, while each use still records its own dependency edge and
 conditions. Returned error values can be cached just like successful values.
 
+Hierarchy loading similarly caches repeated elaboration lookups with the same
+ordered search path and module name. It still records the conditions of each
+use. Traversal bookkeeping such as whether an ancestor has been visited is not
+reported as an alternative. Discovery may still walk a shared subgraph once
+per import path, and source parsing is repeated on those paths: a source parse
+also describes includes and preprocessing effects, so caching its AST alone
+would not replace that plan. Discovery cost is therefore not bounded by the
+number of unique files alone.
+
 The contract remains relative to observed source and metadata contents. It
 does not enumerate every possible future source file, evaluate arbitrary
 Bluespec code to find computed filenames, or interpret arbitrary options
@@ -219,11 +238,13 @@ decoder also interns identifiers, so speculative decoding during normal
 execution would change identifier allocation and output ordering. The input
 contract and actual import loading share their traversal and resolution rules.
 
-Parsing is not followed by blanket `rnf` forcing. Forcing an entire syntax tree
-can change when identifiers are interned and therefore alter normal compiler
-ordering. Where a read or decoder must expose errors before returning, force
-only the required data at that IO boundary. Evaluation forcing is not a way to
-schedule hidden effects; effect order belongs in the explicit plan.
+Execution retains the existing syntax-tree forcing performed by `dump` after
+parsing. Discovery skips that execution step and does not add a blanket `rnf`
+of its own. Forcing an entire syntax tree can change when identifiers are
+interned and therefore alter normal compiler ordering. Where a read or decoder
+must expose errors before returning, force only the required data at that IO
+boundary. Evaluation forcing is not a way to schedule hidden effects; effect
+order belongs in the explicit plan.
 
 ## Limits and use by a build system
 
@@ -233,6 +254,10 @@ preprocessing, C/C++ compilation, and simulators have their own include paths,
 implicit libraries, environment, and toolchain dependencies. Those boundaries
 must be covered by another mechanism or by an explicitly broader fixture or
 toolchain snapshot. Known inputs are retained when discovery is incomplete.
+
+A source invocation that selects a module for elaboration is marked
+incomplete: parsing alone cannot enumerate files read by elaboration or all
+dependencies of later generation stages.
 
 An exit status of zero means a report was written. Always inspect `complete`
 and `incomplete` before treating it as a complete action input declaration.
@@ -252,13 +277,13 @@ Build the compiler and interpreter regression executable from the repository
 root, including the auxiliary tools used to check generated artifacts:
 
 ```sh
-BSC_BUILD_TESTS=1 make -j32 GHCJOBS=16 install-src
+BSC_BUILD_TESTS=1 BSC_BUILD_EXTRA=1 make -j32 GHCJOBS=16 install-src
 ```
 
-The dependency suite runs the interpreter tests and end-to-end compiler
-queries. The latter verify that queries preserve fixture contents and
-timestamps and do not invoke external tools. They also check that source and
-object alternatives with different transitive imports remain distinct.
+The dependency suite runs the interpreter tests. End-to-end queries run with
+the existing Mips source, Bluesim, and Verilog tests; they verify expected
+inputs, outputs, completeness, and preservation of fixture contents and
+timestamps. Interpreter tests check the separation of alternative branches.
 
 Run the complete suite, including long and SystemC tests, from the root:
 

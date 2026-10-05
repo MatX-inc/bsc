@@ -48,6 +48,12 @@ type Stateful s a = S.StateT s (X.ExceptT String BuildPlan) a
 liftPlan :: BuildPlan a -> Stateful s a
 liftPlan = S.lift . S.lift
 
+childrenStep :: (n -> BuildPlan [n]) -> () -> n ->
+                BuildPlan (Either String ((), [n]))
+childrenStep step () name = do
+    children <- step name
+    return (Right ((), children))
+
 owners :: DependencyReport -> [String]
 owners = sort . map requirementOwner . dependencyRequirements
 
@@ -145,6 +151,26 @@ tests =
         assert (conditionOccurrence (head (conditionsFor "c")) /=
                 conditionOccurrence (head (conditionsFor "d")))
             "repeated choice labels were conflated")
+    , ("a following choice has a distinct occurrence in each earlier branch", do
+        report <- discoverDependencies "test" $ do
+            earlier <- select "earlier" 0 [return "left", return "right"]
+            later <- select "later" 0 [return "a", return "b"]
+            record (earlier ++ later)
+        expectOwners ["lefta", "leftb", "righta", "rightb"] report
+        let guards name = [conditions | (conditions, requirement) <-
+                dependencyConditionalRequirements report,
+                requirementOwner requirement == name]
+        case map guards ["lefta", "leftb", "righta", "rightb"] of
+            [[[firstLeft, laterLeftA]], [[_, laterLeftB]],
+             [[firstRight, laterRightA]], [[_, laterRightB]]] -> do
+                assert (conditionOccurrence firstLeft == conditionOccurrence firstRight &&
+                        conditionBranch firstLeft == 0 && conditionBranch firstRight == 1)
+                    "first choice lost its shared occurrence"
+                assert (conditionOccurrence laterLeftA == conditionOccurrence laterLeftB &&
+                        conditionOccurrence laterRightA == conditionOccurrence laterRightB &&
+                        conditionOccurrence laterLeftA /= conditionOccurrence laterRightA)
+                    "following choices shared an occurrence across earlier branches"
+            _ -> assert False "following choices lost their two enclosing conditions")
     , ("unconditional occurrences survive conditional duplicate requirements", do
         report <- discoverDependencies "test" $ do
             record "shared"
@@ -209,6 +235,32 @@ tests =
                 ]
             record "after-group"
         expectOwners ["later-sibling", "after-group"] report)
+    , ("abort throws during execution and stops only its discovery branch", do
+        visits <- newIORef ([] :: [String])
+        let plan = do
+                independently
+                    [ do record "before-abort"
+                         abort "unavailable input" (userError "original failure")
+                         perform (modifyIORef' visits (++ ["after-abort"]))
+                         record "after-abort"
+                    , perform (modifyIORef' visits (++ ["sibling"])) >> record "sibling"
+                    ]
+                record "after-group"
+        result <- E.try (executePlan plan) :: IO (Either E.IOException ())
+        seen <- readIORef visits
+        case result of
+            Left exception -> assert ("original failure" `isInfixOf` show exception && null seen)
+                "abort changed its exception or executed later work"
+            Right _ -> assert False "execution continued past abort"
+        report <- discoverDependencies "test" plan
+        expectOwners ["before-abort", "sibling", "after-group"] report
+        assert (dependencyIncomplete report == ["unavailable input"])
+            "abort lost its discovery boundary")
+    , ("discovery does not force an abort exception", do
+        report <- discoverDependencies "test" $
+            abort "known failure" (error "exception forced" :: E.IOException)
+        assert (dependencyIncomplete report == ["known failure"])
+            "discovery forced the execution exception")
     , ("breadth-first execution preserves queue order and chosen children", do
         visits <- newIORef ([] :: [String])
         let append name = perform (modifyIORef' visits (++ [name]))
@@ -223,7 +275,7 @@ tests =
                     "c" -> return ["c-child"]
                     _ -> return []
         value <- executePlan $ do
-            breadthFirst step ["root-a", "root-b"]
+            _ <- traverseState BreadthFirst (childrenStep step) () ["root-a", "root-b"]
             append "after-traversal"
             return (42 :: Int)
         seen <- readIORef visits
@@ -240,7 +292,7 @@ tests =
                     "right" -> return ["right-child"]
                     _ -> return []
         report <- discoverDependencies "test" $ do
-            breadthFirst step ["root", "independent-root"]
+            _ <- traverseState BreadthFirst (childrenStep step) () ["root", "independent-root"]
             record "after-traversal"
         expectOwners ["root", "left", "right", "left-child", "right-child",
                       "independent-root", "after-traversal"] report
@@ -270,7 +322,7 @@ tests =
                         (error "child production forced" :: IO [String])
                     _ -> return []
         report <- discoverDependencies "test" $ do
-            breadthFirst step ["root", "later-root"]
+            _ <- traverseState BreadthFirst (childrenStep step) () ["root", "later-root"]
             record "after-traversal"
         expectOwners ["root", "blocked", "later-child", "later-root",
                       "after-traversal"] report
@@ -285,7 +337,7 @@ tests =
                     then observe "failed step" (ioError (userError "step failed"))
                     else return ["child"]
         result <- E.try (executePlan $ do
-            breadthFirst step ["root", "bad", "later-root"]
+            _ <- traverseState BreadthFirst (childrenStep step) () ["root", "bad", "later-root"]
             perform (modifyIORef' visits (++ ["after-traversal"])))
             :: IO (Either IOError ())
         seen <- readIORef visits
@@ -365,18 +417,21 @@ tests =
     , ("lazy observation labels do not poison the recovered report", do
         forM_ ["read " ++ error "bad label tail",
                "read " ++ [error "bad label character"]] $ \label -> do
-            report <- discoverDependencies "test" $ independently
-                [ do record "before-label"
-                     -- An include lookup can fail while evaluating the same
-                     -- filename thunk carried by its observation label.
-                     observe label (E.evaluate (foldr seq () label))
-                     record "after-label"
-                , record "safe-sibling"
-                ]
-            expectOwners ["before-label", "safe-sibling"] report
-            expectWritableIncomplete report
-            assert (hasIncomplete "Cannot inspect build-plan label" report)
-                "missing stable label failure boundary")
+            let reads =
+                    -- An include lookup can fail while evaluating the same
+                    -- filename thunk carried by its observation label.
+                    [ observe label (E.evaluate (foldr seq () label))
+                    , requireFiles label "input" "required" [] [] >> return ()
+                    , requireFiles "owner" label "required" [] [] >> return ()
+                    ]
+            forM_ reads $ \readInput -> do
+                report <- discoverDependencies "test" $ independently
+                    [record "before-label" >> readInput >> record "after-label"
+                    ,record "safe-sibling"]
+                expectOwners ["before-label", "safe-sibling"] report
+                expectWritableIncomplete report
+                assert (hasIncomplete "Cannot inspect build-plan label" report)
+                    "missing stable label failure boundary")
     , ("lazy characters in report facts are caught before serialization", do
         let badText = "prefix " ++ [error "bad report character"]
             cases =
@@ -384,6 +439,9 @@ tests =
                 , ("outputs", outputs [badText] >> record "after-output")
                 , ("note", note badText >> record "after-note")
                 , ("boundary", incomplete badText >> record "after-boundary")
+                , ("requirement", requireFiles "owner" "input" badText [] [] >> record "after-policy")
+                , ("requirement", requireFiles "owner" "input" "required" [] [badText] >> record "after-notes")
+                , ("abort", abort badText (error "exception forced" :: E.IOException))
                 ]
         forM_ cases $ \(name, plan) -> do
             report <- discoverDependencies "test" $ independently
@@ -448,20 +506,35 @@ tests =
             Left TestCancellation -> return ()
             Right _ -> assert False "discovery swallowed a custom cancellation")
     , ("discovery propagates cancellation while evaluating labels", do
-        result <- E.try (discoverDependencies "test"
-            (observe (E.throw E.ThreadKilled) (return ()) :: BuildPlan ()))
-            :: IO (Either E.AsyncException DependencyReport)
-        case result of
-            Left E.ThreadKilled -> return ()
-            _ -> assert False "label recovery swallowed ThreadKilled")
+        let plans =
+                [ observe (E.throw E.ThreadKilled) (return ())
+                , requireFiles (E.throw E.ThreadKilled) "input" "required" [] [] >> return ()
+                , abort (E.throw E.ThreadKilled) (userError "failure")
+                ]
+        forM_ plans $ \plan -> do
+            result <- E.try (discoverDependencies "test" plan)
+                :: IO (Either E.AsyncException DependencyReport)
+            case result of
+                Left E.ThreadKilled -> return ()
+                _ -> assert False "label recovery swallowed ThreadKilled")
     , ("discovery propagates cancellation while evaluating diagnostics", do
-        result <- E.try (discoverDependencies "test"
-            (observe "cancelled diagnostic"
-                (E.throwIO (TestDiagnostic (E.throw TestCancellation))) :: BuildPlan ()))
-            :: IO (Either TestCancellation DependencyReport)
-        case result of
-            Left TestCancellation -> return ()
-            Right _ -> assert False "diagnostic recovery swallowed custom cancellation")
+        let plans =
+                [ observe "cancelled diagnostic"
+                    (E.throwIO (TestDiagnostic (E.throw TestCancellation)))
+                , requireFiles "owner" "input" "required" [] [E.throw TestCancellation] >> return ()
+                , abort (E.throw TestCancellation) (userError "failure")
+                ]
+        forM_ plans $ \plan -> do
+            result <- E.try (discoverDependencies "test" plan)
+                :: IO (Either TestCancellation DependencyReport)
+            case result of
+                Left TestCancellation -> return ()
+                Right _ -> assert False "diagnostic recovery swallowed custom cancellation")
+    , ("execution skips all file requirement metadata and returns no candidates", do
+        candidates <- executePlan $ requireFiles
+            (error "owner forced") (error "role forced") (error "policy forced")
+            (error "paths forced") (error "notes forced")
+        assert (null candidates) "execution probed requirement candidates")
     , ("file requirements retain present absent and directory candidates", do
         directory <- getTemporaryDirectory
         E.bracket
@@ -656,6 +729,19 @@ tests =
                 length (nub (map (conditionOccurrence . head) childGuards)) == 12 &&
                 parentGuards == [[]])
             "sibling choices multiplied or escaped their independent scope")
+    , ("discovery restores the actual incoming state after independent scopes", do
+        let action :: Stateful Int ()
+            action = do
+                S.put 17
+                independentlyStateT [S.put 3, S.put 5]
+                -- Check the scope contract itself, not a runtime aggregate.
+                restored <- S.get
+                liftPlan (record ("restored:" ++ show restored))
+        actual <- executeResultPlan (runStatePlan action 0)
+        assert (actual == Right ((), 5)) "execution discarded accumulated state"
+        report <- discoverDependencies "test" (runStatePlan action 0)
+        expectOwners ["restored:17"] report
+        assert (null (dependencyIncomplete report)) "scope restoration was incomplete")
     , ("state scopes fail fast in execution and retain discovery siblings", do
         visits <- newIORef ([] :: [String])
         let recordVisit name = liftPlan $ do
@@ -752,6 +838,25 @@ tests =
         let conditions = map fst (dependencyConditionalRequirements report)
         assert (count == 1 && map (conditionBranch . head) conditions == [0, 1])
             "cache lost provenance or repeated decoding")
+    , ("cached Left values replay facts under each branch condition", do
+        reads <- newIORef (0 :: Int)
+        let load key = do
+                modifyIORef' reads (+ 1)
+                return (Left ("missing:" ++ key) :: Either String String)
+            use readInput = do
+                result <- readInput "shared"
+                case result of
+                    Left reason -> record reason
+                    Right _ -> error "cached Left changed to Right"
+        report <- discoverDependencies "test" $ withCachedRead id load $ \readInput ->
+            select "cached failure alternatives" 0 [use readInput, use readInput]
+        count <- readIORef reads
+        expectOwners ["missing:shared"] report
+        let conditions = map fst (dependencyConditionalRequirements report)
+        assert (count == 1 && map (conditionBranch . head) conditions == [0, 1] &&
+                length (nub (map (conditionOccurrence . head) conditions)) == 1 &&
+                null (dependencyIncomplete report))
+            "cached failure was reread, treated as thrown, or lost branch provenance")
     , ("cached reads retry thrown failures rather than caching them", do
         reads <- newIORef (0 :: Int)
         let load name = do

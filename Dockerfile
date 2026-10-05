@@ -2,7 +2,6 @@ FROM ubuntu:18.04 as build
 ADD .github/workflows/install_dependencies_ubuntu.sh /build/
 RUN DEBIAN_FRONTEND=noninteractive \
     /build/install_dependencies_ubuntu.sh
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y libghc-aeson-dev
 ADD . /build/
 RUN make -C /build -j2 GHCJOBS=2 GHCRTSFLAGS='+RTS -M5G -A128m -RTS'
 

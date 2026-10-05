@@ -9,11 +9,9 @@ module BinUtil (
 import Control.Monad(when, foldM)
 import qualified Data.ByteString as BS
 import Control.Exception(evaluate)
-import Data.List(elemIndex)
 import qualified Data.Set as Set
 import System.Directory(makeAbsolute)
 import System.FilePath(normalise)
-import Data.Maybe(fromMaybe)
 import BuildPlan
 import DependencyReport(DependencyCandidate(..), tryDependency)
 import qualified Data.Map as M
@@ -34,7 +32,7 @@ import SCC
 import FileNameUtil(binSuffix)
 import FileIOUtil(readBinFilePath)
 import GenBin(readBinFile, decodeBinFile)
-import Util(fromJustOrErr,
+import Util(fromJustOrErr, fromMaybeM,
             map_insertManyWith, map_insertManyWithKeyM)
 
 
@@ -105,16 +103,7 @@ readImports errh flags binmap0 hashmap0
 readBin :: ErrorHandle -> Flags -> (Maybe String) ->
            BinMap a -> HashMap -> Id ->
            IO (BinMap a, HashMap, BinFile a, [Id])
-readBin errh flags maybePkgName binmap0 hashmap0 p0 =
-    executeResultPlan $ readBinPlan errh flags maybePkgName
-      (maybe "" id maybePkgName) binmap0 hashmap0 p0
-
--- The binary closure is the same plan whether requested by a compilation or
--- by a source/object alternative. Each import choice is retained explicitly.
-readBinPlan :: ErrorHandle -> Flags -> Maybe String -> String ->
-               BinMap a -> HashMap -> Id ->
-               BuildPlan (BuildResult (BinMap a, HashMap, BinFile a, [Id]))
-readBinPlan errh flags maybePkgName owner binmap0 hashmap0 p0 = do
+readBin errh flags maybePkgName binmap0 hashmap0 p0 = executeResultPlan $ do
    let
        -- if compiling a source package (that imports p0), detect when p0
        -- imports a bin-file with the same name as the source package
@@ -127,14 +116,14 @@ readBinPlan errh flags maybePkgName owner binmap0 hashmap0 p0 = do
              _ -> return ()
 
        seen (bins, _, _) p = M.member (getIdString p) bins
-       load (bins, hashes, ps_read) importer p = do
-         observe "binary import cycle check" $ checkPkgName p
+       load (bins, hashes, ps_read) _ p = observe "read imported package" $ do
+         checkPkgName p
          (fname, bi_sig, bo_sig, bo_pkg, hash, hashes', impNames) <-
-           doImportPlan errh flags importer hashes p
+           doImport errh flags hashes p
          let bins' = M.insert (getIdBaseString p) (fname, bi_sig, bo_sig, bo_pkg, hash) bins
          return $ Just ((bins', hashes', p : ps_read), fname, impNames)
 
-   graph <- walkBinaryPlan seen load (binmap0, hashmap0, []) [(owner,p0)]
+   graph <- walkBinaryPlan seen load (binmap0, hashmap0, []) [(maybe "" id maybePkgName,p0)]
    return $ fmap (\(binmap', hashmap', reversed) ->
        let p0_bininfo = fromJustOrErr "readBin" $ M.lookup (getIdString p0) binmap'
        in (binmap', hashmap', p0_bininfo, reverse reversed)) graph
@@ -179,32 +168,28 @@ addPrelude flags imps | usePrelude flags = CImpId False idPrelude :
                                            imps
                       | otherwise = imps
 
--- Read one candidate using the compiler's decoder and compatibility checks.
-readObjectPlan :: ErrorHandle -> FilePath -> IO BS.ByteString ->
-                  BuildPlan (CSignature, CSignature, IPackage a, String)
-readObjectPlan errh path readBytes = observe ("read package object " ++ path) $ do
-    bytes <- readBytes
-    readBinFile errh path bytes
-
 -- Shared binary closure: a consumer supplies the information it needs from
--- each object. Compilation validates full signatures, while metadata discovery
--- asks only for import names and reports unavailable headers as open boundaries.
+-- each object. Compilation runs the ordinary IO import at its consumption
+-- point. Dependency input contracts attach candidate facts and read only
+-- import names, reporting unavailable headers as open boundaries.
+-- Metadata discovery starts with an empty loaded map and keeps sibling state
+-- separate, so only ancestors can be loaded already. The cycle guard handles
+-- those; loaded-map checks do not represent additional dependency choices.
 walkBinaryPlan :: (s -> Id -> Bool) ->
                   (s -> String -> Id -> BuildPlan (Maybe (s, String, [Id]))) ->
                   s -> [(String, Id)] -> BuildPlan (BuildResult s)
 walkBinaryPlan seen load initial roots = do
     let visit state (ancestors, owner, p)
           | Set.member (getIdString p) ancestors = return (Right (state, []))
-          | otherwise =
-              choose (owner ++ ": object already loaded: " ++ getIdString p)
-                (seen state p) (return (Right (state, []))) $ do
-                  next <- load state owner p
-                  case next of
-                    Nothing -> return (Right (state, []))
-                    Just (state', path, imported) ->
-                      return (Right (state',
-                        [(Set.insert (getIdString p) ancestors, path, i) |
-                         i <- imported]))
+          | seen state p = return (Right (state, []))
+          | otherwise = do
+              next <- load state owner p
+              case next of
+                Nothing -> return (Right (state, []))
+                Just (state', path, imported) ->
+                  return (Right (state',
+                    [(Set.insert (getIdString p) ancestors, path, i) |
+                     i <- imported]))
     graph <- traverseState DepthFirst visit initial
                [(Set.empty, owner, p) | (owner,p) <- roots]
     -- Execution returns the selected graph. Discovery retains real ancestor
@@ -220,12 +205,11 @@ binaryCandidates flags owner i =
       ["A compatible object is required in search-path order; source cannot substitute on this import edge.",
        "Binary-to-binary imports do not independently schedule source recompilation, even under -u."]
 
-selectBinary :: String -> Id -> Maybe FilePath -> [DependencyCandidate] ->
+selectBinary :: String -> Id -> [DependencyCandidate] ->
                 (FilePath -> BuildPlan a) -> BuildPlan a
-selectBinary owner i selected candidates load =
+selectBinary owner i candidates load =
     let available = map candidatePath (filter candidateExists candidates)
-        selectedIndex = fromMaybe 0 (selected >>= (`elemIndex` available))
-    in select (owner ++ ": object for " ++ getIdString i) selectedIndex (map load available)
+    in select (owner ++ ": object for " ++ getIdString i) 0 (map load available)
 
 -- One interpretation owns this cache. Only decoded observations of its input
 -- snapshot are memoized; traversal and requirement facts are replayed for every
@@ -269,7 +253,7 @@ readPackageDependenciesPlan cache _ flags owner imported = declareInputs $ do
           if null (filter candidateExists candidates)
             then incomplete (importer ++ ": package " ++ getIdString i ++
                    " has no available object; transitive dependencies are unknown") >> return Nothing
-            else selectBinary importer i Nothing candidates $ \path -> do
+            else selectBinary importer i candidates $ \path -> do
               deps <- objectImports cache path
               return $ fmap (\ids -> (M.insert (getIdString i) () packages, path, ids)) deps
     _ <- walkBinaryPlan seen load M.empty [(owner,i) | i <- imported]
@@ -282,39 +266,30 @@ readBinaryDependenciesPlan cache errh flags path = declareInputs $ do
       Nothing -> return ()
       Just ids -> readPackageDependenciesPlan cache errh flags path ids
 
--- Import one .bo file. Execution keeps the original first-readable lookup;
--- discovery interprets the same choice by inspecting every present candidate.
-doImportPlan :: ErrorHandle -> Flags -> String -> HashMap -> Id ->
-                BuildPlan (String, CSignature, CSignature, IPackage a, String,
-                           HashMap, [Id])
-doImportPlan errh flags owner hashmap i = do
+-- Import one .bo file
+doImport :: ErrorHandle -> Flags -> HashMap -> Id ->
+            IO (String, CSignature, CSignature, IPackage a, String,
+                HashMap, [Id])
+doImport errh flags hashmap i = do
     let binname = getIdString i ++ "." ++ binSuffix
-        missingErr = (getIdPosition i, EMissingBinFile binname (pfpString i))
-        pillMsg = if enablePoisonPills flags then bsWarning errh else bsError errh
-    found <- binaryCandidates flags owner i
-    selected <- observe ("resolve package object " ++ binname) $
-      readBinFilePath errh (getIdPosition i) False binname (ifcPath flags)
-    let available = map candidatePath (filter candidateExists found)
-        -- The normal lookup has already opened its selected file lazily.
-        -- Consume those bytes rather than abandoning the handle and reopening
-        -- the same path. Other discovery alternatives open their own files.
-        readBytes name = case selected of
-          Just (bytes, path) | path == name -> return bytes
-          _ -> BS.readFile name
-        load name = do
-          perform $ when (verbose flags) $ putStrLn ("read " ++ name)
-          (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _ _), hash) <-
-            readObjectPlan errh name (readBytes name)
-          observe ("check package object " ++ name) $ do
-            when (pi /= i) $
-              bsError errh [(noPosition, EBinFilePkgNameMismatch name (pfpString i) (pfpString pi))]
-            when (any hasPoisonPill [e | IDef _ _ e _ <- ipkg_defs ipkg]) $
-              pillMsg [(getIdPosition pi, WPoisonedDefFile binname)]
-          hashmap' <- observe ("check package hashes " ++ name) $
-            mergeHashes errh hashmap pi hash impHashes
-          return (name, bi_sig, bo_sig, ipkg, hash, hashmap', map fst impHashes)
-    if null available || maybe True (const False) selected then observe ("missing package object " ++ binname) (bsError errh [missingErr])
-      else selectBinary owner i (fmap snd selected) found load
+        missingErr = (getIdPosition i,
+                      EMissingBinFile binname (pfpString i))
+        pillMsg = if (enablePoisonPills flags)
+                  then bsWarning errh
+                  else bsError errh
+    (file, name) <- fromMaybeM (bsError errh [missingErr]) $
+                      readBinFilePath errh (getIdPosition i)
+                          (verbose flags) binname (ifcPath flags)
+    (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _ _), hash)
+        <- readBinFile errh name file
+    when (pi /= i) $
+        bsError errh [(noPosition, EBinFilePkgNameMismatch name
+                                       (pfpString i) (pfpString pi))]
+    when (any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]) $
+        pillMsg [(getIdPosition pi, WPoisonedDefFile binname)]
+    hashmap' <- mergeHashes errh hashmap pi hash impHashes
+    let impNames = map fst impHashes
+    return (name, bi_sig, bo_sig, ipkg, hash, hashmap', impNames)
 
 hasPoisonPill :: IExpr a -> Bool
 hasPoisonPill (ILam _ _ e)  = hasPoisonPill e

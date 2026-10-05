@@ -3,6 +3,10 @@
 set dependency_report_checker [file join [file dirname [file normalize [info script]]] check_dependencies.py]
 proc check_dependencies {test_directory label arguments expectations {trees {}}} {
     global bsc dependency_report_checker
+    if {[auto_execok python3] eq ""} {
+        unsupported "dependencies: $label (python3 unavailable)"
+        return
+    }
     bsc_initialize
     set here [pwd]
     set checker $dependency_report_checker

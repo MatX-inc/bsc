@@ -739,7 +739,7 @@ decodeFlags (('-':s):ss) (sets,warnings, bad, flags) =
             DependencyQuery ->
               let eExpectsArg = (cmdPosition, EOneArgFlag ('-':s))
               in case ss of
-                   path:rest | path == "-" || not (isFlag path) ->
+                   path:rest | path == "-" || not (isFlag path || isSrcFile path) ->
                      decodeFlags rest (("dependencies=" ++ path):sets, perhaps_warn, bad, flags)
                    _ -> decodeFlags ss (sets, perhaps_warn, eExpectsArg:bad, flags)
             Toggle doflag _ -> decodeFlags ss (s:sets, perhaps_warn, bad, doflag flags True)

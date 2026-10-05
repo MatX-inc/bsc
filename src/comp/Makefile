@@ -265,11 +265,15 @@ TESTEXES = buildplantest
 
 EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES)
 
-# Build interpreter regressions and refresh all artifact-checking tools through
-# the normal root install-src build when preparing to run internal checks.
+# Include interpreter regressions in the normal root install-src build.
 ifeq ($(BSC_BUILD_TESTS),1)
 EXES += $(TESTEXES)
-install: install-extra $(BINDIR)/buildplantest $(BINDIR)/core/buildplantest
+install: $(BINDIR)/buildplantest $(BINDIR)/core/buildplantest
+endif
+
+# Internal tests also use the separately selectable artifact-checking tools.
+ifeq ($(BSC_BUILD_EXTRA),1)
+install: install-extra
 endif
 
 .PHONY: all

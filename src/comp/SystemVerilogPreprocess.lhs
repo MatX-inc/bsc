@@ -69,7 +69,11 @@ The state contains
 > emptyOutput :: [String]
 > emptyOutput = []
 
-Scan is not in a monad because of laziness requirements (space efficiency)
+Each source or include is forced at its read boundary so that decoding errors
+are attributed to that file before preprocessing it. This materializes the
+input and can report an invalid encoding before an earlier directive error.
+The scanner still builds its output lazily; forcing the input does not force
+the parsed syntax tree.
 
 > preprocess :: ErrorHandle
 >            -> Flags

@@ -74,6 +74,7 @@ jobs:
           export BSC_BUILD_PKGINFO=1
           # Include interpreter regressions in the test installation.
           export BSC_BUILD_TESTS=1
+          export BSC_BUILD_EXTRA=1
 
           # An STP test hangs on the ARM runners
           if [[ "${{ inputs.os }}" == *-arm ]]; then

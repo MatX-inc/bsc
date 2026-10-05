@@ -2,11 +2,11 @@
 module Depend(chkDeps, sourceDependencyPlan, parseFile, parseFilePlan, chkParse, doCPP, genDepend, genFileDepend,
               outlaw_sv_kws_as_classic_ids) where
 
-import Data.Maybe(isJust, fromMaybe)
-import Data.List(nub, elemIndex)
+import Data.Maybe(isJust)
+import Data.List(nub)
 import Control.Monad(when, unless, void)
 import BuildPlan
-import DependencyReport(DependencyCandidate(..), directoryCandidate, DependencyRequirement(..))
+import DependencyReport(DependencyCandidate(..))
 import BinUtil(withBinaryDependencyCache, readBinaryDependenciesPlan, readPackageDependenciesPlan)
 import System.Process(system)
 import System.Exit(ExitCode(..))
@@ -117,9 +117,10 @@ sourceDependencyPlan errh flags name = do
         return (fmap ((,) Nothing) jobs)
       else withBinaryDependencyCache $ \binaryCache -> do
         (pkg, parseTime, warns) <- parseFilePlan errh flags False name
-        let gflags = [mkId noPosition (mkFString n) | n <- genName flags]
-        pi <- getInfo errh flags gflags name pkg warns
-        readPackageDependenciesPlan binaryCache errh flags name (imports pi)
+        declareInputs $ do
+          let gflags = [mkId noPosition (mkFString n) | n <- genName flags]
+          pi <- getInfo errh flags gflags name pkg warns
+          readPackageDependenciesPlan binaryCache errh flags name (imports pi)
         return (pure (Just parseTime, [(name, pkg, warns)]))
 
 sourceOutputs :: Flags -> FilePath -> [FilePath] -> BuildPlan ()
@@ -133,6 +134,9 @@ type PackageVisit = (Set.Set PkgName, String, PkgName)
 -- Execution threads the selected graph through the breadth-first queue.
 -- Discovery carries each real alternative's state to its descendants while
 -- keeping independent siblings separate; there is no union of package bodies.
+-- Its selected map therefore contains only the root and current ancestors,
+-- already covered by the cycle guard. Visited checks are execution bookkeeping,
+-- not dependency alternatives; separate paths still inspect their own choices.
 gatherPackagesPlan :: ErrorHandle -> Flags -> Bool -> FilePath ->
                       BuildPlan (BuildResult PackageGraph)
 gatherPackagesPlan errh flags fatalRoot name = withBinaryDependencyCache $ \binaryCache -> do
@@ -145,23 +149,22 @@ gatherPackagesPlan errh flags fatalRoot name = withBinaryDependencyCache $ \bina
           | Set.member n ancestors = do
               incomplete (owner ++ ": circular source import involving " ++ getIdString n)
               return (Right (state, []))
-          | otherwise =
-              choose (owner ++ ": package already visited: " ++ getIdString n) (DM.member n selected)
-                (return (Right (state, []))) $ do
-                  epi <- getPkgInfo errh flags owner n
-                  case epi of
-                    Left err -> do
-                      incomplete (owner ++ ": package " ++ getIdString n ++
-                        " has no available candidate; transitive dependencies are unknown")
-                      return (Right ((err : errors, selected), []))
-                    Right pi -> do
-                      let state' = (errors, DM.insert n pi selected)
-                      case compileStatus pi of
-                        Binary -> do
-                          readBinaryDependenciesPlan binaryCache errh flags (fileName pi)
-                          return (Right (state', []))
-                        _ -> return (Right (state',
-                          [(Set.insert n ancestors, fileName pi, i) | i <- imports pi]))
+          | DM.member n selected = return (Right (state, []))
+          | otherwise = do
+              epi <- getPkgInfo errh flags owner n
+              case epi of
+                Left err -> do
+                  incomplete (owner ++ ": package " ++ getIdString n ++
+                    " has no available candidate; transitive dependencies are unknown")
+                  return (Right ((err : errors, selected), []))
+                Right pi -> do
+                  let state' = (errors, DM.insert n pi selected)
+                  case compileStatus pi of
+                    Binary -> do
+                      readBinaryDependenciesPlan binaryCache errh flags (fileName pi)
+                      return (Right (state', []))
+                    _ -> return (Right (state',
+                      [(Set.insert n ancestors, fileName pi, i) | i <- imports pi]))
     -- Preserve transClose's source-loading order: finish the pending queue
     -- before reading any newly discovered imports. Discovery inspects each
     -- branch's child jobs independently without constructing a joined graph.
@@ -205,7 +208,7 @@ getPkgInfo errh flags owner pname = do
     selectedSource <- observe ("resolve source package " ++ name) $
       readFilesPath errh noPosition False [name ++ "." ++ bsvSrcSuffix, name ++ "." ++ bscSrcSuffix] (ifcPath flags)
     selected <- case selectedSource of
-      Just (_, path) -> return (Just path)
+      Just (_, path) -> return (Just ("source", path))
       Nothing -> observe ("resolve object package " ++ name) $ do
         object <- readBinFilePath errh noPosition False (name ++ "." ++ binSuffix) (ifcPath flags)
         case object of
@@ -214,20 +217,23 @@ getPkgInfo errh flags owner pname = do
             -- Finish the selected lazy file read, as the original lookup did,
             -- so its handle is closed before loading further packages.
             _ <- CE.evaluate (BS.length bytes)
-            return (Just path)
-    let available = filter candidateExists candidates
-        selectedIndex = fromMaybe 0 (selected >>= \path -> elemIndex path (map candidatePath available))
-        inspect c | candidateKind c == "source" = do
-          let path = candidatePath c
+            return (Just ("object", path))
+    let available = [(candidateKind c, candidatePath c) |
+                     c <- candidates, candidateExists c]
+        inspect ("source", path) = do
           sourceOutputs flags path []
           (pkg, _, warns) <- parseFilePlan errh flags True path
           Right <$> getInfo errh flags [] path pkg warns
-        inspect c = do
-          let path = candidatePath c
+        inspect (_, path) = do
           t <- observe ("object timestamp " ++ path) $ getModTime path
           return $ Right $ PkgInfo pname path Nothing t [] [] [] [] Binary
-    if null available || not (isJust selected) then return (Left missing)
-      else select (owner ++ ": source or object for " ++ name) selectedIndex (map inspect available)
+    case selected of
+      Nothing -> return (Left missing)
+      Just actual ->
+        -- Requirement probes are discovery-only. Execution always follows
+        -- its real lookup in branch zero; discovery also visits alternatives.
+        select (owner ++ ": source or object for " ++ name) 0
+          (map inspect (actual : filter (/= actual) available))
 
 -- Extract PkgInfo from a parsed CPackage
 getInfo :: ErrorHandle -> Flags -> [ModName] -> FilePath -> CPackage -> [WMsg] -> BuildPlan PkgInfo
@@ -434,11 +440,11 @@ parseFilePlan errh flags fatal_name_mismatch fname = do
     let fname_encoded = createEncodedFullFilePath fname pwd
 
     when (hasDotSuf bsvSrcSuffix fname && vpp flags) $ do
-      directories <- observe "include search directories" $
-        mapM (directoryCandidate "include-search-directory") (ifcPath flags)
-      reportRequirement $ Requirement fname "include-search" "search" directories
+      _ <- requireFiles fname "include-search" "search"
+        [("include-search-directory", path) | path <- ifcPath flags]
         ["Recursive directory snapshots conservatively cover include lookup alternatives, including currently absent files.",
          "Only the compiler's active preprocessing branches are parsed; changed source or defines require a new query."]
+      return ()
 
     perform $ start flags DFcpp
     file <- if cpp flags

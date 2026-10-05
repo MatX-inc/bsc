@@ -1,5 +1,30 @@
-# Interpreter unit tests. Integration queries run with existing designs.
+# Interpreter unit tests and CLI guards. Integration queries use existing designs.
 bsc_initialize
+
+# These are sentinels, not source programs: rejection must precede parsing.
+foreach suffix {bs bsv} {
+    set source [file join [file dirname [file normalize [info script]]] ".dependencies-output-guard-[pid].$suffix"]
+    set sentinel "Dependency output must not overwrite this file.\n"
+    set channel [open $source w]
+    puts -nonewline $channel $sentinel
+    close $channel
+    set status [catch {exec $bsc -u -dependencies $source $source 2>@1} output]
+    set unchanged 0
+    if {[file isfile $source]} {
+        set channel [open $source r]
+        set unchanged [string equal [read $channel] $sentinel]
+        close $channel
+    }
+    file delete -force $source
+    if {$status != 0 && $unchanged &&
+        [string first "The flag -dependencies requires an argument" $output] >= 0} {
+        pass "dependencies: reject .$suffix output without overwriting source"
+    } else {
+        verbose -log $output 2
+        fail "dependencies: reject .$suffix output without overwriting source"
+    }
+}
+
 set commands [list]
 set plan_test [file join [file dirname [which_bsc]] buildplantest]
 if {[file executable $plan_test]} {
