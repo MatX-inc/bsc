@@ -46,7 +46,8 @@ import Pragma
 import PragmaCheck
 import Data.Maybe
 import Util
-import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import GenWrapUtils
 
 -- ====================
@@ -259,7 +260,7 @@ genWrap errh flgs genNames generating cpack symt = do
 -- Given a list of names to generate from the command line (with -g flag)
 -- and the pragmas from the CPackage, generate a mapping from def names
 -- to their associated pprops (removing any duplicate pprops)
-makePPropMap :: [String] -> [Pragma] -> M.Map Id [PProp]
+makePPropMap :: [String] -> [Pragma] -> IdMap [PProp]
 makePPropMap genNames cpragmas =
     let
         -- We avoid adding cmd-line pragmas that duplicate source pragmas,
@@ -269,7 +270,7 @@ makePPropMap genNames cpragmas =
         cmd_line_pragmas = makeCmdLineGenPragmas genNames
         all_pragmas = (cmd_line_pragmas \\ cpragmas) ++ cpragmas
         pairs = [ (i, pps) | (Pproperties i pps) <- all_pragmas ]
-    in  M.fromListWith (++) pairs
+    in  IdMap.fromListWith (++) pairs
 
 makeCmdLineGenPragmas :: [String] -> [Pragma]
 makeCmdLineGenPragmas genNames =
@@ -287,9 +288,9 @@ makeCmdLineGenPragmas genNames =
                     in  mkId cmdPosition fs
     in  [ Pproperties (mId i)  [PPverilog] | i <- genNames ]
 
-isGenDef :: M.Map Id [PProp] -> Id -> Bool
+isGenDef :: IdMap [PProp] -> Id -> Bool
 isGenDef pmap i =
-    case (M.lookup i pmap) of
+    case (IdMap.lookup i pmap) of
       Just pps -> PPverilog `elem` pps
       Nothing -> False
 
@@ -299,7 +300,7 @@ isGenDef pmap i =
 --   extends the existing one by adding the ready and enable signals
 --   Only modules which have the verilog/synthesis pragma are "wrapped"
 
-genWrapE :: Bool -> M.Map Id [PProp] -> CPackage ->
+genWrapE :: Bool -> IdMap [PProp] -> CPackage ->
             GWMonad (CPackage, [WrapInfo])
 genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds includes)  =
     do
@@ -307,7 +308,7 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
        -- (this checks the pragmas on all defs which have pragmas, though,
        -- and errors if any do not meet sanity checks)
        -- moduledefs :: [(CDef, CQType, [(Id, CType, ArgInfo)], [PProp])]
-       moduledefs <- concatMapM (getDef generating ds) (M.toList ppmap)
+       moduledefs <- concatMapM (getDef generating ds) (IdMap.toList ppmap)
        --traceM( "genWrapE:  moduledefs: " ++ ppReadable moduledefs )
 
        -- build the Interface record
@@ -325,7 +326,7 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
        -- New interface is generated here
        -- let newFlatIfcs :: [(Id, Kind, [FInf], CDefn), [PProp]]
        newFlatIfcs <- mapM genTDef finalIfcTRecs
-       let genIfcMap = M.fromList $ map (\g -> (genifc_id g, g)) newFlatIfcs
+       let genIfcMap = IdMap.fromList $ map (\g -> (genifc_id g, g)) newFlatIfcs
 
        --traceM ( "genWrapE moduledefs :" ++ ppReadable moduledefs )
        --traceM ( "genWrapE ifcTypeRecords : " ++ ppReadable ifcTypeRecords)
@@ -721,13 +722,13 @@ fixCModuleVerilog n (ss,ts,ps)
                       return [FInf (binId prefixes f) as r aIds]
        flat_fts <- concatMapM (flattenFInfs noPrefixes) fts
 
-       let finf_map = M.fromList [(unQualId (name finf), finf) | finf <- flat_fts]
+       let finf_map = IdMap.fromList [(unQualId (name finf), finf) | finf <- flat_fts]
        let save_f f =
                let fname = vf_name f
                in  -- imports don't have RDY methods
                    if (isRdyId fname)
                    then return []
-                   else case (M.lookup fname finf_map) of
+                   else case (IdMap.lookup fname finf_map) of
                           Just finf -> saveFieldTypes finf f
                           Nothing -> bad (getIdPosition fname,
                                           EForeignModNotField
@@ -1311,7 +1312,7 @@ mkCtxs ty =
 -- around the actual module definition (lifted with liftM), unpacking
 -- the values before applying the module def to them.
 
-mkNewModDef :: M.Map Id GeneratedIfc -> ModDefInfo -> GWMonad CDefn
+mkNewModDef :: IdMap GeneratedIfc -> ModDefInfo -> GWMonad CDefn
 mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
  do
    --traceM ("mkNewModDef: " ++ ppReadable def)
@@ -1329,7 +1330,7 @@ mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
    let ty = tmod (cTCon tyId)   -- type of new module
 
    -- sanity check the port names (clashes, bad identifiers, etc)
-   let genifc = case (M.lookup tyId genIfcMap) of
+   let genifc = case (IdMap.lookup tyId genIfcMap) of
                   Just res -> res
                   Nothing -> internalError ("mkNewModDef: can't find ifc: " ++
                                             ppReadable tyId)

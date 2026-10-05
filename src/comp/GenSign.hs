@@ -1,8 +1,9 @@
 module GenSign(genUserSign, genEverythingSign) where
 import Data.List((\\), sortBy, unionBy, groupBy, partition)
 import Data.Maybe(mapMaybe)
-import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
 import IdSet(IdSet)
 import qualified IdSet
 import Control.Monad(when)
@@ -112,7 +113,7 @@ genSign errh exportAll symt
 
         -- a map containing entries for all (qualified) Ids to be exported,
         -- and indicating whether it was exported with (..)
-        em = M.fromList (map mkExp exps)
+        em = IdMap.fromList (map mkExp exps)
         -- create the entries, and sanity check the exports
         mkExp e | hasEmptyQual (eName e) =
             internalError ("mkExp: not qualified: " ++ ppReadable (eName e))
@@ -125,7 +126,7 @@ genSign errh exportAll symt
         --         Nothing     (not exported)
         --         Just True   (exported with (..))
         --         Just False  (exported without (..))
-        look i = M.lookup i em
+        look i = IdMap.lookup i em
 
         -- insts: imported typeclass instances
         --        (no longer necessary since we transitively close imports)
@@ -168,8 +169,8 @@ genSign errh exportAll symt
         -- useLoci: map from used variable to definitions where it's used
         --          (excepting data defs with non-visible constructors,
         --          and unnamed defs (like pragmas and instances))
-        useLoci :: M.Map Id [Id]
-        useLoci = M.fromList [ (var, def_names)
+        useLoci :: IdMap [Id]
+        useLoci = IdMap.fromList [ (var, def_names)
                               | var <- IdSet.toList use
                               , let def_names = [ i | (def, fvs) <- ssFVs
                                                     , not (isHiddenDef def)
@@ -202,8 +203,8 @@ genSign errh exportAll symt
                                     (Left _, Left _) -> EQ
 
         -- ATF declarations per locally-defined class (for classToIClass).
-        classDeclaredAts :: M.Map Id [CAssocDepFun]
-        classDeclaredAts = M.fromList
+        classDeclaredAts :: IdMap [CAssocDepFun]
+        classDeclaredAts = IdMap.fromList
             [ (qualId currentPkg (iKName ik), ats)
             | Cclass _ _ ik _ _ ats _ <- ds ]
 
@@ -217,7 +218,7 @@ genSign errh exportAll symt
                                                  ppReadable i)
                        Just cl ->
                            -- Qualify ATF names and pass them to classToIClass.
-                           let rawAts = M.findWithDefault [] i classDeclaredAts
+                           let rawAts = IdMap.findWithDefault [] i classDeclaredAts
                                ats = map (\(CAssocDepFun name params rhs) ->
                                            CAssocDepFun (qualTId symt name) params rhs) rawAts
                            in [classToIClass i k cl ats ms (findPoss i)]
@@ -237,7 +238,7 @@ genSign errh exportAll symt
                  Nothing -> internalError "genSign"
             where -- positions of the uses which necessitated exporting this def
                   -- XXX we could get rid of this
-                  findPoss i = case (M.lookup i useLoci) of
+                  findPoss i = case (IdMap.lookup i useLoci) of
                                  Just us -> map getIdPosition us
                                  Nothing -> [noPosition]
                                     -- XXX when not "exportAll",
@@ -270,7 +271,7 @@ genSign errh exportAll symt
             let unexpName = pfpString (unQualId name)
                 err = internalError ("GenSign.genSign.mkTypeNotExported (" ++
                                      pfpString name ++ ")")
-                defIds = M.findWithDefault err name useLoci
+                defIds = IdMap.findWithDefault err name useLoci
                 defNamesPos = [(pfpString (unQualId name), getIdPosition name)
                                   | name <- defIds]
             in  ETypeNotExported unexpName defNamesPos
@@ -283,7 +284,7 @@ genSign errh exportAll symt
             [(getIdPosition name, mkETypeNotExported name)
                 | name <- missingExportNames,
                   -- has uses which aren't hidden
-                  name `M.member` useLoci]
+                  name `IdMap.member` useLoci]
 
         errors = packageErrors ++ missingExports ++ badExports
 
@@ -299,7 +300,7 @@ genSign errh exportAll symt
 {-
         trace ("\nexps=\n" ++ ppReadable exps ++
                "\n\ndefs=\n" ++ ppReadable ds ++
-               "\n\nem=\n" ++ ppReadable (M.toList em) ++
+               "\n\nem=\n" ++ ppReadable (IdMap.toList em) ++
                "\n\nss=\n" ++ ppReadable ss ++
                "\n\nudef=\n" ++ ppReadable udef ++
                "\n\nss'=\n" ++ ppReadable ss' ++ "\n\n") $

@@ -1,8 +1,11 @@
 module VFinalCleanup (finalCleanup) where
 
 import Data.List(nub)
-import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 import Position(noPosition)
 import Flags(Flags, keepFires, removeUnusedMods, finalcleanup, keepInlined)
 import Id
@@ -28,10 +31,10 @@ import BackendNamingConventions(createVerilogNameMapForAVInst)
 -- all the submodule's ports to the connected list.
 
 data ConnState = ConnState {
-                     visited_wires :: S.Set AId,  -- marking for visited nodes
-                     visited_insts :: S.Set AId,
-                     defs          :: M.Map AId ADef,
-                     instances     :: M.Map AId AVInst,  -- instances from the package
+                     visited_wires :: IdSet,  -- marking for visited nodes
+                     visited_insts :: IdSet,
+                     defs          :: IdMap ADef,
+                     instances     :: IdMap AVInst,  -- instances from the package
                      flags         :: Flags
                  }
 
@@ -76,18 +79,18 @@ removeUnusedInsts flags package =
                            connectedNode flags markedConn ss ds
           ds' = filter isDefUsed ds
           isDefUsed :: ADef -> Bool
-          isDefUsed def@(ADef i _ _ _) = S.member (adef_objid def) cdefs
+          isDefUsed def@(ADef i _ _ _) = IdSet.member (adef_objid def) cdefs
           ss'' = if (removeUnusedMods flags)
                  then filter isModuleUsed ss
                  else ss
           isModuleUsed :: AVInst -> Bool
-          isModuleUsed inst = S.member (avi_vname inst) cinsts
+          isModuleUsed inst = IdSet.member (avi_vname inst) cinsts
           sos' = if (removeUnusedMods flags)
                  then filter isPortOfConnectedInst sos
                  else sos
           isPortOfConnectedInst (i,_) =
               -- XXX This uses a hack (getRootName) to get the instance name
-              (getRootName i) `S.member` (S.map (getIdString) cinsts)
+              (getRootName i) `S.member` (IdSet.mapToSet getIdString cinsts)
 
           -- started with the outputs, any kept firing signals, any kept
           -- instances, and the wires used in foreign function calls
@@ -109,21 +112,21 @@ removeUnusedInsts flags package =
           keepEvenUnused = [i | def@(ADef i _ _ _) <- ds, hasIdProp i IdP_keepEvenUnused]
 
 -- return a  set of connected nodes and connected instances
-connectedNode :: Flags -> [AId] -> [AVInst] ->  [ADef]  -> (S.Set AId, S.Set AId)
+connectedNode :: Flags -> [AId] -> [AVInst] ->  [ADef]  -> (IdSet, IdSet)
 connectedNode flags outputs ainsts din = (visited_wires cstate, visited_insts cstate)
     where
-    defMap  = M.fromList (map (\d@(ADef i _ _ _) -> (i,d))  din)
-    instMap = M.fromList (map (\inst -> (avi_vname inst,inst)) ainsts)
-    initState = (ConnState S.empty S.empty defMap instMap flags)
+    defMap  = IdMap.fromList (map (\d@(ADef i _ _ _) -> (i,d))  din)
+    instMap = IdMap.fromList (map (\inst -> (avi_vname inst,inst)) ainsts)
+    initState = (ConnState IdSet.empty IdSet.empty defMap instMap flags)
     cstate = connected initState outputs
 
 -- traverse the design.
 connected :: ConnState -> [AId] -> ConnState
 connected cstate [] = cstate
-connected cstate (h:rest) |  S.member h (visited_wires cstate) = connected cstate rest
+connected cstate (h:rest) |  IdSet.member h (visited_wires cstate) = connected cstate rest
 connected cstate (h:rest) = connected cstate'  (newvars ++ rest )
     where
-        (cstate', newvars) = case (M.lookup h (defs cstate)) of
+        (cstate', newvars) = case (IdMap.lookup h (defs cstate)) of
                                Nothing    -> handleInst cstate h
                                Just def   -> handleExpr cstate h (adef_expr def)
 
@@ -131,7 +134,7 @@ connected cstate (h:rest) = connected cstate'  (newvars ++ rest )
 handleExpr :: ConnState -> Id -> AExpr -> (ConnState,[Id])
 handleExpr cstate thisId thisExpr = (cstate',newvars)
     where
-      cstate' = cstate { visited_wires = S.insert thisId (visited_wires cstate)}
+      cstate' = cstate { visited_wires = IdSet.insert thisId (visited_wires cstate)}
       newvars = aVars thisExpr
 
 handleInst :: ConnState -> Id -> (ConnState,[Id])
@@ -141,12 +144,12 @@ handleInst cstate instId = handleInst2 rootId
       rootId   = mkId noPosition (mkFString rootName)
       --
       handleInst2 :: Id -> (ConnState,[Id])
-      handleInst2 rid | rid `S.member` (visited_insts cstate) = (cstate,[])
+      handleInst2 rid | rid `IdSet.member` (visited_insts cstate) = (cstate,[])
       handleInst2 rid = (cstate',newvars)
           where
-            cstate' = cstate { visited_insts = S.insert rid (visited_insts cstate),
-                               visited_wires = S.insert instId (visited_wires cstate)}
-            newvars = case (M.lookup rid (instances cstate)) of
+            cstate' = cstate { visited_insts = IdSet.insert rid (visited_insts cstate),
+                               visited_wires = IdSet.insert instId (visited_wires cstate)}
+            newvars = case (IdMap.lookup rid (instances cstate)) of
                          Just i  -> getPortIdsFromInst (flags cstate) i
                          Nothing -> [] -- inputs have no defs
 
