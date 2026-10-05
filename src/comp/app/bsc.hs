@@ -344,11 +344,11 @@ compilePackage ::
     ErrorHandle ->
     Flags ->
     TimeInfo ->
-    BinMap PreElab ->
+    BinMap ->
     HashMap ->
     String ->
     CPackage ->
-    IO (Bool, BinMap PreElab, HashMap)
+    IO (Bool, BinMap, HashMap)
 compilePackage
     errh
     flags                -- user switches

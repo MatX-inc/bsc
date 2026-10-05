@@ -244,7 +244,7 @@ main = do
         probe = CPackage (mk_homeless_id "TConCheckProbe")
                          (Right []) [] [] [] [] []
     (cpkg@(CPackage _ _ _ impsigs _ _ _), binmap, _)
-        <- readImports errh flags (M.empty :: BinMap ()) M.empty probe
+        <- readImports errh flags (M.empty :: BinMap) M.empty probe
     -- Use the full (all-defs) signatures, not just the user-visible ones,
     -- exactly as bsc does when constructing the symbol table for module
     -- generation (see bsc.hs, DFsympostbinary): some checked constants

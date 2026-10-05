@@ -171,7 +171,7 @@ tclCommands =
 -----------------------
 -- global data -- a TCL package
 data TclP = TclP { tp_flags    :: Flags
-                 , tp_binmap   :: !(BinMap PreElab)
+                 , tp_binmap   :: !BinMap
                  , tp_hashmap  :: !HashMap
                  , tp_symtab   :: !SymTab
                  , tp_cpack    :: !CPackage
