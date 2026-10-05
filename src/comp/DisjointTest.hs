@@ -10,6 +10,8 @@ module DisjointTest(
 
 import qualified Data.Set as S
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import Control.Monad(foldM {- , when -})
 import Data.List (genericIndex)
 
@@ -255,8 +257,8 @@ buildSupportMap adefs avis rs = --trace ("XXX support map:" ++ ppReadable res) $
     idToDef     = M.fromList [ (id, def) | def@(ADef id _ _ _) <- adefs]
     err i = error $ "DisjointTest::buildSupportMap Invalid lookup in idtodefmap: " ++ show i ++ "\n" ++ show idToDef
     --
-    portMap :: M.Map AId VModInfo
-    portMap = M.fromList [(avi_vname avi, avi_vmi avi) | avi <- avis]
+    portMap :: IdMap VModInfo
+    portMap = IdMap.fromList [(avi_vname avi, avi_vmi avi) | avi <- avis]
     --
     generator :: (AExprs a) => DSupportMap -> (AId,a) -> DSupportMap
     generator m (id, es) | M.member id m = m

@@ -6,7 +6,8 @@ module AExpr2Util(
   getMethodOutputPortAt
 ) where
 
-import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import Data.List(find, genericIndex)
 
 import ErrorUtil(internalError)
@@ -34,11 +35,11 @@ import VModInfo(VModInfo(..), VFieldInfo(..), vName_to_id)
 -- XXX we can replace them with an unevaluated function applied to its arguments!
 -- XXX That way, the SMT solver will handle any equivalence of the arguments.
 
-getMethodOutputPorts :: (M.Map AId VModInfo) -> AId -> AId -> [AId]
+getMethodOutputPorts :: IdMap VModInfo -> AId -> AId -> [AId]
 getMethodOutputPorts stateMap modId methId =
   let mod_err = internalError("canonMethCalls: module not found: " ++
                               ppReadable modId)
-      fields = vFields $ M.findWithDefault mod_err modId stateMap
+      fields = vFields $ IdMap.findWithDefault mod_err modId stateMap
       meth_err = internalError("canonMethCalls: method not found: " ++
                                ppReadable (modId, methId))
       findFn (Method { vf_name = i }) = qualEq i methId
@@ -53,7 +54,7 @@ getMethodOutputPorts stateMap modId methId =
 -- A bare method reference (with no tuple selection) refers to a method with a
 -- single output port.  Return that (canonical) port, failing if the method has
 -- multiple output ports (those must be reached through a tuple selector).
-getSingleMethodOutputPort :: (M.Map AId VModInfo) -> AId -> AId -> AId
+getSingleMethodOutputPort :: IdMap VModInfo -> AId -> AId -> AId
 getSingleMethodOutputPort stateMap modId methId =
   case getMethodOutputPorts stateMap modId methId of
     [portId] -> portId
@@ -64,7 +65,7 @@ getSingleMethodOutputPort stateMap modId methId =
 -- is split across multiple output ports.  ATupleSel indices are 1-based (AConv
 -- builds them as idx + 1), while getMethodOutputPorts is a 0-based list, so
 -- shift by one to index it.
-getMethodOutputPortAt :: (M.Map AId VModInfo) -> AId -> AId -> Integer -> AId
+getMethodOutputPortAt :: IdMap VModInfo -> AId -> AId -> Integer -> AId
 getMethodOutputPortAt stateMap modId methId selIdx =
   getMethodOutputPorts stateMap modId methId `genericIndex` (selIdx - 1)
 

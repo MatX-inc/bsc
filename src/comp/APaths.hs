@@ -122,7 +122,8 @@ import Data.List(partition, genericIndex, genericLength)
 import Id(unQualId, getIdBaseString)
 import Eval
 import Position(getPosition)
-import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import qualified Data.Set as S
 
 import GraphWrapper
@@ -147,7 +148,7 @@ trace_apaths = "-trace-apaths" `elem` progArgs
 -- value is a list because a def that binds a tuple is a bundle of independent
 -- per-element signals, each with its own node (see PNDefTupleElem); ordinary
 -- names map to a singleton.
-type PathEnv = M.Map AId [PathNode]
+type PathEnv = IdMap [PathNode]
 
 -- The information that is passed between the pre and post scheduler stages
 data PathGraphInfo = PathGraphInfo
@@ -682,7 +683,7 @@ aPathsPreSched errh flags apkg = do
   -- Determine the edges of the graph
 
   -- XXX could separate the ifc_env into maps for port/param?
-  let def_map = M.fromList defs
+  let def_map = IdMap.fromList defs
   let ifc_env = method_inputs ++ method_outputs ++ method_enables ++
                 module_arg_ports ++ module_arg_params ++
                 clk_wires ++ gate_wires ++ rstn_wires
@@ -696,11 +697,11 @@ aPathsPreSched errh flags apkg = do
 
   -- add ifc_env elements one-by-one,
   -- bailing with an error if we ever need to combine
-  let env = foldr (uncurry (M.insertWith overlap_error)) def_map
+  let env = foldr (uncurry (IdMap.insertWith overlap_error)) def_map
                   [ (i, [n]) | (i, n) <- ifc_env ]
 
   when trace_apaths $
-    traceM ("env = " ++ ppReadable (M.toList env))
+    traceM ("env = " ++ ppReadable (IdMap.toList env))
 
   -- --------------------
   -- Module parameter defaults
@@ -1132,7 +1133,7 @@ aPathsPostSched flags pps apkg pathGraphInfo (ASchedule scheds _) = do
 
   -- We don't currently need the argument conversion info, because
   -- the node already contains the converted name (and not the number)
-  let meth_info_map = M.fromList $
+  let meth_info_map = IdMap.fromList $
           [ (meth_id, ({-numbered_args,-} maybe_EN, res)) |
               meth <- apkg_interface apkg,
               let vfieldinfo = aif_fieldinfo meth,
@@ -1144,7 +1145,7 @@ aPathsPostSched flags pps apkg pathGraphInfo (ASchedule scheds _) = do
           ]
 
   let findMethod m =
-          case (M.lookup m meth_info_map) of
+          case (IdMap.lookup m meth_info_map) of
               Just info -> info
               Nothing -> internalError ("APaths findMethod: " ++ ppReadable m)
 
@@ -1309,7 +1310,7 @@ findEdges env (ATupleSel _ (AMethValue t i qmi) oi) =
 -- selecting an element of a tuple-binding def reads just that element's node,
 -- not the whole def -- this is what keeps the per-element signals distinct
 findEdges env (ATupleSel _ (ASDef _ d) oi)
-    | Just pns <- M.lookup d env, oi >= 1, oi <= genericLength pns =
+    | Just pns <- IdMap.lookup d env, oi >= 1, oi <= genericLength pns =
     ([pns `genericIndex` (oi - 1)], [], [])
 -- selecting an element of a literal tuple reads just that element
 findEdges env (ATupleSel _ (ATuple _ es) oi)
@@ -1330,17 +1331,17 @@ findEdges env (AFunCall { ae_args = es }) =
 findEdges env (ATaskValue { }) = ([],[],[])
 -- module port reference
 findEdges env (ASPort t i) =
-    case (M.lookup i env) of
+    case (IdMap.lookup i env) of
         Nothing -> internalError ("findEdges: unknown ASPort: " ++ ppReadable i)
         Just pns -> (pns,[],[])
 -- module parameter reference
 findEdges env (ASParam t i) =
-    case (M.lookup i env) of
+    case (IdMap.lookup i env) of
         Nothing -> internalError ("findEdges: unknown ASParam: " ++ ppReadable i)
         Just pns -> (pns,[],[])
 -- ref to local def (a tuple-binding def contributes all its element nodes)
 findEdges env (ASDef t i) =
-    case (M.lookup i env) of
+    case (IdMap.lookup i env) of
         Nothing -> internalError ("findEdges: unknown ASDef: " ++ ppReadable i)
         Just pns -> (pns,[],[])
 findEdges env (ASInt _ _ _) = ([],[],[])

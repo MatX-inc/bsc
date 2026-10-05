@@ -16,6 +16,8 @@ import Control.Monad(when)
 import Control.Monad.State(StateT, runStateT, liftIO,
                            gets, get, put, modify)
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import qualified Yices as Y
 import Data.Word(Word32)
 
@@ -57,7 +59,7 @@ initYState str flags doHardFail ds avis rs = do
 
                    defMap = M.fromList [(i,d) | d@(ADef i _ _ _) <- ds],
                    ruleMap = M.fromList [(i,r) | r@(i,_,_) <- rs],
-                   stateMap = M.fromList [(avi_vname avi, avi_vmi avi)
+                   stateMap = IdMap.fromList [(avi_vname avi, avi_vmi avi)
                                             | avi <- avis],
                    proofMap = M.empty,
 
@@ -318,7 +320,7 @@ data YState =
 
                defMap        :: M.Map AId ADef,
                ruleMap       :: M.Map ARuleId RuleTriple,
-               stateMap      :: M.Map AId VModInfo,
+               stateMap      :: IdMap VModInfo,
                proofMap      :: M.Map (AExpr, AExpr) Y.Status,
 
                anyId         :: Integer,

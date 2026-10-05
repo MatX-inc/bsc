@@ -141,6 +141,8 @@ import Wires
 import ProofObligation(ProofObligation, MsgFn)
 import Flags
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import ISyntax(IType)
 import InstNodes(InstTree)
 
@@ -1651,7 +1653,7 @@ binOp p = p `elem`
 
 
 -- PRETTY PRINTING WITH DEFINITION EXPANSION --
-data PExpandDef = PExpandDef {defmap :: M.Map AId AExpr
+data PExpandDef = PExpandDef {defmap :: IdMap AExpr
                              ,lookupLimit :: Int
                              ,lookupLevel :: Int}
 
@@ -1694,14 +1696,14 @@ class (PPrint a) => PPrintExpand a where
 
 pPrintExpandFlags :: (PPrintExpand a) => Flags -> [ADef] -> PDetail -> PExpandContext -> a -> Doc
 pPrintExpandFlags flags ds =
-    let edef = PExpandDef {defmap = M.fromList [(id,expr) | (ADef id _ expr _) <- ds ]
+    let edef = PExpandDef {defmap = IdMap.fromList [(id,expr) | (ADef id _ expr _) <- ds ]
                           ,lookupLimit = expandATSlimit flags
                           ,lookupLevel = 0 }
   in pPrintExpand edef
 
 ppeString :: (PPrintExpand a) => [ADef] -> PExpandContext -> a -> String
 ppeString ds ec =
- let edef = PExpandDef {defmap = M.fromList [(id,expr) | (ADef id _ expr _) <- ds ]
+ let edef = PExpandDef {defmap = IdMap.fromList [(id,expr) | (ADef id _ expr _) <- ds ]
                        ,lookupLimit = 30
                        ,lookupLevel = 0 }
     in init . pretty 60 60 . pPrintExpand edef PDReadable ec
@@ -1713,7 +1715,7 @@ instance (PPrintExpand a) => PPrintExpand [a] where
 
 ppeAPackage :: Int -> PDetail -> APackage -> Doc
 ppeAPackage lim d apkg@(APackage { apkg_local_defs = ds }) =
-    let edef = PExpandDef { defmap = M.fromList [(id,expr) | (ADef id _ expr _) <- ds ]
+    let edef = PExpandDef { defmap = IdMap.fromList [(id,expr) | (ADef id _ expr _) <- ds ]
                           ,lookupLimit = lim
                           ,lookupLevel = 0 }
      in
@@ -1924,7 +1926,7 @@ instance PPrintExpand AExpr where
     pPrintExpand m d ec g@(AMGate { })  = pPrint d (getP ec) g
 
 defLookup :: AId -> PExpandDef -> AExpr
-defLookup d ped = M.findWithDefault err d (defmap ped)
+defLookup d ped = IdMap.findWithDefault err d (defmap ped)
     where err = internalError $ "defLookup: no definition `" ++ ppString d ++ "' found"
 
 
