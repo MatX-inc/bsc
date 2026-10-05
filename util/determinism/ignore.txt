@@ -2,10 +2,11 @@
 #
 # Files matching a pattern here are left out of the comparison entirely.  This
 # list is only for test-harness noise that is NOT compiler ordering: wall-clock
-# text, process addresses, test generators seeded from the clock, GHC RTS
-# statistics, the flag's own echo in -print-flags / -v output, the intern-order
-# self-test, and binaries.  Anything whose difference comes from Ord Id belongs
-# in allowlist.txt, tied to a root, so that it is fixed rather than hidden.
+# text, process addresses, test generators seeded from the clock, the flag's
+# own echo in -print-flags / -v output, the intern-order self-test, files that
+# quote the path of the worktree they were made in, and binaries.  Anything
+# whose difference comes from Ord Id belongs in allowlist.txt, tied to a root,
+# so that it is fixed rather than hidden.
 #
 # Rules
 #  - Every pattern needs a reason (compare.py refuses a line without one) and
@@ -83,7 +84,20 @@ bsc.options/bsc.*dir_invalid_no_backend.out*	the directory tests print the effec
 bsc.options/bsc.test_bsc_option.out*	prints the effective flags
 bsc.options/messages/flag-test*.out*	-print-flags echo of the command line
 bsc.scheduler/disjoint/ResourceOneRuleMEbug.bs.bsc-vcomp-out	compiled with -print-flags: only the command-line echo differs
-bsc.bluesim/parallel/mkTbGCD-1.bsc-ccomp-out	bsc -v: command-line echo and elapsed times only (mkTbGCD-2 also moves a 'Bluesim object reused' line and stays allow-listed)
+bsc.bluesim/parallel/mkTbGCD-1.bsc-ccomp-out	bsc -v: command-line echo (and 'exec: make -f <tree>/.../compile_mkTbGCD.mk', the tree's own path); mkTbGCD-2 also links its objects in a different order and stays allow-listed
+bsc.verilog/elab_only/elabv.bsc-out	bsc -v: the 'Invoking command line' echo carries the pass's flags (and the tree's own path in -remap-path-prefix); elapsed times are normalised
+bsc.options/CTypeStats.bsv.bsc-out	bsc -v: the 'Invoking command line' echo carries the pass's flags (and the tree's own path in -remap-path-prefix); elapsed times are normalised
+
+# Files that quote their tree's own path.  run-gate.sh runs its two passes in
+# two temporary worktrees at different paths; -remap-path-prefix makes the
+# paths stored in the .bo and .ba the same, but these outputs print the path
+# themselves (upstream #1135, which drops the stored absolute paths, changes
+# nothing here).  Each names the message and where bsc prints it.
+bsc.batching/intern_order/reversed.out	the test dumps the intern table, in which the source file's pwd-marked absolute path is an interned string (SpeedyString; not a Position, so not remapped); normal.out is above
+bsc.driver/bluesim/Top.bsv.bsc-ccomp-out	warning S0073 lists the duplicate -p directories by absolute path (Error.hs WDuplicatePathDirs)
+bsc.preprocessor/include/IncludeAbsolute.bsv*	the test m4-expands its own directory into the source as an absolute `include (include.exp CURDIR): the generated .bsv, its .expected and the transcript's 'Compilation message' position all carry it
+bsc.preprocessor/misc/*.vpp-out	-dvpp dumps the preprocessed source with `line(<pwd-marked absolute path>,...) directives
+bsc.verilog/filter/RenameTest.bsv.bsc-vcomp-out	error G0121 quotes the generated Verilog file by its full path (Error.hs EVerilogFilterError)
 
 # The intern-order self-test.
 bsc.batching/intern_order/normal.out	the test dumps the intern table itself; the ids are reversed by construction under the flag

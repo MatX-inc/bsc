@@ -33,7 +33,8 @@ check-normalisers.py exercises each on captured samples:
                       '  /* <ctime> */' line and the '  return <n>llu;' line
                       right after it (SimBlocksToC.hs gct_def; zero under
                       -no-show-timestamps, the wall clock without it)
-  .vcd                drop the $date ... $end section
+  .vcd, .fst-vcd      drop the $date ... $end section (.fst-vcd is the VCD that
+                      fst2vcd writes from an FST dump in bsc.bluesim/fst)
   *.inline-reg, *.no-inline-reg (vvp text dumps)
                       replace 0x[0-9a-fA-F]+ with 0xADDR
   .bsc-out, .bsc-<step>-out (bsc transcripts: .bsc-vcomp-out, .bsc-ccomp-out,
@@ -42,7 +43,13 @@ check-normalisers.py exercises each on captured samples:
                       as 'created:' (bsc.hs reuseVerilogFile / the Bluesim
                       object reuse, decided by a one-second mtime comparison in
                       StaleUtils.allFreshVs, so the word flips between runs);
-                      blank the numbers of ' elapsed time: CPU 0.12s, real
+                      the 'Verilog file' lines are also moved to a sorted block
+                      at the end of the transcript, because a reuse is reported
+                      before the other modules' code generation and a creation
+                      after it (the write order stays visible in the 'Elaborated
+                      module file created:' lines, which are left alone, as are
+                      the '<engine> object' lines, whose order is a known leak,
+                      bluesim-package-map-order); blank the numbers of ' elapsed time: CPU 0.12s, real
                       0.34s' lines (TopUtils.printElapsed under -v); drop the
                       GHC RTS statistics of a bsc run with +RTS -s or -S (the
                       -S column header and rows, the -s summary); and reduce
@@ -177,7 +184,15 @@ def norm_model_ctime(data):
 # bsc transcripts.  The four line kinds, each anchored to the whole line:
 #  - 'Verilog file reused: X.v' / '<engine> object reused: X.{h,o}' against
 #    'created:' (bsc.hs reuseVerilogFile and the Bluesim object reuse; the
-#    choice is a one-second mtime comparison, StaleUtils.allFreshVs)
+#    choice is a one-second mtime comparison, StaleUtils.allFreshVs).  A
+#    Verilog reuse is reported when the decision is made, before the other
+#    modules' code generation, and a creation after the file is written, so
+#    the 'Verilog file' line moves as well: those lines are taken out and
+#    re-emitted, sorted, at the end of the transcript.  Every .v write is
+#    paired with an 'Elaborated module file created:' line, which stays in
+#    place, so the write order is still compared; the '<engine> object'
+#    lines stay in place too, since their order is the known leak
+#    bluesim-package-map-order (ABinUtil m_abmis_used)
 #  - ' elapsed time: CPU 0.12s, real 0.34s' (TopUtils.printElapsed, -v)
 #  - the GHC RTS statistics a test asks for with +RTS -s or +RTS -S: the -S
 #    column header and its per-GC rows (interleaved with the transcript), and
@@ -185,7 +200,8 @@ def norm_model_ctime(data):
 #  - "make[2]: Entering directory '/path/to/tree/testsuite/x'" (GNU make
 #    under bsc's -parallel-sim-link or a test's own make; the level counts
 #    the makes above, the directory is the tree's own path)
-REUSED_RE = re.compile(rb"^(Verilog file|[A-Za-z]+ object) reused: ")
+VFILE_RE = re.compile(rb"^Verilog file (created|reused): ")
+OBJ_REUSED_RE = re.compile(rb"^([A-Za-z]+ object) reused: ")
 ELAPSED_RE = re.compile(rb"^( elapsed time: CPU )[0-9.eE+-]+(s, real )[0-9.eE+-]+(s\r?\n?)$")
 MAKE_DIR_RE = re.compile(rb"^make\[\d+\]: (Entering|Leaving) directory '[^']*'(\r?\n?)$")
 RTS_LINE_RES = [re.compile(rx) for rx in (
@@ -209,8 +225,13 @@ RTS_LINE_RES = [re.compile(rx) for rx in (
 
 def norm_transcript(data):
     out = []
+    vfiles = []   # the 'Verilog file' lines, re-emitted sorted at the end
     for line in data.splitlines(keepends=True):
-        m = REUSED_RE.match(line)
+        m = VFILE_RE.match(line)
+        if m:
+            vfiles.append(b"Verilog file created: " + line[m.end():].rstrip(b"\r\n") + b"\n")
+            continue
+        m = OBJ_REUSED_RE.match(line)
         if m:
             line = m.group(1) + b" created: " + line[m.end():]
         else:
@@ -224,7 +245,7 @@ def norm_transcript(data):
                 elif any(rx.match(line) for rx in RTS_LINE_RES):
                     continue
         out.append(line)
-    return b"".join(out)
+    return b"".join(out) + b"".join(sorted(vfiles))
 
 
 # Harness diffs (compare_file in config/unix.exp runs diff -u): the two header
@@ -248,7 +269,7 @@ def normalisers_for(rel):
         if name.startswith("model_") and name.endswith(".cxx"):
             return [norm_src, norm_model_ctime]
         return [norm_src]
-    if name.endswith(".vcd"):
+    if name.endswith((".vcd", ".fst-vcd")):
         return [norm_vcd]
     if name.endswith((".inline-reg", ".no-inline-reg")):
         return [norm_vvp]

@@ -13,6 +13,7 @@ normaliser must leave alone.  Run it from anywhere; it exits 1 on a failure.
 import os
 import sys
 
+sys.dont_write_bytecode = True   # no __pycache__ next to compare.py
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import compare  # noqa: E402
 
@@ -123,10 +124,49 @@ make[1]: Leaving directory '/bazel-cache/ravi/bsc-det/x/trees/reversed/testsuite
  elapsed time: CPU 0.01s, real 0.42s
 
 """
-# the same transcript with the two objects in the other order: a real difference
+# the same transcript with a different object: a real difference
+CCOMP_OTHER = CCOMP_A.replace(b"Bluesim object created: mkGCD.{h,o}", b"Bluesim object created: mkGCD2.{h,o}")
+# the objects in the other order: the bluesim-package-map-order leak, a real difference
 CCOMP_MOVED = CCOMP_A.replace(
     b"Bluesim object created: mkGCD.{h,o}\nBluesim object created: mkTbGCD.{h,o}\n",
     b"Bluesim object created: mkTbGCD.{h,o}\nBluesim object created: mkGCD.{h,o}\n")
+
+# a reused .v is reported before the other modules' code generation, a created
+# one after it (bsc.bsv_examples/MacTestBench/mkTbEnv.bsc-vcomp-out, 2026-10-05)
+TBENV_A = b"""\
+checking package dependencies
+compiling TbEnv.bsv
+code generation for module_calculateCrcNext starts
+code generation for mkTbEnv starts
+Verilog file created: mkTbEnv.v
+Elaborated module file created: mkTbEnv.ba
+Verilog file created: module_calculateCrcNext.v
+Elaborated module file created: module_calculateCrcNext.ba
+All packages are up to date.
+"""
+TBENV_B = b"""\
+checking package dependencies
+compiling TbEnv.bsv
+code generation for module_calculateCrcNext starts
+Verilog file reused: module_calculateCrcNext.v
+code generation for mkTbEnv starts
+Verilog file created: mkTbEnv.v
+Elaborated module file created: mkTbEnv.ba
+Elaborated module file created: module_calculateCrcNext.ba
+All packages are up to date.
+"""
+
+FSTVCD_A = b"""\
+$date
+\tMon Oct  5 04:09:22 2026
+
+$end
+$version
+\tfst2vcd
+$end
+$scope module main $end
+"""
+FSTVCD_B = FSTVCD_A.replace(b"04:09:22", b"04:09:25")
 
 ELAB_A = b"""\
 starting imports
@@ -187,7 +227,15 @@ CASES = [
     # (name, file name, A, B, expected verdict)
     ("Verilog file created/reused", "bsc.bsv_examples/MacTestBench/mkSimpleSwitch.bsc-vcomp-out", VCOMP_A, VCOMP_B, "same"),
     ("Bluesim object reused, make level and directory, elapsed", "bsc.bluesim/parallel/mkTbGCD-2.bsc-ccomp-out", CCOMP_A, CCOMP_B, "same"),
-    ("moved object line is a real difference", "bsc.bluesim/parallel/mkTbGCD-2.bsc-ccomp-out", CCOMP_A, CCOMP_MOVED, "differ"),
+    ("a different object name is a real difference", "bsc.bluesim/parallel/mkTbGCD-2.bsc-ccomp-out", CCOMP_A, CCOMP_OTHER, "differ"),
+    ("Bluesim objects in another order is a real difference (bluesim-package-map-order)", "bsc.bluesim/vcd/sysVCDTest1.bsc-ccomp-out", CCOMP_A, CCOMP_MOVED, "differ"),
+    ("Elaborated module files in another order is a real difference", "bsc.bsv_examples/MacTestBench/mkTbEnv.bsc-vcomp-out", TBENV_A,
+     TBENV_A.replace(b"Elaborated module file created: mkTbEnv.ba\nVerilog file created: module_calculateCrcNext.v\nElaborated module file created: module_calculateCrcNext.ba\n",
+                     b"Elaborated module file created: module_calculateCrcNext.ba\nVerilog file created: module_calculateCrcNext.v\nElaborated module file created: mkTbEnv.ba\n"), "differ"),
+    ("Verilog file reused reported earlier than created", "bsc.bsv_examples/MacTestBench/mkTbEnv.bsc-vcomp-out", TBENV_A, TBENV_B, "same"),
+    ("a missing Verilog file line is a real difference", "bsc.bsv_examples/MacTestBench/mkTbEnv.bsc-vcomp-out", TBENV_A,
+     TBENV_A.replace(b"Verilog file created: module_calculateCrcNext.v\n", b""), "differ"),
+    ("fst2vcd output: the $date section", "bsc.bluesim/fst/sysFstDump.fst-vcd", FSTVCD_A, FSTVCD_B, "same"),
     ("elapsed time lines of a -v transcript", "bsc.verilog/elab_only/elabv.bsc-out", ELAB_A, ELAB_B, "same"),
     ("+RTS -S rows and -s summary", "bsc.bugs/bluespec_inc/b1490/VsortWorkaround.bsv.bsc-vcomp-out", RTS_A, RTS_B, "same"),
     ("RTS table next to a moved module is a real difference", "bsc.bugs/bluespec_inc/b1490/VsortWorkaround.bsv.bsc-vcomp-out",
@@ -215,7 +263,8 @@ def main():
         print(f"{'ok  ' if ok else 'FAIL'}  {name}  [{rel.rsplit('/', 1)[-1]}: expected {expected}, got {got}]")
     # the normalised transcript must keep every line that is not noise
     kept = compare.normalise("x.bsc-ccomp-out", CCOMP_A)
-    for must in (b"exec: make", b"c++ -O3", b"Bluesim object created: mkGCD.{h,o}\n", b"make: Entering directory\n"):
+    for must in (b"exec: make", b"c++ -O3", b"Bluesim object created: mkGCD.{h,o}\n", b"make: Entering directory\n",
+                 b"Bluesim object created: mkTbGCD.{h,o}\n"):
         if must not in kept:
             failures += 1
             print(f"FAIL  normalised transcript lost {must!r}")
