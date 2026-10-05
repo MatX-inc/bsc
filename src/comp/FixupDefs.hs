@@ -1,3 +1,4 @@
+{-# LANGUAGE MonoLocalBinds #-}
 module FixupDefs(fixupDefs, updDef,
                  DictBuckets, mkDictBuckets,
                  DictRedirects, mkDictRedirects) where
@@ -67,7 +68,7 @@ type EvMap = M.Map Id (IType, Maybe DictEv)
 -- source, so the choice is deterministic.
 type DictBuckets = M.Map IType [Id]
 
-mkDictBuckets :: [(IPackage a, String)] -> DictBuckets
+mkDictBuckets :: [(IPackage PreElab, String)] -> DictBuckets
 mkDictBuckets ipkgs =
     M.fromListWith (\ new old -> old ++ new)
         [ (t, [i])
@@ -92,7 +93,7 @@ type DictRedirects = M.Map Id Id
 -- match nothing (redirection is idempotent).  Recomputing it per call
 -- -- once per synthesized module via "updDef" -- rebuilt the evidence
 -- map over every imported def each time.
-mkDictRedirects :: DictBuckets -> IPackage a -> [(IPackage a, String)]
+mkDictRedirects :: DictBuckets -> IPackage PreElab -> [(IPackage PreElab, String)]
                 -> DictRedirects
 mkDictRedirects buckets (IPackage _ _ _ ds _) ipkgs =
     let ads = concat (ds : [ ds' | (IPackage _ _ _ ds' _, _) <- ipkgs ])
@@ -172,7 +173,7 @@ mkRedirects buckets evmap =
 -- package verifies kid slots against the defs it can see, so a kid
 -- entry naming a dropped local def must be rewritten to name the
 -- canonical def instead.
-redirectDictProps :: DictRedirects -> IDef a -> IDef a
+redirectDictProps :: DictRedirects -> IDef PreElab -> IDef PreElab
 redirectDictProps redirects d@(IDef i t e props)
   | M.null redirects = d
   | otherwise = IDef i t e (map upd props)
@@ -199,7 +200,7 @@ redirectDictProps redirects d@(IDef i t e props)
 -- imported packages that are passed as the third argument (and this
 -- package's own defs; see mkDictRedirects on why one map serves every
 -- call).
-fixupDefs :: DictRedirects -> IPackage a -> [(IPackage a, String)] -> (IPackage a, [IDef a])
+fixupDefs :: DictRedirects -> IPackage PreElab -> [(IPackage PreElab, String)] -> (IPackage PreElab, [IDef PreElab])
 fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
     let
         (ms, _) = unzip ipkgs
@@ -248,7 +249,7 @@ fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
 -- the post-synthesis definition.)
 -- The first argument must be "mkDictRedirects" computed from the same
 -- imported packages that are passed as the fourth argument.
-updDef :: DictRedirects -> IDef a -> IPackage a -> [(IPackage a, String)] -> IPackage a
+updDef :: DictRedirects -> IDef PreElab -> IPackage PreElab -> [(IPackage PreElab, String)] -> IPackage PreElab
 updDef redirects d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
     let
         -- replace the def in the list
@@ -272,7 +273,7 @@ updDef redirects d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
 
 -- ===============
 
-fixUp :: DictRedirects -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
+fixUp :: DictRedirects -> M.Map Id (IExpr PreElab) -> IExpr PreElab -> IExpr PreElab
 fixUp r m (ILam i t e) = ILam i t (fixUp r m e)
 fixUp r m (ILAM i k e) = ILAM i k (fixUp r m e)
 fixUp r m (IAps f ts es) = IAps (fixUp r m f) ts (map (fixUp r m) es)
@@ -281,7 +282,7 @@ fixUp r m (ICon i (ICDef t _)) =
     in  ICon i' (ICDef t (get m i'))
 fixUp _ _ e = e
 
-get :: M.Map Id (IExpr a) -> Id -> IExpr a
+get :: M.Map Id (IExpr PreElab) -> Id -> IExpr PreElab
 get m i = let value = get2 m i
               pos = (getIdPosition i)
           in -- trace("LookupX "
@@ -289,7 +290,7 @@ get m i = let value = get2 m i
                 -- ++ (ppReadable (updateIExprPosition pos value))) $
              (updateIExprPosition pos value)
 
-get2 :: M.Map Id (IExpr a) -> Id -> IExpr a
+get2 :: M.Map Id (IExpr PreElab) -> Id -> IExpr PreElab
 get2 m i =
     case M.lookup i m of
     Just e -> e
