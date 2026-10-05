@@ -31,4 +31,5 @@ check_d                        I     6
 -----
 
 Verilog file created: sysAPkgProps_Arb.v
+Elaborated module file created: sysAPkgProps_Arb.ba
 All packages are up to date.

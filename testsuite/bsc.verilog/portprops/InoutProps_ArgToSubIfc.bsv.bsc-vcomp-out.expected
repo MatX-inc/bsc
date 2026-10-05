@@ -12,4 +12,5 @@ inner_io_ifc                  IO    32 inout
 -----
 
 Verilog file created: sysInoutProps_ArgToSubIfc.v
+Elaborated module file created: sysInoutProps_ArgToSubIfc.ba
 All packages are up to date.

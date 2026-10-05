@@ -35,4 +35,5 @@ RST_N                          I     1 unused
 -----
 
 Verilog file created: sysAPkgProps_Sched.v
+Elaborated module file created: sysAPkgProps_Sched.ba
 All packages are up to date.

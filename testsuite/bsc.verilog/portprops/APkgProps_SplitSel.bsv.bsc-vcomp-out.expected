@@ -24,6 +24,7 @@ RST_N                          I     1 unused
 -----
 
 Verilog file created: mkAPkgProps_SplitSel_Sub.v
+Elaborated module file created: mkAPkgProps_SplitSel_Sub.ba
 code generation for sysAPkgProps_SplitSel starts
 === APackageIOproperties (APkgProps_SplitSel sysAPkgProps_SplitSel):
 Name                         I/O  size props
@@ -50,4 +51,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysAPkgProps_SplitSel.v
+Elaborated module file created: sysAPkgProps_SplitSel.ba
 All packages are up to date.
