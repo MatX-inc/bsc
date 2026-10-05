@@ -1,3 +1,4 @@
+{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE PatternGuards #-}
 module ISyntaxCheck(iGetKind,
                     tCheckIPackage,
@@ -153,7 +154,7 @@ assert False s e t x = internalError ("assert failed: " ++ s ++ "\n" ++ ppReadab
 
 type EqTy = Env -> IType -> IType -> Bool
 
-tCheck :: Flags -> SymTab -> IATFCache -> Env -> EqTy -> IExpr a -> IType
+tCheck :: KnownPhase a => Flags -> SymTab -> IATFCache -> Env -> EqTy -> IExpr a -> IType
 tCheck flags symt cache r eqTy ec@(ILam i t e) =
     -- assert (kCheckErr r t == IKStar) "ILam" (ec, kCheckErr r t) $
         trace_icheck ("tCheck ILam: " ++ ppReadable i ++ " :: " ++ ppReadable t) $
@@ -218,7 +219,7 @@ kCheckErr :: Env -> IType -> IKind
 kCheckErr r t = fj $ kCheck r t
   where fj = fromJustOrErr ("findK: " ++ ppReadable (r, t))
 
-tCheckIPackage :: Flags -> SymTab -> IPackage a -> Bool
+tCheckIPackage :: KnownPhase a => Flags -> SymTab -> IPackage a -> Bool
 tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
     let r  = emptyEnv
         defOK (IDef i t e _) =
@@ -228,7 +229,7 @@ tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
                     (i,e,(t,t')) (t, t') True
     in  all defOK ds
 
-tCheckIModule :: Flags -> SymTab -> IModule a -> Bool
+tCheckIModule :: KnownPhase a => Flags -> SymTab -> IModule a -> Bool
 tCheckIModule flags symt (IModule { imod_type_args  = iks,
                                     imod_local_defs = ds,
                                     imod_rules      = rs,

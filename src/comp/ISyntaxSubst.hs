@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -288,7 +289,7 @@ etSubstIConInfo :: (IType -> Changed IType) -> (IExpr a -> Changed (IExpr a))
                 -> IConInfo a -> Changed (IConInfo a)
 -- ICVerilog: substitute iConType and each type in vMethTs
 etSubstIConInfo tsubFn _ ii@(ICVerilog { }) =
-  changed2 (\t vts -> ii { iConType = t, vMethTs = vts })
+  changed2 (\t vts -> ii { ictVerilog = t, vMethTs = vts })
            (iConType ii) (vMethTs ii)
            (tsubFn (iConType ii)) (mapChanged (mapChanged tsubFn) (vMethTs ii))
 -- ICType: iConType is always itType (no free variables), only substitute iType
@@ -302,13 +303,13 @@ etSubstIConInfo _tsubFn esubFn ii@(ICReset { iReset = rst }) =
   changed1 (\rst' -> ii { iReset = rst' }) (subRst esubFn rst)
 -- ICInout: substitute iConType and recurse into inout (clock + reset + wire)
 etSubstIConInfo tsubFn esubFn ii@(ICInout { iInout = io }) =
-  changed2 (\ct io' -> ii { iConType = ct, iInout = io' })
+  changed2 (\ct io' -> ii { ictInout = ct, iInout = io' })
            (iConType ii) io
            (tsubFn (iConType ii)) (subIo esubFn io)
 -- ICLazyArray: substitute iConType and recurse into uninit expressions
 -- (the array pointer itself is left alone)
 etSubstIConInfo tsubFn esubFn ii@(ICLazyArray { uninit = mu }) =
-  changed2 (\ct mu' -> ii { iConType = ct, uninit = mu' })
+  changed2 (\ct mu' -> ii { ictLazyArray = ct, uninit = mu' })
            (iConType ii) mu
            (tsubFn (iConType ii)) (mapMaybeChanged (subPair esubFn) mu)
 -- ICDef: top-level definition; don't follow recursive references
@@ -324,7 +325,7 @@ etSubstIConInfo _ _ ii@(ICLazyUnpack { }) = Unchanged
 -- IStateVar it contains. This is because we don't want the IStateVars in ICStateVars
 -- and the IStateVars store in the evaluator's monad to become inconsistent.
 etSubstIConInfo tsubFn _ ii =
-  changed1 (\t' -> ii { iConType = t' }) (tsubFn (iConType ii))
+  changed1 (\t' -> setIConType t' ii) (tsubFn (iConType ii))
 
 -- Helpers for recursing into clock/reset/inout structures
 subClk :: (IExpr a -> Changed (IExpr a)) -> IClock a -> Changed (IClock a)
@@ -349,21 +350,21 @@ subPair :: (IExpr a -> Changed (IExpr a)) -> (IExpr a, IExpr a)
 subPair esubFn (a, b) = changed2 (,) a b (esubFn a) (esubFn b)
 
 -- Internal expression substitution with contexts
-{-# SPECIALIZE eSubstWith :: EmptyExpr a -> EmptyType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: SingleExpr a -> EmptyType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: EmptyExpr a -> SingleType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: SingleExpr a -> SingleType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: EmptyExpr a -> SingleTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: SingleExpr a -> SingleTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: BatchExpr a -> EmptyType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: EmptyExpr a -> BatchType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: SingleExpr a -> BatchType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: EmptyExpr a -> BatchTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: SingleExpr a -> BatchTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: BatchExpr a -> SingleType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: BatchExpr a -> BatchType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-{-# SPECIALIZE eSubstWith :: BatchExpr a -> BatchTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
-eSubstWith :: (ExprSubstCtx ectx a, TypeSubstCtx tctx)
+{-# SPECIALIZE eSubstWith :: KnownPhase a => EmptyExpr a -> EmptyType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => SingleExpr a -> EmptyType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => EmptyExpr a -> SingleType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => SingleExpr a -> SingleType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => EmptyExpr a -> SingleTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => SingleExpr a -> SingleTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => BatchExpr a -> EmptyType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => EmptyExpr a -> BatchType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => SingleExpr a -> BatchType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => EmptyExpr a -> BatchTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => SingleExpr a -> BatchTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => BatchExpr a -> SingleType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => BatchExpr a -> BatchType -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+{-# SPECIALIZE eSubstWith :: KnownPhase a => BatchExpr a -> BatchTypeNorm -> S.Set Id -> IExpr a -> Changed (IExpr a) #-}
+eSubstWith :: (KnownPhase a, ExprSubstCtx ectx a, TypeSubstCtx tctx)
            => ectx -> tctx -> S.Set Id -> IExpr a -> Changed (IExpr a)
 eSubstWith ectx tctx allIds e
     | ctxIsEmpty ectx && ctxIsEmpty tctx = Unchanged
@@ -376,7 +377,7 @@ eSubstWith ectx tctx allIds e
       changed1 (changedOrId $ ctxNorm tctx) $ tSubstWith tctx allIds t
     -- sub needs to be polymorphic because the context type can change at
     -- ctxAdd (to batch) or ctxRemove (to single or empty) for both contexts
-    sub :: (ExprSubstCtx ectx' a, TypeSubstCtx tctx') => ectx' -> tctx' -> S.Set Id -> IExpr a -> Changed (IExpr a)
+    sub :: (KnownPhase a, ExprSubstCtx ectx' a, TypeSubstCtx tctx') => ectx' -> tctx' -> S.Set Id -> IExpr a -> Changed (IExpr a)
     sub ectx tctx allIds ee@(ILam i t e) =
       case lookupVar i ectx of
         Just _ ->
@@ -427,7 +428,7 @@ eSubstWith ectx tctx allIds e
 
 -- Public API: single expression substitution
 {-# INLINE eSubst #-}
-eSubst :: Id -> IExpr a -> IExpr a -> IExpr a
+eSubst :: KnownPhase a => Id -> IExpr a -> IExpr a -> IExpr a
 eSubst i x e
     | Changed e' <- result = e'
     | otherwise = e
@@ -437,7 +438,7 @@ eSubst i x e
 
 -- Public API: type substitution in expression
 {-# INLINE etSubst #-}
-etSubst :: forall a. Id -> IType -> IExpr a -> IExpr a
+etSubst :: forall a. KnownPhase a => Id -> IType -> IExpr a -> IExpr a
 etSubst i t e
     | Changed e' <- result = e'
     | otherwise = e
@@ -446,7 +447,7 @@ etSubst i t e
 
 -- Public API: batch expression and type substitution, with normalization
 {-# INLINE eSubstBatch #-}
-eSubstBatch :: forall a. (IType -> Changed IType) -> M.Map Id (IExpr a) -> M.Map Id IType -> IExpr a -> IExpr a
+eSubstBatch :: forall a. KnownPhase a => (IType -> Changed IType) -> M.Map Id (IExpr a) -> M.Map Id IType -> IExpr a -> IExpr a
 eSubstBatch norm exprMap typeMap e
     | exprSize == 0 && typeSize == 0 = e
     | Changed e' <- result = e'

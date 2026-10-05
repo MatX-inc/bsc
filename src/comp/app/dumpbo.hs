@@ -30,6 +30,6 @@ main = do
                putStr (ppReadable bi_sig)
                putStrLn ("Internal Symbols (all): ")
                putStr (ppReadable bo_sig)
-               putStr (ppReadable (ipkg :: IPackage ()))
+               putStr (ppReadable (ipkg :: IPackage PreElab))
                putStrLn ("Hash: " ++ hash)
     exitWith ExitSuccess
