@@ -1,5 +1,12 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE PatternGuards #-}
 {-# OPTIONS_GHC -fwarn-name-shadowing -fwarn-missing-signatures -Werror #-}
+-- The IDMAP_AUDIT build (IdOrd.hs) reports the blind IdSet/IdMap
+-- enumerations in closeOverMap and tsortForeignCallsAndDefs as deferred
+-- type errors by design; without this, -Werror stops it here.
+#ifdef IDMAP_AUDIT
+{-# OPTIONS_GHC -Wwarn=deferred-type-errors #-}
+#endif
 
 
 module AVerilogUtil (
