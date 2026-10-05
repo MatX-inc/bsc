@@ -1,0 +1,16 @@
+{
+  "schema": "bsc-testsuite-test-plan",
+  "version": 3,
+  "identity": "file-test-number-v1",
+  "configuration": {
+    "name": "golden",
+    "internal_checks": true,
+    "compiler_options": []
+  },
+  "scripts": [
+    {
+      "path": "bsc.plan/empty.exp",
+      "items": []
+    }
+  ]
+}

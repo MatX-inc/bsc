@@ -1,0 +1,81 @@
+{
+  "schema": "bsc-testsuite-test-plan",
+  "version": 3,
+  "identity": "file-test-number-v1",
+  "configuration": {
+    "name": "golden",
+    "internal_checks": true,
+    "compiler_options": []
+  },
+  "scripts": [
+    {
+      "path": "bsc.plan/variants.exp",
+      "items": [
+        {
+          "status": "planned",
+          "id": {
+            "test": "bsc.plan/variants.exp",
+            "number": 1
+          },
+          "origin": {
+            "file": "bsc.plan/variants.exp",
+            "line": 3,
+            "column": 5,
+            "offset": 57
+          },
+          "kind": {
+            "kind": "compilation",
+            "source": "Example.bs",
+            "options": [],
+            "compile_dependencies": true,
+            "expectation": "succeeds"
+          }
+        },
+        {
+          "status": "planned",
+          "id": {
+            "test": "bsc.plan/variants.exp",
+            "number": 2
+          },
+          "origin": {
+            "file": "bsc.plan/variants.exp",
+            "line": 3,
+            "column": 5,
+            "offset": 57
+          },
+          "kind": {
+            "kind": "compilation",
+            "source": "Example.bs",
+            "options": [
+              "-v"
+            ],
+            "compile_dependencies": true,
+            "expectation": "succeeds"
+          }
+        },
+        {
+          "status": "planned",
+          "id": {
+            "test": "bsc.plan/variants.exp",
+            "number": 3
+          },
+          "origin": {
+            "file": "bsc.plan/variants.exp",
+            "line": 3,
+            "column": 5,
+            "offset": 57
+          },
+          "kind": {
+            "kind": "compilation",
+            "source": "Example.bs",
+            "options": [
+              "-v"
+            ],
+            "compile_dependencies": true,
+            "expectation": "succeeds"
+          }
+        }
+      ]
+    }
+  ]
+}

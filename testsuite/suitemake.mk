@@ -142,13 +142,13 @@ PARALLEL_FLAGS ?= $(INIT) LOCAL_TIME_WALK=1
 generate-stats:
 	@echo ""
 	@echo "                ===  CUMULATIVE SUMMARY ==="
-	@find . -name time.out -exec cat '{}' \; | perl $(CONFDIR)/scripts/collapse.pl
+	@find . -path './.*' -prune -o -name time.out -exec cat '{}' \; | perl $(CONFDIR)/scripts/collapse.pl
 	@echo ""
 	@echo "=== Top 100 longest testcases ==="
-	@find . -name time.out -exec cat '{}' \; | perl $(CONFDIR)/scripts/times-by-directory.pl  | head -100
+	@find . -path './.*' -prune -o -name time.out -exec cat '{}' \; | perl $(CONFDIR)/scripts/times-by-directory.pl  | head -100
 	@echo ""
 	@echo "=== Brief list of results ==="
-	@find . -name '*.sum' | sort | perl $(CONFDIR)/scripts/process-summary-file.pl
+	@find . -path './.*' -prune -o -name '*.sum' -print | sort | perl $(CONFDIR)/scripts/process-summary-file.pl
 
 
 #we call "false" in the else branch to cause a error exit status

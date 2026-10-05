@@ -1,0 +1,13 @@
+Test v3:18:bsc.plan/basic.exp:1
+Configuration: golden
+Kind: package compilation
+Origin: bsc.plan/basic.exp:1:1
+Test directory: bsc.plan
+Source: Example.bs (including absence)
+Compiler options: (none)
+Compile dependencies: yes (-u)
+Compiler version and timestamp text are suppressed.
+Observe exit status and merged transcript: Example.bs.bsc-out
+Expectation: compilation succeeds
+Internal check: Example.bo can be loaded by dumpbo; run even if compilation fails.
+Execution, input/tool binding, and cache policy are not assigned by this plan.

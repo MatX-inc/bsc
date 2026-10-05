@@ -98,8 +98,8 @@ proc time_walk {} {
     } else {
         #depending on exactly how --outdir is used, this may or may not do the right thing.
         #  it does do the right thing if outdir is not set, or if it "."
-        verbose -log " running (find . -name [file tail [time_file]] ) out of this directory: [pwd]"
-        verbose -log [exec find . -name [file tail [time_file]] -exec cat \{\} \; | perl -C $collator ] 0
+        verbose -log " running (find . -path './.*' -prune -o -name [file tail [time_file]] ) out of this directory: [pwd]"
+        verbose -log [exec find . -path {./.*} -prune -o -name [file tail [time_file]] -exec cat \{\} \; | perl -C $collator ] 0
     }
 }
 
@@ -1647,12 +1647,95 @@ proc check_intermediate_files { source xfail {options ""} {modules ""} } {
     }
 }
 
+# Optional source identity in the ordinary DejaGnu log.  The supported boundary
+# is a direct source call (including loops), not a call through a test wrapper.
+proc bsc_test_trace_enabled {} {
+    global env
+    return [expr {[info exists env(BSC_TEST_TRACE)] && $env(BSC_TEST_TRACE) eq "1"}]
+}
+
+proc bsc_test_trace_log {fields} {
+    # The log reader handles one Tcl list per physical line.
+    foreach field $fields {
+        if {[regexp {[\r\n]} $field]} {
+            verbose -log "BSC-TEST: unsupported multiline metadata" 0
+            return 0
+        }
+    }
+    verbose -log "BSC-TEST: $fields" 0
+    return 1
+}
+
+proc bsc_test_trace_path {path} {
+    set root "[file normalize [file dirname [get_test_config_dir]]]/"
+    set path [file normalize $path]
+    if {[string first $root $path] == 0} {
+        return [string range $path [string length $root] end]
+    }
+    return $path
+}
+
+proc bsc_test_init {file} {
+    global bsc_test_number
+    if {![bsc_test_trace_enabled]} { return }
+    set bsc_test_number 0
+    bsc_test_trace_log [list script 1 [bsc_test_trace_path $file] \
+        [expr {!![do_internal_checks]}]]
+}
+
+proc bsc_test_finish {} {
+    global bsc_test_number
+    if {[bsc_test_trace_enabled]} {
+        bsc_test_trace_log [list finish $bsc_test_number]
+    }
+}
+
+# DejaGnu uses ${tool}_init/finish; this suite runs with tool bsc or empty.
+proc bsc_init {file} { bsc_test_init $file }
+proc bsc_finish {} { bsc_test_finish }
+proc _init {file} { bsc_test_init $file }
+proc _finish {} { bsc_test_finish }
+
+# The caller supplies its source frame directly. An empty number means this
+# call is outside the supported boundary; its role/end markers are then no-ops.
+proc bsc_test_begin {procedure frame arguments} {
+    global bsc_test_number
+    if {![bsc_test_trace_enabled]} { return "" }
+    if {![dict exists $frame file] ||
+        ([dict exists $frame proc] && [dict get $frame proc] ne "::runtest")} {
+        return ""
+    }
+    foreach argument $arguments {
+        if {[regexp {[\r\n]} $argument]} {
+            bsc_test_trace_log {unsupported multiline metadata}
+            return ""
+        }
+    }
+    set number [expr {$bsc_test_number + 1}]
+    if {![bsc_test_trace_log [list begin $number $procedure \
+        [bsc_test_trace_path [dict get $frame file]] [dict get $frame line] $arguments]]} {
+        return ""
+    }
+    set bsc_test_number $number
+    return $number
+}
+
+proc bsc_test_role {number role} {
+    if {$number ne ""} { bsc_test_trace_log [list role $number $role] }
+}
+
+proc bsc_test_end {number} {
+    if {$number ne ""} { bsc_test_trace_log [list end $number] }
+}
+
 # straight compile  no backend
 proc compile_pass { source {options ""} {nodeps 0}} {
 
     global xfail_flag
 
     set current_xfail $xfail_flag
+    set test_number [bsc_test_begin compile_pass [info frame -1] \
+        [list $source $options $nodeps]]
 
     incr_stat "compile_pass"
 
@@ -1662,7 +1745,10 @@ proc compile_pass { source {options ""} {nodeps 0}} {
         fail "`$source' should compile"
     }
 
-    check_intermediate_files $source $current_xfail $options
+    bsc_test_role $test_number object-load
+    set result [check_intermediate_files $source $current_xfail $options]
+    bsc_test_end $test_number
+    return $result
 }
 
 proc compile_pass_no_warning { source {options ""} {nodeps 0}} {
@@ -1697,13 +1783,17 @@ proc compile_verilog_fail_no_internal_error {name} {
 
 # straight compile  no backend
 proc compile_fail { source {options ""} {nodeps 0} } {
+    set test_number [bsc_test_begin compile_fail [info frame -1] \
+        [list $source $options $nodeps]]
     incr_stat "compile_fail"
 
     if [bsc_compile $source $options $nodeps] then {
-        fail "`$source' shouldn't compile"
+        set result [fail "`$source' shouldn't compile"]
     } else {
-        pass "`$source' doesn't compile"
+        set result [pass "`$source' doesn't compile"]
     }
+    bsc_test_end $test_number
+    return $result
 }
 
 # straight compile  no backend
@@ -3062,6 +3152,8 @@ proc showrules { topmod vcdin vcdout {options ""}} {
 
 # Use this if the test case ought to fail with a specific error.
 proc compile_fail_error { source tag {expcount 1} {options ""} {nodeps 0}} {
+    set test_number [bsc_test_begin compile_fail_error [info frame -1] \
+        [list $source $tag $expcount $options $nodeps]]
 
     # The file containing the output of compilation
     set output [make_bsc_output_name $source]
@@ -3072,10 +3164,14 @@ proc compile_fail_error { source tag {expcount 1} {options ""} {nodeps 0}} {
 
         # intermediate files should still be valid
         # force xfail to be 0
-        check_intermediate_files $source 0 $options
+        if [do_internal_checks] { bsc_test_role $test_number object-load }
+        set result [check_intermediate_files $source 0 $options]
     } else {
-        find_n_error $output $tag $expcount
+        bsc_test_role $test_number diagnostic-count
+        set result [find_n_error $output $tag $expcount]
     }
+    bsc_test_end $test_number
+    return $result
 }
 
 # This test case ought to fail with a specific error but the error isn't

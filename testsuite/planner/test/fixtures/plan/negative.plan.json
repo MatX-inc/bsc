@@ -1,0 +1,37 @@
+{
+  "schema": "bsc-testsuite-test-plan",
+  "version": 3,
+  "identity": "file-test-number-v1",
+  "configuration": {
+    "name": "golden",
+    "internal_checks": true,
+    "compiler_options": []
+  },
+  "scripts": [
+    {
+      "path": "bsc.plan/negative.exp",
+      "items": [
+        {
+          "status": "planned",
+          "id": {
+            "test": "bsc.plan/negative.exp",
+            "number": 1
+          },
+          "origin": {
+            "file": "bsc.plan/negative.exp",
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "kind": {
+            "kind": "compilation",
+            "source": "Invalid.bs",
+            "options": [],
+            "compile_dependencies": false,
+            "expectation": "fails"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+Test v3:23:bsc.plan/diagnostic.exp:1
+Configuration: golden
+Kind: package compilation with expected diagnostic
+Origin: bsc.plan/diagnostic.exp:1:1
+Test directory: bsc.plan
+Source: Bad.bs (including absence)
+Compiler options: (none)
+Compile dependencies: yes (-u)
+Compiler version and timestamp text are suppressed.
+Observe exit status and merged transcript: Bad.bs.bsc-out
+Expectation: compilation fails with exactly 1 error(s) tagged T0001
+Internal check: Bad.bo can be loaded by dumpbo; run only if compilation succeeds unexpectedly.
+Execution, input/tool binding, and cache policy are not assigned by this plan.

@@ -1,0 +1,69 @@
+{
+  "schema": "bsc-testsuite-test-plan",
+  "version": 3,
+  "identity": "file-test-number-v1",
+  "configuration": {
+    "name": "golden",
+    "internal_checks": true,
+    "compiler_options": []
+  },
+  "scripts": [
+    {
+      "path": "bsc.plan/mixed.exp",
+      "items": [
+        {
+          "status": "planned",
+          "id": {
+            "test": "bsc.plan/mixed.exp",
+            "number": 1
+          },
+          "origin": {
+            "file": "bsc.plan/mixed.exp",
+            "line": 1,
+            "column": 1,
+            "offset": 0
+          },
+          "kind": {
+            "kind": "compilation",
+            "source": "Before.bs",
+            "options": [],
+            "compile_dependencies": true,
+            "expectation": "succeeds"
+          }
+        },
+        {
+          "status": "unsupported",
+          "id": null,
+          "origin": {
+            "file": "bsc.plan/mixed.exp",
+            "line": 2,
+            "column": 1,
+            "offset": 23
+          },
+          "construct": "compile_verilog_pass",
+          "reason": "test kind is not implemented"
+        },
+        {
+          "status": "planned",
+          "id": {
+            "test": "bsc.plan/mixed.exp",
+            "number": 2
+          },
+          "origin": {
+            "file": "bsc.plan/mixed.exp",
+            "line": 3,
+            "column": 1,
+            "offset": 53
+          },
+          "kind": {
+            "kind": "compilation",
+            "source": "Missing.bs",
+            "options": [],
+            "compile_dependencies": true,
+            "expectation": "fails"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,8 @@
 
 if { [bluetcl_package_available InstSynth] == 1 } {
 
-bluetcl_run_compare_pass instsynth.tcl 
+# InstSynth emits BSV and the same report from either startup syntax.
+bluetcl_run_compare_pass instsynth.tcl "" instsynth.tcl.bluetcl-out.expected
 compare_file  FIFO.include.bsv
 compare_file  FIFOLevel.include.bsv
 

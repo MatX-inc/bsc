@@ -13,3 +13,6 @@ build
 
 .vagrant/
 vagrant-out/
+
+# Local testsuite evidence and scratch directories.
+/testsuite/.*
