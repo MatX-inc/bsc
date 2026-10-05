@@ -26,7 +26,7 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260715-14"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260715-15"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -623,7 +623,7 @@ instance Bin (IConInfo a) where
     writeBytes (ICSel t i j)    = do putI 7; toBin t; toBin i; toBin j
     writeBytes (ICVerilog t ui v tss) =
         do putI 8; toBin t; toBin ui; toBin v; toBin tss
-    writeBytes (ICUndet t u mv) = do putI 9; toBin t; toBin u; toBin mv
+    writeBytes (ICUndet t u)    = do putI 9; toBin t; toBin u
     writeBytes (ICInt t v)      = do putI 10; toBin t; toBin v
     writeBytes (ICReal t v)     = do putI 11; toBin t; toBin v
     writeBytes (ICString t s)   = do putI 12; toBin t; toBin s
@@ -634,8 +634,6 @@ instance Bin (IConInfo a) where
     writeBytes (ICAttrib t pps) = do putI 17; toBin t; toBin pps;
     writeBytes (ICPosition t pos) = do putI 18; toBin t; toBin pos
     writeBytes (ICType t it)    = do putI 19; toBin t; toBin it
-    writeBytes (ICIFace _ _ _) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICIFace"
     writeBytes (ICValue _ _) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICValue"
     writeBytes (ICMethArg _) =
@@ -686,9 +684,7 @@ instance Bin (IConInfo a) where
                               v <- fromBin
                               tss <- fromBin
                               return (ICVerilog t ui v tss)
-                     9  -> do u <- fromBin
-                              mv <- fromBin
-                              return (ICUndet t u mv)
+                     9  -> do u <- fromBin; return (ICUndet t u)
                      10 -> do v <- fromBin; return (ICInt t v)
                      11 -> do v <- fromBin; return (ICReal t v)
                      12 -> do s <- fromBin; return (ICString t s)

@@ -583,7 +583,6 @@ removeInlinedPositions flags imod0 =
     -- all other constructors are returned unchanged
     rmConInfo :: IConInfo HeapData -> IConInfo HeapData
     rmConInfo (ICDef t d) = ICDef t (rmExpr d)
-    rmConInfo (ICUndet t k mv) = ICUndet t k (fmap rmExpr mv)
     rmConInfo (ICStateVar t sv) = ICStateVar t (rmStateVar sv)
     rmConInfo (ICValue t d) = ICValue t (rmExpr d)
     rmConInfo (ICMethod t ins outs m) = ICMethod t ins outs (rmExpr m)
@@ -602,6 +601,7 @@ removeInlinedPositions flags imod0 =
     rmConInfo ic@(ICTuple {}) = ic
     rmConInfo ic@(ICSel {}) = ic
     rmConInfo ic@(ICVerilog {}) = ic
+    rmConInfo ic@(ICUndet {}) = ic
     rmConInfo ic@(ICInt {}) = ic
     rmConInfo ic@(ICReal {}) = ic
     rmConInfo ic@(ICString {}) = ic
@@ -610,7 +610,6 @@ removeInlinedPositions flags imod0 =
     rmConInfo ic@(ICMethArg {}) = ic
     rmConInfo ic@(ICModPort {}) = ic
     rmConInfo ic@(ICModParam {}) = ic
-    rmConInfo ic@(ICIFace {}) = ic
     rmConInfo ic@(ICRuleAssert {}) = ic
     rmConInfo ic@(ICSchedPragmas {}) = ic
     rmConInfo ic@(ICName {}) = ic
@@ -6128,8 +6127,6 @@ getStateVars clk lvs vs (ICon i (ICModParam t) : xs) =
     do is <- getStateVars clk lvs vs xs
        return (i:is)
 getStateVars clk lvs vs (ICon _ (ICValue _ e) : xs) = getStateVars clk lvs vs (e : xs)
-getStateVars clk lvs vs (ICon i (ICIFace { }) : xs) = do is <- getStateVars clk lvs vs xs
-                                                         return (i:is)
 getStateVars clk lvs vs (ICon _ _ : xs) = getStateVars clk lvs vs xs
 getStateVars clk lvs vs (x@(IRefT _ _ _ _) : xs) = do uhx <- unheapU x
                                                   getStateVars clk lvs vs (uhx : xs)

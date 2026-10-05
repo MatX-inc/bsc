@@ -450,7 +450,7 @@ joinDefs False True dsx = reverse (snd (foldl add (M.empty, []) dsx))
         add (m, ds) d@(ADef _ _ (ASStr _ _ _) _) = (m, d:ds)
         add (m, ds) d@(ADef _ _ (ASPort _ _) _)  = (m, d:ds)
         add (m, ds) d@(ADef _ _ (ASParam _ _) _) = (m, d:ds)
-        add (m, ds) d@(ADef _ _ (ASAny _ _) _)   = (m, d:ds)
+        add (m, ds) d@(ADef _ _ (ASAny _) _)     = (m, d:ds)
         add (m, ds) d@(ADef ie _ e props)            =
                 case M.lookup e m of
                 Nothing
@@ -480,7 +480,7 @@ joinDefs True True dsx = map rewrite dsx
         shapeOK (ASStr _ _ _)  = False
         shapeOK (ASPort _ _)   = False
         shapeOK (ASParam _ _)  = False
-        shapeOK (ASAny _ _)    = False
+        shapeOK (ASAny _)      = False
         shapeOK _              = True
         -- enable defs cannot BE the surviving name but -- exactly like
         -- the first-come fold -- are still rewritten as aliases of it;
@@ -664,7 +664,7 @@ aExpandDynSel stringOK findFn = mapAExprs expDynSel
                           (idx_e : default_e : flattenPairs case_arms)
                  else
                    let case_arms = map mkCaseArm arms
-                       default_e = ASAny (getArrayElemType arr_ty) Nothing
+                       default_e = ASAny (getArrayElemType arr_ty)
                    in  APrim sel_i sel_ty PrimCase
                           (idx_e : default_e : flattenPairs case_arms)
              _ -> internalError ("aExpandDynSel: unexpected array: " ++
@@ -887,7 +887,7 @@ aPrim _ sel_i sel_ty PrimArrayDynSelect
     do when debug2 $ traceM ("aPrim PrimDynSelect: " ++ ppReadable args)
        let dflt = if (isStringType sel_ty)
                   then lastOrErr "aPrim: empty array" elem_es
-                  else ASAny sel_ty Nothing
+                  else ASAny sel_ty
            idx' = fromInteger idx
            res = if (idx' >= length elem_es)
                  then dflt
@@ -1112,7 +1112,7 @@ isASimple (ASDef _ _)   = True
 isASimple (ASPort _ _)  = True
 isASimple (ASParam _ _) = True
 isASimple (ASStr _ _ _) = True
-isASimple (ASAny _ _)   = True
+isASimple (ASAny _)     = True
 isASimple (APrim _ _ PrimExtract _) = True
 isASimple _             = False
 
@@ -1348,7 +1348,7 @@ muxOpt bflgs aidx dty op esIn | ao_muxExpand bflgs  = do
         mux pxs exs@(ex:_) = mux' [] pxs exs
             where mux' :: [(AExpr,AExpr)] -> [AExpr]  -> [AExpr] -> AExpr
                   mux' xs [] []                     = aMakeMux aidx t op (reverse xs)
-                  mux' xs (_:ps) ((ASAny _ _) : es) = mux' xs ps es
+                  mux' xs (_:ps) ((ASAny _) : es) = mux' xs ps es
                   mux' xs (p:ps) (e:es)             = mux' ((p,e):xs) ps es
                   mux' xs ps es                     = internalError( "AOpt::mux' " ++ ppReadable (xs,ps,es) )
                   -- list ps and es must be same size
@@ -1469,7 +1469,7 @@ aConcat exs =
         es -> APrim defaultAId (ATBit (sum (map aSize es))) PrimConcat es
 
 aSelect :: AExpr -> Integer -> Integer -> AExpr
-aSelect (ASAny _ _) _ d = ASAny (ATBit d) Nothing
+aSelect (ASAny _) _ d = ASAny (ATBit d)
 aSelect (ASInt aid _ (IntLit w b i)) offs d =
         ASInt aid (ATBit d) (IntLit Nothing b (integerSelect d offs i))
 aSelect (APrim aid _ PrimExtract [e, (ASInt _ _ _), ASInt _ _ (IntLit _ _ lo)]) offs d =
@@ -1528,7 +1528,7 @@ aZeroExt _ _ = internalError( "AOpt::aZeroExt" )
 
 -- This is only called by muxOpt, which only optimizes PrimMux and PrimPriMux
 aTransMux :: AExpr -> AExpr
-aTransMux (APrim _ t _ []) = ASAny t Nothing -- ok for both types
+aTransMux (APrim _ t _ []) = ASAny t -- ok for both types
 aTransMux (APrim _ _ _ [_, e]) = e     -- ok for both types
 aTransMux (APrim aid t PrimMux [p1, e1, p2, e2]) =
         if isASimple p2 && not (isASimple p1)

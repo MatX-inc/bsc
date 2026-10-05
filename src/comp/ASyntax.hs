@@ -1126,8 +1126,7 @@ data AExpr
             ae_strval :: String
         }
         | ASAny {        -- don't care expression
-            ae_type :: AType,
-            ae_val  :: Maybe (AExpr)
+            ae_type :: AType
         }
         | ASClock {     -- abstract clock
             ae_type  :: AType,        -- (will vanish after AState)
@@ -1183,7 +1182,7 @@ instance NFData AExpr where
     rnf (ASInt oid typ ival) = rnf3 oid typ ival
     rnf (ASReal oid typ rval) = rnf3 oid typ rval
     rnf (ASStr oid typ sval) = rnf3 oid typ sval
-    rnf (ASAny typ mval) = rnf2 typ mval
+    rnf (ASAny typ) = rnf typ
     rnf (ASClock typ clk) = rnf2 typ clk
     rnf (ASReset typ rst) = rnf2 typ rst
     rnf (ASInout typ inout) = rnf2 typ inout
@@ -1232,8 +1231,7 @@ instance Eq AExpr where
     ASStr _ t str == ASStr _ t' str' =
         (t == t') && (str == str')
 
-    ASAny t me == ASAny t' me' =
-        ((t, me) == (t', me'))
+    ASAny t == ASAny t' = t == t'
 
     ASClock t c == ASClock t' c' = c == c' -- t and t' should be aTClock
 
@@ -1611,8 +1609,7 @@ instance PPrint AExpr where
     pPrint d p (ASInt _ _ i) = text (showVeriIntLit i)
     pPrint d p (ASReal _ _ r) = pPrint d p r
     pPrint d p (ASStr _ _ s) = text (show s)
-    pPrint d p (ASAny t Nothing) = ppExprType d t $ text "_"
-    pPrint d p (ASAny t (Just v)) = ppExprType d t $ text "_[" <> pPrint d maxPrec v <> text "]"
+    pPrint d p (ASAny t) = ppExprType d t $ text "_"
     pPrint d p (ASClock _ c) = text "clock" <+> pPrint d p c
     pPrint d p (ASReset _ r) = text "reset" <+> pPrint d p r
     pPrint d p (ASInout _ r) = text "inout" <+> pPrint d p r
@@ -1917,7 +1914,7 @@ instance PPrintExpand AExpr where
     pPrintExpand m d ec (ASInt _ _ i) = text (showVeriIntLit i)
     pPrintExpand m d ec (ASReal _ _ r) = pPrint d (getP ec) r
     pPrintExpand m d ec (ASStr _ _ s) = text (show s)
-    pPrintExpand m d ec (ASAny t _) = ppExprType d t $ text "_"
+    pPrintExpand m d ec (ASAny t) = ppExprType d t $ text "_"
     pPrintExpand m d ec c@(ASClock { }) = pPrint d (getP ec) c
     pPrintExpand m d ec r@(ASReset { }) = pPrint d (getP ec) r
     pPrintExpand m d ec r@(ASInout { }) = pPrint d (getP ec) r

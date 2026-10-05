@@ -317,7 +317,7 @@ convertASAny errh flags apkg = do
         return $ ASInt dummy_id (ATBit n) (ilSizedHex n v)
 
       cvtASAnyExpr :: AExpr -> IO AExpr
-      cvtASAnyExpr (ASAny ty _) = mkVal (aSize ty)
+      cvtASAnyExpr (ASAny ty) = mkVal (aSize ty)
       cvtASAnyExpr (APrim aid ty op args) =
         do args' <- mapM cvtASAnyExpr args
            return $ APrim aid ty op args'

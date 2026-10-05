@@ -822,7 +822,7 @@ vExpr vco (ASDef (ATTuple ts) i) =
 vExpr vco (ASDef _ i)                           = VEVar (vId i)
 vExpr vco (ASPort _ i)                          = VEVar (vId i)
 vExpr vco (ASParam _ i)                         = VEVar (vId i)
-vExpr vco (ASAny (ATBit w) _)                   = VEUnknown w (vco_unspec vco)
+vExpr vco (ASAny (ATBit w))                     = VEUnknown w (vco_unspec vco)
 
 -- See above: a reassembled ATuple is always element-selected or split into
 -- per-element wires, so a whole ATuple never reaches vExpr -- this is an
@@ -1237,7 +1237,7 @@ aIds (ASParam _ i)        = [vId i]
 aIds (ASDef _ i)          = [vId i]
 aIds (ASInt _ _ _)        = []
 aIds (ASStr _ _ _)        = []
-aIds (ASAny _ _)          = []
+aIds (ASAny _)            = []
 aIds _                    = internalError("Unexpected pattern in AVerilog::aIds" ) ;
 
 
