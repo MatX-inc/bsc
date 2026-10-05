@@ -3919,8 +3919,8 @@ mkExclusiveRulesDB transposed rule_names rule_uses_map are_disjoint are_cf cf_ma
               r1 `disjoint` r2 = shares_uses r2 && are_disjoint r1 r2
 
               foldFunc (accum_ds, accum_es) r2
-                  | (r1 `disjoint` r2) = (S.insert r2 accum_ds, accum_es)
-                  | (r1 `excludes` r2) = (accum_ds, S.insert r2 accum_es)
+                  | (r1 `disjoint` r2) = (IdSet.insert r2 accum_ds, accum_es)
+                  | (r1 `excludes` r2) = (accum_ds, IdSet.insert r2 accum_es)
                   | otherwise          = (accum_ds, accum_es)
               cands = S.unions
                           [ S.unions [ M.findWithDefault S.empty obj obj_index
@@ -3928,16 +3928,16 @@ mkExclusiveRulesDB transposed rule_names rule_uses_map are_disjoint are_cf cf_ma
                           , maybe S.empty M.keysSet
                                 (G.getOutEdgeMap sc_map r1)
                           , M.findWithDefault S.empty r1 drop_index ]
-              (ds, es) = foldl foldFunc (S.empty, S.empty)
+              (ds, es) = foldl foldFunc (IdSet.empty, IdSet.empty)
                              (if transposed then S.toList cands else rule_names)
           in
-              if (S.null ds && S.null es)
+              if (IdSet.null ds && IdSet.null es)
               then []
               else [(r1, (ds, es))]
 
       rs = concatMap mkOneRule rule_names
   in
-      ExclusiveRulesDB (M.fromList rs)
+      ExclusiveRulesDB (IdMap.fromList rs)
 
 
 -- ========================================================================
@@ -4767,8 +4767,10 @@ verifyStaticScheduleTwoRules errh flags gen_backend moduleId
         stt_index = M.fromListWith S.union
             [ (a, S.singleton b) | (a, b) <- S.toList setToTest ]
         candidate_partners r1 =
-            let excl_set = case (M.lookup r1 excl_map) of
-                             Just (ds, es) -> S.union ds es
+            -- toSet: candidate_partners stays a Data.Set because its
+            -- S.toAscList below is a name-ordered site for plan P4
+            let excl_set = case (IdMap.lookup r1 excl_map) of
+                             Just (ds, es) -> IdSet.toSet (IdSet.union ds es)
                              Nothing -> S.empty
             in  S.unions [ excl_set,
                            M.findWithDefault S.empty r1 cf_partner_index,

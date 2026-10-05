@@ -50,6 +50,8 @@ import ForeignFunctions(ForeignFuncMap)
 import Control.Monad(when)
 import Data.List(groupBy)
 import qualified Data.Map as M
+import qualified IdMap
+import qualified IdSet
 import qualified Data.Set as S
 
 -- import Debug.Trace
@@ -406,8 +408,9 @@ getPortInfo pps aif =
 
 exclRulesDBToDisjRulesDB :: ExclusiveRulesDB -> DisjointRulesDB
 exclRulesDBToDisjRulesDB (ExclusiveRulesDB emap) =
-    let e_edges = M.toList emap
-        convEdge (r,(ds,es)) = (r, ds)
+    -- toSet: DisjointRulesDB is converted with the Bluesim modules (plan P3 phase D)
+    let e_edges = IdMap.toList emap
+        convEdge (r,(ds,es)) = (r, IdSet.toSet ds)
         d_edges = map convEdge e_edges
     in  M.fromList d_edges
 
