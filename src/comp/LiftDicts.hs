@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 module LiftDicts(liftDictsPkg) where
 
 import Control.Applicative((<|>))
