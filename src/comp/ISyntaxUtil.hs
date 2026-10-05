@@ -1158,8 +1158,12 @@ getIfcInoutReset i v@(IStateVar { isv_vmi = vmi }) =
                 _   -> internalError ("ISyntaxUtil.getIfcInoutReset: " ++
                                       (ppReadable vmi) ++ (ppReadable i))
 
-getClockGate :: KnownPhase a => IClock a -> IExpr a
-{-# SPECIALISE getClockGate :: IClock PreElab -> IExpr PreElab #-}
+-- At the evaluated phases only: the gate of an output clock is selected
+-- from the instance (ICStateVar), which only those phases have, and the
+-- signature says so directly so that the icSelClockGate call below is
+-- made at this function's own phase (and its specialisation), not at the
+-- one the ICStateVar match refines it to.
+getClockGate :: KnownPhase (EvaldPhase b) => IClock (EvaldPhase b) -> IExpr (EvaldPhase b)
 {-# SPECIALISE getClockGate :: IClock Elab -> IExpr Elab #-}
 {-# SPECIALISE getClockGate :: IClock PostElab -> IExpr PostElab #-}
 getClockGate c =
