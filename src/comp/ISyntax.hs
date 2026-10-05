@@ -110,6 +110,7 @@ import Data.Maybe
 import qualified Data.Set as S
 import IdSet(IdSet)
 import qualified IdSet
+import qualified IdMap
 import Flags
 import Error(internalError, EMsg, ErrMsg(..))
 import PFPrint
@@ -400,11 +401,11 @@ checkRUnionAttributes (IRules sps1 rs1) (IRules sps2 rs2) =
         definedIds = map getIRuleId rs1 ++ map getIRuleId rs2
         attrIds = extractSchedPragmaIds (sps1 ++ sps2)
 
-        testMap  = M.fromList $ zip definedIds (repeat (0 :: Int ))
-        checkMap = M.fromList $ zip attrIds (repeat (0 :: Int ))
+        testMap  = IdMap.fromList $ zip definedIds (repeat (0 :: Int ))
+        checkMap = IdMap.fromList $ zip attrIds (repeat (0 :: Int ))
 
         badIds :: [Id]
-        badIds = map fst $ M.toList $ M.difference checkMap testMap
+        badIds = map fst $ IdMap.toList $ IdMap.difference checkMap testMap
 
         mkErr i = (getIdPosition i, EUnknownRuleIdAttribute (pfpString i))
         msgs = map mkErr badIds
