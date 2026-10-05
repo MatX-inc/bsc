@@ -13,7 +13,8 @@ import System.IO.Error(ioeGetErrorType)
 import GHC.IO.Exception(IOErrorType(..))
 import Data.Time.Clock.POSIX(utcTimeToPOSIXSeconds)
 import qualified Control.Exception as CE
-import qualified Data.Map as DM
+import IdMap(IdMap)
+import qualified IdMap
 
 import TmpNam(tmpNam, localTmpNam)
 import SCC(tsort)
@@ -87,17 +88,17 @@ chkDeps errh flags name = do
         let gflags = [ mkId noPosition (mkFString s) | s <- genName flags ]
         (pkg, _, warns) <- parseFile errh flags False name
         pi <- getInfo errh flags gflags name pkg warns
-        let initMap = DM.singleton (pkgName pi) pi
+        let initMap = IdMap.singleton (pkgName pi) pi
         (errs, piMap) <- transClose errh flags ([], initMap) (imports pi)
         when (not $ null errs) $ bsError errh errs
 
-        let pis = DM.elems piMap
+        let pis = IdMap.elems piMap
         case tsort [ (n, is) | PkgInfo { pkgName = n, imports = is } <- pis ] of
             Left cycle@(firstImport:_) ->
                 bsError errh [(getPosition firstImport,
                                ECircularImports (map ppReadable cycle))]
             Right ns -> do
-                let lookupPkg n = case DM.lookup n piMap of
+                let lookupPkg n = case IdMap.lookup n piMap of
                                     Just pi -> pi
                                     Nothing -> internalError "Depend.chkDeps: lookupPkg"
                     -- the pkginfo of all depended modules, in dependency order
@@ -107,7 +108,7 @@ chkDeps errh flags name = do
                     --genfs = concatMap (getGenFs flags) pis'
                 -- the pkginfos with "recompile" marked for any files whose
                 -- source is newer than any of its related files
-                pis'' <- chkUpd flags DM.empty [] pis'
+                pis'' <- chkUpd flags IdMap.empty [] pis'
                 -- extract the files to recompile with their parsed packages and warnings, in dependency order
                 return (reverse [ (fileName pi, pkg, warns) | pi@(PkgInfo { compileStatus = Recompile pkg warns }) <- pis'' ])
             Left [] -> internalError "Depend.chkDeps: tsort empty cycle"
@@ -205,18 +206,18 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
 -- Compute the transitive closure of all imports.
 -- The `done' arg are the already visited packages,
 -- and the `ns' arg are the names of the remaining ones.
-transClose :: ErrorHandle -> Flags -> ([EMsg], DM.Map PkgName PkgInfo) -> [PkgName] ->
-              IO ([EMsg], DM.Map PkgName PkgInfo)
+transClose :: ErrorHandle -> Flags -> ([EMsg], IdMap PkgInfo) -> [PkgName] ->
+              IO ([EMsg], IdMap PkgInfo)
 transClose errh flags done [] = return done
 transClose errh flags (errs,done) (n:ns) = do
         --putStr (ppReadable n)
-        case DM.lookup n done of
+        case IdMap.lookup n done of
              Just _ -> transClose errh flags (errs,done) ns
              Nothing -> do
                 epi <- getPkgInfo errh flags n
                 case epi of
                   Left  em -> transClose errh flags (em:errs,done) (ns)
-                  Right pi -> transClose errh flags (errs, DM.insert n pi done) (ns ++ imports pi)
+                  Right pi -> transClose errh flags (errs, IdMap.insert n pi done) (ns ++ imports pi)
 
 -- This tries to return a list of all files that will be generated from
 -- this file after codegen.
@@ -265,7 +266,7 @@ getGenFs flags pi =
 -- Update the compile status in all the PkgInfo.
 -- Transforms UpToDate -> Recompile when dependencies require it.
 -- Uses both a Map (for efficient import lookups) and a List (to preserve dependency order).
-chkUpd :: Flags -> DM.Map PkgName PkgInfo -> [PkgInfo] -> [PkgInfo] -> IO [PkgInfo]
+chkUpd :: Flags -> IdMap PkgInfo -> [PkgInfo] -> [PkgInfo] -> IO [PkgInfo]
 chkUpd flags doneMap resultList [] = return resultList
 chkUpd flags doneMap resultList (pi:pis) = do
     --putStrLn ("chkUpd " ++ show pi)
@@ -287,16 +288,16 @@ chkUpd flags doneMap resultList (pi:pis) = do
         let needGenUpd = any (srcMod pi >) genfsClks || or staleAbins
             needIncUpd = any (lastMod pi <) incfsClks
         --putStrLn (show (fileName pi, genfs, map (srcMod pi >) genfsClks))
-        --putStr (ppReadable (pkgName pi, imports pi, DM.keys doneMap))
+        --putStr (ppReadable (pkgName pi, imports pi, IdMap.keys doneMap))
             lastCompTime = minimum ((lastMod pi) : genfsClks)
         if any (needsUpd lastCompTime doneMap) (imports pi) || needGenUpd || needIncUpd then
           let pi' = pi { compileStatus = Recompile pkg warns }
-          in chkUpd flags (DM.insert (pkgName pi') pi' doneMap) (pi' : resultList) pis
+          in chkUpd flags (IdMap.insert (pkgName pi') pi' doneMap) (pi' : resultList) pis
         else
-          chkUpd flags (DM.insert (pkgName pi) pi doneMap) (pi : resultList) pis
+          chkUpd flags (IdMap.insert (pkgName pi) pi doneMap) (pi : resultList) pis
       _ ->
         -- Binary, Recompile, or Prelude packages: no change needed
-        chkUpd flags (DM.insert (pkgName pi) pi doneMap) (pi : resultList) pis
+        chkUpd flags (IdMap.insert (pkgName pi) pi doneMap) (pi : resultList) pis
 
 -- Is this an installed library?
 isPreludePkg :: Flags -> FilePath -> Bool
@@ -307,9 +308,9 @@ isPreludePkg flags n =
 -- Check if out-of-date with respect to an imported module.
 -- Recompilation is needed if the imported file will be
 -- recompiled or if it has a later date stamp.
-needsUpd :: MClockTime -> DM.Map PkgName PkgInfo -> PkgName -> Bool
+needsUpd :: MClockTime -> IdMap PkgInfo -> PkgName -> Bool
 needsUpd myMod piMap n =
-    case DM.lookup n piMap of
+    case IdMap.lookup n piMap of
     Nothing -> internalError ("needsUpd " ++ pfpString n)
     Just pi -> case compileStatus pi of
                  Recompile _ _ -> True
@@ -443,8 +444,8 @@ findPackages errh flags name = do
   let gflags = [ mkId noPosition (mkFString s) | s <- genName flags ]
   (pkg, _, warns) <- parseFile errh flags True name
   pi <- getInfo errh flags gflags name pkg warns
-  (errs, piMap) <- transClose errh flags ([], DM.singleton (pkgName pi) pi) (imports pi)
-  return (errs, DM.elems piMap)
+  (errs, piMap) <- transClose errh flags ([], IdMap.singleton (pkgName pi) pi) (imports pi)
+  return (errs, IdMap.elems piMap)
 
 -- generate the file name dependencies for filename
 -- A package depends on its own source file name
@@ -454,10 +455,10 @@ genDepend :: ErrorHandle -> Flags -> FilePath ->
              IO ([EMsg],[(FilePath, [FilePath])])
 genDepend errh flags name = do
   (errs,pis) <- findPackages errh flags name
-  let pmap :: DM.Map PkgName PkgInfo
-      pmap = DM.fromList [(pkgName pki, pki) | pki <- pis]
+  let pmap :: IdMap PkgInfo
+      pmap = IdMap.fromList [(pkgName pki, pki) | pki <- pis]
       lookupP p =
-            case (DM.lookup p pmap) of
+            case (IdMap.lookup p pmap) of
               Just pinfo -> [pinfo]
               Nothing    -> [] -- internalError $ "Depend:genDepend " ++ show p
       --
