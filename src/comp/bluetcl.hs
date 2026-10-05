@@ -14,7 +14,7 @@ import HTcl
 
 import Control.Monad(foldM, when, mzero)
 import Control.Monad.Trans(lift)
-import Control.Monad.Except(ExceptT, runExceptT, throwError)
+import Control.Monad.Except(ExceptT(..), runExceptT, throwError)
 import Control.Concurrent
 import qualified Control.Exception as CE
 import System.IO.Error(ioeGetErrorString)
@@ -85,6 +85,7 @@ import TypeAnalysisTclUtil
 
 import ABin
 import ABinUtil
+import BuildPlan(executeResultPlan)
 import BinUtil(BinMap, BinFile, HashMap, readBin, sortImportedSignatures)
 import ForeignFunctions(ForeignFuncMap)
 import SimPrimitiveModules(isPrimitiveModule)
@@ -1037,12 +1038,12 @@ tclModule ["load",topname] = do
   when (topname `elem` prim_names) $
        ioError $ userError ("Cannot load " ++ quote topname ++
                             ": it is a primitive module")
-  -- getABIHierarchy calls GenABin.readABinFile to read a .ba file
+  -- Execute the shared hierarchy plan to load the module's .ba files.
   (topmodId, hierMap, instModMap, ffuncMap, _, foreign_mods, abmis_by_name)
-      <- convExceptTToIO globalErrHandle $
+      <- convExceptTToIO globalErrHandle $ ExceptT $ executeResultPlan $
          getABIHierarchy globalErrHandle
                          (verbose flags) (ifcPath flags) (Just gen_backend)
-                         prim_names topname []
+                         prim_names topname [] (\_ _ _ -> return ())
   let modnames = map fst abmis_by_name
   let res = (topmodId, hierMap, instModMap, ffuncMap, foreign_mods,
              [(n,mi) | (n,(mi,_)) <- abmis_by_name])

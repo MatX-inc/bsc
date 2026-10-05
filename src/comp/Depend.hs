@@ -1,10 +1,13 @@
 {-# LANGUAGE CPP #-}
-module Depend(chkDeps, parseFile, chkParse, doCPP, genDepend, genFileDepend,
+module Depend(chkDeps, sourceDependencyPlan, parseFile, parseFilePlan, chkParse, doCPP, genDepend, genFileDepend,
               outlaw_sv_kws_as_classic_ids) where
 
-import Data.Maybe(isJust)
-import Data.List(nub)
-import Control.Monad(when)
+import Data.Maybe(isJust, fromMaybe)
+import Data.List(nub, elemIndex)
+import Control.Monad(when, unless, void)
+import BuildPlan
+import DependencyReport(DependencyCandidate(..), directoryCandidate, DependencyRequirement(..))
+import BinUtil(withBinaryDependencyCache, readBinaryDependenciesPlan, readPackageDependenciesPlan)
 import System.Process(system)
 import System.Exit(ExitCode(..))
 import System.Directory(getModificationTime, getCurrentDirectory)
@@ -13,7 +16,9 @@ import System.IO.Error(ioeGetErrorType)
 import GHC.IO.Exception(IOErrorType(..))
 import Data.Time.Clock.POSIX(utcTimeToPOSIXSeconds)
 import qualified Control.Exception as CE
+import qualified Data.ByteString as BS
 import qualified Data.Map as DM
+import qualified Data.Set as Set
 
 import TmpNam(tmpNam, localTmpNam)
 import SCC(tsort)
@@ -36,7 +41,7 @@ import FileIOUtil(readFilesPath, readBinFilePath, readFileCatch, writeFileCatch,
 import Id
 import PreIds(idPrelude, idPreludeBSV)
 import Parser.Classic(pPackage, errSyntax, classicWarnings)
-import Parser.BSV(bsvParseString)
+import Parser.BSV(bsvParseStringPlan)
 import CSyntax
 import GenFuncWrap(makeGenFuncId)
 import IOUtil(getEnvDef, progArgs)
@@ -82,98 +87,169 @@ getModificationTime' file =
 -- result from codegen, so that a later stage could link them.  But this
 -- feature is no longer supported.)
 chkDeps :: ErrorHandle -> Flags -> String -> IO [(FilePath, CPackage, [WMsg])]
-chkDeps errh flags name = do
-        let gflags = [ mkId noPosition (mkFString s) | s <- genName flags ]
-        (pkg, _, warns) <- parseFile errh flags False name
+chkDeps errh flags name = executeResultPlan $ do
+    graph <- gatherPackagesPlan errh flags False name
+    performResult (fmap (uncurry (schedulePackages errh flags)) graph)
+
+-- The invocation runs one read/choice plan. Its result carries the actual
+-- compilation jobs during execution; discovery never fabricates a selected
+-- graph or the jobs that would be produced from one.
+-- Direct compilation retains the parser's end time for the next phase;
+-- update mode starts a fresh phase clock when each scheduled job is compiled.
+sourceDependencyPlan :: ErrorHandle -> Flags -> FilePath ->
+                        BuildPlan (BuildResult
+                            (Maybe TimeInfo, [(FilePath, CPackage, [WMsg])]))
+sourceDependencyPlan errh flags name = do
+    note "Requirements owned by an alternative source or object apply when that artifact is used."
+    note "Missing candidates describe absence dependencies, not files the caller must manufacture."
+    note "Potential outputs are not exhaustive and are not guaranteed after a compilation error."
+    _ <- requireFiles name "compilation-source" "required" [("source", name)]
+      ["An existing object cannot substitute for the explicit source argument."]
+    sourceOutputs flags name []
+    when (preprocessOnly flags) $
+      incomplete "Preprocessing-only (-E) termination is not simulated: source is parsed conservatively."
+    when (isJust (kill flags)) $
+      incomplete "Stage termination (-KILL) is not simulated: source is parsed conservatively."
+    if updCheck flags
+      then do
+        graph <- gatherPackagesPlan errh flags False name
+        jobs <- performResult (fmap (uncurry (schedulePackages errh flags)) graph)
+        return (fmap ((,) Nothing) jobs)
+      else withBinaryDependencyCache $ \binaryCache -> do
+        (pkg, parseTime, warns) <- parseFilePlan errh flags False name
+        let gflags = [mkId noPosition (mkFString n) | n <- genName flags]
         pi <- getInfo errh flags gflags name pkg warns
-        let initMap = DM.singleton (pkgName pi) pi
-        (errs, piMap) <- transClose errh flags ([], initMap) (imports pi)
-        when (not $ null errs) $ bsError errh errs
+        readPackageDependenciesPlan binaryCache errh flags name (imports pi)
+        return (pure (Just parseTime, [(name, pkg, warns)]))
 
-        let pis = DM.elems piMap
-        case tsort [ (n, is) | PkgInfo { pkgName = n, imports = is } <- pis ] of
-            Left cycle@(firstImport:_) ->
-                bsError errh [(getPosition firstImport,
-                               ECircularImports (map ppReadable cycle))]
-            Right ns -> do
-                let lookupPkg n = case DM.lookup n piMap of
-                                    Just pi -> pi
-                                    Nothing -> internalError "Depend.chkDeps: lookupPkg"
-                    -- the pkginfo of all depended modules, in dependency order
-                    pis' = map lookupPkg ns
-                    -- names of files resulting from codegen, if we want
-                    -- to return them, for a linking stage to use
-                    --genfs = concatMap (getGenFs flags) pis'
-                -- the pkginfos with "recompile" marked for any files whose
-                -- source is newer than any of its related files
-                pis'' <- chkUpd flags DM.empty [] pis'
-                -- extract the files to recompile with their parsed packages and warnings, in dependency order
-                return (reverse [ (fileName pi, pkg, warns) | pi@(PkgInfo { compileStatus = Recompile pkg warns }) <- pis'' ])
-            Left [] -> internalError "Depend.chkDeps: tsort empty cycle"
+sourceOutputs :: Flags -> FilePath -> [FilePath] -> BuildPlan ()
+sourceOutputs flags name generated =
+    unless (preprocessOnly flags || isJust (kill flags)) $
+      outputs (putInDir (bdir flags) name binSuffix : generated)
 
--- Get PkgInfo for a package name.  Try to open the corresponding file.
--- Also try the .bo file (for installed libraries).
-getPkgInfo :: ErrorHandle -> Flags -> PkgName -> IO (Either EMsg PkgInfo)
-getPkgInfo errh flags pname =
-    let name = getIdString pname ++ "." ++ bscSrcSuffix
-        bsvname = getIdString pname ++ "." ++ bsvSrcSuffix
-        bname = getIdString pname ++ "." ++ binSuffix
-        path = ifcPath flags
-        errPackageMissing = (getIdPosition pname,
-                             EMissingPackage (pfpString pname))
-        trybsv :: IO (Maybe PkgInfo)
-        trybsv = do
-          mfile <- readFilesPath errh noPosition False [bsvname, name] path
-          case mfile of
-            Nothing -> return Nothing
-            Just (_, fname) -> do
-                (pkg, _, warns) <- parseFile errh flags True fname
-                pi <- getInfo errh flags [] fname pkg warns
-                -- parseFile checks package name matches filename (fatal error)
-                return (Just pi)
-        trybo :: IO (Maybe PkgInfo)
-        trybo = do
-          mfile <- readBinFilePath errh noPosition False bname path
-          case mfile of
-            Nothing -> return Nothing
-            Just (file, fname) ->
-                -- this comparison forces evaluation to force close on the file
-                if file /= file then internalError "getPkgInfo" else do
-                  t <- getModTime fname
-                  return $ Just $
-                      PkgInfo { pkgName = pname, fileName = fname,
-                                srcMod = Nothing, lastMod = t, imports = [], includes = [],
-                                gens = [], foreigns = [],
-                                compileStatus = Binary }
+type PackageGraph = ([EMsg], DM.Map PkgName PkgInfo)
+type PackageVisit = (Set.Set PkgName, String, PkgName)
 
-        -- if a stage returns Nothing, then try the next stage;
-        -- once a stage returns something, return it
-        contIfNothing :: IO (Maybe a) -> Maybe a -> IO (Maybe a)
-        contIfNothing fn Nothing = fn
-        contIfNothing fn res     = return res
-    in
-       -- any IO failure along the way aborts the process
-       trybsv >>=
-       contIfNothing trybo >>=
-       \res -> case res of
-                 Nothing -> return (Left errPackageMissing)
-                 Just r -> return (Right r)
+-- Execution threads the selected graph through the breadth-first queue.
+-- Discovery carries each real alternative's state to its descendants while
+-- keeping independent siblings separate; there is no union of package bodies.
+gatherPackagesPlan :: ErrorHandle -> Flags -> Bool -> FilePath ->
+                      BuildPlan (BuildResult PackageGraph)
+gatherPackagesPlan errh flags fatalRoot name = withBinaryDependencyCache $ \binaryCache -> do
+    let gflags = [mkId noPosition (mkFString n) | n <- genName flags]
+    (pkg, _, warns) <- parseFilePlan errh flags fatalRoot name
+    root <- getInfo errh flags gflags name pkg warns
+    let initial = ([], DM.singleton (pkgName root) root)
+        visit :: PackageGraph -> PackageVisit -> BuildPlan (Either () (PackageGraph, [PackageVisit]))
+        visit state@(errors, selected) (ancestors, owner, n)
+          | Set.member n ancestors = do
+              incomplete (owner ++ ": circular source import involving " ++ getIdString n)
+              return (Right (state, []))
+          | otherwise =
+              choose (owner ++ ": package already visited: " ++ getIdString n) (DM.member n selected)
+                (return (Right (state, []))) $ do
+                  epi <- getPkgInfo errh flags owner n
+                  case epi of
+                    Left err -> do
+                      incomplete (owner ++ ": package " ++ getIdString n ++
+                        " has no available candidate; transitive dependencies are unknown")
+                      return (Right ((err : errors, selected), []))
+                    Right pi -> do
+                      let state' = (errors, DM.insert n pi selected)
+                      case compileStatus pi of
+                        Binary -> do
+                          readBinaryDependenciesPlan binaryCache errh flags (fileName pi)
+                          return (Right (state', []))
+                        _ -> return (Right (state',
+                          [(Set.insert n ancestors, fileName pi, i) | i <- imports pi]))
+    -- Preserve transClose's source-loading order: finish the pending queue
+    -- before reading any newly discovered imports. Discovery inspects each
+    -- branch's child jobs independently without constructing a joined graph.
+    graph <- traverseState BreadthFirst visit initial
+      [(Set.singleton (pkgName root), name, i) | i <- imports root]
+    return (fmap (either (const (internalError "gatherPackagesPlan: unexpected traversal error")) id) graph)
+
+schedulePackages :: ErrorHandle -> Flags -> [EMsg] -> DM.Map PkgName PkgInfo ->
+                    IO [(FilePath, CPackage, [WMsg])]
+schedulePackages errh flags errs packages = do
+    when (not (null errs)) $ bsError errh errs
+    let pis = DM.elems packages
+    case tsort [(pkgName pi, imports pi) | pi <- pis] of
+      Left (firstImport:rest) ->
+        bsError errh [(getPosition firstImport,
+          ECircularImports (map ppReadable (firstImport:rest)))]
+      Left [] -> internalError "Depend.schedulePackages: tsort empty cycle"
+      Right names -> do
+        let lookupPkg n = case DM.lookup n packages of
+              Just pi -> pi
+              Nothing -> internalError "Depend.schedulePackages: lookupPkg"
+        checked <- chkUpd flags DM.empty [] (map lookupPkg names)
+        return (reverse [(fileName pi, pkg, warns) |
+          pi@PkgInfo { compileStatus = Recompile pkg warns } <- checked])
+
+-- Resolve the same source-first package choice for both interpretations.
+-- The normal lookup determines the selected branch and retains its diagnostics.
+-- Discovery unions the available alternatives, including shadowed objects.
+getPkgInfo :: ErrorHandle -> Flags -> String -> PkgName -> BuildPlan (Either EMsg PkgInfo)
+getPkgInfo errh flags owner pname = do
+    let name = getIdString pname
+        paths ext = [dir ++ "/" ++ name ++ "." ++ ext | dir <- ifcPath flags]
+        sourcePaths = paths bsvSrcSuffix ++ paths bscSrcSuffix
+        objectPaths = paths binSuffix
+        missing = (getIdPosition pname, EMissingPackage (pfpString pname))
+    candidates <- requireFiles owner ("package-import:" ++ name) "source-or-object"
+      ([("source", p) | p <- sourcePaths] ++ [("object", p) | p <- objectPaths])
+      ["-u looks for source (.bsv before .bs, in search-path order), parses available source and may regenerate its object.",
+       "An existing object is reusable only under the compiler's normal freshness and compatibility checks.",
+       "When no source is found, a compatible object is required."]
+    selectedSource <- observe ("resolve source package " ++ name) $
+      readFilesPath errh noPosition False [name ++ "." ++ bsvSrcSuffix, name ++ "." ++ bscSrcSuffix] (ifcPath flags)
+    selected <- case selectedSource of
+      Just (_, path) -> return (Just path)
+      Nothing -> observe ("resolve object package " ++ name) $ do
+        object <- readBinFilePath errh noPosition False (name ++ "." ++ binSuffix) (ifcPath flags)
+        case object of
+          Nothing -> return Nothing
+          Just (bytes, path) -> do
+            -- Finish the selected lazy file read, as the original lookup did,
+            -- so its handle is closed before loading further packages.
+            _ <- CE.evaluate (BS.length bytes)
+            return (Just path)
+    let available = filter candidateExists candidates
+        selectedIndex = fromMaybe 0 (selected >>= \path -> elemIndex path (map candidatePath available))
+        inspect c | candidateKind c == "source" = do
+          let path = candidatePath c
+          sourceOutputs flags path []
+          (pkg, _, warns) <- parseFilePlan errh flags True path
+          Right <$> getInfo errh flags [] path pkg warns
+        inspect c = do
+          let path = candidatePath c
+          t <- observe ("object timestamp " ++ path) $ getModTime path
+          return $ Right $ PkgInfo pname path Nothing t [] [] [] [] Binary
+    if null available || not (isJust selected) then return (Left missing)
+      else select (owner ++ ": source or object for " ++ name) selectedIndex (map inspect available)
 
 -- Extract PkgInfo from a parsed CPackage
-getInfo :: ErrorHandle -> Flags -> [ModName] -> FilePath -> CPackage -> [WMsg] -> IO PkgInfo
+getInfo :: ErrorHandle -> Flags -> [ModName] -> FilePath -> CPackage -> [WMsg] -> BuildPlan PkgInfo
 getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
     -- the mod time of the source file
-    tbs <- getModTime fname
+    tbs <- observe ("source timestamp " ++ fname) $ getModTime fname
 
     -- function to change fname's path to a new directory
     -- (like TopUtils::putInDir)
     let mkdname dir suf = dir ++ "/" ++ baseName (dropSuf fname) ++ "." ++ suf
 
     -- find the mod time of the bo file (either in same dir or in the bdir)
-    tbo_samedir <- getModTime (dropSuf fname ++ "." ++ binSuffix)
+    when (updCheck flags) $ do
+      _ <- requireFiles fname "freshness-object" "optional"
+        [("object", p) | p <- nub [dropSuf fname ++ "." ++ binSuffix, putInDir (bdir flags) fname binSuffix]]
+        ["Under -u, existing objects and their timestamps influence whether this source is recompiled.",
+         "The -bdir object is preferred for freshness when present; otherwise the same-directory object is checked."]
+      return ()
+    tbo_samedir <- observe ("object timestamp " ++ fname) $ getModTime (dropSuf fname ++ "." ++ binSuffix)
     tbo_bdir <- case (bdir flags) of
                     Nothing -> return Nothing
-                    Just dir -> getModTime (mkdname dir binSuffix)
+                    Just dir -> observe ("object timestamp " ++ mkdname dir binSuffix) $ getModTime (mkdname dir binSuffix)
     let tbo = if (isJust tbo_bdir) then tbo_bdir else tbo_samedir
 
     -- include the prelude to avoid failures when predule was updated.
@@ -183,7 +259,7 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
            | i == idPreludeBSV = [idPrelude]
            | otherwise = [idPrelude, idPreludeBSV]
     let status = if tbo < tbs then Recompile pkg warns else UpToDate pkg warns
-    return $ PkgInfo {
+    let pi = PkgInfo {
                       pkgName = i,
                       fileName = fname,
                       srcMod = tbs,
@@ -200,22 +276,20 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
                       foreigns = [ i | CPragma (Pproperties _ pps) <- defs,
                                        (PPforeignImport i) <- pps ],
                       compileStatus = status }
-
--- Compute the transitive closure of all imports.
--- The `done' arg are the already visited packages,
--- and the `ns' arg are the names of the remaining ones.
-transClose :: ErrorHandle -> Flags -> ([EMsg], DM.Map PkgName PkgInfo) -> [PkgName] ->
-              IO ([EMsg], DM.Map PkgName PkgInfo)
-transClose errh flags done [] = return done
-transClose errh flags (errs,done) (n:ns) = do
-        --putStr (ppReadable n)
-        case DM.lookup n done of
-             Just _ -> transClose errh flags (errs,done) ns
-             Nothing -> do
-                epi <- getPkgInfo errh flags n
-                case epi of
-                  Left  em -> transClose errh flags (em:errs,done) (ns)
-                  Right pi -> transClose errh flags (errs, DM.insert n pi done) (ns ++ imports pi)
+    let generated = getGenFs flags pi
+    sourceOutputs flags fname generated
+    when (updCheck flags && not (null generated)) $ do
+      _ <- requireFiles fname "freshness-generated-outputs" "optional"
+        [("generated-output", p) | p <- generated]
+        ["Missing or older generated outputs can cause -u to recompile the source."]
+      return ()
+    when (backend flags /= Nothing && not (null (gens pi))) $ do
+      incomplete (fname ++ ": module elaboration can open dynamically named files, including absolute paths; relative names use " ++
+        maybe "the invocation working directory" ("-fdir " ++) (fdir flags) ++
+        ". Elaboration is not executed and these file accesses are not scanned by dependency discovery.")
+      when (or [not (null options) | CPragma (Pproperties _ props) <- defs, PPoptions options <- props]) $
+        incomplete (fname ++ ": module options pragmas may change input/output paths or generation behavior during elaboration.")
+    return pi
 
 -- This tries to return a list of all files that will be generated from
 -- this file after codegen.
@@ -268,11 +342,9 @@ chkUpd flags doneMap resultList (pi:pis) = do
         --putStrLn (show (fileName pi, genfs, map (srcMod pi >) genfsClks))
         --putStr (ppReadable (pkgName pi, imports pi, DM.keys doneMap))
             lastCompTime = minimum ((lastMod pi) : genfsClks)
-        if any (needsUpd lastCompTime doneMap) (imports pi) || needGenUpd || needIncUpd then
-          let pi' = pi { compileStatus = Recompile pkg warns }
-          in chkUpd flags (DM.insert (pkgName pi') pi' doneMap) (pi' : resultList) pis
-        else
-          chkUpd flags (DM.insert (pkgName pi) pi doneMap) (pi : resultList) pis
+        let stale = any (needsUpd lastCompTime doneMap) (imports pi) || needGenUpd || needIncUpd
+            pi' = if stale then pi { compileStatus = Recompile pkg warns } else pi
+        chkUpd flags (DM.insert (pkgName pi') pi' doneMap) (pi' : resultList) pis
       _ ->
         -- Binary, Recompile, or Prelude packages: no change needed
         chkUpd flags (DM.insert (pkgName pi) pi doneMap) (pi : resultList) pis
@@ -296,7 +368,7 @@ needsUpd myMod piMap n =
 
 getModTime :: String -> IO MClockTime
 getModTime f = CE.catch (getModificationTime' f >>= return . Just) handler
-  where handler :: CE.SomeException -> IO MClockTime
+  where handler :: CE.IOException -> IO MClockTime
         handler _ = return Nothing
 
 -----
@@ -347,22 +419,36 @@ flags in the CC variable, for example CC="cc -g", then it will work.
 -- If fatal_name_mismatch is True, package name mismatch causes bsError (aborts)
 -- If False, it's just a bsWarning
 parseFile :: ErrorHandle -> Flags -> Bool -> FilePath -> IO (CPackage, TimeInfo, [WMsg])
-parseFile errh flags fatal_name_mismatch fname = do
+parseFile errh flags fatal_name_mismatch fname =
+    executePlan $ parseFilePlan errh flags fatal_name_mismatch fname
+
+parseFilePlan :: ErrorHandle -> Flags -> Bool -> FilePath -> BuildPlan (CPackage, TimeInfo, [WMsg])
+parseFilePlan errh flags fatal_name_mismatch fname = do
     let isClassic = hasDotSuf bscSrcSuffix fname
 
-    t <- getNow
+    t <- observe "parser clock" getNow
     let dumpnames = (Just (baseName (dropSuf fname)), Nothing, Nothing)
 
     -- parseSrc needs encoded path for position tracking
-    pwd <- getCurrentDirectory
+    pwd <- observe "working directory" getCurrentDirectory
     let fname_encoded = createEncodedFullFilePath fname pwd
 
-    start flags DFcpp
-    file <- doCPP errh flags fname_encoded
-    _ <- dumpStr errh flags t DFcpp dumpnames file
+    when (hasDotSuf bsvSrcSuffix fname && vpp flags) $ do
+      directories <- observe "include search directories" $
+        mapM (directoryCandidate "include-search-directory") (ifcPath flags)
+      reportRequirement $ Requirement fname "include-search" "search" directories
+        ["Recursive directory snapshots conservatively cover include lookup alternatives, including currently absent files.",
+         "Only the compiler's active preprocessing branches are parsed; changed source or defines require a new query."]
+
+    perform $ start flags DFcpp
+    file <- if cpp flags
+      then produce (fname ++ ": external C preprocessing is not executed by dependency discovery") $
+             doCPP errh flags fname_encoded
+      else observe ("read source " ++ fname) $ doCPP errh flags fname_encoded
+    perform $ void $ dumpStr errh flags t DFcpp dumpnames file
 
     -- parseSrc handles its own dump stages (DFparsed, DFvpp, etc.)
-    (pkg@(CPackage i _ _ _ _ _ _), t', warns) <- parseSrc isClassic errh flags fname_encoded file
+    (pkg@(CPackage i _ _ _ _ _ _), t', warns) <- parseSrcPlan isClassic errh flags fname_encoded file
 
     -- Check for package name mismatch
     let reportMismatch = if fatal_name_mismatch then bsError else bsWarning
@@ -371,43 +457,42 @@ parseFile errh flags fatal_name_mismatch fname = do
     -- setSyntax, GHC can memoize the result as CLASSIC and corrupt the print
     -- mode for the entire subsequent compilation.  Package names are always
     -- simple unqualified identifiers, so getIdString is equivalent.
-    when (getIdString i /= baseName (dropSuf fname)) $
+    observe ("check package name " ++ fname) $ when (getIdString i /= baseName (dropSuf fname)) $
          reportMismatch errh
              [(getPosition i, WFilePackageNameMismatch fname (getIdString i))]
 
     -- dump CSyntax
-    when (showCSyntax flags) (putStrLnF (show pkg))
+    perform $ when (showCSyntax flags) (putStrLnF (show pkg))
     -- dump stats
-    stats flags DFparsed pkg
+    perform $ stats flags DFparsed pkg
 
     return (pkg, t', warns)
 
--- wrapper to detect file encoding errors (which are detected lazily)
-parseSrc :: Bool -> ErrorHandle -> Flags -> String -> String ->
-            IO (CPackage, TimeInfo, [WMsg])
-parseSrc classic errh flags filename inp = CE.handleJust isEncErr handleErr $ parseSrc' classic errh flags filename inp
-    where isEncErr :: CE.IOException -> Maybe CE.IOException
-          isEncErr e | InvalidArgument <- ioeGetErrorType e = Just e
-                     | otherwise = Nothing
-          handleErr _ = bsError errh [(filePosition $ mkFString filename, ENotUTF8)]
-
-parseSrc' :: Bool -> ErrorHandle -> Flags -> String -> String ->
-            IO (CPackage, TimeInfo, [WMsg])
-parseSrc' True errh flags filename inp = do
-  -- Classic parser
-  t <- getNow
+-- Parsing reads source and included files. Dumps, progress output and stage
+-- termination are separate execution effects; dependency discovery runs the
+-- same parser and retains its errors as unresolved branches.
+parseSrcPlan :: Bool -> ErrorHandle -> Flags -> String -> String ->
+                BuildPlan (CPackage, TimeInfo, [WMsg])
+parseSrcPlan True errh flags filename inp = do
+  t <- observe "parser clock" getNow
   let dumpnames = (Just (baseName (dropSuf filename)), Nothing, Nothing)
-  start flags DFparsed
-  let lflags = LFlags { lf_is_stdlib = stdlibNames flags,
-                        lf_allow_sv_kws = not outlaw_sv_kws_as_classic_ids }
-  case chkParse pPackage (lexStart lflags (mkFString filename) inp) of
-      Right pkg -> do t <- dump errh flags t DFparsed dumpnames pkg
-                      let ws = classicWarnings pkg
-                      return (pkg, t, ws)
-      Left errs -> bsError errh errs
-parseSrc' False errh flags filename inp =
-  -- BSV parser
-  bsvParseString errh flags filename (baseName $ dropSuf filename) inp
+      lflags = LFlags { lf_is_stdlib = stdlibNames flags,
+                       lf_allow_sv_kws = not outlaw_sv_kws_as_classic_ids }
+  perform $ start flags DFparsed
+  pkg <- observe ("parse " ++ filename) $
+    CE.handleJust isEncErr handleErr $
+      case chkParse pPackage (lexStart lflags (mkFString filename) inp) of
+        Right p -> return p
+        Left errs -> bsError errh errs
+  perform $ void $ dump errh flags t DFparsed dumpnames pkg
+  t' <- observe "parser clock" getNow
+  return (pkg, t', classicWarnings pkg)
+  where isEncErr :: CE.IOException -> Maybe CE.IOException
+        isEncErr e | InvalidArgument <- ioeGetErrorType e = Just e
+                   | otherwise = Nothing
+        handleErr _ = bsError errh [(filePosition $ mkFString filename, ENotUTF8)]
+parseSrcPlan False errh flags filename inp =
+  bsvParseStringPlan errh flags filename (baseName $ dropSuf filename) inp
 
 chkParse :: Parser [Token] a -> [Token] -> Either [EMsg] a
 chkParse p ts =
@@ -418,12 +503,9 @@ chkParse p ts =
 
 ----
 findPackages :: ErrorHandle -> Flags -> FilePath -> IO ([EMsg],[PkgInfo])
-findPackages errh flags name = do
-  let gflags = [ mkId noPosition (mkFString s) | s <- genName flags ]
-  (pkg, _, warns) <- parseFile errh flags True name
-  pi <- getInfo errh flags gflags name pkg warns
-  (errs, piMap) <- transClose errh flags ([], DM.singleton (pkgName pi) pi) (imports pi)
-  return (errs, DM.elems piMap)
+findPackages errh flags name = executeResultPlan $
+  fmap (fmap (\(errs, packages) -> (errs, DM.elems packages))) $
+    gatherPackagesPlan errh flags True name
 
 -- generate the file name dependencies for filename
 -- A package depends on its own source file name

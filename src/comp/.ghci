@@ -4,6 +4,7 @@
 
 -- Packages
 :set -package base
+:set -package aeson
 :set -package containers
 :set -package array
 :set -package mtl

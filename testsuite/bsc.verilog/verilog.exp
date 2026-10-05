@@ -1,6 +1,9 @@
 
 # test Verilog (and C) code generation modules
 
+set dependency_test_directory [file dirname [file normalize [info script]]]
+source [file join $dependency_test_directory .. bsc.dependencies dependencies.tcl]
+
 # Note: Bluesim executes system tasks at the posedge of clock,
 # consistent with TRS semantics.  Verilog executes them at the
 # negedge of clock, 1/2 cycle too early.  Until the Verilog
@@ -25,6 +28,15 @@ test_c_only Misc
 
 # Bluesim also generates warnings that Verilog can't
 test_veri_only Mips sysMips.v.out.expected
+if {$vtest == 1} {
+    check_dependencies $dependency_test_directory mips-verilog [list \
+        -verilog -vsim $verilog_compiler -e sysMips \
+        -o dependency-mips.vexe sysMips.v] {
+        --mode verilog-link --complete false --input sysMips.v
+        --role explicit-verilog --role simulator-wrapper
+        --output dependency-mips.vexe --boundary simulator
+    }
+}
 # The warnings depend on if aggr-conds is on, so ensure it is
 test_c_only_bs_modules_options Mips {} {-aggressive-conditions}
 #test_syn Mips 
@@ -53,4 +65,3 @@ find_n_strings sysUnderscore.v {mkUnderscore_ s} 1
 }
 
 # -----
-

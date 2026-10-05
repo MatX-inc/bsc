@@ -1,6 +1,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenBin(genBinFile, readBinFile) where
+module GenBin(genBinFile, readBinFile, decodeBinFile) where
 
 import Control.Monad(when)
 import qualified Data.Text as T
@@ -8,7 +8,7 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
 import Position
 import Pragma
-import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
+import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, bsError)
 import ISyntax
 import ISyntaxUtil(icUndet)
 import CSyntax
@@ -39,12 +39,20 @@ genBinFile errh fn bi_sig bo_sig ipkg =
 readBinFile :: ErrorHandle -> String -> B.ByteString ->
                IO (CSignature, CSignature, IPackage a, String)
 readBinFile errh nm s =
+    either (bsError errh . (:[])) return (decodeBinFile nm s)
+
+-- Header inspection is also used before a possible compilation. Keep decoding
+-- separate from diagnostics: speculative metadata reads must not reject an
+-- otherwise up-to-date invocation or validate objects before their producers.
+decodeBinFile :: String -> B.ByteString ->
+                 Either EMsg (CSignature, CSignature, IPackage a, String)
+decodeBinFile nm s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS
        then let ((bi_sig, bo_sig, ipkg), hash) =
                     decodeWithHash $ B.drop hlen s
-            in return (bi_sig, bo_sig, ipkg, hash)
-       else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+            in Right (bi_sig, bo_sig, ipkg, hash)
+       else Left (noPosition, EBinFileVerMismatch nm)
 
 -- ----------
 -- Bin CSignature

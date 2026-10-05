@@ -6,6 +6,10 @@
 > import Data.Char
 > import Data.List(mapAccumL, group, groupBy, intercalate, sort, partition, nub)
 > import Data.Maybe
+> import BuildPlan
+> import qualified Control.Exception as CE
+> import System.IO.Error(ioeGetErrorType)
+> import GHC.IO.Exception(IOErrorType(..))
 > import Control.Monad
 > import qualified Data.Set as S
 > -- import Debug.Trace
@@ -34,7 +38,7 @@
 > import Parser.BSV.CVParserCommon
 > import Parser.BSV.CVParserImperative
 > import Pragma
-> import SystemVerilogPreprocess(preprocess)
+> import SystemVerilogPreprocess(preprocessPlan)
 > import SystemVerilogScanner(scan)
 > import SystemVerilogTokens
 > import SystemVerilogKeywords
@@ -5917,29 +5921,46 @@ tokenize and parse string into CSyntax
 >                   String -> String -> String ->
 >                   IO (CPackage, TimeInfo, [WMsg])
 > bsvParseString errh flags filename defaultPkgName source =
+>     executePlan $ bsvParseStringPlan errh flags filename defaultPkgName source
+>
+> bsvParseStringPlan :: ErrorHandle -> Flags ->
+>                       String -> String -> String ->
+>                       BuildPlan (CPackage, TimeInfo, [WMsg])
+> bsvParseStringPlan errh flags filename defaultPkgName source =
 >     do
 >       let initpos =
 >               updatePosStdlib (initialPosition filename) (stdlibNames flags)
->       t <- getNow
->       start flags DFvpp
->       vppOut@(ppsource, includes)  <- preprocess errh flags initpos source
+>       t <- observe "parser clock" getNow
+>       perform $ start flags DFvpp
+>       vppOut@(ppsource, includes) <- preprocessPlan errh flags initpos source
 >       let dumpnames = (Just (baseName (dropSuf filename)), Nothing, Nothing)
->       t <- dump errh flags t DFvpp dumpnames (VPPOut vppOut)
->       when ( preprocessOnly flags ) $ do putStrLn ppsource
->                                          exitOK errh
+>       perform $ void $ dump errh flags t DFvpp dumpnames (VPPOut vppOut)
+>       t <- observe "parser clock" getNow
+>       perform $ when (preprocessOnly flags) $ do
+>         putStrLn ppsource
+>         exitOK errh
 >
->       start flags DFbsvlex
+>       perform $ start flags DFbsvlex
 >       let tokens = scan initpos ppsource
->       t <- dump errh flags t DFbsvlex dumpnames tokens
+>       perform $ void $ dump errh flags t DFbsvlex dumpnames tokens
+>       t <- observe "parser clock" getNow
 
 parsing is done after we return
 
->       start flags DFparsed
+>       perform $ start flags DFparsed
 >       (CPackage name exports imports impsigs fixs defs _, warns)
->            <- bsvParseTokens errh flags filename defaultPkgName tokens
+>            <- observe ("parse " ++ filename) $ encodingErrors $
+>                bsvParseTokens errh flags filename defaultPkgName tokens
 >       let package = (CPackage name exports imports impsigs fixs defs (map CInclude includes))
->       t <- vdump errh flags t DFparsed dumpnames package
+>       perform $ void $ vdump errh flags t DFparsed dumpnames package
+>       t <- observe "parser clock" getNow
 >       return (package, t, warns)
+>     where
+>       encodingErrors action = CE.handleJust isEncErr handleErr action
+>       isEncErr :: CE.IOException -> Maybe CE.IOException
+>       isEncErr e | InvalidArgument <- ioeGetErrorType e = Just e
+>                  | otherwise = Nothing
+>       handleErr _ = bsError errh [(filePosition $ mkFString filename, ENotUTF8)]
 
 wrapper function to allow parsing from TCL for a specific type
 XXX should fixup positions here

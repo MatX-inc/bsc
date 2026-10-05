@@ -5,6 +5,7 @@ import Exceptions(bsCatch)
 import Version
 import FileNameUtil(hasDotSuf, hasNoSuffix, vcdSuffix)
 import ABinUtil(getABIHierarchy, assertNoSchedErr, InstModMap, HierMap)
+import BuildPlan(executeResultPlan)
 import Position(noPosition)
 import Id( Id, getIdString, getIdBaseString, getIdQualString
          , mkIdCanFire, mkIdWillFire, isIdCanFire, dropCanFirePrefixId
@@ -41,6 +42,7 @@ import System.IO
 import System.IO.Unsafe(unsafePerformIO)
 import System.Time
 import Control.Monad(when, msum, foldM)
+import Control.Monad.Except(ExceptT(..))
 import Control.Exception(bracket)
 import Data.List( partition, intercalate, genericLength
                 , sort, findIndex, sortBy, groupBy
@@ -305,8 +307,9 @@ hmain argv = do
           let prim_names = map sb_name primBlocks
           when (verbose) $ putStrLn "Reading design data from .ba files..."
           (_, hier_map, inst_map, _, _, _, abemis_by_name)
-              <- convExceptTToIO errh $
+              <- convExceptTToIO errh $ ExceptT $ executeResultPlan $
                  getABIHierarchy errh verbose ba_path Nothing prim_names top_mod []
+                     (\_ _ _ -> return ())
           abmis_by_name <- convExceptTToIO errh $ assertNoSchedErr abemis_by_name
 
           -- analyze design in preparation for VCD interpretation

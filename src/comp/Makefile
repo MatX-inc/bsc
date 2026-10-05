@@ -129,6 +129,7 @@ GHCPROFAUTO = -fprof-auto
 
 PACKAGES = \
 	base \
+	aeson \
 	containers \
 	array \
 	mtl \
@@ -260,8 +261,16 @@ BSCEXES = bsc
 TCLEXES = bluetcl
 UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck
 SHOWRULESEXES = showrules
+TESTEXES = buildplantest
 
 EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES)
+
+# Build interpreter regressions and refresh all artifact-checking tools through
+# the normal root install-src build when preparing to run internal checks.
+ifeq ($(BSC_BUILD_TESTS),1)
+EXES += $(TESTEXES)
+install: install-extra $(BINDIR)/buildplantest $(BINDIR)/core/buildplantest
+endif
 
 .PHONY: all
 all: $(EXES)
@@ -359,6 +368,14 @@ showrules: $(SOURCES)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
 
+.PHONY: buildplantest
+buildplantest: $(SOURCES) $(TOP)/testsuite/bsc.dependencies/BuildPlanTest.hs
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main -o $@ \
+		$(filter-out $@,$(BUILDFLAGS)) $(RTSFLAGS) \
+		$(TOP)/testsuite/bsc.dependencies/BuildPlanTest.hs
+	$(POSTBUILDCOMMAND)
+
 # bluetcl is built in two steps:
 # 1. Build BlueTcl module using -c to emit .hi/.o files, and also the
 #    BlueTcl_stub.h reqired by bluetcl_Main.hsc in the next action
@@ -444,7 +461,7 @@ tags:   *hs */*hs bluewish.hs
 
 .PHONY: clean
 clean:
-	$(RM) -rf $(EXES) $(BUILDDIR)
+	$(RM) -rf $(EXES) $(TESTEXES) $(BUILDDIR)
 
 .PHONY: full_clean
 full_clean: clean

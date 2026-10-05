@@ -12,6 +12,7 @@ apt-get install -y \
     git \
     gperf \
     iverilog \
+    libghc-aeson-dev \
     libghc-old-time-dev \
     libghc-regex-compat-dev \
     libghc-syb-dev \

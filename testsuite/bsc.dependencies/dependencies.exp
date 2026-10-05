@@ -1,0 +1,30 @@
+# Interpreter unit tests. Integration queries run with existing designs.
+bsc_initialize
+set commands [list]
+set plan_test [file join [file dirname [which_bsc]] buildplantest]
+if {[file executable $plan_test]} {
+    lappend commands [list $plan_test]
+} elseif {[do_internal_checks]} {
+    fail "dependencies: buildplantest missing (build root install-src with BSC_BUILD_TESTS=1)"
+}
+foreach command $commands {
+    verbose -log "Executing: $command" 2
+    set status [catch {exec {*}$command 2>@1} output]
+    verbose -log $output 2
+    set results 0
+    set failures 0
+    foreach line [split $output "\n"] {
+        if {[regexp {^(PASS|FAIL): (.*)$} $line _ verdict label]} {
+            incr results
+            if {$verdict eq "PASS"} {
+                pass $label
+            } else {
+                incr failures
+                fail $label
+            }
+        }
+    }
+    if {$results == 0 || ($status != 0 && $failures == 0)} {
+        fail "dependencies: test driver completed ($output)"
+    }
+}

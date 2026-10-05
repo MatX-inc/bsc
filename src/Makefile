@@ -16,7 +16,7 @@ TOOLS=$(CC_TOOLS) \
       $(YICES_TOOLS) \
       $(STP_TOOLS) \
 
-GHC_PKGS=regex-compat syb old-time split strict-concurrency
+GHC_PKGS=aeson regex-compat syb old-time split strict-concurrency
 
 SUBMODS=vendor/yices/v2.6/yices2
 

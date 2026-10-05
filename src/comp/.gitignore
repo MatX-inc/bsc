@@ -17,6 +17,7 @@ dumpba
 bsc2bsv
 bsv2bsc
 showrules
+buildplantest
 vcdcheck
 
 # Ignore TAGS files
