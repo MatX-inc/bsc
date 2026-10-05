@@ -1,14 +1,19 @@
 set expandPorts [file join [get_bsdir] tcllib bluespec expandPorts.tcl]
 
-if { [file exists $expandPorts] } {
-    note "Script 'expandPorts' is available!"
-    #set tests [glob *.bsv]
-    set bsvfiles [list Test1.bsv Test10.bsv Test1a.bsv Test1b.bsv Test2.bsv Test3.bsv Test4.bsv Test5.bsv Test6.bsv Test7.bsv Test7a.bsv Test7b.bsv Test12.bsv]
-    # set bsvfiles [list Test1.bsv]
-} else {
-    note "Script 'expandPorts' is NOT available"
-    set bsvfiles [list]
+if { ![file readable $expandPorts] } {
+    fail "installed Bluetcl script expandPorts is available"
+    return
 }
+
+foreach pkg {portUtil types} {
+    set packageFile [file join [get_bsdir] tcllib bluespec $pkg.tcl]
+    if { ![file readable $packageFile] || ![bluetcl_package_available $pkg] } {
+        fail "installed Bluetcl package $pkg is available"
+        return
+    }
+}
+
+set bsvfiles [list Test1.bsv Test10.bsv Test1a.bsv Test1b.bsv Test2.bsv Test3.bsv Test4.bsv Test5.bsv Test6.bsv Test7.bsv Test7a.bsv Test7b.bsv Test12.bsv]
 
 foreach bsv $bsvfiles {
     bsc_compile $bsv {-verilog -elab}

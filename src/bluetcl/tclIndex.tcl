@@ -43,7 +43,7 @@ foreach f $files {
         set ver [lindex $nv 1]
         if { $root == "" } { continue }
 
-            set s [format {package ifneeded %s %s [list source [file join $dir %s]]} $root $ver $f]
+            set s [format {package ifneeded %s %s [list source [file join $dir %s]]} $root $ver [file tail $f]]
             puts $outfp $s
     }
 }

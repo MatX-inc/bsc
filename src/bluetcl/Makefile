@@ -3,6 +3,7 @@ TOP:=$(PWD)/../..
 
 PREFIX?=$(TOP)/inst
 INSTALLDIR = $(PREFIX)/lib/tcllib/bluespec
+HELPERDIR = $(TOP)/util/bluetcl-scripts
 
 TCLSH = $(shell $(TOP)/platform.sh tclsh)
 
@@ -19,20 +20,27 @@ TCLFILES = \
 # tcl packages
 PACKAGES = \
         BluesimP.tcl \
+        $(HELPERDIR)/InstSynth.tcl \
+        $(HELPERDIR)/portUtil.tcl \
+        $(HELPERDIR)/types.tcl \
 
 # top level user scripts
 EXEFILES = \
 	bluesim.tcl \
 	makedepend.tcl \
+	$(HELPERDIR)/expandPorts.tcl \
 
 .PHONY: all
-all: tclIndex
+all: tclIndex pkgIndex.tcl
 
-tclIndex: *.tcl
+tclIndex: $(TCLFILES) $(PACKAGES) tclIndex.tcl Makefile
 	${TCLSH} ./tclIndex.tcl "$(TCLFILES)" "$(PACKAGES)"
 
+pkgIndex.tcl: tclIndex
+	test -f $@ || ${TCLSH} ./tclIndex.tcl "$(TCLFILES)" "$(PACKAGES)"
+
 .PHONY: install
-install: tclIndex
+install: tclIndex pkgIndex.tcl
 	install -d -m755 $(INSTALLDIR)
 	install -m644 $(FILES) $(PACKAGES) $(TCLFILES) $(INSTALLDIR)
 	install -m755 $(EXEFILES) $(INSTALLDIR)
