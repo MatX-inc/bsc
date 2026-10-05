@@ -67,6 +67,8 @@ type Env a = M.Map Id (IExpr a)
 -- resolve exactly like references to any other top-level definition.
 iConvPackage :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab ->
                CATFCache -> [IDef (BinderPhase e)] -> CPackage -> IO (IPackage (BinderPhase e))
+{-# SPECIALISE iConvPackage :: ErrorHandle -> Flags -> SymTab -> CATFCache -> [IDef PreElab] -> CPackage -> IO (IPackage PreElab) #-}
+{-# SPECIALISE iConvPackage :: ErrorHandle -> Flags -> SymTab -> CATFCache -> [IDef Elab] -> CPackage -> IO (IPackage Elab) #-}
 iConvPackage errh flags r ctypeATFCache liftedDefs (CPackage pi _ _ _ _ ds _) =
     return (IPackage pi [] ps ds' itypeATFCache)
   where ds' = concatMap (iConvD errh flags pi r env pvs) ds ++ liftedDefs
@@ -81,6 +83,8 @@ iConvPackage errh flags r ctypeATFCache liftedDefs (CPackage pi _ _ _ _ ds _) =
 
 
 iConvDef :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> IPackage (BinderPhase e) -> CDefn -> IDef (BinderPhase e)
+{-# SPECIALISE iConvDef :: ErrorHandle -> Flags -> SymTab -> IPackage PreElab -> CDefn -> IDef PreElab #-}
+{-# SPECIALISE iConvDef :: ErrorHandle -> Flags -> SymTab -> IPackage Elab -> CDefn -> IDef Elab #-}
 iConvDef errh flags r (IPackage pi _ _ ds _) def =
     let env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds])
         pvs = map IVar tmpVarIds
@@ -89,6 +93,8 @@ iConvDef errh flags r (IPackage pi _ _ ds _) def =
         ds -> internalError ("iConvDef " ++ ppReadable ds ++ ppReadable def)
 
 iConvVar :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (BinderPhase e) -> Id -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvVar :: Flags -> SymTab -> Env PreElab -> Id -> IExpr PreElab #-}
+{-# SPECIALISE iConvVar :: Flags -> SymTab -> Env Elab -> Id -> IExpr Elab #-}
 iConvVar flags r env i =
         --trace ("lookup " ++ ppReadable i ++ show env) $
         case M.lookup i env of
@@ -138,6 +144,8 @@ iConvVar flags r env i =
 
 -- XXX is this really worthwhile now?
 iConvTask :: KnownPhase (BinderPhase e) => SymTab -> Id -> IType -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvTask :: SymTab -> Id -> IType -> IExpr PreElab #-}
+{-# SPECIALISE iConvTask :: SymTab -> Id -> IType -> IExpr Elab #-}
 iConvTask r i it =
    case findVar r i of
         -- only care about name - no "port-magic" for $display and friends
@@ -151,6 +159,8 @@ iConvTask r i it =
 
 
 addVar :: KnownPhase (BinderPhase e) => Id -> IExpr (BinderPhase e) -> Env (BinderPhase e) -> Env (BinderPhase e)
+{-# SPECIALISE addVar :: Id -> IExpr PreElab -> Env PreElab -> Env PreElab #-}
+{-# SPECIALISE addVar :: Id -> IExpr Elab -> Env Elab -> Env Elab #-}
 addVar i e t =
         --trace ("add " ++ ppReadable (i,e)) $
         M.insert i e t
@@ -161,6 +171,8 @@ type IPVars a = [IExpr a]
 
 iConvD :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> Id -> SymTab -> Env (BinderPhase e) -> IPVars (BinderPhase e) ->
           CDefn -> [IDef (BinderPhase e)]
+{-# SPECIALISE iConvD :: ErrorHandle -> Flags -> Id -> SymTab -> Env PreElab -> IPVars PreElab -> CDefn -> [IDef PreElab] #-}
+{-# SPECIALISE iConvD :: ErrorHandle -> Flags -> Id -> SymTab -> Env Elab -> IPVars Elab -> CDefn -> [IDef Elab] #-}
 iConvD errh flags pi r env pvs (CValueSign (CDefT i vs qt cs)) =
     case iConvVS errh flags r env pvs i vs qt cs of
         (i, t, e) -> [IDef (qualId' pi i) t e [] ]
@@ -186,6 +198,8 @@ iConvVS :: KnownPhase (BinderPhase e) => ErrorHandle
            -> CQType
            -> [CClause]
            -> (Id, IType, IExpr (BinderPhase e))
+{-# SPECIALISE iConvVS :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> IPVars PreElab -> Id -> [TyVar] -> CQType -> [CClause] -> (Id, IType, IExpr PreElab) #-}
+{-# SPECIALISE iConvVS :: ErrorHandle -> Flags -> SymTab -> Env Elab -> IPVars Elab -> Id -> [TyVar] -> CQType -> [CClause] -> (Id, IType, IExpr Elab) #-}
 iConvVS errh flags r env pvs i vs (CQType _ t) cs =
         let t' = iConvT flags r t
             t'' = foldr (\ (TyVar i _ k) t -> ITForAll i (iConvK k) t) t' vs
@@ -313,11 +327,15 @@ iConvK (KVar _) = internalError "iConvK"
 --
 iConvPs :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (BinderPhase e) -> [(IExpr (BinderPhase e), IType, CPat)] ->
            (IExpr (BinderPhase e), [(Id, IType, IExpr (BinderPhase e))], Env (BinderPhase e))
+{-# SPECIALISE iConvPs :: Flags -> SymTab -> Env PreElab -> [(IExpr PreElab, IType, CPat)] -> (IExpr PreElab, [(Id, IType, IExpr PreElab)], Env PreElab) #-}
+{-# SPECIALISE iConvPs :: Flags -> SymTab -> Env Elab -> [(IExpr Elab, IType, CPat)] -> (IExpr Elab, [(Id, IType, IExpr Elab)], Env Elab) #-}
 iConvPs flags r env vtps = iConvPs' flags r env id [] (length vtps) vtps
 
 iConvPs' :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (BinderPhase e) ->
             (IExpr (BinderPhase e) -> IExpr (BinderPhase e)) -> [(Id, IType, IExpr (BinderPhase e))] -> Int ->
             [(IExpr (BinderPhase e), IType, CPat)] -> (IExpr (BinderPhase e), [(Id, IType, IExpr (BinderPhase e))], Env (BinderPhase e))
+{-# SPECIALISE iConvPs' :: Flags -> SymTab -> Env PreElab -> (IExpr PreElab -> IExpr PreElab) -> [(Id, IType, IExpr PreElab)] -> Int -> [(IExpr PreElab, IType, CPat)] -> (IExpr PreElab, [(Id, IType, IExpr PreElab)], Env PreElab) #-}
+{-# SPECIALISE iConvPs' :: Flags -> SymTab -> Env Elab -> (IExpr Elab -> IExpr Elab) -> [(Id, IType, IExpr Elab)] -> Int -> [(IExpr Elab, IType, CPat)] -> (IExpr Elab, [(Id, IType, IExpr Elab)], Env Elab) #-}
 iConvPs' flags r env cond bs n [] = (cond iTrue, bs, env)
 
 iConvPs' flags r env cond bs n ((v, _, CPConTs ti i ots [pat]) : ps) =
@@ -364,6 +382,8 @@ iConvPs' flags r env cond bs n _ = internalError ("iConvPs'")
 
 iConvCs :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
            IPVars (BinderPhase e) -> IType -> [CClause] -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvCs :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> IPVars PreElab -> IType -> [CClause] -> IExpr PreElab #-}
+{-# SPECIALISE iConvCs :: ErrorHandle -> Flags -> SymTab -> Env Elab -> IPVars Elab -> IType -> [CClause] -> IExpr Elab #-}
 iConvCs errh flags r env pvs t cs@(CClause ps _ _ : _) =
     foldr (uncurry ILam) (iConvCs' errh flags r env pos pvs' (map (IVar . fst) vts) ts rt cs) vts
   where getArgs (_:ps) (ITAp (ITAp arr a) r) | arr == itArrow = a : getArgs ps r
@@ -383,6 +403,8 @@ iConvCs errh flags r env pvs t [] = internalError "IConv.iConvCs: []"
 iConvCs' :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e)
          -> Position -> IPVars (BinderPhase e) -> [IExpr (BinderPhase e)] -> [IType] -> IType -> [CClause]
          -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvCs' :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> Position -> IPVars PreElab -> [IExpr PreElab] -> [IType] -> IType -> [CClause] -> IExpr PreElab #-}
+{-# SPECIALISE iConvCs' :: ErrorHandle -> Flags -> SymTab -> Env Elab -> Position -> IPVars Elab -> [IExpr Elab] -> [IType] -> IType -> [CClause] -> IExpr Elab #-}
 iConvCs' errh flags r env pos pvs (v:vs) (t_v:t_vs) t [] =
     -- take the position of the first scrutinee if you can
     buildUndefNoMatchPos flags r env (v,t_v) t
@@ -395,6 +417,8 @@ iConvCs' errh flags r env pos pvs vs ts t (c:cs) =
 
 iConvC :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
           IPVars (BinderPhase e) -> [IExpr (BinderPhase e)] -> [IType] -> CClause -> (IExpr (BinderPhase e), IExpr (BinderPhase e))
+{-# SPECIALISE iConvC :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> IPVars PreElab -> [IExpr PreElab] -> [IType] -> CClause -> (IExpr PreElab, IExpr PreElab) #-}
+{-# SPECIALISE iConvC :: ErrorHandle -> Flags -> SymTab -> Env Elab -> IPVars Elab -> [IExpr Elab] -> [IType] -> CClause -> (IExpr Elab, IExpr Elab) #-}
 iConvC errh flags r env pvs vs ts (CClause ps qs e) =
     let (p1, _, env') = iConvPs flags r env (zip3 vs ts ps)
         (p2, bindFn, env'') = iConvQs errh flags r env' pvs qs
@@ -424,11 +448,15 @@ iConvC errh flags r env pvs vs ts (CClause ps qs e) =
 --
 iConvQs :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
            IPVars (BinderPhase e) -> [CQual] -> (IExpr (BinderPhase e), (IExpr (BinderPhase e) -> IExpr (BinderPhase e)), Env (BinderPhase e))
+{-# SPECIALISE iConvQs :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> IPVars PreElab -> [CQual] -> (IExpr PreElab, (IExpr PreElab -> IExpr PreElab), Env PreElab) #-}
+{-# SPECIALISE iConvQs :: ErrorHandle -> Flags -> SymTab -> Env Elab -> IPVars Elab -> [CQual] -> (IExpr Elab, (IExpr Elab -> IExpr Elab), Env Elab) #-}
 iConvQs errh flags r env pvs qs = iConvQs' errh flags r env pvs id [] qs
 
 iConvQs' :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
             IPVars (BinderPhase e) -> (IExpr (BinderPhase e) -> IExpr (BinderPhase e)) -> [(Id, IType, IExpr (BinderPhase e))] ->
             [CQual] -> (IExpr (BinderPhase e), (IExpr (BinderPhase e) -> IExpr (BinderPhase e)), Env (BinderPhase e))
+{-# SPECIALISE iConvQs' :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> IPVars PreElab -> (IExpr PreElab -> IExpr PreElab) -> [(Id, IType, IExpr PreElab)] -> [CQual] -> (IExpr PreElab, (IExpr PreElab -> IExpr PreElab), Env PreElab) #-}
+{-# SPECIALISE iConvQs' :: ErrorHandle -> Flags -> SymTab -> Env Elab -> IPVars Elab -> (IExpr Elab -> IExpr Elab) -> [(Id, IType, IExpr Elab)] -> [CQual] -> (IExpr Elab, (IExpr Elab -> IExpr Elab), Env Elab) #-}
 iConvQs' errh flags r env pvs cond bs [] =
     let -- create let bindings
         -- (use iLetSimp, to inline names that we don't need to keep;
@@ -457,6 +485,8 @@ iConvQs' errh flags r env pvs cond bs (CQGen ct p e:qs) =
 -- convert definitions in a sequential let
 iConvLetSeq :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
                IPVars (BinderPhase e) -> [CDefl] -> (Env (BinderPhase e), [(Id, IType, IExpr (BinderPhase e))])
+{-# SPECIALISE iConvLetSeq :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> IPVars PreElab -> [CDefl] -> (Env PreElab, [(Id, IType, IExpr PreElab)]) #-}
+{-# SPECIALISE iConvLetSeq :: ErrorHandle -> Flags -> SymTab -> Env Elab -> IPVars Elab -> [CDefl] -> (Env Elab, [(Id, IType, IExpr Elab)]) #-}
 iConvLetSeq errh flags symtab env ipvars [] = (env, [])
 iConvLetSeq errh flags symtab env ipvars
         (CLValueSign (CDefT name genvars qualtype clauses) quals : rest_defs) =
@@ -473,6 +503,8 @@ iConvLetSeq _ _ _ _ _ _ = internalError "iConvLetSeq"
 iConvLet :: forall e .
             KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) -> IPVars (BinderPhase e) -> [CDefl] ->
             (Env (BinderPhase e), [(Id, IType, IExpr (BinderPhase e))])
+{-# SPECIALISE iConvLet :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> IPVars PreElab -> [CDefl] -> (Env PreElab, [(Id, IType, IExpr PreElab)]) #-}
+{-# SPECIALISE iConvLet :: ErrorHandle -> Flags -> SymTab -> Env Elab -> IPVars Elab -> [CDefl] -> (Env Elab, [(Id, IType, IExpr Elab)]) #-}
 iConvLet errh flags r env pvs ds = answer
   where answer = case loop_test of
                    Left cycles -> -- trace "inloop" $
@@ -536,9 +568,15 @@ iConvLet errh flags r env pvs ds = answer
 iAddWhen :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e)
          -> IPVars (BinderPhase e) -> [CQual] -> (Env (BinderPhase e) -> IPVars (BinderPhase e) -> (Id, IType, IExpr (BinderPhase e)))
          -> (Id, IType, IExpr (BinderPhase e))
+{-# SPECIALISE iAddWhen :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> IPVars PreElab -> [CQual] -> (Env PreElab -> IPVars PreElab -> (Id, IType, IExpr PreElab)) -> (Id, IType, IExpr PreElab) #-}
+{-# SPECIALISE iAddWhen :: ErrorHandle -> Flags -> SymTab -> Env Elab -> IPVars Elab -> [CQual] -> (Env Elab -> IPVars Elab -> (Id, IType, IExpr Elab)) -> (Id, IType, IExpr Elab) #-}
 iAddWhen errh flags r env pvs [] ite = ite env pvs
 iAddWhen errh flags r env pvs qs ite =
     let (p, bindFn, env') = iConvQs errh flags r env pvs qs
+        -- (GADT matches under MonoLocalBinds need the signature)
+        underLAM :: IType -> IExpr (BinderPhase x) -> [(Id, IKind)]
+                 -> (IType -> IExpr (BinderPhase x) -> IExpr (BinderPhase x))
+                 -> IExpr (BinderPhase x)
         underLAM (ITForAll _ _ t) (ILAM v k e) vks f = underLAM t e ((v,k):vks) f
         underLAM t                e            vks f = foldl (\ e (v,k) -> ILAM v k e) (f t e) vks
     in  case ite env' pvs of
@@ -546,10 +584,14 @@ iAddWhen errh flags r env pvs qs ite =
 
 -- external interface for converting expressions
 iConvExpr :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) -> CExpr -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvExpr :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> CExpr -> IExpr PreElab #-}
+{-# SPECIALISE iConvExpr :: ErrorHandle -> Flags -> SymTab -> Env Elab -> CExpr -> IExpr Elab #-}
 iConvExpr errh flags r env ce = iConvE errh flags r env (map IVar tmpVarIds) ce
 
 iConvE :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) -> IPVars (BinderPhase e) ->
           CExpr -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvE :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> IPVars PreElab -> CExpr -> IExpr PreElab #-}
+{-# SPECIALISE iConvE :: ErrorHandle -> Flags -> SymTab -> Env Elab -> IPVars Elab -> CExpr -> IExpr Elab #-}
 -- CLam
 iConvE errh flags r env pvs (Cletrec ds e) =
         let (env', ites) = iConvLet errh flags r env pvs ds
@@ -722,6 +764,8 @@ getMethodType flags r ti ts m = iInst selty ts
 
 iConvR :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
           IPVars (BinderPhase e) -> CRule -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvR :: ErrorHandle -> Flags -> SymTab -> Env PreElab -> IPVars PreElab -> CRule -> IExpr PreElab #-}
+{-# SPECIALISE iConvR :: ErrorHandle -> Flags -> SymTab -> Env Elab -> IPVars Elab -> CRule -> IExpr Elab #-}
 iConvR errh flags r env pvs rule@(CRule rps i qs a) =
     let (p, bindFn, env') = iConvQs errh flags r env pvs qs
         a' = bindFn $ iConvE errh flags r env' pvs a
@@ -733,9 +777,13 @@ iConvR errh flags r env pvs rule =
     internalError ("IConv.iConvR: nested rule: " ++ show rule)
 
 iConvRulePragmas :: KnownPhase (BinderPhase e) => [RulePragma] -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvRulePragmas :: [RulePragma] -> IExpr PreElab #-}
+{-# SPECIALISE iConvRulePragmas :: [RulePragma] -> IExpr Elab #-}
 iConvRulePragmas as = ICon (dummyId noPosition) (ICRuleAssert { ictRuleAssert = itBit0, iAsserts = as })
 
 iConvSchedulePragmas :: KnownPhase (BinderPhase e) => [CSchedulePragma] -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvSchedulePragmas :: [CSchedulePragma] -> IExpr PreElab #-}
+{-# SPECIALISE iConvSchedulePragmas :: [CSchedulePragma] -> IExpr Elab #-}
 iConvSchedulePragmas sps = ICon (dummyId noPosition) (ICSchedPragmas { ictSchedPragmas = itSchedPragma, iPragmas = sps })
 
 flattenRules :: [RulePragma] -> [Maybe CExpr] -> [CQual] -> CRule -> [CRule]
@@ -779,6 +827,8 @@ isNumericForeignPred pp =
             [idAdd, idMul, idDiv, idLog, idMax, idMin, idNumEq]
 
 dropDicts :: KnownPhase (BinderPhase e) => [(Id, IExpr (BinderPhase e))]
+{-# SPECIALISE dropDicts :: [(Id, IExpr PreElab)] #-}
+{-# SPECIALISE dropDicts :: [(Id, IExpr Elab)] #-}
 dropDicts = [(idPrimConcat, icPrimConcat),
              (idPrimZeroExt, icPrimZeroExt),
              (idPrimSignExt, icPrimSignExt),
@@ -786,6 +836,8 @@ dropDicts = [(idPrimConcat, icPrimConcat),
              (idPrimMul, icPrimMul)]
 
 iConvLit :: KnownPhase (BinderPhase e) => Literal -> Position -> IType -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvLit :: Literal -> Position -> IType -> IExpr PreElab #-}
+{-# SPECIALISE iConvLit :: Literal -> Position -> IType -> IExpr Elab #-}
 iConvLit (LInt i) pos t = ICon (setIdPosition pos idIntLit) (ICInt { ictInt = t, iVal = i })
 iConvLit (LReal r) pos t = ICon (setIdPosition pos idRealLit) (ICReal { ictReal = t, iReal = r })
 iConvLit (LString s) pos t = iMkStringAt pos s
@@ -794,6 +846,8 @@ iConvLit LPosition pos t = iMkPosition pos
 
 -- converts implicit field extract functions to bit select.
 iConvField :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Id -> Id -> IExpr (BinderPhase e)
+{-# SPECIALISE iConvField :: Flags -> SymTab -> Id -> Id -> IExpr PreElab #-}
+{-# SPECIALISE iConvField :: Flags -> SymTab -> Id -> Id -> IExpr Elab #-}
 iConvField flags r ti i =
     case findType r ti of
       Just (TypeInfo _ _ _ (TIstruct _ fs) _) ->
@@ -916,6 +970,8 @@ countForall _ = 0
 ------
 
 iLetSimp :: KnownPhase (BinderPhase e) => Id -> IType -> IExpr (BinderPhase e) -> IExpr (BinderPhase e) -> IExpr (BinderPhase e)
+{-# SPECIALISE iLetSimp :: Id -> IType -> IExpr PreElab -> IExpr PreElab -> IExpr PreElab #-}
+{-# SPECIALISE iLetSimp :: Id -> IType -> IExpr Elab -> IExpr Elab -> IExpr Elab #-}
 iLetSimp i _ e@(IVar _) b | not (isKeepId i) = eSubst i e b
 {-
 iLetSimp i t e b | onlyIAP b = iTypeBeta (eSubst i e b)
@@ -934,6 +990,8 @@ iLetSimp i t e b = iLet i t e b
 
 buildUndef :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (BinderPhase e) ->
               Position -> UndefKind -> IType -> IExpr (BinderPhase e)
+{-# SPECIALISE buildUndef :: Flags -> SymTab -> Env PreElab -> Position -> UndefKind -> IType -> IExpr PreElab #-}
+{-# SPECIALISE buildUndef :: Flags -> SymTab -> Env Elab -> Position -> UndefKind -> IType -> IExpr Elab #-}
 buildUndef flags r env pos kind t =
     IAps p [t] [iMkPosition pos, iuKindToExpr kind]
   where p = iConvVar flags r env idBuildUndef
@@ -941,6 +999,8 @@ buildUndef flags r env pos kind t =
 -- use the scrutinee's position to build the undefined value on a no-match
 buildUndefNoMatchPos :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (BinderPhase e) ->
                         (IExpr (BinderPhase e), IType) -> IType -> IExpr (BinderPhase e)
+{-# SPECIALISE buildUndefNoMatchPos :: Flags -> SymTab -> Env PreElab -> (IExpr PreElab, IType) -> IType -> IExpr PreElab #-}
+{-# SPECIALISE buildUndefNoMatchPos :: Flags -> SymTab -> Env Elab -> (IExpr Elab, IType) -> IType -> IExpr Elab #-}
 buildUndefNoMatchPos flags r env (e, t_e) t =
     IAps bu [t] [IAps gp [t_e] [e], iuNoMatchExpr]
   where bu = iConvVar flags r env idBuildUndef
