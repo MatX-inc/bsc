@@ -9,8 +9,9 @@ module AState(
               ) where
 
 import qualified Data.Map as M
+import IdMap(IdMap)
 import qualified IdMap
-import qualified Data.Set as S
+import qualified IdSet
 
 import Data.List(transpose, sortBy, partition,
             unzip4, groupBy, intersect,
@@ -65,7 +66,7 @@ astAndPref = "_dand"
 
 -- type ActMap = M.Map (AId, AMethodId) [(ARuleId, [AExpr])]
 
-type OrderMap = M.Map ARuleId Int
+type OrderMap = IdMap Int
 
 type AExprSubst = [(AExpr, AExpr)]
 
@@ -199,13 +200,13 @@ aState' flags pps schedule_info apkg = do
         vmi_map :: VModInfoMap
         vmi_map =
             let mkVMIPair avi = (avi_vname avi, avi_vmi avi)
-            in  M.fromList (map mkVMIPair vs)
+            in  IdMap.fromList (map mkVMIPair vs)
 
         -- the port spelling of each instance (see BackendNamingConventions)
-        inst_port_info :: M.Map AId InstPortInfo
+        inst_port_info :: IdMap InstPortInfo
         inst_port_info =
             let mkInfoPair avi = (avi_vname avi, instPortInfo flags avi)
-            in  M.fromList (map mkInfoPair vs)
+            in  IdMap.fromList (map mkInfoPair vs)
 
         -- The Id for a port of a state instance: "o" is the instance (as
         -- the method call or the AVInst names it), "m" the method, "ino"
@@ -219,7 +220,7 @@ aState' flags pps schedule_info apkg = do
         -- the method spelling, which those passes look up.
         portId :: PortIdFn
         portId o m ino part =
-            case (M.lookup o inst_port_info) of
+            case (IdMap.lookup o inst_port_info) of
               Just info -> statePortIdFromInfo info o m ino part
               -- not a state instance: nothing to spell differently
               Nothing -> mkMethId o m ino part
@@ -266,17 +267,17 @@ aState' flags pps schedule_info apkg = do
     --traceM( "rdys are: " ++ ppReadable rdysToRemove )
     let
         -- rule ordering map
-        om = M.fromList (zip earliness_order [0..])
+        om = IdMap.fromList (zip earliness_order [0..])
         -- ruleid to rule map
-        rmap = M.fromList [(aRuleName r, r) | r <- rs_unsorted]
+        rmap = IdMap.fromList [(aRuleName r, r) | r <- rs_unsorted]
 
         -- lookup utility function
         ridToRule :: ARuleId -> ARule
         ridToRule rid =
-            M.findWithDefault
+            IdMap.findWithDefault
                 (internalError("AState: rule maps do not match\n" ++
                                (ppReadable (reverse earliness_order)) ++
-                               (ppReadable (M.keys rmap))))
+                               (ppReadable (IdMap.keys rmap))))
                 rid rmap
         -- sorted rules
         rs = if (not . null) earliness_order then
@@ -558,7 +559,7 @@ aState' flags pps schedule_info apkg = do
         omMultMap = M.fromList (concatMap genMethodMult vs)
 
         -- defined variables
-        dvars = S.fromList [ i | ADef i _ _ _ <- defs' ]
+        dvars = IdSet.fromList [ i | ADef i _ _ _ <- defs' ]
 
         -- all possible method inputs & outputs
         allmvars :: [(AId, AId, AType, Bool)]
@@ -567,7 +568,7 @@ aState' flags pps schedule_info apkg = do
         -- all undefined method inputs and outputs
         mvars :: [(AId, AId, AType, Bool)]
         mvars = [ (ui, mi, t, a) | (ui, mi, t, a) <- allmvars,
-                                   not (ui `S.member` dvars)]
+                                   not (ui `IdSet.member` dvars)]
 
         -- undefined state outputs
         svars = [ (i, t) | (i, _, t, False) <- mvars ]
@@ -659,7 +660,7 @@ aState' flags pps schedule_info apkg = do
                        ++ ppReadable ars ++ "--\n"
                        ++ ppReadable blobs)
     traceM (ppReadable (zip earliness_order [0..]))
-    traceM (ppReadable (S.toList dvars))
+    traceM (ppReadable (IdSet.toList dvars))
     traceM (ppReadable mvars)
     traceM (ppReadable ers)
     traceM (ppReadable ars)
@@ -1449,11 +1450,11 @@ aRdyId i = ASDef aTBool (mkRdyId i)
 
 -- ---------------
 
-mlookup :: (Ord k, PPrint k, PPrint a) => k -> M.Map k a -> a
+mlookup :: AId -> OrderMap -> Int
 mlookup x m =
-    case M.lookup x m of
+    case IdMap.lookup x m of
     Just y -> y
-    Nothing -> internalError ("mlookup " ++ ppReadable (x, M.toList m))
+    Nothing -> internalError ("mlookup " ++ ppReadable (x, IdMap.toList m))
 
 
 -- generate a list of alias which can be substituted out.
@@ -1528,13 +1529,13 @@ realInoutWires _ = internalError "AState.realInoutWires: unhandled"
 
 -- ==============================
 
-type VModInfoMap = M.Map AId VModInfo
+type VModInfoMap = IdMap VModInfo
 
 mkOutputGatePort :: VModInfoMap -> AId -> AId -> AExpr
 mkOutputGatePort vmi_map modId clkId =
     let lookupErr = internalError ("mkOutputGatePort: vmi not found: " ++
                                    ppReadable modId)
-        vmi = M.findWithDefault lookupErr modId vmi_map
+        vmi = IdMap.findWithDefault lookupErr modId vmi_map
     in
         case (lookupOutputClockWires clkId vmi) of
             (i_osc, Nothing) ->
