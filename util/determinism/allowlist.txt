@@ -26,16 +26,23 @@
 #                   (BinData.hs:640-645); no classifier root assigned yet
 #    pending-*      no classifier record for the file
 #
-# Baseline: bsc 71e1b19b (det/fp-astate-ports: release-devel-B0 4b086bb5 + the
+# Baseline: bsc 3be09aa3 (det/gate-parallel: release-devel-B0 4b086bb5 + the
 # AState/InlineCReg port-spelling fold + the -reverse-intern-order switch of
-# det/base-b0 7a7f32f9/de916844), archives of 2026-10-04 (the full testsuite,
-# normal vs TEST_BSC_OPTIONS=-reverse-intern-order), compared with compare.py
-# --write-allowlist seeded by the upstream line's list (bsc 575feb17): an entry
-# that differed there keeps its root_id and note (5493 entries); a file that
-# differs only on this line is UNCLASSIFIED (8024 entries), since this line
-# lacks every determinism fix det/base-b0 carries; roots.md has the counts.
-# Regenerate with compare.py --write-allowlist after a fix, and review the diff:
-# it may only remove lines.
+# det/base-b0 7a7f32f9/de916844 + the stableOrdNub fix 9a830c01; the gate
+# scripts on top change no compiler bytes), archives of 2026-10-05 (the full
+# testsuite in two temporary worktrees, normal vs -reverse-intern-order, both
+# with -remap-path-prefix <tree>=.), compared with compare.py --write-allowlist
+# seeded by the previous list (bsc 71e1b19b of 2026-10-04, itself seeded by the
+# upstream line's list, bsc 575feb17): an entry that differed there keeps its
+# root_id and note; a file that differs for the first time is UNCLASSIFIED, as
+# are the files that differ only on this line, which lacks every determinism
+# fix det/base-b0 carries (7960 entries); roots.md has the counts.  Against
+# the 71e1b19b list: 128 entries gone (124 *.filtered leftovers of the serial
+# harness, fixed in config/unix.exp; 2 that were run-time noise, normalised
+# now; 2 'bsc -v' echoes, moved to ignore.txt) and 14 added
+# (bsc.verilog/instports, a test added after that baseline).  Regenerate with
+# compare.py --write-allowlist after a fix, and review the diff: it may only
+# remove lines.
 bsc.arrays/ArrayBenchmark.bo	UNCLASSIFIED	differs
 bsc.arrays/ArrayBenchmark.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.arrays/ArrayDecl.bo	UNCLASSIFIED	differs
@@ -803,16 +810,12 @@ bsc.bluetcl/commands/Test.bsv.bsc-out	genwrap-ppmap-order	messages/text
 bsc.bluetcl/commands/Test2.bo	genwrap-ppmap-order	bo binary; also linked-hash-transitive
 bsc.bluetcl/commands/WireTypes.bo	UNCLASSIFIED	differs
 bsc.bluetcl/commands/browseinst2.tcl.bluetcl-bh-out	insttree-vector-position	messages/text; also insttree-unsuffixed-id-order
-bsc.bluetcl/commands/browseinst2.tcl.bluetcl-bh-out.filtered	insttree-vector-position	messages/text; also insttree-unsuffixed-id-order
 bsc.bluetcl/commands/browseinst2.tcl.bluetcl-bh-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because browseinst2.tcl.bluetcl-bh-out.filtered mismatched its expected output (that file: insttree-vector-position)
 bsc.bluetcl/commands/browseinst2.tcl.bluetcl-out	insttree-vector-position	messages/text; also insttree-unsuffixed-id-order
-bsc.bluetcl/commands/browseinst2.tcl.bluetcl-out.filtered	insttree-vector-position	messages/text; also insttree-unsuffixed-id-order
 bsc.bluetcl/commands/browseinst2.tcl.bluetcl-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because browseinst2.tcl.bluetcl-out.filtered mismatched its expected output (that file: insttree-vector-position)
 bsc.bluetcl/commands/depend.tcl.bluetcl-bh-out	depend-map-order	messages/text
-bsc.bluetcl/commands/depend.tcl.bluetcl-bh-out.filtered	depend-map-order	messages/text
 bsc.bluetcl/commands/depend.tcl.bluetcl-bh-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because depend.tcl.bluetcl-bh-out.filtered mismatched its expected output (that file: depend-map-order)
 bsc.bluetcl/commands/depend.tcl.bluetcl-out	depend-map-order	messages/text
-bsc.bluetcl/commands/depend.tcl.bluetcl-out.filtered	depend-map-order	messages/text
 bsc.bluetcl/commands/depend.tcl.bluetcl-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because depend.tcl.bluetcl-out.filtered mismatched its expected output (that file: depend-map-order)
 bsc.bluetcl/commands/mkArgClock.ba	UNCLASSIFIED	differs
 bsc.bluetcl/commands/mkClockOut.ba	UNCLASSIFIED	differs
@@ -829,10 +832,8 @@ bsc.bluetcl/commands/mkTestSchedErr.ba	UNCLASSIFIED	differs
 bsc.bluetcl/commands/mkWireTypes.ba	UNCLASSIFIED	differs
 bsc.bluetcl/commands/mkWireTypes.v	UNCLASSIFIED	differs
 bsc.bluetcl/commands/submodule.tcl.bluetcl-bh-out	submodule-method-uses-map	messages/text; residual noise once fixed: rts-stats
-bsc.bluetcl/commands/submodule.tcl.bluetcl-bh-out.filtered	submodule-method-uses-map	messages/text; residual noise once fixed: rts-stats
 bsc.bluetcl/commands/submodule.tcl.bluetcl-bh-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because submodule.tcl.bluetcl-bh-out.filtered mismatched its expected output (that file: submodule-method-uses-map)
 bsc.bluetcl/commands/submodule.tcl.bluetcl-out	submodule-method-uses-map	messages/text; residual noise once fixed: rts-stats
-bsc.bluetcl/commands/submodule.tcl.bluetcl-out.filtered	submodule-method-uses-map	messages/text; residual noise once fixed: rts-stats
 bsc.bluetcl/commands/submodule.tcl.bluetcl-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because submodule.tcl.bluetcl-out.filtered mismatched its expected output (that file: submodule-method-uses-map)
 bsc.bluetcl/fst_correlation/bo_default/SplitPortsSim.bo	UNCLASSIFIED	differs
 bsc.bluetcl/fst_correlation/bo_default/SplitPortsTest.bo	UNCLASSIFIED	differs
@@ -883,40 +884,28 @@ bsc.bluetcl/hierarchy2/Loop2.bo	UNCLASSIFIED	differs
 bsc.bluetcl/hierarchy2/LoopSkip.bo	UNCLASSIFIED	differs
 bsc.bluetcl/hierarchy2/MultFor.bo	UNCLASSIFIED	differs
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysLoopSkip.bluetcl-bh-out	UNCLASSIFIED	differs
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysLoopSkip.bluetcl-bh-out.filtered	UNCLASSIFIED	differs
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysLoopSkip.bluetcl-bh-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysLoopSkip.bluetcl-out	UNCLASSIFIED	differs
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysLoopSkip.bluetcl-out.filtered	UNCLASSIFIED	differs
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysLoopSkip.bluetcl-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysMultFor.bluetcl-bh-out	UNCLASSIFIED	differs
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysMultFor.bluetcl-bh-out.filtered	UNCLASSIFIED	differs
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysMultFor.bluetcl-bh-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysMultFor.bluetcl-out	UNCLASSIFIED	differs
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysMultFor.bluetcl-out.filtered	UNCLASSIFIED	differs
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysMultFor.bluetcl-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTest2F.bluetcl-bh-out	insttree-unsuffixed-id-order	messages/text
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysTest2F.bluetcl-bh-out.filtered	insttree-unsuffixed-id-order	messages/text
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTest2F.bluetcl-bh-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because ShowH.tcl_sysTest2F.bluetcl-bh-out.filtered mismatched its expected output (that file: insttree-unsuffixed-id-order)
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTest2F.bluetcl-out	insttree-unsuffixed-id-order	messages/text
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysTest2F.bluetcl-out.filtered	insttree-unsuffixed-id-order	messages/text
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTest2F.bluetcl-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because ShowH.tcl_sysTest2F.bluetcl-out.filtered mismatched its expected output (that file: insttree-unsuffixed-id-order)
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestBody.bluetcl-bh-out	insttree-unsuffixed-id-order	messages/text
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestBody.bluetcl-bh-out.filtered	insttree-unsuffixed-id-order	messages/text
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestBody.bluetcl-bh-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because ShowH.tcl_sysTestBody.bluetcl-bh-out.filtered mismatched its expected output (that file: insttree-unsuffixed-id-order)
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestBody.bluetcl-out	insttree-unsuffixed-id-order	messages/text
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestBody.bluetcl-out.filtered	insttree-unsuffixed-id-order	messages/text
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestBody.bluetcl-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because ShowH.tcl_sysTestBody.bluetcl-out.filtered mismatched its expected output (that file: insttree-unsuffixed-id-order)
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestF.bluetcl-bh-out	insttree-unsuffixed-id-order	messages/text
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestF.bluetcl-bh-out.filtered	insttree-unsuffixed-id-order	messages/text
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestF.bluetcl-bh-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because ShowH.tcl_sysTestF.bluetcl-bh-out.filtered mismatched its expected output (that file: insttree-unsuffixed-id-order)
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestF.bluetcl-out	insttree-unsuffixed-id-order	messages/text
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestF.bluetcl-out.filtered	insttree-unsuffixed-id-order	messages/text
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestF.bluetcl-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because ShowH.tcl_sysTestF.bluetcl-out.filtered mismatched its expected output (that file: insttree-unsuffixed-id-order)
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestFOld.bluetcl-bh-out	insttree-unsuffixed-id-order	messages/text
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestFOld.bluetcl-bh-out.filtered	insttree-unsuffixed-id-order	messages/text
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestFOld.bluetcl-bh-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because ShowH.tcl_sysTestFOld.bluetcl-bh-out.filtered mismatched its expected output (that file: insttree-unsuffixed-id-order)
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestFOld.bluetcl-out	insttree-unsuffixed-id-order	messages/text
-bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestFOld.bluetcl-out.filtered	insttree-unsuffixed-id-order	messages/text
 bsc.bluetcl/hierarchy2/ShowH.tcl_sysTestFOld.bluetcl-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because ShowH.tcl_sysTestFOld.bluetcl-out.filtered mismatched its expected output (that file: insttree-unsuffixed-id-order)
 bsc.bluetcl/hierarchy2/SimpleLoop.bo	UNCLASSIFIED	differs
 bsc.bluetcl/hierarchy2/Test2.bo	UNCLASSIFIED	differs
@@ -2156,7 +2145,6 @@ bsc.bugs/bluespec_inc/b1191/Test3.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b1191/mkTest.ba	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b1191/mkTest2.ba	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b1191/mkTest2_2.ba	UNCLASSIFIED	differs
-bsc.bugs/bluespec_inc/b1197/FixedPointLibrary.bo.dumpbi-out.diff-out	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b1198/Bug1198.bo	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b1198/Bug1198.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b1198/mkTest.ba	UNCLASSIFIED	differs
@@ -2567,7 +2555,6 @@ bsc.bugs/bluespec_inc/b302/Design.bo	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b302/Design.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b302/mkDesign.ba	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b302/mkDesign.v	UNCLASSIFIED	differs
-bsc.bugs/bluespec_inc/b302/mkDesign.v.filtered	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b302/mkDesign.v.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.bugs/bluespec_inc/b308/Bug308.bo	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b308/Bug308.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -2786,7 +2773,6 @@ bsc.bugs/bluespec_inc/b848/FIFOPush.bo	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b848/FIFOPush.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b848/sysFIFOPush.ba	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b848/sysFIFOPush.v	iexpand-pconj-set-order	verilog
-bsc.bugs/bluespec_inc/b848/sysFIFOPush.v.filtered	iexpand-pconj-set-order	messages/text
 bsc.bugs/bluespec_inc/b848/sysFIFOPush.v.filtered.diff-out	iexpand-pconj-set-order	messages/text; residual noise once fixed: timestamp
 bsc.bugs/bluespec_inc/b851/Bug851.bo	UNCLASSIFIED	differs
 bsc.bugs/bluespec_inc/b851/Bug851.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -4132,7 +4118,6 @@ bsc.evaluator/sysImplicitConditionAssertionsOK.ba	UNCLASSIFIED	differs
 bsc.evaluator/sysNormalMult.ba	pending-ba	ba binary; plain dumpba text identical in both runs; the bytes differ only through BinData.hs:640-645 (Bin (Map/Set) = toList, i.e. Id-keyed maps are written in Ord Id order); which map is not pinned
 bsc.evaluator/sysNormalMult.ba.dumpba-out	new-ba-dump-ruleuses-map-order	ba dump; dump-time only: dumpba printed the rule-uses map under TEST_BSC_OPTIONS; the .ba content is identical
 bsc.evaluator/sysShiftMult.ats	UNCLASSIFIED	differs
-bsc.evaluator/sysShiftMult.ats.filtered	UNCLASSIFIED	differs
 bsc.evaluator/sysShiftMult.ats.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.evaluator/sysShiftMult.ba	UNCLASSIFIED	differs
 bsc.evaluator/sysStaticIndex.ba	UNCLASSIFIED	differs
@@ -4783,7 +4768,6 @@ bsc.interra/OVL/assertFrame2/assertFrame2.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.interra/OVL/assertFrame3/assertFrame3.ba	UNCLASSIFIED	differs
 bsc.interra/OVL/assertFrame3/assertFrame3.bo	UNCLASSIFIED	differs
 bsc.interra/OVL/assertFrame3/assertFrame3.bo.dumpbo-out	UNCLASSIFIED	differs
-bsc.interra/OVL/assertFrame3/assertFrame3.bsc-vcomp-out	UNCLASSIFIED	differs
 bsc.interra/OVL/assertHandshake1/assertHandshake1.ba	UNCLASSIFIED	differs
 bsc.interra/OVL/assertHandshake1/assertHandshake1.bo	UNCLASSIFIED	differs
 bsc.interra/OVL/assertHandshake1/assertHandshake1.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -6871,7 +6855,6 @@ bsc.interra/messages/ENotAlwaysReady/ENotAlwaysReady.bo.dumpbo-out	UNCLASSIFIED	
 bsc.interra/messages/ENotAlwaysReady/ENotAlwaysReady.bs.bsc-vcomp-out	always-ready-exprmap-order	messages/text
 bsc.interra/messages/ENotAlwaysReady/mkGCD.ba	UNCLASSIFIED	differs
 bsc.interra/messages/EResources/EResources.bs.bsc-vcomp-out	UNCLASSIFIED	differs
-bsc.interra/messages/EResources/EResources.bs.bsc-vcomp-out.filtered	UNCLASSIFIED	differs
 bsc.interra/messages/EResources/EResources.bs.bsc-vcomp-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.interra/messages/EResources/mkDifference.ba	UNCLASSIFIED	differs
 bsc.interra/messages/EResources/subtractor.ba	UNCLASSIFIED	differs
@@ -9224,35 +9207,25 @@ bsc.misc/lambda_calculus/Tb.bo	UNCLASSIFIED	differs
 bsc.misc/lambda_calculus/Tb.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.misc/lambda_calculus/Tb.bsv.bsc-vcomp-out	rule-use-map-id-order	messages/text
 bsc.misc/lambda_calculus/lc-sysDynArrSelWithImplCond.out	lc-updateapkgtypes-elems	messages/text
-bsc.misc/lambda_calculus/lc-sysDynArrSelWithImplCond.out.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysDynArrSelWithImplCond.out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because lc-sysDynArrSelWithImplCond.out.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/lambda_calculus/lc-sysExtract.out	lc-updateapkgtypes-elems	messages/text
-bsc.misc/lambda_calculus/lc-sysExtract.out.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysExtract.out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because lc-sysExtract.out.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/lambda_calculus/lc-sysMergeIf.out	lc-updateapkgtypes-elems	messages/text
-bsc.misc/lambda_calculus/lc-sysMergeIf.out.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysMergeIf.out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because lc-sysMergeIf.out.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/lambda_calculus/lc-sysMergeIf2.out	lc-updateapkgtypes-elems	messages/text
-bsc.misc/lambda_calculus/lc-sysMergeIf2.out.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysMergeIf2.out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because lc-sysMergeIf2.out.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/lambda_calculus/lc-sysMergeIf3.out	lc-updateapkgtypes-elems	messages/text
-bsc.misc/lambda_calculus/lc-sysMergeIf3.out.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysMergeIf3.out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because lc-sysMergeIf3.out.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/lambda_calculus/lc-sysMethod_Split.out	lc-updateapkgtypes-elems	messages/text
-bsc.misc/lambda_calculus/lc-sysMethod_Split.out.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysMethod_Split.out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because lc-sysMethod_Split.out.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/lambda_calculus/lc-sysMethods.out	lc-updateapkgtypes-elems	messages/text
-bsc.misc/lambda_calculus/lc-sysMethods.out.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysMethods.out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because lc-sysMethods.out.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/lambda_calculus/lc-sysMultiArityConcat.out	lc-updateapkgtypes-elems	messages/text
-bsc.misc/lambda_calculus/lc-sysMultiArityConcat.out.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysMultiArityConcat.out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because lc-sysMultiArityConcat.out.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/lambda_calculus/lc-sysPrimMods.out	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysStructs.out	lc-updateapkgtypes-elems	messages/text
-bsc.misc/lambda_calculus/lc-sysStructs.out.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysStructs.out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because lc-sysStructs.out.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/lambda_calculus/lc-sysTb.out	lc-updateapkgtypes-elems	messages/text
-bsc.misc/lambda_calculus/lc-sysTb.out.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/lambda_calculus/lc-sysTb.out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because lc-sysTb.out.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/lambda_calculus/mkAVMethod_UnusedValue_Sub.ba	UNCLASSIFIED	differs
 bsc.misc/lambda_calculus/mkDynamicInstArg_Sub.ba	UNCLASSIFIED	differs
@@ -9338,7 +9311,6 @@ bsc.misc/method_conditions/sysMethodConds_DroppedRule_FalseCond.ba	itransform-ru
 bsc.misc/method_conditions/sysMethodConds_Function.ba	iexpand-pconj-set-order	ba binary; also itransform-runt-map-order, new-itransform-cse-rename-id-tiebreak; from a plain-dumpba re-dump of both archives; COND_ (DefP_NoCSE) local defs emitted in def_map order, same shape as the bluetcl methodconditions listing
 bsc.misc/method_conditions/sysMethodConds_MultiplicityCond.ba	iexpand-pconj-set-order	ba binary; also itransform-runt-map-order, new-itransform-cse-rename-id-tiebreak; from a plain-dumpba re-dump of both archives; COND_ (DefP_NoCSE) local defs emitted in def_map order, same shape as the bluetcl methodconditions listing
 bsc.misc/method_conditions/sysMethodConds_MultiplicityCond.bluetcl-out	itransform-runt-map-order	messages/text
-bsc.misc/method_conditions/sysMethodConds_MultiplicityCond.bluetcl-out.filtered	itransform-runt-map-order	messages/text
 bsc.misc/method_conditions/sysMethodConds_MultiplicityCond.bluetcl-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because sysMethodConds_MultiplicityCond.bluetcl-out.filtered mismatched its expected output (that file: itransform-runt-map-order)
 bsc.misc/method_conditions/sysMethodConds_MultiplicityCond.v	iexpand-pconj-set-order	verilog
 bsc.misc/method_conditions/sysMethodConds_RegWrite.ba	itransform-runt-map-order	ba binary; also new-itransform-cse-rename-id-tiebreak; from a plain-dumpba re-dump of both archives; COND_ (DefP_NoCSE) local defs emitted in def_map order, same shape as the bluetcl methodconditions listing
@@ -9380,35 +9352,25 @@ bsc.misc/ruledrop/mkWarnFalse.ba	UNCLASSIFIED	differs
 bsc.misc/sal/AVMethod_UnusedValue.bo	genwrap-ppmap-order	bo binary
 bsc.misc/sal/AVMethod_UnusedValue.bo.dumpbo-out	genwrap-ppmap-order	bo dump
 bsc.misc/sal/CTX_sysDynArrSelWithImplCond.sal	lc-updateapkgtypes-elems	messages/text
-bsc.misc/sal/CTX_sysDynArrSelWithImplCond.sal.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysDynArrSelWithImplCond.sal.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because CTX_sysDynArrSelWithImplCond.sal.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/sal/CTX_sysExtract.sal	lc-updateapkgtypes-elems	messages/text
-bsc.misc/sal/CTX_sysExtract.sal.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysExtract.sal.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because CTX_sysExtract.sal.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/sal/CTX_sysMergeIf.sal	lc-updateapkgtypes-elems	messages/text
-bsc.misc/sal/CTX_sysMergeIf.sal.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysMergeIf.sal.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because CTX_sysMergeIf.sal.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/sal/CTX_sysMergeIf2.sal	lc-updateapkgtypes-elems	messages/text
-bsc.misc/sal/CTX_sysMergeIf2.sal.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysMergeIf2.sal.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because CTX_sysMergeIf2.sal.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/sal/CTX_sysMergeIf3.sal	lc-updateapkgtypes-elems	messages/text
-bsc.misc/sal/CTX_sysMergeIf3.sal.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysMergeIf3.sal.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because CTX_sysMergeIf3.sal.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/sal/CTX_sysMethod_Split.sal	lc-updateapkgtypes-elems	messages/text
-bsc.misc/sal/CTX_sysMethod_Split.sal.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysMethod_Split.sal.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because CTX_sysMethod_Split.sal.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/sal/CTX_sysMethods.sal	lc-updateapkgtypes-elems	messages/text
-bsc.misc/sal/CTX_sysMethods.sal.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysMethods.sal.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because CTX_sysMethods.sal.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/sal/CTX_sysMultiArityConcat.sal	lc-updateapkgtypes-elems	messages/text
-bsc.misc/sal/CTX_sysMultiArityConcat.sal.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysMultiArityConcat.sal.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because CTX_sysMultiArityConcat.sal.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/sal/CTX_sysPrimMods.sal	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysStructs.sal	lc-updateapkgtypes-elems	messages/text
-bsc.misc/sal/CTX_sysStructs.sal.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysStructs.sal.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because CTX_sysStructs.sal.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/sal/CTX_sysTb.sal	lc-updateapkgtypes-elems	messages/text
-bsc.misc/sal/CTX_sysTb.sal.filtered	lc-updateapkgtypes-elems	messages/text
 bsc.misc/sal/CTX_sysTb.sal.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because CTX_sysTb.sal.filtered mismatched its expected output (that file: lc-updateapkgtypes-elems)
 bsc.misc/sal/DynArrSelWithImplCond.bo	UNCLASSIFIED	differs
 bsc.misc/sal/DynArrSelWithImplCond.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -9959,17 +9921,14 @@ bsc.names/signal_names/Method.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.names/signal_names/MethodActionValue.bo	genwrap-ppmap-order	bo binary
 bsc.names/signal_names/MethodActionValue.bo.dumpbo-out	genwrap-ppmap-order	bo dump
 bsc.names/signal_names/MethodActionValue.bsv.bsc-vcomp-out	UNCLASSIFIED	differs
-bsc.names/signal_names/MethodActionValue.bsv.bsc-vcomp-out.filtered	UNCLASSIFIED	differs
 bsc.names/signal_names/MethodActionValue.bsv.bsc-vcomp-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.names/signal_names/MethodRead.bo	UNCLASSIFIED	differs
 bsc.names/signal_names/MethodRead.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.names/signal_names/MethodRead.bsv.bsc-vcomp-out	UNCLASSIFIED	differs
-bsc.names/signal_names/MethodRead.bsv.bsc-vcomp-out.filtered	UNCLASSIFIED	differs
 bsc.names/signal_names/MethodRead.bsv.bsc-vcomp-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.names/signal_names/NoInline.bo	genwrap-ppmap-order	bo binary
 bsc.names/signal_names/NoInline.bo.dumpbo-out	genwrap-ppmap-order	bo dump
 bsc.names/signal_names/NoInline.bsv.bsc-vcomp-out	genwrap-ppmap-order	messages/text
-bsc.names/signal_names/NoInline.bsv.bsc-vcomp-out.filtered	genwrap-ppmap-order	messages/text
 bsc.names/signal_names/NoInline.bsv.bsc-vcomp-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because NoInline.bsv.bsc-vcomp-out.filtered mismatched its expected output (that file: genwrap-ppmap-order)
 bsc.names/signal_names/TaskValue.bo	UNCLASSIFIED	differs
 bsc.names/signal_names/TaskValue.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -9987,7 +9946,6 @@ bsc.names/state_names/one.bo	UNCLASSIFIED	differs
 bsc.names/state_names/one.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.names/state_names/two.bo	UNCLASSIFIED	differs
 bsc.names/state_names/two.bo.dumpbo-out	UNCLASSIFIED	differs
-bsc.options/CTypeStats.bsv.bsc-out	UNCLASSIFIED	differs
 bsc.options/DummyModule.bo	UNCLASSIFIED	differs
 bsc.options/DummyModule.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.options/GCD.bo	genwrap-ppmap-order	bo binary
@@ -10120,7 +10078,6 @@ bsc.scheduler/RuleAssertionsEspositoOK.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/RuleMethodConflict.bo	UNCLASSIFIED	differs
 bsc.scheduler/RuleMethodConflict.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/RuleMethodConflict.bsv.bsc-sched-out	rule-use-map-id-order	messages/text
-bsc.scheduler/RuleMethodConflict.bsv.bsc-sched-out.filtered	rule-use-map-id-order	messages/text
 bsc.scheduler/RuleMethodConflict.bsv.bsc-sched-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because RuleMethodConflict.bsv.bsc-sched-out.filtered mismatched its expected output (that file: rule-use-map-id-order)
 bsc.scheduler/SplitIf.bo	genwrap-ppmap-order	bo binary
 bsc.scheduler/SplitIf.bo.dumpbo-out	genwrap-ppmap-order	bo dump
@@ -10202,7 +10159,6 @@ bsc.scheduler/attribute_scope/sysTopMethodNameTopModule1.ba	UNCLASSIFIED	differs
 bsc.scheduler/avmeth/AVArgUse_C.bo	genwrap-ppmap-order	bo binary
 bsc.scheduler/avmeth/AVArgUse_C.bo.dumpbo-out	genwrap-ppmap-order	bo dump
 bsc.scheduler/avmeth/AVArgUse_C.bsv.bsc-sched-out	rule-use-map-id-order	messages/text
-bsc.scheduler/avmeth/AVArgUse_C.bsv.bsc-sched-out.filtered	rule-use-map-id-order	messages/text
 bsc.scheduler/avmeth/AVArgUse_C.bsv.bsc-sched-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because AVArgUse_C.bsv.bsc-sched-out.filtered mismatched its expected output (that file: rule-use-map-id-order)
 bsc.scheduler/avmeth/AVArgUse_SBR.bo	genwrap-ppmap-order	bo binary
 bsc.scheduler/avmeth/AVArgUse_SBR.bo.dumpbo-out	genwrap-ppmap-order	bo dump
@@ -10283,7 +10239,6 @@ bsc.scheduler/conflict_free/sysConflictFreeResource.cxx	new-cf-assump-methcond-m
 bsc.scheduler/disjoint/GCD_t1.bo	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/GCD_t1.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/GCD_t1.bs.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/disjoint/GCD_t1.bs.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/GCD_t1.bs.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/disjoint/ResourceOneRuleME.bo	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/ResourceOneRuleME.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -10292,7 +10247,6 @@ bsc.scheduler/disjoint/ResourceOneRuleb31Fixed.bo.dumpbo-out	UNCLASSIFIED	differ
 bsc.scheduler/disjoint/SharedPortsFIFO.bo	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/SharedPortsFIFO.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/SharedPortsFIFO.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/disjoint/SharedPortsFIFO.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/SharedPortsFIFO.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/disjoint/SharedPortsInArg.bo	genwrap-ppmap-order	bo binary
 bsc.scheduler/disjoint/SharedPortsInArg.bo.dumpbo-out	genwrap-ppmap-order	bo dump
@@ -10300,7 +10254,6 @@ bsc.scheduler/disjoint/SharedPortsInArg.bsv.bsc-vcomp-out	genwrap-ppmap-order	me
 bsc.scheduler/disjoint/SharedPortsRegFile.bo	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/SharedPortsRegFile.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/SharedPortsRegFile.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/disjoint/SharedPortsRegFile.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/SharedPortsRegFile.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/disjoint/module_id.ba	UNCLASSIFIED	differs
 bsc.scheduler/disjoint/sysGCD.ba	UNCLASSIFIED	differs
@@ -10382,12 +10335,10 @@ bsc.scheduler/earliness/sysTest.ba	UNCLASSIFIED	differs
 bsc.scheduler/many_rules/DenseRules.bo	UNCLASSIFIED	differs
 bsc.scheduler/many_rules/DenseRules.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/many_rules/DenseRules.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/many_rules/DenseRules.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/many_rules/DenseRules.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/many_rules/GridRules.bo	UNCLASSIFIED	differs
 bsc.scheduler/many_rules/GridRules.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/many_rules/GridRules.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/many_rules/GridRules.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/many_rules/GridRules.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/many_rules/GuardedRules.bo	UNCLASSIFIED	differs
 bsc.scheduler/many_rules/GuardedRules.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -10648,7 +10599,6 @@ bsc.scheduler/relax-schedule/Ex2.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/Ex3.bo	rule-before-methods-map	bo binary
 bsc.scheduler/relax-schedule/Ex3.bo.dumpbo-out	rule-before-methods-map	bo dump
 bsc.scheduler/relax-schedule/Ex3.bsv.bsc-sched-out	rule-before-methods-map	messages/text
-bsc.scheduler/relax-schedule/Ex3.bsv.bsc-sched-out.filtered	rule-before-methods-map	messages/text
 bsc.scheduler/relax-schedule/Ex3.bsv.bsc-sched-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because Ex3.bsv.bsc-sched-out.filtered mismatched its expected output (that file: rule-before-methods-map)
 bsc.scheduler/relax-schedule/Ex4.bo	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/Ex4.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -10659,7 +10609,6 @@ bsc.scheduler/relax-schedule/GetUrgency.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/IBuffer2.bo	rule-before-methods-map	bo binary
 bsc.scheduler/relax-schedule/IBuffer2.bo.dumpbo-out	rule-before-methods-map	bo dump
 bsc.scheduler/relax-schedule/IBuffer2.bsv.bsc-sched-out	depend-map-order	messages/text; also rule-before-methods-map
-bsc.scheduler/relax-schedule/IBuffer2.bsv.bsc-sched-out.filtered	depend-map-order	messages/text; also rule-before-methods-map
 bsc.scheduler/relax-schedule/IBuffer2.bsv.bsc-sched-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because IBuffer2.bsv.bsc-sched-out.filtered mismatched its expected output (that file: depend-map-order)
 bsc.scheduler/relax-schedule/Interfaces.bo	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/MECombSched.bo	genwrap-ppmap-order	bo binary
@@ -10674,7 +10623,6 @@ bsc.scheduler/relax-schedule/PutUrgency.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/PutUrgency2.bo	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/PutUrgency2.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/PutUrgency2.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/relax-schedule/PutUrgency2.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/PutUrgency2.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/relax-schedule/RuleBetweenMethods.bo	genwrap-ppmap-order	bo binary
 bsc.scheduler/relax-schedule/RuleBetweenMethods.bo.dumpbo-out	genwrap-ppmap-order	bo dump
@@ -10709,14 +10657,12 @@ bsc.scheduler/relax-schedule/RuleBetweenMethods_TwoRulesDisjoint.bsv.bsc-vcomp-o
 bsc.scheduler/relax-schedule/SeqEx1.bo	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/SeqEx1.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/SeqEx1.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/relax-schedule/SeqEx1.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/SeqEx1.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/relax-schedule/ValueMethodEx1.bo	genwrap-ppmap-order	bo binary
 bsc.scheduler/relax-schedule/ValueMethodEx1.bo.dumpbo-out	genwrap-ppmap-order	bo dump
 bsc.scheduler/relax-schedule/ValueMethodEx2.bo	genwrap-ppmap-order	bo binary
 bsc.scheduler/relax-schedule/ValueMethodEx2.bo.dumpbo-out	genwrap-ppmap-order	bo dump
 bsc.scheduler/relax-schedule/ValueMethodEx2.bsv.bsc-sched-out	genwrap-ppmap-order	messages/text
-bsc.scheduler/relax-schedule/ValueMethodEx2.bsv.bsc-sched-out.filtered	genwrap-ppmap-order	messages/text
 bsc.scheduler/relax-schedule/ValueMethodEx2.bsv.bsc-sched-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because ValueMethodEx2.bsv.bsc-sched-out.filtered mismatched its expected output (that file: genwrap-ppmap-order)
 bsc.scheduler/relax-schedule/X86_Datatypes.bo	UNCLASSIFIED	differs
 bsc.scheduler/relax-schedule/mkEx1.ba	UNCLASSIFIED	differs
@@ -10788,7 +10734,6 @@ bsc.scheduler/resource/ResourceOneRuleTwoMethodsSC.bs.bsc-sched-out	rule-use-map
 bsc.scheduler/resource/ResourcePredicates.bo	UNCLASSIFIED	differs
 bsc.scheduler/resource/ResourcePredicates.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/resource/ResourcePredicates.bs.bsc-sched-out	rule-use-map-id-order	messages/text
-bsc.scheduler/resource/ResourcePredicates.bs.bsc-sched-out.filtered	rule-use-map-id-order	messages/text
 bsc.scheduler/resource/ResourcePredicates.bs.bsc-sched-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because ResourcePredicates.bs.bsc-sched-out.filtered mismatched its expected output (that file: rule-use-map-id-order)
 bsc.scheduler/resource/ResourceSixRulesFail.bo	UNCLASSIFIED	differs
 bsc.scheduler/resource/ResourceSixRulesFail.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -10824,242 +10769,194 @@ bsc.scheduler/sat/AddTest.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/AddTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/AddTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/AddTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/AddTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/AddTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/AddTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/AddTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/AddTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/AddTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/AddTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ArraySelectImplCondTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectImplCondTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectImplCondTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ArraySelectImplCondTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectImplCondTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ArraySelectImplCondTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectImplCondTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectImplCondTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ArraySelectImplCondTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectImplCondTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ArraySelectLongIndexTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectLongIndexTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectLongIndexTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ArraySelectLongIndexTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectLongIndexTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ArraySelectLongIndexTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectLongIndexTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectLongIndexTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ArraySelectLongIndexTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectLongIndexTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ArraySelectShortIndexTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectShortIndexTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectShortIndexTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ArraySelectShortIndexTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectShortIndexTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ArraySelectShortIndexTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectShortIndexTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectShortIndexTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ArraySelectShortIndexTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectShortIndexTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ArraySelectTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ArraySelectTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ArraySelectTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ArraySelectTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ArraySelectTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/BoolTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/BoolTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/BoolTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/BoolTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/BoolTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/BoolTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/BoolTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/BoolTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/BoolTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/BoolTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/CaseTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/CaseTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/CaseTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/CaseTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/CaseTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/CaseTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/CaseTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/CaseTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/CaseTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/CaseTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/DivTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/DivTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/DivTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/DivTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/DivTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/DivTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/DivTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/DivTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/DivTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/DivTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/IteTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/IteTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/IteTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/IteTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/IteTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/IteTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/IteTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/IteTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/IteTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/IteTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/LessThanSTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanSTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanSTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/LessThanSTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanSTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/LessThanSTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanSTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanSTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/LessThanSTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanSTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/LessThanTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/LessThanTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/LessThanTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/LessThanTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/LessThanTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/MultTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/MultTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/MultTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/MultTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/MultTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/MultTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/MultTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/MultTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/MultTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/MultTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ParamBitsTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBitsTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBitsTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ParamBitsTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBitsTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ParamBitsTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBitsTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBitsTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ParamBitsTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBitsTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ParamBoolTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBoolTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBoolTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ParamBoolTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBoolTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ParamBoolTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBoolTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBoolTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ParamBoolTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ParamBoolTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/RemTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/RemTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/RemTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/RemTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/RemTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/RemTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/RemTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/RemTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/RemTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/RemTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/SextTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/SextTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/SextTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/SextTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/SextTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/SextTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/SextTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/SextTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/SextTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/SextTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ShiftLTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftLTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftLTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ShiftLTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftLTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ShiftLTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftLTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftLTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ShiftLTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftLTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ShiftRATest2_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest2_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest2_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ShiftRATest2_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest2_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ShiftRATest2_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest2_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest2_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ShiftRATest2_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest2_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ShiftRATest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ShiftRATest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ShiftRATest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ShiftRATest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRATest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ShiftRTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ShiftRTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ShiftRTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ShiftRTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ShiftRTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/SplitTupleMethodTest_sat-stp.bo	genwrap-ppmap-order	bo binary
 bsc.scheduler/sat/SplitTupleMethodTest_sat-stp.bo.dumpbo-out	genwrap-ppmap-order	bo dump
 bsc.scheduler/sat/SplitTupleMethodTest_sat-stp.bsv.bsc-sched-out	genwrap-ppmap-order	messages/text
-bsc.scheduler/sat/SplitTupleMethodTest_sat-stp.bsv.bsc-sched-out.filtered	genwrap-ppmap-order	messages/text
 bsc.scheduler/sat/SplitTupleMethodTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because SplitTupleMethodTest_sat-stp.bsv.bsc-sched-out.filtered mismatched its expected output (that file: genwrap-ppmap-order)
 bsc.scheduler/sat/SplitTupleMethodTest_sat-yices.bo	genwrap-ppmap-order	bo binary
 bsc.scheduler/sat/SplitTupleMethodTest_sat-yices.bo.dumpbo-out	genwrap-ppmap-order	bo dump
 bsc.scheduler/sat/SplitTupleMethodTest_sat-yices.bsv.bsc-sched-out	genwrap-ppmap-order	messages/text
-bsc.scheduler/sat/SplitTupleMethodTest_sat-yices.bsv.bsc-sched-out.filtered	genwrap-ppmap-order	messages/text
 bsc.scheduler/sat/SplitTupleMethodTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because SplitTupleMethodTest_sat-yices.bsv.bsc-sched-out.filtered mismatched its expected output (that file: genwrap-ppmap-order)
 bsc.scheduler/sat/TruncateTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/TruncateTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/TruncateTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/TruncateTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/TruncateTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/TruncateTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/TruncateTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/TruncateTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/TruncateTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/TruncateTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/Word64Test_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/Word64Test_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/Word64Test_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/Word64Test_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/Word64Test_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/Word64Test_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/Word64Test_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/Word64Test_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/Word64Test_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/Word64Test_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ZextTest_sat-stp.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ZextTest_sat-stp.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ZextTest_sat-stp.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ZextTest_sat-stp.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ZextTest_sat-stp.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/ZextTest_sat-yices.bo	UNCLASSIFIED	differs
 bsc.scheduler/sat/ZextTest_sat-yices.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/sat/ZextTest_sat-yices.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/sat/ZextTest_sat-yices.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/sat/ZextTest_sat-yices.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/sat/mkAVSub.ba	UNCLASSIFIED	differs
 bsc.scheduler/sat/mkValSub.ba	UNCLASSIFIED	differs
@@ -11143,27 +11040,22 @@ bsc.scheduler/urgency/AlwaysEnabled.bsv.bsc-sched-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction1.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction1.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction1.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/DUFunction1.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction1.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/DUFunction2.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction2.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction2.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/DUFunction2.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction2.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/DUFunction3.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction3.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction3.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/DUFunction3.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction3.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/DUFunction4.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction4.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction4.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/DUFunction4.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction4.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/DUFunction6.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction6.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction6.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/DUFunction6.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUFunction6.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/DUSingleton.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DUSingleton.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -11171,32 +11063,26 @@ bsc.scheduler/urgency/DUSingleton.bsv.bsc-vcomp-out	rule-use-map-id-order	messag
 bsc.scheduler/urgency/DescendingUrgencyAttribute1.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttribute1.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttribute1.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/DescendingUrgencyAttribute1.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttribute1.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/DescendingUrgencyAttribute2.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttribute2.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttribute2.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/DescendingUrgencyAttribute2.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttribute2.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/DescendingUrgencyAttributeForLoop.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttributeForLoop.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttributeForLoop.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/DescendingUrgencyAttributeForLoop.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttributeForLoop.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/DescendingUrgencyAttributeSplitIf.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttributeSplitIf.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttributeSplitIf.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/DescendingUrgencyAttributeSplitIf.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttributeSplitIf.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/DescendingUrgencyAttributeSubModule1.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttributeSubModule1.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttributeSubModule1.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/DescendingUrgencyAttributeSubModule1.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/DescendingUrgencyAttributeSubModule1.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/IfcIfcWarning.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/IfcIfcWarning.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/IfcIfcWarning.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/IfcIfcWarning.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/IfcIfcWarning.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/IfcRuleWarning.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/IfcRuleWarning.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -11205,7 +11091,6 @@ bsc.scheduler/urgency/JoinUrgencyMany.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/MinimalRuleWarnings.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/MinimalRuleWarnings.bo.dumpbo-out	UNCLASSIFIED	differs
 bsc.scheduler/urgency/MinimalRuleWarnings.bsv.bsc-sched-out	UNCLASSIFIED	differs
-bsc.scheduler/urgency/MinimalRuleWarnings.bsv.bsc-sched-out.filtered	UNCLASSIFIED	differs
 bsc.scheduler/urgency/MinimalRuleWarnings.bsv.bsc-sched-out.filtered.diff-out	UNCLASSIFIED	only in B
 bsc.scheduler/urgency/MinimalRuleWarnings2.bo	UNCLASSIFIED	differs
 bsc.scheduler/urgency/MinimalRuleWarnings2.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -11330,7 +11215,6 @@ bsc.scheduler/use_cond/sysUseCondEqNEqCross2.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondEqVar1.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondEqVars1.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondEqVars1.v	iexpand-pconj-set-order	verilog
-bsc.scheduler/use_cond/sysUseCondEqVars1.v.filtered	use-cond-set-order	messages/text
 bsc.scheduler/use_cond/sysUseCondEqVars1.v.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because sysUseCondEqVars1.v.filtered mismatched its expected output (that file: use-cond-set-order)
 bsc.scheduler/use_cond/sysUseCondEqVars2.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondFalseFalse.ba	UNCLASSIFIED	differs
@@ -11341,23 +11225,19 @@ bsc.scheduler/use_cond/sysUseCondNEqVar3.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondNEqVar4.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondNEqVars1.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondNEqVars1.v	iexpand-pconj-set-order	verilog
-bsc.scheduler/use_cond/sysUseCondNEqVars1.v.filtered	use-cond-set-order	messages/text
 bsc.scheduler/use_cond/sysUseCondNEqVars1.v.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because sysUseCondNEqVars1.v.filtered mismatched its expected output (that file: use-cond-set-order)
 bsc.scheduler/use_cond/sysUseCondNEqVars2.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondNEqVars3.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondNEqVars3.v	iexpand-pconj-set-order	verilog
-bsc.scheduler/use_cond/sysUseCondNEqVars3.v.filtered	use-cond-set-order	messages/text
 bsc.scheduler/use_cond/sysUseCondNEqVars3.v.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because sysUseCondNEqVars3.v.filtered mismatched its expected output (that file: use-cond-set-order)
 bsc.scheduler/use_cond/sysUseCondNEqVars4.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondTrueFalse.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondTrueFalse.v	iexpand-pconj-set-order	verilog
-bsc.scheduler/use_cond/sysUseCondTrueFalse.v.filtered	use-cond-set-order	messages/text
 bsc.scheduler/use_cond/sysUseCondTrueFalse.v.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because sysUseCondTrueFalse.v.filtered mismatched its expected output (that file: use-cond-set-order)
 bsc.scheduler/use_cond/sysUseCondTrueFalseCross1.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondTrueFalseCross2.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondTrueTrue.ba	UNCLASSIFIED	differs
 bsc.scheduler/use_cond/sysUseCondTrueTrue.v	iexpand-pconj-set-order	verilog
-bsc.scheduler/use_cond/sysUseCondTrueTrue.v.filtered	use-cond-set-order	messages/text
 bsc.scheduler/use_cond/sysUseCondTrueTrue.v.filtered.diff-out	only-one-side	only in the reversed archive; harness diff written because sysUseCondTrueTrue.v.filtered mismatched its expected output (that file: use-cond-set-order)
 bsc.syntax/bh/DoAndIfThenElse.bo	UNCLASSIFIED	differs
 bsc.syntax/bh/DoAndIfThenElse.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -12411,7 +12291,6 @@ bsc.verilog/dollar/renaming4/sysTbGCD.ba	UNCLASSIFIED	differs
 bsc.verilog/dollar/sysTbWideGCD.ba	pending-ba	ba binary; plain dumpba text identical in both runs; the bytes differ only through BinData.hs:640-645 (Bin (Map/Set) = toList, i.e. Id-keyed maps are written in Ord Id order); which map is not pinned
 bsc.verilog/elab_only/ElabOnly.bo	UNCLASSIFIED	differs
 bsc.verilog/elab_only/ElabOnly.bo.dumpbo-out	UNCLASSIFIED	differs
-bsc.verilog/elab_only/elabv.bsc-out	UNCLASSIFIED	differs
 bsc.verilog/elab_only/mkESub.ba	UNCLASSIFIED	differs
 bsc.verilog/elab_only/sysETb.ba	UNCLASSIFIED	differs
 bsc.verilog/filter/RenameTest.bo.dumpbo-out	UNCLASSIFIED	differs
@@ -12536,6 +12415,20 @@ bsc.verilog/inout/wrapBoth2.ba	UNCLASSIFIED	differs
 bsc.verilog/inout/wrapBoth3.ba	UNCLASSIFIED	differs
 bsc.verilog/inout/wrapReceiver.ba	UNCLASSIFIED	differs
 bsc.verilog/inout/wrapSender.ba	UNCLASSIFIED	differs
+bsc.verilog/instports/AStateDump.bo	UNCLASSIFIED	differs
+bsc.verilog/instports/AStateDump.bo.dumpbo-out	UNCLASSIFIED	differs
+bsc.verilog/instports/Coll1.bo	UNCLASSIFIED	differs
+bsc.verilog/instports/Coll1.bo.dumpbo-out	UNCLASSIFIED	differs
+bsc.verilog/instports/Coll4.bs.bsc-vcomp-out	UNCLASSIFIED	differs
+bsc.verilog/instports/Coll4.bs.bsc-vcomp-out.diff-out	UNCLASSIFIED	only in B
+bsc.verilog/instports/Coll5.bo	UNCLASSIFIED	differs
+bsc.verilog/instports/Coll5.bo.dumpbo-out	UNCLASSIFIED	differs
+bsc.verilog/instports/SharedPort.bo	UNCLASSIFIED	differs
+bsc.verilog/instports/SharedPort.bo.dumpbo-out	UNCLASSIFIED	differs
+bsc.verilog/instports/sysAStateDump.ba	UNCLASSIFIED	differs
+bsc.verilog/instports/sysColl1.ba	UNCLASSIFIED	differs
+bsc.verilog/instports/sysColl5.ba	UNCLASSIFIED	differs
+bsc.verilog/instports/sysSharedPort.ba	UNCLASSIFIED	differs
 bsc.verilog/mkUnderscore_.ba	UNCLASSIFIED	differs
 bsc.verilog/model_sysCase.cxx	new-simcopt-sched-local-decl-order	bluesim cxx; also iexpand-pconj-set-order
 bsc.verilog/model_sysExclusiveActions.cxx	new-simcopt-sched-local-decl-order	bluesim cxx
