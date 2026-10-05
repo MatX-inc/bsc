@@ -24,6 +24,7 @@ import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import PreIds
 import qualified Data.Map as M
 import IdMap(IdMap)
+import qualified IdMap
 import qualified Data.Set as S
 import PPrint
 import Pragma(ASchedulePragma)
@@ -77,9 +78,10 @@ aAddSchedAssumps apkg schedule schedinfo = (apkg'', schedinfo')
         cmpRule r1 r2 = compare (get r1) (get r2)
         pragmas = apkg_schedule_pragmas apkg
         ruleMethodMap :: RuleMethodMap
-        ruleMethodMap = M.map (buildOMCondMap .
-                               ruleMethodUsesToUUs . snd)
-                              (asi_rule_uses_map schedinfo)
+        ruleMethodMap = IdMap.toMap $
+                        IdMap.map (buildOMCondMap .
+                                   ruleMethodUsesToUUs . snd)
+                                  (asi_rule_uses_map schedinfo)
         instSchedMap :: OSchedMap
         instSchedMap = M.fromList
                          [(n, methodConflictInfo (vSched vmi))
@@ -191,9 +193,10 @@ aAddCFConditionWires errh r alldefs flags apkg schedinfo =
         cfPairs = extractCFPairsSP pragmas
         cfRules = S.fromList ((map fst cfPairs) ++ (map snd cfPairs))
         ruleMethodMap :: RuleMethCondMap
-        ruleMethodMap = M.map (buildMethCondList .
-                               ruleMethodUsesToUUs . snd)
-                              (asi_rule_uses_map schedinfo)
+        ruleMethodMap = IdMap.toMap $
+                        IdMap.map (buildMethCondList .
+                                   ruleMethodUsesToUUs . snd)
+                                  (asi_rule_uses_map schedinfo)
         oldState = apkg_state_instances apkg
         (rules', newUseInfos) = unzipWith (addCFCondWires cfRules ruleMethodMap) (apkg_rules apkg)
         newUseInfo = concat newUseInfos

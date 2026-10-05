@@ -26,6 +26,8 @@ import System.IO.Unsafe
 import Debug.Trace(traceM)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdMap
+import qualified IdSet
 
 import qualified GraphMap as G
 import qualified GraphWrapper as GW
@@ -3856,7 +3858,7 @@ mkExclusiveRulesDB transposed rule_names rule_uses_map are_disjoint are_cf cf_ma
       rule_objs_map = rumToObjectMap rule_uses_map
       getRuleObjUses r =
           fromJustOrErr ("mkExclusiveRulesDB: getRuleObjUses: " ++ ppReadable r)
-              (M.lookup r rule_objs_map)
+              (IdMap.lookup r rule_objs_map)
 
       -- The two membership tests below can only hold for rules sharing
       -- a state instance with r1 ("disjoint"), or with an SC edge or a
@@ -3865,8 +3867,8 @@ mkExclusiveRulesDB transposed rule_names rule_uses_map are_disjoint are_cf cf_ma
       -- (The result sets are unordered, so enumeration order is free.)
       obj_index = M.fromListWith S.union
                       [ (obj, S.singleton r)
-                        | (r, objs) <- M.toList rule_objs_map,
-                          obj <- S.toList objs ]
+                        | (r, objs) <- IdMap.toList rule_objs_map,
+                          obj <- IdSet.toList objs ]
       drop_index = M.fromListWith S.union
                        [ (r1, S.singleton r2)
                          | (r1, r2, _) <-
@@ -3913,7 +3915,7 @@ mkExclusiveRulesDB transposed rule_names rule_uses_map are_disjoint are_cf cf_ma
               r1_uses = getRuleObjUses r1
               shares_uses r2 =
                   let r2_uses = getRuleObjUses r2
-                  in  not (S.null (r1_uses `S.intersection` r2_uses))
+                  in  not (IdSet.null (r1_uses `IdSet.intersection` r2_uses))
               r1 `disjoint` r2 = shares_uses r2 && are_disjoint r1 r2
 
               foldFunc (accum_ds, accum_es) r2
@@ -3922,7 +3924,7 @@ mkExclusiveRulesDB transposed rule_names rule_uses_map are_disjoint are_cf cf_ma
                   | otherwise          = (accum_ds, accum_es)
               cands = S.unions
                           [ S.unions [ M.findWithDefault S.empty obj obj_index
-                                       | obj <- S.toList r1_uses ]
+                                       | obj <- IdSet.toList r1_uses ]
                           , maybe S.empty M.keysSet
                                 (G.getOutEdgeMap sc_map r1)
                           , M.findWithDefault S.empty r1 drop_index ]
@@ -4417,7 +4419,7 @@ makeRuleMethodUseMaps :: NoConflictSet -> RuleUsesMap ->
                           RulePCConflictUseMap)
 makeRuleMethodUseMaps (NoConflictSet setPC) ruleUseMap =
     let
-        full_use_map :: M.Map ARuleId (AExpr, M.Map Id (M.Map Id [UniqueUse]))
+        full_use_map :: IdMap.IdMap (AExpr, IdMap.IdMap (IdMap.IdMap [UniqueUse]))
         full_use_map = rumToMethodUseMap ruleUseMap
 
         -- Make a map from each rule to all the methods that rule calls,
@@ -4426,17 +4428,17 @@ makeRuleMethodUseMaps (NoConflictSet setPC) ruleUseMap =
         -- to avoid the effort of looking it up.
         -- XXX this used to filter out ready signals; why?
         -- XXX it works fine without the filter now
-        rule_meth_map = M.map convRuleUses full_use_map
+        rule_meth_map = IdMap.toMap (IdMap.map convRuleUses full_use_map)
           where
-            convRuleUses (p, m) = (p, M.map (map convMethodUses . M.toList) m)
+            convRuleUses (p, m) = (p, IdMap.toMap (IdMap.map (map convMethodUses . IdMap.toList) m))
 
             convMethodUses :: (AId, [UniqueUse]) -> (AId, AExpr)
             convMethodUses (m, uus) = (m, aAnds (map extractCondition uus))
 
         -- convert the use-info into pc conflict info
-        pc_conflict_map = M.map mkPCConflictInfo full_use_map
+        pc_conflict_map = IdMap.toMap (IdMap.map mkPCConflictInfo full_use_map)
 
-        mkPCConflictInfo :: (AExpr, M.Map Id (M.Map Id [UniqueUse])) ->
+        mkPCConflictInfo :: (AExpr, IdMap.IdMap (IdMap.IdMap [UniqueUse])) ->
                             (AExpr, MethodUsesList, PCConflictPairsMap)
         mkPCConflictInfo (rp, usemap) =
           let
@@ -4446,8 +4448,8 @@ makeRuleMethodUseMaps (NoConflictSet setPC) ruleUseMap =
               singleMethodConfls =
                   [ (m, uses)
                       | -- find all methods that are used at least twice
-                        (objId, mus) <- M.toList usemap,
-                        p@(methId, uses@(_:_:_)) <- M.toList mus,
+                        (objId, mus) <- IdMap.toList usemap,
+                        p@(methId, uses@(_:_:_)) <- IdMap.toList mus,
                         let m = MethodId objId methId,
                         -- ... that are not PC with itself
                         not ((m,m) `S.member` setPC)
@@ -4462,14 +4464,14 @@ makeRuleMethodUseMaps (NoConflictSet setPC) ruleUseMap =
                               -- find all pairs of used methods
                               -- (known to be on the same instance)
                               p@((methId1,uses1), (methId2,uses2))
-                                  <- uniquePairs (M.toList uses),
+                                  <- uniquePairs (IdMap.toList uses),
                               -- that conflict with each other
                               let m1 = MethodId instId methId1,
                               let m2 = MethodId instId methId2,
                               not ((m1,m2) `S.member` setPC),
                               not ((m2,m1) `S.member` setPC)
                           ]
-                  in  M.mapWithKey makePairConfls usemap
+                  in  IdMap.toMap (IdMap.mapWithKey makePairConfls usemap)
           in
               (rp, singleMethodConfls, pairMethodConfls)
     in
