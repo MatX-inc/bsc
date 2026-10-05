@@ -84,7 +84,7 @@ liftDictsPkg :: ErrorHandle -> Flags -> SymTab -> CPackage
 liftDictsPkg errh flags symt pkg@(CPackage mi exps imps impsigs fixs ds includes)
   = (CPackage mi exps imps impsigs fixs ds' includes, reverse (liftedDefs s'))
   where s0 = initLState errh flags symt pkg
-        (ds', s') = runState (liftDicts S.empty M.empty ds) s0
+        (ds', s') = runState (liftDicts IdSet.empty IdMap.empty ds) s0
 
 data LState a = LState {
   errHandle :: ErrorHandle,
@@ -109,7 +109,7 @@ data LState a = LState {
   liftedDefs :: [IDef a],
   -- CSyntax types of the lifted dictionaries, for the CSyntax-side
   -- analysis (getTopNameInfo) of later dictionary expressions
-  liftedTypes :: M.Map Id CType,
+  liftedTypes :: IdMap CType,
   -- Conversion environment for lifting: maps every id a lifted
   -- evidence expression may reference -- previously lifted
   -- dictionaries and the package's converted-instance definitions --
@@ -142,7 +142,7 @@ initLState errh fs r (CPackage mi exps imps impsigs fixs ds includes) = LState {
   dictPool = M.empty,
   dictPoolC = M.empty,
   liftedDefs = [],
-  liftedTypes = M.empty,
+  liftedTypes = IdMap.empty,
   convEnv = instConvEnv,
   localInstInfo = instInfo,
   topLevelBases = S.fromList [ getIdBase (getDName def) | CValueSign def <- ds ],
@@ -169,7 +169,7 @@ getTopNameInfo i = do
     localMap <- gets localInstInfo
     r <- gets symt
     return $ lookupLifted ltmap <|> lookupLocal localMap <|> lookupSymTab r
-  where lookupLifted = fmap (\t -> ([], t)) . M.lookup i
+  where lookupLifted = fmap (\t -> ([], t)) . IdMap.lookup i
         lookupLocal  = IdMap.lookup i
         lookupSymTab = fmap handleVarInfo . flip findVar i
         handleVarInfo vi@(VarInfo {}) = (tyVars, t')
@@ -192,7 +192,7 @@ newDictId pos = do
 isIncoherentDict :: Id -> Bool
 isIncoherentDict i = isDictId i && hasIdProp i IdPIncoherent
 
-type BoundDicts = S.Set Id
+type BoundDicts = IdSet
 
 -- Convert a liftable dictionary's type and evidence to ISyntax, using
 -- the production conversion machinery over the pass's environment (see
@@ -372,7 +372,7 @@ handleDict incoherent p t e = do
             modify (\s -> s {
                 dictPool = M.insertWith (\new old -> old ++ new) it [(lift_i, ie)] (dictPool s),
                 liftedDefs = IDef lift_i it ie props : liftedDefs s,
-                liftedTypes = M.insert lift_i t (liftedTypes s),
+                liftedTypes = IdMap.insert lift_i t (liftedTypes s),
                 convEnv = IdMap.insert lift_i ref (convEnv s) })
             recordC lift_i
             return $ Right lift_i
@@ -399,14 +399,14 @@ handleDictExpr p t e@(CAnyT {}) = internalError $ "LiftDicts: undefined dictiona
 handleDictExpr p _ e@(CStructT _ _) = do
   let fvs = fvSetToFreeVars (getFVE e)
   known <- mapM getTopNameInfo fvs
-  let closed = not (any (`S.member` p) fvs) &&
+  let closed = not (any (`IdSet.member` p) fvs) &&
                and [ maybe False (const True) k | k <- known ]
   return (e, closed)
 handleDictExpr p t e@(CApply f []) = do
   when trace_lift_dicts $ traceM $ "Normalizing CApply f []: " ++ ppReadable e
   handleDictExpr p t f
 handleDictExpr p _ e@(CVar i)
-  | i `S.member` p = do
+  | i `IdSet.member` p = do
       when trace_lift_dicts $ traceM $ "inlining: " ++ ppReadable (i, e)
       return (e, False)
   | otherwise = do
@@ -479,7 +479,7 @@ handleDictFun ts e = internalError $ "handleDictFun unexpected expression: " ++ 
 -- - Constants
 -- - undefined expressions
 -- - variable to variable assignments
-type InlineMap = M.Map Id CExpr
+type InlineMap = IdMap CExpr
 
 -- InlineMap is used for substitution but not returned (scoped bindings don't escape).
 -- Only special functions (processCDeflsSeq, processCQuals) return InlineMap for sequential threading.
@@ -502,12 +502,11 @@ instance LiftDicts CDef where
   liftDicts _ _ def = internalError $ "LiftDicts - unexpected CDef: " ++ ppReadable def
 
 shadowBindings :: IdSet -> InlineMap -> InlineMap
--- boundary coercion: InlineMap is still a Data.Map (P3 Phase A)
-shadowBindings s m = M.withoutKeys m (IdSet.toSet s)
+shadowBindings s m = IdMap.withoutKeys m s
 
 instance LiftDicts CClause where
   liftDicts p m (CClause ps qs e) = do
-    let p' = p `S.union` S.fromList [ i | CPVar i <- ps, isDictId i ]
+    let p' = p `IdSet.union` IdSet.fromList [ i | CPVar i <- ps, isDictId i ]
         pvs = IdSet.unions $ map getPV ps
         m' = shadowBindings pvs m
     (qs', m'') <- processCQuals p' m' qs
@@ -591,12 +590,12 @@ processCDeflsSeq p m (d:ds) = do
   action <- deflAction p d'
   case action of
     Inline i e -> do
-      let m' = M.insert i e m
+      let m' = IdMap.insert i e m
       processCDeflsSeq p m' ds
     Keep d'' -> do
       let i = getLName d''
       let m' = shadowBindings (IdSet.singleton i) m
-      let p' = if isDictId i then S.insert i p else p
+      let p' = if isDictId i then IdSet.insert i p else p
       (ds', m'') <- processCDeflsSeq p' m' ds
       return (d'':ds', m'')
 
@@ -611,9 +610,9 @@ instance LiftDicts CExpr where
   -- rather than tripping the top-level-known internalError below.
   liftDicts p m (Cletrec ds e) = do
     let names = [ getLName d | d <- ds ]
-        vs = S.fromList names
+        vs = IdSet.fromList names
         m' = shadowBindings (IdSet.fromList names) m
-        p' = p `S.union` S.filter isDictId vs
+        p' = p `IdSet.union` IdSet.filter isDictId vs
     ds' <- liftDicts p' m' ds
     e'  <- liftDicts p' m' e
     return $ cLetRec ds' e'
@@ -625,7 +624,7 @@ instance LiftDicts CExpr where
     e' <- liftDicts p m e
     return $ CTApply e' ts
   liftDicts p m e@(CVar i) = do
-    case M.lookup i m of
+    case IdMap.lookup i m of
       -- The inlined expression keeps its definition-site position: use
       -- sites of CSEd/lifted dictionaries and inlined constants report
       -- (and name nets after) where the value was defined, not where it
