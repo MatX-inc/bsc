@@ -1697,10 +1697,16 @@ getIExprPosition (IRefT _ _ poss _) =
 --------
 
 iAP :: KnownPhase a => IExpr a -> IType -> IExpr a
+{-# SPECIALISE iAP :: IExpr PreElab -> IType -> IExpr PreElab #-}
+{-# SPECIALISE iAP :: IExpr Elab -> IType -> IExpr Elab #-}
+{-# SPECIALISE iAP :: IExpr PostElab -> IType -> IExpr PostElab #-}
 iAP (IAps f ts []) t = IAps f (ts ++ [t]) []
 iAP f t = IAps f [t] []
 
 iAp :: KnownPhase a => IExpr a -> IExpr a -> IExpr a
+{-# SPECIALISE iAp :: IExpr PreElab -> IExpr PreElab -> IExpr PreElab #-}
+{-# SPECIALISE iAp :: IExpr Elab -> IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE iAp :: IExpr PostElab -> IExpr PostElab -> IExpr PostElab #-}
 iAp (IAps f ts es) e = IAps f ts (es ++ [e])
 iAp f e = IAps f [] [e]
 

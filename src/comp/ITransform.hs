@@ -1,7 +1,7 @@
 {-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE CPP #-}
 {-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
-{-# LANGUAGE ImplicitParams, PatternGuards, ScopedTypeVariables #-}
+{-# LANGUAGE ImplicitParams, PatternGuards, ScopedTypeVariables, TypeApplications #-}
 {-# LANGUAGE BangPatterns #-}
 module ITransform(
 
@@ -60,16 +60,22 @@ import BoolOpt
 -- instead of the general-purpose iTransExpr
 -- will use BDDs for boolean optimization when -opt-bool is set (like optIRule)
 iTransBoolExpr :: KnownPhase a => Flags -> IExpr a -> IExpr a
+{-# SPECIALISE iTransBoolExpr :: Flags -> IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE iTransBoolExpr :: Flags -> IExpr PostElab -> IExpr PostElab #-}
 iTransBoolExpr flags = optBoolExpr (optBool flags)
 
 -----------------------------------------------------------------------------
 
 iTransExpr :: KnownPhase a => ErrorHandle -> IExpr a -> (IExpr a, Bool)
+{-# SPECIALISE iTransExpr :: ErrorHandle -> IExpr Elab -> (IExpr Elab, Bool) #-}
+{-# SPECIALISE iTransExpr :: ErrorHandle -> IExpr PostElab -> (IExpr PostElab, Bool) #-}
 iTransExpr errh =
     let ?errh = errh
     in iTransExpr'
 
 iTransExpr' :: (KnownPhase a, ?errh :: ErrorHandle) => IExpr a -> (IExpr a, Bool)
+{-# SPECIALISE iTransExpr' :: (?errh :: ErrorHandle) => IExpr Elab -> (IExpr Elab, Bool) #-}
+{-# SPECIALISE iTransExpr' :: (?errh :: ErrorHandle) => IExpr PostElab -> (IExpr PostElab, Bool) #-}
 iTransExpr' (IAps f ts es) = iTrAp emptyCtx f ts es
 iTransExpr' e = (e, False)
 
@@ -263,16 +269,22 @@ runCSE e = return e
 {-# INLINE iTrAp2 #-}
 iTrAp2 :: (KnownPhase a, ?errh :: ErrorHandle) =>
           Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
+{-# SPECIALISE iTrAp2 :: (?errh :: ErrorHandle) => Ctx Elab -> IExpr Elab -> [IType] -> [IExpr Elab] -> (IExpr Elab, Bool) #-}
+{-# SPECIALISE iTrAp2 :: (?errh :: ErrorHandle) => Ctx PostElab -> IExpr PostElab -> [IType] -> [IExpr PostElab] -> (IExpr PostElab, Bool) #-}
 iTrAp2 ctx e ts es = (iTrApExp ctx e ts es, True)
 
 -- transform an expression, forgetting whether an transformation
 -- was done or not - used for recursive transformation
 {-# INLINE iTrApExp #-}
 iTrApExp :: (KnownPhase a, ?errh :: ErrorHandle) => Ctx a -> IExpr a -> [IType] -> [IExpr a] -> IExpr a
+{-# SPECIALISE iTrApExp :: (?errh :: ErrorHandle) => Ctx Elab -> IExpr Elab -> [IType] -> [IExpr Elab] -> IExpr Elab #-}
+{-# SPECIALISE iTrApExp :: (?errh :: ErrorHandle) => Ctx PostElab -> IExpr PostElab -> [IType] -> [IExpr PostElab] -> IExpr PostElab #-}
 iTrApExp ctx e ts es = fst (iTrAp ctx e ts es)
 
 -- transform an expression, if it is an application
 iTrExprIfAp :: (KnownPhase a, ?errh :: ErrorHandle) => Ctx a -> IExpr a -> (IExpr a, Bool)
+{-# SPECIALISE iTrExprIfAp :: (?errh :: ErrorHandle) => Ctx Elab -> IExpr Elab -> (IExpr Elab, Bool) #-}
+{-# SPECIALISE iTrExprIfAp :: (?errh :: ErrorHandle) => Ctx PostElab -> IExpr PostElab -> (IExpr PostElab, Bool) #-}
 iTrExprIfAp ctx (IAps f ts es) = iTrAp ctx f ts es
 iTrExprIfAp _   e              = (e,False)
 
@@ -282,6 +294,8 @@ iTrExprIfAp _   e              = (e,False)
 -- since these are already CSEed.
 -- Returns a flag indicating whether the expression changed or not
 iTrAp :: (KnownPhase a, ?errh :: ErrorHandle) => Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
+{-# SPECIALISE iTrAp :: (?errh :: ErrorHandle) => Ctx Elab -> IExpr Elab -> [IType] -> [IExpr Elab] -> (IExpr Elab, Bool) #-}
+{-# SPECIALISE iTrAp :: (?errh :: ErrorHandle) => Ctx PostElab -> IExpr PostElab -> [IType] -> [IExpr PostElab] -> (IExpr PostElab, Bool) #-}
 
 -- eliminate null actions
 iTrAp ctx (ICon _ (ICPrim _ PrimJoinActions)) _ [ICon _ (ICPrim _ PrimNoActions), e] = (e, True)
@@ -1093,6 +1107,8 @@ iTrAp ctx f ts es = iTrApTail ctx f ts es
 
 -- constant folding
 iTrApTail :: KnownPhase a => Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
+{-# SPECIALISE iTrApTail :: Ctx Elab -> IExpr Elab -> [IType] -> [IExpr Elab] -> (IExpr Elab, Bool) #-}
+{-# SPECIALISE iTrApTail :: Ctx PostElab -> IExpr PostElab -> [IType] -> [IExpr PostElab] -> (IExpr PostElab, Bool) #-}
 iTrApTail ctx c@(ICon _ (ICPrim _ p)) ts as | canDoOp = (e, True)
   where (canDoOp, e) = case (doPrimOp (getIExprPosition c) p ts as) of
                            Just (Right res) -> (True, res)
@@ -1101,13 +1117,19 @@ iTrApTail ctx c@(ICon _ (ICPrim _ p)) ts as | canDoOp = (e, True)
 iTrApTail ctx f ts es = (IAps f ts es, False)
 
 expVal :: KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE expVal :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE expVal :: IExpr PostElab -> IExpr PostElab #-}
 expVal (ICon _ (ICValue { iValDef = e })) = e
 expVal e = e
 
 -- Like expVal but expands concats one level deeper, so that
 -- the patterns can match things like ((a ++ (select..)) ++ (select..))
-expValConcat :: KnownPhase a => IExpr a -> IExpr a
-expValConcat (ICon _ (ICValue { iValDef = e })) = expValConcat e
+expValConcat :: forall a . KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE expValConcat :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE expValConcat :: IExpr PostElab -> IExpr PostElab #-}
+-- (the recursive calls under a GADT match are typed at the outer phase, so
+-- that the per-phase specialisations apply to them)
+expValConcat (ICon _ (ICValue { iValDef = e })) = expValConcat @a e
 expValConcat (IAps p@(ICon _ (ICPrim _ PrimConcat)) ts es) = IAps p ts (map expVal es)
 expValConcat e = e
 
@@ -1115,6 +1137,8 @@ expValConcat e = e
 
 findConcatBreaks :: KnownPhase a => Integer -> IExpr a -> IExpr a ->
                     [(Integer, IExpr a, IExpr a)]
+{-# SPECIALISE findConcatBreaks :: Integer -> IExpr Elab -> IExpr Elab -> [(Integer, IExpr Elab, IExpr Elab)] #-}
+{-# SPECIALISE findConcatBreaks :: Integer -> IExpr PostElab -> IExpr PostElab -> [(Integer, IExpr PostElab, IExpr PostElab)] #-}
 findConcatBreaks sz eA@(IAps (ICon _ (ICPrim _ PrimConcat))
                           [ITNum itA1, ITNum itA2, ITNum itA3] [eA1, eA2]) eB =
     case (splitConstExpr itA1 itA2 eB) of
@@ -1131,6 +1155,8 @@ findConcatBreaks sz eA eB = [(sz, eA, eB)]
 
 
 splitConstExpr :: KnownPhase a => Integer -> Integer -> IExpr a  -> Maybe (IExpr a, IExpr a)
+{-# SPECIALISE splitConstExpr :: Integer -> Integer -> IExpr Elab  -> Maybe (IExpr Elab, IExpr Elab) #-}
+{-# SPECIALISE splitConstExpr :: Integer -> Integer -> IExpr PostElab  -> Maybe (IExpr PostElab, IExpr PostElab) #-}
 splitConstExpr n n2 (ICon _ ic@(ICInt { iVal = IntLit { ilValue = c } })) =
     let c1 = iMkLit (aitBit (mkNumConT n)) (c `div` 2^n2)
         c2 = iMkLit (aitBit (mkNumConT n2)) (mask n2 c)
@@ -1169,6 +1195,8 @@ splitConstExpr _ _ _ = Nothing
 -----------------------------------------------------------------------------
 
 addT :: KnownPhase a => IExpr a -> Ctx a -> Ctx a
+{-# SPECIALISE addT :: IExpr Elab -> Ctx Elab -> Ctx Elab #-}
+{-# SPECIALISE addT :: IExpr PostElab -> Ctx PostElab -> Ctx PostElab #-}
 addT e ctx = --trace ("addT\n" ++ ppReadable (e, ctx, addT' (expValAndOrCmp e) ctx)) $
                 addT' (expValAndOrCmp e) ctx
   where addT' e (Ctx vs be) = Ctx (addEqs e vs) (bAdd e be)
@@ -1184,17 +1212,23 @@ addT e ctx = --trace ("addT\n" ++ ppReadable (e, ctx, addT' (expValAndOrCmp e) c
         addNEqs _ vs = vs
 
 addF :: KnownPhase a => IExpr a -> Ctx a -> Ctx a
+{-# SPECIALISE addF :: IExpr Elab -> Ctx Elab -> Ctx Elab #-}
+{-# SPECIALISE addF :: IExpr PostElab -> Ctx PostElab -> Ctx PostElab #-}
 addF e ctx = addT (ieNot e) ctx
 
-expValAndOrCmp :: KnownPhase a => IExpr a -> IExpr a
+expValAndOrCmp :: forall a . KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE expValAndOrCmp :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE expValAndOrCmp :: IExpr PostElab -> IExpr PostElab #-}
 expValAndOrCmp (IAps e ts es) = IAps e ts (map expValAndOrCmp es)
-expValAndOrCmp (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) | isAndOrCmp p = expValAndOrCmp e
+expValAndOrCmp (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) | isAndOrCmp p = expValAndOrCmp @a e
 expValAndOrCmp e = e
 
 isAndOrCmp :: PrimOp -> Bool
 isAndOrCmp p = p `elem` [PrimBAnd, PrimBOr, PrimBNot, PrimEQ, PrimULT, PrimULE, PrimSLT, PrimSLE]
 
 expValShallow :: KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE expValShallow :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE expValShallow :: IExpr PostElab -> IExpr PostElab #-}
 expValShallow (IAps e ts es) = IAps e ts (map expValShallow es)
 expValShallow (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) | p == PrimBNot = expValShallow e
                                                                                   | isAndOrCmp p = e
@@ -1209,6 +1243,8 @@ expValAndOr e = e
 -}
 
 isT :: KnownPhase a => Ctx a -> IExpr a -> Bool
+{-# SPECIALISE isT :: Ctx Elab -> IExpr Elab -> Bool #-}
+{-# SPECIALISE isT :: Ctx PostElab -> IExpr PostElab -> Bool #-}
 isT ctx@(Ctx vs be) e = --traces ("isT\n" ++ ppReadable (e, expValAndOrCmp e, ctx, isT' (expValAndOrCmp e))) $
                         isT' (expValAndOrCmp e)
   where isT' e =
@@ -1228,6 +1264,8 @@ isT ctx@(Ctx vs be) e = --traces ("isT\n" ++ ppReadable (e, expValAndOrCmp e, ct
 
 
 isF :: KnownPhase a => Ctx a -> IExpr a -> Bool
+{-# SPECIALISE isF :: Ctx Elab -> IExpr Elab -> Bool #-}
+{-# SPECIALISE isF :: Ctx PostElab -> IExpr PostElab -> Bool #-}
 isF ctx@(Ctx vs be) e = --traces ("isF\n" ++ ppReadable (e, expValAndOrCmp e, ctx, isF' (expValAndOrCmp e))) $
                         isF' (expValAndOrCmp e)
   where isF' e =
@@ -1255,14 +1293,20 @@ isF _ _ = False
 
 -- a --> b
 implies :: KnownPhase a => Ctx a -> IExpr a -> IExpr a -> Bool
+{-# SPECIALISE implies :: Ctx Elab -> IExpr Elab -> IExpr Elab -> Bool #-}
+{-# SPECIALISE implies :: Ctx PostElab -> IExpr PostElab -> IExpr PostElab -> Bool #-}
 implies ctx a b = isT (addT a ctx) b
 
 -- ~a --> b
 notimplies :: KnownPhase a => Ctx a -> IExpr a -> IExpr a -> Bool
+{-# SPECIALISE notimplies :: Ctx Elab -> IExpr Elab -> IExpr Elab -> Bool #-}
+{-# SPECIALISE notimplies :: Ctx PostElab -> IExpr PostElab -> IExpr PostElab -> Bool #-}
 notimplies ctx a b = isT (addF a ctx) b
 
 -- a --> ~b
 impliesnot :: KnownPhase a => Ctx a -> IExpr a -> IExpr a -> Bool
+{-# SPECIALISE impliesnot :: Ctx Elab -> IExpr Elab -> IExpr Elab -> Bool #-}
+{-# SPECIALISE impliesnot :: Ctx PostElab -> IExpr PostElab -> IExpr PostElab -> Bool #-}
 impliesnot ctx a b = isF (addT a ctx) b
 
 -----------------------------------------------------------------------------
@@ -1273,6 +1317,8 @@ data Ctx a = Ctx (M.Map (ExprKey a) IValue) (BExpr a)
 type IValue = Integer
 
 emptyCtx :: KnownPhase a => Ctx a
+{-# SPECIALISE emptyCtx :: Ctx Elab #-}
+{-# SPECIALISE emptyCtx :: Ctx PostElab #-}
 emptyCtx = Ctx M.empty bNothing
 
 instance PPrint (Ctx a) where
@@ -1313,18 +1359,26 @@ getMaskTail mask size | zeroes_gcd > 1 =
         power      = 2^size
 
 isZero :: KnownPhase a => IExpr a -> Bool
+{-# SPECIALISE isZero :: IExpr Elab -> Bool #-}
+{-# SPECIALISE isZero :: IExpr PostElab -> Bool #-}
 isZero (ICon _ (ICInt { iVal = IntLit { ilValue = 0 } })) = True
 isZero _ = False
 
 isOne :: KnownPhase a => IExpr a -> Bool
+{-# SPECIALISE isOne :: IExpr Elab -> Bool #-}
+{-# SPECIALISE isOne :: IExpr PostElab -> Bool #-}
 isOne (ICon _ (ICInt { iVal = IntLit { ilValue = 1 } })) = True
 isOne _ = False
 
 isAllOnes :: KnownPhase a => IExpr a -> Bool
+{-# SPECIALISE isAllOnes :: IExpr Elab -> Bool #-}
+{-# SPECIALISE isAllOnes :: IExpr PostElab -> Bool #-}
 isAllOnes (ICon _ (ICInt { ictInt = ITAp b (ITNum i), iVal = IntLit { ilValue = n } })) = b == itBit && 2^i == n+1
 isAllOnes _ = False
 
 isAlmost :: KnownPhase a => IExpr a -> Bool
+{-# SPECIALISE isAlmost :: IExpr Elab -> Bool #-}
+{-# SPECIALISE isAlmost :: IExpr PostElab -> Bool #-}
 isAlmost (ICon _ (ICInt { ictInt = ITAp b (ITNum i), iVal = IntLit { ilValue = n } })) = b == itBit && 2^i == n+2
 isAlmost _ = False
 
@@ -1336,6 +1390,8 @@ iLog2 i =
              Nothing
 
 inc :: KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE inc :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE inc :: IExpr PostElab -> IExpr PostElab #-}
 inc (ICon i c@(ICInt { iVal = il@(IntLit { ilValue = n }) })) =
     -- GHC emits a warning below because it's forgotten that 'c' must be
     -- an ICInt
@@ -1343,20 +1399,28 @@ inc (ICon i c@(ICInt { iVal = il@(IntLit { ilValue = n }) })) =
 inc iexpr = internalError ("ITransform.inc: " ++ ppString iexpr)
 
 mkZero :: KnownPhase a => IType -> IExpr a
+{-# SPECIALISE mkZero :: IType -> IExpr Elab #-}
+{-# SPECIALISE mkZero :: IType -> IExpr PostElab #-}
 mkZero t = iMkLit (aitBit t) 0
 
 -- match undefined values
 isUndet :: KnownPhase a => IExpr a -> Bool
+{-# SPECIALISE isUndet :: IExpr Elab -> Bool #-}
+{-# SPECIALISE isUndet :: IExpr PostElab -> Bool #-}
 isUndet (ICon _ (ICUndet {})) = True
 isUndet _ = False
 
 -- Guard optimizations that are not valid in the presence of implicit conditions.
 noRefs :: KnownPhase a => IExpr a -> Bool
+{-# SPECIALISE noRefs :: IExpr Elab -> Bool #-}
+{-# SPECIALISE noRefs :: IExpr PostElab -> Bool #-}
 noRefs (IRefT {})    = False
 noRefs (IAps f _ es) = all noRefs (f:es)
 noRefs _             = True
 
 isIfElseOfIConInt :: KnownPhase a => IExpr a -> Bool
+{-# SPECIALISE isIfElseOfIConInt :: IExpr Elab -> Bool #-}
+{-# SPECIALISE isIfElseOfIConInt :: IExpr PostElab -> Bool #-}
 isIfElseOfIConInt (IAps (ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) =
     isIfElseOfIConInt' thn && isIfElseOfIConInt' els
   where
@@ -1369,11 +1433,15 @@ isIfElseOfIConInt (ICon _ (ICValue { iValDef = e })) = isIfElseOfIConInt e
 isIfElseOfIConInt _ = False
 
 isConstExprForPrim :: KnownPhase a => PrimOp -> IExpr a -> Bool
+{-# SPECIALISE isConstExprForPrim :: PrimOp -> IExpr Elab -> Bool #-}
+{-# SPECIALISE isConstExprForPrim :: PrimOp -> IExpr PostElab -> Bool #-}
 isConstExprForPrim prim (IAps (ICon _ (ICPrim _ p)) _ [e1,e2]) =
     (p == prim) && ((isIConInt e1) || (isIConInt e2))
 isConstExprForPrim _ _ = False
 
 constPart :: KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE constPart :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE constPart :: IExpr PostElab -> IExpr PostElab #-}
 constPart (IAps (ICon _ (ICPrim _ p)) _ [e1,e2])
     | isIConInt e1 = e1
     | isIConInt e2 = e2
@@ -1381,12 +1449,16 @@ constPart (IAps (ICon _ (ICPrim _ p)) _ [e1,e2])
 constPart _ = internalError "constPart: expected a binary primitive op"
 
 nonConstPart :: KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE nonConstPart :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE nonConstPart :: IExpr PostElab -> IExpr PostElab #-}
 nonConstPart (IAps (ICon _ (ICPrim _ p)) _ [e1,e2]) =
     if (isIConInt e1) then e2 else e1  -- note: e2 may also be a constant!
 nonConstPart _ = internalError "nonConstPart: expected a binary primitive op"
 
 -- More accurate (and faster) equality by ignoring ICValue
 eqE :: KnownPhase a => IExpr a -> IExpr a -> Bool
+{-# SPECIALISE eqE :: IExpr Elab -> IExpr Elab -> Bool #-}
+{-# SPECIALISE eqE :: IExpr PostElab -> IExpr PostElab -> Bool #-}
 eqE (IAps e1 ts1 es1)                    (IAps e2 ts2 es2)                    = eqE e1 e2 && ts1 == ts2 && and (zipWith eqE es1 es2)
 eqE (ICon i1 (ICValue { iValDef = e1 })) (ICon i2 (ICValue { iValDef = e2 })) = i1 == i2
 eqE (ICon _  (ICValue { iValDef = e1 }))                               e2     = eqE e1 e2
@@ -1503,9 +1575,13 @@ uEq' e1 e2 = e1 == e2
 -----------------------------------------------------------------------------
 
 optBoolExpr :: KnownPhase a => Bool -> IExpr a -> IExpr a
+{-# SPECIALISE optBoolExpr :: Bool -> IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE optBoolExpr :: Bool -> IExpr PostElab -> IExpr PostElab #-}
 optBoolExpr moreBoolOpt = optBoolExprN 8 moreBoolOpt
 
 optBoolExprN :: KnownPhase a => Int -> Bool -> IExpr a -> IExpr a
+{-# SPECIALISE optBoolExprN :: Int -> Bool -> IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE optBoolExprN :: Int -> Bool -> IExpr PostElab -> IExpr PostElab #-}
 optBoolExprN nvars moreBoolOpt =
         fromBE .
         (if moreBoolOpt then tryHard nvars else sSimplify) .
@@ -1520,6 +1596,8 @@ tryHard nvars e =
         Just e' -> {-trace (ppReadable(e, e')) -} e'
 
 fromBE :: KnownPhase a => BoolExp (ExprKey a) -> IExpr a
+{-# SPECIALISE fromBE :: BoolExp (ExprKey Elab) -> IExpr Elab #-}
+{-# SPECIALISE fromBE :: BoolExp (ExprKey PostElab) -> IExpr PostElab #-}
 fromBE (And e1 e2)   = ieAnd (fromBE e1) (fromBE e2)
 fromBE (Or  e1 e2)   = ieOr  (fromBE e1) (fromBE e2)
 fromBE (Not e)       = ieNot (fromBE e)
@@ -1529,6 +1607,8 @@ fromBE TT            = iTrue
 fromBE FF            = iFalse
 
 toBE :: KnownPhase a => IExpr a -> BoolExp (ExprKey a)
+{-# SPECIALISE toBE :: IExpr Elab -> BoolExp (ExprKey Elab) #-}
+{-# SPECIALISE toBE :: IExpr PostElab -> BoolExp (ExprKey PostElab) #-}
 toBE (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2])   = And (toBE e1) (toBE e2)
 toBE (IAps (ICon _ (ICPrim _ PrimBOr))  _ [e1, e2])   = Or  (toBE e1) (toBE e2)
 toBE (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e])        = Not (toBE e)
@@ -1539,6 +1619,8 @@ toBE e | e == iTrue  = TT
 
 -- A quick hack for optimizing comparisons
 sOptCmp :: KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE sOptCmp :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE sOptCmp :: IExpr PostElab -> IExpr PostElab #-}
 sOptCmp e =
     let collEQs (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = collEQs e1 ++ collEQs e2
         collEQs (IAps (ICon _ (ICPrim _ PrimEQ))   _ [v, ICon _ (ICInt { iVal = IntLit { ilValue = i } })]) = [(v, i)]
@@ -1570,6 +1652,8 @@ sOptCmp e =
     in  remAbs (remNE (collEQs e) e)
 
 aOptCmp :: KnownPhase a => IExpr a -> IExpr a
+{-# SPECIALISE aOptCmp :: IExpr Elab -> IExpr Elab #-}
+{-# SPECIALISE aOptCmp :: IExpr PostElab -> IExpr PostElab #-}
 aOptCmp e =
         --trace ("optCmp:\n" ++ ppReadable e) $
         let (_, e') = optE M.empty e
@@ -1577,6 +1661,8 @@ aOptCmp e =
             e'
 
 optE :: KnownPhase a => ValMap a -> IExpr a -> (ValMap a, IExpr a)
+{-# SPECIALISE optE :: ValMap Elab -> IExpr Elab -> (ValMap Elab, IExpr Elab) #-}
+{-# SPECIALISE optE :: ValMap PostElab -> IExpr PostElab -> (ValMap PostElab, IExpr PostElab) #-}
 optE m e0@(IAps p@(ICon _ (ICPrim _ PrimBAnd)) ts [e1, e2]) =
 -- XXX this can't be the best way
         let (m1, e2') = optE m  e2
@@ -1607,6 +1693,8 @@ vmAdd :: IExpr a -> ValueSet -> ValMap a -> ValMap a
 vmAdd k vs m = M.insert (ExprKey k) vs m
 
 vmGet :: KnownPhase a => IExpr a -> ValMap a -> ValueSet
+{-# SPECIALISE vmGet :: IExpr Elab -> ValMap Elab -> ValueSet #-}
+{-# SPECIALISE vmGet :: IExpr PostElab -> ValMap PostElab -> ValueSet #-}
 vmGet v m =
     case M.lookup (ExprKey v) m of
     Just vs -> vs
@@ -1617,6 +1705,8 @@ vmGet v m =
 type ValueSet = VSetInteger
 
 vsUniv :: KnownPhase a => IExpr a -> ValueSet
+{-# SPECIALISE vsUniv :: IExpr Elab -> ValueSet #-}
+{-# SPECIALISE vsUniv :: IExpr PostElab -> ValueSet #-}
 vsUniv (ICon i (ICValue { iValDef = IAps (ICon _ (ICPrim _ PrimRange)) _
                                         [ICon _ (ICInt { iVal = IntLit { ilValue = lo } }), ICon _ (ICInt { iVal = IntLit { ilValue = hi } }), _] })) =
         --traces ("interval " ++ ppReadable (i,lo,hi)) $
@@ -1647,6 +1737,8 @@ cmpToVS _ _ _     prim    =
     internalError ("ITransform.cmpToVS: " ++ ppString prim)
 
 doCmp :: KnownPhase a => ValMap a -> IExpr a -> PrimOp -> IExpr a -> Integer -> Integer -> Bool -> (ValMap a,IExpr a)
+{-# SPECIALISE doCmp :: ValMap Elab -> IExpr Elab -> PrimOp -> IExpr Elab -> Integer -> Integer -> Bool -> (ValMap Elab,IExpr Elab) #-}
+{-# SPECIALISE doCmp :: ValMap PostElab -> IExpr PostElab -> PrimOp -> IExpr PostElab -> Integer -> Integer -> Bool -> (ValMap PostElab,IExpr PostElab) #-}
 doCmp m e cmp v n i norm =
         let vs = vmGet v m
             tvs = cmpToVS n i norm cmp

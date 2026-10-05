@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances, TypeSynonymInstances, RelaxedPolyRec, PatternGuards, ScopedTypeVariables #-}
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilies, TypeApplications #-}
 {-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 -- Todo
 --  * Use a set to keep track of variable values to handle x==c1 || x==c2
@@ -705,6 +705,8 @@ eqPtrs heap ptrs =
         -- future rewrite that has a reason to change them may.
         hptrs e0 = reverse (snd (go e0 (IS.empty, [])))
           where
+            -- (GADT matches under MonoLocalBinds need the signature)
+            go :: HExpr -> (IS.IntSet, [HeapPointer]) -> (IS.IntSet, [HeapPointer])
             go (IAps f _ es) acc = foldl (flip go) acc (f:es)
             go (ICon _ (ICStateVar { iVar = IStateVar { isv_iargs = es } })) acc =
                 foldl (flip go) acc es
@@ -5732,8 +5734,10 @@ doSel sel s tys ty n as ee (p, e) =
 
         -- select inouts out of state variables
         e@(ICon id (ICStateVar {iVar = v})) | isitInout_ ty -> do
-          let hclk = getIfcInoutClock s v
-              hrst = getIfcInoutReset s v
+          -- (the calls are typed at Elab, not at the ICStateVar payload's
+          -- refined phase, so the specialised helpers are used)
+          let hclk = getIfcInoutClock @Elab s v
+              hrst = getIfcInoutReset @Elab s v
               sz = getInout_Size ty
               wire = (IAps sel tys [e])
               inout = makeInout hclk hrst wire
@@ -6322,7 +6326,7 @@ reportNonSynthTypeInModuleArg modId modExpr =
                      mkEMsg v
 
 
-getNonSynthTypes :: IExpr a -> [IType]
+getNonSynthTypes :: forall a . IExpr a -> [IType]
 getNonSynthTypes expr =
     let
         -- we only want to catch types which are fully known (no variables)
@@ -6332,10 +6336,13 @@ getNonSynthTypes expr =
         isAllTCon _ = False
 
         -- the ILAM should be the first things
+        -- (GADT matches under MonoLocalBinds need the signatures)
+        getTyVars :: [Id] -> IExpr a -> ([Id], IExpr a)
         getTyVars ts (ILAM t _ e) = getTyVars (t:ts) e
         getTyVars ts e = (ts,e)
 
         -- the ILam should be next
+        getVars :: [(Id, IType)] -> IExpr a -> [(Id, IType)]
         getVars vts (ILam _
                           (ITAp (ITAp (ITCon c _ _)
                                       v)
