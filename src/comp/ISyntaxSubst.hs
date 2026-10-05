@@ -44,7 +44,8 @@ import Changed
 import Id
 import IdSet(IdSet)
 import qualified IdSet
-import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 
 -- ============================================================
 -- Substitution contexts
@@ -101,26 +102,26 @@ instance SubstContext (SingleExpr a) (IExpr a) where
   ctxRemove i' s@(SingleExpr i _ _) =
     if i == i' then SomeCtx (EmptyExpr :: EmptyExpr a) else SomeCtx s
   ctxAdd i' x' (SingleExpr i x fvs) =
-    BatchExpr (M.fromList [(i,x), (i',x')]) (fvs `IdSet.union` fVars x')
+    BatchExpr (IdMap.fromList [(i,x), (i',x')]) (fvs `IdSet.union` fVars x')
   ctxNorm _ _ = Unchanged
   ctxAvoids _ _ = False
 
 -- Batch substitution (size >= 2) - uses Map
-data BatchExpr a = BatchExpr !(M.Map Id (IExpr a)) !IdSet
+data BatchExpr a = BatchExpr !(IdMap (IExpr a)) !IdSet
 
 instance SubstContext (BatchExpr a) (IExpr a) where
-  lookupVar i (BatchExpr m _) = M.lookup i m
+  lookupVar i (BatchExpr m _) = IdMap.lookup i m
   ctxIsEmpty _ = False  -- BatchExpr always has size >= 2
   ctxContainsVar i (BatchExpr _ fvs) = i `IdSet.member` fvs
   ctxRemove i (BatchExpr m fvs) =
-    let m' = M.delete i m
-    in case M.size m' of
+    let m' = IdMap.delete i m
+    in case IdMap.size m' of
          0 -> SomeCtx (EmptyExpr :: EmptyExpr a)
-         1 -> let (j, x) = M.findMin m'
+         1 -> let (j, x) = IdMap.onlyEntry m'
               in SomeCtx $ SingleExpr j x fvs
          _ -> SomeCtx $ BatchExpr m' fvs
   ctxAdd i x (BatchExpr m fvs) =
-    BatchExpr (M.insert i x m) (fvs `IdSet.union` fVars x)
+    BatchExpr (IdMap.insert i x m) (fvs `IdSet.union` fVars x)
   ctxNorm _ _ = Unchanged
   ctxAvoids _ _ = False
 
@@ -149,7 +150,7 @@ instance SubstContext SingleType IType where
   ctxRemove i' s@(SingleType i _ _) =
     if i == i' then SomeCtx EmptyType else SomeCtx s
   ctxAdd i' t' (SingleType i t fvs) =
-    BatchTypeNorm (M.fromList [(i,t), (i',t')]) (fvs `vsUnion` fTVarSet t') (\ _ -> Unchanged)
+    BatchTypeNorm (IdMap.fromList [(i,t), (i',t')]) (fvs `vsUnion` fTVarSet t') (\ _ -> Unchanged)
   ctxNorm _ _ = Unchanged
   ctxAvoids fvs (SingleType i _ _) = not (i `vsMember` fvs)
 
@@ -163,47 +164,47 @@ instance SubstContext SingleTypeNorm IType where
   ctxRemove i' s@(SingleTypeNorm i _ _ _) =
     if i == i' then SomeCtx EmptyType else SomeCtx s
   ctxAdd i' t' (SingleTypeNorm i t fvs norm) =
-    BatchTypeNorm (M.fromList [(i,t), (i',t')]) (fvs `vsUnion` fTVarSet t') norm
+    BatchTypeNorm (IdMap.fromList [(i,t), (i',t')]) (fvs `vsUnion` fTVarSet t') norm
   ctxNorm (SingleTypeNorm _ _ _ norm) = norm
   ctxAvoids fvs (SingleTypeNorm i _ _ _) = not (i `vsMember` fvs)
 
 -- Batch type substitution
-data BatchType = BatchType !(M.Map Id IType) !VarSet
+data BatchType = BatchType !(IdMap IType) !VarSet
 
 instance SubstContext BatchType IType where
-  lookupVar i (BatchType m _) = M.lookup i m
+  lookupVar i (BatchType m _) = IdMap.lookup i m
   ctxIsEmpty _ = False
   ctxContainsVar i (BatchType _ fvs) = i `vsMember` fvs
   ctxRemove i (BatchType m fvs) =
-    let m' = M.delete i m
-    in case M.size m' of
+    let m' = IdMap.delete i m
+    in case IdMap.size m' of
          0 -> SomeCtx EmptyType
-         1 -> let (j, t) = M.findMin m'
+         1 -> let (j, t) = IdMap.onlyEntry m'
               in SomeCtx $ SingleType j t fvs
          _ -> SomeCtx $ BatchType m' fvs
   ctxAdd i t (BatchType m fvs) =
-    BatchTypeNorm (M.insert i t m) (fvs `vsUnion` fTVarSet t) (\ _ -> Unchanged)
+    BatchTypeNorm (IdMap.insert i t m) (fvs `vsUnion` fTVarSet t) (\ _ -> Unchanged)
   ctxNorm _ _ = Unchanged
-  ctxAvoids fvs (BatchType m _) = not (any (`vsMember` fvs) (M.keys m))
+  ctxAvoids fvs (BatchType m _) = not (any (`vsMember` fvs) (IdMap.keys m))
 
 -- Batch type substitution with normalization
-data BatchTypeNorm = BatchTypeNorm !(M.Map Id IType) !VarSet !(IType -> Changed IType)
+data BatchTypeNorm = BatchTypeNorm !(IdMap IType) !VarSet !(IType -> Changed IType)
 
 instance SubstContext BatchTypeNorm IType where
-  lookupVar i (BatchTypeNorm m _ _) = M.lookup i m
+  lookupVar i (BatchTypeNorm m _ _) = IdMap.lookup i m
   ctxIsEmpty _ = False
   ctxContainsVar i (BatchTypeNorm _ fvs _) = i `vsMember` fvs
   ctxRemove i (BatchTypeNorm m fvs norm) =
-    let m' = M.delete i m
-    in case M.size m' of
+    let m' = IdMap.delete i m
+    in case IdMap.size m' of
          0 -> SomeCtx EmptyType
-         1 -> let (j, t) = M.findMin m'
+         1 -> let (j, t) = IdMap.onlyEntry m'
               in SomeCtx $ SingleTypeNorm j t fvs norm
          _ -> SomeCtx $ BatchTypeNorm m' fvs norm
   ctxAdd i t (BatchTypeNorm m fvs norm) =
-    BatchTypeNorm (M.insert i t m) (fvs `vsUnion` fTVarSet t) norm
+    BatchTypeNorm (IdMap.insert i t m) (fvs `vsUnion` fTVarSet t) norm
   ctxNorm (BatchTypeNorm _ _ norm) = norm
-  ctxAvoids fvs (BatchTypeNorm m _ _) = not (any (`vsMember` fvs) (M.keys m))
+  ctxAvoids fvs (BatchTypeNorm m _ _) = not (any (`vsMember` fvs) (IdMap.keys m))
 
 -- ============================================================
 -- Type substitution
@@ -268,16 +269,16 @@ tSubst i t ty = changedOr ty (tSubstWith (SingleType i t (fTVarSet t)) (fTVars t
 
 -- Public API: batch type substitution
 {-# INLINE tSubstBatch #-}
-tSubstBatch :: M.Map Id IType -> IType -> IType
+tSubstBatch :: IdMap IType -> IType -> IType
 tSubstBatch typeMap t
-  | M.null typeMap = t
-  | M.size typeMap == 1 =
-      let (i, ty) = M.findMin typeMap
+  | IdMap.null typeMap = t
+  | IdMap.size typeMap == 1 =
+      let (i, ty) = IdMap.onlyEntry typeMap
       in tSubst i ty t
   | otherwise =
-      let ftxv = foldr (vsUnion . fTVarSet) vsEmpty (M.elems typeMap)
+      let ftxv = foldr (vsUnion . fTVarSet) vsEmpty (IdMap.elems typeMap)
           tctx = BatchType typeMap ftxv
-          allIds = IdSet.unions (map fTVars (M.elems typeMap)) `IdSet.union` aTVars t
+          allIds = IdSet.unions (map fTVars (IdMap.elems typeMap)) `IdSet.union` aTVars t
       in changedOr t (tSubstWith tctx allIds t)
 
 -- ============================================================
@@ -452,40 +453,40 @@ etSubst i t e
 
 -- Public API: batch expression and type substitution, with normalization
 {-# INLINE eSubstBatch #-}
-eSubstBatch :: forall a. (IType -> Changed IType) -> M.Map Id (IExpr a) -> M.Map Id IType -> IExpr a -> IExpr a
+eSubstBatch :: forall a. (IType -> Changed IType) -> IdMap (IExpr a) -> IdMap IType -> IExpr a -> IExpr a
 eSubstBatch norm exprMap typeMap e
     | exprSize == 0 && typeSize == 0 = e
     | Changed e' <- result = e'
     | otherwise = e
   where
-    exprSize = M.size exprMap
-    typeSize = M.size typeMap
+    exprSize = IdMap.size exprMap
+    typeSize = IdMap.size typeMap
     result = case (exprSize, typeSize) of
-          (0, 1) -> let (i, t) = M.findMin typeMap
+          (0, 1) -> let (i, t) = IdMap.onlyEntry typeMap
                     in eSubstWith (EmptyExpr :: EmptyExpr a) (SingleTypeNorm i t (fTVarSet t) norm) (fTVars t `IdSet.union` aVars e) e
-          (0, _) -> let ftxv = foldr (vsUnion . fTVarSet) vsEmpty (M.elems typeMap)
-                        ftx = IdSet.unions (map fTVars (M.elems typeMap))
+          (0, _) -> let ftxv = foldr (vsUnion . fTVarSet) vsEmpty (IdMap.elems typeMap)
+                        ftx = IdSet.unions (map fTVars (IdMap.elems typeMap))
                     in eSubstWith (EmptyExpr :: EmptyExpr a) (BatchTypeNorm typeMap ftxv norm) (ftx `IdSet.union` aVars e) e
-          (1, 0) -> let (i, x) = M.findMin exprMap
+          (1, 0) -> let (i, x) = IdMap.onlyEntry exprMap
                         fvx = fVars x
                     in eSubstWith (SingleExpr i x fvx) EmptyType (fvx `IdSet.union` aVars e) e
-          (1, 1) -> let (ei, ex) = M.findMin exprMap
-                        (ti, tt) = M.findMin typeMap
+          (1, 1) -> let (ei, ex) = IdMap.onlyEntry exprMap
+                        (ti, tt) = IdMap.onlyEntry typeMap
                         fvx = fVars ex
                     in eSubstWith (SingleExpr ei ex fvx) (SingleTypeNorm ti tt (fTVarSet tt) norm) (fvx `IdSet.union` fTVars tt `IdSet.union` aVars e) e
-          (1, _) -> let (ei, ex) = M.findMin exprMap
+          (1, _) -> let (ei, ex) = IdMap.onlyEntry exprMap
                         fvx = fVars ex
-                        ftxv = foldr (vsUnion . fTVarSet) vsEmpty (M.elems typeMap)
-                        ftx = IdSet.unions (map fTVars (M.elems typeMap))
+                        ftxv = foldr (vsUnion . fTVarSet) vsEmpty (IdMap.elems typeMap)
+                        ftx = IdSet.unions (map fTVars (IdMap.elems typeMap))
                     in eSubstWith (SingleExpr ei ex fvx) (BatchTypeNorm typeMap ftxv norm) (fvx `IdSet.union` ftx `IdSet.union` aVars e) e
-          (_, 0) -> let fvx = IdSet.unions $ M.elems $ M.map fVars exprMap
+          (_, 0) -> let fvx = IdSet.unions $ IdMap.elems $ IdMap.map fVars exprMap
                     in eSubstWith (BatchExpr exprMap fvx) EmptyType (fvx `IdSet.union` aVars e) e
-          (_, 1) -> let fvx = IdSet.unions $ M.elems $ M.map fVars exprMap
-                        (ti, tt) = M.findMin typeMap
+          (_, 1) -> let fvx = IdSet.unions $ IdMap.elems $ IdMap.map fVars exprMap
+                        (ti, tt) = IdMap.onlyEntry typeMap
                     in eSubstWith (BatchExpr exprMap fvx) (SingleTypeNorm ti tt (fTVarSet tt) norm) (fvx `IdSet.union` fTVars tt `IdSet.union` aVars e) e
-          (_, _) -> let fvx = IdSet.unions $ M.elems $ M.map fVars exprMap
-                        ftxv = foldr (vsUnion . fTVarSet) vsEmpty (M.elems typeMap)
-                        ftx = IdSet.unions (map fTVars (M.elems typeMap))
+          (_, _) -> let fvx = IdSet.unions $ IdMap.elems $ IdMap.map fVars exprMap
+                        ftxv = foldr (vsUnion . fTVarSet) vsEmpty (IdMap.elems typeMap)
+                        ftx = IdSet.unions (map fTVars (IdMap.elems typeMap))
                     in eSubstWith (BatchExpr exprMap fvx) (BatchTypeNorm typeMap ftxv norm) (fvx `IdSet.union` ftx `IdSet.union` aVars e) e
 
 {-# INLINE mapChanged #-}

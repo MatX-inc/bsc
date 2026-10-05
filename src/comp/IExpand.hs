@@ -36,6 +36,8 @@ import qualified Data.IntMap as IM
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
 import qualified IdSet
 import Debug.Trace(traceM)
 
@@ -3306,7 +3308,7 @@ mkApUH f es = do es' <- mapM evalArgUH es
 -- Accumulate substitutions when applying to a chain of ILam/ILAM
 -- This batches substitutions to avoid repeated hyper calls
 --
-evalApAccum :: String -> M.Map Id HExpr -> M.Map Id IType -> HExpr -> [Arg] -> G PExpr
+evalApAccum :: String -> IdMap HExpr -> IdMap IType -> HExpr -> [Arg] -> G PExpr
 
 -- Continue accumulating for ILam with expression argument
 evalApAccum tag exprCtx typeCtx (ILam i t body) (E a : as) = do
@@ -3319,18 +3321,18 @@ evalApAccum tag exprCtx typeCtx (ILam i t body) (E a : as) = do
   a' <- toHeap "apply-accum" t' a (Just i)
   -- position information is clobbered by this point
   when doDebug $ traceM ("accum apply arg=" ++ ppReadable (a', a))
-  evalApAccum "ILam-accum" (M.insert i a' exprCtx) typeCtx body as
+  evalApAccum "ILam-accum" (IdMap.insert i a' exprCtx) typeCtx body as
 
 -- Continue accumulating for ILAM with type argument
 evalApAccum tag exprCtx typeCtx e@(ILAM i k body) (T t : as) =
-  evalApAccum "ILAM-accum" exprCtx (M.insert i t typeCtx) body as
+  evalApAccum "ILAM-accum" exprCtx (IdMap.insert i t typeCtx) body as
 
 -- Hit something else: apply accumulated substitutions if any, then continue
 evalApAccum tag exprCtx typeCtx e args = do
   when (doDebug || doTraceExpandBatchSubst) $
     traceM ("applying batched subst: " ++
-             show (M.size exprCtx) ++ " exprs, " ++
-             show (M.size typeCtx) ++ " types")
+             show (IdMap.size exprCtx) ++ " exprs, " ++
+             show (IdMap.size typeCtx) ++ " types")
   -- eSubstBatch will do no work if exprCtx and typeCtx are empty
   -- (but in evalAppAccum, at least one of them won't be)
   norm <- getTypeNormalizerC
@@ -3389,7 +3391,7 @@ evalAp'   (ILam i t e)   (E a:as) = do
         a' <- toHeap "apply" t a (Just i)
         -- position information is clobbered by this point
         when doDebug $ traceM ("apply arg=" ++ ppReadable (a', a))
-        evalApAccum "ILam" (M.singleton i a') M.empty e as
+        evalApAccum "ILam" (IdMap.singleton i a') IdMap.empty e as
 evalAp'   f@(ILam _ _ _) (T t:as) = internalError("evalAp' ILam: " ++ ppReadable (f,t))
 
 -- it's WHNF
@@ -3397,7 +3399,7 @@ evalAp' e@(ILAM _ _ _)         [] = return (pExpr e)
 -- substitute type
 -- We can put t directly into typeCtx because the simpNumT case of evalAp' took care of
 -- simplifying any unsimplified numeric types
-evalAp'   (ILAM i k e)   (T t:as) = evalApAccum "ILAM" M.empty (M.singleton i t) e as
+evalAp'   (ILAM i k e)   (T t:as) = evalApAccum "ILAM" IdMap.empty (IdMap.singleton i t) e as
 evalAp'   f@(ILAM _ _ _) (E e:as) = internalError ("evalAp' ILAM:" ++ ppReadable (f,e))
 -- place applications args on the stack and evaluate function
 evalAp' e@(IAps f tys es)      as =
