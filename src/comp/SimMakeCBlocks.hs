@@ -1084,7 +1084,7 @@ mkActionMethodSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map
       -- ----------
       -- Get all the defs needed for the WF expr
       ids = S.toList $ getExprIds True def_map S.empty [ASDef bit_type unqual_wf]
-      defs = tsortADefs $ map (findDef def_map) ids
+      defs = tsortADefs False $ map (findDef def_map) ids
 
       -- ----------
       -- Call the RDY method for top-level methods, since they may check their
@@ -1137,7 +1137,7 @@ mkRuleSchedStmts inst_map full_dmap method_calls
       -- ----------
       -- Get all the defs needed for the WF expr
       ids = S.toList $ getExprIds True def_map S.empty [ASDef bit_type unqual_wf]
-      defs = tsortADefs $ map (findDef def_map) ids
+      defs = tsortADefs False $ map (findDef def_map) ids
 
       -- ----------
       -- Make the statements
