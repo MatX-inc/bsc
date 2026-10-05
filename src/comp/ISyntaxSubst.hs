@@ -380,10 +380,17 @@ subPair esubFn (a, b) = changed2 (,) a b (esubFn a) (esubFn b)
 {-# SPECIALIZE eSubstWith :: BatchExpr Elab -> BatchTypeNorm -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
 eSubstWith :: forall a ectx tctx . (KnownPhase a, ExprSubstCtx ectx a, TypeSubstCtx tctx)
            => ectx -> tctx -> S.Set Id -> IExpr a -> Changed (IExpr a)
-eSubstWith ectx tctx allIds e
-    | ctxIsEmpty ectx && ctxIsEmpty tctx = Unchanged
-    | otherwise = sub ectx tctx allIds e
+eSubstWith ectx tctx allIds e = go ectx tctx allIds e
   where
+    -- The whole substitution, polymorphic in the two context types but
+    -- fixed at the caller's phase.  The SomeCtx arms of sub re-enter go,
+    -- not eSubstWith: ctxRemove changes a context's type, never the
+    -- phase, so each per-phase specialisation of eSubstWith keeps its
+    -- own copy of go and no KnownPhase dictionary is passed at runtime.
+    go :: (ExprSubstCtx ectx' a, TypeSubstCtx tctx') => ectx' -> tctx' -> S.Set Id -> IExpr a -> Changed (IExpr a)
+    go ectx tctx allIds e
+      | ctxIsEmpty ectx && ctxIsEmpty tctx = Unchanged
+      | otherwise = sub ectx tctx allIds e
     tSubWithNorm :: (TypeSubstCtx tctx') => tctx' -> S.Set Id -> IType -> Changed IType
     tSubWithNorm tctx allIds t =
       -- Need to normalize the entire type after substitution, because even if the original type is in normal form,
@@ -396,19 +403,19 @@ eSubstWith ectx tctx allIds e
     sub :: (ExprSubstCtx ectx' a, TypeSubstCtx tctx') => ectx' -> tctx' -> S.Set Id -> IExpr a -> Changed (IExpr a)
     -- The contexts and the id set only change at a binder, so the walk
     -- below a binder runs in one monomorphic loop; a binder that
-    -- changes a context re-enters through sub or eSubstWith.
-    sub ectx tctx allIds = go
+    -- changes a context re-enters through sub or go.
+    sub ectx tctx allIds = loop
       where
         tsub = tSubWithNorm tctx allIds
-        go ee@(ILam i t e) =
+        loop ee@(ILam i t e) =
           case lookupVar i ectx of
             Just _ ->
               -- Variable shadowed: remove from context and continue
               -- We reprocess ee because it is possible i is in the free vars
               -- of the context, so we will need alpha-conversion.
-              -- We call eSubstWith so that we check if the context is now empty.
+              -- We call go so that we check if the context is now empty.
               case ctxRemove i ectx of
-                SomeCtx ectx' -> eSubstWith ectx' tctx allIds ee
+                SomeCtx ectx' -> go ectx' tctx allIds ee
             Nothing ->
               if ctxContainsVar i ectx
               then -- Alpha-conversion needed: add renaming and continue
@@ -419,16 +426,16 @@ eSubstWith ectx tctx allIds e
                     !e'     = changedOr e (sub ectx' tctx allIds' e)
                 in Changed $ ILam i' t' e'
               else -- No conflict: continue with same contexts
-                changed2 (ILam i) t e (tsub t) (go e)
-        go ee@(ILAM i k e) =
+                changed2 (ILam i) t e (tsub t) (loop e)
+        loop ee@(ILAM i k e) =
           case lookupVar i tctx of
             Just _ ->
               -- Variable shadowed: remove from context and continue
               -- We reprocess ee because it is possible i is in the free vars
               -- of the context, so we will need alpha-conversion.
-              -- We call eSubstWith so that we check if both contexts are now empty.
+              -- We call go so that we check if both contexts are now empty.
               case ctxRemove i tctx of
-                SomeCtx tctx' -> eSubstWith ectx tctx' allIds ee
+                SomeCtx tctx' -> go ectx tctx' allIds ee
             Nothing ->
               if ctxContainsVar i tctx
               then -- Alpha-conversion needed: add renaming and continue
@@ -438,13 +445,13 @@ eSubstWith ectx tctx allIds e
                     !e'     = changedOr e (sub ectx tctx' allIds' e)
                 in Changed $ ILAM i' k e'
               else -- No conflict: continue with same contexts
-                changed1 (ILAM i k) (go e)
-        go (IVar i) = maybe Unchanged Changed (lookupVar i ectx)
-        go (IAps f ts es) =
-            changed3 IAps f ts es (go f) (mapChanged tsub ts) (mapChanged go es)
+                changed1 (ILAM i k) (loop e)
+        loop (IVar i) = maybe Unchanged Changed (lookupVar i ectx)
+        loop (IAps f ts es) =
+            changed3 IAps f ts es (loop f) (mapChanged tsub ts) (mapChanged loop es)
         -- Use helper for IConInfo (handles both type and expression substitution)
-        go (ICon i ii) = changed1 (ICon i) (etSubstIConInfo tsub go ii)
-        go (IRefT _ _ _ _) = Unchanged  -- no free tyvar inside IRef
+        loop (ICon i ii) = changed1 (ICon i) (etSubstIConInfo tsub loop ii)
+        loop (IRefT _ _ _ _) = Unchanged  -- no free tyvar inside IRef
 
 -- Public API: single expression substitution
 {-# INLINE eSubst #-}
