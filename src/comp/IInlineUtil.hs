@@ -5,7 +5,6 @@ import qualified IdMap
 import ErrorUtil(internalError)
 import ISyntax
 import ISyntaxUtil(irulesMap)
-import Id
 import PPrint(ppReadable)
 import Util(fromJustOrErr)
 
