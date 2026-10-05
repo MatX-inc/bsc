@@ -1,7 +1,11 @@
+set instSynth [file join [get_bsdir] tcllib bluespec InstSynth.tcl]
+if { ![file readable $instSynth] || ![bluetcl_package_available InstSynth] } {
+    fail "installed Bluetcl package InstSynth is available"
+    return
+}
 
-if { [bluetcl_package_available InstSynth] == 1 } {
-
-bluetcl_run_compare_pass instsynth.tcl 
+# InstSynth emits BSV and the same report from either startup syntax.
+bluetcl_run_compare_pass instsynth.tcl "" instsynth.tcl.bluetcl-out.expected
 compare_file  FIFO.include.bsv
 compare_file  FIFOLevel.include.bsv
 
@@ -14,6 +18,4 @@ find_n_strings Inst.bsv.bsc-vcomp-out "No concrete definition of mkFIFO for type
 find_n_strings Inst.bsv.bsc-vcomp-out "Using mkFIFOCount__FIFOCountIfc_int_10_ for mkFIFOCount of type:" 2
 find_n_strings Inst.bsv.bsc-vcomp-out "Using mkFIFOCount__FIFOCountIfc_int_11_ for mkFIFOCount of type:" 2
 find_n_strings Inst.bsv.bsc-vcomp-out "No concrete definition of mkFIFOCount" 4
-}
-
 }
