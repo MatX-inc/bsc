@@ -56,7 +56,10 @@ import CCSyntax
 import ForeignFunctions
 import SimPrimitiveModules
 import qualified Data.Map as M
-import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 import IntLit
 import IntegerUtil(aaaa)
 import PPrint hiding (char, int)
@@ -247,20 +250,20 @@ defs_read (SFSOutputReset _ e)       = aVars e
 defs_read _                          = []
 
 -- Rename the Ids in a SimCCFnStmt based on an Id map
-mapId :: Map.Map Id Id -> Id -> Id
-mapId idmap i = Map.findWithDefault i i idmap
+mapId :: IdMap Id -> Id -> Id
+mapId idmap i = IdMap.findWithDefault i i idmap
 
-mapExpr :: Map.Map Id Id -> AExpr -> AExpr
+mapExpr :: IdMap Id -> AExpr -> AExpr
 mapExpr idmap e = exprMap fn e
   where fn (ASDef t i) = Just (ASDef t (mapId idmap i))
         fn expr        = Nothing
 
-mapAct ::  Map.Map Id Id -> AAction -> AAction
+mapAct ::  IdMap Id -> AAction -> AAction
 mapAct idmap act = mapAExprs (exprMap fn) act
   where fn (ASDef t i) = Just (ASDef t (mapId idmap i))
         fn expr        = Nothing
 
-renameIds :: Map.Map Id Id -> SimCCFnStmt -> SimCCFnStmt
+renameIds :: IdMap Id -> SimCCFnStmt -> SimCCFnStmt
 renameIds m (SFSDef b (t,i) Nothing) = SFSDef b (t, mapId m i) Nothing
 renameIds m (SFSDef b (t,i) (Just e)) = SFSDef b (t, mapId m i) (Just (mapExpr m e))
 renameIds m (SFSAssign b i e) = SFSAssign b (mapId m i) (mapExpr m e)
@@ -1718,10 +1721,10 @@ simCCBlockToClassDeclaration genVCD sb_map sb =
 -- For defs which will hold system tasks, we initialize the value to "aaaa"
 -- (unless it is wide, in which case the constructor for wide data already
 -- does that).
-mkCtorInit :: S.Set AId -> (AType,AId) -> Maybe (AId,[AExpr])
+mkCtorInit :: IdSet -> (AType,AId) -> Maybe (AId,[AExpr])
 mkCtorInit task_id_set (aty@(ATBit sz),aid)
   | sz > 64     = Just (aid,[aNat sz])
-  | (S.member aid task_id_set)
+  | (IdSet.member aid task_id_set)
                 = let val = ASInt defaultAId aty (ilHex (aaaa sz))
                   in  Just (aid,[val])
   | otherwise   = Nothing
@@ -1770,7 +1773,7 @@ simCCBlockToClassDefinition :: Bool -> SBMap -> M.Map (Bool,AId) ClockDomain ->
 simCCBlockToClassDefinition genVCD sb_map sch_map sb =
   do let scope = Just (pfxMod ++ (sb_name sb))
          state_defs = map (addSBArgs sb_map) (sb_state sb)
-         task_id_set = S.fromList (sb_taskDefs sb)
+         task_id_set = IdSet.fromList (sb_taskDefs sb)
          pub_def_inits = mapMaybe (mkCtorInit task_id_set) (sb_publicDefs sb)
          pri_def_inits = mapMaybe (mkCtorInit task_id_set) (sb_privateDefs sb)
          symbols = sortBy symOrd $ [ (getIdString i, SymParam i sz)
@@ -1895,14 +1898,14 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
                                                  (concatMap sf_body rules)
                         ]
          rl_map = M.fromList [ (i,d) | (d,is) <- ids_by_clock, i <- is ]
-         mc_map = M.fromList [ (i,c)
-                             | (c, mths) <- sb_methods sb
-                             , i <- map fst mths
-                             ]
+         mc_map = IdMap.fromList [ (i,c)
+                                 | (c, mths) <- sb_methods sb
+                                 , i <- map fst mths
+                                 ]
          -- RDY methods now get marked with the clock of the method,
          -- so this indirection should no longer be needed.
-         lookupMClk i | isRdyId i = M.findWithDefault Nothing (dropReadyPrefixId i) mc_map
-                      | otherwise = M.findWithDefault Nothing i mc_map
+         lookupMClk i | isRdyId i = IdMap.findWithDefault Nothing (dropReadyPrefixId i) mc_map
+                      | otherwise = IdMap.findWithDefault Nothing i mc_map
          (ms1,ms2) = partition (\(c,_) -> c == (Just noClockDomain))
                                (sb_methods sb)
          ms1' = M.toList $ M.unionsWith (++) $

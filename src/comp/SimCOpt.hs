@@ -17,6 +17,8 @@ import Data.List(find, intercalate, sortOn)
 import Data.List.Split(split, condense, oneOf)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdMap
+import qualified IdSet
 
 import PPrint
 
@@ -141,7 +143,7 @@ moveDefsOntoStack flags instmodmap (blocks,scheds) =
       sched_refs = [ (k, dr) | (k, (dr,_)) <- sched_tups
                              , not (k `S.member` bcgTopMethodCFs) ]
       sched_defs = M.fromListWith combine_refs sched_refs
-      sched_qids = M.fromListWith S.union [ (k, S.singleton q) | (k,(_,q)) <- sched_tups ]
+      sched_qids = M.fromListWith IdSet.union [ (k, IdSet.singleton q) | (k,(_,q)) <- sched_tups ]
 
       all_defs = M.unionWith combine_refs block_defs sched_defs
 
@@ -204,8 +206,8 @@ moveDefsOntoStack flags instmodmap (blocks,scheds) =
                                                   then (Nothing,fn)
                                                   else (Just sbid,fn)
                                      ]
-      moved_defs = M.fromListWith S.union [ (sbid, S.singleton aid)
-                                          | els <- M.elems move_map
+      moved_defs = M.fromListWith IdSet.union [ (sbid, IdSet.singleton aid)
+                                              | els <- M.elems move_map
                                           , (sbid, aid) <- els
                                           ]
 
@@ -215,16 +217,16 @@ moveDefsOntoStack flags instmodmap (blocks,scheds) =
                            , aid <- map snd ((sb_publicDefs b) ++ (sb_privateDefs b))
                            ]
       unused_defs = def_set `S.difference` (M.keysSet all_defs)
-      deleted_defs = M.fromListWith S.union
-                                    [ (sbid, S.singleton aid)
+      deleted_defs = M.fromListWith IdSet.union
+                                    [ (sbid, IdSet.singleton aid)
                                     | (sbid, aid) <- S.toList unused_defs
                                     ]
 
       -- update blocks and functions
       isNotDeleted sbid aid =
-          let moved = M.findWithDefault S.empty sbid moved_defs
-              deleted = M.findWithDefault S.empty sbid deleted_defs
-          in (aid `S.notMember` deleted) && (aid `S.notMember` moved)
+          let moved = M.findWithDefault IdSet.empty sbid moved_defs
+              deleted = M.findWithDefault IdSet.empty sbid deleted_defs
+          in (aid `IdSet.notMember` deleted) && (aid `IdSet.notMember` moved)
       sndOf3 (_,x,_) = x
       inline aid = let q = getIdQualString aid
                        b = getIdBaseString aid
@@ -250,18 +252,18 @@ moveDefsOntoStack flags instmodmap (blocks,scheds) =
       moveDefs Nothing fn = -- move into schedule
           let fname = sf_name fn
               new_defs = [ [ SFSDef isPort (ty,qual_id) Nothing
-                           | qual_id <- S.toList qids
+                           | qual_id <- IdSet.toList qids
                            ]
                          | (sbid,aid) <- M.findWithDefault [] (Nothing,fname) move_map
                          , let ty = btype_lookup (sbid,aid)
                          , let isPort = S.member (sbid,aid) port_set
-                         , let qids = M.findWithDefault S.empty (sbid, aid) sched_qids
+                         , let qids = M.findWithDefault IdSet.empty (sbid, aid) sched_qids
                          ]
-              idmap = M.fromList [ (qual_id, inline qual_id)
-                                 | (sbid,aid) <- M.findWithDefault [] (Nothing,fname) move_map
-                                 , let qids = M.findWithDefault S.empty (sbid,aid) sched_qids
-                                 , qual_id <- S.toList qids
-                                 ]
+              idmap = IdMap.fromList [ (qual_id, inline qual_id)
+                                     | (sbid,aid) <- M.findWithDefault [] (Nothing,fname) move_map
+                                     , let qids = M.findWithDefault IdSet.empty (sbid,aid) sched_qids
+                                     , qual_id <- IdSet.toList qids
+                                     ]
               body = map (renameIds idmap) ((concat new_defs) ++ (sf_body fn))
           in fn { sf_body = body }
       blocks' = [ b { sb_publicDefs  = pubs
@@ -305,27 +307,27 @@ dropTopInst a = let q = (dropWhile (/= '.')) (getIdQualString a)
 
 removeUnusedLocals :: SimCCFn -> SimCCFn
 removeUnusedLocals fn =
-    let used_defs = S.fromList [ aid
-                               | (aid, DF wr rd) <- getFnRefs False fn
-                               , not (S.null rd)
-                               ]
-        action_values = S.fromList [ aid | (SFSAssignAction _ aid _ _) <- sf_body fn ]
-        keep_defs = (used_defs `S.union` action_values)
+    let used_defs = IdSet.fromList [ aid
+                                   | (aid, DF wr rd) <- getFnRefs False fn
+                                   , not (S.null rd)
+                                   ]
+        action_values = IdSet.fromList [ aid | (SFSAssignAction _ aid _ _) <- sf_body fn ]
+        keep_defs = (used_defs `IdSet.union` action_values)
 
-        local_defs = S.fromList [ aid | (SFSDef _ (_,aid) _) <- sf_body fn ]
+        local_defs = IdSet.fromList [ aid | (SFSDef _ (_,aid) _) <- sf_body fn ]
 
-        args = S.fromList (map snd (sf_args fn))
+        args = IdSet.fromList (map snd (sf_args fn))
 
         -- consider any unreferenced def to be unused, as well as any argument ports
         -- since the argument will be referenced directly
         isUnusedDef (SFSDef p (_,aid) _) =
-            (aid `S.notMember` keep_defs) || (p && (aid `S.member` args))
+            (aid `IdSet.notMember` keep_defs) || (p && (aid `IdSet.member` args))
         -- consider any assignment to a local unreferenced def to be unused, as well
         -- assignments to locally defined argument ports, since the argument will be
         -- referenced directly
         isUnusedDef (SFSAssign p aid _)  =
-            (aid `S.member` local_defs) &&
-            ((aid `S.notMember` keep_defs) || (p && (aid `S.member` args)))
+            (aid `IdSet.member` local_defs) &&
+            ((aid `IdSet.notMember` keep_defs) || (p && (aid `IdSet.member` args)))
         -- keep everything else
         isUnusedDef _                    = False
 
