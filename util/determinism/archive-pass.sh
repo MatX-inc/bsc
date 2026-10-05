@@ -12,7 +12,8 @@
 #                  order: the per-group layout the serial mode writes); _log/
 #                  holds the make transcript, the group -> .exp map and the
 #                  TESTDIRS value
-#   [options]      the TEST_BSC_OPTIONS value, e.g. -reverse-intern-order
+#   [options]      the TEST_BSC_OPTIONS value, one argument, e.g.
+#                  '-reverse-intern-order -remap-path-prefix /x/tree=.'
 #
 # environment:
 #   ONLY_GROUPS="a b c"   run only these top-level groups
@@ -24,9 +25,8 @@
 #                         groups.  Same archive, about ten times slower; kept
 #                         for comparison
 #   GATE_WORKTREE=DIR     the checkout whose testsuite to run (default: the
-#                         one this script lives in; run-gate.sh sets it when
-#                         it runs a copy of this script in a mount namespace
-#                         that shows a temporary worktree at that path)
+#                         one this script lives in; run-gate.sh names its
+#                         temporary worktrees here)
 #   GATE_TIMING=FILE      parallel mode: a timing table from an earlier run
 #                         (the _log/timing.txt every parallel pass writes);
 #                         with one, the slowest test directories start first
@@ -55,8 +55,11 @@
 # archives, executables (*.cexe *.vexe *.syscexe and ELF binaries), *.log,
 # *.sum, and the parallel driver's own bookkeeping (all_tests.mk, timing.txt).
 # Test failures never make this script exit non-zero (the gate compares
-# bytes; test results are the other CI's job); the exit status reports only
-# usage and I/O errors.
+# bytes; test results are the other CI's job).  The exit status is 2 for a
+# usage or I/O error and, in parallel mode, 4 when a test directory the run
+# was expected to cover wrote no testrun.sum (its runtest did not finish, so
+# the archive is incomplete: a comparison would report its files absent);
+# the directories are listed in _log/no_sum.txt and the archive is kept.
 set -u
 
 die() { printf 'archive-pass.sh: %s\n' "$*" >&2; exit 2; }
@@ -315,8 +318,11 @@ for g in $group_list; do
     "$g" "$pass" "$fail" "$unres" "$files" "$secs" "$note"
   total_pass=$((total_pass + pass)); total_fail=$((total_fail + fail)); total_unres=$((total_unres + unres))
 done
+incomplete=0
 if [ -s "$tmp/no_sum" ]; then
-  echo "== archive-pass: WARNING: $(wc -l < "$tmp/no_sum") expected test directories wrote no testrun.sum:"
+  incomplete=1
+  cp "$tmp/no_sum" "$archive/_log/no_sum.txt"
+  echo "== archive-pass: INCOMPLETE: $(wc -l < "$tmp/no_sum") expected test directories wrote no testrun.sum (_log/no_sum.txt):"
   sed 's/^/      /' "$tmp/no_sum"
 fi
 if [ -s "$tmp/extra_sum" ]; then
@@ -329,4 +335,5 @@ note=
 [ "$make_status" -eq 0 ] || [ $((total_pass + total_fail + total_unres)) -gt 0 ] || note="  (make exit $make_status: see _log/checkparallel.log)"
 echo "== archive-pass done: pass $total_pass fail $total_fail unresolved $total_unres  archived $n_files files  make ${make_secs}s  $(( $(date +%s) - pass_t0 ))s wall  $(load_now)  $(date '+%F %T')$note"
 git clean -fdXq . || die "git clean failed in $suite"
+[ "$incomplete" = 0 ] || exit 4
 exit 0
