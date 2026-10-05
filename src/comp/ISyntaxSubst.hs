@@ -380,10 +380,17 @@ subPair esubFn (a, b) = changed2 (,) a b (esubFn a) (esubFn b)
 {-# SPECIALIZE eSubstWith :: BatchExpr Elab -> BatchTypeNorm -> S.Set Id -> IExpr Elab -> Changed (IExpr Elab) #-}
 eSubstWith :: forall a ectx tctx . (KnownPhase a, ExprSubstCtx ectx a, TypeSubstCtx tctx)
            => ectx -> tctx -> S.Set Id -> IExpr a -> Changed (IExpr a)
-eSubstWith ectx tctx allIds e
-    | ctxIsEmpty ectx && ctxIsEmpty tctx = Unchanged
-    | otherwise = sub ectx tctx allIds e
+eSubstWith ectx tctx allIds e = go ectx tctx allIds e
   where
+    -- The whole substitution, polymorphic in the two context types but
+    -- fixed at the caller's phase.  The SomeCtx arms of sub re-enter go,
+    -- not eSubstWith: ctxRemove changes a context's type, never the
+    -- phase, so each per-phase specialisation of eSubstWith keeps its
+    -- own copy of go and no KnownPhase dictionary is passed at runtime.
+    go :: (ExprSubstCtx ectx' a, TypeSubstCtx tctx') => ectx' -> tctx' -> S.Set Id -> IExpr a -> Changed (IExpr a)
+    go ectx tctx allIds e
+      | ctxIsEmpty ectx && ctxIsEmpty tctx = Unchanged
+      | otherwise = sub ectx tctx allIds e
     tSubWithNorm :: (TypeSubstCtx tctx') => tctx' -> S.Set Id -> IType -> Changed IType
     tSubWithNorm tctx allIds t =
       -- Need to normalize the entire type after substitution, because even if the original type is in normal form,
@@ -400,9 +407,9 @@ eSubstWith ectx tctx allIds e
           -- Variable shadowed: remove from context and continue
           -- We reprocess ee because it is possible i is in the free vars
           -- of the context, so we will need alpha-conversion.
-          -- We call eSubstWith so that we check if the context is now empty.
+          -- We call go so that we check if the context is now empty.
           case ctxRemove i ectx of
-            SomeCtx ectx' -> eSubstWith ectx' tctx allIds ee
+            SomeCtx ectx' -> go ectx' tctx allIds ee
         Nothing ->
           if ctxContainsVar i ectx
           then -- Alpha-conversion needed: add renaming and continue
@@ -420,9 +427,9 @@ eSubstWith ectx tctx allIds e
           -- Variable shadowed: remove from context and continue
           -- We reprocess ee because it is possible i is in the free vars
           -- of the context, so we will need alpha-conversion.
-          -- We call eSubstWith so that we check if both contexts are now empty.
+          -- We call go so that we check if both contexts are now empty.
           case ctxRemove i tctx of
-            SomeCtx tctx' -> eSubstWith ectx tctx' allIds ee
+            SomeCtx tctx' -> go ectx tctx' allIds ee
         Nothing ->
           if ctxContainsVar i tctx
           then -- Alpha-conversion needed: add renaming and continue
