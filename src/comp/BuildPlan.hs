@@ -405,18 +405,34 @@ type Discovery = D.StateT DiscoveryState IO
 -- mutate each other's decisions or visited sets.
 discoverDependencies :: String -> BuildPlan a -> IO DependencyReport
 discoverDependencies mode plan = do
-    let update :: (DependencyReport -> DependencyReport) -> Discovery ()
+    let forceText :: String -> IO String
+        forceText text = E.evaluate (foldr seq () text) >> return text
+        update :: (DependencyReport -> DependencyReport) -> Discovery ()
         update f = D.modify' $ \state -> state
             { discoveredReport = f (discoveredReport state) }
         addIncomplete :: String -> Discovery ()
-        addIncomplete reason = update $ \report -> report
-            { dependencyIncomplete = reason : dependencyIncomplete report }
+        addIncomplete reason = do
+            -- Parser-derived labels and exception messages can themselves
+            -- contain a deferred failure. Never let recovery store that
+            -- failure in a report that will only be forced by JSON output.
+            result <- D.liftIO (tryDependency (forceText reason))
+            let diagnostic = case result of
+                    Right text -> text
+                    Left _ -> "Cannot evaluate dependency diagnostic."
+            update $ \report -> report
+                { dependencyIncomplete = diagnostic : dependencyIncomplete report }
         checked :: String -> IO b -> (b -> Discovery ()) -> Discovery ()
         checked label action next = do
-            result <- D.liftIO (tryDependency action)
-            case result of
-                Left reason -> addIncomplete (label ++ ": " ++ reason)
-                Right value -> next value
+            -- Validate the label separately: if evaluating the read also
+            -- fails, its diagnostic must not re-evaluate a poisoned label.
+            labelResult <- D.liftIO (tryDependency (forceText label))
+            case labelResult of
+                Left reason -> addIncomplete ("Cannot inspect build-plan label: " ++ reason)
+                Right safeLabel -> do
+                    result <- D.liftIO (tryDependency action)
+                    case result of
+                        Left reason -> addIncomplete (safeLabel ++ ": " ++ reason)
+                        Right value -> next value
         visit :: [DependencyCondition] -> BuildPlan b -> Discovery ()
         visit conditions pending =
             -- Catch lazy continuations before inspecting the next constructor.
@@ -439,7 +455,7 @@ discoverDependencies mode plan = do
             addIncomplete ("Dependency discovery requires skipped production: " ++ label)
         walk conditions (Select label _ branches) =
             checked "Cannot inspect build-plan choice"
-                (E.evaluate (length label) >> E.evaluate (length branches)) $ \count -> do
+                (forceText label >> E.evaluate (length branches)) $ \count -> do
                 state <- D.get
                 let occurrence = nextOccurrence state
                 D.put (state { nextOccurrence = occurrence + 1 })
@@ -500,17 +516,17 @@ discoverDependencies mode plan = do
                 visit conditions next
         walk conditions (OutputFacts facts next) =
             checked "Cannot inspect build-plan outputs"
-                (E.evaluate (sum (map length facts))) $ \_ -> do
+                (mapM_ forceText facts) $ \_ -> do
                 update $ \report -> report
                     { dependencyOutputs = reverse facts ++ dependencyOutputs report }
                 visit conditions next
         walk conditions (NoteFact fact next) =
-            checked "Cannot inspect build-plan note" (E.evaluate (length fact)) $ \_ -> do
+            checked "Cannot inspect build-plan note" (forceText fact) $ \_ -> do
                 update $ \report -> report
                     { dependencyNotes = fact : dependencyNotes report }
                 visit conditions next
         walk conditions (IncompleteFact fact next) =
-            checked "Cannot inspect build-plan boundary" (E.evaluate (length fact)) $ \_ -> do
+            checked "Cannot inspect build-plan boundary" (forceText fact) $ \_ -> do
                 addIncomplete fact
                 visit conditions next
     (_, state) <- D.runStateT (visit [] plan) (DiscoveryState (emptyReport mode) 0)

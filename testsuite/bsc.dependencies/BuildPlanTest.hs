@@ -24,6 +24,15 @@ instance E.Exception TestCancellation where
     toException = E.asyncExceptionToException
     fromException = E.asyncExceptionFromException
 
+-- Exception text can itself be lazy, just like a label derived from parsing
+-- an input. Recovery must not move that failure into report serialization.
+newtype TestDiagnostic = TestDiagnostic String deriving (Typeable)
+
+instance Show TestDiagnostic where
+    show (TestDiagnostic message) = message
+
+instance E.Exception TestDiagnostic
+
 assert :: Bool -> String -> IO ()
 assert condition message = unless condition (ioError (userError message))
 
@@ -53,6 +62,21 @@ expectOutputs expected report =
 
 hasIncomplete :: String -> DependencyReport -> Bool
 hasIncomplete text = any (isInfixOf text) . dependencyIncomplete
+
+expectWritableIncomplete :: DependencyReport -> IO ()
+expectWritableIncomplete report = do
+    directory <- getTemporaryDirectory
+    E.bracket
+        (do (path, handle) <- openTempFile directory "bsc-build-plan-report"
+            hClose handle
+            return path)
+        removeFile $ \path -> do
+            writeDependencyReport path report
+            contents <- readFile path
+            assert ("\"complete\":false" `isInfixOf` contents)
+                "recovered report did not serialize as incomplete"
+            _ <- E.evaluate (length contents)
+            return ()
 
 tests :: [(String, IO ())]
 tests =
@@ -338,6 +362,60 @@ tests =
             ]
         expectOwners ["safe-sibling"] report
         assert (hasIncomplete "lazy read: " report) "lazy failure escaped")
+    , ("lazy observation labels do not poison the recovered report", do
+        forM_ ["read " ++ error "bad label tail",
+               "read " ++ [error "bad label character"]] $ \label -> do
+            report <- discoverDependencies "test" $ independently
+                [ do record "before-label"
+                     -- An include lookup can fail while evaluating the same
+                     -- filename thunk carried by its observation label.
+                     observe label (E.evaluate (foldr seq () label))
+                     record "after-label"
+                , record "safe-sibling"
+                ]
+            expectOwners ["before-label", "safe-sibling"] report
+            expectWritableIncomplete report
+            assert (hasIncomplete "Cannot inspect build-plan label" report)
+                "missing stable label failure boundary")
+    , ("lazy characters in report facts are caught before serialization", do
+        let badText = "prefix " ++ [error "bad report character"]
+            cases =
+                [ ("choice", choose badText True (record "bad-choice") (record "other-choice"))
+                , ("outputs", outputs [badText] >> record "after-output")
+                , ("note", note badText >> record "after-note")
+                , ("boundary", incomplete badText >> record "after-boundary")
+                ]
+        forM_ cases $ \(name, plan) -> do
+            report <- discoverDependencies "test" $ independently
+                [record "before-fact" >> plan, record "safe-sibling"]
+            expectOwners ["before-fact", "safe-sibling"] report
+            expectWritableIncomplete report
+            assert (hasIncomplete ("Cannot inspect build-plan " ++ name) report)
+                ("missing failure boundary for " ++ name))
+    , ("lazy exception text receives a serializable fallback diagnostic", do
+        report <- discoverDependencies "test" $ independently
+            [ do record "before-error"
+                 observe "failed read" $ E.throwIO $ TestDiagnostic
+                     ("diagnostic " ++ [error "bad diagnostic character"])
+                 record "after-error"
+            , record "safe-sibling"
+            ]
+        expectOwners ["before-error", "safe-sibling"] report
+        assert (hasIncomplete "Cannot evaluate dependency diagnostic" report)
+            "missing fallback for an unevaluable diagnostic"
+        expectWritableIncomplete report)
+    , ("lazy production labels receive a serializable fallback diagnostic", do
+        report <- discoverDependencies "test" $ independently
+            [ do record "before-production"
+                 produce ("production " ++ error "bad production label")
+                     (error "production action forced" :: IO ())
+                 record "after-production"
+            , record "safe-sibling"
+            ]
+        expectOwners ["before-production", "safe-sibling"] report
+        assert (hasIncomplete "Cannot evaluate dependency diagnostic" report)
+            "missing fallback for an unevaluable production label"
+        expectWritableIncomplete report)
     , ("execution chooses one branch and performs production", do
         writes <- newIORef ([] :: [String])
         let append value = perform (modifyIORef' writes (++ [value]))
@@ -369,6 +447,21 @@ tests =
         case result of
             Left TestCancellation -> return ()
             Right _ -> assert False "discovery swallowed a custom cancellation")
+    , ("discovery propagates cancellation while evaluating labels", do
+        result <- E.try (discoverDependencies "test"
+            (observe (E.throw E.ThreadKilled) (return ()) :: BuildPlan ()))
+            :: IO (Either E.AsyncException DependencyReport)
+        case result of
+            Left E.ThreadKilled -> return ()
+            _ -> assert False "label recovery swallowed ThreadKilled")
+    , ("discovery propagates cancellation while evaluating diagnostics", do
+        result <- E.try (discoverDependencies "test"
+            (observe "cancelled diagnostic"
+                (E.throwIO (TestDiagnostic (E.throw TestCancellation))) :: BuildPlan ()))
+            :: IO (Either TestCancellation DependencyReport)
+        case result of
+            Left TestCancellation -> return ()
+            Right _ -> assert False "diagnostic recovery swallowed custom cancellation")
     , ("file requirements retain present absent and directory candidates", do
         directory <- getTemporaryDirectory
         E.bracket
