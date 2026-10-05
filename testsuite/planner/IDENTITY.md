@@ -9,7 +9,7 @@ tested independently of the message used to report its result.
 The version 3 `plan` command emits the separate `file-test-number-v1` identity:
 the suite-relative script and a positive test number, with no assertion role.
 The counter resets in each `.exp` and advances only for recognized
-`compile_pass` and `compile_fail` invocations, including calls whose arguments
+`compile_pass`, `compile_fail`, and `compile_fail_error` invocations, including calls whose arguments
 cannot be lowered. Those calls retain their reserved IDs as planning issues;
 other unsupported constructs have a null ID and do not advance the counter.
 The selector is `v3:LENGTH:FILE:NUMBER`, where length counts Unicode characters

@@ -30,7 +30,8 @@ not runtime assertions. `explain PLAN.json TEST-OR-ISSUE-ID` describes one test'
 semantic obligations or one numbered issue's reason, with its source origin.
 
 Internal checks default to enabled and are derived by semantic procedures for
-expected-success compilation tests; they are not separate planned tests. The
+expected-success compilation tests and unexpected success in diagnostic-error
+tests; they are not separate planned tests. The
 initial lowerer supports package compilation, audited scalar assignments, and
 finite loops. See [PLAN.md](PLAN.md) for the exact restrictions, v3 schema, and
 execution and identity boundaries.
@@ -88,8 +89,8 @@ reader with limited scalar substitution support; it does not run Tcl.
 A plan contains configuration and scripts; script items contain
 tests or located planning issues. A test has a file-local test number, origin, and
 kind, currently compilation plus its expected result. `Procedures.hs` shares
-the meaning of `compilePass` and `compileFail` through `compilationTest`,
-including the derived internal-check obligation. These Haskell functions need
+the meaning of `compilePass`, `compileFail`, and `compileFailError`, including
+exact diagnostic counts and conditional internal-check obligations. These Haskell functions need
 not correspond one for one to Tcl helpers. The core contains no execution
 steps, action graph, workspace snapshots, or cache policy. Input and tool
 binding live in `Buck2.hs` and `Execute.hs`. Read `Execute.hs` next for private
@@ -111,7 +112,7 @@ parity with the legacy harness.
 
 IDs use the `file-test-number-v1` identity: the suite-relative `.exp` path and a
 positive number. The counter resets for each script and advances only for
-recognized `compile_pass`/`compile_fail` invocations. A recognized call reserves
+recognized `compile_pass`/`compile_fail`/`compile_fail_error` invocations. A recognized call reserves
 a number even if static argument lowering fails. Other unsupported constructs
 have no number. Repeated loop invocations remain distinct, and internal object
 checks retain their parent test number. `explain` selectors have the form

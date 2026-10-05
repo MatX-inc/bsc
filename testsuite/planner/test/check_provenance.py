@@ -41,6 +41,7 @@ proc load_procedures {path names} {
 load_procedures [file join $env(PROVENANCE_DEJAGNU) runtest.exp] {runtest}
 load_procedures [file join $env(PROVENANCE_SUITE) config unix.exp] {
     compile_pass compile_fail compile_backend_pass dumpbo_pass dumpba_pass
+    compile_fail_error make_bsc_output_name find_n_error find_n_emsg
     check_intermediate_files do_internal_checks bsc_test_trace_enabled
     bsc_test_trace_log bsc_test_trace_path bsc_test_init bsc_test_finish
     bsc_test_begin bsc_test_role bsc_test_end bsc_init bsc_finish _init _finish
@@ -53,7 +54,17 @@ proc send_error {args} { puts -nonewline $::log [lindex $args end] }
 proc timestamp {} { clock seconds }
 proc incr_stat {args} {}
 proc bsc_compile {source args} {
-    return [expr {![string match "Fail*" $source]}]
+    set fails [string match "Fail*" $source]
+    set transcript [open [file join $::srcdir $::subdir [make_bsc_output_name $source]] w]
+    if {$fails} {
+        set count [expr {$source eq "FailTwo.bs" ? 2 : $source eq "FailZero.bs" ? 0 : 1}]
+        for {set n 0} {$n < $count} {incr n} {
+            puts $transcript "Error: \"$source\", line 1, column 1: (T0001)"
+            puts $transcript "  example diagnostic"
+        }
+    }
+    close $transcript
+    return [expr {!$fails}]
 }
 proc dumpbo {source} { return 1 }
 proc dumpba {source} { return 1 }
@@ -81,6 +92,8 @@ proc existing_pass_hook {message} {
     puts $::log "EXISTING HOOK $final_type $message"
 }
 set local_record_procs(pass) existing_pass_hook
+cd $srcdir
+set subdir cases
 foreach fixture [lsort [glob -nocomplain [file join $env(PROVENANCE_ROOT) cases *.exp]]] {
     runtest $fixture
 }
@@ -172,6 +185,31 @@ class ProvenanceTests(unittest.TestCase):
                                  [["finish", "2"], ["finish", "1"]])
                 self.assertEqual([m[1] for m in markers if m[0] == "begin"], ["1", "2", "1"])
                 self.assertNotIn("Intermediate file", (self.root / "testrun.sum").read_text())
+
+    def test_compile_error_branch_roles_and_interleaved_numbering(self):
+        self.write_case("errors", (FIXTURES / "errors.tcl").read_text())
+        for internal in (1, 0):
+            with self.subTest(internal=internal):
+                log = self.run_capture(internal=internal)
+                markers = self.markers(log)
+                begins = [m for m in markers if m[0] == "begin"]
+                self.assertEqual([m[1] for m in begins], list(map(str, range(1, 9))))
+                self.assertEqual([m[2] for m in begins], ["compile_fail_error", "compile_pass",
+                    "compile_fail_error", "compile_fail", "compile_fail_error",
+                    "compile_fail_error", "compile_fail_error", "compile_fail_error"])
+                self.assertEqual(decode_list(begins[0][5]), ["Fail.bs", "T0001", "1", "", "0"])
+                diagnostic_ids = [m[1] for m in markers if m[0] == "role" and m[2] == "diagnostic-count"]
+                self.assertEqual(diagnostic_ids, ["1", "3", "5", "6", "8"])
+                unexpected = log.split("BSC-TEST: begin 7 ", 1)[1].split("BSC-TEST: end 7", 1)[0]
+                self.assertIn("FAIL: `Good.bs' shouldn't compile", unexpected)
+                self.assertEqual("BSC-TEST: role 7 object-load" in unexpected, bool(internal))
+                self.assertEqual("PASS: Intermediate file" in unexpected, bool(internal))
+                self.assertIn("FAIL: expected `1' copies of Error T9999 in `cases/Fail.bs.bsc-out', found `0'", log)
+                self.assertIn("FAIL: expected `1' copies of Error T0001 in `cases/FailTwo.bs.bsc-out', found `2'", log)
+                self.assertIn("PASS: found `0' copies of Error T0001", log)
+                summary = (self.root / "testrun.sum").read_bytes()
+                self.run_capture(internal=internal, enabled=False)
+                self.assertEqual((self.root / "testrun.sum").read_bytes(), summary)
 
     def test_off_on_summaries_and_return_values_are_identical(self):
         self.write_case("returns", r'''

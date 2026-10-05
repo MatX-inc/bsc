@@ -1,10 +1,12 @@
 module LowerTest (runTests) where
 
 import Lower
-import Procedures (compilePass, compileFail, internalChecksFor, InternalCheck(..), explainTest, supportedProcedures)
+import Procedures (compilePass, compileFail, compileFailError, internalChecksFor,
+  internalChecksAfter, InternalCheck(..), explainTest, supportedProcedures)
 import Tcl (SourcePos(..))
 import TestPlan
 import Control.Monad (forM_, unless)
+import Data.Either (isLeft)
 import Data.List (intercalate, isInfixOf, nub)
 import System.Exit (ExitCode(..))
 import System.Process (readProcessWithExitCode)
@@ -12,6 +14,7 @@ import System.Process (readProcessWithExitCode)
 runTests :: IO ()
 runTests = do
   compileTests
+  diagnosticTests
   evaluationTests
   differentialTests
   identityTests
@@ -37,8 +40,7 @@ lowered :: String -> TestPlan
 lowered = loweredWith config
 
 compilations :: TestPlan -> [Compilation]
-compilations plan = [compilation | test <- plannedTests plan,
-                                  CompilationTest compilation _ <- [testKind test]]
+compilations = map (testCompilation . testKind) . plannedTests
 
 sourceOptions :: TestPlan -> [(FilePath, [String])]
 sourceOptions = map (\c -> (compilationSource c, compilationOptions c)) . compilations
@@ -71,7 +73,7 @@ compileTests = do
     (fmap testKind (compileFail config identifier origin invocation) ==
       Right (CompilationTest invocation CompileFails))
   check "only implemented semantic procedures reserve invocation numbers"
-    (supportedProcedures == ["compile_pass", "compile_fail"])
+    (supportedProcedures == ["compile_pass", "compile_fail", "compile_fail_error"])
   check "resolved invocation adapter agrees with source lowering"
     (lowerInvocation config identifier origin "compile_pass" ["Good.bs"] ==
       Right (head (plannedTests success)))
@@ -120,6 +122,70 @@ compileTests = do
     (case internalChecksFor config (testKind (head (plannedTests unsupportedOptions))) of
        Left _ -> True
        Right _ -> False)
+
+diagnosticTests :: IO ()
+diagnosticTests = do
+  let defaults = lowered "compile_fail_error Bad.bs T0001"
+      kind = CompilationErrorTest (Compilation "Bad.bs" [] True) (ExpectedError "T0001" 1)
+      identifier = Identifier testPath 1
+      origin = SourcePos testPath 1 1 0
+  check "diagnostic defaults mean one literal error with dependencies"
+    (map testKind (plannedTests defaults) == [kind] && null (planIssues defaults))
+  check "diagnostic adapter uses the shared semantic constructor"
+    (compileFailError config identifier origin (Compilation "Bad.bs" [] True) (ExpectedError "T0001" 1)
+      == Right (head (plannedTests defaults)))
+  check "resolved diagnostic invocation retains its later number"
+    (lowerInvocation config (Identifier testPath 9) origin "compile_fail_error" ["Bad.bs", "T0001"]
+      == Right (Test (Identifier testPath 9) origin kind))
+  let variants = lowered $ unlines
+        [ "compile_fail_error Zero.bs T0001 0"
+        , "compile_fail_error Two.bs T0001 2 {-v -let-gen}"
+        , "compile_fail_error NoDeps.bs a_B-09 3 {-dinternal} 1"
+        ]
+  check "diagnostic count, options and nodeps positions preserve their semantics"
+    (map testKind (plannedTests variants) ==
+      [ CompilationErrorTest (Compilation "Zero.bs" [] True) (ExpectedError "T0001" 0)
+      , CompilationErrorTest (Compilation "Two.bs" ["-v", "-let-gen"] True) (ExpectedError "T0001" 2)
+      , CompilationErrorTest (Compilation "NoDeps.bs" ["-dinternal"] False) (ExpectedError "a_B-09" 3)
+      ])
+  let configured = loweredWith (config { configCompilerOptions = ["-v"] })
+        "compile_fail_error Bad.bs T0001 1 {-v -dinternal}"
+  check "diagnostic configuration options precede invocation options"
+    (sourceOptions configured == [("Bad.bs", ["-v", "-v", "-dinternal"])])
+  check "diagnostic object check is possible but depends on actual success"
+    (internalChecksFor config kind == Right [ObjectLoads "Bad.bo"] &&
+     internalChecksAfter config kind False == Right [] &&
+     internalChecksAfter config kind True == Right [ObjectLoads "Bad.bo"])
+  forM_ [False, True] $ \succeeded -> do
+    check "ordinary pass checks run after either compiler outcome"
+      (internalChecksAfter config (CompilationTest (testCompilation kind) CompileSucceeds) succeeded
+        == Right [ObjectLoads "Bad.bo"])
+    check "ordinary fail checks never inspect objects"
+      (internalChecksAfter config (CompilationTest (testCompilation kind) CompileFails) succeeded == Right [])
+    check "disabled diagnostic checks remain disabled"
+      (internalChecksAfter (config { configInternalChecks = False }) kind succeeded == Right [])
+    forM_ [ExpectedError "T.*" 1, ExpectedError "T0001" (-1)] $ \expected ->
+      check "conditional checks still validate diagnostic semantics when not running"
+        (isLeft (internalChecksAfter config (CompilationErrorTest (testCompilation kind) expected) succeeded))
+  check "diagnostic explanations describe the conditional obligation"
+    (case explainTest defaults (renderIdentifier identifier) of
+      Right description -> "exactly 1 error(s) tagged T0001" `isInfixOf` description &&
+        "run only if compilation succeeds unexpectedly" `isInfixOf` description
+      Left _ -> False)
+  forM_ ["Bad.bs {T[0-9]+}", "Bad.bs {T.*}", "Bad.bs 0T", "Bad.bs Té",
+         "Bad.bs T0001 -1", "Bad.bs T0001 +1", "Bad.bs T0001 1.0",
+         "Bad.bs T0001 010", "Bad.bs T0001 08", "Bad.bs T0001 00", "Bad.bs T0001 02",
+         "Bad.bs T0001 {}", "Bad.bs T0001 0x10", "Bad.bs T0001 99999999999999999999999",
+         "Bad.bs T0001 1 {-unknown}", "Bad.bs T0001 1 {} true", "Bad.bs",
+         "Bad.bs T0001 1 {} 0 extra"] $ \arguments -> do
+    let plan = lowered ("compile_fail_error " ++ arguments ++ "; compile_pass Good.bs")
+    check ("unsupported diagnostic invocation reserves number and preserves later test: " ++ arguments)
+      (planCounts plan == (1,1,0) && map issueId (planIssues plan) == [Just identifier] &&
+       map (identifierNumber . testId) (plannedTests plan) == [2])
+  let loop = lowered "foreach source {One.bs Two.bs} {compile_fail_error $source T0001; compile_fail_error $source {T.*}}"
+  check "diagnostic loops number supported and unsupported calls together"
+    (map (identifierNumber . testId) (plannedTests loop) == [1,3] &&
+     map (fmap identifierNumber . issueId) (planIssues loop) == [Just 2, Just 4])
 
 evaluationTests :: IO ()
 evaluationTests = do
@@ -259,7 +325,7 @@ partialPlanTests = do
     (planCounts mixed == (2,1,0) &&
      map compilationSource (compilations mixed) == ["Before.bs", "After.bs"])
   check "known diagnostic tests do not poison subsequent independent tests"
-    (planCounts (lowered "compile_fail_error Bad.bs T0001; compile_pass Good.bs") == (1,1,0))
+    (planCounts (lowered "compile_fail_error Bad.bs T0001; compile_pass Good.bs") == (2,0,0))
   let opaque = lowered $ unlines
         ["compile_pass Before.bs", "exec forbidden", "compile_pass After.bs"]
   check "opaque effects preserve the prefix and mark subsequent tests unresolved"
@@ -283,6 +349,7 @@ partialPlanTests = do
   forM_ ["compile_pass A.bs {[set ::source New.bs]}",
          "compile_pass $srcdir {[set ::source New.bs]}",
          "compile_verilog_pass A.bs {} {[set ::source New.bs]}",
+         "compile_fail_error A.bs T0001 1 {[set ::source New.bs]}",
          "compile_pass A.bs {-v; set ::source New.bs}"] $ \invocation -> do
     let secondParse = lowered ("set source Old.bs\n" ++ invocation ++ "\ncompile_pass $source")
     check "second-pass Tcl effects invalidate later declarations"

@@ -1,5 +1,55 @@
 # Testsuite planner and Buck2 migration: Stage 1
 
+## Diagnostic compilation tests
+
+The next semantic kind is `CompilationErrorTest Compilation ExpectedError`,
+adapted from `compile_fail_error`. It expects compilation to fail and then
+counts diagnostics with a literal tag. The count defaults to one. The executor
+retains both the raw compiler transcript and the expected and observed counts;
+the result checker independently recounts the transcript.
+
+This preserves the helper's conditional behavior: ordinary compilation
+failure produces one diagnostic verdict, while unexpected success produces a
+compilation FAIL and the configured internal object-load check. Regex tags,
+noncanonical numeric counts, backend options, and shared-state execution stay
+unsupported. The public Buck2 rules need no new test-specific policy.
+
+The refreshed inventory adds 164 planned diagnostic tests across 66 scripts,
+bringing the total to 508 planned tests. It retains 4,697 unsupported and 975
+unresolved items. These are planning counts, not executed-test coverage.
+Both plans and legacy traces must be regenerated because recognizing another
+procedure changes later invocation numbers in affected scripts.
+
+The reusable `testsuite/buck2/check_diagnostics.py` regression compares thirteen
+of those tests, covering counts of one, two, and eleven. All thirteen match
+real DejaGNU; its six additional assertions also pass. A copied-source syntax
+error produces a diagnostic-count FAIL in both runners. Replacing that source
+with a valid package instead produces a compilation FAIL and object-load PASS
+in both. Exact source restoration returns all thirteen tests to PASS. The
+unchanged warm build runs zero actions; each source mutation reruns thirteen
+actions because the input declaration is deliberately conservative.
+
+The Haskell suite, six direct-harness tests, CLI plan/correlation/emission
+checks, and 32 result-checker regressions pass. The Haskell diagnostic matcher
+also agrees with Tcl in 2,831 differential cases. The focused real-runner
+evidence is retained under `testsuite/.stage1-validation/diagnostic-integration/`.
+
+The subsequent Buck2 run executed all 164 planned diagnostic tests, plus 115
+ordinary compilation tests from their 66 scripts: **279 tests, 393 PASS checks,
+zero FAIL, and zero infrastructure errors**. Whole script plans preserve the
+invocation numbers and the explicit gaps; all 279 planned tests were executable.
+The run retains 216 unsupported and 355 unresolved items in those scripts.
+
+The saved full DejaGNU run provides a matching command and diagnostic-tag/count
+PASS for all 164 diagnostic tests. Two repeated labels are disambiguated by
+their compiler options. This comparison uses the recorded commands and verdicts,
+not new invocation IDs or historical raw compiler output. The current compiler
+installation fingerprint matches that capture exactly. The historical test-input
+fingerprint also matches after substituting the old tracing implementation and
+excluding the newly added Buck2 support files. No additional full DejaGNU run
+was needed. Execution and comparison evidence is retained under
+`testsuite/.stage1-validation/diagnostic-full-execution/`.
+
 ## First execution backend
 
 `emit-buck2` now snapshots tracked suite inputs, the compiler installation, the
@@ -45,7 +95,7 @@ checks, and existing suite-layout checks pass. The full legacy suite was not
 rerun for this backend-only change; the previous clean full run is the oracle.
 
 The initial executor uses a private copy of each selected directory subtree
-and its internal symlink targets. This policy was audited for the current 344
+and its internal symlink targets. This policy was audited for the initial 344
 tests. Shared-state scenarios, arbitrary cross-directory inputs, and complete
 host isolation remain limitations. Compilation without `-u` is an explicit
 execution gap. The ten-minute process bound accommodates the existing costly
@@ -61,10 +111,11 @@ The semantic planner provides a version 3 TestPlan model, strict JSON
 validation, `plan`, `explain`, and supported-invocation `correlate`. A plan
 contains configuration and scripts; each script contains semantic tests or
 located unsupported/unresolved items.
-The current test kind is package compilation with an expected success or
-failure. `Procedures.hs` shares its meaning through `compilationTest`, used by
-`compilePass` and `compileFail`; it derives the optional internal object check
-for expected-success tests from global configuration. The check is not another
+The test kinds are package compilation with an expected success or failure,
+and compilation with an expected diagnostic count. `Procedures.hs` shares
+their meaning through `compilePass`, `compileFail`, and `compileFailError`;
+it derives conditional internal object checks from global configuration and
+the observed compilation outcome. The check is not another
 planned test. The flat core has no steps, action graph, workspace snapshots,
 or cache policy, and Haskell procedures need not mirror Tcl helpers one for one.
 
@@ -78,7 +129,7 @@ but later source in that malformed script cannot be recovered.
 
 Test IDs contain the script and a positive file-local number, without an
 assertion role. The counter resets in each `.exp` and advances only for
-recognized `compile_pass`/`compile_fail` invocations, including calls whose
+recognized `compile_pass`/`compile_fail`/`compile_fail_error` invocations, including calls whose
 arguments cannot be lowered. Those calls reserve numbered planning issues;
 other unsupported constructs remain unnumbered. Assignments, loop structure,
 comments, whitespace, result labels, and outcomes do not advance the counter.
@@ -124,7 +175,7 @@ field). Empty global options do not verify the tool installation or ambient
 configuration. Correlation establishes declaration correspondence, not full
 configuration equivalence.
 
-The refreshed v3 inventory retains all 866 active scripts and produces 344
+Before the diagnostic addition, the v3 inventory retained all 866 active scripts and produced 344
 planned tests across 169 scripts, 5,211 unsupported items, and 625 unresolved
 items. There are 54 nonempty scripts containing only planned tests and three
 empty scripts. Of the 1,006 numbered items, 344 are planned tests and 662 are

@@ -28,7 +28,9 @@ def main():
                        "foreach flags {{} {-v} {-v}} {\n"
                        "  compile_pass Example.bs $flags\n"
                        "}\n"
-                       "compile_fail Fail.bs\n")
+                       "compile_fail Fail.bs\n"
+                       "compile_fail_error Fail.bs T0001\n"
+                       "compile_fail_error FailTwo.bs T0001 2\n")
         driver = root / "driver.tcl"
         driver.write_text(harness.DRIVER, encoding="utf-8")
 
@@ -59,7 +61,7 @@ def main():
             log_text = log.read_text(encoding="utf-8")
             invocations.append([line for line in log_text.splitlines()
                                 if line.startswith("BSC-TEST: begin ")])
-            check([line.split()[2] for line in invocations[-1]] == list(map(str, range(1, 6))),
+            check([line.split()[2] for line in invocations[-1]] == list(map(str, range(1, 8))),
                   "unsupported wrapper consumed a test number")
             planned = run("plan", "--config", "correlation", "--internal-checks", internal,
                           "--suite-root", output, source)
@@ -69,10 +71,12 @@ def main():
             plan_file.write_text(planned.stdout, encoding="utf-8")
             result = run("correlate", plan_file, output)
             check(result.returncode == 0, result.stdout + result.stderr)
-            check("5 matched tests, 0 skipped numbered tests, 0 problems" in result.stdout,
+            check("7 matched tests, 0 skipped numbered tests, 0 problems" in result.stdout,
                   result.stdout)
             check(result.stdout.count("object-load=PASS") == (4 if internal else 0),
                   "internal results are not attached to their parent tests")
+            check(result.stdout.count("diagnostic-count=PASS") == 2,
+                  "expected diagnostics were not observed as one result per test")
             single = run("correlate", plan_file, log)
             check(single.returncode == 0 and single.stdout == result.stdout,
                   "single-log and directory correlation differ")
@@ -100,16 +104,39 @@ def main():
         check(absent.returncode != 0 and "missing" in absent.stdout,
               "missing captures were treated as matches")
         log_text = (capture_dir / "testrun.log").read_text(encoding="utf-8")
-        check("BSC-TEST: finish 5" in log_text, "script finish was not logged")
+        check("BSC-TEST: finish 7" in log_text, "script finish was not logged")
         incomplete = root / "incomplete.log"
-        incomplete.write_text(log_text.replace("BSC-TEST: finish 5", ""), encoding="utf-8")
+        incomplete.write_text(log_text.replace("BSC-TEST: finish 7", ""), encoding="utf-8")
         unfinished = run("correlate", original, incomplete)
         check(unfinished.returncode != 0, "an incomplete capture was accepted")
         bad_script = root / "error.log"
-        bad_script.write_text(log_text.replace("BSC-TEST: finish 5",
-                              "ERROR: injected script error\nBSC-TEST: finish 5"), encoding="utf-8")
+        bad_script.write_text(log_text.replace("BSC-TEST: finish 7",
+                              "ERROR: injected script error\nBSC-TEST: finish 7"), encoding="utf-8")
         check(run("correlate", original, bad_script).returncode != 0,
               "a script error was hidden by matching invocation counters")
+        for internal in (1, 0):
+            for name, source_text, problem in (
+                ("wrong-tag", "compile_fail_error Fail.bs T9999\n", "diagnostic-count reported FAIL"),
+                ("wrong-count", "compile_fail_error FailTwo.bs T0001 1\n", "diagnostic-count reported FAIL"),
+                ("unexpected-success", "compile_fail_error Good.bs T0001\n", "compilation reported FAIL"),
+            ):
+                output = root / f"{name}-{internal}"
+                cases = output / "cases"
+                cases.mkdir(parents=True)
+                source = cases / "example.exp"
+                source.write_text(source_text, encoding="utf-8")
+                capture(output, internal)
+                planned = run("plan", "--config", "correlation", "--internal-checks", internal,
+                              "--suite-root", output, source)
+                check(planned.returncode == 0, planned.stderr)
+                saved = output / "plan.json"
+                saved.write_text(planned.stdout, encoding="utf-8")
+                result = run("correlate", saved, output / "testrun.log")
+                check(result.returncode != 0 and problem in result.stdout,
+                      f"{name} did not remain a correlated failing test: {result.stdout}{result.stderr}")
+                check("1 matched tests" in result.stdout, result.stdout)
+                check(result.stdout.count("object-load=PASS") ==
+                      (1 if internal and name == "unexpected-success" else 0), result.stdout)
     print("Direct harness log/CLI correspondence, unchanged verdicts, and mismatch checks passed")
 
 

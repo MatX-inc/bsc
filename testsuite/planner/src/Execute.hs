@@ -3,12 +3,13 @@
 -- This is deliberately a small bsctest executor, not a shell/Tcl executor.
 -- The caller supplies a source snapshot and an installation; this module copies
 -- the snapshot, checks the selected declaration, and observes compilation plus
--- its optional object-load obligation. Prior build artifacts, nodeps, mutable
+-- its diagnostic expectation and optional object-load obligation. Prior build artifacts, nodeps, mutable
 -- Tcl setup, and unimplemented test kinds are not silently given new semantics.
 module Execute
   ( ExecutionConfig(..), defaultExecutionTimeoutMicros
-  , ProcessStatus(..), ProcessResult(..), CheckDisposition(..), CheckResult(..)
+  , ProcessStatus(..), ProcessResult(..), CheckDisposition(..), CheckResult(..), DiagnosticResult(..)
   , ExecutionReport(..), executeTest, hasInfrastructureFailure, encodeExecutionReport
+  , countErrorDiagnostics
   ) where
 
 import Control.Exception
@@ -16,7 +17,7 @@ import Control.Exception
 import Control.Concurrent (threadDelay)
 import Control.Monad (forM, forM_, unless, when)
 import Data.Char (ord)
-import Data.List (intercalate, sort)
+import Data.List (intercalate, isPrefixOf, isSuffixOf, sort, tails)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import qualified Data.Set as Set
 import Numeric (showHex)
@@ -28,14 +29,14 @@ import System.Exit (ExitCode(..))
 import System.FilePath
   ( (</>), isAbsolute, joinPath, makeRelative, splitDirectories, takeDirectory
   , takeExtension, takeFileName )
-import System.IO (IOMode(WriteMode), withBinaryFile)
+import System.IO (IOMode(ReadMode, WriteMode), hGetContents', hSetEncoding, latin1, withBinaryFile)
 import System.Posix.Signals (sigKILL, signalProcessGroup)
 import System.Process
   ( CreateProcess(..), StdStream(..), createProcess, getPid, getProcessExitCode
   , proc, waitForProcess )
 import System.Timeout (timeout)
 import Lower (lowerPlan)
-import Procedures (InternalCheck(..), internalChecksFor)
+import Procedures (InternalCheck(..), internalChecksFor, internalChecksAfter)
 import TestPlan
 
 data ExecutionConfig = ExecutionConfig
@@ -71,6 +72,14 @@ data CheckResult = CheckResult
   { checkRole :: String
   , checkDisposition :: CheckDisposition
   , checkProcess :: ProcessResult
+  , checkDiagnostic :: Maybe DiagnosticResult
+  } deriving (Eq, Show)
+
+-- | Evidence for a diagnostic assertion. The process transcript is retained
+-- separately, so consumers can verify this count rather than trusting a PASS.
+data DiagnosticResult = DiagnosticResult
+  { diagnosticExpected :: ExpectedError
+  , diagnosticActualCount :: Int
   } deriving (Eq, Show)
 
 data ExecutionReport = ExecutionReport
@@ -99,7 +108,8 @@ executeTest options plan selector = catch (Right <$> execute) ioFailure
         [test] -> Right test
         _ -> Left "execute requires the identifier of one planned test"
       checks <- require (internalChecksFor (planConfig plan) (testKind selected))
-      let CompilationTest compilation expectation = testKind selected
+      let kind = testKind selected
+          compilation = testCompilation kind
       require $ if compilationDependencies compilation then Right () else
         Left "nodeps execution is unsupported: it may depend on prior compiled artifacts"
       unless (executionTimeoutMicros options > 0) $
@@ -144,16 +154,54 @@ executeTest options plan selector = catch (Right <$> execute) ioFailure
             ["-no-show-timestamps", "-no-show-version", "-u", source]
       compilationResult <- runTool (executionTimeoutMicros options) environment working
         compiler arguments (output </> (source ++ ".bsc-out"))
-      let compilationCheck = CheckResult "compilation"
-            (disposition (expectation == CompileSucceeds) (processStatus compilationResult)) compilationResult
-      internal <- forM checks $ \(ObjectLoads objectFile) -> do
+      compilationCheck <- observeCompilation kind compilationResult
+      actualChecks <- require (internalChecksAfter (planConfig plan) kind
+        (processStatus compilationResult == ProcessExited 0))
+      internal <- forM actualChecks $ \(ObjectLoads objectFile) -> do
         result <- runTool (executionTimeoutMicros options) environment working
           objectReader [objectFile] (output </> (objectFile ++ ".dumpbo-out"))
-        pure (CheckResult "object-load" (disposition True (processStatus result)) result)
+        pure (CheckResult "object-load" (disposition True (processStatus result)) result Nothing)
       let report = ExecutionReport (testId selected) (planConfig plan) installation working
                      (compilationCheck : internal) inputs
       writeFile (output </> "result.json") (encodeExecutionReport report)
       pure report
+
+-- compile_fail_error reports one diagnostic assertion after ordinary failure;
+-- it does not first emit a compilation PASS. Unexpected success instead emits
+-- a compilation FAIL, followed by the conditional internal checks above.
+observeCompilation :: TestKind -> ProcessResult -> IO CheckResult
+observeCompilation kind result = case kind of
+  CompilationTest _ expectation -> pure (CheckResult "compilation"
+    (disposition (expectation == CompileSucceeds) status) result Nothing)
+  CompilationErrorTest _ expected -> case status of
+    ProcessExited code | code > 0 && code < 126 -> do
+      -- Byte-preserving input avoids locale decoding failures from source text
+      -- echoed in diagnostics. Only ASCII tag/header syntax is inspected.
+      transcript <- withBinaryFile (processTranscript result) ReadMode $ \handle ->
+        hSetEncoding handle latin1 >> hGetContents' handle
+      let actual = countErrorDiagnostics expected transcript
+          verdict = if actual == expectedErrorCount expected then CheckPass else CheckFail
+      pure (CheckResult "diagnostic-count" verdict result
+        (Just (DiagnosticResult expected actual)))
+    _ -> pure (CheckResult "compilation" (disposition False status) result Nothing)
+  where status = processStatus result
+
+-- | Literal-tag subset of Tcl's regexp -all -line {Error:.+\(TAG\)$}.
+-- It is not anchored at the start, requires at least one character before the
+-- tag, and matches at most once per line. Tcl's default text-channel newline
+-- translation also treats CRLF and bare CR as line endings. Regex tags are
+-- rejected by Procedures, so no general regex interpretation is needed here.
+countErrorDiagnostics :: ExpectedError -> String -> Int
+countErrorDiagnostics expected = length . filter matches . lines . newlines
+  where
+    suffix = "(" ++ expectedErrorTag expected ++ ")"
+    matches line = suffix `isSuffixOf` line &&
+      any (\rest -> "Error:" `isPrefixOf` rest && length rest > length "Error:")
+        (tails (take (length line - length suffix) line))
+    newlines ('\r':'\n':rest) = '\n' : newlines rest
+    newlines ('\r':rest) = '\n' : newlines rest
+    newlines (c:rest) = c : newlines rest
+    newlines [] = []
 
 requireDirectory :: String -> FilePath -> IO ()
 requireDirectory label path = do
@@ -298,11 +346,15 @@ encodeExecutionReport report = object
    ("checks", array (map encodeCheck (executionChecks report)))] ++ "\n"
   where
     config = executionReportConfig report
-    encodeCheck check = object
+    encodeCheck check = object $
       [("role", string (checkRole check)),
        ("disposition", string (case checkDisposition check of
           CheckPass -> "PASS"; CheckFail -> "FAIL"; CheckInfrastructureError -> "INFRASTRUCTURE_ERROR")),
-       ("process", encodeProcess (checkProcess check))]
+       ("process", encodeProcess (checkProcess check))] ++
+      maybe [] (\diagnostic -> [("diagnostic", object
+        [("error_tag", string (expectedErrorTag (diagnosticExpected diagnostic))),
+         ("expected_count", show (expectedErrorCount (diagnosticExpected diagnostic))),
+         ("actual_count", show (diagnosticActualCount diagnostic))])]) (checkDiagnostic check)
     encodeProcess result = object
       [("program", string (processProgram result)), ("arguments", array (map string (processArguments result))),
        ("transcript", string (takeFileName (processTranscript result))), ("termination", termination (processStatus result))]

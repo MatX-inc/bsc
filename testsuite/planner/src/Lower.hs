@@ -139,16 +139,14 @@ lowerCommand config path identifier state (Command position (nameWord:args)) = d
                       advanced { variables = Map.insert variable item (variables advanced) } body
         pure (foldl' iteration state items)
       _ -> unsupported position name "only one scalar variable, one list, and a braced body are supported"
-    "compile_pass" -> compile compilePass name =<< mapM value args
-    "compile_fail" -> compile compileFail name =<< mapM value args
+    _ | name `elem` supportedProcedures -> compile name =<< mapM value args
     _ | name `elem` unsupportedTestProcedures ->
           unsupported position name "test kind is not implemented"
       | otherwise -> unsupported position name "procedure or setup semantics are not implemented"
   where
-    compile procedure name supplied = do
-      compilation <- compileArguments position name supplied
+    compile name supplied = do
       test <- either (unsupported position name) Right
-        (procedure config identifier position compilation)
+        (lowerInvocation config identifier position name supplied)
       case setupProblem state of
         Just prerequisite -> unresolved position name
           ("setup depends on unsupported item at " ++ sourceFile prerequisite ++ ":" ++
@@ -159,15 +157,19 @@ lowerCommand config path identifier state (Command position (nameWord:args)) = d
 -- is also the semantic boundary used to compare inert Tcl provenance records.
 lowerInvocation :: PlanConfig -> Identifier -> SourcePos -> String -> [String]
                 -> Either String Test
-lowerInvocation config identifier position name args = do
-  procedure <- case name of
-    "compile_pass" -> Right compilePass
-    "compile_fail" -> Right compileFail
-    _ -> Left ("unsupported test procedure: " ++ name)
-  compilation <- case compileArguments position name args of
-    Left (Failure _ _ _ reason) -> Left reason
-    Right value -> Right value
-  procedure config identifier position compilation
+lowerInvocation config identifier position name args = case name of
+  "compile_pass" -> ordinary compilePass
+  "compile_fail" -> ordinary compileFail
+  "compile_fail_error" -> do
+    (compilation, expected) <- arguments (compileErrorArguments position name args)
+    compileFailError config identifier position compilation expected
+  _ -> Left ("unsupported test procedure: " ++ name)
+  where
+    ordinary procedure = do
+      compilation <- arguments (compileArguments position name args)
+      procedure config identifier position compilation
+    arguments (Left (Failure _ _ _ reason)) = Left reason
+    arguments (Right value) = Right value
 
 resolve :: LowerState -> String -> Word -> Either Failure String
 resolve state name word = case resolveScalarWord (`Map.lookup` variables state) word of
@@ -198,6 +200,30 @@ compileArguments position name args = do
   unless (nodeps `elem` ["0", "1"]) $ unsupported position name "nodeps must be 0 or 1"
   options <- parseOptions position name rawOptions
   pure (Compilation source options (nodeps == "0"))
+
+compileErrorArguments :: SourcePos -> String -> [String]
+                      -> Either Failure (Compilation, ExpectedError)
+compileErrorArguments position name args = do
+  (source, tag, rawCount, options, nodeps) <- case args of
+    [source, tag] -> Right (source, tag, "1", "", "0")
+    [source, tag, count] -> Right (source, tag, count, "", "0")
+    [source, tag, count, options] -> Right (source, tag, count, options, "0")
+    [source, tag, count, options, nodeps] -> Right (source, tag, count, options, nodeps)
+    _ -> unsupported position name "expected source, error tag, optional error count, optional options, and optional nodeps"
+  -- Tcl interprets leading-zero numbers as octal (and rejects some spellings).
+  -- Accept only canonical decimal counts rather than changing their meaning.
+  let canonical = case rawCount of
+        "0" -> True
+        first:rest -> first >= '1' && first <= '9' && all (\c -> c >= '0' && c <= '9') rest
+        [] -> False
+      bounded = length rawCount <= length (show (maxBound :: Int))
+      countError = "error count must be a canonical nonnegative decimal Int (no leading zeros)"
+  unless (canonical && bounded) $ unsupported position name countError
+  let count = read rawCount :: Integer
+  when (count > toInteger (maxBound :: Int)) $
+    unsupported position name countError
+  compilation <- compileArguments position name [source, options, nodeps]
+  pure (compilation, ExpectedError tag (fromInteger count))
 
 parseOptions :: SourcePos -> String -> String -> Either Failure [String]
 parseOptions position name contents = do
@@ -262,8 +288,13 @@ secondParseMayChangeSetup state name args = case mapM (resolve state name) args 
   -- The harness may bind names that this adapter does not know. Failure to
   -- resolve here does not prove the real Tcl call stops before its second parse.
   Left _ -> True
-  Right values -> any unsafe values
+  Right values -> any unsafe (secondParsed values)
   where
+    -- The diagnostic tag and count are data passed to find_n_error, not part
+    -- of the compiler command's second Tcl parse.
+    secondParsed (source:_:_:options:_) | name == "compile_fail_error" = [source, options]
+    secondParsed (source:_:_) | name == "compile_fail_error" = [source]
+    secondParsed values = values
     unsafe value = case parseOptions (SourcePos "option" 1 1 0) name value of
       Left _ -> True
       Right _ -> False
@@ -274,7 +305,7 @@ secondParseMayChangeSetup state name args = case mapM (resolve state name) args 
 unsupportedTestProcedures :: [String]
 unsupportedTestProcedures =
   [ "compile_verilog_pass", "compile_object_pass", "compile_pass_no_warning"
-  , "compile_backend_pass", "compile_fail_error"
+  , "compile_backend_pass"
   , "compile_verilog_fail_error", "compile_verilog_fail"
   , "compile_verilog_schedule_pass", "compile_verilog_pass_warning"
   , "compile_object_fail_error", "compile_pass_warning"

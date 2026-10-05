@@ -90,11 +90,10 @@ emitBuck2 config plan = do
 executionGap :: PlanConfig -> Test -> Maybe String
 executionGap config test = case internalChecksFor config (testKind test) of
   Left message -> Just message
-  Right _ -> case testKind test of
-    CompilationTest compilation _
-      | not (compilationDependencies compilation) -> Just
-          "compilation without -u may depend on prior artifacts; shared-state execution is not implemented"
-      | otherwise -> Nothing
+  Right _
+    | not (compilationDependencies (testCompilation (testKind test))) -> Just
+        "compilation without -u may depend on prior artifacts; shared-state execution is not implemented"
+    | otherwise -> Nothing
 
 renderBuildFile :: [Test] -> String
 renderBuildFile tests = unlines

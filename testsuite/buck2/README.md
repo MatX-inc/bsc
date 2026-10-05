@@ -51,12 +51,17 @@ scripts' planning issues remain recorded without blocking the supported tests.
 
 Each action stages its script directory subtree and internal symlink targets
 at the same suite-relative locations. This policy has been audited for the
-current 344 planned tests. New tests that need other source directories require
+initial 344 planned tests and exercised by all 164 added diagnostic tests.
+New tests that need other source directories require
 a wider explicit input policy; no Bluespec dependency parser is used here.
 Compilations without `-u` are reported as execution gaps until shared-state
 scenarios are implemented. The ten-minute per-process timeout, unexpected
 signals, and launch failures are infrastructure errors, including in negative
-compilation tests. Internal object loading still runs after a failed compile.
+compilation tests. For `compile_pass`, internal object loading still runs after
+a failed compile. For `compile_fail_error`, it runs only after unexpected
+compilation success; ordinary compilation failure produces one diagnostic-count
+verdict. The result records the expected tag/count and observed count, and the
+checker independently recounts the saved transcript.
 
 `check_results.py` requires every emitted target and every expected result
 role. It rejects inconsistent configuration, identities, and process outcomes,
@@ -85,6 +90,29 @@ The script returns zero only when all these assertions hold.
 Original source bytes and phase logs are retained in the output directory.
 The copied source is restored in a `finally` block and the checkout is never
 edited. No broken source or changed golden needs to be checked in.
+
+## Diagnostic regression
+
+```sh
+python3 testsuite/buck2/check_diagnostics.py \
+  --planner "$PLANNER" --buck2 "$BSC_BUCK2" \
+  --output testsuite/.buck2/diagnostic-check
+```
+
+This compares thirteen `compile_fail_error` tests from the bound-type-variable
+and error-recovery scripts, including expected counts of one, two, and eleven.
+It checks exact IDs and result roles against real DejaGNU, with internal checks
+enabled. The additional legacy assertions must also pass.
+
+The regression warms one Buck2 cell, inserts a syntax error into a copied
+Bluehs source to produce the wrong diagnostic, replaces that source with a
+valid package to exercise unexpected compilation success and its object-load
+check, then restores the original bytes. It verifies the expected failures in
+both runners, input equality, and invalidation of prior results. Because each
+action currently declares the whole source snapshot, a mutation reruns all
+thirteen actions. This demonstrates correctness of the conservative input
+binding, not fine-grained invalidation. Sources are restored and the test's
+own daemon is stopped on completion or failure.
 
 ## Pinned executable
 

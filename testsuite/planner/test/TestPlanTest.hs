@@ -48,6 +48,32 @@ runTests = do
   let absent = compilationTest
         { testKind = CompilationTest compilation { compilationSource = "absent/Negative.bs" } CompileFails }
   check "absent sources remain representable" (validatePlan (withItems [Planned absent]) == Right ())
+  let errorKind = CompilationErrorTest compilation (ExpectedError "T0001" 1)
+      errorPlan = withItems [Planned compilationTest { testKind = errorKind }]
+      errorEncoding = replaceFirst "\"kind\":\"compilation\"" "\"kind\":\"compilation-error\""
+        (replaceFirst "\"expectation\":\"succeeds\"" "\"error_tag\":\"T0001\",\"error_count\":1" simpleEncoding)
+  check "diagnostic kind has an explicit version 3 wire contract"
+    (encodePlan errorPlan == errorEncoding && decodePlan errorEncoding == Right errorPlan)
+  check "both test kinds expose their compilation"
+    (testCompilation errorKind == compilation && testCompilation (testKind compilationTest) == compilation)
+  forM_ [0, 1, maxBound] $ \count -> do
+    let plan = withItems [Planned compilationTest
+          { testKind = CompilationErrorTest compilation (ExpectedError "a_B-09" count) }]
+    check "nonnegative Int error counts round trip" (decodePlan (encodePlan plan) == Right plan)
+  forM_ ["", "T.*", "T[0-9]", "1T", "_T", "Té", "éT", "T 1"] $ \tag ->
+    check "diagnostic tags reject regex and non-ASCII identifiers"
+      (isLeft (validatePlan (withItems [Planned compilationTest
+        { testKind = CompilationErrorTest compilation (ExpectedError tag 1) }])))
+  check "negative error counts are invalid"
+    (isLeft (validatePlan (withItems [Planned compilationTest
+      { testKind = CompilationErrorTest compilation (ExpectedError "T0001" (-1)) }])))
+  forM_ [("\"error_count\":1", "\"error_count\":-1"),
+         ("\"error_count\":1", "\"error_count\":999999999999999999999999"),
+         ("\"error_count\":1", "\"error_count\":\"1\""),
+         ("\"error_count\":1", "\"error_count\":1,\"expectation\":\"fails\""),
+         ("\"error_tag\":\"T0001\"", "\"error_tag\":\"T.*\"")]
+    $ \(old, new) -> check "invalid diagnostic wire fields are rejected"
+      (isLeft (decodePlan (replaceFirst old new errorEncoding)))
   forM_ malformed $ \(label, content) -> check label (isLeft (decodePlan content))
   forM_ invalidPlans $ \(label, plan) -> check label (isLeft (validatePlan plan))
   forM_ invalidConfigs $ \config -> check "invalid configuration" (isLeft (validateConfig config))

@@ -76,6 +76,23 @@ class ResultCheckerTests(unittest.TestCase):
         self.assertEqual(run.returncode, expected, run.stdout + run.stderr)
         return run.stdout + run.stderr
 
+    def compilation_error(self, expected_count=1, actual_count=1, transcript=None):
+        self.plan["scripts"][0]["items"][1]["kind"] = {
+            "kind": "compilation-error", "source": "Example.bs", "options": [],
+            "compile_dependencies": True, "error_tag": "T0001", "error_count": expected_count,
+        }
+        check = self.check("diagnostic-count", 1)
+        check["process"]["program"] = "bsc"
+        check["diagnostic"] = {"error_tag": "T0001", "expected_count": expected_count,
+                               "actual_count": actual_count}
+        check["disposition"] = "PASS" if expected_count == actual_count else "FAIL"
+        self.reports[2]["checks"] = [check]
+        if transcript is None:
+            transcript = "Error: expected diagnostic (T0001)\n" * actual_count
+        (self.cell / "buck-out/test_2/result/Example.bs.bsc-out").write_bytes(
+            transcript.encode("utf-8"))
+        return check
+
     def test_complete_pass_and_expected_compile_failure(self):
         self.assertIn("PASS 3; FAIL 0", self.run_checker(0))
 
@@ -141,6 +158,166 @@ class ResultCheckerTests(unittest.TestCase):
         self.build["results"]["root//:unexpected"] = copy.deepcopy(
             self.build["results"]["root//:test_1"])
         self.assertIn("unexpected build-report target", self.run_checker(1))
+
+    def test_diagnostic_count_matches_transcript_with_tcl_line_semantics(self):
+        self.compilation_error(expected_count=3, actual_count=3, transcript=(
+            "prefix Error: first (T0001)\r\n"
+            "Error: second (T0001)\r"
+            "Error: first (T0001) Error: third (T0001)\n"
+            "Error:(T0001)\n"
+            "Error: wrong tag (T0002)\n"
+            "Error: trailing text (T0001) ignored\n"
+            "Error: not the same line\n(T0001)\n"))
+        self.assertIn("PASS 3; FAIL 0", self.run_checker(0))
+
+    def test_zero_diagnostics_can_match_expected_zero(self):
+        self.compilation_error(expected_count=0, actual_count=0,
+                               transcript="Error: another tag (T0002)\n")
+        self.assertIn("PASS 3; FAIL 0", self.run_checker(0))
+
+    def test_exit_125_is_an_ordinary_diagnostic_failure(self):
+        check = self.compilation_error()
+        check["process"]["termination"]["exit_code"] = 125
+        self.assertIn("PASS 3; FAIL 0", self.run_checker(0))
+
+    def test_diagnostic_count_preserves_non_utf8_transcript_bytes(self):
+        self.compilation_error()
+        (self.cell / "buck-out/test_2/result/Example.bs.bsc-out").write_bytes(
+            b"Error: echoed source \xff (T0001)\r\n")
+        self.assertIn("PASS 3; FAIL 0", self.run_checker(0))
+
+    def test_diagnostic_count_mismatch_is_an_ordinary_failure(self):
+        self.compilation_error(expected_count=2)
+        self.assertIn("FAIL 1", self.run_checker(1))
+
+    def test_diagnostic_pass_cannot_hide_count_mismatch(self):
+        check = self.compilation_error(expected_count=2)
+        check["disposition"] = "PASS"
+        self.assertIn("contradicts", self.run_checker(1))
+
+    def test_diagnostic_count_cannot_disagree_with_saved_transcript(self):
+        self.compilation_error(transcript="Error: different diagnostic (T0002)\n")
+        self.assertIn("differs from saved transcript", self.run_checker(1))
+
+    def test_diagnostic_metadata_must_match_plan(self):
+        check = self.compilation_error()
+        for field, value in [("error_tag", "T0002"), ("expected_count", 2),
+                             ("expected_count", True)]:
+            with self.subTest(field=field, value=value):
+                original = check["diagnostic"][field]
+                check["diagnostic"][field] = value
+                self.assertIn("expectation differs", self.run_checker(1))
+                check["diagnostic"][field] = original
+
+    def test_invalid_actual_diagnostic_counts_are_rejected(self):
+        check = self.compilation_error()
+        for value in [-1, True, "1", 1.0]:
+            with self.subTest(value=value):
+                check["diagnostic"]["actual_count"] = value
+                self.assertIn("invalid actual diagnostic count", self.run_checker(1))
+
+    def test_diagnostic_and_check_fields_must_be_exact(self):
+        check = self.compilation_error()
+        original = copy.deepcopy(check)
+        mutations = [
+            lambda: check.pop("diagnostic"),
+            lambda: check.update(extra=True),
+            lambda: check["diagnostic"].pop("actual_count"),
+            lambda: check["diagnostic"].update(extra=True),
+        ]
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                check.clear()
+                check.update(copy.deepcopy(original))
+                mutate()
+                self.assertIn("malformed", self.run_checker(1))
+
+    def test_diagnostic_transcript_must_exist_inside_result(self):
+        check = self.compilation_error()
+        for transcript, message in [("missing.out", "missing.out"),
+                                    ("../escape.out", "escapes result directory"),
+                                    (str(self.cell / "outside.out"), "output-relative")]:
+            with self.subTest(transcript=transcript):
+                check["process"]["transcript"] = transcript
+                self.assertIn(message, self.run_checker(1))
+
+    def test_diagnostic_failure_has_no_compilation_or_internal_role(self):
+        check = self.compilation_error()
+        original = copy.deepcopy(check)
+        self.reports[2]["checks"].append(self.check("object-load", 0))
+        self.assertIn("roles differ", self.run_checker(1))
+        self.reports[2]["checks"] = [self.check("compilation", 1)]
+        self.assertIn("roles differ", self.run_checker(1))
+        self.reports[2]["checks"] = [original, copy.deepcopy(original)]
+        self.assertIn("roles differ", self.run_checker(1))
+
+    def test_diagnostic_test_unexpected_compilation_success_runs_internal_check(self):
+        self.compilation_error()
+        compile_check = self.check("compilation", 0)
+        compile_check["disposition"] = "FAIL"
+        self.reports[2]["checks"] = [compile_check, self.check("object-load", 0)]
+        self.assertIn("PASS 3; FAIL 1", self.run_checker(1))
+        compile_check["disposition"] = "PASS"
+        self.assertIn("contradicts", self.run_checker(1))
+        compile_check["disposition"] = "FAIL"
+        self.reports[2]["checks"].pop()
+        self.assertIn("roles differ", self.run_checker(1))
+
+    def test_diagnostic_test_unexpected_success_without_internal_checks(self):
+        self.compilation_error()
+        self.config["internal_checks"] = False
+        for report in self.reports.values():
+            report["configuration"]["internal_checks"] = False
+        self.reports[1]["checks"].pop()
+        self.reports[2]["checks"] = [self.check("compilation", 0)]
+        self.reports[2]["checks"][0]["disposition"] = "FAIL"
+        self.assertIn("PASS 1; FAIL 1", self.run_checker(1))
+
+    def test_diagnostic_test_success_cannot_claim_a_diagnostic_match(self):
+        check = self.compilation_error()
+        check["process"]["termination"]["exit_code"] = 0
+        self.assertIn("roles differ", self.run_checker(1))
+
+    def test_diagnostic_test_infrastructure_has_only_compilation_role(self):
+        self.compilation_error()
+        check = self.check("compilation", 126)
+        check["disposition"] = "INFRASTRUCTURE_ERROR"
+        self.reports[2]["checks"] = [check]
+        for termination in [
+                {"kind": "exited", "exit_code": 126},
+                {"kind": "exited", "exit_code": 127},
+                {"kind": "signal", "signal": 9, "exit_code": -9},
+                {"kind": "timeout", "exit_code": -9},
+                {"kind": "launch-error", "reason": "tool missing"}]:
+            with self.subTest(termination=termination):
+                check["process"]["termination"] = termination
+                output = self.run_checker(1)
+                self.assertIn("INFRASTRUCTURE_ERROR 1", output)
+                self.assertNotIn("contradicts", output)
+        self.reports[2]["checks"].append(self.check("object-load", 0))
+        self.assertIn("roles differ", self.run_checker(1))
+
+    def test_diagnostic_test_infrastructure_cannot_claim_a_diagnostic_match(self):
+        check = self.compilation_error()
+        check["process"]["termination"]["exit_code"] = 126
+        self.assertIn("roles differ", self.run_checker(1))
+
+    def test_invalid_diagnostic_plan_is_rejected(self):
+        self.compilation_error()
+        kind = self.plan["scripts"][0]["items"][1]["kind"]
+        for field, value, message in [
+                ("error_tag", "", "invalid compilation-error tag"),
+                ("error_tag", "T.*", "invalid compilation-error tag"),
+                ("error_tag", "1TAG", "invalid compilation-error tag"),
+                ("error_count", -1, "invalid compilation-error count"),
+                ("error_count", True, "invalid compilation-error count"),
+                ("error_count", sys.maxsize + 1, "invalid compilation-error count"),
+                ("compile_dependencies", "yes", "invalid compilation-error inputs")]:
+            with self.subTest(field=field, value=value):
+                original = kind[field]
+                kind[field] = value
+                self.assertIn(message, self.run_checker(1))
+                kind[field] = original
 
 
 if __name__ == "__main__":

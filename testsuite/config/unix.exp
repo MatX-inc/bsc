@@ -3152,6 +3152,8 @@ proc showrules { topmod vcdin vcdout {options ""}} {
 
 # Use this if the test case ought to fail with a specific error.
 proc compile_fail_error { source tag {expcount 1} {options ""} {nodeps 0}} {
+    set test_number [bsc_test_begin compile_fail_error [info frame -1] \
+        [list $source $tag $expcount $options $nodeps]]
 
     # The file containing the output of compilation
     set output [make_bsc_output_name $source]
@@ -3162,10 +3164,14 @@ proc compile_fail_error { source tag {expcount 1} {options ""} {nodeps 0}} {
 
         # intermediate files should still be valid
         # force xfail to be 0
-        check_intermediate_files $source 0 $options
+        if [do_internal_checks] { bsc_test_role $test_number object-load }
+        set result [check_intermediate_files $source 0 $options]
     } else {
-        find_n_error $output $tag $expcount
+        bsc_test_role $test_number diagnostic-count
+        set result [find_n_error $output $tag $expcount]
     }
+    bsc_test_end $test_number
+    return $result
 }
 
 # This test case ought to fail with a specific error but the error isn't

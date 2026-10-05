@@ -10,6 +10,7 @@ import TestPlan
 runTests :: IO ()
 runTests = do
   decoderTests
+  errorTests
   traces <- either fail pure (decodeTestLog "example.log" logText)
   trace <- case traces of
     [value] -> pure value
@@ -70,6 +71,79 @@ runTests = do
        Left _ -> False)
   check "duplicate captures cannot double-count a script" (isLeft (correlatePlan plan [trace,trace]))
   putStrLn "Ordinary-log decoding, supported-test correspondence, and mismatch tests passed."
+
+errorTests :: IO ()
+errorTests = do
+  let errorSource = "compile_fail_error Broken.bs T0001 2\ncompile_pass Good.bs\ncompile_fail Plain.bs\n"
+      errorPlan internal = either error id (lowerPlan config { configInternalChecks = internal }
+        [(script, errorSource)])
+      text = unlines
+        [ "BSC-TEST: script 1 bsc.example/example.exp 1"
+        , "BSC-TEST: begin 1 compile_fail_error bsc.example/example.exp 1 {Broken.bs T0001 2 {} 0}"
+        , "BSC-TEST: role 1 diagnostic-count"
+        , "PASS: found two matching errors"
+        , "BSC-TEST: end 1"
+        , "BSC-TEST: begin 2 compile_pass bsc.example/example.exp 2 Good.bs"
+        , "PASS: compilation succeeds"
+        , "BSC-TEST: role 2 object-load"
+        , "PASS: object loads"
+        , "BSC-TEST: end 2"
+        , "BSC-TEST: begin 3 compile_fail bsc.example/example.exp 3 Plain.bs"
+        , "PASS: compilation fails"
+        , "BSC-TEST: end 3"
+        , "BSC-TEST: finish 3"
+        ]
+      observed = case decodeTestLog "error.log" text of
+        Right [trace] -> trace
+        result -> error (show result)
+      calls = provenanceInvocations observed
+      first = head calls
+      withResults results = observed { provenanceInvocations =
+        first { invocationResults = results } : tail calls }
+      diagnostic disposition = Observation "diagnostic-count" disposition "error count"
+      primary disposition = Observation "compilation" disposition "unexpected success"
+      loaded = Observation "object-load" "PASS" "object loads"
+      problems trace = correlationProblems (correlate (errorPlan True) trace)
+      hasProblem fragment trace = any (isInfixOf fragment) (problems trace)
+  check "error-tag test has one diagnostic result and interleaves with existing kinds"
+    (length (correlationMatches (correlate (errorPlan True) observed)) == 3 &&
+     null (problems observed))
+  check "wrong error count remains a matched failing observation"
+    (hasProblem "diagnostic-count reported FAIL" (withResults [diagnostic "FAIL"]) &&
+     length (correlationMatches (correlate (errorPlan True) (withResults [diagnostic "FAIL"]))) == 3)
+  check "unexpected successful compilation requires its conditional object check"
+    (hasProblem "result roles differ" (withResults [primary "FAIL"]))
+  check "unexpected successful compilation is a matched failure with an internal check"
+    (hasProblem "compilation reported FAIL" (withResults [primary "FAIL", loaded]) &&
+     length (correlationMatches (correlate (errorPlan True) (withResults [primary "FAIL", loaded]))) == 3)
+  check "a fabricated PASS cannot conceal unexpected compilation success"
+    (hasProblem "unexpected compilation success must report FAIL" (withResults [primary "PASS", loaded]))
+  check "diagnostic branch must not grow an unconditional object-load check"
+    (hasProblem "result roles differ" (withResults [diagnostic "PASS", loaded]))
+  check "duplicate diagnostic results are rejected"
+    (hasProblem "result roles differ" (withResults [diagnostic "PASS", diagnostic "PASS"]))
+  let changedTag = observed { provenanceInvocations = first
+        { invocationArguments = ["Broken.bs", "T9999", "2", "", "0"] } : tail calls }
+  check "observed diagnostic arguments are checked against the saved expectation"
+    (hasProblem "resolved arguments differ" changedTag)
+  let withoutInternal = observed { provenanceInternalChecks = False,
+        provenanceInvocations = first { invocationResults = [primary "FAIL"] } :
+          [call { invocationResults = filter ((/= "object-load") . observationRole)
+                   (invocationResults call) } | call <- tail calls] }
+      withoutReport = correlate (errorPlan False) withoutInternal
+  check "unexpected success with internal checks disabled needs no object result"
+    (length (correlationMatches withoutReport) == 3 &&
+     length (correlationProblems withoutReport) == 1 &&
+     any (isInfixOf "compilation reported FAIL") (correlationProblems withoutReport))
+  forM_ [ replace "BSC-TEST: role 1 diagnostic-count"
+            "PASS: spurious compilation verdict\nBSC-TEST: role 1 diagnostic-count" text
+        , replace "BSC-TEST: role 1 diagnostic-count"
+            "BSC-TEST: role 1 diagnostic-count\nBSC-TEST: role 1 diagnostic-count" text
+        , replace "BSC-TEST: role 1 diagnostic-count"
+            "BSC-TEST: role 1 diagnostic-count\nBSC-TEST: role 1 object-load" text
+        , replace "begin 1 compile_fail_error" "begin 1 compile_fail" text
+        ] $ \malformed -> check "invalid diagnostic branch marker sequence is rejected"
+          (isLeft (decodeTestLog "error.log" malformed))
 
 decoderTests :: IO ()
 decoderTests = do

@@ -16,7 +16,7 @@ import qualified Data.Map.Strict as Map
 import Data.Maybe (isNothing, mapMaybe)
 import Text.Read (readMaybe)
 import Lower (lowerInvocation)
-import Procedures (internalChecksFor, supportedProcedures)
+import Procedures (internalChecksAfter, supportedProcedures)
 import Tcl (SourcePos(..), TclError(..), parseListAt, staticWord)
 import TestPlan
 
@@ -105,13 +105,18 @@ decodeTestLog path input = do
       ensure (all (not . any (`elem` "\r\n")) (file : arguments)) "unsupported multiline metadata"
       let call = Invocation number procedure file originLine arguments []
       pure state { captureScript = Just script { captureActive = Just (call, "compilation") } }
-    marker _ state ["role", numberText, "object-load"] = do
-      script <- activeScript state
-      (call, role) <- activeInvocation script
-      number <- natural numberText
-      ensure (number == invocationNumber call) "role number differs from active invocation"
-      ensure (role == "compilation") "repeated object-load role marker"
-      pure state { captureScript = Just script { captureActive = Just (call, "object-load") } }
+    marker _ state ["role", numberText, nextRole]
+      | nextRole `elem` ["object-load", "diagnostic-count"] = do
+          script <- activeScript state
+          (call, role) <- activeInvocation script
+          number <- natural numberText
+          ensure (number == invocationNumber call) "role number differs from active invocation"
+          ensure (role == "compilation") "repeated or conflicting role marker"
+          whenDiagnostic nextRole $ do
+            ensure (invocationProcedure call == "compile_fail_error")
+              "diagnostic-count role requires compile_fail_error"
+            ensure (null (invocationResults call)) "diagnostic-count follows a compilation verdict"
+          pure state { captureScript = Just script { captureActive = Just (call, nextRole) } }
     marker _ state ["end", numberText] = do
       script <- activeScript state
       (call, _) <- activeInvocation script
@@ -132,6 +137,7 @@ decodeTestLog path input = do
     marker _ _ values = Left ("unknown or malformed BSC-TEST marker: " ++ show values)
     activeScript state = maybe (Left "BSC-TEST marker outside an active script") Right (captureScript state)
     activeInvocation script = maybe (Left "BSC-TEST marker outside an active invocation") Right (captureActive script)
+    whenDiagnostic role action = if role == "diagnostic-count" then action else Right ()
 
 -- Remove the disposition's separator, preserving the rest of the message
 -- exactly, including further leading spaces and trailing spaces.
@@ -207,14 +213,21 @@ correlatePlan plan traces = do
           Unplanned issue -> pure (Correlation [] [issue] [])
           Planned test -> correlateTest test call
     correlateTest test call = do
-      checks <- internalChecksFor config (testKind test)
+      let results = invocationResults call
+          unexpectedSuccess = case (testKind test, results) of
+            (CompilationErrorTest _ _, result:_) -> observationRole result == "compilation"
+            _ -> False
+      checks <- internalChecksAfter config (testKind test) unexpectedSuccess
       let identifier = testId test
           label = renderIdentifier identifier
           expectedProcedure = case testKind test of
             CompilationTest _ CompileSucceeds -> "compile_pass"
             CompilationTest _ CompileFails -> "compile_fail"
-          expectedRoles = "compilation" : ["object-load" | _ <- checks]
-          results = invocationResults call
+            CompilationErrorTest _ _ -> "compile_fail_error"
+          primaryRole = case testKind test of
+            CompilationErrorTest _ _ | not unexpectedSuccess -> "diagnostic-count"
+            _ -> "compilation"
+          expectedRoles = primaryRole : ["object-load" | _ <- checks]
           roles = map observationRole results
           actual = lowerInvocation config identifier (testOrigin test)
                      (invocationProcedure call) (invocationArguments call)
@@ -230,7 +243,9 @@ correlatePlan plan traces = do
               Right translated -> [label ++ ": resolved arguments differ from the plan"
                                   | testKind translated /= testKind test]) ++
             [label ++ ": result roles differ: expected " ++ show expectedRoles ++ ", observed " ++ show roles
-             | roles /= expectedRoles]
+             | roles /= expectedRoles] ++
+            [label ++ ": unexpected compilation success must report FAIL"
+             | unexpectedSuccess, result:_ <- [results], observationDisposition result /= "FAIL"]
           resultProblems = [label ++ ": " ++ observationRole result ++ " reported " ++
               observationDisposition result ++ ": " ++ show (observationMessage result)
               | result <- results, observationDisposition result /= "PASS"]

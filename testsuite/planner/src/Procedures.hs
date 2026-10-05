@@ -6,12 +6,12 @@
 -- compilation-test constructor here. Internal checks are obligations of that
 -- test, rather than extra top-level tests or a preselected action graph.
 --
--- This first vocabulary covers package compilation with exit-status
--- expectations. Diagnostic matching, backend tests, expected-failure phases,
+-- This vocabulary covers package compilation with exit-status or literal
+-- diagnostic-count expectations. Backend tests, expected-failure phases,
 -- and stateful recompilation sequences still need their own semantics.
 module Procedures
-  ( compilePass, compileFail, compilationTest
-  , InternalCheck(..), internalChecksFor
+  ( compilePass, compileFail, compileFailError, compilationTest
+  , InternalCheck(..), internalChecksFor, internalChecksAfter
   , supportedProcedures, supportedCompilerOptions, validateProcedureConfig, explainTest
   ) where
 
@@ -25,7 +25,7 @@ import TestPlan
 -- | Only these procedures currently produce semantic tests and reserve a
 -- file-local invocation number. Other harness helpers remain unnumbered.
 supportedProcedures :: [String]
-supportedProcedures = ["compile_pass", "compile_fail"]
+supportedProcedures = ["compile_pass", "compile_fail", "compile_fail_error"]
 
 -- These flags do not redirect artifacts or select a backend. Expanding this
 -- set requires describing the resulting test semantics, not only passing an
@@ -53,12 +53,22 @@ compileFail = compilationTest CompileFails
 -- Missing sources are valid observations for negative compilation tests.
 compilationTest :: Expectation -> PlanConfig -> Identifier -> SourcePos
                 -> Compilation -> Either String Test
-compilationTest expectation config identifier origin compilation = do
+compilationTest expectation = constructTest (`CompilationTest` expectation)
+
+compileFailError :: PlanConfig -> Identifier -> SourcePos -> Compilation -> ExpectedError
+                 -> Either String Test
+compileFailError config identifier origin compilation expected = do
+  validateExpectedError expected
+  constructTest (`CompilationErrorTest` expected) config identifier origin compilation
+
+constructTest :: (Compilation -> TestKind) -> PlanConfig -> Identifier -> SourcePos
+              -> Compilation -> Either String Test
+constructTest kind config identifier origin compilation = do
   validateProcedureConfig config
   validateCompilation compilation
   let effective = compilation
         { compilationOptions = configCompilerOptions config ++ compilationOptions compilation }
-      test = Test identifier origin (CompilationTest effective expectation)
+      test = Test identifier origin (kind effective)
   unless (identifierNumber identifier > 0) $ Left "invalid test invocation number"
   -- A constructor validates one invocation, which may occur after earlier
   -- tests. Contiguous numbering is checked once the whole plan is assembled.
@@ -88,14 +98,28 @@ data InternalCheck = ObjectLoads FilePath deriving (Eq, Show)
 
 -- compile_pass calls check_intermediate_files after reporting its compilation
 -- result, even if compilation unexpectedly failed. compile_fail does not.
--- Expected-failure variants are not yet represented and must stay unsupported.
+-- compile_fail_error checks objects only when compilation unexpectedly succeeds.
+-- This query returns every possible obligation, independent of its condition.
 internalChecksFor :: PlanConfig -> TestKind -> Either String [InternalCheck]
-internalChecksFor config (CompilationTest compilation expectation) = do
+internalChecksFor config kind = do
   validateProcedureConfig config
+  let compilation = testCompilation kind
   validateCompilation compilation
-  pure $ if configInternalChecks config && expectation == CompileSucceeds
+  needsObject <- case kind of
+    CompilationTest _ expectation -> pure (expectation == CompileSucceeds)
+    CompilationErrorTest _ expected -> validateExpectedError expected >> pure True
+  pure $ if configInternalChecks config && needsObject
     then [ObjectLoads (dropExtension (compilationSource compilation) ++ ".bo")]
     else []
+
+-- | Obligations for an observed compiler outcome. The Bool reports whether
+-- compilation actually succeeded, not whether its expected outcome matched.
+internalChecksAfter :: PlanConfig -> TestKind -> Bool -> Either String [InternalCheck]
+internalChecksAfter config kind compilationSucceeded = do
+  checks <- internalChecksFor config kind
+  pure $ case kind of
+    CompilationErrorTest _ _ | not compilationSucceeded -> []
+    _ -> checks
 
 -- | Explain a semantic test or an unsupported item. This deliberately does not
 -- invent backend actions, workspace snapshots, or cache guarantees.
@@ -121,11 +145,15 @@ explainTest plan selector = do
     config = planConfig plan
     itemId (Planned test) = Just (testId test)
     itemId (Unplanned issue) = issueId issue
-    describe test checks = case testKind test of
-      CompilationTest compilation expectation ->
+    describe test checks =
+      let kind = testKind test
+          compilation = testCompilation kind
+      in
         [ "Test " ++ selector
         , "Configuration: " ++ configName config
-        , "Kind: package compilation"
+        , "Kind: " ++ case kind of
+            CompilationTest _ _ -> "package compilation"
+            CompilationErrorTest _ _ -> "package compilation with expected diagnostic"
         , "Origin: " ++ showOrigin (testOrigin test)
         , "Test directory: " ++ takeDirectory (identifierTest (testId test))
         , "Source: " ++ compilationSource compilation ++ " (including absence)"
@@ -133,15 +161,19 @@ explainTest plan selector = do
         , "Compile dependencies: " ++ if compilationDependencies compilation then "yes (-u)" else "no"
         , "Compiler version and timestamp text are suppressed."
         , "Observe exit status and merged transcript: " ++ compilationSource compilation ++ ".bsc-out"
-        , "Expectation: " ++ case expectation of
-            CompileSucceeds -> "compilation succeeds"
-            CompileFails -> "compilation fails"
-        ] ++ describeInternal checks ++
+        , "Expectation: " ++ case kind of
+            CompilationTest _ CompileSucceeds -> "compilation succeeds"
+            CompilationTest _ CompileFails -> "compilation fails"
+            CompilationErrorTest _ expected -> "compilation fails with exactly " ++
+              show (expectedErrorCount expected) ++ " error(s) tagged " ++ expectedErrorTag expected
+        ] ++ describeInternal kind checks ++
         [ "Execution, input/tool binding, and cache policy are not assigned by this plan." ]
-    describeInternal [] = ["Internal checks: none"]
-    describeInternal checks =
-      ["Internal check: " ++ path ++ " can be loaded by dumpbo; run even if compilation fails."
+    describeInternal _ [] = ["Internal checks: none"]
+    describeInternal kind checks =
+      ["Internal check: " ++ path ++ " can be loaded by dumpbo; " ++ condition kind
       | ObjectLoads path <- checks]
+    condition (CompilationTest _ _) = "run even if compilation fails."
+    condition (CompilationErrorTest _ _) = "run only if compilation succeeds unexpectedly."
     list [] = "(none)"
     list values = intercalate " " values
     showOrigin p = sourceFile p ++ ":" ++ show (sourceLine p) ++ ":" ++ show (sourceColumn p)

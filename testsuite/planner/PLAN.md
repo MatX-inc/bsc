@@ -1,9 +1,9 @@
 # Semantic TestPlan contract
 
 The version 3 plan records discovered tests and constructs that cannot yet be
-planned. Its current test kind is package compilation with an expected success
-or failure. The model itself contains no execution policy. `Execute.hs` executes
-the supported compilation kind and `Buck2.hs` binds inputs for the first local
+planned. Its current test kinds describe package compilation with an expected
+success, failure, or diagnostic count. The model itself contains no execution
+policy. `Execute.hs` executes these tests and `Buck2.hs` binds inputs for the first local
 Buck2 backend; neither establishes whole-suite parity with DejaGNU.
 
 ## Commands
@@ -39,7 +39,9 @@ either `Planned Test` or `Unplanned PlanIssue`. A test contains a file-local
 `Identifier`, a diagnostic source origin, and a `TestKind`. The current kind is
 `CompilationTest Compilation Expectation`: the compilation records the source,
 ordered compiler options, and whether to compile dependencies; the expectation
-is `CompileSucceeds` or `CompileFails`.
+is `CompileSucceeds` or `CompileFails`. `CompilationErrorTest Compilation
+ExpectedError` adds a diagnostic tag and exact expected count after compilation
+fails. These are semantic expectations, not instructions to a scheduler.
 
 `Procedures.hs` gives these tests their shared procedural meaning. `compilePass`
 and `compileFail` use `compilationTest` with different expectations. The Tcl
@@ -52,6 +54,20 @@ into each source adapter.
 | --- | --- | --- |
 | `compile_pass` | Compile the package and require success | Inspect the produced object when `internal_checks` is enabled |
 | `compile_fail` | Compile the package and require failure | None |
+| `compile_fail_error` | Require failure, then count matching error diagnostics | Inspect the produced object only if compilation unexpectedly succeeds |
+
+`compile_fail_error source tag ?count? ?options? ?nodeps?` defaults to a count
+of one. Its successful path emits a single `diagnostic-count` result, with no
+separate compilation PASS. Unexpected compilation success emits a compilation
+FAIL followed by the configured internal check. This mirrors the Tcl helper.
+Counts are canonical nonnegative decimal integers (`0`, or a nonzero leading
+digit followed by digits); leading-zero forms are unsupported because Tcl can
+interpret them as octal. Tags must begin with an ASCII letter
+and contain only ASCII letters, digits, underscores, or hyphens. General Tcl
+regular expressions remain unsupported. Matching reproduces the literal-tag
+subset of `regexp -all -line {Error:.+\(TAG\)$}`, including its unanchored start,
+required character before the tag, and line-ending behavior. Warnings and
+source-position accuracy are not asserted by this procedure.
 
 Dependency compilation corresponds to `-u` and is enabled unless `nodeps=1`.
 Configuration compiler options precede invocation options, preserving order
@@ -75,6 +91,7 @@ The current lowerer statically evaluates:
 
 - `compile_pass source ?options? ?nodeps?` and
   `compile_fail source ?options? ?nodeps?`;
+- `compile_fail_error source tag ?count? ?options? ?nodeps?`;
 - `set name ?value?`, for an audited ordinary scalar name;
 - single-variable `foreach name list {body}`, including finite nested loops;
 - literal, braced, and quoted words; scalar `$name` and `${name}` substitution;
@@ -99,7 +116,7 @@ the command limit records an issue and stops expansion; its uninspected
 remainder is not included in the counts.
 
 Unsupported constructs remain located items in the script. Recognized
-`compile_pass` and `compile_fail` calls reserve their test numbers before
+`compile_pass`, `compile_fail`, and `compile_fail_error` calls reserve their test numbers before
 argument lowering, so a call that cannot be lowered retains its number as an
 issue. Other unsupported constructs do not consume numbers. A known but
 unsupported test procedure, such as `compile_verilog_pass`, does not discard
@@ -156,16 +173,20 @@ An unplanned item has `status` equal to `unsupported` or `unresolved`, an
 `origin`, and `construct` and `reason` strings in place of `kind`. Its `id` has
 the structure above when it represents a recognized compile-test invocation;
 otherwise `id` is `null`. A compilation expectation is `succeeds` or `fails`.
+The `compilation-error` kind uses the same source, options, and dependency
+fields, with `error_tag` and `error_count` in place of `expectation`.
 
 An identifier consists of the suite-relative script and a positive test
 number. Numbering starts at 1 in each `.exp` and advances only for recognized
-`compile_pass` and `compile_fail` invocations, in execution order through the
+`compile_pass`, `compile_fail`, and `compile_fail_error` invocations, in execution order through the
 supported static expansion. Calls with unresolved or unsupported arguments
 still reserve a number. Assignments, loops themselves, unsupported helpers,
 comments, and whitespace do not consume numbers. Repeated loop values remain
 distinct tests. An internal check keeps its parent's test ID and uses a result
 role; enabling internal checks does not add test IDs.
 
+Adding a recognized procedure changes later numbers in affected scripts;
+regenerate both the plan and trace when expanding the supported vocabulary.
 The number identifies a supported invocation in a frozen script expansion,
 not a semantic content hash or cache key. Adding a supported invocation or
 changing loop order can change later numbers. Source and flag changes can
@@ -195,7 +216,7 @@ a test; decoding alone does not establish executable semantics.
 Set `BSC_TEST_TRACE=1` before running the legacy harness to enable direct
 logging in `testsuite/config/unix.exp`. DejaGNU's per-file tool hooks,
 `bsc_init` and `bsc_finish`, reset the counter and delimit each script.
-`compile_pass` and `compile_fail` call small logging helpers directly, supplying
+The three supported compile procedures call small logging helpers directly, supplying
 one caller `info frame` for source location. Calls from procedure wrappers are
 excluded, so unsupported wrappers do not consume numbers. This boundary does
 not attempt arbitrary wrapper or call-stack interpretation. The metadata is
@@ -209,6 +230,7 @@ parsed as data without evaluation. Version 1 uses these records:
 BSC-TEST: script 1 FILE INTERNAL
 BSC-TEST: begin N PROC SOURCEFILE LINE ARGLIST
 BSC-TEST: role N object-load
+BSC-TEST: role N diagnostic-count
 BSC-TEST: end N
 BSC-TEST: finish COUNT
 ```
@@ -216,8 +238,8 @@ BSC-TEST: finish COUNT
 `script` identifies the suite-relative script and internal-check setting;
 `begin` identifies a numbered invocation, its source, and resolved argument
 list. The ordinary final verdicts between `begin` and `end` are authoritative.
-Their default role is compilation; `role` switches to the internal object-load
-check. `finish` supplies the final invocation count. The implementation uses
+Their default role is compilation; `role` switches to an internal object-load
+check or diagnostic count. `finish` supplies the final invocation count. The implementation uses
 direct helper calls and existing log output, without Tcl execution traces,
 aliases, callback interception, stack scanning, or sidecar-file management.
 
@@ -236,7 +258,8 @@ with observed invocations by script and number, then checks the
 internal-check policy, procedure family,
 source file and line, and typed resolved arguments through the same lowering
 used by the planner. It checks the expected result-role sequence: `compilation`
-followed by `object-load` when the test requires an internal check. A compilation
+followed by `object-load` when the test requires an internal check, or the
+single `diagnostic-count` result for an error test whose compilation fails. A compilation
 result and its internal object load keep the same parent test ID. Repeated
 flag variants stay separate even
 when their printed labels are identical. The report identifies mismatches,

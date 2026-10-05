@@ -5,6 +5,7 @@ import argparse
 from collections import Counter
 import json
 from pathlib import Path
+import re
 import sys
 
 
@@ -82,9 +83,25 @@ def planned_tests(plan):
                 require(key[0] == script["path"], "test identity differs from script")
                 require(key not in tests, f"duplicate planned identity: {selector(key)}")
                 kind = item["kind"]
-                require(kind["kind"] == "compilation"
-                        and kind["expectation"] in ("succeeds", "fails"),
-                        "unsupported planned test kind")
+                if kind["kind"] == "compilation-error":
+                    require(set(kind) == {"kind", "source", "options", "compile_dependencies",
+                                          "error_tag", "error_count"},
+                            "malformed compilation-error plan fields")
+                    require(isinstance(kind["source"], str) and kind["source"]
+                            and isinstance(kind["options"], list)
+                            and all(isinstance(option, str) for option in kind["options"])
+                            and type(kind["compile_dependencies"]) is bool,
+                            "invalid compilation-error inputs")
+                    require(isinstance(kind["error_tag"], str)
+                            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", kind["error_tag"]),
+                            "invalid compilation-error tag")
+                    require(type(kind["error_count"]) is int
+                            and 0 <= kind["error_count"] <= sys.maxsize,
+                            "invalid compilation-error count")
+                else:
+                    require(kind["kind"] == "compilation"
+                            and kind["expectation"] in ("succeeds", "fails"),
+                            "unsupported planned test kind")
                 tests[key] = item
             else:
                 require(item["status"] in ("unsupported", "unresolved"),
@@ -94,12 +111,77 @@ def planned_tests(plan):
     return tests, gaps
 
 
-def expected_roles(test, config):
+def expected_roles(test, config, compilation_exit_code=None):
+    if test["kind"]["kind"] == "compilation-error":
+        if compilation_exit_code is None:
+            return ["compilation"]
+        if compilation_exit_code != 0:
+            return ["diagnostic-count"]
+        return ["compilation"] + (["object-load"] if config["internal_checks"] else [])
     return ["compilation"] + (["object-load"] if config["internal_checks"]
             and test["kind"]["expectation"] == "succeeds" else [])
 
 
-def validate_execution(report, key, test, config):
+def validate_process(process):
+    """Return an ordinary exit code, or None for an infrastructure failure."""
+    require(isinstance(process, dict) and set(process) == {
+                "program", "arguments", "transcript", "termination"},
+            "malformed process fields")
+    require(isinstance(process["program"], str) and process["program"],
+            "missing process program")
+    require(isinstance(process["arguments"], list)
+            and all(isinstance(x, str) for x in process["arguments"]),
+            "invalid process arguments")
+    require(isinstance(process["transcript"], str) and process["transcript"],
+            "missing process transcript")
+    termination = process["termination"]
+    require(isinstance(termination, dict), "malformed process termination")
+    mode = termination["kind"]
+    if mode == "exited":
+        code = termination["exit_code"]
+        require(type(code) is int and code >= 0, "invalid process exit code")
+        return code if code < 126 else None
+    require(mode in ("signal", "timeout", "launch-error"), "unknown process termination")
+    if mode == "signal":
+        require(type(termination["signal"]) is int and termination["signal"] > 0
+                and type(termination["exit_code"]) is int
+                and termination["exit_code"] == -termination["signal"],
+                "invalid process signal")
+    elif mode == "timeout":
+        require(type(termination["exit_code"]) is int, "invalid timeout exit code")
+    else:
+        require(isinstance(termination["reason"], str) and termination["reason"],
+                "missing launch-error reason")
+    return None
+
+
+def validate_diagnostic(check, kind, result_root):
+    diagnostic = check["diagnostic"]
+    require(isinstance(diagnostic, dict)
+            and set(diagnostic) == {"error_tag", "expected_count", "actual_count"},
+            "malformed diagnostic fields")
+    require(diagnostic["error_tag"] == kind["error_tag"]
+            and type(diagnostic["expected_count"]) is int
+            and diagnostic["expected_count"] == kind["error_count"],
+            "diagnostic expectation differs from plan")
+    require(type(diagnostic["actual_count"]) is int and diagnostic["actual_count"] >= 0,
+            "invalid actual diagnostic count")
+    if result_root is not None:
+        root = Path(result_root).resolve()
+        transcript = Path(check["process"]["transcript"])
+        require(not transcript.is_absolute(), "diagnostic transcript must be output-relative")
+        transcript = (root / transcript).resolve()
+        require(transcript.is_relative_to(root), "diagnostic transcript escapes result directory")
+        # Tcl's text channel normalizes CRLF/CR; -line anchors at each newline.
+        text = transcript.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        pattern = re.compile(rb"Error:.+\(" + re.escape(kind["error_tag"].encode("ascii")) + rb"\)$")
+        actual = sum(pattern.search(line) is not None for line in text.split(b"\n"))
+        require(diagnostic["actual_count"] == actual,
+                "diagnostic count differs from saved transcript")
+    return "PASS" if diagnostic["actual_count"] == kind["error_count"] else "FAIL"
+
+
+def validate_execution(report, key, test, config, result_root=None):
     require(isinstance(report, dict) and set(report) == {
                 "schema", "version", "id", "configuration", "installation",
                 "working_directory", "staged_inputs", "checks"},
@@ -117,52 +199,34 @@ def validate_execution(report, key, test, config):
             and all(isinstance(path, str) for path in report["staged_inputs"]),
             "invalid staged input metadata")
     checks = report["checks"]
-    require(isinstance(checks, list), "checks must be a list")
+    require(isinstance(checks, list) and checks, "checks must be a nonempty list")
+    codes = []
+    for check in checks:
+        require(isinstance(check, dict), "malformed check fields")
+        fields = {"role", "disposition", "process"}
+        if check.get("role") == "diagnostic-count":
+            fields.add("diagnostic")
+        require(set(check) == fields,
+                "malformed check fields")
+        codes.append(validate_process(check["process"]))
     roles = [check["role"] for check in checks]
-    require(roles == expected_roles(test, config),
+    require(roles == expected_roles(test, config, codes[0]),
             f"result roles differ: {roles!r}")
     counts = Counter()
-    for check in checks:
-        require(set(check) == {"role", "disposition", "process"},
-                "malformed check fields")
+    for check, code in zip(checks, codes):
         disposition = check["disposition"]
         require(disposition in ("PASS", "FAIL", "INFRASTRUCTURE_ERROR"),
                 "unknown result disposition")
-        process = check["process"]
-        require(isinstance(process, dict) and set(process) == {
-                    "program", "arguments", "transcript", "termination"},
-                "malformed process fields")
-        require(isinstance(process["program"], str) and process["program"],
-                "missing process program")
-        require(isinstance(process["arguments"], list)
-                and all(isinstance(x, str) for x in process["arguments"]),
-                "invalid process arguments")
-        require(isinstance(process["transcript"], str) and process["transcript"],
-                "missing process transcript")
-        termination = process["termination"]
-        mode = termination["kind"]
-        if mode == "exited":
-            code = termination["exit_code"]
-            require(type(code) is int and code >= 0, "invalid process exit code")
+        if code is None:
+            derived = "INFRASTRUCTURE_ERROR"
+        elif check["role"] == "diagnostic-count":
+            derived = validate_diagnostic(check, test["kind"], result_root)
+        elif check["role"] == "compilation" and test["kind"]["kind"] == "compilation-error":
+            derived = "FAIL"
+        else:
             expect_success = (check["role"] == "object-load"
                               or test["kind"]["expectation"] == "succeeds")
-            derived = ("INFRASTRUCTURE_ERROR" if code >= 126 else
-                       "PASS" if (code == 0) == expect_success else "FAIL")
-        else:
-            require(mode in ("signal", "timeout", "launch-error"),
-                    "unknown process termination")
-            if mode == "signal":
-                require(type(termination["signal"]) is int
-                        and termination["signal"] > 0
-                        and termination["exit_code"] == -termination["signal"],
-                        "invalid process signal")
-            elif mode == "timeout":
-                require(type(termination["exit_code"]) is int,
-                        "invalid timeout exit code")
-            else:
-                require(isinstance(termination["reason"], str)
-                        and termination["reason"], "missing launch-error reason")
-            derived = "INFRASTRUCTURE_ERROR"
+            derived = "PASS" if (code == 0) == expect_success else "FAIL"
         require(disposition == derived,
                 f"{check['role']} disposition contradicts process termination")
         counts[disposition] += 1
@@ -244,7 +308,8 @@ def audit(cell, build_report):
                 output = cell / output
             require(output.resolve().is_relative_to(cell), "result directory escapes cell")
             report = read_json(output / "result.json")
-            counts.update(validate_execution(report, key, tests[key], plan["configuration"]))
+            counts.update(validate_execution(report, key, tests[key], plan["configuration"],
+                                             result_root=output))
             verified += 1
         except (Invalid, KeyError, TypeError, ValueError, OSError) as error:
             errors.append(f"{target} {selector(key)}: {error}")

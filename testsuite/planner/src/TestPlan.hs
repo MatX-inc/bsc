@@ -2,10 +2,10 @@
 -- tested and its expected result. Unsupported constructs and unresolved
 -- dependencies remain in source order so an incomplete plan is explicit.
 module TestPlan
-  ( Identifier(..), PlanConfig(..), Compilation(..), Expectation(..)
-  , TestKind(..), Test(..), IssueKind(..), PlanIssue(..), PlanItem(..)
+  ( Identifier(..), PlanConfig(..), Compilation(..), Expectation(..), ExpectedError(..)
+  , TestKind(..), testCompilation, Test(..), IssueKind(..), PlanIssue(..), PlanItem(..)
   , ScriptPlan(..), TestPlan(..)
-  , renderIdentifier, encodePlan, decodePlan, validatePlan, validateConfig
+  , renderIdentifier, encodePlan, decodePlan, validatePlan, validateConfig, validateExpectedError
   , plannedTests, planIssues, planCounts
   ) where
 
@@ -39,7 +39,15 @@ data Compilation = Compilation
   , compilationDependencies :: Bool
   } deriving (Eq, Show)
 data Expectation = CompileSucceeds | CompileFails deriving (Eq, Show)
-data TestKind = CompilationTest Compilation Expectation deriving (Eq, Show)
+data ExpectedError = ExpectedError
+  { expectedErrorTag :: String, expectedErrorCount :: Int
+  } deriving (Eq, Show)
+data TestKind = CompilationTest Compilation Expectation
+              | CompilationErrorTest Compilation ExpectedError deriving (Eq, Show)
+
+testCompilation :: TestKind -> Compilation
+testCompilation (CompilationTest compilation _) = compilation
+testCompilation (CompilationErrorTest compilation _) = compilation
 data Test = Test
   { testId :: Identifier, testOrigin :: SourcePos, testKind :: TestKind
   } deriving (Eq, Show)
@@ -99,6 +107,17 @@ validateConfig config = do
   validText (configName config)
   mapM_ validText (configCompilerOptions config)
 
+-- Diagnostic tags are literal ASCII identifiers, never regular expressions.
+validateExpectedError :: ExpectedError -> Either String ()
+validateExpectedError expected = do
+  ensure (case expectedErrorTag expected of
+    first:rest -> letter first && all (\c -> letter c || digit c || c `elem` "_-") rest
+    [] -> False) "error tag must start with an ASCII letter and contain only ASCII letters, digits, '_' or '-'"
+  ensure (expectedErrorCount expected >= 0) "error count must be nonnegative"
+  where
+    letter c = c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
+    digit c = c >= '0' && c <= '9'
+
 -- | Validate the semantic contract, including entries that could not be
 -- planned. This does not inspect the filesystem or establish suite coverage.
 validatePlan :: TestPlan -> Either String ()
@@ -134,14 +153,16 @@ validateScript config script = do
       case item of
         Planned test -> do
           validOrigin path (testOrigin test)
+          let compilation = testCompilation (testKind test)
+          safePath (compilationSource compilation)
+          ensure (takeExtension (compilationSource compilation) `elem` [".bs", ".bsv"])
+            "compilation source must be .bs or .bsv"
+          mapM_ validText (compilationOptions compilation)
+          ensure (configCompilerOptions config `isPrefixOf` compilationOptions compilation)
+            "compilation options do not include the plan configuration prefix"
           case testKind test of
-            CompilationTest compilation _ -> do
-              safePath (compilationSource compilation)
-              ensure (takeExtension (compilationSource compilation) `elem` [".bs", ".bsv"])
-                "compilation source must be .bs or .bsv"
-              mapM_ validText (compilationOptions compilation)
-              ensure (configCompilerOptions config `isPrefixOf` compilationOptions compilation)
-                "compilation options do not include the plan configuration prefix"
+            CompilationTest _ _ -> pure ()
+            CompilationErrorTest _ expected -> validateExpectedError expected
         Unplanned issue -> do
           validOrigin path (issuePosition issue)
           validText (issueConstruct issue)
@@ -193,6 +214,12 @@ encodeKind (CompilationTest compilation expectation) = JObject
    ("options", texts (compilationOptions compilation)),
    ("compile_dependencies", JBool (compilationDependencies compilation)),
    ("expectation", JString (expectationName expectation))]
+encodeKind (CompilationErrorTest compilation expected) = JObject
+  [("kind", JString "compilation-error"), ("source", JString (compilationSource compilation)),
+   ("options", texts (compilationOptions compilation)),
+   ("compile_dependencies", JBool (compilationDependencies compilation)),
+   ("error_tag", JString (expectedErrorTag expected)),
+   ("error_count", int (expectedErrorCount expected))]
 texts :: [String] -> Json
 texts = JArray . map JString
 int :: Int -> Json
@@ -274,6 +301,12 @@ decodeKind json = do
         <*> (field "compile_dependencies" fields >>= jsonBool)
       expectation <- field "expectation" fields >>= enum expectationName [CompileSucceeds, CompileFails]
       pure (CompilationTest compilation expectation)
+    "compilation-error" -> do
+      fields <- objectFields ["kind", "source", "options", "compile_dependencies", "error_tag", "error_count"] json
+      compilation <- Compilation <$> stringField "source" fields <*> arrayField jsonText "options" fields
+        <*> (field "compile_dependencies" fields >>= jsonBool)
+      expected <- ExpectedError <$> stringField "error_tag" fields <*> integerField "error_count" fields
+      pure (CompilationErrorTest compilation expected)
     _ -> Left ("unsupported test kind: " ++ kind)
 
 enum :: (a -> String) -> [a] -> Json -> Either String a

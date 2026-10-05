@@ -1,7 +1,7 @@
 module ExecuteTest (runTests) where
 
 import Control.Exception (bracket)
-import Control.Monad (unless)
+import Control.Monad (forM_, unless)
 import Data.Either (isLeft)
 import Data.List (isInfixOf)
 import Execute
@@ -51,6 +51,39 @@ runTests = withFixture $ \fixture -> do
      processStatus (checkProcess (head (executionChecks expected))) == ProcessExited 1)
   unexpected <- runCase fixture "unexpected-success" config "compile_fail Good.bs"
   check "unexpected compilation success is FAIL data" (map checkDisposition (executionChecks unexpected) == [CheckFail])
+  diagnostics <- runCase fixture "expected-diagnostics" config "compile_fail_error Errors.bs T0001 2"
+  check "expected error counts produce one diagnostic verdict without an internal check"
+    (map checkRole (executionChecks diagnostics) == ["diagnostic-count"] &&
+     map checkDisposition (executionChecks diagnostics) == [CheckPass] &&
+     map checkDiagnostic (executionChecks diagnostics) == [Just (DiagnosticResult (ExpectedError "T0001" 2) 2)])
+  wrongCount <- runCase fixture "wrong-count" config "compile_fail_error Errors.bs T0001"
+  wrongTag <- runCase fixture "wrong-tag" config "compile_fail_error Errors.bs T9999"
+  check "ordinary compiler failure cannot hide a wrong diagnostic count or tag"
+    (map checkDisposition (executionChecks wrongCount) == [CheckFail] &&
+     map checkDisposition (executionChecks wrongTag) == [CheckFail])
+  zeroCount <- runCase fixture "zero-count" config "compile_fail_error Errors.bs T9999 0"
+  check "explicit zero diagnostic counts retain Tcl semantics"
+    (map checkDisposition (executionChecks zeroCount) == [CheckPass])
+  unexpectedError <- runCase fixture "error-unexpected-success" config "compile_fail_error Good.bs T0001"
+  check "unexpected diagnostic-test compilation success runs the internal check"
+    (map checkRole (executionChecks unexpectedError) == ["compilation", "object-load"] &&
+     map checkDisposition (executionChecks unexpectedError) == [CheckFail, CheckPass])
+  unexpectedNoInternal <- runCase fixture "error-unexpected-no-internal"
+    config { configInternalChecks = False } "compile_fail_error Good.bs T0001"
+  check "unexpected success respects disabled internal checks"
+    (map checkRole (executionChecks unexpectedNoInternal) == ["compilation"] &&
+     map checkDisposition (executionChecks unexpectedNoInternal) == [CheckFail])
+  forM_ ["Signal.bs", "Exit127.bs"] $ \source -> do
+    errorInfra <- runCase fixture ("error-infrastructure-" ++ source) config
+      ("compile_fail_error " ++ source ++ " T0001 0")
+    check "infrastructure failure never satisfies even a zero diagnostic count"
+      (map checkRole (executionChecks errorInfra) == ["compilation"] &&
+       map checkDisposition (executionChecks errorInfra) == [CheckInfrastructureError])
+  check "literal matching reproduces Tcl line boundaries, unanchored start, and required text"
+    (countErrorDiagnostics (ExpectedError "T0001" 99)
+      ("prefix Error: pos (T0001)\r\nError: pos (T0001)\rError: pos (T0001)\n" ++
+       "Error:(T0001)\nWarning: pos (T0001)\nError: pos (T0001) extra\n" ++
+       "Error: pos\n(T0001)\nError: pos (T0001) Error: pos (T0001)\n") == 4)
   withoutInternal <- runCase fixture "without-internal" config { configInternalChecks = False } "compile_pass Good.bs"
   check "internal-check policy controls the additional observation" (map checkRole (executionChecks withoutInternal) == ["compilation"])
   signaled <- runCase fixture "signal" config "compile_fail Signal.bs"
@@ -180,6 +213,7 @@ compilerStub = unlines
   , "for source in \"$@\"; do :; done"
   , "case \"$source\" in"
   , "  Fail.bs) exit 1 ;;"
+  , "  Errors.bs) printf 'Error: pos (T0001)\\n  message\\nError: pos (T0001)\\nWarning: pos (T0001)\\n'; exit 1 ;;"
   , "  Signal.bs) kill -TERM \"$$\" ;;"
   , "  Timeout.bs) exec /bin/sleep 5 ;;"
   , "  Exit127.bs) exit 127 ;;"
