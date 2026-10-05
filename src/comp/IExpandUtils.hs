@@ -160,6 +160,7 @@ doTraceATFCacheMiss = doTraceATFCache || elem "-trace-atf-cache-miss" progArgs
 type HPred = Pred Elab
 
 pAtom :: KnownPhase a => IExpr a -> Pred a
+{-# SPECIALISE pAtom :: IExpr Elab -> Pred Elab #-}
 pAtom e = if isTrue e then pTrue else PConj (S.singleton (PTermKey (PAtom e)))
 
 -- we're wrapping this in the G monad because pIf' should be in IO
@@ -265,9 +266,11 @@ normPConj' (PConj ps) =
     in mk (as ++ concat mifs' ++ concat msels')
 
 predToIExpr :: KnownPhase a => Pred a -> IExpr a
+{-# SPECIALISE predToIExpr :: Pred Elab -> IExpr Elab #-}
 predToIExpr (PConj es) = foldr (ieAnd . pTermToIExpr . unPTermKey) iTrue (S.toList es)
 
 pTermToIExpr :: KnownPhase a => PTerm a -> IExpr a
+{-# SPECIALISE pTermToIExpr :: PTerm Elab -> IExpr Elab #-}
 pTermToIExpr (PAtom e) = e
 pTermToIExpr (PIf c t e) = ieIfx itBit1 c (predToIExpr t) (predToIExpr e)
 pTermToIExpr (PSel idx idx_sz es) =
