@@ -25,6 +25,8 @@ import Prim
 
 doPrimOp :: KnownPhase a => Position -> PrimOp -> [IType] -> [IExpr a] ->
             Maybe (Either ErrMsg (IExpr a))
+{-# SPECIALISE doPrimOp :: Position -> PrimOp -> [IType] -> [IExpr Elab] -> Maybe (Either ErrMsg (IExpr Elab)) #-}
+{-# SPECIALISE doPrimOp :: Position -> PrimOp -> [IType] -> [IExpr PostElab] -> Maybe (Either ErrMsg (IExpr PostElab)) #-}
 doPrimOp pos op ts es =
   let isLit e = isIConInt e || isIConReal e
       mkPrimArg (ICon _ (ICInt { iVal = IntLit { ilValue = v } })) = I v
@@ -47,6 +49,8 @@ use _  Nothing          = Nothing
 -- creation function to produce the IExpr for each primitive result.
 doPrimOp' :: KnownPhase a => Position -> PrimOp -> [Integer] -> [PrimArg] ->
              Maybe (Either ErrMsg (IExpr a))
+{-# SPECIALISE doPrimOp' :: Position -> PrimOp -> [Integer] -> [PrimArg] -> Maybe (Either ErrMsg (IExpr Elab)) #-}
+{-# SPECIALISE doPrimOp' :: Position -> PrimOp -> [Integer] -> [PrimArg] -> Maybe (Either ErrMsg (IExpr PostElab)) #-}
 doPrimOp' pos op@PrimAdd  ss@[s]     vs = use (iMkLitSizeAt pos s) (primResult op ss vs)
 doPrimOp' pos op@PrimSub  ss@[s]     vs = use (iMkLitSizeAt pos s) (primResult op ss vs)
 doPrimOp' pos op@PrimMul  ss@[_,_,s] vs = use (iMkLitSizeAt pos s) (primResult op ss vs)
