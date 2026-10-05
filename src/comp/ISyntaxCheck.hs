@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 {-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE PatternGuards #-}
 module ISyntaxCheck(iGetKind,
