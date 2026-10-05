@@ -1,3 +1,5 @@
+{-# LANGUAGE MonoLocalBinds, FlexibleContexts #-}
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 {-# LANGUAGE RankNTypes, ScopedTypeVariables, PatternGuards #-}
 module IConv(
              iConvPackage, iConvT, iConvK, iConvExpr, iConvSc, iConvDef,
@@ -63,8 +65,8 @@ type Env a = M.Map Id (IExpr a)
 -- IDefs; they are appended to the package's definitions, and (through
 -- the env knot below) references to them from the ordinary definitions
 -- resolve exactly like references to any other top-level definition.
-iConvPackage :: ErrorHandle -> Flags -> SymTab ->
-               CATFCache -> [IDef a] -> CPackage -> IO (IPackage a)
+iConvPackage :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab ->
+               CATFCache -> [IDef (BinderPhase e)] -> CPackage -> IO (IPackage (BinderPhase e))
 iConvPackage errh flags r ctypeATFCache liftedDefs (CPackage pi _ _ _ _ ds _) =
     return (IPackage pi [] ps ds' itypeATFCache)
   where ds' = concatMap (iConvD errh flags pi r env pvs) ds ++ liftedDefs
@@ -78,7 +80,7 @@ iConvPackage errh flags r ctypeATFCache liftedDefs (CPackage pi _ _ _ _ ds _) =
                                   (M.map convT ctypeATFCache)
 
 
-iConvDef :: ErrorHandle -> Flags -> SymTab -> IPackage a -> CDefn -> IDef a
+iConvDef :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> IPackage (BinderPhase e) -> CDefn -> IDef (BinderPhase e)
 iConvDef errh flags r (IPackage pi _ _ ds _) def =
     let env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds])
         pvs = map IVar tmpVarIds
@@ -86,7 +88,7 @@ iConvDef errh flags r (IPackage pi _ _ ds _) def =
         [d] -> d
         ds -> internalError ("iConvDef " ++ ppReadable ds ++ ppReadable def)
 
-iConvVar :: Flags -> SymTab -> Env a -> Id -> IExpr a
+iConvVar :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (BinderPhase e) -> Id -> IExpr (BinderPhase e)
 iConvVar flags r env i =
         --trace ("lookup " ++ ppReadable i ++ show env) $
         case M.lookup i env of
@@ -135,7 +137,7 @@ iConvVar flags r env i =
                 _ -> IVar i
 
 -- XXX is this really worthwhile now?
-iConvTask :: SymTab -> Id -> IType -> IExpr a
+iConvTask :: KnownPhase (BinderPhase e) => SymTab -> Id -> IType -> IExpr (BinderPhase e)
 iConvTask r i it =
    case findVar r i of
         -- only care about name - no "port-magic" for $display and friends
@@ -148,7 +150,7 @@ iConvTask r i it =
                             (show i) ++ " not found.\n" ++ ppReadable r )
 
 
-addVar :: Id -> IExpr a -> Env a -> Env a
+addVar :: KnownPhase (BinderPhase e) => Id -> IExpr (BinderPhase e) -> Env (BinderPhase e) -> Env (BinderPhase e)
 addVar i e t =
         --trace ("add " ++ ppReadable (i,e)) $
         M.insert i e t
@@ -157,8 +159,8 @@ type IPVars a = [IExpr a]
 
 -----
 
-iConvD :: ErrorHandle -> Flags -> Id -> SymTab -> Env a -> IPVars a ->
-          CDefn -> [IDef a]
+iConvD :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> Id -> SymTab -> Env (BinderPhase e) -> IPVars (BinderPhase e) ->
+          CDefn -> [IDef (BinderPhase e)]
 iConvD errh flags pi r env pvs (CValueSign (CDefT i vs qt cs)) =
     case iConvVS errh flags r env pvs i vs qt cs of
         (i, t, e) -> [IDef (qualId' pi i) t e [] ]
@@ -174,16 +176,16 @@ qualId' pi i = if tilde `elem` getIdString i then i else qualId pi i
                   [c] -> c
                   _ -> internalError "IConv.qualId': unexpected tilde string"
 
-iConvVS :: ErrorHandle
+iConvVS :: KnownPhase (BinderPhase e) => ErrorHandle
            -> Flags
            -> SymTab
-           -> Env a
-           -> IPVars a
+           -> Env (BinderPhase e)
+           -> IPVars (BinderPhase e)
            -> Id
            -> [TyVar]
            -> CQType
            -> [CClause]
-           -> (Id, IType, IExpr a)
+           -> (Id, IType, IExpr (BinderPhase e))
 iConvVS errh flags r env pvs i vs (CQType _ t) cs =
         let t' = iConvT flags r t
             t'' = foldr (\ (TyVar i _ k) t -> ITForAll i (iConvK k) t) t' vs
@@ -309,13 +311,13 @@ iConvK (KVar _) = internalError "iConvK"
 -- * list of variable bindings from the pattern
 -- * the environment updated with the variable bindings
 --
-iConvPs :: Flags -> SymTab -> Env a -> [(IExpr a, IType, CPat)] ->
-           (IExpr a, [(Id, IType, IExpr a)], Env a)
+iConvPs :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (BinderPhase e) -> [(IExpr (BinderPhase e), IType, CPat)] ->
+           (IExpr (BinderPhase e), [(Id, IType, IExpr (BinderPhase e))], Env (BinderPhase e))
 iConvPs flags r env vtps = iConvPs' flags r env id [] (length vtps) vtps
 
-iConvPs' :: Flags -> SymTab -> Env a ->
-            (IExpr a -> IExpr a) -> [(Id, IType, IExpr a)] -> Int ->
-            [(IExpr a, IType, CPat)] -> (IExpr a, [(Id, IType, IExpr a)], Env a)
+iConvPs' :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (BinderPhase e) ->
+            (IExpr (BinderPhase e) -> IExpr (BinderPhase e)) -> [(Id, IType, IExpr (BinderPhase e))] -> Int ->
+            [(IExpr (BinderPhase e), IType, CPat)] -> (IExpr (BinderPhase e), [(Id, IType, IExpr (BinderPhase e))], Env (BinderPhase e))
 iConvPs' flags r env cond bs n [] = (cond iTrue, bs, env)
 
 iConvPs' flags r env cond bs n ((v, _, CPConTs ti i ots [pat]) : ps) =
@@ -360,8 +362,8 @@ iConvPs' flags r env cond bs n ((v, t, CPAny p) : ps) =
 -- and replaces them with a variable and a guard
 iConvPs' flags r env cond bs n _ = internalError ("iConvPs'")
 
-iConvCs :: ErrorHandle -> Flags -> SymTab -> Env a ->
-           IPVars a -> IType -> [CClause] -> IExpr a
+iConvCs :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
+           IPVars (BinderPhase e) -> IType -> [CClause] -> IExpr (BinderPhase e)
 iConvCs errh flags r env pvs t cs@(CClause ps _ _ : _) =
     foldr (uncurry ILam) (iConvCs' errh flags r env pos pvs' (map (IVar . fst) vts) ts rt cs) vts
   where getArgs (_:ps) (ITAp (ITAp arr a) r) | arr == itArrow = a : getArgs ps r
@@ -378,9 +380,9 @@ iConvCs errh flags r env pvs t cs@(CClause ps _ _ : _) =
         pos = getPosition ps
 iConvCs errh flags r env pvs t [] = internalError "IConv.iConvCs: []"
 
-iConvCs' :: ErrorHandle -> Flags -> SymTab -> Env a
-         -> Position -> IPVars a -> [IExpr a] -> [IType] -> IType -> [CClause]
-         -> IExpr a
+iConvCs' :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e)
+         -> Position -> IPVars (BinderPhase e) -> [IExpr (BinderPhase e)] -> [IType] -> IType -> [CClause]
+         -> IExpr (BinderPhase e)
 iConvCs' errh flags r env pos pvs (v:vs) (t_v:t_vs) t [] =
     -- take the position of the first scrutinee if you can
     buildUndefNoMatchPos flags r env (v,t_v) t
@@ -391,8 +393,8 @@ iConvCs' errh flags r env pos pvs vs ts t (c:cs) =
     ieIf t cond rhs (iConvCs' errh flags r env pos pvs vs ts t cs)
   where (cond, rhs) = iConvC errh flags r env pvs vs ts c
 
-iConvC :: ErrorHandle -> Flags -> SymTab -> Env a ->
-          IPVars a -> [IExpr a] -> [IType] -> CClause -> (IExpr a, IExpr a)
+iConvC :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
+          IPVars (BinderPhase e) -> [IExpr (BinderPhase e)] -> [IType] -> CClause -> (IExpr (BinderPhase e), IExpr (BinderPhase e))
 iConvC errh flags r env pvs vs ts (CClause ps qs e) =
     let (p1, _, env') = iConvPs flags r env (zip3 vs ts ps)
         (p2, bindFn, env'') = iConvQs errh flags r env' pvs qs
@@ -420,13 +422,13 @@ iConvC errh flags r env pvs vs ts (CClause ps qs e) =
 -- preserved if it's a name that has meaning to the user (but is there an
 -- efficiency trade-off?).
 --
-iConvQs :: ErrorHandle -> Flags -> SymTab -> Env a ->
-           IPVars a -> [CQual] -> (IExpr a, (IExpr a -> IExpr a), Env a)
+iConvQs :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
+           IPVars (BinderPhase e) -> [CQual] -> (IExpr (BinderPhase e), (IExpr (BinderPhase e) -> IExpr (BinderPhase e)), Env (BinderPhase e))
 iConvQs errh flags r env pvs qs = iConvQs' errh flags r env pvs id [] qs
 
-iConvQs' :: ErrorHandle -> Flags -> SymTab -> Env a ->
-            IPVars a -> (IExpr a -> IExpr a) -> [(Id, IType, IExpr a)] ->
-            [CQual] -> (IExpr a, (IExpr a -> IExpr a), Env a)
+iConvQs' :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
+            IPVars (BinderPhase e) -> (IExpr (BinderPhase e) -> IExpr (BinderPhase e)) -> [(Id, IType, IExpr (BinderPhase e))] ->
+            [CQual] -> (IExpr (BinderPhase e), (IExpr (BinderPhase e) -> IExpr (BinderPhase e)), Env (BinderPhase e))
 iConvQs' errh flags r env pvs cond bs [] =
     let -- create let bindings
         -- (use iLetSimp, to inline names that we don't need to keep;
@@ -453,8 +455,8 @@ iConvQs' errh flags r env pvs cond bs (CQGen ct p e:qs) =
     in  iConvQs' errh flags r env' pvs new_cond new_bs qs
 
 -- convert definitions in a sequential let
-iConvLetSeq :: ErrorHandle -> Flags -> SymTab -> Env a ->
-               IPVars a -> [CDefl] -> (Env a, [(Id, IType, IExpr a)])
+iConvLetSeq :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
+               IPVars (BinderPhase e) -> [CDefl] -> (Env (BinderPhase e), [(Id, IType, IExpr (BinderPhase e))])
 iConvLetSeq errh flags symtab env ipvars [] = (env, [])
 iConvLetSeq errh flags symtab env ipvars
         (CLValueSign (CDefT name genvars qualtype clauses) quals : rest_defs) =
@@ -468,9 +470,9 @@ iConvLetSeq errh flags symtab env ipvars
 iConvLetSeq _ _ _ _ _ _ = internalError "iConvLetSeq"
 
 -- convert definitions in a recursive let
-iConvLet :: forall a .
-            ErrorHandle -> Flags -> SymTab -> Env a -> IPVars a -> [CDefl] ->
-            (Env a, [(Id, IType, IExpr a)])
+iConvLet :: forall e .
+            KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) -> IPVars (BinderPhase e) -> [CDefl] ->
+            (Env (BinderPhase e), [(Id, IType, IExpr (BinderPhase e))])
 iConvLet errh flags r env pvs ds = answer
   where answer = case loop_test of
                    Left cycles -> -- trace "inloop" $
@@ -531,9 +533,9 @@ iConvLet errh flags r env pvs ds = answer
             in iConvLet errh flags r env pvs
                    (non_cycle ++ (docycles errh ds cycle_nodes))
 
-iAddWhen :: ErrorHandle -> Flags -> SymTab -> Env a
-         -> IPVars a -> [CQual] -> (Env a -> IPVars a -> (Id, IType, IExpr a))
-         -> (Id, IType, IExpr a)
+iAddWhen :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e)
+         -> IPVars (BinderPhase e) -> [CQual] -> (Env (BinderPhase e) -> IPVars (BinderPhase e) -> (Id, IType, IExpr (BinderPhase e)))
+         -> (Id, IType, IExpr (BinderPhase e))
 iAddWhen errh flags r env pvs [] ite = ite env pvs
 iAddWhen errh flags r env pvs qs ite =
     let (p, bindFn, env') = iConvQs errh flags r env pvs qs
@@ -543,11 +545,11 @@ iAddWhen errh flags r env pvs qs ite =
         (i, t, e') -> (i, t, underLAM t e' [] $ \ t e -> iAps icPrimWhen [t] [p, bindFn e])
 
 -- external interface for converting expressions
-iConvExpr :: ErrorHandle -> Flags -> SymTab -> Env a -> CExpr -> IExpr a
+iConvExpr :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) -> CExpr -> IExpr (BinderPhase e)
 iConvExpr errh flags r env ce = iConvE errh flags r env (map IVar tmpVarIds) ce
 
-iConvE :: ErrorHandle -> Flags -> SymTab -> Env a -> IPVars a ->
-          CExpr -> IExpr a
+iConvE :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) -> IPVars (BinderPhase e) ->
+          CExpr -> IExpr (BinderPhase e)
 -- CLam
 iConvE errh flags r env pvs (Cletrec ds e) =
         let (env', ites) = iConvLet errh flags r env pvs ds
@@ -625,7 +627,7 @@ iConvE errh flags r env pvs (CApply (CTApply (CVar splt) ts@[n, m, k]) es@[d, e]
         in  iConvE errh flags r env pvs e
 
 iConvE errh flags r env pvs (CApply (CVar gn) [CVar name]) | gn == idPrimGetName =
-  ICon gn (ICName { iConType = iConvT flags r tName, iName = name })
+  ICon gn (ICName { ictName = iConvT flags r tName, iName = name })
 
 iConvE errh flags r env pvs (CAny pos uk) =
   internalError ("iConvE: CAny " ++ prPosition pos)
@@ -695,7 +697,7 @@ iConvE errh flags r env pvs e@(CmoduleVerilogT ty name ui clks rst args meths sc
             (ti, ts) = splitITApCon ty''
             name' = iConvE errh flags r env pvs name
         in  iAps (ICon (dummyId (getPosition e))
-                     (ICVerilog { iConType = itString `itFun` ty',
+                     (ICVerilog { ictVerilog = itString `itFun` ty',
                                   isUserImport = ui,
                                   vInfo = vinf,
                                   vMethTs = tss })) [] (name' : es')
@@ -707,18 +709,19 @@ iConvE errh flags r enc pvs e@(CForeignFuncCT i prim_ty) =
 
 iConvE errh flags r env pvs (Cattributes pps) =
     ICon (dummyId (getPosition (map fst pps)))
-         (ICAttrib { iConType = iConvT flags r tAttributes, iAttributes = pps })
+         (ICAttrib { ictAttrib = iConvT flags r tAttributes, iAttributes = pps })
 iConvE errh flags r env pvs e = internalError ("IConv.iConvE:" ++ ppReadable e)
 
 getMethodType :: Flags -> SymTab -> Id -> [IType] -> Id -> IType
 getMethodType flags r ti ts m = iInst selty ts
-  where sel = iConvField flags r ti m
+  where -- the selector is only inspected for its type, at any phase
+        sel = iConvField flags r ti m :: IExpr PreElab
         selty = case sel of
                   (ICon _ (ICSel t _ _)) -> t
                   _ -> internalError "IConv.getMethodType: selty"
 
-iConvR :: ErrorHandle -> Flags -> SymTab -> Env a ->
-          IPVars a -> CRule -> IExpr a
+iConvR :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
+          IPVars (BinderPhase e) -> CRule -> IExpr (BinderPhase e)
 iConvR errh flags r env pvs rule@(CRule rps i qs a) =
     let (p, bindFn, env') = iConvQs errh flags r env pvs qs
         a' = bindFn $ iConvE errh flags r env' pvs a
@@ -729,11 +732,11 @@ iConvR errh flags r env pvs rule@(CRule rps i qs a) =
 iConvR errh flags r env pvs rule =
     internalError ("IConv.iConvR: nested rule: " ++ show rule)
 
-iConvRulePragmas :: [RulePragma] -> IExpr a
-iConvRulePragmas as = ICon (dummyId noPosition) (ICRuleAssert { iConType = itBit0, iAsserts = as })
+iConvRulePragmas :: KnownPhase (BinderPhase e) => [RulePragma] -> IExpr (BinderPhase e)
+iConvRulePragmas as = ICon (dummyId noPosition) (ICRuleAssert { ictRuleAssert = itBit0, iAsserts = as })
 
-iConvSchedulePragmas :: [CSchedulePragma] -> IExpr a
-iConvSchedulePragmas sps = ICon (dummyId noPosition) (ICSchedPragmas { iConType = itSchedPragma, iPragmas = sps })
+iConvSchedulePragmas :: KnownPhase (BinderPhase e) => [CSchedulePragma] -> IExpr (BinderPhase e)
+iConvSchedulePragmas sps = ICon (dummyId noPosition) (ICSchedPragmas { ictSchedPragmas = itSchedPragma, iPragmas = sps })
 
 flattenRules :: [RulePragma] -> [Maybe CExpr] -> [CQual] -> CRule -> [CRule]
 flattenRules rps is qs (CRuleNest rps' i qs' rs) =
@@ -775,22 +778,22 @@ isNumericForeignPred pp =
     in  any (qualEq (typeclassId (name cl)))
             [idAdd, idMul, idDiv, idLog, idMax, idMin, idNumEq]
 
-dropDicts :: [(Id, IExpr a)]
+dropDicts :: KnownPhase (BinderPhase e) => [(Id, IExpr (BinderPhase e))]
 dropDicts = [(idPrimConcat, icPrimConcat),
              (idPrimZeroExt, icPrimZeroExt),
              (idPrimSignExt, icPrimSignExt),
              (idPrimTrunc, icPrimTrunc),
              (idPrimMul, icPrimMul)]
 
-iConvLit :: Literal -> Position -> IType -> IExpr a
-iConvLit (LInt i) pos t = ICon (setIdPosition pos idIntLit) (ICInt { iConType = t, iVal = i })
-iConvLit (LReal r) pos t = ICon (setIdPosition pos idRealLit) (ICReal { iConType = t, iReal = r })
+iConvLit :: KnownPhase (BinderPhase e) => Literal -> Position -> IType -> IExpr (BinderPhase e)
+iConvLit (LInt i) pos t = ICon (setIdPosition pos idIntLit) (ICInt { ictInt = t, iVal = i })
+iConvLit (LReal r) pos t = ICon (setIdPosition pos idRealLit) (ICReal { ictReal = t, iReal = r })
 iConvLit (LString s) pos t = iMkStringAt pos s
 iConvLit (LChar c) pos t = iMkCharAt pos c
 iConvLit LPosition pos t = iMkPosition pos
 
 -- converts implicit field extract functions to bit select.
-iConvField :: Flags -> SymTab -> Id -> Id -> IExpr a
+iConvField :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Id -> Id -> IExpr (BinderPhase e)
 iConvField flags r ti i =
     case findType r ti of
       Just (TypeInfo _ _ _ (TIstruct _ fs) _) ->
@@ -912,7 +915,7 @@ countForall _ = 0
 
 ------
 
-iLetSimp :: Id -> IType -> IExpr a -> IExpr a -> IExpr a
+iLetSimp :: KnownPhase (BinderPhase e) => Id -> IType -> IExpr (BinderPhase e) -> IExpr (BinderPhase e) -> IExpr (BinderPhase e)
 iLetSimp i _ e@(IVar _) b | not (isKeepId i) = eSubst i e b
 {-
 iLetSimp i t e b | onlyIAP b = iTypeBeta (eSubst i e b)
@@ -929,15 +932,15 @@ iLetSimp i t e b = iLet i t e b
 
 ---
 
-buildUndef :: Flags -> SymTab -> Env a ->
-              Position -> UndefKind -> IType -> IExpr a
+buildUndef :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (BinderPhase e) ->
+              Position -> UndefKind -> IType -> IExpr (BinderPhase e)
 buildUndef flags r env pos kind t =
     IAps p [t] [iMkPosition pos, iuKindToExpr kind]
   where p = iConvVar flags r env idBuildUndef
 
 -- use the scrutinee's position to build the undefined value on a no-match
-buildUndefNoMatchPos :: Flags -> SymTab -> Env a ->
-                        (IExpr a, IType) -> IType -> IExpr a
+buildUndefNoMatchPos :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (BinderPhase e) ->
+                        (IExpr (BinderPhase e), IType) -> IType -> IExpr (BinderPhase e)
 buildUndefNoMatchPos flags r env (e, t_e) t =
     IAps bu [t] [IAps gp [t_e] [e], iuNoMatchExpr]
   where bu = iConvVar flags r env idBuildUndef

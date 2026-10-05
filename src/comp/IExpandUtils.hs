@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleInstances, TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE DataKinds, TypeFamilies #-}
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 module IExpandUtils(
         HPred, PExpr(..), pExprToHExpr, predToIExpr, pConj, pConjs,
         pAtom, pIf, pSel, normPConj,
@@ -155,10 +157,10 @@ doTraceATFCacheMiss = doTraceATFCache || elem "-trace-atf-cache-miss" progArgs
 
 -----------------------------------------------------------------------------
 
-type HPred = Pred HeapData
+type HPred = Pred Elab
 
-pAtom :: IExpr a -> Pred a
-pAtom e = if isTrue e then pTrue else PConj (S.singleton (PAtom e))
+pAtom :: KnownPhase a => IExpr a -> Pred a
+pAtom e = if isTrue e then pTrue else PConj (S.singleton (PTermKey (PAtom e)))
 
 -- we're wrapping this in the G monad because pIf' should be in IO
 -- using unsafePeformIO inside of it is a performance hack
@@ -185,7 +187,7 @@ pIf'' c t@(PConj ts) e@(PConj es) =
         ts' = ts `S.difference` te
         es' = es `S.difference` te
     in  if ts' == es' then t
-        else PConj (S.insert (PIf c (PConj ts') (PConj es')) te)
+        else PConj (S.insert (PTermKey (PIf c (PConj ts') (PConj es'))) te)
 
 pSel :: HExpr -> Integer -> [HPred] -> HPred
 pSel idx idx_sz es =
@@ -194,7 +196,7 @@ pSel idx idx_sz es =
       ps' = map (\ e -> (getP e) `S.difference` common_ps) es
   in  if (all S.null ps')
       then PConj common_ps
-      else PConj (S.insert (PSel idx idx_sz (map PConj ps')) common_ps)
+      else PConj (S.insert (PTermKey (PSel idx idx_sz (map PConj ps'))) common_ps)
 
 pConj :: Pred a -> Pred a -> Pred a
 pConj p1@(PConj ts1) p2@(PConj ts2)
@@ -229,41 +231,43 @@ normPConj p = return $ normPConj' p
 normPConj' :: HPred -> HPred
 normPConj' (PConj ps) =
     let
-        un (PConj ps) = S.toList ps
+        un (PConj ps) = map unPTermKey (S.toList ps)
+        mk = PConj . S.fromList . map PTermKey
 
         f p@(PAtom _) = if p `elem` as then [] else [p]
         f (PIf c (PConj ts) (PConj es)) = un (pIf' c ts_norm es_norm)
-          where ts' = map f (S.toList ts)
-                ts_norm = PConj (S.fromList (concat ts'))
-                es' = map f (S.toList es)
-                es_norm = PConj (S.fromList (concat es'))
+          where ts' = map (f . unPTermKey) (S.toList ts)
+                ts_norm = mk (concat ts')
+                es' = map (f . unPTermKey) (S.toList es)
+                es_norm = mk (concat es')
         f (PSel idx idx_sz es) = un (pSel idx idx_sz es_norm)
           where es' = map (map f . un) es
-                es_norm = map (PConj . S.fromList . concat) es'
+                es_norm = map (mk . concat) es'
 
         -- the atoms
-        (as, if_or_sels) = partition isPAtom (S.toList ps)
+        (as, if_or_sels) = partition isPAtom (map unPTermKey (S.toList ps))
 
         -- merge all the PIf with common conditions
+        -- (keyed by the condition, in the structural order)
         ifmap = M.fromListWith pairConj
-                    [(c, (t, e)) | PIf c t e <- if_or_sels ]
-        mifs = [ PIf c t e | (c, (t, e)) <- M.toList ifmap ]
+                    [(ExprKey c, (t, e)) | PIf c t e <- if_or_sels ]
+        mifs = [ PIf c t e | (ExprKey c, (t, e)) <- M.toList ifmap ]
         -- remove the atoms that are already covered, and simplify
         mifs' = map f mifs
 
         -- merge all the PSel with common indices
         selmap = M.fromListWith listConj
-                     [((idx, idx_sz), es) | PSel idx idx_sz es <- if_or_sels ]
-        msels = [ PSel idx idx_sz es | ((idx, idx_sz), es) <- M.toList selmap ]
+                     [((ExprKey idx, idx_sz), es) | PSel idx idx_sz es <- if_or_sels ]
+        msels = [ PSel idx idx_sz es | ((ExprKey idx, idx_sz), es) <- M.toList selmap ]
         -- remove the atoms that are already covered, and simplify
         msels' = map f msels
 
-    in PConj (S.fromList (as ++ concat mifs' ++ concat msels'))
+    in mk (as ++ concat mifs' ++ concat msels')
 
-predToIExpr :: Pred a -> IExpr a
-predToIExpr (PConj es) = foldr (ieAnd . pTermToIExpr) iTrue (S.toList es)
+predToIExpr :: KnownPhase a => Pred a -> IExpr a
+predToIExpr (PConj es) = foldr (ieAnd . pTermToIExpr . unPTermKey) iTrue (S.toList es)
 
-pTermToIExpr :: PTerm a -> IExpr a
+pTermToIExpr :: KnownPhase a => PTerm a -> IExpr a
 pTermToIExpr (PAtom e) = e
 pTermToIExpr (PIf c t e) = ieIfx itBit1 c (predToIExpr t) (predToIExpr e)
 pTermToIExpr (PSel idx idx_sz es) =
@@ -272,7 +276,7 @@ pTermToIExpr (PSel idx idx_sz es) =
 
 -- An expression with an implicit condition.
 data PExpr = P !HPred HExpr
-        deriving (Eq, Ord, Show)
+        deriving (Eq, Show)
 
 instance PPrint PExpr where
     pPrint d prec (P p e) = pPrint d prec (iePrimWhen (iGetType e) (predToIExpr p) e)
@@ -420,7 +424,7 @@ data HeapCell = HUnev { hc_hexpr :: HExpr, hc_name :: NameInfo }
               | HNF { hc_pexpr :: PExpr, hc_wire_set :: HWireSet,
                       hc_name :: NameInfo }
               | HLoop { hc_name :: NameInfo }
-        deriving (Show, Eq, Ord)
+        deriving (Show, Eq)
 
 -- should I drop the predicate for better printing of error messages?
 heapCellToHExpr :: HeapCell -> HExpr
@@ -450,6 +454,9 @@ instance PPrint HeapCell where
 
 newtype HeapData = HeapData (IORef (HeapCell))
 
+-- the evaluator's phase is the one with a heap
+type instance Ref Elab = HeapData
+
 {-
 instance Eq HeapData where
   (==) a b = True
@@ -469,19 +476,20 @@ instance PPrint HeapData where
 instance NFData HeapData where
   rnf (HeapData r) = seq r ()
 
--- Heap expressions are IExprs with the real heap reference type filled in
-type HExpr = IExpr HeapData
+-- Heap expressions are IExprs at the evaluator's phase (the one whose
+-- heap references carry HeapData)
+type HExpr = IExpr Elab
 
 -- other useful synonyms
-type HClock = IClock HeapData
-type HReset = IReset HeapData
-type HInout = IInout HeapData
-type HStateVar = IStateVar HeapData
-type HRules = IRules HeapData
-type HWireSet = IWireSet HeapData
-type HRule = IRule HeapData
-type HDef = IDef HeapData
-type HEFace = IEFace HeapData
+type HClock = IClock Elab
+type HReset = IReset Elab
+type HInout = IInout Elab
+type HStateVar = IStateVar Elab
+type HRules = IRules Elab
+type HWireSet = IWireSet Elab
+type HRule = IRule Elab
+type HDef = IDef Elab
+type HEFace = IEFace Elab
 
 type RulesBlobs = [(Bool, (HClock, HReset), IStateLoc, HPred, HExpr)]
 
@@ -3520,7 +3528,7 @@ instance Wireable HExpr where
 
   extractWires _ = return ?z
 
-instance Wireable (PTerm HeapData) where
+instance Wireable (PTerm Elab) where
   extractWires (PAtom e) = extractWires e
   extractWires (PIf c t e) = do ws1 <- extractWires c
                                 ws2 <- extractWires t
@@ -3531,7 +3539,7 @@ instance Wireable (PTerm HeapData) where
                                     return (?jn (ws1:wss))
 
 instance Wireable HPred where
-  extractWires (PConj ps) = do wss <- mapM extractWires (S.toList ps)
+  extractWires (PConj ps) = do wss <- mapM (extractWires . unPTermKey) (S.toList ps)
                                return (?jn wss)
 
 instance Wireable PExpr where

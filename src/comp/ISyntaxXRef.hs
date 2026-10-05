@@ -1,6 +1,9 @@
+{-# LANGUAGE MonoLocalBinds #-}
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 module ISyntaxXRef(
                    updateIExprPosition,
                    mapIExprPosition,
+                   mapIExprPositionRef,
                    mapIExprPosition2,
                    mapIExprPositionConservative
                   ) where
@@ -15,7 +18,7 @@ import Position(Position, noPosition, isUsefulPosition)
 -- #
 -- #############################################################################
 
-updateIExprPosition :: Position -> IExpr a -> IExpr a
+updateIExprPosition :: KnownPhase a => Position -> IExpr a -> IExpr a
 updateIExprPosition pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
 updateIExprPosition pos (IAps e ts [e0]) = (IAps (updateIExprPosition pos e) ts [(updateIExprPosition pos e0)])
 updateIExprPosition pos (IAps e ts es) = (IAps (updateIExprPosition pos e) ts es)
@@ -32,7 +35,7 @@ updateIExprPosition pos (IRefT t p poss r) = (IRefT t p poss' r)
   where poss' = S.insert pos poss
 
 
-updateIExprPosition2 :: Position -> IExpr a -> IExpr a
+updateIExprPosition2 :: KnownPhase a => Position -> IExpr a -> IExpr a
 updateIExprPosition2 pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition pos e))
 updateIExprPosition2 pos iexpr@(IAps e@(ICon i (ICCon _ _)) ts [e0]) =
     if (not (isUsefulPosition (getIdPosition i)))
@@ -51,7 +54,7 @@ updateIExprPosition2 pos (ICon i info) = (ICon (setIdPosition pos i) info)
 updateIExprPosition2 pos (IRefT t p poss r) = (IRefT t p poss' r)
   where poss' = S.insert pos poss
 
-mapIExprPosition :: Bool -> (IExpr a, IExpr a) -> IExpr a
+mapIExprPosition :: KnownPhase a => Bool -> (IExpr a, IExpr a) -> IExpr a
 mapIExprPosition False (expr_0, expr_1) = expr_1
 mapIExprPosition True (expr_0, expr_1) =
     let positionModel = (getIExprPositionCross expr_0)
@@ -66,7 +69,23 @@ mapIExprPosition True (expr_0, expr_1) =
                          in expr
                     else (updateIExprPosition positionModel expr_1)
 
-mapIExprPosition2 :: Bool -> (IExpr a, IExpr a) -> IExpr a
+-- mapIExprPosition for a model that is a heap reference (of any phase):
+-- a reference is never equivalent to any node of the rebuilt expression
+-- (equivIExprs holds only between two references with the same pointer,
+-- and the rebuilt side has none), so the equivalence search above is
+-- vacuous and only the reference's own position is consulted.
+mapIExprPositionRef :: KnownPhase b => Bool -> (IExpr a, IExpr b) -> IExpr b
+mapIExprPositionRef False (expr_0, expr_1) = expr_1
+mapIExprPositionRef True (expr_0, expr_1) =
+    let positionModel = (getIExprPositionCross expr_0)
+    in if (positionModel == noPosition) || (not (isUsefulPosition positionModel))
+       then expr_1
+       else let positionCurrent = (getIExprPositionCross expr_1)
+            in if (positionModel == positionCurrent)
+               then expr_1
+               else (updateIExprPosition positionModel expr_1)
+
+mapIExprPosition2 :: KnownPhase a => Bool -> (IExpr a, IExpr a) -> IExpr a
 mapIExprPosition2 False (expr_0, expr_1) = expr_1
 mapIExprPosition2 True (expr_0, expr_1) =
     let positionModel = (getIExprPositionCross expr_0)
@@ -81,7 +100,7 @@ mapIExprPosition2 True (expr_0, expr_1) =
                          in expr
                     else (updateIExprPosition2 positionModel expr_1)
 
-mapIExprPositionConservative :: Bool -> (IExpr a,IExpr a) -> IExpr a
+mapIExprPositionConservative :: KnownPhase a => Bool -> (IExpr a,IExpr a) -> IExpr a
 mapIExprPositionConservative False (expr_0, expr_1) = expr_1
 mapIExprPositionConservative True (expr_0, expr_1) =
     let positionModel = (getIExprPositionCross expr_0)
@@ -100,7 +119,7 @@ mapIExprPositionConservative True (expr_0, expr_1) =
 -- #
 -- #############################################################################
 
-isEquivIExprIncluded :: IExpr a -> IExpr a -> Bool
+isEquivIExprIncluded :: KnownPhase a => IExpr a -> IExpr a -> Bool
 isEquivIExprIncluded sub_expr expr@(ILam i t e) =
     ((equivIExprs expr sub_expr) || (isEquivIExprIncluded sub_expr e))
 isEquivIExprIncluded sub_expr expr@(IAps e ts es) =
@@ -118,7 +137,7 @@ isEquivIExprIncluded sub_expr expr@(IRefT t p poss r) =
 -- #
 -- #############################################################################
 
-extractEquivIExpr :: IExpr a -> IExpr a -> [IExpr a]
+extractEquivIExpr :: KnownPhase a => IExpr a -> IExpr a -> [IExpr a]
 extractEquivIExpr sub_expr expr@(ILam i t e) = if (equivIExprs sub_expr expr)
                                                then [expr]
                                                else (extractEquivIExpr sub_expr e)
@@ -147,7 +166,7 @@ extractEquivIExpr sub_expr expr@(IRefT t p poss r) =  if (equivIExprs sub_expr e
 -- #
 -- #############################################################################
 
-equivIExprs :: IExpr a -> IExpr a -> Bool
+equivIExprs :: KnownPhase a => IExpr a -> IExpr a -> Bool
 equivIExprs e0@(ILam i0 t0 ee0) e1@(ILam i1 t1 ee1) = ((equivId i0 i1) && (t0 == t1) && (ee0 == ee1))
 equivIExprs e0@(IAps ee0 ts0 es0) e1@(IAps ee1 ts1 es1) = ((equivIExprs ee0 ee1) && (ts0 == ts1) && (es0 == es1))
 equivIExprs e0@(IVar i0) e1@(IVar i1) = (equivId i0 i1)
