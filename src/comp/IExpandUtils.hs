@@ -78,6 +78,7 @@ import qualified Data.Array as Array
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified IdMap
+import qualified IdSet
 
 import Eval
 import PPrint
@@ -2875,9 +2876,9 @@ toHeap _   _ e@(ICon _ _)      _ = return e
 toHeap _   _ e@(IRefT _ _ _ _) _ = return e
 toHeap tag t e cell_name = do
         -- these errors have never happened, disable checks for now.
-        when (doDebugFreeVars && not (S.null (fVars e))) $
+        when (doDebugFreeVars && not (IdSet.null (fVars e))) $
              internalError ("toHeap: fv " ++ ppReadable (fVars e) ++ ppReadable e)
-        when (doDebugFreeVars && not (S.null (ftVars e))) $
+        when (doDebugFreeVars && not (IdSet.null (ftVars e))) $
              internalError ("toHeap: ftv " ++ ppReadable (ftVars e) ++ ppReadable e)
         addHeapUnev tag t e cell_name
 

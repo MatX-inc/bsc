@@ -36,6 +36,7 @@ import qualified Data.IntMap as IM
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified IdSet
 import Debug.Trace(traceM)
 
 import FileIOUtil(openFileCatch, hCloseCatch, hFlushCatch, hGetBufferingCatch,
@@ -1871,12 +1872,12 @@ updNStateVars n = do
 chkStateVarTypes :: Id -> IType -> [[IType]] -> G ()
 chkStateVarTypes i t tss = do
     let allTypes = t : concat tss
-        ftvs = S.unions (map fTVars allTypes)
+        ftvs = IdSet.unions (map fTVars allTypes)
         atfs = concatMap findATFs allTypes
-    when (not (S.null ftvs)) $
+    when (not (IdSet.null ftvs)) $
         internalError $ "IExpand.newState: state variable " ++
             ppReadable i ++ " has free type variables: " ++
-            ppReadable (S.toList ftvs) ++
+            ppReadable (IdSet.toList ftvs) ++
             " in types: " ++ ppReadable allTypes
     when (not (null atfs)) $
         internalError $ "IExpand.newState: state variable " ++

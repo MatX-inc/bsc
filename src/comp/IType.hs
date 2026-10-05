@@ -23,6 +23,8 @@ import Prelude hiding ((<>))
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import IdSet(IdSet)
+import qualified IdSet
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.Maybe(isJust, fromJust)
 import System.IO.Unsafe(unsafePerformIO)
@@ -117,37 +119,48 @@ pattern ITCon i k s <- ITCon_ i k s
 
 -- The set representation used for the cached free-variable metadata
 -- and for substitution-domain checks.  Kept behind a small API so the
--- representation can be specialized in one place.
-type VarSet = S.Set Id
+-- representation can be specialized in one place.  An IdSet: nothing
+-- enumerates these sets in key order (membership, union, delete, and
+-- cloneId's avoid-list, which reads only base FStrings).
+type VarSet = IdSet
 
 vsEmpty :: VarSet
-vsEmpty = S.empty
+vsEmpty = IdSet.empty
 
 -- Canonicalization table for the free-variable sets stored on
 -- interned nodes.  The node table is immortal, so it amplifies every
 -- duplicate set: canonicalizing by content keeps one copy of each
 -- distinct set (thousands of tiny sets like {e,m} otherwise pile up,
 -- one per polymorphic node).  Same global-table posture as the node
--- intern table; keyed by the set itself (Set's Ord is by content).
--- Id's Ord (base name, then qualifier; positions and props ignored)
--- is the right granularity for that key: the sets never serialize,
--- and their consumers -- membership checks and alpha-conversion
--- avoid-lists (cloneId reads only base FStrings) -- never look at
--- the Id positions or props.
+-- intern table; keyed by the set's content.  Id's Ord (base name,
+-- then qualifier; positions and props ignored) is the right
+-- granularity for that key: the sets never serialize, and their
+-- consumers -- membership checks and alpha-conversion avoid-lists
+-- (cloneId reads only base FStrings) -- never look at the Id
+-- positions or props.
+--
+-- The key is the underlying Data.Set (IdSet.toSet, a coerce): a
+-- search tree needs a total order on its keys, and this one is a
+-- search structure only -- a lookup by content equality, nothing is
+-- ever enumerated from it -- so the intern-order Ord is inert here.
+-- IdSet has no Ord by design (IdSet.hs tier N), so this is the one
+-- place the swap keeps a Data.Set key; replacing it is a module
+-- decision (an order-free canonicalisation key), not a site one.
 {-# NOINLINE vsCanonTable #-}
-vsCanonTable :: IORef (M.Map VarSet VarSet)
+vsCanonTable :: IORef (M.Map (S.Set Id) VarSet)
 vsCanonTable = unsafePerformIO $ newIORef M.empty
 
 {-# NOINLINE vsCanon #-}
 vsCanon :: VarSet -> VarSet
 vsCanon x = unsafePerformIO $ do
     m0 <- readIORef vsCanonTable
-    case M.lookup x m0 of
+    case M.lookup k m0 of
       Just c  -> return c
       Nothing -> atomicModifyIORef' vsCanonTable go
-  where go m = case M.lookup x m of
+  where k = IdSet.toSet x
+        go m = case M.lookup k m of
                  Just c  -> (m, c)
-                 Nothing -> (M.insert x x m, x)
+                 Nothing -> (M.insert k x m, x)
 
 -- Union and delete for sets about to be STORED on an interned node:
 -- the arms that can only return an existing set (empty sides, absent
@@ -156,33 +169,33 @@ vsCanon x = unsafePerformIO $ do
 -- canonicalized.
 vsUnionCanon :: VarSet -> VarSet -> VarSet
 vsUnionCanon a b
-    | S.null a = b
-    | S.null b = a
-    | otherwise = vsCanon (S.union a b)
+    | IdSet.null a = b
+    | IdSet.null b = a
+    | otherwise = vsCanon (IdSet.union a b)
 
 vsDeleteCanon :: Id -> VarSet -> VarSet
 vsDeleteCanon i vs
-    | not (S.member i vs) = vs
-    | otherwise = let vs' = S.delete i vs
-                  in  if S.null vs' then vsEmpty else vsCanon vs'
+    | not (IdSet.member i vs) = vs
+    | otherwise = let vs' = IdSet.delete i vs
+                  in  if IdSet.null vs' then vsEmpty else vsCanon vs'
 
 vsSingleton :: Id -> VarSet
-vsSingleton = S.singleton
+vsSingleton = IdSet.singleton
 
 vsUnion :: VarSet -> VarSet -> VarSet
-vsUnion = S.union
+vsUnion = IdSet.union
 
 vsInsert :: Id -> VarSet -> VarSet
-vsInsert = S.insert
+vsInsert = IdSet.insert
 
 vsDelete :: Id -> VarSet -> VarSet
-vsDelete = S.delete
+vsDelete = IdSet.delete
 
 vsMember :: Id -> VarSet -> Bool
-vsMember = S.member
+vsMember = IdSet.member
 
 vsNull :: VarSet -> Bool
-vsNull = S.null
+vsNull = IdSet.null
 
 -- The free-variable set used by the substitution machinery: interior
 -- nodes answer from their cached field, leaves directly.  When the
@@ -202,8 +215,8 @@ fTVarSet t0 | ftvCacheEnabled = cached t0
         leaf (ITVar i) = vsSingleton i
         leaf _ = vsEmpty
 
--- Free type variables as a Set Id (the historical interface).
-fTVars :: IType -> S.Set Id
+-- Free type variables as an IdSet (the historical interface).
+fTVars :: IType -> IdSet
 fTVars = fTVarSet
 
 -- --------------------------------

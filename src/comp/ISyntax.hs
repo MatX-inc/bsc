@@ -108,6 +108,8 @@ import Position
 import Data.Maybe
 
 import qualified Data.Set as S
+import IdSet(IdSet)
+import qualified IdSet
 import Flags
 import Error(internalError, EMsg, ErrMsg(..))
 import PFPrint
@@ -417,13 +419,13 @@ checkRUnionAttributes (IRules sps1 rs1) (IRules sps2 rs2) =
 -- now performed by the ITAp smart constructor itself; see
 -- IType.mkITAp.
 
-aTVars :: IType -> S.Set Id
-aTVars (ITForAll i _ t) = S.insert i (aTVars t)
-aTVars (ITAp f a) = (aTVars f) `S.union` (aTVars a)
-aTVars (ITVar i) = S.singleton i
-aTVars (ITCon _ _ _) = S.empty
-aTVars (ITNum _) = S.empty
-aTVars (ITStr _) = S.empty
+aTVars :: IType -> IdSet
+aTVars (ITForAll i _ t) = IdSet.insert i (aTVars t)
+aTVars (ITAp f a) = (aTVars f) `IdSet.union` (aTVars a)
+aTVars (ITVar i) = IdSet.singleton i
+aTVars (ITCon _ _ _) = IdSet.empty
+aTVars (ITNum _) = IdSet.empty
+aTVars (ITStr _) = IdSet.empty
 
 -- fTVars now lives in IType (answered from the free-variable sets
 -- cached on interned nodes) and is re-exported here.
@@ -976,58 +978,58 @@ isIConParam _ = False
 -- --------------------
 
 -- All variables
-aVars :: IExpr a -> S.Set Id
-aVars (ILam i t e) = S.insert i (aVars e `S.union` fTVars t)
-aVars (IVar i) = S.singleton i
-aVars (ILAM i _ e) = S.insert i (aVars e)
-aVars (IAps f ts es) = (aVars f) `S.union`
-                        (S.unions (map fTVars ts)) `S.union`
-                        (S.unions (map aVars es))
+aVars :: IExpr a -> IdSet
+aVars (ILam i t e) = IdSet.insert i (aVars e `IdSet.union` fTVars t)
+aVars (IVar i) = IdSet.singleton i
+aVars (ILAM i _ e) = IdSet.insert i (aVars e)
+aVars (IAps f ts es) = (aVars f) `IdSet.union`
+                        (IdSet.unions (map fTVars ts)) `IdSet.union`
+                        (IdSet.unions (map aVars es))
 aVars (ICon _ (ICUndet {imVal = Just e})) = aVars e
-aVars (ICon _ _) = S.empty  -- XXX
-aVars (IRefT _ _ _ _) = S.empty
+aVars (ICon _ _) = IdSet.empty  -- XXX
+aVars (IRefT _ _ _ _) = IdSet.empty
 
 -- --------------------
 
 -- Free variables
-fVars :: IExpr a -> S.Set Id
-fVars (ILam i _ e) = S.delete i (fVars e)
-fVars (IVar i) = S.singleton i
+fVars :: IExpr a -> IdSet
+fVars (ILam i _ e) = IdSet.delete i (fVars e)
+fVars (IVar i) = IdSet.singleton i
 fVars (ILAM _ _ e) = fVars e
-fVars (IAps f ts es) = fVars f `S.union` (S.unions (map fVars es))
+fVars (IAps f ts es) = fVars f `IdSet.union` (IdSet.unions (map fVars es))
 fVars (ICon _ (ICUndet {imVal = Just e})) = fVars e
-fVars (ICon _ _) = S.empty
-fVars (IRefT _ _ _ _) = S.empty
+fVars (ICon _ _) = IdSet.empty
+fVars (IRefT _ _ _ _) = IdSet.empty
 
 -- --------------------
 
 -- All definitions and variables
 fdVars :: IExpr a -> [Id]
-fdVars e = S.toList (fdVars' e)
+fdVars e = IdSet.toList (fdVars' e)
 
-fdVars' :: IExpr a -> S.Set Id
+fdVars' :: IExpr a -> IdSet
 fdVars' (ILam i _ e) = fdVars' e
-fdVars' (IVar i) = S.singleton i
+fdVars' (IVar i) = IdSet.singleton i
 fdVars' (ILAM _ _ e) = fdVars' e
-fdVars' (IAps f ts es) = fdVars' f `S.union` (S.unions (map fdVars' es))
-fdVars' (ICon i (ICDef { })) = S.singleton i
-fdVars' (ICon i (ICValue { })) = S.singleton i
+fdVars' (IAps f ts es) = fdVars' f `IdSet.union` (IdSet.unions (map fdVars' es))
+fdVars' (ICon i (ICDef { })) = IdSet.singleton i
+fdVars' (ICon i (ICValue { })) = IdSet.singleton i
 fdVars' (ICon i (ICUndet {imVal = Just e})) = fdVars' e
-fdVars' (ICon _ _) = S.empty
-fdVars' (IRefT _ _ _ _) = S.empty
+fdVars' (ICon _ _) = IdSet.empty
+fdVars' (IRefT _ _ _ _) = IdSet.empty
 
 -- --------------------
 
 -- Free type variables
-ftVars :: IExpr a -> S.Set Id
+ftVars :: IExpr a -> IdSet
 ftVars (ILam i _ e) = ftVars e
-ftVars (IVar i) = S.empty
-ftVars (ILAM i _ e) = S.delete i (ftVars e)
-ftVars (IAps f ts es) = (ftVars f) `S.union` (S.unions (map fTVars ts))
-                                     `S.union` (S.unions (map ftVars es))
+ftVars (IVar i) = IdSet.empty
+ftVars (ILAM i _ e) = IdSet.delete i (ftVars e)
+ftVars (IAps f ts es) = (ftVars f) `IdSet.union` (IdSet.unions (map fTVars ts))
+                                     `IdSet.union` (IdSet.unions (map ftVars es))
 ftVars (ICon _ (ICUndet {imVal = Just e})) = ftVars e
-ftVars (ICon _ _) = S.empty                -- XXX
-ftVars (IRefT _ _ _ _) = S.empty
+ftVars (ICon _ _) = IdSet.empty                -- XXX
+ftVars (IRefT _ _ _ _) = IdSet.empty
 
 -- ============================================================
 -- PPrint (for those instances not defined alongside the type, above)
