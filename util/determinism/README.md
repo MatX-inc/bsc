@@ -45,7 +45,14 @@ outputs too, so it needs `inst/bin/dumpbo` and friends:
 also be given as positional arguments, `run-gate.sh <inst-dir>
 <archive-root>`, and anything starting with `--` is passed on to
 `compare.py`.  The archives are about 4 GB per pass, so point `GATE_OUT`
-at a disk with room.
+at a disk with room.  Both may be inside the checkout, as the defaults
+(`inst/`, `build/determinism/`) and CI's layout are: the concurrent
+passes, which see a temporary worktree at the checkout's path, get those
+directories passed through (see [How the passes
+run](#how-the-passes-run)).  Neither may be the checkout itself or
+anything under `testsuite/`, where a pass's `git clean` would delete it.
+Any other directory under the checkout that the passes must see as it
+is, a `CCACHE_DIR` inside it for instance, goes in `GATE_PASSTHROUGH`.
 
 ### How long it takes
 
@@ -58,24 +65,24 @@ each (`JOBS=32`, the default there):
 |---|---|---|---|---|
 | first in the archive root (no timing table, directory order) | 41 / 18, peak 57 | 1012 s | 1003 s | 1023 s |
 | second (slowest tests first, from the first run's table) | 15 / 30, peak 34 | 502 s | 508 s | 514 s |
+| third, CI's layout (`inst/` and `gate-out/` inside the checkout, no arguments; slowest first, from an earlier table), the machine otherwise idle | 1 / 28, peak 37 | 453 s | 458 s | 462 s |
 
-A pass's time is `make clean`, the test list, the suite (`make`: 937 s
-and 475 s) and the archiving; the gate's time runs from the start of
-`run-gate.sh` to the `compare.py` verdict, two worktree checkouts
+A pass's time is `make clean`, the test list, the suite (`make`: 937 s,
+475 s and 427 s) and the archiving; the gate's time runs from the start
+of `run-gate.sh` to the `compare.py` verdict, two worktree checkouts
 included.  The second run's longest test directory
 (`bsc.bugs/perf-creg-blowup`, 414 s of its own) is most of its pass:
 with the slowest tests first, a pass is close to the floor of its
 longest test.  The serial gate this replaces took 4318 s and 4368 s for
 its two passes of the same suite (the 2026-10-04 baseline run, bsc
-71e1b19b): two hours and twenty-five minutes against eight and a half
-minutes.
+71e1b19b): two hours and twenty-five minutes against eight minutes.
 
-Both runs gave the same test results (normal 39731 pass, 2 fail;
+All three runs gave the same test results (normal 39731 pass, 2 fail;
 reversed 39541 pass, 192 fail), the same archives (40422 and 40594
-files, 4.1 GB each; the normal archives of the two runs hold exactly the
+files, 4.1 GB each; the normal archives of the runs hold exactly the
 same paths) and the same verdict against this allow-list: 13224
-differences allowed, 125 entries stale and 15 (first run) or 17 (second)
-files new.  The stale entries are the 124 `*.filtered` leftovers
+differences allowed, 125 entries stale and 15 (first run), 17 (second)
+or 19 (third) files new.  The stale entries are the 124 `*.filtered` leftovers
 explained under [Equivalence](#equivalence-with-the-serial-mode) plus
 `bsc.interra/OVL/assertFrame3/assertFrame3.bsc-vcomp-out`, identical
 now.  The new files are the 14 `.bo`, `.ba`, dump and transcript files
@@ -133,12 +140,26 @@ private mount namespace with its worktree bind-mounted over this
 checkout's path (`unshare --user --mount`), and `setpriv` then drops the
 namespace's capabilities so that file modes keep their meaning for the
 tests that make files unreadable (a user namespace's root would read
-them).  A pre-flight probe tries exactly that; where unprivileged user
-namespaces are not available the passes run one after the other in this
-checkout, which `SEQUENTIAL=1` asks for explicitly.  The temporary
-worktrees check out HEAD: uncommitted changes under `testsuite/` are not
-in them (the script warns), while `archive-pass.sh` itself runs from a
-copy of this checkout's version.
+them).  That mount would also hide anything under the checkout's path
+that a pass needs, and the installation and the archive root usually
+are (`inst/` and `build/determinism/` by default, `$GITHUB_WORKSPACE/inst`
+and `$GITHUB_WORKSPACE/gate-out` in CI): so each namespace first binds
+the real checkout to an empty alias directory (`mktemp -d`, a mount
+point only), mounts the worktree over the checkout's path, and then
+binds each such directory from the alias back over its own path, created
+in the worktree when it is not there (which `inst/` and `build/`,
+git-ignored, are not).  Inside, `pwd -P` of every path is unchanged, the
+real `inst/bin/bsc` is at its path, and what a pass writes under the
+archive root lands in the real one.  `GATE_PASSTHROUGH` adds directories
+to that list.  A pre-flight probe tries exactly that, pass-throughs
+included (the tree at the path, `pwd -P`, a mode-000 file unreadable,
+every pass-through directory the real one by device and inode, the
+install's `bsc` visible, a write to the archive root landing); where it
+does not work, as without unprivileged user namespaces, the passes run
+one after the other in this checkout, which `SEQUENTIAL=1` asks for
+explicitly.  The temporary worktrees check out HEAD: uncommitted changes
+under `testsuite/` are not in them (the script warns), while
+`archive-pass.sh` itself runs from a copy of this checkout's version.
 
 ### Knobs
 
@@ -147,7 +168,8 @@ copy of this checkout's version.
 | `JOBS` | the CPU count | `make -j` for the suite; concurrent passes get half each, sequential passes all of it |
 | `SEQUENTIAL=1` | off | the passes one after the other in this checkout, with all the jobs; also the automatic fallback |
 | `KEEP_TREES=1` | off | keep `<archive-root>/trees/{normal,reversed}` after the run |
-| `GATE_TIMING` | `<archive-root>/timing.txt` | a timing table (`_log/timing.txt` of an earlier pass; every run leaves its normal pass's table at the default) that starts the slowest test directories first; the first run in an archive root has none and starts them in directory order |
+| `GATE_TIMING` | `<archive-root>/timing.txt` | a timing table (`_log/timing.txt` of an earlier pass; every run leaves its normal pass's table at the default) that starts the slowest test directories first; the first run in an archive root has none and starts them in directory order.  A table named explicitly is copied to `<archive-root>/timing.txt` first, which is where the passes read it |
+| `GATE_PASSTHROUGH` | empty | further directories under the checkout that the concurrent passes must see as they really are (created if missing); the installation and the archive root are always passed through when they are inside |
 | `SERIAL=1` | off | `archive-pass.sh`'s original mode, one `make <group>.group` at a time, for comparison: the same archive plus the `.filtered` leftovers described below, three times slower in the three-group measurement below and eight times for the full suite (4318 s against 502 s per pass) |
 | `ONLY_GROUPS` | all | the groups to run, see below |
 
@@ -246,6 +268,24 @@ The `groups` input narrows each bundle to the groups named and drops the
 bundles left empty.  Every gate job uploads its compare outputs and, on a
 failure, `new-files.tar.gz` with both copies of each file in `compare.new`.
 A job fails on any non-zero exit from `run-gate.sh`.
+
+The workflow keeps everything under the workspace: `GATE_OUT` is
+`$GITHUB_WORKSPACE/gate-out`, `TEST_RELEASE` is `$GITHUB_WORKSPACE/inst`
+(the unpacked build artifact) and `CCACHE_DIR` is
+`$GITHUB_WORKSPACE/ccache`.  The first two are passed through to the
+concurrent passes as described under [How the passes
+run](#how-the-passes-run), so that layout runs the parallel gate as it
+is (measured 2026-10-05 with exactly that layout on the 32-core machine:
+see [How long it takes](#how-long-it-takes)).  `CCACHE_DIR` is not an
+argument of the gate, so inside a pass's namespace that path is the
+temporary worktree's: whatever the passes write there goes with the
+worktree, and the cache the job restored and saves is not the one they
+use.  When the workflow is brought over it should set `GATE_PASSTHROUGH:
+${{ github.workspace }}/ccache` next to `CCACHE_DIR`, or move the cache
+outside the workspace (`${{ runner.temp }}/ccache`).  Where the runner
+has no unprivileged user namespaces the probe says so in the job log and
+the passes run one after the other in the workspace, with the same
+paths.
 
 ### Scope
 

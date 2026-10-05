@@ -21,16 +21,22 @@
 # worktree is bind-mounted over this checkout's path (unshare --user
 # --mount), and setpriv then drops the namespace's capabilities, so that
 # file modes keep their meaning for the tests that make files unreadable
-# (a user namespace's root would read them).  A pre-flight probe tries
-# exactly that; where it is not available (no unprivileged user
-# namespaces), the passes run one after the other in this checkout with all
-# the jobs, which SEQUENTIAL=1 asks for explicitly.
+# (a user namespace's root would read them).  The installation and the
+# archive root may be under this checkout (the defaults are, and so is CI's
+# layout): the mount would hide them, so the real checkout is first bound
+# to an alias directory and each such directory is then bound back from
+# the alias to its own path, over the temporary worktree (so are the
+# directories named in GATE_PASSTHROUGH).  A pre-flight probe tries exactly
+# that, pass-throughs included; where it does not work (no unprivileged
+# user namespaces), the passes run one after the other in this checkout
+# with all the jobs, which SEQUENTIAL=1 asks for explicitly.
 #
 #   <inst-dir>      the bsc installation to test; defaults to $TEST_RELEASE,
 #                   then <worktree>/inst
 #   <archive-root>  defaults to $GATE_OUT, then <worktree>/build/determinism;
 #                   a previous run's normal/, reversed/, trees/, pass-*.log
-#                   and compare.* there are removed first
+#                   and compare.* there are removed first.  Neither may be
+#                   the checkout itself or anything under its testsuite/
 #   options starting with '--' are passed on to compare.py, e.g.
 #   --allow-stale, --root-counts, --write-allowlist F, --jobs N
 #
@@ -50,7 +56,14 @@
 #                         first); default <archive-root>/timing.txt, which
 #                         every run leaves behind from its normal pass, so the
 #                         second run in an archive root is scheduled by the
-#                         first one's times
+#                         first one's times.  A table named explicitly is
+#                         copied to <archive-root>/timing.txt first, which is
+#                         where the passes read it
+#   GATE_PASSTHROUGH="d1 d2"  further directories under this checkout that
+#                         the concurrent passes must see as they really are
+#                         (a CCACHE_DIR inside the checkout, say); created if
+#                         missing.  The installation and the archive root
+#                         are always passed through when they are inside
 #   TEST_RELEASE, GATE_OUT   defaults for the two positional arguments (CI
 #                         sets these and passes no arguments)
 set -u -o pipefail
@@ -105,41 +118,104 @@ rm -rf "$scratch"
 
 mkdir -p "$root" || die "cannot create '$root'"
 root=$(cd "$root" && pwd -P) || die "cannot enter '$root'"
+[ "$root" != "$worktree" ] || die "the archive root cannot be the checkout itself"
+[ "$inst" != "$worktree" ] || die "the installation cannot be the checkout itself"
+# Under testsuite/ the pass's 'git clean' would delete them (through the
+# pass-through, the real files).
 case $root/ in
   "$worktree"/testsuite/*) die "archive root '$root' is inside the testsuite" ;;
 esac
+case $inst/ in
+  "$worktree"/testsuite/*) die "installation '$inst' is inside the testsuite" ;;
+esac
+
+# The directories under this checkout that the concurrent passes must see
+# as they really are, outermost first (a later mount over an earlier one
+# only re-exposes what the earlier one already showed).
+passthrough=()
+add_passthrough() {  # add_passthrough <dir>: record it when it is inside the checkout
+  local p=$1 q i
+  case $p/ in "$worktree"/*) ;; *) return 0 ;; esac
+  for q in ${passthrough[@]+"${passthrough[@]}"}; do [ "$q" != "$p" ] || return 0; done
+  passthrough+=("$p")
+  # keep the list sorted by path length
+  for ((i = ${#passthrough[@]} - 1; i > 0; i--)); do
+    [ ${#passthrough[i]} -lt ${#passthrough[i-1]} ] || break
+    q=${passthrough[i]}; passthrough[i]=${passthrough[i-1]}; passthrough[i-1]=$q
+  done
+}
+add_passthrough "$inst"
+add_passthrough "$root"
+for p in ${GATE_PASSTHROUGH:-}; do
+  # checked as given before anything is created, and in canonical form after
+  case $p in /*) ;; *) p=$PWD/$p ;; esac
+  case $p/ in "$worktree"/testsuite/*) die "GATE_PASSTHROUGH: '$p' is inside the testsuite" ;; esac
+  mkdir -p "$p" || die "GATE_PASSTHROUGH: cannot create '$p'"
+  p=$(cd "$p" && pwd -P) || die "GATE_PASSTHROUGH: cannot enter '$p'"
+  [ "$p" != "$worktree" ] || die "GATE_PASSTHROUGH: '$p' is the checkout itself"
+  case $p/ in
+    "$worktree"/testsuite/*) die "GATE_PASSTHROUGH: '$p' is inside the testsuite" ;;
+    "$worktree"/*) add_passthrough "$p" ;;
+    *) say "GATE_PASSTHROUGH: $p is not under $worktree, nothing to do" ;;
+  esac
+done
 
 # in_tree_at <tree> <path> <cmd...>: run <cmd> in a private mount namespace
-# with <tree> bind-mounted over <path>.  Only the creator of a user namespace
-# may mount in it, so unshare maps us to its root; setpriv then empties the
-# bounding and inheritable sets, so that nothing exec'd after it holds a
-# capability (uid 0 with none behaves as an ordinary owner towards file
-# modes).  97 is the mount's own failure.
+# with <tree> bind-mounted over <path>, and every directory in $passthrough
+# (all under <path>) still showing its real contents: the real <path> is
+# bound to $alias first, and each pass-through directory is then bound from
+# there over its own path (created in <tree> when it does not exist there;
+# the git-ignored inst/ and build/, usually).  Only the creator of a user
+# namespace may mount in it, so unshare maps us to its root; setpriv then
+# empties the bounding and inheritable sets, so that nothing exec'd after
+# it holds a capability (uid 0 with none behaves as an ordinary owner
+# towards file modes).  97 is a mount's own failure.
 in_tree_at() {
   local tree=$1 path=$2; shift 2
   unshare --user --map-root-user --mount -- sh -c '
-    mount --bind "$1" "$2" || exit 97
-    shift 2
-    exec setpriv --bounding-set=-all --inh-caps=-all -- "$@"' in_tree_at "$tree" "$path" "$@"
+    tree=$1 path=$2 alias=$3 n=$4; shift 4
+    mount --bind "$path" "$alias" || exit 97
+    mount --bind "$tree" "$path" || exit 97
+    while [ "$n" -gt 0 ]; do
+      p=$1; shift; n=$((n - 1))
+      mkdir -p "$p" && mount --bind "$alias/${p#"$path"/}" "$p" || exit 97
+    done
+    exec setpriv --bounding-set=-all --inh-caps=-all -- "$@"' \
+    in_tree_at "$tree" "$path" "$alias" "${#passthrough[@]}" ${passthrough[@]+"${passthrough[@]}"} "$@"
 }
 
 # Does in_tree_at work here?  Checks what the passes rely on: the tree shows
 # at the path, also through pwd -P (the paths bsc records come from the
-# physical cwd), and a mode-000 file is unreadable inside.  Prints the
-# reason when not.
+# physical cwd), a mode-000 file is unreadable inside, every pass-through
+# directory is the real one (same device and inode as outside), the
+# installation's bsc is there and the archive root takes a write.  Prints
+# the reason when not.
 probe_sandbox() {
-  local d=$root/probe out
+  local d=$root/probe out ids=() p
   command -v unshare > /dev/null || { echo 'unshare not found'; return 1; }
   command -v setpriv > /dev/null || { echo 'setpriv not found'; return 1; }
   rm -rf "$d"; mkdir -p "$d/tree" || { echo "cannot create $d"; return 1; }
   echo probe > "$d/tree/gate-probe"
   : > "$d/tree/locked"; chmod 000 "$d/tree/locked"
+  for p in ${passthrough[@]+"${passthrough[@]}"}; do
+    ids+=("$p=$(stat -c %d:%i "$p" 2>/dev/null || echo '?')")
+  done
   out=$(in_tree_at "$d/tree" "$worktree" sh -c '
-    cd "$1" || { echo "cannot cd to $1"; exit 1; }
-    [ "$(pwd -P)" = "$1" ] || { echo "pwd -P is $(pwd -P), not $1"; exit 1; }
-    [ -f gate-probe ] || { echo "the bind mount is not visible at $1"; exit 1; }
+    path=$1 inst=$2 probe=$3; shift 3
+    cd "$path" || { echo "cannot cd to $path"; exit 1; }
+    [ "$(pwd -P)" = "$path" ] || { echo "pwd -P is $(pwd -P), not $path"; exit 1; }
+    [ -f gate-probe ] || { echo "the bind mount is not visible at $path"; exit 1; }
     if cat locked > /dev/null 2>&1; then echo "a mode-000 file is readable inside the namespace"; exit 1; fi
-    echo ok' probe "$worktree" 2>&1)
+    for pair in "$@"; do
+      p=${pair%=*}; id=${pair##*=}
+      [ "$(stat -c %d:%i "$p" 2>/dev/null)" = "$id" ] || { echo "$p inside the namespace is not the real directory"; exit 1; }
+    done
+    [ -x "$inst/bin/bsc" ] || { echo "$inst/bin/bsc is not visible inside the namespace"; exit 1; }
+    echo inside > "$probe/written-inside" 2>/dev/null || { echo "cannot write to $probe inside the namespace"; exit 1; }
+    echo ok' probe "$worktree" "$inst" "$d" ${ids[@]+"${ids[@]}"} 2>&1)
+  if [ "$out" = ok ] && [ ! -f "$d/written-inside" ]; then
+    out="a file written to $d inside the namespace did not land there"
+  fi
   chmod 600 "$d/tree/locked"; rm -rf "$d"
   [ "$out" = ok ] || { echo "${out:-no output from the probe}"; return 1; }
 }
@@ -155,10 +231,22 @@ remove_trees() {
 }
 
 remove_trees
-rm -rf "$root/normal" "$root/reversed" "$root"/pass-*.log "$root"/compare.* "$root/archive-pass.sh"
+# The timing table the passes read is <archive-root>/timing.txt: a table
+# named explicitly is copied there (an archive root inside the checkout is
+# passed through to the concurrent passes, an arbitrary path inside it is
+# not), before the previous run's outputs, which may hold it, go.
 timing=${GATE_TIMING:-$root/timing.txt}
-[ -s "$timing" ] || timing=
+if [ -s "$timing" ]; then
+  timing=$(cd "$(dirname "$timing")" && pwd -P)/$(basename "$timing") || die "cannot resolve GATE_TIMING '$GATE_TIMING'"
+  if [ "$timing" != "$root/timing.txt" ]; then
+    cp "$timing" "$root/timing.txt" || die "cannot copy GATE_TIMING '$timing' to $root/timing.txt"
+    timing=$root/timing.txt
+  fi
+else
+  timing=
+fi
 export GATE_TIMING=$timing
+rm -rf "$root/normal" "$root/reversed" "$root"/pass-*.log "$root"/compare.* "$root/archive-pass.sh"
 
 gate_t0=$(date +%s)
 say "worktree $worktree  inst $inst  archives $root  $(date '+%F %T')  $(load_now)"
@@ -172,9 +260,18 @@ if [ -n "${ONLY_GROUPS:-}" ]; then
   compare_opts+=(--scope-groups "$ONLY_GROUPS")
 fi
 
+alias=
 if [ "$sequential" != 1 ]; then
+  # The alias of the real checkout for in_tree_at: a mount point only, so
+  # it stays empty on disk.  Both passes bind to it in their own namespaces.
+  alias=$(mktemp -d "${TMPDIR:-/tmp}/run-gate-alias.XXXXXX") || die 'mktemp failed'
+  trap 'rmdir "$alias" 2> /dev/null' EXIT
+  case $alias/ in
+    "$worktree"/*) die "TMPDIR ($alias) is inside the checkout; set it elsewhere" ;;
+  esac
   if reason=$(probe_sandbox); then
     say "same-path sandbox: ok (unshare --user --mount + setpriv)"
+    [ ${#passthrough[@]} -eq 0 ] || say "passed through (under $worktree, seen as they are): ${passthrough[*]}"
   else
     say "same-path sandbox unavailable: $reason"
     say "running the passes one after the other in $worktree instead"
@@ -185,7 +282,7 @@ fi
 pass_status() {  # pass_status <name> <exit>: report a pass's exit, 0 when fine
   local name=$1 st=$2
   if [ "$st" -eq 97 ]; then
-    say "$name: the bind mount failed inside the namespace (see pass-$name.log)"
+    say "$name: a bind mount failed inside the namespace (see pass-$name.log)"
   elif [ "$st" -ne 0 ]; then
     say "$name: archive-pass.sh exited $st (see pass-$name.log)"
   fi
