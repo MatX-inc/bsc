@@ -25,13 +25,12 @@ import Data.Maybe(mapMaybe, isJust, fromJust, fromMaybe, maybeToList)
 import Data.List(partition, nub, union, find, sortBy, sortOn, (\\))
 import qualified Data.Map as M
 import qualified Data.Set as S
+import IdMap(IdMap)
 import qualified IdMap
+import IdSet(IdSet)
 import qualified IdSet
 
 -- import Debug.Trace
-
--- A set of Ids (used in place of lists, for efficiency)
-type IdSet = S.Set AId
 
 -- This is a map from SimBlock names to SBId
 type NameMap = M.Map String SBId
@@ -40,7 +39,7 @@ type NameMap = M.Map String SBId
 type ModDefMap = M.Map String DefMap
 
 -- map from method names to method port info
-type MethMap = M.Map AId ( Maybe VName            -- enable
+type MethMap = IdMap ( Maybe VName            -- enable
                          , [(AType, AId, VName)]  -- args
                          , Maybe (AType, VName)   -- return
                          , Bool                   -- is action
@@ -98,7 +97,7 @@ simMakeCBlocks flags sim_system =
       -- in that module, so that the scheduler has access to all methods
       full_mmap =
           let mkPair sp = (getIdString (sp_name sp),
-                           M.fromList (mapMaybe (getPortInfo (sp_pps sp)) (sp_interface sp)))
+                           IdMap.fromList (mapMaybe (getPortInfo (sp_pps sp)) (sp_interface sp)))
           in  M.fromList (map mkPair pkgs)
 
       -- ----------
@@ -121,8 +120,8 @@ simMakeCBlocks flags sim_system =
       -- methods on the top-level module
       top_methods   = sp_interface top_pkg
       (top_ameths, top_vmeths) = partition aIfaceHasAction top_methods
-      top_vmeth_set = S.fromList $ concatMap aIfaceResIds top_vmeths
-      top_ameth_set = S.fromList $ map aRuleName $ concatMap aIfaceRules top_ameths
+      top_vmeth_set = IdSet.fromList $ concatMap aIfaceResIds top_vmeths
+      top_ameth_set = IdSet.fromList $ map aRuleName $ concatMap aIfaceRules top_ameths
 
       -- input clocks to the top-level module
       top_gates = [ gate | (AAI_Clock _ (Just gate)) <- sp_inputs top_pkg ]
@@ -222,10 +221,10 @@ getExprIds in_sched def_map known ((AFunCall _ _ _ _ args):es) =
 -- note that we mask the Id property when building the scheduler
 -- because we need the will fire definitions there
 getExprIds in_sched def_map known ((ASDef _ id):es) =
-  if id `S.member` known ||
+  if id `IdSet.member` known ||
      isIdWillFire id && not (in_sched)
   then getExprIds in_sched def_map known es
-  else let known' = id `S.insert` known
+  else let known' = id `IdSet.insert` known
        in case IdMap.lookup id def_map of
          (Just def) -> getExprIds in_sched def_map known' ((adef_expr def):es)
          Nothing    -> getExprIds in_sched def_map known' es
@@ -271,8 +270,8 @@ onePackageToBlock flags name_map full_meth_map ss pkg =
                  | (t,i) <- all_defs
                  , (isFire i)
                  ]
-      pub_ids  = getExprIds True def_map S.empty cf_wf_ex
-      (pub_defs, pri_defs) = partition ((`S.member` pub_ids).snd) all_defs
+      pub_ids  = getExprIds True def_map IdSet.empty cf_wf_ex
+      (pub_defs, pri_defs) = partition ((`IdSet.member` pub_ids).snd) all_defs
 
       task_defs  = [ aid | d@(ADef aid _ (ATaskValue {}) _) <- raw_defs ]
 
@@ -294,11 +293,11 @@ onePackageToBlock flags name_map full_meth_map ss pkg =
       -- gather all method ports
       meth_map  = findModMeth full_meth_map class_name
       meth_ens  = [ (aTBool, vName_to_id vn, vn)
-                  | ((Just vn),_,_,_,_) <- M.elems meth_map
+                  | ((Just vn),_,_,_,_) <- IdMap.elems meth_map
                   ]
-      meth_args = concat [ ins | (_,ins,_,_,_) <- M.elems meth_map ]
+      meth_args = concat [ ins | (_,ins,_,_,_) <- IdMap.elems meth_map ]
       meth_rets = [ (rt, n, vn)
-                  | (n, (_,_,(Just (rt,vn)),_,_)) <- M.toList meth_map
+                  | (n, (_,_,(Just (rt,vn)),_,_)) <- IdMap.toList meth_map
                   ]
       -- Sort by base name so the order doesn't depend on the AId map order
       -- (AId's Ord follows run-dependent interned-FString order).
@@ -488,12 +487,12 @@ cvtActions :: Id -> Id ->
 cvtActions modId rId def_map method_order_map other_defs acts reset_ids =
   let
       -- get all ids for defs used in the actions
-      action_ids = getIds def_map S.empty acts
+      action_ids = getIds def_map IdSet.empty acts
       -- merge in the other defs (needed for, say, an ActionValue)
-      ids = other_defs `S.union` action_ids
+      ids = other_defs `IdSet.union` action_ids
 
       -- get their defs
-      defs = map (findDef def_map) (S.toList ids)
+      defs = map (findDef def_map) (IdSet.toList ids)
 
       -- order the defs and actions, and convert to statements
       -- XXX is it more efficient to pass in the whole def map,
@@ -512,7 +511,7 @@ cvtARule modId def_map method_order_map reset_list
       reset_ids = map (ae_objid . areset_wire)
                       (mapMaybe (\n -> lookup n reset_list) (wpResets wp))
       body = cvtActions modId rId
-                 def_map method_order_map S.empty acts reset_ids
+                 def_map method_order_map IdSet.empty acts reset_ids
   in SimCCFn name args Nothing body
 
 -- Convert an interface method body into a SimCCFn
@@ -538,7 +537,7 @@ cvtIFace modId pps def_map meth_map method_order_map reset_list m =
              then -- we have to find the name of the port associated
                   -- with the RDY method
                   let rdy_id = mkRdyId (aif_name m)
-                      mport = do (_,_,Just (_,vn),_,_) <- M.lookup rdy_id meth_map
+                      mport = do (_,_,Just (_,vn),_,_) <- IdMap.lookup rdy_id meth_map
                                  return $ ASPort aTBool (vName_to_id vn)
                  in case mport of
                       (Just prt) -> [SFSCond prt ss []]
@@ -553,7 +552,7 @@ cvtIFace modId pps def_map meth_map method_order_map reset_list m =
          wp      = aIfaceProps m
          rst_ids = map (ae_objid . areset_wire)
                        (mapMaybe (\n -> lookup n reset_list) (wpResets wp))
-     (men, ins, mr, _, ifcrules) <- M.lookup name meth_map
+     (men, ins, mr, _, ifcrules) <- IdMap.lookup name meth_map
      let prt vn     = vName_to_id vn
          rt         = do { (t,_) <- mr; return t }
          en_stmts   = maybe [] (\vn -> [SFSAssign True (prt vn) aTrue]) men
@@ -572,7 +571,7 @@ cvtIFace modId pps def_map meth_map method_order_map reset_list m =
                    -- find all the defs needed to compute the return value
                    def_map' = IdMap.insert ret_id ret_def def_map
                    ret_expr = ASDef ret_type ret_id
-                   val_ids = getExprIds False def_map' S.empty [ret_expr]
+                   val_ids = getExprIds False def_map' IdSet.empty [ret_expr]
                    -- convert the body to SimCCFnStmts
                    ss = cvtActions modId name
                             def_map' method_order_map val_ids body rst_ids
@@ -596,7 +595,7 @@ cvtIFace modId pps def_map meth_map method_order_map reset_list m =
                    check_rdy ss' ++ ret_stmts
              Nothing -> check_rdy $
                         cvtActions modId name
-                            def_map method_order_map S.empty body rst_ids
+                            def_map method_order_map IdSet.empty body rst_ids
          all_stmts  = concat [en_stmts, wf_stmts, in_stmts, body_stmts]
      return $ SimCCFn (getIdBaseString name) args rt all_stmts
 
@@ -674,7 +673,7 @@ sortTickCalls ticks =
                                (ASPort _ objId)   -> Just (mk_homeless_id (getIdQualString objId), [clk])
                                _ -> Nothing
               es = mapMaybe mkEdge clocks
-          in  M.fromListWith (++) es
+          in  IdMap.fromListWith (++) es
 
       -- for a set of ticks, find the Ids of the submods that are ticked
       getModIds calls = map fst3 calls
@@ -682,7 +681,7 @@ sortTickCalls ticks =
       -- make the tsort edges
       mkEdge (clk, calls) =
           let mods = getModIds calls
-              clocks = concat (mapMaybe (\i -> M.lookup i clock_map) mods)
+              clocks = concat (mapMaybe (\i -> IdMap.lookup i clock_map) mods)
           in  (clk, clocks)
       edges = map mkEdge (M.toList grouped_ticks_map)
   in  case (tsort edges) of
@@ -702,7 +701,7 @@ combineStmtGroups (SchedFns a1 b1 c1) (SchedFns a2 b2 c2) =
 
 -- Convert a SimSchedule into a map from clock edges to pairs of
 -- schedule statements and tick statements.
-mkScheduleStmts :: Flags -> [AIFace] -> S.Set AId -> S.Set AId -> [AId] ->
+mkScheduleStmts :: Flags -> [AIFace] -> IdSet -> IdSet -> [AId] ->
                    InstModMap -> ModDefMap -> ModMethMap -> CallMap ->
                    SimSchedule -> SchedStmtMap
 mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
@@ -718,9 +717,9 @@ mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
       lookupMethods r = do mod   <- M.lookup (getIdQualString r) inst_map
                            calls <- M.lookup mod call_map
                            lookup (unQualId r) calls
-      calls_by_rule = M.fromList $
+      calls_by_rule = IdMap.fromList $
                       [ (r, maybe [] id (lookupMethods r))
-                      | r <- (rules ++ (S.toList top_ameth_set)) -- XXX unnecessary conversion
+                      | r <- (rules ++ (IdSet.toList top_ameth_set)) -- XXX unnecessary conversion
                       ]
       isNotPrimitive q m =
         let inst = if (null q)
@@ -729,7 +728,7 @@ mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
         in  case M.lookup inst inst_map of
               (Just x) -> not (isPrimitiveModule x)
               Nothing  -> internalError $ "bad instance: " ++ (ppReadable m)
-      non_prim_calls = M.mapWithKey
+      non_prim_calls = IdMap.mapWithKey
                         (\r -> (filter (isNotPrimitive (getIdQualString r))))
                         calls_by_rule
 
@@ -758,9 +757,9 @@ mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
       -- unreferenced and are optimized away, matching submodule form.  (See
       -- DEVELOP.md.)
       isTopMethodNode (Sched rid) =
-          (rid `S.member` top_vmeth_set) || (rid `S.member` top_ameth_set)
+          (rid `IdSet.member` top_vmeth_set) || (rid `IdSet.member` top_ameth_set)
       isTopMethodNode (Exec rid) =
-          (rid `S.member` top_vmeth_set) || (rid `S.member` top_ameth_set)
+          (rid `IdSet.member` top_vmeth_set) || (rid `IdSet.member` top_ameth_set)
       mkStmt n = if (blockCodegen flags) && (isTopMethodNode n)
                  then []
                  else mkStmt0 n
@@ -774,14 +773,14 @@ mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
           else ([], stableOrdNub (concatMap mkStmt early_sched_order))
 
       -- determine all ids used in the schedule
-      used_ids = S.fromList $ (concatMap defs_read
+      used_ids = IdSet.fromList $ (concatMap defs_read
                                          (pos_rule_stmts ++ neg_rule_stmts ++
                                           after_posedge_stmts ++ after_negedge_stmts))
-      isUsedId i = (i `inlineIdFrom` top_blk_name) `S.member` used_ids
+      isUsedId i = (i `inlineIdFrom` top_blk_name) `IdSet.member` used_ids
 
       -- build the enable-zeroing statements
       schedule_rules = [ i | (Exec i) <- edge_sched_order ]
-      getMeths r = do ms <- M.lookup r non_prim_calls
+      getMeths r = do ms <- IdMap.lookup r non_prim_calls
                       let inst = getIdQualString r
                           qms = [ addToQual inst m | m <- ms ]
                       return qms
@@ -790,7 +789,7 @@ mkScheduleStmts flags top_ifc top_vmeth_set top_ameth_set top_gates
         do let inst = getIdQualString m
            mod <- M.lookup inst inst_map
            let meth_map = findModMeth full_meth_map mod
-           (e,_,_,_,rs) <- M.lookup (unQualId m) meth_map
+           (e,_,_,_,rs) <- IdMap.lookup (unQualId m) meth_map
            let en = do v <- e
                        return $ (vName_to_id v) `inlineIdFrom` inst
                wfs = [ (mkIdWillFire i) `inlineIdFrom` inst | i <- rs ]
@@ -1016,19 +1015,19 @@ addScope scope (SFSOutputReset rstId val) =
 
 
 -- Create the SimCCFnStmts that correspond to a schedule node
-mkSchedStmts :: [AIFace] -> S.Set AId -> S.Set AId -> InstModMap -> ModDefMap ->
-                M.Map ARuleId [AId] -> GateSubstMap ->
-                [(AId, [AId])] -> M.Map AId [AId] -> SchedNode -> [SimCCFnStmt]
+mkSchedStmts :: [AIFace] -> IdSet -> IdSet -> InstModMap -> ModDefMap ->
+                IdMap [AId] -> GateSubstMap ->
+                [(AId, [AId])] -> IdMap [AId] -> SchedNode -> [SimCCFnStmt]
 mkSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
              calls_by_rule gate_substs sched_conflicts sched_me_inhibits
              (Sched qual_rid) =
-  let method_calls = fromMaybe [] (M.lookup qual_rid calls_by_rule)
-  in if (qual_rid `S.member` top_vmeth_set)
+  let method_calls = fromMaybe [] (IdMap.lookup qual_rid calls_by_rule)
+  in if (qual_rid `IdSet.member` top_vmeth_set)
      then mkValueMethodSchedStmts top_ifc top_vmeth_set top_ameth_set
                                   inst_map full_dmap
                                   gate_substs sched_conflicts sched_me_inhibits
                                   qual_rid
-     else if (qual_rid `S.member` top_ameth_set)
+     else if (qual_rid `IdSet.member` top_ameth_set)
           then mkActionMethodSchedStmts top_ifc top_vmeth_set top_ameth_set
                                         inst_map full_dmap method_calls
                                         gate_substs sched_conflicts
@@ -1039,12 +1038,12 @@ mkSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
 mkSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
              calls_by_rule gate_substs sched_conflicts sched_me_inhibits
              (Exec rid) =
-  if (rid `S.member` top_vmeth_set)
+  if (rid `IdSet.member` top_vmeth_set)
   then mkValueMethodExecStmts top_ifc top_vmeth_set top_ameth_set
                               inst_map full_dmap
                               gate_substs sched_conflicts sched_me_inhibits
                               rid
-  else if (rid `S.member` top_ameth_set)
+  else if (rid `IdSet.member` top_ameth_set)
        then mkActionMethodExecStmts top_ifc top_vmeth_set top_ameth_set
                                     inst_map
                                     full_dmap gate_substs sched_conflicts
@@ -1055,9 +1054,9 @@ mkSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
                             rid
 
 -- Make statements for determining if a value method is ready
-mkValueMethodSchedStmts :: [AIFace] -> S.Set AId -> S.Set AId ->
+mkValueMethodSchedStmts :: [AIFace] -> IdSet -> IdSet ->
                            InstModMap -> ModDefMap -> GateSubstMap ->
-                           [(AId, [AId])] -> M.Map AId [AId] ->
+                           [(AId, [AId])] -> IdMap [AId] ->
                            AId -> [SimCCFnStmt]
 mkValueMethodSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
                         gate_substs sched_conflicts sched_me_inhibits
@@ -1065,9 +1064,9 @@ mkValueMethodSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
   []
 
 -- Make statements for determining if an action method should fire
-mkActionMethodSchedStmts :: [AIFace] -> S.Set AId -> S.Set AId ->
+mkActionMethodSchedStmts :: [AIFace] -> IdSet -> IdSet ->
                             InstModMap -> ModDefMap -> [AId] -> GateSubstMap ->
-                            [(AId, [AId])] -> M.Map AId [AId] ->
+                            [(AId, [AId])] -> IdMap [AId] ->
                             AId -> [SimCCFnStmt]
 mkActionMethodSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map
                          full_dmap method_calls gate_substs
@@ -1085,7 +1084,7 @@ mkActionMethodSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map
 
       -- ----------
       -- Get all the defs needed for the WF expr
-      ids = S.toList $ getExprIds True def_map S.empty [ASDef bit_type unqual_wf]
+      ids = IdSet.toList $ getExprIds True def_map IdSet.empty [ASDef bit_type unqual_wf]
       defs = tsortADefs False $ map (findDef def_map) ids
 
       -- ----------
@@ -1119,7 +1118,7 @@ mkActionMethodSchedStmts top_ifc top_vmeth_set top_ameth_set inst_map
 
 -- Make statements for determining if a rule should fire
 mkRuleSchedStmts :: InstModMap -> ModDefMap -> [AId] ->
-                    GateSubstMap -> [(AId, [AId])] -> M.Map AId [AId] ->
+                    GateSubstMap -> [(AId, [AId])] -> IdMap [AId] ->
                     AId -> [SimCCFnStmt]
 mkRuleSchedStmts inst_map full_dmap method_calls
                  gate_substs sched_conflicts sched_me_inhibits
@@ -1138,7 +1137,7 @@ mkRuleSchedStmts inst_map full_dmap method_calls
 
       -- ----------
       -- Get all the defs needed for the WF expr
-      ids = S.toList $ getExprIds True def_map S.empty [ASDef bit_type unqual_wf]
+      ids = IdSet.toList $ getExprIds True def_map IdSet.empty [ASDef bit_type unqual_wf]
       defs = tsortADefs False $ map (findDef def_map) ids
 
       -- ----------
@@ -1167,7 +1166,7 @@ mkRuleSchedStmts inst_map full_dmap method_calls
       me_inhibitors =
           -- XXX we could take advantage of the fact that the inhibits are
           -- XXX in order, so the lookup should be the top of the list
-          case (M.lookup qual_rid sched_me_inhibits) of
+          case (IdMap.lookup qual_rid sched_me_inhibits) of
               Nothing -> []
               Just is -> is
       inhibit_ids = map mkIdCanFire me_inhibitors
@@ -1209,18 +1208,18 @@ mkRuleSchedStmts inst_map full_dmap method_calls
       map (addScope top_blk_name) (rdy_calls ++ qual_stmts2)
 
 -- Make statements for computing value method outputs
-mkValueMethodExecStmts :: [AIFace] -> S.Set AId -> S.Set AId ->
+mkValueMethodExecStmts :: [AIFace] -> IdSet -> IdSet ->
                           InstModMap -> ModDefMap -> GateSubstMap ->
-                          [(AId, [AId])] -> M.Map AId [AId] ->
+                          [(AId, [AId])] -> IdMap [AId] ->
                           AId -> [SimCCFnStmt]
 mkValueMethodExecStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
                        gate_substs sched_conflicts sched_me_inhibits rid =
   []
 
 -- Make statements for executing an action method
-mkActionMethodExecStmts :: [AIFace] -> S.Set AId -> S.Set AId ->
+mkActionMethodExecStmts :: [AIFace] -> IdSet -> IdSet ->
                            InstModMap -> ModDefMap -> GateSubstMap ->
-                           [(AId, [AId])] -> M.Map AId [AId] ->
+                           [(AId, [AId])] -> IdMap [AId] ->
                            AId -> [SimCCFnStmt]
 mkActionMethodExecStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
                         gate_substs sched_conflicts sched_me_inhibits mid =
@@ -1236,9 +1235,9 @@ mkActionMethodExecStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
   in [cond_stmt]
 
 -- Make statements for executing a rule
-mkRuleExecStmts :: [AIFace] -> S.Set AId -> S.Set AId ->
+mkRuleExecStmts :: [AIFace] -> IdSet -> IdSet ->
                    InstModMap -> ModDefMap -> GateSubstMap ->
-                   [(AId, [AId])] -> M.Map AId [AId] ->
+                   [(AId, [AId])] -> IdMap [AId] ->
                    AId -> [SimCCFnStmt]
 mkRuleExecStmts top_ifc top_vmeth_set top_ameth_set inst_map full_dmap
                 gate_substs sched_conflicts sched_me_inhibits rid =
@@ -1287,12 +1286,12 @@ tsortActionsAndDefs modId rId mmap ds acts reset_ids =
         -- (we only want to make edges for variable uses from this list)
         ds_ids = map adef_objid ds
         -- for efficiency, make it a set
-        s = S.fromList ds_ids
+        s = IdSet.fromList ds_ids
 
         -- make edges for def-to-def dependencies
         def_edges = [ (Left i, map Left uses)
                           | ADef i _ e _ <- ds,
-                            let uses = filter (`S.member` s) (aVars e) ]
+                            let uses = filter (`IdSet.member` s) (aVars e) ]
 
         -- ----------
         -- Actions
@@ -1342,7 +1341,7 @@ tsortActionsAndDefs modId rId mmap ds acts reset_ids =
 
         act_def_edges = [ (Right n, map Left uses)
                               | (n,a) <- numbered_acts,
-                                let uses = filter (`S.member` s) (aVars a) ]
+                                let uses = filter (`IdSet.member` s) (aVars a) ]
 
         -- ----------
         -- Action method to Action method edges
@@ -1457,15 +1456,15 @@ tsortActionsAndDefs modId rId mmap ds acts reset_ids =
         -- so rank def nodes by id-name before tsort and map back for a stable
         -- order.  (Actions keep their position; Left<Right keeps defs first.)
         g_def_ids :: [AId]
-        g_def_ids = S.toList $ S.fromList [ i | (n,ns) <- g_edges, Left i <- n:ns ]
-        rank_map :: M.Map AId Integer
-        rank_map = M.fromList $
+        g_def_ids = IdSet.toList $ IdSet.fromList [ i | (n,ns) <- g_edges, Left i <- n:ns ]
+        rank_map :: IdMap Integer
+        rank_map = IdMap.fromList $
                      zip (sortOn getIdString g_def_ids)
                          [(0::Integer)..]
         unrank_map :: M.Map Integer AId
-        unrank_map = M.fromList [ (r,i) | (i,r) <- M.toList rank_map ]
+        unrank_map = M.fromList [ (r,i) | (i,r) <- IdMap.toList rank_map ]
         encNode :: Node -> EncNode
-        encNode (Left i)  = Left (fromJust (M.lookup i rank_map))
+        encNode (Left i)  = Left (fromJust (IdMap.lookup i rank_map))
         encNode (Right n) = Right n
         decNode :: EncNode -> Node
         decNode (Left r)  = Left (fromJust (M.lookup r unrank_map))
@@ -1479,8 +1478,8 @@ tsortActionsAndDefs modId rId mmap ds acts reset_ids =
 
         -- map def ids back to their exprs
         -- (remember to substitute away AMethValue references)
-        defmap = M.fromList [ (i,d) | d@(ADef i _ _ _) <- ds ]
-        getDef i = case (M.lookup i defmap) of
+        defmap = IdMap.fromList [ (i,d) | d@(ADef i _ _ _) <- ds ]
+        getDef i = case (IdMap.lookup i defmap) of
                        Just d -> (mapAExprs substAV d)
                        Nothing -> internalError "tsortActionsAndDefs: getDef"
 
@@ -1690,15 +1689,15 @@ substGateReferences smap stmts =
 -- ===============
 -- Inserting mutual exclusion inhibitors
 
-mkMERuleInhibits :: S.Set AId -> [SchedNode] -> DisjointRulesDB -> M.Map AId [AId]
+mkMERuleInhibits :: IdSet -> [SchedNode] -> DisjointRulesDB -> IdMap [AId]
 mkMERuleInhibits top_vmeth_set sched_order disjoint_map =
     let
         -- value methods can't change state, so they don't need to inhibit
 
-        foldfunc :: (IdSet.IdSet, [(AId,[AId])]) -> SchedNode ->
-                    (IdSet.IdSet, [(AId,[AId])])
+        foldfunc :: (IdSet, [(AId,[AId])]) -> SchedNode ->
+                    (IdSet, [(AId,[AId])])
         foldfunc (seen_exec_nodes, res) (Exec r) =
-            if (S.member r top_vmeth_set)
+            if (IdSet.member r top_vmeth_set)
             then (seen_exec_nodes, res)
             else (IdSet.insert r seen_exec_nodes, res)
         foldfunc (seen_exec_nodes, res) (Sched r) =
@@ -1709,7 +1708,7 @@ mkMERuleInhibits top_vmeth_set sched_order disjoint_map =
                         new_res = (r, IdSet.toList inhibit_set)
                     in  (seen_exec_nodes, new_res:res)
     in
-        M.fromList $ reverse $ snd $ foldl foldfunc (IdSet.empty, []) sched_order
+        IdMap.fromList $ reverse $ snd $ foldl foldfunc (IdSet.empty, []) sched_order
 
 
 -- ===============
