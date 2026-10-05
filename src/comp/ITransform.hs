@@ -23,6 +23,8 @@ import Control.Monad.State.Strict(State, runState, gets, get, put)
 import Data.List((\\))
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap.Strict as IdMap
 
 import IntegerUtil(mask, integerAnd)
 import Util(log2, itos, appFstM, snd3, makePairs, flattenPairs,
@@ -1426,7 +1428,7 @@ data TState a = TState {
         -- looked up in this map and the assigned expression is inlined.
         -- The defprops are kept to be used in the fixup step that happens
         -- between processing defs and processing the rest of the module.
-        def_map :: M.Map Id (IType, IExpr a, [DefProp]),
+        def_map :: IdMap (IType, IExpr a, [DefProp]),
 
         -- A CSE map, from an expr "e" to a tuple of info for the canonical
         -- def ("defname") to represent it:
@@ -1446,7 +1448,7 @@ runT errh flags no prefix xforms =
                            , flags = flags
                            , prefix = prefix
                            , idNo = no
-                           , def_map = M.empty
+                           , def_map = IdMap.empty
                            , cse_map = M.empty
                            }
     in case runState xforms initState of
@@ -1454,7 +1456,7 @@ runT errh flags no prefix xforms =
               let defs_from_cse = map (snd . snd) (M.toList (cse_map ts))
                   non_cse_defs =
                       [ IDef i t e props
-                        | (i, (t, e, props)) <- M.toList (def_map ts)
+                        | (i, (t, e, props)) <- IdMap.toList (def_map ts)
                         , defPropsHasNoCSE props
                       ]
                   defs = defs_from_cse ++ non_cse_defs
@@ -1488,11 +1490,11 @@ addDefT :: Id -> IType -> IExpr a -> [DefProp] -> T () a
 addDefT i t e p = do
   -- traceM $ "addDefT " ++ ppString i ++ " " ++ ppString e
   ts <- get
-  let dmap' = M.insert i (t,e,p) (def_map ts)
+  let dmap' = IdMap.insert i (t,e,p) (def_map ts)
   dmap' `seq` put $ ts {def_map = dmap' }
 
 getDefT :: Id -> T (Maybe (IExpr a)) a
-getDefT i = get >>= (return . fmap snd3 . M.lookup i . def_map)
+getDefT i = get >>= (return . fmap snd3 . IdMap.lookup i . def_map)
 
 {- we don't need uEq because we use a progress check instead now
 -- the uEq check is tuned to what we need to do to fix
@@ -1713,7 +1715,7 @@ iTransFixupDefNames flags = do
                [ ( cse_name
                  , S.singleton (idQuality (Just def_name), def_name) )
                  | (def_name, (_, ICon cse_name _value@(ICValue {}), props))
-                       <- M.toList old_defmap
+                       <- IdMap.toList old_defmap
                  , not (defPropsHasNoCSE props) ]
 
       -- The best Id is the maximum of the quality-ordered set.
@@ -1740,7 +1742,7 @@ iTransFixupDefNames flags = do
       -- (the def names themselves are unchanged)
       new_defmap =
           let mapFn (ty, e, props) = (ty, rename_expr e, props)
-          in  M.map mapFn old_defmap
+          in  IdMap.map mapFn old_defmap
 
       new_state :: TState a
       new_state = transform_state { def_map = new_defmap,
