@@ -2,8 +2,9 @@
 
 This independent Haskell package provides strict population comparison, a Tcl
 source census, an initial compile-only semantic planner, and supported-test
-provenance correlation. It does not execute tests or emit Buck2 targets yet.
-DejaGNU and make remain the execution backend.
+provenance correlation. Its first execution backend runs supported compilation
+tests and their internal checks through Buck2 build actions. DejaGNU and make
+remain the full-suite behavioral oracle. See [the Buck2 workflow](../buck2/README.md).
 
 Run these commands from the repository root. GHC 9.6.7 or newer is required;
 the package uses only GHC boot libraries and needs no Hackage downloads.
@@ -91,7 +92,10 @@ the meaning of `compilePass` and `compileFail` through `compilationTest`,
 including the derived internal-check obligation. These Haskell functions need
 not correspond one for one to Tcl helpers. The core contains no execution
 steps, action graph, workspace snapshots, or cache policy. Input and tool
-binding, shared-state execution, and cache safety remain backend work.
+binding live in `Buck2.hs` and `Execute.hs`. Read `Execute.hs` next for private
+source staging, compiler observations, and internal object checks, then
+`Buck2.hs` for snapshot emission and the rules under `rules/`. Shared-state
+scenarios and complete host isolation remain future work.
 Read the JSON codec and lexical parser last unless investigating serialization
 or Tcl syntax; they are supporting machinery rather than the test vocabulary.
 

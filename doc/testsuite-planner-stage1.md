@@ -1,5 +1,60 @@
 # Testsuite planner and Buck2 migration: Stage 1
 
+## First execution backend
+
+`emit-buck2` now snapshots tracked suite inputs, the compiler installation, the
+planner executable, and canonical rules into a new standalone cell. The public
+`rules/bluespec` toolchain provider is consumed by `rules/bsctest`, which builds
+verdict artifacts by running the Haskell `Execute` module. Internal object-load
+checks belong to this testsuite layer. The semantic plan is unchanged.
+
+The first complete supported-subset run executed all 344 planned tests with
+internal checks enabled: **626 PASS, zero FAIL, zero infrastructure errors**.
+Independent comparison against the saved full DejaGNU run matched all 344
+compilation observations and all 282 internal object-load observations by
+script, invocation number, and result role. There were no missing, extra, or
+different selected observations. The 5,211 unsupported and 625 unresolved
+planning items remain explicit, including the 662 numbered issues. No further
+tests were excluded by the execution backend. This is supported-subset parity,
+not whole-suite coverage.
+
+Buck2's command log records 344 local actions for the first build and zero
+actions for the unchanged warm build. Separate rule regressions confirm that
+changes to the source snapshot, installation, plan, runner, or host identity
+invalidate the action, including a previously recorded failing verdict.
+An unchanged action runs again after daemon restart in this initial local
+configuration: persistent and remote cache reuse remain unimplemented.
+
+Two independent real executions of `b1213` produced byte-identical files,
+including compiler objects, raw compiler/object-reader transcripts, and result
+JSON. This is a single-test relocation check, not a whole-suite artifact claim.
+
+The reusable `testsuite/buck2/check_mutation.py` regression also passes. It
+keeps one Buck2 cell and daemon, warms `b1213`, inserts a syntax error into
+copied source, then restores the exact original bytes. Both Buck2 and real
+DejaGNU report two PASS, two FAIL, then two PASS observations. The unchanged
+warm build executes zero actions; the mutation executes one action, proving
+that the previous passing result is invalidated. The broken Buck2 action
+successfully saves failing verdicts and the result checker exits nonzero.
+Source hashes match between runners in each phase, and the checkout remains
+unchanged. Evidence is retained under
+`testsuite/.stage1-validation/buck2-negative-control/experiment/`.
+
+The Haskell suite, CLI checks, 14 result-checker regressions, source-snapshot
+checks, and existing suite-layout checks pass. The full legacy suite was not
+rerun for this backend-only change; the previous clean full run is the oracle.
+
+The initial executor uses a private copy of each selected directory subtree
+and its internal symlink targets. This policy was audited for the current 344
+tests. Shared-state scenarios, arbitrary cross-directory inputs, and complete
+host isolation remain limitations. Compilation without `-u` is an explicit
+execution gap. The ten-minute process bound accommodates the existing costly
+`gh334` object-load check without dropping it. See the
+[execution workflow](../testsuite/buck2/README.md) for commands and input/cache
+limitations. Run evidence is retained under
+`testsuite/.stage1-validation/buck2-execution-final/` and
+`testsuite/.stage1-validation/buck2-validation/`.
+
 ## Current planner slice
 
 The semantic planner provides a version 3 TestPlan model, strict JSON
@@ -43,8 +98,10 @@ from silently hiding source or expansion drift.
 The [plan contract](../testsuite/planner/PLAN.md) defines the accepted subset and
 its limits. Simulator operations, golden-output comparisons, expected-failure
 phases, explicit file mutations/recompilation scenarios, complete input closure
-and tool binding, a whole-suite DejaGNU identity bridge, and Buck2 execution
-are still pending. Opaque setup and unknown expansion remain explicit gaps;
+and host isolation, and a whole-suite DejaGNU identity bridge are still pending.
+The first local Buck2 backend executes supported package compilation tests;
+see [its workflow and limitations](../testsuite/buck2/README.md).
+Opaque setup and unknown expansion remain explicit gaps;
 unsupported constructs alone do not block correlation of supported tests.
 The earlier baseline and measurement sections below remain historical
 validation evidence; planning alone reports no compiler verdicts.
@@ -187,8 +244,8 @@ testsuite/planner/       semantic model, Tcl lowering, and backend emitters
 testsuite/buck2/         testsuite cell configuration and generated targets
 ```
 
-These rule directories are the intended next-stage layout, not implemented
-rule APIs in this slice. The generic public entry point will be
+The initial rules implement an installation/host-identity toolchain provider
+and a testsuite semantic execution action. The generic public entry point is
 `rules/bluespec/defs.bzl`; it must not import testsuite-specific policy.
 Compiler installations and platform instances belong in the consuming cell,
 separately from reusable toolchain rule definitions.
@@ -347,7 +404,7 @@ compiler invocations alone do not justify a blanket cache prohibition. Do not
 use output retention to share state across suite invocations. Buck2
 [`local_only` and `allow_cache_upload`](https://buck2.build/docs/api/build/AnalysisActions/)
 control placement and uploading; locality is separate from cache eligibility.
-Backend cache policy and verification remain unimplemented and do not belong
+Broader backend cache policy and verification do not belong
 in the core semantic test model.
 
 ## Validation and configuration
@@ -587,13 +644,13 @@ report. The measurement monitor is paused.
 3. Extend semantic procedures and static lowering to comparisons,
    expected-failure phases, backend-specific tests, and shared-state scenarios.
    Extend golden plans and differential coverage with each supported construct.
-4. Pin a dated Buck2 binary and prelude. First test a trivial action against
-   `bazel-remote`: verify a cache hit after daemon restart, then a miss after
-   changing the toolchain-key platform property. The CI default is a per-job
-   sidecar whose storage is persisted with `actions/cache`; this has not been
-   validated here. Implement generic rules and tool identities, then testsuite
-   rules and `emit-buck2`; checks produce verdict records through build actions.
-   Verify sandbox-independent artifacts before claiming that property.
+4. Extend the initial local Buck2 backend with persistent caching and complete
+   tool identities. The dated executable pin, public toolchain provider,
+   testsuite action, and `emit-buck2` now exist without a prelude dependency.
+   Configure `bazel-remote`, verify a cache hit after daemon restart, then a
+   miss after changing the toolchain-key platform property. The proposed CI
+   sidecar persisted with `actions/cache` has not been validated. Verify
+   sandbox-independent artifacts before claiming that property.
 5. Lower all remaining constructs or prepare independent behavior-preserving
    cleanups; add same-installation per-check parity CI and measurements.
 

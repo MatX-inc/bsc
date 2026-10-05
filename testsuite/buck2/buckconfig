@@ -1,0 +1,9 @@
+# The generated cell needs only Buck2 builtins, with no prelude checkout.
+[cells]
+    root = .
+
+[buildfile]
+    name = BUCK
+
+[project]
+    ignore = .git, buck-out

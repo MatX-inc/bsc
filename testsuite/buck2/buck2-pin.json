@@ -1,0 +1,7 @@
+{
+  "release": "2026-10-01",
+  "commit": "2484d70a6f8a5b1f26cbdfdbd7758c9c5b746f49",
+  "platform": "x86_64-unknown-linux-musl",
+  "url": "https://github.com/facebook/buck2/releases/download/2026-10-01/buck2-x86_64-unknown-linux-musl.zst",
+  "sha256": "11b92ca53712ee36d95cf48b85d3c8c7c804556abc4d2cb25e0c5b9a37d59f11"
+}

@@ -2,8 +2,9 @@
 
 The version 3 plan records discovered tests and constructs that cannot yet be
 planned. Its current test kind is package compilation with an expected success
-or failure. It does not execute tools, generate Buck2 targets, resolve compiler
-installations, or establish parity with DejaGNU.
+or failure. The model itself contains no execution policy. `Execute.hs` executes
+the supported compilation kind and `Buck2.hs` binds inputs for the first local
+Buck2 backend; neither establishes whole-suite parity with DejaGNU.
 
 ## Commands
 
@@ -266,11 +267,13 @@ log markers.
 
 ## Backend boundary
 
-Execution still needs compiler-installation binding, complete input closure,
-transcript and artifact handling, and semantics for shared-state scenarios.
-Deliberately missing sources must remain observable for negative tests.
-No Bluespec dependency parser, hermetic execution guarantee, or cache-safety
-claim is provided here.
+The initial executor binds an installation, stages private sources, and retains
+transcripts, artifacts, and verdicts. Its directory-subtree input policy has
+been audited for the current supported corpus; arbitrary cross-directory
+inputs and shared-state scenarios need further semantics. Deliberately missing
+sources remain observable for negative tests. The backend declares the entire
+source and installation snapshots conservatively and runs locally, with cache
+upload disabled. This is not a hermetic or persistent-cache guarantee.
 
 An incremental scenario must preserve ordered mutations and compiler invocations
 within its shared workspace when it executes. That does not automatically make

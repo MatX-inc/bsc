@@ -23,6 +23,8 @@ extra-source-files:
   test/check_cli_plan.py
   test/check_provenance.py
   test/check_cli_correlate.py
+  test/check_cli_emit.py
+  test/check_buck2_results.py
   test/fixtures/plan/*.tcl
   test/fixtures/plan/*.json
   test/fixtures/plan/*.txt
@@ -35,7 +37,9 @@ common defaults
     base >= 4.18 && < 5,
     containers,
     directory,
-    filepath
+    filepath,
+    process,
+    unix
 
 library
   import: defaults
@@ -48,17 +52,21 @@ library
     Procedures
     Lower
     Correlate
+    Buck2
+    Execute
 
 executable bsc-test-plan
   import: defaults
+  ghc-options: -threaded
   hs-source-dirs: app
   main-is: Main.hs
   build-depends: bsc-testsuite-planner
 
 test-suite planner-tests
   import: defaults
+  ghc-options: -threaded
   type: exitcode-stdio-1.0
   hs-source-dirs: test
   main-is: Main.hs
-  other-modules: VerdictTest, CensusTest, TestPlanTest, LowerTest, PlanGoldenTest, CorrelateTest
+  other-modules: VerdictTest, CensusTest, TestPlanTest, LowerTest, PlanGoldenTest, CorrelateTest, ExecuteTest
   build-depends: bsc-testsuite-planner, process

@@ -1,5 +1,5 @@
--- | Semantic test procedures shared by source adapters and, eventually, an
--- executor. The vocabulary describes what is tested, not how Buck2 runs it.
+-- | Semantic test procedures shared by source adapters and the executor.
+-- The vocabulary describes what is tested, not how Buck2 runs it.
 --
 -- Tcl procedure boundaries are a useful reference, not a required Haskell
 -- module/function structure. compile_pass and compile_fail share one

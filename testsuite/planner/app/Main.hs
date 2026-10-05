@@ -9,12 +9,15 @@
 --   of supported invocations, using numbers plus source and argument checks.
 -- * import-sum/compare: use Verdict to preserve and compare legacy DejaGNU
 --   observations while the new planner is being developed.
+-- * emit-buck2/execute: snapshot explicit inputs and execute one supported
+--   semantic test in a private workspace. Ordinary test failures are data;
+--   the result checker determines whether the selected run passed.
 --
 -- Census also exposes a lexical inventory; successful parsing there does not
 -- mean that Lower supports a script. A structurally valid plan preserves every
 -- selected script, including issues that prevent individual tests being planned.
--- No command here executes compiler tests or submits work to Buck2. A backend
--- and correspondence for the wider test vocabulary remain separate work.
+-- emit-buck2 snapshots explicit inputs into a self-contained local Buck2 cell.
+-- The wider test vocabulary remains separate work.
 module Main (main) where
 
 import Control.Exception (IOException, catch)
@@ -30,6 +33,8 @@ import System.FilePath
 import System.IO (hPutStrLn, stderr)
 
 import Census
+import Buck2
+import Execute
 import Correlate
 import Lower
 import Procedures (explainTest)
@@ -46,6 +51,18 @@ run :: [String] -> IO ()
 run ["census", path] = census path >>= putStr . renderCensusText
 run ["census", "--json", path] = census path >>= putStrLn . renderCensusJson
 run ("plan":arguments) = planCommand arguments
+run ["execute", planPath, identifier, "--installation", installation,
+     "--suite", suite, "--output", output] = do
+  plan <- readFile planPath >>= checked . Plan.decodePlan
+  report <- executeTest (ExecutionConfig installation suite output defaultExecutionTimeoutMicros)
+    plan identifier >>= checked
+  putStrLn ("Executed " ++ identifier ++ "; " ++ show (length (executionChecks report)) ++ " checks.")
+  if hasInfrastructureFailure report then exitWith (ExitFailure 1) else pure ()
+run ["emit-buck2", planPath, "--suite-root", suite, "--installation", installation,
+     "--output", output] = do
+  plan <- readFile planPath >>= checked . Plan.decodePlan
+  (count, gaps) <- emitBuck2 (EmitConfig suite installation output) plan
+  putStrLn ("Emitted " ++ show count ++ " Buck2 test targets; " ++ show gaps ++ " execution gaps.")
 run ["explain", planPath, identifier] = do
   plan <- readFile planPath >>= checked . Plan.decodePlan
   checked (explainTest plan identifier) >>= putStr
@@ -101,6 +118,10 @@ usage = unlines
   , "         [--internal-checks 0|1] [--compiler-option OPTION]... TARGET"
   , "       bsc-test-plan explain PLAN.json TEST-OR-ISSUE-ID"
   , "       bsc-test-plan correlate PLAN.json LOG-DIRECTORY-OR-FILE"
+  , "       bsc-test-plan emit-buck2 PLAN.json --suite-root ROOT"
+  , "         --installation INST --output NEW-CELL"
+  , "       bsc-test-plan execute PLAN.json TEST-ID --installation INST"
+  , "         --suite SNAPSHOT --output NEW-OUTPUT"
   , "       bsc-test-plan import-sum --config NAME --suite-root ORIGINAL-ROOT"
   , "         --expected TEST-LIST SUMMARY-TREE OUTPUT.json"
   , "       bsc-test-plan compare --expected TEST-LIST BASELINE.json CANDIDATE.json"

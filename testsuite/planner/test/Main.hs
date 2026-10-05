@@ -6,6 +6,7 @@ import qualified TestPlanTest
 import qualified LowerTest
 import qualified PlanGoldenTest
 import qualified CorrelateTest
+import qualified ExecuteTest
 
 main :: IO ()
 main = do
@@ -15,3 +16,4 @@ main = do
   LowerTest.runTests
   PlanGoldenTest.runTests
   CorrelateTest.runTests
+  ExecuteTest.runTests
