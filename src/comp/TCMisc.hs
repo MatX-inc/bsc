@@ -66,6 +66,24 @@ useLegacyInstIndex = elem "-legacy-inst-index" progArgs
 legacyDeferInstances :: Bool
 legacyDeferInstances = elem "-legacy-defer-instances" progArgs
 
+-- Debug-only invariant check: every predicate entering the satisfy
+-- loop must be synonym-expanded at construction (see mkVPredFromPred).
+-- Enable with -hack-check-pred-expanded (also via BSC_OPTIONS) to make
+-- a violation an internal error naming the offending predicate.
+checkPredExpanded :: Bool
+checkPredExpanded = elem "-hack-check-pred-expanded" progArgs
+
+assertPredsExpanded :: String -> [VPred] -> a -> a
+assertPredsExpanded tag vps x
+  | not checkPredExpanded = x
+  | otherwise =
+      case [ p | vp@(VPred _ pwp) <- vps
+               , let p@(IsIn _ ts) = removePredPositions pwp
+               , map expandSyn ts /= ts ] of
+        [] -> x
+        (p:_) -> internalError (tag ++ ": unexpanded pred reached the " ++
+                                "solver: " ++ ppReadable p)
+
 doRTrace :: Bool
 doRTrace = elem "-trace-type" progArgs
 rtrace :: String -> a -> a
@@ -178,7 +196,7 @@ satisfyX dvs es ps = do
 
 satisfyXStream :: DVS -> [EPred] -> [VPred] -> TI ([VPred], SolvedBinds)
 satisfyXStream _   es [] = return ([], emptySBs)
-satisfyXStream dvs es ps = do
+satisfyXStream dvs es ps = assertPredsExpanded "satisfyXStream" ps $ do
         -- satTraceM ("satisfy enter: " ++ ppString (dvs, ps))
 -- it is not clear if applying the substitution here wins or not
         s0 <- getSubst
@@ -2046,7 +2064,7 @@ expandTCons (orig_qs :=> orig_t) =
                 cls <- findCls (CTypeclass clsId)
                 v <- newTVar "expandTCons" (kind (csig cls !! tIdx)) t0
                 (_, classArgs) <- mkATFClassPred "expandTCons" t0
-                                    clsId pIdxs tIdx as v
+                                    cls pIdxs tIdx as v
                 let p = PredWithPositions (IsIn cls classArgs) [] []
                 return ([p], v)
       exp (TAp t1 t2) = do (ps1, t1') <- exp t1
