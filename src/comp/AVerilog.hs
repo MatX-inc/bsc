@@ -18,6 +18,8 @@ import Data.Maybe
 import System.IO.Unsafe
 import qualified Data.Set as S
 import qualified Data.Map as M
+import IdMap(IdMap)
+import qualified IdMap
 import qualified Data.Generics as Generic
 
 import ListMap(lookupWithDefault)
@@ -137,7 +139,7 @@ aVerilog errh flags pps aspack ffmap =
         vco = (flagsToVco flags)
                 { vco_ffmap = ffmap
                 , vco_def_widths =
-                    M.fromList [ (i, aSize t) | ADef i t _ _ <- aspkg_values aspack ]
+                    IdMap.fromList [ (i, aSize t) | ADef i t _ _ <- aspkg_values aspack ]
                 }
         -- look for pass-through comments, taking care of \n
         -- XXX should these attach to the main module instead of the
@@ -484,7 +486,7 @@ aVerilog errh flags pps aspack ffmap =
         isPreDeclared = isDeclFromList $ S.fromList inst_declared_signals
 
         -- make a map to hold the defs, for easy access
-        defmap = M.fromList [ (i,d) | d@(ADef i _ _ _) <- ds ]
+        defmap = IdMap.fromList [ (i,d) | d@(ADef i _ _ _) <- ds ]
 
         -- -----
         -- special outputs
@@ -651,8 +653,8 @@ groupPorts si as =
 -- produce the decls and assignments for special outputs (clocks and resets)
 -- and return the remaining defs
 groupSpecialOutputDefs :: (ADef -> [VMItem]) -> ASPSignalInfo ->
-                          M.Map AId ADef ->
-                          ([VMItem], [VMItem], M.Map AId ADef)
+                          IdMap ADef ->
+                          ([VMItem], [VMItem], IdMap ADef)
 groupSpecialOutputDefs vDef si ds =
     let
         mkForClock (clk, gates) (decls, gs, defs) =
@@ -685,8 +687,8 @@ groupSpecialOutputDefs vDef si ds =
 --  * decls for internal signals (CAN_FIRE_/WILL_FIRE_)
 --  * group of defs for both outputs and internal signals
 --  * remaining ADefs
-groupMethodDefs :: (ADef -> [VMItem]) -> ASPSignalInfo -> M.Map AId ADef ->
-                   ([VMItem], [VMItem], [VMItem], M.Map AId ADef)
+groupMethodDefs :: (ADef -> [VMItem]) -> ASPSignalInfo -> IdMap ADef ->
+                   ([VMItem], [VMItem], [VMItem], IdMap ADef)
 groupMethodDefs vDef si ds =
     let
         getRuleSignals r =
@@ -701,8 +703,8 @@ groupMethodDefs vDef si ds =
         --    * related internal signals
         --      (so far just the sched signals for associated rules)
         mkForMethod :: ASPMethodInfo ->
-                       ([VMItem], [VMItem], [VMItem], M.Map AId ADef) ->
-                       ([VMItem], [VMItem], [VMItem], M.Map AId ADef)
+                       ([VMItem], [VMItem], [VMItem], IdMap ADef) ->
+                       ([VMItem], [VMItem], [VMItem], IdMap ADef)
         mkForMethod (ASPMethodInfo i ty mr _ vs _ rs) (odecls, idecls, gs, defs) =
             let
                 -- get the output defs
@@ -731,8 +733,8 @@ groupMethodDefs vDef si ds =
 --  * top-level comments, from any rules whose signals were inlined
 --    (leaving no place to attach comments)
 groupRuleDefs :: (ADef -> [VMItem]) -> ASPSignalInfo -> ASPCommentInfo ->
-                 M.Map AId ADef ->
-                 ([VMItem], [VMItem], M.Map AId ADef, [String])
+                 IdMap ADef ->
+                 ([VMItem], [VMItem], IdMap ADef, [String])
 groupRuleDefs vDef si ci ds =
     let sched_info = aspsi_rule_sched si
         comment_map = aspci_rules ci
@@ -772,8 +774,8 @@ groupRuleDefs vDef si ci ds =
 -- and the remaining defs
 groupSubmoduleDefs :: (ADef -> [VMItem]) ->
                       ([(AId,[VId])], [(AId,[VId])], [VId], [VId]) ->
-                      M.Map AId ADef ->
-                      ([VMItem], M.Map AId ADef)
+                      IdMap ADef ->
+                      ([VMItem], IdMap ADef)
 groupSubmoduleDefs vDef inst_inputs ds =
     let
         (submod_inputs, reg_inputs, rwire_inputs, probe_inputs) = inst_inputs
@@ -793,8 +795,8 @@ groupSubmoduleDefs vDef inst_inputs ds =
 
         -- for grouping all wires into one commented group
         -- rather than a comment per wire
-        mkWireDefGroup :: VComment -> ([VMItem], M.Map AId ADef) -> [VId] ->
-                          ([VMItem], M.Map AId ADef)
+        mkWireDefGroup :: VComment -> ([VMItem], IdMap ADef) -> [VId] ->
+                          ([VMItem], IdMap ADef)
         mkWireDefGroup comment (gs, defs) ss =
             let ss' = map vidToId ss
                 (wire_defs, other_defs) = findADefs ss' defs
@@ -821,8 +823,8 @@ groupSubmoduleDefs vDef inst_inputs ds =
 -- XXX This currently makes one group for all,
 -- XXX but with more info, it could group them according to mux.
 -- XXX Also, it could group selectors and values separately.
-groupMuxDefs :: (ADef -> [VMItem]) -> ASPSignalInfo -> M.Map AId ADef ->
-                ([VMItem], [VMItem], M.Map AId ADef)
+groupMuxDefs :: (ADef -> [VMItem]) -> ASPSignalInfo -> IdMap ADef ->
+                ([VMItem], [VMItem], IdMap ADef)
 groupMuxDefs vDef si ds =
     let mux_input_ids = aspsi_mux_selectors si ++ aspsi_mux_values si
         (mux_defs, other_defs) = findADefs mux_input_ids ds
@@ -840,8 +842,8 @@ groupMuxDefs vDef si ds =
 --  * remaining ADefs
 -- Does not return a group of defs because these decls are assigned
 -- in the foreign function block.
-groupForeignBlockDefs :: (ADef -> [VMItem]) -> [AId] -> M.Map AId ADef ->
-                ([VMItem], M.Map AId ADef)
+groupForeignBlockDefs :: (ADef -> [VMItem]) -> [AId] -> IdMap ADef ->
+                ([VMItem], IdMap ADef)
 groupForeignBlockDefs _ [] ds = ([], ds)
 groupForeignBlockDefs vDef foreign_block_ids  ds =
     let (foreign_defs, other_defs) = findADefs foreign_block_ids ds
@@ -922,7 +924,7 @@ renameInoutPorts vm =
         plain a = a
     in  vm' { vm_ports = [ (map plain as, c) | (as, c) <- vm_ports vm' ] }
 
-computeInouts :: M.Map AId AId -> ASPackage -> [(Id, AType, Id)]
+computeInouts :: IdMap AId -> ASPackage -> [(Id, AType, Id)]
 computeInouts inout_rewire_map aspack =
     let
         -- ifc inouts are connected to their expressions
@@ -936,7 +938,7 @@ computeInouts inout_rewire_map aspack =
                                            i `notElem` ifc_inout_ids ]
 
         all_inouts = ifc_inouts ++ arg_inouts
-        rewire_inout (ASPort t i) = fromMaybe i (M.lookup i inout_rewire_map)
+        rewire_inout (ASPort t i) = fromMaybe i (IdMap.lookup i inout_rewire_map)
         rewire_inout e = internalError ("computeInouts - not port: " ++ ppReadable e)
      in mapThd rewire_inout all_inouts
 
@@ -987,7 +989,7 @@ genInstances :: ErrorHandle -> Flags -> [VMItem] -> (ADef -> [VMItem]) -> ASPack
                  [VId],     -- other defs that needed to be declared,
                             --   so don't re-declare these either
                  [VMItem],  -- always and initial blocks
-                 M.Map AId AId, -- inout rewiring map
+                 IdMap AId, -- inout rewiring map
                  [String])  -- toplevel comments for inlined submodules
 genInstances errh flags ff_blocks vDef aspack =
     let
@@ -1042,28 +1044,28 @@ genInstances errh flags ff_blocks vDef aspack =
 
         (inout_rewire_map, inout_inst_wires) = buildInoutConnectInfo inout_pairs
 
-        buildInoutConnectInfo pairs = apSnd M.keys $ foldr addInoutPair (M.empty, M.empty) inout_pairs
+        buildInoutConnectInfo pairs = apSnd IdMap.keys $ foldr addInoutPair (IdMap.empty, IdMap.empty) inout_pairs
 
-        addInoutPair :: (AId, AId) -> (M.Map AId AId, M.Map AId [AId]) -> (M.Map AId AId, M.Map AId [AId])
-        addInoutPair (i1, i2) (cm, rcm) | Just ic1 <- M.lookup i1 cm,
-                                          Just ic2 <- M.lookup i2 cm =
+        addInoutPair :: (AId, AId) -> (IdMap AId, IdMap [AId]) -> (IdMap AId, IdMap [AId])
+        addInoutPair (i1, i2) (cm, rcm) | Just ic1 <- IdMap.lookup i1 cm,
+                                          Just ic2 <- IdMap.lookup i2 cm =
           if ic1 == ic2
           then (cm, rcm) -- redundant connection
           -- we need to connect everything ic2 is connected to to ic1
-          else let ic2_cxns = fromJustOrErr ("ic2 not found: " ++ ppReadable (ic2, rcm)) (M.lookup ic2 rcm)
-                   update_cm = M.fromList $ map (\cxn -> (cxn, ic1)) ic2_cxns
-               in (M.unionWith (flip const) cm update_cm,
-                   M.delete ic2 $ M.adjust ((++) ic2_cxns) ic1 rcm)
-        addInoutPair (i1, i2) (cm, rcm) | Just i_shared <- M.lookup i1 cm,
-                                          not (M.member i2 cm) = (M.insert i2 i_shared cm,
-                                                                  M.adjust ((:) i2) i_shared rcm)
-        addInoutPair (i1, i2) (cm, rcm) | Just i_shared <- M.lookup i2 cm,
-                                          not (M.member i1 cm) = (M.insert i1 i_shared cm,
-                                                                  M.adjust ((:) i1) i_shared rcm)
+          else let ic2_cxns = fromJustOrErr ("ic2 not found: " ++ ppReadable (ic2, rcm)) (IdMap.lookup ic2 rcm)
+                   update_cm = IdMap.fromList $ map (\cxn -> (cxn, ic1)) ic2_cxns
+               in (IdMap.unionWith (flip const) cm update_cm,
+                   IdMap.delete ic2 $ IdMap.adjust ((++) ic2_cxns) ic1 rcm)
+        addInoutPair (i1, i2) (cm, rcm) | Just i_shared <- IdMap.lookup i1 cm,
+                                          not (IdMap.member i2 cm) = (IdMap.insert i2 i_shared cm,
+                                                                  IdMap.adjust ((:) i2) i_shared rcm)
+        addInoutPair (i1, i2) (cm, rcm) | Just i_shared <- IdMap.lookup i2 cm,
+                                          not (IdMap.member i1 cm) = (IdMap.insert i1 i_shared cm,
+                                                                  IdMap.adjust ((:) i1) i_shared rcm)
         addInoutPair (i1, i2) (cm, rcm) =
-           if (not (M.member i1 cm) && not (M.member i2 cm)) then
-             (M.insert i1 i1 $ M.insert i2 i1 cm,
-              M.insert i1 [i1,i2] rcm)
+           if (not (IdMap.member i1 cm) && not (IdMap.member i2 cm)) then
+             (IdMap.insert i1 i1 $ IdMap.insert i2 i1 cm,
+              IdMap.insert i1 [i1,i2] rcm)
            else internalError ("addInoutPair: " ++ ppReadable ((i1,i2),cm,rcm))
     -- ----------
     -- separate the Reg* instances, when inlining registers
@@ -1847,16 +1849,16 @@ isDeclFromList is (VMDecl (VVDecl _ _ [vv])) = vvName vv `S.member` is
 isDeclFromList _  _ = False
 
 -- lookup defs, maintaining their order, and returning the remaining defs
-findADefs :: [AId] -> M.Map AId ADef -> ([ADef], M.Map AId ADef)
+findADefs :: [AId] -> IdMap ADef -> ([ADef], IdMap ADef)
 findADefs ds defmap =
     let fn i (ds_accum, defmap_accum) =
-            case (M.lookup i defmap_accum) of
+            case (IdMap.lookup i defmap_accum) of
               Nothing -> (ds_accum, defmap_accum)
-              Just d -> (d:ds_accum, M.delete i defmap_accum)
+              Just d -> (d:ds_accum, IdMap.delete i defmap_accum)
     in  foldr fn ([], defmap) ds
 
-isADefFromMap :: M.Map AId a -> ADef -> Bool
-isADefFromMap m (ADef i _ _ _) = M.member i m
+isADefFromMap :: IdMap a -> ADef -> Bool
+isADefFromMap m (ADef i _ _ _) = IdMap.member i m
 
 -- ==============================
 

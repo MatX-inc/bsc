@@ -63,8 +63,11 @@ import Util
 import IntegerUtil
 
 import qualified Data.Map as M
-import qualified Data.Set as S
-import GraphUtil(reverseMap, extractOneCycle_map)
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
+import GraphUtil(extractOneCycle_map)
 import SCC(tsort)
 
 --import Debug.Trace
@@ -80,7 +83,7 @@ data VConvtOpts = VConvtOpts {
                               -- foreign-function map and def widths, for
                               -- monomorphizing polymorphic DPI call names
                               vco_ffmap       :: ForeignFuncMap,
-                              vco_def_widths  :: M.Map AId Integer,
+                              vco_def_widths  :: IdMap Integer,
                               vco_stable      :: Bool
                               }
 
@@ -92,7 +95,7 @@ flagsToVco flags = VConvtOpts {
                                vco_sv_tasks = systemVerilogOutput flags,
                                vco_use_dpi = useDPI flags,
                                vco_ffmap = M.empty,
-                               vco_def_widths = M.empty,
+                               vco_def_widths = IdMap.empty,
                                vco_stable = stableVerilog flags
                               }
 
@@ -141,15 +144,15 @@ vForeignBlock vco ffmap ds (_, []) = Nothing
 vForeignBlock vco ffmap ds (clks, fcalls) =
   let
       -- make a def map
-      def_map = M.fromList [(i, d) | d@(ADef i _ _ _) <- ds]
+      def_map = IdMap.fromList [(i, d) | d@(ADef i _ _ _) <- ds]
       findDef i = let err = internalError ("vForeignBlock findDef: " ++
                                            ppReadable i)
-                  in  M.findWithDefault err i def_map
+                  in  IdMap.findWithDefault err i def_map
 
       -- make a def dependency map
-      dep_map = M.fromList [(i, aVars d) | d@(ADef i _ _ _) <- ds]
+      dep_map = IdMap.fromList [(i, aVars d) | d@(ADef i _ _ _) <- ds]
       -- make a reverse dependency map
-      rev_dep_map = reverseMap dep_map
+      rev_dep_map = reverseIdMap dep_map
 
       -- find the defs which depend on the value of an ActionValue fcall
       av_depend_defs = getAVDependDefs rev_dep_map fcalls
@@ -234,7 +237,7 @@ vForeignCall vco f@(AForeignCall aid taskid (c:es) ids resets) ffmap =
               then dpiMonoCallName vco taskid retW (map (aSize . aType) es)
               else taskid
     retW = case ids of
-             (w:_) -> M.lookup w (vco_def_widths vco)
+             (w:_) -> IdMap.lookup w (vco_def_widths vco)
              []    -> Nothing
     vtaskid = VId dpiName aid Nothing
     (ids',es') = let lv = headOrErr "vForeignCall: missing return value" ids
@@ -324,17 +327,17 @@ tsortForeignCallsAndDefs stable ds fcalls =
         -- (we only want to make edges for variable uses from this list)
         ds_ids = map adef_objid ds
         -- for efficiency, make it a set
-        s = S.fromList ds_ids
+        s = IdSet.fromList ds_ids
 
         -- make edges for def-to-def dependencies
         def_edges = [ (Left (mkKey i), map (Left . mkKey) uses)
                           | ADef i _ e _ <- ds,
-                            let uses = filter (`S.member` s) (aVars e) ]
+                            let uses = filter (`IdSet.member` s) (aVars e) ]
 
         -- map def ids back to their defs
-        defmap = M.fromList [ (i,d) | d@(ADef i _ _ _) <- ds ]
+        defmap = IdMap.fromList [ (i,d) | d@(ADef i _ _ _) <- ds ]
         getDef i =
-            case (M.lookup i defmap) of
+            case (IdMap.lookup i defmap) of
                 Just d -> d
                 Nothing -> internalError "tsortForeignCallsAndDefs: getDef"
 
@@ -374,7 +377,7 @@ tsortForeignCallsAndDefs stable ds fcalls =
         -- fcall is called
         fcall_def_edges = [ (Right n, map (Left . mkKey) uses)
                                 | (n,f) <- numbered_fcalls,
-                                  let uses = filter (`S.member` s) (aVars f) ]
+                                  let uses = filter (`IdSet.member` s) (aVars f) ]
 
         -- any def which uses a value set by an fcall must be computed
         -- after the fcall is called
@@ -383,14 +386,14 @@ tsortForeignCallsAndDefs stable ds fcalls =
                 -- find the values set by the fcalls
                 avalue_pairs = [ (val, n) | (n,f) <- numbered_fcalls,
                                             val <- afc_writes f ]
-                avalue_map = M.fromList avalue_pairs
+                avalue_map = IdMap.fromList avalue_pairs
                 findNum i =
                     let err = internalError
                                   ("tsortForeignCallsAndDefs def_fcall_edges")
-                    in  M.findWithDefault err i avalue_map
+                    in  IdMap.findWithDefault err i avalue_map
                 -- and just the set of ids, for testing membership
-                avalue_set = M.keysSet avalue_map
-                isAV i = S.member i avalue_set
+                avalue_set = IdMap.keysSet avalue_map
+                isAV i = IdSet.member i avalue_set
                 -- find the defs that depend on the avalues
                 aval_refs = [ (i, refs)
                                  | (ADef i _ e _) <- ds,
@@ -437,7 +440,7 @@ tsortForeignCallsAndDefs stable ds fcalls =
             Left [] -> internalError ("tsortForeignCallsAndDefs: cyclic []")
 
 
-getAVDependDefs :: (M.Map AId [AId]) -> [AForeignCall] -> [AId]
+getAVDependDefs :: IdMap [AId] -> [AForeignCall] -> [AId]
 getAVDependDefs rev_dep_map fcalls =
     let avalues = concatMap afc_writes fcalls
         all_ids = closeOverMap rev_dep_map avalues
@@ -447,27 +450,39 @@ getAVDependDefs rev_dep_map fcalls =
         -- are at the end of the list and do this:
         --rDrop (length avalues) all_ids
 
-getFCallDependDefs :: (M.Map AId [AId]) -> [AForeignCall] -> [AId]
+getFCallDependDefs :: IdMap [AId] -> [AForeignCall] -> [AId]
 getFCallDependDefs dep_map fcalls =
     let -- XXX we presumably don't need to include the reset exprs?
         is = aVars (concatMap afc_args fcalls)
     in  closeOverMap dep_map is
 
-closeOverMap :: (M.Map AId [AId]) -> [AId] -> [AId]
-closeOverMap dmap is = S.toList $ closeOverMap' dmap (S.fromList is) S.empty is
+closeOverMap :: IdMap [AId] -> [AId] -> [AId]
+closeOverMap dmap is = IdSet.toList $ closeOverMap' dmap (IdSet.fromList is) IdSet.empty is
 
-closeOverMap' :: (M.Map AId [AId]) -> S.Set AId -> S.Set AId -> [AId] -> S.Set AId
+closeOverMap' :: IdMap [AId] -> IdSet -> IdSet -> [AId] -> IdSet
 closeOverMap' dmap considered consider_next [] =
-    if (S.null consider_next)
+    if (IdSet.null consider_next)
     then considered
-    else let consider_next' = S.difference consider_next considered
-             considered' = S.union considered consider_next'
-         in  closeOverMap' dmap considered' S.empty (S.toList consider_next')
+    else let consider_next' = IdSet.difference consider_next considered
+             considered' = IdSet.union considered consider_next'
+         in  closeOverMap' dmap considered' IdSet.empty (IdSet.toList consider_next')
 closeOverMap' dmap considered consider_next (i:is) =
-    case (M.lookup i dmap) of
-        (Just dep_is) -> let consider_next' = set_insertMany dep_is consider_next
+    case (IdMap.lookup i dmap) of
+        (Just dep_is) -> let consider_next' = IdSet.insertMany dep_is consider_next
                          in  closeOverMap' dmap considered consider_next' is
         Nothing       -> closeOverMap' dmap considered consider_next is
+
+-- GraphUtil.reverseMap over an IdMap: the same construction (every node
+-- gets an entry, each edge is reversed, fromListWith (++) in the blind
+-- list order), so the value lists come out as they did.
+reverseIdMap :: IdMap [AId] -> IdMap [AId]
+reverseIdMap m =
+    let edges = IdMap.toList m
+        startEdge (e1,_) = (e1, [])
+        reverseEdge (e1,es) = [(e2,[e1]) | e2 <- es]
+        rev_edges = map startEdge edges ++
+                    concatMap reverseEdge edges
+    in IdMap.fromListWith (++) rev_edges
 
 -- ==============================
 
@@ -953,7 +968,7 @@ wiredInstance item = internalError ("wiredInstance - not instance: " ++ ppReadab
 --    * a list of method input port signals, and
 --    * a list of method output port signals
 -- XXX this function is too big
-vState :: Flags -> M.Map AId AId -> AVInst -> (AId, VMItem, InstInfo)
+vState :: Flags -> IdMap AId -> AVInst -> (AId, VMItem, InstInfo)
 vState  flags rewire_map avinst =
     let vco = flagsToVco flags
         v_inst_name = avi_vname avinst
@@ -980,7 +995,7 @@ vState  flags rewire_map avinst =
             M.fromList (createVerilogNameMapForAVInst flags avinst)
 
         rewire_inout (ASPort t i) | isInoutType t,
-                                    Just i' <- M.lookup i rewire_map = ASPort t i'
+                                    Just i' <- IdMap.lookup i rewire_map = ASPort t i'
         rewire_inout e = e
 
         -- list of (parameter or port name, assigned expression)
@@ -1085,7 +1100,7 @@ vState  flags rewire_map avinst =
             [ (vIdV wvname, vId wid', wid' == wid)
                 | (wid, wtype, (wvname, wvprops)) <- getSpecialOutputs avinst,
                   -- redirect wires that need special wiring (currently inouts)
-                  let wid' = fromMaybe wid (M.lookup wid rewire_map),
+                  let wid' = fromMaybe wid (IdMap.lookup wid rewire_map),
                   isNotZeroSized wtype
             ]
 
