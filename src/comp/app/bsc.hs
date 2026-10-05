@@ -981,7 +981,7 @@ genModule
     aCheck flags amod_no_assumps "aRemoveAssumps"
     t <- dump errh flags t DFremoveAssumps dumpnames amod_no_assumps
 
-    -- drop ASAny with "chosen" values
+    -- drop ASAny (pick values for undetermined expressions)
     -- just before the split because other paths add new expressions
     -- and because we might choose more undets in pathsPostSched
     start flags DFdropundet

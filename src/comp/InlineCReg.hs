@@ -113,7 +113,7 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
                         arg_def = if (arg_id `S.member` defset) then
                                       []
                                   else
-                                      [ADef arg_id dataTy (ASAny dataTy Nothing) []]
+                                      [ADef arg_id dataTy (ASAny dataTy) []]
                     in  en_def ++ arg_def
 
                 makeReadResExpr 0 = ASPort dataTy (regReadResId i)

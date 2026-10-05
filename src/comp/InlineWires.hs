@@ -183,7 +183,7 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
                     else if (rw_data_id `S.member` defset) then
                         ([], [(rw_data_id, rw_get_id)])
                     else
-                        ([ADef rw_get_id (ATBit sz) (ASAny (ATBit sz) Nothing) []],
+                        ([ADef rw_get_id (ATBit sz) (ASAny (ATBit sz)) []],
                          [])
                 -- the output names
                 outputs =
