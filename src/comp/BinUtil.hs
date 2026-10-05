@@ -45,14 +45,14 @@ type BinFile a = ( String       -- filename
 type HashMap = M.Map Id (String, [Id])
 
 -- a map containing the binfiles that have been loaded, indexed by pkg name
-type BinMap a = M.Map String (BinFile PreElab)
+type BinMap = M.Map String (BinFile PreElab)
 
 
 -- =========================
 
 -- Read all .bo files imported by this package
-readImports :: ErrorHandle -> Flags -> BinMap PreElab -> HashMap -> CPackage ->
-               IO (CPackage, BinMap PreElab, HashMap)
+readImports :: ErrorHandle -> Flags -> BinMap -> HashMap -> CPackage ->
+               IO (CPackage, BinMap, HashMap)
 readImports errh flags binmap0 hashmap0
             (CPackage pkgId exps imps old_impsigs fixs ds includes) = do
   when (not (null old_impsigs)) $
@@ -95,8 +95,8 @@ readImports errh flags binmap0 hashmap0
 
 -- helper function that reads in a .bo file, and any .bo files that it needs
 readBin :: ErrorHandle -> Flags -> (Maybe String) ->
-           BinMap PreElab -> HashMap -> Id ->
-           IO (BinMap PreElab, HashMap, BinFile PreElab, [Id])
+           BinMap -> HashMap -> Id ->
+           IO (BinMap, HashMap, BinFile PreElab, [Id])
 readBin errh flags maybePkgName binmap0 hashmap0 p0 = do
    let
        -- if compiling a source package (that imports p0), detect when p0
@@ -109,8 +109,8 @@ readBin errh flags maybePkgName binmap0 hashmap0 p0 = do
                        ECircularImportsViaBinFile pkgName (getIdString p0))]
              _ -> return ()
 
-       fn :: [Id] -> BinMap PreElab -> HashMap -> [Id] ->
-             IO (BinMap PreElab, HashMap, [Id])
+       fn :: [Id] -> BinMap -> HashMap -> [Id] ->
+             IO (BinMap, HashMap, [Id])
        fn ps_read binmap hashmap [] = return (binmap, hashmap, reverse ps_read)
        fn ps_read binmap hashmap (p:ps) =
            case (M.lookup (getIdString p) binmap) of
