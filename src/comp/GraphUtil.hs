@@ -3,7 +3,8 @@ module GraphUtil (
                   extractOneCycle_gmap,
                   extractOneCycle_map,
                   findPathEdges,
-                  reverseMap
+                  reverseMap,
+                  reverseIdMap
                   ) where
 
 -- ==================================================
@@ -24,6 +25,10 @@ import qualified GraphMap as G
 import qualified GraphWrapper as GW
 
 import qualified Data.Map as M
+
+import Id(Id)
+import IdMap(IdMap)
+import qualified IdMap
 
 import System.IO.Unsafe
 
@@ -125,5 +130,20 @@ reverseMap m =
         rev_edges = map startEdge edges ++
                     concatMap reverseEdge edges
     in M.fromListWith (++) rev_edges
+
+-- reverseMap for an Id-keyed map: the same construction (every node
+-- gets an entry, each edge is reversed, fromListWith (++) assembles the
+-- lists in enumeration order) over IdMap's blind enumeration, which is
+-- the intern order that Ord Id gave reverseMap, so the reversed edge
+-- lists come out as they did.  Used by AVerilogUtil (foreign-block def
+-- dependencies) and SimExpand (conflict and flattened use maps).
+reverseIdMap :: IdMap [Id] -> IdMap [Id]
+reverseIdMap m =
+    let edges = IdMap.toList m
+        startEdge (e1,_) = (e1, [])
+        reverseEdge (e1,es) = [(e2,[e1]) | e2 <- es]
+        rev_edges = map startEdge edges ++
+                    concatMap reverseEdge edges
+    in IdMap.fromListWith (++) rev_edges
 
 -- ===============

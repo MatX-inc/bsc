@@ -74,7 +74,7 @@ import IdMap(IdMap)
 import qualified IdMap
 import IdSet(IdSet)
 import qualified IdSet
-import GraphUtil(extractOneCycle_map)
+import GraphUtil(extractOneCycle_map, reverseIdMap)
 import SCC(tsort)
 
 --import Debug.Trace
@@ -478,18 +478,6 @@ closeOverMap' dmap considered consider_next (i:is) =
         (Just dep_is) -> let consider_next' = IdSet.insertMany dep_is consider_next
                          in  closeOverMap' dmap considered consider_next' is
         Nothing       -> closeOverMap' dmap considered consider_next is
-
--- GraphUtil.reverseMap over an IdMap: the same construction (every node
--- gets an entry, each edge is reversed, fromListWith (++) in the blind
--- list order), so the value lists come out as they did.
-reverseIdMap :: IdMap [AId] -> IdMap [AId]
-reverseIdMap m =
-    let edges = IdMap.toList m
-        startEdge (e1,_) = (e1, [])
-        reverseEdge (e1,es) = [(e2,[e1]) | e2 <- es]
-        rev_edges = map startEdge edges ++
-                    concatMap reverseEdge edges
-    in IdMap.fromListWith (++) rev_edges
 
 -- ==============================
 

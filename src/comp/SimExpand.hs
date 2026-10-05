@@ -48,7 +48,7 @@ import SimDomainInfo
 import SCC (tsort)
 
 import Util (headOrErr, map_insertManyWith, allPairs, stableOrdNub, mapFst, mapSnd)
-import GraphUtil(extractOneCycle_map, reverseMap)
+import GraphUtil(extractOneCycle_map, reverseMap, reverseIdMap)
 
 -- ===============
 -- Traces
@@ -468,18 +468,6 @@ reverseSchedMap smap = M.mapKeys unFSN $ M.map (map unFSN) $ reverseMap smap'
 
 reverseConflictMap :: ConflictMap -> ConflictMap
 reverseConflictMap cmap = reverseIdMap cmap
-
--- GraphUtil.reverseMap for an IdMap: the reversed edge lists are built
--- in the blind (intern) order of the input map, as reverseMap builds them
--- in Data.Map's key order.
-reverseIdMap :: IdMap [AId] -> IdMap [AId]
-reverseIdMap m =
-    let edges = IdMap.toList m
-        startEdge (e1,_) = (e1, [])
-        reverseEdge (e1,es) = [(e2,[e1]) | e2 <- es]
-        rev_edges = map startEdge edges ++
-                    concatMap reverseEdge edges
-    in IdMap.fromListWith (++) rev_edges
 
 -- ----------
 
