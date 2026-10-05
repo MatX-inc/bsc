@@ -23,6 +23,7 @@ module LambdaCalcUtil(
 ) where
 
 import qualified Data.Map as M
+import IdMap(IdMap)
 import qualified IdMap
 import qualified Data.Set as S
 import Control.Monad(when)
@@ -147,11 +148,11 @@ checkInstArgs dump_name port_ids avi =
 
 -- -------------------------
 
-type DefMap = M.Map Id ADef
+type DefMap = IdMap ADef
 
 lookupDef :: DefMap -> Id -> ADef
 lookupDef defmap i =
-    case (M.lookup i defmap) of
+    case (IdMap.lookup i defmap) of
       Nothing -> internalError ("lookupDef: " ++ ppReadable i)
       Just res -> res
 
@@ -162,11 +163,11 @@ lookupDef defmap i =
 -- * The numeric type arguments for polymorphic modules
 -- * A map from AV method names to their return values
 --
-type InstMap = M.Map Id (String, [Integer], M.Map Id [AType])
+type InstMap = IdMap (String, [Integer], IdMap [AType])
 
-lookupMod :: InstMap -> Id -> (String, [Integer], M.Map Id [AType])
+lookupMod :: InstMap -> Id -> (String, [Integer], IdMap [AType])
 lookupMod instmap obj =
-    case (M.lookup obj instmap) of
+    case (IdMap.lookup obj instmap) of
       Nothing -> internalError ("lookupMod: " ++ ppReadable obj)
       Just m -> m
 
@@ -180,17 +181,17 @@ lookupMod instmap obj =
 -- map from submodule instance name to a set of pairs of method names
 -- where the first method must execute before the second
 -- (when executed sequentially for atomic execution in one action)
-type MethodOrderMap = M.Map AId (S.Set (AId, AId))
+type MethodOrderMap = IdMap (S.Set (AId, AId))
 
 mkMethodOrderMap :: [AVInst] -> MethodOrderMap
 mkMethodOrderMap avis =
     let mkMethodOrderSet avi =
             S.fromList $ sSB (methodConflictInfo (vSched (avi_vmi avi)))
-    in  M.fromList $ map (\avi -> (avi_vname avi, mkMethodOrderSet avi)) avis
+    in  IdMap.fromList $ map (\avi -> (avi_vname avi, mkMethodOrderSet avi)) avis
 
 findMethodOrderSet :: MethodOrderMap -> AId -> S.Set (AId, AId)
 findMethodOrderSet mmap id =
-    case M.lookup id mmap of
+    case IdMap.lookup id mmap of
         Just mset -> mset
         Nothing -> internalError ("SimPackage.findMethodOrderSet: " ++
                                   "cannot find " ++ ppReadable id)
@@ -199,16 +200,16 @@ findMethodOrderSet mmap id =
 
 -- Get all of the AIds used by AActions, as well as
 -- the AIds used by the defs of those AIds, etc.
-getAActionDefs :: DefMap -> M.Map AId (AType, AExpr) -> [AAction] ->
-                  M.Map AId (AType, AExpr)
+getAActionDefs :: DefMap -> IdMap (AType, AExpr) -> [AAction] ->
+                  IdMap (AType, AExpr)
 getAActionDefs def_map known [] = known
 getAActionDefs def_map known (act:acts) =
   let known' = getAExprDefs def_map known (aact_args act)
   in  getAActionDefs def_map known' acts
 
 -- Accumulate AIds used by an expression and its sub-expressions.
-getAExprDefs :: DefMap -> M.Map AId (AType, AExpr) -> [AExpr] ->
-                M.Map AId (AType, AExpr)
+getAExprDefs :: DefMap -> IdMap (AType, AExpr) -> [AExpr] ->
+                IdMap (AType, AExpr)
 getAExprDefs _ known [] = known
 getAExprDefs def_map known ((APrim _ _ _ args):es) =
   getAExprDefs def_map known (args ++ es)
@@ -221,12 +222,12 @@ getAExprDefs def_map known ((AFunCall _ _ _ _ args):es) =
 getAExprDefs def_map known ((ATuple _ elems):es) =
   getAExprDefs def_map known (elems ++ es)
 getAExprDefs def_map known ((ASDef _ i):es) =
-  case (M.lookup i known) of
+  case (IdMap.lookup i known) of
     Just _ -> getAExprDefs def_map known es
     Nothing ->
-        case M.lookup i def_map of
+        case IdMap.lookup i def_map of
           (Just def@(ADef _ t e _)) ->
-              let known' = M.insert i (t, e) known
+              let known' = IdMap.insert i (t, e) known
               in  getAExprDefs def_map known' ((adef_expr def):es)
           Nothing ->
               --getAExprDefs def_map known' es
@@ -241,7 +242,7 @@ getAExprDefs def_map known (_:es) = getAExprDefs def_map known es
 -- XXX See "makeMethodTemps".
 --
 tsortActionsAndDefs :: MethodOrderMap -> DefMap ->
-                       M.Map AId (AType, AExpr) -> [AAction] ->
+                       IdMap (AType, AExpr) -> [AAction] ->
                        ([Either ADef AAction], M.Map (AId, AId) (AId, AType))
 tsortActionsAndDefs mmap defmap uses acts =
     let
@@ -257,13 +258,13 @@ tsortActionsAndDefs mmap defmap uses acts =
 
         -- find the defs
         used_defs :: [ADef]
-        used_defs = map (\ (i, (t, e)) -> ADef i t e []) (M.toList uses)
+        used_defs = map (\ (i, (t, e)) -> ADef i t e []) (IdMap.toList uses)
 
         -- make edges for def-to-def dependencies
         def_edges =
             [ (Left i, map Left uses)
                   | ADef i _ e _ <- used_defs,
-                    let uses = M.keys $ getAExprDefs defmap M.empty [e] ]
+                    let uses = IdMap.keys $ getAExprDefs defmap IdMap.empty [e] ]
 
         -- ----------
         -- Actions
@@ -314,7 +315,7 @@ tsortActionsAndDefs mmap defmap uses acts =
         act_def_edges =
             [ (Right n, map Left uses)
                   | (n, a) <- numbered_acts,
-                    let uses = M.keys $ getAActionDefs defmap M.empty [a] ]
+                    let uses = IdMap.keys $ getAActionDefs defmap IdMap.empty [a] ]
 
         -- ----------
         -- Action method to Action method edges
@@ -784,7 +785,7 @@ mergeStmts defmap stmts0 =
 updateAPackageTypes :: APackage -> APackage
 updateAPackageTypes apkg =
     let
-        defmap = M.fromList [ (i, d) | d@(ADef i _ _ _) <- apkg_local_defs apkg ]
+        defmap = IdMap.fromList [ (i, d) | d@(ADef i _ _ _) <- apkg_local_defs apkg ]
 
         updateFn = do
           rs <- mapM updateARuleTypes (apkg_rules apkg)
@@ -794,7 +795,7 @@ updateAPackageTypes apkg =
 
         ((rs', ifcs', avis'), defmap') = runUTM defmap updateFn
     in
-        apkg { apkg_local_defs = M.elems defmap',
+        apkg { apkg_local_defs = IdMap.elems defmap',
                apkg_rules = rs',
                apkg_interface = ifcs',
                apkg_state_instances = avis' }
@@ -815,7 +816,7 @@ type UTM = State UpdateTypesState
 runUTM :: DefMap -> (UTM a) -> (a, DefMap)
 runUTM defmap fn =
     let state0 = UpdateTypesState { ut_defMap = defmap,
-                                    ut_usedDefMap = M.empty }
+                                    ut_usedDefMap = IdMap.empty }
         (v, state) = runState fn state0
     in  (v, ut_usedDefMap state)
 
@@ -823,7 +824,7 @@ addToUTMDefMap :: AId -> ADef -> UTM ()
 addToUTMDefMap i d = do
   s <- get
   let dmap = ut_usedDefMap s
-      dmap' = M.insert i d dmap
+      dmap' = IdMap.insert i d dmap
   put (s { ut_usedDefMap = dmap' })
 
 -- -----
@@ -1006,11 +1007,11 @@ updateAExprTypes _ e@(ASStr i t v) = return e
 
 updateAExprTypes mty (ASDef _ i) = do
   used_map <- gets ut_usedDefMap
-  case (M.lookup i used_map) of
+  case (IdMap.lookup i used_map) of
     Just (ADef { adef_type = def_ty }) -> return (ASDef def_ty i)
     Nothing -> do
       def_map <- gets ut_defMap
-      case (M.lookup i def_map) of
+      case (IdMap.lookup i def_map) of
         Nothing -> internalError ("updateAExprTypes: def: " ++ ppReadable i)
         Just (ADef { adef_expr = e, adef_props = props }) -> do
           e' <- updateAExprTypes mty e
@@ -1230,7 +1231,7 @@ inlineUndet = mapAExprs g
 
 -- -------------------------
 
-getSubModAVMethReturnTypes :: AVInst -> M.Map Id [AType]
+getSubModAVMethReturnTypes :: AVInst -> IdMap [AType]
 getSubModAVMethReturnTypes avi =
     let
         meth_types = avi_meth_types avi
@@ -1241,7 +1242,7 @@ getSubModAVMethReturnTypes avi =
 
         pairs = catMaybes $ zipWith mkPair vfis meth_types
     in
-        M.fromList pairs
+        IdMap.fromList pairs
 
 -- -------------------------
 

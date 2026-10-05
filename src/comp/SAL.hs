@@ -10,14 +10,17 @@ import Prelude hiding ((<>))
 #endif
 
 import qualified Data.Map as M
-import qualified Data.Set as S
+import IdMap(IdMap)
+import qualified IdMap
+import IdSet(IdSet)
+import qualified IdSet
 import Control.Monad(foldM)
 import Control.Monad.State(State, runState, gets, get, put)
 import Data.Maybe(mapMaybe)
 import Data.Char(toLower)
 import Data.List(intersperse, groupBy)
 
-import Util(snd3, fst2of3, eqSnd, itos, concatMapM, map_deleteMany, makePairs)
+import Util(snd3, fst2of3, eqSnd, itos, concatMapM, makePairs)
 
 import Error(internalError, ErrorHandle, bsWarning)
 import Flags
@@ -54,7 +57,7 @@ convAPackageToSAL errh flags apkg0 | (apkg_is_wrapped apkg0) =
 
         ds    = apkg_local_defs apkg
         ifcs  = apkg_interface apkg
-        defmap = M.fromList [ (i, d) | d@(ADef i _ _ _) <- ds ]
+        defmap = IdMap.fromList [ (i, d) | d@(ADef i _ _ _) <- ds ]
 
         -- there should be one value method, and its constant RDY
         fn_defs =
@@ -69,16 +72,16 @@ convAPackageToSAL errh flags apkg0 | (apkg_is_wrapped apkg0) =
                   args = aIfaceArgs iface
                   rt = convAType ret_t
 
-                  argset = S.fromList (map fst args)
+                  argset = IdSet.fromList (map fst args)
                   arg_infos = map (\(i,t) -> (methArgId i, convAType t)) args
                   arg_types = map snd arg_infos
 
                   -- get all the defs used by the return value
-                  uses = getAExprDefs defmap M.empty [ret_e]
+                  uses = getAExprDefs defmap IdMap.empty [ret_e]
 
-                  body = runCM defmap M.empty argset $ do
+                  body = runCM defmap IdMap.empty argset $ do
                            ret_expr <- convAExpr ret_e
-                           ds <- mapM convUse (M.toList uses)
+                           ds <- mapM convUse (IdMap.toList uses)
                            return $ sLet ds ret_expr
               in
                   [SDValue noinlineId (funcType arg_types rt) $
@@ -112,8 +115,8 @@ convAPackageToSAL errh flags apkg0 =
         rs    = apkg_rules apkg
         ifcs  = apkg_interface apkg
         inps  = getAPackageInputs apkg
-        defmap = M.fromList [ (i, d) | d@(ADef i _ _ _) <- ds ]
-        instmap = M.fromList [ (inst, (vn, ps, mtmap))
+        defmap = IdMap.fromList [ (i, d) | d@(ADef i _ _ _) <- ds ]
+        instmap = IdMap.fromList [ (inst, (vn, ps, mtmap))
                                  | avi <- avis,
                                    let inst = avi_vname avi,
                                    let (vn, ps) = getSubModType avi,
@@ -850,8 +853,8 @@ makeModCtorDecl defmap inps avis =
 
         inp_fs = map mkInputField inp_infos
 
-        mkInstField :: ([(SId, SExpr)], M.Map AId (AType, AExpr)) ->
-                       AVInst -> CM ([(SId, SExpr)], M.Map AId (AType, AExpr))
+        mkInstField :: ([(SId, SExpr)], IdMap (AType, AExpr)) ->
+                       AVInst -> CM ([(SId, SExpr)], IdMap (AType, AExpr))
         mkInstField (accum_fs, accum_uses) avi = do
             let fname = instFieldId (avi_vname avi)
                 (submod, submod_tys, args) = getSubModArgs avi
@@ -863,9 +866,9 @@ makeModCtorDecl defmap inps avis =
             return (accum_fs', accum_uses')
 
         (inst_fs, letdefs) =
-            runCM defmap M.empty S.empty $ do
-              (fs, uses) <- foldM mkInstField ([], M.empty) (reverse avis)
-              ds <- mapM convUse (M.toList uses)
+            runCM defmap IdMap.empty IdSet.empty $ do
+              (fs, uses) <- foldM mkInstField ([], IdMap.empty) (reverse avis)
+              ds <- mapM convUse (IdMap.toList uses)
               return (fs, ds)
 
         -- SAL does not support records with no fields
@@ -883,7 +886,7 @@ makeModCtorDecl defmap inps avis =
 convARule :: DefMap -> InstMap -> MethodOrderMap -> ARule -> SDefn
 convARule defmap instmap mmap r@(ARule rId _ _ _ p as _ _) =
   let
-      body = runCM defmap instmap S.empty $ convRuleActions mmap p as
+      body = runCM defmap instmap IdSet.empty $ convRuleActions mmap p as
   in
       SDValue (ruleId rId) (ruleType modType) $
         sLam [(stateId, modType)] $
@@ -900,16 +903,16 @@ convAIFace defmap instmap mmap
       args = aIfaceArgs iface
       rt = convAType ret_t
 
-      argset = S.fromList (map fst args)
+      argset = IdSet.fromList (map fst args)
       arg_infos = map (\(i,t) -> (methArgId i, convAType t)) args
       arg_types = map snd arg_infos
 
       -- get all the defs used by the return value
-      uses = getAExprDefs defmap M.empty [ret_e]
+      uses = getAExprDefs defmap IdMap.empty [ret_e]
 
       body = runCM defmap instmap argset $ do
                  ret_expr <- convAExpr ret_e
-                 ds <- mapM convUse (M.toList uses)
+                 ds <- mapM convUse (IdMap.toList uses)
                  return $ sLet ds ret_expr
   in
       [SDValue (modMethId methId) (valueMethType arg_types modType rt) $
@@ -921,7 +924,7 @@ convAIFace defmap instmap mmap
   let
       args = aIfaceArgs iface
       -- arguments are Bit type
-      argset = S.fromList (map fst args)
+      argset = IdSet.fromList (map fst args)
       arg_infos = map (\(i,t) -> (methArgId i, convAType t)) args
       arg_types = map snd arg_infos
 
@@ -941,7 +944,7 @@ convAIFace defmap instmap mmap
       ret_ty = convAType def_t
 
       -- arguments are Bit type
-      argset = S.fromList (map fst args)
+      argset = IdSet.fromList (map fst args)
       arg_infos = map (\(i,t) -> (methArgId i, convAType t)) args
       arg_types = map snd arg_infos
 
@@ -964,14 +967,14 @@ convAIFaceBody mmap methId rs m_ret = do
   defmap <- gets defMap
   let
       -- get all the defs used in the predicates of the rules
-      pred_uses = getAExprDefs defmap M.empty (map arule_pred rs)
+      pred_uses = getAExprDefs defmap IdMap.empty (map arule_pred rs)
 
       -- conv one rule
       convRule (ARule _ _ _ _ p as _ _) = do
         p_expr <- convAExpr p
         -- convert the body without a predicate
         -- (and assuming that the pred_uses are already in scope)
-        r_upd <- convMethActions (M.keys pred_uses) mmap as m_ret
+        r_upd <- convMethActions (IdMap.keys pred_uses) mmap as m_ret
         return (p_expr, r_upd)
 
       -- fold this in reverse
@@ -989,10 +992,10 @@ convAIFaceBody mmap methId rs m_ret = do
     -- leaving one rule with a non-True predicate?)
     rs -> do
       -- the predicates in the if-else structure may refer to defs
-      ds <- mapM convUse (M.toList pred_uses)
+      ds <- mapM convUse (IdMap.toList pred_uses)
       -- we don't assume that the predicates are complete,
       -- so the final branch is a null update
-      null_upd <- convMethActions (M.keys pred_uses) mmap [] m_ret
+      null_upd <- convMethActions (IdMap.keys pred_uses) mmap [] m_ret
       rs_expr <- foldM foldFn null_upd (reverse rs)
       return $ sLet ds rs_expr
 
@@ -1003,7 +1006,7 @@ data ConvState =
         defMap :: DefMap,
         instMap :: InstMap,
         -- the arguments to a method, when converting in a method body
-        argSet :: S.Set AId,
+        argSet :: IdSet,
 
         -- store of unique numbers for generating let-binding names
         uniqueNum :: Integer,
@@ -1014,7 +1017,7 @@ data ConvState =
 
 type CM = State ConvState
 
-runCM :: DefMap -> InstMap -> S.Set AId -> (CM a) -> a
+runCM :: DefMap -> InstMap -> IdSet -> (CM a) -> a
 runCM defmap instmap argset fn =
     let state0 = ConvState { defMap  = defmap,
                              instMap = instmap,
@@ -1073,7 +1076,7 @@ convActions isRule predefined_defs mmap p as m_ret = do
 
   let
       -- get all defs used in the actions
-      uses0 = getAActionDefs defmap M.empty as
+      uses0 = getAActionDefs defmap IdMap.empty as
       -- merge in the defs for the return value
       uses1 = case m_ret of
                 Nothing -> uses0
@@ -1081,7 +1084,7 @@ convActions isRule predefined_defs mmap p as m_ret = do
       -- merge in the defs for the predicate
       uses2 = getAExprDefs defmap uses1 [p]
       -- remove the defs that already defined
-      uses = map_deleteMany predefined_defs uses2
+      uses = IdMap.deleteMany predefined_defs uses2
 
       -- order the defs and actions
       (ordered_stmts, avmap) =
@@ -1164,7 +1167,7 @@ convStmt avmap (AStmtAction cset (ACall obj meth as)) = do
             Just (i, t) -> (convAType t, Just (defId i))
             Nothing -> -- no name because the value is unused
                        -- but we still need to declare the correct type
-                       case (M.lookup (unQualId meth) meth_ty_map) of
+                       case (IdMap.lookup (unQualId meth) meth_ty_map) of
                          Just [t] -> (convAType t, Nothing)
                          Just [] -> (voidType, Nothing)
                          Just _ -> error ("convStmt: multiple return values for method "
@@ -1272,7 +1275,7 @@ convAExpr (ASDef t i) = return $ defVar i
 
 convAExpr (ASPort t i) = do
   argset <- gets argSet
-  if (S.member i argset)
+  if (IdSet.member i argset)
     then -- just reference the argument
          return $ sVar $ methArgId i
     else -- select the value from the state
