@@ -229,6 +229,10 @@ hmain args = do
             do { setFlags flags; doWarnings; showPreamble flags;
                  simLink errh flags top abinFiles cSrcFiles;
                  exitOK errh }
+        DCodeGen flags mods abinFiles ->
+            do { setFlags flags; doWarnings; showPreamble flags;
+                 codeGen errh flags mods abinFiles;
+                 exitOK errh }
 
 
 main' :: ErrorHandle -> Flags -> String -> IO ()
@@ -1332,8 +1336,11 @@ genModuleC errh flags dumpnames time0 toplevel abis =
 
        -- extract file dependency structure and determine if any
        -- existing bluesim packages can reuse existing object files
+       -- (in -c mode, all files are always regenerated)
        start flags DFsimDepend
-       reused <- analyzeBluesimDependencies flags sim_system prefix
+       reused <- if (blockCodegen flags)
+                 then return []
+                 else analyzeBluesimDependencies flags sim_system prefix
        time <- dump errh flags time DFsimDepend dumpnames reused
 
        -- optimize the SimPackages and SimSchedules
@@ -1394,12 +1401,25 @@ genModuleC errh flags dumpnames time0 toplevel abis =
                                    gate_info_opt
                                    writeFileC
 
-       -- generate a header with imported function declarations
+       -- Generate a header with imported function declarations.
+       -- DEPRECATED: generated module code now declares its imported
+       -- functions inline (SimBlocksToC), so nothing generated includes
+       -- this file.  It is still written on -e links, with a #warning,
+       -- in case an out-of-tree build includes it by name; it will stop
+       -- being generated in a future release.  -c mode never writes it
+       -- (a whole-design artifact has no place in per-module codegen).
+       let deprecation_notice = unlines
+             [ "/* DEPRECATED: generated module code now declares its"
+             , " * imported functions inline; nothing generated includes"
+             , " * this file any longer, and it will stop being generated"
+             , " * in a future release. */"
+             , "#warning \"imported_BDPI_functions.h is deprecated; imported-function declarations are now inline in each generated .cxx\""
+             ]
        let import_header =
-             if M.null ff_map
+             if M.null ff_map || blockCodegen flags
              then []
              else [("imported_BDPI_functions.h",
-                    ppReadable (mkImportDeclarations ff_map))]
+                    deprecation_notice ++ ppReadable (mkImportDeclarations ff_map))]
 
        imp_names <- mapM (uncurry writeFileC) import_header
 
@@ -1429,6 +1449,19 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        -- XXX return the headers separate from the files which need to be
        -- XXX compiled
        return (time, names, reused_names, creation_time)
+
+-- ===============
+-- CodeGen
+
+-- The -c mode: generate code for a module from its elaborated (.ba)
+-- file, the middle stage of the three-stage flow (elaborate -> codegen ->
+-- link).  For Bluesim this reuses the front half of simLink, which under
+-- blockCodegen generates each module's C++ as a reusable block (no
+-- schedule or top-level wrapper) and skips compiling and linking.
+codeGen :: ErrorHandle -> Flags -> [String] -> [String] -> IO ()
+codeGen errh flags mods abinFiles =
+    let flags' = flags { blockCodegen = True }
+    in  mapM_ (\m -> simLink errh flags' m abinFiles []) mods
 
 -- ===============
 -- SimLink
@@ -1483,7 +1516,10 @@ simLink errh flags toplevel afilenames cfilenames = do
     start flags DFbluesimcompile
     let jobs = parallelSimLink flags
     (gen_ofiles, compiled_user_ofiles) <-
-        if (jobs > 1)
+        if (blockCodegen flags)
+        then -- the user's build system compiles the generated files
+          return ([], [])
+        else if (jobs > 1)
         then do
           compileParallelCFiles errh flags False
               toplevel gen_cfiles user_cfiles
@@ -1501,9 +1537,10 @@ simLink errh flags toplevel afilenames cfilenames = do
     t <- dump errh flags t_before_compilations DFbluesimcompile dumpnames
               ofiles
 
-    -- if not generating a SystemC model, link to a Bluesim executable
+    -- if generating a SystemC model or only generating code,
+    -- there is nothing to link; otherwise link a Bluesim executable
     start flags DFbluesimlink
-    when (not (genSysC flags)) $
+    when (not (genSysC flags) && not (blockCodegen flags)) $
       cxxLink errh flags toplevel ofiles creation_time
     t <- dump errh flags t DFbluesimlink dumpnames toplevel
 
