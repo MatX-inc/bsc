@@ -535,8 +535,6 @@ aExpr e@(IAps (ICon _ _ (ICSel {})) _ _) = aSelExpr sels selExpr
                          ppReadable e)
       unfoldICSel e = ([], [e])
 
-aExpr (IAps (ICon _ (ITAp _ t) (ICCon { conTagInfo = cti })) _ _) | t == itBit1 =
-        return $ aSBool (conNo cti /= 0)
 aExpr e@(IAps (ICon i _ (ICForeign { fName = name, isC = isC, foports = Nothing})) ts es) = do
         es' <- mapM aSExpr es
         -- XXX should this ever happen?
