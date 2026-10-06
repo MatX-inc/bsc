@@ -119,17 +119,36 @@ the library's (`common_deps`); `src/comp/app` is no source directory of the
 library, so the entry module is the program's alone, and it carries `import
 Warmup ()`. (bluetcl differs: no `-main-is`, a helper module and a C shim.)
 
-## 5. The determinism claim
+## 5. The determinism ladder
 
 The claim: one commit built from clean serially, oversubscribed or in another
-checkout directory gives the same objects, interfaces, archives, programs and
-shared object, and a rebuild after an edit and its revert lands on the same
-bytes.
+checkout directory, or rebuilt after an edit and its revert, gives
+bit-identical objects, archives, programs, and interfaces identical as `ghc
+--show-iface` text.
 
 What holds it: every program links against the library's archive, compiled
 once; `Warmup` fixes the interface-load order; `-fobject-determinism`, from GHC
 9.12, makes an object independent of the session's uniques; and the solvers are
 linked by name.
 
-The check of the claim, a ladder of builds hashed and compared on one machine
-and in CI, is a separate series.
+`util/cabal-ladder.sh`:
+
+- `hash OUT` hashes the build under `dist-newstyle`; interfaces as `ghc
+  --show-iface` text minus the interface hash and flags fingerprint, since
+  their bytes carry the checkout directory.
+- `verdict REF OTHER...` compares each list with the reference; an absent list
+  is MISSING.
+- `run` is the ladder on one machine (two clean builds, `-j1`, `-j64`, then a
+  marker edit to `src/comp/Libs/IOUtil.hs`, a rebuild, its revert and a
+  rebuild), into `determinism-results/`.
+
+`.github/workflows/cabal.yml` runs on pull requests that touch the build and on
+a dispatch, which picks the GHC (default 9.14.1). The legs on ubuntu-24.04 and
+macos-15, each a checkout directory and a jobs count (`jobs: N` and, from 9.12,
+`ghc-options: -jN` in a `cabal.project.local`): `c-j1`, the reference, and
+`c-j64` on a pull request, with `c-j16`, `a-j64` and `d-j64` on a dispatch.
+Each builds and hashes the build. A verdict job per OS compares every planned
+leg against `c-j1`; a failed one is MISSING. A difference is a design question
+before it is a fix: the first suspects are a root module without the Warmup
+import, interface content the direct-dependency rule does not cover, and a
+program's entry module.
