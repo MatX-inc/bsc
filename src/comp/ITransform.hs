@@ -174,20 +174,6 @@ iTrExpr ctx idxs (IAps psel@(ICon _ _ (ICPrim PrimArrayDynSelect)) ts@[elem_ty, 
         idx' <- iTrExpr ctx [] (expValShallow idx)
         arr' <- iTrExpr ctx ((idx,sz_idx):idxs) (expValShallow arr)
         iTrExpr' ctx idxs psel ts [arr', idx']
-iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pupd@(ICon _ _ (ICPrim PrimArrayDynUpdate)) ts@[elem_ty, ITNum sz_upd_idx] [arr, upd_idx, val]) = do
-        upd_idx' <- iTrExpr ctx [] (expValShallow upd_idx)
-        let mkExtend in_sz out_sz e =
-                let k = out_sz - in_sz
-                    ts = [ITNum k, ITNum in_sz, ITNum out_sz]
-                in  IAps icPrimZeroExt ts [e]
-            eq_e = let (max_sz, e1, e2)
-                           | sz_idx > sz_upd_idx = (sz_idx, idx, mkExtend sz_upd_idx sz_idx upd_idx)
-                           | sz_idx < sz_upd_idx = (sz_upd_idx, mkExtend sz_idx sz_upd_idx idx, upd_idx)
-                           | otherwise           = (sz_upd_idx, idx, upd_idx)
-                   in  iePrimEQ (ITNum max_sz) e1 e2
-        val' <- iTrExpr (addT eq_e ctx) idxs (expValShallow val)
-        arr' <- iTrExpr (addF eq_e ctx) idxs (expValShallow arr)
-        iTrExpr' ctx idxs pupd ts [arr', upd_idx', val']
 iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pbld@(ICon i _ (ICPrim PrimBuildArray)) ts es) = do
         let foldFn (res_es, res_ctx) (n, e) = do
               let n_lit = iMkLitAt (getPosition i) (aitBit (ITNum sz_idx)) n

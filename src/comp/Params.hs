@@ -219,8 +219,6 @@ isConstOp PrimTrunc   = True
 
 isConstOp PrimExtract = True
 isConstOp PrimConcat  = True
--- This would also be replaced?
-isConstOp PrimSplit   = True  -- not handled in AVerilogUtil
 
 isConstOp PrimBNot      = True  -- VNot
 isConstOp PrimBAnd      = True  -- VLAnd

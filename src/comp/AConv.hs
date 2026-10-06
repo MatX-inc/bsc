@@ -503,9 +503,6 @@ aExpr (IAps (ICon i _ (ICPrim PrimExtract)) [ITNum i1, _, ITNum i2] [e,h,l]) = d
 -- XXX we can remove PrimRange here, or keep it
 aExpr (IAps (ICon i _ (ICPrim PrimRange)) _ [_,_,e]) =
         aSExpr e
--- XXX hack to get strings into the compiler (masquerade as integers or bits)
-aExpr (IAps (ICon i1 _ (ICPrim PrimIntegerToBit)) _ [IAps (ICon i2 _ (ICPrim PrimStringToInteger)) _ [s]]) =
-        aExpr s
 -- special cases for sign and zero extensions, since they depend on the type information
 aExpr e@(IAps (ICon i _ (ICPrim PrimSignExt)) [_,_,ITNum ii] es) = do
         es' <- mapM aSExpr es

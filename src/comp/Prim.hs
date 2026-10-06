@@ -174,6 +174,14 @@ data PrimOp (p :: Phase) where
 
         PrimEQ3 :: PrimOp p  -- === / Verilog case equality
 
+        -- The Bool <-> Bit 1 coercions.  Elaboration folds them (a nullary
+        -- constructor is PrimChr of its tag), but LambdaCalcUtil builds
+        -- them again after AConv, as the casts its type repair inserts
+        -- for the SAL and lambda-calculus dumps, which consume them; a
+        -- cast of their own there would make these elaboration-only.
+        PrimOrd :: PrimOp p
+        PrimChr :: PrimOp p
+
 
         -- (3) The primitives of elaboration only: folded by the
         -- evaluator (IPrims.doPrimOp', IExpand.conAp') or consumed by
@@ -183,252 +191,249 @@ data PrimOp (p :: Phase) where
         -- PrimSplit never reaches the evaluator at all (IConv rewrites
         -- a saturated primSplit to two selects) and PrimDynamicError
         -- has no use; both stay for the Prelude's declarations.
-        PrimSplit :: PrimOp p
+        PrimSplit :: PrimOp ('Ph 'WithBinders e)
 
-        PrimInoutCast :: PrimOp p
-        PrimInoutUncast :: PrimOp p
+        PrimInoutCast :: PrimOp ('Ph 'WithBinders e)
+        PrimInoutUncast :: PrimOp ('Ph 'WithBinders e)
 
-        PrimMethod :: PrimOp p
-        PrimNoInline :: PrimOp p
+        PrimMethod :: PrimOp ('Ph 'WithBinders e)
+        PrimNoInline :: PrimOp ('Ph 'WithBinders e)
 
         -- primitives without hardware representation
-        PrimIntegerToBit :: PrimOp p
-        PrimIntegerToUIntBits :: PrimOp p
-        PrimIntegerToIntBits :: PrimOp p
-        PrimBitToInteger :: PrimOp p  -- XXX dangerous
-        PrimIntegerToString :: PrimOp p
+        PrimIntegerToBit :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerToUIntBits :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerToIntBits :: PrimOp ('Ph 'WithBinders e)
+        PrimBitToInteger :: PrimOp ('Ph 'WithBinders e)  -- XXX dangerous
+        PrimIntegerToString :: PrimOp ('Ph 'WithBinders e)
 
         -- must be called on compile-time values
-        PrimIntBitsToInteger :: PrimOp p
-        PrimUIntBitsToInteger :: PrimOp p
+        PrimIntBitsToInteger :: PrimOp ('Ph 'WithBinders e)
+        PrimUIntBitsToInteger :: PrimOp ('Ph 'WithBinders e)
 
-        PrimIsStaticInteger :: PrimOp p
-        PrimAreStaticBits :: PrimOp p
+        PrimIsStaticInteger :: PrimOp ('Ph 'WithBinders e)
+        PrimAreStaticBits :: PrimOp ('Ph 'WithBinders e)
 
-        PrimValueOf :: PrimOp p
-        PrimStringOf :: PrimOp p
+        PrimValueOf :: PrimOp ('Ph 'WithBinders e)
+        PrimStringOf :: PrimOp ('Ph 'WithBinders e)
 
-        PrimWhen :: PrimOp p
-        PrimWhenPred :: PrimOp p  -- takes abstract predicate
+        PrimWhen :: PrimOp ('Ph 'WithBinders e)
+        PrimWhenPred :: PrimOp ('Ph 'WithBinders e)  -- takes abstract predicate
 
-        PrimOrd :: PrimOp p
-        PrimChr :: PrimOp p
+        PrimError :: PrimOp ('Ph 'WithBinders e)
+        PrimGenerateError :: PrimOp ('Ph 'WithBinders e)
+        PrimMessage :: PrimOp ('Ph 'WithBinders e)
+        PrimWarning :: PrimOp ('Ph 'WithBinders e)
+        PrimPoisonedDef :: PrimOp ('Ph 'WithBinders e)
 
-        PrimError :: PrimOp p
-        PrimGenerateError :: PrimOp p
-        PrimMessage :: PrimOp p
-        PrimWarning :: PrimOp p
-        PrimPoisonedDef :: PrimOp p
+        PrimDynamicError :: PrimOp ('Ph 'WithBinders e)
+        PrimStringToInteger :: PrimOp ('Ph 'WithBinders e)
+        PrimStringEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimStringLT :: PrimOp ('Ph 'WithBinders e)
+        PrimStringLE :: PrimOp ('Ph 'WithBinders e)
+        PrimStringLength :: PrimOp ('Ph 'WithBinders e)
 
-        PrimDynamicError :: PrimOp p
-        PrimStringToInteger :: PrimOp p
-        PrimStringEQ :: PrimOp p
-        PrimStringLT :: PrimOp p
-        PrimStringLE :: PrimOp p
-        PrimStringLength :: PrimOp p
+        PrimStringSplit :: PrimOp ('Ph 'WithBinders e)
+        PrimStringCons :: PrimOp ('Ph 'WithBinders e)
 
-        PrimStringSplit :: PrimOp p
-        PrimStringCons :: PrimOp p
-
-        PrimCharToString :: PrimOp p
-        PrimStringToChar :: PrimOp p
-        PrimCharOrd :: PrimOp p
-        PrimCharChr :: PrimOp p
-        PrimAddRules :: PrimOp p
-        PrimModuleBind :: PrimOp p
-        PrimModuleReturn :: PrimOp p
-        PrimModuleFix :: PrimOp p
-        PrimModuleClock :: PrimOp p
-        PrimModuleReset :: PrimOp p
-        PrimBuildModule :: PrimOp p
-        PrimCurrentClock :: PrimOp p
-        PrimCurrentReset :: PrimOp p
-        PrimSameFamilyClock :: PrimOp p
-        PrimIsAncestorClock :: PrimOp p
-        PrimChkClockDomain :: PrimOp p
-        PrimClockEQ :: PrimOp p
-        PrimClockOf :: PrimOp p
-        PrimClocksOf :: PrimOp p
-        PrimNoClock :: PrimOp p
-        PrimResetEQ :: PrimOp p
-        PrimResetOf :: PrimOp p
-        PrimResetsOf :: PrimOp p
-        PrimNoReset :: PrimOp p
-        PrimJoinRules :: PrimOp p
-        PrimJoinRulesPreempt :: PrimOp p
-        PrimJoinRulesUrgency :: PrimOp p
-        PrimJoinRulesExecutionOrder :: PrimOp p
-        PrimJoinRulesMutuallyExclusive :: PrimOp p
-        PrimJoinRulesConflictFree :: PrimOp p
-        PrimNoRules :: PrimOp p
-        PrimRule :: PrimOp p
+        PrimCharToString :: PrimOp ('Ph 'WithBinders e)
+        PrimStringToChar :: PrimOp ('Ph 'WithBinders e)
+        PrimCharOrd :: PrimOp ('Ph 'WithBinders e)
+        PrimCharChr :: PrimOp ('Ph 'WithBinders e)
+        PrimAddRules :: PrimOp ('Ph 'WithBinders e)
+        PrimModuleBind :: PrimOp ('Ph 'WithBinders e)
+        PrimModuleReturn :: PrimOp ('Ph 'WithBinders e)
+        PrimModuleFix :: PrimOp ('Ph 'WithBinders e)
+        PrimModuleClock :: PrimOp ('Ph 'WithBinders e)
+        PrimModuleReset :: PrimOp ('Ph 'WithBinders e)
+        PrimBuildModule :: PrimOp ('Ph 'WithBinders e)
+        PrimCurrentClock :: PrimOp ('Ph 'WithBinders e)
+        PrimCurrentReset :: PrimOp ('Ph 'WithBinders e)
+        PrimSameFamilyClock :: PrimOp ('Ph 'WithBinders e)
+        PrimIsAncestorClock :: PrimOp ('Ph 'WithBinders e)
+        PrimChkClockDomain :: PrimOp ('Ph 'WithBinders e)
+        PrimClockEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimClockOf :: PrimOp ('Ph 'WithBinders e)
+        PrimClocksOf :: PrimOp ('Ph 'WithBinders e)
+        PrimNoClock :: PrimOp ('Ph 'WithBinders e)
+        PrimResetEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimResetOf :: PrimOp ('Ph 'WithBinders e)
+        PrimResetsOf :: PrimOp ('Ph 'WithBinders e)
+        PrimNoReset :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRules :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRulesPreempt :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRulesUrgency :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRulesExecutionOrder :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRulesMutuallyExclusive :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRulesConflictFree :: PrimOp ('Ph 'WithBinders e)
+        PrimNoRules :: PrimOp ('Ph 'WithBinders e)
+        PrimRule :: PrimOp ('Ph 'WithBinders e)
 
         -- PrimAddSchedPragmas :: [SchedulePragma] -> Rules -> Rules
-        PrimAddSchedPragmas :: PrimOp p
+        PrimAddSchedPragmas :: PrimOp ('Ph 'WithBinders e)
 
-        PrimGetName :: PrimOp p
+        PrimGetName :: PrimOp ('Ph 'WithBinders e)
 
         -- primStateName :: Name -> Module b -> Module b
         -- This primitive is used to name state components.
         -- The first argument is an abstract name that is added to
         -- the names of state elements instantiated by the second argument.
-        PrimStateName :: PrimOp p
-        PrimGetModuleName :: PrimOp p
+        PrimStateName :: PrimOp ('Ph 'WithBinders e)
+        PrimGetModuleName :: PrimOp ('Ph 'WithBinders e)
 
-        PrimJoinNames :: PrimOp p
-        PrimExtendNameInteger :: PrimOp p
-        PrimGetNamePosition :: PrimOp p
-        PrimGetNameString :: PrimOp p
-        PrimMakeName :: PrimOp p
+        PrimJoinNames :: PrimOp ('Ph 'WithBinders e)
+        PrimExtendNameInteger :: PrimOp ('Ph 'WithBinders e)
+        PrimGetNamePosition :: PrimOp ('Ph 'WithBinders e)
+        PrimGetNameString :: PrimOp ('Ph 'WithBinders e)
+        PrimMakeName :: PrimOp ('Ph 'WithBinders e)
 
         -- primStateAttrib :: Attributes -> Module b -> Module b
         -- This primitive is used to add attributes to submod instantiations.
         -- The first argument is an abstract list of attributes.
-        PrimStateAttrib :: PrimOp p
+        PrimStateAttrib :: PrimOp ('Ph 'WithBinders e)
 
-        PrimNoPosition :: PrimOp p
-        PrimPrintPosition :: PrimOp p
-        PrimGetStringPosition :: PrimOp p
-        PrimSetStringPosition :: PrimOp p
-        PrimGetEvalPosition :: PrimOp p
+        PrimNoPosition :: PrimOp ('Ph 'WithBinders e)
+        PrimPrintPosition :: PrimOp ('Ph 'WithBinders e)
+        PrimGetStringPosition :: PrimOp ('Ph 'WithBinders e)
+        PrimSetStringPosition :: PrimOp ('Ph 'WithBinders e)
+        PrimGetEvalPosition :: PrimOp ('Ph 'WithBinders e)
 
         -- environment
-        PrimGenC :: PrimOp p
-        PrimGenVerilog :: PrimOp p
-        PrimGenModuleName :: PrimOp p
+        PrimGenC :: PrimOp ('Ph 'WithBinders e)
+        PrimGenVerilog :: PrimOp ('Ph 'WithBinders e)
+        PrimGenModuleName :: PrimOp ('Ph 'WithBinders e)
 
         -- elaboration-time file IO
-        PrimOpenFile :: PrimOp p
-        PrimCloseHandle :: PrimOp p
-        PrimHandleIsEOF :: PrimOp p
-        PrimHandleIsOpen :: PrimOp p
-        PrimHandleIsClosed :: PrimOp p
-        PrimHandleIsReadable :: PrimOp p
-        PrimHandleIsWritable :: PrimOp p
-        PrimSetHandleBuffering :: PrimOp p
-        PrimGetHandleBuffering :: PrimOp p
-        PrimFlushHandle :: PrimOp p
-        PrimWriteHandle :: PrimOp p
-        PrimReadHandleLine :: PrimOp p
-        PrimReadHandleChar :: PrimOp p
+        PrimOpenFile :: PrimOp ('Ph 'WithBinders e)
+        PrimCloseHandle :: PrimOp ('Ph 'WithBinders e)
+        PrimHandleIsEOF :: PrimOp ('Ph 'WithBinders e)
+        PrimHandleIsOpen :: PrimOp ('Ph 'WithBinders e)
+        PrimHandleIsClosed :: PrimOp ('Ph 'WithBinders e)
+        PrimHandleIsReadable :: PrimOp ('Ph 'WithBinders e)
+        PrimHandleIsWritable :: PrimOp ('Ph 'WithBinders e)
+        PrimSetHandleBuffering :: PrimOp ('Ph 'WithBinders e)
+        PrimGetHandleBuffering :: PrimOp ('Ph 'WithBinders e)
+        PrimFlushHandle :: PrimOp ('Ph 'WithBinders e)
+        PrimWriteHandle :: PrimOp ('Ph 'WithBinders e)
+        PrimReadHandleLine :: PrimOp ('Ph 'WithBinders e)
+        PrimReadHandleChar :: PrimOp ('Ph 'WithBinders e)
 
         -- reflective type primitives
-        PrimTypeOf :: PrimOp p
-        PrimPrintType :: PrimOp p
-        PrimTypeEQ :: PrimOp p
-        PrimIsIfcType :: PrimOp p
+        PrimTypeOf :: PrimOp ('Ph 'WithBinders e)
+        PrimPrintType :: PrimOp ('Ph 'WithBinders e)
+        PrimTypeEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimIsIfcType :: PrimOp ('Ph 'WithBinders e)
 
         -- type-tracking primitive
-        PrimSavePortType :: PrimOp p
+        PrimSavePortType :: PrimOp ('Ph 'WithBinders e)
 
         -- compile time numbers
-        PrimIntegerAdd :: PrimOp p
-        PrimIntegerSub :: PrimOp p
-        PrimIntegerNeg :: PrimOp p
-        PrimIntegerMul :: PrimOp p
-        PrimIntegerDiv :: PrimOp p
-        PrimIntegerMod :: PrimOp p
-        PrimIntegerExp :: PrimOp p
-        PrimIntegerLog2 :: PrimOp p
-        PrimIntegerLog10 :: PrimOp p
-        PrimIntegerQuot :: PrimOp p
-        PrimIntegerRem :: PrimOp p
+        PrimIntegerAdd :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerSub :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerNeg :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerMul :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerDiv :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerMod :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerExp :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerLog2 :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerLog10 :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerQuot :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerRem :: PrimOp ('Ph 'WithBinders e)
 
-        PrimIntegerEQ :: PrimOp p
-        PrimIntegerLE :: PrimOp p
-        PrimIntegerLT :: PrimOp p
+        PrimIntegerEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerLE :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerLT :: PrimOp ('Ph 'WithBinders e)
 
         -- Real numbers: Show
-        PrimRealToString :: PrimOp p
+        PrimRealToString :: PrimOp ('Ph 'WithBinders e)
 
         -- Real numbers: Literal
-        PrimIntegerToReal :: PrimOp p
+        PrimIntegerToReal :: PrimOp ('Ph 'WithBinders e)
 
         -- Real numbers: Eq and Ord
-        PrimRealEQ :: PrimOp p
-        PrimRealLE :: PrimOp p
-        PrimRealLT :: PrimOp p
+        PrimRealEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLE :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLT :: PrimOp ('Ph 'WithBinders e)
 
         -- Real numbers: Arith
-        PrimRealAdd :: PrimOp p
-        PrimRealSub :: PrimOp p
-        PrimRealNeg :: PrimOp p
-        PrimRealMul :: PrimOp p
-        PrimRealDiv :: PrimOp p
-        PrimRealAbs :: PrimOp p
-        PrimRealSignum :: PrimOp p
-        PrimRealExpE :: PrimOp p
-        PrimRealPow :: PrimOp p
-        PrimRealLogE :: PrimOp p
-        PrimRealLogBase :: PrimOp p
-        PrimRealLog2 :: PrimOp p
-        PrimRealLog10 :: PrimOp p
+        PrimRealAdd :: PrimOp ('Ph 'WithBinders e)
+        PrimRealSub :: PrimOp ('Ph 'WithBinders e)
+        PrimRealNeg :: PrimOp ('Ph 'WithBinders e)
+        PrimRealMul :: PrimOp ('Ph 'WithBinders e)
+        PrimRealDiv :: PrimOp ('Ph 'WithBinders e)
+        PrimRealAbs :: PrimOp ('Ph 'WithBinders e)
+        PrimRealSignum :: PrimOp ('Ph 'WithBinders e)
+        PrimRealExpE :: PrimOp ('Ph 'WithBinders e)
+        PrimRealPow :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLogE :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLogBase :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLog2 :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLog10 :: PrimOp ('Ph 'WithBinders e)
 
         -- Real numbers: Bits
-        PrimRealToBits :: PrimOp p
-        PrimBitsToReal :: PrimOp p
+        PrimRealToBits :: PrimOp ('Ph 'WithBinders e)
+        PrimBitsToReal :: PrimOp ('Ph 'WithBinders e)
 
         -- Real numbers: Trig
-        PrimRealSin :: PrimOp p
-        PrimRealCos :: PrimOp p
-        PrimRealTan :: PrimOp p
-        PrimRealSinH :: PrimOp p
-        PrimRealCosH :: PrimOp p
-        PrimRealTanH :: PrimOp p
-        PrimRealASin :: PrimOp p
-        PrimRealACos :: PrimOp p
-        PrimRealATan :: PrimOp p
-        PrimRealASinH :: PrimOp p
-        PrimRealACosH :: PrimOp p
-        PrimRealATanH :: PrimOp p
-        PrimRealATan2 :: PrimOp p
+        PrimRealSin :: PrimOp ('Ph 'WithBinders e)
+        PrimRealCos :: PrimOp ('Ph 'WithBinders e)
+        PrimRealTan :: PrimOp ('Ph 'WithBinders e)
+        PrimRealSinH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealCosH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealTanH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealASin :: PrimOp ('Ph 'WithBinders e)
+        PrimRealACos :: PrimOp ('Ph 'WithBinders e)
+        PrimRealATan :: PrimOp ('Ph 'WithBinders e)
+        PrimRealASinH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealACosH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealATanH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealATan2 :: PrimOp ('Ph 'WithBinders e)
 
         -- Real numbers: Sqrt
-        PrimRealSqrt :: PrimOp p
+        PrimRealSqrt :: PrimOp ('Ph 'WithBinders e)
 
         -- Real numbers: Rounding
-        PrimRealTrunc :: PrimOp p
-        PrimRealCeil :: PrimOp p
-        PrimRealFloor :: PrimOp p
-        PrimRealRound :: PrimOp p
+        PrimRealTrunc :: PrimOp ('Ph 'WithBinders e)
+        PrimRealCeil :: PrimOp ('Ph 'WithBinders e)
+        PrimRealFloor :: PrimOp ('Ph 'WithBinders e)
+        PrimRealRound :: PrimOp ('Ph 'WithBinders e)
 
         -- Real numbers: Introspection
-        PrimSplitReal :: PrimOp p
-        PrimDecodeReal :: PrimOp p
-        PrimRealToDigits :: PrimOp p
-        PrimRealIsInfinite :: PrimOp p
-        PrimRealIsNegativeZero :: PrimOp p
+        PrimSplitReal :: PrimOp ('Ph 'WithBinders e)
+        PrimDecodeReal :: PrimOp ('Ph 'WithBinders e)
+        PrimRealToDigits :: PrimOp ('Ph 'WithBinders e)
+        PrimRealIsInfinite :: PrimOp ('Ph 'WithBinders e)
+        PrimRealIsNegativeZero :: PrimOp ('Ph 'WithBinders e)
 
-        PrimSeq :: PrimOp p  -- args are eval in sequence
+        PrimSeq :: PrimOp ('Ph 'WithBinders e)  -- args are eval in sequence
                              -- for side effects or strictness
-        PrimSeqCond :: PrimOp p  -- implicit-condition strictness
-        PrimUninitialized :: PrimOp p
-        PrimRawUninitialized :: PrimOp p  -- error out with a use of an uninitialized value
-        PrimMarkArrayUninitialized :: PrimOp p  -- mark array as uninitialized
-        PrimMarkArrayInitialized :: PrimOp p  -- mark array as initialized
-        PrimUninitBitArray :: PrimOp p  -- make an array of uninitialized bits
-        PrimIsBitArray :: PrimOp p  -- is this Bit n represented as an array
-        PrimUpdateBitArray :: PrimOp p
-        PrimBuildUndefined :: PrimOp p  -- build a type-appropriate undefined value
-        PrimRawUndefined :: PrimOp p  -- create a "raw" undefined value
-        PrimIsRawUndefined :: PrimOp p  -- test if a value is a "raw" undefined value
-        PrimImpCondOf :: PrimOp p  -- XXX experimental
-        PrimArrayNew :: PrimOp p  -- Primitive array operators
-        PrimArrayLength :: PrimOp p
-        PrimArraySelect :: PrimOp p
-        PrimArrayUpdate :: PrimOp p
-        PrimArrayDynUpdate :: PrimOp p
+        PrimSeqCond :: PrimOp ('Ph 'WithBinders e)  -- implicit-condition strictness
+        PrimUninitialized :: PrimOp ('Ph 'WithBinders e)
+        PrimRawUninitialized :: PrimOp ('Ph 'WithBinders e)  -- error out with a use of an uninitialized value
+        PrimMarkArrayUninitialized :: PrimOp ('Ph 'WithBinders e)  -- mark array as uninitialized
+        PrimMarkArrayInitialized :: PrimOp ('Ph 'WithBinders e)  -- mark array as initialized
+        PrimUninitBitArray :: PrimOp ('Ph 'WithBinders e)  -- make an array of uninitialized bits
+        PrimIsBitArray :: PrimOp ('Ph 'WithBinders e)  -- is this Bit n represented as an array
+        PrimUpdateBitArray :: PrimOp ('Ph 'WithBinders e)
+        PrimBuildUndefined :: PrimOp ('Ph 'WithBinders e)  -- build a type-appropriate undefined value
+        PrimRawUndefined :: PrimOp ('Ph 'WithBinders e)  -- create a "raw" undefined value
+        PrimIsRawUndefined :: PrimOp ('Ph 'WithBinders e)  -- test if a value is a "raw" undefined value
+        PrimImpCondOf :: PrimOp ('Ph 'WithBinders e)  -- XXX experimental
+        PrimArrayNew :: PrimOp ('Ph 'WithBinders e)  -- Primitive array operators
+        PrimArrayLength :: PrimOp ('Ph 'WithBinders e)
+        PrimArraySelect :: PrimOp ('Ph 'WithBinders e)
+        PrimArrayUpdate :: PrimOp ('Ph 'WithBinders e)
+        PrimArrayDynUpdate :: PrimOp ('Ph 'WithBinders e)
 
-        PrimSetSelPosition :: PrimOp p
+        PrimSetSelPosition :: PrimOp ('Ph 'WithBinders e)
 
-        PrimGetParamName :: PrimOp p  -- get the parameter name associated with the function value
+        PrimGetParamName :: PrimOp ('Ph 'WithBinders e)  -- get the parameter name associated with the function value
 
         -- implicit Bits pack/unpack coercions; the Prelude wrappers
         -- (Prelude.pack/Prelude.unpack) apply these to the Bits dictionary,
         -- and the evaluator unfolds them to the corresponding class method.
         -- They never survive past IExpand.
-        PrimPack :: PrimOp p
-        PrimUnpack :: PrimOp p
+        PrimPack :: PrimOp ('Ph 'WithBinders e)
+        PrimUnpack :: PrimOp ('Ph 'WithBinders e)
 
 
 -- The code tables, generated by Template Haskell (the first use of it
