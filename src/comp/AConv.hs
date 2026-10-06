@@ -396,9 +396,7 @@ aRule :: IRule PostElab -> M ARule
 aRule (IRule i rps s wp p a orig isl) = do
         --trace ("enter rule " ++ ppReadable i) $ return ()
         p' <- aSExpr p
-        -- the body through the expression it stands for (the conversion
-        -- from IAction follows in a later commit)
-        as' <- aAction i (actionToExpr a)
+        as' <- aAction i a
         -- traceM $ "exit rule " ++ ppReadable i
         return (ARule i rps s wp p' as' [] orig)
 
@@ -899,44 +897,44 @@ primType PrimArrayDynSelect _ (arr:_) =
       _ -> internalError ("primType: array select: " ++ ppReadable arr)
 primType p ts xs = internalError ("primType " ++ ppReadable (p, ts, xs))
 
-aAction :: ARuleId -> IExpr PostElab -> M [AAction]
+aAction :: ARuleId -> IAction -> M [AAction]
 aAction s a = aAction' s iTrue a
 
-aAction' :: ARuleId -> IExpr PostElab -> IExpr PostElab -> M [AAction]
+aAction' :: ARuleId -> IExpr PostElab -> IAction -> M [AAction]
 aAction' s cond a = do
-   result <- mapM (aAction1 s cond) (flatAction a)
+   result <- mapM (aAction1 s cond) (flatActionA a)
    return (concat result)
 
-aAction1 :: ARuleId -> IExpr PostElab -> IExpr PostElab -> M [AAction]
--- A hack to handle polymorphic methods (e.g. printBit)
-aAction1 r cond (IAps (IAps f _ es1) _ es2) = aAction1 r cond (IAps f [] (es1++es2))
+-- (the expression form had a first arm for an application whose head
+-- is an application, "a hack to handle polymorphic methods"; no such
+-- application reaches pDef, and the IAction has no node for it)
+aAction1 :: ARuleId -> IExpr PostElab -> IAction -> M [AAction]
 
 -- action part of ActionValue task without arguments
-aAction1 _ cond a@(IAps (ICon avAction_ _ (ICSel { })) _
-                        ((ICon i ity (ICForeign {
+aAction1 _ cond (ACallForeign (Just (AVSel (ICon avAction_ _ (ICSel { })) _))
+                              (ICon i ity (ICForeign {
                                              fName = name,
                                              isC = isC,
                                              foports = Nothing,
-                                             fcallNo = mn})) : es))
+                                             fcallNo = mn}))
+                              Nothing)
    | avAction_ == idAVAction_ = do
    let n = case (mn) of
               Nothing -> internalError
                            ("aAction1: avAction_ on ICForeign without fcallNo")
               Just val -> val
        value_type = aTypeConv i (snd (itGetArrows ity))
-   when (not (null es)) $
-       internalError ("aAction1: too many arguments to avAction_: " ++
-                      ppReadable es)
    cond' <- aSExpr cond
    return [(ATaskAction i name isC n [cond'] Nothing value_type False)]
 
 -- action part of ActionValue task with arguments
-aAction1 _ cond a@(IAps (ICon avAction_ _ (ICSel { })) _
-                        ((IAps (ICon i ity0 (ICForeign {
-                                                   fName = name,
-                                                   isC = isC,
-                                                   foports = Nothing,
-                                                   fcallNo = mn})) fts fes) : es))
+aAction1 _ cond (ACallForeign (Just (AVSel (ICon avAction_ _ (ICSel { })) _))
+                              (ICon i ity0 (ICForeign {
+                                              fName = name,
+                                              isC = isC,
+                                              foports = Nothing,
+                                              fcallNo = mn}))
+                              (Just (fts, fes)))
    | avAction_ == idAVAction_ = do
    let n = case (mn) of
               Nothing -> internalError
@@ -945,25 +943,16 @@ aAction1 _ cond a@(IAps (ICon avAction_ _ (ICSel { })) _
        -- allow for polymorphic foreign functions
        ity = itInst ity0 fts
        value_type = aTypeConv i (snd (itGetArrows ity))
-   when (not (null es)) $
-       internalError ("aAction1: too many arguments to avAction_: " ++
-                      ppReadable es)
    cond' <- aSExpr cond
    fes'   <- mapM aSExpr fes
    return [(ATaskAction i name isC n (cond' : fes') Nothing value_type False)]
 
-aAction1 r cond a@(IAps (ICon avAction_ _ (ICSel { })) _ es) | avAction_ == idAVAction_ =
-   case es of
-       -- if the selection is on a method call, then recurse on the method call
-       [e@(IAps (ICon m _ (ICSel { })) _ (ICon i _ (ICStateVar { }) : method_es))]
-           -> aAction1 r cond e
-       -- anything else is invalid
-       [e] -> internalError
-               ("aAction1: avAction_ called on non-primitive actionvalue\n" ++
-                "e = " ++ show e)
-       _ -> internalError "aAction1: avAction_ with wrong number of arguments"
+-- if the selection is on a method call, then recurse on the method call
+aAction1 r cond (ACallMethod (Just (AVSel (ICon avAction_ _ (ICSel { })) _)) m ts inst es)
+   | avAction_ == idAVAction_ =
+   aAction1 r cond (ACallMethod Nothing m ts inst es)
 
-aAction1 _ cond (IAps (ICon m _ (ICSel { })) _ (ICon i _ (ICStateVar { }) : es)) = do
+aAction1 _ cond (ACallMethod Nothing (ICon m _ (ICSel { })) _ (ICon i _ (ICStateVar { })) es) = do
         cond' <- aSExpr cond
         -- One AExpr per source argument.  aSExpr produces an ATuple AExpr
         -- for a SplitPorts argument whose IExpr is a PrimPair; consumers
@@ -973,7 +962,7 @@ aAction1 _ cond (IAps (ICon m _ (ICSel { })) _ (ICon i _ (ICStateVar { }) : es))
         i' <- transId i
         return [ACall i' m (cond' : es')]
 
-aAction1 _ cond (IAps (ICon i _ (ICForeign { fName = name, isC = isC, foports = Nothing })) ts es) = do
+aAction1 _ cond (ACallForeign Nothing (ICon i _ (ICForeign { fName = name, isC = isC, foports = Nothing })) (Just (ts, es))) = do
         cond' <- aSExpr cond
         es' <- mapM aSExpr es
         -- XXX should this ever happen?
@@ -987,11 +976,13 @@ aAction1 _ cond (IAps (ICon i _ (ICForeign { fName = name, isC = isC, foports = 
 --aAction1 _ cond (IAps (ICon i (ICForeign { fName = name, isC = False, foports = Just ops })) ts es) = ...
 
 -- special case for 0 argument foreign calls
-aAction1 _ cond (ICon i _ (ICForeign { fName = name, isC = isC, foports = Nothing })) = do
+aAction1 _ cond (ACallForeign Nothing (ICon i _ (ICForeign { fName = name, isC = isC, foports = Nothing })) Nothing) = do
         cond' <- aSExpr cond
         return [AFCall i name isC [cond'] False]
 
-aAction1 s cond (IAps (ICon _ _ (ICPrim { primOp = PrimIf })) _ [c, t, e]) = do
+-- (an annotated conditional does not reach here: ISplitIf consumes the
+-- annotations, as it consumed the marker applications)
+aAction1 s cond (AIf SplitDefault c t e) = do
         flags <- getFlags
         t' <- aAction' s (iTransBoolExpr flags (c `ieAnd` cond)) t
         e' <- aAction' s (iTransBoolExpr flags ((ieNot c) `ieAnd` cond)) e
@@ -1003,16 +994,10 @@ aAction1 s cond (ICon _ (ICPrim { primOp = PrimNoActions })) =
 -}
 
 -- XXX find a way to preserve the array in AAction
-aAction1 s cond
-    (IAps ic@(ICon i_sel _ (ICPrim { primOp = PrimArrayDynSelect }))
-          ts@[_, idx_sz_ty@(ITNum idx_sz)]
-          [e_arr, e_idx]) =
-  case e_arr of
-    (ICon i _ (ICValue { iValDef = e_arr' })) ->
-        aAction1 s cond (IAps ic ts [e_arr', e_idx])
-    (IAps (ICon _ _ (ICPrim { primOp = PrimBuildArray })) _ elem_es) -> do
+aAction1 s cond (AArrSel SplitDefault i_sel _ idx_sz elem_es e_idx) = do
         flags <- getFlags
-        let ty_idx = aitBit idx_sz_ty
+        let idx_sz_ty = ITNum idx_sz
+            ty_idx = aitBit idx_sz_ty
         -- number of arms is the min of the elems and the max index
         let max_idx = (2^idx_sz) - 1
             ncells = zip [0..max_idx] elem_es
@@ -1022,11 +1007,10 @@ aAction1 s cond
               aAction' s (iTransBoolExpr flags (c `ieAnd` cond)) e_cell
         -- We assume that the default for out of range indexes is noAction
         concatMapM mapFn ncells
-    _ -> internalError ("aAction1: unexpected array: " ++ ppReadable e_arr)
 
 --aAction1 r cond e = internalError ("aAction1: " ++ ppReadable (r, cond, e))
 -- for deeper tracing
-aAction1 r cond e = internalError ("aAction1 end: " ++ ppReadable (r, cond, e) ++ "\n" ++ showTypeless e)
+aAction1 r cond e = internalError ("aAction1 end: " ++ ppReadable (r, cond, e) ++ "\n" ++ show e)
 
 find :: AExpr -> AType -> Position -> M (AId, AType, AExpr)
 find e t pos = do
