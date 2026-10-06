@@ -857,10 +857,10 @@ icPrimTrunc = ICon idPrimTrunc t (ICPrim PrimTrunc)
         rt = aitBit (ITVar n) `itFun` aitBit (ITVar m)
         (k, m, n) = take3tmpVarIds
 
-icPrimRel :: KnownPhase a => Id -> PrimOp -> IExpr a
-{-# SPECIALISE icPrimRel :: Id -> PrimOp -> IExpr PreElab #-}
-{-# SPECIALISE icPrimRel :: Id -> PrimOp -> IExpr Elab #-}
-{-# SPECIALISE icPrimRel :: Id -> PrimOp -> IExpr PostElab #-}
+icPrimRel :: KnownPhase a => Id -> PrimOp a -> IExpr a
+{-# SPECIALISE icPrimRel :: Id -> PrimOp PreElab -> IExpr PreElab #-}
+{-# SPECIALISE icPrimRel :: Id -> PrimOp Elab -> IExpr Elab #-}
+{-# SPECIALISE icPrimRel :: Id -> PrimOp PostElab -> IExpr PostElab #-}
 icPrimRel id p = ICon id (ITForAll i IKNum (ty `itFun` ty `itFun` itBit1)) (ICPrim p)
   where i = take1tmpVarIds
         ty = itBit `ITAp` ITVar i
@@ -944,10 +944,10 @@ icPrimSLE = icPrimRel idPrimSLE PrimSLE
 icPrimSLT = icPrimRel idPrimSLT PrimSLT
 
 -- For primitive functions of type (Bit n -> Bit n -> Bit n)
-icPrimBinVecOp :: KnownPhase a => Id -> PrimOp -> IExpr a
-{-# SPECIALISE icPrimBinVecOp :: Id -> PrimOp -> IExpr PreElab #-}
-{-# SPECIALISE icPrimBinVecOp :: Id -> PrimOp -> IExpr Elab #-}
-{-# SPECIALISE icPrimBinVecOp :: Id -> PrimOp -> IExpr PostElab #-}
+icPrimBinVecOp :: KnownPhase a => Id -> PrimOp a -> IExpr a
+{-# SPECIALISE icPrimBinVecOp :: Id -> PrimOp PreElab -> IExpr PreElab #-}
+{-# SPECIALISE icPrimBinVecOp :: Id -> PrimOp Elab -> IExpr Elab #-}
+{-# SPECIALISE icPrimBinVecOp :: Id -> PrimOp PostElab -> IExpr PostElab #-}
 icPrimBinVecOp id p = ICon id t (ICPrim p)
   where t = ITForAll i IKNum (ty `itFun` ty `itFun` ty)
         i = take1tmpVarIds
@@ -1488,7 +1488,7 @@ notIf (IAps (ICon _ _ (ICPrim { primOp = PrimIf })) _ _) = False
 notIf _ = True
 
 -- note that ISplitIf.push assumes that PrimIf is FALSE for this function
-isIfWrapper :: PrimOp -> Bool
+isIfWrapper :: PrimOp p -> Bool
 isIfWrapper PrimExpIf = True
 isIfWrapper PrimNoExpIf = True
 isIfWrapper PrimNosplitDeep = True

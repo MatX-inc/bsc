@@ -345,7 +345,7 @@ aQExp _ (AMGate { })               = internalError("AVerilog.aQExp: unexpected g
 
 -- these are operations which cannot be nested, since the generated verilog pushed
 -- them into a separate always block.
-topOp :: PrimOp -> Bool
+topOp :: APrimOp -> Bool
 topOp PrimCase   = True
 topOp PrimMux    = True
 topOp PrimPriMux = True
@@ -353,7 +353,7 @@ topOp _          = False
 
 -- Convert from a Prim{Pri}Mux to a  mux built out of and or logic
 -- XXX We should consider optimizing the pred expressions since they can be redundant.
-aQMux :: AId -> AType -> PrimOp -> [AExpr] -> QQState AExpr
+aQMux :: AId -> AType -> APrimOp -> [AExpr] -> QQState AExpr
 aQMux aid t@(ATBit n) p as = do
     let (ps, es) = if ( isASAny $ last as)
                    then unzip (makePairs $ init as)

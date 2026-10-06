@@ -186,7 +186,7 @@ isConstAExpr _ _ = False
 -- a constant ASyntax expression.
 -- (This check should not be specific to any backend.)
 
-isConstOp :: PrimOp -> Bool
+isConstOp :: APrimOp -> Bool
 isConstOp PrimAdd  = True  -- VAdd
 isConstOp PrimSub  = True  -- VSub
 isConstOp PrimAnd  = True  -- VAnd

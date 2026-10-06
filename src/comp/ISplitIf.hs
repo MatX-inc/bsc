@@ -413,7 +413,7 @@ iExpandIfRule flags
 -- These return Nothing if the check was successful,
 -- otherwise they return Just the offending expression.
 
-check_if_wrappers :: (PrimOp -> Bool) -> IExpr PostElab -> Maybe (IExpr PostElab)
+check_if_wrappers :: (PrimOp PostElab -> Bool) -> IExpr PostElab -> Maybe (IExpr PostElab)
 check_if_wrappers what_kind_of_if_wrapper e
   = case e of
          (IAps (ICon _ _ (ICPrim { primOp = op })) _ _)
@@ -423,10 +423,10 @@ check_if_wrappers what_kind_of_if_wrapper e
            -> (msum (map (check_if_wrappers what_kind_of_if_wrapper) (f:es)))
          _ -> Nothing
 
-check_rules :: (PrimOp -> Bool) -> IRules PostElab -> Maybe (IExpr PostElab)
+check_rules :: (PrimOp PostElab -> Bool) -> IRules PostElab -> Maybe (IExpr PostElab)
 check_rules whatp (IRules _ rs) = msum $ map (check_rule whatp) rs
 
-check_rule :: (PrimOp -> Bool) -> IRule PostElab -> Maybe (IExpr PostElab)
+check_rule :: (PrimOp PostElab -> Bool) -> IRule PostElab -> Maybe (IExpr PostElab)
 check_rule whatp r = check_if_wrappers whatp $ irule_body r
 
 -- --------------------------
@@ -464,7 +464,7 @@ mkExpression val_ ty = if (isEmptyType (getAV_Type ty))
                        else (Just (val_,(getAV_Type ty)))
 
 
-check_meth_rules :: (PrimOp -> Bool) -> IEFace PostElab -> Maybe (IExpr PostElab)
+check_meth_rules :: (PrimOp PostElab -> Bool) -> IEFace PostElab -> Maybe (IExpr PostElab)
 check_meth_rules whatp (IEFace _ _ _ (Just rs) _ _) = check_rules whatp rs
 check_meth_rules _ _ = Nothing
 

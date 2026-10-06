@@ -635,7 +635,7 @@ convAExpr2SExpr_Force False e =
     convAExpr2SExpr (Just (getBitType e)) e >>= toBits
 
 convPrim2SExpr :: Maybe SType ->
-                  PrimOp -> AId -> Integer -> [AExpr] -> SM (S.Expr, SType)
+                  APrimOp -> AId -> Integer -> [AExpr] -> SM (S.Expr, SType)
 convPrim2SExpr mty PrimIf _ _ [c, t, f] = do
     -- force "c" to be Bool
     (yc, _) <- convAExpr2SExpr_Force True c

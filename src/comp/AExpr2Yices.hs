@@ -639,7 +639,7 @@ convAExpr2YExpr_Force False e =
     convAExpr2YExpr (Just (getBitType e)) e >>= toBits
 
 convPrim2YExpr :: Maybe YType ->
-                  PrimOp -> AId -> Integer -> [AExpr] -> YM (Y.Expr, YType)
+                  APrimOp -> AId -> Integer -> [AExpr] -> YM (Y.Expr, YType)
 convPrim2YExpr mty PrimIf _ _ [c, t, f] = do
     -- force "c" to be Bool
     (yc, _) <- convAExpr2YExpr_Force True c

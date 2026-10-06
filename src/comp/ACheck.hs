@@ -362,10 +362,10 @@ compatTypesWthStr (ATArray sz1 t1) (ATArray sz2 t2) = (sz1 == sz2) && (compatTyp
 compatTypesWthStr t1 t2                         = t1 == t2
 
 
-isRelOp :: PrimOp -> Bool
+isRelOp :: APrimOp -> Bool
 isRelOp p = p `elem` [ PrimEQ, PrimULE, PrimULT, PrimSLE, PrimSLT, PrimEQ3 ]
 
-isShift :: PrimOp -> Bool
+isShift :: APrimOp -> Bool
 isShift p = p `elem` [ PrimSL, PrimSRL, PrimSRA ]
 
 tracePP :: Show a => String -> a -> Bool -> Bool

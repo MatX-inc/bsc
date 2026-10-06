@@ -1144,7 +1144,7 @@ instance Bin ANoInlineFun where
                    mi <- fromBin
                    return (ANoInlineFun s ts ps mi)
 
-instance Bin PrimOp where
+instance Bin (PrimOp PostElab) where
     writeBytes p = toBin (writePrimOp p)
     readBytes = do n <- fromBin; return (readPrimOp n)
 

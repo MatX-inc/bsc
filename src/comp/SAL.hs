@@ -671,7 +671,7 @@ sBNot b = SApply notVar b
 
 
 -- construct the name for all other primitives
-primId :: PrimOp -> SId
+primId :: APrimOp -> SId
 primId p = case (show p) of
              (c:cs) -> SId ((toLower c):cs)
              _ -> internalError ("primId: null op name")
@@ -1332,7 +1332,7 @@ convAExpr (AMGate t o c) =
 
 -- -----
 
-convAPrim :: PrimOp -> AType -> [AExpr] -> CM SExpr
+convAPrim :: APrimOp -> AType -> [AExpr] -> CM SExpr
 
 convAPrim PrimChr _ [a] = do
   a_expr <- convAExpr a
