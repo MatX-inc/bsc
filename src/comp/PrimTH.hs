@@ -5,8 +5,12 @@
 -- splices it.  Prim.hs documents why the tables are generated.
 module PrimTH(primOpTables) where
 
+import Data.Bits(xor)
+import Data.Char(ord)
 import Data.List(sort, group)
 import qualified Data.Map as M
+import Data.Word(Word64)
+import Numeric(showHex)
 import Language.Haskell.TH
 
 import ErrorUtil(internalError)
@@ -30,6 +34,12 @@ import ErrorUtil(internalError)
 --   <binding>      :: Int                         (one per retired entry)
 --   retiredPrimOpCodes :: [(Int, String)]         (code, former name),
 --                     in code order, for the listing that pins the table
+--   primOpTableHash :: String                     16 hex digits: FNV-1a 64
+--                     of the table (every code with its name, retired
+--                     ones marked), computed here at compile time; the
+--                     .bo and .ba format tags carry it (GenBin.header,
+--                     GenABin.header), so a change to the primitive set
+--                     changes the format identity without a manual bump
 --
 -- and fails the compile when the constructor set and the table disagree.
 primOpTables :: Name -> Name -> [String] -> [(String, String)] -> Q [Dec]
@@ -51,8 +61,8 @@ primOpTables tyName preElab codes retired = do
       problems =
         [ "duplicated in the code table: " ++ unwords dupTable | not (null dupTable) ] ++
         [ "constructor(s) without a code: " ++ unwords missing ++
-          "\n  (a new primitive goes at the END of the table, and the .bo and .ba"
-          ++ " format tags bump: GenBin.header, GenABin.header)"
+          "\n  (a new primitive goes at the END of the table; the .bo and .ba"
+          ++ " format tags carry the table's hash and change with it)"
         | not (null missing) ] ++
         [ "code table entries that are not constructors: " ++ unwords unknown ++
           "\n  (a removed primitive keeps its entry, listed as retired)"
@@ -108,9 +118,42 @@ primOpTables tyName preElab codes retired = do
       retiredDef = ValD (VarP retiredName)
                      (NormalB (ListE [ TupE [Just (lit k), Just (LitE (StringL c))]
                                      | (k, c) <- sort [ (codeOf M.! c, c) | (c, _) <- retired ] ])) []
+      -- primOpTableHash :: String
+      hashName = mkName "primOpTableHash"
+      hashSig = SigD hashName (ConT ''String)
+      hashDef = ValD (VarP hashName)
+                  (NormalB (LitE (StringL (tableHash codes retiredNames)))) []
   return ([codeSig, codeDef, fromSig, fromDef, allSig, allDef, anySig, anyDef]
-          ++ retiredDecs ++ [retiredSig, retiredDef])
+          ++ retiredDecs ++ [retiredSig, retiredDef, hashSig, hashDef])
   where
+    -- The hash of the table: FNV-1a 64 over the UTF-8 bytes of one line
+    -- per code, "<code>\t<name>\n" for a live primitive and
+    -- "<code>\t<name>\tretired\n" for a retired one, in code order --
+    -- the lines dumpbo -prim-codes prints, so the value can be recomputed
+    -- from that listing.  It changes when a primitive is added, renamed,
+    -- retired or reordered, and only then; nothing about the compiler
+    -- that ran the splice enters it, so every build of one source has
+    -- the same hash.
+    tableHash :: [String] -> [String] -> String
+    tableHash cs rs =
+        let line (k, c) = show k ++ "\t" ++ c ++
+                          (if c `elem` rs then "\tretired" else "") ++ "\n"
+            bytes = concatMap utf8 (concatMap line (zip [0 :: Int ..] cs))
+            fnv :: Word64 -> [Int] -> Word64
+            fnv h [] = h
+            fnv h (b:bs) = let h' = (h `xor` fromIntegral b) * 0x100000001b3
+                           in h' `seq` fnv h' bs
+            hex = showHex (fnv 0xcbf29ce484222325 bytes) ""
+        in replicate (16 - length hex) '0' ++ hex
+    utf8 :: Char -> [Int]
+    utf8 ch
+      | n < 0x80    = [n]
+      | n < 0x800   = [0xC0 + n `div` 0x40, 0x80 + n `mod` 0x40]
+      | n < 0x10000 = [0xE0 + n `div` 0x1000, 0x80 + (n `div` 0x40) `mod` 0x40,
+                       0x80 + n `mod` 0x40]
+      | otherwise   = [0xF0 + n `div` 0x40000, 0x80 + (n `div` 0x1000) `mod` 0x40,
+                       0x80 + (n `div` 0x40) `mod` 0x40, 0x80 + n `mod` 0x40]
+      where n = ord ch
     -- a nullary constructor and whether its result type is the
     -- unrefined `PrimOp p`
     conInfo :: Con -> Q (Name, Bool)

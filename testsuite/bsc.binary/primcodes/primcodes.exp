@@ -1,7 +1,9 @@
 # The .bo and .ba files write a primitive as its code (Prim.hs's table).
 # dumpbo -prim-codes lists every primitive with its code after reading
 # each code back; the listing must match its expected copy, so that a
-# reordered or shifted table fails here instead of in a stale .bo.
+# reordered or shifted table fails here instead of in a stale .bo.  Its
+# first line is the table's hash, which ends the .bo and .ba format tags
+# (GenBin.header, GenABin.header), so the tags are pinned here too.
 #
 # dumpbo is one of the extra tools (make -C src/comp install-extra), and
 # the testsuite insists on it only under DO_INTERNAL_CHECKS=1, which CI

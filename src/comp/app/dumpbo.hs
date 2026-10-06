@@ -10,7 +10,8 @@ import Data.List(sort)
 import PPrint
 import GenBin
 import ISyntax
-import Prim(PrimOp, primOpCode, primOpFromCode, allPrimOps, retiredPrimOpCodes)
+import Prim(PrimOp, primOpCode, primOpFromCode, allPrimOps, retiredPrimOpCodes,
+            primOpTableHash)
 import Error(initErrorHandle)
 import System.IO
 import qualified Data.ByteString as BS
@@ -43,9 +44,12 @@ main = do
 -- primitive, in code order), after checking that each code reads back
 -- as the primitive it was written from; a retired code (one a former
 -- primitive had, kept so later codes do not shift) is listed with its
--- former name and "retired".  The testsuite compares the listing with
--- its expected copy, so a change to the encoding -- a reordered table,
--- a shifted code -- fails there.
+-- former name and "retired".  The first line is the table's hash
+-- (Prim.primOpTableHash, the FNV-1a 64 of the lines that follow), which
+-- ends the .bo and .ba format tags.  The testsuite compares the listing
+-- with its expected copy, so a change to the encoding -- a reordered
+-- table, a shifted code -- fails there, and the hash in the tags is
+-- pinned with it.
 dumpPrimCodes :: IO a
 dumpPrimCodes = do
     hSetEncoding stdout utf8
@@ -58,6 +62,7 @@ dumpPrimCodes = do
             hPutStrLn stderr ("dumpbo -prim-codes: code " ++ show n ++
                               " of " ++ show p ++ " reads back as " ++ show p')
             exitWith (ExitFailure 1)
+    putStrLn ("hash\t" ++ primOpTableHash)
     forM_ (sort (live ++ retired)) $ \ (n, s) ->
         putStrLn (show n ++ "\t" ++ s)
     exitWith ExitSuccess
