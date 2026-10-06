@@ -119,17 +119,40 @@ the library's (`common_deps`); `src/comp/app` is no source directory of the
 library, so the entry module is the program's alone, and it carries `import
 Warmup ()`. (bluetcl differs: no `-main-is`, a helper module and a C shim.)
 
-## 5. The determinism claim
+## 5. The determinism ladder
 
 The claim: one commit built from clean serially, oversubscribed or in another
-checkout directory gives the same objects, interfaces, archives, programs and
-shared object, and a rebuild after an edit and its revert lands on the same
-bytes.
+checkout directory, or rebuilt after an edit and its revert, gives
+bit-identical objects, archives, programs, and interfaces identical as `ghc
+--show-iface` text.
 
 What holds it: every program links against the library's archive, compiled
 once; `Warmup` fixes the interface-load order; `-fobject-determinism`, from GHC
 9.12, makes an object independent of the session's uniques; and the solvers are
 linked by name.
 
-The check of the claim, a ladder of builds hashed and compared on one machine
-and in CI, is a separate series.
+`util/cabal-ladder.sh`:
+
+- `hash OUT` hashes the build under `dist-newstyle`; interfaces as `ghc
+  --show-iface` text minus the interface hash and flags fingerprint, since
+  their bytes carry the checkout directory.
+- `verdict REF OTHER...` compares each list with the reference; an absent list
+  is MISSING.
+- `run` is the ladder on one machine: the legs `c-j1`, the reference, `a-j1` and
+  `c-j64`, each a fresh checkout of `HEAD` in a directory of its own under
+  `determinism-results/<stamp>/legs`, built at its jobs count (`jobs: N` and,
+  from 9.12, `ghc-options: -jN` in a `cabal.project.local`), the solvers
+  installed first, and hashed; the reference then rebuilds after a marker edit
+  to `src/comp/Libs/IOUtil.hs` and after its revert. The reference builds first,
+  so the dependency store it fills is shared; the others follow one at a time.
+  The verdict compares every leg and the reverted rebuild with the reference; a
+  failed one is MISSING. `LEGS` names other legs, `KEEP_LEGS=1` keeps their
+  trees.
+
+`.github/workflows/cabal.yml` runs on pull requests that touch the build and on
+a dispatch, which picks the GHC (default 9.14.1). One job per platform,
+ubuntu-24.04 and macos-15, runs `run`, so every leg of a platform builds on one
+machine; the lists and logs are its artifact. A difference is a design question
+before it is a fix: the first suspects are a root module without the Warmup
+import, interface content the direct-dependency rule does not cover, and a
+program's entry module.
