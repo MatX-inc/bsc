@@ -12,6 +12,7 @@ module Main_fstscopes(main) where
 -- fstscopes_hier.c provides flat accessors for libfst's fstHier
 -- record, which contains a union that the FFI cannot express.
 
+import Warmup ()
 import Control.Monad(when)
 import Foreign.Ptr
 import Foreign.C.Types

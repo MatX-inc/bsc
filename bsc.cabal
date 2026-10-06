@@ -147,6 +147,7 @@ library
     CtxRed
     DOT
     DPIWrappers
+    DefProp
     Depend
     Deriving
     DisjointTest
@@ -157,6 +158,7 @@ library
     ErrorUtil
     Eval
     Exceptions
+    FSTRead
     FStringCompat
     FileIOUtil
     FileNameUtil
@@ -178,6 +180,7 @@ library
     GraphPaths
     GraphUtil
     GraphWrapper
+    GroundCType
     HTcl
     IConv
     IConvLet
@@ -191,6 +194,7 @@ library
     IOMutVar
     IOUtil
     IPrims
+    ISimpDicts
     ISimplify
     ISplitIf
     IStateLoc
@@ -217,6 +221,7 @@ library
     LambdaCalc
     LambdaCalcUtil
     Lex
+    LiftDicts
     ListMap
     ListUtil
     Literal
@@ -282,6 +287,7 @@ library
     SolvedBinds
     Sort
     SpeedyString
+    StaleUtils
     StdPrel
     Subst
     SymTab
@@ -310,15 +316,19 @@ library
     Util
     VCD
     VFileName
+    VFileUtils
     VFinalCleanup
     VIOProps
     VModInfo
     VPIWrappers
     VPrims
+    VStableRenumber
     VVerilogDollar
     Verilog
     Version
     Warmup
+    WaveCheck
+    WireAnalysis
     Wires
     Yices
     YicesFFI
@@ -425,4 +435,70 @@ executable vcdcheck
   hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_vcdcheck
   main-is: vcdcheck.hs
+  other-modules: Warmup
+
+-- The programs whose entry modules sit at the src/comp root rather than
+-- under src/comp/app (they reached the tree before the layout step): the
+-- source root is src, and main-is names the file below it. Nothing under
+-- src other than src/comp spells a library module name from that root, so
+-- the library still comes from the package.
+executable bo2bloogle
+  import: common_exes
+  build-depends:
+    bytestring >=0.11.5.4,
+    mtl >=2.3.1,
+  hs-source-dirs: src
+  ghc-options: -main-is Main_bo2bloogle
+  main-is: comp/bo2bloogle.hs
+  other-modules: Warmup
+
+executable tconcheck
+  import: common_exes
+  build-depends:
+    containers >=0.6.7,
+  hs-source-dirs: src
+  ghc-options: -main-is Main_tconcheck
+  main-is: comp/tconcheck.hs
+  other-modules: Warmup
+
+executable fstcheck
+  import: common_exes
+  build-depends:
+    regex-compat ^>=0.95.2.2,
+  -- libfst (the src/vendor/libfst submodule) is compiled into the program,
+  -- as src/comp/Makefile does (LIBFST_OBJS), with the <config.h> fstapi.c
+  -- includes supplied from src/libfst_config.
+  c-sources:
+    src/comp/fstscopes_hier.c,
+    src/vendor/libfst/src/fastlz.c,
+    src/vendor/libfst/src/fstapi.c,
+    src/vendor/libfst/src/lz4.c,
+  include-dirs:
+    src/libfst_config
+    src/vendor/libfst/src
+  cc-options: -O2
+  extra-libraries: z
+  hs-source-dirs: src
+  ghc-options: -main-is Main_fstcheck
+  main-is: comp/fstcheck.hs
+  other-modules: Warmup
+
+executable fstscopes
+  import: common_exes
+  -- libfst (the src/vendor/libfst submodule) is compiled into the program,
+  -- as src/comp/Makefile does (LIBFST_OBJS), with the <config.h> fstapi.c
+  -- includes supplied from src/libfst_config.
+  c-sources:
+    src/comp/fstscopes_hier.c,
+    src/vendor/libfst/src/fastlz.c,
+    src/vendor/libfst/src/fstapi.c,
+    src/vendor/libfst/src/lz4.c,
+  include-dirs:
+    src/libfst_config
+    src/vendor/libfst/src
+  cc-options: -O2
+  extra-libraries: z
+  hs-source-dirs: src
+  ghc-options: -main-is Main_fstscopes
+  main-is: comp/fstscopes.hs
   other-modules: Warmup

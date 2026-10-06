@@ -5,6 +5,7 @@ module Main_fstcheck(main) where
 -- into the VCD command representation (FSTRead) and the checks run
 -- on the shared engine (WaveCheck).
 
+import Warmup ()
 import Version
 import FileNameUtil(hasDotSuf)
 import Position
