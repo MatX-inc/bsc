@@ -13,3 +13,12 @@ build
 
 .vagrant/
 vagrant-out/
+
+# The cabal build (cabal.project, bsc.cabal)
+dist-newstyle/
+.ghc.environment.*
+cabal.project.local
+# Hash lists and result directories of a determinism run over the build
+# (doc/cabal.md section 5).
+/*.sha256
+determinism-results/
