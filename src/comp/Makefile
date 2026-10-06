@@ -248,8 +248,11 @@ ifeq ($(BSC_BUILD),PROF)
 RTSFLAGS = "-with-rtsopts=-H256m -K256m -i1"
 # The in-process interpreter cannot run the profiled objects of the
 # modules a splice imports; the external one (ghc-iserv-prof) can.
-# (GHC's other way is a non-profiled build first, whose .o/.hi the
-# p_o/p_hi suffixes leave in place.)
+# Measured with GHC 9.14.1: a clean profiling build without this flag
+# stops at Prim.hs ("cannot find object file .../PrimTH.dyn_o while
+# linking an interpreted expression").  GHC's other way is a normal
+# build first: the interpreter then loads the .dyn_o objects that
+# build leaves beside the p_o ones.
 GHCPROFTH = -fexternal-interpreter
 else
 RTSFLAGS = "-with-rtsopts=-H256m -K10m -i1"
