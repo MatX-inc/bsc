@@ -208,18 +208,51 @@ src/comp/app`, `main-is: <name>.hs`, `ghc-options: -main-is Main_<name>`,
 The `Main_<name>` header keeps the file out of the library under the rule of
 section 1, and the entry module carries `import Warmup ()`.
 
-## 5. The determinism claim
+## 5. The determinism ladder
 
-One commit, built from a clean `dist-newstyle` at the project's settings,
-serially, oversubscribed or in another checkout directory, gives the same
-objects, interfaces, archives, programs and shared object, and a rebuild
-after an edit and its revert lands on the same bytes. The programs link
-against the library archive in one order, the Warmup imports give every
+The claim: one commit, built from a clean `dist-newstyle` at the project's
+settings, serially, oversubscribed and in other checkout directories, gives
+bit-identical objects, interfaces, archives, programs and shared objects, and
+a rebuild after an edit and its revert lands on the same bytes. The programs
+link against the library archive in one order, the Warmup imports give every
 module the external interface set in one order (section 3),
 `-fobject-determinism` holds the object code (GHC 9.12, section 2), and no
 directory of the checkout is written into any of them, since the solvers are
-linked by name (section 3). The check of the claim, a ladder of builds hashed
-and compared on one machine and in CI, is a separate series.
+linked by name (section 3). `util/cabal-ladder.sh`:
+
+- `hash OUT` hashes one build: every object, archive and program (from
+  `cabal list-bin bsc:exe:<name>` for each `executable` stanza) as bytes,
+  with paths relative to the repository so directories compare. An interface
+  file is hashed as the text of `ghc --show-iface` minus its interface hash
+  and flags fingerprint, with the package environment off: GHC fingerprints
+  the flags it was given, and cabal passes the autogen include directory by
+  absolute path, so the bytes of a `.hi` depend on the checkout directory
+  while its content does not. A list with no `.hi` lines or holding the
+  digest of empty text is refused, a failing or silent `--show-iface` fails
+  the run, and a partial list is removed, so nothing compares IDENTICAL by
+  producing nothing.
+- `verdict REF OTHER...` compares each list against the first, reporting
+  differences by category (program, object, interface, archive); a missing
+  list is MISSING, and the verdict fails rather than passing on nothing.
+- `run` is the ladder on one machine: legs A and B at the project's settings
+  from clean (repeatability), C at `-j1` (serial against parallel), D at
+  `-j64` (oversubscription), each compared with A; then a marker edit to one
+  module with a few dozen importers (`src/comp/Libs/IOUtil.hs`), a rebuild,
+  the revert and a rebuild that must match A. It runs with any GHC the
+  package builds with (GHC's own parallelism varies only from 9.12, section
+  2), and needs a clean working tree and no `cabal.project.local`; results go to
+  `determinism-results/<timestamp>`.
+
+`.github/workflows/cabal.yml` runs the same two halves across machines and
+directories, with cabal-install pinned to 3.16.1.0 (section 2): a pull
+request builds `-j1` against `-j64` in one directory on ubuntu-24.04 and
+macos-15; a dispatch of the full ladder adds `-j16` there and `-j64` in two
+more directories, which checks that the build does not depend on its path.
+Every planned leg is named to the verdict, so a failed leg is MISSING, not
+skipped. `BuildVersion` embeds the commit, so a ladder compares one commit. A
+failure is a design stop, not a mechanical fix: the first suspects are a root
+without the Warmup import, interface content the direct-dependency rule does
+not cover, and the programs' entry modules.
 
 ## 6. Decomposing into packages later
 
