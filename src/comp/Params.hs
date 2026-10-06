@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
+{-# LANGUAGE MonoLocalBinds #-}
 module Params(
               -- a specific stage on ISyntax for handling params
               iParams,
@@ -20,7 +22,7 @@ import Prim
 
 -- XXX This could become part of IExpand.handlePrim on ICVerilog,
 -- XXX instead of being a separate pass.
-iParams :: ErrorHandle -> IModule a -> IO (IModule a)
+iParams :: ErrorHandle -> IModule PostElab -> IO (IModule PostElab)
 iParams errh imod =
     let
         ds = imod_local_defs imod
@@ -57,7 +59,7 @@ iParams errh imod =
         else bsError errh emsgs
 
 
-inlineParams :: M.Map Id (IExpr a) -> (Id, IStateVar a) -> (Id, IStateVar a)
+inlineParams :: M.Map Id (IExpr PostElab) -> (Id, IStateVar PostElab) -> (Id, IStateVar PostElab)
 inlineParams dmap (inst, svar) =
     let
         -- get the relevant fields from the IStateVar
@@ -76,7 +78,7 @@ inlineParams dmap (inst, svar) =
         (inst, svar')
 
 
-checkParams :: (Id, IStateVar a) -> [EMsg]
+checkParams :: (Id, IStateVar PostElab) -> [EMsg]
 checkParams (inst, svar) =
     let
         -- get the relevant fields from the IStateVar
@@ -91,7 +93,7 @@ checkParams (inst, svar) =
         triples = zip3 [1..] varginfo arg_es
 
         -- check a single param
-        checkParam :: (Integer, VArgInfo, IExpr a) -> [EMsg]
+        checkParam :: (Integer, VArgInfo, IExpr PostElab) -> [EMsg]
         checkParam (n, varginfo@(Param {}), expr) =
             if (not (isConstIExpr expr))
             then let port_name = getIdString (getVArgInfoName varginfo)
@@ -104,34 +106,30 @@ checkParams (inst, svar) =
 
 
 -- XXX copied from IInline; consider putting it in one place?
-iSubst :: M.Map Id (IExpr a) -> IExpr a -> IExpr a
+iSubst :: M.Map Id (IExpr PostElab) -> IExpr PostElab -> IExpr PostElab
 iSubst m e = sub e
   where sub (IAps f ts es) = IAps (sub f) ts (map sub es)
-        sub d@(ICon i _) =
+        sub d@(ICon i _ _) =
             case M.lookup i m of
             Nothing -> d
             Just e -> e
-        sub ee = internalError ("iSubst: " ++ ppReadable ee)
 
 
 -- ==========
 
-isConstIExpr :: IExpr a -> Bool
-isConstIExpr (ICon _ (ICInt {} )) = True       -- constant number
-isConstIExpr (ICon _ (ICReal {} )) = True      -- constant number
-isConstIExpr (ICon _ (ICString {} )) = True    -- constant string
-isConstIExpr (ICon _ (ICModParam {} )) = True  -- parameter reference
-isConstIExpr (ICon _ (ICUndet {} )) =
+isConstIExpr :: IExpr PostElab -> Bool
+isConstIExpr (ICon _ _ (ICInt {} )) = True       -- constant number
+isConstIExpr (ICon _ _ (ICReal {} )) = True      -- constant number
+isConstIExpr (ICon _ _ (ICString {} )) = True    -- constant string
+isConstIExpr (ICon _ _ (ICModParam {} )) = True  -- parameter reference
+isConstIExpr (ICon _ _ (ICUndet {} )) =
     -- Undetermined values will become constant values
     True
-isConstIExpr (ICon _ (ICDef {})) =
-    -- Local def references should have been inlined away
-    internalError "Params.isConstIExpr: inlining not complete"
-isConstIExpr (ICon _ (ICPrim {})) =
+isConstIExpr (ICon _ _ (ICPrim {})) =
     -- primitive operators should be applied,
     -- there is no 0-arity primitive that we allow
     False
-isConstIExpr (ICon _ (ICCon {} )) =
+isConstIExpr (ICon _ _ (ICCon {} )) =
     -- Constructors should be turned into bits by now
     -- XXX check this!
     False
@@ -141,10 +139,10 @@ isConstIExpr (IAps f _ es) =
 isConstIExpr _ = False
 
 
-isConstIExprFunc :: IExpr a -> Bool
+isConstIExprFunc :: IExpr PostElab -> Bool
 -- XXX this should check for only prims which can be turned into
 -- XXX acceptable Verilog primitives, and return False for others
-isConstIExprFunc (ICon _ (ICPrim {})) = True
+isConstIExprFunc (ICon _ _ (ICPrim {})) = True
 -- tuples, selector functions, constructor selectors etc, should all
 -- have been evaluated away, leaving only bits
 isConstIExprFunc _ = False

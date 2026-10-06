@@ -1,3 +1,4 @@
+{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE ScopedTypeVariables, ForeignFunctionInterface, CPP #-}
 {-# OPTIONS_GHC -Wall -fno-warn-unused-binds -fno-warn-unused-matches #-}
 
@@ -169,7 +170,7 @@ tclCommands =
 -----------------------
 -- global data -- a TCL package
 data TclP = TclP { tp_flags    :: Flags
-                 , tp_binmap   :: !(BinMap Id)
+                 , tp_binmap   :: !BinMap
                  , tp_hashmap  :: !HashMap
                  , tp_symtab   :: !SymTab
                  , tp_cpack    :: !CPackage
@@ -217,28 +218,28 @@ type ModInfo =
 
 -- -----
 
-lookupImport :: String -> IO (BinFile Id)
+lookupImport :: String -> IO (BinFile PreElab)
 lookupImport pnm = do
   g <- readIORef globalVar
   case (M.lookup pnm (tp_binmap g)) of
     Just res -> return res
     Nothing -> lookupError "Package" pnm
 
-ip_id :: BinFile Id -> Id
+ip_id :: BinFile PreElab -> Id
 ip_id (_, _, _, ipkg, _) = ipkg_name ipkg
 
-ip_path :: BinFile Id -> String
+ip_path :: BinFile PreElab -> String
 ip_path (fname, _, _, _, _) = (dirName fname) ++ "/"
 
-ip_csig :: BinFile Id -> CSignature
+ip_csig :: BinFile PreElab -> CSignature
 ip_csig (_, _, bo_sig, _, _) = bo_sig
 
-ip_ipkg :: BinFile Id -> IPackage Id
+ip_ipkg :: BinFile PreElab -> IPackage PreElab
 ip_ipkg (_, _, _, ipkg, _) = ipkg
 
 -- return the imports in a sorted order (the dependency order in cpack)
 -- so that "bpackage" commands return results in a consistent order
-getImportsSorted :: IO [BinFile Id]
+getImportsSorted :: IO [BinFile PreElab]
 getImportsSorted = do
   imp_names <- getImportNamesSorted
   mapM lookupImport imp_names
@@ -4268,21 +4269,20 @@ tclDepend xs = internalError $ "tclDepend: grammar mismatch: " ++ (show xs)
 -- (the same representation as a hand-written import "BVI"), and the
 -- richer elaboration products (ICStateVar, ICClock, ICReset, ...)
 -- flow to the .ba and never re-enter package vocabulary.
-find_vmodinfo :: (IPackage Id) -> [VModInfo]
+find_vmodinfo :: (IPackage PreElab) -> [VModInfo]
 find_vmodinfo ipkg = concatMap defVMIs (ipkg_defs ipkg)
   where
-    defVMIs :: IDef Id -> [VModInfo]
+    defVMIs :: IDef PreElab -> [VModInfo]
     defVMIs (IDef _ _ dbody _) = exprVMIs dbody
 
-    exprVMIs :: IExpr Id -> [VModInfo]
+    exprVMIs :: IExpr PreElab -> [VModInfo]
     exprVMIs (ILam _ _ body) = exprVMIs body
     exprVMIs (IAps fun _ args) = concatMap exprVMIs (fun:args)
     exprVMIs (IVar _) = []
     exprVMIs (ILAM _ _ body) = exprVMIs body
-    exprVMIs (ICon _ (ICVerilog { vInfo = vmi })) = [vmi]
-    exprVMIs (ICon _ (ICDef { iConDef = body })) = exprVMIs body
-    exprVMIs (ICon _ _) = []
-    exprVMIs (IRefT {}) = []
+    exprVMIs (ICon _ _ (ICVerilog { vInfo = vmi })) = [vmi]
+    exprVMIs (ICon _ _ (ICDef { iConDef = body })) = exprVMIs body
+    exprVMIs (ICon _ _ _) = []
 
 package_vsignals :: TclP -> [(Id,String)]
 package_vsignals tclp =

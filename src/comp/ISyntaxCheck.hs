@@ -1,4 +1,8 @@
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
+{-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 module ISyntaxCheck(iGetKind,
                     tCheckIPackage,
                     tCheckIModule) where
@@ -153,11 +157,13 @@ assert False s e t x = internalError ("assert failed: " ++ s ++ "\n" ++ ppReadab
 
 type EqTy = Env -> IType -> IType -> Bool
 
-tCheck :: Flags -> SymTab -> IATFCache -> Env -> EqTy -> IExpr a -> IType
+tCheck :: forall a . KnownPhase a => Flags -> SymTab -> IATFCache -> Env -> EqTy -> IExpr a -> IType
+-- (the recursive calls under the binder matches are typed at the outer
+-- phase, so that the per-phase specialisations apply to them)
 tCheck flags symt cache r eqTy ec@(ILam i t e) =
     -- assert (kCheckErr r t == IKStar) "ILam" (ec, kCheckErr r t) $
         trace_icheck ("tCheck ILam: " ++ ppReadable i ++ " :: " ++ ppReadable t) $
-        itFun t (tCheck flags symt cache (addT symt i t r) eqTy e)
+        itFun t (tCheck @a flags symt cache (addT symt i t r) eqTy e)
 tCheck flags symt cache r eqTy ec@(IAps f0 ts [a]) =
         let f = iAps f0 ts []
             norm = changedOrId $ fullTypeNormalizer flags symt cache
@@ -176,7 +182,7 @@ tCheck flags symt cache r eqTy (IAps f ts (e:es)) =
     tCheck flags symt cache r eqTy (IAps (IAps f ts [e]) [] es)
 tCheck _ _ _ r _ (IVar i) = findT i r
 tCheck flags symt cache r eqTy (ILAM i k e) =
-    ITForAll i k (tCheck flags symt cache (addK i k r) eqTy e)
+    ITForAll i k (tCheck @a flags symt cache (addK i k r) eqTy e)
 tCheck flags symt cache r eqTy ec@(IAps e [t] []) =
         case tCheck flags symt cache r eqTy e of
         ITForAll i k rt ->
@@ -188,7 +194,7 @@ tCheck flags symt cache r eqTy ec@(IAps e [t] []) =
         tt -> internalError ("tCheck IAP: " ++ ppReadable (ec, tt))
 tCheck flags symt cache r eqTy (IAps f (t:ts) []) =
     tCheck flags symt cache r eqTy (IAps (IAps f [t] []) ts [])
-tCheck _ _ _ _ _ (ICon c ic) = iConType ic
+tCheck _ _ _ _ _ (ICon c t _) = t
 tCheck flags symt cache r eqTy (IAps f [] []) =
     trace_icheck ("tCheck IAps []: " ++ show f) $
     tCheck flags symt cache r eqTy f
@@ -218,7 +224,8 @@ kCheckErr :: Env -> IType -> IKind
 kCheckErr r t = fj $ kCheck r t
   where fj = fromJustOrErr ("findK: " ++ ppReadable (r, t))
 
-tCheckIPackage :: Flags -> SymTab -> IPackage a -> Bool
+tCheckIPackage :: KnownPhase a => Flags -> SymTab -> IPackage a -> Bool
+{-# SPECIALISE tCheckIPackage :: Flags -> SymTab -> IPackage PreElab -> Bool #-}
 tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
     let r  = emptyEnv
         defOK (IDef i t e _) =
@@ -228,7 +235,8 @@ tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
                     (i,e,(t,t')) (t, t') True
     in  all defOK ds
 
-tCheckIModule :: Flags -> SymTab -> IModule a -> Bool
+tCheckIModule :: KnownPhase a => Flags -> SymTab -> IModule a -> Bool
+{-# SPECIALISE tCheckIModule :: Flags -> SymTab -> IModule PostElab -> Bool #-}
 tCheckIModule flags symt (IModule { imod_type_args  = iks,
                                     imod_local_defs = ds,
                                     imod_rules      = rs,

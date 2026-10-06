@@ -1,3 +1,4 @@
+{-# LANGUAGE MonoLocalBinds #-}
 module BinUtil (
                 BinMap, BinFile,
                 HashMap,
@@ -44,14 +45,14 @@ type BinFile a = ( String       -- filename
 type HashMap = M.Map Id (String, [Id])
 
 -- a map containing the binfiles that have been loaded, indexed by pkg name
-type BinMap a = M.Map String (BinFile a)
+type BinMap = M.Map String (BinFile PreElab)
 
 
 -- =========================
 
 -- Read all .bo files imported by this package
-readImports :: ErrorHandle -> Flags -> BinMap a -> HashMap -> CPackage ->
-               IO (CPackage, BinMap a, HashMap)
+readImports :: ErrorHandle -> Flags -> BinMap -> HashMap -> CPackage ->
+               IO (CPackage, BinMap, HashMap)
 readImports errh flags binmap0 hashmap0
             (CPackage pkgId exps imps old_impsigs fixs ds includes) = do
   when (not (null old_impsigs)) $
@@ -94,8 +95,8 @@ readImports errh flags binmap0 hashmap0
 
 -- helper function that reads in a .bo file, and any .bo files that it needs
 readBin :: ErrorHandle -> Flags -> (Maybe String) ->
-           BinMap a -> HashMap -> Id ->
-           IO (BinMap a, HashMap, BinFile a, [Id])
+           BinMap -> HashMap -> Id ->
+           IO (BinMap, HashMap, BinFile PreElab, [Id])
 readBin errh flags maybePkgName binmap0 hashmap0 p0 = do
    let
        -- if compiling a source package (that imports p0), detect when p0
@@ -108,8 +109,8 @@ readBin errh flags maybePkgName binmap0 hashmap0 p0 = do
                        ECircularImportsViaBinFile pkgName (getIdString p0))]
              _ -> return ()
 
-       fn :: [Id] -> BinMap a -> HashMap -> [Id] ->
-             IO (BinMap a, HashMap, [Id])
+       fn :: [Id] -> BinMap -> HashMap -> [Id] ->
+             IO (BinMap, HashMap, [Id])
        fn ps_read binmap hashmap [] = return (binmap, hashmap, reverse ps_read)
        fn ps_read binmap hashmap (p:ps) =
            case (M.lookup (getIdString p) binmap) of
@@ -169,7 +170,7 @@ addPrelude flags imps | usePrelude flags = CImpId False idPrelude :
 
 -- Import one .bo file
 doImport :: ErrorHandle -> Flags -> HashMap -> Id ->
-            IO (String, CSignature, CSignature, IPackage a, String,
+            IO (String, CSignature, CSignature, IPackage PreElab, String,
                 HashMap, [Id])
 doImport errh flags hashmap i = do
     let binname = getIdString i ++ "." ++ binSuffix
@@ -192,11 +193,11 @@ doImport errh flags hashmap i = do
     let impNames = map fst impHashes
     return (name, bi_sig, bo_sig, ipkg, hash, hashmap', impNames)
 
-hasPoisonPill :: IExpr a -> Bool
+hasPoisonPill :: IExpr PreElab -> Bool
 hasPoisonPill (ILam _ _ e)  = hasPoisonPill e
 hasPoisonPill (ILAM _ _ e)  = hasPoisonPill e
 hasPoisonPill (IAps f _ es) = any hasPoisonPill (f:es)
-hasPoisonPill (ICon _ (ICPrim _ p)) = p == PrimPoisonedDef
+hasPoisonPill (ICon _ _ (ICPrim p)) = p == PrimPoisonedDef
 hasPoisonPill _ = False
 
 mergeHashes :: ErrorHandle -> HashMap -> Id -> String -> [(Id, String)] ->

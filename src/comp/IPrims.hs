@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 module IPrims(doPrimOp) where
 
 import Error(internalError, ErrMsg)
@@ -23,12 +24,14 @@ import Prim
 -- If these two issues can be resolved, then we can remove the Maybe
 -- and internal error on any conditions which are not expected.
 
-doPrimOp :: Position -> PrimOp -> [IType] -> [IExpr a] ->
+doPrimOp :: KnownPhase a => Position -> PrimOp -> [IType] -> [IExpr a] ->
             Maybe (Either ErrMsg (IExpr a))
+{-# SPECIALISE doPrimOp :: Position -> PrimOp -> [IType] -> [IExpr Elab] -> Maybe (Either ErrMsg (IExpr Elab)) #-}
+{-# SPECIALISE doPrimOp :: Position -> PrimOp -> [IType] -> [IExpr PostElab] -> Maybe (Either ErrMsg (IExpr PostElab)) #-}
 doPrimOp pos op ts es =
   let isLit e = isIConInt e || isIConReal e
-      mkPrimArg (ICon _ (ICInt { iVal = IntLit { ilValue = v } })) = I v
-      mkPrimArg (ICon _ (ICReal { iReal = v })) = D v
+      mkPrimArg (ICon _ _ (ICInt { iVal = IntLit { ilValue = v } })) = I v
+      mkPrimArg (ICon _ _ (ICReal { iReal = v })) = D v
       mkPrimArg e = internalError ("mkPrimArg: " ++ ppReadable e)
   in  if (all isLit es)
       then let tints = [ i | ITNum i <- ts]
@@ -45,8 +48,10 @@ use _  Nothing          = Nothing
 
 -- This does primResult to compute the value and then applies the right literal
 -- creation function to produce the IExpr for each primitive result.
-doPrimOp' :: Position -> PrimOp -> [Integer] -> [PrimArg] ->
+doPrimOp' :: KnownPhase a => Position -> PrimOp -> [Integer] -> [PrimArg] ->
              Maybe (Either ErrMsg (IExpr a))
+{-# SPECIALISE doPrimOp' :: Position -> PrimOp -> [Integer] -> [PrimArg] -> Maybe (Either ErrMsg (IExpr Elab)) #-}
+{-# SPECIALISE doPrimOp' :: Position -> PrimOp -> [Integer] -> [PrimArg] -> Maybe (Either ErrMsg (IExpr PostElab)) #-}
 doPrimOp' pos op@PrimAdd  ss@[s]     vs = use (iMkLitSizeAt pos s) (primResult op ss vs)
 doPrimOp' pos op@PrimSub  ss@[s]     vs = use (iMkLitSizeAt pos s) (primResult op ss vs)
 doPrimOp' pos op@PrimMul  ss@[_,_,s] vs = use (iMkLitSizeAt pos s) (primResult op ss vs)

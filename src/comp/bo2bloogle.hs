@@ -18,7 +18,7 @@ import qualified Data.ByteString as BS
 import Data.String (IsString (..))
 import Error (initErrorHandle)
 import GenBin (readBinFile)
-import ISyntax (IPackage)
+import ISyntax (IPackage, PreElab)
 import Id (Id, getIdBaseString)
 import Lex (Representable (..), checkRepresentable)
 import PPrint (pp80)
@@ -61,7 +61,7 @@ main = do
   putStrLn "@version 0"
   forM_ paths $ \path -> do
     contents <- BS.readFile path
-    (CSignature pkgName _ _ defns, _, _ :: IPackage (), _) <-
+    (CSignature pkgName _ _ defns, _, _ :: IPackage PreElab, _) <-
       readBinFile errh path contents
     putStrLn ("\nmodule " ++ getIdBaseString pkgName)
     forM_ defns $ \defn -> do

@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 module LiftDicts(liftDictsPkg) where
 
 import Control.Applicative((<|>))
@@ -76,13 +77,13 @@ trace_lift_dicts = "-trace-lift-dicts" `elem` progArgs
 -- never merged across packages.
 
 liftDictsPkg :: ErrorHandle -> Flags -> SymTab -> CPackage
-             -> (CPackage, [IDef a])
+             -> (CPackage, [IDef PreElab])
 liftDictsPkg errh flags symt pkg@(CPackage mi exps imps impsigs fixs ds includes)
   = (CPackage mi exps imps impsigs fixs ds' includes, reverse (liftedDefs s'))
   where s0 = initLState errh flags symt pkg
         (ds', s') = runState (liftDicts S.empty M.empty ds) s0
 
-data LState a = LState {
+data LState = LState {
   errHandle :: ErrorHandle,
   flags :: Flags,
   -- source of unique numbers to append to top-level dict names
@@ -90,7 +91,7 @@ data LState a = LState {
   -- The lifted-dictionary pool: interned type -> lifted candidates, in
   -- lifting order.  A dictionary is reused only on a structural match
   -- of its converted evidence (see the module note above).
-  dictPool :: M.Map IType [(Id, IExpr a)],
+  dictPool :: M.Map IType [(Id, IExpr PreElab)],
   -- Pre-conversion mirror of dictPool, keyed on the CSyntax type and
   -- evidence (both position-insensitive Eq).  Equal (CType, CExpr)
   -- convert to equal (IType, IExpr) -- convDict is deterministic and
@@ -102,7 +103,7 @@ data LState a = LState {
   dictPoolC :: M.Map CType [(CExpr, Id)],
   -- The lifted definitions, most recent first (reversed at the end, so
   -- the emitted order is lifting order and thus deterministic)
-  liftedDefs :: [IDef a],
+  liftedDefs :: [IDef PreElab],
   -- CSyntax types of the lifted dictionaries, for the CSyntax-side
   -- analysis (getTopNameInfo) of later dictionary expressions
   liftedTypes :: M.Map Id CType,
@@ -114,7 +115,7 @@ data LState a = LState {
   -- references to imported definitions do.  The bodies here are
   -- placeholders; fixupDefs later ties all references to the real
   -- definitions.
-  convEnv :: M.Map Id (IExpr a),
+  convEnv :: M.Map Id (IExpr PreElab),
   -- Information about instances that do not appear in the symbol table.
   -- These are converted instance definitions that were added by convinst
   -- but never incorporated into the symbol table.
@@ -128,9 +129,9 @@ data LState a = LState {
   symt :: SymTab
 }
 
-type L t a = State (LState t) a
+type L a = State LState a
 
-initLState :: ErrorHandle -> Flags -> SymTab -> CPackage -> LState a
+initLState :: ErrorHandle -> Flags -> SymTab -> CPackage -> LState
 initLState errh fs r (CPackage mi exps imps impsigs fixs ds includes) = LState {
   errHandle = errh,
   flags = fs,
@@ -157,9 +158,9 @@ initLState errh fs r (CPackage mi exps imps impsigs fixs ds includes) = LState {
         mkRef i (vs, t) =
             let it = foldr (\ (TyVar v _ k) acc -> ITForAll v (iConvK k) acc)
                            (iConvT fs r t) vs
-            in  ICon i (ICDef it (icUndetAt (getIdPosition i) it UNoMatch))
+            in  ICon i it (ICDef (icUndetAt (getIdPosition i) it UNoMatch))
 
-getTopNameInfo :: Id -> L a (Maybe ([TyVar], CType))
+getTopNameInfo :: Id -> L (Maybe ([TyVar], CType))
 getTopNameInfo i = do
     ltmap <- gets liftedTypes
     localMap <- gets localInstInfo
@@ -173,7 +174,7 @@ getTopNameInfo i = do
                 tyVars = zipWith tVarKind tmpTyVarIds ks
                 t'     = inst (map TVar tyVars) (qualToType qt)
 
-newDictId :: Position -> L a Id
+newDictId :: Position -> L Id
 newDictId pos = do
   n <- gets dictNo
   mi <- gets packageName
@@ -193,7 +194,7 @@ type BoundDicts = S.Set Id
 -- Convert a liftable dictionary's type and evidence to ISyntax, using
 -- the production conversion machinery over the pass's environment (see
 -- convEnv above).
-convDict :: CType -> CExpr -> L a (IType, IExpr a)
+convDict :: CType -> CExpr -> L (IType, IExpr PreElab)
 convDict t e = do
   s <- get
   let it = iConvT (flags s) (symt s) t
@@ -305,7 +306,7 @@ renderEvidence flgs r e0 =
 -- lifted definition.  Right i means the definition can be replaced by
 -- a reference to i; Left e' keeps the (possibly simplified) local
 -- definition.
-handleDict :: Bool -> BoundDicts -> CType -> CExpr -> L a (Either CExpr Id)
+handleDict :: Bool -> BoundDicts -> CType -> CExpr -> L (Either CExpr Id)
 handleDict incoherent p t e = do
   (e', liftable) <- handleDictExpr p t e
   if not liftable then do
@@ -364,7 +365,7 @@ handleDict incoherent p t e = do
             when (trace_lift_dicts && not incoherent && null props) $ traceM $
                 "no evidence rendering (not cross-package dedupable): "
                 ++ ppReadable (lift_i, e')
-            let ref = ICon lift_i (ICDef it (icUndetAt (getIdPosition lift_i) it UNoMatch))
+            let ref = ICon lift_i it (ICDef (icUndetAt (getIdPosition lift_i) it UNoMatch))
             modify (\s -> s {
                 dictPool = M.insertWith (\new old -> old ++ new) it [(lift_i, ie)] (dictPool s),
                 liftedDefs = IDef lift_i it ie props : liftedDefs s,
@@ -373,7 +374,7 @@ handleDict incoherent p t e = do
             recordC lift_i
             return $ Right lift_i
 
-handleDictExpr :: BoundDicts -> CType -> CExpr -> L a (CExpr, Bool)
+handleDictExpr :: BoundDicts -> CType -> CExpr -> L (CExpr, Bool)
 handleDictExpr _ t e
   | (f, [arg]) <- splitTAp t,
     leftCon f == (Just $ idMonad noPosition),
@@ -442,7 +443,7 @@ handleDictExpr p t e = internalError $ "handleDictExpr unexpected expression: " 
 -- Returns the type of the dictionary function
 -- should be: dictArg1 -> dictArg2 -> ... -> finalDict
 -- instantiates types if the dictionary function is polymorphic
-handleDictFun :: [CType] -> CExpr -> L a CType
+handleDictFun :: [CType] -> CExpr -> L CType
 handleDictFun ts (CVar i) = do
   minfo <- getTopNameInfo i
   case minfo of
@@ -480,7 +481,7 @@ type InlineMap = M.Map Id CExpr
 -- InlineMap is used for substitution but not returned (scoped bindings don't escape).
 -- Only special functions (processCDeflsSeq, processCQuals) return InlineMap for sequential threading.
 class LiftDicts c where
-  liftDicts :: BoundDicts -> InlineMap -> c -> L a c
+  liftDicts :: BoundDicts -> InlineMap -> c -> L c
 
 -- General instance when there is no sequential scoping
 instance LiftDicts c => LiftDicts [c] where
@@ -510,7 +511,7 @@ instance LiftDicts CClause where
     return $ CClause ps qs' e'
 
 -- We handle CQuals separately because we need to update the inlineMap as entries are shadowed
-processCQuals :: BoundDicts -> InlineMap -> [CQual] -> L a ([CQual], InlineMap)
+processCQuals :: BoundDicts -> InlineMap -> [CQual] -> L ([CQual], InlineMap)
 processCQuals _ m [] = return ([], m)
 processCQuals p m (CQGen t pat e : qs) = do
   -- CQGen binds e to the pattern, so does not shadow anything in e
@@ -551,7 +552,7 @@ simpCExpr e = e
 
 data DeflAction = Inline Id CExpr | Keep CDefl
 
-deflAction :: BoundDicts -> CDefl -> L a DeflAction
+deflAction :: BoundDicts -> CDefl -> L DeflAction
 deflAction p (CLValueSign (CDefT i [] (CQType [] t) [CClause [] [] e]) [])
   | isSimple e && not (isKeepId i) = do
       when trace_lift_dicts $ traceM  $ "inlining simple: " ++ ppReadable (i, e)
@@ -579,7 +580,7 @@ deflAction p (CLValueSign (CDefT i [] (CQType [] t) [CClause [] [] e]) [])
           return $ Keep $ CLValueSign (CDefT i [] (CQType [] t) [CClause [] [] e']) []
 deflAction _ d = return $ Keep d
 
-processCDeflsSeq :: BoundDicts -> InlineMap -> [CDefl] -> L a ([CDefl], InlineMap)
+processCDeflsSeq :: BoundDicts -> InlineMap -> [CDefl] -> L ([CDefl], InlineMap)
 processCDeflsSeq _ m [] = return ([], m)
 processCDeflsSeq p m (d:ds) = do
   d' <- liftDicts p m d
