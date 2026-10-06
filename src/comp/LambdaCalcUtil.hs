@@ -1055,7 +1055,7 @@ updateAExprTypes _ e@(ASInout {}) = return e
 updateAExprTypes _ e@(AMGate t o c) = return e
 
 
-updateAPrimTypes :: Maybe AType -> PrimOp -> AId -> AType -> [AExpr] -> UTM AExpr
+updateAPrimTypes :: Maybe AType -> APrimOp -> AId -> AType -> [AExpr] -> UTM AExpr
 updateAPrimTypes mty PrimIf i t [ec, et, ef] = do
   -- force "c" to be Bool
   new_ec <- updateAExprTypes_Bool ec
@@ -1191,17 +1191,17 @@ updateAPrimTypes _ PrimSLT i t args = updateAPrim_BitsBool i t PrimSLT args
 -- XXX consider updating the sizes to arithmetic operations?
 updateAPrimTypes _ p i t args = updateAPrim_BitsBits i t p args
 
-updateAPrim_BoolBool :: AId -> AType -> PrimOp -> [AExpr] -> UTM AExpr
+updateAPrim_BoolBool :: AId -> AType -> APrimOp -> [AExpr] -> UTM AExpr
 updateAPrim_BoolBool i _ p as = do
   as' <- mapM updateAExprTypes_Bool as
   return (APrim i mkATBool p as')
 
-updateAPrim_BitsBool :: AId -> AType -> PrimOp -> [AExpr] -> UTM AExpr
+updateAPrim_BitsBool :: AId -> AType -> APrimOp -> [AExpr] -> UTM AExpr
 updateAPrim_BitsBool i _ p as = do
   as' <- mapM updateAExprTypes_Bits as
   return (APrim i mkATBool p as')
 
-updateAPrim_BitsBits :: AId -> AType -> PrimOp -> [AExpr] -> UTM AExpr
+updateAPrim_BitsBits :: AId -> AType -> APrimOp -> [AExpr] -> UTM AExpr
 updateAPrim_BitsBits i t p as = do
   as' <- mapM updateAExprTypes_Bits as
   return (APrim i t p as')

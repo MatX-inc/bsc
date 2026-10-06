@@ -801,7 +801,7 @@ aTupleTypesConv a (ITAp (ITAp (ITCon p _ _) t1) t2) | p == idPrimPair =
   aTypeConv a t1 : aTupleTypesConv a t2
 aTupleTypesConv a t = [aTypeConv a t]
 
-realPrim :: PrimOp -> Bool
+realPrim :: PrimOp PostElab -> Bool
 realPrim p = p `elem`
         [
          PrimSignExt, PrimZeroExt, PrimTrunc,
@@ -812,26 +812,26 @@ realPrim p = p `elem`
          -- not primArith because not Bit n -> Bit n -> Bit n
          PrimMul, PrimQuot, PrimRem
         ] ++ primAriths ++ primCmps ++ primBools ++ primStrings
-primAriths :: [PrimOp]
+primAriths :: [PrimOp PostElab]
 primAriths = [ PrimAdd, PrimSub, PrimAnd, PrimOr, PrimXor,
                PrimSL, PrimSRL, PrimSRA,
                PrimInv, PrimNeg ]
-primBools :: [PrimOp]
+primBools :: [PrimOp PostElab]
 primBools = [ PrimBAnd, PrimBOr, PrimBNot ]
-primCmps :: [PrimOp]
+primCmps :: [PrimOp PostElab]
 primCmps = [ PrimEQ, PrimEQ3,
              PrimULE, PrimULT,
              PrimSLE, PrimSLT ]
-primStrings :: [PrimOp]
+primStrings :: [PrimOp PostElab]
 primStrings = [ PrimStringConcat ]
 
 -- Many primops are associative, but if we reassociate we might rebalance a carefully
 -- set up tree of computations.
 --assocPrims = [ PrimAdd, PrimAnd, PrimOr, PrimXor, PrimConcat, PrimBAnd, PrimBOr ]
-assocPrims :: [PrimOp]
+assocPrims :: [PrimOp PostElab]
 assocPrims = [ PrimConcat ]
 
-joinOp :: PrimOp -> IExpr PostElab -> [IExpr PostElab]
+joinOp :: PrimOp PostElab -> IExpr PostElab -> [IExpr PostElab]
 joinOp p (IAps (ICon _ _ (ICPrim { primOp = p' })) _ es) | p == p' = es
 joinOp _ e = [e]
 
@@ -844,17 +844,17 @@ sumStrSizes (e:es) = do n  <- case (aType e) of
                         return (n + n')
 
 {-
-aPrim :: AType -> PrimOp -> AExpr -> AExpr
+aPrim :: AType -> PrimOp PostElab -> AExpr -> AExpr
 aPrim t p es | p `elem` assocPrims = APrim _ t p (concatMap join es)
   where join (APrim _ t' p' es) | t == t' && p == p' = es
         join e = [e]
 aPrim t p es = APrim _ t p es
 -}
 
--- Rather than have a separate arm of aExpr for every PrimOp,
+-- Rather than have a separate arm of aExpr for every PrimOp PostElab,
 -- we have one general arm that uses this function to determine the type
 --
-primType :: PrimOp -> [IType] -> [AExpr] -> AType
+primType :: PrimOp PostElab -> [IType] -> [AExpr] -> AType
 primType PrimIf _ [_, e2, e3] =
     let t2 = aType e2
         t3 = aType e3

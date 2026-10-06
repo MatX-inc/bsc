@@ -245,7 +245,7 @@ normExpr (APrim aid t op es) = do
 normExpr e@(ASDef _ i) = getSimple i e
 normExpr e = return e
 
-aOptPrim :: AId -> AType -> PrimOp -> [AExpr] -> AExpr
+aOptPrim :: AId -> AType -> APrimOp -> [AExpr] -> AExpr
 aOptPrim aid t PrimBAnd es  = aAnds aid es
 aOptPrim aid t PrimBOr  es  = aOrs  aid es
 aOptPrim aid t PrimXor  es  = aXors aid es
@@ -350,20 +350,20 @@ toS2 (x, y) = do
 toSs :: [AExpr] -> S [AExpr]
 toSs = mapM toS
 
-isBoolOp :: PrimOp -> Bool
+isBoolOp :: APrimOp -> Bool
 isBoolOp PrimBAnd = True
 isBoolOp PrimBOr = True
 isBoolOp PrimBNot = True
 isBoolOp _ = False
 
-isBoolVecOp :: PrimOp -> Bool
+isBoolVecOp :: APrimOp -> Bool
 isBoolVecOp PrimAnd = True
 isBoolVecOp PrimOr = True
 isBoolVecOp PrimInv = True
 isBoolVecOp PrimXor = True
 isBoolVecOp _ = False
 
-primToFun :: PrimOp -> AId -> [AExpr] -> AExpr
+primToFun :: APrimOp -> AId -> [AExpr] -> AExpr
 primToFun PrimAnd = aAnds
 primToFun PrimOr = aOrs
 primToFun PrimInv = aNots
@@ -371,13 +371,13 @@ primToFun PrimXor = aXors
 primToFun p =  internalError( "Synthesize::primToFun: " ++ (show p))
 
 
-shiftOf :: PrimOp -> ShiftFun
+shiftOf :: APrimOp -> ShiftFun
 shiftOf PrimSL = permSL
 shiftOf PrimSRL = permSRL
 shiftOf PrimSRA = permSRA
 shiftOf p =  internalError( "Synthesize::shiftOf: " ++ (show p))
 
-synPrim :: AId -> AType -> PrimOp -> [AExpr] -> S [AExpr]
+synPrim :: AId -> AType -> APrimOp -> [AExpr] -> S [AExpr]
 synPrim aid t p es | isBoolOp p = return [APrim aid t p es]
 synPrim aid _ p es | isBoolVecOp p = do
         ess <- mapM synExpS es

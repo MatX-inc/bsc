@@ -143,7 +143,7 @@ dropGeneratedSuffixes multidigit =
                                      else "__[a-z][0-9]"
     in  \name -> concat (splitRegex generated_suffix name)
 
-opToString :: PrimOp -> String
+opToString :: APrimOp -> String
 opToString PrimAdd = "PLUS"
 opToString PrimSub = "MINUS"
 opToString PrimBAnd = "AND"

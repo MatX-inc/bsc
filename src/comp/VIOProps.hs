@@ -1013,7 +1013,7 @@ getIOPropsA _flags pps mschedinfo apkg =
         evalDefA :: AId -> Maybe Integer
         evalDefA i = fromMaybe Nothing (M.lookup i evalDefMemo)
 
-        evalPrimA :: PrimOp -> [AExpr] -> Maybe Integer
+        evalPrimA :: APrimOp -> [AExpr] -> Maybe Integer
         evalPrimA p [e] | (p == PrimBNot) || (p == PrimInv) =
             fmap (1 -) (evalConstA e)
         evalPrimA p es | (p == PrimBAnd) || (p == PrimAnd) =

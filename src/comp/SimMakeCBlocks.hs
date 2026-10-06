@@ -941,7 +941,7 @@ mkGateInfo pkg_map top_gates inst_map scheds =
       mapMaybe mkGateInfo (M.toList inst_map)
 
 -- apply a binary primitive to a list to reduce it to a singleton
-reduce :: PrimOp -> [AExpr] -> [AExpr]
+reduce :: APrimOp -> [AExpr] -> [AExpr]
 reduce prim []      = []
 reduce prim [e]     = [e]
 reduce prim [e1,e2] = [APrim dummy_id (ae_type e1) prim [e1,e2]]

@@ -524,7 +524,7 @@ isSimple c (AMGate { })         = True
 --  * Everything else is not cheap
 
 
-cheap :: PrimOp -> [AExpr] -> Bool
+cheap :: APrimOp -> [AExpr] -> Bool
 cheap PrimBNot es                                = True
 cheap PrimBAnd es                                = length es < 9
 cheap PrimBOr  es                                = length es < 9

@@ -493,7 +493,7 @@ sBNot b = SApply notVar [b]
 
 -- construct the name for all other primitives by dropping the "prim" prefix
 -- and making it lowercase
-primVar :: PrimOp -> SExpr
+primVar :: APrimOp -> SExpr
 primVar p =
   let p_name = case (show p) of
                  (c:cs) -> ((toLower c):cs)
@@ -1229,7 +1229,7 @@ convAExpr (AMGate t o c) =
 
 -- -----
 
-convAPrim :: PrimOp -> AType -> [AExpr] -> CM SExpr
+convAPrim :: APrimOp -> AType -> [AExpr] -> CM SExpr
 convAPrim PrimIf _ [c, t, f] = do
   c_expr <- convAExpr c
   t_expr <- convAExpr t
