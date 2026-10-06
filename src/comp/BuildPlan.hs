@@ -22,6 +22,9 @@
 -- * 'observe' reads in both interpretations. IO passed to 'perform', 'produce',
 --   'performResult', and 'withResult' runs only during execution. Callers must
 --   classify their IO honestly; the types do not enforce read-only actions.
+-- * 'inspectDependency' is a discovery-only cutoff; execution always inspects.
+--   'searchAlternatives' preserves the runtime lookup without repeating it
+--   speculatively before discovery has checked its candidate boundaries.
 -- * 'declareInputs', file requirements, and report facts are discovery-only.
 --   In execution 'requireFiles' returns [], never a runtime lookup result.
 -- * Bind distributes the continuation into every 'select' alternative.
@@ -35,20 +38,23 @@
 --   that provenance. 'abort' records an incomplete boundary and ends its branch.
 module BuildPlan
     ( BuildPlan, observe, perform, produce, abort, choose, select, noAlternative, independently
-    , declareInputs
+    , declareInputs, inspectDependency, searchAlternatives
     , BuildResult, performResult, planResult, withResult, requireResult, executeResultPlan
     , TraversalOrder(..), traverseState, selectStateT, independentlyStateT
     , runStatePlan, withCachedRead
     , requireFiles, reportRequirement, outputs, note, incomplete
-    , executePlan, discoverDependencies
+    , executePlan, discoverDependencies, discoverDependenciesWithDistribution
     ) where
 
 import qualified Control.Exception as E
-import Control.Monad (ap, forM_)
+import Control.Monad (ap, filterM, forM_)
 import Control.Monad.Except (ExceptT(..), runExceptT)
 import Control.Monad.State (StateT(..), runStateT)
 import qualified Control.Monad.State.Strict as D
 import Data.IORef
+import Data.List (isPrefixOf)
+import System.Directory (canonicalizePath, doesDirectoryExist)
+import System.FilePath (splitDirectories)
 import qualified Data.Map as M
 
 import DependencyReport
@@ -78,6 +84,8 @@ data TraversalOrder = DepthFirst | BreadthFirst
 data BuildPlan a where
     Return :: a -> BuildPlan a
     Observe :: String -> IO b -> (b -> BuildPlan a) -> BuildPlan a
+    InspectDependency :: FilePath -> (Bool -> BuildPlan a) -> BuildPlan a
+    SearchAlternatives :: String -> BuildPlan a -> [BuildPlan a] -> BuildPlan a
     Perform :: IO () -> BuildPlan a -> BuildPlan a
     Abort :: String -> E.SomeException -> BuildPlan a
     Select :: String -> Int -> [BuildPlan a] -> BuildPlan a
@@ -112,6 +120,10 @@ instance Monad BuildPlan where
     Return value >>= next = next value
     Observe label action next >>= after =
         Observe label action (\value -> next value >>= after)
+    InspectDependency path next >>= after =
+        InspectDependency path (\inspect -> next inspect >>= after)
+    SearchAlternatives label selected alternatives >>= after =
+        SearchAlternatives label (selected >>= after) (map (>>= after) alternatives)
     Perform action next >>= after = Perform action (next >>= after)
     Abort reason exception >>= _ = Abort reason exception
     -- Distributing bind is essential: discovery continues separately with
@@ -145,6 +157,22 @@ instance Monad BuildPlan where
 -- this branch in discovery; execution retains the action's exception behavior.
 observe :: String -> IO a -> BuildPlan a
 observe label action = Observe label action Return
+
+-- | Whether dependency discovery must inspect this input. Ordinary execution
+-- always returns True without probing or even evaluating the path. Configured
+-- discovery treats physically contained distribution inputs as opaque: the
+-- complete distribution is already a prerequisite of using the compiler.
+-- Callers must preserve independent siblings when omitting an input, and must
+-- not fabricate a decoded value for an opaque source or object.
+inspectDependency :: FilePath -> BuildPlan Bool
+inspectDependency path = InspectDependency path Return
+
+-- | Keep the ordinary lookup and its diagnostics in the execution interpreter,
+-- while discovery visits the explicit candidate branches. In particular, this
+-- avoids opening the selected installed object before discovery can prune it.
+-- Each candidate carries its own continuation, just as with 'select'.
+searchAlternatives :: String -> BuildPlan a -> [BuildPlan a] -> BuildPlan a
+searchAlternatives = SearchAlternatives
 
 -- | Perform a side effect whose result carries no information. Discovery
 -- suppresses the action without even evaluating it, and continues with ().
@@ -326,6 +354,8 @@ incomplete fact = IncompleteFact fact (Return ())
 executePlan :: BuildPlan a -> IO a
 executePlan (Return value) = return value
 executePlan (Observe _ action next) = action >>= executePlan . next
+executePlan (InspectDependency _ next) = executePlan (next True)
+executePlan (SearchAlternatives _ selected _) = executePlan selected
 executePlan (Perform action next) = action >> executePlan next
 executePlan (Abort _ exception) = E.throwIO exception
 executePlan (Select label selected branches)
@@ -414,7 +444,44 @@ type Discovery = D.StateT DiscoveryState IO
 -- is threaded separately from semantic traversal state, so alternatives do not
 -- mutate each other's decisions or visited sets.
 discoverDependencies :: String -> BuildPlan a -> IO DependencyReport
-discoverDependencies mode plan = do
+discoverDependencies = discoverDependenciesUsing Nothing
+
+-- | Compiler dependency queries assume the configured distribution is present
+-- as a whole. Its files are neither reported nor recursively inspected. The
+-- unconfigured interpreter above remains useful for generic plan tests.
+discoverDependenciesWithDistribution :: FilePath -> String -> BuildPlan a -> IO DependencyReport
+discoverDependenciesWithDistribution root = discoverDependenciesUsing (Just root)
+
+-- Resolve physical paths, including existing prefixes of missing candidates.
+-- An inward symlink belongs to the distribution; an outward symlink does not.
+-- Failure to establish containment retains the input conservatively. Cache
+-- only within this interpretation, whose input filesystem is assumed stable.
+distributionInspector :: Maybe FilePath -> IO (FilePath -> IO Bool)
+distributionInspector Nothing = return (const (return True))
+distributionInspector (Just root) = do
+    resolved <- tryDependency $ do
+        exists <- doesDirectoryExist root
+        if exists then Just <$> canonicalizePath root else return Nothing
+    case resolved of
+      Right (Just physicalRoot) -> do
+        cache <- newIORef M.empty
+        return $ \path -> do
+            known <- M.lookup path <$> readIORef cache
+            case known of
+              Just inspect -> return inspect
+              Nothing -> do
+                physical <- tryDependency (canonicalizePath path)
+                let inspect = case physical of
+                      Right target -> not (splitDirectories physicalRoot `isPrefixOf`
+                                           splitDirectories target)
+                      Left _ -> True
+                modifyIORef' cache (M.insert path inspect)
+                return inspect
+      _ -> return (const (return True))
+
+discoverDependenciesUsing :: Maybe FilePath -> String -> BuildPlan a -> IO DependencyReport
+discoverDependenciesUsing distribution mode plan = do
+    inspect <- distributionInspector distribution
     let forceText :: String -> IO String
         forceText text = E.evaluate (foldr seq () text) >> return text
         update :: (DependencyReport -> DependencyReport) -> Discovery ()
@@ -460,6 +527,10 @@ discoverDependencies mode plan = do
         walk _ (Return _) = return ()
         walk conditions (Observe label action next) =
             checked label (action >>= E.evaluate) (visit conditions . next)
+        walk conditions (InspectDependency path next) =
+            checked "Cannot inspect distribution boundary" (inspect path) (visit conditions . next)
+        walk conditions (SearchAlternatives label _ alternatives) =
+            walk conditions (Select label 0 alternatives)
         walk conditions (Perform _ next) = visit conditions next
         walk _ (Abort reason _) =
             checked "Cannot inspect build-plan abort" (forceText reason) $ \_ ->
@@ -527,11 +598,27 @@ discoverDependencies mode plan = do
             -- Force report metadata while still inside this branch's exception
             -- boundary, not later in JSON serialization of the whole report.
             checked "Cannot inspect build-plan requirement"
-                (E.evaluate (length (show fact))) $ \_ -> do
-                update $ \report -> report
-                    { dependencyRequirements = fact : dependencyRequirements report
+                (do _ <- E.evaluate (length (show fact))
+                    let original = requirementCandidates fact
+                    candidates <- filterM (inspect . candidatePath) original
+                    let supplied = requirementPolicy fact `elem` ["one-of", "source-or-object"] &&
+                            any (\candidate -> candidateExists candidate && candidate `notElem` candidates) original
+                    return (fact
+                        { requirementCandidates = candidates
+                        , requirementPolicy = if supplied then "optional" else requirementPolicy fact
+                        , requirementNotes = requirementNotes fact ++
+                            ["An available distribution candidate supplies an alternative; remaining candidates describe optional lookup and absence dependencies." | supplied]
+                        })) $ \visible -> do
+                -- Preserve intentionally empty environment/tool facts; an
+                -- input requirement emptied by the distribution cutoff adds
+                -- no dependency of its own.
+                if null (requirementCandidates visible) &&
+                   not (null (requirementCandidates fact))
+                  then return ()
+                  else update $ \report -> report
+                    { dependencyRequirements = visible : dependencyRequirements report
                     , dependencyConditionalRequirements =
-                        (conditions, fact) : dependencyConditionalRequirements report }
+                        (conditions, visible) : dependencyConditionalRequirements report }
                 visit conditions next
         walk conditions (OutputFacts facts next) =
             checked "Cannot inspect build-plan outputs"
@@ -548,7 +635,10 @@ discoverDependencies mode plan = do
             checked "Cannot inspect build-plan boundary" (forceText fact) $ \_ -> do
                 addIncomplete fact
                 visit conditions next
-    (_, state) <- D.runStateT (visit [] plan) (DiscoveryState (emptyReport mode) 0)
+    let initial = (emptyReport mode) { dependencyNotes = case distribution of
+            Nothing -> []
+            Just _ -> ["The configured Bluespec distribution is assumed available as a whole; its physically contained inputs and their transitive dependencies are omitted."] }
+    (_, state) <- D.runStateT (visit [] plan) (DiscoveryState initial 0)
     let report = discoveredReport state
     return report
         { dependencyRequirements = stableOrdNub (reverse (dependencyRequirements report))

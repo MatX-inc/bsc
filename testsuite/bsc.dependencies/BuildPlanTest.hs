@@ -11,7 +11,9 @@ import Control.Monad (forM, forM_, unless)
 import Data.IORef
 import Data.List (intercalate, isInfixOf, nub, sort)
 import Data.Typeable (Typeable)
-import System.Directory (getTemporaryDirectory, removeFile)
+import System.Directory (createDirectory, createDirectoryIfMissing, createFileLink,
+                         getTemporaryDirectory, removeFile, removePathForcibly)
+import System.FilePath ((</>))
 import System.Exit (exitFailure)
 import System.IO (hClose, openTempFile)
 
@@ -84,9 +86,139 @@ expectWritableIncomplete report = do
             _ <- E.evaluate (length contents)
             return ()
 
+-- Keep filesystem-policy tests independent of the installed compiler. All
+-- paths, including deliberately corrupt metadata sentinels, belong to this tree.
+withDistributionTree :: (FilePath -> FilePath -> IO ()) -> IO ()
+withDistributionTree action = do
+    temporary <- getTemporaryDirectory
+    E.bracket
+        (do (path, handle) <- openTempFile temporary "bsc-distribution-plan"
+            hClose handle
+            removeFile path
+            createDirectory path
+            return path)
+        removePathForcibly $ \root -> do
+            let distribution = root </> "distribution"
+                workspace = root </> "workspace"
+            createDirectoryIfMissing True (distribution </> "Libraries")
+            createDirectory workspace
+            action distribution workspace
+
+reportPaths :: DependencyReport -> [FilePath]
+reportPaths = concatMap (map candidatePath . requirementCandidates) . dependencyRequirements
+
+conditionalPaths :: DependencyReport -> [FilePath]
+conditionalPaths = concatMap (map candidatePath . requirementCandidates . snd) .
+                   dependencyConditionalRequirements
+
 tests :: [(String, IO ())]
 tests =
-    [ ("discovery unions both choices for either observed answer", do
+    [ ("distribution files are absent from flat and conditional requirements", do
+        withDistributionTree $ \distribution workspace -> do
+            let installed = distribution </> "Libraries" </> "Installed.bo"
+                local = workspace </> "Local.bo"
+                missing = workspace </> "Installed.bo"
+                paths = [("object", installed), ("object", local), ("object", missing)]
+                inputs = requireFiles "owner" "package-import:Installed" "one-of" paths []
+            writeFile installed "not decoded by this policy test"
+            writeFile local "local candidate"
+            report <- discoverDependenciesWithDistribution distribution "test" $ do
+                _ <- inputs
+                choose "conditional inputs" True (inputs >> return ()) (return ())
+                reportRequirement (Requirement "reported" "input" "one-of"
+                    [Candidate installed "object" True, Candidate missing "object" False] [])
+                outputs [installed]
+            assert (sort (nub (reportPaths report)) == sort [local, missing])
+                "flat report lost a local shadow or retained an installed candidate"
+            assert (sort (nub (conditionalPaths report)) == sort [local, missing])
+                "conditional report did not use the same distribution boundary"
+            assert (all (not . null . requirementCandidates) (dependencyRequirements report))
+                "candidate filtering manufactured an empty requirement"
+            assert (all ((== "optional") . requirementPolicy) (dependencyRequirements report))
+                "an available distribution alternative left local shadows mandatory"
+            expectOutputs [installed] report
+            assert (null (dependencyIncomplete report)) "pruning made discovery incomplete")
+    , ("missing installed candidates do not weaken required local alternatives", do
+        withDistributionTree $ \distribution workspace -> do
+            let installed = distribution </> "Libraries" </> "Missing.bo"
+                local = workspace </> "Missing.bo"
+            report <- discoverDependenciesWithDistribution distribution "test" $ do
+                _ <- requireFiles "owner" "input" "one-of"
+                    [("object", installed), ("object", local)] []
+                return ()
+            assert (reportPaths report == [local]) "missing distribution candidate was retained"
+            assert (map requirementPolicy (dependencyRequirements report) == ["one-of"])
+                "a nonexistent distribution file supplied an alternative")
+    , ("distribution pruning uses physical paths in both alias directions", do
+        withDistributionTree $ \distribution workspace -> do
+            let installed = distribution </> "Libraries" </> "Installed.bo"
+                local = workspace </> "Local.bo"
+                inward = workspace </> "Inward.bo"
+                outward = distribution </> "Libraries" </> "Outward.bo"
+            writeFile installed "installed"
+            writeFile local "external"
+            createFileLink installed inward
+            createFileLink local outward
+            report <- discoverDependenciesWithDistribution distribution "test" $ do
+                _ <- requireFiles "aliases" "input" "one-of"
+                    [("object", inward), ("object", outward)] []
+                inwardRead <- inspectDependency inward
+                outwardRead <- inspectDependency outward
+                if inwardRead then incomplete "inward alias was not pruned" else return ()
+                if outwardRead then return () else incomplete "outward alias was pruned"
+            assert (reportPaths report == [outward] && conditionalPaths report == [outward])
+                "physical cutoff lost the outward alias spelling or retained the inward alias"
+            assert (null (dependencyIncomplete report)) "alias classification was incorrect")
+    , ("pruned metadata does not decode or hide a later local sibling", do
+        withDistributionTree $ \distribution workspace -> do
+            let installed = distribution </> "Libraries" </> "Installed.ba"
+                local = workspace </> "Local.ba"
+                visit path = do
+                    inspect <- inspectDependency path
+                    if inspect then do
+                        _ <- requireFiles path "elaboration" "required" [("elaboration", path)] []
+                        observe "metadata read" $ if path == installed
+                            then ioError (userError "corrupt installed metadata was decoded")
+                            else return ()
+                      else return ()
+            writeFile installed "corrupt installed metadata"
+            writeFile local "local metadata"
+            report <- discoverDependenciesWithDistribution distribution "test" $ do
+                independently [visit installed, visit local]
+                record "after-siblings"
+            expectOwners [local, "after-siblings"] report
+            assert (null (dependencyIncomplete report)) "installed sibling leaked a decode failure")
+    , ("unconfigured discovery and execution do not apply a distribution cutoff", do
+        inspect <- executePlan (inspectDependency (error "execution inspected the path"))
+        assert inspect "execution skipped its ordinary metadata read"
+        withDistributionTree $ \distribution _ -> do
+            let installed = distribution </> "Libraries" </> "Installed.bo"
+            writeFile installed "input"
+            report <- discoverDependencies "test" $ do
+                shouldRead <- inspectDependency installed
+                if shouldRead then record "ordinary-read" else return ()
+                _ <- requireFiles "installed" "input" "required" [("object", installed)] []
+                return ()
+            expectOwners ["ordinary-read", "installed"] report
+            assert (reportPaths report == ["ordinary-read", installed])
+                "generic interpreter unexpectedly applied a distribution cutoff")
+    , ("search alternatives skip runtime lookup only during discovery", do
+        seen <- newIORef ([] :: [String])
+        let runtime = observe "normal lookup" (modifyIORef' seen (++ ["runtime"]) >> return "chosen")
+            plan = do
+                selected <- searchAlternatives "candidate search" runtime
+                    [return "first", return "second"]
+                record selected
+                return selected
+        report <- discoverDependencies "test" plan
+        expectOwners ["first", "second"] report
+        afterDiscovery <- readIORef seen
+        assert (null afterDiscovery) "discovery ran the ordinary metadata lookup"
+        selected <- executePlan plan
+        afterExecution <- readIORef seen
+        assert (selected == "chosen" && afterExecution == ["runtime"])
+            "execution visited discovery candidates or changed its selected result")
+    , ("discovery unions both choices for either observed answer", do
         forM_ [False, True] $ \answer -> do
             report <- discoverDependencies "test" $ do
                 selected <- observe "answer" (return answer)

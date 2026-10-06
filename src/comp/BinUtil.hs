@@ -6,7 +6,7 @@ module BinUtil (
                 replaceImportedSignatures
                ) where
 
-import Control.Monad(when, foldM)
+import Control.Monad(when, unless, foldM)
 import qualified Data.ByteString as BS
 import Control.Exception(evaluate)
 import qualified Data.Set as Set
@@ -234,6 +234,8 @@ withBinaryDependencyCache = withCachedRead ("inspect package header " ++) $ \pat
 -- validation on a normal invocation which may never consume this object.
 objectImports :: BinaryDependencyCache -> FilePath -> BuildPlan (Maybe [Id])
 objectImports cache path = do
+    external <- inspectDependency path
+    unless external $ noAlternative ("Distribution object " ++ path)
     key <- observe ("normalize package path " ++ path) $
       normalise <$> makeAbsolute path
     result <- cache key

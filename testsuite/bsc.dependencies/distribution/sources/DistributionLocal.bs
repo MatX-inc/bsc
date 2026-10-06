@@ -1,0 +1,4 @@
+package DistributionLocal (localValue) where
+
+localValue :: Bit 8
+localValue = 11

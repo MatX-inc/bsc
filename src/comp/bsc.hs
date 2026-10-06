@@ -66,7 +66,7 @@ hmain args = do
                     showPreamble flags
                     BP.executePlan plan
                 Just path -> do
-                    result <- tryDependency (BP.discoverDependencies mode plan)
+                    result <- tryDependency (BP.discoverDependenciesWithDistribution (bluespecDir flags) mode plan)
                     let report = case result of
                           Right value -> value
                           Left reason -> (emptyReport mode)

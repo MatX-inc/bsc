@@ -79,6 +79,33 @@ inode is insufficient. Search spaces can therefore be deliberately broader
 than individual package files. An external planner may narrow these scopes
 only with additional evidence.
 
+## Installed distribution boundary
+
+Dependency discovery treats the configured Bluespec distribution (`BLUESPECDIR`,
+including its library and runtime directories) as an opaque toolchain input by
+default. Files physically inside that directory are omitted from both flat and
+conditional requirements, and their package or elaboration metadata is not
+decoded for discovery. Preprocessing an external source file can still read
+installed include text needed to parse that source; those installed files are
+omitted from the report as well. The caller must track the distribution
+separately, for example by an installation fingerprint. Ordinary compilation
+and linking still read and validate those files normally.
+
+This boundary follows resolved paths: an external alias into the distribution
+is omitted, while a distribution alias to an external file remains a dependency.
+Local source/object alternatives and absent local shadow candidates remain in
+search order. When an existing omitted distribution file can satisfy a lookup,
+the remaining candidates have `optional` policy and an explanatory note; an
+absent distribution candidate alone does not relax the lookup requirement.
+Potential-output entries are not filtered by this boundary; outputs that
+would require inspecting omitted metadata are not inferred from that metadata.
+
+Pruning one installed input does not prune its external siblings. In particular,
+a mixed explicit `.ba` list still describes local inputs. A nonstandard installed
+`.ba` filename whose module identity is unavailable without decoding may leave
+hierarchy discovery incomplete if normal module-name lookup cannot resolve it.
+The query does not invent metadata for such an input.
+
 ## Source and object substitution
 
 An explicit `.bs` or `.bsv` command-line argument is a source input. An existing
@@ -91,8 +118,8 @@ object, include, and generated-output timestamps. A planner must not silently
 remove source files or normalize away the timestamp relationships when those
 relationships are what a test exercises.
 
-Binary imports are followed through existing `.bo` metadata as well as source
-imports. A poisoned, corrupt, or incompatible object is not permission for the
+Outside the distribution boundary, binary imports are followed through existing
+`.bo` metadata as well as source imports. A poisoned, corrupt, or incompatible object is not permission for the
 planner to choose a different compilation strategy. The query preserves the
 normal compiler's validity constraints; it is not a recovery scheduler.
 
@@ -127,7 +154,8 @@ regeneration path is disabled. Consequently `.ba` cannot substitute for `.v`.
 There is also no active direct `.ba`-to-Verilog emission command in this
 checkout; storing a Verilog program in an elaboration file does not enable one.
 Verilog-only linking remains possible without a matching `.ba` hierarchy.
-Explicit `.ba` inputs are nevertheless opened and validated. VPI foreign
+Ordinary linking nevertheless opens and validates explicit `.ba` inputs;
+discovery inspects only those outside the distribution boundary. VPI foreign
 functions can require generated wrapper C sources and headers in addition to
 their `.ba` records.
 
@@ -284,6 +312,10 @@ The dependency suite runs the interpreter tests. End-to-end queries run with
 the existing Mips source, Bluesim, and Verilog tests; they verify expected
 inputs, outputs, completeness, and preservation of fixture contents and
 timestamps. Interpreter tests check the separation of alternative branches.
+The distribution fixture uses a private installation copy to check pruned
+package/elaboration metadata, local shadow candidates, aliases in both
+directions, and mixed installed/local artifact inputs. Corrupt fixture metadata
+is never written into the live installation.
 
 Run the complete suite, including long and SystemC tests, from the root:
 
@@ -294,3 +326,15 @@ PATH="$PWD/inst/bin:$PATH" CONFIG_SHELL=/bin/sh DO_INTERNAL_CHECKS=1 \
   TEST_SYSTEMC_LIB=/usr/lib/x86_64-linux-gnu \
   TEST_SYSTEMC_CXXFLAGS=-std=c++17
 ```
+
+For a focused distribution-boundary check without DejaGNU, run the same fixture
+through its direct Tcl driver after the root build:
+
+```sh
+tclsh testsuite/bsc.dependencies/run_distribution.tcl \
+  "$PWD/inst/bin/bsc" "$PWD/inst/lib"
+```
+
+This driver runs the compiler commands in `distribution/distribution.exp` and
+returns failure if any fixture assertion fails. It does not replace the full
+suite or its final certification.

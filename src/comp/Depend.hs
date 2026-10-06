@@ -191,8 +191,9 @@ schedulePackages errh flags errs packages = do
           pi@PkgInfo { compileStatus = Recompile pkg warns } <- checked])
 
 -- Resolve the same source-first package choice for both interpretations.
--- The normal lookup determines the selected branch and retains its diagnostics.
--- Discovery unions the available alternatives, including shadowed objects.
+-- Execution keeps its normal lookup and diagnostics. Discovery visits the
+-- available alternatives, including shadowed objects, before opening any of
+-- them; the distribution cutoff can therefore prune an entire package branch.
 getPkgInfo :: ErrorHandle -> Flags -> String -> PkgName -> BuildPlan (Either EMsg PkgInfo)
 getPkgInfo errh flags owner pname = do
     let name = getIdString pname
@@ -205,35 +206,37 @@ getPkgInfo errh flags owner pname = do
       ["-u looks for source (.bsv before .bs, in search-path order), parses available source and may regenerate its object.",
        "An existing object is reusable only under the compiler's normal freshness and compatibility checks.",
        "When no source is found, a compatible object is required."]
-    selectedSource <- observe ("resolve source package " ++ name) $
-      readFilesPath errh noPosition False [name ++ "." ++ bsvSrcSuffix, name ++ "." ++ bscSrcSuffix] (ifcPath flags)
-    selected <- case selectedSource of
-      Just (_, path) -> return (Just ("source", path))
-      Nothing -> observe ("resolve object package " ++ name) $ do
-        object <- readBinFilePath errh noPosition False (name ++ "." ++ binSuffix) (ifcPath flags)
-        case object of
-          Nothing -> return Nothing
-          Just (bytes, path) -> do
-            -- Finish the selected lazy file read, as the original lookup did,
-            -- so its handle is closed before loading further packages.
-            _ <- CE.evaluate (BS.length bytes)
-            return (Just ("object", path))
-    let available = [(candidateKind c, candidatePath c) |
+    let inspect (kind, path) = do
+          external <- inspectDependency path
+          unless external $ noAlternative ("Distribution package " ++ path)
+          if kind == "source" then do
+            sourceOutputs flags path []
+            (pkg, _, warns) <- parseFilePlan errh flags True path
+            Right <$> getInfo errh flags [] path pkg warns
+          else do
+            t <- observe ("object timestamp " ++ path) $ getModTime path
+            return $ Right $ PkgInfo pname path Nothing t [] [] [] [] Binary
+        -- Keep the ordinary source-first lookup, including its diagnostics
+        -- and completed file reads, out of speculative dependency discovery.
+        selected = do
+          selectedSource <- observe ("resolve source package " ++ name) $
+            readFilesPath errh noPosition False [name ++ "." ++ bsvSrcSuffix, name ++ "." ++ bscSrcSuffix] (ifcPath flags)
+          actual <- case selectedSource of
+            Just (_, path) -> return (Just ("source", path))
+            Nothing -> observe ("resolve object package " ++ name) $ do
+              object <- readBinFilePath errh noPosition False (name ++ "." ++ binSuffix) (ifcPath flags)
+              case object of
+                Nothing -> return Nothing
+                Just (bytes, path) -> do
+                  -- Complete the original lookup's lazy read before loading
+                  -- another package, preserving its handle lifetime.
+                  _ <- CE.evaluate (BS.length bytes)
+                  return (Just ("object", path))
+          maybe (return (Left missing)) inspect actual
+        available = [(candidateKind c, candidatePath c) |
                      c <- candidates, candidateExists c]
-        inspect ("source", path) = do
-          sourceOutputs flags path []
-          (pkg, _, warns) <- parseFilePlan errh flags True path
-          Right <$> getInfo errh flags [] path pkg warns
-        inspect (_, path) = do
-          t <- observe ("object timestamp " ++ path) $ getModTime path
-          return $ Right $ PkgInfo pname path Nothing t [] [] [] [] Binary
-    case selected of
-      Nothing -> return (Left missing)
-      Just actual ->
-        -- Requirement probes are discovery-only. Execution always follows
-        -- its real lookup in branch zero; discovery also visits alternatives.
-        select (owner ++ ": source or object for " ++ name) 0
-          (map inspect (actual : filter (/= actual) available))
+        alternatives = if null available then [selected] else map inspect available
+    searchAlternatives (owner ++ ": source or object for " ++ name) selected alternatives
 
 -- Extract PkgInfo from a parsed CPackage
 getInfo :: ErrorHandle -> Flags -> [ModName] -> FilePath -> CPackage -> [WMsg] -> BuildPlan PkgInfo
@@ -430,6 +433,11 @@ parseFile errh flags fatal_name_mismatch fname =
 
 parseFilePlan :: ErrorHandle -> Flags -> Bool -> FilePath -> BuildPlan (CPackage, TimeInfo, [WMsg])
 parseFilePlan errh flags fatal_name_mismatch fname = do
+    external <- inspectDependency fname
+    unless external $ noAlternative ("Distribution source " ++ fname)
+    -- Installed include text can still be needed while preprocessing an
+    -- external source. Do not skip that text: it can determine imports and
+    -- active branches. Its reported file requirements are pruned centrally.
     let isClassic = hasDotSuf bscSrcSuffix fname
 
     t <- observe "parser clock" getNow

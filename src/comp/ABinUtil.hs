@@ -8,7 +8,7 @@ module ABinUtil (
 
 import Data.List(nub, partition)
 import Data.Maybe(isJust, fromJust)
-import Control.Monad(when)
+import Control.Monad(when, unless)
 import Control.Exception(evaluate)
 import qualified Data.ByteString as BS
 import Control.Monad.Except(ExceptT(..), runExceptT, throwError, catchError)
@@ -460,22 +460,22 @@ findABI isMod mparent lookup_name = do
                 lift $ lift $ incomplete
                     ("Missing elaboration metadata for " ++ lookup_name ++
                      "; its transitive artifact dependencies are not known.")
-            -- Execution retains the established search and diagnostics. Each
-            -- readable alternative has its own continuation in discovery,
-            -- including its own traversal state and transitive children.
-            selected <- lift $ lift $ runExceptT $
-                readAndCheckABinPathPlan (m_read_abi s) be_verbose search_path lookup_name
-            let selectedPath = case selected of
-                    Right (Just (path, _)) -> Just (normalise path)
-                    _ -> Nothing
-            result <- lift $ lift $ select ("elaboration search for " ++ lookup_name) 0 $
-                return selected :
-                [ runExceptT $
-                    readAndCheckABinPathPlan (m_read_abi s) be_verbose [dir] lookup_name
-                | (dir, candidate) <- paths
-                , candidateExists candidate
-                , let path = candidatePath candidate
-                , Just (normalise path) /= selectedPath ]
+            -- The real lookup stays execution-only. Discovery checks each
+            -- candidate before opening it, so a distribution .ba need not be
+            -- decoded merely to discover that its whole subtree is opaque.
+            let selected = runExceptT $
+                    readAndCheckABinPathPlan (m_read_abi s) be_verbose search_path lookup_name
+                available = [(dir, candidate) | (dir, candidate) <- paths,
+                             candidateExists candidate]
+                inspect (dir, candidate) = do
+                    external <- inspectDependency (candidatePath candidate)
+                    unless external $ noAlternative
+                        ("Distribution elaboration " ++ candidatePath candidate)
+                    runExceptT $
+                        readAndCheckABinPathPlan (m_read_abi s) be_verbose [dir] lookup_name
+                alternatives = if null available then [selected] else map inspect available
+            result <- lift $ lift $ searchAlternatives
+                ("elaboration search for " ++ lookup_name) selected alternatives
             mfile <- either throwError return result
             (file, abi) <- fromMaybeM (throwError (EMsgs [err])) (return mfile)
             recordFile lookup_name file

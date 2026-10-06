@@ -6,7 +6,7 @@ module DependencyArtifacts
     , artifactPlan
     ) where
 
-import Control.Monad (forM, forM_, when)
+import Control.Monad (filterM, forM, forM_, when)
 import qualified Control.Exception as E
 import Data.Char (toLower)
 import Data.List (nub)
@@ -104,7 +104,14 @@ artifactPlan errh flags backend' top baFiles vFiles cFiles actions = do
     -- independent scopes before metadata reads, so a rejected .ba cannot hide
     -- an unrelated toolchain, explicit input, or known output.
     declareInputs $ independently [requirements | (_, requirements) <- plannedStages]
-    decoded <- forM (nub baFiles) $ \path -> do
+    -- Opaque installed inputs contribute no metadata to discovery. Filter
+    -- each input separately so later external .ba siblings are still read.
+    -- Execution keeps the complete original list and its validation order.
+    -- An opaque explicit input's internal module name is deliberately unknown.
+    -- If it cannot be found through normal named lookup, discovery retains an
+    -- incomplete hierarchy rather than guessing its name from the filename.
+    inspectedFiles <- filterM inspectDependency (nub baFiles)
+    decoded <- forM inspectedFiles $ \path -> do
         result <- observe ("read elaboration " ++ path) $
             tryArtifactRead (readAndCheckABin errh (Just backend') path)
         case result of

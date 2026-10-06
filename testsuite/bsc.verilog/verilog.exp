@@ -31,11 +31,10 @@ test_veri_only Mips sysMips.v.out.expected
 if {$vtest == 1} {
     check_dependencies $dependency_test_directory mips-verilog [list \
         -verilog -vsim $verilog_compiler -e sysMips \
-        -o dependency-mips.vexe sysMips.v] {
-        --mode verilog-link --complete false --input sysMips.v
-        --role explicit-verilog --role simulator-wrapper
-        --output dependency-mips.vexe --boundary simulator
-    }
+        -o dependency-mips.vexe sysMips.v] [list \
+        --mode verilog-link --complete false --input sysMips.v \
+        --candidate sysMips explicit-verilog required verilog true sysMips.v \
+        --output dependency-mips.vexe --boundary simulator --exclude-tree $bsdir]
 }
 # The warnings depend on if aggr-conds is on, so ensure it is
 test_c_only_bs_modules_options Mips {} {-aggressive-conditions}

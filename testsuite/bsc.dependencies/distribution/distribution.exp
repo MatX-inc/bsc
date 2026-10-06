@@ -1,0 +1,214 @@
+# Exercise the default distribution boundary with real metadata. Never alter
+# the running installation: all deliberate corruption lives in a private copy.
+set distribution_fixture [file dirname [file normalize [info script]]]
+source [file join $distribution_fixture .. dependencies.tcl]
+bsc_initialize
+
+if {[auto_execok python3] eq ""} {
+    unsupported "dependencies: distribution boundary (python3 unavailable)"
+    return
+}
+
+proc distribution_compile {label arguments succeeds {corrupt_file ""}} {
+    global bsc
+    set status [catch {exec $bsc {*}$arguments > ".ordinary-$label.log" 2>@1} result options]
+    set channel [open ".ordinary-$label.log" r]
+    set output [read $channel]
+    close $channel
+    if {$succeeds} {
+        if {$status != 0} {
+            error "$label: unexpected compiler failure: $result\n$output"
+        }
+    } else {
+        set child_status [list]
+        if {[dict exists $options -errorcode]} {
+            set child_status [dict get $options -errorcode]
+        }
+        if {$status == 0 || [llength $child_status] != 3 ||
+            [lindex $child_status 0] ne "CHILDSTATUS" ||
+            ![string is integer -strict [lindex $child_status 2]] ||
+            [lindex $child_status 2] <= 0} {
+            error "$label: expected an ordinary compiler error, got $child_status: $result\n$output"
+        }
+        if {$corrupt_file eq "" || [string first $corrupt_file $output] < 0 ||
+            [string first {(S0005)} $output] < 0 ||
+            [string first {Binary version mismatch} $output] < 0} {
+            error "$label: missing binary metadata diagnostic for $corrupt_file:\n$output"
+        }
+    }
+    pass "dependencies: distribution $label"
+}
+
+set distribution_here [pwd]
+set distribution_had_root [info exists ::env(BLUESPECDIR)]
+if {$distribution_had_root} { set distribution_old_root $::env(BLUESPECDIR) }
+set distribution_had_options [info exists ::env(BSC_OPTIONS)]
+if {$distribution_had_options} { set distribution_old_options $::env(BSC_OPTIONS) }
+set distribution_status [catch {
+    set work [file join $distribution_fixture .distribution-work]
+    file delete -force $work
+    file mkdir $work
+    set private [file join $work installation]
+    exec python3 $dependency_report_checker copy-distribution $bsdir $private
+    # The distribution outside these two deliberately mutable metadata files
+    # is hashed once before and once after the fixture, including additions and
+    # removals. Each query separately snapshots both mutable files and their
+    # external alias target. No whole-tree hashing is needed on every query.
+    set immutable_snapshot [file join $work immutable-installation.json]
+    set mutable_exclusions [list --exclude Libraries/DistributionLibrary.bo \
+        --exclude Libraries/Opaque.ba]
+    exec python3 $dependency_report_checker snapshot-tree $private \
+        $immutable_snapshot {*}$mutable_exclusions
+    set installed_bo [file join $private Libraries DistributionLibrary.bo]
+    set installed_ba [file join $private Libraries Opaque.ba]
+    set ::env(BLUESPECDIR) $private
+    set ::env(BSC_OPTIONS) "-i $private"
+    set workspace [file join $work workspace]
+    set saved [file join $work saved]
+    file mkdir $workspace $saved
+    foreach name {DistributionClient DistributionLocal DistributionDesign} {
+        file copy [file join $distribution_fixture sources "$name.bs"] $workspace
+    }
+    cd $workspace
+    distribution_compile library-object [list -u -bdir $saved \
+        [file join $distribution_fixture sources DistributionLibrary.bs]] 1
+    set installed_bo [file join $private Libraries DistributionLibrary.bo]
+    set saved_bo [file join $saved DistributionLibrary.bo]
+    file copy $saved_bo $installed_bo
+    distribution_compile local-object {-u DistributionLocal.bs} 1
+    distribution_compile valid-library {-u DistributionClient.bs} 1
+
+    set source_expectations [list --mode source --complete true \
+        --input DistributionClient.bs --input DistributionLocal.bo \
+        --missing DistributionLibrary.bo --missing DistributionLibrary.bs \
+        --exclude-tree $private]
+    check_dependencies $workspace distribution-source {-u DistributionClient.bs} \
+        $source_expectations [list $saved $installed_bo $installed_ba]
+    set object_expectations [list --mode source --complete true \
+        --input DistributionClient.bs --input DistributionLocal.bo \
+        --missing DistributionLibrary.bo --exclude-tree $private]
+    check_dependencies $workspace distribution-object {DistributionClient.bs} \
+        $object_expectations [list $saved $installed_bo $installed_ba]
+
+    # A corrupt installed object must not be decoded by discovery, including
+    # when reached through a path alias outside the distribution directory.
+    set channel [open $installed_bo w]
+    puts -nonewline $channel "deliberately invalid installed package object"
+    close $channel
+    check_dependencies $workspace distribution-corrupt-object {DistributionClient.bs} \
+        $object_expectations [list $saved $installed_bo $installed_ba]
+    file link -symbolic installed-alias [file join $private Libraries]
+    check_dependencies $workspace distribution-inward-alias \
+        {-p installed-alias:+ DistributionClient.bs} $object_expectations [list $saved $installed_bo $installed_ba]
+    file mkdir external
+    file copy $saved_bo [file join external DistributionLibrary.bo]
+    check_dependencies $workspace distribution-installed-before-external \
+        {-p installed-alias:external:+ DistributionClient.bs} \
+        [list --mode source --complete true --input DistributionClient.bs \
+            --input external/DistributionLibrary.bo --input DistributionLocal.bo \
+            --exclude-tree $private] [list $saved $installed_bo $installed_ba external]
+    distribution_compile corrupt-library {DistributionClient.bs} 0 DistributionLibrary.bo
+    file delete $installed_bo
+
+    # An outward alias is outside the physical distribution boundary. Its
+    # spelling must survive, and corrupting its target must still be detected.
+    file link -symbolic $installed_bo $saved_bo
+    check_dependencies $workspace distribution-outward-alias {DistributionClient.bs} \
+        [list --mode source --complete true --input $installed_bo \
+            --input DistributionClient.bs --input DistributionLocal.bo \
+            --exclude-tree $private] [list $saved $installed_bo $installed_ba]
+    file copy $saved_bo "$saved_bo.valid"
+    set channel [open $saved_bo w]
+    puts -nonewline $channel "deliberately invalid external package object"
+    close $channel
+    check_dependencies $workspace distribution-outward-corrupt {DistributionClient.bs} \
+        [list --mode source --complete false --input $installed_bo \
+            --input DistributionClient.bs --exclude-tree $private \
+            --boundary DistributionLibrary] [list $saved $installed_bo $installed_ba]
+    file copy -force "$saved_bo.valid" $saved_bo
+    file delete $installed_bo
+    file copy $saved_bo $installed_bo
+
+    # Compile real backend metadata. Query both source backends, then every
+    # existing native artifact stage; no external compiler or simulator runs.
+    distribution_compile native-metadata {-u -sim -g mkDistributionDesign DistributionDesign.bs} 1
+    file mkdir native
+    file copy mkDistributionDesign.ba [file join native mkDistributionDesign.ba]
+    foreach backend {sim verilog} {
+        check_dependencies $workspace "distribution-source-$backend" \
+            [list -u -$backend -g mkDistributionDesign DistributionDesign.bs] \
+            [list --mode source --complete false --input DistributionDesign.bs \
+                --exclude-tree $private --boundary elaboration] [list $saved $installed_bo $installed_ba native]
+    }
+    # An installed corrupt sibling comes first. The local top remains present
+    # and decoded; pruning must not stop the surrounding explicit-input list.
+    set installed_ba [file join $private Libraries Opaque.ba]
+    set channel [open $installed_ba w]
+    puts -nonewline $channel "deliberately invalid installed elaboration object"
+    close $channel
+    foreach spec {
+        {cxx bluesim-cxx true {-KILLsimBlocksToC}}
+        {objects bluesim-objects false {-KILLbluesimcompile}}
+        {link bluesim-link false {}}
+        {systemc systemc-objects false {-systemc}}
+    } {
+        lassign $spec label mode complete flags
+        set args [concat [list -sim -e mkDistributionDesign] $flags \
+            [list $installed_ba mkDistributionDesign.ba]]
+        set expects [list --mode $mode --complete $complete \
+            --input mkDistributionDesign.ba --output mkDistributionDesign.cxx \
+            --exclude-tree $private --forbid-boundary Opaque.ba]
+        check_dependencies $workspace "distribution-$label" $args $expects \
+            [list $saved $installed_bo $installed_ba native]
+    }
+    # A later corrupt local sibling proves it is still visited even though the
+    # first explicit input is pruned. Keep the valid top available for lookup.
+    set channel [open CorruptLocal.ba w]
+    puts -nonewline $channel "deliberately invalid local elaboration object"
+    close $channel
+    check_dependencies $workspace distribution-local-sibling \
+        [list -sim -e mkDistributionDesign -KILLsimBlocksToC \
+            $installed_ba CorruptLocal.ba mkDistributionDesign.ba] \
+        [list --mode bluesim-cxx --complete false --input CorruptLocal.ba \
+            --input mkDistributionDesign.ba --boundary CorruptLocal.ba \
+            --forbid-boundary Opaque.ba --exclude-tree $private] [list $saved $installed_bo $installed_ba native]
+    distribution_compile corrupt-elaboration \
+        [list -sim -e mkDistributionDesign -KILLsimBlocksToC $installed_ba mkDistributionDesign.ba] 0 Opaque.ba
+
+    distribution_compile verilog-metadata {-u -verilog -g mkDistributionDesign DistributionDesign.bs} 1
+    foreach inputs [list [list mkDistributionDesign.v] \
+                         [list $installed_ba mkDistributionDesign.ba mkDistributionDesign.v]] {
+        set label [expr {[llength $inputs] == 1 ? "rtl" : "rtl-mixed"}]
+        check_dependencies $workspace "distribution-$label" \
+            [concat {-verilog -vsim iverilog -e mkDistributionDesign} $inputs] \
+            [list --mode verilog-link --complete false --input mkDistributionDesign.v \
+                --boundary simulator --forbid-boundary Opaque.ba --exclude-tree $private] \
+            [list $saved $installed_bo $installed_ba native]
+    }
+} distribution_output]
+# Check even if setup or an ordinary compiler control failed. Intentional
+# changes were confined to the excluded files; nothing rewrites other entries.
+if {[info exists immutable_snapshot] && [file exists $immutable_snapshot]} {
+    if {[catch {exec python3 $dependency_report_checker check-tree $private \
+            $immutable_snapshot {*}$mutable_exclusions} immutable_error]} {
+        verbose -log $immutable_error 2
+        fail "dependencies: distribution immutable installation preserved"
+    } else {
+        pass "dependencies: distribution immutable installation preserved"
+    }
+}
+cd $distribution_here
+if {$distribution_had_root} {
+    set ::env(BLUESPECDIR) $distribution_old_root
+} else {
+    unset ::env(BLUESPECDIR)
+}
+if {$distribution_had_options} {
+    set ::env(BSC_OPTIONS) $distribution_old_options
+} else {
+    unset ::env(BSC_OPTIONS)
+}
+if {$distribution_status != 0} {
+    verbose -log $distribution_output 2
+    fail "dependencies: distribution fixture setup and ordinary execution"
+}
