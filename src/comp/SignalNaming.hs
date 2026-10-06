@@ -58,6 +58,10 @@ signalNameFromAExpr' multidigit (APrim { aprim_prim = PrimCase,
     "CASE_" ++
     connectWith "_" (map (signalNameFromAExpr' multidigit)
                          ((idx:ces) ++ [dflt]))
+-- a mux names itself as the APrim it was ("MUX_" / "PRIMUX_" and its arms)
+signalNameFromAExpr' multidigit (AMux { amux_kind = k, amux_arms = arms }) =
+    map toUpper (aMuxKindName k) ++ "_" ++
+    connectWith "_" (map (signalNameFromAExpr' multidigit) (aMuxArmExprs arms))
 signalNameFromAExpr' multidigit (expr@APrim { aprim_prim = prim })
     | binOp prim =
         connectWith ("_" ++ opToString prim ++ "_")

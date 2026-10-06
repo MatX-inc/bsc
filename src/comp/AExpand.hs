@@ -488,6 +488,7 @@ isSimple c (APrim i t PrimInv [e])                                = isSimple c e
 isSimple _ (APrim i t PrimEQ  [_, (ASInt _ (ATBit sz) _)])        = True
 isSimple c (APrim i t PrimConcat es)                              = c && all (isSimple c) es
 isSimple c e@(APrim _ _ p es)                                     = c && isSmall e && cheap p es -- && all (isSimple c) es
+isSimple c (AMux {})                                              = False  -- (never cheap)
 isSimple c (AMethCall _ _ _ es)                                   = null es
 isSimple c (AMethValue _ _ _)                                     = True
 isSimple c (ATupleSel _ e _)                                      = isSimple c e
@@ -566,8 +567,8 @@ getExprSize (APrim i t PrimIf es) = (nub $ concat vars, sum terms, 2 + maximum d
 --getExprSize (APrim _ _ PrimArrayDynSelect es) = ...
 
 -- all other primitives add 1 to the max of its arguments
-getExprSize (APrim _ _ _ es) = (nub $ concat vars, sum terms, 1 + maximum depths)
-    where (vars,terms,depths) = unzip3 $ map getExprSize es
+getExprSize (APrim _ _ _ es) = getArgsSize es
+getExprSize (AMux _ _ _ arms) = getArgsSize (aMuxArmExprs arms)
 
 getExprSize (AMethCall t i mid args) = ([mid],1,1)
 getExprSize (AMethValue t i mid)     = ([mid],1,1)
@@ -592,6 +593,11 @@ getExprSize (ASClock {} )            = ([],   1,1)
 getExprSize (ASReset {} )            = ([],   1,1)
 getExprSize (ASInout {} )            = ([],   1,1)
 getExprSize (AMGate t i c)           = ([c],  1,1) -- XXX ? c is not unique to the gate?
+
+-- the size of a node over its arguments: one level above their maximum
+getArgsSize :: [AExpr] -> ([AId], Int, Int)
+getArgsSize es = (nub $ concat vars, sum terms, 1 + maximum depths)
+    where (vars,terms,depths) = unzip3 $ map getExprSize es
 
 
 -- ==============================
@@ -641,8 +647,7 @@ inlineable (ANoInlineFunCall { }) = False
 inlineable (AMethCall { }) = False
 inlineable (AMethValue { }) = False
 inlineable (AMGate { }) = False  -- treat like a method call
-inlineable (APrim _ _ PrimMux _) = False
-inlineable (APrim _ _ PrimPriMux _) = False
+inlineable (AMux {}) = False
 inlineable (APrim _ _ PrimMul _) = False -- XXX EWC is this good?
 inlineable (APrim _ _ PrimQuot _) = False
 inlineable (APrim _ _ PrimRem _) = False

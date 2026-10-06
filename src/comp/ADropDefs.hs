@@ -13,6 +13,7 @@ dVars :: (AExprs a) => a -> [AId]
 dVars = findAExprs dVarsE
   where dVarsE (ASDef _ i) = [i]
         dVarsE (APrim { ae_args = es }) = dVars es
+        dVarsE (AMux { amux_arms = arms }) = dVars arms
         dVarsE (AMethCall { ae_args = es}) = dVars es
         dVarsE (ANoInlineFunCall { ae_args = es }) = dVars es
         dVarsE (AFunCall { ae_args = es }) = dVars es

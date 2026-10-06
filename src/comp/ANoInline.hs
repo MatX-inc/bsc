@@ -161,6 +161,9 @@ liftAExpr True (ANoInlineFunCall t i f es) = do
 liftAExpr _ (APrim aid ty op es) =  do
     es' <- mapM (liftAExpr False) es
     return $ APrim aid ty op es'
+liftAExpr _ (AMux aid ty k arms) =  do
+    arms' <- mapMAMuxArms (liftAExpr False) arms
+    return $ AMux aid ty k arms'
 liftAExpr _ (AMethCall ty aid mid es) = do
     es' <- mapM (liftAExpr False) es
     return $ AMethCall ty aid mid es'

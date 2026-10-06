@@ -30,8 +30,8 @@
 29	PrimMethod
 30	PrimNoInline
 31	PrimIf
-32	PrimMux
-33	PrimPriMux
+32	PrimMux	retired
+33	PrimPriMux	retired
 34	PrimFmtConcat
 35	PrimCase
 36	PrimSelect

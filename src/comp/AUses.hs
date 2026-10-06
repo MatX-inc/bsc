@@ -842,6 +842,8 @@ eDomain (APrim _ _ PrimArrayDynSelect [arr_e, idx_e]) = do
 eDomain (APrim { ae_args = es }) =
     -- should primitives have resource constraints?
     mapM eDomain es >>= mergeExprUsesM
+eDomain (AMux { amux_arms = arms }) =
+    mapM eDomain (aMuxArmExprs arms) >>= mergeExprUsesM
 eDomain e@(AMethCall _ i mi es) = do
     let this_use = singleMethodExprUse i (unQualId mi) e ucTrue
     es_uses <- mapM eDomain es

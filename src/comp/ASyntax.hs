@@ -29,6 +29,8 @@ module ASyntax(
         mkIfcInoutN,
         AExpr(..),
         APrimOp,
+        AMuxKind(..), aMuxKindCode, aMuxKindOfCode, aMuxKindName,
+        aMuxArmExprs, mapAMuxArms, mapMAMuxArms,
         ADef(..),
         ASPackage(..),
         ASPSignalInfo(..),
@@ -136,7 +138,7 @@ import FStringCompat
 -- import Position(noPosition)
 import Position
 import Data.Maybe
-import Util(itos)
+import Util(itos, flattenPairs)
 import VModInfo
 import Wires
 import ProofObligation(ProofObligation, MsgFn)
@@ -1041,6 +1043,44 @@ instance NFData AInout where
 -- the primitives that exist at every phase can appear here.
 type APrimOp = PrimOp PostElab
 
+-- How a mux (AMux) reads its selects
+data AMuxKind
+        = AMuxParallel  -- the selects are mutually exclusive: a parallel
+                        -- case, or the mux_ primitive module
+        | AMuxPriority  -- the first true select wins: a priority chain,
+                        -- or the priorityMux_ primitive module
+        deriving (Eq, Ord, Show)
+
+-- The code a .ba writes for a mux: the one the APrim form had (PrimMux
+-- and PrimPriMux, retired from PrimOp when the mux became an AExpr
+-- constructor), so the encoding is unchanged.
+aMuxKindCode :: AMuxKind -> Int
+aMuxKindCode AMuxParallel = primMuxCode
+aMuxKindCode AMuxPriority = primPriMuxCode
+
+aMuxKindOfCode :: Int -> Maybe AMuxKind
+aMuxKindOfCode n | n == primMuxCode    = Just AMuxParallel
+                 | n == primPriMuxCode = Just AMuxPriority
+                 | otherwise           = Nothing
+
+-- the dump's name for the mux (SignalNaming upper-cases it)
+aMuxKindName :: AMuxKind -> String
+aMuxKindName AMuxParallel = "mux"
+aMuxKindName AMuxPriority = "primux"
+
+-- The expressions of a mux's arms in arm order, each select before its
+-- value: the order the arguments of the APrim form had, which the
+-- traversals that visit every subexpression keep.
+aMuxArmExprs :: [(AExpr, AExpr)] -> [AExpr]
+aMuxArmExprs = flattenPairs
+
+mapAMuxArms :: (AExpr -> AExpr) -> [(AExpr, AExpr)] -> [(AExpr, AExpr)]
+mapAMuxArms f arms = [ (f c, f e) | (c, e) <- arms ]
+
+-- (the select of an arm before its value, as the flat list was mapped)
+mapMAMuxArms :: (Monad m) => (AExpr -> m AExpr) -> [(AExpr, AExpr)] -> m [(AExpr, AExpr)]
+mapMAMuxArms f arms = mapM (\ (c, e) -> do { c' <- f c; e' <- f e; return (c', e') }) arms
+
 -- Every expression is annotated with its (result) type
         -- all types should be ae_type
         -- all ids should be ae_objid
@@ -1050,6 +1090,16 @@ data AExpr
             ae_type :: AType,
             aprim_prim :: APrimOp,
             ae_args :: [AExpr]
+        }
+        -- A multiplexer, built after the .ba is written: by AState for
+        -- a port that several rules drive (its arms end in a default
+        -- arm, selected when no other is, whose value is ASAny) and by
+        -- AOpt from an if.  Every arm is (select, value).
+        | AMux {
+            ae_objid :: AId,
+            ae_type :: AType,
+            amux_kind :: AMuxKind,
+            amux_arms :: [(AExpr, AExpr)]
         }
         | AMethCall {
             ae_type :: AType,
@@ -1170,10 +1220,91 @@ data AExpr
             ae_objid :: AId,
             ae_clkid :: AId
         }
-        deriving (Ord, Show)
+        deriving (Show)
+
+-- the lexicographic combination of two comparisons (Semigroup's <>,
+-- which PPrint's Doc operator shadows in this module)
+infixr 6 `andThen`
+andThen :: Ordering -> Ordering -> Ordering
+andThen EQ r = r
+andThen r  _ = r
+
+-- The order is the one the derived instance gave while a mux was an
+-- APrim (of PrimMux or PrimPriMux): by constructor in declaration
+-- order, AMux taking APrim's place, then by the fields in declaration
+-- order, a mux's being the APrim's (id, type, the primitive's code,
+-- the arms as the flat argument list).  AOpt's mux-arm sort
+-- (mergeIdenExpr, when not -stable-verilog) and the Maps and Sets
+-- keyed on an expression see this order.  Like the derived instance,
+-- it compares the ids that Eq ignores.
+instance Ord AExpr where
+    compare a b =
+        case compare (rank a) (rank b) of
+          EQ -> fields a b
+          r  -> r
+      where
+        rank :: AExpr -> Int
+        rank (APrim {}) = 0
+        rank (AMux {}) = 0
+        rank (AMethCall {}) = 1
+        rank (AMethValue {}) = 2
+        rank (ATuple {}) = 3
+        rank (ATupleSel {}) = 4
+        rank (ANoInlineFunCall {}) = 5
+        rank (AFunCall {}) = 6
+        rank (ATaskValue {}) = 7
+        rank (ASPort {}) = 8
+        rank (ASParam {}) = 9
+        rank (ASDef {}) = 10
+        rank (ASInt {}) = 11
+        rank (ASReal {}) = 12
+        rank (ASStr {}) = 13
+        rank (ASAny {}) = 14
+        rank (ASClock {}) = 15
+        rank (ASReset {}) = 16
+        rank (ASInout {}) = 17
+        rank (AMGate {}) = 18
+
+        fields (APrim i t op es) (APrim i' t' op' es') =
+            compare i i' `andThen` compare t t' `andThen` compare op op' `andThen` compare es es'
+        fields (APrim i t op es) (AMux i' t' k' arms') =
+            compare i i' `andThen` compare t t' `andThen` compare (primOpCode op) (aMuxKindCode k')
+                         `andThen` compare es (aMuxArmExprs arms')
+        fields (AMux i t k arms) (APrim i' t' op' es') =
+            compare i i' `andThen` compare t t' `andThen` compare (aMuxKindCode k) (primOpCode op')
+                         `andThen` compare (aMuxArmExprs arms) es'
+        fields (AMux i t k arms) (AMux i' t' k' arms') =
+            compare i i' `andThen` compare t t' `andThen` compare k k' `andThen` compare arms arms'
+        fields (AMethCall t i m es) (AMethCall t' i' m' es') =
+            compare t t' `andThen` compare i i' `andThen` compare m m' `andThen` compare es es'
+        fields (AMethValue t i m) (AMethValue t' i' m') =
+            compare t t' `andThen` compare i i' `andThen` compare m m'
+        fields (ATuple t es) (ATuple t' es') = compare t t' `andThen` compare es es'
+        fields (ATupleSel t e n) (ATupleSel t' e' n') =
+            compare t t' `andThen` compare e e' `andThen` compare n n'
+        fields (ANoInlineFunCall t i f es) (ANoInlineFunCall t' i' f' es') =
+            compare t t' `andThen` compare i i' `andThen` compare f f' `andThen` compare es es'
+        fields (AFunCall t i f c es) (AFunCall t' i' f' c' es') =
+            compare t t' `andThen` compare i i' `andThen` compare f f' `andThen` compare c c' `andThen` compare es es'
+        fields (ATaskValue t i f c n) (ATaskValue t' i' f' c' n') =
+            compare t t' `andThen` compare i i' `andThen` compare f f' `andThen` compare c c' `andThen` compare n n'
+        fields (ASPort t i) (ASPort t' i') = compare t t' `andThen` compare i i'
+        fields (ASParam t i) (ASParam t' i') = compare t t' `andThen` compare i i'
+        fields (ASDef t i) (ASDef t' i') = compare t t' `andThen` compare i i'
+        fields (ASInt i t v) (ASInt i' t' v') = compare i i' `andThen` compare t t' `andThen` compare v v'
+        fields (ASReal i t v) (ASReal i' t' v') = compare i i' `andThen` compare t t' `andThen` compare v v'
+        fields (ASStr i t v) (ASStr i' t' v') = compare i i' `andThen` compare t t' `andThen` compare v v'
+        fields (ASAny t) (ASAny t') = compare t t'
+        fields (ASClock t c) (ASClock t' c') = compare t t' `andThen` compare c c'
+        fields (ASReset t r) (ASReset t' r') = compare t t' `andThen` compare r r'
+        fields (ASInout t x) (ASInout t' x') = compare t t' `andThen` compare x x'
+        fields (AMGate t i c) (AMGate t' i' c') = compare t t' `andThen` compare i i' `andThen` compare c c'
+        -- equal ranks are the same constructor, or APrim and AMux
+        fields x y = internalError ("compare AExpr: " ++ show (rank x, rank y))
 
 instance NFData AExpr where
     rnf (APrim oid typ prim args) = rnf4 oid typ prim args
+    rnf (AMux oid typ kind arms) = rnf4 oid typ (aMuxKindCode kind) arms
     rnf (AMethCall typ oid mid args) = rnf4 typ oid mid args
     rnf (AMethValue typ oid mid) = rnf3 typ oid mid
     rnf (ATuple typ elems) = rnf2 typ elems
@@ -1196,6 +1327,9 @@ instance NFData AExpr where
 instance Eq AExpr where
     APrim _ t op aexprs == APrim _ t' op' aexprs' =
         (t == t') && (op == op') && (aexprs == aexprs')
+
+    AMux _ t k arms == AMux _ t' k' arms' =
+        (t == t') && (k == k') && (arms == arms')
 
     AMethCall t aid mid aexprs == AMethCall t' aid' mid' aexprs' =
         (t == t') && (mid == mid') && (aexprs == aexprs') && (aid == aid')
@@ -1251,6 +1385,7 @@ instance Eq AExpr where
 
 instance HasPosition AExpr where
     getPosition APrim{ ae_objid = p }       = getPosition p
+    getPosition AMux{ ae_objid = p }        = getPosition p
     getPosition AMethCall{ ae_objid = p }   = getPosition p
     getPosition AMethValue{ ae_objid = p }  = getPosition p
     getPosition ATuple{ ae_elems = e : _ }  = getPosition e
@@ -1586,16 +1721,9 @@ instance PPrint AExpr where
           where f [] = []
                 f (x:y:xs) = (pPrint d 0 x <+> text "->" <+> pPrint d 0 y) : f xs
                 f x = internalError ("pPrint AExpr Aprim binOp: " ++ show x)
-    pPrint d p (APrim _ _ PrimPriMux es) = pparen (p>0) $
-        text "primux" <+> sep (f es)
-          where f [] = []
-                f (x:y:xs) = pparen True (sep [pPrint d 0 x <> text ",", pPrint d 0 y]) : f xs
-                f x = internalError ("pPrint AExpr Aprim PriMux 1: " ++ show x)
-    pPrint d p (APrim _ _ PrimMux es) = pparen (p>0) $
-        text "mux" <+> sep (f es)
-          where f [] = []
-                f (x:y:xs) = pparen True (sep [pPrint d 0 x <> text ",", pPrint d 0 y]) : f xs
-                f x = internalError ("pPrint AExpr Aprim PriMux 2: " ++ show x)
+    pPrint d p (AMux _ _ k arms) = pparen (p>0) $
+        text (aMuxKindName k) <+>
+        sep [ pparen True (sep [pPrint d 0 c <> text ",", pPrint d 0 e]) | (c, e) <- arms ]
     pPrint d p (APrim _ _ o es) = pparen (p>0) $ pPrint d 1 o <+> sep (map (pPrint d 1) es)
     pPrint d p (ANoInlineFunCall _ i _ es)  = pparen (p>0) $ pPrint d 1 i <+> sep (map (pPrint d 1) es)
     pPrint d p (AFunCall _ i _ _ es)  = pparen (p>0) $ pPrint d 1 i <+> sep (map (pPrint d 1) es)
@@ -1853,22 +1981,12 @@ instance PPrintExpand AExpr where
                 f [] = []
                 f (x:y:xs) = (pPrintExpand m d ec' x <+> text "->" <+> pPrintExpand m d ec' y) : f xs
                 f  x = internalError ("pPrintExpand APrim _ PrimCase: " ++ show x)
-    pPrintExpand m d ec (APrim _ _ PrimPriMux es) = pparen (p) $
-        text "primux" <+> sep (f es)
+    pPrintExpand m d ec (AMux _ _ k arms) = pparen (p) $
+        text (aMuxKindName k) <+>
+        sep [ parens (sep [pPrintExpand m d ecb c <> comma, pPrintExpand m d ec' e]) | (c, e) <- arms ]
           where p = useParen ec
                 ec' = defContext { literal= literal ec}
                 ecb = defContext { literal=Boolean }
-                f [] = []
-                f (x:y:xs) = parens (sep [pPrintExpand m d ecb x <> comma,  pPrintExpand m d ec' y]) : f xs
-                f  x = internalError ("pPrintExpand APrim _ PrimPriMux: " ++ show x)
-    pPrintExpand m d ec (APrim _ _ PrimMux es) = pparen (p) $
-        text "mux" <+> sep (f es)
-          where p = useParen ec
-                ec' = defContext { literal= literal ec}
-                ecb = defContext { literal=Boolean }
-                f [] = []
-                f (x:y:xs) = parens (sep [pPrintExpand m d ecb x <> comma , pPrintExpand m d ec' y]) : f xs
-                f  x = internalError ("pPrintExpand APrim: " ++ show x)
     pPrintExpand m d ec (APrim _ _ PrimExtract [var, hi, lo]) =
         pPrintExpand m d pContext var <> lbrack
                        <> (if ( dhi == dlo )

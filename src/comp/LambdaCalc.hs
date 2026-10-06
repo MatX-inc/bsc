@@ -1181,6 +1181,8 @@ convAExpr (ASAny t) = let st = convAType t
                               in return $ anyTVar st
 
 convAExpr (APrim _ t p args) = convAPrim p t args
+-- (the dump is of the package before AState, which builds the first mux)
+convAExpr e@(AMux {}) = internalError ("convAExpr: mux before AState: " ++ ppReadable e)
 
 convAExpr (AMethCall _ obj meth as) = do
   modId <- gets curModId
