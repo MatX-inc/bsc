@@ -1289,6 +1289,8 @@ convAExpr (ASParam t i) = do
 convAExpr (ASAny t) = return $ anyVar t
 
 convAExpr (APrim _ t p args) = convAPrim p t args
+-- (the dump is of the package before AState, which builds the first mux)
+convAExpr e@(AMux {}) = internalError ("convAExpr: mux before AState: " ++ ppReadable e)
 
 convAExpr (AMethCall _ obj meth as) = do
   state_expr <- gets curState

@@ -33,6 +33,7 @@ import BackendNamingConventions
 -- pretty-printing drops the id for constant-shaped exprs
 exprIdText :: AExpr -> String
 exprIdText (APrim i _ _ _)  = getIdBaseString i
+exprIdText (AMux i _ _ _)   = getIdBaseString i
 exprIdText (ASInt i _ _)    = getIdBaseString i
 exprIdText (ASStr i _ _)    = getIdBaseString i
 exprIdText (ASPort _ i)     = getIdBaseString i

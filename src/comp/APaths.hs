@@ -1272,6 +1272,8 @@ findEdges :: PathEnv -> AExpr ->
 findEdges env (APrim i t op es) =
     -- make edge between inputs and output
     concatUnzip3 (map (findEdges env) es)
+findEdges env (AMux _ _ _ arms) =
+    concatUnzip3 (map (findEdges env) (aMuxArmExprs arms))
 findEdges env (AMethCall t i qmi args) =
     -- make edges between exprs and meth input
     -- return the output connection

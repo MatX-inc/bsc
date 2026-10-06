@@ -230,10 +230,6 @@ isConstOp PrimCase   = True
 isConstOp PrimArrayDynSelect = True
 isConstOp PrimBuildArray = True
 
--- XXX No reason not to allow these, but they won't occur in parameter exprs
-isConstOp PrimMux    = False
-isConstOp PrimPriMux = False
-
 -- This should be transformed away too, right?
 isConstOp PrimSelect = True  -- not handled in AVerilog
 

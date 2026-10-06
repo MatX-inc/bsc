@@ -576,6 +576,11 @@ convAExpr2SExpr mty (APrim i (ATBit width) p args) = do
     when traceConv $ traceM("conv prim " ++ ppString p)
     convPrim2SExpr mty p i width args
 
+-- a mux is an unknown, as it was when it was a primitive without a conversion
+convAExpr2SExpr mty e@(AMux _ (ATBit width) _ _) = do
+    when traceConv $ traceM("conv mux")
+    addUnknownExpr mty e width
+
 -- Method calls create independent variables, with given width
 -- XXX Passing the current context is just a heuristic
 -- XXX TODO: some methods calls may be mutex, such as FIFO.full and FIFO.empty
