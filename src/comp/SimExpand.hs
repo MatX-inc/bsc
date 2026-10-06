@@ -15,7 +15,6 @@ import Position (noPosition, getPosition)
 import PPrint
 import Flags
 import FStringCompat(mkFString)
-import Backend
 
 import PreStrings (sSigned, sUnsigned)
 import PreIds (idDefaultClock, idDefaultReset)
@@ -35,8 +34,8 @@ import SimPackage
 import SimPrimitiveModules(getPrimDomainInfo, checkBluesimPrimitives)
 import SimCCBlock(SimCCBlock(..), primBlocks)
 import SchedInfo (methodConflictInfo, sSB)
-import ABin (ABin(..), ABinModInfo(..))
-import ABinUtil(HierMap, getABIHierarchy, assertNoSchedErr)
+import ABin (ABinModInfo(..))
+import ABinUtil(HierMap, ABIHierarchy, assertNoSchedErr)
 import SimDomainInfo
 
 import SCC (tsort)
@@ -54,20 +53,11 @@ trace_bs_mcd = "-trace-bs-mcd" `elem` progArgs
 
 -- ===============
 
--- topname: the top module of the design
--- fabis: the name of each .ba file paired with its contents
---        (file + abi = fabi)
---        the filename is kept for reporting errors to the user
-simExpand :: ErrorHandle -> Flags -> String -> [(String, ABin)] -> IO SimSystem
-simExpand errh flags topname fabis = do
-    -- get the names of the primitives
-    -- (to put in the list of mods we don't need .ba for)
-    let prim_names = map sb_name primBlocks
-
-    (topmodId, hiermap, instmap, ffuncmap, filemap, _, emodinfos_used_by_name)
-        <- convExceptTToIO errh $
-           getABIHierarchy errh (verbose flags) (ifcPath flags) (Just Bluesim)
-                           prim_names topname fabis
+-- The link plan supplies the loaded hierarchy. Expansion does not perform
+-- artifact discovery or choose a plan interpreter.
+simExpand :: ErrorHandle -> Flags -> String -> ABIHierarchy -> IO SimSystem
+simExpand errh flags topname
+    (topmodId, hiermap, instmap, ffuncmap, filemap, _, emodinfos_used_by_name) = do
 
     modinfos_used_by_name <- convExceptTToIO errh $
                              assertNoSchedErr emodinfos_used_by_name

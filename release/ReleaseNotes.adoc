@@ -4,6 +4,13 @@ Bluespec Compiler (BSC) Release Notes
 :last-update-label!:
 :nofooter:
 
+Unreleased
+----------
+
+* Building BSC now requires the Haskell `aeson` package for dependency reports.
+  The packaged Haskell dependency license notices also support MIT and ISC
+  licenses, in addition to the existing BSD licenses.
+
 2026.07.1 Release
 -----------------
 

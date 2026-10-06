@@ -147,14 +147,29 @@ data Decoded = DHelp Flags       -- Display the public help message
              | DVerLink Flags String [VFileName] [String] [String]
                -- entry, ABin files and C files to be generated and linked
              | DSimLink Flags String [String] [String]
+               -- Query an otherwise ordinary invocation; never serialized in Flags.
+             | DDependencies FilePath Decoded
 
 decodeArgs :: String -> [String] -> String -> ([WMsg], Decoded)
 decodeArgs prog args cdir =
     let (sets, warnings0, errors0, flags0, anames) =
             decodeFlags args ([], [], [], defaultFlags cdir)
-        -- do some final adjustments
         (warnings, errors, flags) = adjustFinalFlags warnings0 errors0 flags0
-    in if "help-hidden" `elem` sets
+        (_, decoded) = decodeInvocation sets warnings errors flags anames
+        reports = [path | setting <- sets,
+                          Just path <- [stripPrefix "dependencies=" setting]]
+        wrap operation = case reports of
+            [] -> operation
+            path:_ -> DDependencies path operation
+    in (warnings, case decoded of
+          DBlueSrc {} -> wrap decoded
+          DVerLink {} -> wrap decoded
+          DSimLink {} -> wrap decoded
+          _ -> decoded)
+
+decodeInvocation :: [String] -> [WMsg] -> [EMsg] -> Flags -> [String] -> ([WMsg], Decoded)
+decodeInvocation sets warnings errors flags anames =
+       if "help-hidden" `elem` sets
        then (warnings, DHelpHidden flags)
        else if "h" `elem` sets || "help" `elem` sets
             then (warnings, DHelp flags)
@@ -416,6 +431,7 @@ describeFlags showHidden =
         getDataFromInfo f (Arg a1 _ _)     = f ++ " " ++ a1
         getDataFromInfo f (Arg2 a1 a2 _ _) = f ++ " " ++ a1 ++ " " ++ a2
         getDataFromInfo f (PassThrough a _ _) = f ++ " " ++ a
+        getDataFromInfo f DependencyQuery = f ++ " file"
         getDataFromInfo f _                = f
     in
         sort [ "-" ++ flag ++ replicate (22 - length flag) ' ' ++ " " ++ desc |
@@ -720,6 +736,12 @@ decodeFlags (('-':s):ss) (sets,warnings, bad, flags) =
 -- Of course we give a DEPRECATED warning if the flag is used correctly.
           in
           case flagtype of
+            DependencyQuery ->
+              let eExpectsArg = (cmdPosition, EOneArgFlag ('-':s))
+              in case ss of
+                   path:rest | path == "-" || not (isFlag path || isSrcFile path) ->
+                     decodeFlags rest (("dependencies=" ++ path):sets, perhaps_warn, bad, flags)
+                   _ -> decodeFlags ss (sets, perhaps_warn, eExpectsArg:bad, flags)
             Toggle doflag _ -> decodeFlags ss (s:sets, perhaps_warn, bad, doflag flags True)
             NoArg dofunc _ ->
               if (null ss) || (isFlag (head ss)) || (isSrcFile (head ss)) then
@@ -1056,6 +1078,8 @@ data FlagType =
     | Alias  String
         -- alias for another flag
     | Resource  ResourceFlag
+    | DependencyQuery
+        -- command-only report path, held in decodeFlags' settings, not Flags
 
 type FlagDescr = String
 
@@ -1095,6 +1119,9 @@ showMsgList fn =
 
 externalFlags :: [(String, FlagInfo)]
 externalFlags = [
+        ("dependencies",
+         (DependencyQuery,
+          "write conservative dependency JSON to file (- for stdout)", Hidden)),
         ("aggressive-conditions",
          (Toggle (\f x -> f {aggImpConds=x}) (showIfTrue aggImpConds),
           "construct implicit conditions aggressively", Visible)),

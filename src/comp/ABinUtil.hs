@@ -1,5 +1,5 @@
 module ABinUtil (
-                 HierMap, InstModMap, ABinMap,
+                 HierMap, InstModMap, ABinMap, ABIHierarchy,
                  getABIHierarchy, assertNoSchedErr,
                  readAndCheckABin,
                  readAndCheckABinPath,
@@ -8,10 +8,14 @@ module ABinUtil (
 
 import Data.List(nub, partition)
 import Data.Maybe(isJust, fromJust)
-import Control.Monad(when)
+import Control.Monad(when, unless)
+import Control.Exception(evaluate)
 import qualified Data.ByteString as BS
-import Control.Monad.Except(ExceptT, throwError)
-import Control.Monad.State(StateT, runStateT, lift, get, put)
+import Control.Monad.Except(ExceptT(..), runExceptT, throwError, catchError)
+import Control.Monad.State(StateT, lift, get, put)
+import System.FilePath((</>), normalise)
+import BuildPlan
+import DependencyReport(DependencyCandidate(..))
 
 import Version(bscVersionStr)
 import Backend
@@ -58,6 +62,10 @@ type InstModMap = M.Map String String
 -- map from module name to the name of the file it was read from
 type ABinMap = M.Map String FilePath
 
+type ABIHierarchy =
+    (Id, HierMap, InstModMap, ForeignFuncMap, ABinMap, [String],
+     [(String, (ABinEitherModInfo, String))])
+
 -- ---------------
 
 -- Monad for reading in .ba files
@@ -68,12 +76,14 @@ type ABinMap = M.Map String FilePath
 -- still be reported immediately, via IO -- such as file version mismatch,
 -- or read errors, etc.
 --
-type M = StateT MState (ExceptT EMsgs IO)
+type M = StateT MState (ExceptT EMsgs BuildPlan)
+
+type ABinPathReader = ([String], String) ->
+    BuildPlan (Maybe (String, Either EMsgs ABin))
 
 -- monad state
 data MState = MState {
-         m_errHandle :: ErrorHandle
-       , m_verbose :: Bool
+         m_verbose :: Bool
        , m_ifc_path :: [String]
        , m_backend :: Maybe Backend
        , m_foreign_mods :: [String]
@@ -82,6 +92,8 @@ data MState = MState {
        , m_foundmod_map :: HierMap
        , m_foundffunc_map :: ForeignFuncMap
        , m_abmi_file_map :: ABinMap
+       , m_on_artifact :: FilePath -> String -> ABin -> BuildPlan ()
+       , m_read_abi :: ABinPathReader
      }
 
 addMod :: String -> ABinEitherModInfo -> String -> M ()
@@ -125,12 +137,12 @@ putHierMap m = get >>= \s -> put (s { m_foundmod_map = m })
 
 -- prim_names = list of primtives which don't need .ba files
 getABIHierarchy ::
-    ErrorHandle -> Bool -> [String] -> (Maybe Backend) ->
+    ErrorHandle -> Bool -> [String] -> Maybe Backend ->
     [String] -> String -> [(String, ABin)] ->
-    ExceptT EMsgs IO
-        (Id, HierMap, InstModMap, ForeignFuncMap, ABinMap, [String],
-         [(String, (ABinEitherModInfo, String))])
-getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
+    (FilePath -> String -> ABin -> BuildPlan ()) ->
+    BuildPlan (BuildResult (Either EMsgs ABIHierarchy))
+getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis onArtifact =
+  withABinPathCache errh backend $ \readPath -> do
     -- pair the abis with their module name
     let
         pair_with_name (f,abi) = (getIdString (getABIName abi), (f,abi))
@@ -138,7 +150,6 @@ getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
 
     -- create the initial state
     let state0 = MState {
-                     m_errHandle = errh,
                      m_verbose = be_verbose,
                      m_ifc_path = ifc_path,
                      m_backend = backend,
@@ -147,7 +158,9 @@ getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
                      m_abis_unused = fabis_by_name,
                      m_foundmod_map = start_hiermap,
                      m_foundffunc_map = start_ffuncmap,
-                     m_abmi_file_map = start_filemap
+                     m_abmi_file_map = start_filemap,
+                     m_on_artifact = onArtifact,
+                     m_read_abi = readPath
                  }
         existing_mods = prim_names
         no_mod_children m = (m,([],[]))
@@ -155,9 +168,18 @@ getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
         start_ffuncmap = M.empty
         start_filemap = M.fromList [ (n,f) | (n,(f,_)) <- fabis_by_name ]
 
-    (topmodId, end_state)
-        <- runStateT (followABIHierarchy Nothing topname) state0
+    let follow = followABIHierarchy Nothing topname `catchError` \err -> do
+            lift $ lift $ incomplete
+                ("Cannot discover the complete elaboration hierarchy for " ++ topname ++
+                 "; its transitive artifact dependencies are not known.")
+            throwError err
+    result <- runStatePlan follow state0
+    performResult (either (return . Left)
+        (runExceptT . finishABIHierarchy errh topname) <$> result)
 
+finishABIHierarchy :: ErrorHandle -> String -> (Id, MState) ->
+                      ExceptT EMsgs IO ABIHierarchy
+finishABIHierarchy errh topname (topmodId, end_state) = do
     let hiermap0  = m_foundmod_map end_state
         ffuncmap = m_foundffunc_map end_state
         filemap  = m_abmi_file_map end_state
@@ -178,7 +200,7 @@ getABIHierarchy errh be_verbose ifc_path backend prim_names topname fabis = do
     -- if there is an unsupported import (in followABIHierarchy)
     let hiermap = M.unionWithKey foreignHierErr
                                  hiermap0
-                                 (M.fromList (map no_mod_children foreign_mods))
+                                 (M.fromList [(name, ([], [])) | name <- foreign_mods])
 
     -- report warnings for any unused abi files
     let remaining_mods = m_abis_unused end_state
@@ -286,7 +308,7 @@ followABMIHierarchy curpkg = do
                   -- add the use
                   addForeignMod mod
 
-    mapM_ addFModUse foreign_avis
+    independentlyStateT (map addFModUse foreign_avis)
 
     -- ----------
     -- get the noinline functions (which are also modules)
@@ -336,7 +358,7 @@ followABMIHierarchy curpkg = do
                       s <- get
                       put (s { m_foundffunc_map = ffunc_map' })
 
-    mapM_ addFFuncUse ffunc_names
+    independentlyStateT (map addFFuncUse ffunc_names)
 
     -- ----------
     -- function to traverse the submods
@@ -351,7 +373,7 @@ followABMIHierarchy curpkg = do
               else followABIHierarchy (Just curmodname) modname >> return ()
 
     -- we don't follow foreign modules (which includes primitives)
-    mapM_ followOneSubMod (native_submod_names ++ func_names)
+    independentlyStateT (map followOneSubMod (native_submod_names ++ func_names))
 
 -- ---------------
 
@@ -393,14 +415,16 @@ findABI isMod mparent lookup_name = do
     abis <- getABIs
     let (found_abis, other_abis) =
             partition (\ (i,a) -> i == lookup_name) abis
-    case found_abis of
-        [(_,(_,abi))] -> setABIs other_abis >> return abi
-        [] -> do -- try to find the module in the path
+        explicit_paths = map (normalise . fst . snd) found_abis
+        matchesRequestedKind (ABinMod {}) = isMod
+        matchesRequestedKind (ABinModSchedErr {}) = isMod
+        matchesRequestedKind (ABinForeignFunc {}) = not isMod
+        fromPath :: Bool -> M ABin
+        fromPath fallback = do
             s <- get
             let be_verbose = m_verbose s
                 ifc_path   = m_ifc_path s
                 backend    = m_backend s
-                errh       = m_errHandle s
                 err = if (isMod)
                       then (cmdPosition,
                             EMissingABinModFile lookup_name mparent)
@@ -410,16 +434,84 @@ findABI isMod mparent lookup_name = do
                            (cmdPosition,
                             EMissingABinForeignFuncFile lookup_name parent)
                          Nothing -> internalError "findABI: ffunc mparent"
-            (file, abi) <-
-                fromMaybeM (throwError (EMsgs [err])) $
-                lift $ readAndCheckABinPath errh be_verbose ifc_path backend
-                           lookup_name
+            let owner = maybe lookup_name id mparent
+                role | fallback = "consumed-explicit-elaboration-fallback"
+                     | not isMod = "foreign-function-elaboration"
+                     | isJust mparent = "module-elaboration"
+                     | otherwise = "top-elaboration"
+                policy | fallback = "optional"
+                       | backend == Just Bluesim = "one-of"
+                       | otherwise = "optional"
+            candidates <- lift $ lift $
+                requireFiles owner role policy
+                    [("elaboration", dir </> (lookup_name ++ "." ++ abinSuffix))
+                        | dir <- ifc_path]
+                    ["Candidates are in interface-search-path order; absent candidates remain existence dependencies."
+                    ,"A .ba input is not replaced by source, a package object, or generated Verilog."]
+            let paths = [(dir, candidate) | (dir, candidate) <- zip ifc_path candidates,
+                         not fallback || (candidateExists candidate &&
+                           normalise (candidatePath candidate) `notElem` explicit_paths)]
+                -- Candidate probes are discovery-only; the ordinary lookup
+                -- always uses the configured search path directly.
+                search_path = if fallback then map fst paths else ifc_path
+            when (fallback && null paths) $ lift $ lift $
+                noAlternative ("No distinct provider after consuming explicit elaboration " ++ lookup_name)
+            when (not fallback && null (filter candidateExists candidates) && backend == Just Bluesim) $
+                lift $ lift $ incomplete
+                    ("Missing elaboration metadata for " ++ lookup_name ++
+                     "; its transitive artifact dependencies are not known.")
+            -- The real lookup stays execution-only. Discovery checks each
+            -- candidate before opening it, so a distribution .ba need not be
+            -- decoded merely to discover that its whole subtree is opaque.
+            let selected = runExceptT $
+                    readAndCheckABinPathPlan (m_read_abi s) be_verbose search_path lookup_name
+                available = [(dir, candidate) | (dir, candidate) <- paths,
+                             candidateExists candidate]
+                inspect (dir, candidate) = do
+                    external <- inspectDependency (candidatePath candidate)
+                    unless external $ noAlternative
+                        ("Distribution elaboration " ++ candidatePath candidate)
+                    runExceptT $
+                        readAndCheckABinPathPlan (m_read_abi s) be_verbose [dir] lookup_name
+                alternatives = if null available then [selected] else map inspect available
+            result <- lift $ lift $ searchAlternatives
+                ("elaboration search for " ++ lookup_name) selected alternatives
+            mfile <- either throwError return result
+            (file, abi) <- fromMaybeM (throwError (EMsgs [err])) (return mfile)
             recordFile lookup_name file
             return abi
-        files -> let fnames = map (fst . snd) files
-                 in  throwError
-                         (EMsgs [(cmdPosition,
-                                  EMultipleABinFilesForName lookup_name fnames)])
+        fromExplicit :: M ABin
+        fromExplicit = case found_abis of
+            [(_,(_,abi))] -> setABIs other_abis >> return abi
+            files -> do
+                let fnames = map (fst . snd) files
+                lift $ lift $ incomplete
+                    ("Multiple explicit elaboration inputs define " ++ lookup_name ++
+                     "; ordinary linking rejects this ambiguity.")
+                selectStateT ("explicit elaboration alternatives for " ++ lookup_name) 0 $
+                    throwError (EMsgs [(cmdPosition,
+                        EMultipleABinFilesForName lookup_name fnames)]) :
+                    [setABIs other_abis >> recordFile lookup_name path >> return abi
+                        | (_, (path, abi)) <- files]
+    abi <- case found_abis of
+        [] -> fromPath False
+        [(_, (_, abi))] | matchesRequestedKind abi ->
+            -- A prior successful same-kind use would be in its visited map;
+            -- an other-kind use would reject this record and stop. Neither
+            -- can consume it and leave this lookup needing a path fallback.
+            fromExplicit
+        _ ->
+            -- Foreign functions and modules have separate visited maps but
+            -- share the explicit inputs. A preceding foreign-function use
+            -- can consume an explicit record with this module's link name.
+            -- Retain that path-search possibility without probing it during
+            -- execution or treating absent speculative providers as errors.
+            selectStateT ("explicit or previously consumed elaboration " ++ lookup_name) 0
+                [fromExplicit, setABIs other_abis >> fromPath True]
+    s <- get
+    let path = M.findWithDefault (lookup_name ++ "." ++ abinSuffix) lookup_name (m_abmi_file_map s)
+    lift $ lift $ m_on_artifact s path lookup_name abi
+    return abi
 
 -- ---------------
 
@@ -474,22 +566,46 @@ readAndCheckABin errh backend filename = do
 readAndCheckABinPath :: ErrorHandle ->
                         Bool -> [String] -> (Maybe Backend) -> String ->
                         (ExceptT EMsgs IO) (Maybe (String, ABin))
-readAndCheckABinPath errh be_verbose path backend mod_name = do
-    let binname = mod_name ++ "." ++ abinSuffix
-    mread <- lift $ readBinFilePath errh noPosition be_verbose binname path
+readAndCheckABinPath errh be_verbose path backend mod_name = ExceptT $
+    executePlan $ withABinPathCache errh backend $ \readPath -> runExceptT $
+        readAndCheckABinPathPlan readPath be_verbose path mod_name
+
+-- Cache immutable reads and decoded metadata without merging the conditions
+-- under which each hierarchy edge is visited. Validation stays lazy here so
+-- the caller can emit the ordinary progress message before a validation error.
+withABinPathCache :: ErrorHandle -> Maybe Backend ->
+                    (ABinPathReader -> BuildPlan a) -> BuildPlan a
+withABinPathCache errh backend = withCachedRead label readPath
+  where
+    label (_, mod_name) = "open elaboration " ++ mod_name ++ "." ++ abinSuffix
+    readPath (path, mod_name) = do
+        let binname = mod_name ++ "." ++ abinSuffix
+        mread <- readBinFilePath errh noPosition False binname path
+        return $ case mread of
+          Nothing -> Nothing
+          Just (contents, filename) -> Just (filename,
+            case decodeABin errh backend binname contents of
+              Left msgs -> Left (EMsgs msgs)
+              Right abi ->
+                let file_mod_name = getIdString (getABIName abi)
+                in if file_mod_name == mod_name
+                   then Right abi
+                   else Left (EMsgs [(noPosition,
+                       EABinNameMismatch mod_name filename file_mod_name)]))
+
+-- Opening, progress output and validation remain in their original order.
+-- Discovery can read and validate the same bytes while suppressing progress
+-- output, including when validation rejects an artifact.
+readAndCheckABinPathPlan :: ABinPathReader -> Bool -> [String] -> String ->
+                            ExceptT EMsgs BuildPlan (Maybe (String, ABin))
+readAndCheckABinPathPlan readPath be_verbose path mod_name = do
+    mread <- lift $ readPath (path, mod_name)
     case mread of
       Nothing -> return Nothing
-      Just (contents, filename) -> do
-          case (decodeABin errh backend binname contents) of
-            Left msgs -> throwError (EMsgs msgs)
-            Right abi -> do
-                -- check that the file contains the module of the expected name
-                let file_mod_name = getIdString (getABIName abi)
-                if (file_mod_name == mod_name)
-                    then return $ Just (filename, abi)
-                    else throwError
-                           (EMsgs [(noPosition,
-                                   EABinNameMismatch mod_name filename file_mod_name)])
+      Just (filename, result) -> do
+          lift $ perform $ when be_verbose (putStrLn ("read " ++ filename))
+          ExceptT $ observe ("validate elaboration " ++ filename) $ evaluate $
+              fmap (\abi -> Just (filename, abi)) result
 
 readAndCheckABinPathCatch ::
     ErrorHandle -> Bool -> [String] -> (Maybe Backend) -> String -> EMsg ->

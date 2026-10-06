@@ -1,0 +1,4 @@
+package SymlinkLeaf (value) where
+
+value :: Bit 8
+value = 1

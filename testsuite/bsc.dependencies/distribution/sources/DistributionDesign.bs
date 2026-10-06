@@ -1,0 +1,8 @@
+package DistributionDesign (mkDistributionDesign) where
+
+mkDistributionDesign :: Module Empty
+mkDistributionDesign =
+    module
+        counter :: Reg (Bit 8) <- mkReg 0
+        rules
+            "increment": when True ==> counter := counter + 1

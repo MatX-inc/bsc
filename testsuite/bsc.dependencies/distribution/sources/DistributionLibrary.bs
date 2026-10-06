@@ -1,0 +1,4 @@
+package DistributionLibrary (libraryValue) where
+
+libraryValue :: Bit 8
+libraryValue = 7

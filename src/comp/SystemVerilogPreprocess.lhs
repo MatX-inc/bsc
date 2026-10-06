@@ -2,14 +2,19 @@
 
 Preprocessor for SystemVerilog
 
-> module SystemVerilogPreprocess(preprocess) where
+> module SystemVerilogPreprocess(preprocess, preprocessPlan) where
 
 > import Data.List
 > import Data.Char(isLetter, isDigit)
 > import Control.Monad (when)
+> import BuildPlan
+> import qualified Control.Exception as CE
+> import System.IO.Error(ioeGetErrorType)
+> import GHC.IO.Exception(IOErrorType(..))
+> import FStringCompat(mkFString)
 
 > import Position
-> import Error(internalError, ErrMsg(..), ErrorHandle, bsError, bsErrorUnsafe)
+> import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, bsError, bsErrorUnsafe)
 > import FileIOUtil(readFilePathOrAbs)
 > import Version(versionname)
 > import Flags(Flags, backend, defines, verbose, ifcPath, cpp, vpp)
@@ -37,7 +42,19 @@ The state contains
 
 > newtype PreState = PreState ([String], Position, String, [EnvVal], ErrorHandle, Flags)
 
-> type PreProcessor = PreState -> IO (String, [EnvVal])
+> type PreProcessor = PreState -> BuildPlan (String, [EnvVal])
+>
+> preprocessError :: ErrorHandle -> [EMsg] -> BuildPlan a
+> preprocessError errh errs = observe "preprocessor diagnostic" $ bsError errh errs
+>
+> forceInput :: ErrorHandle -> FilePath -> String -> BuildPlan ()
+> forceInput errh path text = observe ("read preprocessor input " ++ path) $
+>   CE.handleJust isEncErr handleErr $ CE.evaluate (length text) >> return ()
+>   where
+>     isEncErr :: CE.IOException -> Maybe CE.IOException
+>     isEncErr e | InvalidArgument <- ioeGetErrorType e = Just e
+>                | otherwise = Nothing
+>     handleErr _ = bsError errh [(filePosition $ mkFString path, ENotUTF8)]
 
 > emptyEnv :: [EnvVal]
 > emptyEnv = [EnvVal{ env_def = "bluespec",
@@ -52,14 +69,23 @@ The state contains
 > emptyOutput :: [String]
 > emptyOutput = []
 
-Scan is not in a monad because of laziness requirements (space efficiency)
+Each source or include is forced at its read boundary so that decoding errors
+are attributed to that file before preprocessing it. This materializes the
+input and can report an invalid encoding before an earlier directive error.
+The scanner still builds its output lazily; forcing the input does not force
+the parsed syntax tree.
 
 > preprocess :: ErrorHandle
 >            -> Flags
 >            -> Position  -- initial position
 >            -> String    -- input
 >            -> IO (String,[String])
-> preprocess errh flags initPos file0 = do
+> preprocess errh flags initPos file0 =
+>     executePlan $ preprocessPlan errh flags initPos file0
+>
+> preprocessPlan :: ErrorHandle -> Flags -> Position -> String -> BuildPlan (String, [String])
+> preprocessPlan errh flags initPos file0 = do
+>     forceInput errh (getPositionFile initPos) file0
 >     -- perform cpp if requested
 >     let file1 = if (cpp flags)
 >                 then unlines (map cppLine_to_svLine (lines file0))
@@ -149,7 +175,7 @@ Toplevel scanner function
 >     | (c=='(' || isWhitespace c) = prescanMain (enstring ('`':'l':'i':'n':'e':c:[]) (eatChars 6 state))
 > -- `endif. If we see this something is wrong
 > prescanMain state@(PreState (outp, pos, ( '`':'e':'n':'d':'i':'f':c:restOfInput ), env, errh, flgs))
->     | isWhitespace c = bsError errh [(pos, ESVPUnmatchedEndIf)]
+>     | isWhitespace c = preprocessError errh [(pos, ESVPUnmatchedEndIf)]
 
 
 > prescanMain state@(PreState (outp, pos, ('`':'i':'f':'d':'e':'f':c:restOfInput),
@@ -188,12 +214,23 @@ Toplevel scanner function
 >             newPos = updatePosString pos ("`include" ++ (c:ws) ++ ws2 ++
 >                                           (delim1:filestr) ++ [delim2])
 >             missingFileErr =
->                  bsError errh [(pos, EMissingIncludeFile filestr)]
+>                  preprocessError errh [(pos, EMissingIncludeFile filestr)]
 >         in
 >           do
+>               let owner = getPositionFile pos
+>                   candidates = case filestr of
+>                     ('/':_) -> [filestr]
+>                     _ -> [dir ++ "/" ++ filestr | dir <- ifcPath flgs]
+>               _ <- requireFiles owner ("include-lookup:" ++ filestr) "one-of"
+>                 [("include", path) | path <- candidates]
+>                 ["The preprocessor selects the first readable include in search-path order."]
 >               (fileContents, fileName) <-
->                   fromMaybeM missingFileErr $
->                       readFilePathOrAbs errh pos (verbose flgs) filestr (ifcPath flgs)
+>                   fromMaybeM missingFileErr $ observe ("resolve include " ++ filestr) $
+>                       readFilePathOrAbs errh pos False filestr (ifcPath flgs)
+>               _ <- requireFiles owner "textual-includes" "required" [("include", fileName)]
+>                 ["Required when this source is parsed with the invocation's defines and preprocessing flags."]
+>               perform $ when (verbose flgs) $ putStrLn ("read " ++ fileName)
+>               forceInput errh fileName fileContents
 >               let env' = (EnvInclude fileName):env
 >               (str,newEnv) <- prescanMain (PreState(emptyOutput, initialPosition fileName,
 >                                                     fileContents, env', errh, flgs))
@@ -219,7 +256,7 @@ Toplevel scanner function
 >                           newEnv = filter (\x -> ((env_def x) /= tid)) [e' | e'@(EnvVal {}) <- env]
 >                        in
 >                         do
->                          when (tid == "") $ bsError errh [(pos, ESVPNoId "`undef")]
+>                          when (tid == "") $ preprocessError errh [(pos, ESVPNoId "`undef")]
 >                          prescanMain (PreState (outp, newPos, (andRest), newEnv, errh, flgs))
 >
 > prescanMain state@(PreState (outp, pos, ('`':'d':'e':'f':'i':'n':'e':
@@ -329,7 +366,7 @@ Toplevel scanner function
 >     let
 >        (id, paramsAndStuff) = span (isIdChar) restOfInput
 >     in do
->         when (id == "") $ bsError errh [(pos, ESVPNoId "`")]
+>         when (id == "") $ preprocessError errh [(pos, ESVPNoId "`")]
 >         case paramsAndStuff of
 >             ('(':parms_etc) ->
 >              let
@@ -402,7 +439,7 @@ Toplevel scanner function
 >                                             (PreState (outp, nPos, afterDefine, newEnv, errh, flgs)))
 >                  return rslt
 >             _ -> if not (inEnv id env) then
->                     bsError errh [(pos, ESVPUndefinedId id)]
+>                     preprocessError errh [(pos, ESVPUndefinedId id)]
 >                   else
 >                     let
 >                        envEntry = getEnvEntry id env
@@ -690,7 +727,7 @@ It probably won't work properly if and there are unbalanced `ifdef
 >  in
 >     do
 >       when (id == "") $ let ctx = if posif then "`ifdef" else "`ifndef"
->                         in bsError errh [(pos, ESVPNoId ctx)]
+>                         in preprocessError errh [(pos, ESVPNoId ctx)]
 >       (ifStr, newEnv) <-
 >           if ((inEnv id env) == posif) then
 >              --do first branch

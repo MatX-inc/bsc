@@ -97,3 +97,16 @@ compile_pass Line_MissingParen_NextLine.bsv
 compile_pass Define_NonTermComment_EOF.bsv
 
 # ----------
+
+# A malformed include filename also appears in the dependency observation's
+# label. Recover it as an incomplete report; do not defer the same parser
+# failure into JSON output and leave behind an empty report file.
+set dependency_test_directory [file dirname [file normalize [info script]]]
+source [file join $dependency_test_directory .. .. bsc.dependencies dependencies.tcl]
+check_dependencies $dependency_test_directory malformed-include {
+    -u NoId_Macro_Include.bsv
+} {
+    --mode source --complete false
+    --input NoId_Macro_Include.bsv
+    --boundary {Cannot inspect build-plan label}
+}

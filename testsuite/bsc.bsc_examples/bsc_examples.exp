@@ -1,6 +1,9 @@
 
 # test legacy examples
 
+set dependency_test_directory [file dirname [file normalize [info script]]]
+source [file join $dependency_test_directory .. bsc.dependencies dependencies.tcl]
+
 compile_pass Counters.bs
 
 compile_pass Elf.bs
@@ -80,10 +83,25 @@ if {$ctest == 1} {
 }
 
 compile_pass MipsCPU.bs
+check_dependencies $dependency_test_directory mips-source {-u Mips.bs} {
+    --mode source --complete true
+    --input Mips.bs --input MipsCPU.bs --input MipsDefs.bs
+    --input MipsInstr.bs --input MipsROM.bs --missing MipsCPU.bsv
+    --role package-import:RegFile --output Mips.bo
+}
 
 if {$ctest == 1} {
   compile_object_pass Mips.bs sysMips
 }
 
 link_objects_pass {sysMipsROM sysMips} sysMips
+if {$ctest == 1} {
+    check_dependencies $dependency_test_directory mips-bluesim {
+        -sim -e sysMips -KILLsimBlocksToC sysMips.ba sysMipsROM.ba
+    } {
+        --mode bluesim-cxx --complete true
+        --input sysMips.ba --input sysMipsROM.ba --role generated-object-reuse
+        --output sysMips.cxx --output sysMipsROM.cxx --output model_sysMips.cxx
+    }
+}
 link_objects_pass {sysNewMipsROM sysNewMips} sysNewMips

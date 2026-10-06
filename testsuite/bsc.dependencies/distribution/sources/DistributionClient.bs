@@ -1,0 +1,7 @@
+package DistributionClient (clientValue) where
+
+import DistributionLibrary
+import DistributionLocal
+
+clientValue :: Bit 8
+clientValue = libraryValue + localValue

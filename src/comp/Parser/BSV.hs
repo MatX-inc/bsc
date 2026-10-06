@@ -1,4 +1,4 @@
-module Parser.BSV( bsvParseString
+module Parser.BSV( bsvParseString, bsvParseStringPlan
                  , pStringWrapper
                  , pTypeExpr
                  , pQualConstructor
