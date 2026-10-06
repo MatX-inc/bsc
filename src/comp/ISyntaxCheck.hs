@@ -257,17 +257,34 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
                           _ -> True)
 
             rulesOK (IRules sps rs) = all ruleOK rs
-            -- the body through the expression it stands for (the
-            -- check over IAction follows in the next commit)
-            ruleOK (IRule { irule_pred = p , irule_body = a0 }) =
-                let a = actionToExpr a0
-                    tp = tCheck flags symt M.empty r eqTy p
-                    ta = tCheck flags symt M.empty r eqTy a
+            ruleOK (IRule { irule_pred = p , irule_body = a }) =
+                let tp = tCheck flags symt M.empty r eqTy p
                 in
                     assert (tp == itBit1) "ruleOK p"
                         (p, tp) (p, tp) True &&
-                    assert (ta == itAction) "ruleOK a"
-                        (a, ta) (p, tp) True
+                    actionOK a
+            -- a body: each condition at Bit 1, each index at its width,
+            -- each call (as the application it stands for) at Action
+            actionOK a =
+                case a of
+                  ANoActions -> True
+                  AJoin a1 a2 -> actionOK a1 && actionOK a2
+                  AIf _ c t e -> condOK c && actionOK t && actionOK e
+                  ADeep _ a1 -> actionOK a1
+                  AArrSel _ _ _ sz es i ->
+                      all actionOK es && exprOK (aitBit (ITNum sz)) "ruleOK index" i
+                  ACallMethod mav sel ts inst args ->
+                      leafOK (avWrap mav (IAps sel ts (inst : args)))
+                  ACallForeign mav f (Just (ts, es)) -> leafOK (avWrap mav (IAps f ts es))
+                  ACallForeign mav f Nothing -> leafOK (avWrap mav f)
+                  AUndet c -> leafOK c
+            avWrap Nothing e = e
+            avWrap (Just (AVSel s ts)) e = IAps s ts [e]
+            condOK c = exprOK itBit1 "ruleOK cond" c
+            leafOK e = exprOK itAction "ruleOK a" e
+            exprOK t what e =
+                let te = tCheck flags symt M.empty r eqTy e
+                in  assert (te == t) what (e, te) (e, te) True
         in  all defOK ds && rulesOK rs && all ifcOK ifc
 
 -------

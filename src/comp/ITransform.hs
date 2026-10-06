@@ -14,6 +14,9 @@ module ITransform(
                  -- optimize an expression of any type
                  , iTransExpr
 
+                 -- the pure rewrites of an action (a rule body)
+                 , iTransAction
+
                  ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
@@ -79,6 +82,13 @@ iTransExpr' :: (KnownPhase a, ?errh :: ErrorHandle) => IExpr a -> (IExpr a, Bool
 iTransExpr' (IAps f ts es) = iTrAp emptyCtx f ts es
 iTransExpr' e = (e, False)
 
+-- the same for an action: iTransExpr on the application the action
+-- stood for (a leaf is unchanged there too)
+iTransAction :: ErrorHandle -> IAction -> (IAction, Bool)
+iTransAction errh =
+    let ?errh = errh
+    in iTrActionAp emptyCtx
+
 {- not really useful external uses only have one-level transformations exposed
 iTransExprLoop :: IExpr a -> IExpr a
 iTransExprLoop e =
@@ -138,11 +148,9 @@ iTrRule r = do
         c' <- iTrExprL ctx [] (irule_pred r)
         let c'' = optBoolExpr doBO c'
         -- traceM("iTrRule cond " ++ ppReadable (irule_name r, c''))
-        -- the body through the expression it stands for (the rewrite
-        -- over IAction follows in the next commit)
-        e' <- iTrExprL (addT c'' ctx) [] (actionToExpr (irule_body r))
+        e' <- iTrActionL (addT c'' ctx) (irule_body r)
         -- traceM("iTrRule body " ++ ppReadable (irule_name r, e'))
-        return $ r { irule_pred = c'', irule_body = toIAction e' }
+        return $ r { irule_pred = c'', irule_body = e' }
 
 iTrRules :: IRules PostElab -> T (IRules PostElab)
 iTrRules (IRules sps rs) = do
@@ -151,6 +159,54 @@ iTrRules (IRules sps rs) = do
 
 iTrExprL :: Ctx PostElab -> [(IExpr PostElab, Integer)] -> IExpr PostElab -> T (IExpr PostElab)
 iTrExprL ctx idxs e = expandHRef e >>= iTrExpr ctx idxs
+
+iTrActionL :: Ctx PostElab -> IAction -> T IAction
+iTrActionL ctx a = mapActionExprsM expandHRef a >>= iTrAction ctx
+
+-- The transformation of a rule body: the arms of iTrExpr that the
+-- action's expression met, in their order and with their contexts.
+-- The index list is empty throughout an action: the one dynamic
+-- selection that passes an index down is the action array's own,
+-- consumed at its elements.
+iTrAction :: Ctx PostElab -> IAction -> T IAction
+iTrAction ctx a =
+    case a of
+      AIf m cnd thn els -> do
+        doBO <- getDoBO
+        cnd1 <- iTrExpr ctx [] (expValShallow cnd)
+        let cnd' = optBoolExpr doBO cnd1
+        thn' <- iTrAction (addT cnd' ctx) thn
+        els' <- iTrAction (addF cnd' ctx) els
+        iTrAction' ctx (AIf m cnd' thn' els')
+      AArrSel m i_sel i_arr sz es idx -> do
+        idx' <- iTrExpr ctx [] (expValShallow idx)
+        -- the elements under the array's index (the PrimBuildArray arm):
+        -- element n under idx == n, the negation threaded to the next
+        let sz_idx = ITNum sz
+            foldFn (res_es, res_ctx) (n, e) = do
+              let n_lit = iMkLitAt (getPosition i_arr) (aitBit sz_idx) n
+              let eq_e = iePrimEQ sz_idx idx n_lit
+              e' <- iTrAction (addT eq_e res_ctx) e
+              return (e':res_es, addF eq_e res_ctx)
+        (rev_es', _) <- foldM foldFn ([], ctx) (zip [0..] es)
+        iTrAction' ctx (AArrSel m i_sel i_arr sz (reverse rev_es') idx')
+      AJoin a1 a2 -> do
+        a1' <- iTrAction ctx a1
+        a2' <- iTrAction ctx a2
+        iTrAction' ctx (AJoin a1' a2')
+      ADeep b a1 -> do
+        a1' <- iTrAction ctx a1
+        iTrAction' ctx (ADeep b a1')
+      ACallMethod v s ts i es -> do
+        es' <- mapM (iTrExpr ctx []) es
+        iTrAction' ctx (ACallMethod v s ts i es')
+      ACallForeign v f (Just (ts, es)) -> do
+        es' <- mapM (iTrExpr ctx []) es
+        iTrAction' ctx (ACallForeign v f (Just (ts, es')))
+      ACallForeign _ _ Nothing -> return a
+      -- XXX This makes some conditions simpler, but maybe other things get worse?
+      AUndet _ -> return ANoActions
+      ANoActions -> return a
 
 iTrExpr :: Ctx PostElab -> [(IExpr PostElab, Integer)] -> IExpr PostElab -> T (IExpr PostElab)
 iTrExpr ctx idxs (IAps pif@(ICon _ _ (ICPrim PrimIf)) [t] [cnd, thn, els]) = do
@@ -211,8 +267,6 @@ iTrExpr ctx idxs (IAps por@(ICon _ _ (ICPrim PrimBOr)) ts [e1, e2]) = do
 iTrExpr ctx idxs (IAps f ts es) = do
         es' <- mapM (iTrExpr ctx []) es
         iTrExpr' ctx idxs f ts es'
--- XXX This makes some conditions simpler, but maybe other things get worse?
-iTrExpr ctx idxs (ICon _ t (ICUndet _)) | t == itAction = return icNoActions
 iTrExpr ctx idxs e = return e
 
 expandHRef :: IExpr PostElab -> T (IExpr PostElab)
@@ -252,6 +306,21 @@ iTrExpr' ctx idxs f ts es = do
                     return iFalse
                 else
                     return e
+
+-- The arguments are already transformed in this context.
+iTrAction' :: Ctx PostElab -> IAction -> T IAction
+-- Removing noAction does not require another traversal of the surviving action.
+iTrAction' _ (AJoin ANoActions e) = return e
+iTrAction' _ (AJoin e ANoActions) = return e
+iTrAction' ctx a = do
+        errh <- gets errHandle
+        let (a', trans) = let ?errh = errh
+                          in iTrActionAp ctx a
+        -- (no CSE of an action, and it is not a Bool)
+        if trans then
+            iTrAction ctx a'
+        else
+            return a'
 
 runCSE :: IExpr PostElab -> T (IExpr PostElab)
 runCSE e@(IAps _ _ _) = do
@@ -1106,6 +1175,77 @@ iTrAp ctx c@(ICon _ _ (ICPrim p)) ts as | canDoOp = (e, True)
                            _ -> (False, internalError("iTrAp: ICPrim"))
 
 iTrAp ctx f ts es = iTrApTail ctx f ts es
+
+-- The rewrites of iTrAp at an action: the join with no actions, and
+-- the PrimIf rules in their order (the ones that need a Bit-typed arm
+-- cannot fire at type Action and are left out).  The rewritten
+-- conditional keeps its split annotation (the marker application was
+-- outside the conditional iTrAp rewrote); an annotated inner
+-- conditional is a different node, as the marker application was.
+iTrActionAp :: (?errh :: ErrorHandle) => Ctx PostElab -> IAction -> (IAction, Bool)
+
+-- eliminate null actions
+iTrActionAp ctx (AJoin ANoActions e) = (e, True)
+iTrActionAp ctx (AJoin e ANoActions) = (e, True)
+
+-- if True  t e         -->  t
+-- if False t e         -->  e
+-- if c t t             -->  t
+-- if c t _             -->  t
+-- if c _ e             -->  e
+iTrActionAp ctx (AIf m cnd thn els)
+        | isT ctx cnd = (thn, True)
+        | isF ctx cnd = (els, True)
+        | eqAction thn els = (thn, True)
+        | otherwise   =
+                case (expVal cnd, thn, els) of
+
+                -- if c1 t (if c2 t e)  -->  if (c1 || c2) t e
+                (_, _, AIf SplitDefault cnd2 thn2 els2) | eqAction thn thn2
+                        -> again (AIf m (ieOr cnd cnd2) thn els2)
+
+                --   if c _ _  -->  _
+                (_, AUndet {}, AUndet {})
+                    -> (els, True)
+
+                -- if (not c) t e -->  if c e t
+                (IAps (ICon _ _ (ICPrim PrimBNot)) _ [c], _, _)
+                        -> again (AIf m c els thn)
+
+                -- if c then _ else e  -->  e
+                (_, AUndet {}, _) -> (els, True)
+                _ -> (AIf m cnd thn els, False)
+  where again a = (fst (iTrActionAp ctx a), True)
+
+iTrActionAp ctx a = (a, False)
+
+-- eqE over actions: the modes and the stored constants as cmpE
+-- compares them, the argument lists through eqE's truncating zipWith
+eqAction :: IAction -> IAction -> Bool
+eqAction a b =
+    case (a, b) of
+      (ANoActions, ANoActions) -> True
+      (AJoin a1 a2, AJoin b1 b2) -> eqAction a1 b1 && eqAction a2 b2
+      (AIf m1 c1 t1 e1, AIf m2 c2 t2 e2) ->
+          m1 == m2 && eqE c1 c2 && eqAction t1 t2 && eqAction e1 e2
+      (ADeep x1 a1, ADeep x2 a2) -> x1 == x2 && eqAction a1 a2
+      (AArrSel m1 s1 r1 n1 es1 i1, AArrSel m2 s2 r2 n2 es2 i2) ->
+          m1 == m2 && eqConId s1 s2 && eqConId r1 r2 && n1 == n2 &&
+          and (zipWith eqAction es1 es2) && eqE i1 i2
+      (ACallMethod v1 s1 ts1 i1 es1, ACallMethod v2 s2 ts2 i2 es2) ->
+          eqAV v1 v2 && eqE s1 s2 && ts1 == ts2 && eqE i1 i2 && and (zipWith eqE es1 es2)
+      (ACallForeign v1 f1 as1, ACallForeign v2 f2 as2) ->
+          eqAV v1 v2 && eqE f1 f2 && eqArgs as1 as2
+      (AUndet c1, AUndet c2) -> eqE c1 c2
+      _ -> False
+  where
+    eqAV Nothing Nothing = True
+    eqAV (Just (AVSel s1 ts1)) (Just (AVSel s2 ts2)) = eqE s1 s2 && ts1 == ts2
+    eqAV _ _ = False
+    eqArgs Nothing Nothing = True
+    eqArgs (Just (ts1, es1)) (Just (ts2, es2)) = ts1 == ts2 && and (zipWith eqE es1 es2)
+    eqArgs _ _ = False
+    eqConId i j = i == j && getIdInlinedPositions i == getIdInlinedPositions j
 
 -- constant folding
 iTrApTail :: KnownPhase a => Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
