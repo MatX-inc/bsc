@@ -3568,7 +3568,7 @@ mkBitsMethodSel prim_i selty meth_i = do
           | otherwise = internalError ("mkBitsMethodSel: " ++
                                        ppReadable meth_i)
     return (ICon (setIdPosition (getIdPosition prim_i) meth_i)
-                 selty (ICSel { 
+                 selty (ICSel {
                           selNo = k,
                           numSel = n }))
 
