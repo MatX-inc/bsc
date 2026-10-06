@@ -6,6 +6,7 @@ module AExpr2Util(
   getMethodOutputPortAt
 ) where
 
+import Warmup ()
 import qualified Data.Map as M
 import Data.List(find, genericIndex)
 
