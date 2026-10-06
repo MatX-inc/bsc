@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 module Main_dumpba(main) where
 
+import Warmup ()
 import System.Environment(getArgs)
 
 import GenABin
