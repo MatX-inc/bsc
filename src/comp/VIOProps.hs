@@ -1,5 +1,6 @@
 module VIOProps (VIOProps, getIOProps) where
 
+import Warmup ()
 import Data.List(intersect)
 import Data.Maybe(catMaybes, isNothing)
 import qualified Data.Map as M

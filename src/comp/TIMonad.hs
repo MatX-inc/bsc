@@ -26,6 +26,7 @@ module TIMonad(
         , disambiguateStruct
         ) where
 
+import Warmup ()
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
 import Prelude hiding ((<>))
 #endif

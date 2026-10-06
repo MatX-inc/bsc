@@ -2,6 +2,7 @@
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
 module GenBin(genBinFile, readBinFile) where
 
+import Warmup ()
 import Control.Monad(when)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE

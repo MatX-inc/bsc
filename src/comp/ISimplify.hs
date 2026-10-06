@@ -1,5 +1,6 @@
 module ISimplify(iSimplify) where
 
+import Warmup ()
 import Data.List((\\))
 import qualified Data.Map as M
 import qualified Data.Set as S

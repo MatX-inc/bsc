@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 module IDropRules (iDropRules) where
 
+import Warmup ()
 import qualified Data.Set as S
 import qualified Data.Map.Lazy as M
 import Data.List(partition, find)

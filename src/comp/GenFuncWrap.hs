@@ -1,6 +1,4 @@
-module GenFuncWrap(genFuncWrap, addFuncWrap,
-                   makeGenFuncId
-                  ) where
+module GenFuncWrap(genFuncWrap, addFuncWrap) where
 
 import Data.Maybe(isJust)
 import Data.List(unzip4, partition)
@@ -24,13 +22,6 @@ import Util(concatMapM)
 import Pragma
 -- import Util(traces)
 import GenWrapUtils
-
--- ===============
-
--- naming convention
-
-makeGenFuncId :: Id -> Id
-makeGenFuncId i = mkIdPre (mkFString "module_") i
 
 -- ===============
 

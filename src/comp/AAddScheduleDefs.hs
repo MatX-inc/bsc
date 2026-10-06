@@ -1,5 +1,6 @@
 module AAddScheduleDefs (aAddScheduleDefs) where
 
+import Warmup ()
 import ASyntax
 import ASyntaxUtil
 import AScheduleInfo

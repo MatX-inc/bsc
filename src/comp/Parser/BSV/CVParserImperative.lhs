@@ -2,6 +2,7 @@
 
 > module Parser.BSV.CVParserImperative where
 
+> import Warmup ()
 > import Data.List
 > import Data.Maybe
 > import Control.Monad

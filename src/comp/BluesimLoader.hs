@@ -19,6 +19,7 @@ module BluesimLoader ( BluesimModel(..)
 -- into a Haskell program, and exposes the API of the model as a
 -- BluesimModel structure.
 
+import Warmup ()
 import FileNameUtil(dirName,baseName)
 import ErrorUtil(internalError)
 import HTcl

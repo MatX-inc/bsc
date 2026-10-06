@@ -3,6 +3,7 @@
 
 > module Parser.BSV.CVParser {- (bsvParseString, bsvParseFile) -} where
 
+> import Warmup ()
 > import Data.Char
 > import Data.List(mapAccumL, group, groupBy, intercalate, sort, partition, nub)
 > import Data.Maybe

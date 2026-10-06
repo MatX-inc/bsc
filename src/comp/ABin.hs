@@ -15,6 +15,7 @@ module ABin (ABin(..),
              abemi_rule_relation_db
              ) where
 
+import Warmup ()
 import Data.Maybe(isNothing)
 import PPrint
 import Id(Id)

@@ -38,7 +38,7 @@ import PreIds(idPrelude, idPreludeBSV)
 import Parser.Classic(pPackage, errSyntax, classicWarnings)
 import Parser.BSV(bsvParseString)
 import CSyntax
-import GenFuncWrap(makeGenFuncId)
+import GenWrapUtils(makeGenFuncId)
 import IOUtil(getEnvDef, progArgs)
 import TopUtils
 --import Debug.Trace

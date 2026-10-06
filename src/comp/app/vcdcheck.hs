@@ -1,5 +1,6 @@
 module Main_vcdcheck(main) where
 
+import Warmup ()
 import Version
 import FileNameUtil(hasDotSuf, vcdSuffix)
 import Position

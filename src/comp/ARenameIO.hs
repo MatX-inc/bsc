@@ -2,6 +2,7 @@ module ARenameIO(
               aRenameIO
               ) where
 
+import Warmup ()
 import qualified Data.Map as M
 
 import Util(mapFst)

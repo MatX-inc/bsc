@@ -23,6 +23,7 @@ module TclUtils(
 ) where
 
 --------
+import Warmup ()
 import Data.Char(isPrint,ord)
 import Data.List(elemIndices)
 import Control.Monad(foldM, unless)

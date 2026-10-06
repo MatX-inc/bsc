@@ -1,5 +1,6 @@
 module InlineCReg(aInlineCReg) where
 
+import Warmup ()
 import ASyntax
 import ASyntaxUtil
 import Prim

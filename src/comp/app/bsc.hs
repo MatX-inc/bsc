@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns, CPP #-}
 module Main_bsc(main, hmain) where
 
+import Warmup ()
 -- Haskell libs
 import Prelude
 import System.Environment(getArgs, getProgName)

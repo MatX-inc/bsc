@@ -1,5 +1,6 @@
 module DPIWrappers ( genDPIWrappers ) where
 
+import Warmup ()
 import ForeignFunctions(ForeignFunction(..), isPoly)
 import CCSyntax(CCFragment)
 import Position(getPosition)

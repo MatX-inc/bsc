@@ -11,6 +11,7 @@ module SolvedBinds(SolvedBind, mkSolvedBind, SolvedBinds, Bind,
                    getRecursiveDefls, getNonRecursiveDefls,
                    getIncoherentIds, computeTransitiveIncoherent) where
 
+import Warmup ()
 import Prelude hiding ((<>))
 
 import Data.List(union, partition)

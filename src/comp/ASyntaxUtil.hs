@@ -13,7 +13,7 @@ import SCC(tsort)
 import Util(separate)
 import Data.List(nub, genericIndex, genericDrop)
 import Data.Maybe(mapMaybe, fromMaybe)
-import Id(Id)
+import Id(Id, getIdBaseString, getIdQualString, isBadId, isFromRHSId)
 import Control.Monad(liftM)
 import PreIds(idInout_)
 
@@ -53,6 +53,11 @@ is_aiaction _ = False
 isInoutType :: AType -> Bool
 isInoutType (ATAbstract i _) = i == idInout_
 isInoutType _ = False
+
+-- A local (compiler-introduced) definition: one with a "bad" name or one
+-- created from a rule's right-hand side.  Used by AExpand and ADropDefs.
+isLocalAId :: Id -> Bool
+isLocalAId i = isBadId i || isFromRHSId i
 
 -- ---------------
 

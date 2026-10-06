@@ -1,5 +1,6 @@
 module FixupDefs(fixupDefs, updDef) where
 
+import Warmup ()
 import Data.List(nub)
 import qualified Data.Map as M
 import PFPrint

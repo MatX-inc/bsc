@@ -1,4 +1,5 @@
 > module Parser.BSV.CVParserAssertion where
+> import Warmup ()
 
 Main Assertions Handler
 

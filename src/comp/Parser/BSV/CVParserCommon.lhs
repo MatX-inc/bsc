@@ -1,5 +1,6 @@
 > {-# LANGUAGE CPP #-}
 > module Parser.BSV.CVParserCommon where
+> import Warmup ()
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
 

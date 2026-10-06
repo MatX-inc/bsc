@@ -1,5 +1,6 @@
 module InlineWires(aInlineWires) where
 
+import Warmup ()
 import ASyntax
 import ASyntaxUtil
 import Data.List(partition)

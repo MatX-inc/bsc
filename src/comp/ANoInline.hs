@@ -1,5 +1,6 @@
 module ANoInline (aNoInline) where
 
+import Warmup ()
 import Util(itos)
 import Position(noPosition)
 import Flags(Flags)
