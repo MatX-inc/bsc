@@ -1,6 +1,6 @@
 {-# LANGUAGE MonoLocalBinds, DataKinds, FlexibleContexts, ScopedTypeVariables #-}
 {-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
-module ISyntaxUtil where
+module ISyntaxUtil (module ISyntaxUtil, itAction) where
 
 import System.IO(Handle, BufferMode(..))
 import qualified Data.Map as M
@@ -112,9 +112,9 @@ itSchedPragma :: IType
 itSchedPragma = ITCon idSchedPragma IKStar tiSchedPragma
 
 -- type of the Clock constructor
-itClockCons, itAction, itPrimUnit :: IType
+itClockCons, itPrimUnit :: IType
 itClockCons = itBit1 `itFun` itBit1 `itFun` itClock -- XXX is this right?
-itAction = ITCon idPrimAction IKStar tiAction
+-- itAction lives in ISyntax (beside IAction) and is re-exported above
 itPrimUnit = ITCon idPrimUnit IKStar tiUnit
 
 -- an unstructured type where it is safe to optimize
@@ -1523,6 +1523,75 @@ joinActions :: KnownPhase a => [IExpr a] -> IExpr a
 joinActions [] = icNoActions
 joinActions as = foldr1 ja as
   where ja a1 a2 = IAps icJoinActions [] [a1, a2]
+
+-- The same over IAction, the body after elaboration: the actions of a
+-- tree of joins with the no-actions leaves (PrimNoActions and the
+-- undetermined action) dropped, and the right-nested join of a list.
+flatActionA :: IAction -> [IAction]
+flatActionA ANoActions = []
+flatActionA (AUndet _) = []
+flatActionA (AJoin a1 a2) = flatActionA a1 ++ flatActionA a2
+flatActionA a = [a]
+
+joinActionsA :: [IAction] -> IAction
+joinActionsA [] = ANoActions
+joinActionsA as = foldr1 AJoin as
+
+-- One level of a traversal of an action: the expression function on
+-- each embedded expression (a condition, an index, the arguments) and
+-- the action function on each direct sub-action, in the order a
+-- traversal of the expression the action stands for met them (a
+-- conditional's condition before its arms, an array's elements before
+-- its index, a call's arguments left to right).  The stored constants
+-- are not visited: the callers substitute ICValue references, which a
+-- selector, state variable or foreign constant never is.
+onActionArgsM :: Monad m => (IExpr PostElab -> m (IExpr PostElab))
+              -> (IAction -> m IAction) -> IAction -> m IAction
+onActionArgsM fe fa a =
+    case a of
+      ANoActions -> return a
+      AJoin a1 a2 -> do a1' <- fa a1
+                        a2' <- fa a2
+                        return (AJoin a1' a2')
+      AIf m c t e -> do c' <- fe c
+                        t' <- fa t
+                        e' <- fa e
+                        return (AIf m c' t' e')
+      ADeep b a1 -> do a1' <- fa a1
+                       return (ADeep b a1')
+      AArrSel m s r n es i -> do es' <- mapM fa es
+                                 i' <- fe i
+                                 return (AArrSel m s r n es' i')
+      ACallMethod v s ts i es -> do es' <- mapM fe es
+                                    return (ACallMethod v s ts i es')
+      ACallForeign v c (Just (ts, es)) -> do es' <- mapM fe es
+                                             return (ACallForeign v c (Just (ts, es')))
+      ACallForeign _ _ Nothing -> return a
+      AUndet _ -> return a
+
+onActionArgs :: (IExpr PostElab -> IExpr PostElab) -> (IAction -> IAction)
+             -> IAction -> IAction
+onActionArgs fe fa a =
+    case a of
+      ANoActions -> a
+      AJoin a1 a2 -> AJoin (fa a1) (fa a2)
+      AIf m c t e -> AIf m (fe c) (fa t) (fa e)
+      ADeep b a1 -> ADeep b (fa a1)
+      AArrSel m s r n es i -> AArrSel m s r n (map fa es) (fe i)
+      ACallMethod v s ts i es -> ACallMethod v s ts i (map fe es)
+      ACallForeign v c (Just (ts, es)) -> ACallForeign v c (Just (ts, map fe es))
+      ACallForeign _ _ Nothing -> a
+      AUndet _ -> a
+
+-- Apply an expression function to every expression embedded anywhere
+-- in an action (an ISyntax substitution over a rule body).
+mapActionExprs :: (IExpr PostElab -> IExpr PostElab) -> IAction -> IAction
+mapActionExprs f = go
+  where go = onActionArgs f go
+
+mapActionExprsM :: Monad m => (IExpr PostElab -> m (IExpr PostElab)) -> IAction -> m IAction
+mapActionExprsM f = go
+  where go = onActionArgsM f go
 
 iStrToInt :: KnownPhase a => String -> Position -> IExpr a
 {-# SPECIALISE iStrToInt :: String -> Position -> IExpr PreElab #-}
