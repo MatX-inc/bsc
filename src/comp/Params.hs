@@ -129,10 +129,6 @@ isConstIExpr (ICon _ _ (ICPrim {})) =
     -- primitive operators should be applied,
     -- there is no 0-arity primitive that we allow
     False
-isConstIExpr (ICon _ _ (ICCon {} )) =
-    -- Constructors should be turned into bits by now
-    -- XXX check this!
-    False
 isConstIExpr (IAps f _ es) =
     -- application of acceptable operators on constant args is constant
     (isConstIExprFunc f && all isConstIExpr es)

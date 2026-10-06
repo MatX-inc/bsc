@@ -412,10 +412,9 @@ iMkInvalid :: KnownPhase (BinderPhase e) => IType -> IExpr (BinderPhase e)
 {-# SPECIALISE iMkInvalid :: IType -> IExpr Elab #-}
 iMkInvalid t = IAps icPrimChr [mkNumConT 1, itMaybe t] [iMkLitSize 1 0]
 
-iMkValid :: KnownPhase a => IType -> IExpr a -> IExpr a
+iMkValid :: KnownPhase (BinderPhase e) => IType -> IExpr (BinderPhase e) -> IExpr (BinderPhase e)
 {-# SPECIALISE iMkValid :: IType -> IExpr PreElab -> IExpr PreElab #-}
 {-# SPECIALISE iMkValid :: IType -> IExpr Elab -> IExpr Elab #-}
-{-# SPECIALISE iMkValid :: IType -> IExpr PostElab -> IExpr PostElab #-}
 iMkValid t e =
   let a = take1tmpVarIds
       ic_ty = ITForAll a IKStar $ (ITVar a) `itFun` (itMaybe (ITVar a))
@@ -441,10 +440,9 @@ itListCons t =
       ti = TIstruct (SDataCon idList False) [id_1, id_2]
   in  ITAp (ITCon tc_id (IKFun IKStar IKStar) ti) t
 
-iMkCons :: KnownPhase a => IType -> IExpr a -> IExpr a -> IExpr a
+iMkCons :: KnownPhase (BinderPhase e) => IType -> IExpr (BinderPhase e) -> IExpr (BinderPhase e) -> IExpr (BinderPhase e)
 {-# SPECIALISE iMkCons :: IType -> IExpr PreElab -> IExpr PreElab -> IExpr PreElab #-}
 {-# SPECIALISE iMkCons :: IType -> IExpr Elab -> IExpr Elab -> IExpr Elab #-}
-{-# SPECIALISE iMkCons :: IType -> IExpr PostElab -> IExpr PostElab -> IExpr PostElab #-}
 iMkCons t e_hd e_tl =
   let a = take1tmpVarIds
       ic_ty = ITForAll a IKStar $

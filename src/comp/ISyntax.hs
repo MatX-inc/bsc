@@ -929,8 +929,12 @@ data IConInfo (p :: Phase) where
                        fTyVarNames :: [String],
                        fcallNo :: Maybe Integer }
                   -> IConInfo p
-          -- constructor
-        ICCon :: { conTagInfo :: ConTagInfo } -> IConInfo p
+          -- constructor, applied through IAps to its one argument (a
+          -- multi-field payload is an ICTuple).  The evaluator reduces
+          -- every constructor application -- a nullary constructor to
+          -- PrimChr of its tag, the others through ICIs/ICOut and the
+          -- derived Bits instances -- so none exists after elaboration.
+        ICCon :: { conTagInfo :: ConTagInfo } -> IConInfo ('Ph 'WithBinders e)
           -- function that tests whether its argument is the right kind of a constructor
           --  eventually cancels out and turns into ICInt 0 (false) or 1 (true)
         ICIs :: ConTagInfo -> IConInfo ('Ph 'WithBinders e)
