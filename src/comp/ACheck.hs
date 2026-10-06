@@ -242,9 +242,6 @@ chkAExpr e@(APrim _ ret_ty PrimArrayDynSelect es) =
                   else err
               _ -> err
         _ -> err
-chkAExpr e@(APrim _ ret_ty PrimArrayDynUpdate es) =
-  -- These should not exist after IExpand
-  internalError ("chkAExpr: array update: " ++ ppReadable e)
 {-
   let err = internalError ("chkAExpr: array update: " ++ ppReadable e)
   in  case es of

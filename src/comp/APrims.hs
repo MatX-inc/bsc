@@ -67,7 +67,6 @@ evalPrim op ss vs = use asInteger (primResult op ss (map I vs)) op
 boolOps :: [APrimOp]
 boolOps = [ PrimEQ, PrimULE, PrimULT, PrimSLE, PrimSLT
           , PrimBNot, PrimBAnd, PrimBOr
-          , PrimIntegerEQ, PrimIntegerLE, PrimIntegerLT
           ]
 
 -- An unused size, which will generate an error if it is ever actually used

@@ -1,3 +1,4 @@
+{-# LANGUAGE MonoLocalBinds #-}
 {-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 module IPrims(doPrimOp) where
 
