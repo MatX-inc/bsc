@@ -1,0 +1,1 @@
+../../src/vendor/stp/HaskellIfc/STP.hs

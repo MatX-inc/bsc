@@ -1,0 +1,17 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+AAddSchedAssumps.hs
+AAddScheduleDefs.hs
+ACleanup.hs
+ADropUndet.hs
+ADumpSchedule.hs
+ANoInline.hs
+APaths.hs
+AProofs.hs
+ARankMethCalls.hs
+ARemoveAssumps.hs
+ASchedule.hs
+ATaskSplice.hs
+DisjointTest.hs
+SetupHooks.hs
+bsc-schedule.cabal

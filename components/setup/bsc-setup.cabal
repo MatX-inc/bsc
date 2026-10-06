@@ -1,0 +1,35 @@
+cabal-version: 3.14
+
+name: bsc-setup
+version: 2026.1
+synopsis: Setup hooks shared by the bsc component packages
+description:
+  The Hooks library every bsc component package names in its setup-depends
+  (doc/recabalization-brief.md, sections 3.1 and 3.4): the GHC version
+  guard, the per-component Warmup generator, and, for bsc-core only, the
+  BuildSystem and BuildVersion generators and the Tcl and solver link
+  configuration.
+license: BSD-3-Clause
+build-type: Simple
+tested-with: GHC == 9.14.1
+
+library
+  hs-source-dirs: .
+  exposed-modules: BscSetupHooks
+  build-depends:
+    base        >=4.18.3.0,
+    Cabal       ^>=3.16,
+    Cabal-hooks ^>=3.16,
+    directory,
+    filepath,
+    process,
+  default-language: GHC2021
+  -- -O0 is required, and is the one explicit exception to the project's
+  -- optimization: 2 (brief, 3.1): at -O1 the StaticPointers-based rules
+  -- left floated closures unresolved when linking the setup executable
+  -- (undefined reference to rfsB_closure); the cause is undiagnosed (brief,
+  -- R2) and doc/recabalization-evidence/pkgtoy/setuplib/toy-setup.cabal
+  -- preserves the reproduction.
+  ghc-options: -O0
+  -- The hooks refuse any compiler older than 9.14 with a readable message;
+  -- this makes the wrong compiler a clear error for this package too.

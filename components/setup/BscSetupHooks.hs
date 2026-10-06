@@ -1,0 +1,570 @@
+{-# LANGUAGE DisambiguateRecordFields #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE OverloadedLists #-}
+{-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE StaticPointers #-}
+
+-- | The setup hooks shared by every Hooks package of the bsc build.
+--
+-- Each component package (bsc-core, bsc-bo, ... and the facade bsc) is a
+-- @build-type: Hooks@ package whose three-line SetupHooks.hs re-exports
+-- 'bscSetupHooks'. The hooks run with the package directory as the working
+-- directory: components/<short>/ for a component, the repository root itself
+-- for the facade; 'findRepoRoot' finds the root from either.
+--
+-- What runs where (doc/recabalization-brief.md, sections 3.1 and 3.4):
+--
+-- * in every package: a generated hidden Warmup for each library and
+--   executable component (there is no compiler floor: -fobject-determinism is
+--   conditional on the compiler in every package's .cabal, and tested-with
+--   records the compiler the line is qualified with);
+--
+-- * in bsc-core only, on its main library: the generated BuildSystem and
+--   BuildVersion modules;
+--
+-- * in htcl only, on its main library: the Tcl include and link
+--   configuration (platform.sh), for the vendored binding and its C shim;
+--
+-- * in each solver binding package (bsc-stp, bsc-yices), on its main
+--   library: the build of that vendored solver and its link configuration.
+--
+-- No hook writes into src/comp or anywhere else outside dist-newstyle and
+-- the components' autogen directories; the make build generates its own
+-- Warmup.hs and BuildVersion.hs as before.
+module BscSetupHooks (bscSetupHooks) where
+
+import Control.Monad (forM, forM_, unless, when)
+import Control.Monad.IO.Class (liftIO)
+import Data.Char (isSpace)
+import Data.List (find, isPrefixOf, nub, sort)
+import qualified Data.List.NonEmpty as NE
+import Data.Maybe (fromMaybe)
+import Distribution.InstalledPackageInfo (ExposedModule (..))
+import qualified Distribution.InstalledPackageInfo as IPI
+import Distribution.ModuleName (ModuleName)
+import Distribution.Package (mkPackageName, pkgName)
+import Distribution.Pretty (prettyShow)
+import Distribution.Simple.Configure (getInstalledPackages)
+import Distribution.Simple.LocalBuildInfo
+  ( hostPlatform,
+    interpretSymbolicPathLBI,
+    localPkgDescr,
+    mbWorkDirLBI,
+    withPackageDB,
+    withPrograms,
+  )
+import qualified Distribution.Simple.LocalBuildInfo as LBI
+import Distribution.Simple.PackageIndex (lookupUnitId)
+import Distribution.Simple.Setup (fromFlagOrDefault)
+import Distribution.Simple.SetupHooks
+import Distribution.Simple.Utils (die')
+import Distribution.System (OS (..))
+import qualified Distribution.Types.LocalBuildConfig as LBC
+import Distribution.Utils.Path
+  ( makeSymbolicPath,
+    moduleNameSymbolicPath,
+    (<.>),
+  )
+import Distribution.Verbosity (normal)
+import System.Directory
+  ( canonicalizePath,
+    createDirectoryIfMissing,
+    createDirectoryLink,
+    doesDirectoryExist,
+    doesFileExist,
+    makeAbsolute,
+    removeDirectoryLink,
+  )
+import System.Environment (getEnvironment, lookupEnv)
+import System.Exit (ExitCode (..))
+import System.FilePath (takeDirectory, (</>))
+import System.IO (readFile')
+import System.IO.Error (catchIOError)
+import System.Process
+  ( CreateProcess (..),
+    callProcess,
+    createProcess,
+    proc,
+    readProcess,
+    waitForProcess,
+  )
+
+bscSetupHooks :: SetupHooks
+bscSetupHooks =
+  warmupSetupHooks
+    <> generatedModulesSetupHooks
+    <> solverSetupHooks
+    <> tclSetupHooks
+
+-- | The repository root: the nearest directory at or above the package
+-- directory the hooks run in that holds cabal.project. A component's package
+-- directory is components/<short>/; the facade's is the root itself.
+findRepoRoot :: IO FilePath
+findRepoRoot = canonicalizePath "." >>= go
+  where
+    go dir = do
+      found <- doesFileExist (dir </> "cabal.project")
+      if found
+        then pure dir
+        else
+          let up = takeDirectory dir
+           in if up == dir
+                then ioError (userError "no cabal.project at or above the package directory")
+                else go up
+
+-- | Run a process to completion, failing if it does.
+--
+-- process-1.6.28 exports this as callCreateProcess, but GHC 9.14.1 bundles
+-- 1.6.26, and a floor that excludes the bundled version makes cabal build
+-- process from Hackage. Spelling it out keeps the hooks on the compiler's
+-- own bundled process.
+callCreateProcess :: CreateProcess -> IO ()
+callCreateProcess cp = do
+  (_, _, _, handle) <- createProcess cp
+  code <- waitForProcess handle
+  case code of
+    ExitSuccess -> pure ()
+    ExitFailure n -> ioError (userError ("setup command failed with " <> show n))
+
+isMainLib :: Component -> Bool
+isMainLib (CLib Library {libName = LMainLibName}) = True
+isMainLib _ = False
+
+-- | Whether the hooks are running in the bsc-core package: the home of the
+-- generated BuildSystem and BuildVersion modules. It is its own package because
+-- cabal-install builds a Hooks package as a single unit and allows no
+-- sublibraries in it (brief, F1); the other components and the facade with
+-- the executables are Hooks packages beside it that share these hooks.
+isBscCore :: PackageDescription -> Bool
+isBscCore pd = pkgName (package pd) == mkPackageName "bsc-core"
+
+-- | Whether the hooks are running in the htcl package: the vendored Tcl
+-- binding (HTcl.hs, haskell.c), the one place the Tcl headers and
+-- libraries are needed. The flags reach bluetcl through the package
+-- database like the solver flags do.
+isHtcl :: PackageDescription -> Bool
+isHtcl pd = pkgName (package pd) == mkPackageName "htcl"
+
+-- | Run the action only if the target files don't already exist.
+needing :: [FilePath] -> IO () -> IO ()
+needing targets act = do
+  exists <- and <$> mapM doesFileExist targets
+  unless exists $ do
+    let nub' = fmap NE.head . NE.group . sort
+    forM_ (nub' (takeDirectory <$> targets)) (createDirectoryIfMissing True)
+    act
+
+-- | Write the file only if its content changes, so an unchanged generated
+-- module keeps its timestamp.
+writeFileChanged :: FilePath -> String -> IO ()
+writeFileChanged path new = do
+  createDirectoryIfMissing True (takeDirectory path)
+  exists <- doesFileExist path
+  same <- if exists then (== new) <$> readFile' path else pure False
+  unless same (writeFile path new)
+
+-- | The autogen location of a generated module of the component.
+autogenLocation :: LocalBuildInfo -> ComponentLocalBuildInfo -> ModuleName -> Location
+autogenLocation lbi clbi m =
+  Location (autogenComponentModulesDir lbi clbi) (moduleNameSymbolicPath m <.> "hs")
+
+-- | A location as the file path the action that writes it uses.
+locationFilePath :: LocalBuildInfo -> Location -> FilePath
+locationFilePath lbi loc = interpretSymbolicPathLBI lbi (location loc)
+
+-- | Which components get a generated Warmup: every library, main or named,
+-- and every executable. Test suites (and benchmarks and foreign libraries)
+-- get none.
+wantsWarmup :: Component -> Bool
+wantsWarmup CLib {} = True
+wantsWarmup CExe {} = True
+wantsWarmup _ = False
+
+-- | The hooks to generate each component's Warmup module.
+--
+-- Warmup imports every exposed module of every package the component
+-- directly depends on, so that the whole external interface set enters
+-- GHC's EPS in one deterministic order before any other module of the
+-- component compiles; without it, @ghc --make -jN@ object output varies
+-- with scheduling (rule visibility and rule-overlap order both depend on
+-- interface-load order; see GHC.Core.Rules, Note [Overall plumbing for
+-- rules]). Every component root imports it (brief, 3.4), so the barrier
+-- holds for the whole unit. The module is generated against this build's
+-- compiler and this build's resolved dependencies, read from the package
+-- databases at build time, not from the Makefile's package list.
+--
+-- Only the DIRECT dependencies are used: the transitive closure would name
+-- modules of packages GHC is not given, which it refuses as hidden. In-place
+-- packages count, so a child's Warmup covers its parents (bsc-core's modules
+-- enter bsc-typecheck's Warmup, the facade's enter the executables'), and
+-- bsc-core's public Warmup is excluded by name so that no child imports the
+-- compatibility module into its own Warmup.
+warmupSetupHooks :: SetupHooks
+warmupSetupHooks = noSetupHooks {configureHooks, buildHooks}
+  where
+    configureHooks = noConfigureHooks {preConfComponentHook}
+    buildHooks = noBuildHooks {preBuildComponentRules}
+
+    -- Declare that the module is generated. The .cabal file lists it under
+    -- other-modules (exposed-modules in bsc-core), as Cabal requires of an
+    -- autogen module.
+    preConfComponentHook :: Maybe PreConfComponentHook
+    preConfComponentHook = Just $ \inputs ->
+      if wantsWarmup inputs.component
+        then
+          pure $
+            PreConfComponentOutputs
+              { componentDiff =
+                  buildInfoComponentDiff
+                    (componentName inputs.component)
+                    (emptyBuildInfo {autogenModules = ["Warmup"]})
+              }
+        else pure $ noPreConfComponentOutputs inputs
+
+    -- Generate the module.
+    preBuildComponentRules :: Maybe PreBuildComponentRules
+    preBuildComponentRules = Just . rules (static ()) $ \env -> do
+      let lbi = env.localBuildInfo
+          clbi = env.targetInfo.targetCLBI
+          verbosity = buildingWhatVerbosity env.buildingWhat
+      when (wantsWarmup (targetComponent env.targetInfo)) $ do
+        -- The package databases are read here, at build time, not taken from
+        -- the configure-time snapshot in installedPkgs lbi. cabal-install does
+        -- not reconfigure a package when a dependency's exposed-modules
+        -- change (an in-place unit id such as bsc-core-2026.1-inplace is
+        -- stable), so the snapshot goes stale as soon as modules move between
+        -- packages, and a Warmup generated from it imports modules its
+        -- dependency no longer exposes. This computation re-runs on every
+        -- build, after the dependencies were registered, so the index is
+        -- current; and because the module list is an argument of the rule's
+        -- command, Cabal re-runs the rule when the list changes. This is the
+        -- body of Cabal's getInstalledPackagesById, with die' for its
+        -- exception.
+        index <-
+          liftIO $
+            getInstalledPackages
+              verbosity
+              (LBI.compiler lbi)
+              (mbWorkDirLBI lbi)
+              (withPackageDB lbi)
+              (withPrograms lbi)
+        -- The index holds the external packages and every in-place library
+        -- built before this component, which Cabal's build order guarantees
+        -- for the dependencies; a dependency missing from it would make an
+        -- incomplete Warmup, so it is an error rather than a gap.
+        direct <- liftIO . forM (componentPackageDeps clbi) $ \(unit, _) ->
+          case lookupUnitId index unit of
+            Just ipi -> pure ipi
+            Nothing ->
+              die' verbosity $
+                "Warmup: dependency " <> prettyShow unit
+                  <> " is not in the installed package index"
+        let units = sort [prettyShow (IPI.installedUnitId ipi) | ipi <- direct]
+            mods =
+              sort . nub $
+                [ m
+                  | ipi <- direct,
+                    e <- IPI.exposedModules ipi,
+                    let m = prettyShow (exposedName e),
+                    m /= "Warmup"
+                ]
+            warmup = autogenLocation lbi clbi "Warmup"
+        registerRule_ "Warmup.hs" $
+          staticRule
+            ( mkCommand
+                (static Dict)
+                (static writeWarmupHs)
+                (locationFilePath lbi warmup, units, mods)
+            )
+            []
+            [warmup]
+
+writeWarmupHs :: (FilePath, [String], [String]) -> IO ()
+writeWarmupHs (path, units, mods) =
+  writeFileChanged path . unlines $
+    [ "-- Generated by bsc-setup (BscSetupHooks.hs); do not edit.",
+      "-- An import of every exposed module of every direct dependency of this",
+      "-- component, so that the external interface set enters GHC's EPS in one",
+      "-- deterministic order before any other module compiles; see",
+      "-- warmupSetupHooks in BscSetupHooks.hs for why.",
+      "-- Direct dependencies, as resolved for this build:"
+    ]
+      <> ["--   " <> u | u <- units]
+      <> ["module Warmup where"]
+      <> ["import " <> m <> " ()" | m <- mods]
+
+-- | The hooks to generate the BuildSystem and BuildVersion modules, on the
+-- main library of bsc-core only.
+generatedModulesSetupHooks :: SetupHooks
+generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
+  where
+    configureHooks = noConfigureHooks {preConfComponentHook}
+    buildHooks = noBuildHooks {preBuildComponentRules}
+
+    -- Declare that the modules are generated.
+    preConfComponentHook :: Maybe PreConfComponentHook
+    preConfComponentHook = Just $ \inputs ->
+      if isBscCore (LBC.localPkgDescr inputs.packageBuildDescr)
+        && isMainLib inputs.component
+        then
+          pure $
+            PreConfComponentOutputs
+              { componentDiff =
+                  buildInfoComponentDiff
+                    (componentName inputs.component)
+                    (emptyBuildInfo {autogenModules = ["BuildSystem", "BuildVersion"]})
+              }
+        else pure $ noPreConfComponentOutputs inputs
+
+    -- Generate the modules.
+    preBuildComponentRules :: Maybe PreBuildComponentRules
+    preBuildComponentRules = Just . rules (static ()) $ \env -> do
+      let lbi = env.localBuildInfo
+          clbi = env.targetInfo.targetCLBI
+          buildSystem = autogenLocation lbi clbi "BuildSystem"
+          buildVersion = autogenLocation lbi clbi "BuildVersion"
+      when (isBscCore (localPkgDescr lbi) && isMainLib (targetComponent env.targetInfo)) $ do
+        registerRule_ "BuildSystem.hs" $
+          staticRule
+            ( mkCommand
+                (static Dict)
+                (static writeBuildSystemHs)
+                (locationFilePath lbi buildSystem, hostPlatform lbi)
+            )
+            []
+            [buildSystem]
+        registerRule_ "BuildVersion.hs" $
+          staticRule
+            ( mkCommand
+                (static Dict)
+                (static writeBuildVersionHs)
+                (interpretSymbolicPathLBI lbi (autogenComponentModulesDir lbi clbi))
+            )
+            []
+            [buildVersion]
+
+writeBuildSystemHs :: (FilePath, Platform) -> IO ()
+writeBuildSystemHs (path, Platform _ os) = needing [path] $ do
+  binFmtType <- case os of
+    Linux -> pure "ELF"
+    OSX -> pure "MachO"
+    _ -> ioError (userError ("unsupported OS: " <> show os))
+  writeFile path . unlines $
+    [ "module BuildSystem",
+      "  ( BinFmtType(..),",
+      "    binFmtToString,",
+      "    getBinFmtType,",
+      "  )",
+      "where",
+      "",
+      "data BinFmtType = ELF | MachO",
+      "",
+      "binFmtToString :: BinFmtType -> String",
+      "binFmtToString ELF   = \"ELF\"",
+      "binFmtToString MachO = \"Mach-O\"",
+      "",
+      "getBinFmtType :: BinFmtType",
+      "getBinFmtType = " <> binFmtType
+    ]
+
+-- | Run update-build-version.sh in the autogen directory.
+--
+-- The script writes BuildVersion.hs into its working directory and needs
+-- only git, which finds the repository from any directory inside it, so
+-- the autogen directory is where it runs and nothing is copied: the autogen
+-- copy is the one GHC compiles, and src/comp/BuildVersion.hs stays the make
+-- build's own. The script leaves an up-to-date file untouched. NOGIT and
+-- NOUPDATEBUILDVERSION pass through with the Makefile's defaults.
+writeBuildVersionHs :: FilePath -> IO ()
+writeBuildVersionHs autogenDir = do
+  noGit <- fromMaybe "0" <$> lookupEnv "NOGIT"
+  noUpdateBuildVersion <- fromMaybe "0" <$> lookupEnv "NOUPDATEBUILDVERSION"
+  let newVars =
+        [ ("NOGIT", noGit),
+          ("NOUPDATEBUILDVERSION", noUpdateBuildVersion)
+        ]
+  env <- (newVars <>) <$> getEnvironment
+  createDirectoryIfMissing True autogenDir
+  dir <- makeAbsolute autogenDir
+  -- The script is named by its absolute path: a relative one would be
+  -- resolved against the process's working directory, the autogen dir.
+  root <- findRepoRoot
+  let script = root </> "src" </> "comp" </> "update-build-version.sh"
+  callCreateProcess (proc script []) {cwd = Just dir, env = Just env}
+
+-- | The hooks that make a vendored solver available, on the main library of
+-- its binding package (bsc-stp, bsc-yices) only.
+--
+-- The solvers are shared libraries, so the Haskell library's dynamic object --
+-- which is what ghci and runghc load -- carries them as recorded dependencies
+-- rather than copies of their code. That is also why they cannot be
+-- @extra-bundled-libraries@: cabal keeps those off the library's own link
+-- line, and GHC's runtime linker cannot load a static archive on
+-- aarch64-darwin at all.
+--
+-- Cabal is told about them the way tclSetupHooks tells it about Tcl: the
+-- directory is computed here and injected into the component, because an
+-- absolute path in a build tree cannot be written in the .cabal file.
+solverSetupHooks :: SetupHooks
+solverSetupHooks = noSetupHooks {configureHooks, buildHooks}
+  where
+    configureHooks = noConfigureHooks {preConfComponentHook}
+    buildHooks = noBuildHooks {postBuildComponentHook}
+
+    -- The vendored directories are named directly for the link, so nothing
+    -- has to be staged for it and there is no copy to go missing.
+    preConfComponentHook :: Maybe PreConfComponentHook
+    preConfComponentHook = Just $ \inputs ->
+      case solverOf (LBC.localPkgDescr inputs.packageBuildDescr) of
+        Just solver | isMainLib inputs.component -> do
+          dir <- solverLibDir solver
+          let Platform _ os = LBC.hostPlatform inputs.packageBuildDescr
+          pure $
+            PreConfComponentOutputs
+              { componentDiff =
+                  buildInfoComponentDiff
+                    (componentName inputs.component)
+                    ( emptyBuildInfo
+                        { extraLibs = [solverLib solver],
+                          extraLibDirs = [makeSymbolicPath dir],
+                          -- The solvers record themselves as @rpath/...@, so
+                          -- an rpath is the whole of what either platform needs
+                          -- to resolve them. It is the make build's
+                          -- (src/comp/Makefile, SAT_RPATH_FLAGS): lib/SAT
+                          -- beside the directory holding the binary, which is
+                          -- what lets an installation move as a whole, and it
+                          -- names no directory of this checkout, so the linked
+                          -- bytes do not depend on where the tree is. The
+                          -- library's ldOptions and extra-libraries are
+                          -- registered with the package and reach every
+                          -- library and executable that links it, however many
+                          -- packages up, through the package database (brief,
+                          -- F5); the dynamic object is what records the solver
+                          -- dependencies. The post-build hook below gives the
+                          -- build tree the lib/SAT that each of them resolves.
+                          ldOptions = ["-Wl,-rpath," <> satRPathOrigin os <> "/../lib/SAT"]
+                        }
+                    )
+              }
+        _ -> pure $ noPreConfComponentOutputs inputs
+
+    -- The build tree's lib/SAT, so that the artifacts run where they are
+    -- built: a link to the staged solver libraries beside the directory that
+    -- holds each artifact carrying the rpath. A library's dynamic object is
+    -- <builddir>/build/libHS*.so, so its lib/SAT is <builddir>/lib/SAT; an
+    -- executable is <builddir>/build/<exe>/<exe>, so its lib/SAT is
+    -- <builddir>/build/lib/SAT. Every library gets one, since the ldOptions
+    -- reach every library above the solvers.
+    postBuildComponentHook :: Maybe PostBuildComponentHook
+    postBuildComponentHook = Just $ \inputs -> do
+      let lbi = inputs.localBuildInfo
+      build <- makeAbsolute (interpretSymbolicPathLBI lbi (LBI.buildDir lbi))
+      staged <- (</> ("lib" </> "SAT")) <$> solverStagingDir
+      stagedExists <- doesDirectoryExist staged
+      when stagedExists $ case targetComponent inputs.targetInfo of
+        CLib _ -> linkSatDir staged (takeDirectory build)
+        CExe _ -> linkSatDir staged build
+        _ -> pure ()
+
+-- | The linker's name for the directory holding the binary being resolved,
+-- as src/comp/Makefile spells it for each platform.
+satRPathOrigin :: OS -> String
+satRPathOrigin OSX = "@loader_path"
+satRPathOrigin _ = "$ORIGIN"
+
+-- | Make @dir/lib/SAT@ a link to the staged solver libraries, replacing a
+-- stale link.
+linkSatDir :: FilePath -> FilePath -> IO ()
+linkSatDir staged dir = do
+  let sat = dir </> "lib" </> "SAT"
+  createDirectoryIfMissing True (dir </> "lib")
+  removeDirectoryLink sat `catchIOError` \_ -> pure ()
+  createDirectoryLink staged sat
+
+-- | Where the solvers' make install stages them: the make build's lib/SAT
+-- layout under a prefix of the build tree.
+solverStagingDir :: IO FilePath
+solverStagingDir = (</> ("dist-newstyle" </> "solver-prefix")) <$> findRepoRoot
+
+-- | A vendored solver: the package that binds it, the library it links, the
+-- vendored source tree whose make builds it, and where that leaves the
+-- library, both relative to the repository root. Adding a solver is adding a
+-- row here and a binding package in the manifest; replacing one is removing
+-- them.
+data Solver = Solver
+  { solverPackage :: String,
+    solverLib :: String,
+    solverSrc :: FilePath,
+    solverLibPath :: FilePath
+  }
+
+solvers :: [Solver]
+solvers =
+  [ Solver "bsc-stp" "stp" (vendor </> "stp") (vendor </> "stp" </> "lib"),
+    Solver "bsc-yices" "yices" (vendor </> "yices") (vendor </> "yices" </> "lib")
+  ]
+  where
+    vendor = "src" </> "vendor"
+
+solverOf :: PackageDescription -> Maybe Solver
+solverOf pd = find ((== pkgName (package pd)) . mkPackageName . solverPackage) solvers
+
+-- | Build a vendored solver and return the directory holding its library.
+--
+-- The make target is a no-op once the library is up to date, and the link
+-- names the library where the make build leaves it, so nothing can go
+-- missing between a configure and a build; the install's copy under
+-- solverStaging is what the build tree's lib/SAT links point at. The path is
+-- canonicalized so that the link flags carry no @..@.
+solverLibDir :: Solver -> IO FilePath
+solverLibDir solver = do
+  root <- findRepoRoot
+  scratch <- solverStagingDir
+  callProcess "make" ["-C", root </> solverSrc solver, "install", "PREFIX=" <> scratch]
+  canonicalizePath (root </> solverLibPath solver)
+
+-- | The hooks to compile against and link to Tcl, on the main library of
+-- htcl only.
+tclSetupHooks :: SetupHooks
+tclSetupHooks = noSetupHooks {configureHooks}
+  where
+    configureHooks = noConfigureHooks {preConfComponentHook}
+
+    preConfComponentHook :: Maybe PreConfComponentHook
+    preConfComponentHook = Just $ \inputs -> do
+      root <- findRepoRoot
+      let platform arg = readProcess "sh" [root </> "platform.sh", arg] ""
+      let trim = f . f where f = reverse . dropWhile isSpace
+      let getArgs flag = fmap (drop (length flag)) . filter (flag `isPrefixOf`)
+      if isHtcl (LBC.localPkgDescr inputs.packageBuildDescr)
+        && isMainLib inputs.component
+        then do
+          tclInc <- words <$> platform "tclinc"
+          tclLibs <- words <$> platform "tcllibs"
+          tclVersion <- trim <$> platform "tclversion"
+
+          cflags <- case tclVersion of
+            "8.5" -> pure ["-DTCL85"]
+            "8.6" -> pure []
+            "9.0" -> pure ["-DTCL9"]
+            _ -> ioError (userError ("unsupported Tcl version: " <> tclVersion))
+          let includeDirs = makeSymbolicPath <$> getArgs "-I" tclInc
+              extraLibDirs = makeSymbolicPath <$> getArgs "-L" tclLibs
+              extraLibs = getArgs "-l" tclLibs
+
+          pure $
+            PreConfComponentOutputs
+              { componentDiff =
+                  buildInfoComponentDiff
+                    (componentName inputs.component)
+                    ( emptyBuildInfo
+                        { includeDirs,
+                          extraLibDirs,
+                          extraLibs,
+                          ccOptions = cflags,
+                          cppOptions = cflags
+                        }
+                    )
+              }
+        else pure $ noPreConfComponentOutputs inputs

@@ -1,0 +1,11 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+AExpr2STP.hs
+AExpr2Util.hs
+AExpr2Yices.hs
+Pred2STP.hs
+Pred2Yices.hs
+SAT.hs
+SATPred.hs
+SetupHooks.hs
+bsc-sat.cabal

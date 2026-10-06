@@ -1,0 +1,18 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+LambdaCalc.hs
+LambdaCalcUtil.hs
+SAL.hs
+SetupHooks.hs
+SimBlocksToC.hs
+SimCCBlock.hs
+SimCOpt.hs
+SimDomainInfo.hs
+SimExpand.hs
+SimFileUtils.hs
+SimMakeCBlocks.hs
+SimPackage.hs
+SimPackageOpt.hs
+SimPrimitiveModules.hs
+SystemCWrapper.hs
+bsc-bluesim.cabal

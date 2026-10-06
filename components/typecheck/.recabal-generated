@@ -1,0 +1,29 @@
+# Written by util/recabal/gen.py.  Every path below, relative to this
+# directory, was generated and is removed when the manifest drops it.
+ContextErrors.hs
+CtxRed.hs
+Deriving.hs
+FixupDefs.hs
+GenFuncWrap.hs
+GenSign.hs
+GenWrap.hs
+IConv.hs
+IConvLet.hs
+ISimplify.hs
+IfcBetterInfo.hs
+InferKind.hs
+KIMisc.hs
+MakeSymTab.hs
+PoisonUtils.hs
+PragmaCheck.hs
+PredTrie.hs
+SetupHooks.hs
+Simplify.hs
+SolvedBinds.hs
+TCMisc.hs
+TCPat.hs
+TCheck.hs
+TIMonad.hs
+TypeAnalysis.hs
+TypeCheck.hs
+bsc-typecheck.cabal
