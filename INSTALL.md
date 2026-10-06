@@ -119,7 +119,7 @@ cabal v1-install regex-compat syb old-time split strict-concurrency
 Those final four commands install the recommended GHC compiler version
 and libraries. If you would prefer to install GHC via the system's
 package manager, which may install an older version, you can
-substitute the following command.  Any `ghc` from 9.4.7 on builds the
+substitute the following command.  Any `ghc` from 9.4.7 through 9.14 builds the
 compiler, Ubuntu 24.04's included (see the GHC section below); an older
 `ghc`, such as Ubuntu 22.04's 8.8.4 (check with `ghc --version`), is not
 supported.
@@ -181,7 +181,7 @@ cabal v1-install regex-compat syb old-time split strict-concurrency
 Those final four commands install the recommended GHC compiler version
 and libraries. If you would prefer to install GHC via the system's
 package manager, which may install an older version, you can
-substitute the following command.  Any `ghc` from 9.4.7 on builds the
+substitute the following command.  Any `ghc` from 9.4.7 through 9.14 builds the
 compiler (see the GHC section below); a `ghc` older than 9.4.7 (check
 with `ghc --version`) is not supported.
 
@@ -269,9 +269,10 @@ macOS, and WSL2 on Windows.  This allows easily installing the
 recommended version of GHC. The package manager for your OS may
 provide a package for GHC, however it may be for an older version of
 GHC.  This is fine, as the BSC source code builds with every release
-of GHC from 9.4.7 on, the version Ubuntu 24.04 packages; however, newer
-versions may be more efficient.  GHC releases older than 9.4.7 are not
-supported.
+of GHC from 9.4.7, the version Ubuntu 24.04 packages, through 9.14; newer
+versions in that range may be more efficient.  GHC releases older than 9.4.7
+are not supported, and a release newer than 9.14 needs the upper bounds in
+`bsc.cabal` raised (or `allow-newer: bsc:*` in `cabal.project.local`).
 
 BSC releases are tested and built with the recommended stable version
 of GHC, currently 9.6.7.  The source is also tested with a range of
@@ -334,6 +335,22 @@ for the [STP SMT solver]. When that happens, additional requirements
 from that repository will be added.
 
 [STP SMT solver]: https://github.com/stp/stp
+
+The compiler links the solvers by name, so the linker has to find
+`libstp` and `libyices`: `make install-solvers` builds and installs them
+under `inst/lib/SAT`, and a `cabal build` needs that directory named to
+the linker:
+
+```bash
+make install-solvers
+LIBRARY_PATH=$PWD/inst/lib/SAT cabal build all
+```
+
+Without it, cabal stops at configure with "Missing (or bad) C
+libraries: stp, yices" and suggests `--extra-lib-dirs`; do not take that
+suggestion, which writes the directory into the build (see
+`doc/cabal.md`), but set `LIBRARY_PATH` as above, or install the solvers
+where the linker looks.
 
 Both the Yices and STP solvers are optional to build, although
 recommended. To skip these builds, see "Optionally avoiding the

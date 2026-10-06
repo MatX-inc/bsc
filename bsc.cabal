@@ -1,0 +1,411 @@
+cabal-version: 3.16
+
+-- The Bluespec compiler as one cabal package: the library is every module of
+-- src/comp with the vendored Parsec, Tcl and solver bindings, and each program
+-- is an executable over it, its entry module under src/comp/app. doc/cabal.md
+-- describes the build; SetupHooks.hs is the package's own Hooks module.
+name: bsc
+version: 2026.7
+synopsis: Bluespec Compiler (BSC)
+description: Toolchain for the Bluespec Hardware Definition Language
+homepage: https://github.com/B-Lang-org/bsc
+license: BSD-3-Clause
+license-file: COPYING
+author: Bluespec, Inc.
+maintainer: bsc-dev@groups.io
+category: Hardware
+build-type: Hooks
+-- The scripts the hooks run, so that a source distribution carries them.
+extra-source-files:
+  platform.sh
+  src/comp/update-build-version.sh
+-- The GHCs CI builds with (.github/workflows/ci.yml).
+tested-with:
+  GHC == 9.4.7,
+  GHC == 9.6.7,
+  GHC == 9.8.4,
+  GHC == 9.10.3,
+  GHC == 9.12.2,
+  GHC == 9.14.1
+
+custom-setup
+  setup-depends:
+    base        >=4.17.2.0 && <4.23,
+    Cabal       ^>=3.16,
+    Cabal-hooks ^>=3.16,
+    directory   >=1.3.7.1 && <1.4,
+    filepath    >=1.4.2.2 && <1.6,
+    process     >=1.6.17.0 && <1.7,
+
+-- Shared by the library and every program.
+common common_all
+  default-language: GHC2021
+  -- An imported module that is not listed fails the build, naming it.
+  ghc-options: -Werror=missing-home-modules
+  ghc-options: -Wtabs -fmax-pmcheck-models=800
+  ghc-options: -Wall -Wno-orphans -Wno-name-shadowing -Wno-unused-matches
+  -- Deterministic object code where GHC has the flag (from 9.12.1).
+  -- cabal.project puts it on every package of the build and compiles in
+  -- parallel under the same condition; this copy is for a build of the
+  -- package without the project file.
+  if impl(ghc >= 9.12)
+    ghc-options: -fobject-determinism
+
+-- The library's packages, visible to every program as the make build's
+-- PACKAGES were to each of its programs, so a program's stanza names none.
+common common_deps
+  build-depends:
+    -- The hook generates Warmup from the exposed modules of every package
+    -- named here (doc/cabal.md), so hidden boot packages such as ghc-bignum
+    -- and ghc-internal have to be named too. The lower bounds are GHC 9.4.7's
+    -- boot libraries: the floor is the GHC Ubuntu 24.04 packages (doc/cabal.md
+    -- section 2). The upper bounds are the next major versions after GHC
+    -- 9.14.1's, the newest CI builds with (tested-with); a newer GHC needs
+    -- them raised.
+    array        >=0.5.4.0 && <0.6,
+    base         >=4.17.2.0 && <4.23,
+    bytestring   >=0.11.5.2 && <0.13,
+    containers   >=0.6.7 && <0.9,
+    deepseq      >=1.4.8.0 && <1.6,
+    directory    >=1.3.7.1 && <1.4,
+    filepath     >=1.4.2.2 && <1.6,
+    ghc-bignum   >=1.3 && <1.5,
+    integer-gmp  >=1.1 && <1.2,
+    mtl          >=2.2.2 && <2.4,
+    old-locale   ^>=1.0.0.7,
+    old-time     ^>=1.1.1.0,
+    process      >=1.6.17.0 && <1.7,
+    regex-compat ^>=0.95.2.2,
+    split        ^>=0.2.5,
+    strict-concurrency ^>=0.2.4.3,
+    syb          ^>=0.7.2,
+    text         >=2.0.2 && <2.2,
+    time         >=1.12.2 && <1.16,
+    unix         >=2.7.3 && <2.9,
+  if impl(ghc >= 9.10)
+    build-depends: ghc-internal <9.1500
+
+library
+  import: common_all, common_deps
+  -- Written by the hooks (SetupHooks.hs) into the autogen directory.
+  autogen-modules: Warmup, BuildSystem, BuildVersion
+  hs-source-dirs:
+    src/comp
+    src/comp/Libs
+    src/comp/GHC/posix
+    src/Parsec
+    src/vendor/htcl
+    src/vendor/stp/HaskellIfc
+    src/vendor/yices/v2.6/HaskellIfc
+  -- The solvers, linked by name against whichever copies the linker finds
+  -- (doc/cabal.md section 2). The make build, which builds the releases,
+  -- builds and installs the vendored copies first and names them in
+  -- LIBRARY_PATH, so a release links the versions the tree is tested with;
+  -- any other build, such as a distribution's, links the copies it has
+  -- installed or its own. At run time they resolve beside the installed
+  -- binary, lib/SAT, through the make build's rpath (SAT_RPATH_FLAGS in
+  -- src/comp/Makefile), which every program that links the library
+  -- inherits through the package database.
+  extra-libraries: stp, yices
+  if os(osx)
+    extra-libraries: c++
+    ld-options: -Wl,-rpath,@loader_path/../lib/SAT
+  else
+    extra-libraries: stdc++
+    ld-options: -Wl,-rpath,$ORIGIN/../lib/SAT
+  c-sources:
+    src/vendor/htcl/haskell.c,
+  -- Every module of the library, the generated three included
+  -- (autogen-modules above).
+  exposed-modules:
+    AAddSchedAssumps
+    AAddScheduleDefs
+    ABin
+    ABinUtil
+    ACheck
+    ACleanup
+    AConv
+    ADropDefs
+    ADropUndet
+    ADumpSchedule
+    ADumpScheduleInfo
+    AExpand
+    AExpr2STP
+    AExpr2Util
+    AExpr2Yices
+    ANoInline
+    AOpt
+    APaths
+    APrims
+    AProofs
+    ARankMethCalls
+    ARemoveAssumps
+    ARenameIO
+    ASchedule
+    AScheduleInfo
+    AState
+    ASyntax
+    ASyntaxUtil
+    ATaskSplice
+    AUses
+    AVeriQuirks
+    AVerilog
+    AVerilogUtil
+    Assump
+    BDD
+    BExpr
+    Backend
+    BackendNamingConventions
+    Bag
+    Balanced
+    BinData
+    BinParse
+    BinUtil
+    BluesimLoader
+    BoolExp
+    BoolOpt
+    BuildSystem
+    BuildVersion
+    CCSyntax
+    CFreeVars
+    CPPLineDirectives
+    CSubst
+    CSyntax
+    CSyntaxTypes
+    CSyntaxUtil
+    CType
+    CVPrint
+    Changed
+    Classic
+    ConTagInfo
+    CondTree
+    ContextErrors
+    CtxRed
+    DOT
+    DPIWrappers
+    Depend
+    Deriving
+    DisjointTest
+    DynamicMap
+    EquivalenceClass
+    Error
+    ErrorMonad
+    ErrorUtil
+    Eval
+    Exceptions
+    FStringCompat
+    FileIOUtil
+    FileNameUtil
+    Fixity
+    FixupDefs
+    Flags
+    FlagsDecode
+    ForeignFunctions
+    GHCPretty
+    GenABin
+    GenBin
+    GenForeign
+    GenFuncWrap
+    GenSign
+    GenWrap
+    GenWrapUtils
+    GlobPattern
+    GraphMap
+    GraphPaths
+    GraphUtil
+    GraphWrapper
+    HTcl
+    IConv
+    IConvLet
+    IDropRules
+    IExpand
+    IExpandUtils
+    IInline
+    IInlineFmt
+    IInlineUtil
+    ILift
+    IOMutVar
+    IOUtil
+    IPrims
+    ISimplify
+    ISplitIf
+    IStateLoc
+    ISyntax
+    ISyntaxCheck
+    ISyntaxSubst
+    ISyntaxUtil
+    ISyntaxXRef
+    ITransform
+    IType
+    IWireSet
+    Id
+    IdPrint
+    IfcBetterInfo
+    InferKind
+    InlineCReg
+    InlineReg
+    InlineWires
+    InstNodes
+    IntLit
+    IntegerUtil
+    Intervals
+    KIMisc
+    LambdaCalc
+    LambdaCalcUtil
+    Lex
+    ListMap
+    ListUtil
+    Literal
+    Log2
+    MVarStrict
+    MakeSymTab
+    PFPrint
+    PPrint
+    PVPrint
+    Params
+    Parse
+    ParseOp
+    Parsec
+    ParsecChar
+    ParsecCombinator
+    ParsecExpr
+    ParsecPrim
+    Parser.BSV
+    Parser.BSV.CVParser
+    Parser.BSV.CVParserAssertion
+    Parser.BSV.CVParserCommon
+    Parser.BSV.CVParserImperative
+    Parser.BSV.CVParserUtil
+    Parser.Classic
+    Parser.Classic.CParser
+    Parser.Classic.Warnings
+    PoisonUtils
+    Position
+    Pragma
+    PragmaCheck
+    PreIds
+    PreStrings
+    Pred
+    Pred2STP
+    Pred2Yices
+    PredTrie
+    Pretty
+    Prim
+    ProofObligation
+    RSchedule
+    RealUtil
+    SAL
+    SAT
+    SATPred
+    SCC
+    SEMonad
+    STP
+    STPFFI
+    SchedInfo
+    Scheme
+    SignalNaming
+    SimBlocksToC
+    SimCCBlock
+    SimCOpt
+    SimDomainInfo
+    SimExpand
+    SimFileUtils
+    SimMakeCBlocks
+    SimPackage
+    SimPackageOpt
+    SimPrimitiveModules
+    Simplify
+    SolvedBinds
+    Sort
+    SpeedyString
+    StdPrel
+    Subst
+    SymTab
+    Synthesize
+    SystemCWrapper
+    SystemCheck
+    SystemVerilogKeywords
+    SystemVerilogPreprocess
+    SystemVerilogScanner
+    SystemVerilogTokens
+    TCMisc
+    TCPat
+    TCheck
+    TIMonad
+    TclParseUtils
+    TclUtils
+    TmpNam
+    TopUtils
+    Type
+    TypeAnalysis
+    TypeAnalysisTclUtil
+    TypeCheck
+    TypeOps
+    Undefined
+    Unify
+    Util
+    VCD
+    VFileName
+    VFinalCleanup
+    VIOProps
+    VModInfo
+    VPIWrappers
+    VPrims
+    VVerilogDollar
+    Verilog
+    Version
+    Warmup
+    Wires
+    Yices
+    YicesFFI
+
+common common_exes
+  import: common_all, common_deps
+  build-depends: bsc
+  hs-source-dirs: src/comp/app
+  -- Every program's Warmup is written by the hooks (SetupHooks.hs).
+  other-modules: Warmup
+  autogen-modules: Warmup
+  ghc-options: -rtsopts "-with-rtsopts=-H256m -K10m -i1"
+
+executable bsc
+  import: common_exes
+  ghc-options: -main-is Main_bsc
+  main-is: bsc.hs
+
+executable bluetcl
+  import: common_exes
+  c-sources:
+    src/comp/app/bluetcl_shim.c,
+  main-is: bluetcl_Main.hs
+  other-modules: Bluetcl
+
+executable bsc2bsv
+  import: common_exes
+  ghc-options: -main-is Main_bsc2bsv
+  main-is: bsc2bsv.hs
+
+executable bsv2bsc
+  import: common_exes
+  ghc-options: -main-is Main_bsv2bsc
+  main-is: bsv2bsc.hs
+
+executable dumpba
+  import: common_exes
+  ghc-options: -main-is Main_dumpba
+  main-is: dumpba.hs
+
+executable dumpbo
+  import: common_exes
+  ghc-options: -main-is Main_dumpbo
+  main-is: dumpbo.hs
+
+executable showrules
+  import: common_exes
+  ghc-options: -main-is Main_showrules
+  main-is: showrules.hs
+
+executable vcdcheck
+  import: common_exes
+  ghc-options: -main-is Main_vcdcheck
+  main-is: vcdcheck.hs
