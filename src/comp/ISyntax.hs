@@ -28,6 +28,11 @@ module ISyntax(
         IConInfo(..),
         IRules(..),
         IRule(..),
+        Body,
+        IAction(..),
+        SplitMode(..),
+        AVSel(..),
+        itAction,
         IEFace(..),
         IMethodInput,
         IModule(..),
@@ -114,10 +119,13 @@ import Eval
 import Id
 import Wires(ResetId, ClockDomain, ClockId, noClockId, noResetId, noDefaultClockId, noDefaultResetId, WireProps)
 import IdPrint
-import PreIds(idBind, idReturn, idPack, idUnpack, idMonad, idLiftModule, idBit, idFromInteger)
+import PreIds(idBind, idReturn, idPack, idUnpack, idMonad, idLiftModule, idBit, idFromInteger,
+              idPrimAction, idPrimIf, idPrimNoActions,
+              idPrimExpIf, idPrimNoExpIf, idPrimSplitDeep, idPrimNosplitDeep)
 import Backend
 import Prim(PrimOp(..))
 import ConTagInfo
+import CType(TISort(..))
 import VModInfo(VModInfo, vArgs, vName, VName(..), {- VeriPortProp(..), -}
                 VArgInfo(..), VFieldInfo(..), isParam, VWireInfo)
 import DefProp(DefProp)
@@ -273,6 +281,189 @@ instance Eq (IStateVar a) where
 
 instance Ord (IStateVar a) where
     a `compare` b =  isv_uid a `compare` isv_uid b
+
+-- ==============================
+-- IAction
+
+-- The body of a rule or of a method after elaboration.  The evaluator
+-- reduces a body to a tree of joins and conditionals over method calls
+-- and foreign calls (pDef never makes a definition of an action-typed
+-- cell, so a body is materialised down to those leaves, whose
+-- arguments are ordinary expressions).  pDef's rebuild turns that tree
+-- into an IAction, and from then on no IExpr contains an action.
+--
+-- The leaf constants (a method selector, a state variable, a foreign
+-- function, the avAction_ selector, an undetermined action) are kept
+-- as the ICon nodes the evaluator's application carried, so that
+-- equality (cmpE: the Id and its inlined positions, the selector's
+-- type, the state variable's uid, the foreign call's cookie), printing
+-- and the inlined-position rewrite are the expression's by
+-- construction.  Which variant a field holds is established by the
+-- converter (IExpand.toIAction) and stated at each constructor.
+
+-- The split annotation on a conditional action: none (the -split-if
+-- flag decides), primExpIf, primNoExpIf.
+data SplitMode = SplitDefault | SplitIf | NoSplitIf
+    deriving (Eq, Show)
+
+-- The avAction_ selector that takes the action half of an ActionValue
+-- call: the selector constant (ICon idAVAction_ t (ICSel 1 2)) and the
+-- type arguments it is applied to.
+data AVSel = AVSel (IExpr PostElab) [IType]
+    deriving (Eq, Show)
+
+data IAction
+    = -- PrimNoActions
+      ANoActions
+      -- PrimJoinActions a1 a2 (binary, as the evaluator builds it:
+      -- the nesting takes part in equality, as it did in the expression)
+    | AJoin IAction IAction
+      -- [primExpIf | primNoExpIf] (PrimIf ·Action c t e)
+    | AIf SplitMode (IExpr PostElab) IAction IAction
+      -- primSplitDeep (True) / primNosplitDeep (False) around an
+      -- action: the region whose bare conditionals are split / are not
+      -- split (ISplitIf consumes it)
+    | ADeep Bool IAction
+      -- [primExpIf | primNoExpIf]
+      --   (PrimArrayDynSelect ·Action ·sz (PrimBuildArray ·Action es) idx):
+      -- the mode, the Ids of the PrimArrayDynSelect and PrimBuildArray
+      -- constants (the positions of the index literals the passes
+      -- build), the index width, the elements, the index
+    | AArrSel SplitMode Id Id Integer [IAction] (IExpr PostElab)
+      -- [avAction_ ·t] (.m ·ts inst args): the selector constant
+      -- (ICon m mt (ICSel n k)), its type arguments, the instance
+      -- constant (ICon i it (ICStateVar sv)), the arguments
+    | ACallMethod (Maybe AVSel) (IExpr PostElab) [IType] (IExpr PostElab) [IExpr PostElab]
+      -- [avAction_ ·t] (f ·ts es), or the bare constant f (Nothing):
+      -- the foreign constant (ICon f ft (ICForeign ..)), and the type
+      -- arguments and arguments when it is applied
+    | ACallForeign (Maybe AVSel) (IExpr PostElab) (Maybe ([IType], [IExpr PostElab]))
+      -- the constant ICon i Action (ICUndet k): an action selected
+      -- from an array by a static index that is out of range
+    | AUndet (IExpr PostElab)
+    deriving (Show)
+
+-- Equality as cmpE gave on the expression each node stands for: the
+-- mode (the marker constants' Ids), the stored constants through
+-- cmpE, the argument lists pairwise and by length.  The derived
+-- instance would differ on AArrSel's two Ids, whose inlined positions
+-- cmpE compares and Id's Eq does not.
+instance Eq IAction where
+    ANoActions == ANoActions = True
+    AJoin a1 a2 == AJoin b1 b2 = a1 == b1 && a2 == b2
+    AIf m1 c1 t1 e1 == AIf m2 c2 t2 e2 =
+        m1 == m2 && c1 == c2 && t1 == t2 && e1 == e2
+    ADeep b1 a1 == ADeep b2 a2 = b1 == b2 && a1 == a2
+    AArrSel m1 s1 r1 n1 es1 i1 == AArrSel m2 s2 r2 n2 es2 i2 =
+        m1 == m2 && eqConId s1 s2 && eqConId r1 r2 && n1 == n2 &&
+        es1 == es2 && i1 == i2
+    ACallMethod v1 s1 ts1 i1 es1 == ACallMethod v2 s2 ts2 i2 es2 =
+        v1 == v2 && s1 == s2 && ts1 == ts2 && i1 == i2 && es1 == es2
+    ACallForeign v1 f1 as1 == ACallForeign v2 f2 as2 =
+        v1 == v2 && f1 == f2 && as1 == as2
+    AUndet c1 == AUndet c2 = c1 == c2
+    _ == _ = False
+
+-- two constants' Ids as cmpE compares them (the variant is ICPrim, so
+-- the type does not take part): the name, then the inlined positions
+eqConId :: Id -> Id -> Bool
+eqConId i j = i == j && getIdInlinedPositions i == getIdInlinedPositions j
+
+instance NFData SplitMode where
+    rnf m = m `seq` ()
+
+instance NFData AVSel where
+    rnf (AVSel s ts) = rnf2 s ts
+
+instance NFData IAction where
+    rnf ANoActions = ()
+    rnf (AJoin a1 a2) = rnf2 a1 a2
+    rnf (AIf m c t e) = rnf4 m c t e
+    rnf (ADeep b a) = rnf2 b a
+    rnf (AArrSel m s r n es i) = rnf6 m s r n es i
+    rnf (ACallMethod v s ts i es) = rnf5 v s ts i es
+    rnf (ACallForeign v f as) = rnf3 v f as
+    rnf (AUndet c) = rnf c
+
+-- The type of an action (tiAction is TIabstract).  ISyntaxUtil
+-- re-exports it.
+itAction :: IType
+itAction = ITCon idPrimAction IKStar TIabstract
+
+-- An IAction prints as the expression it stands for: the three ppAps
+-- arms over its parts.  The stored constants print through their own
+-- instance; a primitive constant the node stands for (PrimIf, the
+-- join, the markers, the array primitives) prints as the PrimOp's
+-- name at PDReadable, as the expression did, and as its Id at the
+-- other details (where the expression also printed its type).
+instance PPrint IAction where
+    pPrint = ppAction
+
+ppAction :: PDetail -> Int -> IAction -> Doc
+ppAction d p a =
+    case a of
+      ANoActions -> ppPrimHead d idPrimNoActions PrimNoActions
+      AJoin _ _ ->
+          text "{" <+> sepList (map (ppAction d 0) (joinArms a)) (text ";") <+> text "}"
+      AIf mode c t e ->
+          ppMarked d p mode $ \ p' ->
+              ppApsA d p' (ppPrimHead d idPrimIf PrimIf) [itAction]
+                  [pPrint d maxPrec c, ppAction d maxPrec t, ppAction d maxPrec e]
+      ADeep b a' ->
+          let (i, op) = if b then (idPrimSplitDeep, PrimSplitDeep)
+                        else (idPrimNosplitDeep, PrimNosplitDeep)
+          in  ppApsA d p (ppPrimHead d i op) [] [ppAction d maxPrec a']
+      AArrSel mode i_sel i_arr sz es idx ->
+          ppMarked d p mode $ \ p' ->
+              ppApsA d p' (ppPrimHead d i_sel PrimArrayDynSelect)
+                  [itAction, ITNum sz]
+                  [ppApsA d maxPrec (ppPrimHead d i_arr PrimBuildArray) [itAction]
+                       (map (ppAction d maxPrec) es),
+                   pPrint d maxPrec idx]
+      ACallMethod mav sel ts inst args ->
+          ppAV d p mav $ \ p' ->
+              ppApsA d p' (pPrint d (maxPrec-1) sel) ts
+                  (map (pPrint d maxPrec) (inst : args))
+      ACallForeign mav f (Just (ts, es)) ->
+          ppAV d p mav $ \ p' ->
+              ppApsA d p' (pPrint d (maxPrec-1) f) ts (map (pPrint d maxPrec) es)
+      ACallForeign mav f Nothing ->
+          ppAV d p mav $ \ p' -> pPrint d p' f
+      AUndet c -> pPrint d p c
+  where
+    -- the actions of a join, nested joins flattened on both sides
+    joinArms (AJoin a1 a2) = joinArms a1 ++ joinArms a2
+    joinArms a' = [a']
+    -- the split marker around a conditional, when there is one
+    ppMarked d' p' SplitDefault k = k p'
+    ppMarked d' p' SplitIf k =
+        ppApsA d' p' (ppPrimHead d' idPrimExpIf PrimExpIf) [] [k maxPrec]
+    ppMarked d' p' NoSplitIf k =
+        ppApsA d' p' (ppPrimHead d' idPrimNoExpIf PrimNoExpIf) [] [k maxPrec]
+    -- the avAction_ selector around a call, when there is one
+    ppAV d' p' Nothing k = k p'
+    ppAV d' p' (Just (AVSel s ts)) k =
+        ppApsA d' p' (pPrint d' (maxPrec-1) s) ts [k maxPrec]
+
+-- the generic ppAps arm, over the head's and the arguments' documents
+-- (the arguments rendered at maxPrec by the caller)
+ppApsA :: PDetail -> Int -> Doc -> [IType] -> [Doc] -> Doc
+ppApsA d p f ts es = pparen (p>(maxPrec-1)) $
+    sep (f : map (nest 2 . (text"\183" <>) . pPrint d maxPrec) ts ++ map (nest 2) es)
+
+-- a primitive constant's text (the ICPrim arm of PPrint (IExpr a) at
+-- PDReadable, the Id arm otherwise)
+ppPrimHead :: PDetail -> Id -> PrimOp -> Doc
+ppPrimHead d@PDReadable _ op = text (show op)
+ppPrimHead d i _ = ppId d i
+
+-- The body of a rule, per phase: an expression until pDef's rebuild,
+-- an IAction after it.  Two instances on apart patterns (as Ref): a
+-- partially known phase reduces, a phase variable is stuck, which is
+-- what lets the name-only rule code stay phase-polymorphic.
+type family Body (p :: Phase) :: Type
+type instance Body ('Ph 'WithBinders e) = IExpr ('Ph 'WithBinders e)
+type instance Body PostElab = IAction
 
 -- ==============================
 -- IRule
