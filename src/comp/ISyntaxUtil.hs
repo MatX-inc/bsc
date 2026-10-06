@@ -390,10 +390,9 @@ iMkCharAt pos c = ICon (setIdPosition pos idCharLit) itChar (ICChar c)
 iMkHandle :: Handle -> IExpr Elab
 iMkHandle h = ICon idHandleLit itHandle (ICHandle h)
 
-iMkBufferMode :: KnownPhase a => BufferMode -> IExpr a
+iMkBufferMode :: KnownPhase (BinderPhase e) => BufferMode -> IExpr (BinderPhase e)
 {-# SPECIALISE iMkBufferMode :: BufferMode -> IExpr PreElab #-}
 {-# SPECIALISE iMkBufferMode :: BufferMode -> IExpr Elab #-}
-{-# SPECIALISE iMkBufferMode :: BufferMode -> IExpr PostElab #-}
 iMkBufferMode NoBuffering =
   IAps icPrimChr [mkNumConT 2, itBufferMode] [iMkLitSize 2 0]
 iMkBufferMode LineBuffering =
@@ -408,10 +407,9 @@ iMkBufferMode (BlockBuffering msz) =
              Just sz -> iMkValid itInteger (iMkLit itInteger (toInteger sz))
   in  IAps ic [] [e]
 
-iMkInvalid :: KnownPhase a => IType -> IExpr a
+iMkInvalid :: KnownPhase (BinderPhase e) => IType -> IExpr (BinderPhase e)
 {-# SPECIALISE iMkInvalid :: IType -> IExpr PreElab #-}
 {-# SPECIALISE iMkInvalid :: IType -> IExpr Elab #-}
-{-# SPECIALISE iMkInvalid :: IType -> IExpr PostElab #-}
 iMkInvalid t = IAps icPrimChr [mkNumConT 1, itMaybe t] [iMkLitSize 1 0]
 
 iMkValid :: KnownPhase a => IType -> IExpr a -> IExpr a
@@ -425,10 +423,9 @@ iMkValid t e =
       ic = ICon idValid ic_ty (ICCon { conTagInfo = cti })
   in  IAps ic [t] [e]
 
-iMkNil :: KnownPhase a => IType -> IExpr a
+iMkNil :: KnownPhase (BinderPhase e) => IType -> IExpr (BinderPhase e)
 {-# SPECIALISE iMkNil :: IType -> IExpr PreElab #-}
 {-# SPECIALISE iMkNil :: IType -> IExpr Elab #-}
-{-# SPECIALISE iMkNil :: IType -> IExpr PostElab #-}
 iMkNil t = IAps icPrimChr [mkNumConT 1, itList t] [iMkLitSize 1 0]
 
 -- The Cons constructor's internal struct type, matching the frontend's
@@ -463,10 +460,9 @@ iMkCons t e_hd e_tl =
       e = IAps tup [t] [e_hd, e_tl]
   in  IAps ic [t] [e]
 
-iMkList :: KnownPhase a => IType -> [IExpr a] -> IExpr a
+iMkList :: KnownPhase (BinderPhase e) => IType -> [IExpr (BinderPhase e)] -> IExpr (BinderPhase e)
 {-# SPECIALISE iMkList :: IType -> [IExpr PreElab] -> IExpr PreElab #-}
 {-# SPECIALISE iMkList :: IType -> [IExpr Elab] -> IExpr Elab #-}
-{-# SPECIALISE iMkList :: IType -> [IExpr PostElab] -> IExpr PostElab #-}
 iMkList t xs = foldr (iMkCons t) (iMkNil t) xs
 
 iMkBool :: KnownPhase a => Bool -> IExpr a
@@ -483,10 +479,9 @@ iMkBoolAt :: KnownPhase a => Position -> Bool -> IExpr a
 iMkBoolAt pos True  = iTrueAt pos
 iMkBoolAt pos False = iFalseAt pos
 
-iMkRealBool :: KnownPhase a => Bool -> IExpr a
+iMkRealBool :: KnownPhase (BinderPhase e) => Bool -> IExpr (BinderPhase e)
 {-# SPECIALISE iMkRealBool :: Bool -> IExpr PreElab #-}
 {-# SPECIALISE iMkRealBool :: Bool -> IExpr Elab #-}
-{-# SPECIALISE iMkRealBool :: Bool -> IExpr PostElab #-}
 iMkRealBool b = IAps (ICon i t (ICPrim PrimChr)) [] [iMkBool b]
   where i = if b then idTrue else idFalse
         t = itBit1 `itFun` itBool
@@ -517,16 +512,14 @@ iFalseAt pos = iMkLitSizeAt pos 1 0
 
 -- conversions between Bit#(1) and Bool
 
-toBit :: KnownPhase a => IExpr a -> IExpr a
+toBit :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e) -> IExpr (BinderPhase e)
 {-# SPECIALISE toBit :: IExpr PreElab -> IExpr PreElab #-}
 {-# SPECIALISE toBit :: IExpr Elab -> IExpr Elab #-}
-{-# SPECIALISE toBit :: IExpr PostElab -> IExpr PostElab #-}
 toBit e = IAps icPrimOrd [itBool, it1] [e]
 
-toBool :: KnownPhase a => IExpr a -> IExpr a
+toBool :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e) -> IExpr (BinderPhase e)
 {-# SPECIALISE toBool :: IExpr PreElab -> IExpr PreElab #-}
 {-# SPECIALISE toBool :: IExpr Elab -> IExpr Elab #-}
-{-# SPECIALISE toBool :: IExpr PostElab -> IExpr PostElab #-}
 toBool e = IAps icPrimChr [it1, itBool] [e]
 
 -- Functions
@@ -642,10 +635,9 @@ isFalse :: KnownPhase a => IExpr a -> Bool
 isFalse (ICon _ _ (ICInt { iVal = IntLit { ilValue = 0 } })) = True
 isFalse _ = False
 
-iePrimWhen :: KnownPhase a => IType -> IExpr a -> IExpr a -> IExpr a
+iePrimWhen :: KnownPhase (BinderPhase e) => IType -> IExpr (BinderPhase e) -> IExpr (BinderPhase e) -> IExpr (BinderPhase e)
 {-# SPECIALISE iePrimWhen :: IType -> IExpr PreElab -> IExpr PreElab -> IExpr PreElab #-}
 {-# SPECIALISE iePrimWhen :: IType -> IExpr Elab -> IExpr Elab -> IExpr Elab #-}
-{-# SPECIALISE iePrimWhen :: IType -> IExpr PostElab -> IExpr PostElab -> IExpr PostElab #-}
 iePrimWhen t p e =
     if isTrue p then
         e
@@ -661,10 +653,9 @@ iePrimWhenPred t p e =
       e
   else IAps icPrimWhenPred [t] [icPred p, e]
 
-ieJoinR :: KnownPhase a => IExpr a -> IExpr a -> IExpr a
+ieJoinR :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e) -> IExpr (BinderPhase e) -> IExpr (BinderPhase e)
 {-# SPECIALISE ieJoinR :: IExpr PreElab -> IExpr PreElab -> IExpr PreElab #-}
 {-# SPECIALISE ieJoinR :: IExpr Elab -> IExpr Elab -> IExpr Elab #-}
-{-# SPECIALISE ieJoinR :: IExpr PostElab -> IExpr PostElab -> IExpr PostElab #-}
 ieJoinR e1 e2 | e1 == icNoRules = e2
 ieJoinR e1 e2 | e2 == icNoRules = e1
 ieJoinR e1 e2 = IAps icJoinRules [] [e1, e2]
@@ -697,7 +688,8 @@ iAnd = ICon idPrimBAnd (itBit1 `itFun` itBit1 `itFun` itBit1) (ICPrim PrimBAnd)
 iOr  = ICon idPrimBOr  (itBit1 `itFun` itBit1 `itFun` itBit1) (ICPrim PrimBOr)
 iNot = ICon idPrimBNot (itBit1 `itFun` itBit1) (ICPrim PrimBNot)
 
-icJoinRules, icNoRules, icRule, icAddSchedPragmas, icJoinActions, icNoActions :: KnownPhase a => IExpr a
+icJoinRules, icNoRules, icRule, icAddSchedPragmas :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e)
+icJoinActions, icNoActions :: KnownPhase a => IExpr a
 {-# SPECIALISE icJoinRules :: IExpr PreElab #-}
 {-# SPECIALISE icNoRules :: IExpr PreElab #-}
 {-# SPECIALISE icRule :: IExpr PreElab #-}
@@ -710,10 +702,6 @@ icJoinRules, icNoRules, icRule, icAddSchedPragmas, icJoinActions, icNoActions ::
 {-# SPECIALISE icAddSchedPragmas :: IExpr Elab #-}
 {-# SPECIALISE icJoinActions :: IExpr Elab #-}
 {-# SPECIALISE icNoActions :: IExpr Elab #-}
-{-# SPECIALISE icJoinRules :: IExpr PostElab #-}
-{-# SPECIALISE icNoRules :: IExpr PostElab #-}
-{-# SPECIALISE icRule :: IExpr PostElab #-}
-{-# SPECIALISE icAddSchedPragmas :: IExpr PostElab #-}
 {-# SPECIALISE icJoinActions :: IExpr PostElab #-}
 {-# SPECIALISE icNoActions :: IExpr PostElab #-}
 icJoinRules = ICon idPrimJoinRules (itRules `itFun` itRules `itFun` itRules) (ICPrim PrimJoinRules)
@@ -769,18 +757,16 @@ icPrimCase sz = ICon idPrimCase t (ICPrim PrimCase)
                          elem_ty [1..sz])
         (n, a) = take2tmpVarIds
 
-icPrimOrd :: KnownPhase a => IExpr a
+icPrimOrd :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e)
 {-# SPECIALISE icPrimOrd :: IExpr PreElab #-}
 {-# SPECIALISE icPrimOrd :: IExpr Elab #-}
-{-# SPECIALISE icPrimOrd :: IExpr PostElab #-}
 icPrimOrd = ICon idPrimOrd t (ICPrim PrimOrd)
   where t = ITForAll a IKStar (ITForAll n IKNum (ITVar a `itFun` aitBit (ITVar n)))
         (a, n) = take2tmpVarIds
 
-icPrimChr :: KnownPhase a => IExpr a
+icPrimChr :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e)
 {-# SPECIALISE icPrimChr :: IExpr PreElab #-}
 {-# SPECIALISE icPrimChr :: IExpr Elab #-}
-{-# SPECIALISE icPrimChr :: IExpr PostElab #-}
 icPrimChr = ICon idPrimChr t (ICPrim PrimChr)
   where t = ITForAll n IKNum (ITForAll a IKStar (aitBit (ITVar n) `itFun` ITVar a))
         (n, a) = take2tmpVarIds
@@ -865,18 +851,16 @@ icPrimRel id p = ICon id (ITForAll i IKNum (ty `itFun` ty `itFun` itBit1)) (ICPr
   where i = take1tmpVarIds
         ty = itBit `ITAp` ITVar i
 
-icPrimWhen :: KnownPhase a => IExpr a
+icPrimWhen :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e)
 {-# SPECIALISE icPrimWhen :: IExpr PreElab #-}
 {-# SPECIALISE icPrimWhen :: IExpr Elab #-}
-{-# SPECIALISE icPrimWhen :: IExpr PostElab #-}
 icPrimWhen = ICon idPrimWhen t (ICPrim PrimWhen)
   where t = ITForAll i IKStar (itBit1 `itFun` ITVar i `itFun` ITVar i)
         i = take1tmpVarIds
 
-icPrimWhenPred :: KnownPhase a => IExpr a
+icPrimWhenPred :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e)
 {-# SPECIALISE icPrimWhenPred :: IExpr PreElab #-}
 {-# SPECIALISE icPrimWhenPred :: IExpr Elab #-}
-{-# SPECIALISE icPrimWhenPred :: IExpr PostElab #-}
 icPrimWhenPred = ICon idPrimWhen t (ICPrim PrimWhenPred)
   where t = ITForAll i IKStar (itPred `itFun` ITVar i `itFun` ITVar i)
         i = take1tmpVarIds
@@ -885,20 +869,17 @@ itUninitialized :: IType
 itUninitialized = ITForAll i IKStar (itPosition `itFun` itString `itFun` ITVar i)
   where i = take1tmpVarIds
 
-icPrimRawUninitialized, icPrimUninitialized :: KnownPhase a => IExpr a
+icPrimRawUninitialized, icPrimUninitialized :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e)
 {-# SPECIALISE icPrimRawUninitialized :: IExpr PreElab #-}
 {-# SPECIALISE icPrimUninitialized :: IExpr PreElab #-}
 {-# SPECIALISE icPrimRawUninitialized :: IExpr Elab #-}
 {-# SPECIALISE icPrimUninitialized :: IExpr Elab #-}
-{-# SPECIALISE icPrimRawUninitialized :: IExpr PostElab #-}
-{-# SPECIALISE icPrimUninitialized :: IExpr PostElab #-}
 icPrimRawUninitialized = ICon idPrimRawUninitialized itUninitialized (ICPrim PrimRawUninitialized)
 icPrimUninitialized = ICon idPrimUninitialized itUninitialized (ICPrim PrimUninitialized)
 
-icPrimSetSelPosition :: KnownPhase a => IExpr a
+icPrimSetSelPosition :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e)
 {-# SPECIALISE icPrimSetSelPosition :: IExpr PreElab #-}
 {-# SPECIALISE icPrimSetSelPosition :: IExpr Elab #-}
-{-# SPECIALISE icPrimSetSelPosition :: IExpr PostElab #-}
 icPrimSetSelPosition = ICon idPrimSetSelPosition t (ICPrim PrimSetSelPosition)
   where t = ITForAll i IKStar (itPosition `itFun` ITVar i `itFun` ITVar i)
         i = take1tmpVarIds
@@ -972,10 +953,9 @@ icPrimInv = ICon idPrimSL t (ICPrim PrimInv)
         i = take1tmpVarIds
         ty = itBit `ITAp` ITVar i
 
-icPrimIntegerToBit :: KnownPhase a => IExpr a
+icPrimIntegerToBit :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e)
 {-# SPECIALISE icPrimIntegerToBit :: IExpr PreElab #-}
 {-# SPECIALISE icPrimIntegerToBit :: IExpr Elab #-}
-{-# SPECIALISE icPrimIntegerToBit :: IExpr PostElab #-}
 icPrimIntegerToBit = ICon (idFromInteger noPosition) t (ICPrim PrimIntegerToBit)
   where t  = ITForAll i IKNum (itInteger `itFun` (aitBit ty))
         ty = ITVar i
