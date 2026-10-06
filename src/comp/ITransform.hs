@@ -174,20 +174,6 @@ iTrExpr ctx idxs (IAps psel@(ICon _ _ (ICPrim PrimArrayDynSelect)) ts@[elem_ty, 
         idx' <- iTrExpr ctx [] (expValShallow idx)
         arr' <- iTrExpr ctx ((idx,sz_idx):idxs) (expValShallow arr)
         iTrExpr' ctx idxs psel ts [arr', idx']
-iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pupd@(ICon _ _ (ICPrim PrimArrayDynUpdate)) ts@[elem_ty, ITNum sz_upd_idx] [arr, upd_idx, val]) = do
-        upd_idx' <- iTrExpr ctx [] (expValShallow upd_idx)
-        let mkExtend in_sz out_sz e =
-                let k = out_sz - in_sz
-                    ts = [ITNum k, ITNum in_sz, ITNum out_sz]
-                in  IAps icPrimZeroExt ts [e]
-            eq_e = let (max_sz, e1, e2)
-                           | sz_idx > sz_upd_idx = (sz_idx, idx, mkExtend sz_upd_idx sz_idx upd_idx)
-                           | sz_idx < sz_upd_idx = (sz_upd_idx, mkExtend sz_idx sz_upd_idx idx, upd_idx)
-                           | otherwise           = (sz_upd_idx, idx, upd_idx)
-                   in  iePrimEQ (ITNum max_sz) e1 e2
-        val' <- iTrExpr (addT eq_e ctx) idxs (expValShallow val)
-        arr' <- iTrExpr (addF eq_e ctx) idxs (expValShallow arr)
-        iTrExpr' ctx idxs pupd ts [arr', upd_idx', val']
 iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pbld@(ICon i _ (ICPrim PrimBuildArray)) ts es) = do
         let foldFn (res_es, res_ctx) (n, e) = do
               let n_lit = iMkLitAt (getPosition i) (aitBit (ITNum sz_idx)) n
@@ -1232,7 +1218,7 @@ expValAndOrCmp e = e
 expValAndOrCmpPost :: IExpr PostElab -> IExpr PostElab
 expValAndOrCmpPost = expValAndOrCmp
 
-isAndOrCmp :: PrimOp -> Bool
+isAndOrCmp :: PrimOp p -> Bool
 isAndOrCmp p = p `elem` [PrimBAnd, PrimBOr, PrimBNot, PrimEQ, PrimULT, PrimULE, PrimSLT, PrimSLE]
 
 expValShallow :: KnownPhase a => IExpr a -> IExpr a
@@ -1441,9 +1427,9 @@ isIfElseOfIConInt (IAps (ICon _ _ (ICPrim PrimIf)) [t] [cnd, thn, els]) =
 isIfElseOfIConInt (ICon _ _ (ICValue { iValDef = e })) = isIfElseOfIConInt e
 isIfElseOfIConInt _ = False
 
-isConstExprForPrim :: KnownPhase a => PrimOp -> IExpr a -> Bool
-{-# SPECIALISE isConstExprForPrim :: PrimOp -> IExpr Elab -> Bool #-}
-{-# SPECIALISE isConstExprForPrim :: PrimOp -> IExpr PostElab -> Bool #-}
+isConstExprForPrim :: KnownPhase a => PrimOp a -> IExpr a -> Bool
+{-# SPECIALISE isConstExprForPrim :: PrimOp Elab -> IExpr Elab -> Bool #-}
+{-# SPECIALISE isConstExprForPrim :: PrimOp PostElab -> IExpr PostElab -> Bool #-}
 isConstExprForPrim prim (IAps (ICon _ _ (ICPrim p)) _ [e1,e2]) =
     (p == prim) && ((isIConInt e1) || (isIConInt e2))
 isConstExprForPrim _ _ = False
@@ -1729,13 +1715,13 @@ vsUniv e =
 vsGetSingleton :: IExpr a -> ValMap a -> Maybe Integer
 vsGetSingleton e m = M.lookup (ExprKey e) m >>= vGetSing
 
-isCmp :: PrimOp -> Bool
+isCmp :: PrimOp p -> Bool
 isCmp PrimEQ = True
 isCmp PrimULT = True
 isCmp PrimULE = True
 isCmp _      = False
 
-cmpToVS :: Integer -> Integer -> Bool -> PrimOp -> VSetInteger
+cmpToVS :: Integer -> Integer -> Bool -> PrimOp p -> VSetInteger
 cmpToVS n i True  PrimEQ  = vSing i
 cmpToVS n i True  PrimULT = vFromTo 0 (i-1)
 cmpToVS n i True  PrimULE = vFromTo 0 i
@@ -1745,9 +1731,9 @@ cmpToVS n i False PrimULE = vFromTo i (2^n-1)
 cmpToVS _ _ _     prim    =
     internalError ("ITransform.cmpToVS: " ++ ppString prim)
 
-doCmp :: KnownPhase a => ValMap a -> IExpr a -> PrimOp -> IExpr a -> Integer -> Integer -> Bool -> (ValMap a,IExpr a)
-{-# SPECIALISE doCmp :: ValMap Elab -> IExpr Elab -> PrimOp -> IExpr Elab -> Integer -> Integer -> Bool -> (ValMap Elab,IExpr Elab) #-}
-{-# SPECIALISE doCmp :: ValMap PostElab -> IExpr PostElab -> PrimOp -> IExpr PostElab -> Integer -> Integer -> Bool -> (ValMap PostElab,IExpr PostElab) #-}
+doCmp :: KnownPhase a => ValMap a -> IExpr a -> PrimOp a -> IExpr a -> Integer -> Integer -> Bool -> (ValMap a,IExpr a)
+{-# SPECIALISE doCmp :: ValMap Elab -> IExpr Elab -> PrimOp Elab -> IExpr Elab -> Integer -> Integer -> Bool -> (ValMap Elab,IExpr Elab) #-}
+{-# SPECIALISE doCmp :: ValMap PostElab -> IExpr PostElab -> PrimOp PostElab -> IExpr PostElab -> Integer -> Integer -> Bool -> (ValMap PostElab,IExpr PostElab) #-}
 doCmp m e cmp v n i norm =
         let vs = vmGet v m
             tvs = cmpToVS n i norm cmp

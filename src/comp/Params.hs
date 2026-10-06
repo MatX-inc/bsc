@@ -129,10 +129,6 @@ isConstIExpr (ICon _ _ (ICPrim {})) =
     -- primitive operators should be applied,
     -- there is no 0-arity primitive that we allow
     False
-isConstIExpr (ICon _ _ (ICCon {} )) =
-    -- Constructors should be turned into bits by now
-    -- XXX check this!
-    False
 isConstIExpr (IAps f _ es) =
     -- application of acceptable operators on constant args is constant
     (isConstIExprFunc f && all isConstIExpr es)
@@ -186,7 +182,7 @@ isConstAExpr _ _ = False
 -- a constant ASyntax expression.
 -- (This check should not be specific to any backend.)
 
-isConstOp :: PrimOp -> Bool
+isConstOp :: APrimOp -> Bool
 isConstOp PrimAdd  = True  -- VAdd
 isConstOp PrimSub  = True  -- VSub
 isConstOp PrimAnd  = True  -- VAnd
@@ -219,8 +215,6 @@ isConstOp PrimTrunc   = True
 
 isConstOp PrimExtract = True
 isConstOp PrimConcat  = True
--- This would also be replaced?
-isConstOp PrimSplit   = True  -- not handled in AVerilogUtil
 
 isConstOp PrimBNot      = True  -- VNot
 isConstOp PrimBAnd      = True  -- VLAnd
@@ -235,10 +229,6 @@ isConstOp PrimCase   = True
 -- These appear as a pair and are equivalent to PrimCase/PrimIf
 isConstOp PrimArrayDynSelect = True
 isConstOp PrimBuildArray = True
-
--- XXX No reason not to allow these, but they won't occur in parameter exprs
-isConstOp PrimMux    = False
-isConstOp PrimPriMux = False
 
 -- This should be transformed away too, right?
 isConstOp PrimSelect = True  -- not handled in AVerilog

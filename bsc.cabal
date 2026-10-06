@@ -42,6 +42,8 @@ library
     split        ^>=0.2.5,
     strict-concurrency ^>=0.2.4.3,
     syb          ^>=0.7.2,
+    -- Prim.hs splices its code tables (PrimTH)
+    template-haskell >=2.20,
     text         >=2.0.2,
     time         >=1.12.2,
     unix         >=2.8.6.0,
@@ -51,6 +53,13 @@ library
     FlexibleContexts,
     FlexibleInstances,
     TypeSynonymInstances,
+  -- Prim.hs splices its code tables.  Cabal learns that a splice runs
+  -- from the extension lists of the stanza, not from a LANGUAGE pragma,
+  -- and then also builds the compiler's own way (vanilla or dynamic)
+  -- when only the profiled way was asked for, so that the splice has
+  -- objects it can load.  Only default-extensions reach ghc as -X
+  -- flags; this list does not, so the normal build is unchanged.
+  other-extensions: TemplateHaskell
   -- From GHC 9.10 on, update-warmup.sh also reports ghc-internal, whose
   -- modules the generated Warmup then imports.
   if impl(ghc >= 9.10)
@@ -257,6 +266,7 @@ library
     PredTrie
     Pretty
     Prim
+    PrimTH
     ProofObligation
     RSchedule
     RealUtil

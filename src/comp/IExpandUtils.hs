@@ -3552,7 +3552,7 @@ instance Wireable PExpr where
 
 -----------------------------------------------------------------------------
 
-realPrimOp :: PrimOp -> Bool
+realPrimOp :: PrimOp p -> Bool
 realPrimOp PrimAdd = True
 realPrimOp PrimSub = True
 realPrimOp PrimAnd = True
@@ -3601,7 +3601,7 @@ realPrimOp _ = False
 
 -----------------------------------------------------------------------------
 
-integerPrim :: PrimOp -> Bool
+integerPrim :: PrimOp p -> Bool
 integerPrim PrimIntegerAdd = True
 integerPrim PrimIntegerSub = True
 integerPrim PrimIntegerNeg = True
@@ -3621,7 +3621,7 @@ integerPrim _ = False
 
 -----------------------------------------------------------------------------
 
-realPrim :: PrimOp -> Bool
+realPrim :: PrimOp p -> Bool
 realPrim PrimRealEQ = True
 realPrim PrimRealLE = True
 realPrim PrimRealLT = True
@@ -3670,7 +3670,7 @@ realPrim _ = False
 
 -- ops that only take arguments (one or two) of type String
 -- (IExpand uses this to handle multiple ops in one arm of "conAp'")
-stringPrim :: PrimOp -> Bool
+stringPrim :: PrimOp p -> Bool
 stringPrim PrimStringConcat = True
 stringPrim PrimStringEQ = True
 stringPrim PrimStringLT = True
@@ -3684,7 +3684,7 @@ stringPrim _ = False
 
 -- ops that only take an argument of type Char
 -- (IExpand uses this to handle multiple ops in one arm of "conAp'")
-charPrim :: PrimOp -> Bool
+charPrim :: PrimOp p -> Bool
 charPrim PrimCharToString = True
 charPrim PrimCharOrd = True
 charPrim _ = False
@@ -3693,7 +3693,7 @@ charPrim _ = False
 
 -- ops that are Boolean queries on one argument of type Handle
 -- (IExpand uses this to handle them all in one arm of "conAp'")
-handleBoolPrim :: PrimOp -> Bool
+handleBoolPrim :: PrimOp p -> Bool
 handleBoolPrim PrimHandleIsEOF = True
 handleBoolPrim PrimHandleIsOpen = True
 handleBoolPrim PrimHandleIsClosed = True
@@ -3703,7 +3703,7 @@ handleBoolPrim _ = False
 
 -----------------------------------------------------------------------------
 
-strictPrim :: PrimOp -> Bool
+strictPrim :: PrimOp p -> Bool
 strictPrim PrimAdd = True
 strictPrim PrimSub = True
 strictPrim PrimAnd = True
@@ -3763,7 +3763,7 @@ strictPrim _ = False
 -- wrote a dynamic expression; this is used to detect when to report a better
 -- error than nfError
 --
-condPrim :: PrimOp -> Bool
+condPrim :: PrimOp p -> Bool
 condPrim PrimIf = True
 condPrim PrimCase = True
 condPrim PrimArrayDynSelect = True

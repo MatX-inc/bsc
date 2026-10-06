@@ -46,7 +46,7 @@ evalAExprToInteger _ _ _ e = Left $ "evalAExprToInteger: cannot handle expressio
                                     (ppReadable e)
 
 -- utilities for working with the return of primInts
-use :: (a -> b) -> (Maybe (Either ErrMsg a)) -> PrimOp -> (Either String b)
+use :: (a -> b) -> (Maybe (Either ErrMsg a)) -> APrimOp -> (Either String b)
 use fn (Just (Right x)) _  = Right (fn x)
 use _  (Just (Left s))  _  = Left (show s)
 use _  Nothing          op = Left $ "evalPrim: no primitive function available for " ++ (show op)
@@ -57,17 +57,16 @@ asBool b = if b then 1 else 0
 asInteger :: Integer -> Integer
 asInteger = id
 
--- Select the return type based on the PrimOp
-evalPrim :: PrimOp -> [Integer] -> [Integer] -> Either String Integer
+-- Select the return type based on the APrimOp
+evalPrim :: APrimOp -> [Integer] -> [Integer] -> Either String Integer
 evalPrim op ss vs | op `elem` boolOps
                   = use asBool (primResult op ss (map I vs)) op
 evalPrim op ss vs = use asInteger (primResult op ss (map I vs)) op
 
 -- See Prim.hs::evalIntPrimToBool
-boolOps :: [PrimOp]
+boolOps :: [APrimOp]
 boolOps = [ PrimEQ, PrimULE, PrimULT, PrimSLE, PrimSLT
           , PrimBNot, PrimBAnd, PrimBOr
-          , PrimIntegerEQ, PrimIntegerLE, PrimIntegerLT
           ]
 
 -- An unused size, which will generate an error if it is ever actually used
@@ -76,7 +75,7 @@ unused = internalError "size parameter used unexpectedly"
 
 -- Get the list of size parameters needed to evaluate a primitive.
 -- These must match the patterns in Prim.hs
-getOpSizes :: PrimOp -> AExpr -> [Integer]
+getOpSizes :: APrimOp -> AExpr -> [Integer]
 getOpSizes PrimMul     e = [unused, unused, aSize e]
 getOpSizes PrimQuot    e = [aSize e, unused]
 getOpSizes PrimRem     e = [unused, aSize e]

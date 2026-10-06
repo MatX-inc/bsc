@@ -56,7 +56,7 @@ import IntLit
 import Undefined
 import Prim hiding(PrimArg(..))
 
-import Util(Hash, hashInit, nextHashByte, showHash)
+import Util(Hash, hashInit, nextHashByte, showHash, makePairs)
 
 import Data.List(sort, intercalate)
 import Control.Monad(replicateM, liftM, ap)
@@ -1065,6 +1065,12 @@ instance Bin AType where
 instance Bin AExpr where
     writeBytes (APrim i t op args) = section "AExpr" $
         do putI 0; toBin i; toBin t; toBin op; toBin args
+    -- a mux is written as the APrim it used to be: tag 0, the retired
+    -- code of its kind, the arms as the flat argument list; so the
+    -- encoding is unchanged.  (None occurs in a .ba today: the file is
+    -- written before AState builds the first mux.)
+    writeBytes (AMux i t k arms) = section "AExpr" $
+        do putI 0; toBin i; toBin t; toBin (aMuxKindCode k); toBin (aMuxArmExprs arms)
     writeBytes (AMethCall t obj meth args) = section "AExpr" $
         do putI 1; toBin t; toBin obj; toBin meth; toBin args
     writeBytes (AMethValue t obj meth) = section "AExpr" $
@@ -1091,8 +1097,11 @@ instance Bin AExpr where
     readBytes = do
         i <- getI
         case i of
-          0  -> do { i <- fromBin; t <- fromBin; op <- fromBin;
-                     args <- fromBin; return (APrim i t op args); }
+          0  -> do { i <- fromBin; t <- fromBin; n <- fromBin;
+                     args <- fromBin;
+                     return (case aMuxKindOfCode n of
+                               Just k -> AMux i t k (makePairs args)
+                               Nothing -> APrim i t (readPrimOp n) args); }
           1  -> do { t <- fromBin; obj <- fromBin; meth <- fromBin;
                      args <- fromBin; return (AMethCall t obj meth args); }
           2  -> do { t <- fromBin; obj <- fromBin; meth <- fromBin;
@@ -1144,7 +1153,7 @@ instance Bin ANoInlineFun where
                    mi <- fromBin
                    return (ANoInlineFun s ts ps mi)
 
-instance Bin PrimOp where
+instance Bin (PrimOp PostElab) where
     writeBytes p = toBin (writePrimOp p)
     readBytes = do n <- fromBin; return (readPrimOp n)
 

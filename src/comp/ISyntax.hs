@@ -116,7 +116,8 @@ import Wires(ResetId, ClockDomain, ClockId, noClockId, noResetId, noDefaultClock
 import IdPrint
 import PreIds(idBind, idReturn, idPack, idUnpack, idMonad, idLiftModule, idBit, idFromInteger)
 import Backend
-import Prim(PrimOp(..))
+import Prim(PrimOp(..), Binders(..), Evald(..), Phase(..),
+            PreElab, Elab, PostElab, BinderPhase, EvaldPhase)
 import ConTagInfo
 import VModInfo(VModInfo, vArgs, vName, VName(..), {- VeriPortProp(..), -}
                 VArgInfo(..), VFieldInfo(..), isParam, VWireInfo)
@@ -458,38 +459,10 @@ splitITAp t0 = go t0 []
 -- ==============================
 -- Phases
 
--- An IExpr (and everything built from IExprs: IDef, IModule, IPackage,
--- IStateVar, Pred, ...) is indexed by the phase of compilation it
--- belongs to, and each constructor is restricted to the phases where it
--- can occur.  The index is a pair of axes rather than a flat enumeration
--- so that every restriction is a (partially) refined return type: GHC
--- stores nothing for those, whereas a constraint in a constructor's
--- context is an evidence field in every node.
---   Binders: may ILam/IVar/ILAM (and the pre-elaboration IConInfo
---            variants) occur?  Yes until the evaluator's rebuild (pDef).
---   Evald:   may the evaluator-made variants (instances, ports, module
---            definitions) occur?  Yes from the evaluator onwards.
-data Binders = WithBinders | NoBinders
-data Evald = Unevaluated | Evaluated
-data Phase = Ph Binders Evald
-
--- The three phases that are inhabited:
---   PreElab:  IConv's output, the .bo contents, LiftDicts, FixupDefs,
---             ISimpDicts, ISimplify and the readers (bluetcl, dumpbo)
---   Elab:     inside the evaluator (IExpand/IExpandUtils, HExpr); the
---             only phase with heap references (IRefT, ArrayCell)
---   PostElab: from pDef's rebuild of the heap to AConv
--- ('Ph 'NoBinders 'Unevaluated is uninhabited.)
-type PreElab = 'Ph 'WithBinders 'Unevaluated
-type Elab = 'Ph 'WithBinders 'Evaluated
-type PostElab = 'Ph 'NoBinders 'Evaluated
-
--- The two half-axes, for code that is polymorphic over the other axis:
---   BinderPhase e: PreElab or Elab (IConv's output, anything that builds
---                  ILam/IVar/ILAM or the pre-elaboration constants)
---   EvaldPhase b:  Elab or PostElab (the evaluator-made constants)
-type BinderPhase e = 'Ph 'WithBinders e
-type EvaldPhase b = 'Ph b 'Evaluated
+-- The phase kind (Binders, Evald, Phase) and the phase synonyms
+-- (PreElab, Elab, PostElab, BinderPhase, EvaldPhase) are declared in
+-- Prim, the lowest module whose type is indexed by them, with the
+-- explanation of the two axes; this module re-exports them.
 
 -- The payload of a heap reference, per phase.  Only the evaluator has a
 -- heap: `type instance Ref Elab = HeapData` lives in IExpandUtils beside
@@ -933,7 +906,7 @@ data IConInfo (p :: Phase) where
         ICDef :: { iConDef :: IExpr ('Ph 'WithBinders e) }
               -> IConInfo ('Ph 'WithBinders e)
           -- primitive
-        ICPrim :: { primOp :: PrimOp } -> IConInfo p
+        ICPrim :: { primOp :: PrimOp p } -> IConInfo p
           -- foreign function; foports specifies input and output port names in verilog
           -- (for functions implemented via module instantiation - primarily "noinlined")
           -- The inputs are grouped per argument (the inner list is the ports of
@@ -956,8 +929,12 @@ data IConInfo (p :: Phase) where
                        fTyVarNames :: [String],
                        fcallNo :: Maybe Integer }
                   -> IConInfo p
-          -- constructor
-        ICCon :: { conTagInfo :: ConTagInfo } -> IConInfo p
+          -- constructor, applied through IAps to its one argument (a
+          -- multi-field payload is an ICTuple).  The evaluator reduces
+          -- every constructor application -- a nullary constructor to
+          -- PrimChr of its tag, the others through ICIs/ICOut and the
+          -- derived Bits instances -- so none exists after elaboration.
+        ICCon :: { conTagInfo :: ConTagInfo } -> IConInfo ('Ph 'WithBinders e)
           -- function that tests whether its argument is the right kind of a constructor
           --  eventually cancels out and turns into ICInt 0 (false) or 1 (true)
         ICIs :: ConTagInfo -> IConInfo ('Ph 'WithBinders e)

@@ -618,7 +618,6 @@ removeInlinedPositions flags imod0 =
     rmConInfo (ICInout io) = ICInout (rmInout io)
     rmConInfo ic@(ICPrim {}) = ic
     rmConInfo ic@(ICForeign {}) = ic
-    rmConInfo ic@(ICCon {}) = ic
     rmConInfo ic@(ICTuple {}) = ic
     rmConInfo ic@(ICSel {}) = ic
     rmConInfo ic@(ICUndet {}) = ic
@@ -6087,10 +6086,14 @@ instance HeapToDef HExpr where
     hToDef m (ICon i t (ICClock c)) = ICon i t (ICClock (hToDef m c))
     hToDef m (ICon i t (ICReset r)) = ICon i t (ICReset (hToDef m r))
     hToDef m (ICon i t (ICInout io)) = ICon i t (ICInout (hToDef m io))
-    -- the leaves, rebuilt at PostElab
-    hToDef _ (ICon i t (ICPrim p)) = ICon i t (ICPrim p)
+    -- the leaves, rebuilt at PostElab; a primitive is rebuilt at the
+    -- new phase when it exists there, refused (below) when it is one
+    -- of elaboration only
+    hToDef _ e@(ICon i t (ICPrim p)) =
+        case primOpAnyPhase p of
+          Just p' -> ICon i t (ICPrim p')
+          Nothing -> escapedElab ("ICPrim " ++ show p) e
     hToDef _ (ICon i t (ICForeign n c ps tvns fc)) = ICon i t (ICForeign n c ps tvns fc)
-    hToDef _ (ICon i t (ICCon cti)) = ICon i t (ICCon cti)
     hToDef _ (ICon i t (ICTuple fs)) = ICon i t (ICTuple fs)
     hToDef _ (ICon i t (ICSel n k)) = ICon i t (ICSel n k)
     hToDef _ (ICon i t (ICUndet k)) = ICon i t (ICUndet k)
@@ -6116,6 +6119,7 @@ instance HeapToDef HExpr where
     hToDef _ e@(ILAM {}) = escapedElab "ILAM" e
     -- the constants of the phases with binders (PreElab and Elab)
     hToDef _ e@(ICon _ _ (ICDef {})) = escapedElab "ICDef" e
+    hToDef _ e@(ICon _ _ (ICCon {})) = escapedElab "ICCon" e
     hToDef _ e@(ICon _ _ (ICIs {})) = escapedElab "ICIs" e
     hToDef _ e@(ICon _ _ (ICOut {})) = escapedElab "ICOut" e
     hToDef _ e@(ICon _ _ (ICVerilog {})) = escapedElab "ICVerilog" e

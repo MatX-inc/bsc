@@ -361,6 +361,8 @@ aVerilog errh flags pps aspack ffmap =
                 ++ concatMap exprVForeignCalls (ae_args e)
             exprVForeignCalls e@(APrim {}) =
                 concatMap exprVForeignCalls (ae_args e)
+            exprVForeignCalls e@(AMux {}) =
+                concatMap exprVForeignCalls (aMuxArmExprs (amux_arms e))
             exprVForeignCalls e@(AMethCall {}) =
                 concatMap exprVForeignCalls (ae_args e)
             exprVForeignCalls e@(ANoInlineFunCall {}) =

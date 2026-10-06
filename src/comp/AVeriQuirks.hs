@@ -3,7 +3,7 @@ module AVeriQuirks (aVeriQuirks) where
 import Data.List( tails, partition)
 import Data.Maybe(catMaybes)
 import IntegerUtil(integerAnd, integerOr)
-import Util(itos, makePairs)
+import Util(itos)
 import PPrint
 import IntLit
 import ErrorUtil(internalError)
@@ -248,6 +248,12 @@ aQExp False x@(APrim aid t op es) | topOp op = do
     e <- aQExp True (APrim aid t op es')
     i <- addExpr t e
     return (ASDef t i)
+aQExp False x@(AMux aid t k arms) = do
+    when debug $ traceM("aQExp topOp True:" ++ ppReadable x)
+    arms' <- mapMAMuxArms (aQExp False) arms
+    e <- aQExp True (AMux aid t k arms')
+    i <- addExpr t e
+    return (ASDef t i)
 
 -- noinline functions (that are module instantiations) need to be at the top
 aQExp False x@(ANoInlineFunCall t i f es) = do
@@ -308,15 +314,15 @@ aQExp top x@(APrim aid t p es) | p == PrimQuot || p == PrimRem = do
     es' <- mapM mkDefS es
     return (APrim aid t p es')
 
--- For PrimMux and PrimPriMux operators,
-aQExp top x@(APrim aid t p es) | p == PrimMux || p == PrimPriMux = do
-    when debug $ traceM("aQExp PrimMux PrimPriMux: " ++ ppReadable x)
-    es'           <- mapM (aQExp False) es
+-- For the muxes,
+aQExp top x@(AMux aid t k arms) = do
+    when debug $ traceM("aQExp AMux: " ++ ppReadable x)
+    arms'         <- mapMAMuxArms (aQExp False) arms
     rmPrimModules <- gets qs_rmPrimModules
     readableMux   <- gets qs_readableMux
     case ( rmPrimModules,  readableMux ) of
-      (True, False) ->         aQMux aid t p es' -- build AndOr Muxes
-      (_, _ )       ->  return (APrim aid t p es')
+      (True, False) ->         aQMux aid t k arms' -- build AndOr Muxes
+      (_, _ )       ->  return (AMux aid t k arms')
 
 aQExp top (APrim aid t p es)       = mapM (aQExp False) es >>= return . APrim aid t p
 aQExp top (AMethCall t i m es)     = mapM (aQExp False) es >>= return . AMethCall t i m
@@ -344,20 +350,22 @@ aQExp _ (ASInout { })              = internalError("AVerilog.aQExp: unexpected i
 aQExp _ (AMGate { })               = internalError("AVerilog.aQExp: unexpected gate")
 
 -- these are operations which cannot be nested, since the generated verilog pushed
--- them into a separate always block.
-topOp :: PrimOp -> Bool
+-- them into a separate always block (as is a mux, AMux, with its own arm above).
+topOp :: APrimOp -> Bool
 topOp PrimCase   = True
-topOp PrimMux    = True
-topOp PrimPriMux = True
 topOp _          = False
 
--- Convert from a Prim{Pri}Mux to a  mux built out of and or logic
+-- Convert from a mux to a  mux built out of and or logic
 -- XXX We should consider optimizing the pred expressions since they can be redundant.
-aQMux :: AId -> AType -> PrimOp -> [AExpr] -> QQState AExpr
-aQMux aid t@(ATBit n) p as = do
-    let (ps, es) = if ( isASAny $ last as)
-                   then unzip (makePairs $ init as)
-                   else unzip (makePairs as)
+-- (A default arm, ASAny, is dropped.  While the mux was an APrim this
+-- took `init` of the flat argument list, leaving the default's select
+-- as an odd element that makePairs refused, so the drop could not run;
+-- -no-readable-mux, the only way here, is not in the testsuite.)
+aQMux :: AId -> AType -> AMuxKind -> [(AExpr, AExpr)] -> QQState AExpr
+aQMux aid t@(ATBit n) k arms = do
+    let (ps, es) = if ( isASAny $ snd $ last arms)
+                   then unzip (init arms)
+                   else unzip arms
         priEnc = map pri . tail . reverse . tails . reverse
         --
         pri :: [AExpr] -> AExpr
@@ -367,7 +375,7 @@ aQMux aid t@(ATBit n) p as = do
         --
         -- bnot x = APrim aid aTBool PrimBNot [x]
     ps'  <- mapM mkDefS ps
-    ps'' <- if p == PrimMux then return ps' else {- mapM mkDefS -}  return (priEnc ps')
+    ps'' <- if k == AMuxParallel then return ps' else {- mapM mkDefS -}  return (priEnc ps')
     let sext e = if n == 1 then e else APrim aid t PrimSignExt [e]
         e = aBitOr aid t [ aBitAnd aid t [sext p, e] | (p, e) <- zip ps'' es ]
     return e

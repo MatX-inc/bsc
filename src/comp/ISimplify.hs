@@ -115,7 +115,7 @@ doEagerPackUnpack :: Bool
 doEagerPackUnpack = elem "-hack-eager-pack-unpack" progArgs
 
 -- XXX should we do more PrimOps here?
-doPrim :: PrimOp -> [IType] -> [IExpr PreElab] -> Maybe (IExpr PreElab)
+doPrim :: PrimOp PreElab -> [IType] -> [IExpr PreElab] -> Maybe (IExpr PreElab)
 doPrim PrimIntegerToBit [t@(ITNum s)] [ICon i _ l@(ICInt { iVal = v })] | ilValue v >= 0 &&
                                                                         s >=0 &&
                                                                         ilValue v < 2^s = Just $ ICon i (aitBit t) l

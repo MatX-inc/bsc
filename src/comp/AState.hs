@@ -1127,16 +1127,16 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
     -- Multiple inputs
     let
         -- ---------------
-        -- Determine if we need a PrimMux or PrimPriMux
+        -- Determine if we need a parallel or a priority mux
 
-        -- should we use a PrimPriMux?
+        -- should we use a priority mux?
         -- Old decision: If any rule Id is not in the order map, then it
         --   must be a read method, and we can assume that the scheduler
         --   has taken care to only enable one unique use at a time, so
-        --   PrimMux is sufficient.  For all other cases (rules and
-        --   action methods), use PrimPriMux.
+        --   a parallel mux is sufficient.  For all other cases (rules and
+        --   action methods), use a priority mux.
         -- New decision: We can do better for rules and action methods by
-        --   only using PrimPriMux when some of the rules are not disjoint.
+        --   only using a priority mux when some of the rules are not disjoint.
         --   (If exclusive_rules_db says all the rules are disjoint, no pri
         --   mux is needed.)  Note that we even do this check for read
         --   methods (to be safe), even though we could have continued to
@@ -1201,7 +1201,7 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         -- any new defs (because we want to give the return expr a name)
 
         mkArg :: (Integer, (AExpr, AExpr, Maybe [ARuleId])) ->
-                 ([AExpr], [ADef])
+                 ([(AExpr, AExpr)], [ADef])
         mkArg (n, (e, _, mrs)) =
             let suffix = use2suffix n mrs
                 val_type = ae_type e
@@ -1210,8 +1210,8 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
                   Nothing -> []
                   Just rs -> map DefP_Rule rs
             in
-                ([ASDef aTBool (selId suffix),
-                  ASDef val_type val_id],
+                ([(ASDef aTBool (selId suffix),
+                   ASDef val_type val_id)],
                  [ADef val_id val_type e props])
 
         -- ---------------
@@ -1239,7 +1239,7 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
 
         -- ---------------
         -- Function to put the muxed arguments in priority order
-        -- (if we make a PrimPriMux, it will expect arguments in pri order)
+        -- (a priority mux expects its arms in priority order)
 
         -- If an arm is found to be used by multiple rules, then we need
         -- to separate it into different arms, so that each rule's arm
@@ -1265,9 +1265,9 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
                            then order ers
                            else ers
 
-        -- PrimMux takes a list of pairs of the selector ASDef and the
-        -- expr that should result
-        -- mux_pairs = the pairs, val_defs = the new Id defs for the vals
+        -- The mux's arms: the selector ASDef and the expr that should
+        -- result
+        -- mux_pairs = the arms, val_defs = the new Id defs for the vals
         (mux_pairs, val_defs) = concatUnzipMap mkArg ers'
         default_pair = mkDefaultPair t mux_pairs
         -- The new Id defs for the mux selector control signals
@@ -1279,8 +1279,8 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         -- The new def for the result of the mux
         -- default_pair is an explicit default conditions for the mux ASAny
         out_def :: ADef
-        out_def = ADef i t (APrim i t
-                               (if usePri then PrimPriMux else PrimMux)
+        out_def = ADef i t (AMux i t
+                               (if usePri then AMuxPriority else AMuxParallel)
                                (mux_pairs ++ default_pair) ) []
 
         -- The uses used in predicates (should not be > 1)
@@ -1297,9 +1297,9 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
 mkEmux _ _ _ _ _ _ _ _ _ = internalError "mkEMux"
 
 -- create a default expresson for a mux from the conditions
-mkDefaultPair :: AType -> [AExpr] -> [AExpr]
-mkDefaultPair t aexprs = [APrim  defaultAId (ATBit 1) PrimBNot [orCond] , ASAny t]
-    where (conds,_) = unzip $ makePairs aexprs
+mkDefaultPair :: AType -> [(AExpr, AExpr)] -> [(AExpr, AExpr)]
+mkDefaultPair t arms = [(APrim  defaultAId (ATBit 1) PrimBNot [orCond] , ASAny t)]
+    where (conds,_) = unzip arms
           orCond = aOrs conds
 
 -- ==============================

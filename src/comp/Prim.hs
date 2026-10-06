@@ -1,6 +1,15 @@
-{-# LANGUAGE TypeSynonymInstances, FlexibleInstances, DeriveDataTypeable #-}
+{-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE DataKinds, GADTs, KindSignatures, StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 module Prim(
+            -- the compilation-phase kind that PrimOp, IExpr and the
+            -- rest of ISyntax are indexed by (re-exported by ISyntax)
+            Binders(..), Evald(..), Phase(..),
+            PreElab, Elab, PostElab, BinderPhase, EvaldPhase,
             PrimOp(..),
+            primOpCode, primOpFromCode, allPrimOps, primOpAnyPhase,
+            primMuxCode, primPriMuxCode, retiredPrimOpCodes,
             toPrim,
             toWString,
             stringSize,
@@ -19,325 +28,528 @@ import RealUtil hiding (log2, log10)
 import qualified RealUtil as R (log2,log10)
 import ErrorUtil(internalError)
 import Error(ErrMsg(..))
-import qualified Data.Generics as Generic
+import PrimTH(primOpTables)
 
-data PrimOp =
-          PrimAdd
-        | PrimSub
-        | PrimAnd
-        | PrimOr
-        | PrimXor
+-- ==============================
+-- The compilation-phase kind
+--
+-- An IExpr (and everything built from IExprs: IDef, IModule, IPackage,
+-- IStateVar, Pred, ...) is indexed by the phase of compilation it
+-- belongs to, and each constructor is restricted to the phases where it
+-- can occur.  The index is a pair of axes rather than a flat enumeration
+-- so that every restriction is a (partially) refined return type: GHC
+-- stores nothing for those, whereas a constraint in a constructor's
+-- context is an evidence field in every node.
+--   Binders: may ILam/IVar/ILAM (and the pre-elaboration IConInfo
+--            variants) occur?  Yes until the evaluator's rebuild (pDef).
+--   Evald:   may the evaluator-made variants (instances, ports, module
+--            definitions) occur?  Yes from the evaluator onwards.
+-- The kind is declared here, in the lowest module whose type is indexed
+-- by it (a PrimOp is the payload of ISyntax's ICPrim); ISyntax
+-- re-exports it with the KnownPhase class, so the rest of the compiler
+-- imports the phases from ISyntax as before.
+data Binders = WithBinders | NoBinders
+data Evald = Unevaluated | Evaluated
+data Phase = Ph Binders Evald
 
-        | PrimMul
+-- The three phases that are inhabited:
+--   PreElab:  IConv's output, the .bo contents, LiftDicts, FixupDefs,
+--             ISimpDicts, ISimplify and the readers (bluetcl, dumpbo)
+--   Elab:     inside the evaluator (IExpand/IExpandUtils, HExpr); the
+--             only phase with heap references (IRefT, ArrayCell)
+--   PostElab: from pDef's rebuild of the heap to AConv
+-- ('Ph 'NoBinders 'Unevaluated is uninhabited.)
+type PreElab = 'Ph 'WithBinders 'Unevaluated
+type Elab = 'Ph 'WithBinders 'Evaluated
+type PostElab = 'Ph 'NoBinders 'Evaluated
 
-        | PrimQuot
-        | PrimRem
+-- The two half-axes, for code that is polymorphic over the other axis:
+--   BinderPhase e: PreElab or Elab (IConv's output, anything that builds
+--                  ILam/IVar/ILAM or the pre-elaboration constants)
+--   EvaldPhase b:  Elab or PostElab (the evaluator-made constants)
+type BinderPhase e = 'Ph 'WithBinders e
+type EvaldPhase b = 'Ph b 'Evaluated
 
-        | PrimSL
-        | PrimSRL
-        | PrimSRA
+-- ==============================
+-- PrimOp
+--
+-- A primitive operation, indexed by the phases in which an ICPrim
+-- holding it may occur: a constructor whose result type is `PrimOp p`
+-- exists at every phase, one whose result type is refined exists only
+-- at the phases it names.  (ICPrim :: PrimOp p -> IConInfo p, so the
+-- index of the primitive is the index of the node holding it.)
+--
+-- The constructors are declared in three sections, and the order
+-- within a section is deliberate: GHC gives the first six constructors
+-- of a type with more than seven a direct pointer tag, so the hottest
+-- six come first.  The declaration order is NOT the encoding order:
+-- the .bo and .ba files write a primitive as its code, assigned by the
+-- table at the end of this declaration, which keeps the encoding of
+-- every existing primitive fixed while the declaration is free to be
+-- arranged for the compiler.
+data PrimOp (p :: Phase) where
+        -- (1) The six most frequently dispatched primitives that also
+        -- survive to AConv, hottest first.  Dispatch counts over the
+        -- Sudoku, h264 and Flute elaborations (evalAp'/conAp'/walkNF/
+        -- hToDef/iTrAp/doPrimOp' scrutinies, 2026-10-06): PrimIf 17.6%,
+        -- PrimBNot 9.3%, PrimEQ 9.1%, PrimBAnd 8.2%, PrimBOr 4.1%,
+        -- PrimConcat 3.7% of all PrimOp scrutinies.
+        PrimIf :: PrimOp p
+        PrimBNot :: PrimOp p
+        PrimEQ :: PrimOp p
+        PrimBAnd :: PrimOp p
+        PrimBOr :: PrimOp p
+        PrimConcat :: PrimOp p
 
-        | PrimInv
-        | PrimNeg
+        -- (2) The other primitives that exist at every phase: the
+        -- hardware operations AConv converts, the action combinators
+        -- flatAction consumes, and the ones a pass after elaboration
+        -- still builds or consumes before AConv -- the four split
+        -- markers (ISplitIf builds PrimExpIf and asserts at its end that
+        -- no marker survives; ILift 262-266 re-wraps them, presumably
+        -- dead after ISplitIf) and PrimFmtConcat (the Prelude's Fmt
+        -- concatenation, which the evaluator leaves in normal form and
+        -- IInlineFmt consumes).  Those five are gone by AConv by a
+        -- runtime check, not by type.  (The two muxes AState and AOpt
+        -- build after AConv are not primitives: ASyntax's AMux; their
+        -- former codes, 32 and 33, are retired below.)
+        PrimAdd :: PrimOp p
+        PrimSub :: PrimOp p
+        PrimAnd :: PrimOp p
+        PrimOr :: PrimOp p
+        PrimXor :: PrimOp p
 
-        | PrimEQ
+        PrimMul :: PrimOp p
 
-        | PrimULE
-        | PrimULT
+        PrimQuot :: PrimOp p
+        PrimRem :: PrimOp p
 
-        | PrimSLE
-        | PrimSLT
+        PrimSL :: PrimOp p
+        PrimSRL :: PrimOp p
+        PrimSRA :: PrimOp p
 
-        | PrimSignExt
-        | PrimZeroExt
+        PrimInv :: PrimOp p
+        PrimNeg :: PrimOp p
 
-        | PrimTrunc
+        PrimULE :: PrimOp p
+        PrimULT :: PrimOp p
 
-        | PrimExtract
-        | PrimConcat
-        | PrimSplit
+        PrimSLE :: PrimOp p
+        PrimSLT :: PrimOp p
 
-        | PrimBNot
-        | PrimBAnd
-        | PrimBOr
+        PrimSignExt :: PrimOp p
+        PrimZeroExt :: PrimOp p
 
-        | PrimInoutCast
-        | PrimInoutUncast
+        PrimTrunc :: PrimOp p
 
-        | PrimMethod
-        | PrimNoInline
+        PrimExtract :: PrimOp p
 
-        | PrimIf
-        | PrimMux
-        | PrimPriMux
-
-        | PrimFmtConcat
+        PrimFmtConcat :: PrimOp p  -- Prelude.bs primFmtConcat; consumed by IInlineFmt
 
         -- Only in ATS
         -- use: PrimCase e d c1 e1 c2 e2 ... cn en
         -- e is the scrutinized expression, d is the default value, (ck, ek) forms a case arm
-        | PrimCase
+        PrimCase :: PrimOp p
 
         -- Only used in intermediate code
         -- primSelect @k @m @n e  selects k bits at position m from n bits
         -- primSelect :: \/ k, m, n :: * -> Bit n -> Bit k
-        | PrimSelect
-
-        -- primitives without hardware representation
-        | PrimIntegerToBit
-        | PrimIntegerToUIntBits
-        | PrimIntegerToIntBits
-        | PrimBitToInteger -- XXX dangerous
-        | PrimIntegerToString
-
-        -- must be called on compile-time values
-        | PrimIntBitsToInteger
-        | PrimUIntBitsToInteger
-
-        | PrimIsStaticInteger
-        | PrimAreStaticBits
-
-        | PrimValueOf
-        | PrimStringOf
-
-        | PrimWhen
-        | PrimWhenPred -- takes abstract predicate
-
-        | PrimOrd
-        | PrimChr
+        PrimSelect :: PrimOp p
 
         -- primRange lo hi x, promises lo <= x <= hi
-        | PrimRange
+        PrimRange :: PrimOp p
 
-        | PrimError
-        | PrimGenerateError
-        | PrimMessage
-        | PrimWarning
-        | PrimPoisonedDef
+        PrimStringConcat :: PrimOp p
 
-        | PrimDynamicError
+        PrimJoinActions :: PrimOp p
+        PrimNoActions :: PrimOp p
+        PrimExpIf :: PrimOp p  -- "split shallow"
+        PrimNoExpIf :: PrimOp p  -- "nosplit shallow"
+        PrimSplitDeep :: PrimOp p
+        PrimNosplitDeep :: PrimOp p
+        PrimResetUnassertedVal :: PrimOp p
+        PrimArrayDynSelect :: PrimOp p
+        PrimBuildArray :: PrimOp p  -- only exists after IExpand and in ASyntax
 
-        | PrimStringConcat
-        | PrimStringToInteger
-        | PrimStringEQ
-        | PrimStringLT
-        | PrimStringLE
-        | PrimStringLength
+        PrimEQ3 :: PrimOp p  -- === / Verilog case equality
 
-        | PrimStringSplit
-        | PrimStringCons
+        -- The Bool <-> Bit 1 coercions.  Elaboration folds them (a nullary
+        -- constructor is PrimChr of its tag), but LambdaCalcUtil builds
+        -- them again after AConv, as the casts its type repair inserts
+        -- for the SAL and lambda-calculus dumps, which consume them; a
+        -- cast of their own there would make these elaboration-only.
+        PrimOrd :: PrimOp p
+        PrimChr :: PrimOp p
 
-        | PrimCharToString
-        | PrimStringToChar
-        | PrimCharOrd
-        | PrimCharChr
 
-        | PrimJoinActions
-        | PrimNoActions
-        | PrimExpIf     -- "split shallow"
-        | PrimNoExpIf   -- "nosplit shallow"
-        | PrimSplitDeep
-        | PrimNosplitDeep
-        | PrimAddRules
-        | PrimModuleBind
-        | PrimModuleReturn
-        | PrimModuleFix
-        | PrimModuleClock
-        | PrimModuleReset
-        | PrimBuildModule
-        | PrimCurrentClock
-        | PrimCurrentReset
-        | PrimSameFamilyClock
-        | PrimIsAncestorClock
-        | PrimChkClockDomain
-        | PrimClockEQ
-        | PrimClockOf
-        | PrimClocksOf
-        | PrimNoClock
-        | PrimResetEQ
-        | PrimResetOf
-        | PrimResetsOf
-        | PrimNoReset
-        | PrimResetUnassertedVal
-        | PrimJoinRules
-        | PrimJoinRulesPreempt
-        | PrimJoinRulesUrgency
-        | PrimJoinRulesExecutionOrder
-        | PrimJoinRulesMutuallyExclusive
-        | PrimJoinRulesConflictFree
-        | PrimNoRules
-        | PrimRule
+        -- (3) The primitives of elaboration only: folded by the
+        -- evaluator (IPrims.doPrimOp', IExpand.conAp') or consumed by
+        -- it (lists, strings, characters, Integer and Real arithmetic,
+        -- names, positions, types, modules, rules, clock and reset
+        -- queries, handles, when, poison, errors, arrays, pack/unpack).
+        -- PrimSplit never reaches the evaluator at all (IConv rewrites
+        -- a saturated primSplit to two selects) and PrimDynamicError
+        -- has no use; both stay for the Prelude's declarations.
+        PrimSplit :: PrimOp ('Ph 'WithBinders e)
+
+        PrimInoutCast :: PrimOp ('Ph 'WithBinders e)
+        PrimInoutUncast :: PrimOp ('Ph 'WithBinders e)
+
+        PrimMethod :: PrimOp ('Ph 'WithBinders e)
+        PrimNoInline :: PrimOp ('Ph 'WithBinders e)
+
+        -- primitives without hardware representation
+        PrimIntegerToBit :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerToUIntBits :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerToIntBits :: PrimOp ('Ph 'WithBinders e)
+        PrimBitToInteger :: PrimOp ('Ph 'WithBinders e)  -- XXX dangerous
+        PrimIntegerToString :: PrimOp ('Ph 'WithBinders e)
+
+        -- must be called on compile-time values
+        PrimIntBitsToInteger :: PrimOp ('Ph 'WithBinders e)
+        PrimUIntBitsToInteger :: PrimOp ('Ph 'WithBinders e)
+
+        PrimIsStaticInteger :: PrimOp ('Ph 'WithBinders e)
+        PrimAreStaticBits :: PrimOp ('Ph 'WithBinders e)
+
+        PrimValueOf :: PrimOp ('Ph 'WithBinders e)
+        PrimStringOf :: PrimOp ('Ph 'WithBinders e)
+
+        PrimWhen :: PrimOp ('Ph 'WithBinders e)
+        PrimWhenPred :: PrimOp ('Ph 'WithBinders e)  -- takes abstract predicate
+
+        PrimError :: PrimOp ('Ph 'WithBinders e)
+        PrimGenerateError :: PrimOp ('Ph 'WithBinders e)
+        PrimMessage :: PrimOp ('Ph 'WithBinders e)
+        PrimWarning :: PrimOp ('Ph 'WithBinders e)
+        PrimPoisonedDef :: PrimOp ('Ph 'WithBinders e)
+
+        PrimDynamicError :: PrimOp ('Ph 'WithBinders e)
+        PrimStringToInteger :: PrimOp ('Ph 'WithBinders e)
+        PrimStringEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimStringLT :: PrimOp ('Ph 'WithBinders e)
+        PrimStringLE :: PrimOp ('Ph 'WithBinders e)
+        PrimStringLength :: PrimOp ('Ph 'WithBinders e)
+
+        PrimStringSplit :: PrimOp ('Ph 'WithBinders e)
+        PrimStringCons :: PrimOp ('Ph 'WithBinders e)
+
+        PrimCharToString :: PrimOp ('Ph 'WithBinders e)
+        PrimStringToChar :: PrimOp ('Ph 'WithBinders e)
+        PrimCharOrd :: PrimOp ('Ph 'WithBinders e)
+        PrimCharChr :: PrimOp ('Ph 'WithBinders e)
+        PrimAddRules :: PrimOp ('Ph 'WithBinders e)
+        PrimModuleBind :: PrimOp ('Ph 'WithBinders e)
+        PrimModuleReturn :: PrimOp ('Ph 'WithBinders e)
+        PrimModuleFix :: PrimOp ('Ph 'WithBinders e)
+        PrimModuleClock :: PrimOp ('Ph 'WithBinders e)
+        PrimModuleReset :: PrimOp ('Ph 'WithBinders e)
+        PrimBuildModule :: PrimOp ('Ph 'WithBinders e)
+        PrimCurrentClock :: PrimOp ('Ph 'WithBinders e)
+        PrimCurrentReset :: PrimOp ('Ph 'WithBinders e)
+        PrimSameFamilyClock :: PrimOp ('Ph 'WithBinders e)
+        PrimIsAncestorClock :: PrimOp ('Ph 'WithBinders e)
+        PrimChkClockDomain :: PrimOp ('Ph 'WithBinders e)
+        PrimClockEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimClockOf :: PrimOp ('Ph 'WithBinders e)
+        PrimClocksOf :: PrimOp ('Ph 'WithBinders e)
+        PrimNoClock :: PrimOp ('Ph 'WithBinders e)
+        PrimResetEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimResetOf :: PrimOp ('Ph 'WithBinders e)
+        PrimResetsOf :: PrimOp ('Ph 'WithBinders e)
+        PrimNoReset :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRules :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRulesPreempt :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRulesUrgency :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRulesExecutionOrder :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRulesMutuallyExclusive :: PrimOp ('Ph 'WithBinders e)
+        PrimJoinRulesConflictFree :: PrimOp ('Ph 'WithBinders e)
+        PrimNoRules :: PrimOp ('Ph 'WithBinders e)
+        PrimRule :: PrimOp ('Ph 'WithBinders e)
+
         -- PrimAddSchedPragmas :: [SchedulePragma] -> Rules -> Rules
-        | PrimAddSchedPragmas
+        PrimAddSchedPragmas :: PrimOp ('Ph 'WithBinders e)
 
-        | PrimGetName
+        PrimGetName :: PrimOp ('Ph 'WithBinders e)
+
         -- primStateName :: Name -> Module b -> Module b
         -- This primitive is used to name state components.
         -- The first argument is an abstract name that is added to
         -- the names of state elements instantiated by the second argument.
-        | PrimStateName
-        | PrimGetModuleName
+        PrimStateName :: PrimOp ('Ph 'WithBinders e)
+        PrimGetModuleName :: PrimOp ('Ph 'WithBinders e)
 
-        | PrimJoinNames
-        | PrimExtendNameInteger
-        | PrimGetNamePosition
-        | PrimGetNameString
-        | PrimMakeName
+        PrimJoinNames :: PrimOp ('Ph 'WithBinders e)
+        PrimExtendNameInteger :: PrimOp ('Ph 'WithBinders e)
+        PrimGetNamePosition :: PrimOp ('Ph 'WithBinders e)
+        PrimGetNameString :: PrimOp ('Ph 'WithBinders e)
+        PrimMakeName :: PrimOp ('Ph 'WithBinders e)
 
         -- primStateAttrib :: Attributes -> Module b -> Module b
         -- This primitive is used to add attributes to submod instantiations.
         -- The first argument is an abstract list of attributes.
-        | PrimStateAttrib
+        PrimStateAttrib :: PrimOp ('Ph 'WithBinders e)
 
-        | PrimNoPosition
-        | PrimPrintPosition
-        | PrimGetStringPosition
-        | PrimSetStringPosition
-        | PrimGetEvalPosition
+        PrimNoPosition :: PrimOp ('Ph 'WithBinders e)
+        PrimPrintPosition :: PrimOp ('Ph 'WithBinders e)
+        PrimGetStringPosition :: PrimOp ('Ph 'WithBinders e)
+        PrimSetStringPosition :: PrimOp ('Ph 'WithBinders e)
+        PrimGetEvalPosition :: PrimOp ('Ph 'WithBinders e)
 
         -- environment
-        | PrimGenC
-        | PrimGenVerilog
-        | PrimGenModuleName
+        PrimGenC :: PrimOp ('Ph 'WithBinders e)
+        PrimGenVerilog :: PrimOp ('Ph 'WithBinders e)
+        PrimGenModuleName :: PrimOp ('Ph 'WithBinders e)
 
         -- elaboration-time file IO
-        | PrimOpenFile
-        | PrimCloseHandle
-        | PrimHandleIsEOF
-        | PrimHandleIsOpen
-        | PrimHandleIsClosed
-        | PrimHandleIsReadable
-        | PrimHandleIsWritable
-        | PrimSetHandleBuffering
-        | PrimGetHandleBuffering
-        | PrimFlushHandle
-        | PrimWriteHandle
-        | PrimReadHandleLine
-        | PrimReadHandleChar
+        PrimOpenFile :: PrimOp ('Ph 'WithBinders e)
+        PrimCloseHandle :: PrimOp ('Ph 'WithBinders e)
+        PrimHandleIsEOF :: PrimOp ('Ph 'WithBinders e)
+        PrimHandleIsOpen :: PrimOp ('Ph 'WithBinders e)
+        PrimHandleIsClosed :: PrimOp ('Ph 'WithBinders e)
+        PrimHandleIsReadable :: PrimOp ('Ph 'WithBinders e)
+        PrimHandleIsWritable :: PrimOp ('Ph 'WithBinders e)
+        PrimSetHandleBuffering :: PrimOp ('Ph 'WithBinders e)
+        PrimGetHandleBuffering :: PrimOp ('Ph 'WithBinders e)
+        PrimFlushHandle :: PrimOp ('Ph 'WithBinders e)
+        PrimWriteHandle :: PrimOp ('Ph 'WithBinders e)
+        PrimReadHandleLine :: PrimOp ('Ph 'WithBinders e)
+        PrimReadHandleChar :: PrimOp ('Ph 'WithBinders e)
 
         -- reflective type primitives
-        | PrimTypeOf
-        | PrimPrintType
-        | PrimTypeEQ
-        | PrimIsIfcType
+        PrimTypeOf :: PrimOp ('Ph 'WithBinders e)
+        PrimPrintType :: PrimOp ('Ph 'WithBinders e)
+        PrimTypeEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimIsIfcType :: PrimOp ('Ph 'WithBinders e)
 
         -- type-tracking primitive
-        | PrimSavePortType
+        PrimSavePortType :: PrimOp ('Ph 'WithBinders e)
 
         -- compile time numbers
-        | PrimIntegerAdd
-        | PrimIntegerSub
-        | PrimIntegerNeg
-        | PrimIntegerMul
-        | PrimIntegerDiv
-        | PrimIntegerMod
-        | PrimIntegerExp
-        | PrimIntegerLog2
-        | PrimIntegerLog10
-        | PrimIntegerQuot
-        | PrimIntegerRem
+        PrimIntegerAdd :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerSub :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerNeg :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerMul :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerDiv :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerMod :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerExp :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerLog2 :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerLog10 :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerQuot :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerRem :: PrimOp ('Ph 'WithBinders e)
 
-        | PrimIntegerEQ
-        | PrimIntegerLE
-        | PrimIntegerLT
+        PrimIntegerEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerLE :: PrimOp ('Ph 'WithBinders e)
+        PrimIntegerLT :: PrimOp ('Ph 'WithBinders e)
 
         -- Real numbers: Show
-        | PrimRealToString
+        PrimRealToString :: PrimOp ('Ph 'WithBinders e)
+
         -- Real numbers: Literal
-        | PrimIntegerToReal
+        PrimIntegerToReal :: PrimOp ('Ph 'WithBinders e)
+
         -- Real numbers: Eq and Ord
-        | PrimRealEQ
-        | PrimRealLE
-        | PrimRealLT
+        PrimRealEQ :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLE :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLT :: PrimOp ('Ph 'WithBinders e)
+
         -- Real numbers: Arith
-        | PrimRealAdd
-        | PrimRealSub
-        | PrimRealNeg
-        | PrimRealMul
-        | PrimRealDiv
-        | PrimRealAbs
-        | PrimRealSignum
-        | PrimRealExpE
-        | PrimRealPow
-        | PrimRealLogE
-        | PrimRealLogBase
-        | PrimRealLog2
-        | PrimRealLog10
+        PrimRealAdd :: PrimOp ('Ph 'WithBinders e)
+        PrimRealSub :: PrimOp ('Ph 'WithBinders e)
+        PrimRealNeg :: PrimOp ('Ph 'WithBinders e)
+        PrimRealMul :: PrimOp ('Ph 'WithBinders e)
+        PrimRealDiv :: PrimOp ('Ph 'WithBinders e)
+        PrimRealAbs :: PrimOp ('Ph 'WithBinders e)
+        PrimRealSignum :: PrimOp ('Ph 'WithBinders e)
+        PrimRealExpE :: PrimOp ('Ph 'WithBinders e)
+        PrimRealPow :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLogE :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLogBase :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLog2 :: PrimOp ('Ph 'WithBinders e)
+        PrimRealLog10 :: PrimOp ('Ph 'WithBinders e)
+
         -- Real numbers: Bits
-        | PrimRealToBits
-        | PrimBitsToReal
+        PrimRealToBits :: PrimOp ('Ph 'WithBinders e)
+        PrimBitsToReal :: PrimOp ('Ph 'WithBinders e)
+
         -- Real numbers: Trig
-        | PrimRealSin
-        | PrimRealCos
-        | PrimRealTan
-        | PrimRealSinH
-        | PrimRealCosH
-        | PrimRealTanH
-        | PrimRealASin
-        | PrimRealACos
-        | PrimRealATan
-        | PrimRealASinH
-        | PrimRealACosH
-        | PrimRealATanH
-        | PrimRealATan2
+        PrimRealSin :: PrimOp ('Ph 'WithBinders e)
+        PrimRealCos :: PrimOp ('Ph 'WithBinders e)
+        PrimRealTan :: PrimOp ('Ph 'WithBinders e)
+        PrimRealSinH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealCosH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealTanH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealASin :: PrimOp ('Ph 'WithBinders e)
+        PrimRealACos :: PrimOp ('Ph 'WithBinders e)
+        PrimRealATan :: PrimOp ('Ph 'WithBinders e)
+        PrimRealASinH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealACosH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealATanH :: PrimOp ('Ph 'WithBinders e)
+        PrimRealATan2 :: PrimOp ('Ph 'WithBinders e)
+
         -- Real numbers: Sqrt
-        | PrimRealSqrt
+        PrimRealSqrt :: PrimOp ('Ph 'WithBinders e)
+
         -- Real numbers: Rounding
-        | PrimRealTrunc
-        | PrimRealCeil
-        | PrimRealFloor
-        | PrimRealRound
+        PrimRealTrunc :: PrimOp ('Ph 'WithBinders e)
+        PrimRealCeil :: PrimOp ('Ph 'WithBinders e)
+        PrimRealFloor :: PrimOp ('Ph 'WithBinders e)
+        PrimRealRound :: PrimOp ('Ph 'WithBinders e)
+
         -- Real numbers: Introspection
-        | PrimSplitReal
-        | PrimDecodeReal
-        | PrimRealToDigits
-        | PrimRealIsInfinite
-        | PrimRealIsNegativeZero
+        PrimSplitReal :: PrimOp ('Ph 'WithBinders e)
+        PrimDecodeReal :: PrimOp ('Ph 'WithBinders e)
+        PrimRealToDigits :: PrimOp ('Ph 'WithBinders e)
+        PrimRealIsInfinite :: PrimOp ('Ph 'WithBinders e)
+        PrimRealIsNegativeZero :: PrimOp ('Ph 'WithBinders e)
 
-        | PrimSeq        -- args are eval in sequence
-                        -- for side effects or strictness
-        | PrimSeqCond   -- implicit-condition strictness
-        | PrimUninitialized
-        | PrimRawUninitialized -- error out with a use of an uninitialized value
-        | PrimMarkArrayUninitialized -- mark array as uninitialized
-        | PrimMarkArrayInitialized -- mark array as initialized
-        | PrimUninitBitArray -- make an array of uninitialized bits
-        | PrimIsBitArray -- is this Bit n represented as an array
-        | PrimUpdateBitArray
-        | PrimBuildUndefined -- build a type-appropriate undefined value
-        | PrimRawUndefined -- create a "raw" undefined value
-        | PrimIsRawUndefined -- test if a value is a "raw" undefined value
-        | PrimImpCondOf -- XXX experimental
-        | PrimArrayNew  -- Primitive array operators
-        | PrimArrayLength
-        | PrimArraySelect
-        | PrimArrayUpdate
-        | PrimArrayDynSelect
-        | PrimArrayDynUpdate
-        | PrimBuildArray -- only exists after IExpand and in ASyntax
+        PrimSeq :: PrimOp ('Ph 'WithBinders e)  -- args are eval in sequence
+                             -- for side effects or strictness
+        PrimSeqCond :: PrimOp ('Ph 'WithBinders e)  -- implicit-condition strictness
+        PrimUninitialized :: PrimOp ('Ph 'WithBinders e)
+        PrimRawUninitialized :: PrimOp ('Ph 'WithBinders e)  -- error out with a use of an uninitialized value
+        PrimMarkArrayUninitialized :: PrimOp ('Ph 'WithBinders e)  -- mark array as uninitialized
+        PrimMarkArrayInitialized :: PrimOp ('Ph 'WithBinders e)  -- mark array as initialized
+        PrimUninitBitArray :: PrimOp ('Ph 'WithBinders e)  -- make an array of uninitialized bits
+        PrimIsBitArray :: PrimOp ('Ph 'WithBinders e)  -- is this Bit n represented as an array
+        PrimUpdateBitArray :: PrimOp ('Ph 'WithBinders e)
+        PrimBuildUndefined :: PrimOp ('Ph 'WithBinders e)  -- build a type-appropriate undefined value
+        PrimRawUndefined :: PrimOp ('Ph 'WithBinders e)  -- create a "raw" undefined value
+        PrimIsRawUndefined :: PrimOp ('Ph 'WithBinders e)  -- test if a value is a "raw" undefined value
+        PrimImpCondOf :: PrimOp ('Ph 'WithBinders e)  -- XXX experimental
+        PrimArrayNew :: PrimOp ('Ph 'WithBinders e)  -- Primitive array operators
+        PrimArrayLength :: PrimOp ('Ph 'WithBinders e)
+        PrimArraySelect :: PrimOp ('Ph 'WithBinders e)
+        PrimArrayUpdate :: PrimOp ('Ph 'WithBinders e)
+        PrimArrayDynUpdate :: PrimOp ('Ph 'WithBinders e)
 
-        | PrimSetSelPosition
+        PrimSetSelPosition :: PrimOp ('Ph 'WithBinders e)
 
-        | PrimGetParamName -- get the parameter name associated with the function value
-
-        | PrimEQ3 -- === / Verilog case equality
+        PrimGetParamName :: PrimOp ('Ph 'WithBinders e)  -- get the parameter name associated with the function value
 
         -- implicit Bits pack/unpack coercions; the Prelude wrappers
         -- (Prelude.pack/Prelude.unpack) apply these to the Bits dictionary,
         -- and the evaluator unfolds them to the corresponding class method.
         -- They never survive past IExpand.
-        -- NB: .bo files encode PrimOp via fromEnum (see writePrimOp below),
-        -- so any change to this enum requires bumping the .bo format tag
-        -- (GenBin.header).
-        | PrimPack
-        | PrimUnpack
-        deriving (Eq, Ord, Show, Enum, Bounded, Generic.Data, Generic.Typeable)
+        PrimPack :: PrimOp ('Ph 'WithBinders e)
+        PrimUnpack :: PrimOp ('Ph 'WithBinders e)
+
+
+-- The code tables, generated by Template Haskell (the first use of it
+-- in this repository) from the declaration above and the list below:
+--
+--   primOpCode     :: PrimOp p -> Int       the code a file writes
+--   primOpFromCode :: Int -> PrimOp PreElab the primitive a .bo reads
+--   allPrimOps     :: [PrimOp PreElab]      every primitive, code order
+--   primOpAnyPhase :: PrimOp p -> Maybe (PrimOp q)
+--                     the same primitive at another phase, when it
+--                     exists at every phase (Nothing for one declared
+--                     at the binder phases only; the evaluator's rebuild
+--                     and the .ba reader refuse those)
+--   primMuxCode, primPriMuxCode :: Int
+--                     the retired codes (one binding per retired entry)
+--   retiredPrimOpCodes :: [(Int, String)]
+--                     the retired codes with their former names
+--
+-- The list is the encoding: a primitive's code is its position, and
+-- the positions are those of the `deriving Enum` the type had before
+-- it was indexed, so the .bo and .ba bytes are unchanged.  A new
+-- primitive goes at the END of the list, with the .bo and .ba format
+-- tags bumped (GenBin.header, GenABin.header); a removed one keeps its
+-- entry, named in the retired list, so later codes do not shift.  The
+-- splice reifies the type and refuses to compile when a constructor
+-- has no entry, an entry has no constructor, or a name repeats, so the
+-- table cannot drift from the declaration.
+--
+-- Why generated: with the declaration arranged for the compiler, the
+-- two directions of a 224-entry table would otherwise be hand-written
+-- twice and checked by nothing.  If a build cannot run a splice (a
+-- cross-compiler, or a profiling build without the non-profiled
+-- objects or -fexternal-interpreter), the fallback is to paste the
+-- generated declarations (ghc -ddump-splices) into a PrimCodes.hs and
+-- import it here in place of the splice.
+$(primOpTables ''PrimOp ''PreElab
+  [
+    "PrimAdd", "PrimSub", "PrimAnd", "PrimOr",
+    "PrimXor", "PrimMul", "PrimQuot", "PrimRem",
+    "PrimSL", "PrimSRL", "PrimSRA", "PrimInv",
+    "PrimNeg", "PrimEQ", "PrimULE", "PrimULT",
+    "PrimSLE", "PrimSLT", "PrimSignExt", "PrimZeroExt",
+    "PrimTrunc", "PrimExtract", "PrimConcat", "PrimSplit",
+    "PrimBNot", "PrimBAnd", "PrimBOr", "PrimInoutCast",
+    "PrimInoutUncast", "PrimMethod", "PrimNoInline", "PrimIf",
+    "PrimMux", "PrimPriMux", "PrimFmtConcat", "PrimCase",
+    "PrimSelect", "PrimIntegerToBit", "PrimIntegerToUIntBits", "PrimIntegerToIntBits",
+    "PrimBitToInteger", "PrimIntegerToString", "PrimIntBitsToInteger", "PrimUIntBitsToInteger",
+    "PrimIsStaticInteger", "PrimAreStaticBits", "PrimValueOf", "PrimStringOf",
+    "PrimWhen", "PrimWhenPred", "PrimOrd", "PrimChr",
+    "PrimRange", "PrimError", "PrimGenerateError", "PrimMessage",
+    "PrimWarning", "PrimPoisonedDef", "PrimDynamicError", "PrimStringConcat",
+    "PrimStringToInteger", "PrimStringEQ", "PrimStringLT", "PrimStringLE",
+    "PrimStringLength", "PrimStringSplit", "PrimStringCons", "PrimCharToString",
+    "PrimStringToChar", "PrimCharOrd", "PrimCharChr", "PrimJoinActions",
+    "PrimNoActions", "PrimExpIf", "PrimNoExpIf", "PrimSplitDeep",
+    "PrimNosplitDeep", "PrimAddRules", "PrimModuleBind", "PrimModuleReturn",
+    "PrimModuleFix", "PrimModuleClock", "PrimModuleReset", "PrimBuildModule",
+    "PrimCurrentClock", "PrimCurrentReset", "PrimSameFamilyClock", "PrimIsAncestorClock",
+    "PrimChkClockDomain", "PrimClockEQ", "PrimClockOf", "PrimClocksOf",
+    "PrimNoClock", "PrimResetEQ", "PrimResetOf", "PrimResetsOf",
+    "PrimNoReset", "PrimResetUnassertedVal", "PrimJoinRules", "PrimJoinRulesPreempt",
+    "PrimJoinRulesUrgency", "PrimJoinRulesExecutionOrder", "PrimJoinRulesMutuallyExclusive", "PrimJoinRulesConflictFree",
+    "PrimNoRules", "PrimRule", "PrimAddSchedPragmas", "PrimGetName",
+    "PrimStateName", "PrimGetModuleName", "PrimJoinNames", "PrimExtendNameInteger",
+    "PrimGetNamePosition", "PrimGetNameString", "PrimMakeName", "PrimStateAttrib",
+    "PrimNoPosition", "PrimPrintPosition", "PrimGetStringPosition", "PrimSetStringPosition",
+    "PrimGetEvalPosition", "PrimGenC", "PrimGenVerilog", "PrimGenModuleName",
+    "PrimOpenFile", "PrimCloseHandle", "PrimHandleIsEOF", "PrimHandleIsOpen",
+    "PrimHandleIsClosed", "PrimHandleIsReadable", "PrimHandleIsWritable", "PrimSetHandleBuffering",
+    "PrimGetHandleBuffering", "PrimFlushHandle", "PrimWriteHandle", "PrimReadHandleLine",
+    "PrimReadHandleChar", "PrimTypeOf", "PrimPrintType", "PrimTypeEQ",
+    "PrimIsIfcType", "PrimSavePortType", "PrimIntegerAdd", "PrimIntegerSub",
+    "PrimIntegerNeg", "PrimIntegerMul", "PrimIntegerDiv", "PrimIntegerMod",
+    "PrimIntegerExp", "PrimIntegerLog2", "PrimIntegerLog10", "PrimIntegerQuot",
+    "PrimIntegerRem", "PrimIntegerEQ", "PrimIntegerLE", "PrimIntegerLT",
+    "PrimRealToString", "PrimIntegerToReal", "PrimRealEQ", "PrimRealLE",
+    "PrimRealLT", "PrimRealAdd", "PrimRealSub", "PrimRealNeg",
+    "PrimRealMul", "PrimRealDiv", "PrimRealAbs", "PrimRealSignum",
+    "PrimRealExpE", "PrimRealPow", "PrimRealLogE", "PrimRealLogBase",
+    "PrimRealLog2", "PrimRealLog10", "PrimRealToBits", "PrimBitsToReal",
+    "PrimRealSin", "PrimRealCos", "PrimRealTan", "PrimRealSinH",
+    "PrimRealCosH", "PrimRealTanH", "PrimRealASin", "PrimRealACos",
+    "PrimRealATan", "PrimRealASinH", "PrimRealACosH", "PrimRealATanH",
+    "PrimRealATan2", "PrimRealSqrt", "PrimRealTrunc", "PrimRealCeil",
+    "PrimRealFloor", "PrimRealRound", "PrimSplitReal", "PrimDecodeReal",
+    "PrimRealToDigits", "PrimRealIsInfinite", "PrimRealIsNegativeZero", "PrimSeq",
+    "PrimSeqCond", "PrimUninitialized", "PrimRawUninitialized", "PrimMarkArrayUninitialized",
+    "PrimMarkArrayInitialized", "PrimUninitBitArray", "PrimIsBitArray", "PrimUpdateBitArray",
+    "PrimBuildUndefined", "PrimRawUndefined", "PrimIsRawUndefined", "PrimImpCondOf",
+    "PrimArrayNew", "PrimArrayLength", "PrimArraySelect", "PrimArrayUpdate",
+    "PrimArrayDynSelect", "PrimArrayDynUpdate", "PrimBuildArray", "PrimSetSelPosition",
+    "PrimGetParamName", "PrimEQ3", "PrimPack", "PrimUnpack"
+  ]
+  -- retired: the muxes, now ASyntax's AMux (AMuxParallel was PrimMux,
+  -- AMuxPriority PrimPriMux); BinData writes a mux with the retired code
+  -- so that a .ba holding one would be byte-identical, and reads it back
+  [ ("PrimMux", "primMuxCode"), ("PrimPriMux", "primPriMuxCode") ])
+
+-- Equality and order are by code, which is the order of the enum the
+-- type derived them from before it was indexed: the Map and Set
+-- iteration orders that key on an expression holding a primitive are
+-- unchanged, whatever the declaration order above.
+instance Eq (PrimOp p) where
+    a == b = primOpCode a == primOpCode b
+
+instance Ord (PrimOp p) where
+    compare a b = compare (primOpCode a) (primOpCode b)
+
+deriving instance Show (PrimOp p)
+
 
 -- Just some size, have to be coordinated with Prelude.bs
 stringSize :: String -> Integer
 stringSize s = toInteger (8 * length s)        -- in bytes as bits
 
-toPrim :: Id -> PrimOp
+toPrim :: Id -> PrimOp (BinderPhase e)
 toPrim i = tp (getIdBaseString i)                -- XXXXX
   where tp "primAdd" = PrimAdd
         tp "primSub" = PrimSub
@@ -580,10 +792,10 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
         tp "primUnpack" = PrimUnpack
         tp s = internalError ("unknown primitive: " ++ s ++ " " ++ prPosition (getIdPosition i))
 
-instance PPrint PrimOp where
+instance PPrint (PrimOp p) where
     pPrint d p op = text (toString op)
 
-toString :: PrimOp -> String
+toString :: PrimOp p -> String
 toString PrimAdd = "+"
 toString PrimSub = "-"
 toString PrimAnd = "&"
@@ -625,7 +837,7 @@ toString PrimCurrentClock = "primCurrentClock"
 toString p = show p
 
 -- to name of wide-data operations
-toWString :: PrimOp -> String
+toWString :: PrimOp p -> String
 toWString PrimAdd = "add"
 toWString PrimSub = "sub"
 toWString PrimAnd = "and"
@@ -663,7 +875,7 @@ toWString PrimError = "_error"
 toWString PrimCurrentClock = "primCurrentClock"
 toWString p = show p
 
-instance NFData PrimOp where
+instance NFData (PrimOp p) where
     rnf PrimAdd = ()
     rnf PrimSub = ()
     rnf PrimAnd = ()
@@ -696,8 +908,6 @@ instance NFData PrimOp where
     rnf PrimMethod = ()
     rnf PrimNoInline = ()
     rnf PrimIf = ()
-    rnf PrimMux = ()
-    rnf PrimPriMux = ()
     rnf PrimFmtConcat = ()
     rnf PrimCase = ()
     rnf PrimSelect = ()
@@ -891,13 +1101,19 @@ instance NFData PrimOp where
 
 -----
 
--- For writing and readin PrimOp to a file
+-- The .ba encoding of a primitive (BinData's Bin instance): the code,
+-- read back at PostElab.  The .bo (GenBin) uses primOpCode and
+-- primOpFromCode directly, at PreElab, where every code is a primitive.
 
-writePrimOp :: PrimOp -> Int
-writePrimOp p = fromEnum p
+writePrimOp :: PrimOp p -> Int
+writePrimOp = primOpCode
 
-readPrimOp :: Int -> PrimOp
-readPrimOp n = toEnum n
+readPrimOp :: Int -> PrimOp PostElab
+readPrimOp n =
+    case primOpAnyPhase (primOpFromCode n) of
+      Just p -> p
+      Nothing -> internalError ("readPrimOp: an elaboration-only primitive " ++
+                                "in a .ba: " ++ show (primOpFromCode n))
 
 -- -------------------------------------------------------------------
 -- Routines for evaluating prim ops with constant arguments
@@ -927,7 +1143,7 @@ instance PPrint PrimArg where
 
 -- ----
 -- Primitives returning Integer
-evalPrimToInt :: PrimOp -> [Integer] -> [PrimArg] ->
+evalPrimToInt :: PrimOp p -> [Integer] -> [PrimArg] ->
                  Maybe (Either ErrMsg Integer)
 
 -- basic math on sized values
@@ -1066,7 +1282,7 @@ evalPrimToInt _ _ _ = no_answer
 
 -- ----
 -- Primitives returning Bool
-evalPrimToBool :: PrimOp -> [Integer] -> [PrimArg] ->
+evalPrimToBool :: PrimOp p -> [Integer] -> [PrimArg] ->
                   Maybe (Either ErrMsg Bool)
 
 -- relational operators on sized values
@@ -1102,7 +1318,7 @@ evalPrimToBool _ _ _ = no_answer
 
 -- ----
 -- Primitives returning Double
-evalPrimToDouble :: PrimOp -> [Integer] -> [PrimArg] ->
+evalPrimToDouble :: PrimOp p -> [Integer] -> [PrimArg] ->
                     Maybe (Either ErrMsg Double)
 
 evalPrimToDouble PrimIntegerToReal _ [I i1] = ans $ fromInteger i1
@@ -1183,7 +1399,7 @@ evalPrimToDouble _ _ _ = no_answer
 
 -- ----
 -- Double to String primitives
-evalPrimToString :: PrimOp -> [Integer] -> [PrimArg] ->
+evalPrimToString :: PrimOp p -> [Integer] -> [PrimArg] ->
                     Maybe (Either ErrMsg String)
 
 -- XXX PrimIntegerToString could go here, but it needs access to the base
@@ -1196,7 +1412,7 @@ evalPrimToString _ _ _ = no_answer
 
 -- ----
 -- Primitives returning (Integer, Double)
-evalPrimToIntDouble :: PrimOp -> [Integer] -> [PrimArg] ->
+evalPrimToIntDouble :: PrimOp p -> [Integer] -> [PrimArg] ->
                        Maybe (Either ErrMsg (Integer,Double))
 
 evalPrimToIntDouble PrimSplitReal _ [D d1] = ans $ properFraction d1
@@ -1207,7 +1423,7 @@ evalPrimToIntDouble _ _ _ = no_answer
 
 -- ----
 -- Primitives returning (Bool, Integer, Integer)
-evalPrimToBoolIntInt :: PrimOp -> [Integer] -> [PrimArg] ->
+evalPrimToBoolIntInt :: PrimOp p -> [Integer] -> [PrimArg] ->
                         Maybe (Either ErrMsg (Bool,Integer,Integer))
 
 evalPrimToBoolIntInt PrimDecodeReal _ [D d1] =
@@ -1222,7 +1438,7 @@ evalPrimToBoolIntInt _ _ _ = no_answer
 
 -- ----
 -- Primitives returning ([Integer], Integer)
-evalPrimToListIntInt :: PrimOp -> [Integer] -> [PrimArg] ->
+evalPrimToListIntInt :: PrimOp p -> [Integer] -> [PrimArg] ->
                         Maybe (Either ErrMsg ([Integer], Integer))
 
 evalPrimToListIntInt PrimRealToDigits _ [I i, D d] =
@@ -1238,7 +1454,7 @@ evalPrimToListIntInt _ _ _ = no_answer
 -- Typeclass to simplify evaluation of prim ops
 
 class PrimResult a where
-  primResult :: PrimOp -> [Integer] -> [PrimArg] -> Maybe (Either ErrMsg a)
+  primResult :: PrimOp p -> [Integer] -> [PrimArg] -> Maybe (Either ErrMsg a)
   -- default implementation is to return no_answer for everything
   primResult _ _ _ = no_answer
 

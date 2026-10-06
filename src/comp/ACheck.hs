@@ -192,13 +192,11 @@ chkAExpr e@(APrim _ t PrimIf (c:es)) =
     if all ((compatTypesWthStr t) . chkAExpr) es && chkAExpr c == aTBool
     then t
     else internalError ("chkAExpr: if " ++ ppReadable (e, t))
-chkAExpr e@(APrim _ t op es) | op == PrimPriMux || op == PrimMux =
-        if f es
+chkAExpr e@(AMux _ t _ arms) =
+        if all f arms
                 then t
                 else internalError ("chkAExpr: mux " ++ ppReadable t ++ ppReadable e)
-  where f [] = True
-        f (c:x:xs) = chkAExpr c == aTBool && compatTypesWthStr (chkAExpr x)  t && f xs
-        f _ = internalError "chkAExpr mux"
+  where f (c, x) = chkAExpr c == aTBool && compatTypesWthStr (chkAExpr x)  t
 -- XXX could check a little more
 chkAExpr e@(APrim _ t PrimCase (x:v:ces)) =
         if compatTypesWthStr (chkAExpr v) t && chk ces
@@ -242,9 +240,6 @@ chkAExpr e@(APrim _ ret_ty PrimArrayDynSelect es) =
                   else err
               _ -> err
         _ -> err
-chkAExpr e@(APrim _ ret_ty PrimArrayDynUpdate es) =
-  -- These should not exist after IExpand
-  internalError ("chkAExpr: array update: " ++ ppReadable e)
 {-
   let err = internalError ("chkAExpr: array update: " ++ ppReadable e)
   in  case es of
@@ -362,10 +357,10 @@ compatTypesWthStr (ATArray sz1 t1) (ATArray sz2 t2) = (sz1 == sz2) && (compatTyp
 compatTypesWthStr t1 t2                         = t1 == t2
 
 
-isRelOp :: PrimOp -> Bool
+isRelOp :: APrimOp -> Bool
 isRelOp p = p `elem` [ PrimEQ, PrimULE, PrimULT, PrimSLE, PrimSLT, PrimEQ3 ]
 
-isShift :: PrimOp -> Bool
+isShift :: APrimOp -> Bool
 isShift p = p `elem` [ PrimSL, PrimSRL, PrimSRA ]
 
 tracePP :: Show a => String -> a -> Bool -> Bool
@@ -428,6 +423,7 @@ checkUses ds is ps es = concatMap (checkUse ds is ps) es
 
 checkUse :: S.Set AId -> S.Set AId -> S.Set AId -> AExpr -> [AId]
 checkUse ds is ps (APrim _ _ _ es)     = checkUses ds is ps es
+checkUse ds is ps (AMux _ _ _ arms)    = checkUses ds is ps (aMuxArmExprs arms)
 checkUse ds is ps (AMethCall _ i m es) = checkUses ds is ps es  -- XXX check i and m ?
 checkUse ds is ps (AMethValue _ i m)   = [] -- XXX check i and m ?
 checkUse ds is ps (ATuple _ es)        = checkUses ds is ps es
@@ -477,6 +473,7 @@ chkMethAExpr e@(AMethValue { }) =
 chkMethAExpr e@(AMGate { }) =
     internalError ("chkMethAExpr: mgate " ++ ppReadable e)
 chkMethAExpr (APrim _ _ _ es) = all chkMethAExpr es
+chkMethAExpr (AMux _ _ _ arms) = all chkMethAExpr (aMuxArmExprs arms)
 chkMethAExpr (AFunCall { ae_args = es }) = all chkMethAExpr es
 chkMethAExpr (ATaskValue { }) = True
 -- Others don't have arguments to recurse

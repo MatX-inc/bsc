@@ -503,9 +503,6 @@ aExpr (IAps (ICon i _ (ICPrim PrimExtract)) [ITNum i1, _, ITNum i2] [e,h,l]) = d
 -- XXX we can remove PrimRange here, or keep it
 aExpr (IAps (ICon i _ (ICPrim PrimRange)) _ [_,_,e]) =
         aSExpr e
--- XXX hack to get strings into the compiler (masquerade as integers or bits)
-aExpr (IAps (ICon i1 _ (ICPrim PrimIntegerToBit)) _ [IAps (ICon i2 _ (ICPrim PrimStringToInteger)) _ [s]]) =
-        aExpr s
 -- special cases for sign and zero extensions, since they depend on the type information
 aExpr e@(IAps (ICon i _ (ICPrim PrimSignExt)) [_,_,ITNum ii] es) = do
         es' <- mapM aSExpr es
@@ -538,8 +535,6 @@ aExpr e@(IAps (ICon _ _ (ICSel {})) _ _) = aSelExpr sels selExpr
                          ppReadable e)
       unfoldICSel e = ([], [e])
 
-aExpr (IAps (ICon _ (ITAp _ t) (ICCon { conTagInfo = cti })) _ _) | t == itBit1 =
-        return $ aSBool (conNo cti /= 0)
 aExpr e@(IAps (ICon i _ (ICForeign { fName = name, isC = isC, foports = Nothing})) ts es) = do
         es' <- mapM aSExpr es
         -- XXX should this ever happen?
@@ -801,7 +796,7 @@ aTupleTypesConv a (ITAp (ITAp (ITCon p _ _) t1) t2) | p == idPrimPair =
   aTypeConv a t1 : aTupleTypesConv a t2
 aTupleTypesConv a t = [aTypeConv a t]
 
-realPrim :: PrimOp -> Bool
+realPrim :: PrimOp PostElab -> Bool
 realPrim p = p `elem`
         [
          PrimSignExt, PrimZeroExt, PrimTrunc,
@@ -812,26 +807,26 @@ realPrim p = p `elem`
          -- not primArith because not Bit n -> Bit n -> Bit n
          PrimMul, PrimQuot, PrimRem
         ] ++ primAriths ++ primCmps ++ primBools ++ primStrings
-primAriths :: [PrimOp]
+primAriths :: [PrimOp PostElab]
 primAriths = [ PrimAdd, PrimSub, PrimAnd, PrimOr, PrimXor,
                PrimSL, PrimSRL, PrimSRA,
                PrimInv, PrimNeg ]
-primBools :: [PrimOp]
+primBools :: [PrimOp PostElab]
 primBools = [ PrimBAnd, PrimBOr, PrimBNot ]
-primCmps :: [PrimOp]
+primCmps :: [PrimOp PostElab]
 primCmps = [ PrimEQ, PrimEQ3,
              PrimULE, PrimULT,
              PrimSLE, PrimSLT ]
-primStrings :: [PrimOp]
+primStrings :: [PrimOp PostElab]
 primStrings = [ PrimStringConcat ]
 
 -- Many primops are associative, but if we reassociate we might rebalance a carefully
 -- set up tree of computations.
 --assocPrims = [ PrimAdd, PrimAnd, PrimOr, PrimXor, PrimConcat, PrimBAnd, PrimBOr ]
-assocPrims :: [PrimOp]
+assocPrims :: [PrimOp PostElab]
 assocPrims = [ PrimConcat ]
 
-joinOp :: PrimOp -> IExpr PostElab -> [IExpr PostElab]
+joinOp :: PrimOp PostElab -> IExpr PostElab -> [IExpr PostElab]
 joinOp p (IAps (ICon _ _ (ICPrim { primOp = p' })) _ es) | p == p' = es
 joinOp _ e = [e]
 
@@ -844,17 +839,17 @@ sumStrSizes (e:es) = do n  <- case (aType e) of
                         return (n + n')
 
 {-
-aPrim :: AType -> PrimOp -> AExpr -> AExpr
+aPrim :: AType -> PrimOp PostElab -> AExpr -> AExpr
 aPrim t p es | p `elem` assocPrims = APrim _ t p (concatMap join es)
   where join (APrim _ t' p' es) | t == t' && p == p' = es
         join e = [e]
 aPrim t p es = APrim _ t p es
 -}
 
--- Rather than have a separate arm of aExpr for every PrimOp,
+-- Rather than have a separate arm of aExpr for every PrimOp PostElab,
 -- we have one general arm that uses this function to determine the type
 --
-primType :: PrimOp -> [IType] -> [AExpr] -> AType
+primType :: PrimOp PostElab -> [IType] -> [AExpr] -> AType
 primType PrimIf _ [_, e2, e3] =
     let t2 = aType e2
         t3 = aType e3

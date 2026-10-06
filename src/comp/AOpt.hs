@@ -509,6 +509,7 @@ joinDefs True True dsx = map rewrite dsx
 -- (this top-level entry point is called by AVeriQuirks and Synthesize)
 aOptBoolExpr :: AExpr -> AExpr
 aOptBoolExpr (APrim aid t p es) = aPrimBool aid t p es
+aOptBoolExpr (AMux aid t k arms) = aMuxBool aid t k arms
 aOptBoolExpr e = e
 
 -- aOptDefs does the aInsertCase optimization over all defs before
@@ -578,31 +579,24 @@ aMuxOptDef bflgs (ADef i t e p) = do
     addDef (ADef i t e2 p)
 
 
-type OptFunction = BFlags -> AId -> AType -> PrimOp -> [AExpr] ->  O AExpr
+-- an optimization of a mux, applied bottom-up to every mux of a tree
+type MuxOptFunction = BFlags -> AId -> AType -> AMuxKind -> [(AExpr, AExpr)] ->  O AExpr
 
 -- A general function to optimize down a tree.
-aOptTree :: BFlags -> (OptFunction) -> AExpr -> O AExpr
-aOptTree bflgs ofunc (APrim aid t p es)   = mapM (aOptTree bflgs ofunc) es >>= ofunc bflgs aid t p
-aOptTree bflgs ofunc (AMethCall t i m es) = mapM (aOptTree bflgs ofunc) es >>= return . AMethCall t i m
-aOptTree bflgs ofunc (ANoInlineFunCall t i f es)  = mapM (aOptTree bflgs ofunc) es >>= return . ANoInlineFunCall t i f
-aOptTree bflgs ofunc (AFunCall t i f isC es)  = mapM (aOptTree bflgs ofunc) es >>= return . AFunCall t i f isC
+aOptTree :: BFlags -> (MuxOptFunction) -> AExpr -> O AExpr
+aOptTree bflgs mfunc (APrim aid t p es)   = mapM (aOptTree bflgs mfunc) es >>= return . APrim aid t p
+aOptTree bflgs mfunc (AMux aid t k arms)  = mapMAMuxArms (aOptTree bflgs mfunc) arms >>= mfunc bflgs aid t k
+aOptTree bflgs mfunc (AMethCall t i m es) = mapM (aOptTree bflgs mfunc) es >>= return . AMethCall t i m
+aOptTree bflgs mfunc (ANoInlineFunCall t i f es)  = mapM (aOptTree bflgs mfunc) es >>= return . ANoInlineFunCall t i f
+aOptTree bflgs mfunc (AFunCall t i f isC es)  = mapM (aOptTree bflgs mfunc) es >>= return . AFunCall t i f isC
 aOptTree _ _ e  = return e
 
 aMuxOpt :: BFlags -> AExpr -> O AExpr
-aMuxOpt bflgs aexpr = aOptTree bflgs aMuxOptPrim aexpr
-    where
-      aMuxOptPrim :: BFlags -> AId -> AType -> PrimOp -> [AExpr] ->  O AExpr
-      aMuxOptPrim bflags aid t p es | p == PrimMux || p == PrimPriMux = muxOpt bflags aid t p es
-      aMuxOptPrim bflags aid t p es                                   = return $ APrim aid t p es
-
+aMuxOpt bflgs aexpr = aOptTree bflgs muxOpt aexpr
 
 -- Wrapper for mux constanst
 aMuxOptConst :: BFlags -> AExpr -> O AExpr
-aMuxOptConst bflgs aexpr = aOptTree bflgs aMuxOptC aexpr
-    where
-      aMuxOptC :: BFlags -> AId -> AType -> PrimOp -> [AExpr] ->  O AExpr
-      aMuxOptC bflags aid t p es | p == PrimMux || p == PrimPriMux = muxOptConst bflags aid t p es
-      aMuxOptC bflags aid t p es                                   = return $ APrim aid t p es
+aMuxOptConst bflgs aexpr = aOptTree bflgs muxOptConst aexpr
 
 {-aMuxOpt bflgs (APrim aid t p es) = mapM (aMuxOpt bflgs) es >>= aMuxOptPrim bflgs aid t p
 aMuxOpt bflgs (AMethCall t i m es) = mapM (aMuxOpt bflgs) es >>= return . AMethCall t i m
@@ -688,6 +682,8 @@ aInsertCase :: Bool -> (AId -> AExpr) -> AExpr -> AExpr
 aInsertCase stringOK findFn (APrim i t p es) =
     let es' = map (aInsertCase stringOK findFn) es
     in  aPrimInsertCase stringOK findFn i t p es'
+aInsertCase stringOK findFn (AMux i t k arms) =
+    AMux i t k (mapAMuxArms (aInsertCase stringOK findFn) arms)
 aInsertCase stringOK findFn (AMethCall t i m es) =
     let es' = map (aInsertCase stringOK findFn) es
     in  AMethCall t i m es'
@@ -701,7 +697,7 @@ aInsertCase _ _ e = e
 -- expression.  Allows arms such as "if (v == 3) || (v == 5)", but
 -- they become separate arms in the case statement.
 aPrimInsertCase :: Bool -> (AId -> AExpr) ->
-                   AId -> AType -> PrimOp -> [AExpr] -> AExpr
+                   AId -> AType -> APrimOp -> [AExpr] -> AExpr
 aPrimInsertCase stringOK findFn aid t PrimIf es@[cond, _, _]
   | stringOK || not (isStringType t) =
     -- if the condition is of the form "(v == c) || (v2 == c2) || ...",
@@ -733,6 +729,8 @@ aExp :: BFlags -> AExpr -> O AExpr
 --
 --
 aExp bflags (APrim aid t p es)   = mapM (aExp bflags) es >>= aPrim bflags aid t p
+-- (aPrim had no rule for a mux beyond aPrimBool's boolean simplification)
+aExp bflags (AMux aid t k arms)  = mapMAMuxArms (aExp bflags) arms >>= return . aMuxBool aid t k
 aExp bflags (AMethCall t i m es) = mapM (aExp bflags) es >>= return . AMethCall t i m
 aExp bflags (AFunCall t i f isC es)  = mapM (aExp bflags) es >>= return . AFunCall t i f isC
 --
@@ -770,7 +768,7 @@ aExp bflags e@(_)                = return e
 
 -- various optimizations
 -- single level only aExp traverses nested expressions
-aPrim :: BFlags -> AId -> AType -> PrimOp -> [AExpr] -> O AExpr
+aPrim :: BFlags -> AId -> AType -> APrimOp -> [AExpr] -> O AExpr
 
 -- if (!c) tt ee  -->  if (c) ee tt
 aPrim bflags aid t PrimIf [APrim _ _ PrimBNot [c], tt, ee]
@@ -833,14 +831,14 @@ aPrim bflags aid t PrimIf [cnd, x, y]  | ao_ifmux bflags && not (isStringType t)
     let -- if inlining reveals an expression that's a mux return it, else
         -- returns the original expression
         usePrimPri = ao_ifsToPrimPri bflags
-        op = if (usePrimPri) then PrimPriMux else PrimMux
+        kind = if (usePrimPri) then AMuxPriority else AMuxParallel
         --
         inlineMux :: AExpr -> O AExpr
         inlineMux e@(ASDef { }) = do
             let e' = (expandUniqueVarRef findU findD e)
             case (e') of
-              (APrim _ _ opx es) | opx == op &&
-                                   genericLength es < muxSize -> return e'
+              (AMux _ _ kx arms) | kx == kind &&
+                                   genericLength (aMuxArmExprs arms) < muxSize -> return e'
               _ -> return e
         inlineMux e = return e
         --
@@ -849,13 +847,13 @@ aPrim bflags aid t PrimIf [cnd, x, y]  | ao_ifmux bflags && not (isStringType t)
     let notc' = aNot c'
         otherCond = if ( usePrimPri) then aTrue else notc'
         -- if the underlying expression is a mux, join them
-        addToMux :: AExpr -> AExpr -> [AExpr]
-        addToMux c (APrim _ _ opx es) | opx == op =
-            flattenPairs $ nubByFst (mapFst (aAnd c) (makePairs es))
-        addToMux c e = [c, e]
-    let es' = addToMux c' x' ++ addToMux otherCond y'
-    when debug2 $ traceM("optIfMux size: " ++ show (length es'))
-    aPrim bflags aid t op es'
+        addToMux :: AExpr -> AExpr -> [(AExpr, AExpr)]
+        addToMux c (AMux _ _ kx arms) | kx == kind =
+            nubByFst (mapFst (aAnd c) arms)
+        addToMux c e = [(c, e)]
+    let arms' = addToMux c' x' ++ addToMux otherCond y'
+    when debug2 $ traceM("optIfMux size: " ++ show (length (aMuxArmExprs arms')))
+    return (aMuxBool aid t kind arms')
 
 
 -- fill case expressions or optimize
@@ -950,11 +948,12 @@ aOptFinalPass flags p | optFinalPass flags == False = p
                                               aConcat (mapAExprs flattenExprs es)
                                           | otherwise =
                                               APrim i e op (mapAExprs flattenExprs es)
+          flattenExprs  (AMux i e k arms) = AMux i e k (mapAExprs flattenExprs arms)
           flattenExprs   e = e
           --
           communitiveOps = [PrimAdd, PrimOr, PrimBOr, PrimBAnd, PrimAnd, PrimXor]
           --
-          unnest :: PrimOp -> AExpr -> [AExpr]
+          unnest :: APrimOp -> AExpr -> [AExpr]
           unnest op1 (APrim i e op es) | op == op1 = es
           unnest _ e = [e]
 
@@ -966,17 +965,23 @@ truncateInteger value hi lo =
 
 -- If the expression is a 1-bit type, then try to simplify it as a
 -- boolean expression (using aBoolSimp)
-aPrimBool :: AId -> AType -> PrimOp -> [AExpr] -> AExpr
+aPrimBool :: AId -> AType -> APrimOp -> [AExpr] -> AExpr
 aPrimBool aid t@(ATBit 1) p es = aBoolSimp (APrim aid t p es)
 aPrimBool aid t p es = APrim aid t p es
 
-bitwise :: PrimOp -> Bool
+-- the same for a mux (aBoolSimp sees a mux as a variable, so this is
+-- the identity; kept so the two forms are treated alike)
+aMuxBool :: AId -> AType -> AMuxKind -> [(AExpr, AExpr)] -> AExpr
+aMuxBool aid t@(ATBit 1) k arms = aBoolSimp (AMux aid t k arms)
+aMuxBool aid t k arms = AMux aid t k arms
+
+bitwise :: APrimOp -> Bool
 bitwise PrimAnd = True
 bitwise PrimOr  = True
 bitwise PrimXor = True
 bitwise _       = False
 
-boolOp :: PrimOp -> PrimOp
+boolOp :: APrimOp -> APrimOp
 boolOp PrimAnd = PrimBAnd
 boolOp PrimOr  = PrimBOr
 boolOp PrimXor = PrimXor
@@ -1013,7 +1018,7 @@ mkDefS e = do
 
 -----
 
-sAPrim :: AType -> PrimOp -> [AExpr] -> AExpr
+sAPrim :: AType -> APrimOp -> [AExpr] -> AExpr
 sAPrim t op es = APrim defaultAId t op es
 
 isInt :: AExpr -> Bool
@@ -1194,7 +1199,7 @@ rmDupsInCasePairs prs = rmDups S.empty prs
 --  removes any pair where the condition is false
 --  drops all pairs after a true const is found
 --  merges identical expressions
-optMuxPairs :: BFlags -> AId -> AType -> PrimOp -> [(AExpr,AExpr)] -> [(AExpr,AExpr)]
+optMuxPairs :: BFlags -> AId -> AType -> AMuxKind -> [(AExpr,AExpr)] -> [(AExpr,AExpr)]
 optMuxPairs bflgs aid dty op eps | not $ ao_mux bflgs = eps
 optMuxPairs bflgs aid dty op eps = eps3
     where
@@ -1212,7 +1217,7 @@ optMuxPairs bflgs aid dty op eps = eps3
 -- merge Identical Expressions
 -- The sort function here can cause reordering in case expression, which can
 -- later turn to if expressions, and look totally wrong when comparing to older versions.
-mergeIdenExpr :: Bool -> PrimOp -> [(AExpr,AExpr)] ->  [(AExpr,AExpr)]
+mergeIdenExpr :: Bool -> AMuxKind -> [(AExpr,AExpr)] ->  [(AExpr,AExpr)]
 mergeIdenExpr stable op eps = if ( length newpairs < length eps ) then newpairs else eps
     where
       flattenGrps :: [(AExpr,AExpr)] -> (AExpr,AExpr)
@@ -1235,12 +1240,12 @@ mergeIdenExpr stable op eps = if ( length newpairs < length eps ) then newpairs 
                 testf :: (AExpr,AExpr) -> (AExpr,AExpr) -> Bool
                 testf (_,x1) (_,x2) = isASAny x1 == isASAny x2
       --
-      -- Under -stable-verilog the PrimMux arm sort keys on the arm's
-      -- TEXT (with ASAny arms last, the invariant sortPairASAny exists
-      -- to repair) instead of Ord AExpr, which bottoms out in intern
-      -- order; structurally equal arms have identical text, so groupBy
-      -- still finds them adjacent.
-      sortfn | op /= PrimMux = id
+      -- Under -stable-verilog the parallel mux's arm sort keys on the
+      -- arm's TEXT (with ASAny arms last, the invariant sortPairASAny
+      -- exists to repair) instead of Ord AExpr, which bottoms out in
+      -- intern order; structurally equal arms have identical text, so
+      -- groupBy still finds them adjacent.
+      sortfn | op /= AMuxParallel = id
              | stable        = sortBy (comparing (\ (_,e) -> (isASAny e, ppString e)))
              | otherwise     = sortPairASAny . sortBy cmpSnd
       meps = groupBy eqSnd (sortfn eps)
@@ -1251,14 +1256,14 @@ mergeIdenExpr stable op eps = if ( length newpairs < length eps ) then newpairs 
 -- muxOpt
 -------------
 
--- a pass of all PrimPriMux and PriMux to remove constants and
+-- a pass of all muxes to remove constants and
 -- to turn small ones back to if
-muxOptConst :: BFlags -> AId -> AType -> PrimOp -> [AExpr] -> O AExpr
-muxOptConst bflgs aid dty op exs | not $ ao_mux bflgs = return (APrim aid dty op exs)
+muxOptConst :: BFlags -> AId -> AType -> AMuxKind -> [(AExpr, AExpr)] -> O AExpr
+muxOptConst bflgs aid dty op exs | not $ ao_mux bflgs = return (AMux aid dty op exs)
 muxOptConst bflgs aid dty op exs = do
     -- trivial mux opt
     -- optimize the pairs
-    let exs1 = optMuxPairs bflgs aid dty op (makePairs exs)
+    let exs1 = optMuxPairs bflgs aid dty op exs
         bflgs' = optFlagsOff bflgs
     case exs1 of
       []                               -> internalError "muxOptConst"
@@ -1274,7 +1279,7 @@ muxOptConst bflgs aid dty op exs = do
       -- A 2 input mux is turned into a if regardless of flags.
       [(c,e1),(_,e2)]                  -> aPrim bflgs' aid dty  PrimIf [c,e1,e2]
       -- otherwise just build the mux back again
-      es                               ->  return (APrim aid dty op (flattenPairs es ))
+      es                               ->  return (AMux aid dty op es)
 
 
 -------------------------------------
@@ -1287,18 +1292,18 @@ isAnyExprAString exprs = any isAExprStr exprs
           isAExprStr _           = False
 
 -- function which optimizes mux pairs
-muxOpt :: BFlags -> AId -> AType -> PrimOp -> [AExpr] -> O AExpr
+muxOpt :: BFlags -> AId -> AType -> AMuxKind -> [(AExpr, AExpr)] -> O AExpr
 muxOpt bflgs aid dty op esx | not $ ao_muxExpand bflgs = do
     -- trivial mux opt
   return $
     case esx of
-            []          -> internalError "muxOpt"
-            [_,e]       -> e
-            [c,e1,_,e2] -> APrim aid dty PrimIf [c,e1,e2]
-            es          -> APrim aid dty op es
+            []              -> internalError "muxOpt"
+            [(_,e)]         -> e
+            [(c,e1),(_,e2)] -> APrim aid dty PrimIf [c,e1,e2]
+            es              -> AMux aid dty op es
 
 -- Do not do Mux optimization if any expr is a string
-muxOpt bflgs aid dty op esIn | ao_muxExpand bflgs && isAnyExprAString esIn =
+muxOpt bflgs aid dty op esIn | ao_muxExpand bflgs && isAnyExprAString (aMuxArmExprs esIn) =
   muxOpt (optFlagsOff bflgs)  aid dty op esIn
 
 -- (if optMux flag is True)
@@ -1306,9 +1311,9 @@ muxOpt bflgs aid dty op esIn | ao_muxExpand bflgs && isAnyExprAString esIn =
 muxOpt bflgs aidx dty op esIn | ao_muxExpand bflgs  = do
     when debug2 $ traceM ("--------------------------------------------------------------------------------------" )
     when debug2 $ traceM ("Type: " ++ ppReadable dty)
-    when debug2 $ traceM ("muxOpt " ++ ppReadable (APrim aidx dty op esIn))
+    when debug2 $ traceM ("muxOpt " ++ ppReadable (AMux aidx dty op esIn))
     getf <- findDef
-    let (psIn, asIn) = unzip (makePairs esIn)
+    let (psIn, asIn) = unzip esIn
         cmuxo = ao_muxconst bflgs
     --
     -- for each expr returned by the branch of the mux (for each "a" in "as"),
@@ -1362,10 +1367,10 @@ muxOpt bflgs aidx dty op esIn | ao_muxExpand bflgs  = do
             Nothing  -> m : joinMuxes (m':ms)
             Just m'' -> joinMuxes (m'':ms)
         joinMuxes ms = ms
-        join2 (APrim aid ty p pes) (APrim _ _ p' pes') | length pes == length pes'
-                                && p == p' && (p == PrimMux || p == PrimPriMux) = do
+        join2 (AMux aid ty p pes) (AMux _ _ p' pes') | length pes == length pes'
+                                && p == p' = do
             pes'' <- joinpes pes pes'
-            return (APrim aid (aType (pes''!!1)) p pes'')
+            return (AMux aid (aType (snd (headOrErr "AOpt.join2" pes''))) p pes'')
 {-
 -- XXX why is this commented out?  it looks like a good optimization!
         join2 (APrim _ ty PrimIf [c,t,e]) (APrim _ _ PrimIf [c',t',e']) | c == c' = do
@@ -1374,10 +1379,10 @@ muxOpt bflgs aidx dty op esIn | ao_muxExpand bflgs  = do
             return (APrim _ (aType t'') PrimIf [c,t'',e''])
 -}
         join2 _ _ = Nothing
-        joinpes (p:e:pes) (p':e':pes') =
+        joinpes ((p,e):pes) ((p',e'):pes') =
             if p == p' then do
                 pes'' <- joinpes pes pes'
-                return (p:(aConcat [e, e']):pes'')
+                return ((p, aConcat [e, e']):pes'')
             else
                 Nothing
         joinpes [] [] = return []
@@ -1387,8 +1392,7 @@ muxOpt bflgs aidx dty op esIn | ao_muxExpand bflgs  = do
 --                ++ ppReadable szs ++ ppReadable ess'
 --                ++ ppReadable tess ++ ppReadable ps ++ ppReadable ms ++ ppReadable d')
         aOptMuxSel :: AExpr -> AExpr
-        aOptMuxSel (APrim aid t p pes) | p == PrimMux || p == PrimPriMux =
-                APrim aid t p (flattenPairs (mapFst aBoolSimp (makePairs pes)))
+        aOptMuxSel (AMux aid t p pes) = AMux aid t p (mapFst aBoolSimp pes)
         aOptMuxSel _ = internalError "aOptMuxSel"
         result = aConcat (map (aTransAndOrMux . aTransMux . aOptMuxSel) jms)
     --
@@ -1499,9 +1503,9 @@ aExtract e hi lo =
 
 ------------
 
-aMakeMux :: AId -> AType -> PrimOp -> [(AExpr, AExpr)] -> AExpr
+aMakeMux :: AId -> AType -> AMuxKind -> [(AExpr, AExpr)] -> AExpr
 aMakeMux aid t op pexs =
-    let pexs' = joinEq (if op == PrimMux then partition else span) pexs
+    let pexs' = joinEq (if op == AMuxParallel then partition else span) pexs
         joinEq f [] = []
         joinEq f ((p,e):pes) =
             let (xs, pes') = f (aEqual e . snd) pes
@@ -1509,7 +1513,7 @@ aMakeMux aid t op pexs =
         aEqual :: AExpr -> AExpr -> Bool
         aEqual (ASInt _ _ (IntLit _ _ i)) (ASInt _ _ (IntLit _ _ i')) = i == i'
         aEqual e e' = e == e'
-    in  APrim aid t op (flattenPairs pexs')
+    in  AMux aid t op pexs'
 
 aIf :: AType -> AExpr -> AExpr -> AExpr -> AExpr
 aIf ty c (ASInt _ _ (IntLit _ _ 1)) (ASInt _ _ (IntLit _ _ 0)) = aZeroExt ty c
@@ -1526,29 +1530,29 @@ aZeroExt ty@(ATBit sz) e = APrim dummy_id ty PrimConcat
                         (ATBit (sz-1)) (ilDec 0), e]
 aZeroExt _ _ = internalError( "AOpt::aZeroExt" )
 
--- This is only called by muxOpt, which only optimizes PrimMux and PrimPriMux
+-- This is only called by muxOpt, which only optimizes muxes
 aTransMux :: AExpr -> AExpr
-aTransMux (APrim _ t _ []) = ASAny t -- ok for both types
-aTransMux (APrim _ _ _ [_, e]) = e     -- ok for both types
-aTransMux (APrim aid t PrimMux [p1, e1, p2, e2]) =
+aTransMux (AMux _ t _ []) = ASAny t -- ok for both kinds
+aTransMux (AMux _ _ _ [(_, e)]) = e   -- ok for both kinds
+aTransMux (AMux aid t AMuxParallel [(p1, e1), (p2, e2)]) =
         if isASimple p2 && not (isASimple p1)
                 then aIf t p2 e2 e1
                 else aIf t p1 e1 e2
-aTransMux (APrim aid t PrimPriMux [p1, e1, p2, e2]) = aIf t p1 e1 e2
-aTransMux e@(APrim {}) = e
+aTransMux (AMux aid t AMuxPriority [(p1, e1), (p2, e2)]) = aIf t p1 e1 e2
+aTransMux e@(AMux {}) = e
 aTransMux _ = internalError( "AOpt::aTransMux" )
 
 aTransAndOrMux :: AExpr -> AExpr
-aTransAndOrMux (APrim aid t PrimMux pes) =
+aTransAndOrMux (AMux aid t AMuxParallel pes) =
     -- all inputs that are 0 can be removed from an AND/OR mux
-    let pes' = filter (isNonZero . snd) (makePairs pes)
+    let pes' = filter (isNonZero . snd) pes
         isNonZero (ASInt _ _ (IntLit _ _ 0)) = False
         isNonZero _ = True
     in  if t == aTBool then
             -- turn a boolean mux into the corresponding expression.
             aBoolSimp (APrim aid t PrimBOr [ APrim aid t PrimBAnd [p, e] | (p, e) <- pes' ])
         else
-            APrim aid t PrimMux (flattenPairs pes')
+            AMux aid t AMuxParallel pes'
 aTransAndOrMux e = e
 
 ------------
@@ -1615,7 +1619,7 @@ fromBE (Var e) = e
 fromBE TT = aBool True
 fromBE FF = aBool False
 
-getOp :: PrimOp -> AExpr -> [AExpr]
+getOp :: APrimOp -> AExpr -> [AExpr]
 getOp p (APrim _ _ p' es) | p == p' = es
 getOp _ e = [e]
 
@@ -1680,6 +1684,9 @@ optAndOrExpr (APrim i t@(ATBit 1) op es)
 optAndOrExpr (APrim i t op es) = do
   es1 <- mapM optAndOrExpr es
   return (APrim i t op es1)
+optAndOrExpr (AMux i t k arms) = do
+  arms1 <- mapMAMuxArms optAndOrExpr arms
+  return (AMux i t k arms1)
 --
 -- ignore other expressions
 optAndOrExpr e = return e
@@ -1765,4 +1772,5 @@ aOptDefLite adef = do
 
 aOptExprLite ::AExpr -> O AExpr
 aOptExprLite (APrim aid t p es) = aPrim optExprBFlag aid t p es
+aOptExprLite (AMux aid t k arms) = return (aMuxBool aid t k arms)
 aOptExprLite e = return e

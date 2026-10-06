@@ -2008,6 +2008,7 @@ aUses m a@(ATaskAction i _ _ _ es _ _ isAssump) =
 -- A use is a method Id on a particular instance (instId, methId)
 eDomain :: M.Map AId [(AId,AId)] -> AExpr -> [(AId,AId)]
 eDomain m (APrim _ _ _ es) = mergeUses $ map (eDomain m) es
+eDomain m (AMux _ _ _ arms) = mergeUses $ map (eDomain m) (aMuxArmExprs arms)
 eDomain m e@(AMethCall _ i mi es) =
     mergeUses ([(i, unQualId mi)] : map (eDomain m) es)
 -- don't count the return value uses of actionvalue, only the action part

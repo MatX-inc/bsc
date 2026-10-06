@@ -12,6 +12,7 @@ import Position
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import ISyntax
+import Prim(primOpCode, primOpFromCode)
 import ISyntaxUtil(icUndet)
 import CSyntax
 import Undefined(UndefKind(UNoMatch))
@@ -616,7 +617,7 @@ instance Bin ConTagInfo where
 -- the node (no format change).
 putConInfo :: IType -> IConInfo PreElab -> Out ()
 putConInfo t (ICDef _)          = do putI 0; toBin t
-putConInfo t (ICPrim p)         = do putI 1; toBin t; toBin (fromEnum p)
+putConInfo t (ICPrim p)         = do putI 1; toBin t; toBin (primOpCode p)
 putConInfo t (ICForeign n isC ps tvns Nothing) =
     do putI 2; toBin t; toBin n; toBin isC; toBin ps; toBin tvns
 putConInfo _ (ICForeign { fcallNo = (Just _) }) =
@@ -648,7 +649,7 @@ getConInfo = do tag <- getI
                               -- Here we use a don't-care value for the expression
                               -- XXX Should we use an error there, so it's not silently used?
                               return (ICDef (icUndet t UNoMatch))
-                        1  -> do p <- fromBin; return (ICPrim (toEnum p))
+                        1  -> do p <- fromBin; return (ICPrim (primOpFromCode p))
                         2  -> do n <- fromBin
                                  isC <- fromBin
                                  ps <- fromBin
