@@ -739,7 +739,7 @@ iConvE errh flags r env pvs e@(CmoduleVerilogT ty name ui clks rst args meths sc
             (ti, ts) = splitITApCon ty''
             name' = iConvE errh flags r env pvs name
         in  iAps (ICon (dummyId (getPosition e))
-                     (itString `itFun` ty') (ICVerilog { 
+                     (itString `itFun` ty') (ICVerilog {
                                   isUserImport = ui,
                                   vInfo = vinf,
                                   vMethTs = tss })) [] (name' : es')
