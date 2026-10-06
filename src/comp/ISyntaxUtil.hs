@@ -1504,14 +1504,6 @@ isAbstractType :: IType -> Bool
 isAbstractType t = getITypeSort t == Just TIabstract
 
 
--- utility method to check if an expression is an if or not
-notIf :: KnownPhase a => IExpr a -> Bool
-{-# SPECIALISE notIf :: IExpr PreElab -> Bool #-}
-{-# SPECIALISE notIf :: IExpr Elab -> Bool #-}
-{-# SPECIALISE notIf :: IExpr PostElab -> Bool #-}
-notIf (IAps (ICon _ _ (ICPrim { primOp = PrimIf })) _ _) = False
-notIf _ = True
-
 -- note that ISplitIf.push assumes that PrimIf is FALSE for this function
 isIfWrapper :: PrimOp -> Bool
 isIfWrapper PrimExpIf = True
@@ -1767,42 +1759,6 @@ toIAction e =
           IAps f@(ICon _ _ (ICForeign {})) ts es -> ACallForeign (Just av) f (Just (ts, es))
           f@(ICon _ _ (ICForeign {})) -> ACallForeign (Just av) f Nothing
           _ -> refuse "avAction_ of something other than a method call or a foreign call"
-
--- The expression an IAction stands for, rebuilt from its parts (the
--- stored constants, and the canonical constants for the primitives):
--- cmpE-equal to, and printing as, the expression toIAction was given.
--- A bridge for the passes that still read a body as an expression
--- while they are rewritten over IAction; it goes with the last of them.
-actionToExpr :: IAction -> IExpr PostElab
-actionToExpr a =
-    case a of
-      ANoActions -> icNoActions
-      AJoin a1 a2 -> IAps icJoinActions [] [actionToExpr a1, actionToExpr a2]
-      AIf m c t e -> marked m (IAps icIf [itAction] [c, actionToExpr t, actionToExpr e])
-      ADeep b a1 -> IAps (marker (if b then PrimSplitDeep else PrimNosplitDeep)) [] [actionToExpr a1]
-      AArrSel m i_sel i_arr sz es idx ->
-          let arr = IAps (withId i_arr (icPrimBuildArray (length es))) [itAction] (map actionToExpr es)
-          in  marked m (IAps (withId i_sel icPrimArrayDynSelect) [itAction, ITNum sz] [arr, idx])
-      ACallMethod mav sel ts inst args -> av mav (IAps sel ts (inst : args))
-      ACallForeign mav f (Just (ts, es)) -> av mav (IAps f ts es)
-      ACallForeign mav f Nothing -> av mav f
-      AUndet c -> c
-  where
-    marked SplitDefault e = e
-    marked SplitIf e = IAps (marker PrimExpIf) [] [e]
-    marked NoSplitIf e = IAps (marker PrimNoExpIf) [] [e]
-    marker :: PrimOp -> IExpr PostElab
-    marker p = ICon (markerId p) (itAction `itFun` itAction) (ICPrim p)
-    markerId PrimExpIf = idPrimExpIf
-    markerId PrimNoExpIf = idPrimNoExpIf
-    markerId PrimSplitDeep = idPrimSplitDeep
-    markerId PrimNosplitDeep = idPrimNosplitDeep
-    markerId p = internalError ("actionToExpr: not a marker: " ++ show p)
-    av Nothing e = e
-    av (Just (AVSel s ts)) e = IAps s ts [e]
-    withId :: Id -> IExpr PostElab -> IExpr PostElab
-    withId i (ICon _ t ic) = ICon i t ic
-    withId _ c = c
 
 iStrToInt :: KnownPhase a => String -> Position -> IExpr a
 {-# SPECIALISE iStrToInt :: String -> Position -> IExpr PreElab #-}

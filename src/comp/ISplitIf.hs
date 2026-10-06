@@ -15,7 +15,6 @@ import Pragma(SPIdSplitMap, splitSchedPragmaIds)
 import ITransform(iTransBoolExpr)
 import PreStrings(fs_T, fs_F)
 import FStringCompat(FString, concatFString, getFString, mkFString)
-import Control.Monad(msum)
 import Data.List(genericLength)
 -- import Debug.Trace(trace)
 
@@ -39,16 +38,9 @@ iSplitIf flags imod@(IModule { imod_rules = rules,
        (smaps, new_methods) = unzip $ map (iSplitIface flags) methods
        -- provide the method split map, in case any rule pragmas mention methods
        (_, new_rules) = do_iExpandIfRules flags (concat smaps) rules
-    in case check_rules new_rules of
-          (Just x) -> internalError ("iSplitIf Error " ++ (ppReadable x))
-          _
-              ->  case (msum (map check_meth_rules
-                                  new_methods)) of
-                    (Just x) -> internalError ("iSplitIf Error in interface "
-                                               ++ (ppReadable x))
-                    _ -> --trace ("============m1\n"++(show new_methods)) $
-                         imod { imod_rules = new_rules ,
-                                imod_interface = new_methods }
+    in --trace ("============m1\n"++(show new_methods)) $
+       imod { imod_rules = new_rules ,
+              imod_interface = new_methods }
 
 -- --------------------------
 
@@ -313,26 +305,6 @@ iExpandIfRule flags
      in (sched , new_rules)
 
 
--- These return Nothing if the check was successful,
--- otherwise they return Just the offending expression.
-
-check_if_wrappers :: IAction -> Maybe IAction
-check_if_wrappers e
-  = case e of
-         (AIf SplitDefault _ t f) -> msum (map check_if_wrappers [t, f])
-         (AArrSel SplitDefault _ _ _ es _) -> msum (map check_if_wrappers es)
-         (AJoin a1 a2) -> msum (map check_if_wrappers [a1, a2])
-         (AIf _ _ _ _) -> Just e
-         (AArrSel _ _ _ _ _ _) -> Just e
-         (ADeep _ _) -> Just e
-         _ -> Nothing
-
-check_rules :: IRules PostElab -> Maybe IAction
-check_rules (IRules _ rs) = msum $ map check_rule rs
-
-check_rule :: IRule PostElab -> Maybe IAction
-check_rule r = check_if_wrappers $ irule_body r
-
 -- --------------------------
 
 -- methods
@@ -353,10 +325,6 @@ iSplitIface flags (IEFace i xargs me (Just irules) wp fi)
 iSplitIface _ ieface@(IEFace _ _ (Just _) Nothing _ _) = ([], ieface)
 iSplitIface _ ieface = internalError ("iSplitIface: a method with neither value nor rules: " ++ ppReadable ieface)
 
-
-check_meth_rules :: IEFace PostElab -> Maybe IAction
-check_meth_rules (IEFace _ _ _ (Just rs) _ _) = check_rules rs
-check_meth_rules _ = Nothing
 
 -- --------------------------
 
