@@ -102,19 +102,19 @@ get = getAnds . norm
 getAnds :: KnownPhase a => IExpr a -> [ExprKey a]
 {-# SPECIALISE getAnds :: IExpr Elab -> [ExprKey Elab] #-}
 {-# SPECIALISE getAnds :: IExpr PostElab -> [ExprKey PostElab] #-}
-getAnds (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = mergeOrdNoDup (getAnds e1) (getAnds e2)
+getAnds (IAps (ICon _ _ (ICPrim PrimBAnd)) _ [e1, e2]) = mergeOrdNoDup (getAnds e1) (getAnds e2)
 getAnds e = [ExprKey e]
 
 norm :: KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE norm :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE norm :: IExpr PostElab -> IExpr PostElab #-}
-norm (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) = invert e
+norm (IAps (ICon _ _ (ICPrim PrimBNot)) _ [e]) = invert e
 norm e = e
 
 invert :: KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE invert :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE invert :: IExpr PostElab -> IExpr PostElab #-}
-invert (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = ieOr  (invert e1) (invert e2)
-invert (IAps (ICon _ (ICPrim _ PrimBOr )) _ [e1, e2]) = ieAnd (invert e1) (invert e2)
-invert (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]     ) = e
+invert (IAps (ICon _ _ (ICPrim PrimBAnd)) _ [e1, e2]) = ieOr  (invert e1) (invert e2)
+invert (IAps (ICon _ _ (ICPrim PrimBOr)) _ [e1, e2]) = ieAnd (invert e1) (invert e2)
+invert (IAps (ICon _ _ (ICPrim PrimBNot)) _ [e]     ) = e
 invert e = ieNot e

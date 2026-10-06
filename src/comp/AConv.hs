@@ -355,19 +355,19 @@ aIface flags iface@(IEFace i its maybe_e maybe_rs wp fi) = do
             | t == itClock
             -> do
               ac <- case e of
-                      ICon _ (ICClock { iClock = c }) -> aClock c
+                      ICon _ _ (ICClock { iClock = c }) -> aClock c
                       _ -> internalError ("AConv.aIface not clock " ++ ppReadable e)
               return $ AIClock i ac fi
             | t == itReset
             -> do
               ar <- case e of
-                      ICon _ (ICReset { iReset = r }) -> aReset r
+                      ICon _ _ (ICReset { iReset = r }) -> aReset r
                       _ -> internalError ("AConv.aIFace not reset " ++ ppReadable e)
               return $ AIReset i ar fi
             | isitInout_ t
             -> do
               ar <- case e of
-                      ICon _ (ICInout { iInout = r }) -> aInout r
+                      ICon _ _ (ICInout { iInout = r }) -> aInout r
                       _ -> internalError ("AConv.aIFace not inout " ++ ppReadable e)
               return $ AIInout i ar fi
             | t == itAction
@@ -404,10 +404,10 @@ aReset :: IReset PostElab -> M AReset
 aReset r = do
   -- traceM (ppReadable r)
   r' <- case (getResetWire r) of
-          IAps (ICon i (ICSel { ictSel = itReset })) _ [(ICon vid (ICStateVar {iVar = sv}))] ->
+          IAps (ICon i itReset (ICSel { })) _ [(ICon vid _ (ICStateVar {iVar = sv}))] ->
             let i_rstn = lookupOutputResetWire i (getVModInfo sv)
             in  return (mkOutputWire vid i_rstn)
-          ICon idNoReset (ICPrim itBit1 PrimResetUnassertedVal) -> do
+          ICon idNoReset itBit1 (ICPrim PrimResetUnassertedVal) -> do
             return (APrim idNoReset aTBool  PrimResetUnassertedVal [])
           wire_exp -> aSExpr wire_exp
   return (AReset r')
@@ -416,14 +416,14 @@ aInout :: IInout PostElab -> M AInout
 aInout r = do
   -- traceM (ppReadable r)
   r' <- case (getInoutWire r) of
-          e@(IAps (ICon i (ICSel {})) _ [(ICon vid (ICStateVar {iVar = sv}))])
+          e@(IAps (ICon i _ (ICSel {})) _ [(ICon vid _ (ICStateVar {iVar = sv}))])
               -> let t = iGetType e
                      i_iot = lookupIfcInoutWire i (getVModInfo sv)
                  in  if (isitInout_ t)
                      then return (mkIfcInoutN (getInout_Size t) vid i_iot)
                      else internalError ("aInout: sel not Inout_ type: " ++
                                          ppReadable e)
-          e@(ICon _ (ICModPort t)) ->
+          e@(ICon _ t ICModPort) ->
               if (isitInout_ t)
               then aSExpr e
               else internalError ("aInout: modport not Inout_ type: " ++
@@ -434,13 +434,13 @@ aInout r = do
 aClock :: IClock PostElab -> M AClock
 aClock c = do
   case getClockWires c of
-    IAps (ICon _ (ICTuple {fieldIds = [f_osc, f_gate]})) _ [e_osc, e_gate] |
+    IAps (ICon _ _ (ICTuple {fieldIds = [f_osc, f_gate]})) _ [e_osc, e_gate] |
       f_osc == idClockOsc && f_gate == idClockGate -> do
         a_osc  <- aSExpr e_osc
         a_gate <- aSExpr e_gate
         return (AClock { aclock_osc = a_osc, aclock_gate = a_gate })
     -- output clock fields
-    IAps (ICon i (ICSel { ictSel = itClock })) _ [(ICon vid (ICStateVar {iVar = sv}))] ->
+    IAps (ICon i itClock (ICSel { })) _ [(ICon vid _ (ICStateVar {iVar = sv}))] ->
         let (i_osc, mi_gate) = lookupOutputClockWires i (getVModInfo sv)
             osc_aexpr = mkOutputWire vid i_osc
             gate_aexpr = case (mi_gate) of
@@ -456,7 +456,7 @@ aClock c = do
 dropPrimUnitArgs :: [IExpr PostElab] -> [IExpr PostElab]
 dropPrimUnitArgs = filter (not . isPrimUnitArg)
   where
-    isPrimUnitArg (ICon i _) = i == idPrimUnit
+    isPrimUnitArg (ICon i _ _) = i == idPrimUnit
     isPrimUnitArg _          = False
 
 aSExpr :: IExpr PostElab -> M AExpr
@@ -486,7 +486,7 @@ aExprNoCSE :: IExpr PostElab -> M AExpr
 aExprNoCSE e = withReaderT (const True) (aExpr e)
 
 aExpr :: IExpr PostElab -> M AExpr
-aExpr exp@(IAps (ICon isel (ICPrim _ PrimSelect)) [ITNum i1, ITNum i2, ITNum i3] [e]) = do
+aExpr exp@(IAps (ICon isel _ (ICPrim PrimSelect)) [ITNum i1, ITNum i2, ITNum i3] [e]) = do
         e' <- aSExpr e
         if i2 < i3 && i3-i2 >= i1
            then
@@ -495,52 +495,52 @@ aExpr exp@(IAps (ICon isel (ICPrim _ PrimSelect)) [ITNum i1, ITNum i2, ITNum i3]
             internalError ("aExpr select: bad bit selection\n" ++
                            ppReadable (getIdPosition isel) ++ ppReadable exp)
 
-aExpr (IAps (ICon i (ICPrim _ PrimExtract)) [ITNum i1, _, ITNum i2] [e,h,l]) = do
+aExpr (IAps (ICon i _ (ICPrim PrimExtract)) [ITNum i1, _, ITNum i2] [e,h,l]) = do
         let n = log2 i1
         errh <- gets errHandle
         es' <- mapM aSExpr [e, eTrunc errh n h, eTrunc errh n l]
         return $ APrim i (ATBit i2) PrimExtract es'
 -- XXX we can remove PrimRange here, or keep it
-aExpr (IAps (ICon i (ICPrim _ PrimRange)) _ [_,_,e]) =
+aExpr (IAps (ICon i _ (ICPrim PrimRange)) _ [_,_,e]) =
         aSExpr e
 -- XXX hack to get strings into the compiler (masquerade as integers or bits)
-aExpr (IAps (ICon i1 (ICPrim _ PrimIntegerToBit)) _ [IAps (ICon i2 (ICPrim _ PrimStringToInteger)) _ [s]]) =
+aExpr (IAps (ICon i1 _ (ICPrim PrimIntegerToBit)) _ [IAps (ICon i2 _ (ICPrim PrimStringToInteger)) _ [s]]) =
         aExpr s
 -- special cases for sign and zero extensions, since they depend on the type information
-aExpr e@(IAps (ICon i (ICPrim _ PrimSignExt)) [_,_,ITNum ii] es) = do
+aExpr e@(IAps (ICon i _ (ICPrim PrimSignExt)) [_,_,ITNum ii] es) = do
         es' <- mapM aSExpr es
         return $ APrim i (ATBit ii) PrimSignExt es'
-aExpr e@(IAps (ICon i (ICPrim _ p)) ts es) | realPrim p = do
+aExpr e@(IAps (ICon i _ (ICPrim p)) ts es) | realPrim p = do
         es' <- mapM aSExpr (if p `elem` assocPrims then concatMap (joinOp p) es else es)
         --traceM (ppReadable (es, es'))
         return $ APrim i (primType p ts es') p es'
 
 -- error if "avValue_" is applied to too many arguments
 -- (so that the following other case arms can assume this check)
-aExpr (IAps (ICon i (ICSel { })) ts (e:es))
+aExpr (IAps (ICon i _ (ICSel { })) ts (e:es))
     | (i == idAVValue_) && (not (null es))
     = internalError ("aExpr: too many arguments to avValue_: " ++
                      ppReadable es)
 
-aExpr e@(IAps (ICon _ (ICSel {})) _ _) = aSelExpr sels selExpr
+aExpr e@(IAps (ICon _ _ (ICSel {})) _ _) = aSelExpr sels selExpr
     where
       (sels, selExpr) = unfoldICSel e
 
       unfoldICSel :: IExpr PostElab -> ([(Id, AType)], [IExpr PostElab])
-      unfoldICSel e@(IAps (ICon i (ICSel {})) _ [e']) =
+      unfoldICSel e@(IAps (ICon i _ (ICSel {})) _ [e']) =
           let (sels, a) = unfoldICSel e'
           in  ((i, aTypeConvE e $ iGetType e) : sels, a)
-      unfoldICSel e@(IAps (ICon i (ICSel {})) _ a@(_:_)) =
+      unfoldICSel e@(IAps (ICon i _ (ICSel {})) _ a@(_:_)) =
           ([(i, aTypeConvE e $ iGetType e)], a)
       -- a selector is always applied to at least its object operand
-      unfoldICSel e@(IAps (ICon _ (ICSel {})) _ []) =
+      unfoldICSel e@(IAps (ICon _ _ (ICSel {})) _ []) =
           internalError ("AConv.unfoldICSel: ICSel applied to no arguments:\n" ++
                          ppReadable e)
       unfoldICSel e = ([], [e])
 
-aExpr (IAps (ICon _ (ICCon { ictCon = ITAp _ t, conTagInfo = cti })) _ _) | t == itBit1 =
+aExpr (IAps (ICon _ (ITAp _ t) (ICCon { conTagInfo = cti })) _ _) | t == itBit1 =
         return $ aSBool (conNo cti /= 0)
-aExpr e@(IAps (ICon i (ICForeign { fName = name, isC = isC, foports = Nothing})) ts es) = do
+aExpr e@(IAps (ICon i _ (ICForeign { fName = name, isC = isC, foports = Nothing})) ts es) = do
         es' <- mapM aSExpr es
         -- XXX should this ever happen?
         -- assume we do not need applied types,
@@ -548,7 +548,7 @@ aExpr e@(IAps (ICon i (ICForeign { fName = name, isC = isC, foports = Nothing}))
         --let ns = [ n | ITNum n <- ts]
         --traceM("AFunCall1: " ++ name)
         return $ AFunCall (aTypeConvE e (iGetType e)) i name isC es'
-aExpr e@(IAps (ICon i (ICForeign { fName = name, isC = False, foports = (Just ops),
+aExpr e@(IAps (ICon i _ (ICForeign { fName = name, isC = False, foports = (Just ops),
                                    fTyVarNames = tvns })) ts es) = do
         es' <- mapM aSExpr es
         let nvals = [ n | ITNum n <- ts ]
@@ -567,56 +567,56 @@ aExpr e@(IAps (ICon i (ICForeign { fName = name, isC = False, foports = (Just op
         return $ ANoInlineFunCall t i'
                    (ANoInlineFun name ns ops Nothing) es'
 
-aExpr e@(IAps (ICon i _) _ _) | i == idPrimPair = do
+aExpr e@(IAps (ICon i _ _) _ _) | i == idPrimPair = do
         let at = aTypeConvE e (iGetType e)
         aes <- aTupleExpr e
         return (ATuple at aes)
 
-aExpr e@(ICon v (ICModPort { ictModPort = t })) = return (ASPort (aTypeConvE e t) v)
-aExpr e@(ICon v (ICModParam { ictModParam = t })) = return (ASParam (aTypeConvE e t) v)
-aExpr e@(ICon v (ICMethArg { ictMethArg = t })) = return (ASPort (aTypeConvE e t) v)
-aExpr (ICon i (ICValue { iValDef = e })) = aEDef i e []
+aExpr e@(ICon v t ICModPort) = return (ASPort (aTypeConvE e t) v)
+aExpr e@(ICon v t ICModParam) = return (ASParam (aTypeConvE e t) v)
+aExpr e@(ICon v t ICMethArg) = return (ASPort (aTypeConvE e t) v)
+aExpr (ICon i _ (ICValue { iValDef = e })) = aEDef i e []
 -- ^this destroys defprops, add them back with "union" in aEDef.
-aExpr e@(ICon id (ICInt { ictInt = t, iVal = i })) = return $ ASInt id (aTypeConvE e t) i
-aExpr e@(ICon id (ICReal { ictReal = t, iReal = r})) = return $ ASReal id (aTypeConvE e t) r
-aExpr e@(ICon id (ICString { ictString = t, iStr = s })) = return $ ASStr id (aTypeConvE e t) s
-aExpr e@(ICon _ (ICChar { })) =
+aExpr e@(ICon id t (ICInt { iVal = i })) = return $ ASInt id (aTypeConvE e t) i
+aExpr e@(ICon id t (ICReal { iReal = r})) = return $ ASReal id (aTypeConvE e t) r
+aExpr e@(ICon id t (ICString { iStr = s })) = return $ ASStr id (aTypeConvE e t) s
+aExpr e@(ICon _ _ (ICChar { })) =
   internalError ("aExpr: ICChar: " ++ ppReadable e)
-aExpr e@(ICon id (ICUndet { ictUndet = t })) | t /= itString = --trace ("ICAny: " ++ ppDebug e) $
+aExpr e@(ICon id t (ICUndet { })) | t /= itString = --trace ("ICAny: " ++ ppDebug e) $
   return (ASAny (aTypeConvE e t))
-aExpr e@(ICon id (ICUndet { ictUndet = t })) | t == itString =
+aExpr e@(ICon id t (ICUndet { })) | t == itString =
   throwError (getPosition id, EGeneric "Attempt to use a raw undetermined string")
 
-aExpr e@(ICon i (ICForeign { ictForeign = t, fName = name, isC = isC, foports = Nothing})) =
+aExpr e@(ICon i t (ICForeign { fName = name, isC = isC, foports = Nothing})) =
         --trace("AFunCall3: " ++ name) $
         return $ AFunCall (aTypeConvE e t) i name isC []
-aExpr e@(ICon i (ICForeign { ictForeign = t, fName = name, isC = False, foports = (Just ops)})) = do
+aExpr e@(ICon i t (ICForeign { fName = name, isC = False, foports = (Just ops)})) = do
         let i' = if isGenId i
                  then dropGenSuffixId i
                  else i
         --traceM("AFunCall4: " ++ name)
         return $ ANoInlineFunCall (aTypeConvE e t) i'
                    (ANoInlineFun name [] ops Nothing) []
-aExpr e@(IAps (ICon _ (ICUndet { })) _ _) =
+aExpr e@(IAps (ICon _ _ (ICUndet { })) _ _) =
     internalError ("AConv.ICUndet application " ++ ppReadable e)
 
-aExpr e@(ICon _ (ICClock { ictClock = itClock, iClock = c})) = do
+aExpr e@(ICon _ itClock (ICClock { iClock = c})) = do
   let at = aTypeConvE e itClock
   ac <- aClock c
   return (ASClock at ac)
 
-aExpr e@(ICon _ (ICReset { ictReset = t, iReset = r})) =
+aExpr e@(ICon _ t (ICReset { iReset = r})) =
    do let at = aTypeConvE e t
       ar <- aReset r
       return (ASReset at ar)
 
-aExpr e@(ICon _ (ICInout { ictInout = it, iInout = i})) | (isitInout_ it) = do
+aExpr e@(ICon _ it (ICInout { iInout = i})) | (isitInout_ it) = do
   let sz = getInout_Size it
       at = aTInout_ sz  -- aTypeConv e it
   ai <- aInout i
   return (ASInout at ai)
 
-aExpr (ICon i _) | i == idPrimUnit = return $ ASInt i (ATBit 0) (ilDec 0)
+aExpr (ICon i _ _) | i == idPrimUnit = return $ ASInt i (ATBit 0) (ilDec 0)
 
 aExpr e = internalError
               ("AConv.aExpr at " ++ ppString p ++ ":" ++ ppReadable e ++ "\n" ++
@@ -624,11 +624,11 @@ aExpr e = internalError
     where p = getIExprPosition e
 
 aTupleExpr :: IExpr PostElab -> M [AExpr]
-aTupleExpr (IAps (ICon i _) [t1, t2] [e1, e2]) | i == idPrimPair = do
+aTupleExpr (IAps (ICon i _ _) [t1, t2] [e1, e2]) | i == idPrimPair = do
         ae1 <- aSExpr e1
         ae2 <- aTupleExpr e2
         return (ae1:ae2)
-aTupleExpr (ICon i _) | i == idPrimUnit = return []
+aTupleExpr (ICon i _ _) | i == idPrimUnit = return []
 aTupleExpr e = fmap (:[]) (aSExpr e)
 
 -- the PrimFst/PrimSnd selectors that project an element out of a
@@ -639,7 +639,7 @@ isTupleSelector s = s == idPrimFst || s == idPrimSnd
 aSelExpr :: [(Id, AType)] -> [IExpr PostElab] -> M AExpr
 
 -- value part of ActionValue task without arguments
-aSelExpr [(m, t)] [(ICon i (ICForeign {fName = name,
+aSelExpr [(m, t)] [(ICon i _ (ICForeign {fName = name,
                                        isC = isC,
                                        foports = Nothing,
                                        fcallNo = mn}))]
@@ -652,7 +652,7 @@ aSelExpr [(m, t)] [(ICon i (ICForeign {fName = name,
         return (ATaskValue t i name isC n)
 
 -- value part of ActionValue task with arguments
-aSelExpr [(m, t)] [(IAps (ICon i (ICForeign {fName = name,
+aSelExpr [(m, t)] [(IAps (ICon i _ (ICForeign {fName = name,
                                              isC = isC,
                                              foports = Nothing,
                                              fcallNo = mn})) fts fes)]
@@ -669,7 +669,7 @@ aSelExpr [(m, t)] [(IAps (ICon i (ICForeign {fName = name,
 -- A port selected (via PrimFst/PrimSnd) from a value method that returns a
 -- tuple.  The value method still carries its arguments.  The number of PrimSnd
 -- selectors skipped to reach the method is the 0-based output port index.
-aSelExpr sels (ICon i (ICStateVar { }) : es)
+aSelExpr sels (ICon i _ (ICStateVar { }) : es)
     | (pfx@((_, atype) : _), [(m, atypeTup)]) <- span (isTupleSelector . fst) sels = do
   i' <- transId i
   es' <- mapM aSExpr (dropPrimUnitArgs es)
@@ -681,7 +681,7 @@ aSelExpr sels (ICon i (ICStateVar { }) : es)
 -- dropped in IExpand, so none should remain.  When there are leading
 -- PrimFst/PrimSnd selectors, the number of PrimSnd selectors is the 0-based
 -- output port index.
-aSelExpr sels base@(ICon i (ICStateVar { }) : es)
+aSelExpr sels base@(ICon i _ (ICStateVar { }) : es)
     | (pfx, [(iav, atypeTup), (m, _)]) <- span (isTupleSelector . fst) sels
     , iav == idAVValue_ = do
   i' <- transId i
@@ -702,18 +702,18 @@ aSelExpr sels base@(ICon i (ICStateVar { }) : es)
       return $ ATupleSel atype meth (idx + 1)
 
 -- value method
-aSelExpr [(m, atype)] (ICon i (ICStateVar { }) : es) = do
+aSelExpr [(m, atype)] (ICon i _ (ICStateVar { }) : es) = do
   i' <- transId i
   -- one AExpr per source argument; SplitPorts args are ATuple AExprs
   args <- mapM aSExpr (dropPrimUnitArgs es)
   return $ AMethCall atype i' m args
 
-aSelExpr [(m, _)] [ICon i (ICClock { iClock = c })] | m == idClockGate = do
+aSelExpr [(m, _)] [ICon i _ (ICClock { iClock = c })] | m == idClockGate = do
         ac <- aClock c
         return (aclock_gate ac)
 -- XXX This is here because aClock calls aSExpr on the oscillator.  However,
 -- XXX that should be the only place where an osc ever appears in an expr.
-aSelExpr [(m, _)] [ICon i (ICClock { iClock = c })] | m == idClockOsc = do
+aSelExpr [(m, _)] [ICon i _ (ICClock { iClock = c })] | m == idClockOsc = do
         ac <- aClock c
         return (aclock_osc ac)
 
@@ -729,8 +729,8 @@ aSelExpr sels@(_:_) [fcall]
   let atype = snd (headOrErr "AConv.aSelExpr: foreign sel" sels)
       idx = genericLength (filter ((== idPrimSnd) . fst) sels)
   return $ ATupleSel atype fcall' (idx + 1)
-  where isForeignFunCall (ICon _ (ICForeign { foports = Just _ })) = True
-        isForeignFunCall (IAps (ICon _ (ICForeign { foports = Just _ })) _ _) = True
+  where isForeignFunCall (ICon _ _ (ICForeign { foports = Just _ })) = True
+        isForeignFunCall (IAps (ICon _ _ (ICForeign { foports = Just _ })) _ _) = True
         isForeignFunCall _ = False
 
 aSelExpr sels base = internalError
@@ -786,7 +786,7 @@ aTypeConvE _ t@(ITAp (ITAp (ITCon p _ _) _) _) | p == idPrimPair =
 aTypeConvE a t | t == itReal = ATReal
 aTypeConvE a t | t == itString =
   case a of
-    (ICon _ (ICString _ s)) -> ATString (Just (genericLength s))
+    (ICon _ _ (ICString s)) -> ATString (Just (genericLength s))
     otherwise               -> ATString Nothing
 aTypeConvE a (ITCon i _ _) | i == idPrimUnit = ATBit 0
 aTypeConvE a t = abs t []
@@ -832,7 +832,7 @@ assocPrims :: [PrimOp]
 assocPrims = [ PrimConcat ]
 
 joinOp :: PrimOp -> IExpr PostElab -> [IExpr PostElab]
-joinOp p (IAps (ICon _ (ICPrim { primOp = p' })) _ es) | p == p' = es
+joinOp p (IAps (ICon _ _ (ICPrim { primOp = p' })) _ es) | p == p' = es
 joinOp _ e = [e]
 
 sumStrSizes :: [AExpr] -> Maybe ASize
@@ -910,8 +910,8 @@ aAction1 :: ARuleId -> IExpr PostElab -> IExpr PostElab -> M [AAction]
 aAction1 r cond (IAps (IAps f _ es1) _ es2) = aAction1 r cond (IAps f [] (es1++es2))
 
 -- action part of ActionValue task without arguments
-aAction1 _ cond a@(IAps (ICon avAction_ (ICSel { })) _
-                        ((ICon i (ICForeign {ictForeign = ity,
+aAction1 _ cond a@(IAps (ICon avAction_ _ (ICSel { })) _
+                        ((ICon i ity (ICForeign {
                                              fName = name,
                                              isC = isC,
                                              foports = Nothing,
@@ -929,8 +929,8 @@ aAction1 _ cond a@(IAps (ICon avAction_ (ICSel { })) _
    return [(ATaskAction i name isC n [cond'] Nothing value_type False)]
 
 -- action part of ActionValue task with arguments
-aAction1 _ cond a@(IAps (ICon avAction_ (ICSel { })) _
-                        ((IAps (ICon i (ICForeign {ictForeign = ity0,
+aAction1 _ cond a@(IAps (ICon avAction_ _ (ICSel { })) _
+                        ((IAps (ICon i ity0 (ICForeign {
                                                    fName = name,
                                                    isC = isC,
                                                    foports = Nothing,
@@ -950,10 +950,10 @@ aAction1 _ cond a@(IAps (ICon avAction_ (ICSel { })) _
    fes'   <- mapM aSExpr fes
    return [(ATaskAction i name isC n (cond' : fes') Nothing value_type False)]
 
-aAction1 r cond a@(IAps (ICon avAction_ (ICSel { })) _ es) | avAction_ == idAVAction_ =
+aAction1 r cond a@(IAps (ICon avAction_ _ (ICSel { })) _ es) | avAction_ == idAVAction_ =
    case es of
        -- if the selection is on a method call, then recurse on the method call
-       [e@(IAps (ICon m (ICSel { })) _ (ICon i (ICStateVar { }) : method_es))]
+       [e@(IAps (ICon m _ (ICSel { })) _ (ICon i _ (ICStateVar { }) : method_es))]
            -> aAction1 r cond e
        -- anything else is invalid
        [e] -> internalError
@@ -961,7 +961,7 @@ aAction1 r cond a@(IAps (ICon avAction_ (ICSel { })) _ es) | avAction_ == idAVAc
                 "e = " ++ show e)
        _ -> internalError "aAction1: avAction_ with wrong number of arguments"
 
-aAction1 _ cond (IAps (ICon m (ICSel { })) _ (ICon i (ICStateVar { }) : es)) = do
+aAction1 _ cond (IAps (ICon m _ (ICSel { })) _ (ICon i _ (ICStateVar { }) : es)) = do
         cond' <- aSExpr cond
         -- One AExpr per source argument.  aSExpr produces an ATuple AExpr
         -- for a SplitPorts argument whose IExpr is a PrimPair; consumers
@@ -971,7 +971,7 @@ aAction1 _ cond (IAps (ICon m (ICSel { })) _ (ICon i (ICStateVar { }) : es)) = d
         i' <- transId i
         return [ACall i' m (cond' : es')]
 
-aAction1 _ cond (IAps (ICon i (ICForeign { fName = name, isC = isC, foports = Nothing })) ts es) = do
+aAction1 _ cond (IAps (ICon i _ (ICForeign { fName = name, isC = isC, foports = Nothing })) ts es) = do
         cond' <- aSExpr cond
         es' <- mapM aSExpr es
         -- XXX should this ever happen?
@@ -985,11 +985,11 @@ aAction1 _ cond (IAps (ICon i (ICForeign { fName = name, isC = isC, foports = No
 --aAction1 _ cond (IAps (ICon i (ICForeign { fName = name, isC = False, foports = Just ops })) ts es) = ...
 
 -- special case for 0 argument foreign calls
-aAction1 _ cond (ICon i (ICForeign { fName = name, isC = isC, foports = Nothing })) = do
+aAction1 _ cond (ICon i _ (ICForeign { fName = name, isC = isC, foports = Nothing })) = do
         cond' <- aSExpr cond
         return [AFCall i name isC [cond'] False]
 
-aAction1 s cond (IAps (ICon _ (ICPrim { primOp = PrimIf })) _ [c, t, e]) = do
+aAction1 s cond (IAps (ICon _ _ (ICPrim { primOp = PrimIf })) _ [c, t, e]) = do
         flags <- getFlags
         t' <- aAction' s (iTransBoolExpr flags (c `ieAnd` cond)) t
         e' <- aAction' s (iTransBoolExpr flags ((ieNot c) `ieAnd` cond)) e
@@ -1002,13 +1002,13 @@ aAction1 s cond (ICon _ (ICPrim { primOp = PrimNoActions })) =
 
 -- XXX find a way to preserve the array in AAction
 aAction1 s cond
-    (IAps ic@(ICon i_sel (ICPrim { primOp = PrimArrayDynSelect }))
+    (IAps ic@(ICon i_sel _ (ICPrim { primOp = PrimArrayDynSelect }))
           ts@[_, idx_sz_ty@(ITNum idx_sz)]
           [e_arr, e_idx]) =
   case e_arr of
-    (ICon i (ICValue { iValDef = e_arr' })) ->
+    (ICon i _ (ICValue { iValDef = e_arr' })) ->
         aAction1 s cond (IAps ic ts [e_arr', e_idx])
-    (IAps (ICon _ (ICPrim { primOp = PrimBuildArray })) _ elem_es) -> do
+    (IAps (ICon _ _ (ICPrim { primOp = PrimBuildArray })) _ elem_es) -> do
         flags <- getFlags
         let ty_idx = aitBit idx_sz_ty
         -- number of arms is the min of the elems and the max index

@@ -130,7 +130,7 @@ dropEmptyRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
 -- will the rule never fire
 isFalseRule :: IRule PostElab -> Bool
 isFalseRule (IRule { irule_pred =
-               (ICon _ (ICInt { iVal = (IntLit { ilValue = 0 }) }))
+               (ICon _ _ (ICInt { iVal = (IntLit { ilValue = 0 }) }))
                    } )
               = True
 isFalseRule _ = False
@@ -142,7 +142,7 @@ isSplitRule r = isSplitRuleId (getIRuleId r)
 -- is the rule a noAction rule
 isNoActionRule :: IRule PostElab -> Bool
 isNoActionRule (IRule {
-       irule_body = (ICon _ (ICPrim { primOp = PrimNoActions })) } )
+       irule_body = (ICon _ _ (ICPrim { primOp = PrimNoActions })) } )
     = True
 isNoActionRule _ = False
 
@@ -179,10 +179,10 @@ warnUndetPreds errh flags imod@(IModule { imod_rules = (IRules _ rs),
         -- this returns a list of positions for any undet values found
         findUndets :: IExpr PostElab -> [Position]
         findUndets (IAps f _ as) = findUndets f ++ concatMap findUndets as
-        findUndets (ICon i (ICUndet {})) = [getPosition i]
-        findUndets (ICon i (ICValue {})) =
+        findUndets (ICon i _ (ICUndet {})) = [getPosition i]
+        findUndets (ICon i _ (ICValue {})) =
             fromJustOrErr ("findUndets: " ++ ppReadable i) $ M.lookup i hmap
-        findUndets (ICon _ _) = []
+        findUndets (ICon _ _ _) = []
 
 {-      -- for trace output of an expression containing an undet
         dmap = M.fromList [ (i, e) | (IDef i _ e _) <- ds ]

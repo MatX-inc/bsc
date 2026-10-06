@@ -158,7 +158,7 @@ initLState errh fs r (CPackage mi exps imps impsigs fixs ds includes) = LState {
         mkRef i (vs, t) =
             let it = foldr (\ (TyVar v _ k) acc -> ITForAll v (iConvK k) acc)
                            (iConvT fs r t) vs
-            in  ICon i (ICDef it (icUndetAt (getIdPosition i) it UNoMatch))
+            in  ICon i it (ICDef (icUndetAt (getIdPosition i) it UNoMatch))
 
 getTopNameInfo :: Id -> L (Maybe ([TyVar], CType))
 getTopNameInfo i = do
@@ -365,7 +365,7 @@ handleDict incoherent p t e = do
             when (trace_lift_dicts && not incoherent && null props) $ traceM $
                 "no evidence rendering (not cross-package dedupable): "
                 ++ ppReadable (lift_i, e')
-            let ref = ICon lift_i (ICDef it (icUndetAt (getIdPosition lift_i) it UNoMatch))
+            let ref = ICon lift_i it (ICDef (icUndetAt (getIdPosition lift_i) it UNoMatch))
             modify (\s -> s {
                 dictPool = M.insertWith (\new old -> old ++ new) it [(lift_i, ie)] (dictPool s),
                 liftedDefs = IDef lift_i it ie props : liftedDefs s,

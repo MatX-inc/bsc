@@ -85,7 +85,7 @@ icPair :: KnownPhase a => Id -> IExpr a
 {-# SPECIALISE icPair :: Id -> IExpr PreElab #-}
 {-# SPECIALISE icPair :: Id -> IExpr Elab #-}
 {-# SPECIALISE icPair :: Id -> IExpr PostElab #-}
-icPair i = ICon i (ICTuple ct [idPrimFst, idPrimSnd])
+icPair i = ICon i ct (ICTuple [idPrimFst, idPrimSnd])
   where ct = ITForAll i1 IKStar
               (ITForAll i2 IKStar
                ((ITVar i1) `itFun` (ITVar i2) `itFun` pair_t))
@@ -238,7 +238,7 @@ iMkLit :: KnownPhase a => IType -> Integer -> IExpr a
 {-# SPECIALISE iMkLit :: IType -> Integer -> IExpr PreElab #-}
 {-# SPECIALISE iMkLit :: IType -> Integer -> IExpr Elab #-}
 {-# SPECIALISE iMkLit :: IType -> Integer -> IExpr PostElab #-}
-iMkLit t i = ICon idIntLit (ICInt { ictInt = t, iVal = ilDec i })
+iMkLit t i = ICon idIntLit t (ICInt { iVal = ilDec i })
 
 iMkLitAt :: KnownPhase a => Position -> IType -> Integer -> IExpr a
 {-# SPECIALISE iMkLitAt :: Position -> IType -> Integer -> IExpr PreElab #-}
@@ -246,7 +246,7 @@ iMkLitAt :: KnownPhase a => Position -> IType -> Integer -> IExpr a
 {-# SPECIALISE iMkLitAt :: Position -> IType -> Integer -> IExpr PostElab #-}
 iMkLitAt pos t i =
     let ci = setIdPosition pos idIntLit
-    in  ICon ci (ICInt { ictInt = t, iVal = ilDec i })
+    in  ICon ci t (ICInt { iVal = ilDec i })
 
 iMkLitWB :: KnownPhase a => IType -> Maybe Integer -> Integer -> Integer -> IExpr a
 {-# SPECIALISE iMkLitWB :: IType -> Maybe Integer -> Integer -> Integer -> IExpr PreElab #-}
@@ -254,7 +254,7 @@ iMkLitWB :: KnownPhase a => IType -> Maybe Integer -> Integer -> Integer -> IExp
 {-# SPECIALISE iMkLitWB :: IType -> Maybe Integer -> Integer -> Integer -> IExpr PostElab #-}
 iMkLitWB t w b i =
     let lit = IntLit { ilValue = i, ilBase = b, ilWidth = w }
-    in  ICon idIntLit (ICInt { ictInt = t, iVal = lit })
+    in  ICon idIntLit t (ICInt { iVal = lit })
 
 iMkLitWBAt :: KnownPhase a => Position ->
               IType -> Maybe Integer -> Integer -> Integer -> IExpr a
@@ -264,7 +264,7 @@ iMkLitWBAt :: KnownPhase a => Position ->
 iMkLitWBAt pos t w b i =
     let ci = setIdPosition pos idIntLit
         lit = IntLit { ilValue = i, ilBase = b, ilWidth = w }
-    in  ICon ci (ICInt { ictInt = t, iVal = lit })
+    in  ICon ci t (ICInt { iVal = lit })
 
 iMkLitSize :: KnownPhase a => Integer -> Integer -> IExpr a
 {-# SPECIALISE iMkLitSize :: Integer -> Integer -> IExpr PreElab #-}
@@ -288,7 +288,7 @@ iMkRealLit :: KnownPhase a => Double -> IExpr a
 {-# SPECIALISE iMkRealLit :: Double -> IExpr PreElab #-}
 {-# SPECIALISE iMkRealLit :: Double -> IExpr Elab #-}
 {-# SPECIALISE iMkRealLit :: Double -> IExpr PostElab #-}
-iMkRealLit d = ICon idRealLit (ICReal { ictReal = itReal, iReal = d })
+iMkRealLit d = ICon idRealLit itReal (ICReal { iReal = d })
 
 iMkRealLitAt :: KnownPhase a => Position -> Double -> IExpr a
 {-# SPECIALISE iMkRealLitAt :: Position -> Double -> IExpr PreElab #-}
@@ -296,7 +296,7 @@ iMkRealLitAt :: KnownPhase a => Position -> Double -> IExpr a
 {-# SPECIALISE iMkRealLitAt :: Position -> Double -> IExpr PostElab #-}
 iMkRealLitAt pos d =
     let i = setIdPosition pos idRealLit
-    in  ICon i (ICReal { ictReal = itReal, iReal = d })
+    in  ICon i itReal (ICReal { iReal = d })
 
 iMkPairAt :: KnownPhase a => Position -> IType -> IType -> IExpr a -> IExpr a -> IExpr a
 {-# SPECIALISE iMkPairAt :: Position -> IType -> IType -> IExpr PreElab -> IExpr PreElab -> IExpr PreElab #-}
@@ -326,7 +326,7 @@ iMkPosition pos = iMkPositions [pos]
 iMkPositions :: KnownPhase (BinderPhase e) => [Position] -> IExpr (BinderPhase e)
 {-# SPECIALISE iMkPositions :: [Position] -> IExpr PreElab #-}
 {-# SPECIALISE iMkPositions :: [Position] -> IExpr Elab #-}
-iMkPositions poss = ICon idPositionLit (ICPosition itPosition poss)
+iMkPositions poss = ICon idPositionLit itPosition (ICPosition poss)
 
 -- utility for code that expects only one position in ICPosition
 getICPosition :: String -> [Position] -> Position
@@ -336,15 +336,15 @@ getICPosition str poss  = internalError (str ++ ": " ++ ppReadable poss)
 iMkName :: KnownPhase (BinderPhase e) => Id -> Id -> IExpr (BinderPhase e)
 {-# SPECIALISE iMkName :: Id -> Id -> IExpr PreElab #-}
 {-# SPECIALISE iMkName :: Id -> Id -> IExpr Elab #-}
-iMkName id name = ICon id (ICName itName name)
+iMkName id name = ICon id itName (ICName name)
 
 icType :: KnownPhase (BinderPhase e) => Id -> IType -> IExpr (BinderPhase e)
 {-# SPECIALISE icType :: Id -> IType -> IExpr PreElab #-}
 {-# SPECIALISE icType :: Id -> IType -> IExpr Elab #-}
-icType i t = ICon i (ICType { ictType = itType, iType = t })
+icType i t = ICon i itType (ICType { iType = t })
 
 icPred :: Pred Elab -> IExpr Elab
-icPred p = ICon idPredLit (ICPred { ictPred = itPred, iPred = p })
+icPred p = ICon idPredLit itPred (ICPred { iPred = p })
 
 icUndet :: KnownPhase a => IType -> UndefKind -> IExpr a
 {-# SPECIALISE icUndet :: IType -> UndefKind -> IExpr PreElab #-}
@@ -356,19 +356,19 @@ icUndetAt :: KnownPhase a => Position -> IType -> UndefKind -> IExpr a
 {-# SPECIALISE icUndetAt :: Position -> IType -> UndefKind -> IExpr PreElab #-}
 {-# SPECIALISE icUndetAt :: Position -> IType -> UndefKind -> IExpr Elab #-}
 {-# SPECIALISE icUndetAt :: Position -> IType -> UndefKind -> IExpr PostElab #-}
-icUndetAt pos t u = ICon (dummyId pos) (ICUndet t u)
+icUndetAt pos t u = ICon (dummyId pos) t (ICUndet u)
 
 iMkString :: KnownPhase a => String -> IExpr a
 {-# SPECIALISE iMkString :: String -> IExpr PreElab #-}
 {-# SPECIALISE iMkString :: String -> IExpr Elab #-}
 {-# SPECIALISE iMkString :: String -> IExpr PostElab #-}
-iMkString s = ICon idStringLit (ICString itString s)
+iMkString s = ICon idStringLit itString (ICString s)
 
 iMkStringAt :: KnownPhase a => Position -> String -> IExpr a
 {-# SPECIALISE iMkStringAt :: Position -> String -> IExpr PreElab #-}
 {-# SPECIALISE iMkStringAt :: Position -> String -> IExpr Elab #-}
 {-# SPECIALISE iMkStringAt :: Position -> String -> IExpr PostElab #-}
-iMkStringAt pos s = ICon (setIdPosition pos idStringLit) (ICString itString s)
+iMkStringAt pos s = ICon (setIdPosition pos idStringLit) itString (ICString s)
 
 iMkStrConcat :: KnownPhase a => IExpr a -> IExpr a -> IExpr a
 {-# SPECIALISE iMkStrConcat :: IExpr PreElab -> IExpr PreElab -> IExpr PreElab #-}
@@ -378,17 +378,17 @@ iMkStrConcat istr1 istr2 = iAps iConcatCon [] [istr1, istr2]
     where itStr = itString
           iConcatCon :: KnownPhase a => IExpr a
           iConcatCon = (ICon idPrimStringConcat
-                        (ICPrim (itStr `itFun` (itStr `itFun` itStr))
+                        (itStr `itFun` (itStr `itFun` itStr)) (ICPrim 
                          PrimStringConcat))
 
 iMkCharAt :: KnownPhase a => Position -> Char -> IExpr a
 {-# SPECIALISE iMkCharAt :: Position -> Char -> IExpr PreElab #-}
 {-# SPECIALISE iMkCharAt :: Position -> Char -> IExpr Elab #-}
 {-# SPECIALISE iMkCharAt :: Position -> Char -> IExpr PostElab #-}
-iMkCharAt pos c = ICon (setIdPosition pos idCharLit) (ICChar itChar c)
+iMkCharAt pos c = ICon (setIdPosition pos idCharLit) itChar (ICChar c)
 
 iMkHandle :: Handle -> IExpr Elab
-iMkHandle h = ICon idHandleLit (ICHandle itHandle h)
+iMkHandle h = ICon idHandleLit itHandle (ICHandle h)
 
 iMkBufferMode :: KnownPhase a => BufferMode -> IExpr a
 {-# SPECIALISE iMkBufferMode :: BufferMode -> IExpr PreElab #-}
@@ -402,7 +402,7 @@ iMkBufferMode (BlockBuffering msz) =
   let ic_ty = (itMaybe itInteger) `itFun` itBufferMode
       cti = ConTagInfo { conNo = 2, numCon = 3, conTag = 2, tagSize = 2 }
       ic = ICon idBlockBuffering
-             (ICCon { ictCon = ic_ty, conTagInfo = cti })
+             ic_ty (ICCon { conTagInfo = cti })
       e = case msz of
              Nothing -> iMkInvalid itInteger
              Just sz -> iMkValid itInteger (iMkLit itInteger (toInteger sz))
@@ -422,7 +422,7 @@ iMkValid t e =
   let a = take1tmpVarIds
       ic_ty = ITForAll a IKStar $ (ITVar a) `itFun` (itMaybe (ITVar a))
       cti = ConTagInfo { conNo = 1, numCon = 2, conTag = 1, tagSize = 1 }
-      ic = ICon idValid (ICCon { ictCon = ic_ty, conTagInfo = cti })
+      ic = ICon idValid ic_ty (ICCon { conTagInfo = cti })
   in  IAps ic [t] [e]
 
 iMkNil :: KnownPhase a => IType -> IExpr a
@@ -454,12 +454,12 @@ iMkCons t e_hd e_tl =
               itListCons (ITVar a) `itFun` (itList (ITVar a))
       cti = ConTagInfo { conNo = 1, numCon = 2, conTag = 1, tagSize = 1 }
       ic = ICon (idCons noPosition)
-                (ICCon { ictCon = ic_ty, conTagInfo = cti })
+                ic_ty (ICCon { conTagInfo = cti })
       (id_1:id_2:_) = tupleIds
       tc_id = mkTCId idList (idCons noPosition)
       tup_ty = ITForAll a IKStar $
                (ITVar a) `itFun` itList (ITVar a) `itFun` itListCons (ITVar a)
-      tup = ICon tc_id (ICTuple tup_ty [id_1, id_2])
+      tup = ICon tc_id tup_ty (ICTuple [id_1, id_2])
       e = IAps tup [t] [e_hd, e_tl]
   in  IAps ic [t] [e]
 
@@ -487,7 +487,7 @@ iMkRealBool :: KnownPhase a => Bool -> IExpr a
 {-# SPECIALISE iMkRealBool :: Bool -> IExpr PreElab #-}
 {-# SPECIALISE iMkRealBool :: Bool -> IExpr Elab #-}
 {-# SPECIALISE iMkRealBool :: Bool -> IExpr PostElab #-}
-iMkRealBool b = IAps (ICon i (ICPrim t PrimChr)) [] [iMkBool b]
+iMkRealBool b = IAps (ICon i t (ICPrim PrimChr)) [] [iMkBool b]
   where i = if b then idTrue else idFalse
         t = itBit1 `itFun` itBool
 
@@ -567,10 +567,10 @@ ieOrOpt :: KnownPhase a => IExpr a -> IExpr a -> IExpr a
 {-# SPECIALISE ieOrOpt :: IExpr Elab -> IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE ieOrOpt :: IExpr PostElab -> IExpr PostElab -> IExpr PostElab #-}
 -- a || (a && b) == a
-ieOrOpt e1 e2@(IAps (ICon _ (ICPrim _ PrimBAnd)) _ [a,b]) | e1 == a || e1 == b = e1
+ieOrOpt e1 e2@(IAps (ICon _ _ (ICPrim PrimBAnd)) _ [a,b]) | e1 == a || e1 == b = e1
 -- a || (~a && b ) == a || b
-ieOrOpt e1 e2@(IAps (ICon _ (ICPrim _ PrimBAnd)) _ [a,b]) | e1 == ieNot a = ieOrOpt e1 b
-ieOrOpt e1 e2@(IAps (ICon _ (ICPrim _ PrimBAnd)) _ [a,b]) | e1 == ieNot b = ieOrOpt e1 a
+ieOrOpt e1 e2@(IAps (ICon _ _ (ICPrim PrimBAnd)) _ [a,b]) | e1 == ieNot a = ieOrOpt e1 b
+ieOrOpt e1 e2@(IAps (ICon _ _ (ICPrim PrimBAnd)) _ [a,b]) | e1 == ieNot b = ieOrOpt e1 a
 ieOrOpt e1 e2 | e1 == e2       = e1
 ieOrOpt e1 e2 | e1 == ieNot e2 = iTrue
 ieOrOpt e1 e2 = ieOr e1 e2
@@ -580,8 +580,8 @@ ieNot :: KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE ieNot :: IExpr PreElab -> IExpr PreElab #-}
 {-# SPECIALISE ieNot :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE ieNot :: IExpr PostElab -> IExpr PostElab #-}
-ieNot (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) = e
-ieNot (IAps p@(ICon _ (ICPrim _ PrimIf)) ts [c,t,e]) = IAps p ts [c, ieNot t, ieNot e]
+ieNot (IAps (ICon _ _ (ICPrim PrimBNot)) _ [e]) = e
+ieNot (IAps p@(ICon _ _ (ICPrim PrimIf)) ts [c,t,e]) = IAps p ts [c, ieNot t, ieNot e]
 ieNot e | isFalse e = iTrue
 ieNot e | isTrue e  = iFalse
 ieNot e = IAps iNot [] [e]
@@ -632,14 +632,14 @@ isTrue :: KnownPhase a => IExpr a -> Bool
 {-# SPECIALISE isTrue :: IExpr PreElab -> Bool #-}
 {-# SPECIALISE isTrue :: IExpr Elab -> Bool #-}
 {-# SPECIALISE isTrue :: IExpr PostElab -> Bool #-}
-isTrue (ICon _ (ICInt { iVal = IntLit { ilValue = 1 } })) = True
+isTrue (ICon _ _ (ICInt { iVal = IntLit { ilValue = 1 } })) = True
 isTrue _ = False
 
 isFalse :: KnownPhase a => IExpr a -> Bool
 {-# SPECIALISE isFalse :: IExpr PreElab -> Bool #-}
 {-# SPECIALISE isFalse :: IExpr Elab -> Bool #-}
 {-# SPECIALISE isFalse :: IExpr PostElab -> Bool #-}
-isFalse (ICon _ (ICInt { iVal = IntLit { ilValue = 0 } })) = True
+isFalse (ICon _ _ (ICInt { iVal = IntLit { ilValue = 0 } })) = True
 isFalse _ = False
 
 iePrimWhen :: KnownPhase a => IType -> IExpr a -> IExpr a -> IExpr a
@@ -693,9 +693,9 @@ iAnd, iOr, iNot :: KnownPhase a => IExpr a
 {-# SPECIALISE iAnd :: IExpr PostElab #-}
 {-# SPECIALISE iOr :: IExpr PostElab #-}
 {-# SPECIALISE iNot :: IExpr PostElab #-}
-iAnd = ICon idPrimBAnd (ICPrim (itBit1 `itFun` itBit1 `itFun` itBit1) PrimBAnd)
-iOr  = ICon idPrimBOr  (ICPrim (itBit1 `itFun` itBit1 `itFun` itBit1) PrimBOr)
-iNot = ICon idPrimBNot (ICPrim (itBit1 `itFun` itBit1) PrimBNot)
+iAnd = ICon idPrimBAnd (itBit1 `itFun` itBit1 `itFun` itBit1) (ICPrim PrimBAnd)
+iOr  = ICon idPrimBOr  (itBit1 `itFun` itBit1 `itFun` itBit1) (ICPrim PrimBOr)
+iNot = ICon idPrimBNot (itBit1 `itFun` itBit1) (ICPrim PrimBNot)
 
 icJoinRules, icNoRules, icRule, icAddSchedPragmas, icJoinActions, icNoActions :: KnownPhase a => IExpr a
 {-# SPECIALISE icJoinRules :: IExpr PreElab #-}
@@ -716,18 +716,18 @@ icJoinRules, icNoRules, icRule, icAddSchedPragmas, icJoinActions, icNoActions ::
 {-# SPECIALISE icAddSchedPragmas :: IExpr PostElab #-}
 {-# SPECIALISE icJoinActions :: IExpr PostElab #-}
 {-# SPECIALISE icNoActions :: IExpr PostElab #-}
-icJoinRules = ICon idPrimJoinRules (ICPrim (itRules `itFun` itRules `itFun` itRules) PrimJoinRules)
-icNoRules = ICon idPrimNoRules (ICPrim itRules PrimNoRules)
-icRule = ICon idPrimRule (ICPrim (itString `itFun` itBit0 `itFun` itBit1 `itFun` itAction `itFun` itRules) PrimRule)
-icAddSchedPragmas = ICon idPrimAddSchedPragmas (ICPrim (itSchedPragma `itFun` itRules `itFun` itRules) PrimAddSchedPragmas)
-icJoinActions = ICon idPrimJoinActions (ICPrim (itAction `itFun` itAction `itFun` itAction) PrimJoinActions)
-icNoActions = ICon idPrimNoActions (ICPrim itAction PrimNoActions)
+icJoinRules = ICon idPrimJoinRules (itRules `itFun` itRules `itFun` itRules) (ICPrim PrimJoinRules)
+icNoRules = ICon idPrimNoRules itRules (ICPrim PrimNoRules)
+icRule = ICon idPrimRule (itString `itFun` itBit0 `itFun` itBit1 `itFun` itAction `itFun` itRules) (ICPrim PrimRule)
+icAddSchedPragmas = ICon idPrimAddSchedPragmas (itSchedPragma `itFun` itRules `itFun` itRules) (ICPrim PrimAddSchedPragmas)
+icJoinActions = ICon idPrimJoinActions (itAction `itFun` itAction `itFun` itAction) (ICPrim PrimJoinActions)
+icNoActions = ICon idPrimNoActions itAction (ICPrim PrimNoActions)
 
 icIf :: KnownPhase a => IExpr a
 {-# SPECIALISE icIf :: IExpr PreElab #-}
 {-# SPECIALISE icIf :: IExpr Elab #-}
 {-# SPECIALISE icIf :: IExpr PostElab #-}
-icIf = ICon idPrimIf (ICPrim (ITForAll i IKStar (itBit1 `itFun` ty `itFun` ty `itFun` ty)) PrimIf)
+icIf = ICon idPrimIf (ITForAll i IKStar (itBit1 `itFun` ty `itFun` ty `itFun` ty)) (ICPrim PrimIf)
   where i = take1tmpVarIds
         ty = ITVar i
 
@@ -735,7 +735,7 @@ icPrimArrayDynSelect :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimArrayDynSelect :: IExpr PreElab #-}
 {-# SPECIALISE icPrimArrayDynSelect :: IExpr Elab #-}
 {-# SPECIALISE icPrimArrayDynSelect :: IExpr PostElab #-}
-icPrimArrayDynSelect = ICon idPrimArrayDynSelect (ICPrim t PrimArrayDynSelect)
+icPrimArrayDynSelect = ICon idPrimArrayDynSelect t (ICPrim PrimArrayDynSelect)
   where elem_ty = ITVar a
         arr_ty = ITAp itPrimArray elem_ty
         idx_ty = aitBit (ITVar n)
@@ -748,7 +748,7 @@ icPrimBuildArray ::  (KnownPhase b, Num a, Enum a) => a -> IExpr b
 {-# SPECIALISE icPrimBuildArray :: (Num a, Enum a) => a -> IExpr PreElab #-}
 {-# SPECIALISE icPrimBuildArray :: (Num a, Enum a) => a -> IExpr Elab #-}
 {-# SPECIALISE icPrimBuildArray :: (Num a, Enum a) => a -> IExpr PostElab #-}
-icPrimBuildArray sz = ICon idPrimBuildArray (ICPrim t PrimBuildArray)
+icPrimBuildArray sz = ICon idPrimBuildArray t (ICPrim PrimBuildArray)
   where elem_ty = ITVar i
         arr_ty = ITAp itPrimArray elem_ty
         t = ITForAll i IKStar $ foldr (\ e f -> elem_ty `itFun` f) arr_ty [1..sz]
@@ -759,7 +759,7 @@ icPrimCase :: (KnownPhase b, Num a, Enum a) => a -> IExpr b
 {-# SPECIALISE icPrimCase :: (Num a, Enum a) => a -> IExpr PreElab #-}
 {-# SPECIALISE icPrimCase :: (Num a, Enum a) => a -> IExpr Elab #-}
 {-# SPECIALISE icPrimCase :: (Num a, Enum a) => a -> IExpr PostElab #-}
-icPrimCase sz = ICon idPrimCase (ICPrim t PrimCase)
+icPrimCase sz = ICon idPrimCase t (ICPrim PrimCase)
   where elem_ty = ITVar a
         idx_ty = aitBit (ITVar n)
         t = ITForAll n IKNum $
@@ -773,7 +773,7 @@ icPrimOrd :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimOrd :: IExpr PreElab #-}
 {-# SPECIALISE icPrimOrd :: IExpr Elab #-}
 {-# SPECIALISE icPrimOrd :: IExpr PostElab #-}
-icPrimOrd = ICon idPrimOrd (ICPrim t PrimOrd)
+icPrimOrd = ICon idPrimOrd t (ICPrim PrimOrd)
   where t = ITForAll a IKStar (ITForAll n IKNum (ITVar a `itFun` aitBit (ITVar n)))
         (a, n) = take2tmpVarIds
 
@@ -781,7 +781,7 @@ icPrimChr :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimChr :: IExpr PreElab #-}
 {-# SPECIALISE icPrimChr :: IExpr Elab #-}
 {-# SPECIALISE icPrimChr :: IExpr PostElab #-}
-icPrimChr = ICon idPrimChr (ICPrim t PrimChr)
+icPrimChr = ICon idPrimChr t (ICPrim PrimChr)
   where t = ITForAll n IKNum (ITForAll a IKStar (aitBit (ITVar n) `itFun` ITVar a))
         (n, a) = take2tmpVarIds
 
@@ -789,7 +789,7 @@ icSelect :: KnownPhase a => Position -> IExpr a
 {-# SPECIALISE icSelect :: Position -> IExpr PreElab #-}
 {-# SPECIALISE icSelect :: Position -> IExpr Elab #-}
 {-# SPECIALISE icSelect :: Position -> IExpr PostElab #-}
-icSelect pos = ICon (idPrimSelectAt pos) (ICPrim t PrimSelect)
+icSelect pos = ICon (idPrimSelectAt pos) t (ICPrim PrimSelect)
   where t = ITForAll k IKNum (ITForAll m IKNum (ITForAll n IKNum rt))
         rt = aitBit (ITVar n) `itFun` aitBit (ITVar k)
         (k, m, n) = take3tmpVarIds
@@ -798,7 +798,7 @@ icPrimConcat :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimConcat :: IExpr PreElab #-}
 {-# SPECIALISE icPrimConcat :: IExpr Elab #-}
 {-# SPECIALISE icPrimConcat :: IExpr PostElab #-}
-icPrimConcat = ICon idPrimConcat (ICPrim t PrimConcat)
+icPrimConcat = ICon idPrimConcat t (ICPrim PrimConcat)
   where t = ITForAll k IKNum (ITForAll m IKNum (ITForAll n IKNum rt))
         rt = aitBit (ITVar k) `itFun` aitBit (ITVar m) `itFun` aitBit (ITVar n)
         (k, m, n) = take3tmpVarIds
@@ -807,7 +807,7 @@ icPrimMul :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimMul :: IExpr PreElab #-}
 {-# SPECIALISE icPrimMul :: IExpr Elab #-}
 {-# SPECIALISE icPrimMul :: IExpr PostElab #-}
-icPrimMul = ICon idPrimMul (ICPrim t PrimMul)
+icPrimMul = ICon idPrimMul t (ICPrim PrimMul)
   where t = ITForAll k IKNum (ITForAll m IKNum (ITForAll n IKNum rt))
         rt = aitBit (ITVar k) `itFun` aitBit (ITVar m) `itFun` aitBit (ITVar n)
         (k, m, n) = take3tmpVarIds
@@ -816,7 +816,7 @@ icPrimQuot :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimQuot :: IExpr PreElab #-}
 {-# SPECIALISE icPrimQuot :: IExpr Elab #-}
 {-# SPECIALISE icPrimQuot :: IExpr PostElab #-}
-icPrimQuot = ICon idPrimQuot (ICPrim t PrimQuot)
+icPrimQuot = ICon idPrimQuot t (ICPrim PrimQuot)
   where t = ITForAll k IKNum (ITForAll n IKNum rt)
         rt = aitBit (ITVar k) `itFun` aitBit (ITVar n) `itFun` aitBit (ITVar k)
         (k, n) = take2tmpVarIds
@@ -825,7 +825,7 @@ icPrimRem :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimRem :: IExpr PreElab #-}
 {-# SPECIALISE icPrimRem :: IExpr Elab #-}
 {-# SPECIALISE icPrimRem :: IExpr PostElab #-}
-icPrimRem = ICon idPrimRem (ICPrim t PrimRem)
+icPrimRem = ICon idPrimRem t (ICPrim PrimRem)
   where t = ITForAll k IKNum (ITForAll n IKNum rt)
         rt = aitBit (ITVar k) `itFun` aitBit (ITVar n) `itFun` aitBit (ITVar n)
         (k, n) = take2tmpVarIds
@@ -834,7 +834,7 @@ icPrimZeroExt :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimZeroExt :: IExpr PreElab #-}
 {-# SPECIALISE icPrimZeroExt :: IExpr Elab #-}
 {-# SPECIALISE icPrimZeroExt :: IExpr PostElab #-}
-icPrimZeroExt = ICon idPrimZeroExt (ICPrim t PrimZeroExt)
+icPrimZeroExt = ICon idPrimZeroExt t (ICPrim PrimZeroExt)
   where t = ITForAll m IKNum (ITForAll k IKNum (ITForAll n IKNum rt))
         rt = aitBit (ITVar k) `itFun` aitBit (ITVar n)
         (k, m, n) = take3tmpVarIds
@@ -843,7 +843,7 @@ icPrimSignExt :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimSignExt :: IExpr PreElab #-}
 {-# SPECIALISE icPrimSignExt :: IExpr Elab #-}
 {-# SPECIALISE icPrimSignExt :: IExpr PostElab #-}
-icPrimSignExt = ICon idPrimSignExt (ICPrim t PrimSignExt)
+icPrimSignExt = ICon idPrimSignExt t (ICPrim PrimSignExt)
   where t = ITForAll m IKNum (ITForAll k IKNum (ITForAll n IKNum rt))
         rt = aitBit (ITVar k) `itFun` aitBit (ITVar n)
         (k, m, n) = take3tmpVarIds
@@ -852,7 +852,7 @@ icPrimTrunc :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimTrunc :: IExpr PreElab #-}
 {-# SPECIALISE icPrimTrunc :: IExpr Elab #-}
 {-# SPECIALISE icPrimTrunc :: IExpr PostElab #-}
-icPrimTrunc = ICon idPrimTrunc (ICPrim t PrimTrunc)
+icPrimTrunc = ICon idPrimTrunc t (ICPrim PrimTrunc)
   where t = ITForAll k IKNum (ITForAll m IKNum (ITForAll n IKNum rt))
         rt = aitBit (ITVar n) `itFun` aitBit (ITVar m)
         (k, m, n) = take3tmpVarIds
@@ -861,7 +861,7 @@ icPrimRel :: KnownPhase a => Id -> PrimOp -> IExpr a
 {-# SPECIALISE icPrimRel :: Id -> PrimOp -> IExpr PreElab #-}
 {-# SPECIALISE icPrimRel :: Id -> PrimOp -> IExpr Elab #-}
 {-# SPECIALISE icPrimRel :: Id -> PrimOp -> IExpr PostElab #-}
-icPrimRel id p = ICon id (ICPrim (ITForAll i IKNum (ty `itFun` ty `itFun` itBit1)) p)
+icPrimRel id p = ICon id (ITForAll i IKNum (ty `itFun` ty `itFun` itBit1)) (ICPrim p)
   where i = take1tmpVarIds
         ty = itBit `ITAp` ITVar i
 
@@ -869,7 +869,7 @@ icPrimWhen :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimWhen :: IExpr PreElab #-}
 {-# SPECIALISE icPrimWhen :: IExpr Elab #-}
 {-# SPECIALISE icPrimWhen :: IExpr PostElab #-}
-icPrimWhen = ICon idPrimWhen (ICPrim t PrimWhen)
+icPrimWhen = ICon idPrimWhen t (ICPrim PrimWhen)
   where t = ITForAll i IKStar (itBit1 `itFun` ITVar i `itFun` ITVar i)
         i = take1tmpVarIds
 
@@ -877,7 +877,7 @@ icPrimWhenPred :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimWhenPred :: IExpr PreElab #-}
 {-# SPECIALISE icPrimWhenPred :: IExpr Elab #-}
 {-# SPECIALISE icPrimWhenPred :: IExpr PostElab #-}
-icPrimWhenPred = ICon idPrimWhen (ICPrim t PrimWhenPred)
+icPrimWhenPred = ICon idPrimWhen t (ICPrim PrimWhenPred)
   where t = ITForAll i IKStar (itPred `itFun` ITVar i `itFun` ITVar i)
         i = take1tmpVarIds
 
@@ -892,14 +892,14 @@ icPrimRawUninitialized, icPrimUninitialized :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimUninitialized :: IExpr Elab #-}
 {-# SPECIALISE icPrimRawUninitialized :: IExpr PostElab #-}
 {-# SPECIALISE icPrimUninitialized :: IExpr PostElab #-}
-icPrimRawUninitialized = ICon idPrimRawUninitialized (ICPrim itUninitialized PrimRawUninitialized)
-icPrimUninitialized = ICon idPrimUninitialized (ICPrim itUninitialized PrimUninitialized)
+icPrimRawUninitialized = ICon idPrimRawUninitialized itUninitialized (ICPrim PrimRawUninitialized)
+icPrimUninitialized = ICon idPrimUninitialized itUninitialized (ICPrim PrimUninitialized)
 
 icPrimSetSelPosition :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimSetSelPosition :: IExpr PreElab #-}
 {-# SPECIALISE icPrimSetSelPosition :: IExpr Elab #-}
 {-# SPECIALISE icPrimSetSelPosition :: IExpr PostElab #-}
-icPrimSetSelPosition = ICon idPrimSetSelPosition (ICPrim t PrimSetSelPosition)
+icPrimSetSelPosition = ICon idPrimSetSelPosition t (ICPrim PrimSetSelPosition)
   where t = ITForAll i IKStar (itPosition `itFun` ITVar i `itFun` ITVar i)
         i = take1tmpVarIds
 
@@ -907,7 +907,7 @@ icPrimSL :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimSL :: IExpr PreElab #-}
 {-# SPECIALISE icPrimSL :: IExpr Elab #-}
 {-# SPECIALISE icPrimSL :: IExpr PostElab #-}
-icPrimSL = ICon idPrimSL (ICPrim t PrimSL)
+icPrimSL = ICon idPrimSL t (ICPrim PrimSL)
   where t = ITForAll i IKNum (ty `itFun` itNat `itFun` ty)
         ty = itBit `ITAp` ITVar i
         i = take1tmpVarIds
@@ -916,7 +916,7 @@ icPrimSRL :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimSRL :: IExpr PreElab #-}
 {-# SPECIALISE icPrimSRL :: IExpr Elab #-}
 {-# SPECIALISE icPrimSRL :: IExpr PostElab #-}
-icPrimSRL = ICon idPrimSRL (ICPrim t PrimSRL)
+icPrimSRL = ICon idPrimSRL t (ICPrim PrimSRL)
   where t = ITForAll i IKNum (ty `itFun` itNat `itFun` ty)
         ty = itBit `ITAp` ITVar i
         i = take1tmpVarIds
@@ -948,7 +948,7 @@ icPrimBinVecOp :: KnownPhase a => Id -> PrimOp -> IExpr a
 {-# SPECIALISE icPrimBinVecOp :: Id -> PrimOp -> IExpr PreElab #-}
 {-# SPECIALISE icPrimBinVecOp :: Id -> PrimOp -> IExpr Elab #-}
 {-# SPECIALISE icPrimBinVecOp :: Id -> PrimOp -> IExpr PostElab #-}
-icPrimBinVecOp id p = ICon id (ICPrim t p)
+icPrimBinVecOp id p = ICon id t (ICPrim p)
   where t = ITForAll i IKNum (ty `itFun` ty `itFun` ty)
         i = take1tmpVarIds
         ty = itBit `ITAp` ITVar i
@@ -967,7 +967,7 @@ icPrimInv :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimInv :: IExpr PreElab #-}
 {-# SPECIALISE icPrimInv :: IExpr Elab #-}
 {-# SPECIALISE icPrimInv :: IExpr PostElab #-}
-icPrimInv = ICon idPrimSL (ICPrim t PrimInv)
+icPrimInv = ICon idPrimSL t (ICPrim PrimInv)
   where t = ITForAll i IKNum (ty `itFun` ty)
         i = take1tmpVarIds
         ty = itBit `ITAp` ITVar i
@@ -976,7 +976,7 @@ icPrimIntegerToBit :: KnownPhase a => IExpr a
 {-# SPECIALISE icPrimIntegerToBit :: IExpr PreElab #-}
 {-# SPECIALISE icPrimIntegerToBit :: IExpr Elab #-}
 {-# SPECIALISE icPrimIntegerToBit :: IExpr PostElab #-}
-icPrimIntegerToBit = ICon (idFromInteger noPosition) (ICPrim t PrimIntegerToBit)
+icPrimIntegerToBit = ICon (idFromInteger noPosition) t (ICPrim PrimIntegerToBit)
   where t  = ITForAll i IKNum (itInteger `itFun` (aitBit ty))
         ty = ITVar i
         i  = take1tmpVarIds
@@ -984,23 +984,23 @@ icPrimIntegerToBit = ICon (idFromInteger noPosition) (ICPrim t PrimIntegerToBit)
 icClock :: KnownPhase (EvaldPhase b) => Id -> IClock (EvaldPhase b) -> IExpr (EvaldPhase b)
 {-# SPECIALISE icClock :: Id -> IClock Elab -> IExpr Elab #-}
 {-# SPECIALISE icClock :: Id -> IClock PostElab -> IExpr PostElab #-}
-icClock i c = ICon i (ICClock {ictClock = itClock, iClock = c})
+icClock i c = ICon i itClock (ICClock {iClock = c})
 
 icReset :: KnownPhase (EvaldPhase b) => Id -> IReset (EvaldPhase b) -> IExpr (EvaldPhase b)
 {-# SPECIALISE icReset :: Id -> IReset Elab -> IExpr Elab #-}
 {-# SPECIALISE icReset :: Id -> IReset PostElab -> IExpr PostElab #-}
-icReset i r = ICon i (ICReset {ictReset = itReset, iReset = r})
+icReset i r = ICon i itReset (ICReset {iReset = r})
 
 icInout :: KnownPhase (EvaldPhase b) => Id -> Integer -> IInout (EvaldPhase b) -> IExpr (EvaldPhase b)
 {-# SPECIALISE icInout :: Id -> Integer -> IInout Elab -> IExpr Elab #-}
 {-# SPECIALISE icInout :: Id -> Integer -> IInout PostElab -> IExpr PostElab #-}
-icInout i sz iot = ICon i (ICInout {ictInout = itInout_N sz, iInout = iot})
+icInout i sz iot = ICon i (itInout_N sz) (ICInout {iInout = iot})
 
 icSelClockOsc :: KnownPhase (EvaldPhase b) => Id -> IClock (EvaldPhase b) -> IExpr (EvaldPhase b)
 {-# SPECIALISE icSelClockOsc :: Id -> IClock Elab -> IExpr Elab #-}
 {-# SPECIALISE icSelClockOsc :: Id -> IClock PostElab -> IExpr PostElab #-}
 icSelClockOsc i c =
-    IAps (ICon idClockOsc (ICSel { ictSel = itClock `itFun` itBit1,
+    IAps (ICon idClockOsc (itClock `itFun` itBit1) (ICSel { 
                                     selNo = 0,
                                     numSel = 2 }))
          []
@@ -1010,7 +1010,7 @@ icSelClockGate :: KnownPhase (EvaldPhase b) => Id -> IClock (EvaldPhase b) -> IE
 {-# SPECIALISE icSelClockGate :: Id -> IClock Elab -> IExpr Elab #-}
 {-# SPECIALISE icSelClockGate :: Id -> IClock PostElab -> IExpr PostElab #-}
 icSelClockGate i c =
-    IAps (ICon idClockGate (ICSel { ictSel = itClock `itFun` itBit1,
+    IAps (ICon idClockGate (itClock `itFun` itBit1) (ICSel { 
                                     selNo = 1,
                                     numSel = 2 }))
          []
@@ -1026,14 +1026,14 @@ icNoReset = icReset idNoReset noReset
 icNoPosition :: KnownPhase (BinderPhase e) => IExpr (BinderPhase e)
 {-# SPECIALISE icNoPosition :: IExpr PreElab #-}
 {-# SPECIALISE icNoPosition :: IExpr Elab #-}
-icNoPosition = ICon idNoPosition (ICPosition { ictPosition = itPosition, iPosition = [noPosition] })
+icNoPosition = ICon idNoPosition itPosition (ICPosition { iPosition = [noPosition] })
 
 -- turn an oscillator and gate expression into a clock wires tuple
 makeClockWires :: KnownPhase a => IExpr a -> IExpr a -> IExpr a
 {-# SPECIALISE makeClockWires :: IExpr PreElab -> IExpr PreElab -> IExpr PreElab #-}
 {-# SPECIALISE makeClockWires :: IExpr Elab -> IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE makeClockWires :: IExpr PostElab -> IExpr PostElab -> IExpr PostElab #-}
-makeClockWires osc gate = iAps (ICon idClock (ICTuple {ictTuple = itClockCons, fieldIds = [idClockOsc, idClockGate]})) [] [osc, gate]
+makeClockWires osc gate = iAps (ICon idClock itClockCons (ICTuple {fieldIds = [idClockOsc, idClockGate]})) [] [osc, gate]
 
 noClock :: KnownPhase a => IClock a
 {-# SPECIALISE noClock :: IClock PreElab #-}
@@ -1052,7 +1052,7 @@ noReset :: KnownPhase a => IReset a
 {-# SPECIALISE noReset :: IReset PreElab #-}
 {-# SPECIALISE noReset :: IReset Elab #-}
 {-# SPECIALISE noReset :: IReset PostElab #-}
-noReset = makeReset noResetId noClock (ICon idNoReset (ICPrim itBit1 PrimResetUnassertedVal))
+noReset = makeReset noResetId noClock (ICon idNoReset itBit1 (ICPrim PrimResetUnassertedVal))
 
 -- XXX should the reset wire be an error?
 missingDefaultReset :: KnownPhase a => IReset a
@@ -1168,9 +1168,9 @@ getClockGate :: KnownPhase (EvaldPhase b) => IClock (EvaldPhase b) -> IExpr (Eva
 {-# SPECIALISE getClockGate :: IClock PostElab -> IExpr PostElab #-}
 getClockGate c =
    case (getClockWires c) of
-     IAps (ICon i (ICTuple {fieldIds = [i_osc, i_gate]})) [] [osc, gate] |
+     IAps (ICon i _ (ICTuple {fieldIds = [i_osc, i_gate]})) [] [osc, gate] |
         i == idClock && i_osc == idClockOsc && i_gate == idClockGate -> gate
-     IAps (ICon i (ICSel { ictSel = itClock })) _ [(ICon vid (ICStateVar {iVar = sv}))] ->
+     IAps (ICon i itClock (ICSel { })) _ [(ICon vid _ (ICStateVar {iVar = sv}))] ->
         case (lookupOutputClockWires i (getVModInfo sv)) of
           (_, Nothing) -> iTrue
           (_, Just _)  -> icSelClockGate i c
@@ -1190,14 +1190,14 @@ getClockOscString :: KnownPhase a => IClock a -> String
 getClockOscString clk =
    let
        handleExpr :: KnownPhase a => IExpr a -> String
-       handleExpr (IAps (ICon m (ICSel { })) _
-                        [(ICon i (ICClock { iClock = c }))]) = handleClk c
-       handleExpr (ICon v (ICModPort { })) =
+       handleExpr (IAps (ICon m _ (ICSel { })) _
+                        [(ICon i _ (ICClock { iClock = c }))]) = handleClk c
+       handleExpr (ICon v _ (ICModPort { })) =
            -- This does not display the user-level name for a port.
            -- We currently expect the caller to handle that.
            getIdString v
-       handleExpr (IAps (ICon m (ICSel { })) _
-                        (ICon vid (ICStateVar { }) : es )) =
+       handleExpr (IAps (ICon m _ (ICSel { })) _
+                        (ICon vid _ (ICStateVar { }) : es )) =
            getIdString vid ++ "." ++ getIdString m
        handleExpr e = internalError ("getClockOscString: unexpected expr: " ++
                                      ppReadable e)
@@ -1205,12 +1205,12 @@ getClockOscString clk =
        handleClk :: KnownPhase a => IClock a -> String
        handleClk c =
            case (getClockWires c) of
-               IAps (ICon i (ICTuple {fieldIds = [i_osc, i_gate]})) []
+               IAps (ICon i _ (ICTuple {fieldIds = [i_osc, i_gate]})) []
                     [osc, gate] | i == idClock &&
                                   i_osc == idClockOsc && i_gate == idClockGate
                  -> handleExpr osc
-               IAps (ICon i (ICSel { ictSel = itClock })) _
-                    [(ICon vid (ICStateVar {iVar = sv}))]
+               IAps (ICon i itClock (ICSel { })) _
+                    [(ICon vid _ (ICStateVar {iVar = sv}))]
                  -> -- display the BSV name, not the Verilog port
                     getIdString vid ++ "." ++ getIdString i
                     --let port = fst $
@@ -1227,13 +1227,13 @@ getResetString :: KnownPhase a => IReset a -> String
 getResetString rst =
    let
        handleExpr :: KnownPhase a => IExpr a -> String
-       handleExpr (ICon _ (ICReset { iReset = r })) = handleRst r
-       handleExpr (ICon v (ICModPort { })) =
+       handleExpr (ICon _ _ (ICReset { iReset = r })) = handleRst r
+       handleExpr (ICon v _ (ICModPort { })) =
            -- This does not display the user-level name for a port.
            -- We currently expect the caller to handle that.
            getIdString v
-       handleExpr (IAps (ICon m (ICSel { })) _
-                        [ICon vid (ICStateVar { })]) =
+       handleExpr (IAps (ICon m _ (ICSel { })) _
+                        [ICon vid _ (ICStateVar { })]) =
            getIdString vid ++ "." ++ getIdString m
        handleExpr e = internalError ("getResetString: unexpected expr: " ++
                                      ppReadable e)
@@ -1416,7 +1416,7 @@ iGetTypeNorm norm e0 =
           dropArrows (length es) (changedOrId norm $ tCheck r (IAps f ts []))
         tCheck r (IVar i) = findT i r
         tCheck r (ILAM i k e) = ITForAll i k (tCheck r e)
-        tCheck r (ICon c ic) = iConType ic
+        tCheck r (ICon c t _) = t
         tCheck r (IRefT t _ _ _) = t
 --        tCheck _ e = internalError ("no match in ISyntaxUtil.tCheck: " ++ ppReadable e)
 
@@ -1431,8 +1431,8 @@ iGetTypeNorm norm e0 =
 
     in  case e0 of
         -- First some fast special cases:
-        (ICon c ic) -> iConType ic
-        e@(IAps (ICon _ (ICPrim _ p)) ts es) -> iGetTypePrim e p ts es
+        (ICon c t _) -> t
+        e@(IAps (ICon _ _ (ICPrim p)) ts es) -> iGetTypePrim e p ts es
         -- General
         e -> changedOrId norm $ tCheck emptyEnv e
 
@@ -1484,7 +1484,7 @@ notIf :: KnownPhase a => IExpr a -> Bool
 {-# SPECIALISE notIf :: IExpr PreElab -> Bool #-}
 {-# SPECIALISE notIf :: IExpr Elab -> Bool #-}
 {-# SPECIALISE notIf :: IExpr PostElab -> Bool #-}
-notIf (IAps (ICon _ (ICPrim { primOp = PrimIf })) _ _) = False
+notIf (IAps (ICon _ _ (ICPrim { primOp = PrimIf })) _ _) = False
 notIf _ = True
 
 -- note that ISplitIf.push assumes that PrimIf is FALSE for this function
@@ -1502,9 +1502,9 @@ flattensToNothing :: KnownPhase a => IExpr a -> Bool
 {-# SPECIALISE flattensToNothing :: IExpr PreElab -> Bool #-}
 {-# SPECIALISE flattensToNothing :: IExpr Elab -> Bool #-}
 {-# SPECIALISE flattensToNothing :: IExpr PostElab -> Bool #-}
-flattensToNothing (ICon _ (ICPrim { primOp = PrimNoActions })) = True
-flattensToNothing (ICon i (ICUndet { })) = True
-flattensToNothing (IAps (ICon i (ICUndet { })) _ _) = True
+flattensToNothing (ICon _ _ (ICPrim { primOp = PrimNoActions })) = True
+flattensToNothing (ICon i _ (ICUndet { })) = True
+flattensToNothing (IAps (ICon i _ (ICUndet { })) _ _) = True
 flattensToNothing _ = False
 
 flatAction :: KnownPhase a => IExpr a -> [IExpr a]
@@ -1512,7 +1512,7 @@ flatAction :: KnownPhase a => IExpr a -> [IExpr a]
 {-# SPECIALISE flatAction :: IExpr Elab -> [IExpr Elab] #-}
 {-# SPECIALISE flatAction :: IExpr PostElab -> [IExpr PostElab] #-}
 flatAction x | flattensToNothing x = []
-flatAction (IAps (ICon _ (ICPrim { primOp = PrimJoinActions })) _ [a1, a2]) = flatAction a1 ++ flatAction a2
+flatAction (IAps (ICon _ _ (ICPrim { primOp = PrimJoinActions })) _ [a1, a2]) = flatAction a1 ++ flatAction a2
 --flatAction (IAps f ts es) = [IAps f ts (map (joinActions . flatAction) es)]
 flatAction a = [a]
 
@@ -1558,7 +1558,7 @@ getStateVarNames :: KnownPhase a => IExpr a -> [Id]
 {-# SPECIALISE getStateVarNames :: IExpr PostElab -> [Id] #-}
 getStateVarNames (ILam _ _ e) = getStateVarNames e
 getStateVarNames (ILAM _ _ e) = getStateVarNames e
-getStateVarNames (ICon i (ICStateVar {})) = [i]
+getStateVarNames (ICon i _ (ICStateVar {})) = [i]
 getStateVarNames (IAps f _ es) = concatMap getStateVarNames (f:es)
 getStateVarNames _ = []
 
@@ -1585,11 +1585,11 @@ emptyFmt :: KnownPhase a => (IExpr a)
 {-# SPECIALISE emptyFmt :: (IExpr PreElab) #-}
 {-# SPECIALISE emptyFmt :: (IExpr Elab) #-}
 {-# SPECIALISE emptyFmt :: (IExpr PostElab) #-}
-emptyFmt = (IAps (ICon idFormat (ICForeign {fName    = getIdString(unQualId(idFormat)),
+emptyFmt = (IAps (ICon idFormat tt (ICForeign {fName    = getIdString(unQualId(idFormat)),
                                             foports  = Nothing,
                                             fTyVarNames = [],
                                             fcallNo  = (Just 0),
-                                            ictForeign = tt,
+                                            
                                             isC = False -- unsure what this should be?
                                             })) [] [e])
    where e = iMkString ""

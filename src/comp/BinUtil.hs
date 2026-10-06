@@ -197,7 +197,7 @@ hasPoisonPill :: IExpr PreElab -> Bool
 hasPoisonPill (ILam _ _ e)  = hasPoisonPill e
 hasPoisonPill (ILAM _ _ e)  = hasPoisonPill e
 hasPoisonPill (IAps f _ es) = any hasPoisonPill (f:es)
-hasPoisonPill (ICon _ (ICPrim _ p)) = p == PrimPoisonedDef
+hasPoisonPill (ICon _ _ (ICPrim p)) = p == PrimPoisonedDef
 hasPoisonPill _ = False
 
 mergeHashes :: ErrorHandle -> HashMap -> Id -> String -> [(Id, String)] ->

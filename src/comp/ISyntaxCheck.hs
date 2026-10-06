@@ -194,7 +194,7 @@ tCheck flags symt cache r eqTy ec@(IAps e [t] []) =
         tt -> internalError ("tCheck IAP: " ++ ppReadable (ec, tt))
 tCheck flags symt cache r eqTy (IAps f (t:ts) []) =
     tCheck flags symt cache r eqTy (IAps (IAps f [t] []) ts [])
-tCheck _ _ _ _ _ (ICon c ic) = iConType ic
+tCheck _ _ _ _ _ (ICon c t _) = t
 tCheck flags symt cache r eqTy (IAps f [] []) =
     trace_icheck ("tCheck IAps []: " ++ show f) $
     tCheck flags symt cache r eqTy f

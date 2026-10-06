@@ -40,10 +40,10 @@ iSimp n (ILam i t e) = ILam i t (iSimp n e)
 iSimp n (IAps e ts as) = iSimpAp' n (iSimp n (expDef e)) ts (map (iSimp n) as)
 iSimp _ e@(IVar _) = e
 iSimp n (ILAM i k e) = ILAM i k (iSimp n e)
-iSimp _ e@(ICon _ _) = e
+iSimp _ e@(ICon _ _ _) = e
 
 expDef :: IExpr PreElab -> IExpr PreElab
-expDef (ICon _ (ICDef _ e)) | isHarmless e = e
+expDef (ICon _ _ (ICDef e)) | isHarmless e = e
 expDef e = e
 
 iSimpAp' :: Bool -> IExpr PreElab -> [IType] -> [IExpr PreElab] -> IExpr PreElab
@@ -55,7 +55,7 @@ iSimpAp n (ILam i _ e) [] (a:as)
     | not (isKeepId i) && (isTriv a || countOcc i e <= 1) =
         let e' = eSubst i a e
         in iSimpAp n e' [] as
-iSimpAp _ (ICon _ (ICPrim _ prim)) ts es | m /= Nothing = r
+iSimpAp _ (ICon _ _ (ICPrim prim)) ts es | m /= Nothing = r
   where m = doPrim prim ts es
         r = fromJustOrErr "iSimpAp ICPrim Nothing" m
 -- Under -hack-eager-pack-unpack (a debugging aid, see IExpand), resolve
@@ -71,7 +71,7 @@ iSimpAp _ (ICon _ (ICPrim _ prim)) ts es | m /= Nothing = r
 -- otherwise permeate the condition machinery), so resolving them here
 -- restores the old static folding for Bool logic and does the unfold
 -- once per .bo instead of once per elaboration use.
-iSimpAp n (ICon _ (ICPrim _ p)) ts (dict : es)
+iSimpAp n (ICon _ _ (ICPrim p)) ts (dict : es)
     | p == PrimPack || p == PrimUnpack, n,
       doEagerPackUnpack || smallWidth ts,
       Just meth <- selectDictMethod meth_i dict
@@ -79,7 +79,7 @@ iSimpAp n (ICon _ (ICPrim _ p)) ts (dict : es)
   where meth_i = if p == PrimPack then idPack else idUnpack
         smallWidth [_, ITNum w] = w <= 1
         smallWidth _ = False
-iSimpAp n f@(ICon _ (ICSel { selNo = k })) ts
+iSimpAp n f@(ICon _ _ (ICSel { selNo = k })) ts
         es@(def : as) | n && m /= Nothing = {-trace (ppReadable (IAps f ts es, e'))-} e'
   where m = selectTuple (fromInteger k) def
         e = fromJustOrErr "iSimpAp ICSel Nothing" m
@@ -88,12 +88,12 @@ iSimpAp n e [] [] = e -- iSimp has already been called
 iSimpAp n f ts es = IAps f ts es
 
 selectTuple :: Int -> IExpr PreElab -> Maybe (IExpr PreElab)
-selectTuple k (ICon di (ICDef { iConDef = def@(IAps (ICon _ (ICTuple { })) _ ms) })) | di `notElem` dVars e = Just e
+selectTuple k (ICon di _ (ICDef { iConDef = def@(IAps (ICon _ _ (ICTuple { })) _ ms) })) | di `notElem` dVars e = Just e
   where e = ms !! k
-selectTuple k (IAps (ICon iii (ICDef { iConDef = body })) ts []) =
+selectTuple k (IAps (ICon iii _ (ICDef { iConDef = body })) ts []) =
         -- trace ("getTuple " ++ ppReadable (iii,body)) $
         case iSimpAp False body ts [] of
-        IAps (ICon _ (ICTuple { })) _ ms -> Just $ ms !! k
+        IAps (ICon _ _ (ICTuple { })) _ ms -> Just $ ms !! k
         _ -> Nothing
 selectTuple _ _ = Nothing
 
@@ -101,12 +101,12 @@ selectTuple _ _ = Nothing
 -- fieldIds (used for the pack/unpack coercion primitives under
 -- -hack-eager-pack-unpack)
 selectDictMethod :: Id -> IExpr PreElab -> Maybe (IExpr PreElab)
-selectDictMethod meth (ICon di (ICDef { iConDef = IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms }))
+selectDictMethod meth (ICon di _ (ICDef { iConDef = IAps (ICon _ _ (ICTuple { fieldIds = fs })) _ ms }))
     | Just k <- findIndex (qualEq meth) fs, k < length ms,
       let e = ms !! k, di `notElem` dVars e = Just e
-selectDictMethod meth (IAps (ICon _ (ICDef { iConDef = body })) ts []) =
+selectDictMethod meth (IAps (ICon _ _ (ICDef { iConDef = body })) ts []) =
         case iSimpAp False body ts [] of
-        IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms
+        IAps (ICon _ _ (ICTuple { fieldIds = fs })) _ ms
             | Just k <- findIndex (qualEq meth) fs, k < length ms -> Just (ms !! k)
         _ -> Nothing
 selectDictMethod _ _ = Nothing
@@ -116,10 +116,10 @@ doEagerPackUnpack = elem "-hack-eager-pack-unpack" progArgs
 
 -- XXX should we do more PrimOps here?
 doPrim :: PrimOp -> [IType] -> [IExpr PreElab] -> Maybe (IExpr PreElab)
-doPrim PrimIntegerToBit [t@(ITNum s)] [ICon i l@(ICInt { iVal = v })] | ilValue v >= 0 &&
+doPrim PrimIntegerToBit [t@(ITNum s)] [ICon i _ l@(ICInt { iVal = v })] | ilValue v >= 0 &&
                                                                         s >=0 &&
-                                                                        ilValue v < 2^s = Just $ ICon i (l { ictInt = aitBit t })
-doPrim PrimOrd          [t,s] [IAps (ICon _ (ICPrim _ PrimChr)) [s',t'] [e]] | s == s' && t == t' = Just e
+                                                                        ilValue v < 2^s = Just $ ICon i (aitBit t) l
+doPrim PrimOrd          [t,s] [IAps (ICon _ _ (ICPrim PrimChr)) [s',t'] [e]] | s == s' && t == t' = Just e
 doPrim PrimIf _ [c, t, e] | isTrue  c = Just t
                           | isFalse c = Just e
 doPrim _ _ _ = Nothing
@@ -153,15 +153,14 @@ isTriv :: IExpr PreElab -> Bool
 isTriv (IVar _) = True
 -- do not inline ActionValue constants
 -- may break correlations for foreign functions
-isTriv (ICon _ ci) | isitActionValue_ t || isitActionValue t = False
-  where t = iConType ci
-isTriv (ICon _ (ICInt { })) = True
-isTriv (ICon _ (ICReal { })) = True
-isTriv (ICon _ (ICChar { })) = True
-isTriv (ICon _ (ICString { })) = True
-isTriv (ICon _ (ICUndet { })) = True
-isTriv (ICon _ (ICTuple { fieldIds = [] })) = True
-isTriv (ICon _ (ICDef { })) = True
+isTriv (ICon _ t _) | isitActionValue_ t || isitActionValue t = False
+isTriv (ICon _ _ (ICInt { })) = True
+isTriv (ICon _ _ (ICReal { })) = True
+isTriv (ICon _ _ (ICChar { })) = True
+isTriv (ICon _ _ (ICString { })) = True
+isTriv (ICon _ _ (ICUndet { })) = True
+isTriv (ICon _ _ (ICTuple { fieldIds = [] })) = True
+isTriv (ICon _ _ (ICDef { })) = True
 isTriv _ = False
 
 isHarmless :: IExpr PreElab -> Bool
@@ -182,7 +181,7 @@ gVars (ILam i t e) = gVars e
 gVars (IVar i) = [i]
 gVars (ILAM i _ e) = gVars e
 gVars (IAps f ts es) = gVars f ++ concatMap gVars es
-gVars (ICon _ _) = []
+gVars (ICon _ _ _) = []
 
 -- computes the top-level definitions the expression depends onb
 -- dVars :: IExpr PreElab -> [Id]
@@ -207,22 +206,22 @@ dVars' ids (ILAM _ _ e) = dVars' ids e
 -- same definitions over and over again across f and es.
 dVars' ids (IAps f _ es) = foldl dVars' (dVars' ids f) es
 -- guarding against circular traversal
-dVars' ids (ICon i (ICDef { })) | i `S.member` ids = ids
-dVars' ids (ICon i (ICDef {iConDef = e})) = dVars' (S.insert i ids) e
-dVars' ids (ICon _ _) = ids
+dVars' ids (ICon i _ (ICDef { })) | i `S.member` ids = ids
+dVars' ids (ICon i _ (ICDef {iConDef = e})) = dVars' (S.insert i ids) e
+dVars' ids (ICon _ _ _) = ids
 
 onlySimple :: IExpr PreElab -> Bool
 onlySimple (ILam _ _ e) = onlySimple e
 onlySimple (ILAM _ _ e) = onlySimple e
 onlySimple (IAps f _ es) = onlySimple f && all onlySimple es
 onlySimple (IVar _) = True
-onlySimple (ICon _ (ICPrim { })) = True
-onlySimple (ICon _ (ICInt { })) = True
-onlySimple (ICon _ (ICReal { })) = True
-onlySimple (ICon _ (ICChar { })) = True
-onlySimple (ICon _ (ICString { })) = True
-onlySimple (ICon _ (ICUndet { })) = True
-onlySimple (ICon _ (ICTuple { fieldIds = [] })) = True
+onlySimple (ICon _ _ (ICPrim { })) = True
+onlySimple (ICon _ _ (ICInt { })) = True
+onlySimple (ICon _ _ (ICReal { })) = True
+onlySimple (ICon _ _ (ICChar { })) = True
+onlySimple (ICon _ _ (ICString { })) = True
+onlySimple (ICon _ _ (ICUndet { })) = True
+onlySimple (ICon _ _ (ICTuple { fieldIds = [] })) = True
 -- note that foreign function calls are not simple
 onlySimple e = False
 
@@ -239,5 +238,5 @@ fixUp :: M.Map Id (IExpr PreElab) -> IExpr PreElab -> IExpr PreElab
 fixUp m (ILam i t e) = ILam i t (fixUp m e)
 fixUp m (ILAM i k e) = ILAM i k (fixUp m e)
 fixUp m (IAps f ts es) = IAps (fixUp m f) ts (map (fixUp m) es)
-fixUp m (ICon i (ICDef t d)) = ICon i (ICDef t (M.findWithDefault d i m))
+fixUp m (ICon i t (ICDef d)) = ICon i t (ICDef (M.findWithDefault d i m))
 fixUp m e = e
