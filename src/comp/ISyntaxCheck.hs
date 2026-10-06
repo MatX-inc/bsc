@@ -247,13 +247,16 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
                 let t' = tCheck flags symt M.empty r eqTy e
                 in  assert (t == t') "defOK2"
                         (i,e,(t,t')) (t, t') True
+            -- (the rules before the value: see actionOK on the order;
+            -- the action was the last argument of the ActionValue_
+            -- struct this check used to see)
             ifcOK (IEFace i _ maybe_e maybe_r _ _) =
-                       (case maybe_e of
-                          Just (e,t) -> defOK (IDef i t e [])
-                          _ -> True)
-                       &&
                        (case maybe_r of
                           Just rs -> rulesOK rs
+                          _ -> True)
+                       &&
+                       (case maybe_e of
+                          Just (e,t) -> defOK (IDef i t e [])
                           _ -> True)
 
             rulesOK (IRules sps rs) = all ruleOK rs
@@ -264,15 +267,29 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
                         (p, tp) (p, tp) True &&
                     actionOK a
             -- a body: each condition at Bit 1, each index at its width,
-            -- each call (as the application it stands for) at Action
+            -- each call (as the application it stands for) at Action.
+            --
+            -- The order of the checks is observable.  This check is the
+            -- first consumer of the elaborated module; an Id's string is
+            -- interned when it is first compared; Ord Id is interning
+            -- order (SpeedyString); and ITransform's iSortDs breaks ties
+            -- among independent defs by Ord Id, which decides which
+            -- occurrence of a shared expression names its CSE def and so
+            -- the source position the .ba records for it.  The parts are
+            -- therefore checked in the order tCheck checked the
+            -- expression the body stood for: a curried application
+            -- checks its last argument before its function part, so the
+            -- arms of a join, the arms and then the condition of an if,
+            -- and the elements of an array are checked right to left,
+            -- and an index before its elements.
             actionOK a =
                 case a of
                   ANoActions -> True
-                  AJoin a1 a2 -> actionOK a1 && actionOK a2
-                  AIf _ c t e -> condOK c && actionOK t && actionOK e
+                  AJoin a1 a2 -> actionOK a2 && actionOK a1
+                  AIf _ c t e -> actionOK e && actionOK t && condOK c
                   ADeep _ a1 -> actionOK a1
                   AArrSel _ _ _ sz es i ->
-                      all actionOK es && exprOK (aitBit (ITNum sz)) "ruleOK index" i
+                      exprOK (aitBit (ITNum sz)) "ruleOK index" i && all actionOK (reverse es)
                   ACallMethod mav sel ts inst args ->
                       leafOK (avWrap mav (IAps sel ts (inst : args)))
                   ACallForeign mav f (Just (ts, es)) -> leafOK (avWrap mav (IAps f ts es))
