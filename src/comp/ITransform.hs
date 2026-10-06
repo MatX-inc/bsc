@@ -181,14 +181,21 @@ iTrAction ctx a =
       AArrSel m i_sel i_arr sz es idx -> do
         idx' <- iTrExpr ctx [] (expValShallow idx)
         -- the elements under the array's index (the PrimBuildArray arm):
-        -- element n under idx == n, the negation threaded to the next
+        -- element n under idx == n, the negation threaded to the next.
+        -- The expression traversal expanded the shallow and/or/cmp
+        -- references of the array as a whole (expValShallow arr) and of
+        -- each element again, two levels through every node of the
+        -- element, so that a call argument such as `idx == 2` is an
+        -- application the element's context folds; the same two
+        -- expansions over the element's expressions here.
         let sz_idx = ITNum sz
+            expElem = mapActionExprs expValShallow
             foldFn (res_es, res_ctx) (n, e) = do
               let n_lit = iMkLitAt (getPosition i_arr) (aitBit sz_idx) n
               let eq_e = iePrimEQ sz_idx idx n_lit
-              e' <- iTrAction (addT eq_e res_ctx) e
+              e' <- iTrAction (addT eq_e res_ctx) (expElem e)
               return (e':res_es, addF eq_e res_ctx)
-        (rev_es', _) <- foldM foldFn ([], ctx) (zip [0..] es)
+        (rev_es', _) <- foldM foldFn ([], ctx) (zip [0..] (map expElem es))
         iTrAction' ctx (AArrSel m i_sel i_arr sz (reverse rev_es') idx')
       AJoin a1 a2 -> do
         a1' <- iTrAction ctx a1
