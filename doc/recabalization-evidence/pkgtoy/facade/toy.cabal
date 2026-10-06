@@ -1,0 +1,13 @@
+cabal-version: 3.14
+name: toy
+version: 0.1
+build-type: Simple
+library
+  reexported-modules: CoreM, SemM
+  build-depends: base, toy-core, toy-sem
+  default-language: GHC2021
+executable use
+  hs-source-dirs: app
+  main-is: Main.hs
+  build-depends: base, toy
+  default-language: GHC2021

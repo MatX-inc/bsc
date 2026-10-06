@@ -1,0 +1,27 @@
+cabal-version: 3.4
+name: pkgb
+version: 0.1
+build-type: Simple
+-- F3: with both sublibraries listing ../shared, each compiles its own M1 (and
+-- b-y its own M2); the executable then fails to typecheck against pkga's T.
+-- With disjoint directories (../shared-x holding only M2, ../shared-y only M3)
+-- the project builds and runs.
+library b-x
+  hs-source-dirs: ../shared
+  exposed-modules: M2
+  build-depends: base, pkga
+  default-language: GHC2021
+library b-y
+  hs-source-dirs: ../shared
+  exposed-modules: M3
+  build-depends: base, pkga, pkgb:b-x
+  default-language: GHC2021
+library
+  reexported-modules: M1, M2, M3
+  build-depends: base, pkga, pkgb:b-x, pkgb:b-y
+  default-language: GHC2021
+executable use
+  hs-source-dirs: app
+  main-is: Main.hs
+  build-depends: base, pkgb
+  default-language: GHC2021
