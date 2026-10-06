@@ -5,7 +5,6 @@
   "package_version": "2026.1",
   "license": "BSD-3-Clause",
   "tested_with": "GHC == 9.14.1",
-  "min_ghc": "9.14",
   "setup": {
     "name": "bsc-setup",
     "dir": "components/setup",

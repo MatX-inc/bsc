@@ -1,0 +1,187 @@
+name: MatX cabal build
+
+# The cabal build of the compiler (cabal.project, components/, bsc.cabal) and
+# its determinism ladder: the same commit built serially, oversubscribed and
+# in other checkout directories must give bit-identical objects, interfaces,
+# archives and programs (util/recabal/hash-build.sh hashes a build,
+# util/recabal/ladder-verdict.sh compares the lists).  A pull request runs
+# the two-leg smoke ladder; release qualification dispatches the full one.
+# Only GHC 9.14 and later offer -fobject-determinism, so the ladder is
+# meaningful only from there; older compilers still build.
+
+on:
+  pull_request:
+    paths:
+      - cabal.project
+      - bsc.cabal
+      - SetupHooks.hs
+      - components/**
+      - util/recabal/**
+      - src/comp/**
+      - src/Parsec/**
+      - src/vendor/**
+      - .github/workflows/matx-cabal.yml
+  workflow_dispatch:
+    inputs:
+      ghc_version:
+        description: GHC version (9.14 or later for the determinism legs)
+        required: false
+        default: '9.14.1'
+        type: string
+      ladder:
+        description: >-
+          smoke = c-j1 and c-j64 (one directory, serial against
+          oversubscribed); full adds c-j16 and -j64 in two more directories
+        required: false
+        default: smoke
+        type: choice
+        options: [smoke, full]
+      platforms:
+        description: Runners to build on
+        required: false
+        default: both
+        type: choice
+        options: [both, ubuntu, macos]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  generated:
+    name: "Check: generated cabal files"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Regenerate and diff
+        run: |
+          python3 util/recabal/gen.py generate
+          if [ -n "$(git status --porcelain -- cabal.project bsc.cabal SetupHooks.hs components)" ]; then
+            git status --porcelain -- cabal.project bsc.cabal SetupHooks.hs components
+            git diff -- cabal.project bsc.cabal SetupHooks.hs components
+            echo "::error::generated files are out of date: run util/recabal/gen.py generate"
+            exit 1
+          fi
+          python3 util/recabal/gen.py verify --strict
+
+  plan:
+    name: Ladder plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      legs: ${{ steps.plan.outputs.legs }}
+      os: ${{ steps.plan.outputs.os }}
+    steps:
+      - id: plan
+        env:
+          LADDER: ${{ inputs.ladder || 'smoke' }}
+          PLATFORMS: ${{ inputs.platforms || 'both' }}
+        run: |
+          # A leg is a checkout directory and a parallelism: cabal jobs and
+          # ghc -j both set to N.  Directories a, c and d check that the
+          # build does not depend on its path.
+          c_j1='{"name":"c-j1","dir":"c","jobs":"1"}'
+          c_j16='{"name":"c-j16","dir":"c","jobs":"16"}'
+          c_j64='{"name":"c-j64","dir":"c","jobs":"64"}'
+          a_j64='{"name":"a-j64","dir":"a","jobs":"64"}'
+          d_j64='{"name":"d-j64","dir":"d","jobs":"64"}'
+          case "$LADDER" in
+            full) legs="[$c_j1,$c_j16,$c_j64,$a_j64,$d_j64]" ;;
+            *) legs="[$c_j1,$c_j64]" ;;
+          esac
+          case "$PLATFORMS" in
+            ubuntu) os='["ubuntu-22.04"]' ;;
+            macos) os='["macos-15"]' ;;
+            *) os='["ubuntu-22.04","macos-15"]' ;;
+          esac
+          echo "legs=$legs" >> "$GITHUB_OUTPUT"
+          echo "os=$os" >> "$GITHUB_OUTPUT"
+          echo "ladder: $LADDER on $os: $legs"
+
+  build:
+    name: "Build ${{ matrix.os }} ${{ matrix.leg.name }}"
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.os) }}
+        leg: ${{ fromJSON(needs.plan.outputs.legs) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: ${{ matrix.leg.dir }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+          path: ${{ matrix.leg.dir }}
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo .github/workflows/install_dependencies_ubuntu.sh
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          .github/workflows/install_dependencies_macos.sh
+          # The same workaround as build-and-test-macos.yml: a stray tcl.h in
+          # /usr/local/include shadows the system Tcl and breaks the bluetcl
+          # link.
+          rm -f /usr/local/include/tcl.h
+      # Don't rely on the VM to pick the GHC version; Hooks packages need
+      # cabal-install 3.14 or later, hence the latest cabal.
+      - name: Install GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: ${{ inputs.ghc_version || '9.14.1' }}
+          cabal: latest
+      - name: Build (${{ matrix.leg.name }})
+        env:
+          JOBS: ${{ matrix.leg.jobs }}
+        run: |
+          cabal update
+          # The leg's parallelism, on top of the project's settings: cabal
+          # package jobs and ghc --make -j, both N (a later -j wins in GHC).
+          printf 'jobs: %s\nprogram-options\n  ghc-options: -j%s\n' "$JOBS" "$JOBS" > cabal.project.local
+          cat cabal.project.local
+          cabal build all
+      - name: Programs start
+        run: |
+          bsc="$(cabal list-bin bsc:exe:bsc)"
+          ls -l "$bsc"
+          "$bsc" -v || true
+      - name: Hash the build
+        env:
+          LEG: ${{ matrix.leg.name }}
+        run: util/recabal/hash-build.sh "$LEG.sha256"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: hashes-${{ matrix.os }}-${{ matrix.leg.name }}
+          path: ${{ matrix.leg.dir }}/${{ matrix.leg.name }}.sha256
+          if-no-files-found: error
+
+  verdict:
+    name: "Verdict ${{ matrix.os }}"
+    needs: [plan, build]
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.os) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: hashes-${{ matrix.os }}-*
+          merge-multiple: true
+          path: hashes
+      - name: Compare the legs against c-j1
+        run: |
+          ls -l hashes
+          others=$(ls hashes/*.sha256 | grep -v '/c-j1\.sha256$' || true)
+          util/recabal/ladder-verdict.sh hashes/c-j1.sha256 $others
