@@ -11,7 +11,7 @@ import ISyntaxUtil(ieNot,
                    iGetType, ieIf, ieIfxA, flatActionA,
                    joinActionsA,
                    isTrue, isFalse, ieAndOpt, ieOrOpt,
-                   iDefMap, isPairType
+                   isPairType
                    )
 import ITransform(iTransExpr, iTransBoolExpr, iTransAction)
 
@@ -24,30 +24,21 @@ trace_lift :: Bool
 trace_lift = "-trace-lift" `elem` progArgs
 
 iLift :: ErrorHandle -> Flags -> IModule PostElab -> IModule PostElab
-iLift errh flags imod@(IModule { imod_local_defs = ds,
-                                 imod_rules      = rs,
+-- (an expression holds no action, and a method's action is its rule:
+-- the defs and the method values have nothing to lift)
+iLift errh flags imod@(IModule { imod_rules      = rs,
                                  imod_interface  = ifc }) =
-    imod { imod_local_defs = ds', imod_rules = rs', imod_interface = ifc' }
-  where ds'  = map (iLiftDef errh flags) ds
-        rs'  = (iLiftRules errh flags) rs
+    imod { imod_rules = rs', imod_interface = ifc' }
+  where rs'  = (iLiftRules errh flags) rs
         ifc' = map (iLiftIfc errh flags) ifc
 --      itvs'? do we need to go into state vars?
 
--- just lift the def inside
-iLiftDef :: ErrorHandle -> Flags -> IDef PostElab -> IDef PostElab
-iLiftDef errh flags def = iDefMap (iLiftExpr errh flags) def
-
--- just lift the def inside
+-- just lift the rules inside
 iLiftIfc :: ErrorHandle -> Flags -> IEFace PostElab -> IEFace PostElab
 iLiftIfc errh flags (IEFace i x maybe_e maybe_rs wp fi) =
-  IEFace i x (do { (e,t) <- maybe_e ; return ((iLiftExpr errh flags e),t) })
+  IEFace i x maybe_e
              (do { rs <- maybe_rs ; return (iLiftRules errh flags rs) })
              wp fi
-
--- an expression holds no action (a method's action is its rule), so
--- there is nothing to lift in a def or a method value
-iLiftExpr :: ErrorHandle -> Flags -> IExpr PostElab -> IExpr PostElab
-iLiftExpr errh flags e = e
 
 iLiftRules :: ErrorHandle -> Flags -> IRules PostElab -> IRules PostElab
 iLiftRules errh flags (IRules sps rs) = IRules sps (map (iLiftRule errh flags) rs)
@@ -218,13 +209,6 @@ lift1 errh flags ifexp@(AIf SplitDefault cunsimp t f) =
       let result = (loopT [] [] (concatMap (condActions flags) (concatMap (lift1 errh flags) (flatActionA t)))
                                 (concatMap (condActions flags) (concatMap (lift1 errh flags) (flatActionA f)))) in
         tracep trace_lift ("if lifting result: " ++ (ppReadable result)) $ result
-
--- lift "through" an explicit split or nosplit
-lift1 errh flags exp@(AIf p c t f) =
-      tracep trace_lift ("found noexp or exp:" ++ (ppReadable exp)) $
-      let es = (lift1 errh flags (AIf SplitDefault c t f)) in
-          -- can be multiple ifs in the result, so map over and be safe
-          [case e' of { AIf SplitDefault c' t' f' -> AIf p c' t' f'; _ -> e' } | e' <- es ]
 
 -- if nothing else matched there is no lifting work
 lift1 errh flags e = tracep trace_lift ("default: " ++ (show e)) $ [e]
