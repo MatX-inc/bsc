@@ -13,3 +13,12 @@ build
 
 .vagrant/
 vagrant-out/
+
+# The cabal build (cabal.project, bsc.cabal)
+dist-newstyle/
+.ghc.environment.*
+cabal.project.local
+# Determinism ladder outputs: hash lists the CI legs write into the
+# checkout root, and util/cabal-ladder.sh's result directories.
+/*.sha256
+determinism-results/

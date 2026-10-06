@@ -1,5 +1,6 @@
 module Main_bsv2bsc(main) where
 
+import Warmup ()
 import System.Environment
 
 import Parser.BSV(bsvParseString)
