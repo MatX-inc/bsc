@@ -1,0 +1,34 @@
+packages: .
+
+-- Parity with the make build (src/comp/Makefile GHCOPTLEVEL = -O2).
+optimization: 2
+
+-- One GHC job server shared by every ghc --make -j, so the effective
+-- parallelism stays the number of slots as the build splits into packages.
+-- cabal-install and GHC must speak the same semaphore protocol: cabal-install
+-- 3.16 speaks v1, which GHC 9.8 through 9.14.1 implement; 3.18 speaks only
+-- v2, which GHC reports from 9.14.2 and 10.2, and with an older GHC it warns
+-- and falls back to plain -j per package. Build with cabal-install 3.16.1.0
+-- until GHC moves (doc/cabal.md).
+jobs: $ncpus
+semaphore: True
+
+-- Lets bare ghci/runghc/ghc resolve the compiled library from any cwd inside
+-- the repo (GHC searches upward for .ghc.environment.*). Harmless to the make
+-- build: src/comp/Makefile compiles with -hide-all-packages plus explicit
+-- -package flags, which override the environment file.
+write-ghc-environment-files: always
+
+-- Parallel GHC inside the package. -fobject-determinism is not set here:
+-- bsc.cabal carries it under impl(ghc >= 9.14), so the condition travels
+-- with the package.
+program-options
+  ghc-options: -j
+
+-- program-options reaches local packages only. The Hackage dependencies are
+-- compiled into the store without the package's own ghc-options, so the
+-- determinism flag reaches them from the one stanza that applies to
+-- non-local packages, under the same condition as in bsc.cabal.
+if impl(ghc >= 9.14)
+  package *
+    ghc-options: -fobject-determinism
