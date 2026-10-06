@@ -378,7 +378,7 @@ iMkStrConcat istr1 istr2 = iAps iConcatCon [] [istr1, istr2]
     where itStr = itString
           iConcatCon :: KnownPhase a => IExpr a
           iConcatCon = (ICon idPrimStringConcat
-                        (itStr `itFun` (itStr `itFun` itStr)) (ICPrim 
+                        (itStr `itFun` (itStr `itFun` itStr)) (ICPrim
                          PrimStringConcat))
 
 iMkCharAt :: KnownPhase a => Position -> Char -> IExpr a
@@ -1000,7 +1000,7 @@ icSelClockOsc :: KnownPhase (EvaldPhase b) => Id -> IClock (EvaldPhase b) -> IEx
 {-# SPECIALISE icSelClockOsc :: Id -> IClock Elab -> IExpr Elab #-}
 {-# SPECIALISE icSelClockOsc :: Id -> IClock PostElab -> IExpr PostElab #-}
 icSelClockOsc i c =
-    IAps (ICon idClockOsc (itClock `itFun` itBit1) (ICSel { 
+    IAps (ICon idClockOsc (itClock `itFun` itBit1) (ICSel {
                                     selNo = 0,
                                     numSel = 2 }))
          []
@@ -1010,7 +1010,7 @@ icSelClockGate :: KnownPhase (EvaldPhase b) => Id -> IClock (EvaldPhase b) -> IE
 {-# SPECIALISE icSelClockGate :: Id -> IClock Elab -> IExpr Elab #-}
 {-# SPECIALISE icSelClockGate :: Id -> IClock PostElab -> IExpr PostElab #-}
 icSelClockGate i c =
-    IAps (ICon idClockGate (itClock `itFun` itBit1) (ICSel { 
+    IAps (ICon idClockGate (itClock `itFun` itBit1) (ICSel {
                                     selNo = 1,
                                     numSel = 2 }))
          []
@@ -1589,7 +1589,6 @@ emptyFmt = (IAps (ICon idFormat tt (ICForeign {fName    = getIdString(unQualId(i
                                             foports  = Nothing,
                                             fTyVarNames = [],
                                             fcallNo  = (Just 0),
-                                            
                                             isC = False -- unsure what this should be?
                                             })) [] [e])
    where e = iMkString ""

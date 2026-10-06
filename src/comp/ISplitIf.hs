@@ -305,7 +305,7 @@ if_annotate do_split
   = let
         wrap_split if_expression
           = (IAps (ICon idPrimExpIf
-                        (itAction `itFun` itAction) (ICPrim { 
+                        (itAction `itFun` itAction) (ICPrim {
                                   primOp = PrimExpIf }))
                   [] -- takes no type arguments
                   [if_expression])
