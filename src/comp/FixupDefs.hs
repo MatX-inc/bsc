@@ -278,9 +278,9 @@ fixUp :: DictRedirects -> M.Map Id (IExpr PreElab) -> IExpr PreElab -> IExpr Pre
 fixUp r m (ILam i t e) = ILam i t (fixUp r m e)
 fixUp r m (ILAM i k e) = ILAM i k (fixUp r m e)
 fixUp r m (IAps f ts es) = IAps (fixUp r m f) ts (map (fixUp r m) es)
-fixUp r m (ICon i (ICDef t _)) =
+fixUp r m (ICon i t (ICDef _)) =
     let i' = M.findWithDefault i i r
-    in  ICon i' (ICDef t (get m i'))
+    in  ICon i' t (ICDef (get m i'))
 fixUp _ _ e = e
 
 get :: M.Map Id (IExpr PreElab) -> Id -> IExpr PreElab

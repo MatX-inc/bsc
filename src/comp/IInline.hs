@@ -53,21 +53,21 @@ iInlineS True imod@(IModule { imod_local_defs = ds,
         -- concatenation and bit selection are just wires, inline them
         -- this is to improve the performance of the ITransform pass
         -- ITransform should re-CSE anything that it does not simplify
-        simple (IAps (ICon _ (ICPrim _ PrimConcat)) _ [e1, e2]) = simple e1 && simple e2
-        simple (IAps (ICon _ (ICPrim _ PrimSelect)) _ [e]) = simple e
-        simple (IAps (ICon _ (ICPrim _ PrimExtract)) _ [e1,e2,e3]) = simple e1 && simple e2 && simple e3
+        simple (IAps (ICon _ _ (ICPrim PrimConcat)) _ [e1, e2]) = simple e1 && simple e2
+        simple (IAps (ICon _ _ (ICPrim PrimSelect)) _ [e]) = simple e
+        simple (IAps (ICon _ _ (ICPrim PrimExtract)) _ [e1,e2,e3]) = simple e1 && simple e2 && simple e3
         -- boolean expressions are just gates, inline them
-        simple (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = simple e1 && simple e2
-        simple (IAps (ICon _ (ICPrim _ PrimBOr)) _ [e1, e2]) = simple e1 && simple e2
-        simple (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) = simple e
+        simple (IAps (ICon _ _ (ICPrim PrimBAnd)) _ [e1, e2]) = simple e1 && simple e2
+        simple (IAps (ICon _ _ (ICPrim PrimBOr)) _ [e1, e2]) = simple e1 && simple e2
+        simple (IAps (ICon _ _ (ICPrim PrimBNot)) _ [e]) = simple e
         -- these are noops, inline them
-        simple (ICon _ (ICMethArg { })) = True
-        simple (ICon _ (ICModPort { })) = True
-        simple (ICon _ (ICModParam { })) = True
-        simple (ICon _ (ICStateVar { })) = True
-        simple (ICon _ (ICValue { })) = True
-        simple (ICon _ (ICInt { })) = True
-        simple (ICon _ (ICReal { })) = True
+        simple (ICon _ _ (ICMethArg { })) = True
+        simple (ICon _ _ (ICModPort { })) = True
+        simple (ICon _ _ (ICModParam { })) = True
+        simple (ICon _ _ (ICStateVar { })) = True
+        simple (ICon _ _ (ICValue { })) = True
+        simple (ICon _ _ (ICInt { })) = True
+        simple (ICon _ _ (ICReal { })) = True
         --
         simple _ = False
 
@@ -146,8 +146,8 @@ iInlineUseLimit use_limit
 
 iValVars :: IExpr PostElab -> [Id]
 iValVars (IAps e _ es) = iValVars e ++ concatMap iValVars es
-iValVars (ICon i (ICValue { })) = [i]
-iValVars (ICon _ _) = []
+iValVars (ICon i _ (ICValue { })) = [i]
+iValVars (ICon _ _ _) = []
 
 -- #############################################################################
 -- #

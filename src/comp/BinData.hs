@@ -4,7 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables, BangPatterns #-}
 {-# LANGUAGE PatternSynonyms, OverloadedLists, TypeFamilies #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module BinData ( Byte
+module BinData ( Byte, Out, In
                , putBs, putB, putI
                , getN, getB, getI -- , getBytesRead
                , Bin(..)

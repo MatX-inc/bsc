@@ -30,8 +30,8 @@ doPrimOp :: KnownPhase a => Position -> PrimOp -> [IType] -> [IExpr a] ->
 {-# SPECIALISE doPrimOp :: Position -> PrimOp -> [IType] -> [IExpr PostElab] -> Maybe (Either ErrMsg (IExpr PostElab)) #-}
 doPrimOp pos op ts es =
   let isLit e = isIConInt e || isIConReal e
-      mkPrimArg (ICon _ (ICInt { iVal = IntLit { ilValue = v } })) = I v
-      mkPrimArg (ICon _ (ICReal { iReal = v })) = D v
+      mkPrimArg (ICon _ _ (ICInt { iVal = IntLit { ilValue = v } })) = I v
+      mkPrimArg (ICon _ _ (ICReal { iReal = v })) = D v
       mkPrimArg e = internalError ("mkPrimArg: " ++ ppReadable e)
   in  if (all isLit es)
       then let tints = [ i | ITNum i <- ts]

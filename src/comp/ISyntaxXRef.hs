@@ -29,8 +29,8 @@ updateIExprPosition pos (IAps e ts [e0]) = (IAps (updateIExprPosition pos e) ts 
 updateIExprPosition pos (IAps e ts es) = (IAps (updateIExprPosition pos e) ts es)
 updateIExprPosition pos (IVar i) = (IVar (setIdPosition pos i))
 updateIExprPosition pos (ILAM i kind e) = (ILAM (setIdPosition pos i) kind (updateIExprPosition @a pos e))
-updateIExprPosition pos iexpr@(ICon i (ICStateVar t isv)) = iexpr
-updateIExprPosition pos (ICon i info) = (ICon (setIdPosition pos i) info)
+updateIExprPosition pos iexpr@(ICon i t (ICStateVar isv)) = iexpr
+updateIExprPosition pos (ICon i t info) = (ICon (setIdPosition pos i) t info)
 -- The heap ref's position set carries the stamped position out of
 -- band; the type itself is deliberately not restamped.  Rewriting the
 -- positions of the Ids inside a type rebuilds the whole type, and
@@ -45,11 +45,11 @@ updateIExprPosition2 :: forall a . KnownPhase a => Position -> IExpr a -> IExpr 
 {-# SPECIALISE updateIExprPosition2 :: Position -> IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE updateIExprPosition2 :: Position -> IExpr PostElab -> IExpr PostElab #-}
 updateIExprPosition2 pos (ILam i t e) = (ILam (setIdPosition pos i) t (updateIExprPosition @a pos e))
-updateIExprPosition2 pos iexpr@(IAps e@(ICon i (ICCon _ _)) ts [e0]) =
+updateIExprPosition2 pos iexpr@(IAps e@(ICon i _ (ICCon _)) ts [e0]) =
     if (not (isUsefulPosition (getIdPosition i)))
     then updateIExprPosition pos iexpr
     else iexpr
-updateIExprPosition2 pos iexpr@(IAps e@(ICon i (ICPrim _ _)) ts es) =
+updateIExprPosition2 pos iexpr@(IAps e@(ICon i _ (ICPrim _)) ts es) =
     if (not (isUsefulPosition (getIdPosition i)))
     then updateIExprPosition pos iexpr
     else iexpr
@@ -57,8 +57,8 @@ updateIExprPosition2 pos (IAps e ts [e0]) = (IAps (updateIExprPosition pos e) ts
 updateIExprPosition2 pos (IAps e ts es) = (IAps (updateIExprPosition pos e) ts es)
 updateIExprPosition2 pos (IVar i) = (IVar (setIdPosition pos i))
 updateIExprPosition2 pos (ILAM i kind e) = (ILAM (setIdPosition pos i) kind (updateIExprPosition @a pos e))
-updateIExprPosition2 pos iexpr@(ICon i (ICStateVar t isv)) = iexpr
-updateIExprPosition2 pos (ICon i info) = (ICon (setIdPosition pos i) info)
+updateIExprPosition2 pos iexpr@(ICon i t (ICStateVar isv)) = iexpr
+updateIExprPosition2 pos (ICon i t info) = (ICon (setIdPosition pos i) t info)
 updateIExprPosition2 pos (IRefT t p poss r) = (IRefT t p poss' r)
   where poss' = S.insert pos poss
 
@@ -151,7 +151,7 @@ isEquivIExprIncluded sub_expr expr@(IVar _) =
     (equivIExprs expr sub_expr)
 isEquivIExprIncluded sub_expr expr@(ILAM i kind e) =
     ((equivIExprs expr sub_expr) || (isEquivIExprIncluded sub_expr e))
-isEquivIExprIncluded sub_expr expr@(ICon _ _) =
+isEquivIExprIncluded sub_expr expr@(ICon _ _ _) =
     (equivIExprs expr sub_expr)
 isEquivIExprIncluded sub_expr expr@(IRefT t p poss r) =
     (equivIExprs expr sub_expr)
@@ -180,7 +180,7 @@ extractEquivIExpr sub_expr expr@(ILAM i kind e) =  if (equivIExprs sub_expr expr
                                                    then [expr]
                                                    else (extractEquivIExpr sub_expr e)
 
-extractEquivIExpr sub_expr expr@(ICon _ _) =  if (equivIExprs sub_expr expr)
+extractEquivIExpr sub_expr expr@(ICon _ _ _) =  if (equivIExprs sub_expr expr)
                                               then [expr]
                                               else []
 
@@ -200,7 +200,7 @@ equivIExprs e0@(ILam i0 t0 ee0) e1@(ILam i1 t1 ee1) = ((equivId i0 i1) && (t0 ==
 equivIExprs e0@(IAps ee0 ts0 es0) e1@(IAps ee1 ts1 es1) = ((equivIExprs ee0 ee1) && (ts0 == ts1) && (es0 == es1))
 equivIExprs e0@(IVar i0) e1@(IVar i1) = (equivId i0 i1)
 equivIExprs e0@(ILAM i0 k0 ee0) e1@(ILAM i1 k1 ee1) = ((equivId i0 i1) && (k0 == k1) && (ee0 == ee1))
-equivIExprs e0@(ICon i0 info0) e1@(ICon i1 info1) = ((equivId i0 i1) && (info0 == info1))
+equivIExprs e0@(ICon i0 t0 info0) e1@(ICon i1 t1 info1) = ((equivId i0 i1) && (cmpC t0 info0 t1 info1 == EQ))
 equivIExprs e0@(IRefT t0 p0 poss0 r0) e1@(IRefT t1 p1 poss1 r1) = (p0 == p1)
 equivIExprs e0 e1 = False
 

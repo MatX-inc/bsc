@@ -50,7 +50,7 @@ iLiftIfc errh flags (IEFace i x maybe_e maybe_rs wp fi) =
 iLiftExpr :: ErrorHandle -> Flags -> IExpr PostElab -> IExpr PostElab
 iLiftExpr errh flags e | (isTAction (iGetType e)) = iLiftActionExpr errh flags e
 -- also lift on the action part of actionvalue structs
-iLiftExpr errh flags (IAps f@(ICon av (ICTuple {})) ts [val_expr, act_expr])
+iLiftExpr errh flags (IAps f@(ICon av _ (ICTuple {})) ts [val_expr, act_expr])
     | (av == idActionValue_)
     = IAps f ts [val_expr, iLiftExpr errh flags act_expr]
 iLiftExpr errh flags e = e
@@ -85,7 +85,7 @@ condActions flags e = concatMap (condActions1 flags) (flatAction e)
 condActions1 :: Flags -> IExpr PostElab -> [IActionCond PostElab]
 
 -- if case (recurses using condActions to handle action lists)
-condActions1 flags (IAps (ICon i (ICPrim _ PrimIf)) _ [c,t,f]) =
+condActions1 flags (IAps (ICon i _ (ICPrim PrimIf)) _ [c,t,f]) =
    let ts = condActions flags t
        fs = condActions flags f in
        (map (addCond flags c) ts) ++ (map (addCond flags ((iTransBoolExpr flags) (ieNot c))) fs)
@@ -113,7 +113,7 @@ iLiftActionExpr errh flags e =
 lift1 :: ErrorHandle -> Flags -> IExpr PostElab -> [IExpr PostElab]
 
 -- bulk of interesting lifting happens when we find an if expression
-lift1 errh flags ifexp@(IAps (ICon id (ICPrim {primOp = PrimIf, ictPrim = contyp})) [typ] [cunsimp, t, f]) | (isTAction typ) =
+lift1 errh flags ifexp@(IAps (ICon id contyp (ICPrim {primOp = PrimIf})) [typ] [cunsimp, t, f]) | (isTAction typ) =
   --
   -- loopT loops through the true-arm actions
   -- parameters are lifted expressions, unliftable (true) expressions, true expressions to scan, false actions to lift against
@@ -148,7 +148,7 @@ lift1 errh flags ifexp@(IAps (ICon id (ICPrim {primOp = PrimIf, ictPrim = contyp
            )]
 -}
       -- going through the true expressions and find a module method call
-      loopT lifted unlifted (firstT@(IActionCond {action = firstTaction@(IAps expT tsT ((icsvT@(ICon _ (svT@(ICStateVar _ _)))):argsT)),
+      loopT lifted unlifted (firstT@(IActionCond {action = firstTaction@(IAps expT tsT ((icsvT@(ICon _ _ (svT@(ICStateVar _)))):argsT)),
                                                      condition = firstTcond}):restT) f =
       -- loop through the list of false actions
       -- first parameter is scanned false actions, second is false actions to scan
@@ -160,8 +160,8 @@ lift1 errh flags ifexp@(IAps (ICon id (ICPrim {primOp = PrimIf, ictPrim = contyp
             -- when we find a matching method call for a module lift the method call (into a joint ActionCond)
             -- and put conditional expressions on the arguments
             -- the length check is for things like $display so we do not lift when there are different numbers of arguments
-            loopF scanned ((firstF@(IActionCond {action = firstFaction@(IAps expF _ ((icsvF@(ICon _ (svF@(ICStateVar _ _)))):argsF)),
-                                                 condition = firstFcond})):restF) | (expF == expT) && (svF == svT) &&
+            loopF scanned ((firstF@(IActionCond {action = firstFaction@(IAps expF _ ((icsvF@(ICon _ _ (svF@(ICStateVar _)))):argsF)),
+                                                 condition = firstFcond})):restF) | (expF == expT) && (iVar svF == iVar svT) &&
                                                                                     ((length argsT) == (length argsF)),
                                                                                     Just newargs <- mapM (uncurry (mergeLiftArg errh c)) (zip argsT argsF) =
               -- just make an ActionCond out of this when it matches
@@ -189,8 +189,8 @@ lift1 errh flags ifexp@(IAps (ICon id (ICPrim {primOp = PrimIf, ictPrim = contyp
       -- ----
       -- do the same for actionvalue calls, with an additional avAction_ selector
       loopT lifted unlifted
-            (firstT@(IActionCond {action = (IAps sel@(ICon i_sel (ICSel {})) sel_ts
-                                                 [firstTaction@(IAps expT tsT ((icsvT@(ICon _ (svT@(ICStateVar _ _)))):argsT))]),
+            (firstT@(IActionCond {action = (IAps sel@(ICon i_sel _ (ICSel {})) sel_ts
+                                                 [firstTaction@(IAps expT tsT ((icsvT@(ICon _ _ (svT@(ICStateVar _)))):argsT))]),
                                   condition = firstTcond}):restT) f  | (i_sel == idAVAction_) =
             -- loop through the list of false actions
             -- first parameter is scanned false actions, second is false actions to scan
@@ -201,10 +201,10 @@ lift1 errh flags ifexp@(IAps (ICon id (ICPrim {primOp = PrimIf, ictPrim = contyp
             -- when we find a matching method call for a module lift the method call (into a joint ActionCond)
             -- and put conditional expressions on the arguments
             -- the length check is for things like $display so we do not lift when there are different numbers of arguments
-            loopF scanned ((firstF@(IActionCond {action = IAps sel@(ICon i_sel (ICSel {})) sel_ts
-                                                               [firstFaction@(IAps expF _ ((icsvF@(ICon _ (svF@(ICStateVar _ _)))):argsF))],
+            loopF scanned ((firstF@(IActionCond {action = IAps sel@(ICon i_sel _ (ICSel {})) sel_ts
+                                                               [firstFaction@(IAps expF _ ((icsvF@(ICon _ _ (svF@(ICStateVar _)))):argsF))],
                                                  condition = firstFcond})):restF) | (i_sel == idAVAction_) &&
-                                                                                         (expF == expT) && (svF == svT) &&
+                                                                                         (expF == expT) && (iVar svF == iVar svT) &&
                                                                                     ((length argsT) == (length argsF)),
                                                                                     Just newargs <- mapM (uncurry (mergeLiftArg errh c)) (zip argsT argsF) =
               -- just make an ActionCond out of this when it matches
@@ -259,11 +259,11 @@ lift1 errh flags ifexp@(IAps (ICon id (ICPrim {primOp = PrimIf, ictPrim = contyp
         tracep trace_lift ("if lifting result: " ++ (ppReadable result)) $ result
 
 -- lift "through" an explicit split or nosplit
-lift1 errh flags exp@(IAps (ICon id (ICPrim {primOp = p, ictPrim = contyp})) typs [e]) | (p == PrimExpIf) || (p == PrimNoExpIf) =
+lift1 errh flags exp@(IAps (ICon id contyp (ICPrim {primOp = p})) typs [e]) | (p == PrimExpIf) || (p == PrimNoExpIf) =
       tracep trace_lift ("found noexp or exp:" ++ (ppReadable exp)) $
       let es = (lift1 errh flags e) in
           -- can be multiple ifs in the result, so map over and be safe
-          [if (notIf e') then e' else (IAps (ICon id (ICPrim {primOp = p, ictPrim = contyp})) typs [e']) | e' <- es ]
+          [if (notIf e') then e' else (IAps (ICon id contyp (ICPrim {primOp = p})) typs [e']) | e' <- es ]
 
 -- if nothing else matched there is no lifting work
 lift1 errh flags e = tracep trace_lift ("default: " ++ (showTypeless e)) $ [e]
@@ -296,8 +296,8 @@ mergeLiftArg :: ErrorHandle -> IExpr PostElab -> IExpr PostElab -> IExpr PostEla
 mergeLiftArg errh c argT argF
     | isPairType (iGetType argT) =
         case (unwrap argT, unwrap argF) of
-          (IAps conT@(ICon i (ICTuple {})) tsT esT,
-           IAps      (ICon i' (ICTuple {})) _  esF)
+          (IAps conT@(ICon i _ (ICTuple {})) tsT esT,
+           IAps      (ICon i' _ (ICTuple {})) _  esF)
               | i == i' && length esT == length esF -> do
                   es <- sequence (zipWith (mergeLiftArg errh c) esT esF)
                   return (IAps conT tsT es)
@@ -307,5 +307,5 @@ mergeLiftArg errh c argT argF
             ieIf (iGetType argT) c (fst (iTransExpr errh argT))
                                    (fst (iTransExpr errh argF))
   where
-    unwrap (ICon _ (ICValue { iValDef = e })) = unwrap e
+    unwrap (ICon _ _ (ICValue { iValDef = e })) = unwrap e
     unwrap e = e

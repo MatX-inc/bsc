@@ -17,12 +17,12 @@ iSubst = iSubstWhen (const True)
 iSubstWhen :: (IExpr PostElab -> Bool) -> M.Map Id (IExpr PostElab) -> M.Map Id (IExpr PostElab) -> IExpr PostElab -> IExpr PostElab
 iSubstWhen tst subMap defMap e = sub e
   where sub (IAps f ts es) = IAps (sub f) ts (map sub es)
-        sub d@(ICon i val@(ICValue {})) =
+        sub d@(ICon i t val@(ICValue {})) =
             case M.lookup i subMap of
             Nothing ->
               let ev = fromJustOrErr ("iSubstWhen ICValue def not found: " ++ ppReadable i)
                                      (M.lookup i defMap)
-              in ICon i (val { iValDef = ev })
+              in ICon i t (val { iValDef = ev })
             Just e -> if tst e then e else d
         sub c@(ICon {}) = c
 
