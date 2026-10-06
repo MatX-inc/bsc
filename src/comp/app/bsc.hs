@@ -2,6 +2,7 @@
 module Main_bsc(main, hmain) where
 
 -- Haskell libs
+import Warmup ()
 import Prelude
 import System.Environment(getArgs, getProgName, lookupEnv)
 import Text.Read(readMaybe)

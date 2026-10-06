@@ -10,6 +10,7 @@
 module Bluetcl where
 
 
+import Warmup ()
 import HTcl
 
 import Control.Monad(foldM, when, mzero)
