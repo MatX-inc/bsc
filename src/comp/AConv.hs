@@ -396,7 +396,9 @@ aRule :: IRule PostElab -> M ARule
 aRule (IRule i rps s wp p a orig isl) = do
         --trace ("enter rule " ++ ppReadable i) $ return ()
         p' <- aSExpr p
-        as' <- aAction i a
+        -- the body through the expression it stands for (the conversion
+        -- from IAction follows in a later commit)
+        as' <- aAction i (actionToExpr a)
         -- traceM $ "exit rule " ++ ppReadable i
         return (ARule i rps s wp p' as' [] orig)
 

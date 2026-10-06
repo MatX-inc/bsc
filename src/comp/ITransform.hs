@@ -138,9 +138,11 @@ iTrRule r = do
         c' <- iTrExprL ctx [] (irule_pred r)
         let c'' = optBoolExpr doBO c'
         -- traceM("iTrRule cond " ++ ppReadable (irule_name r, c''))
-        e' <- iTrExprL (addT c'' ctx) [] (irule_body r)
+        -- the body through the expression it stands for (the rewrite
+        -- over IAction follows in the next commit)
+        e' <- iTrExprL (addT c'' ctx) [] (actionToExpr (irule_body r))
         -- traceM("iTrRule body " ++ ppReadable (irule_name r, e'))
-        return $ r { irule_pred = c'', irule_body = e' }
+        return $ r { irule_pred = c'', irule_body = toIAction e' }
 
 iTrRules :: IRules PostElab -> T (IRules PostElab)
 iTrRules (IRules sps rs) = do

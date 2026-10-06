@@ -441,49 +441,35 @@ generateMethodPreds flag (IRules _ rs) =
   if (not flag) then [] else concatMap one_rule rs where
     one_rule :: IRule PostElab -> [IDef PostElab]
     one_rule r = gen_defs (irule_name r) $ collect_ifs $ irule_body r
-    collect_ifs :: IExpr PostElab ->
-                   [(IExpr PostElab, IExpr PostElab)]  -- pred, meth call
+    collect_ifs :: IAction ->
+                   [(IExpr PostElab, IAction)]  -- pred, meth call
     collect_ifs e = -- trace ("collect_ifs " ++ (show e) ) $
                      collect_ifs' e
-    collect_ifs' :: IExpr PostElab ->
-                   [(IExpr PostElab, IExpr PostElab)]  -- pred, meth call
-    collect_ifs' (IAps (ICon _ _ (ICPrim { primOp = PrimIf })) _ [cnd, thn, els]) =
+    collect_ifs' :: IAction ->
+                   [(IExpr PostElab, IAction)]  -- pred, meth call
+    -- a split annotation does not change the condition
+    collect_ifs' (AIf _ cnd thn els) =
       let true_branch = collect_ifs thn
           false_branch = collect_ifs els
       in ( map (add_to_pred cnd) true_branch) ++ (map (add_to_pred (ieNot cnd)) false_branch)
-    collect_ifs' (IAps (ICon _ _ (ICPrim { primOp = PrimCase }))
-                      [sz_idx, elem_ty] (idx:dflt:ces)) =
-      -- XXX if the arms are not overlapping, we can simplify the conditions
-      let foldFn (v, e) false_branch =
-              let true_branch = collect_ifs e
-                  c = iePrimEQ sz_idx idx v
-              in  (map (add_to_pred c) true_branch) ++
-                  (map (add_to_pred (ieNot c)) false_branch)
-      in  foldr foldFn (collect_ifs dflt) (makePairs ces)
-    collect_ifs' (IAps (ICon i_sel _ (ICPrim { primOp = PrimArrayDynSelect }))
-                      [elem_ty, sz_idx] [arr, idx]) =
-      case arr of
-        (IAps (ICon _ _ (ICPrim { primOp = PrimBuildArray })) _ es) ->
-            let pos = getPosition i_sel
-                ty_idx = aitBit sz_idx
-                mapFn (n, e) =
-                    let n_lit = iMkLitAt pos ty_idx n
-                        c = iePrimEQ sz_idx idx n_lit
-                    in  map (add_to_pred c) (collect_ifs e)
-            in  concatMap mapFn (zip [0..] es)
-        _ -> internalError ("collect_ifs': PrimArrayDynSelect: " ++
-                            ppReadable arr)
-    collect_ifs' (IAps (ICon join _ (ICPrim{ primOp = op})) _t es)
-      | join == idPrimJoinActions || op == PrimJoinActions
-        = concatMap collect_ifs es -- search further for unlifted Ifs inside an action block
-    collect_ifs' e@(IAps (ICon _method _ (ICSel { })) _t
-                  ((ICon _state _ (ICStateVar { })):_methodargs)) =
+    collect_ifs' (AArrSel _ i_sel _ sz es idx) =
+      let pos = getPosition i_sel
+          sz_idx = ITNum sz
+          ty_idx = aitBit sz_idx
+          mapFn (n, e) =
+              let n_lit = iMkLitAt pos ty_idx n
+                  c = iePrimEQ sz_idx idx n_lit
+              in  map (add_to_pred c) (collect_ifs e)
+      in  concatMap mapFn (zip [0..] es)
+    collect_ifs' (AJoin a1 a2)
+        = collect_ifs a1 ++ collect_ifs a2 -- search further for unlifted Ifs inside an action block
+    collect_ifs' e@(ACallMethod Nothing _ _ _ _) =
       [(iTrue,e)] -- base case for unpack_method_call
-    collect_ifs' (IAps (ICon _ _ (ICPrim pi)) _t [e]) | isIfWrapper pi
+    collect_ifs' (ADeep _ e)
         = collect_ifs e
     -- need to recurse further into e? XXX
     collect_ifs' e = [(iTrue,e)]
-    add_to_pred :: IExpr PostElab -> (IExpr PostElab, IExpr PostElab) -> (IExpr PostElab, IExpr PostElab)
+    add_to_pred :: IExpr PostElab -> (IExpr PostElab, IAction) -> (IExpr PostElab, IAction)
     add_to_pred new (old, action) = (ieAndOpt new old, action)
 
     -- tiny state monad to get unique numbers.  This is a lazy
@@ -494,10 +480,10 @@ generateMethodPreds flag (IRules _ rs) =
       n <- get
       put $ n+1
       return n
-    gen_defs :: Id -> [(IExpr PostElab, IExpr PostElab)] -> [IDef PostElab]
+    gen_defs :: Id -> [(IExpr PostElab, IAction)] -> [IDef PostElab]
     gen_defs rulename predmethods = concat $ evalState (mapM (makeDef rulename) predmethods ) 1
 
-    makeDef :: Id -> (IExpr PostElab, IExpr PostElab) -> State Integer [IDef PostElab]
+    makeDef :: Id -> (IExpr PostElab, IAction) -> State Integer [IDef PostElab]
     makeDef rulename (predicate, expr)
       | not $ isTrue predicate =
         -- trace ("now evaluating " ++ ppReadable rulename ++ " " ++ ppReadable (predicate, expr)
@@ -540,44 +526,50 @@ generateMethodPreds flag (IRules _ rs) =
       in
           addIdProps (mkId noPosition fstr) props
 
-unpack_method_call :: IExpr PostElab -> [(Id,Id)]
+unpack_method_call :: IAction -> [(Id,Id)]
 unpack_method_call e = -- trace ("unpack_method_call " ++ (show e)) $
                        unpack_method_call' [] e
 -- This accumulates a list of positions along the way, to support "avAction_"
 -- wrappers; in some places we sanity check that it's an empty list, because
 -- positions are not expected to be accumulated in those situations.
-unpack_method_call' :: [Position] -> IExpr PostElab -> [(Id,Id)]
+unpack_method_call' :: [Position] -> IAction -> [(Id,Id)]
 -- no action
-unpack_method_call' _ (ICon _ _ (ICPrim { primOp = PrimNoActions })) =
+unpack_method_call' _ ANoActions =
   []
 -- action method call
-unpack_method_call' poss e@(IAps (ICon i_method _ (ICSel { })) _ts
-                            ((ICon i_state _ (ICStateVar { })):_methodargs))
+unpack_method_call' poss (ACallMethod Nothing (ICon i_method _ _) _ts
+                            (ICon i_state _ _) _methodargs)
   = let i_method' = addIdInlinedPositions i_method poss
     in  [(i_state, i_method')]
 -- Most action have methods have an "avAction_" wrapper, but some do not
 -- (Reg write does not -- is the difference Classic vs BSV?)
-unpack_method_call' poss (IAps (ICon i_av _ (ICSel { })) _ts [e])
-  | (i_av == idAVAction_)
+unpack_method_call' poss (ACallMethod (Just (AVSel (ICon i_av _ _) _)) sel ts inst args)
   = let av_poss = fromMaybe [] $ getIdInlinedPositions i_av
         poss' = av_poss ++ poss
-    in  unpack_method_call' poss' e
+    in  unpack_method_call' poss' (ACallMethod Nothing sel ts inst args)
+unpack_method_call' poss (ACallForeign (Just (AVSel (ICon i_av _ _) _)) f margs)
+  = let av_poss = fromMaybe [] $ getIdInlinedPositions i_av
+        poss' = av_poss ++ poss
+    in  unpack_method_call' poss' (ACallForeign Nothing f margs)
 -- multiple actions
-unpack_method_call' poss (IAps (ICon _ _ (ICPrim { primOp = PrimJoinActions }))
-                          _ts es) =
+unpack_method_call' poss (AJoin a1 a2) =
   case poss of
-    [] -> concatMap unpack_method_call es
+    [] -> unpack_method_call a1 ++ unpack_method_call a2
     _ -> internalError ("unpack_method_call': JoinActions: " ++
                         ppReadable poss)
 -- function with arguments (such as $display)
-unpack_method_call' poss (IAps (ICon i_function _ _) _ts _es) =
+unpack_method_call' poss (ACallForeign Nothing (ICon i_function _ _) (Just _)) =
   let i_function' = addIdInlinedPositions i_function poss
   in  [(mk_homeless_id "FUNCTION", i_function')]
 -- function of no arguments
-unpack_method_call' poss (ICon i_function _ _) =
+unpack_method_call' poss (ACallForeign Nothing (ICon i_function _ _) Nothing) =
   let i_function' = addIdInlinedPositions i_function poss
   in  [(mk_homeless_id "FUNCTION", i_function')]
   -- ^seen in Sudoku with high order functional programming (displayGrid)
+-- the undetermined action (a constant, so a function of no arguments)
+unpack_method_call' poss (AUndet (ICon i_function _ _)) =
+  let i_function' = addIdInlinedPositions i_function poss
+  in  [(mk_homeless_id "FUNCTION", i_function')]
 unpack_method_call' _ e =
   internalError("unpack_method_call': unknown: " ++ ppReadable e)
   -- trace ("unpack_method_call unable to match " ++ show e) $
@@ -656,7 +648,28 @@ removeInlinedPositions flags imod0 =
 
     rmRule :: IRule PostElab -> IRule PostElab
     rmRule r = r { irule_pred = rmExpr (irule_pred r),
-                   irule_body = rmExpr (irule_body r) }
+                   irule_body = rmAction (irule_body r) }
+
+    -- every constant the action holds, the stored ones included (the
+    -- method selector carries the inlined positions this removes)
+    rmAction :: IAction -> IAction
+    rmAction a =
+        case a of
+          ANoActions -> a
+          AJoin a1 a2 -> AJoin (rmAction a1) (rmAction a2)
+          AIf m c t e -> AIf m (rmExpr c) (rmAction t) (rmAction e)
+          ADeep b a1 -> ADeep b (rmAction a1)
+          AArrSel m s r n es i ->
+              AArrSel m (removeIdInlinedPositions s) (removeIdInlinedPositions r) n
+                      (map rmAction es) (rmExpr i)
+          ACallMethod v s ts i es ->
+              ACallMethod (fmap rmAV v) (rmExpr s) ts (rmExpr i) (map rmExpr es)
+          ACallForeign v f as ->
+              ACallForeign (fmap rmAV v) (rmExpr f) (fmap (\ (ts, es) -> (ts, map rmExpr es)) as)
+          AUndet c -> AUndet (rmExpr c)
+
+    rmAV :: AVSel -> AVSel
+    rmAV (AVSel s ts) = AVSel (rmExpr s) ts
 
     rmIFace :: IEFace PostElab -> IEFace PostElab
     rmIFace ief =
@@ -5992,8 +6005,38 @@ instance HeapToDef HEFace where
           collPtrs x .
           collPtrs i
     hToDef m (IEFace i x e rs wp fi)
-        = (IEFace (hToDef m i) (hToDef m x) (hToDef m e)
-                  (hToDef m rs) (hToDef m wp) (hToDef m fi))
+        = let i' = hToDef m i
+              wp' = hToDef m wp
+              (e', rs') = methodBody i' wp' (hToDef m e) (hToDef m rs)
+          in  IEFace i' (hToDef m x) e' rs' wp' (hToDef m fi)
+
+-- An Action method's body is the whole of its value, and an
+-- ActionValue method's body is the second field of its ActionValue_
+-- struct (iExpandMethod' keeps the struct for exactly those).  With
+-- the body an IAction, that value cannot stay an expression, so the
+-- method is split here, as ISplitIf.iSplitIface split it while a body
+-- could be an expression: the value half stays ief_value (at the
+-- ActionValue's inner type, or absent when that type is empty) and the
+-- action half becomes the method's one rule, named after the method,
+-- with the method's wire properties and a true predicate.  Every other
+-- method (a value method, a ready signal, a clock, a reset, an inout)
+-- is unchanged.
+methodBody :: Id -> WireProps
+           -> Maybe (IExpr PostElab, IType) -> Maybe (IRules PostElab)
+           -> (Maybe (IExpr PostElab, IType), Maybe (IRules PostElab))
+methodBody i wp (Just (e, t)) Nothing
+    | t == itAction = (Nothing, oneRule e)
+    | IAps (ICon av _ (ICTuple { fieldIds = [_, _] })) [_] [val_, act_] <- e,
+      av == idActionValue_
+    = let vt = getAV_Type t
+          value = if isEmptyType vt then Nothing else Just (val_, vt)
+      in  (value, oneRule act_)
+    | isActionType t
+    = internalError ("iExpand: the method " ++ ppReadable i ++ " of type " ++
+                     ppReadable t ++ " has a value that is neither an action " ++
+                     "nor the ActionValue_ struct:\n" ++ ppReadable e)
+  where oneRule a = Just (IRules [] [IRule i [] (getIdString i) wp iTrue (toIAction a) Nothing []])
+methodBody _ _ e rs = (e, rs)
 
 instance HeapToDef VFieldInfo where
     type Rebuilt VFieldInfo = VFieldInfo
@@ -6183,8 +6226,11 @@ instance HeapToDef HRule where
     type Rebuilt HRule = IRule PostElab
     collPtrs r = collPtrs (irule_body r) . collPtrs (irule_pred r)
 
+    -- the body leaves the expression representation here: the rebuilt
+    -- normal form becomes an IAction (toIAction refuses, by name, every
+    -- shape the evaluator does not produce)
     hToDef m r = r { irule_pred = hToDef m $ irule_pred r ,
-                     irule_body = hToDef m $ irule_body r }
+                     irule_body = toIAction (hToDef m $ irule_body r) }
 
 -----------------------------------------------------------------------------
 

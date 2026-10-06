@@ -16,7 +16,6 @@ import Pragma
 import DefProp
 import Error(internalError, ErrMsg(..), ErrorHandle, bsWarning)
 import ISyntax
-import Prim
 import VModInfo(VFieldInfo(..))
 import Util(fromJustOrErr)
 import PPrint
@@ -141,9 +140,7 @@ isSplitRule r = isSplitRuleId (getIRuleId r)
 
 -- is the rule a noAction rule
 isNoActionRule :: IRule PostElab -> Bool
-isNoActionRule (IRule {
-       irule_body = (ICon _ _ (ICPrim { primOp = PrimNoActions })) } )
-    = True
+isNoActionRule (IRule { irule_body = ANoActions }) = True
 isNoActionRule _ = False
 
 

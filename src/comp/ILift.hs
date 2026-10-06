@@ -7,11 +7,12 @@ import Flags(Flags, ifLift)
 import Error(ErrorHandle)
 import ISyntax
 import ISyntaxUtil(ieNot,
-                   icNoActions, itAction, iTrue,
+                   icNoActions, iTrue,
                    iGetType, ieIf, ieIfx, flatAction,
                    joinActions, notIf, isTAction,
                    isTrue, isFalse, ieAndOpt, ieOrOpt,
-                   iDefMap, isPairType
+                   iDefMap, isPairType,
+                   toIAction, actionToExpr
                    )
 import ITransform(iTransExpr, iTransBoolExpr)
 import PreIds(idActionValue_, idAVAction_)
@@ -60,7 +61,9 @@ iLiftRules errh flags (IRules sps rs) = IRules sps (map (iLiftRule errh flags) r
 
 iLiftRule :: ErrorHandle -> Flags -> IRule PostElab -> IRule PostElab
 iLiftRule errh flags r =
-    r { irule_body = iLiftExpr errh flags $ irule_body r }
+    -- the body through the expression it stands for (the rewrite
+    -- over IAction follows in the next commit)
+    r { irule_body = toIAction $ iLiftExpr errh flags $ actionToExpr $ irule_body r }
 
 -- Conditional actions (an action, extracted from an if, combined
 -- with an expression describing its condition)

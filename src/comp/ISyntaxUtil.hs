@@ -1347,20 +1347,38 @@ bitTupleSizes = map leafSize . itTupleElems
 -- #
 -- #############################################################################
 
--- Apply an ISyntax substitution to the predicate and action of a set of rules
-irulesMap :: (IExpr a -> IExpr a) -> IRules a -> IRules a
+-- Apply an ISyntax substitution to the predicate and body of a set of
+-- rules: the predicate, then every expression embedded in the body
+irulesMap :: (IExpr PostElab -> IExpr PostElab) -> IRules PostElab -> IRules PostElab
 irulesMap f (IRules sps rs) = IRules sps (map (iruleMap f) rs)
   where iruleMap f r = r { irule_pred = f (irule_pred r),
-                           irule_body = f (irule_body r) }
+                           irule_body = mapActionExprs f (irule_body r) }
 
-irulesMapM :: (Monad m) => (IExpr a -> m (IExpr a)) -> IRules a -> m (IRules a)
-irulesMapM f (IRules sps rs) = do
-  let iruleMapM f r = do
-        p' <- f $ irule_pred r
-        a' <- f $ irule_body r
+-- the same in a monad, with the body's function given separately
+-- (the predicate, then the body, per rule)
+irulesMapM :: (Monad m) => (IExpr PostElab -> m (IExpr PostElab))
+           -> (IAction -> m IAction) -> IRules PostElab -> m (IRules PostElab)
+irulesMapM fe fa (IRules sps rs) = do
+  let iruleMapM r = do
+        p' <- fe $ irule_pred r
+        a' <- fa $ irule_body r
         return r { irule_pred = p' , irule_body = a' }
-  rs' <- mapM (iruleMapM f) rs
+  rs' <- mapM iruleMapM rs
   return (IRules sps rs')
+
+-- the expressions embedded in an action, in traversal order
+actionExprs :: IAction -> [IExpr PostElab]
+actionExprs a =
+    case a of
+      ANoActions -> []
+      AJoin a1 a2 -> actionExprs a1 ++ actionExprs a2
+      AIf _ c t e -> c : actionExprs t ++ actionExprs e
+      ADeep _ a1 -> actionExprs a1
+      AArrSel _ _ _ _ es i -> concatMap actionExprs es ++ [i]
+      ACallMethod _ _ _ _ es -> es
+      ACallForeign _ _ (Just (_, es)) -> es
+      ACallForeign _ _ Nothing -> []
+      AUndet _ -> []
 
 -------------------
 
@@ -1550,22 +1568,28 @@ onActionArgsM :: Monad m => (IExpr PostElab -> m (IExpr PostElab))
 onActionArgsM fe fa a =
     case a of
       ANoActions -> return a
-      AJoin a1 a2 -> do a1' <- fa a1
-                        a2' <- fa a2
-                        return (AJoin a1' a2')
-      AIf m c t e -> do c' <- fe c
-                        t' <- fa t
-                        e' <- fa e
-                        return (AIf m c' t' e')
-      ADeep b a1 -> do a1' <- fa a1
-                       return (ADeep b a1')
-      AArrSel m s r n es i -> do es' <- mapM fa es
-                                 i' <- fe i
-                                 return (AArrSel m s r n es' i')
-      ACallMethod v s ts i es -> do es' <- mapM fe es
-                                    return (ACallMethod v s ts i es')
-      ACallForeign v c (Just (ts, es)) -> do es' <- mapM fe es
-                                             return (ACallForeign v c (Just (ts, es')))
+      AJoin a1 a2 ->
+          do a1' <- fa a1
+             a2' <- fa a2
+             return (AJoin a1' a2')
+      AIf m c t e ->
+          do c' <- fe c
+             t' <- fa t
+             e' <- fa e
+             return (AIf m c' t' e')
+      ADeep b a1 ->
+          do a1' <- fa a1
+             return (ADeep b a1')
+      AArrSel m s r n es i ->
+          do es' <- mapM fa es
+             i' <- fe i
+             return (AArrSel m s r n es' i')
+      ACallMethod v s ts i es ->
+          do es' <- mapM fe es
+             return (ACallMethod v s ts i es')
+      ACallForeign v c (Just (ts, es)) ->
+          do es' <- mapM fe es
+             return (ACallForeign v c (Just (ts, es')))
       ACallForeign _ _ Nothing -> return a
       AUndet _ -> return a
 
@@ -1592,6 +1616,186 @@ mapActionExprs f = go
 mapActionExprsM :: Monad m => (IExpr PostElab -> m (IExpr PostElab)) -> IAction -> m IAction
 mapActionExprsM f = go
   where go = onActionArgsM f go
+
+-- #############################################################################
+-- # pDef's edge: the evaluator's normal form of an action, as an IAction
+-- #############################################################################
+
+-- The normal form of an action, as walkNF leaves it and pDef's
+-- rebuild (IExpand.hToDef, the only caller) hands it here: a tree of
+-- PrimJoinActions, PrimIf at type Action (possibly under a primExpIf /
+-- primNoExpIf marker), the primSplitDeep / primNosplitDeep region
+-- markers and dynamic selections over a PrimBuildArray, over method
+-- calls (a selector applied to a state variable), foreign calls,
+-- PrimNoActions and the undetermined action, with the action half of
+-- an ActionValue call under the avAction_ selector.  pDef makes no
+-- definition of an action-typed cell (its is_def test), so the tree is
+-- complete down to those leaves; only their arguments are ordinary
+-- expressions.
+--
+-- Every other shape is refused by name: no evaluator path produces it,
+-- and the pass that met it would have failed on it later with less
+-- context.  No arm is a wildcard, so that a variant added to IConInfo
+-- PostElab is an incomplete-pattern warning here.
+toIAction :: IExpr PostElab -> IAction
+toIAction e =
+    case e of
+      IAps f ts as ->
+          case f of
+            ICon _ _ ic -> application f ic ts as
+            IAps {} -> refuse "an application whose head is an application"
+      ICon _ _ ic -> constant ic
+  where
+    refuse :: String -> a
+    refuse what = internalError ("toIAction: " ++ what ++ ":\n" ++ ppReadable e)
+    refuseHead what = refuse ("an application of an " ++ what ++ " constant in action position")
+    refuseCon what = refuse ("an " ++ what ++ " constant in action position")
+
+    -- the leaves: no actions, a nullary foreign call, the undetermined action
+    constant ic =
+        case ic of
+          ICPrim PrimNoActions -> ANoActions
+          ICForeign {} -> ACallForeign Nothing e Nothing
+          ICUndet {} -> AUndet e
+          -- the constants no evaluator path leaves in action position
+          ICPrim p -> refuse ("the primitive " ++ show p ++ " in action position")
+          ICCon {} -> refuseCon "ICCon"
+          ICTuple {} -> refuseCon "ICTuple"
+          ICSel {} -> refuseCon "ICSel"
+          ICInt {} -> refuseCon "ICInt"
+          ICReal {} -> refuseCon "ICReal"
+          ICString {} -> refuseCon "ICString"
+          ICChar {} -> refuseCon "ICChar"
+          ICStateVar {} -> refuseCon "ICStateVar"
+          ICMethArg -> refuseCon "ICMethArg"
+          ICModPort -> refuseCon "ICModPort"
+          ICModParam -> refuseCon "ICModParam"
+          ICValue {} -> refuseCon "ICValue"
+          ICClock {} -> refuseCon "ICClock"
+          ICReset {} -> refuseCon "ICReset"
+          ICInout {} -> refuseCon "ICInout"
+
+    -- an application, by its head constant
+    application f ic ts as =
+        case ic of
+          ICPrim p -> primitive p ts as
+          ICSel {} -> selection f ts as
+          ICForeign {} -> ACallForeign Nothing f (Just (ts, as))
+          -- the applications no evaluator path builds in action position
+          ICCon {} -> refuseHead "ICCon"
+          ICTuple {} -> refuseHead "ICTuple"
+          ICUndet {} -> refuseHead "ICUndet"
+          ICInt {} -> refuseHead "ICInt"
+          ICReal {} -> refuseHead "ICReal"
+          ICString {} -> refuseHead "ICString"
+          ICChar {} -> refuseHead "ICChar"
+          ICStateVar {} -> refuseHead "ICStateVar"
+          ICMethArg -> refuseHead "ICMethArg"
+          ICModPort -> refuseHead "ICModPort"
+          ICModParam -> refuseHead "ICModParam"
+          ICValue {} -> refuseHead "ICValue"
+          ICClock {} -> refuseHead "ICClock"
+          ICReset {} -> refuseHead "ICReset"
+          ICInout {} -> refuseHead "ICInout"
+
+    -- joins, conditionals, markers, arrays
+    primitive p ts as =
+        case (p, ts, as) of
+          (PrimJoinActions, [], [a1, a2]) -> AJoin (toIAction a1) (toIAction a2)
+          (PrimJoinActions, _, _) ->
+              refuse "a PrimJoinActions with type arguments or not exactly two arguments"
+          (PrimIf, [t], [c, a1, a2]) | t == itAction ->
+              AIf SplitDefault c (toIAction a1) (toIAction a2)
+          (PrimIf, _, _) -> refuse "a PrimIf not at type Action with three arguments"
+          (PrimExpIf, [], [a]) -> markedIf SplitIf a
+          (PrimNoExpIf, [], [a]) -> markedIf NoSplitIf a
+          (PrimSplitDeep, [], [a]) -> ADeep True (toIAction a)
+          (PrimNosplitDeep, [], [a]) -> ADeep False (toIAction a)
+          _ | isIfWrapper p ->
+              refuse "a split annotation with type arguments or not exactly one argument"
+          (PrimArrayDynSelect, _, _) -> arraySel SplitDefault e
+          (PrimCase, _, _) ->
+              refuse "a PrimCase in action position (no evaluator path builds one)"
+          _ -> refuse ("an application of " ++ show p ++ " in action position")
+
+    -- a method call, or the action half of an ActionValue call
+    selection sel ts as =
+        case sel of
+          ICon i _ _
+              | i == idAVAction_ ->
+                  case as of
+                    [inner] -> avHalf (AVSel sel ts) inner
+                    _ -> refuse "an avAction_ selector applied to other than one argument"
+              | i == idAVValue_ -> refuse "an avValue_ selection in action position"
+          _ -> case as of
+                 inst@(ICon _ _ (ICStateVar {})) : args -> ACallMethod Nothing sel ts inst args
+                 _ -> refuse "a method selection from something other than a state variable"
+
+    -- the conditional under a primExpIf / primNoExpIf marker
+    markedIf mode a =
+        case a of
+          IAps (ICon _ _ (ICPrim PrimIf)) [t] [c, a1, a2] | t == itAction ->
+              AIf mode c (toIAction a1) (toIAction a2)
+          IAps (ICon _ _ (ICPrim PrimArrayDynSelect)) _ _ -> arraySel mode a
+          IAps (ICon _ _ (ICPrim PrimCase)) _ _ ->
+              refuse "a PrimCase under a split annotation (no evaluator path builds one)"
+          _ -> refuse "a split annotation around something other than a conditional"
+
+    -- a dynamic selection of actions: the array is a PrimBuildArray
+    -- (pDef makes no definition of an array, so it is never a reference)
+    arraySel mode a =
+        case a of
+          IAps (ICon i_sel _ (ICPrim PrimArrayDynSelect)) [t, ITNum sz]
+               [IAps (ICon i_arr _ (ICPrim PrimBuildArray)) [_] es, idx] | t == itAction ->
+              AArrSel mode i_sel i_arr sz (map toIAction es) idx
+          IAps (ICon _ _ (ICPrim PrimArrayDynSelect)) [t, ITNum _] [_, _] | t == itAction ->
+              refuse "a dynamic selection of actions over something other than a PrimBuildArray"
+          _ -> refuse "a PrimArrayDynSelect not at type Action with a literal index width"
+
+    -- the action half of an ActionValue call: a method call or a foreign call
+    avHalf av inner =
+        case inner of
+          IAps sel@(ICon _ _ (ICSel {})) ts (inst@(ICon _ _ (ICStateVar {})) : args) ->
+              ACallMethod (Just av) sel ts inst args
+          IAps f@(ICon _ _ (ICForeign {})) ts es -> ACallForeign (Just av) f (Just (ts, es))
+          f@(ICon _ _ (ICForeign {})) -> ACallForeign (Just av) f Nothing
+          _ -> refuse "avAction_ of something other than a method call or a foreign call"
+
+-- The expression an IAction stands for, rebuilt from its parts (the
+-- stored constants, and the canonical constants for the primitives):
+-- cmpE-equal to, and printing as, the expression toIAction was given.
+-- A bridge for the passes that still read a body as an expression
+-- while they are rewritten over IAction; it goes with the last of them.
+actionToExpr :: IAction -> IExpr PostElab
+actionToExpr a =
+    case a of
+      ANoActions -> icNoActions
+      AJoin a1 a2 -> IAps icJoinActions [] [actionToExpr a1, actionToExpr a2]
+      AIf m c t e -> marked m (IAps icIf [itAction] [c, actionToExpr t, actionToExpr e])
+      ADeep b a1 -> IAps (marker (if b then PrimSplitDeep else PrimNosplitDeep)) [] [actionToExpr a1]
+      AArrSel m i_sel i_arr sz es idx ->
+          let arr = IAps (withId i_arr (icPrimBuildArray (length es))) [itAction] (map actionToExpr es)
+          in  marked m (IAps (withId i_sel icPrimArrayDynSelect) [itAction, ITNum sz] [arr, idx])
+      ACallMethod mav sel ts inst args -> av mav (IAps sel ts (inst : args))
+      ACallForeign mav f (Just (ts, es)) -> av mav (IAps f ts es)
+      ACallForeign mav f Nothing -> av mav f
+      AUndet c -> c
+  where
+    marked SplitDefault e = e
+    marked SplitIf e = IAps (marker PrimExpIf) [] [e]
+    marked NoSplitIf e = IAps (marker PrimNoExpIf) [] [e]
+    marker :: PrimOp -> IExpr PostElab
+    marker p = ICon (markerId p) (itAction `itFun` itAction) (ICPrim p)
+    markerId PrimExpIf = idPrimExpIf
+    markerId PrimNoExpIf = idPrimNoExpIf
+    markerId PrimSplitDeep = idPrimSplitDeep
+    markerId PrimNosplitDeep = idPrimNosplitDeep
+    markerId p = internalError ("actionToExpr: not a marker: " ++ show p)
+    av Nothing e = e
+    av (Just (AVSel s ts)) e = IAps s ts [e]
+    withId :: Id -> IExpr PostElab -> IExpr PostElab
+    withId i (ICon _ t ic) = ICon i t ic
+    withId _ c = c
 
 iStrToInt :: KnownPhase a => String -> Position -> IExpr a
 {-# SPECIALISE iStrToInt :: String -> Position -> IExpr PreElab #-}

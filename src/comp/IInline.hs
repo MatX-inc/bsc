@@ -10,7 +10,7 @@ import PPrint
 import ErrorUtil
 import Id
 import ISyntax
-import ISyntaxUtil(irulesMap, iDefsMap)
+import ISyntaxUtil(irulesMap, iDefsMap, actionExprs)
 import IInlineUtil(iSubst, iSubstIfc)
 import Prim
 import Data.Maybe(catMaybes)
@@ -78,7 +78,7 @@ iInlineS True imod@(IModule { imod_local_defs = ds,
 
 ruleVars :: IRules PostElab -> [Id]
 ruleVars (IRules sps rs) = concatMap leafVars rs
-    where leafVars r = iValVars (irule_pred r) ++ iValVars (irule_body r)
+    where leafVars r = iValVars (irule_pred r) ++ concatMap iValVars (actionExprs (irule_body r))
 
 varVars :: (a, IStateVar PostElab) -> [Id]
 varVars (_, IStateVar { isv_iargs = es }) =

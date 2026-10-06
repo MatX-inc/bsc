@@ -7,11 +7,11 @@ import ISyntax
 import Prim
 import ErrorUtil(internalError)
 import PPrint
-import PreIds(idPrimExpIf, idActionValue_, idAVValue_)
+import PreIds(idPrimExpIf, idAVValue_)
 import qualified Flags(Flags, expandIf)
 import Position
 import ISyntaxUtil
-import Id(Id, mkSplitId, getIdString)
+import Id(Id, mkSplitId)
 import Pragma(SPIdSplitMap, splitSchedPragmaIds)
 import ITransform(iTransBoolExpr)
 import PreStrings(fs_T, fs_F)
@@ -355,8 +355,10 @@ iExpandIfRule flags
              , irule_original = orig
              })
   = let
+        -- the body through the expression it stands for (the rewrite
+        -- over IAction follows in the next commit)
         paths :: [Path_through_actions PostElab]
-        paths = run (push (Flags.expandIf flags) action)
+        paths = run (push (Flags.expandIf flags) (actionToExpr action))
 
         splitorig :: Maybe Id
         splitorig = maybe (Just i) Just orig
@@ -384,8 +386,8 @@ iExpandIfRule flags
                 new_predicate :: IExpr PostElab
                 new_predicate = iTransBoolExpr flags (foldr ieAndOpt predicate terms)
 
-                new_action :: IExpr PostElab
-                new_action = joinActions action_list
+                new_action :: IAction
+                new_action = toIAction (joinActions action_list)
              in
 --trace ("mkRule " ++ new_description ++ (ppReadable branches) ++ " = " ++
 --(ppReadable new_predicate) ++ " : " ++ (ppReadable action_list)) $
@@ -397,7 +399,7 @@ iExpandIfRule flags
                   }
 
         mkSingleRule (_branches, action_list)
-            = r { irule_body = joinActions action_list }
+            = r { irule_body = toIAction (joinActions action_list) }
         new_rules :: [IRule PostElab]
         new_rules = case paths of
              [s] -> [mkSingleRule s]
@@ -427,41 +429,27 @@ check_rules :: (PrimOp -> Bool) -> IRules PostElab -> Maybe (IExpr PostElab)
 check_rules whatp (IRules _ rs) = msum $ map (check_rule whatp) rs
 
 check_rule :: (PrimOp -> Bool) -> IRule PostElab -> Maybe (IExpr PostElab)
-check_rule whatp r = check_if_wrappers whatp $ irule_body r
+check_rule whatp r = check_if_wrappers whatp $ actionToExpr $ irule_body r
 
 -- --------------------------
 
 -- methods
 
+-- An Action or ActionValue method arrives with its action as its one
+-- rule (pDef's rebuild makes it, IExpand.methodBody) and that rule is
+-- split like any other; a method with a value only (a value method, a
+-- ready signal, a clock, a reset, an inout) is unchanged.
 iSplitIface :: Flags.Flags -> IEFace PostElab -> (SPIdSplitMap, IEFace PostElab)
-iSplitIface flags ieface@(IEFace i xargs (Just (e,t)) Nothing wp fi)
-    = if (t == itAction) then
-            let irule = IRule i [] (getIdString i) wp iTrue e Nothing []
-                irules = IRules [] [irule] -- no sps
-            -- Don't call "optRules", since it only serves to remove rules!
-            -- Methods should not be remove!  The one other function is to
-            -- warn about never-ready methods, but AAddScheduleDefs does that
-            -- for us, later.
-            -- irules_opt <- optRules (iLiftThenExpandIfRules flags irules)
-                (smap, irules_opt) = do_iExpandIfRules flags [] irules
-            in (smap, IEFace i xargs Nothing (Just irules_opt) wp fi)
-      else case e of
-            (IAps (ICon av _ (ICTuple {fieldIds = [_val_id,_act_id]}))
-                      [_] [val_,act_])
-                | (av == idActionValue_)
-                -> let irule = IRule i [] (getIdString i) wp iTrue act_ Nothing []
-                       irules = IRules [] [irule] -- no sps
-                       (smap, irules_opt) = do_iExpandIfRules flags [] irules
-                    in (smap, IEFace i xargs (mkExpression val_ t)
-                                       (Just irules_opt) wp fi)
-            _ -> ([], ieface)
-
-iSplitIface _ _ = internalError ("iSplitIface: no expression or unexpected rule")
-
-mkExpression :: IExpr PostElab -> IType -> Maybe (IExpr PostElab, IType)
-mkExpression val_ ty = if (isEmptyType (getAV_Type ty))
-                       then Nothing
-                       else (Just (val_,(getAV_Type ty)))
+iSplitIface flags (IEFace i xargs me (Just irules) wp fi)
+    = -- Don't call "optRules", since it only serves to remove rules!
+      -- Methods should not be remove!  The one other function is to
+      -- warn about never-ready methods, but AAddScheduleDefs does that
+      -- for us, later.
+      -- irules_opt <- optRules (iLiftThenExpandIfRules flags irules)
+      let (smap, irules_opt) = do_iExpandIfRules flags [] irules
+      in  (smap, IEFace i xargs me (Just irules_opt) wp fi)
+iSplitIface _ ieface@(IEFace _ _ (Just _) Nothing _ _) = ([], ieface)
+iSplitIface _ ieface = internalError ("iSplitIface: a method with neither value nor rules: " ++ ppReadable ieface)
 
 
 check_meth_rules :: (PrimOp -> Bool) -> IEFace PostElab -> Maybe (IExpr PostElab)
