@@ -197,7 +197,13 @@ data IModule a
                 -- comments on submodule instantiations
                 imod_instance_comments :: [(Id, [String])]
           }
-         deriving (Show)
+
+-- The instances that look inside a rule body (through IRule, IRules
+-- and IEFace) are per phase: the body's type is the Body family, and
+-- a `Show (Body a)` context on a polymorphic instance would be a
+-- dictionary passed at every use.  An IModule exists only after
+-- elaboration.
+deriving instance Show (IModule PostElab)
 
 getWireInfo :: IModule a -> VWireInfo
 getWireInfo = imod_external_wires
@@ -244,7 +250,9 @@ data IEFace a = IEFace {
         ief_wireprops :: WireProps,
         ief_fieldinfo :: VFieldInfo
      }
-    deriving (Show)
+
+deriving instance Show (IEFace Elab)
+deriving instance Show (IEFace PostElab)
 
 
 -- ---------------
@@ -482,16 +490,21 @@ data IRule a =
       irule_wire_properties :: WireProps,
       -- Rule predicate
       irule_pred :: (IExpr a),
-      -- Rule body
-      irule_body :: (IExpr a),
+      -- Rule body: an expression until pDef's rebuild, an IAction after
+      irule_body :: Body a,
       {- orig rule - for splitting -}
       irule_original :: (Maybe Id),
       -- Instantiation hierarchy
       irule_state_loc :: IStateLoc
       }
-    deriving (Show)
 
-instance NFData (IRule a) where
+deriving instance Show (IRule Elab)
+deriving instance Show (IRule PostElab)
+
+instance NFData (IRule Elab) where
+    rnf (IRule i ps s wp r1 r2 orig isl) = rnf8 i ps s wp r1 r2 orig isl
+
+instance NFData (IRule PostElab) where
     rnf (IRule i ps s wp r1 r2 orig isl) = rnf8 i ps s wp r1 r2 orig isl
 
 getIRuleId :: IRule a -> Id
@@ -501,9 +514,14 @@ getIRuleStateLoc :: IRule a -> IStateLoc
 getIRuleStateLoc = irule_state_loc
 
 data IRules a = IRules [ISchedulePragma] [IRule a]
-    deriving (Show)
 
-instance NFData (IRules a) where
+deriving instance Show (IRules Elab)
+deriving instance Show (IRules PostElab)
+
+instance NFData (IRules Elab) where
+    rnf (IRules sps rs) = rnf2 sps rs
+
+instance NFData (IRules PostElab) where
     rnf (IRules sps rs) = rnf2 sps rs
 
 
@@ -1452,7 +1470,7 @@ instance PPrint (IPackage a) where
         foldr (sep (text "next def..........................................................") . ppDef d) (text "") ds
   where sep a b c = b $+$ a $+$ c
 
-instance PPrint (IModule a) where
+instance PPrint (IModule PostElab) where
  pPrint d p (IModule mi fmod be wi ps ks as clks rsts vs pts ds rs ifc ffcalNo cmap) =
         (text "IModule" <+> ppId d mi <> if fmod then text " -- function" else text "") $+$
         (case be of
@@ -1491,8 +1509,17 @@ instance PPrint (IModule a) where
 ppMV :: (PPrint a) => PDetail -> (Id, a) -> Doc
 ppMV d (i, ty) = ppId d i <+> text "::" <+> pPrint d 0 ty
 
-instance PPrint (IEFace a) where
-    pPrint d p (IEFace i vs et rules wp fi)
+-- the per-phase printers of the rule-holding records, through one
+-- printer each that takes the printer of the part whose instance is
+-- per phase (the body, the rule, the rules)
+instance PPrint (IEFace Elab) where
+    pPrint = ppIEFace pPrint
+
+instance PPrint (IEFace PostElab) where
+    pPrint = ppIEFace pPrint
+
+ppIEFace :: (PDetail -> Int -> Maybe (IRules a) -> Doc) -> PDetail -> Int -> IEFace a -> Doc
+ppIEFace ppRules d p (IEFace i vs et rules wp fi)
         =       text "-- args" $+$
                 foldr (($+$) . ppMV d) b (concat vs)
               where b =        text "-- body" $+$
@@ -1500,7 +1527,7 @@ instance PPrint (IEFace a) where
                           Just (e,t) -> ppDef d $ IDef i t e []
                           _ -> empty ) $+$
                         text "-- rules" $+$
-                        pPrint d 0 rules $+$
+                        ppRules d 0 rules $+$
                         text "-- wire properties" $+$
                         pPrint d 0 wp $+$
                         text "-- field info" $+$
@@ -1544,8 +1571,14 @@ instance PPrint (IStateVar a) where
                    text ")")
 
 
-instance PPrint (IRule a) where
-    pPrint d p (IRule {
+instance PPrint (IRule Elab) where
+    pPrint = ppIRule pPrint
+
+instance PPrint (IRule PostElab) where
+    pPrint = ppIRule pPrint
+
+ppIRule :: (PDetail -> Int -> Body a -> Doc) -> PDetail -> Int -> IRule a -> Doc
+ppIRule ppBody d p (IRule {
                    irule_name = longname,
                    irule_pragmas = rps,
                    irule_description = s,
@@ -1555,12 +1588,18 @@ instance PPrint (IRule a) where
         (text "" <+> text (show longname) <> text ":") $+$
         (text "" <+> text (show s) <> text ":") $+$
         (text "  when" <+> pPrint d 0 c) $+$
-        (text "   ==>" <+> pPrint d 0 a)
+        (text "   ==>" <+> ppBody d 0 a)
 
-instance PPrint (IRules a) where
-    pPrint d p (IRules sps rs) =
+instance PPrint (IRules Elab) where
+    pPrint = ppIRules pPrint
+
+instance PPrint (IRules PostElab) where
+    pPrint = ppIRules pPrint
+
+ppIRules :: (PDetail -> Int -> IRule a -> Doc) -> PDetail -> Int -> IRules a -> Doc
+ppIRules ppRule d p (IRules sps rs) =
         foldr (($+$) . pPrint d 0) (text "") sps $+$
-        foldr (($+$) . pPrint d 0) (text "") rs
+        foldr (($+$) . ppRule d 0) (text "") rs
 
 ppQuant :: PPrint a => String -> PDetail -> Int -> Id -> a -> IExpr b -> Doc
 ppQuant s d p i t e =
@@ -1640,11 +1679,14 @@ ppApsRest d p f es = ppAps d p f [] es
 instance NFData (IPackage a) where
     rnf (IPackage i lps ps ds atfCache) = rnf5 i ps lps ds atfCache
 
-instance NFData (IModule a) where
+instance NFData (IModule PostElab) where
     rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16) =
         rnf16 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16
 
-instance NFData (IEFace a) where
+instance NFData (IEFace Elab) where
+    rnf (IEFace x1 x2 x3 x4 x5 x6) = rnf6 x1 x2 x3 x4 x5 x6
+
+instance NFData (IEFace PostElab) where
     rnf (IEFace x1 x2 x3 x4 x5 x6) = rnf6 x1 x2 x3 x4 x5 x6
 
 instance NFData IAbstractInput where
@@ -1839,7 +1881,9 @@ showTypeless (ILAM i k e) = "(ILAM " ++ (show i) ++ " " ++ (show k) ++ " " ++ (s
 showTypeless (ICon_ _ i _ ci) = "(ICon " ++ (show i) ++ " " ++ (showTypelessCI ci) ++ " )"
 showTypeless (IRefT _ i _ _) = "(IRefT " ++ "_" ++ (show i) ++ ")"
 
-showTypelessRule :: IRule a -> String
+-- (the bodies are expressions only before pDef's rebuild; after it,
+-- `show` of the IAction is the shallow form)
+showTypelessRule :: IRule Elab -> String
 showTypelessRule (IRule {
                      irule_name = n,
                      irule_pragmas = rps,
@@ -1850,7 +1894,7 @@ showTypelessRule (IRule {
     (show s) ++ "\n\t" ++ (showTypeless c) ++ "\n\t" ++
     (showTypeless a) ++ "\n)"
 
-showTypelessRules :: IRules a -> String
+showTypelessRules :: IRules Elab -> String
 showTypelessRules (IRules sps rs) =
     "(IRules " ++ show sps ++ " [" ++
     foldr1 (\x y -> x ++ ", " ++ y) (map showTypelessRule rs) ++ "])"

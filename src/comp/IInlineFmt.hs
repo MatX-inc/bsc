@@ -4,7 +4,8 @@ import PPrint
 import ErrorUtil
 import ISyntax
 import IInlineUtil(iSubstIfc, iSubstWhen)
-import ISyntaxUtil(itString, icJoinActions, itBit, irulesMap, irulesMapM, itFmt, itGetArrows, itFun, itInst, itAction, iGetType, joinActions, iMkString, isitAction, isitActionValue_, iDefMapM, iDefsMap, emptyFmt)
+import ISyntaxUtil(itString, icJoinActions, itBit, irulesMap, irulesMapM, itFmt, itGetArrows, itFun, itInst, iGetType, joinActions, iMkString, isitAction, isitActionValue_, iDefMapM, iDefsMap, emptyFmt,
+                   toIAction, actionToExpr)
 import Id
 import Prim
 import PreIds(idActionValue_, idArrow, tmpVarIds, idAVValue_, idAVAction_, idPrimFmtConcat)
@@ -55,7 +56,7 @@ splitFmtsF imod@(IModule { imod_local_defs  = ds,
         ds'' <- mapM updateDef ds'
 
         ifc' <- ssplitFmt_ifc ifc
-        rs'  <- irulesMapM ssplitFmt rs
+        rs'  <- irulesMapM ssplitFmt ssplitFmtA rs
         let updateStateVar (name, sv@(IStateVar { isv_iargs = es })) = do es' <- mapM ssplitFmt es
                                                                           return (name, sv { isv_iargs = es' })
         state_vars' <- mapM updateStateVar (imod_state_insts imod)
@@ -68,6 +69,12 @@ ssplitFmt :: IExpr PostElab -> F PostElab (IExpr PostElab)
 ssplitFmt e =
     do expr' <- fsplitFmt e
        splitFmt expr'
+
+-- a rule body, through the expression it stands for (the rewrite over
+-- IAction follows in the next commit)
+ssplitFmtA :: IAction -> F PostElab IAction
+ssplitFmtA a = do e <- ssplitFmt (actionToExpr a)
+                  return (toIAction e)
 
 --------------------------------------------------------------------------------
 -- Special handling for $fdisplay, $fwrite etc.
@@ -592,11 +599,31 @@ isAVFFWithFmts _                                              = False
 isFFWithFmts :: IExpr PostElab -> Bool
 isFFWithFmts e = isActionFFWithFmts e || isAVFFWithFmts e
 
+-- A method's value and rules.  An ActionValue method's value and its
+-- one rule's body were the two fields of one ActionValue_ struct until
+-- pDef split them; the split pieces are processed as that struct was
+-- (every phase over the value, then over the action), so that the
+-- cookies are allocated in the same order.  This rebuilds the struct
+-- for that; the rewrite over IAction in the next commit interleaves
+-- the phases directly.
 ssplitFmt_ifc :: [IEFace PostElab] -> F PostElab [IEFace PostElab]
 ssplitFmt_ifc ifc_list
-    = do let updateIfc (IEFace i xs (Just (e,t)) rules wp fi) = do e' <- ssplitFmt e
-                                                                   return (IEFace i xs (Just (e',t)) rules wp fi)
-             updateIfc (IEFace i xs _ rules wp fi)            = return (internalError("ssplitFmt_ifc: expression not found"))
+    = do let updateIfc (IEFace i xs (Just (e,t)) Nothing wp fi) =
+                 do e' <- ssplitFmt e
+                    return (IEFace i xs (Just (e',t)) Nothing wp fi)
+             updateIfc (IEFace i xs Nothing (Just rules) wp fi) =
+                 do rules' <- irulesMapM ssplitFmt ssplitFmtA rules
+                    return (IEFace i xs Nothing (Just rules') wp fi)
+             updateIfc (IEFace i xs (Just (e,t)) (Just (IRules sps [r])) wp fi) =
+                 do let tup = ICon idActionValue_ itAction (ICTuple [idAVValue_, idAVAction_])
+                    p' <- ssplitFmt (irule_pred r)
+                    both <- ssplitFmt (IAps tup [t] [e, actionToExpr (irule_body r)])
+                    (e', a') <- case both of
+                                  IAps _ _ [e', a'] -> return (e', toIAction a')
+                                  _ -> internalError ("ssplitFmt_ifc: " ++ ppReadable both)
+                    let r' = r { irule_pred = p', irule_body = a' }
+                    return (IEFace i xs (Just (e',t)) (Just (IRules sps [r'])) wp fi)
+             updateIfc ief = return (internalError("ssplitFmt_ifc: unexpected method shape: " ++ ppReadable ief))
          ifc_list' <- mapM updateIfc ifc_list
          return ifc_list'
 

@@ -235,8 +235,8 @@ tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
                     (i,e,(t,t')) (t, t') True
     in  all defOK ds
 
-tCheckIModule :: KnownPhase a => Flags -> SymTab -> IModule a -> Bool
-{-# SPECIALISE tCheckIModule :: Flags -> SymTab -> IModule PostElab -> Bool #-}
+-- (an IModule exists only after elaboration, where a rule body is an IAction)
+tCheckIModule :: Flags -> SymTab -> IModule PostElab -> Bool
 tCheckIModule flags symt (IModule { imod_type_args  = iks,
                                     imod_local_defs = ds,
                                     imod_rules      = rs,
@@ -257,8 +257,11 @@ tCheckIModule flags symt (IModule { imod_type_args  = iks,
                           _ -> True)
 
             rulesOK (IRules sps rs) = all ruleOK rs
-            ruleOK (IRule { irule_pred = p , irule_body = a }) =
-                let tp = tCheck flags symt M.empty r eqTy p
+            -- the body through the expression it stands for (the
+            -- check over IAction follows in the next commit)
+            ruleOK (IRule { irule_pred = p , irule_body = a0 }) =
+                let a = actionToExpr a0
+                    tp = tCheck flags symt M.empty r eqTy p
                     ta = tCheck flags symt M.empty r eqTy a
                 in
                     assert (tp == itBit1) "ruleOK p"
