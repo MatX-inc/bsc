@@ -22,6 +22,8 @@ help:
 	@echo '    make  install-solvers'
 	@echo '                       Build and install just the vendored solvers (for a cabal build by hand)'
 	@echo '    make  install-doc  Build and install just the documentation'
+	@echo '    make  install-bluehs'
+	@echo '                       Install the bluehs script runtime (after install-src)'
 	@echo
 	@echo '    make  check-smoke  Run a quick smoke test'
 	@echo '    make  check-suite  Run the test suite (this will take time!)'
@@ -62,6 +64,10 @@ install-solvers:
 .PHONY: install-doc
 install-doc:
 	$(MAKE)  -C doc  PREFIX=$(PREFIX)  install
+
+.PHONY: install-bluehs
+install-bluehs:
+	util/bluehs/mk-dist.sh $(PREFIX)/bluehs $(BUILDDIR)/bluehs
 
 .PHONY: install-release
 install-release:
