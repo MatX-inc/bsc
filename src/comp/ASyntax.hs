@@ -29,7 +29,7 @@ module ASyntax(
         mkIfcInoutN,
         AExpr(..),
         APrimOp,
-        AMuxKind(..), aMuxKindCode, aMuxKindOfCode, aMuxKindName,
+        AMuxKind(..), aMuxKindName,
         aMuxArmExprs, mapAMuxArms, mapMAMuxArms,
         ADef(..),
         ASPackage(..),
@@ -1051,17 +1051,8 @@ data AMuxKind
                         -- or the priorityMux_ primitive module
         deriving (Eq, Ord, Show)
 
--- The code a .ba writes for a mux: the one the APrim form had (PrimMux
--- and PrimPriMux, retired from PrimOp when the mux became an AExpr
--- constructor), so the encoding is unchanged.
-aMuxKindCode :: AMuxKind -> Int
-aMuxKindCode AMuxParallel = primMuxCode
-aMuxKindCode AMuxPriority = primPriMuxCode
-
-aMuxKindOfCode :: Int -> Maybe AMuxKind
-aMuxKindOfCode n | n == primMuxCode    = Just AMuxParallel
-                 | n == primPriMuxCode = Just AMuxPriority
-                 | otherwise           = Nothing
+instance NFData AMuxKind where
+    rnf x = seq x ()
 
 -- the dump's name for the mux (SignalNaming upper-cases it)
 aMuxKindName :: AMuxKind -> String
@@ -1220,91 +1211,11 @@ data AExpr
             ae_objid :: AId,
             ae_clkid :: AId
         }
-        deriving (Show)
-
--- the lexicographic combination of two comparisons (Semigroup's <>,
--- which PPrint's Doc operator shadows in this module)
-infixr 6 `andThen`
-andThen :: Ordering -> Ordering -> Ordering
-andThen EQ r = r
-andThen r  _ = r
-
--- The order is the one the derived instance gave while a mux was an
--- APrim (of PrimMux or PrimPriMux): by constructor in declaration
--- order, AMux taking APrim's place, then by the fields in declaration
--- order, a mux's being the APrim's (id, type, the primitive's code,
--- the arms as the flat argument list).  AOpt's mux-arm sort
--- (mergeIdenExpr, when not -stable-verilog) and the Maps and Sets
--- keyed on an expression see this order.  Like the derived instance,
--- it compares the ids that Eq ignores.
-instance Ord AExpr where
-    compare a b =
-        case compare (rank a) (rank b) of
-          EQ -> fields a b
-          r  -> r
-      where
-        rank :: AExpr -> Int
-        rank (APrim {}) = 0
-        rank (AMux {}) = 0
-        rank (AMethCall {}) = 1
-        rank (AMethValue {}) = 2
-        rank (ATuple {}) = 3
-        rank (ATupleSel {}) = 4
-        rank (ANoInlineFunCall {}) = 5
-        rank (AFunCall {}) = 6
-        rank (ATaskValue {}) = 7
-        rank (ASPort {}) = 8
-        rank (ASParam {}) = 9
-        rank (ASDef {}) = 10
-        rank (ASInt {}) = 11
-        rank (ASReal {}) = 12
-        rank (ASStr {}) = 13
-        rank (ASAny {}) = 14
-        rank (ASClock {}) = 15
-        rank (ASReset {}) = 16
-        rank (ASInout {}) = 17
-        rank (AMGate {}) = 18
-
-        fields (APrim i t op es) (APrim i' t' op' es') =
-            compare i i' `andThen` compare t t' `andThen` compare op op' `andThen` compare es es'
-        fields (APrim i t op es) (AMux i' t' k' arms') =
-            compare i i' `andThen` compare t t' `andThen` compare (primOpCode op) (aMuxKindCode k')
-                         `andThen` compare es (aMuxArmExprs arms')
-        fields (AMux i t k arms) (APrim i' t' op' es') =
-            compare i i' `andThen` compare t t' `andThen` compare (aMuxKindCode k) (primOpCode op')
-                         `andThen` compare (aMuxArmExprs arms) es'
-        fields (AMux i t k arms) (AMux i' t' k' arms') =
-            compare i i' `andThen` compare t t' `andThen` compare k k' `andThen` compare arms arms'
-        fields (AMethCall t i m es) (AMethCall t' i' m' es') =
-            compare t t' `andThen` compare i i' `andThen` compare m m' `andThen` compare es es'
-        fields (AMethValue t i m) (AMethValue t' i' m') =
-            compare t t' `andThen` compare i i' `andThen` compare m m'
-        fields (ATuple t es) (ATuple t' es') = compare t t' `andThen` compare es es'
-        fields (ATupleSel t e n) (ATupleSel t' e' n') =
-            compare t t' `andThen` compare e e' `andThen` compare n n'
-        fields (ANoInlineFunCall t i f es) (ANoInlineFunCall t' i' f' es') =
-            compare t t' `andThen` compare i i' `andThen` compare f f' `andThen` compare es es'
-        fields (AFunCall t i f c es) (AFunCall t' i' f' c' es') =
-            compare t t' `andThen` compare i i' `andThen` compare f f' `andThen` compare c c' `andThen` compare es es'
-        fields (ATaskValue t i f c n) (ATaskValue t' i' f' c' n') =
-            compare t t' `andThen` compare i i' `andThen` compare f f' `andThen` compare c c' `andThen` compare n n'
-        fields (ASPort t i) (ASPort t' i') = compare t t' `andThen` compare i i'
-        fields (ASParam t i) (ASParam t' i') = compare t t' `andThen` compare i i'
-        fields (ASDef t i) (ASDef t' i') = compare t t' `andThen` compare i i'
-        fields (ASInt i t v) (ASInt i' t' v') = compare i i' `andThen` compare t t' `andThen` compare v v'
-        fields (ASReal i t v) (ASReal i' t' v') = compare i i' `andThen` compare t t' `andThen` compare v v'
-        fields (ASStr i t v) (ASStr i' t' v') = compare i i' `andThen` compare t t' `andThen` compare v v'
-        fields (ASAny t) (ASAny t') = compare t t'
-        fields (ASClock t c) (ASClock t' c') = compare t t' `andThen` compare c c'
-        fields (ASReset t r) (ASReset t' r') = compare t t' `andThen` compare r r'
-        fields (ASInout t x) (ASInout t' x') = compare t t' `andThen` compare x x'
-        fields (AMGate t i c) (AMGate t' i' c') = compare t t' `andThen` compare i i' `andThen` compare c c'
-        -- equal ranks are the same constructor, or APrim and AMux
-        fields x y = internalError ("compare AExpr: " ++ show (rank x, rank y))
+        deriving (Ord, Show)
 
 instance NFData AExpr where
     rnf (APrim oid typ prim args) = rnf4 oid typ prim args
-    rnf (AMux oid typ kind arms) = rnf4 oid typ (aMuxKindCode kind) arms
+    rnf (AMux oid typ kind arms) = rnf4 oid typ kind arms
     rnf (AMethCall typ oid mid args) = rnf4 typ oid mid args
     rnf (AMethValue typ oid mid) = rnf3 typ oid mid
     rnf (ATuple typ elems) = rnf2 typ elems
