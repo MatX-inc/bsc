@@ -2,21 +2,41 @@
 # dumpbo -prim-codes lists every primitive with its code after reading
 # each code back; the listing must match its expected copy, so that a
 # reordered or shifted table fails here instead of in a stale .bo.
-# dumpbo is an internal tool, found only when the internal checks run.
+#
+# dumpbo is one of the extra tools (make -C src/comp install-extra), and
+# the testsuite insists on it only under DO_INTERNAL_CHECKS=1, which CI
+# does not set.  This check has to run wherever the tool is installed,
+# so outside the internal checks it finds dumpbo the way which_dumpbo
+# does (DUMPBO, which the testsuite's make sets to
+# $(TEST_RELEASE)/bin/dumpbo for every run, then the PATH) and, like
+# bsc.showrules, reports itself unsupported when the tool is not built:
+# an auditable marker rather than a silent skip.
+
+global env
+global srcdir
+global subdir
+
+bsc_initialize
 
 if { [do_internal_checks] } {
-
     global dumpbo
-    global srcdir
-    global subdir
+    set tool $dumpbo
+} elseif { [info exists env(DUMPBO)] && [file exists $env(DUMPBO)] } {
+    set tool [absolute_filename $env(DUMPBO)]
+} else {
+    set tool [which dumpbo]
+}
 
-    bsc_initialize
+if { $tool == 0 } {
+    note "dumpbo is NOT available"
+    unsupported "dumpbo: tool not built (make -C src/comp install-extra)"
+} else {
 
     set here [absolute $srcdir]
     cd [file join $here $subdir]
 
     set output "primcodes.dumpbo-out"
-    set cmd "$dumpbo -prim-codes >& $output"
+    set cmd "$tool -prim-codes >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "dumpbo" $cmd 2]
     if { $status == 0 } {
