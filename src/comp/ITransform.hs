@@ -1180,8 +1180,9 @@ iTrAp ctx f ts es = iTrApTail ctx f ts es
 -- the PrimIf rules in their order (the ones that need a Bit-typed arm
 -- cannot fire at type Action and are left out).  The rewritten
 -- conditional keeps its split annotation (the marker application was
--- outside the conditional iTrAp rewrote); an annotated inner
--- conditional is a different node, as the marker application was.
+-- outside the conditional iTrAp rewrote, so it stayed around whatever
+-- the rewrite returned); an annotated inner conditional is a different
+-- node, as the marker application was.
 iTrActionAp :: (?errh :: ErrorHandle) => Ctx PostElab -> IAction -> (IAction, Bool)
 
 -- eliminate null actions
@@ -1194,9 +1195,9 @@ iTrActionAp ctx (AJoin e ANoActions) = (e, True)
 -- if c t _             -->  t
 -- if c _ e             -->  e
 iTrActionAp ctx (AIf m cnd thn els)
-        | isT ctx cnd = (thn, True)
-        | isF ctx cnd = (els, True)
-        | eqAction thn els = (thn, True)
+        | isT ctx cnd = (remark thn, True)
+        | isF ctx cnd = (remark els, True)
+        | eqAction thn els = (remark thn, True)
         | otherwise   =
                 case (expVal cnd, thn, els) of
 
@@ -1206,16 +1207,28 @@ iTrActionAp ctx (AIf m cnd thn els)
 
                 --   if c _ _  -->  _
                 (_, AUndet {}, AUndet {})
-                    -> (els, True)
+                    -> (remark els, True)
 
                 -- if (not c) t e -->  if c e t
                 (IAps (ICon _ _ (ICPrim PrimBNot)) _ [c], _, _)
                         -> again (AIf m c els thn)
 
                 -- if c then _ else e  -->  e
-                (_, AUndet {}, _) -> (els, True)
+                (_, AUndet {}, _) -> (remark els, True)
                 _ -> (AIf m cnd thn els, False)
   where again a = (fst (iTrActionAp ctx a), True)
+        -- An arm the rewrite picks takes the conditional's annotation:
+        -- the marker application stayed around the arm, and ISplitIf
+        -- read it as that arm's own when the arm was an unannotated
+        -- conditional.  (Around anything else -- a call, a join, no
+        -- actions, a region marker, a conditional with a marker of its
+        -- own -- ISplitIf refused the marker with "Bad argument to split
+        -- annotation"; the mode has nowhere to go on those and is
+        -- dropped, so such a rule compiles now.)
+        remark a | m == SplitDefault = a
+        remark (AIf SplitDefault c t e) = AIf m c t e
+        remark (AArrSel SplitDefault s r n es i) = AArrSel m s r n es i
+        remark a = a
 
 iTrActionAp ctx a = (a, False)
 
