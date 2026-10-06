@@ -104,9 +104,9 @@ run :: IExpr PostElab -> [Path_through_actions PostElab]
 --run l | flattensToNothing l = return ([], [])
 run l
   = case l of
-        (IAps (ICon _ (ICPrim { primOp = PrimExpIf })) [] [e]) ->
+        (IAps (ICon _ _ (ICPrim { primOp = PrimExpIf })) [] [e]) ->
           case e of
-            (IAps (ICon _ (ICPrim { primOp = PrimIf }))
+            (IAps (ICon _ _ (ICPrim { primOp = PrimIf }))
                  [ty_if] [cond, t_action, f_action]) | ty_if == itAction
               ->
                if (canLiftCond cond) then
@@ -114,7 +114,7 @@ run l
                  map (prepend_branch (BranchIf cond False)) (run f_action)
                else run e
 
-            (IAps (ICon _ (ICPrim { primOp = PrimCase }))
+            (IAps (ICon _ _ (ICPrim { primOp = PrimCase }))
                  [ITNum idx_sz, elem_ty] (e_idx:e_dflt:ces))
                 | elem_ty == itAction
               ->
@@ -132,11 +132,11 @@ run l
                      doDflt
                else run e
 
-            (IAps (ICon i_sel (ICPrim { primOp = PrimArrayDynSelect }))
+            (IAps (ICon i_sel _ (ICPrim { primOp = PrimArrayDynSelect }))
                  [elem_ty, ITNum idx_sz] [e_arr, e_idx]) ->
              if (canLiftCond e_idx) then
               case (expandRefs e_arr) of
-                (IAps (ICon _ (ICPrim { primOp = PrimBuildArray }))
+                (IAps (ICon _ _ (ICPrim { primOp = PrimBuildArray }))
                      [elem_ty'] es_elems)
                   -> let sel_pos = getPosition i_sel
                          max_idx = (2^idx_sz) - 1
@@ -166,13 +166,13 @@ run l
             _ -> internalError ("ISplitIf.run wrong kind of splitting.\n"
                                 ++ (ppReadable l))
 
-        (IAps (ICon _ (ICPrim { primOp = PrimJoinActions })) _ [e1,e2])
+        (IAps (ICon _ _ (ICPrim { primOp = PrimJoinActions })) _ [e1,e2])
           -> do
                 (a, x) <- run e1
                 (b, y) <- run e2
                 return (a ++ b, x ++ y)
 
-        (IAps (ICon _ (ICPrim { primOp = op })) _ _)
+        (IAps (ICon _ _ (ICPrim { primOp = op })) _ _)
           | isIfWrapper op
           -> internalError ("ISplitIf.run wrong kind of splitting.\n"
                             ++ (ppReadable l))
@@ -194,32 +194,32 @@ push do_split e
         -- keeps pushing split or nosplit depending on the argument
         continue x = push do_split x
      in case e of
-        (IAps j@(ICon _ (ICPrim { primOp = PrimJoinActions })) t [e1,e2])
+        (IAps j@(ICon _ _ (ICPrim { primOp = PrimJoinActions })) t [e1,e2])
           -> (IAps j t
                [continue e1,continue e2])
-        (IAps   (ICon _ (ICPrim { primOp = PrimJoinActions })) _ _)
+        (IAps   (ICon _ _ (ICPrim { primOp = PrimJoinActions })) _ _)
           -> internalError
                ("PrimJoinActions called with wrong number of arguments")
 
-        (IAps wrap@(ICon _ (ICPrim { primOp = PrimExpIf })) [] [if_e]) ->
+        (IAps wrap@(ICon _ _ (ICPrim { primOp = PrimExpIf })) [] [if_e]) ->
           -- leave as is, and continue in the arms
           case if_e of
-            (IAps ic@(ICon _ (ICPrim { primOp = PrimIf }))
+            (IAps ic@(ICon _ _ (ICPrim { primOp = PrimIf }))
                  [ty_if] [cond, t_act, f_act]) | ty_if == itAction
               -> (IAps wrap []
                       [IAps ic [ty_if] [cond, continue t_act, continue f_act]])
-            (IAps ic@(ICon _ (ICPrim { primOp = PrimCase }))
+            (IAps ic@(ICon _ _ (ICPrim { primOp = PrimCase }))
                  tys@[ITNum idx_sz, elem_ty] (e_idx:e_dflt:ces))
                 | elem_ty == itAction
               -> let ces' = flattenPairs $ mapSnd continue $ makePairs ces
                      e_dflt' = continue e_dflt
                  in  (IAps wrap []
                           [IAps ic tys (e_idx:e_dflt':ces')])
-            (IAps ic_sel@(ICon _ (ICPrim { primOp = PrimArrayDynSelect }))
+            (IAps ic_sel@(ICon _ _ (ICPrim { primOp = PrimArrayDynSelect }))
                  sel_tys@[elem_ty, ITNum idx_sz] [e_arr, e_idx])
                 | elem_ty == itAction
               -> case (expandRefs e_arr) of
-                   (IAps ic_arr@(ICon _ (ICPrim { primOp = PrimBuildArray }))
+                   (IAps ic_arr@(ICon _ _ (ICPrim { primOp = PrimBuildArray }))
                         [elem_ty'] es_elems)
                      -> let e_arr' = IAps ic_arr [elem_ty'] (map continue es_elems)
                         in  (IAps wrap []
@@ -231,23 +231,23 @@ push do_split e
                       ("Bad argument to split annotation PrimExpIf: "++
                        ppReadable if_e)
 
-        (IAps (ICon _ (ICPrim { primOp = PrimNoExpIf })) _ [if_e]) ->
+        (IAps (ICon _ _ (ICPrim { primOp = PrimNoExpIf })) _ [if_e]) ->
           -- nosplit wrappers are removed, and continue in the arms
           case if_e of
-            (IAps ic@(ICon _ (ICPrim { primOp = PrimIf }))
+            (IAps ic@(ICon _ _ (ICPrim { primOp = PrimIf }))
                  [ty_if] [cond, t_act, f_act]) | ty_if == itAction
               -> (IAps ic [ty_if] [cond, continue t_act, continue f_act])
-            (IAps ic@(ICon _ (ICPrim { primOp = PrimCase }))
+            (IAps ic@(ICon _ _ (ICPrim { primOp = PrimCase }))
                  tys@[ITNum idx_sz, elem_ty] (e_idx:e_dflt:ces))
                 | elem_ty == itAction
               -> let ces' = flattenPairs $ mapSnd continue $ makePairs ces
                      e_dflt' = continue e_dflt
                  in  (IAps ic tys (e_idx:e_dflt':ces'))
-            (IAps ic_sel@(ICon _ (ICPrim { primOp = PrimArrayDynSelect }))
+            (IAps ic_sel@(ICon _ _ (ICPrim { primOp = PrimArrayDynSelect }))
                  sel_tys@[elem_ty, ITNum idx_sz] [e_arr, e_idx])
                 | elem_ty == itAction
               -> case (expandRefs e_arr) of
-                   (IAps ic_arr@(ICon _ (ICPrim { primOp = PrimBuildArray }))
+                   (IAps ic_arr@(ICon _ _ (ICPrim { primOp = PrimBuildArray }))
                         [elem_ty'] es_elems)
                      -> let e_arr' = IAps ic_arr [elem_ty'] (map continue es_elems)
                         in  (IAps ic_sel sel_tys [e_arr', e_idx])
@@ -258,32 +258,32 @@ push do_split e
                       ("Bad argument to split annotation PrimNoExpIf: "++
                        ppReadable if_e)
 
-        (IAps (ICon _ (ICPrim { primOp = PrimSplitDeep })) [] [e])
+        (IAps (ICon _ _ (ICPrim { primOp = PrimSplitDeep })) [] [e])
           -> push True e
-        (IAps (ICon _ (ICPrim { primOp = PrimNosplitDeep })) [] [e])
+        (IAps (ICon _ _ (ICPrim { primOp = PrimNosplitDeep })) [] [e])
           -> push False e
 
-        (IAps (ICon _ (ICPrim { primOp = op })) _ _) | isIfWrapper op
+        (IAps (ICon _ _ (ICPrim { primOp = op })) _ _) | isIfWrapper op
           -> -- any other use an if-wrapper is invalid
              internalError ("Bad argument to split annotation "++
                             ppReadable e)
 
         -- a bare conditional: do what do_split says
-        (IAps ic@(ICon _ (ICPrim { primOp = PrimIf }))
+        (IAps ic@(ICon _ _ (ICPrim { primOp = PrimIf }))
              [ty_if] [cond, t_act, f_act]) | ty_if == itAction
           -> if_annotate do_split
                  (IAps ic [ty_if] [cond, continue t_act, continue f_act])
-        (IAps ic@(ICon _ (ICPrim { primOp = PrimCase }))
+        (IAps ic@(ICon _ _ (ICPrim { primOp = PrimCase }))
              tys@[ITNum idx_sz, elem_ty] (e_idx:e_dflt:ces))
             | elem_ty == itAction
           -> let ces' = flattenPairs $ mapSnd continue $ makePairs ces
                  e_dflt' = continue e_dflt
              in  if_annotate do_split (IAps ic tys (e_idx:e_dflt':ces'))
-        (IAps ic_sel@(ICon _ (ICPrim { primOp = PrimArrayDynSelect }))
+        (IAps ic_sel@(ICon _ _ (ICPrim { primOp = PrimArrayDynSelect }))
              sel_tys@[elem_ty, ITNum idx_sz] [e_arr, e_idx])
             | elem_ty == itAction
           -> case (expandRefs e_arr) of
-               (IAps ic_arr@(ICon _ (ICPrim { primOp = PrimBuildArray }))
+               (IAps ic_arr@(ICon _ _ (ICPrim { primOp = PrimBuildArray }))
                     [elem_ty'] es_elems)
                  -> let e_arr' = IAps ic_arr [elem_ty'] (map continue es_elems)
                     in  if_annotate do_split
@@ -305,7 +305,7 @@ if_annotate do_split
   = let
         wrap_split if_expression
           = (IAps (ICon idPrimExpIf
-                        (ICPrim { ictPrim = itAction `itFun` itAction,
+                        (itAction `itFun` itAction) (ICPrim { 
                                   primOp = PrimExpIf }))
                   [] -- takes no type arguments
                   [if_expression])
@@ -416,7 +416,7 @@ iExpandIfRule flags
 check_if_wrappers :: (PrimOp -> Bool) -> IExpr PostElab -> Maybe (IExpr PostElab)
 check_if_wrappers what_kind_of_if_wrapper e
   = case e of
-         (IAps (ICon _ (ICPrim { primOp = op })) _ _)
+         (IAps (ICon _ _ (ICPrim { primOp = op })) _ _)
            | (what_kind_of_if_wrapper op)
            -> Just e
          (IAps f _ es)
@@ -446,7 +446,7 @@ iSplitIface flags ieface@(IEFace i xargs (Just (e,t)) Nothing wp fi)
                 (smap, irules_opt) = do_iExpandIfRules flags [] irules
             in (smap, IEFace i xargs Nothing (Just irules_opt) wp fi)
       else case e of
-            (IAps (ICon av (ICTuple {fieldIds = [_val_id,_act_id]}))
+            (IAps (ICon av _ (ICTuple {fieldIds = [_val_id,_act_id]}))
                       [_] [val_,act_])
                 | (av == idActionValue_)
                 -> let irule = IRule i [] (getIdString i) wp iTrue act_ Nothing []
@@ -472,7 +472,7 @@ check_meth_rules _ _ = Nothing
 
 -- XXX this inlinining is needed for array selection of actions
 expandRefs :: IExpr PostElab -> IExpr PostElab
-expandRefs (ICon _ (ICValue { iValDef = e })) = expandRefs e
+expandRefs (ICon _ _ (ICValue { iValDef = e })) = expandRefs e
 expandRefs e = e
 
 -- --------------------------
@@ -483,10 +483,10 @@ expandRefs e = e
 --
 canLiftCond :: IExpr PostElab -> Bool
 -- conditions that can't be lifted
-canLiftCond (IAps (ICon i (ICSel {})) _ _) | (i == idAVValue_) = False
-canLiftCond (ICon _ (ICMethArg {})) = False
+canLiftCond (IAps (ICon i _ (ICSel {})) _ _) | (i == idAVValue_) = False
+canLiftCond (ICon _ _ (ICMethArg {})) = False
 -- follow references
-canLiftCond (ICon _ (ICValue { iValDef = e })) = canLiftCond e
+canLiftCond (ICon _ _ (ICValue { iValDef = e })) = canLiftCond e
 -- recurse
 canLiftCond (IAps f _ as) = canLiftCond f && all canLiftCond as
 -- any other terminal is OK

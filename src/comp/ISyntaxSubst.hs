@@ -283,49 +283,58 @@ tSubstBatch typeMap t
 -- ============================================================
 -- Expression and type substitution
 
--- Helper: apply type and expression substitution to IConInfo.
--- tsubFn substitutes/normalizes types; esubFn substitutes expressions.
+-- Helper: apply type and expression substitution to the payload of an
+-- ICon.  tsubFn substitutes/normalizes types; esubFn substitutes
+-- expressions.  The node's type is not the payload's business: the ICon
+-- arm of eSubstWith substitutes it, for the variants conTypeSubst admits.
 etSubstIConInfo :: (IType -> Changed IType) -> (IExpr a -> Changed (IExpr a))
                 -> IConInfo a -> Changed (IConInfo a)
--- ICVerilog: substitute iConType and each type in vMethTs
+-- ICVerilog: substitute each type in vMethTs
 etSubstIConInfo tsubFn _ ii@(ICVerilog { }) =
-  changed2 (\t vts -> ii { ictVerilog = t, vMethTs = vts })
-           (iConType ii) (vMethTs ii)
-           (tsubFn (iConType ii)) (mapChanged (mapChanged tsubFn) (vMethTs ii))
--- ICType: iConType is always itType (no free variables), only substitute iType
+  changed1 (\vts -> ii { vMethTs = vts })
+           (mapChanged (mapChanged tsubFn) (vMethTs ii))
+-- ICType: substitute iType (the node's type is always itType, no free variables)
 etSubstIConInfo tsubFn _ ii@(ICType { }) =
   changed1 (\t' -> ii { iType = t' }) (tsubFn (iType ii))
--- ICClock: recurse into clock wires (iConType is always Bit 1, no substitution needed)
+-- ICClock: recurse into clock wires (the node's type is always Bit 1, no substitution needed)
 etSubstIConInfo _tsubFn esubFn ii@(ICClock { iClock = clk }) =
   changed1 (\clk' -> ii { iClock = clk' }) (subClk esubFn clk)
--- ICReset: recurse into reset wires (iConType is always Bit 1, no substitution needed)
+-- ICReset: recurse into reset wires (the node's type is always Bit 1, no substitution needed)
 etSubstIConInfo _tsubFn esubFn ii@(ICReset { iReset = rst }) =
   changed1 (\rst' -> ii { iReset = rst' }) (subRst esubFn rst)
--- ICInout: substitute iConType and recurse into inout (clock + reset + wire)
-etSubstIConInfo tsubFn esubFn ii@(ICInout { iInout = io }) =
-  changed2 (\ct io' -> ii { ictInout = ct, iInout = io' })
-           (iConType ii) io
-           (tsubFn (iConType ii)) (subIo esubFn io)
--- ICLazyArray: substitute iConType and recurse into uninit expressions
+-- ICInout: recurse into inout (clock + reset + wire)
+etSubstIConInfo _tsubFn esubFn ii@(ICInout { iInout = io }) =
+  changed1 (\io' -> ii { iInout = io' }) (subIo esubFn io)
+-- ICLazyArray: recurse into uninit expressions
 -- (the array pointer itself is left alone)
-etSubstIConInfo tsubFn esubFn ii@(ICLazyArray { uninit = mu }) =
-  changed2 (\ct mu' -> ii { ictLazyArray = ct, uninit = mu' })
-           (iConType ii) mu
-           (tsubFn (iConType ii)) (mapMaybeChanged (subPair esubFn) mu)
--- ICDef: top-level definition; don't follow recursive references
-etSubstIConInfo _ _ ii@(ICDef { }) = Unchanged
--- ICValue: evaluator-created definition; too late to substitute
-etSubstIConInfo _ _ ii@(ICValue { }) = Unchanged
--- ICLazyPack/ICLazyUnpack: evaluator-created, types already ground and
--- the held expressions are heap references; too late to substitute
-etSubstIConInfo _ _ ii@(ICLazyPack { }) = Unchanged
-etSubstIConInfo _ _ ii@(ICLazyUnpack { }) = Unchanged
--- Catch-all: substitute iConType only
+etSubstIConInfo _tsubFn esubFn ii@(ICLazyArray { uninit = mu }) =
+  changed1 (\mu' -> ii { uninit = mu' }) (mapMaybeChanged (subPair esubFn) mu)
+-- No other variant has a field substitution reaches.
 -- We do not have special handling for ICStateVar because we do not enter the
 -- IStateVar it contains. This is because we don't want the IStateVars in ICStateVars
 -- and the IStateVars store in the evaluator's monad to become inconsistent.
-etSubstIConInfo tsubFn _ ii =
-  changed1 (\t' -> setIConType t' ii) (tsubFn (iConType ii))
+etSubstIConInfo _ _ _ = Unchanged
+
+-- Whether the ICon arm substitutes (and normalizes) the node's type: it
+-- does for exactly the variants whose type was substituted when it was
+-- a payload field.  The exceptions were left alone then and stay so:
+-- ICDef (top-level definition; don't follow recursive references),
+-- ICValue (evaluator-created definition; too late to substitute),
+-- ICLazyPack/ICLazyUnpack (evaluator-created, types already ground and
+-- the held expressions are heap references), and ICType, ICClock,
+-- ICReset (only their contents were substituted; the type is itType or
+-- Bit 1).  Normalization can rewrite a type with no free variables, so
+-- substituting one of these now could change a type that reaches a .bo
+-- or a name.
+conTypeSubst :: IConInfo a -> Bool
+conTypeSubst (ICDef { }) = False
+conTypeSubst (ICValue { }) = False
+conTypeSubst (ICLazyPack { }) = False
+conTypeSubst (ICLazyUnpack { }) = False
+conTypeSubst (ICType { }) = False
+conTypeSubst (ICClock { }) = False
+conTypeSubst (ICReset { }) = False
+conTypeSubst _ = True
 
 -- Helpers for recursing into clock/reset/inout structures
 subClk :: (IExpr a -> Changed (IExpr a)) -> IClock a -> Changed (IClock a)
@@ -443,10 +452,12 @@ eSubstWith ectx tctx allIds e = go ectx tctx allIds e
     sub ectx _    _      ee@(IVar i) = maybe Unchanged Changed (lookupVar i ectx)
     sub ectx tctx allIds ee@(IAps f ts es) =
         changed3 IAps f ts es (sub ectx tctx allIds f) (mapChanged (tSubWithNorm tctx allIds) ts) (mapChanged (sub ectx tctx allIds) es)
-    -- Use helper for IConInfo (handles both type and expression substitution)
-    sub ectx tctx allIds ee@(ICon i ii) =
-        changed1 (ICon i) (etSubstIConInfo (tSubWithNorm tctx allIds)
-                                           (sub ectx tctx allIds) ii)
+    -- The node's type is substituted here (for the variants conTypeSubst
+    -- admits); the helper substitutes inside the payload
+    sub ectx tctx allIds ee@(ICon i t ii) =
+        let tsub = tSubWithNorm tctx allIds
+            ct = if conTypeSubst ii then tsub t else Unchanged
+        in  changed2 (ICon i) t ii ct (etSubstIConInfo tsub (sub ectx tctx allIds) ii)
     sub _    _    _      ee@(IRefT _ _ _ _) = Unchanged  -- no free tyvar inside IRef
 
 -- Public API: single expression substitution

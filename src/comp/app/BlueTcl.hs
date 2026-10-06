@@ -4280,9 +4280,9 @@ find_vmodinfo ipkg = concatMap defVMIs (ipkg_defs ipkg)
     exprVMIs (IAps fun _ args) = concatMap exprVMIs (fun:args)
     exprVMIs (IVar _) = []
     exprVMIs (ILAM _ _ body) = exprVMIs body
-    exprVMIs (ICon _ (ICVerilog { vInfo = vmi })) = [vmi]
-    exprVMIs (ICon _ (ICDef { iConDef = body })) = exprVMIs body
-    exprVMIs (ICon _ _) = []
+    exprVMIs (ICon _ _ (ICVerilog { vInfo = vmi })) = [vmi]
+    exprVMIs (ICon _ _ (ICDef { iConDef = body })) = exprVMIs body
+    exprVMIs (ICon _ _ _) = []
 
 package_vsignals :: TclP -> [(Id,String)]
 package_vsignals tclp =

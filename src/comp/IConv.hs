@@ -72,7 +72,7 @@ iConvPackage :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab ->
 iConvPackage errh flags r ctypeATFCache liftedDefs (CPackage pi _ _ _ _ ds _) =
     return (IPackage pi [] ps ds' itypeATFCache)
   where ds' = concatMap (iConvD errh flags pi r env pvs) ds ++ liftedDefs
-        env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds'])
+        env = M.fromList ([(i, ICon i t (ICDef e)) | IDef i t e _ <- ds'])
         pvs = map IVar tmpVarIds
         ps = [ qualP p | CPragma p <- ds ]
         qualP (Pproperties i ps) = Pproperties (qualId pi i) ps
@@ -86,7 +86,7 @@ iConvDef :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> IPac
 {-# SPECIALISE iConvDef :: ErrorHandle -> Flags -> SymTab -> IPackage PreElab -> CDefn -> IDef PreElab #-}
 {-# SPECIALISE iConvDef :: ErrorHandle -> Flags -> SymTab -> IPackage Elab -> CDefn -> IDef Elab #-}
 iConvDef errh flags r (IPackage pi _ _ ds _) def =
-    let env = M.fromList ([(i, ICon i (ICDef t e)) | IDef i t e _ <- ds])
+    let env = M.fromList ([(i, ICon i t (ICDef e)) | IDef i t e _ <- ds])
         pvs = map IVar tmpVarIds
     in  case iConvD errh flags pi r env pvs def of
         [d] -> d
@@ -102,7 +102,7 @@ iConvVar flags r env i =
         Just e  -> e
         Nothing ->
                 case findVar r i of
-                Just (VarInfo VarPrim (_ :>: sc) _ _) -> ICon i (ICPrim (iConvSc flags r sc) (toPrim i))
+                Just (VarInfo VarPrim (_ :>: sc) _ _) -> ICon i (iConvSc flags r sc) (ICPrim (toPrim i))
                 Just (VarInfo (VarForg name tvns mps) (_ :>: sc) _ _) ->
                         let -- numeric contexts are checked at each
                             -- application by the typechecker and their
@@ -130,7 +130,7 @@ iConvVar flags r env i =
                                 addSizes is ops ([(i, n)]:ins) r
                             addSizes [] ops ins t = (reverse ins, zip ops (bitTupleSizes t))
                             addSizes is ops ins t = internalError ("addSizes mismatch: " ++ ppReadable (is, ops, ins, t))
-                        in  ICon i (ICForeign t name False ops' tvns Nothing)
+                        in  ICon i t (ICForeign name False ops' tvns Nothing)
                 Just (VarInfo VarMeth (_ :>: Forall _ ((pp:_) :=> _)) _ _) ->
                     let (IsIn cl _) = removePredPositions pp
                     in iConvField flags r (typeclassId $ name cl) i
@@ -139,7 +139,7 @@ iConvVar flags r env i =
                     in  -- XXX should we use an error for the value
                         -- XXX so that it isn't silently used?
                         -- XXX (see similar code in GenBin)
-                        ICon i (ICDef t (icUndetAt (getIdPosition i) t UNoMatch))
+                        ICon i t (ICDef (icUndetAt (getIdPosition i) t UNoMatch))
                 _ -> IVar i
 
 -- XXX is this really worthwhile now?
@@ -151,7 +151,7 @@ iConvTask r i it =
         -- only care about name - no "port-magic" for $display and friends
         Just (VarInfo (VarForg name _ _) _ _ _) ->
             -- trace("iConvTask: " ++ ppReadable it) $
-            (ICon i (ICForeign it name False Nothing [] Nothing))
+            (ICon i it (ICForeign name False Nothing [] Nothing))
         Just x  -> internalError ("iConvTask: foreign function info for " ++
                             (show i) ++ " not expected.\n" ++ ppReadable x )
         Nothing -> internalError ("iConvTask: foreign function info for " ++
@@ -349,8 +349,8 @@ iConvPs' flags r env cond bs n ((v, _, CPConTs ti i ots [pat]) : ps) =
         mkIsTy _ = internalError "IConv.iConvPs' mkIsTy"
         outty = underForAll conty (length ts) mkOutTy
         isty  = underForAll conty (length ts) mkIsTy
-        out = IAps (ICon i (ICOut outty cti)) ts [v]
-        is  = IAps (ICon i (ICIs  isty  cti)) ts [v]
+        out = IAps (ICon i outty (ICOut cti)) ts [v]
+        is  = IAps (ICon i isty (ICIs  cti)) ts [v]
         isTest = if numCon cti == 1 then id else (is `ieAnd`)
         ty = iInst conty ts
 iConvPs' flags r env cond bs n ((v, _, CPConTs _ _ _ _) : ps) =
@@ -364,7 +364,7 @@ iConvPs' flags r env cond bs n ((v, t, CPstruct _ _ fs) : ps) =
         addP (f, p) ps =
                 let sel = iConvField flags r ti f
                     selty = case sel of
-                              (ICon _ (ICSel t _ _)) -> t
+                              (ICon _ t (ICSel _ _)) -> t
                               _ -> internalError "IConv.iConvPs' CPstruct: selty"
                     ty = iInst selty ts
                 in  --trace ("iConvPs' " ++ ppReadable (sel, selty, ts, ty)) $
@@ -605,15 +605,15 @@ iConvE errh flags r env pvs (CApply (CTApply (CVar i) ts) (e:es)) | isField =
         in  iAps (IAps ie ts1 [iConvE errh flags r env pvs e]) ts2 (map (iConvE errh flags r env pvs) es)
   where ie = iConvVar flags r env i
         (isField, n) = case ie of
-                        ICon _ (ICSel t _ _) -> (True, countForall t)
+                        ICon _ t (ICSel _ _) -> (True, countForall t)
                         _ -> (False, 0)
 iConvE errh flags r env pvs (CConT ti c es) =
         let (t, cti) = lookupConType flags ti c r
-        in  iAps (ICon c (ICCon t cti)) [] (map (iConvE errh flags r env pvs) es)
+        in  iAps (ICon c t (ICCon cti)) [] (map (iConvE errh flags r env pvs) es)
 -- Ccase
 iConvE errh flags r env pvs (CStructT ct []) = con
   where con = iAPs ict itvs
-        ict = ICon ti (ICTuple tupty [])
+        ict = ICon ti tupty (ICTuple [])
         tupty = foldr (\tv t -> ITForAll (tv_name tv) (iConvK $ tv_kind tv) t) it tvs
         it = iConvT flags r ct
         tvs = tv ct
@@ -624,7 +624,7 @@ iConvE errh flags r env pvs eee@(CStructT ct fs@((f,_):_)) =
  --trace (ppReadable (map (\ (f,_) -> lookupSelType flags ti f r) fs)) $
  iAps con [] (map (iConvE errh flags r env pvs . snd) fs)
   where con = iAPs ict ts
-        ict = ICon ti (ICTuple tupty (map fst fs))
+        ict = ICon ti tupty (ICTuple (map fst fs))
         tupty = foldr (\ (v, k) t -> ITForAll v k t) (foldr itFun st fts) (zip vs ks)
         fts = map (\ (f,_) -> resType (iInst (lookupSelType flags ti f r) tvs)) fs
         (ti, ts) = splitITApCon (iConvT flags r ct)
@@ -669,7 +669,7 @@ iConvE errh flags r env pvs (CApply (CTApply (CVar splt) ts@[n, m, k]) es@[d, e]
         in  iConvE errh flags r env pvs e
 
 iConvE errh flags r env pvs (CApply (CVar gn) [CVar name]) | gn == idPrimGetName =
-  ICon gn (ICName { ictName = iConvT flags r tName, iName = name })
+  ICon gn (iConvT flags r tName) (ICName { iName = name })
 
 iConvE errh flags r env pvs (CAny pos uk) =
   internalError ("iConvE: CAny " ++ prPosition pos)
@@ -739,7 +739,7 @@ iConvE errh flags r env pvs e@(CmoduleVerilogT ty name ui clks rst args meths sc
             (ti, ts) = splitITApCon ty''
             name' = iConvE errh flags r env pvs name
         in  iAps (ICon (dummyId (getPosition e))
-                     (ICVerilog { ictVerilog = itString `itFun` ty',
+                     (itString `itFun` ty') (ICVerilog { 
                                   isUserImport = ui,
                                   vInfo = vinf,
                                   vMethTs = tss })) [] (name' : es')
@@ -747,11 +747,11 @@ iConvE errh flags r env pvs e@(CmoduleVerilogT ty name ui clks rst args meths sc
 iConvE errh flags r enc pvs e@(CForeignFuncCT i prim_ty) =
     let name = getIdString i
         ty' = iConvT flags r prim_ty
-    in  ICon i (ICForeign ty' name True Nothing [] Nothing)
+    in  ICon i ty' (ICForeign name True Nothing [] Nothing)
 
 iConvE errh flags r env pvs (Cattributes pps) =
     ICon (dummyId (getPosition (map fst pps)))
-         (ICAttrib { ictAttrib = iConvT flags r tAttributes, iAttributes = pps })
+         (iConvT flags r tAttributes) (ICAttrib { iAttributes = pps })
 iConvE errh flags r env pvs e = internalError ("IConv.iConvE:" ++ ppReadable e)
 
 getMethodType :: Flags -> SymTab -> Id -> [IType] -> Id -> IType
@@ -759,7 +759,7 @@ getMethodType flags r ti ts m = iInst selty ts
   where -- the selector is only inspected for its type, at any phase
         sel = iConvField flags r ti m :: IExpr PreElab
         selty = case sel of
-                  (ICon _ (ICSel t _ _)) -> t
+                  (ICon _ t (ICSel _ _)) -> t
                   _ -> internalError "IConv.getMethodType: selty"
 
 iConvR :: KnownPhase (BinderPhase e) => ErrorHandle -> Flags -> SymTab -> Env (BinderPhase e) ->
@@ -779,12 +779,12 @@ iConvR errh flags r env pvs rule =
 iConvRulePragmas :: KnownPhase (BinderPhase e) => [RulePragma] -> IExpr (BinderPhase e)
 {-# SPECIALISE iConvRulePragmas :: [RulePragma] -> IExpr PreElab #-}
 {-# SPECIALISE iConvRulePragmas :: [RulePragma] -> IExpr Elab #-}
-iConvRulePragmas as = ICon (dummyId noPosition) (ICRuleAssert { ictRuleAssert = itBit0, iAsserts = as })
+iConvRulePragmas as = ICon (dummyId noPosition) itBit0 (ICRuleAssert { iAsserts = as })
 
 iConvSchedulePragmas :: KnownPhase (BinderPhase e) => [CSchedulePragma] -> IExpr (BinderPhase e)
 {-# SPECIALISE iConvSchedulePragmas :: [CSchedulePragma] -> IExpr PreElab #-}
 {-# SPECIALISE iConvSchedulePragmas :: [CSchedulePragma] -> IExpr Elab #-}
-iConvSchedulePragmas sps = ICon (dummyId noPosition) (ICSchedPragmas { ictSchedPragmas = itSchedPragma, iPragmas = sps })
+iConvSchedulePragmas sps = ICon (dummyId noPosition) itSchedPragma (ICSchedPragmas { iPragmas = sps })
 
 flattenRules :: [RulePragma] -> [Maybe CExpr] -> [CQual] -> CRule -> [CRule]
 flattenRules rps is qs (CRuleNest rps' i qs' rs) =
@@ -838,8 +838,8 @@ dropDicts = [(idPrimConcat, icPrimConcat),
 iConvLit :: KnownPhase (BinderPhase e) => Literal -> Position -> IType -> IExpr (BinderPhase e)
 {-# SPECIALISE iConvLit :: Literal -> Position -> IType -> IExpr PreElab #-}
 {-# SPECIALISE iConvLit :: Literal -> Position -> IType -> IExpr Elab #-}
-iConvLit (LInt i) pos t = ICon (setIdPosition pos idIntLit) (ICInt { ictInt = t, iVal = i })
-iConvLit (LReal r) pos t = ICon (setIdPosition pos idRealLit) (ICReal { ictReal = t, iReal = r })
+iConvLit (LInt i) pos t = ICon (setIdPosition pos idIntLit) t (ICInt { iVal = i })
+iConvLit (LReal r) pos t = ICon (setIdPosition pos idRealLit) t (ICReal { iReal = r })
 iConvLit (LString s) pos t = iMkStringAt pos s
 iConvLit (LChar c) pos t = iMkCharAt pos c
 iConvLit LPosition pos t = iMkPosition pos
@@ -854,7 +854,7 @@ iConvField flags r ti i =
           --trace ("iConvField " ++ ppReadable (i, ti, fs, elemIndex i fs)) $
           --trace ("iConvField " ++ ppReadable (i, lookupSelType flags ti i r)) $
           let fieldnum = fromJustOrErr "iConvField" (findIndex (qualEq i) fs)
-          in  ICon i (ICSel (lookupSelType flags ti i r) (toInteger fieldnum) (toInteger (length fs)))
+          in  ICon i (lookupSelType flags ti i r) (ICSel (toInteger fieldnum) (toInteger (length fs)))
       tyi -> internalError ("iConvField: " ++ ppReadable (i, ti, tyi))
 
 {-
@@ -1004,7 +1004,7 @@ buildUndefNoMatchPos :: KnownPhase (BinderPhase e) => Flags -> SymTab -> Env (Bi
 buildUndefNoMatchPos flags r env (e, t_e) t =
     IAps bu [t] [IAps gp [t_e] [e], iuNoMatchExpr]
   where bu = iConvVar flags r env idBuildUndef
-        gp = ICon idPrimGetEvalPosition (ICPrim itPrimGetPosition PrimGetEvalPosition)
+        gp = ICon idPrimGetEvalPosition itPrimGetPosition (ICPrim PrimGetEvalPosition)
 
 uncurry3 :: (a -> b -> c -> d) -> (a, b, c) -> d
 uncurry3 f ~(x, y, z) = f x y z

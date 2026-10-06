@@ -109,7 +109,7 @@ checkParams (inst, svar) =
 iSubst :: M.Map Id (IExpr PostElab) -> IExpr PostElab -> IExpr PostElab
 iSubst m e = sub e
   where sub (IAps f ts es) = IAps (sub f) ts (map sub es)
-        sub d@(ICon i _) =
+        sub d@(ICon i _ _) =
             case M.lookup i m of
             Nothing -> d
             Just e -> e
@@ -118,18 +118,18 @@ iSubst m e = sub e
 -- ==========
 
 isConstIExpr :: IExpr PostElab -> Bool
-isConstIExpr (ICon _ (ICInt {} )) = True       -- constant number
-isConstIExpr (ICon _ (ICReal {} )) = True      -- constant number
-isConstIExpr (ICon _ (ICString {} )) = True    -- constant string
-isConstIExpr (ICon _ (ICModParam {} )) = True  -- parameter reference
-isConstIExpr (ICon _ (ICUndet {} )) =
+isConstIExpr (ICon _ _ (ICInt {} )) = True       -- constant number
+isConstIExpr (ICon _ _ (ICReal {} )) = True      -- constant number
+isConstIExpr (ICon _ _ (ICString {} )) = True    -- constant string
+isConstIExpr (ICon _ _ (ICModParam {} )) = True  -- parameter reference
+isConstIExpr (ICon _ _ (ICUndet {} )) =
     -- Undetermined values will become constant values
     True
-isConstIExpr (ICon _ (ICPrim {})) =
+isConstIExpr (ICon _ _ (ICPrim {})) =
     -- primitive operators should be applied,
     -- there is no 0-arity primitive that we allow
     False
-isConstIExpr (ICon _ (ICCon {} )) =
+isConstIExpr (ICon _ _ (ICCon {} )) =
     -- Constructors should be turned into bits by now
     -- XXX check this!
     False
@@ -142,7 +142,7 @@ isConstIExpr _ = False
 isConstIExprFunc :: IExpr PostElab -> Bool
 -- XXX this should check for only prims which can be turned into
 -- XXX acceptable Verilog primitives, and return False for others
-isConstIExprFunc (ICon _ (ICPrim {})) = True
+isConstIExprFunc (ICon _ _ (ICPrim {})) = True
 -- tuples, selector functions, constructor selectors etc, should all
 -- have been evaluated away, leaving only bits
 isConstIExprFunc _ = False

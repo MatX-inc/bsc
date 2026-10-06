@@ -20,13 +20,12 @@ module ISyntax(
         IType(ITVar, ITCon, ITNum, ITStr, ITAp, ITForAll),
         IExpr(ILam, IAps, IVar, ILAM, ICon, IRefT),
         cmpE,
+        cmpC,
         ExprKey(..),
         PTermKey(..),
         cmpPred,
         ConTagInfo(..),
         IConInfo(..),
-        iConType,
-        setIConType,
         IRules(..),
         IRule(..),
         IEFace(..),
@@ -508,26 +507,26 @@ type instance Ref PostElab = Void
 class KnownPhase (p :: Phase) where
     type Ann p :: Type
     annAps :: IExpr p -> [IType] -> [IExpr p] -> Ann p
-    annCon :: Id -> IConInfo p -> Ann p
+    annCon :: Id -> IType -> IConInfo p -> Ann p
 
 instance KnownPhase PreElab where
     type Ann PreElab = ()
     annAps _ _ _ = ()
-    annCon _ _ = ()
+    annCon _ _ _ = ()
     {-# INLINE annAps #-}
     {-# INLINE annCon #-}
 
 instance KnownPhase Elab where
     type Ann Elab = ()
     annAps _ _ _ = ()
-    annCon _ _ = ()
+    annCon _ _ _ = ()
     {-# INLINE annAps #-}
     {-# INLINE annCon #-}
 
 instance KnownPhase PostElab where
     type Ann PostElab = ()
     annAps _ _ _ = ()
-    annCon _ _ = ()
+    annCon _ _ _ = ()
     {-# INLINE annAps #-}
     {-# INLINE annCon #-}
 
@@ -544,7 +543,7 @@ data IExpr (p :: Phase) where
         -- vanishes after IExpand
         ILAM  :: Id -> IKind -> IExpr ('Ph 'WithBinders e)
               -> IExpr ('Ph 'WithBinders e)
-        ICon_ :: Ann p -> Id -> IConInfo p -> IExpr p
+        ICon_ :: Ann p -> Id -> IType -> IConInfo p -> IExpr p
         -- IRef is only used during reduction, it refers to a "heap" cell
         IRefT :: IType -> !Int -> S.Set Position -> Ref Elab -> IExpr Elab
 
@@ -560,9 +559,9 @@ pattern IAps :: KnownPhase p => IExpr p -> [IType] -> [IExpr p] -> IExpr p
 pattern IAps f ts es <- IAps_ _ f ts es
   where IAps f ts es = IAps_ (annAps f ts es) f ts es
 
-pattern ICon :: KnownPhase p => Id -> IConInfo p -> IExpr p
-pattern ICon i ic <- ICon_ _ i ic
-  where ICon i ic = ICon_ (annCon i ic) i ic
+pattern ICon :: KnownPhase p => Id -> IType -> IConInfo p -> IExpr p
+pattern ICon i t ic <- ICon_ _ i t ic
+  where ICon i t ic = ICon_ (annCon i t ic) i t ic
 
 {-# COMPLETE ILam, IAps, IVar, ILAM, ICon, IRefT #-}
 
@@ -571,9 +570,9 @@ instance Show (IExpr a) where
   show (IAps_ _ f ts es) = "(IAps " ++ show f ++ " " ++ show ts ++ " " ++ show es ++ ")"
   show (IVar i)       = "(IVar " ++ show i ++ ")"
   show (ILAM i k e)   = "(ILAM " ++ show i ++ " " ++ show k ++ " " ++ show e ++ ")"
-  show (ICon_ _ i (ICDef {})) = "(ICDef " ++ show i ++ ")"
-  show (ICon_ _ i (ICValue {})) = "(ICValue " ++ show i ++ ")"
-  show (ICon_ _ i ic)    = "(ICon " ++ show i ++ " " ++ show ic ++ ")"
+  show (ICon_ _ i _ (ICDef {})) = "(ICDef " ++ show i ++ ")"
+  show (ICon_ _ i _ (ICValue {})) = "(ICValue " ++ show i ++ ")"
+  show (ICon_ _ i t ic)  = "(ICon " ++ show i ++ " " ++ showsPrec 11 t "" ++ " " ++ show ic ++ ")"
   show (IRefT t p _ _)  = "(IRefT " ++ show t ++ " " ++ "_" ++ show p ++ ")"
 
 -- The structural comparison of expressions, in every phase: Ids by
@@ -618,24 +617,24 @@ cmpE (ILAM _ _ _)    (IRefT _ _ _ _)   = GT -- ???????
 
 cmpE (ILAM _  _ _)   _               = LT
 
-cmpE (ICon_ _ _ _)   (ILam _ _ _)    = GT
-cmpE (ICon_ _ _ _)   (IAps_ _ _ _ _) = GT
-cmpE (ICon_ _ _ _)   (IVar _)        = GT
-cmpE (ICon_ _ i1 ic1) (ICon_ _ i2 ic2) =
+cmpE (ICon_ _ _ _ _) (ILam _ _ _)    = GT
+cmpE (ICon_ _ _ _ _) (IAps_ _ _ _ _) = GT
+cmpE (ICon_ _ _ _ _) (IVar _)        = GT
+cmpE (ICon_ _ i1 t1 ic1) (ICon_ _ i2 t2 ic2) =
         case compare i1 i2 of
-        EQ -> case (cmpC ic1 ic2) of
+        EQ -> case (cmpC t1 ic1 t2 ic2) of
                 -- inlined positions need to be considered in equality tests
                 EQ -> let mposs1 = getIdInlinedPositions i1
                           mposs2 = getIdInlinedPositions i2
                       in  compare mposs1 mposs2
                 o  -> o
         o  -> o
-cmpE (ICon_ _ _ _)   _               = LT
+cmpE (ICon_ _ _ _ _) _               = LT
 
 cmpE (IRefT _ _ _ _)   (ILam _ _ _)    = GT
 cmpE (IRefT _ _ _ _)   (IAps_ _ _ _ _) = GT
 cmpE (IRefT _ _ _ _)   (IVar _)        = GT
-cmpE (IRefT _ _ _ _)   (ICon_ _ _ _)   = GT
+cmpE (IRefT _ _ _ _)   (ICon_ _ _ _ _) = GT
 cmpE (IRefT _ p1 _ _)  (IRefT _ p2 _ _)  = compare p1 p2                -- XXX
 
 cmpE (IRefT _ _ _ _)     (ILAM _ _ _)  = LT -- ??????????
@@ -921,21 +920,20 @@ cmpPreds (x:xs) (y:ys) =
 -- IConInfo
 
 -- The variants are restricted by phase through their return types (see
--- the Phase comment above).  GHC requires constructors that share a
--- record field to share a result type, so the type field, which every
--- variant has, is named per constructor (ict<Variant>) and is read
--- through the function iConType (and replaced with setIConType); the
--- per-constructor names appear only in record patterns, constructions
--- and updates of that constructor.
+-- the Phase comment above).  The constant's type lives on the ICon node
+-- (ICon i t ic), not here: GHC requires constructors that share a
+-- record field to share a result type, so a type field on every
+-- variant would need a name per constructor.  A variant carries only
+-- its own fields.
 data IConInfo (p :: Phase) where
           -- top level definition
           --  iconDef has the definition body
           -- may be _ if the ICDef was read from a .bo file and has not been fixed-up yet
           -- these disappear in IExpand and do not exists in IModule
-        ICDef :: { ictDef :: IType, iConDef :: IExpr ('Ph 'WithBinders e) }
+        ICDef :: { iConDef :: IExpr ('Ph 'WithBinders e) }
               -> IConInfo ('Ph 'WithBinders e)
           -- primitive
-        ICPrim :: { ictPrim :: IType, primOp :: PrimOp } -> IConInfo p
+        ICPrim :: { primOp :: PrimOp } -> IConInfo p
           -- foreign function; foports specifies input and output port names in verilog
           -- (for functions implemented via module instantiation - primarily "noinlined")
           -- The inputs are grouped per argument (the inner list is the ports of
@@ -947,8 +945,7 @@ data IConInfo (p :: Phase) where
           -- fcallNo is a cookie used to mark foreign function calls during elaboration
           -- so an association can be made between the Action and Value parts of an
           -- ActionValue call (e.g. $fopen or $stime) for use deep in the output codegens
-        ICForeign :: { ictForeign :: IType,
-                       fName :: String,
+        ICForeign :: { fName :: String,
                        isC :: Bool,
                        foports :: Maybe ([[(String, Integer)]], [(String, Integer)]),
                        -- the declaration's type variable names, in
@@ -960,23 +957,22 @@ data IConInfo (p :: Phase) where
                        fcallNo :: Maybe Integer }
                   -> IConInfo p
           -- constructor
-        ICCon :: { ictCon :: IType, conTagInfo :: ConTagInfo } -> IConInfo p
+        ICCon :: { conTagInfo :: ConTagInfo } -> IConInfo p
           -- function that tests whether its argument is the right kind of a constructor
           --  eventually cancels out and turns into ICInt 0 (false) or 1 (true)
-        ICIs :: IType -> ConTagInfo -> IConInfo ('Ph 'WithBinders e)
+        ICIs :: ConTagInfo -> IConInfo ('Ph 'WithBinders e)
           -- function that projects the data associated with a particular constructor
           -- only used after doing appropriate ICIs, otherwise turns into _,
           --   which is "convenient for some transformations" (_s can be "optimized later")
           -- (used to bind variables in pattern matching)
-        ICOut :: IType -> ConTagInfo -> IConInfo ('Ph 'WithBinders e)
+        ICOut :: ConTagInfo -> IConInfo ('Ph 'WithBinders e)
           -- tuple constructor
           -- fieldIds names fields of struct that turned into this tuple
-        ICTuple :: { ictTuple :: IType, fieldIds :: [Id] } -> IConInfo p
+        ICTuple :: { fieldIds :: [Id] } -> IConInfo p
           -- select field selNo out of tuple that has numSel fields
-        ICSel :: { ictSel :: IType, selNo :: Integer, numSel :: Integer } -> IConInfo p
+        ICSel :: { selNo :: Integer, numSel :: Integer } -> IConInfo p
           -- reference to a Verilog module; vMethTs has types of method arguments
-        ICVerilog :: { ictVerilog :: IType,
-                       isUserImport :: Bool,
+        ICVerilog :: { isUserImport :: Bool,
                        vInfo :: VModInfo,
                        vMethTs :: [[IType]] }
                   -> IConInfo ('Ph 'WithBinders e)
@@ -984,63 +980,62 @@ data IConInfo (p :: Phase) where
           --   - user-inserted (IUDontCare)
           --   - unreachable _ (IUNotUsed) (needed for some expression data structs)
           --   - pattern matching failure (IUNoMatch)
-        ICUndet :: { ictUndet :: IType, iuKind :: UndefKind } -> IConInfo p
+        ICUndet :: { iuKind :: UndefKind } -> IConInfo p
           -- numeric integer literal
-        ICInt :: { ictInt :: IType, iVal :: IntLit } -> IConInfo p
+        ICInt :: { iVal :: IntLit } -> IConInfo p
           -- numeric real literal
-        ICReal :: { ictReal :: IType, iReal :: Double } -> IConInfo p
+        ICReal :: { iReal :: Double } -> IConInfo p
           -- string literal
-        ICString :: { ictString :: IType, iStr :: String } -> IConInfo p
+        ICString :: { iStr :: String } -> IConInfo p
           -- character literal
-        ICChar :: { ictChar :: IType, iChar :: Char } -> IConInfo p
+        ICChar :: { iChar :: Char } -> IConInfo p
           -- IO handle
-        ICHandle :: { ictHandle :: IType, iHandle :: Handle } -> IConInfo Elab
+        ICHandle :: { iHandle :: Handle } -> IConInfo Elab
           -- instantiated Verilog module
-        ICStateVar :: { ictStateVar :: IType, iVar :: IStateVar ('Ph b 'Evaluated) }
+        ICStateVar :: { iVar :: IStateVar ('Ph b 'Evaluated) }
                    -> IConInfo ('Ph b 'Evaluated)
           -- interface method argument variable
           -- only exists after expansion
-          -- note that the identifier for the port comes from the id of the surrounding ICon
-        ICMethArg :: { ictMethArg :: IType } -> IConInfo ('Ph b 'Evaluated)
+          -- note that the port's identifier and type come from the surrounding ICon
+        ICMethArg :: IConInfo ('Ph b 'Evaluated)
           -- external module input (either as port or parameter)
           -- Only exists after expansion.
-          -- Note that the identifier for the port/param comes from
-          -- the id of the surrounding ICon.
+          -- Note that the port/param's identifier and type come from
+          -- the surrounding ICon.
           -- ICModPort is used for dynamic inputs (including clock and reset wires)
-        ICModPort :: { ictModPort :: IType } -> IConInfo ('Ph b 'Evaluated)
-        ICModParam :: { ictModParam :: IType } -> IConInfo ('Ph b 'Evaluated)
+        ICModPort :: IConInfo ('Ph b 'Evaluated)
+        ICModParam :: IConInfo ('Ph b 'Evaluated)
           -- reference to a local def in a module
           -- (similar to ICDef, which is a reference to a package def)
           -- this is created in iExpand, so it only exists in IModule
           -- and does not appear in IPackage
           -- XXX consider renaming it to ICModDef?
-        ICValue :: { ictValue :: IType, iValDef :: IExpr PostElab } -> IConInfo PostElab
+        ICValue :: { iValDef :: IExpr PostElab } -> IConInfo PostElab
           -- a constructor containing rule pragmas, which is used in the
           -- arguments to PrimRule.
           -- only exists before expansion
-        ICRuleAssert :: { ictRuleAssert :: IType, iAsserts :: [RulePragma] }
+        ICRuleAssert :: { iAsserts :: [RulePragma] }
                      -> IConInfo ('Ph 'WithBinders e)
           -- a constructor containing scheduling pragmas, which is used
           -- as an argument to PrimAddSchedPragmas (applied to rules).
           -- only exists before expansion
-        ICSchedPragmas :: { ictSchedPragmas :: IType, iPragmas :: [CSchedulePragma] }
+        ICSchedPragmas :: { iPragmas :: [CSchedulePragma] }
                        -> IConInfo ('Ph 'WithBinders e)
 
-        ICMethod :: { ictMethod :: IType,
-                      -- per-source-argument input port name groups
-                      iInputNames :: [[String]],
+          -- iInputNames: per-source-argument input port name groups
+        ICMethod :: { iInputNames :: [[String]],
                       iOutputNames :: [String],
                       iMethod :: IExpr Elab }
                  -> IConInfo Elab
-        ICClock :: { ictClock :: IType, iClock :: IClock ('Ph b 'Evaluated) }
+        ICClock :: { iClock :: IClock ('Ph b 'Evaluated) }
                 -> IConInfo ('Ph b 'Evaluated)
         -- iReset has effective type itBit1
-        ICReset :: { ictReset :: IType, iReset :: IReset ('Ph b 'Evaluated) }
+        ICReset :: { iReset :: IReset ('Ph b 'Evaluated) }
                 -> IConInfo ('Ph b 'Evaluated)
-        ICInout :: { ictInout :: IType, iInout :: IInout ('Ph b 'Evaluated) }
+        ICInout :: { iInout :: IInout ('Ph b 'Evaluated) }
                 -> IConInfo ('Ph b 'Evaluated)
         -- uninit is used to give simpler error messages for completely uninitialized bit vectors / vectors
-        ICLazyArray :: { ictLazyArray :: IType, iArray :: ILazyArray Elab,
+        ICLazyArray :: { iArray :: ILazyArray Elab,
                          uninit :: Maybe (IExpr Elab, IExpr Elab) }
                     -> IConInfo Elab
           -- a held pack/unpack coercion (see PrimPack/PrimUnpack in IExpand):
@@ -1055,97 +1050,23 @@ data IConInfo (p :: Phase) where
           -- equal type arguments imply interchangeable dictionaries).
           -- lzTa/lzTn are the (a, n) type arguments, used for the
           -- cancellation match.
-        ICLazyPack :: { ictLazyPack :: IType, lzTa :: IType, lzTn :: IType,
+        ICLazyPack :: { lzTa :: IType, lzTn :: IType,
                         lzOrig :: IExpr Elab, lzApplied :: IExpr Elab }
                    -> IConInfo Elab
-        ICLazyUnpack :: { ictLazyUnpack :: IType, lzTa :: IType, lzTn :: IType,
+        ICLazyUnpack :: { lzTa :: IType, lzTn :: IType,
                           lzOrig :: IExpr Elab, lzApplied :: IExpr Elab }
                      -> IConInfo Elab
-        ICName :: { ictName :: IType, iName :: Id } -> IConInfo ('Ph 'WithBinders e)
-        ICAttrib :: { ictAttrib :: IType, iAttributes :: [(Position,PProp)] }
+        ICName :: { iName :: Id } -> IConInfo ('Ph 'WithBinders e)
+        ICAttrib :: { iAttributes :: [(Position,PProp)] }
                  -> IConInfo ('Ph 'WithBinders e)
           -- This was updated to support a list of positions,
           -- though most uses are a single position
-        ICPosition :: { ictPosition :: IType, iPosition :: [Position] }
+        ICPosition :: { iPosition :: [Position] }
                    -> IConInfo ('Ph 'WithBinders e)
-        ICType :: { ictType :: IType, iType :: IType } -> IConInfo ('Ph 'WithBinders e)
-        ICPred :: { ictPred :: IType, iPred :: Pred Elab } -> IConInfo Elab
+        ICType :: { iType :: IType } -> IConInfo ('Ph 'WithBinders e)
+        ICPred :: { iPred :: Pred Elab } -> IConInfo Elab
 
 deriving instance Show (IConInfo p)
-
--- the type of the constant (every variant's first field)
-iConType :: IConInfo p -> IType
-iConType (ICDef { ictDef = t }) = t
-iConType (ICPrim { ictPrim = t }) = t
-iConType (ICForeign { ictForeign = t }) = t
-iConType (ICCon { ictCon = t }) = t
-iConType (ICIs t _) = t
-iConType (ICOut t _) = t
-iConType (ICTuple { ictTuple = t }) = t
-iConType (ICSel { ictSel = t }) = t
-iConType (ICVerilog { ictVerilog = t }) = t
-iConType (ICUndet { ictUndet = t }) = t
-iConType (ICInt { ictInt = t }) = t
-iConType (ICReal { ictReal = t }) = t
-iConType (ICString { ictString = t }) = t
-iConType (ICChar { ictChar = t }) = t
-iConType (ICHandle { ictHandle = t }) = t
-iConType (ICStateVar { ictStateVar = t }) = t
-iConType (ICMethArg { ictMethArg = t }) = t
-iConType (ICModPort { ictModPort = t }) = t
-iConType (ICModParam { ictModParam = t }) = t
-iConType (ICValue { ictValue = t }) = t
-iConType (ICRuleAssert { ictRuleAssert = t }) = t
-iConType (ICSchedPragmas { ictSchedPragmas = t }) = t
-iConType (ICMethod { ictMethod = t }) = t
-iConType (ICClock { ictClock = t }) = t
-iConType (ICReset { ictReset = t }) = t
-iConType (ICInout { ictInout = t }) = t
-iConType (ICLazyArray { ictLazyArray = t }) = t
-iConType (ICLazyPack { ictLazyPack = t }) = t
-iConType (ICLazyUnpack { ictLazyUnpack = t }) = t
-iConType (ICName { ictName = t }) = t
-iConType (ICAttrib { ictAttrib = t }) = t
-iConType (ICPosition { ictPosition = t }) = t
-iConType (ICType { ictType = t }) = t
-iConType (ICPred { ictPred = t }) = t
-
--- replace the type of the constant, keeping everything else
-setIConType :: IType -> IConInfo p -> IConInfo p
-setIConType t (ICDef _ d) = ICDef t d
-setIConType t (ICPrim _ p) = ICPrim t p
-setIConType t (ICForeign _ n c ps tvns fc) = ICForeign t n c ps tvns fc
-setIConType t (ICCon _ cti) = ICCon t cti
-setIConType t (ICIs _ cti) = ICIs t cti
-setIConType t (ICOut _ cti) = ICOut t cti
-setIConType t (ICTuple _ fs) = ICTuple t fs
-setIConType t (ICSel _ i n) = ICSel t i n
-setIConType t (ICVerilog _ ui vi tss) = ICVerilog t ui vi tss
-setIConType t (ICUndet _ k) = ICUndet t k
-setIConType t (ICInt _ v) = ICInt t v
-setIConType t (ICReal _ r) = ICReal t r
-setIConType t (ICString _ s) = ICString t s
-setIConType t (ICChar _ c) = ICChar t c
-setIConType t (ICHandle _ h) = ICHandle t h
-setIConType t (ICStateVar _ sv) = ICStateVar t sv
-setIConType t (ICMethArg _) = ICMethArg t
-setIConType t (ICModPort _) = ICModPort t
-setIConType t (ICModParam _) = ICModParam t
-setIConType t (ICValue _ d) = ICValue t d
-setIConType t (ICRuleAssert _ as) = ICRuleAssert t as
-setIConType t (ICSchedPragmas _ sps) = ICSchedPragmas t sps
-setIConType t (ICMethod _ ins outs m) = ICMethod t ins outs m
-setIConType t (ICClock _ c) = ICClock t c
-setIConType t (ICReset _ r) = ICReset t r
-setIConType t (ICInout _ io) = ICInout t io
-setIConType t (ICLazyArray _ arr mu) = ICLazyArray t arr mu
-setIConType t (ICLazyPack _ ta tn o a) = ICLazyPack t ta tn o a
-setIConType t (ICLazyUnpack _ ta tn o a) = ICLazyUnpack t ta tn o a
-setIConType t (ICName _ n) = ICName t n
-setIConType t (ICAttrib _ pps) = ICAttrib t pps
-setIConType t (ICPosition _ pos) = ICPosition t pos
-setIConType t (ICType _ ty) = ICType t ty
-setIConType t (ICPred _ p) = ICPred t p
 
 ordC :: IConInfo a -> Int
 ordC (ICDef { }) = 0
@@ -1183,15 +1104,15 @@ ordC (ICMethod { }) = 31
 ordC (ICLazyPack { }) = 32
 ordC (ICLazyUnpack { }) = 33
 
-instance Eq (IConInfo a) where
-    x == y  =  cmpC x y == EQ
-    x /= y  =  cmpC x y /= EQ
-
-instance Ord (IConInfo a) where
-    compare x y = cmpC x y
-
-cmpC :: IConInfo a -> IConInfo a -> Ordering
-cmpC c1 c2 =
+-- Two constants with equal Ids (cmpE compares the Ids first): the
+-- variant rank, then the payload fields.  The node's type takes part
+-- for exactly the variants whose arms read t1 and t2 below: the ones
+-- that compared it when it was a payload field.  The others ignore it
+-- (two ICPrim or two ICForeign nodes with the same Id compare EQ
+-- whatever their instantiated types), and every map keyed by
+-- expressions depends on this order staying as it is.
+cmpC :: IType -> IConInfo a -> IType -> IConInfo a -> Ordering
+cmpC t1 c1 t2 c2 =
     case compare (ordC c1) (ordC c2) of
     LT -> LT
     GT -> GT
@@ -1202,18 +1123,18 @@ cmpC c1 c2 =
         ICForeign { } -> compare (fcallNo c1) (fcallNo c2)
         -- XXX ICCon should check conNo and numCon instead of relying
         -- on the identifier equality from ICon
-        ICCon { ictCon = t1 } -> compare t1 (iConType c2)
-        ICIs t1 _ -> compare t1 (iConType c2)
-        ICOut t1 _ -> compare t1 (iConType c2)
-        ICTuple { ictTuple = t1 } -> compare t1 (iConType c2)
-        ICSel { ictSel = t1 } -> compare t1 (iConType c2)
-        ICVerilog { ictVerilog = t1, vInfo = s1 } ->
+        ICCon { } -> compare t1 t2
+        ICIs _ -> compare t1 t2
+        ICOut _ -> compare t1 t2
+        ICTuple { } -> compare t1 t2
+        ICSel { } -> compare t1 t2
+        ICVerilog { vInfo = s1 } ->
             -- ignores method types and whether they are user imports or not
-            compare (t1, s1) (iConType c2, vInfo c2)
-        ICUndet { ictUndet = t1 } -> compare t1 (iConType c2)
-        ICInt { ictInt = t1, iVal = i1 } -> compare (t1, i1) (iConType c2, iVal c2)
-        ICReal { ictReal = t1, iReal = r1 } -> compare (t1, r1) (iConType c2, iReal c2)
-        ICString { ictString = t1, iStr = s1 } -> compare (t1, s1) (iConType c2, iStr c2)
+            compare (t1, s1) (t2, vInfo c2)
+        ICUndet { } -> compare t1 t2
+        ICInt { iVal = i1 } -> compare (t1, i1) (t2, iVal c2)
+        ICReal { iReal = r1 } -> compare (t1, r1) (t2, iReal c2)
+        ICString { iStr = s1 } -> compare (t1, s1) (t2, iStr c2)
         ICChar { iChar = chr1 } ->
             -- the type should always be Char (should we compare anyway?)
             compare chr1 (iChar c2)
@@ -1258,13 +1179,13 @@ cmpC c1 c2 =
         ICPred {iPred = p1 } -> cmpPred p1 (iPred c2)
 
 isIConInt, isIConReal, isIConParam :: IExpr a -> Bool
-isIConInt (ICon_ _ _ (ICInt { })) = True
+isIConInt (ICon_ _ _ _ (ICInt { })) = True
 isIConInt _ = False
 
-isIConReal (ICon_ _ _ (ICReal { })) = True
+isIConReal (ICon_ _ _ _ (ICReal { })) = True
 isIConReal _ = False
 
-isIConParam (ICon_ _ _ (ICModParam { })) = True
+isIConParam (ICon_ _ _ _ ICModParam) = True
 isIConParam _ = False
 
 -- ============================================================
@@ -1281,7 +1202,7 @@ aVars (ILAM i _ e) = S.insert i (aVars e)
 aVars (IAps_ _ f ts es) = (aVars f) `S.union`
                         (S.unions (map fTVars ts)) `S.union`
                         (S.unions (map aVars es))
-aVars (ICon_ _ _ _) = S.empty  -- XXX
+aVars (ICon_ _ _ _ _) = S.empty  -- XXX
 aVars (IRefT _ _ _ _) = S.empty
 
 -- --------------------
@@ -1292,7 +1213,7 @@ fVars (ILam i _ e) = S.delete i (fVars e)
 fVars (IVar i) = S.singleton i
 fVars (ILAM _ _ e) = fVars e
 fVars (IAps_ _ f ts es) = fVars f `S.union` (S.unions (map fVars es))
-fVars (ICon_ _ _ _) = S.empty
+fVars (ICon_ _ _ _ _) = S.empty
 fVars (IRefT _ _ _ _) = S.empty
 
 -- --------------------
@@ -1306,9 +1227,9 @@ fdVars' (ILam i _ e) = fdVars' e
 fdVars' (IVar i) = S.singleton i
 fdVars' (ILAM _ _ e) = fdVars' e
 fdVars' (IAps_ _ f ts es) = fdVars' f `S.union` (S.unions (map fdVars' es))
-fdVars' (ICon_ _ i (ICDef { })) = S.singleton i
-fdVars' (ICon_ _ i (ICValue { })) = S.singleton i
-fdVars' (ICon_ _ _ _) = S.empty
+fdVars' (ICon_ _ i _ (ICDef { })) = S.singleton i
+fdVars' (ICon_ _ i _ (ICValue { })) = S.singleton i
+fdVars' (ICon_ _ _ _ _) = S.empty
 fdVars' (IRefT _ _ _ _) = S.empty
 
 -- --------------------
@@ -1320,7 +1241,7 @@ ftVars (IVar i) = S.empty
 ftVars (ILAM i _ e) = S.delete i (ftVars e)
 ftVars (IAps_ _ f ts es) = (ftVars f) `S.union` (S.unions (map fTVars ts))
                                      `S.union` (S.unions (map ftVars es))
-ftVars (ICon_ _ _ _) = S.empty                -- XXX
+ftVars (ICon_ _ _ _ _) = S.empty                -- XXX
 ftVars (IRefT _ _ _ _) = S.empty
 
 -- ============================================================
@@ -1472,32 +1393,32 @@ ppDef d (IDef i t e p) =
 instance PPrint (IExpr a) where
     pPrint d p (ILam i t e) = ppQuant "\\ "  d p i t e
     pPrint d p (IAps_ _ f ts es) = ppAps d p f ts es
-    pPrint d p (ICon_ _ i (ICUndet t _)) = text "_ :: " <+> pPrint d maxPrec t
-    pPrint d@PDReadable p (ICon_ _ i (ICDef _ _)) = ppId d i <> text "="
-    pPrint d@PDReadable p (ICon_ _ i (ICVerilog { vInfo = vi })) = pparen True $ text "verilog" <+> pPrint d 0 vi
-    pPrint d@PDReadable p (ICon_ _ i (ICIs _ _)) = ppId d i <> text "?"
-    pPrint d@PDReadable p (ICon_ _ i (ICOut _ _)) = text "out" <> ppId d i
-    pPrint d@PDReadable p (ICon_ _ i (ICSel _ _ _)) = text "." <> ppId d i
-    pPrint d@PDReadable _ (ICon_ _ i (ICPrim _ p)) = text (show p)
-    pPrint d@PDReadable _ (ICon_ _ i (ICLazyArray {})) = ppId d i <> text "[Array]"
+    pPrint d p (ICon_ _ i t (ICUndet _)) = text "_ :: " <+> pPrint d maxPrec t
+    pPrint d@PDReadable p (ICon_ _ i _ (ICDef _)) = ppId d i <> text "="
+    pPrint d@PDReadable p (ICon_ _ i _ (ICVerilog { vInfo = vi })) = pparen True $ text "verilog" <+> pPrint d 0 vi
+    pPrint d@PDReadable p (ICon_ _ i _ (ICIs _)) = ppId d i <> text "?"
+    pPrint d@PDReadable p (ICon_ _ i _ (ICOut _)) = text "out" <> ppId d i
+    pPrint d@PDReadable p (ICon_ _ i _ (ICSel _ _)) = text "." <> ppId d i
+    pPrint d@PDReadable _ (ICon_ _ i _ (ICPrim p)) = text (show p)
+    pPrint d@PDReadable _ (ICon_ _ i _ (ICLazyArray {})) = ppId d i <> text "[Array]"
     -- distinguish held coercions from an application of the bare
     -- primitive (they only ever print from diagnostics, so show the
     -- payload ref too)
-    pPrint d@PDReadable _ (ICon_ _ i (ICLazyPack { lzOrig = o })) =
+    pPrint d@PDReadable _ (ICon_ _ i _ (ICLazyPack { lzOrig = o })) =
         ppId d i <> text "[Held " <> pPrint d 0 o <> text "]"
-    pPrint d@PDReadable _ (ICon_ _ i (ICLazyUnpack { lzOrig = o })) =
+    pPrint d@PDReadable _ (ICon_ _ i _ (ICLazyUnpack { lzOrig = o })) =
         ppId d i <> text "[Held " <> pPrint d 0 o <> text "]"
 --    pPrint d@PDReadable _ (ICon id con) = ppId d id <> text (": " ++ show con)
     pPrint d p (IVar i) = ppId d i -- <> text ":V"
     pPrint d p (ILAM i k e) = ppQuant "/\\ "  d p i k e
-    pPrint d p (ICon_ _ _ (ICString t s)) = text (show s)
-    pPrint d p (ICon_ _ _ (ICChar _ c)) = text (show c)
-    pPrint d@PDDebug p (ICon_ _ _ (ICInt { ictInt = t, iVal = i })) = pPrint d p i <> text "::" <> pPrint d maxPrec t
-    pPrint d p (ICon_ _ _ (ICInt { ictInt = t, iVal = i })) = pPrint d p i
-    pPrint d p (ICon_ _ _ (ICReal { ictReal = t, iReal = r })) = pPrint d p r
-    pPrint d@PDDebug p (ICon_ _ i ict) = ppId d i <> text "::" <> pPrint d maxPrec (iConType ict)
-    pPrint d p ict@(ICon_ _ i (ICForeign {fcallNo = (Just n)})) = ppId d i <> text ("#" ++ show n)
-    pPrint d p (ICon_ _ i ict) = ppId d i
+    pPrint d p (ICon_ _ _ _ (ICString s)) = text (show s)
+    pPrint d p (ICon_ _ _ _ (ICChar c)) = text (show c)
+    pPrint d@PDDebug p (ICon_ _ _ t (ICInt { iVal = i })) = pPrint d p i <> text "::" <> pPrint d maxPrec t
+    pPrint d p (ICon_ _ _ _ (ICInt { iVal = i })) = pPrint d p i
+    pPrint d p (ICon_ _ _ _ (ICReal { iReal = r })) = pPrint d p r
+    pPrint d@PDDebug p (ICon_ _ i t _) = ppId d i <> text "::" <> pPrint d maxPrec t
+    pPrint d p ict@(ICon_ _ i _ (ICForeign {fcallNo = (Just n)})) = ppId d i <> text ("#" ++ show n)
+    pPrint d p (ICon_ _ i _ _) = ppId d i
     pPrint d p (IRefT _ ptr _ _) = text ("_") <> pPrint d 0 ptr
 
 -- An application, given its parts (so that the let-printing arm can
@@ -1506,8 +1427,8 @@ instance PPrint (IExpr a) where
 -- the ones an application node can match in the instance above, in
 -- that order.
 ppAps :: PDetail -> Int -> IExpr a -> [IType] -> [IExpr a] -> Doc
-ppAps d p (ICon_ _ _ (ICPrim { primOp = PrimJoinActions })) _ [e1, e2] =
-    let getActions (IAps_ _ (ICon_ _ _ (ICPrim { primOp = PrimJoinActions })) _ [e1', e2']) = getActions e1' ++ getActions e2'
+ppAps d p (ICon_ _ _ _ (ICPrim { primOp = PrimJoinActions })) _ [e1, e2] =
+    let getActions (IAps_ _ (ICon_ _ _ _ (ICPrim { primOp = PrimJoinActions })) _ [e1', e2']) = getActions e1' ++ getActions e2'
         getActions e = [e]
         as = getActions e1 ++ getActions e2
     in  text "{" <+> sepList (map (pPrint d 0) as) (text ";") <+> text "}"
@@ -1549,47 +1470,53 @@ instance NFData (IExpr a) where
     rnf (IAps_ _ e ts es) = rnf3 e ts es
     rnf (IVar i) = rnf i
     rnf (ILAM i k e) = rnf3 i k e
-    rnf (ICon_ _ i ic) = rnf2 i ic
+    -- the type is forced with the payload, except under ICDef and ICValue,
+    -- whose payload arms force nothing (as they did when the type was a
+    -- payload field: a forced ICDef can loop through its definition)
+    rnf (ICon_ _ i t ic) = case ic of
+        ICDef { }   -> rnf i
+        ICValue { } -> rnf i
+        _           -> rnf3 i t ic
     rnf (IRefT t p poss _) = rnf2 t poss
 
 instance NFData (IConInfo a) where
---    rnf (ICDef x1 x2) = rnf2 x1 x2
-    rnf ic@(ICDef x1 x2) = ()                        -- XXX a hack to avoid circular defs
-    rnf (ICPrim x1 x2) = rnf2 x1 x2
-    rnf (ICForeign x1 x2 x3 x4 x5 x6) = rnf6 x1 x2 x3 x4 x5 x6
-    rnf (ICCon x1 x2) = rnf2 x1 x2
-    rnf (ICIs x1 x2) = rnf2 x1 x2
-    rnf (ICOut x1 x2) = rnf2 x1 x2
-    rnf (ICTuple x1 x2) = rnf2 x1 x2
-    rnf (ICSel x1 x2 x3) = rnf3 x1 x2 x3
-    rnf (ICVerilog x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
-    rnf (ICUndet x1 x2) = rnf2 x1 x2
-    rnf (ICInt x1 x2) = rnf2 x1 x2
-    rnf (ICReal x1 x2) = rnf2 x1 x2
-    rnf (ICString x1 x2) = rnf2 x1 x2
-    rnf (ICChar x1 x2) = rnf2 x1 x2
-    rnf (ICHandle x1 x2) = rnf2 x1 x2
-    rnf (ICStateVar x1 x2) = rnf2 x1 x2
-    rnf (ICMethArg x1) = rnf x1
-    rnf (ICModPort x1) = rnf x1
-    rnf (ICModParam x1) = rnf x1
-    -- rnf (ICValue x1 x2) = rnf2 x1 x2
+--    rnf (ICDef x1) = rnf x1
+    rnf (ICDef _) = ()                               -- XXX a hack to avoid circular defs
+    rnf (ICPrim x1) = rnf x1
+    rnf (ICForeign x1 x2 x3 x4 x5) = rnf5 x1 x2 x3 x4 x5
+    rnf (ICCon x1) = rnf x1
+    rnf (ICIs x1) = rnf x1
+    rnf (ICOut x1) = rnf x1
+    rnf (ICTuple x1) = rnf x1
+    rnf (ICSel x1 x2) = rnf2 x1 x2
+    rnf (ICVerilog x1 x2 x3) = rnf3 x1 x2 x3
+    rnf (ICUndet x1) = rnf x1
+    rnf (ICInt x1) = rnf x1
+    rnf (ICReal x1) = rnf x1
+    rnf (ICString x1) = rnf x1
+    rnf (ICChar x1) = rnf x1
+    rnf (ICHandle x1) = rnf x1
+    rnf (ICStateVar x1) = rnf x1
+    rnf ICMethArg = ()
+    rnf ICModPort = ()
+    rnf ICModParam = ()
+    -- rnf (ICValue x1) = rnf x1
     -- XXX the above line causes cycles somehow so, like ICDef, we don't enter ICValue
-    rnf (ICValue x1 x2) = ()
-    rnf (ICRuleAssert x1 x2) = rnf2 x1 x2
-    rnf (ICSchedPragmas x1 x2) = rnf2 x1 x2
-    rnf (ICMethod x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
-    rnf (ICClock x1 x2) = rnf2 x1 x2
-    rnf (ICReset x1 x2) = rnf2 x1 x2
-    rnf (ICInout x1 x2) = rnf2 x1 x2
-    rnf (ICName x1 x2) = rnf2 x1 x2
-    rnf (ICAttrib x1 x2) = rnf2 x1 x2
-    rnf (ICLazyArray x1 x2 x3) = rnf3 x1 x2 x3
-    rnf (ICLazyPack x1 x2 x3 x4 x5) = rnf5 x1 x2 x3 x4 x5
-    rnf (ICLazyUnpack x1 x2 x3 x4 x5) = rnf5 x1 x2 x3 x4 x5
-    rnf (ICPosition x1 x2) = rnf2 x1 x2
-    rnf (ICType x1 x2) = rnf2 x1 x2
-    rnf (ICPred x1 x2) = rnf2 x1 x2
+    rnf (ICValue _) = ()
+    rnf (ICRuleAssert x1) = rnf x1
+    rnf (ICSchedPragmas x1) = rnf x1
+    rnf (ICMethod x1 x2 x3) = rnf3 x1 x2 x3
+    rnf (ICClock x1) = rnf x1
+    rnf (ICReset x1) = rnf x1
+    rnf (ICInout x1) = rnf x1
+    rnf (ICName x1) = rnf x1
+    rnf (ICAttrib x1) = rnf x1
+    rnf (ICLazyArray x1 x2) = rnf2 x1 x2
+    rnf (ICLazyPack x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
+    rnf (ICLazyUnpack x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
+    rnf (ICPosition x1) = rnf x1
+    rnf (ICType x1) = rnf x1
+    rnf (ICPred x1) = rnf x1
 
 instance NFData (IStateVar a) where
     rnf x = (x==x) `seq` ()                -- XXX (does not evaluate IStateVar components)
@@ -1629,7 +1556,7 @@ getIExprPositionCrossInternal n (ILAM i _ e) =
     let pos = (getIExprPositionCrossInternal (n + 1) e)
     in  firstPos [pos, getIdPosition i]
 
-getIExprPositionCrossInternal _ (ICon_ _ i (ICSel _ _ _)) =
+getIExprPositionCrossInternal _ (ICon_ _ i _ (ICSel _ _)) =
     if (isPassThroughOp i)
         then -- trace("DDD " ++ (pfpString i)) $
              noPosition
@@ -1637,7 +1564,7 @@ getIExprPositionCrossInternal _ (ICon_ _ i (ICSel _ _ _)) =
              (getIdPosition i)
 
 
-getIExprPositionCrossInternal _ (ICon_ _ i _) = getIdPosition i
+getIExprPositionCrossInternal _ (ICon_ _ i _ _) = getIdPosition i
 -- The positions stamped on the heap ref (collected out of band when
 -- expressions are rewritten).  There is no type fallback: Ids embedded
 -- in ITypes carry no positions (IType normalizes them on entry).
@@ -1683,7 +1610,7 @@ getIExprPosition (IAps_ _ e _ es) =
 getIExprPosition (IVar i) = getIdPosition i
 
 getIExprPosition (ILAM i _ e) = firstPos [getIdPosition i, getIExprPosition e]
-getIExprPosition (ICon_ _ i _) = getIdPosition i
+getIExprPosition (ICon_ _ i _ _) = getIdPosition i
 -- The positions stamped on the heap ref (collected out of band when
 -- expressions are rewritten).
 -- When poss has several entries the pick is by Ord Position, whose
@@ -1718,7 +1645,7 @@ showTypeless (ILam i _ e) = "(ILam " ++ (show i) ++ " _ " ++ (showTypeless e) ++
 showTypeless (IAps_ _ e _ es) = "(IAps " ++ (showTypeless e) ++ " _ " ++ showTypelessList es ++ ")"
 showTypeless (IVar i) = "(IVar " ++ (show i) ++ ")"
 showTypeless (ILAM i k e) = "(ILAM " ++ (show i) ++ " " ++ (show k) ++ " " ++ (showTypeless e) ++ ")"
-showTypeless (ICon_ _ i ci) = "(ICon " ++ (show i) ++ " " ++ (showTypelessCI ci) ++ " )"
+showTypeless (ICon_ _ i _ ci) = "(ICon " ++ (show i) ++ " " ++ (showTypelessCI ci) ++ " )"
 showTypeless (IRefT _ i _ _) = "(IRefT " ++ "_" ++ (show i) ++ ")"
 
 showTypelessRule :: IRule a -> String
@@ -1738,38 +1665,38 @@ showTypelessRules (IRules sps rs) =
     foldr1 (\x y -> x ++ ", " ++ y) (map showTypelessRule rs) ++ "])"
 
 showTypelessCI :: IConInfo a -> String
-showTypelessCI (ICDef {ictDef = t, iConDef = e}) = "(ICDef)"
-showTypelessCI (ICPrim {ictPrim = t, primOp = p}) = "(ICPrim _ " ++ (show p) ++ ")"
-showTypelessCI (ICForeign {ictForeign = t, fName = n, isC = b, foports = f}) = "(ICForeign _ " ++ n ++ " " ++ show b ++ " " ++ (show f) ++ ")"
-showTypelessCI (ICCon {ictCon = t, conTagInfo = cti}) = "(ICCon _ " ++ (ppReadable cti) ++ ")"
-showTypelessCI (ICIs t cti) = "(ICIs _ " ++ (ppReadable cti) ++ ")"
-showTypelessCI (ICOut t cti) = "(ICOut _ " ++ (ppReadable cti) ++ ")"
-showTypelessCI (ICTuple {ictTuple = t, fieldIds = fs}) = "(ICTuple _ " ++ (show fs) ++ ")"
-showTypelessCI (ICSel {ictSel = t, selNo = i, numSel = j}) = "(ICSel _ " ++ (show i) ++ " " ++ (show j) ++ ")"
+showTypelessCI (ICDef {iConDef = e}) = "(ICDef)"
+showTypelessCI (ICPrim {primOp = p}) = "(ICPrim _ " ++ (show p) ++ ")"
+showTypelessCI (ICForeign {fName = n, isC = b, foports = f}) = "(ICForeign _ " ++ n ++ " " ++ show b ++ " " ++ (show f) ++ ")"
+showTypelessCI (ICCon {conTagInfo = cti}) = "(ICCon _ " ++ (ppReadable cti) ++ ")"
+showTypelessCI (ICIs cti) = "(ICIs _ " ++ (ppReadable cti) ++ ")"
+showTypelessCI (ICOut cti) = "(ICOut _ " ++ (ppReadable cti) ++ ")"
+showTypelessCI (ICTuple {fieldIds = fs}) = "(ICTuple _ " ++ (show fs) ++ ")"
+showTypelessCI (ICSel {selNo = i, numSel = j}) = "(ICSel _ " ++ (show i) ++ " " ++ (show j) ++ ")"
 showTypelessCI (ICLazyPack {lzOrig = o}) = "(ICLazyPack _ [" ++ showTypeless o ++ "])"
 showTypelessCI (ICLazyUnpack {lzOrig = o}) = "(ICLazyUnpack _ [" ++ showTypeless o ++ "])"
-showTypelessCI (ICVerilog {ictVerilog = t, isUserImport = ui, vInfo = v, vMethTs = vts}) = "(ICVerilog _ " ++ {--(show v)--} "<vmodinfo>" ++ " [_])"
-showTypelessCI (ICUndet {ictUndet = t, iuKind = k}) = "(ICUndet _ _ )"
-showTypelessCI (ICInt {ictInt = t, iVal = v}) = "(ICInt _ " ++ (show v) ++ ")"
-showTypelessCI (ICReal {ictReal = t, iReal = v}) = "(ICReal _ " ++ (show v) ++ ")"
-showTypelessCI (ICString {ictString = t, iStr = s}) = "(ICString _ " ++ (show s) ++ ")"
-showTypelessCI (ICChar {ictChar = t, iChar = c}) = "(ICChar _ " ++ (show c) ++ ")"
-showTypelessCI (ICHandle {ictHandle = t, iHandle = h}) = "(ICHandle _ " ++ (show h) ++ ")"
-showTypelessCI (ICStateVar {ictStateVar = t, iVar = v}) = "(ICStateVar _ " ++ (showTypelessStateVar v) ++ ")"
-showTypelessCI (ICMethArg {ictMethArg = t}) = "(ICMethArg _ )"
-showTypelessCI (ICModPort {ictModPort = t}) = "(ICModPort _ )"
-showTypelessCI (ICModParam {ictModParam = t}) = "(ICModParam _ )"
-showTypelessCI (ICValue {ictValue = t, iValDef = e}) = "(ICValue)"
-showTypelessCI (ICRuleAssert {ictRuleAssert = t, iAsserts = rps}) = "(ICRuleAssert _ " ++ (show rps) ++ ")"
-showTypelessCI (ICSchedPragmas {ictSchedPragmas = t, iPragmas = sps}) = "(ICSchedPragmas _ " ++ (show sps) ++ ")"
-showTypelessCI (ICMethod {ictMethod = t, iInputNames = ins, iOutputNames = outs, iMethod = m }) = "(ICMethod " ++ (show ins) ++ " " ++ (show outs) ++ " " ++ (ppReadable m) ++ ")"
-showTypelessCI (ICClock {ictClock = t, iClock = clock}) = "(ICClock)"
-showTypelessCI (ICReset {ictReset = t, iReset = reset}) = "(ICReset)"
-showTypelessCI (ICInout {ictInout = t, iInout = inout}) = "(ICInout)"
-showTypelessCI (ICName {ictName = t, iName = name}) = "(ICName _ " ++ (show name) ++ ")"
-showTypelessCI (ICAttrib {ictAttrib = t, iAttributes = pps}) = "(ICAttrib _ " ++ (show (map snd pps)) ++ ")"
-showTypelessCI (ICLazyArray {ictLazyArray = t, iArray = arr}) = "(ICLazyArray _ " ++ (ppReadable (map ac_ptr (Array.elems arr))) ++ ")"
-showTypelessCI (ICPosition {ictPosition = t, iPosition = pos}) = "(ICPosition _ " ++ (show pos) ++ ")"
+showTypelessCI (ICVerilog {isUserImport = ui, vInfo = v, vMethTs = vts}) = "(ICVerilog _ " ++ {--(show v)--} "<vmodinfo>" ++ " [_])"
+showTypelessCI (ICUndet {iuKind = k}) = "(ICUndet _ _ )"
+showTypelessCI (ICInt {iVal = v}) = "(ICInt _ " ++ (show v) ++ ")"
+showTypelessCI (ICReal {iReal = v}) = "(ICReal _ " ++ (show v) ++ ")"
+showTypelessCI (ICString {iStr = s}) = "(ICString _ " ++ (show s) ++ ")"
+showTypelessCI (ICChar {iChar = c}) = "(ICChar _ " ++ (show c) ++ ")"
+showTypelessCI (ICHandle {iHandle = h}) = "(ICHandle _ " ++ (show h) ++ ")"
+showTypelessCI (ICStateVar {iVar = v}) = "(ICStateVar _ " ++ (showTypelessStateVar v) ++ ")"
+showTypelessCI (ICMethArg {}) = "(ICMethArg _ )"
+showTypelessCI (ICModPort {}) = "(ICModPort _ )"
+showTypelessCI (ICModParam {}) = "(ICModParam _ )"
+showTypelessCI (ICValue {iValDef = e}) = "(ICValue)"
+showTypelessCI (ICRuleAssert {iAsserts = rps}) = "(ICRuleAssert _ " ++ (show rps) ++ ")"
+showTypelessCI (ICSchedPragmas {iPragmas = sps}) = "(ICSchedPragmas _ " ++ (show sps) ++ ")"
+showTypelessCI (ICMethod {iInputNames = ins, iOutputNames = outs, iMethod = m }) = "(ICMethod " ++ (show ins) ++ " " ++ (show outs) ++ " " ++ (ppReadable m) ++ ")"
+showTypelessCI (ICClock {iClock = clock}) = "(ICClock)"
+showTypelessCI (ICReset {iReset = reset}) = "(ICReset)"
+showTypelessCI (ICInout {iInout = inout}) = "(ICInout)"
+showTypelessCI (ICName {iName = name}) = "(ICName _ " ++ (show name) ++ ")"
+showTypelessCI (ICAttrib {iAttributes = pps}) = "(ICAttrib _ " ++ (show (map snd pps)) ++ ")"
+showTypelessCI (ICLazyArray {iArray = arr}) = "(ICLazyArray _ " ++ (ppReadable (map ac_ptr (Array.elems arr))) ++ ")"
+showTypelessCI (ICPosition {iPosition = pos}) = "(ICPosition _ " ++ (show pos) ++ ")"
 showTypelessCI (ICType {iType = t}) = "(ICType _ " ++ (show t) ++ ")"
 showTypelessCI (ICPred {iPred = p}) = "(ICPred _ " ++ (show p) ++ ")"
 

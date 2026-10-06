@@ -31,8 +31,8 @@ simpDict (IDef i t e ps)
   | isLiftedDict i || itIsDictType t = IDef i t e'' ps
       where e' = simpExpr e
             isTuple = case e' of
-                        ICon _ (ICTuple { }) -> True
-                        IAps (ICon _ (ICTuple { })) _ _ -> True
+                        ICon _ _ (ICTuple { }) -> True
+                        IAps (ICon _ _ (ICTuple { })) _ _ -> True
                         _ -> False
             e'' = if isTuple
                   then tracep trace_simp_dicts ("Reduced to an ICTuple: " ++ ppReadable i) $ e'
@@ -46,7 +46,7 @@ isDictDef i = hasIdProp i IdPDict
 simpExpr :: IExpr PreElab -> IExpr PreElab
 simpExpr (ILAM i k e) = ILAM i k $ simpExpr e
 simpExpr (ILam i t e) = ILam i t $ simpExpr e
-simpExpr (IAps (ICon i (ICDef _ f)) ts es)
+simpExpr (IAps (ICon i _ (ICDef f)) ts es)
   | isDictDef i = simpAp f ts es
 simpExpr (IAps f ts es) = simpAp f ts es
 simpExpr e = e
@@ -64,5 +64,5 @@ fixUp :: M.Map Id (IExpr PreElab) -> IExpr PreElab -> IExpr PreElab
 fixUp m (ILam i t e) = ILam i t (fixUp m e)
 fixUp m (ILAM i k e) = ILAM i k (fixUp m e)
 fixUp m (IAps f ts es) = IAps (fixUp m f) ts (map (fixUp m) es)
-fixUp m (ICon i (ICDef t d)) = ICon i (ICDef t (M.findWithDefault d i m))
+fixUp m (ICon i t (ICDef d)) = ICon i t (ICDef (M.findWithDefault d i m))
 fixUp _ e = e

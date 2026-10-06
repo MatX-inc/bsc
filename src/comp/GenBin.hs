@@ -578,7 +578,7 @@ instance Bin (IExpr PreElab) where
     writeBytes (IAps e ts es) = do putI 1; toBin e; toBin ts; toBin es
     writeBytes (IVar i)       = do putI 2; toBin i
     writeBytes (ILAM i k e)   = do putI 3; toBin i; toBin k; toBin e
-    writeBytes (ICon i ic)    = do putI 4; toBin i; toBin ic
+    writeBytes (ICon i t ic)  = do putI 4; toBin i; putConInfo t ic
     readBytes = do tag <- getI
                    case tag of
                      0 -> do i <- fromBin
@@ -594,7 +594,7 @@ instance Bin (IExpr PreElab) where
                              k <- fromBin
                              e <- fromBin
                              return (ILAM i k e)
-                     4 -> do i <- fromBin; ic <- fromBin; return (ICon i ic)
+                     4 -> do i <- fromBin; (t, ic) <- getConInfo; return (ICon i t ic)
                      n -> internalError $ "GenBin.Bin(IExpr).readBytes: " ++ show n
 
 -- ----------
@@ -610,62 +610,69 @@ instance Bin ConTagInfo where
 -- ----------
 -- Bin IConInfo
 
-instance Bin (IConInfo PreElab) where
-    writeBytes (ICDef t _)      = do putI 0; toBin t
-    writeBytes (ICPrim t p)     = do putI 1; toBin t; toBin (fromEnum p)
-    writeBytes (ICForeign t n isC ps tvns Nothing) =
-        do putI 2; toBin t; toBin n; toBin isC; toBin ps; toBin tvns
-    writeBytes (ICForeign { fcallNo = (Just _) }) =
-        internalError "GenBin.Bin(IConInfo).writeBytes: ICForeign with cookie"
-    writeBytes (ICCon t cti)    = do putI 3; toBin t; toBin cti
-    writeBytes (ICIs t cti)     = do putI 4; toBin t; toBin cti
-    writeBytes (ICOut t cti)    = do putI 5; toBin t; toBin cti
-    writeBytes (ICTuple t is)   = do putI 6; toBin t; toBin is
-    writeBytes (ICSel t i j)    = do putI 7; toBin t; toBin i; toBin j
-    writeBytes (ICVerilog t ui v tss) =
-        do putI 8; toBin t; toBin ui; toBin v; toBin tss
-    writeBytes (ICUndet t u)    = do putI 9; toBin t; toBin u
-    writeBytes (ICInt t v)      = do putI 10; toBin t; toBin v
-    writeBytes (ICReal t v)     = do putI 11; toBin t; toBin v
-    writeBytes (ICString t s)   = do putI 12; toBin t; toBin s
-    writeBytes (ICChar t c)     = do putI 13; toBin t; toBin c
-    writeBytes (ICRuleAssert t as) = do putI 14; toBin t; toBin as
-    writeBytes (ICSchedPragmas t sps) = do putI 15; toBin t; toBin sps
-    writeBytes (ICName t n)     = do putI 16; toBin t; toBin n
-    writeBytes (ICAttrib t pps) = do putI 17; toBin t; toBin pps;
-    writeBytes (ICPosition t pos) = do putI 18; toBin t; toBin pos
-    writeBytes (ICType t it)    = do putI 19; toBin t; toBin it
-    readBytes = do tag <- getI
-                   t <- fromBin
-                   case tag of
-                     0  -> -- ICDef contains the expression for the def
-                           -- Here we use a don't-care value for the expression
-                           -- XXX Should we use an error there, so it's not silently used?
-                           return (ICDef t (icUndet t UNoMatch))
-                     1  -> do p <- fromBin; return (ICPrim t (toEnum p))
-                     2  -> do n <- fromBin
-                              isC <- fromBin
-                              ps <- fromBin
-                              tvns <- fromBin
-                              return (ICForeign t n isC ps tvns Nothing)
-                     3  -> do cti <- fromBin; return (ICCon t cti)
-                     4  -> do cti <- fromBin; return (ICIs t cti)
-                     5  -> do cti <- fromBin; return (ICOut t cti)
-                     6  -> do is <- fromBin; return (ICTuple t is)
-                     7  -> do i <- fromBin; j <- fromBin; return (ICSel t i j)
-                     8  -> do ui <- fromBin
-                              v <- fromBin
-                              tss <- fromBin
-                              return (ICVerilog t ui v tss)
-                     9  -> do u <- fromBin; return (ICUndet t u)
-                     10 -> do v <- fromBin; return (ICInt t v)
-                     11 -> do v <- fromBin; return (ICReal t v)
-                     12 -> do s <- fromBin; return (ICString t s)
-                     13 -> do c <- fromBin; return (ICChar t c)
-                     14 -> do as <- fromBin; return (ICRuleAssert t as)
-                     15 -> do sps <- fromBin; return (ICSchedPragmas t sps)
-                     16 -> do n <- fromBin; return (ICName t n)
-                     17 -> do pps <- fromBin; return (ICAttrib t pps)
-                     18 -> do pos <- fromBin; return (ICPosition t pos)
-                     19 -> do it <- fromBin; return (ICType t it)
-                     n  -> internalError $ "GenBin.Bin(IConInfo).readBytes: " ++ show n
+-- A constant is written as its payload tag, then the node's type, then
+-- the payload fields, and read back in that order: the byte layout of
+-- the .bo is the one from before the type moved from the payload onto
+-- the node (no format change).
+putConInfo :: IType -> IConInfo PreElab -> Out ()
+putConInfo t (ICDef _)          = do putI 0; toBin t
+putConInfo t (ICPrim p)         = do putI 1; toBin t; toBin (fromEnum p)
+putConInfo t (ICForeign n isC ps tvns Nothing) =
+    do putI 2; toBin t; toBin n; toBin isC; toBin ps; toBin tvns
+putConInfo _ (ICForeign { fcallNo = (Just _) }) =
+    internalError "GenBin.putConInfo: ICForeign with cookie"
+putConInfo t (ICCon cti)        = do putI 3; toBin t; toBin cti
+putConInfo t (ICIs cti)         = do putI 4; toBin t; toBin cti
+putConInfo t (ICOut cti)        = do putI 5; toBin t; toBin cti
+putConInfo t (ICTuple is)       = do putI 6; toBin t; toBin is
+putConInfo t (ICSel i j)        = do putI 7; toBin t; toBin i; toBin j
+putConInfo t (ICVerilog ui v tss) =
+    do putI 8; toBin t; toBin ui; toBin v; toBin tss
+putConInfo t (ICUndet u)        = do putI 9; toBin t; toBin u
+putConInfo t (ICInt v)          = do putI 10; toBin t; toBin v
+putConInfo t (ICReal v)         = do putI 11; toBin t; toBin v
+putConInfo t (ICString s)       = do putI 12; toBin t; toBin s
+putConInfo t (ICChar c)         = do putI 13; toBin t; toBin c
+putConInfo t (ICRuleAssert as)  = do putI 14; toBin t; toBin as
+putConInfo t (ICSchedPragmas sps) = do putI 15; toBin t; toBin sps
+putConInfo t (ICName n)         = do putI 16; toBin t; toBin n
+putConInfo t (ICAttrib pps)     = do putI 17; toBin t; toBin pps;
+putConInfo t (ICPosition pos)   = do putI 18; toBin t; toBin pos
+putConInfo t (ICType it)        = do putI 19; toBin t; toBin it
+
+getConInfo :: In (IType, IConInfo PreElab)
+getConInfo = do tag <- getI
+                t <- fromBin
+                ic <- case tag of
+                        0  -> -- ICDef contains the expression for the def
+                              -- Here we use a don't-care value for the expression
+                              -- XXX Should we use an error there, so it's not silently used?
+                              return (ICDef (icUndet t UNoMatch))
+                        1  -> do p <- fromBin; return (ICPrim (toEnum p))
+                        2  -> do n <- fromBin
+                                 isC <- fromBin
+                                 ps <- fromBin
+                                 tvns <- fromBin
+                                 return (ICForeign n isC ps tvns Nothing)
+                        3  -> do cti <- fromBin; return (ICCon cti)
+                        4  -> do cti <- fromBin; return (ICIs cti)
+                        5  -> do cti <- fromBin; return (ICOut cti)
+                        6  -> do is <- fromBin; return (ICTuple is)
+                        7  -> do i <- fromBin; j <- fromBin; return (ICSel i j)
+                        8  -> do ui <- fromBin
+                                 v <- fromBin
+                                 tss <- fromBin
+                                 return (ICVerilog ui v tss)
+                        9  -> do u <- fromBin; return (ICUndet u)
+                        10 -> do v <- fromBin; return (ICInt v)
+                        11 -> do v <- fromBin; return (ICReal v)
+                        12 -> do s <- fromBin; return (ICString s)
+                        13 -> do c <- fromBin; return (ICChar c)
+                        14 -> do as <- fromBin; return (ICRuleAssert as)
+                        15 -> do sps <- fromBin; return (ICSchedPragmas sps)
+                        16 -> do n <- fromBin; return (ICName n)
+                        17 -> do pps <- fromBin; return (ICAttrib pps)
+                        18 -> do pos <- fromBin; return (ICPosition pos)
+                        19 -> do it <- fromBin; return (ICType it)
+                        n  -> internalError $ "GenBin.getConInfo: " ++ show n
+                return (t, ic)

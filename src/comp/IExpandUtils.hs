@@ -176,13 +176,13 @@ pIf' :: HExpr -> HPred -> HPred -> HPred
 pIf' c@(IRefT _ _ _ (HeapData r)) t e =
   let (P p e') = heapCellToPExpr (unsafePerformIO (readIORef r))
   in case e' of
-      (IAps (ICon _ (ICPrim _ PrimBNot)) [] [c']) ->
+      (IAps (ICon _ _ (ICPrim PrimBNot)) [] [c']) ->
           pConj p (pIf' c' e t)
       _ -> pIf'' c t e
 pIf' c t e = pIf'' c t e
 
 pIf'' :: HExpr -> HPred -> HPred -> HPred
-pIf'' (IAps (ICon _ (ICPrim _ PrimBNot)) [] [c]) t e = pIf' c e t
+pIf'' (IAps (ICon _ _ (ICPrim PrimBNot)) [] [c]) t e = pIf' c e t
 pIf'' c t@(PConj ts) e@(PConj es) =
     let te = ts `S.intersection` es
         ts' = ts `S.difference` te
@@ -309,16 +309,16 @@ canLiftCond' :: M.Map Int Bool -> HExpr -> (Bool, M.Map Int Bool)
 -- value portion of an ActionValue
 -- the select should only survive if it is surrounding a method call
 -- or foreign function call, so no check of "e" is needed
-canLiftCond' m (IAps (ICon i_sel ICSel { }) _ [e])
+canLiftCond' m (IAps (ICon i_sel _ ICSel { }) _ [e])
     | i_sel == idAVValue_ = (False, m)
 -- dynamic selection from an array
 -- (we could not treat this prim specially and instead just consider an
 -- ICLazyArray liftable if all elements are liftable; but this is a more
 -- aggressive optimization that only considers the selectable elems)
-canLiftCond' m (IAps (ICon _ (ICPrim _ PrimArrayDynSelect))
+canLiftCond' m (IAps (ICon _ _ (ICPrim PrimArrayDynSelect))
                      [elem_ty, ITNum idx_sz] [arr_e, idx_e]) =
     case arr_e of
-      ICon _ (ICLazyArray _ arr u) ->
+      ICon _ _ (ICLazyArray arr u) ->
           if (isJust u)
           then (False, m)
           else let cells = Array.elems arr
@@ -330,19 +330,19 @@ canLiftCond' m (IAps (ICon _ (ICPrim _ PrimArrayDynSelect))
       _ -> internalError ("canLiftCond': array: " ++ ppReadable arr_e)
 canLiftCond' m (IAps f _ es) = canLiftCond'_List m (f:es)
 -- method argument
-canLiftCond' m (ICon _ (ICMethArg _)) = (False, m)
+canLiftCond' m (ICon _ _ ICMethArg) = (False, m)
 -- other arrays are unexpected
-canLiftCond' m (ICon _ (ICLazyArray arr_ty arr u)) =
+canLiftCond' m (ICon _ arr_ty (ICLazyArray arr u)) =
     internalError ("IExpandUtils.canLiftCond: unexpected array")
 -- held pack/unpack coercions should have been squeezed out by the
 -- condition-handling paths (doIf, evalStaticOp', walkNF) before any
 -- condition-liftability question is asked; this cannot force them (pure
 -- context), so fail loudly rather than answer wrongly
-canLiftCond' m (ICon _ (ICLazyPack {})) =
+canLiftCond' m (ICon _ _ (ICLazyPack {})) =
     internalError ("IExpandUtils.canLiftCond: unexpected held coercion (pack)")
-canLiftCond' m (ICon _ (ICLazyUnpack {})) =
+canLiftCond' m (ICon _ _ (ICLazyUnpack {})) =
     internalError ("IExpandUtils.canLiftCond: unexpected held coercion (unpack)")
-canLiftCond' m (ICon _ _) = (True, m)
+canLiftCond' m (ICon _ _ _) = (True, m)
 canLiftCond' m ref@(IRefT t p poss r) =
     -- only follow references for which we haven't yet computed the answer
     case M.lookup p m of
@@ -1387,8 +1387,8 @@ addInhighClkGate c =
     -- try to only add clocks which are input clocks
     case (getClockWires c) of
       -- It's a clock tuple of a module port for the oscillator and gate == 1
-      IAps (ICon i (ICTuple {fieldIds = [i_osc, i_gate]})) []
-           [osc@(ICon _ (ICModPort _)), gate] |
+      IAps (ICon i _ (ICTuple {fieldIds = [i_osc, i_gate]})) []
+           [osc@(ICon _ _ ICModPort), gate] |
            i == idClock && i_osc == idClockOsc && i_gate == idClockGate &&
            isTrue gate
         -> do -- traceM ("is a boundary clock: " ++ ppReadable c)
@@ -1663,9 +1663,9 @@ makeInputClk gated id_clk = do
 
   let (id_osc, mid_gate) = makeArgClockIds pps gated id_clk
 
-  let topClkOsc = ICon id_osc (ICModPort itBit1)
+  let topClkOsc = ICon id_osc itBit1 ICModPort
   let topClkGate = case mid_gate of
-                     Just id_gate -> ICon id_gate (ICModPort itBit1)
+                     Just id_gate -> ICon id_gate itBit1 ICModPort
                      Nothing -> iTrue
   let abs_input = IAI_Clock id_osc mid_gate
   let varginfo = ClockArg id_clk
@@ -1735,7 +1735,7 @@ makeInputRstn id_rst mclk = do
                                   let err = "IExpand.makeInputRstn: " ++
                                             "unknown boundary clock"
                                   return (fromJustOrErr err c)
-  let topRstnWire = ICon id_wire (ICModPort itBit1)
+  let topRstnWire = ICon id_wire itBit1 ICModPort
   let abs_input = IAI_Reset id_wire
   let varginfo = ResetArg id_rst
   rstn <- newReset topRstnClock topRstnWire
@@ -1817,7 +1817,7 @@ makeArgInout id_iot sz mclk mrst = do
                                   let err = "IExpand.makeArgInout: " ++
                                             "unknown boundary clock"
                                   return (fromJustOrErr err r)
-  let topIotWire = ICon id_wire (ICModPort (itInout_N sz))
+  let topIotWire = ICon id_wire (itInout_N sz) ICModPort
       iinout = makeInout topIotClock topIotReset topIotWire
   let abs_arg = IAI_Inout id_wire sz
   let varginfo = InoutArg (id_to_vName id_wire) mclk mrst
@@ -2844,7 +2844,7 @@ unheapAll e = do
         ILam i t e -> do e' <- unheapAll e; return (ILam i t e')
         IAps f ts es -> do f' <- unheapAll f; es' <- mapM unheapAll es; return (IAps f' ts es')
         ILAM i t e -> do e' <- unheapAll e; return (ILAM i t e')
-        ICon i (ICLazyArray arr_t arr u) -> do
+        ICon i arr_t (ICLazyArray arr u) -> do
             let elem_ty = case arr_t of
                             (ITAp c t) | (c == itPrimArray) -> t
                             _ -> internalError ("unheapAll: array type")
@@ -2852,7 +2852,7 @@ unheapAll e = do
                     unheapAll (IRefT elem_ty ptr S.empty ref)
             es <- mapM mapFn (Array.elems arr)
             let ic = case icPrimBuildArray (length es) of
-                       (ICon _ ci) -> ICon i ci
+                       (ICon _ ct ci) -> ICon i ct ci
                        _ -> internalError ("unheapAll: icPrimBuildArray")
             return (IAps ic [elem_ty] es)
         _ -> return e'
@@ -2872,16 +2872,16 @@ unheapAllNFNoImp e = do
 toHeap :: String -> IType -> HExpr -> Maybe Id -> G HExpr
 -- foreign function calls must be forced onto the heap for
 -- proper handling of actionvalues
-toHeap tag t e@(ICon _ (ICForeign {})) cell_name = do
+toHeap tag t e@(ICon _ _ (ICForeign {})) cell_name = do
   addHeapUnev tag t e cell_name
 -- definitions must be heaped for correct handling of actionvalues
 -- a top-level definition should have no free variables by construction
 -- Don't use t for caching because, for polymorphic defs, it may be the
 -- instantiated type of the definition in the current context.
-toHeap tag t (ICon i (ICDef t' e)) cell_name = do
+toHeap tag t (ICon i t' (ICDef e)) cell_name = do
   e' <- cacheDef i t' e
   toHeap tag t e' cell_name
-toHeap _   _ e@(ICon _ _)      _ = return e
+toHeap _   _ e@(ICon _ _ _)      _ = return e
 toHeap _   _ e@(IRefT _ _ _ _) _ = return e
 toHeap tag t e cell_name = do
         -- these errors have never happened, disable checks for now.
@@ -2896,20 +2896,20 @@ toHeap tag t e cell_name = do
 {-# INLINE toHeapCon #-}
 toHeapCon :: String -> IType -> HExpr -> Maybe Id -> G HExpr
 -- expand out ICDef as in toHeap
-toHeapCon tag t (ICon i (ICDef t' e)) cell_name = do
+toHeapCon tag t (ICon i t' (ICDef e)) cell_name = do
   e' <- cacheDef i t' e
   toHeapCon tag t e' cell_name
 -- heap all other constants
-toHeapCon tag t e@(ICon _ _) cell_name = do
+toHeapCon tag t e@(ICon _ _ _) cell_name = do
   addHeapUnev tag t e cell_name
 toHeapCon tag t e cell_name = toHeap tag t e cell_name
 
 {-# INLINE toHeapWHNF #-}
 toHeapWHNF :: String -> IType -> PExpr -> Maybe Id -> G HExpr
-toHeapWHNF _  _ (P p e@(ICon _ _)) _ | p == pTrue = return e
+toHeapWHNF _  _ (P p e@(ICon _ _ _)) _ | p == pTrue = return e
 toHeapWHNF _  _ (P p e@(IRefT _ _ _ _)) _ | p == pTrue = return e
 toHeapWHNF tag _ (P p e) cell_name
-  | IAps (ICon _ (ICPrim _ PrimWhenPred)) [t] [ICon _ (ICPred _ p'), e'] <- e =
+  | IAps (ICon _ _ (ICPrim PrimWhenPred)) [t] [ICon _ _ (ICPred p'), e'] <- e =
     toHeapWHNF tag t (P (pConj p p') e') cell_name
 toHeapWHNF tag t pe@(P p e) cell_name = do
     -- Pointing to an IRefT (because p /= pTrue) is not WHNF
@@ -2918,7 +2918,7 @@ toHeapWHNF tag t pe@(P p e) cell_name = do
 
 {-# INLINE toHeapWHNFCon #-}
 toHeapWHNFCon :: String -> IType -> HExpr -> Maybe Id -> G HExpr
-toHeapWHNFCon tag t e@(ICon _ _) cell_name = do
+toHeapWHNFCon tag t e@(ICon _ _ _) cell_name = do
     addHeapWHNF tag t (P pTrue e) cell_name
 toHeapWHNFCon tag t e cell_name = toHeapWHNF tag t (P pTrue e) cell_name
 
@@ -2929,7 +2929,7 @@ inferName (IRefT _ _ _ heap_ref) =
     do heap_cell <- getHeap heap_ref
        return (hc_name heap_cell)
 -- bit selection
-inferName expr@(IAps (ICon _ (ICPrim { primOp = PrimSelect })) [ITNum bit_size, ITNum lowest_bit, _] [selected_object]) =
+inferName expr@(IAps (ICon _ _ (ICPrim { primOp = PrimSelect })) [ITNum bit_size, ITNum lowest_bit, _] [selected_object]) =
     do selected_object_name <- inferName selected_object
        let highest_bit = lowest_bit + bit_size - 1
            suffix | highest_bit == lowest_bit =
@@ -2941,10 +2941,10 @@ inferName expr@(IAps (ICon _ (ICPrim { primOp = PrimSelect })) [ITNum bit_size, 
          Just name -> return (Just (mkIdPost name suffix))
          Nothing -> return Nothing
 -- register read sugar
-inferName expr@(IAps (ICon con_name (ICSel {})) [_] [object])
+inferName expr@(IAps (ICon con_name _ (ICSel {})) [_] [object])
     | con_name == idPreludeRead = inferName object
 -- state instances
-inferName expr@(ICon inst_name (ICStateVar {})) = return (Just inst_name)
+inferName expr@(ICon inst_name _ (ICStateVar {})) = return (Just inst_name)
 inferName _ = return Nothing
 
 unCacheableType :: IType -> Bool
@@ -3455,13 +3455,13 @@ instance Wireable HExpr where
   extractWires (ILam i t e) = extractWires e
 
   -- method call
-  extractWires (IAps (ICon methId (ICSel { })) _ ((ICon instId (ICStateVar { iVar = v })):es)) = do
+  extractWires (IAps (ICon methId _ (ICSel { })) _ ((ICon instId _ (ICStateVar { iVar = v })):es)) = do
     ws <- ?mkvar instId methId v
     wss <- mapM extractWires es
     return (?jn (ws:wss))
 
   -- don't walk unnecessary parts of a struct or interface
-  extractWires (IAps f@(ICon i_sel (ICSel { selNo = n })) _ (a@(IRefT _ _ p r):as)) = do
+  extractWires (IAps f@(ICon i_sel _ (ICSel { selNo = n })) _ (a@(IRefT _ _ p r):as)) = do
     -- we don't look for "p" in the WireSet cache, because we don't want to
     -- include the wires from the unused fields
     -- (presumably the fields will have their own refs, which can be cached)
@@ -3476,14 +3476,14 @@ instance Wireable HExpr where
     -- might "p" include wires from the other fields?
     p_ws <- extractWires p
     case e of
-       (IAps (ICon i_tup (ICTuple {})) _ es) -> do
+       (IAps (ICon i_tup _ (ICTuple {})) _ es) -> do
            let esel = if (length es > fromInteger n)
                       then es!!(fromInteger n)
                       else internalError("extractWires: ICSel: " ++
                                          ppReadable (n, es))
            a_wss <- mapM extractWires (esel:as)
            return (?jn (p_ws:a_wss))
-       (ICon instId (ICStateVar { iVar = v })) -> do
+       (ICon instId _ (ICStateVar { iVar = v })) -> do
            ws <- ?mkvar instId i_sel v
            wss <- mapM extractWires as
            return (?jn (p_ws:ws:wss))
@@ -3519,15 +3519,15 @@ instance Wireable HExpr where
         ?st p pos ws
         return ws
 
-  extractWires (ICon i (ICModPort {})) = ?mkport i
+  extractWires (ICon i _ (ICModPort {})) = ?mkport i
 
-  extractWires (ICon i (ICInout { iInout = inout })) = ?mkinout i inout
+  extractWires (ICon i _ (ICInout { iInout = inout })) = ?mkinout i inout
 
   -- a held pack/unpack coercion: its wires are those of the value it
   -- holds (lzApplied references the same state, plus the dictionary,
   -- which is pure)
-  extractWires (ICon _ (ICLazyPack { lzOrig = o })) = extractWires o
-  extractWires (ICon _ (ICLazyUnpack { lzOrig = o })) = extractWires o
+  extractWires (ICon _ _ (ICLazyPack { lzOrig = o })) = extractWires o
+  extractWires (ICon _ _ (ICLazyUnpack { lzOrig = o })) = extractWires o
 
   extractWires _ = return ?z
 

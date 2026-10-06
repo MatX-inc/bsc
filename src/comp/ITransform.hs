@@ -151,7 +151,7 @@ iTrExprL :: Ctx PostElab -> [(IExpr PostElab, Integer)] -> IExpr PostElab -> T (
 iTrExprL ctx idxs e = expandHRef e >>= iTrExpr ctx idxs
 
 iTrExpr :: Ctx PostElab -> [(IExpr PostElab, Integer)] -> IExpr PostElab -> T (IExpr PostElab)
-iTrExpr ctx idxs (IAps pif@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) = do
+iTrExpr ctx idxs (IAps pif@(ICon _ _ (ICPrim PrimIf)) [t] [cnd, thn, els]) = do
         doBO <- getDoBO
         cnd1 <- iTrExpr ctx [] (expValShallow cnd)
         let cnd' = optBoolExpr doBO cnd1
@@ -159,7 +159,7 @@ iTrExpr ctx idxs (IAps pif@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) = do
         els' <- iTrExpr (addF cnd' ctx) idxs els
 --        traceM ("IF " ++ ppString (IAps pif [t] [cnd', thn', els']) ++ "\n   " ++ ppReadable (cnd, cnd0, cnd1))
         iTrExpr' ctx idxs pif [t] [cnd', thn', els']
-iTrExpr ctx idxs (IAps pcase@(ICon _ (ICPrim _ PrimCase)) ts@[sz_idx, elem_ty] (idx:dflt:ces)) = do
+iTrExpr ctx idxs (IAps pcase@(ICon _ _ (ICPrim PrimCase)) ts@[sz_idx, elem_ty] (idx:dflt:ces)) = do
         idx' <- iTrExpr ctx [] (expValShallow idx)
         let foldFn (res_ces, res_ctx) (c,e) = do
               c' <- iTrExpr ctx [] (expValShallow c)
@@ -170,11 +170,11 @@ iTrExpr ctx idxs (IAps pcase@(ICon _ (ICPrim _ PrimCase)) ts@[sz_idx, elem_ty] (
         let ces' = flattenPairs (reverse rev_ces')
         dflt' <- iTrExpr ctx' idxs dflt
         iTrExpr' ctx idxs pcase ts (idx':dflt':ces')
-iTrExpr ctx idxs (IAps psel@(ICon _ (ICPrim _ PrimArrayDynSelect)) ts@[elem_ty, ITNum sz_idx] [arr, idx]) = do
+iTrExpr ctx idxs (IAps psel@(ICon _ _ (ICPrim PrimArrayDynSelect)) ts@[elem_ty, ITNum sz_idx] [arr, idx]) = do
         idx' <- iTrExpr ctx [] (expValShallow idx)
         arr' <- iTrExpr ctx ((idx,sz_idx):idxs) (expValShallow arr)
         iTrExpr' ctx idxs psel ts [arr', idx']
-iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pupd@(ICon _ (ICPrim _ PrimArrayDynUpdate)) ts@[elem_ty, ITNum sz_upd_idx] [arr, upd_idx, val]) = do
+iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pupd@(ICon _ _ (ICPrim PrimArrayDynUpdate)) ts@[elem_ty, ITNum sz_upd_idx] [arr, upd_idx, val]) = do
         upd_idx' <- iTrExpr ctx [] (expValShallow upd_idx)
         let mkExtend in_sz out_sz e =
                 let k = out_sz - in_sz
@@ -188,7 +188,7 @@ iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pupd@(ICon _ (ICPrim _ PrimArray
         val' <- iTrExpr (addT eq_e ctx) idxs (expValShallow val)
         arr' <- iTrExpr (addF eq_e ctx) idxs (expValShallow arr)
         iTrExpr' ctx idxs pupd ts [arr', upd_idx', val']
-iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pbld@(ICon i (ICPrim _ PrimBuildArray)) ts es) = do
+iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pbld@(ICon i _ (ICPrim PrimBuildArray)) ts es) = do
         let foldFn (res_es, res_ctx) (n, e) = do
               let n_lit = iMkLitAt (getPosition i) (aitBit (ITNum sz_idx)) n
               let eq_e = iePrimEQ (ITNum sz_idx) idx n_lit
@@ -196,12 +196,12 @@ iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pbld@(ICon i (ICPrim _ PrimBuild
               return (e':res_es, addF eq_e res_ctx)
         (rev_es', _) <- foldM foldFn ([], ctx) (zip [0..] es)
         iTrExpr' ctx idxs pbld ts (reverse rev_es')
-iTrExpr ctx idxs (IAps pand@(ICon _ (ICPrim _ PrimBAnd)) ts [e1, e2]) = do
+iTrExpr ctx idxs (IAps pand@(ICon _ _ (ICPrim PrimBAnd)) ts [e1, e2]) = do
         e1' <- iTrExpr ctx [] e1
         e2'' <- iTrExpr (addT e1'  ctx) [] (expValShallow e2)
         e1'' <- iTrExpr (addT e2'' ctx) [] (expValShallow e1')
         iTrExpr' ctx idxs pand ts [e1'', e2'']
-iTrExpr ctx idxs (IAps por@(ICon _ (ICPrim _ PrimBOr)) ts [e1, e2]) = do
+iTrExpr ctx idxs (IAps por@(ICon _ _ (ICPrim PrimBOr)) ts [e1, e2]) = do
         e1' <- iTrExpr ctx [] e1
         e2'' <- iTrExpr (addF e1'  ctx) [] (expValShallow e2)
         e1'' <- iTrExpr (addF e2'' ctx) [] (expValShallow e1')
@@ -210,7 +210,7 @@ iTrExpr ctx idxs (IAps f ts es) = do
         es' <- mapM (iTrExpr ctx []) es
         iTrExpr' ctx idxs f ts es'
 -- XXX This makes some conditions simpler, but maybe other things get worse?
-iTrExpr ctx idxs (ICon _ (ICUndet t _)) | t == itAction = return icNoActions
+iTrExpr ctx idxs (ICon _ t (ICUndet _)) | t == itAction = return icNoActions
 iTrExpr ctx idxs e = return e
 
 expandHRef :: IExpr PostElab -> T (IExpr PostElab)
@@ -218,7 +218,7 @@ expandHRef (IAps f ts es) = do
         f' <- expandHRef f
         es' <- mapM expandHRef es
         return (IAps f' ts es')
-expandHRef e@(ICon i (ICValue { })) = do
+expandHRef e@(ICon i _ (ICValue { })) = do
         me <- getDefT i
         case me of
             Just e' -> return e'
@@ -229,10 +229,10 @@ expandHRef e = return e        -- XXX
 iTrExpr' :: Ctx PostElab -> [(IExpr PostElab, Integer)] -> IExpr PostElab -> [IType] -> [IExpr PostElab] -> T (IExpr PostElab)
 -- The arguments are already transformed in this context with no indices.
 -- Removing noAction does not require another traversal of the surviving action.
-iTrExpr' _ [] (ICon _ (ICPrim _ PrimJoinActions)) _
-    [ICon _ (ICPrim _ PrimNoActions), e] = return e
-iTrExpr' _ [] (ICon _ (ICPrim _ PrimJoinActions)) _
-    [e, ICon _ (ICPrim _ PrimNoActions)] = return e
+iTrExpr' _ [] (ICon _ _ (ICPrim PrimJoinActions)) _
+    [ICon _ _ (ICPrim PrimNoActions), e] = return e
+iTrExpr' _ [] (ICon _ _ (ICPrim PrimJoinActions)) _
+    [e, ICon _ _ (ICPrim PrimNoActions)] = return e
 iTrExpr' ctx idxs f ts es = do
         errh <- gets errHandle
         let (et, trans) = let ?errh = errh
@@ -298,8 +298,8 @@ iTrAp :: (KnownPhase a, ?errh :: ErrorHandle) => Ctx a -> IExpr a -> [IType] -> 
 {-# SPECIALISE iTrAp :: (?errh :: ErrorHandle) => Ctx PostElab -> IExpr PostElab -> [IType] -> [IExpr PostElab] -> (IExpr PostElab, Bool) #-}
 
 -- eliminate null actions
-iTrAp ctx (ICon _ (ICPrim _ PrimJoinActions)) _ [ICon _ (ICPrim _ PrimNoActions), e] = (e, True)
-iTrAp ctx (ICon _ (ICPrim _ PrimJoinActions)) _ [e, ICon _ (ICPrim _ PrimNoActions)] = (e, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimJoinActions)) _ [ICon _ _ (ICPrim PrimNoActions), e] = (e, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimJoinActions)) _ [e, ICon _ _ (ICPrim PrimNoActions)] = (e, True)
 
 -- if True  t e         -->  t
 -- if False t e         -->  e
@@ -312,22 +312,22 @@ iTrAp ctx (ICon _ (ICPrim _ PrimJoinActions)) _ [e, ICon _ (ICPrim _ PrimNoActio
 -- if c t False         -->  c && t
 -- if c t _             -->  t
 -- if c _ e             -->  e
-iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
+iTrAp ctx p@(ICon _ _ (ICPrim PrimIf)) [t] [cnd, thn, els]
         | isT ctx cnd = (thn, True)
         | isF ctx cnd = (els, True)
         | eqE thn els = (thn, True)
         | otherwise   = case (t == itBit1, thn, els) of
-           (True, ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }), ICon _ (ICInt { iVal = IntLit { ilValue = 0 } })) -> (cnd, True)
-           (True, ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }), _                            ) -> iTrAp2 ctx iOr  [] [cnd, els]
-           (True, ICon _ (ICInt { iVal = IntLit { ilValue = 0 } }), ICon _ (ICInt { iVal = IntLit { ilValue = 1 } })) -> iTrAp2 ctx iNot [] [cnd]
-           (True, ICon _ (ICInt { iVal = IntLit { ilValue = 0 } }), _                            ) -> iTrAp2 ctx iAnd [] [iTrApExp ctx iNot [] [cnd], els]
-           (True, _,                             ICon _ (ICInt { iVal = IntLit { ilValue = 1 } })) -> iTrAp2 ctx iOr  [] [iTrApExp ctx iNot [] [cnd], thn]
-           (True, _,                             ICon _ (ICInt { iVal = IntLit { ilValue = 0 } })) -> iTrAp2 ctx iAnd [] [cnd, thn]
+           (True, ICon _ _ (ICInt { iVal = IntLit { ilValue = 1 } }), ICon _ _ (ICInt { iVal = IntLit { ilValue = 0 } })) -> (cnd, True)
+           (True, ICon _ _ (ICInt { iVal = IntLit { ilValue = 1 } }), _                            ) -> iTrAp2 ctx iOr  [] [cnd, els]
+           (True, ICon _ _ (ICInt { iVal = IntLit { ilValue = 0 } }), ICon _ _ (ICInt { iVal = IntLit { ilValue = 1 } })) -> iTrAp2 ctx iNot [] [cnd]
+           (True, ICon _ _ (ICInt { iVal = IntLit { ilValue = 0 } }), _                            ) -> iTrAp2 ctx iAnd [] [iTrApExp ctx iNot [] [cnd], els]
+           (True, _,                             ICon _ _ (ICInt { iVal = IntLit { ilValue = 1 } })) -> iTrAp2 ctx iOr  [] [iTrApExp ctx iNot [] [cnd], thn]
+           (True, _,                             ICon _ _ (ICInt { iVal = IntLit { ilValue = 0 } })) -> iTrAp2 ctx iAnd [] [cnd, thn]
            (_,    _,                             _                            ) ->
                 case (expVal cnd, expVal thn, expVal els) of
 
                 -- if c1 t (if c2 t e)  -->  if (c1 || c2) t e
-                (_, _, IAps (ICon _ (ICPrim _ PrimIf)) _ [cnd2, thn2, els2]) | eqE thn thn2
+                (_, _, IAps (ICon _ _ (ICPrim PrimIf)) _ [cnd2, thn2, els2]) | eqE thn thn2
                         -> iTrAp2 ctx p [t] [ieOr cnd cnd2, thn, els2]
 {-
 -- This opt is an improvement, but it triggers too much inlining in some
@@ -341,7 +341,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
 
                 -- XXX Can this ever be harmful?  It removes a constant...
                 -- if (x == k) k e  -->  if (x == k) x e
-                (IAps (ICon _ (ICPrim _ PrimEQ)) _ [x, k@(ICon _ _)], _, _)
+                (IAps (ICon _ _ (ICPrim PrimEQ)) _ [x, k@(ICon _ _ _)], _, _)
                   |  k == thn && thn /= x
                   -> iTrAp2 ctx p [t] [cnd, x, els]
 
@@ -356,7 +356,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
 
                 --   if c _ _  -->  _
                 -- XXX Is this opt even used?
-                (_, ICon _ (ICUndet {}), ICon _ (ICUndet {}))
+                (_, ICon _ _ (ICUndet {}), ICon _ _ (ICUndet {}))
                     -> (els, True)
 
 {-
@@ -382,14 +382,14 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
                 -- Special case for turning pack.unpack into an identity
                 -- if (select _ l _ e == c) (c              ++ select k m _ e) x  -->  IF k+m == l
                 -- if (select _ l _ e == c) (select _ l _ e ++ select k m _ e) x
-                (IAps (ICon _ (ICPrim _ PrimEQ))      _ [sel1, c],
-                 IAps (ICon _ (ICPrim _ PrimConcat)) ts [c', sel2],
+                (IAps (ICon _ _ (ICPrim PrimEQ))      _ [sel1, c],
+                 IAps (ICon _ _ (ICPrim PrimConcat)) ts [c', sel2],
                  _) | eqE c c' &&
                       (case expVal sel1 of
-                        IAps (ICon _ (ICPrim _ PrimSelect)) [_, ITNum ls, _] [e] ->
+                        IAps (ICon _ _ (ICPrim PrimSelect)) [_, ITNum ls, _] [e] ->
                               case expVal sel2 of
-                                IAps (ICon _ (ICPrim _ PrimSelect)) [ITNum k, ITNum m, _] [e'] -> k + m == ls && eqE e e'
-                                ICon _ (ICUndet {}) -> True
+                                IAps (ICon _ _ (ICPrim PrimSelect)) [ITNum k, ITNum m, _] [e'] -> k + m == ls && eqE e e'
+                                ICon _ _ (ICUndet {}) -> True
                                 _ -> False
                         _ -> False
                       )
@@ -399,15 +399,15 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
                 -- if c (x1++x2) (y1++x2)  -->  (if c x1 y1) ++ x2
                 -- check if we make progress to avoid infinite loops
                 (_,
-                 IAps pc@(ICon _ (ICPrim _ PrimConcat)) ts@[t1,t2,_]   [x1, x2],
-                 IAps    (ICon _ (ICPrim _ PrimConcat)) ts'            [y1, y2]
+                 IAps pc@(ICon _ _ (ICPrim PrimConcat)) ts@[t1,t2,_]   [x1, x2],
+                 IAps    (ICon _ _ (ICPrim PrimConcat)) ts'            [y1, y2]
                  ) | ts == ts',
                      let (e1', opt1) = iTrAp ctx p [aitBit t1] [cnd, x1, y1],
                      let (e2', opt2) = iTrAp ctx p [aitBit t2] [cnd, x2, y2],
                      opt1 || opt2 ->
                      iTrAp2 ctx pc ts [e1', e2']
                 -- if (not c) t e -->  if c e t
-                (IAps (ICon _ (ICPrim _ PrimBNot)) _ [c], _, _)
+                (IAps (ICon _ _ (ICPrim PrimBNot)) _ [c], _, _)
                         -> iTrAp2 ctx p [t] [c,els,thn]
 
                 -- if c t e --> if c t[c=True] e[c=False]
@@ -422,9 +422,9 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
                 -- substitutions.
                 (_,_,_) | eqE cnd thn -> iTrAp2 ctx p [t] [cnd,iTrue,els]
                 (_,_,_) | eqE cnd els -> iTrAp2 ctx p [t] [cnd,thn,iFalse]
-                (_,IAps (ICon _ (ICPrim _ PrimBNot)) _ [x],_) | eqE cnd x
+                (_,IAps (ICon _ _ (ICPrim PrimBNot)) _ [x],_) | eqE cnd x
                                       -> iTrAp2 ctx p [t] [cnd,iFalse,els]
-                (_,_,IAps (ICon _ (ICPrim _ PrimBNot)) _ [x]) | eqE cnd x
+                (_,_,IAps (ICon _ _ (ICPrim PrimBNot)) _ [x]) | eqE cnd x
                                       -> iTrAp2 ctx p [t] [cnd,thn,iTrue]
 
                 -- if c then _ else e  -->  e
@@ -433,7 +433,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
                 -- Note that enabling the symmetric simplification for thn
                 -- when els is a don't care disturbs the expected pack . unpack
                 -- structure and makes some things worse while fixing others.
-                (_, ICon _ (ICUndet {}), _) -> (els, True)
+                (_, ICon _ _ (ICUndet {}), _) -> (els, True)
                 _ -> (IAps p [t] [cnd, thn, els], False)
 
 -- Boolean optimization
@@ -446,7 +446,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
 -- compiler might be able to optimize one path and not the other
 -- e1 && e2    --> False        IF e1 IMPLIES ~e2
 -- e2 && e1    --> False        IF e2 IMPLIES ~e1
-iTrAp ctx p@(ICon _ (ICPrim _ PrimBAnd)) _ [c1, c2]
+iTrAp ctx p@(ICon _ _ (ICPrim PrimBAnd)) _ [c1, c2]
          | isF ctx c1 || isF ctx c2 = (iFalse, True) -- fast special case
          | isUndet c1 || isUndet c2 = (iFalse, True)
          | implies ctx c1 c2        = (c1, True)
@@ -464,7 +464,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimBAnd)) _ [c1, c2]
 -- e1 || e2   --> True                 IF ~e1 IMPLIES e2
 -- e1 || e2   --> True          IF ~e2 IMPLIES e1
 
-iTrAp ctx p@(ICon _ (ICPrim _ PrimBOr)) _ [c1, c2]
+iTrAp ctx p@(ICon _ _ (ICPrim PrimBOr)) _ [c1, c2]
          | isT ctx c1 || isT ctx c2 = (iTrue, True) -- fast special case
          | isUndet c1 || isUndet c2 = (iTrue, True)
          | implies ctx c2 c1        = (c1, True)
@@ -481,33 +481,33 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimBOr)) _ [c1, c2]
 -- not (e1 RELOP e2)  -->  e1 (inv RELOP) e2
 -- not (if c t e)     -->  if c (not t) (not e)
 -- XXX There is no rule for pushing inside dynamic array select/update
-iTrAp ctx p@(ICon _ (ICPrim _ PrimBNot)) _ [c]
+iTrAp ctx p@(ICon _ _ (ICPrim PrimBNot)) _ [c]
          | isF ctx c = (iTrue, True)
          | isT ctx c = (iFalse, True)
          | otherwise = case expVal c of
-              IAps   (ICon _ (ICPrim _ PrimBNot)) _  [e]        -> (e, True)
-              IAps   (ICon _ (ICPrim _ PrimBAnd)) _  [e1, e2]   -> iTrAp2 ctx iOr  [] [iTrApExp ctx iNot [] [e1], iTrApExp ctx iNot [] [e2]]
-              IAps   (ICon _ (ICPrim _ PrimBOr))  _  [e1, e2]   -> iTrAp2 ctx iAnd [] [iTrApExp ctx iNot [] [e1], iTrApExp ctx iNot [] [e2]]
-              IAps i@(ICon _ (ICPrim _ PrimIf))  [t] [e1,e2,e3] -> iTrAp2 ctx i [t] [e1, iTrApExp ctx iNot [] [e2], iTrApExp ctx iNot [] [e3]]
-              u@(ICon i (ICUndet t k)) -> (u, True)
+              IAps   (ICon _ _ (ICPrim PrimBNot)) _  [e]        -> (e, True)
+              IAps   (ICon _ _ (ICPrim PrimBAnd)) _  [e1, e2]   -> iTrAp2 ctx iOr  [] [iTrApExp ctx iNot [] [e1], iTrApExp ctx iNot [] [e2]]
+              IAps   (ICon _ _ (ICPrim PrimBOr))  _  [e1, e2]   -> iTrAp2 ctx iAnd [] [iTrApExp ctx iNot [] [e1], iTrApExp ctx iNot [] [e2]]
+              IAps i@(ICon _ _ (ICPrim PrimIf))  [t] [e1,e2,e3] -> iTrAp2 ctx i [t] [e1, iTrApExp ctx iNot [] [e2], iTrApExp ctx iNot [] [e3]]
+              u@(ICon i t (ICUndet k)) -> (u, True)
               _                                                 -> (IAps p [] [c], False)
 
 -- e == e --> True
-iTrAp ctx (ICon _ (ICPrim _ PrimEQ)) _ [e, e'] | e == e' = (iTrue, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimEQ)) _ [e, e'] | e == e' = (iTrue, True)
 
 -- e <= e --> True
 -- e < e --> False
-iTrAp ctx (ICon _ (ICPrim _ p)) _ [e, e'] | isLE p, e == e' = (iTrue, True)
+iTrAp ctx (ICon _ _ (ICPrim p)) _ [e, e'] | isLE p, e == e' = (iTrue, True)
   where isLE = (`elem` [PrimULE, PrimSLE])
-iTrAp ctx (ICon _ (ICPrim _ p)) _ [e, e'] | isLT p, e == e' = (iFalse, True)
+iTrAp ctx (ICon _ _ (ICPrim p)) _ [e, e'] | isLT p, e == e' = (iFalse, True)
   where isLT = (`elem` [PrimULT, PrimSLT])
 
 -- XXX: preserve the _ "kind"? Or treat different _ differently?
 -- _ == e --> _
 -- Note that this transformation is wrong for values of size 0. All values of size 0 (even undetermined or undefined ones) are 0.
-iTrAp ctx (ICon _ (ICPrim _ PrimEQ)) [ITNum n] [e1@(ICon _ (ICUndet {iuKind = u})), e2] | n > 0 = (icUndet itBit1 u, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimEQ)) [ITNum n] [e1@(ICon _ _ (ICUndet {iuKind = u})), e2] | n > 0 = (icUndet itBit1 u, True)
 -- e == _ --> _
-iTrAp ctx (ICon _ (ICPrim _ PrimEQ)) [ITNum n] [e1, e2@(ICon _ (ICUndet {iuKind = u}))] | n > 0 = (icUndet itBit1 u, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimEQ)) [ITNum n] [e1, e2@(ICon _ _ (ICUndet {iuKind = u}))] | n > 0 = (icUndet itBit1 u, True)
 
 
 -- e + c1 == c2  -->  e == c2 - c1
@@ -516,16 +516,16 @@ iTrAp ctx (ICon _ (ICPrim _ PrimEQ)) [ITNum n] [e1, e2@(ICon _ (ICUndet {iuKind 
 --   the flipped versions are not equivalent in the presence of over-
 --   and under-flow.
 -- e ^ c1 == c2  -->  e == c2 ^ c1
-iTrAp ctx rel_c@(ICon _ (ICPrim _ PrimEQ)) t1@[ITNum i1] [e', c2] |  -- app of a PrimEQ with a single type variable
+iTrAp ctx rel_c@(ICon _ _ (ICPrim PrimEQ)) t1@[ITNum i1] [e', c2] |  -- app of a PrimEQ with a single type variable
     (isIConInt c2) &&  -- c2 is a constant
     case expVal e' of
-        (IAps (ICon _ (ICPrim _ op)) t2@[ITNum i2] [e, c1]) ->       -- app of a prim op with a single type variable
+        (IAps (ICon _ _ (ICPrim op)) t2@[ITNum i2] [e, c1]) ->       -- app of a prim op with a single type variable
              (isIConInt c1) && (not (isIConInt e)) &&  -- c1 is a constant, e is not a constant (to ensure progress)
              ((op == PrimAdd) || (op == PrimSub) || (op == PrimXor)) &&   -- op is one of these
              (i1 == i2)  -- the type variables are the same
         _ -> False
   = case expVal e' of
-        (IAps opc@(ICon _ (ICPrim _ op)) _ [e, c1]) ->
+        (IAps opc@(ICon _ _ (ICPrim op)) _ [e, c1]) ->
             let
                 inv_op = case op of
                              PrimAdd -> PrimSub
@@ -550,8 +550,8 @@ iTrAp ctx rel_c@(ICon _ (ICPrim _ PrimEQ)) t1@[ITNum i1] [e', c2] |  -- app of a
 -- preventing case statement reconstruction by obscuring the comparison.
 
 -- e1 ++ e2 == e3 => (e1 == e3[0:i1 - 1] && e2 == e3[i1:i3])
-iTrAp ctx eq@(ICon ideq (ICPrim _ PrimEQ)) t_eq@[ITNum i_eq]
-         [e_concat@(IAps cat_con@(ICon _ (ICPrim _ PrimConcat))
+iTrAp ctx eq@(ICon ideq _ (ICPrim PrimEQ)) t_eq@[ITNum i_eq]
+         [e_concat@(IAps cat_con@(ICon _ _ (ICPrim PrimConcat))
                          cat_ty@[ITNum i1, ITNum i2, ITNum i3]
                          cat_args@[e1, e2]),
           e3] | i3 == i_eq = -- otherwise the comparison is buggy
@@ -569,9 +569,9 @@ iTrAp ctx eq@(ICon ideq (ICPrim _ PrimEQ)) t_eq@[ITNum i_eq]
         (e3',mod_e3)  = iTrExprIfAp ctx e3
 
 -- e3 == e1 ++ e2 => (e1 == e3[0:i1 - 1] && e2 == e3[i1:i3])
-iTrAp ctx eq@(ICon ideq (ICPrim _ PrimEQ)) t_eq@[ITNum i_eq]
+iTrAp ctx eq@(ICon ideq _ (ICPrim PrimEQ)) t_eq@[ITNum i_eq]
          [e3,
-          e_concat@(IAps cat_con@(ICon _ (ICPrim _ PrimConcat))
+          e_concat@(IAps cat_con@(ICon _ _ (ICPrim PrimConcat))
                          cat_ty@[ITNum i1, ITNum i2, ITNum i3]
                          cat_args@[e1, e2])] | i3 == i_eq = -- otherwise the comparison is buggy
       let improved x = (x == iTrue) || (x == iFalse)
@@ -587,31 +587,31 @@ iTrAp ctx eq@(ICon ideq (ICPrim _ PrimEQ)) t_eq@[ITNum i_eq]
         (e3',mod_e3)  = iTrExprIfAp ctx e3
 
 -- select n 0 n e  -->  e
-iTrAp ctx (ICon _ (ICPrim _ PrimSelect)) [n, ITNum 0, n'] [e] | n == n' = (e, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimSelect)) [n, ITNum 0, n'] [e] | n == n' = (e, True)
 
 -- select 0 _ _ e  -->  0
-iTrAp ctx (ICon _ (ICPrim _ PrimSelect)) [t@(ITNum 0), _, _] [_]  = (mkZero t, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimSelect)) [t@(ITNum 0), _, _] [_]  = (mkZero t, True)
 
 -- e * 0  -->  0
 -- 0 * e  -->  0
-iTrAp ctx (ICon _ (ICPrim _ PrimMul)) [_,_,sz] [e,c] | isZero c = (mkZero sz, True)
-iTrAp ctx (ICon _ (ICPrim _ PrimMul)) [_,_,sz] [c,e] | isZero c = (mkZero sz, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimMul)) [_,_,sz] [e,c] | isZero c = (mkZero sz, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimMul)) [_,_,sz] [c,e] | isZero c = (mkZero sz, True)
 
 -- e * 1  -->  e
 -- 1 * e  -->  e
-iTrAp ctx (ICon _ (ICPrim _ PrimMul)) [se,sk@(ITNum k_size),sz] [e,c] | isOne c = (e', True)
+iTrAp ctx (ICon _ _ (ICPrim PrimMul)) [se,sk@(ITNum k_size),sz] [e,c] | isOne c = (e', True)
     where e' = iTrApExp ctx icPrimConcat [sk,se,sz] [iMkLitSize k_size 0, e]
-iTrAp ctx (ICon _ (ICPrim _ PrimMul)) [sk@(ITNum k_size),se,sz] [c,e] | isOne c = (e', True)
+iTrAp ctx (ICon _ _ (ICPrim PrimMul)) [sk@(ITNum k_size),se,sz] [c,e] | isOne c = (e', True)
     where e' = iTrApExp ctx icPrimConcat [sk,se,sz] [iMkLitSize k_size 0, e]
 
 -- e * 2^k  -->  e << k
-iTrAp ctx (ICon _ (ICPrim _ PrimMul)) [se,sk@(ITNum k_size),sz] [e, ICon _ (ICInt { iVal = IntLit { ilValue = n } })]
+iTrAp ctx (ICon _ _ (ICPrim PrimMul)) [se,sk@(ITNum k_size),sz] [e, ICon _ _ (ICInt { iVal = IntLit { ilValue = n } })]
   | m /= Nothing = iTrAp2 ctx icPrimSL [sz, ITNum 32] [e', iMkLit itNat k]
     where e' = iTrApExp ctx icPrimConcat [sk, se, sz] [iMkLitSize k_size 0, e]
           m  = iLog2 n
           k  = fromJustOrErr "iTraAp iLog2" m
 -- 2^k * e  -->  e << k
-iTrAp ctx (ICon _ (ICPrim _ PrimMul)) [sk@(ITNum k_size),se,sz] [ICon _ (ICInt { iVal = IntLit { ilValue = n } }), e]
+iTrAp ctx (ICon _ _ (ICPrim PrimMul)) [sk@(ITNum k_size),se,sz] [ICon _ _ (ICInt { iVal = IntLit { ilValue = n } }), e]
   | m /= Nothing = iTrAp2 ctx icPrimSL [sz, ITNum 32] [e', iMkLit itNat k]
     where e' = iTrApExp ctx icPrimConcat [sk, se, sz] [iMkLitSize k_size 0, e]
           m  = iLog2 n
@@ -622,7 +622,7 @@ iTrAp ctx (ICon _ (ICPrim _ PrimMul)) [sk@(ITNum k_size),se,sz] [ICon _ (ICInt {
 -- 0 & e  -->  0
 -- 1 & e  -->  e
 -- and v.v. (with better granularity)
-iTrAp ctx p@(ICon _ (ICPrim _ PrimOr)) [ITNum n] [ICon _ (ICInt {iVal = IntLit {ilValue = i}}), e] | n > 0 =
+iTrAp ctx p@(ICon _ _ (ICPrim PrimOr)) [ITNum n] [ICon _ _ (ICInt {iVal = IntLit {ilValue = i}}), e] | n > 0 =
    case getMaskTail i n of
      Zeroes l ->
       let k = n - l
@@ -637,9 +637,9 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimOr)) [ITNum n] [ICon _ (ICInt {iVal = IntLit {
       in iTrAp2 ctx icPrimConcat [ITNum k, ITNum l, ITNum n] [hd, tl]
  where sel = icSelect (getIExprPosition p)
 
-iTrAp ctx p@(ICon _ (ICPrim _ PrimOr)) t@[ITNum n] [e, c@(ICon _ (ICInt {}))] = iTrAp ctx p t [c, e]
+iTrAp ctx p@(ICon _ _ (ICPrim PrimOr)) t@[ITNum n] [e, c@(ICon _ _ (ICInt {}))] = iTrAp ctx p t [c, e]
 
-iTrAp ctx p@(ICon _ (ICPrim _ PrimAnd)) [ITNum n] [ICon _ (ICInt {iVal = IntLit {ilValue = i}}), e] | n > 0 =
+iTrAp ctx p@(ICon _ _ (ICPrim PrimAnd)) [ITNum n] [ICon _ _ (ICInt {iVal = IntLit {ilValue = i}}), e] | n > 0 =
   case getMaskTail i n of
     Zeroes l ->
      let k = n - l
@@ -654,13 +654,13 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimAnd)) [ITNum n] [ICon _ (ICInt {iVal = IntLit 
      in iTrAp2 ctx icPrimConcat [ITNum k, ITNum l, ITNum n] [hd, tl]
  where sel = icSelect (getIExprPosition p)
 
-iTrAp ctx p@(ICon _ (ICPrim _ PrimAnd)) t@[ITNum n] [e, c@(ICon _ (ICInt {}))] = iTrAp ctx p t [c, e]
+iTrAp ctx p@(ICon _ _ (ICPrim PrimAnd)) t@[ITNum n] [e, c@(ICon _ _ (ICInt {}))] = iTrAp ctx p t [c, e]
 
 -- 0 ^ e --> e
 -- 1 ^ e --> ~e
 -- and v.v.
 -- with better granularity
-iTrAp ctx p@(ICon _ (ICPrim _ PrimXor)) [ITNum n] [ICon _ (ICInt {iVal = IntLit {ilValue = i}}), e] | n > 0 =
+iTrAp ctx p@(ICon _ _ (ICPrim PrimXor)) [ITNum n] [ICon _ _ (ICInt {iVal = IntLit {ilValue = i}}), e] | n > 0 =
   case getMaskTail i n of
     Zeroes l ->
      let k = n - l
@@ -676,7 +676,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimXor)) [ITNum n] [ICon _ (ICInt {iVal = IntLit 
      in iTrAp2 ctx icPrimConcat [ITNum k, ITNum l, ITNum n] [hd, tl]
  where sel = icSelect (getIExprPosition p)
 
-iTrAp ctx p@(ICon _ (ICPrim _ PrimXor)) t@[ITNum n] [e, c@(ICon _ (ICInt {}))] = iTrAp ctx p t [c, e]
+iTrAp ctx p@(ICon _ _ (ICPrim PrimXor)) t@[ITNum n] [e, c@(ICon _ _ (ICInt {}))] = iTrAp ctx p t [c, e]
 
 {-
 iTrAp ctx (ICon _ (ICPrim _ PrimOr))  _ [c, e] | isZero    c = (e, True)
@@ -705,27 +705,27 @@ iTrAp ctx (ICon _ (ICPrim _ PrimXor)) [t] [e, c] | isAllOnes c = iTrAp2 ctx icPr
 -- 0 + e  -->  e
 -- e + 0  -->  e
 -- e - 0  -->  e
-iTrAp ctx (ICon _ (ICPrim _ PrimAdd)) _ [c, e] | isZero c = (e, True)
-iTrAp ctx (ICon _ (ICPrim _ PrimAdd)) _ [e, c] | isZero c = (e, True)
-iTrAp ctx (ICon _ (ICPrim _ PrimSub)) _ [e, c] | isZero c = (e, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimAdd)) _ [c, e] | isZero c = (e, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimAdd)) _ [e, c] | isZero c = (e, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimSub)) _ [e, c] | isZero c = (e, True)
 
 -- e - e  -->  0
-iTrAp ctx (ICon _ (ICPrim _ PrimSub)) [t] [e, e'] | e == e' = (mkZero t, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimSub)) [t] [e, e'] | e == e' = (mkZero t, True)
 
 -- e / 1    -->  e
-iTrAp ctx (ICon _ (ICPrim _ PrimQuot)) _ [e, c] | isOne c = (e, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimQuot)) _ [e, c] | isOne c = (e, True)
 
 -- e / 2^k  -->  e >> k
-iTrAp ctx (ICon _ (ICPrim _ PrimQuot)) [se,_] [e, ICon _ (ICInt { iVal = IntLit { ilValue = n } })]
+iTrAp ctx (ICon _ _ (ICPrim PrimQuot)) [se,_] [e, ICon _ _ (ICInt { iVal = IntLit { ilValue = n } })]
   | m /= Nothing = iTrAp2 ctx icPrimSRL [se] [e, iMkLit itNat k]
     where m = iLog2 n
           k = fromJustOrErr "iTraAp iLog2" m
 
 -- e % 1    --> 0
-iTrAp ctx (ICon _ (ICPrim _ PrimRem)) [_,sk] [_,c] | isOne c = (mkZero sk, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimRem)) [_,sk] [_,c] | isOne c = (mkZero sk, True)
 
 -- e % 2^k  --> e[k-1:0]  (with optional zero extension)
-iTrAp ctx (ICon remid (ICPrim _ PrimRem)) [se,sk@(ITNum k_size)] [e, ICon _ (ICInt { iVal = IntLit { ilValue = n } })]
+iTrAp ctx (ICon remid _ (ICPrim PrimRem)) [se,sk@(ITNum k_size)] [e, ICon _ _ (ICInt { iVal = IntLit { ilValue = n } })]
   | m /= Nothing = if (pad == 0)
                    then (e', True)
                    else iTrAp2 ctx icPrimConcat [ITNum pad, ITNum k, sk] [iMkLitSize pad 0, e']
@@ -740,12 +740,12 @@ iTrAp ctx (ICon remid (ICPrim _ PrimRem)) [se,sk@(ITNum k_size)] [e, ICon _ (ICI
 -- e   <= 0xe  -->  e /= 0xf
 -- e   <  0xf  -->  e /= 0xf
 -- e   <= 0xf  -->  True
-iTrAp ctx (ICon _ (ICPrim _ PrimULT)) [_] [_, c] | isZero    c = (iFalse, True)
-iTrAp ctx (ICon _ (ICPrim _ PrimULE)) [t] [e, c] | isZero    c = iTrAp2 ctx icPrimEQ [t] [e, c]
-iTrAp ctx (ICon _ (ICPrim _ PrimULT)) [t] [e, c] | isOne     c = iTrAp2 ctx icPrimEQ [t] [e, mkZero t]
-iTrAp ctx (ICon _ (ICPrim _ PrimULE)) [t] [e, c] | isAlmost  c = iTrAp2 ctx iNot     []  [iTrApExp ctx icPrimEQ [t] [e, inc c]]
-iTrAp ctx (ICon _ (ICPrim _ PrimULT)) [t] [e, c] | isAllOnes c = iTrAp2 ctx iNot     []  [iTrApExp ctx icPrimEQ [t] [e, c]]
-iTrAp ctx (ICon _ (ICPrim _ PrimULE)) [_] [_, c] | isAllOnes c = (iTrue, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimULT)) [_] [_, c] | isZero    c = (iFalse, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimULE)) [t] [e, c] | isZero    c = iTrAp2 ctx icPrimEQ [t] [e, c]
+iTrAp ctx (ICon _ _ (ICPrim PrimULT)) [t] [e, c] | isOne     c = iTrAp2 ctx icPrimEQ [t] [e, mkZero t]
+iTrAp ctx (ICon _ _ (ICPrim PrimULE)) [t] [e, c] | isAlmost  c = iTrAp2 ctx iNot     []  [iTrApExp ctx icPrimEQ [t] [e, inc c]]
+iTrAp ctx (ICon _ _ (ICPrim PrimULT)) [t] [e, c] | isAllOnes c = iTrAp2 ctx iNot     []  [iTrApExp ctx icPrimEQ [t] [e, c]]
+iTrAp ctx (ICon _ _ (ICPrim PrimULE)) [_] [_, c] | isAllOnes c = (iTrue, True)
 
 -- 0xf <    e  -->  False
 -- 0xf <=   e  -->  e == 0xf
@@ -753,31 +753,31 @@ iTrAp ctx (ICon _ (ICPrim _ PrimULE)) [_] [_, c] | isAllOnes c = (iTrue, True)
 -- 1   <=   e  -->  e /= 0
 -- 0   <    e  -->  e /= 0
 -- 0   <=   e  -->  True
-iTrAp ctx (ICon _ (ICPrim _ PrimULT)) [_] [c, _] | isAllOnes c = (iFalse, True)
-iTrAp ctx (ICon _ (ICPrim _ PrimULE)) [t] [c, e] | isAllOnes c = iTrAp2 ctx icPrimEQ [t] [e, c]
-iTrAp ctx (ICon _ (ICPrim _ PrimULT)) [t] [c, e] | isAlmost  c = iTrAp2 ctx icPrimEQ [t] [e, inc c]
-iTrAp ctx (ICon _ (ICPrim _ PrimULE)) [t] [c, e] | isOne     c = iTrAp2 ctx iNot     []  [iTrApExp ctx icPrimEQ [t] [e, mkZero t]]
-iTrAp ctx (ICon _ (ICPrim _ PrimULT)) [t] [c, e] | isZero    c = iTrAp2 ctx iNot     []  [iTrApExp ctx icPrimEQ [t] [e, c]]
-iTrAp ctx (ICon _ (ICPrim _ PrimULE)) [_] [c, _] | isZero    c = (iTrue, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimULT)) [_] [c, _] | isAllOnes c = (iFalse, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimULE)) [t] [c, e] | isAllOnes c = iTrAp2 ctx icPrimEQ [t] [e, c]
+iTrAp ctx (ICon _ _ (ICPrim PrimULT)) [t] [c, e] | isAlmost  c = iTrAp2 ctx icPrimEQ [t] [e, inc c]
+iTrAp ctx (ICon _ _ (ICPrim PrimULE)) [t] [c, e] | isOne     c = iTrAp2 ctx iNot     []  [iTrApExp ctx icPrimEQ [t] [e, mkZero t]]
+iTrAp ctx (ICon _ _ (ICPrim PrimULT)) [t] [c, e] | isZero    c = iTrAp2 ctx iNot     []  [iTrApExp ctx icPrimEQ [t] [e, c]]
+iTrAp ctx (ICon _ _ (ICPrim PrimULE)) [_] [c, _] | isZero    c = (iTrue, True)
 
 -- e < 0 (signed)   ==> sign-bit
 -- e <= -1 (signed) ==> sign-bit
-iTrAp ctx (ICon i (ICPrim _ PrimSLT)) [ITNum n] [e, c] | isZero c = iTrAp2 ctx sel [ITNum 1, ITNum (n - 1), ITNum n] [e]
+iTrAp ctx (ICon i _ (ICPrim PrimSLT)) [ITNum n] [e, c] | isZero c = iTrAp2 ctx sel [ITNum 1, ITNum (n - 1), ITNum n] [e]
   where sel = icSelect (getIdPosition i)
-iTrAp ctx (ICon i (ICPrim _ PrimSLE)) [ITNum n] [e, c] | isAllOnes c = iTrAp2 ctx sel [ITNum 1, ITNum (n - 1), ITNum n] [e]
+iTrAp ctx (ICon i _ (ICPrim PrimSLE)) [ITNum n] [e, c] | isAllOnes c = iTrAp2 ctx sel [ITNum 1, ITNum (n - 1), ITNum n] [e]
   where sel = icSelect (getIdPosition i)
 
 -- Bit fields of size 0 always have the value 0.  Proceed accordingly.
-iTrAp ctx (ICon _ (ICPrim _ p)) [ITNum 0] _ | argRes p = (iMkLitSize 0 0, True)
+iTrAp ctx (ICon _ _ (ICPrim p)) [ITNum 0] _ | argRes p = (iMkLitSize 0 0, True)
   where argRes p = p `elem` [PrimAdd, PrimSub, PrimAnd, PrimOr, PrimXor, PrimInv, PrimNeg]
 -- shifts take two type arguments (the item size and the index size)
-iTrAp ctx (ICon _ (ICPrim _ p)) [ITNum 0,_] _ | p `elem` [PrimSL, PrimSRL, PrimSRA] = (iMkLitSize 0 0, True)
-iTrAp ctx (ICon _ (ICPrim _ PrimMul)) [_,_,ITNum 0] _ = (iMkLitSize 0 0, True) -- PrimMul takes three numeric type arguments
-iTrAp ctx (ICon _ (ICPrim _ p)) [ITNum 0] _ | eqOp p = (iTrue, True)
+iTrAp ctx (ICon _ _ (ICPrim p)) [ITNum 0,_] _ | p `elem` [PrimSL, PrimSRL, PrimSRA] = (iMkLitSize 0 0, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimMul)) [_,_,ITNum 0] _ = (iMkLitSize 0 0, True) -- PrimMul takes three numeric type arguments
+iTrAp ctx (ICon _ _ (ICPrim p)) [ITNum 0] _ | eqOp p = (iTrue, True)
   where eqOp p = p `elem` [PrimEQ, PrimULE, PrimSLE]
-iTrAp ctx (ICon _ (ICPrim _ p)) [ITNum 0] _ | ltOp p = (iFalse, True)
+iTrAp ctx (ICon _ _ (ICPrim p)) [ITNum 0] _ | ltOp p = (iFalse, True)
   where ltOp p = p `elem` [PrimULT, PrimSLT]
-iTrAp ctx (ICon _ (ICPrim _ PrimSignExt)) [_, ITNum 0, ITNum s] _ = (iMkLitSize s 0, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimSignExt)) [_, ITNum 0, ITNum s] _ = (iMkLitSize s 0, True)
 
 -- --e --> e
 -- ~~e --> e
@@ -786,18 +786,18 @@ iTrAp ctx (ICon _ (ICPrim _ PrimSignExt)) [_, ITNum 0, ITNum s] _ = (iMkLitSize 
 -- ~ (a ++ b) -> (~a) ++ (~b)
 -- - _ -> _
 -- ~ _ -> _
-iTrAp ctx cneg@(ICon _ (ICPrim _ p)) [ty] [exp] | p == PrimNeg || p == PrimInv =
+iTrAp ctx cneg@(ICon _ _ (ICPrim p)) [ty] [exp] | p == PrimNeg || p == PrimInv =
     case expVal exp of
-    IAps cneg2@(ICon _ (ICPrim _ p')) [ty] [e] | p' == p -> (e, True)
-    IAps cif@(ICon _ (ICPrim _ PrimIf)) [tif] [c, t, e] | isIConInt t || isIConInt e ->
+    IAps cneg2@(ICon _ _ (ICPrim p')) [ty] [e] | p' == p -> (e, True)
+    IAps cif@(ICon _ _ (ICPrim PrimIf)) [tif] [c, t, e] | isIConInt t || isIConInt e ->
         iTrAp2 ctx cif [tif] [c, iTrApExp ctx cneg [ty] [t], iTrApExp ctx cneg [ty] [e]]
-    IAps ccat@(ICon _ (ICPrim _ PrimConcat)) ts@[l, m, _] [e1, e2] | p == PrimInv ->
+    IAps ccat@(ICon _ _ (ICPrim PrimConcat)) ts@[l, m, _] [e1, e2] | p == PrimInv ->
         iTrAp2 ctx ccat ts [iTrApExp ctx cneg [l] [e1], iTrApExp ctx cneg [m] [e2]]
-    u@(ICon i (ICUndet t k)) -> (u, True)
+    u@(ICon i t (ICUndet k)) -> (u, True)
     _ -> iTrApTail ctx cneg [ty] [exp]
 
 -- e >> n  -->  0 ++ select (k-n) n k e
-iTrAp ctx (ICon srl (ICPrim _ PrimSRL)) [t@(ITNum k), _] [e, ICon _ (ICInt { iVal = IntLit { ilValue = n } })] =
+iTrAp ctx (ICon srl _ (ICPrim PrimSRL)) [t@(ITNum k), _] [e, ICon _ _ (ICInt { iVal = IntLit { ilValue = n } })] =
         let z = iMkLitSize n 0
             tt = mkNumConT (k-n)
             tn = mkNumConT n
@@ -808,7 +808,7 @@ iTrAp ctx (ICon srl (ICPrim _ PrimSRL)) [t@(ITNum k), _] [e, ICon _ (ICInt { iVa
                 iTrAp2 ctx icPrimConcat [tn, tt, t] [z, e']
 
 -- e << n  -->  trunc (e ++ 0)
-iTrAp ctx (ICon sl (ICPrim _ PrimSL)) [t@(ITNum k), _] [e, ICon _ (ICInt { iVal = IntLit { ilValue = n } })] =
+iTrAp ctx (ICon sl _ (ICPrim PrimSL)) [t@(ITNum k), _] [e, ICon _ _ (ICInt { iVal = IntLit { ilValue = n } })] =
         let z = iMkLitSize n 0
             tt = mkNumConT (k-n)
             tn = mkNumConT n
@@ -819,21 +819,21 @@ iTrAp ctx (ICon sl (ICPrim _ PrimSL)) [t@(ITNum k), _] [e, ICon _ (ICInt { iVal 
                 iTrAp2 ctx icPrimConcat [tt, tn, t] [e', z]
 
 -- e :: Bit 1 >> x or e :: Bit 1 << x -> if (x == 0) e else 0 --> (x == 0) && e
-iTrAp ctx (ICon _ (ICPrim _ p)) [ITNum 1, ITNum t] [e, shft] | p `elem` [PrimSL, PrimSRL] =
+iTrAp ctx (ICon _ _ (ICPrim p)) [ITNum 1, ITNum t] [e, shft] | p `elem` [PrimSL, PrimSRL] =
     iTrAp2 ctx icIf [itBit1] [isZero, e, mkZero (ITNum 1)]
   where isZero = IAps icPrimEQ [ITNum t] [shft, mkZero (ITNum t)]
 
 
 -- e :: Bit 1 >> x (arithmetic) --> e
 -- we rely on looping to recursively simplify e
-iTrAp ctx (ICon _ (ICPrim _ PrimSRA)) [ITNum 1, ITNum t] [e, shft] = (e, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimSRA)) [ITNum 1, ITNum t] [e, shft] = (e, True)
 
 -- Associativity and commutativity (for +, &, |)
 -- (k1 op (k2 op e))  -->   (e op (k1 op k2))
 -- (k1 op (e op k2))  -->   (e op (k1 op k2))
 -- ((e op k1) op k2)  -->   (e op (k1 op k2))
 -- ((k1 op e) op k2)  -->   (e op (k1 op k2))
-iTrAp ctx p@(ICon _ (ICPrim _ prim)) [t] [e1,e2]
+iTrAp ctx p@(ICon _ _ (ICPrim prim)) [t] [e1,e2]
   | prim `elem` [PrimAdd, PrimAnd, PrimOr] &&
     (((isIConInt e1) && (isConstExprForPrim prim e2)) ||
      ((isIConInt e2) && (isConstExprForPrim prim e1)))
@@ -846,9 +846,9 @@ iTrAp ctx p@(ICon _ (ICPrim _ prim)) [t] [e1,e2]
                    _ -> internalError("iTrAp: associativity")
 
 -- extract n k e h l -->  zeroExt (h-l+1) (k-(h-l+1)) k (select (h-l+1) l n e)
-iTrAp ctx fun@(ICon iext (ICPrim _ PrimExtract)) ts@[tn@(ITNum n), _, ITNum k] es@[e, eh, el]
-  | (ICon _ (ICInt { iVal = IntLit { ilValue = h } })) <- eh
-  , (ICon _ (ICInt { iVal = IntLit { ilValue = l } })) <- el
+iTrAp ctx fun@(ICon iext _ (ICPrim PrimExtract)) ts@[tn@(ITNum n), _, ITNum k] es@[e, eh, el]
+  | (ICon _ _ (ICInt { iVal = IntLit { ilValue = h } })) <- eh
+  , (ICon _ _ (ICInt { iVal = IntLit { ilValue = l } })) <- el
   = let
         exp = iTrApExp ctx (icSelect (getIdPosition iext)) [mkNumConT sz, mkNumConT l, tn] [e]
         sz = mask 32 (h-l+1) -- mask it to allow h == l-1
@@ -863,13 +863,13 @@ iTrAp ctx fun@(ICon iext (ICPrim _ PrimExtract)) ts@[tn@(ITNum n), _, ITNum k] e
         iTrAp2 ctx icPrimConcat [mkNumConT k_sz, mkNumConT sz, mkNumConT k] [iMkLitSize k_sz 0, exp]
 
 -- select n k m e --> error, n+k > m
-iTrAp ctx fun@(ICon sel (ICPrim _ PrimSelect)) ts@[ITNum n, ITNum k, ITNum m] as | n+k > m =
+iTrAp ctx fun@(ICon sel _ (ICPrim PrimSelect)) ts@[ITNum n, ITNum k, ITNum m] as | n+k > m =
     bsErrorUnsafe ?errh
         [(getIdPosition sel,
           EBitSel (show n) (show k) (show m) (ppString (IAps fun ts as)))]
 
 -- select n ? ? _  -->  _
-iTrAp ctx (ICon sel (ICPrim _ PrimSelect)) [ITNum n, _, _] [ICon _ (ICUndet { iuKind = u })] = (icUndet (itBitN n) u, True)
+iTrAp ctx (ICon sel _ (ICPrim PrimSelect)) [ITNum n, _, _] [ICon _ _ (ICUndet { iuKind = u })] = (icUndet (itBitN n) u, True)
 
 {-
 -- XXX join with above
@@ -889,7 +889,7 @@ iTrAp ctx fun@(ICon iext (ICPrim _ PrimExtract)) args@[T tn, T tk, E e, E eh, E 
 
 -- x::Bit1 == 1  -->  x
 -- x::Bit1 == 0  -->  not x
-iTrAp ctx e0@(ICon _ (ICPrim _ PrimEQ)) [ITNum 1] [e, ICon _ (ICInt { iVal = IntLit { ilValue = i } })]
+iTrAp ctx e0@(ICon _ _ (ICPrim PrimEQ)) [ITNum 1] [e, ICon _ _ (ICInt { iVal = IntLit { ilValue = i } })]
         | i == 0    = iTrAp2 ctx iNot [] [e]
         | i == 1    = (e, True)
         | otherwise = internalError ("conApN ==")
@@ -899,21 +899,21 @@ iTrAp ctx e0@(ICon _ (ICPrim _ PrimEQ)) [ITNum 1] [e, ICon _ (ICInt { iVal = Int
 -- (other direction is handled by the flip rule below)
 -- also can be applied to any op which has a 1-bit result
 -- (and possibly are heuristics for when it's worth applying to other ops)
-iTrAp ctx rel_c@(ICon _ (ICPrim _ p)) t1@[ITNum i1] [e', c] |
+iTrAp ctx rel_c@(ICon _ _ (ICPrim p)) t1@[ITNum i1] [e', c] |
     -- app of a 1-bit prim with a single type variable
     (isIConInt c) &&  -- c is a constant
     -- XXX can we include other ops?
     (p `elem` [PrimEQ, PrimULT, PrimULE, PrimSLT, PrimSLE]) &&
     (isIfElseOfIConInt e')
-  = let ap (IAps i@(ICon _ (ICPrim _ PrimIf)) ts [cnd, thn, els]) =
+  = let ap (IAps i@(ICon _ _ (ICPrim PrimIf)) ts [cnd, thn, els]) =
             -- the result of the "if" is now 1-bit
             (IAps i [itBit1] [cnd, ap thn, ap els])
-        ap (ICon _ (ICValue { iValDef = e })) = ap e
+        ap (ICon _ _ (ICValue { iValDef = e })) = ap e
         ap e = iTrApExp ctx rel_c t1 [e, c]
     in  (ap e', True)
 
 -- c RELOP x  -->  x (flip RELOP) c
-iTrAp ctx e0@(ICon _ (ICPrim _ p)) [t] [e1, e2]
+iTrAp ctx e0@(ICon _ _ (ICPrim p)) [t] [e1, e2]
   | (Just fp) <- flipOp p
   , isIConInt e1 && not (isIConInt e2)
   = fp [t] [e2, e1]
@@ -924,26 +924,26 @@ iTrAp ctx e0@(ICon _ (ICPrim _ p)) [t] [e1, e2]
         flipOp PrimSLE = Just $ \ ts es -> iTrAp2 ctx iNot [] [iTrApExp ctx icPrimSLT ts es]
         flipOp _ = Nothing
 
-iTrAp ctx p@(ICon _ (ICPrim _ PrimConcat)) ts@[s1@(ITNum i1), s2@(ITNum i2), s3@(ITNum i3)] as@[e1, e2] =
+iTrAp ctx p@(ICon _ _ (ICPrim PrimConcat)) ts@[s1@(ITNum i1), s2@(ITNum i2), s3@(ITNum i3)] as@[e1, e2] =
     case map expValConcat as of
     -- ignore 0 sized args
     _ | i1 == 0 -> (e2, True)
     _ | i2 == 0 -> (e1, True)
     -- _ ++ _  --> _
-    [ICon _ (ICUndet {}), ICon _ (ICUndet { iuKind = u })]
+    [ICon _ _ (ICUndet {}), ICon _ _ (ICUndet { iuKind = u })]
         -> (icUndet (aitBit s3) u, True)
     -- c1 ++ (c2 ++ e)  -->  (c1++c2) ++ e
-    [ICon _ (ICInt { iVal = IntLit { ilValue = c1 } }),
-     IAps (ICon _ (ICPrim _ PrimConcat)) [ITNum isc2, se, _] [ICon _ (ICInt { iVal = IntLit { ilValue = c2 } }), e]]
+    [ICon _ _ (ICInt { iVal = IntLit { ilValue = c1 } }),
+     IAps (ICon _ _ (ICPrim PrimConcat)) [ITNum isc2, se, _] [ICon _ _ (ICInt { iVal = IntLit { ilValue = c2 } }), e]]
         -> iTrAp2 ctx p [mkNumConT isc1c2, se, s3] [iMkLitSize isc1c2 (c1 * 2^isc2 + c2), e]
           where isc1c2 = i1 + isc2
 
     -- select ? ? ? e1 ++ (select ? ? ? e1 ++ e2)  -->  (select ? ? ? e1 ++ select ? ? ? e1) ++ e2
     -- enables next transform
-    [x1@(IAps ps@(ICon _ (ICPrim _ PrimSelect)) _ [e1]),                -- size l
-        (IAps pc@(ICon _ (ICPrim _ PrimConcat))
+    [x1@(IAps ps@(ICon _ _ (ICPrim PrimSelect)) _ [e1]),                -- size l
+        (IAps pc@(ICon _ _ (ICPrim PrimConcat))
                 [s2s@(ITNum s2i), e2s, _]
-                [x2@(IAps (ICon _ (ICPrim _ PrimSelect)) _ [e1']),
+                [x2@(IAps (ICon _ _ (ICPrim PrimSelect)) _ [e1']),
                  e2])]
         | e1 == e1'
         -> iTrAp2 ctx pc [s12s, e2s, s3] [ss, e2]
@@ -951,17 +951,17 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimConcat)) ts@[s1@(ITNum i1), s2@(ITNum i2), s3@
               s12s = mkNumConT (i1 + s2i)
 
     -- select l (m+k) n e ++ select k m n e  -->  select (l+k) m n e
-    [IAps p@(ICon _ (ICPrim _ PrimSelect)) [ITNum il', ITNum imk, n] [e],
-     IAps   (ICon _ (ICPrim _ PrimSelect)) [ITNum ik', m@(ITNum im), n'] [e']]
+    [IAps p@(ICon _ _ (ICPrim PrimSelect)) [ITNum il', ITNum imk, n] [e],
+     IAps   (ICon _ _ (ICPrim PrimSelect)) [ITNum ik', m@(ITNum im), n'] [e']]
         |  i1 == il' && i2 == ik' && n == n' && eqE e e'
         && i3 == i1 + i2 && imk == im + i2
         -> iTrAp2 ctx p [s3, m, n] [e]
     -- (e1 ++ select l (m+k) n e2) ++ select k m n e2 -> (e1 ++ select (l+k) m n e)
-    [x1@(IAps pc@(ICon _ (ICPrim _ PrimConcat))
+    [x1@(IAps pc@(ICon _ _ (ICPrim PrimConcat))
                 [e1s@(ITNum e1i), sel1s@(ITNum sel1i), _]
-                [e1, sel1@(IAps (ICon _ (ICPrim _ PrimSelect))
+                [e1, sel1@(IAps (ICon _ _ (ICPrim PrimSelect))
                                 [ITNum il', ITNum imk, n] [e2])]),
-     sel2@(IAps ps@(ICon _ (ICPrim _ PrimSelect))
+     sel2@(IAps ps@(ICon _ _ (ICPrim PrimSelect))
                   [ITNum ik', m@(ITNum im), n'] [e2'])]
         | sel1i == il' && i2 == ik' && n == n' && eqE e2 e2'
         && i3 == i1 + i2 && imk == im + i2
@@ -971,8 +971,8 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimConcat)) ts@[s1@(ITNum i1), s2@(ITNum i2), s3@
 
     -- _ ++ select k m n e  -->       select (l+k) m n e                IF n-m >= l+k
     -- _ ++ select k m n e  -->  _ ++ select (n-m) m n e                IF n-m <  l+k
-    [ICon _ (ICUndet { iuKind = u }),
-     IAps ps@(ICon _ (ICPrim _ PrimSelect)) [ITNum ik', m@(ITNum im), n@(ITNum inn)] [e]]
+    [ICon _ _ (ICUndet { iuKind = u }),
+     IAps ps@(ICon _ _ (ICPrim PrimSelect)) [ITNum ik', m@(ITNum im), n@(ITNum inn)] [e]]
         |  i2 == ik' && d /= i1
         -> --trace ("_ ++ sel\n" ++ ppReadable (mkAp p as)) $
            if d <= 0 then
@@ -986,8 +986,8 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimConcat)) ts@[s1@(ITNum i1), s2@(ITNum i2), s3@
 
     -- select k m n e ++ _  -->  select (l+k) (m-l) n e                        IF m >= l
     -- select k m n e ++ _  -->  select (m+k) 0     n e ++ _
-    [IAps ps@(ICon _ (ICPrim _ PrimSelect)) [ITNum ik', m@(ITNum im), n@(ITNum inn)] [e],
-     ICon _ (ICUndet { iuKind = u })]
+    [IAps ps@(ICon _ _ (ICPrim PrimSelect)) [ITNum ik', m@(ITNum im), n@(ITNum inn)] [e],
+     ICon _ _ (ICUndet { iuKind = u })]
         |  i1 == ik' && (im >= i2 || d /= i2)
         -> --trace ("sel ++ _\n" ++ ppReadable (mkAp p as, im, i2)) $
            if im >= i2 then
@@ -998,33 +998,33 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimConcat)) ts@[s1@(ITNum i1), s2@(ITNum i2), s3@
           where tmk = mkNumConT (im+i1)
                 d = i3 - (im+i1)
     -- (if c t0 e0) ++ (if c t1 e1) --> if c (t0 ++ t1) (e0 ++ e1)
-    [IAps pif@(ICon _ (ICPrim _ PrimIf)) _ [cnd0, t0, e0],
-     IAps     (ICon _ (ICPrim _ PrimIf)) _ [cnd1, t1, e1]] | cnd0 == cnd1 ->
+    [IAps pif@(ICon _ _ (ICPrim PrimIf)) _ [cnd0, t0, e0],
+     IAps     (ICon _ _ (ICPrim PrimIf)) _ [cnd1, t1, e1]] | cnd0 == cnd1 ->
         iTrAp2 ctx pif [itBitN i3] [cnd0, t', e']
       where t' = iTrApExp ctx p ts [t0, t1]
             e' = iTrApExp ctx p ts [e0, e1]
 
     -- (if c thn _) ++ e --> thn ++ e
-    [IAps (ICon _ (ICPrim _ PrimIf)) _ [_, thn, els], e]
+    [IAps (ICon _ _ (ICPrim PrimIf)) _ [_, thn, els], e]
       | isUndet thn && noRefs els -> iTrAp2 ctx p ts [els, e]
       | isUndet els && noRefs thn -> iTrAp2 ctx p ts [thn, e]
 
     -- e ++ (if c thn _) --> e ++ thn
-    [e, IAps (ICon _ (ICPrim _ PrimIf)) _ [_, thn, els]]
+    [e, IAps (ICon _ _ (ICPrim PrimIf)) _ [_, thn, els]]
       | isUndet thn && noRefs els -> iTrAp2 ctx p ts [e, els]
       | isUndet els && noRefs thn -> iTrAp2 ctx p ts [e, thn]
 
     _ -> iTrApTail ctx p ts as
 
-iTrAp ctx ps@(ICon _ (ICPrim _ PrimSelect)) ts@[k@(ITNum ik), m@(ITNum im), n] [e] =
+iTrAp ctx ps@(ICon _ _ (ICPrim PrimSelect)) ts@[k@(ITNum ik), m@(ITNum im), n] [e] =
     case expVal e of
     -- select k m n (select n p q e)  -->  select k (m+p) q e
-    IAps (ICon _ (ICPrim _ PrimSelect)) [n', ITNum ip, q] [e]
+    IAps (ICon _ _ (ICPrim PrimSelect)) [n', ITNum ip, q] [e]
         | n == n'
         -> iTrAp2 ctx ps [k, mkNumConT (im+ip), q] [e]
 
     -- select k 0 n (e1 ++ e2)  -->  select (k-l2) 0 l1 e1 ++ e2        IF k >= l2
-    IAps pc@(ICon _ (ICPrim _ PrimConcat)) [l1, l2@(ITNum il2), n'] [e1, e2]
+    IAps pc@(ICon _ _ (ICPrim PrimConcat)) [l1, l2@(ITNum il2), n'] [e1, e2]
         | n == n' && im == 0 && ik >= il2
         -> iTrAp2 ctx pc [mkNumConT j, l2, k] [sel, e2]
           where j = ik - il2
@@ -1033,7 +1033,7 @@ iTrAp ctx ps@(ICon _ (ICPrim _ PrimSelect)) ts@[k@(ITNum ik), m@(ITNum im), n] [
     -- select k m n (e1 ++ e2)  -->  select k      m l2 e2                IF k+m <= l2
     --                                -->  select k (m-l2) l1 e1                IF m >= l2
     -- otherwise                -->  select (k + m - l2) 0 l1 e1 ++ select (l2 - m) m l2 e2
-    IAps pc@(ICon _ (ICPrim _ PrimConcat)) [l1, l2@(ITNum il2), n'] [e1, e2]
+    IAps pc@(ICon _ _ (ICPrim PrimConcat)) [l1, l2@(ITNum il2), n'] [e1, e2]
         | n == n'
         -> if im >= il2 then
                iTrAp2 ctx ps [k, mkNumConT (im - il2), l1] [e1]
@@ -1057,15 +1057,15 @@ iTrAp ctx ps@(ICon _ (ICPrim _ PrimSelect)) ts@[k@(ITNum ik), m@(ITNum im), n] [
 
 -- (e1 ++ 0) + (e2 ++ e3)  -->  (e1+e2) ++ e3
 -- XXX only special case so far
-iTrAp ctx op@(ICon _ (ICPrim _ PrimAdd)) ts as =
+iTrAp ctx op@(ICon _ _ (ICPrim PrimAdd)) ts as =
     case map expVal as of
-    [ICon _ (ICInt { iVal = IntLit { ilValue = c } } ),
-     IAps co@(ICon _ (ICPrim _ PrimConcat)) [t1, t2@(ITNum it2), t3]  [ICon _ (ICInt { iVal = IntLit { ilValue = c2 } }), e]
+    [ICon _ _ (ICInt { iVal = IntLit { ilValue = c } } ),
+     IAps co@(ICon _ _ (ICPrim PrimConcat)) [t1, t2@(ITNum it2), t3]  [ICon _ _ (ICInt { iVal = IntLit { ilValue = c2 } }), e]
      ]        | r == 0
         -> iTrAp2 ctx co [t1, t2, t3] [iMkLit (aitBit t1) (q+c2), e]
         where (q,r) = quotRem c (2^it2)
-    [IAps co@(ICon _ (ICPrim _ PrimConcat)) [t1, t2@(ITNum it2), t3]  [e, ICon _ (ICInt { iVal = IntLit { ilValue = 0 } })],
-     ICon _ (ICInt { iVal = IntLit { ilValue = c } } )
+    [IAps co@(ICon _ _ (ICPrim PrimConcat)) [t1, t2@(ITNum it2), t3]  [e, ICon _ _ (ICInt { iVal = IntLit { ilValue = 0 } })],
+     ICon _ _ (ICInt { iVal = IntLit { ilValue = c } } )
      ]        | q == 0
         -> iTrAp2 ctx co [t1, t2, t3] [e, iMkLit (aitBit t2) r]
         where (q,r) = quotRem c (2^it2)
@@ -1074,7 +1074,7 @@ iTrAp ctx op@(ICon _ (ICPrim _ PrimAdd)) ts as =
 -- (e1 ++ e2) `op` (e3 ++ e4)  -->  (e1 `op` e3) ++ (e2 `op` e4)
 -- ((e1 ++ e1') ++ e2) `op` (e3 ++ c)   -->  ((e1 ++ e1') ++ e2) `op` ((e3 ++ c1) ++ c2)
 -- this doesn't improve things on its own, but can open up other transformations
-iTrAp ctx op@(ICon _ (ICPrim _ p)) [t@(ITNum it)] as
+iTrAp ctx op@(ICon _ _ (ICPrim p)) [t@(ITNum it)] as
     | p `elem` [PrimAnd, PrimOr, PrimXor] =
     let default_res = iTrApTail ctx op [t] as
         applyOp (sz, eA, eB) = (sz, iTrApExp ctx op [ITNum sz] [eA, eB])
@@ -1095,10 +1095,10 @@ iTrAp ctx op@(ICon _ (ICPrim _ p)) [t@(ITNum it)] as
                default_res
 
 -- signExt n n e  -->  e
-iTrAp ctx (ICon _ (ICPrim _ PrimSignExt)) [_, t1, t2] [e] | t1 == t2 = (e, True)
+iTrAp ctx (ICon _ _ (ICPrim PrimSignExt)) [_, t1, t2] [e] | t1 == t2 = (e, True)
 
 -- constant folding
-iTrAp ctx c@(ICon _ (ICPrim _ p)) ts as | canDoOp = (e, True)
+iTrAp ctx c@(ICon _ _ (ICPrim p)) ts as | canDoOp = (e, True)
   where (canDoOp, e) = case (doPrimOp (getIExprPosition c) p ts as) of
                            Just (Right res) -> (True, res)
                            _ -> (False, internalError("iTrAp: ICPrim"))
@@ -1109,7 +1109,7 @@ iTrAp ctx f ts es = iTrApTail ctx f ts es
 iTrApTail :: KnownPhase a => Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
 {-# SPECIALISE iTrApTail :: Ctx Elab -> IExpr Elab -> [IType] -> [IExpr Elab] -> (IExpr Elab, Bool) #-}
 {-# SPECIALISE iTrApTail :: Ctx PostElab -> IExpr PostElab -> [IType] -> [IExpr PostElab] -> (IExpr PostElab, Bool) #-}
-iTrApTail ctx c@(ICon _ (ICPrim _ p)) ts as | canDoOp = (e, True)
+iTrApTail ctx c@(ICon _ _ (ICPrim p)) ts as | canDoOp = (e, True)
   where (canDoOp, e) = case (doPrimOp (getIExprPosition c) p ts as) of
                            Just (Right res) -> (True, res)
                            _ -> (False, internalError("iTrapTail: ICPrim"))
@@ -1119,7 +1119,7 @@ iTrApTail ctx f ts es = (IAps f ts es, False)
 expVal :: KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE expVal :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE expVal :: IExpr PostElab -> IExpr PostElab #-}
-expVal (ICon _ (ICValue { iValDef = e })) = e
+expVal (ICon _ _ (ICValue { iValDef = e })) = e
 expVal e = e
 
 -- Like expVal but expands concats one level deeper, so that
@@ -1131,8 +1131,8 @@ expValConcat :: forall a . KnownPhase a => IExpr a -> IExpr a
 -- under that match goes through the PostElab copy directly; the Elab
 -- specialisation, where the arm is inaccessible, then carries no
 -- dictionary for it)
-expValConcat (ICon _ (ICValue { iValDef = e })) = expValConcatPost e
-expValConcat (IAps p@(ICon _ (ICPrim _ PrimConcat)) ts es) = IAps p ts (map expVal es)
+expValConcat (ICon _ _ (ICValue { iValDef = e })) = expValConcatPost e
+expValConcat (IAps p@(ICon _ _ (ICPrim PrimConcat)) ts es) = IAps p ts (map expVal es)
 expValConcat e = e
 
 expValConcatPost :: IExpr PostElab -> IExpr PostElab
@@ -1144,13 +1144,13 @@ findConcatBreaks :: KnownPhase a => Integer -> IExpr a -> IExpr a ->
                     [(Integer, IExpr a, IExpr a)]
 {-# SPECIALISE findConcatBreaks :: Integer -> IExpr Elab -> IExpr Elab -> [(Integer, IExpr Elab, IExpr Elab)] #-}
 {-# SPECIALISE findConcatBreaks :: Integer -> IExpr PostElab -> IExpr PostElab -> [(Integer, IExpr PostElab, IExpr PostElab)] #-}
-findConcatBreaks sz eA@(IAps (ICon _ (ICPrim _ PrimConcat))
+findConcatBreaks sz eA@(IAps (ICon _ _ (ICPrim PrimConcat))
                           [ITNum itA1, ITNum itA2, ITNum itA3] [eA1, eA2]) eB =
     case (splitConstExpr itA1 itA2 eB) of
       Nothing -> [(sz, eA, eB)]
       Just (eB1, eB2) -> findConcatBreaks itA1 eA1 eB1 ++
                          findConcatBreaks itA2 eA2 eB2
-findConcatBreaks sz eA eB@(IAps (ICon _ (ICPrim _ PrimConcat))
+findConcatBreaks sz eA eB@(IAps (ICon _ _ (ICPrim PrimConcat))
                              [ITNum itB1, ITNum itB2, ITNum itB3] [eB1, eB2]) =
     case (splitConstExpr itB1 itB2 eA) of
       Nothing -> [(sz, eA, eB)]
@@ -1162,15 +1162,15 @@ findConcatBreaks sz eA eB = [(sz, eA, eB)]
 splitConstExpr :: KnownPhase a => Integer -> Integer -> IExpr a  -> Maybe (IExpr a, IExpr a)
 {-# SPECIALISE splitConstExpr :: Integer -> Integer -> IExpr Elab  -> Maybe (IExpr Elab, IExpr Elab) #-}
 {-# SPECIALISE splitConstExpr :: Integer -> Integer -> IExpr PostElab  -> Maybe (IExpr PostElab, IExpr PostElab) #-}
-splitConstExpr n n2 (ICon _ ic@(ICInt { iVal = IntLit { ilValue = c } })) =
+splitConstExpr n n2 (ICon _ _ ic@(ICInt { iVal = IntLit { ilValue = c } })) =
     let c1 = iMkLit (aitBit (mkNumConT n)) (c `div` 2^n2)
         c2 = iMkLit (aitBit (mkNumConT n2)) (mask n2 c)
     in  Just (c1, c2)
-splitConstExpr n n2 (ICon _ (ICUndet { iuKind = u })) =
+splitConstExpr n n2 (ICon _ _ (ICUndet { iuKind = u })) =
     let u1 = icUndet (aitBit (mkNumConT n)) u
         u2 = icUndet (aitBit (mkNumConT n2)) u
     in  Just (u1, u2)
-splitConstExpr n n2 e@(IAps (ICon _ (ICPrim _ PrimConcat))
+splitConstExpr n n2 e@(IAps (ICon _ _ (ICPrim PrimConcat))
                             [(ITNum it1), (ITNum it2), (ITNum it3)]
                             [e1, e2]) =
     case (compare n it1) of
@@ -1205,15 +1205,15 @@ addT :: KnownPhase a => IExpr a -> Ctx a -> Ctx a
 addT e ctx = --trace ("addT\n" ++ ppReadable (e, ctx, addT' (expValAndOrCmp e) ctx)) $
                 addT' (expValAndOrCmp e) ctx
   where addT' e (Ctx vs be) = Ctx (addEqs e vs) (bAdd e be)
-        addEqs (IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })]) vs = M.insert (ExprKey i) v vs
+        addEqs (IAps (ICon _ _ (ICPrim PrimEQ)) _ [i, ICon _ _ (ICInt { iVal = IntLit { ilValue = v } })]) vs = M.insert (ExprKey i) v vs
         -- XXX case for when the const is on the left?
         -- XXX case for (e1 == e2), when e1 or e2 exists in the set, add the other as the same val
-        addEqs (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) vs = addEqs e1 (addEqs e2 vs)
-        addEqs (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) vs = addNEqs e vs
+        addEqs (IAps (ICon _ _ (ICPrim PrimBAnd)) _ [e1, e2]) vs = addEqs e1 (addEqs e2 vs)
+        addEqs (IAps (ICon _ _ (ICPrim PrimBNot)) _ [e]) vs = addNEqs e vs
         addEqs _ vs = vs
         -- XXX case for != ?
-        addNEqs (IAps (ICon _ (ICPrim _ PrimBOr)) _ [e1, e2]) vs = addNEqs e1 (addNEqs e2 vs)
-        addNEqs (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) vs = addEqs e vs
+        addNEqs (IAps (ICon _ _ (ICPrim PrimBOr)) _ [e1, e2]) vs = addNEqs e1 (addNEqs e2 vs)
+        addNEqs (IAps (ICon _ _ (ICPrim PrimBNot)) _ [e]) vs = addEqs e vs
         addNEqs _ vs = vs
 
 addF :: KnownPhase a => IExpr a -> Ctx a -> Ctx a
@@ -1226,7 +1226,7 @@ expValAndOrCmp :: forall a . KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE expValAndOrCmp :: IExpr PostElab -> IExpr PostElab #-}
 expValAndOrCmp (IAps e ts es) = IAps e ts (map expValAndOrCmp es)
 -- (the ICValue arm recurses through the PostElab copy, as expValConcat's does)
-expValAndOrCmp (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) | isAndOrCmp p = expValAndOrCmpPost e
+expValAndOrCmp (ICon _ _ (ICValue { iValDef = e@(IAps (ICon _ _ (ICPrim p)) _ _ )})) | isAndOrCmp p = expValAndOrCmpPost e
 expValAndOrCmp e = e
 
 expValAndOrCmpPost :: IExpr PostElab -> IExpr PostElab
@@ -1239,7 +1239,7 @@ expValShallow :: KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE expValShallow :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE expValShallow :: IExpr PostElab -> IExpr PostElab #-}
 expValShallow (IAps e ts es) = IAps e ts (map expValShallow es)
-expValShallow (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) | p == PrimBNot = expValShallow e
+expValShallow (ICon _ _ (ICValue { iValDef = e@(IAps (ICon _ _ (ICPrim p)) _ _ )})) | p == PrimBNot = expValShallow e
                                                                                   | isAndOrCmp p = e
 expValShallow e = e
 
@@ -1259,12 +1259,12 @@ isT ctx@(Ctx vs be) e = --traces ("isT\n" ++ ppReadable (e, expValAndOrCmp e, ct
   where isT' e =
             bImplies be e ||
             case e of
-            IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })] ->
+            IAps (ICon _ _ (ICPrim PrimEQ)) _ [i, ICon _ _ (ICInt { iVal = IntLit { ilValue = v } })] ->
 --                traces ("isT EQ" ++ ppReadable (i, v, M.toList vs)) $
                 case M.lookup (ExprKey i) vs of
                 Just k -> v == k
                 Nothing -> False
-            IAps (ICon _ (ICPrim _ PrimBNot)) _ [IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })]] ->
+            IAps (ICon _ _ (ICPrim PrimBNot)) _ [IAps (ICon _ _ (ICPrim PrimEQ)) _ [i, ICon _ _ (ICInt { iVal = IntLit { ilValue = v } })]] ->
 --                traces ("isT NE" ++ ppReadable (i, v, M.toList vs)) $
                 case M.lookup (ExprKey i) vs of
                 Just k -> v /= k
@@ -1280,11 +1280,11 @@ isF ctx@(Ctx vs be) e = --traces ("isF\n" ++ ppReadable (e, expValAndOrCmp e, ct
   where isF' e =
             bImplies be (ieNot e) ||
             case e of
-            IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })] ->
+            IAps (ICon _ _ (ICPrim PrimEQ)) _ [i, ICon _ _ (ICInt { iVal = IntLit { ilValue = v } })] ->
                 case M.lookup (ExprKey i) vs of
                 Just k -> v /= k
                 Nothing -> False
-            IAps (ICon _ (ICPrim _ PrimBNot)) _ [IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })]] ->
+            IAps (ICon _ _ (ICPrim PrimBNot)) _ [IAps (ICon _ _ (ICPrim PrimEQ)) _ [i, ICon _ _ (ICInt { iVal = IntLit { ilValue = v } })]] ->
                 case M.lookup (ExprKey i) vs of
                 Just k -> v == k
                 Nothing -> False
@@ -1370,25 +1370,25 @@ getMaskTail mask size | zeroes_gcd > 1 =
 isZero :: KnownPhase a => IExpr a -> Bool
 {-# SPECIALISE isZero :: IExpr Elab -> Bool #-}
 {-# SPECIALISE isZero :: IExpr PostElab -> Bool #-}
-isZero (ICon _ (ICInt { iVal = IntLit { ilValue = 0 } })) = True
+isZero (ICon _ _ (ICInt { iVal = IntLit { ilValue = 0 } })) = True
 isZero _ = False
 
 isOne :: KnownPhase a => IExpr a -> Bool
 {-# SPECIALISE isOne :: IExpr Elab -> Bool #-}
 {-# SPECIALISE isOne :: IExpr PostElab -> Bool #-}
-isOne (ICon _ (ICInt { iVal = IntLit { ilValue = 1 } })) = True
+isOne (ICon _ _ (ICInt { iVal = IntLit { ilValue = 1 } })) = True
 isOne _ = False
 
 isAllOnes :: KnownPhase a => IExpr a -> Bool
 {-# SPECIALISE isAllOnes :: IExpr Elab -> Bool #-}
 {-# SPECIALISE isAllOnes :: IExpr PostElab -> Bool #-}
-isAllOnes (ICon _ (ICInt { ictInt = ITAp b (ITNum i), iVal = IntLit { ilValue = n } })) = b == itBit && 2^i == n+1
+isAllOnes (ICon _ (ITAp b (ITNum i)) (ICInt { iVal = IntLit { ilValue = n } })) = b == itBit && 2^i == n+1
 isAllOnes _ = False
 
 isAlmost :: KnownPhase a => IExpr a -> Bool
 {-# SPECIALISE isAlmost :: IExpr Elab -> Bool #-}
 {-# SPECIALISE isAlmost :: IExpr PostElab -> Bool #-}
-isAlmost (ICon _ (ICInt { ictInt = ITAp b (ITNum i), iVal = IntLit { ilValue = n } })) = b == itBit && 2^i == n+2
+isAlmost (ICon _ (ITAp b (ITNum i)) (ICInt { iVal = IntLit { ilValue = n } })) = b == itBit && 2^i == n+2
 isAlmost _ = False
 
 iLog2 :: Integer -> Maybe Integer
@@ -1401,10 +1401,10 @@ iLog2 i =
 inc :: KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE inc :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE inc :: IExpr PostElab -> IExpr PostElab #-}
-inc (ICon i c@(ICInt { iVal = il@(IntLit { ilValue = n }) })) =
+inc (ICon i t c@(ICInt { iVal = il@(IntLit { ilValue = n }) })) =
     -- GHC emits a warning below because it's forgotten that 'c' must be
     -- an ICInt
-    ICon i (c { iVal = il { ilValue = n+1 } })
+    ICon i t (c { iVal = il { ilValue = n+1 } })
 inc iexpr = internalError ("ITransform.inc: " ++ ppString iexpr)
 
 mkZero :: KnownPhase a => IType -> IExpr a
@@ -1416,7 +1416,7 @@ mkZero t = iMkLit (aitBit t) 0
 isUndet :: KnownPhase a => IExpr a -> Bool
 {-# SPECIALISE isUndet :: IExpr Elab -> Bool #-}
 {-# SPECIALISE isUndet :: IExpr PostElab -> Bool #-}
-isUndet (ICon _ (ICUndet {})) = True
+isUndet (ICon _ _ (ICUndet {})) = True
 isUndet _ = False
 
 -- Guard optimizations that are not valid in the presence of implicit conditions.
@@ -1430,28 +1430,28 @@ noRefs _             = True
 isIfElseOfIConInt :: KnownPhase a => IExpr a -> Bool
 {-# SPECIALISE isIfElseOfIConInt :: IExpr Elab -> Bool #-}
 {-# SPECIALISE isIfElseOfIConInt :: IExpr PostElab -> Bool #-}
-isIfElseOfIConInt (IAps (ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) =
+isIfElseOfIConInt (IAps (ICon _ _ (ICPrim PrimIf)) [t] [cnd, thn, els]) =
     isIfElseOfIConInt' thn && isIfElseOfIConInt' els
   where
-    isIfElseOfIConInt' (IAps (ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) =
+    isIfElseOfIConInt' (IAps (ICon _ _ (ICPrim PrimIf)) [t] [cnd, thn, els]) =
         isIfElseOfIConInt' thn && isIfElseOfIConInt' els
-    isIfElseOfIConInt' (ICon _ (ICValue { iValDef = e })) =
+    isIfElseOfIConInt' (ICon _ _ (ICValue { iValDef = e })) =
         isIfElseOfIConInt' e
     isIfElseOfIConInt' e = isIConInt e || isUndet e
-isIfElseOfIConInt (ICon _ (ICValue { iValDef = e })) = isIfElseOfIConInt e
+isIfElseOfIConInt (ICon _ _ (ICValue { iValDef = e })) = isIfElseOfIConInt e
 isIfElseOfIConInt _ = False
 
 isConstExprForPrim :: KnownPhase a => PrimOp -> IExpr a -> Bool
 {-# SPECIALISE isConstExprForPrim :: PrimOp -> IExpr Elab -> Bool #-}
 {-# SPECIALISE isConstExprForPrim :: PrimOp -> IExpr PostElab -> Bool #-}
-isConstExprForPrim prim (IAps (ICon _ (ICPrim _ p)) _ [e1,e2]) =
+isConstExprForPrim prim (IAps (ICon _ _ (ICPrim p)) _ [e1,e2]) =
     (p == prim) && ((isIConInt e1) || (isIConInt e2))
 isConstExprForPrim _ _ = False
 
 constPart :: KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE constPart :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE constPart :: IExpr PostElab -> IExpr PostElab #-}
-constPart (IAps (ICon _ (ICPrim _ p)) _ [e1,e2])
+constPart (IAps (ICon _ _ (ICPrim p)) _ [e1,e2])
     | isIConInt e1 = e1
     | isIConInt e2 = e2
     | otherwise    = internalError "constPart: no const part found!"
@@ -1460,7 +1460,7 @@ constPart _ = internalError "constPart: expected a binary primitive op"
 nonConstPart :: KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE nonConstPart :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE nonConstPart :: IExpr PostElab -> IExpr PostElab #-}
-nonConstPart (IAps (ICon _ (ICPrim _ p)) _ [e1,e2]) =
+nonConstPart (IAps (ICon _ _ (ICPrim p)) _ [e1,e2]) =
     if (isIConInt e1) then e2 else e1  -- note: e2 may also be a constant!
 nonConstPart _ = internalError "nonConstPart: expected a binary primitive op"
 
@@ -1469,9 +1469,9 @@ eqE :: KnownPhase a => IExpr a -> IExpr a -> Bool
 {-# SPECIALISE eqE :: IExpr Elab -> IExpr Elab -> Bool #-}
 {-# SPECIALISE eqE :: IExpr PostElab -> IExpr PostElab -> Bool #-}
 eqE (IAps e1 ts1 es1)                    (IAps e2 ts2 es2)                    = eqE e1 e2 && ts1 == ts2 && and (zipWith eqE es1 es2)
-eqE (ICon i1 (ICValue { iValDef = e1 })) (ICon i2 (ICValue { iValDef = e2 })) = i1 == i2
-eqE (ICon _  (ICValue { iValDef = e1 }))                               e2     = eqE e1 e2
-eqE                               e1     (ICon _  (ICValue { iValDef = e2 })) = eqE e1 e2
+eqE (ICon i1 _ (ICValue { iValDef = e1 })) (ICon i2 _ (ICValue { iValDef = e2 })) = i1 == i2
+eqE (ICon _  _ (ICValue { iValDef = e1 }))                               e2     = eqE e1 e2
+eqE                               e1     (ICon _  _ (ICValue { iValDef = e2 })) = eqE e1 e2
 eqE                               e1                                   e2     = e1 == e2
 
 -----------------------------------------------------------------------------
@@ -1539,7 +1539,7 @@ newExprT t e = do
     Nothing -> do
         n <- gets idNo
         let i = setBadId $ mkId noPosition (mkFString ((prefix ts) ++ itos n))
-            e' = ICon i (ICValue t e)
+            e' = ICon i t (ICValue e)
             d = IDef i t e []  -- props get lost here, but restored in iTransRenameIdsInDef
             cmap' = M.insert e (e', d) cmap
             !n'   = n + 1
@@ -1618,10 +1618,10 @@ fromBE FF            = iFalse
 toBE :: KnownPhase a => IExpr a -> BoolExp (ExprKey a)
 {-# SPECIALISE toBE :: IExpr Elab -> BoolExp (ExprKey Elab) #-}
 {-# SPECIALISE toBE :: IExpr PostElab -> BoolExp (ExprKey PostElab) #-}
-toBE (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2])   = And (toBE e1) (toBE e2)
-toBE (IAps (ICon _ (ICPrim _ PrimBOr))  _ [e1, e2])   = Or  (toBE e1) (toBE e2)
-toBE (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e])        = Not (toBE e)
-toBE (IAps (ICon _ (ICPrim _ PrimIf))   _ [e1,e2,e3]) = If (toBE e1) (toBE e2) (toBE e3)
+toBE (IAps (ICon _ _ (ICPrim PrimBAnd)) _ [e1, e2])   = And (toBE e1) (toBE e2)
+toBE (IAps (ICon _ _ (ICPrim PrimBOr))  _ [e1, e2])   = Or  (toBE e1) (toBE e2)
+toBE (IAps (ICon _ _ (ICPrim PrimBNot)) _ [e])        = Not (toBE e)
+toBE (IAps (ICon _ _ (ICPrim PrimIf))   _ [e1,e2,e3]) = If (toBE e1) (toBE e2) (toBE e3)
 toBE e | e == iTrue  = TT
        | e == iFalse = FF
        | otherwise   = Var (ExprKey e)
@@ -1631,26 +1631,26 @@ sOptCmp :: KnownPhase a => IExpr a -> IExpr a
 {-# SPECIALISE sOptCmp :: IExpr Elab -> IExpr Elab #-}
 {-# SPECIALISE sOptCmp :: IExpr PostElab -> IExpr PostElab #-}
 sOptCmp e =
-    let collEQs (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = collEQs e1 ++ collEQs e2
-        collEQs (IAps (ICon _ (ICPrim _ PrimEQ))   _ [v, ICon _ (ICInt { iVal = IntLit { ilValue = i } })]) = [(v, i)]
+    let collEQs (IAps (ICon _ _ (ICPrim PrimBAnd)) _ [e1, e2]) = collEQs e1 ++ collEQs e2
+        collEQs (IAps (ICon _ _ (ICPrim PrimEQ))   _ [v, ICon _ _ (ICInt { iVal = IntLit { ilValue = i } })]) = [(v, i)]
         collEQs _ = []
-        remNE vcs e@(IAps (ICon _ (ICPrim _ PrimEQ))   _ [v, ICon _ (ICInt { iVal = IntLit { ilValue = i } })]) =
+        remNE vcs e@(IAps (ICon _ _ (ICPrim PrimEQ))   _ [v, ICon _ _ (ICInt { iVal = IntLit { ilValue = i } })]) =
                 case lookup v vcs of
                 Just i' | i /= i' -> iFalse
                 _ -> e
         remNE vcs (IAps f ts es) = IAps f ts (map (remNE vcs) es)
         remNE vcs e = e
 
-        collTerms (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = collTerms e1 ++ collTerms e2
+        collTerms (IAps (ICon _ _ (ICPrim PrimBAnd)) _ [e1, e2]) = collTerms e1 ++ collTerms e2
         collTerms e = [e]
 
-        remAbsurd e (IAps (ICon _ (ICPrim _ PrimBNot)) _
-                        [IAps (ICon _ (ICPrim _ PrimEQ)) _
-                                [v, ICon _ (ICInt { ictInt = ITAp bit (ITNum vn), iVal = IntLit { ilValue = i } })]] : es)
+        remAbsurd e (IAps (ICon _ _ (ICPrim PrimBNot)) _
+                        [IAps (ICon _ _ (ICPrim PrimEQ)) _
+                                [v, ICon _ (ITAp bit (ITNum vn)) (ICInt { iVal = IntLit { ilValue = i } })]] : es)
                 | bit == itBit && vn <= 8 = loop ([0..2^vn-1] \\ [i]) es
                   where loop [] [] = iFalse
                         loop _  [] = e
-                        loop is (IAps (ICon _ (ICPrim _ PrimBNot)) _ [IAps (ICon _ (ICPrim _ PrimEQ)) _ [v', ICon _ (ICInt { iVal = IntLit { ilValue = i } })]] : es)
+                        loop is (IAps (ICon _ _ (ICPrim PrimBNot)) _ [IAps (ICon _ _ (ICPrim PrimEQ)) _ [v', ICon _ _ (ICInt { iVal = IntLit { ilValue = i } })]] : es)
                                 | v == v' = loop (is \\ [i]) es
                         loop is (_:es) = loop is es
         remAbsurd e (_:es) = remAbsurd e es
@@ -1672,7 +1672,7 @@ aOptCmp e =
 optE :: KnownPhase a => ValMap a -> IExpr a -> (ValMap a, IExpr a)
 {-# SPECIALISE optE :: ValMap Elab -> IExpr Elab -> (ValMap Elab, IExpr Elab) #-}
 {-# SPECIALISE optE :: ValMap PostElab -> IExpr PostElab -> (ValMap PostElab, IExpr PostElab) #-}
-optE m e0@(IAps p@(ICon _ (ICPrim _ PrimBAnd)) ts [e1, e2]) =
+optE m e0@(IAps p@(ICon _ _ (ICPrim PrimBAnd)) ts [e1, e2]) =
 -- XXX this can't be the best way
         let (m1, e2') = optE m  e2
             (m2, e1') = optE m1 e1
@@ -1682,12 +1682,12 @@ optE m e0@(IAps p@(ICon _ (ICPrim _ PrimBAnd)) ts [e1, e2]) =
                 let (m1, e1') = optE m  e1
                     (m2, e2') = optE m1 e2
                 in  (m2, IAps p ts [e1', e2'])
-optE m e@(IAps p@(ICon _ (ICPrim _ cmp)) _ [v, ICon _ (ICInt { ictInt = t, iVal = IntLit { ilValue = i } })])
+optE m e@(IAps p@(ICon _ _ (ICPrim cmp)) _ [v, ICon _ t (ICInt { iVal = IntLit { ilValue = i } })])
   | isCmp cmp
   , (Just n) <- getBit t
   = doCmp m e cmp v n i True
-optE m e@(IAps (ICon _ (ICPrim _ PrimBNot)) _
-                [IAps p@(ICon _ (ICPrim _ cmp)) ts [v, ICon _ (ICInt { ictInt = t, iVal = IntLit { ilValue = i } })]])
+optE m e@(IAps (ICon _ _ (ICPrim PrimBNot)) _
+                [IAps p@(ICon _ _ (ICPrim cmp)) ts [v, ICon _ t (ICInt { iVal = IntLit { ilValue = i } })]])
   | isCmp cmp
   , (Just n) <- getBit t
   = doCmp m e cmp v n i False
@@ -1716,8 +1716,8 @@ type ValueSet = VSetInteger
 vsUniv :: KnownPhase a => IExpr a -> ValueSet
 {-# SPECIALISE vsUniv :: IExpr Elab -> ValueSet #-}
 {-# SPECIALISE vsUniv :: IExpr PostElab -> ValueSet #-}
-vsUniv (ICon i (ICValue { iValDef = IAps (ICon _ (ICPrim _ PrimRange)) _
-                                        [ICon _ (ICInt { iVal = IntLit { ilValue = lo } }), ICon _ (ICInt { iVal = IntLit { ilValue = hi } }), _] })) =
+vsUniv (ICon i _ (ICValue { iValDef = IAps (ICon _ _ (ICPrim PrimRange)) _
+                                        [ICon _ _ (ICInt { iVal = IntLit { ilValue = lo } }), ICon _ _ (ICInt { iVal = IntLit { ilValue = hi } }), _] })) =
         --traces ("interval " ++ ppReadable (i,lo,hi)) $
         vFromTo lo hi
 vsUniv e =
@@ -1793,7 +1793,7 @@ iTransFixupDefNames flags = do
           M.fromListWith S.union $
                [ ( cse_name
                  , S.singleton (idQuality (Just def_name), def_name) )
-                 | (def_name, (_, ICon cse_name _value@(ICValue {}), props))
+                 | (def_name, (_, ICon cse_name _ _value@(ICValue {}), props))
                        <- M.toList old_defmap
                  , not (defPropsHasNoCSE props) ]
 
@@ -1831,10 +1831,10 @@ iTransFixupDefNames flags = do
 -- given a map from old to new identifiers, replace all occurrences
 -- of the old identifier with the new in a given expression
 iTransRenameIdsInExpr :: M.Map Id Id -> IExpr PostElab -> IExpr PostElab
-iTransRenameIdsInExpr rename_map expr@(ICon name value@(ICValue {})) =
+iTransRenameIdsInExpr rename_map expr@(ICon name t value@(ICValue {})) =
     let renamed_value_def = iTransRenameIdsInExpr rename_map (iValDef value)
         new_value = value { iValDef = renamed_value_def }
-    in  ICon (iTransRenameId rename_map name) new_value
+    in  ICon (iTransRenameId rename_map name) t new_value
 iTransRenameIdsInExpr rename_map (IAps func types args) =
     let renamed_func = iTransRenameIdsInExpr rename_map func
         renamed_args = [iTransRenameIdsInExpr rename_map arg | arg <- args]
