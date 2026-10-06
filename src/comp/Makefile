@@ -181,6 +181,7 @@ PACKAGES = \
 	text \
 	deepseq \
 	strict-concurrency \
+	template-haskell \
 
 
 # The EPS warmup (see update-warmup.sh) must also cover packages that
@@ -245,6 +246,11 @@ GHCTMP = '-tmpdir $(TMPDIR)'
 # If you modify this, also update rts_opts in ../vendor/htcl/haskell.c
 ifeq ($(BSC_BUILD),PROF)
 RTSFLAGS = "-with-rtsopts=-H256m -K256m -i1"
+# The in-process interpreter cannot run the profiled objects of the
+# modules a splice imports; the external one (ghc-iserv-prof) can.
+# (GHC's other way is a non-profiled build first, whose .o/.hi the
+# p_o/p_hi suffixes leave in place.)
+GHCPROFTH = -fexternal-interpreter
 else
 RTSFLAGS = "-with-rtsopts=-H256m -K10m -i1"
 endif
@@ -271,8 +277,13 @@ GHCFLAGS += \
 
 ifeq ($(OSTYPE), Linux)
 # Some GHC installations may fail to include this automatically,
-# and it's benign to include otherwise
-GHCFLAGS += -lpthread
+# and it's benign to include otherwise.  It goes to the linker only
+# (-optl): Prim.hs splices its code tables (Template Haskell), and a
+# -l flag is also loaded into the interpreter that runs the splices,
+# which refuses the static libpthread.a that is all glibc >= 2.34
+# ships ("Loading static libraries is not supported in this
+# configuration"); the linker does not care.
+GHCFLAGS += -optl-lpthread
 endif
 
 # Get Haskell runtime to parse and filter +RTS ... -RTS args
@@ -286,7 +297,7 @@ GHCOPTLEVEL ?= -O2
 
 GHCOPTFLAGS = $(GHCOPTLEVEL) $(GHCFLAGS)
 
-GHCPROF = -prof $(GHCPROFAUTO) '-osuf p_o' '-hisuf p_hi'
+GHCPROF = -prof $(GHCPROFAUTO) $(GHCPROFTH) '-osuf p_o' '-hisuf p_hi'
 GHCOPTPROFFLAGS = $(GHCOPTFLAGS) $(GHCPROF)
 
 GHCDEBUG = -dcore-lint -debug '-osuf d_o' '-hisuf d_hi'

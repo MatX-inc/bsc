@@ -578,7 +578,7 @@ aMuxOptDef bflgs (ADef i t e p) = do
     addDef (ADef i t e2 p)
 
 
-type OptFunction = BFlags -> AId -> AType -> PrimOp -> [AExpr] ->  O AExpr
+type OptFunction = BFlags -> AId -> AType -> APrimOp -> [AExpr] ->  O AExpr
 
 -- A general function to optimize down a tree.
 aOptTree :: BFlags -> (OptFunction) -> AExpr -> O AExpr
@@ -591,7 +591,7 @@ aOptTree _ _ e  = return e
 aMuxOpt :: BFlags -> AExpr -> O AExpr
 aMuxOpt bflgs aexpr = aOptTree bflgs aMuxOptPrim aexpr
     where
-      aMuxOptPrim :: BFlags -> AId -> AType -> PrimOp -> [AExpr] ->  O AExpr
+      aMuxOptPrim :: BFlags -> AId -> AType -> APrimOp -> [AExpr] ->  O AExpr
       aMuxOptPrim bflags aid t p es | p == PrimMux || p == PrimPriMux = muxOpt bflags aid t p es
       aMuxOptPrim bflags aid t p es                                   = return $ APrim aid t p es
 
@@ -600,7 +600,7 @@ aMuxOpt bflgs aexpr = aOptTree bflgs aMuxOptPrim aexpr
 aMuxOptConst :: BFlags -> AExpr -> O AExpr
 aMuxOptConst bflgs aexpr = aOptTree bflgs aMuxOptC aexpr
     where
-      aMuxOptC :: BFlags -> AId -> AType -> PrimOp -> [AExpr] ->  O AExpr
+      aMuxOptC :: BFlags -> AId -> AType -> APrimOp -> [AExpr] ->  O AExpr
       aMuxOptC bflags aid t p es | p == PrimMux || p == PrimPriMux = muxOptConst bflags aid t p es
       aMuxOptC bflags aid t p es                                   = return $ APrim aid t p es
 
@@ -701,7 +701,7 @@ aInsertCase _ _ e = e
 -- expression.  Allows arms such as "if (v == 3) || (v == 5)", but
 -- they become separate arms in the case statement.
 aPrimInsertCase :: Bool -> (AId -> AExpr) ->
-                   AId -> AType -> PrimOp -> [AExpr] -> AExpr
+                   AId -> AType -> APrimOp -> [AExpr] -> AExpr
 aPrimInsertCase stringOK findFn aid t PrimIf es@[cond, _, _]
   | stringOK || not (isStringType t) =
     -- if the condition is of the form "(v == c) || (v2 == c2) || ...",
@@ -770,7 +770,7 @@ aExp bflags e@(_)                = return e
 
 -- various optimizations
 -- single level only aExp traverses nested expressions
-aPrim :: BFlags -> AId -> AType -> PrimOp -> [AExpr] -> O AExpr
+aPrim :: BFlags -> AId -> AType -> APrimOp -> [AExpr] -> O AExpr
 
 -- if (!c) tt ee  -->  if (c) ee tt
 aPrim bflags aid t PrimIf [APrim _ _ PrimBNot [c], tt, ee]
@@ -954,7 +954,7 @@ aOptFinalPass flags p | optFinalPass flags == False = p
           --
           communitiveOps = [PrimAdd, PrimOr, PrimBOr, PrimBAnd, PrimAnd, PrimXor]
           --
-          unnest :: PrimOp -> AExpr -> [AExpr]
+          unnest :: APrimOp -> AExpr -> [AExpr]
           unnest op1 (APrim i e op es) | op == op1 = es
           unnest _ e = [e]
 
@@ -966,17 +966,17 @@ truncateInteger value hi lo =
 
 -- If the expression is a 1-bit type, then try to simplify it as a
 -- boolean expression (using aBoolSimp)
-aPrimBool :: AId -> AType -> PrimOp -> [AExpr] -> AExpr
+aPrimBool :: AId -> AType -> APrimOp -> [AExpr] -> AExpr
 aPrimBool aid t@(ATBit 1) p es = aBoolSimp (APrim aid t p es)
 aPrimBool aid t p es = APrim aid t p es
 
-bitwise :: PrimOp -> Bool
+bitwise :: APrimOp -> Bool
 bitwise PrimAnd = True
 bitwise PrimOr  = True
 bitwise PrimXor = True
 bitwise _       = False
 
-boolOp :: PrimOp -> PrimOp
+boolOp :: APrimOp -> APrimOp
 boolOp PrimAnd = PrimBAnd
 boolOp PrimOr  = PrimBOr
 boolOp PrimXor = PrimXor
@@ -1013,7 +1013,7 @@ mkDefS e = do
 
 -----
 
-sAPrim :: AType -> PrimOp -> [AExpr] -> AExpr
+sAPrim :: AType -> APrimOp -> [AExpr] -> AExpr
 sAPrim t op es = APrim defaultAId t op es
 
 isInt :: AExpr -> Bool
@@ -1194,7 +1194,7 @@ rmDupsInCasePairs prs = rmDups S.empty prs
 --  removes any pair where the condition is false
 --  drops all pairs after a true const is found
 --  merges identical expressions
-optMuxPairs :: BFlags -> AId -> AType -> PrimOp -> [(AExpr,AExpr)] -> [(AExpr,AExpr)]
+optMuxPairs :: BFlags -> AId -> AType -> APrimOp -> [(AExpr,AExpr)] -> [(AExpr,AExpr)]
 optMuxPairs bflgs aid dty op eps | not $ ao_mux bflgs = eps
 optMuxPairs bflgs aid dty op eps = eps3
     where
@@ -1212,7 +1212,7 @@ optMuxPairs bflgs aid dty op eps = eps3
 -- merge Identical Expressions
 -- The sort function here can cause reordering in case expression, which can
 -- later turn to if expressions, and look totally wrong when comparing to older versions.
-mergeIdenExpr :: Bool -> PrimOp -> [(AExpr,AExpr)] ->  [(AExpr,AExpr)]
+mergeIdenExpr :: Bool -> APrimOp -> [(AExpr,AExpr)] ->  [(AExpr,AExpr)]
 mergeIdenExpr stable op eps = if ( length newpairs < length eps ) then newpairs else eps
     where
       flattenGrps :: [(AExpr,AExpr)] -> (AExpr,AExpr)
@@ -1253,7 +1253,7 @@ mergeIdenExpr stable op eps = if ( length newpairs < length eps ) then newpairs 
 
 -- a pass of all PrimPriMux and PriMux to remove constants and
 -- to turn small ones back to if
-muxOptConst :: BFlags -> AId -> AType -> PrimOp -> [AExpr] -> O AExpr
+muxOptConst :: BFlags -> AId -> AType -> APrimOp -> [AExpr] -> O AExpr
 muxOptConst bflgs aid dty op exs | not $ ao_mux bflgs = return (APrim aid dty op exs)
 muxOptConst bflgs aid dty op exs = do
     -- trivial mux opt
@@ -1287,7 +1287,7 @@ isAnyExprAString exprs = any isAExprStr exprs
           isAExprStr _           = False
 
 -- function which optimizes mux pairs
-muxOpt :: BFlags -> AId -> AType -> PrimOp -> [AExpr] -> O AExpr
+muxOpt :: BFlags -> AId -> AType -> APrimOp -> [AExpr] -> O AExpr
 muxOpt bflgs aid dty op esx | not $ ao_muxExpand bflgs = do
     -- trivial mux opt
   return $
@@ -1499,7 +1499,7 @@ aExtract e hi lo =
 
 ------------
 
-aMakeMux :: AId -> AType -> PrimOp -> [(AExpr, AExpr)] -> AExpr
+aMakeMux :: AId -> AType -> APrimOp -> [(AExpr, AExpr)] -> AExpr
 aMakeMux aid t op pexs =
     let pexs' = joinEq (if op == PrimMux then partition else span) pexs
         joinEq f [] = []
@@ -1615,7 +1615,7 @@ fromBE (Var e) = e
 fromBE TT = aBool True
 fromBE FF = aBool False
 
-getOp :: PrimOp -> AExpr -> [AExpr]
+getOp :: APrimOp -> AExpr -> [AExpr]
 getOp p (APrim _ _ p' es) | p == p' = es
 getOp _ e = [e]
 

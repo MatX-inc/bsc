@@ -857,7 +857,7 @@ vNot (VEOp vid e1 VEQ  e2) = VEOp vid e1 VNE  e2
 vNot (VEOp vid e1 VEQ3 e2) = VEOp vid e1 VNE3 e2
 vNot e                     = mkVEUnOp VNot e
 
-toVOp :: PrimOp -> VOp
+toVOp :: APrimOp -> VOp
 toVOp PrimBNot = VNot
 toVOp PrimInv  = VInv
 toVOp PrimNeg  = VNeg
@@ -881,12 +881,12 @@ toVOp PrimBAnd = VLAnd
 toVOp PrimBOr  = VLOr
 toVOp p        = internalError ("toVOp " ++ show p)
 
-isSignedCmp :: PrimOp -> Bool
+isSignedCmp :: APrimOp -> Bool
 isSignedCmp PrimSLT = True
 isSignedCmp PrimSLE = True
 isSignedCmp _       = False
 
-unsOp :: PrimOp -> VOp
+unsOp :: APrimOp -> VOp
 unsOp PrimSLT = VULT
 unsOp PrimSLE = VULE
 unsOp _ = internalError ("AVerilog::unsOp")

@@ -28,6 +28,7 @@ module ASyntax(
         mkOutputWire,
         mkIfcInoutN,
         AExpr(..),
+        APrimOp,
         ADef(..),
         ASPackage(..),
         ASPSignalInfo(..),
@@ -1036,6 +1037,10 @@ instance NFData AReset where
 instance NFData AInout where
     rnf (AInout wire) = rnf wire
 
+-- The primitive of an APrim: ASyntax exists after elaboration, so only
+-- the primitives that exist at every phase can appear here.
+type APrimOp = PrimOp PostElab
+
 -- Every expression is annotated with its (result) type
         -- all types should be ae_type
         -- all ids should be ae_objid
@@ -1043,7 +1048,7 @@ data AExpr
         = APrim {        -- Verilog primitive (e.g., +)
             ae_objid :: AId,
             ae_type :: AType,
-            aprim_prim :: PrimOp,
+            aprim_prim :: APrimOp,
             ae_args :: [AExpr]
         }
         | AMethCall {
@@ -1634,7 +1639,7 @@ instance PPrint AType where
         text "Tuple" <+> parens (commaSep (map (pPrint d 0) ts))
     pPrint d p (ATAbstract i ns) = sep (text "ABSTRACT: " : pPrint d 0 i : map (pPrint d 0) ns)
 
-binOp :: PrimOp -> Bool
+binOp :: APrimOp -> Bool
 binOp p = p `elem`
         [PrimAdd, PrimSub, PrimAnd, PrimOr, PrimXor,
          PrimMul, PrimQuot, PrimRem,
@@ -1658,7 +1663,7 @@ data PExpandLiteral = Sized | Boolean | Index
 data PExpandContext =
     PExpandContext {
                     useParen    :: Bool -- if needed
-                   ,parentOp    :: Maybe PrimOp
+                   ,parentOp    :: Maybe APrimOp
                    ,literal     :: PExpandLiteral
                    }
 
@@ -1815,7 +1820,7 @@ instance PPrintExpand AAction where
     pPrintExpand _ _ _  x = internalError ("pPrintExpand AAction: " ++ show x)
 
 
-isAssocOp :: PrimOp -> Bool
+isAssocOp :: APrimOp -> Bool
 isAssocOp PrimMul = True
 isAssocOp PrimAdd = True
 isAssocOp PrimOr = True

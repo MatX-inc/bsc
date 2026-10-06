@@ -42,6 +42,8 @@ library
     split        ^>=0.2.5,
     strict-concurrency ^>=0.2.4.3,
     syb          ^>=0.7.2,
+    -- Prim.hs splices its code tables (PrimTH)
+    template-haskell >=2.20,
     text         >=2.0.2,
     time         >=1.12.2,
     unix         >=2.8.6.0,
@@ -257,6 +259,7 @@ library
     PredTrie
     Pretty
     Prim
+    PrimTH
     ProofObligation
     RSchedule
     RealUtil
