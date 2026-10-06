@@ -16,7 +16,7 @@ import ErrorUtil(internalError)
 --   codes    every constructor's name, in encoding order: a
 --            constructor's code is its index in this list
 --   retired  (name, binding) for the codes of former constructors that
---            a file format still writes; a binding `name :: Int` is
+--            a file format still writes; a binding `binding :: Int` is
 --            generated for each
 --
 -- generates
@@ -27,6 +27,9 @@ import ErrorUtil(internalError)
 --                     Just for a constructor declared at every phase
 --                     (result type `PrimOp p`), Nothing for one whose
 --                     result type is refined to some phases
+--   <binding>      :: Int                         (one per retired entry)
+--   retiredPrimOpCodes :: [(Int, String)]         (code, former name),
+--                     in code order, for the listing that pins the table
 --
 -- and fails the compile when the constructor set and the table disagree.
 primOpTables :: Name -> Name -> [String] -> [(String, String)] -> Q [Dec]
@@ -99,7 +102,14 @@ primOpTables tyName preElab codes retired = do
       retiredDecs = concat [ [ SigD (mkName b) intT
                              , ValD (VarP (mkName b)) (NormalB (lit (codeOf M.! c))) [] ]
                            | (c, b) <- retired ]
-  return ([codeSig, codeDef, fromSig, fromDef, allSig, allDef, anySig, anyDef] ++ retiredDecs)
+      -- retiredPrimOpCodes :: [(Int, String)]
+      retiredName = mkName "retiredPrimOpCodes"
+      retiredSig = SigD retiredName (AppT ListT (AppT (AppT (TupleT 2) intT) (ConT ''String)))
+      retiredDef = ValD (VarP retiredName)
+                     (NormalB (ListE [ TupE [Just (lit k), Just (LitE (StringL c))]
+                                     | (k, c) <- sort [ (codeOf M.! c, c) | (c, _) <- retired ] ])) []
+  return ([codeSig, codeDef, fromSig, fromDef, allSig, allDef, anySig, anyDef]
+          ++ retiredDecs ++ [retiredSig, retiredDef])
   where
     -- a nullary constructor and whether its result type is the
     -- unrefined `PrimOp p`

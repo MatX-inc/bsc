@@ -30,6 +30,7 @@ isLiteral (ASInt {}) = True
 isLiteral (ASStr {}) = True
 isLiteral (ASAny {}) = True
 isLiteral (APrim {ae_args = es}) = all isLiteral es
+isLiteral (AMux {amux_arms = arms}) = all isLiteral (aMuxArmExprs arms)
 isLiteral _ = False
 
 -- utility function to check if you have a bare constant
@@ -69,6 +70,7 @@ instance AVars AExpr where
     aVars (ASPort _ i) = [i]
     aVars (ASParam _ i) = [i]
     aVars (APrim _ _ _ es) = concatMap aVars es
+    aVars (AMux _ _ _ arms) = concatMap aVars (aMuxArmExprs arms)
     aVars (ANoInlineFunCall _ _ _ es) = concatMap aVars es
     aVars (AFunCall _ _ _ _ es) = concatMap aVars es
     aVars (AMethCall _ _ _ es) = concatMap aVars es
@@ -117,6 +119,7 @@ instance AVars AVInst where
 -- find AMethValue uses in an AExpr
 aMethValues :: AExpr -> [(AId, AId, AType)]
 aMethValues e@(APrim {}) = concatMap aMethValues (ae_args e)
+aMethValues e@(AMux {}) = concatMap aMethValues (aMuxArmExprs (amux_arms e))
 aMethValues e@(AMethCall {}) = concatMap aMethValues (ae_args e)
 aMethValues (AMethValue ty obj meth) = [(obj,meth,ty)]
 aMethValues (ATuple _ es) = concatMap aMethValues es
@@ -139,6 +142,7 @@ aMethValues (AMGate {}) = []
 -- find AMethCall uses in an AExpr (ignore references to AV values)
 aMethCalls :: AExpr -> [(AId, AId)]
 aMethCalls e@(APrim {}) = concatMap aMethCalls (ae_args e)
+aMethCalls e@(AMux {}) = concatMap aMethCalls (aMuxArmExprs (amux_arms e))
 aMethCalls (AMethCall _ obj meth es) = ((obj,meth) : concatMap aMethCalls es)
 aMethCalls (AMethValue _ obj meth) = []
 aMethCalls (ATuple _ es) = concatMap aMethCalls es
@@ -161,6 +165,7 @@ aMethCalls (AMGate {}) = []
 -- find ATaskValue uses in an AExpr
 aTaskValues :: AExpr -> [(AId, Integer, AType)]
 aTaskValues e@(APrim {}) = concatMap aTaskValues (ae_args e)
+aTaskValues e@(AMux {}) = concatMap aTaskValues (aMuxArmExprs (amux_arms e))
 aTaskValues e@(AMethCall {}) = concatMap aTaskValues (ae_args e)
 aTaskValues (AMethValue {}) = []
 aTaskValues (ATuple _ es) = concatMap aTaskValues es
@@ -187,6 +192,7 @@ exprForeignCalls e@(AFunCall {})  =
   then e : concatMap exprForeignCalls (ae_args e)
   else (concatMap exprForeignCalls (ae_args e))
 exprForeignCalls e@(APrim {})     = concatMap exprForeignCalls (ae_args e)
+exprForeignCalls e@(AMux {})      = concatMap exprForeignCalls (aMuxArmExprs (amux_arms e))
 exprForeignCalls e@(AMethCall {}) = concatMap exprForeignCalls (ae_args e)
 exprForeignCalls (ATuple _ es) = concatMap exprForeignCalls es
 exprForeignCalls (ATupleSel _ e _) = exprForeignCalls e
@@ -487,6 +493,7 @@ aSubst m = mapAExprs xsub
         xsub x@(ASParam _ i) = M.findWithDefault x i m
         xsub x@(ASDef _ i) = M.findWithDefault x i m
         xsub (APrim aid t p es) = APrim aid t p (aSubst m es)
+        xsub (AMux aid t k arms) = AMux aid t k (aSubst m arms)
         xsub (AMethCall t i meth es) = AMethCall t i meth (aSubst m es)
         xsub (ATuple t es) = ATuple t (aSubst m es)
         xsub (ATupleSel t e n) = ATupleSel t (aSubst m e) n
@@ -501,6 +508,9 @@ aSubst m = mapAExprs xsub
 exprMap :: (AExpr -> Maybe AExpr) -> AExpr -> AExpr
 exprMap f e@(APrim i t o args) =
   let e' = APrim i t o (map (exprMap f) args)
+  in fromMaybe e' (f e)
+exprMap f e@(AMux i t k arms) =
+  let e' = AMux i t k (mapAMuxArms (exprMap f) arms)
   in fromMaybe e' (f e)
 exprMap f e@(AMethCall t i m args) =
   let e' = AMethCall t i m (map (exprMap f) args)
@@ -526,6 +536,12 @@ exprMapM f e@(APrim i t o args) = do
     Just e' -> return e'
     Nothing -> do args' <- mapM (exprMapM f) args
                   return $ APrim i t o args'
+exprMapM f e@(AMux i t k arms) = do
+  me <- f e
+  case me of
+    Just e' -> return e'
+    Nothing -> do arms' <- mapMAMuxArms (exprMapM f) arms
+                  return $ AMux i t k arms'
 exprMapM f e@(AMethCall t i m args) = do
   me <- f e
   case me of
@@ -566,6 +582,9 @@ exprMapM f e = do
 exprFold :: (AExpr -> a -> a) -> a -> AExpr -> a
 exprFold f v e@(APrim i t o args) =
   let v' = foldr (flip (exprFold f)) v args
+  in f e v'
+exprFold f v e@(AMux i t k arms) =
+  let v' = foldr (flip (exprFold f)) v (aMuxArmExprs arms)
   in f e v'
 exprFold f v e@(AMethCall t i m args) =
   let v' = foldr (flip (exprFold f)) v args
@@ -657,6 +676,8 @@ instance ARules APackage where
 aIdFnToAExprFn :: (AId -> AId) -> (AExpr -> AExpr)
 aIdFnToAExprFn fn (APrim aid ty op args) =
     APrim (fn aid) ty op (mapAExprs (aIdFnToAExprFn fn) args)
+aIdFnToAExprFn fn (AMux aid ty k arms) =
+    AMux (fn aid) ty k (mapAExprs (aIdFnToAExprFn fn) arms)
 aIdFnToAExprFn fn (AMethCall ty aid mid args) =
     AMethCall ty (fn aid) mid (mapAExprs (aIdFnToAExprFn fn) args)
 aIdFnToAExprFn fn (AMethValue ty aid mid) =

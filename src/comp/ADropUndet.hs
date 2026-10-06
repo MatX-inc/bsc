@@ -92,6 +92,7 @@ canFixUndet flags avmap e =
 
 hasNoActionValue :: M.Map AId Bool -> AExpr -> Bool
 hasNoActionValue avm (APrim { ae_args = es }) = all (hasNoActionValue avm) es
+hasNoActionValue avm (AMux { amux_arms = arms }) = all (hasNoActionValue avm) (aMuxArmExprs arms)
 hasNoActionValue avm (AMethCall { ae_args = es }) = all (hasNoActionValue avm) es
 hasNoActionValue avm (AMethValue {}) = False
 hasNoActionValue avm (ATuple _ es) = all (hasNoActionValue avm) es

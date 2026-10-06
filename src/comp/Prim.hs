@@ -9,6 +9,7 @@ module Prim(
             PreElab, Elab, PostElab, BinderPhase, EvaldPhase,
             PrimOp(..),
             primOpCode, primOpFromCode, allPrimOps, primOpAnyPhase,
+            primMuxCode, primPriMuxCode, retiredPrimOpCodes,
             toPrim,
             toWString,
             stringSize,
@@ -109,9 +110,9 @@ data PrimOp (p :: Phase) where
         -- dead after ISplitIf) and PrimFmtConcat (the Prelude's Fmt
         -- concatenation, which the evaluator leaves in normal form and
         -- IInlineFmt consumes).  Those five are gone by AConv by a
-        -- runtime check, not by type.  PrimMux and PrimPriMux exist
-        -- only in ASyntax, built after AConv; they are declared here
-        -- until the muxes get AExpr constructors of their own.
+        -- runtime check, not by type.  (The two muxes AState and AOpt
+        -- build after AConv are not primitives: ASyntax's AMux; their
+        -- former codes, 32 and 33, are retired below.)
         PrimAdd :: PrimOp p
         PrimSub :: PrimOp p
         PrimAnd :: PrimOp p
@@ -142,8 +143,6 @@ data PrimOp (p :: Phase) where
         PrimTrunc :: PrimOp p
 
         PrimExtract :: PrimOp p
-        PrimMux :: PrimOp p  -- built by AOpt/AState after AConv, never an ICPrim
-        PrimPriMux :: PrimOp p  -- built by AOpt/AState after AConv, never an ICPrim
 
         PrimFmtConcat :: PrimOp p  -- Prelude.bs primFmtConcat; consumed by IInlineFmt
 
@@ -447,6 +446,10 @@ data PrimOp (p :: Phase) where
 --                     exists at every phase (Nothing for one declared
 --                     at the binder phases only; the evaluator's rebuild
 --                     and the .ba reader refuse those)
+--   primMuxCode, primPriMuxCode :: Int
+--                     the retired codes (one binding per retired entry)
+--   retiredPrimOpCodes :: [(Int, String)]
+--                     the retired codes with their former names
 --
 -- The list is the encoding: a primitive's code is its position, and
 -- the positions are those of the `deriving Enum` the type had before
@@ -524,7 +527,10 @@ $(primOpTables ''PrimOp ''PreElab
     "PrimArrayDynSelect", "PrimArrayDynUpdate", "PrimBuildArray", "PrimSetSelPosition",
     "PrimGetParamName", "PrimEQ3", "PrimPack", "PrimUnpack"
   ]
-  [])
+  -- retired: the muxes, now ASyntax's AMux (AMuxParallel was PrimMux,
+  -- AMuxPriority PrimPriMux); BinData writes a mux with the retired code
+  -- so that a .ba holding one would be byte-identical, and reads it back
+  [ ("PrimMux", "primMuxCode"), ("PrimPriMux", "primPriMuxCode") ])
 
 -- Equality and order are by code, which is the order of the enum the
 -- type derived them from before it was indexed: the Map and Set
@@ -902,8 +908,6 @@ instance NFData (PrimOp p) where
     rnf PrimMethod = ()
     rnf PrimNoInline = ()
     rnf PrimIf = ()
-    rnf PrimMux = ()
-    rnf PrimPriMux = ()
     rnf PrimFmtConcat = ()
     rnf PrimCase = ()
     rnf PrimSelect = ()

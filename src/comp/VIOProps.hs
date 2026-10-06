@@ -414,6 +414,7 @@ okUse :: AId -> AExpr -> Bool
 okUse i (APrim _ _ PrimConcat es)         = and (map (okUse i) es)
 okUse i (APrim _ _ PrimExtract [e, _, _]) = okUse i e
 okUse i (APrim _ _ _ es)                  = and (map (noUse i) es)
+okUse i (AMux _ _ _ arms)                 = and (map (noUse i) (aMuxArmExprs arms))
 okUse i (ANoInlineFunCall _ _ _ es)       = and (map (noUse i) es)
 okUse i (AFunCall _ _ _ _ es)             = and (map (noUse i) es)
 okUse i (ASInt _ _ _)                     = True
@@ -427,6 +428,7 @@ okUse i e                                 = internalError ("getIOProps.okUse " +
 
 noUse :: AId -> AExpr -> Bool
 noUse i (APrim _ _ _ es)     = and (map (noUse i) es)
+noUse i (AMux _ _ _ arms)    = and (map (noUse i) (aMuxArmExprs arms))
 noUse i (ANoInlineFunCall _ _ _ es) = and (map (noUse i) es)
 noUse i (AFunCall _ _ _ _ es) = and (map (noUse i) es)
 noUse i (AMethCall _ _ _ es) = and (map (noUse i) es)
@@ -1171,6 +1173,10 @@ getIOPropsA _flags pps mschedinfo apkg =
         getOutPropsA (APrim _ _ _ es)
             | not (null es),
               all (\ e -> VPconst `elem` getOutPropsA e) es = [VPconst]
+        -- (a mux likewise)
+        getOutPropsA (AMux _ _ _ arms)
+            | not (null arms),
+              all (\ e -> VPconst `elem` getOutPropsA e) (aMuxArmExprs arms) = [VPconst]
         -- either a special output of a state instance
         -- or an input of this module
         getOutPropsA (ASPort _ i) =
@@ -1305,6 +1311,7 @@ getIOPropsA _flags pps mschedinfo apkg =
         exprCalls (AMethCall _ obj meth es) =
             (obj, unQualId meth) : concatMap exprCalls es
         exprCalls (APrim _ _ _ es) = concatMap exprCalls es
+        exprCalls (AMux _ _ _ arms) = concatMap exprCalls (aMuxArmExprs arms)
         exprCalls (ANoInlineFunCall _ _ _ es) = concatMap exprCalls es
         exprCalls (AFunCall _ _ _ _ es) = concatMap exprCalls es
         exprCalls (ATuple _ es) = concatMap exprCalls es
@@ -1495,6 +1502,8 @@ getIOPropsA _flags pps mschedinfo apkg =
         classifyForeignExpr :: AExpr -> [(SigKey, AUse)]
         classifyForeignExpr (APrim _ _ _ es) =
             concatMap classifyForeignExpr es
+        classifyForeignExpr (AMux _ _ _ arms) =
+            concatMap classifyForeignExpr (aMuxArmExprs arms)
         classifyForeignExpr (ANoInlineFunCall _ _ _ es) =
             concatMap classifyForeignExpr es
         classifyForeignExpr (AFunCall _ _ _ _ es) =
@@ -1557,6 +1566,8 @@ getIOPropsA _flags pps mschedinfo apkg =
             classifyExpr u e ++ concatMap (classifyExpr (opaqueOf u)) es
         classifyExpr u (APrim _ _ _ es) =
             concatMap (classifyExpr (opaqueOf u)) es
+        classifyExpr u (AMux _ _ _ arms) =
+            concatMap (classifyExpr (opaqueOf u)) (aMuxArmExprs arms)
         classifyExpr u (ANoInlineFunCall _ _ _ es) =
             concatMap (classifyExpr (opaqueOf u)) es
         classifyExpr u (AFunCall _ _ _ _ es) =

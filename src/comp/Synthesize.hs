@@ -60,6 +60,7 @@ aImprove stable p@(ASPackage { aspkg_values = ds }) =
                 Just e' -> e'
                 Nothing -> e
         repl (APrim aid t p es) = APrim aid t p (map repl es)
+        repl (AMux aid t k arms) = AMux aid t k (mapAMuxArms repl arms)
         repl (ANoInlineFunCall t i f es) = ANoInlineFunCall t i f (map repl es)
         repl (AFunCall t i f isC es) = AFunCall t i f isC (map repl es)
 --        repl e = internalError ("aImprove.replE " ++ ppReadable e)
@@ -199,6 +200,7 @@ toE (APrim aid t@(ATBit n) PrimExtract [e, h, l]) | h /= l && not (isConst h && 
             e' = aOptBoolExpr (APrim aid t PrimAnd [e1, e2])
         in  toE e'
 toE (APrim aid t p es) = mapM toSE es >>= return . APrim aid t p
+toE (AMux aid t k arms) = mapMAMuxArms toSE arms >>= return . AMux aid t k
 toE (ANoInlineFunCall t i f es) = mapM toSE es >>= return . ANoInlineFunCall t i f
 toE (AFunCall t i f isC es) = mapM toSE es >>= return . AFunCall t i f isC
 toE e = return e
@@ -237,13 +239,18 @@ addDefU i e p = do
 -- put primops on "normal form", i.e., with sorted operands and simple id inlined
 normExpr :: AExpr -> S AExpr
 normExpr (APrim aid t op es) = do
-    let getSimpleS e@(ASDef _ i) = getSimple i e
-        getSimpleS e = return e
     es' <- mapM getSimpleS es
     stable <- gets sstable
     return (sortExpr stable (aOptPrim aid t op es'))
+normExpr (AMux aid t k arms) = do
+    arms' <- mapMAMuxArms getSimpleS arms
+    return (AMux aid t k arms')
 normExpr e@(ASDef _ i) = getSimple i e
 normExpr e = return e
+
+getSimpleS :: AExpr -> S AExpr
+getSimpleS e@(ASDef _ i) = getSimple i e
+getSimpleS e = return e
 
 aOptPrim :: AId -> AType -> APrimOp -> [AExpr] -> AExpr
 aOptPrim aid t PrimBAnd es  = aAnds aid es
@@ -278,6 +285,11 @@ synDef (i, e, props) = do
 
 synExp :: AExpr -> S [AExpr]
 synExp (APrim aid t p es) = synPrim aid t p es
+synExp (AMux aid _ AMuxParallel arms) = synMux aid (unzip arms)
+synExp (AMux aid _ AMuxPriority arms) = do
+        let (ps, es) = unzip arms
+        ps' <- synPriEnc aid [] ps >>= toSs
+        synMux aid (ps', es)
 synExp e@(ANoInlineFunCall t _ _ _) = do
         i <- newName
         addDef i e []
@@ -391,12 +403,7 @@ synPrim aid _ PrimEQ [x, y] = do
         return [aNot aid ne]
 synPrim aid ty PrimIf [c, t, e] = do
         notc <- toS (aNot aid c)
-        synPrim aid ty PrimMux [c, t, notc, e]
-synPrim aid _ PrimMux pes = synMux aid (unzip (makePairs pes))
-synPrim aid _ PrimPriMux pes = do
-        let (ps, es) = unzip (makePairs pes)
-        ps' <- synPriEnc aid [] ps >>= toSs
-        synMux aid (ps', es)
+        synMux aid ([c, notc], [t, e])
 synPrim aid _ PrimExtract [e, ASInt _ _ (IntLit _ _ h), ASInt _ _ (IntLit _ _ l)] = do
         es <- synExp e
         return (take (fromInteger (h-l+1)) (drop (fromInteger l) es))

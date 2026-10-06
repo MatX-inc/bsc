@@ -1020,6 +1020,8 @@ updateAExprTypes _ e@(ASParam t i) = return e
 updateAExprTypes _ e@(ASAny t) = return e
 
 updateAExprTypes mty (APrim i t p args) = updateAPrimTypes mty p i t args
+-- (the dumps are of the package before AState, which builds the first mux)
+updateAExprTypes _ e@(AMux {}) = internalError ("updateAExprTypes: mux before AState: " ++ ppReadable e)
 
 -- method arguments and return values are Bit type,
 -- except RDY methods which return Bool

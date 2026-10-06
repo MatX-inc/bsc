@@ -483,15 +483,13 @@ vDefMpd :: VConvtOpts -> ADef -> ForeignFuncMap
               -> [VMItem]
 -- special case for two input mux, for readability
 {-
-vDefMpd _ (ADef i t (APrim _ _ PrimPriMux [ce,te,_,ee])) =
+vDefMpd _ (ADef i t (AMux _ _ AMuxPriority [(ce,te),(_,ee)])) =
         [ VMDecl $ VVDecl VDWire (vSize t) [VVar (vId i)],
           VMAssign (VLId (vId i)) (VEIf (vExpr vco ce) (vExpr vco te) (vExpr vco ee)) ]
 -}
-vDefMpd vco (ADef i t (APrim _ _ PrimPriMux []) _) _ = internalError("vDefMpd 11" )
+vDefMpd vco (ADef i t (AMux _ _ AMuxPriority []) _) _ = internalError("vDefMpd 11" )
 
-vDefMpd vco (ADef i t (APrim _ _ PrimPriMux [e]) _) _ = internalError("vDefMpd 12" )
-
-vDefMpd vco  def@(ADef i t (APrim _ _ PrimPriMux es) _) _ =
+vDefMpd vco  def@(ADef i t (AMux _ _ AMuxPriority armpairs) _) _ =
     if (not (vco_readableMux vco)) then
         [ VMDecl $ VVDecl VDWire (vSize t) [VVar (vId i)],
           muxInst vco True (aSize t) (vPrimInstId "priorityMux_" i) (VEVar (vId i) : map (vExpr vco) es) ]
@@ -501,13 +499,14 @@ vDefMpd vco  def@(ADef i t (APrim _ _ PrimPriMux es) _) _ =
                    vi_body =
                        Valways $ VAt ev $
                        Vcase { vs_case_expr = one,
-                               vs_case_arms = arms (makePairs es),
+                               vs_case_arms = arms armpairs,
                                vs_parallel = False,
                                vs_full = False
                              }
                  }
         ]
   where vi = vId i
+        es = aMuxArmExprs armpairs
         one = VEWConst (mkVId "1") 1 2 1
         arms [] = []  -- shouldn't happen
         arms [(c,e)] = [VDefault (VAssign (VLId vi) (vExpr vco e))]
@@ -515,10 +514,10 @@ vDefMpd vco  def@(ADef i t (APrim _ _ PrimPriMux es) _) _ =
             (VCaseArm [vExpr vco c] (VAssign (VLId vi) (vExpr vco e)) : arms ces)
         sensitivityList = nub (concatMap aIds es)
         ev = if (null sensitivityList)
-             then (internalError("AVerilogUtil:: null sensitivity list for PrimPriMux" ++ ppReadable def))
+             then (internalError("AVerilogUtil:: null sensitivity list for AMuxPriority" ++ ppReadable def))
              else foldr1 VEEOr (map (VEE . VEVar) sensitivityList)
 
-vDefMpd vco def@(ADef i t (APrim _ _ PrimMux es) _) _ =
+vDefMpd vco def@(ADef i t (AMux _ _ AMuxParallel armpairs) _) _ =
     if (not (vco_readableMux vco)) then
         [ VMDecl $ VVDecl VDWire (vSize t) [VVar (vId i)],
           muxInst vco False (aSize t) (vPrimInstId "mux_" i) (VEVar (vId i) : map (vExpr vco) es) ]
@@ -537,13 +536,13 @@ vDefMpd vco def@(ADef i t (APrim _ _ PrimMux es) _) _ =
                  }
         ]
   where vi = vId i
+        es = aMuxArmExprs armpairs
         one = VEWConst (mkVId "1") 1 2 1
-        armpairs = makePairs es
         arm (c,e) = VCaseArm [vExpr vco c] (VAssign (VLId vi) (vExpr vco e))
         defaultArm (c,e) = [VDefault (VAssign (VLId vi) (vExpr vco e))]
         sensitivityList = nub (concatMap aIds es)
         ev = if (null sensitivityList)
-             then (internalError("AVerilogUtil:: null sensitivity list for PrimMux"  ++ ppReadable def))
+             then (internalError("AVerilogUtil:: null sensitivity list for AMuxParallel"  ++ ppReadable def))
              else foldr1 VEEOr (map (VEE . VEVar) sensitivityList)
 
 vDefMpd vco (ADef i t
@@ -764,8 +763,7 @@ tupleElemVId i idx = suff (vId i) ("_" ++ itos idx)
 -- main conversion for AExpr to VExpr
 vExpr :: VConvtOpts -> AExpr -> VExpr
 vExpr vco e@(APrim _ _ PrimCase _) = internalError ("vExpr vco CASE " ++ ppReadable e)
-vExpr vco e@(APrim _ _ PrimMux es) = internalError ("vExpr vco MUX " ++ ppReadable e)
-vExpr vco e@(APrim _ _ PrimPriMux es) = internalError ("vExpr vco MUX " ++ ppReadable e)
+vExpr vco e@(AMux {}) = internalError ("vExpr vco MUX " ++ ppReadable e)
 vExpr vco (APrim _ _ PrimResetUnassertedVal []) = mkNotReset
 vExpr vco (APrim _ _ PrimConcat es@(e:_)) | allSame es = VERepeat (VEConst (genericLength es)) (vExpr vco e)
 vExpr vco (APrim _ _ PrimConcat es) = VEConcat (map (vExpr vco) es)
@@ -1224,6 +1222,7 @@ vDropSize e = e
 
 aIds :: AExpr -> [VId]
 aIds (APrim _ _ _ es)     = concatMap aIds es
+aIds (AMux _ _ _ arms)    = concatMap aIds (aMuxArmExprs arms)
 -- XXX AMethCall/AMethValue shouldn't exist
 -- aIds (AMethCall _ i m []) = [(vMethId i m 1 MethodResult M.Empty)]
 -- aIds (AMethCall _ _ _ es) = concatMap aIds es
