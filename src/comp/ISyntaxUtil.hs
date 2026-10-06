@@ -1564,6 +1564,9 @@ joinActionsA as = foldr1 AJoin as
 -- selector, state variable or foreign constant never is.
 onActionArgsM :: Monad m => (IExpr PostElab -> m (IExpr PostElab))
               -> (IAction -> m IAction) -> IAction -> m IAction
+-- (the unfolding is exposed so that each caller's monad gets its own
+-- specialisation instead of a Monad dictionary passed at run time)
+{-# INLINABLE onActionArgsM #-}
 onActionArgsM fe fa a =
     case a of
       ANoActions -> return a
