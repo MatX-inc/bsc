@@ -4,10 +4,9 @@
 module ISplitIf (iSplitIf) where
 
 import ISyntax
-import Prim
 import ErrorUtil(internalError)
 import PPrint
-import PreIds(idPrimExpIf, idAVValue_)
+import PreIds(idAVValue_)
 import qualified Flags(Flags, expandIf)
 import Position
 import ISyntaxUtil
@@ -17,8 +16,6 @@ import ITransform(iTransBoolExpr)
 import PreStrings(fs_T, fs_F)
 import FStringCompat(FString, concatFString, getFString, mkFString)
 import Control.Monad(msum)
-import Util(makePairs, flattenPairs)
-import Util(mapSnd)
 import Data.List(genericLength)
 -- import Debug.Trace(trace)
 
@@ -42,10 +39,10 @@ iSplitIf flags imod@(IModule { imod_rules = rules,
        (smaps, new_methods) = unzip $ map (iSplitIface flags) methods
        -- provide the method split map, in case any rule pragmas mention methods
        (_, new_rules) = do_iExpandIfRules flags (concat smaps) rules
-    in case check_rules isIfWrapper new_rules of
+    in case check_rules new_rules of
           (Just x) -> internalError ("iSplitIf Error " ++ (ppReadable x))
           _
-              ->  case (msum (map (check_meth_rules isIfWrapper)
+              ->  case (msum (map check_meth_rules
                                   new_methods)) of
                     (Just x) -> internalError ("iSplitIf Error in interface "
                                                ++ (ppReadable x))
@@ -88,230 +85,136 @@ data Branch_taken a =
        | BranchCaseDefault (IExpr a) [IExpr a] Integer
     deriving (Eq, Show)
 
-type Path_through_actions a = ([Branch_taken a],[IExpr a])
+type Path_through_actions a = ([Branch_taken a],[IAction])
 
-run :: IExpr PostElab -> [Path_through_actions PostElab]
+run :: IAction -> [Path_through_actions PostElab]
 -- this function does the work of splitting an if into two actions
 
 -- this function uses the list as the nondeterminism monad.  I've heard
 -- that there exist more efficient nondeterminism monads, which should be
 -- looked into if performance is a problem.
 
--- we are very careful of checking that the type arguments to
--- PrimExpIf, PrimNoExpIf, PrimSplitDeep, PrimNosplitDeep are []
--- (as they should be)
-
 --run l | flattensToNothing l = return ([], [])
 run l
   = case l of
-        (IAps (ICon _ _ (ICPrim { primOp = PrimExpIf })) [] [e]) ->
-          case e of
-            (IAps (ICon _ _ (ICPrim { primOp = PrimIf }))
-                 [ty_if] [cond, t_action, f_action]) | ty_if == itAction
-              ->
+        -- a conditional marked for splitting: one branch set per arm
+        -- when the condition can be lifted to the predicate, else the
+        -- bare conditional
+        (AIf SplitIf cond t_action f_action) ->
                if (canLiftCond cond) then
                  map (prepend_branch (BranchIf cond True)) (run t_action) ++
                  map (prepend_branch (BranchIf cond False)) (run f_action)
-               else run e
+               else run (AIf SplitDefault cond t_action f_action)
 
-            (IAps (ICon _ _ (ICPrim { primOp = PrimCase }))
-                 [ITNum idx_sz, elem_ty] (e_idx:e_dflt:ces))
-                | elem_ty == itAction
-              ->
-               if (canLiftCond e_idx) then
-                 let ce_pairs = makePairs ces
-                     cs = map fst ce_pairs
-                     doArm (e_cond, e_arm) n =
-                         map (prepend_branch (BranchCase e_idx e_cond n idx_sz))
-                             (run e_arm)
-                     doDflt =
-                         map (prepend_branch
-                                  (BranchCaseDefault e_idx cs idx_sz))
-                             (run e_dflt)
-                 in  concat (zipWith doArm ce_pairs [0..]) ++
-                     doDflt
-               else run e
-
-            (IAps (ICon i_sel _ (ICPrim { primOp = PrimArrayDynSelect }))
-                 [elem_ty, ITNum idx_sz] [e_arr, e_idx]) ->
+        (AArrSel SplitIf i_sel i_arr idx_sz es_elems e_idx) ->
              if (canLiftCond e_idx) then
-              case (expandRefs e_arr) of
-                (IAps (ICon _ _ (ICPrim { primOp = PrimBuildArray }))
-                     [elem_ty'] es_elems)
-                  -> let sel_pos = getPosition i_sel
-                         max_idx = (2^idx_sz) - 1
-                         num_es = genericLength es_elems
-                         -- funcs to make the branches
-                         doElem e_elem n =
-                             map (prepend_branch
-                                      (BranchArrSel e_idx n idx_sz sel_pos))
-                                 (run e_elem)
-                         doOutOfBounds =
-                             map (prepend_branch
-                                      (BranchArrSelOutOfBounds
-                                           e_idx num_es idx_sz sel_pos))
-                                 (run icNoActions)
-                         -- # of arms is the min of the elems and the max index
-                         e_branches =
-                             concat (zipWith doElem es_elems [0..max_idx])
-                         dflt_branch =
-                             if (max_idx > (num_es-1))
-                             then doOutOfBounds
-                             else []
-                     in  e_branches ++ dflt_branch
-                _ -> internalError ("ISplitIf run: unexpected array: " ++
-                                    ppReadable e_arr)
-             else run e
+                  let sel_pos = getPosition i_sel
+                      max_idx = (2^idx_sz) - 1
+                      num_es = genericLength es_elems
+                      -- funcs to make the branches
+                      doElem e_elem n =
+                          map (prepend_branch
+                                   (BranchArrSel e_idx n idx_sz sel_pos))
+                              (run e_elem)
+                      doOutOfBounds =
+                          map (prepend_branch
+                                   (BranchArrSelOutOfBounds
+                                        e_idx num_es idx_sz sel_pos))
+                              (run ANoActions)
+                      -- # of arms is the min of the elems and the max index
+                      e_branches =
+                          concat (zipWith doElem es_elems [0..max_idx])
+                      dflt_branch =
+                          if (max_idx > (num_es-1))
+                          then doOutOfBounds
+                          else []
+                  in  e_branches ++ dflt_branch
+             else run (AArrSel SplitDefault i_sel i_arr idx_sz es_elems e_idx)
 
-            _ -> internalError ("ISplitIf.run wrong kind of splitting.\n"
-                                ++ (ppReadable l))
-
-        (IAps (ICon _ _ (ICPrim { primOp = PrimJoinActions })) _ [e1,e2])
+        (AJoin e1 e2)
           -> do
                 (a, x) <- run e1
                 (b, y) <- run e2
                 return (a ++ b, x ++ y)
 
-        (IAps (ICon _ _ (ICPrim { primOp = op })) _ _)
-          | isIfWrapper op
+        -- push removed every other annotation
+        (AIf NoSplitIf _ _ _)
+          -> internalError ("ISplitIf.run wrong kind of splitting.\n"
+                            ++ (ppReadable l))
+        (AArrSel NoSplitIf _ _ _ _ _)
+          -> internalError ("ISplitIf.run wrong kind of splitting.\n"
+                            ++ (ppReadable l))
+        (ADeep _ _)
           -> internalError ("ISplitIf.run wrong kind of splitting.\n"
                             ++ (ppReadable l))
 
-        (IAps function ty x)
-          -> do y <- (mapM run x)
-                return (concatMap fst y,
-                        [IAps function ty (map (joinActions . snd) y)])
+        -- an unsplit conditional: all combinations of the paths through
+        -- its arms, the conditional rebuilt around each combination's
+        -- actions
+        (AIf SplitDefault cond t_action f_action)
+          -> do (bt, xt) <- run t_action
+                (bf, xf) <- run f_action
+                return (bt ++ bf,
+                        [AIf SplitDefault cond (joinActionsA xt) (joinActionsA xf)])
 
+        (AArrSel SplitDefault i_sel i_arr idx_sz es_elems e_idx)
+          -> do y <- (mapM run es_elems)
+                return (concatMap fst y,
+                        [AArrSel SplitDefault i_sel i_arr idx_sz
+                                 (map (joinActionsA . snd) y) e_idx])
+
+        -- a call, no actions, the undetermined action: one path
         _ -> return ([],[l])
 
-push :: Bool -> IExpr PostElab -> IExpr PostElab
+push :: Bool -> IAction -> IAction
 -- this function pushes SplitDeep and NosplitDeep down the tree
 -- the "state" of whether we are in splitting mode or not is stored
 -- and recursed down the tree in the argument do_split.  The initial
 -- state of do_split is probably Flags.expandIf
 push do_split e
-  = let continue :: IExpr PostElab -> IExpr PostElab
+  = let continue :: IAction -> IAction
         -- keeps pushing split or nosplit depending on the argument
         continue x = push do_split x
      in case e of
-        (IAps j@(ICon _ _ (ICPrim { primOp = PrimJoinActions })) t [e1,e2])
-          -> (IAps j t
-               [continue e1,continue e2])
-        (IAps   (ICon _ _ (ICPrim { primOp = PrimJoinActions })) _ _)
-          -> internalError
-               ("PrimJoinActions called with wrong number of arguments")
+        (AJoin e1 e2)
+          -> AJoin (continue e1) (continue e2)
 
-        (IAps wrap@(ICon _ _ (ICPrim { primOp = PrimExpIf })) [] [if_e]) ->
-          -- leave as is, and continue in the arms
-          case if_e of
-            (IAps ic@(ICon _ _ (ICPrim { primOp = PrimIf }))
-                 [ty_if] [cond, t_act, f_act]) | ty_if == itAction
-              -> (IAps wrap []
-                      [IAps ic [ty_if] [cond, continue t_act, continue f_act]])
-            (IAps ic@(ICon _ _ (ICPrim { primOp = PrimCase }))
-                 tys@[ITNum idx_sz, elem_ty] (e_idx:e_dflt:ces))
-                | elem_ty == itAction
-              -> let ces' = flattenPairs $ mapSnd continue $ makePairs ces
-                     e_dflt' = continue e_dflt
-                 in  (IAps wrap []
-                          [IAps ic tys (e_idx:e_dflt':ces')])
-            (IAps ic_sel@(ICon _ _ (ICPrim { primOp = PrimArrayDynSelect }))
-                 sel_tys@[elem_ty, ITNum idx_sz] [e_arr, e_idx])
-                | elem_ty == itAction
-              -> case (expandRefs e_arr) of
-                   (IAps ic_arr@(ICon _ _ (ICPrim { primOp = PrimBuildArray }))
-                        [elem_ty'] es_elems)
-                     -> let e_arr' = IAps ic_arr [elem_ty'] (map continue es_elems)
-                        in  (IAps wrap []
-                                 [IAps ic_sel sel_tys [e_arr', e_idx]])
-                   _ -> internalError
-                            ("ISplitIf push ExpIf: unexpected array: " ++
-                             ppReadable e_arr)
-            _ -> internalError
-                      ("Bad argument to split annotation PrimExpIf: "++
-                       ppReadable if_e)
+        -- a split annotation is kept, and we continue in the arms
+        (AIf SplitIf cond t_act f_act)
+          -> AIf SplitIf cond (continue t_act) (continue f_act)
+        (AArrSel SplitIf i_sel i_arr idx_sz es_elems e_idx)
+          -> AArrSel SplitIf i_sel i_arr idx_sz (map continue es_elems) e_idx
 
-        (IAps (ICon _ _ (ICPrim { primOp = PrimNoExpIf })) _ [if_e]) ->
-          -- nosplit wrappers are removed, and continue in the arms
-          case if_e of
-            (IAps ic@(ICon _ _ (ICPrim { primOp = PrimIf }))
-                 [ty_if] [cond, t_act, f_act]) | ty_if == itAction
-              -> (IAps ic [ty_if] [cond, continue t_act, continue f_act])
-            (IAps ic@(ICon _ _ (ICPrim { primOp = PrimCase }))
-                 tys@[ITNum idx_sz, elem_ty] (e_idx:e_dflt:ces))
-                | elem_ty == itAction
-              -> let ces' = flattenPairs $ mapSnd continue $ makePairs ces
-                     e_dflt' = continue e_dflt
-                 in  (IAps ic tys (e_idx:e_dflt':ces'))
-            (IAps ic_sel@(ICon _ _ (ICPrim { primOp = PrimArrayDynSelect }))
-                 sel_tys@[elem_ty, ITNum idx_sz] [e_arr, e_idx])
-                | elem_ty == itAction
-              -> case (expandRefs e_arr) of
-                   (IAps ic_arr@(ICon _ _ (ICPrim { primOp = PrimBuildArray }))
-                        [elem_ty'] es_elems)
-                     -> let e_arr' = IAps ic_arr [elem_ty'] (map continue es_elems)
-                        in  (IAps ic_sel sel_tys [e_arr', e_idx])
-                   _ -> internalError
-                            ("ISplitIf: push NoExpIf: unexpected array: " ++
-                             ppReadable e_arr)
-            _ -> internalError
-                      ("Bad argument to split annotation PrimNoExpIf: "++
-                       ppReadable if_e)
+        -- nosplit annotations are removed, and we continue in the arms
+        (AIf NoSplitIf cond t_act f_act)
+          -> AIf SplitDefault cond (continue t_act) (continue f_act)
+        (AArrSel NoSplitIf i_sel i_arr idx_sz es_elems e_idx)
+          -> AArrSel SplitDefault i_sel i_arr idx_sz (map continue es_elems) e_idx
 
-        (IAps (ICon _ _ (ICPrim { primOp = PrimSplitDeep })) [] [e])
-          -> push True e
-        (IAps (ICon _ _ (ICPrim { primOp = PrimNosplitDeep })) [] [e])
-          -> push False e
-
-        (IAps (ICon _ _ (ICPrim { primOp = op })) _ _) | isIfWrapper op
-          -> -- any other use an if-wrapper is invalid
-             internalError ("Bad argument to split annotation "++
-                            ppReadable e)
+        (ADeep True e1)
+          -> push True e1
+        (ADeep False e1)
+          -> push False e1
 
         -- a bare conditional: do what do_split says
-        (IAps ic@(ICon _ _ (ICPrim { primOp = PrimIf }))
-             [ty_if] [cond, t_act, f_act]) | ty_if == itAction
+        (AIf SplitDefault cond t_act f_act)
           -> if_annotate do_split
-                 (IAps ic [ty_if] [cond, continue t_act, continue f_act])
-        (IAps ic@(ICon _ _ (ICPrim { primOp = PrimCase }))
-             tys@[ITNum idx_sz, elem_ty] (e_idx:e_dflt:ces))
-            | elem_ty == itAction
-          -> let ces' = flattenPairs $ mapSnd continue $ makePairs ces
-                 e_dflt' = continue e_dflt
-             in  if_annotate do_split (IAps ic tys (e_idx:e_dflt':ces'))
-        (IAps ic_sel@(ICon _ _ (ICPrim { primOp = PrimArrayDynSelect }))
-             sel_tys@[elem_ty, ITNum idx_sz] [e_arr, e_idx])
-            | elem_ty == itAction
-          -> case (expandRefs e_arr) of
-               (IAps ic_arr@(ICon _ _ (ICPrim { primOp = PrimBuildArray }))
-                    [elem_ty'] es_elems)
-                 -> let e_arr' = IAps ic_arr [elem_ty'] (map continue es_elems)
-                    in  if_annotate do_split
-                            (IAps ic_sel sel_tys [e_arr', e_idx])
-               _ -> internalError ("ISplitIf push bare: unexpected array: " ++
-                                   ppReadable e_arr)
+                 (AIf SplitDefault cond (continue t_act) (continue f_act))
+        (AArrSel SplitDefault i_sel i_arr idx_sz es_elems e_idx)
+          -> if_annotate do_split
+                 (AArrSel SplitDefault i_sel i_arr idx_sz (map continue es_elems) e_idx)
 
-        -- if the IF is not an action, then the
-        -- following fall-through is called
-        (IAps f ts es) -> (IAps f ts (map continue es))
-         -- XXX fixme: almost certainly we do not NEED to push it
-         -- through an f, though there is no harm.
-
+        -- a call, no actions, the undetermined action (an expression
+        -- holds no conditional action, so there is nothing to push
+        -- into a call's arguments)
         _ -> e
 
 
-if_annotate :: Bool -> IExpr PostElab -> IExpr PostElab
-if_annotate do_split
-  = let
-        wrap_split if_expression
-          = (IAps (ICon idPrimExpIf
-                        (itAction `itFun` itAction) (ICPrim {
-                                  primOp = PrimExpIf }))
-                  [] -- takes no type arguments
-                  [if_expression])
-     in case do_split of
-           True -> wrap_split
-           _    -> id
+if_annotate :: Bool -> IAction -> IAction
+if_annotate True (AIf _ cond t_act f_act) = AIf SplitIf cond t_act f_act
+if_annotate True (AArrSel _ i_sel i_arr idx_sz es_elems e_idx) =
+    AArrSel SplitIf i_sel i_arr idx_sz es_elems e_idx
+if_annotate _ a = a
 
 prepend_branch :: Branch_taken PostElab ->
                   Path_through_actions PostElab -> Path_through_actions PostElab
@@ -355,10 +258,8 @@ iExpandIfRule flags
              , irule_original = orig
              })
   = let
-        -- the body through the expression it stands for (the rewrite
-        -- over IAction follows in the next commit)
         paths :: [Path_through_actions PostElab]
-        paths = run (push (Flags.expandIf flags) (actionToExpr action))
+        paths = run (push (Flags.expandIf flags) action)
 
         splitorig :: Maybe Id
         splitorig = maybe (Just i) Just orig
@@ -387,7 +288,7 @@ iExpandIfRule flags
                 new_predicate = iTransBoolExpr flags (foldr ieAndOpt predicate terms)
 
                 new_action :: IAction
-                new_action = toIAction (joinActions action_list)
+                new_action = joinActionsA action_list
              in
 --trace ("mkRule " ++ new_description ++ (ppReadable branches) ++ " = " ++
 --(ppReadable new_predicate) ++ " : " ++ (ppReadable action_list)) $
@@ -399,7 +300,7 @@ iExpandIfRule flags
                   }
 
         mkSingleRule (_branches, action_list)
-            = r { irule_body = toIAction (joinActions action_list) }
+            = r { irule_body = joinActionsA action_list }
         new_rules :: [IRule PostElab]
         new_rules = case paths of
              [s] -> [mkSingleRule s]
@@ -415,21 +316,22 @@ iExpandIfRule flags
 -- These return Nothing if the check was successful,
 -- otherwise they return Just the offending expression.
 
-check_if_wrappers :: (PrimOp -> Bool) -> IExpr PostElab -> Maybe (IExpr PostElab)
-check_if_wrappers what_kind_of_if_wrapper e
+check_if_wrappers :: IAction -> Maybe IAction
+check_if_wrappers e
   = case e of
-         (IAps (ICon _ _ (ICPrim { primOp = op })) _ _)
-           | (what_kind_of_if_wrapper op)
-           -> Just e
-         (IAps f _ es)
-           -> (msum (map (check_if_wrappers what_kind_of_if_wrapper) (f:es)))
+         (AIf SplitDefault _ t f) -> msum (map check_if_wrappers [t, f])
+         (AArrSel SplitDefault _ _ _ es _) -> msum (map check_if_wrappers es)
+         (AJoin a1 a2) -> msum (map check_if_wrappers [a1, a2])
+         (AIf _ _ _ _) -> Just e
+         (AArrSel _ _ _ _ _ _) -> Just e
+         (ADeep _ _) -> Just e
          _ -> Nothing
 
-check_rules :: (PrimOp -> Bool) -> IRules PostElab -> Maybe (IExpr PostElab)
-check_rules whatp (IRules _ rs) = msum $ map (check_rule whatp) rs
+check_rules :: IRules PostElab -> Maybe IAction
+check_rules (IRules _ rs) = msum $ map check_rule rs
 
-check_rule :: (PrimOp -> Bool) -> IRule PostElab -> Maybe (IExpr PostElab)
-check_rule whatp r = check_if_wrappers whatp $ actionToExpr $ irule_body r
+check_rule :: IRule PostElab -> Maybe IAction
+check_rule r = check_if_wrappers $ irule_body r
 
 -- --------------------------
 
@@ -452,16 +354,9 @@ iSplitIface _ ieface@(IEFace _ _ (Just _) Nothing _ _) = ([], ieface)
 iSplitIface _ ieface = internalError ("iSplitIface: a method with neither value nor rules: " ++ ppReadable ieface)
 
 
-check_meth_rules :: (PrimOp -> Bool) -> IEFace PostElab -> Maybe (IExpr PostElab)
-check_meth_rules whatp (IEFace _ _ _ (Just rs) _ _) = check_rules whatp rs
-check_meth_rules _ _ = Nothing
-
--- --------------------------
-
--- XXX this inlinining is needed for array selection of actions
-expandRefs :: IExpr PostElab -> IExpr PostElab
-expandRefs (ICon _ _ (ICValue { iValDef = e })) = expandRefs e
-expandRefs e = e
+check_meth_rules :: IEFace PostElab -> Maybe IAction
+check_meth_rules (IEFace _ _ _ (Just rs) _ _) = check_rules rs
+check_meth_rules _ = Nothing
 
 -- --------------------------
 

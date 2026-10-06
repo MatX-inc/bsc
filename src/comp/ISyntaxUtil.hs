@@ -604,6 +604,13 @@ ieIfx ty c t e | t == e                                = t
                | ty == itBit1 && isTrue t && isFalse e = c
                | otherwise                             = ieIf ty c t e
 
+-- ieIfx at an action (the Bit-typed case does not arise)
+ieIfxA :: IExpr PostElab -> IAction -> IAction -> IAction
+ieIfxA c t e | t == e    = t
+             | isTrue c  = t
+             | isFalse c = e
+             | otherwise = AIf SplitDefault c t e
+
 ieArraySel :: KnownPhase a => IType -> Integer -> IExpr a -> [IExpr a] -> IExpr a
 {-# SPECIALISE ieArraySel :: IType -> Integer -> IExpr PreElab -> [IExpr PreElab] -> IExpr PreElab #-}
 {-# SPECIALISE ieArraySel :: IType -> Integer -> IExpr Elab -> [IExpr Elab] -> IExpr Elab #-}
