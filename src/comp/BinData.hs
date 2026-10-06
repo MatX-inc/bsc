@@ -56,7 +56,7 @@ import IntLit
 import Undefined
 import Prim hiding(PrimArg(..))
 
-import Util(Hash, hashInit, nextHashByte, showHash, makePairs)
+import Util(Hash, hashInit, nextHashByte, showHash)
 
 import Data.List(sort, intercalate)
 import Control.Monad(replicateM, liftM, ap)
@@ -1060,17 +1060,24 @@ instance Bin AType where
           n -> internalError $ "GenABin.Bin(AType).readBytes: " ++ show n
 
 -- ----------
+-- Bin AMuxKind
+
+instance Bin AMuxKind where
+    writeBytes AMuxParallel = putI 0
+    writeBytes AMuxPriority = putI 1
+    readBytes = do
+        i <- getI
+        case i of
+          0 -> return AMuxParallel
+          1 -> return AMuxPriority
+          n -> internalError $ "GenABin.Bin(AMuxKind).readBytes: " ++ show n
+
+-- ----------
 -- Bin AExpr
 
 instance Bin AExpr where
     writeBytes (APrim i t op args) = section "AExpr" $
         do putI 0; toBin i; toBin t; toBin op; toBin args
-    -- a mux is written as the APrim it used to be: tag 0, the retired
-    -- code of its kind, the arms as the flat argument list; so the
-    -- encoding is unchanged.  (None occurs in a .ba today: the file is
-    -- written before AState builds the first mux.)
-    writeBytes (AMux i t k arms) = section "AExpr" $
-        do putI 0; toBin i; toBin t; toBin (aMuxKindCode k); toBin (aMuxArmExprs arms)
     writeBytes (AMethCall t obj meth args) = section "AExpr" $
         do putI 1; toBin t; toBin obj; toBin meth; toBin args
     writeBytes (AMethValue t obj meth) = section "AExpr" $
@@ -1094,14 +1101,15 @@ instance Bin AExpr where
     writeBytes (ASReal i t val) = section "AExpr" $ do putI 16; toBin i; toBin t; toBin val
     writeBytes (ATupleSel t e idx) = section "AExpr" $ do putI 17; toBin t; toBin e; toBin idx
     writeBytes (ATuple t es) = section "AExpr" $ do putI 18; toBin t; toBin es
+    -- (no mux occurs in a .ba today: the file is written before AState
+    -- builds the first one)
+    writeBytes (AMux i t k arms) = section "AExpr" $
+        do putI 19; toBin i; toBin t; toBin k; toBin arms
     readBytes = do
         i <- getI
         case i of
-          0  -> do { i <- fromBin; t <- fromBin; n <- fromBin;
-                     args <- fromBin;
-                     return (case aMuxKindOfCode n of
-                               Just k -> AMux i t k (makePairs args)
-                               Nothing -> APrim i t (readPrimOp n) args); }
+          0  -> do { i <- fromBin; t <- fromBin; op <- fromBin;
+                     args <- fromBin; return (APrim i t op args); }
           1  -> do { t <- fromBin; obj <- fromBin; meth <- fromBin;
                      args <- fromBin; return (AMethCall t obj meth args); }
           2  -> do { t <- fromBin; obj <- fromBin; meth <- fromBin;
@@ -1134,6 +1142,8 @@ instance Bin AExpr where
                      return (ATupleSel t e idx) }
           18 -> do { t <- fromBin; es <- fromBin;
                      return (ATuple t es) }
+          19 -> do { i <- fromBin; t <- fromBin; k <- fromBin;
+                     arms <- fromBin; return (AMux i t k arms) }
           n  -> internalError $ "GenABin.Bin(IExpr).readBytes: " ++ show n
     -- toBin e = Out [AExp e] ()
     -- fromBin = readShared

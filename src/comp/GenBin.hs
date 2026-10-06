@@ -30,7 +30,7 @@ doTrace = elem "-trace-genbin" progArgs
 -- See also GenABin.header
 --
 -- The tag ends in Prim.primOpTableHash, the hash of the primitive code
--- table, so a primitive added, renamed, retired or reordered changes
+-- table, so a primitive added, removed, renamed or moved changes
 -- the tag by construction and every .bo written before it is refused
 -- with "Binary version mismatch".  The hash covers the primitive table
 -- only: a change to anything else in the format (the IConInfo and AExpr
@@ -45,7 +45,7 @@ doTrace = elem "-trace-genbin" progArgs
 -- internal error, not the version mismatch).  The hash has a fixed
 -- width, so later tags all have this length and that cannot recur.
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack ("bsc-bo-20261006-7-" ++ primOpTableHash)
+header = B.unpack $ TE.encodeUtf8 $ T.pack ("bsc-bo-20261006-8-" ++ primOpTableHash)
 
 headerBS :: B.ByteString
 headerBS = B.pack header
