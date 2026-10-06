@@ -10,6 +10,7 @@ module Prim(
             PrimOp(..),
             primOpCode, primOpFromCode, allPrimOps, primOpAnyPhase,
             primMuxCode, primPriMuxCode, retiredPrimOpCodes,
+            primOpTableHash,
             toPrim,
             toWString,
             stringSize,
@@ -450,16 +451,26 @@ data PrimOp (p :: Phase) where
 --                     the retired codes (one binding per retired entry)
 --   retiredPrimOpCodes :: [(Int, String)]
 --                     the retired codes with their former names
+--   primOpTableHash :: String
+--                     a hash of the whole table (FNV-1a 64, 16 hex
+--                     digits), computed by the splice; the .bo and .ba
+--                     format tags end in it (GenBin.header,
+--                     GenABin.header), so any change to this table
+--                     makes every file written before it unreadable,
+--                     with the usual "Binary version mismatch", and
+--                     no one has to remember to bump the tags
 --
 -- The list is the encoding: a primitive's code is its position, and
 -- the positions are those of the `deriving Enum` the type had before
 -- it was indexed, so the .bo and .ba bytes are unchanged.  A new
--- primitive goes at the END of the list, with the .bo and .ba format
--- tags bumped (GenBin.header, GenABin.header); a removed one keeps its
+-- primitive goes at the END of the list; a removed one keeps its
 -- entry, named in the retired list, so later codes do not shift.  The
 -- splice reifies the type and refuses to compile when a constructor
 -- has no entry, an entry has no constructor, or a name repeats, so the
--- table cannot drift from the declaration.
+-- table cannot drift from the declaration.  Either edit changes
+-- primOpTableHash and with it the format tags; the hash covers this
+-- table only, so a change elsewhere in the formats (an IConInfo or
+-- AExpr tag in BinData, a field) still needs the manual bump.
 --
 -- Why generated: with the declaration arranged for the compiler, the
 -- two directions of a 224-entry table would otherwise be hand-written

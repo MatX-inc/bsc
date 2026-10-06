@@ -21,6 +21,7 @@ import Verilog
 
 import ABin
 import BinData
+import Prim(primOpTableHash)
 import FileIOUtil(writeBinaryFileCatch)
 
 import qualified Data.Set as S
@@ -33,8 +34,24 @@ import qualified Data.ByteString as B
 
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
+--
+-- The tag ends in Prim.primOpTableHash, the hash of the primitive code
+-- table, so a primitive added, renamed, retired or reordered changes
+-- the tag by construction and every .ba written before it is refused
+-- with "Binary version mismatch".  The hash covers the primitive table
+-- only: a change to anything else in the format (the IConInfo and AExpr
+-- tag numbering in BinData, a field written or read) still needs the
+-- date-and-counter part bumped by hand, in both headers.
+--
+-- A reader compares the tag against the start of the file, so no tag
+-- may be a prefix of an earlier one: the date-and-counter part moved
+-- from 20261005-6 to 20261006-7 when the hash was appended, because
+-- the 20261005-6 reader would otherwise accept a hashed file and
+-- decode the hash as content (measured on the tags before these: an
+-- internal error, not the version mismatch).  The hash has a fixed
+-- width, so later tags all have this length and that cannot recur.
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261005-6"
+header = B.unpack $ TE.encodeUtf8 $ T.pack ("bsc-ba-20261006-7-" ++ primOpTableHash)
 
 headerBS :: B.ByteString
 headerBS = B.pack header
