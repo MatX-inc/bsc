@@ -69,6 +69,13 @@ library
     FlexibleContexts,
     FlexibleInstances,
     TypeSynonymInstances,
+  -- Prim.hs splices its code tables.  Cabal learns that a splice runs
+  -- from the extension lists of the stanza, not from a LANGUAGE pragma,
+  -- and then also builds the compiler's own way (vanilla or dynamic)
+  -- when only the profiled way was asked for, so that the splice has
+  -- objects it can load.  Only default-extensions reach ghc as -X
+  -- flags; this list does not, so the normal build is unchanged.
+  other-extensions: TemplateHaskell
   ghc-options: -Wall -Wno-orphans -Wno-name-shadowing -Wno-unused-matches
   -- Deterministic object code when the compiler offers it (GHC 9.14+):
   -- parity with src/comp/Makefile's probe, as a condition rather than a floor.
