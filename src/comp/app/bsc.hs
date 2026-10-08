@@ -1538,8 +1538,12 @@ vCodeGen errh flags mods afilenames = do
 
 -- Generate Verilog for modules from their elaborated (.ba) files,
 -- reconstructing the inputs of genModuleVerilog from each ABinModInfo.
--- Codegen flags come from this invocation's command line, matching the
--- Bluesim path; elaboration-affecting flags are baked into the .ba.
+-- Codegen-semantic flags come from the .ba, not from this invocation;
+-- see cgflags below.  The Bluesim path takes the opposite approach: it
+-- generates under the invocation's flags and records the ones that
+-- shape the emitted bytes in the codegen reuse descriptor
+-- (SimFileUtils.codeGenOptionDescr), so a mismatched object is
+-- regenerated rather than reused.
 vGenMods :: ErrorHandle -> Flags -> TimeInfo -> [(String, ABinModInfo)] ->
             IO (TimeInfo, [VFileName])
 vGenMods errh flags t0 abmis = do
@@ -1558,15 +1562,36 @@ vGenMods errh flags t0 abmis = do
             blurb <- mkGenFileHeader flags
             let apkg = abmi_apkg abmi
                 pps = abmi_pps abmi
+                -- Codegen-SEMANTIC flags come from the .ba itself: they
+                -- were recorded there at the original compile with any
+                -- (* options *) pragma applied (see genModule), so the
+                -- regenerated output matches that compile by
+                -- construction.  Only environment/output flags follow
+                -- this invocation.
+                cgflags = (abmi_flags abmi) {
+                              bdir = bdir flags,
+                              vdir = vdir flags,
+                              infoDir = infoDir flags,
+                              ifcPath = ifcPath flags,
+                              verbosity = verbosity flags,
+                              showCodeGen = showCodeGen flags,
+                              showElabProgress = showElabProgress flags,
+                              printFlags = printFlags flags,
+                              printFlagsHidden = printFlagsHidden flags,
+                              printFlagsRaw = printFlagsRaw flags,
+                              timeStamps = timeStamps flags,
+                              showVersion = showVersion flags,
+                              updCheck = updCheck flags
+                          }
                 methodConflict = abmi_method_dump abmi
                 methodConflictBlurb
-                  | methodConf flags =
+                  | methodConf cgflags =
                       ["Method conflict info:"]
                       ++ lines (pretty 78 78
-                                  (vcat (dumpMethodInfo flags methodConflict)))
+                                  (vcat (dumpMethodInfo cgflags methodConflict)))
                   | otherwise = []
                 methodConflictBVI
-                  | methodBVI flags =
+                  | methodBVI cgflags =
                       ["BVI format method schedule info:"]
                       ++ lines (pretty 78 78
                                   (vcat (dumpMethodBVIInfo methodConflict)))
@@ -1576,9 +1601,9 @@ vGenMods errh flags t0 abmis = do
                 -- recompute the APackage-derived port properties from the
                 -- .ba's own contents, so a regenerated .v matches the
                 -- original compile's under -semantic-ports-comment too
-                (aioprops, _) = getIOPropsA flags pps (Just aschedinfo) apkg
+                (aioprops, _) = getIOPropsA cgflags pps (Just aschedinfo) apkg
             (t', vfns) <-
-                genModuleVerilog errh pps flags dumpnames t prefix modstr
+                genModuleVerilog errh pps cgflags dumpnames t prefix modstr
                     blurb methodConflictBlurb methodConflictBVI
                     pathinfo aschedinfo aioprops apkg
             return (t', vfns_so_far ++ vfns)
