@@ -517,6 +517,11 @@ install-bsc: $(PKGINFO)
 install-bluetcl: $(addprefix $(BINDIR)/,$(TCLEXES))
 install-bluetcl: $(PKGINFO)
 
+.PHONY: install-bo2bloogle
+install-bo2bloogle: $(addprefix $(BINDIR)/,$(BO2BLOOGLEEXES))
+install-bo2bloogle: $(addprefix $(BINDIR)/core/,$(BO2BLOOGLEEXES))
+install-bo2bloogle: $(PKGINFO)
+
 .PHONY: install-utils
 install-utils: $(addprefix $(BINDIR)/,$(UTILEXES))
 install-utils: $(PKGINFO)
