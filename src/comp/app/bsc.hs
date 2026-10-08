@@ -1003,7 +1003,13 @@ genModule
             getIOPropsA flags pps (Just sched_info'') amod_final
     t <- dump errh flags t DFAPackageIOproperties dumpnames aioprops
 
-    t <- if (backend flags == Just Verilog)
+    -- With -elab-only, the Verilog backend stops at the .ba, like the
+    -- Bluesim backend: genModuleVerilog is not run at all, and a later
+    -- -c or link generates the .v from the .ba.  The wrapper keeps its
+    -- port properties either way -- they come from the APackage above,
+    -- not from the netlist -- so a parent compiled against an
+    -- -elab-only .bo deduces exactly what the direct compile deduces.
+    t <- if (backend flags == Just Verilog && not (elabOnly flags))
          then do (t', _vfilenames)
                      <- genModuleVerilog
                            errh pps flags dumpnames t prefix modstr
