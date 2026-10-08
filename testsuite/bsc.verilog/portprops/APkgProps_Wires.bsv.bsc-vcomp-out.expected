@@ -38,4 +38,5 @@ EN_deadSet                     I     1 unused
 -----
 
 Verilog file created: sysAPkgProps_Wires.v
+Elaborated module file created: sysAPkgProps_Wires.ba
 All packages are up to date.

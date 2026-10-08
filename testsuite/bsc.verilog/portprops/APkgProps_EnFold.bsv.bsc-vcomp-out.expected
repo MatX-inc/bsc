@@ -26,6 +26,7 @@ EN_m                           I     1 unused
 -----
 
 Verilog file created: mkEnFoldShared.v
+Elaborated module file created: mkEnFoldShared.ba
 code generation for mkEnFoldLast starts
 === APackageIOproperties (APkgProps_EnFold mkEnFoldLast):
 Name                         I/O  size props
@@ -60,4 +61,5 @@ EN_set2                        I     1 unused
 -----
 
 Verilog file created: mkEnFoldLast.v
+Elaborated module file created: mkEnFoldLast.ba
 All packages are up to date.
