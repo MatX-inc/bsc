@@ -147,6 +147,7 @@ library
     CtxRed
     DOT
     DPIWrappers
+    DefProp
     Depend
     Deriving
     DisjointTest
@@ -191,6 +192,7 @@ library
     IOMutVar
     IOUtil
     IPrims
+    ISimpDicts
     ISimplify
     ISplitIf
     IStateLoc
@@ -217,6 +219,7 @@ library
     LambdaCalc
     LambdaCalcUtil
     Lex
+    LiftDicts
     ListMap
     ListUtil
     Literal
