@@ -333,6 +333,7 @@ library
     VModInfo
     VPIWrappers
     VPrims
+    VStableRenumber
     VVerilogDollar
     Verilog
     Version
