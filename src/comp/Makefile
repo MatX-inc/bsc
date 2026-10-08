@@ -461,7 +461,7 @@ endif
 # within each compile. Naming one executable directly still builds just it.
 .PHONY: install
 install:
-	$(MAKE) -j1 $(BSCEXES) $(TCLEXES) install-bsc install-bluetcl
+	$(MAKE) -j1 $(BSCEXES) $(TCLEXES) $(CHECKEXES) install-bsc install-bluetcl install-checkers
 
 .PHONY: install-extra
 install-extra:
@@ -489,7 +489,6 @@ install-showrules: $(PKGINFO)
 
 .PHONY: install-checkers
 install-checkers: $(addprefix $(BINDIR)/,$(CHECKEXES))
-install-checkers: $(addprefix $(BINDIR)/core/,$(CHECKEXES))
 install-checkers: $(PKGINFO)
 
 # ----
