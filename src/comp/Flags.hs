@@ -130,6 +130,7 @@ data Flags = Flags {
         satBackend :: SATFlag,
         schedConds:: Bool,
         schedDOT :: Bool,
+        schedTransposed :: Bool,
         schedQueries :: [(String,String)],
         showCSyntax :: Bool,
         showCodeGen :: Bool,
