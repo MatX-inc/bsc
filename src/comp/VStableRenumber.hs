@@ -127,24 +127,17 @@ hitsItems its acc = foldr hitsItem acc its
 hitsItem :: VMItem -> [Hit] -> [Hit]
 hitsItem (VMDecl d) acc            = hitsDecl d acc
 hitsItem (VMInst m i pas pos) acc  =
-    hitsId m (hitsId i (hitsParams pas (foldr hitsAssoc acc pos)))
+    hitsId m (hitsId i (foldr hitsAssoc (foldr hitsAssoc acc pos) pas))
 hitsItem (VMAssign l e) acc        = hitsLV l (hitsExpr e acc)
 hitsItem (VMStmt _ s) acc          = hitsStmt s acc
 hitsItem (VMComment _ it) acc      = hitsItem it acc
 hitsItem (VMRegGroup i _ _ it) acc = hitsId i (hitsItem it acc)
 hitsItem (VMGroup _ itss) acc      = foldr hitsItems acc itss
 hitsItem (VMFunction f) acc        = hitsFunction f acc
+hitsItem (VMDPI d) acc             = hitsDPI d acc
 
 hitsAssoc :: (VId, Maybe VExpr) -> [Hit] -> [Hit]
 hitsAssoc (v, me) acc = hitsId v (hitsMExpr me acc)
-
--- Instance parameters are positional (Left, comment plus expression) or named
--- (Right).  Only the named arm contributes identifiers of its own; the
--- positional arm's expressions still hold them.
-hitsParams :: Either [(Maybe String, VExpr)] [(VId, Maybe VExpr)]
-           -> [Hit] -> [Hit]
-hitsParams (Left ps) acc  = foldr (\(_, e) r -> hitsExpr e r) acc ps
-hitsParams (Right ps) acc = foldr hitsAssoc acc ps
 
 hitsMExpr :: Maybe VExpr -> [Hit] -> [Hit]
 hitsMExpr Nothing acc  = acc
@@ -159,6 +152,10 @@ hitsId v@(VId _ _ (Just it)) acc = HId v : hitsItem it acc
 hitsFunction :: VFunction -> [Hit] -> [Hit]
 hitsFunction (VFunction n mr ds s) acc =
     hitsId n (hitsMRange mr (foldr hitsDecl (hitsStmt s acc) ds))
+
+hitsDPI :: VDPI -> [Hit] -> [Hit]
+hitsDPI (VDPI n _ _ _ args) acc =
+    hitsId n (foldr (\(a, _, _) r -> hitsId a r) acc args)
 
 hitsDecl :: VVDecl -> [Hit] -> [Hit]
 hitsDecl (VVDecl _ mr vs) acc = hitsMRange mr (foldr hitsVar acc vs)
@@ -236,7 +233,7 @@ portIds vps = [ i | (args, _) <- vps, a <- args, i <- argIds a ]
     argIds (VAInout i mi mmr)    = i : maybe [] (: []) mi
                                      ++ maybe [] rangeIds' mmr
     argIds (VAOutput i mr)       = i : rangeIds' mr
-    argIds (VAParameter i mr e) = i : rangeIds' mr ++ exprIds e
+    argIds (VAParameter i mr e _) = i : rangeIds' mr ++ exprIds e
     rangeIds' = maybe [] (\(e1, e2) -> exprIds e1 ++ exprIds e2)
     exprIds e = [ v | HId v <- hitsExpr e [] ]
 
@@ -248,7 +245,7 @@ mapItems f = map (mapItem f)
 mapItem :: (VId -> VId) -> VMItem -> VMItem
 mapItem f (VMDecl d)            = VMDecl (mapDecl f d)
 mapItem f (VMInst m i pas pos)  = VMInst (mapId f m) (mapId f i)
-                                         (mapParams f pas)
+                                         (map (mapAssoc f) pas)
                                          (map (mapAssoc f) pos)
 mapItem f (VMAssign l e)        = VMAssign (mapLV f l) (mapExpr f e)
 mapItem f (VMStmt t s)          = VMStmt t (mapStmt f s)
@@ -256,15 +253,10 @@ mapItem f (VMComment c it)      = VMComment c (mapItem f it)
 mapItem f (VMRegGroup i s c it) = VMRegGroup (mapId f i) s c (mapItem f it)
 mapItem f (VMGroup t itss)      = VMGroup t (map (mapItems f) itss)
 mapItem f (VMFunction fn)       = VMFunction (mapFunction f fn)
+mapItem f (VMDPI d)             = VMDPI (mapDPI f d)
 
 mapAssoc :: (VId -> VId) -> (VId, Maybe VExpr) -> (VId, Maybe VExpr)
 mapAssoc f (v, me) = (mapId f v, fmap (mapExpr f) me)
-
-mapParams :: (VId -> VId)
-          -> Either [(Maybe String, VExpr)] [(VId, Maybe VExpr)]
-          -> Either [(Maybe String, VExpr)] [(VId, Maybe VExpr)]
-mapParams f (Left ps)  = Left [ (c, mapExpr f e) | (c, e) <- ps ]
-mapParams f (Right ps) = Right (map (mapAssoc f) ps)
 
 mapId :: (VId -> VId) -> VId -> VId
 mapId f v =
@@ -274,6 +266,10 @@ mapId f v =
 mapFunction :: (VId -> VId) -> VFunction -> VFunction
 mapFunction f (VFunction n mr ds s) =
     VFunction (mapId f n) (mapMRange f mr) (map (mapDecl f) ds) (mapStmt f s)
+
+mapDPI :: (VId -> VId) -> VDPI -> VDPI
+mapDPI f (VDPI n a b t args) =
+    VDPI (mapId f n) a b t [ (mapId f i, x, y) | (i, x, y) <- args ]
 
 mapDecl :: (VId -> VId) -> VVDecl -> VVDecl
 mapDecl f (VVDecl t mr vs) = VVDecl t (mapMRange f mr) (map (mapVar f) vs)
@@ -356,7 +352,7 @@ renumberModule vm =
         instFixed :: VMItem -> [String]
         instFixed (VMInst m i pas pos) =
             [getVIdString m, getVIdString i] ++
-            either (const []) (map (getVIdString . fst)) pas ++
+            map (getVIdString . fst) pas ++
             map (getVIdString . fst) pos
         instFixed (VMComment _ it)      = instFixed it
         instFixed (VMRegGroup _ _ _ it) = instFixed it
