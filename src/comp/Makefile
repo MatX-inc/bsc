@@ -199,6 +199,8 @@ MAINSRC = $@.hs
 bsc bsc2bsv bsv2bsc dumpbo dumpba vcdcheck showrules: MAINSRC = app/$@.hs
 bluetcl: MAINSRC = app/bluetcl_Main.hs
 tconcheck: MAINSRC = app/tconcheck.hs
+fstcheck: MAINSRC = app/fstcheck.hs
+fstscopes: MAINSRC = app/fstscopes.hs
 GHCMAKEFLAGS = --make $(MAINSRC) -o $@ -j$(GHCJOBS)
 GHCCOMPILEFLAGS = -o $@ -c $<
 
