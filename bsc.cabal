@@ -426,3 +426,12 @@ executable vcdcheck
   ghc-options: -main-is Main_vcdcheck
   main-is: vcdcheck.hs
   other-modules: Warmup
+
+executable tconcheck
+  import: common_exes
+  build-depends:
+    containers >=0.6.7,
+  hs-source-dirs: src/comp/app
+  ghc-options: -main-is Main_tconcheck
+  main-is: tconcheck.hs
+  other-modules: Warmup
