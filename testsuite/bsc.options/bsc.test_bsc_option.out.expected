@@ -17,6 +17,7 @@ Flags:
     -show-compiles
     -show-timestamps
     -show-version
+    -stable-verilog
     -steps 12345678
     -steps-max-intervals 1
     -steps-warn-interval 12345678
