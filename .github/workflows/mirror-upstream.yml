@@ -1,0 +1,31 @@
+# Keep the upstream-main branch a byte-identical, fast-forward-only mirror
+# of B-Lang-org/bsc main (plus upstream tags, which release tooling's
+# `git describe` needs).  No --force by design: if the push ever refuses,
+# someone committed directly to upstream-main and that deserves a loud
+# failure, not a silent clobber.  workflow_dispatch is the recovery path
+# for GitHub's scheduled-workflow auto-disable.
+name: Mirror B-Lang-org main
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fast-forward upstream-main (fail loudly on divergence)
+        run: |
+          git remote add upstream https://github.com/B-Lang-org/bsc.git
+          git fetch upstream main --tags
+          git push origin upstream/main:refs/heads/upstream-main
+      - name: Sync tags (best effort)
+        # GITHUB_TOKEN cannot push refs that carry workflow-file changes,
+        # which rejects ancient upstream tags; those were pushed once
+        # manually, so rejections here should only ever be transient.
+        run: |
+          git push origin --tags || echo "::warning::some tag pushes rejected; recent tags still sync (see log)"
