@@ -91,7 +91,7 @@ correlate_variant () {
     TOP_NAME=sysWireTypeTest \
       VERI_HIER="$(pwd)/$veri/WireTypes.fsthier" \
       SIM_HIER="$(pwd)/sim/WireTypes.fsthier" \
-      MOD_AT_LIST="mkWireTypes main.top.dut mkPixelStash main.top.dut.leafA mkPixelStash main.top.dut.leafB" \
+      MOD_AT_LIST="mkWireTypes main.top.dut mkPixelStash main.top.dut.leafA mkPixelStash main.top.dut.leafB mkAnnotStash main.top.dut.annot" \
       bash -c "cd '$bo' && $BLUETCL ../correlate_fst.tcl"
     echo ""
 

@@ -15,6 +15,21 @@ global lasterr
 set here    [absolute $srcdir]
 set testdir [file join $here $subdir]
 
+# This test is iverilog-specific by design (see run_fst_correlation.sh):
+# the Verilog-side FST is produced by running `vvp -fst` (with iverilog
+# the FST-vs-VCD encoding is chosen at vvp runtime), and part of what is
+# checked is iverilog's recording of each scope's module type
+# (vpiDefName) in the FST.  Under any other TEST_BSC_VERILOG_SIM the
+# harness-exported BSC_VERILOG_SIM makes `bsc -e` link a non-vvp
+# executable, which `vvp` cannot run (no dump.fst is ever produced).
+# The Bluesim half is sim-agnostic and is still covered by the default
+# iverilog suite runs.
+global verilog_compiler
+if { $verilog_compiler != "iverilog" } {
+    unsupported "fst_correlation: not run under $verilog_compiler: iverilog-specific (vvp -fst; vpiDefName scope types)"
+    return
+}
+
 # the FST hierarchies are extracted with the fstscopes utility, which
 # is built and installed by `make install-extra` (like vcdcheck)
 set fstscopes [find_fstscopes]
