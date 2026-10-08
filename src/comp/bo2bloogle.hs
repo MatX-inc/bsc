@@ -5,6 +5,7 @@
 
 module Main_bo2bloogle (main) where
 
+import Warmup ()
 import CSyntax
 import CType (isTConArrow, isTConPair)
 import Control.Category ((>>>))
