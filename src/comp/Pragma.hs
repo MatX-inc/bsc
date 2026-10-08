@@ -24,6 +24,7 @@ module Pragma(
 
               isGatedInputClk, isGatedDefaultClk,
               hasDefaultClk, hasDefaultRst,
+              getDefaultClockArg, getDefaultResetArg,
               hasInhighAttribute, hasUnusedAttribute,
               hasRuleHide,
               ppPProp, pvpPProp,
@@ -140,6 +141,9 @@ data PProp
         | PPinst_hide
         | PPinst_hide_all
         | PPdeprecate String
+        -- module args (clock/reset) to use as the default clock/reset
+        | PPdefault_clock_arg Id
+        | PPdefault_reset_arg Id
       deriving (Show, Eq, Ord, Generic.Data, Generic.Typeable)
 
 data PPnm
@@ -206,6 +210,8 @@ instance PPrint PProp where
     pPrint d _ (PPdoc comment) = text ("doc = " ++ doubleQuote comment)
     pPrint d _ (PPdeprecate comment) = text ("deprecate = " ++ doubleQuote comment)
     pPrint d _ (PPinst_hide) = text "hide"
+    pPrint d _ (PPdefault_clock_arg i) = text "default_clock =" <+> ppId d i
+    pPrint d _ (PPdefault_reset_arg i) = text "default_reset =" <+> ppId d i
     pPrint d p v = text (drop 2 (show v))
 
 instance PPrint PPnm where
@@ -277,6 +283,8 @@ instance PVPrint PProp where
     pvPrint d _ (PPparam ids) = text "param = \"" <> sepList (map (pvpId d) ids) (text ",") <> text "\""
     pvPrint d _ (PPinst_name i) = text "inst_name = \"" <> pvpId d i <> text "\""
     pvPrint d _ (PPinst_hide) = text "inst_hide"
+    pvPrint d _ (PPdefault_clock_arg i) = text "default_clock = \"" <> pvpId d i <> text "\""
+    pvPrint d _ (PPdefault_reset_arg i) = text "default_reset = \"" <> pvpId d i <> text "\""
     pvPrint d p v = text (drop 2 (show v))
 
 instance PVPrint PPnm where
@@ -321,6 +329,8 @@ instance NFData PProp where
     rnf PPinst_hide = ()
     rnf PPinst_hide_all = ()
     rnf (PPdeprecate msg) = rnf msg
+    rnf (PPdefault_clock_arg i) = rnf i
+    rnf (PPdefault_reset_arg i) = rnf i
 
 instance NFData PPnm where
     rnf (PPnmOne i) = rnf i
@@ -340,6 +350,8 @@ getPragmaArgNames (PPgate_input_clocks is) = map getIdBaseString is
 getPragmaArgNames (PPclock_family is)      = map getIdBaseString is
 getPragmaArgNames (PPclock_ancestors is)   = map getIdBaseString (concat is)
 getPragmaArgNames (PPparam is)             = map getIdBaseString is
+getPragmaArgNames (PPdefault_clock_arg i)  = [getIdBaseString i]
+getPragmaArgNames (PPdefault_reset_arg i)  = [getIdBaseString i]
 getPragmaArgNames _ = []
 
 getModulePragmaName :: PProp -> String
@@ -374,6 +386,8 @@ getModulePragmaName (PPinst_name {})         = "inst_name"
 getModulePragmaName (PPinst_hide)            = "inst_hide"
 getModulePragmaName (PPinst_hide_all)        = "inst_hide_all"
 getModulePragmaName (PPdeprecate {})         = "deprecate"
+getModulePragmaName (PPdefault_clock_arg {}) = "default_clock"
+getModulePragmaName (PPdefault_reset_arg {}) = "default_reset"
 
 
 -- ========================================================================
@@ -700,15 +714,27 @@ hasUnusedAttribute pps i
   | i == idDefaultClock = hasUnusedAttribute pps emptyId
   | otherwise = or [ i `elem` is | PPgate_unused is <- pps ]
 
+-- whether the module has a default clock port
+-- (an argument designated as the default clock, with the "default_clock"
+-- attribute, serves as the default clock but is not the implicit port)
 hasDefaultClk :: [PProp] -> Bool
 hasDefaultClk pps = not (any removesDefClk pps)
   where removesDefClk (PPclock_osc ps) = (idDefaultClock,"") `elem` ps
+        removesDefClk (PPdefault_clock_arg _) = True
         removesDefClk _                = False
 
 hasDefaultRst :: [PProp] -> Bool
 hasDefaultRst pps = not (any removesDefRst pps)
   where removesDefRst (PPreset_port ps) = (idDefaultReset,"") `elem` ps
+        removesDefRst (PPdefault_reset_arg _) = True
         removesDefRst _                 = False
+
+-- the module argument designated as the default clock/reset, if any
+getDefaultClockArg :: [PProp] -> Maybe Id
+getDefaultClockArg pps = listToMaybe [ i | PPdefault_clock_arg i <- pps ]
+
+getDefaultResetArg :: [PProp] -> Maybe Id
+getDefaultResetArg pps = listToMaybe [ i | PPdefault_reset_arg i <- pps ]
 
 hasRuleHide :: [RulePragma] -> Bool
 hasRuleHide []         = False
