@@ -469,3 +469,13 @@ executable fstscopes
   ghc-options: -main-is Main_fstscopes
   main-is: fstscopes.hs
   other-modules: Warmup
+
+executable bo2bloogle
+  import: common_exes
+  build-depends:
+    bytestring >=0.11.5.4,
+    mtl >=2.3.1,
+  hs-source-dirs: src/comp/app
+  ghc-options: -main-is Main_bo2bloogle
+  main-is: bo2bloogle.hs
+  other-modules: Warmup

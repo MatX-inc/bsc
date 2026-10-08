@@ -201,6 +201,7 @@ bluetcl: MAINSRC = app/bluetcl_Main.hs
 tconcheck: MAINSRC = app/tconcheck.hs
 fstcheck: MAINSRC = app/fstcheck.hs
 fstscopes: MAINSRC = app/fstscopes.hs
+bo2bloogle: MAINSRC = app/bo2bloogle.hs
 GHCMAKEFLAGS = --make $(MAINSRC) -o $@ -j$(GHCJOBS)
 GHCCOMPILEFLAGS = -o $@ -c $<
 
