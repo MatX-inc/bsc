@@ -311,13 +311,14 @@ SOURCES = BuildVersion.hs BuildSystem.hs Warmup.hs $(SOURCES_WO_EXTRA_BUILDVERSI
 
 BSCEXES = bsc
 TCLEXES = bluetcl
+BO2BLOOGLEEXES = bo2bloogle
 UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba fstcheck fstscopes vcdcheck
 SHOWRULESEXES = showrules
 # Build-consistency checkers: installed as part of the normal install
 # (not just install-extra), because the library build runs them
 CHECKEXES = tconcheck
 
-EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES) $(CHECKEXES)
+EXES = $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(UTILEXES) $(SHOWRULESEXES) $(CHECKEXES)
 
 .PHONY: all
 all: $(EXES)
@@ -460,6 +461,12 @@ showrules: $(SOURCES)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
 
+.PHONY: bo2bloogle
+bo2bloogle: $(SOURCES)
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
+	$(POSTBUILDCOMMAND)
+
 # bluetcl has a Haskell main that hands control to Tcl through a C shim, so
 # the RTS comes up the ordinary way and there is one entry point to maintain.
 .PHONY: bluetcl
@@ -499,7 +506,7 @@ endif
 # within each compile. Naming one executable directly still builds just it.
 .PHONY: install
 install:
-	$(MAKE) -j1 $(BSCEXES) $(TCLEXES) $(CHECKEXES) install-bsc install-bluetcl install-checkers
+	$(MAKE) -j1 $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) install-bsc install-bluetcl install-bo2bloogle install-checkers
 
 .PHONY: install-extra
 install-extra:
@@ -519,7 +526,6 @@ install-bluetcl: $(PKGINFO)
 
 .PHONY: install-bo2bloogle
 install-bo2bloogle: $(addprefix $(BINDIR)/,$(BO2BLOOGLEEXES))
-install-bo2bloogle: $(addprefix $(BINDIR)/core/,$(BO2BLOOGLEEXES))
 install-bo2bloogle: $(PKGINFO)
 
 .PHONY: install-utils
