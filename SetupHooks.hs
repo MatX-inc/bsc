@@ -188,11 +188,17 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
     -- same packages the Makefile passes, so a make build and a cabal build
     -- with the same compiler produce the same file and neither disturbs the
     -- other; with different compilers each regenerates it on entry.
+    --
+    -- The scripts are spawned by absolute path: with a `cwd`, process >= 1.6.24
+    -- uses posix_spawn, and macOS resolves a relative program path against
+    -- the parent's directory before the chdir file action runs, so
+    -- "./update-warmup.sh" fails with ENOENT there (GHC 9.14 ships 1.6.26).
     writeWarmupHs :: (FilePath, FilePath, [String]) -> IO ()
     writeWarmupHs (path, ghc, deps) = do
-      let cmd = proc "./update-warmup.sh" (ghc : deps)
-      callCreateProcess cmd {cwd = Just "src/comp"}
-      copyFile ("src/comp" </> "Warmup.hs") path
+      comp <- makeAbsolute "src/comp"
+      let cmd = proc (comp </> "update-warmup.sh") (ghc : deps)
+      callCreateProcess cmd {cwd = Just comp}
+      copyFile (comp </> "Warmup.hs") path
 
     writeBuildVersionHs :: (FilePath, Platform) -> IO ()
     writeBuildVersionHs (path, Platform _ os) = do
@@ -203,10 +209,11 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
               ("NOUPDATEBUILDVERSION", noUpdateBuildVersion)
             ]
 
-      let cmd = proc "./update-build-version.sh" []
+      comp <- makeAbsolute "src/comp"
+      let cmd = proc (comp </> "update-build-version.sh") []
       env <- (newVars <>) <$> getEnvironment
-      callCreateProcess $ cmd {cwd = Just "src/comp", env = Just env}
-      copyFile "src/comp/BuildVersion.hs" path
+      callCreateProcess $ cmd {cwd = Just comp, env = Just env}
+      copyFile (comp </> "BuildVersion.hs") path
 
 -- | The hooks that make the vendored solvers available.
 --
