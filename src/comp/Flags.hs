@@ -283,7 +283,6 @@ data DumpFlag
         | DFastate
         | DFrwire
         | DFcreg
-        | DFrenameio
         | DFadropdefs
         | DFaopt
         | DFsynthesize

@@ -1,0 +1,31 @@
+package SharedPort where
+
+-- Two value methods of one import declared on the SAME output port, as
+-- FIFOF_'s notFull and i_notFull both read FULL_N.  Read from two rules,
+-- the instance has one wire for the port and both reads use it.
+interface VShared =
+    full   :: Bit 1
+    i_full :: Bit 1
+    count  :: Bit 8
+
+vMkShared :: Module VShared
+vMkShared =
+    module verilog "VShared" "CLK" {
+        full   = "FULL_N";
+        i_full = "FULL_N";
+        count  = "COUNT";
+    } [ full <> full, i_full <> i_full, count <> count,
+        full <> i_full, full <> count, i_full <> count ]
+
+{-# verilog sysSharedPort #-}
+sysSharedPort :: Module Empty
+sysSharedPort =
+    module
+        m :: VShared <- vMkShared
+        a :: Reg (Bit 1) <- mkReg 0
+        b :: Reg (Bit 1) <- mkReg 0
+        c :: Reg (Bit 8) <- mkReg 0
+        rules
+            "useFull": when True ==> a := m.full
+            "useIFull": when True ==> b := m.i_full
+            "useCount": when True ==> c := m.count

@@ -28,10 +28,12 @@ if { $vtest == 1 } {
 set fname {sysPriMux_SharedValue.astate}
 compile_verilog_pass PriMux_SharedValue.bsv {} "-dastate=$fname"
 if { $vtest == 1 } {
+    # the mux defines the register's D_IN port; the MUX_ value names
+    # keep the method spelling r$write_1
     find_regexp $fname {
-r\$write_1  \= primux \(WILL_FIRE_RL_rA, MUX_r\$write_1__VAL_1\)
-		    \(WILL_FIRE_RL_rB, MUX_r\$write_1__VAL_2\)
-		    \(WILL_FIRE_RL_rC, MUX_r\$write_1__VAL_3\)}
+r\$D_IN  \= primux \(WILL_FIRE_RL_rA, MUX_r\$write_1__VAL_1\)
+		 \(WILL_FIRE_RL_rB, MUX_r\$write_1__VAL_2\)
+		 \(WILL_FIRE_RL_rC, MUX_r\$write_1__VAL_3\)}
 }
 
 # ----------

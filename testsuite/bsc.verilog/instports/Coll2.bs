@@ -1,0 +1,27 @@
+package Coll2 where
+
+-- A method NAMED sub_1 beside a 2-ported method `sub': the internal
+-- spelling of copy 1 of `sub' (m$sub_1, Verilog port D_OUT_2) and of
+-- the result of `sub_1' (Verilog port VAL) are the same, so the two
+-- ports cannot both be named.  Error G0134.
+interface VColl2 =
+    sub   :: Bit 4 -> Bit 8
+    sub_1 :: Bit 8
+
+vMkColl2 :: Module VColl2
+vMkColl2 =
+    module verilog "VColl2" "CLK" {
+        sub[2] = "ADDR" "D_OUT";
+        sub_1  = "VAL";
+    } [ sub <> sub, sub_1 <> sub_1, sub <> sub_1 ]
+
+{-# verilog sysColl2 #-}
+sysColl2 :: Module Empty
+sysColl2 =
+    module
+        m :: VColl2 <- vMkColl2
+        r :: Reg (Bit 8) <- mkReg 0
+        r2 :: Reg (Bit 8) <- mkReg 0
+        rules
+            "useSub": when True ==> r := m.sub (r[3:0]) + m.sub (r2[3:0])
+            "useSub1": when True ==> r2 := m.sub_1

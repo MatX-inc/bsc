@@ -9,7 +9,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import BackendNamingConventions
 import Error(internalError, EMsg, WMsg)
-import Flags(Flags, removeCross)
+import Flags(Flags)
 
 -- import Debug.Trace
 
@@ -74,9 +74,7 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
         (rws, vs') = partition isRWire vs
         (rw0s, nonrwire_vs) = partition isRWire0 vs'
         (bw0s, nonrwire_vs') = partition isBypassWire0 nonrwire_vs
-        should_inline_bw x = isBypassWire x &&
-                          ((not (isClockCrossingBypassWire x)) || (removeCross flags))
-        (bws, nonwire_vs) = partition should_inline_bw nonrwire_vs'
+        (bws, nonwire_vs) = partition (inlinedBypassWireInst flags) nonrwire_vs'
         -- for each RWire instance, make a tuple of:
         --  * the instance name
         --  * the instance outputs (whas and possibly wget)

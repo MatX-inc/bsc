@@ -1,0 +1,26 @@
+package Coll3 where
+
+-- Coll2 with the colliding method declared FIRST, so that whichever
+-- entry a map keeps, the error is reported (and names the ports in
+-- declaration order).
+interface VColl3 =
+    sub_1 :: Bit 8
+    sub   :: Bit 4 -> Bit 8
+
+vMkColl3 :: Module VColl3
+vMkColl3 =
+    module verilog "VColl3" "CLK" {
+        sub_1  = "VAL";
+        sub[2] = "ADDR" "D_OUT";
+    } [ sub <> sub, sub_1 <> sub_1, sub <> sub_1 ]
+
+{-# verilog sysColl3 #-}
+sysColl3 :: Module Empty
+sysColl3 =
+    module
+        m :: VColl3 <- vMkColl3
+        r :: Reg (Bit 8) <- mkReg 0
+        r2 :: Reg (Bit 8) <- mkReg 0
+        rules
+            "useSub": when True ==> r := m.sub (r[3:0]) + m.sub (r2[3:0])
+            "useSub1": when True ==> r2 := m.sub_1

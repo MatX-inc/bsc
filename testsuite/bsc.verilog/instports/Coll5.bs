@@ -1,0 +1,29 @@
+package Coll5 where
+
+-- Same spelling, same Verilog port: the method NAMED sub_1 reads
+-- D_OUT_2, the port of copy 1 of the 2-ported `sub'.  Both entries for
+-- the spelling m$sub_1 name the one wire m$D_OUT_2, which is legal (it
+-- is another way for an output port to be shared across methods, as
+-- FIFOF_'s notFull and i_notFull share FULL_N) and compiles to a single
+-- connection that both reads use.
+interface VColl5 =
+    sub   :: Bit 4 -> Bit 8
+    sub_1 :: Bit 8
+
+vMkColl5 :: Module VColl5
+vMkColl5 =
+    module verilog "VColl5" "CLK" {
+        sub[2] = "ADDR" "D_OUT";
+        sub_1  = "D_OUT_2";
+    } [ sub <> sub, sub_1 <> sub_1, sub <> sub_1 ]
+
+{-# verilog sysColl5 #-}
+sysColl5 :: Module Empty
+sysColl5 =
+    module
+        m :: VColl5 <- vMkColl5
+        r :: Reg (Bit 8) <- mkReg 0
+        r2 :: Reg (Bit 8) <- mkReg 0
+        rules
+            "useSub": when True ==> r := m.sub (r[3:0]) + m.sub (r2[3:0])
+            "useSub1": when True ==> r2 := m.sub_1

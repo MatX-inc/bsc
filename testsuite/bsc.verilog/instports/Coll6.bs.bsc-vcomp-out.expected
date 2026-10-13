@@ -1,0 +1,10 @@
+checking package dependencies
+compiling Coll6.bs
+code generation for sysColl6 starts
+Error: "Coll6.bs", line 21, column 8: (G0134)
+  Ports of instance `m' of the imported module `VColl6' share the internal
+  name `set_1': port `D_IN' of method `set' and port `VAL' of method `set_1'.
+  A port is named by its method, followed by the copy number of a method with
+  multiplicity and the argument number, so a method whose name matches a copy
+  or an argument of another method cannot be imported beside it. Rename one of
+  the methods.

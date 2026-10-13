@@ -1,0 +1,120 @@
+# Tests for the naming of the ports of submodule instances: AState mints
+# the Verilog spelling of each port (m$D_OUT_2, m$FULL_N, r$D_IN, ...)
+# from the internal method spelling of the port (m$sub_1, m$notFull,
+# r$write_1, ...), and lists a port read through two methods once.
+#
+# The BVI imports are written in Classic (.bs); the -dastate design in BSV.
+#
+# For reference only (not an expectation): measured against the install
+# before this naming change (release-devel-B0 at 4b086bb5), this file
+# gives 20 passes and 29 failures.  Coll2, Coll3, Coll4 and Coll5 were
+# internal errors there ("acheck:chkDupWires ... internal typecheck failed
+# (asCheck after ainlinewires)") and Coll6 an internal error in
+# mkInstOutputDecl ("instance `m' output port not found: m$VAL"); Coll1,
+# SharedPort and AStateDump compiled, with sysColl1.v and sysSharedPort.v
+# byte-identical to the current output, and the AStateDump dump showing
+# the method spellings (f$notFull, f$i_notFull, r$write_1, r$EN_write,
+# f$enq_1, f$EN_enq) that the regexps at the end reject.
+
+# ----------
+# A method whose name equals the spelling of a copy or an argument of
+# another method of the same import cannot be imported beside it: the two
+# ports would share one internal name.  Error G0134 names the instance,
+# the imported module, the shared name and both ports.
+
+# method `sub_1' (port VAL) beside copy 1 of `sub[2]' (port D_OUT_2)
+compile_verilog_fail_error Coll2.bs G0134
+if { $vtest == 1 } {
+    compare_file Coll2.bs.bsc-vcomp-out
+}
+
+# the same with `sub_1' declared first
+compile_verilog_fail_error Coll3.bs G0134
+if { $vtest == 1 } {
+    compare_file Coll3.bs.bsc-vcomp-out
+}
+
+# input side: action method `upd_1' beside `upd[2]'; the three shared
+# names upd_1_1, upd_1_2 and EN_upd_1 give one error each
+compile_verilog_fail_error Coll4.bs G0134 3
+if { $vtest == 1 } {
+    compare_file Coll4.bs.bsc-vcomp-out
+}
+
+# no multiplicity: argument 1 of `set' beside the value method `set_1'
+compile_verilog_fail_error Coll6.bs G0134
+if { $vtest == 1 } {
+    compare_file Coll6.bs.bsc-vcomp-out
+}
+
+# ----------
+# No collision when it is a Verilog PORT (not a method) that is named like
+# a copy of another method: each port gets its own wire.
+compile_verilog_pass Coll1.bs
+if { $vtest == 1 } {
+    find_n_strings sysColl1.v {wire [7 : 0] m$D_OUT_1, m$D_OUT_2, m$sub_1;} 1
+    find_n_strings sysColl1.v {.D_OUT_2(m$D_OUT_2)} 1
+    find_n_strings sysColl1.v {.sub_1(m$sub_1)} 1
+    find_n_strings sysColl1.v {assign r$D_IN = m$D_OUT_1 + m$D_OUT_2 ;} 1
+    find_n_strings sysColl1.v {assign r2$D_IN = m$sub_1 ;} 1
+}
+
+# ----------
+# Same internal name, same Verilog port: method `sub_1' reads D_OUT_2, the
+# port of copy 1 of `sub[2]'.  This is legal (an output port shared by two
+# methods): one wire, one connection, and both reads use it.
+compile_verilog_pass Coll5.bs
+if { $vtest == 1 } {
+    find_n_strings sysColl5.v {wire [7 : 0] m$D_OUT_1, m$D_OUT_2;} 1
+    find_n_strings sysColl5.v {.D_OUT_2(m$D_OUT_2)} 1
+    find_n_strings sysColl5.v {m$VAL} 0
+    find_n_strings sysColl5.v {assign r$D_IN = m$D_OUT_1 + m$D_OUT_2 ;} 1
+    find_n_strings sysColl5.v {assign r2$D_IN = m$D_OUT_2 ;} 1
+    # the declaration, the connection and the two reads: no other line
+    find_n_strings sysColl5.v {m$D_OUT_2} 4
+}
+# the Verilog simulator accepts the file (VColl5.v is a stub for the
+# imported module)
+link_verilog_pass {sysColl5.v VColl5.v} sysColl5
+
+# ----------
+# Two value methods declared on the same output port (as FIFOF_'s notFull
+# and i_notFull share FULL_N), read from two rules: one wire for the port,
+# used by both reads.
+compile_verilog_pass SharedPort.bs
+if { $vtest == 1 } {
+    find_n_strings sysSharedPort.v {wire m$FULL_N;} 1
+    find_n_strings sysSharedPort.v {.FULL_N(m$FULL_N)} 1
+    find_n_strings sysSharedPort.v {assign a$D_IN = m$FULL_N ;} 1
+    find_n_strings sysSharedPort.v {assign b$D_IN = m$FULL_N ;} 1
+    find_n_strings sysSharedPort.v {m$FULL_N} 4
+}
+link_verilog_pass {sysSharedPort.v VShared.v} sysSharedPort
+
+# ----------
+# The -dastate dump: defs and state outputs carry the Verilog port
+# spelling, and a port read through two methods is listed once.
+set fname {sysAStateDump.astate-dump}
+compile_verilog_pass AStateDump.bsv {} "-dastate=$fname"
+if { $vtest == 1 } {
+    # the register written from two rules: its mux defines r$D_IN and its
+    # enable r$EN; the MUX_ value names keep the method spelling r$write_1
+    find_regexp $fname {
+r\$D_IN  \= mux \(WILL_FIRE_RL_rA, MUX_r\$write_1__VAL_1\)
+	      \(WILL_FIRE_RL_rB, MUX_r\$write_1__VAL_2\)}
+    find_regexp $fname {^r\$EN  \= WILL_FIRE_RL_rA \|\| WILL_FIRE_RL_rB;$}
+    # the FIFO's input ports
+    find_regexp $fname {^f\$D_IN  \= }
+    find_regexp $fname {^f\$ENQ  \= WILL_FIRE_RL_rA;$}
+    find_regexp $fname {^f\$DEQ  \= WILL_FIRE_RL_drain;$}
+    # state outputs: FULL_N once, although notFull (rule watch) and
+    # i_notFull (the enq guard) both read it; EMPTY_N likewise
+    find_n_regexp $fname {^f\$FULL_N :: Bit 1;$} 1
+    find_n_regexp $fname {^f\$EMPTY_N :: Bit 1;$} 1
+    find_n_regexp $fname {^r :: Bit 8;$} 1
+    # no method-spelled port ids remain
+    find_regexp_fail $fname {^f\$(i_)?notFull}
+    find_regexp_fail $fname {^f\$(i_)?notEmpty}
+    find_regexp_fail $fname {^f\$(enq_1|EN_enq)}
+    find_regexp_fail $fname {^r\$(read|write_1|EN_write)}
+}

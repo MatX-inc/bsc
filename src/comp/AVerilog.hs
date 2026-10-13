@@ -29,7 +29,7 @@ import Error(internalError, ErrorHandle, bsWarning,
 import Position(getPosition, Position)
 import qualified Data.Generics as Generic
 import Flags(Flags, systemVerilogOutput,
-             removeReg, removeCross, removeInoutConnect, removeUnusedMods,
+             removeInoutConnect, removeUnusedMods,
              useDPI, verilogDeclareAllFirst)
 import Id
 import Pragma(PProp(..))
@@ -39,7 +39,7 @@ import Verilog
 import VPrims(vPriEnc,vMux,vPriMux,verilogInstancePrefix)
 import AVerilogUtil
 import InlineReg
-import BackendNamingConventions(isRegInst, isClockCrossingRegInst, isInoutConnect)
+import BackendNamingConventions(inlinedRegInst, isInoutConnect)
 import ForeignFunctions(ForeignFuncMap, mkDPIDeclarations, getDPIInstantiations)
 import qualified GraphWrapper as G
 
@@ -1070,11 +1070,8 @@ genInstances errh flags ff_blocks vDef aspack =
 
         inlined_reg_instances :: [AVInst]
         noninlined_aspkg_instances :: [AVInst]
-        should_inline x = isRegInst x && ((not (isClockCrossingRegInst x)) || (removeCross flags))
         (inlined_reg_instances, noninlined_aspkg_instances) =
-            if (removeReg flags)
-            then partition should_inline not_inout_connect_instances
-            else ([], not_inout_connect_instances)
+            partition (inlinedRegInst flags) not_inout_connect_instances
 
         (inlined_reg_comments, noninlinedreg_comments) =
             let reg_inst_ids = map avi_vname inlined_reg_instances
