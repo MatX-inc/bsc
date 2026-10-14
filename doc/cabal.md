@@ -133,22 +133,23 @@ linked by name.
 
 `util/cabal-ladder.sh`:
 
-- `hash OUT` hashes the build under `dist-newstyle`; interfaces as `ghc
-  --show-iface` text minus the interface hash and flags fingerprint, since
-  their bytes carry the checkout directory.
+- `hash OUT [DIR...]` hashes the build under `dist-newstyle` and every file of
+  each installed DIR; interfaces as `ghc --show-iface` text minus the interface
+  hash and flags fingerprint, since their bytes carry the checkout directory.
 - `verdict REF OTHER...` compares each list with the reference; an absent list
   is MISSING.
 - `run` is the ladder on one machine: the legs `c-j1`, the reference, `a-j1`,
   `c-j16`, `c-j64`, `a-j64` and `d-j64`, each a fresh checkout of `HEAD` in a
-  directory of its own under `determinism-results/<stamp>/legs`, built at its
-  jobs count (`jobs: N` and, from 9.12, `ghc-options: -jN` in a
-  `cabal.project.local`), the solvers installed first, and hashed; the reference
-  then rebuilds after a marker edit to `src/comp/Libs/IOUtil.hs` and after its
-  revert. The reference builds first, alone, so the dependency store it fills is
-  shared; then up to `LADDER_JOBS` legs run at once, one per 6 GB of memory
-  unless set. The verdict compares every leg and the reverted rebuild with the
-  reference; a failed one is MISSING. `LEGS` names other legs, `KEEP_LEGS=1`
-  keeps their trees.
+  directory of its own under `determinism-results/<stamp>/legs`, built and
+  installed (`make install-src`, `make -C src/comp install-extra`, `make
+  install-bluehs`) at its jobs count (`jobs: N` and, from 9.12, `ghc-options:
+  -jN` in a `cabal.project.local`) and hashed, `inst/bluehs` with the build
+  tree; the reference then rebuilds after a marker edit to
+  `src/comp/Libs/IOUtil.hs` and after its revert. The reference builds first,
+  alone, so the dependency store it fills is shared; then up to `LADDER_JOBS`
+  legs run at once, one per 6 GB of memory unless set. The verdict compares
+  every leg and the reverted rebuild with the reference; a failed one is
+  MISSING. `LEGS` names other legs, `KEEP_LEGS=1` keeps their trees.
 
 `.github/workflows/cabal.yml` runs on the project's own pull requests that touch
 the build files, nightly on the project's default branch, and on a dispatch,
