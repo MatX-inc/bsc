@@ -4,12 +4,16 @@ name: Cabal build
 # and its determinism ladder: the same commit built serially, oversubscribed
 # and in other checkout directories must give bit-identical objects,
 # interfaces, archives and programs (util/cabal-ladder.sh hash hashes a
-# build, util/cabal-ladder.sh verdict compares the lists).  A pull request
-# runs the two-leg smoke ladder; a manual dispatch runs the full one.  From
-# GHC 9.12 the legs vary GHC's own parallelism as well as cabal's: that is
-# where -fobject-determinism exists and cabal.project compiles in parallel.
-# Below it GHC compiles serially, and the legs vary cabal's package jobs and
-# the checkout directory.
+# build, util/cabal-ladder.sh verdict compares the lists).  The ladder is
+# six legs: the serial build against a second serial build, -j16, and three
+# -j64 builds, the second serial and two of the -j64 in other directories.
+# It runs on the project's own pull requests and on a dispatch; a fork's
+# pull requests do not run it, since a fork's branches are a developer's
+# loop, and a fork dispatches it when it qualifies a release.  From GHC 9.12
+# the legs vary GHC's own parallelism as well as cabal's: that is where
+# -fobject-determinism exists and cabal.project compiles in parallel.  Below
+# it GHC compiles serially, and the legs vary cabal's package jobs and the
+# checkout directory.
 
 on:
   pull_request:
@@ -27,14 +31,6 @@ on:
         required: false
         default: '9.14.1'
         type: string
-      ladder:
-        description: >-
-          smoke = c-j1 and c-j64 (one directory, serial against
-          oversubscribed); full adds c-j16 and -j64 in two more directories
-        required: false
-        default: smoke
-        type: choice
-        options: [smoke, full]
       platforms:
         description: Runners to build on
         required: false
@@ -52,6 +48,8 @@ permissions:
 jobs:
   plan:
     name: Ladder plan
+    # The project's pull requests and any dispatch; not a fork's pull requests.
+    if: ${{ github.event_name != 'pull_request' || github.repository == 'B-Lang-org/bsc' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -60,22 +58,20 @@ jobs:
     steps:
       - id: plan
         env:
-          LADDER: ${{ inputs.ladder || 'smoke' }}
           PLATFORMS: ${{ inputs.platforms || 'both' }}
         run: |
           # A leg is a checkout directory and a parallelism: cabal jobs N, and
           # ghc -jN where the project compiles in parallel (GHC 9.12 on).
           # Directories a, c and d check that the build does not depend on
-          # its path.
+          # its path; c-j1 is the reference the verdict compares the others
+          # against.
           c_j1='{"name":"c-j1","dir":"c","jobs":"1"}'
+          a_j1='{"name":"a-j1","dir":"a","jobs":"1"}'
           c_j16='{"name":"c-j16","dir":"c","jobs":"16"}'
           c_j64='{"name":"c-j64","dir":"c","jobs":"64"}'
           a_j64='{"name":"a-j64","dir":"a","jobs":"64"}'
           d_j64='{"name":"d-j64","dir":"d","jobs":"64"}'
-          case "$LADDER" in
-            full) legs="[$c_j1,$c_j16,$c_j64,$a_j64,$d_j64]" ;;
-            *) legs="[$c_j1,$c_j64]" ;;
-          esac
+          legs="[$c_j1,$a_j1,$c_j16,$c_j64,$a_j64,$d_j64]"
           case "$PLATFORMS" in
             ubuntu) os='["ubuntu-24.04"]' ;;
             macos) os='["macos-15"]' ;;
@@ -83,7 +79,7 @@ jobs:
           esac
           echo "legs=$legs" >> "$GITHUB_OUTPUT"
           echo "os=$os" >> "$GITHUB_OUTPUT"
-          echo "ladder: $LADDER on $os: $legs"
+          echo "ladder on $os: $legs"
 
   build:
     name: "Build ${{ matrix.os }} ${{ matrix.leg.name }}"
@@ -150,7 +146,9 @@ jobs:
   verdict:
     name: "Verdict ${{ matrix.os }}"
     needs: [plan, build]
-    if: ${{ !cancelled() }}
+    # After every leg, passed or failed, so a failed leg is reported MISSING;
+    # not when the ladder was not planned at all.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:

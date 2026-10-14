@@ -244,10 +244,13 @@ linked by name (section 3). `util/cabal-ladder.sh`:
   `determinism-results/<timestamp>`.
 
 `.github/workflows/cabal.yml` runs the same two halves across machines and
-directories, with cabal-install pinned to 3.16.1.0 (section 2): a pull
-request builds `-j1` against `-j64` in one directory on ubuntu-24.04 and
-macos-15; a dispatch of the full ladder adds `-j16` there and `-j64` in two
-more directories, which checks that the build does not depend on its path.
+directories, with cabal-install pinned to 3.16.1.0 (section 2): on
+ubuntu-24.04 and macos-15 it compares the serial build against a second
+serial build in another directory, `-j16`, and `-j64` three times in three
+directories, which checks that the build depends neither on its parallelism
+nor on its path. It runs on the project's own pull requests and on a
+dispatch; a fork's pull requests do not run it, since a fork's branches are
+a developer's loop, and a fork dispatches it when it qualifies a release.
 Every planned leg is named to the verdict, so a failed leg is MISSING, not
 skipped. `BuildVersion` embeds the commit, so a ladder compares one commit. A
 failure is a design stop, not a mechanical fix: the first suspects are a root
