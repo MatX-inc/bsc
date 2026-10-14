@@ -15,8 +15,11 @@ author: Bluespec, Inc.
 maintainer: bsc-dev@groups.io
 category: Hardware
 build-type: Hooks
--- The scripts the hooks run, so that a source distribution carries them.
+-- HEAD, written by `make install-src` so that a commit alone is a changed
+-- source and BuildVersion follows it (doc/cabal.md section 2).
 extra-source-files:
+  build/cabal-head
+  -- The scripts the hooks run, so that a source distribution carries them.
   platform.sh
   src/comp/update-build-version.sh
 -- The GHCs CI builds with (.github/workflows/ci.yml).

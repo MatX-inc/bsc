@@ -1,7 +1,15 @@
 #! /usr/bin/env bash
 set -euo pipefail
 
+# --deps-of: start from the named packages' dependencies and leave the
+# packages themselves out (the in-place library is not a third-party package).
+DEPS_OF=0
+if [ "${1:-}" = "--deps-of" ] ; then
+    DEPS_OF=1
+    shift
+fi
 PACKAGES=$@
+GHCPKG=${GHCPKG:-ghc-pkg}
 
 # ===========================================================================
 
@@ -68,15 +76,15 @@ add_pkg() {
 
     #echo "Looking up $1"
 
-    PKG_NAME=`ghc-pkg field --ipid ${PKG_ID} name --simple-output`
+    PKG_NAME=`"${GHCPKG}" field --ipid ${PKG_ID} name --simple-output`
     PKG_KEY=`echo "${PKG_NAME}" | tr .- _`
 
     aget arr_name "${PKG_KEY}" i_name
     if [ -z ${i_name+x} ] ; then
-	PKG_VER=`ghc-pkg field --ipid ${PKG_ID} version --simple-output`
-	PKG_LIC=`ghc-pkg field --ipid ${PKG_ID} license --simple-output`
-	PKG_COPYR=`ghc-pkg field --ipid ${PKG_ID} copyright --simple-output`
-	PKG_DEPS=`ghc-pkg field --ipid ${PKG_ID} depends --simple-output`
+	PKG_VER=`"${GHCPKG}" field --ipid ${PKG_ID} version --simple-output`
+	PKG_LIC=`"${GHCPKG}" field --ipid ${PKG_ID} license --simple-output`
+	PKG_COPYR=`"${GHCPKG}" field --ipid ${PKG_ID} copyright --simple-output`
+	PKG_DEPS=`"${GHCPKG}" field --ipid ${PKG_ID} depends --simple-output`
 
 	if [ "${PKG_LIC}" != "BSD-3-Clause" ] ; then
 	    if [ "${PKG_LIC}" != "BSD-2-Clause" ] ; then
@@ -98,13 +106,24 @@ add_pkg() {
     fi
 }
 
-# Add the packages from the command line (and their dependencies).
-# These are package names, so resolve each to its id first.
+# Add the packages from the command line (and their dependencies), or with
+# --deps-of their dependencies alone. These are package names, so resolve
+# each to its id first; a name no database knows is an error, not an empty
+# list.
 for i in ${PACKAGES}
 do
-    for id in `ghc-pkg field $i id --simple-output`
+    ids=`"${GHCPKG}" field $i id --simple-output` || { echo "Package ${i} not found by ${GHCPKG}" >&2; exit 1; }
+    for id in ${ids}
     do
-	add_pkg "$id"
+	if [ "${DEPS_OF}" = 1 ] ; then
+	    deps=`"${GHCPKG}" field --ipid ${id} depends --simple-output`
+	    for dep in ${deps}
+	    do
+		add_pkg "${dep}"
+	    done
+	else
+	    add_pkg "${id}"
+	fi
     done
 done
 

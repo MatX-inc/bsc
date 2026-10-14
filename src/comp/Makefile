@@ -9,6 +9,7 @@ TMPDIR=/tmp
 # System tools
 
 INSTALL ?= install
+CABAL ?= cabal
 
 RM = rm -f
 LN = ln -sf
@@ -433,30 +434,89 @@ PKGINFO=
 else
 PKGINFO=$(LICDIR)/LICENSE.ghc_pkgs
 
+# The packages the installed programs were linked against are the cabal
+# build's: the dependencies cabal-install built into its store and GHC's own
+# (the trailing colon), walked from the in-place library's dependencies.
+CABAL_STORE = $(shell cd $(TOP) && $(CABAL) path --store-dir)
+CABAL_PKG_PATH = $(TOP)/dist-newstyle/packagedb/ghc-$(GHCVERSION):$(firstword $(wildcard $(CABAL_STORE)/ghc-$(GHCVERSION)*/package.db)):
+
 .PHONY: $(PKGINFO)
 $(PKGINFO):
 	mkdir -p -m 755 $(LICDIR)
-	./make-ghc-pkg-info.sh $(PACKAGES) > $(PKGINFO)
+	GHC_PACKAGE_PATH="$(CABAL_PKG_PATH)" ./make-ghc-pkg-info.sh --deps-of bsc > $(PKGINFO)
 endif
 
 # -----
 # Install targets
 
-# Every executable compiles into the same -odir, so two of them running at
-# once race on the objects of the modules they share: one renames its
-# temporary over the path the other is still writing, which surfaces as
-# `renameFile: ... VCD.o.tmp to ... VCD.o: does not exist`. Build them
-# through a -j1 sub-make, which holds however the caller invoked make.
-# Little is lost, because the objects are shared: after the first target the
-# rest compile only their own main and link, and GHCJOBS still parallelises
-# within each compile. Naming one executable directly still builds just it.
-.PHONY: install
-install:
-	$(MAKE) -j1 $(BSCEXES) $(TCLEXES) install-bsc install-bluetcl
+# What `install` installs is the cabal build: `cabal build all` at the
+# repository root compiles the library once and links every program against
+# its archive, which is what makes the programs the same bytes from build to
+# build (doc/cabal.md section 5); the ghc --make targets above are a build
+# without cabal-install, and not what ships. `install` copies bsc and
+# bluetcl into $(BINDIR) and `install-extra` every other executable stanza
+# of bsc.cabal, as the make build's targets beside them do. GHCJOBS bounds
+# the build as it bounds the make build: with cabal.project's semaphore, -j
+# is the number of GHC slots in all.
+CABAL_EXES = $(shell sed -n 's/^executable[[:space:]]*\([^[:space:]]*\).*/\1/p' $(TOP)/bsc.cabal)
+# What `install` copies; `install-extra` copies every other stanza.
+INSTALLEXES = $(BSCEXES) $(TCLEXES)
+EXTRAEXES = $(filter-out $(INSTALLEXES),$(CABAL_EXES))
 
-.PHONY: install-extra
-install-extra:
-	$(MAKE) -j1 $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
+# BuildVersion names the commit, and its rule runs when cabal-install builds
+# the package, which it does when a declared source changed. A commit that
+# touches no source of the package (a testsuite or workflow change) would
+# leave the previous commit's version in the programs, so `install` writes
+# HEAD into a file bsc.cabal declares as a source: a new commit is then a
+# changed source, and the version follows (doc/cabal.md section 2).
+CABAL_HEAD = $(TOP)/build/cabal-head
+
+# The cabal build links the solvers by name and is told no directory
+# (doc/cabal.md section 2): src/Makefile installed them under
+# $(PREFIX)/lib/SAT before descending here, and LIBRARY_PATH names that
+# directory to the linker for every link of the build.
+
+# The Bluesim kernel's version header is generated from this directory's
+# BuildVersion.hs (src/bluesim/gen_version_h), which the make build writes
+# with update-build-version.sh; the hooks run the same script into the
+# package's autogen directory, so it is written here too and the two agree.
+
+# BSC_BUILD selects the cabal build's variant as it selects the make build's:
+# PROF (profiling, cost centres on every function, and the larger stack cap
+# their frames need), DEBUG (Core lint and the debugging runtime) or NOOPT
+# (unoptimized); unset, the project's settings. The cabal commands take the
+# GHC make is given, as the make build does; list-bin takes the same flags,
+# since the build directory follows them.
+ifeq ($(BSC_BUILD),PROF)
+BSC_BUILD_FLAGS = --enable-profiling --profiling-detail=all-functions \
+	--ghc-options='"-with-rtsopts=-H256m -K256m -i1"'
+else ifeq ($(BSC_BUILD),DEBUG)
+BSC_BUILD_FLAGS = --ghc-options='-dcore-lint -debug'
+else ifeq ($(BSC_BUILD),NOOPT)
+BSC_BUILD_FLAGS = --disable-optimization
+else
+BSC_BUILD_FLAGS =
+endif
+CABAL_FLAGS = --with-compiler=$(GHC) $(BSC_BUILD_FLAGS)
+
+.PHONY: install install-extra
+install: CABAL_INSTALL = $(INSTALLEXES)
+install-extra: CABAL_INSTALL = $(EXTRAEXES)
+install install-extra:
+	mkdir -p -m 755 $(TOP)/build $(BINDIR)
+	(git -C $(TOP) rev-parse HEAD 2>/dev/null || echo no-repository) > $(CABAL_HEAD).tmp && \
+	  { cmp -s $(CABAL_HEAD).tmp $(CABAL_HEAD) || mv $(CABAL_HEAD).tmp $(CABAL_HEAD); } && \
+	  $(RM) -f $(CABAL_HEAD).tmp
+	./update-build-version.sh
+	cd $(TOP) && LIBRARY_PATH="$(abspath $(PREFIX))/lib/SAT$${LIBRARY_PATH:+:$$LIBRARY_PATH}" $(CABAL) build -j$(GHCJOBS) $(CABAL_FLAGS) all
+	@set -e; for exe in $(CABAL_INSTALL); do \
+	  bin=$$(cd $(TOP) && $(CABAL) list-bin $(CABAL_FLAGS) bsc:exe:$$exe); \
+	  echo "$(INSTALL) -m 755 $$bin $(BINDIR)/$$exe"; \
+	  $(INSTALL) -m 755 "$$bin" $(BINDIR)/$$exe; \
+	done
+ifneq ($(PKGINFO),)
+	$(MAKE) $(PKGINFO)
+endif
 
 $(BINDIR)/%: %
 	mkdir -p -m 755 $(BINDIR)
@@ -464,19 +524,15 @@ $(BINDIR)/%: %
 
 .PHONY: install-bsc
 install-bsc: $(addprefix $(BINDIR)/,$(BSCEXES))
-install-bsc: $(PKGINFO)
 
 .PHONY: install-bluetcl
 install-bluetcl: $(addprefix $(BINDIR)/,$(TCLEXES))
-install-bluetcl: $(PKGINFO)
 
 .PHONY: install-utils
 install-utils: $(addprefix $(BINDIR)/,$(UTILEXES))
-install-utils: $(PKGINFO)
 
 .PHONY: install-showrules
 install-showrules: $(addprefix $(BINDIR)/,$(SHOWRULESEXES))
-install-showrules: $(PKGINFO)
 
 # ----
 # Other targets
@@ -493,7 +549,7 @@ tags:   *hs */*hs bluewish.hs
 
 .PHONY: clean
 clean:
-	$(RM) -rf $(EXES) $(BUILDDIR)
+	$(RM) -rf $(EXES) $(BUILDDIR) $(TOP)/dist-newstyle $(CABAL_HEAD)
 
 .PHONY: full_clean
 full_clean: clean

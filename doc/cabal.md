@@ -1,8 +1,10 @@
 # The cabal build of bsc
 
-One cabal package at the repository root builds the compiler beside the make
-build, which is untouched and keeps generating its own `Warmup.hs` and
-`BuildVersion.hs`. INSTALL.md covers prerequisites and the toolchain.
+One cabal package at the repository root builds the compiler, and `make
+install-src` builds the solvers, runs it and installs what it built; the make
+build's own `ghc --make` targets remain beside it and keep generating their own
+`Warmup.hs` and `BuildVersion.hs`. INSTALL.md covers prerequisites and the
+toolchain.
 
 ## 1. Shape
 
@@ -41,16 +43,24 @@ message (INSTALL.md).
 From GHC 9.12, the first with `-fobject-determinism`, the flag is on
 (`bsc.cabal`, and `cabal.project` for every package of the build) and
 `semaphore: True` puts cabal-install and every GHC of the build on one job
-server, so `jobs` (cabal's `-j`) bounds the modules compiling at once; below
-9.12 parallel GHC is not deterministic, so each package compiles serially and
-`jobs` bounds only the packages building at once. `write-ghc-environment-files:
-always` serves bare `ghci` and `runghc`.
+server, so `jobs` (cabal's `-j`, make's `GHCJOBS`) bounds the modules compiling
+at once; below 9.12 parallel GHC is not deterministic, so each package compiles
+serially and `jobs` bounds only the packages building at once.
+`write-ghc-environment-files: always` serves bare `ghci` and `runghc`.
 
 The programs and the library's dynamic object (what `ghci` and `runghc`
 load) resolve the solvers beside themselves, `lib/SAT`, by the rpath
 `$ORIGIN/../lib/SAT` (`@loader_path` on Darwin), from `bsc.cabal`'s
 `ld-options`; Cabal 3.16 applies those to the programs' links only, so
 `cabal.project` repeats it for the dynamic object.
+
+`make install-src` installs the solvers (`src/Makefile`) and then, in
+`src/comp/Makefile`'s `install`, runs `cabal build -j$(GHCJOBS) all` with
+`LIBRARY_PATH` set and copies bsc and bluetcl into `inst/bin`; `make -C
+src/comp install-extra` copies the other programs over the same build.
+`BuildVersion` names the commit, but its rule runs only when cabal-install
+builds the package (a changed declared source or a reconfigure), so `install`
+first writes HEAD into `build/cabal-head`, a declared source.
 
 `Setup.hs` is for a tool that runs a Setup script rather than cabal-install
 (the hooks' external program): cabal-install generates the same two lines for
