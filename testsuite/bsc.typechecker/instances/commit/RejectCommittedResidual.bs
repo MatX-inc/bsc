@@ -1,0 +1,58 @@
+package RejectCommittedResidual where
+
+-- Negative twin of DeferCommittedResidual: the refinement grounds the
+-- residual at Lits TagMissing Bool, but no such instance exists.  Re-entering
+-- ground residuals at settlement must not turn a genuine failure into an
+-- accepted program.
+class (Lits :: * -> * -> *) tag tp | tag -> tp where
+  type TPf tag = tp
+
+data TagMissing = TagMissing
+
+class (SlotE :: * -> * -> * -> *) s a ts | s a -> ts where
+  type TSlot s a = ts
+
+data SWC = SWC
+
+struct (WithC :: * -> *) i = {
+  value :: i ;
+  chosen :: (UInt 2)
+ }
+ deriving (DefaultValue)
+
+instance SlotE SWC a (WithC a) where { }
+
+struct (Pr :: * -> * -> *) i p = {
+  iv :: i ;
+  pv :: p
+ }
+ deriving (DefaultValue)
+
+struct (InstrB :: * -> *) l = {
+  csrc :: (UInt 4) ;
+  cpred :: TPf (l)
+ }
+ deriving (DefaultValue)
+
+struct (MxuOf :: * -> * -> *) s l = {
+  systolic :: TSlot (s) (Pr (InstrB (l)) (TPf (l)))
+ }
+ deriving (DefaultValue)
+
+struct (TIOf :: * -> * -> *) s l = {
+  mxu :: MxuOf (s) (l)
+ }
+ deriving (DefaultValue)
+
+type Bcast t = t SWC TagMissing
+type BTile = Bcast TIOf
+
+withC :: i -> WithC i
+withC i = WithC { value = i; chosen = 0 }
+
+bcastT :: i -> Pr i Bool
+bcastT i = Pr { iv = i; pv = True }
+
+bad :: BTile
+bad = defaultValue { mxu = defaultValue { systolic = withC $ bcastT $
+        defaultValue { cpred = False } } }
