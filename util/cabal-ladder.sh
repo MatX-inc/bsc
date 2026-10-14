@@ -15,8 +15,9 @@ usage() {
 usage: util/cabal-ladder.sh hash OUT.sha256       hash the build in dist-newstyle into OUT.sha256
        util/cabal-ladder.sh verdict REF OTHER...  compare hash lists against REF (an absent one is MISSING)
        util/cabal-ladder.sh run                   the ladder on this machine: the legs \$LEGS (default the
-                                                  three of doc/cabal.md), each a fresh checkout of HEAD under
-                                                  \$OUT/legs, one after another, then the verdict; lists and
+                                                  six of doc/cabal.md), each a fresh checkout of HEAD under
+                                                  \$OUT/legs, up to \$LADDER_JOBS at once (default one per
+                                                  6 GB of memory), then the verdict; lists and
                                                   logs in \$OUT (default determinism-results/<stamp>);
                                                   KEEP_LEGS=1 keeps the legs' trees
 USAGE
@@ -103,23 +104,31 @@ verdict() {
 # installed first and named to the linker, then hashed; the reference then
 # rebuilds after a marker edit to $LEAF and after its revert, each hashed,
 # and the reverted rebuild is held to the reference.  The reference leg, the first of $LEGS,
-# builds first: the dependency store it fills is shared by the others, which
-# follow one at a time.  A leg's tree goes once its lists are written (KEEP_LEGS=1 keeps it);
+# builds alone first: the dependency store it fills is shared by the others,
+# which then run up to $LADDER_JOBS at once, one per 6 GB of memory unless
+# set.  A leg's tree goes once its lists are written (KEEP_LEGS=1 keeps it);
 # the lists and the logs stay in $OUT, and the verdict
 # over them is the result.
+ladder_jobs_default() {
+  local kb
+  kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null)
+  [ -n "$kb" ] || kb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1024 ))
+  kb=$(( kb / (6 * 1024 * 1024) )); [ "$kb" -ge 1 ] && echo "$kb" || echo 1
+}
 run_ladder() {
   OUT="${OUT:-$TOP/determinism-results/$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
-  local t legs ref ncpu name pid refpid
+  local t legs ref jobs ncpu name pid refpid
   for t in cabal ghc git make; do command -v "$t" >/dev/null || die "$t not found"; done
   ghc_deterministic \
     || echo "GHC $(ghc --numeric-version): below 9.12 the project compiles each package serially (cabal.project), so the legs vary cabal's package jobs, not GHC's parallelism"
   git diff --quiet || die "working tree is dirty; the legs check out HEAD"
   [ -e cabal.project.local ] && die "cabal.project.local exists; it would not reach the legs, which write their own"
   [ -f "$LEAF" ] || die "$LEAF not found"
-  legs="${LEGS:-c-j1 a-j1 c-j64}"; ref="${legs%% *}"
+  legs="${LEGS:-c-j1 a-j1 c-j16 c-j64 a-j64 d-j64}"; ref="${legs%% *}"
+  jobs="${LADDER_JOBS:-$(ladder_jobs_default)}"
   ncpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
   mkdir -p "$OUT/legs"
-  echo "ladder: legs $legs, reference $ref; results in $OUT"
+  echo "ladder: legs $legs, reference $ref, up to $jobs at once; results in $OUT"
   # NAME: the leg's checkout, build, hash, and the reference's
   # round; $OUT/NAME.built marks the store filled, $OUT/NAME.rc its exit.
   leg_run() {
@@ -151,12 +160,19 @@ run_ladder() {
     echo $rc > "$OUT/$name.rc"
     return $rc
   }
+  live() {  # how many of the pids given are running
+    local p c=0; for p in "$@"; do kill -0 "$p" 2>/dev/null && c=$((c + 1)); done; echo $c
+  }
   # The reference first, alone, until its lists are written or it fails.
   leg_run "$ref" & refpid=$!
   while [ ! -e "$OUT/$ref.built" ] && kill -0 "$refpid" 2>/dev/null; do sleep 10; done
   [ -e "$OUT/$ref.built" ] || { wait "$refpid"; die "the reference leg $ref failed; see $OUT/$ref.log"; }
-  for name in ${legs#"$ref"}; do leg_run "$name" || true; done
-  wait "$refpid" || true
+  local pids="$refpid"
+  for name in ${legs#"$ref"}; do
+    while [ "$(live $pids)" -ge "$jobs" ]; do sleep 10; done
+    leg_run "$name" & pids="$pids $!"
+  done
+  wait
   # Every leg and every round the plan expects, so a failed one is MISSING.
   local others="" rounds=""
   for name in ${legs#"$ref"}; do others="$others $OUT/$name.sha256"; done
