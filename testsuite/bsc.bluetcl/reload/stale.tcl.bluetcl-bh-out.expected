@@ -1,0 +1,7 @@
+StaleT PreludeBSV Prelude
+Alias {(StaleT.S :: *)} {Prelude.Bit 8} {position {v1/StaleT.bs 3 5}}
+Struct {(StaleT.T :: *)} {members {{{Prelude.Bit 8} a {width 8}}}} {width 8} {position {v1/StaleT.bs 5 7}}
+
+StaleT PreludeBSV Prelude
+Alias {(StaleT.S :: *)} {Prelude.Bit 16} {position {v2/StaleT.bs 3 5}}
+Struct {(StaleT.T :: *)} {members {{{Prelude.Bit 16} a {width 16}} {{Prelude.Bit 4} b {width 4}}}} {width 20} {position {v2/StaleT.bs 5 7}}
