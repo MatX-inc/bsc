@@ -120,15 +120,23 @@ LOCALCHKCMD ?= $(RUNTESTENV) $(RUNTEST) $(RUNTESTFLAGS) *.exp
 localcheck: $(LOCALCHECKPREREQUISITES)
 	$(LOCALCHKCMD)
 
+# TESTDIRS (space-separated directory prefixes, e.g. "bsc.mcd
+# bsc.lib/BRAM") restricts the run to tests under those directories;
+# empty runs everything.  Used by CI to shard the suite across jobs.
+TESTDIRS ?=
+export TESTDIRS
+
 # This creates the file 'all_tests.mk', that is used by the 'run-tests'
 # target in the 'parallel.mk' file.  It also checks for duplicates
 # which can cause problems.
 .PHONY: run-tests-setup
 run-tests-setup:
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
+		| perl $(CONFDIR)/scripts/filter-testdirs.pl \
 		| awk '{t=t " " $$0} END{print "ALL_TESTS :=" t}' \
 		> $(CONFDIR)/all_tests.mk
 	perl $(CONFDIR)/scripts/sort-by-time.pl $(tool) \
+		| perl $(CONFDIR)/scripts/filter-testdirs.pl \
 		| perl $(CONFDIR)/scripts/double-directory.pl
 
 

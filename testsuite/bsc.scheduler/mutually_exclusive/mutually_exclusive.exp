@@ -24,7 +24,19 @@ compile_verilog_fail_bug MutuallyExclusiveNotOK.bsv {} 1847
 
 # Test that an execution-time error is given if the two rules
 # can fire in the same clock cycle
+#
+# The deliberately-violated annotation makes BSC emit a register-update
+# mux marked "synopsys parallel_case" whose arms (r == 0, r < 2) are both
+# hot.  The MatX-deployed Verilator checks that pragma at runtime and
+# aborts with its own assertion + $stop (nonzero exit) at t=1, before
+# BSC's negedge R0001 check can report, so the sim/compare/VCD stages
+# cannot run meaningfully under verilator.  (BSC's R0001 runtime check
+# itself works under verilator: see MEExecOrder2 and the Verilog half of
+# MutuallyExclusiveBug1327, which pass.)  The Bluesim half of this test
+# is unaffected by the span.
+verinorun verilator "verilator's parallel_case runtime assertion aborts the sim on the deliberately-violated mutually_exclusive annotation before BSC's R0001 check reports"
 test_c_veri_bsv MutuallyExclusiveCheck
+verinorun_end
 
 # Test that if the execution never triggers both rules in the same
 # clock cycle, that no error is given
