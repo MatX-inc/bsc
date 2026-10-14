@@ -4,6 +4,10 @@
 {-# LANGUAGE ScopedTypeVariables, BangPatterns #-}
 {-# LANGUAGE PatternSynonyms, OverloadedLists, TypeFamilies #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
+-- profiling-only: tiny leaf functions called at extreme frequency;
+-- an SCC here blocks their inlining (distorting -fprof-auto
+-- profiles) and their time belongs to callers
+{-# OPTIONS_GHC -fno-prof-auto #-}
 module BinData ( Byte
                , putBs, putB, putI
                , getN, getB, getI -- , getBytesRead

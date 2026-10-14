@@ -1,3 +1,7 @@
+-- profiling-only: tiny leaf functions called at extreme frequency;
+-- an SCC here blocks their inlining (distorting -fprof-auto
+-- profiles) and their time belongs to callers
+{-# OPTIONS_GHC -fno-prof-auto #-}
 module Eval(NFData(..), deepseq,
             rnf2, rnf3, rnf4, rnf5, rnf6, rnf7, rnf8, rnf9,
             rnf10, rnf11, rnf12, rnf13, rnf14, rnf15, rnf16,
