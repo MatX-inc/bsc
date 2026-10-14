@@ -21,7 +21,7 @@ main = do
                        _ -> do putStr ("Usage: dumpbo [-bi] mod-id\n")
                                exitWith (ExitFailure 1)
     file <- BS.readFile fname
-    (bi_sig, bo_sig, ipkg, hash) <- readBinFile errh fname file
+    (bi_sig, bo_sig, ipkg, hash, _pill) <- readBinFile errh fname file
     hSetEncoding stdout utf8
     if (isBI)
        then do putStr (ppReadable bi_sig)

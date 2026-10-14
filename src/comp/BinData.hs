@@ -50,7 +50,7 @@ import IntLit
 import Undefined
 import Prim hiding(PrimArg(..))
 
-import Util(Hash, hashInit, nextHashByte, showHash)
+import Util(hashInit, nextHashByte, showHash)
 
 import Data.List(sort, intercalate)
 import Control.Monad(replicateM, liftM, ap)
@@ -323,10 +323,16 @@ section s action = do { beginSection s; action; endSection }
 -- The In monad makes it easy to parse a byte stream
 
 -- The In monad state keeps tables for shared structures
--- in addition to unconsumed bytes and an optional hash of
--- consumed bytes.
+-- in addition to unconsumed bytes.
+--
+-- The .bo hash is deliberately NOT threaded through here.  The decoder
+-- consumes the stream strictly sequentially and decodeWithHash proves it
+-- consumed all of it, so folding over the raw bytes gives the identical
+-- value without a Maybe test and a box allocation on every getB.  .ba
+-- reads never hashed at all (GenABin.readABinFile), so they only ever
+-- paid the extra constructor width.
 
-data IS = IS !BinTable !BS.ByteString !Int !(Maybe Hash)
+data IS = IS !BinTable !BS.ByteString !Int
 
 -- In monad is a state transformer type monad
 newtype In a = In (IS -> (a,IS))
@@ -348,14 +354,11 @@ getN :: Int -> In [Byte]
 getN n = replicateM n getB
 
 getB :: In Byte
-getB = In $ \(IS bc bs off mh) ->
+getB = In $ \(IS bc bs off) ->
   case BS.indexMaybe bs off of
     Nothing -> internalError "BinData.getB: unexpected end of byte stream"
     Just b -> let !off' = off + 1
-              in case mh of
-                   Just h -> let !h' = nextHashByte h b
-                             in (b, IS bc bs off' (Just h'))
-                   Nothing -> (b, IS bc bs off' Nothing)
+              in (b, IS bc bs off')
 
 -- get an Int value (between 0 and 255)
 getI :: In Int
@@ -408,10 +411,10 @@ mkNewVal :: (BinTable -> (Table v)) ->
             (BinTable -> (Table v) -> BinTable) ->
             In (Int,v)
 mkNewVal get set =
-  In $ \(IS bt bs off h) ->
+  In $ \(IS bt bs off) ->
           let (Known n m) = get bt
               bt' = set bt (Known (n+1) m)
-          in ((n, undefined), (IS bt' bs off h))
+          in ((n, undefined), (IS bt' bs off))
 
 -- get the right table, add a mapping from the index to the value,
 -- and put back the updated table while returning ()
@@ -419,17 +422,17 @@ mkRecordVal ::(BinTable -> (Table v)) ->
               (BinTable -> (Table v) -> BinTable) ->
               (Int -> v -> In ())
 mkRecordVal get set idx v =
-  In $ \(IS bt bs off h) ->
+  In $ \(IS bt bs off) ->
           let (Known n m) = get bt
               bt' = v `seq` set bt (Known n (M.insert idx v m))
-          in ((), (IS bt' bs off h))
+          in ((), (IS bt' bs off))
 
 
 -- get the right table and look up the value for the given index
 mkLookupIdx ::(BinTable -> (Table v)) ->
               (Int -> In v)
 mkLookupIdx get idx =
-  In $ \is@(IS bt _ _ _) ->
+  In $ \is@(IS bt _ _) ->
           let (Known _ m) = get bt
           in case (M.lookup idx m) of
                (Just v) -> (v, is)
@@ -1527,21 +1530,24 @@ runOut (Out xs _) = let bes   = compress $ toList xs
 encode :: (Bin a) => a -> [Byte]
 encode x = runOut (toBin x)
 
-runIn :: In a -> BS.ByteString -> Bool -> (a, Int, String)
-runIn (In f) bs do_hash =
-  let h0 = if do_hash then (Just hashInit) else Nothing
-      (x,(IS _ _ off h)) = f (IS unknownTable bs 0 h0)
-      hstr = maybe "" showHash h
-  in (x, off, hstr)
+runIn :: In a -> BS.ByteString -> (a, Int)
+runIn (In f) bs =
+  let (x,(IS _ _ off)) = f (IS unknownTable bs 0)
+  in (x, off)
 
 decode :: (Bin a) => BS.ByteString -> a
-decode s = let (x, off, _) = runIn fromBin s False
+decode s = let (x, off) = runIn fromBin s
            in if off == BS.length s
               then x
               else internalError "BinData.decode: unused trailing bytes"
 
+-- The hash is a fold over the byte stream in consumption order.  getB
+-- advances strictly forward and never revisits a byte (shared structures are
+-- table indices, not byte offsets), and the offset check proves the decoder
+-- consumed exactly s -- so this is the same value the old
+-- threaded-through-IS hash produced, for every existing .bo.
 decodeWithHash :: (Bin a) => BS.ByteString -> (a,String)
-decodeWithHash s = let (x, off, hstr) = runIn fromBin s True
+decodeWithHash s = let (x, off) = runIn fromBin s
                    in if off == BS.length s
-                      then (x, hstr)
+                      then (x, showHash (BS.foldl' nextHashByte hashInit s))
                       else internalError "BinData.decodeWithHash: unused trailing bytes"
