@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # The determinism ladder of the cabal build (doc/cabal.md): one commit built
 # serially, oversubscribed, incrementally or in another directory must give
-# bit-identical objects, interfaces, archives and programs.  CI
-# (.github/workflows/cabal.yml) runs `hash` on every leg and `verdict` over
-# the lists; `run` is the whole ladder on one machine.
+# bit-identical objects, interfaces, archives and programs, and the same
+# bytes in any installed distribution named to `hash` (CI names the bluehs
+# runtime, util/bluehs).  CI (.github/workflows/cabal.yml) runs `hash` on
+# every leg and `verdict` over the lists; `run` is the whole ladder on one
+# machine.
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOP="$(cd "$(dirname "$SELF")/.." && pwd)"; cd "$TOP" || exit 2
 LEAF=src/comp/Libs/IOUtil.hs
 usage() {
   cat >&2 <<USAGE
-usage: util/cabal-ladder.sh hash OUT.sha256       hash the build in dist-newstyle into OUT.sha256
+usage: util/cabal-ladder.sh hash OUT.sha256 [DIR...]
+                                                  hash the build in dist-newstyle, and every file of
+                                                  each installed DIR, into OUT.sha256
        util/cabal-ladder.sh verdict REF OTHER...  compare hash lists against REF (an absent one is MISSING)
        util/cabal-ladder.sh run                   the ladder on this machine; lists and logs in \$OUT
                                                   (default determinism-results/<stamp>)
@@ -35,9 +39,14 @@ export -f sha256 iface_hash
 
 # Every object, archive and interface under dist-newstyle/build and every
 # program bsc.cabal declares, as bytes except interfaces, with paths relative
-# to the repository so builds in different directories compare.
+# to the repository so builds in different directories compare.  Then every
+# file of each installed directory named after the list: as bytes, except the
+# interfaces under a `store` directory (the libraries this tree builds and
+# their dependencies, whose bytes carry the build directory as above); a
+# shipped GHC runtime's own interfaces are copies of the installed compiler's
+# and compare as bytes.  A symbolic link is hashed as its target's text.
 hash_build() {
-  LIST="$1"
+  LIST="$1"; shift
   # A partial list would compare like a complete one.
   trap '[ $? -eq 0 ] || rm -f "$LIST"' EXIT
   local ncpu programs e bin empty_digest
@@ -54,18 +63,32 @@ hash_build() {
       [ -f "$bin" ] || continue
       sha256 "$bin"
     done
+    for dir in "$@"; do
+      [ -d "$dir" ] || die "$dir: no such directory"
+      find "$dir" -type f ! \( -path '*/store/*' \( -name '*.hi' -o -name '*.dyn_hi' -o -name '*.p_hi' \) \) -print0 \
+        | sort -z | xargs -0 bash -eo pipefail -c 'sha256 "$@"' _
+      find "$dir" -type f -path '*/store/*' \( -name '*.hi' -o -name '*.dyn_hi' -o -name '*.p_hi' \) -print0 \
+        | xargs -0 -n 1 -P "$ncpu" bash -eo pipefail -c 'iface_hash "$1"' _
+      find "$dir" -type l -print0 | sort -z | while IFS= read -r -d '' l; do
+        printf '%s' "$(readlink "$l")" | sha256 | sed "s|  -\$|  $l|"
+      done
+    done
   } | sed "s|  $TOP/|  |" | LC_ALL=C sort -k2 > "$LIST"
-  # A list without interfaces, or with the digest of empty text, means the
-  # interface hashing silently produced nothing; it must not compare IDENTICAL.
+  for dir in "$@"; do
+    grep -q "  ${dir#"$TOP/"}/" "$LIST" || die "no files of $dir hashed into $LIST"
+  done
+  # A list without interfaces, or an interface with the digest of empty text,
+  # means the interface hashing silently produced nothing; it must not compare
+  # IDENTICAL.  (An installed directory may hold empty files; those are bytes.)
   grep -q '\.hi$' "$LIST" || die "no .hi files hashed into $LIST"
   empty_digest="$(sha256 < /dev/null | cut -d' ' -f1)"
-  grep -q "^$empty_digest " "$LIST" && die "$LIST contains the digest of empty text"
+  grep "^$empty_digest " "$LIST" | grep -Eq '\.(hi|dyn_hi|p_hi)$' && die "$LIST hashes an interface as empty text"
   echo "$(wc -l < "$LIST") files hashed into $LIST"
 }
 
 # Pass means every list is identical to the reference.  Differences are
-# reported by category (program, object, interface, archive) so a failure
-# says what moved.
+# reported by category (program, object, interface, archive, and distribution
+# for the files of an installed directory) so a failure says what moved.
 verdict() {
   local ref="$1" fail=0 other name diffs n cat sel c; shift
   [ -r "$ref" ] && [ -s "$ref" ] || { echo "verdict: reference $ref is missing, unreadable or empty"; exit 2; }
@@ -77,12 +100,14 @@ verdict() {
     diffs=$(diff "$ref" "$other" | grep '^[<>]' | awk '{print $NF}' | sort -u)
     n=$(printf '%s\n' "$diffs" | sed '/^$/d' | wc -l)
     echo "DIFFER: $(basename "$ref" .sha256) vs $name: $n file(s)"
-    for cat in program object interface archive; do
+    build=$(printf '%s\n' "$diffs" | grep '^dist-newstyle/' || true)
+    for cat in program object interface archive distribution; do
       case "$cat" in
-        program) sel=$(printf '%s\n' "$diffs" | grep -Ev '\.(o|hi|dyn_o|dyn_hi|p_o|p_hi|a)$' || true);;
-        object) sel=$(printf '%s\n' "$diffs" | grep -E '\.(o|dyn_o|p_o)$' || true);;
-        interface) sel=$(printf '%s\n' "$diffs" | grep -E '\.(hi|dyn_hi|p_hi)$' || true);;
-        archive) sel=$(printf '%s\n' "$diffs" | grep '\.a$' || true);;
+        program) sel=$(printf '%s\n' "$build" | grep -Ev '\.(o|hi|dyn_o|dyn_hi|p_o|p_hi|a)$' || true);;
+        object) sel=$(printf '%s\n' "$build" | grep -E '\.(o|dyn_o|p_o)$' || true);;
+        interface) sel=$(printf '%s\n' "$build" | grep -E '\.(hi|dyn_hi|p_hi)$' || true);;
+        archive) sel=$(printf '%s\n' "$build" | grep '\.a$' || true);;
+        distribution) sel=$(printf '%s\n' "$diffs" | grep -v '^dist-newstyle/' || true);;
       esac
       c=$(printf '%s\n' "$sel" | sed '/^$/d' | wc -l)
       [ "$c" -gt 0 ] && { echo "   $cat: $c"; printf '%s\n' "$sel" | sed '/^$/d' | head -8 | sed 's/^/      /'; }
@@ -133,7 +158,7 @@ run_ladder() {
 }
 
 case "${1-}" in
-  hash) [ $# -eq 2 ] || usage; set -eo pipefail; hash_build "$2";;
+  hash) [ $# -ge 2 ] || usage; set -eo pipefail; shift; hash_build "$@";;
   verdict) [ $# -ge 3 ] || usage; shift; verdict "$@";;
   run) [ $# -eq 1 ] || usage; run_ladder;;
   *) usage;;
