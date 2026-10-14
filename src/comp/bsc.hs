@@ -81,11 +81,11 @@ import VModInfo(VPathInfo, VPort)
 import Deriving(derive)
 import SymTab
 import MakeSymTab(mkSymTab, cConvInst, getPackagesUsedInTypes)
-import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
+import TypeCheck(cCtxReduceIO, cTypeCheck)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
-import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
+import ISyntax(IPackage(..), IModule(..),
                IEFace(..), IDef(..), IExpr(..), fdVars)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
@@ -409,7 +409,7 @@ compilePackage
 
     -- Reduce the contexts as far as possible
     start flags DFctxreduce
-    (mctx, pkgsUsedInCtxReduce, atfCacheFromCtxReduce) <- cCtxReduceIO errh flags symt11 mder
+    (mctx, pkgsUsedInCtxReduce) <- cCtxReduceIO errh flags symt11 mder
     t <- dump errh flags t DFctxreduce dumpnames mctx
 
     -- Rebuild the symbol table because CtxReduce has possibly changed
@@ -425,7 +425,7 @@ compilePackage
 
     -- Type check and insert dictionaries
     start flags DFtypecheck
-    (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh flags symt minst
+    (mod, tcErrors, pkgsUsedInCode) <- cTypeCheck errh flags symt minst
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
 
@@ -459,8 +459,7 @@ compilePackage
     -- Convert to internal abstract syntax
     --------------------------------------------
     start flags DFinternal
-    let combinedATFCache = mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce
-    imod <- iConvPackage errh flags symt combinedATFCache mod'
+    imod <- iConvPackage errh flags symt mod'
     t <- dump errh flags t DFinternal dumpnames imod
     when (showISyntax flags) (putStrLnF (show imod))
     iPCheck flags symt imod "internal"
@@ -482,9 +481,9 @@ compilePackage
             [(String, IExpr a)] ->
             (IPackage a) ->
             (IPackage a)
-        adjEnv env (IPackage i lps ps ds atfCache)
+        adjEnv env (IPackage i lps ps ds)
                             | getIdString i == "Prelude" =
-                    IPackage i lps ps (map adjDef ds) atfCache
+                    IPackage i lps ps (map adjDef ds)
             where
                 adjDef (IDef i t x p) =
                     case lookup (getIdString (unQualId i)) env of
@@ -523,17 +522,8 @@ compilePackage
     t <- dump errh flags t DFisimplify dumpnames imods
     stats flags DFisimplify imods
 
-    -- The ATF cache used during elaboration: this package's entries unioned
-    -- with the entries of every (transitively) loaded import.  This union is
-    -- only ever held in memory; each .bo file stores just its own package's
-    -- entries.  The union covers the full transitive closure because
-    -- "binmods" does: each .bo's ipkg_depends records its writer's entire
-    -- loaded closure (see ipkg_sigs in fixupDefs).
-    let elabATFCache = foldl' mergeIATFCaches (ipkg_atf_cache imods)
-                              [ ipkg_atf_cache m | (m, _) <- binmods ]
-
     let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
-        orderGens (IPackage pid _ _ ds _) gs =
+        orderGens (IPackage pid _ _ ds) gs =
                 --trace (ppReadable (gis, g, os)) $
                                               map get os
           where gis = [ qualId pid i
@@ -558,7 +548,7 @@ compilePackage
                     "\n")
 
     let getDef :: IPackage a -> Id -> IDef a
-        getDef (IPackage _ _ _ ds _) i =
+        getDef (IPackage _ _ _ ds) i =
            case [ d | d@(IDef i' _ _ _) <- ds, unQualId i == unQualId i' ] of
                 [ d ] -> d
                 _ -> internalError ("No definition for " ++ pfpString i)
@@ -583,7 +573,7 @@ compilePackage
                 def_comp = do
                   def <- genModule errh wi fwrapper flags dumpnames'
                              prefix (getIdBaseString pkgId)
-                             internalSymt alldefs elabATFCache (getDef im i')
+                             internalSymt alldefs (getDef im i')
                   return (def, True)
                 ex_comp s = do
                   hFlush stdout >> hPutStr stderr s
@@ -673,7 +663,6 @@ genModule ::
     String -> -- source package name
     SymTab ->
     M.Map Id (IExpr HeapData) ->
-    IATFCache ->
     IDef HeapData ->
     IO (CDefn)
 
@@ -688,7 +677,6 @@ genModule
     srcName
     symt
     alldefs
-    atf_cache
     def  =
 
   do
@@ -705,7 +693,7 @@ genModule
 
     -- "run" it
     start flags DFexpanded
-    imod0 <- iExpand errh flags symt alldefs atf_cache fwrapper pps def
+    imod0 <- iExpand errh flags symt alldefs fwrapper pps def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
     when (showIESyntax flags) (putStrLnF (show imod0))
@@ -2198,11 +2186,11 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
     t <- getNow
 
     start flags DFwrapper_ctxreduce
-    (cpkg_ctx, _, _) <- cCtxReduceIO errh flags symt cpkg0
+    (cpkg_ctx, _) <- cCtxReduceIO errh flags symt cpkg0
     t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
 
     start flags DFwrapper_typecheck
-    (cpkg_chk, tcErrors, _usedPkgs, _wrapperATFCache) <- cTypeCheck errh flags symt cpkg_ctx
+    (cpkg_chk, tcErrors, _usedPkgs) <- cTypeCheck errh flags symt cpkg_ctx
     t <- dump errh flags t DFwrapper_typecheck dumpnames cpkg_chk
 
     start flags DFwrapper_simplified
