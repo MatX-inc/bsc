@@ -67,6 +67,10 @@ module_*.cxx
 # VCD dumps
 *.vcd
 
+# correlation test build/run trees
+bsc.bluetcl/*_correlation/bo_*/
+bsc.bluetcl/*_correlation/veri_*/
+bsc.bluetcl/*_correlation/sim/
 # ModelSim/Questa output
 transcript
 work_*
