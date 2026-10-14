@@ -122,6 +122,11 @@ mkdir -p "$WORK/proj"
 # The project pins the Hackage index its dependencies resolve against, so
 # this build and the installed compiler's take the same versions
 grep -qi '^index-state[[:space:]]*:' "$WORK/proj/cabal.project" || die "$REPO/cabal.project pins no index-state"
+# The checkout's local settings, when it has any, apply to this build too: a
+# developer's optimisation level, or a determinism leg's parallelism, must
+# reach the shipped libraries as it reaches the main build.
+rm -f "$WORK/proj/cabal.project.local"
+[ ! -f "$REPO/cabal.project.local" ] || cp "$REPO/cabal.project.local" "$WORK/proj/"
 # bsc depends on every package a split produces, so this builds them all
 (cd "$WORK/proj" && LIBRARY_PATH="$SOLVER_DIR${LIBRARY_PATH:+:$LIBRARY_PATH}" cabal build bsc:lib:bsc \
     >"$WORK/cabal-build.log" 2>&1) \

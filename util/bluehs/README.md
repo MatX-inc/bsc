@@ -127,7 +127,15 @@ package set and the program list are read off `cabal.project` and
 section 6), or a later program, needs no change here.
 
 Build it in the same tree as the `bsc` beside it: the library rejects `.ba`
-files whose build version stamp differs (see Caveats).
+files whose build version stamp differs (see Caveats). The second build
+takes the checkout's `cabal.project.local` when there is one, so a
+developer's settings reach the shipped libraries as they reach the main
+build.
+
+The determinism ladder (`doc/cabal.md` section 5) installs the distribution
+on every leg and hashes it with the compiler: `inst/bluehs` must be the same
+bytes whatever the parallelism and the checkout directory, which the
+relocation above makes possible and the ladder checks.
 
 Everything redistributed is covered in `inst/bluehs/LICENSES/`:
 `LICENSE.ghc` (compiler/runtime), a generated `LICENSE.ghc_pkgs` enumerating
