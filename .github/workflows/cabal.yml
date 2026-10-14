@@ -3,7 +3,8 @@ name: Cabal build
 # The cabal build of the compiler (bsc.cabal, cabal.project, SetupHooks.hs)
 # and its determinism ladder: the same commit built serially, oversubscribed
 # and in other checkout directories must give bit-identical objects,
-# interfaces, archives and programs.
+# interfaces, archives and programs, and the same bytes in the
+# bluehs script runtime (util/bluehs) installed from it.
 # The ladder is six legs: the serial build against a second serial build,
 # -j16, and three -j64 builds, each in a fresh checkout directory of its own;
 # the reference then rebuilds after a marker edit and its revert, and that
@@ -28,6 +29,7 @@ on:
       - bsc.cabal
       - SetupHooks.hs
       - util/cabal-ladder.sh
+      - util/bluehs/**
       - GNUmakefile
       - .github/workflows/cabal.yml
   schedule:
@@ -73,7 +75,10 @@ jobs:
           submodules: true
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
-        run: sudo .github/workflows/install_dependencies_ubuntu.sh
+        run: |
+          sudo .github/workflows/install_dependencies_ubuntu.sh
+          # mk-dist.sh rewrites the shipped libraries' search paths
+          sudo apt-get install -y patchelf cpio
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
