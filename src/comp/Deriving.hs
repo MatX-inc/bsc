@@ -779,7 +779,7 @@ mkGenericInstance r packageid dpos i vs isData summands =
             [cTApplys (cTCon idMeta)
               [cTApplys (cTCon $ case mfns of
                             Just _ | isIfcType -> idMetaInterface
-                            Just _ -> idMetaConsNamed
+                                   | otherwise -> idMetaConsNamed
                             Nothing -> idMetaConsAnon)
                 [cTStr (getIdBase cn) dpos,
                   cTNum k dpos,
