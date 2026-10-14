@@ -139,13 +139,13 @@ linked by name.
   marker edit to `src/comp/Libs/IOUtil.hs`, a rebuild, its revert and a
   rebuild), into `determinism-results/`.
 
-`.github/workflows/cabal.yml` runs on pull requests that touch the build and on
-a dispatch, which picks the GHC (default 9.14.1). The legs on ubuntu-24.04 and
-macos-15, each a checkout directory and a jobs count (`jobs: N` and, from 9.12,
-`ghc-options: -jN` in a `cabal.project.local`): `c-j1`, the reference, and
-`c-j64` on a pull request, with `c-j16`, `a-j64` and `d-j64` on a dispatch.
-Each builds and hashes the build. A verdict job per OS compares every planned
-leg against `c-j1`; a failed one is MISSING. A difference is a design question
+`.github/workflows/cabal.yml` runs on the project's own pull requests that
+touch the build and on a dispatch, which picks the GHC (default 9.14.1). Six
+legs on ubuntu-24.04 and macos-15, each a checkout directory and a jobs count
+(`jobs: N` and, from 9.12, `ghc-options: -jN` in a `cabal.project.local`):
+`c-j1`, the reference, `a-j1`, `c-j16`, `c-j64`, `a-j64` and `d-j64`. Each
+builds and hashes the build. A verdict job per OS compares every planned leg
+against `c-j1`; a failed one is MISSING. A difference is a design question
 before it is a fix: the first suspects are a root module without the Warmup
 import, interface content the direct-dependency rule does not cover, and a
 program's entry module.
