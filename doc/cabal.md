@@ -220,9 +220,12 @@ module the external interface set in one order (section 3),
 directory of the checkout is written into any of them, since the solvers are
 linked by name (section 3). `util/cabal-ladder.sh`:
 
-- `hash OUT` hashes one build: every object, archive and program (from
-  `cabal list-bin bsc:exe:<name>` for each `executable` stanza) as bytes,
-  with paths relative to the repository so directories compare. An interface
+- `hash OUT [DIR...]` hashes one build: every object, archive and program
+  (from `cabal list-bin bsc:exe:<name>` for each `executable` stanza) as
+  bytes, with paths relative to the repository so directories compare, then
+  every file of each installed directory named after the list (CI names
+  `inst/bluehs`, the script runtime of `util/bluehs`), as bytes except the
+  interfaces under its `store`, which are hashed as below. An interface
   file is hashed as the text of `ghc --show-iface` minus its interface hash
   and flags fingerprint, with the package environment off: GHC fingerprints
   the flags it was given, and cabal passes the autogen include directory by
@@ -232,8 +235,9 @@ linked by name (section 3). `util/cabal-ladder.sh`:
   the run, and a partial list is removed, so nothing compares IDENTICAL by
   producing nothing.
 - `verdict REF OTHER...` compares each list against the first, reporting
-  differences by category (program, object, interface, archive); a missing
-  list is MISSING, and the verdict fails rather than passing on nothing.
+  differences by category (program, object, interface, archive, and
+  distribution for an installed directory's files); a missing list is
+  MISSING, and the verdict fails rather than passing on nothing.
 - `run` is the ladder on one machine: legs A and B at the project's settings
   from clean (repeatability), C at `-j1` (serial against parallel), D at
   `-j64` (oversubscription), each compared with A; then a marker edit to one
@@ -248,9 +252,14 @@ directories, with cabal-install pinned to 3.16.1.0 (section 2): on
 ubuntu-24.04 and macos-15 it compares the serial build against a second
 serial build in another directory, `-j16`, and `-j64` three times in three
 directories, which checks that the build depends neither on its parallelism
-nor on its path. It runs on the project's own pull requests and on a
-dispatch; a fork's pull requests do not run it, since a fork's branches are
-a developer's loop, and a fork dispatches it when it qualifies a release.
+nor on its path. Each leg then installs the tree (`make install-src`) and
+the bluehs runtime over it (`make install-bluehs`, whose second build of the
+libraries takes the leg's `cabal.project.local`), and hashes `inst/bluehs`
+with the build, so the distribution is held to the same claim: the same
+bytes whatever the parallelism and the directory. It runs on the project's
+own pull requests and on a dispatch; a fork's pull requests do not run it,
+since a fork's branches are a developer's loop, and a fork dispatches it
+when it qualifies a release.
 Every planned leg is named to the verdict, so a failed leg is MISSING, not
 skipped. `BuildVersion` embeds the commit, so a ladder compares one commit. A
 failure is a design stop, not a mechanical fix: the first suspects are a root

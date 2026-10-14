@@ -3,10 +3,12 @@ name: Cabal build
 # The cabal build of the compiler (bsc.cabal, cabal.project, SetupHooks.hs)
 # and its determinism ladder: the same commit built serially, oversubscribed
 # and in other checkout directories must give bit-identical objects,
-# interfaces, archives and programs (util/cabal-ladder.sh hash hashes a
-# build, util/cabal-ladder.sh verdict compares the lists).  The ladder is
-# six legs: the serial build against a second serial build, -j16, and three
-# -j64 builds, the second serial and two of the -j64 in other directories.
+# interfaces, archives and programs, and the same bytes in the bluehs script
+# runtime (util/bluehs) installed from it (util/cabal-ladder.sh hash hashes a
+# build and the distribution, util/cabal-ladder.sh verdict compares the
+# lists).  The ladder is six legs: the serial build against a second serial
+# build, -j16, and three -j64 builds, the second serial and two of the -j64
+# in other directories.
 # It runs on the project's own pull requests and on a dispatch; a fork's
 # pull requests do not run it, since a fork's branches are a developer's
 # loop, and a fork dispatches it when it qualifies a release.  From GHC 9.12
@@ -23,6 +25,8 @@ on:
       - SetupHooks.hs
       - util/cabal-ladder.sh
       - src/**
+      - util/bluehs/**
+      - GNUmakefile
       - .github/workflows/cabal.yml
   workflow_dispatch:
     inputs:
@@ -101,7 +105,10 @@ jobs:
           path: ${{ matrix.leg.dir }}
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
-        run: sudo .github/workflows/install_dependencies_ubuntu.sh
+        run: |
+          sudo .github/workflows/install_dependencies_ubuntu.sh
+          # mk-dist.sh rewrites the shipped libraries' search paths
+          sudo apt-get install -y patchelf cpio
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -133,10 +140,20 @@ jobs:
           bsc="$(cabal list-bin bsc:exe:bsc)"
           ls -l "$bsc"
           "$bsc" -v || true
-      - name: Hash the build
+      # The installed tree, then the bluehs runtime over it: the tree's own
+      # cabal build is the one already made, and mk-dist.sh builds the
+      # libraries a second time under build/bluehs with the leg's settings
+      # (cabal.project.local), in this leg's directory.
+      - name: Install (make install-src)
+        env:
+          JOBS: ${{ matrix.leg.jobs }}
+        run: make -j"$(getconf _NPROCESSORS_ONLN)" GHCJOBS="$JOBS" install-src
+      - name: Install the bluehs runtime
+        run: make install-bluehs
+      - name: Hash the build and the distribution
         env:
           LEG: ${{ matrix.leg.name }}
-        run: util/cabal-ladder.sh hash "$LEG.sha256"
+        run: util/cabal-ladder.sh hash "$LEG.sha256" inst/bluehs
       - uses: actions/upload-artifact@v6
         with:
           name: hashes-${{ matrix.os }}-${{ matrix.leg.name }}
