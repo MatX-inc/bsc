@@ -93,7 +93,7 @@ instance SShow' (ConcPoly a) where
   sshow' (ConcPoly _) = "<polymorphic value>"
 
 -- Note that below there are more specific instances for
--- SShow' (Meta (MetaConsNamed ...)) and SShow' (Meta (MetaConsAnon ...))
+-- MetaConsNamed, MetaConsAnon and MetaInterface
 instance (SShow' a) => SShow' (Meta m a) where
   sshow' (Meta x) = sshow' x
   sshowP' (Meta x) = sshowP' x
@@ -105,6 +105,10 @@ instance (SShow' a, SShow' b) => SShow' (Either a b) where
   sshowP' (Right x) = sshowP' x
 
 instance (SShowSummand a) => SShow' (Meta (MetaConsNamed name idx nfields) a) where
+  sshow' (Meta x) = stringOf name +++ " {" +++ sshowSummandNamed x +++ "}"
+  sshowP' x = "(" +++ sshow' x +++ ")"
+
+instance (SShowSummand a) => SShow' (Meta (MetaInterface name idx nfields) a) where
   sshow' (Meta x) = stringOf name +++ " {" +++ sshowSummandNamed x +++ "}"
   sshowP' x = "(" +++ sshow' x +++ ")"
 

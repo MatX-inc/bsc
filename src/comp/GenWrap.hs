@@ -1222,6 +1222,8 @@ genFrom pps ty var =
 -- The Generic representation of a wrapper type is the type being wrapped -
 -- here we derive a Generic instance which uses the
 -- "fromIfc_" function and calls the class method for the original interface.
+-- This custom representation delegates through Conc rather than describing
+-- constructor fields; the original interface's derived instance carries MetaInterface.
 
 mkInstances :: IfcTRec -> GWMonad [CDefn]
 mkInstances trec = do
