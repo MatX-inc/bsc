@@ -135,21 +135,26 @@ linked by name.
   their bytes carry the checkout directory.
 - `verdict REF OTHER...` compares each list with the reference; an absent list
   is MISSING.
-- `run` is the ladder on one machine: the legs `c-j1`, the reference, `a-j1` and
-  `c-j64`, each a fresh checkout of `HEAD` in a directory of its own under
-  `determinism-results/<stamp>/legs`, built at its jobs count (`jobs: N` and,
-  from 9.12, `ghc-options: -jN` in a `cabal.project.local`), the solvers
-  installed first, and hashed; the reference then rebuilds after a marker edit
-  to `src/comp/Libs/IOUtil.hs` and after its revert. The reference builds first,
-  so the dependency store it fills is shared; the others follow one at a time.
-  The verdict compares every leg and the reverted rebuild with the reference; a
-  failed one is MISSING. `LEGS` names other legs, `KEEP_LEGS=1` keeps their
-  trees.
+- `run` is the ladder on one machine: the legs `c-j1`, the reference, `a-j1`,
+  `c-j16`, `c-j64`, `a-j64` and `d-j64`, each a fresh checkout of `HEAD` in a
+  directory of its own under `determinism-results/<stamp>/legs`, built at its
+  jobs count (`jobs: N` and, from 9.12, `ghc-options: -jN` in a
+  `cabal.project.local`), the solvers installed first, and hashed; the reference
+  then rebuilds after a marker edit to `src/comp/Libs/IOUtil.hs` and after its
+  revert. The reference builds first, alone, so the dependency store it fills is
+  shared; then up to `LADDER_JOBS` legs run at once, one per 6 GB of memory
+  unless set. The verdict compares every leg and the reverted rebuild with the
+  reference; a failed one is MISSING. `LEGS` names other legs, `KEEP_LEGS=1`
+  keeps their trees.
 
-`.github/workflows/cabal.yml` runs on pull requests that touch the build and on
-a dispatch, which picks the GHC (default 9.14.1). One job per platform,
-ubuntu-24.04 and macos-15, runs `run`, so every leg of a platform builds on one
-machine; the lists and logs are its artifact. A difference is a design question
-before it is a fix: the first suspects are a root module without the Warmup
-import, interface content the direct-dependency rule does not cover, and a
-program's entry module.
+`.github/workflows/cabal.yml` runs on the project's own pull requests that touch
+the build files, nightly on the project's default branch, and on a dispatch,
+which picks the GHC (default 9.14.1); source changes do not run it, since the
+one source invariant it guards, that every root module imports Warmup, is
+checked on every pull request (`src/comp/check-warmup-roots.sh`). One job per
+platform, ubuntu-24.04 and macos-15, runs `run`, so every leg of a platform
+builds on one machine and a difference is the build's, not two runner images';
+the lists and logs are its artifact. A difference is a design question before it
+is a fix: the first suspects are a root module without the Warmup import,
+interface content the direct-dependency rule does not cover, and a program's
+entry module.
