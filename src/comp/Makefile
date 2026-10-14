@@ -9,6 +9,7 @@ TMPDIR=/tmp
 # System tools
 
 INSTALL ?= install
+CABAL ?= cabal
 
 RM = rm -f
 LN = ln -sf
@@ -433,30 +434,69 @@ PKGINFO=
 else
 PKGINFO=$(LICDIR)/LICENSE.ghc_pkgs
 
+# The packages the installed programs were linked against are the cabal
+# build's: the in-place library, the dependencies cabal-install built into
+# its store, and GHC's own (the trailing colon), walked from the library.
+CABAL_STORE = $(shell cd $(TOP) && $(CABAL) path --store-dir)
+CABAL_PKG_PATH = $(TOP)/dist-newstyle/packagedb/ghc-$(GHCVERSION):$(firstword $(wildcard $(CABAL_STORE)/ghc-$(GHCVERSION)*/package.db)):
+
 .PHONY: $(PKGINFO)
 $(PKGINFO):
 	mkdir -p -m 755 $(LICDIR)
-	./make-ghc-pkg-info.sh $(PACKAGES) > $(PKGINFO)
+	GHC_PACKAGE_PATH="$(CABAL_PKG_PATH)" ./make-ghc-pkg-info.sh bsc > $(PKGINFO)
 endif
 
 # -----
 # Install targets
 
-# Every executable compiles into the same -odir, so two of them running at
-# once race on the objects of the modules they share: one renames its
-# temporary over the path the other is still writing, which surfaces as
-# `renameFile: ... VCD.o.tmp to ... VCD.o: does not exist`. Build them
-# through a -j1 sub-make, which holds however the caller invoked make.
-# Little is lost, because the objects are shared: after the first target the
-# rest compile only their own main and link, and GHCJOBS still parallelises
-# within each compile. Naming one executable directly still builds just it.
+# What `install` installs is the cabal build: `cabal build all` at the
+# repository root compiles the library once and links every program against
+# its archive, which is what makes the programs the same bytes from build to
+# build (doc/cabal.md section 5); the ghc --make targets above are a build
+# without cabal-install, and not what ships. Every executable stanza of
+# bsc.cabal is installed, so a step that adds a program adds nothing here.
+# GHCJOBS bounds the build as it bounds the make build: with cabal.project's
+# semaphore, -j is the number of GHC slots in all.
+CABAL_EXES = $(shell sed -n 's/^executable[[:space:]]*\([^[:space:]]*\).*/\1/p' $(TOP)/bsc.cabal)
+
+# BuildVersion names the commit, and its rule runs when cabal-install builds
+# the package, which it does when a declared source changed. A commit that
+# touches no source of the package (a testsuite or workflow change) would
+# leave the previous commit's version in the programs, so `install` writes
+# HEAD into a file bsc.cabal declares as a source: a new commit is then a
+# changed source, and the version follows (doc/cabal.md section 2).
+CABAL_HEAD = $(TOP)/build/cabal-head
+
+# The cabal build links the solvers by name and is told no directory
+# (SetupHooks.hs, solverSetupHooks): src/Makefile installed them under
+# $(PREFIX)/lib/SAT before descending here, and LIBRARY_PATH names that
+# directory to the linker for every link of the build.
+
+# The Bluesim kernel's version header is generated from this directory's
+# BuildVersion.hs (src/bluesim/gen_version_h), which the make build writes
+# with update-build-version.sh; the hooks run the same script into the
+# package's autogen directory, so it is written here too and the two agree.
+
 .PHONY: install
 install:
-	$(MAKE) -j1 $(BSCEXES) $(TCLEXES) install-bsc install-bluetcl
+	mkdir -p -m 755 $(TOP)/build $(BINDIR)
+	(git -C $(TOP) rev-parse HEAD 2>/dev/null || echo no-repository) > $(CABAL_HEAD).tmp && \
+	  { cmp -s $(CABAL_HEAD).tmp $(CABAL_HEAD) || mv $(CABAL_HEAD).tmp $(CABAL_HEAD); } && \
+	  $(RM) -f $(CABAL_HEAD).tmp
+	./update-build-version.sh
+	cd $(TOP) && LIBRARY_PATH="$(abspath $(PREFIX))/lib/SAT$${LIBRARY_PATH:+:$$LIBRARY_PATH}" $(CABAL) build -j$(GHCJOBS) all
+	@set -e; for exe in $(CABAL_EXES); do \
+	  bin=$$(cd $(TOP) && $(CABAL) list-bin bsc:exe:$$exe); \
+	  echo "$(INSTALL) -m 755 $$bin $(BINDIR)/$$exe"; \
+	  $(INSTALL) -m 755 "$$bin" $(BINDIR)/$$exe; \
+	done
+ifneq ($(PKGINFO),)
+	$(MAKE) $(PKGINFO)
+endif
 
+# Everything is one build; the target remains for callers that run both.
 .PHONY: install-extra
-install-extra:
-	$(MAKE) -j1 $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
+install-extra: install
 
 $(BINDIR)/%: %
 	mkdir -p -m 755 $(BINDIR)
@@ -493,7 +533,7 @@ tags:   *hs */*hs bluewish.hs
 
 .PHONY: clean
 clean:
-	$(RM) -rf $(EXES) $(BUILDDIR)
+	$(RM) -rf $(EXES) $(BUILDDIR) $(TOP)/dist-newstyle $(CABAL_HEAD)
 
 .PHONY: full_clean
 full_clean: clean
