@@ -2,7 +2,7 @@ module AConv (aConv, aTypeConv, isLocalAId) where
 
 import Util(itos, headOrErr, initOrErr, lastOrErr, log2, concatMapM, makePairs)
 import qualified Data.Map as M
-import Control.Monad(when, liftM, forM, zipWithM)
+import Control.Monad(when, liftM, zipWithM)
 import Control.Monad.Except(throwError)
 import Control.Monad.State(StateT, runStateT, gets, get, put)
 import Control.Monad.Reader(ReaderT, runReaderT, withReaderT, ask)
@@ -467,7 +467,7 @@ aSExpr e = do
          (ASPort _ _) -> return e'
          (ASParam _ _) -> return e'
          (ASStr _ _ _) -> return e'
-         (ASAny _ _) -> return e'
+         (ASAny _) -> return e'
          (ASClock _ _) -> return e'
          (ASReset _ _) -> return e'
          (ASInout _ _) -> return e'
@@ -580,9 +580,8 @@ aExpr e@(ICon id (ICReal { iConType = t, iReal = r})) = return $ ASReal id (aTyp
 aExpr e@(ICon id (ICString { iConType = t, iStr = s })) = return $ ASStr id (aTypeConvE e t) s
 aExpr e@(ICon _ (ICChar { })) =
   internalError ("aExpr: ICChar: " ++ ppReadable e)
-aExpr e@(ICon id (ICUndet { iConType = t, iuKind = u, imVal = mv })) | t /= itString = --trace ("ICAny: " ++ ppDebug e) $
-  do mv' <- forM mv aSExpr
-     return (ASAny (aTypeConvE e t) mv')
+aExpr e@(ICon id (ICUndet { iConType = t })) | t /= itString = --trace ("ICAny: " ++ ppDebug e) $
+  return (ASAny (aTypeConvE e t))
 aExpr e@(ICon id (ICUndet { iConType = t })) | t == itString =
   throwError (getPosition id, EGeneric "Attempt to use a raw undetermined string")
 

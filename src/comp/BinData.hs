@@ -1080,7 +1080,7 @@ instance Bin AExpr where
     writeBytes (ASDef t i)     = section "AExpr" $ do putI  8; toBin t; toBin i
     writeBytes (ASInt i t val) = section "AExpr" $ do putI  9; toBin i; toBin t; toBin val
     writeBytes (ASStr i t str) = section "AExpr" $ do putI 10; toBin i; toBin t; toBin str
-    writeBytes (ASAny t me)       = section "AExpr" $ do putI 11; toBin t; toBin me
+    writeBytes (ASAny t)       = section "AExpr" $ do putI 11; toBin t
     writeBytes (ASClock t clk) = section "AExpr" $ do putI 12; toBin t; toBin clk
     writeBytes (ASReset t rst) = section "AExpr" $ do putI 13; toBin t; toBin rst
     writeBytes (AMGate t obj clk) = section "AExpr" $ do putI 14; toBin t; toBin obj; toBin clk
@@ -1113,7 +1113,7 @@ instance Bin AExpr where
                      return (ASInt i t val) }
           10 -> do { i <- fromBin; t <- fromBin; str <- fromBin;
                      return (ASStr i t str) }
-          11 -> do t <- fromBin; me <- fromBin; return (ASAny t me)
+          11 -> do t <- fromBin; return (ASAny t)
           12 -> do t <- fromBin; clk <- fromBin; return (ASClock t clk)
           13 -> do t <- fromBin; rst <- fromBin; return (ASReset t rst)
           14 -> do { t <- fromBin; obj <- fromBin; clk <- fromBin;

@@ -1123,7 +1123,7 @@ aExprToCExpr ret f@(AFunCall {}) =
                   otherwise -> Nothing
      args <- convertArgList arg_list
      return $ wrapReturn ret' ((var name) `cCall` args)
-aExprToCExpr _ (ASAny ty _) =
+aExprToCExpr _ (ASAny ty) =
   internalError "ASAny should not exist past SimExpand"
 aExprToCExpr _ x = internalError ("Unhandled expr: " ++ (show x))
 

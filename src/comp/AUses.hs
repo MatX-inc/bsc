@@ -865,7 +865,7 @@ eDomain (ASDef _ d) = getDefUses d
 eDomain (ASInt _ _ _) = return noExprUses
 eDomain (ASReal _ _ _) = return noExprUses
 eDomain (ASStr _ _ _) = return noExprUses
-eDomain (ASAny _ _) = return noExprUses
+eDomain (ASAny _) = return noExprUses
 -- these are now expected, as eDomain is called on instantiation arguments
 eDomain e@(ASClock { }) = return noExprUses
     --internalError ("AUses.eDomain unexpected clock" ++ ppReadable e)

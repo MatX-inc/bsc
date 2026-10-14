@@ -2025,7 +2025,7 @@ eDomain m (ASDef _ d) = M.findWithDefault err d m
 eDomain _ (ASInt _ _ _) = []
 eDomain _ (ASReal _ _ _) = []
 eDomain _ (ASStr _ _ _) = []
-eDomain _ (ASAny _ _) = []
+eDomain _ (ASAny _) = []
 -- the uses are counted on the action side
 eDomain _ (ATaskValue { }) = []
 eDomain _ e@(ASClock { }) =

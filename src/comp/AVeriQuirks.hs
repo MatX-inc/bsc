@@ -335,7 +335,7 @@ aQExp top e@(ASStr _ _ _)          = return e
 aQExp top e@(ASPort _ _)           = return e
 aQExp top e@(ASParam _ _)          = return e
 aQExp top e@(ASDef _ _)            = return e
-aQExp top e@(ASAny _ _)            = return e
+aQExp top e@(ASAny _)              = return e
 aQExp True  e@(ATaskValue _ _ _ _ _) = return e
 aQExp False e@(ATaskValue _ _ _ _ _) = internalError("AVerilog.aQExp: ATaskValue must not be inlined - " ++ ppReadable e)
 aQExp _ (ASClock { })              = internalError("AVerilog.aQExp: unexpected clock")
@@ -438,5 +438,5 @@ aSNat n = ASInt defaultAId aTNat (ilDec n)
 -- turns _ into its first argument
 getConst :: Integer -> AExpr -> Integer
 getConst d (ASInt _ _ (IntLit _ _ i)) = i
-getConst d (ASAny _ _) = d
+getConst d (ASAny _) = d
 getConst _ _ = internalError "AVerilog.getConst"

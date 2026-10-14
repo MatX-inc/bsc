@@ -14,11 +14,7 @@ import Flags
 import Prim
 
 
--- During elaboration, undetermined values may have been annotated with
--- recommended values (but left as undetermined).  Here we replace them
--- with the recommended value.
---
--- For undetermined values without recommendations, we have two options:
+-- For undetermined values, we have two options:
 -- leave it for the backend to optimize or pick a value now (so that all
 -- backends see the same value, to produce identical simulation results).
 -- This choice is specified by the user with the -opt-undetermined-vals flag.
@@ -42,7 +38,7 @@ aDropUndet errh flags apkg =
 fixUndet :: ErrorHandle -> Flags -> M.Map AId AExpr -> AExpr -> AExpr
 fixUndet errh flags defmap = g
   where
-        -- whether to pick values for undets without a recommended value
+        -- whether to pick values for undets
         b = optUndet flags
         -- the value that undets should be set to
         tgt = unSpecTo flags
@@ -56,11 +52,9 @@ fixUndet errh flags defmap = g
 
         -- handle an expression
         f :: AExpr -> Maybe AExpr
-        -- if the Undet has a recommended value, use it
-        f (ASAny _ (Just e)) = Just (g e)
-        -- if it doesn't, and the backends are not allowed to diverge,
-        -- then replace it with a constant
-        f (ASAny t Nothing) | (not b) = Just (mkUnspec errh tgt t)
+        -- if the backends are not allowed to diverge,
+        -- then replace the Undet with a constant
+        f (ASAny t) | (not b) = Just (mkUnspec errh tgt t)
         -- XXX This is a fixup for ITransform not picking the best value.
         -- XXX The long-term solution is to not pick values in ITransform,
         -- XXX but to wait until the Path Graph is available.
@@ -68,8 +62,8 @@ fixUndet errh flags defmap = g
             let tt'  = g tt
                 ff'  = g ff
             in  case (tt,ff) of
-                  ((ASAny _ _), _) | canFixUndet flags avmap ff' -> Just ff'
-                  (_, (ASAny _ _)) | canFixUndet flags avmap tt' -> Just tt'
+                  ((ASAny _), _) | canFixUndet flags avmap ff' -> Just ff'
+                  (_, (ASAny _)) | canFixUndet flags avmap tt' -> Just tt'
                   _ -> Nothing
         -- otherwise, don't change it
         f _ = Nothing
@@ -114,9 +108,7 @@ hasNoActionValue avm (ASDef { ae_objid = i }) =
 hasNoActionValue avm (ASInt {}) = True
 hasNoActionValue avm (ASReal {}) = True
 hasNoActionValue avm (ASStr {}) = True
-hasNoActionValue avm (ASAny { ae_val = Nothing }) = True
--- XXX if the recommended value has an AV, we could just drop it
-hasNoActionValue avm (ASAny { ae_val = Just e }) = hasNoActionValue avm e
+hasNoActionValue avm (ASAny {}) = True
 hasNoActionValue avm (ASClock {}) = True
 hasNoActionValue avm (ASReset {}) = True
 hasNoActionValue avm (ASInout {}) = True

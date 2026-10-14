@@ -421,7 +421,7 @@ okUse i (ASStr _ _ _)                     = True
 okUse i (ASPort _ _)                      = True
 okUse i (ASParam _ _)                     = True
 okUse i (ASDef _ _)                       = True
-okUse i (ASAny _ _)                       = True
+okUse i (ASAny _)                         = True
 okUse i e                                 = internalError ("getIOProps.okUse " ++ show (i,e))
 
 
@@ -1313,7 +1313,6 @@ getIOPropsA _flags pps mschedinfo apkg =
             exprCalls o ++ exprCalls g
         exprCalls (ASReset _ (AReset { areset_wire = w })) = exprCalls w
         exprCalls (ASInout _ (AInout { ainout_wire = w })) = exprCalls w
-        exprCalls (ASAny _ (Just e)) = exprCalls e
         exprCalls _ = []
 
         -- all the uses of signals in the package, classified
@@ -1511,7 +1510,6 @@ getIOPropsA _flags pps mschedinfo apkg =
             classifyForeignExpr w
         classifyForeignExpr (ASInout _ (AInout { ainout_wire = w })) =
             classifyForeignExpr w
-        classifyForeignExpr (ASAny _ (Just e)) = classifyForeignExpr e
         classifyForeignExpr (ATuple _ es) = concatMap classifyForeignExpr es
         classifyForeignExpr (ATupleSel _ e _) = classifyForeignExpr e
         classifyForeignExpr _ = []
@@ -1578,7 +1576,6 @@ getIOPropsA _flags pps mschedinfo apkg =
             classifyExpr (opaqueOf u) w
         classifyExpr u (ASInout _ (AInout { ainout_wire = w })) =
             classifyExpr (opaqueOf u) w
-        classifyExpr u (ASAny _ (Just e)) = classifyExpr (opaqueOf u) e
         -- a tuple groups the per-port values of a split argument;
         -- the pairing with ports happens in directMethArgs, so a
         -- tuple in any other context is surrounding logic

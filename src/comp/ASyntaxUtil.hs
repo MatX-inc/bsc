@@ -492,7 +492,6 @@ aSubst m = mapAExprs xsub
         xsub (ATupleSel t e n) = ATupleSel t (aSubst m e) n
         xsub (ANoInlineFunCall t i f es) = ANoInlineFunCall t i f (aSubst m es)
         xsub (AFunCall t i f isC es) = AFunCall t i f isC (aSubst m es)
-        xsub (ASAny t me) = ASAny t (fmap (aSubst m) me)
         xsub x = x
 
 
@@ -500,9 +499,6 @@ aSubst m = mapAExprs xsub
 -- recursive expression mapping
 
 exprMap :: (AExpr -> Maybe AExpr) -> AExpr -> AExpr
-exprMap f e@(ASAny t (Just v)) =
-  let e' = ASAny t (Just ((exprMap f) v))
-  in fromMaybe e' (f e)
 exprMap f e@(APrim i t o args) =
   let e' = APrim i t o (map (exprMap f) args)
   in fromMaybe e' (f e)
@@ -524,12 +520,6 @@ exprMap f e@(AFunCall t i fun isC args) =
 exprMap f e = fromMaybe e (f e)
 
 exprMapM :: (Monad m) => (AExpr -> m (Maybe AExpr)) -> AExpr -> m AExpr
-exprMapM f e@(ASAny t (Just v)) = do
-  me <- f e
-  case me of
-    Just e' -> return e'
-    Nothing -> do v' <- (exprMapM f) v
-                  return $ ASAny t (Just v')
 exprMapM f e@(APrim i t o args) = do
   me <- f e
   case me of
@@ -687,7 +677,6 @@ aIdFnToAExprFn fn (ASDef ty aid) = ASDef ty (fn aid)
 aIdFnToAExprFn fn (ASInt aid ty v) = ASInt (fn aid) ty v
 aIdFnToAExprFn fn (ASReal aid ty v) = ASReal (fn aid) ty v
 aIdFnToAExprFn fn (ASStr aid ty s) = ASStr (fn aid) ty s
-aIdFnToAExprFn fn (ASAny ty (Just e)) = ASAny ty (Just ((aIdFnToAExprFn fn) e))
 aIdFnToAExprFn fn (AMGate ty aid cid) = AMGate ty (fn aid) cid
 aIdFnToAExprFn _ expr = expr -- identity function for everything without AIds
 

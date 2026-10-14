@@ -203,10 +203,7 @@ iTrExpr ctx idxs (IAps f ts es) = do
         es' <- mapM (iTrExpr ctx []) es
         iTrExpr' ctx idxs f ts es'
 -- XXX This makes some conditions simpler, but maybe other things get worse?
-iTrExpr ctx idxs (ICon _ (ICUndet t _ _)) | t == itAction = return icNoActions
-iTrExpr ctx idxs (ICon i (ICUndet t k (Just e))) = do
-  e' <- iTrExpr ctx idxs e
-  return (ICon i (ICUndet t k (Just e')))
+iTrExpr ctx idxs (ICon _ (ICUndet t _)) | t == itAction = return icNoActions
 iTrExpr ctx idxs e = return e
 
 expandHRef :: IExpr a -> T (IExpr a) a
@@ -219,11 +216,6 @@ expandHRef e@(ICon i (ICValue { })) = do
         case me of
             Just e' -> return e'
             Nothing -> return e
--- probably not necessary
--- included so we could re-run ITransform if we wanted
-expandHRef (ICon i (ICUndet t k (Just e))) = do
-  e' <- expandHRef e
-  return (ICon i (ICUndet t k (Just e')))
 expandHRef e = return e        -- XXX
 --expandHRef e = internalError ("expandHRef " ++ ppReadable e)
 
@@ -263,12 +255,6 @@ runCSE e@(IAps _ _ _) = do
       newExprT t e
    else
       return e
--- should CSE values boxed by undefined
--- they have something to CSE against
-runCSE (ICon i (ICUndet t k (Just v))) = do
-  v' <- runCSE v
-  let e' = ICon i (ICUndet t k (Just v'))
-  return e'
 runCSE e = return e
 
 -- recursively transform an expression
@@ -357,12 +343,9 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
                 -- in the evaluator:
 
                 --   if c _ _  -->  _
-                -- XXX This only applies if one of the don't-care has not
-                -- XXX been tagged.  Can we ignore tags?  Is this opt even used?
-                (_, ICon _ (ICUndet { imVal = Nothing }), ICon _ (ICUndet {}))
+                -- XXX Is this opt even used?
+                (_, ICon _ (ICUndet {}), ICon _ (ICUndet {}))
                     -> (els, True)
-                (_, ICon _ (ICUndet {}), ICon _ (ICUndet { imVal = Nothing }))
-                    -> (thn, True)
 
 {-
 -- This opt was OK when we still had the above optimization for tagging of
@@ -394,7 +377,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
                         IAps (ICon _ (ICPrim _ PrimSelect)) [_, ITNum ls, _] [e] ->
                               case expVal sel2 of
                                 IAps (ICon _ (ICPrim _ PrimSelect)) [ITNum k, ITNum m, _] [e'] -> k + m == ls && eqE e e'
-                                ICon _ (ICUndet { imVal = Nothing }) -> True
+                                ICon _ (ICUndet {}) -> True
                                 _ -> False
                         _ -> False
                       )
@@ -494,7 +477,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimBNot)) _ [c]
               IAps   (ICon _ (ICPrim _ PrimBAnd)) _  [e1, e2]   -> iTrAp2 ctx iOr  [] [iTrApExp ctx iNot [] [e1], iTrApExp ctx iNot [] [e2]]
               IAps   (ICon _ (ICPrim _ PrimBOr))  _  [e1, e2]   -> iTrAp2 ctx iAnd [] [iTrApExp ctx iNot [] [e1], iTrApExp ctx iNot [] [e2]]
               IAps i@(ICon _ (ICPrim _ PrimIf))  [t] [e1,e2,e3] -> iTrAp2 ctx i [t] [e1, iTrApExp ctx iNot [] [e2], iTrApExp ctx iNot [] [e3]]
-              u@(ICon i (ICUndet t k Nothing)) -> (u, True)
+              u@(ICon i (ICUndet t k)) -> (u, True)
               _                                                 -> (IAps p [] [c], False)
 
 -- e == e --> True
@@ -510,9 +493,9 @@ iTrAp ctx (ICon _ (ICPrim _ p)) _ [e, e'] | isLT p, e == e' = (iFalse, True)
 -- XXX: preserve the _ "kind"? Or treat different _ differently?
 -- _ == e --> _
 -- Note that this transformation is wrong for values of size 0. All values of size 0 (even undetermined or undefined ones) are 0.
-iTrAp ctx (ICon _ (ICPrim _ PrimEQ)) [ITNum n] [e1@(ICon _ (ICUndet {iuKind = u, imVal = Nothing})), e2] | n > 0 = (icUndet itBit1 u, True)
+iTrAp ctx (ICon _ (ICPrim _ PrimEQ)) [ITNum n] [e1@(ICon _ (ICUndet {iuKind = u})), e2] | n > 0 = (icUndet itBit1 u, True)
 -- e == _ --> _
-iTrAp ctx (ICon _ (ICPrim _ PrimEQ)) [ITNum n] [e1, e2@(ICon _ (ICUndet {iuKind = u, imVal = Nothing}))] | n > 0 = (icUndet itBit1 u, True)
+iTrAp ctx (ICon _ (ICPrim _ PrimEQ)) [ITNum n] [e1, e2@(ICon _ (ICUndet {iuKind = u}))] | n > 0 = (icUndet itBit1 u, True)
 
 
 -- e + c1 == c2  -->  e == c2 - c1
@@ -798,7 +781,7 @@ iTrAp ctx cneg@(ICon _ (ICPrim _ p)) [ty] [exp] | p == PrimNeg || p == PrimInv =
         iTrAp2 ctx cif [tif] [c, iTrApExp ctx cneg [ty] [t], iTrApExp ctx cneg [ty] [e]]
     IAps ccat@(ICon _ (ICPrim _ PrimConcat)) ts@[l, m, _] [e1, e2] | p == PrimInv ->
         iTrAp2 ctx ccat ts [iTrApExp ctx cneg [l] [e1], iTrApExp ctx cneg [m] [e2]]
-    u@(ICon i (ICUndet t k Nothing)) -> (u, True)
+    u@(ICon i (ICUndet t k)) -> (u, True)
     _ -> iTrApTail ctx cneg [ty] [exp]
 
 -- e >> n  -->  0 ++ select (k-n) n k e
@@ -874,7 +857,7 @@ iTrAp ctx fun@(ICon sel (ICPrim _ PrimSelect)) ts@[ITNum n, ITNum k, ITNum m] as
           EBitSel (show n) (show k) (show m) (ppString (IAps fun ts as)))]
 
 -- select n ? ? _  -->  _
-iTrAp ctx (ICon sel (ICPrim _ PrimSelect)) [ITNum n, _, _] [ICon _ (ICUndet { iuKind = u, imVal = Nothing })] = (icUndet (itBitN n) u, True)
+iTrAp ctx (ICon sel (ICPrim _ PrimSelect)) [ITNum n, _, _] [ICon _ (ICUndet { iuKind = u })] = (icUndet (itBitN n) u, True)
 
 {-
 -- XXX join with above
@@ -935,7 +918,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimConcat)) ts@[s1@(ITNum i1), s2@(ITNum i2), s3@
     _ | i1 == 0 -> (e2, True)
     _ | i2 == 0 -> (e1, True)
     -- _ ++ _  --> _
-    [ICon _ (ICUndet { imVal = Nothing }), ICon _ (ICUndet { iuKind = u, imVal = Nothing })]
+    [ICon _ (ICUndet {}), ICon _ (ICUndet { iuKind = u })]
         -> (icUndet (aitBit s3) u, True)
     -- c1 ++ (c2 ++ e)  -->  (c1++c2) ++ e
     [ICon _ (ICInt { iVal = IntLit { ilValue = c1 } }),
@@ -976,7 +959,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimConcat)) ts@[s1@(ITNum i1), s2@(ITNum i2), s3@
 
     -- _ ++ select k m n e  -->       select (l+k) m n e                IF n-m >= l+k
     -- _ ++ select k m n e  -->  _ ++ select (n-m) m n e                IF n-m <  l+k
-    [ICon _ (ICUndet { iuKind = u, imVal = Nothing }),
+    [ICon _ (ICUndet { iuKind = u }),
      IAps ps@(ICon _ (ICPrim _ PrimSelect)) [ITNum ik', m@(ITNum im), n@(ITNum inn)] [e]]
         |  i2 == ik' && d /= i1
         -> --trace ("_ ++ sel\n" ++ ppReadable (mkAp p as)) $
@@ -992,7 +975,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimConcat)) ts@[s1@(ITNum i1), s2@(ITNum i2), s3@
     -- select k m n e ++ _  -->  select (l+k) (m-l) n e                        IF m >= l
     -- select k m n e ++ _  -->  select (m+k) 0     n e ++ _
     [IAps ps@(ICon _ (ICPrim _ PrimSelect)) [ITNum ik', m@(ITNum im), n@(ITNum inn)] [e],
-     ICon _ (ICUndet { iuKind = u, imVal = Nothing })]
+     ICon _ (ICUndet { iuKind = u })]
         |  i1 == ik' && (im >= i2 || d /= i2)
         -> --trace ("sel ++ _\n" ++ ppReadable (mkAp p as, im, i2)) $
            if im >= i2 then
@@ -1154,7 +1137,7 @@ splitConstExpr n n2 (ICon _ ic@(ICInt { iVal = IntLit { ilValue = c } })) =
     let c1 = iMkLit (aitBit (mkNumConT n)) (c `div` 2^n2)
         c2 = iMkLit (aitBit (mkNumConT n2)) (mask n2 c)
     in  Just (c1, c2)
-splitConstExpr n n2 (ICon _ (ICUndet { iuKind = u, imVal = Nothing })) =
+splitConstExpr n n2 (ICon _ (ICUndet { iuKind = u })) =
     let u1 = icUndet (aitBit (mkNumConT n)) u
         u2 = icUndet (aitBit (mkNumConT n2)) u
     in  Just (u1, u2)
@@ -1363,9 +1346,9 @@ inc iexpr = internalError ("ITransform.inc: " ++ ppString iexpr)
 mkZero :: IType -> IExpr a
 mkZero t = iMkLit (aitBit t) 0
 
--- only match non-chosen undefined values
+-- match undefined values
 isUndet :: IExpr a -> Bool
-isUndet (ICon _ (ICUndet { imVal = Nothing })) = True
+isUndet (ICon _ (ICUndet {})) = True
 isUndet _ = False
 
 -- Guard optimizations that are not valid in the presence of implicit conditions.
@@ -1505,10 +1488,8 @@ getDefT i = get >>= (return . fmap snd3 . M.lookup i . def_map)
 -- this avoids some stack overflows and other nastiness
 uEq :: IExpr a -> IExpr a -> Bool
 uEq e1 e2 = {- trace ("uEq: " ++ ppReadable (e1, e2)) $ -} uEq' e1 e2
-uEq' (ICon _ (ICUndet { imVal = Nothing })) e = True
-uEq' e (ICon _ (ICUndet { imVal = Nothing })) = True
-uEq' e1 (ICon _ (ICUndet { imVal = Just e2 })) = uEq e1 e2
-uEq' (ICon _ (ICUndet { imVal = Just e1 })) e2 = uEq e1 e2
+uEq' (ICon _ (ICUndet {})) e = True
+uEq' e (ICon _ (ICUndet {})) = True
 uEq' (ICon i1 (ICValue { })) (ICon i2 (ICValue { })) = i1 == i2
 uEq' (ICon _ (ICValue _ e1)) e2 = uEq e1 e2
 uEq' e1 (ICon _ (ICValue _ e2)) = uEq e1 e2
@@ -1758,9 +1739,6 @@ iTransRenameIdsInExpr rename_map (IAps func types args) =
     let renamed_func = iTransRenameIdsInExpr rename_map func
         renamed_args = [iTransRenameIdsInExpr rename_map arg | arg <- args]
     in  IAps renamed_func types renamed_args
-iTransRenameIdsInExpr rename_map (ICon i (ICUndet t k (Just v))) =
-    let v' = iTransRenameIdsInExpr rename_map v
-    in ICon i (ICUndet t k (Just v'))
 iTransRenameIdsInExpr rename_map expr = expr
 
 -- given a map from old to new identifiers, replace all occurrences

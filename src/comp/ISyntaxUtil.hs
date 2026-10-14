@@ -307,7 +307,7 @@ icUndet :: IType -> UndefKind -> IExpr a
 icUndet t u = icUndetAt noPosition t u
 
 icUndetAt :: Position -> IType -> UndefKind -> IExpr a
-icUndetAt pos t u = ICon (dummyId pos) (ICUndet t u Nothing)
+icUndetAt pos t u = ICon (dummyId pos) (ICUndet t u)
 
 iMkString :: String -> IExpr a
 iMkString s = ICon idStringLit (ICString itString s)

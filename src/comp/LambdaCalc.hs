@@ -1176,10 +1176,8 @@ convAExpr (ASParam t i) = do
   -- XXX not from the sequenced state?
   return $ SSelect stateVar (paramFieldId modId i)
 
--- if we know what value will be picked, use that
-convAExpr (ASAny _ (Just e)) = convAExpr e
--- otherwise, use a primitive to express that it's an unknown
-convAExpr (ASAny t Nothing) = let st = convAType t
+-- use a primitive to express that it's an unknown
+convAExpr (ASAny t) = let st = convAType t
                               in return $ anyTVar st
 
 convAExpr (APrim _ t p args) = convAPrim p t args

@@ -204,7 +204,7 @@ toE (AFunCall t i f isC es) = mapM toSE es >>= return . AFunCall t i f isC
 toE e = return e
 
 toSE :: AExpr -> S AExpr
-toSE (ASAny t _) = return (ASInt defaultAId t (ilDec 0))
+toSE (ASAny t) = return (ASInt defaultAId t (ilDec 0))
 toSE e@(ASInt {}) = return e
 toSE e@(ASStr {}) = return e
 toSE e@(ASDef {}) = return e
@@ -302,7 +302,7 @@ synExp v@(ASDef (ATBit 1) i) = return [ v ]
 synExp (ASDef (ATBit n) i) = return [ ASDef aTBool (wireId i k) | k <- [0..fromInteger n-1] ]
 synExp (ASInt aid (ATBit n) (IntLit _ _ i)) = return [ ASInt aid aTBool (ilSizedBin 1 b) | b <- reverse (integerToBits n i) ]
 synExp (ASStr _ _ _) = internalError "Synthesize.synExp: ASStr"
-synExp (ASAny t _) = internalError "Synthesize.synExp: ASAny"
+synExp (ASAny t) = internalError "Synthesize.synExp: ASAny"
 synExp _ = internalError( "Synthesize::synExp" )
 
 synExpS :: AExpr -> S [AExpr]

@@ -571,7 +571,7 @@ convAExpr2YExpr mty (ASParam t@(ATBit _) aid) =
 -- For ASAny, create an independent variable.
 -- If it has a tagged value, don't use it!  That's not part of the formal
 -- meaning, it's an implementation optimization.
-convAExpr2YExpr mty (ASAny (ATBit width) _) = do
+convAExpr2YExpr mty (ASAny (ATBit width)) = do
     when traceConv $ traceM("conv any")
     str <- getAnyName
     makeDeclAndVar mty str width
@@ -678,7 +678,7 @@ convPrim2YExpr mty PrimArrayDynSelect i w args =
                           _ -> internalError ("convPrim2SExpr: idx_ty")
               arms = zip [0..max_idx] es
               -- default (even if it's not reachable)
-              dflt = ASAny (ATBit w) Nothing
+              dflt = ASAny (ATBit w)
           in  convAExpr2YExpr mty (foldr foldFn dflt arms)
       [ASDef _ i_def, idx] -> do
           dmap <- gets defMap

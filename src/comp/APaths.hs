@@ -1346,10 +1346,7 @@ findEdges env (ASDef t i) =
 findEdges env (ASInt _ _ _) = ([],[],[])
 findEdges env (ASReal _ _ _) = ([],[],[])
 findEdges env (ASStr _ _ _) = ([],[],[])
--- if we know what the ASAny will turn into,
--- the combinational paths will exist in the output hardware
-findEdges env (ASAny _ (Just e)) = findEdges env e
-findEdges env (ASAny _ Nothing) = ([],[],[])
+findEdges env (ASAny _) = ([],[],[])
 -- clock and reset edges should be irrelevant
 findEdges env (ASClock _ _) = ([],[],[]) -- XXX recurse into the osc and gate?
 findEdges env (ASReset _ _) = ([],[],[]) -- XXX recurse into the rst?

@@ -145,7 +145,6 @@ iInlineUseLimit use_limit
 iValVars :: IExpr a -> [Id]
 iValVars (IAps e _ es) = iValVars e ++ concatMap iValVars es
 iValVars (ICon i (ICValue { })) = [i]
-iValVars (ICon i (ICUndet {imVal = Just e})) = iValVars e
 iValVars (ICon _ _) = []
 iValVars e = internalError ("iValVars: " ++ ppReadable e)
 
