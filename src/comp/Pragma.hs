@@ -19,6 +19,7 @@ module Pragma(
               extractSchedPragmaIds,
 
               isAlwaysRdy,
+              mkIsAlwaysRdy,
               isAlwaysEn,
               isEnWhenRdy,
 
@@ -52,6 +53,7 @@ import Prelude hiding ((<>))
 #endif
 
 import qualified Data.Map as M
+import qualified Data.Set as S
 import Data.Maybe(listToMaybe)
 import Data.List(sort)
 import qualified Data.Generics as Generic
@@ -657,6 +659,23 @@ isAlwaysRdy ((PPalwaysEnabled is):pps) i =
    then True
    else isAlwaysRdy pps i
 isAlwaysRdy (pp:pps) i = isAlwaysRdy pps i
+
+-- Precomputed form of "isAlwaysRdy", for callers that query many
+-- methods: "isAlwaysRdy" rebuilds and rescans the pragma method lists
+-- per query, which goes quadratic when both the interface and the
+-- always_ready/always_enabled lists are large.  Equivalent because a
+-- list match implies isRdyId (the list elements are mkRdyId-built) and
+-- the whole-module case returns isRdyId directly, so pragma order
+-- never affects the result.
+mkIsAlwaysRdy :: [PProp] -> (Id -> Bool)
+mkIsAlwaysRdy pps =
+    let whole_module =
+            or [ null is | PPalwaysReady is <- pps ] ||
+            or [ null is | PPalwaysEnabled is <- pps ]
+        ar_ids = S.fromList $
+            [ mkRdyId (flattenUSId m) | PPalwaysReady is <- pps, m <- is ] ++
+            [ mkRdyId (flattenUSId m) | PPalwaysEnabled is <- pps, m <- is ]
+    in  \ i -> isRdyId i && (whole_module || i `S.member` ar_ids)
 
 
 -- NOTE: always_enabled implies enabled_when_ready
