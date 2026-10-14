@@ -1,9 +1,10 @@
 # The cabal build of bsc
 
-One cabal package at the repository root builds the compiler beside the make
-build, which is untouched and keeps generating its own `Warmup.hs` and
-`BuildVersion.hs`. The comments in `bsc.cabal`, `cabal.project` and
-`SetupHooks.hs` cite this document.
+One cabal package at the repository root builds the compiler, and `make
+install-src` builds the solvers, runs it and installs what it built (section
+2). The make build's own `ghc --make` targets remain beside it and keep
+generating their own `Warmup.hs` and `BuildVersion.hs`. The comments in
+`bsc.cabal`, `cabal.project` and `SetupHooks.hs` cite this document.
 
 ## 1. Shape
 
@@ -81,6 +82,33 @@ nothing outside `dist-newstyle`, the autogen directories and the
 `.ghc.environment.*` file at the root that `write-ghc-environment-files` asks
 for; nothing under `src/comp` or `src/vendor` is written.
 
+### Installing
+
+    make install-src
+
+installs the cabal build: `src/comp/Makefile`'s `install` runs `cabal build
+all` and copies every executable of `bsc.cabal` into `inst/bin`, then the
+libraries are built with that compiler as before. `install-extra` is the same
+install, kept for callers that run both. The make build's own `ghc --make`
+targets remain for a build without cabal-install (`make -C src/comp bsc`) and
+are not what `install` installs. `GHCJOBS` is passed as cabal's `-j`, which
+with the project's semaphore is the number of GHC slots in all; the heap is
+not capped, and the full build's high-water mark on four cores was under 6 GB.
+
+`BuildVersion` names the commit, and its rule runs when cabal-install builds
+the package, which it does when a declared source changed. A commit that
+touches no source of the package, such as a testsuite or workflow change,
+would leave the previous commit's version in the programs, so `install`
+writes HEAD into `build/cabal-head`, which `bsc.cabal` declares in
+`extra-source-files`: a new commit is a changed source, and the version
+follows. A plain `cabal build` after such a commit keeps the previous version
+until a source changes, as section 3 describes; `make install-src` does not.
+
+With `BSC_BUILD_PKGINFO` set, as the release workflows set it, the install
+also writes `LICENSES/LICENSE.ghc_pkgs` from the packages the programs were
+linked against: the in-place library, cabal-install's store and GHC's own,
+walked from the library by `src/comp/make-ghc-pkg-info.sh`.
+
 ## 3. The hooks
 
 `SetupHooks.hs` at the root is the package's hooks module (`module SetupHooks
@@ -111,7 +139,9 @@ for; nothing under `src/comp` or `src/vendor` is written.
   checkout works. The rule runs whenever Setup builds the package, which
   cabal-install decides from the declared sources, not the repository: an
   incremental build after a commit that touched none of them keeps the
-  previous version string until one does. A clean build is always right; the
+  previous version string until one does. `make install-src` closes that
+  gap by writing HEAD into `build/cabal-head`, a declared source (section
+  2); a plain `cabal build` does not. A clean build is always right; the
   make build runs the script every time and has no such gap. The rule also
   monitors `HEAD` and the reflog, for a build system that runs the rules
   itself (cabal-install with a Cabal 3.18 setup).
