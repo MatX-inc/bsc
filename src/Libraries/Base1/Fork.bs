@@ -11,8 +11,9 @@ import Vector
 --@ values to avoid CSE.
 --@
 
--- XXX m == 2*n, but we can't have contexts on foreign.
-foreign vfork :: Bit n -> Bit m = "Fork",("i","o")
+-- The proviso enforces the width relationship at every application
+-- (it is checked by the typechecker and then erased).
+foreign vfork :: (Add n n m) => Bit n -> Bit m = "Fork",("i","o")
 
 --@ Copy a value into two identical values.
 --@ \begin{libverbatim}
