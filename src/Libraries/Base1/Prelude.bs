@@ -257,7 +257,7 @@ package Prelude(
         Generic(..), Conc(..), ConcPrim(..), ConcPoly(..),
         Meta(..), MetaData(..), StarArg(..), NumArg(..), StrArg(..),
         NumConArg(..), StarConArg(..), OtherConArg(..),
-        MetaConsNamed(..), MetaConsAnon(..), MetaField(..),
+        MetaConsNamed(..), MetaConsAnon(..), MetaInterface(..), MetaField(..),
 
         WrapField(..), WrapMethod(..), fromWrapNoInline, WrapPorts(..), NonEmptyBits(..),
         Port(..), unPort, SplitPorts(..), PrimSeqTupleBits(..)
@@ -3997,7 +3997,7 @@ primitive primMakeRawUninitialized :: Position__ -> String -> a
 instance PrimMakeUninitialized (a -> b) where
    primMakeUninitialized = primMakeRawUninitialized
 
--- Default generic instance covers data and structs
+-- Default generic instance covers data, structs and interfaces
 instance (PrimMakeUninitialized' a (Rep a)) => PrimMakeUninitialized a where
   primMakeUninitialized pos f = primMakeUninitialized' ((error "proxy") :: Rep a) pos f
 
@@ -4008,9 +4008,9 @@ class PrimMakeUninitialized' a r where
 -- When the type has a single constructor, we can build that
 -- structure, with uninitialized arguments (via calls to the typeclass member,
 -- not the primitive, in case the sub-types themselves have structure).
--- The derived instance for structs is like the instance for data types with a single
--- constructor: a struct value is returned with uninitialized values in its
--- fields.
+-- The derived instance for structs and interfaces is like the instance for data
+-- types with a single constructor: a value is returned with uninitialized
+-- values in its fields.
 --
 instance (PrimMakeUninitialized'' (Rep a)) =>
          PrimMakeUninitialized' a (Meta (MetaData n p ta 1) r') where
@@ -4044,6 +4044,9 @@ instance (PrimMakeUninitialized'' a) => PrimMakeUninitialized'' (Meta (MetaData 
   primMakeUninitialized'' named pos f = Meta $ primMakeUninitialized'' named pos f
 
 instance (PrimMakeUninitialized'' a) => PrimMakeUninitialized'' (Meta (MetaConsNamed n i nf) a) where
+  primMakeUninitialized'' _ pos f = Meta $ primMakeUninitialized'' True pos f
+
+instance (PrimMakeUninitialized'' a) => PrimMakeUninitialized'' (Meta (MetaInterface n i nf) a) where
   primMakeUninitialized'' _ pos f = Meta $ primMakeUninitialized'' True pos f
 
 instance (PrimMakeUninitialized'' a) => PrimMakeUninitialized'' (Meta (MetaConsAnon n i nf) a) where
@@ -4146,7 +4149,7 @@ instance PrimMakeUndefined Rules where
 instance PrimMakeUndefined (Array a) where
    primMakeUndefined = primMakeRawUndefined
 
--- Default generic instance covers data and structs
+-- Default generic instance covers data, structs and interfaces
 instance (PrimMakeUndefined' a (Rep a)) => PrimMakeUndefined a where
   primMakeUndefined pos i = primMakeUndefined' ((error "proxy") :: Rep a) pos i
 
@@ -4155,8 +4158,8 @@ class PrimMakeUndefined' a r where
   primMakeUndefined' :: r -> Position__ -> Integer -> a
 
 -- Single constructor case, make undefined values for all the fields.
--- The derived instance for structs is like for data types with a single
--- constructor: a struct value is returned with undefined values in its
+-- The derived instance for structs and interfaces is like for data types with a
+-- single constructor: a value is returned with undefined values in its
 -- fields.
 instance (PrimMakeUndefined'' (Rep a)) =>
          PrimMakeUndefined' a (Meta (MetaData n p ta 1) r') where
@@ -4585,10 +4588,11 @@ data Meta m r = Meta r
 
 -- The 'm' type in `Meta m r` must be one of the following types:
 
--- Indicates that a representation is for a type (e.g. struct/data) with a name,
--- package, type arguments and number of constructors
+-- Indicates that a representation is for a type (e.g. struct/data/interface)
+-- with a name, package, type arguments and number of constructors
 data (MetaData :: $ -> $ -> * -> # -> *) name pkg tyargs ncons = MetaData
   deriving (FShow)
+
 -- Wrappers for types appearing in the MetaData type arguments;
 -- only kinds *, # and $ are made available, constructor-kinded type arguments
 -- cannot be handled in general and are omitted from the OtherConArg representation type.
@@ -4613,6 +4617,13 @@ data (MetaConsNamed :: $ -> # -> # -> *) name idx nfields = MetaConsNamed
 -- Indicates that a representation is for a constructor with anonymous fields,
 -- with a name, index in the data's constructors, and number of fields
 data (MetaConsAnon :: $ -> # -> # -> *) name idx nfields = MetaConsAnon
+  deriving (FShow)
+
+-- Indicates that a representation is for an interface's named fields,
+-- with the interface name, index (always 0), and number of fields.
+-- Derived interfaces retain the outer MetaData wrapper with one constructor,
+-- but use MetaInterface in place of MetaConsNamed around the field product.
+data (MetaInterface :: $ -> # -> # -> *) name idx nfields = MetaInterface
   deriving (FShow)
 
 -- Indicates that a representation is for a field, with a field name (either the

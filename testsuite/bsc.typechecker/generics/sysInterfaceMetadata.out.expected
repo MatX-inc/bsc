@@ -1,0 +1,19 @@
+InterfaceMetadataBSV.Tree
+InterfaceMetadata.View (Prelude.Bit 8)
+InterfaceMetadata.Holder InterfaceMetadata.View
+Tree
+InterfaceMetadata.View
+CShow interface: View {value=True}
+CShow struct: Record {value=True}
+SShow interface: View {value=True}
+SShow struct: Record {value=True}
+CShow tuple: (True, False)
+SShow tuple: (True, False)
+tuple leaves: 2
+polymorphic roundtrip: 7 True
+polymorphic interface: PolyView {identity=<polymorphic value>}
+partial interface updates: 13 17
+interface leaves: 4
+value roundtrip: 5 5 6
+action roundtrip: 9
+actionvalue roundtrip: 11

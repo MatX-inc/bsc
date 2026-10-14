@@ -16,7 +16,7 @@ import PreIds(
               -- type constructors
               idBit, idAdd, idMax,
               idConc, idConcPrim, idConcPoly, idMeta,
-              idMetaData, idStarArg, idNumArg, idStrArg, idStarConArg, idNumConArg, idOtherConArg,
+              idMetaData, idMetaInterface, idStarArg, idNumArg, idStrArg, idStarConArg, idNumConArg, idOtherConArg,
               idMetaConsNamed, idMetaConsAnon, idMetaField,
               -- classes that the compiler can derive
               idEq, idBits, idFShow, idBounded, idDefaultValue,
@@ -726,7 +726,7 @@ doSGeneric :: SymTab -> Id -> Position -> Id -> [Type] -> CFields -> Either EMsg
 doSGeneric r packageid dpos i vs fs = mkGenericInstance r packageid dpos i vs False
   [(i, Just [fn | CField {cf_name=fn} <- fs], [fty | CField {cf_type=fty} <- fs])]
 
--- Build an instance of Generic for a struct / data declaration,
+-- Build an instance of Generic for a struct / interface / data declaration,
 -- along with any needed poly field wrapper structs and instances
 -- Arguments:
 --   r == the symbol table
@@ -757,6 +757,10 @@ mkGenericInstance r packageid dpos i vs isData summands =
                           | (cn, mfns, ftys) <- summands,
                             (fn, fty@(CQType ps _)) <- zip (fieldNames mfns dpos) ftys,
                             fieldHigherRank fty]
+        isIfcType = case findType r i of
+          Just (TypeInfo _ _ _ (TIstruct s _) _) -> isIfc s
+          _ -> False
+
         rep = cTApplys (cTCon idMeta)
           [cTApplys (cTCon idMetaData)
            [cTStr (getIdBase i) dpos,
@@ -774,6 +778,7 @@ mkGenericInstance r packageid dpos i vs isData summands =
            tMkEitherTree dpos
             [cTApplys (cTCon idMeta)
               [cTApplys (cTCon $ case mfns of
+                            Just _ | isIfcType -> idMetaInterface
                             Just _ -> idMetaConsNamed
                             Nothing -> idMetaConsAnon)
                 [cTStr (getIdBase cn) dpos,

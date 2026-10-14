@@ -76,7 +76,7 @@ instance CShow' (ConcPoly a) where
   cshow' (ConcPoly _) = $format "<polymorphic value>"
 
 -- Note that below there are more specific instances for
--- CShow' (Meta (MetaConsNamed ...)) and CShow' (Meta (MetaConsAnon ...))
+-- MetaConsNamed, MetaConsAnon and MetaInterface
 instance (CShow' a) => CShow' (Meta m a) where
   cshow' (Meta x) = cshow' x
   cshowP' (Meta x) = cshowP' x
@@ -88,6 +88,10 @@ instance (CShow' a, CShow' b) => CShow' (Either a b) where
   cshowP' (Right x) = cshowP' x
 
 instance (CShowSummand a) => CShow' (Meta (MetaConsNamed name idx nfields) a) where
+  cshow' (Meta x) = $format (stringOf name) " {" (cshowSummandNamed x) "}"
+  cshowP' x = $format "(" (cshow' x) ")"
+
+instance (CShowSummand a) => CShow' (Meta (MetaInterface name idx nfields) a) where
   cshow' (Meta x) = $format (stringOf name) " {" (cshowSummandNamed x) "}"
   cshowP' x = $format "(" (cshow' x) ")"
 
