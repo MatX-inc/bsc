@@ -4,17 +4,22 @@ name: Cabal build
 # and its determinism ladder: the same commit built serially, oversubscribed
 # and in other checkout directories must give bit-identical objects,
 # interfaces, archives and programs.
-# The ladder is three legs: the serial build against a second serial build
-# in another directory and a -j64 build, each in a fresh checkout directory
-# of its own; the reference then rebuilds after a marker edit and its revert,
-# and that rebuild is held to the reference as well.  The legs run on one machine per platform
+# The ladder is six legs: the serial build against a second serial build,
+# -j16, and three -j64 builds, each in a fresh checkout directory of its own;
+# the reference then rebuilds after a marker edit and its revert, and that
+# rebuild is held to the reference as well.  The legs run on one machine per platform
 # (util/cabal-ladder.sh run, which hashes every leg and gives the verdict), so
 # a difference is the build's and not two runner images'.  From GHC 9.12 the
 # legs vary GHC's own parallelism as well as cabal's: that is where
 # -fobject-determinism exists and cabal.project compiles in parallel.  Below
 # it GHC compiles serially, and the legs vary cabal's package jobs and the
 # checkout directory.
-# It runs on pull requests that touch the build and on a dispatch.
+# It runs on the project's own pull requests that touch the build, nightly on
+# the project's default branch, and on a dispatch; a fork's pull requests and
+# schedule do not run it, since a fork's branches are a developer's loop, and
+# a fork dispatches it when it qualifies a release.  Source changes do not run
+# it: the one source invariant it guards, that every root module imports
+# Warmup, is checked on every pull request (src/comp/check-warmup-roots.sh).
 
 on:
   pull_request:
@@ -23,9 +28,10 @@ on:
       - bsc.cabal
       - SetupHooks.hs
       - util/cabal-ladder.sh
-      - src/**
       - GNUmakefile
       - .github/workflows/cabal.yml
+  schedule:
+    - cron: '23 3 * * *'
   workflow_dispatch:
     inputs:
       ghc_version:
@@ -50,13 +56,17 @@ permissions:
 jobs:
   ladder:
     name: "Ladder ${{ matrix.os }}"
+    # The project's pull requests and nightly, and any dispatch; not a fork's.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.repository == 'B-Lang-org/bsc' }}
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJSON(inputs.platforms == 'ubuntu' && '["ubuntu-24.04"]' || inputs.platforms == 'macos' && '["macos-15"]' || '["ubuntu-24.04","macos-15"]') }}
     runs-on: ${{ matrix.os }}
-    # Three legs on one machine, one after another (util/cabal-ladder.sh run).
-    timeout-minutes: 240
+    # Six legs on one machine, up to two at a time on a 16 GB runner and one
+    # on a 7 GB one (util/cabal-ladder.sh run), the serial legs' rounds
+    # included: about two hours on ubuntu-24.04, four on macos-15.
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v6
         with:
