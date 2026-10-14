@@ -15,6 +15,9 @@ author: Bluespec, Inc.
 maintainer: bsc-dev@groups.io
 category: Hardware
 build-type: Hooks
+-- HEAD, written by `make install-src` so that a commit alone is a changed
+-- source and BuildVersion follows it (doc/cabal.md section 2).
+extra-source-files: build/cabal-head
 -- The GHCs CI builds with (.github/workflows/ci.yml).
 tested-with:
   GHC == 9.4.7,

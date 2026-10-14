@@ -1,6 +1,13 @@
 #! /usr/bin/env bash
 set -euo pipefail
 
+# --deps-of: start from the named packages' dependencies and leave the
+# packages themselves out (the in-place library is not a third-party package).
+DEPS_OF=0
+if [ "${1:-}" = "--deps-of" ] ; then
+    DEPS_OF=1
+    shift
+fi
 PACKAGES=$@
 
 # ===========================================================================
@@ -111,13 +118,24 @@ add_pkg() {
     fi
 }
 
-# Add the packages from the command line (and their dependencies).
-# These are package names, so resolve each to its id first.
+# Add the packages from the command line (and their dependencies), or with
+# --deps-of their dependencies alone. These are package names, so resolve
+# each to its id first; a name no database knows is an error, not an empty
+# list.
 for i in ${PACKAGES}
 do
-    for id in `ghc-pkg field $i id --simple-output`
+    ids=`ghc-pkg field $i id --simple-output` || { echo "Package ${i} not found by ghc-pkg" >&2; exit 1; }
+    for id in ${ids}
     do
-	add_pkg "$id"
+	if [ "${DEPS_OF}" = 1 ] ; then
+	    deps=`ghc-pkg field --ipid ${id} depends --simple-output`
+	    for dep in ${deps}
+	    do
+		add_pkg "${dep}"
+	    done
+	else
+	    add_pkg "${id}"
+	fi
     done
 done
 
