@@ -27,6 +27,7 @@ import Distribution.Simple.LocalBuildInfo (interpretSymbolicPathLBI)
 import qualified Distribution.Simple.LocalBuildInfo as LBI
 import Distribution.Simple.SetupHooks
 import Distribution.Simple.Utils (die', rawSystemExitCode, rewriteFileEx)
+import Distribution.System (OS (..), buildOS)
 import Distribution.Verbosity (normal)
 import Distribution.Utils.Path (makeSymbolicPath, moduleNameSymbolicPath, (<.>))
 import System.Directory
@@ -43,7 +44,7 @@ import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (splitSearchPath, takeDirectory, (</>))
 import System.IO.Error (catchIOError)
-import System.Process (readProcess, readProcessWithExitCode)
+import System.Process (callProcess, readProcess, readProcessWithExitCode)
 
 setupHooks :: SetupHooks
 setupHooks =
@@ -250,17 +251,20 @@ gitHead = do
 -- (doc/cabal.md section 2). A library's dynamic object is
 -- <builddir>/build/libHS*.so, so its lib/SAT is <builddir>/lib/SAT; an
 -- executable is <builddir>/build/<exe>/<exe>, so its lib/SAT is
--- <builddir>/build/lib/SAT.
+-- <builddir>/build/lib/SAT. A program also loses the FILE symbol of its
+-- link stub (stripStubFileSymbol).
 postBuildComponent :: PostBuildComponentHook
 postBuildComponent inputs = do
+  let lbi = inputs.localBuildInfo
+  build <- makeAbsolute (interpretSymbolicPathLBI lbi (LBI.buildDir lbi))
   linked <- solverDirectory
-  forM_ linked $ \sat -> do
-    let lbi = inputs.localBuildInfo
-    build <- makeAbsolute (interpretSymbolicPathLBI lbi (LBI.buildDir lbi))
-    case targetComponent inputs.targetInfo of
-      CLib _ -> linkSatDir sat (takeDirectory build)
-      CExe _ -> linkSatDir sat build
-      _ -> pure ()
+  case targetComponent inputs.targetInfo of
+    CLib _ -> forM_ linked $ \sat -> linkSatDir sat (takeDirectory build)
+    CExe exe -> do
+      forM_ linked $ \sat -> linkSatDir sat build
+      let name = prettyShow (exeName exe)
+      stripStubFileSymbol (build </> name </> name)
+    _ -> pure ()
 
 -- | The directory the solvers are linked from: the first in LIBRARY_PATH
 -- that holds both (lib/SAT is one directory). Copies in a system directory
@@ -287,6 +291,18 @@ linkSatDir solvers dir = do
   createDirectoryIfMissing True (dir </> "lib")
   removeDirectoryLink sat `catchIOError` \_ -> pure ()
   createDirectoryLink solvers sat
+
+-- | Remove the FILE symbols of GHC's link stubs from a program. GHC compiles
+-- the stubs from temporary files named by a per-session counter (ghc_NNN.c,
+-- ghc_tmp_N_M.o from 9.10), and the C compiler records each name as a FILE
+-- symbol, so the counter would be in the bytes (doc/cabal.md section 5); the
+-- other local symbols stay, and no other FILE symbol begins with ghc_. On macOS an
+-- object compiled without -g records no file name, so there is nothing to
+-- remove. Removing nothing rewrites the same bytes, so a rebuild that
+-- relinks nothing is unchanged.
+stripStubFileSymbol :: FilePath -> IO ()
+stripStubFileSymbol exe =
+  when (buildOS == Linux) $ callProcess "objcopy" ["--wildcard", "--strip-symbol=ghc_*", exe]
 
 -- | The flags to compile against and link to Tcl, for the vendored binding
 -- (HTcl.hs, haskell.c): a path of the build machine cannot be written in
