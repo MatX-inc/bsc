@@ -276,7 +276,9 @@ job-server protocol, which GHC gains in 9.10.4, 9.12.5, 9.14.2 and
 10.0.1, so with the GHCs CI builds it falls back to a slower build (see
 `doc/cabal.md`).  Install it with `ghcup`, as the commands above do, and
 run `cabal update` to fetch the Hackage package index, which the build
-reads.
+reads: `index-state` in `cabal.project` pins the versions it takes (see
+`doc/cabal.md`), and an index fetched before that instant stops the
+build with cabal's own message, `cabal update` being the remedy.
 
 To build a version of BSC that supports profiling, be aware that
 profiling versions of the libraries need to be present: cabal builds
