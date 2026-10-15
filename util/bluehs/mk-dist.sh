@@ -10,9 +10,11 @@
 # parallelism (the determinism ladder, doc/cabal.md section 5, checks it):
 # the dependencies come from the cabal store, whose path the files built
 # there record (a Paths_ module's directories, a shared object's search
-# paths and build id), so that path must not be the checkout's; the solver
-# libraries are stripped of the debug information that names their build
-# directory; and only libraries are shipped, no build tool.
+# paths and build id), so that path must not be the checkout's; the solvers
+# are the installed tree's, built by make from the vendored sources, which
+# the library links by name with no directory recorded (SetupHooks.hs), and
+# are stripped of the debug information that names their build directory;
+# and only libraries are shipped, no build tool.
 #
 # The libraries are the cabal project's own packages (cabal.project): the
 # package `bsc` and, once the compiler is split, the packages it depends on.
@@ -33,12 +35,17 @@
 
 set -euo pipefail
 
-# canonical, as the cabal hooks record the paths under it
+# canonical, as the in-place registrations record the build directories under it
 REPO=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd -P)
 [ $# -ge 1 ] || { echo "usage: $0 <prefix>/bluehs [work-dir]" >&2; exit 1; }
 mkdir -p "$1"
 DEST=$(cd "$1" && pwd)
 PREFIX=$(dirname "$DEST")
+# The solvers the installed compiler carries, built by make from the vendored
+# sources: the library links them by name and records no directory
+# (SetupHooks.hs), so the build below is pointed at them the way the make
+# build's is, and the distribution's copies are these.
+SOLVER_DIR=$PREFIX/lib/SAT
 WORK=${2:-$REPO/build/bluehs}
 mkdir -p "$WORK"
 WORK=$(cd "$WORK" && pwd -P)
@@ -121,7 +128,7 @@ mkdir -p "$WORK/proj"
     echo "index-state: $INDEX_STATE"
 } > "$WORK/proj/cabal.project"
 # bsc depends on every package a split produces, so this builds them all
-(cd "$WORK/proj" && cabal build bsc:lib:bsc \
+(cd "$WORK/proj" && LIBRARY_PATH="$SOLVER_DIR${LIBRARY_PATH:+:$LIBRARY_PATH}" cabal build bsc:lib:bsc \
     >"$WORK/cabal-build.log" 2>&1) \
     || { tail -30 "$WORK/cabal-build.log" >&2; exit 1; }
 PLAN=$WORK/proj/dist-newstyle/cache/plan.json
@@ -136,15 +143,6 @@ for d in "$STORE_ROOT/ghc-$GHC_VER" "$STORE_ROOT/ghc-$GHC_VER"-*; do
 done
 [ -n "$STORE_SRC" ] || die "no ghc-$GHC_VER store in $STORE_ROOT"
 STORE_NAME=$(basename "$STORE_SRC")
-
-# The vendored solver libraries, where the hooks' build of them leaves them.
-# The hooks record these directories canonically (the yices one is reached
-# through a symlink), so they are canonical here too.
-SOLVER_DIRS=()
-for d in "$REPO/src/vendor/stp/lib" "$REPO/src/vendor/yices/lib"; do
-    ls "$d"/*."$DLL"* >/dev/null 2>&1 || die "no solver library in $d"
-    SOLVER_DIRS+=("$(cd "$d" && pwd -P)")
-done
 
 # The in-place libraries: registration, id and build directory of every
 # package of the project.  A library of re-exports alone has no modules of
@@ -279,9 +277,13 @@ done
 # ${pkgroot} = the directory containing package.db
 for conf in "$STORE"/package.db/*.conf; do
     sed_inplace "$conf" -e "s|$STORE_SRC|\${pkgroot}|g"
-    for d in "${SOLVER_DIRS[@]}"; do
-        sed_inplace "$conf" -e "s|$d|\${pkgroot}/../../../SAT|g"
-    done
+    # The solvers for GHC's loader, which opens a package's extra-libraries
+    # by their link names from the package's library directories: the
+    # registration names none (SetupHooks.hs), so the shipped one gets SAT.
+    if [ "$conf" = "$STORE/package.db/$FACADE_ID.conf" ]; then
+        awk '{ print } /^(library-dirs|dynamic-library-dirs):/ { print "    ${pkgroot}/../../../SAT" }' \
+            "$conf" > "$conf.tmp" && mv "$conf.tmp" "$conf"
+    fi
     # Drop haddock-* fields INCLUDING their continuation lines (they point
     # at never-shipped docs; a bare sed of the header line would orphan the
     # indented value lines and break ghc-pkg's parser)
@@ -324,7 +326,7 @@ GLOBALDB=$(ls -d "$DIST/hs/ghc/lib/ghc-$GHC_VER/lib/package.conf.d")
 # 5. SAT libs, scripts, launcher
 
 msg "copying SAT libs, scripts and launcher"
-for d in "${SOLVER_DIRS[@]}"; do cp -a "$d"/*."$DLL"* "$DIST/SAT/"; done
+cp -a "$SOLVER_DIR"/*."$DLL"* "$DIST/SAT/"
 # Every program of bsc.cabal runs as a script except bluetcl, whose main is
 # C.  The entry file is named after the program, which is how the launcher
 # finds it; the programs' hs-source-dirs may be a farm of links into src/,
@@ -363,12 +365,12 @@ shipped_dir() {
                 echo "$STORE/${INPLACE_IDS[$i]}/lib${1#"${INPLACE_BUILDS[$i]}"}"; return ;;
         esac
     done
-    for d in "${SOLVER_DIRS[@]}"; do
-        [ "$1" != "$d" ] || { echo "$DIST/SAT"; return; }
-    done
     case "$1" in
+        # the library's own rpath for the solvers (cabal.project): SAT here
+        '$ORIGIN/../lib/SAT' | '@loader_path/../lib/SAT') echo "$DIST/SAT"; return ;;
         "$WORK"/* | "$REPO"/*) return 1 ;;
-        *) echo "$1" ;;
+        /*) echo "$1" ;;
+        *) return 1 ;;
     esac
 }
 

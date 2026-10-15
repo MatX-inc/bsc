@@ -22,7 +22,7 @@
 #                   repo's .ghc.environment.* for that ghc's version
 #   distribution  - <dist>/bin/bluehs, the bundled GHC, and <dist>/hs/bsc.env
 #
-# Sets up two things a compiled binary would not need:
+# Sets up three things a compiled binary would not need:
 #   GHC_ENVIRONMENT - the GHC package environment naming the compiled bsc
 #                     library, so runghc finds it from any cwd
 #   BLUESPECDIR     - defaulted to the bsc install beside the library
@@ -30,6 +30,16 @@
 #                     .ba search paths); a compiled binary derives it from its
 #                     own location, which runghc cannot do because the script
 #                     is not installed
+#   LD_LIBRARY_PATH - the solvers for GHC's loader, which opens a package's
+#                     extra-libraries by their link names before the
+#                     package's own object loads: from the package's library
+#                     directories, which name none (SetupHooks.hs), then from
+#                     the dynamic linker's search path, which this names the
+#                     installed copies for. On macOS the variable does not
+#                     survive the shell wrappers around ghc (SIP strips it),
+#                     so there the library's own rpath resolves the solvers
+#                     (cabal.project) and the loader's warning about the
+#                     preload it could not do is silenced on the command line
 
 SELF=$(readlink -f "$0")
 HERE=$(dirname "$SELF")
@@ -60,6 +70,7 @@ if [ -f "$HERE/../hs/bsc.env" ]; then
     RUNGHC=$DIST/hs/ghc/bin/runghc
     ENVFILE=$DIST/hs/bsc.env
     DEFAULT_BLUESPECDIR=$(dirname "$DIST")/lib
+    SAT=$DIST/SAT
 else
     REPO=$(dirname "$(dirname "$(dirname "$SELF")")")
     APP=$REPO/src/comp/app
@@ -79,6 +90,7 @@ else
         exit 1
     fi
     DEFAULT_BLUESPECDIR=$REPO/inst/lib
+    SAT=$REPO/inst/lib/SAT
 fi
 
 case "$TOOL" in
@@ -93,6 +105,7 @@ fi
 
 GHC_ENVIRONMENT="$ENVFILE" export GHC_ENVIRONMENT
 BLUESPECDIR="${BLUESPECDIR:-$DEFAULT_BLUESPECDIR}" export BLUESPECDIR
+LD_LIBRARY_PATH="$SAT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" export LD_LIBRARY_PATH
 
 # runghc gets the -i arguments, then the script in place of the tool name
 if [ "$NAME" = "bluehs" ]; then
@@ -109,4 +122,4 @@ if [ "$NAME" = "bluehs" ]; then
 else
     set -- "$SCRIPT" "$@"
 fi
-exec "$RUNGHC" "$@"
+exec "$RUNGHC" --ghc-arg=-Wno-missed-extra-shared-lib "$@"

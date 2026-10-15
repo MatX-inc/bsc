@@ -15,11 +15,12 @@ that file and runs it.
 
     util/bluehs/setup.sh
 
-The cabal hooks build the vendored solver libraries and generate
-`BuildVersion.hs`, so nothing has to be prepared by hand. The first build
-compiles every module of `bsc-core`, the one component package the project
-has today (`components/core`; `bsc` is the facade over it that the
-executables, and scripts, import through); later builds are incremental.
+`setup.sh` installs the vendored solvers under `inst/lib/SAT` (`make
+install-solvers`) and runs the cabal build with that directory named in
+`LIBRARY_PATH`, since the library links the solvers by name and is told no
+directory (doc/cabal.md section 2); the hooks generate `BuildVersion.hs`.
+The first build compiles every module of the `bsc` package; later builds
+are incremental.
 
 **Re-run `setup.sh` whenever you rebuild bsc at a new commit.** This is a
 correctness requirement, not hygiene: `.bo`/`.ba` files embed the build
@@ -78,12 +79,15 @@ source, which is much slower to load.)
   (for the interpret-from-source workflow) is merged into the session and
   fights the package environment. Use the repository root, or
   `ghci -ignore-dot-ghci`.
-* **The solver libraries are loaded, not linked in.** The cabal hooks name
-  the vendored `libstp` and `libyices` in `bsc-core`'s `extra-libraries`, so
-  every script and every `ghci` session opens them at load. The hooks also
-  name the vendored directories and an rpath, which is what resolves them:
-  each solver records itself `@rpath`-relative on Mach-O, and by its soname
-  on ELF.
+* **The solver libraries are loaded, not linked in.** `bsc.cabal` names
+  `libstp` and `libyices` in `extra-libraries`, so every script and every
+  `ghci` session opens them at load, and the library's shared object records
+  them as dependencies. They come from the installed tree, `inst/lib/SAT`:
+  the launcher names it in `LD_LIBRARY_PATH` for GHC's loader, and the
+  shared object carries the rpath that resolves them (`cabal.project`), the
+  build tree's `lib/SAT` beside it pointing at the installed copies. The
+  distribution's registration names its own `SAT` directory, so plain `ghci`
+  works there without the launcher.
 * **`BLUESPECDIR` must name a real `inst/lib`** for the tools that read it
   (`showrules` and `vcdcheck` use it for `%` expansion and default `.ba`
   search paths). The launcher defaults it to `<repo>/inst/lib`, which is

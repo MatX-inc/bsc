@@ -9,15 +9,16 @@
 # (ABinUtil.decodeABin -> EBinFileVerMismatch).  The library and the bsc
 # that produced your .ba files must be built from the same BuildVersion.hs.
 #
-# The cabal build's own hooks build the vendored solver libraries (left
-# under src/vendor/stp/lib and src/vendor/yices/lib) and generate
-# BuildVersion.hs, so there is nothing to prepare.  The build is the whole
-# project: the component packages under components/, the facade `bsc`
-# that re-exports them, and the programs.
+# The library links the solvers by name against the installed copies,
+# inst/lib/SAT, which `make install-solvers` builds from the vendored
+# sources, with that directory named in LIBRARY_PATH; the cabal hooks
+# generate BuildVersion.hs (doc/cabal.md section 2).  The build is the whole
+# project: the package `bsc` and its programs.
 
 set -e
 REPO=$(dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")
 cd "$REPO"
 
-cabal build
+make install-solvers
+LIBRARY_PATH="$REPO/inst/lib/SAT${LIBRARY_PATH:+:$LIBRARY_PATH}" cabal build
 echo "setup.sh: done - try: util/bluehs/bin/dumpbo inst/lib/Libraries/Arbiter.bo"
