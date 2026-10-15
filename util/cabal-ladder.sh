@@ -3,8 +3,8 @@
 # serially, oversubscribed, in another directory or, from GHC 9.12,
 # incrementally must give
 # bit-identical objects, interfaces, archives, shared objects and programs, and the same
-# bytes in any installed distribution named to `hash` (CI names the bluehs
-# runtime, util/bluehs).  CI (.github/workflows/cabal.yml) runs `hash` on
+# bytes in any installed directory named to `hash` (CI names the installed
+# tree, inst, the bluehs runtime under it included).  CI (.github/workflows/cabal.yml) runs `hash` on
 # every leg, `rebuild` on the serial legs and `verdict` over the lists; `run`
 # is the whole ladder on one machine.  `hash` writes a record of the toolchain
 # beside each list, which `verdict` reads a difference against.
@@ -166,12 +166,12 @@ toolchain_compare() {  # REF_LIST OTHER_LIST [quiet]
 }
 
 # Pass means every list is identical to the reference.  Differences are
-# reported by category (program, shared object, object, interface, archive,
-# and distribution for the files of an installed directory) so a failure says
-# what moved, and against the toolchain records beside the two lists, so it
-# says whether the same tools built them; the records do not decide the
-# result, which is the bytes'.  Identical lists whose records differ are
-# noted as well.
+# reported by category (program, shared object, object, interface, archive;
+# installed for the files of an installed directory, and distribution for
+# those of a bluehs runtime under it) so a failure says what moved, and
+# against the toolchain records beside the two lists, so it says whether the
+# same tools built them; the records do not decide the result, which is the
+# bytes'.  Identical lists whose records differ are noted as well.
 verdict() {
   local ref="$1" fail=0 other name diffs n cat sel c; shift
   [ -r "$ref" ] && [ -s "$ref" ] || { echo "verdict: reference $ref is missing, unreadable or empty"; exit 2; }
@@ -187,14 +187,15 @@ verdict() {
     n=$(printf '%s\n' "$diffs" | sed '/^$/d' | wc -l)
     echo "DIFFER: $(basename "$ref" .sha256) vs $name: $n file(s)"
     build=$(printf '%s\n' "$diffs" | grep '^dist-newstyle/' || true)
-    for cat in program shared object interface archive distribution; do
+    for cat in program shared object interface archive installed distribution; do
       case "$cat" in
         program) sel=$(printf '%s\n' "$build" | grep -Ev '\.(o|hi|dyn_o|dyn_hi|p_o|p_hi|a|so|dylib)$' || true);;
         shared) sel=$(printf '%s\n' "$build" | grep -E '\.(so|dylib)$' || true);;
         object) sel=$(printf '%s\n' "$build" | grep -E '\.(o|dyn_o|p_o)$' || true);;
         interface) sel=$(printf '%s\n' "$build" | grep -E '\.(hi|dyn_hi|p_hi)$' || true);;
         archive) sel=$(printf '%s\n' "$build" | grep '\.a$' || true);;
-        distribution) sel=$(printf '%s\n' "$diffs" | grep -v '^dist-newstyle/' || true);;
+        installed) sel=$(printf '%s\n' "$diffs" | grep -v '^dist-newstyle/' | grep -v '/bluehs/' || true);;
+        distribution) sel=$(printf '%s\n' "$diffs" | grep -v '^dist-newstyle/' | grep '/bluehs/' || true);;
       esac
       c=$(printf '%s\n' "$sel" | sed '/^$/d' | wc -l)
       [ "$c" -gt 0 ] && { echo "   $cat: $c"; printf '%s\n' "$sel" | sed '/^$/d' | head -8 | sed 's/^/      /'; }
