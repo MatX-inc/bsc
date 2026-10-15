@@ -8,7 +8,8 @@
 -- | The package's setup hooks (build-type: Hooks), run in the package
 -- directory; doc/cabal.md section 3 says what they do.
 -- No hook writes into src/comp, or anywhere outside dist-newstyle and the
--- autogen directories; the make build generates its own Warmup.hs and
+-- autogen directories but the install stamp build/cabal-head
+-- (writeBuildVersionHs); the make build generates its own Warmup.hs and
 -- BuildVersion.hs as before.
 module SetupHooks (setupHooks) where
 
@@ -238,27 +239,18 @@ writeBuildSystemHs (path, Platform _ os) = do
 -- BuildVersion.hs (it leaves an up-to-date file untouched). NOGIT and
 -- NOUPDATEBUILDVERSION pass through with the Makefile's defaults.
 --
--- The script's git commands search upward from the working directory,
--- which fails when the build directory lies outside the checkout, so the
--- repository is named through GIT_DIR (worktree-safe, from rev-parse) and
--- GIT_WORK_TREE; where the probe fails (an exported archive, or no git)
--- neither is set and the script behaves as before. The second argument,
+-- The script reads the repository it lives in, whatever the working
+-- directory or the caller's Git environment (a build directory outside
+-- the checkout, a Git hook of another repository). The second argument,
 -- the commit the rule was computed for, only makes the rule's identity
--- follow HEAD; the script reads the repository itself.
+-- follow HEAD.
 writeBuildVersionHs :: (FilePath, String) -> IO ()
 writeBuildVersionHs (autogenDir, _) = do
   noGit <- fromMaybe "0" <$> lookupEnv "NOGIT"
   noUpdateBuildVersion <- fromMaybe "0" <$> lookupEnv "NOUPDATEBUILDVERSION"
   root <- packageRoot
-  repoHead <- if noGit == "1" then pure Nothing else gitHead
-  let gitVars = case repoHead of
-        Just (gitDir, _) -> [("GIT_DIR", gitDir), ("GIT_WORK_TREE", root)]
-        Nothing -> []
-  let newVars =
-        [ ("NOGIT", noGit),
-          ("NOUPDATEBUILDVERSION", noUpdateBuildVersion)
-        ]
-          <> gitVars
+  commit <- gitHead
+  let newVars = [("NOGIT", noGit), ("NOUPDATEBUILDVERSION", noUpdateBuildVersion)]
   env <- (newVars <>) <$> getEnvironment
   createDirectoryIfMissing True autogenDir
   dir <- makeAbsolute autogenDir
@@ -270,6 +262,16 @@ writeBuildVersionHs (autogenDir, _) = do
   case code of
     ExitSuccess -> pure ()
     ExitFailure n -> die' normal ("src/comp/update-build-version.sh exited with " <> show n)
+  -- The install stamp (src/comp/Makefile, CABAL_HEAD): `make install`
+  -- writes HEAD into it, a declared source, so that a later commit is a
+  -- changed source and this rule runs again. It has to exist from the
+  -- first build, since cabal-install watches only the declared sources it
+  -- finds when it records a build. It names the commit whatever NOGIT
+  -- says, as `make install` does, so the two write the same stamp.
+  let stamp = root </> "build" </> "cabal-head"
+      content = maybe "no-repository" snd commit <> "\n"
+  createDirectoryIfMissing True (root </> "build")
+  rewriteFileEx normal stamp content
 
 -- | The repository's git directory (worktree-safe) and its HEAD commit, or
 -- Nothing where there is no git or no checkout (an exported archive).
@@ -277,7 +279,8 @@ gitHead :: IO (Maybe (FilePath, String))
 gitHead = do
   root <- packageRoot
   probe <-
-    readProcessWithExitCode "git" ["-C", root, "rev-parse", "--absolute-git-dir", "HEAD"] ""
+    readProcessWithExitCode "bash"
+      [root </> "src" </> "comp" </> "update-build-version.sh", "--git-info"] ""
       `catchIOError` \_ -> pure (ExitFailure 1, "", "")
   pure $ case probe of
     (ExitSuccess, out, _) | [gitDir, commit] <- lines out -> Just (gitDir, commit)
