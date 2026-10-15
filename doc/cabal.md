@@ -57,7 +57,10 @@ load) resolve the solvers beside themselves, `lib/SAT`, by the rpath
 src/comp install-extra` copies the other programs over the same build.
 `BuildVersion` names the commit, but its rule runs only when cabal-install
 builds the package (a changed declared source or a reconfigure), so `install`
-first writes HEAD into `build/cabal-head`, a declared source.
+first writes HEAD into `build/cabal-head`, a declared source. The hooks write
+the same stamp (`update-build-version.sh --stamp`, which `install` runs too)
+from the first build, since cabal-install watches only the sources it finds
+when it records a build.
 
 `Setup.hs` is for a tool that runs a Setup script rather than cabal-install
 (the hooks' external program): cabal-install generates the same two lines for
@@ -78,15 +81,21 @@ index, and compiles serially, which the bytes do not depend on.
   otherwise `ghc --make -jN` output varies with scheduling. Every root module
   of the library and each program's entry module imports it.
 - `BuildSystem`, from the host platform, and `BuildVersion`, by
-  `src/comp/update-build-version.sh` run in the autogen directory with
-  `GIT_DIR` and `GIT_WORK_TREE` set for a build directory outside the checkout.
-  A `Warmup.hs` or `BuildSystem.hs` the make build has generated under
-  `src/comp` would be compiled instead, so configuring refuses while one is
-  there (`make -C src/comp full_clean` removes them).
+  `src/comp/update-build-version.sh` run in the autogen directory; the script
+  reads the repository it lives in, whatever the working directory or the
+  caller's git environment, and a tree without one (an unpacked sdist) builds
+  as no-git. A `Warmup.hs` or `BuildSystem.hs` the make build has generated
+  under `src/comp` would be compiled instead, so configuring refuses while one
+  is there (`make -C src/comp full_clean` removes them).
 - Tcl, at configure: the include, link and `-D` flags, from `platform.sh`.
 - Solvers: after each build, `lib/SAT` beside the artifact is linked to the
   `LIBRARY_PATH` directory holding them, so the build tree runs in place
   (copies in a system directory need no link).
+
+cabal-install builds without configuring when only sources changed, and a
+changed `SetupHooks.hs` rebuilds the Setup without reconfiguring, so a change
+to what a configure hook produces takes effect at the next configure: edit
+`bsc.cabal`, or build clean.
 
 ## 4. Adding a module, adding a program
 

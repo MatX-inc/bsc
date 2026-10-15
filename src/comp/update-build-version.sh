@@ -6,6 +6,33 @@ export TMOUT=1
 # -------------------------
 # GIT
 
+# Always inspect this source tree, even from an external build directory or
+# a caller (such as a Git hook) with another repository in its environment.
+root=$(cd "$(dirname "$0")/../.." && pwd)
+repoGit () (
+    unset $(git rev-parse --local-env-vars)
+    git --git-dir="$root/.git" --work-tree="$root" "$@"
+)
+
+# --stamp FILE writes the install stamp, HEAD, when the
+# content changes: src/comp/Makefile's install and the hooks' version rule
+# (SetupHooks.hs) write the same file through it. HEAD is the repository's
+# whatever NOGIT says; a tree without one gets no-repository.
+writeStamp () {
+    if [ -e "$root/.git" ]; then
+        head=$(repoGit rev-parse HEAD)
+    else
+        head=no-repository
+    fi
+    mkdir -p "$(dirname "$1")"
+    printf '%s\n' "$head" > "$1.tmp"
+    if cmp -s "$1.tmp" "$1"; then
+        rm -f "$1.tmp"
+    else
+        mv "$1.tmp" "$1"
+    fi
+}
+
 # Arguments: 1=commit hash, 2=describe string
 genGITBuildVersion () {
     echo "module BuildVersion(buildVersion, buildVersionNum, buildVersionName) where" > BuildVersion.hs.new;
@@ -36,6 +63,11 @@ genGITBuildVersion () {
 
 # -------------------------
 
+# --stamp FILE writes the install stamp (writeStamp above).
+case "${1:-}" in
+    --stamp) writeStamp "$2"; exit ;;
+esac
+
 if ( test -f BuildVersion.hs ) && [ "$NOUPDATEBUILDVERSION" = 1 ] ; then
     echo "BuildVersion.hs not modified"
 else
@@ -53,11 +85,16 @@ else
 	    else
 		GITDESCR="archive-g${GITCOMMIT}"
 	    fi
+	elif [ ! -e "$root/.git" ]; then
+
+	    # A tree without a repository, such as an unpacked sdist
+	    GITCOMMIT="0000000"
+	    GITDESCR="no-git"
 	else
 
 	    # Get the current commit hash
-	    GITCOMMIT=`git show -s --format=%h HEAD`
-	    if ! GITDESCR=`git describe --tags`; then
+	    GITCOMMIT=`repoGit show -s --format=%h HEAD`
+	    if ! GITDESCR=`repoGit describe --tags`; then
 		GITDESCR="untagged-g${GITCOMMIT}"
 	    fi
 

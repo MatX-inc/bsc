@@ -504,9 +504,7 @@ install: CABAL_INSTALL = $(INSTALLEXES)
 install-extra: CABAL_INSTALL = $(EXTRAEXES)
 install install-extra:
 	mkdir -p -m 755 $(TOP)/build $(BINDIR)
-	(git -C $(TOP) rev-parse HEAD 2>/dev/null || echo no-repository) > $(CABAL_HEAD).tmp && \
-	  { cmp -s $(CABAL_HEAD).tmp $(CABAL_HEAD) || mv $(CABAL_HEAD).tmp $(CABAL_HEAD); } && \
-	  $(RM) -f $(CABAL_HEAD).tmp
+	./update-build-version.sh --stamp $(CABAL_HEAD)
 	./update-build-version.sh
 	cd $(TOP) && LIBRARY_PATH="$(abspath $(PREFIX))/lib/SAT$${LIBRARY_PATH:+:$$LIBRARY_PATH}" $(CABAL) build -j$(GHCJOBS) $(CABAL_FLAGS) all
 	@set -e; for exe in $(CABAL_INSTALL); do \

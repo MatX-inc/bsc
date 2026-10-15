@@ -8,7 +8,8 @@
 -- | The package's setup hooks (build-type: Hooks), run in the package
 -- directory; doc/cabal.md section 3 says what they do.
 -- No hook writes into src/comp, or anywhere outside dist-newstyle and the
--- autogen directories; the make build generates its own Warmup.hs and
+-- autogen directories but the install stamp build/cabal-head
+-- (writeBuildVersionHs); the make build generates its own Warmup.hs and
 -- BuildVersion.hs as before.
 module SetupHooks (setupHooks) where
 
@@ -44,7 +45,7 @@ import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (splitSearchPath, takeDirectory, (</>))
 import System.IO.Error (catchIOError)
-import System.Process (readProcess, readProcessWithExitCode)
+import System.Process (readProcess)
 
 setupHooks :: SetupHooks
 setupHooks =
@@ -56,11 +57,6 @@ setupHooks =
             postBuildComponentHook = Just postBuildComponent
           }
     }
-
--- | The package directory: Cabal runs the hooks there (cabal-install's
--- external Setup, or a Setup script run by hand).
-packageRoot :: IO FilePath
-packageRoot = canonicalizePath "."
 
 isMainLib :: Component -> Bool
 isMainLib (CLib Library {libName = LMainLibName}) = True
@@ -111,7 +107,8 @@ preConfComponent inputs = do
 -- excluded by name so that no program imports it into its own.
 --
 -- BuildVersion's input is the repository's HEAD, which no file dependency
--- names: the rule runs whenever Setup builds the package.
+-- names: the rule runs whenever Setup builds the package, and the install
+-- stamp (writeBuildVersionHs) makes a new commit a changed source.
 preBuildRules :: PreBuildComponentRules
 preBuildRules = rules (static ()) $ \env -> do
   let lbi = env.localBuildInfo
@@ -187,10 +184,9 @@ writeWarmupHs (path, mods) = do
 -- | Refuse while the make build's Warmup.hs or BuildSystem.hs lies under
 -- src/comp, where GHC would compile it in place of the generated one.
 refuseStrayGeneratedModules :: IO ()
-refuseStrayGeneratedModules = do
-  root <- packageRoot
+refuseStrayGeneratedModules =
   forM_ (["Warmup", "BuildSystem"] :: [String]) $ \m -> do
-    left <- doesFileExist (root </> "src" </> "comp" </> (m <> ".hs"))
+    left <- doesFileExist ("src" </> "comp" </> (m <> ".hs"))
     when left . ioError . userError $
       "src/comp/" <> m <> ".hs is the make build's, and GHC would compile it in place of"
         <> " the generated module: remove it (make -C src/comp full_clean) and configure again"
@@ -222,51 +218,38 @@ writeBuildSystemHs (path, Platform _ os) = do
     ]
 
 -- | Run update-build-version.sh in the autogen directory, where it writes
--- BuildVersion.hs (it leaves an up-to-date file untouched). NOGIT and
--- NOUPDATEBUILDVERSION pass through with the Makefile's defaults.
+-- BuildVersion.hs (it leaves an up-to-date file untouched), then have it
+-- write the install stamp. NOGIT and NOUPDATEBUILDVERSION pass through
+-- with the Makefile's defaults.
 --
--- The script's git commands search upward from the working directory,
--- which fails when the build directory lies outside the checkout, so the
--- repository is named through GIT_DIR (worktree-safe, from rev-parse) and
--- GIT_WORK_TREE; where the probe fails (an exported archive, or no git)
--- neither is set and the script behaves as before.
+-- The script reads the repository it lives in, whatever the working
+-- directory or the caller's Git environment (a build directory outside
+-- the checkout, a Git hook of another repository).
 writeBuildVersionHs :: FilePath -> IO ()
 writeBuildVersionHs autogenDir = do
   noGit <- fromMaybe "0" <$> lookupEnv "NOGIT"
   noUpdateBuildVersion <- fromMaybe "0" <$> lookupEnv "NOUPDATEBUILDVERSION"
-  root <- packageRoot
-  repoHead <- if noGit == "1" then pure Nothing else gitHead
-  let gitVars = case repoHead of
-        Just (gitDir, _) -> [("GIT_DIR", gitDir), ("GIT_WORK_TREE", root)]
-        Nothing -> []
-  let newVars =
-        [ ("NOGIT", noGit),
-          ("NOUPDATEBUILDVERSION", noUpdateBuildVersion)
-        ]
-          <> gitVars
+  let newVars = [("NOGIT", noGit), ("NOUPDATEBUILDVERSION", noUpdateBuildVersion)]
   env <- (newVars <>) <$> getEnvironment
   createDirectoryIfMissing True autogenDir
   dir <- makeAbsolute autogenDir
-  -- The script is named by its absolute path: a relative one would be
-  -- resolved against the process's working directory, the autogen dir.
-  -- bash runs it, since an sdist stores no executable bit.
-  let script = root </> "src" </> "comp" </> "update-build-version.sh"
-  code <- rawSystemExitCode normal (Just (makeSymbolicPath dir)) "bash" [script] (Just env)
-  case code of
-    ExitSuccess -> pure ()
-    ExitFailure n -> die' normal ("src/comp/update-build-version.sh exited with " <> show n)
-
--- | The repository's git directory (worktree-safe) and its HEAD commit, or
--- Nothing where there is no git or no checkout (an exported archive).
-gitHead :: IO (Maybe (FilePath, String))
-gitHead = do
-  root <- packageRoot
-  probe <-
-    readProcessWithExitCode "git" ["-C", root, "rev-parse", "--absolute-git-dir", "HEAD"] ""
-      `catchIOError` \_ -> pure (ExitFailure 1, "", "")
-  pure $ case probe of
-    (ExitSuccess, out, _) | [gitDir, commit] <- lines out -> Just (gitDir, commit)
-    _ -> Nothing
+  -- The script and the stamp are named by absolute paths: a relative one
+  -- would be resolved against the process's working directory, the autogen
+  -- dir. bash runs the script, since an sdist stores no executable bit.
+  script <- makeAbsolute ("src" </> "comp" </> "update-build-version.sh")
+  stamp <- makeAbsolute ("build" </> "cabal-head")
+  let run args = do
+        code <- rawSystemExitCode normal (Just (makeSymbolicPath dir)) "bash" (script : args) (Just env)
+        case code of
+          ExitSuccess -> pure ()
+          ExitFailure n -> die' normal ("src/comp/update-build-version.sh exited with " <> show n)
+  run []
+  -- The install stamp (src/comp/Makefile, CABAL_HEAD): HEAD, a declared
+  -- source, so that a later commit is a changed source and this rule runs
+  -- again. `make install` writes it through the same script; it has to
+  -- exist from the first build, since cabal-install watches only the
+  -- declared sources it finds when it records a build.
+  run ["--stamp", stamp]
 
 -- | After a build, link lib/SAT beside the artifact to the directory the
 -- solvers were linked from, so that the build tree runs in place: the
@@ -318,8 +301,7 @@ linkSatDir solvers dir = do
 -- bsc.cabal, so platform.sh is asked at configure time.
 tclBuildInfo :: IO BuildInfo
 tclBuildInfo = do
-  root <- packageRoot
-  let platform arg = readProcess "sh" [root </> "platform.sh", arg] ""
+  let platform arg = readProcess "sh" ["platform.sh", arg] ""
   let trim = f . f where f = reverse . dropWhile isSpace
   tclInc <- words <$> platform "tclinc"
   tclLibs <- words <$> platform "tcllibs"
