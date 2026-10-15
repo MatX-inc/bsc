@@ -109,8 +109,8 @@ jobs:
       - name: Check GHCI :load
         run: |
           cd src/comp
-          echo ':load app/bsc.hs' | ghci 2>&1 | tee ghci.log
-          if grep '\(Failed\|error:\)' ghci.log
+          echo ':load app/bsc.hs' | ghci 2>&1 | tee "$RUNNER_TEMP/ghci.log"
+          if grep '\(Failed\|error:\)' "$RUNNER_TEMP/ghci.log"
           then
             echo "GHCi reported errors."
             exit 1
