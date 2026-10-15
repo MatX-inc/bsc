@@ -476,11 +476,6 @@ CABAL_HEAD = $(TOP)/build/cabal-head
 # $(PREFIX)/lib/SAT before descending here, and LIBRARY_PATH names that
 # directory to the linker for every link of the build.
 
-# The Bluesim kernel's version header is generated from this directory's
-# BuildVersion.hs (src/bluesim/gen_version_h), which the make build writes
-# with update-build-version.sh; the hooks run the same script into the
-# package's autogen directory, so it is written here too and the two agree.
-
 # BSC_BUILD selects the cabal build's variant as it selects the make build's:
 # PROF (profiling, cost centres on every function, and the larger stack cap
 # their frames need), DEBUG (Core lint and the debugging runtime) or NOOPT
@@ -507,7 +502,6 @@ install install-extra:
 	(git -C $(TOP) rev-parse HEAD 2>/dev/null || echo no-repository) > $(CABAL_HEAD).tmp && \
 	  { cmp -s $(CABAL_HEAD).tmp $(CABAL_HEAD) || mv $(CABAL_HEAD).tmp $(CABAL_HEAD); } && \
 	  $(RM) -f $(CABAL_HEAD).tmp
-	./update-build-version.sh
 	cd $(TOP) && LIBRARY_PATH="$(abspath $(PREFIX))/lib/SAT$${LIBRARY_PATH:+:$$LIBRARY_PATH}" $(CABAL) build -j$(GHCJOBS) $(CABAL_FLAGS) all
 	@set -e; for exe in $(CABAL_INSTALL); do \
 	  bin=$$(cd $(TOP) && $(CABAL) list-bin $(CABAL_FLAGS) bsc:exe:$$exe); \
