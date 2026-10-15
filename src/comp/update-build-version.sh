@@ -3,10 +3,9 @@ set -euo pipefail
 
 export TMOUT=1
 
-# Inputs, from the environment: src/comp/Makefile exports NOGIT, and the
-# cabal hooks pass both through (SetupHooks.hs, writeBuildVersionHs).
+# Input, from the environment: src/comp/Makefile exports NOGIT, and the
+# cabal hooks pass it through (SetupHooks.hs, writeBuildVersionHs).
 NOGIT=${NOGIT:-0}
-NOUPDATEBUILDVERSION=${NOUPDATEBUILDVERSION:-0}
 
 # -------------------------
 # GIT
@@ -91,11 +90,7 @@ case "${1:-}" in
     --name) getGITVersion; echo "$GITDESCR"; exit ;;
 esac
 
-if ( test -f BuildVersion.hs ) && [ "$NOUPDATEBUILDVERSION" = 1 ] ; then
-    echo "BuildVersion.hs not modified"
-else
-    getGITVersion
-    genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
-fi
+getGITVersion
+genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
 
 # -------------------------

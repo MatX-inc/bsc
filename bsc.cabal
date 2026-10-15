@@ -15,8 +15,9 @@ author: Bluespec, Inc.
 maintainer: bsc-dev@groups.io
 category: Hardware
 build-type: Hooks
--- HEAD, written by `make install-src` so that a commit alone is a changed
--- source and BuildVersion follows it (doc/cabal.md section 2).
+-- HEAD and the version name, written by `make install-src` so that a commit
+-- or a tag alone is a changed source and BuildVersion follows it
+-- (doc/cabal.md section 2).
 extra-source-files:
   build/cabal-head
   -- The scripts the hooks run, so that a source distribution carries them.
@@ -91,7 +92,7 @@ common common_deps
 library
   import: common_all, common_deps
   -- Written by the hooks (SetupHooks.hs) into the autogen directory.
-  autogen-modules: Warmup, BuildSystem, BuildVersion
+  autogen-modules: Warmup, BuildVersion
   hs-source-dirs:
     src/comp
     src/comp/Libs
@@ -101,14 +102,13 @@ library
     src/vendor/stp/HaskellIfc
     src/vendor/yices/v2.6/HaskellIfc
   -- The solvers, linked by name against whichever copies the linker finds
-  -- (doc/cabal.md section 2). The make build, which builds the releases,
+  -- (doc/cabal.md section 2). `make install-src`, which builds the releases,
   -- builds and installs the vendored copies first and names them in
   -- LIBRARY_PATH, so a release links the versions the tree is tested with;
   -- any other build, such as a distribution's, links the copies it has
   -- installed or its own. At run time they resolve beside the installed
-  -- binary, lib/SAT, through the make build's rpath (SAT_RPATH_FLAGS in
-  -- src/comp/Makefile), which every program that links the library
-  -- inherits through the package database.
+  -- binary, lib/SAT, through the rpath below, which every program that
+  -- links the library inherits through the package database.
   extra-libraries: stp, yices
   if os(osx)
     extra-libraries: c++
@@ -118,7 +118,7 @@ library
     ld-options: -Wl,-rpath,$ORIGIN/../lib/SAT
   c-sources:
     src/vendor/htcl/haskell.c,
-  -- Every module of the library, the generated three included
+  -- Every module of the library, the generated two included
   -- (autogen-modules above).
   exposed-modules:
     AAddSchedAssumps
