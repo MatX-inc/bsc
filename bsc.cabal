@@ -15,8 +15,8 @@ author: Bluespec, Inc.
 maintainer: bsc-dev@groups.io
 category: Hardware
 build-type: Hooks
--- The install stamp, HEAD: a commit alone is then a changed source
--- (doc/cabal.md section 2).
+-- The install stamp, HEAD and the version name: a commit or a tag alone is
+-- then a changed source (doc/cabal.md section 2).
 extra-source-files:
   build/cabal-head
   -- The scripts the hooks run, so that a source distribution carries them.
@@ -90,7 +90,7 @@ common common_deps
 library
   import: common_all, common_deps
   -- Written by the hooks (SetupHooks.hs) into the autogen directory.
-  autogen-modules: Warmup, BuildSystem, BuildVersion
+  autogen-modules: Warmup, BuildVersion
   hs-source-dirs:
     src/comp
     src/comp/Libs
@@ -99,11 +99,10 @@ library
     src/vendor/htcl
     src/vendor/stp/HaskellIfc
     src/vendor/yices/v2.6/HaskellIfc
-  -- The solvers, linked by name and from no directory: the make build names
-  -- the vendored copies in LIBRARY_PATH, any other build links the copies it
-  -- has (doc/cabal.md section 2). At run time they resolve beside the binary,
-  -- lib/SAT, through the make build's rpath (SAT_RPATH_FLAGS in
-  -- src/comp/Makefile), which the programs inherit.
+  -- The solvers, linked by name and from no directory: `make install-src`
+  -- names the vendored copies in LIBRARY_PATH, any other build links the
+  -- copies it has (doc/cabal.md section 2). At run time they resolve beside
+  -- the binary, lib/SAT, through the rpath below, which the programs inherit.
   extra-libraries: stp, yices
   if os(osx)
     extra-libraries: c++
@@ -113,7 +112,7 @@ library
     ld-options: -Wl,-rpath,$ORIGIN/../lib/SAT
   c-sources:
     src/vendor/htcl/haskell.c,
-  -- Every module of the library, the generated three included
+  -- Every module of the library, the generated two included
   -- (autogen-modules above).
   exposed-modules:
     AAddSchedAssumps

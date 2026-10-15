@@ -3,10 +3,9 @@ set -euo pipefail
 
 export TMOUT=1
 
-# Inputs, from the environment: src/comp/Makefile exports NOGIT, and the
-# cabal hooks pass both through (SetupHooks.hs, writeBuildVersionHs).
+# Input, from the environment: src/comp/Makefile exports NOGIT, and the
+# cabal hooks pass it through (SetupHooks.hs, writeBuildVersionHs).
 NOGIT=${NOGIT:-0}
-NOUPDATEBUILDVERSION=${NOUPDATEBUILDVERSION:-0}
 
 # -------------------------
 # GIT
@@ -19,7 +18,7 @@ repoGit () (
     git --git-dir="$root/.git" --work-tree="$root" "$@"
 )
 
-# --stamp FILE writes the install stamp, HEAD, when the
+# --stamp FILE writes the install stamp, HEAD and the version name, when the
 # content changes: src/comp/Makefile's install and the hooks' version rule
 # (SetupHooks.hs) write the same file through it. HEAD is the repository's
 # whatever NOGIT says; a tree without one gets no-repository.
@@ -29,8 +28,9 @@ writeStamp () {
     else
         head=no-repository
     fi
+    getGITVersion
     mkdir -p "$(dirname "$1")"
-    printf '%s\n' "$head" > "$1.tmp"
+    printf '%s\n%s\n' "$head" "$GITDESCR" > "$1.tmp"
     if cmp -s "$1.tmp" "$1"; then
         rm -f "$1.tmp"
     else
@@ -109,11 +109,7 @@ case "${1:-}" in
     --name) getGITVersion; echo "$GITDESCR"; exit ;;
 esac
 
-if ( test -f BuildVersion.hs ) && [ "$NOUPDATEBUILDVERSION" = 1 ] ; then
-    echo "BuildVersion.hs not modified"
-else
-    getGITVersion
-    genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
-fi
+getGITVersion
+genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
 
 # -------------------------

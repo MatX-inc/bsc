@@ -1,18 +1,12 @@
-# Ignore Haskell files that are auto-generated and not checked in
-BuildVersion.hs
-BuildSystem.hs
-Warmup.hs
-
 # Ignore bluewish.hs copy of bluetcl.hs
 bluewish.hs
 
 # Ignore C files that are auto-generated and not checked in
 rts_hooks*.o
 
-# Ignore the generated executables
+# The programs' links, which the per-program targets make
 bsc
 bluetcl
-bluewish
 dumpbo
 dumpba
 bsc2bsv

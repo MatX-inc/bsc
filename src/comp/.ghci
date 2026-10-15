@@ -4,9 +4,9 @@
 
 -- Packages: the cabal build writes a GHC environment file at the repository
 -- root naming every package it built against, which ghci loads from any
--- directory below it. The compiled library is named here for the three
--- modules the hooks generate (BuildVersion, BuildSystem, Warmup), which have
--- no source in the tree; every module that has one is interpreted from it,
+-- directory below it. The compiled library is named here for the two
+-- modules the hooks generate (BuildVersion, Warmup), which have no source in
+-- the tree; every module that has one is interpreted from it,
 -- since GHC takes a home module over a package's.
 :set -package bsc
 

@@ -363,6 +363,10 @@ make PREFIX=/opt/tools/bsc/bsc-${BSC_VERSION}
 
 However, note that the `clean` target will delete the `PREFIX` directory!
 
+The `clean` target also removes the cabal build under `dist-newstyle` and
+the GHC environment file at the root; `ghci` in `src/comp` then needs a
+build again.
+
 An unoptimized, debug, or profiling build can be done using one of:
 
 ```bash
@@ -370,6 +374,27 @@ make BSC_BUILD=NOOPT
 make BSC_BUILD=DEBUG
 make BSC_BUILD=PROF
 ```
+
+Each is a set of flags that `src/comp/Makefile` passes on the cabal
+command line (`BSC_BUILD_FLAGS`: `--disable-optimization`;
+`--ghc-options='-dcore-lint -debug'`; `--enable-profiling
+--profiling-detail=all-functions` with a larger stack cap in
+`-with-rtsopts`).  A `cabal.project.local` at the root of the repository
+sets the same in project-file form for a `cabal build` run by hand;
+`make install-src` honors it too, and git ignores it.  The profiling
+variant in that form, and a setting that is not a variant, the GHC a bare
+`cabal build` uses (`make` takes `GHC=` for that):
+
+```
+profiling: True
+profiling-detail: all-functions
+package bsc
+  ghc-options: "-with-rtsopts=-H256m -K256m -i1"
+with-compiler: ghc-9.14.1
+```
+
+A GHC newer than the bounds in `bsc.cabal` admit takes `allow-newer: bsc:*`
+there as well (see the GHC section above).
 
 You can provide the `-j` flag to `make` to specify the number of targets
 to execute in parallel, however this does not control the parallelism of
@@ -487,20 +512,14 @@ of Git, you can do so with `git archive`, but be aware of two points.
 For one, you will need to also export the files from submodules,
 because Git will not include them.
 
-For two, you may wish to adjust files in the `src/comp/` directory, to
-give a particular version name to installations built from the
-snapshot.  The build in that directory uses Git to automatically
-generate the version information for the compiler and place it in the
-file `BuildVersion.hs`.  The script that generates this,
-`update-build-version.sh`, can only query Git for version info when
-called from inside a Git repository.  The script will still work if
-`git archive` is used to export the snapshot, because we have
-specified (in `.gitattributes`) that patterns in the file should be
-substituted with their values (the commit hash and tag, if any) during
-export.  Therefore, no change in this directory is required.  However,
-if you want to hard-code a different version name, you can pre-generate
-the `BuildVersion.hs` file and adjust the `Makefile` to not rebuild
-it, by changing the assignment of `NOUPDATEBUILDVERSION` to `1`.
+For two, the version information the compiler and the Bluesim kernel
+carry is generated from Git by `src/comp/update-build-version.sh`, which
+the build runs, and the script can only query Git when called from
+inside a Git repository.  It will still work if `git archive` is used
+to export the snapshot, because we have specified (in `.gitattributes`)
+that patterns in the script should be substituted with their values
+(the commit hash and tag, if any) during export.  Therefore, no change
+is required.
 
 ---
 
