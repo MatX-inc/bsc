@@ -162,7 +162,10 @@ jobs:
       # The installed tree, then the bluehs runtime over it: the tree's own
       # cabal build is the one already made, and mk-dist.sh builds the
       # libraries a second time under build/bluehs with the leg's settings
-      # (cabal.project.local), in this leg's directory.
+      # (cabal.project.local), in this leg's directory. The whole tree is
+      # hashed: the programs, the solvers, the Bluespec libraries, the
+      # Bluesim and VPI libraries, the Verilog and Tcl libraries and the
+      # runtime.
       - name: Install (make install-src, install-extra)
         env:
           JOBS: ${{ matrix.leg.jobs }}
@@ -173,10 +176,10 @@ jobs:
       # the runner image, the system, cc, ld, ar, ghc, cabal, patchelf where
       # present and the versions in cabal_macros.h), which the verdict reads a
       # difference against.
-      - name: Hash the build and the distribution
+      - name: Hash the build and the installed tree
         env:
           LEG: ${{ matrix.leg.name }}
-        run: util/cabal-ladder.sh hash "$LEG.sha256" inst/bluehs
+        run: util/cabal-ladder.sh hash "$LEG.sha256" inst
       # The serial legs rebuild in place: with nothing changed and, from GHC
       # 9.12, after a marker edit to one module and after its revert (below
       # 9.12 a module recompiled alone carries the session's uniques in its
@@ -190,7 +193,7 @@ jobs:
           JOBS: ${{ matrix.leg.jobs }}
           BUILD_CMD: 'make -j"$(getconf _NPROCESSORS_ONLN)" GHCJOBS="$JOBS" install-src && make -C src/comp GHCJOBS="$JOBS" install-extra && make install-bluehs'
           REBUILD_STEPS: ${{ contains(fromJSON(needs.plan.outputs.rebuilds), 'revert') && 'rebuild edit revert' || 'rebuild' }}
-        run: util/cabal-ladder.sh rebuild "$LEG" inst/bluehs
+        run: util/cabal-ladder.sh rebuild "$LEG" inst
       # After a failed rebuild too, so the leg's own list reaches the verdict
       # and the rebuild alone is MISSING.
       - uses: actions/upload-artifact@v6
