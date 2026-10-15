@@ -484,7 +484,8 @@ fi
 # ----------------------------------------------------------------------
 # 8. Install, then smoke test a copy in another directory with the build
 #    tree out of reach, under an empty environment and, for the scripts
-#    that do not use CPP, with no C compiler on PATH
+#    that do not use CPP, with no C compiler on PATH; and with nothing but
+#    the probe interpreted, so the compiler's modules come from the library
 
 msg "installing into $DEST"
 rm -rf "$DEST"
@@ -519,4 +520,11 @@ LIBRARY=$(run "$SMOKE/bin" "$SMOKE/probe.hs")
 COMPILER=$("$PREFIX/bin/bsc" -v | head -1)
 [ "$LIBRARY" = "$COMPILER" ] \
     || die "the library and $PREFIX/bin/bsc differ: '$LIBRARY' vs '$COMPILER'"
+# At -v1 GHC counts the modules it interprets, so a compiler module reached
+# as a source through the launcher's search path or the environment would be
+# a second one; run from the smoke directory, so the working directory holds
+# nothing but the probe
+( cd "$SMOKE" && run "$SMOKE/bin" -v1 probe.hs > "$SMOKE/probe-v1.out" 2>&1 ) || true
+grep -q '^Ok, one module loaded\.$' "$SMOKE/probe-v1.out" \
+    || { cat "$SMOKE/probe-v1.out" >&2; die "smoke test: more than the probe was interpreted"; }
 msg "done: $DEST ($(du -sh "$DEST" | cut -f1)), $LIBRARY"
