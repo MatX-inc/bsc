@@ -3,7 +3,7 @@ name: Cabal build
 # The cabal build of the compiler (bsc.cabal, cabal.project, SetupHooks.hs)
 # and its determinism ladder: the same commit built serially, oversubscribed
 # and in other checkout directories must give bit-identical objects,
-# interfaces, archives and programs, and the same bytes in the
+# interfaces, archives, shared objects and programs, and the same bytes in the
 # bluehs script runtime (util/bluehs) installed from it.
 # The ladder is six legs: the serial build against a second serial build,
 # -j16, and three -j64 builds, each in a fresh checkout directory of its own;
