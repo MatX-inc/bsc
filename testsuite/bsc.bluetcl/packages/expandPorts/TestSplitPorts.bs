@@ -1,0 +1,30 @@
+package TestSplitPorts where
+
+struct Payload =
+  narrow :: Bit 4
+  wide :: Bit 8
+ deriving (Bits)
+
+-- The physical order, names, and types deliberately differ from the source.
+instance SplitPorts Payload (Port (Bit 8), Port (Bit 4)) where
+  splitPorts x = (Port x.wide, Port x.narrow)
+  unsplitPorts (Port wide, Port narrow) = Payload { narrow = narrow; wide = wide }
+  portNames _ base = Cons (base +++ "_byte") $ Cons (base +++ "_nibble") Nil
+
+interface TestSplitPorts =
+  read :: Payload
+  -- A dropped zero-width argument must not shift the other argument types.
+  exchange :: Bit 0 -> Payload -> Bit 3 -> ActionValue Payload
+  zero :: Bit 0
+
+{-# synthesize mkTestSplitPorts #-}
+mkTestSplitPorts :: Module TestSplitPorts
+mkTestSplitPorts =
+  module
+    state <- mkReg $ Payload { narrow = 5; wide = 42 }
+    interface
+      read = state
+      exchange _ x _ = do
+        state := x
+        return state
+      zero = 0

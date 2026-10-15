@@ -1,7 +1,9 @@
 
 if { [bluetcl_package_available InstSynth] == 1 } {
 
-bluetcl_run_compare_pass instsynth.tcl 
+# InstSynth consumes BSV type descriptions and generates BSV include files.
+# A second run in BH mode would overwrite those files with incomplete output.
+bluetcl_run_bsv_compare_pass instsynth.tcl
 compare_file  FIFO.include.bsv
 compare_file  FIFOLevel.include.bsv
 
