@@ -8,7 +8,8 @@
 -- | The package's setup hooks (build-type: Hooks), run with the repository
 -- root as the working directory; doc/cabal.md section 3 says what they do.
 -- No hook writes into src/comp, or anywhere outside dist-newstyle and the
--- autogen directories; the make build generates its own Warmup.hs and
+-- autogen directories but the install stamp build/cabal-head
+-- (writeBuildVersionHs); the make build generates its own Warmup.hs and
 -- BuildVersion.hs as before.
 module SetupHooks (setupHooks) where
 
@@ -319,7 +320,8 @@ writeBuildVersionHs (autogenDir, _) = do
   noGit <- fromMaybe "0" <$> lookupEnv "NOGIT"
   noUpdateBuildVersion <- fromMaybe "0" <$> lookupEnv "NOUPDATEBUILDVERSION"
   root <- findRepoRoot
-  repoHead <- if noGit == "1" then pure Nothing else gitHead
+  commit <- gitHead
+  let repoHead = if noGit == "1" then Nothing else commit
   let gitVars = case repoHead of
         Just (gitDir, _) -> [("GIT_DIR", gitDir), ("GIT_WORK_TREE", root)]
         Nothing -> []
@@ -335,6 +337,17 @@ writeBuildVersionHs (autogenDir, _) = do
   -- resolved against the process's working directory, the autogen dir.
   let script = root </> "src" </> "comp" </> "update-build-version.sh"
   callCreateProcess (proc script []) {cwd = Just dir, env = Just env}
+  -- The install stamp (src/comp/Makefile, CABAL_HEAD): `make install`
+  -- writes HEAD into it, a declared source, so that a later commit is a
+  -- changed source and this rule runs again. It has to exist from the
+  -- first build, since cabal-install watches only the declared sources it
+  -- finds when it records a build. It names the commit whatever NOGIT
+  -- says, as `make install` does, so the two write the same stamp.
+  let stamp = root </> "build" </> "cabal-head"
+      content = maybe "no-repository" snd commit <> "\n"
+  createDirectoryIfMissing True (root </> "build")
+  current <- (Just <$> readFile' stamp) `catchIOError` \_ -> pure Nothing
+  when (current /= Just content) $ writeFile stamp content
 
 -- | The repository's git directory (worktree-safe) and its HEAD commit, or
 -- Nothing where there is no git or no checkout (an exported archive).

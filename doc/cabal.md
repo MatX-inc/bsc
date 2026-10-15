@@ -59,7 +59,9 @@ load) resolve the solvers beside themselves, `lib/SAT`, by the rpath
 src/comp install-extra` copies the other programs over the same build.
 `BuildVersion` names the commit, but its rule runs only when cabal-install
 builds the package (a changed declared source or a reconfigure), so `install`
-first writes HEAD into `build/cabal-head`, a declared source.
+first writes HEAD into `build/cabal-head`, a declared source. The hooks write
+the same stamp from the first build, since cabal-install watches only the
+sources it finds when it records a build.
 
 `Setup.hs` is for a tool that runs a Setup script rather than cabal-install
 (the hooks' external program): cabal-install generates the same two lines for
@@ -90,6 +92,11 @@ index, and compiles serially, which the bytes do not depend on.
 - Solvers: after each build, `lib/SAT` beside the artifact is linked to the
   `LIBRARY_PATH` directory holding them, so the build tree runs in place
   (copies in a system directory need no link).
+
+cabal-install builds without configuring when only sources changed, and a
+changed `SetupHooks.hs` rebuilds the Setup without reconfiguring, so a change
+to what a configure hook produces takes effect at the next configure: edit
+`bsc.cabal`, or build clean.
 
 ## 4. Adding a module, adding a program
 
