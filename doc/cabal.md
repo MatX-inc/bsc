@@ -60,7 +60,7 @@ warns and falls back to `-j` per package (correct, but oversubscribed). The
 pin moves when the GHC in use moves.
 
 GHC 9.14 or later gives `-fobject-determinism`; an older compiler builds
-without it, and the ladder of section 5 means nothing then. The native
+without it, and the claim of section 5 does not hold then. The native
 dependencies are the make build's: Tcl headers and library (`platform.sh`
 finds them), a C and C++ compiler, and the tools the vendored solvers'
 Makefiles run (autoconf, bison, flex, gperf), as installed by
@@ -78,9 +78,10 @@ file gives the library's shared object its rpath, `$ORIGIN/../lib/SAT`
 invocation: Cabal 3.16 passes a library's `ld-options` to the programs'
 links but not to the library's own (section 3). Machine
 settings go in `cabal.project.local`, which git ignores. The build writes
-nothing outside `dist-newstyle`, the autogen directories and the
+nothing outside `dist-newstyle`, the autogen directories, the
 `.ghc.environment.*` file at the root that `write-ghc-environment-files` asks
-for; nothing under `src/comp` or `src/vendor` is written.
+for, and the install stamp `build/cabal-head` (section 3); nothing under
+`src/comp` or `src/vendor` is written.
 
 ### Installing
 
@@ -101,8 +102,12 @@ touches no source of the package, such as a testsuite or workflow change,
 would leave the previous commit's version in the programs, so `install`
 writes HEAD into `build/cabal-head`, which `bsc.cabal` declares in
 `extra-source-files`: a new commit is a changed source, and the version
-follows. A plain `cabal build` after such a commit keeps the previous version
-until a source changes, as section 3 describes; `make install-src` does not.
+follows. The hooks' version rule writes the same stamp, so it exists from
+the first build: cabal-install watches the declared sources it finds when it
+records a build, and a stamp first written by an install after a build
+would go unwatched. A plain `cabal build` after such a commit keeps the
+previous version until a source changes, as section 3 describes;
+`make install-src` does not.
 
 With `BSC_BUILD_PKGINFO` set, as the release workflows set it, the install
 also writes `LICENSES/LICENSE.ghc_pkgs` from the packages the programs were
@@ -168,6 +173,11 @@ walked from the library by `src/comp/make-ghc-pkg-info.sh`.
   artifact in the build tree to the `LIBRARY_PATH` directory holding them,
   so the programs run where they are built.
 
+A change to what the configure hooks produce (the Tcl and solver settings
+above) needs a reconfigure: cabal-install rebuilds the Setup when
+`SetupHooks.hs` changes, but configures the package again only when the
+package's own inputs change, so touch `bsc.cabal` or build clean.
+
 ## 4. Adding a module, adding a program
 
 A module is its file under `src/comp`, `src/comp/Libs` or
@@ -182,45 +192,18 @@ src/comp/app`, `main-is: <name>.hs`, `ghc-options: -main-is Main_<name>`,
 The `Main_<name>` header keeps the file out of the library under the rule of
 section 1, and the entry module carries `import Warmup ()`.
 
-## 5. The determinism ladder
+## 5. The determinism claim
 
-The claim: one commit, built from a clean `dist-newstyle` at the project's
-settings, serially, oversubscribed and in other checkout directories, gives
-bit-identical objects, interfaces, archives and programs, and a rebuild after
-an edit and its revert lands on the same bytes. `util/cabal-ladder.sh`:
-
-- `hash OUT` hashes one build: every object, archive and program (from
-  `cabal list-bin bsc:exe:<name>` for each `executable` stanza) as bytes,
-  with paths relative to the repository so directories compare. An interface
-  file is hashed as the text of `ghc --show-iface` minus its interface hash
-  and flags fingerprint, with the package environment off: GHC fingerprints
-  the flags it was given, and cabal passes the autogen include directory by
-  absolute path, so the bytes of a `.hi` depend on the checkout directory
-  while its content does not. A list with no `.hi` lines or holding the
-  digest of empty text is refused, a failing or silent `--show-iface` fails
-  the run, and a partial list is removed, so nothing compares IDENTICAL by
-  producing nothing.
-- `verdict REF OTHER...` compares each list against the first, reporting
-  differences by category (program, object, interface, archive); a missing
-  list is MISSING, and the verdict fails rather than passing on nothing.
-- `run` is the ladder on one machine: legs A and B at the project's settings
-  from clean (repeatability), C at `-j1` (serial against parallel), D at
-  `-j64` (oversubscription), each compared with A; then a marker edit to one
-  module with a few dozen importers (`src/comp/Libs/IOUtil.hs`), a rebuild,
-  the revert and a rebuild that must match A. It needs GHC 9.14 or later, a
-  clean working tree and no `cabal.project.local`; results go to
-  `determinism-results/<timestamp>`.
-
-`.github/workflows/cabal.yml` runs the same two halves across machines and
-directories, with cabal-install pinned to 3.16.1.0 (section 2): a pull
-request builds `-j1` against `-j64` in one directory on ubuntu-22.04 and
-macos-15; a dispatch of the full ladder adds `-j16` there and `-j64` in two
-more directories, which checks that the build does not depend on its path.
-Every planned leg is named to the verdict, so a failed leg is MISSING, not
-skipped. `BuildVersion` embeds the commit, so a ladder compares one commit. A
-failure is a design stop, not a mechanical fix: the first suspects are a root
-without the Warmup import, interface content the direct-dependency rule does
-not cover, and the programs' entry modules.
+One commit, built from a clean `dist-newstyle` at the project's settings,
+serially, oversubscribed or in another checkout directory, gives the same
+objects, interfaces, archives, programs and shared object, and a rebuild
+after an edit and its revert lands on the same bytes. The programs link
+against the library archive in one order, the Warmup imports give every
+module the external interface set in one order (section 3),
+`-fobject-determinism` holds the object code, and no directory of the
+checkout is written into any of them, since the solvers are linked by name
+(section 3). The check of the claim, a ladder of builds hashed and compared
+on one machine and in CI, is a separate series.
 
 ## 6. Decomposing into packages later
 
