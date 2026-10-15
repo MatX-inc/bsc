@@ -1,14 +1,15 @@
 module VStableRenumber(stableRenumberVProgram) where
 
+import Data.Bits(shiftR)
 import Data.Char(isDigit, ord)
-import Data.List(foldl', dropWhileEnd)
+import Data.List(dropWhileEnd, sort, sortBy)
 import Data.Maybe(listToMaybe, mapMaybe)
 import Data.Word(Word64)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
 import Id(setIdBaseString)
-import Util(hashInit, nextHashByte, hashValue)
+import Util(Hash, hashInit, nextHashByte, hashValue)
 import Verilog
 
 -- Under -stable-verilog, renumber the compiler-generated name families
@@ -19,20 +20,54 @@ import Verilog
 --     <stem>__fN    (ANoInline instance-connection wires)
 --     _dmN          (AOpt-minted, whole name, no stem)
 --     _dsN          (Synthesize-minted, whole name, no stem)
+--     _dfooN        (ACleanup-minted, whole name, no stem)
 --
--- per module, by order of first occurrence in the emitted structure,
--- so the numbers are a pure function of the module's contents rather
--- than of mint order.  Mint order varies with compile history (the
--- heap ids arrive in the .ba with their elaboration-time numbers, and
--- the backend counters run in traversal order), so without this pass
--- two compiles that agree on structure can still disagree on N.
+-- per module, by the CONTENT of what each name is driven by, so that N
+-- is a pure function of the member's own logic rather than of mint
+-- order or of its position among the module's other members.
+--
+-- The content hash of a member covers its declared width and every
+-- piece of the module that assigns it, in body order: continuous
+-- assignments (whole, as an element of a concatenation, or to a part
+-- select), each procedural assignment to it together with the control
+-- path that leads there (the block kind and event, the enclosing if
+-- branches and case arms), a foreign task that writes it through its
+-- first argument, or the instance output port that drives it.  A reg
+-- assigned in a block therefore depends on its own assignments and
+-- their conditions, not on the rest of the block.  Inside
+-- those, a reference to another family member contributes that
+-- member's content hash, never its name; every other identifier (a
+-- port, a state element, a submodule port, a rule or method signal,
+-- a foreign function) contributes its name, which is where the hash
+-- stops.  So N depends, ultimately, on the ports, the state elements
+-- and the operations between them, and an unchanged definition keeps
+-- its name whatever is added, removed or reordered around it.
+--
+-- N is the hash reduced to twelve decimal digits, so the family shape
+-- <stem><marker><digits> is unchanged for everything that matches it.
+-- Two members with the same stem and the same content (possible when
+-- join-defs is off) or a twelve-digit collision are told apart by
+-- rehashing in first-occurrence order; a target that would collide
+-- with a non-renameable name is rehashed the same way.  Definitions
+-- with no driver in the module hash to their stem alone, and a
+-- reference that closes a cycle (none are expected: the backend's
+-- definitions are acyclic) contributes the referenced stem, so the
+-- pass always terminates and stays deterministic.
+--
+-- After the rename, the groups that AVerilog had sorted by name (the
+-- merged declarations and the "remaining internal signals") are sorted
+-- again, by the new names: a list sorted under the old names is
+-- otherwise in old-name order, which is mint order.  The VMItem
+-- ordering treats procedural items, instances and groups as equal, and
+-- the sort is stable, so only declarations and continuous assignments
+-- (order-independent in Verilog) ever move.
 --
 -- Soundness:
 --  * Renaming is a per-module simultaneous substitution.  A target
 --    name <stem><marker><k> can only collide with another family
 --    member -- any name matching the pattern is itself in the map --
---    and family members all move at once.  Targets that would collide
---    with a non-renameable name (below) are skipped over.
+--    and family members all move at once.  Targets are made distinct
+--    from one another and from non-renameable names before use.
 --  * Names in non-renameable positions are never collected and never
 --    produced as targets: the module's own name, everything in the
 --    port list, instantiated module names, instance names, and the
@@ -44,22 +79,20 @@ import Verilog
 --    names never contain '$', so the passes are disjoint.
 --
 -- The traversals below are written out per constructor rather than
--- derived generically.  Field order must match the declaration order
--- in Verilog.hs: the numbering is the order identifiers are reached,
--- so a field visited out of order silently renumbers.  Constructors
--- are matched without a wildcard so that adding one to Verilog.hs is
--- a compile error here rather than a name that escapes the walk.
+-- derived generically.  Constructors are matched without a wildcard so
+-- that adding one to Verilog.hs is a compile error here rather than a
+-- name that escapes the walk.
 
 stableRenumberVProgram :: VProgram -> VProgram
 stableRenumberVProgram (VProgram ms dpis cs) =
     VProgram (map renumberModule ms) dpis cs
 
-data Family = FamD | FamH | FamQ | FamF | FamDM | FamDS
+data Family = FamD | FamH | FamQ | FamF | FamDM | FamDS | FamDFoo
     deriving (Eq, Ord)
 
 -- in the order matchFamily tries them; the first match wins
 families :: [Family]
-families = [FamD, FamH, FamQ, FamF, FamDM, FamDS]
+families = [FamD, FamH, FamQ, FamF, FamDM, FamDS, FamDFoo]
 
 markerText :: Family -> String
 markerText FamD  = "___d"
@@ -68,18 +101,36 @@ markerText FamQ  = "__q"
 markerText FamF  = "__f"   -- ANoInline instance-connection wires
 markerText FamDM = "_dm"   -- AOpt-minted names (whole name, no stem)
 markerText FamDS = "_ds"   -- Synthesize-minted names (whole name, no stem)
+markerText FamDFoo = "_dfoo" -- ACleanup-minted names (whole name, no stem)
 
 -- whether the family's names are the bare marker plus number
 -- (no stem before the marker)
 stemlessOK :: Family -> Bool
 stemlessOK FamDM = True
 stemlessOK FamDS = True
+stemlessOK FamDFoo = True
 stemlessOK _     = False
 
--- split a name into (stem, family) at the rightmost marker-followed-by-digits
--- suffix. The stem is built only for the family that matches.
-matchFamily :: String -> Maybe (String, Family)
-matchFamily s
+-- split a name into (stem, family, part) at the rightmost
+-- marker-followed-by-digits suffix.  The stem is built only for the
+-- family that matches.  A tuple-typed def is printed as one wire per
+-- element, <name>_k (AVerilogUtil.tupleElemVId): the part suffix _k is
+-- kept and the number before it is the one that is renumbered.
+matchFamily :: String -> Maybe (String, Family, String)
+matchFamily s =
+    case matchBare s of
+      Just (stem, fam) -> Just (stem, fam, "")
+      Nothing ->
+          let digits = reverse (takeWhile isDigit (reverse s))
+              rest   = dropWhileEnd isDigit s
+          in  if null digits || null rest || last rest /= '_'
+              then Nothing
+              else case matchBare (init rest) of
+                     Just (stem, fam) -> Just (stem, fam, '_' : digits)
+                     Nothing          -> Nothing
+
+matchBare :: String -> Maybe (String, Family)
+matchBare s
     | null s || not (isDigit (last s)) = Nothing
     | otherwise = listToMaybe (mapMaybe try families)
   where
@@ -87,7 +138,8 @@ matchFamily s
     try fam =
         let m = markerText fam
             n = length rest - length m
-        in  if n >= 0 && (stemlessOK fam || n > 0) && drop n rest == m
+        in  if n >= 0 && (if stemlessOK fam then n == 0 else n > 0)
+               && drop n rest == m
             then Just (take n rest, fam)
             else Nothing
 
@@ -103,8 +155,20 @@ nameKey :: String -> NameKey
 nameKey s = NameKey (hashName s) s
 
 hashName :: String -> Word64
-hashName = hashValue . foldl' (\h c -> nextHashByte h (fromIntegral (ord c)))
-                              hashInit
+hashName = hashValue . feedString hashInit
+
+-- ------------------------------------------------------------ hash feeding
+
+-- A string's bytes followed by a terminator, so that consecutive fields
+-- cannot run together.
+feedString :: Hash -> String -> Hash
+feedString h s = nextHashByte (foldl' (\a c -> nextHashByte a (fromIntegral (ord c))) h s) 0
+
+feedWord :: Hash -> Word64 -> Hash
+feedWord h w = foldl' (\a i -> nextHashByte a (fromIntegral (w `shiftR` (8 * i)))) h [0 .. 7]
+
+feedShow :: Show a => Hash -> a -> Hash
+feedShow h x = feedString h (show x)
 
 -- One walk covers all three of the following using the Hit data type:
 -- 1. Collect every identifier occurrence.
@@ -340,13 +404,378 @@ mapExpr f (VEIf e1 e2 e3)      = VEIf (mapExpr f e1) (mapExpr f e2)
 mapExpr f (VEFctCall fn es)    = VEFctCall (mapId f fn) (map (mapExpr f) es)
 mapExpr _ e@(VEMacro _)        = e
 
+-- ---------------------------------------------------------------- drivers
+
+-- What drives a family member: every piece of the module that assigns it,
+-- in body order.
+data Frag
+    = FAssign VExpr                      -- assign v = e;  wire v = e;
+    | FConcat Int Int VLValue VExpr      -- assign {.. v ..} = e; the k-th of n elements
+    | FSub VLValue VExpr                 -- assign v[i] = e;
+    | FProc [Guard] Proc                 -- a procedural assignment under its control path
+    | FInst String String String         -- driven by an instance port: module, instance, port
+
+-- the control path to a procedural assignment, outermost first
+data Guard
+    = GEvent Int VEventExpr              -- always @(...), numbered per item: hashed once, not once per assignment
+    | GBlock String                      -- always / initial
+    | GIf VExpr Bool                     -- the then (True) or else branch
+    | GCase String VExpr [VExpr]         -- a case/casex arm with these labels
+    | GDefault String VExpr              -- the default arm
+
+data Proc
+    = PAssign Bool VLValue VExpr         -- non-blocking (True) or blocking assignment
+    | PTask String [VExpr]               -- a foreign task writing the target through its first argument
+
+data Drivers = Drivers {
+    drFrags :: M.Map NameKey [Frag],              -- reversed; FInst never here
+    drInsts :: M.Map NameKey Frag,                -- first instance port driving the name
+    drDecls :: M.Map NameKey (Maybe VRange, Maybe VRange),  -- declared range, array range
+    drNext  :: Int                                -- the next procedural item number
+  }
+
+noDrivers :: Drivers
+noDrivers = Drivers M.empty M.empty M.empty 0
+
+addFrag :: NameKey -> Frag -> Drivers -> Drivers
+addFrag k f d = d { drFrags = M.insertWith (++) k [f] (drFrags d) }
+
+addInst :: NameKey -> Frag -> Drivers -> Drivers
+addInst k f d = d { drInsts = M.insertWith (\_ old -> old) k f (drInsts d) }
+
+addDecl :: NameKey -> (Maybe VRange, Maybe VRange) -> Drivers -> Drivers
+addDecl k r d = d { drDecls = M.insertWith (\_ old -> old) k r (drDecls d) }
+
+-- the base identifier of an lvalue, if it has a single one
+lvBase :: VLValue -> Maybe VId
+lvBase (VLId v)      = Just v
+lvBase (VLSub l _)   = lvBase l
+lvBase (VLConcat _)  = Nothing
+
+collectItems :: (String -> Bool) -> [VMItem] -> Drivers -> Drivers
+collectItems isM its d = foldl' (flip (collectItem isM)) d its
+
+collectItem :: (String -> Bool) -> VMItem -> Drivers -> Drivers
+collectItem isM (VMDecl dcl) d            = collectDecl isM dcl d
+collectItem isM (VMInst m i _ pos) d      = foldl' port d pos
+  where
+    port acc (p, Just (VEVar v))
+        | isM (getVIdString v) =
+            addInst (nameKey (getVIdString v))
+                    (FInst (getVIdString m) (getVIdString i) (getVIdString p)) acc
+    port acc _ = acc
+collectItem isM (VMAssign l e) d          = collectAssign isM l e d
+collectItem isM (VMStmt _ s) d            = collectStmt isM s d
+collectItem isM (VMComment _ it) d        = collectItem isM it d
+collectItem isM (VMRegGroup _ _ _ it) d   = collectItem isM it d
+collectItem isM (VMGroup _ itss) d        = foldl' (\acc its -> collectItems isM its acc) d itss
+collectItem _   (VMFunction _) d          = d
+collectItem _   (VMDPI _) d               = d
+
+collectDecl :: (String -> Bool) -> VVDecl -> Drivers -> Drivers
+collectDecl isM (VVDecl _ mr vs) d = foldl' (declVar isM mr) d vs
+collectDecl isM (VVDWire mr v e) d =
+    let d' = declVar isM mr d v
+        i  = case v of
+               VVar x     -> x
+               VArray _ x -> x
+    in  if isM (getVIdString i)
+        then addFrag (nameKey (getVIdString i)) (FAssign e) d'
+        else d'
+
+declVar :: (String -> Bool) -> Maybe VRange -> Drivers -> VVar -> Drivers
+declVar isM mr d (VVar i)
+    | isM (getVIdString i) = addDecl (nameKey (getVIdString i)) (mr, Nothing) d
+declVar isM mr d (VArray r i)
+    | isM (getVIdString i) = addDecl (nameKey (getVIdString i)) (mr, Just r) d
+declVar _ _ d _ = d
+
+collectAssign :: (String -> Bool) -> VLValue -> VExpr -> Drivers -> Drivers
+collectAssign isM l e d =
+    case l of
+      VLId v | isM (getVIdString v) ->
+          addFrag (nameKey (getVIdString v)) (FAssign e) d
+      VLConcat ls ->
+          let n = length ls
+              elt acc (k, lv) =
+                  case lvBase lv of
+                    Just v | isM (getVIdString v) ->
+                        addFrag (nameKey (getVIdString v)) (FConcat k n lv e) acc
+                    _ -> acc
+          in  foldl' elt d (zip [1 ..] ls)
+      VLSub _ _ ->
+          case lvBase l of
+            Just v | isM (getVIdString v) ->
+                addFrag (nameKey (getVIdString v)) (FSub l e) d
+            _ -> d
+      _ -> d
+
+collectStmt :: (String -> Bool) -> VStmt -> Drivers -> Drivers
+collectStmt isM s d =
+    let n = drNext d
+    in  foldl' (\acc (v, f) -> if isM (getVIdString v)
+                               then addFrag (nameKey (getVIdString v)) f acc
+                               else acc)
+               d { drNext = n + 1 } (procs n [] s [])
+
+-- the procedural assignments of a statement with their control paths
+-- (innermost guard first while walking; stored outermost first)
+procs :: Int -> [Guard] -> VStmt -> [(VId, Frag)] -> [(VId, Frag)]
+procs n gs (VAt ee s) acc         = procs n (GEvent n ee : gs) s acc
+procs n gs (Valways s) acc        = procs n (GBlock "always" : gs) s acc
+procs n gs (Vinitial s) acc       = procs n (GBlock "initial" : gs) s acc
+procs n gs (VSeq ss) acc          = foldr (procs n gs) acc ss
+procs n gs (Vcasex e as _ _) acc  = foldr (procArm n gs "casex" e) acc as
+procs n gs (Vcase e as _ _) acc   = foldr (procArm n gs "case" e) acc as
+procs _ gs (VAssign l e) acc      = procLV gs False l e acc
+procs _ gs (VAssignA l e) acc     = procLV gs True l e acc
+procs n gs (Vif e s) acc          = procs n (GIf e True : gs) s acc
+procs n gs (Vifelse e s1 s2) acc  = procs n (GIf e True : gs) s1 (procs n (GIf e False : gs) s2 acc)
+procs _ _  (Vdumpvars _ _) acc    = acc
+procs _ gs (VTask t (VEVar v : es)) acc
+    | isForeignTask (getVIdString t) =
+        (v, FProc (reverse gs) (PTask (getVIdString t) es)) : acc
+procs _ _  (VTask _ _) acc        = acc
+procs _ _  (VAssert _ _) acc      = acc
+procs _ _  VZeroDelay acc         = acc
+
+procArm :: Int -> [Guard] -> String -> VExpr -> VCaseArm -> [(VId, Frag)] -> [(VId, Frag)]
+procArm n gs kind e (VCaseArm ls s) acc = procs n (GCase kind e ls : gs) s acc
+procArm n gs kind e (VDefault s) acc    = procs n (GDefault kind e : gs) s acc
+
+-- the one reg a procedural item assigns, if it assigns exactly one
+singleTarget :: VMItem -> Maybe String
+singleTarget (VMComment _ it)      = singleTarget it
+singleTarget (VMRegGroup _ _ _ it) = singleTarget it
+singleTarget (VMStmt _ s) =
+    case S.toList (S.fromList [ getVIdString v | (v, FProc _ (PAssign _ _ _)) <- procs 0 [] s [] ]) of
+      [t] -> Just t
+      _   -> Nothing
+singleTarget _ = Nothing
+
+procLV :: [Guard] -> Bool -> VLValue -> VExpr -> [(VId, Frag)] -> [(VId, Frag)]
+procLV gs nb l e acc =
+    let frag = FProc (reverse gs) (PAssign nb l e)
+        elems = case l of
+                  VLConcat ls -> ls
+                  _           -> [l]
+    in  foldr (\lv a -> case lvBase lv of
+                          Just v  -> (v, frag) : a
+                          Nothing -> a) acc elems
+
+-- A system task ($display and the like) assigns nothing.  A foreign
+-- function called as a task (AVerilogUtil: $imported_<f>, or the DPI
+-- name, which has no '$') writes its result through its first argument.
+-- A void foreign task takes an input there instead; such a name has a
+-- driver of its own, which fragsOf prefers.
+isForeignTask :: String -> Bool
+isForeignTask n = take 10 n == "$imported_" || take 1 n /= "$"
+
+-- the identifiers a driver mentions (for the dependency order)
+fragHits :: Frag -> [Hit]
+fragHits (FAssign e)         = hitsExpr e []
+fragHits (FConcat _ _ l e)   = hitsLV l (hitsExpr e [])
+fragHits (FSub l e)          = hitsLV l (hitsExpr e [])
+fragHits (FProc gs p)        = foldr guardHits (procHits p []) gs
+fragHits (FInst _ _ _)       = []
+
+guardHits :: Guard -> [Hit] -> [Hit]
+guardHits (GEvent _ ee) acc   = hitsEvent ee acc
+guardHits (GBlock _) acc      = acc
+guardHits (GIf e _) acc       = hitsExpr e acc
+guardHits (GCase _ e ls) acc  = hitsExpr e (foldr hitsExpr acc ls)
+guardHits (GDefault _ e) acc  = hitsExpr e acc
+
+procHits :: Proc -> [Hit] -> [Hit]
+procHits (PAssign _ l e) acc  = hitsLV l (hitsExpr e acc)
+procHits (PTask _ es) acc     = foldr hitsExpr acc es
+
+-- ---------------------------------------------------------------- hashing
+
+data Ctx = Ctx {
+    cxEnv  :: M.Map NameKey Word64,  -- content hashes computed so far
+    cxEv   :: M.Map Int Word64,      -- event-list hashes, by procedural item number
+    cxIsM  :: String -> Bool,        -- a renameable family member?
+    cxLhs  :: M.Map NameKey Int      -- the current driver's own targets, by position
+  }
+
+positions :: [NameKey] -> M.Map NameKey Int
+positions ks = M.fromList (zip ks [1 ..])
+
+-- a reference: the member's content, a target's position, or the name
+hRef :: Ctx -> VId -> Hash -> Hash
+hRef cx v h =
+    let s = getVIdString v
+        k = nameKey s
+    in  case M.lookup k (cxLhs cx) of
+          Just i -> feedShow (feedString h "L") i
+          Nothing
+            | cxIsM cx s ->
+                case M.lookup k (cxEnv cx) of
+                  Just w  -> feedWord (feedString h "R") w
+                  Nothing -> -- closes a cycle: the stem stands in
+                      feedString (feedString h "Y")
+                                 (maybe s (\(stem, _, _) -> stem) (matchFamily s))
+            | otherwise -> feedString (feedString h "N") s
+
+hExpr :: Ctx -> VExpr -> Hash -> Hash
+hExpr _  (VEConst i) h           = feedShow (feedString h "c") i
+hExpr _  (VEReal r) h            = feedShow (feedString h "r") r
+hExpr _  (VEWConst _ w b v) h    = feedShow (feedString h "C") (w, b, v)
+hExpr _  (VEUnknown w s) h       = feedString (feedShow (feedString h "u") w) s
+hExpr _  (VEString s) h          = feedString (feedString h "s") s
+hExpr _  (VETriConst ts) h       = feedShow (feedString h "t") ts
+hExpr cx (VEUnOp _ o e) h        = hExpr cx e (feedShow (feedString h "U") o)
+hExpr cx (VEOp _ e1 o e2) h      = hExpr cx e2 (hExpr cx e1 (feedShow (feedString h "O") o))
+hExpr cx (VEVar v) h             = hRef cx v (feedString h "V")
+hExpr cx (VEConcat es) h         = feedString (foldl' (flip (hExpr cx)) (feedString h "{") es) "}"
+hExpr cx (VEIndex v e) h         = hExpr cx e (hRef cx v (feedString h "X"))
+hExpr cx (VESelect e1 e2 e3) h   = hExpr cx e3 (hExpr cx e2 (hExpr cx e1 (feedString h "P")))
+hExpr cx (VESelect1 e1 e2) h     = hExpr cx e2 (hExpr cx e1 (feedString h "Q"))
+hExpr cx (VERepeat e1 e2) h      = hExpr cx e2 (hExpr cx e1 (feedString h "*"))
+hExpr cx (VEIf e1 e2 e3) h       = hExpr cx e3 (hExpr cx e2 (hExpr cx e1 (feedString h "?")))
+hExpr cx (VEFctCall f es) h      =
+    feedString (foldl' (flip (hExpr cx)) (feedString (feedString h "F") (getVIdString f)) es) ")"
+hExpr _  (VEMacro s) h           = feedString (feedString h "M") s
+
+hRange :: Ctx -> VRange -> Hash -> Hash
+hRange cx (e1, e2) h = hExpr cx e2 (hExpr cx e1 (feedString h ":"))
+
+hMRange :: Ctx -> Maybe VRange -> Hash -> Hash
+hMRange _  Nothing h  = feedString h "-"
+hMRange cx (Just r) h = hRange cx r h
+
+hLV :: Ctx -> VLValue -> Hash -> Hash
+hLV cx (VLId v) h      = hRef cx v (feedString h "l")
+hLV cx (VLConcat ls) h = feedString (foldl' (flip (hLV cx)) (feedString h "{") ls) "}"
+hLV cx (VLSub l e) h   = hExpr cx e (hLV cx l (feedString h "["))
+
+hEvent :: Ctx -> VEventExpr -> Hash -> Hash
+hEvent cx (VEEOr e1 e2) h  = hEvent cx e2 (hEvent cx e1 (feedString h "or"))
+hEvent cx (VEEposedge e) h = hExpr cx e (feedString h "posedge")
+hEvent cx (VEEnegedge e) h = hExpr cx e (feedString h "negedge")
+hEvent cx (VEE e) h        = hExpr cx e (feedString h "ev")
+hEvent cx (VEEMacro s e) h = hExpr cx e (feedString (feedString h "evmacro") s)
+
+hGuard :: Ctx -> Guard -> Hash -> Hash
+hGuard cx (GEvent n _) h      = feedWord (feedString h "@") (M.findWithDefault 0 n (cxEv cx))
+hGuard _  (GBlock s) h        = feedString h s
+hGuard cx (GIf e b) h         = feedShow (hExpr cx e (feedString h "if")) b
+hGuard cx (GCase kind e ls) h = feedString (foldl' (flip (hExpr cx)) (hExpr cx e (feedString h kind)) ls) ":"
+hGuard cx (GDefault kind e) h = hExpr cx e (feedString h (kind ++ "default"))
+
+hProc :: Ctx -> Proc -> Hash -> Hash
+hProc cx (PAssign nb l e) h = hExpr cx e (hLV cx l (feedString h (if nb then "<=" else "=")))
+hProc cx (PTask n es) h     =
+    feedString (foldl' (flip (hExpr cx)) (feedString (feedString h "task") n) es) ")"
+
+hFrag :: Ctx -> Frag -> Hash -> Hash
+hFrag cx (FAssign e) h        = hExpr cx e (feedString h "A")
+hFrag cx (FConcat k n l e) h  = hExpr cx e (hLV cx l (feedShow (feedString h "K") (k, n)))
+hFrag cx (FSub l e) h         = hExpr cx e (hLV cx l (feedString h "S"))
+hFrag cx (FProc gs p) h       = hProc cx p (foldl' (flip (hGuard cx)) (feedString h "P") gs)
+hFrag _  (FInst m i p) h      = feedString (feedString (feedString (feedString h "I") m) i) p
+
+-- the content hash of one member, given the hashes of what it references
+contentHash :: Ctx -> NameKey -> [Frag] -> Maybe (Maybe VRange, Maybe VRange) -> Word64
+contentHash cx self frags decl =
+    let cx' = cx { cxLhs = positions [self] }
+        h0  = case decl of
+                Nothing       -> feedString hashInit "undeclared"
+                Just (mr, ar) -> hMRange cx' ar (hMRange cx' mr (feedString hashInit "W"))
+        h1  = case frags of
+                [] -> feedString (feedString h0 "undriven")
+                                 (maybe "" (\(stem, _, _) -> stem) (matchFamily (keyString self)))
+                _  -> foldl' (\h f -> hFrag cx' f h) h0 frags
+    in  hashValue h1
+
+keyString :: NameKey -> String
+keyString (NameKey _ s) = s
+
+-- Hash every member, references first.  Members are visited in
+-- first-occurrence order; a reference back into the visiting stack is a
+-- cycle, which hRef resolves to the stem.
+-- An item's event list (a case mux's sensitivity list has one entry
+-- per arm) is hashed once, when the first assignment under it is
+-- reached: by then every member it mentions is hashed.
+hashMembers :: (String -> Bool) -> [NameKey] -> (NameKey -> [Frag])
+            -> (NameKey -> Maybe (Maybe VRange, Maybe VRange))
+            -> M.Map NameKey Word64
+hashMembers isM keys fragsOf declOf = fst (foldl' (visit S.empty) (M.empty, M.empty) keys)
+  where
+    refsOf k = [ r | HId v <- concatMap fragHits (fragsOf k)
+                   , let s = getVIdString v, isM s
+                   , let r = nameKey s, r /= k ]
+    visit stack st@(env, ev) k
+        | M.member k env       = st
+        | k `S.member` stack   = st
+        | otherwise =
+            let stack'     = S.insert k stack
+                (env', ev') = foldl' (visit stack') st (refsOf k)
+                frags      = fragsOf k
+                cx0        = Ctx { cxEnv = env', cxEv = ev', cxIsM = isM, cxLhs = M.empty }
+                ev''       = foldl' (ensureEvent cx0) ev' frags
+                w          = contentHash cx0 { cxEv = ev'' } k frags (declOf k)
+            in  (M.insert k w env', ev'')
+    ensureEvent cx ev (FProc gs _) = foldl' one ev gs
+      where one m (GEvent n ee)
+                | not (M.member n m) = M.insert n (hashValue (hEvent cx ee hashInit)) m
+            one m _ = m
+    ensureEvent _ ev _ = ev
+
+-- twelve decimal digits of a hash, rehashed for the n-th retry
+digitsOf :: Word64 -> Int -> String
+digitsOf w 0 = show (w `mod` 1000000000000)
+digitsOf w n = show (hashValue (feedShow (feedWord hashInit w) n) `mod` 1000000000000)
+
+-- targets in first-occurrence order, each distinct from the ones before
+-- it and from the non-renameable names
+assignTargets :: S.Set NameKey -> [(String, String, Family, String, Word64)] -> [(String, String)]
+assignTargets _ [] = []
+assignTargets taken ((nm, stem, fam, part, w) : rest) =
+    let pick n = let t = stem ++ markerText fam ++ digitsOf w n ++ part
+                 in  if nameKey t `S.member` taken then pick (n + 1) else t
+        target = pick (0 :: Int)
+    in  (nm, target) : assignTargets (S.insert (nameKey target) taken) rest
+
+-- --------------------------------------------------------------- re-sort
+
+-- Sort again, by the new names, every group list that was sorted under
+-- the old ones (the original and renamed bodies have the same shape).
+-- Declaration variable lists are always sorted.
+resortItems :: [VMItem] -> [VMItem] -> [VMItem]
+resortItems = zipWith resortItem
+
+resortItem :: VMItem -> VMItem -> VMItem
+resortItem (VMGroup _ itss0) (VMGroup t itss)        = VMGroup t (zipWith resortList itss0 itss)
+resortItem (VMComment _ it0) (VMComment c it)        = VMComment c (resortItem it0 it)
+resortItem (VMRegGroup _ _ _ it0) (VMRegGroup i s c it) = VMRegGroup i s c (resortItem it0 it)
+resortItem _ (VMDecl (VVDecl t mr vs))               = VMDecl (VVDecl t mr (sort vs))
+resortItem _ it                                      = it
+
+resortList :: [VMItem] -> [VMItem] -> [VMItem]
+resortList its0 its =
+    let its' = resortItems its0 its
+    in  if and (zipWith (<=) its0 (drop 1 its0)) then sortBy cmpItem its' else its'
+
+-- the VMItem order, except that procedural items assigning exactly one
+-- reg (the case muxes) are ordered by that reg's new name; the VMItem
+-- order has them all equal, which would leave them in mint order
+cmpItem :: VMItem -> VMItem -> Ordering
+cmpItem x y =
+    case compare x y of
+      EQ -> compare (singleTarget x) (singleTarget y)
+      o  -> o
+
 -- ------------------------------------------------------------------ the pass
 
 renumberModule :: VModule -> VModule
 renumberModule vm =
     let
+        body = vm_body vm
+
         body_hits :: [Hit]
-        body_hits = hitsItems (vm_body vm) []
+        body_hits = hitsItems body []
 
         -- names that must not change (or be created by renaming).
         instFixed :: VMItem -> [String]
@@ -369,46 +798,63 @@ renumberModule vm =
             getVIdString (vm_name vm) :
             map getVIdString (portIds (vm_ports vm)) ++
             [ n | HForeign n <- body_hits ] ++
-            concatMap instFixed (vm_body vm)))
+            concatMap instFixed body))
 
         -- family members in order of first occurrence.
         occurrences :: [String]
         occurrences = [ getVIdString v | HId v <- body_hits ]
 
         -- the seen set only needs to record names that match a family shape
-        firstSeen :: S.Set NameKey -> [String] -> [(String, String, Family)]
+        firstSeen :: S.Set NameKey -> [String] -> [(String, String, Family, String)]
         firstSeen _ [] = []
         firstSeen seen (s : ss) =
             case matchFamily s of
               Nothing -> firstSeen seen ss
-              Just (stem, fam) ->
+              Just (stem, fam, part) ->
                   let k = nameKey s
                   in  if k `S.member` seen
                       then firstSeen seen ss
                       else if k `S.member` excluded
                            then firstSeen (S.insert k seen) ss
-                           else (s, stem, fam) : firstSeen (S.insert k seen) ss
+                           else (s, stem, fam, part) : firstSeen (S.insert k seen) ss
 
-        members :: [(String, String, Family)]  -- (name, stem, family)
+        members :: [(String, String, Family, String)]  -- (name, stem, family, part suffix)
         members = firstSeen S.empty occurrences
 
-        -- assign numbers per family in first-occurrence order,
-        -- skipping targets that collide with non-renameable names
-        assign :: M.Map Family Integer -> [(String, String, Family)]
-               -> [(String, String)]
-        assign _ [] = []
-        assign ks ((nm, stem, fam) : rest) =
-            let next n = let tgt = stem ++ markerText fam ++ show n
-                         in  if nameKey tgt `S.member` excluded
-                             then next (n + 1)
-                             else (n, tgt)
-                (k, target) = next (M.findWithDefault 1 fam ks)
-            in  (nm, target) : assign (M.insert fam (k + 1) ks) rest
+        memberKeys :: S.Set NameKey
+        memberKeys = S.fromList [ nameKey nm | (nm, _, _, _) <- members ]
+
+        isM :: String -> Bool
+        isM s = nameKey s `S.member` memberKeys
+
+        drivers = collectItems isM body noDrivers
+
+        -- a task argument counts as a driver only for a name that has
+        -- no other: a void task's input has its own assignment or port
+        fragsOf :: NameKey -> [Frag]
+        fragsOf k =
+            let inst = maybe [] (: []) (M.lookup k (drInsts drivers))
+            in  case M.lookup k (drFrags drivers) of
+                  Nothing -> inst
+                  Just fs ->
+                      let own = [ f | f <- reverse fs, not (isTask f) ]
+                      in  if not (null own) then own
+                          else if not (null inst) then inst
+                          else reverse fs
+        isTask (FProc _ (PTask _ _)) = True
+        isTask _                     = False
+
+        hashes :: M.Map NameKey Word64
+        hashes = hashMembers isM [ nameKey nm | (nm, _, _, _) <- members ]
+                             fragsOf (\k -> M.lookup k (drDecls drivers))
+
+        targets :: [(String, String)]
+        targets = assignTargets excluded
+                      [ (nm, stem, fam, part, M.findWithDefault 0 (nameKey nm) hashes)
+                      | (nm, stem, fam, part) <- members ]
 
         renames :: M.Map NameKey String
-        renames = M.fromList [ (nameKey nm, tgt)
-                             | (nm, tgt) <- assign M.empty members
-                             , nm /= tgt ]
+        renames = M.fromList [ (nameKey nm, tgt) | (nm, tgt) <- targets, nm /= tgt ]
 
         subst :: VId -> VId
         subst v@(VId s i info) =
@@ -418,4 +864,4 @@ renumberModule vm =
     in
         if M.null renames
         then vm
-        else vm { vm_body = mapItems subst (vm_body vm) }
+        else vm { vm_body = resortItems body (mapItems subst body) }

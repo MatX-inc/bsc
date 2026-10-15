@@ -14,7 +14,8 @@ module AOpt(aOpt,
 import Control.Monad(when, foldM, zipWithM)
 import Control.Monad.State.Strict(State, StateT, evalState, evalStateT, liftIO,
                                   gets, get, put)
-import Data.List(sortBy, genericLength, sort, transpose, partition, groupBy, nub)
+import Data.List(sortBy, genericLength, sort, transpose, partition, groupBy, nub, isPrefixOf)
+import Data.Char(isDigit)
 import Data.Ord(Down(..), comparing)
 import Util(mapFst)
 import qualified Data.Map as M
@@ -1209,6 +1210,16 @@ optMuxPairs bflgs aid dty op eps = eps3
       eps2 = takeWhilePlus1 (not . isTrue . fst) eps1
       eps3 = mergeIdenExpr (ao_stable bflgs) op eps2
 
+-- the text with the numbers of generated names (___dN, __hN, __qN, __fN,
+-- _dmN, _dsN) blanked to '#'
+maskGenNums :: String -> String
+maskGenNums [] = []
+maskGenNums str@(c : cs) =
+    case [ drop (length m) str | m <- markers, m `isPrefixOf` str ] of
+      ((d : rest) : _) | isDigit d -> '#' : maskGenNums (dropWhile isDigit rest)
+      _                            -> c : maskGenNums cs
+  where markers = ["___d", "__h", "__q", "__f", "_dm", "_ds", "_dfoo"]
+
 -- merge Identical Expressions
 -- The sort function here can cause reordering in case expression, which can
 -- later turn to if expressions, and look totally wrong when comparing to older versions.
@@ -1240,8 +1251,13 @@ mergeIdenExpr stable op eps = if ( length newpairs < length eps ) then newpairs 
       -- to repair) instead of Ord AExpr, which bottoms out in intern
       -- order; structurally equal arms have identical text, so groupBy
       -- still finds them adjacent.
+      -- The text key blanks the numbers of generated names first, so
+      -- that the order does not follow mint order; the full text is the
+      -- final tie-break.
       sortfn | op /= PrimMux = id
-             | stable        = sortBy (comparing (\ (_,e) -> (isASAny e, ppString e)))
+             | stable        = sortBy (comparing (\ (c,e) -> (isASAny e, maskGenNums (ppString e),
+                                                              maskGenNums (ppString c),
+                                                              ppString e, ppString c)))
              | otherwise     = sortPairASAny . sortBy cmpSnd
       meps = groupBy eqSnd (sortfn eps)
       newpairs = map flattenGrps meps
