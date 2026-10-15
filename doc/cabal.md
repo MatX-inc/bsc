@@ -87,9 +87,10 @@ same file gives the library's shared object its rpath, `$ORIGIN/../lib/SAT`
 invocation: Cabal 3.16 passes a library's `ld-options` to the programs' links
 but not to the library's own (section 3). Machine settings go in
 `cabal.project.local`, which git ignores. The build writes nothing outside
-`dist-newstyle`, the autogen directories and the `.ghc.environment.*` file at
-the root that `write-ghc-environment-files` asks for; nothing under `src/comp`
-or `src/vendor` is written.
+`dist-newstyle`, the autogen directories, the `.ghc.environment.*` file at the
+root that `write-ghc-environment-files` asks for, and the install stamp
+`build/cabal-head` (section 3); nothing under `src/comp` or `src/vendor` is
+written.
 
 ### Installing
 
@@ -111,8 +112,12 @@ touches no source of the package, such as a testsuite or workflow change,
 would leave the previous commit's version in the programs, so `install`
 writes HEAD into `build/cabal-head`, which `bsc.cabal` declares in
 `extra-source-files`: a new commit is a changed source, and the version
-follows. A plain `cabal build` after such a commit keeps the previous version
-until a source changes, as section 3 describes; `make install-src` does not.
+follows. The hooks' version rule writes the same stamp, so it exists from
+the first build: cabal-install watches the declared sources it finds when it
+records a build, and a stamp first written by an install after a build
+would go unwatched. A plain `cabal build` after such a commit keeps the
+previous version until a source changes, as section 3 describes;
+`make install-src` does not.
 
 With `BSC_BUILD_PKGINFO` set, as the release workflows set it, the install
 also writes `LICENSES/LICENSE.ghc_pkgs` from the packages the programs were
@@ -177,6 +182,11 @@ walked from the library by `src/comp/make-ghc-pkg-info.sh`.
   when it does not, and a post-build hook that links `lib/SAT` beside each
   artifact in the build tree to the `LIBRARY_PATH` directory holding them,
   so the programs run where they are built.
+
+A change to what the configure hooks produce (the Tcl and solver settings
+above) needs a reconfigure: cabal-install rebuilds the Setup when
+`SetupHooks.hs` changes, but configures the package again only when the
+package's own inputs change, so touch `bsc.cabal` or build clean.
 
 ## 4. Adding a module, adding a program
 
