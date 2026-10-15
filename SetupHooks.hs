@@ -9,8 +9,7 @@
 -- root as the working directory; doc/cabal.md section 3 says what they do.
 -- No hook writes into src/comp, or anywhere outside dist-newstyle and the
 -- autogen directories but the install stamp build/cabal-head
--- (writeBuildVersionHs); the make build generates its own Warmup.hs and
--- BuildVersion.hs as before.
+-- (writeBuildVersionHs).
 module SetupHooks (setupHooks) where
 
 import Control.Monad (filterM, forM, forM_, unless, when)
@@ -56,6 +55,7 @@ import System.Process
   ( CreateProcess (..),
     createProcess,
     proc,
+    readCreateProcess,
     readProcess,
     readProcessWithExitCode,
     waitForProcess,
@@ -142,9 +142,9 @@ wantsWarmup _ = False
 -- (exposed-modules, other-modules), as Cabal requires of an autogen module.
 --
 -- GHC takes a module found under hs-source-dirs over the autogen one, so a
--- Warmup.hs or BuildSystem.hs the make build has generated under src/comp
--- would be what the library compiles, and the make build's are not this
--- build's: configuring refuses while one is there.
+-- copy of a generated module under src/comp would be what the library
+-- compiles: configuring refuses while one is there, and so does each build
+-- (cabal-install builds without configuring when only sources changed).
 preConfComponent :: PreConfComponentHook
 preConfComponent inputs = do
   let c = inputs.component
@@ -226,6 +226,7 @@ preBuildRules = rules (static ()) $ \env -> do
   when (isMainLib component) $ do
     let buildSystem = autogenLocation lbi clbi "BuildSystem"
         buildVersion = autogenLocation lbi clbi "BuildVersion"
+    liftIO refuseStrayGeneratedModules
     repoHead <- liftIO gitHead
     case repoHead of
       Just (gitDir, _) ->
@@ -269,16 +270,16 @@ writeWarmupHs (path, units, mods) =
       <> ["module Warmup where"]
       <> ["import " <> m <> " ()" | m <- mods]
 
--- | Refuse while the make build's Warmup.hs or BuildSystem.hs lies under
--- src/comp, where GHC would compile it in place of the generated one.
+-- | Refuse while a copy of a generated module lies under src/comp, where
+-- GHC would compile it in place of the generated one.
 refuseStrayGeneratedModules :: IO ()
 refuseStrayGeneratedModules = do
   root <- findRepoRoot
-  forM_ (["Warmup", "BuildSystem"] :: [String]) $ \m -> do
+  forM_ (["Warmup", "BuildSystem", "BuildVersion"] :: [String]) $ \m -> do
     left <- doesFileExist (root </> "src" </> "comp" </> (m <> ".hs"))
     when left . ioError . userError $
-      "src/comp/" <> m <> ".hs is the make build's, and GHC would compile it in place of"
-        <> " the generated module: remove it (make -C src/comp full_clean) and configure again"
+      "src/comp/" <> m <> ".hs would be compiled in place of the generated module:"
+        <> " remove it (make -C src/comp no-stale-modules does) and build again"
 
 writeBuildSystemHs :: (FilePath, Platform) -> IO ()
 writeBuildSystemHs (path, Platform _ os) = needing [path] $ do
@@ -305,8 +306,8 @@ writeBuildSystemHs (path, Platform _ os) = needing [path] $ do
     ]
 
 -- | Run update-build-version.sh in the autogen directory, where it writes
--- BuildVersion.hs (it leaves an up-to-date file untouched). NOGIT and
--- NOUPDATEBUILDVERSION pass through with the Makefile's defaults.
+-- BuildVersion.hs (it leaves an up-to-date file untouched). NOGIT passes
+-- through from the environment, defaulted off as the script defaults it.
 --
 -- The script's git commands search upward from the working directory,
 -- which fails when the build directory lies outside the checkout, so the
@@ -318,18 +319,13 @@ writeBuildSystemHs (path, Platform _ os) = needing [path] $ do
 writeBuildVersionHs :: (FilePath, String) -> IO ()
 writeBuildVersionHs (autogenDir, _) = do
   noGit <- fromMaybe "0" <$> lookupEnv "NOGIT"
-  noUpdateBuildVersion <- fromMaybe "0" <$> lookupEnv "NOUPDATEBUILDVERSION"
   root <- findRepoRoot
   commit <- gitHead
   let repoHead = if noGit == "1" then Nothing else commit
   let gitVars = case repoHead of
         Just (gitDir, _) -> [("GIT_DIR", gitDir), ("GIT_WORK_TREE", root)]
         Nothing -> []
-  let newVars =
-        [ ("NOGIT", noGit),
-          ("NOUPDATEBUILDVERSION", noUpdateBuildVersion)
-        ]
-          <> gitVars
+  let newVars = ("NOGIT", noGit) : gitVars
   env <- (newVars <>) <$> getEnvironment
   createDirectoryIfMissing True autogenDir
   dir <- makeAbsolute autogenDir
@@ -338,13 +334,15 @@ writeBuildVersionHs (autogenDir, _) = do
   let script = root </> "src" </> "comp" </> "update-build-version.sh"
   callCreateProcess (proc script []) {cwd = Just dir, env = Just env}
   -- The install stamp (src/comp/Makefile, CABAL_HEAD): `make install`
-  -- writes HEAD into it, a declared source, so that a later commit is a
-  -- changed source and this rule runs again. It has to exist from the
-  -- first build, since cabal-install watches only the declared sources it
-  -- finds when it records a build. It names the commit whatever NOGIT
-  -- says, as `make install` does, so the two write the same stamp.
+  -- writes HEAD and the version name into it, a declared source, so that a
+  -- later commit, or a tag at this one, is a changed source and this rule
+  -- runs again. It has to exist from the first build, since cabal-install
+  -- watches only the declared sources it finds when it records a build. It
+  -- names the commit whatever NOGIT says, as `make install` does, so the
+  -- two write the same stamp.
+  name <- readCreateProcess (proc script ["--name"]) {cwd = Just dir, env = Just env} ""
   let stamp = root </> "build" </> "cabal-head"
-      content = maybe "no-repository" snd commit <> "\n"
+      content = maybe "no-repository" snd commit <> "\n" <> name
   createDirectoryIfMissing True (root </> "build")
   current <- (Just <$> readFile' stamp) `catchIOError` \_ -> pure Nothing
   when (current /= Just content) $ writeFile stamp content

@@ -1,6 +1,6 @@
 packages: .
 
--- Parity with the make build (src/comp/Makefile GHCOPTLEVEL = -O2).
+-- -O2, as the compiler has always been built.
 optimization: 2
 
 -- Packages build side by side, and from GHC 9.12 (below) cabal-install and
@@ -9,9 +9,8 @@ optimization: 2
 -- through 9.14.1 (doc/cabal.md).
 jobs: $ncpus
 
--- Bare ghci, runghc and ghc find the compiled library from any directory of
--- the checkout; the make build's -hide-all-packages and -package flags
--- override the file.
+-- Bare ghci, runghc and ghc find the build's packages from any directory of
+-- the checkout; src/comp/.ghci relies on it.
 write-ghc-environment-files: always
 
 -- GHC compiles in parallel only where its object code is deterministic:

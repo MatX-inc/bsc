@@ -1,10 +1,8 @@
 # The cabal build of bsc
 
-One cabal package at the repository root builds the compiler, and `make
-install-src` builds the solvers, runs it and installs what it built; the make
-build's own `ghc --make` targets remain beside it and keep generating their own
-`Warmup.hs` and `BuildVersion.hs`. INSTALL.md covers prerequisites and the
-toolchain.
+One cabal package at the repository root builds the compiler; `make
+install-src` builds the solvers, runs that build and installs the result.
+INSTALL.md covers prerequisites, the toolchain and the build variants.
 
 ## 1. Shape
 
@@ -59,9 +57,10 @@ load) resolve the solvers beside themselves, `lib/SAT`, by the rpath
 src/comp install-extra` copies the other programs over the same build.
 `BuildVersion` names the commit, but its rule runs only when cabal-install
 builds the package (a changed declared source or a reconfigure), so `install`
-first writes HEAD into `build/cabal-head`, a declared source. The hooks write
-the same stamp from the first build, since cabal-install watches only the
-sources it finds when it records a build.
+first writes HEAD and the version name (`update-build-version.sh --name`) into
+`build/cabal-head`, a declared source: a new commit, or a tag at the built one,
+is then a changed source. The hooks write the same stamp from the first build,
+since cabal-install watches only the sources it finds when it records a build.
 
 `Setup.hs` is for a tool that runs a Setup script rather than cabal-install
 (the hooks' external program): cabal-install generates the same two lines for
@@ -85,9 +84,11 @@ index, and compiles serially, which the bytes do not depend on.
   `src/comp/update-build-version.sh` run in the autogen directory with
   `GIT_DIR` and `GIT_WORK_TREE` set for a build directory outside the checkout;
   the rule monitors git `HEAD` and its reflog for a cabal-install that runs the
-  rules itself (Cabal 3.18). A `Warmup.hs` or `BuildSystem.hs` the make build
-  has generated under `src/comp` would be compiled instead, so configuring
-  refuses while one is there (`make -C src/comp full_clean` removes them).
+  rules itself (Cabal 3.18). A copy of a generated module under `src/comp`,
+  left by an older checkout's make build, would be compiled instead: `make
+  install-src` and the per-program targets remove the three before building,
+  and a bare `cabal build` refuses while one is there (`make -C src/comp
+  no-stale-modules` removes them).
 - Tcl, at configure: the include, link and `-D` flags, from `platform.sh`.
 - Solvers: after each build, `lib/SAT` beside the artifact is linked to the
   `LIBRARY_PATH` directory holding them, so the build tree runs in place
