@@ -84,7 +84,10 @@ data TStatePersistent = TStatePersistent {
    -- or only for marked typeclasses
    tsAllowIncoherent :: Bool,
    tsWarns :: [WMsg], -- accumulated warning messages
-   tsUsedPackages :: S.Set Id, -- packages from which symbols were used
+   -- Class-heavy typechecking records many repeated package uses.  Force
+   -- each update so unused-import checking does not discharge a long chain
+   -- of deferred Set.insert calls after compilation has otherwise finished.
+   tsUsedPackages :: !(S.Set Id), -- packages from which symbols were used
    tsATFCache :: CATFCache
 }
 
