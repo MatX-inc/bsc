@@ -281,7 +281,11 @@ cabal update
 ```
 
 The second command fetches the Hackage package index, which the build
-reads.
+reads.  The versions it takes from it are fixed by `index-state` in
+`cabal.project`, so two builds of one commit resolve the same
+libraries whenever they run; an index fetched before that instant
+stops the build with cabal's own message, and `cabal update` is the
+remedy.
 
 To build a version of BSC that supports profiling, be aware that
 profiling versions of the libraries need to be present: cabal builds
