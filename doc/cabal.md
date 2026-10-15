@@ -205,20 +205,25 @@ section 1, and the entry module carries `import Warmup ()`.
 The claim: one commit, built from a clean `dist-newstyle` at the project's
 settings, serially, oversubscribed and in other checkout directories, gives
 bit-identical objects, interfaces, archives, programs and shared objects, and
-a rebuild after an edit and its revert lands on the same bytes. The programs
-link against the library archive in one order, the Warmup imports give every
-module the external interface set in one order (section 3),
-`-fobject-determinism` holds the object code, and no directory of the
-checkout is written into any of them, since the solvers are linked by name
-(section 3). `util/cabal-ladder.sh`:
+a rebuild after an edit and its revert lands on the same bytes; and the
+installed tree, `make install-src` and `make install-bluehs` over that build,
+is the same bytes too. The programs link against the library archive in one
+order, the Warmup imports give every module the external interface set in
+one order (section 3), `-fobject-determinism` holds the object code, and no
+directory of the checkout is written into any of them, since the solvers are
+linked by name (section 3). In the installed tree the compiler stores file
+names relative to the build directory (upstream 1135), and the Bluesim and
+VPI libraries map the checkout out of their debug information
+(`-ffile-prefix-map` in their Makefiles). `util/cabal-ladder.sh`:
 
 - `hash OUT [DIR...]` hashes one build: every object, archive, shared
   object and program (the programs from `cabal list-bin bsc:exe:<name>` for
   each `executable` stanza) as
   bytes, with paths relative to the repository so directories compare, then
   every file of each installed directory named after the list (CI names
-  `inst/bluehs`, the script runtime of `util/bluehs`), as bytes except the
-  interfaces under its `store`, which are hashed as below. An interface
+  `inst`, the installed tree, with the script runtime of `util/bluehs` under
+  it), as bytes except the interfaces under a `store`, which are hashed as
+  below. An interface
   file is hashed as the text of `ghc --show-iface` minus its interface hash
   and flags fingerprint, with the package environment off: GHC fingerprints
   the flags it was given, and cabal passes the autogen include directory by
@@ -228,9 +233,10 @@ checkout is written into any of them, since the solvers are linked by name
   the run, and a partial list is removed, so nothing compares IDENTICAL by
   producing nothing.
 - `verdict REF OTHER...` compares each list against the first, reporting
-  differences by category (program, object, interface, archive, and
-  distribution for an installed directory's files); a missing list is
-  MISSING, and the verdict fails rather than passing on nothing.
+  differences by category (program, shared object, object, interface,
+  archive; installed for an installed directory's files, and distribution
+  for a bluehs runtime's under it); a missing list is MISSING, and the
+  verdict fails rather than passing on nothing.
 - `run` is the ladder on one machine: legs A and B at the project's settings
   from clean (repeatability), C at `-j1` (serial against parallel), D at
   `-j64` (oversubscription), each compared with A; then a marker edit to one
@@ -248,9 +254,11 @@ serial build in another directory, `-j16`, and `-j64` three times in three
 directories, which checks that the build depends neither on its parallelism
 nor on its path. Each leg then installs the tree (`make install-src`) and
 the bluehs runtime over it (`make install-bluehs`, whose second build of the
-libraries takes the leg's `cabal.project.local`), and hashes `inst/bluehs`
-with the build, so the distribution is held to the same claim: the same
-bytes whatever the parallelism and the directory. It runs on the project's
+libraries takes the leg's `cabal.project.local`), and hashes the whole of
+`inst` with the build: the programs, the solvers, the Bluespec libraries, the
+Bluesim and VPI libraries, the Verilog and Tcl libraries and the runtime are
+all held to the same claim, the same bytes whatever the parallelism and the
+directory. It runs on the project's
 own pull requests and on a dispatch; a fork's pull requests do not run it,
 since a fork's branches are a developer's loop, and a fork dispatches it
 when it qualifies a release.
