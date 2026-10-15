@@ -58,28 +58,37 @@ only v2, which GHC reports from 9.14.2 and 10.2, and with an older GHC it
 warns and falls back to `-j` per package (correct, but oversubscribed). The
 pin moves when the GHC in use moves.
 
-GHC 9.14 or later gives `-fobject-determinism`; an older compiler builds
+GHC 8.8.4 is the oldest compiler that builds the package: `bsc.cabal`'s
+lower bounds are its boot libraries, the language is GHC2021 from GHC 9.2 and
+Haskell2010 with the four `default-extensions` before it, and CI builds with
+it. GHC 9.14 or later gives `-fobject-determinism`; an older compiler builds
 without it, and the claim of section 5 does not hold then. The native
 dependencies are those of `make install-src`: Tcl headers and library
 (`platform.sh` finds them), a C and C++ compiler, and the tools the vendored
 solvers' Makefiles run (autoconf, bison, flex, gperf), as installed by
 `.github/workflows/install_dependencies_*.sh`.
 
-`cabal.project` sets `optimization: 2`, `jobs: $ncpus` with `semaphore: True`
-(one job server for cabal-install and every `ghc -j`), `-j` inside the package,
+`cabal.project` pins `index-state`, so the versions of the Hackage dependencies
+follow the commit rather than the build date. Moving it is a change of its own,
+since the dependency plan and the bytes of the build move with it: set it to
+any instant the local index covers (`cabal update` reports the index's latest)
+and build. An index fetched before the pin stops the build with cabal's own
+message, and `cabal update` is the remedy. The file also sets
+`optimization: 2`, `jobs: $ncpus` with `semaphore: True` (one job server for
+cabal-install and every `ghc -j`), `-j` inside the package,
 `write-ghc-environment-files: always` (bare `ghci` and `runghc` find the
 library from any directory of the checkout), and `-fobject-determinism` for the
 Hackage dependencies under `package *`, since `program-options` reaches local
-packages only; `bsc.cabal` carries the flag for the package under `if impl(ghc
->= 9.14)`. The same file gives the library's shared object its rpath,
-`$ORIGIN/../lib/SAT` (`@loader_path` on Darwin), under `program-options`, which
-reaches every GHC invocation: Cabal 3.16 passes a library's `ld-options` to the
-programs' links but not to the library's own (section 3). Machine settings go
-in `cabal.project.local`, which git ignores. The build writes nothing outside
-`dist-newstyle`, the autogen directories, the `.ghc.environment.*` file at the
-root that `write-ghc-environment-files` asks for, and the install stamp
-`build/cabal-head` (section 3); nothing under `src/comp` or `src/vendor` is
-written.
+packages only; `bsc.cabal` carries the flag for the package under
+`if impl(ghc >= 9.14)`. The same file gives the library's shared object its
+rpath, `$ORIGIN/../lib/SAT` (`@loader_path` on Darwin), under
+`program-options`, which reaches every GHC invocation: Cabal 3.16 passes a
+library's `ld-options` to the programs' links but not to the library's own
+(section 3). Machine settings go in `cabal.project.local`, which git ignores.
+The build writes nothing outside `dist-newstyle`, the autogen directories, the
+`.ghc.environment.*` file at the root that `write-ghc-environment-files` asks
+for, and the install stamp `build/cabal-head` (section 3); nothing under
+`src/comp` or `src/vendor` is written.
 
 ### Installing
 

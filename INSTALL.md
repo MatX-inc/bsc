@@ -54,9 +54,9 @@ symlinks in `/usr/bin/` that point to the executables in
 To build a complete release of BSC, you will need:
  - The standard Haskell compiler [GHC]. The recommended version is
    9.6.7, which is the primary version built and tested by this
-   project's continuous integration (CI); newer versions are also
-   tested (see the [CI workflow] for the exact set).  Older versions
-   are untested and may not work.  We recommend installing GHC via
+   project's continuous integration (CI); other versions, 8.8.4 and
+   newer, are also tested (see the [CI workflow] for the exact set).
+   Older versions are not supported.  We recommend installing GHC via
    the popular installer [GHCup].
  - The Haskell build tool [cabal-install], version 3.16, which fetches
    the Haskell libraries the build needs beyond GHC's own from Hackage.
@@ -121,10 +121,9 @@ cabal update
 Those final four commands install the recommended GHC compiler version
 and the cabal build tool, and fetch the package index the build reads. If you would prefer to install GHC via the system's
 package manager, which may install an older version, you can
-substitute the following command.  Note well that the version of `ghc`
-tested for building the Bluespec toolchain is the version specified in
-the `ghcup install ghc` command above.  If your system packages an
-older `ghc` (check with `ghc --version`), it might not work.
+substitute the following command.  Any `ghc` from 8.8.4 on builds the
+compiler (see the GHC section below); a `ghc` older than 8.8.4 (check
+with `ghc --version`) is not supported.
 
 ```bash
 sudo apt-get install \
@@ -174,10 +173,9 @@ cabal update
 Those final four commands install the recommended GHC compiler version
 and the cabal build tool, and fetch the package index the build reads. If you would prefer to install GHC via the system's
 package manager, which may install an older version, you can
-substitute the following command.  Note well that the version of `ghc`
-tested for building the Bluespec toolchain is the version specified in
-the `ghcup install ghc` command above.  If your system packages an
-older `ghc` (check with `ghc --version`), it might not work.
+substitute the following command.  Any `ghc` from 8.8.4 on builds the
+compiler (see the GHC section below); a `ghc` older than 8.8.4 (check
+with `ghc --version`) is not supported.
 
 ```bash
 sudo dnf install \
@@ -253,11 +251,9 @@ popular installer [GHCup], which is available for Linux, FreeBSD,
 macOS, and WSL2 on Windows.  This allows easily installing the
 recommended version of GHC. The package manager for your OS may
 provide a package for GHC, however it may be for an older version of
-GHC.  This is fine, as the BSC source code has been written with
-extensive preprocessor macros to support every minor release of GHC
-since 7.10, through 9.12. Any releases in that range should be fine;
-however, newer versions may be more efficient.
-GHC releases older than 7.10.3 are not supported.
+GHC.  This is fine, as the BSC source code builds with every release
+of GHC from 8.8.4 on; however, newer versions may be more efficient.
+GHC releases older than 8.8.4 are not supported.
 
 BSC releases are tested and built with the recommended stable version
 of GHC, currently 9.6.7.  The source is also tested with a range of
@@ -282,7 +278,11 @@ cabal update
 ```
 
 The second command fetches the Hackage package index, which the build
-reads.
+reads.  The versions it takes from it are fixed by `index-state` in
+`cabal.project`, so two builds of one commit resolve the same
+libraries whenever they run; an index fetched before that instant
+stops the build with cabal's own message, and `cabal update` is the
+remedy.
 
 To build a version of BSC that supports profiling, be aware that
 profiling versions of the libraries need to be present: cabal builds

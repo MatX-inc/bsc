@@ -1,5 +1,10 @@
 packages: .
 
+-- The Hackage index the dependencies resolve against: the commit, not the
+-- build date, fixes their versions. Moving it is a change of its own
+-- (doc/cabal.md).
+index-state: 2026-10-15T20:00:00Z
+
 -- -O2, as the compiler has always been built.
 optimization: 2
 
