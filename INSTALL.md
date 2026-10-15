@@ -350,12 +350,29 @@ make PREFIX=/opt/tools/bsc/bsc-${BSC_VERSION}
 
 However, note that the `clean` target will delete the `PREFIX` directory!
 
-An unoptimized, debug, or profiling build can be done using one of:
+The compiler is one cabal package (see `doc/cabal.md`), and a variant of
+its build is a `cabal.project.local` at the root of the repository, which
+`make install-src` honors and git ignores.  Unoptimized:
 
-```bash
-make BSC_BUILD=NOOPT
-make BSC_BUILD=DEBUG
-make BSC_BUILD=PROF
+```
+optimization: False
+```
+
+Debug, with Core lint and the debugging runtime:
+
+```
+package bsc
+  ghc-options: -dcore-lint -debug
+```
+
+Profiling, with cost centres on every function and the larger stack cap
+their frames need:
+
+```
+profiling: True
+profiling-detail: all-functions
+package bsc
+  ghc-options: "-with-rtsopts=-H256m -K256m -i1"
 ```
 
 You can provide the `-j` flag to `make` to specify the number of targets
@@ -472,20 +489,15 @@ of Git, you can do so with `git archive`, but be aware of two points.
 For one, you will need to also export the files from submodules,
 because Git will not include them.
 
-For two, you may wish to adjust files in the `src/comp/` directory, to
-give a particular version name to installations built from the
-snapshot.  The build in that directory uses Git to automatically
-generate the version information for the compiler and place it in the
-file `BuildVersion.hs`.  The script that generates this,
-`update-build-version.sh`, can only query Git for version info when
-called from inside a Git repository.  The script will still work if
-`git archive` is used to export the snapshot, because we have
-specified (in `.gitattributes`) that patterns in the file should be
-substituted with their values (the commit hash and tag, if any) during
-export.  Therefore, no change in this directory is required.  However,
-if you want to hard-code a different version name, you can pre-generate
-the `BuildVersion.hs` file and adjust the `Makefile` to not rebuild
-it, by changing the assignment of `NOUPDATEBUILDVERSION` to `1`.
+For two, the version information the compiler and the Bluesim kernel
+carry is generated from Git by `src/comp/update-build-version.sh`, which
+the build runs, and the script can only query Git when called from
+inside a Git repository.  It will still work if `git archive` is used
+to export the snapshot, because we have specified (in `.gitattributes`)
+that patterns in the script should be substituted with their values
+(the commit hash and tag, if any) during export.  Therefore, no change
+is required.  Without Git and without that substitution, set `NOGIT=1`
+in the environment for a null version.
 
 ---
 

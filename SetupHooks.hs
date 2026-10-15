@@ -25,8 +25,7 @@
 --
 -- No hook writes into src/comp or anywhere else outside dist-newstyle and
 -- the package's autogen directories, but for the install stamp
--- build/cabal-head (writeBuildVersionHs); the make build generates its own
--- Warmup.hs and BuildVersion.hs as before.
+-- build/cabal-head (writeBuildVersionHs).
 module SetupHooks (setupHooks) where
 
 import Control.Monad (filterM, forM, forM_, unless, when)
@@ -168,16 +167,15 @@ locationFilePath lbi loc = interpretSymbolicPathLBI lbi (location loc)
 
 -- | The hook that holds exposed-modules to the tree: every module under the
 -- library's source roots below src/comp must be listed, or configuring fails
--- naming the ones that are not. The Makefile finds the same files by
--- wildcard; the list is explicit here because Cabal wants it, and because
--- its change is what makes cabal-install reconfigure.
+-- naming the ones that are not. The list is explicit because Cabal wants
+-- it, and because its change is what makes cabal-install reconfigure.
 --
 -- A file is a module of the library when the module its header names is the
 -- one its path under the root spells: Libs/IOUtil.hs is IOUtil under the
 -- Libs root and nothing under the src/comp root, and app/bsc.hs, whose
 -- header names Main_bsc, is a program's entry module and not the library's.
--- The generated modules are skipped where the make build has left them in
--- src/comp.
+-- The generated modules are exempt: a copy of one under src/comp is refused
+-- (generatedModulesSetupHooks).
 moduleListSetupHooks :: SetupHooks
 moduleListSetupHooks = noSetupHooks {configureHooks}
   where
@@ -258,7 +256,7 @@ wantsWarmup _ = False
 -- rules]). Every root module of the library and every program imports it
 -- (doc/cabal.md), so the barrier holds for the whole unit. The module is generated against this build's
 -- compiler and this build's resolved dependencies, read from the package
--- databases at build time, not from the Makefile's package list.
+-- databases at build time.
 --
 -- Only the DIRECT dependencies are used: the transitive closure would name
 -- modules of packages GHC is not given, which it refuses as hidden. In-place
@@ -368,20 +366,15 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
 
     -- Declare that the modules are generated. GHC takes a module found
     -- under hs-source-dirs over the autogen one (Cabal lists the source
-    -- directories first), so a Warmup.hs or BuildSystem.hs the make build
-    -- has generated under src/comp would be what the library compiles, and
-    -- the make build's are not this build's: configuring refuses while one
-    -- is there.
+    -- directories first), so a copy of one of them under src/comp, which
+    -- nothing generates any more, would be what the library compiles:
+    -- configuring refuses while one is there, and so does each build, since
+    -- cabal-install builds without configuring when only sources changed.
     preConfComponentHook :: Maybe PreConfComponentHook
     preConfComponentHook = Just $ \inputs@PreConfComponentInputs {component} ->
       if isMainLib component
         then do
-          root <- findRepoRoot
-          forM_ (["Warmup", "BuildSystem"] :: [String]) $ \m -> do
-            left <- doesFileExist (root </> "src" </> "comp" </> (m <> ".hs"))
-            when left . ioError . userError $
-              "src/comp/" <> m <> ".hs is the make build's, and GHC would compile it in place of"
-                <> " the generated module: remove it (make -C src/comp clean) and configure again"
+          refuseStrayGeneratedModules
           pure $
             PreConfComponentOutputs
               { componentDiff =
@@ -404,6 +397,7 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
           buildSystem = autogenLocation lbi clbi "BuildSystem"
           buildVersion = autogenLocation lbi clbi "BuildVersion"
       when (isMainLib (targetComponent targetInfo)) $ do
+        liftIO refuseStrayGeneratedModules
         repoHead <- liftIO gitHead
         case repoHead of
           Just (gitDir, _) ->
@@ -433,6 +427,17 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
             []
             [buildVersion]
 
+-- | Refuse while a copy of a generated module lies under src/comp, where
+-- GHC would compile it in place of the generated one.
+refuseStrayGeneratedModules :: IO ()
+refuseStrayGeneratedModules = do
+  root <- findRepoRoot
+  forM_ (["Warmup", "BuildSystem", "BuildVersion"] :: [String]) $ \m -> do
+    left <- doesFileExist (root </> "src" </> "comp" </> (m <> ".hs"))
+    when left . ioError . userError $
+      "src/comp/" <> m <> ".hs would be compiled in place of the generated module:"
+        <> " remove it and build again"
+
 writeBuildSystemHs :: (FilePath, Platform) -> IO ()
 writeBuildSystemHs (path, Platform _ os) = needing [path] $ do
   binFmtType <- case os of
@@ -460,10 +465,9 @@ writeBuildSystemHs (path, Platform _ os) = needing [path] $ do
 -- | Run update-build-version.sh in the autogen directory.
 --
 -- The script writes BuildVersion.hs into its working directory, so the
--- autogen directory is where it runs and nothing is copied: the autogen
--- copy is the one GHC compiles, and src/comp/BuildVersion.hs stays the make
--- build's own. The script leaves an up-to-date file untouched. NOGIT and
--- NOUPDATEBUILDVERSION pass through with the Makefile's defaults.
+-- autogen directory is where it runs and nothing is copied. The script
+-- leaves an up-to-date file untouched. NOGIT passes through from the
+-- environment, defaulted off as the script defaults it.
 --
 -- The script's git commands find the repository by searching upward from
 -- the working directory, which fails when the build directory lies outside
@@ -476,18 +480,13 @@ writeBuildSystemHs (path, Platform _ os) = needing [path] $ do
 writeBuildVersionHs :: (FilePath, String) -> IO ()
 writeBuildVersionHs (autogenDir, _) = do
   noGit <- fromMaybe "0" <$> lookupEnv "NOGIT"
-  noUpdateBuildVersion <- fromMaybe "0" <$> lookupEnv "NOUPDATEBUILDVERSION"
   root <- findRepoRoot
   commit <- gitHead
   let repoHead = if noGit == "1" then Nothing else commit
   let gitVars = case repoHead of
         Just (gitDir, _) -> [("GIT_DIR", gitDir), ("GIT_WORK_TREE", root)]
         Nothing -> []
-  let newVars =
-        [ ("NOGIT", noGit),
-          ("NOUPDATEBUILDVERSION", noUpdateBuildVersion)
-        ]
-          <> gitVars
+  let newVars = ("NOGIT", noGit) : gitVars
   env <- (newVars <>) <$> getEnvironment
   createDirectoryIfMissing True autogenDir
   dir <- makeAbsolute autogenDir
@@ -526,7 +525,7 @@ gitHead = do
 --
 -- The cabal build does not build the solvers. The library links @stp@ and
 -- @yices@ by name (bsc.cabal, extra-libraries), against whichever copies the
--- linker finds, as any Haskell package links a C library: the make build
+-- linker finds, as any Haskell package links a C library: `make install-src`
 -- builds and installs the vendored copies first and names their directory in
 -- LIBRARY_PATH when it runs the cabal build (src/comp/Makefile), and a build
 -- run by hand does the same (doc/cabal.md section 2) or links copies the
@@ -537,8 +536,9 @@ gitHead = do
 -- The solvers are shared libraries (the dynamic link is yices's GPL
 -- boundary), so the library's dynamic object, what ghci and runghc load,
 -- records them as dependencies rather than carrying copies of their code.
--- Everything resolves them beside itself, lib/SAT, the make build's rpath
--- (SAT_RPATH_FLAGS): the programs get it from the library's ld-options in
+-- Everything resolves them beside itself, lib/SAT, through the rpath
+-- $ORIGIN/../lib/SAT (@loader_path on Darwin): the programs get it from the
+-- library's ld-options in
 -- bsc.cabal, which every program that links the library inherits through the
 -- package database, and the dynamic object gets it from cabal.project, since
 -- Cabal 3.16 passes a library's ld-options to the programs' links but not to
