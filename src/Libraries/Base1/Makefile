@@ -28,6 +28,11 @@ $(BUILDDIR)/Prelude.bo:     Prelude.bs ${BSC}
 $(BUILDDIR)/PreludeBSV.bo:  PreludeBSV.bsv ${BSC}
 	${BSC} ${BSCFLAGS} -no-use-prelude PreludeBSV.bsv
 
+# Generic boundary wrapping is needed by PreludeBSV's BVI declarations.
+# Its only import is Prelude, so do not add the implicit PreludeBSV import.
+$(BUILDDIR)/ModuleWrap.bo: ModuleWrap.bs ${BSC}
+	${BSC} ${BSCFLAGS} -no-use-prelude ModuleWrap.bs
+
 # .bs.bo:
 $(BUILDDIR)/%.bo: %.bs
 	${BSC} ${BSCFLAGS} $<

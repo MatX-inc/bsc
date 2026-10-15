@@ -39,6 +39,7 @@ import Parser.Classic(pPackage, errSyntax, classicWarnings)
 import Parser.BSV(bsvParseString)
 import CSyntax
 import GenFuncWrap(makeGenFuncId)
+import GenWrapUtils(moduleWrapImports, idModuleWrap)
 import IOUtil(getEnvDef, progArgs)
 import TopUtils
 --import Debug.Trace
@@ -181,6 +182,7 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
            | not (usePrelude flags) = []
            | i == idPrelude = []
            | i == idPreludeBSV = [idPrelude]
+           | i == idModuleWrap = [idPrelude]
            | otherwise = [idPrelude, idPreludeBSV]
     let status = if tbo < tbs then Recompile pkg warns else UpToDate pkg warns
     return $ PkgInfo {
@@ -188,7 +190,7 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
                       fileName = fname,
                       srcMod = tbs,
                       lastMod = tbs `max` tbo,
-                      imports = [ i | CImpId _ i <- imps] ++ prelude,
+                      imports = [ i | CImpId _ i <- imps ++ moduleWrapImports gflags pkg] ++ prelude,
                       includes = [i |  CInclude i <- incs],
                       gens = [ i | CPragma (Pproperties i pps) <- defs,
                                    PPverilog `elem` pps ] ++

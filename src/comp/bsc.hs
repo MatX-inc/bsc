@@ -569,9 +569,9 @@ compilePackage
                 --trace (ppReadable (gis, g, os)) $
                                               map get os
           where gis = [ qualId pid i
-                                | (WrapInfo i _ _ _ _ _) <- gs ]
+                                | WrapInfo { mod_nm = i } <- gs ]
                 tr = [ (qualId pid i_, qualId pid i)
-                                | (WrapInfo i _ _ i_ _ _) <- gs ]
+                                | WrapInfo { mod_nm = i, wrapped_mod = i_ } <- gs ]
                 ds' = [ IDef (lookupWithDefault tr i i) t e p
                                 | IDef i t e p <- ds, i `notElem` gis ]
                 is = [ i | IDef i _ _ _ <- ds' ]
@@ -579,7 +579,7 @@ compilePackage
                 iis = scc g
                 os = concat iis `intersect` gis
                 get i = headOrErr "bsc.orderGens: no WrapInfo"
-                                  [ x | x@(WrapInfo i' _ _ _ _ _) <- gs,
+                                  [ x | x@WrapInfo { mod_nm = i' } <- gs,
                                                 unQualId i == i' ]
         ordgens :: [WrapInfo]
         ordgens = orderGens imods gens
@@ -668,8 +668,8 @@ compilePackage
     -- Generate a type signature where everything is visible
     bo_sig <- genEverythingSign errh symt mctx
 
-    -- Check for unused imports by combining packages from all three sources
-    let (CPackage _ _ imports _ _ _ _) = mctx
+    -- Check user imports, excluding dependencies inserted for generated code.
+    let (CPackage _ _ imports _ _ _ _) = min
         allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
         importedPkgs = [i | (CImpId _ i) <- imports]
         unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
@@ -738,7 +738,7 @@ genModule
 
     -- "run" it
     start flags DFexpanded
-    imod0 <- iExpand errh flags symt alldefs atf_cache fwrapper pps def
+    imod0 <- iExpand errh flags symt alldefs atf_cache fwrapper pps (wi_field_info wi) def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
     when (showIESyntax flags) (putStrLnF (show imod0))

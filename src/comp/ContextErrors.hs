@@ -21,7 +21,7 @@ import TCMisc
 import Unify
 
 import FStringCompat (FString, mkFString, getFString)
-import Id(Id, mkId)
+import Id(Id, mkId, getIdQualString)
 import PreIds
 import CSyntax
 import Util(separate, concatMapM, quote, headOrErr, toMaybe, boolCompress)
@@ -64,7 +64,20 @@ reportedPwp s pwp =
           -- been created at a positionless site (e.g. a generated
           -- wrapper signature) while the residual accumulated real
           -- source positions on its way through the reduction
-          _  -> let root = last nonPre
+          _  -> let outer = last nonPre
+                    -- Generic interface traversal is an implementation detail.
+                    -- Keep the existing field-specific synthesis diagnostic,
+                    -- including its source path, instead of exposing WrapIfc.
+                    wrapperFields = [ e | e <- nonPre
+                                        , IsIn c [TCon (TyStr _ _), _, _] <-
+                                            [removePredPositions (apSub s e)]
+                                        , typeclassId (name c) == idWrapField ]
+                    isModuleWrap e = case removePredPositions e of
+                      IsIn c _ -> getIdQualString (typeclassId (name c)) == "ModuleWrap"
+                    root = case wrapperFields of
+                             [] -> outer
+                             _ | isModuleWrap outer -> last wrapperFields
+                               | otherwise -> outer
                     new_poss = filter (`notElem` getPredPositions root)
                                       (getPredPositions pwp)
                 in  apSub s (addPredPositions root new_poss)
@@ -225,6 +238,7 @@ handleContextReduction' mid pos
     | cid == idWrapField =
         case ts of
           [TCon (TyStr name _), t, _] -> return $ handleCtxRedWrapField mid pos p name t
+          [_, _, _] -> return $ defaultContextReductionErr pos p
           _ -> internalError("handleContextReduction': " ++
                              "WrapField instance contains wrong number of types")
 

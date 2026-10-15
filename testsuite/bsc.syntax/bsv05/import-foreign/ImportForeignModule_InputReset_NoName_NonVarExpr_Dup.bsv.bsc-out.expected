@@ -8,7 +8,7 @@ endmodule: launderReset
 module mkMod(Empty);
   let _bv1 <- launderReset(noReset);
   let _bv0 <- launderReset(noReset);
-  Empty _m__;
+  ModuleWrap::WrappedIfc#(ModuleWrap::BVIWrap, Empty) _m__;
   _m__ <- liftModule((unexpected) module verilog "MOD";
 		     reset _rst__1(RST1) clocked_by(no_clock);
 		     reset _rst__2(RST2) clocked_by(no_clock);
@@ -17,6 +17,7 @@ module mkMod(Empty);
 			 }
 			 SchedInfo [] [] [] []
 			 No combinational paths from inputs to outputs);
+  Empty'(ModuleWrap::fromWrapIfc(_m___wrapStyle, _m___wrapInfo, _m__))
 endmodule: mkMod
 
 endpackage: ImportForeignModule_InputReset_NoName_NonVarExpr_Dup

@@ -25,10 +25,11 @@ $(BUILDDIR)/GetPut.bo:	GetPut.bs $(BUILDDIR)/FIFO.bo $(BUILDDIR)/FIFOF.bo $(BUIL
 $(BUILDDIR)/Inout.bo:	Inout.bsv $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/LevelFIFO.bo:	LevelFIFO.bsv $(BUILDDIR)/FIFOLevel.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/List.bo:	List.bs $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
-$(BUILDDIR)/ListN.bo:	ListN.bs $(BUILDDIR)/List.bo $(BUILDDIR)/Vector.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
+$(BUILDDIR)/ListN.bo:	ListN.bs $(BUILDDIR)/List.bo $(BUILDDIR)/Vector.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo $(BUILDDIR)/ModuleWrap.bo
+$(BUILDDIR)/ModuleWrap.bo:	ModuleWrap.bs $(BUILDDIR)/Prelude.bo
 $(BUILDDIR)/Once.bo:	Once.bs $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/Prelude.bo:	Prelude.bs
-$(BUILDDIR)/PreludeBSV.bo:	PreludeBSV.bsv $(BUILDDIR)/Prelude.bo $(BUILDDIR)/Prelude.bo
+$(BUILDDIR)/PreludeBSV.bo:	PreludeBSV.bsv $(BUILDDIR)/Prelude.bo $(BUILDDIR)/ModuleWrap.bo
 $(BUILDDIR)/PrintType.bo:	PrintType.bs $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/Probe.bo:	Probe.bsv $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/ProbeWire.bo:	ProbeWire.bsv $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
@@ -42,4 +43,4 @@ $(BUILDDIR)/SplitPorts.bo:	SplitPorts.bs $(BUILDDIR)/List.bo $(BUILDDIR)/Vector.
 $(BUILDDIR)/SplitVector.bo:	SplitVector.bs $(BUILDDIR)/List.bo $(BUILDDIR)/Vector.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo $(BUILDDIR)/CShow.bo $(BUILDDIR)/Foldable.bo $(BUILDDIR)/Traversable.bo
 $(BUILDDIR)/Traversable.bo:	Traversable.bs $(BUILDDIR)/List.bo $(BUILDDIR)/ListN.bo $(BUILDDIR)/Vector.bo $(BUILDDIR)/Foldable.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
 $(BUILDDIR)/TreeMap.bo:	TreeMap.bs $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
-$(BUILDDIR)/Vector.bo:	Vector.bs $(BUILDDIR)/List.bo $(BUILDDIR)/Array.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo
+$(BUILDDIR)/Vector.bo:	Vector.bs $(BUILDDIR)/List.bo $(BUILDDIR)/Array.bo $(BUILDDIR)/Prelude.bo $(BUILDDIR)/PreludeBSV.bo $(BUILDDIR)/ModuleWrap.bo

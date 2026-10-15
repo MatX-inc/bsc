@@ -12,7 +12,7 @@ module mkMod(Ifc);
   let _bv2 <- exposeCurrentClock;
   let _bv1 <- exposeCurrentClock;
   let _bv0 <- exposeCurrentClock;
-  Ifc _m__;
+  ModuleWrap::WrappedIfc#(ModuleWrap::BVIWrap, Ifc) _m__;
   _m__ <- liftModule((unexpected) module verilog "MOD";
 		     clock _clk__4(CLKC);
 		     clock _clk__6(CLKD);
@@ -32,10 +32,7 @@ module mkMod(Ifc);
 			 }
 			 SchedInfo [] [] [] []
 			 No combinational paths from inputs to outputs);
-  method _clk__4() ;   return (_m__._clk__4);
-  endmethod: _clk__4
-  method _clk__6() ;   return (_m__._clk__6);
-  endmethod: _clk__6
+  Ifc'(ModuleWrap::fromWrapIfc(_m___wrapStyle, _m___wrapInfo, _m__))
 endmodule: mkMod
 
 endpackage: ImportForeignModule_InputClock_NoName_Clash

@@ -2,6 +2,7 @@
 # tests for Bluespec generics
 
 test_c_veri GenericTests
+test_c_veri InterfaceMetadata
 compile_fail GenericNegativeTests.bs
 compare_file GenericNegativeTests.bs.bsc-out
 

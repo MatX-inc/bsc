@@ -39,3 +39,6 @@ compile_fail_error ForeignModClockArg.bsv T0055
 # Test that a polymorphic sub-ifc compiles
 compile_pass ForeignModPolySubIfc.bsv
 
+# Explicit BVI constructors must match even for a nested polymorphic interface.
+compile_fail_error ForeignModWrongSubIfcConstructor.bsv T0020
+

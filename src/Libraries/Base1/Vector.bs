@@ -25,6 +25,7 @@ package Vector(
 
 import List
 import Array
+import ModuleWrap
 
 infixr  8 :>
 
@@ -1427,6 +1428,31 @@ instance (DefaultValue t) => DefaultValue (Vector n t)
 instance Generic (Vector n a) (Meta (MetaData "Vector" "Vector" (NumArg n, StarArg a) 1) (Vector n (Conc a))) where
   from v = Meta $ map Conc v
   to (Meta v) = map (\ Conc x -> x) v
+
+-- Collection instances live here so ModuleWrap can bootstrap PreludeBSV
+-- without importing Vector.  Only vectors of interfaces/special wires are
+-- containers; ordinary value vectors retain their Bits/SplitPorts ABI.
+instance (WrapClassify a k, WrapSequenceKind k result) => WrapClassify (Vector n a) result where {}
+
+instance (WrapPath path "[_]" elementPath, WrapRep style elementPath r w) =>
+    WrapRep style path (Vector n r) (Vector n w) where
+  toWrapRep style _ infos xs =
+    let step pending x = case toWrapRep style (StrArg :: StrArg elementPath) pending x of
+                       (w, rest') -> (rest', w)
+        (rest, ws) = mapAccumL step infos xs
+    in (ws, rest)
+  fromWrapRep style _ infos ws =
+    let step pending w = case fromWrapRep style (StrArg :: StrArg elementPath) pending w of
+                       (x, rest') -> (rest', x)
+        (rest, xs) = mapAccumL step infos ws
+    in (xs, rest)
+  saveWrapRep style _ _ modName infos =
+    let step pending proxy = case saveWrapRep style (StrArg :: StrArg elementPath) proxy modName pending of
+                           (act, rest') -> (rest', act)
+        proxies :: Vector n r
+        proxies = replicate (_ :: r)
+        (rest, acts) = mapAccumL step infos proxies
+    in (mapM_ id acts, rest)
 
 -- Generic implementations of primitive type classes for types with vector generic representations
 instance (PrimMakeUndefined'' r) => PrimMakeUndefined'' (Vector n r) where

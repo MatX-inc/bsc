@@ -68,21 +68,21 @@ arg info  [clockarg default_clock;, resetarg default_reset;]
 -- APackage resets
 [(0, { wire:  RST_N })]
 -- AP state elements
-i :: ABSTRACT:  MethodActionValue.Ifc­ = mkMethodActionValue_Sub
-					 (VModInfo
-					  mkMethodActionValue_Sub
-					  clock default_clock(CLK, {-unused-});
-					  reset default_reset(RST_N) clocked_by(default_clock);
-					  [clockarg default_clock;, resetarg default_reset;]
-					  [method (m, [const])m enable ((EN_m,
-									 [unused])) clocked_by (default_clock) reset_by (no_reset);,
-					   method (RDY_m, [const])RDY_m clocked_by (default_clock) reset_by (no_reset);]
-					  SchedInfo [RDY_m CF [RDY_m, m], m CF m] [] [] []
-					  [])
-					 [clock { osc:  CLK gate:  1'd1 }, reset { wire:  RST_N }]
-					 []
-					 meth types=[([], Just (Bit 1), [Bit 8]), ([], Nothing, [Bit 1])]
-					 port types=m -> Prelude.Bit 8
+i :: ABSTRACT:  Prelude.Meta = mkMethodActionValue_Sub
+			       (VModInfo
+				mkMethodActionValue_Sub
+				clock default_clock(CLK, {-unused-});
+				reset default_reset(RST_N) clocked_by(default_clock);
+				[clockarg default_clock;, resetarg default_reset;]
+				[method (m, [const])m enable ((EN_m,
+							       [unused])) clocked_by (default_clock) reset_by (no_reset);,
+				 method (RDY_m, [const])RDY_m clocked_by (default_clock) reset_by (no_reset);]
+				SchedInfo [RDY_m CF [RDY_m, m], m CF m] [] [] []
+				[])
+			       [clock { osc:  CLK gate:  1'd1 }, reset { wire:  RST_N }]
+			       []
+			       meth types=[([], Just (Bit 1), [Bit 8]), ([], Nothing, [Bit 1])]
+			       port types=m -> Prelude.Bit 8
 -- AP local definitions
 i_m_PLUS_8___d2 :: Bit 8;
 i_m_PLUS_8___d2  = i_m___d1 + 8'd8;

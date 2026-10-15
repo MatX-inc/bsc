@@ -1,10 +1,6 @@
 checking package dependencies
 compiling NoInline_ArgNotInBits.bsv
 Error: "NoInline_ArgNotInBits.bsv", line 4, column 15: (T0043)
-  Cannot synthesize `module_fnNoInline_ArgNotInBits­': The interface method
-  `fnNoInline_ArgNotInBits' uses type(s) that are not in the Bits or
-  SplitPorts typeclasses: NoInline_ArgNotInBits::L
-Error: "NoInline_ArgNotInBits.bsv", line 4, column 15: (T0043)
   Cannot synthesize this module or function: The interface method
   `fnNoInline_ArgNotInBits' uses type(s) that are not in the Bits or
   SplitPorts typeclasses: NoInline_ArgNotInBits::L

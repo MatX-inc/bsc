@@ -5,7 +5,7 @@ module mkMod(Empty);
   let _bv2 <- exposeCurrentReset;
   let _bv1 <- exposeCurrentClock;
   let _bv0 <- exposeCurrentReset;
-  Empty _m__;
+  ModuleWrap::WrappedIfc#(ModuleWrap::BVIWrap, Empty) _m__;
   _m__ <- liftModule((unexpected) module verilog "MOD";
 		     clock _clk__1(CLK, CLK_GATE);
 		     reset _rst__1(RST) clocked_by(_clk__1);
@@ -18,6 +18,7 @@ module mkMod(Empty);
 			 }
 			 SchedInfo [] [] [] []
 			 No combinational paths from inputs to outputs);
+  Empty'(ModuleWrap::fromWrapIfc(_m___wrapStyle, _m___wrapInfo, _m__))
 endmodule: mkMod
 
 endpackage: ImportForeignModule_InputReset_Underscore

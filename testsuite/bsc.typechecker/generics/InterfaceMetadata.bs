@@ -1,0 +1,129 @@
+package InterfaceMetadata where
+
+import InterfaceMetadataBSV
+import PrintType
+import CPrintType
+import CShow
+import SShow
+
+data TypeEq a b = Refl__
+refl :: TypeEq a a
+refl = Refl__
+
+interface View a =
+  value :: a
+ deriving (Bits, Eq)
+
+struct Record a =
+  value :: a
+ deriving (Bits, Eq)
+
+interface PolyView =
+  identity :: a -> a
+
+polyView :: PolyView
+polyView = interface PolyView { identity x = x }
+
+data (Holder :: (* -> *) -> *) c = Holder
+
+-- Equal field shapes retain their different declaration categories.
+viewRep :: (Generic (View a) r) => TypeEq r
+  (Meta (MetaData "View" "InterfaceMetadata" (StarArg a) 1)
+   (Meta (MetaInterface "View" 0 1)
+    (Meta (MetaField "value" 0) (Conc a))))
+viewRep = refl
+
+recordRep :: (Generic (Record a) r) => TypeEq r
+  (Meta (MetaData "Record" "InterfaceMetadata" (StarArg a) 1)
+   (Meta (MetaConsNamed "Record" 0 1)
+    (Meta (MetaField "value" 0) (Conc a))))
+recordRep = refl
+
+leafRep :: (Generic (Leaf a) r) => TypeEq r
+  (Meta (MetaData "Leaf" "InterfaceMetadataBSV" (StarArg a) 1)
+   (Meta (MetaInterface "Leaf" 0 3)
+    (Meta (MetaField "read" 0) (Conc a),
+     Meta (MetaField "write" 1) (Conc (a -> Action)),
+     Meta (MetaField "exchange" 2) (Conc (a -> ActionValue a)))))
+leafRep = refl
+
+-- A wrapper traversal must recurse into subinterfaces, but stop at a
+-- data-valued method even when its result is itself a record.
+class LeafCount a where
+  leafCount :: a -> Integer
+
+instance (LeafCountRep (Rep a)) => LeafCount a where
+  leafCount _ = leafCountRep (_ :: Rep a)
+
+instance LeafCount (a -> b) where
+  leafCount _ = 1
+
+class LeafCountRep r where
+  leafCountRep :: r -> Integer
+
+instance LeafCountRep r where
+  leafCountRep _ = 1
+
+instance (InterfaceFields r) =>
+    LeafCountRep (Meta (MetaData name pkg args 1)
+                 (Meta (MetaInterface cname index nfields) r)) where
+  leafCountRep _ = interfaceFields (_ :: r)
+
+class InterfaceFields r where
+  interfaceFields :: r -> Integer
+
+instance (InterfaceFields a, InterfaceFields b) => InterfaceFields (a, b) where
+  interfaceFields _ = interfaceFields (_ :: a) + interfaceFields (_ :: b)
+
+instance InterfaceFields () where
+  interfaceFields _ = 0
+
+instance (InterfaceFields r) => InterfaceFields (Meta m r) where
+  interfaceFields _ = interfaceFields (_ :: r)
+
+instance (LeafCount a) => InterfaceFields (Conc a) where
+  interfaceFields _ = leafCount (_ :: a)
+
+sysInterfaceMetadata :: Module Empty
+sysInterfaceMetadata = module
+  original <- mkTree
+  phase :: Reg (UInt 2) <- mkReg 0
+  let roundtrip :: Tree
+      roundtrip = to (from original)
+      shownView :: View Bool
+      shownView = interface View { value = True }
+      shownRecord :: Record Bool
+      shownRecord = Record { value = True }
+      polyRoundtrip :: PolyView
+      polyRoundtrip = to (from polyView)
+  rules
+    when phase == 0 ==> do
+      $display (stringOf (TPrintType Tree))
+      $display (stringOf (TPrintType (View (Bit 8))))
+      $display (stringOf (TPrintType (Holder View)))
+      $display (cPrintType roundtrip)
+      $display (cPrintConType (_ :: View ()))
+      $display "CShow interface: " (cshow shownView)
+      $display "CShow struct: " (cshow shownRecord)
+      $display "SShow interface: " (sshow shownView)
+      $display "SShow struct: " (sshow shownRecord)
+      $display "CShow tuple: " (cshow (True, False))
+      $display "SShow tuple: " (sshow (True, False))
+      $display "tuple leaves: %0d" (leafCount (True, False))
+      $display "polymorphic roundtrip: %0d "
+        (polyRoundtrip.identity (7 :: UInt 8))
+        (cshow (polyRoundtrip.identity True))
+      $display "polymorphic interface: " (sshow polyRoundtrip)
+      $display "partial interface updates: %0d %0d" fromUndefined fromUninitialized
+      $display "interface leaves: %0d" (leafCount roundtrip)
+      $display "value roundtrip: %0d %0d %0d"
+        roundtrip.child.read roundtrip.sample.first roundtrip.sample.second
+      roundtrip.child.write 9
+      phase := 1
+    when phase == 1 ==> do
+      previous <- roundtrip.child.exchange 11
+      $display "action roundtrip: %0d" previous
+      phase := 2
+    when phase == 2 ==> do
+      $display "actionvalue roundtrip: %0d" roundtrip.child.read
+      $finish

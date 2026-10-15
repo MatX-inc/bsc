@@ -76,6 +76,7 @@ import IExpandUtils
 import Wires
 import IWireSet
 import qualified IfcBetterInfo as BetterInfo
+import StructuralWrap
 
 import ITransform(iTransExpr)
 
@@ -254,9 +255,9 @@ iExpandPref = "__h"
 iExpand :: ErrorHandle -> Flags ->
            SymTab -> M.Map Id HExpr ->
            IATFCache ->
-           Bool -> [PProp] -> HDef ->
+           Bool -> [PProp] -> [(Id, [IfcPragma])] -> HDef ->
            IO (IModule HeapData)
-iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
+iExpand errh flags symt alldefs atf_cache is_noinlined_func pps fieldPragmas def@(IDef mi _ _ _) = do
   -- unbuffer output if we're tracing
   when (doAnyTrace || showElabProgress flags) $
       do hSetBuffering stdout LineBuffering
@@ -264,7 +265,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
   -- execute the static elaboration
   -- go is of type GOutput X, where X is the large tuple output of iExpandModuleDef
   go <- runG errh flags symt alldefs atf_cache mi is_noinlined_func pps $
-            iExpandModuleDef def
+            iExpandModuleDef fieldPragmas def
   -- trace the steps and heap size
   when doTraceSteps $ putStrLn ("expansion steps: " ++ (show (go_steps go)))
   when doTraceHeapSize $ putStrLn ("heap size: " ++ (show (go_hp go)))
@@ -810,9 +811,9 @@ eqPtrs heap ptrs =
 
 -- convert top level module definition for which code is being generated
 iExpandModuleDef ::
-    HDef ->
+    [(Id, [IfcPragma])] -> HDef ->
     G ([(Id, IKind)], [IAbstractInput], [VArgInfo], [IEFace HeapData])
-iExpandModuleDef (IDef i t e _) = do
+iExpandModuleDef fieldPragmas (IDef i t e _) = do
     -- this was to allow code-gen of modules with numeric parameters,
     -- but we don't support that, so set the list of such params to null
     let iks = []
@@ -923,7 +924,7 @@ iExpandModuleDef (IDef i t e _) = do
     -- iExpandIface:
     --   turns a struct of ILams into IEFace: evaluates method bodies and takes
     --   the methods out of the interface struct
-    ifcs <- iExpandIface mod_id clkRst ifc'
+    ifcs <- iExpandIface mod_id fieldPragmas clkRst ifc'
 
     popIfcSchedNameScope
 
@@ -1225,8 +1226,70 @@ findModArgResetByAttr pps arg_id =
 -- iExpandField probably needs to be called in a type-driven order
 -- (i.e. clocks, resets, other stuff) so that boundary clocks and resets can
 -- be reconciled for each other and for methods
-iExpandIface :: Id -> (HClock, HReset) -> PExpr -> G [IEFace HeapData]
-iExpandIface modId clkRst (P pi e@(IAps c@(ICon _ (ICTuple { fieldIds = fs0 })) ts es)) = do
+iExpandIface :: Id -> [(Id, [IfcPragma])] -> (HClock, HReset) ->
+                PExpr -> G [IEFace HeapData]
+iExpandIface modId fieldPragmas clkRst pe@(P pi e) = do
+    norm <- getTypeNormalizerC
+    case iWrapShape (iGetTypeNorm norm e) of
+      Nothing -> iExpandNominalIface modId clkRst pe
+      Just shape -> do
+        fields <- collectWrappedFields (getPosition modId) pi [] shape e
+        let pragmas = M.fromList [(unQualId i, ps) | (i, ps) <- fieldPragmas]
+            better i =
+              let ps = M.findWithDefault [] i pragmas
+                  defaults = BetterInfo.noMethodInfo i
+              in defaults {
+                   BetterInfo.mi_ready = maybe (BetterInfo.mi_ready defaults)
+                     str_to_vPort (lookupRdySignalIfcPragma ps),
+                   BetterInfo.mi_enable = maybe (BetterInfo.mi_enable defaults)
+                     str_to_vPort (lookupEnSignalIfcPragma ps),
+                   BetterInfo.mi_prefix = maybe i (setIdBaseString i)
+                     (lookupPrefixIfcPragma ps) }
+            isClock (_,_,_,t) = t == itClock
+            isReset (_,_,_,t) = t == itReset
+            (clocks, rest) = partition isClock fields
+            (resets, methods) = partition isReset rest
+            expand (i, p, e, t) = iExpandField modId p clkRst (i, better i, e, t)
+        clockFields <- mapM expand clocks
+        makeDomainToBoundaryIdsMap
+        resetFields <- mapM expand resets
+        methodFields <- mapM expand methods
+        return (concat (clockFields ++ resetFields ++ methodFields))
+
+-- Only traverse the structural carrier.  In particular, do not force a
+-- method's readiness slot: as with the old generated ready fields, the
+-- actual ready expression is obtained by elaborating the method body.
+collectWrappedFields :: Position -> HPred -> [String] -> WrapShape IType ->
+                        HExpr -> G [(Id, HPred, HExpr, IType)]
+collectWrappedFields _ _ _ shape _ | emptyWrapShape shape = return []
+collectWrappedFields pos p path shape e = do
+    (_, P p' e') <- evalUH e
+    let pred = pConj p p'
+        recur = collectWrappedFields pos pred
+        fieldId = mkId pos (mkFString (intercalate "_" path))
+    case (shape, e') of
+      (WrapMeta _ _ name child, IAps (ICon _ (ICCon {})) _ [body]) ->
+        recur (maybe path (\n -> path ++ [n]) name) child body
+      (WrapPair _ a b, IAps (ICon _ (ICTuple {})) _ [ea, eb]) -> do
+        fa <- recur path a ea
+        fb <- recur path b eb
+        return (fa ++ fb)
+      (WrapLeaf _ t, IAps (ICon _ (ICTuple {})) _ [value, _]) ->
+        return [(fieldId, pred, value, t)]
+      (WrapVector _ n child, IAps (ICon _ (ICCon {})) _ [array]) -> do
+        (_, P pa arr) <- evalUH array
+        case arr of
+          ICon _ (ICLazyArray _ cells Nothing)
+            | toInteger (length (Array.elems cells)) == n -> do
+              let one (k, ArrayCell ptr ref) =
+                    collectWrappedFields pos (pConj pred pa) (path ++ [show k])
+                      child (IRefT (wrapShapeType child) ptr S.empty ref)
+              concat <$> mapM one (zip [0 :: Integer ..] (Array.elems cells))
+          _ -> internalError ("collectWrappedFields: vector " ++ ppReadable arr)
+      _ -> internalError ("collectWrappedFields: " ++ ppReadable e')
+
+iExpandNominalIface :: Id -> (HClock, HReset) -> PExpr -> G [IEFace HeapData]
+iExpandNominalIface modId clkRst (P pi e@(IAps c@(ICon _ (ICTuple { fieldIds = fs0 })) ts es)) = do
         flags <- getFlags
         symt <- getSymTab
 
@@ -1272,11 +1335,11 @@ iExpandIface modId clkRst (P pi e@(IAps c@(ICon _ (ICTuple { fieldIds = fs0 })) 
 
         return $ concat (clock_xs ++ reset_xs ++ method_xs)
 
-iExpandIface _ _ (P pi (ICon _ (ICTuple { fieldIds = [] }))) | pi == pTrue =
+iExpandNominalIface _ _ (P pi (ICon _ (ICTuple { fieldIds = [] }))) | pi == pTrue =
     do -- need to make sure the map is made!
        makeDomainToBoundaryIdsMap
        return []
-iExpandIface _ _ e = internalError ("iExpandIface: " ++ ppReadable e)
+iExpandNominalIface _ _ e = internalError ("iExpandIface: " ++ ppReadable e)
 
 
 -- expand an interface field
@@ -1721,7 +1784,13 @@ handlePrim isMFix (curClk, curRstn) ns p
                     _ -> internalError ("handlePrim: ICVerilog: " ++
                                         "newState didn't return ICStateVar")
         mapM_ (chkModuleArgumentClkRst inst_id v) (zip3 vargs es' port_infos)
-        return (P p e)
+        -- Imported methods still use the existing flat state-variable
+        -- representation internally.  Rebuild the generic carrier around
+        -- its typed selectors so ordinary library code can unwrap it.
+        wrapped <- case iWrapShape mod_type of
+          Nothing -> return e
+          Just shape -> buildWrappedState shape info e
+        return (P p wrapped)
 
 handlePrim isMFix curClkRstn ns p e@(IAps (ICon _ (ICPrim { primOp = PrimSavePortType })) _ [e_mname, e_port, e_type]) = do
   mname <- do m <- evalMaybe e_mname
@@ -1891,6 +1960,57 @@ chkStateVarTypes i t tss = do
     findATFs (ITAp f a) = findATFs f ++ findATFs a
     findATFs (ITForAll _ _ body) = findATFs body
     findATFs _ = []
+
+-- instantiate a state variable (Verilog module)
+-- Reconstruct the structural type without changing the primitive module ABI.
+-- Readiness fields omitted by an always-ready import become constant True;
+-- clocks, resets and inouts have an unused readiness slot of the same value.
+buildWrappedState :: WrapShape IType -> VModInfo -> HExpr -> G HExpr
+buildWrappedState shape vi state = do
+    result <- build [] shape
+    -- Keep the primitive instance's identity even for an empty interface,
+    -- which has no method selector through which primGetModuleName could
+    -- recover it.  This name exists only on the elaborated carrier; it does
+    -- not change the constructor's tag or the structural type.
+    case (state, result) of
+      (ICon name (ICStateVar {}), IAps (ICon _ con@(ICCon {})) ts es) ->
+        return (IAps (ICon (addIdProp name IdPGeneratedIfc) con) ts es)
+      _ -> internalError "buildWrappedState: expected outer Meta constructor"
+  where
+    rootType = wrapShapeType shape
+    pos = getIExprPosition state
+    fields = M.fromList [(unQualId (vf_name f), n)
+                         | (f, n) <- zip (vFields vi) [0 :: Integer ..]]
+    fieldCount = toInteger (length (vFields vi))
+    select name t =
+      case M.lookup name fields of
+        Just n -> IAps (ICon name (ICSel (rootType `itFun` t) n fieldCount)) [] [state]
+        Nothing | isRdyId name -> iMkLitSize 1 1
+        Nothing -> internalError ("buildWrappedState: missing field " ++ ppReadable name)
+    oneConstructor name t argType arg =
+      IAps (ICon name (ICCon (argType `itFun` t) (ConTagInfo 0 1 0 0))) [] [arg]
+    build _ (WrapUnit t) = return (ICon idPrimUnit (ICTuple t []))
+    build path (WrapPair _ a b) = do
+      ea <- build path a
+      eb <- build path b
+      return (iMkPairAt pos (wrapShapeType a) (wrapShapeType b) ea eb)
+    build path (WrapMeta t _ name child) = do
+      e <- build (maybe path (\n -> path ++ [n]) name) child
+      return (oneConstructor idMeta t (wrapShapeType child) e)
+    build path (WrapVector t n child) = do
+      es <- mapM (\k -> build (path ++ [show k]) child) [0 .. n-1]
+      cells <- mapM mkArrayCell es
+      let elemType = wrapShapeType child
+          arrayType = ITAp itPrimArray elemType
+          arr = ICon idPrimArray (ICLazyArray arrayType (Array.listArray (0,n-1) cells) Nothing)
+          vectorCon = mkQId pos (getIdQual idVector) (mkFString "V")
+      return (oneConstructor vectorCon t arrayType arr)
+    build path (WrapLeaf _ t) = do
+      let name = mkId pos (mkFString (intercalate "_" path))
+          value = select name t
+          ready | t == itClock || t == itReset || isitInout_ t = iMkLitSize 1 1
+                | otherwise = select (mkRdyId name) itBit1
+      return (iMkPairAt pos t itBit1 value ready)
 
 -- instantiate a state variable (Verilog module)
 newState :: Bool -> Bool -> IType -> [[IType]] -> VModInfo ->
@@ -2768,6 +2888,10 @@ evalUHNF e = do
 -- the HWireSet returned only relates to the HExpr
 -- the implicit condition's HWireSet will be returned by evalPred
 walkNF :: HExpr -> G (PExpr, HWireSet)
+-- A primitive instance is an opaque method receiver even when its source
+-- interface is represented by a structural carrier instead of a nominal
+-- interface type.  The enclosing selector accounts for its clock/reset use.
+walkNF e@(ICon _ (ICStateVar {})) = return (pExpr e, wsEmpty)
 walkNF e =
   if not (isPrimType (iGetType e)) then do
     when (doDebug || doTraceNF) $ traceM ("not prim type: " ++ ppReadable (e, iGetType e))
@@ -3725,7 +3849,8 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
 -- turn all unit-argument / no-argument constructiors into PrimChr
 -- this is safe because the difference is not observable, and it helps with
 -- improveIf
-conAp' i (ICCon ict cti) _ as | hasNoArg = do
+conAp' i (ICCon ict cti) _ as
+  | hasNoArg && not (hasIdProp i IdPGeneratedIfc) = do
     norm <- getTypeNormalizer
     evalAp "ICCon Enum" icPrimChr (T sizeNum :  T (norm resultType) :  E bitExpr : as')
   where sizeNum    = mkNumConT (tagSize cti)
@@ -3916,8 +4041,16 @@ conAp' i (ICPrim _ PrimGetParamName) e [T _, T _, E fun] = do
 -- get the name of a state instance
 conAp' _ (ICPrim _ PrimGetModuleName) _ [T t, E e] = do
   e' <- evaleUH e
+  norm <- getTypeNormalizerC
   case e' of
     (ICon i (ICStateVar {})) -> return $ pExpr (iMkName i i)
+    -- Structural imports retain their instance name on the outer Meta
+    -- constructor.  Recover it without evaluating any method or readiness
+    -- slot (and also when the interface has no fields).
+    (IAps (ICon i (ICCon {})) _ _)
+      | hasIdProp i IdPGeneratedIfc, Just _ <- iWrapShape (iGetTypeNorm norm e') ->
+          let name = rmIdProp i IdPGeneratedIfc
+          in return $ pExpr (iMkName name name)
     _ -> do
      e'' <- unheapAll e'
      let err = "PrimGetModuleName: no state var - " ++ ppReadable e''

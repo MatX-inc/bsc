@@ -3,7 +3,7 @@ checking package dependencies
 package ImportForeignModule_DefaultClock_Underscore;
 module mkMod(Empty);
   let _bv0 <- exposeCurrentClock;
-  Empty _m__;
+  ModuleWrap::WrappedIfc#(ModuleWrap::BVIWrap, Empty) _m__;
   _m__ <- liftModule((unexpected) module verilog "MOD";
 		     clock _(CLK1, {-inhigh-});
 		     reset rst(RSTN) clocked_by(_);
@@ -12,6 +12,7 @@ module mkMod(Empty);
 			 }
 			 SchedInfo [] [] [] []
 			 No combinational paths from inputs to outputs);
+  Empty'(ModuleWrap::fromWrapIfc(_m___wrapStyle, _m___wrapInfo, _m__))
 endmodule: mkMod
 
 endpackage: ImportForeignModule_DefaultClock_Underscore

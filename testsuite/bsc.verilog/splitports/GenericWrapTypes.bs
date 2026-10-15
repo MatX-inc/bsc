@@ -1,0 +1,26 @@
+package GenericWrapTypes where
+
+-- The source type has two fields, but the boundary layout deliberately
+-- reverses them.  A synthesized boundary uses this SplitPorts instance;
+-- an imported BVI boundary must continue to use the packed Bits layout.
+struct Payload =
+  lo :: Bit 8
+  hi :: Bit 8
+ deriving (Bits, Eq)
+
+instance SplitPorts Payload (Port (Bit 8), Port (Bit 8)) where
+  splitPorts x = (Port x.hi, Port x.lo)
+  unsplitPorts (Port hi, Port lo) = Payload { lo = lo; hi = hi }
+  portNames _ base = Cons (base +++ "_upper") $ Cons (base +++ "_lower") Nil
+
+interface Leaf a =
+  read :: a
+  put :: a -> Action
+  exchange :: a -> ActionValue a
+  translate :: a -> a
+
+interface Tree a =
+  leaf :: Leaf a
+  -- This is a record-valued method, not a subinterface, despite having the
+  -- same named-field Generic structure as an interface without MetaInterface.
+  snapshot :: a

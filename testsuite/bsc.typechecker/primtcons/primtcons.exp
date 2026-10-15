@@ -110,14 +110,33 @@ compile_pass CExtendATFExplicit.bsv
 
 # ---------------
 # SizeOf in the length of a Vector of subinterfaces (GitHub Issue #313,
-# Bluespec Inc Bug 1917).  This is not fixed by PR #916: the example typechecks,
-# but fails when synthesized, because GenWrap decides whether the field is a
-# method or a subinterface before typecheck and cannot reduce the SizeOf.
+# Bluespec Inc Bug 1917).  Metadata and generic wrapping must traverse the same
+# number of elements, including nested Vector/ListN containers.
 compile_pass ExpSizeOf_VectorIfc.bsv
-# two T0043s in the combined tree: the definition-level report and the
-# module-site report (batch-6 diagnostics completeness; same adjustment
-# as release-2026.07.rc3)
-compile_verilog_fail_error ExpSizeOf_VectorIfc.bsv T0043 2
+compile_verilog_pass ExpSizeOf_VectorIfc.bsv
+compile_verilog_pass ExpSizeOf_NestedVectorIfc.bsv
+compile_verilog_pass ExpSizeOf_PackedVectorBVI.bsv
+if { $vtest == 1 } {
+    foreach i {0 1} {
+        string_occurs mkExample.v "input  example_${i}__write_x;"
+        string_occurs mkExample.v "input  EN_example_${i}__write;"
+        string_occurs mkExample.v "output RDY_example_${i}__write;"
+        foreach j {0 1} {
+            string_occurs mkNestedVectorIfc.v "input  lanes_${i}_${j}__write_x;"
+            string_occurs mkNestedVectorIfc.v "input  EN_lanes_${i}_${j}__write;"
+            string_occurs mkNestedVectorIfc.v "output RDY_lanes_${i}_${j}__write;"
+        }
+    }
+    string_occurs mkNestedVectorIfc.v {output [15 : 0] samples;}
+    string_occurs mkPackedVectorMethod.v {output [1 : 0] echo;}
+    string_occurs mkPackedVectorMethod.v {input  echo_x;}
+    string_does_not_occur mkPackedVectorMethod.v {echo_0}
+}
+
+# Local deriving happens after wrapper generation.  A length that cannot yet
+# be resolved must fail with a source diagnostic, never malformed metadata.
+compile_pass ExpSizeOf_VectorIfcUnresolved.bsv
+compile_verilog_fail_error ExpSizeOf_VectorIfcUnresolved.bsv T0043
 
 # ---------------
 

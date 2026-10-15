@@ -1,13 +1,13 @@
 
-Test Vector Array List PreludeBSV Prelude
-Test Vector Array List PreludeBSV Prelude
+Test Vector Array List PreludeBSV ModuleWrap Prelude
+Test Vector Array List PreludeBSV ModuleWrap Prelude
 
 
-Test Vector Array List PreludeBSV Prelude
-Test Vector Array List PreludeBSV Prelude
-Test Vector RegFile Array List ConfigReg PreludeBSV Prelude
-Test Vector RegFile Array List ConfigReg PreludeBSV Prelude
-Depends: {Test {Prelude PreludeBSV List Array Vector}} {Vector {Prelude PreludeBSV List Array}} {RegFile {Prelude PreludeBSV ConfigReg List}} {Array {Prelude PreludeBSV List}} {List {Prelude PreludeBSV}} {ConfigReg {Prelude PreludeBSV}} {PreludeBSV Prelude} {Prelude {}}
+Test Vector Array List PreludeBSV ModuleWrap Prelude
+Test Vector Array List PreludeBSV ModuleWrap Prelude
+Test Vector RegFile Array List ConfigReg PreludeBSV ModuleWrap Prelude
+Test Vector RegFile Array List ConfigReg PreludeBSV ModuleWrap Prelude
+Depends: {Test {Prelude ModuleWrap PreludeBSV List Array Vector}} {Vector {Prelude ModuleWrap PreludeBSV List Array}} {RegFile {Prelude ModuleWrap PreludeBSV ConfigReg List}} {Array {Prelude ModuleWrap PreludeBSV List}} {List {Prelude ModuleWrap PreludeBSV}} {ConfigReg {Prelude ModuleWrap PreludeBSV}} {PreludeBSV {Prelude ModuleWrap}} {ModuleWrap Prelude} {Prelude {}}
 
 Search Bar:
 Test Bar
@@ -55,9 +55,6 @@ PreludeBSV vMkCRegA5
 PreludeBSV mkCReg
 PreludeBSV mkCRegU
 PreludeBSV mkCRegA
-PreludeBSV _PreludeBSV.CReg5713
-PreludeBSV _PreludeBSV.CReg5809
-PreludeBSV _PreludeBSV.CReg5904
 Prelude Reg
 Prelude VReg
 Prelude vMkReg

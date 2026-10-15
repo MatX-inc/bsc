@@ -44,8 +44,8 @@ if {$ctest == 1} {
 
     find_n_strings $out nullCrossingWire 1
 
-    # compiling "file" and the actual error message
-    find_n_strings $out BadDomainError.bsv 6
+    # Compilation, error/elaboration positions, and the wset call position
+    find_n_strings $out BadDomainError.bsv 7
 }
 
 

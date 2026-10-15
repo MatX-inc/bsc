@@ -16,6 +16,7 @@ package ListN(
 
 import List
 import Vector
+import ModuleWrap
 
 infixr  8 :>
 
@@ -1040,3 +1041,5 @@ mapPairs f g (L xs) = L (List.mapPairs f g xs)
 instance Generic (ListN n a) (Meta (MetaData "ListN" "ListN" (NumArg n, StarArg a) 1) (Vector n (Conc a))) where
   from l = Meta $ (Vector.map Conc) $ toVector $ toList l
   to (Meta v) = toListN $ Vector.toList $ Vector.map (\ Conc x -> x) v
+
+instance (WrapClassify a k, WrapSequenceKind k result) => WrapClassify (ListN n a) result where {}

@@ -10,6 +10,7 @@ import Control.Monad(when, foldM)
 import qualified Data.Map as M
 import Flags(Flags,
              ifcPath,
+             genName,
              enablePoisonPills,
              usePrelude,
              verbose)
@@ -25,6 +26,8 @@ import SCC
 import FileNameUtil(binSuffix)
 import FileIOUtil(readBinFilePath)
 import GenBin(readBinFile)
+import GenWrapUtils(moduleWrapImports, idModuleWrap)
+import FStringCompat(mkFString)
 import Util(fromJustOrErr, fromMaybeM,
             map_insertManyWith, map_insertManyWithKeyM)
 
@@ -53,11 +56,13 @@ type BinMap a = M.Map String (BinFile a)
 readImports :: ErrorHandle -> Flags -> BinMap a -> HashMap -> CPackage ->
                IO (CPackage, BinMap a, HashMap)
 readImports errh flags binmap0 hashmap0
-            (CPackage pkgId exps imps old_impsigs fixs ds includes) = do
+            pkg@(CPackage pkgId exps imps old_impsigs fixs ds includes) = do
   when (not (null old_impsigs)) $
       internalError "readImports: unexpected non-empty impsigs"
   let
       pkgName = getIdString pkgId
+      genNames = map (mkId noPosition . mkFString) (genName flags)
+      imps' = imps ++ moduleWrapImports genNames pkg
 
       -- Replace qualified importing only (True) with unqualified and
       -- qualified (False)
@@ -79,7 +84,7 @@ readImports errh flags binmap0 hashmap0
              return (binmap', hashmap', qualmap'')
 
   (binmap, hashmap, qualmap)
-      <- foldM fn (binmap0, hashmap0, M.empty) (addPrelude flags imps)
+      <- foldM fn (binmap0, hashmap0, M.empty) (addPrelude flags imps')
 
   let mkCImp (s, q) = case (M.lookup s binmap) of
                         Just (fn, bi_sig, _, _, _) -> CImpSign fn q bi_sig
@@ -87,7 +92,7 @@ readImports errh flags binmap0 hashmap0
   let impsigs' = map mkCImp (M.toList qualmap)
 
   let sortedImpsigs = sortImportedSignatures impsigs'
-  let cpkg' = CPackage pkgId exps imps sortedImpsigs fixs ds includes
+  let cpkg' = CPackage pkgId exps imps' sortedImpsigs fixs ds includes
 
   return (cpkg', binmap, hashmap)
 
@@ -142,12 +147,16 @@ sortImportedSignatures signatures =
         addImplicitPreludeDependency (name, imports)
             | name == strPrelude = (name, imports)
             | name == strPreludeBSV = (name, imports)
+            -- ModuleWrap is built between Prelude and PreludeBSV: its
+            -- explicit Prelude import is its only bootstrap dependency.
+            | name == strModuleWrap = (name, strPrelude:imports)
             | otherwise = (name, strPrelude :
                            strPreludeBSV :
                            filter (\ x -> x /= strPrelude && x /= strPreludeBSV)
                                   imports)
             where strPrelude = getIdString idPrelude
                   strPreludeBSV = getIdString idPreludeBSV
+                  strModuleWrap = getIdString idModuleWrap
         sGraph = [ addImplicitPreludeDependency (getIdString name,
                                                  map getIdString imports)
                    | (CImpSign _ _ (CSignature name imports _ _))

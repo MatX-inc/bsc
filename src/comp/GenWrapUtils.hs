@@ -10,6 +10,7 @@ import Pragma
 import PreIds
 import CSyntax
 import CSyntaxUtil(posLiteral, numLiteralAt)
+import CFreeVars(getFVD, getFVDl, getFVC, fvSetToFreeVars)
 import CType
 import Undefined (UndefKind(..))
 
@@ -28,6 +29,48 @@ addInternalProp lid = addIdProp lid IdPGeneratedIfc
 
 isGenId :: Id -> Bool
 isGenId i = hasIdProp i IdPGeneratedIfc
+
+
+-- ====================
+-- The BVI parser leaves this ordinary local binding for GenWrap to fill in
+-- after it can inspect the imported interface's fields in declaration order.
+bviWrapInfoId :: Id -> Id
+bviWrapInfoId i = setInternal (mkIdPost i (mkFString "_wrapInfo"))
+
+-- The style binding carries the source interface shape for polymorphic BVI
+-- leaves, whose Bits constraint need not imply a Generic representation.
+bviWrapStyleId :: Id -> Id
+bviWrapStyleId i = setInternal (mkIdPost i (mkFString "_wrapStyle"))
+
+
+-- ====================
+-- Wrapping is ordinary library code, so its signatures must be available
+-- before GenWrap and its dependency must be visible to -u and makedepend.
+-- BVI imports already contain a qualified wrapping call after parsing;
+-- synthesis and noinline definitions acquire one during GenWrap.
+idModuleWrap :: Id
+idModuleWrap = mkId noPosition (mkFString "ModuleWrap")
+
+moduleWrapImports :: [Id] -> CPackage -> [CImport]
+moduleWrapImports genNames (CPackage pkgId _ imps _ _ ds _)
+  | pkgId == idModuleWrap = []
+  | any importsWrap imps = []
+  | any needsWrap ds = [CImpId True idModuleWrap]
+  | otherwise = []
+ where
+  importsWrap (CImpId _ i) = i == idModuleWrap
+  isWrapRef i = getIdQual i == getIdBase idModuleWrap
+  refsNeedWrap = any isWrapRef . fvSetToFreeVars
+  isGenerated i = any ((== unQualId i) . unQualId) genNames
+  needsWrap (CPragma (Pproperties _ ps)) = PPverilog `elem` ps
+  needsWrap (CPragma (Pnoinline is)) = not (null is)
+  needsWrap (CValueSign d@(CDef i _ _)) = isGenerated i || refsNeedWrap (getFVD d)
+  needsWrap (CValue i cs) = isGenerated i || any (refsNeedWrap . getFVC) cs
+  needsWrap (Cinstance _ dls) = any (refsNeedWrap . getFVDl) dls
+  needsWrap (Cstruct _ _ _ _ fs _) = any fieldNeedsWrap fs
+  needsWrap (Cclass _ _ _ _ _ _ fs) = any fieldNeedsWrap fs
+  needsWrap _ = False
+  fieldNeedsWrap = any (refsNeedWrap . getFVC) . cf_default
 
 
 -- ====================

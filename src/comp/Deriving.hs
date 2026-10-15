@@ -16,7 +16,7 @@ import PreIds(
               -- type constructors
               idBit, idAdd, idMax,
               idConc, idConcPrim, idConcPoly, idMeta,
-              idMetaData, idStarArg, idNumArg, idStrArg, idStarConArg, idNumConArg, idOtherConArg,
+              idMetaData, idMetaInterface, idStarArg, idNumArg, idStrArg, idStarConArg, idNumConArg, idOtherConArg,
               idMetaConsNamed, idMetaConsAnon, idMetaField,
               -- classes that the compiler can derive
               idEq, idBits, idFShow, idBounded, idDefaultValue,
@@ -815,7 +815,7 @@ doSGeneric :: SymTab -> Id -> Position -> Id -> [Type] -> CFields -> Either EMsg
 doSGeneric r packageid dpos i vs fs = mkGenericInstance r packageid dpos i vs False
   [(i, Just [fn | CField {cf_name=fn} <- fs], [fty | CField {cf_type=fty} <- fs])]
 
--- Build an instance of Generic for a struct / data declaration,
+-- Build an instance of Generic for a struct / interface / data declaration,
 -- along with any needed poly field wrapper structs and instances
 -- Arguments:
 --   r == the symbol table
@@ -846,6 +846,10 @@ mkGenericInstance r packageid dpos i vs isData summands =
                           | (cn, mfns, ftys) <- summands,
                             (fn, fty@(CQType ps _)) <- zip (fieldNames mfns dpos) ftys,
                             fieldHigherRank fty]
+        isIfcType = case findType r i of
+          Just (TypeInfo _ _ _ (TIstruct s _) _) -> isIfc s
+          _ -> False
+
         rep = cTApplys (cTCon idMeta)
           [cTApplys (cTCon idMetaData)
            [cTStr (getIdBase i) dpos,
@@ -863,7 +867,8 @@ mkGenericInstance r packageid dpos i vs isData summands =
            tMkEitherTree dpos
             [cTApplys (cTCon idMeta)
               [cTApplys (cTCon $ case mfns of
-                            Just _ -> idMetaConsNamed
+                            Just _ | isIfcType -> idMetaInterface
+                                   | otherwise -> idMetaConsNamed
                             Nothing -> idMetaConsAnon)
                 [cTStr (getIdBase cn) dpos,
                   cTNum k dpos,
@@ -902,20 +907,26 @@ mkGenericInstance r packageid dpos i vs isData summands =
            [CPCon idMeta
             [pMkEitherTree dpos k (length summands) $
              CPCon idMeta
-              [pMkTuple dpos
+              [pMkTuple toTermPos
                [CPCon idMeta
                 [CPCon (if fieldHigherRank fty then idConcPoly else idConc)
-                 [CPVar $ mkId dpos $ mkFString $ "a" ++ show (j :: Int)]]
+                 [CPVar $ fieldVar j]]
                | (j, fty) <- zip [1..] ftys]]]] [] $
             let args = [
                   if fieldHigherRank fty
-                  then CSelect (CVar $ mkId dpos $ mkFString $ "a" ++ show j) idPolyWrapField
-                  else CVar $ mkId dpos $ mkFString $ "a" ++ show (j :: Int)
+                  then CSelect (CVar $ fieldVar j) idPolyWrapField
+                  else CVar $ fieldVar j
                   | (j, fty) <- zip [1..] ftys]
             in case mfns of
               Nothing -> CCon cn args
               Just fns -> CStruct (Just (not isData)) cn $ zip fns args
           | (k, (cn, mfns, ftys)) <- zip [0..] summands] []
+        -- Interface tuple projections and variables only move fields through
+        -- the generated representation.  Stamping them with the declaration
+        -- position can turn it into an apparent method call when an Action
+        -- is inlined.
+        toTermPos = if isIfcType then noPosition else dpos
+        fieldVar j = mkId toTermPos $ mkFString $ "a" ++ show (j :: Int)
         inst = Cinstance (CQType preds (TAp (TAp (cTCon idGeneric) ty) rep)) [from, to]
 
 -- Build a wrapper struct for generic representation of a polymorphic field.

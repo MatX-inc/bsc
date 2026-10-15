@@ -8,7 +8,7 @@ endmodule: launderClock
 module mkMod(Empty);
   let _bv1 <- launderClock(noClock);
   let _bv0 <- launderClock(noClock);
-  Empty _m__;
+  ModuleWrap::WrappedIfc#(ModuleWrap::BVIWrap, Empty) _m__;
   _m__ <- liftModule((unexpected) module verilog "MOD";
 		     clock _clk__1(CLK1, {-inhigh-});
 		     clock _clk__2(CLK2, {-inhigh-});
@@ -17,6 +17,7 @@ module mkMod(Empty);
 			 }
 			 SchedInfo [] [] [] []
 			 No combinational paths from inputs to outputs);
+  Empty'(ModuleWrap::fromWrapIfc(_m___wrapStyle, _m___wrapInfo, _m__))
 endmodule: mkMod
 
 endpackage: ImportForeignModule_InputClock_NoName_NonVarExpr_Dup

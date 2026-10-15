@@ -320,3 +320,35 @@ compile_verilog_pass SplitIfTuple.bsv
 compile_verilog_pass SplitIfTuple.bsv {} {-no-lift}
 # The cross-rule variant exercises AState's per-port muxing of tuple args.
 compile_verilog_pass CrossRule.bsv
+
+# Generic interface wrapping must distinguish nested interfaces from
+# record-valued methods.  Synthesis honors custom SplitPorts layouts, while
+# BVI preserves its packed Bits ABI for exactly the same source interface.
+# The simulation checks both directions, ActionValue results, and readiness.
+test_veri_only_bsv_modules GenericWrapStyles {GenericWrapForeign}
+if { $vtest == 1 } {
+    find_regexp mkGenericWrapSynth.v {input  \[7 : 0\] leaf_put_1_upper;}
+    find_regexp mkGenericWrapSynth.v {input  \[7 : 0\] leaf_put_1_lower;}
+    find_regexp mkGenericWrapSynth.v {output \[7 : 0\] snapshot_upper;}
+    find_regexp mkGenericWrapSynth.v {output \[7 : 0\] snapshot_lower;}
+    string_does_not_occur mkGenericWrapSynth.v {RDY_leaf_read}
+    string_does_not_occur mkGenericWrapSynth.v {RDY_leaf_translate}
+    string_does_not_occur mkGenericWrapSynth.v {RDY_snapshot}
+}
+
+# Internal interface classification and field paths remain coherent when
+# user classes use global incoherent matching.  Recompile so -u does not
+# reuse the wrappers from the flag-off run above.
+erase GenericWrapStyles.bo
+test_veri_only_bsv_modules_options GenericWrapStyles {GenericWrapForeign} {-incoherent-instance-matches}
+if { $vtest == 1 } {
+    string_does_not_occur GenericWrapStyles.bsv.bsc-vcomp-out {WrapPath}
+    string_does_not_occur GenericWrapStyles.bsv.bsc-vcomp-out {WrapClassifyRep}
+}
+
+# Empty carriers still identify the instantiated module when port metadata
+# is saved for dynamic module arguments.
+test_veri_only_bsv_modules EmptyWrapIdentity {EmptyWrapForeign}
+
+# Source interface synthesis attributes cannot discard an explicit BVI ready.
+test_veri_only_bsv_modules BVIReadyAttributes {BVIReadyForeign}

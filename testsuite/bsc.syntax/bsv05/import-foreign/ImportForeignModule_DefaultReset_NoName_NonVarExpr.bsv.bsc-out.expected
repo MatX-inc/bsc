@@ -4,7 +4,7 @@ package ImportForeignModule_DefaultReset_NoName_NonVarExpr;
 module mkMyReg(Reg#(Bool));
   let _bv1 <- exposeCurrentClock;
   let _bv0 <- exposeCurrentReset;
-  Reg#(Bool) _m__;
+  ModuleWrap::WrappedIfc#(ModuleWrap::BVIWrap, Reg#(Bool)) _m__;
   _m__ <- liftModule((unexpected) module verilog "MOD";
 		     clock _clk__1(CLK, CLK_GATE);
 		     reset _rst__1(RST) clocked_by(_clk__1);
@@ -15,10 +15,7 @@ module mkMyReg(Reg#(Bool));
 			 }
 			 SchedInfo [_read CF _read, _read SB _write, _write SBR _write] [] [] []
 			 No combinational paths from inputs to outputs);
-  method _read() ;   return (unpack((_m__)()));
-  endmethod: _read
-  method _write(x1) ;   return (fromActionValue_((_m__._write)(pack(x1))));
-  endmethod: _write
+  (Reg#(Bool))'(ModuleWrap::fromWrapIfc(_m___wrapStyle, _m___wrapInfo, _m__))
 endmodule: mkMyReg
 
 endpackage: ImportForeignModule_DefaultReset_NoName_NonVarExpr
