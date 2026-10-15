@@ -51,10 +51,6 @@ mkdir -p "$WORK"
 WORK=$(cd "$WORK" && pwd -P)
 DIST=$WORK/dist
 
-# The Hackage index the dependencies resolve against, so that the commit,
-# not the build date, fixes them
-INDEX_STATE=2026-09-26T00:00:00Z
-
 msg() { echo ">>> $*"; }
 die() { echo "mk-dist.sh: $*" >&2; exit 1; }
 # GNU and BSD sed disagree on -i
@@ -122,11 +118,10 @@ mkdir -p "$WORK/proj"
         inpk { inpk = 0 }
         /^write-ghc-environment-files:/ { next }
         { print }' "$REPO/cabal.project"
-    echo
-    echo "-- The Hackage index the dependencies resolve against, so that the"
-    echo "-- commit, not the build date, fixes them"
-    echo "index-state: $INDEX_STATE"
 } > "$WORK/proj/cabal.project"
+# The project pins the Hackage index its dependencies resolve against, so
+# this build and the installed compiler's take the same versions
+grep -qi '^index-state[[:space:]]*:' "$WORK/proj/cabal.project" || die "$REPO/cabal.project pins no index-state"
 # bsc depends on every package a split produces, so this builds them all
 (cd "$WORK/proj" && LIBRARY_PATH="$SOLVER_DIR${LIBRARY_PATH:+:$LIBRARY_PATH}" cabal build bsc:lib:bsc \
     >"$WORK/cabal-build.log" 2>&1) \

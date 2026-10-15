@@ -112,7 +112,7 @@ compiler reachable. `util/bluehs/mk-dist.sh` does the work; it needs `ghc`
 and `cabal` on `PATH` (the GHC it ships), `python3`, `cpio`, and `patchelf`
 on Linux. It builds the project a second time from another directory, so
 the checkout's own build and environment file are untouched, resolves
-dependencies against a fixed Hackage `index-state` into the cabal store
+dependencies against the project's `index-state` into the cabal store
 (the files a dependency builds record the store's path, so a store under
 the checkout would make the distribution depend on where the checkout is;
 the ladder checks that it does not), ships the plan's libraries and no
