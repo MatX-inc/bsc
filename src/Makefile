@@ -9,9 +9,8 @@ override PREFIX := $(abspath $(PREFIX))
 ifndef NO_DEPS_CHECKS
 CC_TOOLS=$(CC) $(CXX) $(LD)
 # The Haskell libraries beyond GHC's own are cabal-install's to fetch
-# (bsc.cabal names them); the ghc --make targets of comp/Makefile, a build
-# without cabal-install, need them installed with GHC, and GHC names the
-# missing ones.
+# (bsc.cabal names them); ghc-pkg walks them for the package information
+# (comp/make-ghc-pkg-info.sh).
 BSC_TOOLS=ghc ghc-pkg cabal
 YICES_TOOLS=gperf autoconf
 STP_TOOLS=flex bison
@@ -64,7 +63,7 @@ install clean full_clean:
 	$(MAKE)  -C vendor/stp   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C vendor/yices PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C vendor/htcl  PREFIX=$(PREFIX)  $@
-	# we need to build targets from here sequentially, as they operate in the same workspace
+	# comp is one cabal build, which parallelizes itself (GHCJOBS)
 	$(MAKE)  -C comp -j1   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C Libraries  PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C exec       PREFIX=$(PREFIX)  $@

@@ -79,11 +79,10 @@ library
   if impl(ghc >= 9.12)
     ghc-options: -fobject-determinism
   -- The solvers, linked by name against whichever copies the linker finds
-  -- (SetupHooks.hs, solverSetupHooks; the make build names its installed
+  -- (SetupHooks.hs, solverSetupHooks; `make install-src` names its installed
   -- copies in LIBRARY_PATH), and resolved at run time beside the installed
-  -- binary, lib/SAT, through the make build's rpath (SAT_RPATH_FLAGS in
-  -- src/comp/Makefile), which every program that links the library inherits
-  -- through the package database.
+  -- binary, lib/SAT, through the rpath below, which every program that links
+  -- the library inherits through the package database.
   extra-libraries: stp, yices
   if os(osx)
     extra-libraries: c++
