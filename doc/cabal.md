@@ -212,8 +212,9 @@ module the external interface set in one order (section 3),
 checkout is written into any of them, since the solvers are linked by name
 (section 3). `util/cabal-ladder.sh`:
 
-- `hash OUT [DIR...]` hashes one build: every object, archive and program
-  (from `cabal list-bin bsc:exe:<name>` for each `executable` stanza) as
+- `hash OUT [DIR...]` hashes one build: every object, archive, shared
+  object and program (the programs from `cabal list-bin bsc:exe:<name>` for
+  each `executable` stanza) as
   bytes, with paths relative to the repository so directories compare, then
   every file of each installed directory named after the list (CI names
   `inst/bluehs`, the script runtime of `util/bluehs`), as bytes except the
@@ -234,7 +235,9 @@ checkout is written into any of them, since the solvers are linked by name
   from clean (repeatability), C at `-j1` (serial against parallel), D at
   `-j64` (oversubscription), each compared with A; then a marker edit to one
   module with a few dozen importers (`src/comp/Libs/IOUtil.hs`), a rebuild,
-  the revert and a rebuild that must match A. It needs GHC 9.14 or later, a
+  the revert and a rebuild that must match A. It installs the solvers first
+  (`make install-solvers`, section 2) and names them to the linker for every
+  leg. It needs GHC 9.14 or later, a
   clean working tree and no `cabal.project.local`; results go to
   `determinism-results/<timestamp>`.
 
