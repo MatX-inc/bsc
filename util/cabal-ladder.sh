@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The determinism ladder of the cabal build (doc/cabal.md): one commit built
 # serially, oversubscribed, incrementally or in another directory must give
-# bit-identical objects, interfaces, archives and programs, and the same
+# bit-identical objects, interfaces, archives, shared objects and programs, and the same
 # bytes in any installed distribution named to `hash` (CI names the bluehs
 # runtime, util/bluehs).  CI (.github/workflows/cabal.yml) runs `hash` on
 # every leg and `verdict` over the lists; `run` is the whole ladder on one
@@ -37,8 +37,8 @@ iface_hash() {  # one interface file -> "hash  path"
 }
 export -f sha256 iface_hash
 
-# Every object, archive and interface under dist-newstyle/build and every
-# program bsc.cabal declares, as bytes except interfaces, with paths relative
+# Every object, archive, shared object and interface under dist-newstyle/build
+# and every program bsc.cabal declares, as bytes except interfaces, with paths relative
 # to the repository so builds in different directories compare.  Then every
 # file of each installed directory named after the list: as bytes, except the
 # interfaces under a `store` directory (the libraries this tree builds and
@@ -54,7 +54,7 @@ hash_build() {
   programs=$(awk '/^executable[ \t]/ {print $2}' bsc.cabal)
   [ -n "$programs" ] || die "no executable stanzas in bsc.cabal"
   {
-    find dist-newstyle/build -type f \( -name '*.o' -o -name '*.dyn_o' -o -name '*.p_o' -o -name '*.a' \) -print0 \
+    find dist-newstyle/build -type f \( -name '*.o' -o -name '*.dyn_o' -o -name '*.p_o' -o -name '*.a' -o -name '*.so' -o -name '*.dylib' \) -print0 \
       | sort -z | xargs -0 bash -eo pipefail -c 'sha256 "$@"' _
     find dist-newstyle/build -type f \( -name '*.hi' -o -name '*.dyn_hi' -o -name '*.p_hi' \) -print0 \
       | xargs -0 -n 1 -P "$ncpu" bash -eo pipefail -c 'iface_hash "$1"' _
@@ -87,8 +87,9 @@ hash_build() {
 }
 
 # Pass means every list is identical to the reference.  Differences are
-# reported by category (program, object, interface, archive, and distribution
-# for the files of an installed directory) so a failure says what moved.
+# reported by category (program, shared object, object, interface, archive,
+# and distribution for the files of an installed directory) so a failure says
+# what moved.
 verdict() {
   local ref="$1" fail=0 other name diffs n cat sel c; shift
   [ -r "$ref" ] && [ -s "$ref" ] || { echo "verdict: reference $ref is missing, unreadable or empty"; exit 2; }
@@ -101,9 +102,10 @@ verdict() {
     n=$(printf '%s\n' "$diffs" | sed '/^$/d' | wc -l)
     echo "DIFFER: $(basename "$ref" .sha256) vs $name: $n file(s)"
     build=$(printf '%s\n' "$diffs" | grep '^dist-newstyle/' || true)
-    for cat in program object interface archive distribution; do
+    for cat in program shared object interface archive distribution; do
       case "$cat" in
-        program) sel=$(printf '%s\n' "$build" | grep -Ev '\.(o|hi|dyn_o|dyn_hi|p_o|p_hi|a)$' || true);;
+        program) sel=$(printf '%s\n' "$build" | grep -Ev '\.(o|hi|dyn_o|dyn_hi|p_o|p_hi|a|so|dylib)$' || true);;
+        shared) sel=$(printf '%s\n' "$build" | grep -E '\.(so|dylib)$' || true);;
         object) sel=$(printf '%s\n' "$build" | grep -E '\.(o|dyn_o|p_o)$' || true);;
         interface) sel=$(printf '%s\n' "$build" | grep -E '\.(hi|dyn_hi|p_hi)$' || true);;
         archive) sel=$(printf '%s\n' "$build" | grep '\.a$' || true);;
@@ -129,6 +131,10 @@ run_ladder() {
   git diff --quiet || die "working tree is dirty; commit or stash first"
   [ -e cabal.project.local ] && die "cabal.project.local exists; the ladder writes its own"
   [ -f "$LEAF" ] || die "$LEAF not found"
+  # The solvers the library links by name (doc/cabal.md section 2): installed
+  # once, outside the directories the legs clean, and named to the linker.
+  make install-solvers > "$OUT/solvers.log" 2>&1 || { tail -20 "$OUT/solvers.log"; die "installing the solvers failed"; }
+  export LIBRARY_PATH="$TOP/inst/lib/SAT${LIBRARY_PATH:+:$LIBRARY_PATH}"
   snapshot() { "$SELF" hash "$OUT/$1.sha256" || die "$1: hashing the build failed"; }
   compare() { "$SELF" verdict "$OUT/$1.sha256" "$OUT/$2.sha256" || fail=1; }
   clean() { rm -rf dist-newstyle/build dist-newstyle/cache dist-newstyle/packagedb dist-newstyle/tmp; }
