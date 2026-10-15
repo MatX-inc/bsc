@@ -3,7 +3,7 @@ name: Cabal build
 # The cabal build of the compiler (bsc.cabal, cabal.project, SetupHooks.hs)
 # and its determinism ladder: the same commit built serially, oversubscribed
 # and in other checkout directories must give bit-identical objects,
-# interfaces, archives and programs, and the same bytes in the bluehs script
+# interfaces, archives, shared objects and programs, and the same bytes in the bluehs script
 # runtime (util/bluehs) installed from it (util/cabal-ladder.sh hash hashes a
 # build and the distribution, util/cabal-ladder.sh verdict compares the
 # lists).  The ladder is six legs: the serial build against a second serial
@@ -134,6 +134,11 @@ jobs:
           # parallel at all (GHC 9.12 on, cabal.project; a later -j wins in GHC).
           printf 'jobs: %s\nif impl(ghc >= 9.12)\n  program-options\n    ghc-options: -j%s\n' "$JOBS" "$JOBS" > cabal.project.local
           cat cabal.project.local
+          # The solvers the library links by name: installed first and named
+          # to the linker (doc/cabal.md section 2), as make install-src below
+          # does for the build it runs.
+          make install-solvers
+          export LIBRARY_PATH="$PWD/inst/lib/SAT"
           cabal build all
       - name: Programs start
         run: |
