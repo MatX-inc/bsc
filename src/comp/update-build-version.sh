@@ -3,6 +3,11 @@ set -euo pipefail
 
 export TMOUT=1
 
+# Inputs, from the environment: src/comp/Makefile exports NOGIT, and the
+# cabal hooks pass both through (SetupHooks.hs, writeBuildVersionHs).
+NOGIT=${NOGIT:-0}
+NOUPDATEBUILDVERSION=${NOUPDATEBUILDVERSION:-0}
+
 # -------------------------
 # GIT
 
@@ -42,19 +47,10 @@ genGITBuildVersion () {
     fi;
 }
 
-# -------------------------
-
-# The stamp and hook queries follow HEAD even with NOGIT=1 and write no
-# file.
-case "${1:-}" in
-    --head) repoGit rev-parse HEAD; exit ;;
-    --git-info) repoGit rev-parse --absolute-git-dir HEAD; exit ;;
-esac
-
-if ( test -f BuildVersion.hs ) && [ "$NOUPDATEBUILDVERSION" = 1 ] ; then
-    echo "BuildVersion.hs not modified"
-else
-
+# Sets GITCOMMIT and GITDESCR: null values with NOGIT=1, the values git
+# substituted on export for an archive (.gitattributes, export-subst), and
+# the repository's otherwise.
+getGITVersion () {
     if [ "$NOGIT" = 1 ] ; then
 	GITCOMMIT="0000000"
 	GITDESCR="no-git"
@@ -83,8 +79,23 @@ else
 
 	fi
     fi
-    genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
+}
 
+# -------------------------
+
+# The stamp and hook queries follow HEAD even with NOGIT=1. --name prints
+# the Bluesim kernel's version name. None of these modes writes a file.
+case "${1:-}" in
+    --head) repoGit rev-parse HEAD; exit ;;
+    --git-info) repoGit rev-parse --absolute-git-dir HEAD; exit ;;
+    --name) getGITVersion; echo "$GITDESCR"; exit ;;
+esac
+
+if ( test -f BuildVersion.hs ) && [ "$NOUPDATEBUILDVERSION" = 1 ] ; then
+    echo "BuildVersion.hs not modified"
+else
+    getGITVersion
+    genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
 fi
 
 # -------------------------
