@@ -44,9 +44,9 @@ module mkCTest(CLK,
   wire the_z$CLR, the_z$DEQ, the_z$ENQ, the_z$FULL_N;
 
   // inputs to muxes for submodule ports
-  wire MUX_the_y$write_1__SEL_1,
-       MUX_the_y$write_1__SEL_2,
-       MUX_the_y$write_1__SEL_3;
+  wire MUX_the_y$write_1__SEL_RL_zag,
+       MUX_the_y$write_1__SEL_RL_zig,
+       MUX_the_y$write_1__SEL_RL_zug;
 
   // submodule the_z
   FIFO2 #(.width(32'd4), .guarded(1'd1)) the_z(.RST(RST_N),
@@ -60,46 +60,46 @@ module mkCTest(CLK,
 					       .EMPTY_N());
 
   // inputs to muxes for submodule ports
-  assign MUX_the_y$write_1__SEL_1 =
-	     the_z$FULL_N && the_cnd[0] && !MUX_the_y$write_1__SEL_2 ;
-  assign MUX_the_y$write_1__SEL_2 = the_z$FULL_N && the_cnd[1] ;
-  assign MUX_the_y$write_1__SEL_3 =
-	     the_z$FULL_N && the_cnd[2] && !MUX_the_y$write_1__SEL_1 &&
-	     !MUX_the_y$write_1__SEL_2 ;
+  assign MUX_the_y$write_1__SEL_RL_zag = the_z$FULL_N && the_cnd[1] ;
+  assign MUX_the_y$write_1__SEL_RL_zig =
+	     the_z$FULL_N && the_cnd[0] && !MUX_the_y$write_1__SEL_RL_zag ;
+  assign MUX_the_y$write_1__SEL_RL_zug =
+	     the_z$FULL_N && the_cnd[2] && !MUX_the_y$write_1__SEL_RL_zig &&
+	     !MUX_the_y$write_1__SEL_RL_zag ;
 
   // register the_cnd
   assign the_cnd$D_IN = 3'h0 ;
   assign the_cnd$EN = 1'b0 ;
 
   // register the_y
-  always@(MUX_the_y$write_1__SEL_1 or
-	  MUX_the_y$write_1__SEL_2 or MUX_the_y$write_1__SEL_3)
+  always@(MUX_the_y$write_1__SEL_RL_zag or
+	  MUX_the_y$write_1__SEL_RL_zig or MUX_the_y$write_1__SEL_RL_zug)
   begin
     case (1'b1) // synopsys parallel_case
-      MUX_the_y$write_1__SEL_1: the_y$D_IN = 4'd1;
-      MUX_the_y$write_1__SEL_2: the_y$D_IN = 4'd2;
-      MUX_the_y$write_1__SEL_3: the_y$D_IN = 4'd4;
+      MUX_the_y$write_1__SEL_RL_zag: the_y$D_IN = 4'd2;
+      MUX_the_y$write_1__SEL_RL_zig: the_y$D_IN = 4'd1;
+      MUX_the_y$write_1__SEL_RL_zug: the_y$D_IN = 4'd4;
       default: the_y$D_IN = 4'b1010 /* unspecified value */ ;
     endcase
   end
   assign the_y$EN =
-	     MUX_the_y$write_1__SEL_1 || MUX_the_y$write_1__SEL_2 ||
-	     MUX_the_y$write_1__SEL_3 ;
+	     MUX_the_y$write_1__SEL_RL_zig || MUX_the_y$write_1__SEL_RL_zag ||
+	     MUX_the_y$write_1__SEL_RL_zug ;
 
   // submodule the_z
-  always@(MUX_the_y$write_1__SEL_1 or
-	  MUX_the_y$write_1__SEL_2 or MUX_the_y$write_1__SEL_3)
+  always@(MUX_the_y$write_1__SEL_RL_zag or
+	  MUX_the_y$write_1__SEL_RL_zig or MUX_the_y$write_1__SEL_RL_zug)
   begin
     case (1'b1) // synopsys parallel_case
-      MUX_the_y$write_1__SEL_1: the_z$D_IN = 4'd1;
-      MUX_the_y$write_1__SEL_2: the_z$D_IN = 4'd2;
-      MUX_the_y$write_1__SEL_3: the_z$D_IN = 4'd4;
+      MUX_the_y$write_1__SEL_RL_zag: the_z$D_IN = 4'd2;
+      MUX_the_y$write_1__SEL_RL_zig: the_z$D_IN = 4'd1;
+      MUX_the_y$write_1__SEL_RL_zug: the_z$D_IN = 4'd4;
       default: the_z$D_IN = 4'b1010 /* unspecified value */ ;
     endcase
   end
   assign the_z$ENQ =
-	     MUX_the_y$write_1__SEL_1 || MUX_the_y$write_1__SEL_2 ||
-	     MUX_the_y$write_1__SEL_3 ;
+	     MUX_the_y$write_1__SEL_RL_zig || MUX_the_y$write_1__SEL_RL_zag ||
+	     MUX_the_y$write_1__SEL_RL_zug ;
   assign the_z$DEQ = 1'b0 ;
   assign the_z$CLR = 1'b0 ;
 

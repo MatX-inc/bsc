@@ -68,8 +68,8 @@ module mkGCD(CLK,
   wire reg_2$EN;
 
   // inputs to muxes for submodule ports
-  wire [50 : 0] MUX_reg_2$write_1__VAL_2;
-  wire MUX_reg_1$write_1__SEL_1, MUX_reg_2$write_1__SEL_2;
+  wire [50 : 0] MUX_reg_2$write_1__VAL_RL_sub;
+  wire MUX_reg_1$write_1__SEL_RL_flip, MUX_reg_2$write_1__SEL_RL_sub;
 
   // remaining internal signals
   wire reg_1_ULE_reg_2___d1;
@@ -82,29 +82,33 @@ module mkGCD(CLK,
   assign RDY_result = reg_2 == 51'd0 ;
 
   // inputs to muxes for submodule ports
-  assign MUX_reg_1$write_1__SEL_1 = !reg_1_ULE_reg_2___d1 && reg_2 != 51'd0 ;
-  assign MUX_reg_2$write_1__SEL_2 = reg_1_ULE_reg_2___d1 && reg_2 != 51'd0 ;
-  assign MUX_reg_2$write_1__VAL_2 = reg_2 - reg_1 ;
+  assign MUX_reg_1$write_1__SEL_RL_flip =
+	     !reg_1_ULE_reg_2___d1 && reg_2 != 51'd0 ;
+  assign MUX_reg_2$write_1__SEL_RL_sub =
+	     reg_1_ULE_reg_2___d1 && reg_2 != 51'd0 ;
+  assign MUX_reg_2$write_1__VAL_RL_sub = reg_2 - reg_1 ;
 
   // register reg_1
-  assign reg_1$D_IN = MUX_reg_1$write_1__SEL_1 ? reg_2 : start_num1 ;
-  assign reg_1$EN = MUX_reg_1$write_1__SEL_1 || EN_start ;
+  assign reg_1$D_IN = MUX_reg_1$write_1__SEL_RL_flip ? reg_2 : start_num1 ;
+  assign reg_1$EN = MUX_reg_1$write_1__SEL_RL_flip || EN_start ;
 
   // register reg_2
-  always@(MUX_reg_1$write_1__SEL_1 or
+  always@(MUX_reg_1$write_1__SEL_RL_flip or
 	  reg_1 or
-	  MUX_reg_2$write_1__SEL_2 or
-	  MUX_reg_2$write_1__VAL_2 or EN_start or start_num2)
+	  MUX_reg_2$write_1__SEL_RL_sub or
+	  MUX_reg_2$write_1__VAL_RL_sub or EN_start or start_num2)
   begin
     case (1'b1) // synopsys parallel_case
-      MUX_reg_1$write_1__SEL_1: reg_2$D_IN = reg_1;
-      MUX_reg_2$write_1__SEL_2: reg_2$D_IN = MUX_reg_2$write_1__VAL_2;
+      MUX_reg_1$write_1__SEL_RL_flip: reg_2$D_IN = reg_1;
+      MUX_reg_2$write_1__SEL_RL_sub:
+	  reg_2$D_IN = MUX_reg_2$write_1__VAL_RL_sub;
       EN_start: reg_2$D_IN = start_num2;
       default: reg_2$D_IN = 51'h2AAAAAAAAAAAA /* unspecified value */ ;
     endcase
   end
   assign reg_2$EN =
-	     MUX_reg_1$write_1__SEL_1 || MUX_reg_2$write_1__SEL_2 ||
+	     MUX_reg_1$write_1__SEL_RL_flip ||
+	     MUX_reg_2$write_1__SEL_RL_sub ||
 	     EN_start ;
 
   // remaining internal signals

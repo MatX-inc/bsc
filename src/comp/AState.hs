@@ -11,7 +11,7 @@ module AState(
 import qualified Data.Map as M
 import qualified Data.Set as S
 
-import Data.List(transpose, sortBy, partition,
+import Data.List(transpose, sortBy, partition, intercalate, foldl',
             unzip4, groupBy, intersect,
             genericLength)
 import Data.Ord(comparing)
@@ -43,6 +43,8 @@ import AVerilogUtil(vNameToTask)
 import RSchedule(RAT, ratToNestedLists)
 import Wires(WireProps(..))
 import Data.Maybe (listToMaybe)
+import Data.Char(ord, isAscii, isAlphaNum)
+import Data.Word(Word64)
 
 --import Debug.Trace
 --import Util(traces)
@@ -1181,12 +1183,50 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
                          then aRdyId rId
                          else aWillFireId rId
 
-        -- produce the uniquifier for mux selector Ids
-        -- Here we just add _#, but we could include the rules for
-        -- the selector in its name, or even just include one name
-        -- when it's only one rule.  for brevity, we just use _#
-        use2suffix :: Integer -> Maybe [Id] -> FString
-        use2suffix n _ = mkFString ("_" ++ itos n)
+        -- produce the uniquifier for mux selector Ids: the arm's rule
+        -- (or method) names, so that it is a function of the design and
+        -- not of the arm's position (the urgency rank in a priority mux,
+        -- the use order otherwise; either moves when a writer is added).
+        -- Several rules sharing an arm are joined in sorted order (long
+        -- lists keep the first name and a hash of the rest); a rule
+        -- contributing more than one arm (split conditions) gets an
+        -- ordinal on its later arms.
+        armNames :: (AExpr, AExpr, Maybe [ARuleId]) -> [String]
+        armNames (_, _, Just rs) = S.toAscList (S.fromList (map (identChars . getIdBaseString) rs))
+        armNames (_, _, Nothing) = []
+
+        armSuffix :: (AExpr, AExpr, Maybe [ARuleId]) -> String
+        armSuffix arm =
+            case armNames arm of
+              []    -> "_use"
+              names@(first : more) ->
+                  let joined = intercalate "_" names
+                  in  "_" ++ (if not (null more) && length joined > 60
+                              then take 40 first ++ "_ETC_" ++
+                                   show (hashString joined `mod` 1000000000)
+                              else joined)
+
+        -- rule names may carry characters Verilog identifiers cannot
+        identChars :: String -> String
+        identChars = map (\c -> if c == '_' || (isAscii c && isAlphaNum c) then c else '_')
+
+        hashString :: String -> Word64
+        hashString = hashValue . foldl' (\h c -> nextHashByte h (fromIntegral (ord c))) hashInit
+
+        -- later arms with a suffix already used get _2, _3, ..., skipping
+        -- anything that is itself another arm's suffix
+        uniqueSuffixes :: [String] -> [String]
+        uniqueSuffixes ss = go S.empty ss
+          where bases = S.fromList ss
+                go _ [] = []
+                go used (s : rest) =
+                    let cands = s : [ s ++ "_" ++ itos n | n <- [(2 :: Integer) ..] ]
+                        ok c = not (S.member c used) && (c == s || not (S.member c bases))
+                        s' = headOrErr "uniqueSuffixes" (filter ok cands)
+                    in  s' : go (S.insert s' used) rest
+
+        armKey :: (AExpr, AExpr, Maybe [ARuleId]) -> String
+        armKey = intercalate "_" . armNames
 
         -- ---------------
         -- Function to make the arguments to the selector primitive
@@ -1200,11 +1240,10 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         -- return a list of the selector expr and the return expr, and
         -- any new defs (because we want to give the return expr a name)
 
-        mkArg :: (Integer, (AExpr, AExpr, Maybe [ARuleId])) ->
+        mkArg :: (FString, (AExpr, AExpr, Maybe [ARuleId])) ->
                  ([AExpr], [ADef])
-        mkArg (n, (e, _, mrs)) =
-            let suffix = use2suffix n mrs
-                val_type = ae_type e
+        mkArg (suffix, (e, _, mrs)) =
+            let val_type = ae_type e
                 val_id = valId suffix
                 props = case mrs of
                   Nothing -> []
@@ -1216,10 +1255,9 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
 
         -- ---------------
         -- Function to make the definitions for the control signals
-        mkSel :: (Integer, (AExpr, AExpr, Maybe [ARuleId])) -> [ADef]
-        mkSel (n, (_, c, Just rs)) =
-          let suffix = use2suffix n (Just rs)
-              props :: [DefProp]
+        mkSel :: (FString, (AExpr, AExpr, Maybe [ARuleId])) -> [ADef]
+        mkSel (suffix, (_, c, Just rs)) =
+          let props :: [DefProp]
               props = map DefP_Rule rs -- record the source rule
           in
               if isTrue c then
@@ -1260,10 +1298,15 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         -- The type of the muxed value, for use in creating the new Defs
         t = aType e
 
-        -- The arg blobs, numbered, and in priority order if necessary
-        ers' = zip [1..] $ if usePri
-                           then order ers
-                           else ers
+        -- The arg blobs in priority order if necessary; otherwise the
+        -- order is immaterial and is by rule names, so that it does not
+        -- depend on the use order either.
+        ers_ordered = if usePri then order ers
+                      else sortBy (comparing armKey) ers
+
+        -- The arg blobs, each with its suffix
+        ers' = zip (map mkFString (uniqueSuffixes (map armSuffix ers_ordered)))
+                   ers_ordered
 
         -- PrimMux takes a list of pairs of the selector ASDef and the
         -- expr that should result
