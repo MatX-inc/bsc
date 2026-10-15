@@ -6,6 +6,14 @@
 # libraries with no Haskell toolchain installed; a C compiler is needed only
 # by scripts that use CPP.
 #
+# The tree is the same bytes whatever the checkout directory and the build's
+# parallelism (the determinism ladder, doc/cabal.md section 5, checks it):
+# the dependencies come from the cabal store, whose path the files built
+# there record (a Paths_ module's directories, a shared object's search
+# paths and build id), so that path must not be the checkout's; the solver
+# libraries are stripped of the debug information that names their build
+# directory; and only libraries are shipped, no build tool.
+#
 # The libraries are the cabal project's own packages (cabal.project): the
 # package `bsc` and, once the compiler is split, the packages it depends on.
 # The package set and the programs are read off the project, so a split, or
@@ -70,12 +78,12 @@ done
 GHC_VER=$(ghc --numeric-version)
 msg "GHC $GHC_VER at $GHC_ROOT"
 
-if [ "${REUSE_WORK:-0}" != 1 ]; then rm -rf "$WORK/proj" "$WORK/store"; fi
+if [ "${REUSE_WORK:-0}" != 1 ]; then rm -rf "$WORK/proj"; fi
 rm -rf "$DIST"
 mkdir -p "$DIST"/{bin,scripts,SAT,LICENSES,hs}
 
 # ----------------------------------------------------------------------
-# 1. Build the libraries, and their dependencies into a fresh store.  The
+# 1. Build the libraries, and their dependencies into the cabal store.  The
 #    project is the repository's own, copied with its package paths made
 #    absolute and without its environment-file setting, and built from
 #    another directory: the checkout's dist-newstyle and .ghc.environment.*
@@ -85,6 +93,9 @@ mkdir -p "$DIST"/{bin,scripts,SAT,LICENSES,hs}
 #    solver sources the cabal hooks build.  The build version comes from
 #    the hooks too (BuildVersion is generated into each build), so the
 #    library and the bsc installed from this tree carry the same stamp.
+#    The dependencies go into the store cabal uses for everything else, not
+#    one under the checkout: what a package records of the store it was
+#    built in would otherwise name the checkout.
 
 msg "building the bsc libraries (this compiles every module at -O2)"
 mkdir -p "$WORK/proj"
@@ -110,17 +121,20 @@ mkdir -p "$WORK/proj"
     echo "index-state: $INDEX_STATE"
 } > "$WORK/proj/cabal.project"
 # bsc depends on every package a split produces, so this builds them all
-(cd "$WORK/proj" && cabal --store-dir="$WORK/store" build bsc:lib:bsc \
+(cd "$WORK/proj" && cabal build bsc:lib:bsc \
     >"$WORK/cabal-build.log" 2>&1) \
     || { tail -30 "$WORK/cabal-build.log" >&2; exit 1; }
+PLAN=$WORK/proj/dist-newstyle/cache/plan.json
+[ -f "$PLAN" ] || die "no build plan at $PLAN"
 
 # cabal names the store's directory ghc-<version>, or in newer releases
 # ghc-<version>-<abi hash>
+STORE_ROOT=$(cd "$WORK/proj" && cabal path --store-dir)
 STORE_SRC=
-for d in "$WORK/store/ghc-$GHC_VER" "$WORK/store/ghc-$GHC_VER"-*; do
+for d in "$STORE_ROOT/ghc-$GHC_VER" "$STORE_ROOT/ghc-$GHC_VER"-*; do
     [ -d "$d/package.db" ] && { STORE_SRC=$d; break; }
 done
-[ -n "$STORE_SRC" ] || die "no ghc-$GHC_VER store in $WORK/store"
+[ -n "$STORE_SRC" ] || die "no ghc-$GHC_VER store in $STORE_ROOT"
 STORE_NAME=$(basename "$STORE_SRC")
 
 # The vendored solver libraries, where the hooks' build of them leaves them.
@@ -196,13 +210,35 @@ done
 # ----------------------------------------------------------------------
 # 3. Relocatable store
 
+# The plan's library units that live in the store: the dependencies, as
+# built for this project.  The store holds whatever else was ever built on
+# this machine, and the plan's build tools (hsc2hs) and setup components,
+# none of which a script needs.
 msg "relocating package store"
-mkdir -p "$DIST/hs/store"
-cp -a "$STORE_SRC" "$DIST/hs/store/"
 STORE=$DIST/hs/store/$STORE_NAME
+mkdir -p "$STORE/package.db"
+python3 -c '
+import json, sys
+plan = json.load(open(sys.argv[1]))
+for u in plan["install-plan"]:
+    if u.get("style") == "global" and u.get("component-name", "lib") == "lib":
+        print(u["id"])
+' "$PLAN" | while read -r id; do
+    [ -d "$STORE_SRC/$id" ] || die "the plan's $id is not in the store $STORE_SRC"
+    cp -a "$STORE_SRC/$id" "$STORE/"
+    cp "$STORE_SRC/package.db/$id.conf" "$STORE/package.db/"
+    # On macOS cabal-install keeps every unit's dynamic library in the
+    # store's one lib directory, to stay under the Mach-O load command size
+    # limit (cabal-install's ProjectPlanning, dynlibdir), and the unit's
+    # registration and the rpaths of what links it name that directory.
+    for dl in "$STORE_SRC/lib/libHS$id-ghc"*."$DLL"; do
+        [ -e "$dl" ] || continue
+        mkdir -p "$STORE/lib" && cp -a "$dl" "$STORE/lib/"
+    done
+done
+[ -n "$(ls "$STORE/package.db")" ] || die "no library of the plan found in $STORE_SRC"
 
 find "$STORE" -name '*.a' -delete
-rm -rf "$STORE/incoming"
 find "$STORE" -name 'cabal-hash.txt' -delete
 
 # The in-place libraries join the store as more packages: their interface
@@ -384,7 +420,7 @@ leaks() {
         patchelf --print-rpath "$f"; patchelf --print-needed "$f"
     else
         otool -l "$f" | awk '$1 == "path" || $1 == "name" { print $2 }'
-    fi | grep -F -e "$WORK" -e "$REPO" -e "$GHC_ROOT" || true
+    fi | grep -F -e "$WORK" -e "$REPO" -e "$GHC_ROOT" -e "$STORE_SRC" || true
 }
 
 msg "rewriting library paths"
@@ -393,8 +429,10 @@ while IFS= read -r -d '' f; do LIBS+=("$f"); done \
     < <(find "$STORE" "$DIST/SAT" -type f -name "*.$DLL*" -print0)
 for f in "${LIBS[@]}"; do
     chmod u+w "$f"
+    # The bsc library and the solvers carry symbols and debug information
+    # no script needs; the solvers' names their build directory.
     case "$f" in
-        */libHSbsc-*) if [ $DLL = so ]; then strip "$f"; else strip -x "$f"; fi ;;
+        */libHSbsc-* | */SAT/*) if [ $DLL = so ]; then strip "$f"; else strip -S -x "$f"; fi ;;
     esac
     if [ $DLL = so ]; then relocate_elf "$f"; else relocate_macho "$f"; fi
 done

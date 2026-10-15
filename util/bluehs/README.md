@@ -93,10 +93,10 @@ source, which is much slower to load.)
 
 `make install-bluehs`, after `make install-src`, installs a self-contained
 copy of all this at `inst/bluehs`: a pruned GHC runtime, a package store
-holding the compiled bsc libraries (every package of `cabal.project` but the
-hooks library `bsc-setup`) and their dependencies, the SAT solver libraries,
-the tool entry scripts (every program of `bsc.cabal` but `bluetcl`), and
-this launcher as `bin/bluehs`. It runs scripts with **no Haskell toolchain
+holding the compiled bsc libraries (every package of `cabal.project`) and
+the dependencies of the build plan, the SAT solver libraries, the tool
+entry scripts (every program of `bsc.cabal` but `bluetcl`), and this
+launcher as `bin/bluehs`. It runs scripts with **no Haskell toolchain
 installed**, and the tree can be moved with the rest of `inst`:
 
     inst/bluehs/bin/bluehs dumpbo foo.bo
@@ -108,7 +108,11 @@ compiler reachable. `util/bluehs/mk-dist.sh` does the work; it needs `ghc`
 and `cabal` on `PATH` (the GHC it ships), `python3`, `cpio`, and `patchelf`
 on Linux. It builds the project a second time from another directory, so
 the checkout's own build and environment file are untouched, resolves
-dependencies against a fixed Hackage `index-state`, and before finishing it
+dependencies against a fixed Hackage `index-state` into the cabal store
+(the files a dependency builds record the store's path, so a store under
+the checkout would make the distribution depend on where the checkout is;
+the ladder checks that it does not), ships the plan's libraries and no
+build tool, strips the solver libraries, and before finishing it
 runs a copy of the tree from another directory under an empty environment
 and checks that the library's build version matches `inst/bin/bsc`'s. The
 package set and the program list are read off `cabal.project` and
