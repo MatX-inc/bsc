@@ -120,8 +120,8 @@ Warmup ()`. (bluetcl differs: no `-main-is`, a helper module and a C shim.)
 
 The claim: one commit built from clean serially, oversubscribed or in another
 checkout directory, or rebuilt after an edit and its revert, gives
-bit-identical objects, archives, programs, and interfaces identical as `ghc
---show-iface` text.
+bit-identical objects, archives, shared objects and programs, and interfaces
+identical as `ghc --show-iface` text.
 
 What holds it: every program links against the library's archive, compiled
 once; `Warmup` fixes the interface-load order; `-fobject-determinism`, from GHC
