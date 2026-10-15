@@ -118,7 +118,10 @@ the checkout would make the distribution depend on where the checkout is;
 the ladder checks that it does not), ships the plan's libraries and no
 build tool, strips the solver libraries, and before finishing it
 runs a copy of the tree from another directory under an empty environment
-and checks that the library's build version matches `inst/bin/bsc`'s. The
+with a probe script that imports the compiler's modules, and checks that
+the library's build version matches `inst/bin/bsc`'s and that the probe is
+the only module interpreted, so the compiler's modules come from the
+compiled library. The
 package set and the program list are read off `cabal.project` and
 `bsc.cabal`, so a later split of the library into packages (`doc/cabal.md`
 section 6), or a later program, needs no change here.
