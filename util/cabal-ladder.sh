@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # The determinism ladder of the cabal build (doc/cabal.md): one commit built
 # serially, oversubscribed, in another directory or, from GHC 9.12,
-# incrementally must give bit-identical objects, interfaces, archives and
-# programs, and the same bytes in any installed directory named to `hash`
-# (`run` names the bluehs runtime it installs, inst/bluehs).  `run` is the
-# whole ladder on one machine, every leg a fresh checkout in a directory of its
-# own: it runs `hash` on every leg and `verdict` over the lists; CI
+# incrementally must give bit-identical objects, interfaces, archives, shared
+# objects and programs, and the same bytes in any installed directory named to
+# `hash` (`run` names the bluehs runtime it installs, inst/bluehs).  `run` is
+# the whole ladder on one machine, every leg a fresh checkout in a directory of
+# its own: it runs `hash` on every leg and `verdict` over the lists; CI
 # (.github/workflows/cabal.yml) runs it, one job per platform.
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
@@ -42,8 +42,8 @@ iface_hash() {  # one interface file -> "hash  path"
 }
 export -f sha256 iface_hash
 
-# Every object, archive and interface under dist-newstyle/build and every
-# program bsc.cabal declares, as bytes except interfaces, with paths relative
+# Every object, archive, shared object and interface under dist-newstyle/build
+# and every program bsc.cabal declares, as bytes except interfaces, with paths relative
 # to the repository so builds in different directories compare.  Then every
 # file of each installed directory named after the list: as bytes, except the
 # interfaces under a `store` directory (the libraries this tree builds and
@@ -59,7 +59,7 @@ hash_build() {
   programs=$(awk '/^executable[ \t]/ {print $2}' bsc.cabal)
   [ -n "$programs" ] || die "no executable stanzas in bsc.cabal"
   {
-    find dist-newstyle/build -type f \( -name '*.o' -o -name '*.dyn_o' -o -name '*.p_o' -o -name '*.a' \) -print0 \
+    find dist-newstyle/build -type f \( -name '*.o' -o -name '*.dyn_o' -o -name '*.p_o' -o -name '*.a' -o -name '*.so' -o -name '*.dylib' \) -print0 \
       | sort -z | xargs -0 bash -eo pipefail -c 'sha256 "$@"' _
     find dist-newstyle/build -type f \( -name '*.hi' -o -name '*.dyn_hi' -o -name '*.p_hi' \) -print0 \
       | xargs -0 -n 1 -P "$ncpu" bash -eo pipefail -c 'iface_hash "$1"' _
@@ -92,8 +92,9 @@ hash_build() {
 }
 
 # Pass means every list is identical to the reference.  Differences are
-# reported by category (program, object, interface, archive, and distribution
-# for the files of an installed directory) so a failure says what moved.
+# reported by category (program, shared object, object, interface, archive,
+# and distribution for the files of an installed directory) so a failure says
+# what moved.
 verdict() {
   local ref="$1" fail=0 other name diffs n cat sel c; shift
   [ -r "$ref" ] && [ -s "$ref" ] || { echo "verdict: reference $ref is missing, unreadable or empty"; exit 2; }
@@ -106,9 +107,10 @@ verdict() {
     n=$(printf '%s\n' "$diffs" | sed '/^$/d' | wc -l)
     echo "DIFFER: $(basename "$ref" .sha256) vs $name: $n file(s)"
     build=$(printf '%s\n' "$diffs" | grep '^dist-newstyle/' || true)
-    for cat in program object interface archive distribution; do
+    for cat in program shared object interface archive distribution; do
       case "$cat" in
-        program) sel=$(printf '%s\n' "$build" | grep -Ev '\.(o|hi|dyn_o|dyn_hi|p_o|p_hi|a)$' || true);;
+        program) sel=$(printf '%s\n' "$build" | grep -Ev '\.(o|hi|dyn_o|dyn_hi|p_o|p_hi|a|so|dylib)$' || true);;
+        shared) sel=$(printf '%s\n' "$build" | grep -E '\.(so|dylib)$' || true);;
         object) sel=$(printf '%s\n' "$build" | grep -E '\.(o|dyn_o|p_o)$' || true);;
         interface) sel=$(printf '%s\n' "$build" | grep -E '\.(hi|dyn_hi|p_hi)$' || true);;
         archive) sel=$(printf '%s\n' "$build" | grep '\.a$' || true);;
