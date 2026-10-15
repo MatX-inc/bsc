@@ -214,7 +214,11 @@ directory of the checkout is written into any of them, since the solvers are
 linked by name (section 3). In the installed tree the compiler stores file
 names relative to the build directory (upstream 1135), and the Bluesim and
 VPI libraries map the checkout out of their debug information
-(`-ffile-prefix-map` in their Makefiles). `util/cabal-ladder.sh`:
+(`-ffile-prefix-map` in their Makefiles). The programs carry no local symbols
+(`-Wl,-x` in `bsc.cabal`): GHC compiles its link stubs from temporary files
+named by a per-process counter, and the C compiler records each name as a
+FILE symbol, which once differed between two builds of one commit; nothing
+reads a program's local symbols. `util/cabal-ladder.sh`:
 
 - `hash OUT [DIR...]` hashes one build: every object, archive, shared
   object and program (the programs from `cabal list-bin bsc:exe:<name>` for

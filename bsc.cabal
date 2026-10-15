@@ -352,6 +352,11 @@ common common_exes
   else
     default-language: Haskell2010
   ghc-options: -rtsopts "-with-rtsopts=-H256m -K10m -i1"
+  -- No local symbols in the programs: GHC compiles its link stubs from
+  -- temporary files named by a per-process counter, and the C compiler
+  -- records each name as a FILE symbol, so the counter would be in the bytes
+  -- (doc/cabal.md, section 5). Nothing reads a program's local symbols.
+  ld-options: -Wl,-x
   -- Deterministic object code when the compiler offers it (GHC 9.14+), as a
   -- condition rather than a floor on the compiler version.
   if impl(ghc >= 9.14)
