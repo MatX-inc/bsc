@@ -216,9 +216,14 @@ names relative to the build directory (upstream 1135), and the Bluesim and
 VPI libraries map the checkout out of their debug information
 (`-ffile-prefix-map` in their Makefiles). The programs carry no local symbols
 (`-Wl,-x` in `bsc.cabal`): GHC compiles its link stubs from temporary files
-named by a per-process counter, and the C compiler records each name as a
-FILE symbol, which once differed between two builds of one commit; nothing
-reads a program's local symbols. `util/cabal-ladder.sh`:
+named by a per-process counter, and the C compiler records each name as a FILE
+symbol, which once differed between two builds of one commit; nothing reads a
+program's local symbols. The yices library's version stamp carries the source's
+commit date, not the day of the build
+(`src/vendor/yices/v2.6/make_source_version`, handed to yices' make as
+`MKVERSION` in place of its own): yices regenerates the stamp on every make,
+and `make install-src` runs one, so two builds of one commit on different days
+differed in that string alone. `util/cabal-ladder.sh`:
 
 - `hash OUT [DIR...]` hashes one build: every object, archive, shared
   object and program (the programs from `cabal list-bin bsc:exe:<name>` for
