@@ -1,7 +1,6 @@
 {-# LANGUAGE DisambiguateRecordFields #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StaticPointers #-}
 
@@ -73,7 +72,7 @@ import System.Directory
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath (isPathSeparator, splitExtension, splitSearchPath, takeDirectory, (</>))
-import System.IO (IOMode (..), hGetContents', hSetEncoding, latin1, readFile', withFile)
+import System.IO (Handle, IOMode (..), hGetContents, hSetEncoding, latin1, withFile)
 import System.IO.Error (catchIOError)
 import System.Process
   ( CreateProcess (..),
@@ -137,11 +136,21 @@ needing targets act = do
 
 -- | Write the file only if its content changes, so an unchanged generated
 -- module keeps its timestamp.
+-- | Strict reads, as base 4.15's readFile' and hGetContents', for the GHCs
+-- before it.
+hGetContentsStrict :: Handle -> IO String
+hGetContentsStrict h = do
+  s <- hGetContents h
+  length s `seq` pure s
+
+readFileStrict :: FilePath -> IO String
+readFileStrict path = withFile path ReadMode hGetContentsStrict
+
 writeFileChanged :: FilePath -> String -> IO ()
 writeFileChanged path new = do
   createDirectoryIfMissing True (takeDirectory path)
   exists <- doesFileExist path
-  same <- if exists then (== new) <$> readFile' path else pure False
+  same <- if exists then (== new) <$> readFileStrict path else pure False
   unless same (writeFile path new)
 
 -- | The autogen location of a generated module of the component.
@@ -170,9 +179,9 @@ moduleListSetupHooks = noSetupHooks {configureHooks}
     configureHooks = noConfigureHooks {preConfComponentHook}
 
     preConfComponentHook :: Maybe PreConfComponentHook
-    preConfComponentHook = Just $ \inputs -> do
-      case inputs.component of
-        CLib lib | isMainLib inputs.component -> do
+    preConfComponentHook = Just $ \inputs@PreConfComponentInputs {component} -> do
+      case component of
+        CLib lib | isMainLib component -> do
           root <- findRepoRoot
           let bi = libBuildInfo lib
               roots = [d | d <- getSymbolicPath <$> hsSourceDirs bi, "src/comp" `isPrefixOf` d]
@@ -215,7 +224,7 @@ generatedModules = ["Warmup", "BuildSystem", "BuildVersion"]
 moduleHeader :: FilePath -> IO (Maybe String)
 moduleHeader path = withFile path ReadMode $ \h -> do
   hSetEncoding h latin1
-  text <- hGetContents' h
+  text <- hGetContentsStrict h
   pure (listToMaybe [m | l <- lines text, Just m <- [headerName l]])
   where
     headerName line = case words (bird (dropWhile isSpace line)) of
@@ -261,25 +270,24 @@ warmupSetupHooks = noSetupHooks {configureHooks, buildHooks}
     -- other-modules (exposed-modules for the library), as Cabal requires of
     -- an autogen module.
     preConfComponentHook :: Maybe PreConfComponentHook
-    preConfComponentHook = Just $ \inputs ->
-      if wantsWarmup inputs.component
+    preConfComponentHook = Just $ \inputs@PreConfComponentInputs {component} ->
+      if wantsWarmup component
         then
           pure $
             PreConfComponentOutputs
               { componentDiff =
                   buildInfoComponentDiff
-                    (componentName inputs.component)
+                    (componentName component)
                     (emptyBuildInfo {autogenModules = ["Warmup"]})
               }
         else pure $ noPreConfComponentOutputs inputs
 
     -- Generate the module.
     preBuildComponentRules :: Maybe PreBuildComponentRules
-    preBuildComponentRules = Just . rules (static ()) $ \env -> do
-      let lbi = env.localBuildInfo
-          clbi = env.targetInfo.targetCLBI
-          verbosity = buildingWhatVerbosity env.buildingWhat
-      when (wantsWarmup (targetComponent env.targetInfo)) $ do
+    preBuildComponentRules = Just . rules (static ()) $ \PreBuildComponentInputs {buildingWhat, localBuildInfo = lbi, targetInfo} -> do
+      let clbi = targetCLBI targetInfo
+          verbosity = buildingWhatVerbosity buildingWhat
+      when (wantsWarmup (targetComponent targetInfo)) $ do
         -- The package databases are read here, at build time, not taken from
         -- the configure-time snapshot in installedPkgs lbi. cabal-install does
         -- not reconfigure a package when a dependency's exposed-modules
@@ -360,15 +368,15 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
     -- configuring refuses while one is there, and so does each build, since
     -- cabal-install builds without configuring when only sources changed.
     preConfComponentHook :: Maybe PreConfComponentHook
-    preConfComponentHook = Just $ \inputs ->
-      if isMainLib inputs.component
+    preConfComponentHook = Just $ \inputs@PreConfComponentInputs {component} ->
+      if isMainLib component
         then do
           refuseStrayGeneratedModules
           pure $
             PreConfComponentOutputs
               { componentDiff =
                   buildInfoComponentDiff
-                    (componentName inputs.component)
+                    (componentName component)
                     (emptyBuildInfo {autogenModules = ["BuildSystem", "BuildVersion"]})
               }
         else pure $ noPreConfComponentOutputs inputs
@@ -381,12 +389,11 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
     -- for a build system that runs the rules itself (cabal-install with a
     -- Cabal 3.18 setup), which decides from them (doc/cabal.md).
     preBuildComponentRules :: Maybe PreBuildComponentRules
-    preBuildComponentRules = Just . rules (static ()) $ \env -> do
-      let lbi = env.localBuildInfo
-          clbi = env.targetInfo.targetCLBI
+    preBuildComponentRules = Just . rules (static ()) $ \PreBuildComponentInputs {localBuildInfo = lbi, targetInfo} -> do
+      let clbi = targetCLBI targetInfo
           buildSystem = autogenLocation lbi clbi "BuildSystem"
           buildVersion = autogenLocation lbi clbi "BuildVersion"
-      when (isMainLib (targetComponent env.targetInfo)) $ do
+      when (isMainLib (targetComponent targetInfo)) $ do
         liftIO refuseStrayGeneratedModules
         repoHead <- liftIO gitHead
         case repoHead of
@@ -495,7 +502,7 @@ writeBuildVersionHs (autogenDir, _) = do
   let stamp = root </> "build" </> "cabal-head"
       content = maybe "no-repository" snd commit <> "\n"
   createDirectoryIfMissing True (root </> "build")
-  current <- (Just <$> readFile' stamp) `catchIOError` \_ -> pure Nothing
+  current <- (Just <$> readFileStrict stamp) `catchIOError` \_ -> pure Nothing
   when (current /= Just content) $ writeFile stamp content
 
 -- | The repository's git directory (worktree-safe) and its HEAD commit, or
@@ -546,10 +553,10 @@ solverSetupHooks = noSetupHooks {configureHooks, buildHooks}
     buildHooks = noBuildHooks {postBuildComponentHook}
 
     preConfComponentHook :: Maybe PreConfComponentHook
-    preConfComponentHook = Just $ \inputs -> do
-      case inputs.component of
-        CLib lib | isMainLib inputs.component -> do
-          linkable <- solversLinkable (LBC.withPrograms inputs.localBuildConfig) (libBuildInfo lib)
+    preConfComponentHook = Just $ \inputs@PreConfComponentInputs {component, localBuildConfig} -> do
+      case component of
+        CLib lib | isMainLib component -> do
+          linkable <- solversLinkable (LBC.withPrograms localBuildConfig) (libBuildInfo lib)
           unless linkable $ ioError (userError solverAdvice)
         _ -> pure ()
       pure $ noPreConfComponentOutputs inputs
@@ -558,12 +565,11 @@ solverSetupHooks = noSetupHooks {configureHooks, buildHooks}
     -- lib/SAT is <builddir>/lib/SAT; an executable is
     -- <builddir>/build/<exe>/<exe>, so its lib/SAT is <builddir>/build/lib/SAT.
     postBuildComponentHook :: Maybe PostBuildComponentHook
-    postBuildComponentHook = Just $ \inputs -> do
+    postBuildComponentHook = Just $ \PostBuildComponentInputs {localBuildInfo = lbi, targetInfo} -> do
       linked <- solverDirectory
       forM_ linked $ \sat -> do
-        let lbi = inputs.localBuildInfo
         build <- makeAbsolute (interpretSymbolicPathLBI lbi (LBI.buildDir lbi))
-        case targetComponent inputs.targetInfo of
+        case targetComponent targetInfo of
           CLib _ -> linkSatDir sat (takeDirectory build)
           CExe _ -> linkSatDir sat build
           _ -> pure ()
@@ -640,12 +646,12 @@ tclSetupHooks = noSetupHooks {configureHooks}
     configureHooks = noConfigureHooks {preConfComponentHook}
 
     preConfComponentHook :: Maybe PreConfComponentHook
-    preConfComponentHook = Just $ \inputs -> do
+    preConfComponentHook = Just $ \inputs@PreConfComponentInputs {component} -> do
       root <- findRepoRoot
       let platform arg = readProcess "sh" [root </> "platform.sh", arg] ""
       let trim = f . f where f = reverse . dropWhile isSpace
       let getArgs flag = fmap (drop (length flag)) . filter (flag `isPrefixOf`)
-      if isMainLib inputs.component
+      if isMainLib component
         then do
           tclInc <- words <$> platform "tclinc"
           tclLibs <- words <$> platform "tcllibs"
@@ -664,7 +670,7 @@ tclSetupHooks = noSetupHooks {configureHooks}
             PreConfComponentOutputs
               { componentDiff =
                   buildInfoComponentDiff
-                    (componentName inputs.component)
+                    (componentName component)
                     ( emptyBuildInfo
                         { includeDirs,
                           extraLibDirs,
