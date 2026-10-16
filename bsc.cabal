@@ -64,7 +64,7 @@ library
     unix         >=2.8.6.0,
   if impl(ghc >= 9.10)
     build-depends: ghc-internal
-  default-language: GHC2021
+  default-language: Haskell2010
   default-extensions:
     BangPatterns,
     FlexibleContexts,
@@ -338,7 +338,7 @@ common common_exes
   build-depends:
     base >=4.18.3.0,
     bsc,
-  default-language: GHC2021
+  default-language: Haskell2010
   ghc-options: -rtsopts "-with-rtsopts=-H256m -K10m -i1"
   -- Deterministic object code when the compiler offers it (GHC 9.14+), as a
   -- condition rather than a floor on the compiler version.
