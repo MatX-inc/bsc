@@ -2,4 +2,6 @@
 
 CONFDIR = $(realpath ../..)
 
+KEEPFILES = GenericWrapForeign.v EmptyWrapForeign.v BVIReadyForeign.v
+
 include $(CONFDIR)/clean.mk

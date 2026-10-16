@@ -157,7 +157,7 @@ instance DeepSplitPorts' r a (PortsOf a) where
   deepUnsplitPorts' _ = unsplitPorts
   deepSplitPortNames' _ = portNames
 
--- Recurse into the fields of a struct
+-- Recurse into the fields of a single-constructor type, including interfaces
 instance (DeepSplitPorts'' (Rep a) p) => DeepSplitPorts' (Meta (MetaData name pkg args 1) r') a p where
   deepSplitPorts' _ = deepSplitPorts'' ∘ from
   deepUnsplitPorts' _ = to ∘ deepUnsplitPorts''

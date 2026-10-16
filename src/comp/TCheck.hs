@@ -51,6 +51,7 @@ import Pragma(PProp(..))
 import CSubst
 import ForeignFunctions(toAVId)
 import CFreeVars(getFQTyVarsT)
+import StructuralWrap(cWrapShape, wrapLeaves)
 -------
 
 import Util(traces)
@@ -627,6 +628,13 @@ tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps) = do
     eq_ps <- unify exp (TAp tModule v) td
     s <- getSubst
     sy <- getSymTab
+    rawType <- expandFullType (apSub s v)
+    when doRTrace $ traceM ("CmoduleVerilog interface: " ++ ppReadable rawType)
+    let rawFields = fmap (concatMap addReady . wrapLeaves (getPosition exp))
+                        (cWrapShape rawType)
+        addReady (f, t)
+          | isClock t || isReset t || isInout_ t = [(f, t)]
+          | otherwise = [(f, t), (mkRdyId f, tBitN 1 (getPosition f))]
 
     -- some common definitions for error messages
     let getString (CLit (CLiteral _ (LString x))) = x
@@ -674,12 +682,18 @@ tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps) = do
                 let f = vf_name vfi
                     f_str = pfpString f
 
-                (_ :>: sc, _, _) <- findFields v f
-                -- traceM(ppReadable sc)
-                (_ :=> ft, _)    <- freshInst "D" f sc
-                (t, eq_ps) <- unifyFnTo f exp ft v
-                when (not . null $ eq_ps) $
-                  internalError("TCheck.chkVeriIfc: " ++ ppReadable (exp,v,f,ft,t))
+                t <- case rawFields of
+                  Just fs ->
+                    case find (qualEq f . fst) fs of
+                      Just (_, ft) -> return ft
+                      Nothing -> internalError ("TCheck.chkVeriIfc: structural field " ++ f_str)
+                  Nothing -> do
+                    (_ :>: sc, _, _) <- findFields v f
+                    (_ :=> ft, _) <- freshInst "D" f sc
+                    (t, eq_ps) <- unifyFnTo f exp ft v
+                    when (not . null $ eq_ps) $
+                      internalError("TCheck.chkVeriIfc: " ++ ppReadable (exp,v,f,ft,t))
+                    return t
                 s <- getSubst
                 let mtype = expandSyn (apSub s t)
                 let (argTypes, resType) = getArrows mtype
@@ -855,17 +869,31 @@ tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps) = do
     -- monadic evaluations for ty below
 --    tyM1 <- mapM (\ e -> newTVar "tiExpr CmoduleVerilog 4" KStar e) es
 --    tyM2 <- mapM (\ t -> newTVar "tiExpr CmoduleVerilog 5" KStar t) ts
-    case leftCon (expandSyn (apSub s v)) of
-     Just ti | (Just fs0) <- getIfcFields ti sy ->
-         let fs = {- trace ("fields:" ++ ppReadable fs0) $ -} map unQualId fs0
-             ty = foldr fn td ts
+    let ifcFields = case rawFields of
+          Just fs -> Just (idMetaInterface, map fst fs, True)
+          Nothing -> do
+            ti <- leftCon (expandSyn (apSub s v))
+            fs <- getIfcFields ti sy
+            return (ti, fs, False)
+    case ifcFields of
+     Just (ti, fs0, structural) ->
+         let fs = map unQualId fs0
+             -- Structural wrappers always carry a readiness slot.  An import
+             -- with no ready port supplies constant True for that slot.
+             required = if structural then filter (not . isRdyId) fs else fs
+             -- The associated wrapper type may have been reduced using this
+             -- definition's Bits givens.  Keep that structural result in the
+             -- typed primitive; IConv has no local dictionary environment in
+             -- which to repeat the reduction for a polymorphic BVI import.
+             resultTy = if structural then TAp tModule rawType else td
+             ty = foldr fn resultTy ts
          in
                 -- check for extra fields first
                 case fieldnames \\ fs of
                   i:_ -> err (getIdPosition i, EForeignModNotField
                                                    (pfpString ti) (pfpString i))
                   [] -> -- now check for missing fields
-                      case fs \\ fieldnames of
+                      case required \\ fieldnames of
                         i:_ -> err (getIdPosition i,
                                     EForeignModMissingField (pfpString i)
                                         name_str name_pos_str)

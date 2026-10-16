@@ -16,6 +16,7 @@
 > import Parser.BSV.CVParserUtil
 > import CSyntax
 > import CSyntaxUtil
+> import CType(cTCon, cTApplys)
 
 > import Id
 > import Position
@@ -29,6 +30,7 @@
 > import PreIds
 > import FStringCompat
 > import PreStrings
+> import GenWrapUtils (bviWrapInfoId, bviWrapStyleId)
 > import SEMonad
 > import Util
 
@@ -1531,6 +1533,12 @@ Extract each type of statement, making sure to preserve the order
 >        when (not (null bvis13))
 >            (internalError "convImperativeStmtsToCStmts:ISBVI(2)")
 
+>        -- Flattened method names do not expose repeated empty subinterfaces,
+>        -- or repeated subinterfaces whose method declarations are disjoint.
+>        case findDup [ name | (name, _, _) <- ifcs ] of
+>          name : _ -> cvtErr (getPosition name) (EDupField (getIdString name))
+>          [] -> return ()
+
 >        let fname = case mf of
 >                     (Just e) -> e
 >                     _ -> (internalError "convImperativeStmtsToCStmts:ISBVI(3)")
@@ -1683,50 +1691,7 @@ Extract each type of statement, making sure to preserve the order
 >                (clk, rst) <- checkClkRst mclk mrst
 >                return (Method a clk rst d e f g)
 
->        let mkPatArgs is =
->              take (length is) (map CPVar (newIds lastPos))
->            mkArgs is =
->              take (length is) (map (\ i -> (cVApply idPack [CVar i])) (newIds lastPos))
->            mkBasicDef f id sid is b =
->              let qual = if b
->                         then [CQFilter (cVApply idUnpack
->                                                 [(CSelect (CVar bviMname) (mkRdyId id))])]
->                         else []
->              in CLValue sid [CClause (mkPatArgs is) []
->                               (f (CApply (CSelect (CVar bviMname) id) (mkArgs is)))]
->                             qual
-
->            mkBSVMethod (si, Clock i, _) =
->                     CLValue si [CClause [] [] (CSelect (CVar bviMname) i)] []
->            mkBSVMethod (si, Reset i, _) =
->                     CLValue si [CClause [] [] (CSelect (CVar bviMname) i)] []
->            mkBSVMethod (si, Inout i _ _ _, _) =
->                     CLValue si [CClause [] []
->                                   (cVApply idPrimInoutUncast0 [(CSelect (CVar bviMname) i)])] []
->            -- the following case will generate an error in chkBSVMethod below:
->            mkBSVMethod (sn, Method n _ _ _ is [] Nothing, b) = -- ... mo me needsReady
->               mkBasicDef (\ e -> e) n sn is b
->            mkBSVMethod (sn, Method n _ _ _ is (_ : _) Nothing, b) = -- ... mo me needsReady
->               mkBasicDef (\ e -> cVApply idUnpack [e]) n sn is b
->            mkBSVMethod (sn, Method n _ _ _ is [] (Just _), b) = -- ... mo me needsReady
->               mkBasicDef (\ e -> cVApply idFromActionValue_ [e]) n sn is b
->            mkBSVMethod (sn, Method n _ _ _ is (_ : _) (Just _), b) = -- ... mo me needsReady
->               mkBasicDef (\ e -> cVApply idFromActionValue_ [e]) n sn is b
-
->            mkBSVIfc (name,constr,ss) =
->               let ms = [ m | (ISBVI _ (BVI_method m)) <- ss ]
->                   is = [ i | (ISBVI _ (BVI_interface i)) <-ss ]
->                   mcs = methodClauses ms
->                   ics = map mkBSVIfc is
->                   clss = mcs++ics
->                in CLValue name [CClause [][] (Cinterface lastPos (Just constr) clss)] []
->
->            isRealMethod (_,Method i _ _ _ _ _ _,_) = not (isRdyId i)
->            isRealMethod _ = True
->            methodClauses ms = (map mkBSVMethod (filter isRealMethod ms))
->            ifcClauses = map mkBSVIfc
-
->            lastPos = getPosition (last stmts)
+>        let lastPos = getPosition (last stmts)
 >            bviMname = idM lastPos
 >            chkBSVMethod (Method n _ _ _ _ [] Nothing) = -- os me
 >               cvtErr (getPosition n) (EForeignModOutputOrEnable (pvpReadable n))
@@ -1928,11 +1893,45 @@ Extract each type of statement, making sure to preserve the order
 >                    vsi
 >                    (VPathInfo paths)
 >            mod' = cVApply idLiftModule [mod]
->            ifc = Cinterface pos Nothing ((methodClauses methods)++(ifcClauses ifcs))
+>            -- The imported primitive has the tuple representation selected by
+>            -- BVIWrap.  Reconstruct the source interface through the same
+>            -- generic traversal as synthesized wrappers, with BVI's whole-Bits
+>            -- leaf policy and the explicitly declared ready conditions.
+>            wrapId s = mkQId pos (mkFString "WrapModule") (mkFString s)
+>            wrappedType = case itype of
+>              CQType qs t -> CQType qs $
+>                cTApplys (cTCon (wrapId "WrappedIfc"))
+>                  [cTCon (wrapId "BVIWrap"), t]
+>            ifc = CHasType
+>                    (cVApply (wrapId "fromWrapIfc")
+>                      [CVar (bviWrapStyleId bviMname),
+>                       CVar (bviWrapInfoId bviMname), CVar bviMname])
+>                    itype
+>            -- The generic unwrapper follows the expected interface type, but
+>            -- BVI also names the constructor of each subinterface explicitly.
+>            -- Check those names with ordinary patterns, without recreating the
+>            -- old method bodies.  Omitted pattern fields need no definitions.
+>            -- This unused binding is checked and then removed as dead code.
+>            ifcPattern (_, constr, ss) =
+>                CPstruct (Just True) constr
+>                  [ (name, ifcPattern sub)
+>                  | ISBVI _ (BVI_interface sub@(name, _, _)) <- ss ]
+>            checkIfc sub@(name, _, _) =
+>                Ccase (getPosition name)
+>                  (noRead (CSelect (CHasType (anyExprAt pos) itype) name))
+>                  [CCaseArm (ifcPattern sub) [] (mkTuple pos [])]
+>            checkId = setInternal
+>                        (mkIdPost bviMname (mkFString "_checkInterfaces"))
+>            ifcChecks =
+>                [ CSletseq [CLValue checkId
+>                    [CClause [] [] (mkTuple pos (map checkIfc ifcs))] []]
+>                | not (null ifcs) ]
 >        -- (*A*) Note: this next expression is recognised by GenWrap and the
->        -- interface type itype is replaced there.  See comment (*A*) in GenWrap.hs.
->        return (bindings ++
->                [CSBindT (CPVar bviMname) (Just (mkNameExpr bviMname)) [] itype mod',
+>        -- descriptor and shape-indexed style bindings are filled in there.
+>        -- The raw type's BVIWrap sentinel is also replaced with that style.
+>        -- Both sides of the conversion are then typechecked normally.
+>        return (bindings ++ ifcChecks ++
+>                [CSBindT (CPVar bviMname) (Just (mkNameExpr bviMname)) [] wrappedType mod',
 >                 CSExpr Nothing (cVApply (idReturn lastPos) [ifc])])
 
 > convImperativeStmtsToCStmts c_mt_me False stmts@(ISBVI pos _ : rest) =

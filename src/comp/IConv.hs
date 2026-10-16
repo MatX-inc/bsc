@@ -43,6 +43,7 @@ import Undefined
 import Prim
 import Pragma(CSchedulePragma, Pragma(..))
 import IConvLet(docycles, reorderDs, unpoly)
+import StructuralWrap(iWrapShape, wrapLeaves)
 
 -- import Debug.Trace
 
@@ -590,7 +591,20 @@ iConvE errh flags r env pvs e@(CmoduleVerilogT ty name ui clks rst args meths sc
             getMethodName (Clock i) = i
             getMethodName (Reset i) = i
             getMethodName (Inout { vf_name = i }) = i
-            tss = map (tail . itSplit . getMethodType flags r ti ts . getMethodName) meths
+            -- The generic wrapper carries the field types structurally.
+            -- Nominal user imports retain their existing selector lookup.
+            tss = case iWrapShape ty'' of
+                    Just shape ->
+                      let addReady (i, t)
+                            | t == itClock || t == itReset || isitInout_ t = [(i,t)]
+                            | otherwise = [(i,t), (mkRdyId i,itBit1)]
+                          fields = M.fromList $ concatMap addReady $
+                                     wrapLeaves (getPosition e) shape
+                          lookupType f = fromJustOrErr
+                            ("IConv: missing structural import field " ++ ppReadable f)
+                            (M.lookup (unQualId f) fields)
+                      in map (itSplit . lookupType . getMethodName) meths
+                    Nothing -> map (tail . itSplit . getMethodType flags r ti ts . getMethodName) meths
             ty' = iConvT flags r ty
             ty'' = case dropA es' ty' of
                      ITAp _ t -> t

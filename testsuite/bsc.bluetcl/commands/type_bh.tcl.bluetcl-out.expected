@@ -1,4 +1,4 @@
-Test Vector Array List PreludeBSV Prelude
+Test Vector Array List PreludeBSV WrapModule Prelude
 
 Sz
 Alias Test::Sz 9 {position {Test.bsv 7 11}}
@@ -287,6 +287,6 @@ Tuple2#(a, b)
 
 {tpl_1 Int#(32) 32 32} {tpl_2 Int#(32) 32 0}
 
-Test Vector TaggedUnionPoly Array List PreludeBSV Prelude
+Test Vector TaggedUnionPoly Array List PreludeBSV WrapModule Prelude
 TaggedUnion {TaggedUnionPoly::NSRK#(type n, type s, type r, numeric type k)} polymorphic {members {{{TaggedUnionPoly::Fin#(n, k)} N} {{TaggedUnionPoly::Fin#(s, k)} S} {{TaggedUnionPoly::Fin#(r, k)} R}}} {position {TaggedUnionPoly.bsv 9 3}}
 

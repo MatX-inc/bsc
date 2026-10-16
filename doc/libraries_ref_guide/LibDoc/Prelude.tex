@@ -7358,7 +7358,7 @@ data (MetaData :: $ -> $ -> * -> # -> *)
     name pkg tyargs ncons
    \end{libverbatim}
    &
-   Indicates that a representation is for a type (e.g. struct/data) with a name,
+   Indicates that a representation is for a type (e.g. struct/data/interface) with a name,
    package, tuple of type arguments and number of constructors.
    Types of kind \te{*}, \te{\#}, \te{\$}, \te{* -> *} or \te{\# -> *}
    appearing in the type arguments are wrapped
@@ -7376,6 +7376,16 @@ data (MetaData :: $ -> $ -> * -> # -> *)
    Constructor-kinded types arguments cannot be handled in general and
    are omitted from the \te{OtherConArg} representation type.
    \\
+   \hline
+   \begin{libverbatim}
+data (MetaInterface :: $ -> # -> # -> *)
+    name idx nfields
+   \end{libverbatim}
+   &
+   Indicates that a representation is for an interface's named fields,
+   with the interface name, index (always 0), and number of fields.
+   It appears inside the outer \te{MetaData} wrapper, in the position occupied
+   by \te{MetaConsNamed} for a struct. \\
    \hline
    \begin{libverbatim}
 data (MetaConsNamed :: $ -> # -> # -> *)
@@ -7404,14 +7414,30 @@ data (MetaField :: $ -> # -> *) name idx
    \end{tabular}
 \end{center}
 
+An automatically derived interface representation has an outer
+\te{Meta (MetaData name pkg tyargs 1)} wrapper, followed by
+\te{Meta (MetaInterface name 0 nfields)} around its product of fields.
+Each field retains its \te{MetaField} metadata and concrete-type wrapper.
+The outer metadata continues to describe the interface's name, package,
+type arguments and single-constructor structure.
+
+The use of \te{MetaInterface} in place of \te{MetaConsNamed} is a deliberate
+compatibility break in the automatically derived \te{Generic} representation of interfaces,
+including the Prelude \te{PrimPair} interface used for tuples.
+Generic operations that explicitly handle \te{MetaConsNamed} must also handle
+\te{MetaInterface} if they are intended to support interfaces.
+Operations that ignore metadata through an instance for \te{Meta m r}
+can continue to do so.  Struct and data representations are unchanged.
+
 {\bf Examples}
 
-Including metadata, the derived \te{Generic} instance for the \te{PrimPair} type is
+Including metadata, the derived \te{Generic} instance for the \te{PrimPair} type
+(declared as an interface in Prelude) is
 
 \begin{libverbatim}
    instance Generic (PrimPair a b)
       (Meta (MetaData "PrimPair" "Prelude" (StarArg a, StarArg b) 1)
-      (Meta (MetaConsNamed "PrimPair" 0 2)
+      (Meta (MetaInterface "PrimPair" 0 2)
       (Meta (MetaField "fst" 0) (Conc a),
          Meta (MetaField "snd" 1) (Conc b)))) where
    from x = Meta (Meta (Meta (Conc x.fst), Meta (Conc x.snd)))

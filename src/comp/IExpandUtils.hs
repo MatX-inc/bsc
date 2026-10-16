@@ -97,6 +97,7 @@ import CType(TISort(..), StructSubType(..))
 import VModInfo
 import ISyntax
 import ISyntaxUtil
+import StructuralWrap(iWrapShape, wrapLeaves)
 import Prim
 import Wires
 import IWireSet
@@ -1024,8 +1025,11 @@ incrSNFIgnoreCount _ = internalError ("incrSNFIgnoreCount")
 pushTopModuleSchedNameScope :: IType -> G ()
 pushTopModuleSchedNameScope t = do
   symt <- getSymTab
-  let ifcName = iGetIfcName $ iGetModIfcType t
-      methNames = getIfcFlatMethodNames symt ifcName
+  norm <- getTypeNormalizer
+  let ifcType = norm (iGetModIfcType t)
+      methNames = case structuralMethodNames ifcType of
+        Just names -> names
+        Nothing -> getIfcFlatMethodNames symt (iGetIfcName ifcType)
       -- use True to indicate that these are top-level methods
       newNameMap = M.fromList [ (m, SNI_Method True) | m <- methNames ]
       newFrame = SchedNameFrame [] 0 newNameMap Nothing
@@ -1046,16 +1050,19 @@ pushTopModuleSchedNameScope t = do
 pushModuleSchedNameScope :: IStateLoc -> IType -> G ()
 pushModuleSchedNameScope ns resTy = do
   symt <- getSymTab
+  norm <- getTypeNormalizer
   s <- get
   let oldScope = schedNameScope s
   let -- XXX For backwards compatibility, allow visibility in addRules.
       -- XXX For for-loops, we should create a new context and allow
       -- XXX indexing of iterations
       ign = (hasIgnore ns) || (isAddRules ns) || (isLoop ns)
-      mIfcName = iMGetIfcName resTy
-      methNames = case mIfcName of
-                    Nothing -> []
-                    Just ifcName -> getIfcFlatMethodNames symt ifcName
+      resultType = norm resTy
+      methNames = case structuralMethodNames resultType of
+                    Just names -> names
+                    Nothing -> case iMGetIfcName resultType of
+                      Nothing -> []
+                      Just ifcName -> getIfcFlatMethodNames symt ifcName
       newNameMap = M.fromList [ (m, SNI_Method False) | m <- methNames ]
       newFrame = SchedNameFrame ns 0 newNameMap Nothing
       -- if this is an "ignore" level, just update the old scope
@@ -1065,6 +1072,15 @@ pushModuleSchedNameScope ns resTy = do
   --traceM("PUSH: " ++ (ppReadable ((toTF ign, toTF (hasIgnore ns)), head newScope)))
   --traceM("PUSH: " ++ ppReadable (M.toList (snf_nameMap (head newScope))))
   put (s { schedNameScope = newScope })
+
+-- Generic wrapper products carry logical method names in MetaField, not in
+-- their ordinary tuple selectors.  Keep scheduling attributes in that same
+-- method namespace when crossing the compiler's wrapper boundary.
+structuralMethodNames :: IType -> Maybe [Id]
+structuralMethodNames t = do
+  shape <- iWrapShape t
+  return [i | (i, ft) <- wrapLeaves noPosition shape,
+              ft /= itClock, ft /= itReset, not (isitInout_ ft)]
 
 pushRuleSchedNameScope :: Id -> Bool -> G ()
 pushRuleSchedNameScope i hide = do

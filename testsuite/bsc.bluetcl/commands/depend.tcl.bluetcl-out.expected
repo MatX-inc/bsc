@@ -1,5 +1,5 @@
 Command: depend make Test.bsv
-Test.bo {Test.bsv {$(BLUESPECDIR)/Libraries/Vector.bo} {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo}}
+Test.bo {Test.bsv {$(BLUESPECDIR)/Libraries/Vector.bo} {$(BLUESPECDIR)/Libraries/WrapModule.bo} {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo}}
 ---------
 Command: depend make MissingFile.bsv
 Caught error:  Error: Unknown position: (S0030)
@@ -11,11 +11,11 @@ Command: depend make Dep1.bsv
 Warning: "./IncDep2.bsv", line 2, column 8: (S0000)
   Cannot find package `Foo'
 Dep1.bo {Dep1.bsv ./Test.bo {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo} ./IncDep2.bsv ./IncDep1.bsv}
-./Test.bo {./Test.bsv {$(BLUESPECDIR)/Libraries/Vector.bo} {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo}}
+./Test.bo {./Test.bsv {$(BLUESPECDIR)/Libraries/Vector.bo} {$(BLUESPECDIR)/Libraries/WrapModule.bo} {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo}}
 ---------
 Command: depend make Dep1.bsv
 Dep1.bo {Dep1.bsv ./Test.bo subdir/Foo.bo {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo} ./IncDep2.bsv ./IncDep1.bsv}
-./Test.bo {./Test.bsv {$(BLUESPECDIR)/Libraries/Vector.bo} {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo}}
+./Test.bo {./Test.bsv {$(BLUESPECDIR)/Libraries/Vector.bo} {$(BLUESPECDIR)/Libraries/WrapModule.bo} {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo}}
 subdir/Foo.bo {subdir/Foo.bs {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo}}
 ---------
 Command: flags set -bdir BOUTDIR
@@ -24,7 +24,7 @@ BOUTDIR
 ---------
 Command: depend make Dep1.bsv
 BOUTDIR/Dep1.bo {Dep1.bsv BOUTDIR/Test.bo BOUTDIR/Foo.bo {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo} ./IncDep2.bsv ./IncDep1.bsv}
-BOUTDIR/Test.bo {./Test.bsv {$(BLUESPECDIR)/Libraries/Vector.bo} {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo}}
+BOUTDIR/Test.bo {./Test.bsv {$(BLUESPECDIR)/Libraries/Vector.bo} {$(BLUESPECDIR)/Libraries/WrapModule.bo} {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo}}
 BOUTDIR/Foo.bo {subdir/Foo.bs {$(BLUESPECDIR)/Libraries/Prelude.bo} {$(BLUESPECDIR)/Libraries/PreludeBSV.bo}}
 ---------
 Command: depend recomp MissingFile.bsv

@@ -9,37 +9,37 @@ module GenWrap(
 import Prelude hiding ((<>))
 #endif
 
-import Data.Char(isDigit)
-import Data.List(nub, (\\), find)
-import Control.Monad(when, foldM, filterM, zipWithM)
-import Control.Monad.Except(ExceptT, runExceptT, throwError)
-import Control.Monad.State(StateT, runStateT, lift, gets, get, put)
+import Data.List(nub, (\\))
+import Control.Monad(when, unless, foldM, filterM, zipWithM)
+import Control.Monad.Reader(ReaderT, runReaderT, lift, asks, ask)
 import PFPrint
-import Position(Position, noPosition, getPositionLine, cmdPosition)
-import Error(internalError, EMsg, EMsgs(..), ErrMsg(..), ErrorHandle, bsError)
-import ErrorMonad(ErrorMonad, convErrorMonadToIO)
+import Position(Position, noPosition, cmdPosition)
+import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, bsError, bsWarning)
+import ErrorMonad(ErrorMonad(..))
 import Flags(Flags)
 import FStringCompat
-import PreStrings(fsUnderscore, fs_t, fsTo, fsFrom, fsEmpty, fsEnable, fs_rdy, fsDot)
+import PreStrings(fsUnderscore, fs_t, fsEnable, fs_rdy)
 import Id
 import IdPrint
 import PreIds
 import CSyntax
 import CSyntaxUtil
-import SymTab(SymTab, TypeInfo(..), FieldInfo(..), findType, addTypesUQ,
+import SymTab(SymTab, TypeInfo(..), FieldInfo(..), findType,
               findField, findFieldInfo, getMethodArgNames)
 import MakeSymTab(convCQType)
 import Pred hiding (name)
 import qualified Pred(name)
 import Scheme
 import Assump
-import CType(cTNum, cTStr, tyConArgs, getArrows, cTVarNum, isIfc, getRes, typeclassId)
+import CType(cTNum, tyConArgs, getArrows, cTVarNum, isIfc, getRes, typeclassId, splitTAp)
 import VModInfo(VSchedInfo, VPathInfo(..), VeriPortProp(..), VArgInfo(..),
                 VFieldInfo(..), VName(..), VWireInfo(..), VPort)
 -- GenWrap defines its own versions that expand synonyms and use qualEq
 import Type hiding (isPrimAction, isActionValue, getAVType,
                     isReset, isClock, isInout)
 import TypeCheck(cCtxReduceDef)
+import TCMisc(mkQualType, normT)
+import qualified TIMonad as TI
 import Subst(mkSubst, Types(..))
 import Classic(isClassic)
 import Pragma
@@ -47,65 +47,54 @@ import PragmaCheck
 import Data.Maybe
 import Util
 import qualified Data.Map as M
+import qualified Data.Set as S
 import GenWrapUtils
+import Undefined(UndefKind(UNotUsed))
 
 -- ====================
 
-type GWMonad = StateT GenState (ExceptT EMsgs IO)
+-- All type queries share the post-deriving environment and retain the
+-- package dependencies and associated-type resolutions they discover.
+type GWMonad = ReaderT GenEnv TI.TI
 
-data GenState = GenState
+data GenEnv = GenEnv
  {
    errHandle  ::  ErrorHandle,
    symtable   ::  SymTab,
    flags      ::  Flags
  }
 
-runGWMonad :: GWMonad a -> GenState -> IO a
-runGWMonad f s = do
-  let errh = errHandle s
-  result <- runExceptT ((runStateT f) s)
-  case result of
-    Right (res, _) -> return res
-    Left msgs -> bsError errh (errmsgs msgs)
+runGWMonad :: GWMonad a -> GenEnv -> TI.TIResult a
+runGWMonad f env =
+    TI.runTI (flags env) False (symtable env) (runReaderT f env)
 
 -- don't expect it to fail
-runGWMonadNoFail :: GWMonad a -> GenState -> IO a
-runGWMonadNoFail f s =
-    do (_, res) <- runGWMonadGetNoFail f s
-       return res
-
--- get the state as well,
--- and we don't expect it to fail
-runGWMonadGetNoFail :: GWMonad a -> GenState -> IO (GenState, a)
-runGWMonadGetNoFail f s =
-    do result <- runExceptT ((runStateT f) s)
-       case result of
-         Right (res, s2) -> return (s2, res)
-         Left msgs -> internalError ("runGWMonadGetNoFail: " ++
-                                     ppReadable (errmsgs msgs))
+runGWMonadNoFail :: GWMonad a -> GenEnv -> IO a
+runGWMonadNoFail f env = do
+    let result = runGWMonad f env
+    when (not (null (TI.tiWarnings result))) $
+        bsWarning (errHandle env) (TI.tiWarnings result)
+    case TI.tiResult result of
+      Right res -> return res
+      Left msgs -> internalError ("runGWMonadNoFail: " ++ ppReadable msgs)
 
 -- for converting from ErrorMonad
 convEM :: ErrorMonad a -> GWMonad a
-convEM m = do
-  errh <- gets errHandle
-  lift $ lift $ convErrorMonadToIO errh m
+convEM (EMError msgs) = bads msgs
+convEM (EMWarning msgs x) = lift (mapM_ TI.twarn msgs) >> return x
+convEM (EMResult x) = return x
 
 getFlags :: GWMonad Flags
-getFlags = gets flags
+getFlags = asks flags
 
 getSymTab :: GWMonad SymTab
-getSymTab = do s <- get
-               return (symtable s)
-
-newSymTab :: SymTab -> GWMonad ()
-newSymTab symtnew = do s <- get
-                       put (s { symtable = symtnew })
+getSymTab = asks symtable
 
 bad :: EMsg -> GWMonad a
-bad msg = throwError (EMsgs [msg])
+bad = lift . TI.err
 
 bads :: [EMsg] -> GWMonad a
-bads msgs = throwError (EMsgs msgs)
+bads = lift . TI.errs "GenWrap"
 
 -- ====================
 
@@ -142,90 +131,33 @@ data WrapInfo = WrapInfo
  {
    mod_nm      :: Id,           -- module name for synthesis eg mkTest
    orig_cqt    :: CQType,       -- cqtype of original module
-   wrapper_ifc :: Id,           -- munged interface name
    wrapped_mod :: Id,           -- Id of wrapped module eg.  mkTest_
    wi_prags    :: [PProp],
+   wi_field_info :: [(Id, [IfcPragma])], -- elaboration metadata, not serialized
    deffun      :: DefFun
  }
 
 instance PPrint WrapInfo where
-    pPrint d p wi@(WrapInfo id1 cqt id2 id3 ps _) =
-       text "WrapInfo:" <+> ppId d id1 <> text(" :: ") <> pPrint d 0 cqt <>
-       text(" id2: ") <>  ppId d id2 <> text(" id3: ") <>
-       ppId d id3 $+$
-       text(" PProps: ")
-       <> sepList ( map (pPrint d p) ps) (text ",")
+    pPrint d p wi =
+       text "WrapInfo:" <+> ppId d (mod_nm wi) <> text " :: " <>
+       pPrint d 0 (orig_cqt wi) <+> text "wrapped module:" <+>
+       ppId d (wrapped_mod wi) $+$
+       text " PProps: " <>
+       sepList (map (pPrint d p) (wi_prags wi)) (text ",")
 
 -- ====================
 
--- A shallow processing of the interface of a synthesized module (or of an
--- import-BVI).  It lists the original type, it's original field names, and
--- any applicable attributes from the module (such as "always_enabled")
--- and it adds to that some shallow information about the flattened ifc
--- type which will be created later: the name of that type, a list of names
--- of the numeric type arguments that it takes, and a mapping from types in
--- original ifc to their bitified forms in the new ifc (using type names
--- from the argument name list).
-
--- Until we support synthesis of size-parameterized modules, the argument
--- list and type map will be empty for synthesized modules.  Only import-BVI
--- modules will have non-empty lists.
-
-data IfcTRec = IfcTRec
-  {
-    rec_id        :: Id,        -- name of the flattened ifc ("<ifc>_")
-    rec_rootid    :: Id,        -- type constructor of the original type
-    rec_isforeign :: Bool,      -- whether it is from an import-BVI
-    rec_type      :: CType,     -- the original ifc type
-    rec_pprops    :: [PProp],   -- module properties which apply to the ifc
-    rec_kind      :: Kind,      -- kind of the flattened ifc
-                                -- (can be derived from the numArgs)
-    rec_finfs     :: [FInf],    -- fields of the original ifc
-                                -- with _unqualified_ names
-    rec_numargs   :: [Id],             -- names of the numeric type args
-                                       -- of the flattened ifc
-    rec_typemap   :: [(CType, CType)]  -- mapping from types in the orig ifc
-                                       -- to their form in the flattened ifc
+-- One flattened source field supplies port checks, pragmas and the library's
+-- descriptor.  There is no synthetic interface declaration or name to track.
+data BoundaryField = BoundaryField
+  { boundarySource :: FInf
+  , boundaryPragmas :: [IfcPragma]
+  , boundaryProperties :: [PProp]
+  , boundaryPrefix :: String
+  , boundaryResult :: String
+  , boundaryReady :: Bool
+  , boundaryWire :: Bool
   }
-  deriving (Eq, Show)
-
-instance PPrint IfcTRec where
-    pPrint d p r =
-        text "IfcTRec:" <+> ppId d (rec_id r) <+> equals <+>
-        braces (
-                (if (rec_isforeign r) then text "(Foreign)" else empty) <+>
-                text "rootid:" <> pPrint d p (rec_rootid r) $+$
-                text "type:" <> pPrint d p (rec_type r) $+$
-                text "pprops:" <> pPrint d p (rec_pprops r) $+$
-                pPrint d p (rec_kind r) $+$
-                pPrint d p (rec_finfs r) $+$
-                pPrint d p (rec_numargs r) <+>
-                pPrint d p (rec_typemap r)
-               )
-
--- ====================
-
--- Information about a flattened, bitified interface
-
--- The IfcTRec information is further processed (along with the symtab)
--- to create this information.
-
-data GeneratedIfc = GeneratedIfc
-    {
-     genifc_id     :: Id,
-     genifc_kind   :: Kind,
-     genifc_cdefn  :: CDefn,
-     genifc_pprops :: [PProp]
-    }
-  deriving (Show)
-
-instance PPrint GeneratedIfc where
-    pPrint d p gifc =
-        text "GeneratedIfc: " <+> ppId d (genifc_id gifc) <+> equals <+>
-             braces (
-                      pPrint d p (genifc_cdefn gifc)
-                      $+$ pPrint d p (genifc_pprops gifc)
-                    )
 
 -- ====================
 
@@ -243,11 +175,17 @@ type ModDefInfo = (CDef, CQType,  -- the new "<mod>_" def and it's type
 -- arguments and results; surfaces method ready signals
 -- Pragma are module specific
 genWrap :: ErrorHandle -> Flags -> [String] -> Bool -> CPackage -> SymTab ->
-           IO (CPackage, [WrapInfo])
+           IO (CPackage, [WrapInfo], S.Set Id, TI.CATFCache)
 genWrap errh flgs genNames generating cpack symt = do
-    runGWMonad (genWrapE generating ppmap cpack) origstate
+    let result = runGWMonad (genWrapE generating ppmap cpack) env
+    when (not (null (TI.tiWarnings result))) $
+        bsWarning errh (TI.tiWarnings result)
+    case TI.tiResult result of
+      Left msgs -> bsError errh msgs
+      Right (cpack', infos) ->
+          return (cpack', infos, TI.tiUsedPackages result, TI.tiATFCache result)
  where
-    origstate = GenState errh symt flgs
+    env = GenEnv errh symt flgs
     pragmas = (extractPragmas cpack)
     ppmap = makePPropMap genNames pragmas
     --
@@ -295,132 +233,33 @@ isGenDef pmap i =
 
 -- ====================
 
--- A new interface is created in the CSyntax, which has the name <Top>_.  This interface
---   extends the existing one by adding the ready and enable signals
---   Only modules which have the verilog/synthesis pragma are "wrapped"
+-- Synthesis boundaries call the wrapping class and retain their declaration
+-- metadata for elaboration.  Explicit BVI imports use a separate wrapping style.
 
 genWrapE :: Bool -> M.Map Id [PProp] -> CPackage ->
             GWMonad (CPackage, [WrapInfo])
-genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds includes)  =
-    do
-       -- information on all modules which are being generated
-       -- (this checks the pragmas on all defs which have pragmas, though,
-       -- and errors if any do not meet sanity checks)
-       -- moduledefs :: [(CDef, CQType, [(Id, CType, ArgInfo)], [PProp])]
-       moduledefs <- concatMapM (getDef generating ds) (M.toList ppmap)
-       --traceM( "genWrapE:  moduledefs: " ++ ppReadable moduledefs )
-
-       -- build the Interface record
-       -- this structure should be used throughout
-       -- ifcTypeRecords :: [IfcTRec]
-       ifcTypeRecords <- mapM procDef moduledefs
-       let trs0 = concat ifcTypeRecords
-       let trs = nub trs0
-
-       -- create the type records for Verilog interfaces
-       (defsWithVector, trs') <- foldM fixVerilogIfc ([],[]) ds
-       let finalIfcTRecs = nub (trs0 ++ reverse trs')
-       --traceM( "IfcTRec: " ++ ppReadable finalIfcTRecs )
-
-       -- New interface is generated here
-       -- let newFlatIfcs :: [(Id, Kind, [FInf], CDefn), [PProp]]
-       newFlatIfcs <- mapM genTDef finalIfcTRecs
-       let genIfcMap = M.fromList $ map (\g -> (genifc_id g, g)) newFlatIfcs
-
-       --traceM ( "genWrapE moduledefs :" ++ ppReadable moduledefs )
-       --traceM ( "genWrapE ifcTypeRecords : " ++ ppReadable ifcTypeRecords)
-       ----traceM ( "genWrapE old dis_tmp :" ++ ppReadable dis_tmp )
-       --traceM ( "genWrapE old record :" ++ ppReadable finalIfcTRecs )
-       --traceM ( "genWrapE new ifc :" ++ ppReadable newFlatIfcs )
-
-       -- Update the symbol table for newFlatIfcs
-       symt <- getSymTab
-       let symt' = foldr (extSym packageId) symt newFlatIfcs
-       newSymTab symt'
-
-       -- The following make up the new definition list in the CPackage.
-       let ifcdefns = map genifc_cdefn newFlatIfcs  -- new interface definitions
-
-       -- create new new module definitions for the CPackage
-       newModule_s <- mapM (mkNewModDef genIfcMap) moduledefs
-
-       to_Defs <- mapM mkTo_ trs
-       from_Defs <- mapM mkFrom_ trs
-       let ifcConversionDefs = to_Defs ++ from_Defs
-
-       let fixedDefs = map fixDef defsWithVector
-
-       instanceDefs <- concatMapM mkInstances trs
-       -- XXX we don't update the symbol table with the new instances
-       -- XXX we rely on the symbol table being rebuilt
-
-       let finalDefs = reverse fixedDefs ++
-                       ifcdefns ++
-                       newModule_s ++
-                       ifcConversionDefs ++
-                       instanceDefs
-
-       gens <- mapM (genWrapInfo newFlatIfcs) moduledefs
-
-       --traceM ( "gen wrap: wrapinfo : " ++ ppReadable gens )
-       ----traceM ( "gen Wrap: dis : " ++ ppReadable dis )
-       ----traceM ( "gen wrap: ifcds : " ++ ppReadable ifcds )
-       --traceM ( "gen wrap: ds_ : " ++ ppReadable newModule_s )
-       --traceM ( "gen wrap: to_s : " ++ ppReadable ifcConversionDefs )
-       return (
-           CPackage packageId exps imps impsigs fixs finalDefs includes,
-           gens
-          )
-    where
-       -- Adds the new types into the symbol table
-       extSym :: Id -> GeneratedIfc -> SymTab -> SymTab
-       extSym mid genifc symt =
-           -- include both the qualified and unqualified names
-           addTypesUQ symt [(qdi, tyinf), (di, tyinf)]
-         where
-           di    = genifc_id genifc
-           qdi   = qualId mid di
-           k     = genifc_kind genifc
-           -- the type only has parameters if it's a wrapped foreign func
-           -- (in which case, the params are sizes from added Bits provisos)
-           -- XXX should we give better names in that case?
-           vs    = []
-           -- XXX if we need the field names, get them from genifc_cdefn
-           ti    = TIstruct (SInterface noIfcPragmas)
-                       (internalError "extSym: tried to access field names")
-           tyinf = TypeInfo (Just qdi) k vs ti Nothing
-
-       -- removes the [CClause] from the input, and replaces it with singleton list
-       fixDef :: CDefn -> CDefn
-       fixDef (CValueSign (CDef defid t e)) | generating &&
-                                              isGenDef ppmap defid =
-           CValueSign (CDef defid t [CClause [] [] (CVar defid)])
-       fixDef d = d
-
-
--- --------------------
--- genWrapE toplevel: procDef
-
--- This takes the ModDefInfo (computed by getDef) for each module to be
--- synthesized and returns a IfcTRec for each flattened interface that
--- needs to be created.  It returns a list because it used to support
--- interface arguments, so it would return the provided interface plus
--- any given interfaces.  (Probably only returns one element lists now.)
-
--- XXX note that it doesn't do a full recursive sweep of the interface
-
--- Check all definition types and put them in a convenient form
--- XXX the work here is forgotten and repeated many times throughout GenWrap
-procDef :: ModDefInfo -> GWMonad [IfcTRec]
-procDef (def@(CDef _ t _), _, _, pps) =
-    do --traceM( "procdef : def= " ++ ppReadable def ) ;
-       ts <- chkType def t
-       res <- mapM (makeIfcTRec pps) ts
-       return res
-procDef _ = internalError "genWrapE::procDef not CDef"
+genWrapE generating ppmap (CPackage packageId exps imps impsigs fixs ds includes) = do
+    defs <- mapM fixVerilogIfc ds
+    modules <- concatMapM (getDef generating defs) (M.toList ppmap)
+    wrapped <- mapM wrapModule modules
+    let (newDefs, infos) = unzip wrapped
+        fixDef (CValueSign (CDef i t _)) | generating && isGenDef ppmap i =
+            CValueSign (CDef i t [CClause [] [] (CVar i)])
+        fixDef d = d
+    return (CPackage packageId exps imps impsigs fixs
+                     (map fixDef defs ++ newDefs) includes, infos)
+  where
+    wrapModule info@(def@(CDef _ ty _), _, _, _) = do
+        ifc <- chkType def ty
+        fields <- collectBoundaryFields SynthReady ifc
+        wrapped <- mkNewModDef fields info
+        continuation <- genWrapInfo fields info
+        return (wrapped, continuation)
+    wrapModule (def, _, _, _) =
+        internalError ("GenWrap.wrapModule: " ++ ppReadable def)
 
 -- check that the type being generated is legal (uses the def to get a position)
-chkType :: CDef -> CQType -> GWMonad [CType]
+chkType :: CDef -> CQType -> GWMonad CType
 chkType def ty =
  do
    let defId = getDName def
@@ -453,10 +292,7 @@ chkType def ty =
                        ----traceM ("chkType 2: " ++ pfpReadable (chkInterface tr))
                        cint <- chkInterface tr
                        case cint of
-                         Just _ ->
-                          do
-                            trs <- getInterfaces args
-                            return (tr : trs)
+                         Just _ -> return tr
                          Nothing -> let msg = "The type " ++
                                               quote (pfpString t) ++
                                               " is not an interface."
@@ -482,40 +318,6 @@ getPolyInterface t = do
           return res
         _ -> return []
 
-
--- Build the Interface record
-makeIfcTRec :: [PProp] -> Type -> GWMonad IfcTRec
-makeIfcTRec pps t =
-    do res <- chkInterface t
-       let pps' = filter isRelevantProp pps
-       case res of
-         Nothing -> internalError ("makeIfcTRec: not interface - " ++ show t)
-         Just (_, _, fts) ->
-           do -- name based on module attributes not ifc attributes
-              flat_t <- flatTypeId pps' t
-              raw <- rawTypeId t
-              let rootId = addInternalProp raw
-              --
-              return IfcTRec { rec_id        = flat_t,
-                               rec_isforeign = False,
-                               rec_rootid    = rootId,
-                               rec_type      = t,
-                               rec_pprops    = pps',
-                               rec_kind      = KStar,
-                               rec_finfs     = fts,
-                               rec_numargs   = [],
-                               rec_typemap   = [] }
-
--- pulls out all PProps relevant to GenWrap
-isRelevantProp :: PProp -> Bool
-isRelevantProp (PPalwaysReady {})      = True
-isRelevantProp (PPalwaysEnabled {})    = True
-isRelevantProp (PPenabledWhenReady {}) = True
-isRelevantProp _                       = False
-
-
--- --------------------
--- genWrapE toplevel: getDef
 
 -- For each definition which has PProps attached to it, this checks
 -- the properties, and then for those which are to be generated
@@ -604,79 +406,50 @@ fixupPolyModType ty =
 -- synthesized and generates the WrapInfo structure which is returned
 -- from GenWrap (info about the module and a DefFun continuation which is
 -- used at the end of synthesis to make the final wrapper).
--- It also takes the list of generated interfaces, in which it will find
--- the info for the interface of the current module.
+-- It also takes the collected metadata for the interfaces being synthesized.
 
 -- User pragmas are checked that any names match the actual flattened ifc.
 -- Pragmas on the ifc type declaration are added to the module's list of
 -- pragmas (returned in the WrapInfo).
 
-genWrapInfo :: [GeneratedIfc] -> ModDefInfo -> GWMonad WrapInfo
-genWrapInfo genifcs (d@(CDef modName oqt@(CQType _ t) cls), cqt, _, pps) =
- do
-   ifcName_ <- ifcNameFromMod pps t
-   -- lookup the generate ifc for this module
-   let mifc = find (qualEq ifcName_ . genifc_id) genifcs
-       err = internalError ( "genWrapInfo:: cannot find interface " ++
-                             ppReadable ifcName_ ++ ppReadable genifcs )
-       ifc = maybe err id mifc
-   let iprops = genifc_pprops ifc
-   chkUserPragmas pps ifc
-   -- XXX the new module name should be already created in ModDefInfo,
-   -- XXX so that it does not have to be created both here and in mkNewModDef
-   let newModName = modIdRename pps modName
-   --traceM ("genWrapInfo" ++ ppReadable ifcName_ ++ ppReadable newModName)
-   --traceM ("genWrapInfo" ++ ppReadable genifcs)
-   namefun <- mkDef iprops pps d cqt -- pass down the pragma for the wrapper gen state
-   return WrapInfo { mod_nm      = modName,
-                     orig_cqt    = oqt,
-                     wrapper_ifc = ifcName_,
-                     wrapped_mod = newModName,
-                     wi_prags    = (pps ++ iprops),-- combine pragmas
-                     deffun      = namefun }
- where
-   --Get interface name from module XXX make disappear
-   -- XXX this was already done, but we did not keep the name !
-   ifcNameFromMod :: [PProp] -> Type -> GWMonad Id
-   ifcNameFromMod localpps localt = flatTypeIdQual localpps tr
-     where
-       tr = case getArrows localt of
-              (_, TAp _ r) -> r
-              _ -> internalError "GenWrap.genWrapInfo ifcNameFromMod: tr"
-genWrapInfo _ (def,_,_,_) =
-    internalError( "genWrapInfo: unexpected def: " ++ ppReadable def )
-
+genWrapInfo :: [BoundaryField] -> ModDefInfo -> GWMonad WrapInfo
+genWrapInfo fields (d@(CDef modName oqt _), cqt, _, pps) = do
+    let iprops = concatMap boundaryProperties fields
+        ports = boundaryPorts pps fields
+    chkUserPragmas pps fields
+    namefun <- mkDef fields iprops pps d cqt
+    return WrapInfo { mod_nm = modName
+                    , orig_cqt = oqt
+                    , wrapped_mod = modIdRename pps modName
+                    , wi_prags = pps ++ iprops
+                    , wi_field_info = [(i, ps) | (i, _, ps) <- ports]
+                    , deffun = namefun }
+genWrapInfo _ (def, _, _, _) =
+    internalError ("genWrapInfo: unexpected def: " ++ ppReadable def)
 
 -- --------------------
 -- genWrapE toplevel: fixVerilogIfc
 
--- BSV import-BVI statements have an implied wrapper which converts between
--- the bitified signals and the abstract values.  This function looks for
--- import-BVI constructs and inserts the wrapper, also returning an IfcTRec
--- for each new flattended ifc that needs to be declared.
+-- The BVI parser inserts the generic unwrap call.  Fill its declaration
+-- metadata, style schema, and raw structural type, and retain the existing
+-- port-type recording and validation.  Raw `module verilog` is left alone.
+-- The matched syntax is marked (*A*) in CVParserImperative.
+fixVerilogIfc :: CDefn -> GWMonad CDefn
+fixVerilogIfc (CValueSign (CDef n (CQType prs tid)
+                          [CClause ps qs (Cmodule pos body)])) = do
+    (newBody, prs') <- foldM (fixCModuleVerilog (CQType prs tid)) ([], prs) body
+    return $ CValueSign $ CDef n (CQType prs' tid)
+        [CClause ps qs (Cmodule pos (reverse newBody))]
+fixVerilogIfc d = return d
 
--- finds definitions containing CmoduleVerilog bodies, and alters the
--- name of their interface types to the "derived id":
--- (*A*) Note: this matches syntax generated in CVParserImperative: see
--- the comment labelled (*A*) in CVParserImperative.lhs
--- This looks for CModuleVerilog definition (import BVI), and creates  the new definition and
--- IfcTRec for it.
-fixVerilogIfc :: ([CDefn], [IfcTRec]) -> CDefn -> GWMonad ([CDefn], [IfcTRec])
-fixVerilogIfc (ds,ts) x@(CValueSign (CDef n (CQType prs tid) [CClause ps qs (Cmodule pos body)])) =
- do
-    (newBody, tyrs, prs') <- foldM (fixCModuleVerilog n) ([],[],prs) body
-    let d'= (CValueSign (CDef n (CQType prs' tid) [CClause ps qs (Cmodule pos (reverse newBody))]))
-    --
-    return (d':ds, tyrs++ts)
-
-fixVerilogIfc (ds,ts) d = return ((d:ds),ts)
-
-
--- a fix for vectors of interfaces
-fixCModuleVerilog :: Id -> ([CMStmt], [IfcTRec], [CPred]) -> CMStmt -> GWMonad ([CMStmt], [IfcTRec], [CPred])
-fixCModuleVerilog n (ss,ts,ps)
-       bdy@(CMStmt (CSBindT p@(CPVar mName) mi pprops cq@(CQType qs ty)
-                            def@(CApply _ [CmoduleVerilog _ _ _ _ aes fs _ _]))) = do
+-- Fill one parser-generated BVI boundary.
+fixCModuleVerilog :: CQType -> ([CMStmt], [CPred]) -> CMStmt -> GWMonad ([CMStmt], [CPred])
+fixCModuleVerilog moduleType (ss, ps)
+       bdy@(CMStmt (CSBindT p@(CPVar mName) mi pprops cq@(CQType qs rawTy)
+                            def@(CApply _ [CmoduleVerilog vname _ _ _ aes fs _ _])))
+  | (TCon (TyCon wrap _ _), [TCon (TyCon style _ _), ty]) <- splitTAp rawTy,
+    wrap == wrapId "WrappedIfc", style == wrapId "BVIWrap" =
+   withModuleContext moduleType $ do
    let mStmtSPT = savePortTypeStmt (CVar id_x)
        mStmtSPTO = savePortTypeOfStmt (CVar id_x)
    let saveArgTypes (Port vp _ _, e) = [mStmtSPTO vp e]
@@ -685,11 +458,26 @@ fixCModuleVerilog n (ss,ts,ps)
          let vp = (vn,[])
          in  [mStmtSPTO vp e]
        saveArgTypes _ = []
-   let saveFieldTypes finf (Method { vf_inputs = inps,
+   let checkArgType fid t = do
+         t' <- expandSynSym t
+         -- These special types used to survive bitification unchanged (or as
+         -- Inout_) and be rejected by the primitive module typechecker.  Reject
+         -- them before an unsatisfied Bits requirement can obscure that error
+         -- by leaving the associated wrapper type unreduced.
+         let special = t' == tClock || t' == tReset ||
+                       leftCon t' `elem` map Just
+                         [idInout, idActionValue, idActionValue_]
+             modName = case vname of
+                         CLit (CLiteral _ (LString s)) -> s
+                         _ -> pfpString vname
+         when special $ bad (getPosition fid,
+           EForeignModBadArgType (pfpString t') modName
+             (ppReadable (getPosition vname)))
+   let saveFieldTypes finf (Method { vf_name = fid,
+                                     vf_inputs = inps,
                                      vf_outputs = outs }) = do
+         mapM_ (checkArgType fid) (arg_types finf)
          let rt = ret_type finf
-         isAV <- isActionValue rt
-         output_type <- if isAV then getAVType "fixCModVer" rt else return rt
          let output_stmt = map ((flip mStmtSPT) rt) outs
          -- we let the type-checker error on mismatches
          return (output_stmt ++ (zipWith mStmtSPT (concat inps) (arg_types finf)))
@@ -700,27 +488,15 @@ fixCModuleVerilog n (ss,ts,ps)
        saveFieldTypes _ _ = return []
 
    cint <- chkInterface ty
-   rawid <- rawTypeId ty
-   let rootId = addInternalProp rawid
 
    case cint of
     Nothing -> bad (getPosition cq, EBadForeignIfcType (pfpString ty))
     Just (i, k, fts) ->
      do
-       -- XXX This flattening is redone in genIfcFieldFN
-       -- XXX We should flatten once -- maybe by storing the flattened FInfs?
-       let flattenFInfs prefixes (FInf f as r aIds) = do
-               mifc <- chkInterface r
-               case (mifc, as) of
-                 (Just (_, _, finfs), []) -> do
-                     newPrefixes <- extendPrefixes prefixes [] r f
-                     meths <- mapM (flattenFInfs newPrefixes) finfs
-                     return (concat meths)
-                 _ -> -- if Vector of ifcs was supported,
-                      -- we'd have to handle it here
-                      return [FInf (binId prefixes f) as r aIds]
-       flat_fts <- concatMapM (flattenFInfs noPrefixes) fts
-
+       -- Share declaration-order metadata with the synthesis path, retaining
+       -- BVI's packed-value policy for vectors and abstract method results.
+       boundary <- collectBoundaryFields BVIReady ty
+       let flat_fts = map boundarySource boundary
        let finf_map = M.fromList [(unQualId (name finf), finf) | finf <- flat_fts]
        let save_f f =
                let fname = vf_name f
@@ -735,573 +511,145 @@ fixCModuleVerilog n (ss,ts,ps)
        save_f_stmtss <- mapM save_f fs
        let save_a_stmtss = map saveArgTypes aes
        let save_stmts = concat (save_a_stmtss ++ save_f_stmtss)
-       let pos = getPosition n
-           ftypes = nub (concatMap (\ (FInf fid as r aIds) -> (r:as)) flat_fts)
-       (_, numArgs', actualArgs', fieldTypes, ps')
-           <- foldM procType (0,[],[],[],[]) (reverse ftypes)
-       let actualArgs  = reverse actualArgs'
-           numArgs     = reverse numArgs'
-           newLeftId   = setInternal $
-                         enumId (getIdString i) pos (getPositionLine(pos))
-           newLeftKind = foldr (\ a lk -> Kfun KNum lk) KStar actualArgs
-           -- Not actually used, but this is what genIfcFieldFN should produce
-           -- when it processes the IfcTRec.
-           newFieldNames = map name flat_fts
-           newLeftSort = TIstruct (SInterface noIfcPragmas) newFieldNames
-           newLeftType = TCon (TyCon newLeftId (Just newLeftKind) newLeftSort)
-           newType = cTApplys newLeftType actualArgs
-           no_rdys = map (\v -> [vf_name v]) (filter (not . (hasReadyFN fs)) fs)
-           rdyPPs = case no_rdys of
-             [] -> []
-             _ -> [PPalwaysReady no_rdys] -- No ready signals for clocks, resets, etc
-           s' =(CMStmt
-                 (CSBindT p mi pprops
-                   (CQType qs newType) def))
-           tr' = IfcTRec { rec_id        = newLeftId,
-                           rec_isforeign = True,
-                           rec_rootid    = rootId,
-                           rec_type      = ty,
-                           rec_pprops    = rdyPPs,
-                           rec_kind      = newLeftKind,
-                           rec_finfs     = fts,
-                           rec_numargs   = numArgs,
-                           rec_typemap   = fieldTypes }
-           -- saving port types has to be after the instantiation
-           -- and saving its name
-           ss' = save_stmts ++ ((saveNameStmt mName id_x):s':ss)
-       return (ss', tr':ts, ps' ++ ps)
-fixCModuleVerilog n (ss, ts, ps) s = return (s:ss, ts, ps)
+       let ftypes = nub (concatMap (\ (FInf fid as r aIds) -> (r:as)) flat_fts)
+       (_, ps') <- foldM addBVIBitsProviso (0, []) (reverse ftypes)
+       let no_rdys = map (\v -> [vf_name v]) (filter (not . (hasReadyFN fs)) fs)
+           rdyPPs = [PPalwaysReady no_rdys | not (null no_rdys)]
+       let descriptor = mkWrapDescriptor rdyPPs [] boundary
+       schema <- bviWrapSchema ty
+       let styleTy = TAp (cTCon $ wrapId "BVIWrap") schema
+           wrappedTy = cTApplys (cTCon $ wrapId "WrappedIfc") [styleTy, ty]
+           rawStmt = CMStmt $ CSBindT p mi pprops (CQType qs wrappedTy) def
+           styleDef = CLValueSign (CDef (bviWrapStyleId mName)
+                         (CQType [] styleTy) [CClause [] [] $ wrapStyle "BVIWrap"]) []
+           descriptorDef = CLValue (bviWrapInfoId mName)
+                             [CClause [] [] descriptor] []
+           descriptorStmt = CMStmt $ CSletseq [styleDef, descriptorDef]
+           ss'' = save_stmts ++ (saveNameStmt mName id_x : rawStmt : descriptorStmt : ss)
+       return (ss'', ps' ++ ps)
+fixCModuleVerilog _ (ss, ps) s = return (s:ss, ps)
 
+-- BVI shape is determined at the declaration, including its explicit
+-- provisos.  A given may identify an associated type as a subinterface.
+withModuleContext :: CQType -> GWMonad a -> GWMonad a
+withModuleContext (CQType [] _) query = query
+withModuleContext cqt query = do
+    qt@(ps :=> _) <- lift (mkQualType cqt)
+    givens <- lift $ mapM (TI.mkEPred . removePredPositions) ps
+    env <- ask
+    lift $ TI.withLocalTypeContext (tv qt) givens (runReaderT query env)
 
-procType ::
-    (Int, [Id], [CType], [(CType, CType)], [CPred]) -> CType ->
-    GWMonad (
-      Int,  -- next unique num for creating numeric type arg Ids
-      [Id], -- names of the numeric types created so far (of the form "n_#")
-            -- as used in the type map below (collected in reverse order)
-      [CType], -- numeric type variables created so far (of the form "sn_#")
-               -- as used in the provisos below (collected in reverse order)
-      [(CType, CType)],
-            -- map from types in the original ifc to their bitified form
-            -- (using "n_#" sizes)
-      [CPred] -- Bits provisos which convert the original types to the
-              -- numeric types "sn_#"
-    )
-procType (n, ns, as, ts, ctx) ty = do
-  let hasVars t = not (null (tv t))
-      newSVar = cTVarNum (enumId "sn" noPosition n)
-      newId  = enumId "n" noPosition n
-      cBit t = cTApplys tBit [t]
-      cInout_ t = cTApplys tInout_ [t]
-      bitsCtx a s = CPred (CTypeclass idBits) [a, s]
-  isAV <- isActionValue ty
-  if isAV then do
-    av_t <- getAVType "procType" ty
-    return (n+1, newId:ns, newSVar:as,
-            (ty, (TAp tActionValue_ (TAp tBit (cTVarNum newId)))):ts,
-            (bitsCtx av_t newSVar):ctx)
-   else do
-     isInout <- isInoutType ty
-     case isInout of
-       Just t ->
-         if hasVars t then
-              return (n+1, newId:ns, newSVar:as,
-                      (ty, cInout_ (cTVarNum newId)):ts,
-                      (bitsCtx t newSVar):ctx)
-         else return (n, ns, as, ts, ctx)
-       Nothing ->
-         if hasVars ty then
-              return (n+1, newId:ns, newSVar:as,
-                      (ty, cBit (cTVarNum newId)):ts,
-                      (bitsCtx ty newSVar):ctx)
-         else return (n, ns, as, ts, ctx)
-
-
--- --------------------
--- genWrapE toplevel: genTDef
-
--- Given a IfcTRec structure for the ifc of a synthesized module,
--- produce the
--- Generate a new interface with Id and CDefn
--- Any interface hierarchy is flattened,  leaving a new interface
-genTDef :: IfcTRec -> GWMonad GeneratedIfc
-genTDef trec@(IfcTRec newId rootId _ sty _ k fts args _) =
- do
-   -- generate the new interfaces
-   (ifc',newprops) <- genIfc trec args k
-   --traceM( "genTDef: ifc " ++ ppReadable ifc' )
-   --traceM( "genTDef:: new prop are: " ++ ppReadable newprops )
-   return GeneratedIfc {
-      genifc_id = newId,
-      genifc_kind = k,
-      genifc_cdefn = ifc',
-      genifc_pprops = newprops }
-
--- Generate a new interface definition for the CPackage
--- Basically, this consists of a Cstruct of sub-type Sintrface.
--- The fields are generated in genIfcField
--- accomplished by traversing down the possibly nested interface definitions
--- The props are ones extracted from the ifc, and must be propagated to the module
-genIfc :: IfcTRec -> [Id] -> Kind -> GWMonad (CDefn, [PProp] )
-genIfc trec args knd =
-    do let fts    = rec_finfs trec
-           rootId = rec_rootid trec
-           si     = rec_id trec
-       --traceM("genIfc: " ++ ppReadable trec ) ;
-       -- lookup interface pragmas from symt and pass them in.
-       iprags <- getInterfacePrags rootId
-       let prefix = noPrefixes { ifcp_pragmas = iprags }
-       fieldprops <- mapM (genIfcField' trec rootId prefix ) fts
-       let (fields,ppropss) = unzip fieldprops
-       let newprops = concat ppropss
-       --
-       return ( (Cstruct True (SInterface iprags) (IdKind si knd) args ( (concat fields)) []),
-                newprops )
-    where
-    genIfcField' = if rec_isforeign trec
-                    then genIfcFieldFN -- foreign module case
-                    else genIfcField
-
--- Generate the ifc fields
--- And any new AR AE pragmas from the methods
--- Note: The FInf are assumed to have unqualified field names.
-genIfcField :: IfcTRec -> Id -> IfcPrefixes -> FInf -> GWMonad ([CField], [PProp] )
-genIfcField trec ifcIdIn prefixes (FInf fieldIdQ argtypes rettype _) =
-    do
-       -- get relevant pragmas for this interface and field
-       --traceM( "prefixes for: " ++ ppReadable fieldId ++ " = " ++ ppReadable prefixes )
-       -- looking up the pragmas requires the qualified name
-       ciPrags <- getInterfaceFieldPrags ifcIdIn fieldIdQ
-       -- but for the rest of the work, we only need the unqualified name
-       let fieldId = unQualId fieldIdQ
-       --traceM( "prags for field are: " ++ ppReadable fieldId ++ " = " ++ ppReadable ciPrags)
-       --
-       mi <- chkInterface rettype
-       case mi of
-           Just (ifcId, k, fts) | null argtypes ->  -- recursive function this is an ifc of ifc
-             do -- create new prefixes before creating new sub-interface fields
-                newPrefixes <- extendPrefixes prefixes ciPrags rettype fieldId
-                --
-                -- if the field is an interface, use its interface Id to
-                -- recurse and look up field information
-                fieldsprops <- mapM (genIfcField trec ifcId newPrefixes ) fts
-                let (fields,props) = unzip fieldsprops
-                return ((concat fields), (concat props))
-           _ ->               -- leaf function
-             do
-              isClock <- isClockType rettype
-              isReset <- isResetType rettype
-              isInout <- isInoutType rettype
-              let isIot = isInout/=Nothing
-              isPA <- isPrimAction rettype
-              isVec <- isVectorInterfaces rettype
-              case (isVec, argtypes) of
-                (Just (n, tVec, isListN), []) ->
-                    do -- Vectors of interfaces are interfaces
-                       --traceM ("tVec:" ++ (show tVec))
-                       let nums = map mkNumId [0..(n-1)]
-                       newPrefixes <- extendPrefixes prefixes ciPrags rettype fieldId
-                       let recurse num = genIfcField trec ifcIdIn newPrefixes  (FInf num [] tVec [])
-                       fieldsprops <- mapM recurse nums
-                       let (fields,props) = unzip fieldsprops
-                       return (concat fields, concat props)
-                _ -> do  -- ELSE NOT a Vec
-                      let fnt = cTStr (fieldPathName prefixes fieldId) (getIdPosition fieldIdQ)
-                      let v = cTVar $ head tmpTyVarIds
-                      let ctx = CPred (CTypeclass idWrapField) [fnt, foldr arrow rettype argtypes, v]
-
-                      let fi = binId prefixes fieldId
-                      --
-                      let (mprops, ifcPragmas) = gen prefixes ciPrags fieldId fi
-                          gen | isClock   = genNewClockIfcPragmas
-                              | isReset   = genNewResetIfcPragmas
-                              | isIot     = genNewInoutIfcPragmas
-                              | otherwise = genNewMethodIfcPragmas
-
-                      let ifc_field = CField { cf_name = fi,
-                                              cf_pragmas = Just ifcPragmas,
-                                              cf_type = CQType [ctx] v,
-                                              cf_orig_type = Just (foldr arrow rettype argtypes),
-                                              cf_default = []
-                                            }
-                      --
-                      -- the ready field
-                      let rdy_field = if (isClock || isReset || isIot) then []
-                                      else mkReadyField trec ifcPragmas ifcIdIn fieldId fi
-                      --
-                      --traceM( "ifc_fields is: " ++ ppReadable ifc_field)
-                      return ((ifc_field : rdy_field), mprops )
-
-
--- create a RDY field, if requested
-mkReadyField :: IfcTRec -> [IfcPragma] -> Id -> Id -> Id -> [CField]
-mkReadyField trec ifcprags rootIfcId fieldId pathFieldId = if makingReady then [cfield] else []
-    where  pps = rec_pprops trec
-           readyId = mkRdyId pathFieldId -- why mkRdyId only to compare it later?
-           makingReady = not ((isAlwaysRdy pps readyId) || (isAlwaysReadyIfc ifcprags) )
-           --
-           renamed = mkRdyId pathFieldId
-           cfield = CField { cf_name = renamed,
-                             cf_pragmas = Nothing,
-                             cf_type = (CQType [] (TAp tBit (cTNum 1 (getPosition fieldId)))),
-                             cf_orig_type = Nothing,
-                             cf_default = []
-                           }
-
--- The same (as genIfcField) but for foreign modules.
--- Note: The FInf are assumed to have unqualified field names.
-genIfcFieldFN :: IfcTRec -> Id  -> IfcPrefixes -> FInf -> GWMonad ( [CField], [PProp])
-genIfcFieldFN trec rootId  prefixes (FInf fieldIdQ argtypes r _) =
- do
-   let typeMap = rec_typemap trec
-   -- looking up the pragmas requires the qualified name
-   ciPrags <- getInterfaceFieldPrags rootId fieldIdQ
-   -- but for the rest of the work, we only need the unqualified name
-   let fieldId = unQualId fieldIdQ
-   mi <- chkInterface r
-   case mi of
-     Just (ifcId, k, fts) | null argtypes ->  -- recursive function this is an ifc of ifc
-           do -- create new prefixes before creating new sub-interface fields
-             newPrefixes <- extendPrefixes prefixes ciPrags r fieldId
-             --
-             -- if the field is an interface, use its interface Id to recurse and look up field information
-             fieldsprops <- mapM (genIfcFieldFN trec ifcId newPrefixes ) fts
-             let (fields,props) = unzip fieldsprops
-             return ((concat fields), (concat props))
-
-
-     Just _ ->   -- recursive interface def
-             internalError ( "genIfcFieldFN -- invalid hierarchy of interfaces" )
-
-     Nothing ->            -- leaf function
-      do
-        symt <- getSymTab
-        let (v, vs) = unconsOrErr "GenWrap.genIfcFieldFN: v:vs" $
-                        map cTVarNum (take (length argtypes + 1) tmpTyVarIds)
-            isTClock t = t == tClock
-            isTReset t = t == tReset
-            isTInout t = (leftCon t == Just idInout)
-            bitsCtx a s = CPred (CTypeclass idBits) [a, s]
-            newTypeCtx t lctx lv =
-                case lookup t typeMap of
-                  Just t' -> (t', lctx)
-                  Nothing ->
-                      let newTCtx
-                            | isTClock t                       = (t,lctx)
-                            | isTReset t                       = (t,lctx)
-                            | leftCon t == Just idBit          = (t,lctx)
-                            | leftCon t == Just idActionValue_ = (t,lctx)
-                            | leftCon t == Just idActionValue  = (t,lctx)
-                            | isTInout t                       =
-                                let it = headOrErr "inout arg" (tyConArgs t)
-                                in  (TAp tInout_ lv, bitsCtx it lv : lctx)
-                            | otherwise                        =
-                                (TAp tBit lv, bitsCtx t lv : lctx)
-                      in newTCtx
-            fldfn (t,lv) (largtypes,lctx) =
-                let (t',ctx') = newTypeCtx t lctx lv
-                in  (t':largtypes, ctx')
-            (newAs,ctx) = foldr fldfn ([],[]) (zip argtypes vs)
-
-        isPA <- isPrimAction r
-        isClock <- isClockType r
-        isReset <- isResetType r
-        isInout <- isInoutType r
-        let isIot = isInout/=Nothing
-
-        let (r', ctx') = if (isPA || isClock || isReset) then (r, ctx)
-                         else newTypeCtx r ctx v
-        let fi = binId prefixes fieldId
-
-        ----traceM ("Making readyFN for " ++ (ppReadable fi) ++ " of " ++ (show pps) ++ ": " ++ (show makingReady))
-        let (mprops,ifcPragmas) = gen prefixes [] fieldId fi
-            gen | isClock   = genNewClockIfcPragmas
-                | isReset   = genNewResetIfcPragmas
-                | isIot     = genNewInoutIfcPragmas
-                | otherwise = genNewMethodIfcPragmas
-
-        let ifc_field = CField { cf_name = fi, cf_pragmas = Just ifcPragmas,
-                                 cf_type = CQType ctx' (foldr arrow r' newAs),
-                                 -- probably unnecessary, but can't hurt
-                                 -- import "BVI" is tracked differently
-                                 cf_orig_type = Just $ foldr arrow r argtypes,
-                                 cf_default = []
-                               }
-        let rdy_field = mkReadyField trec ifcPragmas rootId fieldId fi
-
-        ----traceM (pfpReadable ((fieldId, t), (argtypes, r), ctx))
-        return ((ifc_field : rdy_field),
-                mprops )
-
-
--- --------------------
--- genWrapE toplevel: mkTo_
-
--- For an interface, make the function which converts from the original
--- interface type to the flattened interface type
-
--- (the underscore is because traditionally the flattened version of an
--- interface "X" was named "X_", though now we are more sophisticated about
--- generating different flattened types from the same original type, based
--- on differing attributes)
-
-mkTo_ :: IfcTRec -> GWMonad CDefn
-mkTo_ trec@(IfcTRec { rec_numargs = [], rec_typemap = [] }) =
- do
-   let pps = rec_pprops trec
-       -- i = rec_id trec
-       t = rec_type trec
-   tyId <- flatTypeId pps t
-   let arg = id_t (getPosition t)
-   let ty = t `fn` cTCon tyId
-   to <- (genTo pps t (CVar arg))
-   let cls = CClause [CPVar arg] [] to
-   return (CValueSign (CDef (to_Id tyId) (CQType [] ty) [cls]))
-mkTo_ x = internalError "GenWrap::mkTo_ "
-
--- Create the name of the function which converts to the given interface
-to_Id :: Id -> Id
-to_Id i = addInternalProp (mkIdPre fsTo i)
-
-
-genTo :: [PProp] -> CType -> CExpr -> GWMonad CExpr
-genTo pps ty mk =
- do
-   --traceM ("genTo type: " ++ (pfpAll ty))
-   cint <- chkInterface ty
-   case cint of
-     Nothing -> internalError ("genTo: " ++ pfpReadable (ty, mk))
-     Just (ifcId, _, fts) -> do
-       meths <- mapM (meth mk noPrefixes ifcId) fts
-       fty <- flatTypeId pps ty
-       let tmpl = Cinterface (getPosition fts) (Just fty) (concat meths)
-       return tmpl
- where
-   meth :: CExpr -> IfcPrefixes -> Id -> FInf -> GWMonad [CDefl]
-   meth sel prefixes ifcIdIn (FInf f as r aIds) =
-    do
-       ciPrags <- getInterfaceFieldPrags ifcIdIn f {- f should be qualifed -}
-       mi <- chkInterface r
-       case (mi, as) of
-         (Just (ifcId, _, fts), []) -> do
-           isAV <- isActionValue r
-           if isAV
-             then internalError "genTo 2: unexpected AV"
-             else do
-               --traceM ("selector: " ++ show sel)
-               newPrefixes <- extendPrefixes prefixes ciPrags r f
-               meths <- mapM (meth (extSel sel f) newPrefixes ifcId) fts
-               return (concat meths)
-         _ ->  do  -- Generate the Verilog template for X
-           isVec <- isVectorInterfaces r
-           case (isVec, as) of
-             (Just (vn, tVec, _), []) -> do
-               --traceM ("toVec:" ++ (show tVec))
-               let nums = [0..(vn-1)] :: [Integer]
-               let primselect = idPrimSelectFn noPosition
-               let lit k = CLit $ num_to_cliteral_at noPosition k
-               let selector n = cVApply primselect [posLiteral noPosition, extSel sel f, lit n]
-               elemPrefix <- extendPrefixes prefixes ciPrags r f
-               let recurse num = do
-                                    numPrefix <- extendPrefixes elemPrefix [] r (mkNumId num)
-                                    meth (selector num) numPrefix ifcIdIn (FInf idEmpty [] tVec [])
-               fields <- mapM recurse nums
-               return (concat fields)
-             _ -> do
-               -- Compute the prefix and arg_names pragmas for the flattened interface field, extended according to the current prefix.
-               let currentPre  = ifcp_renamePrefixes prefixes -- the current rename prefix
-                   localPrefix1 = fromMaybe (getIdBaseString f) (lookupPrefixIfcPragma ciPrags)
-                   localPrefix = joinStrings_  currentPre localPrefix1
-                   prefix = stringLiteralAt noPosition localPrefix
-                   arg_names = mkList (getPosition f) [stringLiteralAt (getPosition i) (getIdString i) | i <- aIds]
-                   localResult1 = fromMaybe (getIdBaseString f) (lookupResultIfcPragma ciPrags)
-                   localResult = joinStrings_ currentPre localResult1
-                   result = stringLiteralAt noPosition localResult
-                   fnp = mkStrArgProxyExpr (getIdPosition f) $ TAp (cTCon idStrArg) $ cTStr (fieldPathName prefixes f) (getIdPosition f)
-               -- XXX idEmpty is a horrible way to know no more selection is required
-               let ec = if f == idEmpty then sel else CSelect sel (setInternal f)
-               -- positioned at the field, so the WrapField proviso this
-               -- mints reports there rather than at "Unknown position"
-               let e = CApply (CVar (setIdPosition (getPosition f) idToWrapField)) [fnp, prefix, arg_names, result, ec]
-               return [CLValue (binId prefixes f) [CClause [] [] e] []]
-
--- --------------------
--- genWrapE toplevel: mkFrom_
-
--- XXX this duplicates the traversals done by mkTo_ / genIfcField
-mkFrom_ :: IfcTRec -> GWMonad CDefn
-mkFrom_ trec@(IfcTRec { rec_numargs = [], rec_typemap = [] }) =
- do
-   let pps = rec_pprops trec
-       -- i = rec_id trec
-       t = rec_type trec
-   tyId <- flatTypeId pps t
-   let arg = id_t (getPosition t)
-   let ty = cTCon tyId `fn` t
-   expr <- genFrom pps t (CVar arg)
-   let cls = CClause [CPVar arg] [] expr
-   return (CValueSign (CDef (from_Id tyId) (CQType [] ty) [cls]))
-mkFrom_ x = internalError "GenWrap::mkFrom_ "
-
-from_Id :: Id -> Id
-from_Id i = addInternalProp (mkIdPre fsFrom i)
-
-genFrom :: [PProp] -> CType -> CExpr -> GWMonad CExpr
-genFrom pps ty var =
- do
-   --traceM ("genFrom type: " ++ (pfpAll ty))
-   cint <- chkInterface ty
-   case cint of
-     Nothing -> internalError ("genFrom: " ++ pfpReadable ty)
-     Just (ti, _, fts) -> do
-       -- the top-level interface might have pragmas on it
-       -- (do the work that "extendPrefixes" would have done, of adding
-       -- the pragrams on the interface to the prefix so that it propagates
-       -- to the fields)
-       ifcPrags <- getInterfacePrags ti
-       let prefixes = noPrefixes { ifcp_pragmas = ifcPrags }
-       fieldBlobs <- mapM (meth prefixes ti) fts
-       return $ blobsToIfc ti fts fieldBlobs
- where
-   blobsToIfc ti fts fieldBlobs =
-       let meths = [ CLValue (setInternal f) [CClause [] [] e] gs
-                         | (f, e, gs) <- fieldBlobs ]
-       in  Cinterface (getPosition fts) (Just ti) meths
-
-   -- This returns a 3-tuple of a field Id (method or subifc),
-   -- its defining expression, and its implicit condition (only for methods).
-   -- Note: The Id is qualified, because it could be something not
-   -- imported by the user (and this not available unqualified).
-   meth :: IfcPrefixes -> Id -> FInf ->
-           GWMonad (Id, CExpr, [CQual])
-   meth prefixes ifcId (FInf f as r aIds) =
-    do
-      ciPrags <- getInterfaceFieldPrags ifcId f {- f should be qualifed -}
-      --traceM ("ciPrags = " ++ ppReadable (ifcId, f, ciPrags))
+-- Preserve the original declaration-time classification: known interfaces
+-- are traversed, and an opaque type variable is an ordinary Bits value.
+-- The style parameter records that choice before instantiation, including
+-- known arrows and ActionValue results, without requiring Generic evidence
+-- for a polymorphic method value.
+bviWrapSchema :: CType -> GWMonad CType
+bviWrapSchema ty = do
+    mi <- chkInterface ty
+    case mi of
+      Just (_, _, fs) -> do
+        children <- mapM fieldSchema fs
+        return $ TAp (cTCon $ wrapId "WrapInterfaceSchema") $
+                   tMkTuple (getPosition ty) children
+      Nothing -> internalError ("bviWrapSchema: " ++ ppReadable ty)
+  where
+    fieldSchema (FInf _ as r _) = do
       mi <- chkInterface r
       case (mi, as) of
-        (Just (ti, _, fts), []) -> do
-          newprefixes <- extendPrefixes prefixes ciPrags r f
-          fieldBlobs <- mapM (meth newprefixes ti) fts
-          let expr = blobsToIfc ti fts fieldBlobs
-          return (f, expr, [])
+        (Just _, []) -> bviWrapSchema r
         _ -> do
-          isVec <- isVectorInterfaces r
-          case (isVec, as) of
-            (Just (n, tVec, isListN), []) -> do
-               --traceM ("fromVec:" ++ (show tVec))
-               let nums = [0..(n-1)] :: [Integer]
-               let recurse num =
-                       do newprefixes <- extendPrefixes prefixes ciPrags r f
-                          meth newprefixes idVector (FInf (mkNumId num) [] tVec [])
-               fieldBlobs <- mapM recurse nums
-               let (es, gs) = unzip [(e, g) | (_, e, g) <- fieldBlobs]
-               let vec = cToVector isListN es
-               return (f, vec, concat gs)
-            _ -> do
-              isPA <- isPrimAction r
-              isClock <- isClockType r
-              isReset <- isResetType r
-              isInout <- isInoutType r
-              let isIot = isInout /= Nothing
-              let binf = binId prefixes f
-              let wbinf = mkRdyId binf
-              let sel = CSelect var
-              let hasNoRdy = isAlwaysRdy pps wbinf ||
-                             isAlwaysReadyIfc (ifcp_pragmas prefixes ++ ciPrags)
-              let meth_guard = CApply eUnpack [sel wbinf]
-              let qs = if (hasNoRdy || isClock || isReset || isIot)
-                       then [] else [CQFilter meth_guard]
-
-              -- Call fromWrapField with a proxy for the field name as a type level string,
-              -- and the field selection from the unwrapped module.
-              let fnp = mkStrArgProxyExpr (getIdPosition f) $ TAp (cTCon idStrArg) $ cTStr (fieldPathName prefixes f) (getIdPosition f)
-              let e = CApply (CVar (setIdPosition (getPosition f) idFromWrapField)) [fnp, sel binf]
-              return (f, e, qs)
+          clock <- isClockType r
+          reset <- isResetType r
+          inout <- isInoutType r
+          action <- isPrimAction r
+          actionValue <- isActionValue r
+          let result = cTCon $ wrapId $
+                if clock || reset || isJust inout then "WrapWireKind"
+                else if action then "WrapPrimActionSchema"
+                else if actionValue then "WrapActionValueSchema"
+                else "WrapValueKind"
+          return $ foldr (\_ rest -> TAp (cTCon $ wrapId "WrapFunctionSchema") rest)
+                         result as
 
 
--- --------------------
--- genWrapE toplevel: mkInstances
+-- Keep the original BVI module's Bits constraints for polymorphic ports.
+-- Wrapping itself resolves the corresponding packed types through the class.
+addBVIBitsProviso :: (Int, [CPred]) -> CType -> GWMonad (Int, [CPred])
+addBVIBitsProviso (n, ctx) ty = do
+    av <- isActionValue ty
+    inout <- isInoutType ty
+    bitsType <- if av then getAVType "addBVIBitsProviso" ty
+                else return $ fromMaybe ty inout
+    if av || not (null $ tv bitsType)
+      then let size = cTVarNum (enumId "sn" noPosition n)
+           in return (n+1, CPred (CTypeclass idBits) [bitsType, size] : ctx)
+      else return (n, ctx)
 
--- The Generic representation of a wrapper type is the type being wrapped -
--- here we derive a Generic instance which uses the
--- "fromIfc_" function and calls the class method for the original interface.
 
-mkInstances :: IfcTRec -> GWMonad [CDefn]
-mkInstances trec = do
-  genericInstance <- mkGeneric trec
-  return [genericInstance]
+-- Flatten declaration metadata once, after deriving has made type functions
+-- available.  Generic handles the value traversal; this walk only preserves
+-- source names, positions and pragmas which are not part of Generic.
+data WrapReadyPolicy = SynthReady | BVIReady
 
-mkGeneric :: IfcTRec -> GWMonad CDefn
-mkGeneric (IfcTRec { rec_id = flat_id, rec_type = orig_ty, rec_rootid = orig_id }) = do
-  ctxs <- mkCtxs orig_ty
-  let pos = getPosition orig_id
-      flat_ty = cTCon flat_id
-      cqt = CQType ctxs $ cTApplys (cTCon idGeneric)
-            [flat_ty, cTApplys (cTCon idMeta)
-              [cTApplys (cTCon idMetaData)
-               [cTStr (getIdBase orig_id) pos,
-                cTStr (getIdQual orig_id) pos,
-                tMkTuple pos [],
-                cTNum 1 pos],
-               TAp (cTCon idConc) orig_ty]]
-      defn = Cinstance cqt
-        [CLValue (unQualId idFrom)
-          [CClause [CPVar id_x] [] $
-            CCon idMeta [CCon idConc [cVApply (from_Id flat_id) [CVar id_x]]]] [],
-         CLValue (unQualId idTo)
-          [CClause [CPCon idMeta [CPCon idConc [CPVar id_x]]] [] $
-            cVApply (to_Id flat_id) [CVar id_x]] []]
-  return defn
-
--- XXX this duplicates work done elsewhere; just do one traversal and
--- XXX reuse it in genIfcField / mkTo / mkFrom / mkFromBind
-mkCtxs :: CType -> GWMonad [CPred]
-mkCtxs ty =
- do
-   cint <- chkInterface ty
-   case cint of
-     Nothing -> internalError ("genFrom: " ++ pfpReadable ty)
-     Just (_, _, fts) -> do
-       css <- mapM meth fts
-       let bits_types = unions css
-           ctxs = [ CPred (CTypeclass idBits) [t, cTVarNum v]
-                        | (t, v) <- zip bits_types tmpTyVarIds ]
-       return ctxs
- where
-   meth :: FInf -> GWMonad [CType]
-   meth (FInf _ as r _) =
-    do
+collectBoundaryFields :: WrapReadyPolicy -> CType -> GWMonad [BoundaryField]
+collectBoundaryFields policy ty = do
+    mi <- chkInterface ty
+    case mi of
+      Nothing -> internalError ("collectBoundaryFields: " ++ ppReadable ty)
+      Just (ti, _, fs) -> do
+        prags <- getInterfacePrags ti
+        concatMapM (field (noPrefixes { ifcp_pragmas = prags }) ti) fs
+  where
+    field prefixes ti (FInf f as r argIds) = do
+      prags <- getInterfaceFieldPrags ti f
       mi <- chkInterface r
       case (mi, as) of
-        (Just (_, _, fts), []) -> do
-          ctxss <- mapM meth fts
-          return (unions ctxss)
+        (Just (subti, _, fs), []) -> do
+          prefixes' <- extendPrefixes prefixes prags r f
+          concatMapM (field prefixes' subti) fs
         _ -> do
-          isVec <- isVectorInterfaces r
-          case (isVec, as) of
-            (Just (n, tVec, isListN), []) ->
-               meth (FInf (mkNumId 0) [] tVec [])
-            _ -> do
-              isPA <- isPrimAction r
-              isClock <- isClockType r
-              isReset <- isResetType r
-              isInout <- isInoutType r
-              isAV <- isActionValue r
-              res_ctxs <-
-                  case isInout of
-                    Just iot -> return [iot]
-                    _ -> if (isPA || isClock || isReset)
-                          then return []
-                          else
-                           if isAV
-                              then do
-                                retType <- getAVType "genFrom" r
-                                return [retType]
-                              else return [r]
-              let ctxs = nub (res_ctxs ++ as)
-              return (ctxs)
+          -- BVI vectors and argument-taking methods are packed values.
+          mv <- case (policy, as) of
+                  (SynthReady, []) -> isVectorInterfaces r
+                  _ -> return Nothing
+          case mv of
+            Just (n, elemTy, _) -> do
+              prefixes' <- extendPrefixes prefixes prags r f
+              concatMapM (\k -> field prefixes' ti (FInf (mkNumId k) [] elemTy [])) [0..n-1]
+            Nothing -> do
+              clock <- isClockType r
+              reset <- isResetType r
+              inout <- isInoutType r
+              let logical = binId prefixes f
+                  sourceName = unQualId f
+                  current = ifcp_renamePrefixes prefixes
+                  prefix = joinStrings_ current $
+                    fromMaybe (getIdBaseString f) (lookupPrefixIfcPragma prags)
+                  result = joinStrings_ current $
+                    fromMaybe (getIdBaseString f) (lookupResultIfcPragma prags)
+                  gen | wire = genNewWireIfcPragmas
+                      | otherwise = genNewMethodIfcPragmas
+                  (props, fieldPrags) = gen prefixes prags sourceName logical
+                  wire = clock || reset || isJust inout
+                  ifcReady = case policy of
+                    SynthReady -> isAlwaysReadyIfc (prags ++ ifcp_pragmas prefixes)
+                    BVIReady -> False
+              return [BoundaryField (FInf logical as r argIds) fieldPrags props
+                                    prefix result (wire || ifcReady) wire]
 
+-- Ready signals are port metadata, not additional source fields.
+boundaryPorts :: [PProp] -> [BoundaryField] -> [(Id, CType, [IfcPragma])]
+boundaryPorts pps = concatMap ports
+  where
+    ports f =
+      let src = boundarySource f
+          i = name src
+          t = foldr arrow (ret_type src) (arg_types src)
+          ready = mkRdyId i
+          readyPort = [(ready, TAp tBit (cTNum 1 (getPosition i)), []) |
+                        not (boundaryReady f || isAlwaysRdy pps ready)]
+      in (i, t, boundaryPragmas f) : readyPort
 
 -- --------------------
 -- genWrapE toplevel: mkNewModDef
@@ -1311,34 +659,14 @@ mkCtxs ty =
 -- around the actual module definition (lifted with liftM), unpacking
 -- the values before applying the module def to them.
 
-mkNewModDef :: M.Map Id GeneratedIfc -> ModDefInfo -> GWMonad CDefn
-mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
- do
-   --traceM ("mkNewModDef: " ++ ppReadable def)
-   -- XXX This could have been stored in the moduledef info
-   -- XXX (note that the first half is the "ts" in "vtis")
+mkNewModDef :: [BoundaryField] -> ModDefInfo -> GWMonad CDefn
+mkNewModDef fields (def@(CDef i (CQType _ t) _), _, vtis, vps) = do
    let tr = case getArrows t of
               (_, TAp _ r) -> r
               _ -> internalError "GenWrap.mkNewModDef: tr"
-   cint <- chkInterface tr
-   (ifcId, _, fts) <- case cint of
-                        Just res -> return res
-                        Nothing -> internalError "GenWrap.mkNewModDef: cint"
-
-   tyId <- flatTypeId vps tr    -- id of the Ifc_
-   let ty = tmod (cTCon tyId)   -- type of new module
-
-   -- sanity check the port names (clashes, bad identifiers, etc)
-   let genifc = case (M.lookup tyId genIfcMap) of
-                  Just res -> res
-                  Nothing -> internalError ("mkNewModDef: can't find ifc: " ++
-                                            ppReadable tyId)
-       cfields = case genifc_cdefn genifc of
-                   (Cstruct _ _ _ _ cs _) -> cs
-                   _ -> internalError "GenWrap.mkNewModDef: cfields"
-   -- XXX reverse the fields just to match the behvaior of the previous
-   -- XXX compiler, which accumulated with fold rather than map
-   ftps <- mapM collectIfcInfo (reverse cfields)
+       ty = tmod (wrappedIfcType "SynthWrap" tr)
+       -- Preserve diagnostic ordering from the previous port checker.
+       ftps = reverse (boundaryPorts vps fields)
    -- get back the arg port to type mapping, for recording
    flgs <- getFlags
    arg_pts <- convEM $ checkModulePortNames flgs (getPosition i) vps vtis ftps
@@ -1359,16 +687,19 @@ mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
        arg_sptStmts = map (uncurry saveTopModPortTypeStmt) arg_pts
 
    -- interface save-port-type statements
-   ifc_sptStmts <- mkFieldSavePortTypeStmts Nothing ifcId fts
+   let wrapInfo = mkWrapDescriptor vps [] fields
+   let ifc_sptStmts = [CSExpr Nothing $ cVApply idLiftModule
+                        [wrapApply "saveWrapIfcPortTypes"
+                         [wrapStyle "SynthWrap", mkIfcProxyExpr tr,
+                          mkMaybe Nothing, wrapInfo]]]
 
    let sptStmts = arg_sptStmts ++ ifc_sptStmts
        -- a do-block around the module body, so that we can include the
        -- save-port-type statements
-       lexp = if not (null sptStmts)
-              then Cdo False (sptStmts ++ [CSExpr Nothing mexp])
-              else mexp
+       lexp = Cdo False (sptStmts ++ [CSExpr Nothing mexp])
        -- liftM of the do-block
-       to  = cVApply idLiftM [CVar (to_Id tyId), lexp]
+       to  = cVApply idLiftM
+               [wrapApply "toWrapIfc" [wrapStyle "SynthWrap", wrapInfo], lexp]
        -- let-define the user's module around the expr we just created
        lte = Cletseq [CLValueSign def []] to
        -- the clause for the new def we're creating
@@ -1391,13 +722,6 @@ mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
    --traceM( "mkNewModDef def" ++ ppReadable def )
    return result
  where
-
-   collectIfcInfo :: CField -> GWMonad  (Id, CType, [IfcPragma])
-   collectIfcInfo (CField {cf_name = fid, cf_pragmas = ps,
-                           cf_type = qtype@(CQType xpred ftype) }) = do
-     -- XXX is this needed?
-     ftype' <- expandSynSym ftype
-     return (fid, ftype, fromMaybe [] ps)
 
    convVar :: ArgInfo -> GWMonad CExpr
    convVar (Simple v lt) =
@@ -1429,24 +753,18 @@ mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
    mkCtx :: ([CPred], Type) -> (Type, Type) -> GWMonad ([CPred], Type)
    mkCtx (ctx, rt) (lt, v) =
     do
-      -- XXX interface argument remnant
-      isgIfc <- isGoodInterface lt
-      if isgIfc
-        then do
-          ft <- flatTypeId [] lt
-          return (ctx, cTCon ft `fn` rt)
-        else do
-          isInout <- isInoutType lt
-          case isInout of
-            Just tt -> return ((CPred (CTypeclass idBits) [tt, v]):ctx,
-                               TAp tInout_ v `fn` rt)
-            _ -> do
-                  isClock <- isClockType lt
-                  isReset <- isResetType lt
-                  isParam <- isParamType lt
-                  if (isClock || isReset || isParam)
-                     then return (ctx, lt `fn` rt)
-                     else return ((CPred (CTypeclass idBits) [lt, v]):ctx, TAp tBit v `fn` rt)
+      isInout <- isInoutType lt
+      case isInout of
+        Just tt -> return (CPred (CTypeclass idBits) [tt, v] : ctx,
+                           TAp tInout_ v `fn` rt)
+        Nothing -> do
+          isClock <- isClockType lt
+          isReset <- isResetType lt
+          isParam <- isParamType lt
+          if isClock || isReset || isParam
+            then return (ctx, lt `fn` rt)
+            else return (CPred (CTypeclass idBits) [lt, v] : ctx,
+                         TAp tBit v `fn` rt)
 
 mkNewModDef _ (def,_,_,_) =
     internalError ("GenWrap::mkNewModDef unexpected definition " ++ show def )
@@ -1460,19 +778,16 @@ mkNewModDef _ (def,_,_,_) =
 
 -- type DefFun = Bool -> VWireInfo -> VSchedInfo -> VPathInfo -> [VPort] -> SymTab -> [VFieldInfo] -> [Id] -> IO CDefn
 -- XXX: alwaysEnabled is dropped and broken (not propagated to {inhigh})
-mkDef :: [PProp] -> [PProp] -> CDef -> CQType -> GWMonad DefFun
-mkDef iprags pps (CDef i (CQType _ qt) _) cqt = do
- st0 <- get
+mkDef :: [BoundaryField] -> [PProp] -> [PProp] -> CDef -> CQType -> GWMonad DefFun
+mkDef boundary iprags pps (CDef i (CQType _ qt) _) cqt = do
+ env <- ask
  return (\fmod wire_info sch pathinfo ips symt fields true_ifc_ids -> do
   let
       (ts, tr) = case getArrows qt of
                    (ats, TAp _ r) -> (ats, r)
                    _ -> internalError "GenWrap.mkDef: ts, tr"
-      st1 = st0 { symtable = symt }
-  -- do not use ifc prags here
-  (st2, ti_) <- runGWMonadGetNoFail (flatTypeId pps tr) st1
-  let vs =  take (length ts) tmpVarIds
-  (st3, Just (ifcId, _, finfs)) <- runGWMonadGetNoFail (chkInterface tr) st2
+      env' = env { symtable = symt }
+  let vs = take (length ts) tmpVarIds
   let
       -- return an expression for creating the arg (from the wrapper's args)
       -- and the type of the internal module's arg (for port-type saving)
@@ -1512,7 +827,7 @@ mkDef iprags pps (CDef i (CQType _ qt) _) cqt = do
          elem_exprs <- mapM (`genArg` tVec) elem_sels
          return (concat elem_exprs)
 
-  (st4, argss) <- runGWMonadGetNoFail (zipWithM genArg (map CVar vs) ts) st3
+  argss <- runGWMonadNoFail (zipWithM genArg (map CVar vs) ts) env'
   let (arg_exprs, arg_ts) = unzip $ concat argss
       -- make the arg port-types, for saving in the module
       arg_pts = mkArgPortTypes wire_info arg_ts
@@ -1529,13 +844,12 @@ mkDef iprags pps (CDef i (CQType _ qt) _) cqt = do
              sch
              pathinfo
       vlift = (cVApply idLiftModule [vexp])
-  body <- runGWMonadNoFail
-              (genFromBody arg_pts vlift true_ifc_ids ti_ ifcId finfs)
-              st4
-  let cls = CClause (map CPVar vs) [] body
+  let body = genStructuralFromBody boundary arg_pts vlift
+                 (iprags ++ pps) true_ifc_ids tr
+      cls = CClause (map CPVar vs) [] body
   return $ CValueSign (CDef i cqt [cls]))
 
-mkDef _ _ def _ = internalError ("GenWrap::mkDef unexpected " ++ show def )
+mkDef _ _ _ def _ = internalError ("GenWrap::mkDef unexpected " ++ show def )
 
 
 mkArgPortTypes :: VWireInfo -> [CType] -> [(VPort, CType)]
@@ -1551,90 +865,6 @@ mkArgPortTypes wire_info arg_ts =
         mkPortType (ResetArg {}, _) = []
     in
         concatMap mkPortType arg_its
-
-
--- used in wrapper generate to wrap the module given by mk
--- to the result.
-genFromBody :: [(VPort, CType)] ->
-               CExpr -> [Id] -> Id -> Id -> [FInf] -> GWMonad CExpr
-genFromBody arg_pts mk true_ifc_ids si ifcId fts =
- do
-   -- traceM( "genFromBody: " ++ ppReadable fts )
-   let sty = cTCon si
-   let pos = getIdPosition si
-   let mkMethod = mkFromBind true_ifc_ids (CVar (id_t pos))
-   meths <- mapM mkMethod fts
-   -- interface save-port-type statements
-   ifc_sptStmts <- mkFieldSavePortTypeStmts (Just $ CVar id_x) ifcId fts
-   -- argument save-port-type statements
-   let arg_sptStmts =
-           map (uncurry (savePortTypeStmt (CVar id_x))) arg_pts
-       sptStmts = arg_sptStmts ++ map CMStmt ifc_sptStmts
-   let tmpl = Cmodule pos $
-                 [CMStmt $ CSBindT (CPVar (id_t pos)) Nothing [] (CQType [] sty) mk] ++
-                 ((saveNameStmt (id_t pos) id_x):sptStmts) ++
-                 [CMinterface (Cinterface pos Nothing meths)]
-   -- traceM( "genFromBody return: " ++ (show mk))
-   return tmpl
-
-
--- Creates a method for the module body.
--- XXX some of this can be replaced with a call to "mkFrom_"
--- Currently there is an optimization preventing this - we avoid adding guards for
--- ready signals that are known to be constant True, which isn't known when mkFrom_ is generated.
-mkFromBind :: [Id] -> CExpr -> FInf -> GWMonad CDefl
-mkFromBind true_ifc_ids var ft =
- do
-   ms <- meth noPrefixes ft
-   return $ mkv ms
- where
-   mkv (f, e, g) = CLValue (setInternal f) [CClause vps [] e'] g
-     where
-       (vps, e') = unLams e
-   -- This returns a triple of a field Id (method or subifc),
-   -- its definition, and its implicit condition (only for methods).
-   -- Note: The Id is qualified, because it could be something not
-   -- imported by the user (and this not available unqualified).
-   meth :: IfcPrefixes -> FInf -> GWMonad (Id, CExpr, [CQual])
-   meth prefixes (FInf f as r aIds) =
-    do
-      mi <- chkInterface r
-      case (mi, as) of
-        (Just (ti, _, fts), []) -> do
-          newprefixes <- extendPrefixes prefixes [] r f
-          fieldBlobs <- mapM (meth newprefixes) fts
-          return (f, cInterface ti fieldBlobs, [])
-        _ -> do
-          isVec <- isVectorInterfaces r
-          case (isVec, as) of
-            (Just (n, tVec, isListN), []) -> do
-               --traceM ("fromVec:" ++ (show tVec))
-               let nums = [0..(n-1)] :: [Integer]
-               let recurse num = do newprefixes <- extendPrefixes prefixes [] r f
-                                    meth newprefixes (FInf (mkNumId num) [] tVec [])
-               fieldBlobs <- mapM recurse nums
-               let (es, gs) = unzip [(e,g) | (_, e, g) <- fieldBlobs]
-               let vec = cToVector isListN es
-               return (f, vec, concat gs)
-            _ -> do
-              isPA <- isPrimAction r
-              isClock <- isClockType r
-              isReset <- isResetType r
-              isInout <- isInoutType r
-              let isIot = isInout/=Nothing
-              let binf = binId prefixes f
-              let wbinf = mkRdyId binf
-              let sel = CSelect var
-              let meth_guard = CApply eUnpack [sel wbinf]
-              let qs = if (wbinf `elem` true_ifc_ids || isClock || isReset || isIot)
-                       then [] else [CQFilter meth_guard]
-
-              -- Call fromWrapField with a proxy for the field name as a type level string,
-              -- and the field selection from the unwrapped module.
-              let fnp = mkStrArgProxyExpr (getIdPosition f) $ TAp (cTCon idStrArg) $ cTStr (fieldPathName prefixes f) (getIdPosition f)
-              let e = CApply (CVar (setIdPosition (getPosition f) idFromWrapField)) [fnp, sel binf]
-              return (f, e, qs)
-
 
 
 -- add port properties to method ports in VModInfo
@@ -1664,11 +894,6 @@ fixupPort vportprops vport@(vname, base_props) =
 addInHigh :: Bool -> VPort -> VPort
 addInHigh False p = p
 addInHigh True (n, props)  = (n, VPinhigh:props)
-
-cInterface :: Id -> [(Id, CExpr, [CQual])] -> CExpr
-cInterface ti fegs =
-        Cinterface (getPosition fegs) (Just ti) [CLValue (setInternal f) [CClause [] [] e] g | (f, e, g) <- fegs ]
-
 
 -- ====================
 -- Interface checking and associated type analysis utilities
@@ -1759,13 +984,18 @@ isPolyFieldType ti ts c =
 isVectorInterfaces :: Type -> GWMonad (Maybe (Integer, Type, Bool))
 isVectorInterfaces t =
  do
-   t' <- isVectorType t
-   case (t') of
-     Just (n,tVec, isListN) -> do
+   t' <- expandSynSym t
+   case vectorTypeParts t' of
+     Just (sz, tVec, _) -> do
        res <- chkInterfaceVectorElementType tVec
-       if (res) then
-         return (Just (n, tVec, isListN))
-        else return Nothing
+       if res then do
+         vec <- isVectorType t'
+         case vec of
+           Just _ -> return vec
+           Nothing -> bad (getPosition sz, EBadIfcType Nothing $
+             "The interface vector length could not be determined: " ++
+             pfpString sz)
+       else return Nothing
      _ -> return Nothing
 
 -- is the supplied type a valid component of a vector of interfaces?
@@ -1773,8 +1003,8 @@ isVectorInterfaces t =
 chkInterfaceVectorElementType :: Type -> GWMonad (Bool)
 chkInterfaceVectorElementType t =
  do
-   t' <- isVectorType t
-   case (t') of
+   t' <- expandSynSym t
+   case vectorTypeParts t' of
      Just (_,tVec,_) -> chkInterfaceVectorElementType tVec
      Nothing -> do
          isClock <- isClockType t
@@ -1847,11 +1077,21 @@ isVectorType :: Type -> GWMonad (Maybe (Integer, Type, Bool))
 isVectorType t =
  do
    t' <- expandSynSym t
-   case (leftCon t', tyConArgs t') of
-     (Just con, [TCon (TyNum n _), tVec])
-         | ((qualEq con idListN) || (qualEq con idVector))
-       -> return $ Just (n,tVec,qualEq con idListN)
+   case vectorTypeParts t' of
+     Just (TCon (TyNum n _), tVec, isListN) ->
+         return $ Just (n, tVec, isListN)
      _ -> return $ Nothing
+
+-- Classification depends on the element type, even before the length can be
+-- reduced.  An unresolved interface vector must not become a method leaf in
+-- the descriptor while the wrapping library later traverses its elements.
+vectorTypeParts :: Type -> Maybe (Type, Type, Bool)
+vectorTypeParts t =
+   case (leftCon t, tyConArgs t) of
+     (Just con, [sz, elemTy])
+       | qualEq con idListN || qualEq con idVector ->
+           Just (sz, elemTy, qualEq con idListN)
+     _ -> Nothing
 
 -- --------------------
 
@@ -1859,7 +1099,16 @@ expandSynSym :: Type -> GWMonad Type
 expandSynSym xt =
  do
    symt <- getSymTab
-   return (expandSyn (updTypes symt xt))
+   -- The parsed BVI type still has kind variables.  Reuse the kinds inferred
+   -- for its declaration before matching typeclass instances.
+   bound <- lift TI.getBoundTVs
+   let scoped = apSub (mkSubst [(v, TVar v) | v <- bound]) xt
+       t = updTypes symt scoped
+   lift $ do
+     TI.addBoundTVs (tv t)
+     t' <- normT t
+     TI.popBoundTVs
+     return t'
  where
    updTypes r o@(TCon (TyCon i _ TIabstract)) =
      case findType r i of
@@ -1872,50 +1121,6 @@ expandSynSym xt =
    updTypes r t = t
 
 -- --------------------
-
--- Create a qualified ID, based on the specific (interface) type generated
--- the first part of the name is based on the type of the interface, while the second is
--- based on the specific pragmas, AR/AE from the PProps
-flatTypeIdQual :: [PProp] -> CType -> GWMonad Id
-flatTypeIdQual pps sty =
- do
-   esty <- expandSynSym sty
-   let qual = case esty of
-          TCon (TyCon i _ _) -> fst (getIdFStrings i);
-          _                  -> fsEmpty
-   let flat_fs = concatFString (map (getIdFString . unQualId) (flattenType esty))
-   let flat_id = mkQId noPosition qual flat_fs
-   return (ifcIdRename pps flat_id)
-   --
- where
-   flattenType :: CType -> [Id]
-   flattenType (TVar (TyVar i _ _)) = [i] -- xxx aren't any at top level
-   flattenType (TCon (TyCon i _ _)) = [i]
-   flattenType (TCon (TyNum i _)) = [mkNumId i]
-   flattenType (TAp t1 t2) = flattenType t1 ++ flattenType t2
-   flattenType t = internalError ("GenWrap::flattenType: " ++ pfpReadable t)
-
-flatTypeId :: [PProp] -> CType -> GWMonad Id
-flatTypeId pps ty =
- do
-   res <- flatTypeIdQual pps ty
-   return (unQualId res)
-
--- extract the name ID  from the type
-rawTypeId :: CType -> GWMonad Id
-rawTypeId sty =
- do
-   symt <- getSymTab
-   esty <- expandSynSym sty
-   let raw = extractId esty
-   -- keep the qualified name
-   return raw
- where
-   extractId ltype = case ltype of
-         TCon (TyCon i _ _) -> i
-         TAp r _            -> extractId r
-         _                  -> internalError ("GenWrap :: rawTypeId: " ++ show ltype )
-
 
 -- ====================
 -- Prefix utilities (for flattening interfaces)
@@ -1946,32 +1151,6 @@ binId :: IfcPrefixes -> Id -> Id
 -- XXX horrible hack when there isn't selection required at the end
 binId ifcp i | i == idEmpty =  mkId noPosition (concatFString (init (ifcp_pathIdString ifcp)))
 binId ifcp i = (mkIdPre (concatFString (ifcp_pathIdString ifcp)) (unQualId i))
-
-fieldPathName :: IfcPrefixes -> Id -> FString
--- XXX horrible hack when there isn't selection required at the end
-fieldPathName ifcp i | i == idEmpty = concatFString $ init $ map fixupPathElement $ ifcp_pathIdString ifcp
-fieldPathName ifcp i = concatFString $ map fixupPathElement (ifcp_pathIdString ifcp) ++ [getIdBase i]
-
-fsIndexPlaceholder :: FString
-fsIndexPlaceholder = mkFString "[_]"
-
--- This has two transformations we want to do on path elements when constructing
--- the String type passed to WrapField for the field-wrapping error message:
--- 1. Replace the "_" separators in the path with "." to match the field selection that
--- would appear in the source.
--- 2. Replace the concrete index numbers in the path with "[_]". This is so that we do
--- not create multiple independent WrapField contexts when wrapping each element of a
--- vector-blasted field. If we use concrete field numbers each WrapField context needs to
--- be resolved individually, leading to repeated construction of the field-wrapping
--- dictionaries. If we use the placeholder all of the WrapField contexts for each
--- vector-blasted field will match so they will be joined into a single context
--- (see joinNeededCtxs in TCMisc.hs) before being resolved, so the field-wrapping
--- dictionaries will be constructed only once.
-fixupPathElement :: FString -> FString
-fixupPathElement fs
-  | fs == fsUnderscore = fsDot
-  | all isDigit (getFString fs) = fsIndexPlaceholder
-  | otherwise = fs
 
 -- Extend the prefixes
 -- Take the current set of prefix information, add to that information
@@ -2073,43 +1252,13 @@ genNewMethodIfcPragmas ifcp pragmas fieldId newFieldId  =
           pae = if (isAlwaysEnabledIfc joinedPrags) then [PPalwaysEnabled [[newFieldId]]] else []
 
 
--- generate a full set of pragmas for the new clock field which is being created.
--- these pragmas are then loaded in the symbol table, and picked out during eval for name creation.
-genNewClockIfcPragmas :: IfcPrefixes -> [IfcPragma] -> Id -> Id -> ([PProp], [IfcPragma])
-genNewClockIfcPragmas ifcp pragmas fieldId newFieldId  =
-    ([] , [prefix])
-    where currentPre  = ifcp_renamePrefixes ifcp -- the current rename prefix
-          --
-          localPrefix1 = fromMaybe (getIdString fieldId) (lookupPrefixIfcPragma pragmas)
-          localPrefix = joinStrings_  currentPre localPrefix1
-          --
-          prefix = (PIPrefixStr localPrefix)
-
-
--- generate a full set of pragmas for the new reset field which is being created.
--- these pragmas are then loaded in the symbol table, and picked out during eval for name creation.
-genNewResetIfcPragmas :: IfcPrefixes -> [IfcPragma] -> Id -> Id -> ([PProp], [IfcPragma])
-genNewResetIfcPragmas ifcp pragmas fieldId newFieldId  =
-    ([] , [prefix])
-    where currentPre  = ifcp_renamePrefixes ifcp -- the current rename prefix
-          --
-          localPrefix1 = fromMaybe (getIdString fieldId) (lookupPrefixIfcPragma pragmas)
-          localPrefix = joinStrings_  currentPre localPrefix1
-          --
-          prefix = (PIPrefixStr localPrefix)
-
-
--- generate a full set of pragmas for the new inout field which is being created.
--- these pragmas are then loaded in the symbol table, and picked out during eval for name creation.
-genNewInoutIfcPragmas :: IfcPrefixes -> [IfcPragma] -> Id -> Id -> ([PProp], [IfcPragma])
-genNewInoutIfcPragmas ifcp pragmas fieldId newFieldId  =
-    ([] , [prefix])
-    where currentPre  = ifcp_renamePrefixes ifcp -- the current rename prefix
-          --
-          localPrefix1 = fromMaybe (getIdString fieldId) (lookupPrefixIfcPragma pragmas)
-          localPrefix = joinStrings_  currentPre localPrefix1
-          --
-          prefix = (PIPrefixStr localPrefix)
+-- Clock, reset and inout fields only carry their physical name prefix.
+genNewWireIfcPragmas :: IfcPrefixes -> [IfcPragma] -> Id -> Id -> ([PProp], [IfcPragma])
+genNewWireIfcPragmas ifcp pragmas fieldId _ =
+    ([], [PIPrefixStr prefix])
+  where
+    localPrefix = fromMaybe (getIdString fieldId) (lookupPrefixIfcPragma pragmas)
+    prefix = joinStrings_ (ifcp_renamePrefixes ifcp) localPrefix
 
 
 -- Join string together with an underscore if either is not empty.
@@ -2122,39 +1271,17 @@ joinStrings_  s1 s2 = s1 ++ "_" ++ s2
 
 -- Check that the names exist
 -- XXX also check that always_enabled isn't applied to a value method?
-chkUserPragmas :: [PProp] -> GeneratedIfc -> GWMonad ()
-chkUserPragmas pps ifc = do
-    -- find any names mentioned by the user
+chkUserPragmas :: [PProp] -> [BoundaryField] -> GWMonad ()
+chkUserPragmas pps fields = do
     let getMethIds (PPalwaysReady is) = is
         getMethIds (PPalwaysEnabled is) = is
         getMethIds (PPenabledWhenReady is) = is
         getMethIds _ = []
-    let pp_ids = map flattenUSId $ -- turn Longname into Id
-                 concatMap getMethIds pps
-    when (null pp_ids) $ return ()
-
-    -- find the fields of the flattened ifc
-    let fields = case genifc_cdefn ifc of
-                   (Cstruct _ _ _ _ cs _) -> cs
-                   _ -> internalError "GenWrap.chkUserPragmas: fields"
-
-    -- identify which fields are methods
-    let dropQ (CQType _ t) = t
-    let isMethType t = do
-          let tt = dropQ t
-          isClock <- isClockType tt
-          isReset <- isResetType tt
-          isInout <- isInoutType tt
-          return (not isClock && not isReset && isInout==Nothing)
-    meth_fields <- filterM (isMethType . cf_type) fields
-    -- and get their flattened ids
-    let meth_ids = map cf_name meth_fields
-
-    let bad_pp_ids = filter (\i -> not (elem i meth_ids)) pp_ids
-        mkErr i = (getPosition i, EAttributeIdNotAMethod (getIdString i))
-    if (null bad_pp_ids)
-        then return ()
-        else bads $ map mkErr bad_pp_ids
+        ids = map flattenUSId $ concatMap getMethIds pps
+        methods = [name (boundarySource f) | f <- fields, not (boundaryWire f)]
+        invalid = filter (`notElem` methods) ids
+    unless (null invalid) $ bads
+      [(getPosition i, EAttributeIdNotAMethod (getIdString i)) | i <- invalid]
 
 
 -- ====================
@@ -2184,50 +1311,6 @@ saveTopModPortTypeStmt i t =
         cVApply idSavePortType
           [mkMaybe Nothing, stringLiteralAt noPosition s, typeLiteral t]
 
--- saveFieldPortTypes v "prefix" ["arg1", "arg2"] "result"
-mkFieldSavePortTypeStmts :: Maybe CExpr -> Id -> [FInf] -> GWMonad [CStmt]
-mkFieldSavePortTypeStmts v ifcId = concatMapM $ meth noPrefixes ifcId
- where
-   meth :: IfcPrefixes -> Id -> FInf -> GWMonad [CStmt]
-   meth prefixes ifcIdIn (FInf f as r aIds) =
-    do
-      ciPrags <- getInterfaceFieldPrags ifcIdIn f
-      mi <- chkInterface r
-      case (mi, as) of
-        (Just (ti, _, fts), []) -> do
-          newprefixes <- extendPrefixes prefixes ciPrags r f
-          concatMapM (meth newprefixes ti) fts
-        _ -> do
-          isVec <- isVectorInterfaces r
-          case (isVec, as) of
-            (Just (n, tVec, isListN), []) -> do
-               let nums = [0..(n-1)] :: [Integer]
-               let recurse num = do newprefixes <- extendPrefixes prefixes ciPrags r f
-                                    meth newprefixes ifcIdIn (FInf (mkNumId num) [] tVec [])
-               concatMapM recurse nums
-            _ -> do
-              -- Compute the local prefix and result name for this field in the flattened interface
-              -- from the current prefixes and pragmas from the field definition.
-              let currentPre  = ifcp_renamePrefixes prefixes -- the current rename prefix
-                  localPrefix1 = fromMaybe (getIdBaseString f) (lookupPrefixIfcPragma ciPrags)
-                  localPrefix = joinStrings_  currentPre localPrefix1
-                  localResult1 = fromMaybe (getIdBaseString f) (lookupResultIfcPragma ciPrags)
-                  localResult = joinStrings_ currentPre localResult1
-
-              -- Arguments to saveFieldPortTypes: proxies for the field name as a type level string and the field type,
-              -- and the values for the prefix, arg_names, and result pragmas.
-              let fproxy = mkStrArgProxyExpr (getIdPosition f) $ TAp (cTCon idStrArg) $ cTStr (fieldPathName prefixes f) (getIdPosition f)
-                  proxy = mkTypeProxyExpr $ foldr arrow r as
-                  prefix = stringLiteralAt noPosition localPrefix
-                  arg_names = mkList (getPosition f) [stringLiteralAt (getPosition i) (getIdString i) | i <- aIds]
-                  result = stringLiteralAt noPosition localResult
-              return [
-                CSExpr Nothing $
-                  cVApply idLiftModule $
-                    [cVApply idSaveFieldPortTypes
-                      [fproxy, proxy, mkMaybe v, prefix, arg_names, result]]]
-
-
 saveNameStmt :: Id -> Id -> CMStmt
 saveNameStmt svName resultVar = CMStmt (CSletseq [(CLValue resultVar [CClause [] [] nameExpr]) []])
   where nameExpr = cVApply idGetModuleName [cVApply idAsIfc [CVar svName]]
@@ -2236,14 +1319,74 @@ saveNameStmt svName resultVar = CMStmt (CSletseq [(CLValue resultVar [CClause []
 -- ====================
 -- CSyntax utilities
 
-extSel :: CExpr -> Id -> CExpr
-extSel sel xid | xid == idEmpty = sel
-extSel sel xid = CSelect sel xid
+-- The wrapping implementation is ordinary library code.  GenWrap supplies
+-- declaration metadata and calls it; neither style needs a generated type.
+wrapId :: String -> Id
+wrapId = mkQId noPosition (mkFString "WrapModule") . mkFString
 
-unLams :: CExpr -> ([CPat], CExpr)
-unLams (CLam (Right i) e) = ((CPVar i):is, e') where (is, e') = unLams e
-unLams (CLam (Left p) e) = ((CPAny p):is, e') where (is, e') = unLams e
-unLams e = ([], e)
+wrapApply :: String -> [CExpr] -> CExpr
+wrapApply name = cVApply (wrapId name)
+
+wrapStyle :: String -> CExpr
+wrapStyle name = CCon (wrapId name) []
+
+wrappedIfcType :: String -> CType -> CType
+wrappedIfcType style ty =
+    cTApplys (cTCon $ wrapId "WrappedIfc") [cTCon $ wrapId style, ty]
+
+-- asIfc suppresses implicit reads on variables.  Applying it to a type
+-- annotation would still allow the annotation's internal binding to read
+-- _read, so keep the typed binding and its use explicit here.
+mkIfcProxyExpr :: CType -> CExpr
+mkIfcProxyExpr ty =
+    let pos = getPosition ty
+        proxy = id_t pos
+        def = CLValueSign (CDef proxy (CQType [] ty)
+                [CClause [] [] $ CAny pos UNotUsed]) []
+    in Cletseq [def] $ cVApply idAsIfc [CVar proxy]
+
+-- Descriptor order agrees with Generic's declaration-order traversal.
+-- Readiness learned during synthesis only changes these values; the source
+-- interface does not need to be traversed again by the continuation.
+mkWrapDescriptor :: [PProp] -> [Id] -> [BoundaryField] -> CExpr
+mkWrapDescriptor pps trueFields fields = mkList noPosition (map record fields)
+  where
+    record f =
+      let src = boundarySource f
+          i = name src
+          pos = getPosition i
+          str = stringLiteralAt pos
+          ready = boundaryReady f || mkRdyId i `elem` trueFields ||
+                  isAlwaysRdy pps (mkRdyId i)
+      in CStruct (Just True) (wrapId "WrapFieldInfo")
+           [(wrapId "wrapName", str $ getIdBaseString i),
+            (wrapId "wrapPrefix", str $ boundaryPrefix f),
+            (wrapId "wrapArgNames", mkList pos
+               [stringLiteralAt (getPosition a) (getIdBaseString a) | a <- arg_names src]),
+            (wrapId "wrapResult", str $ boundaryResult f),
+            (wrapId "wrapReady", CCon (if ready then idTrue else idFalse) []),
+            (wrapId "wrapPosition", posLiteral pos)]
+
+-- DefFun still constructs and typechecks this definition after synthesis.
+-- Only its reconstruction body changes: one library call replaces generated
+-- interface methods and subinterface constructors.
+genStructuralFromBody :: [BoundaryField] -> [(VPort, CType)] -> CExpr ->
+                         [PProp] -> [Id] -> CType -> CExpr
+genStructuralFromBody fields argTypes mk pps trueFields ty =
+    let descriptor = mkWrapDescriptor pps trueFields fields
+        pos = getPosition ty
+        raw = id_t pos
+        rawType = wrappedIfcType "SynthWrap" ty
+        saveArgs = map (uncurry (savePortTypeStmt $ CVar id_x)) argTypes
+        saveIfc = CMStmt $ CSExpr Nothing $ cVApply idLiftModule
+          [wrapApply "saveWrapIfcPortTypes"
+            [wrapStyle "SynthWrap", mkIfcProxyExpr ty,
+             mkMaybe (Just $ CVar id_x), descriptor]]
+        result = wrapApply "fromWrapIfc" [wrapStyle "SynthWrap", descriptor, CVar raw]
+    in Cmodule pos $
+      [CMStmt $ CSBindT (CPVar raw) Nothing [] (CQType [] rawType) mk,
+       saveNameStmt raw id_x] ++ saveArgs ++
+      [saveIfc, CMStmt $ CSExpr Nothing $ cVApply (idReturn pos) [result]]
 
 cToVector :: Bool -> [CExpr] -> CExpr
 cToVector isListN es = cVApply f [vcons es]
@@ -2279,23 +1422,3 @@ hasReadyFN vfs xvf = or (map (isReadyFor xvf) vfs)
  where
    isReadyFor vf@(Method {}) vf_rdy = (mkRdyId (vf_name vf)) == (vf_name vf_rdy)
    isReadyFor _ _ = False
-
-
--- ====================
--- XXX Interface argument remnants
-
-getInterfaces :: [Type] -> GWMonad [Type]
-getInterfaces ts =
- do
-   filterM isGoodInterface ts
-
-isGoodInterface :: Type -> GWMonad Bool
-isGoodInterface t =
- do
-   res <- chkInterface t
-   case res of
-     Just _ -> return True
-     Nothing -> return False
-
-
--- ====================

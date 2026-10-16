@@ -10,6 +10,7 @@ import Pragma
 import PreIds
 import CSyntax
 import CSyntaxUtil(posLiteral, numLiteralAt)
+import CFreeVars(getFVD, getFVDl, getFVC, fvSetToFreeVars)
 import CType
 import Undefined (UndefKind(..))
 
@@ -31,23 +32,49 @@ isGenId i = hasIdProp i IdPGeneratedIfc
 
 
 -- ====================
--- Field and module rename utilities
+-- The BVI parser leaves this ordinary local binding for GenWrap to fill in
+-- after it can inspect the imported interface's fields in declaration order.
+bviWrapInfoId :: Id -> Id
+bviWrapInfoId i = setInternal (mkIdPost i (mkFString "_wrapInfo"))
 
--- A function to rename the top interface name -- should not rename port of the interface.
--- This needs to generate a unique name for the interface based on the pragmas
--- Therefore Ifc_ is different from Ifc_ {always_ready} etc
-ifcIdRename :: [PProp] -> Id -> Id
-ifcIdRename pps modid = addInternalProp (mkIdPost nm fsGenSuffix)
+-- The style binding carries the source interface shape for polymorphic BVI
+-- leaves, whose Bits constraint need not imply a Generic representation.
+bviWrapStyleId :: Id -> Id
+bviWrapStyleId i = setInternal (mkIdPost i (mkFString "_wrapStyle"))
+
+
+-- ====================
+-- Wrapping is ordinary library code, so its signatures must be available
+-- before GenWrap and its dependency must be visible to -u and makedepend.
+-- BVI imports already contain a qualified wrapping call after parsing;
+-- synthesis and noinline definitions acquire one during GenWrap.
+idWrapModule :: Id
+idWrapModule = mkId noPosition (mkFString "WrapModule")
+
+wrapModuleImports :: [Id] -> CPackage -> [CImport]
+wrapModuleImports genNames (CPackage pkgId _ imps _ _ ds _)
+  | pkgId == idWrapModule = []
+  | any importsWrap imps = []
+  | any needsWrap ds = [CImpId True idWrapModule]
+  | otherwise = []
  where
-  pos = getPosition modid
-  nm = flattenUSId ((unQualId modid) : (relevantNames pps))
-  relevantNames :: [PProp] -> Longname
-  relevantNames []                           = []
-  relevantNames ((PPalwaysReady is):ps)      = (pp "AR") : (concat is) ++ (relevantNames ps)
-  relevantNames ((PPalwaysEnabled is):ps)    = (pp "AE") : (concat is) ++ (relevantNames ps)
-  relevantNames ((PPenabledWhenReady is):ps) = (pp "EWR") : (concat is) ++ (relevantNames ps)
-  relevantNames (p:ps)                       = relevantNames ps
-  pp s = mkId pos (mkFString s)
+  importsWrap (CImpId _ i) = i == idWrapModule
+  isWrapRef i = getIdQual i == getIdBase idWrapModule
+  refsNeedWrap = any isWrapRef . fvSetToFreeVars
+  isGenerated i = any ((== unQualId i) . unQualId) genNames
+  needsWrap (CPragma (Pproperties _ ps)) = PPverilog `elem` ps
+  needsWrap (CPragma (Pnoinline is)) = not (null is)
+  needsWrap (CValueSign d@(CDef i _ _)) = isGenerated i || refsNeedWrap (getFVD d)
+  needsWrap (CValue i cs) = isGenerated i || any (refsNeedWrap . getFVC) cs
+  needsWrap (Cinstance _ dls) = any (refsNeedWrap . getFVDl) dls
+  needsWrap (Cstruct _ _ _ _ fs _) = any fieldNeedsWrap fs
+  needsWrap (Cclass _ _ _ _ _ _ fs) = any fieldNeedsWrap fs
+  needsWrap _ = False
+  fieldNeedsWrap = any (refsNeedWrap . getFVC) . cf_default
+
+
+-- ====================
+-- Field and module rename utilities
 
 -- For now this just adds an underscore
 modIdRename :: [PProp] -> Id -> Id
