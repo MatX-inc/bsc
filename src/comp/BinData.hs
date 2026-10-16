@@ -60,6 +60,7 @@ import Data.Bits
 import Data.Word
 import GHC.Exts(IsList(..))
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Unsafe as BSU
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as TE
@@ -347,9 +348,16 @@ instance Applicative In where
 getN :: Int -> In [Byte]
 getN n = replicateM n getB
 
+-- The byte at an offset, or Nothing past the end: bytestring 0.11 (GHC 9.2's
+-- boot library) has this as indexMaybe; GHC 8.8 and 9.0 ship 0.10.
+indexMaybeBS :: BS.ByteString -> Int -> Maybe Byte
+indexMaybeBS bs off
+  | off >= 0 && off < BS.length bs = Just $! BSU.unsafeIndex bs off
+  | otherwise = Nothing
+
 getB :: In Byte
 getB = In $ \(IS bc bs off mh) ->
-  case BS.indexMaybe bs off of
+  case indexMaybeBS bs off of
     Nothing -> internalError "BinData.getB: unexpected end of byte stream"
     Just b -> let !off' = off + 1
               in case mh of
