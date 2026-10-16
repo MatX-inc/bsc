@@ -89,26 +89,44 @@ jobs:
     secrets: inherit
 
   # ------------------------------
-  # Tests using other recent versions of GHC, particularly newer ones,
-  # in anticipation of upgrading the release builds to that version
+  # Tests using other versions of GHC: newer ones, in anticipation of
+  # upgrading the release builds to that version, and the older ones
+  # INSTALL.md promises still build, from 8.8.4 (Ubuntu 22.04's GHC) up.
+  # Those run on ubuntu-22.04: the 8.8.4 bindist needs its libtinfo5.
 
   build-and-test-ghc-ubuntu:
     strategy:
       matrix:
         ghc:
+          - version: 8.8.4
+            hls:
+            os: ubuntu-22.04
+          - version: 9.0.2
+            hls:
+            os: ubuntu-22.04
+          - version: 9.2.8
+            hls:
+            os: ubuntu-22.04
+          - version: 9.4.8
+            hls:
+            os: ubuntu-22.04
           - version: 9.8.4
             hls: 2.13.0.0
+            os: ubuntu-24.04
           - version: 9.10.3
             hls:
+            os: ubuntu-24.04
           - version: 9.12.2
             hls: 2.13.0.0
+            os: ubuntu-24.04
           - version: 9.14.1
             hls:
+            os: ubuntu-24.04
       fail-fast: false
     name: "Build/Test: GHC Ubuntu"
     uses: ./.github/workflows/build-and-test-ubuntu.yml
     with:
-      os: ubuntu-24.04
+      os: ${{ matrix.ghc.os }}
       ghc_version: ${{ matrix.ghc.version }}
       hls_version: ${{ matrix.ghc.hls }}
     secrets: inherit

@@ -277,8 +277,8 @@ GHC releases older than 7.10.3 are not supported.
 
 BSC releases are tested and built with the recommended stable version
 of GHC, currently 9.6.7.  The source is also tested with a range of
-newer GHC versions (currently 9.8, 9.10, and 9.12) any of which are
-also fine.
+other GHC versions (currently 8.8.4 through 9.4, and 9.8 through 9.14)
+any of which are also fine.
 
 ### Haskell libraries via Cabal
 
