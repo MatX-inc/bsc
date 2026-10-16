@@ -2,7 +2,7 @@ packages: .
 
 -- scratch: the lower bounds of bsc.cabal are GHC 9.6.7's boot libraries;
 -- ignoring them lets an older GHC show where the sources' own floor is.
-allow-older: all
+allow-older: array, base, ghc-bignum, bytestring, containers, deepseq, directory, filepath, integer-gmp, mtl, old-locale, old-time, process, regex-compat, split, strict-concurrency, syb, text, time, unix
 
 -- The Hackage index the dependencies resolve against: the commit, not the
 -- build date, fixes their versions. Moving it is a change of its own
