@@ -13,6 +13,7 @@ module TIMonad(
         EPred(..), Infer2, CheckT, TaskCheckT,
         getBoundTVs, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
+        withLocalTypeContext,
         getNumProven, getNumRefuted, addNumDecided,
         errorAtId, findCons, findTyCon, findFields, findCls,
         bitCls,
@@ -380,6 +381,22 @@ addNumDecided proven refuted = modify (\ s ->
 mkEPred :: Pred -> TI EPred
 mkEPred p = do i <- newDict
                return $ EPred (CVar i) p
+
+-- Query types under a declaration's givens without retaining its substitutions
+-- or context-dependent ATF results.  Fresh IDs, dependencies and warnings are
+-- still shared with the surrounding computation.
+withLocalTypeContext :: [TyVar] -> [EPred] -> TI a -> TI a
+withLocalTypeContext bound givens query = do
+    savedState <- get
+    savedATFs <- lift (gets tsATFCache)
+    let restore = do
+          put savedState
+          lift $ modify (\s -> s { tsATFCache = savedATFs })
+    addBoundTVs bound
+    addExplPreds givens
+    result <- catchError query (\es -> restore >> throwError es)
+    restore
+    return result
 
 clearSubst :: TI ()
 clearSubst = modify (transSubst (const nullSubst))

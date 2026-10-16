@@ -114,13 +114,20 @@ compile_pass CExtendATFExplicit.bsv
 # number of elements, including nested Vector/ListN containers.
 compile_pass ExpSizeOf_VectorIfc.bsv
 compile_verilog_pass ExpSizeOf_VectorIfc.bsv
+compile_verilog_pass ExpSizeOf_DerivedVectorIfc.bsv
 compile_verilog_pass ExpSizeOf_NestedVectorIfc.bsv
 compile_verilog_pass ExpSizeOf_PackedVectorBVI.bsv
+compile_verilog_pass ATF_WrappedInterfaces.bsv
+compile_verilog_pass ATF_BVIGivens.bsv
+compile_fail_error ATF_BVIMissingGiven.bsv T0104
 if { $vtest == 1 } {
     foreach i {0 1} {
         string_occurs mkExample.v "input  example_${i}__write_x;"
         string_occurs mkExample.v "input  EN_example_${i}__write;"
         string_occurs mkExample.v "output RDY_example_${i}__write;"
+        string_occurs mkDerivedVectorIfc.v "input  example_${i}__write_x;"
+        string_occurs mkDerivedVectorIfc.v "input  EN_example_${i}__write;"
+        string_occurs mkDerivedVectorIfc.v "output RDY_example_${i}__write;"
         foreach j {0 1} {
             string_occurs mkNestedVectorIfc.v "input  lanes_${i}_${j}__write_x;"
             string_occurs mkNestedVectorIfc.v "input  EN_lanes_${i}_${j}__write;"
@@ -131,11 +138,15 @@ if { $vtest == 1 } {
     string_occurs mkPackedVectorMethod.v {output [1 : 0] echo;}
     string_occurs mkPackedVectorMethod.v {input  echo_x;}
     string_does_not_occur mkPackedVectorMethod.v {echo_0}
+    string_occurs mkATFInterface.v {input  [2 : 0] _write_x;}
+    string_occurs mkATFInterface.v {ForeignATF}
+    string_occurs mkATFFields.v {input  [2 : 0] sub__write_x;}
+    string_occurs mkATFFields.v {output [4 : 0] value;}
+    string_occurs mkATFGivenThree.v {output [2 : 0] sub_value;}
+    string_occurs mkATFGivenFive.v {output [4 : 0] sub_value;}
 }
 
-# Local deriving happens after wrapper generation.  A length that cannot yet
-# be resolved must fail with a source diagnostic, never malformed metadata.
-compile_pass ExpSizeOf_VectorIfcUnresolved.bsv
+# An actually unresolved length must still produce a source diagnostic.
 compile_verilog_fail_error ExpSizeOf_VectorIfcUnresolved.bsv T0043
 
 # ---------------

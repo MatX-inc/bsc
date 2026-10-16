@@ -48,18 +48,18 @@ bviWrapStyleId i = setInternal (mkIdPost i (mkFString "_wrapStyle"))
 -- before GenWrap and its dependency must be visible to -u and makedepend.
 -- BVI imports already contain a qualified wrapping call after parsing;
 -- synthesis and noinline definitions acquire one during GenWrap.
-idModuleWrap :: Id
-idModuleWrap = mkId noPosition (mkFString "ModuleWrap")
+idWrapModule :: Id
+idWrapModule = mkId noPosition (mkFString "WrapModule")
 
-moduleWrapImports :: [Id] -> CPackage -> [CImport]
-moduleWrapImports genNames (CPackage pkgId _ imps _ _ ds _)
-  | pkgId == idModuleWrap = []
+wrapModuleImports :: [Id] -> CPackage -> [CImport]
+wrapModuleImports genNames (CPackage pkgId _ imps _ _ ds _)
+  | pkgId == idWrapModule = []
   | any importsWrap imps = []
-  | any needsWrap ds = [CImpId True idModuleWrap]
+  | any needsWrap ds = [CImpId True idWrapModule]
   | otherwise = []
  where
-  importsWrap (CImpId _ i) = i == idModuleWrap
-  isWrapRef i = getIdQual i == getIdBase idModuleWrap
+  importsWrap (CImpId _ i) = i == idWrapModule
+  isWrapRef i = getIdQual i == getIdBase idWrapModule
   refsNeedWrap = any isWrapRef . fvSetToFreeVars
   isGenerated i = any ((== unQualId i) . unQualId) genNames
   needsWrap (CPragma (Pproperties _ ps)) = PPverilog `elem` ps
@@ -75,22 +75,6 @@ moduleWrapImports genNames (CPackage pkgId _ imps _ _ ds _)
 
 -- ====================
 -- Field and module rename utilities
-
--- A function to rename the top interface name -- should not rename port of the interface.
--- This needs to generate a unique name for the interface based on the pragmas
--- Therefore Ifc_ is different from Ifc_ {always_ready} etc
-ifcIdRename :: [PProp] -> Id -> Id
-ifcIdRename pps modid = addInternalProp (mkIdPost nm fsGenSuffix)
- where
-  pos = getPosition modid
-  nm = flattenUSId ((unQualId modid) : (relevantNames pps))
-  relevantNames :: [PProp] -> Longname
-  relevantNames []                           = []
-  relevantNames ((PPalwaysReady is):ps)      = (pp "AR") : (concat is) ++ (relevantNames ps)
-  relevantNames ((PPalwaysEnabled is):ps)    = (pp "AE") : (concat is) ++ (relevantNames ps)
-  relevantNames ((PPenabledWhenReady is):ps) = (pp "EWR") : (concat is) ++ (relevantNames ps)
-  relevantNames (p:ps)                       = relevantNames ps
-  pp s = mkId pos (mkFString s)
 
 -- For now this just adds an underscore
 modIdRename :: [PProp] -> Id -> Id

@@ -387,23 +387,12 @@ compilePackage
     (mfwrp, symt0, funcs) <- genFuncWrap errh flags generating mop symt00
     t <- dump errh flags t DFgenfuncwrap dumpnames mfwrp
 
-    -- Generate wrapper for Verilog interface.
-    start flags DFgenwrap
-    (mwrp, gens) <- genWrap errh flags (genName flags) generating mfwrp symt0
-    t <- dump errh flags t DFgenwrap dumpnames mwrp
-
-    -- Rebuild the symbol table because GenWrap added new types
-    -- and typeclass instances for those types
-    start flags DFsympostgenwrap
-    symt1 <- mkSymTab errh mwrp
-    t <- dump errh flags t DFsympostgenwrap dumpnames symt1
-
     -- Re-add function definitions for `noinline'
-    mfawrp <- addFuncWrap errh symt1 funcs mwrp
+    mfawrp <- addFuncWrap errh symt0 funcs mfwrp
 
     -- Turn deriving into instance declarations
     start flags DFderiving
-    mder <- derive errh flags symt1 mfawrp
+    mder <- derive errh flags symt0 mfawrp
     t <- dump errh flags t DFderiving dumpnames mder
 
     -- Rebuild the symbol table because Deriving added new instances
@@ -415,9 +404,17 @@ compilePackage
     -- (before any transformations that might expand synonyms or change types)
     let pkgsUsedInTypes = getPackagesUsedInTypes symt11 mder
 
+    -- Wrapping uses the derived instances to evaluate interface type
+    -- functions.  It adds no types or instances, so context reduction can
+    -- use the same symbol table; its rebuild below adds the wrapper values.
+    start flags DFgenwrap
+    (mwrp, gens, pkgsUsedInGenWrap, atfCacheFromGenWrap) <-
+        genWrap errh flags (genName flags) generating mder symt11
+    t <- dump errh flags t DFgenwrap dumpnames mwrp
+
     -- Reduce the contexts as far as possible
     start flags DFctxreduce
-    (mctx, pkgsUsedInCtxReduce, atfCacheFromCtxReduce) <- cCtxReduceIO errh flags symt11 mder
+    (mctx, pkgsUsedInCtxReduce, atfCacheFromCtxReduce) <- cCtxReduceIO errh flags symt11 mwrp
     t <- dump errh flags t DFctxreduce dumpnames mctx
 
     -- Rebuild the symbol table because CtxReduce has possibly changed
@@ -478,7 +475,8 @@ compilePackage
     -- Convert to internal abstract syntax
     --------------------------------------------
     start flags DFinternal
-    let combinedATFCache = mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce
+    let combinedATFCache = mergeCATFCaches ctypeATFCache $
+                           mergeCATFCaches atfCacheFromCtxReduce atfCacheFromGenWrap
     imod <- iConvPackage errh flags symt combinedATFCache lifted_defs mod_lifted
     t <- dump errh flags t DFinternal dumpnames imod
     when (showISyntax flags) (putStrLnF (show imod))
@@ -670,7 +668,8 @@ compilePackage
 
     -- Check user imports, excluding dependencies inserted for generated code.
     let (CPackage _ _ imports _ _ _ _) = min
-        allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInCode, pkgsUsedInExports]
+        allUsedPkgs = S.unions [pkgsUsedInTypes, pkgsUsedInGenWrap, pkgsUsedInCtxReduce,
+                               pkgsUsedInCode, pkgsUsedInExports]
         importedPkgs = [i | (CImpId _ i) <- imports]
         unusedPkgs = filter (\pkg -> not (S.member pkg allUsedPkgs)) importedPkgs
         unusedWarns = [(getPosition pkg, WUnusedImport (pfpString pkg)) | pkg <- unusedPkgs]

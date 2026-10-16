@@ -16,7 +16,7 @@ package ListN(
 
 import List
 import Vector
-import ModuleWrap
+import WrapModule
 
 infixr  8 :>
 

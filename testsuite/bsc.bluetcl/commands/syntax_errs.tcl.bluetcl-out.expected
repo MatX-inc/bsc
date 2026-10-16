@@ -5,7 +5,7 @@ Error: Command is invalid.  At "Test" expected:
 ...subcommands...
 
 ----------
-Test Vector Array List PreludeBSV ModuleWrap Prelude
+Test Vector Array List PreludeBSV WrapModule Prelude
 ----------
 Error: Command is incomplete.  It is expected to continue with:
 (full <arg> | constr <arg> | bitify <arg>)

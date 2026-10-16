@@ -4,7 +4,7 @@ package ImportForeignModule_InputReset_NoName_ExposeCurRst;
 module mkMod(Empty);
   let _bv1 <- exposeCurrentReset;
   let _bv0 <- exposeCurrentReset;
-  ModuleWrap::WrappedIfc#(ModuleWrap::BVIWrap, Empty) _m__;
+  WrapModule::WrappedIfc#(WrapModule::BVIWrap, Empty) _m__;
   _m__ <- liftModule((unexpected) module verilog "MOD";
 		     reset _rst__1(RST1) clocked_by(no_clock);
 		     reset _rst__2(RST2) clocked_by(no_clock);
@@ -13,7 +13,7 @@ module mkMod(Empty);
 			 }
 			 SchedInfo [] [] [] []
 			 No combinational paths from inputs to outputs);
-  Empty'(ModuleWrap::fromWrapIfc(_m___wrapStyle, _m___wrapInfo, _m__))
+  Empty'(WrapModule::fromWrapIfc(_m___wrapStyle, _m___wrapInfo, _m__))
 endmodule: mkMod
 
 endpackage: ImportForeignModule_InputReset_NoName_ExposeCurRst

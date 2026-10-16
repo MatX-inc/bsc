@@ -1,4 +1,4 @@
-package ModuleWrap where
+package WrapModule where
 
 -- This package is also used while compiling PreludeBSV.  Keep it independent
 -- of PreludeBSV, Vector and ListN; those collection packages add their own
@@ -29,29 +29,23 @@ struct WrapFieldInfo =
   wrapReady :: Bool
   wrapPosition :: Position__
 
-class WrapIfc style ifc w | style ifc -> w where
+class WrapModule style ifc w | style ifc -> w where
   type WrappedIfc style ifc = w
   toWrapIfc :: style -> List WrapFieldInfo -> ifc -> w
   fromWrapIfc :: style -> List WrapFieldInfo -> w -> ifc
   saveWrapIfcPortTypes :: style -> ifc -> Maybe Name__ -> List WrapFieldInfo -> Module ()
 
 -- Keep style dispatch explicit, so the compiler does not eagerly replace a
--- sole default instance and prevent later packages from specializing WrapIfc.
-instance (WrapValue SynthWrap "" ifc w) => WrapIfc SynthWrap ifc w where
+-- sole default instance and prevent later packages from specializing WrapModule.
+instance (WrapValue SynthWrap "" ifc w) => WrapModule SynthWrap ifc w where
   toWrapIfc = toWrapIfcValue
   fromWrapIfc = fromWrapIfcValue
   saveWrapIfcPortTypes = saveWrapIfcValuePortTypes
 
-instance (WrapBVIValue shape "" ifc w) => WrapIfc (BVIWrap shape) ifc w where
-  toWrapIfc style infos x =
-    case toWrapBVIValue style (StrArg :: StrArg "") infos x of
-      (w, rest) -> finishWrapInfo rest w
-  fromWrapIfc style infos w =
-    case fromWrapBVIValue style (StrArg :: StrArg "") infos w of
-      (x, rest) -> finishWrapInfo rest x
-  saveWrapIfcPortTypes style _ modName infos =
-    case saveWrapBVIValue style (StrArg :: StrArg "") (_ :: ifc) modName infos of
-      (act, rest) -> finishWrapInfo rest act
+instance (WrapValue (BVIWrap shape) "" ifc w) => WrapModule (BVIWrap shape) ifc w where
+  toWrapIfc = toWrapIfcValue
+  fromWrapIfc = fromWrapIfcValue
+  saveWrapIfcPortTypes = saveWrapIfcValuePortTypes
 
 toWrapIfcValue :: (WrapValue style "" ifc w) => style -> List WrapFieldInfo -> ifc -> w
 toWrapIfcValue style infos x =
@@ -120,10 +114,33 @@ class (WrapValue :: * -> $ -> * -> * -> *) style path a w | style path a -> w wh
   fromWrapValue :: style -> StrArg path -> List WrapFieldInfo -> w -> (a, List WrapFieldInfo)
   saveWrapValue :: style -> StrArg path -> a -> Maybe Name__ -> List WrapFieldInfo -> (Module (), List WrapFieldInfo)
 
-instance (WrapClassify a k, WrapValueBy k style path a w) => WrapValue style path a w where
+instance (WrapClassify a k, WrapValueBy k SynthWrap path a w) => WrapValue SynthWrap path a w where
   toWrapValue = toWrapValueBy (_ :: k)
   fromWrapValue = fromWrapValueBy (_ :: k)
   saveWrapValue = saveWrapValueBy (_ :: k)
+
+-- Imported methods retain their declaration-time ABI even when an abstract
+-- Bits result later instantiates to an interface type.  Only this dispatch
+-- uses the BVI schema; both styles share the generic traversal below.
+instance (BVIField shape a w) => WrapValue (BVIWrap shape) path a (w, Bit 1) where
+  toWrapValue = toWrapValueBy WrapValueKind
+  fromWrapValue = fromWrapValueBy WrapValueKind
+  saveWrapValue = saveWrapValueBy WrapValueKind
+
+instance (BVIField WrapWireKind a w) => WrapValue (BVIWrap WrapWireKind) path a (w, Bit 1) where
+  toWrapValue = toWrapValueBy WrapWireKind
+  fromWrapValue = fromWrapValueBy WrapWireKind
+  saveWrapValue = saveWrapValueBy WrapWireKind
+
+instance (WrapRep (BVIWrap fields) path (Rep a) w) =>
+    WrapValue (BVIWrap (WrapInterfaceSchema fields)) path a w where
+  toWrapValue _ path infos x =
+    toWrapRep (BVIWrap :: BVIWrap fields) path infos (from x)
+  fromWrapValue _ path infos w =
+    case fromWrapRep (BVIWrap :: BVIWrap fields) path infos w of
+      (r, rest) -> (to r, rest)
+  saveWrapValue _ path _ =
+    saveWrapRep (BVIWrap :: BVIWrap fields) path (_ :: Rep a)
 
 class (WrapValueBy :: * -> * -> $ -> * -> * -> *) k style path a w | k style path a -> w where
   toWrapValueBy :: k -> style -> StrArg path -> List WrapFieldInfo -> a -> (w, List WrapFieldInfo)
@@ -195,18 +212,33 @@ instance (WrapPath path name child, WrapRep style child r w) =>
       (r, rest) -> (Meta r, rest)
   saveWrapRep style _ _ = saveWrapRep style (StrArg :: StrArg child) (_ :: r)
 
-instance (WrapRep style path a wa, WrapRep style path b wb) => WrapRep style path (a, b) (wa, wb) where
+-- Synthesis uses one policy throughout.  A BVI product distributes its
+-- declaration-side field schemas to the corresponding generic children.
+class WrapPairStyle style left right | style -> left right where
+  splitWrapStyle :: style -> (left, right)
+
+instance WrapPairStyle SynthWrap SynthWrap SynthWrap where
+  splitWrapStyle style = (style, style)
+
+instance WrapPairStyle (BVIWrap (a, b)) (BVIWrap a) (BVIWrap b) where
+  splitWrapStyle _ = (BVIWrap, BVIWrap)
+
+instance (WrapPairStyle style sa sb, WrapRep sa path a wa, WrapRep sb path b wb) =>
+    WrapRep style path (a, b) (wa, wb) where
   toWrapRep style path infos (a, b) =
-    case toWrapRep style path infos a of
-      (wa, restA) -> case toWrapRep style path restA b of
+    let (styleA, styleB) = splitWrapStyle style
+    in case toWrapRep styleA path infos a of
+      (wa, restA) -> case toWrapRep styleB path restA b of
         (wb, restB) -> ((wa, wb), restB)
   fromWrapRep style path infos (wa, wb) =
-    case fromWrapRep style path infos wa of
-      (a, restA) -> case fromWrapRep style path restA wb of
+    let (styleA, styleB) = splitWrapStyle style
+    in case fromWrapRep styleA path infos wa of
+      (a, restA) -> case fromWrapRep styleB path restA wb of
         (b, restB) -> ((a, b), restB)
   saveWrapRep style path _ modName infos =
-    case saveWrapRep style path (_ :: a) modName infos of
-      (actA, restA) -> case saveWrapRep style path (_ :: b) modName restA of
+    let (styleA, styleB) = splitWrapStyle style
+    in case saveWrapRep styleA path (_ :: a) modName infos of
+      (actA, restA) -> case saveWrapRep styleB path (_ :: b) modName restA of
         (actB, restB) -> (do { actA; actB }, restB)
 
 instance WrapRep style path () () where
@@ -238,94 +270,6 @@ instance (BVIField shape a w) => WrapLeaf (BVIWrap shape) path a w where
   fromWrapLeaf style _ = fromBVIField style
   saveWrapLeaf style _ proxy modName info =
     saveBVIField style proxy modName info.wrapArgNames info.wrapResult
-
--- BVI traverses the same Generic metadata, with declaration-side guidance
--- at Conc fields.  In particular, a method returning an abstract Bits type
--- does not require that type to have a Generic instance.
-class (WrapBVIValue :: * -> $ -> * -> * -> *) shape path a w | shape path a -> w where
-  toWrapBVIValue :: BVIWrap shape -> StrArg path -> List WrapFieldInfo -> a -> (w, List WrapFieldInfo)
-  fromWrapBVIValue :: BVIWrap shape -> StrArg path -> List WrapFieldInfo -> w -> (a, List WrapFieldInfo)
-  saveWrapBVIValue :: BVIWrap shape -> StrArg path -> a -> Maybe Name__ -> List WrapFieldInfo -> (Module (), List WrapFieldInfo)
-
-instance (BVIField shape a w) => WrapBVIValue shape path a (w, Bit 1) where
-  toWrapBVIValue = toWrapValueBy WrapValueKind
-  fromWrapBVIValue = fromWrapValueBy WrapValueKind
-  saveWrapBVIValue = saveWrapValueBy WrapValueKind
-
-instance (BVIField WrapWireKind a w) => WrapBVIValue WrapWireKind path a (w, Bit 1) where
-  toWrapBVIValue = toWrapValueBy WrapWireKind
-  fromWrapBVIValue = fromWrapValueBy WrapWireKind
-  saveWrapBVIValue = saveWrapValueBy WrapWireKind
-
-instance (WrapBVIRep fields path (Rep a) w) =>
-    WrapBVIValue (WrapInterfaceSchema fields) path a w where
-  toWrapBVIValue _ path infos x =
-    toWrapBVIRep (BVIWrap :: BVIWrap fields) path infos (from x)
-  fromWrapBVIValue _ path infos w =
-    case fromWrapBVIRep (BVIWrap :: BVIWrap fields) path infos w of
-      (r, rest) -> (to r, rest)
-  saveWrapBVIValue _ path _ =
-    saveWrapBVIRep (BVIWrap :: BVIWrap fields) path (_ :: Rep a)
-
-class (WrapBVIRep :: * -> $ -> * -> * -> *) shape path r w | shape path r -> w where
-  toWrapBVIRep :: BVIWrap shape -> StrArg path -> List WrapFieldInfo -> r -> (w, List WrapFieldInfo)
-  fromWrapBVIRep :: BVIWrap shape -> StrArg path -> List WrapFieldInfo -> w -> (r, List WrapFieldInfo)
-  saveWrapBVIRep :: BVIWrap shape -> StrArg path -> r -> Maybe Name__ -> List WrapFieldInfo -> (Module (), List WrapFieldInfo)
-
-instance (WrapBVIRep shape path r w) =>
-    WrapBVIRep shape path (Meta (MetaData name pkg args nc) r) w where
-  toWrapBVIRep style path infos (Meta x) = toWrapBVIRep style path infos x
-  fromWrapBVIRep style path infos x =
-    case fromWrapBVIRep style path infos x of
-      (r, rest) -> (Meta r, rest)
-  saveWrapBVIRep style path _ = saveWrapBVIRep style path (_ :: r)
-
-instance (WrapBVIRep shape path r w) =>
-    WrapBVIRep shape path (Meta (MetaInterface name idx nf) r) (Meta (MetaInterface name idx nf) w) where
-  toWrapBVIRep style path infos (Meta x) =
-    case toWrapBVIRep style path infos x of
-      (w, rest) -> (Meta w, rest)
-  fromWrapBVIRep style path infos (Meta x) =
-    case fromWrapBVIRep style path infos x of
-      (r, rest) -> (Meta r, rest)
-  saveWrapBVIRep style path _ = saveWrapBVIRep style path (_ :: r)
-
-instance (WrapPath path name child, WrapBVIRep shape child r w) =>
-    WrapBVIRep shape path (Meta (MetaField name idx) r) (Meta (MetaField name idx) w) where
-  toWrapBVIRep style _ infos (Meta x) =
-    case toWrapBVIRep style (StrArg :: StrArg child) infos x of
-      (w, rest) -> (Meta w, rest)
-  fromWrapBVIRep style _ infos (Meta x) =
-    case fromWrapBVIRep style (StrArg :: StrArg child) infos x of
-      (r, rest) -> (Meta r, rest)
-  saveWrapBVIRep style _ _ = saveWrapBVIRep style (StrArg :: StrArg child) (_ :: r)
-
-instance (WrapBVIRep sa path a wa, WrapBVIRep sb path b wb) =>
-    WrapBVIRep (sa, sb) path (a, b) (wa, wb) where
-  toWrapBVIRep _ path infos (a, b) =
-    case toWrapBVIRep (BVIWrap :: BVIWrap sa) path infos a of
-      (wa, restA) -> case toWrapBVIRep (BVIWrap :: BVIWrap sb) path restA b of
-        (wb, restB) -> ((wa, wb), restB)
-  fromWrapBVIRep _ path infos (wa, wb) =
-    case fromWrapBVIRep (BVIWrap :: BVIWrap sa) path infos wa of
-      (a, restA) -> case fromWrapBVIRep (BVIWrap :: BVIWrap sb) path restA wb of
-        (b, restB) -> ((a, b), restB)
-  saveWrapBVIRep _ path _ modName infos =
-    case saveWrapBVIRep (BVIWrap :: BVIWrap sa) path (_ :: a) modName infos of
-      (actA, restA) -> case saveWrapBVIRep (BVIWrap :: BVIWrap sb) path (_ :: b) modName restA of
-        (actB, restB) -> (do { actA; actB }, restB)
-
-instance WrapBVIRep () path () () where
-  toWrapBVIRep _ _ infos _ = ((), infos)
-  fromWrapBVIRep _ _ infos _ = ((), infos)
-  saveWrapBVIRep _ _ _ _ infos = (return (), infos)
-
-instance (WrapBVIValue shape path a w) => WrapBVIRep shape path (Conc a) w where
-  toWrapBVIRep style path infos (Conc x) = toWrapBVIValue style path infos x
-  fromWrapBVIRep style path infos x =
-    case fromWrapBVIValue style path infos x of
-      (a, rest) -> (Conc a, rest)
-  saveWrapBVIRep style path _ = saveWrapBVIValue style path (_ :: a)
 
 -- BVI's ABI packs each source argument and result as a single Bits value.
 -- It deliberately does not consult SplitPorts.

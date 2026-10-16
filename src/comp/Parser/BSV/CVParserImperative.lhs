@@ -1897,7 +1897,7 @@ Extract each type of statement, making sure to preserve the order
 >            -- BVIWrap.  Reconstruct the source interface through the same
 >            -- generic traversal as synthesized wrappers, with BVI's whole-Bits
 >            -- leaf policy and the explicitly declared ready conditions.
->            wrapId s = mkQId pos (mkFString "ModuleWrap") (mkFString s)
+>            wrapId s = mkQId pos (mkFString "WrapModule") (mkFString s)
 >            wrappedType = case itype of
 >              CQType qs t -> CQType qs $
 >                cTApplys (cTCon (wrapId "WrappedIfc"))

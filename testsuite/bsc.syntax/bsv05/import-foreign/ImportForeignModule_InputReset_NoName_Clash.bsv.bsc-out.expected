@@ -12,7 +12,7 @@ module mkMod(Ifc);
   let _bv2 <- exposeCurrentReset;
   let _bv1 <- exposeCurrentReset;
   let _bv0 <- exposeCurrentReset;
-  ModuleWrap::WrappedIfc#(ModuleWrap::BVIWrap, Ifc) _m__;
+  WrapModule::WrappedIfc#(WrapModule::BVIWrap, Ifc) _m__;
   _m__ <- liftModule((unexpected) module verilog "MOD";
 		     reset _rst__4(RSTC) clocked_by(no_clock);
 		     reset _rst__6(RSTD) clocked_by(no_clock);
@@ -32,7 +32,7 @@ module mkMod(Ifc);
 			 }
 			 SchedInfo [] [] [] []
 			 No combinational paths from inputs to outputs);
-  Ifc'(ModuleWrap::fromWrapIfc(_m___wrapStyle, _m___wrapInfo, _m__))
+  Ifc'(WrapModule::fromWrapIfc(_m___wrapStyle, _m___wrapInfo, _m__))
 endmodule: mkMod
 
 endpackage: ImportForeignModule_InputReset_NoName_Clash

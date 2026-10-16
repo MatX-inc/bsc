@@ -1,13 +1,13 @@
 
-Test Vector Array List PreludeBSV ModuleWrap Prelude
-Test Vector Array List PreludeBSV ModuleWrap Prelude
+Test Vector Array List PreludeBSV WrapModule Prelude
+Test Vector Array List PreludeBSV WrapModule Prelude
 
 
-Test Vector Array List PreludeBSV ModuleWrap Prelude
-Test Vector Array List PreludeBSV ModuleWrap Prelude
-Test Vector RegFile Array List ConfigReg PreludeBSV ModuleWrap Prelude
-Test Vector RegFile Array List ConfigReg PreludeBSV ModuleWrap Prelude
-Depends: {Test {Prelude ModuleWrap PreludeBSV List Array Vector}} {Vector {Prelude ModuleWrap PreludeBSV List Array}} {RegFile {Prelude ModuleWrap PreludeBSV ConfigReg List}} {Array {Prelude ModuleWrap PreludeBSV List}} {List {Prelude ModuleWrap PreludeBSV}} {ConfigReg {Prelude ModuleWrap PreludeBSV}} {PreludeBSV {Prelude ModuleWrap}} {ModuleWrap Prelude} {Prelude {}}
+Test Vector Array List PreludeBSV WrapModule Prelude
+Test Vector Array List PreludeBSV WrapModule Prelude
+Test Vector RegFile Array List ConfigReg PreludeBSV WrapModule Prelude
+Test Vector RegFile Array List ConfigReg PreludeBSV WrapModule Prelude
+Depends: {Test {Prelude WrapModule PreludeBSV List Array Vector}} {Vector {Prelude WrapModule PreludeBSV List Array}} {RegFile {Prelude WrapModule PreludeBSV ConfigReg List}} {Array {Prelude WrapModule PreludeBSV List}} {List {Prelude WrapModule PreludeBSV}} {ConfigReg {Prelude WrapModule PreludeBSV}} {PreludeBSV {Prelude WrapModule}} {WrapModule Prelude} {Prelude {}}
 
 Search Bar:
 Test Bar

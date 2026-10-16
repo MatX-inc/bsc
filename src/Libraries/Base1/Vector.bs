@@ -25,7 +25,7 @@ package Vector(
 
 import List
 import Array
-import ModuleWrap
+import WrapModule
 
 infixr  8 :>
 
@@ -1429,7 +1429,7 @@ instance Generic (Vector n a) (Meta (MetaData "Vector" "Vector" (NumArg n, StarA
   from v = Meta $ map Conc v
   to (Meta v) = map (\ Conc x -> x) v
 
--- Collection instances live here so ModuleWrap can bootstrap PreludeBSV
+-- Collection instances live here so WrapModule can bootstrap PreludeBSV
 -- without importing Vector.  Only vectors of interfaces/special wires are
 -- containers; ordinary value vectors retain their Bits/SplitPorts ABI.
 instance (WrapClassify a k, WrapSequenceKind k result) => WrapClassify (Vector n a) result where {}

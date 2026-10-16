@@ -26,7 +26,7 @@ import SCC
 import FileNameUtil(binSuffix)
 import FileIOUtil(readBinFilePath)
 import GenBin(readBinFile)
-import GenWrapUtils(moduleWrapImports, idModuleWrap)
+import GenWrapUtils(wrapModuleImports, idWrapModule)
 import FStringCompat(mkFString)
 import Util(fromJustOrErr, fromMaybeM,
             map_insertManyWith, map_insertManyWithKeyM)
@@ -62,7 +62,7 @@ readImports errh flags binmap0 hashmap0
   let
       pkgName = getIdString pkgId
       genNames = map (mkId noPosition . mkFString) (genName flags)
-      imps' = imps ++ moduleWrapImports genNames pkg
+      imps' = imps ++ wrapModuleImports genNames pkg
 
       -- Replace qualified importing only (True) with unqualified and
       -- qualified (False)
@@ -147,16 +147,16 @@ sortImportedSignatures signatures =
         addImplicitPreludeDependency (name, imports)
             | name == strPrelude = (name, imports)
             | name == strPreludeBSV = (name, imports)
-            -- ModuleWrap is built between Prelude and PreludeBSV: its
+            -- WrapModule is built between Prelude and PreludeBSV: its
             -- explicit Prelude import is its only bootstrap dependency.
-            | name == strModuleWrap = (name, strPrelude:imports)
+            | name == strWrapModule = (name, strPrelude:imports)
             | otherwise = (name, strPrelude :
                            strPreludeBSV :
                            filter (\ x -> x /= strPrelude && x /= strPreludeBSV)
                                   imports)
             where strPrelude = getIdString idPrelude
                   strPreludeBSV = getIdString idPreludeBSV
-                  strModuleWrap = getIdString idModuleWrap
+                  strWrapModule = getIdString idWrapModule
         sGraph = [ addImplicitPreludeDependency (getIdString name,
                                                  map getIdString imports)
                    | (CImpSign _ _ (CSignature name imports _ _))

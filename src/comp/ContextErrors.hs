@@ -67,16 +67,16 @@ reportedPwp s pwp =
           _  -> let outer = last nonPre
                     -- Generic interface traversal is an implementation detail.
                     -- Keep the existing field-specific synthesis diagnostic,
-                    -- including its source path, instead of exposing WrapIfc.
+                    -- including its source path, instead of exposing WrapModule.
                     wrapperFields = [ e | e <- nonPre
                                         , IsIn c [TCon (TyStr _ _), _, _] <-
                                             [removePredPositions (apSub s e)]
                                         , typeclassId (name c) == idWrapField ]
-                    isModuleWrap e = case removePredPositions e of
-                      IsIn c _ -> getIdQualString (typeclassId (name c)) == "ModuleWrap"
+                    isWrapModule e = case removePredPositions e of
+                      IsIn c _ -> getIdQualString (typeclassId (name c)) == "WrapModule"
                     root = case wrapperFields of
                              [] -> outer
-                             _ | isModuleWrap outer -> last wrapperFields
+                             _ | isWrapModule outer -> last wrapperFields
                                | otherwise -> outer
                     new_poss = filter (`notElem` getPredPositions root)
                                       (getPredPositions pwp)

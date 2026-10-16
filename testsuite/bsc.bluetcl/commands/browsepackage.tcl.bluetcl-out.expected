@@ -1,4 +1,4 @@
-Test Vector Array List PreludeBSV ModuleWrap Prelude
+Test Vector Array List PreludeBSV WrapModule Prelude
 ----------
 Command: browsepackage list 0
 1 . {}
@@ -10,10 +10,10 @@ Command: browsepackage list 1
 Command: browsepackage list 2
 4 Array {}
 5 List {}
-6 ModuleWrap {}
-7 Prelude {}
-8 PreludeBSV {}
-9 Vector {}
+6 Prelude {}
+7 PreludeBSV {}
+8 Vector {}
+9 WrapModule {}
 ---------
 ----------
 Command: browsepackage list 1
@@ -255,7 +255,7 @@ position {Test.bsv 62 23}
 ---------
 
 ----------
-Test Vector RegFile Array List ConfigReg PreludeBSV ModuleWrap Prelude
+Test Vector RegFile Array List ConfigReg PreludeBSV WrapModule Prelude
 
 Command: browsepackage list 0
 1 . {}

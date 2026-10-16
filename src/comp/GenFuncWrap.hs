@@ -193,8 +193,8 @@ wrapFun errh _ (CDefT i _ _ _) =
 
 -- ===============
 
--- This is called after GenWrap to construct the "foreign" declaration and
--- a wrapper that packs to / unpacks from the primitive form.  WrapField
+-- Construct the "foreign" declaration and a wrapper that packs to /
+-- unpacks from the primitive form before deriving and GenWrap.  WrapField
 -- determines that form during normal type checking, using the same SplitPorts
 -- instances as the generated module's interface wrapper.
 
