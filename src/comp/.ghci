@@ -1,4 +1,7 @@
--- Extensions
+-- Extensions: bsc.cabal's default-extensions, so the interpreted modules
+-- parse as the compiled ones do whatever the GHC's default language (they
+-- are all in GHC2021, which GHC 9.2 and later apply without a flag).
+:set -XBangPatterns -XFlexibleContexts -XFlexibleInstances -XTypeSynonymInstances
 :set -XForeignFunctionInterface
 :set -XUndecidableInstances
 
