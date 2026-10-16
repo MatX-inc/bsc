@@ -133,8 +133,9 @@ linked by name; and the hooks remove from each program, after its link, the
 FILE symbol of GHC's link stub, compiled from a temporary file named by a
 per-session counter (`objcopy`, on Linux); the other local symbols stay. In the
 installed tree, the compiler stores file names relative to the build directory
-(upstream 1135), and the Bluesim and VPI libraries map the checkout out of
-their debug information (`-ffile-prefix-map`).
+(upstream 1135), the Bluesim and VPI libraries map the checkout out of their
+debug information (`-ffile-prefix-map`), and the yices library's version stamp
+carries the source's commit date, not the build day (`make_source_version`).
 
 `util/cabal-ladder.sh`:
 
