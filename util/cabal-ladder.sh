@@ -126,8 +126,8 @@ verdict() {
 run_ladder() {
   OUT="${OUT:-$TOP/determinism-results/$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$OUT"
   command -v cabal >/dev/null || die "cabal not found"
-  ghc --numeric-version | grep -Eq '^(9\.1[4-9]|9\.[2-9][0-9]|[1-9][0-9])\.' \
-    || die "GHC 9.14 or later required for -fobject-determinism, found $(ghc --numeric-version)"
+  ghc --numeric-version | grep -Eq '^(9\.1[2-9]|9\.[2-9][0-9]|[1-9][0-9])\.' \
+    || die "GHC 9.12 or later required for -fobject-determinism, found $(ghc --numeric-version)"
   git diff --quiet || die "working tree is dirty; commit or stash first"
   [ -e cabal.project.local ] && die "cabal.project.local exists; the ladder writes its own"
   [ -f "$LEAF" ] || die "$LEAF not found"

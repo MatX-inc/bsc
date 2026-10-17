@@ -24,7 +24,7 @@ semaphore: True
 write-ghc-environment-files: always
 
 -- Parallel GHC inside the package. -fobject-determinism is not set here:
--- bsc.cabal carries it under impl(ghc >= 9.14), so the condition travels
+-- bsc.cabal carries it under impl(ghc >= 9.12), so the condition travels
 -- with the package.
 program-options
   ghc-options: -j
@@ -33,7 +33,7 @@ program-options
 -- compiled into the store without the package's own ghc-options, so the
 -- determinism flag reaches them from the one stanza that applies to
 -- non-local packages, under the same condition as in bsc.cabal.
-if impl(ghc >= 9.14)
+if impl(ghc >= 9.12)
   package *
     ghc-options: -fobject-determinism
 

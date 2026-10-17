@@ -79,9 +79,9 @@ library
     FlexibleInstances,
     TypeSynonymInstances,
   ghc-options: -Wall -Wno-orphans -Wno-name-shadowing -Wno-unused-matches
-  -- Deterministic object code when the compiler offers it (GHC 9.14+), as a
+  -- Deterministic object code when the compiler offers it (GHC 9.12+), as a
   -- condition rather than a floor on the compiler version.
-  if impl(ghc >= 9.14)
+  if impl(ghc >= 9.12)
     ghc-options: -fobject-determinism
   -- The solvers, linked by name against whichever copies the linker finds
   -- (SetupHooks.hs, solverSetupHooks; `make install-src` names its installed
@@ -357,9 +357,9 @@ common common_exes
   -- records each name as a FILE symbol, so the counter would be in the bytes
   -- (doc/cabal.md, section 5). Nothing reads a program's local symbols.
   ld-options: -Wl,-x
-  -- Deterministic object code when the compiler offers it (GHC 9.14+), as a
+  -- Deterministic object code when the compiler offers it (GHC 9.12+), as a
   -- condition rather than a floor on the compiler version.
-  if impl(ghc >= 9.14)
+  if impl(ghc >= 9.12)
     ghc-options: -fobject-determinism
 
 executable bsc
