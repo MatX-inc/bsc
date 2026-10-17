@@ -36,7 +36,7 @@ import SCC(scc)
 import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
-import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName,
+import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, storedPath,
                     mkAName, mkVName, mkVPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
@@ -57,6 +57,7 @@ import IOUtil(getEnvDef)
 import Exceptions(bsCatch)
 import Flags(
         Flags(..),
+        storedFlagsPaths,
         DumpFlag(..),
         hasDump,
         verbose, extraVerbose, quiet)
@@ -1007,7 +1008,9 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
            <- simCheckPackage errh (backend flags == Just Bluesim) amod
 
        -- generate the abin file
-       let afilename = mkAName (bdir flags) prefix modstr
+       pwd <- getCurrentDirectory
+       let storedFlags = storedFlagsPaths (storedPath pwd (bluespecDir flags)) flags
+           afilename = mkAName (bdir flags) prefix modstr
            afilename_rel = getRelativeFilePath afilename
            backend = apkg_backend amod_for_abin
            abinPrintPrefix =
@@ -1025,7 +1028,7 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                           abmi_oqt         = oqt,
                           abmi_method_dump = methodConflict,
                           abmi_pathinfo = vPathInfo,
-                          abmi_flags       = flags,
+                          abmi_flags       = storedFlags,
                           abmi_vprogram    = if (genABinVerilog flags)
                                              then vprog else Nothing
                      }
@@ -1044,7 +1047,9 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
        start flags DFwriteABin
 
        -- generate the abin file
-       let afilename = mkAName (bdir flags) prefix modstr
+       pwd <- getCurrentDirectory
+       let storedFlags = storedFlagsPaths (storedPath pwd (bluespecDir flags)) flags
+           afilename = mkAName (bdir flags) prefix modstr
            afilename_rel = getRelativeFilePath afilename
            abinPrintPrefix = "Elaborated error module file created: "
            modinfo = ABinModSchedErrInfo {
@@ -1054,7 +1059,7 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
                           abmsei_aschederrinfo = sched_info,
                           abmsei_pps           = pps,
                           abmsei_oqt           = oqt,
-                          abmsei_flags         = flags
+                          abmsei_flags         = storedFlags
                      }
            abin = ABinModSchedErr modinfo (bscVersionStr True)
        genABinFile errh afilename abin
