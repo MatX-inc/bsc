@@ -122,9 +122,9 @@ Warmup ()`. (bluetcl differs: no `-main-is`, a helper module and a C shim.)
 ## 5. The determinism ladder
 
 The claim: one commit built from clean serially, oversubscribed or in another
-checkout directory, or rebuilt after an edit and its revert, gives
-bit-identical objects, archives, shared objects and programs, and interfaces
-identical as `ghc --show-iface` text.
+checkout directory, or rebuilt in place with nothing changed and, from GHC
+9.12, after an edit and its revert, gives bit-identical objects, archives,
+shared objects and programs, interfaces identical as `ghc --show-iface` text.
 
 What holds it: every program links against the library's archive, compiled
 once; `Warmup` fixes the interface-load order; `-fobject-determinism`, from GHC
@@ -138,9 +138,11 @@ linked by name.
   hash and flags fingerprint, since their bytes carry the checkout directory.
 - `verdict REF OTHER...` compares each list with the reference; an absent list
   is MISSING.
-- `run` is the ladder on one machine (two clean builds, `-j1`, `-j64`, then a
-  marker edit to `src/comp/Libs/IOUtil.hs`, a rebuild, its revert and a
-  rebuild), into `determinism-results/`.
+- `rebuild NAME [DIR...]` runs the in-place round: a rebuild with nothing
+  changed and, from 9.12, after a marker edit to `src/comp/Libs/IOUtil.hs` and
+  its revert, each hashed.
+- `run` is the ladder on one machine (two clean builds, the round, `-j1`,
+  `-j64`), into `determinism-results/`.
 
 `.github/workflows/cabal.yml` runs on the project's own pull requests that
 touch the build and on a dispatch, which picks the GHC (default 9.14.1). Six
@@ -148,8 +150,9 @@ legs on ubuntu-24.04 and macos-15, each a checkout directory and a jobs count
 (`jobs: N` and, from 9.12, `ghc-options: -jN` in a `cabal.project.local`):
 `c-j1`, the reference, `a-j1`, `c-j16`, `c-j64`, `a-j64` and `d-j64`. Each
 builds, installs (`make install-src`, `make -C src/comp install-extra`, `make
-install-bluehs`) and hashes the build with `inst/bluehs`. A verdict job per OS
-compares every planned leg against `c-j1`; a failed one is MISSING. A
-difference is a design question before it is a fix: the first suspects are a
-root module without the Warmup import, interface content the direct-dependency
-rule does not cover, and a program's entry module.
+install-bluehs`) and hashes the build with `inst/bluehs`; the serial legs then
+rebuild in place. A verdict job per OS compares every planned leg and rebuild
+against `c-j1`; a failed one is MISSING. A difference is a design question
+before it is a fix: the first suspects are a root module without the Warmup
+import, interface content the direct-dependency rule does not cover, and a
+program's entry module.
