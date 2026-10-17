@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # The determinism ladder of the cabal build (doc/cabal.md): one commit built
-# serially, oversubscribed, incrementally or in another directory must give
+# serially, oversubscribed, in another directory or, from GHC 9.12,
+# incrementally must give
 # bit-identical objects, interfaces, archives, shared objects and programs, and the same
 # bytes in any installed distribution named to `hash` (CI names the bluehs
 # runtime, util/bluehs).  CI (.github/workflows/cabal.yml) runs `hash` on
-# every leg and `verdict` over the lists; `run` is the whole ladder on one
-# machine.
+# every leg, `rebuild` on the serial legs and `verdict` over the lists; `run`
+# is the whole ladder on one machine.
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOP="$(cd "$(dirname "$SELF")/.." && pwd)"; cd "$TOP" || exit 2
@@ -16,12 +17,28 @@ usage: util/cabal-ladder.sh hash OUT.sha256 [DIR...]
                                                   hash the build in dist-newstyle, and every file of
                                                   each installed DIR, into OUT.sha256
        util/cabal-ladder.sh verdict REF OTHER...  compare hash lists against REF (an absent one is MISSING)
+       util/cabal-ladder.sh rebuild NAME [DIR...]  rebuild in place with nothing changed and, from GHC
+                                                  9.12, after a marker edit and its revert, each hashed
+                                                  like \`hash\` into \$OUT/NAME-{rebuild,edit,revert}.sha256
+                                                  (\$OUT default .); \$BUILD_CMD is the build
+                                                  (default \`cabal build all\`)
        util/cabal-ladder.sh run                   the ladder on this machine; lists and logs in \$OUT
                                                   (default determinism-results/<stamp>)
 USAGE
   exit 2
 }
 die() { echo "cabal-ladder: $*" >&2; exit 2; }
+# From GHC 9.12 -fobject-determinism makes a module's object independent of
+# the session's uniques (at 9.14.1, a module recompiled alone under a
+# perturbed unique supply is identical with the flag and differs without
+# it), and cabal.project turns it on there, so the in-place round holds the
+# rebuild after the marker edit's revert to the reference.  Below 9.12 the
+# flag does not exist and the object carries the uniques (at 9.4.7, in a
+# local label's name and its relocation; in a small test, in the order of a
+# static reference table's entries), so a module recompiled alone is not
+# byte-identical to the one compiled in the full build, while clean builds
+# agree among themselves.
+ghc_deterministic() { ghc --numeric-version | grep -Eq '^(9\.1[2-9]|9\.[2-9][0-9]|[1-9][0-9])\.'; }
 # macOS has no sha256sum; shasum prints the same "hash  path" lines.
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 # An interface is hashed as the text of `ghc --show-iface` minus its interface
@@ -119,15 +136,48 @@ verdict() {
   exit $fail
 }
 
-# Clean builds with the project's settings (A, B), serial (C) and
-# oversubscribed (D), then an incremental round (marker edit of one module
-# module, rebuild, revert, rebuild) that must land back on A's bytes.
+# The in-place round: a rebuild with nothing changed and, from GHC 9.12
+# (ghc_deterministic), a rebuild after a marker edit, a comment, to one
+# module, which recompiles that module alone, and a rebuild after the
+# revert, each hashed like `hash` (with the DIRs given) into
+# $OUT/NAME-rebuild, NAME-edit and NAME-revert.  $REBUILD_STEPS names the
+# steps instead when set (CI passes its plan's, so the lists made are the
+# lists its verdict expects).  $BUILD_CMD is the build, `cabal build all`
+# unless the caller installs too (CI runs the make targets, so what the leg
+# installs is rebuilt and hashed with the build).  The caller's EXIT trap
+# restores $LEAF.
+rebuild_round() {  # NAME [DIR...]
+  local name="$1" steps="${REBUILD_STEPS:-}" step t0 rc; shift
+  mkdir -p "$OUT"
+  [ -f "$LEAF" ] || die "$LEAF not found"
+  git diff --quiet -- "$LEAF" || die "$LEAF is modified; the round edits and reverts it"
+  if [ -z "$steps" ]; then
+    if ghc_deterministic; then steps="rebuild edit revert"
+    else steps=rebuild; echo "GHC $(ghc --numeric-version): below 9.12 the round is the rebuild with nothing changed alone"; fi
+  fi
+  for step in $steps; do
+    case $step in
+      edit) echo "-- determinism-check marker" >> "$LEAF";;
+      revert) git checkout -- "$LEAF";;
+    esac
+    t0=$(date +%s); rc=0
+    bash -c "${BUILD_CMD:-cabal build all}" > "$OUT/$name-$step.log" 2>&1 || rc=$?
+    echo "$name-$step: exit $rc, $(( $(date +%s) - t0 )) s"
+    [ $rc -eq 0 ] || { tail -30 "$OUT/$name-$step.log"; die "$name-$step build failed"; }
+    "$SELF" hash "$OUT/$name-$step.sha256" "$@" || die "$name-$step: hashing the build failed"
+  done
+}
+
+# Clean builds with the project's settings (A, B), the in-place round on B
+# (a rebuild of nothing and, from GHC 9.12, a marker edit of one module and
+# a rebuild, the revert and a rebuild) whose first and last lists must match
+# A, then serial (C) and oversubscribed (D).
 run_ladder() {
   OUT="${OUT:-$TOP/determinism-results/$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$OUT"
   command -v cabal >/dev/null || die "cabal not found"
   command -v ghc >/dev/null || die "ghc not found"
-  ghc --numeric-version | grep -Eq '^(9\.1[2-9]|9\.[2-9][0-9]|[1-9][0-9])\.' \
-    || echo "GHC $(ghc --numeric-version): below 9.12 the project compiles each package serially (cabal.project), so the legs vary cabal's package jobs and the incremental round, not GHC's parallelism"
+  ghc_deterministic \
+    || echo "GHC $(ghc --numeric-version): below 9.12 the project compiles each package serially (cabal.project), so the legs vary cabal's package jobs, not GHC's parallelism, and the in-place round is the rebuild with nothing changed alone"
   git diff --quiet || die "working tree is dirty; commit or stash first"
   [ -e cabal.project.local ] && die "cabal.project.local exists; the ladder writes its own"
   [ -f "$LEAF" ] || die "$LEAF not found"
@@ -153,13 +203,9 @@ run_ladder() {
   local fail=0
   leg_config "";  clean; build A;  snapshot A
   leg_config "";  clean; build B;  snapshot B;  compare A B
+  rebuild_round B; compare A B-rebuild; if ghc_deterministic; then compare A B-revert; fi
   leg_config 1;   clean; build C;  snapshot C;  compare A C
   leg_config 64;  clean; build D;  snapshot D;  compare A D
-  leg_config ""
-  echo "-- determinism-check marker" >> "$LEAF"
-  build EDIT; snapshot EDIT
-  git checkout -- "$LEAF"
-  build REVERT; snapshot REVERT; compare A REVERT
   echo; echo "result: $([ $fail -eq 0 ] && echo PASS || echo FAIL)  (hash lists and logs in $OUT)"
   exit $fail
 }
@@ -168,5 +214,6 @@ case "${1-}" in
   hash) [ $# -ge 2 ] || usage; set -eo pipefail; shift; hash_build "$@";;
   verdict) [ $# -ge 3 ] || usage; shift; verdict "$@";;
   run) [ $# -eq 1 ] || usage; run_ladder;;
+  rebuild) [ $# -ge 2 ] || usage; shift; OUT="${OUT:-.}"; trap 'git checkout -- "$LEAF"' EXIT; rebuild_round "$@";;
   *) usage;;
 esac
