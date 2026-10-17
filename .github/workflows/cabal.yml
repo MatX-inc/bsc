@@ -7,8 +7,9 @@ name: Cabal build
 # bluehs script runtime (util/bluehs) installed from it.
 # The ladder is six legs: the serial build against a second serial build,
 # -j16, and three -j64 builds, each in a fresh checkout directory of its own;
-# the reference then rebuilds after a marker edit and its revert, and that
-# rebuild is held to the reference as well.  The legs run on one machine per platform
+# the two serial legs then rebuild in place, with nothing changed and, from
+# GHC 9.12, after a marker edit and its revert, and those rebuilds are held to
+# the reference as well.  The legs run on one machine per platform
 # (util/cabal-ladder.sh run, which hashes every leg and gives the verdict), so
 # a difference is the build's and not two runner images'.  From GHC 9.12 the
 # legs vary GHC's own parallelism as well as cabal's: that is where
@@ -37,7 +38,7 @@ on:
   workflow_dispatch:
     inputs:
       ghc_version:
-        description: GHC version, as a number (from 9.12 the legs vary GHC's own parallelism)
+        description: GHC version, as a number (from 9.12 the legs vary GHC's own parallelism and hold the serial legs' revert rebuild)
         required: false
         default: '9.14.1'
         type: string
