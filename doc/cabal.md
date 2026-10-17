@@ -214,20 +214,34 @@ section 1, and the entry module carries `import Warmup ()`.
 The claim: one commit, built from a clean `dist-newstyle` at the project's
 settings, serially, oversubscribed and in other checkout directories, gives
 bit-identical objects, interfaces, archives, programs and shared objects, and,
-from GHC 9.12, a rebuild after an edit and its revert lands on the same bytes.
-The programs link against the library archive in one order, the Warmup imports
-give every module the external interface set in one order (section 3),
-`-fobject-determinism` holds the object code (GHC 9.12, section 2), and no
-directory of the checkout is written into any of them, since the solvers are
-linked by name (section 3). `util/cabal-ladder.sh`:
+from GHC 9.12, a rebuild after an edit and its revert lands on the same bytes;
+and the installed tree, `make install-src` and `make install-bluehs` over that
+build, is the same bytes too. The programs link against the library archive in
+one order, the Warmup imports give every module the external interface set in
+one order (section 3), `-fobject-determinism` holds the object code (GHC 9.12,
+section 2), and no directory of the checkout is written into any of them, since
+the solvers are linked by name (section 3). In the installed tree the compiler
+stores file names relative to the build directory (upstream 1135), and the
+Bluesim and VPI libraries map the checkout out of their debug information
+(`-ffile-prefix-map` in their Makefiles). The programs carry no local symbols
+(`-Wl,-x` in `bsc.cabal`): GHC compiles its link stubs from temporary files
+named by a per-process counter, and the C compiler records each name as a FILE
+symbol, which once differed between two builds of one commit; nothing reads a
+program's local symbols. The yices library's version stamp carries the source's
+commit date, not the day of the build
+(`src/vendor/yices/v2.6/make_source_version`, handed to yices' make as
+`MKVERSION` in place of its own): yices regenerates the stamp on every make,
+and `make install-src` runs one, so two builds of one commit on different days
+differed in that string alone. `util/cabal-ladder.sh`:
 
 - `hash OUT [DIR...]` hashes one build: every object, archive, shared
   object and program (the programs from `cabal list-bin bsc:exe:<name>` for
   each `executable` stanza) as
   bytes, with paths relative to the repository so directories compare, then
   every file of each installed directory named after the list (CI names
-  `inst/bluehs`, the script runtime of `util/bluehs`), as bytes except the
-  interfaces under its `store`, which are hashed as below. An interface
+  `inst`, the installed tree, with the script runtime of `util/bluehs` under
+  it), as bytes except the interfaces under a `store`, which are hashed as
+  below. An interface
   file is hashed as the text of `ghc --show-iface` minus its interface hash
   and flags fingerprint, with the package environment off: GHC fingerprints
   the flags it was given, and cabal passes the autogen include directory by
@@ -237,9 +251,10 @@ linked by name (section 3). `util/cabal-ladder.sh`:
   the run, and a partial list is removed, so nothing compares IDENTICAL by
   producing nothing.
 - `verdict REF OTHER...` compares each list against the first, reporting
-  differences by category (program, shared object, object, interface, archive,
-  and distribution for an installed directory's files); a missing list is
-  MISSING, and the verdict fails rather than passing on nothing.
+  differences by category (program, shared object, object, interface,
+  archive; installed for an installed directory's files, and distribution
+  for a bluehs runtime's under it); a missing list is MISSING, and the
+  verdict fails rather than passing on nothing.
 - `rebuild NAME [DIR...]` is that round alone, for CI: the rebuilds, each
   hashed as `hash` does into `NAME-rebuild`, `NAME-edit` and `NAME-revert`,
   with `BUILD_CMD` as the build (`cabal build all` unless given; CI gives the
@@ -273,19 +288,20 @@ another directory, `-j16`, and `-j64` three times in three directories, which
 checks that the build depends neither on its parallelism nor on its path. Each
 leg then installs the tree (`make install-src`) and the bluehs runtime over it
 (`make install-bluehs`, whose second build of the libraries takes the leg's
-`cabal.project.local`), and hashes `inst/bluehs` with the build, so the
-distribution is held to the same claim: the same bytes whatever the parallelism
-and the directory. The two serial legs then rebuild in place, with nothing
-changed and, from GHC 9.12, after a marker edit and its revert, and those
-rebuilds are held to the reference as well, in the reference directory and in
-another. It runs on the project's own pull requests and on a dispatch; a fork's
-pull requests do not run it, since a fork's branches are a developer's loop,
-and a fork dispatches it when it qualifies a release. Every planned leg and
-rebuild is named to the verdict, so a failed leg is MISSING, not skipped.
-`BuildVersion` embeds the commit, so a ladder compares one commit. A failure is
-a design stop, not a mechanical fix: the first suspects are a root without the
-Warmup import, interface content the direct-dependency rule does not cover, and
-the programs' entry modules.
+`cabal.project.local`), and hashes the whole of `inst` with the build: the
+programs, the solvers, the Bluespec libraries, the Bluesim and VPI libraries,
+the Verilog and Tcl libraries and the runtime are all held to the same claim,
+the same bytes whatever the parallelism and the directory. The two serial legs
+then rebuild in place, with nothing changed and, from GHC 9.12, after a marker
+edit and its revert, and those rebuilds are held to the reference as well, in
+the reference directory and in another. It runs on the project's own pull
+requests and on a dispatch; a fork's pull requests do not run it, since a
+fork's branches are a developer's loop, and a fork dispatches it when it
+qualifies a release. Every planned leg and rebuild is named to the verdict, so
+a failed leg is MISSING, not skipped. `BuildVersion` embeds the commit, so a
+ladder compares one commit. A failure is a design stop, not a mechanical fix:
+the first suspects are a root without the Warmup import, interface content the
+direct-dependency rule does not cover, and the programs' entry modules.
 
 ## 6. Decomposing into packages later
 

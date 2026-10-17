@@ -343,6 +343,11 @@ common common_exes
     bsc,
   default-language: GHC2021
   ghc-options: -rtsopts "-with-rtsopts=-H256m -K10m -i1"
+  -- No local symbols in the programs: GHC compiles its link stubs from
+  -- temporary files named by a per-process counter, and the C compiler
+  -- records each name as a FILE symbol, so the counter would be in the bytes
+  -- (doc/cabal.md, section 5). Nothing reads a program's local symbols.
+  ld-options: -Wl,-x
   -- Deterministic object code wherever the compiler has the flag (GHC 9.12.1
   -- introduced it); cabal.project compiles in parallel under the same condition.
   if impl(ghc >= 9.12)
