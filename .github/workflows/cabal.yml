@@ -8,7 +8,9 @@ name: Cabal build
 # build and the distribution, util/cabal-ladder.sh verdict compares the
 # lists).  The ladder is six legs: the serial build against a second serial
 # build, -j16, and three -j64 builds, the second serial and two of the -j64
-# in other directories.
+# in other directories; the two serial legs then rebuild in place, with
+# nothing changed and, from GHC 9.12, after a marker edit and its revert,
+# and those rebuilds are held to the reference as well.
 # It runs on the project's own pull requests and on a dispatch; a fork's
 # pull requests do not run it, since a fork's branches are a developer's
 # loop, and a fork dispatches it when it qualifies a release.  From GHC 9.12
@@ -31,7 +33,7 @@ on:
   workflow_dispatch:
     inputs:
       ghc_version:
-        description: GHC version (from 9.12 the legs vary GHC's own parallelism)
+        description: GHC version, as a number (from 9.12 the legs vary GHC's own parallelism and hold the serial legs' revert rebuild)
         required: false
         default: '9.14.1'
         type: string
@@ -58,17 +60,19 @@ jobs:
     timeout-minutes: 5
     outputs:
       legs: ${{ steps.plan.outputs.legs }}
+      rebuilds: ${{ steps.plan.outputs.rebuilds }}
       os: ${{ steps.plan.outputs.os }}
     steps:
       - id: plan
         env:
           PLATFORMS: ${{ inputs.platforms || 'both' }}
+          GHC: ${{ inputs.ghc_version || '9.14.1' }}
         run: |
           # A leg is a checkout directory and a parallelism: cabal jobs N, and
           # ghc -jN where the project compiles in parallel (GHC 9.12 on).
           # Directories a, c and d check that the build does not depend on
           # its path; c-j1 is the reference the verdict compares the others
-          # against.
+          # against, the serial legs' in-place rebuilds among them.
           c_j1='{"name":"c-j1","dir":"c","jobs":"1"}'
           a_j1='{"name":"a-j1","dir":"a","jobs":"1"}'
           c_j16='{"name":"c-j16","dir":"c","jobs":"16"}'
@@ -76,14 +80,23 @@ jobs:
           a_j64='{"name":"a-j64","dir":"a","jobs":"64"}'
           d_j64='{"name":"d-j64","dir":"d","jobs":"64"}'
           legs="[$c_j1,$a_j1,$c_j16,$c_j64,$a_j64,$d_j64]"
+          # The serial legs' in-place rebuilds the verdict expects: the rebuild
+          # with nothing changed at every GHC, and the rebuild after the marker
+          # edit's revert from 9.12 (doc/cabal.md section 5); the rebuild step
+          # runs exactly these, so the lists made are the lists expected.
+          case "$GHC" in
+            9.1[2-9]*|9.[2-9][0-9]*|[1-9][0-9].*) rebuilds='["rebuild","revert"]' ;;
+            *) rebuilds='["rebuild"]' ;;
+          esac
           case "$PLATFORMS" in
             ubuntu) os='["ubuntu-24.04"]' ;;
             macos) os='["macos-15"]' ;;
             *) os='["ubuntu-24.04","macos-15"]' ;;
           esac
           echo "legs=$legs" >> "$GITHUB_OUTPUT"
+          echo "rebuilds=$rebuilds" >> "$GITHUB_OUTPUT"
           echo "os=$os" >> "$GITHUB_OUTPUT"
-          echo "ladder on $os: $legs"
+          echo "ladder on $os with GHC $GHC: $legs; the serial legs' rebuilds $rebuilds"
 
   build:
     name: "Build ${{ matrix.os }} ${{ matrix.leg.name }}"
@@ -159,10 +172,29 @@ jobs:
         env:
           LEG: ${{ matrix.leg.name }}
         run: util/cabal-ladder.sh hash "$LEG.sha256" inst/bluehs
+      # The serial legs rebuild in place: with nothing changed and, from GHC
+      # 9.12, after a marker edit to one module and after its revert (below
+      # 9.12 a module recompiled alone carries the session's uniques in its
+      # object), through the same make targets, so what the leg installs is
+      # rebuilt too; each rebuild is hashed like the build
+      # (util/cabal-ladder.sh rebuild, with the plan's steps).
+      - name: Rebuild in place (serial legs)
+        if: matrix.leg.jobs == '1'
+        env:
+          LEG: ${{ matrix.leg.name }}
+          JOBS: ${{ matrix.leg.jobs }}
+          BUILD_CMD: 'make -j"$(getconf _NPROCESSORS_ONLN)" GHCJOBS="$JOBS" install-src && make install-bluehs'
+          REBUILD_STEPS: ${{ contains(fromJSON(needs.plan.outputs.rebuilds), 'revert') && 'rebuild edit revert' || 'rebuild' }}
+        run: util/cabal-ladder.sh rebuild "$LEG" inst/bluehs
+      # After a failed rebuild too, so the leg's own list reaches the verdict
+      # and the rebuild alone is MISSING.
       - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() }}
         with:
           name: hashes-${{ matrix.os }}-${{ matrix.leg.name }}
-          path: ${{ matrix.leg.dir }}/${{ matrix.leg.name }}.sha256
+          path: |
+            ${{ matrix.leg.dir }}/${{ matrix.leg.name }}.sha256
+            ${{ matrix.leg.dir }}/${{ matrix.leg.name }}-re*.sha256
           if-no-files-found: error
 
   verdict:
@@ -187,9 +219,12 @@ jobs:
       - name: Compare the legs against c-j1
         env:
           LEGS: ${{ needs.plan.outputs.legs }}
+          REBUILDS: ${{ needs.plan.outputs.rebuilds }}
         run: |
           ls -l hashes
-          # Every planned leg is named, so a leg whose build or hash step
-          # failed is reported MISSING instead of being skipped.
-          others=$(jq -r '.[].name | select(. != "c-j1") | "hashes/\(.).sha256"' <<< "$LEGS")
-          util/cabal-ladder.sh verdict hashes/c-j1.sha256 $others
+          # Every planned leg, and every planned rebuild of the serial legs, is
+          # named, so one whose build or hash step failed is reported MISSING
+          # instead of being skipped.
+          others=$(jq -r '.[] | select(.name != "c-j1") | "hashes/\(.name).sha256"' <<< "$LEGS")
+          rebuilds=$(jq -r --argjson rs "$REBUILDS" '.[] | select(.jobs == "1") | .name as $n | $rs[] | "hashes/\($n)-\(.).sha256"' <<< "$LEGS")
+          util/cabal-ladder.sh verdict hashes/c-j1.sha256 $others $rebuilds
