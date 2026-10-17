@@ -5,8 +5,9 @@
 # objects and programs, and the same bytes in any installed directory named to
 # `hash` (`run` names the bluehs runtime it installs, inst/bluehs).  `run` is
 # the whole ladder on one machine, every leg a fresh checkout in a directory of
-# its own: it runs `hash` on every leg and `verdict` over the lists; CI
-# (.github/workflows/cabal.yml) runs it, one job per platform.
+# its own: it runs `hash` on every leg, `rebuild` on the serial legs and
+# `verdict` over the lists; CI (.github/workflows/cabal.yml) runs it, one job
+# per platform.
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOP="$(cd "$(dirname "$SELF")/.." && pwd)"; cd "$TOP" || exit 2
@@ -17,6 +18,11 @@ usage: util/cabal-ladder.sh hash OUT.sha256 [DIR...]
                                                   hash the build in dist-newstyle, and every file of
                                                   each installed DIR, into OUT.sha256
        util/cabal-ladder.sh verdict REF OTHER...  compare hash lists against REF (an absent one is MISSING)
+       util/cabal-ladder.sh rebuild NAME [DIR...]  rebuild in place with nothing changed and, from GHC
+                                                  9.12, after a marker edit and its revert, each hashed
+                                                  like \`hash\` into \$OUT/NAME-{rebuild,edit,revert}.sha256
+                                                  (\$OUT default .); \$BUILD_CMD is the build
+                                                  (default \`cabal build all\`)
        util/cabal-ladder.sh run                   the ladder on this machine: the legs \$LEGS (default the
                                                   six of doc/cabal.md), each a fresh checkout of HEAD under
                                                   \$OUT/legs, up to \$LADDER_JOBS at once (default one per
@@ -27,6 +33,17 @@ USAGE
   exit 2
 }
 die() { echo "cabal-ladder: $*" >&2; exit 2; }
+# From GHC 9.12 -fobject-determinism makes a module's object independent of
+# the session's uniques (at 9.14.1, a module recompiled alone under a
+# perturbed unique supply is identical with the flag and differs without
+# it), and cabal.project turns it on there, so the in-place round holds the
+# rebuild after the marker edit's revert to the reference.  Below 9.12 the
+# flag does not exist and the object carries the uniques (at 9.4.7, in a
+# local label's name and its relocation; in a small test, in the order of a
+# static reference table's entries), so a module recompiled alone is not
+# byte-identical to the one compiled in the full build, while clean builds
+# agree among themselves.
+ghc_deterministic() { ghc --numeric-version | grep -Eq '^(9\.1[2-9]|9\.[2-9][0-9]|[1-9][0-9])\.'; }
 # macOS has no sha256sum; shasum prints the same "hash  path" lines.
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 # An interface is hashed as the text of `ghc --show-iface` minus its interface
@@ -124,13 +141,43 @@ verdict() {
   exit $fail
 }
 
+# The in-place round: a rebuild with nothing changed and, from GHC 9.12
+# (ghc_deterministic), a rebuild after a marker edit, a comment, to one
+# module, which recompiles that module alone, and a rebuild after the
+# revert, each hashed like `hash` (with the DIRs given) into
+# $OUT/NAME-rebuild, NAME-edit and NAME-revert.  $REBUILD_STEPS names the
+# steps instead when set.  $BUILD_CMD is the build, `cabal build all`
+# unless the caller installs too (`run` passes the make targets, so what the
+# leg installs is rebuilt and hashed with the build).  The caller's EXIT trap
+# restores $LEAF.
+rebuild_round() {  # NAME [DIR...]
+  local name="$1" steps="${REBUILD_STEPS:-}" step t0 rc; shift
+  mkdir -p "$OUT"
+  [ -f "$LEAF" ] || die "$LEAF not found"
+  git diff --quiet -- "$LEAF" || die "$LEAF is modified; the round edits and reverts it"
+  if [ -z "$steps" ]; then
+    if ghc_deterministic; then steps="rebuild edit revert"
+    else steps=rebuild; echo "GHC $(ghc --numeric-version): below 9.12 the round is the rebuild with nothing changed alone"; fi
+  fi
+  for step in $steps; do
+    case $step in
+      edit) echo "-- determinism-check marker" >> "$LEAF";;
+      revert) git checkout -- "$LEAF";;
+    esac
+    t0=$(date +%s); rc=0
+    bash -c "${BUILD_CMD:-cabal build all}" > "$OUT/$name-$step.log" 2>&1 || rc=$?
+    echo "$name-$step: exit $rc, $(( $(date +%s) - t0 )) s"
+    [ $rc -eq 0 ] || { tail -30 "$OUT/$name-$step.log"; die "$name-$step build failed"; }
+    "$SELF" hash "$OUT/$name-$step.sha256" "$@" || die "$name-$step: hashing the build failed"
+  done
+}
+
 # The ladder on this machine.  A leg is a name DIR-jN: a fresh checkout of HEAD
 # under $OUT/legs, in a directory of its own, built and installed at cabal
 # jobs N (and ghc -jN where the project compiles in parallel, GHC 9.12 on)
 # through the make targets, so what it installs is built and hashed with the
-# build tree, then hashed with inst/bluehs; the reference then
-# rebuilds after a marker edit to $LEAF and after its revert, each hashed,
-# and the reverted rebuild is held to the reference.  The reference leg, the first of $LEGS,
+# build tree, then hashed with inst/bluehs; a serial leg (N = 1) then runs the
+# in-place round (rebuild_round).  The reference leg, the first of $LEGS,
 # builds alone first: the dependency store it fills is shared by the others,
 # which then run up to $LADDER_JOBS at once, one per 6 GB of memory unless
 # set.  A leg's tree goes once its lists are written (KEEP_LEGS=1 keeps it);
@@ -147,7 +194,7 @@ run_ladder() {
   local t legs ref jobs ncpu name pid refpid
   for t in cabal ghc git make; do command -v "$t" >/dev/null || die "$t not found"; done
   ghc_deterministic \
-    || echo "GHC $(ghc --numeric-version): below 9.12 the project compiles each package serially (cabal.project), so the legs vary cabal's package jobs, not GHC's parallelism"
+    || echo "GHC $(ghc --numeric-version): below 9.12 the project compiles each package serially (cabal.project), so the legs vary cabal's package jobs, not GHC's parallelism, and the in-place round is the rebuild with nothing changed alone"
   git diff --quiet || die "working tree is dirty; the legs check out HEAD"
   [ -e cabal.project.local ] && die "cabal.project.local exists; it would not reach the legs, which write their own"
   [ -f "$LEAF" ] || die "$LEAF not found"
@@ -156,7 +203,7 @@ run_ladder() {
   ncpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
   mkdir -p "$OUT/legs"
   echo "ladder: legs $legs, reference $ref, up to $jobs at once; results in $OUT"
-  # NAME: the leg's checkout, build and install, hash, and the reference's
+  # NAME: the leg's checkout, build and install, hash, and the serial leg's
   # round; $OUT/NAME.built marks the store filled, $OUT/NAME.rc its exit.
   leg_run() {
     local name="$1" dir n rc=0 t0 build
@@ -173,11 +220,8 @@ run_ladder() {
       (cd "$dir" && ./util/cabal-ladder.sh hash "$OUT/$name.sha256" inst/bluehs) >> "$OUT/$name.log" 2>&1 || rc=$?
     fi
     [ $rc -eq 0 ] && touch "$OUT/$name.built"
-    if [ $rc -eq 0 ] && [ "$name" = "$ref" ]; then
-      # The incremental round: a marker edit to one module, a rebuild, the
-      # revert and a rebuild, each hashed; the reverted one must match.
-      (cd "$dir" && echo "-- determinism-check marker" >> "$LEAF" && bash -c "$build" && ./util/cabal-ladder.sh hash "$OUT/$name-edit.sha256" inst/bluehs \
-         && git checkout -- "$LEAF" && bash -c "$build" && ./util/cabal-ladder.sh hash "$OUT/$name-revert.sha256" inst/bluehs) >> "$OUT/$name.log" 2>&1 || rc=$?
+    if [ $rc -eq 0 ] && [ "$n" = 1 ]; then
+      (cd "$dir" && OUT="$OUT" BUILD_CMD="$build" ./util/cabal-ladder.sh rebuild "$name" inst/bluehs) >> "$OUT/$name.log" 2>&1 || rc=$?
       echo "$name: round exit $rc"
     fi
     [ $rc -eq 0 ] || tail -15 "$OUT/$name.log" | sed "s/^/   $name: /"
@@ -201,7 +245,11 @@ run_ladder() {
   # Every leg and every round the plan expects, so a failed one is MISSING.
   local others="" rounds=""
   for name in ${legs#"$ref"}; do others="$others $OUT/$name.sha256"; done
-  rounds="$OUT/$ref-revert.sha256"
+  for name in $legs; do
+    [ "${name##*-j}" = 1 ] || continue
+    rounds="$rounds $OUT/$name-rebuild.sha256"
+    ghc_deterministic && rounds="$rounds $OUT/$name-revert.sha256"
+  done
   echo; echo "verdict against $ref (lists and logs in $OUT):"
   "$SELF" verdict "$OUT/$ref.sha256" $others $rounds
 }
@@ -210,5 +258,6 @@ case "${1-}" in
   hash) [ $# -ge 2 ] || usage; set -eo pipefail; shift; hash_build "$@";;
   verdict) [ $# -ge 3 ] || usage; shift; verdict "$@";;
   run) [ $# -eq 1 ] || usage; run_ladder;;
+  rebuild) [ $# -ge 2 ] || usage; shift; OUT="${OUT:-.}"; trap 'git checkout -- "$LEAF"' EXIT; rebuild_round "$@";;
   *) usage;;
 esac

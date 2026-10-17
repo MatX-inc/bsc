@@ -122,9 +122,9 @@ Warmup ()`. (bluetcl differs: no `-main-is`, a helper module and a C shim.)
 ## 5. The determinism ladder
 
 The claim: one commit built from clean serially, oversubscribed or in another
-checkout directory, or rebuilt after an edit and its revert, gives
-bit-identical objects, archives, shared objects and programs, and interfaces
-identical as `ghc --show-iface` text.
+checkout directory, or rebuilt in place with nothing changed and, from GHC
+9.12, after an edit and its revert, gives bit-identical objects, archives,
+shared objects and programs, interfaces identical as `ghc --show-iface` text.
 
 What holds it: every program links against the library's archive, compiled
 once; `Warmup` fixes the interface-load order; `-fobject-determinism`, from GHC
@@ -138,18 +138,20 @@ linked by name.
   hash and flags fingerprint, since their bytes carry the checkout directory.
 - `verdict REF OTHER...` compares each list with the reference; an absent list
   is MISSING.
+- `rebuild NAME [DIR...]` runs the in-place round: a rebuild with nothing
+  changed and, from 9.12, after a marker edit to `src/comp/Libs/IOUtil.hs` and
+  its revert, each hashed.
 - `run` is the ladder on one machine: the legs `c-j1`, the reference, `a-j1`,
   `c-j16`, `c-j64`, `a-j64` and `d-j64`, each a fresh checkout of `HEAD` in a
   directory of its own under `determinism-results/<stamp>/legs`, built and
   installed (`make install-src`, `make -C src/comp install-extra`, `make
   install-bluehs`) at its jobs count (`jobs: N` and, from 9.12, `ghc-options:
   -jN` in a `cabal.project.local`) and hashed, `inst/bluehs` with the build
-  tree; the reference then rebuilds after a marker edit to
-  `src/comp/Libs/IOUtil.hs` and after its revert. The reference builds first,
-  alone, so the dependency store it fills is shared; then up to `LADDER_JOBS`
-  legs run at once, one per 6 GB of memory unless set. The verdict compares
-  every leg and the reverted rebuild with the reference; a failed one is
-  MISSING. `LEGS` names other legs, `KEEP_LEGS=1` keeps their trees.
+  tree; the serial legs then run the round. The reference builds first, alone,
+  so the dependency store it fills is shared; then up to `LADDER_JOBS` legs run
+  at once, one per 6 GB of memory unless set. The verdict compares every leg and
+  round with the reference; a failed one is MISSING. `LEGS` names other legs,
+  `KEEP_LEGS=1` keeps their trees.
 
 `.github/workflows/cabal.yml` runs on the project's own pull requests that touch
 the build files, nightly on the project's default branch, and on a dispatch,
