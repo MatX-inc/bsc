@@ -1192,9 +1192,14 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
               names@(first : more) ->
                   let joined = intercalate "_" names
                   in  "_" ++ (if not (null more) && length joined > 60
-                              then take 40 first ++ "_ETC_" ++
-                                   show (hashString joined `mod` 1000000000)
+                              then take 40 first ++ "_ETC_" ++ hashDigits (armText arm)
                               else joined)
+
+        -- the names joined by spaces: unambiguous, since a cleaned rule
+        -- name cannot contain one (cleanupRuleName), where the underscore
+        -- join is not (rules a_b against a and b)
+        armText :: (AExpr, AExpr, Maybe [ARuleId]) -> String
+        armText = unwords . armNames
 
         -- rule names may carry characters Verilog identifiers cannot
         identChars :: String -> String
@@ -1203,9 +1208,28 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         hashString :: String -> Word64
         hashString = hashValue . foldl' (\h c -> nextHashByte h (fromIntegral (ord c))) hashInit
 
+        -- twelve decimal digits of the hash, zero padded
+        hashDigits :: String -> String
+        hashDigits s = let d = show (hashString s `mod` 1000000000000)
+                       in  replicate (12 - length d) '0' ++ d
+
+        -- Arms whose suffixes collide (rules a_b against a and b, or two
+        -- long joins shortened alike) are told apart by their space-joined
+        -- names, so the suffix stays a function of the arm's rules alone;
+        -- a hash collision on top of that falls back to a counter, so that
+        -- a legal design always compiles.
+        armSuffixes :: [(AExpr, AExpr, Maybe [ARuleId])] -> [String]
+        armSuffixes arms = counterFallback (zipWith disambiguate arms ss)
+          where ss = map armSuffix arms
+                dups = M.keysSet (M.filter (> (1 :: Int))
+                                           (M.fromListWith (+) [ (s, 1) | s <- ss ]))
+                disambiguate arm s
+                    | S.member s dups = s ++ "_" ++ hashDigits (armText arm)
+                    | otherwise       = s
+
         -- a repeated suffix gets _2, _3, ..., avoiding every other arm's
-        uniqueSuffixes :: [String] -> [String]
-        uniqueSuffixes ss = go S.empty ss
+        counterFallback :: [String] -> [String]
+        counterFallback ss = go S.empty ss
           where bases = S.fromList ss
                 go _ [] = []
                 go used (s : rest) =
@@ -1214,8 +1238,8 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
                         s' = headOrErr "uniqueSuffixes" (filter ok cands)
                     in  s' : go (S.insert s' used) rest
 
-        armKey :: (AExpr, AExpr, Maybe [ARuleId]) -> String
-        armKey = intercalate "_" . armNames
+        armKey :: (AExpr, AExpr, Maybe [ARuleId]) -> [String]
+        armKey = armNames
 
         -- ---------------
         -- Function to make the arguments to the selector primitive
@@ -1293,7 +1317,7 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
                       else sortBy (comparing armKey) ers
 
         -- The arg blobs, each with its suffix
-        ers' = zip (map mkFString (uniqueSuffixes (map armSuffix ers_ordered)))
+        ers' = zip (map mkFString (armSuffixes ers_ordered))
                    ers_ordered
 
         -- PrimMux takes a list of pairs of the selector ASDef and the
