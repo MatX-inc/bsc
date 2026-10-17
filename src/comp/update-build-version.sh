@@ -3,6 +3,10 @@ set -euo pipefail
 
 export TMOUT=1
 
+# Input, from the environment: src/comp/Makefile exports NOGIT, and the
+# cabal hooks pass it through (SetupHooks.hs, writeBuildVersionHs).
+NOGIT=${NOGIT:-0}
+
 # -------------------------
 # GIT
 
@@ -34,12 +38,10 @@ genGITBuildVersion () {
     fi;
 }
 
-# -------------------------
-
-if ( test -f BuildVersion.hs ) && [ "$NOUPDATEBUILDVERSION" = 1 ] ; then
-    echo "BuildVersion.hs not modified"
-else
-
+# Sets GITCOMMIT and GITDESCR: null values with NOGIT=1, the values git
+# substituted on export for an archive (.gitattributes, export-subst), and
+# the repository's otherwise.
+getGITVersion () {
     if [ "$NOGIT" = 1 ] ; then
 	GITCOMMIT="0000000"
 	GITDESCR="no-git"
@@ -63,8 +65,19 @@ else
 
 	fi
     fi
-    genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
+}
 
+# -------------------------
+
+# --name prints the version name alone and writes nothing: what the Bluesim
+# kernel's version header carries (src/bluesim/Makefile).
+if [ "${1:-}" = "--name" ] ; then
+    getGITVersion
+    echo "$GITDESCR"
+    exit 0
 fi
+
+getGITVersion
+genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
 
 # -------------------------

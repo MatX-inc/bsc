@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 module Main_showrules(main) where
 
+import Warmup ()
 import Exceptions(bsCatch)
 import Version
 import FileNameUtil(hasDotSuf, hasNoSuffix, vcdSuffix)
