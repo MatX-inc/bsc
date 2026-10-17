@@ -1,0 +1,230 @@
+name: Cabal build
+
+# The cabal build of the compiler (bsc.cabal, cabal.project, SetupHooks.hs)
+# and its determinism ladder: the same commit built serially, oversubscribed
+# and in other checkout directories must give bit-identical objects,
+# interfaces, archives, shared objects and programs, and the same bytes in the bluehs script
+# runtime (util/bluehs) installed from it (util/cabal-ladder.sh hash hashes a
+# build and the distribution, util/cabal-ladder.sh verdict compares the
+# lists).  The ladder is six legs: the serial build against a second serial
+# build, -j16, and three -j64 builds, the second serial and two of the -j64
+# in other directories; the two serial legs then rebuild in place, with
+# nothing changed and, from GHC 9.12, after a marker edit and its revert,
+# and those rebuilds are held to the reference as well.
+# It runs on the project's own pull requests and on a dispatch; a fork's
+# pull requests do not run it, since a fork's branches are a developer's
+# loop, and a fork dispatches it when it qualifies a release.  From GHC 9.12
+# the legs vary GHC's own parallelism as well as cabal's: that is where
+# -fobject-determinism exists and cabal.project compiles in parallel.  Below
+# it GHC compiles serially, and the legs vary cabal's package jobs and the
+# checkout directory.
+
+on:
+  pull_request:
+    paths:
+      - cabal.project
+      - bsc.cabal
+      - SetupHooks.hs
+      - util/cabal-ladder.sh
+      - src/**
+      - util/bluehs/**
+      - GNUmakefile
+      - .github/workflows/cabal.yml
+  workflow_dispatch:
+    inputs:
+      ghc_version:
+        description: GHC version, as a number (from 9.12 the legs vary GHC's own parallelism and hold the serial legs' revert rebuild)
+        required: false
+        default: '9.14.1'
+        type: string
+      platforms:
+        description: Runners to build on
+        required: false
+        default: both
+        type: choice
+        options: [both, ubuntu, macos]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Ladder plan
+    # The project's pull requests and any dispatch; not a fork's pull requests.
+    if: ${{ github.event_name != 'pull_request' || github.repository == 'B-Lang-org/bsc' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      legs: ${{ steps.plan.outputs.legs }}
+      rebuilds: ${{ steps.plan.outputs.rebuilds }}
+      os: ${{ steps.plan.outputs.os }}
+    steps:
+      - id: plan
+        env:
+          PLATFORMS: ${{ inputs.platforms || 'both' }}
+          GHC: ${{ inputs.ghc_version || '9.14.1' }}
+        run: |
+          # A leg is a checkout directory and a parallelism: cabal jobs N, and
+          # ghc -jN where the project compiles in parallel (GHC 9.12 on).
+          # Directories a, c and d check that the build does not depend on
+          # its path; c-j1 is the reference the verdict compares the others
+          # against, the serial legs' in-place rebuilds among them.
+          c_j1='{"name":"c-j1","dir":"c","jobs":"1"}'
+          a_j1='{"name":"a-j1","dir":"a","jobs":"1"}'
+          c_j16='{"name":"c-j16","dir":"c","jobs":"16"}'
+          c_j64='{"name":"c-j64","dir":"c","jobs":"64"}'
+          a_j64='{"name":"a-j64","dir":"a","jobs":"64"}'
+          d_j64='{"name":"d-j64","dir":"d","jobs":"64"}'
+          legs="[$c_j1,$a_j1,$c_j16,$c_j64,$a_j64,$d_j64]"
+          # The serial legs' in-place rebuilds the verdict expects: the rebuild
+          # with nothing changed at every GHC, and the rebuild after the marker
+          # edit's revert from 9.12 (doc/cabal.md section 5); the rebuild step
+          # runs exactly these, so the lists made are the lists expected.
+          case "$GHC" in
+            9.1[2-9]*|9.[2-9][0-9]*|[1-9][0-9].*) rebuilds='["rebuild","revert"]' ;;
+            *) rebuilds='["rebuild"]' ;;
+          esac
+          case "$PLATFORMS" in
+            ubuntu) os='["ubuntu-24.04"]' ;;
+            macos) os='["macos-15"]' ;;
+            *) os='["ubuntu-24.04","macos-15"]' ;;
+          esac
+          echo "legs=$legs" >> "$GITHUB_OUTPUT"
+          echo "rebuilds=$rebuilds" >> "$GITHUB_OUTPUT"
+          echo "os=$os" >> "$GITHUB_OUTPUT"
+          echo "ladder on $os with GHC $GHC: $legs; the serial legs' rebuilds $rebuilds"
+
+  build:
+    name: "Build ${{ matrix.os }} ${{ matrix.leg.name }}"
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.os) }}
+        leg: ${{ fromJSON(needs.plan.outputs.legs) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: ${{ matrix.leg.dir }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+          path: ${{ matrix.leg.dir }}
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo .github/workflows/install_dependencies_ubuntu.sh
+          # mk-dist.sh rewrites the shipped libraries' search paths
+          sudo apt-get install -y patchelf cpio
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          .github/workflows/install_dependencies_macos.sh
+          # The same workaround as build-and-test-macos.yml: a stray tcl.h in
+          # /usr/local/include shadows the system Tcl and breaks the bluetcl
+          # link.
+          rm -f /usr/local/include/tcl.h
+      # cabal-install 3.16 speaks the GHC job semaphore protocol v1 that GHC 9.8 through 9.14.1 implement;
+      # 3.18 speaks only v2 (GHC 9.14.2 and 10.2 onward), so with it no -jsem is used.
+      - name: Install GHC
+        uses: haskell/ghcup-setup@v1
+        with:
+          ghc: ${{ inputs.ghc_version || '9.14.1' }}
+          cabal: 3.16.1.0
+      - name: Build (${{ matrix.leg.name }})
+        env:
+          JOBS: ${{ matrix.leg.jobs }}
+        run: |
+          cabal update
+          # The leg's parallelism, on top of the project's settings: cabal
+          # package jobs N, and ghc --make -jN where the project compiles in
+          # parallel at all (GHC 9.12 on, cabal.project; a later -j wins in GHC).
+          printf 'jobs: %s\nif impl(ghc >= 9.12)\n  program-options\n    ghc-options: -j%s\n' "$JOBS" "$JOBS" > cabal.project.local
+          cat cabal.project.local
+          # The solvers the library links by name: installed first and named
+          # to the linker (doc/cabal.md section 2), as make install-src below
+          # does for the build it runs.
+          make install-solvers
+          export LIBRARY_PATH="$PWD/inst/lib/SAT"
+          cabal build all
+      - name: Programs start
+        run: |
+          bsc="$(cabal list-bin bsc:exe:bsc)"
+          ls -l "$bsc"
+          "$bsc" -v || true
+      # The installed tree, then the bluehs runtime over it: the tree's own
+      # cabal build is the one already made, and mk-dist.sh builds the
+      # libraries a second time under build/bluehs with the leg's settings
+      # (cabal.project.local), in this leg's directory.
+      - name: Install (make install-src)
+        env:
+          JOBS: ${{ matrix.leg.jobs }}
+        run: make -j"$(getconf _NPROCESSORS_ONLN)" GHCJOBS="$JOBS" install-src
+      - name: Install the bluehs runtime
+        run: make install-bluehs
+      - name: Hash the build and the distribution
+        env:
+          LEG: ${{ matrix.leg.name }}
+        run: util/cabal-ladder.sh hash "$LEG.sha256" inst/bluehs
+      # The serial legs rebuild in place: with nothing changed and, from GHC
+      # 9.12, after a marker edit to one module and after its revert (below
+      # 9.12 a module recompiled alone carries the session's uniques in its
+      # object), through the same make targets, so what the leg installs is
+      # rebuilt too; each rebuild is hashed like the build
+      # (util/cabal-ladder.sh rebuild, with the plan's steps).
+      - name: Rebuild in place (serial legs)
+        if: matrix.leg.jobs == '1'
+        env:
+          LEG: ${{ matrix.leg.name }}
+          JOBS: ${{ matrix.leg.jobs }}
+          BUILD_CMD: 'make -j"$(getconf _NPROCESSORS_ONLN)" GHCJOBS="$JOBS" install-src && make install-bluehs'
+          REBUILD_STEPS: ${{ contains(fromJSON(needs.plan.outputs.rebuilds), 'revert') && 'rebuild edit revert' || 'rebuild' }}
+        run: util/cabal-ladder.sh rebuild "$LEG" inst/bluehs
+      # After a failed rebuild too, so the leg's own list reaches the verdict
+      # and the rebuild alone is MISSING.
+      - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() }}
+        with:
+          name: hashes-${{ matrix.os }}-${{ matrix.leg.name }}
+          path: |
+            ${{ matrix.leg.dir }}/${{ matrix.leg.name }}.sha256
+            ${{ matrix.leg.dir }}/${{ matrix.leg.name }}-re*.sha256
+          if-no-files-found: error
+
+  verdict:
+    name: "Verdict ${{ matrix.os }}"
+    needs: [plan, build]
+    # After every leg, passed or failed, so a failed leg is reported MISSING;
+    # not when the ladder was not planned at all.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.os) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: hashes-${{ matrix.os }}-*
+          merge-multiple: true
+          path: hashes
+      - name: Compare the legs against c-j1
+        env:
+          LEGS: ${{ needs.plan.outputs.legs }}
+          REBUILDS: ${{ needs.plan.outputs.rebuilds }}
+        run: |
+          ls -l hashes
+          # Every planned leg, and every planned rebuild of the serial legs, is
+          # named, so one whose build or hash step failed is reported MISSING
+          # instead of being skipped.
+          others=$(jq -r '.[] | select(.name != "c-j1") | "hashes/\(.name).sha256"' <<< "$LEGS")
+          rebuilds=$(jq -r --argjson rs "$REBUILDS" '.[] | select(.jobs == "1") | .name as $n | $rs[] | "hashes/\($n)-\(.).sha256"' <<< "$LEGS")
+          util/cabal-ladder.sh verdict hashes/c-j1.sha256 $others $rebuilds
