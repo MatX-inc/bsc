@@ -606,6 +606,7 @@ defaultFlags bluespecdir = Flags {
         demoteErrors = SomeMsgs [],
         disableAssertions = False,
         passThroughAssertions = False,
+        svaImmediate = False,
         doICheck = True,
         dumpAll = Nothing,
         dumpFormats = ["vcd"],
@@ -1224,6 +1225,10 @@ externalFlags = [
         ("passthrough-assertions",
          (NoArg (\f -> Left $ f {passThroughAssertions=True}) (Just passThroughAssertions),
           "pass SV assertions through to RTL", Hidden)),
+
+        ("sva-immediate",
+         (NoArg (\f -> Left $ f {svaImmediate=True}) (Just svaImmediate),
+          "emit SVA assertions as immediate assertions on boolean expressions, for tools without SVA support", Visible)),
 
         ("e",
          (Arg "module" (\f s -> Left (f {entry = Just s})) (Just (FRTMaybeString entry)),
@@ -2020,6 +2025,7 @@ showFlagsRaw flags =
           ("optUndet", show (optUndet flags)),
           ("parallelSimLink", show (parallelSimLink flags)),
           ("passThroughAssertions", show (passThroughAssertions flags)),
+          ("svaImmediate", show (svaImmediate flags)),
           ("preprocessOnly", show (preprocessOnly flags)),
           ("printFlags", show (printFlags flags)),
           ("printFlagsHidden", show (printFlagsHidden flags)),

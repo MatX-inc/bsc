@@ -1,0 +1,11 @@
+package SvaDirect where
+
+import SVAssert
+
+-- the $SVA task used directly only has a Verilog lowering
+{-# verilog sysSvaDirect #-}
+sysSvaDirect :: Module Empty
+sysSvaDirect = module
+  r :: Reg Bool <- mkReg False
+  rules
+    "direct": when True ==> $SVA "direct" (toSvaProp (toProp r))

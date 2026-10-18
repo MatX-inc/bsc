@@ -37,11 +37,12 @@ import Data.Maybe
 
 import FStringCompat(FString, getFString)
 import ErrorUtil
-import Flags(Flags, readableMux, unSpecTo, systemVerilogOutput, useDPI)
+import Flags(Flags, readableMux, unSpecTo, systemVerilogOutput, useDPI, svaImmediate)
 import PPrint
 import IntLit
 import Id
-import PreIds( idInout_, idSVA )
+import PreIds( idInout_ )
+import ASVA(svaKindOf, svaCallArgs)
 import Position( Position )
 
 import VModInfo(vArgs, vName, vFields, VName(..), VeriPortProp(..),
@@ -75,6 +76,7 @@ data VConvtOpts = VConvtOpts {
                               vco_readableMux :: Bool,
                               vco_sv_tasks    :: Bool,
                               vco_use_dpi     :: Bool,
+                              vco_sva_immediate :: Bool,
                               -- foreign-function map and def widths, for
                               -- monomorphizing polymorphic DPI call names
                               vco_ffmap       :: ForeignFuncMap,
@@ -88,6 +90,7 @@ flagsToVco flags = VConvtOpts {
                                vco_readableMux = readableMux flags,
                                vco_sv_tasks = systemVerilogOutput flags,
                                vco_use_dpi = useDPI flags,
+                               vco_sva_immediate = svaImmediate flags,
                                vco_ffmap = M.empty,
                                vco_def_widths = M.empty
                               }
@@ -162,8 +165,8 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
 
       -- convert the sorted list to VStmts
       convert :: Either ADef AForeignCall -> [VStmt]
-      convert (Right fcall@(AForeignCall { afc_name = aid })) | aid == idSVA =
-          [vSVAssert vco ass_sensitivity_list fcall]
+      convert (Right fcall) | Just kind <- svaKindOf (afc_fun fcall) =
+          [vSVAssert vco ass_sensitivity_list kind fcall]
       convert (Right fcall) = [vForeignCall vco fcall ffmap]
       convert (Left adef) =
           let -- some of the defs that we inline might not be simple
@@ -213,30 +216,51 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
 -- condition becomes the antecedent of the property, so the property is
 -- only checked on cycles the rule fires, and the rule's resets become
 -- the `disable iff` term.
-vSVAssert :: VConvtOpts -> VEventExpr -> AForeignCall -> VStmt
-vSVAssert vco ev (AForeignCall _ _ (c:es) _ resets) =
-    VAssert ev disable args
+vSVAssert :: VConvtOpts -> VEventExpr -> VAssertKind -> AForeignCall -> VStmt
+vSVAssert vco ev kind (AForeignCall _ _ args _ resets) =
+    VAssert kind label ev disable immediate prop
   where
+    (c, label, aprop) = svaCallArgs args
     vc = vExpr vco c
-    ves = map (vExpr vco) es
     disable = case map (mkEqualsReset . vExpr vco) resets of
                 [] -> Nothing
                 rs -> Just (foldr1 (\a b -> mkVEOp a VLOr b) rs)
-    -- the operands consumed by placeholders; one extra trailing operand
-    -- is the result register (see ppAssert)
-    (label, pieces) = case ves of
-                        (l : ps) -> (l, ps)
-                        [] -> internalError "vSVAssert: missing label"
-    nPlaceholders = sum [ length (filter (== '%') s) | VEString s <- pieces ]
-    nOperands = length [ e | e <- pieces, not (isVEString e) ]
-    (prop, reg) = if nOperands == nPlaceholders + 1
-                  then (init pieces, [last pieces])
-                  else (pieces, [])
-    args | isOne vc  = label : prop ++ reg
-         | otherwise = label : VEString "(%b)|->(" : vc : prop ++ [VEString ")"] ++ reg
-    isVEString (VEString _) = True
-    isVEString _ = False
-vSVAssert _ _ fc = internalError ("vSVAssert: " ++ ppReadable fc)
+    guarded = if isOne vc then aProp aprop else VPImplies (VSExpr vc) (aProp aprop)
+    immediate = vco_sva_immediate vco
+    -- in the immediate style the whole property folds into one expression
+    -- (checkSVA has already rejected anything temporal)
+    prop = if immediate
+           then case immediateExpr guarded of
+                  Just e -> VPSeq (VSExpr e)
+                  Nothing -> internalError ("vSVAssert: `" ++ label ++ "' is not boolean")
+           else guarded
+    aProp (APrim _ _ PrimSvaPropSeq [s])    = VPSeq (aSeq s)
+    aProp (APrim _ _ PrimSvaNot [p])        = VPNot (aProp p)
+    aProp (APrim _ _ PrimSvaAnd [a, b])     = VPAnd (aProp a) (aProp b)
+    aProp (APrim _ _ PrimSvaOr [a, b])      = VPOr (aProp a) (aProp b)
+    aProp (APrim _ _ PrimSvaImplies [s, p]) = VPImplies (aSeq s) (aProp p)
+    aProp e = internalError ("vSVAssert: not a property: " ++ ppReadable e)
+    aSeq (APrim _ _ PrimSvaExpr [e])                = VSExpr (vExpr vco e)
+    aSeq (APrim _ _ PrimSvaDelay [lo, hi, a, b])    = VSDelay (aInt lo) (Just (aInt hi)) (aSeq a) (aSeq b)
+    aSeq (APrim _ _ PrimSvaDelayUnbound [lo, a, b]) = VSDelay (aInt lo) Nothing (aSeq a) (aSeq b)
+    aSeq (APrim _ _ PrimSvaRep [lo, hi, s])         = VSRep (aInt lo) (Just (aInt hi)) (aSeq s)
+    aSeq (APrim _ _ PrimSvaRepUnbound [lo, s])      = VSRep (aInt lo) Nothing (aSeq s)
+    aSeq (APrim _ _ PrimSvaSeqOr [a, b])            = VSOr (aSeq a) (aSeq b)
+    aSeq (APrim _ _ PrimSvaSeqIntersect [a, b])     = VSIntersect (aSeq a) (aSeq b)
+    aSeq (APrim _ _ PrimSvaFirstMatch [s])          = VSFirstMatch (aSeq s)
+    aSeq e = internalError ("vSVAssert: not a sequence: " ++ ppReadable e)
+    aInt (ASInt _ _ il) = ilValue il
+    aInt e = internalError ("vSVAssert: bound is not a constant: " ++ ppReadable e)
+
+-- a property over boolean expressions only, as one expression
+immediateExpr :: VProp -> Maybe VExpr
+immediateExpr (VPSeq (VSExpr e)) = Just e
+immediateExpr (VPNot p) = mkVEUnOp VNot <$> immediateExpr p
+immediateExpr (VPAnd a b) = mkVEOp <$> immediateExpr a <*> pure VLAnd <*> immediateExpr b
+immediateExpr (VPOr a b) = mkVEOp <$> immediateExpr a <*> pure VLOr <*> immediateExpr b
+immediateExpr (VPImplies (VSExpr a) p) =
+    (\e -> mkVEOp (mkVEUnOp VNot a) VLOr e) <$> immediateExpr p
+immediateExpr _ = Nothing
 
 vForeignCall :: VConvtOpts -> AForeignCall -> ForeignFuncMap -> VStmt
 vForeignCall vco f@(AForeignCall aid taskid (c:es) ids resets) ffmap =

@@ -1,0 +1,10 @@
+package SvaDupLabel where
+
+import SVAssert
+
+{-# verilog sysSvaDupLabel #-}
+sysSvaDupLabel :: Module Empty
+sysSvaDupLabel = module
+  r :: Reg Bool <- mkReg False
+  svaAssert "twice" r
+  svaAssert "twice" (not r)

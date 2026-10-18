@@ -17,6 +17,9 @@ module Verilog(
                VProgram(..),
                VRange,
                VStmt(..),
+               VAssertKind(..),
+               VProp(..),
+               VSeq(..),
                VTri(..),
                VVDecl(..),
                VVar(..),
@@ -520,9 +523,13 @@ data VStmt
         | Vifelse VExpr VStmt VStmt
         | Vdumpvars Int [VId]           -- appears unused
         | VTask VId [VExpr] -- calling a verilog system task as a Bluespec foreign function of type Action
-        -- a concurrent assertion: clock event, the `disable iff` condition,
-        -- and the arguments of the $SVA call (see ppAssert for their shape)
-        | VAssert VEventExpr (Maybe VExpr) [VExpr]
+        -- a concurrent assertion (see ppAssert)
+        | VAssert { va_kind :: VAssertKind,
+                    va_label :: String,
+                    va_event :: VEventExpr,
+                    va_disable :: Maybe VExpr,   -- the `disable iff` condition
+                    va_immediate :: Bool,        -- print as an immediate assertion
+                    va_prop :: VProp }
         | VZeroDelay -- injecting an explicit (0-tick) delay for synchronization purposes
         deriving (Eq, Show, Generic.Data, Generic.Typeable)
 
@@ -574,7 +581,7 @@ instance PPrint VStmt where
         pPrint d p (VTask task []) | isTaskVId task = pPrint d 0 task <> text ";"
         pPrint d p (VTask task es) = pPrint d 0 task <> text "(" <> commaList d es <> text ");"
 
-        pPrint d p (VAssert ev dis es) = ppAssert d ev dis es
+        pPrint d p (VAssert k lbl ev dis imm prop) = ppAssert d k lbl ev dis imm prop
 
 
         pPrint d p  VZeroDelay     = text "#0;"
@@ -592,43 +599,101 @@ instance NFData VStmt where
     rnf (Vifelse expr s1 s2) = rnf3 expr s1 s2
     rnf (Vdumpvars lvl vars) = rnf2 lvl vars
     rnf (VTask tid exprs) = rnf2 tid exprs
-    rnf (VAssert ev dis exprs) = rnf3 ev dis exprs
+    rnf (VAssert k l ev dis imm pr) =
+        rnf k `seq` rnf l `seq` rnf ev `seq` rnf dis `seq` rnf imm `seq` rnf pr
     rnf VZeroDelay = ()
 
--- The $SVA arguments are: the label, then the property as text pieces in
--- which each %b or %n prints the operand that follows, and optionally one
--- trailing register that the assertion's action block latches the result
--- into.  The guard macro lets flows that only read Verilog-2001 drop it.
-ppAssert :: PDetail -> VEventExpr -> Maybe VExpr -> [VExpr] -> Doc
-ppAssert d ev dis (VEString label : rest) =
+-- Concurrent assertions.  The property is kept structured so the printer
+-- can emit native SVA or, for tools without SVA support, an immediate
+-- assertion over a boolean expression.  The guard macro lets flows that
+-- only read Verilog-2001 drop them.
+data VAssertKind = VAssertKind | VAssumeKind | VCoverKind
+        deriving (Eq, Ord, Show, Enum, Generic.Data, Generic.Typeable)
+
+data VSeq = VSExpr VExpr
+          | VSDelay Integer (Maybe Integer) VSeq VSeq   -- s1 ##[lo:hi] s2; Nothing is $
+          | VSRep Integer (Maybe Integer) VSeq          -- s [*lo:hi]
+          | VSOr VSeq VSeq
+          | VSIntersect VSeq VSeq
+          | VSFirstMatch VSeq
+        deriving (Eq, Show, Generic.Data, Generic.Typeable)
+
+data VProp = VPSeq VSeq
+           | VPNot VProp
+           | VPAnd VProp VProp
+           | VPOr VProp VProp
+           | VPImplies VSeq VProp                       -- s |-> p
+        deriving (Eq, Show, Generic.Data, Generic.Typeable)
+
+instance NFData VAssertKind where
+    rnf k = k `seq` ()
+
+instance NFData VSeq where
+    rnf (VSExpr e) = rnf e
+    rnf (VSDelay lo hi a b) = rnf4 lo hi a b
+    rnf (VSRep lo hi s) = rnf3 lo hi s
+    rnf (VSOr a b) = rnf2 a b
+    rnf (VSIntersect a b) = rnf2 a b
+    rnf (VSFirstMatch s) = rnf s
+
+instance NFData VProp where
+    rnf (VPSeq s) = rnf s
+    rnf (VPNot p) = rnf p
+    rnf (VPAnd a b) = rnf2 a b
+    rnf (VPOr a b) = rnf2 a b
+    rnf (VPImplies s p) = rnf2 s p
+
+ppAssert :: PDetail -> VAssertKind -> String -> VEventExpr -> Maybe VExpr -> Bool -> VProp -> Doc
+ppAssert d k lbl ev dis False prop =
     text "`ifndef BSV_NO_SVA" $$
-    (text (label ++ ": assert property (@(") <> pPrint d 0 ev <> text ")" <+>
-     disDoc <+> ppAssertBody d rest) $$
+    (text (lbl ++ ": " ++ assertKeyword k ++ " property (@(") <> pPrint d 0 ev <>
+     text ")" <+> disDoc <+> ppProp d prop <> text ");") $$
     text "`endif"
   where disDoc = case dis of
                    Nothing -> empty
                    Just c  -> text "disable iff (" <> pPrint d 0 c <> text ")"
-ppAssert _ _ _ es = internalError ("ppAssert: " ++ show es)
+-- the immediate form: a boolean checked at the clock edge while not in reset
+ppAssert d k lbl ev dis True (VPSeq (VSExpr e)) =
+    text "`ifndef BSV_NO_SVA" $$
+    (text "always @(" <> pPrint d 0 ev <> text ")" <+> guardDoc <+>
+     text (lbl ++ ": " ++ assertKeyword k ++ " (") <> pPrint d 0 e <> text ");") $$
+    text "`endif"
+  where guardDoc = case dis of
+                     Nothing -> empty
+                     Just c  -> text "if (!(" <> pPrint d 0 c <> text "))"
+ppAssert _ _ lbl _ _ True _ =
+    internalError ("ppAssert: immediate assertion `" ++ lbl ++ "' with a temporal property")
 
-ppAssertBody :: PDetail -> [VExpr] -> Doc
-ppAssertBody d es =
-    case go es of
-      (body, [])    -> body <> text ");"
-      (body, [reg]) -> body <> text ") " <> pPrint d 0 reg <> text "=1; else " <>
-                       pPrint d 0 reg <> text "=0;"
-      (_, extra)    -> internalError ("ppAssertBody: unconsumed operands " ++ show extra)
-  where
-    go (VEString s : rest) = let (doc, rest')   = ppPiece s rest
-                                 (doc', rest'') = go rest'
-                             in  (doc <> doc', rest'')
-    go rest = (empty, rest)
-    ppPiece [] xs = (empty, xs)
-    ppPiece ('%':c:s) (x:xs) | c == 'b' || c == 'n' =
-        let (doc, rest) = ppPiece s xs in (pPrint d 0 x <> doc, rest)
-    ppPiece s@('%':_) _ = internalError ("ppAssertBody: bad placeholder in " ++ show s)
-    ppPiece s xs = let (lit, s')   = break (== '%') s
-                       (doc, rest) = ppPiece s' xs
-                   in  (text lit <> doc, rest)
+assertKeyword :: VAssertKind -> String
+assertKeyword VAssertKind = "assert"
+assertKeyword VAssumeKind = "assume"
+assertKeyword VCoverKind  = "cover"
+
+-- every node is parenthesized, so SVA precedence never matters
+ppProp :: PDetail -> VProp -> Doc
+ppProp d (VPSeq s) = ppSeq d s
+ppProp d (VPNot p) = text "not(" <> ppProp d p <> text ")"
+ppProp d (VPAnd a b) = text "(" <> ppProp d a <> text ") and (" <> ppProp d b <> text ")"
+ppProp d (VPOr a b) = text "(" <> ppProp d a <> text ") or (" <> ppProp d b <> text ")"
+ppProp d (VPImplies s p) = text "(" <> ppSeq d s <> text ") |-> (" <> ppProp d p <> text ")"
+
+ppSeq :: PDetail -> VSeq -> Doc
+ppSeq d (VSExpr e) = text "(" <> pPrint d 0 e <> text ")"
+ppSeq d (VSDelay lo hi a b) =
+    text "(" <> ppSeq d a <> text (") ##" ++ ppDelayBounds lo hi ++ " (") <> ppSeq d b <> text ")"
+ppSeq d (VSRep lo hi s) = text "(" <> ppSeq d s <> text (")[*" ++ ppSvaRange lo hi ++ "]")
+ppSeq d (VSOr a b) = text "(" <> ppSeq d a <> text ") or (" <> ppSeq d b <> text ")"
+ppSeq d (VSIntersect a b) = text "(" <> ppSeq d a <> text ") intersect (" <> ppSeq d b <> text ")"
+ppSeq d (VSFirstMatch s) = text "first_match(" <> ppSeq d s <> text ")"
+
+ppSvaRange :: Integer -> Maybe Integer -> String
+ppSvaRange lo (Just hi) | lo == hi = itos lo
+ppSvaRange lo (Just hi) = itos lo ++ ":" ++ itos hi
+ppSvaRange lo Nothing = itos lo ++ ":$"
+
+ppDelayBounds :: Integer -> Maybe Integer -> String
+ppDelayBounds lo (Just hi) | lo == hi = itos lo
+ppDelayBounds lo hi = "[" ++ ppSvaRange lo hi ++ "]"
 
 pprintCaseAttributes :: Bool -> Bool -> Doc
 pprintCaseAttributes False False = empty

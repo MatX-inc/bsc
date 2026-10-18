@@ -1192,6 +1192,11 @@ data ErrMsg =
         | EUnsupportedSequence  --These will be removed once supported
         | EUnsupportedProperty
         | EUnsupportedAssertion
+        | ESVABadLabel String String            -- module, label
+        | ESVADuplicateLabel String String
+        | ESVAImmediateUnsupported String String
+        | EBluesimNoSVA String String
+        | WPassThroughAssertActions
         | EUnsupportedMutualRecursion [String]
         | EMutualRecursionComplicatedClause String
         | EIllegalRepetition !String
@@ -1595,6 +1600,29 @@ getErrorText (EUnsupportedProperty) =
 getErrorText (EUnsupportedAssertion) =
     (Parse 121, empty,
      s2par ("assert, assume, cover, and expect statements are not currently supported"))
+getErrorText (ESVABadLabel m l) =
+    (Generate 134, empty,
+     s2par ("The SVA assertion label `" ++ l ++ "' in module `" ++ m ++
+            "' is not a valid Verilog identifier."))
+getErrorText (ESVADuplicateLabel m l) =
+    (Generate 135, empty,
+     s2par ("Module `" ++ m ++ "' has more than one SVA assertion labelled `" ++
+            l ++ "'."))
+getErrorText (ESVAImmediateUnsupported m l) =
+    (Generate 136, empty,
+     s2par ("With -sva-immediate an assertion must be over boolean expressions only, " ++
+            "but `" ++ l ++ "' in module `" ++ m ++ "' uses sequence operators " ++
+            "(delays, repetition, or, intersect).  The SVAssert library checks such " ++
+            "properties with its FSM checkers in that mode."))
+getErrorText (EBluesimNoSVA m l) =
+    (System 100, empty,
+     s2par ("Bluesim does not support SVA assertions, but `" ++ l ++ "' in module `" ++
+            m ++ "' reached the Bluesim backend.  The SVAssert library lowers " ++
+            "assertions to FSM checkers under -sim."))
+getErrorText (WPassThroughAssertActions) =
+    (Parse 226, empty,
+     s2par ("With -passthrough-assertions the assertion's pass and fail actions are " ++
+            "ignored; the simulator reports the assertion itself."))
 getErrorText (EWrongParamNumber def given) =
     (Parse 122, empty,
      s2par ("Wrong number of parameters to sequence or property instance (Defined: " ++ (show def) ++  ", Given: " ++ (show given) ++ ")"))

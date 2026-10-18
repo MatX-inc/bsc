@@ -561,7 +561,7 @@ instance Bin Flags where
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
-                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137) =
+                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138) =
        do
           wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4;
           wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8; wr_chunk9
@@ -626,7 +626,7 @@ instance Bin Flags where
         {-# NOINLINE wr_chunk9 #-}
         wr_chunk9 =
           do
-             toBin a_135; toBin a_136; toBin a_137
+             toBin a_135; toBin a_136; toBin a_137; toBin a_138
     readBytes =
        do
           (a_000, a_001, a_002, a_003, a_004, a_005, a_006, a_007,
@@ -647,7 +647,7 @@ instance Bin Flags where
            a_113, a_114, a_115, a_116, a_117, a_118, a_119) <- rd_chunk7
           (a_120, a_121, a_122, a_123, a_124, a_125, a_126, a_127,
            a_128, a_129, a_130, a_131, a_132, a_133, a_134) <- rd_chunk8
-          (a_135, a_136, a_137) <- rd_chunk9
+          (a_135, a_136, a_137, a_138) <- rd_chunk9
           return (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
@@ -662,7 +662,7 @@ instance Bin Flags where
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
-                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137)
+                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138)
       where
         {-# NOINLINE rd_chunk0 #-}
         rd_chunk0 =
@@ -740,7 +740,8 @@ instance Bin Flags where
         rd_chunk9 =
           do
              a_135 <- fromBin; a_136 <- fromBin; a_137 <- fromBin
-             return (a_135, a_136, a_137)
+             a_138 <- fromBin
+             return (a_135, a_136, a_137, a_138)
 
 -- ----------
 
@@ -936,7 +937,8 @@ instance Bin VStmt where
     writeBytes (Vifelse c t f)   = do putI 9; toBin c; toBin t; toBin f
     writeBytes (Vdumpvars n is)  = do putI 10; toBin n; toBin is
     writeBytes (VTask i es)      = do putI 11; toBin i; toBin es
-    writeBytes (VAssert e d es)  = do putI 12; toBin e; toBin d; toBin es
+    writeBytes (VAssert k l ev d i pr) = do putI 12; toBin k; toBin l; toBin ev;
+                                            toBin d; toBin i; toBin pr
     writeBytes (VZeroDelay)      = do putI 13
     readBytes = do
       i <- getI
@@ -955,9 +957,49 @@ instance Bin VStmt where
         9 -> do c <- fromBin; t <- fromBin; f <- fromBin; return (Vifelse c t f)
         10 -> do n <- fromBin; is <- fromBin; return (Vdumpvars n is)
         11 -> do i <- fromBin; es <- fromBin; return (VTask i es)
-        12 -> do e <- fromBin; d <- fromBin; es <- fromBin; return (VAssert e d es)
+        12 -> do k <- fromBin; l <- fromBin; ev <- fromBin; d <- fromBin;
+                 i <- fromBin; pr <- fromBin; return (VAssert k l ev d i pr)
         13 -> return VZeroDelay
         n -> internalError $ "GenABin(VStmt).readBytes: " ++ show n
+
+instance Bin VAssertKind where
+    writeBytes k = putI (fromEnum k)
+    readBytes = do n <- getI; return (toEnum n)
+
+instance Bin VSeq where
+    writeBytes (VSExpr e)          = do putI 0; toBin e
+    writeBytes (VSDelay lo hi a b) = do putI 1; toBin lo; toBin hi; toBin a; toBin b
+    writeBytes (VSRep lo hi s)     = do putI 2; toBin lo; toBin hi; toBin s
+    writeBytes (VSOr a b)          = do putI 3; toBin a; toBin b
+    writeBytes (VSIntersect a b)   = do putI 4; toBin a; toBin b
+    writeBytes (VSFirstMatch s)    = do putI 5; toBin s
+    readBytes = do
+      i <- getI
+      case i of
+        0 -> do e <- fromBin; return (VSExpr e)
+        1 -> do lo <- fromBin; hi <- fromBin; a <- fromBin; b <- fromBin;
+                return (VSDelay lo hi a b)
+        2 -> do lo <- fromBin; hi <- fromBin; s <- fromBin; return (VSRep lo hi s)
+        3 -> do a <- fromBin; b <- fromBin; return (VSOr a b)
+        4 -> do a <- fromBin; b <- fromBin; return (VSIntersect a b)
+        5 -> do s <- fromBin; return (VSFirstMatch s)
+        n -> internalError $ "GenABin(VSeq).readBytes: " ++ show n
+
+instance Bin VProp where
+    writeBytes (VPSeq s)       = do putI 0; toBin s
+    writeBytes (VPNot p)       = do putI 1; toBin p
+    writeBytes (VPAnd a b)     = do putI 2; toBin a; toBin b
+    writeBytes (VPOr a b)      = do putI 3; toBin a; toBin b
+    writeBytes (VPImplies s p) = do putI 4; toBin s; toBin p
+    readBytes = do
+      i <- getI
+      case i of
+        0 -> do s <- fromBin; return (VPSeq s)
+        1 -> do p <- fromBin; return (VPNot p)
+        2 -> do a <- fromBin; b <- fromBin; return (VPAnd a b)
+        3 -> do a <- fromBin; b <- fromBin; return (VPOr a b)
+        4 -> do s <- fromBin; p <- fromBin; return (VPImplies s p)
+        n -> internalError $ "GenABin(VProp).readBytes: " ++ show n
 
 instance Bin VEventExpr where
     writeBytes (VEEOr e1 e2)  = do putI 0; toBin e1; toBin e2

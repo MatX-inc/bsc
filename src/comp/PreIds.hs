@@ -655,11 +655,32 @@ idWarnTask   = prelude_id_no fsWarnTask
 idInfoTask   = prelude_id_no fsInfoTask
 idFatalTask  = prelude_id_no fsFatalTask
 
-idSVA, idSvaParam, idSvaBool, idSvaNumber :: Id
+idSVA, idSVAssume, idSVACover, idSvaSeq, idSvaProp :: Id
 idSVA        = prelude_id_no fsSVA
-idSvaParam   = prelude_id_no fsSvaParam
-idSvaBool    = prelude_id_no fsSvaBool
-idSvaNumber  = prelude_id_no fsSvaNumber
+idSVAssume   = prelude_id_no fsSVAssume
+idSVACover   = prelude_id_no fsSVACover
+idSvaSeq     = prelude_id_no fsSvaSeq
+idSvaProp    = prelude_id_no fsSvaProp
+
+-- the Prelude's property constructors, for a frontend that builds a
+-- property itself (the BSV assertion syntax, see CVParserAssertion)
+idPrimSvaExpr, idPrimSvaDelay, idPrimSvaDelayUnbound, idPrimSvaRep,
+  idPrimSvaRepUnbound, idPrimSvaSeqOr, idPrimSvaSeqIntersect,
+  idPrimSvaFirstMatch, idPrimSvaPropSeq, idPrimSvaNot, idPrimSvaAnd,
+  idPrimSvaOr, idPrimSvaImplies :: Id
+idPrimSvaExpr = prelude_id_no fsPrimSvaExpr
+idPrimSvaDelay = prelude_id_no fsPrimSvaDelay
+idPrimSvaDelayUnbound = prelude_id_no fsPrimSvaDelayUnbound
+idPrimSvaRep = prelude_id_no fsPrimSvaRep
+idPrimSvaRepUnbound = prelude_id_no fsPrimSvaRepUnbound
+idPrimSvaSeqOr = prelude_id_no fsPrimSvaSeqOr
+idPrimSvaSeqIntersect = prelude_id_no fsPrimSvaSeqIntersect
+idPrimSvaFirstMatch = prelude_id_no fsPrimSvaFirstMatch
+idPrimSvaPropSeq = prelude_id_no fsPrimSvaPropSeq
+idPrimSvaNot = prelude_id_no fsPrimSvaNot
+idPrimSvaAnd = prelude_id_no fsPrimSvaAnd
+idPrimSvaOr = prelude_id_no fsPrimSvaOr
+idPrimSvaImplies = prelude_id_no fsPrimSvaImplies
 
 idSVAsampled, idSVArose, idSVAfell, idSVAstable, idSVApast :: Id
 idSVAsampled = prelude_id_no fsSVAsampled
@@ -717,7 +738,7 @@ taskIds = [ idFinish, idStop,
             idSWritebAV, idSWriteb, idSWriteoAV, idSWriteo,
             idFormat,
             --
-            idSVA,
+            idSVA, idSVAssume, idSVACover,
             --
             idDumpon,  idDumpoff, idDumpvars, idDumpflush, idDumpfile,
             idDumpall, idDumplimit,

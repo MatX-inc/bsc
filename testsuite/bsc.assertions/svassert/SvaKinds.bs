@@ -1,0 +1,24 @@
+package SvaKinds where
+
+import SVAssert
+
+-- assume and cover alongside assert
+{-# verilog sysSvaKinds #-}
+sysSvaKinds :: Module Empty
+sysSvaKinds = module
+  cnt :: Reg (UInt 8) <- mkReg 0
+  req :: Reg Bool <- mkReg False
+  ack :: Reg Bool <- mkReg False
+  rules
+    "tick": when True ==> do
+      cnt := cnt + 1
+      req := (cnt % 8) == 0
+      ack := req
+      if cnt == 40 then do
+          $display "done"
+          $finish 0
+        else return ()
+  svaAssume "cnt_in_range" (cnt <= 41)
+  svaAssert "ack_follows_req" (req |=> ack)
+  svaCover "saw_ack" ack
+  svaCover "never_both" (req && ack)

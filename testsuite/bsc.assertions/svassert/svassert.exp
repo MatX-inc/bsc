@@ -6,17 +6,40 @@ compile_verilog_pass SvaTest.bs sysSvaTest
 find_n_strings sysSvaTest.v {`ifndef BSV_NO_SVA} 5
 find_n_strings sysSvaTest.v {assert property (@(posedge CLK) disable iff (RST_N ==} 5
 find_regexp sysSvaTest.v {ack_follows_req: assert property}
-find_regexp sysSvaTest.v {##1\(\(1'd1\)\)\)\|->\(\(\(ack\)\)\)\);}
+find_regexp sysSvaTest.v {\(\(\(req\)\) ##1 \(\(1'd1\)\)\) \|-> \(\(ack\)\)\);}
 find_regexp sysSvaTest.v {##\[1:3\]}
-find_regexp sysSvaTest.v {not\(\(\(ack\)\)\)}
-find_regexp sysSvaTest.v {result=1; else result=0;}
+find_regexp sysSvaTest.v {not\(\(ack\)\)}
 find_regexp_fail sysSvaTest.v {translate_off\n *`ifndef BSV_NO_SVA}
+
+# assume and cover
+compile_verilog_pass SvaKinds.bs sysSvaKinds
+find_regexp sysSvaKinds.v {cnt_in_range: assume property}
+find_regexp sysSvaKinds.v {saw_ack: cover property}
+find_regexp sysSvaKinds.v {never_both: cover property}
+
+# -sva-immediate: boolean properties print as immediate assertions,
+# temporal ones are checked by the FSM checkers driving a flag
+compile_verilog_pass SvaImm.bs sysSvaImm {-sva-immediate}
+find_n_strings sysSvaImm.v {assert (} 5
+find_regexp sysSvaImm.v {always @\(posedge CLK\) if \(!\(RST_N ==}
+find_regexp sysSvaImm.v {cnt_bounded: assert \(cnt <=}
+find_regexp sysSvaImm.v {ack_follows_req: assert \(!failed\);}
+find_regexp_fail sysSvaImm.v {assert property}
 
 # Bluesim: the same assertions run as the SVA package's FSM checkers
 test_c_only SvaTest
 test_c_only SvaFail
+test_c_only SvaKinds
 
-# The BSV frontend's pass-through path uses the same backend
+# the checks on assertions
+compile_verilog_fail_error SvaBadLabel.bs G0134
+compile_verilog_fail_error SvaDupLabel.bs G0135
+compile_verilog_fail_error SvaImmBad.bs G0136 1 sysSvaImmBad {-sva-immediate}
+compile_fail_error SvaDirect.bs S0100 1 {-sim}
+
+# The BSV frontend's pass-through path builds the same primitives
 compile_verilog_pass_warning PassThrough.bsv S0028 1 mkPassThrough {-passthrough-assertions}
 find_regexp mkPassThrough.v {svaAssertion_L[0-9]+C[0-9]+: assert property \(@\(posedge CLK\) disable iff}
-find_regexp mkPassThrough.v {svaBool_L[0-9]+C[0-9]+=1; else svaBool_L[0-9]+C[0-9]+=0;}
+find_regexp mkPassThrough.v {##1 \(\(ack\)\)}
+compile_verilog_pass_warning PassThroughActions.bsv P0226 1 mkPassThroughActions {-passthrough-assertions}
+find_regexp mkPassThroughActions.v {\[\*1:2\]\) ##1 \(\(ack\)\)}

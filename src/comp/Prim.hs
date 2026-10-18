@@ -6,7 +6,8 @@ module Prim(
             stringSize,
             writePrimOp, readPrimOp,
             PrimResult(..), PrimArg(..)
-            ) where
+            ,
+               svaSeqPrims, svaPropPrims) where
 
 import Numeric(floatToDigits)
 import Eval(NFData(..))
@@ -331,7 +332,30 @@ data PrimOp =
         -- (GenBin.header).
         | PrimPack
         | PrimUnpack
+
+        -- SVA property structure: built by the Prelude's primSva*
+        -- functions, carried through ASyntax as an APrim tree of
+        -- abstract type SvaSeq/SvaProp, printed by the Verilog backend
+        | PrimSvaExpr           -- Bool -> SvaSeq
+        | PrimSvaDelay          -- lo hi s1 s2:  s1 ##[lo:hi] s2
+        | PrimSvaDelayUnbound   -- lo s1 s2:     s1 ##[lo:$] s2
+        | PrimSvaRep            -- lo hi s:      s [*lo:hi]
+        | PrimSvaRepUnbound     -- lo s:         s [*lo:$]
+        | PrimSvaSeqOr
+        | PrimSvaSeqIntersect
+        | PrimSvaFirstMatch
+        | PrimSvaPropSeq        -- SvaSeq -> SvaProp
+        | PrimSvaNot
+        | PrimSvaAnd
+        | PrimSvaOr
+        | PrimSvaImplies        -- s p:  s |-> p
         deriving (Eq, Ord, Show, Enum, Bounded, Generic.Data, Generic.Typeable)
+
+svaSeqPrims, svaPropPrims :: [PrimOp]
+svaSeqPrims = [PrimSvaExpr, PrimSvaDelay, PrimSvaDelayUnbound, PrimSvaRep,
+               PrimSvaRepUnbound, PrimSvaSeqOr, PrimSvaSeqIntersect,
+               PrimSvaFirstMatch]
+svaPropPrims = [PrimSvaPropSeq, PrimSvaNot, PrimSvaAnd, PrimSvaOr, PrimSvaImplies]
 
 -- Just some size, have to be coordinated with Prelude.bs
 stringSize :: String -> Integer
@@ -467,6 +491,19 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
 
         tp "primGenC" = PrimGenC
         tp "primGenVerilog" = PrimGenVerilog
+        tp "primSvaExpr" = PrimSvaExpr
+        tp "primSvaDelay" = PrimSvaDelay
+        tp "primSvaDelayUnbound" = PrimSvaDelayUnbound
+        tp "primSvaRep" = PrimSvaRep
+        tp "primSvaRepUnbound" = PrimSvaRepUnbound
+        tp "primSvaSeqOr" = PrimSvaSeqOr
+        tp "primSvaSeqIntersect" = PrimSvaSeqIntersect
+        tp "primSvaFirstMatch" = PrimSvaFirstMatch
+        tp "primSvaPropSeq" = PrimSvaPropSeq
+        tp "primSvaNot" = PrimSvaNot
+        tp "primSvaAnd" = PrimSvaAnd
+        tp "primSvaOr" = PrimSvaOr
+        tp "primSvaImplies" = PrimSvaImplies
         tp "primGenModuleName" = PrimGenModuleName
 
         tp "primOpenFile" = PrimOpenFile
@@ -888,6 +925,19 @@ instance NFData PrimOp where
     rnf PrimEQ3 = ()
     rnf PrimPack = ()
     rnf PrimUnpack = ()
+    rnf PrimSvaExpr = ()
+    rnf PrimSvaDelay = ()
+    rnf PrimSvaDelayUnbound = ()
+    rnf PrimSvaRep = ()
+    rnf PrimSvaRepUnbound = ()
+    rnf PrimSvaSeqOr = ()
+    rnf PrimSvaSeqIntersect = ()
+    rnf PrimSvaFirstMatch = ()
+    rnf PrimSvaPropSeq = ()
+    rnf PrimSvaNot = ()
+    rnf PrimSvaAnd = ()
+    rnf PrimSvaOr = ()
+    rnf PrimSvaImplies = ()
 
 -----
 

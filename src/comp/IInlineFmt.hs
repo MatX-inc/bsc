@@ -6,7 +6,7 @@ import IInlineUtil(iSubstIfc, iSubstWhen)
 import ISyntaxUtil(itString, icJoinActions, itBit, irulesMap, irulesMapM, itFmt, itGetArrows, itFun, itInst, itAction, iGetType, joinActions, iMkString, isitAction, isitActionValue_, iDefMapM, iDefsMap, emptyFmt)
 import Id
 import Prim
-import PreIds(idActionValue_, idArrow, tmpVarIds, idAVValue_, idAVAction_, idPrimFmtConcat, idSVA)
+import PreIds(idActionValue_, idArrow, tmpVarIds, idAVValue_, idAVAction_, idPrimFmtConcat)
 import ForeignFunctions
 import Control.Monad.Except(ExceptT, runExceptT)
 import Control.Monad.State
@@ -101,7 +101,7 @@ splitFmt :: IExpr a -> F a (IExpr a)
 splitFmt e =
   do let e0 = replaceDisplays e
      e1 <- unNestFmts [] [] e0
-     let e2 = flattenSvaFmts (combineFmts e1)
+     let e2 = combineFmts e1
          e3 = promoteConcat False e2
      e4 <- splitFF True [] [] e3
      e5 <- removeConcat e4
@@ -184,24 +184,6 @@ splitFmt e =
            let es' = map combineFmts es
            in (IAps c ts es')
         combineFmts e = e
-
-        -- a $SVA call must stay one call, since its Fmt is one property:
-        -- splice the pieces of each Fmt argument into the argument list
-        -- (combineFmts only merges one level, so walk the concat tree)
-        flattenSvaFmts (IAps (ICon fid f@(ICForeign {iConType = t})) [] es)
-                         | fid == idSVA =
-            let es' = concatMap flat es
-                (_, rt) = itGetArrows (getInnerType t)
-                t' = foldr1 itFun (map iGetType es' ++ [rt])
-            in  IAps (ICon fid f {iConType = t'}) [] es'
-          where
-            flat (IAps (ICon _ (ICPrim _ PrimFmtConcat)) _ [e0, e1]) = flat e0 ++ flat e1
-            flat (IAps (ICon _ (ICForeign {})) _ fes) | all ((/= itFmt) . iGetType) fes = fes
-            flat x | iGetType x == itFmt =
-                internalError ("flattenSvaFmts: unsupported Fmt in $SVA: " ++ ppReadable x)
-            flat x = [x]
-        flattenSvaFmts (IAps x ts es) = IAps x ts (map flattenSvaFmts es)
-        flattenSvaFmts x = x
 
         -- next move primFmtConcats up so that after this step, all the primFmtConcats in any
         -- expression come first

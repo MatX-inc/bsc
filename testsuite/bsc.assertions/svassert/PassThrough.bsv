@@ -9,5 +9,5 @@ module mkPassThrough(Empty);
       req <= !req;
       ack <= req;
    endrule
-   always assert property (req |-> ##1 ack) else $display("FAIL");
+   always assert property (req |-> ##1 ack) ;
 endmodule

@@ -1989,8 +1989,23 @@ instance VUse VStmt where
     vuses (Vifelse e s s') = vuses e ++ vuses s ++ vuses s'
     vuses (Vdumpvars _ _) = []
     vuses (VTask _ es) = vuses es
-    vuses (VAssert e d es) = vuses e ++ maybe [] vuses d ++ vuses es
+    vuses (VAssert _ _ e d _ pr) = vuses e ++ maybe [] vuses d ++ vuses pr
     vuses (VZeroDelay) = []
+
+instance VUse VProp where
+    vuses (VPSeq s) = vuses s
+    vuses (VPNot p) = vuses p
+    vuses (VPAnd a b) = vuses a ++ vuses b
+    vuses (VPOr a b) = vuses a ++ vuses b
+    vuses (VPImplies s p) = vuses s ++ vuses p
+
+instance VUse VSeq where
+    vuses (VSExpr e) = vuses e
+    vuses (VSDelay _ _ a b) = vuses a ++ vuses b
+    vuses (VSRep _ _ s) = vuses s
+    vuses (VSOr a b) = vuses a ++ vuses b
+    vuses (VSIntersect a b) = vuses a ++ vuses b
+    vuses (VSFirstMatch s) = vuses s
 
 instance VUse VLValue where
     vuses (VLId i) = [i]

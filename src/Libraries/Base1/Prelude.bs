@@ -152,7 +152,11 @@ package Prelude(
 
         $error, $warning, $info, $fatal,
 
-        $SVA, SvaParam(..),
+        $SVA, $SVAssume, $SVACover,
+        SvaSeq, SvaProp,
+        primSvaExpr, primSvaDelay, primSvaDelayUnbound, primSvaRep, primSvaRepUnbound,
+        primSvaSeqOr, primSvaSeqIntersect, primSvaFirstMatch,
+        primSvaPropSeq, primSvaNot, primSvaAnd, primSvaOr, primSvaImplies,
 
         $random,
 
@@ -247,6 +251,7 @@ package Prelude(
         epochTime,
         buildVersion,
         testAssert,
+        svaImmediate,
 
         -- Ordering type for working with comparators
         Ordering(..),
@@ -3329,9 +3334,45 @@ foreign $warning :: PrimAction = "$warning"
 foreign $info :: PrimAction = "$info"
 foreign $fatal :: PrimAction = "$fatal"
 
-foreign $SVA :: PrimAction = "$sva"
+-- Concurrent (SVA) assertions.  A property is built from the primitives
+-- below and handed to one of the $SVA tasks with a label; the Verilog
+-- backend prints it as a native `assert property`.  BH code should use
+-- the SVAssert package rather than these directly.
+primitive type SvaSeq :: *
+primitive type SvaProp :: *
 
-data SvaParam = SvaBool Bool | SvaNumber (UInt 32) deriving (Bits)
+-- the boolean is packed: a dynamic Bool has no evaluated form
+primitive primSvaExpr :: Bit 1 -> SvaSeq
+-- s1 ##[lo:hi] s2
+primitive primSvaDelay :: Bit 32 -> Bit 32 -> SvaSeq -> SvaSeq -> SvaSeq
+-- s1 ##[lo:$] s2
+primitive primSvaDelayUnbound :: Bit 32 -> SvaSeq -> SvaSeq -> SvaSeq
+-- s [*lo:hi]
+primitive primSvaRep :: Bit 32 -> Bit 32 -> SvaSeq -> SvaSeq
+-- s [*lo:$]
+primitive primSvaRepUnbound :: Bit 32 -> SvaSeq -> SvaSeq
+primitive primSvaSeqOr :: SvaSeq -> SvaSeq -> SvaSeq
+primitive primSvaSeqIntersect :: SvaSeq -> SvaSeq -> SvaSeq
+primitive primSvaFirstMatch :: SvaSeq -> SvaSeq
+primitive primSvaPropSeq :: SvaSeq -> SvaProp
+primitive primSvaNot :: SvaProp -> SvaProp
+primitive primSvaAnd :: SvaProp -> SvaProp -> SvaProp
+primitive primSvaOr :: SvaProp -> SvaProp -> SvaProp
+-- s |-> p
+primitive primSvaImplies :: SvaSeq -> SvaProp -> SvaProp
+
+foreign _sva_assert_ :: String -> SvaProp -> PrimAction = "$sva_assert"
+foreign _sva_assume_ :: String -> SvaProp -> PrimAction = "$sva_assume"
+foreign _sva_cover_ :: String -> SvaProp -> PrimAction = "$sva_cover"
+
+$SVA :: String -> SvaProp -> Action
+$SVA label p = fromPrimAction (_sva_assert_ label p)
+
+$SVAssume :: String -> SvaProp -> Action
+$SVAssume label p = fromPrimAction (_sva_assume_ label p)
+
+$SVACover :: String -> SvaProp -> Action
+$SVACover label p = fromPrimAction (_sva_cover_ label p)
 
 displayHex :: (Bits a sa) => a -> Action
 displayHex x = $display "0x%h" x
@@ -4316,6 +4357,15 @@ buildVersion = 0
 --@ \end{libverbatim}
 testAssert :: Bool
 testAssert = False
+
+--@ \index{svaImmediate@\te{svaImmediate}|textbf}
+--@ True when the compiler was asked (\te{-sva-immediate}) to emit SVA
+--@ assertions as immediate assertions over boolean expressions.
+--@ \begin{libverbatim}
+--@ Bool svaImmediate;
+--@ \end{libverbatim}
+svaImmediate :: Bool
+svaImmediate = False
 
 ------------------
 
