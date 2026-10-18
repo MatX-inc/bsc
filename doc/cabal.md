@@ -235,11 +235,24 @@ linked by name (section 3). `util/cabal-ladder.sh`:
   while its content does not. A list with no `.hi` lines or holding the
   digest of empty text is refused, a failing or silent `--show-iface` fails
   the run, and a partial list is removed, so nothing compares IDENTICAL by
-  producing nothing.
+  producing nothing. Beside the list it writes a record of what built it,
+  `c-j1.toolchain` beside `c-j1.sha256`: the runner image when GitHub's runner
+  names one, the system, the first line the C compiler, the linker and `ar`
+  print for their version, ghc, cabal, patchelf where present, and the tool
+  and dependency versions of the package's `cabal_macros.h`, the header Cabal
+  includes into every module that runs the C preprocessor. That header names
+  every program Cabal configured and found a version for (`ld`, `ar` and `tar`
+  carry none), whether the package uses it or not, so a program installed at
+  another version between two legs' dependency steps is in the interface of
+  every such module, in the package and in the store alike, with nothing in
+  the build to blame; the record names it.
 - `verdict REF OTHER...` compares each list against the first, reporting
   differences by category (program, shared object, object, interface, archive,
   and distribution for an installed directory's files); a missing list is
-  MISSING, and the verdict fails rather than passing on nothing.
+  MISSING, and the verdict fails rather than passing on nothing. Under a
+  DIFFER it says whether the two legs' toolchain records agree and prints
+  their difference when they do not, and identical lists whose records differ
+  are noted too; the records do not decide the result, which is the bytes'.
 - `rebuild NAME [DIR...]` is that round alone, for CI: the rebuilds, each
   hashed as `hash` does into `NAME-rebuild`, `NAME-edit` and `NAME-revert`,
   with `BUILD_CMD` as the build (`cabal build all` unless given; CI gives the
@@ -264,7 +277,10 @@ linked by name (section 3). `util/cabal-ladder.sh`:
   (`make install-solvers`, section 2) and names them to the linker for every
   leg. It runs with any GHC the package builds with (GHC's own parallelism
   varies only from 9.12, section 2), and needs a clean working tree and no
-  `cabal.project.local`; results go to `determinism-results/<timestamp>`.
+  `cabal.project.local`; the lists, the toolchain records and the logs go to
+  `determinism-results/<timestamp>`.
+- `toolchain` prints the record `hash` writes beside a list, for the machine
+  it runs on and the build in `dist-newstyle`.
 
 `.github/workflows/cabal.yml` runs the same two halves across machines and
 directories, with cabal-install pinned to 3.16.1.0 (section 2): on ubuntu-24.04
@@ -281,7 +297,12 @@ rebuilds are held to the reference as well, in the reference directory and in
 another. It runs on the project's own pull requests and on a dispatch; a fork's
 pull requests do not run it, since a fork's branches are a developer's loop,
 and a fork dispatches it when it qualifies a release. Every planned leg and
-rebuild is named to the verdict, so a failed leg is MISSING, not skipped.
+rebuild is named to the verdict, so a failed leg is MISSING, not skipped. Each
+leg uploads its toolchain records with its lists, and the verdict's log prints
+the reference's, so a difference is read against what built the legs: once, a
+macOS leg whose `brew update` failed kept the image's pkgconf while the other
+legs upgraded theirs, and the interface of every module that runs the C
+preprocessor differed through `cabal_macros.h` alone.
 `BuildVersion` embeds the commit, so a ladder compares one commit. A failure is
 a design stop, not a mechanical fix: the first suspects are a root without the
 Warmup import, interface content the direct-dependency rule does not cover, and
