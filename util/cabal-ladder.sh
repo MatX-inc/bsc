@@ -7,7 +7,8 @@
 # the whole ladder on one machine, every leg a fresh checkout in a directory of
 # its own: it runs `hash` on every leg, `rebuild` on the serial legs and
 # `verdict` over the lists; CI (.github/workflows/cabal.yml) runs it, one job
-# per platform.
+# per platform.  `hash` writes a record of the toolchain beside each list,
+# which `verdict` reads a difference against.
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOP="$(cd "$(dirname "$SELF")/.." && pwd)"; cd "$TOP" || exit 2
@@ -16,8 +17,13 @@ usage() {
   cat >&2 <<USAGE
 usage: util/cabal-ladder.sh hash OUT.sha256 [DIR...]
                                                   hash the build in dist-newstyle, and every file of
-                                                  each installed DIR, into OUT.sha256
-       util/cabal-ladder.sh verdict REF OTHER...  compare hash lists against REF (an absent one is MISSING)
+                                                  each installed DIR, into OUT.sha256, with the
+                                                  toolchain record beside it in OUT.toolchain
+       util/cabal-ladder.sh verdict REF OTHER...  compare hash lists against REF (an absent one is MISSING);
+                                                  a difference is read against the toolchain records
+       util/cabal-ladder.sh toolchain             print the toolchain record: the runner image, the system,
+                                                  cc, ld, ar, ghc, cabal, patchelf where present and the
+                                                  versions in cabal_macros.h
        util/cabal-ladder.sh rebuild NAME [DIR...]  rebuild in place with nothing changed and, from GHC
                                                   9.12, after a marker edit and its revert, each hashed
                                                   like \`hash\` into \$OUT/NAME-{rebuild,edit,revert}.sha256
@@ -26,7 +32,7 @@ usage: util/cabal-ladder.sh hash OUT.sha256 [DIR...]
        util/cabal-ladder.sh run                   the ladder on this machine: the legs \$LEGS (default the
                                                   six of doc/cabal.md), each a fresh checkout of HEAD under
                                                   \$OUT/legs, up to \$LADDER_JOBS at once (default one per
-                                                  6 GB of memory), then the verdict; lists and
+                                                  6 GB of memory), then the verdict; lists, records and
                                                   logs in \$OUT (default determinism-results/<stamp>);
                                                   KEEP_LEGS=1 keeps the legs' trees
 USAGE
@@ -59,6 +65,42 @@ iface_hash() {  # one interface file -> "hash  path"
 }
 export -f sha256 iface_hash
 
+# What built the list it is written beside, for reading a difference: the
+# runner image when GitHub's runner names one, the system, the C compiler,
+# the linker and ar, ghc, cabal, patchelf where it is (mk-dist.sh rewrites the
+# shipped libraries with it), and the versions in the package's
+# cabal_macros.h, the header Cabal includes into every module that runs the C
+# preprocessor: every program Cabal configured and found a version for (ld, ar
+# and tar carry none), used by the package or not, and every dependency.
+# A program installed at another version between two legs' dependency steps
+# (pkg-config on a macOS runner, once) is in that header and so in the
+# interface of every such module, in the package and in the store alike, with
+# nothing in the build to blame; the record names it.  The dependencies are
+# pinned by cabal.project's index-state and recorded for completeness.
+toolchain_record() {
+  version_line() {  # LABEL COMMAND ARGS...: the first line the command prints, or that it is not found
+    if command -v "$2" >/dev/null 2>&1; then echo "$1: $("${@:2}" 2>&1 | head -1)"; else echo "$1: $2 not found"; fi
+  }
+  [ -n "${ImageOS-}${ImageVersion-}" ] && echo "image: ${ImageOS-} ${ImageVersion-}"
+  echo "system: $(uname -srm)"
+  version_line cc cc --version
+  version_line ld ld -v
+  version_line ar ar --version
+  version_line ghc ghc --numeric-version
+  version_line cabal cabal --numeric-version
+  command -v patchelf >/dev/null 2>&1 && version_line patchelf patchelf --version
+  # The header's own comments name each tool and package with its version
+  # (the macro names spell a hyphen as an underscore).
+  if [ -d dist-newstyle/build ] && find dist-newstyle/build -name cabal_macros.h | grep -q .; then
+    find dist-newstyle/build -name cabal_macros.h -exec sed -n \
+      -e 's|^/\* tool \(.*\)-\([0-9][0-9.]*\) \*/$|tool \1: \2|p' \
+      -e 's|^/\* package \(.*\)-\([0-9][0-9.]*\) \*/$|package \1: \2|p' {} + | LC_ALL=C sort -u
+  else
+    echo "cabal_macros.h: none under dist-newstyle/build"
+  fi
+  return 0
+}
+
 # Every object, archive, shared object and interface under dist-newstyle/build
 # and every program bsc.cabal declares, as bytes except interfaces, with paths relative
 # to the repository so builds in different directories compare.  Then every
@@ -70,7 +112,7 @@ export -f sha256 iface_hash
 hash_build() {
   LIST="$1"; shift
   # A partial list would compare like a complete one.
-  trap '[ $? -eq 0 ] || rm -f "$LIST"' EXIT
+  trap '[ $? -eq 0 ] || rm -f "$LIST" "${LIST%.sha256}.toolchain"' EXIT
   local ncpu programs e bin empty_digest
   ncpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
   programs=$(awk '/^executable[ \t]/ {print $2}' bsc.cabal)
@@ -106,19 +148,45 @@ hash_build() {
   empty_digest="$(sha256 < /dev/null | cut -d' ' -f1)"
   grep "^$empty_digest " "$LIST" | grep -Eq '\.(hi|dyn_hi|p_hi)$' && die "$LIST hashes an interface as empty text"
   echo "$(wc -l < "$LIST") files hashed into $LIST"
+  toolchain_record > "${LIST%.sha256}.toolchain"
+  echo "toolchain recorded in ${LIST%.sha256}.toolchain"
+}
+
+# The toolchain records beside two lists (NAME.toolchain beside NAME.sha256):
+# whether they agree and, when not, their difference, under the lists' line;
+# with `quiet`, nothing when they agree or either is absent.
+toolchain_compare() {  # REF_LIST OTHER_LIST [quiet]
+  local a="${1%.sha256}.toolchain" b="${2%.sha256}.toolchain" f
+  for f in "$a" "$b"; do
+    [ -r "$f" ] && continue
+    [ "${3-}" = quiet ] || echo "   toolchain: no record $f"
+    return 0
+  done
+  if diff -q "$a" "$b" >/dev/null; then
+    [ "${3-}" = quiet ] || echo "   toolchain: the same ($(basename "$a"), $(basename "$b"))"
+    return 0
+  fi
+  echo "   toolchain: differs ($(basename "$a") < > $(basename "$b"))"
+  diff "$a" "$b" | grep '^[<>]' | sed 's/^/      /'
 }
 
 # Pass means every list is identical to the reference.  Differences are
 # reported by category (program, shared object, object, interface, archive,
 # and distribution for the files of an installed directory) so a failure says
-# what moved.
+# what moved, and against the toolchain records beside the two lists, so it
+# says whether the same tools built them; the records do not decide the
+# result, which is the bytes'.  Identical lists whose records differ are
+# noted as well.
 verdict() {
   local ref="$1" fail=0 other name diffs n cat sel c; shift
   [ -r "$ref" ] && [ -s "$ref" ] || { echo "verdict: reference $ref is missing, unreadable or empty"; exit 2; }
   for other in "$@"; do
     name="$(basename "$other" .sha256)"
     if [ ! -r "$other" ] || [ ! -s "$other" ]; then echo "MISSING: $name (no hash list)"; fail=1; continue; fi
-    if diff -q "$ref" "$other" >/dev/null; then echo "IDENTICAL: $(basename "$ref" .sha256) vs $name ($(wc -l < "$other") files)"; continue; fi
+    if diff -q "$ref" "$other" >/dev/null; then
+      echo "IDENTICAL: $(basename "$ref" .sha256) vs $name ($(wc -l < "$other") files)"
+      toolchain_compare "$ref" "$other" quiet; continue
+    fi
     fail=1
     diffs=$(diff "$ref" "$other" | grep '^[<>]' | awk '{print $NF}' | sort -u)
     n=$(printf '%s\n' "$diffs" | sed '/^$/d' | wc -l)
@@ -136,6 +204,7 @@ verdict() {
       c=$(printf '%s\n' "$sel" | sed '/^$/d' | wc -l)
       [ "$c" -gt 0 ] && { echo "   $cat: $c"; printf '%s\n' "$sel" | sed '/^$/d' | head -8 | sed 's/^/      /'; }
     done
+    toolchain_compare "$ref" "$other"
   done
   echo "result: $([ $fail -eq 0 ] && echo PASS || echo FAIL)"
   exit $fail
@@ -181,7 +250,7 @@ rebuild_round() {  # NAME [DIR...]
 # builds alone first: the dependency store it fills is shared by the others,
 # which then run up to $LADDER_JOBS at once, one per 6 GB of memory unless
 # set.  A leg's tree goes once its lists are written (KEEP_LEGS=1 keeps it);
-# the lists and the logs stay in $OUT, and the verdict
+# the lists, the toolchain records and the logs stay in $OUT, and the verdict
 # over them is the result.
 ladder_jobs_default() {
   local kb
@@ -250,13 +319,15 @@ run_ladder() {
     rounds="$rounds $OUT/$name-rebuild.sha256"
     ghc_deterministic && rounds="$rounds $OUT/$name-revert.sha256"
   done
-  echo; echo "verdict against $ref (lists and logs in $OUT):"
+  echo; echo "toolchain of $ref:"; sed 's/^/   /' "$OUT/$ref.toolchain"
+  echo "verdict against $ref (lists, records and logs in $OUT):"
   "$SELF" verdict "$OUT/$ref.sha256" $others $rounds
 }
 
 case "${1-}" in
   hash) [ $# -ge 2 ] || usage; set -eo pipefail; shift; hash_build "$@";;
   verdict) [ $# -ge 3 ] || usage; shift; verdict "$@";;
+  toolchain) [ $# -eq 1 ] || usage; toolchain_record;;
   run) [ $# -eq 1 ] || usage; run_ladder;;
   rebuild) [ $# -ge 2 ] || usage; shift; OUT="${OUT:-.}"; trap 'git checkout -- "$LEAF"' EXIT; rebuild_round "$@";;
   *) usage;;
