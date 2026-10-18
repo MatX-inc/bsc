@@ -5,8 +5,9 @@ name: Cabal build
 # and in other checkout directories must give bit-identical objects,
 # interfaces, archives, shared objects and programs, and the same bytes in the bluehs script
 # runtime (util/bluehs) installed from it (util/cabal-ladder.sh hash hashes a
-# build and the distribution, util/cabal-ladder.sh verdict compares the
-# lists).  The ladder is six legs: the serial build against a second serial
+# build and the distribution and records the toolchain beside the list,
+# util/cabal-ladder.sh verdict compares the lists and reads a difference
+# against the records).  The ladder is six legs: the serial build against a second serial
 # build, -j16, and three -j64 builds, the second serial and two of the -j64
 # in other directories; the two serial legs then rebuild in place, with
 # nothing changed and, from GHC 9.12, after a marker edit and its revert,
@@ -168,6 +169,10 @@ jobs:
         run: make -j"$(getconf _NPROCESSORS_ONLN)" GHCJOBS="$JOBS" install-src
       - name: Install the bluehs runtime
         run: make install-bluehs
+      # The list and, beside it, the leg's toolchain record (LEG.toolchain:
+      # the runner image, the system, cc, ld, ar, ghc, cabal, patchelf where
+      # present and the versions in cabal_macros.h), which the verdict reads a
+      # difference against.
       - name: Hash the build and the distribution
         env:
           LEG: ${{ matrix.leg.name }}
@@ -195,6 +200,8 @@ jobs:
           path: |
             ${{ matrix.leg.dir }}/${{ matrix.leg.name }}.sha256
             ${{ matrix.leg.dir }}/${{ matrix.leg.name }}-re*.sha256
+            ${{ matrix.leg.dir }}/${{ matrix.leg.name }}.toolchain
+            ${{ matrix.leg.dir }}/${{ matrix.leg.name }}-re*.toolchain
           if-no-files-found: error
 
   verdict:
@@ -222,6 +229,9 @@ jobs:
           REBUILDS: ${{ needs.plan.outputs.rebuilds }}
         run: |
           ls -l hashes
+          # The reference's toolchain, so the log says what built it; the
+          # verdict reads a leg's difference against the leg's own record.
+          echo "toolchain of c-j1:"; sed 's/^/   /' hashes/c-j1.toolchain || true
           # Every planned leg, and every planned rebuild of the serial legs, is
           # named, so one whose build or hash step failed is reported MISSING
           # instead of being skipped.
