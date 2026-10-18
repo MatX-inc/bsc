@@ -69,10 +69,11 @@ with GHC2021; 22.04's 8.8.4 has not built them since c1348cb6d (bytestring
 compiles in parallel under the same condition; an older compiler compiles each
 package serially, so GHC's own parallelism has nothing to vary below 9.12. The
 claim of section 5 is measured on 9.12.2, 9.12.4 and 9.14.1 with GHC parallel,
-and on 9.4.7 with GHC serial. The native dependencies are those of
-`make install-src`: Tcl headers and library (`platform.sh` finds them), a C and
-C++ compiler, and the tools the vendored solvers' Makefiles run (autoconf,
-bison, flex, gperf), as installed by
+and on 9.4.7 with GHC serial; its rebuild after an edit and its revert on
+9.14.1, where it holds, and on 9.4.7, where it does not. The native
+dependencies are those of `make install-src`: Tcl headers and library
+(`platform.sh` finds them), a C and C++ compiler, and the tools the vendored
+solvers' Makefiles run (autoconf, bison, flex, gperf), as installed by
 `.github/workflows/install_dependencies_*.sh`.
 
 `cabal.project` pins `index-state`, so the versions of the Hackage dependencies
@@ -208,18 +209,104 @@ src/comp/app`, `main-is: <name>.hs`, `ghc-options: -main-is Main_<name>`,
 The `Main_<name>` header keeps the file out of the library under the rule of
 section 1, and the entry module carries `import Warmup ()`.
 
-## 5. The determinism claim
+## 5. The determinism ladder
 
-One commit, built from a clean `dist-newstyle` at the project's settings,
-serially, oversubscribed or in another checkout directory, gives the same
-objects, interfaces, archives, programs and shared object, and a rebuild
-after an edit and its revert lands on the same bytes. The programs link
-against the library archive in one order, the Warmup imports give every
-module the external interface set in one order (section 3),
+The claim: one commit, built from a clean `dist-newstyle` at the project's
+settings, serially, oversubscribed and in other checkout directories, gives
+bit-identical objects, interfaces, archives, programs and shared objects, and,
+from GHC 9.12, a rebuild after an edit and its revert lands on the same bytes.
+The programs link against the library archive in one order, the Warmup imports
+give every module the external interface set in one order (section 3),
 `-fobject-determinism` holds the object code (GHC 9.12, section 2), and no
 directory of the checkout is written into any of them, since the solvers are
-linked by name (section 3). The check of the claim, a ladder of builds hashed
-and compared on one machine and in CI, is a separate series.
+linked by name (section 3). `util/cabal-ladder.sh`:
+
+- `hash OUT [DIR...]` hashes one build: every object, archive, shared
+  object and program (the programs from `cabal list-bin bsc:exe:<name>` for
+  each `executable` stanza) as
+  bytes, with paths relative to the repository so directories compare, then
+  every file of each installed directory named after the list (CI names
+  `inst/bluehs`, the script runtime of `util/bluehs`), as bytes except the
+  interfaces under its `store`, which are hashed as below. An interface
+  file is hashed as the text of `ghc --show-iface` minus its interface hash
+  and flags fingerprint, with the package environment off: GHC fingerprints
+  the flags it was given, and cabal passes the autogen include directory by
+  absolute path, so the bytes of a `.hi` depend on the checkout directory
+  while its content does not. A list with no `.hi` lines or holding the
+  digest of empty text is refused, a failing or silent `--show-iface` fails
+  the run, and a partial list is removed, so nothing compares IDENTICAL by
+  producing nothing. Beside the list it writes a record of what built it,
+  `c-j1.toolchain` beside `c-j1.sha256`: the runner image when GitHub's runner
+  names one, the system, the first line the C compiler, the linker and `ar`
+  print for their version, ghc, cabal, patchelf where present, and the tool
+  and dependency versions of the package's `cabal_macros.h`, the header Cabal
+  includes into every module that runs the C preprocessor. That header names
+  every program Cabal configured and found a version for (`ld`, `ar` and `tar`
+  carry none), whether the package uses it or not, so a program installed at
+  another version between two legs' dependency steps is in the interface of
+  every such module, in the package and in the store alike, with nothing in
+  the build to blame; the record names it.
+- `verdict REF OTHER...` compares each list against the first, reporting
+  differences by category (program, shared object, object, interface, archive,
+  and distribution for an installed directory's files); a missing list is
+  MISSING, and the verdict fails rather than passing on nothing. Under a
+  DIFFER it says whether the two legs' toolchain records agree and prints
+  their difference when they do not, and identical lists whose records differ
+  are noted too; the records do not decide the result, which is the bytes'.
+- `rebuild NAME [DIR...]` is that round alone, for CI: the rebuilds, each
+  hashed as `hash` does into `NAME-rebuild`, `NAME-edit` and `NAME-revert`,
+  with `BUILD_CMD` as the build (`cabal build all` unless given; CI gives the
+  make targets, so the installed directory named to it is rebuilt and hashed
+  too) and `REBUILD_STEPS` as the steps where the caller decides them (CI
+  passes its plan's, so the lists made are the lists its verdict expects).
+  Below GHC 9.12 the round is the rebuild with nothing changed alone: there a
+  module's object carries the session's uniques, so a module recompiled alone
+  differs from the one compiled in the full build (at 9.4.7, `IOUtil.o` in the
+  name of one local label and the relocation naming it, with the same code and
+  data) while clean builds agree among themselves; from 9.12
+  `-fobject-determinism`, which the project turns on there, holds it: at 9.14.1
+  a module recompiled alone under a perturbed unique supply is identical with
+  the flag and differs without it (section 2).
+- `run` is the ladder on one machine: legs A and B at the project's settings
+  from clean (repeatability), then the in-place round on B: a rebuild with
+  nothing changed, which must match A, and from GHC 9.12 a marker edit, a
+  comment, to one module (`src/comp/Libs/IOUtil.hs`), a rebuild, which
+  recompiles that module alone, the revert and a rebuild, which must match A as
+  well; then C at `-j1` (serial against parallel) and D at `-j64`
+  (oversubscription), each compared with A. It installs the solvers first
+  (`make install-solvers`, section 2) and names them to the linker for every
+  leg. It runs with any GHC the package builds with (GHC's own parallelism
+  varies only from 9.12, section 2), and needs a clean working tree and no
+  `cabal.project.local`; the lists, the toolchain records and the logs go to
+  `determinism-results/<timestamp>`.
+- `toolchain` prints the record `hash` writes beside a list, for the machine
+  it runs on and the build in `dist-newstyle`.
+
+`.github/workflows/cabal.yml` runs the same two halves across machines and
+directories, with cabal-install pinned to 3.16.1.0 (section 2): on ubuntu-24.04
+and macos-15 it compares the serial build against a second serial build in
+another directory, `-j16`, and `-j64` three times in three directories, which
+checks that the build depends neither on its parallelism nor on its path. Each
+leg then installs the tree (`make install-src`) and the bluehs runtime over it
+(`make install-bluehs`, whose second build of the libraries takes the leg's
+`cabal.project.local`), and hashes `inst/bluehs` with the build, so the
+distribution is held to the same claim: the same bytes whatever the parallelism
+and the directory. The two serial legs then rebuild in place, with nothing
+changed and, from GHC 9.12, after a marker edit and its revert, and those
+rebuilds are held to the reference as well, in the reference directory and in
+another. It runs on the project's own pull requests and on a dispatch; a fork's
+pull requests do not run it, since a fork's branches are a developer's loop,
+and a fork dispatches it when it qualifies a release. Every planned leg and
+rebuild is named to the verdict, so a failed leg is MISSING, not skipped. Each
+leg uploads its toolchain records with its lists, and the verdict's log prints
+the reference's, so a difference is read against what built the legs: once, a
+macOS leg whose `brew update` failed kept the image's pkgconf while the other
+legs upgraded theirs, and the interface of every module that runs the C
+preprocessor differed through `cabal_macros.h` alone.
+`BuildVersion` embeds the commit, so a ladder compares one commit. A failure is
+a design stop, not a mechanical fix: the first suspects are a root without the
+Warmup import, interface content the direct-dependency rule does not cover, and
+the programs' entry modules.
 
 ## 6. Decomposing into packages later
 
