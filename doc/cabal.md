@@ -131,10 +131,13 @@ linked by name.
 `util/cabal-ladder.sh`:
 
 - `hash OUT [DIR...]` hashes the build under `dist-newstyle` and every file of
-  each installed DIR; interfaces as `ghc --show-iface` text minus the interface
-  hash and flags fingerprint, since their bytes carry the checkout directory.
+  each installed DIR, with a toolchain record beside it; interfaces as `ghc
+  --show-iface` text minus the interface hash and flags fingerprint, since
+  their bytes carry the checkout directory.
 - `verdict REF OTHER...` compares each list with the reference; an absent list
-  is MISSING.
+  is MISSING, and a difference is read against the toolchain records.
+- `toolchain` prints the record `hash` writes: the tools and the versions in
+  `cabal_macros.h`.
 - `rebuild NAME [DIR...]` runs the in-place round: a rebuild with nothing
   changed and, from 9.12, after a marker edit to `src/comp/Libs/IOUtil.hs` and
   its revert, each hashed.
