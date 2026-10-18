@@ -39,7 +39,7 @@ module Verilog(
                getVIdString,
                mkVEOp,
                mkVEUnOp,
-               mkEqualsReset, mkNotEqualsReset, mkEdgeReset,
+               mkEqualsReset, mkNotEqualsReset, mkEdgeReset, isOne,
                mkReset, mkNotReset,
                defaultVId,
                vIsValidIdent
@@ -520,7 +520,9 @@ data VStmt
         | Vifelse VExpr VStmt VStmt
         | Vdumpvars Int [VId]           -- appears unused
         | VTask VId [VExpr] -- calling a verilog system task as a Bluespec foreign function of type Action
-        | VAssert VEventExpr [VExpr]
+        -- a concurrent assertion: clock event, the `disable iff` condition,
+        -- and the arguments of the $SVA call (see ppAssert for their shape)
+        | VAssert VEventExpr (Maybe VExpr) [VExpr]
         | VZeroDelay -- injecting an explicit (0-tick) delay for synchronization purposes
         deriving (Eq, Show, Generic.Data, Generic.Typeable)
 
@@ -572,7 +574,7 @@ instance PPrint VStmt where
         pPrint d p (VTask task []) | isTaskVId task = pPrint d 0 task <> text ";"
         pPrint d p (VTask task es) = pPrint d 0 task <> text "(" <> commaList d es <> text ");"
 
-        pPrint d p (VAssert ev es) = ppAssert d p ev es
+        pPrint d p (VAssert ev dis es) = ppAssert d ev dis es
 
 
         pPrint d p  VZeroDelay     = text "#0;"
@@ -590,30 +592,43 @@ instance NFData VStmt where
     rnf (Vifelse expr s1 s2) = rnf3 expr s1 s2
     rnf (Vdumpvars lvl vars) = rnf2 lvl vars
     rnf (VTask tid exprs) = rnf2 tid exprs
-    rnf (VAssert ev exprs) = rnf2 ev exprs
+    rnf (VAssert ev dis exprs) = rnf3 ev dis exprs
     rnf VZeroDelay = ()
 
-ppAssert :: PDetail -> Int -> VEventExpr -> [VExpr] -> Doc
---ppAssert d i ev (VEString s : es) = text (pretty 78 78 (ppAs1 d i s es))
-ppAssert d i ev (VEString s1 :
-                 VEString s2 : es) = text (s1++": assert property (@(") <>
-                                     pPrint d 0 ev <> text ")" $$
-                                     ppAs1 d i s2 es
+-- The $SVA arguments are: the label, then the property as text pieces in
+-- which each %b or %n prints the operand that follows, and optionally one
+-- trailing register that the assertion's action block latches the result
+-- into.  The guard macro lets flows that only read Verilog-2001 drop it.
+ppAssert :: PDetail -> VEventExpr -> Maybe VExpr -> [VExpr] -> Doc
+ppAssert d ev dis (VEString label : rest) =
+    text "`ifndef BSV_NO_SVA" $$
+    (text (label ++ ": assert property (@(") <> pPrint d 0 ev <> text ")" <+>
+     disDoc <+> ppAssertBody d rest) $$
+    text "`endif"
+  where disDoc = case dis of
+                   Nothing -> empty
+                   Just c  -> text "disable iff (" <> pPrint d 0 c <> text ")"
 ppAssert _ _ _ es = internalError ("ppAssert: " ++ show es)
 
-ppAs1 :: PDetail -> Int -> String -> [VExpr] -> Doc
-ppAs1 d i s [] = internalError("ppAs1D: " ++ s)
-ppAs1 d i "" [b] = text s where
-    v0 = ppReadable b
-    v = take ((length v0) -1) v0
-    s = ") "++v++"=1; else "++v++"=0;"
-ppAs1 d i "" es = internalError("ppAs1A: " ++ show es)
-ppAs1 d i ('%':'b':s) (x:xs) = pPrint d i x $$ ppAs1 d i s xs
-ppAs1 d i ('%':'n':s) (x:xs) = pPrint d i x $$ ppAs1 d i s xs
-ppAs1 d i ss@('%':s) (x:xs) = internalError("ppAs1B: " ++ show ss)
-ppAs1 d i cs xs = text c1 <> ppAs1 d i c2 xs where
-    c1 = takeWhile (/='%') cs
-    c2 = dropWhile (/='%') cs
+ppAssertBody :: PDetail -> [VExpr] -> Doc
+ppAssertBody d es =
+    case go es of
+      (body, [])    -> body <> text ");"
+      (body, [reg]) -> body <> text ") " <> pPrint d 0 reg <> text "=1; else " <>
+                       pPrint d 0 reg <> text "=0;"
+      (_, extra)    -> internalError ("ppAssertBody: unconsumed operands " ++ show extra)
+  where
+    go (VEString s : rest) = let (doc, rest')   = ppPiece s rest
+                                 (doc', rest'') = go rest'
+                             in  (doc <> doc', rest'')
+    go rest = (empty, rest)
+    ppPiece [] xs = (empty, xs)
+    ppPiece ('%':c:s) (x:xs) | c == 'b' || c == 'n' =
+        let (doc, rest) = ppPiece s xs in (pPrint d 0 x <> doc, rest)
+    ppPiece s@('%':_) _ = internalError ("ppAssertBody: bad placeholder in " ++ show s)
+    ppPiece s xs = let (lit, s')   = break (== '%') s
+                       (doc, rest) = ppPiece s' xs
+                   in  (text lit <> doc, rest)
 
 pprintCaseAttributes :: Bool -> Bool -> Doc
 pprintCaseAttributes False False = empty

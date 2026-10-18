@@ -1989,7 +1989,7 @@ instance VUse VStmt where
     vuses (Vifelse e s s') = vuses e ++ vuses s ++ vuses s'
     vuses (Vdumpvars _ _) = []
     vuses (VTask _ es) = vuses es
-    vuses (VAssert e es) = vuses e ++ vuses es
+    vuses (VAssert e d es) = vuses e ++ maybe [] vuses d ++ vuses es
     vuses (VZeroDelay) = []
 
 instance VUse VLValue where
