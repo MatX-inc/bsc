@@ -1,0 +1,26 @@
+package SvaTest where
+
+import SVAssert
+
+-- `req` pulses every 8 cycles and `ack` follows one cycle later
+{-# verilog sysSvaTest #-}
+sysSvaTest :: Module Empty
+sysSvaTest = module
+  cnt :: Reg (UInt 8) <- mkReg 0
+  req :: Reg Bool <- mkReg False
+  ack :: Reg Bool <- mkReg False
+  rules
+    "tick": when True ==> do
+      cnt := cnt + 1
+      req := (cnt % 8) == 0
+      ack := req
+      if cnt == 40 then do
+          $display "done"
+          $finish 0
+        else return ()
+  svaAssert "ack_follows_req" (req |=> ack)
+  svaAssert "ack_within_3" (req |-> delayRange 1 3 True ack)
+  svaAssert "cnt_bounded" (cnt <= 41)
+  svaAssert "no_double_ack" (ack |=> pNot ack)
+  svaAssertWith "ack_reported" (req |=> ack)
+      noAction ($display "FAIL: ack did not follow req at %0d" cnt)

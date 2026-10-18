@@ -1,0 +1,22 @@
+# Concurrent assertions written in BH with the SVAssert library
+
+# Verilog: each svaAssert is a native, guarded assert property with
+# the module reset as its disable iff term
+compile_verilog_pass SvaTest.bs sysSvaTest
+find_n_strings sysSvaTest.v {`ifndef BSV_NO_SVA} 5
+find_n_strings sysSvaTest.v {assert property (@(posedge CLK) disable iff (RST_N ==} 5
+find_regexp sysSvaTest.v {ack_follows_req: assert property}
+find_regexp sysSvaTest.v {##1\(\(1'd1\)\)\)\|->\(\(\(ack\)\)\)\);}
+find_regexp sysSvaTest.v {##\[1:3\]}
+find_regexp sysSvaTest.v {not\(\(\(ack\)\)\)}
+find_regexp sysSvaTest.v {result=1; else result=0;}
+find_regexp_fail sysSvaTest.v {translate_off\n *`ifndef BSV_NO_SVA}
+
+# Bluesim: the same assertions run as the SVA package's FSM checkers
+test_c_only SvaTest
+test_c_only SvaFail
+
+# The BSV frontend's pass-through path uses the same backend
+compile_verilog_pass_warning PassThrough.bsv S0028 1 mkPassThrough {-passthrough-assertions}
+find_regexp mkPassThrough.v {svaAssertion_L[0-9]+C[0-9]+: assert property \(@\(posedge CLK\) disable iff}
+find_regexp mkPassThrough.v {svaBool_L[0-9]+C[0-9]+=1; else svaBool_L[0-9]+C[0-9]+=0;}

@@ -1332,6 +1332,9 @@ checkAssertParam as e =
       let pos = getPosition e
 
       case t of
+        -- a Fmt carries the rendered property text and its operands;
+        -- IInlineFmt flattens it into the $SVA argument list
+        _ | isFmt t -> return (res, t, [])
         _ | isString t -> return (res, t, [])
         _ | isChar t ->
           do

@@ -1,0 +1,285 @@
+-- Concurrent (SVA-style) assertions for Bluespec Haskell.
+--
+-- A property is an ordinary elaboration-time value built from the
+-- combinators below.  `svaAssert` lowers it two ways, chosen by the
+-- backend:
+--   * Verilog: a native `assert property (...)` in the generated RTL,
+--     carried through the compiler by the `$SVA` task.
+--   * Bluesim: the FSM checkers of the `SVA` package, which execute the
+--     property cycle by cycle and run the pass/fail actions.
+--
+--   svaAssert "ack_follows_req" (req |=> ack)
+--   svaAssert "grant_within_4" (req |-> delayRange 1 4 True gnt)
+
+package SVAssert(
+    Seq, Prop, SvaSeq(..), SvaProp(..),
+    sExpr, (##), delay, delayRange, delayUnbound,
+    rep, repRange, repUnbound, sOr, sIntersect, firstMatch,
+    (|->), (|=>), pNot, pAnd, pOr,
+    svaAssert, svaAssertWith
+  ) where
+
+import List
+import SVA
+
+infixr 7 ##
+infixr 1 |->
+infixr 1 |=>
+
+-- Sequences: when a sequence match starts and ends is relative to the
+-- cycle its first element is sampled on.
+data Seq = SExpr Bool
+         | SDelay Integer (Maybe Integer) Seq Seq   -- s1 ##[lo:hi] s2; Nothing is $
+         | SRep Integer (Maybe Integer) Seq         -- s [*lo:hi]; Nothing is $
+         | SOr Seq Seq
+         | SIntersect Seq Seq
+         | SFirstMatch Seq
+
+data Prop = PSeq Seq
+          | PNot Prop
+          | PAnd Prop Prop
+          | POr Prop Prop
+          | PImplies Seq Prop                       -- overlapping implication
+
+class SvaSeq a where
+    toSeq :: a -> Seq
+
+instance SvaSeq Bool where
+    toSeq b = SExpr b
+
+instance SvaSeq (Reg Bool) where
+    toSeq r = SExpr r._read
+
+instance SvaSeq Seq where
+    toSeq s = s
+
+class SvaProp a where
+    toProp :: a -> Prop
+
+instance SvaProp Bool where
+    toProp b = PSeq (SExpr b)
+
+instance SvaProp (Reg Bool) where
+    toProp r = PSeq (SExpr r._read)
+
+instance SvaProp Seq where
+    toProp s = PSeq s
+
+instance SvaProp Prop where
+    toProp p = p
+
+sExpr :: Bool -> Seq
+sExpr b = SExpr b
+
+-- a ##1 b
+(##) :: (SvaSeq a, SvaSeq b) => a -> b -> Seq
+(##) a b = SDelay 1 (Just 1) (toSeq a) (toSeq b)
+
+-- a ##n b
+delay :: (SvaSeq a, SvaSeq b) => Integer -> a -> b -> Seq
+delay n a b = SDelay n (Just n) (toSeq a) (toSeq b)
+
+-- a ##[lo:hi] b
+delayRange :: (SvaSeq a, SvaSeq b) => Integer -> Integer -> a -> b -> Seq
+delayRange lo hi a b = SDelay lo (Just hi) (toSeq a) (toSeq b)
+
+-- a ##[lo:$] b
+delayUnbound :: (SvaSeq a, SvaSeq b) => Integer -> a -> b -> Seq
+delayUnbound lo a b = SDelay lo Nothing (toSeq a) (toSeq b)
+
+-- s [*n]
+rep :: (SvaSeq a) => Integer -> a -> Seq
+rep n s = SRep n (Just n) (toSeq s)
+
+-- s [*lo:hi]
+repRange :: (SvaSeq a) => Integer -> Integer -> a -> Seq
+repRange lo hi s = SRep lo (Just hi) (toSeq s)
+
+-- s [*lo:$]
+repUnbound :: (SvaSeq a) => Integer -> a -> Seq
+repUnbound lo s = SRep lo Nothing (toSeq s)
+
+sOr :: (SvaSeq a, SvaSeq b) => a -> b -> Seq
+sOr a b = SOr (toSeq a) (toSeq b)
+
+sIntersect :: (SvaSeq a, SvaSeq b) => a -> b -> Seq
+sIntersect a b = SIntersect (toSeq a) (toSeq b)
+
+firstMatch :: (SvaSeq a) => a -> Seq
+firstMatch s = SFirstMatch (toSeq s)
+
+-- s |-> p
+(|->) :: (SvaSeq a, SvaProp b) => a -> b -> Prop
+(|->) s p = PImplies (toSeq s) (toProp p)
+
+-- s |=> p, i.e. (s ##1 true) |-> p
+(|=>) :: (SvaSeq a, SvaProp b) => a -> b -> Prop
+(|=>) s p = PImplies (SDelay 1 (Just 1) (toSeq s) (SExpr True)) (toProp p)
+
+pNot :: (SvaProp a) => a -> Prop
+pNot p = PNot (toProp p)
+
+pAnd :: (SvaProp a, SvaProp b) => a -> b -> Prop
+pAnd a b = PAnd (toProp a) (toProp b)
+
+pOr :: (SvaProp a, SvaProp b) => a -> b -> Prop
+pOr a b = POr (toProp a) (toProp b)
+
+-- ----------------------------------------------------------------------
+-- Verilog: render the property as SVA text with one %b per operand.
+-- The backend prints it inside `assert property (@(posedge CLK) ...)`.
+
+renderSeq :: Seq -> Fmt
+renderSeq (SExpr b) = $format "(%b)" b
+renderSeq (SDelay lo mhi s1 s2) =
+    $format "(" + renderSeq s1 + $format (")##" +++ boundStr lo mhi +++ "(") + renderSeq s2 + $format ")"
+renderSeq (SRep lo mhi s) =
+    $format "((" + renderSeq s + $format (")[*" +++ boundStr lo mhi +++ "])")
+renderSeq (SOr a b) = $format "(" + renderSeq a + $format ")or(" + renderSeq b + $format ")"
+renderSeq (SIntersect a b) =
+    $format "(" + renderSeq a + $format ")intersect(" + renderSeq b + $format ")"
+renderSeq (SFirstMatch s) = $format "(first_match(" + renderSeq s + $format "))"
+
+boundStr :: Integer -> Maybe Integer -> String
+boundStr lo (Just hi) = if lo == hi then integerToString lo
+                        else "[" +++ integerToString lo +++ ":" +++ integerToString hi +++ "]"
+boundStr lo Nothing = "[" +++ integerToString lo +++ ":$]"
+
+renderProp :: Prop -> Fmt
+renderProp (PSeq s) = $format "(" + renderSeq s + $format ")"
+renderProp (PNot p) = $format "(not(" + renderProp p + $format "))"
+renderProp (PAnd a b) = $format "(" + renderProp a + $format ")and(" + renderProp b + $format ")"
+renderProp (POr a b) = $format "(" + renderProp a + $format ")or(" + renderProp b + $format ")"
+renderProp (PImplies s p) = $format "(" + renderSeq s + $format ")|->(" + renderProp p + $format ")"
+
+-- ----------------------------------------------------------------------
+-- Bluesim: lower to the SVA package's checker modules, following the
+-- same desugaring the BSV frontend applies (delays become concatenation
+-- chains through `true`, ranges become disjunctions of fixed delays).
+
+seqTrue :: Seq
+seqTrue = SExpr True
+
+lowerSeq :: Seq -> Module Sequence
+lowerSeq (SExpr b) = mkSeqExpr b
+lowerSeq (SDelay lo mhi s1 s2) =
+    case mhi of
+      Just hi ->
+        if lo > hi then error ("SVAssert: delay lower bound " +++ integerToString lo +++
+                               " exceeds upper bound " +++ integerToString hi)
+        else if lo < hi then mkSeqOr (lowerSeq (SDelay lo (Just lo) s1 s2))
+                                     (lowerSeq (SDelay (lo + 1) (Just hi) s1 s2))
+        else if lo == 0 then mkSeqFuse (lowerSeq s1) (lowerSeq s2)
+        else if lo == 1 then mkSeqConcat (lowerSeq s1) (lowerSeq s2)
+        else mkSeqConcat (lowerSeq s1) (lowerSeq (SDelay (lo - 1) (Just (lo - 1)) seqTrue s2))
+      Nothing ->
+        if lo == 0 then mkSeqOr (lowerSeq (SDelay 0 (Just 0) s1 s2))
+                                (lowerSeq (SDelay 1 Nothing s1 s2))
+        else mkSeqConcat (lowerSeq s1)
+                         (mkSeqConcat (lowerSeq (SRep (lo - 1) Nothing seqTrue)) (lowerSeq s2))
+lowerSeq (SRep lo mhi s) =
+    case mhi of
+      Just hi ->
+        if lo > hi then error ("SVAssert: repetition lower bound " +++ integerToString lo +++
+                               " exceeds upper bound " +++ integerToString hi)
+        else if lo < hi then mkSeqOr (lowerSeq (SRep lo (Just lo) s))
+                                     (lowerSeq (SRep (lo + 1) (Just hi) s))
+        else if lo == 0 then mkSeqNull
+        else if lo == 1 then lowerSeq s
+        else mkSeqConcat (lowerSeq s) (lowerSeq (SRep (lo - 1) (Just (lo - 1)) s))
+      Nothing ->
+        if lo == 0 then mkSeqOr (lowerSeq (SRep 0 (Just 0) s)) (lowerSeq (SRep 1 Nothing s))
+        else if lo == 1 then mkSeqUnbound (lowerSeq s)
+        else mkSeqConcat (lowerSeq (SRep (lo - 1) (Just (lo - 1)) s)) (lowerSeq (SRep 1 Nothing s))
+lowerSeq (SOr a b) = mkSeqOr (lowerSeq a) (lowerSeq b)
+lowerSeq (SIntersect a b) = mkSeqIntersect (lowerSeq a) (lowerSeq b)
+lowerSeq (SFirstMatch s) = mkSeqFirstMatch (lowerSeq s)
+
+lowerProp :: Prop -> Module Property
+lowerProp (PSeq s) = mkPropSeq (lowerSeq s)
+lowerProp (PNot p) = do
+    m <- lowerProp p
+    mkPropNot m
+lowerProp (PAnd a b) = do
+    x <- lowerProp a
+    y <- lowerProp b
+    mkPropAnd x y
+lowerProp (POr a b) = do
+    x <- lowerProp a
+    y <- lowerProp b
+    mkPropOr x y
+lowerProp (PImplies s p) = do
+    -- one copy of the consequent per cycle the antecedent can complete on
+    ps <- replicateM (longestPathProp p) (lowerProp p)
+    mkPropImplies (lowerSeq s) ps
+
+-- How many cycles a match can span: bounds the number of concurrent
+-- attempts the checkers need.
+longestPathSeq :: Seq -> Integer
+longestPathSeq (SExpr _) = 1
+longestPathSeq (SDelay lo mhi s1 s2) =
+    longestPathSeq s1 + (case mhi of { Just hi -> hi; Nothing -> lo }) + longestPathSeq s2 - 1
+longestPathSeq (SRep lo mhi s) = longestPathSeq s * (case mhi of { Just hi -> hi; Nothing -> lo })
+longestPathSeq (SOr a b) = max (longestPathSeq a) (longestPathSeq b)
+longestPathSeq (SIntersect a b) = max (longestPathSeq a) (longestPathSeq b)
+longestPathSeq (SFirstMatch s) = longestPathSeq s
+
+longestPathProp :: Prop -> Integer
+longestPathProp (PSeq s) = longestPathSeq s
+longestPathProp (PNot p) = longestPathProp p
+longestPathProp (PAnd a b) = max (longestPathProp a) (longestPathProp b)
+longestPathProp (POr a b) = max (longestPathProp a) (longestPathProp b)
+longestPathProp (PImplies s _) = longestPathSeq s
+
+-- ----------------------------------------------------------------------
+
+-- Assert `p` on every cycle.  In Verilog the simulator or formal tool
+-- reports violations; in Bluesim a failure prints a message.
+svaAssert :: (SvaProp p) => String -> p -> Module Empty
+svaAssert name p0 = svaAssertProp name (toProp p0)
+
+svaAssertProp :: String -> Prop -> Module Empty
+svaAssertProp name p =
+    if genVerilog then
+        addRules $
+          rules
+            {-# ASSERT fire when enabled #-}
+            ("svaAssert_" +++ name):
+              when True ==> $SVA name (renderProp p)
+    else
+        svaAssertFSM name p noAction
+            ($display ("[SVA] assertion \"" +++ name +++ "\" failed"))
+
+-- As `svaAssert`, running `onPass` / `onFail` when an attempt completes.
+-- In Verilog the result is latched by the assertion's action block.
+svaAssertWith :: (SvaProp p) => String -> p -> Action -> Action -> Module Empty
+svaAssertWith name p0 onPass onFail = svaAssertWithProp name (toProp p0) onPass onFail
+
+svaAssertWithProp :: String -> Prop -> Action -> Action -> Module Empty
+svaAssertWithProp name p onPass onFail =
+    if genVerilog then
+        module
+          result :: Reg Bool <- mkRegU
+          addRules $
+            rules
+              {-# ASSERT fire when enabled #-}
+              ("svaAssert_" +++ name):
+                when True ==> do
+                  $SVA name (renderProp p) result
+                  if result then onPass else onFail
+    else
+        svaAssertFSM name p onPass onFail
+
+svaAssertFSM :: String -> Prop -> Action -> Action -> Module Empty
+svaAssertFSM name p onPass onFail =
+    module
+      props <- replicateM (longestPathProp p) (lowerProp p)
+      a :: Assertion <- mkAssertAlways props onPass onFail
+      addRules $
+        rules
+          {-# ASSERT no implicit conditions #-}
+          {-# ASSERT fire when enabled #-}
+          ("svaAssert_" +++ name):
+            when True ==> do
+              _ <- a.advance
+              return ()

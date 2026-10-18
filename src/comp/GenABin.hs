@@ -936,7 +936,7 @@ instance Bin VStmt where
     writeBytes (Vifelse c t f)   = do putI 9; toBin c; toBin t; toBin f
     writeBytes (Vdumpvars n is)  = do putI 10; toBin n; toBin is
     writeBytes (VTask i es)      = do putI 11; toBin i; toBin es
-    writeBytes (VAssert e es)    = do putI 12; toBin e; toBin es
+    writeBytes (VAssert e d es)  = do putI 12; toBin e; toBin d; toBin es
     writeBytes (VZeroDelay)      = do putI 13
     readBytes = do
       i <- getI
@@ -955,7 +955,7 @@ instance Bin VStmt where
         9 -> do c <- fromBin; t <- fromBin; f <- fromBin; return (Vifelse c t f)
         10 -> do n <- fromBin; is <- fromBin; return (Vdumpvars n is)
         11 -> do i <- fromBin; es <- fromBin; return (VTask i es)
-        12 -> do e <- fromBin; es <- fromBin; return (VAssert e es)
+        12 -> do e <- fromBin; d <- fromBin; es <- fromBin; return (VAssert e d es)
         13 -> return VZeroDelay
         n -> internalError $ "GenABin(VStmt).readBytes: " ++ show n
 

@@ -368,6 +368,10 @@ module mkSeqOr#(module#(Sequence) m1, module#(Sequence) m2)(Sequence);
   let s2 <- m2;
   let run_1 <- mkReg(False);
   let run_2 <- mkReg(False);
+  // A branch that has finished keeps reporting its final result, so the
+  // disjunction can still fail once the other branch fails too.
+  let res_1 <- mkReg(SeqPending);
+  let res_2 <- mkReg(SeqPending);
   method running() ;   return (run_1 || run_2);
   endmethod: running
   method advance() ;
@@ -378,7 +382,7 @@ module mkSeqOr#(module#(Sequence) m1, module#(Sequence) m2)(Sequence);
 				   return(tuple2(seqRunning1(r), r));
 				 endactionvalue)
        :   actionvalue
-	      return tuple2(False, SeqPending);
+	      return tuple2(False, res_1);
 	   endactionvalue;
       let {run_2a,res_r} <- !(run_1) && !(run_2) || run_2 ?
 				(actionvalue
@@ -386,10 +390,12 @@ module mkSeqOr#(module#(Sequence) m1, module#(Sequence) m2)(Sequence);
 				   return(tuple2(seqRunning2(r2), r2));
 				 endactionvalue)
        :   actionvalue
-	      return tuple2(False, SeqPending);
+	      return tuple2(False, res_2);
 	   endactionvalue;
       run_1 <= run_1a;
       run_2 <= run_2a;
+      res_1 <= res_l;
+      res_2 <= res_r;
       return(doSeqOrRes(run_1, run_2, res_l, res_r));
     endactionvalue
   endmethod: advance
@@ -736,10 +742,14 @@ typedef enum {
 
 interface Property;
     method ActionValue#(PropRes) advance();
+    // True while a sequence inside is still part way through an attempt
+    method Bool running();
 endinterface: Property
 
 module mkPropSeq#(module#(Sequence) m)(Property);
   let s <- m;
+  method running() ;   return (s.running);
+  endmethod: running
   method advance() ;
     actionvalue
       let r <- s.advance;
@@ -755,6 +765,8 @@ module mkPropSeq#(module#(Sequence) m)(Property);
 endmodule: mkPropSeq
 
 module mkPropNot#(Property prop)(Property);
+  method running() ;   return (prop.running);
+  endmethod: running
   method advance() ;
     actionvalue
       let r <- prop.advance;
@@ -770,6 +782,8 @@ module mkPropNot#(Property prop)(Property);
 endmodule: mkPropNot
 
 module mkPropOr#(Property p1, Property p2)(Property);
+  method running() ;   return (p1.running || p2.running);
+  endmethod: running
   method advance() ;
     actionvalue
       let r1 <- p1.advance;
@@ -788,6 +802,8 @@ module mkPropOr#(Property p1, Property p2)(Property);
 endmodule: mkPropOr
 
 module mkPropAnd#(Property p1, Property p2)(Property);
+  method running() ;   return (p1.running || p2.running);
+  endmethod: running
   method advance() ;
     actionvalue
       let r1 <- p1.advance;
@@ -875,23 +891,61 @@ function Action assignRegs (List#(Reg#(Bool)) x1, List#(Bool) x2);
    endcase
 endfunction: assignRegs
 
+function Bool propRunning(Property p);
+   return (p.running);
+endfunction: propRunning
+
+// Turn the first element that is neither in use nor still draining True:
+function List#(Bool) getFreeP2 (List#(Bool) used, List#(Bool) busy);
+   case (tuple2(decodeList(used), decodeList(busy))) matches
+      {tagged Invalid, .*}: return (Nil);
+      {.*, tagged Invalid}: return (Nil);
+      {tagged Valid {.u, .us}, tagged Valid {.b, .bs}}:
+	 return ((!u && !b) ? Cons(True, us) : Cons(u, getFreeP2(us, bs)));
+   endcase
+endfunction: getFreeP2
+
+// Keep advancing props that are not in use but whose sequences are still
+// running, so a finished attempt drains instead of leaking into the next
+// use of that prop (its result is already decided, so it is ignored):
+function Action drainPs (List#(Property) ps, List#(Bool) used);
+   case (tuple2(decodeList(ps), decodeList(used))) matches
+      {tagged Invalid, .*}: return noAction;
+      {.*, tagged Invalid}: return noAction;
+      {tagged Valid {.p, .ps2}, tagged Valid {.u, .us}}:
+	 return (action
+		    if (!u && p.running)
+		       begin
+			  let r <- p.advance;
+		       end
+		    drainPs(ps2, us);
+		 endaction);
+   endcase
+endfunction: drainPs
+
 module mkPropImplies#(module#(Sequence) m, List#(Property) props)(Property);
    let s <- m;
    let rs <- replicateM(length(props), mkReg(False));
+   method running() ;
+      return (s.running || any(readReg, rs) || any(propRunning, props));
+   endmethod: running
    method advance() ;
       actionvalue
 	 let sr <- s.advance;
+	 let used = map(readReg, rs);
+	 let busy = map(propRunning, props);
 	 let bs = case (sr) matches
 		     // If the sequence hasn't succeeded, get list of props in
 		     // progress:
-		     tagged SeqFail :  return(map(readReg, rs));
-		     tagged SeqPending :  return(map(readReg, rs));
+		     tagged SeqFail :  return(used);
+		     tagged SeqPending :  return(used);
 		     // If sequence has succeeded, add a free one (in order to
 		     // start it off):
-		     default :  return(getFreeP(map(readReg, rs)));
+		     default :  return(getFreeP2(used, busy));
 		  endcase;
 	 // Advance all the props:
 	 let pres <- runPs(props, bs);
+	 drainPs(props, bs);
 	 // Clear the register of any which has just finished:
 	 assignRegs(rs, map(unRun, pres));
 	 // Return accumulated result (False trumping True):
@@ -952,9 +1006,10 @@ module mkAssertAlways#(List#(Property) props, Action pass, Action fail)(Assertio
   let rs <- replicateM(length(props), mkReg(False));
   method advance() ;
     actionvalue
-       let bs = getFreeP(map(readReg, rs));
+       let bs = getFreeP2(map(readReg, rs), map(propRunning, props));
        // Advance all the props:
        let pres <- runPs(props, bs);
+       drainPs(props, bs);
        // Clear the register of any which has just finished:
        assignRegs(rs, map(unRun, pres));
        // Switch on accumulated result (False trumping True):

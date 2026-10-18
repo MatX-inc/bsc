@@ -162,6 +162,8 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
 
       -- convert the sorted list to VStmts
       convert :: Either ADef AForeignCall -> [VStmt]
+      convert (Right fcall@(AForeignCall { afc_name = aid })) | aid == idSVA =
+          [vSVAssert vco ass_sensitivity_list fcall]
       convert (Right fcall) = [vForeignCall vco fcall ffmap]
       convert (Left adef) =
           let -- some of the defs that we inline might not be simple
@@ -179,7 +181,7 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
       fcall_stmts0 = concatMap convert fcalls_and_defs
       -- separate out the SVAssertions
       isAss :: VStmt -> Bool
-      isAss (VTask i _) = (vidToId i)==idSVA
+      isAss (VAssert {}) = True
       isAss _ = False
       (asses, fcall_stmts) = partition isAss fcall_stmts0
       -- the always block sensitivity list
@@ -192,17 +194,13 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
       always_stmt = Valways
                        (VAt sensitivity_list
                          (VSeq (VZeroDelay : fcall_stmts)))
-      -- the assertions' sensitivity list
+      -- the assertions' sensitivity list: concurrent assertions sample
+      -- at the positive edge, like the design
       ass_sensitivity_list =
-          -- foreign function calls trigger at the negative clock edge so
-          -- values are ready (at the positive edge) from input system tasks
           foldr1 VEEOr (map (VEEposedge . (vExpr vco)) clks)
-      mkVAssert :: VStmt -> VMItem
-      mkVAssert (VTask _ es) =
-          VMStmt { vi_translate_off = True,
-                   vi_body = VAssert ass_sensitivity_list es }
-      mkVAssert x = internalError("mkVAssert: " ++ (show x))
-      ass_stmts = map mkVAssert asses
+      -- not translate_off: formal tools must see the assertions
+      -- (ppAssert wraps them in a macro guard instead)
+      ass_stmts = [VMStmt { vi_translate_off = False, vi_body = s } | s <- asses]
   in -- put it together, with translate_off, since it is for sim only
      Just ((if null fcall_stmts then [] else
                      [VMStmt { vi_translate_off = True,
@@ -211,12 +209,40 @@ vForeignBlock vco ffmap ds (clks, fcalls) =
 
            inline_def_ids)
 
+-- A $SVA call becomes a concurrent assertion.  The calling rule's firing
+-- condition becomes the antecedent of the property, so the property is
+-- only checked on cycles the rule fires, and the rule's resets become
+-- the `disable iff` term.
+vSVAssert :: VConvtOpts -> VEventExpr -> AForeignCall -> VStmt
+vSVAssert vco ev (AForeignCall _ _ (c:es) _ resets) =
+    VAssert ev disable args
+  where
+    vc = vExpr vco c
+    ves = map (vExpr vco) es
+    disable = case map (mkEqualsReset . vExpr vco) resets of
+                [] -> Nothing
+                rs -> Just (foldr1 (\a b -> mkVEOp a VLOr b) rs)
+    -- the operands consumed by placeholders; one extra trailing operand
+    -- is the result register (see ppAssert)
+    (label, pieces) = case ves of
+                        (l : ps) -> (l, ps)
+                        [] -> internalError "vSVAssert: missing label"
+    nPlaceholders = sum [ length (filter (== '%') s) | VEString s <- pieces ]
+    nOperands = length [ e | e <- pieces, not (isVEString e) ]
+    (prop, reg) = if nOperands == nPlaceholders + 1
+                  then (init pieces, [last pieces])
+                  else (pieces, [])
+    args | isOne vc  = label : prop ++ reg
+         | otherwise = label : VEString "(%b)|->(" : vc : prop ++ [VEString ")"] ++ reg
+    isVEString (VEString _) = True
+    isVEString _ = False
+vSVAssert _ _ fc = internalError ("vSVAssert: " ++ ppReadable fc)
+
 vForeignCall :: VConvtOpts -> AForeignCall -> ForeignFuncMap -> VStmt
 vForeignCall vco f@(AForeignCall aid taskid (c:es) ids resets) ffmap =
-  -- only go when none of the connected resets are active (except for $SVA)
+  -- only go when none of the connected resets are active
   -- traces ("vfc " ++ show resets) $
-  if aid==idSVA then fcall es
-                  else foldr (Vif . mkNotEqualsReset . vExpr vco) fcall_body resets
+  foldr (Vif . mkNotEqualsReset . vExpr vco) fcall_body resets
   where
     -- monomorphize the DPI call name by the concrete polymorphic-operand widths
     dpiName = if vco_use_dpi vco
