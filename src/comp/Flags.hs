@@ -46,6 +46,7 @@ data Flags = Flags {
         demoteErrors :: MsgListFlag,
         disableAssertions :: Bool,
         passThroughAssertions :: Bool,
+        svaImmediate :: Bool,
         doICheck :: Bool,
         dumpAll :: Maybe (Maybe FilePath), -- maybe dump to file or stdout
         dumpFormats :: [String], -- waveform dump formats compiled into the sim

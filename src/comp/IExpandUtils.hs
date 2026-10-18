@@ -373,6 +373,7 @@ isPrimType (ITCon i _ _) = i == idPrimAction ||
                            -- but choose not to
                            -- i == idInteger
                            i == idFmt || -- also not really a primitive
+                           i == idSvaSeq || i == idSvaProp || -- SVA properties, likewise
                            i == idClock ||
                            i == idReset ||
                            i == idPrimUnit
@@ -3514,6 +3515,8 @@ instance Wireable PExpr where
 -----------------------------------------------------------------------------
 
 realPrimOp :: PrimOp -> Bool
+-- an SVA property is a tree of suspended prims over dynamic booleans
+realPrimOp p | p `elem` svaSeqPrims || p `elem` svaPropPrims = True
 realPrimOp PrimAdd = True
 realPrimOp PrimSub = True
 realPrimOp PrimAnd = True

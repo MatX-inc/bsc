@@ -1116,140 +1116,84 @@ This is the "backend" which causes assertions to be passed through to the genera
 > transAssertStmtPT :: Position -> SVA_Statement -> ISConvMonad [ImperativeStatement]
 > transAssertStmtPT pos (isAlways, (SVA_STMT_Assert mname prop onPass onFail)) =
 >  do
->    nm <- newAssertName pos
 >    bUnrolled <- unrollPROP pos prop
 >    bDeSugared <- deSugarProp bUnrolled
 >    bClean <- cleanupProp bDeSugared
->    let (rName, bName, aName) = ruleNames pos
->    let assStr = getIdBaseString (fromMaybe aName mname)
->    let theTask = consAssertion pos assStr bName bClean
->    passExpr <- mkAction onPass
->    failExpr <- mkAction onFail
+>    when (not (null onPass) || not (null onFail)) $
+>       cvtWarn pos WPassThroughAssertActions
+>    let (rName, aName) = ruleNames pos
+>        label = getIdBaseString (fromMaybe aName mname)
+>        theTask = CTaskApply (CVar idSVA)
+>                    [CLit (CLiteral pos (LString label)), propExpr pos bClean]
 >    return
->     [(ISDecl pos (Right bName) (Just (TAp (TCon (TyCon idReg (Just KStar) TIabstract))
->                                (TCon (TyCon idBool (Just KStar) TIabstract))))) [],
->      (ISBind pos [] (Right bName) (CVar (idMkRegU pos))),
->      (ISRule pos rName []
->       (CRule [] (Just (stringLiteralAt pos (getIdBaseString rName)))
+>     [(ISRule pos rName []
+>       (CRule [RPfireWhenEnabled, RPnoImplicitConditions]
+>              (Just (stringLiteralAt pos (getIdBaseString rName)))
 >              [CQFilter (CCon idTrue [])]
->              (Caction pos [CSExpr Nothing theTask,
->                            CSExpr Nothing (Cif pos (CVar bName) passExpr failExpr)])))]
+>              (Caction pos [CSExpr Nothing theTask])))]
 > transAssertStmtPT pos (_, z) = --unsupported errors go here
 >    internalError ("CVParserImperative:transAssertStmtPT at " ++ show pos)
 
-> consAssertion :: Position -> String -> Id -> SVA_CORE_PROP -> CExpr
-> consAssertion pos idstr idb p =
->     let (s, es) = ppProp p []
->     in (CTaskApply (CVar idSVA)
->         ((CLit (CLiteral pos (LString idstr))):
->          (CLit (CLiteral pos (LString s))) :
->          reverse((boolParam pos (CVar idb)):es)))
-
-> ruleNames :: Position -> (Id,Id,Id)
+> ruleNames :: Position -> (Id, Id)
 > ruleNames pos =
 >     let sl = itos(getPositionLine pos)
 >         sc = itos(getPositionColumn pos)
 >         ids = "L"++sl++"C"++sc
->         rid = "svaRule_"++ids
->         bid = "svaBool_"++ids
->         aid = "svaAssertion_"++ids
->     in (mk_dangling_id rid pos, mk_dangling_id bid pos, mk_dangling_id aid pos)
+>     in (mk_dangling_id ("svaRule_" ++ ids) pos, mk_dangling_id ("svaAssertion_" ++ ids) pos)
 
-> svaParam :: Id -> Position -> CExpr -> CExpr
-> svaParam i pos e =
->     let rid = idTheResult pos
->     in (Ccase pos (CCon i [e])
->         [CCaseArm {cca_pattern = CPCon i [CPVar rid],
->                    cca_filters = [],
->                    cca_consequent = CVar rid}])
+The property as applications of the Prelude's SVA primitives (see SVAssert.bs
+for the same lowering from BH).
 
-> boolParam :: Position -> CExpr -> CExpr
-> boolParam = svaParam idSvaBool
-> numParam :: Position -> CExpr -> CExpr
-> numParam p n = svaParam idSvaNumber p (CApply (CVar (idFromInteger p)) [n])
+> propExpr :: Position -> SVA_CORE_PROP -> CExpr
+> propExpr pos (SVA_CORE_PROP_Seq s) = svaPrim idPrimSvaPropSeq [seqExpr pos s]
+> propExpr pos (SVA_CORE_PROP_Not p) = svaPrim idPrimSvaNot [propExpr pos p]
+> propExpr pos (SVA_CORE_PROP_And a b) = svaPrim idPrimSvaAnd [propExpr pos a, propExpr pos b]
+> propExpr pos (SVA_CORE_PROP_Or a b) = svaPrim idPrimSvaOr [propExpr pos a, propExpr pos b]
+> propExpr pos (SVA_CORE_PROP_Implies s p) = svaPrim idPrimSvaImplies [seqExpr pos s, propExpr pos p]
 
-> ppDel :: SVA_Delay -> [CExpr] -> (String, [CExpr])
-> ppDel (SVA_Delay_Const e) es = ("%n", ((numParam noPosition e):es))
-> ppDel (SVA_Delay_Unbound e) es = ("%n:$", ((numParam noPosition e):es))
-> ppDel (SVA_Delay_Range e1 e2) es = ("%n:%n", ((numParam noPosition e2):
->                                               (numParam noPosition e1):es))
+> seqExpr :: Position -> SVA_CORE_SEQ -> CExpr
+> seqExpr pos (SVA_CORE_SEQ_Expr e) = svaPrim idPrimSvaExpr [CApply (CVar (setIdPosition pos idPack)) [e]]
+> seqExpr pos (SVA_CORE_SEQ_Asgn _) =
+>    internalError("seqExpr: local variables not yet implemented")
+> seqExpr pos (SVA_CORE_SEQ_Concat a b) = delayExpr pos (lit 1) (Just (lit 1)) (seqExpr pos a) (seqExpr pos b)
+> seqExpr pos (SVA_CORE_SEQ_Fuse a b) = delayExpr pos (lit 0) (Just (lit 0)) (seqExpr pos a) (seqExpr pos b)
+> seqExpr pos (SVA_CORE_SEQ_Or a b) = svaPrim idPrimSvaSeqOr [seqExpr pos a, seqExpr pos b]
+> seqExpr pos (SVA_CORE_SEQ_Intersect a b) = svaPrim idPrimSvaSeqIntersect [seqExpr pos a, seqExpr pos b]
+> seqExpr pos (SVA_CORE_SEQ_FirstMatch s) = svaPrim idPrimSvaFirstMatch [seqExpr pos s]
+> seqExpr pos (SVA_CORE_SEQ_Null s) = svaPrim idPrimSvaRep [bound pos (lit 0), bound pos (lit 0), seqExpr pos s]
+> seqExpr pos (SVA_CORE_SEQ_Unbound s) = svaPrim idPrimSvaRepUnbound [bound pos (lit 1), seqExpr pos s]
+> seqExpr pos (SVA_CORE_SEQ_Rep s (SVA_REP_Cons d)) =
+>    let s' = seqExpr pos s
+>    in case d of
+>         SVA_Delay_Const n -> svaPrim idPrimSvaRep [bound pos n, bound pos n, s']
+>         SVA_Delay_Range lo hi -> svaPrim idPrimSvaRep [bound pos lo, bound pos hi, s']
+>         SVA_Delay_Unbound lo -> svaPrim idPrimSvaRepUnbound [bound pos lo, s']
+> seqExpr pos (SVA_CORE_SEQ_Rep _ r) =
+>    internalError ("seqExpr (Rep): " ++ show r)
+> seqExpr pos (SVA_CORE_SEQ_Delay d rest s1 s2) =
+>    -- s1 ##d (s2 ##0 r1 ##0 r2 ...)
+>    let fuse a b = delayExpr pos (lit 0) (Just (lit 0)) a b
+>        s2' = foldl fuse (seqExpr pos s2) (map (seqExpr pos) rest)
+>        s1' = seqExpr pos s1
+>    in case d of
+>         SVA_Delay_Const n -> delayExpr pos n (Just n) s1' s2'
+>         SVA_Delay_Range lo hi -> delayExpr pos lo (Just hi) s1' s2'
+>         SVA_Delay_Unbound lo -> delayExpr pos lo Nothing s1' s2'
 
-> ppRep :: SVA_REP -> [CExpr] -> (String, [CExpr])
-> ppRep (SVA_REP_Cons d) es =
->     let (s,es1) = ppDel d es in ("*"++s, es1)
-> ppRep (SVA_REP_NonCons d) es =
->     let (s,es1) = ppDel d es in ("="++s, es1)
-> ppRep (SVA_REP_Goto d) es =
->     let (s,es1) = ppDel d es in ("->"++s, es1)
-> ppRep (SVA_REP_None) es = internalError ("SVA_REP_None")
+> delayExpr :: Position -> CExpr -> Maybe CExpr -> CExpr -> CExpr -> CExpr
+> delayExpr pos lo (Just hi) a b = svaPrim idPrimSvaDelay [bound pos lo, bound pos hi, a, b]
+> delayExpr pos lo Nothing a b = svaPrim idPrimSvaDelayUnbound [bound pos lo, a, b]
 
-> ppSeq :: SVA_CORE_SEQ -> [CExpr] -> (String, [CExpr])
+> svaPrim :: Id -> [CExpr] -> CExpr
+> svaPrim i es = CApply (CVar i) es
 
-> ppSeq (SVA_CORE_SEQ_Expr exp) es = ("(%b)", ((boolParam noPosition exp):es))
+The primitives take their bounds as Bit 32
 
-> ppSeq (SVA_CORE_SEQ_Concat s1 s2) es =
->     let (st1, es1) = ppSeq s1 es
->         (st2, es2) = ppSeq s2 es1
->     in ("(" ++ st1 ++ ")##1(" ++ st2 ++ ")", es2)
-> ppSeq (SVA_CORE_SEQ_Fuse s1 s2) es =
->     let (st1, es1) = ppSeq s1 es
->         (st2, es2) = ppSeq s2 es1
->     in ("(" ++ st1 ++ ")##0(" ++ st2 ++ ")", es2)
-> ppSeq (SVA_CORE_SEQ_Asgn asns) es =
->     internalError("ppSeq: local variables not yet implemented")
-> ppSeq (SVA_CORE_SEQ_Or s1 s2) es =
->     let (st1, es1) = ppSeq s1 es
->         (st2, es2) = ppSeq s2 es1
->     in ("(" ++ st1 ++ ")or(" ++ st2 ++ ")", es2)
-> ppSeq (SVA_CORE_SEQ_Intersect s1 s2) es =
->     let (st1, es1) = ppSeq s1 es
->         (st2, es2) = ppSeq s2 es1
->     in ("(" ++ st1 ++ ")intersect(" ++ st2 ++ ")", es2)
-> ppSeq (SVA_CORE_SEQ_FirstMatch seq) es =
->     let (st1, es1) = ppSeq seq es
->     in ("(first_match(" ++ st1 ++ "))", es1)
-> ppSeq (SVA_CORE_SEQ_Null seq) es =
->     let (st1, es1) = ppSeq seq es
->     in ("((" ++ st1 ++ ")[*0])", es1)
-> ppSeq (SVA_CORE_SEQ_Unbound seq) es =
->     let (st1, es1) = ppSeq seq es
->     in ("((" ++ st1 ++ ")[*1:$])", es1)
+> bound :: Position -> CExpr -> CExpr
+> bound pos e = CApply (CVar (idFromInteger pos)) [e]
 
-> ppSeq (SVA_CORE_SEQ_Delay del rest s1 s2) es =
->     let (st1, es1) = ppSeq s1 es
->         (ns,  es2) = ppDel del es1
->         (st2, es3) = ppSeq s2 es2
->         f (pst,pes) sq =
->           let (s, pes1) = ppSeq sq pes in (pst++"##0("++s++")", pes1)
->         (fst, fes) = foldl f ("",es3) rest
->     in ("(" ++ st1 ++ ")##"++ns++"(" ++ st2 ++ ")"++fst, fes)
-
-> ppSeq (SVA_CORE_SEQ_Rep exp rep) es =
->     let (st1, es1) = ppSeq exp es
->         (st2, es2) = ppRep rep es1
->     in ("((" ++ st1 ++ ")["++st2++"])", es2)
-
-> ppProp :: SVA_CORE_PROP -> [CExpr] -> (String, [CExpr])
-> ppProp (SVA_CORE_PROP_Seq seq) es =
->     let (st1, es1) = ppSeq seq es
->     in ("(" ++ st1 ++ ")", es1)
-> ppProp (SVA_CORE_PROP_Not prop) es =
->     let (st1, es1) = ppProp prop es
->     in ("(not(" ++ st1 ++ "))", es1)
-> ppProp (SVA_CORE_PROP_And p1 p2) es =
->     let (st1, es1) = ppProp p1 es
->         (st2, es2) = ppProp p2 es1
->     in ("(" ++ st1 ++ ")and(" ++ st2 ++ ")", es2)
-> ppProp (SVA_CORE_PROP_Or p1 p2) es =
->     let (st1, es1) = ppProp p1 es
->         (st2, es2) = ppProp p2 es1
->     in ("(" ++ st1 ++ ")or(" ++ st2 ++ ")", es2)
-> ppProp (SVA_CORE_PROP_Implies p1 p2) es =
->     let (st1, es1) = ppSeq p1 es
->         (st2, es2) = ppProp p2 es1
->     in ("(" ++ st1 ++ ")|->(" ++ st2 ++ ")", es2)
-
-
+> lit :: Integer -> CExpr
+> lit n = CLit (CLiteral noPosition (LInt (ilDec n)))
 
 TRANSLATION TO BSV
 

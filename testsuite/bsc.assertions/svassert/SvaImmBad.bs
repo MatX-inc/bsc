@@ -1,0 +1,8 @@
+package SvaImmBad where
+import SVAssert
+{-# verilog sysSvaImmBad #-}
+sysSvaImmBad :: Module Empty
+sysSvaImmBad = module
+  r :: Reg Bool <- mkReg False
+  rules
+    "direct": when True ==> $SVA "temporal" (toSvaProp (r |=> r))

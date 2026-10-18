@@ -111,7 +111,8 @@ module ASyntax(
         binOp,
         mkCFCondWireInstId,
         PExpandContext, defContext, bContext, pContext
-        ) where
+        ,
+               aTSvaSeq, aTSvaProp, isSvaType) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
 import Prelude hiding ((<>))
@@ -124,7 +125,7 @@ import PPrint
 import IntLit
 import Id
 import IdPrint
-import PreIds(idPrimAction, idClock, idReset, idInout, idInout_, idPreludeRead, idNoReset)
+import PreIds(idPrimAction, idClock, idReset, idInout, idInout_, idPreludeRead, idNoReset, idSvaSeq, idSvaProp)
 import Prim
 import ErrorUtil(internalError)
 import Backend
@@ -481,6 +482,14 @@ aTNat = ATBit 32
 
 aTAction, aTClock, aTReset :: AType
 aTAction = ATAbstract idPrimAction []
+
+aTSvaSeq, aTSvaProp :: AType
+aTSvaSeq  = ATAbstract idSvaSeq []
+aTSvaProp = ATAbstract idSvaProp []
+
+isSvaType :: AType -> Bool
+isSvaType (ATAbstract i _) = i == idSvaSeq || i == idSvaProp
+isSvaType _ = False
 aTClock  = ATAbstract idClock []
 aTReset  = ATAbstract idReset []
 

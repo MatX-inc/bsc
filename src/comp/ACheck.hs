@@ -264,6 +264,15 @@ chkAExpr e@(APrim _ t PrimStringConcat es)
    | all isStringType (t : map chkAExpr es) = t
    | otherwise = internalError ("chkAExpr: string prim " ++ ppReadable (e, t, map chkAExpr es))
 
+-- SVA property nodes: operands are property nodes, packed booleans
+-- (Bit 1) and constant bounds (Bit 32); the node itself is abstract
+chkAExpr e@(APrim _ t op es)
+   | op `elem` svaSeqPrims || op `elem` svaPropPrims =
+        if isSvaType t && all okArg (map chkAExpr es)
+                then t
+                else internalError ("chkAExpr: sva prim " ++ ppReadable (e, t, map chkAExpr es))
+  where okArg at = isSvaType at || at == ATBit 1 || at == ATBit 32
+
 -- all other primitives
 chkAExpr e@(APrim _ t op es) =
         if all ((== t) . chkAExpr) es
@@ -349,7 +358,7 @@ isInout_ (ATAbstract i _) = i == idInout_
 isInout_ _ = False
 
 isForeignArg :: AType -> Bool
-isForeignArg  e = isBit e || isString e || isReal e
+isForeignArg  e = isBit e || isString e || isReal e || isSvaType e
 --isBitOrString :: AType -> Bool
 --isBitOrString e = isBit e || isString e
 isBitOrInout_ :: AType -> Bool
