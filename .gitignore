@@ -21,4 +21,5 @@ cabal.project.local
 # Hash lists and result directories of a determinism run over the build
 # (doc/cabal.md section 5).
 /*.sha256
+/*.toolchain
 determinism-results/
