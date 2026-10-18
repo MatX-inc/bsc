@@ -103,13 +103,14 @@ jobs:
         env:
           OUT: ${{ github.workspace }}/determinism-results
         run: util/cabal-ladder.sh run
-      # The lists and the logs, after a failed ladder too.
+      # The lists, the toolchain records and the logs, after a failed ladder too.
       - uses: actions/upload-artifact@v6
         if: ${{ !cancelled() }}
         with:
           name: ladder-${{ matrix.os }}
           path: |
             determinism-results/*.sha256
+            determinism-results/*.toolchain
             determinism-results/*.log
             determinism-results/*.rc
           if-no-files-found: error
