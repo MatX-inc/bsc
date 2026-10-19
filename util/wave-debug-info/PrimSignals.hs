@@ -64,8 +64,9 @@ isWire :: AVInst -> Bool
 isWire avi = isRWire avi || isRWire0 avi || isBypassWire avi || isBypassWire0 avi
 
 -- The instance's method ports: each argument, result and enable, with
--- the method it serves and the type recorded for it.  An enable tied
--- high (an always-enabled method) has no wire.
+-- the method it serves and the type recorded for it, and its output
+-- clocks and resets.  An enable tied high (an always-enabled method)
+-- has no wire.
 methodPorts :: AVInst -> [PrimPort]
 methodPorts avi =
     concat [ [ port m vn "arg" | args <- vf_inputs f, (vn, _) <- args ] ++
@@ -73,8 +74,12 @@ methodPorts avi =
              [ (port m vn "enable") { pp_type = Just itBool }
              | Just (vn, props) <- [vf_enable f], VPinhigh `notElem` props ]
            | f@(Method {}) <- vFields (avi_vmi avi)
-           , let m = getIdBaseString (vf_name f) ]
-  where port m vn role =
+           , let m = getIdBaseString (vf_name f) ] ++
+    [ port (getIdBaseString c) vn "result"
+    | (c, Just (osc, gate)) <- output_clocks (vClk vmi), vn <- osc : [ g | Just (g, _) <- [gate] ] ] ++
+    [ port (getIdBaseString r) vn "result" | (r, (Just vn, _)) <- output_resets (vRst vmi) ]
+  where vmi = avi_vmi avi
+        port m vn role =
             PrimPort m (getVNameString vn) role (M.lookup vn (avi_port_types avi)) []
 
 bluesimSignals :: AVInst -> (Maybe [String], [PrimPort])

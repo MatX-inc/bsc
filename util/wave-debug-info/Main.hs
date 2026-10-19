@@ -57,7 +57,7 @@ run flagArgs top out = do
                           exitFailure
 
     -- the design's elaboration files, from the top module down
-    (_, hierMap, _, _, _, _, abmis_by_name) <- phase flags "loading the elaboration" (\ (_, _, _, _, _, _, ms) -> length ms) $
+    (_, hierMap, _, ffmap, _, _, abmis_by_name) <- phase flags "loading the elaboration" (\ (_, _, _, _, _, _, ms) -> length ms) $
         convExceptTToIO errh $
           getABIHierarchy errh (verbose flags) (ifcPath flags) (Just be)
                           (map sb_name primBlocks) top []
@@ -76,5 +76,5 @@ run flagArgs top out = do
                          (sortImportedSignatures (map mkCImp bininfos)) [] [] []
     symtab <- phase flags "loading the packages" (const 0) $ mkSymTab errh cpack
 
-    json <- waveDebugInfo errh flags symtab hierMap abmis top
+    json <- waveDebugInfo errh flags symtab hierMap ffmap abmis top
     phase flags "writing" (const 0) $ withBinaryFile out WriteMode (\ h -> B.hPutBuilder h json)

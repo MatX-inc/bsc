@@ -30,3 +30,6 @@ Modules:
 - `InstScopes.hs`: the source-level scope view of an instance tree.
 - `PrimSignals.hs`: the signals a primitive instance puts in a dump, as
   Bluesim and Verilog each spell them.
+- `Netlist.hs`: the generated Verilog's nets, named by running bsc's own
+  back end on the elaboration, each with the rules and methods it belongs
+  to.

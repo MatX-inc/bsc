@@ -8,8 +8,13 @@
 -- "signals" lists the design's own signals: the state elements
 -- (registers, FIFOs, wires, ... -- one entry per primitive instance,
 -- and one per port of it the dump shows), the synthesized submodule
--- instances, each rule's CAN_FIRE and WILL_FIRE, and each method's
--- ports.  For each, "synthpath" is the signal's path in a dump of the
+-- instances, each rule's CAN_FIRE and WILL_FIRE, each method's ports
+-- the module's clock and reset ports and, for the Verilog elaboration,
+-- the wires of each synthesized submodule instance's ports and every
+-- other net of the generated Verilog ("net": the compiler's own
+-- definitions, each with the rules and methods whose condition, body,
+-- result or ready it is part of; see Netlist).  For each, "synthpath"
+-- is the signal's path in a dump of the
 -- synthesized hierarchy (scope names then the signal name, as the
 -- selected backend spells them; see PrimSignals) and "bsvpath" its
 -- path in the source: the instance names down through the inlined
@@ -49,7 +54,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 
 import Error(ErrorHandle)
-import Flags(Flags, tclShowHidden, verbose)
+import Flags(Flags, backend, tclShowHidden, verbose)
 import Position(getPositionFile, getPositionLine,
                 getPositionColumn, noPosition)
 import TclUtils(isRealPosition)
@@ -75,6 +80,9 @@ import ABin(ABinEitherModInfo, abemi_apkg)
 import ABinUtil(HierMap)
 import InstScopes(InstScope(..), instScopes, scopeLocalName)
 import PrimSignals(PrimPort(..), primSignals)
+import Netlist(Netlist(..), Net(..), Owner(..), verilogNetlist)
+import ForeignFunctions(ForeignFuncMap)
+import Backend(Backend(..))
 
 -- ---------------
 -- JSON
@@ -166,6 +174,7 @@ signalJson nameOf s =
 -- the elaborated packages by module name
 data Design = Design { d_hier :: HierMap
                      , d_mods :: M.Map String ABinEitherModInfo
+                     , d_nets :: M.Map String Netlist  -- the Verilog elaboration's, by module
                      , d_hide :: Bool  -- leave out {-# hide #-}'d instances
                      , d_flags :: Flags
                      }
@@ -188,7 +197,17 @@ moduleSignals d scope bsv modname =
                                | avi <- apkg_state_instances apkg ]
             scopes = instScopes (d_hide d) (apkg_name apkg) (apkg_inst_tree apkg)
             ports = concatMap (portSignals apkg scope bsv) (apkg_interface apkg)
-        in  ports ++ scopeSignals d scope bsv submods prims scopes
+            nets = maybe [] (netSignals scope bsv (ruleScopes bsv scopes)) (M.lookup modname (d_nets d))
+        in  clockSignals apkg scope bsv ++ ports ++ scopeSignals d scope bsv submods prims scopes ++ nets
+
+-- The module's input clock and reset ports
+clockSignals :: APackage -> [String] -> [String] -> [Signal]
+clockSignals apkg scope bsv =
+    [ Signal (scope ++ [n]) (bsv ++ [n]) kind [] Nothing Nothing | (kind, n) <- clocks ++ resets ]
+  where wires = apkg_external_wires apkg
+        clocks = concat [ ("clock", getVNameString osc) : [ ("clock", getVNameString g) | Right g <- [gate] ]
+                        | (_, Just (osc, gate)) <- input_clocks (wClk wires) ]
+        resets = [ ("reset", getVNameString r) | (_, (Just r, _)) <- input_resets (wRst wires) ]
 
 -- The signals of the source-level scopes of a module (see InstScope):
 -- its state elements and rules, then those of the inlined instances,
@@ -218,37 +237,71 @@ ruleSignals scope bsv name rule =
 tBool :: CType
 tBool = iToCT itBool
 
+-- Each rule of a module's source scopes: its display name and the
+-- source path of its scope
+ruleScopes :: [String] -> InstScope -> M.Map Id (String, [String])
+ruleScopes bsv sc =
+    M.unions $ M.fromList [ (rule, (localName name, bsv ++ [localName name])) | (name, rule) <- is_rules sc ]
+             : [ ruleScopes (bsv ++ [scopeLocalName (is_name c)]) c | c <- is_children sc ]
+
+-- The generated Verilog's other nets, at the module's scope.  A net
+-- belonging to one rule sits in that rule's source scope; any other at
+-- the module's.
+netSignals :: [String] -> [String] -> M.Map Id (String, [String]) -> Netlist -> [Signal]
+netSignals scope bsv rules nl =
+    [ Signal (scope ++ [net_name n]) (home ++ [net_name n]) "net" detail Nothing (Just (net_id n))
+    | n <- nl_nets nl
+    , let ruleOwners = [ (o, r) | o <- net_owners n, ow_kind o == "rule", Just r <- [M.lookup (ow_id o) rules] ]
+          home = case distinct [ path | (_, (_, path)) <- ruleOwners ] of
+                   [path] -> path
+                   _ -> bsv
+          detail = maybe [] (\ w -> [("width", JNum w)]) (net_width n) ++
+                   [ ("rules", JArr [ JObj [("rule", JStr name), ("part", JStr (ow_part o))]
+                                    | (o, (name, _)) <- ruleOwners ])
+                   | not (null ruleOwners) ] ++
+                   [ ("methods", JArr [ JObj [("method", JStr (getIdBaseString (ow_id o))), ("part", JStr (ow_part o))]
+                                      | o <- net_owners n, ow_kind o == "method" ])
+                   | any ((== "method") . ow_kind) (net_owners n) ]
+    ]
+
 -- A state element is a synthesized submodule instance (a scope of its
 -- own, whose contents follow) or a primitive instance.  A primitive's
 -- entry is the signal carrying its contents (a register's value) or,
 -- when the dump has none, its scope (a FIFO); it records which
--- primitive, and the type of its contents.  The primitive's ports
--- follow it, each named in the source by the port.
+-- primitive, and the type of its contents.  The instance's ports
+-- follow it, each named in the source by the port: a primitive's in
+-- either backend, a submodule's in Verilog, where they are wires of
+-- the parent (Bluesim dumps them at the submodule's own scope, where
+-- its methods' ports describe them).
 stateSignals :: Design -> [String] -> [String] -> M.Map String String
              -> M.Map String AVInst -> Id -> Id -> [Signal]
 stateSignals d scope bsv submods prims name flat =
     let flatname = getIdBaseString flat
         local = localName name
         synth = scope ++ [flatname]
+        portEntries avi extra =
+            [ Signal (scope ++ pp_path p) (bsv ++ [local, pp_port p]) "port"
+                     ([ ("role", JStr (pp_role p)), ("method", JStr (pp_method p)) ] ++ extra)
+                     (fmap iToCT (pp_type p)) (Just name)
+            | p <- snd (primSignals (d_flags d) avi) ]
     in  case M.lookup flatname submods of
           Just submod | M.member submod (d_mods d) ->
               Signal synth (bsv ++ [local]) "module"
                      [("module", JStr submod)] Nothing (Just name)
-              : moduleSignals d synth (bsv ++ [local]) submod
+              : (case (backend (d_flags d), M.lookup flatname prims) of
+                   (Just Verilog, Just avi) -> portEntries avi [("module", JStr submod)]
+                   _ -> [])
+              ++ moduleSignals d synth (bsv ++ [local]) submod
           _ ->
               case M.lookup flatname prims of
                 Just avi ->
                     let vmi = avi_vmi avi
                         prim = getVNameString (vName vmi)
                         ty = fmap iToCT (primDataType avi)
-                        (value, ports) = primSignals (d_flags d) avi
+                        (value, _) = primSignals (d_flags d) avi
                     in  Signal (scope ++ maybe [flatname] id value) (bsv ++ [local]) "state"
                                [("prim", JStr prim)] ty (Just name)
-                        : [ Signal (scope ++ pp_path p) (bsv ++ [local, pp_port p]) "port"
-                                   [ ("role", JStr (pp_role p)), ("method", JStr (pp_method p))
-                                   , ("prim", JStr prim) ]
-                                   (fmap iToCT (pp_type p)) (Just name)
-                          | p <- ports ]
+                        : portEntries avi [("prim", JStr prim)]
                 Nothing ->
                     [ Signal synth (bsv ++ [local]) "state" [] Nothing (Just name) ]
 
@@ -617,11 +670,18 @@ phase flags name measure act
 
 -- The JSON bytes of the debug information for the design under `top`,
 -- whose scope path in the dump is main.top
-waveDebugInfo :: ErrorHandle -> Flags -> SymTab -> HierMap -> [(String, ABinEitherModInfo)]
+waveDebugInfo :: ErrorHandle -> Flags -> SymTab -> HierMap -> ForeignFuncMap -> [(String, ABinEitherModInfo)]
               -> String -> IO B.Builder
-waveDebugInfo errh flags symtab hier mods top = do
+waveDebugInfo errh flags symtab hier ffmap mods top = do
+    -- the Verilog elaboration's nets: the generated netlist's names
+    nets <- phase flags "the netlists" (sum . map (length . nl_nets . snd)) $
+        case backend flags of
+          Just Verilog -> sequence [ (,) n <$> verilogNetlist errh flags ffmap abmi
+                                   | (n, Right abmi) <- mods ]
+          _ -> return []
     let design = Design { d_hier = hier
                         , d_mods = M.fromList mods
+                        , d_nets = M.fromList nets
                         , d_hide = not (tclShowHidden flags)
                         , d_flags = flags }
     _ <- phase flags "decoding the modules" id $
