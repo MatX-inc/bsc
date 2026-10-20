@@ -72,6 +72,8 @@ if { $bluehs == 0 } {
     compile_pass WaveTypes.bs {-sim -elab}
     wavedebuginfo_pass $bluehs -sim + mkWaveTypesCore mkWaveTypesCore.bluesim.wave-debug.json
     compare_file_filtered mkWaveTypesCore.bluesim.wave-debug.json "" $filters
+    wavedebuginfo_pass $bluehs -sim + mkStash mkStash.bluesim.wave-debug.json
+    compare_file_filtered mkStash.bluesim.wave-debug.json "" $filters
 
     # the Verilog elaboration, in its own directory so that neither
     # backend's files hide the other's; the script runs bsc's Verilog
