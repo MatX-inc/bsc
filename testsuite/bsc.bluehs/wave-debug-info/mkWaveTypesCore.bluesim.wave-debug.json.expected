@@ -1,0 +1,787 @@
+{
+  "format": "bsc-wave-debug-info",
+  "version": 2,
+  "module": "mkWaveTypesCore",
+  "backend": "bluesim",
+  "compiler": "Bluespec Compiler, version build-20260926-1-19-g170eeb7a (build 170eeb7a)",
+  "children": [
+    {
+      "instance": "stash",
+      "path": ["stash"],
+      "module": "mkStash"
+    }
+  ],
+  "signals": [
+    {
+      "synthpath": ["CLK"],
+      "bsvpath": ["CLK"],
+      "kind": "clock"
+    },
+    {
+      "synthpath": ["RST_N"],
+      "bsvpath": ["RST_N"],
+      "kind": "reset"
+    },
+    {
+      "synthpath": ["cell"],
+      "bsvpath": ["cell"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "WaveTypes::Cell",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 103,
+      "column": 4
+    },
+    {
+      "synthpath": ["cell", "Q_OUT"],
+      "bsvpath": ["cell", "Q_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "read",
+      "prim": "RegN",
+      "type": "WaveTypes::Cell",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 103,
+      "column": 4
+    },
+    {
+      "synthpath": ["cell", "D_IN"],
+      "bsvpath": ["cell", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "WaveTypes::Cell",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 103,
+      "column": 4
+    },
+    {
+      "synthpath": ["cell", "EN"],
+      "bsvpath": ["cell", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 103,
+      "column": 4
+    },
+    {
+      "synthpath": ["maybeIdx"],
+      "bsvpath": ["maybeIdx"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "Maybe#(UInt#(16))",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 104,
+      "column": 4
+    },
+    {
+      "synthpath": ["maybeIdx", "Q_OUT"],
+      "bsvpath": ["maybeIdx", "Q_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "read",
+      "prim": "RegN",
+      "type": "Maybe#(UInt#(16))",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 104,
+      "column": 4
+    },
+    {
+      "synthpath": ["maybeIdx", "D_IN"],
+      "bsvpath": ["maybeIdx", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Maybe#(UInt#(16))",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 104,
+      "column": 4
+    },
+    {
+      "synthpath": ["maybeIdx", "EN"],
+      "bsvpath": ["maybeIdx", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 104,
+      "column": 4
+    },
+    {
+      "synthpath": ["packet"],
+      "bsvpath": ["packet"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "WaveTypes::Packet",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 109,
+      "column": 4
+    },
+    {
+      "synthpath": ["packet", "Q_OUT"],
+      "bsvpath": ["packet", "Q_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "read",
+      "prim": "RegN",
+      "type": "WaveTypes::Packet",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 109,
+      "column": 4
+    },
+    {
+      "synthpath": ["packet", "D_IN"],
+      "bsvpath": ["packet", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "WaveTypes::Packet",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 109,
+      "column": 4
+    },
+    {
+      "synthpath": ["packet", "EN"],
+      "bsvpath": ["packet", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 109,
+      "column": 4
+    },
+    {
+      "synthpath": ["palette"],
+      "bsvpath": ["palette"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "Vector::Vector#(4, WaveTypes::Color)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 105,
+      "column": 4
+    },
+    {
+      "synthpath": ["palette", "Q_OUT"],
+      "bsvpath": ["palette", "Q_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "read",
+      "prim": "RegN",
+      "type": "Vector::Vector#(4, WaveTypes::Color)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 105,
+      "column": 4
+    },
+    {
+      "synthpath": ["palette", "D_IN"],
+      "bsvpath": ["palette", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Vector::Vector#(4, WaveTypes::Color)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 105,
+      "column": 4
+    },
+    {
+      "synthpath": ["palette", "EN"],
+      "bsvpath": ["palette", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 105,
+      "column": 4
+    },
+    {
+      "synthpath": ["source"],
+      "bsvpath": ["source"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "WaveTypes::Source",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 108,
+      "column": 4
+    },
+    {
+      "synthpath": ["source", "Q_OUT"],
+      "bsvpath": ["source", "Q_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "read",
+      "prim": "RegN",
+      "type": "WaveTypes::Source",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 108,
+      "column": 4
+    },
+    {
+      "synthpath": ["source", "D_IN"],
+      "bsvpath": ["source", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "WaveTypes::Source",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 108,
+      "column": 4
+    },
+    {
+      "synthpath": ["source", "EN"],
+      "bsvpath": ["source", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 108,
+      "column": 4
+    },
+    {
+      "synthpath": ["stash"],
+      "bsvpath": ["stash"],
+      "kind": "module",
+      "module": "mkStash",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 102,
+      "column": 4
+    },
+    {
+      "synthpath": ["tick"],
+      "bsvpath": ["tick"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(16)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 106,
+      "column": 4
+    },
+    {
+      "synthpath": ["tick", "Q_OUT"],
+      "bsvpath": ["tick", "Q_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "read",
+      "prim": "RegN",
+      "type": "UInt#(16)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 106,
+      "column": 4
+    },
+    {
+      "synthpath": ["tick", "D_IN"],
+      "bsvpath": ["tick", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "UInt#(16)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 106,
+      "column": 4
+    },
+    {
+      "synthpath": ["tick", "EN"],
+      "bsvpath": ["tick", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 106,
+      "column": 4
+    },
+    {
+      "synthpath": ["w"],
+      "bsvpath": ["w"],
+      "kind": "state",
+      "prim": "RWire",
+      "type": "UInt#(16)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 107,
+      "column": 4
+    },
+    {
+      "synthpath": ["WILL_FIRE_RL_done"],
+      "bsvpath": ["done", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "done",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 122,
+      "column": 6
+    },
+    {
+      "synthpath": ["CAN_FIRE_RL_done"],
+      "bsvpath": ["done", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "done",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 122,
+      "column": 6
+    },
+    {
+      "synthpath": ["WILL_FIRE_RL_step"],
+      "bsvpath": ["step", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "step",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 112,
+      "column": 6
+    },
+    {
+      "synthpath": ["CAN_FIRE_RL_step"],
+      "bsvpath": ["step", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "step",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 112,
+      "column": 6
+    },
+    {
+      "synthpath": ["pair_hi"],
+      "bsvpath": ["pair", "hi"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 66,
+      "column": 4
+    },
+    {
+      "synthpath": ["pair_hi", "Q_OUT"],
+      "bsvpath": ["pair", "hi", "Q_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "read",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 66,
+      "column": 4
+    },
+    {
+      "synthpath": ["pair_hi", "D_IN"],
+      "bsvpath": ["pair", "hi", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 66,
+      "column": 4
+    },
+    {
+      "synthpath": ["pair_hi", "EN"],
+      "bsvpath": ["pair", "hi", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 66,
+      "column": 4
+    },
+    {
+      "synthpath": ["pair_lo"],
+      "bsvpath": ["pair", "lo"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 65,
+      "column": 4
+    },
+    {
+      "synthpath": ["pair_lo", "Q_OUT"],
+      "bsvpath": ["pair", "lo", "Q_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "read",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 65,
+      "column": 4
+    },
+    {
+      "synthpath": ["pair_lo", "D_IN"],
+      "bsvpath": ["pair", "lo", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 65,
+      "column": 4
+    },
+    {
+      "synthpath": ["pair_lo", "EN"],
+      "bsvpath": ["pair", "lo", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 65,
+      "column": 4
+    },
+    {
+      "synthpath": ["WILL_FIRE_RL_pair_carry"],
+      "bsvpath": ["pair", "carry", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "carry",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 69,
+      "column": 6
+    },
+    {
+      "synthpath": ["CAN_FIRE_RL_pair_carry"],
+      "bsvpath": ["pair", "carry", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "carry",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 69,
+      "column": 6
+    },
+    {
+      "synthpath": ["pair_d"],
+      "bsvpath": ["pair", "d", "_r"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "/rw/home/william/bsc/surfer-enhancements/src/Libraries/Base2///DReg.bs",
+      "line": 17,
+      "column": 6
+    },
+    {
+      "synthpath": ["pair_d", "Q_OUT"],
+      "bsvpath": ["pair", "d", "_r", "Q_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "read",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "/rw/home/william/bsc/surfer-enhancements/src/Libraries/Base2///DReg.bs",
+      "line": 17,
+      "column": 6
+    },
+    {
+      "synthpath": ["pair_d", "D_IN"],
+      "bsvpath": ["pair", "d", "_r", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "UInt#(4)",
+      "file": "/rw/home/william/bsc/surfer-enhancements/src/Libraries/Base2///DReg.bs",
+      "line": 17,
+      "column": 6
+    },
+    {
+      "synthpath": ["pair_d", "EN"],
+      "bsvpath": ["pair", "d", "_r", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/rw/home/william/bsc/surfer-enhancements/src/Libraries/Base2///DReg.bs",
+      "line": 17,
+      "column": 6
+    },
+    {
+      "synthpath": ["pair_d_1"],
+      "bsvpath": ["pair", "d", "_wire"],
+      "kind": "state",
+      "prim": "RWire",
+      "type": "UInt#(4)",
+      "file": "/rw/home/william/bsc/surfer-enhancements/src/Libraries/Base2///DReg.bs",
+      "line": 19,
+      "column": 6
+    },
+    {
+      "synthpath": ["WILL_FIRE_RL_pair_d__dreg_update"],
+      "bsvpath": ["pair", "d", "_dreg_update", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "_dreg_update",
+      "type": "Bool",
+      "file": "/rw/home/william/bsc/surfer-enhancements/src/Libraries/Base2///DReg.bs",
+      "line": 21,
+      "column": 13
+    },
+    {
+      "synthpath": ["CAN_FIRE_RL_pair_d__dreg_update"],
+      "bsvpath": ["pair", "d", "_dreg_update", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "_dreg_update",
+      "type": "Bool",
+      "file": "/rw/home/william/bsc/surfer-enhancements/src/Libraries/Base2///DReg.bs",
+      "line": 21,
+      "column": 13
+    }
+  ],
+  "types": {
+    "WaveTypes::Cell": {
+      "kind": "union",
+      "width": 20,
+      "layout": "derived",
+      "tag": {
+        "lo": 18,
+        "hi": 20
+      },
+      "members": [
+        {
+          "name": "Px",
+          "type": "WaveTypes::Pixel",
+          "width": 18,
+          "tag": 0,
+          "lo": 0,
+          "hi": 18
+        },
+        {
+          "name": "Idx",
+          "type": "UInt#(16)",
+          "width": 16,
+          "tag": 1,
+          "lo": 0,
+          "hi": 16
+        },
+        {
+          "name": "Empty",
+          "type": "void",
+          "width": 0,
+          "tag": 2
+        }
+      ]
+    },
+    "Bool": {
+      "kind": "enum",
+      "width": 1,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "False",
+          "value": 0
+        },
+        {
+          "name": "True",
+          "value": 1
+        }
+      ]
+    },
+    "Maybe#(UInt#(16))": {
+      "kind": "union",
+      "width": 17,
+      "layout": "derived",
+      "tag": {
+        "lo": 16,
+        "hi": 17
+      },
+      "members": [
+        {
+          "name": "Invalid",
+          "type": "void",
+          "width": 0,
+          "tag": 0
+        },
+        {
+          "name": "Valid",
+          "type": "UInt#(16)",
+          "width": 16,
+          "tag": 1,
+          "lo": 0,
+          "hi": 16
+        }
+      ]
+    },
+    "WaveTypes::Packet": {
+      "kind": "union",
+      "width": 9,
+      "layout": "custom",
+      "tag": {
+        "lo": 8,
+        "hi": 9
+      },
+      "members": [
+        {
+          "name": "Wide",
+          "type": "Bit#(8)",
+          "width": 8,
+          "tag": 0,
+          "lo": 0,
+          "hi": 8
+        },
+        {
+          "name": "Narrow",
+          "type": "Bit#(6)",
+          "width": 6,
+          "tag": 1,
+          "lo": 2,
+          "hi": 8
+        }
+      ]
+    },
+    "Vector::Vector#(4, WaveTypes::Color)": {
+      "kind": "vector",
+      "width": 8,
+      "length": 4,
+      "elem": "WaveTypes::Color",
+      "stride": 2
+    },
+    "WaveTypes::Source": {
+      "kind": "union",
+      "width": 3,
+      "layout": "custom",
+      "tag": {
+        "lo": 0,
+        "hi": 3
+      },
+      "members": [
+        {
+          "name": "Zeros",
+          "type": "void",
+          "width": 0,
+          "tag": 0
+        },
+        {
+          "name": "Alu",
+          "type": "Bit#(1)",
+          "width": 1,
+          "tags": [1, 2],
+          "bits": {
+            "op": "not",
+            "width": 1,
+            "args": [
+              {
+                "op": "eq",
+                "width": 1,
+                "args": [
+                  {
+                    "op": "arg"
+                  },
+                  {
+                    "op": "const",
+                    "bits": "001"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "VecMem",
+          "type": "void",
+          "width": 0,
+          "tag": 3
+        },
+        {
+          "name": "Other",
+          "type": "void",
+          "width": 0,
+          "tags": [4, 5, 6, 7]
+        }
+      ]
+    },
+    "UInt#(16)": {
+      "kind": "primary",
+      "width": 16
+    },
+    "UInt#(4)": {
+      "kind": "primary",
+      "width": 4
+    },
+    "WaveTypes::Pixel": {
+      "kind": "struct",
+      "width": 18,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "x",
+          "type": "UInt#(8)",
+          "width": 8,
+          "lo": 10,
+          "hi": 18
+        },
+        {
+          "name": "y",
+          "type": "UInt#(8)",
+          "width": 8,
+          "lo": 2,
+          "hi": 10
+        },
+        {
+          "name": "color",
+          "type": "WaveTypes::Color",
+          "width": 2,
+          "lo": 0,
+          "hi": 2
+        }
+      ]
+    },
+    "void": {
+      "kind": "primary",
+      "width": 0
+    },
+    "Bit#(8)": {
+      "kind": "primary",
+      "width": 8
+    },
+    "Bit#(6)": {
+      "kind": "primary",
+      "width": 6
+    },
+    "WaveTypes::Color": {
+      "kind": "enum",
+      "width": 2,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "Red",
+          "value": 0
+        },
+        {
+          "name": "Green",
+          "value": 1
+        },
+        {
+          "name": "Blue",
+          "value": 2
+        }
+      ]
+    },
+    "Bit#(1)": {
+      "kind": "primary",
+      "width": 1
+    },
+    "UInt#(8)": {
+      "kind": "primary",
+      "width": 8
+    }
+  }
+}

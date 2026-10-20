@@ -39,11 +39,9 @@ main :: IO ()
 main = do
     args <- getArgs
     case splitAt (length args - 2) args of
-      (flagArgs, [modname, out]) | all isFlag flagArgs -> run flagArgs modname out
+      (flagArgs, [modname, out]) | take 1 modname /= "-" -> run flagArgs modname out
       _ -> do hPutStrLn stderr "Usage: wavedebuginfo [bsc flags] <module> <output.json>"
               exitFailure
-  where isFlag ('-' : _) = True
-        isFlag _ = False
 
 run :: [String] -> String -> FilePath -> IO ()
 run flagArgs modname out = do

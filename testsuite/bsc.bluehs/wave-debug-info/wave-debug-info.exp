@@ -1,0 +1,65 @@
+# Tests for the waveform debug information script (util/wave-debug-info):
+# one JSON fragment per synthesized module, from its elaboration file.
+#
+# The script runs on the bluehs runtime of the bsc installation
+# (`make install-bluehs`), found beside bsc; the tests are skipped when
+# the installation has none.
+
+# Locate the bluehs launcher: BLUEHS in the environment, else the
+# installation's, next to bsc (<install>/bin/bsc, <install>/bluehs/bin/bluehs)
+proc find_bluehs {} {
+    global env
+
+    if { [info exists env(BLUEHS)] && [file exists $env(BLUEHS)] } {
+        return [absolute_filename $env(BLUEHS)]
+    }
+    set bsc [which_bsc]
+    if { $bsc != 0 } {
+        set launcher [file join [file dirname [file dirname $bsc]] bluehs bin bluehs]
+        if { [file exists $launcher] } {
+            return $launcher
+        }
+    }
+    return [which bluehs]
+}
+
+# Run the script on a module's elaboration: `backend` is -sim or
+# -verilog, `path` the search path of its .ba and .bo files
+proc wavedebuginfo_pass { bluehs backend path module outname } {
+    global srcdir
+    global subdir
+
+    set script [file join [absolute $srcdir] .. util wave-debug-info]
+    set here [pwd]
+    cd [file join [absolute $srcdir] $subdir]
+    set status [exec_with_log "wavedebuginfo" \
+        "$bluehs -i$script $script/Main.hs $backend -p $path $module $outname >& $outname.bluehs-out"]
+    cd $here
+    if { $status == 0 } {
+        pass "wavedebuginfo $backend $module"
+    } else {
+        fail "wavedebuginfo $backend $module"
+    }
+}
+
+set bluehs [find_bluehs]
+if { $bluehs == 0 } {
+    unsupported "wave-debug-info: no bluehs runtime beside bsc (build with make install-bluehs)"
+} else {
+    # source positions are compared without their directories, and
+    # without the compiler's version stamp
+    set filters {-e {s|"file": ".*/|"file": "|} -e {s|"compiler": ".*"|"compiler": "..."|}}
+
+    # the Bluesim elaboration, in this directory
+    compile_pass WaveTypes.bs {-sim -elab}
+    wavedebuginfo_pass $bluehs -sim + mkWaveTypesCore mkWaveTypesCore.bluesim.wave-debug.json
+    compare_file_filtered mkWaveTypesCore.bluesim.wave-debug.json "" $filters
+
+    # the Verilog elaboration, in its own directory so that neither
+    # backend's files hide the other's; the script runs bsc's Verilog
+    # back end on it, so every net of the generated Verilog is named
+    file mkdir [file join [absolute $srcdir] $subdir vba]
+    compile_pass WaveTypes.bs {-verilog -elab -bdir vba -vdir vba}
+    wavedebuginfo_pass $bluehs -verilog vba:%/Libraries mkWaveTypesCore mkWaveTypesCore.verilog.wave-debug.json
+    compare_file_filtered mkWaveTypesCore.verilog.wave-debug.json "" $filters
+}

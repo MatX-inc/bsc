@@ -24,6 +24,11 @@ Verilog elaboration the script also runs bsc's own back end on the
 module, so that the generated Verilog's every net is described under
 the name the netlist gives it.
 
+`testsuite/bsc.bluehs/wave-debug-info` runs the script on a fixture with
+every kind of type and compares the fragments of both backends against
+expected files (`make bsc.bluehs/wave-debug-info/wave-debug-info.check`
+in `testsuite`); it is skipped when the installation has no bluehs runtime.
+
 Modules:
 
 - `WaveDebugInfo.hs`: the document, its `signals` from the design's
