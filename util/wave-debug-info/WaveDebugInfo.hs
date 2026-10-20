@@ -23,7 +23,9 @@
 -- the wires of each synthesized submodule instance's ports and every
 -- other net of the generated Verilog ("net": the compiler's own
 -- definitions, each with the rules and methods whose condition, body,
--- result or ready it is part of; see Netlist).  For each, "synthpath"
+-- result or ready it is part of; see Netlist).  A state element's or
+-- submodule's port likewise names the rules and methods that call its
+-- method, as "rules" and "methods".  For each, "synthpath"
 -- is the signal's path in a dump of the synthesized hierarchy (scope
 -- names then the signal name, as the selected backend spells them; see
 -- PrimSignals) and "bsvpath" its path in the source: the instance
@@ -44,15 +46,19 @@
 -- union arm or enum constant told apart by a fixed range of tag bits
 -- carries the tag value(s) selecting it, and the type carries the
 -- range; anything else carries the expression that computes it, for
--- the reader to evaluate.  "layout" says whether the result is the
--- derived one (struct fields concatenated, first field most
--- significant; a union's tag above the widest payload, each payload
--- right-aligned), "custom", or "unknown" when the instance could not
--- be reduced.  A vector's element 0 is lowest.
+-- the reader to evaluate; a member the instance yielded nothing for
+-- is marked "layout": "unknown".  A union constructor of several
+-- fields carries the fields, each with its own range or expression,
+-- and its own bits are theirs concatenated, first field most
+-- significant.  "layout" says whether the result is the derived one
+-- (struct fields concatenated, first field most significant; a
+-- union's tag above the widest payload, each payload right-aligned),
+-- "custom", or "unknown" when the instance could not be reduced.  A
+-- vector's element 0 is lowest.
 module WaveDebugInfo (waveDebugInfo, phase) where
 
 import Data.List(intersperse)
-import Data.Maybe(mapMaybe, isJust)
+import Data.Maybe(mapMaybe, isJust, isNothing)
 import qualified Data.ByteString.Builder as B
 import qualified Data.ByteString.Lazy as BL
 import Control.Exception(evaluate)
@@ -90,7 +96,7 @@ import ASyntax
 import ABin(ABinModInfo(..))
 import InstScopes(InstScope(..), instScopes, scopeLocalName)
 import PrimSignals(PrimPort(..), primSignals)
-import Netlist(Netlist(..), Net(..), Owner(..), verilogNetlist)
+import Netlist(Netlist(..), Net(..), Owner(..), verilogNetlist, methodOwners)
 import ForeignFunctions(ForeignFuncMap)
 import Backend(Backend(..))
 import SimCCBlock(SimCCBlock(..), primBlocks)
@@ -184,6 +190,7 @@ signalJson nameOf s =
 
 -- What describing the module's signals needs besides its package
 data Design = Design { d_nets :: Maybe Netlist  -- the Verilog elaboration's nets
+                     , d_owners :: M.Map (String, String) [Owner]  -- of each instance's methods
                      , d_hide :: Bool  -- leave out {-# hide #-}'d instances
                      , d_flags :: Flags
                      }
@@ -207,9 +214,10 @@ moduleSignals d apkg =
         prims = M.fromList [ (getIdBaseString (avi_vname avi), avi)
                            | avi <- apkg_state_instances apkg ]
         scopes = instScopes (d_hide d) (apkg_name apkg) (apkg_inst_tree apkg)
+        rules = ruleScopes bsv scopes
         ports = concatMap (portSignals apkg scope bsv) (apkg_interface apkg)
-        nets = maybe [] (netSignals scope bsv (ruleScopes bsv scopes)) (d_nets d)
-    in  clockSignals apkg scope bsv ++ ports ++ scopeSignals d scope bsv prims scopes ++ nets
+        nets = maybe [] (netSignals scope bsv rules) (d_nets d)
+    in  clockSignals apkg scope bsv ++ ports ++ scopeSignals d scope bsv rules prims scopes ++ nets
 
 -- The module's input clock and reset ports
 clockSignals :: APackage -> [String] -> [String] -> [Signal]
@@ -223,12 +231,12 @@ clockSignals apkg scope bsv =
 -- The signals of the source-level scopes of a module (see InstScope):
 -- its state elements and rules, then those of the inlined instances,
 -- each one more level of the source path
-scopeSignals :: Design -> [String] -> [String]
+scopeSignals :: Design -> [String] -> [String] -> M.Map Id (String, [String])
              -> M.Map String AVInst -> InstScope -> [Signal]
-scopeSignals d scope bsv prims sc =
-    concat [ stateSignals d scope bsv prims name flat | (name, flat) <- is_states sc ] ++
+scopeSignals d scope bsv rules prims sc =
+    concat [ stateSignals d scope bsv rules prims name flat | (name, flat) <- is_states sc ] ++
     concat [ ruleSignals scope bsv name rule | (name, rule) <- is_rules sc ] ++
-    concat [ scopeSignals d scope (bsv ++ [scopeLocalName (is_name c)]) prims c
+    concat [ scopeSignals d scope (bsv ++ [scopeLocalName (is_name c)]) rules prims c
            | c <- is_children sc ]
 
 -- A rule's fire signals are dumped at the module's scope under the
@@ -257,25 +265,33 @@ ruleScopes bsv sc =
 
 -- The generated Verilog's other nets, at the module's scope.  A net
 -- belonging to one rule sits in that rule's source scope; any other at
--- the module's.  Each owning rule is named with its source path, since
--- rules of different instances share names.
+-- the module's.
 netSignals :: [String] -> [String] -> M.Map Id (String, [String]) -> Netlist -> [Signal]
 netSignals scope bsv rules nl =
     [ Signal (scope ++ [net_name n]) (home ++ [net_name n]) "net" detail Nothing (Just (net_id n))
     | n <- nl_nets nl
-    , let ruleOwners = [ (o, r) | o <- net_owners n, ow_kind o == "rule", Just r <- [M.lookup (ow_id o) rules] ]
-          home = case distinct [ path | (_, (_, path)) <- ruleOwners ] of
+    , let (owned, homes) = ownerDetail rules (net_owners n)
+          home = case homes of
                    [path] -> path
                    _ -> bsv
-          detail = maybe [] (\ w -> [("width", JNum w)]) (net_width n) ++
-                   [ ("rules", JArr [ JObj [ ("rule", JStr name), ("path", JArr (map JStr path))
-                                           , ("part", JStr (ow_part o)) ]
-                                    | (o, (name, path)) <- ruleOwners ])
-                   | not (null ruleOwners) ] ++
-                   [ ("methods", JArr [ JObj [("method", JStr (getIdBaseString (ow_id o))), ("part", JStr (ow_part o))]
-                                      | o <- net_owners n, ow_kind o == "method" ])
-                   | any ((== "method") . ow_kind) (net_owners n) ]
+          detail = maybe [] (\ w -> [("width", JNum w)]) (net_width n) ++ owned
     ]
+
+-- A signal's owners, as its `rules` and `methods` entries, and the
+-- source paths of the owning rules' scopes.  Each owning rule is named
+-- with its source path, since rules of different instances share
+-- names.
+ownerDetail :: M.Map Id (String, [String]) -> [Owner] -> ([(String, JValue)], [[String]])
+ownerDetail rules owners =
+    ( [ ("rules", JArr [ JObj [ ("rule", JStr name), ("path", JArr (map JStr path))
+                              , ("part", JStr (ow_part o)) ]
+                       | (o, (name, path)) <- ruleOwners ])
+      | not (null ruleOwners) ] ++
+      [ ("methods", JArr [ JObj [("method", JStr (getIdBaseString (ow_id o))), ("part", JStr (ow_part o))]
+                         | o <- owners, ow_kind o == "method" ])
+      | any ((== "method") . ow_kind) owners ]
+    , distinct [ path | (_, (_, path)) <- ruleOwners ] )
+  where ruleOwners = [ (o, r) | o <- owners, ow_kind o == "rule", Just r <- [M.lookup (ow_id o) rules] ]
 
 -- A state element is a synthesized submodule instance (a scope of its
 -- own, described by that module's fragment) or a primitive instance.  A primitive's
@@ -285,18 +301,20 @@ netSignals scope bsv rules nl =
 -- follow it, each named in the source by the port: a primitive's in
 -- either backend, a submodule's in Verilog, where they are wires of
 -- the parent (Bluesim dumps them at the submodule's own scope, where
--- its methods' ports describe them).
-stateSignals :: Design -> [String] -> [String]
+-- its methods' ports describe them).  A port carries the owners of its
+-- method: the rules and methods that call it.
+stateSignals :: Design -> [String] -> [String] -> M.Map Id (String, [String])
              -> M.Map String AVInst -> Id -> Id -> [Signal]
-stateSignals d scope bsv prims name flat =
+stateSignals d scope bsv rules prims name flat =
     let flatname = getIdBaseString flat
         local = localName name
         synth = scope ++ [flatname]
         portEntries avi extra =
             [ Signal (scope ++ pp_path p) (bsv ++ [local, pp_port p]) "port"
-                     ([ ("role", JStr (pp_role p)), ("method", JStr (pp_method p)) ] ++ extra)
+                     ([ ("role", JStr (pp_role p)), ("method", JStr (pp_method p)) ] ++ extra ++ owned)
                      (fmap iToCT (pp_type p)) (Just name)
-            | p <- snd (primSignals (d_flags d) avi) ]
+            | p <- snd (primSignals (d_flags d) avi)
+            , let (owned, _) = ownerDetail rules (M.findWithDefault [] (flatname, pp_method p) (d_owners d)) ]
     in  case M.lookup flatname prims of
           Just avi | isSynthesized avi ->
               let submod = getVNameString (vName (avi_vmi avi))
@@ -392,7 +410,15 @@ data Member = Member { mb_name :: String
                      , mb_width :: Maybe Integer
                      , mb_derivedTag :: Maybe Integer  -- the tag a derived instance gives it
                      , mb_when :: Maybe BitExpr        -- 1 iff the value is this member
-                     , mb_bits :: Maybe BitExpr }      -- the member's own bits
+                     , mb_bits :: Maybe BitExpr        -- the member's own bits
+                     , mb_fields :: [Field] }          -- of a constructor of several fields
+
+-- A field of a union constructor that has several: its bits are asked
+-- for one field at a time, and the member's are their concatenation
+data Field = Field { fd_name :: String
+                   , fd_type :: Maybe CType
+                   , fd_width :: Maybe Integer
+                   , fd_bits :: Maybe BitExpr }
 
 -- What describing one type takes: the types its members name, the
 -- packages its layout queries import, the queries, and the finishing
@@ -423,7 +449,7 @@ prepareType flags symtab t =
         plain [target] (JObj [("kind", JStr "alias"), ("target", JStr (typeName target))])
     prepare (Struct _ _ _ _ fields _) =
         let fws = [ (i, qualToType qt, fw) | (i, qt, fw) <- fields ]
-            members = [ Member (getIdBaseString i) (Just ft) fw Nothing Nothing Nothing
+            members = [ Member (getIdBaseString i) (Just ft) fw Nothing Nothing Nothing []
                       | (i, ft, fw) <- fws ]
             queries w = [ q | (n, (i, _, Just fw)) <- zip [0 :: Int ..] fws, fw > 0
                             , let q = Query (valName n) w fw (\ b -> packed (CSelect (unpacked b) i)) ]
@@ -445,7 +471,7 @@ prepareType flags symtab t =
                          , ("members", JArr (map (memberJson Nothing) members')) ]
         in  Just (Prep [ ft | (_, ft, _) <- fws ] (typePackages t) (posed queries) finish)
     prepare (Enum qi cons _) =
-        let members = [ Member (getIdBaseString c) Nothing Nothing (fmap conTag (tagInfo symtab qi c)) Nothing Nothing
+        let members = [ Member (getIdBaseString c) Nothing Nothing (fmap conTag (tagInfo symtab qi c)) Nothing Nothing []
                       | c <- cons ]
             queries w = [ Query (isName n) w 1 (isCon (CPCon c (replicate (conArity qi c) (CPAny pos))))
                         | (n, c) <- zip [0 :: Int ..] cons ]
@@ -463,15 +489,30 @@ prepareType flags symtab t =
                          , ("members", JArr (memberJsons "value" "values" table members')) ]
         in  Just (Prep [] (typePackages t) (posed queries) finish)
     prepare (TaggedUnion qi _ _ _ arms _) =
-        let members = [ Member (getIdBaseString c) (Just at) aw (fmap conTag (tagInfo symtab qi c)) Nothing Nothing
-                      | (c, at, aw) <- arms ]
+        let members = [ Member (getIdBaseString c) (Just at) (armWidth aw fields)
+                               (fmap conTag (tagInfo symtab qi c)) Nothing Nothing fields
+                      | (c, at, aw) <- arms
+                      , let fields = [ Field (getIdBaseString i) (Just ft) fw Nothing | (i, ft, fw) <- fieldsOf c at ] ]
+            -- the fields of a constructor have a width of their own even
+            -- where their tuple, under a hand-written instance, has none
+            armWidth (Just w) _ = Just w
+            armWidth Nothing [] = Nothing
+            armWidth Nothing fields = fmap sum (mapM fd_width fields)
             -- a constructor of several anonymous fields has no one
-            -- payload expression to pack, so only its tag is asked for
+            -- payload expression to pack: each field's bits are asked
+            -- for on their own
+            fieldsOf c at
+              | conArity qi c > 1
+              , Right (Struct _ _ _ _ fs _) <- analyzeType flags symtab at =
+                  [ (i, qualToType qt, fw) | (i, qt, fw) <- fs ]
+              | otherwise = []
             queries w = concat
                 [ Query (isName n) w 1 (isCon (CPCon c (replicate (conArity qi c) (CPAny pos)))) :
                   [ Query (valName n) w pw (payloadOf c)
-                  | Just pw <- [aw], pw > 0, conArity qi c == 1 ]
-                | (n, (c, _, aw)) <- zip [0 :: Int ..] arms ]
+                  | Just pw <- [aw], pw > 0, conArity qi c == 1 ] ++
+                  [ Query (fieldName n j) w fw (fieldOf c (length fs) j)
+                  | let fs = fieldsOf c at, (j, (_, _, Just fw)) <- zip [0 :: Int ..] fs, fw > 0 ]
+                | (n, (c, at, aw)) <- zip [0 :: Int ..] arms ]
             finish results =
                 let members' = attach results members
                     -- a derived instance puts the tag above the widest payload,
@@ -493,7 +534,8 @@ prepareType flags symtab t =
                            , ("layout", JStr (layoutStr (layoutOf members' derived))) ] ++
                            tag_range ++
                            [ ("members", JArr (memberJsons "tag" "tags" table members')) ]
-        in  Just (Prep [ at | (_, at, _) <- arms ] (typePackages t) (posed queries) finish)
+        in  Just (Prep ([ at | (_, at, _) <- arms ] ++ [ ft | (c, at, _) <- arms, (_, ft, _) <- fieldsOf c at ])
+                       (typePackages t) (posed queries) finish)
     prepare ta@(Vector _ len elt _) =
         let w = getWidth ta
             n = case len of
@@ -513,6 +555,7 @@ prepareType flags symtab t =
     pos = noPosition
     isName n = "is" ++ show n
     valName n = "val" ++ show n
+    fieldName n j = valName n ++ "_" ++ show j
     unpacked b = CHasType (CApply (CVar idUnpack) [b]) (CQType [] t)
     packed e = CApply (CVar idPack) [e]
     isCon pat b = Ccase pos (unpacked b)
@@ -522,6 +565,11 @@ prepareType flags symtab t =
                     in  Ccase pos (unpacked b)
                           [ CCaseArm (CPCon c [CPVar x]) [] (packed (CVar x))
                           , CCaseArm (CPAny pos) [] (CAny pos UDontCare) ]
+    -- the j-th of a constructor's k fields
+    fieldOf c k j b = let xs = [ mkId pos (mkFString ("field" ++ show i)) | i <- [0 .. k - 1] ]
+                      in  Ccase pos (unpacked b)
+                            [ CCaseArm (CPCon c (map CPVar xs)) [] (packed (CVar (xs !! j)))
+                            , CCaseArm (CPAny pos) [] (CAny pos UDontCare) ]
 
     -- the arguments a pattern for the constructor has to supply, as the
     -- type checker counts them from the constructor's declared type:
@@ -537,11 +585,18 @@ prepareType flags symtab t =
                 _ -> 1
           Nothing -> 1
 
-    -- the members with their queries' results
+    -- the members with their queries' results; a member of several
+    -- fields has the bits of all of them, first field highest, when
+    -- every field's were found
     attach :: [(String, BitExpr)] -> [Member] -> [Member]
     attach results members =
-        [ m { mb_when = lookup (isName n) results, mb_bits = lookup (valName n) results }
-        | (n, m) <- zip [0 :: Int ..] members ]
+        [ m { mb_when = lookup (isName n) results
+            , mb_bits = case fields of
+                          [] -> lookup (valName n) results
+                          _ -> fmap (simplify . BConcat) (mapM fd_bits fields)
+            , mb_fields = fields }
+        | (n, m) <- zip [0 :: Int ..] members
+        , let fields = [ f { fd_bits = lookup (fieldName n j) results } | (j, f) <- zip [0 :: Int ..] (mb_fields m) ] ]
 
     layoutOf members derived
       | derived = LayoutDerived
@@ -586,6 +641,9 @@ prepareType flags symtab t =
           Just (_, sels) -> [ memberJson (Just (one, many, sel)) m | (m, sel) <- zip members sels ]
           Nothing -> map (memberJson Nothing) members
 
+    -- A member whose layout the instance did not yield (neither which
+    -- values are it nor where its bits are) says so, rather than
+    -- leaving a reader to guess; one of no bits has nothing to yield
     memberJson :: Maybe (String, String, [Integer]) -> Member -> JValue
     memberJson tags m =
         JObj $ [ ("name", JStr (mb_name m)) ] ++
@@ -596,10 +654,25 @@ prepareType flags symtab t =
                   (Just (_, many, vs), _) | length vs <= 64 -> [(many, JArr (map JNum vs))]
                   (_, Just e) -> [("when", bitExprJson e)]
                   _ -> []) ++
-               (case (fixedRange m, mb_bits m) of
-                  (Just (lo, hi), _) -> [("lo", JNum lo), ("hi", JNum hi)]
-                  (Nothing, Just e) -> [("bits", bitExprJson e)]
-                  _ -> [])
+               bitsJson (fixedRange m) (mb_bits m) ++
+               [ ("layout", JStr "unknown")
+               | isNothing (mb_when m), isNothing (mb_bits m), null (mb_fields m), mb_width m /= Just 0 ] ++
+               [ ("fields", JArr (map fieldJson (mb_fields m))) | not (null (mb_fields m)) ]
+
+    fieldJson :: Field -> JValue
+    fieldJson f =
+        JObj $ [ ("name", JStr (fd_name f)) ] ++
+               maybe [] (\ ft -> [("type", JStr (typeName ft))]) (fd_type f) ++
+               maybe [] (\ w -> [("width", JNum w)]) (fd_width f) ++
+               bitsJson (fd_bits f >>= slice) (fd_bits f) ++
+               [ ("layout", JStr "unknown") | isNothing (fd_bits f), fd_width f /= Just 0 ]
+
+    -- where some bits sit: their range when they are a plain slice of
+    -- the value, else the expression that computes them
+    bitsJson :: Maybe (Integer, Integer) -> Maybe BitExpr -> [(String, JValue)]
+    bitsJson (Just (lo, hi)) _ = [("lo", JNum lo), ("hi", JNum hi)]
+    bitsJson Nothing (Just e) = [("bits", bitExprJson e)]
+    bitsJson Nothing Nothing = []
 
 -- The packages whose definitions a type refers to
 typePackages :: CType -> [Id]
@@ -692,6 +765,7 @@ waveDebugInfo errh flags symtab ffmap abmi = do
           Just Verilog -> Just <$> verilogNetlist errh flags ffmap abmi
           _ -> return Nothing
     let design = Design { d_nets = nets
+                        , d_owners = methodOwners apkg (abmi_aschedinfo abmi)
                         , d_hide = not (tclShowHidden flags)
                         , d_flags = flags }
         signals0 = moduleSignals design apkg

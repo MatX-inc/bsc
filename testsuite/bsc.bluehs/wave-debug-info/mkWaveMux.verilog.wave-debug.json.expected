@@ -1,0 +1,802 @@
+{
+  "format": "bsc-wave-debug-info",
+  "version": 2,
+  "module": "mkWaveMux",
+  "backend": "verilog",
+  "compiler": "Bluespec Compiler, version build-20260926-1-19-g170eeb7a (build 170eeb7a)",
+  "children": [],
+  "signals": [
+    {
+      "synthpath": ["CLK"],
+      "bsvpath": ["CLK"],
+      "kind": "clock"
+    },
+    {
+      "synthpath": ["RST_N"],
+      "bsvpath": ["RST_N"],
+      "kind": "reset"
+    },
+    {
+      "synthpath": ["put_1"],
+      "bsvpath": ["put", "arg1"],
+      "kind": "port",
+      "role": "arg",
+      "method": "put",
+      "type": "WaveMux::Item",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 37,
+      "column": 0
+    },
+    {
+      "synthpath": ["EN_put"],
+      "bsvpath": ["put", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "put",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 37,
+      "column": 0
+    },
+    {
+      "synthpath": ["RDY_put"],
+      "bsvpath": ["put", "RDY"],
+      "kind": "port",
+      "role": "ready",
+      "method": "put",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 37,
+      "column": 0
+    },
+    {
+      "synthpath": ["get"],
+      "bsvpath": ["get"],
+      "kind": "port",
+      "role": "result",
+      "method": "get",
+      "type": "WaveMux::Item",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 37,
+      "column": 0
+    },
+    {
+      "synthpath": ["EN_get"],
+      "bsvpath": ["get", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "get",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 37,
+      "column": 0
+    },
+    {
+      "synthpath": ["RDY_get"],
+      "bsvpath": ["get", "RDY"],
+      "kind": "port",
+      "role": "ready",
+      "method": "get",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 37,
+      "column": 0
+    },
+    {
+      "synthpath": ["count"],
+      "bsvpath": ["count"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(8)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 42,
+      "column": 4
+    },
+    {
+      "synthpath": ["count$D_IN"],
+      "bsvpath": ["count", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "rules": [
+        {
+          "rule": "flush",
+          "path": ["flush"],
+          "part": "body"
+        },
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "body"
+        }
+      ],
+      "type": "UInt#(8)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 42,
+      "column": 4
+    },
+    {
+      "synthpath": ["count$EN"],
+      "bsvpath": ["count", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "rules": [
+        {
+          "rule": "flush",
+          "path": ["flush"],
+          "part": "body"
+        },
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "body"
+        }
+      ],
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 42,
+      "column": 4
+    },
+    {
+      "synthpath": ["inQ"],
+      "bsvpath": ["inQ"],
+      "kind": "state",
+      "prim": "FIFO2",
+      "type": "WaveMux::Item",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 40,
+      "column": 4
+    },
+    {
+      "synthpath": ["inQ$D_IN"],
+      "bsvpath": ["inQ", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "enq",
+      "prim": "FIFO2",
+      "methods": [
+        {
+          "method": "put",
+          "part": "body"
+        }
+      ],
+      "type": "WaveMux::Item",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 40,
+      "column": 4
+    },
+    {
+      "synthpath": ["inQ$ENQ"],
+      "bsvpath": ["inQ", "ENQ"],
+      "kind": "port",
+      "role": "enable",
+      "method": "enq",
+      "prim": "FIFO2",
+      "methods": [
+        {
+          "method": "put",
+          "part": "body"
+        }
+      ],
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 40,
+      "column": 4
+    },
+    {
+      "synthpath": ["inQ$DEQ"],
+      "bsvpath": ["inQ", "DEQ"],
+      "kind": "port",
+      "role": "enable",
+      "method": "deq",
+      "prim": "FIFO2",
+      "rules": [
+        {
+          "rule": "flush",
+          "path": ["flush"],
+          "part": "body"
+        },
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "body"
+        }
+      ],
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 40,
+      "column": 4
+    },
+    {
+      "synthpath": ["inQ$D_OUT"],
+      "bsvpath": ["inQ", "D_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "first",
+      "prim": "FIFO2",
+      "rules": [
+        {
+          "rule": "flush",
+          "path": ["flush"],
+          "part": "condition"
+        },
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "body"
+        },
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "condition"
+        }
+      ],
+      "type": "WaveMux::Item",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 40,
+      "column": 4
+    },
+    {
+      "synthpath": ["inQ$FULL_N"],
+      "bsvpath": ["inQ", "FULL_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "notFull",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 40,
+      "column": 4
+    },
+    {
+      "synthpath": ["inQ$FULL_N"],
+      "bsvpath": ["inQ", "FULL_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "i_notFull",
+      "prim": "FIFO2",
+      "methods": [
+        {
+          "method": "put",
+          "part": "body"
+        },
+        {
+          "method": "put",
+          "part": "ready"
+        }
+      ],
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 40,
+      "column": 4
+    },
+    {
+      "synthpath": ["inQ$EMPTY_N"],
+      "bsvpath": ["inQ", "EMPTY_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "notEmpty",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 40,
+      "column": 4
+    },
+    {
+      "synthpath": ["inQ$EMPTY_N"],
+      "bsvpath": ["inQ", "EMPTY_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "i_notEmpty",
+      "prim": "FIFO2",
+      "rules": [
+        {
+          "rule": "flush",
+          "path": ["flush"],
+          "part": "condition"
+        },
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "condition"
+        }
+      ],
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 40,
+      "column": 4
+    },
+    {
+      "synthpath": ["inQ$CLR"],
+      "bsvpath": ["inQ", "CLR"],
+      "kind": "port",
+      "role": "enable",
+      "method": "clear",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 40,
+      "column": 4
+    },
+    {
+      "synthpath": ["outQ"],
+      "bsvpath": ["outQ"],
+      "kind": "state",
+      "prim": "FIFO2",
+      "type": "WaveMux::Item",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 41,
+      "column": 4
+    },
+    {
+      "synthpath": ["outQ$D_IN"],
+      "bsvpath": ["outQ", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "enq",
+      "prim": "FIFO2",
+      "rules": [
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "body"
+        }
+      ],
+      "type": "WaveMux::Item",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 41,
+      "column": 4
+    },
+    {
+      "synthpath": ["outQ$ENQ"],
+      "bsvpath": ["outQ", "ENQ"],
+      "kind": "port",
+      "role": "enable",
+      "method": "enq",
+      "prim": "FIFO2",
+      "rules": [
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "body"
+        }
+      ],
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 41,
+      "column": 4
+    },
+    {
+      "synthpath": ["outQ$DEQ"],
+      "bsvpath": ["outQ", "DEQ"],
+      "kind": "port",
+      "role": "enable",
+      "method": "deq",
+      "prim": "FIFO2",
+      "methods": [
+        {
+          "method": "get",
+          "part": "body"
+        }
+      ],
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 41,
+      "column": 4
+    },
+    {
+      "synthpath": ["outQ$D_OUT"],
+      "bsvpath": ["outQ", "D_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "first",
+      "prim": "FIFO2",
+      "methods": [
+        {
+          "method": "get",
+          "part": "body"
+        }
+      ],
+      "type": "WaveMux::Item",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 41,
+      "column": 4
+    },
+    {
+      "synthpath": ["outQ$FULL_N"],
+      "bsvpath": ["outQ", "FULL_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "notFull",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 41,
+      "column": 4
+    },
+    {
+      "synthpath": ["outQ$FULL_N"],
+      "bsvpath": ["outQ", "FULL_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "i_notFull",
+      "prim": "FIFO2",
+      "rules": [
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "condition"
+        }
+      ],
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 41,
+      "column": 4
+    },
+    {
+      "synthpath": ["outQ$EMPTY_N"],
+      "bsvpath": ["outQ", "EMPTY_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "notEmpty",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 41,
+      "column": 4
+    },
+    {
+      "synthpath": ["outQ$EMPTY_N"],
+      "bsvpath": ["outQ", "EMPTY_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "i_notEmpty",
+      "prim": "FIFO2",
+      "methods": [
+        {
+          "method": "get",
+          "part": "body"
+        },
+        {
+          "method": "get",
+          "part": "ready"
+        }
+      ],
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 41,
+      "column": 4
+    },
+    {
+      "synthpath": ["outQ$CLR"],
+      "bsvpath": ["outQ", "CLR"],
+      "kind": "port",
+      "role": "enable",
+      "method": "clear",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 41,
+      "column": 4
+    },
+    {
+      "synthpath": ["WILL_FIRE_RL_flush"],
+      "bsvpath": ["flush", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "flush",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 48,
+      "column": 6
+    },
+    {
+      "synthpath": ["CAN_FIRE_RL_flush"],
+      "bsvpath": ["flush", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "flush",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 48,
+      "column": 6
+    },
+    {
+      "synthpath": ["WILL_FIRE_RL_forward"],
+      "bsvpath": ["forward", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "forward",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 44,
+      "column": 6
+    },
+    {
+      "synthpath": ["CAN_FIRE_RL_forward"],
+      "bsvpath": ["forward", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "forward",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 44,
+      "column": 6
+    },
+    {
+      "synthpath": ["MUX_count$write_1__SEL_1"],
+      "bsvpath": ["flush", "MUX_count$write_1__SEL_1"],
+      "kind": "net",
+      "width": 1,
+      "rules": [
+        {
+          "rule": "flush",
+          "path": ["flush"],
+          "part": "body"
+        }
+      ],
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 42,
+      "column": 4
+    },
+    {
+      "synthpath": ["MUX_count$write_1__SEL_2"],
+      "bsvpath": ["forward", "MUX_count$write_1__SEL_2"],
+      "kind": "net",
+      "width": 1,
+      "rules": [
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "body"
+        }
+      ],
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 42,
+      "column": 4
+    },
+    {
+      "synthpath": ["MUX_count$write_1__VAL_2"],
+      "bsvpath": ["forward", "MUX_count$write_1__VAL_2"],
+      "kind": "net",
+      "width": 8,
+      "rules": [
+        {
+          "rule": "forward",
+          "path": ["forward"],
+          "part": "body"
+        }
+      ],
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 42,
+      "column": 4
+    }
+  ],
+  "types": {
+    "WaveMux::Item": {
+      "kind": "struct",
+      "width": 25,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "kind",
+          "type": "WaveMux::Kind",
+          "width": 1,
+          "lo": 24,
+          "hi": 25
+        },
+        {
+          "name": "dest",
+          "type": "WaveMux::Dest",
+          "width": 8,
+          "lo": 16,
+          "hi": 24
+        },
+        {
+          "name": "route",
+          "type": "WaveMux::Route",
+          "width": 8,
+          "lo": 8,
+          "hi": 16
+        },
+        {
+          "name": "payload",
+          "type": "UInt#(8)",
+          "width": 8,
+          "lo": 0,
+          "hi": 8
+        }
+      ]
+    },
+    "Bool": {
+      "kind": "enum",
+      "width": 1,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "False",
+          "value": 0
+        },
+        {
+          "name": "True",
+          "value": 1
+        }
+      ]
+    },
+    "UInt#(8)": {
+      "kind": "primary",
+      "width": 8
+    },
+    "WaveMux::Kind": {
+      "kind": "enum",
+      "width": 1,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "Data",
+          "value": 0
+        },
+        {
+          "name": "Flush",
+          "value": 1
+        }
+      ]
+    },
+    "WaveMux::Dest": {
+      "kind": "union",
+      "width": 8,
+      "layout": "derived",
+      "tag": {
+        "lo": 7,
+        "hi": 8
+      },
+      "members": [
+        {
+          "name": "Local",
+          "type": "void",
+          "width": 0,
+          "tag": 0
+        },
+        {
+          "name": "Remote",
+          "type": "WaveMux::Dest_$Remote",
+          "width": 7,
+          "tag": 1,
+          "lo": 0,
+          "hi": 7,
+          "fields": [
+            {
+              "name": "_1",
+              "type": "UInt#(4)",
+              "width": 4,
+              "lo": 3,
+              "hi": 7
+            },
+            {
+              "name": "_2",
+              "type": "Bit#(3)",
+              "width": 3,
+              "lo": 0,
+              "hi": 3
+            }
+          ]
+        }
+      ]
+    },
+    "WaveMux::Route": {
+      "kind": "union",
+      "width": 8,
+      "layout": "custom",
+      "tag": {
+        "lo": 7,
+        "hi": 8
+      },
+      "members": [
+        {
+          "name": "Here",
+          "type": "void",
+          "width": 0,
+          "tag": 0
+        },
+        {
+          "name": "There",
+          "type": "WaveMux::Route_$There",
+          "width": 7,
+          "tag": 1,
+          "bits": {
+            "op": "concat",
+            "args": [
+              {
+                "op": "extract",
+                "hi": 3,
+                "lo": 0,
+                "args": [
+                  {
+                    "op": "arg"
+                  }
+                ]
+              },
+              {
+                "op": "extract",
+                "hi": 6,
+                "lo": 4,
+                "args": [
+                  {
+                    "op": "arg"
+                  }
+                ]
+              }
+            ]
+          },
+          "fields": [
+            {
+              "name": "_1",
+              "type": "UInt#(4)",
+              "width": 4,
+              "lo": 0,
+              "hi": 4
+            },
+            {
+              "name": "_2",
+              "type": "Bit#(3)",
+              "width": 3,
+              "lo": 4,
+              "hi": 7
+            }
+          ]
+        }
+      ]
+    },
+    "void": {
+      "kind": "primary",
+      "width": 0
+    },
+    "WaveMux::Dest_$Remote": {
+      "kind": "struct",
+      "width": 7,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "_1",
+          "type": "UInt#(4)",
+          "width": 4,
+          "lo": 3,
+          "hi": 7
+        },
+        {
+          "name": "_2",
+          "type": "Bit#(3)",
+          "width": 3,
+          "lo": 0,
+          "hi": 3
+        }
+      ]
+    },
+    "UInt#(4)": {
+      "kind": "primary",
+      "width": 4
+    },
+    "Bit#(3)": {
+      "kind": "primary",
+      "width": 3
+    },
+    "WaveMux::Route_$There": {
+      "kind": "struct",
+      "width": null,
+      "layout": "unknown",
+      "members": [
+        {
+          "name": "_1",
+          "type": "UInt#(4)",
+          "width": 4,
+          "layout": "unknown"
+        },
+        {
+          "name": "_2",
+          "type": "Bit#(3)",
+          "width": 3,
+          "layout": "unknown"
+        }
+      ]
+    }
+  }
+}

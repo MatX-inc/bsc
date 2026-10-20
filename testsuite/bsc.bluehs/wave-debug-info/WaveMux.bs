@@ -1,0 +1,55 @@
+package WaveMux where
+
+-- A register two rules write, one of them through the mux's default
+-- arm, and union types with a constructor of several fields: one
+-- derived, one whose hand-written instance stores the fields the
+-- other way round.
+
+import FIFO
+
+data Dest = Local | Remote (UInt 4) (Bit 3)
+  deriving (Eq, Bits)
+
+data Route = Here | There (UInt 4) (Bit 3)
+  deriving (Eq)
+
+instance Bits Route 8 where
+  pack r = case r of
+    Here -> 0
+    There a b -> (1 :: Bit 1) ++ b ++ pack a
+  unpack v = if v[7:7] == 1 then There (unpack v[3:0]) v[6:4] else Here
+
+data Kind = Data | Flush
+  deriving (Eq, Bits)
+
+struct Item =
+  { kind :: Kind
+  ; dest :: Dest
+  ; route :: Route
+  ; payload :: UInt 8 }
+  deriving (Bits)
+
+interface WaveMux =
+  put :: Item -> Action
+  get :: ActionValue Item
+
+{-# verilog mkWaveMux #-}
+mkWaveMux :: Module WaveMux
+mkWaveMux =
+  module
+    inQ :: FIFO Item <- mkFIFO
+    outQ :: FIFO Item <- mkFIFO
+    count :: Reg (UInt 8) <- mkReg 0
+    rules
+      "forward": when inQ.first.kind /= Flush ==> do
+        outQ.enq inQ.first
+        inQ.deq
+        count := count + 1
+      "flush": when inQ.first.kind == Flush ==> do
+        inQ.deq
+        count := 0
+    interface
+      put x = inQ.enq x
+      get = do
+        outQ.deq
+        return outQ.first

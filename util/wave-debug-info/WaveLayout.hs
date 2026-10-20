@@ -10,7 +10,7 @@
 -- derived instance reduces to bit extracts and tag comparisons; a
 -- hand-written instance reduces to whatever its code computes, which
 -- is reported as an expression the reader can evaluate.
-module WaveLayout(Query(..), BitExpr(..), reduceQueries,
+module WaveLayout(Query(..), BitExpr(..), reduceQueries, simplify,
                   bitExprWidth, evalBitExpr, bitExprSupport, distinct) where
 
 import qualified Control.Exception as CE

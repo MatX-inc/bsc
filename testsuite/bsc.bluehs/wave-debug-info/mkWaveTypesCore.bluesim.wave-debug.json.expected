@@ -51,6 +51,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "WaveTypes::Cell",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 103,
@@ -63,6 +70,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 103,
@@ -97,6 +111,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "Maybe#(UInt#(16))",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 104,
@@ -109,6 +130,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 104,
@@ -143,6 +171,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "WaveTypes::Packet",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 109,
@@ -155,6 +190,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 109,
@@ -177,6 +219,13 @@
       "role": "result",
       "method": "read",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "Vector::Vector#(4, WaveTypes::Color)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 105,
@@ -189,6 +238,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "Vector::Vector#(4, WaveTypes::Color)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 105,
@@ -201,6 +257,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 105,
@@ -235,6 +298,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "WaveTypes::Source",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 108,
@@ -247,6 +317,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 108,
@@ -278,6 +355,18 @@
       "role": "result",
       "method": "read",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "done",
+          "path": ["done"],
+          "part": "condition"
+        },
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "UInt#(16)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 106,
@@ -290,6 +379,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "UInt#(16)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 106,
@@ -302,6 +398,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 106,
@@ -374,6 +477,13 @@
       "role": "result",
       "method": "read",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "carry",
+          "path": ["pair", "carry"],
+          "part": "body"
+        }
+      ],
       "type": "UInt#(4)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 66,
@@ -386,6 +496,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "carry",
+          "path": ["pair", "carry"],
+          "part": "body"
+        }
+      ],
       "type": "UInt#(4)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 66,
@@ -398,6 +515,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "carry",
+          "path": ["pair", "carry"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 66,
@@ -420,6 +544,18 @@
       "role": "result",
       "method": "read",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        },
+        {
+          "rule": "carry",
+          "path": ["pair", "carry"],
+          "part": "condition"
+        }
+      ],
       "type": "UInt#(4)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 65,
@@ -432,6 +568,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "UInt#(4)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 65,
@@ -444,6 +587,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "step",
+          "path": ["step"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 65,
@@ -498,6 +648,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "_dreg_update",
+          "path": ["pair", "d", "_dreg_update"],
+          "part": "body"
+        }
+      ],
       "type": "UInt#(4)",
       "file": "/rw/home/william/bsc/surfer-enhancements/src/Libraries/Base2///DReg.bs",
       "line": 17,
@@ -510,6 +667,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "_dreg_update",
+          "path": ["pair", "d", "_dreg_update"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/rw/home/william/bsc/surfer-enhancements/src/Libraries/Base2///DReg.bs",
       "line": 17,

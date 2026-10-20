@@ -37,7 +37,8 @@ module and the backend when they are unambiguous:
 
 `testsuite/bsc.bluehs/wave-debug-info` runs the script on a fixture with
 every kind of type and compares the fragments of both backends against
-expected files, and bundles them
+expected files, on one with a register two rules write and union
+constructors of several fields, and bundles them
 (`make bsc.bluehs/wave-debug-info/wave-debug-info.check` in `testsuite`);
 it is skipped when the installation has no bluehs runtime.
 
@@ -55,4 +56,4 @@ Modules:
   Bluesim and Verilog each spell them.
 - `Netlist.hs`: the generated Verilog's nets, named by running bsc's own
   back end on the elaboration, each with the rules and methods it belongs
-  to.
+  to; and the callers of each state element's methods, for its ports.

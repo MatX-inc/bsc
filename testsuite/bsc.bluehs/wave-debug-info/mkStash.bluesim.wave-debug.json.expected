@@ -110,6 +110,19 @@
       "role": "result",
       "method": "read",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "drain",
+          "path": ["drain"],
+          "part": "body"
+        }
+      ],
+      "methods": [
+        {
+          "method": "depth",
+          "part": "result"
+        }
+      ],
       "type": "UInt#(8)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 86,
@@ -122,6 +135,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "drain",
+          "path": ["drain"],
+          "part": "body"
+        }
+      ],
       "type": "UInt#(8)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 86,
@@ -134,6 +154,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "drain",
+          "path": ["drain"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 86,
@@ -156,6 +183,12 @@
       "role": "result",
       "method": "read",
       "prim": "RegN",
+      "methods": [
+        {
+          "method": "top",
+          "part": "result"
+        }
+      ],
       "type": "WaveTypes::Pixel",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 87,
@@ -168,6 +201,13 @@
       "role": "arg",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "drain",
+          "path": ["drain"],
+          "part": "body"
+        }
+      ],
       "type": "WaveTypes::Pixel",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 87,
@@ -180,6 +220,13 @@
       "role": "enable",
       "method": "write",
       "prim": "RegN",
+      "rules": [
+        {
+          "rule": "drain",
+          "path": ["drain"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 87,
@@ -202,6 +249,12 @@
       "role": "arg",
       "method": "enq",
       "prim": "FIFO2",
+      "methods": [
+        {
+          "method": "push",
+          "part": "body"
+        }
+      ],
       "type": "WaveTypes::Pixel",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 85,
@@ -214,6 +267,12 @@
       "role": "enable",
       "method": "enq",
       "prim": "FIFO2",
+      "methods": [
+        {
+          "method": "push",
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 85,
@@ -226,6 +285,13 @@
       "role": "enable",
       "method": "deq",
       "prim": "FIFO2",
+      "rules": [
+        {
+          "rule": "drain",
+          "path": ["drain"],
+          "part": "body"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 85,
@@ -238,6 +304,13 @@
       "role": "result",
       "method": "first",
       "prim": "FIFO2",
+      "rules": [
+        {
+          "rule": "drain",
+          "path": ["drain"],
+          "part": "body"
+        }
+      ],
       "type": "WaveTypes::Pixel",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 85,
@@ -262,6 +335,16 @@
       "role": "result",
       "method": "i_notFull",
       "prim": "FIFO2",
+      "methods": [
+        {
+          "method": "push",
+          "part": "body"
+        },
+        {
+          "method": "push",
+          "part": "ready"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 85,
@@ -286,6 +369,13 @@
       "role": "result",
       "method": "i_notEmpty",
       "prim": "FIFO2",
+      "rules": [
+        {
+          "rule": "drain",
+          "path": ["drain"],
+          "part": "condition"
+        }
+      ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
       "line": 85,

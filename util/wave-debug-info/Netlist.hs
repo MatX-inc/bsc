@@ -8,10 +8,16 @@
 -- rules and methods whose logic it is part of, from the elaboration:
 -- the definitions a rule's condition and body reach, and a method's
 -- ready, result and body; a definition the back end minted belongs to
--- whatever the definitions it references belong to (a rule's fire or a
--- method's enable counting as that rule or method), or failing that to
--- whatever references it.
-module Netlist(Netlist(..), Net(..), Owner(..), verilogNetlist) where
+-- the rules the state pass stamped it with (a write mux's arms and
+-- selectors carry the rules whose actions they serve), else to whatever
+-- the definitions it references belong to (a rule's fire or a method's
+-- enable counting as that rule or method), or failing that to whatever
+-- references it.
+--
+-- Also the owners of a state element's or submodule's method ports,
+-- from the schedule's record of which rules and methods call each
+-- method, for the signals' port entries of either backend.
+module Netlist(Netlist(..), Net(..), Owner(..), verilogNetlist, methodOwners) where
 
 import Control.Monad(unless)
 import Data.Data(Data, gmapQ)
@@ -21,10 +27,13 @@ import qualified Data.Set as S
 
 import Error(ErrorHandle, bsWarning, bsError)
 import Flags(Flags(..))
-import Id(Id, getIdString, unQualId)
+import Id(Id, getIdString, getIdBaseString, unQualId)
 import ASyntax
 import ASyntaxUtil(aVars)
 import ABin(ABinModInfo(..))
+import AScheduleInfo(AScheduleInfo(..))
+import AUses(MethodId(..))
+import DefProp(DefProp(..))
 import AState(aState)
 import InlineWires(aInlineWires)
 import InlineCReg(aInlineCReg)
@@ -131,6 +140,15 @@ verilogNetlist errh flags0 ffmap abmi = do
             concat [ ruleParts (arule_id r) r | r <- apkg_rules apkg ] ++
             concatMap methodParts (apkg_interface apkg)
 
+        -- the state pass stamps the definitions it mints for a method's
+        -- write mux (each arm's value and selector) with the rules and
+        -- methods whose actions they serve
+        user = userOwner apkg
+        stamped = M.fromList [ (adef_objid d, S.fromList [ user r "body" "body" | DefP_Rule r <- adef_props d ])
+                             | d <- aspkg_values asmod, any isRuleProp (adef_props d) ]
+        isRuleProp (DefP_Rule _) = True
+        isRuleProp _ = False
+
         defs = aspkg_values final
         defMap = M.fromList [ (adef_objid d, d) | d <- defs ]
         canFire = M.fromList [ (c, r) | (r, [c, _]) <- aspsi_rule_sched sinfo ]
@@ -138,9 +156,10 @@ verilogNetlist errh flags0 ffmap abmi = do
         enables = M.fromList [ (e, aspm_name m) | m <- aspsi_methods sinfo, Just e <- [aspm_menableid m] ]
         attributed :: M.Map AId (S.Set Owner)
         attributed = M.map attribute defMap
-        attribute d = case M.lookup (adef_objid d) elaborated of
-            Just os -> os
-            Nothing -> S.unions (map through (aVars (adef_expr d)))
+        attribute d = case (M.lookup (adef_objid d) elaborated, M.lookup (adef_objid d) stamped) of
+            (Just os, _) -> os
+            (_, Just os) -> os
+            _ -> S.unions (map through (aVars (adef_expr d)))
         through i
           | Just r <- M.lookup i willFire = S.singleton (Owner "rule" r "body")
           | Just r <- M.lookup i canFire = S.singleton (Owner "rule" r "condition")
@@ -163,6 +182,36 @@ verilogNetlist errh flags0 ffmap abmi = do
     width (ATBit n) = Just n
     width _ = Nothing
     vidStr (VId s _ _) = s
+
+-- The owners of each method of each state element or submodule
+-- instance, keyed by the instance's and the method's names: the rules
+-- and interface methods the schedule records as calling it.  A call in
+-- a rule's predicate is part of its condition, in a method's predicate
+-- of its ready; a call in a rule's body is part of the body, in a
+-- value method's of its result, in an action method's of its body.
+methodOwners :: APackage -> AScheduleInfo -> M.Map (String, String) [Owner]
+methodOwners apkg asi =
+    M.fromListWith (++)
+        [ ((getIdBaseString o, getIdBaseString m), S.toList (S.fromList owners))
+        | (MethodId o m, uses) <- M.toList (asi_method_uses_map asi)
+        , let owners = concat [ map (\ r -> user r "condition" "ready") preds ++
+                                map (\ r -> user r "body" (resultOrBody r)) acts
+                              | (_, (preds, acts, _)) <- uses ] ]
+  where
+    user = userOwner apkg
+    values = S.fromList [ aif_name f | f@(AIDef {}) <- apkg_interface apkg ]
+    resultOrBody r | r `S.member` values = "result"
+                   | otherwise = "body"
+
+-- The owner a rule id of the schedule's records names: one of the
+-- module's rules, with the part given for a rule, else one of its
+-- interface methods (whose bodies the scheduler treats as rules), with
+-- the part given for a method
+userOwner :: APackage -> Id -> String -> String -> Owner
+userOwner apkg r rulePart methodPart
+    | r `S.member` rules = Owner "rule" r rulePart
+    | otherwise = Owner "method" r methodPart
+  where rules = S.fromList (map arule_id (apkg_rules apkg))
 
 -- every identifier of a Verilog program, in traversal order
 vids :: Data a => a -> [VId]

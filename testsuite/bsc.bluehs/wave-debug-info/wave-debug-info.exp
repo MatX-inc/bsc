@@ -85,6 +85,13 @@ if { $bluehs == 0 } {
     wavedebuginfo_pass $bluehs -verilog vba:%/Libraries mkStash mkStash.verilog.wave-debug.json
     compare_file_filtered mkStash.verilog.wave-debug.json "" $filters
 
+    # a write mux's arms belong to the rules whose actions they carry,
+    # and a method's ports to its callers; a constructor of several
+    # fields has each field's bits
+    compile_pass WaveMux.bs {-verilog -elab -bdir vba -vdir vba}
+    wavedebuginfo_pass $bluehs -verilog vba:%/Libraries mkWaveMux mkWaveMux.verilog.wave-debug.json
+    compare_file_filtered mkWaveMux.verilog.wave-debug.json "" $filters
+
     # the bundle of a design: the fragments its top module reaches, with
     # an index, from whatever fragments are offered (here both backends',
     # so the backend has to be named; the top is the module no fragment
