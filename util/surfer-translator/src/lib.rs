@@ -33,20 +33,45 @@ extern "ExtismHost" {
 }
 
 // ---------------------------------------------------------------------
-// The debug information, as `module wavedebuginfo` writes it
+// The debug information, as the exporter writes it: a bundle beside the
+// dump, `<dump>.debug/`, whose `index.json` names the top module and one
+// fragment per synthesized module the design reaches
 
 #[derive(Deserialize)]
-struct DebugInfo {
+struct Index {
+    top: String,
+    #[serde(default)]
+    fragments: Vec<String>,
+}
+
+/// One synthesized module's debug information
+#[derive(Deserialize)]
+struct Fragment {
+    module: String,
+    #[serde(default)]
+    children: Vec<Child>,
     #[serde(default)]
     signals: Vec<Signal>,
     #[serde(default)]
     types: HashMap<String, TypeDesc>,
 }
 
-/// One of the design's own signals: its path in a dump of the synthesized
+/// An instance of a synthesized module: its name in the synthesized
+/// hierarchy, its path in the source (the instance names down through
+/// the inlined modules), and the module whose fragment describes it
+#[derive(Deserialize)]
+struct Child {
+    instance: String,
+    #[serde(default)]
+    path: Vec<String>,
+    module: String,
+}
+
+/// One of a module's own signals: its path in a dump of the synthesized
 /// hierarchy and in the source (also its path in a dump made with
-/// -wave-source-hierarchy), and what it is.  The source position the
-/// debug information also carries is not used here.
+/// -wave-source-hierarchy), both relative to the module's own scope, and
+/// what it is.  The source position the debug information also carries
+/// is not used here.
 #[derive(Deserialize)]
 struct Signal {
     synthpath: Vec<String>,
@@ -114,12 +139,58 @@ struct TagRange {
     hi: u64,
 }
 
+/// A module's fragment, indexed by the paths a dump spells: its signals
+/// under the synthesized and the source hierarchy's names, its children
+/// by instance name and by source path
+struct ModuleInfo {
+    signals: Vec<Signal>,
+    by_synth: HashMap<String, usize>,
+    by_bsv: HashMap<String, usize>,
+    children: Vec<Child>,
+    child_by_instance: HashMap<String, usize>,
+    child_by_path: HashMap<String, usize>,
+}
+
+impl ModuleInfo {
+    fn new(signals: Vec<Signal>, children: Vec<Child>) -> ModuleInfo {
+        let mut by_synth = HashMap::new();
+        let mut by_bsv = HashMap::new();
+        for (i, s) in signals.iter().enumerate() {
+            by_synth.entry(s.synthpath.join(".")).or_insert(i);
+            if !s.bsvpath.is_empty() {
+                by_bsv.entry(s.bsvpath.join(".")).or_insert(i);
+            }
+        }
+        let mut child_by_instance = HashMap::new();
+        let mut child_by_path = HashMap::new();
+        for (i, c) in children.iter().enumerate() {
+            child_by_instance.entry(c.instance.clone()).or_insert(i);
+            if !c.path.is_empty() {
+                child_by_path.entry(c.path.join(".")).or_insert(i);
+            }
+        }
+        ModuleInfo {
+            signals,
+            by_synth,
+            by_bsv,
+            children,
+            child_by_instance,
+            child_by_path,
+        }
+    }
+}
+
 struct Loaded {
-    info: DebugInfo,
-    // dump path ("main.top.core.cell") -> the signal, under both the
-    // synthesized and the source hierarchy's spelling (the dump follows
-    // one or the other)
-    signal_by_path: HashMap<String, usize>,
+    top: String,
+    modules: HashMap<String, ModuleInfo>,
+    // every fragment's types by name; a name two fragments describe
+    // keeps the first description
+    types: HashMap<String, TypeDesc>,
+    // dump path -> the module and signal it names, remembered: the
+    // plugin is asked about a variable at every column
+    located: HashMap<String, Option<(String, usize)>>,
+    // the dump scopes found to hold the top module, tried first
+    roots: Vec<Vec<String>>,
 }
 
 // The plugin's state, behind a lock that is never held across a call
@@ -128,38 +199,111 @@ struct Loaded {
 static LOADED: Mutex<Option<Loaded>> = Mutex::new(None);
 
 fn load(wave_path: &str) {
-    let path = format!("{wave_path}.debug.json");
-    let info =
-        host_read_file(&path).and_then(|bytes| serde_json::from_slice::<DebugInfo>(&bytes).ok());
-    *LOADED.lock().unwrap() = info.map(Loaded::new);
+    let dir = format!("{wave_path}.debug");
+    let loaded = host_read_file(&format!("{dir}/index.json"))
+        .and_then(|bytes| serde_json::from_slice::<Index>(&bytes).ok())
+        .map(|index| {
+            let fragments = index
+                .fragments
+                .iter()
+                .filter_map(|name| host_read_file(&format!("{dir}/{name}")))
+                .filter_map(|bytes| serde_json::from_slice::<Fragment>(&bytes).ok())
+                .collect();
+            Loaded::new(index.top, fragments)
+        });
+    *LOADED.lock().unwrap() = loaded;
 }
 
 impl Loaded {
-    fn new(info: DebugInfo) -> Loaded {
-        let mut signal_by_path = HashMap::new();
-        for (i, s) in info.signals.iter().enumerate() {
-            signal_by_path.insert(s.synthpath.join("."), i);
-            if !s.bsvpath.is_empty() {
-                // the source path is relative to the top module's scope
-                let mut path = s.synthpath[..2.min(s.synthpath.len())].to_vec();
-                path.extend(s.bsvpath.iter().cloned());
-                signal_by_path.entry(path.join(".")).or_insert(i);
+    fn new(top: String, mut fragments: Vec<Fragment>) -> Loaded {
+        // the top module's fragment first, so its types take precedence
+        fragments.sort_by_key(|f| f.module != top);
+        let mut modules = HashMap::new();
+        let mut types = HashMap::new();
+        for f in fragments {
+            for (name, desc) in f.types {
+                types.entry(name).or_insert(desc);
             }
+            modules.insert(f.module, ModuleInfo::new(f.signals, f.children));
         }
         Loaded {
-            info,
-            signal_by_path,
+            top,
+            modules,
+            types,
+            located: HashMap::new(),
+            roots: vec![],
         }
     }
 
-    fn signal_at(&self, path: &str) -> Option<&Signal> {
-        self.signal_by_path
-            .get(path)
-            .map(|&i| &self.info.signals[i])
+    /// The module and signal a dump path names, found by walking the
+    /// instance tree from the top module under whichever dump scope
+    /// holds it: a scope already found to, else each prefix of the path
+    /// in turn (bsc's simulation harness puts the top module at
+    /// `main.top`; a testbench or a formal wrapper has its own)
+    fn locate(&mut self, path: &[String]) -> Option<(String, usize)> {
+        let key = path.join(".");
+        if let Some(found) = self.located.get(&key) {
+            return found.clone();
+        }
+        let mut found = None;
+        for root in &self.roots {
+            if path.len() > root.len() && path[..root.len()] == root[..] {
+                found = self.walk(&self.top, &path[root.len()..]);
+                if found.is_some() {
+                    break;
+                }
+            }
+        }
+        if found.is_none() {
+            for r in 0..path.len() {
+                found = self.walk(&self.top, &path[r..]);
+                if found.is_some() {
+                    let root = path[..r].to_vec();
+                    if !self.roots.contains(&root) {
+                        self.roots.push(root);
+                    }
+                    break;
+                }
+            }
+        }
+        self.located.insert(key, found.clone());
+        found
     }
 
-    fn type_at(&self, path: &str) -> Option<&str> {
-        self.signal_at(path).and_then(|s| s.ty.as_deref())
+    /// `rest` under the scope of an instance of `module`: one of the
+    /// module's own signals, or inside a child's scope, named by its
+    /// instance in the synthesized hierarchy or by its source path
+    fn walk(&self, module: &str, rest: &[String]) -> Option<(String, usize)> {
+        let info = self.modules.get(module)?;
+        if rest.is_empty() {
+            return None;
+        }
+        let key = rest.join(".");
+        if let Some(&i) = info.by_synth.get(&key).or_else(|| info.by_bsv.get(&key)) {
+            return Some((module.to_string(), i));
+        }
+        for k in 1..rest.len() {
+            let prefix = rest[..k].join(".");
+            let child = info
+                .child_by_path
+                .get(&prefix)
+                .or_else(|| (k == 1).then(|| info.child_by_instance.get(&prefix)).flatten());
+            if let Some(&c) = child {
+                if let Some(found) = self.walk(&info.children[c].module, &rest[k..]) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    fn signal_at(&mut self, path: &[String]) -> Option<&Signal> {
+        let (module, i) = self.locate(path)?;
+        self.modules.get(&module).map(|m| &m.signals[i])
+    }
+
+    fn type_at(&mut self, path: &[String]) -> Option<String> {
+        self.signal_at(path).and_then(|s| s.ty.clone())
     }
 }
 
@@ -170,7 +314,7 @@ impl Loaded {
 fn resolve<'a>(loaded: &'a Loaded, name: &str) -> Option<&'a TypeDesc> {
     let mut name: &str = name;
     for _ in 0..16 {
-        let desc = loaded.info.types.get(name)?;
+        let desc = loaded.types.get(name)?;
         match (desc.kind.as_str(), &desc.target) {
             ("alias", Some(target)) => name = target.as_str(),
             _ => return Some(desc),
@@ -181,12 +325,11 @@ fn resolve<'a>(loaded: &'a Loaded, name: &str) -> Option<&'a TypeDesc> {
 
 /// The type of a variable: the dump's own record of it, else the debug
 /// information's entry for the variable's path
-fn type_of(loaded: &Loaded, variable: &VariableMeta<(), ()>) -> Option<String> {
+fn type_of(loaded: &mut Loaded, variable: &VariableMeta<(), ()>) -> Option<String> {
     if let Some(t) = &variable.variable_type_name {
         return Some(t.clone());
     }
-    let path = variable.var.full_path().join(".");
-    loaded.type_at(&path).map(str::to_string)
+    loaded.type_at(&variable.var.full_path())
 }
 
 /// A file's bytes, through the host, None where there is no such file;
@@ -224,18 +367,20 @@ fn is_compiler_temporary(name: &str) -> bool {
 /// Variables keep their dumped names: a Bluespec signal's declaration
 /// site, often inside an inlined library module, does not identify it
 /// the way the flattened name does.
-fn name_info(loaded: &Loaded, variable: &VariableMeta<(), ()>) -> Option<VariableNameInfo> {
-    let path = variable.var.full_path().join(".");
-    let Some(signal) = loaded.signal_at(&path) else {
-        return is_compiler_temporary(&variable.var.name).then_some(VariableNameInfo {
-            true_name: None,
-            priority: Some(-1),
-            visible: Some(false),
-        });
+fn name_info(loaded: &mut Loaded, variable: &VariableMeta<(), ()>) -> Option<VariableNameInfo> {
+    let hidden = VariableNameInfo {
+        true_name: None,
+        priority: Some(-1),
+        visible: Some(false),
+    };
+    let Some(signal) = loaded.signal_at(&variable.var.full_path()) else {
+        return is_compiler_temporary(&variable.var.name).then_some(hidden);
     };
     let priority = match signal.kind.as_deref() {
+        // the compiler's own definitions, described for completeness
+        Some("net") => return Some(hidden),
         Some("state") | Some("module") => 2,
-        Some("port") | Some("fire") => 1,
+        Some("port") | Some("fire") | Some("clock") | Some("reset") => 1,
         _ => 0,
     };
     Some(VariableNameInfo {
@@ -717,8 +862,8 @@ pub fn set_wave_source(Json(source): Json<Option<WaveSource>>) -> FnResult<()> {
 
 #[plugin_fn]
 pub fn translates(variable: VariableMeta<(), ()>) -> FnResult<TranslationPreference> {
-    let slot = LOADED.lock().unwrap();
-    let Some(loaded) = slot.as_ref() else {
+    let mut slot = LOADED.lock().unwrap();
+    let Some(loaded) = slot.as_mut() else {
         return Ok(TranslationPreference::No);
     };
     Ok(match type_of(loaded, &variable) {
@@ -729,8 +874,8 @@ pub fn translates(variable: VariableMeta<(), ()>) -> FnResult<TranslationPrefere
 
 #[plugin_fn]
 pub fn variable_name_info(variable: VariableMeta<(), ()>) -> FnResult<Option<VariableNameInfo>> {
-    let slot = LOADED.lock().unwrap();
-    let Some(loaded) = slot.as_ref() else {
+    let mut slot = LOADED.lock().unwrap();
+    let Some(loaded) = slot.as_mut() else {
         return Ok(None);
     };
     Ok(name_info(loaded, &variable))
@@ -738,8 +883,8 @@ pub fn variable_name_info(variable: VariableMeta<(), ()>) -> FnResult<Option<Var
 
 #[plugin_fn]
 pub fn variable_info(variable: VariableMeta<(), ()>) -> FnResult<VariableInfo> {
-    let slot = LOADED.lock().unwrap();
-    let Some(loaded) = slot.as_ref() else {
+    let mut slot = LOADED.lock().unwrap();
+    let Some(loaded) = slot.as_mut() else {
         return Ok(VariableInfo::Bits);
     };
     Ok(match type_of(loaded, &variable) {
@@ -752,10 +897,10 @@ pub fn variable_info(variable: VariableMeta<(), ()>) -> FnResult<VariableInfo> {
 pub fn translate(
     TranslateParams { variable, value }: TranslateParams,
 ) -> FnResult<TranslationResult> {
-    let slot = LOADED.lock().unwrap();
+    let mut slot = LOADED.lock().unwrap();
     let width = variable.num_bits.unwrap_or(0) as usize;
     let bits = bits_of(&value, width);
-    let Some(loaded) = slot.as_ref() else {
+    let Some(loaded) = slot.as_mut() else {
         return Ok(raw(&bits));
     };
     Ok(match type_of(loaded, &variable) {
@@ -768,17 +913,25 @@ pub fn translate(
 mod tests {
     use super::*;
 
-    // The exporter's own test output, as the fixture: mkWaveTypesCore's
-    // debug information (the Tcl transcript precedes the JSON)
+    // The exporter's testsuite goldens as the fixture: the Bluesim
+    // fragments of mkWaveTypesCore and of mkStash, which it instantiates
     fn fixture() -> Loaded {
-        let text = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../testsuite/bsc.bluetcl/commands/wavedebuginfo.tcl.bluetcl-out.expected"
-        ))
-        .unwrap();
-        let json = &text[text.find('{').unwrap()..];
-        let info: DebugInfo = serde_json::from_str(json).unwrap();
-        Loaded::new(info)
+        let fragments = ["mkWaveTypesCore", "mkStash"]
+            .iter()
+            .map(|module| {
+                let path = format!(
+                    "{}/../../testsuite/bsc.bluehs/wave-debug-info/{module}.bluesim.wave-debug.json.expected",
+                    env!("CARGO_MANIFEST_DIR")
+                );
+                serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+            })
+            .collect();
+        Loaded::new("mkWaveTypesCore".into(), fragments)
+    }
+
+    fn ty(l: &mut Loaded, path: &str) -> Option<String> {
+        let path: Vec<String> = path.split('.').map(str::to_string).collect();
+        l.type_at(&path)
     }
 
     // a variable at the given dump scope, as Surfer hands it to the plugin
@@ -935,28 +1088,70 @@ mod tests {
             VariableInfo::Compound { subfields } => assert_eq!(subfields.len(), 3),
             _ => panic!("struct should be compound"),
         }
-        assert_eq!(l.type_at("main.top.cell"), Some("WaveTypes::Cell"));
+    }
+
+    #[test]
+    fn paths() {
+        let mut l = fixture();
+        // the top module under bsc's harness, found by its first signal
+        assert_eq!(ty(&mut l, "main.top.cell").as_deref(), Some("WaveTypes::Cell"));
+        assert_eq!(l.roots, vec![vec!["main".to_string(), "top".to_string()]]);
         // an inlined instance's register, under either hierarchy's path
-        assert_eq!(l.type_at("main.top.pair_lo"), Some("UInt#(4)"));
-        assert_eq!(l.type_at("main.top.pair.lo"), Some("UInt#(4)"));
+        assert_eq!(ty(&mut l, "main.top.pair_lo").as_deref(), Some("UInt#(4)"));
+        assert_eq!(ty(&mut l, "main.top.pair.lo").as_deref(), Some("UInt#(4)"));
+        assert_eq!(ty(&mut l, "main.top.pair.d._r").as_deref(), Some("UInt#(4)"));
+        // a synthesized child's signals, in its own fragment
+        assert_eq!(ty(&mut l, "main.top.stash.cnt").as_deref(), Some("UInt#(8)"));
+        assert_eq!(ty(&mut l, "main.top.stash.last").as_deref(), Some("WaveTypes::Pixel"));
+        assert_eq!(ty(&mut l, "main.top.stash"), None);
+        assert_eq!(ty(&mut l, "main.top.nothing"), None);
+        assert_eq!(ty(&mut l, "main.top.stash.nothing"), None);
+        // the same design under a testbench of its own
+        assert_eq!(ty(&mut l, "tb.dut.stash.cnt").as_deref(), Some("UInt#(8)"));
+        assert_eq!(l.roots.len(), 2);
+        // the top module is not the dump's root itself
+        assert_eq!(ty(&mut l, "cnt"), None);
     }
 
     #[test]
     fn names() {
-        let l = fixture();
+        let mut l = fixture();
         // the state of the design outranks its fires, which outrank the rest
-        let state = name_info(&l, &meta("main.top", "cell")).unwrap();
+        let state = name_info(&mut l, &meta("main.top", "cell")).unwrap();
         assert_eq!(state.priority, Some(2));
         assert!(state.true_name.is_none());
+        let child = name_info(&mut l, &meta("main.top.stash", "cnt")).unwrap();
+        assert_eq!(child.priority, Some(2));
         // a flattened name keeps its dumped name
-        let fire = name_info(&l, &meta("main.top", "WILL_FIRE_RL_step")).unwrap();
+        let fire = name_info(&mut l, &meta("main.top", "WILL_FIRE_RL_step")).unwrap();
         assert_eq!(fire.priority, Some(1));
         assert!(fire.true_name.is_none());
+        assert_eq!(
+            name_info(&mut l, &meta("main.top", "CLK")).unwrap().priority,
+            Some(1)
+        );
         // a compiler temporary is hidden; anything else unknown is left alone
-        let tmp = name_info(&l, &meta("main.top", "cnt___d3")).unwrap();
+        let tmp = name_info(&mut l, &meta("main.top", "cnt___d3")).unwrap();
         assert_eq!((tmp.priority, tmp.visible), (Some(-1), Some(false)));
-        assert!(name_info(&l, &meta("main.top", "CLK")).is_none());
+        assert!(name_info(&mut l, &meta("main.top", "other")).is_none());
         assert!(is_compiler_temporary("x__h944"));
         assert!(!is_compiler_temporary("my__data"));
+    }
+
+    #[test]
+    fn nets_are_hidden() {
+        // a net of the generated Verilog, as the Verilog fragments describe
+        let fragment: Fragment = serde_json::from_str(
+            r#"{"module": "m", "signals": [
+                 {"synthpath": ["x__h12"], "kind": "net", "type": "Bool"},
+                 {"synthpath": ["cnt"], "kind": "state", "type": "UInt#(8)"}]}"#,
+        )
+        .unwrap();
+        let mut l = Loaded::new("m".into(), vec![fragment]);
+        let net = name_info(&mut l, &meta("main.top", "x__h12")).unwrap();
+        assert_eq!((net.priority, net.visible), (Some(-1), Some(false)));
+        assert_eq!(ty(&mut l, "main.top.x__h12").as_deref(), Some("Bool"));
+        let state = name_info(&mut l, &meta("main.top", "cnt")).unwrap();
+        assert_eq!((state.priority, state.visible), (Some(2), None));
     }
 }
