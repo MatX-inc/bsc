@@ -1,0 +1,371 @@
+{
+  "format": "bsc-wave-debug-info",
+  "version": 2,
+  "module": "mkStash",
+  "backend": "verilog",
+  "compiler": "Bluespec Compiler, version build-20260926-1-19-g170eeb7a (build 170eeb7a)",
+  "children": [],
+  "signals": [
+    {
+      "synthpath": ["CLK"],
+      "bsvpath": ["CLK"],
+      "kind": "clock"
+    },
+    {
+      "synthpath": ["RST_N"],
+      "bsvpath": ["RST_N"],
+      "kind": "reset"
+    },
+    {
+      "synthpath": ["push_1"],
+      "bsvpath": ["push", "arg1"],
+      "kind": "port",
+      "role": "arg",
+      "method": "push",
+      "type": "WaveTypes::Pixel",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 82,
+      "column": 0
+    },
+    {
+      "synthpath": ["EN_push"],
+      "bsvpath": ["push", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "push",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 82,
+      "column": 0
+    },
+    {
+      "synthpath": ["RDY_push"],
+      "bsvpath": ["push", "RDY"],
+      "kind": "port",
+      "role": "ready",
+      "method": "push",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 82,
+      "column": 0
+    },
+    {
+      "synthpath": ["top"],
+      "bsvpath": ["top"],
+      "kind": "port",
+      "role": "result",
+      "method": "top",
+      "type": "WaveTypes::Pixel",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 82,
+      "column": 0
+    },
+    {
+      "synthpath": ["RDY_top"],
+      "bsvpath": ["top", "RDY"],
+      "kind": "port",
+      "role": "ready",
+      "method": "top",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 82,
+      "column": 0
+    },
+    {
+      "synthpath": ["depth"],
+      "bsvpath": ["depth"],
+      "kind": "port",
+      "role": "result",
+      "method": "depth",
+      "type": "UInt#(8)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 82,
+      "column": 0
+    },
+    {
+      "synthpath": ["RDY_depth"],
+      "bsvpath": ["depth", "RDY"],
+      "kind": "port",
+      "role": "ready",
+      "method": "depth",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 82,
+      "column": 0
+    },
+    {
+      "synthpath": ["cnt"],
+      "bsvpath": ["cnt"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "UInt#(8)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 86,
+      "column": 4
+    },
+    {
+      "synthpath": ["cnt$D_IN"],
+      "bsvpath": ["cnt", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "UInt#(8)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 86,
+      "column": 4
+    },
+    {
+      "synthpath": ["cnt$EN"],
+      "bsvpath": ["cnt", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 86,
+      "column": 4
+    },
+    {
+      "synthpath": ["last"],
+      "bsvpath": ["last"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "WaveTypes::Pixel",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 87,
+      "column": 4
+    },
+    {
+      "synthpath": ["last$D_IN"],
+      "bsvpath": ["last", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "type": "WaveTypes::Pixel",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 87,
+      "column": 4
+    },
+    {
+      "synthpath": ["last$EN"],
+      "bsvpath": ["last", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 87,
+      "column": 4
+    },
+    {
+      "synthpath": ["q"],
+      "bsvpath": ["q"],
+      "kind": "state",
+      "prim": "FIFO2",
+      "type": "WaveTypes::Pixel",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 85,
+      "column": 4
+    },
+    {
+      "synthpath": ["q$D_IN"],
+      "bsvpath": ["q", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "enq",
+      "prim": "FIFO2",
+      "type": "WaveTypes::Pixel",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 85,
+      "column": 4
+    },
+    {
+      "synthpath": ["q$ENQ"],
+      "bsvpath": ["q", "ENQ"],
+      "kind": "port",
+      "role": "enable",
+      "method": "enq",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 85,
+      "column": 4
+    },
+    {
+      "synthpath": ["q$DEQ"],
+      "bsvpath": ["q", "DEQ"],
+      "kind": "port",
+      "role": "enable",
+      "method": "deq",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 85,
+      "column": 4
+    },
+    {
+      "synthpath": ["q$D_OUT"],
+      "bsvpath": ["q", "D_OUT"],
+      "kind": "port",
+      "role": "result",
+      "method": "first",
+      "prim": "FIFO2",
+      "type": "WaveTypes::Pixel",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 85,
+      "column": 4
+    },
+    {
+      "synthpath": ["q$FULL_N"],
+      "bsvpath": ["q", "FULL_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "notFull",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 85,
+      "column": 4
+    },
+    {
+      "synthpath": ["q$FULL_N"],
+      "bsvpath": ["q", "FULL_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "i_notFull",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 85,
+      "column": 4
+    },
+    {
+      "synthpath": ["q$EMPTY_N"],
+      "bsvpath": ["q", "EMPTY_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "notEmpty",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 85,
+      "column": 4
+    },
+    {
+      "synthpath": ["q$EMPTY_N"],
+      "bsvpath": ["q", "EMPTY_N"],
+      "kind": "port",
+      "role": "result",
+      "method": "i_notEmpty",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 85,
+      "column": 4
+    },
+    {
+      "synthpath": ["q$CLR"],
+      "bsvpath": ["q", "CLR"],
+      "kind": "port",
+      "role": "enable",
+      "method": "clear",
+      "prim": "FIFO2",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 85,
+      "column": 4
+    },
+    {
+      "synthpath": ["WILL_FIRE_RL_drain"],
+      "bsvpath": ["drain", "WILL_FIRE"],
+      "kind": "fire",
+      "rule": "drain",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 89,
+      "column": 6
+    },
+    {
+      "synthpath": ["CAN_FIRE_RL_drain"],
+      "bsvpath": ["drain", "CAN_FIRE"],
+      "kind": "fire",
+      "rule": "drain",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveTypes.bs",
+      "line": 89,
+      "column": 6
+    }
+  ],
+  "types": {
+    "WaveTypes::Pixel": {
+      "kind": "struct",
+      "width": 18,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "x",
+          "type": "UInt#(8)",
+          "width": 8,
+          "lo": 10,
+          "hi": 18
+        },
+        {
+          "name": "y",
+          "type": "UInt#(8)",
+          "width": 8,
+          "lo": 2,
+          "hi": 10
+        },
+        {
+          "name": "color",
+          "type": "WaveTypes::Color",
+          "width": 2,
+          "lo": 0,
+          "hi": 2
+        }
+      ]
+    },
+    "Bool": {
+      "kind": "enum",
+      "width": 1,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "False",
+          "value": 0
+        },
+        {
+          "name": "True",
+          "value": 1
+        }
+      ]
+    },
+    "UInt#(8)": {
+      "kind": "primary",
+      "width": 8
+    },
+    "WaveTypes::Color": {
+      "kind": "enum",
+      "width": 2,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "Red",
+          "value": 0
+        },
+        {
+          "name": "Green",
+          "value": 1
+        },
+        {
+          "name": "Blue",
+          "value": 2
+        }
+      ]
+    }
+  }
+}

@@ -42,6 +42,24 @@ proc wavedebuginfo_pass { bluehs backend path module outname } {
     }
 }
 
+# Bundle fragments with wave_debug_bundle.py
+proc bundle_pass { options fragments } {
+    global srcdir
+    global subdir
+
+    set script [file join [absolute $srcdir] .. util wave-debug-info wave_debug_bundle.py]
+    set here [pwd]
+    cd [file join [absolute $srcdir] $subdir]
+    set status [exec_with_log "wave_debug_bundle" \
+        "python3 $script $options $fragments >& bundle.bundle-out"]
+    cd $here
+    if { $status == 0 } {
+        pass "bundle $options"
+    } else {
+        fail "bundle $options"
+    }
+}
+
 set bluehs [find_bluehs]
 if { $bluehs == 0 } {
     unsupported "wave-debug-info: no bluehs runtime beside bsc (build with make install-bluehs)"
@@ -62,4 +80,13 @@ if { $bluehs == 0 } {
     compile_pass WaveTypes.bs {-verilog -elab -bdir vba -vdir vba}
     wavedebuginfo_pass $bluehs -verilog vba:%/Libraries mkWaveTypesCore mkWaveTypesCore.verilog.wave-debug.json
     compare_file_filtered mkWaveTypesCore.verilog.wave-debug.json "" $filters
+    wavedebuginfo_pass $bluehs -verilog vba:%/Libraries mkStash mkStash.verilog.wave-debug.json
+    compare_file_filtered mkStash.verilog.wave-debug.json "" $filters
+
+    # the bundle of a design: the fragments its top module reaches, with
+    # an index, from whatever fragments are offered (here both backends',
+    # so the backend has to be named; the top is the module no fragment
+    # reaches)
+    bundle_pass {--backend verilog --out bundle} {mkWaveTypesCore.verilog.wave-debug.json mkStash.verilog.wave-debug.json mkWaveTypesCore.bluesim.wave-debug.json}
+    compare_file bundle/index.json bundle.index.json.expected
 }

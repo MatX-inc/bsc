@@ -1,0 +1,10 @@
+{
+  "backend": "verilog",
+  "format": "bsc-wave-debug-bundle",
+  "fragments": [
+    "mkStash.verilog.wave-debug.json",
+    "mkWaveTypesCore.verilog.wave-debug.json"
+  ],
+  "top": "mkWaveTypesCore",
+  "version": 1
+}

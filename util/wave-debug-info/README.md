@@ -24,10 +24,22 @@ Verilog elaboration the script also runs bsc's own back end on the
 module, so that the generated Verilog's every net is described under
 the name the netlist gives it.
 
+`wave_debug_bundle.py` (Python, no bsc needed) bundles the fragments a
+design's top module reaches into a directory with an `index.json` naming
+the format, the top module, the backend and the fragments: what a viewer
+reads beside the dump, as `<dump>.debug/`. It takes fragments or
+directories of them, any superset of the design's, and infers the top
+module and the backend when they are unambiguous:
+
+    util/wave-debug-info/wave_debug_bundle.py --out <dump>.debug <fragments>...
+
+`--top`, `--backend` name them otherwise, `--tar` also writes a tar.
+
 `testsuite/bsc.bluehs/wave-debug-info` runs the script on a fixture with
 every kind of type and compares the fragments of both backends against
-expected files (`make bsc.bluehs/wave-debug-info/wave-debug-info.check`
-in `testsuite`); it is skipped when the installation has no bluehs runtime.
+expected files, and bundles them
+(`make bsc.bluehs/wave-debug-info/wave-debug-info.check` in `testsuite`);
+it is skipped when the installation has no bluehs runtime.
 
 Modules:
 
