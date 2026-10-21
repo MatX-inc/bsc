@@ -5296,30 +5296,45 @@ class HeapToDef a where
 
     hToDef _ x = x
 
+-- The parts of a structure are collected one after the other, with the
+-- map forced in between ("collPtrs xs `collThen` collPtrs x", instead of
+-- "collPtrs xs . collPtrs x"), so that the collection runs as a loop over
+-- the siblings and its stack is the depth of the heap rather than its
+-- size: composed lazily, every reference reached forced the map built by
+-- the one before it, a chain of thunks as long as the number of cells
+-- visited, which was the deepest stack of the whole compilation on a
+-- large elaborated module.
+infixr 9 `collThen`
+collThen :: (IM.IntMap HeapCell -> IM.IntMap HeapCell) ->
+            (IM.IntMap HeapCell -> IM.IntMap HeapCell) ->
+            IM.IntMap HeapCell -> IM.IntMap HeapCell
+collThen f g m = f $! g m
+
 instance HeapToDef a => HeapToDef [a] where
     collPtrs [] = id
-    collPtrs (x:xs) = collPtrs xs . collPtrs x
+    collPtrs (x:xs) = collPtrs xs `collThen` collPtrs x
     hToDef m xs = map (hToDef m) xs
 
 instance (HeapToDef a, HeapToDef b) => HeapToDef (a, b) where
-    collPtrs (a, b) = collPtrs b . collPtrs a
+    collPtrs (a, b) = collPtrs b `collThen` collPtrs a
     hToDef m (a, b) = (hToDef m a, hToDef m b)
 
 instance (HeapToDef a, HeapToDef b, HeapToDef c) => HeapToDef (a, b, c) where
-    collPtrs (a, b, c) = collPtrs c . collPtrs b . collPtrs a
+    collPtrs (a, b, c) = collPtrs c `collThen` collPtrs b `collThen` collPtrs a
     hToDef m (a, b, c) = (hToDef m a, hToDef m b, hToDef m c)
 
 instance (HeapToDef a, HeapToDef b, HeapToDef c, HeapToDef d) => HeapToDef (a, b, c, d) where
-    collPtrs (a, b, c, d) = collPtrs d . collPtrs c . collPtrs b . collPtrs a
+    collPtrs (a, b, c, d) =
+        collPtrs d `collThen` collPtrs c `collThen` collPtrs b `collThen` collPtrs a
     hToDef m (a, b, c, d) = (hToDef m a, hToDef m b, hToDef m c, hToDef m d)
 
 instance HeapToDef HEFace where
     collPtrs (IEFace i x e rs wp fi)
-        = collPtrs fi .
-          collPtrs wp .
-          collPtrs rs .
-          collPtrs e .
-          collPtrs x .
+        = collPtrs fi `collThen`
+          collPtrs wp `collThen`
+          collPtrs rs `collThen`
+          collPtrs e `collThen`
+          collPtrs x `collThen`
           collPtrs i
     hToDef m (IEFace i x e rs wp fi)
         = (IEFace (hToDef m i) (hToDef m x) (hToDef m e)
@@ -5361,10 +5376,10 @@ instance HeapToDef HExpr where
         else
             let c = unsafeDerefHeap r in
               case c of
-                HNF { hc_pexpr = P _ e } -> collPtrs e (IM.insert p c m)
+                HNF { hc_pexpr = P _ e } -> collPtrs e $! IM.insert p c m
                 HWHNF { hc_pexpr = P _ e } ->
 --                traces ("collPtrs: " ++ ppReadable (p, e))
-                  collPtrs e (IM.insert p c m)
+                  collPtrs e $! IM.insert p c m
                 e -> internalError ("collPtrs: " ++ ppReadable e)
     collPtrs e m = internalError ("collPtrs: " ++ ppReadable e)
 
@@ -5402,7 +5417,7 @@ instance HeapToDef HRules where
     hToDef m (IRules sps rs) = IRules sps (hToDef m rs)
 
 instance HeapToDef HRule where
-    collPtrs r = collPtrs (irule_body r) . collPtrs (irule_pred r)
+    collPtrs r = collPtrs (irule_body r) `collThen` collPtrs (irule_pred r)
 
     hToDef m r = r { irule_pred = hToDef m $ irule_pred r ,
                      irule_body = hToDef m $ irule_body r }
