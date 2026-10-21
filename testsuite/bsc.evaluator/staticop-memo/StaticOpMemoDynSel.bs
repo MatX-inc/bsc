@@ -1,0 +1,43 @@
+-- A static operator (here a dynamic selection among DAG values) pushed
+-- through an if-DAG: the value is built by a loop in which each step
+-- refers to the previous value twice, so the DAG has 2^n root-to-leaf
+-- paths.  evalStaticOp' memoizes its walk per heap cell; without the
+-- memo this took time exponential in n.
+package StaticOpMemoDynSel(sysStaticOpMemoDynSel) where
+
+import qualified List
+import Vector
+
+interface Sub =
+  v :: Maybe (Bit 32)
+  put :: Bit 32 -> Action
+
+mkSub :: Module Sub
+mkSub = module
+  c :: Vector 16 (Reg Bool) <- replicateM (mkReg False)
+  d :: Vector 16 (Reg Bool) <- replicateM (mkReg False)
+  r :: Reg (Bit 32) <- mkReg 0
+  w :: Reg (Bit 32) <- mkReg 0
+  sel :: Reg (Bit 2) <- mkReg 0
+  let step :: (Maybe (Bit 32), Vector 4 (Maybe (Bit 32))) -> Integer
+              -> (Maybe (Bit 32), Vector 4 (Maybe (Bit 32)))
+      step (x, vs) i = let y = if (d !! i)._read then x else (if w == 0 then Invalid else Valid w)
+                           xn = if (c !! i)._read then x else y
+                       in (xn, update vs (mod i 4) xn)
+      x0 :: Maybe (Bit 32)
+      x0 = Valid r
+      vs :: Vector 4 (Maybe (Bit 32))
+      vs = (List.foldl step (x0, replicate x0) (List.upto 0 15)).snd
+  interface
+    v = select vs sel._read
+    put z = r := z
+
+{-# verilog sysStaticOpMemoDynSel #-}
+sysStaticOpMemoDynSel :: Module Empty
+sysStaticOpMemoDynSel = module
+  s :: Sub <- mkSub
+  o :: Reg (Bit 32) <- mkReg 0
+  rules
+    "go": when True ==> action
+      o := fromMaybe 5 s.v
+      s.put o

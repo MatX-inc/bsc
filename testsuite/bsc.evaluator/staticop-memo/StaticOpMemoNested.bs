@@ -1,0 +1,36 @@
+-- fromMaybe of fromMaybe over a nested Maybe built by a loop in which
+-- each step refers to the previous value twice.  The unmemoized compiler
+-- overflows the stack on this one; evalStaticOp' memoizes its walk per
+-- heap cell, so it is linear in n.
+package StaticOpMemoNested(sysStaticOpMemoNested) where
+
+import qualified List
+import Vector
+
+interface Sub =
+  v :: Maybe (Maybe (Bit 32))
+  put :: Bit 32 -> Action
+
+mkSub :: Module Sub
+mkSub = module
+  c :: Vector 16 (Reg Bool) <- replicateM (mkReg False)
+  d :: Vector 16 (Reg Bool) <- replicateM (mkReg False)
+  r :: Reg (Bit 32) <- mkReg 0
+  w :: Reg (Bit 32) <- mkReg 0
+  let step :: Maybe (Maybe (Bit 32)) -> Integer -> Maybe (Maybe (Bit 32))
+      step x i = let y = if (d !! i)._read then x
+                         else (if w == 0 then Invalid else Valid (if w == 1 then Invalid else Valid w))
+                 in if (c !! i)._read then x else y
+  interface
+    v = List.foldl step (Valid (Valid r)) (List.upto 0 15)
+    put z = r := z
+
+{-# verilog sysStaticOpMemoNested #-}
+sysStaticOpMemoNested :: Module Empty
+sysStaticOpMemoNested = module
+  s :: Sub <- mkSub
+  o :: Reg (Bit 32) <- mkReg 0
+  rules
+    "go": when True ==> action
+      o := fromMaybe 5 (fromMaybe Invalid s.v)
+      s.put o

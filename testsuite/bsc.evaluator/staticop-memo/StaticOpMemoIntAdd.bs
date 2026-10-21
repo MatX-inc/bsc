@@ -1,0 +1,33 @@
+-- Integer addition of a DAG to itself: the handler of the outer walk
+-- starts an inner walk at every leaf, so the unmemoized compiler walked
+-- 4^n paths.  Each step of the loop refers to the previous value twice.
+package StaticOpMemoIntAdd(sysStaticOpMemoIntAdd) where
+
+import qualified List
+import Vector
+
+interface Sub =
+  v :: Integer
+  put :: Bit 32 -> Action
+
+mkSub :: Module Sub
+mkSub = module
+  c :: Vector 8 (Reg Bool) <- replicateM (mkReg False)
+  d :: Vector 8 (Reg Bool) <- replicateM (mkReg False)
+  r :: Reg (Bit 32) <- mkReg 0
+  let step :: Integer -> Integer -> Integer
+      step x i = let y = if (d !! i)._read then x else 3
+                 in if (c !! i)._read then x else y
+  interface
+    v = List.foldl step 7 (List.upto 0 7)
+    put z = r := z
+
+{-# verilog sysStaticOpMemoIntAdd #-}
+sysStaticOpMemoIntAdd :: Module Empty
+sysStaticOpMemoIntAdd = module
+  s :: Sub <- mkSub
+  o :: Reg (Bit 32) <- mkReg 0
+  rules
+    "go": when True ==> action
+      o := fromInteger (s.v + s.v)
+      s.put o
