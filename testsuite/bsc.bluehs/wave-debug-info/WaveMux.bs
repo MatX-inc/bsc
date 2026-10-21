@@ -3,8 +3,9 @@ package WaveMux where
 -- A register two rules write, one of them through the mux's default
 -- arm; union types with a constructor of several fields: one derived,
 -- one whose hand-written instance stores the fields the other way
--- round; and a method argument and a method result that bsc splits
--- over one port per field, the result's fields themselves split.
+-- round; a method argument and a method result that bsc splits over
+-- one port per field, the result's fields themselves split; a wire of
+-- a tuple; and a register of an interface used as data.
 
 import FIFO
 import SplitPorts
@@ -43,6 +44,11 @@ struct Span =
   deriving (Bits, Eq)
   deriving SplitPorts via ShallowSplit
 
+interface Tagged t =
+  valid :: Bool
+  dat :: t
+ deriving (Bits, Eq)
+
 interface WaveMux =
   put :: Item -> Action
   get :: ActionValue Item
@@ -57,6 +63,8 @@ mkWaveMux =
     outQ :: FIFO Item <- mkFIFO
     count :: Reg (UInt 8) <- mkReg 0
     origin :: Reg Coord <- mkReg (Coord { x = 0; y = 0 })
+    seen :: RWire (Bool, UInt 4) <- mkRWire
+    tagged :: Reg (Tagged (UInt 4)) <- mkReg (Tagged { valid = False; dat = 0 })
     rules
       "forward": when inQ.first.kind /= Flush ==> do
         outQ.enq inQ.first
@@ -65,6 +73,8 @@ mkWaveMux =
       "flush": when inQ.first.kind == Flush ==> do
         inQ.deq
         count := 0
+        seen.wset (True, origin.x)
+        tagged := Tagged { valid = True; dat = origin.y }
     interface
       put x = inQ.enq x
       get = do

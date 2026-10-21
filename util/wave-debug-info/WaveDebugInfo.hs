@@ -44,7 +44,11 @@
 -- "types" describes every type named by a signal, and the types those
 -- reach: kind, width in bits, and for structs, unions and enums where
 -- each member lies in the packed value, as the type's Bits instance
--- computes it (WaveLayout reduces the instance's own code).  A member
+-- computes it (WaveLayout reduces the instance's own code).  A tuple
+-- is a struct of members _1, _2, ...; an interface with a Bits
+-- instance (a struct in all but name) a struct of its fields.  A type
+-- the analysis cannot describe still gets an entry, of kind "unknown"
+-- and layout "unknown", with its width when it has one.  A member
 -- whose bits are a plain slice of the value carries their range
 -- (half-open, [lo, hi), counted from the least significant bit); a
 -- union arm or enum constant told apart by a fixed range of tag bits
@@ -84,7 +88,7 @@ import IType(IType, iToCT)
 import ISyntaxUtil(itBool)
 import CSyntax
 import Undefined(UndefKind(..))
-import PreIds(idPack, idUnpack, idTrue, idFalse, idAction, idActionValue)
+import PreIds(idPack, idUnpack, idTrue, idFalse, idAction, idActionValue, idPrimPair, idPrimFst, idPrimSnd)
 import FStringCompat(mkFString)
 import WaveLayout
 import Pred(qualToType, Qual(..))
@@ -95,6 +99,7 @@ import PVPrint(pvpString)
 import SymTab(SymTab, ConInfo(..), findCon)
 import ConTagInfo(ConTagInfo(..))
 import TypeAnalysis(TypeAnalysis(..), analyzeType, getWidth)
+import TypeWidth(typeWidth)
 import VModInfo
 import ASyntax
 import ABin(ABinModInfo(..))
@@ -548,48 +553,41 @@ data Prep = Prep { p_more :: [CType]
                  , p_queries :: [Query]
                  , p_finish :: [(String, BitExpr)] -> JValue }
 
-prepareType :: Flags -> SymTab -> CType -> Maybe Prep
+prepareType :: Flags -> SymTab -> CType -> Prep
 prepareType flags symtab t =
     case analyzeType flags symtab t of
-      Left _ -> Nothing
-      Right ta -> prepare ta
+      Right ta | Just p <- prepare ta -> p
+      _ -> Prep [] [] [] (const (JObj [ ("kind", JStr "unknown"), ("width", width typeBits)
+                                      , ("layout", JStr "unknown") ]))
   where
     width = maybe JNull JNum
-    typeBits = case analyzeType flags symtab t of
-                 Right ta -> getWidth ta
-                 Left _ -> Nothing
+    -- the type's width, from its Bits instance
+    typeBits = typeWidth flags symtab t
     plain more json = Just (Prep more [] [] (const json))
     -- the queries a type poses, once its width is known
     posed queries = maybe [] queries typeBits
 
     prepare :: TypeAnalysis -> Maybe Prep
+    prepare (Primary qi _ _ _ _) | qualEq qi idPrimPair =
+        -- a tuple: bsc's pairs, nested to the right, whose members the
+        -- type's name counts off as _1, _2, ...
+        let tupleFields :: (CExpr -> CExpr) -> CType -> [(CType, CExpr -> CExpr)]
+            tupleFields sel (TAp (TAp (TCon (TyCon i _ _)) a) b) | qualEq i idPrimPair =
+                (a, \ e -> CSelect (sel e) idPrimFst) : tupleFields (\ e -> CSelect (sel e) idPrimSnd) b
+            tupleFields sel ty = [(ty, sel)]
+        in  structPrep [ ("_" ++ show n, ft, typeWidth flags symtab ft, sel)
+                       | (n, (ft, sel)) <- zip [(1 :: Int) ..] (tupleFields id t) ]
     prepare ta@(Primary {}) =
         plain [] (JObj [("kind", JStr "primary"), ("width", width (getWidth ta))])
+    prepare (Interface _ _ _ _ fields _) =
+        -- an interface used as data (one with a Bits instance): its
+        -- fields are its members, as a struct's
+        structPrep [ (getIdBaseString i, ft, typeWidth flags symtab ft, \ e -> CSelect e i)
+                   | (_, i, qt, _) <- fields, let ft = qualToType qt, null (fst (getArrows ft)) ]
     prepare (Alias _ _ _ target) =
         plain [target] (JObj [("kind", JStr "alias"), ("target", JStr (typeName target))])
     prepare (Struct _ _ _ _ fields _) =
-        let fws = [ (i, qualToType qt, fw) | (i, qt, fw) <- fields ]
-            members = [ Member (getIdBaseString i) (Just ft) fw Nothing Nothing Nothing []
-                      | (i, ft, fw) <- fws ]
-            queries w = [ q | (n, (i, _, Just fw)) <- zip [0 :: Int ..] fws, fw > 0
-                            , let q = Query (valName n) w fw (\ b -> packed (CSelect (unpacked b) i)) ]
-            -- a derived instance concatenates the fields, first field highest
-            derivedRanges =
-                case (typeBits, sequence [ fw | (_, _, fw) <- fws ]) of
-                  (Just total, Just ws) ->
-                      let his = scanl (-) total ws
-                      in  Just (zip (drop 1 his) his)
-                  _ -> Nothing
-            finish results =
-                let members' = attach results members
-                    derived = case derivedRanges of
-                                Just rs -> and [ Just r == fixedRange m | (m, r) <- zip members' rs ]
-                                Nothing -> False
-                in  JObj [ ("kind", JStr "struct")
-                         , ("width", width typeBits)
-                         , ("layout", JStr (layoutStr (layoutOf members' derived)))
-                         , ("members", JArr (map (memberJson Nothing) members')) ]
-        in  Just (Prep [ ft | (_, ft, _) <- fws ] (typePackages t) (posed queries) finish)
+        structPrep [ (getIdBaseString i, qualToType qt, fw, \ e -> CSelect e i) | (i, qt, fw) <- fields ]
     prepare (Enum qi cons _) =
         let members = [ Member (getIdBaseString c) Nothing Nothing (fmap conTag (tagInfo symtab qi c)) Nothing Nothing []
                       | c <- cons ]
@@ -670,6 +668,32 @@ prepareType flags symtab t =
                                 , ("elem", JStr (typeName elt))
                                 , ("stride", width stride) ])
     prepare _ = Nothing
+
+    -- a struct of the given members: each one's name, type, width and
+    -- the expression selecting it from an unpacked value
+    structPrep :: [(String, CType, Maybe Integer, CExpr -> CExpr)] -> Maybe Prep
+    structPrep fws =
+        let members = [ Member n (Just ft) fw Nothing Nothing Nothing [] | (n, ft, fw, _) <- fws ]
+            queries w = [ q | (n, (_, _, Just fw, sel)) <- zip [0 :: Int ..] fws, fw > 0
+                            , let q = Query (valName n) w fw (\ b -> packed (sel (unpacked b))) ]
+            -- a derived instance concatenates the fields, first field highest
+            derivedRanges =
+                case (typeBits, sequence [ fw | (_, _, fw, _) <- fws ]) of
+                  (Just total, Just ws) ->
+                      let his = scanl (-) total ws
+                      in  Just (zip (drop 1 his) his)
+                  _ -> Nothing
+            finish results =
+                let members' = attach results members
+                    -- a member of no bits has no range to check
+                    derived = case derivedRanges of
+                                Just rs -> and [ mb_width m == Just 0 || Just r == fixedRange m | (m, r) <- zip members' rs ]
+                                Nothing -> False
+                in  JObj [ ("kind", JStr "struct")
+                         , ("width", width typeBits)
+                         , ("layout", JStr (layoutStr (layoutOf members' derived)))
+                         , ("members", JArr (map (memberJson Nothing) members')) ]
+        in  Just (Prep [ ft | (_, ft, _, _) <- fws ] (typePackages t) (posed queries) finish)
 
     -- the queries, in the type's source syntax
     pos = noPosition
@@ -849,9 +873,8 @@ typesJson errh flags symtab roots = do
     collect seen acc (t:ts)
       | S.member name seen = collect seen acc ts
       | otherwise =
-          case prepareType flags symtab t of
-            Nothing -> collect seen' acc ts
-            Just p -> collect seen' ((name, p) : acc) (ts ++ p_more p)
+          let p = prepareType flags symtab t
+          in  collect seen' ((name, p) : acc) (ts ++ p_more p)
       where name = typeName t
             seen' = S.insert name seen
 

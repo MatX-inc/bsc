@@ -52,6 +52,8 @@ Modules:
   the evaluator reduce them over a symbolic argument. Each query is a
   `noinline` function, which bsc wraps as a module whose one method is
   the function.
+- `TypeWidth.hs`: a type's width from its Bits instance, by the type
+  checker.
 - `InstScopes.hs`: the source-level scope view of an instance tree.
 - `PrimSignals.hs`: the signals a primitive instance puts in a dump, as
   Bluesim and Verilog each spell them.
