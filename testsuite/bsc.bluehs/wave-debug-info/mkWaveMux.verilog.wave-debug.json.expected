@@ -24,7 +24,7 @@
       "method": "put",
       "type": "WaveMux::Item",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 37,
+      "line": 53,
       "column": 0
     },
     {
@@ -35,7 +35,7 @@
       "method": "put",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 37,
+      "line": 53,
       "column": 0
     },
     {
@@ -46,7 +46,7 @@
       "method": "put",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 37,
+      "line": 53,
       "column": 0
     },
     {
@@ -57,7 +57,7 @@
       "method": "get",
       "type": "WaveMux::Item",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 37,
+      "line": 53,
       "column": 0
     },
     {
@@ -68,7 +68,7 @@
       "method": "get",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 37,
+      "line": 53,
       "column": 0
     },
     {
@@ -79,7 +79,130 @@
       "method": "get",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 37,
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": ["mark_1_x"],
+      "bsvpath": ["mark", "arg1", "x"],
+      "kind": "port",
+      "role": "arg",
+      "method": "mark",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": ["mark_1_y"],
+      "bsvpath": ["mark", "arg1", "y"],
+      "kind": "port",
+      "role": "arg",
+      "method": "mark",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": [],
+      "bsvpath": ["mark", "arg1"],
+      "kind": "value",
+      "role": "arg",
+      "method": "mark",
+      "ports": ["mark_1_x", "mark_1_y"],
+      "type": "WaveMux::Coord",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": ["EN_mark"],
+      "bsvpath": ["mark", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "mark",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": ["RDY_mark"],
+      "bsvpath": ["mark", "RDY"],
+      "kind": "port",
+      "role": "ready",
+      "method": "mark",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": ["span_lo_x"],
+      "bsvpath": ["span", "lo", "x"],
+      "kind": "port",
+      "role": "result",
+      "method": "span",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": ["span_lo_y"],
+      "bsvpath": ["span", "lo", "y"],
+      "kind": "port",
+      "role": "result",
+      "method": "span",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": ["span_hi_x"],
+      "bsvpath": ["span", "hi", "x"],
+      "kind": "port",
+      "role": "result",
+      "method": "span",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": ["span_hi_y"],
+      "bsvpath": ["span", "hi", "y"],
+      "kind": "port",
+      "role": "result",
+      "method": "span",
+      "type": "UInt#(4)",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": [],
+      "bsvpath": ["span"],
+      "kind": "value",
+      "role": "result",
+      "method": "span",
+      "ports": ["span_lo_x", "span_lo_y", "span_hi_x", "span_hi_y"],
+      "type": "WaveMux::Span",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
+      "column": 0
+    },
+    {
+      "synthpath": ["RDY_span"],
+      "bsvpath": ["span", "RDY"],
+      "kind": "port",
+      "role": "ready",
+      "method": "span",
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 53,
       "column": 0
     },
     {
@@ -89,7 +212,7 @@
       "prim": "RegN",
       "type": "UInt#(8)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 42,
+      "line": 58,
       "column": 4
     },
     {
@@ -113,7 +236,7 @@
       ],
       "type": "UInt#(8)",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 42,
+      "line": 58,
       "column": 4
     },
     {
@@ -137,7 +260,7 @@
       ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 42,
+      "line": 58,
       "column": 4
     },
     {
@@ -147,7 +270,7 @@
       "prim": "FIFO2",
       "type": "WaveMux::Item",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 40,
+      "line": 56,
       "column": 4
     },
     {
@@ -165,7 +288,7 @@
       ],
       "type": "WaveMux::Item",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 40,
+      "line": 56,
       "column": 4
     },
     {
@@ -183,7 +306,7 @@
       ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 40,
+      "line": 56,
       "column": 4
     },
     {
@@ -207,7 +330,7 @@
       ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 40,
+      "line": 56,
       "column": 4
     },
     {
@@ -236,7 +359,7 @@
       ],
       "type": "WaveMux::Item",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 40,
+      "line": 56,
       "column": 4
     },
     {
@@ -248,7 +371,7 @@
       "prim": "FIFO2",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 40,
+      "line": 56,
       "column": 4
     },
     {
@@ -270,7 +393,7 @@
       ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 40,
+      "line": 56,
       "column": 4
     },
     {
@@ -282,7 +405,7 @@
       "prim": "FIFO2",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 40,
+      "line": 56,
       "column": 4
     },
     {
@@ -306,7 +429,7 @@
       ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 40,
+      "line": 56,
       "column": 4
     },
     {
@@ -318,7 +441,53 @@
       "prim": "FIFO2",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 40,
+      "line": 56,
+      "column": 4
+    },
+    {
+      "synthpath": ["origin"],
+      "bsvpath": ["origin"],
+      "kind": "state",
+      "prim": "RegN",
+      "type": "WaveMux::Coord",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 59,
+      "column": 4
+    },
+    {
+      "synthpath": ["origin$D_IN"],
+      "bsvpath": ["origin", "D_IN"],
+      "kind": "port",
+      "role": "arg",
+      "method": "write",
+      "prim": "RegN",
+      "methods": [
+        {
+          "method": "mark",
+          "part": "body"
+        }
+      ],
+      "type": "WaveMux::Coord",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 59,
+      "column": 4
+    },
+    {
+      "synthpath": ["origin$EN"],
+      "bsvpath": ["origin", "EN"],
+      "kind": "port",
+      "role": "enable",
+      "method": "write",
+      "prim": "RegN",
+      "methods": [
+        {
+          "method": "mark",
+          "part": "body"
+        }
+      ],
+      "type": "Bool",
+      "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
+      "line": 59,
       "column": 4
     },
     {
@@ -328,7 +497,7 @@
       "prim": "FIFO2",
       "type": "WaveMux::Item",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 41,
+      "line": 57,
       "column": 4
     },
     {
@@ -347,7 +516,7 @@
       ],
       "type": "WaveMux::Item",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 41,
+      "line": 57,
       "column": 4
     },
     {
@@ -366,7 +535,7 @@
       ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 41,
+      "line": 57,
       "column": 4
     },
     {
@@ -384,7 +553,7 @@
       ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 41,
+      "line": 57,
       "column": 4
     },
     {
@@ -402,7 +571,7 @@
       ],
       "type": "WaveMux::Item",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 41,
+      "line": 57,
       "column": 4
     },
     {
@@ -414,7 +583,7 @@
       "prim": "FIFO2",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 41,
+      "line": 57,
       "column": 4
     },
     {
@@ -433,7 +602,7 @@
       ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 41,
+      "line": 57,
       "column": 4
     },
     {
@@ -445,7 +614,7 @@
       "prim": "FIFO2",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 41,
+      "line": 57,
       "column": 4
     },
     {
@@ -467,7 +636,7 @@
       ],
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 41,
+      "line": 57,
       "column": 4
     },
     {
@@ -479,7 +648,7 @@
       "prim": "FIFO2",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 41,
+      "line": 57,
       "column": 4
     },
     {
@@ -489,7 +658,7 @@
       "rule": "flush",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 48,
+      "line": 65,
       "column": 6
     },
     {
@@ -499,7 +668,7 @@
       "rule": "flush",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 48,
+      "line": 65,
       "column": 6
     },
     {
@@ -509,7 +678,7 @@
       "rule": "forward",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 44,
+      "line": 61,
       "column": 6
     },
     {
@@ -519,7 +688,7 @@
       "rule": "forward",
       "type": "Bool",
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 44,
+      "line": 61,
       "column": 6
     },
     {
@@ -535,7 +704,7 @@
         }
       ],
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 42,
+      "line": 58,
       "column": 4
     },
     {
@@ -551,7 +720,7 @@
         }
       ],
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 42,
+      "line": 58,
       "column": 4
     },
     {
@@ -567,7 +736,7 @@
         }
       ],
       "file": "/home/william/work/bsc/surfer-enhancements/testsuite/bsc.bluehs/wave-debug-info///WaveMux.bs",
-      "line": 42,
+      "line": 58,
       "column": 4
     }
   ],
@@ -619,6 +788,52 @@
         {
           "name": "True",
           "value": 1
+        }
+      ]
+    },
+    "UInt#(4)": {
+      "kind": "primary",
+      "width": 4
+    },
+    "WaveMux::Coord": {
+      "kind": "struct",
+      "width": 8,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "x",
+          "type": "UInt#(4)",
+          "width": 4,
+          "lo": 4,
+          "hi": 8
+        },
+        {
+          "name": "y",
+          "type": "UInt#(4)",
+          "width": 4,
+          "lo": 0,
+          "hi": 4
+        }
+      ]
+    },
+    "WaveMux::Span": {
+      "kind": "struct",
+      "width": 16,
+      "layout": "derived",
+      "members": [
+        {
+          "name": "lo",
+          "type": "WaveMux::Coord",
+          "width": 8,
+          "lo": 8,
+          "hi": 16
+        },
+        {
+          "name": "hi",
+          "type": "WaveMux::Coord",
+          "width": 8,
+          "lo": 0,
+          "hi": 8
         }
       ]
     },
@@ -770,10 +985,6 @@
           "hi": 3
         }
       ]
-    },
-    "UInt#(4)": {
-      "kind": "primary",
-      "width": 4
     },
     "Bit#(3)": {
       "kind": "primary",

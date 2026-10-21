@@ -37,8 +37,9 @@ module and the backend when they are unambiguous:
 
 `testsuite/bsc.bluehs/wave-debug-info` runs the script on a fixture with
 every kind of type and compares the fragments of both backends against
-expected files, on one with a register two rules write and union
-constructors of several fields, and bundles them
+expected files, on one with a register two rules write, union
+constructors of several fields and methods whose argument and result
+are split over one port per field, and bundles them
 (`make bsc.bluehs/wave-debug-info/wave-debug-info.check` in `testsuite`);
 it is skipped when the installation has no bluehs runtime.
 

@@ -19,7 +19,11 @@
 -- (registers, FIFOs, wires, ... -- one entry per primitive instance,
 -- and one per port of it the dump shows), the synthesized submodule
 -- instances, each rule's CAN_FIRE and WILL_FIRE, each method's ports,
--- the module's clock and reset ports and, for the Verilog elaboration,
+-- the module's clock and reset ports (a method's result or argument
+-- that bsc split over several ports, one per field, has an entry per
+-- port, each named in the source by its field path under the method,
+-- and a "value" entry for the whole: its type, the ports, no path in
+-- the dump of its own) and, for the Verilog elaboration,
 -- the wires of each synthesized submodule instance's ports and every
 -- other net of the generated Verilog ("net": the compiler's own
 -- definitions, each with the rules and methods whose condition, body,
@@ -57,7 +61,7 @@
 -- vector's element 0 is lowest.
 module WaveDebugInfo (waveDebugInfo, phase) where
 
-import Data.List(intersperse)
+import Data.List(intersperse, isPrefixOf, sortOn)
 import Data.Maybe(mapMaybe, isJust, isNothing)
 import qualified Data.ByteString.Builder as B
 import qualified Data.ByteString.Lazy as BL
@@ -80,13 +84,13 @@ import IType(IType, iToCT)
 import ISyntaxUtil(itBool)
 import CSyntax
 import Undefined(UndefKind(..))
-import PreIds(idPack, idUnpack, idTrue, idFalse)
+import PreIds(idPack, idUnpack, idTrue, idFalse, idAction, idActionValue)
 import FStringCompat(mkFString)
 import WaveLayout
 import Pred(qualToType, Qual(..))
 import Assump(Assump(..))
 import Scheme(Scheme(..))
-import CType(getArrows, leftTyCon, isTypeUnit, TyCon(..), TISort(..), StructSubType(..))
+import CType(getArrows, leftTyCon, isTypeUnit, TyCon(..), TISort(..), StructSubType(..), CQType(..))
 import PVPrint(pvpString)
 import SymTab(SymTab, ConInfo(..), findCon)
 import ConTagInfo(ConTagInfo(..))
@@ -191,8 +195,10 @@ signalJson nameOf s =
 -- What describing the module's signals needs besides its package
 data Design = Design { d_nets :: Maybe Netlist  -- the Verilog elaboration's nets
                      , d_owners :: M.Map (String, String) [Owner]  -- of each instance's methods
+                     , d_methods :: M.Map String CType  -- each method's declared type
                      , d_hide :: Bool  -- leave out {-# hide #-}'d instances
                      , d_flags :: Flags
+                     , d_symtab :: SymTab
                      }
 
 -- An instance of a synthesized module, as opposed to one of a
@@ -215,7 +221,7 @@ moduleSignals d apkg =
                            | avi <- apkg_state_instances apkg ]
         scopes = instScopes (d_hide d) (apkg_name apkg) (apkg_inst_tree apkg)
         rules = ruleScopes bsv scopes
-        ports = concatMap (portSignals apkg scope bsv) (apkg_interface apkg)
+        ports = concatMap (portSignals d apkg scope bsv) (apkg_interface apkg)
         nets = maybe [] (netSignals scope bsv rules) (d_nets d)
     in  clockSignals apkg scope bsv ++ ports ++ scopeSignals d scope bsv rules prims scopes ++ nets
 
@@ -354,41 +360,155 @@ primDataType avi =
 
 -- A method's ports, at the module's scope.  Argument, result and
 -- enable ports are named by the interface; the ready signal is a
--- method of its own (RDY_<method>) in the elaborated interface.
-portSignals :: APackage -> [String] -> [String] -> AIFace -> [Signal]
-portSignals apkg scope bsv aif =
+-- method of its own (RDY_<method>) in the elaborated interface.  A
+-- value bsc split over several ports (a struct's fields, a vector's
+-- elements, as far down as the type's SplitPorts instance goes) has an
+-- entry per port, named in the source by its field path, and a "value"
+-- entry for the whole: its declared type, and the ports.
+portSignals :: Design -> APackage -> [String] -> [String] -> AIFace -> [Signal]
+portSignals d apkg scope bsv aif =
     case aif_fieldinfo aif of
       Method { vf_inputs = ins, vf_outputs = outs, vf_enable = en }
         | isRdyId name ->
-            [ (port (getFromReady name) "RDY" "ready" (fst vp)) { sig_type = Just tBool }
+            [ (port (getFromReady name) ["RDY"] "ready" (fst vp)) { sig_type = Just tBool }
             | vp <- outs ]
         | otherwise ->
-            [ port meth (argName i vn) "arg" vn
-            | (i, vps) <- zip [(1 :: Int) ..] ins, (vn, _) <- vps ] ++
-            [ Signal (scope ++ [getVNameString vn]) (bsv ++ [meth]) "port"
-                     [("role", JStr "result"), ("method", JStr meth)]
-                     (fmap iToCT (M.lookup vn types)) (Just name)
-            | (vn, _) <- outs ] ++
-            [ (port meth "EN" "enable" vn) { sig_type = Just tBool } | Just (vn, _) <- [en] ]
+            concat [ value (\ base -> [argName i base]) "arg" (map fst vps) t
+                   | (i, vps, t) <- zip3 [(1 :: Int) ..] ins (map Just args ++ repeat Nothing) ] ++
+            value (const []) "result" (map fst outs) result ++
+            [ (port meth ["EN"] "enable" vn) { sig_type = Just tBool } | Just (vn, _) <- [en] ]
       _ -> []
   where
     name = aif_name aif
     meth = getIdBaseString name
     types = apkg_external_wire_types apkg
+    (args, result) = case M.lookup meth (d_methods d) of
+                       Just t -> methodArgsResult t
+                       Nothing -> ([], Nothing)
     port m leaf role vn =
-        Signal (scope ++ [getVNameString vn]) (bsv ++ [m, leaf]) "port"
+        Signal (scope ++ [getVNameString vn]) (bsv ++ [m] ++ leaf) "port"
                [("role", JStr role), ("method", JStr m)]
                (fmap iToCT (M.lookup vn types)) (Just name)
-    -- an argument port is named <method>_<arg>; the source knows the arg
-    -- by its name, or by position when the interface gave it none
-    argName :: Int -> VName -> String
-    argName i vn =
-        let full = getVNameString vn
-            pre = meth ++ "_"
-            rest = drop (length pre) full
-        in  if take (length pre) full == pre && not (null rest) && not (all isDigit rest)
+    -- the ports of one value: one port is the value, named under the
+    -- method by `leafOf` its name; several are its fields, each named
+    -- by its path below that, and the whole gets a "value" entry.  The
+    -- ports' common stem is the value's name; the stem the type's field
+    -- paths resolve from is taken, since a port prefix pragma or a
+    -- field name with `_` in it can make the stem ambiguous.
+    value _ _ [] _ = []
+    value leafOf role [vn] _ = [ port meth (leafOf (getVNameString vn)) role vn ]
+    value leafOf role vns t =
+        [ port meth (leaf ++ p) role vn | (vn, p) <- zip vns paths ] ++
+        [ Signal [] (bsv ++ [meth] ++ leaf) "value"
+                 [ ("role", JStr role), ("method", JStr meth)
+                 , ("ports", JArr (map JStr names)) ]
+                 t (Just name) ]
+      where
+        names = map getVNameString vns
+        leaf = leafOf base
+        (base, paths) =
+            case [ (b, ps) | b <- meth : stems (commonPrefix names), Just ps <- [resolve b] ] of
+              (x : _) -> x
+              [] -> let b = portBase meth names in (b, [ [drop (length b + 1) n] | n <- names ])
+        resolve b = t >>= \ ty -> mapM (fieldPath (d_flags d) (d_symtab d) ty b) names
+    -- an argument's ports are named <method>_<arg> and, when split, that
+    -- followed by the field path; the source knows the arg by its name,
+    -- or by position when the interface gave it none
+    argName :: Int -> String -> String
+    argName i base =
+        let pre = meth ++ "_"
+            rest = drop (length pre) base
+        in  if take (length pre) base == pre && not (null rest) && not (all isDigit rest)
             then rest
             else "arg" ++ show i
+
+-- The common stem of some port names: the one name, or the longest
+-- common prefix cut back to a `_`, or the method's name
+portBase :: String -> [String] -> String
+portBase _ [n] = n
+portBase meth ns = case stems (commonPrefix ns) of
+                     (s : _) -> s
+                     [] -> meth
+
+commonPrefix :: [String] -> String
+commonPrefix = foldr1 (\ a b -> map fst (takeWhile (uncurry (==)) (zip a b)))
+
+-- The stems a prefix of some port names may be: the prefix itself
+-- unless a `_` ends it, then the prefix cut back to each `_`, longest
+-- first
+stems :: String -> [String]
+stems s = [ s | not (null s), last s /= '_' ] ++
+          [ take k s | k <- reverse [1 .. length s - 1], s !! k == '_' ]
+
+-- The path of the field a split port carries, from the port's name and
+-- the value's type: the SplitPorts library names a struct field's
+-- ports <base>_<field> (<base><field> for a name that starts with `_`)
+-- and a vector element's <base>_<index>, down to the leaves the type's
+-- instance keeps whole, whose port is the base itself.  Longer field
+-- names are tried first, since names may contain `_`.
+fieldPath :: Flags -> SymTab -> CType -> String -> String -> Maybe [String]
+fieldPath flags symtab t base port
+  | port == base = Just []
+  | otherwise =
+      case analyzeType flags symtab t of
+        Right (Struct _ _ _ _ fields _) ->
+            firstJust [ fmap (fn :) (fieldPath flags symtab (qualToType qt) stem port)
+                      | (i, qt, _) <- sortOn (negate . length . getIdBaseString . fst3) fields
+                      , let fn = getIdBaseString i
+                            stem = join fn
+                      , stem `isPrefixOf` port ]
+        Right (Vector _ (TCon (TyNum n _)) elt _) ->
+            firstJust [ fmap (show k :) (fieldPath flags symtab elt stem port)
+                      | k <- [0 .. n - 1], let stem = base ++ "_" ++ show k, stem `isPrefixOf` port ]
+        Right (Alias _ _ _ t') -> fieldPath flags symtab t' base port
+        -- the library's split markers wrap the value they split
+        Right (TaggedUnion qi _ _ _ [(_, at, _)] _)
+          | getIdBaseString qi `elem` ["ShallowSplit", "DeepSplit", "NoSplit", "Port"] ->
+              fieldPath flags symtab at base port
+        _ -> Nothing
+  where
+    join fn | null base || null fn || head fn == '_' = base ++ fn
+            | otherwise = base ++ "_" ++ fn
+    fst3 (a, _, _) = a
+    firstJust ms = case [ x | Just x <- ms ] of
+                     (x : _) -> Just x
+                     [] -> Nothing
+
+-- A method's declared argument types and result type (none for an
+-- Action, the value's for an ActionValue)
+methodArgsResult :: CType -> ([CType], Maybe CType)
+methodArgsResult t =
+    let (as, r) = getArrows t
+        res = case r of
+                TAp (TCon (TyCon i _ _)) v | qualEq i idActionValue -> Just v
+                TCon (TyCon i _ _) | qualEq i idAction -> Nothing
+                _ -> Just r
+    in  (as, res)
+
+-- The declared type of each method of an interface, by the name the
+-- elaborated module gives it: a subinterface's methods are prefixed
+-- with its name, a vector of subinterfaces' with the name and index
+methodTypes :: Flags -> SymTab -> CType -> M.Map String CType
+methodTypes flags symtab ifc = M.fromList (go "" ifc)
+  where
+    go prefix t =
+        case analyzeType flags symtab t of
+          Right (Interface _ _ _ _ fields _) ->
+              concat [ if isSub then sub (prefix ++ n) ft else [(prefix ++ n, ft)]
+                     | (isSub, i, qt, _) <- fields, let n = getIdBaseString i, let ft = qualToType qt ]
+          _ -> []
+    sub n t =
+        case analyzeType flags symtab t of
+          Right (Vector _ (TCon (TyNum k _)) elt _) -> concat [ sub (n ++ "_" ++ show j) elt | j <- [0 .. k - 1] ]
+          Right (Alias _ _ _ t') -> sub n t'
+          _ -> go (n ++ "_") t
+
+-- The interface a module's type gives it, past the module's arguments
+moduleInterface :: CQType -> Maybe CType
+moduleInterface (CQType _ t) =
+    case snd (getArrows t) of
+      TAp _ ifc -> Just ifc
+      _ -> Nothing
 
 -- ---------------
 -- Types
@@ -766,8 +886,10 @@ waveDebugInfo errh flags symtab ffmap abmi = do
           _ -> return Nothing
     let design = Design { d_nets = nets
                         , d_owners = methodOwners apkg (abmi_aschedinfo abmi)
+                        , d_methods = maybe M.empty (methodTypes flags symtab) (moduleInterface (abmi_oqt abmi))
                         , d_hide = not (tclShowHidden flags)
-                        , d_flags = flags }
+                        , d_flags = flags
+                        , d_symtab = symtab }
         signals0 = moduleSignals design apkg
         roots = distinct (mapMaybe sig_type signals0)
         names = M.fromList [ (t, typeName t) | t <- roots ]
