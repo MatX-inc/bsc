@@ -22,7 +22,8 @@ package SVAssert(
     -- sequence operations (16.9)
     (##), cycleDelay, cycleDelayRange, cycleDelayUnbounded,
     consecutiveRep, consecutiveRepRange, consecutiveRepUnbounded,
-    gotoRep, gotoRepRange, nonconsecutiveRep, nonconsecutiveRepRange,
+    gotoRep, gotoRepRange, gotoRepUnbounded,
+    nonconsecutiveRep, nonconsecutiveRepRange, nonconsecutiveRepUnbounded,
     andOp, orOp, intersection, within, throughout, firstMatch,
     -- sampled value functions (16.9.3)
     past, rose, fell, stable, changed,
@@ -30,8 +31,10 @@ package SVAssert(
     negation, disjunction, conjunction, ifElse,
     (|->), (|=>), overlappingImplication, nonOverlappingImplication,
     overlappingFollowedBy, nonOverlappingFollowedBy,
-    nexttime, sNexttime, always, alwaysRange, sAlways,
-    eventually, sEventually, until, sUntil, untilWith, sUntilWith,
+    nexttime, nexttimeAt, sNexttime, sNexttimeAt,
+    always, alwaysRange, alwaysUnbounded, sAlways,
+    eventually, sEventually, sEventuallyRange, sEventuallyUnbounded,
+    until, sUntil, untilWith, sUntilWith,
     implies, iff, strong, weak, acceptOn, rejectOn, syncAcceptOn, syncRejectOn,
     -- statements
     svaAssert, svaAssume, svaCover,
@@ -133,12 +136,18 @@ gotoRep n b = Seq (primSvaNode2 "(%0)[->%1]" (bit b) (int n))
 gotoRepRange :: Integer -> Integer -> Bool -> Seq
 gotoRepRange m n b = Seq (primSvaNode3 "(%0)[->%1:%2]" (bit b) (int m) (int n))
 
+gotoRepUnbounded :: Integer -> Bool -> Seq
+gotoRepUnbounded m b = Seq (primSvaNode2 "(%0)[->%1:$]" (bit b) (int m))
+
 -- b[=n]: n occurrences of b, possibly followed by cycles without b
 nonconsecutiveRep :: Integer -> Bool -> Seq
 nonconsecutiveRep n b = Seq (primSvaNode2 "(%0)[=%1]" (bit b) (int n))
 
 nonconsecutiveRepRange :: Integer -> Integer -> Bool -> Seq
 nonconsecutiveRepRange m n b = Seq (primSvaNode3 "(%0)[=%1:%2]" (bit b) (int m) (int n))
+
+nonconsecutiveRepUnbounded :: Integer -> Bool -> Seq
+nonconsecutiveRepUnbounded m b = Seq (primSvaNode2 "(%0)[=%1:$]" (bit b) (int m))
 
 -- both match, starting together (lengths may differ)
 andOp :: (IsSeq a, IsSeq b) => a -> b -> Seq
@@ -217,17 +226,29 @@ overlappingFollowedBy s p = Prop (primSvaNode2 "(%0) #-# (%1)" (unS s) (unP p))
 nonOverlappingFollowedBy :: (IsSeq a, IsProp b) => a -> b -> Prop
 nonOverlappingFollowedBy s p = Prop (primSvaNode2 "(%0) #=# (%1)" (unS s) (unP p))
 
-nexttime :: (IsProp a) => Integer -> a -> Prop
-nexttime n p = Prop (primSvaNode2 "nexttime [%0] (%1)" (int n) (unP p))
+-- p holds at the next clock tick (weak: or there is no next tick)
+nexttime :: (IsProp a) => a -> Prop
+nexttime p = Prop (primSvaNode1 "nexttime (%0)" (unP p))
 
-sNexttime :: (IsProp a) => Integer -> a -> Prop
-sNexttime n p = Prop (primSvaNode2 "s_nexttime [%0] (%1)" (int n) (unP p))
+-- p holds n ticks from now
+nexttimeAt :: (IsProp a) => Integer -> a -> Prop
+nexttimeAt n p = Prop (primSvaNode2 "nexttime [%0] (%1)" (int n) (unP p))
+
+sNexttime :: (IsProp a) => a -> Prop
+sNexttime p = Prop (primSvaNode1 "s_nexttime (%0)" (unP p))
+
+sNexttimeAt :: (IsProp a) => Integer -> a -> Prop
+sNexttimeAt n p = Prop (primSvaNode2 "s_nexttime [%0] (%1)" (int n) (unP p))
 
 always :: (IsProp a) => a -> Prop
 always p = Prop (primSvaNode1 "always (%0)" (unP p))
 
 alwaysRange :: (IsProp a) => Integer -> Integer -> a -> Prop
 alwaysRange m n p = Prop (primSvaNode3 "always [%0:%1] (%2)" (int m) (int n) (unP p))
+
+-- always [m:$] p
+alwaysUnbounded :: (IsProp a) => Integer -> a -> Prop
+alwaysUnbounded m p = Prop (primSvaNode2 "always [%0:$] (%1)" (int m) (unP p))
 
 sAlways :: (IsProp a) => Integer -> Integer -> a -> Prop
 sAlways m n p = Prop (primSvaNode3 "s_always [%0:%1] (%2)" (int m) (int n) (unP p))
@@ -237,6 +258,12 @@ eventually m n p = Prop (primSvaNode3 "eventually [%0:%1] (%2)" (int m) (int n) 
 
 sEventually :: (IsProp a) => a -> Prop
 sEventually p = Prop (primSvaNode1 "s_eventually (%0)" (unP p))
+
+sEventuallyRange :: (IsProp a) => Integer -> Integer -> a -> Prop
+sEventuallyRange m n p = Prop (primSvaNode3 "s_eventually [%0:%1] (%2)" (int m) (int n) (unP p))
+
+sEventuallyUnbounded :: (IsProp a) => Integer -> a -> Prop
+sEventuallyUnbounded m p = Prop (primSvaNode2 "s_eventually [%0:$] (%1)" (int m) (unP p))
 
 until :: (IsProp a, IsProp b) => a -> b -> Prop
 until p q = Prop (primSvaNode2 "(%0) until (%1)" (unP p) (unP q))

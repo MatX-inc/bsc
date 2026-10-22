@@ -3,8 +3,8 @@
 # Verilog: one statement per operator family, each a native, guarded
 # assert property with the module reset as its disable iff term
 compile_verilog_pass SvaTest.bs sysSvaTest
-find_n_strings sysSvaTest.v {`ifndef BSV_NO_SVA} 30
-find_n_strings sysSvaTest.v {property (@(posedge CLK) disable iff (RST_N ==} 30
+find_n_strings sysSvaTest.v {`ifndef BSV_NO_SVA} 34
+find_n_strings sysSvaTest.v {property (@(posedge CLK) disable iff (RST_N ==} 34
 find_regexp sysSvaTest.v {t_implies: assert property}
 find_regexp sysSvaTest.v {\(req\) \|-> \(ack\)}
 find_regexp sysSvaTest.v {\(req\) \|=> \(ack\)}
@@ -27,6 +27,10 @@ find_regexp sysSvaTest.v {not \(\(req\) \|-> \(ack\)\)}
 find_regexp sysSvaTest.v {if \(req\) \(ack\) else \(!ack\)}
 find_regexp sysSvaTest.v {\(req\) #-# \(ack\)}
 find_regexp sysSvaTest.v {nexttime \[2\] \(ack\)}
+find_regexp sysSvaTest.v {\|-> \(nexttime \(ack\)\)}
+find_regexp sysSvaTest.v {\(ack\)\[->1:\$\]}
+find_regexp sysSvaTest.v {always \[2:\$\] \(cnt}
+find_regexp sysSvaTest.v {s_eventually \[1:4\] \(ack\)}
 find_regexp sysSvaTest.v {always \(cnt}
 find_regexp sysSvaTest.v {eventually \[1:4\] \(ack\)}
 find_regexp sysSvaTest.v {\(req\) until \(ack\)}

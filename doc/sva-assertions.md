@@ -88,6 +88,7 @@ The FSM lowering of properties to Bluespec checkers (`SVA.bsv`, and the
 earlier #237/#238 experiments) is not used: Bluesim does not check SVA.
 Running assertions in emulation would want it back, at which point the
 checkers need a token-automaton rewrite and a differential test against a
-simulator's native engine. `clockedBy`/`disableIff` for multi-clock
-properties, sequence local variables, and a text front end for pasting SV
-properties are not provided.
+simulator's native engine. Not provided: the `case` property, `$sampled` and the global-clocking
+`$past_gclk` family, `restrict`/`expect`, sequence local variables and
+match items, multiclock (`clockedBy`/`disableIff`), and a text front end
+for pasting SV properties.
