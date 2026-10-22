@@ -2862,6 +2862,12 @@ walkNF e =
                     let p = pe1 `pConj` p_if
                     upd (pConj p0 p) (ieOr e1' e2') (wsJoin ws1 ws2)
 
+                -- an SVA property's operands are evaluated here, when the
+                -- enclosing $SVA call is walked
+                IAps f@(ICon _ (ICPrim _ p)) ts es | p `elem` svaPrims -> do
+                    (p, es', ws) <- walkList evalNF es
+                    upd (pConj p0 p) (IAps f ts es') ws
+
                 IAps f@(ICon _ (ICPrim _ p)) ts es | realPrimOp p -> do
                     (p, es', ws) <- walkList walkNF es
                     upd (pConj p0 p) (IAps f ts es') ws -- (map (mapIExprPosition cross) (zip es es'))) ws
@@ -4683,6 +4689,11 @@ conAp' i (ICPrim _ PrimArrayDynUpdate) f
   bldApUH' "DynUpd" f as
 
 -- assuming any remaining primitives are non-strict
+-- an SVA property node is strict in its operands, like a foreign call:
+-- the backend expects a tree of evaluated nodes over evaluated signals
+conAp' _ ic@(ICPrim _ p) f as | p `elem` svaPrims =
+  bldApUH' "ICPrim sva" f as
+
 conAp' _ ic@(ICPrim { }) f as = do
   bldAp' "ICPrim" f as
 

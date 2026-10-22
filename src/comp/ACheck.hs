@@ -264,6 +264,15 @@ chkAExpr e@(APrim _ t PrimStringConcat es)
    | all isStringType (t : map chkAExpr es) = t
    | otherwise = internalError ("chkAExpr: string prim " ++ ppReadable (e, t, map chkAExpr es))
 
+-- SVA property nodes: a template string over child nodes, or a leaf
+-- holding a design signal or a constant; the node itself is abstract
+chkAExpr e@(APrim _ t op es)
+   | op `elem` svaPrims =
+        if isSvaType t && all okArg (map chkAExpr es)
+                then t
+                else internalError ("chkAExpr: sva prim " ++ ppReadable (e, t, map chkAExpr es))
+  where okArg at = isSvaType at || isBit at || isStringType at
+
 -- all other primitives
 chkAExpr e@(APrim _ t op es) =
         if all ((== t) . chkAExpr) es
@@ -349,7 +358,7 @@ isInout_ (ATAbstract i _) = i == idInout_
 isInout_ _ = False
 
 isForeignArg :: AType -> Bool
-isForeignArg  e = isBit e || isString e || isReal e
+isForeignArg  e = isBit e || isString e || isReal e || isSvaType e
 --isBitOrString :: AType -> Bool
 --isBitOrString e = isBit e || isString e
 isBitOrInout_ :: AType -> Bool

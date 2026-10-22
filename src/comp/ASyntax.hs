@@ -52,7 +52,7 @@ module ASyntax(
         aRuleName,
         aRulePred,
         aTNat,
-        aTAction,
+        aTAction, aTSvaNode, isSvaType,
         aTClock,
         aTReset,
         aTInout,
@@ -124,7 +124,7 @@ import PPrint
 import IntLit
 import Id
 import IdPrint
-import PreIds(idPrimAction, idClock, idReset, idInout, idInout_, idPreludeRead, idNoReset)
+import PreIds(idPrimAction, idClock, idReset, idInout, idInout_, idPreludeRead, idNoReset, idSvaNode)
 import Prim
 import ErrorUtil(internalError)
 import Backend
@@ -481,6 +481,13 @@ aTNat = ATBit 32
 
 aTAction, aTClock, aTReset :: AType
 aTAction = ATAbstract idPrimAction []
+
+aTSvaNode :: AType
+aTSvaNode = ATAbstract idSvaNode []
+
+isSvaType :: AType -> Bool
+isSvaType (ATAbstract i _) = i == idSvaNode
+isSvaType _ = False
 aTClock  = ATAbstract idClock []
 aTReset  = ATAbstract idReset []
 

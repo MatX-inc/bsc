@@ -152,7 +152,9 @@ package Prelude(
 
         $error, $warning, $info, $fatal,
 
-        $SVA, SvaParam(..),
+        $SVA, $SVAssume, $SVACover,
+        SvaNode, primSvaBits, primSvaInt,
+        primSvaNode1, primSvaNode2, primSvaNode3, primSvaNode4,
 
         $random,
 
@@ -3329,9 +3331,32 @@ foreign $warning :: PrimAction = "$warning"
 foreign $info :: PrimAction = "$info"
 foreign $fatal :: PrimAction = "$fatal"
 
-foreign $SVA :: PrimAction = "$sva"
+-- Concurrent (SVA) assertions.  A property is a tree the Verilog backend
+-- prints: leaves are design signals and constants, inner nodes are SVA
+-- text templates in which %0, %1, ... stand for the children.  The
+-- compiler knows nothing about the SVA operators; the SVAssert package
+-- defines them and is the intended interface for BH code.
+primitive type SvaNode :: *
 
-data SvaParam = SvaBool Bool | SvaNumber (UInt 32) deriving (Bits)
+primitive primSvaBits :: Bit n -> SvaNode
+primitive primSvaInt :: Bit 32 -> SvaNode
+primitive primSvaNode1 :: String -> SvaNode -> SvaNode
+primitive primSvaNode2 :: String -> SvaNode -> SvaNode -> SvaNode
+primitive primSvaNode3 :: String -> SvaNode -> SvaNode -> SvaNode -> SvaNode
+primitive primSvaNode4 :: String -> SvaNode -> SvaNode -> SvaNode -> SvaNode -> SvaNode
+
+foreign _sva_assert_ :: String -> SvaNode -> PrimAction = "$sva_assert"
+foreign _sva_assume_ :: String -> SvaNode -> PrimAction = "$sva_assume"
+foreign _sva_cover_ :: String -> SvaNode -> PrimAction = "$sva_cover"
+
+$SVA :: String -> SvaNode -> Action
+$SVA label p = fromPrimAction (_sva_assert_ label p)
+
+$SVAssume :: String -> SvaNode -> Action
+$SVAssume label p = fromPrimAction (_sva_assume_ label p)
+
+$SVACover :: String -> SvaNode -> Action
+$SVACover label p = fromPrimAction (_sva_cover_ label p)
 
 displayHex :: (Bits a sa) => a -> Action
 displayHex x = $display "0x%h" x

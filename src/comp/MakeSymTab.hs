@@ -829,8 +829,11 @@ chkTopDef r mi src_pkg isDep (Cforeign i qt on ops ni) = do
         isGoodResult t = (isTypeBit t) || (isTypeString t) ||
                          (isTypeActionValue_ t) || (isTypePrimAction t)
 
+        -- (an SVA property is only ever an argument of the $SVA tasks)
         isGoodArg :: CType -> Bool
-        isGoodArg t = (isTypeBit t) || (isTypeString t)
+        isGoodArg t = (isTypeBit t) || (isTypeString t) || (isTypeSvaNode t)
+        isTypeSvaNode (TCon (TyCon i _ _)) = i == idSvaNode
+        isTypeSvaNode _ = False
 
         isGoodType :: CType -> Bool
         isGoodType t = let (args, res) = getArrows t

@@ -1,0 +1,9 @@
+package SvaBadLabel where
+
+import SVAssert
+
+{-# verilog sysSvaBadLabel #-}
+sysSvaBadLabel :: Module Empty
+sysSvaBadLabel = module
+  r :: Reg Bool <- mkReg False
+  svaAssert "not a label" r

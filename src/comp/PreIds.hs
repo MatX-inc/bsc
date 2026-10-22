@@ -655,11 +655,22 @@ idWarnTask   = prelude_id_no fsWarnTask
 idInfoTask   = prelude_id_no fsInfoTask
 idFatalTask  = prelude_id_no fsFatalTask
 
-idSVA, idSvaParam, idSvaBool, idSvaNumber :: Id
+idSVA, idSVAssume, idSVACover, idSvaNode :: Id
 idSVA        = prelude_id_no fsSVA
-idSvaParam   = prelude_id_no fsSvaParam
-idSvaBool    = prelude_id_no fsSvaBool
-idSvaNumber  = prelude_id_no fsSvaNumber
+idSVAssume   = prelude_id_no fsSVAssume
+idSVACover   = prelude_id_no fsSVACover
+idSvaNode    = prelude_id_no fsSvaNode
+
+-- the Prelude's property constructors, for a frontend that builds a
+-- property itself (the BSV assertion syntax, see CVParserAssertion)
+idPrimSvaBits, idPrimSvaInt, idPrimSvaNode1, idPrimSvaNode2, idPrimSvaNode3,
+  idPrimSvaNode4 :: Id
+idPrimSvaBits  = prelude_id_no fsPrimSvaBits
+idPrimSvaInt   = prelude_id_no fsPrimSvaInt
+idPrimSvaNode1 = prelude_id_no fsPrimSvaNode1
+idPrimSvaNode2 = prelude_id_no fsPrimSvaNode2
+idPrimSvaNode3 = prelude_id_no fsPrimSvaNode3
+idPrimSvaNode4 = prelude_id_no fsPrimSvaNode4
 
 idSVAsampled, idSVArose, idSVAfell, idSVAstable, idSVApast :: Id
 idSVAsampled = prelude_id_no fsSVAsampled
@@ -717,7 +728,7 @@ taskIds = [ idFinish, idStop,
             idSWritebAV, idSWriteb, idSWriteoAV, idSWriteo,
             idFormat,
             --
-            idSVA,
+            idSVA, idSVAssume, idSVACover,
             --
             idDumpon,  idDumpoff, idDumpvars, idDumpflush, idDumpfile,
             idDumpall, idDumplimit,

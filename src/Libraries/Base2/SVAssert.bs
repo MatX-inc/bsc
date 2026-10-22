@@ -1,0 +1,378 @@
+-- Concurrent (SVA) assertions for Bluespec Haskell.
+--
+-- A property is an ordinary elaboration-time value built from the
+-- combinators below, which follow the names of IEEE 1800 clause 16.
+-- `svaAssert`, `svaAssume` and `svaCover` emit it as a native SystemVerilog
+-- `assert property` in the generated Verilog, where the simulator or
+-- formal tool does the temporal matching.  Under -sim the statements are
+-- no-ops: Bluesim does not check SVA.
+--
+-- Sequences and properties are distinct types, so a composition the LRM
+-- forbids is a type error.  Each operator is one line here: a text
+-- template over its operands, which the compiler carries as a tree and
+-- prints.  Every template parenthesizes its operands, so SVA precedence
+-- never applies to the output.
+--
+--   svaAssert "ack_follows_req" (req |=> ack)
+--   svaAssert "grant_within_4"  (req |-> cycleDelayRange 1 4 True gnt)
+--   svaCover  "burst_of_3"      (consecutiveRep 3 valid)
+
+package SVAssert(
+    Seq, Prop, IsSeq(..), IsProp(..),
+    -- sequence operations (16.9)
+    (##), cycleDelay, cycleDelayRange, cycleDelayUnbounded,
+    consecutiveRep, consecutiveRepRange, consecutiveRepUnbounded,
+    gotoRep, gotoRepRange, gotoRepUnbounded,
+    nonconsecutiveRep, nonconsecutiveRepRange, nonconsecutiveRepUnbounded,
+    andOp, orOp, intersection, within, throughout, firstMatch,
+    -- sampled value functions (16.9.3)
+    past, rose, fell, stable, changed,
+    -- properties (16.12)
+    negation, disjunction, conjunction, ifElse,
+    (|->), (|=>), overlappingImplication, nonOverlappingImplication,
+    overlappingFollowedBy, nonOverlappingFollowedBy,
+    nexttime, nexttimeAt, sNexttime, sNexttimeAt,
+    always, alwaysRange, alwaysUnbounded, sAlways,
+    eventually, sEventually, sEventuallyRange, sEventuallyUnbounded,
+    until, sUntil, untilWith, sUntilWith,
+    implies, iff, strong, weak, acceptOn, rejectOn, syncAcceptOn, syncRejectOn,
+    -- statements
+    svaAssert, svaAssume, svaCover,
+    -- assume-guarantee roles
+    Role(..), guarantee, require,
+    -- short aliases
+    delay, delayRange, delayUnbound, rep, repRange, repUnbound,
+    sOr, sIntersect, pNot, pAnd, pOr
+  ) where
+
+infixr 7 ##
+infixr 1 |->
+infixr 1 |=>
+
+-- The two SVA sorts.  A Seq matches on finite stretches of cycles; a Prop
+-- holds or fails from a cycle.
+data Seq = Seq SvaNode
+data Prop = Prop SvaNode
+
+class IsSeq a where
+    toSeq :: a -> Seq
+
+instance IsSeq Bool where
+    toSeq b = Seq (primSvaBits (pack b))
+
+instance IsSeq (Reg Bool) where
+    toSeq r = toSeq r._read
+
+instance IsSeq Seq where
+    toSeq s = s
+
+class IsProp a where
+    toProp :: a -> Prop
+
+instance IsProp Bool where
+    toProp b = Prop (primSvaBits (pack b))
+
+instance IsProp (Reg Bool) where
+    toProp r = toProp r._read
+
+instance IsProp Seq where
+    toProp (Seq n) = Prop n
+
+instance IsProp Prop where
+    toProp p = p
+
+-- ----------------------------------------------------------------------
+-- building nodes
+
+unS :: (IsSeq a) => a -> SvaNode
+unS a = case toSeq a of
+          Seq n -> n
+
+unP :: (IsProp a) => a -> SvaNode
+unP a = case toProp a of
+          Prop n -> n
+
+int :: Integer -> SvaNode
+int n = primSvaInt (fromInteger n)
+
+bit :: Bool -> SvaNode
+bit b = primSvaBits (pack b)
+
+-- ----------------------------------------------------------------------
+-- 16.9  Sequence operations
+
+-- a ##1 b
+(##) :: (IsSeq a, IsSeq b) => a -> b -> Seq
+(##) a b = cycleDelay 1 a b
+
+-- a ##n b
+cycleDelay :: (IsSeq a, IsSeq b) => Integer -> a -> b -> Seq
+cycleDelay n a b = Seq (primSvaNode3 "(%0) ##%1 (%2)" (unS a) (int n) (unS b))
+
+-- a ##[m:n] b
+cycleDelayRange :: (IsSeq a, IsSeq b) => Integer -> Integer -> a -> b -> Seq
+cycleDelayRange m n a b = Seq (primSvaNode4 "(%0) ##[%1:%2] (%3)" (unS a) (int m) (int n) (unS b))
+
+-- a ##[m:$] b
+cycleDelayUnbounded :: (IsSeq a, IsSeq b) => Integer -> a -> b -> Seq
+cycleDelayUnbounded m a b = Seq (primSvaNode3 "(%0) ##[%1:$] (%2)" (unS a) (int m) (unS b))
+
+-- s[*n]
+consecutiveRep :: (IsSeq a) => Integer -> a -> Seq
+consecutiveRep n s = Seq (primSvaNode2 "(%0)[*%1]" (unS s) (int n))
+
+-- s[*m:n]
+consecutiveRepRange :: (IsSeq a) => Integer -> Integer -> a -> Seq
+consecutiveRepRange m n s = Seq (primSvaNode3 "(%0)[*%1:%2]" (unS s) (int m) (int n))
+
+-- s[*m:$]
+consecutiveRepUnbounded :: (IsSeq a) => Integer -> a -> Seq
+consecutiveRepUnbounded m s = Seq (primSvaNode2 "(%0)[*%1:$]" (unS s) (int m))
+
+-- b[->n]: the n-th occurrence of b, not necessarily consecutive (booleans only)
+gotoRep :: Integer -> Bool -> Seq
+gotoRep n b = Seq (primSvaNode2 "(%0)[->%1]" (bit b) (int n))
+
+gotoRepRange :: Integer -> Integer -> Bool -> Seq
+gotoRepRange m n b = Seq (primSvaNode3 "(%0)[->%1:%2]" (bit b) (int m) (int n))
+
+gotoRepUnbounded :: Integer -> Bool -> Seq
+gotoRepUnbounded m b = Seq (primSvaNode2 "(%0)[->%1:$]" (bit b) (int m))
+
+-- b[=n]: n occurrences of b, possibly followed by cycles without b
+nonconsecutiveRep :: Integer -> Bool -> Seq
+nonconsecutiveRep n b = Seq (primSvaNode2 "(%0)[=%1]" (bit b) (int n))
+
+nonconsecutiveRepRange :: Integer -> Integer -> Bool -> Seq
+nonconsecutiveRepRange m n b = Seq (primSvaNode3 "(%0)[=%1:%2]" (bit b) (int m) (int n))
+
+nonconsecutiveRepUnbounded :: Integer -> Bool -> Seq
+nonconsecutiveRepUnbounded m b = Seq (primSvaNode2 "(%0)[=%1:$]" (bit b) (int m))
+
+-- both match, starting together (lengths may differ)
+andOp :: (IsSeq a, IsSeq b) => a -> b -> Seq
+andOp a b = Seq (primSvaNode2 "(%0) and (%1)" (unS a) (unS b))
+
+orOp :: (IsSeq a, IsSeq b) => a -> b -> Seq
+orOp a b = Seq (primSvaNode2 "(%0) or (%1)" (unS a) (unS b))
+
+-- both match, starting and ending together
+intersection :: (IsSeq a, IsSeq b) => a -> b -> Seq
+intersection a b = Seq (primSvaNode2 "(%0) intersect (%1)" (unS a) (unS b))
+
+-- a match of the first lies within a match of the second
+within :: (IsSeq a, IsSeq b) => a -> b -> Seq
+within a b = Seq (primSvaNode2 "(%0) within (%1)" (unS a) (unS b))
+
+-- the boolean holds on every cycle of the sequence
+throughout :: (IsSeq a) => Bool -> a -> Seq
+throughout b s = Seq (primSvaNode2 "(%0) throughout (%1)" (bit b) (unS s))
+
+firstMatch :: (IsSeq a) => a -> Seq
+firstMatch s = Seq (primSvaNode1 "first_match(%0)" (unS s))
+
+-- ----------------------------------------------------------------------
+-- 16.9.3  Sampled value functions, as boolean sequences
+
+-- $past(x, n) == v, since $past is only useful compared to something
+past :: (Bits a sa) => Integer -> a -> a -> Seq
+past n x v = Seq (primSvaNode3 "($past(%0, %1) == %2)" (primSvaBits (pack x)) (int n) (primSvaBits (pack v)))
+
+rose :: Bool -> Seq
+rose b = Seq (primSvaNode1 "$rose(%0)" (bit b))
+
+fell :: Bool -> Seq
+fell b = Seq (primSvaNode1 "$fell(%0)" (bit b))
+
+stable :: (Bits a sa) => a -> Seq
+stable x = Seq (primSvaNode1 "$stable(%0)" (primSvaBits (pack x)))
+
+changed :: (Bits a sa) => a -> Seq
+changed x = Seq (primSvaNode1 "$changed(%0)" (primSvaBits (pack x)))
+
+-- ----------------------------------------------------------------------
+-- 16.12  Properties
+
+negation :: (IsProp a) => a -> Prop
+negation p = Prop (primSvaNode1 "not (%0)" (unP p))
+
+disjunction :: (IsProp a, IsProp b) => a -> b -> Prop
+disjunction p q = Prop (primSvaNode2 "(%0) or (%1)" (unP p) (unP q))
+
+conjunction :: (IsProp a, IsProp b) => a -> b -> Prop
+conjunction p q = Prop (primSvaNode2 "(%0) and (%1)" (unP p) (unP q))
+
+ifElse :: (IsProp a, IsProp b) => Bool -> a -> b -> Prop
+ifElse c p q = Prop (primSvaNode3 "if (%0) (%1) else (%2)" (bit c) (unP p) (unP q))
+
+-- s |-> p: when s matches, p holds from that cycle
+overlappingImplication :: (IsSeq a, IsProp b) => a -> b -> Prop
+overlappingImplication s p = Prop (primSvaNode2 "(%0) |-> (%1)" (unS s) (unP p))
+
+-- s |=> p: when s matches, p holds from the next cycle
+nonOverlappingImplication :: (IsSeq a, IsProp b) => a -> b -> Prop
+nonOverlappingImplication s p = Prop (primSvaNode2 "(%0) |=> (%1)" (unS s) (unP p))
+
+(|->) :: (IsSeq a, IsProp b) => a -> b -> Prop
+(|->) s p = overlappingImplication s p
+
+(|=>) :: (IsSeq a, IsProp b) => a -> b -> Prop
+(|=>) s p = nonOverlappingImplication s p
+
+-- s #-# p, s #=# p: implication that also requires s to match
+overlappingFollowedBy :: (IsSeq a, IsProp b) => a -> b -> Prop
+overlappingFollowedBy s p = Prop (primSvaNode2 "(%0) #-# (%1)" (unS s) (unP p))
+
+nonOverlappingFollowedBy :: (IsSeq a, IsProp b) => a -> b -> Prop
+nonOverlappingFollowedBy s p = Prop (primSvaNode2 "(%0) #=# (%1)" (unS s) (unP p))
+
+-- p holds at the next clock tick (weak: or there is no next tick)
+nexttime :: (IsProp a) => a -> Prop
+nexttime p = Prop (primSvaNode1 "nexttime (%0)" (unP p))
+
+-- p holds n ticks from now
+nexttimeAt :: (IsProp a) => Integer -> a -> Prop
+nexttimeAt n p = Prop (primSvaNode2 "nexttime [%0] (%1)" (int n) (unP p))
+
+sNexttime :: (IsProp a) => a -> Prop
+sNexttime p = Prop (primSvaNode1 "s_nexttime (%0)" (unP p))
+
+sNexttimeAt :: (IsProp a) => Integer -> a -> Prop
+sNexttimeAt n p = Prop (primSvaNode2 "s_nexttime [%0] (%1)" (int n) (unP p))
+
+always :: (IsProp a) => a -> Prop
+always p = Prop (primSvaNode1 "always (%0)" (unP p))
+
+alwaysRange :: (IsProp a) => Integer -> Integer -> a -> Prop
+alwaysRange m n p = Prop (primSvaNode3 "always [%0:%1] (%2)" (int m) (int n) (unP p))
+
+-- always [m:$] p
+alwaysUnbounded :: (IsProp a) => Integer -> a -> Prop
+alwaysUnbounded m p = Prop (primSvaNode2 "always [%0:$] (%1)" (int m) (unP p))
+
+sAlways :: (IsProp a) => Integer -> Integer -> a -> Prop
+sAlways m n p = Prop (primSvaNode3 "s_always [%0:%1] (%2)" (int m) (int n) (unP p))
+
+eventually :: (IsProp a) => Integer -> Integer -> a -> Prop
+eventually m n p = Prop (primSvaNode3 "eventually [%0:%1] (%2)" (int m) (int n) (unP p))
+
+sEventually :: (IsProp a) => a -> Prop
+sEventually p = Prop (primSvaNode1 "s_eventually (%0)" (unP p))
+
+sEventuallyRange :: (IsProp a) => Integer -> Integer -> a -> Prop
+sEventuallyRange m n p = Prop (primSvaNode3 "s_eventually [%0:%1] (%2)" (int m) (int n) (unP p))
+
+sEventuallyUnbounded :: (IsProp a) => Integer -> a -> Prop
+sEventuallyUnbounded m p = Prop (primSvaNode2 "s_eventually [%0:$] (%1)" (int m) (unP p))
+
+until :: (IsProp a, IsProp b) => a -> b -> Prop
+until p q = Prop (primSvaNode2 "(%0) until (%1)" (unP p) (unP q))
+
+sUntil :: (IsProp a, IsProp b) => a -> b -> Prop
+sUntil p q = Prop (primSvaNode2 "(%0) s_until (%1)" (unP p) (unP q))
+
+untilWith :: (IsProp a, IsProp b) => a -> b -> Prop
+untilWith p q = Prop (primSvaNode2 "(%0) until_with (%1)" (unP p) (unP q))
+
+sUntilWith :: (IsProp a, IsProp b) => a -> b -> Prop
+sUntilWith p q = Prop (primSvaNode2 "(%0) s_until_with (%1)" (unP p) (unP q))
+
+implies :: (IsProp a, IsProp b) => a -> b -> Prop
+implies p q = Prop (primSvaNode2 "(%0) implies (%1)" (unP p) (unP q))
+
+iff :: (IsProp a, IsProp b) => a -> b -> Prop
+iff p q = Prop (primSvaNode2 "(%0) iff (%1)" (unP p) (unP q))
+
+strong :: (IsSeq a) => a -> Prop
+strong s = Prop (primSvaNode1 "strong(%0)" (unS s))
+
+weak :: (IsSeq a) => a -> Prop
+weak s = Prop (primSvaNode1 "weak(%0)" (unS s))
+
+acceptOn :: (IsProp a) => Bool -> a -> Prop
+acceptOn c p = Prop (primSvaNode2 "accept_on (%0) (%1)" (bit c) (unP p))
+
+rejectOn :: (IsProp a) => Bool -> a -> Prop
+rejectOn c p = Prop (primSvaNode2 "reject_on (%0) (%1)" (bit c) (unP p))
+
+syncAcceptOn :: (IsProp a) => Bool -> a -> Prop
+syncAcceptOn c p = Prop (primSvaNode2 "sync_accept_on (%0) (%1)" (bit c) (unP p))
+
+syncRejectOn :: (IsProp a) => Bool -> a -> Prop
+syncRejectOn c p = Prop (primSvaNode2 "sync_reject_on (%0) (%1)" (bit c) (unP p))
+
+-- ----------------------------------------------------------------------
+-- Statements.  The clock and `disable iff` come from the rule the
+-- statement elaborates to: the module's default clock and reset.
+
+svaAssert :: (IsProp p) => String -> p -> Module Empty
+svaAssert name p = statement $SVA "svaAssert_" name (unP p)
+
+svaAssume :: (IsProp p) => String -> p -> Module Empty
+svaAssume name p = statement $SVAssume "svaAssume_" name (unP p)
+
+svaCover :: (IsProp p) => String -> p -> Module Empty
+svaCover name p = statement $SVACover "svaCover_" name (unP p)
+
+statement :: (String -> SvaNode -> Action) -> String -> String -> SvaNode -> Module Empty
+statement task prefix name node =
+    if genVerilog then
+        addRules $
+          rules
+            {-# ASSERT fire when enabled #-}
+            (prefix +++ name):
+              when True ==> task name node
+    else return _
+
+-- ----------------------------------------------------------------------
+-- Assume-guarantee roles.  Write a link's rules once; which side's rules
+-- are assumptions and which are checks follows from the role the module
+-- under verification plays.  As Observer everything is checked.
+
+data Role = Initiator | Responder | Observer
+
+-- a rule the initiator side is responsible for
+guarantee :: (IsProp p) => Role -> String -> p -> Module Empty
+guarantee Responder = svaAssume
+guarantee _ = svaAssert
+
+-- a rule the responder side is responsible for
+require :: (IsProp p) => Role -> String -> p -> Module Empty
+require Initiator = svaAssume
+require _ = svaAssert
+
+-- ----------------------------------------------------------------------
+-- Short aliases
+
+delay :: (IsSeq a, IsSeq b) => Integer -> a -> b -> Seq
+delay = cycleDelay
+
+delayRange :: (IsSeq a, IsSeq b) => Integer -> Integer -> a -> b -> Seq
+delayRange = cycleDelayRange
+
+delayUnbound :: (IsSeq a, IsSeq b) => Integer -> a -> b -> Seq
+delayUnbound = cycleDelayUnbounded
+
+rep :: (IsSeq a) => Integer -> a -> Seq
+rep = consecutiveRep
+
+repRange :: (IsSeq a) => Integer -> Integer -> a -> Seq
+repRange = consecutiveRepRange
+
+repUnbound :: (IsSeq a) => Integer -> a -> Seq
+repUnbound = consecutiveRepUnbounded
+
+sOr :: (IsSeq a, IsSeq b) => a -> b -> Seq
+sOr = orOp
+
+sIntersect :: (IsSeq a, IsSeq b) => a -> b -> Seq
+sIntersect = intersection
+
+pNot :: (IsProp a) => a -> Prop
+pNot = negation
+
+pAnd :: (IsProp a, IsProp b) => a -> b -> Prop
+pAnd = conjunction
+
+pOr :: (IsProp a, IsProp b) => a -> b -> Prop
+pOr = disjunction

@@ -1,0 +1,9 @@
+package SvaDirect where
+
+-- the $SVA task used directly, which only the Verilog backend accepts
+{-# verilog sysSvaDirect #-}
+sysSvaDirect :: Module Empty
+sysSvaDirect = module
+  r :: Reg Bool <- mkReg False
+  rules
+    "direct": when True ==> $SVA "direct" (primSvaBits (pack r))

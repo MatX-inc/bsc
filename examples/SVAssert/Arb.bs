@@ -1,0 +1,31 @@
+package Arb where
+
+import SVAssert
+
+-- A two-client fixed-priority arbiter with a one-cycle grant latency,
+-- with its contract as concurrent assertions.  `bsc -verilog Arb.bs`
+-- prints them as native SVA for a simulator or a formal tool.
+interface Arb =
+    request :: Bit 2 -> Action
+    grant :: Bit 2
+
+{-# verilog mkArb #-}
+mkArb :: Module Arb
+mkArb = module
+  req :: Reg (Bit 2) <- mkReg 0
+  gnt :: Reg (Bit 2) <- mkReg 0
+  rules
+    "arbitrate": when True ==> do
+      gnt := if req[0:0] == 1 then 1 else if req[1:1] == 1 then 2 else 0
+  -- at most one grant
+  svaAssert "grant_onehot" (gnt /= 3)
+  -- client 0 is granted the cycle after it requests
+  svaAssert "req0_granted_next" ((req[0:0] == 1) |=> (gnt == 1))
+  -- client 1 alone is granted within two cycles
+  svaAssert "req1_granted_soon" ((req == 2) |-> cycleDelayRange 1 2 True (gnt == 2))
+  -- a grant means someone asked the cycle before
+  svaAssert "grant_has_request" ((gnt /= 0) |-> past 1 (req /= 0) True)
+  svaCover "both_requesting" (req == 3)
+  interface
+    request r = req := r
+    grant = gnt

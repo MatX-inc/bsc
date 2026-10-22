@@ -17,6 +17,8 @@ module Verilog(
                VProgram(..),
                VRange,
                VStmt(..),
+               VAssertKind(..),
+               VSva(..),
                VTri(..),
                VVDecl(..),
                VVar(..),
@@ -39,7 +41,7 @@ module Verilog(
                getVIdString,
                mkVEOp,
                mkVEUnOp,
-               mkEqualsReset, mkNotEqualsReset, mkEdgeReset,
+               mkEqualsReset, mkNotEqualsReset, mkEdgeReset, isOne,
                mkReset, mkNotReset,
                defaultVId,
                vIsValidIdent
@@ -520,7 +522,13 @@ data VStmt
         | Vifelse VExpr VStmt VStmt
         | Vdumpvars Int [VId]           -- appears unused
         | VTask VId [VExpr] -- calling a verilog system task as a Bluespec foreign function of type Action
-        | VAssert VEventExpr [VExpr]
+        -- a concurrent assertion (see ppAssert)
+        | VAssert { va_kind :: VAssertKind,
+                    va_label :: String,
+                    va_event :: VEventExpr,
+                    va_disable :: Maybe VExpr,   -- the `disable iff` condition
+                    va_immediate :: Bool,        -- print as an immediate assertion
+                    va_prop :: VSva }
         | VZeroDelay -- injecting an explicit (0-tick) delay for synchronization purposes
         deriving (Eq, Show, Generic.Data, Generic.Typeable)
 
@@ -572,7 +580,7 @@ instance PPrint VStmt where
         pPrint d p (VTask task []) | isTaskVId task = pPrint d 0 task <> text ";"
         pPrint d p (VTask task es) = pPrint d 0 task <> text "(" <> commaList d es <> text ");"
 
-        pPrint d p (VAssert ev es) = ppAssert d p ev es
+        pPrint d p (VAssert k lbl ev dis imm prop) = ppAssert d k lbl ev dis imm prop
 
 
         pPrint d p  VZeroDelay     = text "#0;"
@@ -590,30 +598,75 @@ instance NFData VStmt where
     rnf (Vifelse expr s1 s2) = rnf3 expr s1 s2
     rnf (Vdumpvars lvl vars) = rnf2 lvl vars
     rnf (VTask tid exprs) = rnf2 tid exprs
-    rnf (VAssert ev exprs) = rnf2 ev exprs
+    rnf (VAssert k l ev dis imm pr) =
+        rnf k `seq` rnf l `seq` rnf ev `seq` rnf dis `seq` rnf imm `seq` rnf pr
     rnf VZeroDelay = ()
 
-ppAssert :: PDetail -> Int -> VEventExpr -> [VExpr] -> Doc
---ppAssert d i ev (VEString s : es) = text (pretty 78 78 (ppAs1 d i s es))
-ppAssert d i ev (VEString s1 :
-                 VEString s2 : es) = text (s1++": assert property (@(") <>
-                                     pPrint d 0 ev <> text ")" $$
-                                     ppAs1 d i s2 es
-ppAssert _ _ _ es = internalError ("ppAssert: " ++ show es)
+-- Concurrent assertions.  The property is a tree: leaves are design
+-- expressions and constants, inner nodes are SVA text templates in which
+-- %0, %1, ... stand for the children.  The compiler knows nothing about
+-- the operators; the SVAssert library owns their spelling.  The guard
+-- macro lets flows that only read Verilog-2001 drop the assertions.
+data VAssertKind = VAssertKind | VAssumeKind | VCoverKind
+        deriving (Eq, Ord, Show, Enum, Generic.Data, Generic.Typeable)
 
-ppAs1 :: PDetail -> Int -> String -> [VExpr] -> Doc
-ppAs1 d i s [] = internalError("ppAs1D: " ++ s)
-ppAs1 d i "" [b] = text s where
-    v0 = ppReadable b
-    v = take ((length v0) -1) v0
-    s = ") "++v++"=1; else "++v++"=0;"
-ppAs1 d i "" es = internalError("ppAs1A: " ++ show es)
-ppAs1 d i ('%':'b':s) (x:xs) = pPrint d i x $$ ppAs1 d i s xs
-ppAs1 d i ('%':'n':s) (x:xs) = pPrint d i x $$ ppAs1 d i s xs
-ppAs1 d i ss@('%':s) (x:xs) = internalError("ppAs1B: " ++ show ss)
-ppAs1 d i cs xs = text c1 <> ppAs1 d i c2 xs where
-    c1 = takeWhile (/='%') cs
-    c2 = dropWhile (/='%') cs
+data VSva = VSvaExpr VExpr
+          | VSvaInt Integer
+          | VSvaNode String [VSva]
+        deriving (Eq, Show, Generic.Data, Generic.Typeable)
+
+instance NFData VAssertKind where
+    rnf k = k `seq` ()
+
+instance NFData VSva where
+    rnf (VSvaExpr e) = rnf e
+    rnf (VSvaInt n) = rnf n
+    rnf (VSvaNode t cs) = rnf2 t cs
+
+ppAssert :: PDetail -> VAssertKind -> String -> VEventExpr -> Maybe VExpr -> Bool -> VSva -> Doc
+ppAssert d k lbl ev dis False prop =
+    text "`ifndef BSV_NO_SVA" $$
+    (text (lbl ++ ": " ++ assertKeyword k ++ " property (@(") <> pPrint d 0 ev <>
+     text ")" <+> disDoc <+> ppSva d prop <> text ");") $$
+    text "`endif"
+  where disDoc = case dis of
+                   Nothing -> empty
+                   Just c  -> text "disable iff (" <> pPrint d 0 c <> text ")"
+-- the immediate form: a boolean checked at the clock edge while not in reset
+ppAssert d k lbl ev dis True (VSvaExpr e) =
+    text "`ifndef BSV_NO_SVA" $$
+    (text "always @(" <> pPrint d 0 ev <> text ")" <+> guardDoc <+>
+     text (lbl ++ ": " ++ assertKeyword k ++ " (") <> pPrint d 0 e <> text ");") $$
+    text "`endif"
+  where guardDoc = case dis of
+                     Nothing -> empty
+                     Just c  -> text "if (!(" <> pPrint d 0 c <> text "))"
+ppAssert _ _ lbl _ _ True _ =
+    internalError ("ppAssert: immediate assertion `" ++ lbl ++ "' is not a boolean")
+
+assertKeyword :: VAssertKind -> String
+assertKeyword VAssertKind = "assert"
+assertKeyword VAssumeKind = "assume"
+assertKeyword VCoverKind  = "cover"
+
+-- splice the children into the template; every template parenthesizes
+-- its operands, so SVA precedence never matters
+ppSva :: PDetail -> VSva -> Doc
+ppSva d (VSvaExpr e) = pPrint d 0 e
+ppSva d (VSvaInt n) = text (itos n)
+ppSva d (VSvaNode t cs) = go t
+  where
+    go ('%':rest) =
+        let (digits, rest') = span (`elem` "0123456789") rest
+        in  case digits of
+              [] -> internalError ("ppSva: bad template " ++ show t)
+              _  -> let i = read digits
+                    in  if i < length cs
+                        then ppSva d (cs !! i) <> go rest'
+                        else internalError ("ppSva: template " ++ show t ++
+                                            " has no child " ++ show i)
+    go cs' = let (lit, rest) = break (== '%') cs'
+             in  if null rest then text lit else text lit <> go rest
 
 pprintCaseAttributes :: Bool -> Bool -> Doc
 pprintCaseAttributes False False = empty
