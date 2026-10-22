@@ -140,6 +140,7 @@ import VPIWrappers(genVPIWrappers, genVPIRegistrationArray)
 import DPIWrappers(genDPIWrappers)
 import SimCCBlock
 import SimExpand(simExpand, simCheckPackage)
+import ASVA(checkSVA)
 import SimPackage(SimSystem(..))
 import SimPackageOpt(simPackageOpt)
 import SimMakeCBlocks(simMakeCBlocks)
@@ -812,6 +813,8 @@ genModule
     -- ATS stands for "Abstract Transition System" from James C. Hoe's Ph.D. thesis
     start flags DFATS
     amod <- aConv errh pps flags imod_drop
+    -- the SVA assertions are checked here, before either backend
+    checkSVA errh flags amod
     aCheck flags amod "ATS"
     t <- dump errh flags t DFATS dumpnames amod
     amod == amod `seq` return ()

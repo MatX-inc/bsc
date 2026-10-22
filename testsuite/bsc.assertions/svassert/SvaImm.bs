@@ -1,0 +1,13 @@
+package SvaImm where
+
+import SVAssert
+
+-- -sva-immediate prints a boolean property as an immediate assertion
+{-# verilog sysSvaImm #-}
+sysSvaImm :: Module Empty
+sysSvaImm = module
+  cnt :: Reg (UInt 8) <- mkReg 0
+  rules
+    "tick": when True ==> cnt := cnt + 1
+  svaAssert "cnt_bounded" (cnt <= 41)
+  svaCover "cnt_hits_40" (cnt == 40)

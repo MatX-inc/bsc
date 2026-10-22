@@ -1,0 +1,57 @@
+# Concurrent assertions written in BH with the SVAssert library
+
+# Verilog: one statement per operator family, each a native, guarded
+# assert property with the module reset as its disable iff term
+compile_verilog_pass SvaTest.bs sysSvaTest
+find_n_strings sysSvaTest.v {`ifndef BSV_NO_SVA} 30
+find_n_strings sysSvaTest.v {property (@(posedge CLK) disable iff (RST_N ==} 30
+find_regexp sysSvaTest.v {t_implies: assert property}
+find_regexp sysSvaTest.v {\(req\) \|-> \(ack\)}
+find_regexp sysSvaTest.v {\(req\) \|=> \(ack\)}
+find_regexp sysSvaTest.v {##2 \(ack\)}
+find_regexp sysSvaTest.v {##\[1:3\] \(ack\)}
+find_regexp sysSvaTest.v {##\[1:\$\] \(ack\)}
+find_regexp sysSvaTest.v {\(ack\)\[\*2\]}
+find_regexp sysSvaTest.v {\(ack\)\[\*1:3\]}
+find_regexp sysSvaTest.v {\(ack\)\[->2\]}
+find_regexp sysSvaTest.v {\(ack\)\[=2\]}
+find_regexp sysSvaTest.v {\) or \(}
+find_regexp sysSvaTest.v {\) intersect \(}
+find_regexp sysSvaTest.v {\) within \(}
+find_regexp sysSvaTest.v {\) throughout \(}
+find_regexp sysSvaTest.v {first_match\(}
+find_regexp sysSvaTest.v {\$past\(req, 1\) == 1'd1}
+find_regexp sysSvaTest.v {\$rose\(req\)}
+find_regexp sysSvaTest.v {\$stable\(cnt\)}
+find_regexp sysSvaTest.v {not \(\(req\) \|-> \(ack\)\)}
+find_regexp sysSvaTest.v {if \(req\) \(ack\) else \(!ack\)}
+find_regexp sysSvaTest.v {\(req\) #-# \(ack\)}
+find_regexp sysSvaTest.v {nexttime \[2\] \(ack\)}
+find_regexp sysSvaTest.v {always \(cnt}
+find_regexp sysSvaTest.v {eventually \[1:4\] \(ack\)}
+find_regexp sysSvaTest.v {\(req\) until \(ack\)}
+find_regexp sysSvaTest.v {strong\(\(ack\)\[\*1:\$\]\)}
+find_regexp sysSvaTest.v {accept_on \(cnt ==}
+find_regexp sysSvaTest.v {t_assume: assume property}
+find_regexp sysSvaTest.v {t_cover: cover property}
+find_regexp_fail sysSvaTest.v {translate_off\n *`ifndef BSV_NO_SVA}
+
+# -sva-immediate prints a boolean property as an immediate assertion
+compile_verilog_pass SvaImm.bs sysSvaImm {-sva-immediate}
+find_regexp sysSvaImm.v {always @\(posedge CLK\) if \(!\(RST_N ==}
+find_regexp sysSvaImm.v {cnt_bounded: assert \(cnt <=}
+find_regexp sysSvaImm.v {cnt_hits_40: cover \(cnt ==}
+find_regexp_fail sysSvaImm.v {assert property}
+
+# the checks on assertions
+compile_verilog_fail_error SvaBadLabel.bs G0134
+compile_verilog_fail_error SvaDupLabel.bs G0135
+compile_verilog_fail_error SvaImmBad.bs G0136 1 sysSvaImmBad {-sva-immediate}
+compile_fail_error SvaDirect.bs S0100 1 {-sim}
+
+# The BSV frontend's pass-through path builds the same tree
+compile_verilog_pass_warning PassThrough.bsv S0028 1 mkPassThrough {-passthrough-assertions}
+find_regexp mkPassThrough.v {svaAssertion_L[0-9]+C[0-9]+: assert property \(@\(posedge CLK\) disable iff}
+find_regexp mkPassThrough.v {##1 \(ack\)}
+compile_verilog_pass_warning PassThroughActions.bsv P0226 1 mkPassThroughActions {-passthrough-assertions}
+find_regexp mkPassThroughActions.v {\[\*1:2\]\) ##1 \(ack\)}

@@ -470,6 +470,9 @@ aSExpr e = do
          (ASClock _ _) -> return e'
          (ASReset _ _) -> return e'
          (ASInout _ _) -> return e'
+         -- an SVA property stays inline: it is only ever an argument
+         -- of a $SVA task, and has no Verilog wire representation
+         _ | isSvaType (aType e') -> return e'
          _ | noCSE -> return e'
          _ -> do
                 (i, t, e'') <- find e' (aType e') (getIExprPosition e)
@@ -809,7 +812,7 @@ realPrim p = p `elem`
          PrimRange,
          -- not primArith because not Bit n -> Bit n -> Bit n
          PrimMul, PrimQuot, PrimRem
-        ] ++ primAriths ++ primCmps ++ primBools ++ primStrings
+        ] ++ primAriths ++ primCmps ++ primBools ++ primStrings ++ svaPrims
 primAriths :: [PrimOp]
 primAriths = [ PrimAdd, PrimSub, PrimAnd, PrimOr, PrimXor,
                PrimSL, PrimSRL, PrimSRA,
@@ -893,6 +896,7 @@ primType PrimArrayDynSelect _ (arr:_) =
     case (aType arr) of
       ATArray _ t -> t
       _ -> internalError ("primType: array select: " ++ ppReadable arr)
+primType p _ _ | p `elem` svaPrims = aTSvaNode
 primType p ts xs = internalError ("primType " ++ ppReadable (p, ts, xs))
 
 aAction :: ARuleId -> IExpr a -> M [AAction]

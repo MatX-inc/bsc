@@ -1323,61 +1323,6 @@ checkDisplayParam av_ok fmt_ok as e =
                    do
                      packResult as e
 
-checkAssertParam :: [Assump] -> CExpr -> TI (([VPred], CExpr), Type, CStmts)
-checkAssertParam as e =
-    do
-      v <- newTVar "checkAssertParam start" KStar e
-      res@(ps, e') <- tiExpr as v e
-      t <- expandFullType v
-      let pos = getPosition e
-
-      case t of
-        _ | isString t -> return (res, t, [])
-        _ | isChar t ->
-          do
-            res' <- tiExpr as tString (cVApply (idPrimCharToString pos) [e])
-            return (res', tString, [])
-        _ | isBool t || isUInt t ->
-          do
-            v' <- newTVar "checkAssertParam pack" KStar e
-            res' <- tiExpr as v' (cVApply (setIdPosition pos idPack) [e])
-            t' <- expandFullType v'
-            return (res', t', [])
-        _ -> -- fall through and look at provisos
-           do
-             ps' <- apSubTI ps
-             let ptvars = tv ps'
-             case t of
-               -- the original tvar has been constrained by a proviso
-               TVar tvar | tvar `elem` ptvars -> do
-                 -- traceM ("proviso variable: " ++ (ppReadable t))
-                 do
-                   -- duplicate provisos are possible, so remove them
-                   let preds = nub [ pred | (VPred _ pp) <-  ps',
-                                            let pred = removePredPositions pp,
-                                            tvar `elem` (tv pred)]
-                   -- traceM("proviso predicates: " ++ (ppReadable preds))
-                   literal <- literalCls
-                   stringLiteral <- stringLiteralCls
-                   let literalprovisos = [p | p@(IsIn c [tbind]) <- preds,
-                                              c == literal, tbind == t]
-                   let stringprovisos = [p | p@(IsIn c [tbind]) <- preds,
-                                             c == stringLiteral, tbind == t]
-                   (if ((not . null) literalprovisos) then
-                     do
-                       -- traceM("literal provisos: " ++ (ppReadable literalprovisos))
-                         _ <- unify e tInteger t
-                         res' <- tiExpr as tInteger e
-                            -- res' <- tiExpr as bit32 e
-                         return (res', tInteger, [])
-                    else if ((not . null) stringprovisos) then do
-                       _ <- unify e tString t
-                       res' <- tiExpr as tString e
-                       return (res', tString, [])
-                    else do internalError ("TCheck.SVAParam: " ++ show e))
-               _ ->
-                   do internalError ("TCheck.SVAParam: " ++ show t)
-
 -- CStmts are null
 -- the incantation to pack the result is repeated
 packResult :: [Assump] -> CExpr -> TI (([VPred], CExpr), Type, CStmts)
@@ -1406,15 +1351,6 @@ taskCheckDisplay as td f es =
         _ <- unify f tAction td -- check type so fromPrimAction will succeed
                            -- f is used for its position only
         paramResults <- mapM (checkDisplayParam True True as) es
-        finishDisplay as td f es paramResults
-
-taskCheckAssert :: [Assump] -> Type -> CExpr -> [CExpr] -> TI ([VPred],CExpr)
-taskCheckAssert as td f es =
-      do
-        _ <- unify f tAction td -- check type so fromPrimAction will succeed
-                                -- f is used for its position only
-        paramResults <- mapM (checkAssertParam as) es
-        -- OK to use finishDisplay here:
         finishDisplay as td f es paramResults
 
 -- Check a display task where the first argument must be an interface
@@ -1685,7 +1621,9 @@ taskCheckMap = [(idTime,      taskCheckNormal),
                 (idInfoTask,  taskCheckDisplay),
                 (idFatalTask, taskCheckFatal),
                 --
-                (idSVA,       taskCheckAssert),
+                (idSVA,       taskCheckNormal),
+                (idSVAssume,  taskCheckNormal),
+                (idSVACover,  taskCheckNormal),
 
                 (idSVAsampled, taskCheckNormal),
                 (idSVArose, taskCheckNormal),

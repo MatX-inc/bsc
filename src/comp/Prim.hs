@@ -1,5 +1,5 @@
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances, DeriveDataTypeable #-}
-module Prim(
+module Prim(svaPrims, 
             PrimOp(..),
             toPrim,
             toWString,
@@ -331,7 +331,20 @@ data PrimOp =
         -- (GenBin.header).
         | PrimPack
         | PrimUnpack
+
+        -- An SVA property, carried as a tree the Verilog backend prints:
+        -- leaves are design signals and constants, inner nodes are SVA
+        -- text templates over their children (see SVAssert.bs).
+        | PrimSvaBits           -- Bit n -> SvaNode
+        | PrimSvaInt            -- Bit 32 -> SvaNode
+        | PrimSvaNode1          -- String -> SvaNode -> SvaNode
+        | PrimSvaNode2
+        | PrimSvaNode3
+        | PrimSvaNode4
         deriving (Eq, Ord, Show, Enum, Bounded, Generic.Data, Generic.Typeable)
+
+svaPrims :: [PrimOp]
+svaPrims = [PrimSvaBits, PrimSvaInt, PrimSvaNode1, PrimSvaNode2, PrimSvaNode3, PrimSvaNode4]
 
 -- Just some size, have to be coordinated with Prelude.bs
 stringSize :: String -> Integer
@@ -467,6 +480,12 @@ toPrim i = tp (getIdBaseString i)                -- XXXXX
 
         tp "primGenC" = PrimGenC
         tp "primGenVerilog" = PrimGenVerilog
+        tp "primSvaBits" = PrimSvaBits
+        tp "primSvaInt" = PrimSvaInt
+        tp "primSvaNode1" = PrimSvaNode1
+        tp "primSvaNode2" = PrimSvaNode2
+        tp "primSvaNode3" = PrimSvaNode3
+        tp "primSvaNode4" = PrimSvaNode4
         tp "primGenModuleName" = PrimGenModuleName
 
         tp "primOpenFile" = PrimOpenFile
@@ -888,6 +907,12 @@ instance NFData PrimOp where
     rnf PrimEQ3 = ()
     rnf PrimPack = ()
     rnf PrimUnpack = ()
+    rnf PrimSvaBits = ()
+    rnf PrimSvaInt = ()
+    rnf PrimSvaNode1 = ()
+    rnf PrimSvaNode2 = ()
+    rnf PrimSvaNode3 = ()
+    rnf PrimSvaNode4 = ()
 
 -----
 

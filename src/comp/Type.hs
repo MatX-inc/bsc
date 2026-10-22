@@ -97,9 +97,8 @@ tBitN n pos = TAp tBit (tOfSize n pos)
 tNat :: Position -> Type
 tNat pos = tBitN 32 pos
 
-tFile, tSvaParam :: Type
+tFile :: Type
 tFile = TCon (TyCon idFile (Just KStar) (tiData [idInvalidFile, idMCD, idFD]))
-tSvaParam  = TCon (TyCon idSvaParam (Just KStar) (tiData [idSvaBool, idSvaNumber]))
 
 fn         :: Type -> Type -> Type
 a `fn` b    = TAp (TAp tArrow a) b
@@ -144,7 +143,7 @@ handwrittenTCons =
       tClock, tReset, tInout, tInout_, tString, tChar,
       tFmt, tName, tPosition, tType, tPred, tAttributes, tPrimPair,
       tAction, tActionValue, tActionValue_, tPrimAction, tRules,
-      tSchedPragma, tModule, tEmpty, tId, tFile, tSvaParam,
+      tSchedPragma, tModule, tEmpty, tId, tFile,
       tAdd, tSub, tMul, tDiv, tLog, tExp, tMax, tMin ]
 
 class HasKind t where

@@ -1,0 +1,46 @@
+package SvaTest where
+
+import SVAssert
+
+-- one assertion per operator family, to check the printed SVA
+{-# verilog sysSvaTest #-}
+sysSvaTest :: Module Empty
+sysSvaTest = module
+  cnt :: Reg (UInt 8) <- mkReg 0
+  req :: Reg Bool <- mkReg False
+  ack :: Reg Bool <- mkReg False
+  rules
+    "tick": when True ==> do
+      cnt := cnt + 1
+      req := (cnt % 8) == 0
+      ack := req
+  svaAssert "t_bool"        (cnt <= 41)
+  svaAssert "t_implies"     (req |-> ack)
+  svaAssert "t_implies_nxt" (req |=> ack)
+  svaAssert "t_delay"       (req |-> cycleDelay 2 True ack)
+  svaAssert "t_range"       (req |-> cycleDelayRange 1 3 True ack)
+  svaAssert "t_unbounded"   (req |-> cycleDelayUnbounded 1 True ack)
+  svaAssert "t_rep"         (req |-> consecutiveRep 2 ack)
+  svaAssert "t_rep_range"   (req |-> consecutiveRepRange 1 3 ack)
+  svaAssert "t_goto"        (req |-> gotoRep 2 ack)
+  svaAssert "t_nonconsec"   (req |-> nonconsecutiveRep 2 ack)
+  svaAssert "t_or"          (req |-> orOp ack (cnt == 3))
+  svaAssert "t_intersect"   (req |-> intersection (ack ## ack) (consecutiveRep 2 ack))
+  svaAssert "t_within"      (req |-> within ack (consecutiveRep 3 True))
+  svaAssert "t_throughout"  (req |-> throughout (cnt /= 0) (ack ## ack))
+  svaAssert "t_first_match" (firstMatch (cycleDelayRange 1 3 req ack) |-> True)
+  svaAssert "t_past"        (ack |-> past 1 req True)
+  svaAssert "t_rose"        (rose req |=> ack)
+  svaAssert "t_stable"      ((req && not ack) |=> stable cnt)
+  svaAssert "t_not"         (negation (req |-> ack))
+  svaAssert "t_and_or"      (conjunction (req |-> ack) (disjunction (ack |-> True) req))
+  svaAssert "t_if_else"     (ifElse req ack (not ack))
+  svaAssert "t_followed_by" (overlappingFollowedBy req ack)
+  svaAssert "t_nexttime"    (req |-> nexttime 2 ack)
+  svaAssert "t_always"      (always (cnt <= 41))
+  svaAssert "t_eventually"  (req |-> eventually 1 4 ack)
+  svaAssert "t_until"       (req |-> until req ack)
+  svaAssert "t_strong"      (req |-> strong (consecutiveRepUnbounded 1 ack))
+  svaAssert "t_accept_on"   (acceptOn (cnt == 0) (req |-> ack))
+  svaAssume "t_assume"      (cnt <= 41)
+  svaCover  "t_cover"       (consecutiveRep 3 ack)
