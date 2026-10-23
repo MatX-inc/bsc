@@ -343,6 +343,8 @@ library
     YicesFFI
 
 common common_exes
+  hs-source-dirs: src/comp/app
+  other-modules: Warmup
   autogen-modules: Warmup
   build-depends:
     base >=4.17.2.0,
@@ -367,10 +369,8 @@ executable bsc
     process >=1.6.17.0,
     time >=1.12.2,
     unix >=2.7.3,
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_bsc
   main-is: bsc.hs
-  other-modules: Warmup
 
 executable bluetcl
   import: common_exes
@@ -382,43 +382,32 @@ executable bluetcl
     unix >=2.7.3,
   c-sources:
     src/comp/app/bluetcl_shim.c,
-  hs-source-dirs: src/comp/app
   main-is: bluetcl_Main.hs
-  other-modules:
-    Bluetcl
-    Warmup
+  other-modules: Bluetcl
 
 executable bsc2bsv
   import: common_exes
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_bsc2bsv
   main-is: bsc2bsv.hs
-  other-modules: Warmup
 
 executable bsv2bsc
   import: common_exes
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_bsv2bsc
   main-is: bsv2bsc.hs
-  other-modules: Warmup
 
 executable dumpba
   import: common_exes
   build-depends:
     bytestring >=0.11.5.2,
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_dumpba
   main-is: dumpba.hs
-  other-modules: Warmup
 
 executable dumpbo
   import: common_exes
   build-depends:
     bytestring >=0.11.5.2,
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_dumpbo
   main-is: dumpbo.hs
-  other-modules: Warmup
 
 executable showrules
   import: common_exes
@@ -428,10 +417,8 @@ executable showrules
     old-time ^>=1.1.1.0,
     regex-compat ^>=0.95.2.2,
     split ^>=0.2.5,
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_showrules
   main-is: showrules.hs
-  other-modules: Warmup
 
 executable vcdcheck
   import: common_exes
@@ -439,7 +426,5 @@ executable vcdcheck
     bytestring >=0.11.5.2,
     containers >=0.6.7,
     regex-compat ^>=0.95.2.2,
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_vcdcheck
   main-is: vcdcheck.hs
-  other-modules: Warmup

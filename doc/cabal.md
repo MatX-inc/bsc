@@ -139,10 +139,8 @@ walked from the library by `src/comp/make-ghc-pkg-info.sh`.
 `SetupHooks.hs` at the root is the package's hooks module (`module SetupHooks
 (setupHooks)`), run with the repository root as the working directory:
 
-- The module-list check, the rule of section 1, as a configure hook on the
-  library that fails when a module under `src/comp` is not listed.
-- `Warmup`, one per library and per executable, declared autogen and
-  generated before the component builds. `ghc --make -jN` produces objects
+- `Warmup`, generated before building each component that lists it in
+  `autogen-modules`. `ghc --make -jN` produces objects
   that vary with scheduling unless the whole external interface set enters
   GHC's environment in one order before any module compiles (GHC.Core.Rules,
   "Note [Overall plumbing for rules]"); `Warmup` is that barrier: `import M
@@ -155,7 +153,8 @@ walked from the library by `src/comp/make-ghc-pkg-info.sh`.
   module (for `bluetcl`, `Bluetcl`, which `bluetcl_Main.hs` imports). A
   `Warmup.hs`, `BuildSystem.hs` or `BuildVersion.hs` under `src/comp` would be
   compiled in place of the generated module, since GHC takes `hs-source-dirs`
-  first, so configuring refuses while one is there, and so does each build.
+  first, so the build rules refuse while one is there, before compilation
+  or REPL loading.
 - `BuildSystem` and `BuildVersion` on the library, also autogen: the first
   from the host platform, the second by running
   `src/comp/update-build-version.sh` in the autogen directory with `GIT_DIR`
@@ -204,9 +203,10 @@ imported module missing from the list (section 1). Editing `bsc.cabal`
 makes cabal-install reconfigure. A module importing nothing else from
 the library is a root and carries `import Warmup ()` (section 3).
 
-A program is one `executable` stanza: `import: common_exes`, `hs-source-dirs:
-src/comp/app`, `main-is: <name>.hs`, `ghc-options: -main-is Main_<name>`,
-`other-modules: Warmup`, and its direct dependencies beyond `bsc` and `base`.
+A program is one `executable` stanza: `import: common_exes`,
+`main-is: <name>.hs`, `ghc-options: -main-is Main_<name>`, and its direct
+dependencies beyond `bsc` and `base`. The common stanza supplies
+`hs-source-dirs: src/comp/app` and the generated `Warmup` module.
 The entry module uses a `Main_<name>` header and carries `import Warmup ()`.
 
 ## 5. The determinism claim
