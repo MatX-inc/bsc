@@ -8,9 +8,6 @@
 -- | The package's setup hooks (build-type: Hooks). They run with the
 -- repository root as the working directory. What they do (doc/cabal.md):
 --
--- * hold exposed-modules to the tree: every module under the src/comp roots
---   must be listed, or configuring fails naming the missing ones;
---
 -- * generate a hidden Warmup for the library and for each executable;
 --
 -- * generate the BuildSystem and BuildVersion modules of the library;
@@ -23,19 +20,18 @@
 --
 -- No hook writes into src/comp or anywhere else outside dist-newstyle and
 -- the package's autogen directories, but for the install stamp
--- build/cabal-head (writeBuildVersionHs).
+-- cabal-head.project (writeBuildVersionHs).
 module SetupHooks (setupHooks) where
 
 import Control.Monad (filterM, forM, forM_, unless, when)
 import Control.Monad.IO.Class (liftIO)
-import Data.Char (isAlphaNum, isSpace)
+import Data.Char (isSpace)
 import Data.List (isPrefixOf, nub, sort)
 import qualified Data.List.NonEmpty as NE
 import Data.Maybe (fromMaybe, listToMaybe)
 import Distribution.InstalledPackageInfo (ExposedModule (..))
 import qualified Distribution.InstalledPackageInfo as IPI
 import Distribution.ModuleName (ModuleName)
-import qualified Distribution.ModuleName as ModuleName
 import Distribution.Pretty (prettyShow)
 import Distribution.Simple.Configure (getInstalledPackages)
 import Distribution.Simple.LocalBuildInfo
@@ -72,8 +68,8 @@ import System.Directory
   )
 import System.Environment (getEnvironment, lookupEnv)
 import System.Exit (ExitCode (..))
-import System.FilePath (isPathSeparator, splitExtension, splitSearchPath, takeDirectory, (</>))
-import System.IO (IOMode (..), hGetContents', hSetEncoding, latin1, readFile', withFile)
+import System.FilePath (splitSearchPath, takeDirectory, (</>))
+import System.IO (readFile')
 import System.IO.Error (catchIOError)
 import System.Process
   ( CreateProcess (..),
@@ -86,27 +82,14 @@ import System.Process
 
 setupHooks :: SetupHooks
 setupHooks =
-  moduleListSetupHooks
-    <> warmupSetupHooks
+  warmupSetupHooks
     <> generatedModulesSetupHooks
     <> solverSetupHooks
     <> tclSetupHooks
 
--- | The repository root: the nearest directory at or above the working
--- directory that holds cabal.project (the package directory is the root
--- itself; the search is for a Setup run from elsewhere).
-findRepoRoot :: IO FilePath
-findRepoRoot = canonicalizePath "." >>= go
-  where
-    go dir = do
-      found <- doesFileExist (dir </> "cabal.project")
-      if found
-        then pure dir
-        else
-          let up = takeDirectory dir
-           in if up == dir
-                then ioError (userError "no cabal.project at or above the package directory")
-                else go up
+-- | Cabal 3.16 runs the external Setup in the package directory.
+packageRoot :: IO FilePath
+packageRoot = canonicalizePath "."
 
 -- | Run a process to completion, failing if it does.
 --
@@ -153,77 +136,6 @@ autogenLocation lbi clbi m =
 locationFilePath :: LocalBuildInfo -> Location -> FilePath
 locationFilePath lbi loc = interpretSymbolicPathLBI lbi (location loc)
 
--- | The hook that holds exposed-modules to the tree: every module under the
--- library's source roots below src/comp must be listed, or configuring fails
--- naming the ones that are not. The list is explicit because Cabal wants
--- it, and because its change is what makes cabal-install reconfigure.
---
--- A file is a module of the library when the module its header names is the
--- one its path under the root spells: Libs/IOUtil.hs is IOUtil under the
--- Libs root and nothing under the src/comp root, and app/bsc.hs, whose
--- header names Main_bsc, is a program's entry module and not the library's.
--- The generated modules are exempt: a copy of one under src/comp is refused
--- (generatedModulesSetupHooks).
-moduleListSetupHooks :: SetupHooks
-moduleListSetupHooks = noSetupHooks {configureHooks}
-  where
-    configureHooks = noConfigureHooks {preConfComponentHook}
-
-    preConfComponentHook :: Maybe PreConfComponentHook
-    preConfComponentHook = Just $ \inputs -> do
-      case inputs.component of
-        CLib lib | isMainLib inputs.component -> do
-          root <- findRepoRoot
-          let bi = libBuildInfo lib
-              roots = [d | d <- getSymbolicPath <$> hsSourceDirs bi, "src/comp" `isPrefixOf` d]
-              listed = exposedModules lib <> otherModules bi
-          found <- concat <$> mapM (modulesUnder . (root </>)) roots
-          let missing = sort [m | m <- nub found, m `notElem` listed]
-          unless (null missing) $
-            ioError . userError $
-              "bsc.cabal does not list "
-                <> show (length missing)
-                <> " module(s) found under src/comp: "
-                <> unwords (prettyShow <$> missing)
-        _ -> pure ()
-      pure (noPreConfComponentOutputs inputs)
-
--- | The modules under a source root, by the rule above.
-modulesUnder :: FilePath -> IO [ModuleName]
-modulesUnder root = go ""
-  where
-    go rel = do
-      entries <- sort <$> listDirectory (root </> rel)
-      fmap concat . forM entries $ \entry -> do
-        let relEntry = rel </> entry
-        isDir <- doesDirectoryExist (root </> relEntry)
-        if isDir
-          then go relEntry
-          else case splitExtension relEntry of
-            (base, ext) | ext `elem` ([".hs", ".lhs"] :: [String]) -> do
-              let name = map (\c -> if isPathSeparator c then '.' else c) base
-              header <- moduleHeader (root </> relEntry)
-              pure [ModuleName.fromString name | header == Just name, name `notElem` generatedModules]
-            _ -> pure []
-
-generatedModules :: [String]
-generatedModules = ["Warmup", "BuildSystem", "BuildVersion"]
-
--- | The module a Haskell source names in its header, plain or bird-track
--- literate. Read as Latin-1 so that no locale decides whether a byte in a
--- comment is an error.
-moduleHeader :: FilePath -> IO (Maybe String)
-moduleHeader path = withFile path ReadMode $ \h -> do
-  hSetEncoding h latin1
-  text <- hGetContents' h
-  pure (listToMaybe [m | l <- lines text, Just m <- [headerName l]])
-  where
-    headerName line = case words (bird (dropWhile isSpace line)) of
-      ("module" : m : _) -> Just (takeWhile (\c -> isAlphaNum c || c `elem` ("._'" :: String)) m)
-      _ -> Nothing
-    bird ('>' : rest) = rest
-    bird rest = rest
-
 -- | Which components get a generated Warmup: every library with modules of
 -- its own and every executable; test suites (and benchmarks and foreign
 -- libraries) get none.
@@ -252,26 +164,9 @@ wantsWarmup _ = False
 -- library's own Warmup is excluded by name so that no program imports it
 -- into its own.
 warmupSetupHooks :: SetupHooks
-warmupSetupHooks = noSetupHooks {configureHooks, buildHooks}
+warmupSetupHooks = noSetupHooks {buildHooks}
   where
-    configureHooks = noConfigureHooks {preConfComponentHook}
     buildHooks = noBuildHooks {preBuildComponentRules}
-
-    -- Declare that the module is generated. The .cabal file lists it under
-    -- other-modules (exposed-modules for the library), as Cabal requires of
-    -- an autogen module.
-    preConfComponentHook :: Maybe PreConfComponentHook
-    preConfComponentHook = Just $ \inputs ->
-      if wantsWarmup inputs.component
-        then
-          pure $
-            PreConfComponentOutputs
-              { componentDiff =
-                  buildInfoComponentDiff
-                    (componentName inputs.component)
-                    (emptyBuildInfo {autogenModules = ["Warmup"]})
-              }
-        else pure $ noPreConfComponentOutputs inputs
 
     -- Generate the module.
     preBuildComponentRules :: Maybe PreBuildComponentRules
@@ -353,25 +248,15 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
     configureHooks = noConfigureHooks {preConfComponentHook}
     buildHooks = noBuildHooks {preBuildComponentRules}
 
-    -- Declare that the modules are generated. GHC takes a module found
-    -- under hs-source-dirs over the autogen one (Cabal lists the source
-    -- directories first), so a copy of one of them under src/comp, which
-    -- nothing generates any more, would be what the library compiles:
+    -- GHC takes a module found under hs-source-dirs over the autogen one
+    -- (Cabal lists the source directories first), so a copy under src/comp,
+    -- which nothing generates any more, would be what the library compiles:
     -- configuring refuses while one is there, and so does each build, since
     -- cabal-install builds without configuring when only sources changed.
     preConfComponentHook :: Maybe PreConfComponentHook
-    preConfComponentHook = Just $ \inputs ->
-      if isMainLib inputs.component
-        then do
-          refuseStrayGeneratedModules
-          pure $
-            PreConfComponentOutputs
-              { componentDiff =
-                  buildInfoComponentDiff
-                    (componentName inputs.component)
-                    (emptyBuildInfo {autogenModules = ["BuildSystem", "BuildVersion"]})
-              }
-        else pure $ noPreConfComponentOutputs inputs
+    preConfComponentHook = Just $ \inputs -> do
+      when (isMainLib inputs.component) refuseStrayGeneratedModules
+      pure $ noPreConfComponentOutputs inputs
 
     -- Generate the modules. BuildVersion's input is the repository's HEAD,
     -- which no file dependency names. Through an external Setup the rules run
@@ -421,7 +306,7 @@ generatedModulesSetupHooks = noSetupHooks {configureHooks, buildHooks}
 -- GHC would compile it in place of the generated one.
 refuseStrayGeneratedModules :: IO ()
 refuseStrayGeneratedModules = do
-  root <- findRepoRoot
+  root <- packageRoot
   forM_ (["Warmup", "BuildSystem", "BuildVersion"] :: [String]) $ \m -> do
     left <- doesFileExist (root </> "src" </> "comp" </> (m <> ".hs"))
     when left . ioError . userError $
@@ -432,6 +317,7 @@ writeBuildSystemHs :: (FilePath, Platform) -> IO ()
 writeBuildSystemHs (path, Platform _ os) = needing [path] $ do
   binFmtType <- case os of
     Linux -> pure "ELF"
+    FreeBSD -> pure "ELF"
     OSX -> pure "MachO"
     _ -> ioError (userError ("unsupported OS: " <> show os))
   writeFile path . unlines $
@@ -470,7 +356,7 @@ writeBuildSystemHs (path, Platform _ os) = needing [path] $ do
 writeBuildVersionHs :: (FilePath, String) -> IO ()
 writeBuildVersionHs (autogenDir, _) = do
   noGit <- fromMaybe "0" <$> lookupEnv "NOGIT"
-  root <- findRepoRoot
+  root <- packageRoot
   commit <- gitHead
   let repoHead = if noGit == "1" then Nothing else commit
   let gitVars = case repoHead of
@@ -492,9 +378,8 @@ writeBuildVersionHs (autogenDir, _) = do
   -- watched, and the version stops following HEAD until something else
   -- makes cabal-install build again. It names the commit whatever NOGIT
   -- says, as `make install` does, so the two write the same stamp.
-  let stamp = root </> "build" </> "cabal-head"
+  let stamp = root </> "cabal-head.project"
       content = maybe "no-repository" snd commit <> "\n"
-  createDirectoryIfMissing True (root </> "build")
   current <- (Just <$> readFile' stamp) `catchIOError` \_ -> pure Nothing
   when (current /= Just content) $ writeFile stamp content
 
@@ -502,7 +387,7 @@ writeBuildVersionHs (autogenDir, _) = do
 -- Nothing where there is no git or no checkout (an exported archive).
 gitHead :: IO (Maybe (FilePath, String))
 gitHead = do
-  root <- findRepoRoot
+  root <- packageRoot
   probe <-
     readProcessWithExitCode "git" ["-C", root, "rev-parse", "--absolute-git-dir", "HEAD"] ""
       `catchIOError` \_ -> pure (ExitFailure 1, "", "")
@@ -641,7 +526,7 @@ tclSetupHooks = noSetupHooks {configureHooks}
 
     preConfComponentHook :: Maybe PreConfComponentHook
     preConfComponentHook = Just $ \inputs -> do
-      root <- findRepoRoot
+      root <- packageRoot
       let platform arg = readProcess "sh" [root </> "platform.sh", arg] ""
       let trim = f . f where f = reverse . dropWhile isSpace
       let getArgs flag = fmap (drop (length flag)) . filter (flag `isPrefixOf`)

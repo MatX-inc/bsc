@@ -16,8 +16,12 @@ maintainer: bsc-dev@groups.io
 copyright: Bluespec, Inc.
 build-type: Hooks
 -- HEAD, written by `make install-src` so that a commit alone is a changed
--- source and BuildVersion follows it (doc/cabal.md section 2).
-extra-source-files: build/cabal-head
+-- source and BuildVersion follows it (doc/cabal.md section 2). The glob
+-- matches cabal.project even before the cabal-head.project stamp exists.
+extra-source-files:
+  *.project
+  platform.sh
+  src/comp/update-build-version.sh
 -- The GHCs CI builds with (.github/workflows/ci.yml).
 tested-with:
   GHC == 9.4.7,
@@ -37,6 +41,7 @@ custom-setup
     process,
 
 library
+  autogen-modules: Warmup, BuildSystem, BuildVersion
   hs-source-dirs:
     src/comp
     src/comp/Libs
@@ -74,6 +79,8 @@ library
     build-depends: ghc-internal
   default-language: GHC2021
   ghc-options: -Wall -Wno-orphans -Wno-name-shadowing -Wno-unused-matches
+  -- An imported module omitted here would be missing from the library archive.
+  ghc-options: -Werror=missing-home-modules
   -- Deterministic object code wherever the compiler has the flag (GHC 9.12.1
   -- introduced it); cabal.project compiles in parallel under the same condition.
   if impl(ghc >= 9.12)
@@ -92,9 +99,7 @@ library
     ld-options: -Wl,-rpath,$ORIGIN/../lib/SAT
   c-sources:
     src/vendor/htcl/haskell.c,
-  -- Every module of the library, the generated three included (the hooks
-  -- declare those autogen). The hooks refuse to configure when a module
-  -- under src/comp is missing here (SetupHooks.hs, moduleListSetupHooks).
+  -- Every module of the library, the generated three included.
   exposed-modules:
     AAddSchedAssumps
     AAddScheduleDefs
@@ -338,11 +343,14 @@ library
     YicesFFI
 
 common common_exes
+  autogen-modules: Warmup
   build-depends:
     base >=4.17.2.0,
     bsc,
   default-language: GHC2021
   ghc-options: -rtsopts "-with-rtsopts=-H256m -K10m -i1"
+  -- GHC link-stub temporary filenames otherwise enter local FILE symbols.
+  ld-options: -Wl,-x
   -- Deterministic object code wherever the compiler has the flag (GHC 9.12.1
   -- introduced it); cabal.project compiles in parallel under the same condition.
   if impl(ghc >= 9.12)

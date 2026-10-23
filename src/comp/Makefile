@@ -40,6 +40,8 @@ HTCL_HS = ../vendor/htcl
 # GHC
 
 GHC ?= ghc
+# A versioned GHC uses the corresponding ghc-pkg; wrappers may override it.
+GHCPKG ?= $(if $(findstring /,$(GHC)),$(dir $(GHC)))ghc-pkg$(patsubst ghc%,%,$(notdir $(GHC)))
 # The compile parallelism, passed as cabal's -j: from GHC 9.12, with
 # cabal.project's semaphore, the number of GHC slots in all; below it the
 # number of packages building at once (doc/cabal.md section 2). Default it
@@ -51,7 +53,7 @@ GHC ?= ghc
 # margin.
 GHCJOBS ?= $(shell n=`nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1`; if [ "$$n" -gt 16 ]; then echo 16; else echo "$$n"; fi)
 
-GHCVERSION=$(shell $(GHC) --version | head -1 | grep -Eo "[0-9]+\.[0-9]+\.[0-9]" )
+GHCVERSION=$(shell $(GHC) --numeric-version)
 $(info Building with GHC $(GHCVERSION))
 
 # GHC's RTS options for the build, as CI sets them to cap the heap on its
@@ -60,7 +62,8 @@ $(info Building with GHC $(GHCVERSION))
 # well so that both see one configuration. Unset, GHC's defaults; the full
 # build's high-water mark on four cores was under 6 GB.
 GHCRTSFLAGS ?=
-CABAL_GHC_OPTIONS = $(if $(strip $(GHCRTSFLAGS)),--ghc-options='$(GHCRTSFLAGS)')
+CABAL_COMPILER_OPTIONS = --with-compiler="$(GHC)" --with-hc-pkg="$(GHCPKG)"
+CABAL_GHC_OPTIONS = $(CABAL_COMPILER_OPTIONS) $(if $(strip $(GHCRTSFLAGS)),--ghc-options='$(GHCRTSFLAGS)')
 
 # -----
 # GHC package info
@@ -76,13 +79,13 @@ PKGINFO=$(LICDIR)/LICENSE.ghc_pkgs
 # The packages the installed programs were linked against: the in-place
 # library, the dependencies cabal-install built into its store, and GHC's
 # own (the trailing colon), walked from the library.
-CABAL_STORE = $(shell cd $(TOP) && $(CABAL) path --store-dir)
+CABAL_STORE = $(shell cd $(TOP) && $(CABAL) path $(CABAL_COMPILER_OPTIONS) --store-dir)
 CABAL_PKG_PATH = $(TOP)/dist-newstyle/packagedb/ghc-$(GHCVERSION):$(firstword $(wildcard $(CABAL_STORE)/ghc-$(GHCVERSION)*/package.db)):
 
 .PHONY: $(PKGINFO)
 $(PKGINFO):
 	mkdir -p -m 755 $(LICDIR)
-	GHC_PACKAGE_PATH="$(CABAL_PKG_PATH)" ./make-ghc-pkg-info.sh bsc > $(PKGINFO)
+	GHCPKG="$(GHCPKG)" GHC_PACKAGE_PATH="$(CABAL_PKG_PATH)" ./make-ghc-pkg-info.sh bsc > $(PKGINFO)
 endif
 
 # -----
@@ -102,8 +105,9 @@ CABAL_EXES = $(shell sed -n 's/^executable[[:space:]]*\([^[:space:]]*\).*/\1/p' 
 # touches no source of the package (a testsuite or workflow change) would
 # leave the previous commit's version in the programs, so `install` writes
 # HEAD into a file bsc.cabal declares as a source: a new commit is then a
-# changed source, and the version follows (doc/cabal.md section 2).
-CABAL_HEAD = $(TOP)/build/cabal-head
+# changed source, and the version follows (doc/cabal.md section 2). This is
+# a rebuild input, not a Cabal configuration file.
+CABAL_HEAD = $(TOP)/cabal-head.project
 
 # The cabal build links the solvers by name and is told no directory
 # (SetupHooks.hs, solverSetupHooks): src/Makefile installed them under
@@ -112,7 +116,7 @@ CABAL_HEAD = $(TOP)/build/cabal-head
 
 .PHONY: install
 install:
-	mkdir -p -m 755 $(TOP)/build $(BINDIR)
+	mkdir -p -m 755 $(BINDIR)
 	(git -C $(TOP) rev-parse HEAD 2>/dev/null || echo no-repository) > $(CABAL_HEAD).tmp && \
 	  { cmp -s $(CABAL_HEAD).tmp $(CABAL_HEAD) || mv $(CABAL_HEAD).tmp $(CABAL_HEAD); } && \
 	  $(RM) -f $(CABAL_HEAD).tmp

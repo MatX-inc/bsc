@@ -13,17 +13,11 @@ the three compiler roots (`src/comp`, `src/comp/Libs`, `src/comp/GHC/posix`),
 `src/Parsec`, `src/vendor/htcl` and the solver bindings under
 `src/vendor/stp/HaskellIfc` and `src/vendor/yices/v2.6/HaskellIfc`. Its
 `exposed-modules` lists every module, the generated `Warmup`, `BuildSystem`
-and `BuildVersion` included (the hooks declare those autogen). The hooks
-hold the list to the tree when the package configures: under each source
-directory of the library below `src/comp`, walked recursively, a `.hs` or
-`.lhs` file is a module when its first `module X` header (plain or
-bird-track `> module X`) names the module its path relative to that root
-spells, and every module so found must be listed, or configuring fails
-naming the missing ones. A file whose header disagrees is not a module of
-the library: a program main (`src/comp/app/bsc.hs` is `Main_bsc`), or
-`src/comp/Libs/IOUtil.hs` seen from `src/comp` (it is `IOUtil`, a module of
-the `Libs` root). The generated three are exempt (a copy of one under
-`src/comp` is refused, section 3).
+and `BuildVersion` included (declared in `autogen-modules`).
+`-Werror=missing-home-modules` rejects an imported module missing from the
+list: otherwise GHC can compile it while Cabal leaves it out of the library
+archive and source distribution. Unused files are not checked. A copy of a
+generated module under `src/comp` is refused (section 3).
 
 Each program is one entry module under `src/comp/app` over the library
 (`bluetcl`'s entry module `bluetcl_Main.hs` hands control to Tcl through the
@@ -94,7 +88,7 @@ library's `ld-options` to the programs' links but not to the library's own
 (section 3). Machine settings go in `cabal.project.local`, which git ignores.
 The build writes nothing outside `dist-newstyle`, the autogen directories, the
 `.ghc.environment.*` file at the root that `write-ghc-environment-files` asks
-for, and the install stamp `build/cabal-head` (section 3); nothing under
+for, and the install stamp `cabal-head.project` (section 3); nothing under
 `src/comp` or `src/vendor` is written.
 
 ### Installing
@@ -112,20 +106,28 @@ slots in all, and below it the number of packages building at once.
 `GHCRTSFLAGS`, GHC's RTS options as CI sets them to cap the heap on its
 runners, is passed to cabal as GHC options, which reach every GHC of the
 build; unset, the heap is not capped, and the full build's high-water mark on
-four cores was under 6 GB.
+four cores was under 6 GB. `GHC` is passed to both `cabal build` and
+`cabal list-bin` as `--with-compiler`; `GHCPKG` defaults to the corresponding
+`ghc-pkg` name and can be overridden when using a compiler wrapper.
 
 `BuildVersion` names the commit, and its rule runs when cabal-install builds
 the package, which it does when a declared source changed. A commit that
 touches no source of the package, such as a testsuite or workflow change,
 would leave the previous commit's version in the programs, so `install`
-writes HEAD into `build/cabal-head`, which `bsc.cabal` declares in
-`extra-source-files`: a new commit is a changed source, and the version
-follows. The hooks' version rule writes the same stamp, so it exists from
+writes HEAD into `cabal-head.project`, which `bsc.cabal` includes through
+`extra-source-files: *.project`: a new commit is a changed source, and the
+version follows. The hooks' version rule writes the same stamp, so it exists from
 the first build: cabal-install watches the declared sources it finds when it
 records a build, and a stamp first written by an install after a build
 would go unwatched. A plain `cabal build` after such a commit keeps the
 previous version until a source changes, as section 3 describes;
 `make install-src` does not.
+
+The stamp is a rebuild input, not a Cabal configuration file. The glob also
+matches the checked-in `cabal.project`, so `cabal sdist` works before the
+first build has generated a stamp. The source archive includes the platform
+and version scripts; building it outside Git requires `NOGIT=1` and the
+same preinstalled native dependencies as a direct Cabal build.
 
 With `BSC_BUILD_PKGINFO` set, as the release workflows set it, the install
 also writes `LICENSES/LICENSE.ghc_pkgs` from the packages the programs were
@@ -163,7 +165,7 @@ walked from the library by `src/comp/make-ghc-pkg-info.sh`.
   the package, which cabal-install decides from the declared sources, not
   the repository: an incremental build after a commit that touched none of
   them keeps the previous version string until one does. `make install-src`
-  closes that gap by writing HEAD into `build/cabal-head`, a declared source
+  closes that gap by writing HEAD into `cabal-head.project`, a declared source
   (section 2); a plain `cabal build` does not. A clean build is always
   right. The rule also monitors `HEAD` and the reflog, for a build system
   that runs the rules itself (cabal-install with a Cabal 3.18 setup).
@@ -197,16 +199,15 @@ package's own inputs change, so touch `bsc.cabal` or build clean.
 ## 4. Adding a module, adding a program
 
 A module is its file under `src/comp`, `src/comp/Libs` or
-`src/comp/GHC/posix` and its name in `exposed-modules`; the check of section
-1 names a forgotten one at the next configure, and the edit to `bsc.cabal` is
-what makes cabal-install reconfigure. A module importing nothing else from
+`src/comp/GHC/posix` and its name in `exposed-modules`; GHC rejects an
+imported module missing from the list (section 1). Editing `bsc.cabal`
+makes cabal-install reconfigure. A module importing nothing else from
 the library is a root and carries `import Warmup ()` (section 3).
 
 A program is one `executable` stanza: `import: common_exes`, `hs-source-dirs:
 src/comp/app`, `main-is: <name>.hs`, `ghc-options: -main-is Main_<name>`,
 `other-modules: Warmup`, and its direct dependencies beyond `bsc` and `base`.
-The `Main_<name>` header keeps the file out of the library under the rule of
-section 1, and the entry module carries `import Warmup ()`.
+The entry module uses a `Main_<name>` header and carries `import Warmup ()`.
 
 ## 5. The determinism claim
 

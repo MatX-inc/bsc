@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PACKAGES=$@
+GHCPKG=${GHCPKG:-ghc-pkg}
 
 # ===========================================================================
 
@@ -79,15 +80,15 @@ add_pkg() {
 
     #echo "Looking up $1"
 
-    PKG_NAME=`ghc-pkg field --ipid ${PKG_ID} name --simple-output`
+    PKG_NAME=`"${GHCPKG}" field --ipid ${PKG_ID} name --simple-output`
     PKG_KEY=`echo "${PKG_NAME}" | tr .- _`
 
     aget arr_id "${PKG_KEY}" i_id
     if [ -z ${i_id+x} ] ; then
-	PKG_VER=`ghc-pkg field --ipid ${PKG_ID} version --simple-output`
-	PKG_LIC=`ghc-pkg field --ipid ${PKG_ID} license --simple-output`
-	PKG_COPYR=`ghc-pkg field --ipid ${PKG_ID} copyright --simple-output`
-	PKG_DEPS=`ghc-pkg field --ipid ${PKG_ID} depends --simple-output`
+	PKG_VER=`"${GHCPKG}" field --ipid ${PKG_ID} version --simple-output`
+	PKG_LIC=`"${GHCPKG}" field --ipid ${PKG_ID} license --simple-output`
+	PKG_COPYR=`"${GHCPKG}" field --ipid ${PKG_ID} copyright --simple-output`
+	PKG_DEPS=`"${GHCPKG}" field --ipid ${PKG_ID} depends --simple-output`
 
 	if [ "${PKG_LIC}" != "BSD-3-Clause" ] ; then
 	    if [ "${PKG_LIC}" != "BSD-2-Clause" ] ; then
@@ -115,7 +116,7 @@ add_pkg() {
 # These are package names, so resolve each to its id first.
 for i in ${PACKAGES}
 do
-    for id in `ghc-pkg field $i id --simple-output`
+    for id in `"${GHCPKG}" field $i id --simple-output`
     do
 	add_pkg "$id"
     done
