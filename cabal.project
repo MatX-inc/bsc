@@ -1,0 +1,55 @@
+packages: .
+
+-- The Hackage index the dependencies resolve against: the commit, not the
+-- build date, fixes their versions. Moving it is a change of its own
+-- (doc/cabal.md).
+index-state: 2026-10-15T20:00:00Z
+
+-- -O2, as the compiler has always been built.
+optimization: 2
+
+-- Packages build side by side; GHC itself compiles in parallel only where
+-- its object code is deterministic (below), and then under one job server
+-- shared by cabal-install and every GHC of the build, bounded by this
+-- number. cabal-install and GHC must speak the same semaphore protocol:
+-- cabal-install 3.16 speaks v1, which GHC 9.8 through 9.14.1 implement; 3.18
+-- speaks only v2, which GHC reports from 9.14.2 and 10.2, and with a GHC
+-- through 9.14.1 it warns and falls back to plain -j per package. Build with
+-- cabal-install 3.16.1.0 until GHC moves (doc/cabal.md).
+jobs: $ncpus
+
+-- Lets bare ghci/runghc/ghc resolve the build's packages and the compiled
+-- library from any cwd inside the repo (GHC searches upward for
+-- .ghc.environment.*); src/comp/.ghci relies on it.
+write-ghc-environment-files: always
+
+-- Parallel GHC only where its object code is deterministic in parallel:
+-- -fobject-determinism, which GHC 9.12.1 introduced, with the Warmup imports
+-- holding the interface order; the claim of doc/cabal.md section 5 is
+-- measured on 9.12.2, 9.12.4 and 9.14.1. Below 9.12 every GHC compiles
+-- serially, and the job server has nothing to share. The semaphore puts
+-- every GHC of the build, the package's own included, on the job server
+-- (Setup passes -jsem to GHC; a -j given later overrides it, which is how
+-- the ladder's cabal.project.local sets a leg's parallelism). The flag
+-- reaches the Hackage dependencies through `package *`, the one stanza that
+-- applies to non-local packages, since program-options reaches local
+-- packages only; bsc.cabal carries it for the package itself.
+if impl(ghc >= 9.12)
+  semaphore: True
+  package *
+    ghc-options: -fobject-determinism
+
+-- The library's shared object records the solvers as dependencies and
+-- resolves them beside itself, lib/SAT, through the rpath the programs get
+-- from bsc.cabal's ld-options. Cabal 3.16 passes a library's ld-options to
+-- the programs' links but not to the library's own, so the shared object
+-- takes the rpath from here, where ghc-options reach every invocation (an
+-- -optl flag does nothing at a compile). ghci and runghc need it: the build
+-- tree's lib/SAT points where the solvers were linked from (SetupHooks.hs),
+-- and an installed tree has lib/SAT itself.
+if os(osx)
+  program-options
+    ghc-options: -optl-Wl,-rpath,@loader_path/../lib/SAT
+else
+  program-options
+    ghc-options: -optl-Wl,-rpath,$ORIGIN/../lib/SAT

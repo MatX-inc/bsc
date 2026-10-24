@@ -4,10 +4,17 @@ TOP := $(PWD)/..
 include $(TOP)/platform.mk
 
 PREFIX?=$(TOP)/inst
+override PREFIX := $(abspath $(PREFIX))
+
+GHC ?= ghc
+CABAL ?= cabal
 
 ifndef NO_DEPS_CHECKS
 CC_TOOLS=$(CC) $(CXX) $(LD)
-BSC_TOOLS=ghc ghc-pkg
+# The Haskell libraries beyond GHC's own are cabal-install's to fetch
+# (bsc.cabal names them); ghc-pkg walks them for the package information
+# (comp/make-ghc-pkg-info.sh).
+BSC_TOOLS=$(GHC) $(CABAL)
 YICES_TOOLS=gperf autoconf
 STP_TOOLS=flex bison
 
@@ -16,18 +23,12 @@ TOOLS=$(CC_TOOLS) \
       $(YICES_TOOLS) \
       $(STP_TOOLS) \
 
-GHC_PKGS=regex-compat syb old-time split strict-concurrency
-
 SUBMODS=vendor/yices/v2.6/yices2
 
 # Check all the necessary build tools are present
-pathsearch=$(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,$(PATH)))))
+pathsearch=$(if $(findstring /,$(1)),$(wildcard $(1)),$(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,$(PATH))))))
 checktool=$(if $(call pathsearch,$(1)),,$(error Tool $(1) could not be found))
 $(foreach tool,$(TOOLS),$(call checktool,$(tool)))
-
-# Check Haskell package dependencies
-checkghcpkg=$(if $(shell ghc-pkg list --simple-output $(1)),,$(error GHC package $(1) not installed))
-$(foreach pkg,$(GHC_PKGS),$(call checkghcpkg,$(pkg)))
 
 # Check all submodules are initialized
 submodexists=$(shell git submodule status $(1) 2> /dev/null )
@@ -53,12 +54,20 @@ endif # NO_DEPS_CHECKS
 .PHONY: all
 all: install
 
+# The solvers alone, for a cabal build run by hand (doc/cabal.md section
+# 2); install runs the same two first.
+.PHONY: install-solvers
+install-solvers:
+	$(MAKE)  -C vendor/stp   PREFIX=$(PREFIX)  install
+	$(MAKE)  -C vendor/yices PREFIX=$(PREFIX)  install
+
 .PHONY: install clean full_clean
 install clean full_clean:
 	$(MAKE)  -C vendor/stp   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C vendor/yices PREFIX=$(PREFIX)  $@
-	$(MAKE)  -C vendor/htcl  PREFIX=$(PREFIX)  $@
-	# we need to build targets from here sequentially, as they operate in the same workspace
+	# Cabal compiles the Tcl binding; only clean its old Make outputs.
+	$(if $(filter install,$@),:,$(MAKE) -C vendor/htcl PREFIX=$(PREFIX) $@)
+	# comp is one cabal build, which parallelizes itself (GHCJOBS)
 	$(MAKE)  -C comp -j1   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C Libraries  PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C exec       PREFIX=$(PREFIX)  $@
