@@ -46,8 +46,7 @@ import Distribution.System (OS (..))
 import qualified Distribution.Types.LocalBuildConfig as LBC
 import Distribution.Verbosity (normal)
 import Distribution.Utils.Path
-  ( getSymbolicPath,
-    makeSymbolicPath,
+  ( makeSymbolicPath,
     moduleNameSymbolicPath,
     (<.>),
   )

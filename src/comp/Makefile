@@ -79,8 +79,8 @@ PKGINFO=$(LICDIR)/LICENSE.ghc_pkgs
 # The packages the installed programs were linked against: the in-place
 # library, the dependencies cabal-install built into its store, and GHC's
 # own (the trailing colon), walked from the library.
-CABAL_STORE = $(shell cd $(TOP) && $(CABAL) path $(CABAL_COMPILER_OPTIONS) --store-dir)
-CABAL_PKG_PATH = $(TOP)/dist-newstyle/packagedb/ghc-$(GHCVERSION):$(firstword $(wildcard $(CABAL_STORE)/ghc-$(GHCVERSION)*/package.db)):
+CABAL_COMPILER_STORE = $(shell cd $(TOP) && $(CABAL) path $(CABAL_COMPILER_OPTIONS) --compiler-info | sed -n 's/^compiler-store-path: //p')
+CABAL_PKG_PATH = $(TOP)/dist-newstyle/packagedb/ghc-$(GHCVERSION):$(CABAL_COMPILER_STORE)/package.db:
 
 .PHONY: $(PKGINFO)
 $(PKGINFO):
