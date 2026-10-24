@@ -117,7 +117,7 @@ CABAL_HEAD = $(TOP)/cabal-head.project
 .PHONY: install
 install:
 	mkdir -p -m 755 $(BINDIR)
-	(git -C $(TOP) rev-parse HEAD 2>/dev/null || echo no-repository) > $(CABAL_HEAD).tmp && \
+	(./update-build-version.sh --head 2>/dev/null || echo no-repository) > $(CABAL_HEAD).tmp && \
 	  { cmp -s $(CABAL_HEAD).tmp $(CABAL_HEAD) || mv $(CABAL_HEAD).tmp $(CABAL_HEAD); } && \
 	  $(RM) -f $(CABAL_HEAD).tmp
 	cd $(TOP) && LIBRARY_PATH="$(abspath $(PREFIX))/lib/SAT$${LIBRARY_PATH:+:$$LIBRARY_PATH}" \

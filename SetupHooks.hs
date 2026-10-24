@@ -268,25 +268,16 @@ writeBuildSystemHs (path, Platform _ os) = do
 -- leaves an up-to-date file untouched. NOGIT passes through from the
 -- environment, defaulted off as the script defaults it.
 --
--- The script's git commands find the repository by searching upward from
--- the working directory, which fails when the build directory lies outside
--- the checkout (--builddir elsewhere, or a dist-newstyle symlink), so the
--- repository is named explicitly through GIT_DIR (worktree-safe, from
--- rev-parse) and GIT_WORK_TREE. Where that probe fails (an exported archive,
--- or no git) neither is set and the script behaves as before.
+-- The script locates the repository from its own source path and clears
+-- inherited Git context, so an external build directory or another
+-- repository in the caller's environment cannot change the version.
 -- The second argument, the commit the rule was computed for, only makes
 -- the rule's identity follow HEAD; the script reads the repository itself.
 writeBuildVersionHs :: (FilePath, String) -> IO ()
 writeBuildVersionHs (autogenDir, _) = do
-  noGit <- fromMaybe "0" <$> lookupEnv "NOGIT"
   root <- packageRoot
   commit <- gitHead
-  let repoHead = if noGit == "1" then Nothing else commit
-  let gitVars = case repoHead of
-        Just (gitDir, _) -> [("GIT_DIR", gitDir), ("GIT_WORK_TREE", root)]
-        Nothing -> []
-  let newVars = ("NOGIT", noGit) : gitVars
-  env <- (newVars <>) <$> getEnvironment
+  env <- getEnvironment
   createDirectoryIfMissing True autogenDir
   dir <- makeAbsolute autogenDir
   -- The script is named by its absolute path: a relative one would be
@@ -311,7 +302,8 @@ gitHead :: IO (Maybe (FilePath, String))
 gitHead = do
   root <- packageRoot
   probe <-
-    readProcessWithExitCode "git" ["-C", root, "rev-parse", "--absolute-git-dir", "HEAD"] ""
+    readProcessWithExitCode
+      (root </> "src" </> "comp" </> "update-build-version.sh") ["--git-info"] ""
       `catchIOError` \_ -> pure (ExitFailure 1, "", "")
   pure $ case probe of
     (ExitSuccess, out, _) | [gitDir, commit] <- lines out -> Just (gitDir, commit)

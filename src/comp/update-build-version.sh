@@ -10,6 +10,14 @@ NOGIT=${NOGIT:-0}
 # -------------------------
 # GIT
 
+# Always inspect this source tree, even from an external build directory or
+# a caller (such as a Git hook) with another repository in its environment.
+repoGit () (
+    unset $(git rev-parse --local-env-vars)
+    root=$(cd "$(dirname "$0")/../.." && pwd)
+    git --git-dir="$root/.git" --work-tree="$root" "$@"
+)
+
 # Arguments: 1=commit hash, 2=describe string
 genGITBuildVersion () {
     echo "module BuildVersion(buildVersion, buildVersionNum, buildVersionName) where" > BuildVersion.hs.new;
@@ -58,8 +66,8 @@ getGITVersion () {
 	else
 
 	    # Get the current commit hash
-	    GITCOMMIT=`git show -s --format=%h HEAD`
-	    if ! GITDESCR=`git describe --tags`; then
+	    GITCOMMIT=`repoGit show -s --format=%h HEAD`
+	    if ! GITDESCR=`repoGit describe --tags`; then
 		GITDESCR="untagged-g${GITCOMMIT}"
 	    fi
 
@@ -69,13 +77,13 @@ getGITVersion () {
 
 # -------------------------
 
-# --name prints the version name alone and writes nothing: what the Bluesim
-# kernel's version header carries (src/bluesim/Makefile).
-if [ "${1:-}" = "--name" ] ; then
-    getGITVersion
-    echo "$GITDESCR"
-    exit 0
-fi
+# The stamp and hook queries follow HEAD even with NOGIT=1. --name prints
+# the Bluesim kernel's version name. None of these modes writes a file.
+case "${1:-}" in
+    --head) repoGit rev-parse HEAD; exit ;;
+    --git-info) repoGit rev-parse --absolute-git-dir HEAD; exit ;;
+    --name) getGITVersion; echo "$GITDESCR"; exit ;;
+esac
 
 getGITVersion
 genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
