@@ -40,15 +40,6 @@ aset () {
         esac"
 }
 
-## aunset STEM KEY
-## Remove KEY from the associative array named STEM.
-aunset () {
-  eval "unset __aa__${1}__${2}
-        case \$__aa__${1} in
-          *\" $2 \"*) __aa__${1}=\"\${__aa__${1}%% $2 *} \${__aa__${1}#* $2 }\";;
-        esac"
-}
-
 # ===========================================================================
 
 ainit arr_id
@@ -56,7 +47,6 @@ ainit arr_name
 ainit arr_ver
 ainit arr_lic
 ainit arr_copyr
-ainit arr_deps
 
 # Horizontal delimiter between packages in the output
 #
@@ -102,7 +92,6 @@ add_pkg() {
 	aset arr_ver ${PKG_KEY} "${PKG_VER}"
 	aset arr_lic ${PKG_KEY} "${PKG_LIC}"
 	aset arr_copyr ${PKG_KEY} "${PKG_COPYR}"
-	aset arr_deps ${PKG_KEY} "${PKG_DEPS}"
 
 	for dep in ${PKG_DEPS}
 	do

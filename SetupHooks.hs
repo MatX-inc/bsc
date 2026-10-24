@@ -32,7 +32,7 @@ import Distribution.InstalledPackageInfo (ExposedModule (..))
 import qualified Distribution.InstalledPackageInfo as IPI
 import Distribution.ModuleName (ModuleName)
 import Distribution.Pretty (prettyShow)
-import Distribution.Simple.Configure (getInstalledPackagesById)
+import Distribution.Simple.Configure (ccLdOptionsBuildInfo, getInstalledPackagesById)
 import Distribution.Simple.Errors (CabalException (MissingCoveredInstalledLibrary))
 import Distribution.Simple.LocalBuildInfo
   ( hostPlatform,
@@ -452,7 +452,6 @@ tclSetupHooks = noSetupHooks {configureHooks}
       root <- packageRoot
       let platform arg = readProcess "sh" [root </> "platform.sh", arg] ""
       let trim = f . f where f = reverse . dropWhile isSpace
-      let getArgs flag = fmap (drop (length flag)) . filter (flag `isPrefixOf`)
       if isMainLib inputs.component
         then do
           tclInc <- words <$> platform "tclinc"
@@ -464,22 +463,11 @@ tclSetupHooks = noSetupHooks {configureHooks}
             "8.6" -> pure []
             "9.0" -> pure ["-DTCL9"]
             _ -> ioError (userError ("unsupported Tcl version: " <> tclVersion))
-          let includeDirs = makeSymbolicPath <$> getArgs "-I" tclInc
-              extraLibDirs = makeSymbolicPath <$> getArgs "-L" tclLibs
-              extraLibs = getArgs "-l" tclLibs
-
           pure $
             PreConfComponentOutputs
               { componentDiff =
                   buildInfoComponentDiff
                     (componentName inputs.component)
-                    ( emptyBuildInfo
-                        { includeDirs,
-                          extraLibDirs,
-                          extraLibs,
-                          ccOptions = cflags,
-                          cppOptions = cflags
-                        }
-                    )
+                    ((ccLdOptionsBuildInfo (tclInc <> cflags) tclLibs []) {cppOptions = cflags})
               }
         else pure $ noPreConfComponentOutputs inputs
