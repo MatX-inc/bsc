@@ -690,7 +690,7 @@ compilePackage
             -- references
             -- XXX Note that alldefs is not updated here.  This works
             -- XXX because the defs we use from it will not have changed.
-            let im' = updDef dictRedirects idef im binmods
+            let im' = updDef dictRedirects idef im_lifted binmods
             t <- dump errh flags t DFwrapper_fixup dumpnames' im'
 
             t <- dump errh flags tStartWrapper DFwrappercomp dumpnames' idef
