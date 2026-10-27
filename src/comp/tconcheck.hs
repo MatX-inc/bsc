@@ -27,6 +27,7 @@ module Main_tconcheck(main) where
 --
 -- Exit status 0 iff every entry is OK (or explicitly exempted/waived below).
 
+import Warmup ()
 import Control.Monad(forM)
 import Data.List(isPrefixOf)
 import qualified Data.Map as M
