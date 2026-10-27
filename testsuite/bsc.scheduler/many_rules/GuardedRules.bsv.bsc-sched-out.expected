@@ -598,4 +598,5 @@ Logical execution order: incr,
 
 ==============================================
 Verilog file created: mkGuardedRules.v
+Elaborated module file created: mkGuardedRules.ba
 All packages are up to date.
