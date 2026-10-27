@@ -9,6 +9,7 @@ if [ "${1:-}" = "--deps-of" ] ; then
     shift
 fi
 PACKAGES=$@
+GHCPKG=${GHCPKG:-ghc-pkg}
 
 # ===========================================================================
 
@@ -46,23 +47,12 @@ aset () {
         esac"
 }
 
-## aunset STEM KEY
-## Remove KEY from the associative array named STEM.
-aunset () {
-  eval "unset __aa__${1}__${2}
-        case \$__aa__${1} in
-          *\" $2 \"*) __aa__${1}=\"\${__aa__${1}%% $2 *} \${__aa__${1}#* $2 }\";;
-        esac"
-}
-
 # ===========================================================================
 
-ainit arr_id
 ainit arr_name
 ainit arr_ver
 ainit arr_lic
 ainit arr_copyr
-ainit arr_deps
 
 # Horizontal delimiter between packages in the output
 #
@@ -86,15 +76,15 @@ add_pkg() {
 
     #echo "Looking up $1"
 
-    PKG_NAME=`ghc-pkg field --ipid ${PKG_ID} name --simple-output`
+    PKG_NAME=`"${GHCPKG}" field --ipid ${PKG_ID} name --simple-output`
     PKG_KEY=`echo "${PKG_NAME}" | tr .- _`
 
-    aget arr_id "${PKG_KEY}" i_id
-    if [ -z ${i_id+x} ] ; then
-	PKG_VER=`ghc-pkg field --ipid ${PKG_ID} version --simple-output`
-	PKG_LIC=`ghc-pkg field --ipid ${PKG_ID} license --simple-output`
-	PKG_COPYR=`ghc-pkg field --ipid ${PKG_ID} copyright --simple-output`
-	PKG_DEPS=`ghc-pkg field --ipid ${PKG_ID} depends --simple-output`
+    aget arr_name "${PKG_KEY}" i_name
+    if [ -z ${i_name+x} ] ; then
+	PKG_VER=`"${GHCPKG}" field --ipid ${PKG_ID} version --simple-output`
+	PKG_LIC=`"${GHCPKG}" field --ipid ${PKG_ID} license --simple-output`
+	PKG_COPYR=`"${GHCPKG}" field --ipid ${PKG_ID} copyright --simple-output`
+	PKG_DEPS=`"${GHCPKG}" field --ipid ${PKG_ID} depends --simple-output`
 
 	if [ "${PKG_LIC}" != "BSD-3-Clause" ] ; then
 	    if [ "${PKG_LIC}" != "BSD-2-Clause" ] ; then
@@ -103,12 +93,10 @@ add_pkg() {
 	    fi
 	fi
 
-	aset arr_id ${PKG_KEY} "${PKG_ID}"
 	aset arr_name ${PKG_KEY} "${PKG_NAME}"
 	aset arr_ver ${PKG_KEY} "${PKG_VER}"
 	aset arr_lic ${PKG_KEY} "${PKG_LIC}"
 	aset arr_copyr ${PKG_KEY} "${PKG_COPYR}"
-	aset arr_deps ${PKG_KEY} "${PKG_DEPS}"
 
 	for dep in ${PKG_DEPS}
 	do
@@ -124,11 +112,11 @@ add_pkg() {
 # list.
 for i in ${PACKAGES}
 do
-    ids=`ghc-pkg field $i id --simple-output` || { echo "Package ${i} not found by ghc-pkg" >&2; exit 1; }
+    ids=`"${GHCPKG}" field $i id --simple-output` || { echo "Package ${i} not found by ${GHCPKG}" >&2; exit 1; }
     for id in ${ids}
     do
 	if [ "${DEPS_OF}" = 1 ] ; then
-	    deps=`ghc-pkg field --ipid ${id} depends --simple-output`
+	    deps=`"${GHCPKG}" field --ipid ${id} depends --simple-output`
 	    for dep in ${deps}
 	    do
 		add_pkg "${dep}"
@@ -143,7 +131,7 @@ done
 echo $DELIM
 
 # For each package in the database
-keys=$(akeys arr_id)
+keys=$(akeys arr_name)
 sorted_keys=`echo ${keys} | tr ' ' '\012' | sort | tr '\012' ' '`
 for i in ${sorted_keys}
 do
@@ -154,7 +142,6 @@ do
 
     echo
     echo "package: $pkg"
-    #echo "id: ${i_id}"
     echo "version: ${i_ver}"
     echo "license: ${i_lic}"
     if [[ -n "${i_copyr}" ]]; then

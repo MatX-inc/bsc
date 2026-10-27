@@ -19,8 +19,6 @@
 :set -i../vendor/htcl
 
 :set -I/usr/include/tcl
-:set -L../vendor/htcl
-:set -lhtcl
 
 :set -L../vendor/stp/lib
 :set -lstp

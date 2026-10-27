@@ -40,6 +40,9 @@ HTCL_HS = ../vendor/htcl
 # GHC
 
 GHC ?= ghc
+# The ghc-pkg of the selected GHC, for make-ghc-pkg-info.sh (cabal finds
+# its own): ghc-9.4.7 has ghc-pkg-9.4.7 beside it; a wrapper may set GHCPKG.
+GHCPKG ?= $(if $(findstring /,$(GHC)),$(dir $(GHC)))ghc-pkg$(patsubst ghc%,%,$(notdir $(GHC)))
 # GHCJOBS is the parallelism of the cabal build, passed as `cabal build -jN`.
 # What N bounds depends on the GHC (doc/cabal.md section 2): from 9.12,
 # cabal.project puts cabal-install and every GHC it runs under one job
@@ -51,7 +54,7 @@ GHC ?= ghc
 # -j12, since only 5 or 6 modules are ready to compile at any moment.
 GHCJOBS ?= $(shell n=`nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1`; if [ "$$n" -gt 16 ]; then echo 16; else echo "$$n"; fi)
 
-GHCVERSION=$(shell $(GHC) --version | head -1 | grep -Eo "[0-9]+\.[0-9]+\.[0-9]+" )
+GHCVERSION=$(shell $(GHC) --numeric-version 2>/dev/null)
 # A GHC that prints no version (one named by GHC= and not on PATH, or none
 # at all) stops here, named, as the make build's check stopped.
 ifeq ($(GHCVERSION),)
@@ -110,7 +113,8 @@ endif
 # What the cabal commands here take beyond the project's settings: the GHC
 # make is given, as the make build took it, the variant and the RTS options;
 # list-bin takes the same, since the build directory follows them.
-CABAL_FLAGS = --with-compiler=$(GHC) $(BSC_BUILD_FLAGS) $(if $(strip $(GHCRTSFLAGS)),--ghc-options='$(GHCRTSFLAGS)')
+CABAL_COMPILER_OPTIONS = --with-compiler=$(GHC)
+CABAL_FLAGS = $(CABAL_COMPILER_OPTIONS) $(BSC_BUILD_FLAGS) $(if $(strip $(GHCRTSFLAGS)),--ghc-options='$(GHCRTSFLAGS)')
 
 # -----
 # GHC package info
@@ -126,13 +130,16 @@ PKGINFO=$(LICDIR)/LICENSE.ghc_pkgs
 # The packages the installed programs were linked against: the dependencies
 # cabal-install built into its store and GHC's own (the trailing colon),
 # walked from the in-place library's dependencies.
-CABAL_STORE = $(shell cd $(TOP) && $(CABAL) path --store-dir)
-CABAL_PKG_PATH = $(TOP)/dist-newstyle/packagedb/ghc-$(GHCVERSION):$(firstword $(wildcard $(CABAL_STORE)/ghc-$(GHCVERSION)*/package.db)):
+CABAL_COMPILER_STORE := $(shell cd $(TOP) && $(CABAL) path $(CABAL_COMPILER_OPTIONS) --compiler-info | sed -n 's/^compiler-store-path: //p')
+ifeq ($(CABAL_COMPILER_STORE),)
+$(error cabal path reports no compiler-store-path for $(GHC))
+endif
+CABAL_PKG_PATH = $(TOP)/dist-newstyle/packagedb/ghc-$(GHCVERSION):$(CABAL_COMPILER_STORE)/package.db:
 
 .PHONY: $(PKGINFO)
 $(PKGINFO):
 	mkdir -p -m 755 $(LICDIR)
-	GHC_PACKAGE_PATH="$(CABAL_PKG_PATH)" ./make-ghc-pkg-info.sh --deps-of bsc > $(PKGINFO)
+	GHCPKG="$(GHCPKG)" GHC_PACKAGE_PATH="$(CABAL_PKG_PATH)" ./make-ghc-pkg-info.sh --deps-of bsc > $(PKGINFO)
 endif
 
 # -----
@@ -194,7 +201,7 @@ install: CABAL_INSTALL = $(INSTALLEXES)
 install-extra: CABAL_INSTALL = $(EXTRAEXES)
 install install-extra: no-stale-modules
 	mkdir -p -m 755 $(TOP)/build $(BINDIR)
-	{ git -C $(TOP) rev-parse HEAD 2>/dev/null || echo no-repository; ./update-build-version.sh --name; } > $(CABAL_HEAD).tmp && \
+	{ ./update-build-version.sh --head 2>/dev/null || echo no-repository; ./update-build-version.sh --name; } > $(CABAL_HEAD).tmp && \
 	  { cmp -s $(CABAL_HEAD).tmp $(CABAL_HEAD) || mv $(CABAL_HEAD).tmp $(CABAL_HEAD); } && \
 	  $(RM) -f $(CABAL_HEAD).tmp
 	cd $(TOP) && $(CABAL_ENV) $(CABAL) build -j$(GHCJOBS) $(CABAL_FLAGS) all

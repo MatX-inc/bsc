@@ -18,7 +18,11 @@ build-type: Hooks
 -- HEAD and the version name, written by `make install-src` so that a commit
 -- or a tag alone is a changed source and BuildVersion follows it
 -- (doc/cabal.md section 2).
-extra-source-files: build/cabal-head
+extra-source-files:
+  build/cabal-head
+  -- The scripts the hooks run, so that a source distribution carries them.
+  platform.sh
+  src/comp/update-build-version.sh
 -- The GHCs CI builds with (.github/workflows/ci.yml).
 tested-with:
   GHC == 9.4.7,
@@ -87,6 +91,8 @@ common common_deps
 
 library
   import: common_all, common_deps
+  -- Written by the hooks (SetupHooks.hs) into the autogen directory.
+  autogen-modules: Warmup, BuildSystem, BuildVersion
   hs-source-dirs:
     src/comp
     src/comp/Libs
@@ -359,63 +365,50 @@ library
 common common_exes
   import: common_all, common_deps
   build-depends: bsc
+  hs-source-dirs: src/comp/app
+  -- Every program's Warmup is written by the hooks (SetupHooks.hs).
+  other-modules: Warmup
+  autogen-modules: Warmup
   ghc-options: -rtsopts "-with-rtsopts=-H256m -K10m -i1"
 
 executable bsc
   import: common_exes
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_bsc
   main-is: bsc.hs
-  other-modules: Warmup
 
 executable bluetcl
   import: common_exes
   c-sources:
     src/comp/app/bluetcl_shim.c,
-  hs-source-dirs: src/comp/app
   main-is: bluetcl_Main.hs
-  other-modules:
-    Bluetcl
-    Warmup
+  other-modules: Bluetcl
 
 executable bsc2bsv
   import: common_exes
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_bsc2bsv
   main-is: bsc2bsv.hs
-  other-modules: Warmup
 
 executable bsv2bsc
   import: common_exes
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_bsv2bsc
   main-is: bsv2bsc.hs
-  other-modules: Warmup
 
 executable dumpba
   import: common_exes
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_dumpba
   main-is: dumpba.hs
-  other-modules: Warmup
 
 executable dumpbo
   import: common_exes
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_dumpbo
   main-is: dumpbo.hs
-  other-modules: Warmup
 
 executable showrules
   import: common_exes
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_showrules
   main-is: showrules.hs
-  other-modules: Warmup
 
 executable vcdcheck
   import: common_exes
-  hs-source-dirs: src/comp/app
   ghc-options: -main-is Main_vcdcheck
   main-is: vcdcheck.hs
-  other-modules: Warmup
