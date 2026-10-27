@@ -10,7 +10,7 @@ optimization: 2
 jobs: $ncpus
 
 -- Bare ghci, runghc and ghc find the build's packages from any directory of
--- the checkout.
+-- the checkout; src/comp/.ghci relies on it.
 write-ghc-environment-files: always
 
 -- GHC compiles in parallel only where its object code is deterministic:

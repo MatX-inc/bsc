@@ -75,7 +75,6 @@ install-solvers:
 install clean full_clean:
 	$(MAKE)  -C vendor/stp   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C vendor/yices PREFIX=$(PREFIX)  $@
-	$(MAKE)  -C vendor/htcl  PREFIX=$(PREFIX)  $@
 	# comp is one cabal build, which parallelizes itself (GHCJOBS)
 	$(MAKE)  -C comp -j1   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C Libraries  PREFIX=$(PREFIX)  $@
