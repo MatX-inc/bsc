@@ -1,6 +1,7 @@
 {-# LANGUAGE CPP #-}
 module Main_dumpbo(main) where
 
+import Warmup ()
 import System.Environment(getArgs)
 import System.Exit(exitWith, ExitCode(..))
 
