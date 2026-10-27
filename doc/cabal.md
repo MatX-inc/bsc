@@ -37,6 +37,9 @@ message (INSTALL.md).
   speaks the job semaphore protocol v1, GHC's since 9.8; 3.18 speaks only
   v2, which GHC adds in 9.10.4, 9.12.5, 9.14.2 and 10.0.1, and with a v1 GHC
   falls back to plain `-j` per package.
+- `index-state` in `cabal.project` pins the Hackage index, so the
+  dependencies follow the commit; an older index stops the build
+  (INSTALL.md).
 
 From GHC 9.12, the first with `-fobject-determinism`, the flag is on
 (`bsc.cabal`, and `cabal.project` for every package of the build) and
