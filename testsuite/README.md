@@ -80,10 +80,10 @@ parent `bsc` repo, the Makefile will report an error.
 
 ### Extra tools
 
-By default, the Makefile in `bsc/src/comp/` will not build and install
-the tool `showrules` or the developer tools.  These tools can all be
-installed with the `install-extra` target in `bsc/src/comp/` (or
-separately with `install-showrules` and `install-utils`).
+By default, the Makefile in `bsc/src/comp/` will not install the tool
+`showrules` or the developer tools.  These tools can all be installed
+with the `install-extra` target in `bsc/src/comp/` (or separately with
+`install-showrules` and `install-utils`).
 
 #### showrules
 
