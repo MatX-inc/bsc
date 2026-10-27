@@ -34,6 +34,7 @@ import System.Directory
     createDirectoryIfMissing,
     createDirectoryLink,
     doesDirectoryExist,
+    doesFileExist,
     listDirectory,
     makeAbsolute,
     removeDirectoryLink,
@@ -136,7 +137,11 @@ preBuildRules = rules (static ()) $ \env -> do
         []
         [warmup]
   when (isMainLib component) $ do
+    -- GHC takes a module found under hs-source-dirs over the autogen one,
+    -- so a copy of a generated module under src/comp would be what the
+    -- library compiles: every build refuses while one is there.
     let buildVersion = autogenLocation lbi clbi "BuildVersion"
+    liftIO refuseStrayGeneratedModules
     registerRule_ "BuildVersion.hs" $
       staticRule
         ( mkCommand
@@ -159,6 +164,16 @@ writeWarmupHs (path, mods) = do
       "module Warmup where"
     ]
       <> ["import " <> m <> " ()" | m <- mods]
+
+-- | Refuse while a copy of a generated module lies under src/comp, where
+-- GHC would compile it in place of the generated one.
+refuseStrayGeneratedModules :: IO ()
+refuseStrayGeneratedModules =
+  forM_ (["Warmup", "BuildVersion"] :: [String]) $ \m -> do
+    left <- doesFileExist ("src" </> "comp" </> (m <> ".hs"))
+    when left . ioError . userError $
+      "src/comp/" <> m <> ".hs would be compiled in place of the generated module:"
+        <> " remove it (make -C src/comp no-stale-modules does) and build again"
 
 -- | Run update-build-version.sh in the autogen directory, where it writes
 -- BuildVersion.hs (it leaves an up-to-date file untouched), then have it
@@ -183,9 +198,10 @@ writeBuildVersionHs autogenDir = do
           ExitSuccess -> pure ()
           ExitFailure n -> die' normal ("src/comp/update-build-version.sh exited with " <> show n)
   run []
-  -- The install stamp: HEAD and the version name, a declared source, so
-  -- that a later commit, or a tag at this one, is a changed source and this
-  -- rule runs again. It has to exist from the first build, since
+  -- The install stamp (src/comp/Makefile, CABAL_HEAD): HEAD and the version
+  -- name, a declared source, so that a later commit, or a tag at this one,
+  -- is a changed source and this rule runs again. `make install` writes it
+  -- through the same script; it has to exist from the first build, since
   -- cabal-install watches only the declared sources it finds when it
   -- records a build.
   run ["--stamp", stamp]

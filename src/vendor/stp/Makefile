@@ -6,7 +6,8 @@ PREFIX?=$(TOP)/inst
 .PHONY: all install clean full_clean
 
 # install copies the library under its soname and adds the link name beside
-# it, so that a build may link the installed copy by name.
+# it, for the cabal build, which links the installed copy: `make install-src`
+# names $(PREFIX)/lib/SAT to its linker (src/comp/Makefile).
 
 ifeq ($(STP_STUB),)
 SRC = src

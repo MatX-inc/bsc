@@ -55,7 +55,7 @@ common common_all
     ghc-options: -fobject-determinism
 
 -- The library's packages, visible to every program as the make build's
--- PACKAGES are to each of its programs, so a program's stanza names none.
+-- PACKAGES were to each of its programs, so a program's stanza names none.
 common common_deps
   build-depends:
     -- Warmup imports the exposed modules of every package named here
@@ -99,9 +99,9 @@ library
     src/vendor/htcl
     src/vendor/stp/HaskellIfc
     src/vendor/yices/v2.6/HaskellIfc
-  -- The solvers, linked by name and from no directory: a build names the
-  -- vendored copies in LIBRARY_PATH (`make install-solvers`, doc/cabal.md
-  -- section 2) or links the copies it has. At run time they resolve beside
+  -- The solvers, linked by name and from no directory: `make install-src`
+  -- names the vendored copies in LIBRARY_PATH, any other build links the
+  -- copies it has (doc/cabal.md section 2). At run time they resolve beside
   -- the binary, lib/SAT, through the rpath below, which the programs inherit.
   extra-libraries: stp, yices
   if os(osx)

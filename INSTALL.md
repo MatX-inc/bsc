@@ -58,8 +58,9 @@ To build a complete release of BSC, you will need:
    newer, are also tested (see the [CI workflow] for the exact set).
    Older versions are not supported.  We recommend installing GHC via
    the popular installer [GHCup].
- - A few additional Haskell libraries: `regex-compat`, `syb`,
-   `old-time`, `split`, and `strict-concurrency`.
+ - The Haskell build tool [cabal-install], version 3.16, which fetches
+   the Haskell libraries the build needs beyond GHC's own from Hackage.
+   We recommend installing it via [GHCup] as well.
  - The GNU Multiple Precision Arithmetic Library (GMP). `libgmp` is
    used to implement integers in Haskell and may already be a
    dependency of installing GHC.
@@ -86,6 +87,7 @@ The following dependencies are optional, though recommended:
 [CI workflow]: .github/workflows/ci.yml
 [GHC]: https://www.haskell.org/ghc/
 [GHCUp]: https://www.haskell.org/ghcup/
+[cabal-install]: https://www.haskell.org/cabal/
 [Icarus Verilog]: https://steveicarus.github.io/iverilog/
 [Asciidoctor]: https://asciidoctor.org
 
@@ -112,14 +114,15 @@ sudo apt-get install \
 
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
 ghcup install ghc 9.6.7
+ghcup install cabal 3.16.1.0
 cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
 ```
 
 Those final four commands install the recommended GHC compiler version
-and libraries. If you would prefer to install GHC via the system's
+and the cabal build tool, and fetch the package index the build reads.
+If you would prefer to install GHC via the system's
 package manager, which may install an older version, you can
-substitute the following command.  Any `ghc` from 9.4.7 on builds the
+substitute the following command.  Any `ghc` from 9.4.7 through 9.14 builds the
 compiler, Ubuntu 24.04's included (see the GHC section below); an older
 `ghc`, such as Ubuntu 22.04's 8.8.4 (check with `ghc --version`), is not
 supported.
@@ -127,29 +130,20 @@ supported.
 ```bash
 sudo apt-get install \
    ghc \
-   libghc-regex-compat-dev \
-   libghc-syb-dev \
-   libghc-old-time-dev \
-   libghc-split-dev
+   cabal-install
 ```
 
 If you use the system's package manager and want to profile the
-Bluespec compiler (unlikely for most users), you will also need to the
-profiling-enabled versions of the Haskell libraries:
+Bluespec compiler (unlikely for most users), you will also need the
+profiling-enabled versions of GHC's own libraries:
 
 ```bash
-sudo apt-get install \
-   ghc-prof \
-   libghc-regex-compat-prof \
-   libghc-syb-prof \
-   libghc-old-time-prof \
-   libghc-split-prof
+sudo apt-get install ghc-prof
 ```
 
-Note that there are currently no `libghc-strict-concurrency-dev` or
-`libghc-strict-concurrency-prof` packages.  Until such packages are
-created, that library would need to be installed using `cabal`, which
-is available via the `cabal-install` package.
+The system's `cabal-install` may be older than the 3.16 the build needs
+(check with `cabal --version`); `ghcup install cabal 3.16.1.0` gives
+that one.
 
 ### Fedora systems
 
@@ -174,43 +168,35 @@ sudo dnf install \
 
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
 ghcup install ghc 9.6.7
+ghcup install cabal 3.16.1.0
 cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
 ```
 
 Those final four commands install the recommended GHC compiler version
-and libraries. If you would prefer to install GHC via the system's
+and the cabal build tool, and fetch the package index the build reads.
+If you would prefer to install GHC via the system's
 package manager, which may install an older version, you can
-substitute the following command.  Any `ghc` from 9.4.7 on builds the
+substitute the following command.  Any `ghc` from 9.4.7 through 9.14 builds the
 compiler (see the GHC section below); a `ghc` older than 9.4.7 (check
 with `ghc --version`) is not supported.
 
 ```bash
 sudo dnf install \
    ghc \
-   ghc-regex-compat-devel \
-   ghc-syb-devel \
-   ghc-old-time-devel \
-   ghc-split-devel
+   cabal-install
 ```
 
 If you use the system's package manager and want to profile the
-Bluespec compiler (unlikely for most users), you will also need to the
-profiling-enabled versions of the Haskell libraries:
+Bluespec compiler (unlikely for most users), you will also need the
+profiling-enabled versions of GHC's own libraries:
 
 ```bash
-sudo dnf install \
-   ghc-prof \
-   ghc-regex-compat-prof \
-   ghc-syb-prof \
-   ghc-old-time-prof \
-   ghc-split-prof
+sudo dnf install ghc-prof
 ```
-Note that there are currently no `ghc-strict-concurrency-devel` or
-`ghc-strict-concurrency-prof` packages in upstream Fedora, however
-they can be installed using the [Terra
-repository](https://terrapkg.com/).  You can also install using
-`cabal`, which is available via the `cabal-install` package.
+
+The system's `cabal-install` may be older than the 3.16 the build needs
+(check with `cabal --version`); `ghcup install cabal 3.16.1.0` gives
+that one.
 
 ### MacOS systems
 
@@ -254,12 +240,12 @@ brew install \
 
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
 ghcup install ghc 9.6.7
+ghcup install cabal 3.16.1.0
 cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
 ```
 
 Those final four commands install the recommended GHC compiler version
-and libraries.
+and the cabal build tool, and fetch the package index the build reads.
 
 ### GHC Haskell compiler
 
@@ -269,9 +255,10 @@ macOS, and WSL2 on Windows.  This allows easily installing the
 recommended version of GHC. The package manager for your OS may
 provide a package for GHC, however it may be for an older version of
 GHC.  This is fine, as the BSC source code builds with every release
-of GHC from 9.4.7 on, the version Ubuntu 24.04 packages; however, newer
-versions may be more efficient.  GHC releases older than 9.4.7 are not
-supported.
+of GHC from 9.4.7, the version Ubuntu 24.04 packages, through 9.14; newer
+versions in that range may be more efficient.  GHC releases older than 9.4.7
+are not supported, and a release newer than 9.14 needs the upper bounds in
+`bsc.cabal` raised (or `allow-newer: bsc:*` in `cabal.project.local`).
 
 BSC releases are tested and built with the recommended stable version
 of GHC, currently 9.6.7.  The source is also tested with a range of
@@ -280,42 +267,23 @@ are also fine.
 
 ### Haskell libraries via Cabal
 
-Building BSC requires some additional Haskell libraries beyond the standard
-GHC libraries.  We recommend using the `cabal` command to install
-those libraries, as shown in the above summaries.
-As with GHC, we recommend installing `cabal` via `ghcup`.
-
-If you have installed GHC through the package manager of your OS,
-then you may need to install libraries through the package manager as
-well (as shown in the above summaries) or you may need to install `cabal`
-through the package manager.
-
-The BSC build currently assumes that libraries have been installed
-globally with GHC.  This is why we have shown the `cabal` command
-using the legacy `v1-install` subcommand, which install globally:
-
-```bash
-cabal update
-cabal v1-install regex-compat syb old-time split strict-concurrency
-```
-
-Cabal's newer `v2-install` has the advantage of not installing the
-libraries into the GHC installation.  This is useful if the GHC
-installation is globally installed and you want to build BSC without
-disturbing the global setup; or if GHC is installed via a package
-manager and you don't want to mix cabal-installed files with package
-manager-installed files.  Using `v2-install` is possible, but requires
-passing an additional flag to GHC, which can be done by defining `GHC`
-in the environment when calling `make` in the later steps.  For
-example (cabal 3.x only):
-
-```bash
-cabal v2-install --package-env=default regex-compat syb old-time split strict-concurrency
-make GHC="ghc -package-env default"
-```
+The compiler is built by `cabal`, which `make install-src` runs (see
+`doc/cabal.md`), and the Haskell libraries it needs beyond GHC's own
+are fetched from Hackage into cabal's own store under your home
+directory: nothing is installed into the GHC installation, and no
+library needs installing by hand.  cabal-install 3.16 is required for
+now: the build's hooks need Cabal 3.16, and 3.18 speaks only the v2
+job-server protocol, which GHC gains in 9.10.4, 9.12.5, 9.14.2 and
+10.0.1, so with the GHCs CI builds it falls back to a slower build (see
+`doc/cabal.md`).  Install it with `ghcup`, as the commands above do, and
+run `cabal update` to fetch the Hackage package index, which the build
+reads.
 
 To build a version of BSC that supports profiling, be aware that
-profiling versions of the libraries need to be installed.
+profiling versions of the libraries need to be present: cabal builds
+those of the libraries it fetches when profiling is enabled
+(`profiling: True` in `cabal.project.local`), and GHC's own come with
+GHC (the `ghc-prof` package, where the OS packages GHC).
 
 ### SMT solvers
 
@@ -335,17 +303,20 @@ from that repository will be added.
 
 [STP SMT solver]: https://github.com/stp/stp
 
-The cabal build links the solvers by name, so the linker has to find
-`libstp` and `libyices`: `make install-solvers` builds and installs them
-under `inst/lib/SAT`, and a `cabal build` (cabal-install 3.16, see
-`doc/cabal.md`) needs that directory named to the linker:
+The compiler links the solvers by name, so the linker has to find
+`libstp` and `libyices`: `make install-src` builds and installs them
+under `inst/lib/SAT` and names that directory to the linker.  A `cabal
+build` run by hand needs the same two steps:
 
 ```bash
 make install-solvers
 LIBRARY_PATH=$PWD/inst/lib/SAT cabal build all
 ```
 
-Without it, cabal stops at configure with "Missing (or bad) C
+An `export` of the variable once per shell covers every later `cabal`
+command.
+
+Without them, cabal stops at configure with "Missing (or bad) C
 libraries: stp, yices" and suggests `--extra-lib-dirs`; do not take that
 suggestion, which writes the directory into the build (see
 `doc/cabal.md`), but set `LIBRARY_PATH` as above, or install the solvers
@@ -393,6 +364,10 @@ make PREFIX=/opt/tools/bsc/bsc-${BSC_VERSION}
 
 However, note that the `clean` target will delete the `PREFIX` directory!
 
+The `clean` target also removes the cabal build under `dist-newstyle` and
+the GHC environment file at the root; `ghci` in `src/comp` then needs a
+build again.
+
 An unoptimized, debug, or profiling build can be done using one of:
 
 ```bash
@@ -401,10 +376,33 @@ make BSC_BUILD=DEBUG
 make BSC_BUILD=PROF
 ```
 
+Each is a set of flags that `src/comp/Makefile` passes on the cabal
+command line (`BSC_BUILD_FLAGS`: `--disable-optimization`;
+`--ghc-options='-dcore-lint -debug'`; `--enable-profiling
+--profiling-detail=all-functions` with a larger stack cap in
+`-with-rtsopts`).  A `cabal.project.local` at the root of the repository
+sets the same in project-file form for a `cabal build` run by hand;
+`make install-src` honors it too, and git ignores it.  The profiling
+variant in that form, and a setting that is not a variant, the GHC a bare
+`cabal build` uses (`make` takes `GHC=` for that):
+
+```
+profiling: True
+profiling-detail: all-functions
+package bsc
+  ghc-options: "-with-rtsopts=-H256m -K256m -i1"
+with-compiler: ghc-9.14.1
+```
+
+A GHC newer than the bounds in `bsc.cabal` admit takes `allow-newer: bsc:*`
+there as well (see the GHC section above).
+
 You can provide the `-j` flag to `make` to specify the number of targets
 to execute in parallel, however this does not control the parallelism of
-the core haskell build.  To specify the number of modules that GHC may
-compile in parallel, define `GHCJOBS` in the environment to that number:
+the cabal build of the compiler.  To set that, define `GHCJOBS` in the
+environment: it is passed as cabal's `-j`, which from GHC 9.12 is the
+number of GHC compile slots in all and below it the number of packages
+building at once (see `doc/cabal.md`):
 
 ```bash
 make GHCJOBS=4
@@ -515,20 +513,14 @@ of Git, you can do so with `git archive`, but be aware of two points.
 For one, you will need to also export the files from submodules,
 because Git will not include them.
 
-For two, you may wish to adjust files in the `src/comp/` directory, to
-give a particular version name to installations built from the
-snapshot.  The build in that directory uses Git to automatically
-generate the version information for the compiler and place it in the
-file `BuildVersion.hs`.  The script that generates this,
-`update-build-version.sh`, can only query Git for version info when
-called from inside a Git repository.  The script will still work if
-`git archive` is used to export the snapshot, because we have
-specified (in `.gitattributes`) that patterns in the file should be
-substituted with their values (the commit hash and tag, if any) during
-export.  Therefore, no change in this directory is required.  However,
-if you want to hard-code a different version name, you can pre-generate
-the `BuildVersion.hs` file and adjust the `Makefile` to not rebuild
-it, by changing the assignment of `NOUPDATEBUILDVERSION` to `1`.
+For two, the version information the compiler and the Bluesim kernel
+carry is generated from Git by `src/comp/update-build-version.sh`, which
+the build runs, and the script can only query Git when called from
+inside a Git repository.  It will still work if `git archive` is used
+to export the snapshot, because we have specified (in `.gitattributes`)
+that patterns in the script should be substituted with their values
+(the commit hash and tag, if any) during export.  Therefore, no change
+is required.
 
 ---
 

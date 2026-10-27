@@ -3,10 +3,9 @@ set -euo pipefail
 
 export TMOUT=1
 
-# Inputs, from the environment: src/comp/Makefile exports both, and the
-# cabal hooks pass them through (SetupHooks.hs, writeBuildVersionHs).
+# Input, from the environment: src/comp/Makefile exports NOGIT, and the
+# cabal hooks pass it through (SetupHooks.hs, writeBuildVersionHs).
 NOGIT=${NOGIT:-0}
-NOUPDATEBUILDVERSION=${NOUPDATEBUILDVERSION:-0}
 
 # -------------------------
 # GIT
@@ -20,9 +19,9 @@ repoGit () (
 )
 
 # --stamp FILE writes the install stamp, HEAD and the version name, when the
-# content changes (the hooks' version rule, SetupHooks.hs, writes it through
-# this). HEAD is the repository's whatever NOGIT says; a tree without one gets
-# no-repository.
+# content changes: src/comp/Makefile's install and the hooks' version rule
+# (SetupHooks.hs) write the same file through it. HEAD is the repository's
+# whatever NOGIT says; a tree without one gets no-repository.
 writeStamp () {
     if [ -e "$root/.git" ]; then
         head=$(repoGit rev-parse HEAD)
@@ -113,11 +112,7 @@ case "${1:-}" in
     --name) getGITVersion; echo "$GITDESCR"; exit ;;
 esac
 
-if ( test -f BuildVersion.hs ) && [ "$NOUPDATEBUILDVERSION" = 1 ] ; then
-    echo "BuildVersion.hs not modified"
-else
-    getGITVersion
-    genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
-fi
+getGITVersion
+genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
 
 # -------------------------
