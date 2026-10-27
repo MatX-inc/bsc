@@ -6,9 +6,14 @@ include $(TOP)/platform.mk
 PREFIX?=$(TOP)/inst
 override PREFIX := $(abspath $(PREFIX))
 
+GHC ?= ghc
+CABAL ?= cabal
+
 ifndef NO_DEPS_CHECKS
 CC_TOOLS=$(CC) $(CXX) $(LD)
-BSC_TOOLS=ghc ghc-pkg
+# cabal-install fetches the Haskell libraries (bsc.cabal); ghc-pkg, for the
+# package information, is found beside GHC (comp/Makefile, GHCPKG).
+BSC_TOOLS=$(GHC) $(CABAL)
 YICES_TOOLS=gperf autoconf
 STP_TOOLS=flex bison
 
@@ -17,18 +22,20 @@ TOOLS=$(CC_TOOLS) \
       $(YICES_TOOLS) \
       $(STP_TOOLS) \
 
-GHC_PKGS=regex-compat syb old-time split strict-concurrency
-
 SUBMODS=vendor/yices/v2.6/yices2
 
 # Check all the necessary build tools are present
-pathsearch=$(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,$(PATH)))))
+pathsearch=$(if $(findstring /,$(1)),$(wildcard $(1)),$(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,$(PATH))))))
 checktool=$(if $(call pathsearch,$(1)),,$(error Tool $(1) could not be found))
 $(foreach tool,$(TOOLS),$(call checktool,$(tool)))
 
-# Check Haskell package dependencies
-checkghcpkg=$(if $(shell ghc-pkg list --simple-output $(1)),,$(error GHC package $(1) not installed))
-$(foreach pkg,$(GHC_PKGS),$(call checkghcpkg,$(pkg)))
+# The cabal-install the hooks need, checked before the solvers build.
+CABALVERSION := $(shell $(CABAL) --numeric-version 2>/dev/null)
+CABALMAJOR := $(word 1,$(subst ., ,$(CABALVERSION)))
+CABALMINOR := $(word 2,$(subst ., ,$(CABALVERSION)))
+ifneq ($(shell expr $(CABALMAJOR) \> 3 \| $(CABALMAJOR) = 3 \& $(CABALMINOR) \>= 16),1)
+$(error cabal-install 3.16 or newer is required, found $(CABALVERSION) (INSTALL.md))
+endif
 
 # Check all submodules are initialized
 submodexists=$(shell git submodule status $(1) 2> /dev/null )
@@ -65,7 +72,7 @@ install clean full_clean:
 	$(MAKE)  -C vendor/stp   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C vendor/yices PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C vendor/htcl  PREFIX=$(PREFIX)  $@
-	# we need to build targets from here sequentially, as they operate in the same workspace
+	# comp is one cabal build, which parallelizes itself (GHCJOBS)
 	$(MAKE)  -C comp -j1   PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C Libraries  PREFIX=$(PREFIX)  $@
 	$(MAKE)  -C exec       PREFIX=$(PREFIX)  $@

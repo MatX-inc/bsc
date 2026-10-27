@@ -1,0 +1,3 @@
+-- The unoptimized variant (make BSC_BUILD=NOOPT; INSTALL.md).
+import: cabal.project
+optimization: False
