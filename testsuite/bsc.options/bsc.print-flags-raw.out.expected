@@ -22,6 +22,7 @@ Flags {
 	dumpAll = Nothing,
 	dumpFormats = ["vcd"],
 	dumps = [],
+	elabOnly = False,
 	enablePoisonPills = False,
 	entry = Nothing,
 	expandATSlimit = 20,
