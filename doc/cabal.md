@@ -1,8 +1,8 @@
 # The cabal build of bsc
 
-One cabal package at the repository root builds the compiler beside the make
-build, which is untouched and keeps generating its own `Warmup.hs` and
-`BuildVersion.hs`. INSTALL.md covers prerequisites and the toolchain.
+One cabal package at the repository root builds the compiler; `make
+install-src` builds the solvers, runs that build and installs the result.
+INSTALL.md covers prerequisites, the toolchain and the build variants.
 
 ## 1. Shape
 
@@ -38,10 +38,10 @@ message (INSTALL.md).
 From GHC 9.12, the first with `-fobject-determinism`, the flag is on
 (`bsc.cabal`, and `cabal.project` for every package of the build) and
 `semaphore: True` puts cabal-install and every GHC of the build on one job
-server, so `jobs` (cabal's `-j`) bounds the modules compiling at once; below
-9.12 parallel GHC is not deterministic, so each package compiles serially and
-`jobs` bounds only the packages building at once. `write-ghc-environment-files:
-always` serves bare `ghci` and `runghc`.
+server, so `jobs` (cabal's `-j`, make's `GHCJOBS`) bounds the modules compiling
+at once; below 9.12 parallel GHC is not deterministic, so each package compiles
+serially and `jobs` bounds only the packages building at once.
+`write-ghc-environment-files: always` serves bare `ghci` and `runghc`.
 
 The programs and the library's dynamic object (what `ghci` and `runghc`
 load) resolve the solvers beside themselves, `lib/SAT`, by the rpath
@@ -49,12 +49,17 @@ load) resolve the solvers beside themselves, `lib/SAT`, by the rpath
 `ld-options`; Cabal 3.16 applies those to the programs' links only, so
 `cabal.project` repeats it for the dynamic object.
 
+`make install-src` installs the solvers (`src/Makefile`) and then, in
+`src/comp/Makefile`'s `install`, runs `cabal build -j$(GHCJOBS) all` with
+`LIBRARY_PATH` set and copies bsc and bluetcl into `inst/bin`; `make -C
+src/comp install-extra` copies the other programs over the same build.
 `BuildVersion` names the commit, but its rule runs only when cabal-install
-builds the package (a changed declared source or a reconfigure), so the hooks
-write HEAD and the version name into `build/cabal-head`, a declared source
-(`update-build-version.sh --stamp`): a new commit, or a tag at the built one,
-is then a changed source. The stamp is written from the first build, since
-cabal-install watches only the sources it finds when it records a build.
+builds the package (a changed declared source or a reconfigure), so `install`
+first writes HEAD and the version name into `build/cabal-head`, a declared
+source: a new commit, or a tag at the built one, is then a changed source. The
+hooks write the same stamp (`update-build-version.sh --stamp`, which `install`
+runs too) from the first build, since cabal-install watches only the sources it
+finds when it records a build.
 
 `Setup.hs` is for a tool that runs a Setup script rather than cabal-install
 (the hooks' external program): cabal-install generates the same two lines for
@@ -78,9 +83,11 @@ index, and compiles serially, which the bytes do not depend on.
   directory; the script reads the repository it lives in, whatever the working
   directory or the caller's git environment, and a tree without one (an
   unpacked sdist) builds as no-git. `BuildSystem` is checked in: a CPP test on
-  the host OS picks the object format. A `Warmup.hs` or `BuildVersion.hs` the
-  make build has generated under `src/comp` would be compiled instead (`make -C
-  src/comp full_clean` removes them).
+  the host OS picks the object format. A copy of a generated module under
+  `src/comp`, left by an older checkout's make build, would be compiled
+  instead: `make install-src` and the per-program targets remove the two before
+  building, and a bare `cabal build` refuses while one is there (`make -C
+  src/comp no-stale-modules` removes them).
 - Tcl, at configure: the include, link and `-D` flags, from `platform.sh`.
 - Solvers: after each build, `lib/SAT` beside the artifact is linked to the
   `LIBRARY_PATH` directory holding them, so the build tree runs in place
