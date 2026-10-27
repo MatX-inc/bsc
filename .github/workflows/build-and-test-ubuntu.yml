@@ -47,7 +47,7 @@ jobs:
         uses: haskell/ghcup-setup@v1
         with:
           ghc: ${{ inputs.ghc_version }}
-          cabal: recommended
+          cabal: 3.16.1.0
       # Until BSC uses cabal to build, pre-install these packages
       - name: Install Haskell dependencies
         shell: bash

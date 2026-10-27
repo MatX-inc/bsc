@@ -54,8 +54,8 @@ endif # NO_DEPS_CHECKS
 .PHONY: all
 all: install
 
-# The solvers alone, for a cabal build run by hand; install runs the same
-# two first.
+# The solvers alone, for a cabal build run by hand (doc/cabal.md section
+# 2); install runs the same two first.
 .PHONY: install-solvers
 install-solvers:
 	$(MAKE)  -C vendor/stp   PREFIX=$(PREFIX)  install
