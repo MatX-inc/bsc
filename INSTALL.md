@@ -335,6 +335,22 @@ from that repository will be added.
 
 [STP SMT solver]: https://github.com/stp/stp
 
+The cabal build links the solvers by name, so the linker has to find
+`libstp` and `libyices`: `make install-solvers` builds and installs them
+under `inst/lib/SAT`, and a `cabal build` (cabal-install 3.16, see
+`doc/cabal.md`) needs that directory named to the linker:
+
+```bash
+make install-solvers
+LIBRARY_PATH=$PWD/inst/lib/SAT cabal build all
+```
+
+Without it, cabal stops at configure with "Missing (or bad) C
+libraries: stp, yices" and suggests `--extra-lib-dirs`; do not take that
+suggestion, which writes the directory into the build (see
+`doc/cabal.md`), but set `LIBRARY_PATH` as above, or install the solvers
+where the linker looks.
+
 Both the Yices and STP solvers are optional to build, although
 recommended. To skip these builds, see "Optionally avoiding the
 compile of STP or Yices" below.
