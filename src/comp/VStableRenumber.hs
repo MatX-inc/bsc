@@ -90,7 +90,7 @@ renumberModule vm =
         instFixed :: VMItem -> [String]
         instFixed (VMInst m i pas pos) =
             [vidStr m, vidStr i] ++
-            either (const []) (map (vidStr . fst)) pas ++
+            map (vidStr . fst) pas ++
             map (vidStr . fst) pos
         instFixed (VMComment _ it)      = instFixed it
         instFixed (VMRegGroup _ _ _ it) = instFixed it
