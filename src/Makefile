@@ -23,7 +23,7 @@ TOOLS=$(CC_TOOLS) \
       $(YICES_TOOLS) \
       $(STP_TOOLS) \
 
-SUBMODS=vendor/yices/v2.6/yices2
+SUBMODS=vendor/yices/v2.6/yices2 vendor/libfst
 
 # Check all the necessary build tools are present
 pathsearch=$(if $(findstring /,$(1)),$(wildcard $(1)),$(firstword $(wildcard $(addsuffix /$(1),$(subst :, ,$(PATH))))))
