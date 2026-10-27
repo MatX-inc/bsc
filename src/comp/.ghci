@@ -2,22 +2,13 @@
 :set -XForeignFunctionInterface
 :set -XUndecidableInstances
 
--- Packages
-:set -package base
-:set -package containers
-:set -package array
-:set -package mtl
-:set -package unix
-:set -package regex-compat
-:set -package bytestring
-:set -package directory
-:set -package process
-:set -package filepath
-:set -package time
-:set -package old-time
-:set -package old-locale
-:set -package split
-:set -package syb
+-- Packages: the cabal build writes a GHC environment file at the repository
+-- root naming every package it built against, which ghci loads from any
+-- directory below it. The compiled library is named here for the two
+-- modules the hooks generate (BuildVersion, Warmup), which have no source in
+-- the tree; every module that has one is interpreted from it,
+-- since GHC takes a home module over a package's.
+:set -package bsc
 
 -- Haskell source
 :set -i../comp:../comp/app:../comp/Libs:../comp/GHC:../comp/GHC/posix:../Parsec
@@ -28,8 +19,6 @@
 :set -i../vendor/htcl
 
 :set -I/usr/include/tcl
-:set -L../vendor/htcl
-:set -lhtcl
 
 :set -L../vendor/stp/lib
 :set -lstp
