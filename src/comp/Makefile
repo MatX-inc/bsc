@@ -180,6 +180,9 @@ SHOWRULESEXES = showrules
 # The build-consistency checker (1046), which the libraries' install runs.
 CHECKEXES = tconcheck
 INSTALLEXES += $(CHECKEXES)
+# bo2bloogle (969), which the libraries' install runs for the bloogle index.
+BO2BLOOGLEEXES = bo2bloogle
+INSTALLEXES += $(BO2BLOOGLEEXES)
 
 # The generated modules an older checkout's make build left here, which the
 # hooks would otherwise refuse to build over (doc/cabal.md section 3).
