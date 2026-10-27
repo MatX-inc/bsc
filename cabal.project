@@ -1,0 +1,28 @@
+packages: .
+
+-- -O2, as the compiler has always been built.
+optimization: 2
+
+-- From GHC 9.12 cabal-install and every GHC it runs share one job server of
+-- this many slots; cabal-install 3.16 speaks GHC's protocol (doc/cabal.md).
+jobs: $ncpus
+
+-- Bare ghci, runghc and ghc find the build's packages from any directory of
+-- the checkout.
+write-ghc-environment-files: always
+
+-- Parallel compilation only where object code is deterministic: from 9.12,
+-- with the flag on every package of the build (doc/cabal.md).
+if impl(ghc >= 9.12)
+  semaphore: True
+  package *
+    ghc-options: -fobject-determinism
+
+-- The library's shared object takes the programs' rpath (bsc.cabal): Cabal
+-- 3.16 passes a library's ld-options to the programs' links, not its own.
+if os(osx)
+  program-options
+    ghc-options: -optl-Wl,-rpath,@loader_path/../lib/SAT
+else
+  program-options
+    ghc-options: -optl-Wl,-rpath,$ORIGIN/../lib/SAT

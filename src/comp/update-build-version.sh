@@ -3,7 +3,8 @@ set -euo pipefail
 
 export TMOUT=1
 
-# Inputs, from the environment: src/comp/Makefile exports both.
+# Inputs, from the environment: src/comp/Makefile exports both, and the
+# cabal hooks pass them through (SetupHooks.hs, writeBuildVersionHs).
 NOGIT=${NOGIT:-0}
 NOUPDATEBUILDVERSION=${NOUPDATEBUILDVERSION:-0}
 
@@ -17,6 +18,25 @@ repoGit () (
     unset $(git rev-parse --local-env-vars)
     git --git-dir="$root/.git" --work-tree="$root" "$@"
 )
+
+# --stamp FILE writes the install stamp, HEAD and the version name, when the
+# content changes (the hooks' version rule, SetupHooks.hs, writes it through
+# this). HEAD is the repository's whatever NOGIT says; a tree without one gets
+# no-repository.
+writeStamp () {
+    if [ -e "$root/.git" ]; then
+        head=$(repoGit rev-parse HEAD)
+    else
+        head=no-repository
+    fi
+    mkdir -p "$(dirname "$1")"
+    printf '%s\n%s\n' "$head" "$GITDESCR" > "$1.tmp"
+    if cmp -s "$1.tmp" "$1"; then
+        rm -f "$1.tmp"
+    else
+        mv "$1.tmp" "$1"
+    fi
+}
 
 # Arguments: 1=commit hash, 2=describe string
 genGITBuildVersion () {
@@ -85,8 +105,10 @@ getGITVersion () {
 
 # -------------------------
 
-# --name prints the Bluesim kernel's version name and writes nothing.
+# --stamp FILE writes the install stamp (writeStamp above); --name prints
+# the Bluesim kernel's version name and writes nothing.
 case "${1:-}" in
+    --stamp) writeStamp "$2"; exit ;;
     --name)
         # Make builds keep the compiler's authoritative version alongside this
         # script, including when NOGIT or NOUPDATEBUILDVERSION was set only in
