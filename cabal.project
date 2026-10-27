@@ -7,8 +7,7 @@ optimization: 2
 -- this many slots; cabal-install 3.16 speaks GHC's protocol (doc/cabal.md).
 jobs: $ncpus
 
--- Bare ghci, runghc and ghc find the build's packages from any directory of
--- the checkout.
+-- Bare ghci and runghc find the build's packages (src/comp/.ghci).
 write-ghc-environment-files: always
 
 -- Parallel compilation only where object code is deterministic: from 9.12,
