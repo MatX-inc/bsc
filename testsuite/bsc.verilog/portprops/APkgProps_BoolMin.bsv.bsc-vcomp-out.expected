@@ -26,4 +26,5 @@ RST_N                          I     1 reset
 -----
 
 Verilog file created: sysAPkgProps_BoolMin.v
+Elaborated module file created: sysAPkgProps_BoolMin.ba
 All packages are up to date.
