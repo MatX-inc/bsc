@@ -30,7 +30,6 @@ Flags {
 	fdir = Nothing,
 	finalcleanup = 1,
 	genABin = False,
-	genABinVerilog = False,
 	genName = [],
 	genSysC = False,
 	ifLift = True,
