@@ -133,9 +133,12 @@ $(LIB_KERNEL): version $(KERNEL_OBJS)
 	$(RM) $(LIB_KERNEL)
 	$(AR) cr $(LIB_KERNEL) $(KERNEL_OBJS)
 
+# The version name the compiler's BuildVersion module carries, from the same
+# script (NOGIT honored), so the header and the compiler agree.
 .PHONY: version
 version:
-	./gen_version_h $(COMPDIR)/BuildVersion.hs > version.h
+	name=$$($(COMPDIR)/update-build-version.sh --name) && \
+	  echo "static const char* version_name = \"$$name\";" > version.h
 
 # Static check of the header files before releasing them.
 # Don't include headers which require systemC.
