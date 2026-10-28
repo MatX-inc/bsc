@@ -117,6 +117,7 @@ import ASyntax(APackage(..), ASPackage(..),
 import ASyntaxUtil(getForeignCallNames)
 import ASourceTypes(anchorASPackage)
 import AMuxSourceTypes(propagateArgumentMuxTypes)
+import AConditionalSourceTypes(propagateConditionalTypes)
 import WireAnalysis(getFinalWireTypeCandidates)
 import ACheck(aMCheck, aSMCheck, aSignalCheck, aSMethCheck)
 import AConv(aConv)
@@ -1176,7 +1177,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Generate muxes etc.
        start flags DFastate
        asmod0 <- aState errh flags pprops scheduleInfo atsPackage
-       let asmod = anchorASPackage (propagateArgumentMuxTypes asmod0)
+       let asmod = anchorASPackage (propagateConditionalTypes
+                                    (propagateArgumentMuxTypes asmod0))
        -- after aState, method calls should no longer exist
        asMethCheck flags asmod "astate"
        t <- dump errh flags t DFastate dumpnames asmod
