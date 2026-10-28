@@ -1,0 +1,24 @@
+# Generic native-AST candidate and proof/replay checks; no MatX source here.
+namespace eval eco_alias_orientation {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set yosys [which yosys]
+    if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO alias orientation: matched bluehs runtime unavailable"
+    } elseif {$yosys == 0 || ![file executable $yosys]} {
+        unsupported "ECO alias orientation: Yosys unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-alias-orientation-[pid]-[clock clicks]]]
+        file mkdir $root
+        set script [file join $here ASTAliasOrientation.hs]
+        set log [file join $root directed.log]
+        if {[catch {exec $bluehs -i[file join $sdk lib] $script [file join $root run] $script $yosys >$log 2>@1} message]} {
+            fail "ECO alias orientation: directed candidate/proof/replay"
+            set f [open $log]; verbose -log [read $f] 0; close $f
+        } else {pass "ECO alias orientation: directed candidate/proof/replay"}
+    }
+}

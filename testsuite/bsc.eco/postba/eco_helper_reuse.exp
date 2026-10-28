@@ -1,0 +1,32 @@
+namespace eval eco_helper_reuse {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set yosys [which yosys]
+    if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]] || $yosys == 0 || ![file executable $yosys]} {
+        unsupported "ECO live helper reuse: matched bluehs/Yosys unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-helper-reuse-[pid]-[clock clicks]]]
+        set log "$root.log"
+        if {[catch {exec $bluehs "-i[file join $sdk lib]" [file join $here HelperReuse.hs] $yosys $root >$log 2>@1} message]} {
+            fail "ECO live helper reuse: typed live projection, saved replay and negative controls"
+            set f [open $log]; verbose -log [read $f] 0; close $f
+        } else {pass "ECO live helper reuse: typed live projection, saved replay and negative controls"}
+    }
+}
+
+namespace eval eco_refinement_breadth {
+ set here [file dirname [file normalize [info script]]]
+ if {[info exists ::env(ECO_BLUEHS)] && [info exists ::env(ECO_SDK)] && [info exists ::env(ECO_YOSYS)]} {
+  set root [file normalize [file join [pwd] eco-refinement-breadth-[pid]-[clock clicks]]]
+  set log "$root.log"
+  if {[catch {exec $::env(ECO_BLUEHS) "-i[file join $::env(ECO_SDK) lib]" [file join $here ASTRefinements.hs] $::env(ECO_YOSYS) $root >$log 2>@1} message]} {
+   fail "ECO standard refinements: bounded family breadth"
+   set f [open $log];verbose -log [read $f] 0;close $f
+  } else {pass "ECO standard refinements: bounded family breadth"}
+ } else {unsupported "ECO standard refinements: matched runtime environment unavailable"}
+}
+
