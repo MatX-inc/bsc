@@ -577,6 +577,8 @@ removeInlinedPositions flags imod0 =
             imod_state_insts =
                 [ (i, rmStateVar sv) | (i, sv) <- imod_state_insts imod0 ],
             imod_local_defs = map rmDef (imod_local_defs imod0),
+            imod_expr_types = [(rmExpr e, ts) |
+                               (e, ts) <- imod_expr_types imod0],
             imod_rules = rmRules (imod_rules imod0),
             imod_interface = map rmIFace (imod_interface imod0)
           }
