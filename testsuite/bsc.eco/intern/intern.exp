@@ -1,0 +1,17 @@
+# Each script runs in a fresh process. Capture first checks for an empty table.
+set work [file join [absolute $srcdir] $subdir work_intern]
+file mkdir $work
+set spelling [open [file join $work spelling] w]
+puts -nonewline $spelling "runtime-spelling"
+close $spelling
+
+bluehs_run_pass Capture.hs
+bluehs_run_pass Restore.hs
+bluehs_run_pass Reentrant.hs
+bluehs_run_pass RestoreReentrant.hs
+
+bluehs_run_pass MethodName.hs
+bluehs_run_pass DuplicateRestore.hs
+bluehs_run_pass Empty.hs
+bluehs_run_pass Late.hs
+bluehs_run_pass Invalid.hs
