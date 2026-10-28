@@ -123,11 +123,17 @@ namedDeclaredWireTypeMap apkg = stableOrdNub (declared ++ renamed)
 
 sourceObservedWireTypes :: APackage -> M.Map String (S.Set IType)
 sourceObservedWireTypes apkg = MS.fromListWith S.union
-    [(name, ts) | (e,ts0) <- apkg_expr_types apkg,
-                  let ts = S.filter (not . isBitType) ts0,
-                  not (S.null ts),
-                  name <- S.toList (names (canonical e))]
+    [(name, ts) | (e,ts) <- M.toList observed,
+                  name <- S.toList (names e)]
   where
+    -- CSE and retained anchors can observe the same expression through many
+    -- aliases. Union those interpretations before expanding its names: doing
+    -- that expansion per observation generates a quadratic number of repeated
+    -- (name, type-set) pairs when there are many aliases of one value.
+    observed = MS.fromListWith S.union
+        [(canonical e, ts) | (e,ts0) <- apkg_expr_types apkg,
+                             let ts = S.filter (not . isBitType) ts0,
+                             not (S.null ts)]
     ifcDefs = [(d, fi) | AIDef { aif_value = d, aif_fieldinfo = fi } <- apkg_interface apkg] ++
               [(d, fi) | AIActionValue { aif_value = d, aif_fieldinfo = fi } <- apkg_interface apkg]
     -- A0 can split a method result across several physical ports. Match
