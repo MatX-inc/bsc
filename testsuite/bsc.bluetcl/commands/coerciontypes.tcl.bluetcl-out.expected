@@ -8,4 +8,5 @@ PASS mkForcedUnpack: legacy map refines x to CoercionTypes.Nibbles
 PASS mkForcedUnpack: legacy map refines x$Q_OUT to CoercionTypes.Nibbles
 PASS mkForcedUnpack: legacy map refines x.Q_OUT to CoercionTypes.Nibbles
 PASS mkLeafInputType: legacy map refines upper_bits to CoercionTypes.Nibbles
+PASS mkConstantType: legacy map refines result to CoercionTypes.Nibbles
 PASS: candidate types survive clearing and reloading the .ba file

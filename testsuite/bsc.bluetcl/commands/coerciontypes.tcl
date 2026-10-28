@@ -76,6 +76,7 @@ assertSingle mkForcedUnpack x CoercionTypes.Nibbles
 assertSingle mkForcedUnpack {x$Q_OUT} CoercionTypes.Nibbles
 assertSingle mkForcedUnpack x.Q_OUT CoercionTypes.Nibbles
 assertSingle mkLeafInputType upper_bits CoercionTypes.Nibbles
+assertSingle mkConstantType result CoercionTypes.Nibbles
 
 module load mkRepackTypes
 set before [module wiretypecandidates mkRepackTypes]

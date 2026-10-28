@@ -132,4 +132,15 @@ module mkLeafInputType(LeafInputType);
     endmethod
 endmodule
 
+interface ConstantType;
+    method Bit#(8) result;
+endinterface
+
+// The evaluated result is a literal, but the output port is still a wire
+// whose source interpretation must survive releasing the evaluator heap.
+(* synthesize *)
+module mkConstantType(ConstantType);
+    method Bit#(8) result = pack(Nibbles {upper: 5, lower: 3});
+endmodule
+
 endpackage

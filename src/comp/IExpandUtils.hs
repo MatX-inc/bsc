@@ -67,7 +67,7 @@ module IExpandUtils(
 
 import Control.Monad(when, liftM)
 import Control.Monad.State(StateT, runStateT, evalStateT, lift, liftIO,
-                           gets, get, put, modify)
+                           gets, get, put, modify, modify')
 import Data.IORef
 import System.IO.Unsafe
 import Data.List
@@ -77,6 +77,7 @@ import System.Time -- XXX: from old-time package
 import Debug.Trace(traceM)
 import qualified Data.Array as Array
 import qualified Data.Map as M
+import qualified Data.Map.Strict as MS
 import qualified Data.Set as S
 
 import Eval
@@ -454,7 +455,7 @@ instance PPrint HeapCell where
 -- observed after an alias was copied must still annotate both references.
 -- The union-find contains only types and metadata refs, never expressions,
 -- so dead heap cells can be collected as before.
-data HeapSourceTypes = HeapSourceTypes !Int (S.Set IType)
+data HeapSourceTypes = HeapSourceTypes !Int !(S.Set IType)
                      | HeapSourceAlias (IORef HeapSourceTypes)
 
 data HeapData = HeapData (IORef HeapCell) (IORef HeapSourceTypes)
@@ -526,6 +527,7 @@ shareHeapSourceTypes (HeapData _ left) (IRefT _ _ _ (HeapData _ right)) = liftIO
     (r, rr, rts) <- sourceTypeRoot right
     when (l /= r) $ do
       let ts = S.union lts rts
+      ts `seq` return ()
       if lr < rr
         then do writeIORef l (HeapSourceAlias r)
                 writeIORef r (HeapSourceTypes rr ts)
@@ -557,8 +559,8 @@ saveSourceType t e = saveLeafSourceType t e
 saveLeafSourceType :: IType -> HExpr -> G ()
 saveLeafSourceType t e@(ICon _ ci) | isWire ci = do
     norm <- getTypeNormalizer
-    modify (\s -> s { sourceLeafTypes =
-                         M.insertWith S.union e (S.singleton (norm t)) (sourceLeafTypes s) })
+    modify' (\s -> s { sourceLeafTypes =
+                          MS.insertWith S.union e (S.singleton (norm t)) (sourceLeafTypes s) })
   where isWire (ICModPort {}) = True
         isWire (ICMethArg {}) = True
         isWire _ = False
@@ -568,11 +570,15 @@ saveLeafSourceType _ _ = return ()
 -- ref), especially for an interface result. Remember its observation; final
 -- extraction retains it only if that expression is actually reachable.
 saveEvaluatedSourceTypes :: HExpr -> HExpr -> G ()
+-- A surviving reference already carries its observations. Keeping it in the
+-- global map would retain its heap graph even if executable uses disappear.
+saveEvaluatedSourceTypes source (IRefT _ _ _ ref) =
+    shareHeapSourceTypes ref source
 saveEvaluatedSourceTypes source value = do
     ts <- sourceTypes source
     when (not (S.null ts)) $
-      modify (\s -> s { sourceLeafTypes =
-                           M.insertWith S.union value ts (sourceLeafTypes s) })
+      modify' (\s -> s { sourceLeafTypes =
+                            MS.insertWith S.union value ts (sourceLeafTypes s) })
   where sourceTypes (IRefT _ _ _ (HeapData _ ref)) = do
           (_, _, ts) <- liftIO (sourceTypeRoot ref)
           return ts
@@ -638,7 +644,7 @@ data GState = GState {
         -- XXX what is the Id? flattened name?
         vars           :: [(Id, HStateVar)], -- instantiated verilog modules
         portTypeMap    :: PortTypeMap, -- map of state var -> port -> type
-        sourceLeafTypes :: M.Map HExpr (S.Set IType), -- unheaped leaves and evaluated roots
+        sourceLeafTypes :: !(M.Map HExpr (S.Set IType)), -- unheaped leaves and evaluated roots
 
         rules          :: HRules,    -- accumulated rules
         newRuleSuffix  :: Integer,   -- store for creating unique names when ruleNameCheck is off
