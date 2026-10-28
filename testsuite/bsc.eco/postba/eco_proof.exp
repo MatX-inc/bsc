@@ -15,7 +15,7 @@ namespace eval eco_sdk_proof {
     } else {
         set root [file normalize [file join [pwd] eco-proof-[pid]-[clock clicks]]]
         file mkdir $root
-        foreach script {ASTProof.hs ASTConcatProof.hs} {
+        foreach script {ASTProof.hs ASTContracts.hs ASTConcatProof.hs} {
             set label [file rootname $script]
             set log [file join $root "$label.log"]
             set extra {}

@@ -1,0 +1,24 @@
+namespace eval eco_search {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag "-i[file join $sdk lib]"
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO search: matched bluehs runtime unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-search-[pid]-[clock clicks]]]
+        file mkdir $root
+        foreach name {ASTSearch ASTExternalRules} {
+            set script [file join $here "$name.hs"]
+            set args [list [file join $root $name]]
+            if {$name eq "ASTExternalRules"} {lappend args $script}
+            set log [file join $root "$name.log"]
+            if {[catch {exec $bluehs $sourceFlag $script {*}$args >$log 2>@1} message]} {
+                fail "ECO search: $name"
+                set f [open $log]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO search: $name"}
+        }
+    }
+}

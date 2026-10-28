@@ -1,0 +1,20 @@
+namespace eval eco_vacancy {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag "-i[file join $sdk lib]"
+    set yosys [which yosys]
+    if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]] || $yosys == 0 || ![file executable $yosys]} {
+        unsupported "ECO vacancy: matched bluehs/Yosys unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-vacancy-[pid]-[clock clicks]]]
+        set log "$root.log"
+        if {[catch {exec $bluehs $sourceFlag [file join $here StateVacancy.hs] $yosys $root >$log 2>@1} message]} {
+            fail "ECO vacancy: typed alternatives and proof controls"
+            set f [open $log]; verbose -log [read $f] 0; close $f
+        } else {pass "ECO vacancy: typed alternatives and proof controls"}
+    }
+}

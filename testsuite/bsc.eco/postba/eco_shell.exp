@@ -1,0 +1,30 @@
+namespace eval eco_shell {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag "-i[file join $sdk lib]"
+    set yosys [which yosys]
+    if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO shell: matched bluehs runtime unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-shell-[pid]-[clock clicks]]]
+        file mkdir $root
+        foreach name {HistoricalShell InactiveHelpers PreservationBarriers} {
+            set args [list [file join $root $name]]
+            if {$name ne "PreservationBarriers"} {
+                if {$yosys == 0 || ![file executable $yosys]} {
+                    unsupported "ECO shell: Yosys unavailable"; continue
+                }
+                set args [concat [list $yosys] $args]
+            }
+            set log [file join $root "$name.log"]
+            if {[catch {exec $bluehs $sourceFlag [file join $here "$name.hs"] {*}$args >$log 2>@1} message]} {
+                fail "ECO shell: $name"
+                set f [open $log]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO shell: $name"}
+        }
+    }
+}
