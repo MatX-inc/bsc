@@ -333,6 +333,7 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts _ idefs rs ifc ffc
                             apkg_inputs = map aAbstractInput its,
                             apkg_external_wires = wi,
                             apkg_external_wire_types = lookupInstPorts Nothing,
+                            apkg_final_wire_names = Nothing,
                             apkg_expr_types = [(aSubst subst_map e, ts) |
                                                (e, ts) <- exprTypes],
                             apkg_clock_domains = clock_domains,

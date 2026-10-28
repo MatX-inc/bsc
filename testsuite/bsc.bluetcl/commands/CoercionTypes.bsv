@@ -14,6 +14,7 @@ interface CseTypes;
     method Action load(Bit#(8) a, Bit#(8) b);
     method Nibbles nibbles;
     method TaggedPayload taggedPayload;
+    method Bit#(16) combined;
 endinterface
 
 // Two separately written expressions enter different nominal types. Their
@@ -25,9 +26,9 @@ module mkCseTypes(CseTypes);
     Reg#(Bit#(8)) y <- mkReg(0);
     Reg#(Nibbles) ns <- mkReg(unpack(0));
     Reg#(TaggedPayload) ts <- mkReg(unpack(0));
+    Bit#(8) forNibbles = (x + y) ^ 8'h53;
+    Bit#(8) forTagged = (x + y) ^ 8'h53;
     rule update;
-        Bit#(8) forNibbles = (x + y) ^ 8'h53;
-        Bit#(8) forTagged = (x + y) ^ 8'h53;
         Nibbles nv = unpack(forNibbles);
         TaggedPayload tv = unpack(forTagged);
         ns <= nv;
@@ -39,6 +40,9 @@ module mkCseTypes(CseTypes);
     endmethod
     method Nibbles nibbles = ns;
     method TaggedPayload taggedPayload = ts;
+    // Reusing the shared result in a concatenation keeps it as a physical
+    // wire instead of letting codegen inline it into both register inputs.
+    method Bit#(16) combined = {forNibbles, forTagged};
 endmodule
 
 interface RepackTypes;

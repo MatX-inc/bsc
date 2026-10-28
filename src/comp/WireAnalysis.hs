@@ -46,7 +46,7 @@ import BackendNamingConventions(isRegInst, isCRegInst, cregToReg,
 -- new internal wires only when there is a single observed interpretation.
 getWireTypeMap :: APackage -> [(String, IType)]
 getWireTypeMap apkg =
-    let declared = declaredWireTypeMap apkg
+    let declared = namedDeclaredWireTypeMap apkg
         known = M.fromListWith S.union [(n, S.singleton t) | (n,t) <- declared]
         inferred = observedWireTypes apkg
         choices n = S.filter (not . isBitType) $
@@ -65,7 +65,7 @@ getWireTypeCandidates :: APackage -> [(String, [IType])]
 getWireTypeCandidates apkg = M.toList $ M.map S.toList $
     M.unionWith S.union (observedWireTypes apkg)
         (M.fromListWith S.union [(n,S.singleton t) |
-                                 (n,t) <- declaredWireTypeMap apkg])
+                                 (n,t) <- namedDeclaredWireTypeMap apkg])
 
 isBitType :: IType -> Bool
 isBitType (ITAp t _) = t == itBit
@@ -75,7 +75,37 @@ isBitType _ = False
 -- those names. Only actual definitions and named boundary wires are emitted;
 -- metadata expressions do not manufacture wires in the generated netlist.
 observedWireTypes :: APackage -> M.Map String (S.Set IType)
-observedWireTypes apkg = M.fromListWith S.union
+observedWireTypes apkg = M.unionWith S.union boundary mapped
+  where
+    raw = sourceObservedWireTypes apkg
+    declaredNames = S.fromList (map fst (declaredWireTypeMap apkg))
+    -- Established boundary aliases are useful for both Verilog and Bluesim.
+    -- Internal observations require a binding to an emitted signal: retaining
+    -- the old name can silently alias a DIFFERENT wire after stable renaming.
+    boundary = M.filterWithKey (\n _ -> n `S.member` declaredNames && safeAlias n) raw
+    safeAlias = case apkg_final_wire_names apkg of
+        Nothing -> const True
+        Just names -> let emitted = S.fromList (M.elems names)
+                      in \n -> n `S.notMember` emitted || M.lookup n names == Just n
+    mapped = case apkg_final_wire_names apkg of
+        Nothing -> M.empty
+        Just names -> M.fromListWith S.union
+            [(final, ts) | (n, ts) <- M.toList raw,
+                           Just final <- [M.lookup n names]]
+
+-- Keep the declared map's existing aliases, and add their physical spelling
+-- when codegen renamed them (including collision-aware dollar removal).
+namedDeclaredWireTypeMap :: APackage -> [(String, IType)]
+namedDeclaredWireTypeMap apkg = stableOrdNub (declared ++ renamed)
+  where
+    declared = declaredWireTypeMap apkg
+    renamed = case apkg_final_wire_names apkg of
+        Nothing -> []
+        Just names -> [(final, t) | (n,t) <- declared,
+                                   Just final <- [M.lookup n names], final /= n]
+
+sourceObservedWireTypes :: APackage -> M.Map String (S.Set IType)
+sourceObservedWireTypes apkg = M.fromListWith S.union
     [(name, ts) | (e,ts0) <- apkg_expr_types apkg,
                   let ts = S.filter (not . isBitType) ts0,
                   not (S.null ts),
