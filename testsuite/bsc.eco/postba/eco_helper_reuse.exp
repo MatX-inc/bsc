@@ -30,3 +30,44 @@ namespace eval eco_refinement_breadth {
  } else {unsupported "ECO standard refinements: matched runtime environment unavailable"}
 }
 
+namespace eval eco_helper_flow {
+ set here [file dirname [file normalize [info script]]]
+ set bluehs [which bluehs]
+ if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+ set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+ if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+ set yosys [which yosys]
+ if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+ if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]] || $yosys == 0 || ![file executable $yosys]} {
+  unsupported "ECO standard refinements: matched bluehs/Yosys unavailable"
+ } else {
+  set root [file normalize [file join [pwd] eco-refinements-[pid]-[clock clicks]]]
+  file mkdir $root
+  set captures {};set ok 1
+  foreach side {old new} {
+   set dir [file join $root $side];file mkdir $dir
+   set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -g mkHelperPipeline -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+   if {$side eq "new"} {lappend args -Xcpp -DECO_REMOVE_STAGE}
+   lappend args [file join $here HelperPipeline.bs]
+   if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+    fail "ECO standard refinements: capture $side";verbose -log $message 0;set ok 0
+   } else {pass "ECO standard refinements: capture $side"}
+   lappend captures [file join $dir capture mkHelperPipeline.replay]
+  }
+  if {$ok} {
+   set flow [file join $root flow]
+   set log [file join $root flow.log]
+   if {[catch {exec $bluehs "-i[file join $sdk lib]" [file join $here HelperReuseFlow.hs] [which_bsc] {*}$captures $::env(BLUESPECDIR) [file join $sdk build.manifest] $flow $yosys >$log 2>@1} message]} {
+    fail "ECO standard refinements: native translated flow and saved replay"
+    set f [open $log];verbose -log [read $f] 0;close $f
+   } else {
+    pass "ECO standard refinements: native translated flow and saved replay"
+    set log [file join $root cli.log]
+    if {[catch {exec $bluehs "-i[file join $sdk lib]" [file join $sdk scripts captures.hs] --objective translated-normalized --refinements standard --invariants defer "$flow-cli.config" >$log 2>@1} message]} {
+     fail "ECO standard refinements: packaged CLI"
+     set f [open $log];verbose -log [read $f] 0;close $f
+    } else {pass "ECO standard refinements: packaged CLI"}
+   }
+  }
+ }
+}

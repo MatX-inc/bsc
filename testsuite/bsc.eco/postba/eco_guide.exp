@@ -1,0 +1,31 @@
+namespace eval eco_guide {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag "-i[file join $sdk lib]"
+    set yosys [which yosys]
+    if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]] || $yosys == 0 || ![file executable $yosys]} {
+        unsupported "ECO guide: matched bluehs/Yosys unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-guide-[pid]-[clock clicks]]]
+        set script [file join $here .. .. .. util eco examples run.sh]
+        set log "$root.log"
+        if {[catch {exec bash $script [which_bsc] $bluehs $sdk $yosys $::env(BLUESPECDIR) $root >$log 2>@1} message]} {
+            fail "ECO guide: packaged capture, configuration, metrics and replay commands"
+            set f [open $log]; verbose -log [read $f] 0; close $f
+        } elseif {![file exists [file join $root replayed-branch selected.v]] || ![file exists [file join $root selected-metrics report.json]] || ![file exists [file join $root ordinary-metrics report.json]]} {
+            fail "ECO guide: complete example products"
+        } else {
+            pass "ECO guide: packaged capture, configuration, metrics and replay commands"
+            set replayControls [file join $here FlowReplayControls.hs]
+            set replayLog "$root-flow-replay-controls.log"
+            if {[catch {exec $bluehs $sourceFlag $replayControls $bluehs $sdk [file join $root flow] "$root-flow-replay-controls" >$replayLog 2>@1} message]} {
+                fail "ECO guide: shared full-flow fresh replay controls"
+                set f [open $replayLog]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO guide: shared full-flow fresh replay controls"}
+        }
+    }
+}

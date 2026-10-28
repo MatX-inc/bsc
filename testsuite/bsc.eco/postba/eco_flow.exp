@@ -1,0 +1,36 @@
+namespace eval eco_flow {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag "-i[file join $sdk lib]"
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO flow: matched bluehs runtime unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-flow-[pid]-[clock clicks]]]
+        file mkdir $root
+        set snapshots {}; set captures {}; set ok 1
+        foreach side {old new} {
+            set dir [file join $root $side]; file mkdir $dir
+            set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr -g mkFanoutLoss -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+            if {$side eq "new"} {lappend args -Xcpp -DECO_NEW}
+            lappend args [file join $here FanoutLoss.bs]
+            if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+                fail "ECO flow: capture $side"; verbose -log $message 0; set ok 0
+            } else {pass "ECO flow: capture $side"}
+            lappend snapshots [file join $dir capture mkFanoutLoss.eco-ast]
+            lappend captures [file join $dir capture mkFanoutLoss.replay]
+        }
+        if {$ok} {
+            set manifest [file join $sdk build.manifest]
+            foreach {name args} [list ASTSnapshot [concat $snapshots [list [file join $root snapshots]]] ASTFlow [concat [list [which_bsc]] $captures [list $::env(BLUESPECDIR) $manifest [file join $root flow]]]] {
+                set log [file join $root "$name.log"]
+                if {[catch {exec $bluehs $sourceFlag [file join $here "$name.hs"] {*}$args >$log 2>@1} message]} {
+                    fail "ECO flow: $name"
+                    set f [open $log]; verbose -log [read $f] 0; close $f
+                } else {pass "ECO flow: $name"}
+            }
+        }
+    }
+}

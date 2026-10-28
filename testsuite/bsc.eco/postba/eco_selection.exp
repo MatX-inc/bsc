@@ -1,0 +1,29 @@
+namespace eval eco_selection {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag "-i[file join $sdk lib]"
+    set yosys [which yosys]
+    if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]] || $yosys == 0 || ![file executable $yosys]} {
+        unsupported "ECO selection: matched bluehs/Yosys unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-selection-[pid]-[clock clicks]]]
+        file mkdir $root
+        set example [file join $root example]
+        foreach {name command} [list \
+            policy [list $bluehs $sourceFlag [file join $here SelectionPolicy.hs]] \
+            fixture [list bash [file join $here .. .. .. util eco examples run.sh] [which_bsc] $bluehs $sdk $yosys $::env(BLUESPECDIR) $example] \
+            replay [list $bluehs $sourceFlag [file join $sdk scripts select.hs] strict $yosys 30 [file join $root selected] [file join $example flow]] \
+            rejection [list $bluehs $sourceFlag [file join $here SelectionReject.hs] [file join $example flow] $yosys [file join $root rejected]]] {
+            set log [file join $root "$name.log"]
+            if {[catch {exec {*}$command >$log 2>@1} message]} {
+                fail "ECO selection: $name"
+                set f [open $log]; verbose -log [read $f] 0; close $f
+                break
+            } else {pass "ECO selection: $name"}
+        }
+    }
+}
