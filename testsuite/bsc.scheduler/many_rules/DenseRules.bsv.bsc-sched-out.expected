@@ -4772,4 +4772,5 @@ Logical execution order: bump,
 
 ============================================
 Verilog file created: mkDenseRules.v
+Elaborated module file created: mkDenseRules.ba
 All packages are up to date.
