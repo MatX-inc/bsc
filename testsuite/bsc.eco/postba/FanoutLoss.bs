@@ -1,0 +1,22 @@
+package FanoutLoss where
+
+interface FanoutLoss =
+    put :: Bit 4 -> Action {-# arg_names = [value] #-}
+    result :: Bit 64 -> Bit 64 -> Bit 4 -> Bit 128
+        {-# arg_names = [x, y, selector] #-}
+
+{-# synthesize mkFanoutLoss #-}
+mkFanoutLoss :: Module FanoutLoss
+mkFanoutLoss = module
+    savedSelector :: Reg (Bit 4) <- mkReg 0
+    interface FanoutLoss
+        put value = action
+            savedSelector := value
+        result x y selector =
+#ifdef ECO_NEW
+            zeroExtend (pack ((x < y) || selector[0:0] == 1) ++
+                        pack ((x /= y) && selector[1:1] == 1))
+#else
+            zeroExtend (pack ((x /= y) || selector[0:0] == 1) ++
+                        pack ((x /= y) && selector[1:1] == 1))
+#endif

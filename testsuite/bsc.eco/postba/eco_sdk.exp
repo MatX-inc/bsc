@@ -1,0 +1,38 @@
+# The real bluehs runtime owns the compiled library; check the recorded SDK.
+namespace eval eco_sdk {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO SDK: actual bluehs/source SDK unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-sdk-[pid]-[clock clicks]]]
+        file mkdir $root
+        set manifest [file join $sdk build.manifest]
+        set checker [file join $sdk scripts package-sdk.hs]
+        if {[catch {exec $bluehs $checker --check $manifest >$root/valid.log 2>@1} message]} {
+            fail "ECO SDK: matched real runtime, compiled library and sources"
+            verbose -log $message 0
+        } else {pass "ECO SDK: matched real runtime, compiled library and sources"}
+        set f [open $manifest]; set original [read $f]; close $f
+        foreach {label marker} {library libHSbsc source sdkSources} {
+            set start [string first $marker $original]
+            set digest [string first {fiSHA256 = "} $original $start]
+            if {$start < 0 || $digest < 0} {
+                fail "ECO SDK: $label identity fixture exists"
+                continue
+            }
+            set first [expr {$digest + [string length {fiSHA256 = "}]}]
+            set changed [string replace $original $first [expr {$first + 63}] [string repeat 0 64]]
+            set path [file join $root "$label.manifest"]
+            set f [open $path w]; puts -nonewline $f $changed; close $f
+            set rejected [catch {exec $bluehs $checker --check $path >$root/$label.log 2>@1} message]
+            set f [open $root/$label.log]; set output [read $f]; close $f
+            if {$rejected && [string first {SDK/runtime identity changed:} $output] >= 0} {
+                pass "ECO SDK: changed $label digest rejects"
+            } else {fail "ECO SDK: changed $label digest rejects"; verbose -log $output 0}
+        }
+    }
+}

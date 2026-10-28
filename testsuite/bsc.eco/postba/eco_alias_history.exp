@@ -1,0 +1,23 @@
+# Uses the existing bluehs runtime, native AST and ordinary DejaGNU harness.
+namespace eval eco_alias_history {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set iverilog [which iverilog]
+    set vvp [which vvp]
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]] || $iverilog == 0 || $vvp == 0} {
+        unsupported "ECO alias history: matched bluehs/Icarus unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-alias-history-[pid]-[clock clicks]]]
+        file mkdir $root
+        set log [file join $root directed.log]
+        if {[catch {exec $bluehs "-i[file join $sdk lib]" [file join $here ASTAliasHistory.hs] $root $iverilog $vvp >$log 2>@1} message]} {
+            fail "ECO alias history: ASTAliasHistory"
+            set f [open $log]; verbose -log [read $f] 0; close $f
+        } else {
+            pass "ECO alias history: ASTAliasHistory"
+        }
+    }
+}

@@ -1,0 +1,45 @@
+# Public native string-parameter filter fixture; no RTL parsing or private capture.
+namespace eval eco_renderer {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag "-i[file join $sdk lib]"
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO renderer: matched bluehs runtime unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-renderer-[pid]-[clock clicks]]]
+        file mkdir $root
+        set ordinary [file join $root ordinary]; file mkdir $ordinary
+        set macro [file join $root macro]; file mkdir $macro
+        set snapshot [file join $ordinary capture mkStringParameter.eco-ast]
+        set source [file join $here StringParameter.bs]
+        set base [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -g mkStringParameter]
+        set args [concat $base [list -bdir $ordinary -vdir $ordinary -info-dir $ordinary -eco-capture [file join $ordinary capture] $source]]
+        if {[catch {exec {*}$args >$ordinary/capture.log 2>@1} message]} {
+            fail "ECO renderer: ordinary string-parameter capture"; verbose -log $message 0
+        } else {
+            pass "ECO renderer: ordinary string-parameter capture"
+            # Shell-quote literal fixture paths; do not interpolate a command.
+            proc quote {s} {return "'[string map [list ' '\\''] $s]'"}
+            set filter [file join $root filter.sh]
+            set f [open $filter w]
+            puts $f {#!/bin/sh}
+            puts $f {set -eu}
+            puts $f "exec [quote $bluehs] [quote $sourceFlag] [quote [file join $here RendererFilter.hs]] [quote $snapshot] \"\$1\""
+            close $f; file attributes $filter -permissions 0755
+            set args [concat $base [list -bdir $macro -vdir $macro -info-dir $macro -eco-capture [file join $macro capture] -verilog-filter $filter $source]]
+            if {[catch {exec {*}$args >$macro/capture.log 2>@1} message]} {
+                fail "ECO renderer: authenticated native parameter filter capture"; verbose -log $message 0
+            } else {
+                pass "ECO renderer: authenticated native parameter filter capture"
+                set log [file join $root checks.log]
+                if {[catch {exec $bluehs $sourceFlag [file join $here ASTRenderer.hs] [file join $macro capture mkStringParameter.eco-ast] $snapshot [file join $root checks] >$log 2>@1} message]} {
+                    fail "ECO renderer: layout, policy and filter guards"
+                    set f [open $log]; verbose -log [read $f] 0; close $f
+                } else {pass "ECO renderer: layout, policy and filter guards"}
+            }
+        }
+    }
+}

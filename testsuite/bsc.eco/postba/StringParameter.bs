@@ -1,0 +1,10 @@
+package StringParameter where
+
+{-# synthesize mkStringParameter { parameter label } #-}
+mkStringParameter :: String -> Module Empty
+mkStringParameter label = module
+    counter :: Reg (Bit 8) <- mkReg 0
+    rules
+        "step": when True ==> action
+            counter := counter + 1
+            $display "%s %d" label counter

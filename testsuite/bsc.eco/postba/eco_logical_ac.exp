@@ -1,0 +1,31 @@
+# Logical identities use the existing bluehs/DejaGNU and optional Icarus tools.
+namespace eval eco_logical_ac {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO logical AC: matched bluehs runtime unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-logical-ac-[pid]-[clock clicks]]]
+        file mkdir $root
+        set script [file join $here ASTLogicalAC.hs]
+        set log [file join $root directed.log]
+        if {[catch {exec $bluehs -i[file join $sdk lib] $script directed >$log 2>@1} message]} {
+            fail "ECO logical AC: directed strict controls"
+            set f [open $log]; verbose -log [read $f] 0; close $f
+        } else {pass "ECO logical AC: directed strict controls"}
+        set iverilog [which iverilog]
+        set vvp [which vvp]
+        if {$iverilog == 0 || $vvp == 0} {
+            unsupported "ECO logical AC: Icarus unavailable"
+        } else {
+            set log [file join $root oracle.log]
+            if {[catch {exec $bluehs -i[file join $sdk lib] $script oracle [file join $root oracle] $iverilog $vvp >$log 2>@1} message]} {
+                fail "ECO logical AC: exhaustive X/Z oracle"
+                set f [open $log]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO logical AC: exhaustive X/Z oracle"}
+        }
+    }
+}
