@@ -1,0 +1,179 @@
+namespace eval eco_backend {
+    proc check {label condition} {
+        if {$condition} {pass "ECO backend: $label"} else {fail "ECO backend: $label"}
+        return $condition
+    }
+
+    proc log_failure {logfile} {
+        if {[file exists $logfile]} {
+            set f [open $logfile]; verbose -log [read $f] 0; close $f
+        }
+    }
+
+    proc run {label arguments logfile {expected ""}} {
+        variable here
+        set previous [pwd]
+        cd $here
+        set command [list [which_bsc]]
+        if {[lindex $arguments 0] in {-eco-replay -eco-adapt}} {
+            set command [list env BSC_OPTIONS= [which_bsc]]
+        }
+        set status [exec_with_log eco_backend \
+            [concat $command $arguments [list > $logfile 2>@1]]]
+        set child_failure [expr {$status == 1 && [lindex $::errorCode 0] eq "CHILDSTATUS" && \
+            [lindex $::errorCode 2] != 0}]
+        cd $previous
+        if {$expected eq ""} {
+            set ok [expr {$status == 0}]
+        } else {
+            set f [open $logfile]; set output [read $f]; close $f
+            set ok [expr {$child_failure && [string first $expected $output] >= 0}]
+        }
+        if {!$ok} {log_failure $logfile}
+        return [check $label $ok]
+    }
+
+    proc identical {label first second logfile} {
+        set status [exec_with_log eco_backend [list cmp $first $second > $logfile 2>@1]]
+        if {$status != 0} {log_failure $logfile}
+        return [check $label [expr {$status == 0}]]
+    }
+
+    proc sources_unchanged {label} {
+        variable result
+        set logfile [file join $result $label-source.log]
+        close [open $logfile w]
+        set ok 1
+        foreach before [glob [file join $result source-before *]] {
+            set name [file tail $before]
+            if {$name eq "keep.plan"} {
+                set after [file join $result keep.plan]
+            } else {
+                set after [file join $result capture $name]
+            }
+            if {[exec_with_log eco_backend [list cmp $before $after >> $logfile 2>@1]] != 0} {set ok 0}
+        }
+        if {!$ok} {log_failure $logfile}
+        return [check "$label preserves source bytes" $ok]
+    }
+
+    proc reject_output {label expected arguments} {
+        variable result
+        run "$label rejected" $arguments [file join $result $label.log] $expected
+        return [sources_unchanged $label]
+    }
+
+    proc test {} {
+        variable here
+        variable result
+        bsc_initialize
+        set has_bluehs [expr {$::bluehs ne "" && [file isfile $::bluehs] && [file executable $::bluehs]}]
+        file delete -force $result
+        file mkdir $result [file join $result new]
+        if {$has_bluehs} {
+            bluehs_run_pass BackendSafety.hs [list [file join $result guards]] [file join $result safety.log]
+            bluehs_run_pass BackendPlanContext.hs [list [file join $result contexts]] [file join $result contexts.log]
+        } else {
+            untested "ECO backend: typed safety checks (bluehs unavailable)"
+        }
+        set compiled [run "capture helper-retention fixture" \
+            [list -u -verilog -elab -no-show-timestamps -cpp -Xcpp -DECO_NEW -g mkFanoutLoss \
+                -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched \
+                -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr \
+                -bdir [file join $result new] -vdir [file join $result new] -info-dir [file join $result new] \
+                -eco-capture [file join $result capture] [file join $here FanoutLoss.bs]] \
+            [file join $result compile.log]]
+        if {!$compiled} {
+            untested "ECO backend: replay controls require a successful capture"
+            return
+        }
+        set stem [file join $result capture mkFanoutLoss]
+        set plan [file join $result keep.plan]
+        set planned 0
+        if {$has_bluehs} {
+            set planned [bluehs_run_pass BackendContract.hs [list plan $stem.replay $stem $plan] \
+                [file join $result plan.log]]
+        } else {
+            untested "ECO backend: native plan generation (bluehs unavailable)"
+        }
+        file mkdir [file join $result source-before]
+        foreach path [glob [file join $result capture *]] {
+            file copy $path [file join $result source-before [file tail $path]]
+        }
+        if {$planned} {file copy $plan [file join $result source-before keep.plan]}
+
+        # Every graph/checkpoint filename must be checked before any RTL is emitted.
+        foreach suffix {eco-preopt eco-graph eco-ports eco-ast eco-ast.bin eco-ast.output.v} {
+            set graph [file join $result graph-$suffix]
+            file mkdir $graph
+            file link -symbolic [file join $graph mkFanoutLoss.$suffix] $stem.ba
+            if {![reject_output "graph-$suffix" {output would overwrite a bound capture} \
+                    [list -eco-replay $stem.replay -eco-output [file join $result replay-$suffix] -eco-graph $graph]]} {return}
+            check "graph-$suffix emits no RTL" [expr {![file exists [file join $result replay-$suffix mkFanoutLoss.v]]}]
+        }
+        if {![reject_output source-graph {output would overwrite a bound capture} \
+                [list -eco-replay $stem.replay -eco-output [file join $result source-graph] \
+                    -eco-graph [file join $result capture]]]} {return}
+        if {![reject_output adapt-graph {output would overwrite a bound capture} \
+                [list -eco-adapt $stem.replay -eco-output [file join $result adapt-graph] \
+                    -eco-graph [file join $result graph-eco-graph]]]} {return}
+        check "rejected adaptation emits no control RTL" \
+            [expr {![file exists [file join $result adapt-graph current-control mkFanoutLoss.v]]}]
+        if {[run "adaptation accepts separate graph output" \
+                [list -eco-adapt $stem.replay -eco-output [file join $result adapt-safe] \
+                    -eco-graph [file join $result adapt-safe-graph]] [file join $result adapt-safe.log]]} {
+            identical "adaptation preserves ordinary bytes" [file join $result new mkFanoutLoss.v] \
+                [file join $result adapt-safe current-control mkFanoutLoss.v] [file join $result adapt-safe-bytes.log]
+            foreach suffix {eco-graph eco-ast} {
+                set path [file join $result adapt-safe-graph mkFanoutLoss.$suffix]
+                check "adaptation emits $suffix" [expr {[file exists $path] && [file size $path] > 0}]
+            }
+        }
+        if {![sources_unchanged adapt-safe]} {return}
+        if {!$planned} {
+            untested "ECO backend: plan controls require a generated native plan"
+            return
+        }
+
+        # Reject a populated control directory before following any link into input.
+        file mkdir [file join $result plan-overlap ordinary-control]
+        file link -symbolic [file join $result plan-overlap ordinary-control replay-control.log] $stem.ba
+        if {![reject_output plan-overlap {backend plan output directory must be empty} \
+                [list -eco-replay $stem.replay -eco-output [file join $result plan-overlap] -eco-backend-plan $plan]]} {return}
+        file mkdir [file join $result plan-graph]
+        file link -hard [file join $result plan-graph mkFanoutLoss.eco-graph] $plan
+        if {![reject_output source-plan {output would overwrite a bound capture, plan or ordinary output artifact} \
+                [list -eco-replay $stem.replay -eco-output [file join $result source-plan] \
+                    -eco-backend-plan $plan -eco-graph [file join $result plan-graph]]]} {return}
+        foreach mode {empty keep} {
+            set selected $plan
+            if {$mode eq "empty"} {set selected $plan.empty}
+            set replayed($mode) [run "$mode plan replay" \
+                [list -eco-replay $stem.replay -eco-output [file join $result $mode] -eco-backend-plan $selected] \
+                [file join $result $mode.log]]
+        }
+        if {$replayed(empty)} {
+            identical "empty plan preserves ordinary bytes" [file join $result new mkFanoutLoss.v] \
+                [file join $result empty mkFanoutLoss.v] [file join $result empty-bytes.log]
+        }
+        if {$replayed(keep)} {
+            bluehs_run_pass BackendContract.hs \
+                [list verify $plan [file join $result keep mkFanoutLoss.eco-graph]] [file join $result verify.log]
+        }
+        foreach mode {schema module capture preopt duplicate type rhs unknown protected} {
+            switch $mode {
+                schema - module - capture - preopt {set expected {structural plan capture/module/schema/pre-aOpt digest mismatch}}
+                duplicate {set expected {duplicate keep definition}}
+                default {set expected {keep request is unknown, protected, non-scalar, opaque or has stale typed RHS}}
+            }
+            run "invalid $mode plan rejected" \
+                [list -eco-replay $stem.replay -eco-output [file join $result reject-$mode] -eco-backend-plan $plan.$mode] \
+                [file join $result reject-$mode.log] $expected
+            check "invalid $mode plan emits no RTL" [expr {![file exists [file join $result reject-$mode mkFanoutLoss.v]]}]
+        }
+    }
+
+    set here [file dirname [file normalize [info script]]]
+    set result [file join $here work_backend]
+    test
+}

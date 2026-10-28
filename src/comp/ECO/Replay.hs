@@ -6,6 +6,7 @@ module ECO.Replay
     , captureReplay, prepareReplay, loadReplay
     , verifyReplayOutputs, checkReplayOutputPaths, outputPathsOverlap, inspectReplay
     , prepareReplayAdaptation, runReplayControl, finishReplayAdaptation
+    , writeReplayEvidence, replayEvidenceIdentity, ReplayEvidence(..), readReplayEvidence
     , replayTargetRevision, replaySchema, fileIdentity, sameFileIdentity
     ) where
 
@@ -73,6 +74,18 @@ data ReplayManifest = ReplayManifest
     , rmDependencies :: [FileIdentity]
     , rmFilters :: [(String, FileIdentity)]
     , rmOutputs :: [(FilePath, FileIdentity)]
+    } deriving (Read, Show)
+
+-- Optional versioned companion. Legacy captures have no companion and do not
+-- acquire historical facts during adaptation. All observations remain evidence
+-- requiring explicit binding/reproof, never assumptions used by this backend.
+data ReplayEvidence = ReplayEvidence
+    { reSchema :: Int
+    , reCapture :: FileIdentity
+    , reABin :: FileIdentity
+    , reSourceCapture :: FileIdentity
+    , reObservedProducer :: FileIdentity
+    , rePayload :: FileIdentity
     } deriving (Read, Show)
 
 failReplay :: String -> IO a
@@ -203,6 +216,7 @@ prepareReplay :: FilePath -> IO ReplayManifest
 prepareReplay path = do
     manifest <- readTextRecord path
     validateReplayFiles manifest
+    _ <- replayEvidenceIdentity path
     producer <- getExecutablePath >>= fileIdentity
     unless (fiSHA256 producer == fiSHA256 (rmProducer manifest)) $
         failReplay "compiler executable differs from capture producer"
@@ -259,9 +273,16 @@ replayFiles manifest =
 checkReplayOutputPaths :: FilePath -> ReplayManifest -> [FilePath] -> IO ()
 checkReplayOutputPaths manifestPath manifest outputs = do
     source <- canonicalizePath manifestPath
-    let astStem = dropExtension source ++ ".eco-ast"
-        companions = [astStem, astStem ++ ".bin", astStem ++ ".output.v"]
-    overlap <- outputPathsOverlap (source : companions ++ map fiPath (replayFiles manifest)) outputs
+    evidence <- readReplayEvidence source
+    let identities = replayFiles manifest ++
+                     maybe [] (\e -> [reSourceCapture e, reObservedProducer e, rePayload e]) evidence
+        astStem = dropExtension source ++ ".eco-ast"
+        -- Protect existing companion files, including legacy JSON reports.
+        companions = [source ++ ".evidence", source ++ ".evidence.json",
+                      astStem, astStem ++ ".bin", astStem ++ ".output.v"] ++
+                     [dropExtension source ++ suffix |
+                        suffix <- [".eco-preopt", ".eco-graph", ".eco-ports", ".eco-backend.json"]]
+    overlap <- outputPathsOverlap (source : companions ++ map fiPath identities) outputs
     unless (not overlap) $
         failReplay "output would overwrite a bound capture or snapshot artifact"
 
@@ -281,6 +302,7 @@ prepareReplayAdaptation path directory = do
     manifest <- readTextRecord path
     checkIdentity sourceIdentity
     validateReplayFiles manifest
+    _ <- replayEvidenceIdentity path
     checkIdentity (rmProducer manifest)
     mapM_ (checkIdentity . snd) (rmOutputs manifest)
     runReplayControl (fiPath (rmProducer manifest)) path manifest (directory </> "original-control")
@@ -319,7 +341,7 @@ runReplayControl executable manifestPath manifest directory = do
 -- has moved behind compatibility symlinks. Only identity path spellings and
 -- cwd change: native bytes, flags, dependency lookup names, filter commands,
 -- producer SHA and expected output SHAs are unchanged. The original manifest
--- is never rewritten. This is not an alternate replay guard.
+-- and evidence are never rewritten. This is not an alternate replay guard.
 relocatedReplayControl :: FilePath -> ReplayManifest -> FilePath -> IO (FilePath,[FileIdentity])
 relocatedReplayControl originalPath manifest directory = do
     let relocate identity = do
@@ -338,20 +360,31 @@ relocatedReplayControl originalPath manifest directory = do
           rmABin=abin,rmFlags=flags,rmIntern=intern,rmDependencies=dependencies,
           rmFilters=filters,rmOutputs=outputs}
     source <- fileIdentity originalPath
-    if show relocated == show manifest
+    evidence <- readReplayEvidence originalPath
+    let literalEvidenceBinding = case evidence of
+          Nothing -> True
+          Just envelope -> reCapture envelope == source && reABin envelope == abin
+    if show relocated == show manifest && literalEvidenceBinding
       then return (fiPath source,[]) else do
       let controlPath = directory </> "relocated-input.replay"
           ledgerPath = directory </> "relocation-receipt"
       exists <- doesFileExist controlPath
       when exists $ failReplay "relocation control input already exists"
+      originalEvidence <- replayEvidenceIdentity originalPath
       writeFile controlPath (show relocated ++ "\n")
       control <- fileIdentity controlPath
+      controlEvidence <- case evidence of
+        Nothing -> return Nothing
+        Just envelope -> do
+          writeFile (controlPath ++ ".evidence") (show (envelope {
+            reCapture=control,reABin=abin}) ++ "\n")
+          fmap Just (fileIdentity (controlPath ++ ".evidence"))
       let mapping = zip (replayFiles manifest) (replayFiles relocated)
-      -- Preserve the versioned receipt's optional companion-binding slots.
-      writeFile ledgerPath (show ("bsc-eco-relocation-1",source,(Nothing :: Maybe FileIdentity),
-          control,(Nothing :: Maybe FileIdentity),(rmWorkingDirectory manifest,cwd),mapping) ++ "\n")
+      writeFile ledgerPath (show ("bsc-eco-relocation-1",source,originalEvidence,
+          control,controlEvidence,(rmWorkingDirectory manifest,cwd),mapping) ++ "\n")
       ledger <- fileIdentity ledgerPath
-      return (controlPath,[control,ledger])
+      return (controlPath,control:ledger:maybe [] (:[]) controlEvidence ++
+                                    maybe [] (:[]) originalEvidence)
 
 finishReplayAdaptation :: FileIdentity -> ReplayManifest -> FilePath -> FilePath -> IO ()
 finishReplayAdaptation sourceIdentity source directory adaptedPath = do
@@ -373,7 +406,61 @@ finishReplayAdaptation sourceIdentity source directory adaptedPath = do
     let receipt = ("bsc-eco-native-adapter-1", sourceIdentity, rmProducer source,
                    producer, adaptedIdentity, originalOutputs, currentOutputs, relocation,
                    "Both ordinary backend controls equal every captured RTL digest; native schema/version and dependencies checked; no frontend run.")
+    copyReplayEvidence (fiPath sourceIdentity) adaptedPath
     writeFile (directory </> "adapter-receipt") (show receipt ++ "\n")
+
+-- The envelope is native Read/Show only to avoid a JSON parser in bootstrap.
+-- Consumers use the payload JSON and must check this envelope's exact hashes.
+writeReplayEvidence :: FilePath -> String -> IO ()
+writeReplayEvidence manifestPath payload = do
+    manifest <- readTextRecord manifestPath
+    capture <- fileIdentity manifestPath
+    let payloadPath = manifestPath ++ ".evidence.json"
+    writeFile payloadPath payload
+    payloadIdentity <- fileIdentity payloadPath
+    let envelope = ReplayEvidence 1 capture (rmABin manifest) capture
+                                  (rmProducer manifest) payloadIdentity
+    writeFile (manifestPath ++ ".evidence") (show envelope ++ "\n")
+
+readReplayEvidence :: FilePath -> IO (Maybe ReplayEvidence)
+readReplayEvidence manifestPath = do
+    exists <- doesFileExist (manifestPath ++ ".evidence")
+    if not exists then return Nothing else do
+        envelope <- readTextRecord (manifestPath ++ ".evidence")
+        capture <- fileIdentity manifestPath
+        manifest <- readTextRecord manifestPath
+        sameCapture <- sameFileIdentity (reCapture envelope) capture
+        sameNative <- sameFileIdentity (reABin envelope) (rmABin manifest)
+        unless (reSchema envelope == 1 && sameCapture && sameNative) $
+            failReplay "companion evidence schema/capture/native binding mismatch"
+        mapM_ checkIdentity [rePayload envelope,reSourceCapture envelope,reObservedProducer envelope]
+        source <- readTextRecord (fiPath (reSourceCapture envelope))
+        sameProducer <- sameFileIdentity (rmProducer source) (reObservedProducer envelope)
+        unless (sameProducer &&
+                fiSHA256 (rmABin source) == fiSHA256 (rmABin manifest)) $
+            failReplay "companion evidence original producer/native binding mismatch"
+        return (Just envelope)
+
+replayEvidenceIdentity :: FilePath -> IO (Maybe FileIdentity)
+replayEvidenceIdentity path = do
+    evidence <- readReplayEvidence path
+    case evidence of
+        Nothing -> return Nothing
+        Just _ -> fmap Just (fileIdentity (path ++ ".evidence"))
+
+copyReplayEvidence :: FilePath -> FilePath -> IO ()
+copyReplayEvidence sourcePath adaptedPath = do
+    evidence <- readReplayEvidence sourcePath
+    case evidence of
+        Nothing -> return ()
+        Just envelope -> do
+            adapted <- readTextRecord adaptedPath
+            bound <- fileIdentity adaptedPath
+            let payloadPath = adaptedPath ++ ".evidence.json"
+            copyFile (fiPath (rePayload envelope)) payloadPath
+            payload <- fileIdentity payloadPath
+            writeFile (adaptedPath ++ ".evidence") (show envelope {
+                reCapture = bound, reABin = rmABin adapted, rePayload = payload } ++ "\n")
 
 -- Read-only AST/package inspection is deliberately separate from native replay.
 -- It does not restore interning or generate compiler names. Serialized FString
@@ -387,6 +474,7 @@ inspectReplay errh path = do
         validateReplayFiles manifest
         checkIdentity (rmProducer manifest)
         mapM_ (checkIdentity . snd) (rmOutputs manifest)
+        _ <- replayEvidenceIdentity (fiPath source)
         (info,flags) <- loadReplay errh manifest
         checkIdentity source
         return (manifest,info,flags)
