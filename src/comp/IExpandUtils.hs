@@ -21,7 +21,7 @@ module IExpandUtils(
         setBackendSpecific, cacheDef, lookupCExprCache, insertCExprCache,
         addStateVar, step, updHeap, getHeap, {- filterHeapPtrs, -}
         getSymTab, getDefEnv, getFlags, getErrHandle, getModuleName,
-        getBNotCache, updBNotCache,
+        getBNotCache, updBNotCache, getBitsSelInfo,
         getTypeNormalizer, getTypeNormalizerC, fullTypeNormalizer, mergeATFCache,
         instFunType,
         getNewRuleSuffix, updNewRuleSuffix,
