@@ -22,6 +22,7 @@ import Verilog
 import ABin
 import BinData
 import FileIOUtil(writeBinaryFileCatch)
+import FStringCompat(mkFString, getFString)
 
 import qualified Data.Set as S
 import qualified Data.Map as M
@@ -34,7 +35,7 @@ import qualified Data.ByteString as B
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260715-14"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261028-a0-types-3"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -148,6 +149,8 @@ instance Bin APackage where
                apkg_clock_domains = clks,
                apkg_external_wires = wi,
                apkg_external_wire_types = wpt,
+               apkg_expr_types = ets,
+               apkg_final_wire_names = names,
                apkg_reset_list = rsts,
                apkg_state_instances = avis,
                apkg_local_defs = ds,
@@ -167,6 +170,12 @@ instance Bin APackage where
                         toBin clks
                         toBin wi
                         toBin wpt
+                        toBin ets
+                        -- Share names with the existing identifier strings.
+                        -- Sort before interning: FString ordering depends on
+                        -- process history. Identity pairs prove wire liveness.
+                        toBin (fmap (map (\(a,b) -> (mkFString a, mkFString b)) .
+                                     M.toAscList) names)
                         toBin rsts
                         toBin avis
                         toBin ds
@@ -185,6 +194,11 @@ instance Bin APackage where
                    clks <- fromBin
                    wi <- fromBin
                    wpt <- fromBin
+                   ets <- fromBin
+                   sharedNames <- fromBin
+                   let names = fmap (M.fromList .
+                                     map (\(a,b) -> (getFString a, getFString b)))
+                                    sharedNames
                    rsts <- fromBin
                    avis <- fromBin
                    ds <- fromBin
@@ -202,6 +216,8 @@ instance Bin APackage where
                              apkg_clock_domains = clks,
                              apkg_external_wires = wi,
                              apkg_external_wire_types = wpt,
+                             apkg_expr_types = ets,
+                             apkg_final_wire_names = names,
                              apkg_reset_list = rsts,
                              apkg_state_instances = avis,
                              apkg_local_defs = ds,
