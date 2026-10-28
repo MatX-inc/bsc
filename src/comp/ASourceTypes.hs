@@ -1,7 +1,8 @@
 -- Source-type observations are metadata, never hardware liveness roots.
 -- Keep their expression equivalence independent of compiler CSE and of the
 -- source-location IDs retained by AExpr's derived Ord instance.
-module ASourceTypes(SourceTypeInfo, sourceTypeKey, sourceTypeLookup, anchorSourceTypes,
+module ASourceTypes(SourceTypeInfo, sourceTypeKey, canonicalSourceExpr,
+                    sourceTypeLookup, anchorSourceTypes,
                     namedSourceTypes, anchorASPackage) where
 
 import qualified Data.Map as M
@@ -33,17 +34,36 @@ sourceTypeKey e = e
 
 -- Follow only top-level aliases. Rewriting every nested ASDef would expand
 -- the expression DAG; the lazy memo shares each alias class's canonical RHS.
-canonicalExpr :: [ADef] -> AExpr -> AExpr
-canonicalExpr defs = canonical
-  where memo = M.fromList [(i, canonical e) | ADef i _ e _ <- defs]
+canonicalSourceExpr :: [ADef] -> AExpr -> AExpr
+canonicalSourceExpr defs = canonical
+  where memo = M.fromList [(i, definition i t e) | ADef i t e _ <- defs]
+        -- An unspecified value is a fresh choice, not a shared expression.
+        -- Keep the defining signal's identity, including for a compound RHS
+        -- containing such a choice. Real aliases still resolve to that same
+        -- identity. Bare unknown observations cannot match every unknown def.
+        definition i t e | containsAny e = ASDef t i
+        definition _ _ e = canonical e
         canonical e@(ASDef _ i) = M.findWithDefault e i memo
         canonical e = sourceTypeKey e
+
+containsAny :: AExpr -> Bool
+containsAny (ASAny {}) = True
+containsAny (APrim _ _ _ es) = any containsAny es
+containsAny (AMethCall _ _ _ es) = any containsAny es
+containsAny (ATuple _ es) = any containsAny es
+containsAny (ATupleSel _ e _) = containsAny e
+containsAny (ANoInlineFunCall _ _ _ es) = any containsAny es
+containsAny (AFunCall _ _ _ _ es) = any containsAny es
+containsAny (ASClock _ (AClock osc gate)) = containsAny osc || containsAny gate
+containsAny (ASReset _ (AReset e)) = containsAny e
+containsAny (ASInout _ (AInout e)) = containsAny e
+containsAny _ = False
 
 sourceTypeLookup :: [ADef] -> [(AExpr, S.Set IType)] -> AExpr -> S.Set IType
 sourceTypeLookup _ [] = const S.empty
 sourceTypeLookup defs observations = \e ->
     M.findWithDefault S.empty (canonical e) index
-  where canonical = canonicalExpr defs
+  where canonical = canonicalSourceExpr defs
         index = MS.fromListWith S.union
             [(canonical e, ts) | (e, ts) <- observations]
 
@@ -71,7 +91,7 @@ namedSourceTypes :: [ADef] -> [(AExpr, S.Set IType)] -> M.Map String (S.Set ITyp
 namedSourceTypes _ [] = M.empty
 namedSourceTypes defs observations = MS.fromListWith S.union (defined ++ ports)
   where lookupTypes = sourceTypeLookup defs observations
-        canonical = canonicalExpr defs
+        canonical = canonicalSourceExpr defs
         defined = [(getIdString i, ts) | ADef i t _ _ <- defs,
                                          let ts = lookupTypes (ASDef t i),
                                          not (S.null ts)]

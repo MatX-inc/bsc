@@ -192,6 +192,28 @@ checkSourceTypeAnchors = do
             anchorSourceTypes defs observations) $
         error "repeated anchoring accumulated duplicate observations"
     putStrLn "PASS: metadata key normalization, call identity, dropped aliases, later RHS convergence"
+    let unknown = ASAny bt Nothing
+        compound = APrim defaultAId bt PrimAdd [p,unknown]
+        unknownDefs = [ADef (n "u1") bt unknown [], ADef (n "u2") bt unknown [],
+                       ADef (n "alias1") bt (ASDef bt (n "u1")) [],
+                       ADef (n "alias2") bt (ASDef bt (n "alias1")) [],
+                       ADef (n "nested1") bt compound [],
+                       ADef (n "nested2") bt compound []]
+        unknownTypes = [(ASDef bt (n "u1"),S.singleton itBool),
+                        (ASDef bt (n "nested1"),S.singleton itBool),
+                        (unknown,S.singleton itClock),(compound,S.singleton itClock)]
+        anchored = anchorSourceTypes unknownDefs unknownTypes
+        expected = M.fromList [(name,S.singleton itBool) |
+                              name <- ["u1","alias1","alias2","nested1"]]
+        actual = namedSourceTypes unknownDefs anchored
+        rawPackage = (package [] []) {
+            apkg_local_defs = unknownDefs, apkg_expr_types = unknownTypes,
+            apkg_final_wire_names = Just (M.fromList [(name,name) |
+                name <- ["u1","u2","alias1","alias2","nested1","nested2"]]) }
+    unless (actual == expected &&
+            M.fromList (getWireTypeCandidates rawPackage) == M.map S.toList expected) $
+        error "unspecified choices spread evidence between independent definitions"
+    putStrLn "PASS: unspecified definitions keep independent identities while real aliases share"
 
 benchmark :: Int -> IO ()
 benchmark count = do

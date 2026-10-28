@@ -37,7 +37,7 @@ import Id(getIdString, unQualId, mkRdyId, isRdyId, mkIdCanFire, mkIdWillFire)
 import ISyntax(IType(..))
 import ISyntaxUtil(itBool, itClock, itReset, itBit)
 import ASyntax
-import ASourceTypes(sourceTypeKey, namedSourceTypes)
+import ASourceTypes(canonicalSourceExpr, namedSourceTypes)
 import VModInfo
 import BackendNamingConventions(isRegInst, isCRegInst, cregToReg,
                                 qoutPortStr,
@@ -138,11 +138,10 @@ sourceObservedWireTypes apkg = MS.fromListWith S.union
         [ADef i t e [] | [i] <- [mkNamedOutputs fi]]
     namedDefs = apkg_local_defs apkg ++ concatMap outputDefs ifcDefs
     defs = namedDefs ++ map fst ifcDefs
-    defmap = M.fromList [(i, canonical e) | ADef i _ e _ <- defs]
-    canonical e@(ASDef _ i) = M.findWithDefault e i defmap
-    canonical e = sourceTypeKey e
+    canonical = canonicalSourceExpr defs
     nameIndex = MS.fromListWith S.union
-        [(canonical e, S.singleton (getIdString i)) | ADef i _ e _ <- namedDefs]
+        [(canonical (ASDef t i), S.singleton (getIdString i)) |
+          ADef i t _ _ <- namedDefs]
     names e = M.findWithDefault S.empty e nameIndex `S.union` leafNames e
     leafNames (ASPort _ i) = S.singleton (getIdString i)
     leafNames (AMethValue _ i m) = methodNames i m Nothing
