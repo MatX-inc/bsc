@@ -172,6 +172,9 @@ data APackage = APackage {
             -- Actual surviving Verilog signal names, before and after final
             -- renaming. Nothing when elaboration stopped before codegen.
     apkg_final_wire_names :: Maybe (M.Map String String),
+            -- Observations bound to the optimized, emitted Verilog signals.
+            -- Nothing when code generation has not run (e.g. -elab-only).
+    apkg_final_wire_types :: Maybe (M.Map String (S.Set IType)),
             -- table of resets
     apkg_reset_list :: [(ResetId, AReset)],
             -- state elements (Verilog instances)
@@ -193,8 +196,8 @@ data APackage = APackage {
     } deriving (Eq, Show)
 
 instance NFData APackage where
-    rnf (APackage n1 n2 n3 n4 n5 n6 n7 n8 ets names n9 n10 n11 n12 n13 n14 n15 n16 n17) =
-        rnf names `seq` rnf ets `seq` rnf17 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17
+    rnf (APackage n1 n2 n3 n4 n5 n6 n7 n8 ets names finalTypes n9 n10 n11 n12 n13 n14 n15 n16 n17) =
+        rnf finalTypes `seq` rnf names `seq` rnf ets `seq` rnf17 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17
 
 getAPackageFieldInfos :: APackage -> [VFieldInfo]
 getAPackageFieldInfos = map aif_fieldinfo . apkg_interface

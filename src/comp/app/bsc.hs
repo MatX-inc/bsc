@@ -91,7 +91,7 @@ import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
 import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
-               IEFace(..), IDef(..), IExpr(..), fdVars)
+               IEFace(..), IDef(..), IExpr(..), IType, fdVars)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
@@ -115,6 +115,8 @@ import ASyntax(APackage(..), ASPackage(..),
                ppeAPackage,
                getAPackageFieldInfos)
 import ASyntaxUtil(getForeignCallNames)
+import ASourceTypes(anchorASPackage)
+import WireAnalysis(getFinalWireTypeCandidates)
 import ACheck(aMCheck, aSMCheck, aSignalCheck, aSMethCheck)
 import AConv(aConv)
 import IDropRules(iDropRules)
@@ -1017,20 +1019,21 @@ genModule
     -- port properties either way -- they come from the APackage above,
     -- not from the netlist -- so a parent compiled against an
     -- -elab-only .bo deduces exactly what the direct compile deduces.
-    (t, finalWireNames) <- if (backend flags == Just Verilog && not (elabOnly flags))
-         then do (t', _vfilenames, names)
+    (t, finalWireNames, finalWireTypes) <- if (backend flags == Just Verilog && not (elabOnly flags))
+         then do (t', _vfilenames, names, types)
                      <- genModuleVerilog
                            errh pps flags dumpnames t prefix modstr
                            blurb methodConflictBlurb methodConflictBVI
                            vPathInfo sched_info'' aioprops amod_final
-                 return (t', Just names)
-         else return (t, Nothing)
+                 return (t', Just names, Just types)
+         else return (t, Nothing, Nothing)
 
     t <- if (genABin flags)
          then writeABin errh pps flags dumpnames t prefix
                   modstr srcName (orig_cqt wi)
                   sched_info'' methodConflict vPathInfo
-                  (amod_final { apkg_final_wire_names = finalWireNames })
+                  (amod_final { apkg_final_wire_names = finalWireNames,
+                                apkg_final_wire_types = finalWireTypes })
          else return t
 
     -- Wrapper generation
@@ -1148,7 +1151,8 @@ genModuleVerilog :: ErrorHandle
                  -> APackage
                  -> IO (TimeInfo,
                         [VFileName], -- the Verilog files written
-                        M.Map String String) -- live signal names before/after renaming
+                        M.Map String String, -- live signal names before/after renaming
+                        M.Map String (S.Set IType)) -- final physical observations
 genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  aioprops atsPackage =
@@ -1170,7 +1174,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Generate muxes etc.
        start flags DFastate
-       asmod <- aState errh flags pprops scheduleInfo atsPackage
+       asmod0 <- aState errh flags pprops scheduleInfo atsPackage
+       let asmod = anchorASPackage asmod0
        -- after aState, method calls should no longer exist
        asMethCheck flags asmod "astate"
        t <- dump errh flags t DFastate dumpnames asmod
@@ -1220,7 +1225,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Expand some primitives
        start flags DFsynthesize
-       let asynmod = (aSynthesize flags aomod)
+       let asynmod = aSynthesize flags (anchorASPackage aomod)
        asCheck flags asynmod "asynthesize"
        -- Check that referenced signal names exist
        asSignalCheck flags asynmod "synthesize"
@@ -1229,7 +1234,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFveriquirks
-       let aqmod = aVeriQuirks flags asynmod
+       let aqmod = aVeriQuirks flags (anchorASPackage asynmod)
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))
@@ -1239,7 +1244,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFfinalcleanup
-       let aumod =  finalCleanup flags aqmod
+       let aumod = finalCleanup flags (anchorASPackage aqmod)
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))
@@ -1297,10 +1302,13 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Return
        -- * the Verilog file names written
-       names <- if genABin flags && not (null (apkg_expr_types atsPackage))
+       names <- if genABin flags && not (null (aspkg_expr_types aumod))
                 then CE.evaluate (force (emittedWireNameMap vprog0 vprog))
                 else return M.empty
-       return (t, vfilenames, names)
+       types <- if genABin flags
+                then CE.evaluate (force (getFinalWireTypeCandidates names aumod))
+                else return M.empty
+       return (t, vfilenames, names, types)
 
 -- Both final naming passes preserve declarations and their traversal order.
 -- Zipping declarations captures their EXACT simultaneous mapping, including
@@ -1646,7 +1654,7 @@ vGenMods errh flags t0 abmis = do
                 -- .ba's own contents, so a regenerated .v matches the
                 -- original compile's under -semantic-ports-comment too
                 (aioprops, _) = getIOPropsA cgflags pps (Just aschedinfo) apkg
-            (t', vfns, _names) <-
+            (t', vfns, _names, _types) <-
                 genModuleVerilog errh pps cgflags dumpnames t prefix modstr
                     blurb methodConflictBlurb methodConflictBVI
                     pathinfo aschedinfo aioprops apkg

@@ -25,9 +25,11 @@
 --
 -- Over-emission is intentional: a correlator building a name -> type
 -- dict can index by VCD wire name and match whichever form appears.
-module WireAnalysis (getWireTypeMap, getWireTypeCandidates) where
+module WireAnalysis (getWireTypeMap, getWireTypeCandidates,
+                     getFinalWireTypeCandidates) where
 
 import qualified Data.Map as M
+import qualified Data.Map.Strict as MS
 import qualified Data.Set as S
 import Util(stableOrdNub)
 
@@ -35,6 +37,7 @@ import Id(getIdString, unQualId, mkRdyId, isRdyId, mkIdCanFire, mkIdWillFire)
 import ISyntax(IType(..))
 import ISyntaxUtil(itBool, itClock, itReset, itBit)
 import ASyntax
+import ASourceTypes(canonicalSourceExpr, namedSourceTypes)
 import VModInfo
 import BackendNamingConventions(isRegInst, isCRegInst, cregToReg,
                                 qoutPortStr,
@@ -47,7 +50,7 @@ import BackendNamingConventions(isRegInst, isCRegInst, cregToReg,
 getWireTypeMap :: APackage -> [(String, IType)]
 getWireTypeMap apkg =
     let declared = namedDeclaredWireTypeMap apkg
-        known = M.fromListWith S.union [(n, S.singleton t) | (n,t) <- declared]
+        known = MS.fromListWith S.union [(n, S.singleton t) | (n,t) <- declared]
         inferred = observedWireTypes apkg
         choices n = S.filter (not . isBitType) $
             M.findWithDefault S.empty n known `S.union`
@@ -63,8 +66,8 @@ getWireTypeMap apkg =
 -- expression can be unpacked at several unrelated nominal source types.
 getWireTypeCandidates :: APackage -> [(String, [IType])]
 getWireTypeCandidates apkg = M.toList $ M.map S.toList $
-    M.unionWith S.union (observedWireTypes apkg)
-        (M.fromListWith S.union [(n,S.singleton t) |
+    MS.unionWith S.union (observedWireTypes apkg)
+        (MS.fromListWith S.union [(n,S.singleton t) |
                                  (n,t) <- namedDeclaredWireTypeMap apkg])
 
 isBitType :: IType -> Bool
@@ -75,7 +78,7 @@ isBitType _ = False
 -- those names. Only actual definitions and named boundary wires are emitted;
 -- metadata expressions do not manufacture wires in the generated netlist.
 observedWireTypes :: APackage -> M.Map String (S.Set IType)
-observedWireTypes apkg = M.unionWith S.union boundary mapped
+observedWireTypes apkg = MS.unionWith S.union boundary mapped
   where
     raw = sourceObservedWireTypes apkg
     declaredNames = S.fromList (map fst (declaredWireTypeMap apkg))
@@ -86,12 +89,26 @@ observedWireTypes apkg = M.unionWith S.union boundary mapped
     safeAlias = case apkg_final_wire_names apkg of
         Nothing -> const True
         Just names -> let emitted = S.fromList (M.elems names)
-                      in \n -> n `S.notMember` emitted || M.lookup n names == Just n
-    mapped = case apkg_final_wire_names apkg of
-        Nothing -> M.empty
-        Just names -> M.fromListWith S.union
-            [(final, ts) | (n, ts) <- M.toList raw,
-                           Just final <- [M.lookup n names]]
+                      in case apkg_final_wire_types apkg of
+                           Just _ -> (`S.notMember` emitted)
+                           Nothing -> \n -> n `S.notMember` emitted || M.lookup n names == Just n
+    mapped = case apkg_final_wire_types apkg of
+        Just ts -> ts
+        Nothing -> case apkg_final_wire_names apkg of
+            Nothing -> M.empty
+            Just names -> MS.fromListWith S.union
+                [(final, ts) | (n, ts) <- M.toList raw,
+                               Just final <- [M.lookup n names]]
+
+-- Capture the backend's actual expression aliases after optimization. The
+-- emitted-name map both proves liveness and applies final Verilog renaming.
+getFinalWireTypeCandidates :: M.Map String String -> ASPackage -> M.Map String (S.Set IType)
+getFinalWireTypeCandidates names pkg = MS.fromListWith S.union
+    [(final, ts) | (name, ts0) <- M.toList observed,
+                   let ts = S.filter (not . isBitType) ts0,
+                   not (S.null ts), Just final <- [M.lookup name names]]
+  where observed = namedSourceTypes (aspkg_values pkg ++ aspkg_inout_values pkg)
+                                   (aspkg_expr_types pkg)
 
 -- Keep the declared map's existing aliases, and add their physical spelling
 -- when codegen renamed them (including collision-aware dollar removal).
@@ -105,7 +122,7 @@ namedDeclaredWireTypeMap apkg = stableOrdNub (declared ++ renamed)
                                    Just final <- [M.lookup n names], final /= n]
 
 sourceObservedWireTypes :: APackage -> M.Map String (S.Set IType)
-sourceObservedWireTypes apkg = M.fromListWith S.union
+sourceObservedWireTypes apkg = MS.fromListWith S.union
     [(name, ts) | (e,ts0) <- apkg_expr_types apkg,
                   let ts = S.filter (not . isBitType) ts0,
                   not (S.null ts),
@@ -121,11 +138,10 @@ sourceObservedWireTypes apkg = M.fromListWith S.union
         [ADef i t e [] | [i] <- [mkNamedOutputs fi]]
     namedDefs = apkg_local_defs apkg ++ concatMap outputDefs ifcDefs
     defs = namedDefs ++ map fst ifcDefs
-    defmap = M.fromList [(i, canonical e) | ADef i _ e _ <- defs]
-    canonical e@(ASDef _ i) = M.findWithDefault e i defmap
-    canonical e = e
-    nameIndex = M.fromListWith S.union
-        [(canonical e, S.singleton (getIdString i)) | ADef i _ e _ <- namedDefs]
+    canonical = canonicalSourceExpr defs
+    nameIndex = MS.fromListWith S.union
+        [(canonical (ASDef t i), S.singleton (getIdString i)) |
+          ADef i t _ _ <- namedDefs]
     names e = M.findWithDefault S.empty e nameIndex `S.union` leafNames e
     leafNames (ASPort _ i) = S.singleton (getIdString i)
     leafNames (AMethValue _ i m) = methodNames i m Nothing
@@ -135,7 +151,7 @@ sourceObservedWireTypes apkg = M.fromListWith S.union
     leafNames _ = S.empty
     -- A wide interface can have many observed methods. Index the fields once
     -- rather than scanning the whole interface for every observation.
-    methodIndex = M.fromListWith S.union
+    methodIndex = MS.fromListWith S.union
         [((avi_vname v,m,index), S.fromList $
             [inst ++ "$" ++ port, inst ++ "." ++ port] ++
             [inst | isRegInst v && port == qoutPortStr]) |
