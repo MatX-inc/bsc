@@ -22,6 +22,7 @@ import Verilog
 import ABin
 import BinData
 import FileIOUtil(writeBinaryFileCatch)
+import FStringCompat(mkFString, getFString)
 
 import qualified Data.Set as S
 import qualified Data.Map as M
@@ -34,7 +35,7 @@ import qualified Data.ByteString as B
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261028-a0-types-2"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261028-a0-types-3"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -170,7 +171,11 @@ instance Bin APackage where
                         toBin wi
                         toBin wpt
                         toBin ets
-                        toBin names
+                        -- Share names with the existing identifier strings.
+                        -- Sort before interning: FString ordering depends on
+                        -- process history. Identity pairs prove wire liveness.
+                        toBin (fmap (map (\(a,b) -> (mkFString a, mkFString b)) .
+                                     M.toAscList) names)
                         toBin rsts
                         toBin avis
                         toBin ds
@@ -190,7 +195,10 @@ instance Bin APackage where
                    wi <- fromBin
                    wpt <- fromBin
                    ets <- fromBin
-                   names <- fromBin
+                   sharedNames <- fromBin
+                   let names = fmap (M.fromList .
+                                     map (\(a,b) -> (getFString a, getFString b)))
+                                    sharedNames
                    rsts <- fromBin
                    avis <- fromBin
                    ds <- fromBin
