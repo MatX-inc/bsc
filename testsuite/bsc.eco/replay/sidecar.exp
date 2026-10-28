@@ -1,0 +1,72 @@
+# Every call starts a fresh Haskell process using the shared bluehs test hook.
+bsc_initialize
+namespace eval eco_sidecar {
+    set previous [pwd]
+    try {
+        if {$::bluehs eq "" || $::bluehs eq "0" ||
+            ![file isfile $::bluehs] || ![file executable $::bluehs]} {
+            untested "ECO sidecar: native Haskell checks (bluehs unavailable)"
+            return
+        }
+        set here [file dirname [file normalize [info script]]]
+        cd $here
+        set work [file join $here work_sidecar]
+        file delete -force $work
+        file mkdir $work
+        set script $here/ReplaySidecar.hs
+        foreach {mode argument label} [list \
+            capture $work/capture {capture flags, paths, bytes and hash filename handling} \
+            restore $work/capture/m.replay {restore intern table, outputs and headers in a fresh process}] {
+            if {[exec_with_log "ECO sidecar $mode" [list $::bluehs $script $mode $argument >& $work/$mode.log]]} {
+                set f [open $work/$mode.log]; verbose -log [read $f] 0; close $f
+                fail "ECO sidecar: $label"
+                return
+            }
+            pass "ECO sidecar: $label"
+        }
+        set manifest $work/capture/m.replay
+        cd $work
+        set status [exec_with_log "ECO sidecar changed cwd" [list $::bluehs $script restore $manifest >& $work/cwd.log]]
+        cd $here
+        set f [open $work/cwd.log]; set contents [read $f]; close $f
+        if {$status && [string first {relative-path context changed; run replay from} $contents] >= 0} {
+            pass "ECO sidecar: rejects changed working directory"
+        } else {
+            verbose -log $contents 0
+            fail "ECO sidecar: rejects changed working directory with expected diagnostic"
+        }
+        foreach {mode suffix diagnostic} {
+            bad-schema .bad {producer/native schema mismatch; regenerate the capture}
+            bad-producer .bad-producer {compiler executable differs from capture producer}
+        } {
+            if {[exec_with_log "ECO sidecar $mode fixture" [list $::bluehs $script $mode $manifest >& $work/$mode-fixture.log]]} {
+                set f [open $work/$mode-fixture.log]; verbose -log [read $f] 0; close $f
+                fail "ECO sidecar: construct $mode fixture"
+                continue
+            }
+            set status [exec_with_log "ECO sidecar $mode rejection" [list $::bluehs $script restore $manifest$suffix >& $work/$mode.log]]
+            set f [open $work/$mode.log]; set contents [read $f]; close $f
+            if {$status && [string first $diagnostic $contents] >= 0} {
+                pass "ECO sidecar: rejects $mode"
+            } else {
+                verbose -log $contents 0
+                fail "ECO sidecar: rejects $mode with expected diagnostic"
+            }
+        }
+        foreach {name input} [list dependency $work/capture/foreign.ba payload $work/capture/m.ba] {
+            file copy $input $work/original-$name
+            set f [open $input a]; puts -nonewline $f changed; close $f
+            set status [exec_with_log "ECO sidecar $name rejection" [list $::bluehs $script restore $manifest >& $work/$name.log]]
+            file copy -force $work/original-$name $input
+            set f [open $work/$name.log]; set contents [read $f]; close $f
+            if {$status && [string first "file changed since capture: $input" $contents] >= 0} {
+                pass "ECO sidecar: rejects modified $name bytes"
+            } else {
+                verbose -log $contents 0
+                fail "ECO sidecar: rejects modified $name bytes with expected diagnostic"
+            }
+        }
+    } finally {
+        cd $previous
+    }
+}

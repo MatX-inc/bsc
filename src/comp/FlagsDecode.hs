@@ -47,6 +47,7 @@ import Position(Position, cmdPosition)
 import VFileName
 import Verilog(vIsValidIdent)
 import Flags
+import ECO.Options (defaultECOOptions)
 
 catchIO :: IO a -> (IOError -> IO a) -> IO a
 catchIO = CE.catch
@@ -658,7 +659,8 @@ defaultFlags bluespecdir = Flags {
         verilogFilter = [],
         warnActionShadowing = True,
         warnMethodUrgency = True,
-        warnUndetPred = False
+        warnUndetPred = False,
+        ecoOptions = defaultECOOptions
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1842,6 +1844,7 @@ showFlagsRaw flags =
           ("doICheck", show (doICheck flags)),
           ("dumpAll", show (dumpAll flags)),
           ("dumps", show (dumps flags)),
+          ("ecoOptions", show (ecoOptions flags)),
           ("enablePoisonPills", show (enablePoisonPills flags)),
           ("entry", show (entry flags)),
           ("expandATSlimit", show (expandATSlimit flags)),
