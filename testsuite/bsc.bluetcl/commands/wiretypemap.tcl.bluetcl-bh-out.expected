@@ -28,7 +28,6 @@ CAN_FIRE_RL_sink_cells Prelude.Bool
 CLK Prelude.Clock
 EN_loadPixel Prelude.Bool
 EN_setPalette Prelude.Bool
-NOT_bram_serverAdapter_writeWithResp_wget__8_B_ETC___d32 Prelude.Bool
 RDY_currentCell Prelude.Bool
 RDY_loadPixel Prelude.Bool
 RDY_maybePixel Prelude.Bool
@@ -141,7 +140,7 @@ bram_serverAdapter_s1_1.WVAL {Prelude.Maybe Prelude.Bool}
 bram_serverAdapter_s1_1.wget {Prelude.Maybe Prelude.Bool}
 bram_serverAdapter_s1_1.whas Prelude.Bool
 bram_serverAdapter_s1_1_wget____d24 {Prelude.Maybe Prelude.Bool}
-bram_serverAdapter_s1__h2872 {Prelude.Maybe Prelude.Bool}
+bram_serverAdapter_s1__h2908 {Prelude.Maybe Prelude.Bool}
 bram_serverAdapter_writeWithResp {Prelude.PrimPair Prelude.Bool Prelude.Bool}
 bram_serverAdapter_writeWithResp.WGET {Prelude.PrimPair Prelude.Bool Prelude.Bool}
 bram_serverAdapter_writeWithResp.WHAS Prelude.Bool
@@ -213,7 +212,7 @@ leafB.depth {Prelude.Bit 8}
 leafB.push_p WireTypes.Pixel
 leafB.top WireTypes.Pixel
 loadPixel_p WireTypes.Pixel
-loadPixel_p_BITS_17_TO_10_4_PLUS_1___d85 {Prelude.UInt 8}
+loadPixel_p_BITS_17_TO_10_PLUS_1___d85 {Prelude.UInt 8}
 loadPixel_p_BITS_17_TO_10___d84 {Prelude.UInt 8}
 loopCnt {Prelude.Bit 12}
 loopCnt.ADDA Prelude.Bool
@@ -244,7 +243,7 @@ pal.D_IN {Vector.Vector 4 WireTypes.Color}
 pal.EN Prelude.Bool
 pal.Q_OUT {Vector.Vector 4 WireTypes.Color}
 pal.RST Prelude.Reset
-pal__h3533 {Vector.Vector 4 WireTypes.Color}
+pal__h3559 {Vector.Vector 4 WireTypes.Color}
 palette {Vector.Vector 4 WireTypes.Color}
 pixelBypass {Prelude.Maybe WireTypes.Pixel}
 pixelBypass.WGET {Prelude.Maybe WireTypes.Pixel}

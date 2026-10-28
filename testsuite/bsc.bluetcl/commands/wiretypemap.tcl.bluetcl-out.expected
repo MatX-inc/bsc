@@ -28,7 +28,6 @@ CAN_FIRE_RL_sink_cells Bool
 CLK Clock
 EN_loadPixel Bool
 EN_setPalette Bool
-NOT_bram_serverAdapter_writeWithResp_wget__8_B_ETC___d32 Bool
 RDY_currentCell Bool
 RDY_loadPixel Bool
 RDY_maybePixel Bool
@@ -141,7 +140,7 @@ bram_serverAdapter_s1_1.WVAL Maybe#(Bool)
 bram_serverAdapter_s1_1.wget Maybe#(Bool)
 bram_serverAdapter_s1_1.whas Bool
 bram_serverAdapter_s1_1_wget____d24 Maybe#(Bool)
-bram_serverAdapter_s1__h2872 Maybe#(Bool)
+bram_serverAdapter_s1__h2908 Maybe#(Bool)
 bram_serverAdapter_writeWithResp {Tuple2#(Bool, Bool)}
 bram_serverAdapter_writeWithResp.WGET {Tuple2#(Bool, Bool)}
 bram_serverAdapter_writeWithResp.WHAS Bool
@@ -213,7 +212,7 @@ leafB.depth Bit#(8)
 leafB.push_p WireTypes::Pixel
 leafB.top WireTypes::Pixel
 loadPixel_p WireTypes::Pixel
-loadPixel_p_BITS_17_TO_10_4_PLUS_1___d85 UInt#(8)
+loadPixel_p_BITS_17_TO_10_PLUS_1___d85 UInt#(8)
 loadPixel_p_BITS_17_TO_10___d84 UInt#(8)
 loopCnt Bit#(12)
 loopCnt.ADDA Bool
@@ -244,7 +243,7 @@ pal.D_IN {Vector::Vector#(4, WireTypes::Color)}
 pal.EN Bool
 pal.Q_OUT {Vector::Vector#(4, WireTypes::Color)}
 pal.RST Reset
-pal__h3533 {Vector::Vector#(4, WireTypes::Color)}
+pal__h3559 {Vector::Vector#(4, WireTypes::Color)}
 palette {Vector::Vector#(4, WireTypes::Color)}
 pixelBypass Maybe#(WireTypes::Pixel)
 pixelBypass.WGET Maybe#(WireTypes::Pixel)

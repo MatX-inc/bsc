@@ -90,7 +90,7 @@ checkSplitOutputs = do
         tup = ATTuple [bt,bt]
         fi = Method mid Nothing Nothing 1 [] [(VName "LEFT",[]),(VName "RIGHT",[])] Nothing
         vmi = mkVModInfo (VName "TestPrimitive") clocks resets [] [fi]
-                  (SchedInfo (MethodConflictInfo [] [] [] [] [] [] []) [] [] [])
+                  (SchedInfo (MethodConflictInfo [(mid,mid)] [] [] [] [] [] []) [] [] [])
                   (VPathInfo [])
         inst = (instanceWithType "child" (itBitN 1)) {
                     avi_port_types = M.fromList [(VName "LEFT",itBitN 1),(VName "RIGHT",itBitN 1)],
