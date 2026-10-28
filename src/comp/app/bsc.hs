@@ -106,7 +106,7 @@ import GenBin(genBinFile)
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign)
-import IExpand(iExpand)
+import IExpand(iExpandWithAliases)
 import IExpandUtils(HeapData)
 import ITransform(iTransform)
 import IInline(iInline)
@@ -125,7 +125,9 @@ import ARenameIO(aRenameIO)
 import ASchedule(AScheduleInfo(..), AScheduleErrInfo(..), aSchedule)
 import AAddScheduleDefs(aAddScheduleDefs)
 import APaths(aPathsPreSched, aPathsPostSched)
-import AProofs(aCheckProofs)
+import AProofs(aCheckProofs, aCheckProofsObserved)
+import ECO.Invariant(renderInvariantSnapshot)
+import ECO.Provenance(renderExpansionAliases)
 import ADropDefs(aDropDefs)
 import AOpt(aOpt)
 import AVerilog(aVerilog)
@@ -790,7 +792,7 @@ genModule
 
     -- "run" it
     start flags DFexpanded
-    imod0 <- iExpand errh flags symt alldefs atf_cache fwrapper pps def
+    (imod0, expansionAliases) <- iExpandWithAliases errh flags symt alldefs atf_cache fwrapper pps def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
     when (showIESyntax flags) (putStrLnF (show imod0))
@@ -966,7 +968,11 @@ genModule
     -- prove any proof obligations accumulated at this point
     start flags DFcheckproofs
     -- the obligations are removed from the module
-    (amod_check, ok) <- aCheckProofs errh flags amod_dump
+    let evidenceOptions = ecoOptions flags
+    (amod_check, ok, proofResults) <- case ecoCapture evidenceOptions of
+        Nothing -> do (checked,passed) <- aCheckProofs errh flags amod_dump
+                      return (checked,passed,[])
+        Just _ -> aCheckProofsObserved errh flags amod_dump
     t <- dump errh flags t DFcheckproofs dumpnames ok
 
     -- Add scheduler edges to the path graph
@@ -1060,8 +1066,13 @@ genModule
             ioError (userError "ECO capture requires -elab to retain the native .ba")
         info <- maybe (ioError (userError "ECO capture requires the Verilog backend"))
                       return backendInfo
-        _ <- captureReplay captureDir (mkAName (bdir flags) prefix modstr) flags info
-        return ()
+        manifestPath <- captureReplay captureDir (mkAName (bdir flags) prefix modstr) flags info
+        let aliases = renderExpansionAliases expansionAliases
+        writeReplayEvidence manifestPath $
+            "{\"schema\":1,\"availability\":\"captured\",\"matchingRequiredDuringCapture\":false," ++
+            "\"expansionAliases\":" ++ aliases ++ ",\"snapshots\":[" ++
+            renderInvariantSnapshot "before-checkproofs" amod_dump proofResults ++ "," ++
+            renderInvariantSnapshot "before-dropundet" amod_no_assumps [] ++ "]}\n"
     observe
 
     -- Wrapper generation

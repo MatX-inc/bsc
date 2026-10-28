@@ -179,9 +179,11 @@ library
     ECO.Backend
     ECO.Graph
     ECO.Interface
+    ECO.Invariant
     ECO.Namespace
     ECO.Observe
     ECO.Options
+    ECO.Provenance
     ECO.Replay
     ECO.Types
     ECO.Validate
