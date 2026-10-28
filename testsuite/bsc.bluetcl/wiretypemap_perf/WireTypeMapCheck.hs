@@ -7,6 +7,7 @@ import Control.DeepSeq(force)
 import Control.Exception(evaluate)
 import Control.Monad(unless)
 import qualified Data.Map as M
+import qualified Data.Set as S
 import System.CPUTime(getCPUTime)
 import System.Environment(getArgs)
 import Text.Printf(printf)
@@ -18,7 +19,8 @@ import ISyntax(IType)
 import ISyntaxUtil(itBool, itBitN)
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import VModInfo
-import WireAnalysis(getWireTypeMap)
+import WireAnalysis(getWireTypeMap, getWireTypeCandidates)
+import Wires(emptyWireProps)
 
 clocks :: VClockInfo
 clocks = ClockInfo [] [] [] []
@@ -77,6 +79,37 @@ checkPairs = do
         error "empty package has candidate wires"
     putStrLn "PASS: stable pair deduplication, category order, distinct same-name types"
 
+
+-- A0's split results must join evidence to exactly the selected port,
+-- both on a submodule call and on the enclosing module's interface.
+checkSplitOutputs :: IO ()
+checkSplitOutputs = do
+    let iid = mk_homeless_id "child"
+        mid = mk_homeless_id "get"
+        bt = ATBit 1
+        tup = ATTuple [bt,bt]
+        fi = Method mid Nothing Nothing 1 [] [(VName "LEFT",[]),(VName "RIGHT",[])] Nothing
+        vmi = mkVModInfo (VName "TestPrimitive") clocks resets [] [fi]
+                  (SchedInfo (MethodConflictInfo [] [] [] [] [] [] []) [] [] [])
+                  (VPathInfo [])
+        inst = (instanceWithType "child" (itBitN 1)) {
+                    avi_port_types = M.fromList [(VName "LEFT",itBitN 1),(VName "RIGHT",itBitN 1)],
+                    avi_vmi = vmi }
+        left = ATupleSel bt (AMethCall tup iid mid []) 1
+        right = ATupleSel bt (AMethCall tup iid mid []) 2
+        intf = AIDef mid [] emptyWireProps left
+                   (ADef mid tup (ATuple tup [left,right]) []) fi []
+        input = (package [] [inst]) { apkg_interface = [intf],
+                  apkg_expr_types = [(left,S.singleton itBool)] }
+        actual = M.fromList (getWireTypeCandidates input)
+    unless (all (\n -> maybe False (itBool `elem`) (M.lookup n actual))
+                ["child$LEFT","child.LEFT","LEFT"]) $
+        error ("split output lost its observation: " ++ show actual)
+    unless (all (\n -> maybe True (itBool `notElem`) (M.lookup n actual))
+                ["child$RIGHT","child.RIGHT","RIGHT","get"]) $
+        error ("split output observation escaped to another port: " ++ show actual)
+    putStrLn "PASS: split result evidence follows only its physical output port"
+
 benchmark :: Int -> IO ()
 benchmark count = do
     let input = package []
@@ -97,6 +130,6 @@ main :: IO ()
 main = do
     args <- getArgs
     case args of
-        [] -> checkPairs
+        [] -> checkPairs >> checkSplitOutputs
         [arg] | Just count <- readMaybe arg, count > 0 -> benchmark count
         _ -> error "usage: WireTypeMapCheck [positive-instance-count]"

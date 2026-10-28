@@ -112,7 +112,7 @@ observedWireTypes apkg = M.fromListWith S.union
           v <- apkg_state_instances apkg,
           Method { vf_name = m, vf_outputs = outs } <- vFields (avi_vmi v),
           (idx, (vn,_)) <- zip [1..] outs,
-          index <- Just idx : [Nothing | length outs == 1],
+          index <- Just idx : [Nothing | [_] <- [outs]],
           let inst = getIdString (avi_vname v)
               port = getVNameString vn]
     methodNames i m idx = M.findWithDefault S.empty (i, unQualId m, idx) methodIndex
