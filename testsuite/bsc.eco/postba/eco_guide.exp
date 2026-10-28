@@ -16,10 +16,17 @@ namespace eval eco_guide {
         if {[catch {exec bash $script [which_bsc] $bluehs $sdk $yosys $::env(BLUESPECDIR) $root >$log 2>@1} message]} {
             fail "ECO guide: packaged capture, configuration, metrics and replay commands"
             set f [open $log]; verbose -log [read $f] 0; close $f
-        } elseif {![file exists [file join $root replayed-branch selected.v]] || ![file exists [file join $root selected-metrics report.json]] || ![file exists [file join $root ordinary-metrics report.json]]} {
+        } elseif {![file exists [file join $root replayed-branch selected.v]] || ![file exists [file join $root selected-metrics report.json]] || ![file exists [file join $root ordinary-metrics report.json]] || ![file exists [file join $root finished finish receipt.json]]} {
             fail "ECO guide: complete example products"
         } else {
-            pass "ECO guide: packaged capture, configuration, metrics and replay commands"
+            pass "ECO guide: packaged capture, configuration, metrics, replay and finish commands"
+            set controls [file join $here FinishOrderCLIControls.hs]
+            set controlLog "$root-finish-controls.log"
+            if {[catch {exec $bluehs $sourceFlag $controls $bluehs $sdk [file join $root flow] "$root-finish-controls" >$controlLog 2>@1} message]} {
+                fail "ECO guide: finish-order public input tamper controls"
+                verbose -log $message 0
+                set f [open $controlLog]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO guide: finish-order public input tamper controls"}
             set replayControls [file join $here FlowReplayControls.hs]
             set replayLog "$root-flow-replay-controls.log"
             if {[catch {exec $bluehs $sourceFlag $replayControls $bluehs $sdk [file join $root flow] "$root-flow-replay-controls" >$replayLog 2>@1} message]} {

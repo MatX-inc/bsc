@@ -1,0 +1,26 @@
+# Generic native-AST candidate and proof/replay checks; no MatX source here.
+namespace eval eco_declaration_order {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set yosys [which yosys]
+    if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO declaration order: matched bluehs runtime unavailable"
+    } elseif {$yosys == 0 || ![file executable $yosys]} {
+        unsupported "ECO declaration order: Yosys unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-declaration-order-[pid]-[clock clicks]]]
+        file mkdir $root
+        foreach test {ASTDeclarationOrder ASTJointDeclarationOrder} {
+        set script [file join $here "$test.hs"]
+        set log [file join $root "$test.log"]
+        if {[catch {exec $bluehs -i[file join $sdk lib] $script [file join $root $test] $script $yosys >$log 2>@1} message]} {
+            fail "ECO declaration order: $test candidate/proof/replay"
+            set f [open $log]; verbose -log [read $f] 0; close $f
+        } else {pass "ECO declaration order: $test candidate/proof/replay"}
+        }
+    }
+}

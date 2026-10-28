@@ -37,8 +37,20 @@ for side in old new; do
   "$work/old/capture/mkFanoutLoss.replay" "$work/new/capture/mkFanoutLoss.replay" \
   "$work" "$work" "$BLUESPECDIR" "$sdk/build.manifest" "$yosys" \
   "$work/flow" "$work/flow.config"
-"$bluehs" "-i$sdk/lib" "$sdk/scripts/captures.hs" --vacant-state --state-view --historical-shell \
-  --inactive-helpers --invariants defer "$work/flow.config" > "$work/flow.log" 2>&1
+case "${ECO_EXAMPLE_POLICY:-standard}" in
+  standard)
+    capture_args=(--objective translated-normalized --refinements standard --structure ordinary)
+    objective=translated-normalized ;;
+  legacy-selection-fixture)
+    # Existing selector negative controls require the historical ordinary-plan fixture.
+    capture_args=(--vacant-state --state-view --historical-shell --inactive-helpers)
+    objective=whole ;;
+  *) echo "unknown example policy" >&2; exit 2 ;;
+esac
+"$bluehs" "-i$sdk/lib" "$sdk/scripts/captures.hs" "${capture_args[@]}" \
+  --invariants defer "$work/flow.config" > "$work/flow.log" 2>&1
+"$bluehs" "-i$sdk/lib" "$sdk/scripts/finish-order.hs" "$sdk/build.manifest" \
+  "$work/flow" "$work/finished" > "$work/finish-order.log" 2>&1
 old="$work/flow/adapted-old/mkFanoutLoss.eco-ast"
 new="$work/flow/adapted-new/mkFanoutLoss.eco-ast"
 "$bluehs" "-i$sdk/lib" "$sdk/scripts/measure.hs" "$old" "$new" "$work/ordinary-metrics"
@@ -55,7 +67,9 @@ case "$branch" in
 esac
 "$bluehs" "-i$sdk/lib" "$sdk/scripts/measure.hs" --candidate "$old" "$context" \
   "$work/flow/$branch-search/selected.ast" "$work/flow/mkFanoutLoss.v" "$work/selected-metrics"
-"$bluehs" "-i$sdk/lib" "$sdk/scripts/replay.hs" "$work/flow/effective.config" "$context" \
+replay_args=()
+if [ "$objective" != whole ]; then replay_args=(--objective "$objective" "$old"); fi
+"$bluehs" "-i$sdk/lib" "$sdk/scripts/replay.hs" "${replay_args[@]}" "$work/flow/effective.config" "$context" \
   "$work/flow/$branch-search/search.plan" "$work/replayed-branch"
 cmp "$work/flow/mkFanoutLoss.v" "$work/replayed-branch/selected.v"
 "$bluehs" "$sdk/scripts/package-sdk.hs" --check "$sdk/build.manifest"
