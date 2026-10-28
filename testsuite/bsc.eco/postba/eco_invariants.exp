@@ -1,0 +1,41 @@
+namespace eval eco_invariants {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag "-i[file join $sdk lib]"
+    set yosys [which yosys]
+    if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO invariants: matched bluehs runtime unavailable"
+    } elseif {$yosys == 0 || ![file executable $yosys]} {
+        unsupported "ECO invariants: Yosys unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-invariants-[pid]-[clock clicks]]]
+        file mkdir $root
+        set captures {}; set ok 1
+        # Compiler observations are an optional producer layer. The core suite
+        # always checks synthetic obligations; enable native-positive controls
+        # only with a matched observation-producing compiler and SDK.
+        set native_observations [expr {[info exists ::env(ECO_NATIVE_OBSERVATIONS)] &&
+                                      $::env(ECO_NATIVE_OBSERVATIONS) eq "1"}]
+        foreach kind [expr {$native_observations ? {proved unproved} : {}}] {
+            set dir [file join $root $kind]; file mkdir $dir
+            set command [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -check-assert -g mkEvidence -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+            if {$kind eq "unproved"} {lappend command -Xcpp -DUNPROVED -unsafe-always-ready}
+            lappend command [file join $here Evidence.bs]
+            if {[catch {exec {*}$command >$dir/capture.log 2>@1} message]} {
+                fail "ECO invariants: $kind capture"; verbose -log $message 0; set ok 0
+            } else {pass "ECO invariants: $kind capture"}
+            lappend captures [file join $dir capture mkEvidence.eco-ast]
+        }
+        if {$ok} {
+            set log [file join $root invariants.log]
+            if {[catch {exec $bluehs $sourceFlag [file join $here ASTInvariant.hs] $yosys [file join $root checks] {*}$captures >$log 2>@1} message]} {
+                fail "ECO invariants: independent binding and proof"
+                set f [open $log]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO invariants: independent binding and proof"}
+        }
+    }
+}

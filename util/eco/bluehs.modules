@@ -14,10 +14,15 @@ ECOASTDeclarations
 ECOASTTransform
 ECOASTSearch
 ECOStructurePolicy
+ECOASTInvariant
+ECOInvariantExport
 ECOASTVacancy
 ECOASTPreservation
 ECOASTShell
 ECOASTInactive
+ECOASTMetric
 ECOASTStateView
 ECOAST
+ECOASTTranslatedMetric
 ECOASTCost
+ECOASTTranslatedObjective

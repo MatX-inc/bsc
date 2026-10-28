@@ -1,0 +1,17 @@
+package TranslatedMetric where
+interface TranslatedMetric =
+  advance :: Bit 8 -> Action {-# always_ready, always_enabled #-}
+  result :: Bit 8 {-# always_ready #-}
+{-# verilog mkTranslatedMetric #-}
+mkTranslatedMetric :: Module TranslatedMetric
+mkTranslatedMetric = module
+  q :: Reg (Bit 8) <- mkReg 0
+  interface TranslatedMetric
+    advance x = action
+      q := x
+#ifdef ECO_NEW
+      $display "new debug text" q
+#else
+      $display "old debug text" q
+#endif
+    result = readReg q
