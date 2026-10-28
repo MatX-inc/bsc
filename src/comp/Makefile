@@ -223,6 +223,11 @@ install-bluetcl: ; $(MAKE) install CABAL_INSTALL="$(TCLEXES)"
 install-utils: ; $(MAKE) install CABAL_INSTALL="$(UTILEXES)"
 install-showrules: ; $(MAKE) install CABAL_INSTALL="$(SHOWRULESEXES)"
 
+.PHONY: install-checkers
+install-checkers: $(addprefix $(BINDIR)/,$(CHECKEXES))
+install-checkers: $(addprefix $(BINDIR)/core/,$(CHECKEXES))
+install-checkers: $(PKGINFO)
+
 # ----
 # Other targets
 
