@@ -81,30 +81,41 @@ observedWireTypes apkg = M.fromListWith S.union
                   not (S.null ts),
                   name <- S.toList (names (canonical e))]
   where
-    defs = apkg_local_defs apkg ++
-           [d | AIDef { aif_value = d } <- apkg_interface apkg] ++
-           [d | AIActionValue { aif_value = d } <- apkg_interface apkg]
+    ifcDefs = [(d, fi) | AIDef { aif_value = d, aif_fieldinfo = fi } <- apkg_interface apkg] ++
+              [(d, fi) | AIActionValue { aif_value = d, aif_fieldinfo = fi } <- apkg_interface apkg]
+    -- A0 can split a method result across several physical ports. Match
+    -- each element to its own port; the aggregate method is not a wire.
+    outputDefs (ADef _ (ATTuple ts) (ATuple _ es) _, fi) =
+        zipWith3 (\i t e -> ADef i t e []) (mkNamedOutputs fi) ts es
+    outputDefs (ADef _ t e _, fi) =
+        [ADef i t e [] | [i] <- [mkNamedOutputs fi]]
+    namedDefs = apkg_local_defs apkg ++ concatMap outputDefs ifcDefs
+    defs = namedDefs ++ map fst ifcDefs
     defmap = M.fromList [(i, canonical e) | ADef i _ e _ <- defs]
     canonical e@(ASDef _ i) = M.findWithDefault e i defmap
     canonical e = e
     nameIndex = M.fromListWith S.union
-        [(canonical e, S.singleton (getIdString i)) | ADef i _ e _ <- defs]
+        [(canonical e, S.singleton (getIdString i)) | ADef i _ e _ <- namedDefs]
     names e = M.findWithDefault S.empty e nameIndex `S.union` leafNames e
     leafNames (ASPort _ i) = S.singleton (getIdString i)
-    leafNames (AMethValue _ i m) = methodNames i m
-    leafNames (AMethCall _ i m []) = methodNames i m
+    leafNames (AMethValue _ i m) = methodNames i m Nothing
+    leafNames (AMethCall _ i m []) = methodNames i m Nothing
+    leafNames (ATupleSel _ (AMethValue _ i m) idx) = methodNames i m (Just idx)
+    leafNames (ATupleSel _ (AMethCall _ i m []) idx) = methodNames i m (Just idx)
     leafNames _ = S.empty
     -- A wide interface can have many observed methods. Index the fields once
     -- rather than scanning the whole interface for every observation.
     methodIndex = M.fromListWith S.union
-        [((avi_vname v,m), S.fromList $
+        [((avi_vname v,m,index), S.fromList $
             [inst ++ "$" ++ port, inst ++ "." ++ port] ++
             [inst | isRegInst v && port == qoutPortStr]) |
           v <- apkg_state_instances apkg,
-          Method { vf_name = m, vf_output = Just (vn,_) } <- vFields (avi_vmi v),
+          Method { vf_name = m, vf_outputs = outs } <- vFields (avi_vmi v),
+          (idx, (vn,_)) <- zip [1..] outs,
+          index <- Just idx : [Nothing | length outs == 1],
           let inst = getIdString (avi_vname v)
               port = getVNameString vn]
-    methodNames i m = M.findWithDefault S.empty (i, unQualId m) methodIndex
+    methodNames i m idx = M.findWithDefault S.empty (i, unQualId m, idx) methodIndex
 
 declaredWireTypeMap :: APackage -> [(String, IType)]
 declaredWireTypeMap apkg =
