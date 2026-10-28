@@ -30,6 +30,7 @@ import qualified Control.Exception as CE
 import qualified Data.Map as M
 import qualified Data.Set as S
 import ECO.Options
+import ECO.VerilogInfo (writeVerilogInfo)
 import ECO.Replay
 
 import ListMap(lookupWithDefault)
@@ -207,16 +208,18 @@ hmainReplay opts manifest out = do
         modName = rbModuleName info
     replayFile <- genFileName mkVName (vdir flags) (rbPrefix info) modName
     let outputPath = getFullFilePath replayFile
+        astStem = out </> modName ++ ".eco-ast"
     checkReplayOutputPaths manifest replay
-        ([outputPath] ++
+        ([outputPath, astStem, astStem ++ ".bin", astStem ++ ".output.v"] ++
          [dropSuf outputPath ++ "." ++ useSuffix | showModuleUse flags])
     setErrorHandleFlags errh flags
     t <- getNow
-    (_, _, _, _) <- genModuleVerilog errh (abmi_pps abmi) flags
+    (_, _, _, _, observe) <- genModuleVerilog errh (abmi_pps abmi) flags
         (Nothing, Nothing, Just modName) t (rbPrefix info) modName
         (rbHeader info) (rbMethodConflict info) (rbMethodBVI info)
         (abmi_pathinfo abmi) (abmi_aschedinfo abmi) (abmi_apkg abmi)
     verifyReplayOutputs replay [outputPath]
+    observe
     exitOK errh
 
 hmainAdapt :: ECOOptions -> FilePath -> FilePath -> IO ()
@@ -233,7 +236,7 @@ hmainAdapt opts manifest out = do
     createDirectoryIfMissing True currentDir
     setErrorHandleFlags errh flags
     t <- getNow
-    (_, _, _, backendInfo) <- genModuleVerilog errh (abmi_pps abmi) flags
+    (_, _, _, backendInfo, observe) <- genModuleVerilog errh (abmi_pps abmi) flags
         (Nothing, Nothing, Just modName) t (rbPrefix info) modName
         (rbHeader info) (rbMethodConflict info) (rbMethodBVI info)
         (abmi_pathinfo abmi) (abmi_aschedinfo abmi) (abmi_apkg abmi)
@@ -243,6 +246,7 @@ hmainAdapt opts manifest out = do
                          return backendInfo
     adapted <- captureReplay captureDir (fiPath (rmABin replay)) flags captureInfo
     finishReplayAdaptation sourceIdentity replay out adapted
+    observe
     exitOK errh
 
 hmainOrdinary :: ECOOptions -> [String] -> IO ()
@@ -1017,15 +1021,15 @@ genModule
     --           XXX it would be nice if the Bluesim backend had the same info
     -- * vprog = the Verilog data structure, for recording in the .ba file,
     --           so that it's available to bluetcl
-    (t, veriPortProps, vprog, backendInfo)
+    (t, veriPortProps, vprog, backendInfo, observe)
         <- if (backend flags == Just Verilog)
-           then do (t', ips, v, info)
+           then do (t', ips, v, info, obs)
                        <- genModuleVerilog
                              errh pps flags dumpnames t prefix modstr
                              blurb methodConflictBlurb methodConflictBVI
                              vPathInfo sched_info'' amod_final
-                   return (t', ips, Just v, info)
-           else return (t, [], Nothing, Nothing)
+                   return (t', ips, Just v, info, obs)
+           else return (t, [], Nothing, Nothing, return ())
 
     t <- if (genABin flags)
          then writeABin errh pps flags dumpnames t prefix
@@ -1044,6 +1048,7 @@ genModule
                       return backendInfo
         _ <- captureReplay captureDir (mkAName (bdir flags) prefix modstr) flags info
         return ()
+    observe
 
     -- Wrapper generation
     start flags DFwrappergen
@@ -1083,6 +1088,8 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
        amod_for_abin
            <- simCheckPackage errh (backend flags == Just Bluesim) amod
 
+       let ecoOpts = ecoOptions flags
+
        -- generate the abin file
        pwd <- getCurrentDirectory
        let storedFlags = storedFlagsPaths (storedPath pwd (bluespecDir flags)) flags
@@ -1105,7 +1112,7 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                           abmi_method_dump = methodConflict,
                           abmi_pathinfo = vPathInfo,
                           abmi_flags       = storedFlags,
-                          abmi_vprogram    = if (genABinVerilog flags)
+                          abmi_vprogram    = if (genABinVerilog flags || isJust (ecoCapture ecoOpts))
                                              then vprog else Nothing
                      }
            abin = ABinMod modinfo (bscVersionStr True)
@@ -1162,7 +1169,8 @@ genModuleVerilog :: ErrorHandle
                  -> IO (TimeInfo,
                         [VPort],   -- port properties for the import-BVI
                         VProgram,  -- generated Verilog
-                        Maybe ReplayBackend) -- lazy context only when capture is requested
+                        Maybe ReplayBackend, -- lazy context only when capture is requested
+                        IO ())     -- deferred observations after native capture
 genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  atsPackage =
@@ -1293,11 +1301,18 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                Just _ -> Just (ReplayBackend prefix moduleName blurb
                    methodConflictBlurb methodConflictBVI (map fst abis)
                    (map vfnString vfilenames))
+       let observation
+             | ecoEnabled ecoOpts = writeVerilogInfo ecoOpts
+                 (maybe (maybe "." id (vdir flags)) id (ecoCapture ecoOpts)) moduleName
+                 (verilogHeader blurb methodConflictBlurb methodConflictBVI ioprops vPathInfo)
+                 aumod vprog (vfnString (head vfilenames))
+             | otherwise = return ()
+
        -- Return
        -- * the port properties (to be included in the import-BVI)
        -- * the Verilog structure (for accessing in bluetcl)
        -- Decide whether context is needed now; keep the captured payload lazy.
-       backendInfo `seq` return (t, ips, vprog, backendInfo)
+       backendInfo `seq` return (t, ips, vprog, backendInfo, observation)
 
 
 -- Write a Verilog program to file (along with its use file)
@@ -1323,11 +1338,7 @@ writeVerilog errh flags prefix
            useName = dropSuf (vfnString vName) ++ "." ++ useSuffix
 
        -- Comments at the top of the Verilog file
-       let pathInfoBlurb = lines (pp80 vPathInfo)
-           ioblurb = "" : "Ports:" : lines (pp80 ioprops)
-           comment = commentV (blurb ++ methodConflictBlurb ++ methodConflictBVI ++
-                               ioblurb ++
-                               pathInfoBlurb ++ [""])
+       let comment = verilogHeader blurb methodConflictBlurb methodConflictBVI ioprops vPathInfo
 
        -- The contents of the Verilog file
        let vstring = comment ++ pp80 vprog
@@ -1342,6 +1353,14 @@ writeVerilog errh flags prefix
 
        return [vName]
 
+
+-- Shared renderer context for native output and checked AST snapshots.
+verilogHeader :: [String] -> [String] -> [String] -> VIOProps -> VPathInfo -> String
+verilogHeader blurb methodConflictBlurb methodConflictBVI ioprops vPathInfo =
+    let pathInfoBlurb = lines (pp80 vPathInfo)
+        ioblurb = "" : "Ports:" : lines (pp80 ioprops)
+    in commentV (blurb ++ methodConflictBlurb ++ methodConflictBVI ++
+                 ioblurb ++ pathInfoBlurb ++ [""])
 
 writeVFileCatch :: ErrorHandle -> Flags -> VFileName -> String -> IO ()
 writeVFileCatch errh flags (VFileName fn) s = do

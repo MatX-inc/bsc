@@ -16,10 +16,11 @@ supplies the controls for the current replay or adaptation invocation explicitly
 
 `-eco-capture DIR` requires `-elab` and records the actual native `.ba`, complete
 intern table, effective backend flags, headers, dependency resolution, filter
-identities, and output bytes. It preserves the ordinary native `.ba` contents;
-the existing optional `VProgram` field is retained only when the ordinary
-compiler flags request it. Backend context passes directly to capture after
-native serialization, with no global handoff state.
+identities, and output bytes. It copies the produced native `.ba` unchanged;
+the native codec and layout do not change. Backend context passes directly to
+capture after native serialization, with no global handoff state. The separate
+[Verilog info layer](../verilog-info/README.md) additionally retains the existing
+optional `VProgram` field and exports checked companions after capture.
 
 With `-u`, capture regenerates source packages that produce modules, including
 imported synthesized modules, even when their ordinary outputs are up to date.
@@ -51,8 +52,9 @@ backend replay already retains its interface and does not read its `.ba`.
 The `native.exp`, `dependency.exp` and `incremental.exp` cases invoke the compiler
 directly and compare exact output bytes. The incremental cases cover cached
 builds, repeated capture and imported module/dependency rebuilding. The native
-test also checks that default capture replays without retained `VProgram` or
-Verilog info artifacts; `NativePayload.hs` inspects the native retention field.
+test checks native retention and companion outputs; `NativePayload.hs` inspects
+the native retention field. The capture/replay layer works without retained
+`VProgram` or Verilog info artifacts; the info layer enables their retention.
 Set `PRODUCTION_BSC` to include ordinary output
 comparisons against a second compiler. The Haskell inspectors run through the
 shared `bluehs` test hook; install `bsc` and

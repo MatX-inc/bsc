@@ -28,19 +28,19 @@ namespace eval eco_native {
                 $work/ordinary/mkReplaySmoke.v $work/captured/mkReplaySmoke.v]]} {
             fail "ECO replay: capture preserves ordinary RTL bytes"
         } else {pass "ECO replay: capture preserves ordinary RTL bytes"}
-        if {[llength [glob -nocomplain $work/capture/*.eco-ast*]] == 0} {
-            pass "ECO replay: native capture needs no Verilog info artifacts"
+        if {[llength [glob -nocomplain $work/capture/*.eco-ast*]] == 3} {
+            pass "ECO replay: capture exports Verilog info companions"
         } else {
-            fail "ECO replay: native capture needs no Verilog info artifacts"
+            fail "ECO replay: capture exports Verilog info companions"
         }
         if {$::bluehs eq "" || $::bluehs eq "0" ||
             ![file isfile $::bluehs] || ![file executable $::bluehs]} {
             untested "ECO replay: native VProgram retention (bluehs unavailable)"
         } elseif {[exec_with_log "ECO native payload" [list $::bluehs $here/NativePayload.hs \
-                $work/capture/mkReplaySmoke.ba absent >& $work/native_payload.log]]} {
+                $work/capture/mkReplaySmoke.ba retained >& $work/native_payload.log]]} {
             set f [open $work/native_payload.log]; verbose -log [read $f] 0; close $f
-            fail "ECO replay: default capture has no retained VProgram"
-        } else {pass "ECO replay: default capture has no retained VProgram"}
+            fail "ECO replay: info capture retains native VProgram"
+        } else {pass "ECO replay: info capture retains native VProgram"}
         set manifest $work/capture/mkReplaySmoke.replay
         foreach mode {replayed repeated} {
             if {[exec_with_log "ECO $mode" [list env BSC_OPTIONS= $::bsc -eco-replay $manifest \
@@ -61,8 +61,8 @@ namespace eval eco_native {
         file link -hard $work/replay_hardlink/mkReplaySmoke.v $work/capture/mkReplaySmoke.ba
         file link -symbolic $work/output_alias $work
         foreach {name option output diagnostic} [list \
-            replay_alias -eco-replay $work/replay_alias {output would overwrite a bound capture artifact} \
-            replay_hardlink -eco-replay $work/replay_hardlink {output would overwrite a bound capture artifact} \
+            replay_alias -eco-replay $work/replay_alias {output would overwrite a bound capture or snapshot artifact} \
+            replay_hardlink -eco-replay $work/replay_hardlink {output would overwrite a bound capture or snapshot artifact} \
             adapt_overlap -eco-adapt $work {adaptation output directory must be empty} \
             adapt_alias -eco-adapt $work/output_alias {adaptation output directory must be empty}] {
             set log $work/$name.log
