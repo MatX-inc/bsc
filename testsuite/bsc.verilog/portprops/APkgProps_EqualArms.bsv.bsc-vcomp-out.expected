@@ -24,6 +24,7 @@ EN_put                         I     1
 -----
 
 Verilog file created: mkEqualArmsSink.v
+Elaborated module file created: mkEqualArmsSink.ba
 code generation for sysAPkgProps_EqualArms starts
 Warning: "APkgProps_EqualArms.bsv", line 33, column 8: (G0117)
   Rule `rb' shadows the effects of `put2' when they execute in the same clock
@@ -53,4 +54,5 @@ EN_put2                        I     1
 -----
 
 Verilog file created: sysAPkgProps_EqualArms.v
+Elaborated module file created: sysAPkgProps_EqualArms.ba
 All packages are up to date.
