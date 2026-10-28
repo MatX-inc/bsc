@@ -77,7 +77,7 @@ endmodule
 //   * push  is unannotated: EN_push and RDY_push are real wires.
 // The map must contain EN/RDY candidates for push only -- an entry
 // for a removed port would be a phantom that can never correlate
-// (see the phantom check in run_correlation.sh).
+// (see the phantom check in vcd_correlation.exp).
 
 interface AnnotStash;
     method Action   tick();
