@@ -35,7 +35,7 @@ import qualified Data.ByteString as B
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261028-a0-types-3"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261028-a0-types-4"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -151,6 +151,7 @@ instance Bin APackage where
                apkg_external_wire_types = wpt,
                apkg_expr_types = ets,
                apkg_final_wire_names = names,
+               apkg_final_wire_types = finalTypes,
                apkg_reset_list = rsts,
                apkg_state_instances = avis,
                apkg_local_defs = ds,
@@ -176,6 +177,8 @@ instance Bin APackage where
                         -- process history. Identity pairs prove wire liveness.
                         toBin (fmap (map (\(a,b) -> (mkFString a, mkFString b)) .
                                      M.toAscList) names)
+                        toBin (fmap (map (\(n,ts) -> (mkFString n,ts)) .
+                                     M.toAscList) finalTypes)
                         toBin rsts
                         toBin avis
                         toBin ds
@@ -199,6 +202,9 @@ instance Bin APackage where
                    let names = fmap (M.fromList .
                                      map (\(a,b) -> (getFString a, getFString b)))
                                     sharedNames
+                   sharedTypes <- fromBin
+                   let finalTypes = fmap (M.fromList . map (\(n,ts) -> (getFString n,ts)))
+                                         sharedTypes
                    rsts <- fromBin
                    avis <- fromBin
                    ds <- fromBin
@@ -218,6 +224,7 @@ instance Bin APackage where
                              apkg_external_wire_types = wpt,
                              apkg_expr_types = ets,
                              apkg_final_wire_names = names,
+                             apkg_final_wire_types = finalTypes,
                              apkg_reset_list = rsts,
                              apkg_state_instances = avis,
                              apkg_local_defs = ds,
