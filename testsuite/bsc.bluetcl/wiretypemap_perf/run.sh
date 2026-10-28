@@ -8,6 +8,8 @@
 # Shared-expression alias join scaling (one observation per alias):
 #   GHC=ghc testsuite/bsc.bluetcl/wiretypemap_perf/run.sh --aliases 1000 2000 4000
 #
+# The --cached-aliases mode measures queries with final physical candidates.
+#
 # For an A/B comparison, export an older WireAnalysis.hs to a directory:
 #   mkdir -p /tmp/wire-analysis-baseline
 #   git show BASE_REF:src/comp/WireAnalysis.hs > /tmp/wire-analysis-baseline/WireAnalysis.hs
@@ -41,7 +43,7 @@ fi
 
 "$build_dir/check"
 benchmark_mode=()
-if [[ ${1:-} == --aliases ]]; then
+if [[ ${1:-} == --aliases || ${1:-} == --cached-aliases ]]; then
     benchmark_mode=("$1")
     shift
 fi
