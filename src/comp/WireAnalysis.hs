@@ -53,7 +53,7 @@ getWireTypeMap apkg =
             M.findWithDefault S.empty n known `S.union`
             M.findWithDefault S.empty n inferred
         refine (n,t) = case S.toList (choices n) of
-                         [t'] | isBitType t -> (n,t')
+                         [t'] | isBitType t, M.member n inferred -> (n,t')
                          _ -> (n,t)
         extra = [(n,t) | (n,ts) <- M.toList inferred, M.notMember n known,
                          [t] <- [S.toList ts]]
