@@ -118,6 +118,7 @@ import ASyntaxUtil(getForeignCallNames)
 import ASourceTypes(anchorASPackage)
 import AMuxSourceTypes(propagateArgumentMuxTypes)
 import AConditionalSourceTypes(propagateConditionalTypes)
+import APrimitiveSourceTypes(propagatePrimitiveTypes)
 import WireAnalysis(getFinalWireTypeCandidates)
 import ACheck(aMCheck, aSMCheck, aSignalCheck, aSMethCheck)
 import AConv(aConv)
@@ -1231,9 +1232,10 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Expand some primitives
        start flags DFsynthesize
-       -- Optimization can expose further sharing and lower array selections.
+       -- Derive primitive interpretations while signed/width-sensitive operations
+       -- still exist, sharing their candidates across selections and aliases.
        let asynmod = aSynthesize flags
-                         (anchorASPackage (propagateConditionalTypes aomod))
+                         (anchorASPackage (propagatePrimitiveTypes aomod))
        asCheck flags asynmod "asynthesize"
        -- Check that referenced signal names exist
        asSignalCheck flags asynmod "synthesize"

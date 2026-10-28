@@ -85,6 +85,7 @@ library
     ABinUtil
     ACheck
     ACleanup
+    AConditionalSourceTypes
     AConv
     ADropDefs
     ADropUndet
@@ -94,9 +95,11 @@ library
     AExpr2STP
     AExpr2Util
     AExpr2Yices
+    AMuxSourceTypes
     ANoInline
     AOpt
     APaths
+    APrimitiveSourceTypes
     APrims
     AProofs
     ARankMethCalls
@@ -104,10 +107,12 @@ library
     ARenameIO
     ASchedule
     AScheduleInfo
+    ASourceTypes
     AState
     ASyntax
     ASyntaxUtil
     ATaskSplice
+    ATypePropagation
     AUses
     AVeriQuirks
     AVerilog
