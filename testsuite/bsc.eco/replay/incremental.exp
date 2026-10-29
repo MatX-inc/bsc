@@ -58,7 +58,7 @@ namespace eval eco_incremental {
             }
             foreach module $modules {
                 set complete 1
-                foreach suffix {ba flags intern replay output-0.v} {
+                foreach suffix {ba flags intern replay output-0.v eco-ast eco-ast.bin eco-ast.output.v} {
                     set path $capture/$module.$suffix
                     if {![file exists $path] || [file size $path] == 0} {set complete 0}
                 }

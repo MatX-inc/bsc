@@ -176,8 +176,10 @@ library
     Deriving
     DisjointTest
     DynamicMap
+    ECO.Interface
     ECO.Options
     ECO.Replay
+    ECO.VerilogInfo
     EquivalenceClass
     Error
     ErrorMonad
