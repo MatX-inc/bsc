@@ -1,0 +1,32 @@
+packages: .
+
+-- The Hackage index the dependencies resolve against (doc/cabal.md).
+index-state: 2026-10-15T20:00:00Z
+
+-- -O2, as the compiler has always been built.
+optimization: 2
+
+-- From GHC 9.12 cabal-install and every GHC it runs share one job server of
+-- this many slots; cabal-install 3.16 speaks GHC's protocol (doc/cabal.md).
+jobs: $ncpus
+
+-- Bare ghci, runghc and ghc find the build's packages from any directory of
+-- the checkout.
+write-ghc-environment-files: always
+
+-- Parallel compilation only where object code is deterministic: from 9.12,
+-- with the flag on every package of the build (doc/cabal.md).
+if impl(ghc >= 9.12)
+  semaphore: True
+  package *
+    ghc-options: -fobject-determinism
+
+-- The rpath for the library's shared object: Cabal 3.16 writes the library's
+-- ld-options (bsc.cabal) into its registration, which GHC applies to every
+-- link against the library, the programs', and not to the library's own link.
+if os(osx)
+  program-options
+    ghc-options: -optl-Wl,-rpath,@loader_path/../lib/SAT
+else
+  program-options
+    ghc-options: -optl-Wl,-rpath,$ORIGIN/../lib/SAT
