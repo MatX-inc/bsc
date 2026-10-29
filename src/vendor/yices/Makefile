@@ -6,7 +6,7 @@ PREFIX?=$(TOP)/inst
 .PHONY: all clean full_clean install
 
 # install copies the library under its soname and adds the link name beside
-# it, so that a build may link the installed copy by name.
+# it, so that the cabal build links the installed copy by name.
 
 VER_MAJ = 2
 VER_MIN = 6

@@ -3,10 +3,8 @@ set -euo pipefail
 
 export TMOUT=1
 
-# Inputs, from the environment: src/comp/Makefile exports both, and the
-# cabal hooks pass them through (SetupHooks.hs, writeBuildVersionHs).
+# NOGIT comes from the environment (src/comp/Makefile, SetupHooks.hs).
 NOGIT=${NOGIT:-0}
-NOUPDATEBUILDVERSION=${NOUPDATEBUILDVERSION:-0}
 
 # -------------------------
 # GIT
@@ -19,10 +17,8 @@ repoGit () (
     git --git-dir="$root/.git" --work-tree="$root" "$@"
 )
 
-# --stamp FILE writes the install stamp, HEAD and the version name, when the
-# content changes (the hooks' version rule, SetupHooks.hs, writes it through
-# this). HEAD is the repository's whatever NOGIT says; a tree without one gets
-# no-repository.
+# The install stamp, HEAD and the version name, written when they change;
+# make install and the hooks' version rule share it (SetupHooks.hs).
 writeStamp () {
     if [ -e "$root/.git" ]; then
         head=$(repoGit rev-parse HEAD)
@@ -105,33 +101,17 @@ getGITVersion () {
 
 # -------------------------
 
-# --stamp FILE writes the install stamp (writeStamp above); --name prints
-# the Bluesim kernel's version name and writes nothing.
-case "${1:-}" in
-    --stamp) getGITVersion; writeStamp "$2"; exit ;;
-    --name)
-        # Make builds keep the compiler's authoritative version alongside this
-        # script, including when NOGIT or NOUPDATEBUILDVERSION was set only in
-        # the compiler's Makefile. Cabal builds keep generated modules elsewhere.
-        versionFile="$root/src/comp/BuildVersion.hs"
-        if [ -f "$versionFile" ]; then
-            if ! version=$(grep -E '^buildVersionName = ' "$versionFile"); then
-                echo "Failed to find version information in $versionFile" >&2
-                exit 1
-            fi
-            printf '%s\n' "$version" | cut -d'"' -f2
-        else
-            getGITVersion
-            echo "$GITDESCR"
-        fi
-        exit ;;
-esac
-
-if ( test -f BuildVersion.hs ) && [ "$NOUPDATEBUILDVERSION" = 1 ] ; then
-    echo "BuildVersion.hs not modified"
-else
-    getGITVersion
-    genGITBuildVersion ${GITCOMMIT} ${GITDESCR}
-fi
+# --module DIR writes DIR/BuildVersion.hs; --stamp FILE writes the install
+# stamp; --name prints the version name. The hooks give the first two together.
+getGITVersion
+[ $# -gt 0 ] || { echo "usage: $0 [--module DIR] [--stamp FILE] [--name]" >&2; exit 2; }
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --module) (mkdir -p "$2" && cd "$2" && genGITBuildVersion "$GITCOMMIT" "$GITDESCR"); shift 2 ;;
+        --stamp) writeStamp "$2"; shift 2 ;;
+        --name) echo "$GITDESCR"; shift ;;
+        *) echo "usage: $0 [--module DIR] [--stamp FILE] [--name]" >&2; exit 2 ;;
+    esac
+done
 
 # -------------------------

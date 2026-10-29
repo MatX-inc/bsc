@@ -133,7 +133,7 @@ $(LIB_KERNEL): $(KERNEL_OBJS)
 	$(RM) $(LIB_KERNEL)
 	$(AR) cr $(LIB_KERNEL) $(KERNEL_OBJS)
 
-# Use the compiler's version name, including frozen BuildVersion.hs values.
+# Use the compiler's version name from the shared version script.
 .PHONY: version FORCE
 version: version.h
 

@@ -1,0 +1,5 @@
+-- The debug variant (make BSC_BUILD=DEBUG): Core lint and the debugging
+-- runtime (INSTALL.md).
+import: cabal.project
+package bsc
+  ghc-options: -dcore-lint -debug

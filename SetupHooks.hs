@@ -26,12 +26,13 @@ import qualified Distribution.Simple.LocalBuildInfo as LBI
 import Distribution.Simple.SetupHooks
 import Distribution.Simple.Utils (die', rawSystemExitCode, rewriteFileEx)
 import Distribution.Verbosity (normal)
-import Distribution.Utils.Path (makeSymbolicPath, moduleNameSymbolicPath, (<.>))
+import Distribution.Utils.Path (moduleNameSymbolicPath, (<.>))
 import System.Directory
   ( canonicalizePath,
     createDirectoryIfMissing,
     createDirectoryLink,
     doesDirectoryExist,
+    doesFileExist,
     listDirectory,
     makeAbsolute,
     removeDirectoryLink,
@@ -125,7 +126,10 @@ preBuildRules = rules (static ()) $ \env -> do
       []
       [warmup]
   when (isMainLib component) $ do
+    -- GHC takes a module under hs-source-dirs over the autogen one, so a
+    -- copy under src/comp would be the one compiled: refuse while one is there.
     let buildVersion = autogenLocation lbi clbi "BuildVersion"
+    liftIO refuseStrayGeneratedModules
     registerRule_ "BuildVersion.hs" $
       staticRule
         ( mkCommand
@@ -147,35 +151,28 @@ writeWarmupHs (path, mods) = do
     ]
       <> ["import " <> m <> " ()" | m <- mods]
 
--- | Run update-build-version.sh in the autogen directory, where it writes
--- BuildVersion.hs (it leaves an up-to-date file untouched), then have it
--- write the install stamp. NOGIT passes through from the environment,
--- defaulted off as the script defaults it.
---
--- The script reads the repository it lives in, whatever the working
--- directory or the caller's Git environment (a build directory outside
--- the checkout, a Git hook of another repository).
+-- | Refuse while a copy of a generated module lies under src/comp.
+refuseStrayGeneratedModules :: IO ()
+refuseStrayGeneratedModules =
+  forM_ (["Warmup", "BuildVersion"] :: [String]) $ \m -> do
+    left <- doesFileExist ("src" </> "comp" </> (m <> ".hs"))
+    when left . ioError . userError $
+      "src/comp/" <> m <> ".hs would be compiled in place of the generated module:"
+        <> " remove it (make -C src/comp no-stale-modules does) and build again"
+
+-- | update-build-version.sh writes the autogen directory's BuildVersion.hs
+-- and the install stamp build/cabal-head (src/comp/Makefile, CABAL_HEAD): a
+-- declared source, so that a later commit or tag reruns this rule; written
+-- from the first build, since cabal-install watches only the declared sources
+-- it finds. The script reads the repository it lives in; NOGIT passes
+-- through; bash, since an sdist stores no executable bit.
 writeBuildVersionHs :: FilePath -> IO ()
 writeBuildVersionHs autogenDir = do
-  createDirectoryIfMissing True autogenDir
-  dir <- makeAbsolute autogenDir
-  -- The script and the stamp are named by absolute paths: a relative one
-  -- would be resolved against the process's working directory, the autogen
-  -- dir. bash runs the script, since an sdist stores no executable bit.
-  script <- makeAbsolute ("src" </> "comp" </> "update-build-version.sh")
-  stamp <- makeAbsolute ("build" </> "cabal-head")
-  let run args = do
-        code <- rawSystemExitCode normal (Just (makeSymbolicPath dir)) "bash" (script : args) Nothing
-        case code of
-          ExitSuccess -> pure ()
-          ExitFailure n -> die' normal ("src/comp/update-build-version.sh exited with " <> show n)
-  run []
-  -- The install stamp: HEAD and the version name, a declared source, so
-  -- that a later commit, or a tag at this one, is a changed source and this
-  -- rule runs again. It has to exist from the first build, since
-  -- cabal-install watches only the declared sources it finds when it
-  -- records a build.
-  run ["--stamp", stamp]
+  let script = "src" </> "comp" </> "update-build-version.sh"
+  code <- rawSystemExitCode normal Nothing "bash" [script, "--module", autogenDir, "--stamp", "build" </> "cabal-head"] Nothing
+  case code of
+    ExitSuccess -> pure ()
+    ExitFailure n -> die' normal (script <> " exited with " <> show n)
 
 -- | After a build, link lib/SAT beside the artifact to the directory the
 -- solvers were linked from, so the build tree runs in place via the rpath
