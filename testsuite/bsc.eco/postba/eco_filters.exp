@@ -1,0 +1,29 @@
+# External filter controls are checked against the retained AST's exact bytes.
+namespace eval eco_filters {
+    if {[eco_sdk_env "ECO filters"]} {
+        set root [file normalize [file join [pwd] eco-filters-[pid]-[clock clicks]]]
+        file mkdir $root
+        set captures {}; set ok 1
+        foreach kind {identity candidate ordinary macro macro-candidate} {
+            set dir [file join $root $kind]; file mkdir $dir
+            set filter [file join $dir filter.sh]
+            set f [open $filter w]; puts $f {#!/bin/sh}; puts $f {set -eu}
+            if {$kind eq "candidate" || $kind eq "macro-candidate"} {
+                puts $f {if grep -q ECO_CANDIDATE_MARKER "$1"; then printf '\n// FILTER_CHANGED_CANDIDATE\n' >> "$1"; fi}
+            } elseif {$kind eq "ordinary"} {
+                puts $f {printf '\n// FILTER_CHANGED_ORDINARY\n' >> "$1"}
+            }
+            close $f; file attributes $filter -permissions 0755
+            set module mkFanoutLoss; set source FanoutLoss.bs
+            if {[string match {macro*} $kind]} {set module mkStringParameter; set source StringParameter.bs}
+            set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -g $module -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture] -verilog-filter $filter [file join $here $source]]
+            if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+                fail "ECO filters: $kind capture"; verbose -log $message 0; set ok 0
+            } else {pass "ECO filters: $kind capture"}
+            lappend captures [file join $dir capture "$module.eco-ast"]
+        }
+        if {$ok} {
+            eco_run_script "ECO filters: ordinary and candidate byte controls" [file join $root checks.log] [file join $here ASTFilters.hs] {*}$captures [file join $root checks]
+        }
+    }
+}

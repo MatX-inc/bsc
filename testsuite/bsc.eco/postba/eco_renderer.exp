@@ -1,0 +1,33 @@
+# Public native string-parameter filter fixture; no RTL parsing or private capture.
+namespace eval eco_renderer {
+    if {[eco_sdk_env "ECO renderer"]} {
+        set root [file normalize [file join [pwd] eco-renderer-[pid]-[clock clicks]]]
+        file mkdir $root
+        set ordinary [file join $root ordinary]; file mkdir $ordinary
+        set macro [file join $root macro]; file mkdir $macro
+        set snapshot [file join $ordinary capture mkStringParameter.eco-ast]
+        set source [file join $here StringParameter.bs]
+        set base [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -g mkStringParameter]
+        set args [concat $base [list -bdir $ordinary -vdir $ordinary -info-dir $ordinary -eco-capture [file join $ordinary capture] $source]]
+        if {[catch {exec {*}$args >$ordinary/capture.log 2>@1} message]} {
+            fail "ECO renderer: ordinary string-parameter capture"; verbose -log $message 0
+        } else {
+            pass "ECO renderer: ordinary string-parameter capture"
+            # Shell-quote literal fixture paths; do not interpolate a command.
+            proc quote {s} {return "'[string map [list ' '\\''] $s]'"}
+            set filter [file join $root filter.sh]
+            set f [open $filter w]
+            puts $f {#!/bin/sh}
+            puts $f {set -eu}
+            puts $f "exec [quote $bluehs] -i [quote "-i[file join $sdk lib]"] [quote [file join $here RendererFilter.hs]] [quote $snapshot] \"\$1\""
+            close $f; file attributes $filter -permissions 0755
+            set args [concat $base [list -bdir $macro -vdir $macro -info-dir $macro -eco-capture [file join $macro capture] -verilog-filter $filter $source]]
+            if {[catch {exec {*}$args >$macro/capture.log 2>@1} message]} {
+                fail "ECO renderer: authenticated native parameter filter capture"; verbose -log $message 0
+            } else {
+                pass "ECO renderer: authenticated native parameter filter capture"
+                eco_run_script "ECO renderer: layout, policy and filter guards" [file join $root checks.log] [file join $here ASTRenderer.hs] [file join $macro capture mkStringParameter.eco-ast] $snapshot [file join $root checks]
+            }
+        }
+    }
+}

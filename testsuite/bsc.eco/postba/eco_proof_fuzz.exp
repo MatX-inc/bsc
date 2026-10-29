@@ -1,0 +1,13 @@
+# Differential fuzz of the strict normalizer against Icarus four-state
+# simulation; ECO_FUZZ_COUNT / ECO_FUZZ_SEED override the bounded defaults.
+namespace eval eco_proof_fuzz {
+    if {[eco_sdk_env "ECO proof fuzz" icarus]} {
+        set root [file normalize [file join [pwd] eco-proof-fuzz-[pid]-[clock clicks]]]
+        file mkdir $root
+        set count 3000
+        set seed 1
+        if {[info exists ::env(ECO_FUZZ_COUNT)]} {set count $::env(ECO_FUZZ_COUNT)}
+        if {[info exists ::env(ECO_FUZZ_SEED)]} {set seed $::env(ECO_FUZZ_SEED)}
+        eco_run_script "ECO proof fuzz: strict structural verdicts agree with four-state simulation" [file join $root fuzz.log] [file join $here ASTProofFuzz.hs] $root $iverilog $vvp $count $seed
+    }
+}

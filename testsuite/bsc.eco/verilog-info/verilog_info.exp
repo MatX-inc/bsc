@@ -3,7 +3,23 @@ bsc_initialize
 namespace eval eco_verilog_info {
     set previous [pwd]
     try {
+        # The external lexical gate is the native one textually: the body of
+        # util/eco/lib/ECOASTLexical.hs after its imports must equal the
+        # predicate section of src/comp/ECO/VerilogInfo.hs.
         set here [file dirname [file normalize [info script]]]
+        set root [file normalize [file join $here .. .. ..]]
+        set marker "-- Printed identifier positions, in print order."
+        set stop "-- The gates run before any byte is written"
+        set f [open $root/src/comp/ECO/VerilogInfo.hs]; set native [read $f]; close $f
+        set f [open $root/util/eco/lib/ECOASTLexical.hs]; set external [read $f]; close $f
+        set a [string first $marker $native]; set b [string first $stop $native]
+        set c [string first $marker $external]
+        if {$a >= 0 && $b > $a && $c >= 0 &&
+            [string trim [string range $native $a [expr {$b - 1}]]] eq [string trim [string range $external $c end]]} {
+            pass "ECO Verilog info: ECOASTLexical mirrors the native emission gates textually"
+        } else {
+            fail "ECO Verilog info: ECOASTLexical mirrors the native emission gates textually"
+        }
         if {$::bluehs eq "" || $::bluehs eq "0" ||
             ![file isfile $::bluehs] || ![file executable $::bluehs]} {
             untested "ECO Verilog info: native Haskell inspector (bluehs unavailable)"
@@ -64,6 +80,8 @@ namespace eval eco_verilog_info {
             -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr}
         set fixtures [list \
             {backend/FanoutLoss.bs -cpp} \
+            [list postba/FanoutLoss.bs [concat -cpp $flow]] \
+            {postba/StringParameter.bs -cpp} \
             {replay/ReplayDependencies.bs {}} \
             {replay/ReplayIncrementalTop.bs {-g mkReplayIncrementalTop}} \
             {replay/ReplaySmoke.bs {}}]

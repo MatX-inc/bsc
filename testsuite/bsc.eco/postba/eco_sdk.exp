@@ -1,0 +1,55 @@
+# The real bluehs runtime owns the compiled library; check the recorded SDK.
+namespace eval eco_sdk {
+    if {[eco_sdk_env "ECO SDK"]} {
+        set root [file normalize [file join [pwd] eco-sdk-[pid]-[clock clicks]]]
+        file mkdir $root
+        set manifest [file join $sdk build.manifest]
+        set checker [file join $sdk scripts package-sdk.hs]
+        if {[catch {exec $bluehs $checker --check $manifest >$root/valid.log 2>@1} message]} {
+            fail "ECO SDK: matched real runtime, compiled library and sources"
+            verbose -log $message 0
+        } else {pass "ECO SDK: matched real runtime, compiled library and sources"}
+        proc rejects {label path log} {
+            variable bluehs; variable checker
+            set rejected [catch {exec $bluehs $checker --check $path >$log 2>@1} message]
+            set f [open $log]; set output [read $f]; close $f
+            if {$rejected && [string first {SDK/runtime identity changed:} $output] >= 0} {
+                pass "ECO SDK: $label"
+            } else {fail "ECO SDK: $label"; verbose -log $output 0}
+        }
+        # Packaged paths are manifest-relative, so a tampered manifest is
+        # checked from a copy of the tree it describes.
+        set f [open $manifest]; set original [read $f]; close $f
+        foreach {label marker} {library libHSbsc source sdkSources} {
+            set start [string first $marker $original]
+            set digest [string first {fiSHA256 = "} $original $start]
+            if {$start < 0 || $digest < 0} {
+                fail "ECO SDK: $label identity fixture exists"
+                continue
+            }
+            set first [expr {$digest + [string length {fiSHA256 = "}]}]
+            set changed [string replace $original $first [expr {$first + 63}] [string repeat 0 64]]
+            set tree [file join $root $label]
+            file copy $sdk $tree
+            set f [open [file join $tree build.manifest] w]; puts -nonewline $f $changed; close $f
+            rejects "changed $label digest rejects" [file join $tree build.manifest] $root/$label.log
+        }
+        # A copy checks the tree holding its manifest, and rejects once any
+        # packaged file differs from it.
+        set copy [file join $root copy]
+        file copy $sdk $copy
+        if {[catch {exec $bluehs $checker --check [file join $copy build.manifest] >$root/copy.log 2>@1} message]} {
+            fail "ECO SDK: relocated copy checks its own tree"; verbose -log $message 0
+        } else {pass "ECO SDK: relocated copy checks its own tree"}
+        set f [open [file join $copy lib ECOASTProof.hs] a]; puts $f "-- modified after packaging"; close $f
+        rejects "modified copy rejects" [file join $copy build.manifest] $root/modified.log
+        set stray [file join $root stray]
+        file copy $sdk $stray
+        set f [open [file join $stray lib Stray.hs] w]; puts $f "module Stray where"; close $f
+        set rejected [catch {exec $bluehs $checker --check [file join $stray build.manifest] >$root/stray.log 2>@1} message]
+        set f [open $root/stray.log]; set output [read $f]; close $f
+        if {$rejected && [string first {tree differs from the manifest} $output] >= 0} {
+            pass "ECO SDK: unregistered file in a copy rejects"
+        } else {fail "ECO SDK: unregistered file in a copy rejects"; verbose -log $output 0}
+    }
+}
