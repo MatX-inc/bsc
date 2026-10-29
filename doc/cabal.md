@@ -126,14 +126,19 @@ Warmup ()`. (bluetcl differs: no `-main-is`, a helper module and a C shim.)
 The claim: one commit built from clean serially, oversubscribed or in another
 checkout directory, or rebuilt in place with nothing changed and, from GHC
 9.12, after an edit and its revert, gives bit-identical objects, archives,
-shared objects and programs, interfaces identical as `ghc --show-iface` text.
+shared objects and programs, interfaces identical as `ghc --show-iface` text,
+and the same installed tree.
 
 What holds it: every program links against the library's archive, compiled
 once; `Warmup` fixes the interface-load order; `-fobject-determinism`, from GHC
 9.12, makes an object independent of the session's uniques; the solvers are
 linked by name; and the hooks remove from each program, after its link, the
 FILE symbol of GHC's link stub, compiled from a temporary file named by a
-per-session counter (`objcopy`, on Linux); the other local symbols stay.
+per-session counter (`objcopy`, on Linux); the other local symbols stay. In the
+installed tree, the compiler stores file names relative to the build directory
+(upstream 1135), the Bluesim and VPI libraries map the checkout out of their
+debug information (`-ffile-prefix-map`), and the yices library's version stamp
+carries the source's commit date, not the build day (`make_source_version`).
 
 `util/cabal-ladder.sh`:
 
@@ -153,10 +158,10 @@ per-session counter (`objcopy`, on Linux); the other local symbols stay.
   directory of its own under `determinism-results/<stamp>/legs`, built and
   installed (`make install-src`, `make -C src/comp install-extra`, `make
   install-bluehs`) at its jobs count (`jobs: N` and, from 9.12, `ghc-options:
-  -jN` in a `cabal.project.local`) and hashed, `inst/bluehs` with the build
-  tree; the serial legs then run the round. The reference builds first, alone,
-  so the dependency store it fills is shared; then up to `LADDER_JOBS` legs run
-  at once, one per 6 GB of memory unless set. The verdict compares every leg and
+  -jN` in a `cabal.project.local`) and hashed, `inst` with the build tree; the
+  serial legs then run the round. The reference builds first, alone, so the
+  dependency store it fills is shared; then up to `LADDER_JOBS` legs run at
+  once, one per 6 GB of memory unless set. The verdict compares every leg and
   round with the reference; a failed one is MISSING. `LEGS` names other legs,
   `KEEP_LEGS=1` keeps their trees.
 

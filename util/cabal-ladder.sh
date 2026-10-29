@@ -3,12 +3,13 @@
 # serially, oversubscribed, in another directory or, from GHC 9.12,
 # incrementally must give bit-identical objects, interfaces, archives, shared
 # objects and programs, and the same bytes in any installed directory named to
-# `hash` (`run` names the bluehs runtime it installs, inst/bluehs).  `run` is
-# the whole ladder on one machine, every leg a fresh checkout in a directory of
-# its own: it runs `hash` on every leg, `rebuild` on the serial legs and
-# `verdict` over the lists; CI (.github/workflows/cabal.yml) runs it, one job
-# per platform.  `hash` writes a record of the toolchain beside each list,
-# which `verdict` reads a difference against.
+# `hash` (`run` names the installed tree, inst, the bluehs runtime under it
+# included).  `run` is the whole ladder on one machine, every leg a fresh
+# checkout in a directory of its own: it runs `hash` on every leg, `rebuild` on
+# the serial legs and `verdict` over the lists; CI
+# (.github/workflows/cabal.yml) runs it, one job per platform.  `hash` writes a
+# record of the toolchain beside each list, which `verdict` reads a difference
+# against.
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOP="$(cd "$(dirname "$SELF")/.." && pwd)"; cd "$TOP" || exit 2
@@ -171,12 +172,12 @@ toolchain_compare() {  # REF_LIST OTHER_LIST [quiet]
 }
 
 # Pass means every list is identical to the reference.  Differences are
-# reported by category (program, shared object, object, interface, archive,
-# and distribution for the files of an installed directory) so a failure says
-# what moved, and against the toolchain records beside the two lists, so it
-# says whether the same tools built them; the records do not decide the
-# result, which is the bytes'.  Identical lists whose records differ are
-# noted as well.
+# reported by category (program, shared object, object, interface, archive;
+# installed for the files of an installed directory, and distribution for
+# those of a bluehs runtime under it) so a failure says what moved, and
+# against the toolchain records beside the two lists, so it says whether the
+# same tools built them; the records do not decide the result, which is the
+# bytes'.  Identical lists whose records differ are noted as well.
 verdict() {
   local ref="$1" fail=0 other name diffs n cat sel c; shift
   [ -r "$ref" ] && [ -s "$ref" ] || { echo "verdict: reference $ref is missing, unreadable or empty"; exit 2; }
@@ -192,14 +193,15 @@ verdict() {
     n=$(printf '%s\n' "$diffs" | sed '/^$/d' | wc -l)
     echo "DIFFER: $(basename "$ref" .sha256) vs $name: $n file(s)"
     build=$(printf '%s\n' "$diffs" | grep '^dist-newstyle/' || true)
-    for cat in program shared object interface archive distribution; do
+    for cat in program shared object interface archive installed distribution; do
       case "$cat" in
         program) sel=$(printf '%s\n' "$build" | grep -Ev '\.(o|hi|dyn_o|dyn_hi|p_o|p_hi|a|so|dylib)$' || true);;
         shared) sel=$(printf '%s\n' "$build" | grep -E '\.(so|dylib)$' || true);;
         object) sel=$(printf '%s\n' "$build" | grep -E '\.(o|dyn_o|p_o)$' || true);;
         interface) sel=$(printf '%s\n' "$build" | grep -E '\.(hi|dyn_hi|p_hi)$' || true);;
         archive) sel=$(printf '%s\n' "$build" | grep '\.a$' || true);;
-        distribution) sel=$(printf '%s\n' "$diffs" | grep -v '^dist-newstyle/' || true);;
+        installed) sel=$(printf '%s\n' "$diffs" | grep -v '^dist-newstyle/' | grep -v '/bluehs/' || true);;
+        distribution) sel=$(printf '%s\n' "$diffs" | grep -v '^dist-newstyle/' | grep '/bluehs/' || true);;
       esac
       c=$(printf '%s\n' "$sel" | sed '/^$/d' | wc -l)
       [ "$c" -gt 0 ] && { echo "   $cat: $c"; printf '%s\n' "$sel" | sed '/^$/d' | head -8 | sed 's/^/      /'; }
@@ -245,7 +247,7 @@ rebuild_round() {  # NAME [DIR...]
 # under $OUT/legs, in a directory of its own, built and installed at cabal
 # jobs N (and ghc -jN where the project compiles in parallel, GHC 9.12 on)
 # through the make targets, so what it installs is built and hashed with the
-# build tree, then hashed with inst/bluehs; a serial leg (N = 1) then runs the
+# build tree, then hashed with inst; a serial leg (N = 1) then runs the
 # in-place round (rebuild_round).  The reference leg, the first of $LEGS,
 # builds alone first: the dependency store it fills is shared by the others,
 # which then run up to $LADDER_JOBS at once, one per 6 GB of memory unless
@@ -286,11 +288,11 @@ run_ladder() {
     echo "$name: build exit $rc, $(( $(date +%s) - t0 )) s"
     if [ $rc -eq 0 ]; then
       (cd "$dir" && ./inst/bin/bsc -v) >> "$OUT/$name.log" 2>&1 || true
-      (cd "$dir" && ./util/cabal-ladder.sh hash "$OUT/$name.sha256" inst/bluehs) >> "$OUT/$name.log" 2>&1 || rc=$?
+      (cd "$dir" && ./util/cabal-ladder.sh hash "$OUT/$name.sha256" inst) >> "$OUT/$name.log" 2>&1 || rc=$?
     fi
     [ $rc -eq 0 ] && touch "$OUT/$name.built"
     if [ $rc -eq 0 ] && [ "$n" = 1 ]; then
-      (cd "$dir" && OUT="$OUT" BUILD_CMD="$build" ./util/cabal-ladder.sh rebuild "$name" inst/bluehs) >> "$OUT/$name.log" 2>&1 || rc=$?
+      (cd "$dir" && OUT="$OUT" BUILD_CMD="$build" ./util/cabal-ladder.sh rebuild "$name" inst) >> "$OUT/$name.log" 2>&1 || rc=$?
       echo "$name: round exit $rc"
     fi
     [ $rc -eq 0 ] || tail -15 "$OUT/$name.log" | sed "s/^/   $name: /"
