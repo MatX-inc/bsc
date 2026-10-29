@@ -215,11 +215,13 @@ runCaptureFlowWithCost objectiveFactory provider invariantPolicy config = do
         let searchDir = output </> name ++ "-search"
             gate = runner current current
         let branchObjective=objectiveFactory old current
+        workers <- searchWorkersFromEnvironment
         found <- optimizeAST (defaultSearchRequest (cfSearch config) searchDir
                      (SearchInput (viProgram old) (renderVerilogText old))
                      (SearchInput (viProgram current) (renderVerilogText current)))
                      { searchObjective=branchObjective, searchProvider=provider
-                     , searchProof=gate, searchContracts=branchContracts, searchRenames=alpha }
+                     , searchProof=gate, searchContracts=branchContracts, searchRenames=alpha
+                     , searchWorkers=workers }
         let envelope=srCostEnvelope found
         need ((costOldASTHash envelope,costOldWitnessHash envelope)==costBaselineIdentity objectiveContext)
           "branch objective changed the OLD scoring baseline"

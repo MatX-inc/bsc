@@ -4,21 +4,28 @@
 module ECOASTSearch
     ( SearchOptions(..), SearchResult(..), ASTPlan(..), ASTStep(..), LineCost(..)
     , ProofRunner, defaultSearchOptions, SearchInput(..), SearchRequest(..)
-    , defaultSearchRequest, optimizeAST
+    , defaultSearchRequest, searchWorkersFromEnvironment, optimizeAST
+    , Job(..), Evaluation(..), evaluateJobs
     , CandidateGenerator, CandidateProvider(..), defaultCandidateProvider
     , combineCandidateProviders, CostProvider(..), wholeFileCostProvider
     , replayASTPlanWithCost
     , replayASTPlan, replayASTPlanWith, lineCost, changedLines
     ) where
 
-import Control.Exception (IOException, try)
-import Control.Monad (foldM, unless, when)
+import Control.Exception (IOException, SomeException, try)
+import Control.Monad (foldM, forM, forM_, unless, when)
 import qualified Data.ByteString as BS
 import Data.List (minimumBy, nub)
+import qualified Data.Map as M
 import Data.Ord (comparing)
 import qualified Data.Set as S
 import System.Directory
+import System.Environment (lookupEnv)
+import System.Exit (ExitCode(..))
 import System.FilePath
+import System.IO (BufferMode(..), hClose, hFlush, hGetLine, hIsEOF, hPutStrLn, hSetBuffering, stderr, stdout)
+import System.Posix.IO (closeFd, createPipe, fdToHandle)
+import System.Posix.Process (exitImmediately, forkProcess, getProcessStatus)
 import Text.Read (readMaybe)
 import BinData (encode,decode)
 import GenABin ()
@@ -70,6 +77,9 @@ data SearchRequest = SearchRequest
     , searchProvider :: CandidateProvider, searchProof :: ProofRunner
     , searchContracts :: [ASTContract], searchRenames :: [(String,String)]
     , searchObjective :: CostProvider
+    -- Worker processes that evaluate a round's candidates (1 = in this
+    -- process). Never part of a receipt: the result does not depend on it.
+    , searchWorkers :: Int
     }
 
 -- Select the proof domain explicitly in options. Custom policy changes only
@@ -81,7 +91,21 @@ defaultSearchRequest options directory old current = SearchRequest
     , searchProvider=defaultCandidateProvider, searchProof=defaultProof
     , searchContracts=[], searchRenames=[]
     , searchObjective=wholeFileCostProvider (searchRender old) (searchRender current)
+    , searchWorkers=1
     }
+
+-- ECO_WORKERS names how many worker processes evaluate candidates; a build
+-- rule sets it from the CPU count its action declares. Unset or empty keeps
+-- the sequential loop.
+searchWorkersFromEnvironment :: IO Int
+searchWorkersFromEnvironment = do
+    value <- lookupEnv "ECO_WORKERS"
+    case value of
+      Nothing -> return 1
+      Just "" -> return 1
+      Just text -> case readMaybe text of
+        Just n | n >= 1 && n <= 256 -> return n
+        _ -> ioError (userError ("ECO AST search: ECO_WORKERS must be an integer from 1 to 256, not " ++ show text))
 
 -- Context (including native child pin metadata) comes from the checked capture
 -- supplied by the caller, never from an editable candidate or plan artifact.
@@ -224,8 +248,14 @@ optimizeAST request = do
               generated = take (soCandidates options+1) $
                 cpGenerate provider activeContracts (soFeatures options) (soCandidates options+1) old current
               limited = length generated > soCandidates options
-          (_,accepted,visited') <- foldM (tryCandidate costContext prove n (planOutput plan) current score)
-              (0,[],visited) (take (soCandidates options) generated)
+          -- Admission stays sequential: it writes each candidate's AST and
+          -- dedupes proof keys in proposal order, so which candidates get
+          -- evaluated never depends on how they are evaluated.
+          (_,admitted,visited') <- foldM (admitCandidate n (planOutput plan))
+              (0 :: Int,[],visited) (take (soCandidates options) generated)
+          outcomes <- evaluateJobs (searchWorkers request) (evaluateCandidate costContext prove current score) (reverse admitted)
+          let accepted = [((changedLines (costValue nextScore),size,jobHash job),jobCandidate job,nextCost,nextScore,jobHash job)
+                         | (job,Evaluated nextCost nextScore size True) <- outcomes]
           case accepted of
             [] -> return (current,cost,score,plan,scores,if limited then "candidate-limit" else "no-improving-proved-candidate")
             _ -> do
@@ -233,36 +263,120 @@ optimizeAST request = do
               plan' <- save (planOutput plan) (acProgram candidate) cost nextCost plan candidate (acStateMap candidate)
               require (planOutput plan' == h) "candidate AST changed during proof"
               rounds costContext prove save (n+1) (acProgram candidate) nextCost nextScore plan' (scores++[nextScore]) visited'
-    tryCandidate costContext prove roundNumber referenceHash current score (index,accepted,visited) candidate = do
+    admitCandidate roundNumber referenceHash (index,admitted,visited) candidate = do
         let label = "candidate-" ++ show roundNumber ++ "-" ++ show index
             base = directory </> label
             program = acProgram candidate
         require (acFeature candidate `elem` soFeatures options) "provider emitted a disabled or unregistered feature"
         if (soDomain options == StrictFourState && acBinaryOnly candidate) || not (samePorts ordinary program)
-          then return (index+1,accepted,visited)
+          then return (index+1,admitted,visited)
           else do
             h <- writeAST (base ++ ".ast") program
             -- Proof failures belong to a reference/candidate/certificate
             -- combination, not to the candidate AST alone. Another rule can
             -- propose the same AST with a valid state relation or obligation.
             let proofKey=(referenceHash,h,acStateMap candidate,show (acContracts candidate))
-            if proofKey `S.member` visited then return (index+1,accepted,visited) else do
-              let visited' = S.insert proofKey visited
-              writeFile (base ++ ".v") (render program)
-              nextCost <- lineCost (directory </> "old.v") (base ++ ".v")
-              nextScore <- scoreCost costContext objective label program
-              if changedLines (costValue nextScore) >= changedLines (costValue score) then return (index+1,accepted,visited') else do
-                outcome <- try (prove (label ++ "-proof") (acStateMap candidate) (acContracts candidate) current program)
-                    :: IO (Either IOException ProofResult)
-                case outcome of
-                  Left err -> do
-                    writeFile (base ++ ".rejected") (show err)
-                    return (index+1,accepted,visited')
-                  Right proof -> do
-                    writeFile (base ++ ".proof.json") (renderProofResult proof)
-                    size <- getFileSize (directory </> costWitness nextScore)
-                    let scored = ((changedLines (costValue nextScore),size,h),candidate,nextCost,nextScore,h)
-                    return (index+1,if proofPassed proof then scored:accepted else accepted,visited')
+            if proofKey `S.member` visited then return (index+1,admitted,visited) else
+              return (index+1,Job label base candidate h:admitted,S.insert proofKey visited)
+    -- The expensive part of one candidate: render, score, prove. Everything it
+    -- makes is a file under the search directory, so it runs unchanged in a
+    -- worker process, and the outcome record is all that comes back.
+    evaluateCandidate costContext prove current score job = do
+        let Job label base candidate _ = job
+            program = acProgram candidate
+        writeFile (base ++ ".v") (render program)
+        nextCost <- lineCost (directory </> "old.v") (base ++ ".v")
+        nextScore <- scoreCost costContext objective label program
+        if changedLines (costValue nextScore) >= changedLines (costValue score) then return NotImproved else do
+          outcome <- try (prove (label ++ "-proof") (acStateMap candidate) (acContracts candidate) current program)
+              :: IO (Either IOException ProofResult)
+          case outcome of
+            Left err -> writeFile (base ++ ".rejected") (show err) >> return Rejected
+            Right proof -> do
+              writeFile (base ++ ".proof.json") (renderProofResult proof)
+              size <- getFileSize (directory </> costWitness nextScore)
+              return (Evaluated nextCost nextScore size (proofPassed proof))
+
+-- One admitted candidate of a round, in proposal order.
+data Job = Job { jobLabel :: String, jobBase :: FilePath, jobCandidate :: ASTCandidate, jobHash :: String }
+
+-- What evaluating a candidate produced: exactly the data the round's selection
+-- needs. Proof details and witnesses stay on disk, where the sequential loop
+-- also leaves them.
+data Evaluation = NotImproved | Rejected | Evaluated LineCost CostObservation Integer Bool | Failed String
+    deriving (Read, Show)
+
+-- Evaluate a round's admitted candidates, in worker processes when asked for.
+-- The workers are forked after admission, so each inherits the loaded programs
+-- and cost context without reloading anything. A worker takes job indices from
+-- its own pipe, writes the candidate's files and a one-line outcome record, and
+-- reports the index on the shared completion pipe; the parent hands the next
+-- job to whichever worker finished, so uneven proof times balance out.
+-- Outcomes come back in job order and selection is unchanged, so the result
+-- is byte-identical to the sequential loop. No AST crosses a process boundary.
+evaluateJobs :: Int -> (Job -> IO Evaluation) -> [Job] -> IO [(Job,Evaluation)]
+evaluateJobs workers evaluate jobs
+  | workers <= 1 || null jobs = mapM (\job -> (,) job <$> evaluate job) jobs
+  | otherwise = do
+      hFlush stdout >> hFlush stderr
+      let indexed = zip [0 :: Int ..] jobs
+          count = min workers (length jobs)
+          outcomePath job = jobBase job ++ ".outcome"
+          -- Whatever happens to a job, its index is reported, so the parent
+          -- never waits for a worker that failed: the failure becomes a Failed
+          -- record and stops the search with its message, as an uncaught
+          -- exception would have in the sequential loop.
+          attempt job = do
+              result <- try (evaluate job) :: IO (Either SomeException Evaluation)
+              return (either (Failed . show) id result)
+      (doneRead,doneWrite) <- createPipe
+      pool <- forM [1..count] $ \_ -> do
+          (jobRead,jobWrite) <- createPipe
+          pid <- forkProcess $ do
+              closeFd jobWrite >> closeFd doneRead
+              input <- fdToHandle jobRead
+              done <- fdToHandle doneWrite
+              hSetBuffering done LineBuffering
+              let loop = do
+                    eof <- hIsEOF input
+                    unless eof $ do
+                      index <- read <$> hGetLine input
+                      let job = jobs !! index
+                      outcome <- attempt job
+                      written <- try (writeFile (outcomePath job) (show outcome ++ "\n")) :: IO (Either SomeException ())
+                      hPutStrLn done (either (const "-1") (const (show index)) written)
+                      loop
+              loop
+              hClose done >> hFlush stdout >> hFlush stderr
+              exitImmediately ExitSuccess
+          closeFd jobRead
+          feed <- fdToHandle jobWrite
+          hSetBuffering feed LineBuffering
+          return (pid,feed)
+      closeFd doneWrite
+      done <- fdToHandle doneRead
+      let feedJob (_,feed) index = hPutStrLn feed (show index)
+          (first,rest) = splitAt count indexed
+      forM_ (zip pool first) $ \(w,(index,_)) -> feedJob w index
+      let run owner pending inflight
+            | inflight == (0 :: Int) = return ()
+            | otherwise = do
+                finished <- read <$> hGetLine done
+                when (finished < 0) $ ioError (userError "ECO AST search: a worker could not record a candidate outcome")
+                let w = owner M.! finished
+                case pending of
+                  (index,_):more -> feedJob w index >> run (M.insert index w (M.delete finished owner)) more inflight
+                  [] -> run (M.delete finished owner) [] (inflight-1)
+      run (M.fromList [(index,w) | (w,(index,_)) <- zip pool first]) rest (length first)
+      forM_ pool $ \(_,feed) -> hClose feed
+      forM_ pool $ \(pid,_) -> getProcessStatus True False pid
+      hClose done
+      forM indexed $ \(_,job) -> do
+          text <- readFile (outcomePath job)
+          outcome <- maybe (ioError (userError ("ECO AST search: unreadable outcome record for " ++ jobLabel job))) return (readMaybe text)
+          case outcome of
+            Failed message -> ioError (userError ("ECO AST search: " ++ jobLabel job ++ ": " ++ message))
+            _ -> return (job,outcome)
 
 -- Saved candidates are untrusted. Bind every artifact and rerun the complete
 -- proof chain; a stored receipt never authorizes replay by itself.

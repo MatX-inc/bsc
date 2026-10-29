@@ -1,22 +1,22 @@
--- bluehs captures.hs [--objective whole|translated-raw|translated-normalized] [--refinements standard] [--structure preserve|ordinary|compare] [--invariants export|defer] [--vacant-state] [--state-view] [--historical-shell] [--inactive-helpers] FLOW.config
+-- bluehs captures.hs [--objective whole|translated-raw|translated-normalized] [--refinements standard] [--structure preserve|ordinary|compare] [--invariants export|defer] [--vacant-state] [--state-view] [--historical-shell] [--inactive-helpers] FLOW.config [--workers N]
 -- FLOW.config is a typed CaptureFlow record; all proposals and proofs are saved.
 module Main where
 import ECOASTFlow
 import ECOASTRefinements
 import ECOASTTranslatedObjective
-import ECOASTSearch (changedLines, SearchOptions(..), defaultCandidateProvider, combineCandidateProviders)
+import ECOASTSearch (changedLines, SearchOptions(..), defaultCandidateProvider, combineCandidateProviders, searchWorkersFromEnvironment)
 import ECOASTVacancy (vacancyProvider)
 import ECOASTStateView (stateViewProvider)
 import ECOASTShell (shellProvider)
 import ECOASTInactive (inactiveProvider)
 import Control.Monad (when)
 import System.Directory (doesPathExist, createDirectoryIfMissing)
-import System.Environment (getArgs)
+import System.Environment (getArgs, setEnv)
 import System.Exit (die)
 import System.FilePath ((</>))
 import Text.Read (readMaybe)
 
-usage = "usage: bluehs captures.hs [--objective whole|translated-raw|translated-normalized] [--refinements standard] [--structure preserve|ordinary|compare] [--invariants export|defer] [--vacant-state] [--state-view] [--historical-shell] [--inactive-helpers] FLOW.config"
+usage = "usage: bluehs captures.hs [--objective whole|translated-raw|translated-normalized] [--refinements standard] [--structure preserve|ordinary|compare] [--invariants export|defer] [--vacant-state] [--state-view] [--historical-shell] [--inactive-helpers] FLOW.config [--workers N]"
 
 parseOptions structure invariants vacancy view shell inactive refinements args = case args of
     [path] -> return (structure,invariants,vacancy,view,shell,inactive,refinements,path)
@@ -31,7 +31,15 @@ parseOptions structure invariants vacancy view shell inactive refinements args =
     _ -> die usage
 
 main = do
-    allArgs <- getArgs
+    rawArgs <- getArgs
+    -- --workers N evaluates each round's candidates in N forked worker
+    -- processes (ECO_WORKERS in the environment does the same); the result
+    -- is byte-identical to the sequential search.
+    allArgs <- case break (=="--workers") rawArgs of
+      (before,"--workers":n:after) -> setEnv "ECO_WORKERS" n >> return (before ++ after)
+      (_,"--workers":_) -> die usage
+      _ -> return rawArgs
+    _ <- searchWorkersFromEnvironment
     (objectiveMode,args) <- case allArgs of
       "--objective":mode:rest | mode `elem` ["whole","translated-raw","translated-normalized"] -> return (mode,rest)
       "--objective":_ -> die usage
