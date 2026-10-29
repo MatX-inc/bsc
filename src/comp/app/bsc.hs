@@ -4,7 +4,7 @@ module Main_bsc(main, hmain) where
 -- Haskell libs
 import Warmup ()
 import Prelude
-import System.Environment(getArgs, getProgName)
+import System.Environment(getArgs, getProgName, getExecutablePath)
 import System.Process(runInteractiveProcess, waitForProcess)
 import System.Process(system)
 import System.Exit(ExitCode(ExitFailure, ExitSuccess))
@@ -13,7 +13,7 @@ import System.IO(hFlush, stdout, hPutStr, stderr, hGetContents, hClose, hSetBuff
 import System.IO(hSetEncoding, utf8)
 import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExecuteMode, setFileMode, getFileStatus, fileAccess)
 import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory,
-                        createDirectoryIfMissing)
+                        createDirectoryIfMissing, listDirectory)
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
@@ -30,7 +30,9 @@ import qualified Control.Exception as CE
 import qualified Data.Map as M
 import qualified Data.Set as S
 import ECO.Options
-import ECO.VerilogInfo (writeVerilogInfo)
+import ECO.Observe (observeECO, checkECOOutputPaths)
+import ECO.Graph (extractPreOptGraph)
+import ECO.Backend (applyBackendPlan, checkBackendPorts)
 import ECO.Replay
 
 import ListMap(lookupWithDefault)
@@ -192,15 +194,23 @@ hmain args = do
                       parseECOOptions (words bscopts ++ args)
     let opts = invocationOptions invocation
     case invocation of
-      CompileInvocation _ ordinaryArgs -> hmainOrdinary opts ordinaryArgs
-      ReplayInvocation manifest out -> hmainReplay opts manifest out
-      AdaptInvocation manifest out -> hmainAdapt opts manifest out
+      CompileInvocation _ _ ordinaryArgs -> hmainOrdinary opts ordinaryArgs
+      ReplayInvocation manifest out _ _ -> hmainReplay opts manifest out
+      AdaptInvocation manifest out _ -> hmainAdapt opts manifest out
 
 hmainReplay :: ECOOptions -> FilePath -> FilePath -> IO ()
 hmainReplay opts manifest out = do
     -- No error handle, flag decoding, or native decoder may precede this.
     replay <- prepareReplay manifest
     createDirectoryIfMissing True out
+    case ecoBackendPlan opts of
+      Nothing -> return ()
+      Just _ -> do
+        contents <- listDirectory out
+        unless (null contents) $
+            ioError (userError "ECO replay: backend plan output directory must be empty")
+        executable <- getExecutablePath
+        runReplayControl executable manifest replay (out </> "ordinary-control")
     errh <- initErrorHandle
     (abmi, capturedFlags) <- loadReplay errh replay
     let flags = capturedFlags { vdir = Just out, ecoOptions = opts }
@@ -208,9 +218,8 @@ hmainReplay opts manifest out = do
         modName = rbModuleName info
     replayFile <- genFileName mkVName (vdir flags) (rbPrefix info) modName
     let outputPath = getFullFilePath replayFile
-        astStem = out </> modName ++ ".eco-ast"
-    checkReplayOutputPaths manifest replay
-        ([outputPath, astStem, astStem ++ ".bin", astStem ++ ".output.v"] ++
+    checkECOOutputPaths opts manifest replay out modName
+        ([outputPath] ++
          [dropSuf outputPath ++ "." ++ useSuffix | showModuleUse flags])
     setErrorHandleFlags errh flags
     t <- getNow
@@ -218,7 +227,9 @@ hmainReplay opts manifest out = do
         (Nothing, Nothing, Just modName) t (rbPrefix info) modName
         (rbHeader info) (rbMethodConflict info) (rbMethodBVI info)
         (abmi_pathinfo abmi) (abmi_aschedinfo abmi) (abmi_apkg abmi)
-    verifyReplayOutputs replay [outputPath]
+    case ecoBackendPlan opts of
+      Nothing -> verifyReplayOutputs replay [outputPath]
+      Just _ -> return () -- the separate strict ordinary control passed
     observe
     exitOK errh
 
@@ -234,14 +245,17 @@ hmainAdapt opts manifest out = do
         info = rmBackend replay
         modName = rbModuleName info
     createDirectoryIfMissing True currentDir
+    replayFile <- genFileName mkVName (vdir flags) (rbPrefix info) modName
+    let outputPath = getFullFilePath replayFile
+    checkECOOutputPaths captureOptions manifest replay currentDir modName
+        ([outputPath] ++ [dropSuf outputPath ++ "." ++ useSuffix | showModuleUse flags])
     setErrorHandleFlags errh flags
     t <- getNow
     (_, _, _, backendInfo, observe) <- genModuleVerilog errh (abmi_pps abmi) flags
         (Nothing, Nothing, Just modName) t (rbPrefix info) modName
         (rbHeader info) (rbMethodConflict info) (rbMethodBVI info)
         (abmi_pathinfo abmi) (abmi_aschedinfo abmi) (abmi_apkg abmi)
-    replayFile <- genFileName mkVName (vdir flags) (rbPrefix info) modName
-    verifyReplayOutputs replay [getFullFilePath replayFile]
+    verifyReplayOutputs replay [outputPath]
     captureInfo <- maybe (ioError (userError "ECO capture requires the Verilog backend"))
                          return backendInfo
     adapted <- captureReplay captureDir (fiPath (rmABin replay)) flags captureInfo
@@ -1238,7 +1252,12 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Improve
        start flags DFaopt
-       aomod <- aOpt errh flags adropmod
+       -- Share one lazy checkpoint between keep validation and observation.
+       -- Without a keep request it remains unforced until after native capture.
+       let preOptGraph = extractPreOptGraph atsPackage asmod adropmod
+       (keptmod, checkedPlan) <- applyBackendPlan ecoOpts (maybe "." id (vdir flags)) moduleName
+                      preOptGraph adropmod
+       aomod <- aOpt errh flags keptmod
        asCheck flags aomod "aopt"
        t <- dump errh flags t DFaopt dumpnames aomod
        stats flags DFaopt aomod
@@ -1290,6 +1309,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        t <- dump errh flags t DFverilogDollar dumpnames vprog
 
        -- Write the Verilog files
+       checkBackendPorts ecoOpts (maybe "." id (vdir flags)) moduleName vprog
        start flags DFwriteVerilog
        vfilenames <- writeVerilog errh flags prefix
                          blurb methodConflictBlurb methodConflictBVI ioprops vPathInfo
@@ -1301,12 +1321,14 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                Just _ -> Just (ReplayBackend prefix moduleName blurb
                    methodConflictBlurb methodConflictBVI (map fst abis)
                    (map vfnString vfilenames))
-       let observation
-             | ecoEnabled ecoOpts = writeVerilogInfo ecoOpts
-                 (maybe (maybe "." id (vdir flags)) id (ecoCapture ecoOpts)) moduleName
+       -- Choose the callback now so default compilation can release these
+       -- checkpoints before the caller serializes the native package.
+       observation <- if ecoEnabled ecoOpts
+           then return (observeECO ecoOpts checkedPlan
+                 (maybe "." id (vdir flags)) moduleName atsPackage asmod preOptGraph aumod vprog
                  (verilogHeader blurb methodConflictBlurb methodConflictBVI ioprops vPathInfo)
-                 aumod vprog (vfnString (head vfilenames))
-             | otherwise = return ()
+                 (vfnString (head vfilenames)))
+           else return (return ())
 
        -- Return
        -- * the port properties (to be included in the import-BVI)
