@@ -31,6 +31,7 @@ Nothing in the stack migrates a capture between versions.
 | metric `report.json` (whole-file and translated) | `"schema": 2` | #249 |
 | `flow.report` | `frSchema = 5` | #251 |
 | `upstream-qualification.json` | `"schema": 2` | #251 |
+| finishing `receipt.json` | `"schema": 2` | #252 |
 | proof receipts (`*.proof.json`, `ordinary-to-kept.json`, `proof-N.json`) | `"schema": 1` | #246 |
 | invariant `report.json` (#249), `frontier.json`, `selection.json`, `completed.json` (#251) | `"schema": 1` | see left |
 | `MOD.replay.evidence` (optional producer only) | `reSchema = 1` | #244 |

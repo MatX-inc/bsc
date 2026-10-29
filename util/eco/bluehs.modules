@@ -37,3 +37,6 @@ ECOASTRefinements
 ECOASTLiveAliases
 ECOASTLiveShell
 ECOASTAliasOrientation
+ECOASTDeclarationOrder
+ECOASTFinishOrder
+ECOASTJointDeclarationOrder

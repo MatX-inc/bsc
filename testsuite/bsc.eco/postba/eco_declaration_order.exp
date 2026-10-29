@@ -1,0 +1,11 @@
+# Generic native-AST candidate and proof/replay checks; no MatX source here.
+namespace eval eco_declaration_order {
+    if {[eco_sdk_env "ECO declaration order" yosys]} {
+        set root [file normalize [file join [pwd] eco-declaration-order-[pid]-[clock clicks]]]
+        file mkdir $root
+        foreach test {ASTDeclarationOrder ASTJointDeclarationOrder} {
+            set script [file join $here "$test.hs"]
+            eco_run_script "ECO declaration order: $test candidate/proof/replay" [file join $root "$test.log"] $script [file join $root $test] $script $yosys
+        }
+    }
+}

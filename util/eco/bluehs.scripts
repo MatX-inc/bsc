@@ -7,3 +7,4 @@ configure.hs
 replay.hs
 select.hs
 package-sdk.hs
+finish-order.hs
