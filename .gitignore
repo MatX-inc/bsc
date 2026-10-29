@@ -18,3 +18,8 @@ vagrant-out/
 dist-newstyle/
 .ghc.environment.*
 cabal.project.local
+# Hash lists and result directories of a determinism run over the build
+# (doc/cabal.md section 7).
+/*.sha256
+/*.toolchain
+determinism-results/
