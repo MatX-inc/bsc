@@ -1,17 +1,12 @@
 TOP:=$(shell pwd)/../..
-WANT_TCL=yes
-
-include $(TOP)/platform.mk
-
-TMPDIR=/tmp
 
 # -----
 # System tools
 
 INSTALL ?= install
+CABAL ?= cabal
 
 RM = rm -f
-LN = ln -sf
 
 FIND = find
 
@@ -25,13 +20,6 @@ FIND = find
 NOGIT ?= 0
 export NOGIT
 
-# With NOGIT=1, the build version will be update to a null value.
-# If you want to pre-create the file and avoid overwriting it,
-# then set this variable to 1.
-#
-NOUPDATEBUILDVERSION ?= 0
-export NOUPDATEBUILDVERSION
-
 # -----
 # Paths and environment
 
@@ -42,381 +30,59 @@ BINDIR=$(PREFIX)/bin
 # Where package information is installed
 LICDIR=$(PREFIX)/LICENSES
 
-# Top-level of where intermediate GHC files are stored
-BUILDDIR=$(TOP)/build/comp
-
-# Parsec
+# The Haskell sources beyond this directory (tags)
 PARSEC_HS = ../Parsec
-
-# STP
 STP_HS = ../vendor/stp/include_hs
-STP_INC_FLAGS = -I../vendor/stp/include
-STP_LIB_FLAGS = -L../vendor/stp/lib -lstp
-
-# Yices
 YICES_HS = ../vendor/yices/include_hs
-YICES_INC_FLAGS = -I../vendor/yices/include
-YICES_LIB_FLAGS = -L../vendor/yices/lib -lyices
-
-# The solvers are shared libraries, and the executables that link them find
-# them through an rpath relative to the executable's own location. That is
-# what lets an installation be moved as a whole, as the top-level Makefile
-# promises, and it is why no wrapper script has to set a library path.
-# src/Makefile installs the solvers into $(PREFIX)/lib/SAT before it descends
-# here, so the directory is populated before anything points at it.
-# $$ORIGIN is quoted because the recipe runs through a shell, which would
-# otherwise expand it before ld ever sees it.
-ifeq ($(OSTYPE), Darwin)
-SAT_RPATH_FLAGS = -optl-Wl,-rpath,@loader_path/../lib/SAT
-else
-SAT_RPATH_FLAGS = -optl-Wl,-rpath,'$$ORIGIN/../lib/SAT'
-endif
-
-# HTCL
 HTCL_HS = ../vendor/htcl
-HTCL_INC_FLAGS = -L$(HTCL_HS)
-HTCL_LIB_FLAGS = -lhtcl
-# HTcl.hs needs macro definitions
-HTCL_INC_FLAGS += $(addprefix -D,$(TCL_DEFS))
 
 # -----
 # GHC
 
 GHC ?= ghc
-# Default the compile parallelism from the machine. Measured on a
-# 228-module build (16-core/32-thread EPYC, GHC 9.14.1): wall time is
-# 253.7s at -j1, 82.9s at -j4, 67.7s at -j12, and flat (within ~1%)
-# from -j12 through -j32 -- the module graph's average ready-set width
-# (~5-6 compiles) bounds useful parallelism well below the core count,
-# and SMT threads add nothing. 16 captures the plateau with margin;
-# each job also wants ~1 GB of headroom under -M (see GHCRTSFLAGS).
+# Parallelism of the cabal build (`cabal build -jN`). From GHC 9.12 the
+# project's job semaphore makes N the modules compiling at once; below, each
+# package compiles serially and N bounds the packages. Default: the processor
+# count, capped at 16 (measured: nothing past 12).
 GHCJOBS ?= $(shell n=`nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1`; if [ "$$n" -gt 16 ]; then echo 16; else echo "$$n"; fi)
 
-GHCVERSION=$(shell $(GHC) --version | head -1 | grep -Eo "[0-9]+\.[0-9]+\.[0-9]" )
+GHCVERSION=$(shell $(GHC) --numeric-version 2>/dev/null)
+# No version printed: GHC= names nothing on PATH, or there is no GHC.
+ifeq ($(GHCVERSION),)
+$(error GHC not found: '$(GHC) --version' printed no version (INSTALL.md))
+endif
 $(info Building with GHC $(GHCVERSION))
-
-## Extract the major, minor and patch version numbers
+# bsc.cabal's GHC floor, checked here rather than reported by cabal's
+# solver; a series newer than its upper bounds warns.
 GHCMAJOR=$(shell echo $(GHCVERSION) | cut -d. -f1)
 GHCMINOR=$(shell echo $(GHCVERSION) | cut -d. -f2)
 GHCPATCH=$(shell echo $(GHCVERSION) | cut -d. -f3)
-
-# Check that the GHC version is supported
-# and set version-specific GHC flags
-#
-#$(info Building with GHC $(GHCMAJOR).$(GHCMINOR))
-ifeq ($(GHCMAJOR),9)
-
-# Warn about newer versions that are not yet supported
-# (the CI matrix in .github/workflows/ci.yml is the authority; keep in sync)
-GHCMINORGT14 := $(shell expr $(GHCMINOR) \> 14)
-ifeq ($(GHCMINORGT14),1)
-$(warning Unsupported GHC 9 minor version: $(GHCMINOR))
+ifeq ($(shell expr $(GHCMAJOR) \< 9 \| $(GHCMAJOR) = 9 \& \( $(GHCMINOR) \< 4 \| $(GHCMINOR) = 4 \& $(GHCPATCH) \< 7 \)),1)
+$(error Unsupported GHC $(GHCVERSION): 9.4.7 or newer is required (INSTALL.md))
+endif
+ifeq ($(shell expr $(GHCMAJOR) \> 9 \| $(GHCMAJOR) = 9 \& $(GHCMINOR) \> 14),1)
+$(warning GHC $(GHCVERSION) is newer than the series bsc.cabal's upper bounds admit (through 9.14): raise them, or allow-newer in cabal.project.local (INSTALL.md))
 endif
 
-# Work around a bug in GHC 9.2.1 (see GHC issue 20639)
-ifeq ($(GHCVERSION),9.2.1)
-$(warning Building unoptimized to work around a bug in GHC 9.2.1)
-GHCOPTLEVEL ?= -O0
-endif
-
-GHC += -Wtabs -fmax-pmcheck-models=800
-
-# end ifeq ($(GHCMAJOR),9)
-else
-ifeq ($(GHCMAJOR),8)
-
-GHC += -Wtabs
-
-# end ifeq ($(GHCMAJOR),8)
-else
-ifeq ($(GHCMAJOR),7)
-
-# Versions before 7.10 are not supported
-GHCMINORLT10 := $(shell expr $(GHCMINOR) \< 10)
-ifeq ($(GHCMINORLT10),1)
-$(error Unsupported GHC 7 minor version: $(GHCMINOR))
-endif
-
-GHC += -fwarn-tabs
-
-# end ifeq ($(GHCMAJOR),7)
-else
-# Not GHC 7, 8, or 9
-$(error Unsupported GHC major version: $(GHCMAJOR))
-endif
-endif
-endif
-
-# Generate deterministic object code when the compiler supports it
-# (GHC 9.14+).  Beyond making rebuilds bit-for-bit reproducible, this
-# removes a source of performance variance in the built compiler:
-# nondeterministic uniques can perturb optimization decisions (such as
-# inlining and strictness), so two builds of identical source could
-# otherwise differ measurably in the performance of the bsc they
-# produce.
-GHCOBJDET := $(shell $(GHC) --show-options 2>/dev/null | grep -x -m 1 -e -fobject-determinism)
-ifneq ($(GHCOBJDET),)
-GHC += -fobject-determinism
-endif
-
-GHCPROFAUTO = -fprof-auto
-
-PACKAGES = \
-	base \
-	containers \
-	array \
-	mtl \
-	unix \
-	regex-compat \
-	bytestring \
-	directory \
-	process \
-	filepath \
-	time \
-	old-time \
-	old-locale \
-	split \
-	syb \
-	integer-gmp \
-	text \
-	deepseq \
-	strict-concurrency \
-
-
-# The EPS warmup (see update-warmup.sh) must also cover packages that
-# exist only on newer GHCs and are hidden by default; expose them when
-# present so Warmup.hs can import their modules.
-WARMUP_EXTRA_PKGS := $(shell ./update-warmup.sh --list-extra $(firstword $(GHC)))
-PACKAGES += $(WARMUP_EXTRA_PKGS)
-# GHC can compile either a single file (use GHCCOMPILEFLAGS) or
-# in make mode where it follows dependencies (use GHCMAKEFLAGS).
-#
-# MAINSRC is the source file holding a target's main module. The program
-# entry files live in app/, separate from the library modules, and their
-# names do not always match the executable, so each target names its own.
-# Anything not listed keeps its main beside the library modules.
-MAINSRC = $@.hs
-bsc bsc2bsv bsv2bsc dumpbo dumpba vcdcheck showrules: MAINSRC = app/$@.hs
-bluetcl: MAINSRC = app/bluetcl_Main.hs
-GHCMAKEFLAGS = --make $(MAINSRC) -o $@ -j$(GHCJOBS)
-GHCCOMPILEFLAGS = -o $@ -c $<
-
-# On Mac OS, we'll need to update the dylib location,
-# so linking needs to pad the field so that there's room to overwrite
-ifeq ($(OSTYPE), Darwin)
-GHC += -optl -headerpad_max_install_names
-endif
-
-# flags for the haskell compiler RTS
-#
-# GHC's parallel --make compiles up to GHCJOBS modules concurrently in
-# ONE process sharing ONE heap, and -A128m gives each job its own
-# 128 MB allocation area inside it.  A flat max-heap sized for one job
-# therefore overflows intermittently as the number of GHC jobs
-# increases, depending on which large modules the scheduler happens to
-# compile at the same time.  Scale the cap with the job count: the
-# single-job baseline (4G, the previous fixed value) plus 1G for each
-# additional job.
+# RTS options for every GHC that compiles the package (the dependencies,
+# built into the store, take GHC's defaults): a heap cap of 3 GB plus 1 GB
+# per job and a 256 MB allocation area, the measured plateau. CI sets its own.
 GHCMAXHEAP ?= $(shell expr 3 + $(GHCJOBS))G
-# -A256m sits on the measured allocation-area plateau for parallel
-# builds (repeated-measures sweep, idle machine: -A64m costs 5-8%,
-# -A128m 1-3%, and -A256m/-A512m/-A1g are within noise of each other
-# at the default -j). Total nursery is -A x jobs; at the default cap
-# of 16 jobs that is 4 GB, well under -M.
 GHCRTSFLAGS ?= +RTS -M$(GHCMAXHEAP) -A256m -RTS
 
-# flags for the haskell compile
-GHCINCLUDES =  \
-	-iapp \
-	-iGHC/posix -iLibs \
-	-i$(PARSEC_HS) \
-	-i$(STP_HS) \
-	-i$(YICES_HS) \
-	-i$(HTCL_HS)
-GHCTMP = '-tmpdir $(TMPDIR)'
-# Default RTS flags for programs built with a Haskell main:
-# 256MB heap, 1 second interval between heap profiles, and a -K
-# stack cap.  The profiling build uses a much larger -K because
-# -fprof-auto adds a cost-centre frame around every closure entry,
-# which inflates peak stack usage by roughly an order of magnitude
-# on the perf regression suite.
-# If you modify this, also update rts_opts in ../vendor/htcl/haskell.c
-ifeq ($(BSC_BUILD),PROF)
-RTSFLAGS = "-with-rtsopts=-H256m -K256m -i1"
-else
-RTSFLAGS = "-with-rtsopts=-H256m -K10m -i1"
-endif
-FVIA ?= -fasm
-GHCFLAGS = \
-	-hide-all-packages \
-	$(FVIA) \
-	-Wall \
-	-fno-warn-orphans \
-	-fno-warn-name-shadowing \
-	-fno-warn-unused-matches \
-	$(addprefix -package ,$(PACKAGES)) \
-	$(GHCINCLUDES) \
-	$(GHCTMP) \
-
-# GHC will recompile a module if certain flags (such as -I) have changed.
-# To avoid recompiling the shared modules each time we compile a tool,
-# we provide the -I flags for all tools in every use of GHC.
-GHCFLAGS += \
-	$(STP_INC_FLAGS) \
-	$(YICES_INC_FLAGS) \
-	$(HTCL_INC_FLAGS) \
-	$(TCL_INC_FLAGS) \
-
-ifeq ($(OSTYPE), Linux)
-# Some GHC installations may fail to include this automatically,
-# and it's benign to include otherwise
-GHCFLAGS += -lpthread
-endif
-
-# Get Haskell runtime to parse and filter +RTS ... -RTS args
-# from command line arguments at program start
-RTSFLAGS += -rtsopts
-
-# Use -O2, except when a particular GHC version has a bug that
-# needs working around, in which case, use the value set earlier
-# for that version
-GHCOPTLEVEL ?= -O2
-
-GHCOPTFLAGS = $(GHCOPTLEVEL) $(GHCFLAGS)
-
-GHCPROF = -prof $(GHCPROFAUTO) '-osuf p_o' '-hisuf p_hi'
-GHCOPTPROFFLAGS = $(GHCOPTFLAGS) $(GHCPROF)
-
-GHCDEBUG = -dcore-lint -debug '-osuf d_o' '-hisuf d_hi'
-GHCOPTDEBUGFLAGS = $(GHCOPTFLAGS) $(GHCDEBUG)
-
-# -----
-# Targets
-
-#clean build has no BuildVersion.hs
-SOURCES_WO_EXTRA_BUILDVERSION = \
-	*.hs *.lhs \
-	Parser/*.hs Parser/BSV/*.lhs Parser/Classic/*.hs \
-	Libs/*.hs \
-	GHC/posix/*.hs \
-	$(PARSEC_HS)/*.hs \
-	$(STP_HS)/*.hs \
-	$(YICES_HS)/*.hs \
-	$(HTCL_HS)/*.hs
-
-SOURCES = BuildVersion.hs Warmup.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
-
-BSCEXES = bsc
-TCLEXES = bluetcl
-UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck
-SHOWRULESEXES = showrules
-
-EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES)
-
-.PHONY: all
-all: $(EXES)
-
-BuildVersion.hs:
-	./update-build-version.sh
-
-Warmup.hs:
-	./update-warmup.sh $(firstword $(GHC)) $(PACKAGES)
-
-# Common among all targets
-BUILDSTART = @echo $@ start `date`
-BUILDDONE = @echo $@ done `date`; echo
-
-PREBUILDCOMMAND = $(BUILDSTART); mkdir -p $(BUILDDIR)
-BUILDCOMMAND = $(GHC) -hidir $(BUILDDIR) -odir $(BUILDDIR) -stubdir $(BUILDDIR)
-POSTBUILDCOMMAND = $(BUILDDONE)
-
-# While GHCFLAGS contains the sum of all -I flags for every tool
-# (to avoid recompilation of modules because flags changed)
-# we only provide the -L and -l flags for the specific tools that need them
-# (to avoid creating binaries with unnecessary library requirements)
-#
-BSC_BUILDLIBS = \
-	$(STP_LIB_FLAGS) \
-	$(YICES_LIB_FLAGS) \
-	$(SAT_RPATH_FLAGS) \
-
-BLUETCL_BUILDLIBS = \
-	$(BSC_BUILDLIBS) \
-	$(TCL_LIB_FLAGS) \
-	$(HTCL_LIB_FLAGS) \
-
-# Choose prof/debug/normal based on environment variables
-ifeq ($(BSC_BUILD),PROF)
-$(info ----- Profiling build options -----)
-BUILDFLAGS = $(GHCOPTPROFFLAGS) $(GHCMAKEFLAGS) $(GHCRTSFLAGS)
-else
-ifeq ($(BSC_BUILD),DEBUG)
-$(info ----- Debug build options -----)
-BUILDFLAGS = $(GHCOPTDEBUGFLAGS) $(GHCMAKEFLAGS) $(GHCRTSFLAGS)
-else
-ifeq ($(BSC_BUILD),NOOPT)
-$(info ----- Unoptimized build options -----)
-BUILDFLAGS = $(GHCFLAGS) $(GHCMAKEFLAGS) $(GHCRTSFLAGS)
-else
-$(info ----- Normal build options -----)
-BUILDFLAGS = $(GHCOPTFLAGS) $(GHCMAKEFLAGS) $(GHCRTSFLAGS)
-endif
+# The build variant, a project file over cabal.project: PROF, DEBUG or NOOPT
+# selects cabal.project.prof, .debug or .noopt (INSTALL.md).
+ifneq ($(BSC_BUILD),)
+CABAL_PROJECT = cabal.project.$(shell echo $(BSC_BUILD) | tr A-Z a-z)
+ifeq ($(wildcard $(TOP)/$(CABAL_PROJECT)),)
+$(error BSC_BUILD=$(BSC_BUILD): no $(CABAL_PROJECT) (INSTALL.md))
 endif
 endif
 
-.PHONY: bsc
-bsc: $(SOURCES)
-	$(PREBUILDCOMMAND)
-        # to force updating of BuildVersion when necessary
-	./update-build-version.sh
-	$(BUILDCOMMAND) -main-is Main_$@ \
-		$(BUILDFLAGS) $(RTSFLAGS) $(BSC_BUILDLIBS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: bsc2bsv
-bsc2bsv: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: bsv2bsc
-bsv2bsc: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: dumpbo
-dumpbo: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: dumpba
-dumpba: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: vcdcheck
-vcdcheck: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-.PHONY: showrules
-showrules: $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
-	$(POSTBUILDCOMMAND)
-
-# bluetcl has a Haskell main that hands control to Tcl through a C shim, so
-# the RTS comes up the ordinary way and there is one entry point to maintain.
-.PHONY: bluetcl
-bluetcl: app/bluetcl_Main.hs app/Bluetcl.hs app/bluetcl_shim.c $(SOURCES)
-	$(PREBUILDCOMMAND)
-	$(BUILDCOMMAND) $(BUILDFLAGS) $(RTSFLAGS) $(BLUETCL_BUILDLIBS) \
-		app/bluetcl_shim.c
-	$(POSTBUILDCOMMAND)
+# Beyond the project's settings: the GHC, the variant, the RTS options.
+# list-bin takes the same, since the build directory follows them.
+CABAL_COMPILER_OPTIONS = --with-compiler=$(GHC)
+CABAL_FLAGS = $(if $(CABAL_PROJECT),--project-file=$(CABAL_PROJECT)) $(CABAL_COMPILER_OPTIONS) $(if $(strip $(GHCRTSFLAGS)),--ghc-options='$(GHCRTSFLAGS)')
 
 # -----
 # GHC package info
@@ -429,50 +95,88 @@ PKGINFO=
 else
 PKGINFO=$(LICDIR)/LICENSE.ghc_pkgs
 
+# The selected GHC's ghc-pkg, for make-ghc-pkg-info.sh: ghc-9.4.7 has
+# ghc-pkg-9.4.7 beside it; a wrapper may set GHCPKG.
+GHCPKG ?= $(if $(findstring /,$(GHC)),$(dir $(GHC)))ghc-pkg$(patsubst ghc%,%,$(notdir $(GHC)))
+
+# The package databases the programs were linked from: the in-place one,
+# cabal's store and GHC's own (the trailing colon).
+CABAL_COMPILER_STORE := $(shell cd $(TOP) && $(CABAL) path $(CABAL_COMPILER_OPTIONS) --compiler-info | sed -n 's/^compiler-store-path: //p')
+ifeq ($(CABAL_COMPILER_STORE),)
+$(error cabal path reports no compiler-store-path for $(GHC))
+endif
+CABAL_PKG_PATH = $(TOP)/dist-newstyle/packagedb/ghc-$(GHCVERSION):$(CABAL_COMPILER_STORE)/package.db:
+
 .PHONY: $(PKGINFO)
 $(PKGINFO):
 	mkdir -p -m 755 $(LICDIR)
-	./make-ghc-pkg-info.sh $(PACKAGES) > $(PKGINFO)
+	GHCPKG="$(GHCPKG)" GHC_PACKAGE_PATH="$(CABAL_PKG_PATH)" ./make-ghc-pkg-info.sh --deps-of bsc > $(PKGINFO)
 endif
 
 # -----
 # Install targets
 
-# Every executable compiles into the same -odir, so two of them running at
-# once race on the objects of the modules they share: one renames its
-# temporary over the path the other is still writing, which surfaces as
-# `renameFile: ... VCD.o.tmp to ... VCD.o: does not exist`. Build them
-# through a -j1 sub-make, which holds however the caller invoked make.
-# Little is lost, because the objects are shared: after the first target the
-# rest compile only their own main and link, and GHCJOBS still parallelises
-# within each compile. Naming one executable directly still builds just it.
-.PHONY: install
-install:
-	$(MAKE) -j1 $(BSCEXES) $(TCLEXES) install-bsc install-bluetcl
+# One `cabal build all` at the root compiles the library once and links every
+# program against it (doc/cabal.md section 1). `install` copies bsc and
+# bluetcl into $(BINDIR), `install-extra` every other executable of bsc.cabal.
+CABAL_EXES = $(shell sed -n 's/^executable[[:space:]]*\([^[:space:]]*\).*/\1/p' $(TOP)/bsc.cabal)
+INSTALLEXES = $(BSCEXES) $(TCLEXES)
+EXTRAEXES = $(filter-out $(INSTALLEXES),$(CABAL_EXES))
 
-.PHONY: install-extra
-install-extra:
-	$(MAKE) -j1 $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
+# The install stamp, HEAD and the version name, a declared source of the
+# package: BuildVersion's rule runs only when cabal-install rebuilds the
+# package, so without it a commit touching no source would ship the previous
+# version (doc/cabal.md section 4).
+CABAL_HEAD = $(TOP)/build/cabal-head
 
-$(BINDIR)/%: %
-	mkdir -p -m 755 $(BINDIR)
-	$(INSTALL) -m 755 $(@F) $(BINDIR)/$(@F)
+# The solvers link by name from no directory. LIBRARY_PATH names the vendored
+# copies src/Makefile installed; without it the linker takes the system's.
+CABAL_ENV = LIBRARY_PATH="$(abspath $(PREFIX))/lib/SAT$${LIBRARY_PATH:+:$$LIBRARY_PATH}"
 
-.PHONY: install-bsc
-install-bsc: $(addprefix $(BINDIR)/,$(BSCEXES))
-install-bsc: $(PKGINFO)
+BSCEXES = bsc
+TCLEXES = bluetcl
+UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck
+SHOWRULESEXES = showrules
 
-.PHONY: install-bluetcl
-install-bluetcl: $(addprefix $(BINDIR)/,$(TCLEXES))
-install-bluetcl: $(PKGINFO)
+# Generated modules an older checkout's make build left here; the hooks
+# refuse to build over them (doc/cabal.md section 4).
+.PHONY: no-stale-modules
+no-stale-modules:
+	$(RM) -f BuildVersion.hs Warmup.hs
 
-.PHONY: install-utils
-install-utils: $(addprefix $(BINDIR)/,$(UTILEXES))
-install-utils: $(PKGINFO)
+# The programs, each linked beside this Makefile as the make build left them;
+# the link resolves the solvers through the build tree's lib/SAT, which a
+# copy here would not. A build here by hand needs `make install-solvers` first.
+.PHONY: all
+all: $(CABAL_EXES)
 
-.PHONY: install-showrules
-install-showrules: $(addprefix $(BINDIR)/,$(SHOWRULESEXES))
-install-showrules: $(PKGINFO)
+.PHONY: $(CABAL_EXES)
+$(CABAL_EXES): no-stale-modules
+	cd $(TOP) && $(CABAL_ENV) $(CABAL) build -j$(GHCJOBS) $(CABAL_FLAGS) exe:$@
+	ln -sf "$$(cd $(TOP) && $(CABAL) list-bin $(CABAL_FLAGS) bsc:exe:$@)" $@
+
+.PHONY: install install-extra
+install: CABAL_INSTALL = $(INSTALLEXES)
+install-extra: CABAL_INSTALL = $(EXTRAEXES)
+install install-extra: no-stale-modules
+	mkdir -p -m 755 $(TOP)/build $(BINDIR)
+	./update-build-version.sh --stamp $(CABAL_HEAD)
+	cd $(TOP) && $(CABAL_ENV) $(CABAL) build -j$(GHCJOBS) $(CABAL_FLAGS) all
+	@set -e; for exe in $(CABAL_INSTALL); do \
+	  bin=$$(cd $(TOP) && $(CABAL) list-bin $(CABAL_FLAGS) bsc:exe:$$exe); \
+	  echo "$(INSTALL) -m 755 $$bin $(BINDIR)/$$exe"; \
+	  $(INSTALL) -m 755 "$$bin" $(BINDIR)/$$exe; \
+	done
+ifneq ($(PKGINFO),)
+	$(MAKE) $(PKGINFO)
+endif
+
+# The make build's group installs, over the one build.
+.PHONY: install-bsc install-bluetcl install-utils install-showrules
+install-bsc: ; $(MAKE) install CABAL_INSTALL="$(BSCEXES)"
+install-bluetcl: ; $(MAKE) install CABAL_INSTALL="$(TCLEXES)"
+install-utils: ; $(MAKE) install CABAL_INSTALL="$(UTILEXES)"
+install-showrules: ; $(MAKE) install CABAL_INSTALL="$(SHOWRULESEXES)"
 
 # ----
 # Other targets
@@ -487,13 +191,13 @@ tags:   *hs */*hs
 # -----
 # Clean targets
 
+# The environment file names dist-newstyle's package database.
 .PHONY: clean
 clean:
-	$(RM) -rf $(EXES) $(BUILDDIR)
+	$(RM) -rf $(CABAL_EXES) $(TOP)/dist-newstyle $(CABAL_HEAD) $(TOP)/.ghc.environment.*
 
 .PHONY: full_clean
-full_clean: clean
-	$(RM) -f BuildVersion.hs Warmup.hs
+full_clean: clean no-stale-modules
 	$(RM) tags TAGS
 
 # -----

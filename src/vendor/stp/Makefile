@@ -6,7 +6,7 @@ PREFIX?=$(TOP)/inst
 .PHONY: all install clean full_clean
 
 # install copies the library under its soname and adds the link name beside
-# it, so that a build may link the installed copy by name.
+# it, so that the cabal build links the installed copy by name.
 
 ifeq ($(STP_STUB),)
 SRC = src

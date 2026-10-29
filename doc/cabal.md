@@ -32,23 +32,32 @@ one unit and rejects sublibraries in it.
 
 ## 3. Building
 
-The package builds beside the make build, which is untouched and keeps
-generating its own `Warmup.hs` and `BuildVersion.hs` under `src/comp`; `make
-install-src` is still that build, and the package is built with cabal against
-the solvers `make install-solvers` installs.
+After installing the [prerequisites](../INSTALL.md), the toolchain and the
+Hackage index among them, run at the repository root:
+
+```bash
+make install-src
+```
+
+This builds the vendored solvers, then every program with cabal, and installs
+`bsc` and `bluetcl` with the libraries under `inst`; `make -C src/comp
+install-extra` installs the six other programs over the same build, and
+`make -C src/comp bsc` builds one program and links it beside the Makefile.
+Repeat `PREFIX`, `GHC` and `BSC_BUILD` across these.
 
 ### Solvers
 
 `make install-solvers` installs the vendored `stp` and `yices` under
-`inst/lib/SAT`, which `LIBRARY_PATH` names to the linker. The library links
-both by name and records no directory, so no solver path reaches the
-registration or the binaries, and a build without the vendored copies, a
-distribution's against its system packages, links the system's. At run time a
-program finds them through a relative rpath, `lib/SAT` beside its `bin`, or in
-the system directories. If configuring stops with `Missing (or bad) C
-libraries: stp, yices`, run `make install-solvers`; do not take cabal's
-`--extra-lib-dirs` suggestion, which writes the directory into the package
-registration.
+`inst/lib/SAT`; `make install-src` does so first and names that directory to
+the linker. The library links both by name and records no directory, so no
+solver path reaches the registration or the binaries, and a build without the
+vendored copies, a distribution's against its system packages, links the
+system's. At run time a program finds them through a relative rpath, `lib/SAT`
+beside its `bin`, or in the system directories. If configuring stops with
+`Missing (or bad) C libraries: stp, yices`, run `make install-solvers`; do not
+take cabal's `--extra-lib-dirs` suggestion, which writes the directory into
+the package registration. `STP_STUB=1` or `YICES_STUB=1` builds a stub in
+place of one solver ([INSTALL.md](../INSTALL.md)).
 
 ## 4. Build hooks and generated files
 
@@ -58,7 +67,7 @@ registration.
   flags and defines.
 - **Pre-build:** generate each component's `Warmup`, importing every exposed
   module of its direct dependencies except `Warmup` itself, in sorted order.
-  For the library, also generate `BuildVersion`.
+  For the library, also generate `BuildVersion` and reject stale sources.
 - **Post-build:** link `lib/SAT` beside the build tree's artifacts to the
   solvers, so they run in place.
 
@@ -68,15 +77,16 @@ import `Warmup ()` so external interfaces load before other modules compile.
 `src/comp/update-build-version.sh` generates `BuildVersion` from its own
 repository, whatever the caller's directory or Git environment.
 
-The hook writes `build/cabal-head` (HEAD and the version name), a declared
-source, from the first build; a new commit needs it refreshed before the build
-(`src/comp/update-build-version.sh --stamp build/cabal-head`).
+`make install-src` refreshes `build/cabal-head` (HEAD and the version name), a
+declared source, so a new commit or tag rebuilds `BuildVersion`; the hook
+writes it too, from the first build.
 
-A `src/comp/Warmup.hs` or `BuildVersion.hs` the make build generated would be
-compiled in place of the autogen copy; `make -C src/comp full_clean` removes
-them.
+Old `src/comp/Warmup.hs` or `BuildVersion.hs` files would override autogen
+copies, so the hook refuses them. Remove them with
+`make -C src/comp no-stale-modules`; Make's install and per-program targets
+do this automatically. They remain visible in `git status`.
 
-## 5. Project settings
+## 5. Project settings and variants
 
 [`cabal.project`](../cabal.project) permits parallel compilation only where
 it preserves determinism: from GHC 9.12, `-fobject-determinism` applies to
@@ -84,8 +94,10 @@ every package and `semaphore: True` shares one job limit across cabal-install
 and its GHC processes. Older GHCs compile each package serially; independent
 packages may still build in parallel.
 
-cabal's `-j` (default: the processor count) is that limit. The project also
-selects `-O2` and writes a GHC environment file for bare `ghci` and `runghc`.
+`GHCJOBS` (default: the processor count, capped at 16) is that limit, cabal's
+`-j`; make's own `-j` controls its targets separately. The project also
+selects `-O2` and writes a GHC environment file for bare `ghci` and `runghc`
+(`src/comp/.ghci`).
 
 cabal-install is 3.16.1.0, not 3.18 ([INSTALL.md](../INSTALL.md)).
 
@@ -97,7 +109,18 @@ store's package directories), so a store per checkout would make relocated
 builds differ, besides fetching the index and building every dependency again
 for each checkout.
 
-Local settings go in `cabal.project.local`.
+Each variant imports `cabal.project`:
+
+| Make option | Project file | Change |
+| --- | --- | --- |
+| `BSC_BUILD=NOOPT` | `cabal.project.noopt` | Disable optimization. |
+| `BSC_BUILD=DEBUG` | `cabal.project.debug` | Add `-dcore-lint -debug` to BSC. |
+| `BSC_BUILD=PROF` | `cabal.project.prof` | Profile all functions; `-with-rtsopts=-H256m -K256m -i1`. |
+
+For example, `make install-src BSC_BUILD=PROF`. Local settings go in
+`cabal.project.local`, or `cabal.project.<variant>.local` for a variant. Make
+selects GHC with `GHC=` and passes `GHCRTSFLAGS` when compiling BSC; see
+[INSTALL.md](../INSTALL.md).
 
 `Setup.hs` is the entry point `cabal check` requires of a Hooks package;
 cabal-install builds the hooks into a program of its own and never runs it.
