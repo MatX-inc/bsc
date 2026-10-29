@@ -1,0 +1,27 @@
+# Invocation validation must finish before replay opens a capture or output.
+bluehs_run_pass Invocation.hs
+bsc_initialize
+namespace eval eco_invocation {
+    set previous [pwd]
+    try {
+        set here [file dirname [file normalize [info script]]]
+        cd $here
+        set work [file join $here work_invocation]
+        file delete -force $work
+        file mkdir $work
+        foreach mode {replay adapt} {
+            set log [file join $work $mode.log]
+            set status [exec_with_log "ECO $mode missing output" \
+                [list env BSC_OPTIONS= [which_bsc] -eco-$mode [file join $work missing.replay] >& $log]]
+            set f [open $log]; set contents [read $f]; close $f
+            if {$status && [string first "-eco-$mode requires -eco-output DIR" $contents] >= 0} {
+                pass "ECO invocation: $mode validates required output before opening capture"
+            } else {
+                verbose -log $contents 0
+                fail "ECO invocation: $mode validates required output before opening capture"
+            }
+        }
+    } finally {
+        cd $previous
+    }
+}

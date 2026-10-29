@@ -8,11 +8,12 @@ import System.Environment(getArgs, getProgName)
 import System.Process(runInteractiveProcess, waitForProcess)
 import System.Process(system)
 import System.Exit(ExitCode(ExitFailure, ExitSuccess))
-import System.FilePath(takeDirectory)
+import System.FilePath(takeDirectory, (</>))
 import System.IO(hFlush, stdout, hPutStr, stderr, hGetContents, hClose, hSetBuffering, BufferMode(LineBuffering))
 import System.IO(hSetEncoding, utf8)
 import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExecuteMode, setFileMode, getFileStatus, fileAccess)
-import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory)
+import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory,
+                        createDirectoryIfMissing)
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
@@ -28,6 +29,8 @@ import Control.Concurrent.MVar(newEmptyMVar, putMVar, takeMVar)
 import qualified Control.Exception as CE
 import qualified Data.Map as M
 import qualified Data.Set as S
+import ECO.Options
+import ECO.Replay
 
 import ListMap(lookupWithDefault)
 import SCC(scc)
@@ -183,10 +186,69 @@ main = do
 -- Use with hugs top level
 hmain :: [String] -> IO ()
 hmain args = do
+    bscopts <- getEnvDef "BSC_OPTIONS" ""
+    invocation <- either (ioError . userError) return $
+                      parseECOOptions (words bscopts ++ args)
+    let opts = invocationOptions invocation
+    case invocation of
+      CompileInvocation _ ordinaryArgs -> hmainOrdinary opts ordinaryArgs
+      ReplayInvocation manifest out -> hmainReplay opts manifest out
+      AdaptInvocation manifest out -> hmainAdapt opts manifest out
+
+hmainReplay :: ECOOptions -> FilePath -> FilePath -> IO ()
+hmainReplay opts manifest out = do
+    -- No error handle, flag decoding, or native decoder may precede this.
+    replay <- prepareReplay manifest
+    createDirectoryIfMissing True out
+    errh <- initErrorHandle
+    (abmi, capturedFlags) <- loadReplay errh replay
+    let flags = capturedFlags { vdir = Just out, ecoOptions = opts }
+        info = rmBackend replay
+        modName = rbModuleName info
+    replayFile <- genFileName mkVName (vdir flags) (rbPrefix info) modName
+    let outputPath = getFullFilePath replayFile
+    checkReplayOutputPaths manifest replay
+        ([outputPath] ++
+         [dropSuf outputPath ++ "." ++ useSuffix | showModuleUse flags])
+    setErrorHandleFlags errh flags
+    t <- getNow
+    (_, _, _, _) <- genModuleVerilog errh (abmi_pps abmi) flags
+        (Nothing, Nothing, Just modName) t (rbPrefix info) modName
+        (rbHeader info) (rbMethodConflict info) (rbMethodBVI info)
+        (abmi_pathinfo abmi) (abmi_aschedinfo abmi) (abmi_apkg abmi)
+    verifyReplayOutputs replay [outputPath]
+    exitOK errh
+
+hmainAdapt :: ECOOptions -> FilePath -> FilePath -> IO ()
+hmainAdapt opts manifest out = do
+    (replay, sourceIdentity) <- prepareReplayAdaptation manifest out
+    errh <- initErrorHandle
+    (abmi, capturedFlags) <- loadReplay errh replay
+    let currentDir = out </> "current-control"
+        captureDir = out </> "capture"
+        captureOptions = opts { ecoAdapt = Nothing, ecoCapture = Just captureDir }
+        flags = capturedFlags { vdir = Just currentDir, ecoOptions = captureOptions }
+        info = rmBackend replay
+        modName = rbModuleName info
+    createDirectoryIfMissing True currentDir
+    setErrorHandleFlags errh flags
+    t <- getNow
+    (_, _, _, backendInfo) <- genModuleVerilog errh (abmi_pps abmi) flags
+        (Nothing, Nothing, Just modName) t (rbPrefix info) modName
+        (rbHeader info) (rbMethodConflict info) (rbMethodBVI info)
+        (abmi_pathinfo abmi) (abmi_aschedinfo abmi) (abmi_apkg abmi)
+    replayFile <- genFileName mkVName (vdir flags) (rbPrefix info) modName
+    verifyReplayOutputs replay [getFullFilePath replayFile]
+    captureInfo <- maybe (ioError (userError "ECO capture requires the Verilog backend"))
+                         return backendInfo
+    adapted <- captureReplay captureDir (fiPath (rmABin replay)) flags captureInfo
+    finishReplayAdaptation sourceIdentity replay out adapted
+    exitOK errh
+
+hmainOrdinary :: ECOOptions -> [String] -> IO ()
+hmainOrdinary opts args' = do
     pprog <- getProgName
     cdir <- getBluespecDir
-    bscopts <- getEnvDef "BSC_OPTIONS" ""
-    let args' = words bscopts ++ args
     -- reconstruct original command line (modulo whitespace)
     -- add a newline at the end so it is offset
     let cmdLine = concat ("Invoking command line:\n" : (intersperse " " (pprog:args'))) ++ "\n"
@@ -199,35 +261,34 @@ hmain args = do
           when (printFlagsRaw flags) $ putStrLnF (showFlagsRaw flags)
     let (warnings, decoded) = decodeArgs (baseName pprog) args' cdir
     errh <- initErrorHandle
-    let doWarnings = when ((not . null) warnings) $ bsWarning errh warnings
-        setFlags = setErrorHandleFlags errh
+    let withFlags flags action = do
+          let currentFlags = flags { ecoOptions = opts }
+          setErrorHandleFlags errh currentFlags
+          when ((not . null) warnings) $ bsWarning errh warnings
+          action currentFlags
     case decoded of
-        DHelp flags ->
-            do { setFlags flags; doWarnings;
-                 exitWithHelp errh pprog args' cdir }
-        DHelpHidden flags ->
-            do { setFlags flags; doWarnings;
-                 exitWithHelpHidden errh pprog args' cdir }
+        DHelp flags -> withFlags flags $ \_ ->
+            exitWithHelp errh pprog args' cdir
+        DHelpHidden flags -> withFlags flags $ \_ ->
+            exitWithHelpHidden errh pprog args' cdir
         DUsage -> exitWithUsage errh pprog
         DError msgs -> bsError errh msgs
-        DNoSrc flags ->
-            -- XXX we want to allow "bsc -v" and similar calls
-            -- XXX to print version, etc, but if there are other flags
-            -- XXX on the command-line we probably should report an error
-            do { setFlags flags; doWarnings; showPreamble flags;
-                 exitOK errh }
-        DBlueSrc flags src ->
-            do { setFlags flags; doWarnings; showPreamble flags;
-                 main' errh flags src;
-                 exitOK errh }
+        DNoSrc flags -> withFlags flags $ \currentFlags -> do
+            showPreamble currentFlags
+            exitOK errh
+        DBlueSrc flags src -> withFlags flags $ \currentFlags -> do
+            showPreamble currentFlags
+            main' errh currentFlags src
+            exitOK errh
         DVerLink flags top verSrcFiles abinFiles cSrcFiles ->
-            do { setFlags flags; doWarnings; showPreamble flags;
-                 vLink errh flags top verSrcFiles abinFiles cSrcFiles;
-                 exitOK errh }
-        DSimLink flags top abinFiles cSrcFiles ->
-            do { setFlags flags; doWarnings; showPreamble flags;
-                 simLink errh flags top abinFiles cSrcFiles;
-                 exitOK errh }
+            withFlags flags $ \currentFlags -> do
+                showPreamble currentFlags
+                vLink errh currentFlags top verSrcFiles abinFiles cSrcFiles
+                exitOK errh
+        DSimLink flags top abinFiles cSrcFiles -> withFlags flags $ \currentFlags -> do
+            showPreamble currentFlags
+            simLink errh currentFlags top abinFiles cSrcFiles
+            exitOK errh
 
 
 main' :: ErrorHandle -> Flags -> String -> IO ()
@@ -281,7 +342,11 @@ compile_with_deps errh flags name = do
 
     -- get the list of depended files which need recompiling (with parsed packages and warnings)
     start flags DFdepend
-    pkgs <- chkDeps errh flags name
+    let ecoOpts = ecoOptions flags
+    let checkDeps = if isJust (ecoCapture ecoOpts)
+                    then chkDepsForCapture
+                    else chkDeps
+    pkgs <- checkDeps errh flags name
     _ <- dump errh flags t DFdepend dumpnames (map fst3 pkgs)
 
     -- compile them
@@ -952,15 +1017,15 @@ genModule
     --           XXX it would be nice if the Bluesim backend had the same info
     -- * vprog = the Verilog data structure, for recording in the .ba file,
     --           so that it's available to bluetcl
-    (t, veriPortProps, vprog)
+    (t, veriPortProps, vprog, backendInfo)
         <- if (backend flags == Just Verilog)
-           then do (t', ips, v)
+           then do (t', ips, v, info)
                        <- genModuleVerilog
                              errh pps flags dumpnames t prefix modstr
                              blurb methodConflictBlurb methodConflictBVI
                              vPathInfo sched_info'' amod_final
-                   return (t', ips, Just v)
-           else return (t, [], Nothing)
+                   return (t', ips, Just v, info)
+           else return (t, [], Nothing, Nothing)
 
     t <- if (genABin flags)
          then writeABin errh pps flags dumpnames t prefix
@@ -968,6 +1033,17 @@ genModule
                   sched_info'' methodConflict vPathInfo
                   amod_final vprog
          else return t
+
+    let ecoOpts = ecoOptions flags
+    case ecoCapture ecoOpts of
+      Nothing -> return ()
+      Just captureDir -> do
+        unless (genABin flags) $
+            ioError (userError "ECO capture requires -elab to retain the native .ba")
+        info <- maybe (ioError (userError "ECO capture requires the Verilog backend"))
+                      return backendInfo
+        _ <- captureReplay captureDir (mkAName (bdir flags) prefix modstr) flags info
+        return ()
 
     -- Wrapper generation
     start flags DFwrappergen
@@ -1085,11 +1161,15 @@ genModuleVerilog :: ErrorHandle
                  -> APackage
                  -> IO (TimeInfo,
                         [VPort],   -- port properties for the import-BVI
-                        VProgram)  -- generated Verilog
+                        VProgram,  -- generated Verilog
+                        Maybe ReplayBackend) -- lazy context only when capture is requested
 genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  atsPackage =
     do
+       let ecoOpts = ecoOptions flags
+       when (ecoEnabled ecoOpts && synthesize flags) $
+           ioError (userError "ECO MVP requires Synthesize disabled")
        -- Read in foreign function info from .ba files for
        -- all foreign functions used in the design, and build a
        -- map to be used when generating verilog
@@ -1208,10 +1288,16 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                          vprog
        t <- dump errh flags t DFwriteVerilog dumpnames vfilenames
 
+       let backendInfo = case ecoCapture ecoOpts of
+               Nothing -> Nothing
+               Just _ -> Just (ReplayBackend prefix moduleName blurb
+                   methodConflictBlurb methodConflictBVI (map fst abis)
+                   (map vfnString vfilenames))
        -- Return
        -- * the port properties (to be included in the import-BVI)
        -- * the Verilog structure (for accessing in bluetcl)
-       return (t, ips, vprog)
+       -- Decide whether context is needed now; keep the captured payload lazy.
+       backendInfo `seq` return (t, ips, vprog, backendInfo)
 
 
 -- Write a Verilog program to file (along with its use file)

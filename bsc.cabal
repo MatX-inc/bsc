@@ -176,6 +176,8 @@ library
     Deriving
     DisjointTest
     DynamicMap
+    ECO.Options
+    ECO.Replay
     EquivalenceClass
     Error
     ErrorMonad

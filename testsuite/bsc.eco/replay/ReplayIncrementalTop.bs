@@ -1,0 +1,9 @@
+package ReplayIncrementalTop where
+
+import ReplayIncrementalChild
+
+-- Selected with -g, while the imported child uses its synthesize pragma.
+mkReplayIncrementalTop :: Module ReplayIncremental
+mkReplayIncrementalTop = module
+    child <- mkReplayIncrementalChild
+    return child

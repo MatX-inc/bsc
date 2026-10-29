@@ -1,0 +1,16 @@
+package ReplaySmoke where
+
+interface ReplaySmoke =
+    put :: Bit 8 -> Action {-# arg_names = [value] #-}
+    result :: Bit 8
+
+{-# synthesize mkReplaySmoke #-}
+mkReplaySmoke :: Module ReplaySmoke
+mkReplaySmoke = module
+    a :: Reg (Bit 8) <- mkReg 0
+    b :: Reg (Bit 8) <- mkReg 1
+    interface ReplaySmoke
+        put value = action
+            a := value
+            b := value + 7
+        result = if a > 9 then (a ^ b) + 17 else a - b
