@@ -17,6 +17,9 @@ This goal drives the build's requirements:
   on older GHCs (section 5).
 - Link solvers by name with relative runtime paths, keeping checkout paths
   out of the linked artifacts (section 3).
+- Remove from each program, after its link, the FILE symbol of GHC's link
+  stub, compiled from a temporary file named by a per-session counter
+  (`objcopy`, on Linux); the other local symbols stay (section 4).
 - Track version metadata so incremental builds use the current commit and
   version name (section 4).
 
@@ -70,7 +73,9 @@ place of one solver ([INSTALL.md](../INSTALL.md)).
   module of its direct dependencies except `Warmup` itself, in sorted order.
   For the library, also generate `BuildVersion` and reject stale sources.
 - **Post-build:** link `lib/SAT` beside the build tree's artifacts to the
-  solvers, so they run in place.
+  solvers, so they run in place, and on Linux remove the FILE symbol of GHC's
+  link stub from each program with `objcopy` (section 1); the other local
+  symbols stay.
 
 Every root module (one importing no other module from its component) must
 import `Warmup ()` so external interfaces load before other modules compile.
