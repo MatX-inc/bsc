@@ -1,0 +1,41 @@
+#!/bin/sh
+# Writes the version stamp of the vendored yices in place of its own
+# utils/make_source_version (the MKVERSION of its Makefile.build): yices
+# regenerates the stamp on every make, and each bsc install runs one, so
+# the stamp's date, the day of the build, was in the library's bytes.
+# The same template and arguments, but the date is the yices source's
+# commit date, so the library is the same bytes whenever it is built.
+# Without git both the date and the revision read unknown, as yices
+# itself writes the revision.
+#
+# Usage: make_source_version <template> <result> <version> <mode> <arch>
+
+usage="Usage: $0 <template> <result> <version> <mode> <arch>"
+
+if test $# -ne 5 ; then
+  echo "$usage"
+  exit 2
+fi
+
+template=$1
+result=$2
+version=$3
+mode=$4
+arch=$5
+
+test -f "$template" || { echo "Can't open $template" ; exit 1 ; }
+
+date=`git log -1 --date=short --format=%cd 2>/dev/null` || date=unknown
+rev=`git rev-parse HEAD 2>/dev/null` || rev=unknown
+
+tempfile=`mktemp` || { echo "Can't create temporary file" ; exit 1 ; }
+
+sed -e "s/YICES_VERSION/$version/g" -e "s/YICES_COMPILATION_DATE/$date/g" \
+    -e "s/REVISION/$rev/g" -e "s/YICES_ARCH/$arch/g" -e "s/YICES_BUILD_MODE/$mode/g" \
+    "$template" > "$tempfile"
+
+# Copy over the result only when it changes, so an unchanged stamp
+# rebuilds nothing
+cmp -s "$tempfile" "$result" || cp "$tempfile" "$result"
+
+rm -f "$tempfile"
