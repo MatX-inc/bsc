@@ -3,10 +3,11 @@
 ## 1. Determinism requirements
 
 For the same commit, toolchain, dependencies, and build options, serial,
-parallel, and relocated builds must produce identical binaries so that
-compiler behavior does not depend on how it was built. A rebuild in place with
-nothing changed and, on GHC >= 9.12, after an edit and revert must produce the
-same bytes. This is verified by the determinism ladder (section 7).
+parallel, and relocated builds must produce identical binaries and the same
+installed tree so that compiler behavior does not depend on how it was built. A
+rebuild in place with nothing changed and, on GHC >= 9.12, after an edit and
+revert must produce the same bytes. This is verified by the determinism ladder
+(section 7).
 
 To achieve this, the build:
 
@@ -20,6 +21,12 @@ To achieve this, the build:
   GHC link-stub filenames after linking (section 4).
 - Tracks the selected version so incremental builds reflect Git metadata or
   an explicitly frozen version (section 4).
+
+In the installed tree, the compiler stores file names relative to the build
+directory (upstream 1135), the Bluesim and VPI libraries map the checkout out
+of their debug information (`-ffile-prefix-map`), and the yices library's
+version stamp carries the source's commit date, not the build day
+(`make_source_version`).
 
 ## 2. Package layout
 
@@ -172,7 +179,7 @@ utility) so that `make` builds and installs it.
 `util/cabal-ladder.sh run` checks the claim on one machine: six fresh checkouts
 of `HEAD`, the legs `c-j1` (the reference), `a-j1`, `c-j16`, `c-j64`, `a-j64`
 and `d-j64`, built and installed in directories of their own at the jobs count
-in the name, hashed with the bluehs runtime installed from them, and compared with the
+in the name, hashed with the installed tree, `inst`, and compared with the
 reference; the serial legs then rebuild in place, with nothing changed and,
 from GHC 9.12, after an edit and its revert. A failed leg is MISSING in the
 verdict. The script's usage text names its subcommands and variables.
