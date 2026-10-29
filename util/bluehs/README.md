@@ -126,7 +126,9 @@ compiled library. The package set and the program list are read off
 packages, or a later program, needs no change here.
 
 Build it in the same tree as the `bsc` beside it: the library rejects `.ba`
-files whose build version stamp differs (see Caveats).
+files whose build version stamp differs (see Caveats). `mk-dist.sh` also
+copies `cabal.project.local` when present so local build settings apply to
+the shipped libraries.
 
 Everything redistributed is covered in `inst/bluehs/LICENSES/`:
 `LICENSE.ghc` (compiler/runtime), a generated `LICENSE.ghc_pkgs` enumerating
