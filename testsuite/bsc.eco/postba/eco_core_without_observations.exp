@@ -1,0 +1,19 @@
+# A capture without an observation companion exports zero facts explicitly;
+# with a producer runtime nothing is proved without a solver.
+namespace eval eco_core_without_observations {
+    if {[eco_sdk_env "ECO core without observations"]} {
+        set root [file normalize [file join [pwd] eco-core-without-observations-[pid]-[clock clicks]]]
+        file mkdir $root
+        set command [list [which_bsc] -u -verilog -elab -no-show-timestamps -no-show-version \
+            -g mkCoreWithoutObservations -bdir $root -vdir $root -info-dir $root \
+            -eco-capture $root/capture $here/CoreWithoutObservations.bs]
+        if {[catch {exec {*}$command >$root/capture.log 2>@1} message]} {
+            fail "ECO core without observations: native capture"
+            set f [open $root/capture.log]; verbose -log [read $f] 0; close $f
+        } else {
+            pass "ECO core without observations: native capture"
+            eco_run_script "ECO core without observations: unavailable export and explicit deferral" $root/inspect.log \
+                $here/CoreWithoutObservations.hs $root/capture/mkCoreWithoutObservations.eco-ast $root/checks
+        }
+    }
+}

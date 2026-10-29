@@ -1,0 +1,14 @@
+package CoreWithoutObservations where
+
+interface CoreWithoutObservations =
+    put :: Bit 8 -> Action
+    result :: Bit 8
+
+{-# synthesize mkCoreWithoutObservations #-}
+mkCoreWithoutObservations :: Module CoreWithoutObservations
+mkCoreWithoutObservations = module
+    value :: Reg (Bit 8) <- mkReg 0
+    interface CoreWithoutObservations
+        put next = action
+            value := next
+        result = value + 1

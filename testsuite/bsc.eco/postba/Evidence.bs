@@ -1,0 +1,15 @@
+package Evidence where
+
+interface Evidence =
+    result :: Bit 8 {-# always_ready #-}
+
+{-# synthesize mkEvidence #-}
+mkEvidence :: Module Evidence
+mkEvidence = module
+    saved :: Reg (Bit 8) <- mkReg 0
+    interface Evidence
+#ifdef UNPROVED
+        result = saved when saved == 0
+#else
+        result = saved
+#endif

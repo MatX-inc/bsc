@@ -1,0 +1,33 @@
+# Two reporting metrics over native captures. No emitted RTL parser.
+namespace eval eco_metrics {
+    if {[eco_sdk_env "ECO metrics"]} {
+        set root [file normalize [file join [pwd] eco-metrics-[pid]-[clock clicks]]]
+        file mkdir $root
+        eco_run_script "ECO metrics: comment, whitespace and structural reporting controls" [file join $root pure.log] [file join $here ASTMetric.hs] pure [file join $root pure]
+        set snapshots {}; set ok 1
+        foreach side {old new filtered} {
+            set dir [file join $root $side]; file mkdir $dir
+            set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -g mkFanoutLoss -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+            if {$side eq "new"} {lappend args -Xcpp -DECO_NEW}
+            if {$side eq "filtered"} {
+                set filter [file join $dir filter.sh]
+                set f [open $filter w]
+                puts $f {#!/bin/sh}
+                puts $f {printf '\n// Additional filter information\n' >> "$1"}
+                close $f; file attributes $filter -permissions 0755
+                lappend args -verilog-filter $filter
+            }
+            lappend args [file join $here FanoutLoss.bs]
+            if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+                fail "ECO metrics: capture $side"; verbose -log $message 0; set ok 0
+            } else {pass "ECO metrics: capture $side"}
+            lappend snapshots [file join $dir capture mkFanoutLoss.eco-ast]
+        }
+        if {$ok} {
+            eco_run_script "ECO metrics: authenticated raw and normalized OLD-relative counts" [file join $root captures.log] [file join $here ASTMetric.hs] captures {*}$snapshots [file join $root checks]
+            set measure [file join $sdk scripts measure.hs]
+            eco_run_script "ECO metrics: packaged reporting CLI" [file join $root cli.log] $measure {*}[lrange $snapshots 0 1] [file join $root cli]
+            eco_run_script "ECO metrics: candidate CLI uses same OLD" [file join $root candidate-cli.log] $measure --candidate [lindex $snapshots 0] [lindex $snapshots 1] [file join $root checks candidate.ast] [file join $root checks candidate.v] [file join $root candidate-cli]
+        }
+    }
+}
