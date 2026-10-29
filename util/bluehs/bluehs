@@ -19,6 +19,21 @@
 # files, -v1 names every module GHC interprets, a flag's value is attached
 # (-package<pkg>) or passed as --ghc-arg=<arg>, and -- ends them.
 #
+# Scripts can run compiled instead of interpreted. Three ways in:
+#   BLUEHS_COMPILE=1       compile the script and its -i modules with the GHC
+#                          beside runghc into a cache (BLUEHS_CACHE, default
+#                          ~/.cache/bluehs) keyed by the GHC, the environment
+#                          file and every source, and run the binary; later
+#                          runs with the same sources find it there. Leading
+#                          flags other than -i keep the interpreter, as does
+#                          a failed compile (its log stays in the cache).
+#   --compile-to=FILE      compile only, to FILE, for a build system that
+#                          wants the binary as its own step
+#   --run=FILE             run a binary from --compile-to with the launcher's
+#                          environment (BLUESPECDIR, the solvers)
+# A binary is linked with the larger nursery (-A256m) the ECO flow measured
+# as worthwhile; the interpreter is unchanged.
+#
 # The same file runs from a source checkout and from an installed
 # distribution (mk-dist.sh), and chooses by what surrounds it:
 #   checkout      - <repo>/util/bluehs/bluehs, the ghc on PATH, and the
@@ -49,9 +64,21 @@ SELF=$(readlink -f "$0")
 HERE=$(dirname "$SELF")
 
 NAME=$(basename "$0")
+# The launcher's own option comes first; the GHC flags follow it
+MODE=interpret
+BINARY=
+if [ "$NAME" = "bluehs" ]; then
+    case "${1:-}" in
+        --compile-to=?*) MODE=compile; BINARY=${1#--compile-to=}; shift ;;
+        --run=?*) MODE=binary; BINARY=${1#--run=}; shift ;;
+    esac
+fi
+[ "$MODE" = interpret ] && [ -n "${BLUEHS_COMPILE:-}" ] && MODE=cache
 # GHC flags lead; they stay in place in "$@" for runghc
 FLAGS=0
-if [ "$NAME" = "bluehs" ]; then
+if [ "$MODE" = binary ]; then
+    TOOL=
+elif [ "$NAME" = "bluehs" ]; then
     for a do
         case "$a" in
             --) FLAGS=$((FLAGS + 1)); break ;;
@@ -76,7 +103,11 @@ if [ -f "$HERE/../hs/bsc.env" ]; then
     ENVFILE=$DIST/hs/bsc.env
     DEFAULT_BLUESPECDIR=$(dirname "$DIST")/lib
     SAT=$DIST/SAT
+    GHCBIN=$DIST/hs/ghc/bin/ghc
+    # the bundled GHC keeps only the dynamic way of its libraries
+    WAY=-dynamic
 else
+    DIST=
     REPO=$(dirname "$(dirname "$(dirname "$SELF")")")
     APP=$REPO/src/comp/app
     APP_MORE=$REPO/src/comp
@@ -96,21 +127,41 @@ else
     fi
     DEFAULT_BLUESPECDIR=$REPO/inst/lib
     SAT=$REPO/inst/lib/SAT
+    GHCBIN=ghc
+    WAY=
 fi
 
-case "$TOOL" in
-    *.hs) SCRIPT="$TOOL" ;;
-    *)    SCRIPT="$APP/$TOOL.hs"
-          [ -f "$SCRIPT" ] || [ -z "$APP_MORE" ] || SCRIPT="$APP_MORE/$TOOL.hs" ;;
-esac
-if [ ! -f "$SCRIPT" ]; then
-    echo "bluehs: no such tool or script: $TOOL" >&2
-    exit 1
+if [ "$MODE" != binary ]; then
+    case "$TOOL" in
+        *.hs) SCRIPT="$TOOL" ;;
+        *)    SCRIPT="$APP/$TOOL.hs"
+              [ -f "$SCRIPT" ] || [ -z "$APP_MORE" ] || SCRIPT="$APP_MORE/$TOOL.hs" ;;
+    esac
+    if [ ! -f "$SCRIPT" ]; then
+        echo "bluehs: no such tool or script: $TOOL" >&2
+        exit 1
+    fi
 fi
 
 GHC_ENVIRONMENT="$ENVFILE" export GHC_ENVIRONMENT
+# the GHC this launcher runs or compiled the script with, for a script that
+# identifies its runtime (a compiled binary cannot take it from its own path)
+case "$GHCBIN" in */*) BLUEHS_GHC=$GHCBIN ;; *) BLUEHS_GHC=$(command -v "$GHCBIN" 2>/dev/null || echo "$GHCBIN") ;; esac
+export BLUEHS_GHC
 BLUESPECDIR="${BLUESPECDIR:-$DEFAULT_BLUESPECDIR}" export BLUESPECDIR
 LD_LIBRARY_PATH="$SAT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" export LD_LIBRARY_PATH
+
+if [ "$MODE" = binary ]; then
+    # A distribution's binary is linked dynamically against the libraries
+    # under hs/, with their paths at compile time as its runpath; naming them
+    # here lets the same binary run with the distribution somewhere else (a
+    # build system's sandbox), since LD_LIBRARY_PATH is searched first.
+    if [ -n "${DIST:-}" ]; then
+        LIBDIRS=$(find "$DIST/hs" -name '*.so' -printf '%h\n' 2>/dev/null | LC_ALL=C sort -u | paste -sd: -)
+        [ -z "$LIBDIRS" ] || LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$LIBDIRS" export LD_LIBRARY_PATH
+    fi
+    exec "$BINARY" "$@"
+fi
 
 # runghc gets the flags, then the script in place of the tool name; the
 # launcher's own --ghc-arg comes first, which also ends runghc's reading of
@@ -129,5 +180,77 @@ if [ "$NAME" = "bluehs" ]; then
     done
 else
     set -- "$SCRIPT" "$@"
+fi
+
+# Compiled modes. The GHC flags the launcher compiles with are the -i ones;
+# a script's own module name is passed as -main-is when it is not Main (the
+# named tools). The solvers are linked from the installed copies, which the
+# binary then finds through LD_LIBRARY_PATH above, as the interpreter does.
+if [ "$MODE" != interpret ]; then
+    IFLAGS=""; IDIRS=""; n=0; compilable=1
+    for a do
+        n=$((n + 1))
+        [ $n -gt $FLAGS ] && break
+        case "$a" in
+            --) ;;
+            -i)  IFLAGS="$IFLAGS -i" ;;
+            -i*) IFLAGS="$IFLAGS $a"; IDIRS="$IDIRS ${a#-i}" ;;
+            *)   compilable=0 ;;
+        esac
+    done
+    MAINIS=$(sed -n 's/^module[[:space:]]*\([A-Za-z0-9_.]*\).*/\1/p' "$SCRIPT" | head -1)
+    if [ -n "$MAINIS" ] && [ "$MAINIS" != Main ]; then MAINIS="-main-is $MAINIS"; else MAINIS=""; fi
+    compile() {  # output, build directory
+        # shellcheck disable=SC2086
+        "$GHCBIN" --make -O1 -v0 $WAY $IFLAGS $MAINIS -outputdir "$2" -o "$1" \
+            -L"$SAT" -rtsopts -with-rtsopts=-A256m -Wno-missed-extra-shared-lib "$SCRIPT"
+    }
+    if [ "$MODE" = compile ]; then
+        if [ $compilable -eq 0 ]; then
+            echo "bluehs: --compile-to takes -i flags only" >&2
+            exit 1
+        fi
+        compile "$BINARY" "$BINARY.build" && rm -rf "$BINARY.build"
+        exit $?
+    fi
+    if [ $compilable -eq 1 ] && command -v "$GHCBIN" >/dev/null 2>&1 && command -v sha256sum >/dev/null 2>&1; then
+        # The modules under the -i directories are compiled once per cache
+        # entry and shared by every script that uses them; the entry's lock
+        # serialises the compiles of scripts sharing it.
+        LIBKEY=$( { "$GHCBIN" --numeric-version; printf '%s\n%s\n' "$ENVFILE" "$IFLAGS"; cat "$ENVFILE"
+                    for d in $IDIRS; do find "$d" -name '*.hs' -type f 2>/dev/null | LC_ALL=C sort | while read -r f; do printf '%s\n' "$f"; cat "$f"; done; done
+                  } | sha256sum | cut -c1-32 )
+        KEY=$( { printf '%s\n%s\n' "$LIBKEY" "$MAINIS"; cat "$SCRIPT"; } | sha256sum | cut -c1-32 )
+        ENTRY=${BLUEHS_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/bluehs}/$LIBKEY
+        BIN=$ENTRY/$KEY/bin
+        if [ ! -x "$BIN" ]; then
+            mkdir -p "$ENTRY/$KEY"
+            waited=0
+            while ! mkdir "$ENTRY/lock" 2>/dev/null; do
+                sleep 2; waited=$((waited + 2))
+                [ $waited -ge 1800 ] && { rm -rf "$ENTRY/lock"; break; }
+            done
+            if [ ! -x "$BIN" ]; then
+                if compile "$BIN.tmp" "$ENTRY/build" > "$ENTRY/$KEY/compile.log" 2>&1; then
+                    mv "$BIN.tmp" "$BIN"
+                    printf '%s\n' "$SCRIPT" > "$ENTRY/$KEY/script"
+                else
+                    echo "bluehs: compile failed, interpreting instead (log: $ENTRY/$KEY/compile.log)" >&2
+                fi
+            fi
+            rmdir "$ENTRY/lock" 2>/dev/null
+        fi
+        if [ -x "$BIN" ]; then
+            # the binary takes the script's own arguments
+            k=0
+            for a do
+                [ $k -eq 0 ] && set --
+                k=$((k + 1))
+                [ $k -le $((FLAGS + 1)) ] && continue
+                set -- "$@" "$a"
+            done
+            exec "$BIN" "$@"
+        fi
+    fi
 fi
 exec "$RUNGHC" --ghc-arg=-Wno-missed-extra-shared-lib "$@"

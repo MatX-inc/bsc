@@ -58,6 +58,32 @@ with `-i`, before the script, as `runghc` would take them:
 Startup cost is ~0.3-0.5s: the library is compiled, and only the entry
 file is interpreted.
 
+### Compiled scripts
+
+A script that runs many times, or does much work of its own, can run
+compiled instead. `BLUEHS_COMPILE=1` makes the launcher compile the script
+and the modules its `-i` directories supply with the GHC beside `runghc`
+(`ghc --make -O1`, linked with the larger nursery the ECO flow measured as
+worthwhile) into a cache, `BLUEHS_CACHE` or `~/.cache/bluehs`, keyed by the
+GHC, the environment file and every source; later runs with the same
+sources find the binary there, and scripts sharing the same `-i` modules
+share their compiled form. Leading flags other than `-i` keep the
+interpreter, as does a failed compile (its log stays in the cache). The ECO
+flow runs two to three times faster this way.
+
+    BLUEHS_COMPILE=1 util/bluehs/bluehs -ieco-sdk/lib eco-sdk/scripts/captures.hs ...
+
+A build system that wants the binary as a step of its own has the two
+halves separately:
+
+    util/bluehs/bluehs --compile-to=my-tool -imy-tool my-tool/Main.hs
+    util/bluehs/bluehs --run=my-tool design.ba
+
+`--run` supplies what the interpreter would have had (`BLUESPECDIR`, the
+solvers on the library path, and in a distribution the runtime's shared
+libraries, so the binary does not depend on where the distribution was when
+it was compiled).
+
 ## Interactive use
 
     ghci        # anywhere inside the repo (but see the .ghci caveat below)
