@@ -28,7 +28,10 @@ Nothing in the stack migrates a capture between versions.
 | `search.plan` | `planSchema = 3` | #247 |
 | `objective.plan` | `costSchema = 1` | #247 |
 | `build.manifest` | `sdkSchema = 4` | #246 |
+| metric `report.json` (whole-file and translated) | `"schema": 2` | #249 |
 | proof receipts (`*.proof.json`, `ordinary-to-kept.json`, `proof-N.json`) | `"schema": 1` | #246 |
+| invariant `report.json` | `"schema": 1` | #249 |
+| `MOD.replay.evidence` (optional producer only) | `reSchema = 1` | #244 |
 
 Haskell records are written with `show` and read with `readMaybe`; JSON is
 written by `ECOJSON`. A record of another schema is refused, never
