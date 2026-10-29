@@ -1,0 +1,39 @@
+# Optional matched bluehs SDK checks use the ordinary DejaGNU runner.
+namespace eval eco_sdk_proof {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag "-i[file join $sdk lib]"
+    set yosys [which yosys]
+    if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO proof: matched bluehs runtime unavailable"
+    } elseif {$yosys == 0 || ![file executable $yosys]} {
+        unsupported "ECO proof: Yosys unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-proof-[pid]-[clock clicks]]]
+        file mkdir $root
+        foreach script {ASTProof.hs ASTConcatProof.hs} {
+            set label [file rootname $script]
+            set log [file join $root "$label.log"]
+            set extra {}
+            if {$script == "ASTConcatProof.hs"} {
+                set iverilog [which iverilog]
+                set vvp [which vvp]
+                if {$iverilog == 0 || $vvp == 0} {
+                    unsupported "ECO proof: ASTConcatProof Icarus unavailable"
+                    continue
+                }
+                set extra [list $iverilog $vvp]
+            }
+            if {[catch {exec $bluehs $sourceFlag [file join $here $script] $yosys [file join $root $label] {*}$extra >$log 2>@1} message]} {
+                fail "ECO proof: $label"
+                set f [open $log]; verbose -log [read $f] 0; close $f
+            } else {
+                pass "ECO proof: $label"
+            }
+        }
+    }
+}
