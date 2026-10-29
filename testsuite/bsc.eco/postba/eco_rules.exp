@@ -1,0 +1,17 @@
+namespace eval eco_rules {
+    if {[eco_sdk_env "ECO rules"]} {
+        set root [file normalize [file join [pwd] eco-rules-[pid]-[clock clicks]]]
+        file mkdir $root
+        foreach name {TransformTest TransformProofTest} {
+            set script [file join $here .. .. eco ast "$name.hs"]
+            set args {}
+            if {$name eq "TransformProofTest"} {
+                if {$yosys == 0 || ![file executable $yosys]} {
+                    unsupported "ECO rules: Yosys unavailable"; continue
+                }
+                set args [list $yosys [file join $root $name]]
+            }
+            eco_run_script "ECO rules: $name" [file join $root "$name.log"] $script {*}$args
+        }
+    }
+}

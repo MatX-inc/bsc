@@ -1,0 +1,12 @@
+namespace eval eco_search {
+    if {[eco_sdk_env "ECO search"]} {
+        set root [file normalize [file join [pwd] eco-search-[pid]-[clock clicks]]]
+        file mkdir $root
+        foreach name {ASTSearch ASTExternalRules} {
+            set script [file join $here "$name.hs"]
+            set args [list [file join $root $name]]
+            if {$name eq "ASTExternalRules"} {lappend args $script}
+            eco_run_script "ECO search: $name" [file join $root "$name.log"] $script {*}$args
+        }
+    }
+}
