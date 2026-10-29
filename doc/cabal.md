@@ -153,3 +153,14 @@ in the name, hashed with the bluehs runtime installed from them, and compared wi
 reference; the serial legs then rebuild in place, with nothing changed and,
 from GHC 9.12, after an edit and its revert. A failed leg is MISSING in the
 verdict. The script's usage text names its subcommands and variables.
+
+`.github/workflows/cabal.yml` runs it, one job per platform (ubuntu-24.04 and
+macos-15, so every leg of a platform builds on one machine), on the project's
+pull requests that touch the build files, nightly, and on a dispatch that picks
+the GHC (default 9.14.1); the lists and logs are its artifact. Source changes
+do not run it: the one source invariant it guards, that every root module
+imports Warmup, is checked on every pull request
+(`src/comp/check-warmup-roots.sh`). A difference is a design question before
+it is a fix; the first suspects are a root module without the Warmup import,
+interface content the direct-dependency rule does not cover, and a program's
+entry module.
