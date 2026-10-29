@@ -16,12 +16,15 @@ ECOASTSearch
 ECOStructurePolicy
 ECOASTInvariant
 ECOInvariantExport
+ECOASTFlow
 ECOASTVacancy
 ECOASTPreservation
 ECOASTShell
 ECOASTInactive
 ECOASTMetric
+ECOASTSelection
 ECOBind
+ECOASTReplay
 ECOASTStateView
 ECOASTTranslatedMetric
 ECOASTCost

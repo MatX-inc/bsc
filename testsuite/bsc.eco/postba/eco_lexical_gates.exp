@@ -1,0 +1,25 @@
+# Flow-level negatives for the lexical and declared-before-use gates: a saved
+# plan step whose artifact smuggles a comment line break, a statement-ending
+# identifier or a late declaration is refused by the fresh full-flow verifier
+# even when its hash chain is rebound consistently.
+namespace eval eco_lexical_gates {
+    if {[eco_sdk_env "ECO lexical gates" yosys]} {
+        set root [file normalize [file join [pwd] eco-lexical-gates-[pid]-[clock clicks]]]
+        file mkdir $root
+        set captures {}; set ok 1
+        foreach side {old new} {
+            set dir [file join $root $side]; file mkdir $dir
+            set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr -g mkFanoutLoss -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+            if {$side eq "new"} {lappend args -Xcpp -DECO_NEW}
+            lappend args [file join $here FanoutLoss.bs]
+            if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+                fail "ECO lexical gates: capture $side"; verbose -log $message 0; set ok 0
+            } else {pass "ECO lexical gates: capture $side"}
+            lappend captures [file join $dir capture mkFanoutLoss.replay]
+        }
+        if {$ok && [eco_run_script "ECO lexical gates: configure strict" [file join $root configure.log] [file join $sdk scripts configure.hs] strict [which_bsc] mkFanoutLoss {*}$captures [pwd] [pwd] $::env(BLUESPECDIR) [file join $sdk build.manifest] $yosys [file join $root flow] [file join $root flow.config]]
+            && [eco_run_script "ECO lexical gates: standard flow" [file join $root flow.log] [file join $sdk scripts captures.hs] --objective translated-normalized --refinements standard --structure ordinary --invariants defer [file join $root flow.config]]} {
+            eco_run_script "ECO lexical gates: tampered plan steps refused by the proof gate and the full-flow verifier" [file join $root checks.log] [file join $here LexicalGateControls.hs] $bluehs $sdk [file join $root flow.config] [file join $root flow] [file join $root checks]
+        }
+    }
+}

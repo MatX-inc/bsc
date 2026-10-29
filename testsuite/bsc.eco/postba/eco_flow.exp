@@ -1,0 +1,23 @@
+namespace eval eco_flow {
+    if {[eco_sdk_env "ECO flow" yosys]} {
+        set root [file normalize [file join [pwd] eco-flow-[pid]-[clock clicks]]]
+        file mkdir $root
+        set captures {}; set ok 1
+        foreach side {old new} {
+            set dir [file join $root $side]; file mkdir $dir
+            set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr -g mkFanoutLoss -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+            if {$side eq "new"} {lappend args -Xcpp -DECO_NEW}
+            lappend args [file join $here FanoutLoss.bs]
+            if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+                fail "ECO flow: capture $side"; verbose -log $message 0; set ok 0
+            } else {pass "ECO flow: capture $side"}
+            lappend captures [file join $dir capture mkFanoutLoss.replay]
+        }
+        if {$ok} {
+            set manifest [file join $sdk build.manifest]
+            foreach {name args} [list ASTFlow [concat [list [which_bsc]] $captures [list $::env(BLUESPECDIR) $manifest $yosys [file join $root flow]]]] {
+                eco_run_script "ECO flow: $name" [file join $root "$name.log"] [file join $here "$name.hs"] {*}$args
+            }
+        }
+    }
+}
