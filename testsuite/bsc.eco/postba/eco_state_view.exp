@@ -1,0 +1,6 @@
+namespace eval eco_state_view {
+    if {[eco_sdk_env "ECO state view" yosys]} {
+        set root [file normalize [file join [pwd] eco-state-view-[pid]-[clock clicks]]]
+        eco_run_script "ECO state view: typed alternatives and proof controls" "$root.log" [file join $here StateView.hs] $yosys $root
+    }
+}

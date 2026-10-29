@@ -47,6 +47,9 @@ External groups (`postba/`)
 | `eco_relational_complement`, `eco_logical_ac` (#246) | Directed strict controls for comparison complements and logical reassociation, plus an exhaustive X/Z Icarus oracle. |
 | `eco_matching` (#246) | `ASTPlan.hs` (keep proposals from distinct pre/final graphs, stage negatives), `Rename.hs`, `MatchTest.hs`, `GraphTest.hs`, `AggressiveTest.hs` (injective, typed, maximum-cardinality assignments, determinism under permutation). |
 | `eco_filters`, `eco_renderer` (#246) | Captures with identity, macro and candidate filters: ordinary and candidate byte controls; string-parameter rendering, layout and filter guards; a filter that changes the AST rendering cannot qualify silently. |
+| `eco_rules` (#247) | `TransformTest.hs` (the eleven-code feature table, every generated candidate passes both gates, 140 directed checks) and `TransformProofTest.hs` (proof gates with Yosys, `proveTautology` controls). |
+| `eco_search` (#247) | `ASTSearch.hs` (acceptance, hash-chain tamper rejection, gated initial rename) and `ASTExternalRules.hs` (an unbundled rule through the frozen SDK with negative controls for ports, behaviour, evidence, source mutation, duplicate registration, a use-before-declare and a comment-escape candidate, and a partial cost provider). |
+| `eco_shell`, `eco_vacancy`, `eco_state_view` (#247) | `HistoricalShell.hs`, `InactiveHelpers.hs`, `PreservationBarriers.hs`, `StateVacancy.hs`, `StateView.hs`: each family's candidates, barriers, strict/binary proofs and saved replay; every candidate is emittable. |
 
 Groups that need Yosys are `UNSUPPORTED` without it; `eco_proof_fuzz`,
 `ASTConcatProof.hs` and the two X/Z oracles need Icarus.
