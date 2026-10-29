@@ -1,0 +1,19 @@
+namespace eval eco_selection {
+    if {[eco_sdk_env "ECO selection" yosys]} {
+        set root [file normalize [file join [pwd] eco-selection-[pid]-[clock clicks]]]
+        file mkdir $root
+        set example [file join $root example]
+        foreach {name command} [list \
+            policy [list $bluehs {*}$sourceFlag [file join $here SelectionPolicy.hs]] \
+            fixture [list bash [file join $here .. .. .. util eco examples run.sh] [which_bsc] $bluehs $sdk $yosys $::env(BLUESPECDIR) $example] \
+            replay [list $bluehs {*}$sourceFlag [file join $sdk scripts select.hs] [file join $example flow.config] [file join $root selected] [file join $example flow]] \
+            rejection [list $bluehs {*}$sourceFlag [file join $here SelectionReject.hs] [file join $example flow] [file join $example flow.config] [file join $root rejected]]] {
+            set log [file join $root "$name.log"]
+            if {[catch {exec {*}$command >$log 2>@1} message]} {
+                fail "ECO selection: $name"
+                set f [open $log]; verbose -log [read $f] 0; close $f
+                break
+            } else {pass "ECO selection: $name"}
+        }
+    }
+}

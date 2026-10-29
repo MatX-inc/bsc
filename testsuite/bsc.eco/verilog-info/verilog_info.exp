@@ -83,6 +83,8 @@ namespace eval eco_verilog_info {
             [list postba/FanoutLoss.bs [concat -cpp $flow]] \
             {postba/CoreWithoutObservations.bs -cpp} \
             {postba/Evidence.bs {-cpp -check-assert}} \
+            {postba/HelperPipeline.bs -cpp} \
+            [list postba/ObjectiveFlow.bs [concat -cpp $flow]] \
             {postba/StringParameter.bs -cpp} \
             {postba/TranslatedMetric.bs -cpp} \
             {replay/ReplayDependencies.bs {}} \

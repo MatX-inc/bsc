@@ -1,0 +1,21 @@
+package HelperPipeline where
+interface HelperPipeline =
+  step :: Bit 8 -> Bit 8 -> Bit 8 -> Action
+    {-# always_ready, always_enabled, arg_names=[a,b,c] #-}
+  result :: Bit 8 {-# always_ready #-}
+{-# verilog mkHelperPipeline #-}
+mkHelperPipeline :: Module HelperPipeline
+mkHelperPipeline = module
+#ifndef ECO_REMOVE_STAGE
+  stage :: Reg (Bit 8) <- mkRegU
+#endif
+  output :: Reg (Bit 8) <- mkRegU
+  interface HelperPipeline
+    step a b c = action
+#ifdef ECO_REMOVE_STAGE
+      output := (a + b) + c
+#else
+      stage := a + b
+      output := stage + c
+#endif
+    result = output

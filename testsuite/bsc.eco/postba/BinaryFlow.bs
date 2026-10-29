@@ -1,0 +1,45 @@
+package BinaryFlow where
+
+-- Twin of FanoutLoss with one combinational change that only a solver can
+-- decide. Both sides compute three ordering flags of two 16-bit values whose
+-- zero encodings compare by sign; OLD derives the "unequal" flag from the
+-- equality helper, NEW from the two order helpers. The OLD helper restored
+-- with NEW's skeleton computes NEW's value only under binary valuation
+-- (yNeg || not yNeg == True), so the Binary domain needs a SAT miter and the
+-- strict domain cannot accept it structurally. ECO_TWIN changes NEW's
+-- behaviour so that the same restored helper is inequivalent and the solver
+-- must reject it.
+interface BinaryFlow =
+    put :: Bit 4 -> Action {-# arg_names = [value] #-}
+    result :: Bit 16 -> Bit 16 -> Bit 4 -> Bit 8
+        {-# arg_names = [x, y, selector] #-}
+
+{-# synthesize mkBinaryFlow #-}
+mkBinaryFlow :: Module BinaryFlow
+mkBinaryFlow = module
+    savedSelector :: Reg (Bit 4) <- mkReg 0
+    interface BinaryFlow
+        put value = action
+            savedSelector := value
+        result x y selector =
+            let unordered = selector[0:0] == 1
+                xZero = x == 0
+                yZero = y == 0
+                xNeg = x[15:15] == 1
+                yNeg = y[15:15] == 1
+                sx :: Int 16 = unpack x
+                sy :: Int 16 = unpack y
+                same = if xZero then yZero else (if yZero then False else sx == sy)
+                below = if xZero then (not yZero && not yNeg) else (if yZero then xNeg else sx < sy)
+                above = if xZero then (not yZero && yNeg) else (if yZero then not xNeg else sx > sy)
+                eq = not unordered && same
+                lt = not unordered && below
+                gt = not unordered && above
+#if defined(ECO_TWIN)
+                ne = lt || gt || (xZero && yZero && selector[1:1] == 1)
+#elif defined(ECO_NEW)
+                ne = lt || gt
+#else
+                ne = not eq
+#endif
+            in zeroExtend (pack lt ++ pack gt ++ pack ne)
