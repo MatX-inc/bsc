@@ -3039,6 +3039,45 @@ proc vcdcheck_fail { vcdfile options } {
     }
 }
 
+# Run a script with bluehs, record pass/fail, and return true on success.
+# Mark the test untested if bluehs is unavailable.
+# Arguments are a Tcl list. Set output to give repeated runs separate files;
+# it defaults to <script>.bluehs-out.
+proc bluehs_run_pass { script {arguments {}} {output ""} } {
+    global bluehs
+    global srcdir
+    global subdir
+
+    bsc_initialize
+
+    if { ![file isfile $bluehs] || ![file executable $bluehs] } {
+        untested "bluehs $script (bluehs unavailable)"
+        return 0
+    }
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
+    if { $output eq "" } {set output [make_bluehs_output_name $script]}
+    set cmd [concat [list $bluehs $script] $arguments [list >& $output]]
+    set status [exec_with_log "bluehs" $cmd 2]
+    if { $status != 0 && [file exists $output] } {
+        set f [open $output r]
+        verbose -log [read $f] 0
+        close $f
+    }
+
+    cd $here
+
+    set invocation [linsert $arguments 0 $script]
+    if { $status == 0 } then {
+        pass "bluehs $invocation"
+    } else {
+        fail "bluehs $invocation"
+    }
+    return [expr {$status == 0}]
+}
+
 # Run a script with bluehs, and compare its output with the expected output
 proc bluehs_run_compare_pass { script {expected ""} } {
     global bluehs
