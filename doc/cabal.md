@@ -177,3 +177,12 @@ against the reference. The serial legs (`c-j1`, `a-j1`) also rebuild in place
 with no changes and, on GHC >= 9.12, after a comment edit and revert. Run
 `util/cabal-ladder.sh` with no arguments for subcommand and environment-variable
 usage.
+
+`.github/workflows/cabal.yml` runs the ladder (one job per platform on
+`ubuntu-24.04` and `macos-15`) on pull requests that touch build files,
+nightly, and on manual dispatch (defaulting to GHC 9.14.1), uploading the hash
+lists, toolchain records, and logs as an artifact. Source-only PRs skip this
+workflow because `src/comp/check-warmup-roots.sh` already enforces the
+`Warmup` root-import invariant on every PR. If the ladder fails, check for a
+root module missing `import Warmup ()`, non-deterministic interface content, or
+an executable entry module discrepancy.

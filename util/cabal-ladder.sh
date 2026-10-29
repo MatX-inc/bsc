@@ -3,9 +3,10 @@
 # serial, parallel, relocated, and in-place incremental builds of one commit
 # produce identical objects, interfaces, archives, shared libraries, programs,
 # and installed directories (`run` hashes inst/bluehs). `run` executes all
-# legs in fresh checkouts on one machine, runs `rebuild` on the serial legs,
-# and compares the hash lists with `verdict`. `hash` also writes a `.toolchain`
-# record beside each list so `verdict` can report any tool changes.
+# legs in fresh checkouts on one machine (and is run in CI by
+# .github/workflows/cabal.yml), runs `rebuild` on the serial legs, and compares
+# the hash lists with `verdict`. `hash` also writes a `.toolchain` record beside
+# each list so `verdict` can report any tool changes.
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOP="$(cd "$(dirname "$SELF")/.." && pwd)"; cd "$TOP" || exit 2
