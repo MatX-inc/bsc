@@ -35,11 +35,21 @@ COPT ?= -O3
 CDEBUG ?=
 CFLAGS += $(PROF) $(COPT) $(CDEBUG)
 
+# The debug information names the compile directory and the source, so the
+# installed library would differ between checkout directories; the checkout
+# is mapped to `.` in it (and in __FILE__), and a debugger is pointed at the
+# tree once (gdb's substitute-path, lldb's target.source-map).
+CFLAGS += -ffile-prefix-map=$(abspath $(TOP))=.
+
 ifeq ($(OSTYPE), Darwin)
 # for Mac OS X, declare that the binary is dynamic and undefined references
 # will be looked up later when the library is linked
 LIBBDPI=libbdpi.dylib
 LDFLAGS = -dynamiclib -Wl,-install_name,@rpath/$(LIBBDPI),-undefined,dynamic_lookup
+# The linker's debug map records each object's path and modification time:
+# the checkout is stripped from the path, and ZERO_AR_DATE zeroes the time.
+LDFLAGS += -Wl,-oso_prefix,$(abspath $(TOP))/
+export ZERO_AR_DATE = 1
 else
 LIBBDPI=libbdpi.so
 LDFLAGS = -shared -Wl,-soname,$(LIBBDPI)
