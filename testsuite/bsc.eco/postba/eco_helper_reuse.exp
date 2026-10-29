@@ -1,0 +1,13 @@
+namespace eval eco_helper_reuse {
+    if {[eco_sdk_env "ECO live helper reuse" yosys]} {
+        set root [file normalize [file join [pwd] eco-helper-reuse-[pid]-[clock clicks]]]
+        eco_run_script "ECO live helper reuse: typed live projection, saved replay and negative controls" "$root.log" [file join $here HelperReuse.hs] $yosys $root
+    }
+}
+
+namespace eval eco_refinement_breadth {
+ if {[eco_sdk_env "ECO standard refinements" yosys]} {
+  set root [file normalize [file join [pwd] eco-refinement-breadth-[pid]-[clock clicks]]]
+  eco_run_script "ECO standard refinements: bounded family breadth" "$root.log" [file join $here ASTRefinements.hs] $yosys $root
+ }
+}

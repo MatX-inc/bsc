@@ -55,6 +55,7 @@ External groups (`postba/`)
 | `eco_metrics`, `eco_translated_metrics` (#249) | Authenticated raw and normalized counts over captures and candidates, the packaged `measure.hs` CLI with the same OLD, comment/whitespace/structural controls, translate-off toggle controls, and five git-configuration sentinel/control pairs (ten checks) showing that repository attributes, local, global and ambient configuration and `core.autocrlf` cannot change a count. |
 | `eco_objective` (#249) | Translated objectives: search, proof and tamper controls. |
 | `eco_invariants`, `eco_core_without_observations` (#249) | Synthetic obligations are independently bound and proved; a core capture without a companion reports `unavailable-in-capture` with zero facts and explicit deferral; with `ECO_NATIVE_OBSERVATIONS=1` and the optional producer, proved and unproved captures are checked. |
+| `eco_correspondence`, `eco_pipeline_chain`, `eco_helper_reuse`, `eco_live_aliases`, `eco_live_shell`, `eco_alias_orientation` (#250) | One directed candidate/proof/replay program per family with its exclusions and wrong-function controls; `eco_helper_reuse` also runs the standard refinement preset end to end (bounded family breadth, packaged CLI, native translated flow and saved replay). |
 
 Groups that need Yosys are `UNSUPPORTED` without it; `eco_proof_fuzz`,
 `ASTConcatProof.hs` and the two X/Z oracles need Icarus.

@@ -1,0 +1,13 @@
+namespace eval eco_correspondence {
+    if {[eco_sdk_env "ECO correspondence" yosys]} {
+        set root [file normalize [file join [pwd] eco-correspondence-[pid]-[clock clicks]]]
+        eco_run_script "ECO correspondence: typed width roles, exact leaf permutations and proof controls" "$root.log" [file join $here Correspondence.hs] $yosys $root
+    }
+}
+
+namespace eval eco_value_names {
+    if {[eco_sdk_env "ECO value names" yosys]} {
+        set root [file normalize [file join [pwd] eco-value-names-[pid]-[clock clicks]]]
+        eco_run_script "ECO value names: value-only effect arguments and protected identity controls" "$root.log" [file join $here ValueNames.hs] $yosys $root
+    }
+}

@@ -1,0 +1,6 @@
+namespace eval eco_pipeline_chain {
+    if {[eco_sdk_env "ECO pipeline chain" yosys]} {
+        set root [file normalize [file join [pwd] eco-pipeline-chain-[pid]-[clock clicks]]]
+        eco_run_script "ECO pipeline chain: typed roles, whole-group alpha proofs and negative controls" "$root.log" [file join $here PipelineChain.hs] $yosys $root
+    }
+}

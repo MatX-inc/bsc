@@ -1,0 +1,9 @@
+# Generic native-AST candidate and proof/replay checks; no MatX source here.
+namespace eval eco_live_shell {
+    if {[eco_sdk_env "ECO live shell" yosys]} {
+        set root [file normalize [file join [pwd] eco-live-shell-[pid]-[clock clicks]]]
+        file mkdir $root
+        set script [file join $here ASTLiveShell.hs]
+        eco_run_script "ECO live shell: directed candidate/proof/replay" [file join $root directed.log] $script [file join $root run] $script $yosys
+    }
+}
