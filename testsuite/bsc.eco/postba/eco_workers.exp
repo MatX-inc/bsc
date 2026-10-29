@@ -1,7 +1,7 @@
-# Proposal generation and candidate evaluation in worker processes: the pool
-# mechanics, then the public example flow run sequentially and with
-# ECO_WORKERS=3, whose flow results, search artifacts, finish outputs and
-# branch replay must be byte-identical.
+# Proposal generation, candidate evaluation and plan replay in worker
+# processes: the pool mechanics, then the public example flow run sequentially
+# and with ECO_WORKERS=3, whose flow results, search artifacts, finish outputs
+# and branch replay must be byte-identical.
 namespace eval eco_workers {
  set here [file dirname [file normalize [info script]]]
  set bluehs [which bluehs]
@@ -60,6 +60,12 @@ namespace eval eco_workers {
    set leftovers [list]
    foreach round $proposals {foreach f [glob -nocomplain -directory $round *] {if {![string match *.outcome $f]} {lappend leftovers $f}}}
    if {[llength $candidates] == 0 || ([llength $records] > 0 && [llength $proposals] > 0 && [llength $leftovers] == 0)} {pass "ECO workers: worker processes proposed and evaluated the candidates"} else {fail "ECO workers: worker processes proposed and evaluated the candidates"}
+   set replays [list];set proofs [list]
+   foreach dir {replayed-branch replayed-flow} {
+    lappend replays {*}[glob -nocomplain -directory [file join $b $dir] proof-*.outcome]
+    lappend proofs {*}[glob -nocomplain -directory [file join $a $dir] proof-*.json]
+   }
+   if {[llength $proofs] == 0 || [llength $replays] > 0} {pass "ECO workers: worker processes replayed the plan's proofs"} else {fail "ECO workers: worker processes replayed the plan's proofs"}
   }
  }
 }
