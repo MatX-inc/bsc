@@ -6,7 +6,7 @@ module ECOASTPipelineChain
  , pipelineChainAudit, pipelineChainProvider ) where
 import Verilog
 import VLocalNames(mapRenameableVIds)
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform(ASTCandidate(..))
 import ECOASTPreservation(directiveFree)
 import qualified Data.Map.Strict as M
@@ -193,7 +193,7 @@ analyze budget old current=(audit,take(max 0 budget)(singles++joint))
    (pairCount>length examined||count>max 0 budget)
 
 pipelineChainProvider :: CandidateProvider
-pipelineChainProvider=CandidateProvider["F25"][]$ \_ features budget (VProgram olds _ _) (VProgram currents ds cs)->
+pipelineChainProvider=candidateProvider["F25"][]$ \_ features budget (VProgram olds _ _) (VProgram currents ds cs)->
  if "F25" `notElem`features then[]else take budget
   [ASTCandidate "F25" "Align complete typed pipeline chains to historical tail identities"
    (VProgram(take i currents++[pipelineModule p]++drop(i+1)currents)ds cs)

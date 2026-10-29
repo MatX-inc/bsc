@@ -21,7 +21,7 @@ check s b=unless b(fail s)>>putStrLn("PASS "++s)
 main=do
  [ys,out]<-getArgs
  createDirectoryIfMissing True out
- let flood=CandidateProvider["Flood"][]$ \_ _ budget _ now->replicate budget(ASTCandidate "Flood" "ineligible no-op" now[]False[][])
+ let flood=candidateProvider["Flood"][]$ \_ _ budget _ now->replicate budget(ASTCandidate "Flood" "ineligible no-op" now[]False[][])
      providers=[flood,defaultCandidateProvider]
      options=defaultSearchOptions{soDomain=StrictFourState,soFeatures=["Flood","F04"],soCandidates=2,soYosys=ys}
      sequential=combineCandidateProviders providers

@@ -7,7 +7,7 @@ module ECOASTJointDeclarationOrder
   jointDeclarationOrderOnly,jointDeclarationOrderReason) where
 import Verilog
 import ECOASTTransform(ASTCandidate(..))
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTPreservation(directiveFree)
 import ECOASTValueNames(renameValues)
 import qualified Data.Generics as G
@@ -175,5 +175,5 @@ jointDeclarationOrderCandidates budget old current
    [("surviving-state-wire-identities",pairs),("internal-declaration-order",[("objectsPartitionsWrappersWidthsTypes","unchanged modulo wire names"),("stateAndExecutableExpressions","CURRENT only")]),("declined-register-groups",rejected)]
    False[(o,n)|(n,o)<-pairs][]]
 jointDeclarationOrderReason old current=either id(const"joint wire-identity/internal-order candidate available")(proposal old current)
-jointDeclarationOrderProvider=CandidateProvider["JointDeclarationOrder"][__FILE__]$ \_ features budget old current->
+jointDeclarationOrderProvider=candidateProvider["JointDeclarationOrder"][__FILE__]$ \_ features budget old current->
  if "JointDeclarationOrder" `elem`features then jointDeclarationOrderCandidates budget old current else[]

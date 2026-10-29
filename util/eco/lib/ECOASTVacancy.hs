@@ -1,12 +1,12 @@
 -- Optional external rule: retain current state semantics under vacant OLD names.
 module ECOASTVacancy (vacancyProvider) where
 import ECOASTIdentity
-import ECOASTSearch (CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform (ASTCandidate(..))
 import Verilog
 
 vacancyProvider :: CandidateProvider
-vacancyProvider = CandidateProvider ["F21"] [] $ \_ features budget (VProgram olds _ _) (VProgram currents ds cs) ->
+vacancyProvider = candidateProvider ["F21"] [] $ \_ features budget (VProgram olds _ _) (VProgram currents ds cs) ->
   if "F21" `notElem` features then [] else take budget
     [ASTCandidate "F21" "Reclaim a compatible vacant historical state group"
       (VProgram (take i currents ++ [srpModule proposal] ++ drop (i+1) currents) ds cs)

@@ -3,7 +3,7 @@
 -- at typed consumer roles. Proposals always require the independent proof gate.
 module ECOASTShell (shellProvider, shellCandidates) where
 import Verilog
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform(ASTCandidate(..),expressionWidth)
 import ECOASTPreservation
 import qualified Data.Generics as G
@@ -46,7 +46,7 @@ ac=show.G.everywhere(G.mkT normal).canon where
   foldl1(\a b->VEOp defaultVId a o b)(sortOn show(terms o e))
  normal e=e
 
-shellProvider = CandidateProvider ["F22"] [] $ \_ features budget old current->
+shellProvider = candidateProvider ["F22"] [] $ \_ features budget old current->
  if "F22"`elem`features then take budget(shellCandidates old current) else []
 shellCandidates oldProgram@(VProgram[old]oldDpis _) current@(VProgram[new]dpis comments)=mapMaybe build[False,True]
  where

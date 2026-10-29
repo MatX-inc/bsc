@@ -9,7 +9,7 @@ import qualified Data.Generics as G
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import ECOASTPreservation (directiveFree,transparentFlat,mapTransparent)
-import ECOASTSearch (CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform (ASTCandidate(..),expressionWidth)
 import Verilog
 
@@ -71,7 +71,7 @@ live m=walk S.empty roots where
 
 feature="LiveAliases"
 liveAliasProvider :: [FilePath] -> CandidateProvider
-liveAliasProvider sources=CandidateProvider [feature] sources $ \_ enabled budget old current->
+liveAliasProvider sources=candidateProvider [feature] sources $ \_ enabled budget old current->
  if feature `elem` enabled then liveAliasCandidates budget old current else []
 
 liveAliasCandidates :: Int -> VProgram -> VProgram -> [ASTCandidate]

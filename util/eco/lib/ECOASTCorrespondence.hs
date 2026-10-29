@@ -4,7 +4,7 @@ module ECOASTCorrespondence
   ( correspondenceProvider, correspondenceAudit, CorrespondenceAudit(..) ) where
 import Verilog
 import VLocalNames(mapRenameableVIds)
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform(ASTCandidate(..),generateASTCandidates)
 import ECOASTPreservation(directiveFree)
 import qualified Data.Map.Strict as M
@@ -135,7 +135,7 @@ correspondenceAudit budget oldP@(VProgram olds od _) newP@(VProgram currents nd 
      gs=concat[g|(g,_,_)<-entries];es=concat[e|(_,e,_)<-entries]
      count=sum[length(filter(not.null)[g,e])|(g,e,_)<-entries]
  in CorrespondenceAudit gs es (concat[r|(_,_,r)<-entries]) (count>max 0 budget)
-correspondenceProvider=CandidateProvider ["F24WidthRole","F24ExactLeaf","F24Layout"] [] generate where
+correspondenceProvider=candidateProvider ["F24WidthRole","F24ExactLeaf","F24Layout"] [] generate where
  generate _ features budget oldP@(VProgram olds od _) newP@(VProgram currents nd cs)
   | not(directiveFree oldP&&directiveFree newP)=[]
   | otherwise=take(max 0 budget)(concatMap withLayout base)
