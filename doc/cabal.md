@@ -156,6 +156,14 @@ linked by name.
   round with the reference; a failed one is MISSING. `LEGS` names other legs,
   `KEEP_LEGS=1` keeps their trees.
 
-A difference is a design question before it is a fix: the first suspects are a
-root module without the Warmup import, interface content the direct-dependency
-rule does not cover, and a program's entry module.
+`.github/workflows/cabal.yml` runs on the project's own pull requests that touch
+the build files, nightly on the project's default branch, and on a dispatch,
+which picks the GHC (default 9.14.1); source changes do not run it, since the
+one source invariant it guards, that every root module imports Warmup, is
+checked on every pull request (`src/comp/check-warmup-roots.sh`). One job per
+platform, ubuntu-24.04 and macos-15, runs `run`, so every leg of a platform
+builds on one machine and a difference is the build's, not two runner images';
+the lists, records and logs are its artifact. A difference is a design question
+before it is a fix: the first suspects are a root module without the Warmup
+import, interface content the direct-dependency rule does not cover, and a
+program's entry module.

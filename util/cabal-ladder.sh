@@ -6,8 +6,9 @@
 # `hash` (`run` names the bluehs runtime it installs, inst/bluehs).  `run` is
 # the whole ladder on one machine, every leg a fresh checkout in a directory of
 # its own: it runs `hash` on every leg, `rebuild` on the serial legs and
-# `verdict` over the lists.  `hash` writes a record of the toolchain beside
-# each list, which `verdict` reads a difference against.
+# `verdict` over the lists; CI (.github/workflows/cabal.yml) runs it, one job
+# per platform.  `hash` writes a record of the toolchain beside each list,
+# which `verdict` reads a difference against.
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOP="$(cd "$(dirname "$SELF")/.." && pwd)"; cd "$TOP" || exit 2
