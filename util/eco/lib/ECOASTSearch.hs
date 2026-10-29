@@ -523,14 +523,21 @@ replayASTPlanWith runner expected render planPath directory ordinary = do
     rh <- hashFile (directory </> "input.v")
     require (rh == planRenderer plan) "plan renderer/header changed"
     bundle <- canonicalizePath (takeDirectory planPath)
-    (output,outputHash) <- foldM (applyStep bundle (planOptions plan)) (ordinary,h)
-                               (zip [1::Int ..] (planSteps plan))
+    -- Every step is bound to its artifacts along the hash chain first; then
+    -- the proofs, which depend on nothing but their two programs, run in
+    -- worker processes when asked for and are checked in step order.
+    (bound,(output,outputHash)) <- foldM (bindStep bundle) ([],(ordinary,h)) (zip [1::Int ..] (planSteps plan))
     require (outputHash == planOutput plan) "plan final hash mismatch"
+    workers <- searchWorkersFromEnvironment
+    outcomes <- runJobs workers (proofLabel . boundIndex) ((directory </>) . proofLabel . boundIndex)
+                    (proveStep (planOptions plan)) (reverse bound)
+    forM_ outcomes $ \(_,(passed,status)) -> require passed ("replayed proof failed: " ++ status)
     _ <- writeAST (directory </> "selected.ast") output
     writeFile (directory </> "selected.v") (render output)
     return output
   where
-    applyStep bundle options (reference,before) (index,step) = do
+    proofLabel index = "proof-" ++ show index
+    bindStep bundle (bound,(reference,before)) (index,step) = do
       require (before == stepBefore step) "broken plan hash chain"
       let relative = stepArtifact step
       require (isRelative relative && ".." `notElem` splitDirectories relative) "artifact escapes plan bundle"
@@ -551,11 +558,15 @@ replayASTPlanWith runner expected render planPath directory ordinary = do
       contractHash <- hashFile contractPath
       require (contractHash == stepContractsHash step) "contracts artifact changed"
       contracts <- readASTContracts contractPath
-      proof <- runner options (directory </> "proof-" ++ show index)
-                   (stepAlpha step) contracts reference candidate
-      require (proofPassed proof) ("replayed proof failed: " ++ proofStatus proof)
-      writeFile (directory </> "proof-" ++ show index ++ ".json") (renderProofResult proof)
-      return (candidate,after)
+      return (Bound index (stepAlpha step) contracts reference candidate : bound,(candidate,after))
+    proveStep options (Bound index alpha contracts reference candidate) = do
+      proof <- runner options (directory </> proofLabel index) alpha contracts reference candidate
+      when (proofPassed proof) $ writeFile (directory </> proofLabel index ++ ".json") (renderProofResult proof)
+      return (proofPassed proof,proofStatus proof)
+
+-- One plan step bound to its artifacts: the proof it needs and nothing else.
+data Bound = Bound { boundIndex :: Int, boundAlpha :: [(String,String)], boundContracts :: [ASTContract]
+                   , boundReference :: VProgram, boundCandidate :: VProgram }
 
 -- Objective-aware replay preserves the existing complete semantic proof gate,
 -- then independently checks source identities and every projected score witness.
