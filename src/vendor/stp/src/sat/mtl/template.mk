@@ -44,7 +44,10 @@ libr:	lib$(LIB)_release.a
 %.o:			CFLAGS +=$(COPTIMIZE) -g -D DEBUG
 %.op:			CFLAGS +=$(COPTIMIZE) -pg -g -D NDEBUG
 %.od:			CFLAGS +=-O0 -g -D DEBUG
-%.or:			CFLAGS +=$(COPTIMIZE) -g -D NDEBUG
+# Omit -g from release objects: debug info records the build directory
+# (DW_AT_comp_dir on ELF, plus object timestamps in Mach-O stabs) and
+# changes the ELF build-id.
+%.or:			CFLAGS +=$(COPTIMIZE) -D NDEBUG
 
 ## Link options
 $(EXEC):		LFLAGS += -g
