@@ -26,3 +26,11 @@ ECOASTStateView
 ECOASTTranslatedMetric
 ECOASTCost
 ECOASTTranslatedObjective
+ECOASTCorrespondence
+ECOASTValueNames
+ECOASTPipelineChain
+ECOASTHelperReuse
+ECOASTRefinements
+ECOASTLiveAliases
+ECOASTLiveShell
+ECOASTAliasOrientation
