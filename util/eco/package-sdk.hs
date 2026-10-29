@@ -9,7 +9,7 @@ import qualified Data.Set as S
 import Data.Char (isAlphaNum, isSpace)
 import Data.Version (showVersion)
 import System.Directory
-import System.Environment (getArgs, getEnv, getExecutablePath)
+import System.Environment (getArgs, getEnv, getExecutablePath, lookupEnv)
 import System.FilePath
 import System.Exit (die)
 import System.Info (compilerVersion)
@@ -59,7 +59,8 @@ filesBelow directory = do
         directoryEntry <- doesDirectoryExist path
         if directoryEntry then filesBelow path else pure [path]
 runtimeMetadata environment = do
-    interpreter <- getExecutablePath >>= canonicalizePath
+    -- The launcher names its GHC; a compiled script's own path is not it.
+    interpreter <- lookupEnv "BLUEHS_GHC" >>= maybe getExecutablePath pure >>= canonicalizePath
     let packageTool = takeDirectory interpreter </> "ghc-pkg"
     envText <- readFile environment
     let envLines = map words (lines envText)

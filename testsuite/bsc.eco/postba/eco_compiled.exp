@@ -1,0 +1,66 @@
+# Compiled scripts: the public example flow run interpreted and with
+# BLUEHS_COMPILE=1 (a cache under the test root), whose flow results, search
+# artifacts, finish outputs and branch replay must be byte-identical; and the
+# launcher's --compile-to and --run modes on the pool test.
+namespace eval eco_compiled {
+ set here [file dirname [file normalize [info script]]]
+ set bluehs [which bluehs]
+ if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+ set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+ if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+ set yosys [which yosys]
+ if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+ set sourceFlag "-i[file join $sdk lib]"
+ if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]] || $yosys == 0 || ![file executable $yosys]} {
+  unsupported "ECO compiled: matched bluehs/Yosys unavailable"
+ } else {
+  set root [file normalize [file join [pwd] eco-compiled-[pid]-[clock clicks]]]
+  file mkdir $root
+  set cache [file join $root cache]
+  # --compile-to then --run: the binary takes the script's own arguments
+  set log [file join $root pool.log]
+  set binary [file join $root pool-binary]
+  if {[catch {exec $bluehs --compile-to=$binary -i $sourceFlag [file join $here ASTWorkers.hs] >$log 2>@1} message] || ![file executable $binary]} {
+   fail "ECO compiled: --compile-to";set f [open $log];verbose -log [read $f] 0;close $f
+  } else {pass "ECO compiled: --compile-to"}
+  if {[file executable $binary]} {
+   if {[catch {exec $bluehs --run=$binary [file join $root pool] >$log 2>@1} message] || [catch {exec grep -q {PASS: worker pool mechanics} $log}]} {
+    fail "ECO compiled: --run";set f [open $log];verbose -log [read $f] 0;close $f
+   } else {pass "ECO compiled: --run"}
+  }
+  set example [file join $here .. .. .. util eco examples run.sh]
+  set ok 1
+  # Both runs use the same output path, so receipts binding path-dependent files compare too.
+  foreach {name compiled} {interpreted {} compiled 1} {
+   set out [file join $root run]
+   set log [file join $root "$name.log"]
+   set command [list env -u ECO_WORKERS]
+   if {$compiled eq {}} {lappend command -u BLUEHS_COMPILE} else {lappend command BLUEHS_COMPILE=1 BLUEHS_CACHE=$cache}
+   lappend command bash $example [which_bsc] $bluehs $sdk $yosys $::env(BLUESPECDIR) $out
+   if {[catch {exec {*}$command >$log 2>@1} message]} {
+    fail "ECO compiled: example flow $name";set f [open $log];verbose -log [read $f] 0;close $f;set ok 0
+   } else {pass "ECO compiled: example flow $name"}
+   file rename $out [file join $root $name]
+  }
+  if {$ok} {
+   set a [file join $root interpreted];set b [file join $root compiled]
+   set same 1;set compared 0
+   set files [list [file join flow mkFanoutLoss.v] [file join flow summary.txt]]
+   foreach dir [list [file join flow ordinary-search] finished replayed-branch replayed-flow] {
+    if {![file isdirectory [file join $a $dir]]} continue
+    foreach fa [exec find [file join $a $dir] -type f] {lappend files [string range $fa [expr {[string length $a] + 1}] end]}
+   }
+   foreach f $files {
+    if {[string match *.outcome $f] || [string match *.log $f]} continue
+    if {[lsearch -exact {finish-order.report receipt.json report.json upstream-qualification.json} [file tail $f]] >= 0} continue
+    set fa [file join $a $f];set fb [file join $b $f]
+    if {![file isfile $fa]} continue
+    incr compared
+    if {![file exists $fb] || [catch {exec cmp -s $fa $fb}]} {set same 0;verbose -log "differs: $fa" 0}
+   }
+   if {$same && $compared > 0} {pass "ECO compiled: interpreted and compiled outputs byte-identical"} else {fail "ECO compiled: interpreted and compiled outputs byte-identical"}
+   set binaries [glob -nocomplain -directory $cache -types f */*/bin]
+   if {[llength $binaries] > 0} {pass "ECO compiled: the flow's scripts ran compiled ([llength $binaries] binaries)"} else {fail "ECO compiled: the flow's scripts ran compiled"}
+  }
+ }
+}
