@@ -2,7 +2,7 @@
 -- not infer a functional invariant or change any CURRENT fanin or state.
 module ECOASTInactive(inactiveProvider,inactiveCandidates) where
 import Verilog
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform(ASTCandidate(..))
 import ECOASTPreservation
 import qualified Data.Generics as G
@@ -19,7 +19,7 @@ flat=concatMap f where
 assigned x=[name n|VMAssign(VLId n)_<-flat[x]]
 safeComments x=not(any(\c->any(`isInfixOf`map toLower c)["pragma","synthesis","synopsys","attribute","translate_","`","(*"])
  [c|VMComment cs _<-G.listify(const True)x,c<-cs])
-inactiveProvider = CandidateProvider ["F22Inactive"] [] $ \_ fs budget old current->
+inactiveProvider = candidateProvider ["F22Inactive"] [] $ \_ fs budget old current->
  if "F22Inactive"`elem`fs then take budget(inactiveCandidates old current)else[]
 inactiveCandidates oldProgram@(VProgram[old]_ _) current@(VProgram[new]ds cs)
  |not(directiveFree oldProgram&&directiveFree current)=[]

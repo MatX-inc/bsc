@@ -3,7 +3,7 @@
 -- definition while preserving every CURRENT declaration, consumer and value.
 module ECOASTAliasOrientation(aliasOrientationProvider,aliasOrientationCandidates) where
 import Verilog
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform(ASTCandidate(..),expressionWidth)
 import ECOASTPreservation(directiveFree,transparentFlat,mapTransparent)
 import qualified Data.Generics as G
@@ -95,5 +95,5 @@ aliasOrientationCandidates budget oldP@(VProgram[old]_ _) current@(VProgram[now]
 aliasOrientationCandidates _ _ _=[]
 
 aliasOrientationProvider :: CandidateProvider
-aliasOrientationProvider=CandidateProvider["AliasOrientation"][__FILE__]$ \_ features budget old current->
+aliasOrientationProvider=candidateProvider["AliasOrientation"][__FILE__]$ \_ features budget old current->
  if "AliasOrientation" `elem` features then aliasOrientationCandidates budget old current else[]

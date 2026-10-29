@@ -1,6 +1,7 @@
-# Candidate evaluation in worker processes: the pool mechanics, then the public
-# example flow run sequentially and with ECO_WORKERS=3, whose flow results and
-# search artifacts must be byte-identical.
+# Proposal generation and candidate evaluation in worker processes: the pool
+# mechanics, then the public example flow run sequentially and with
+# ECO_WORKERS=3, whose flow results, search artifacts, finish outputs and
+# branch replay must be byte-identical.
 namespace eval eco_workers {
  set here [file dirname [file normalize [info script]]]
  set bluehs [which bluehs]
@@ -22,8 +23,9 @@ namespace eval eco_workers {
   } else {pass "ECO workers: pool mechanics"}
   set example [file join $here .. .. .. util eco examples run.sh]
   set ok 1
+  # Both runs use the same output path, so receipts binding path-dependent files compare too.
   foreach {name workers} {sequential {} workers 3} {
-   set out [file join $root $name]
+   set out [file join $root run]
    set log [file join $root "$name.log"]
    set command [list env]
    if {$workers eq {}} {lappend command -u ECO_WORKERS} else {lappend command ECO_WORKERS=$workers}
@@ -31,22 +33,33 @@ namespace eval eco_workers {
    if {[catch {exec {*}$command >$log 2>@1} message]} {
     fail "ECO workers: example flow $name";set f [open $log];verbose -log [read $f] 0;close $f;set ok 0
    } else {pass "ECO workers: example flow $name"}
+   file rename $out [file join $root $name]
   }
   if {$ok} {
-   set a [file join $root sequential flow];set b [file join $root workers flow]
+   set a [file join $root sequential];set b [file join $root workers]
    set same 1;set compared 0
-   foreach f [concat [list mkFanoutLoss.v summary.txt] [glob -nocomplain -directory [file join $a ordinary-search] -tails *]] {
-    if {[string match *.outcome $f]} continue
-    set fa [file join $a $f];if {![file isfile $fa]} {set fa [file join $a ordinary-search $f]}
-    set fb [file join $b [string range $fa [expr {[string length $a] + 1}] end]]
+   # every file the search, finish and branch replay produced, except the
+   # receipts that bind the native captures (which bsc names per run)
+   set files [list [file join flow mkFanoutLoss.v] [file join flow summary.txt]]
+   foreach dir [list [file join flow ordinary-search] finished replayed-branch replayed-flow] {
+    if {![file isdirectory [file join $a $dir]]} continue
+    foreach fa [exec find [file join $a $dir] -type f] {lappend files [string range $fa [expr {[string length $a] + 1}] end]}
+   }
+   foreach f $files {
+    if {[string match *.outcome $f] || [string match *.log $f]} continue
+    if {[lsearch -exact {finish-order.report receipt.json report.json upstream-qualification.json} [file tail $f]] >= 0} continue
+    set fa [file join $a $f];set fb [file join $b $f]
     if {![file isfile $fa]} continue
     incr compared
     if {![file exists $fb] || [catch {exec cmp -s $fa $fb}]} {set same 0;verbose -log "differs: $fa" 0}
    }
-   if {$same && $compared > 0} {pass "ECO workers: flow results and search artifacts byte-identical"} else {fail "ECO workers: flow results and search artifacts byte-identical"}
-   set candidates [glob -nocomplain -directory [file join $a ordinary-search] candidate-*.ast]
-   set records [glob -nocomplain -directory [file join $b ordinary-search] *.outcome]
-   if {[llength $candidates] == 0 || [llength $records] > 0} {pass "ECO workers: worker processes evaluated the candidates"} else {fail "ECO workers: worker processes evaluated the candidates"}
+   if {$same && $compared > 0} {pass "ECO workers: search, finish and replay outputs byte-identical"} else {fail "ECO workers: search, finish and replay outputs byte-identical"}
+   set candidates [glob -nocomplain -directory [file join $a flow ordinary-search] candidate-*.ast]
+   set records [glob -nocomplain -directory [file join $b flow ordinary-search] *.outcome]
+   set proposals [glob -nocomplain -directory [file join $b flow ordinary-search proposals] -type d *]
+   set leftovers [list]
+   foreach round $proposals {foreach f [glob -nocomplain -directory $round *] {if {![string match *.outcome $f]} {lappend leftovers $f}}}
+   if {[llength $candidates] == 0 || ([llength $records] > 0 && [llength $proposals] > 0 && [llength $leftovers] == 0)} {pass "ECO workers: worker processes proposed and evaluated the candidates"} else {fail "ECO workers: worker processes proposed and evaluated the candidates"}
   }
  }
 }

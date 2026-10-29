@@ -3,7 +3,7 @@
 -- logic. Every result still passes the ordinary independent semantic gate.
 module ECOASTLiveShell(liveShellProvider,liveShellCandidates,projectLiveShell) where
 import Verilog
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform(ASTCandidate(..))
 import ECOASTShell(shellCandidates)
 import ECOASTPreservation(directiveFree)
@@ -94,6 +94,6 @@ liveShellCandidates old current
      ("proof","required independently against CURRENT")])]}
 
 liveShellProvider :: CandidateProvider
-liveShellProvider=CandidateProvider["LiveShell"]
+liveShellProvider=candidateProvider["LiveShell"]
  [__FILE__,takeDirectory __FILE__ </> "ECOASTShell.hs"] $ \_ features budget old current->
  if "LiveShell" `elem` features then take(max 0 budget)(liveShellCandidates old current)else[]

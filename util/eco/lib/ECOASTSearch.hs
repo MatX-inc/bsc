@@ -5,9 +5,11 @@ module ECOASTSearch
     ( SearchOptions(..), SearchResult(..), ASTPlan(..), ASTStep(..), LineCost(..)
     , ProofRunner, defaultSearchOptions, SearchInput(..), SearchRequest(..)
     , defaultSearchRequest, searchWorkersFromEnvironment, optimizeAST
-    , Job(..), Evaluation(..), evaluateJobs
-    , CandidateGenerator, CandidateProvider(..), defaultCandidateProvider
-    , combineCandidateProviders, CostProvider(..), wholeFileCostProvider
+    , Job(..), Evaluation(..), evaluateJobs, runJobs
+    , CandidateGenerator, CandidateProvider(..), ProposalOrder(..), candidateProvider
+    , defaultCandidateProvider, combineCandidateProviders, combineCandidateProvidersWith
+    , Proposal(..), proposalLeaves, assembleProposals
+    , CostProvider(..), wholeFileCostProvider
     , replayASTPlanWithCost
     , replayASTPlan, replayASTPlanWith, lineCost, changedLines
     ) where
@@ -15,7 +17,7 @@ module ECOASTSearch
 import Control.Exception (IOException, SomeException, try)
 import Control.Monad (foldM, forM, forM_, unless, when)
 import qualified Data.ByteString as BS
-import Data.List (minimumBy, nub)
+import Data.List (minimumBy, nub, transpose)
 import qualified Data.Map as M
 import Data.Ord (comparing)
 import qualified Data.Set as S
@@ -122,24 +124,71 @@ defaultProof options directory alpha contracts =
 -- The generator receives active contracts, enabled feature names, a proposal
 -- budget, OLD, and CURRENT. It only proposes: the runner owns proof and replay.
 type CandidateGenerator = [ASTContract] -> [String] -> Int -> VProgram -> VProgram -> [ASTCandidate]
+-- A provider is one rule family (no parts) or a combination that generates
+-- through its parts and merges their proposals in cpOrder. Search may run the
+-- families in worker processes and merge what they proposed the same way, so
+-- where a family ran never changes what is proposed or in which order.
 data CandidateProvider = CandidateProvider
     { cpFeatures :: [String], cpSources :: [FilePath]
     , cpGenerate :: CandidateGenerator
+    , cpParts :: [CandidateProvider], cpOrder :: ProposalOrder
     }
+-- Priority takes every proposal of a part before the next part's; balanced
+-- gives each part a turn before taking any part's second proposal.
+data ProposalOrder = PriorityOrder | BalancedOrder deriving (Eq,Show)
+
+mergeProposals :: ProposalOrder -> [[a]] -> [a]
+mergeProposals PriorityOrder = concat
+mergeProposals BalancedOrder = concat . transpose
+
+-- One rule family.
+candidateProvider :: [String] -> [FilePath] -> CandidateGenerator -> CandidateProvider
+candidateProvider features sources generate = CandidateProvider features sources generate [] PriorityOrder
 
 defaultCandidateProvider :: CandidateProvider
-defaultCandidateProvider = CandidateProvider (soFeatures defaultSearchOptions) []
+defaultCandidateProvider = candidateProvider (soFeatures defaultSearchOptions) []
     generateASTCandidatesWithContracts
 
 -- The caller chooses ordering (and therefore budget priority). Duplicate
 -- feature registrations are rejected by search rather than silently shadowed.
 combineCandidateProviders :: [CandidateProvider] -> CandidateProvider
-combineCandidateProviders providers = CandidateProvider
-    (concatMap cpFeatures providers) (nub (concatMap cpSources providers)) $ \contracts features budget old current ->
-      take budget $ concat
-        [cpGenerate provider contracts enabled budget old current |
-         provider <- providers, let enabled=filter (`elem` cpFeatures provider) features,
-         not (null enabled)]
+combineCandidateProviders = combineCandidateProvidersWith PriorityOrder
+
+combineCandidateProvidersWith :: ProposalOrder -> [CandidateProvider] -> CandidateProvider
+combineCandidateProvidersWith order providers = combined
+  where
+    combined = CandidateProvider (concatMap cpFeatures providers) (nub (concatMap cpSources providers))
+                   generate providers order
+    generate contracts features budget old current = assembleProposals budget features combined
+        [take budget (cpGenerate family contracts enabled budget old current)
+        | (family,enabled) <- proposalLeaves features combined]
+
+-- The parts that take part in a generation, each with the features it sees.
+enabledParts :: [String] -> [CandidateProvider] -> [(CandidateProvider,[String])]
+enabledParts features providers =
+    [(part,enabled) | part <- providers, let enabled = filter (`elem` cpFeatures part) features, not (null enabled)]
+
+-- The rule families a generation runs, in the provider's order, each with the
+-- features it sees; and the merge that turns their proposal lists (each cut
+-- to the budget) back into the provider's proposal list.
+proposalLeaves :: [String] -> CandidateProvider -> [(CandidateProvider,[String])]
+proposalLeaves features provider
+  | null (cpParts provider) = [(provider,features)]
+  | otherwise = concat [proposalLeaves enabled part | (part,enabled) <- enabledParts features (cpParts provider)]
+
+assembleProposals :: Int -> [String] -> CandidateProvider -> [[a]] -> [a]
+assembleProposals budget features provider lists = case assemble features provider lists of
+    (proposals,[]) -> proposals
+    _ -> error "ECO AST search: more proposal lists than rule families"
+  where
+    assemble fs p ls
+      | null (cpParts p) = case ls of
+          (l:rest) -> (take budget l,rest)
+          [] -> error "ECO AST search: fewer proposal lists than rule families"
+      | otherwise =
+          let step (merged,rest) (part,enabled) = let (l,rest') = assemble enabled part rest in (merged ++ [l],rest')
+              (parts,remaining) = foldl step ([],ls) (enabledParts fs (cpParts p))
+          in (take budget (mergeProposals (cpOrder p) parts),remaining)
 
 require :: Bool -> String -> IO ()
 require yes message = unless yes (ioError (userError ("ECO AST search: " ++ message)))
@@ -245,45 +294,99 @@ optimizeAST request = do
       | n > soRounds options = return (current,cost,score,plan,scores,"round-limit")
       | otherwise = do
           let activeContracts = if "F01" `elem` soFeatures options then renameASTContracts renames contracts else contracts
-              generated = take (soCandidates options+1) $
-                cpGenerate provider activeContracts (soFeatures options) (soCandidates options+1) old current
-              limited = length generated > soCandidates options
-          -- Admission stays sequential: it writes each candidate's AST and
+              budget = soCandidates options+1
+          (proposals,cleanup) <- propose n activeContracts budget current
+          let limited = length proposals > soCandidates options
+          -- Admission stays sequential: it places each candidate's AST and
           -- dedupes proof keys in proposal order, so which candidates get
-          -- evaluated never depends on how they are evaluated.
+          -- evaluated never depends on how or where they were proposed.
           (_,admitted,visited') <- foldM (admitCandidate n (planOutput plan))
-              (0 :: Int,[],visited) (take (soCandidates options) generated)
+              (0 :: Int,[],visited) (take (soCandidates options) proposals)
           outcomes <- evaluateJobs (searchWorkers request) (evaluateCandidate costContext prove current score) (reverse admitted)
-          let accepted = [((changedLines (costValue nextScore),size,jobHash job),jobCandidate job,nextCost,nextScore,jobHash job)
+          let accepted = [((changedLines (costValue nextScore),size,jobHash job),job,nextCost,nextScore)
                          | (job,Evaluated nextCost nextScore size True) <- outcomes]
-          case accepted of
-            [] -> return (current,cost,score,plan,scores,if limited then "candidate-limit" else "no-improving-proved-candidate")
+          chosen <- case accepted of
+            [] -> return Nothing
             _ -> do
-              let (_,candidate,nextCost,nextScore,h) = minimumBy (comparing (\(rank,_,_,_,_) -> rank)) accepted
+              let (_,job,nextCost,nextScore) = minimumBy (comparing (\(rank,_,_,_) -> rank)) accepted
+              candidate <- jobCandidate job
+              return (Just (job,candidate,nextCost,nextScore))
+          cleanup
+          case chosen of
+            Nothing -> return (current,cost,score,plan,scores,if limited then "candidate-limit" else "no-improving-proved-candidate")
+            Just (job,candidate,nextCost,nextScore) -> do
               plan' <- save (planOutput plan) (acProgram candidate) cost nextCost plan candidate (acStateMap candidate)
-              require (planOutput plan' == h) "candidate AST changed during proof"
+              require (planOutput plan' == jobHash job) "candidate AST changed during proof"
               rounds costContext prove save (n+1) (acProgram candidate) nextCost nextScore plan' (scores++[nextScore]) visited'
-    admitCandidate roundNumber referenceHash (index,admitted,visited) candidate = do
-        let label = "candidate-" ++ show roundNumber ++ "-" ++ show index
+    -- A round's proposals: the provider's generator in this process, or each
+    -- rule family in a worker process with the proposals merged in the
+    -- provider's order. Either way the list is what the generator returns.
+    -- A family's proposals come back as records; their programs stay in the
+    -- artifacts the family wrote, which admission moves under the round's
+    -- labels and whoever needs the program reads.
+    propose roundNumber activeContracts budget current
+      | searchWorkers request <= 1 = return
+          ([Proposed (describe candidate) (const (return candidate))
+           | candidate <- take budget (cpGenerate provider activeContracts (soFeatures options) budget old current)]
+          ,return ())
+      | otherwise = do
+          let scratch = directory </> "proposals" </> ("round-" ++ show roundNumber)
+              families = [Family index family enabled (scratch </> ("family-" ++ show index))
+                         | (index,(family,enabled)) <- zip [0 :: Int ..] (proposalLeaves (soFeatures options) provider)]
+          createDirectoryIfMissing True scratch
+          results <- runJobs (searchWorkers request) familyLabel familyBase (proposeFamily activeContracts budget current) families
+          let proposals = assembleProposals budget (soFeatures options) provider (map snd results)
+              cleanup = do
+                  -- The records stay as evidence of what each family proposed;
+                  -- the artifacts were either moved under round labels or are
+                  -- no longer needed.
+                  leftovers <- listDirectory scratch
+                  forM_ [scratch </> f | f <- leftovers, takeExtension f /= ".outcome"] removeFile
+          return ([Proposed record (loadProposal record) | record <- proposals],cleanup)
+    proposeFamily activeContracts budget current family =
+        forM (zip [0 :: Int ..] (take budget (cpGenerate (familyProvider family) activeContracts (familyEnabled family) budget old current))) $
+          \(index,candidate) -> do
+            let base = familyBase family ++ "-" ++ show index
+            h <- writeAST (base ++ ".ast") (acProgram candidate)
+            writeASTContracts (base ++ ".contracts") (acContracts candidate)
+            return (describe candidate) { ppArtifact = Just (base ++ ".ast",base ++ ".contracts",h) }
+    describe candidate = Proposal (acFeature candidate) (acDescription candidate) (acOperations candidate)
+        (acBinaryOnly candidate) (acStateMap candidate) (show (acContracts candidate))
+        (samePorts ordinary (acProgram candidate)) Nothing
+    loadProposal record path = case ppArtifact record of
+        Nothing -> ioError (userError "ECO AST search: a proposal record names no artifact")
+        Just (_,contractPath,_) -> do
+            bytes <- BS.readFile path
+            obligations <- readASTContracts contractPath
+            return (ASTCandidate (ppFeature record) (ppDescription record) (decode bytes) (ppOperations record)
+                                 (ppBinaryOnly record) (ppStateMap record) obligations)
+    admitCandidate roundNumber referenceHash (index,admitted,visited) proposed = do
+        let record = prRecord proposed
+            label = "candidate-" ++ show roundNumber ++ "-" ++ show index
             base = directory </> label
-            program = acProgram candidate
-        require (acFeature candidate `elem` soFeatures options) "provider emitted a disabled or unregistered feature"
-        if (soDomain options == StrictFourState && acBinaryOnly candidate) || not (samePorts ordinary program)
+        require (ppFeature record `elem` soFeatures options) "provider emitted a disabled or unregistered feature"
+        if (soDomain options == StrictFourState && ppBinaryOnly record) || not (ppSamePorts record)
           then return (index+1,admitted,visited)
           else do
-            h <- writeAST (base ++ ".ast") program
+            h <- place proposed (base ++ ".ast")
             -- Proof failures belong to a reference/candidate/certificate
             -- combination, not to the candidate AST alone. Another rule can
             -- propose the same AST with a valid state relation or obligation.
-            let proofKey=(referenceHash,h,acStateMap candidate,show (acContracts candidate))
+            let proofKey=(referenceHash,h,ppStateMap record,ppContractKey record)
             if proofKey `S.member` visited then return (index+1,admitted,visited) else
-              return (index+1,Job label base candidate h:admitted,S.insert proofKey visited)
+              return (index+1,Job label base (prCandidate proposed (base ++ ".ast")) h:admitted,S.insert proofKey visited)
+    -- The candidate's AST under its round label: written now, or moved from
+    -- where its rule family wrote it (the same bytes, so the same hash).
+    place proposed path = case ppArtifact (prRecord proposed) of
+        Nothing -> prCandidate proposed path >>= writeAST path . acProgram
+        Just (programPath,_,h) -> renameFile programPath path >> return h
     -- The expensive part of one candidate: render, score, prove. Everything it
     -- makes is a file under the search directory, so it runs unchanged in a
     -- worker process, and the outcome record is all that comes back.
     evaluateCandidate costContext prove current score job = do
-        let Job label base candidate _ = job
-            program = acProgram candidate
+        let Job label base _ _ = job
+        candidate <- jobCandidate job
+        let program = acProgram candidate
         writeFile (base ++ ".v") (render program)
         nextCost <- lineCost (directory </> "old.v") (base ++ ".v")
         nextScore <- scoreCost costContext objective label program
@@ -297,38 +400,61 @@ optimizeAST request = do
               size <- getFileSize (directory </> costWitness nextScore)
               return (Evaluated nextCost nextScore size (proofPassed proof))
 
--- One admitted candidate of a round, in proposal order.
-data Job = Job { jobLabel :: String, jobBase :: FilePath, jobCandidate :: ASTCandidate, jobHash :: String }
+-- What a rule family reports about one proposal: everything admission and
+-- selection need except the program. When the family ran in a worker process
+-- the program and the obligations are in the artifacts it wrote (program,
+-- contracts, program hash).
+data Proposal = Proposal
+    { ppFeature :: String, ppDescription :: String, ppOperations :: [(String,[(String,String)])]
+    , ppBinaryOnly :: Bool, ppStateMap :: [(String,String)], ppContractKey :: String
+    , ppSamePorts :: Bool, ppArtifact :: Maybe (FilePath,FilePath,String)
+    } deriving (Read,Show)
+
+-- A proposal awaiting admission, and the candidate itself given the path its
+-- program ends up under.
+data Proposed = Proposed { prRecord :: Proposal, prCandidate :: FilePath -> IO ASTCandidate }
+
+-- One rule family's share of a round's generation.
+data Family = Family { familyIndex :: Int, familyProvider :: CandidateProvider, familyEnabled :: [String], familyBase :: FilePath }
+familyLabel :: Family -> String
+familyLabel family = "family-" ++ show (familyIndex family)
+
+-- One admitted candidate of a round, in proposal order. The candidate is read
+-- by whoever evaluates it, or by the round when it is the one accepted.
+data Job = Job { jobLabel :: String, jobBase :: FilePath, jobCandidate :: IO ASTCandidate, jobHash :: String }
 
 -- What evaluating a candidate produced: exactly the data the round's selection
 -- needs. Proof details and witnesses stay on disk, where the sequential loop
 -- also leaves them.
-data Evaluation = NotImproved | Rejected | Evaluated LineCost CostObservation Integer Bool | Failed String
+data Evaluation = NotImproved | Rejected | Evaluated LineCost CostObservation Integer Bool
     deriving (Read, Show)
 
--- Evaluate a round's admitted candidates, in worker processes when asked for.
--- The workers are forked after admission, so each inherits the loaded programs
--- and cost context without reloading anything. A worker takes job indices from
--- its own pipe, writes the candidate's files and a one-line outcome record, and
--- reports the index on the shared completion pipe; the parent hands the next
--- job to whichever worker finished, so uneven proof times balance out.
--- Outcomes come back in job order and selection is unchanged, so the result
--- is byte-identical to the sequential loop. No AST crosses a process boundary.
 evaluateJobs :: Int -> (Job -> IO Evaluation) -> [Job] -> IO [(Job,Evaluation)]
-evaluateJobs workers evaluate jobs
-  | workers <= 1 || null jobs = mapM (\job -> (,) job <$> evaluate job) jobs
+evaluateJobs workers = runJobs workers jobLabel jobBase
+
+-- Run a round's jobs, in worker processes when asked for. The workers are
+-- forked when the jobs are known, so each inherits the loaded programs and
+-- cost context without reloading anything. A worker takes job indices from
+-- its own pipe, does the job, writes its result as a one-line record next to
+-- the job's base path and reports the index on the shared completion pipe;
+-- the parent hands the next job to whichever worker finished, so uneven job
+-- times balance out. Results come back in job order, so a caller sees what
+-- the sequential loop would have seen. No AST crosses a process boundary.
+-- A job that throws stops the caller with its message, as it would have in
+-- the sequential loop.
+runJobs :: (Read r, Show r) => Int -> (job -> String) -> (job -> FilePath) -> (job -> IO r) -> [job] -> IO [(job,r)]
+runJobs workers label base run jobs
+  | workers <= 1 || null jobs = mapM (\job -> (,) job <$> run job) jobs
   | otherwise = do
       hFlush stdout >> hFlush stderr
       let indexed = zip [0 :: Int ..] jobs
           count = min workers (length jobs)
-          outcomePath job = jobBase job ++ ".outcome"
+          recordPath job = base job ++ ".outcome"
           -- Whatever happens to a job, its index is reported, so the parent
-          -- never waits for a worker that failed: the failure becomes a Failed
-          -- record and stops the search with its message, as an uncaught
-          -- exception would have in the sequential loop.
-          attempt job = do
-              result <- try (evaluate job) :: IO (Either SomeException Evaluation)
-              return (either (Failed . show) id result)
+          -- never waits for a worker that failed.
+          attempt job = either (Left . message) Right <$> try (run job)
+          message :: SomeException -> String
+          message = show
       (doneRead,doneWrite) <- createPipe
       pool <- forM [1..count] $ \_ -> do
           (jobRead,jobWrite) <- createPipe
@@ -343,7 +469,7 @@ evaluateJobs workers evaluate jobs
                       index <- read <$> hGetLine input
                       let job = jobs !! index
                       outcome <- attempt job
-                      written <- try (writeFile (outcomePath job) (show outcome ++ "\n")) :: IO (Either SomeException ())
+                      written <- try (writeFile (recordPath job) (show outcome ++ "\n")) :: IO (Either SomeException ())
                       hPutStrLn done (either (const "-1") (const (show index)) written)
                       loop
               loop
@@ -358,25 +484,25 @@ evaluateJobs workers evaluate jobs
       let feedJob (_,feed) index = hPutStrLn feed (show index)
           (first,rest) = splitAt count indexed
       forM_ (zip pool first) $ \(w,(index,_)) -> feedJob w index
-      let run owner pending inflight
+      let go owner pending inflight
             | inflight == (0 :: Int) = return ()
             | otherwise = do
                 finished <- read <$> hGetLine done
-                when (finished < 0) $ ioError (userError "ECO AST search: a worker could not record a candidate outcome")
+                when (finished < 0) $ ioError (userError "ECO AST search: a worker could not record a job outcome")
                 let w = owner M.! finished
                 case pending of
-                  (index,_):more -> feedJob w index >> run (M.insert index w (M.delete finished owner)) more inflight
-                  [] -> run (M.delete finished owner) [] (inflight-1)
-      run (M.fromList [(index,w) | (w,(index,_)) <- zip pool first]) rest (length first)
+                  (index,_):more -> feedJob w index >> go (M.insert index w (M.delete finished owner)) more inflight
+                  [] -> go (M.delete finished owner) [] (inflight-1)
+      go (M.fromList [(index,w) | (w,(index,_)) <- zip pool first]) rest (length first)
       forM_ pool $ \(_,feed) -> hClose feed
       forM_ pool $ \(pid,_) -> getProcessStatus True False pid
       hClose done
       forM indexed $ \(_,job) -> do
-          text <- readFile (outcomePath job)
-          outcome <- maybe (ioError (userError ("ECO AST search: unreadable outcome record for " ++ jobLabel job))) return (readMaybe text)
+          text <- readFile (recordPath job)
+          outcome <- maybe (ioError (userError ("ECO AST search: unreadable outcome record for " ++ label job))) return (readMaybe text)
           case outcome of
-            Failed message -> ioError (userError ("ECO AST search: " ++ jobLabel job ++ ": " ++ message))
-            _ -> return (job,outcome)
+            Left message -> ioError (userError ("ECO AST search: " ++ label job ++ ": " ++ message))
+            Right result -> return (job,result)
 
 -- Saved candidates are untrusted. Bind every artifact and rerun the complete
 -- proof chain; a stored receipt never authorizes replay by itself.

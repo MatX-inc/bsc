@@ -9,7 +9,6 @@ import ECOASTHelperReuse(helperReuseProvider)
 import ECOASTLiveAliases(liveAliasProvider)
 import ECOASTLiveShell(liveShellProvider)
 import ECOASTAliasOrientation(aliasOrientationProvider)
-import Data.List(transpose)
 import ECOASTVacancy(vacancyProvider)
 import ECOASTStateView(stateViewProvider)
 import System.FilePath((</>),takeDirectory)
@@ -38,9 +37,4 @@ enableStandardRefinements options=options{soFeatures=prior++[f|f<-extras,f `notE
 -- retains its explicit caller-priority behavior. The total budget still bounds
 -- emitted proposals, and an undersized budget cannot cover every family.
 balancedCandidateProviders :: [CandidateProvider] -> CandidateProvider
-balancedCandidateProviders providers=combined{cpGenerate=generate}
- where
- combined=combineCandidateProviders providers
- generate contracts features budget old current=take (max 0 budget) $ concat $ transpose
-  [cpGenerate provider contracts enabled budget old current | provider<-providers,
-   let enabled=filter (`elem`cpFeatures provider) features,not(null enabled)]
+balancedCandidateProviders=combineCandidateProvidersWith BalancedOrder

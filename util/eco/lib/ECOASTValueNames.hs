@@ -3,7 +3,7 @@
 module ECOASTValueNames
   ( valueNamesProvider, valueNamesAudit, ValueNamesAudit(..), renameValues ) where
 import Verilog
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform(ASTCandidate(..),generateASTCandidates,expressionWidth)
 import ECOASTPreservation(directiveFree)
 import qualified Data.Generics as G
@@ -126,7 +126,7 @@ evidence _ _=Left "exactly one module required"
 valueNamesAudit old current=case evidence old current of
  Left why->ValueNamesAudit[][why]
  Right(pairs,_)->ValueNamesAudit pairs[]
-valueNamesProvider=CandidateProvider["ValueNames","ValueNamesLayout"][] generate where
+valueNamesProvider=candidateProvider["ValueNames","ValueNamesLayout"][] generate where
  generate _ features budget old current
   | "ValueNames" `notElem`features=[]
   | otherwise=case evidence old current of

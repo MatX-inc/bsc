@@ -55,12 +55,12 @@ main=do
   [out,self]<-getArgs
   createDirectoryIfMissing True out
   before<-fileIdentity self
-  let provider=CandidateProvider [feature] [self] generate
+  let provider=candidateProvider [feature] [self] generate
       options=defaultSearchOptions {soDomain=StrictFourState,soFeatures=[feature]}
       request opts label=defaultSearchRequest opts (out</>label)
         (SearchInput old pp80) (SearchInput new pp80)
       run label p=optimizeAST (request options label) {searchProvider=p}
-      proposed label candidate=CandidateProvider [feature] [self]
+      proposed label candidate=candidateProvider [feature] [self]
         (\_ _ budget _ _->take budget [candidate {acFeature=label}])
       candidate=ASTCandidate feature "external proposal" expected [] False [] []
   baseline<-optimizeAST (request (options {soFeatures=[]}) "baseline")
@@ -88,12 +88,12 @@ main=do
     (run "duplicate" (combineCandidateProviders [provider,provider]))
   combined<-run "combined" (combineCandidateProviders [provider,defaultCandidateProvider])
   check "external provider composes with bundled rules" (srProgram combined==expected)
-  let alternativeCertificates=CandidateProvider [feature] [self] $ \_ _ budget _ _->
+  let alternativeCertificates=candidateProvider [feature] [self] $ \_ _ budget _ _->
         take budget [candidate {acStateMap=[("missing-reference","a")]},candidate]
   certified<-run "alternative-certificates" alternativeCertificates
   check "failed certificate cannot hide identical AST with valid certificate"
     (srProgram certified==expected)
-  let alternativeObligations=CandidateProvider [feature] [self] $ \_ _ budget _ _->
+  let alternativeObligations=candidateProvider [feature] [self] $ \_ _ budget _ _->
         take budget [candidate {acContracts=[AssertCombinational "invalid-obligation" (VEWConst defaultVId 1 10 0)]},candidate]
   discharged<-run "alternative-obligations" alternativeObligations
   check "failed obligation cannot hide identical AST without that obligation"

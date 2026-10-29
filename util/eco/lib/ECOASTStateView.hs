@@ -8,7 +8,7 @@ module ECOASTStateView
 import Verilog
 import VLocalNames(mapRenameableVIds)
 import ECOASTPreservation(directiveFree,transparentFlat)
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform(ASTCandidate(..))
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
@@ -185,7 +185,7 @@ propose budget old new=(audit,take(max 0 budget)eligible) where
  flatPacking x=[x]
 
 stateViewProvider :: CandidateProvider
-stateViewProvider=CandidateProvider ["F23"] [] $ \_ features budget (VProgram olds _ _) (VProgram currents ds cs)->
+stateViewProvider=candidateProvider ["F23"] [] $ \_ features budget (VProgram olds _ _) (VProgram currents ds cs)->
  if "F23" `notElem` features then [] else take budget
   [ASTCandidate "F23" "Reuse a vacant historical state name for an existing aggregate view"
    (VProgram(take i currents++[svModule p]++drop(i+1)currents)ds cs)

@@ -28,7 +28,7 @@ reject s action=do
 runner opts dir alpha cs=runASTProofWithContracts[][]cs(soYosys opts)(soProofSeconds opts)dir(soDomain opts)alpha
 translated sources=CostProvider "test-translated-normalized-v1" sources render render
  where render p=normalizeProgram.fst <$> projectTranslatedProgram p
-provider candidate alpha=CandidateProvider ["FObjective"] [] $ \_ _ _ _ current ->
+provider candidate alpha=candidateProvider ["FObjective"] [] $ \_ _ _ _ current ->
  if current==candidate then [] else [ASTCandidate"FObjective""directed native AST candidate"candidate[]False alpha []]
 main=do
  [out]<-getArgs

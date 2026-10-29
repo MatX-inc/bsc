@@ -5,7 +5,7 @@ module ECOASTDeclarationOrder
  (declarationOrderCandidates,declarationOrderProvider,declarationOrderOnly,declarationOrderReason) where
 import Verilog
 import ECOASTTransform(ASTCandidate(..))
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTPreservation(directiveFree)
 import qualified Data.Map.Strict as M
 import Data.List(sort,sortOn)
@@ -105,5 +105,5 @@ declarationOrderReason oldP@(VProgram[old]_ _)current@(VProgram[now]_ _)
 declarationOrderReason _ _="unsupported module cardinality"
 
 declarationOrderProvider :: CandidateProvider
-declarationOrderProvider=CandidateProvider["DeclarationOrder"][__FILE__]$ \_ features budget old current->
+declarationOrderProvider=candidateProvider["DeclarationOrder"][__FILE__]$ \_ features budget old current->
  if "DeclarationOrder" `elem`features then declarationOrderCandidates budget old current else[]

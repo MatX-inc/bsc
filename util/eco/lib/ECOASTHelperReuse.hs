@@ -4,7 +4,7 @@
 module ECOASTHelperReuse(HelperReuseCandidate(..),helperReuseCandidates,helperReuseProvider) where
 import Verilog
 import ECOASTTransform(expressionWidth)
-import ECOASTSearch(CandidateProvider(..))
+import ECOASTSearch(CandidateProvider(..),candidateProvider)
 import ECOASTTransform(ASTCandidate(..))
 import ECOASTPreservation(directiveFree,transparentFlat)
 import qualified Data.Generics as G
@@ -242,7 +242,7 @@ helperReuseCandidates _ _=Left"exactly one module required"
 -- distinct policy and is deliberately absent from this provider and its SDK.
 -- The normal search owns cost selection, full CURRENT proof and saved replay.
 helperReuseProvider :: CandidateProvider
-helperReuseProvider=CandidateProvider ["F26LiveHelpers"] [__FILE__] $ \_ features budget old current ->
+helperReuseProvider=candidateProvider ["F26LiveHelpers"] [__FILE__] $ \_ features budget old current ->
  if "F26LiveHelpers" `notElem` features then [] else case helperReuseCandidates old current of
   Left _ -> []
   Right candidates -> take budget
