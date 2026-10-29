@@ -8,4 +8,16 @@ ECOLocalRoles
 ECOMatch
 ECOAudit
 ECOASTPlan
+ECOASTIdentity
+ECOASTAliases
+ECOASTDeclarations
+ECOASTTransform
+ECOASTSearch
+ECOStructurePolicy
+ECOASTVacancy
+ECOASTPreservation
+ECOASTShell
+ECOASTInactive
+ECOASTStateView
 ECOAST
+ECOASTCost
