@@ -130,6 +130,10 @@ files whose build version stamp differs (see Caveats). `mk-dist.sh` also
 copies `cabal.project.local` when present so local build settings apply to
 the shipped libraries.
 
+The determinism ladder (`doc/cabal.md` section 7) also hashes `inst/bluehs` on
+every leg to verify that the distribution is identical across checkout paths
+and parallelism settings.
+
 Everything redistributed is covered in `inst/bluehs/LICENSES/`:
 `LICENSE.ghc` (compiler/runtime), a generated `LICENSE.ghc_pkgs` enumerating
 every shipped Haskell package with license and copyright (via
