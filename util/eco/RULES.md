@@ -47,6 +47,8 @@ each family did, not of this build.
 | AliasOrientation | `ECOASTAliasOrientation` (#250) | when CURRENT has `a = b; b = e;` and OLD had `a = e;`, propose `a = e; b = a;`: same-width unique scalar wires with explicit writers, pure expressions, no cycle; single and disjoint-pair proposals | `--refinements standard` | 1 private case | `tryCandidate` |
 | F22 | `ECOASTShell` (#247) | a historical pure combinational shell with CURRENT values at the typed consumer roles (helper declarations placed with `withDeclarations`) | `--historical-shell` only; removed by `--refinements standard` | not in the corpus preset | `tryCandidate`; the operand-order variant is binary-only |
 | F22Inactive | `ECOASTInactive` (#247) | OLD inactive constant helper definitions retained at their original declaration and assignment groups | `--inactive-helpers` only | not in the corpus preset | `tryCandidate` |
+| DeclarationOrder | `ECOASTDeclarationOrder` (#252) | historical order of intact CURRENT declaration blocks; unmatched blocks stay beside the nearest preceding matched block | the finishing stage (`finish-order.hs`) | 2 private cases | `finishDeclarationOrderFrom`: fresh proof and saved-plan replay with roots-derived runner, dual-metric acceptance |
+| JointDeclarationOrder | `ECOASTJointDeclarationOrder` (#252) | inside a surviving register group matched by unchanged state identity, class and width: unique vacant scalar-wire identities with one live continuous driver, plus internal declaration order within existing rows; the inverse rename is checked on the serialised AST | the finishing stage | 1 private case | as DeclarationOrder |
 
 ## What the families share
 

@@ -63,7 +63,8 @@ make -C testsuite eco_sdk.check eco_proof.check eco_proof_fuzz.check eco_matchin
   eco_state_view.check eco_translated_metrics.check eco_renderer.check eco_objective.check \
   eco_correspondence.check eco_pipeline_chain.check eco_helper_reuse.check \
   eco_live_aliases.check eco_live_shell.check eco_alias_orientation.check \
-  eco_binary_flow.check eco_lexical_gates.check TEST_RELEASE="$repo/inst"
+  eco_binary_flow.check eco_lexical_gates.check eco_declaration_order.check \
+  eco_finish_changed.check TEST_RELEASE="$repo/inst"
 ```
 
 A missing bluehs, SDK, Yosys or Icarus makes a group `UNSUPPORTED`, never a
@@ -211,6 +212,32 @@ core compiler writes no observation companion, so `export` reports
 `unavailable-in-capture` with zero facts unless the optional producer made
 the capture. Nothing exported ever enters a proof as an assumption.
 
+## Finish declaration order
+
+This stage and its `eco_declaration_order` group arrive with #252; the
+commands above are complete without it.
+
+```sh
+"$ECO_BLUEHS" -i "-i$ECO_SDK/lib" "$ECO_SDK/scripts/finish-order.hs" \
+  /abs/demo.config /abs/fresh-eco-output /abs/finished-eco-output
+```
+
+`finish-order.hs ROOTS.config FLOW OUT` first replays the selected flow
+freshly into `OUT` (exactly `replay.hs --flow`), then runs
+`ECOASTFinishOrder.finishDeclarationOrderFrom` on the verified program into
+`OUT/finish`: it scores the two finishing families of [RULES.md](RULES.md)
+(`DeclarationOrder`: historical order of intact CURRENT declaration blocks;
+`JointDeclarationOrder`: vacant wire identities coupled with internal order
+inside a surviving register group) with the translated raw and normalized
+metrics, tries the improving proposals in lexicographic
+(normalized, raw) order, and accepts the first one whose fresh proof and
+saved-plan replay pass; the solver, domain and timeout come from the roots.
+`OUT/finish` holds `input.ast` and `input/mkDemo.v`, one `search[-N]/` and
+`replay[-N]/` per attempt with `attempt-N.json`, `selected.ast`, `mkDemo.v`,
+`metric/`, `finish-order.report` and `receipt.json` (schema 2; `status` is
+`changed` or `unchanged` with the reason, both cost pairs and any forward
+wire map). A no-op leaves byte-identical input and output.
+
 ## Measure
 
 ```sh
@@ -276,8 +303,8 @@ saved search's objective.
 ```
 
 `replay.hs --flow ROOTS.config FLOW OUT` is the one verifier
-(`ECOASTReplay.replaySelectedFlow`), shared by the flow itself and by
-`select.hs`. The compiler, both captures, the SDK
+(`ECOASTReplay.replaySelectedFlow`), shared by the flow itself, by
+`finish-order.hs` and by `select.hs`. The compiler, both captures, the SDK
 manifest, the proof domain, the solver and the timeout come from the roots
 file, which is refused when it lies inside the flow directory. The verifier
 then requires `effective.config` to agree with the roots by file identity,

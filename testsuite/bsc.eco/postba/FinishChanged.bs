@@ -1,0 +1,36 @@
+package FinishChanged where
+
+-- The ECO retires register alpha and adds register gamma with a different
+-- update. Reclaiming the vacant alpha identity for gamma leaves the register
+-- groups in NEW's order (beta before the reclaimed alpha); restoring OLD's
+-- declaration order is left to the finishing stage.
+interface FinishChanged =
+    put :: Bit 8 -> Action {-# arg_names = [value] #-}
+    result :: Bit 8 -> Bit 8 -> Bit 2 -> Bit 16
+        {-# arg_names = [x, y, selector] #-}
+
+{-# synthesize mkFinishChanged #-}
+mkFinishChanged :: Module FinishChanged
+mkFinishChanged = module
+#ifdef ECO_NEW
+    gamma :: Reg (Bit 8) <- mkReg 0
+#else
+    alpha :: Reg (Bit 8) <- mkReg 0
+#endif
+    beta :: Reg (Bit 8) <- mkReg 0
+    interface FinishChanged
+        put value = action
+#ifdef ECO_NEW
+            gamma := value + beta
+#else
+            alpha := value
+#endif
+            beta := value + 1
+        result x y selector =
+            let total = x + y
+#ifdef ECO_NEW
+            in (if selector[0:0] == 1 then total else gamma) ++
+#else
+            in (if selector[0:0] == 1 then total else alpha) ++
+#endif
+               (if selector[1:1] == 1 then total else beta)
