@@ -15,7 +15,7 @@ namespace eval eco_selection {
         set example [file join $root example]
         foreach {name command} [list \
             policy [list $bluehs $sourceFlag [file join $here SelectionPolicy.hs]] \
-            fixture [list bash [file join $here .. .. .. util eco examples run.sh] [which_bsc] $bluehs $sdk $yosys $::env(BLUESPECDIR) $example] \
+            fixture [list env ECO_EXAMPLE_POLICY=legacy-selection-fixture bash [file join $here .. .. .. util eco examples run.sh] [which_bsc] $bluehs $sdk $yosys $::env(BLUESPECDIR) $example] \
             replay [list $bluehs $sourceFlag [file join $sdk scripts select.hs] strict $yosys 30 [file join $root selected] [file join $example flow]] \
             rejection [list $bluehs $sourceFlag [file join $here SelectionReject.hs] [file join $example flow] $yosys [file join $root rejected]]] {
             set log [file join $root "$name.log"]

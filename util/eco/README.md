@@ -1,6 +1,3 @@
-> This prefix introduces the complete search/replay flow. Declaration finishing
-> is added by the next layer; commands using `finish-order.hs` need that layer.
-
 # ECO utilities
 
 The optional bluehs tools use native compiler captures to produce RTL close to
