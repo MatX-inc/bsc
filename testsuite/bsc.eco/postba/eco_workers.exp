@@ -1,0 +1,52 @@
+# Candidate evaluation in worker processes: the pool mechanics, then the public
+# example flow run sequentially and with ECO_WORKERS=3, whose flow results and
+# search artifacts must be byte-identical.
+namespace eval eco_workers {
+ set here [file dirname [file normalize [info script]]]
+ set bluehs [which bluehs]
+ if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+ set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+ if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+ set yosys [which yosys]
+ if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+ set sourceFlag "-i[file join $sdk lib]"
+ if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]] || $yosys == 0 || ![file executable $yosys]} {
+  unsupported "ECO workers: matched bluehs/Yosys unavailable"
+ } else {
+  set root [file normalize [file join [pwd] eco-workers-[pid]-[clock clicks]]]
+  file mkdir $root
+  set log [file join $root pool.log]
+  if {[catch {exec $bluehs $sourceFlag [file join $here ASTWorkers.hs] [file join $root pool] >$log 2>@1} message]} {
+   fail "ECO workers: pool mechanics"
+   set f [open $log];verbose -log [read $f] 0;close $f
+  } else {pass "ECO workers: pool mechanics"}
+  set example [file join $here .. .. .. util eco examples run.sh]
+  set ok 1
+  foreach {name workers} {sequential {} workers 3} {
+   set out [file join $root $name]
+   set log [file join $root "$name.log"]
+   set command [list env]
+   if {$workers eq {}} {lappend command -u ECO_WORKERS} else {lappend command ECO_WORKERS=$workers}
+   lappend command bash $example [which_bsc] $bluehs $sdk $yosys $::env(BLUESPECDIR) $out
+   if {[catch {exec {*}$command >$log 2>@1} message]} {
+    fail "ECO workers: example flow $name";set f [open $log];verbose -log [read $f] 0;close $f;set ok 0
+   } else {pass "ECO workers: example flow $name"}
+  }
+  if {$ok} {
+   set a [file join $root sequential flow];set b [file join $root workers flow]
+   set same 1;set compared 0
+   foreach f [concat [list mkFanoutLoss.v summary.txt] [glob -nocomplain -directory [file join $a ordinary-search] -tails *]] {
+    if {[string match *.outcome $f]} continue
+    set fa [file join $a $f];if {![file isfile $fa]} {set fa [file join $a ordinary-search $f]}
+    set fb [file join $b [string range $fa [expr {[string length $a] + 1}] end]]
+    if {![file isfile $fa]} continue
+    incr compared
+    if {![file exists $fb] || [catch {exec cmp -s $fa $fb}]} {set same 0;verbose -log "differs: $fa" 0}
+   }
+   if {$same && $compared > 0} {pass "ECO workers: flow results and search artifacts byte-identical"} else {fail "ECO workers: flow results and search artifacts byte-identical"}
+   set candidates [glob -nocomplain -directory [file join $a ordinary-search] candidate-*.ast]
+   set records [glob -nocomplain -directory [file join $b ordinary-search] *.outcome]
+   if {[llength $candidates] == 0 || [llength $records] > 0} {pass "ECO workers: worker processes evaluated the candidates"} else {fail "ECO workers: worker processes evaluated the candidates"}
+  }
+ }
+}

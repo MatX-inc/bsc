@@ -102,10 +102,11 @@ finishDeclarationOrderFrom manifest upstream options old context current output=
         suffix=if attempt==1 then "" else "-"++show attempt
         searchDir=output</>"search"++suffix
         replayDir=output</>"replay"++suffix
+    workers<-searchWorkersFromEnvironment
     result<-optimizeAST (defaultSearchRequest selectedOptions searchDir
       (SearchInput (viProgram old) (renderVerilogText old))
       (SearchInput current (renderVerilogText context)))
-      { searchObjective=searchObjective, searchProvider=provider, searchProof=runner }
+      { searchObjective=searchObjective, searchProvider=provider, searchProof=runner, searchWorkers=workers }
     (replayed,_,_)<-replayASTPlanWithCost searchObjective(viProgram old)runner selectedOptions(renderVerilogText context)
       (searchDir</>"search.plan")replayDir current
     need(encode replayed==encode(srProgram result))"independent saved-plan replay differs"
