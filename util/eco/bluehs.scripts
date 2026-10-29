@@ -1,6 +1,11 @@
 match.hs
 keep.hs
 invariants.hs
+captures.hs
 measure.hs
+configure.hs
+replay.hs
+select.hs
 package-sdk.hs
 measure-translated.hs
+correspondence.hs

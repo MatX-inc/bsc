@@ -1,0 +1,19 @@
+package ObjectiveFlow where
+interface ObjectiveFlow =
+  put :: Bit 4 -> Action
+  result :: Bit 64 -> Bit 64 -> Bit 4 -> Bit 128
+{-# verilog mkObjectiveFlow #-}
+mkObjectiveFlow :: Module ObjectiveFlow
+mkObjectiveFlow = module
+  savedSelector :: Reg (Bit 4) <- mkReg 0
+  interface ObjectiveFlow
+    put value = action
+      savedSelector := value
+    result x y selector =
+#ifdef ECO_NEW
+      zeroExtend (pack ((x < y) || selector[0:0] == 1) ++
+                  pack ((x /= y) && selector[1:1] == 1))
+#else
+      zeroExtend (pack ((x /= y) || selector[0:0] == 1) ++
+                  pack ((x /= y) && selector[1:1] == 1))
+#endif

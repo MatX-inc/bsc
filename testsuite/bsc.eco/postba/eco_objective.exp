@@ -18,5 +18,55 @@ namespace eval eco_objective {
    fail "ECO objective: search, proof and tamper controls"
    set f [open $log];verbose -log [read $f] 0;close $f
   } else {pass "ECO objective: search, proof and tamper controls"}
+  set captures {};set ok 1
+  foreach side {old new filtered} {
+   set dir [file join $root $side];file mkdir $dir
+   set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr -g mkObjectiveFlow -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+   if {$side ne "old"} {lappend args -Xcpp -DECO_NEW}
+   if {$side eq "filtered"} {
+    set filter [file join $dir append-comment.sh]
+    set f [open $filter w];puts $f {#!/bin/sh};puts $f {set -eu}
+    puts $f {printf '\n// Additional filter information\n' >> "$1"}
+    close $f;file attributes $filter -permissions 0755
+    lappend args -verilog-filter $filter
+   }
+   lappend args [file join $here ObjectiveFlow.bs]
+   if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+    fail "ECO objective: BH capture $side";verbose -log $message 0;set ok 0
+   } else {pass "ECO objective: BH capture $side"}
+   lappend captures [file join $dir capture mkObjectiveFlow.replay]
+  }
+  if {$ok} {
+   set flow [file join $root flow]
+   set log [file join $root flow.log]
+   if {[catch {exec $bluehs $sourceFlag [file join $here ASTObjectiveFlow.hs] [which_bsc] {*}$captures $::env(BLUESPECDIR) [file join $sdk build.manifest] $flow >$log 2>@1} message]} {
+    fail "ECO objective: translated flow and branch selection"
+    set f [open $log];verbose -log [read $f] 0;close $f
+   } else {
+    pass "ECO objective: translated flow and branch selection"
+    set selected "$flow-TranslatedNormalized"
+    set args [list --objective translated-normalized [file join $selected adapted-old mkObjectiveFlow.eco-ast] "$selected.config" [file join $selected kept mkObjectiveFlow.eco-ast] [file join $selected kept-search search.plan] [file join $root cli-replay]]
+    set log [file join $root cli-replay.log]
+    if {[catch {exec $bluehs $sourceFlag [file join $sdk scripts replay.hs] {*}$args >$log 2>@1} message]} {
+     fail "ECO objective: packaged objective-aware replay"
+     set f [open $log];verbose -log [read $f] 0;close $f
+    } else {pass "ECO objective: packaged objective-aware replay"}
+    set log [file join $root cli-capture.log]
+    if {[catch {exec $bluehs $sourceFlag [file join $sdk scripts captures.hs] --objective translated-normalized --invariants defer "$flow-cli.config" >$log 2>@1} message]} {
+     fail "ECO objective: packaged translated capture flow"
+     set f [open $log];verbose -log [read $f] 0;close $f
+    } else {pass "ECO objective: packaged translated capture flow"}
+    set log [file join $root cli-missing-policy.log]
+    if {[catch {exec $bluehs $sourceFlag [file join $sdk scripts replay.hs] "$selected.config" [file join $selected kept mkObjectiveFlow.eco-ast] [file join $selected kept-search search.plan] [file join $root missing-policy] >$log 2>@1} message]} {
+     set f [open $log];set text [read $f];close $f
+     if {[string first {explicit objective} $text] >= 0} {pass "ECO objective: replay requires expected objective"} else {fail "ECO objective: replay requires expected objective"}
+    } else {fail "ECO objective: replay requires expected objective"}
+    set log [file join $root cli-select.log]
+    if {[catch {exec $bluehs $sourceFlag [file join $sdk scripts select.hs] --translated strict $yosys 30 [file join $root cli-select] $selected >$log 2>@1} message]} {
+     fail "ECO objective: translated accepted-prefix selection"
+     set f [open $log];verbose -log [read $f] 0;close $f
+    } else {pass "ECO objective: translated accepted-prefix selection"}
+   }
+  }
  }
 }
