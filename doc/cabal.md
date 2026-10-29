@@ -98,6 +98,8 @@ index, and compiles serially, which the bytes do not depend on.
 - Solvers: after each build, `lib/SAT` beside the artifact is linked to the
   `LIBRARY_PATH` directory holding them, so the build tree runs in place
   (copies in a system directory need no link).
+- Programs, after each build on Linux: `objcopy` removes the FILE symbol of
+  GHC's link stub (section 5); the other local symbols stay.
 
 cabal-install builds without configuring when only sources changed, and a
 changed `SetupHooks.hs` rebuilds the Setup without reconfiguring, so a change
@@ -128,8 +130,10 @@ shared objects and programs, interfaces identical as `ghc --show-iface` text.
 
 What holds it: every program links against the library's archive, compiled
 once; `Warmup` fixes the interface-load order; `-fobject-determinism`, from GHC
-9.12, makes an object independent of the session's uniques; and the solvers are
-linked by name.
+9.12, makes an object independent of the session's uniques; the solvers are
+linked by name; and the hooks remove from each program, after its link, the
+FILE symbol of GHC's link stub, compiled from a temporary file named by a
+per-session counter (`objcopy`, on Linux); the other local symbols stay.
 
 `util/cabal-ladder.sh`:
 
