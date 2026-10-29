@@ -119,17 +119,43 @@ the library's (`common_deps`); `src/comp/app` is no source directory of the
 library, so the entry module is the program's alone, and it carries `import
 Warmup ()`. (bluetcl differs: no `-main-is`, a helper module and a C shim.)
 
-## 5. The determinism claim
+## 5. The determinism ladder
 
 The claim: one commit built from clean serially, oversubscribed or in another
-checkout directory gives the same objects, interfaces, archives, programs and
-shared object, and a rebuild after an edit and its revert lands on the same
-bytes.
+checkout directory, or rebuilt in place with nothing changed and, from GHC
+9.12, after an edit and its revert, gives bit-identical objects, archives,
+shared objects and programs, interfaces identical as `ghc --show-iface` text.
 
 What holds it: every program links against the library's archive, compiled
 once; `Warmup` fixes the interface-load order; `-fobject-determinism`, from GHC
 9.12, makes an object independent of the session's uniques; and the solvers are
 linked by name.
 
-The check of the claim, a ladder of builds hashed and compared on one machine
-and in CI, is a separate series.
+`util/cabal-ladder.sh`:
+
+- `hash OUT [DIR...]` hashes the build under `dist-newstyle` and every file of
+  each installed DIR, with a toolchain record beside it; interfaces as `ghc
+  --show-iface` text minus the interface hash and flags fingerprint, since
+  their bytes carry the checkout directory.
+- `verdict REF OTHER...` compares each list with the reference; an absent list
+  is MISSING, and a difference is read against the toolchain records.
+- `toolchain` prints the record `hash` writes: the tools and the versions in
+  `cabal_macros.h`.
+- `rebuild NAME [DIR...]` runs the in-place round: a rebuild with nothing
+  changed and, from 9.12, after a marker edit to `src/comp/Libs/IOUtil.hs` and
+  its revert, each hashed.
+- `run` is the ladder on one machine: the legs `c-j1`, the reference, `a-j1`,
+  `c-j16`, `c-j64`, `a-j64` and `d-j64`, each a fresh checkout of `HEAD` in a
+  directory of its own under `determinism-results/<stamp>/legs`, built and
+  installed (`make install-src`, `make -C src/comp install-extra`, `make
+  install-bluehs`) at its jobs count (`jobs: N` and, from 9.12, `ghc-options:
+  -jN` in a `cabal.project.local`) and hashed, `inst/bluehs` with the build
+  tree; the serial legs then run the round. The reference builds first, alone,
+  so the dependency store it fills is shared; then up to `LADDER_JOBS` legs run
+  at once, one per 6 GB of memory unless set. The verdict compares every leg and
+  round with the reference; a failed one is MISSING. `LEGS` names other legs,
+  `KEEP_LEGS=1` keeps their trees.
+
+A difference is a design question before it is a fix: the first suspects are a
+root module without the Warmup import, interface content the direct-dependency
+rule does not cover, and a program's entry module.
