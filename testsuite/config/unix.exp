@@ -3572,6 +3572,63 @@ proc bluehs_run_compare_pass { script {expected ""} } {
     compare_file $output $expected
 }
 
+# ECO external groups (testsuite/bsc.eco/postba/eco_*.exp) run bluehs scripts
+# against a packaged SDK. ECO_BLUEHS, ECO_SDK and ECO_YOSYS override the
+# discovery below; the default SDK location is <repo>/eco-sdk.
+#
+# eco_sdk_env LABEL ?NEEDS?: set the variables here, bluehs, sdk, sourceFlag,
+# yosys, iverilog and vvp of the calling group's namespace (never the globals
+# of bsc_initialize) and return 1. When the matched bluehs runtime or SDK is
+# missing, or NEEDS (a list drawn from yosys, icarus) names a missing tool,
+# report "LABEL: ... unavailable" as unsupported and return 0.
+proc eco_sdk_env { label {needs {}} } {
+    set ns [uplevel 1 {namespace current}]
+    if { $ns eq "::" } { error "eco_sdk_env must be called inside a group namespace" }
+    namespace upvar $ns here here bluehs bluehs sdk sdk sourceFlag sourceFlag \
+        yosys yosys iverilog iverilog vvp vvp
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag [list -i "-i[file join $sdk lib]"]
+    set yosys [which yosys]
+    if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+    set iverilog [which iverilog]
+    set vvp [which vvp]
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "$label: matched bluehs runtime unavailable"
+        return 0
+    }
+    if {"yosys" in $needs && ($yosys == 0 || ![file executable $yosys])} {
+        unsupported "$label: Yosys unavailable"
+        return 0
+    }
+    if {"icarus" in $needs && ($iverilog == 0 || $vvp == 0)} {
+        unsupported "$label: Icarus unavailable"
+        return 0
+    }
+    return 1
+}
+
+# eco_run_script LABEL LOG SCRIPT ?ARG ...?: run SCRIPT with the calling
+# group's bluehs and SDK library path, logging to LOG. Pass or fail LABEL,
+# dump the log on failure, and return 1 on success.
+proc eco_run_script { label log script args } {
+    set ns [uplevel 1 {namespace current}]
+    set bluehs [set ${ns}::bluehs]
+    set sdk [set ${ns}::sdk]
+    if {[catch {exec $bluehs -i "-i[file join $sdk lib]" $script {*}$args >$log 2>@1} message]} {
+        fail $label
+        if {[file exists $log]} {
+            set f [open $log]; verbose -log [read $f] 0; close $f
+        } else {verbose -log $message 0}
+        return 0
+    }
+    pass $label
+    return 1
+}
+
 # Use the showrules utility to modify VCD files
 proc showrules { topmod vcdin vcdout {options ""}} {
     global showrules

@@ -1,0 +1,14 @@
+# Logical identities use the existing bluehs/DejaGNU and optional Icarus tools.
+namespace eval eco_logical_ac {
+    if {[eco_sdk_env "ECO logical AC"]} {
+        set root [file normalize [file join [pwd] eco-logical-ac-[pid]-[clock clicks]]]
+        file mkdir $root
+        set script [file join $here ASTLogicalAC.hs]
+        eco_run_script "ECO logical AC: directed strict controls" [file join $root directed.log] $script directed
+        if {$iverilog == 0 || $vvp == 0} {
+            unsupported "ECO logical AC: Icarus unavailable"
+        } else {
+            eco_run_script "ECO logical AC: exhaustive X/Z oracle" [file join $root oracle.log] $script oracle [file join $root oracle] $iverilog $vvp
+        }
+    }
+}
