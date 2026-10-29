@@ -4,10 +4,10 @@
 
 For the same commit, toolchain, dependencies, and build options, serial,
 parallel and relocated builds must produce identical binaries, the objects,
-archives, executables and shared libraries, so that performance does not
-depend on how the compiler was built. A rebuild in place with nothing changed
-and, from GHC 9.12, after an edit and its revert must return to those same
-bytes. The check is the ladder (section 7).
+archives, executables and shared libraries, and the same installed tree, so
+that performance does not depend on how the compiler was built. A rebuild in
+place with nothing changed and, from GHC 9.12, after an edit and its revert
+must return to those same bytes. The check is the ladder (section 7).
 
 This goal drives the build's requirements:
 
@@ -22,6 +22,12 @@ This goal drives the build's requirements:
   (`objcopy`, on Linux); the other local symbols stay (section 4).
 - Track version metadata so incremental builds use the current commit and
   version name (section 4).
+
+In the installed tree, the compiler stores file names relative to the build
+directory (upstream 1135), the Bluesim and VPI libraries map the checkout out
+of their debug information (`-ffile-prefix-map`), and the yices library's
+version stamp carries the source's commit date, not the build day
+(`make_source_version`).
 
 ## 2. Package layout
 
@@ -154,7 +160,7 @@ Bluetcl instead uses a C shim and helper module, without `-main-is`.
 `util/cabal-ladder.sh run` checks the claim on one machine: six fresh checkouts
 of `HEAD`, the legs `c-j1` (the reference), `a-j1`, `c-j16`, `c-j64`, `a-j64`
 and `d-j64`, built and installed in directories of their own at the jobs count
-in the name, hashed with the bluehs runtime installed from them, and compared with the
+in the name, hashed with the installed tree, `inst`, and compared with the
 reference; the serial legs then rebuild in place, with nothing changed and,
 from GHC 9.12, after an edit and its revert. A failed leg is MISSING in the
 verdict. The script's usage text names its subcommands and variables.
