@@ -1,0 +1,95 @@
+# Optional reports are explicit bluehs invocations over unchanged native files.
+namespace eval eco_diagnostics {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO diagnostics: matched bluehs runtime unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-diagnostics-[pid]-[clock clicks]]]
+        file mkdir $root/build
+        set bsc [which_bsc]
+        set previous [pwd]
+        try {
+            cd $root
+            set sourceFlag -i[file join $sdk lib]
+            set command [list $bsc -u -verilog -elab -no-show-timestamps -no-show-version \
+                -g mkCoreWithoutObservations -bdir $root/build -vdir $root/build -info-dir $root/build \
+                -eco-capture $root/capture -eco-graph $root/capture $here/CoreWithoutObservations.bs]
+            if {[catch {exec {*}$command >$root/capture.log 2>@1} message]} {
+                fail "ECO diagnostics: native capture"
+                set f [open $root/capture.log]; verbose -log [read $f] 0; close $f
+                return
+            }
+            set stem $root/capture/mkCoreWithoutObservations
+            if {[catch {exec env BSC_OPTIONS= $bsc -eco-adapt $stem.replay -eco-output $root/adapted \
+                    >$root/adapt.log 2>@1} message]} {
+                fail "ECO diagnostics: native adaptation"
+                set f [open $root/adapt.log]; verbose -log [read $f] 0; close $f
+                return
+            }
+            if {![file exists $stem.eco-backend.json] && ![file exists $root/adapted/adapter-receipt.json]} {
+                pass "ECO diagnostics: native compilation and adaptation omit optional JSON"
+            } else {fail "ECO diagnostics: native compilation and adaptation omit optional JSON"}
+            if {[catch {exec $bluehs $sourceFlag $sdk/scripts/backend-report.hs \
+                    $stem.eco-ast $stem.eco-preopt $stem.eco-graph $stem.eco-ports $root/backend-report \
+                    >$root/backend-report.log 2>@1} message]} {
+                fail "ECO diagnostics: explicit backend report"
+                set f [open $root/backend-report.log]; verbose -log [read $f] 0; close $f
+                return
+            } else {pass "ECO diagnostics: explicit backend report"}
+            if {[catch {exec $bluehs $sourceFlag $sdk/scripts/adapter-receipt-json.hs \
+                    $root/adapted/adapter-receipt $root/adapter-report >$root/adapter-report.log 2>@1} message]} {
+                fail "ECO diagnostics: explicit adapter report"
+                set f [open $root/adapter-report.log]; verbose -log [read $f] 0; close $f
+                return
+            } else {pass "ECO diagnostics: explicit adapter report"}
+            if {[catch {exec $bluehs $sourceFlag $here/Diagnostics.hs \
+                    $stem.eco-ast $stem.eco-preopt $stem.eco-graph $stem.eco-ports \
+                    $root/adapted/adapter-receipt $root/backend-report $root/adapter-report $root \
+                    >$root/checks.log 2>@1} message]} {
+                fail "ECO diagnostics: report contents, identities and overwrite guards"
+                set f [open $root/checks.log]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO diagnostics: report contents, identities and overwrite guards"}
+
+            # Reuse the native helper-retention fixture to exercise aePlan=Just
+            # and the report's capture/preoptimization digest checks.
+            set native [file normalize [file join $here .. backend]]
+            file mkdir $root/keep-build
+            set command [list $bsc -u -verilog -elab -no-show-timestamps -no-show-version \
+                -cpp -Xcpp -DECO_NEW -g mkFanoutLoss -keep-fires -keep-inlined-boundaries \
+                -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr \
+                -bdir $root/keep-build -vdir $root/keep-build -info-dir $root/keep-build \
+                -eco-capture $root/keep-capture $native/FanoutLoss.bs]
+            if {[catch {exec {*}$command >$root/keep-capture.log 2>@1} message]} {
+                fail "ECO diagnostics: helper-retention capture"
+                set f [open $root/keep-capture.log]; verbose -log [read $f] 0; close $f
+                return
+            }
+            set keepStem $root/keep-capture/mkFanoutLoss
+            if {[catch {exec $bluehs $sourceFlag $native/BackendContract.hs plan \
+                    $keepStem.replay $keepStem $root/keep.plan >$root/keep-plan.log 2>@1} message]} {
+                fail "ECO diagnostics: typed helper plan"
+                set f [open $root/keep-plan.log]; verbose -log [read $f] 0; close $f
+                return
+            }
+            if {[catch {exec env BSC_OPTIONS= $bsc -eco-replay $keepStem.replay \
+                    -eco-output $root/kept -eco-backend-plan $root/keep.plan >$root/keep-replay.log 2>@1} message]} {
+                fail "ECO diagnostics: native kept replay"
+                set f [open $root/keep-replay.log]; verbose -log [read $f] 0; close $f
+                return
+            }
+            set keptStem $root/kept/mkFanoutLoss
+            if {[catch {exec $bluehs $sourceFlag $here/Diagnostics.hs --kept $root/keep.plan \
+                    $keptStem.eco-ast $keptStem.eco-preopt $keptStem.eco-graph $keptStem.eco-ports \
+                    $root/kept-report >$root/kept-report.log 2>@1} message]} {
+                fail "ECO diagnostics: bound kept-plan report"
+                set f [open $root/kept-report.log]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO diagnostics: bound kept-plan report"}
+        } finally {
+            cd $previous
+        }
+    }
+}

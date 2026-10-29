@@ -630,3 +630,11 @@ pipeline-chain, live-helper and alias refinements together. See
 policy switches and replay procedure. The preset does not retain unused OLD
 state or enable historical unused-helper shells. Omitting `--refinements`
 preserves the previous provider selection.
+
+### Optional artifact diagnostics
+
+`backend-report.hs` and `adapter-receipt-json.hs` render explicitly requested
+diagnostics from typed native artifacts into fresh output directories. They do
+not run during compilation or ECO selection and do not authorize proofs or
+transformations. See [DIAGNOSTICS.md](DIAGNOSTICS.md) for inputs, validation and
+the distinction between reported provenance and independently checked results.
