@@ -3,7 +3,7 @@ module ProofObligation (
                         ProofObligation(..),
                         HasProve(..), ProofResult(..), MsgFn(..), MsgTuple,
                         warnUnlessProof, errorUnlessProof,
-                        checkProofs
+                        checkProofs, checkProofsObserved
                        ) where
 
 import Error(EMsg, ErrorHandle, bsWarningsAndErrors)
@@ -86,23 +86,48 @@ warnUnlessProof wm _      (ws, ds, es) = (ws ++ wm, ds, es)
 checkProofs :: (MonadIO m, HasProve (ProofObligation a) m) =>
                ErrorHandle -> [(ProofObligation a, MsgFn)] -> m Bool
 checkProofs _ [] = return True
-checkProofs errh ps =
-  do let cmpSnd (_,x1) (_,x2) = x1 `compare` x2
-         eqSnd  (_,x1) (_,x2) = x1 == x2
-         groups = groupBy eqSnd (sortBy cmpSnd ps)
-     bs <- mapM (checkProofSet errh) groups
-     return (and bs)
+checkProofs errh ps = fmap and (mapM (checkProofSet errh) (groupProofs ps))
+
+groupProofs :: [(ProofObligation a, MsgFn)] -> [[(ProofObligation a, MsgFn)]]
+groupProofs ps =
+    let cmpSnd (_,x1) (_,x2) = x1 `compare` x2
+        eqSnd  (_,x1) (_,x2) = x1 == x2
+    in groupBy eqSnd (sortBy cmpSnd ps)
+
+-- Same proof attempts and message grouping as ordinary checking. Observation
+-- records each result; successful compilation does not imply every proof won.
+checkProofsObserved :: (MonadIO m, HasProve (ProofObligation a) m) =>
+                      ErrorHandle -> [(ProofObligation a, MsgFn)] ->
+                      m (Bool, [(ProofObligation a, MsgFn, ProofResult)])
+checkProofsObserved _ [] = return (True, [])
+checkProofsObserved errh ps =
+  do rs <- mapM (checkProofSetObserved errh) (groupProofs ps)
+     return (and (map fst rs), concatMap snd rs)
 
 -- Check one group of proof obligations
 checkProofSet :: (MonadIO m, HasProve (ProofObligation a) m) =>
                  ErrorHandle -> [(ProofObligation a, MsgFn)] -> m Bool
-checkProofSet _ [] = return True
-checkProofSet errh ps =
+checkProofSet = checkProofSetWith (\ok _ -> ok)
+
+checkProofSetObserved :: (MonadIO m, HasProve (ProofObligation a) m) =>
+                        ErrorHandle -> [(ProofObligation a, MsgFn)] ->
+                        m (Bool, [(ProofObligation a, MsgFn, ProofResult)])
+checkProofSetObserved errh ps = checkProofSetWith observe errh ps
+  where observe ok results =
+            (ok, [(ob, msg, result) | ((ob,msg),result) <- zip ps results])
+
+-- Share proof attempts and diagnostics without retaining observation records
+-- on the ordinary path. Only the observed caller constructs those records.
+checkProofSetWith :: (MonadIO m, HasProve (ProofObligation a) m) =>
+                     (Bool -> [ProofResult] -> result) -> ErrorHandle ->
+                     [(ProofObligation a, MsgFn)] -> m result
+checkProofSetWith finish _ [] = return (finish True [])
+checkProofSetWith finish errh ps =
   do results <- mapM (prove . fst) ps
      let fns          = [ fn | (_,(MsgFn _ fn)) <- ps ]
          (warns, demerrs, errs) = buildErrs (zip fns results) ([], [], [])
      when (any (not . null) [warns, demerrs, errs]) $
          liftIO (bsWarningsAndErrors errh warns demerrs errs)
-     return ((null demerrs) && (null errs))
+     return (finish ((null demerrs) && (null errs)) results)
   where buildErrs []            we = we
         buildErrs ((fn,res):xs) we = buildErrs xs (fn res we)

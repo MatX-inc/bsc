@@ -1,5 +1,5 @@
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, TypeSynonymInstances #-}
-module AProofs (aCheckProofs) where
+module AProofs (aCheckProofs, aCheckProofsObserved) where
 
 import Control.Monad.State
 
@@ -14,15 +14,25 @@ import PPrint
 -- -------------------------
 
 aCheckProofs :: ErrorHandle -> Flags -> APackage -> IO (APackage, Bool)
-aCheckProofs errh flags amod = do
+aCheckProofs = aCheckProofsWith checkProofs
+
+aCheckProofsObserved :: ErrorHandle -> Flags -> APackage ->
+                       IO (APackage, Bool, [(ProofObligation AExpr, MsgFn, ProofResult)])
+aCheckProofsObserved errh flags amod = do
+    (package, (ok, results)) <- aCheckProofsWith checkProofsObserved errh flags amod
+    return (package, ok, results)
+
+aCheckProofsWith :: (ErrorHandle -> [(ProofObligation AExpr, MsgFn)] -> SIO result) ->
+                    ErrorHandle -> Flags -> APackage -> IO (APackage, result)
+aCheckProofsWith check errh flags amod = do
     let obs = apkg_proof_obligations amod
         ds = apkg_local_defs amod
         ss = apkg_state_instances amod
     let str = "aproofs_" ++ ppString (apkg_name amod)
     sat_state <- initSATState str errh flags True ds ss
-    (ok, _) <- runStateT (checkProofs errh obs) sat_state
+    (result, _) <- runStateT (check errh obs) sat_state
     let amod' = amod { apkg_proof_obligations = [] }
-    return (amod', ok)
+    return (amod', result)
 
 
 -- -------------------------

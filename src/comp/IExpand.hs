@@ -12,13 +12,14 @@
 --  * if c 0 e  --> {n-bits}c & e
 --  * flatten & (in asyntax)?
 --  * check for name conflict in the generated IEFace
-module IExpand(iExpand, iExpandStrings) where
+module IExpand(iExpand, iExpandWithAliases, iExpandStrings) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
 import Prelude hiding ((<>))
 #endif
 
 import Data.List
+import ECO.Provenance (ExpansionAliases, captureExpansionAliases)
 import Data.Maybe
 import Data.Foldable(foldrM)
 import Numeric(showIntAtBase)
@@ -244,7 +245,17 @@ iExpand :: ErrorHandle -> Flags ->
            IATFCache ->
            Bool -> [PProp] -> HDef ->
            IO (IModule HeapData)
-iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
+iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def =
+  fmap fst (iExpandWithAliases errh flags symt alldefs atf_cache is_noinlined_func pps def)
+
+-- The caller owns each module's detached observation until ordinary output and
+-- the native capture are complete. Existing callers may discard it via iExpand.
+iExpandWithAliases :: ErrorHandle -> Flags ->
+           SymTab -> M.Map Id HExpr ->
+           IATFCache ->
+           Bool -> [PProp] -> HDef ->
+           IO (IModule HeapData, ExpansionAliases)
+iExpandWithAliases errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
   -- unbuffer output if we're tracing
   when (doAnyTrace || showElabProgress flags) $
       do hSetBuffering stdout LineBuffering
@@ -372,6 +383,10 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       -- if preserving method conditions, then remove the book-keeping info
       imod = removeInlinedPositions flags imod0
 
+  aliases <- captureExpansionAliases (ecoOptions flags)
+      [(p,n,IM.findWithDefault p p ptr_map) | p <- ptrs0,
+          Just HNF { hc_name = n } <- [IM.lookup p iheap]]
+
   --let traceMethodPred (IDef i _ p props) =
   --        traceM ("Def: " ++ ppReadable (i, getPosition i, getIdProps i, p, props))
   --mapM_ traceMethodPred mpdefs
@@ -383,7 +398,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       traceM ("iExpand done mod\n" ++ ppReadable imod)
   when doProfile $
       traceM ("iExpand profile\n" ++ ppReadable (go_profile go))
-  return imod
+  return (imod, aliases)
 
 -- iExpandStrings
 --   Evaluate a toplevel definition of type List String to its strings, with

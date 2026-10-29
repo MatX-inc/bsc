@@ -1,0 +1,83 @@
+namespace eval eco_observations {
+    proc run {label arguments logfile} {
+        variable here
+        set previous [pwd]
+        cd $here
+        set command [list [which_bsc]]
+        if {[lindex $arguments 0] in {-eco-replay -eco-adapt}} {
+            set command [list env BSC_OPTIONS= [which_bsc]]
+        }
+        set status [exec_with_log eco_observations \
+            [concat $command $arguments [list > $logfile 2>@1]]]
+        cd $previous
+        if {$status == 0} {
+            pass "ECO observations: $label"
+            return 1
+        }
+        if {[file exists $logfile]} {
+            set f [open $logfile]; verbose -log [read $f] 0; close $f
+        }
+        fail "ECO observations: $label"
+        return 0
+    }
+
+    proc identical {label first second logfile} {
+        set status [exec_with_log eco_observations \
+            [list cmp $first $second > $logfile 2>@1]]
+        if {$status == 0} {
+            pass "ECO observations: $label"
+        } else {
+            set f [open $logfile]; verbose -log [read $f] 0; close $f
+            fail "ECO observations: $label"
+        }
+    }
+
+    bsc_initialize
+    set has_bluehs [expr {$::bluehs ne "" && [file isfile $::bluehs] && [file executable $::bluehs]}]
+    set here [file dirname [file normalize [info script]]]
+    set result [file join $here work_observations]
+    file delete -force $result
+    file mkdir $result
+    if {$has_bluehs} {
+        bluehs_run_pass ProofObservation.hs {} [file join $result proof.log]
+        bluehs_run_pass ExpansionObservation.hs {} [file join $result expansion.log]
+    } else {
+        untested "ECO observations: proof outcomes (bluehs unavailable)"
+    }
+
+    foreach mode {proved unproved} {
+        set extra {}
+        if {$mode eq "unproved"} {set extra {-Xcpp -DUNPROVED -unsafe-always-ready}}
+        foreach side {ordinary capture} {
+            set dir [file join $result $mode-$side]
+            file mkdir $dir
+            set options [concat {-u -verilog -elab -cpp -check-assert -no-show-timestamps -g mkEvidence} \
+                $extra [list -bdir $dir -vdir $dir -info-dir $dir]]
+            if {$side eq "capture"} {lappend options -eco-capture [file join $dir capture]}
+            lappend options [file join $here Evidence.bs]
+            set compiled($side) [run "$mode $side compilation" $options [file join $dir compile.log]]
+        }
+        if {!$compiled(capture)} {
+            untested "ECO observations: $mode evidence and replay require a successful capture"
+            continue
+        }
+        set captured [file join $result $mode-capture mkEvidence.v]
+        if {$compiled(ordinary)} {
+            identical "$mode capture preserves ordinary bytes" \
+                [file join $result $mode-ordinary mkEvidence.v] $captured \
+                [file join $result $mode-ordinary-capture.log]
+        }
+        set manifest [file join $result $mode-capture capture mkEvidence.replay]
+        if {$has_bluehs} {
+            bluehs_run_pass ReadEvidence.hs [list $mode $manifest] [file join $result $mode-evidence.log]
+        } else {
+            untested "ECO observations: $mode bound evidence (bluehs unavailable)"
+        }
+        if {[run "$mode fresh replay" \
+                [list -eco-replay $manifest -eco-output [file join $result $mode-replay]] \
+                [file join $result $mode-replay.log]]} {
+            identical "$mode replay preserves captured bytes" $captured \
+                [file join $result $mode-replay mkEvidence.v] [file join $result $mode-replay-bytes.log]
+        }
+    }
+}
