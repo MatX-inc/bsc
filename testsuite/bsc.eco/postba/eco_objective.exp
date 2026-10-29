@@ -1,0 +1,22 @@
+# External translated objective; all deployed candidates retain complete RTL.
+namespace eval eco_objective {
+ set here [file dirname [file normalize [info script]]]
+ set bluehs [which bluehs]
+ if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+ set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+ if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+ set yosys [which yosys]
+ if {[info exists ::env(ECO_YOSYS)]} {set yosys $::env(ECO_YOSYS)}
+ set sourceFlag "-i[file join $sdk lib]"
+ if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]] || $yosys == 0 || ![file executable $yosys]} {
+  unsupported "ECO objective: matched bluehs unavailable"
+ } else {
+  set root [file normalize [file join [pwd] eco-objective-[pid]-[clock clicks]]]
+  file mkdir $root
+  set log [file join $root directed.log]
+  if {[catch {exec $bluehs $sourceFlag [file join $here ASTObjective.hs] [file join $root directed] >$log 2>@1} message]} {
+   fail "ECO objective: search, proof and tamper controls"
+   set f [open $log];verbose -log [read $f] 0;close $f
+  } else {pass "ECO objective: search, proof and tamper controls"}
+ }
+}

@@ -1,0 +1,30 @@
+# Qualify the core compiler through graphs/helper retention, without PR244.
+namespace eval eco_core_without_observations {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO core without observations: matched bluehs runtime unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-core-without-observations-[pid]-[clock clicks]]]
+        file mkdir $root
+        set bsc [which_bsc]
+        set command [list $bsc -u -verilog -elab -no-show-timestamps -no-show-version \
+            -g mkCoreWithoutObservations -bdir $root -vdir $root -info-dir $root \
+            -eco-capture $root/capture $here/CoreWithoutObservations.bs]
+        if {[catch {exec {*}$command >$root/capture.log 2>@1} message]} {
+            fail "ECO core without observations: native capture"
+            set f [open $root/capture.log]; verbose -log [read $f] 0; close $f
+        } else {
+            pass "ECO core without observations: native capture"
+            if {[catch {exec $bluehs -i[file join $sdk lib] $here/CoreWithoutObservations.hs \
+                    $root/capture/mkCoreWithoutObservations.eco-ast $root/checks \
+                    >$root/inspect.log 2>@1} message]} {
+                fail "ECO core without observations: unavailable export and explicit deferral"
+                set f [open $root/inspect.log]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO core without observations: unavailable export and explicit deferral"}
+        }
+    }
+}

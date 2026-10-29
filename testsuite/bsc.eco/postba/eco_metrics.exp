@@ -1,0 +1,57 @@
+# Two reporting metrics over native captures. No emitted RTL parser.
+namespace eval eco_metrics {
+    set here [file dirname [file normalize [info script]]]
+    set bluehs [which bluehs]
+    if {[info exists ::env(ECO_BLUEHS)]} {set bluehs $::env(ECO_BLUEHS)}
+    set sdk [file normalize [file join $here .. .. .. eco-sdk]]
+    if {[info exists ::env(ECO_SDK)]} {set sdk $::env(ECO_SDK)}
+    set sourceFlag "-i[file join $sdk lib]"
+    if {$bluehs == 0 || ![file executable $bluehs] || ![file exists [file join $sdk build.manifest]]} {
+        unsupported "ECO metrics: matched bluehs runtime unavailable"
+    } else {
+        set root [file normalize [file join [pwd] eco-metrics-[pid]-[clock clicks]]]
+        file mkdir $root
+        set log [file join $root pure.log]
+        if {[catch {exec $bluehs $sourceFlag [file join $here ASTMetric.hs] pure [file join $root pure] >$log 2>@1} message]} {
+            fail "ECO metrics: comment, whitespace and structural reporting controls"
+            set f [open $log]; verbose -log [read $f] 0; close $f
+        } else {pass "ECO metrics: comment, whitespace and structural reporting controls"}
+        set snapshots {}; set ok 1
+        foreach side {old new filtered} {
+            set dir [file join $root $side]; file mkdir $dir
+            set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -g mkFanoutLoss -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+            if {$side eq "new"} {lappend args -Xcpp -DECO_NEW}
+            if {$side eq "filtered"} {
+                set filter [file join $dir filter.sh]
+                set f [open $filter w]
+                puts $f {#!/bin/sh}
+                puts $f {printf '\n// Additional filter information\n' >> "$1"}
+                close $f; file attributes $filter -permissions 0755
+                lappend args -verilog-filter $filter
+            }
+            lappend args [file join $here FanoutLoss.bs]
+            if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+                fail "ECO metrics: capture $side"; verbose -log $message 0; set ok 0
+            } else {pass "ECO metrics: capture $side"}
+            lappend snapshots [file join $dir capture mkFanoutLoss.eco-ast]
+        }
+        if {$ok} {
+            set log [file join $root captures.log]
+            if {[catch {exec $bluehs $sourceFlag [file join $here ASTMetric.hs] captures {*}$snapshots [file join $root checks] >$log 2>@1} message]} {
+                fail "ECO metrics: authenticated raw and normalized OLD-relative counts"
+                set f [open $log]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO metrics: authenticated raw and normalized OLD-relative counts"}
+            set measure [file join $sdk scripts measure.hs]
+            set log [file join $root cli.log]
+            if {[catch {exec $bluehs $sourceFlag $measure {*}[lrange $snapshots 0 1] [file join $root cli] >$log 2>@1} message]} {
+                fail "ECO metrics: packaged reporting CLI"
+                set f [open $log]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO metrics: packaged reporting CLI"}
+            set log [file join $root candidate-cli.log]
+            if {[catch {exec $bluehs $sourceFlag $measure --candidate [lindex $snapshots 0] [lindex $snapshots 1] [file join $root checks candidate.ast] [file join $root checks candidate.v] [file join $root candidate-cli] >$log 2>@1} message]} {
+                fail "ECO metrics: candidate CLI uses same OLD"
+                set f [open $log]; verbose -log [read $f] 0; close $f
+            } else {pass "ECO metrics: candidate CLI uses same OLD"}
+        }
+    }
+}
