@@ -1716,23 +1716,25 @@ parseFooter s =
 -- (most recent first)
 data Frame = Frame !TableKind !Int [[Byte]]
 
--- Closed table entries by kind, keyed by index
-data Entries = Entries { eIds       :: !(IM.IntMap BS.ByteString)
-                       , ePositions :: !(IM.IntMap BS.ByteString)
-                       , eTypes     :: !(IM.IntMap BS.ByteString)
-                       , eITypes    :: !(IM.IntMap BS.ByteString)
+-- Closed table entries by kind, in completion order (most recent
+-- first, as (index, bytes)); they are put into index order once, at
+-- the end, instead of being kept sorted as they close.
+data Entries = Entries { eIds       :: [(Int, BS.ByteString)]
+                       , ePositions :: [(Int, BS.ByteString)]
+                       , eTypes     :: [(Int, BS.ByteString)]
+                       , eITypes    :: [(Int, BS.ByteString)]
                        }
 
 noEntries :: Entries
-noEntries = Entries IM.empty IM.empty IM.empty IM.empty
+noEntries = Entries [] [] [] []
 
 addEntry :: TableKind -> Int -> BS.ByteString -> Entries -> Entries
-addEntry KId       n b e = e { eIds       = IM.insert n b (eIds e) }
-addEntry KPosition n b e = e { ePositions = IM.insert n b (ePositions e) }
-addEntry KType     n b e = e { eTypes     = IM.insert n b (eTypes e) }
-addEntry KIType    n b e = e { eITypes    = IM.insert n b (eITypes e) }
+addEntry KId       n b e = e { eIds       = (n, b) : eIds e }
+addEntry KPosition n b e = e { ePositions = (n, b) : ePositions e }
+addEntry KType     n b e = e { eTypes     = (n, b) : eTypes e }
+addEntry KIType    n b e = e { eITypes    = (n, b) : eITypes e }
 
-getEntries :: TableKind -> Entries -> IM.IntMap BS.ByteString
+getEntries :: TableKind -> Entries -> [(Int, BS.ByteString)]
 getEntries KId       = eIds
 getEntries KPosition = ePositions
 getEntries KType     = eTypes
@@ -1751,7 +1753,7 @@ data WState = WState
   { wsRemap   :: Position -> Position     -- -remap-path-prefix
   , wsCache   :: !BinCache
   , wsStrings :: [FString]                -- first occurrences, most recent first
-  , wsEntries :: !Entries
+  , wsEntries :: !Entries                -- closed entries
   , wsChunks  :: !(IM.IntMap (Int, Int))  -- closed chunks: offset, length
   , wsOpen    :: [(Int, Int)]             -- open chunks: number, start offset
   , wsNChunks :: !Int
@@ -1850,11 +1852,12 @@ finish st frames bodiesEnd
   | not (null (wsOpen st)) = internalError "BinData.assemble: unclosed lazy value"
   | IM.size (wsChunks st) /= wsNChunks st = internalError "BinData.assemble: chunks"
   | otherwise =
-      let tableOf k = let im = getEntries k (wsEntries st)
+      let tableOf k = let es = getEntries k (wsEntries st)
                           n  = cacheCount k (wsCache st)
-                      in if IM.size im /= n || (n > 0 && fst (IM.findMax im) /= n - 1)
+                          arr = array (0, n - 1) es :: Array Int BS.ByteString
+                      in if length es /= n
                          then internalError $ "BinData.assemble: " ++ show k ++ " table"
-                         else (IM.elems im, n)
+                         else (elems arr, n)
           -- entries in index order, then count+1 u32 offsets
           tableRegion start k =
             let (es, n) = tableOf k
