@@ -15,7 +15,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import System.Directory (doesPathExist, createDirectoryIfMissing)
 import System.FilePath ((</>))
-import BinData (decode)
+import BinData (decodeStrict)
 import GenABin ()
 import ECO.VerilogInfo
 import ECOBind (unchanged)
@@ -135,7 +135,7 @@ load input = do
       ContextAST context path rtl -> do
         [contextId,astId,actual] <- mapM fileIdentity [context,path,rtl]
         serialized <- BS.readFile path
-        let candidate = decode serialized :: VProgram
+        let candidate = decodeStrict serialized :: VProgram
         need (fixedPorts candidate == fixedPorts (viProgram snapshot))
              "candidate changed its renderer context's module ports or parameters"
         actualBytes <- BS.readFile (fiPath actual)

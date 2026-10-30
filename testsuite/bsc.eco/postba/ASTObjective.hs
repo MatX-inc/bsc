@@ -55,7 +55,7 @@ main=do
  check"translated improvement accepted even when whole-file worse"
   (changedLines(srObjectiveCost result)<changedLines(srOrdinaryObjectiveCost result)&&changedLines(srCost result)>changedLines(srOrdinaryCost result))
  check"complete emitted candidate includes excluded debug comments" . isInfixOf "debug 40" =<< readFile(out</>"improved/selected.v")
- check"semantic plan is schema 3 with full-file costs"(planSchema(srPlan result)==3&&stepAfterCost(head(planSteps(srPlan result)))==srCost result)
+ check"semantic plan is schema 4 with full-file costs"(planSchema(srPlan result)==4&&stepAfterCost(head(planSteps(srPlan result)))==srCost result)
  (again,selected,baseline)<-replay"replay"objective
  check"saved objective independently reproves and rescored same candidate"(again==improved&&selected==srObjectiveCost result&&baseline==srOrdinaryObjectiveCost result)
  -- Caller-specified mode is independent of mutable saved envelope.

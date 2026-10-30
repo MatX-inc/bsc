@@ -10,7 +10,7 @@ import ECOASTProofContext
 import ECO.Replay(FileIdentity(..),fileIdentity)
 import ECOASTReplay
 import ECOJSON(EvidenceJSON(..),renderEvidenceJSON)
-import BinData(encode,decode)
+import BinData(encode,decodeStrict)
 import GenABin()
 import qualified Data.ByteString as B
 import Control.Monad
@@ -82,7 +82,7 @@ selectPrefixesWithMetric metricPolicy metricSources measure roots output flows=d
    createDirectory dir
    program<-if null steps then pure(viProgram context)else do
      path<-boundMember bundle(stepArtifact(last steps))(stepArtifactHash(last steps))
-     decode<$>B.readFile path
+     decodeStrict<$>B.readFile path
    let ast=dir</>"candidate.ast";rtl=dir</>modul<.>"v"
    B.writeFile ast(B.pack(encode program))
    emitVerilog context rtl program

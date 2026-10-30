@@ -3,7 +3,7 @@
 -- test. The candidate emission gate must still compare all actual bytes.
 module Main where
 import ECO.VerilogInfo
-import BinData(decode)
+import BinData(decodeStrict)
 import GenABin()
 import qualified Data.ByteString as B
 import qualified Data.Text as T
@@ -14,5 +14,5 @@ main=do
  [context,path]<-getArgs
  snapshot<-readVerilogInfo context
  exists<-doesFileExist(path++".fixture.ast")
- program<-if exists then decode <$> B.readFile(path++".fixture.ast") else pure(viProgram snapshot)
+ program<-if exists then decodeStrict <$> B.readFile(path++".fixture.ast") else pure(viProgram snapshot)
  B.writeFile path(TE.encodeUtf8(T.pack(renderVerilogText snapshot program)))

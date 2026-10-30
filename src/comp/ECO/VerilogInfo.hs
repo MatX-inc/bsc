@@ -27,7 +27,7 @@ import Text.Read (readMaybe)
 
 import ABin (ABinModInfo(..))
 import ASyntax
-import BinData (Bin(..), encode, decode)
+import BinData (Bin(..), encode, decodeStrict)
 import ECO.Interface (fixedPorts)
 import ECO.Options
 import ECO.Replay
@@ -200,7 +200,10 @@ readVerilogInfo path = do
     mapM_ checkIdentity ([aePayload envelope,aeOutput envelope] ++ maybe [] (:[]) (aePlan envelope))
     bytes <- BS.readFile (fiPath (aePayload envelope))
     unless (magic `BS.isPrefixOf` bytes) $ failVerilogInfo "invalid binary AST header"
-    let payload@(ASTPayload header program instances) = decode (BS.drop (BS.length magic) bytes)
+    -- The payload is a BinData container with nothing marked lazy; decode it
+    -- strictly so that every shared-table entry is validated here, before
+    -- the fixed-point check below re-encodes it.
+    let payload@(ASTPayload header program instances) = decodeStrict (BS.drop (BS.length magic) bytes)
     _ <- evaluate (rnf program `seq` rnf instances `seq` rnf header)
     unless (all (\line -> all isSpace line || "//" `isPrefixOf` line) (lines header)) $
         failVerilogInfo "renderer header contains non-comment text"
@@ -210,7 +213,7 @@ readVerilogInfo path = do
     -- a false cross-process canonical-byte requirement. The original payload
     -- is still bound by its exact recorded SHA256.
     let encoded = BS.pack (encode payload)
-        reread = decode encoded :: ASTPayload
+        reread = decodeStrict encoded :: ASTPayload
     unless (normalizePayloadRelations reread == normalizePayloadRelations payload &&
             BS.pack (encode reread) == encoded) $
         failVerilogInfo "AST native codec roundtrip lost information"
