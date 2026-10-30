@@ -5,8 +5,9 @@
 For the same commit, toolchain, dependencies, and build options, serial,
 parallel and relocated builds must produce identical binaries, the objects,
 archives, executables and shared libraries, so that performance does not
-depend on how the compiler was built. An incremental build after an edit and
-its revert must return to those same bytes.
+depend on how the compiler was built. A rebuild in place with nothing changed
+and, from GHC 9.12, after an edit and its revert must return to those same
+bytes. The check is the ladder (section 7).
 
 This goal drives the build's requirements:
 
@@ -142,3 +143,24 @@ executable example
 Declare `module Main_example where` and import `Warmup ()`. `common_exes`
 supplies dependencies, source directory, and generated `Warmup` declarations.
 Bluetcl instead uses a C shim and helper module, without `-main-is`.
+
+## 7. The determinism ladder
+
+`util/cabal-ladder.sh run` checks the claim on one machine: six fresh checkouts
+of `HEAD`, the legs `c-j1` (the reference), `a-j1`, `c-j16`, `c-j64`, `a-j64`
+and `d-j64`, built and installed in directories of their own at the jobs count
+in the name, hashed with the bluehs runtime installed from them, and compared with the
+reference; the serial legs then rebuild in place, with nothing changed and,
+from GHC 9.12, after an edit and its revert. A failed leg is MISSING in the
+verdict. The script's usage text names its subcommands and variables.
+
+`.github/workflows/cabal.yml` runs it, one job per platform (ubuntu-24.04 and
+macos-15, so every leg of a platform builds on one machine), on the project's
+pull requests that touch the build files, nightly, and on a dispatch that picks
+the GHC (default 9.14.1); the lists and logs are its artifact. Source changes
+do not run it: the one source invariant it guards, that every root module
+imports Warmup, is checked on every pull request
+(`src/comp/check-warmup-roots.sh`). A difference is a design question before
+it is a fix; the first suspects are a root module without the Warmup import,
+interface content the direct-dependency rule does not cover, and a program's
+entry module.
