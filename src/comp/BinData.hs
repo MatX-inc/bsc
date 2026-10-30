@@ -1744,12 +1744,13 @@ cacheCount KPosition bc = let (Known n _) = position_cache bc in n
 cacheCount KType     bc = let (Known n _) = type_cache bc     in n
 cacheCount KIType    bc = let (Known n _) = itype_cache bc    in n
 
+-- The cold part of the writer's state.  The hot part (the open table
+-- entries and the byte count of the bodies region) is passed as loop
+-- arguments, so a plain byte run costs no record copy.
 data WState = WState
   { wsRemap   :: Position -> Position     -- -remap-path-prefix
   , wsCache   :: !BinCache
   , wsStrings :: [FString]                -- first occurrences, most recent first
-  , wsFrames  :: [Frame]                  -- open entries, innermost first
-  , wsMain    :: !Int                     -- bytes emitted to the bodies region
   , wsEntries :: !Entries
   , wsChunks  :: !(IM.IntMap (Int, Int))  -- closed chunks: offset, length
   , wsOpen    :: [(Int, Int)]             -- open chunks: number, start offset
@@ -1771,81 +1772,85 @@ plainBytes x = concatMap plain (out_data (writeBytes x))
 -- the same as the previous in-stream scheme's, so the output remains a
 -- pure function of the content.
 assemble :: (Position -> Position) -> [BinElem] -> [Byte]
-assemble remapP = assembleGo st0
+assemble remapP = assembleGo st0 [] 0
   where st0 = WState { wsRemap = remapP, wsCache = unknownCache
-                     , wsStrings = [], wsFrames = []
-                     , wsMain = 0, wsEntries = noEntries, wsChunks = IM.empty
+                     , wsStrings = []
+                     , wsEntries = noEntries, wsChunks = IM.empty
                      , wsOpen = [], wsNChunks = 0 }
 
-assembleGo :: WState -> [BinElem] -> [Byte]
-assembleGo !st [] = finish st
-assembleGo !st (B bs : xs) = emit bs st xs
-assembleGo !st (Start _ : xs) = assembleGo st xs
-assembleGo !st (End : xs) = assembleGo st xs
-assembleGo !st (S s : xs) =
+-- arguments: the cold state, the open entries (innermost first), the
+-- number of bytes emitted to the bodies region so far, the elements
+assembleGo :: WState -> [Frame] -> Int -> [BinElem] -> [Byte]
+assembleGo !st frames !main [] = finish st frames main
+assembleGo !st frames !main (B bs : xs) = emit bs st frames main xs
+assembleGo !st frames !main (Start _ : xs) = assembleGo st frames main xs
+assembleGo !st frames !main (End : xs) = assembleGo st frames main xs
+assembleGo !st frames !main (S s : xs) =
   case knownAs s s (wsCache st) of
-    Just idx -> emit (plainBytes idx) st xs
+    Just idx -> emit (plainBytes idx) st frames main xs
     Nothing  -> let (idx, cache') = addKey s s (wsCache st)
                 in emit (plainBytes idx)
-                        st { wsCache = cache', wsStrings = s : wsStrings st } xs
+                        st { wsCache = cache', wsStrings = s : wsStrings st }
+                        frames main xs
 -- The Position transform (-remap-path-prefix) is applied before
 -- sharing, so the cache is keyed on the stored (remapped) value:
 -- positions that remap equal share a single entry.
-assembleGo !st (P p : xs) = let p' = wsRemap st p in shared KPosition p' p' st xs
-assembleGo !st (I i : xs)  = shared KId (id_key i) i st xs
-assembleGo !st (T t : xs)  = shared KType (type_key t) t st xs
-assembleGo !st (IT t : xs) = shared KIType (itype_key t) t st xs
-assembleGo !st (EntryStart k n : xs) =
-  assembleGo st { wsFrames = Frame k n [] : wsFrames st } xs
-assembleGo !st (EntryEnd : xs) =
-  case wsFrames st of
+assembleGo !st frames !main (P p : xs) =
+  let p' = wsRemap st p in shared KPosition p' p' st frames main xs
+assembleGo !st frames !main (I i : xs)  = shared KId (id_key i) i st frames main xs
+assembleGo !st frames !main (T t : xs)  = shared KType (type_key t) t st frames main xs
+assembleGo !st frames !main (IT t : xs) = shared KIType (itype_key t) t st frames main xs
+assembleGo !st frames !main (EntryStart k n : xs) =
+  assembleGo st (Frame k n [] : frames) main xs
+assembleGo !st frames !main (EntryEnd : xs) =
+  case frames of
     (Frame k n runs : fs) ->
       let !bytes = BS.pack (concat (reverse runs))
-      in assembleGo st { wsFrames = fs
-                       , wsEntries = addEntry k n bytes (wsEntries st) } xs
+      in assembleGo st { wsEntries = addEntry k n bytes (wsEntries st) } fs main xs
     [] -> internalError "BinData.assemble: unbalanced table entry"
-assembleGo !st (LazyStart : xs) =
-  case wsFrames st of
+assembleGo !st frames !main (LazyStart : xs) =
+  case frames of
     [] -> let c = wsNChunks st
               bs = plainBytes c
-              !start = wsMain st + length bs
-          in bs ++ assembleGo st { wsMain = start, wsNChunks = c + 1
-                                 , wsOpen = (c, start) : wsOpen st } xs
+              !start = main + length bs
+          in bs ++ assembleGo st { wsNChunks = c + 1, wsOpen = (c, start) : wsOpen st }
+                              frames start xs
     _  -> internalError "BinData.assemble: lazy value inside a shared value"
-assembleGo !st (LazyEnd : xs) =
+assembleGo !st frames !main (LazyEnd : xs) =
   case wsOpen st of
     ((c, start) : rest) ->
       assembleGo st { wsOpen = rest
-                    , wsChunks = IM.insert c (start, wsMain st - start) (wsChunks st) } xs
+                    , wsChunks = IM.insert c (start, main - start) (wsChunks st) }
+                 frames main xs
     [] -> internalError "BinData.assemble: unbalanced lazy value"
 
-emit :: [Byte] -> WState -> [BinElem] -> [Byte]
-emit bs !st xs =
-  case wsFrames st of
-    [] -> bs ++ assembleGo st { wsMain = wsMain st + length bs } xs
-    (Frame k n runs : fs) -> assembleGo st { wsFrames = Frame k n (bs : runs) : fs } xs
+emit :: [Byte] -> WState -> [Frame] -> Int -> [BinElem] -> [Byte]
+emit bs !st frames !main xs =
+  case frames of
+    [] -> bs ++ assembleGo st frames (main + length bs) xs
+    (Frame k n runs : fs) -> assembleGo st (Frame k n (bs : runs) : fs) main xs
 
 -- A shared occurrence: its index, and on first occurrence its payload,
 -- routed to a new table entry (nested shared values inside it get
 -- their own indices and entries as the walk reaches them).
-shared :: (Bin v, Shared k v) => TableKind -> k -> v -> WState -> [BinElem] -> [Byte]
-shared kind key v !st xs =
+shared :: (Bin v, Shared k v) =>
+          TableKind -> k -> v -> WState -> [Frame] -> Int -> [BinElem] -> [Byte]
+shared kind key v !st frames !main xs =
   case knownAs key v (wsCache st) of
-    Just idx -> emit (plainBytes idx) st xs
+    Just idx -> emit (plainBytes idx) st frames main xs
     Nothing  -> let (idx, cache') = addKey key v (wsCache st)
-                in emit (plainBytes idx) st { wsCache = cache' }
+                in emit (plainBytes idx) st { wsCache = cache' } frames main
                         (EntryStart kind idx : out_data (writeBytes v) ++ (EntryEnd : xs))
 
 -- The bodies region is complete: emit the tables, the string table,
 -- the chunk index and the footer.
-finish :: WState -> [Byte]
-finish st
-  | not (null (wsFrames st)) = internalError "BinData.assemble: unclosed table entry"
+finish :: WState -> [Frame] -> Int -> [Byte]
+finish st frames bodiesEnd
+  | not (null frames) = internalError "BinData.assemble: unclosed table entry"
   | not (null (wsOpen st)) = internalError "BinData.assemble: unclosed lazy value"
   | IM.size (wsChunks st) /= wsNChunks st = internalError "BinData.assemble: chunks"
   | otherwise =
-      let bodiesEnd = wsMain st
-          tableOf k = let im = getEntries k (wsEntries st)
+      let tableOf k = let im = getEntries k (wsEntries st)
                           n  = cacheCount k (wsCache st)
                       in if IM.size im /= n || (n > 0 && fst (IM.findMax im) /= n - 1)
                          then internalError $ "BinData.assemble: " ++ show k ++ " table"
