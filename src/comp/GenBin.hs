@@ -1,8 +1,9 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenBin(genBinFile, readBinFile) where
+module GenBin(genBinFile, readBinFile, readBinFileStrict, readBinPackage) where
 
 import Control.Monad(when)
+import Control.Exception(evaluate)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
@@ -13,6 +14,7 @@ import ISyntax
 import ISyntaxUtil(icUndet)
 import CSyntax
 import Undefined(UndefKind(UNoMatch))
+import Prim(PrimOp(PrimPoisonedDef))
 import BinData
 import FileIOUtil(writeBinaryFileCatch)
 import PFPrint
@@ -26,26 +28,68 @@ doTrace = elem "-trace-genbin" progArgs
 -- .bo file tag -- change this whenever the .bo format changes
 -- See also GenABin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260715-6"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20261030-15"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
 
+-- A .bo is the tag followed by one BinData container holding
+-- (bi_sig, bo_sig, BoPackage).  Every def body is a lazy chunk (see
+-- the IDef instance), so a reader that never looks at a body never
+-- decodes it; the signatures, the package header and the per-def
+-- names, types and properties are decoded at load.
 genBinFile :: ErrorHandle -> (Position -> Position) ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
 genBinFile errh remapP fn bi_sig bo_sig ipkg =
-    writeBinaryFileCatch errh fn
-        (header ++ encodeWith remapP (bi_sig, bo_sig, ipkg))
+    let poisoned = any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]
+    in writeBinaryFileCatch errh fn
+           (header ++ encodeWith remapP (bi_sig, bo_sig, BoPackage poisoned ipkg))
 
-readBinFile :: ErrorHandle -> String -> B.ByteString ->
-               IO (CSignature, CSignature, IPackage a, String)
-readBinFile errh nm s =
+-- The authenticating hash is a fold over every byte after the tag,
+-- computed here (eagerly) from the raw bytes: it does not depend on
+-- which parts of the package the consumer later forces.
+readBinWith :: Bool -> ErrorHandle -> String -> B.ByteString ->
+               IO (CSignature, CSignature, IPackage a, Bool, String)
+readBinWith strict errh nm s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS
-       then let ((bi_sig, bo_sig, ipkg), hash) =
-                    decodeWithHash $ B.drop hlen s
-            in return (bi_sig, bo_sig, ipkg, hash)
+       then do let payload = B.drop hlen s
+                   (bi_sig, bo_sig, BoPackage poisoned ipkg) =
+                       if strict then decodeStrict payload else decode payload
+                   -- only the hash of the pair is used
+                   (_, hash) = decodeWithHash payload :: ((), String)
+               _ <- evaluate hash
+               return (bi_sig, bo_sig, ipkg, poisoned, hash)
        else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+
+-- The package, with its poison-pill status, def bodies decoded lazily
+readBinPackage :: ErrorHandle -> String -> B.ByteString ->
+                  IO (CSignature, CSignature, IPackage a, Bool, String)
+readBinPackage = readBinWith False
+
+-- The package with lazily decoded def bodies
+readBinFile :: ErrorHandle -> String -> B.ByteString ->
+               IO (CSignature, CSignature, IPackage a, String)
+readBinFile errh nm s = do
+    (bi_sig, bo_sig, ipkg, _, hash) <- readBinWith False errh nm s
+    return (bi_sig, bo_sig, ipkg, hash)
+
+-- Everything decoded and validated at once (for tools that print the
+-- whole package, and for tests)
+readBinFileStrict :: ErrorHandle -> String -> B.ByteString ->
+                     IO (CSignature, CSignature, IPackage a, String)
+readBinFileStrict errh nm s = do
+    (bi_sig, bo_sig, ipkg, _, hash) <- readBinWith True errh nm s
+    return (bi_sig, bo_sig, ipkg, hash)
+
+-- Whether any def body contains a poisoned-def primitive (computed by
+-- the writer, so that the importer need not decode the bodies)
+hasPoisonPill :: IExpr a -> Bool
+hasPoisonPill (ILam _ _ e)  = hasPoisonPill e
+hasPoisonPill (ILAM _ _ e)  = hasPoisonPill e
+hasPoisonPill (IAps f _ es) = any hasPoisonPill (f:es)
+hasPoisonPill (ICon _ (ICPrim _ p)) = p == PrimPoisonedDef
+hasPoisonPill _ = False
 
 -- ----------
 -- Bin CSignature
@@ -533,21 +577,29 @@ instance Bin Pragma where
 -- ----------
 -- Bin IPackage
 
-instance Bin (IPackage a) where
-    writeBytes pkg =
+-- The package as stored in a .bo: the eager header (name, depends,
+-- pragmas, the writer-computed poison flag), the defs (each body a
+-- lazy chunk) and the ATF cache.
+data BoPackage a = BoPackage Bool (IPackage a)
+
+instance Bin (BoPackage a) where
+    writeBytes (BoPackage poisoned pkg) =
         section "IPackage" $
         do toBin (ipkg_name pkg)
            toBin (ipkg_depends pkg)
            toBin (ipkg_pragmas pkg)
+           toBin poisoned
            toBin (ipkg_defs pkg)
            toBin (ipkg_atf_cache pkg)
     readBytes = do when doTrace $ traceM("read IPackage")
                    name      <- fromBin
                    depends   <- fromBin
                    pragmas   <- fromBin
+                   poisoned  <- fromBin
                    defs      <- fromBin
                    atfCache  <- fromBin
-                   return $ IPackage { ipkg_name      = name
+                   return $ BoPackage poisoned $
+                            IPackage { ipkg_name      = name
                                      , ipkg_depends   = depends
                                      , ipkg_pragmas   = pragmas
                                      , ipkg_defs      = defs
@@ -557,14 +609,16 @@ instance Bin (IPackage a) where
 -- ----------
 -- Bin IDef
 
+-- The body is a lazy chunk: decoded on first force (by elaboration,
+-- simplification or a dump), never by the import itself.
 instance Bin (IDef a) where
     writeBytes (IDef i ty e p) =
         section "IDef" $
-        do toBin i; toBin ty; toBin e ; toBin p
+        do toBin i; toBin ty; toBinLazy e ; toBin p
     readBytes = do when doTrace $ traceM("read IDef")
                    i <- fromBin
                    ty <- fromBin
-                   e <- fromBin
+                   e <- fromBinLazy
                    p <- fromBin
                    return $ IDef i ty e p
 
