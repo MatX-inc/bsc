@@ -34,7 +34,7 @@ import qualified Data.ByteString as B
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260715-6"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261030-15"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -43,11 +43,14 @@ genABinFile :: ErrorHandle -> (Position -> Position) -> String -> ABin -> IO ()
 genABinFile errh remapP fn abin =
     writeBinaryFileCatch errh fn (header ++ encodeWith remapP abin)
 
+-- A .ba marks nothing lazy, and its readers (linking, the -u staleness
+-- check) consume and validate the whole file, so it is decoded
+-- strictly: every shared-table entry is forced at load.
 readABinFile :: ErrorHandle -> String -> B.ByteString -> (ABin, String)
 readABinFile errh nm s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS
-       then (decode (B.drop hlen s), "")
+       then (decodeStrict (B.drop hlen s), "")
        --then (decodeWithHash (B.drop hlen s))
        else bsErrorUnsafe errh [(noPosition, EBinFileVerMismatch nm)]
 
