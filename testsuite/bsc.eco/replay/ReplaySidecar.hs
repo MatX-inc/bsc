@@ -8,7 +8,7 @@ import System.Directory(createDirectoryIfMissing, createFileLink, findExecutable
 import System.FilePath((</>))
 
 import Backend(Backend(..))
-import BinData(encode,decode)
+import BinData(encode,decodeStrict)
 import ECO.Replay
 import ECO.Options (defaultECOOptions, ecoCapture)
 import Flags(Flags(..))
@@ -71,7 +71,7 @@ main = do
                         ["space name.ba", "back\\slash.ba", "line\nfeed.ba"])
                 ["sha256sum", "shasum"]
             bytes <- BS.readFile (fiPath (rmFlags manifest))
-            let decodedFlags = decode bytes :: Flags
+            let decodedFlags = decodeStrict bytes :: Flags
             assert "effective paths were remapped" (vdir decodedFlags == Just "/original/output")
             assert "native flags did not round trip" (BS.pack (encode decodedFlags) == BS.pack (encode flags))
             assert "native decode restored invocation-only ECO controls"

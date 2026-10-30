@@ -20,7 +20,7 @@ import qualified Data.Set as S
 import System.Directory
 import System.FilePath
 import Text.Read (readMaybe)
-import BinData (encode,decode)
+import BinData (encode,decodeStrict)
 import GenABin ()
 import Verilog
 import ECORename (renameInternalSignals)
@@ -151,7 +151,7 @@ optimizeAST request = do
     originalCost <- lineCost (directory </> "old.v") (directory </> "ordinary-new.v")
     costContext <- prepareCost objective directory old
     ordinaryScore <- scoreCost costContext objective "ordinary" ordinary
-    let initialPlan = ASTPlan 3 options originalHash originalHash rendererHash []
+    let initialPlan = ASTPlan 4 options originalHash originalHash rendererHash []
         prove label relation a b = runner options (directory </> label) relation a b
         save before after cost nextCost plan candidate relation = do
             let index = length (planSteps plan) + 1
@@ -287,7 +287,7 @@ replayASTPlanWith :: ProofRunner -> SearchOptions -> (VProgram -> String) -> Fil
 replayASTPlanWith runner expected render planPath directory ordinary = do
     contents <- readFile planPath
     plan <- maybe (ioError (userError "invalid ECO AST plan")) return (readMaybe contents)
-    require (planSchema plan == 3) "unsupported plan schema"
+    require (planSchema plan == 4) "unsupported plan schema"
     require (planOptions plan == expected) "plan proof domain/options differ from requested policy"
     exists <- doesPathExist directory; require (not exists) "replay output directory exists"
     createDirectoryIfMissing True directory
@@ -314,7 +314,7 @@ replayASTPlanWith runner expected render planPath directory ordinary = do
       after <- hashFile path
       require (after == stepArtifactHash step && after == stepAfter step) "candidate artifact changed"
       bytes <- BS.readFile path
-      let candidate = decode bytes
+      let candidate = decodeStrict bytes
       require (samePorts ordinary candidate) "candidate changed fixed module ports"
       emittable candidate
       proof <- runner options (directory </> "proof-" ++ show index) (stepAlpha step) reference candidate
@@ -344,7 +344,7 @@ replayASTPlanWithCost objective old runner expected render planPath directory or
       h <- hashFile path
       require (h==stepArtifactHash step && h==stepAfter step) "objective candidate changed after semantic replay"
       bytes <- BS.readFile path
-      let program=decode bytes
+      let program=decodeStrict bytes
       decodedHash <- writeAST (directory </> "objective-input-" ++ show index ++ ".ast") program
       require (decodedHash==stepAfter step) "objective candidate bytes changed while read"
       pure program) (zip [1::Int ..] (planSteps plan))

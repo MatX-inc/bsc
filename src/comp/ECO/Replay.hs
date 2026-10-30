@@ -32,7 +32,7 @@ import ABinUtil(readAndCheckABin)
 import ASyntax(APackage(..))
 import Id(getIdBaseString)
 import Backend(Backend(..))
-import BinData(encode, decode)
+import BinData(encode, decodeStrict)
 import Error(ErrorHandle)
 import Flags(Flags(..))
 import GenABin() -- native Bin Flags instance, identical to the producer
@@ -402,7 +402,9 @@ loadReplay :: ErrorHandle -> ReplayManifest -> IO (ABinModInfo, Flags)
 loadReplay errh manifest = do
     (_, abin) <- readAndCheckABin errh (Just Verilog) (fiPath (rmABin manifest))
     flagBytes <- BS.readFile (fiPath (rmFlags manifest))
-    flags <- evaluate (decode flagBytes)
+    -- the .flags sidecar is a BinData container with nothing lazy; decode
+    -- it strictly so the whole file is validated before replay proceeds
+    flags <- evaluate (decodeStrict flagBytes)
     when (synthesize flags || backend flags /= Just Verilog) $
         failReplay "captured configuration is outside the supported backend"
     unless (verilogFilter flags == map fst (rmFilters manifest)) $

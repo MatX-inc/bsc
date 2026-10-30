@@ -222,7 +222,7 @@ runCaptureFlow (FlowPolicy provider objectiveFactory invariantPolicy) config = d
     objectiveReport <- fileIdentity (output </> "flow-objective.report")
     objectivePlans <- mapM fileIdentity [takeDirectory (fiPath ident) </> "objective.plan" |
         (_,Right (row,_,_)) <- results,Just ident <- [fbPlan row]]
-    let report = FlowReport 5 moduleName name (cfSearch config) (costPolicy initialObjective) originalCost cost rows identity
+    let report = FlowReport 6 moduleName name (cfSearch config) (costPolicy initialObjective) originalCost cost rows identity
                    (inputs++objectiveInputs++objectivePlans++[objectiveReport]) configID
     writeFile (output </> "flow.report") (show report ++ "\n")
     -- The written bundle is verified freshly through the shared verifier before

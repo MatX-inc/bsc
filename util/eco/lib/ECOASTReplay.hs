@@ -160,7 +160,7 @@ loadFlow roots flowPath controls=do
   if not present then pure[]else do
    c<-required"recorded plan without its branch context"context
    planID<-fileIdentity path;plan<-readRecord path::IO ASTPlan
-   need(planOptions plan==opts&&planSchema plan==3)"selected plan schema/options differ"
+   need(planOptions plan==opts&&planSchema plan==4)"selected plan schema/options differ"
    need(length(planSteps plan)<=256)"accepted-prefix budget exceeds 256 steps per branch"
    let inputPath=controls</>(branch++"-input.ast")
    B.writeFile inputPath(B.pack(encode(viProgram c)))
@@ -185,7 +185,7 @@ replayFlow roots target flowPath output=do
  (branch,report,reportIDs)<-case target of
   SelectedFlow->do
    reportID<-fileIdentity(flow</>"flow.report");saved<-readRecord(fiPath reportID)::IO FlowReport
-   need(frSchema saved==5&&frModule saved==modul&&frSearchPolicy saved==opts)"flow schema/module/proof options mismatch"
+   need(frSchema saved==6&&frModule saved==modul&&frSearchPolicy saved==opts)"flow schema/module/proof options mismatch"
    need(frConfig saved==lfConfigID loaded)"flow report binds a different effective configuration"
    mapM_ unchanged(frInputs saved++[frOutput saved])
    pure(frSelected saved,Just saved,reportID:frOutput saved:frInputs saved)

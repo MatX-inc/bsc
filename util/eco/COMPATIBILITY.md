@@ -25,11 +25,11 @@ Nothing in the stack migrates a capture between versions.
 | `MOD.eco-preopt`, `MOD.eco-graph` | `egSchema = 1` | #243 |
 | `keep.plan` | `ebpSchema = 1` | #243 |
 | `*.eco-plan` rename plans | `erpSchema = 1` | #246 |
-| `search.plan` | `planSchema = 3` | #247 |
-| `objective.plan` | `costSchema = 1` | #247 |
+| `search.plan` (its `steps/N.ast` and every other `.ast` are BinData containers) | `planSchema = 4` | lazy-bindata |
+| `objective.plan` (binds `.ast` digests) | `costSchema = 2` | lazy-bindata |
 | `build.manifest` | `sdkSchema = 4` | #246 |
 | metric `report.json` (whole-file and translated) | `"schema": 2` | #249 |
-| `flow.report` | `frSchema = 5` | #251 |
+| `flow.report` (binds the branch plans) | `frSchema = 6` | lazy-bindata |
 | `upstream-qualification.json` | `"schema": 2` | #251 |
 | finishing `receipt.json` | `"schema": 2` | #252 |
 | proof receipts (`*.proof.json`, `ordinary-to-kept.json`, `proof-N.json`) | `"schema": 1` | #246 |
