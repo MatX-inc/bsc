@@ -1,0 +1,7 @@
+-- The profiling variant (make BSC_BUILD=PROF): cost centres on every
+-- function, and the stack cap their frames need (INSTALL.md).
+import: cabal.project
+profiling: True
+profiling-detail: all-functions
+package bsc
+  ghc-options: "-with-rtsopts=-H256m -K256m -i1"

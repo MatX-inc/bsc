@@ -1,11 +1,10 @@
-# Ignore Haskell files that are auto-generated and not checked in
-BuildVersion.hs
-Warmup.hs
+# Warmup.hs and BuildVersion.hs are not listed: the cabal build writes them
+# under dist-newstyle, and a copy here fails the build.
 
 # Ignore C files that are auto-generated and not checked in
 rts_hooks*.o
 
-# Ignore the generated executables
+# The programs' links, which the per-program targets make
 bsc
 bluetcl
 dumpbo

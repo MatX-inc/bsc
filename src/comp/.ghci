@@ -2,22 +2,10 @@
 :set -XForeignFunctionInterface
 :set -XUndecidableInstances
 
--- Packages
-:set -package base
-:set -package containers
-:set -package array
-:set -package mtl
-:set -package unix
-:set -package regex-compat
-:set -package bytestring
-:set -package directory
-:set -package process
-:set -package filepath
-:set -package time
-:set -package old-time
-:set -package old-locale
-:set -package split
-:set -package syb
+-- Packages come from the environment file the cabal build writes at the
+-- root. The compiled library supplies the two generated modules (Warmup,
+-- BuildVersion); every module with a source is interpreted from it.
+:set -package bsc
 
 -- Haskell source
 :set -i../comp:../comp/app:../comp/Libs:../comp/GHC:../comp/GHC/posix:../Parsec
@@ -28,8 +16,6 @@
 :set -i../vendor/htcl
 
 :set -I/usr/include/tcl
-:set -L../vendor/htcl
-:set -lhtcl
 
 :set -L../vendor/stp/lib
 :set -lstp
