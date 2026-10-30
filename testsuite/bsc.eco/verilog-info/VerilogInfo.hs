@@ -77,7 +77,7 @@ main = do
             ident <- fileIdentity bin
             writeFile env (show (envelope {aePayload=ident}) ++ "\n")
             readVerilogInfo env
-    check "payload magic names the current format" (magic == BS.pack (map (fromIntegral . fromEnum) "bsc-eco-verilog-ast-2\n"))
+    check "payload magic names the current format" (magic == BS.pack (map (fromIntegral . fromEnum) "bsc-eco-verilog-ast-3\n"))
     reject "self-consistent payload cannot inject RTL in renderer header"
         (tamper "header" (Payload ("wire injected;\n" ++ header) program instances))
     let VProgram originalMods dpi comments0 = program
