@@ -26,7 +26,8 @@ main=do
  let forge=out</>"ForgeVerified.hs"
  writeFile forge "module Main where\nimport ECOASTReplay\nforge x=x{replayProgram=replayProgram x}\nmain=pure ()\n"
  (forgeCode,forgeOut,forgeErr)<-readProcessWithExitCode bluehs["-i","-i"++sdk</>"lib",forge]""
- unless(forgeCode/=ExitSuccess&&"record field" `isInfixOf`(forgeOut++forgeErr)&&"replayProgram" `isInfixOf`(forgeOut++forgeErr))(fail"verified value permits record updates")
+ -- GHC 9.14 reports "not a record field"; GHC 9.6 (the release GHC) "not a record selector".
+ unless(forgeCode/=ExitSuccess&&any(`isInfixOf`(forgeOut++forgeErr))["record field","record selector"]&&"replayProgram" `isInfixOf`(forgeOut++forgeErr))(fail"verified value permits record updates")
  let reportPath=flow</>"flow.report"
  report<-record reportPath::IO FlowReport
  let withReport r=changed reportPath(bytes(show r++"\n"))
