@@ -982,22 +982,36 @@ aPathsPreSched errh flags apkg = do
   pathgraph' <- addEdgesWithNodes pathgraph rdy_to_en_edges
   let reachables = findReachables pathgraph' will_fire_nodes
 
+  -- The nodes reachable from one WF node as a map from node to path,
+  -- restricted to the CF and RDY nodes that are looked up below.  The
+  -- reachable list is a DFS preorder, in which each node appears once,
+  -- so "M.lookup n (reachMap rs)" equals "lookup n rs" for every CF or
+  -- RDY node n.
+  let isUrgencyTarget (PNCanFire _) = True
+      isUrgencyTarget (PNTopMethodReady _) = True
+      isUrgencyTarget _ = False
+
+      reachMap :: [(PathNode, [PathNode])] -> M.Map PathNode [PathNode]
+      reachMap rs = M.fromList [ (n, path) | (n, path) <- rs, isUrgencyTarget n ]
+
   -- pairs of PathNode
   let urgency_pairs =
           -- edges from WF to CF of rule (or action/actionvalue method)
           [ (wf_rule_id, cf_rule_id, filtered_path) |
                 (PNWillFire wf_rule_id, rs) <- zip will_fire_nodes reachables,
+                let rmap = reachMap rs,
                 cf_node@(PNCanFire cf_rule_id) <- can_fire_nodes,
-                let mpath = lookup cf_node rs,
+                let mpath = M.lookup cf_node rmap,
                 isJust mpath,
                 let filtered_path = reverse (filterPNDefs (fromJust mpath)) ]
           ++
           -- edges from WF to RDY of value method
           [ (wf_rule_id, meth_id, filtered_path) |
                 (PNWillFire wf_rule_id, rs) <- zip will_fire_nodes reachables,
+                let rmap = reachMap rs,
                 (AIDef { aif_name = meth_id }) <- ifc,
                 let meth_node = (PNTopMethodReady meth_id),
-                let mpath = lookup meth_node rs,
+                let mpath = M.lookup meth_node rmap,
                 isJust mpath,
                 let filtered_path = reverse (filterPNDefs (fromJust mpath)) ]
 
@@ -1118,11 +1132,15 @@ aPathsPostSched flags pps apkg pathGraphInfo (ASchedule scheds _) = do
   let reachables = findReachables pathgraph mod_inputs
 
   -- pairs of PathNode
+  -- (an output is paired with an input iff it is among the nodes
+  -- reachable from the input, which the set answers without scanning
+  -- the reachable list once per output)
   let pathpairs = [ (input, output) |
                         -- we don't need to know the path
                         (input, rs) <- zip mod_inputs reachables,
+                        let reached = S.fromList (map fst rs),
                         output <- mod_outputs,
-                        isJust (lookup output rs) ]
+                        output `S.member` reached ]
 
   -- --------------------
   -- Convert the path ids from PathNode to VName
