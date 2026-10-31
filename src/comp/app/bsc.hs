@@ -56,7 +56,7 @@ import FileIOUtil(writeFileCatch, readFileMaybe, removeFileCatch,
 import TopUtils
 import SystemCheck(doSystemCheck)
 import BuildSystem
-import IOUtil(getEnvDef)
+import IOUtil(getEnvDef, progArgs)
 
 -- compiler libs
 --import FStringCompat
@@ -91,6 +91,7 @@ import SymTab
 import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
+import CType(enableCanonIds, disableCanonIds, cTypeStats)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
@@ -187,7 +188,15 @@ main = do
     hSetEncoding stderr utf8
     args <- getArgs
     -- bsc can raise exception,  catch them here  print the message and exit out.
-    bsCatch (hmain args)
+    bsCatch (hmain args) `CE.finally` dumpCTypeStats
+
+-- Hidden flag -trace-ctype-stats: print the CType canonical-identity
+-- counters at exit, including on the exitWith paths (hence finally).
+dumpCTypeStats :: IO ()
+dumpCTypeStats = when ("-trace-ctype-stats" `elem` progArgs) $ do
+    stats <- cTypeStats
+    hPutStr stderr (unlines [ "ctype-stats " ++ name ++ " " ++ show n
+                            | (name, n) <- stats ])
 
 -- Use with hugs top level
 hmain :: [String] -> IO ()
@@ -412,6 +421,12 @@ compilePackage
     name_orig -- String --
     min@(CPackage pkgId _ _ _ _ _ _) = do
 
+    -- Shut the CType canonical-word gate while this package's parser
+    -- thunks, GenWrap, Deriving and symbol-table builds run; enableCanonIds
+    -- below, after symt11, opens it.  bsc -u compiles several packages in
+    -- one process, so an earlier package's opening must not carry over.
+    disableCanonIds
+
     -- Set syntax mode for the compilation pipeline (error messages, printing, etc.)
     setSyntax (if hasDotSuf bscSrcSuffix name_orig then CLASSIC else BSV)
 
@@ -496,6 +511,11 @@ compilePackage
     -- Extract packages used in type constructors from the parsed package
     -- (before any transformations that might expand synonyms or change types)
     let pkgsUsedInTypes = getPackagesUsedInTypes symt11 mder
+
+    -- Open the CType canonical-word gate: from here on every TyCon Id a
+    -- type can reach is already interned (see "Canonical identity" in
+    -- CType.hs for why words must not be computed earlier).
+    enableCanonIds
 
     -- Reduce the contexts as far as possible
     start flags DFctxreduce
