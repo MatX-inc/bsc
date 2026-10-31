@@ -15,6 +15,7 @@ import Control.Applicative((<|>))
 import Data.Maybe(isJust)
 
 import Backend
+import ECO.Options (ECOOptions)
 
 -- -------------------------
 -- Internal flags
@@ -167,7 +168,9 @@ data Flags = Flags {
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
         warnMethodUrgency :: Bool,
-        warnUndetPred :: Bool
+        warnUndetPred :: Bool,
+        -- Invocation controls; native serialization restores their defaults.
+        ecoOptions :: ECOOptions
         }
 -- don't derive Show -- it causes an optimized ghc build to take a long time
 --        deriving (Show)

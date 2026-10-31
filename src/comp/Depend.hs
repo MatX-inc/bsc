@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP #-}
-module Depend(chkDeps, parseFile, chkParse, doCPP, genDepend, genFileDepend,
+module Depend(chkDeps, chkDepsForCapture, parseFile, chkParse, doCPP, genDepend, genFileDepend,
               outlaw_sv_kws_as_classic_ids) where
 
 import Data.Maybe(isJust)
@@ -82,7 +82,16 @@ getModificationTime' file =
 -- result from codegen, so that a later stage could link them.  But this
 -- feature is no longer supported.)
 chkDeps :: ErrorHandle -> Flags -> String -> IO [(FilePath, CPackage, [WMsg])]
-chkDeps errh flags name = do
+chkDeps = chkDepsWithCapture False
+
+-- Capture needs the live backend state of every generated module, including
+-- synthesized modules in imported source packages. Cached .bo/.ba/RTL files
+-- cannot supply that state, even when ordinary dependency checks are satisfied.
+chkDepsForCapture :: ErrorHandle -> Flags -> String -> IO [(FilePath, CPackage, [WMsg])]
+chkDepsForCapture = chkDepsWithCapture True
+
+chkDepsWithCapture :: Bool -> ErrorHandle -> Flags -> String -> IO [(FilePath, CPackage, [WMsg])]
+chkDepsWithCapture capture errh flags name = do
         let gflags = [ mkId noPosition (mkFString s) | s <- genName flags ]
         (pkg, _, warns) <- parseFile errh flags False name
         pi <- getInfo errh flags gflags name pkg warns
@@ -100,12 +109,19 @@ chkDeps errh flags name = do
                                     Just pi -> pi
                                     Nothing -> internalError "Depend.chkDeps: lookupPkg"
                     -- the pkginfo of all depended modules, in dependency order
-                    pis' = map lookupPkg ns
+                    pis' = map (forceCapture . lookupPkg) ns
+                    forceCapture pi = case compileStatus pi of
+                        UpToDate pkg warns
+                            | capture && not (null (gens pi)) &&
+                              not (isPreludePkg flags (fileName pi)) ->
+                                pi { compileStatus = Recompile pkg warns }
+                        _ -> pi
                     -- names of files resulting from codegen, if we want
                     -- to return them, for a linking stage to use
                     --genfs = concatMap (getGenFs flags) pis'
                 -- the pkginfos with "recompile" marked for any files whose
-                -- source is newer than any of its related files
+                -- source is newer than any of its related files, or whose
+                -- dependencies are being rebuilt for capture
                 pis'' <- chkUpd flags DM.empty [] pis'
                 -- extract the files to recompile with their parsed packages and warnings, in dependency order
                 return (reverse [ (fileName pi, pkg, warns) | pi@(PkgInfo { compileStatus = Recompile pkg warns }) <- pis'' ])

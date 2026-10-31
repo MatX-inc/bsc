@@ -1,0 +1,23 @@
+package ReplayDependencies where
+
+import ReplayForeign
+
+interface ReplayDependencies =
+    put :: Bit 8 -> Action {-# arg_names = [value] #-}
+    result :: Bit 8
+
+{-# synthesize mkReplayDependencies #-}
+mkReplayDependencies :: Module ReplayDependencies
+mkReplayDependencies = module
+    r :: Reg (Bit 8) <- mkReg 1
+    interface ReplayDependencies
+        put value = r := value
+        result = replayForeign r
+
+{-# synthesize mkReplaySecond #-}
+mkReplaySecond :: Module ReplayDependencies
+mkReplaySecond = module
+    r :: Reg (Bit 8) <- mkReg 2
+    interface ReplayDependencies
+        put value = r := value + 1
+        result = replayForeign (r + 3)
