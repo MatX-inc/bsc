@@ -29,6 +29,14 @@ on:
         required: false
         default: false
         type: boolean
+      bundle_runtime:
+        # Give inst its own loader, C runtime and Tcl (matx_bundle_runtime.py),
+        # so the tarball runs on hosts with an older glibc or no Tcl, and prove
+        # it in a container that has neither. Off by default, so upstream CI
+        # tests the install as `make install` lays it out.
+        required: false
+        default: false
+        type: boolean
       # MatX-verilator leg mode: off | observe | ratchet | gate.
       # "off" skips the leg entirely (the default keeps upstream ci.yml
       # unaffected); the other modes run the sharded suite under the
@@ -110,7 +118,34 @@ jobs:
               fi
           fi
 
+          # After every install target: the bundler moves the ELF tools under
+          # bin/core and a later `make install` would put fresh ones over the
+          # launchers. It then runs the bundled bluetcl with an empty
+          # environment, which fails the build if the install cannot run alone.
+          if [ "${{ inputs.bundle_runtime }}" = true ]; then
+              python3 .github/workflows/matx_bundle_runtime.py inst
+          fi
+
           tar czf inst.tar.gz inst
+      - name: Check the install needs nothing from the host
+        if: ${{ inputs.bundle_runtime }}
+        # A Rocky 9 userland with no Tcl, like the RBE workers once their rootfs
+        # stops carrying one. The launchers want only bash, which the minimal
+        # image has; the loader, libc, libtcl and init.tcl all come from inst.
+        run: |
+          cat > probe.tcl <<'EOF'
+          puts "library=[info library]"
+          puts "patchlevel=[info patchlevel]"
+          puts "clock=[clock format 0 -gmt 1]"
+          EOF
+          docker run --rm -v "$PWD:/w:ro" -w /w docker.io/rockylinux/rockylinux:9-minimal \
+              bash -c 'set -e
+                  if command -v tclsh >/dev/null; then echo "the image has a tclsh"; exit 1; fi
+                  [ ! -e /usr/lib64/libtcl8.6.so ]
+                  out=$(env -i inst/bin/bluetcl probe.tcl)
+                  echo "$out"
+                  [[ "$out" == *"library=/w/inst/lib/tcl8.6"* ]]
+                  [[ "$out" == *"clock=Thu Jan 01 00:00:00 GMT 1970"* ]]'
       - name: CCache stats
         env:
           CCACHE_DIR: ${{ GITHUB.WORKSPACE }}/ccache

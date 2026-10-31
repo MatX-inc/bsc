@@ -80,6 +80,9 @@ jobs:
       hls_version: ${{ (inputs.ghc_version || '9.6.7') == '9.6.7' && '2.13.0.0' || '' }}
       timeout_override: ${{ matrix.timeout_override }}
       bluehs: true
+      # The Linux release carries its own runtime, Tcl included, so the
+      # monorepo's bluetcl actions need nothing from the host they run on.
+      bundle_runtime: true
       # push-trigger runs (inputs empty) use the committed default
       matx_verilator_mode: ${{ inputs.verilator_mode || 'ratchet' }}
     secrets: inherit
