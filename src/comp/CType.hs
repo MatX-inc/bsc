@@ -1,9 +1,15 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving, PatternGuards, DeriveDataTypeable #-}
+{-# LANGUAGE PatternSynonyms #-}
 -- | The CType package defines the concrete representation of types and kinds.
 module CType(
   -- * Types
-  Type(..), CType, TyVar(..), TyCon(..), TISort(..), StructSubType(..),
+  Type(TVar, TCon, TAp, TGen, TDefMonad),
+  CType, TyVar(..), TyCon(..), TISort(..), StructSubType(..),
+
+  -- ** Canonical identity
+  typeCanonWord, isGroundType, isNormalType, isGroundNode, isNormalNode,
+  enableCanonIds, disableCanonIds, CTypeStat(..), ctypeStat, bumpCTypeStat, cTypeStats,
 
   -- ** Examining Types
   getTyVarId, getTypeKind,
@@ -60,6 +66,12 @@ import Data.Char(isDigit, chr)
 import Data.List(union)
 import Data.Maybe
 import qualified Data.Generics as Generic
+import qualified Data.Map.Strict as M
+import qualified Data.IntMap.Strict as IM
+import Data.IORef(IORef, newIORef, readIORef, writeIORef, modifyIORef',
+                  atomicModifyIORef')
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
+import Control.Monad(when, unless)
 
 import Eval
 import PPrint
@@ -68,23 +80,57 @@ import Id
 import IdPrint
 import PreIds(idArrow, idPrimPair, idPrimUnit, idBit, idString,
               idPrimAction, idAction, idActionValue_, idActionValue,
-              idTNumToStr)
+              idTNumToStr, idId)
 import Util(itos)
 import ErrorUtil
 import Pragma(IfcPragma)
 import TypeOps
 import PVPrint(PVPrint(..))
 import FStringCompat
+import SpeedyString(internCount)
+import IOUtil(progArgs)
 
 -- Data structures
 
 -- | Representation of types
+--
+-- TCon_ and TAp_ carry a slot holding the node's canonical word (see
+-- "Canonical identity" below): -1 for none, else a word identifying the
+-- node's structure under Eq.  The real constructors are private to this
+-- module; TCon and TAp are bidirectional pattern synonyms, so every other
+-- module matches and builds the public constructor names, and the
+-- synonyms' builders compute the slot.
 data Type = TVar TyVar         -- ^ type variable
-          | TCon TyCon         -- ^ type constructor
-          | TAp Type Type      -- ^ type-level application
+          | TCon_ {-# UNPACK #-} !Int TyCon     -- ^ type constructor
+          | TAp_ {-# UNPACK #-} !Int Type Type  -- ^ type-level application
           | TGen Position Int  -- ^ quantified type variable used in type schemes
           | TDefMonad Position -- ^ not used after CVParserImperative
-    deriving (Show, Generic.Data, Generic.Typeable)
+    deriving (Generic.Data, Generic.Typeable)
+
+pattern TCon :: TyCon -> Type
+pattern TCon c <- TCon_ _ c
+  where TCon c = mkTCon c
+
+pattern TAp :: Type -> Type -> Type
+pattern TAp f a <- TAp_ _ f a
+  where TAp f a = mkTAp f a
+
+{-# COMPLETE TVar, TCon, TAp, TGen, TDefMonad #-}
+
+-- Prints the public constructor names, as `deriving Show` over the five
+-- public constructors would, with the slot omitted (internalError texts
+-- and debug dumps show TCon and TAp).
+instance Show Type where
+    showsPrec d (TVar v) = showParen (d > 10) $
+        showString "TVar " . showsPrec 11 v
+    showsPrec d (TCon c) = showParen (d > 10) $
+        showString "TCon " . showsPrec 11 c
+    showsPrec d (TAp f a) = showParen (d > 10) $
+        showString "TAp " . showsPrec 11 f . showString " " . showsPrec 11 a
+    showsPrec d (TGen p i) = showParen (d > 10) $
+        showString "TGen " . showsPrec 11 p . showString " " . showsPrec 11 i
+    showsPrec d (TDefMonad p) = showParen (d > 10) $
+        showString "TDefMonad " . showsPrec 11 p
 
 -- | Representation of a type variable
 data TyVar = TyVar { tv_name :: Id    -- ^ name of the type variable
@@ -180,6 +226,12 @@ data CPred = CPred { cpred_tc   :: CTypeclass  -- ^ constraint class, e.g., "Eq"
 -- TAp first because it brings forward instances with larger structure
 -- see the Has_tpl_n instances in the Prelude
 cmp :: Type -> Type -> Ordering
+-- Equal canonical words imply equality under the structural clauses below
+-- (see "Canonical identity": equal words <=> equal key <=> Eq-equal leaf
+-- or Eq-equal children), so EQ may be answered from the slots.  LT and GT
+-- never are: every Map and Set order over types stays the structural one.
+cmp x y | i >= 0, i == typeCanonWordNode y = eqByWord x y
+  where i = typeCanonWordNode x
 cmp (TAp f1 a1) (TAp f2 a2) = compare (f1, a1) (f2, a2)
 cmp (TAp _  _)  _           = LT
 cmp (TCon c1) (TCon c2) = compare c1 c2
@@ -196,7 +248,12 @@ cmp (TDefMonad _) (TDefMonad _) = EQ
 cmp (TDefMonad _) _  = GT
 
 instance Eq Type where
-    x == y  =  cmp x y == EQ
+    -- With words on both sides the words decide in both directions: the
+    -- word is a function of the key, so Eq-equal trees have equal words
+    -- (see "Canonical identity").  Otherwise structurally, as before.
+    x == y  =  case (typeCanonWordNode x, typeCanonWordNode y) of
+                 (i, j) | i >= 0 && j >= 0 -> eqByWords x y i j
+                 _ -> cmp x y == EQ
 
 instance Eq TyVar where
     TyVar i n _ == TyVar i' n' _  =  (n, i) == (n', i')
@@ -264,6 +321,333 @@ instance Ord TyCon where
     TyStr _ _   `compare` TyCon _  _  _   =  GT
     TyStr _ _   `compare` TyNum _  _      =  GT
     TyStr s _   `compare` TyStr s' _      =  s `compare` s'
+
+-- ==============================
+-- Canonical identity
+--
+-- A TCon_ or TAp_ node carries a slot holding -1 (no word) or a word
+--
+--     w = 2*n + normalBit
+--
+-- where n is an arrival-order counter from a process-global table and
+-- normalBit is 1 iff the node is normal (below).  The slot is metadata
+-- only.  It is never serialized (BinData writes and reads the fields and
+-- rebuilds through the smart constructors, which recompute it), never
+-- printed, never ordered on, and never used to replace a node: a smart
+-- constructor builds a NEW node holding the caller's children and the
+-- caller's TyCon untouched, so positions, kinds, sort payloads and Id
+-- properties stay exactly where the caller put them.  The word is a pure
+-- function of the node's structure under the structural Eq Type, so its
+-- only uses are an equality shortcut (equal words <=> Eq-equal) and the
+-- two flags:
+--
+--   ground: w >= 0.  No TVar, TGen or TDefMonad anywhere inside.
+--   normal: ground and odd w.  Additionally no type synonym (TItype) or
+--           associated type function (TIatf) head, no primitive type
+--           function (TAdd, ..., TStrCat, TNumToStr) and no Id__ anywhere
+--           inside, so expandSyn, normTAp and the typechecker's type
+--           function reduction are the identity on the type.
+--
+-- Keys.  A TAp is keyed by its children's words; a TyCon by (qualifier,
+-- base) -- the kind and the sort payload are not in the key because Eq
+-- TyCon ignores both for qualified names, and under the
+-- one-tycon-per-qualified-name invariant (see Eq TyCon) the name
+-- determines the sort and hence the normal bit, which -check-ctype-ids
+-- verifies on every table hit; a TyNum by its value (Eq ignores the
+-- position).  Refused (slot -1): an unqualified TyCon (the invariant
+-- does not cover it), a TyStr leaf (its FString may be an unforced
+-- mkFString thunk -- cTCon, Pred.apTFun, normTAp -- and forcing it would
+-- intern a string otherwise interned later), and a TAp with a refused
+-- child.  Two trees that are Eq-equal therefore get the same word, and
+-- two trees with different words are not Eq-equal.
+--
+-- Forcing.  Computing a word forces both children to WHNF and, for a
+-- TyCon leaf, the TyCon, its Id (two strict FString fields), the sort
+-- constructor and the isUnqualId, isPrimTFunName and idId tests; nothing
+-- else (not the kind, not the sort payload, not positions or props).
+-- FString equality and ordering are by intern id, so forcing an Id whose
+-- strings have never been interned would intern them earlier than the
+-- structural paths do, which can permute the iteration order of any
+-- Id-keyed Map.  The gate keeps words off while a package's parser
+-- thunks, GenWrap, Deriving and symbol-table builds run: compilePackage
+-- (app/bsc.hs) shuts it on entry and opens it just before DFctxreduce,
+-- for each package it compiles (bsc -u compiles several in one process).
+-- From then on every TyCon Id reachable from a type is a symbol-table
+-- key, a Prelude PreId or a .bo-decoded Id whose strings the eager
+-- string-table read already interned, so no interning moves.  The
+-- intern_delta counter under -trace-ctype-stats witnesses this and must
+-- stay 0.  Nodes built while the gate is shut carry -1: final for an
+-- interior node (the typechecker rebuilds every spine it touches), but a
+-- leaf's word is recomputed on demand by typeCanonWord, because the Type.hs
+-- CAFs (tArrow, tBit, ...) are first forced before the gate and would
+-- otherwise refuse every arrow type.
+--
+-- Table.  Ids, Integers and FStrings only, never a Type, so no type graph
+-- is retained.  Never reset: an entry is a fact about a name or a pair
+-- of words and cannot go stale.  Same access discipline as
+-- IType.internTable (readIORef fast path, atomicModifyIORef' re-check on
+-- a miss).  Other executables (bluetcl, dumpbo, tconcheck) never open
+-- the gate, so every type they build carries -1 and no word is ever
+-- consulted in them.
+
+data CKey = CKAp {-# UNPACK #-} !Int {-# UNPACK #-} !Int   -- child words
+          | CKCon !FString !FString                        -- qualifier, base
+          | CKNum !Integer
+          deriving (Eq, Ord, Show)
+
+data CanonTable = CanonTable !(M.Map CKey Int) {-# UNPACK #-} !Int
+
+{-# NOINLINE canonTable #-}
+canonTable :: IORef CanonTable
+canonTable = unsafePerformIO $ newIORef (CanonTable M.empty 0)
+
+-- Shut while a package's front end runs (compilePackage shuts it on
+-- entry) and open from enableCanonIds, just before DFctxreduce, to the
+-- end of that package; see Forcing above.
+{-# NOINLINE canonGate #-}
+canonGate :: IORef Bool
+canonGate = unsafePerformIO $ newIORef False
+
+-- Open the gate (compilePackage, immediately before DFctxreduce).  The
+-- hidden flag -no-ctype-ids keeps it shut, for A/B measurement and as a
+-- fallback to the structural paths.
+enableCanonIds :: IO ()
+enableCanonIds =
+    unless ("-no-ctype-ids" `elem` progArgs) $ writeIORef canonGate True
+
+-- Shut the gate (compilePackage, on entry).  The table is kept: a word
+-- is a fact about a name or a pair of words, so a node that got one
+-- under an earlier opening keeps it, and nodes built while the gate is
+-- shut carry -1.
+disableCanonIds :: IO ()
+disableCanonIds = writeIORef canonGate False
+
+normalWord :: Int -> Bool
+normalWord w = w >= 0 && odd w
+
+-- Find or allocate the word of a key.
+lookupOrInsert :: CKey -> Bool -> IO Int
+lookupOrInsert key normal = do
+    CanonTable m0 _ <- readIORef canonTable
+    case M.lookup key m0 of
+      Just w  -> hit w
+      Nothing -> do
+        (w, new) <- atomicModifyIORef' canonTable alloc
+        if new then bumpCTypeStat TableNew >> return w else hit w
+  where
+    alloc st@(CanonTable m n) =
+        case M.lookup key m of
+          Just w  -> (st, (w, False))
+          Nothing -> let w = 2 * n + (if normal then 1 else 0)
+                     in  (CanonTable (M.insert key w m) (n + 1), (w, True))
+    -- the normal bit is a function of the key: checked on every hit
+    hit w = do
+        bumpCTypeStat TableHit
+        when (checkCanonIds && normalWord w /= normal) $
+            internalError ("CType.lookupOrInsert: normal bit disagrees " ++
+                           "for a repeated key: " ++ show (key, w, normal))
+        return w
+
+-- The key and normal bit of a leaf, or the reason it is refused.
+data LeafKey = LeafKey !CKey !Bool | LeafUnqual | LeafTyStr
+
+leafKey :: TyCon -> LeafKey
+leafKey (TyCon i _ sort)
+    | isUnqualId i = LeafUnqual
+    | otherwise = LeafKey (CKCon (getIdQual i) (getIdBase i)) normal
+  where normal = case sort of
+                   TItype _ _ -> False
+                   TIatf {} -> False
+                   _ -> not (isPrimTFunName i) && i /= idId
+leafKey (TyNum n _) = LeafKey (CKNum n) True
+leafKey (TyStr _ _) = LeafTyStr
+
+-- The word of a leaf while the gate is open.
+leafWord :: TyCon -> IO Int
+leafWord c = case leafKey c of
+    LeafKey key normal -> lookupOrInsert key normal
+    LeafUnqual -> bumpCTypeStat RefuseUnqual >> return (-1)
+    LeafTyStr -> bumpCTypeStat RefuseTyStr >> return (-1)
+
+-- The word of a child about to be applied: its slot, or for a leaf built
+-- before the gate the recomputed word.  Forces the child to WHNF.
+childWord :: Type -> IO Int
+childWord (TAp_ w _ _) = return w
+childWord (TCon_ w c) | w >= 0 = return w
+                      | otherwise = bumpCTypeStat LeafRecompute >> leafWord c
+childWord _ = return (-1)
+
+-- Under -trace-ctype-stats, the number of strings interned while an
+-- action ran is accumulated into intern_delta (see Forcing above).
+withInternDelta :: IO a -> IO a
+withInternDelta act
+    | ctypeStatsOn = do
+        n0 <- internCount
+        r <- act
+        n1 <- internCount
+        addCTypeStat InternDelta (n1 - n0)
+        return r
+    | otherwise = act
+
+-- The smart constructors behind the TCon and TAp pattern synonyms.  They
+-- run under unsafeDupablePerformIO: a duplicated evaluation would find
+-- the same key and receive the same word through lookupOrInsert's
+-- re-check, so the noDuplicate barrier is not needed on this hot path.
+-- NB: inside this module every construction of a TCon or TAp goes
+-- through here (the synonyms' builders are these functions).
+{-# NOINLINE mkTCon #-}
+mkTCon :: TyCon -> Type
+mkTCon c = unsafeDupablePerformIO $ do
+    on <- readIORef canonGate
+    bumpCTypeStat TConBuilt
+    if on
+      then do w <- withInternDelta (leafWord c)
+              return (TCon_ w c)
+      else do bumpCTypeStat PreGateBuilt
+              return (TCon_ (-1) c)
+
+{-# NOINLINE mkTAp #-}
+mkTAp :: Type -> Type -> Type
+mkTAp f a = unsafeDupablePerformIO $ do
+    on <- readIORef canonGate
+    bumpCTypeStat TApBuilt
+    if on
+      then withInternDelta $ do
+        wf <- childWord f
+        wa <- childWord a
+        if wf < 0 || wa < 0
+          then do bumpCTypeStat RefuseChild
+                  return (TAp_ (-1) f a)
+          else do w <- lookupOrInsert (CKAp wf wa) (odd wf && odd wa)
+                  return (TAp_ w f a)
+      else do bumpCTypeStat PreGateBuilt
+              return (TAp_ (-1) f a)
+
+-- The canonical word of a type, -1 if none.  A leaf built before the gate
+-- has its word recomputed from its key (while the gate is open); that is
+-- a table lookup, so the comparison instances and the per-site shortcuts
+-- read typeCanonWordNode instead.
+typeCanonWord :: Type -> Int
+typeCanonWord (TAp_ w _ _) = w
+typeCanonWord (TCon_ w c) | w >= 0 = w
+                        | otherwise = leafRecompute c
+typeCanonWord _ = -1
+
+{-# NOINLINE leafRecompute #-}
+leafRecompute :: TyCon -> Int
+leafRecompute c = unsafeDupablePerformIO $ do
+    on <- readIORef canonGate
+    if on then withInternDelta (bumpCTypeStat LeafRecompute >> leafWord c)
+          else return (-1)
+
+-- The slot as stored: O(1), no table access.  A leaf built before the
+-- gate answers -1 here although typeCanonWord would recompute its word;
+-- that only declines a shortcut (a -1 never asserts anything), and
+-- only at a leaf: mkTAp reads its children through childWord, which
+-- recomputes a pre-gate leaf, so an interior node's slot is final and
+-- already holds everything a recompute could learn.
+typeCanonWordNode :: Type -> Int
+typeCanonWordNode (TAp_ w _ _) = w
+typeCanonWordNode (TCon_ w _) = w
+typeCanonWordNode _ = -1
+
+-- The ground and normal flags (see above), recomputing a pre-gate leaf.
+isGroundType, isNormalType :: Type -> Bool
+isGroundType t = typeCanonWord t >= 0
+isNormalType t = normalWord (typeCanonWord t)
+
+-- The same flags read from the slot only (see typeCanonWordNode).
+isGroundNode, isNormalNode :: Type -> Bool
+isGroundNode t = typeCanonWordNode t >= 0
+isNormalNode t = normalWord (typeCanonWordNode t)
+
+-- Equality decided structurally, with no word shortcut
+-- at any level: the oracle for -check-ctype-ids.
+eqStructural :: Type -> Type -> Bool
+eqStructural (TAp f1 a1) (TAp f2 a2) = eqStructural f1 f2 && eqStructural a1 a2
+eqStructural (TCon c1) (TCon c2) = compare c1 c2 == EQ
+eqStructural (TVar v1) (TVar v2) = compare v1 v2 == EQ
+eqStructural (TGen _ i1) (TGen _ i2) = i1 == i2
+eqStructural (TDefMonad _) (TDefMonad _) = True
+eqStructural _ _ = False
+
+-- The EQ answer of cmp's word shortcut.
+eqByWord :: Type -> Type -> Ordering
+eqByWord x y
+    | checkCanonIds && not (eqStructural x y) =
+        internalError ("CType.cmp: equal canonical words for unequal types: "
+                       ++ show (x, y))
+    | otherwise = ctypeStat CmpEqByWord x `seq` EQ
+
+-- The Eq answer when both sides carry words.
+eqByWords :: Type -> Type -> Int -> Int -> Bool
+eqByWords x y i j
+    | checkCanonIds && r /= eqStructural x y =
+        internalError ("CType.==: canonical words disagree with structure: "
+                       ++ show (i, j, x, y))
+    | otherwise = ctypeStat (if r then CmpEqByWord else CmpNeByWord) x `seq` r
+  where r = i == j
+
+-- Counters, kept and printed (by bsc at exit) only under
+-- -trace-ctype-stats; every bump is a no-op otherwise.
+data CTypeStat
+    = TApBuilt | TConBuilt | PreGateBuilt | TableHit | TableNew
+    | RefuseChild | RefuseUnqual | RefuseTyStr | LeafRecompute
+    | CmpEqByWord | CmpNeByWord | InternDelta
+    | SeqCTypeShortcut
+    deriving (Eq, Ord, Enum, Bounded)
+
+statName :: CTypeStat -> String
+statName TApBuilt = "tap_built"
+statName TConBuilt = "tcon_built"
+statName PreGateBuilt = "pre_gate_built"
+statName TableHit = "table_hit"
+statName TableNew = "table_new"
+statName RefuseChild = "refuse_child"
+statName RefuseUnqual = "refuse_unqual"
+statName RefuseTyStr = "refuse_tystr"
+statName LeafRecompute = "leaf_recompute"
+statName CmpEqByWord = "cmp_eq_by_word"
+statName CmpNeByWord = "cmp_ne_by_word"
+statName InternDelta = "intern_delta"
+statName SeqCTypeShortcut = "seq_ctype_shortcut"
+
+{-# NOINLINE ctypeStatsOn #-}
+ctypeStatsOn :: Bool
+ctypeStatsOn = "-trace-ctype-stats" `elem` progArgs
+
+-- -check-ctype-ids: every identity decision is also made structurally
+-- and a disagreement is an internal error; every table hit checks the
+-- normal bit.
+{-# NOINLINE checkCanonIds #-}
+checkCanonIds :: Bool
+checkCanonIds = "-check-ctype-ids" `elem` progArgs
+
+{-# NOINLINE ctypeStatTable #-}
+ctypeStatTable :: IORef (IM.IntMap Int)
+ctypeStatTable = unsafePerformIO $ newIORef IM.empty
+
+addCTypeStat :: CTypeStat -> Int -> IO ()
+addCTypeStat s n = when ctypeStatsOn $
+    modifyIORef' ctypeStatTable (IM.insertWith (+) (fromEnum s) n)
+
+bumpCTypeStat :: CTypeStat -> IO ()
+bumpCTypeStat s = addCTypeStat s 1
+
+-- Count an event on a pure path and return the second argument, which
+-- callers pass as a value that varies per call so the bump cannot be
+-- floated out as a constant.
+{-# NOINLINE ctypeStat #-}
+ctypeStat :: CTypeStat -> a -> a
+ctypeStat s x | ctypeStatsOn = unsafePerformIO (bumpCTypeStat s >> return x)
+              | otherwise = x
+
+-- Every counter, in a fixed order, zeros included.
+cTypeStats :: IO [(String, Int)]
+cTypeStats = do
+    m <- readIORef ctypeStatTable
+    return [ (statName s, IM.findWithDefault 0 (fromEnum s) m)
+           | s <- [minBound .. maxBound] ]
 
 
 
@@ -701,6 +1085,10 @@ instance NFData StructSubType where
 
 -- Force evaluation of a Ctype
 seqCType :: CType -> CType
+-- A ground node was built with the gate open, which forced its spine and
+-- its leaves' TyCons to WHNF (childWord, leafKey); the walk below would
+-- find everything evaluated and return t.
+seqCType t | isGroundNode t = ctypeStat SeqCTypeShortcut t
 seqCType t@(TVar v) = seq v t
 seqCType t@(TCon c) = t
 seqCType t@(TAp t1 t2) = seq (seqCType t1) (seq (seqCType t2) t)
