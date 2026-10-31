@@ -93,7 +93,6 @@ import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
 import LiftDicts(liftDictsPkg)
-import ISimpDicts(iSimpDicts)
 import FixupDefs(fixupDefs, updDef, mkDictBuckets)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
@@ -541,13 +540,7 @@ compilePackage
     let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
     iPCheck flags symt imodf "fixup"
     t <- dump errh flags t DFfixup dumpnames imodf
-
-    start flags DFisimpdicts
-    let imods :: IPackage HeapData
-        imods = iSimpDicts imodf
-    iPCheck flags symt imods "isimpdicts"
-    t <- dump errh flags t DFisimpdicts dumpnames imods
-    stats flags DFisimpdicts imods
+    stats flags DFfixup imodf
 
     -- The ATF cache used during elaboration: this package's entries unioned
     -- with the entries of every (transitively) loaded import.  This union is
@@ -555,7 +548,7 @@ compilePackage
     -- entries.  The union covers the full transitive closure because
     -- "binmods" does: each .bo's ipkg_depends records its writer's entire
     -- loaded closure (see ipkg_sigs in fixupDefs).
-    let elabATFCache = foldl' mergeIATFCaches (ipkg_atf_cache imods)
+    let elabATFCache = foldl' mergeIATFCaches (ipkg_atf_cache imodf)
                               [ ipkg_atf_cache m | (m, _) <- binmods ]
 
     let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
@@ -576,7 +569,7 @@ compilePackage
                                   [ x | x@(WrapInfo i' _ _ _ _ _) <- gs,
                                                 unQualId i == i' ]
         ordgens :: [WrapInfo]
-        ordgens = orderGens imods gens
+        ordgens = orderGens imodf gens
 
     when (verbose flags) $
         putStr ("modules: " ++
@@ -634,7 +627,7 @@ compilePackage
             -- but multiple-error-reporting chose to keep going;
             -- since it will already appear as a user error, no need for
             -- an internal error
-            (idef, ok2) <- compileCDefToIDef errh flags dumpnames' symt imods def
+            (idef, ok2) <- compileCDefToIDef errh flags dumpnames' symt imodf def
 
             t <- getNow
             start flags DFwrapper_fixup
@@ -651,7 +644,7 @@ compilePackage
             gen (im', success && ok && ok2) xs
 
 
-    (imodr, success) <- gen (imods, True) ordgens
+    (imodr, success) <- gen (imodf, True) ordgens
 
     t <- getNow
     -- Finally, generate interface files

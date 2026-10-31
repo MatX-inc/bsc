@@ -546,7 +546,6 @@ traceflags = [
           "trace-schedinfo",
           "trace-scmap",
           "trace-scmaps",
-          "trace-simp-dicts",
           "trace-skip-trim",
           "trace-simplify",
           "trace-smt-conv",
