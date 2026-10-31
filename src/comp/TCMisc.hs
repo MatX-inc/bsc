@@ -335,6 +335,11 @@ warnTransitiveIncoherent sbs = do
 
 -- expand all type functions
 expTFun :: Type -> TI ([VPred], Type)
+-- A normal type (CType.isNormalType) has no TIatf head and no Id__
+-- leaf anywhere, so the equations below would only recurse and rebuild
+-- an equal value; the newTVar/mkVPred effects need an ATF head, so
+-- the equations below perform none on such a type either.
+expTFun t0 | isNormalType t0 = return ([], t0)
 -- Type function application: try to generate a class constraint so
 -- the result gets bound when the class is resolved.
 expTFun t0
@@ -800,7 +805,11 @@ reducePredsAggressive' dvs es sbs1 s1 vps1 = do
   -- performance of type checking.
   SolveResult vps2 sbs2 s2 <- maskAllowIncoherent $ satMany' dvs es [] emptySBs s1 vps1
   checkJoinCtxs "reducePredsAggressive 2" vps1 s2 vps2
-  let allPredTyCons = concat [ concatMap allTyCons ts | IsIn _ ts <- map toPred vps2 ]
+  -- A normal type (CType.isNormalType) contains no TItype, TIatf or
+  -- Id__ constructor, so leaving such types out of the scan does not
+  -- change the badCon answer and skips the union walk over them.
+  let allPredTyCons = concat [ concatMap allTyCons (filter (not . isNormalType) ts)
+                             | IsIn _ ts <- map toPred vps2 ]
   let badCon (TyCon _ _ (TItype _ _)) = True
       badCon (TyCon _ _ (TIatf {})) = True
       badCon (TyCon i _ _) | i == idId = True
@@ -1407,6 +1416,10 @@ rmQualLit (CQGen i p e) = do
 -- will substitute in fresh variables for all type variables in the input type
 -- to avoid variable capture
 expandSynN :: Flags -> SymTab -> Type -> Type
+-- A normal type (CType.isNormalType) has no type variables (tv t = [])
+-- and normT is the identity on it, so the local runTI below would
+-- return Right t with no effects.
+expandSynN _ _ t | isNormalType t = t
 expandSynN flags s t =
    -- should only need to match instances for coherent typeclasses
    -- XXX user code corner-case?
@@ -1417,6 +1430,10 @@ expandSynN flags s t =
        Right t  -> t
 
 normT :: Type -> TI Type
+-- On a normal type (CType.isNormalType) expandSyn is the identity (no
+-- synonym, no primitive type function to fold), expTFun returns ([], t)
+-- and ps is null, so the equation below returns t with no effects.
+normT t | isNormalType t = return t
 normT t = do
     let t' = expandSyn t
     (ps, t'') <- expTFun t'
