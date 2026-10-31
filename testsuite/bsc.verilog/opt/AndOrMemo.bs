@@ -1,0 +1,55 @@
+package AndOrMemo where
+
+import Vector
+
+-- Two instruction slots, each gated by a conjunction of a dynamic select
+-- (which choice register the slot names, compared with the slot index)
+-- and an enable.  The gated values are OR-merged and every bit of the
+-- merged value is consumed on its own, so the gating conjunction of each
+-- slot reaches aopt's And/Or optimization once per bit.
+
+type Choice = UInt 1
+
+struct Instr =
+  chosen :: Choice
+  pred :: Bit 5
+  flag :: Bool
+  val :: Bit 32
+ deriving (Bits, Eq)
+
+interface AndOrMemo =
+  choices :: Vector 2 Choice -> Action {-# always_ready, always_enabled #-}
+  instrs :: Vector 2 Instr -> Action {-# always_ready, always_enabled #-}
+
+{-# synthesize sysAndOrMemo #-}
+sysAndOrMemo :: Module AndOrMemo
+sysAndOrMemo =
+  module
+    choiceWires :: Vector 2 (Wire Choice) <- replicateM mkBypassWire
+    instrWires :: Vector 2 (Wire Instr) <- replicateM mkBypassWire
+    outs :: Vector 32 (Reg (Bit 4)) <- replicateM (mkReg 0)
+    let chv :: Vector 2 Choice
+        chv = readVReg choiceWires
+        iv :: Vector 2 Instr
+        iv = readVReg instrWires
+        gate :: Integer -> Instr -> Bit 32
+        gate i instr =
+          let cond :: Bool
+              cond = (select chv instr.chosen == fromInteger i) &&
+                     (instr.pred /= 0 || instr.flag)
+              mask :: Vector 32 Bool
+              mask = replicate cond
+          in  instr.val & pack mask
+        merged :: Bit 32
+        merged = foldr (|) 0 (zipWith gate (genList :: Vector 2 Integer) iv)
+        bits :: Vector 32 Bool
+        bits = unpack merged
+        bump :: Integer -> Rules
+        bump k =
+          rules
+            ("bump" +++ integerToString k): when (bits !! k) ==>
+              (outs !! k) := (outs !! k)._read + 1
+    addRules $ foldr rJoin emptyRules (map bump (genList :: Vector 32 Integer))
+    interface
+      choices cs = writeVReg choiceWires cs
+      instrs is = writeVReg instrWires is

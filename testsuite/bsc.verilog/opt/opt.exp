@@ -96,3 +96,15 @@ if { $vtest == 1 } {
     find_n_strings mkTestDoubleNorm.v "?" 0
     find_n_strings mkTestDoubleNorm.v {assign _read = r ;} 1
 }
+
+# ---------------
+
+# Test that aopt optimizes each And/Or expression once.  The condition
+# gating each of the two instruction slots is replicated across every bit
+# of the merged value, so it reaches the optimization 32 times per slot;
+# the solver must prove it once per slot (one implication check for the
+# enable, one for the conjunction).
+compile_verilog_pass AndOrMemo.bs sysAndOrMemo {-trace-smt-test}
+if { $vtest == 1 } {
+    find_n_strings AndOrMemo.bs.bsc-vcomp-out {checking bi-implication} 4
+}
