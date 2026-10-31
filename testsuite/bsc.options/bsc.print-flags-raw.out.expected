@@ -22,7 +22,7 @@ Flags {
 	dumpAll = Nothing,
 	dumpFormats = ["vcd"],
 	dumps = [],
-	ecoOptions = ECOOptions {ecoCapture = Nothing, ecoReplay = Nothing, ecoOutput = Nothing, ecoAdapt = Nothing},
+	ecoOptions = ECOOptions {ecoCapture = Nothing, ecoBackendPlan = Nothing, ecoReplay = Nothing, ecoOutput = Nothing, ecoAdapt = Nothing},
 	enablePoisonPills = False,
 	entry = Nothing,
 	expandATSlimit = 20,

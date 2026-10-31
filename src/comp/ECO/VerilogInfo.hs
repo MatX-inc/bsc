@@ -162,7 +162,7 @@ writeVerilogInfo opts directory moduleName header final program ordinary = do
         source <- fileIdentity path
         manifest <- readRecord (fiPath source) :: IO ReplayManifest
         producer <- getExecutablePath >>= fileIdentity
-        let plan = Nothing
+        plan <- mapM fileIdentity (ecoBackendPlan opts)
         let stem = directory </> moduleName ++ ".eco-ast"
             payloadPath = stem ++ ".bin"
             referencePath = stem ++ ".output.v"

@@ -63,6 +63,7 @@ namespace eval eco_verilog_info {
         set flow {-keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched
             -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr}
         set fixtures [list \
+            {backend/FanoutLoss.bs -cpp} \
             {replay/ReplayDependencies.bs {}} \
             {replay/ReplayIncrementalTop.bs {-g mkReplayIncrementalTop}} \
             {replay/ReplaySmoke.bs {}}]
