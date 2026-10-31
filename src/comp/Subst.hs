@@ -201,6 +201,10 @@ class Types t where
   tv    :: t -> [TyVar]
 
 instance Types Type where
+  -- A normal type has no TVar to substitute and no primitive type-function
+  -- redex for normTAp to reduce, so the rebuild below returns a value
+  -- equal to t: return t itself.
+  apSub _ t | isNormalNode t = ctypeStat ApSubShortcut t
   apSub (S seo _) v@(TVar u) =
         case slookup u seo of
         Just t  ->
@@ -218,6 +222,8 @@ instance Types Type where
   apSub s (TAp l r) = normTAp (apSub s l) (apSub s r)
   apSub s t         = t
 
+  -- a ground type has no TVar anywhere, so the union below is []
+  tv t | isGroundNode t = ctypeStat TvShortcut t `seq` []
   tv (TVar u)  = [u]
   tv (TAp l r) = tv l `union` tv r
   tv t         = []

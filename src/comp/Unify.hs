@@ -36,6 +36,13 @@ instance Unify Type where
     mguModal = mguWork False
 
 mguWork :: Bool -> [TyVar] -> Type -> Type -> Maybe (Subst, [(Type, Type)])
+-- Equal canonical words: two Eq-equal ground types.  On those the clauses
+-- below reach atfUnify or numUnify (both start with t1 == t2) or recurse
+-- to tc1 == tc2 at every leaf, composing null substitutions and no
+-- equalities, so the answer is Just (nullSubst, []).
+mguWork _ _ t1 t2 | w >= 0, w == typeCanonWordNode t2 =
+    ctypeStat MguShortcut t1 `seq` Just (nullSubst, [])
+  where w = typeCanonWordNode t1
 -- an unreducable ATF application: identical types unify cleanly (reflexivity);
 -- different types generate a deferred equality constraint.
 -- A type synonym is expanded when (and only when) that exposes an ATF
@@ -190,6 +197,11 @@ isUnSatSyn' (TAp f a) args = isUnSatSyn' f (args + 1)
 isUnSatSyn' _  _ = False
 
 match :: Type -> Type -> Maybe Subst
+-- equal canonical words: two Eq-equal ground types, on which the clauses
+-- below merge null substitutions from tc1 == tc2 at every leaf
+match t1 t2 | w >= 0, w == typeCanonWordNode t2 =
+    ctypeStat MatchShortcut t1 `seq` Just nullSubst
+  where w = typeCanonWordNode t1
 match (TAp l r) (TAp l' r') = rtrace ("match: TAp: " ++ ppReadable (l,r)) $ do
     sl <- match l l'
     sr <- match r r'
