@@ -96,7 +96,6 @@ import LiftDicts(liftDictsPkg)
 import ISimpDicts(iSimpDicts)
 import FixupDefs(fixupDefs, updDef, mkDictBuckets)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
-import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile)
 import GenWrap(genWrap, WrapInfo(..))
@@ -544,16 +543,11 @@ compilePackage
     t <- dump errh flags t DFfixup dumpnames imodf
 
     start flags DFisimpdicts
-    let imodsd = iSimpDicts imodf
-    iPCheck flags symt imodsd "isimpdicts"
-    t <- dump errh flags t DFisimpdicts dumpnames imodsd
-
-    start flags DFisimplify
     let imods :: IPackage HeapData
-        imods = iSimplify imodsd
-    iPCheck flags symt imods "isimplify"
-    t <- dump errh flags t DFisimplify dumpnames imods
-    stats flags DFisimplify imods
+        imods = iSimpDicts imodf
+    iPCheck flags symt imods "isimpdicts"
+    t <- dump errh flags t DFisimpdicts dumpnames imods
+    stats flags DFisimpdicts imods
 
     -- The ATF cache used during elaboration: this package's entries unioned
     -- with the entries of every (transitively) loaded import.  This union is

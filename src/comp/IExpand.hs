@@ -110,12 +110,11 @@ doFunExpand2 = length (filter (== "-trace-fun-expand") progArgs) > 1
 
 -- -hack-eager-pack-unpack
 --   Debugging aid (not a supported configuration): disable the holding of
---   pack/unpack coercions and resolve them eagerly instead -- ISimplify
---   resolves the ones with statically-known dictionaries (see
---   ISimplify.selectDictMethod), and the evaluator unfolds the rest on
---   contact -- reproducing the behavior of a compiler without coercion
---   holding, at the same pipeline stages.  Useful for A/B comparison of
---   the netlist effects of coercion cancellation.
+--   pack/unpack coercions and unfold every one of them on contact (the
+--   method is picked out of the dictionary argument, see
+--   unfoldBitsCoercion), reproducing the behavior of a compiler without
+--   coercion holding.  Useful for A/B comparison of the netlist effects
+--   of coercion cancellation.
 doEagerPackUnpack :: Bool
 doEagerPackUnpack = elem "-hack-eager-pack-unpack" progArgs
 
@@ -2708,7 +2707,7 @@ walkList f es = do
 -----------------------------------------------------------------------------
 
 -- XXX noPosition is used for showPrimError and showPrimMessage
--- because the available position (post-isimplify) is bogus
+-- because the available position is bogus
 -- the position of the def of error/message in the Prelude
 
 showPrim :: (Position -> String -> G ()) -> Position -> HExpr -> G ()
@@ -4191,9 +4190,9 @@ conAp' _ (ICPrim _ PrimUnpack) _ (T ta : T tn : E _ : E x : rest)
 -- is nothing for cancellation to save (a one-bit padded singleton's
 -- body is a constant or a don't-care, cheaper still); meanwhile held
 -- one-bit values (e.g. Bool) would permeate the rule-condition
--- machinery, the most shape-sensitive part of the evaluator.
--- ISimplify resolves the statically-resolvable small ones before we
--- ever see them (see ISimplify.selectDictMethod).
+-- machinery, the most shape-sensitive part of the evaluator.  They
+-- fall through to the unfolding clauses below, which pick the method
+-- out of the dictionary on contact.
 -- A held node carries the payload heaped (lzOrig) alongside an
 -- unevaluated application
 -- of the underlying class method (lzApplied); consumers that demand the

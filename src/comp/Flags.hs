@@ -229,7 +229,6 @@ data DumpFlag
         | DFbinary
         | DFfixup
         | DFisimpdicts
-        | DFisimplify
         | DFwriteBin
 
         -- module generation
