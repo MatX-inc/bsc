@@ -123,6 +123,23 @@ inlineDefs pkg =
           in  concat [ [mkIdCanFire i, mkIdWillFire i] | i <- sched_ids ]
       used_vars = used_in_rule ++ used_in_method ++ used_in_sched
 
+      -- A definition that is an argument of a call to an imported C
+      -- function is never inlined into the call.  Bluesim passes a
+      -- wide or polymorphic argument by address (ForeignFunctions'
+      -- withCopy: a pointer to the value, or to its words), so the
+      -- generated C++ must hold the argument in a variable, and an
+      -- expression has no address.  The rule is per call rather than
+      -- per declared argument type, so the arguments a call passes by
+      -- value stay variables too; a system task is unaffected.
+      ifc_rules = concatMap aIfaceRules (sp_interface pkg)
+      ffunc_actions = [ a | r <- sp_rules pkg ++ ifc_rules
+                          , act <- arule_actions r
+                          , Left a <- actionForeignCalls act ]
+      ffunc_arg_defs =
+          [ i | c <- findAExprs exprForeignCalls pkg, ASDef _ i <- ae_args c ] ++
+          -- the first argument of an action is its condition
+          [ i | a <- ffunc_actions, ASDef _ i <- drop 1 (aact_args a) ]
+
       use_map = collectUses def_map0 used_vars
 
       isTaskOrForeignFunc (ADef _ _ (AFunCall {}) _)   = True
@@ -145,7 +162,7 @@ inlineDefs pkg =
       dangerous = [ i | (i,d) <- defs0, isNotOk d ]
 
       -- don't inline these
-      keep = S.fromList (used_vars ++ dangerous)
+      keep = S.fromList (used_vars ++ dangerous ++ ffunc_arg_defs)
 
       -- construct a substitution
       subst = M.fromList [ (i, adef_expr (fromJust md))

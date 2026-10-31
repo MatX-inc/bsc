@@ -28,6 +28,10 @@ copy values.c.keep values.c
 set value_abins { string_compare.ba and32.ba and128.ba andN.ba const_narrow.ba const_wide.ba }
 test_c_veri_bsv_multi_options TestValues mkTestValues "$value_abins common.c values.c" {} {} {} $iverilog_bug 1 1 {} {+Hi}
 
+# Computed arguments of the polymorphic import andN: Bluesim passes them
+# by address, so the generated C++ must hold them in variables
+test_c_veri_bsv_multi_options TestValueArgs mkTestValueArgs "$value_abins common.c values.c" {} {} {} {} 1 1
+
 # -----
 # Basic tests for action functions
 
