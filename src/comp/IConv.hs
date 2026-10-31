@@ -35,7 +35,8 @@ import Pred
 import SymTab
 import Type(tPrimPair, tBit, HasKind(..))
 import CType(cTVarKind, typeclassId, cTVarNum,
-             isNormalNode, typeCanonWordNode, bumpCTypeStat, CTypeStat(..))
+             isNormalNode, typeCanonWordNode, bumpCTypeStat, CTypeStat(..),
+             checkLetrecBinders)
 import TIMonad(CATFCache)
 import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
@@ -420,7 +421,9 @@ iConvLet errh flags r env pvs ds = answer
                    Left cycles -> -- trace "inloop" $
                                   deal_with_cycles cycles
                    Right _ -> -- trace ("iConvLet: " ++ ppReadable ds ++ "\n\n\n" ++ ppReadable ites ++ "/iconvLet") $
-                              (env', ites)
+                              -- the order tsort gave this group is the
+                              -- one emitted (-trace-ctype-stats check)
+                              checkLetrecBinders d_ids (env', ites)
         ites = map f ds'
                where
                  f (CLValueSign (CDefT i vs qt cs) me) =
