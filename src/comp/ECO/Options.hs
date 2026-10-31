@@ -3,7 +3,6 @@
 module ECO.Options (ECOOptions(..), ECOInvocation(..), defaultECOOptions,
                    parseECOOptions, invocationOptions, ecoEnabled) where
 
-import Warmup ()
 
 import Data.List (isPrefixOf)
 
