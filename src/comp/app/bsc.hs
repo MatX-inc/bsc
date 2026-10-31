@@ -1376,7 +1376,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        let observation
              | ecoEnabled ecoOpts = writeVerilogInfo ecoOpts
                  (maybe (maybe "." id (vdir flags)) id (ecoCapture ecoOpts)) moduleName
-                 (verilogHeader blurb methodConflictBlurb methodConflictBVI comment_ioprops vPathInfo)
+                 (verilogHeader blurb methodConflictBlurb methodConflictBVI ioprops vPathInfo)
                  aumod vprog (vfnString (head vfilenames))
              | otherwise = return ()
 
