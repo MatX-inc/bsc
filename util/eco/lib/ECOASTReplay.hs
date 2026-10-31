@@ -18,7 +18,7 @@ import ECOASTProofContext
 import ECOASTCost(CostObservation(..),CostEnvelope(..))
 import ECOASTTranslatedObjective
 import ECOJSON(EvidenceJSON(..),renderEvidenceJSON)
-import ECO.Replay(FileIdentity(..),ReplayManifest(..),AdapterReceipt(..),adapterSchema,fileIdentity,sameFileIdentity)
+import ECO.Replay(FileIdentity(..),ReplayManifest(..),AdapterReceipt(..),adapterSchema,fileIdentity,resolveProgram,sameFileIdentity)
 import ECO.Interface(fixedPorts)
 import ECOMatchTypes(EcoRenamePlan(..))
 import Verilog(VProgram)
@@ -125,7 +125,12 @@ loadFlow roots flowPath controls=do
      rooted label path root=do
       a<-fileIdentity path;b<-fileIdentity root
       need(a==b)(label++" differs from the trust root");pure b
- compiler<-rooted"configured compiler"(cfCompiler config)(trCompiler roots)
+     -- The compiler's identity is the program's (a release launcher script
+     -- resolves to its bin/core sibling), as the compiler records it.
+     rootedProgram label path root=do
+      a<-resolveProgram path>>=fileIdentity;b<-resolveProgram root>>=fileIdentity
+      need(a==b)(label++" differs from the trust root");pure b
+ compiler<-rootedProgram"configured compiler"(cfCompiler config)(trCompiler roots)
  oldCapture<-rooted"configured OLD capture"(cfOldCapture config)(trOldCapture roots)
  newCapture<-rooted"configured NEW capture"(cfNewCapture config)(trNewCapture roots)
  manifest<-rooted"configured SDK manifest"(cfImplementationManifest config)(trSdkManifest roots)

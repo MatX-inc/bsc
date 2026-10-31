@@ -30,7 +30,7 @@ import ECOASTInvariant
 import ECOInvariantExport
 import ECOASTReplay
 import ECOJSON (EvidenceJSON(..), renderEvidenceJSON)
-import ECO.Replay (FileIdentity(..), fileIdentity, scrubbedEnvironment)
+import ECO.Replay (FileIdentity(..), fileIdentity, resolveProgram, scrubbedEnvironment)
 import ECO.Interface (fixedPorts)
 import Verilog (VProgram)
 
@@ -92,7 +92,10 @@ runCaptureFlow (FlowPolicy provider objectiveFactory invariantPolicy) config = d
     writeFile (output </> "effective.config") (show effective ++ "\n")
     configID <- fileIdentity (output </> "effective.config")
     compiler <- canonicalizePath (cfCompiler config)
-    inputs <- (configID :) <$> mapM fileIdentity ([compiler,cfOldCapture config,cfNewCapture config,
+    -- The compiler runs through its path (a release launcher sets up the
+    -- loader); its identity is the program's, as the compiler records it.
+    program <- resolveProgram compiler
+    inputs <- (configID :) <$> mapM fileIdentity ([program,cfOldCapture config,cfNewCapture config,
                                                    cfImplementationManifest config] ++ cpSources provider)
     let moduleName = cfModule config
         stem directory = directory </> moduleName

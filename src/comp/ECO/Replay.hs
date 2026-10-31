@@ -7,18 +7,21 @@ module ECO.Replay
     , verifyReplayOutputs, checkReplayOutputPaths, outputPathsOverlap, inspectReplay
     , prepareReplayAdaptation, writeAdapterReceipt
     , replaySchema, adapterSchema, scrubbedEnvironment, fileIdentity, sameFileIdentity
+    , producerIdentity, resolveProgram
     ) where
 
-import Control.Exception(evaluate)
+import Control.Exception(SomeException, evaluate, try)
 import Control.Monad(filterM, forM, forM_, unless, when)
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BC
 import Data.Char(isHexDigit, isSpace)
 import Data.List(isPrefixOf, nub)
 import System.Directory(canonicalizePath, copyFile, createDirectoryIfMissing,
                         doesDirectoryExist, doesFileExist, findExecutable, getCurrentDirectory,
                         listDirectory, renameFile, withCurrentDirectory)
-import System.Environment(getExecutablePath)
+import System.Environment(getExecutablePath, getProgName)
 import System.FilePath((</>), takeDirectory, takeFileName, takeExtension)
+import System.IO(IOMode(..), withBinaryFile)
 import System.Posix.Files(getFileStatus, deviceID, fileID)
 import System.Process(readProcessWithExitCode)
 import System.Exit(ExitCode(..))
@@ -126,6 +129,40 @@ checkIdentity expected = do
 -- directory remains a compatibility symlink. Compare both path spellings in
 -- the current filesystem; the recorded digest remains immutable. This is an
 -- identity comparison, not a replacement for hashing the actual file above.
+-- | The program that is running, seen through an explicit dynamic loader. A
+-- release install launches bin/core/<tool> on lib/rt's ld-linux, so the
+-- executable path is the loader's; the program is then the first word of the
+-- command line after the loader that names an existing file called like the
+-- program. Elsewhere it is the executable path itself.
+runningProgram :: IO FilePath
+runningProgram = do
+    exe <- getExecutablePath >>= canonicalizePath
+    if not (isLoader (takeFileName exe)) then return exe else do
+        name <- getProgName
+        raw <- try (BS.readFile "/proc/self/cmdline") :: IO (Either SomeException BS.ByteString)
+        let args = either (const []) (filter (not . null) . map BC.unpack . BC.split '\0') raw
+        found <- filterM doesFileExist [a | a <- drop 1 args, takeFileName a == name]
+        case found of
+            (p:_) -> canonicalizePath p
+            [] -> return exe
+  where isLoader n = any (`isPrefixOf` n) ["ld-linux", "ld.so", "ld64.so", "ld-musl"]
+
+-- | The compiler's identity as the producer of a capture: the program itself,
+-- never the launcher or loader that started it.
+producerIdentity :: IO FileIdentity
+producerIdentity = runningProgram >>= fileIdentity
+
+-- | A configured compiler path seen the same way: a launcher script whose
+-- bin/core/<name> sibling exists names that program, so its identity is the
+-- one the compiler records for itself.
+resolveProgram :: FilePath -> IO FilePath
+resolveProgram path = do
+    p <- canonicalizePath path
+    let core = takeDirectory p </> "core" </> takeFileName p
+    script <- withBinaryFile p ReadMode (\h -> (== BC.pack "#!") <$> BS.hGet h 2)
+    coreExists <- doesFileExist core
+    return (if script && coreExists then core else p)
+
 sameFileIdentity :: FileIdentity -> FileIdentity -> IO Bool
 sameFileIdentity a b = do
     ap <- canonicalizePath (fiPath a)
@@ -176,7 +213,7 @@ captureReplay directory nativePath flags info = do
         exists <- doesFileExist path
         unless exists $ failReplay ("capture input is missing: " ++ path)
     -- Hashing the producer first also proves the SHA-256 utility is usable.
-    producer <- getExecutablePath >>= fileIdentity
+    producer <- producerIdentity
     deps <- mapM fileIdentity (nub (rbDependencies info))
     filters <- mapM identifyFilter (verilogFilter flags)
     workingDirectory <- getCurrentDirectory >>= canonicalizePath
@@ -238,7 +275,7 @@ prepareReplay :: FilePath -> IO ReplayManifest
 prepareReplay path = do
     manifest <- readManifest path
     validateReplayFiles manifest
-    producer <- getExecutablePath >>= fileIdentity
+    producer <- producerIdentity
     unless (fiSHA256 producer == fiSHA256 (rmProducer manifest)) $
         failReplay "compiler executable differs from capture producer"
     restoreReplayIntern manifest
@@ -326,7 +363,7 @@ writeAdapterReceipt :: FileIdentity -> ReplayManifest -> FilePath -> FilePath ->
 writeAdapterReceipt sourceIdentity source directory adaptedPath = do
     checkIdentity sourceIdentity
     validateReplayFiles source
-    producer <- getExecutablePath >>= fileIdentity
+    producer <- producerIdentity
     adaptedIdentity <- fileIdentity adaptedPath
     currentOutputs <- mapM fileIdentity [directory </> "current-control" </> takeFileName original |
                                           (original,_) <- rmOutputs source]
