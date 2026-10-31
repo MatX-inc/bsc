@@ -1,0 +1,247 @@
+# Native capture, exact replay, adaptation and source-output isolation.
+bsc_initialize
+namespace eval eco_native {
+    set previous [pwd]
+    try {
+        set here [file dirname [file normalize [info script]]]
+        cd $here
+        set work [file join $here work_native]
+        file delete -force $work
+        file mkdir $work
+        set flags {-u -verilog -elab -g mkReplaySmoke -no-show-timestamps -no-show-version
+            -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched
+            -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr}
+        foreach mode {ordinary captured} {
+            set dir [file join $work $mode]
+            file mkdir $dir
+            set cmd [list $::bsc {*}$flags -bdir $dir -vdir $dir -info-dir $dir]
+            if {$mode eq "captured"} {lappend cmd -eco-capture [file join $work capture]}
+            lappend cmd [file join $here ReplaySmoke.bs] >& [file join $dir compile.log]
+            if {[exec_with_log "ECO $mode compile" $cmd]} {
+                set f [open $dir/compile.log]; verbose -log [read $f] 0; close $f
+                fail "ECO replay: $mode compilation"
+                return
+            }
+            pass "ECO replay: $mode compilation"
+        }
+        if {[exec_with_log "ECO capture byte parity" [list cmp \
+                $work/ordinary/mkReplaySmoke.v $work/captured/mkReplaySmoke.v]]} {
+            fail "ECO replay: capture preserves ordinary RTL bytes"
+        } else {pass "ECO replay: capture preserves ordinary RTL bytes"}
+        if {[llength [glob -nocomplain $work/capture/*.eco-ast*]] == 0} {
+            pass "ECO replay: native capture needs no Verilog info artifacts"
+        } else {
+            fail "ECO replay: native capture needs no Verilog info artifacts"
+        }
+        if {$::bluehs eq "" || $::bluehs eq "0" ||
+            ![file isfile $::bluehs] || ![file executable $::bluehs]} {
+            untested "ECO replay: native VProgram retention (bluehs unavailable)"
+        } elseif {[exec_with_log "ECO native payload" [list $::bluehs $here/NativePayload.hs \
+                $work/capture/mkReplaySmoke.ba absent >& $work/native_payload.log]]} {
+            set f [open $work/native_payload.log]; verbose -log [read $f] 0; close $f
+            fail "ECO replay: default capture has no retained VProgram"
+        } else {pass "ECO replay: default capture has no retained VProgram"}
+        set manifest $work/capture/mkReplaySmoke.replay
+        foreach mode {replayed repeated} {
+            if {[exec_with_log "ECO $mode" [list env BSC_OPTIONS= $::bsc -eco-replay $manifest \
+                    -eco-output $work/$mode >& $work/$mode.log]]} {
+                set f [open $work/$mode.log]; verbose -log [read $f] 0; close $f
+                fail "ECO replay: $mode fresh process"
+                continue
+            }
+            if {[exec_with_log "ECO $mode bytes" [list cmp \
+                    $work/captured/mkReplaySmoke.v $work/$mode/mkReplaySmoke.v]]} {
+                fail "ECO replay: $mode exact bytes"
+            } else {pass "ECO replay: $mode exact bytes"}
+        }
+
+        # ECO options come from argv only: BSC_OPTIONS cannot redirect a replay
+        # and cannot request a capture; it still carries ordinary flags.
+        if {[exec_with_log "ECO replay ignores BSC_OPTIONS" [list env "BSC_OPTIONS=-eco-output $work/hijack -u" \
+                $::bsc -eco-replay $manifest -eco-output $work/env_ignored >& $work/env_ignored.log]] ||
+            [file exists $work/hijack] ||
+            [exec_with_log "ECO replay bytes under BSC_OPTIONS" [list cmp \
+                $work/captured/mkReplaySmoke.v $work/env_ignored/mkReplaySmoke.v]]} {
+            set f [open $work/env_ignored.log]; verbose -log [read $f] 0; close $f
+            fail "ECO replay: BSC_OPTIONS cannot redirect a replay"
+        } else {pass "ECO replay: BSC_OPTIONS cannot redirect a replay"}
+        file mkdir $work/env_capture
+        set status [exec_with_log "ECO capture via BSC_OPTIONS" [list env \
+            "BSC_OPTIONS=$::env(BSC_OPTIONS) -eco-capture $work/env_capture/capture" $::bsc {*}$flags \
+            -bdir $work/env_capture -vdir $work/env_capture -info-dir $work/env_capture \
+            $here/ReplaySmoke.bs >& $work/env_capture.log]]
+        set f [open $work/env_capture.log]; set contents [read $f]; close $f
+        if {$status && [string first "Unrecognized flag: -eco-capture" $contents] >= 0 &&
+            ![file exists $work/env_capture/capture]} {
+            pass "ECO replay: BSC_OPTIONS cannot request a capture"
+        } else {
+            verbose -log $contents 0
+            fail "ECO replay: BSC_OPTIONS cannot request a capture"
+        }
+
+        file copy $work/capture $work/source_before
+        file mkdir $work/replay_alias $work/replay_hardlink
+        file link -symbolic $work/replay_alias/mkReplaySmoke.v $work/capture/mkReplaySmoke.ba
+        file link -hard $work/replay_hardlink/mkReplaySmoke.v $work/capture/mkReplaySmoke.ba
+        file link -symbolic $work/output_alias $work
+        foreach {name option output diagnostic} [list \
+            replay_alias -eco-replay $work/replay_alias {output would overwrite a bound capture or snapshot artifact} \
+            replay_hardlink -eco-replay $work/replay_hardlink {output would overwrite a bound capture or snapshot artifact} \
+            replay_inside -eco-replay $work/capture/inside {output would overwrite a bound capture or snapshot artifact} \
+            adapt_overlap -eco-adapt $work {adaptation output directory must be empty} \
+            adapt_alias -eco-adapt $work/output_alias {adaptation output directory must be empty} \
+            adapt_inside -eco-adapt $work/capture/inside {output would overwrite a bound capture or snapshot artifact}] {
+            set log $work/$name.log
+            set status [exec_with_log "ECO $name" [list env BSC_OPTIONS= $::bsc $option $manifest -eco-output $output >& $log]]
+            set f [open $log]; set contents [read $f]; close $f
+            if {$status && [string first $diagnostic $contents] >= 0} {
+                pass "ECO replay: rejects $name"
+            } else {
+                verbose -log $contents 0
+                fail "ECO replay: rejects $name with expected diagnostic"
+            }
+            set intact 1
+            foreach original [glob $work/source_before/*] {
+                if {[exec_with_log "ECO source bytes after $name" [list cmp \
+                        $original $work/capture/[file tail $original]]]} {set intact 0}
+            }
+            if {$intact} {
+                pass "ECO replay: $name preserves all source artifacts"
+            } else {
+                fail "ECO replay: $name preserves all source artifacts"
+                return
+            }
+        }
+        if {![file exists $work/capture/inside]} {
+            pass "ECO replay: rejected output inside the capture directory creates nothing there"
+        } else {fail "ECO replay: rejected output inside the capture directory creates nothing there"}
+
+        # Capture checks every input and refuses an existing stem before its
+        # first write, so the source capture is never partially overwritten.
+        file mkdir $work/recapture
+        set status [exec_with_log "ECO recapture into existing stem" [list $::bsc {*}$flags \
+            -bdir $work/recapture -vdir $work/recapture -info-dir $work/recapture \
+            -eco-capture $work/capture $here/ReplaySmoke.bs >& $work/recapture.log]]
+        set f [open $work/recapture.log]; set contents [read $f]; close $f
+        if {$status && [string first "capture already exists: $work/capture/mkReplaySmoke.ba" $contents] >= 0} {
+            pass "ECO replay: rejects capture into an existing stem"
+        } else {
+            verbose -log $contents 0
+            fail "ECO replay: rejects capture into an existing stem with expected diagnostic"
+        }
+        set intact [expr {[lsort [glob -tails -directory $work/source_before *]] eq
+                          [lsort [glob -tails -directory $work/capture *]]}]
+        foreach original [glob $work/source_before/*] {
+            if {[exec_with_log "ECO source bytes after recapture" [list cmp \
+                    $original $work/capture/[file tail $original]]]} {set intact 0}
+        }
+        if {$intact} {
+            pass "ECO replay: refused recapture preserves all source artifacts"
+        } else {fail "ECO replay: refused recapture preserves all source artifacts"}
+
+        if {[exec_with_log "ECO adaptation" [list env BSC_OPTIONS= $::bsc -eco-adapt $manifest \
+                -eco-output $work/adapted >& $work/adapt.log]]} {
+            set f [open $work/adapt.log]; verbose -log [read $f] 0; close $f
+            fail "ECO replay: adaptation into a fresh directory"
+        } else {
+            if {[exec_with_log "ECO adaptation control bytes" [list cmp \
+                    $work/captured/mkReplaySmoke.v $work/adapted/current-control/mkReplaySmoke.v]]} {
+                fail "ECO replay: adaptation ordinary control bytes"
+            } else {pass "ECO replay: adaptation ordinary control bytes"}
+            set f [open $work/adapted/adapter-receipt]; set receipt [read $f]; close $f
+            if {[string first "AdapterReceipt \{arSchema = \"bsc-eco-native-adapter-2\"" $receipt] == 0 &&
+                [llength [glob -nocomplain $work/adapted/capture/*.eco-ast*]] == 0 &&
+                ![file exists $work/adapted/original-control]} {
+                pass "ECO replay: adaptation writes its receipt beside the new capture"
+            } else {
+                verbose -log $receipt 0
+                fail "ECO replay: adaptation writes its receipt beside the new capture"
+            }
+            if {[exec_with_log "ECO adapted replay" [list env BSC_OPTIONS= $::bsc \
+                    -eco-replay $work/adapted/capture/mkReplaySmoke.replay \
+                    -eco-output $work/adapted_replayed >& $work/adapted_replay.log]]} {
+                set f [open $work/adapted_replay.log]; verbose -log [read $f] 0; close $f
+                fail "ECO replay: adapted capture replays"
+            } elseif {[exec_with_log "ECO adapted replay bytes" [list cmp \
+                    $work/captured/mkReplaySmoke.v $work/adapted_replayed/mkReplaySmoke.v]]} {
+                fail "ECO replay: adapted capture exact bytes"
+            } else {pass "ECO replay: adapted capture exact bytes"}
+        }
+        set intact 1
+        foreach original [glob $work/source_before/*] {
+            if {[exec_with_log "ECO source bytes after adaptation" [list cmp \
+                    $original $work/capture/[file tail $original]]]} {set intact 0}
+        }
+        if {$intact} {
+            pass "ECO replay: successful adaptation preserves all source artifacts"
+        } else {fail "ECO replay: successful adaptation preserves all source artifacts"}
+
+        # A tampered captured output is rejected by validation; a forged output
+        # digest reaches the ordinary-byte control, which must leave no
+        # divergent RTL, capture or receipt behind.
+        set output $work/capture/mkReplaySmoke.output-0.v
+        file copy $output $work/original.output-0.v
+        file copy $manifest $work/original.replay
+        set f [open $output a]; puts -nonewline $f "\n// tampered\n"; close $f
+        set status [exec_with_log "ECO tampered output adaptation" [list env BSC_OPTIONS= $::bsc \
+            -eco-adapt $manifest -eco-output $work/adapted_tampered >& $work/adapt_tampered.log]]
+        set f [open $work/adapt_tampered.log]; set contents [read $f]; close $f
+        if {$status && [string first "file changed since capture: $output" $contents] >= 0 &&
+            ![file exists $work/adapted_tampered]} {
+            pass "ECO replay: adaptation rejects a tampered captured output before any write"
+        } else {
+            verbose -log $contents 0
+            fail "ECO replay: adaptation rejects a tampered captured output before any write"
+        }
+        set original_digest [lindex [exec sha256sum $work/original.output-0.v] 0]
+        set forged_digest [lindex [exec sha256sum $output] 0]
+        set f [open $manifest]; set text [read $f]; close $f
+        set f [open $manifest w]
+        puts -nonewline $f [string map [list $original_digest $forged_digest] $text]
+        close $f
+        set status [exec_with_log "ECO forged digest adaptation" [list env BSC_OPTIONS= $::bsc \
+            -eco-adapt $manifest -eco-output $work/adapted_forged >& $work/adapt_forged.log]]
+        file copy -force $work/original.output-0.v $output
+        file copy -force $work/original.replay $manifest
+        set f [open $work/adapt_forged.log]; set contents [read $f]; close $f
+        if {$status && [string first "generated RTL differs from captured output" $contents] >= 0} {
+            pass "ECO replay: adaptation rejects a forged output digest at the byte control"
+        } else {
+            verbose -log $contents 0
+            fail "ECO replay: adaptation rejects a forged output digest at the byte control"
+        }
+        if {![file exists $work/adapted_forged/current-control/mkReplaySmoke.v] &&
+            ![file exists $work/adapted_forged/capture] &&
+            ![file exists $work/adapted_forged/adapter-receipt]} {
+            pass "ECO replay: failed byte control leaves no divergent RTL, capture or receipt"
+        } else {fail "ECO replay: failed byte control leaves no divergent RTL, capture or receipt"}
+
+        if {[info exists ::env(PRODUCTION_BSC)] && $::env(PRODUCTION_BSC) ne ""} {
+            file mkdir $work/production
+            if {[exec_with_log "ECO production control" [list $::env(PRODUCTION_BSC) {*}$flags \
+                    -bdir $work/production -vdir $work/production -info-dir $work/production \
+                    $here/ReplaySmoke.bs >& $work/production/compile.log]]} {
+                set f [open $work/production/compile.log]; verbose -log [read $f] 0; close $f
+                fail "ECO replay: production control compilation"
+            } elseif {[exec_with_log "ECO production bytes" [list cmp \
+                    $work/production/mkReplaySmoke.v $work/ordinary/mkReplaySmoke.v]]} {
+                fail "ECO replay: production compatibility bytes"
+            } else {pass "ECO replay: production compatibility bytes"}
+        } else {untested "ECO replay: production compatibility (PRODUCTION_BSC unset)"}
+
+        file copy $work/capture/mkReplaySmoke.ba $work/original.ba
+        set f [open $work/capture/mkReplaySmoke.ba a]; puts -nonewline $f corrupted; close $f
+        set status [exec_with_log "ECO payload rejection" [list env BSC_OPTIONS= $::bsc -eco-replay $manifest \
+            -eco-output $work/rejected >& $work/reject.log]]
+        file copy -force $work/original.ba $work/capture/mkReplaySmoke.ba
+        set f [open $work/reject.log]; set contents [read $f]; close $f
+        if {$status && [string first "file changed since capture: $work/capture/mkReplaySmoke.ba" $contents] >= 0} {
+            pass "ECO replay: rejects modified native payload"
+        } else {
+            verbose -log $contents 0
+            fail "ECO replay: rejects modified native payload with expected diagnostic"
+        }
+    } finally {
+        cd $previous
+    }
+}

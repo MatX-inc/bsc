@@ -280,6 +280,7 @@ SOURCES_WO_EXTRA_BUILDVERSION = \
 	*.hs *.lhs \
 	Parser/*.hs Parser/BSV/*.lhs Parser/Classic/*.hs \
 	Libs/*.hs \
+	ECO/*.hs \
 	GHC/posix/*.hs \
 	$(PARSEC_HS)/*.hs \
 	$(STP_HS)/*.hs \

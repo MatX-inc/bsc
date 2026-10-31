@@ -1,0 +1,137 @@
+# Multi-module replay, filters, foreign dependencies and lookup identities.
+bsc_initialize
+namespace eval eco_dependency {
+    set previous [pwd]
+    try {
+        set here [file dirname [file normalize [info script]]]
+        cd $here
+        set work [file join $here work_dependency]
+        file delete -force $work
+        file mkdir $work
+        file copy $here/filter.sh $work/filter.sh
+        set flags {-u -verilog -elab -no-show-timestamps -no-show-version
+            -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched
+            -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr}
+        foreach mode {ordinary captured} {
+            set dir $work/$mode
+            file mkdir $dir
+            set cmd [list $::bsc {*}$flags -verilog-filter $work/filter.sh \
+                -bdir $dir -vdir $dir -info-dir $dir]
+            if {$mode eq "captured"} {lappend cmd -eco-capture $work/capture}
+            lappend cmd $here/ReplayDependencies.bs >& $dir/compile.log
+            if {[exec_with_log "ECO dependency $mode compile" $cmd]} {
+                set f [open $dir/compile.log]; verbose -log [read $f] 0; close $f
+                fail "ECO dependencies: $mode compilation"
+                return
+            }
+            pass "ECO dependencies: $mode compilation"
+        }
+        foreach module {mkReplayDependencies mkReplaySecond} {
+            if {[exec_with_log "ECO dependency capture bytes" [list cmp \
+                    $work/ordinary/$module.v $work/captured/$module.v]]} {
+                fail "ECO dependencies: $module capture preserves ordinary bytes"
+            } else {pass "ECO dependencies: $module capture preserves ordinary bytes"}
+            if {[exec_with_log "ECO dependency replay" [list env BSC_OPTIONS= $::bsc \
+                    -eco-replay $work/capture/$module.replay -eco-output $work/replayed \
+                    >& $work/$module-replay.log]]} {
+                set f [open $work/$module-replay.log]; verbose -log [read $f] 0; close $f
+                fail "ECO dependencies: $module replay"
+            } elseif {[exec_with_log "ECO dependency replay bytes" [list cmp \
+                    $work/captured/$module.v $work/replayed/$module.v]]} {
+                fail "ECO dependencies: $module exact replay bytes"
+            } else {pass "ECO dependencies: $module exact replay bytes"}
+        }
+        if {[info exists ::env(PRODUCTION_BSC)] && $::env(PRODUCTION_BSC) ne ""} {
+            file mkdir $work/production
+            if {[exec_with_log "ECO dependency production control" [list $::env(PRODUCTION_BSC) {*}$flags \
+                    -verilog-filter $work/filter.sh -bdir $work/production -vdir $work/production \
+                    -info-dir $work/production $here/ReplayDependencies.bs >& $work/production/compile.log]]} {
+                set f [open $work/production/compile.log]; verbose -log [read $f] 0; close $f
+                fail "ECO dependencies: production control compilation"
+            } else {
+                foreach module {mkReplayDependencies mkReplaySecond} {
+                    if {[exec_with_log "ECO dependency production bytes" [list cmp \
+                            $work/production/$module.v $work/captured/$module.v]]} {
+                        fail "ECO dependencies: $module production compatibility bytes"
+                    } else {pass "ECO dependencies: $module production compatibility bytes"}
+                }
+            }
+        } else {untested "ECO dependencies: production compatibility (PRODUCTION_BSC unset)"}
+
+        foreach {name input} [list filter $work/filter.sh foreign $work/captured/replayForeign.ba] {
+            file copy $input $work/original-$name
+            set f [open $input a]; puts -nonewline $f "\n# modified $name\n"; close $f
+            set status [exec_with_log "ECO $name rejection" [list env BSC_OPTIONS= $::bsc \
+                -eco-replay $work/capture/mkReplayDependencies.replay -eco-output $work/rejected \
+                >& $work/$name-reject.log]]
+            file copy -force $work/original-$name $input
+            set f [open $work/$name-reject.log]; set contents [read $f]; close $f
+            if {$status && [string first "file changed since capture: $input" $contents] >= 0} {
+                pass "ECO dependencies: rejects modified $name bytes"
+            } else {
+                verbose -log $contents 0
+                fail "ECO dependencies: rejects modified $name bytes with expected diagnostic"
+            }
+        }
+
+        # Preserve the original lookup name separately from its canonical basename.
+        set alias $work/alias
+        file mkdir $alias/captured $alias/store
+        set target $alias/store/replayForeign-v1.ba
+        # Tcl's file link requires an existing target, unlike the native writer.
+        set f [open $target w]; close $f
+        file link -symbolic $alias/captured/replayForeign.ba $target
+        file delete $target
+        set cmd [list $::bsc {*}$flags]
+        if {[info exists ::env(ECO_LIBDIR)] && $::env(ECO_LIBDIR) ne ""} {
+            lappend cmd -i $::env(ECO_LIBDIR)
+        }
+        lappend cmd -bdir $alias/captured -vdir $alias/captured -info-dir $alias/captured \
+            -eco-capture $alias/capture $here/ReplayDependencies.bs >& $alias/compile.log
+        if {[exec_with_log "ECO dependency alias capture" $cmd]} {
+            set f [open $alias/compile.log]; verbose -log [read $f] 0; close $f
+            fail "ECO dependencies: capture through original lookup alias"
+            return
+        }
+        if {[file type $alias/captured/replayForeign.ba] eq "link" && [file size $target] > 0} {
+            pass "ECO dependencies: native writer preserves foreign dependency symlink"
+        } else {
+            fail "ECO dependencies: native writer preserves foreign dependency symlink"
+            return
+        }
+        foreach module {mkReplayDependencies mkReplaySecond} {
+            if {[exec_with_log "ECO dependency alias replay" [list env BSC_OPTIONS= $::bsc \
+                    -eco-replay $alias/capture/$module.replay -eco-output $alias/replayed \
+                    >& $alias/$module-replay.log]]} {
+                set f [open $alias/$module-replay.log]; verbose -log [read $f] 0; close $f
+                fail "ECO dependencies: $module alias replay"
+            } elseif {[exec_with_log "ECO dependency alias replay bytes" [list cmp \
+                    $alias/captured/$module.v $alias/replayed/$module.v]]} {
+                fail "ECO dependencies: $module alias exact replay bytes"
+            } else {pass "ECO dependencies: $module alias exact replay bytes"}
+        }
+        # Keep canonical bytes unchanged and its basename resolvable. Only the
+        # original lookup name now resolves to a different file with equal bytes.
+        file copy $target $alias/store/replayForeign-v2.ba
+        file link -symbolic $alias/captured/replayForeign-v1.ba $target
+        file delete $alias/captured/replayForeign.ba
+        file link -symbolic $alias/captured/replayForeign.ba $alias/store/replayForeign-v2.ba
+        set status [exec_with_log "ECO dependency lookup rejection" [list env BSC_OPTIONS= $::bsc \
+            -eco-replay $alias/capture/mkReplayDependencies.replay -eco-output $alias/rejected \
+            >& $alias/alias-reject.log]]
+        file delete $alias/captured/replayForeign.ba
+        file link -symbolic $alias/captured/replayForeign.ba $target
+        set f [open $alias/alias-reject.log]; set contents [read $f]; close $f
+        if {$status && [string first {dependency search path changed resolution: replayForeign.ba} $contents] >= 0} {
+            pass "ECO dependencies: rejects changed original lookup identity"
+        } else {
+            verbose -log $contents 0
+            fail "ECO dependencies: rejects changed original lookup identity with expected diagnostic"
+        }
+        if {![file exists $alias/rejected/mkReplayDependencies.v]} {
+            pass "ECO dependencies: lookup rejection emits no RTL"
+        } else {fail "ECO dependencies: lookup rejection emits no RTL"}
+    } finally {
+        cd $previous
+    }
+}

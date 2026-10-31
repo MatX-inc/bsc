@@ -1,0 +1,4 @@
+package ReplayIncrementalHelper where
+
+replayIncrement :: Bit 8 -> Bit 8
+replayIncrement value = value + 3
