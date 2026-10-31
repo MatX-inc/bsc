@@ -597,7 +597,7 @@ data CTypeStat
     | CmpEqByWord | CmpNeByWord | InternDelta
     | SeqCTypeShortcut | ApSubShortcut | TvShortcut | ExpandSynShortcut
     | InstShortcut | MguShortcut | MatchShortcut | GetFreeTShortcut
-    | ChkTApShortcut
+    | ChkTApShortcut | IConvMemoHit | IConvMemoMiss
     deriving (Eq, Ord, Enum, Bounded)
 
 statName :: CTypeStat -> String
@@ -622,6 +622,8 @@ statName MguShortcut = "mgu_shortcut"
 statName MatchShortcut = "match_shortcut"
 statName GetFreeTShortcut = "getfreet_shortcut"
 statName ChkTApShortcut = "chktap_shortcut"
+statName IConvMemoHit = "iconv_memo_hit"
+statName IConvMemoMiss = "iconv_memo_miss"
 
 {-# NOINLINE ctypeStatsOn #-}
 ctypeStatsOn :: Bool
