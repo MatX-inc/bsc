@@ -1,5 +1,9 @@
 module ISyntaxXRef(
                    updateIExprPosition,
+                   usablePosition,
+                   fillIExprPosition,
+                   spineHeadPosition,
+                   restampReaches,
                    mapIExprPosition,
                    mapIExprPosition2,
                    mapIExprPositionConservative
@@ -9,7 +13,7 @@ import qualified Data.Set as S
 
 import ISyntax
 import Id
-import Position(Position, noPosition, isUsefulPosition)
+import Position(Position, noPosition, isUsefulPosition, firstPos)
 
 -- #############################################################################
 -- #
@@ -30,6 +34,65 @@ updateIExprPosition pos (ICon i info) = (ICon (setIdPosition pos i) info)
 -- original node, dropping the stamps anyway.
 updateIExprPosition pos (IRefT t p poss r) = (IRefT t p poss' r)
   where poss' = S.insert pos poss
+
+-- A position of the user's own code: not empty and not in the
+-- standard library.  Diagnostics report these, and a stamp never
+-- replaces one.
+usablePosition :: Position -> Bool
+usablePosition p = (p /= noPosition) && (isUsefulPosition p)
+
+-- updateIExprPosition's walk, filling positions in rather than
+-- replacing them: an Id whose position is usable keeps it, and a heap
+-- reference whose stamped positions hold a usable one is left alone.
+-- A sole argument lies on the spine the application reduces to, so the
+-- stamp reaches it, but one the user wrote (the one field of a
+-- constructor application, say) keeps its own position.  A binder is
+-- never stamped: no diagnostic is raised at a binder, and the cell
+-- the evaluator binds to it is named after it only when its position
+-- is not the standard library's (improveCellName), so a library
+-- parameter stamped with a use site would name the user's signals.
+fillIExprPosition :: Position -> IExpr a -> IExpr a
+fillIExprPosition pos (ILam i t e) = ILam i t (fillIExprPosition pos e)
+fillIExprPosition pos (IAps e ts [e0]) =
+    IAps (fillIExprPosition pos e) ts [fillIExprPosition pos e0]
+fillIExprPosition pos (IAps e ts es) = IAps (fillIExprPosition pos e) ts es
+fillIExprPosition pos (IVar i) = IVar (fillIdPosition pos i)
+fillIExprPosition pos (ILAM i kind e) = ILAM i kind (fillIExprPosition pos e)
+fillIExprPosition _ iexpr@(ICon _ (ICStateVar _ _)) = iexpr
+fillIExprPosition pos (ICon i info) = ICon (fillIdPosition pos i) info
+fillIExprPosition pos iexpr@(IRefT t p poss r)
+    | any usablePosition (S.toList poss) = iexpr
+    | otherwise = IRefT t p (S.insert pos poss) r
+
+fillIdPosition :: Position -> Id -> Id
+fillIdPosition pos i | usablePosition (getIdPosition i) = i
+                     | otherwise = setIdPosition pos i
+
+-- The position at the head of the spine that fillIExprPosition
+-- stamps: through the binders of a lambda or type abstraction, the
+-- function of an application, the Id of a variable or constant, the
+-- stamped positions of a heap reference.  A state variable has none,
+-- as it is never stamped.
+spineHeadPosition :: IExpr a -> Position
+spineHeadPosition (ILam _ _ e) = spineHeadPosition e
+spineHeadPosition (IAps e _ _) = spineHeadPosition e
+spineHeadPosition (IVar i) = getIdPosition i
+spineHeadPosition (ILAM _ _ e) = spineHeadPosition e
+spineHeadPosition (ICon _ (ICStateVar _ _)) = noPosition
+spineHeadPosition (ICon i _) = getIdPosition i
+spineHeadPosition (IRefT _ _ poss _) = firstPos (S.toAscList poss)
+
+-- Whether a reference to the variable lies on the part of the
+-- expression that updateIExprPosition restamps.  A lambda that
+-- rebinds the variable hides the references in its body.
+restampReaches :: Id -> IExpr a -> Bool
+restampReaches i (ILam i' _ e) = i /= i' && restampReaches i e
+restampReaches i (IAps e _ [e0]) = restampReaches i e || restampReaches i e0
+restampReaches i (IAps e _ _) = restampReaches i e
+restampReaches i (IVar i') = i == i'
+restampReaches i (ILAM _ _ e) = restampReaches i e
+restampReaches _ (ICon _ _) = False
+restampReaches _ (IRefT _ _ _ _) = False
 
 
 updateIExprPosition2 :: Position -> IExpr a -> IExpr a

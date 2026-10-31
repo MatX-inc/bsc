@@ -80,7 +80,8 @@ import qualified IfcBetterInfo as BetterInfo
 import ITransform(iTransExpr)
 
 import IOUtil(progArgs)
-import ISyntaxXRef(mapIExprPosition)
+import ISyntaxXRef(mapIExprPosition, usablePosition, fillIExprPosition,
+                   spineHeadPosition, restampReaches)
 import IStateLoc
 
 -----------------------------------------------------------------------------
@@ -3374,6 +3375,49 @@ bindArg tag occs i t a
     substitutable (Just OnceUnderLam) = isitActionValue t
     substitutable (Just Many)         = False
 
+-- The evaluator unfolds code at a use site: a definition's body in
+-- evalDef, a class dictionary's method in evalSelAp, and the argument
+-- bound to a lambda's parameter in evalAp' and evalApAccum.  The
+-- unfolded expression takes the use site's position when that is
+-- usable and the head of its own spine has none (library code, or a
+-- generated binder); code whose spine starts at a usable position
+-- keeps it.  The stamp fills positions in and never replaces a usable
+-- one (fillIExprPosition), so a user-written sub-expression on the
+-- reach keeps its own position too.  The reach is
+-- updateIExprPosition's (the spine and sole arguments), at the cost of
+-- one spine walk per unfolding, and an error raised by a primitive
+-- inside a library wrapper then reports the user's line.  A heap
+-- reference is left alone: a definition is stamped before it is
+-- cached, so its cached value keeps the positions of the use that
+-- evaluated it, and an argument already on the heap keeps its cell's.
+needsUseSite :: Position -> HExpr -> Bool
+needsUseSite _ (IRefT _ _ _ _) = False
+needsUseSite pos e =
+    usablePosition pos && not (usablePosition (spineHeadPosition e))
+
+stampUseSite :: Position -> HExpr -> HExpr
+stampUseSite pos e | needsUseSite pos e = fillIExprPosition pos e
+                   | otherwise = e
+
+-- The argument bound to a lambda's parameter stands wherever the body
+-- refers to the parameter once the body is substituted.  When such a
+-- reference lies within updateIExprPosition's reach of the body, the
+-- argument is on the spine that the application unfolds to and takes
+-- the use site's position as stampUseSite gives it; an argument the
+-- body only passes on keeps its own.  The use site is the binder's
+-- own position when that is usable (a lambda the user wrote, or a
+-- binder FixupDefs stamped when it tied a reference to an imported
+-- definition), and otherwise the position at the head of the body's
+-- spine, which carries the use site's stamp once the body has been
+-- unfolded (the stamp leaves the binders alone).
+stampBoundArg :: Id -> HExpr -> HExpr -> HExpr
+stampBoundArg i body a
+    | needsUseSite pos a && restampReaches i body = fillIExprPosition pos a
+    | otherwise = a
+  where binder = getIdPosition i
+        pos | usablePosition binder = binder
+            | otherwise = spineHeadPosition body
+
 -- Accumulate substitutions when applying to a chain of ILam/ILAM
 -- This batches substitutions to avoid repeated hyper calls
 --
@@ -3390,7 +3434,7 @@ evalApAccum tag occs exprCtx typeCtx (ILam i t body) (E a : as) = do
   -- the ILAM args have been accumulated into typeCtx).
   norm <- getTypeNormalizerC
   let t' = changedOrId norm (tSubstBatch typeCtx t)
-  a' <- bindArg "apply-accum" occs i t' a
+  a' <- bindArg "apply-accum" occs i t' (stampBoundArg i body a)
   -- position information is clobbered by this point
   when doDebug $ traceM ("accum apply arg=" ++ ppReadable (a', a))
   evalApAccum "ILam-accum" occs (M.insert i a' exprCtx) typeCtx body as
@@ -3441,7 +3485,7 @@ evalDef :: Id -> IType -> HExpr -> [Arg] -> G PExpr
 evalDef i t e as = do
   -- recurse into evaluating e
   step i
-  e' <- cacheDef i t e
+  e' <- cacheDef i t (stampUseSite (getIdPosition i) e)
   evalAp "ICDef" e' as
 
 -- evaluate a function application
@@ -3461,7 +3505,7 @@ evalAp' e@(ILam _ _ _)         [] = return (pExpr e)
 -- substitute the arg, or a heap reference to it, for the binder in the body
 evalAp' f@(ILam i t e)   (E a:as) = do
         let occs = occCounts f (E a:as)
-        a' <- bindArg "apply" occs i t a
+        a' <- bindArg "apply" occs i t (stampBoundArg i e a)
         -- position information is clobbered by this point
         when doDebug $ traceM ("apply arg=" ++ ppReadable (a', a))
         evalApAccum "ILam" occs (M.singleton i a') M.empty e as
@@ -5753,6 +5797,18 @@ doOut out c tys ty cti as ee (p, e) =
         -- otherwise fail
         _ -> internalError ("doOut: " ++ ppReadable (out, e, as))
 
+-- Apply the method selected from a class dictionary at its selection
+-- site.  The method is shared through the heap cell of the
+-- dictionary's tuple field, so the selection site's position goes on
+-- the copy of the value's spine that this application unfolds
+-- (stampUseSite), never on the cell; a selection without arguments
+-- returns the field as evalAp does, still a shared reference.
+evalSelAp :: Position -> HExpr -> [Arg] -> G PExpr
+evalSelAp pos (IRefT t ptr _ ref) as@(_ : _) = do
+        (P p e) <- evalHeap (ptr, ref)
+        evalAp "sel k" (iePrimWhenPred t p (stampUseSite pos e)) as
+evalSelAp pos e as = evalAp "sel k" (stampUseSite pos e) as
+
 doSel :: HExpr -> Id -> [IType] -> IType -> Integer -> [Arg] ->
          HExpr -> (HPred, HExpr) -> G PExpr
 doSel sel s tys ty n as ee (p, e) =
@@ -5762,7 +5818,12 @@ doSel sel s tys ty n as ee (p, e) =
             let tupleError id = internalError $ "indexing `" ++ show id ++ "' out of bounds; do you need to recompile dependencies?"
                 index xs i id = if length xs > i then xs!!i else tupleError id
             let field_e = index es (fromInteger n) id
-                dflt_res = addPredG p $ evalAp "sel k" field_e as
+                -- a class dictionary's method is applied at the
+                -- selection site; an interface's method keeps its own
+                -- positions
+                is_dict = itIsDictType (snd (itGetArrows (dropForAll ictup_ty)))
+                dflt_res | is_dict = addPredG p $ evalSelAp (getPosition s) field_e as
+                         | otherwise = addPredG p $ evalAp "sel k" field_e as
             -- if method conditions are not being preserved,
             -- just return the default result
             flags <- getFlags
