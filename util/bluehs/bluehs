@@ -5,15 +5,18 @@
 # or via the bin/ symlinks:   util/bluehs/bin/dumpbo foo.bo
 # (the symlink name selects the tool)
 #
-#   bluehs [-i<dir>]... <tool|script.hs> [args...]
+#   bluehs [-<ghc flag>]... <tool|script.hs> [args...]
 #
 # A named tool is the program of that name under src/comp/app, run by
 # runghc instead of being compiled.  runghc executes the file's `main`
 # whatever the module is called, so the entry files the cabal executables
 # use (module Main_dumpbo and friends) are also the scripts, with no
-# second copy to keep in step.  Any path to a .hs file works too.  Each
-# -i<dir> adds a directory to the import path, for a script whose modules
-# are split across files.
+# second copy to keep in step.  Any path to a .hs file works too (one that
+# starts with - needs ./).  Flags before the tool or script go to GHC, one
+# word each, as runghc takes them: -i<dir> adds a directory to the import
+# path, for a script whose modules are split across files, a bare -i resets
+# it (so a script sees only the directories named after it), -v1 names
+# every module GHC interprets, and -- ends them.
 #
 # The same file runs from a source checkout and from an installed
 # distribution (mk-dist.sh), and chooses by what surrounds it:
@@ -34,17 +37,18 @@ SELF=$(readlink -f "$0")
 HERE=$(dirname "$SELF")
 
 NAME=$(basename "$0")
-# the -i<dir> arguments lead; they stay in place in "$@" for runghc
+# GHC flags lead; they stay in place in "$@" for runghc
 IMPORTS=0
 if [ "$NAME" = "bluehs" ]; then
     for a do
         case "$a" in
-            -i?*) IMPORTS=$((IMPORTS + 1)) ;;
+            --) IMPORTS=$((IMPORTS + 1)); break ;;
+            -?*) IMPORTS=$((IMPORTS + 1)) ;;
             *) break ;;
         esac
     done
     if [ $# -le $IMPORTS ]; then
-        echo "usage: bluehs [-i<dir>]... <tool|script.hs> [args...]" >&2
+        echo "usage: bluehs [-<ghc flag>]... <tool|script.hs> [args...]" >&2
         exit 1
     fi
     eval "TOOL=\${$((IMPORTS + 1))}"
