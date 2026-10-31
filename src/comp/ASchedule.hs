@@ -137,6 +137,27 @@ type ConflictMap = G.GraphMap ARuleId [Conflicts]
 addConflictEdge :: ConflictMap -> (ARuleId, ARuleId, [Conflicts]) -> ConflictMap
 addConflictEdge g e = G.addEdgeWith (++) g e
 
+-- The one-directional edges of a conflict map, over the vertex list vs:
+-- for each r in vs, the r' in vs (in vs order) with an edge (r,r') but no
+-- edge (r',r), which is to say the r' that must sequence before r when
+-- both fire in the same cycle.  The result is the same list as
+--     [(r, [r' | r' <- vs, r' /= r, (r',r) `G.notMember` g, (r,r') `G.member` g])
+--         | r <- vs]
+-- for every vs: (r,r') `G.member` g holds exactly for the keys r' of r's
+-- out-edge map (G.neighbors), so only those are tested, and each surviving
+-- r' is emitted once per position it occupies in vs, sorted by position,
+-- which is the order and multiplicity the comprehension gives it.
+mkSCGraph :: [ARuleId] -> ConflictMap -> [(ARuleId, [ARuleId])]
+mkSCGraph vs g =
+    let positions = M.fromListWith (\new old -> old ++ new)
+                        (zip vs (map (: []) [(0::Int) ..]))
+        before r = sortOn fst
+                       [ (p, r') | r' <- G.neighbors g r,
+                                   r' /= r,
+                                   (r', r) `G.notMember` g,
+                                   p <- M.findWithDefault [] r' positions ]
+    in  [ (r, map snd (before r)) | r <- vs ]
+
 -- From a list of conlifct explanations, pick one to report.
 -- For backwards compatibility, we choose the most recently added;
 -- but we could choose to always return a method-use explanation if one
@@ -1035,10 +1056,7 @@ aSchedule_step1 errh flags prefix pps amod = do
       -- scGraph is a list of all rules (r1,r2) where r1 /= r2 and there
       -- is only a conflict from r1 to r2 (and not a conflict the other way)
       scGraph = tr "let scGraph" $
-          [(r,[r' | r' <- ruleNames, r' /= r,
-                          (r',r) `G.notMember` scConflictMapResources,
-                          (r,r') `G.member` scConflictMapResources])
-              | r <- ruleNames]
+          mkSCGraph ruleNames scConflictMapResources
 
       -- scGraph is going to be used to determine a static global TRS
       -- reference order for simultaneous firing of rules in one cycle.
@@ -1242,10 +1260,7 @@ aSchedule_step2 errh flags prefix pps urgency_pairs amod ( scConflictMap0
       -- (r1,r2) in scGraphFinal <==>
       --     r2 must sequence before r1 (if they fire in the same cycle)
       scGraphFinal = tr "let scGraphFinal" $
-          [(r,[r' | r' <- G.vertices scConflictMapFinal, r' /= r,
-                    (r',r) `G.notMember` scConflictMapFinal,
-                    (r,r') `G.member` scConflictMapFinal])
-              | r <- G.vertices scConflictMapFinal]
+          mkSCGraph (G.vertices scConflictMapFinal) scConflictMapFinal
 
   -- dump scgraphFinal if flagged
   when trace_scgraph $
@@ -4073,13 +4088,21 @@ flattenUrgencyMap moduleId umap =
         -- than reverse the output of tsort, we get urgency order for
         -- unconstrained rules in the order in which they appeared in
         -- the code.
-        ugraph = [(r, [r' | r' <- vs,
-                            r' /= r,
-                            -- let's try making the graph in the
-                            -- opposite direction
-                            -- (r,r') `G.member` umap])
-                           (r',r) `G.member` umap])
-                    | r <- vs]
+        --
+        -- That is, each vertex r is paired with its predecessors, the
+        -- r' in vs (in vs order) with r' /= r and an edge (r',r):
+        --     [(r, [r' | r' <- vs, r' /= r, (r',r) `G.member` umap]) | r <- vs]
+        -- The predecessor lists are collected from the edges: G.toList
+        -- visits the sources r' in vs
+        -- order (both are the key order of the same map), so prepending
+        -- each r' to the list of its target r gives the predecessors of
+        -- r in reverse vs order, and reversing each list restores vs order.
+        -- Edges to a target outside vs are never looked up, as in the
+        -- pairwise form.
+        preds = M.map reverse $
+                M.fromListWith (++)
+                    [ (r, [r']) | (r', es) <- G.toList umap, (r, _) <- es, r' /= r ]
+        ugraph = [ (r, M.findWithDefault [] r preds) | r <- vs ]
 
     in
         -- tsort returns either an error or
