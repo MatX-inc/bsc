@@ -81,7 +81,7 @@ instance Bin ASTPayload where
         return (ASTPayload h p i)
 
 magic :: BS.ByteString
-magic = BS.pack (map (fromIntegral . fromEnum) "bsc-eco-verilog-ast-2\n")
+magic = BS.pack (map (fromIntegral . fromEnum) "bsc-eco-verilog-ast-3\n")
 
 failVerilogInfo :: String -> IO a
 failVerilogInfo = ioError . userError . ("ECO Verilog info: " ++)
@@ -177,7 +177,7 @@ writeVerilogInfo opts directory moduleName header final program ordinary = do
           Nothing -> unless (map (fiSHA256 . snd) (rmOutputs manifest) == [fiSHA256 outputId]) $
                          failVerilogInfo "ordinary AST output differs from native capture"
           Just _ -> return ()
-        let envelope = ASTEnvelope 2 (bscVersionStr True)
+        let envelope = ASTEnvelope 3 (bscVersionStr True)
                          moduleName source producer payloadId outputId plan
         writeFile stem (show envelope ++ "\n")
 
@@ -189,7 +189,7 @@ readVerilogInfo :: FilePath -> IO VerilogInfo
 readVerilogInfo path = do
     identity <- fileIdentity path
     envelope <- readRecord (fiPath identity)
-    unless (aeSchema envelope == 2 && aeNativeVersion envelope == bscVersionStr True) $
+    unless (aeSchema envelope == 3 && aeNativeVersion envelope == bscVersionStr True) $
         failVerilogInfo "snapshot schema/native library mismatch"
     checkIdentity (aeCapture envelope)
     errh <- initErrorHandle
