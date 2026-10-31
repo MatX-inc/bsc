@@ -238,9 +238,11 @@ iTrExpr' ctx idxs f ts es = do
                 e <- runCSE et
                 let t = iGetType e
                     isBool = t == itBit1
-                if isBool && isT ctx e then
+                    -- one expansion of the new node serves both queries
+                    o = opnd e
+                if isBool && isTOpnd ctx o then
                     return iTrue
-                else if isBool && isF ctx e then
+                else if isBool && isFOpnd ctx o then
                     return iFalse
                 else
                     return e
@@ -308,8 +310,8 @@ iTrAp ctx (ICon _ (ICPrim _ PrimJoinActions)) _ [e, ICon _ (ICPrim _ PrimNoActio
 -- if c t _             -->  t
 -- if c _ e             -->  e
 iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
-        | isT ctx cnd = (thn, True)
-        | isF ctx cnd = (els, True)
+        | isTOpnd ctx o = (thn, True)
+        | isFOpnd ctx o = (els, True)
         | eqE thn els = (thn, True)
         | otherwise   = case (t == itBit1, thn, els) of
            (True, ICon _ (ICInt { iVal = IntLit { ilValue = 1 } }), ICon _ (ICInt { iVal = IntLit { ilValue = 0 } })) -> (cnd, True)
@@ -434,6 +436,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
                 (_, ICon _ (ICUndet {}), _) -> (els, True)
 
                 _ -> (IAps p [t] [cnd, thn, els], False)
+  where o = opnd cnd
 
 -- Boolean optimization
 
@@ -446,13 +449,19 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
 -- e1 && e2    --> False        IF e1 IMPLIES ~e2
 -- e2 && e1    --> False        IF e2 IMPLIES ~e1
 iTrAp ctx p@(ICon _ (ICPrim _ PrimBAnd)) _ [c1, c2]
-         | isF ctx c1 || isF ctx c2 = (iFalse, True) -- fast special case
+         | isFOpnd ctx o1 || isFOpnd ctx o2 = (iFalse, True) -- fast special case
          | isUndet c1 || isUndet c2 = (iFalse, True)
-         | implies ctx c1 c2        = (c1, True)
-         | implies ctx c2 c1        = (c2, True)
-         | impliesnot ctx c1 c2     = (iFalse, True)
-         | impliesnot ctx c2 c1     = (iFalse, True)
+         | isTOpnd ctx1 o2          = (c1, True)      -- c1 implies c2
+         | isTOpnd ctx2 o1          = (c2, True)      -- c2 implies c1
+         | isFOpnd ctx1 o2          = (iFalse, True)  -- c1 implies not c2
+         | isFOpnd ctx2 o1          = (iFalse, True)  -- c2 implies not c1
          | otherwise                = (IAps p [] [c1, c2], False)
+  -- the expanded operands and the contexts extended with each of them
+  -- are shared by all the guards above
+  where o1 = opnd c1
+        o2 = opnd c2
+        ctx1 = addTOpnd o1 ctx
+        ctx2 = addTOpnd o2 ctx
 
 -- True || e  --> True
 -- e || True  --> True
@@ -464,13 +473,17 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimBAnd)) _ [c1, c2]
 -- e1 || e2   --> True          IF ~e2 IMPLIES e1
 
 iTrAp ctx p@(ICon _ (ICPrim _ PrimBOr)) _ [c1, c2]
-         | isT ctx c1 || isT ctx c2 = (iTrue, True) -- fast special case
+         | isTOpnd ctx o1 || isTOpnd ctx o2 = (iTrue, True) -- fast special case
          | isUndet c1 || isUndet c2 = (iTrue, True)
-         | implies ctx c2 c1        = (c1, True)
-         | implies ctx c1 c2        = (c2, True)
-         | notimplies ctx c1 c2     = (iTrue, True)
-         | notimplies ctx c2 c1     = (iTrue, True)
+         | isTOpnd ctx2 o1          = (c1, True)      -- c2 implies c1
+         | isTOpnd ctx1 o2          = (c2, True)      -- c1 implies c2
+         | isTOpnd (addF c1 ctx) o2 = (iTrue, True)   -- not c1 implies c2
+         | isTOpnd (addF c2 ctx) o1 = (iTrue, True)   -- not c2 implies c1
          | otherwise                = (IAps p [] [c1, c2], False)
+  where o1 = opnd c1
+        o2 = opnd c2
+        ctx1 = addTOpnd o1 ctx
+        ctx2 = addTOpnd o2 ctx
 
 -- not True           -->  False
 -- not False          -->  True
@@ -481,8 +494,8 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimBOr)) _ [c1, c2]
 -- not (if c t e)     -->  if c (not t) (not e)
 -- XXX There is no rule for pushing inside dynamic array select/update
 iTrAp ctx p@(ICon _ (ICPrim _ PrimBNot)) _ [c]
-         | isF ctx c = (iTrue, True)
-         | isT ctx c = (iFalse, True)
+         | isFOpnd ctx o = (iTrue, True)
+         | isTOpnd ctx o = (iFalse, True)
          | otherwise = case expVal c of
               IAps   (ICon _ (ICPrim _ PrimBNot)) _  [e]        -> (e, True)
               IAps   (ICon _ (ICPrim _ PrimBAnd)) _  [e1, e2]   -> iTrAp2 ctx iOr  [] [iTrApExp ctx iNot [] [e1], iTrApExp ctx iNot [] [e2]]
@@ -490,6 +503,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimBNot)) _ [c]
               IAps i@(ICon _ (ICPrim _ PrimIf))  [t] [e1,e2,e3] -> iTrAp2 ctx i [t] [e1, iTrApExp ctx iNot [] [e2], iTrApExp ctx iNot [] [e3]]
               u@(ICon i (ICUndet t k Nothing)) -> (u, True)
               _                                                 -> (IAps p [] [c], False)
+  where o = opnd c
 
 -- e == e --> True
 iTrAp ctx (ICon _ (ICPrim _ PrimEQ)) _ [e, e'] | e == e' = (iTrue, True)
@@ -1181,11 +1195,28 @@ splitConstExpr _ _ _ = Nothing
 
 -----------------------------------------------------------------------------
 
+-- An operand of a Boolean primitive, prepared once for every guard of
+-- iTrAp that queries it: its and/or/cmp-expanded form (expValAndOrCmp),
+-- the BExpr terms of that form, and the terms of its negation.  The
+-- fields are lazy, so each piece is computed at the first guard that
+-- demands it and shared with the later guards of the same node, which
+-- otherwise recompute it from the operand.  All three are pure functions
+-- of the operand, so the sharing changes no answer and, because every
+-- piece is first demanded where it was first computed before, forces no
+-- Id earlier than before; it only removes repeated expansions, merges
+-- and comparisons.
+data Opnd a = Opnd (IExpr a) [IExpr a] [IExpr a]
+
+opnd :: IExpr a -> Opnd a
+opnd c = let e = expValAndOrCmp c
+         in  Opnd e (bTerms e) (bTerms (ieNot e))
+
 addT :: IExpr a -> Ctx a -> Ctx a
-addT e ctx = --trace ("addT\n" ++ ppReadable (e, ctx, addT' (expValAndOrCmp e) ctx)) $
-                addT' (expValAndOrCmp e) ctx
-  where addT' e (Ctx vs be) = Ctx (addEqs e vs) (bAdd e be)
-        addEqs (IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })]) vs = M.insert i v vs
+addT e ctx = addTOpnd (opnd e) ctx
+
+addTOpnd :: Opnd a -> Ctx a -> Ctx a
+addTOpnd (Opnd e ts _) (Ctx vs be) = Ctx (addEqs e vs) (bAddTerms ts be)
+  where addEqs (IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })]) vs = M.insert i v vs
         -- XXX case for when the const is on the left?
         -- XXX case for (e1 == e2), when e1 or e2 exists in the set, add the other as the same val
         addEqs (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) vs = addEqs e1 (addEqs e2 vs)
@@ -1221,11 +1252,9 @@ expValAndOr (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) 
 expValAndOr e = e
 -}
 
-isT :: Ctx a -> IExpr a -> Bool
-isT ctx@(Ctx vs be) e = --traces ("isT\n" ++ ppReadable (e, expValAndOrCmp e, ctx, isT' (expValAndOrCmp e))) $
-                        isT' (expValAndOrCmp e)
-  where isT' e =
-            bImplies be e ||
+isTOpnd :: Ctx a -> Opnd a -> Bool
+isTOpnd (Ctx vs be) (Opnd e ts _) =
+            bImpliesTerms be ts ||
             case e of
             IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })] ->
 --                traces ("isT EQ" ++ ppReadable (i, v, M.toList vs)) $
@@ -1240,11 +1269,9 @@ isT ctx@(Ctx vs be) e = --traces ("isT\n" ++ ppReadable (e, expValAndOrCmp e, ct
             _ -> False
 
 
-isF :: Ctx a -> IExpr a -> Bool
-isF ctx@(Ctx vs be) e = --traces ("isF\n" ++ ppReadable (e, expValAndOrCmp e, ctx, isF' (expValAndOrCmp e))) $
-                        isF' (expValAndOrCmp e)
-  where isF' e =
-            bImplies be (ieNot e) ||
+isFOpnd :: Ctx a -> Opnd a -> Bool
+isFOpnd (Ctx vs be) (Opnd e _ nts) =
+            bImpliesTerms be nts ||
             case e of
             IAps (ICon _ (ICPrim _ PrimEQ)) _ [i, ICon _ (ICInt { iVal = IntLit { ilValue = v } })] ->
                 case M.lookup i vs of
@@ -1265,18 +1292,6 @@ isF :: Ctx a -> IExpr a -> Bool
 isF _ (ICon _ (ICInt { iVal = IntLit { ilValue = 0 } })) = True
 isF _ _ = False
 -}
-
--- a --> b
-implies :: Ctx a -> IExpr a -> IExpr a -> Bool
-implies ctx a b = isT (addT a ctx) b
-
--- ~a --> b
-notimplies :: Ctx a -> IExpr a -> IExpr a -> Bool
-notimplies ctx a b = isT (addF a ctx) b
-
--- a --> ~b
-impliesnot :: Ctx a -> IExpr a -> IExpr a -> Bool
-impliesnot ctx a b = isF (addT a ctx) b
 
 -----------------------------------------------------------------------------
 

@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
-module BExpr(BExpr, bNothing, bAdd, bImplies, bImpliesB) where
+module BExpr(BExpr, bNothing, bAdd, bImplies, bImpliesB,
+             bTerms, bAddTerms, bImpliesTerms) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
 import Prelude hiding ((<>))
@@ -21,11 +22,18 @@ import Prim
 -- bImplies checks if the know facts implies an expression.
 --  bImplies is allowed to answer False even if the implication
 --  is true, but not the other way around.
+-- bTerms flattens an expression into the ordered term list that bAdd
+-- and bImplies work on; bAddTerms and bImpliesTerms take that list
+-- directly, so a caller that adds or queries the same expression more
+-- than once can flatten it once and share the result.
 
 bNothing :: BExpr a
 bAdd :: IExpr a -> BExpr a -> BExpr a
 bImplies :: BExpr a -> IExpr a -> Bool
 bImpliesB :: BExpr a -> BExpr a -> Bool
+bTerms :: IExpr a -> [IExpr a]
+bAddTerms :: [IExpr a] -> BExpr a -> BExpr a
+bImpliesTerms :: BExpr a -> [IExpr a] -> Bool
 
 {-
 -- This implementation is exact, but slow.
@@ -75,16 +83,19 @@ instance PPrint (BExpr a) where
 
 bNothing = A [iTrue]
 
-bAdd e (A es) = A $ mergeOrdNoDup (get e) es
+bAdd e = bAddTerms (bTerms e)
 
-bImplies (A es) e =
+bAddTerms ts (A es) = A $ mergeOrdNoDup ts es
+
+bImplies b e =
 --        if length es > 1 then trace (ppReadable (e, es, isOrdSubset (get e) es)) $ isOrdSubset (get e) es
-        isOrdSubset (get e) es
+        bImpliesTerms b (bTerms e)
+
+bImpliesTerms (A es) ts = isOrdSubset ts es
 
 bImpliesB b (A es) = all (bImplies b) es
 
-get :: IExpr a -> [IExpr a]
-get = getAnds . norm
+bTerms = getAnds . norm
 
 getAnds :: IExpr a -> [IExpr a]
 getAnds (IAps (ICon _ (ICPrim _ PrimBAnd)) _ [e1, e2]) = mergeOrdNoDup (getAnds e1) (getAnds e2)
