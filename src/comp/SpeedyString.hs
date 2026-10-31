@@ -2,7 +2,7 @@
 {-# LANGUAGE BangPatterns #-}
 module SpeedyString(SString, toString, fromString, (++), concat, filter,
                     InternSnapshot(..), snapshotInternState, validSnapshot,
-                    renderInternTable, internCount) where
+                    renderInternTable, internCount, internedSince) where
 
 import Prelude hiding((++), concat, filter)
 import qualified Prelude((++), filter)
@@ -114,6 +114,12 @@ freshInt = do fresh <- readVar nextInt
 -- The number of strings interned so far.
 internCount :: IO Int
 internCount = readVar nextInt
+
+-- The strings interned with ids >= n, in id order (for the same
+-- witness: naming what an operation interned).
+internedSince :: Int -> IO [String]
+internedSince n = do m <- readVar strings
+                     return (M.elems (snd (M.split (n - 1) m)))
 
 
 -- A capture contains every spelling, including entries no longer reachable
