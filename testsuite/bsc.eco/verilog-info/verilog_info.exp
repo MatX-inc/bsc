@@ -1,0 +1,162 @@
+# Retained native ASTs, authenticated child metadata, emission gates and safe output paths.
+bsc_initialize
+namespace eval eco_verilog_info {
+    set previous [pwd]
+    try {
+        set here [file dirname [file normalize [info script]]]
+        if {$::bluehs eq "" || $::bluehs eq "0" ||
+            ![file isfile $::bluehs] || ![file executable $::bluehs]} {
+            untested "ECO Verilog info: native Haskell inspector (bluehs unavailable)"
+            return
+        }
+        set fixture [file normalize [file join $here .. replay ReplaySmoke.bs]]
+        cd $here
+        set work [file join $here work_verilog_info]
+        file delete -force $work
+        file mkdir $work
+        foreach side {old new} {
+            set dir $work/$side
+            file mkdir $dir
+            if {[exec_with_log "ECO Verilog info $side capture" [list $::bsc \
+                    -u -verilog -elab -no-show-timestamps -g mkReplaySmoke \
+                    -bdir $dir -vdir $dir -info-dir $dir -eco-capture $dir/capture \
+                    $fixture >& $dir/compile.log]]} {
+                set f [open $dir/compile.log]; verbose -log [read $f] 0; close $f
+                fail "ECO Verilog info: $side native capture"
+                return
+            }
+            pass "ECO Verilog info: $side native capture"
+        }
+        # Native replay may share a capture directory only when its outputs
+        # cannot overwrite any bound companions. Info export adds such files.
+        set capture $work/new/capture
+        file copy $capture $work/source_before
+        set status [exec_with_log "ECO Verilog info replay overlap" [list env BSC_OPTIONS= $::bsc \
+            -eco-replay $capture/mkReplaySmoke.replay -eco-output $capture >& $work/overlap.log]]
+        set f [open $work/overlap.log]; set contents [read $f]; close $f
+        if {$status && [string first {output would overwrite a bound capture or snapshot artifact} $contents] >= 0} {
+            pass "ECO Verilog info: replay rejects overwriting bound companions"
+        } else {
+            verbose -log $contents 0
+            fail "ECO Verilog info: replay rejects overwriting bound companions"
+        }
+        set intact 1
+        foreach original [glob $work/source_before/*] {
+            if {[exec_with_log "ECO Verilog info source after overlap" [list cmp \
+                    $original $capture/[file tail $original]]]} {set intact 0}
+        }
+        if {$intact} {
+            pass "ECO Verilog info: rejected replay preserves all source artifacts"
+        } else {
+            fail "ECO Verilog info: rejected replay preserves all source artifacts"
+            return
+        }
+        if {[exec_with_log "ECO Verilog info inspector" [list $::bluehs $here/VerilogInfo.hs \
+                $work/old/capture/mkReplaySmoke.eco-ast $work/new/capture/mkReplaySmoke.eco-ast \
+                $work/checked >& $work/inspect.log]]} {
+            set f [open $work/inspect.log]; verbose -log [read $f] 0; close $f
+            fail "ECO Verilog info: retained AST, metadata, exact rendering and relocation guards"
+        } else {pass "ECO Verilog info: retained AST, metadata, exact rendering and relocation guards"}
+
+        # Positive control: every fixture of the ECO suite, captured by this
+        # compiler, passes both emission gates and emits its captured bytes.
+        set flow {-keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched
+            -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr}
+        set fixtures [list \
+            {replay/ReplayDependencies.bs {}} \
+            {replay/ReplayIncrementalTop.bs {-g mkReplayIncrementalTop}} \
+            {replay/ReplaySmoke.bs {}}]
+        set captures {}
+        set n 0
+        foreach entry $fixtures {
+            lassign $entry source flags
+            set dir $work/fixtures/[incr n]
+            file mkdir $dir
+            set path [file normalize [file join $here .. $source]]
+            if {[exec_with_log "ECO Verilog info fixture capture $source" [list $::bsc \
+                    -u -verilog -elab -no-show-timestamps {*}$flags -p [file dirname $path]:+ \
+                    -bdir $dir -vdir $dir -info-dir $dir -eco-capture $dir/capture \
+                    $path >& $dir/compile.log]]} {
+                set f [open $dir/compile.log]; verbose -log [read $f] 0; close $f
+                fail "ECO Verilog info: capture every suite fixture ($source)"
+                return
+            }
+            lappend captures {*}[lsort [glob -nocomplain $dir/capture/*.eco-ast]]
+        }
+        pass "ECO Verilog info: capture every suite fixture"
+        if {[exec_with_log "ECO Verilog info gates" [list $::bluehs $here/Gates.hs \
+                $work/gates {*}$captures >& $work/gates.log]]} {
+            set f [open $work/gates.log]; verbose -log [read $f] 0; close $f
+            fail "ECO Verilog info: every captured fixture passes both emission gates"
+        } else {
+            pass "ECO Verilog info: every captured fixture passes both emission gates ([llength $captures] programs)"
+        }
+
+        # Adaptation accepts a different executable only when its full native
+        # version matches. A separately versioned core producer must be rejected.
+        if {![info exists ::env(CORE_REPLAY_BSC)] || $::env(CORE_REPLAY_BSC) eq ""} {
+            untested "ECO Verilog info: native version guard (CORE_REPLAY_BSC unset)"
+        } else {
+            set core_bsc [file normalize $::env(CORE_REPLAY_BSC)]
+            if {![file isfile $core_bsc] || ![file executable $core_bsc]} {
+                fail "ECO Verilog info: CORE_REPLAY_BSC must name an executable"
+                return
+            }
+            set cross [file join $work core_adaptation]
+            file mkdir $cross/core
+            foreach {name compiler} [list core $core_bsc current $::bsc] {
+                if {[exec_with_log "ECO $name producer version" [list env BSC_OPTIONS= $compiler \
+                        -v >& $cross/$name.version]]} {
+                    fail "ECO Verilog info: read $name compiler version"
+                    return
+                }
+                set f [open $cross/$name.version]
+                set versions($name) [gets $f]
+                close $f
+            }
+            if {$versions(core) eq $versions(current)} {
+                fail "ECO Verilog info: CORE_REPLAY_BSC must have a different native version"
+                return
+            }
+            if {[exec_with_log "ECO core producer capture" [list env BSC_OPTIONS= $core_bsc \
+                    -u -verilog -elab -no-show-timestamps -no-show-version -g mkReplaySmoke \
+                    -bdir $cross/core -vdir $cross/core -info-dir $cross/core \
+                    -eco-capture $cross/core/capture $fixture >& $cross/core.log]]} {
+                set f [open $cross/core.log]; verbose -log [read $f] 0; close $f
+                fail "ECO Verilog info: capture with core producer"
+                return
+            }
+            pass "ECO Verilog info: capture with core producer"
+            file copy $cross/core/capture $cross/source_before
+            set source_manifest $cross/core/capture/mkReplaySmoke.replay
+            set status [exec_with_log "ECO incompatible core adaptation" [list env BSC_OPTIONS= $::bsc \
+                -eco-adapt $source_manifest -eco-output $cross/adapted >& $cross/adapt.log]]
+            set f [open $cross/adapt.log]; set contents [read $f]; close $f
+            if {$status && [string first {producer/native schema mismatch} $contents] >= 0} {
+                pass "ECO Verilog info: adaptation rejects a different native version"
+            } else {
+                verbose -log $contents 0
+                fail "ECO Verilog info: adaptation rejects a different native version"
+            }
+            if {[llength [glob -nocomplain $cross/adapted/*]] == 0} {
+                pass "ECO Verilog info: version rejection runs no controls or capture"
+            } else {
+                fail "ECO Verilog info: version rejection runs no controls or capture"
+            }
+            set before [lsort [glob -nocomplain -tails -directory $cross/source_before *]]
+            set after [lsort [glob -nocomplain -tails -directory $cross/core/capture *]]
+            set intact [expr {$before eq $after}]
+            foreach name $before {
+                if {[exec_with_log "ECO core source after version rejection" [list cmp \
+                        $cross/source_before/$name $cross/core/capture/$name]]} {set intact 0}
+            }
+            if {$intact} {
+                pass "ECO Verilog info: version rejection preserves all source artifacts"
+            } else {
+                fail "ECO Verilog info: version rejection preserves all source artifacts"
+            }
+        }
+    } finally {
+        cd $previous
+    }
+}
