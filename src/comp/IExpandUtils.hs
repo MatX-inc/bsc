@@ -3543,6 +3543,11 @@ realPrimOp PrimBNot = True
 realPrimOp PrimBAnd = True
 realPrimOp PrimBOr = True
 realPrimOp PrimIf = True
+-- The operands of a PrimCase are evaluated: it is built only by ieCase,
+-- from the terms of a predicate (evalPTerm, predToIExpr).  evalHeap
+-- heaps the operands of a real primitive in WHNF and those of any other
+-- primitive unevaluated, which walkNF then rejects.
+realPrimOp PrimCase = True
 realPrimOp PrimSelect = True
 realPrimOp PrimArrayDynSelect = True
 realPrimOp PrimArrayDynUpdate = True

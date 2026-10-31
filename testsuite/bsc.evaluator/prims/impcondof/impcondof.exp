@@ -124,6 +124,43 @@ find\_regexp sysDynArraySelect2DMethodAction.v \
       1\'d1\: CASE\_idx2\_0\_fs\_1\_0FULL\_N\_1\_fs\_1\_1FULL\_N\_1\_\_q2 \= fs\_1\_1\$FULL\_N\;
     endcase}
 
+# The same selection bound by a let that two rules share, so that the
+# evaluator heaps it (and the impCondOf application) instead of
+# evaluating it in place: the result of impCondOf reaches walkNF
+# through a heap cell
+compile_verilog_pass DynArraySelect2DMethodActionShared.bsv
+find_regexp sysDynArraySelect2DMethodActionShared.v \
+    {if \(RST\_N \!\= \`BSV\_RESET\_VALUE\)
+      \$display\(\"cond \= \%d\"\,
+	       CASE\_idx1\_0\_CASE\_idx2\_0\_fs\_0\_0\_i\_notFull\_1\_fs\_\_ETC\_\_\_d9\)\;}
+find_regexp sysDynArraySelect2DMethodActionShared.v \
+    {case \(idx1\)
+      1\'d0\:
+	  CASE\_idx1\_0\_CASE\_idx2\_0\_fs\_0\_0\_i\_notFull\_1\_fs\_\_ETC\_\_\_d9 \=
+	      CASE\_idx2\_0\_fs\_0\_0FULL\_N\_1\_fs\_0\_1FULL\_N\_1\_\_q1\;
+      1\'d1\:
+	  CASE\_idx1\_0\_CASE\_idx2\_0\_fs\_0\_0\_i\_notFull\_1\_fs\_\_ETC\_\_\_d9 \=
+	      CASE\_idx2\_0\_fs\_1\_0FULL\_N\_1\_fs\_1\_1FULL\_N\_1\_\_q2\;
+    endcase}
+# the rule that performs the action is guarded by the same condition
+find_regexp sysDynArraySelect2DMethodActionShared.v \
+    {assign fs\_1\_1\$ENQ \=
+	     CASE\_idx1\_0\_CASE\_idx2\_0\_fs\_0\_0\_i\_notFull\_1\_fs\_\_ETC\_\_\_d9 \&\&
+	     idx2 \=\= 1\'d1 \&\&
+	     idx1 \=\= 1\'d1 \;}
+
+# The condition packed to a bit and bound by a let that two rules
+# share: the cell holds the primImpCondOf application itself and
+# evaluates to the case tree of the two-level selection
+compile_verilog_pass DynArraySelect2DMethodActionPackShared.bsv
+find_regexp sysDynArraySelect2DMethodActionPackShared.v \
+    {if \(RST\_N \!\= \`BSV\_RESET\_VALUE\) \$display\(\"cond1 \= \%d\"\, b\_\_h[0-9]+\)\;}
+find_regexp sysDynArraySelect2DMethodActionPackShared.v \
+    {case \(idx1\)
+      1\'d0\: b\_\_h[0-9]+ \= CASE\_idx2\_0\_fs\_0\_0FULL\_N\_1\_fs\_0\_1FULL\_N\_1\_\_q1\;
+      1\'d1\: b\_\_h[0-9]+ \= CASE\_idx2\_0\_fs\_1\_0FULL\_N\_1\_fs\_1\_1FULL\_N\_1\_\_q2\;
+    endcase}
+
 # XXX DynArraySelect2DMethodActionValue.bsv
 # XXX DynArraySelect2DMethodValue.bsv
 
