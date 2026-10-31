@@ -286,6 +286,10 @@ instance PVPrint Inst where
 -----------------------------------------------------------------------------
 
 expandSyn :: Type -> Type
+-- A normal type has no synonym head and no primitive type-function
+-- application anywhere, so exp below rebuilds every node unchanged
+-- (positions are restamped only on synonym bodies): return t0 itself.
+expandSyn t0 | isNormalNode t0 = ctypeStat ExpandSynShortcut t0
 expandSyn t0 = exp [] f as
   where (f, as) = splitTAp t0
         -- All type applications should be split before entering exp
@@ -337,6 +341,9 @@ class Instantiate t where
     inst  :: [Type] -> t -> t
 
 instance Instantiate Type where
+    -- a ground type has no TGen to instantiate, so the rebuild below
+    -- returns a value equal to t: return t itself
+    inst _ t | isGroundNode t = ctypeStat InstShortcut t
     inst ts (TAp l r) = TAp (inst ts l) (inst ts r)
     inst ts (TGen _ n)  = ts !! n
     inst ts t         = t
