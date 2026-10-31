@@ -11,6 +11,7 @@ import qualified Data.Set as S
 import qualified Data.IntMap.Strict as IM
 import qualified Data.List as List
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import Control.Monad(when)
 import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 
 import Util(fromJustOrErr)
@@ -36,7 +37,8 @@ import SymTab
 import Type(tPrimPair, tBit, HasKind(..))
 import CType(cTVarKind, typeclassId, cTVarNum,
              isNormalNode, typeCanonWordNode, bumpCTypeStat, CTypeStat(..),
-             checkLetrecBinders)
+             checkLetrecBinders,
+             checkCanonIds)
 import TIMonad(CATFCache)
 import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
@@ -229,6 +231,12 @@ iConvTMemo w t = unsafeDupablePerformIO $ do
     m0 <- readIORef iConvTMemoTable
     case IM.lookup w m0 of
       Just it -> do bumpCTypeStat IConvMemoHit
+                    -- -check-ctype-ids: the hit is the object a fresh
+                    -- walk returns (Eq IType: equal uniques, else
+                    -- structural)
+                    when (checkCanonIds && it /= iConvTWalk t) $
+                        internalError ("IConv.iConvTMemo: memo disagrees with a fresh conversion: "
+                                       ++ ppReadable (t, it, iConvTWalk t))
                     return it
       Nothing -> do bumpCTypeStat IConvMemoMiss
                     let it = iConvTWalk t

@@ -12,6 +12,7 @@ module CType(
   isGroundType, isNormalType, isGroundNode, isNormalNode,
   enableCanonIds, disableCanonIds, CTypeStat(..), ctypeStat, bumpCTypeStat, cTypeStats,
   checkLetrecBinders,
+  checkEqByWord, checkCanonIds,
 
   -- ** Examining Types
   getTyVarId, getTypeKind,
@@ -671,13 +672,19 @@ eqStructural (TGen _ i1) (TGen _ i2) = i1 == i2
 eqStructural (TDefMonad _) (TDefMonad _) = True
 eqStructural _ _ = False
 
+-- An answer taken from two equal words.  Under -check-ctype-ids the two
+-- types are also compared structurally, and a disagreement is an
+-- internal error naming the site.
+checkEqByWord :: String -> Type -> Type -> a -> a
+checkEqByWord site x y r
+    | checkCanonIds && not (eqStructural x y) =
+        internalError (site ++ ": equal canonical words for unequal types: "
+                       ++ show (x, y))
+    | otherwise = r
+
 -- The EQ answer of cmp's word shortcut.
 eqByWord :: Type -> Type -> Ordering
-eqByWord x y
-    | checkCanonIds && not (eqStructural x y) =
-        internalError ("CType.cmp: equal canonical words for unequal types: "
-                       ++ show (x, y))
-    | otherwise = ctypeStat CmpEqByWord x `seq` EQ
+eqByWord x y = checkEqByWord "CType.cmp" x y (ctypeStat CmpEqByWord x `seq` EQ)
 
 -- Counters, kept and printed (by bsc at exit) only under
 -- -trace-ctype-stats; every bump is a no-op otherwise.
@@ -723,8 +730,14 @@ statName IConvMemoMiss = "iconv_memo_miss"
 ctypeStatsOn :: Bool
 ctypeStatsOn = "-trace-ctype-stats" `elem` progArgs
 
--- -check-ctype-ids: every identity decision is also made structurally
--- and a disagreement is an internal error.
+-- -check-ctype-ids: every answer taken from two equal words -- cmp's EQ
+-- and Unify's mgu and match shortcuts -- is also decided structurally
+-- (checkEqByWord), and every IConv memo hit is compared with a fresh
+-- conversion of the type; a disagreement is an internal error.  The
+-- one-sided shortcuts (apSub, tv, expandSyn, inst, getFreeT, chkTAp,
+-- TCMisc's expTFun, normT, expandSynN and the badCon scan) return their
+-- input on the ground or normal flag and are not checked here: they
+-- rest on the flags' definition, and -no-ctype-ids turns them all off.
 {-# NOINLINE checkCanonIds #-}
 checkCanonIds :: Bool
 checkCanonIds = "-check-ctype-ids" `elem` progArgs
