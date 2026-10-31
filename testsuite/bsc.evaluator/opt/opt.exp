@@ -73,3 +73,17 @@ if { $vtest == 1 } {
 #
 compile_verilog_pass ImproveIf_ConUndet_OneCon.bsv {} \
     {-steps-max-intervals 10 -steps-warn-interval 100000 +RTS -K10m -RTS}
+
+# A Bit#(1) element of a vector compared with zero, as a condition:
+# "bv[idx] == 0" is one negation of the selected bit (ITransform), and
+# the evaluator keeps it as one negation after the selection -- the
+# ord (chr e) of Prelude's conditional returns the evaluated chr
+# argument without evaluating it again, which would push the negation
+# into every element -- so the Verilog selects the un-negated bit and
+# swaps the mux arms.  bsc.bugs/bluespec_inc/b1354 compares the same
+# shape over two selectors.
+compile_verilog_pass NotSel.bsv
+if { $vtest == 1 } {
+    find_n_strings sysNotSel.v {!bv_} 0
+    find_n_strings sysNotSel.v { = bv_} 16
+}

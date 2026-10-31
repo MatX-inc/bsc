@@ -193,9 +193,9 @@ Sequenced before (restricted): flushAddress, cacheRequest, flush
 Conflicts: handleIBufferRequest
  
 Method: iBufferResponse
-Ready signal: (responseQueue_rq_the_fifof.i_notEmpty ||
-	       responseQueue_rq_enqw.whas) &&
-	      responseQueue_rq_result.whas
+Ready signal: responseQueue_rq_result.whas &&
+	      (responseQueue_rq_the_fifof.i_notEmpty ||
+	       responseQueue_rq_enqw.whas)
 Conflict-free: handleIBufferRequest, cacheRequest
 Sequenced before (restricted): flushAddress, flush
 Sequenced after (restricted): handleCacheResponse
@@ -210,9 +210,9 @@ Sequenced after (restricted): handleIBufferRequest,
 			      handleCacheResponse
  
 Method: cacheRequest
-Ready signal: (cacheAddrQueue_caq_the_fifof.i_notEmpty ||
-	       cacheAddrQueue_caq_enqw.whas) &&
-	      cacheAddrQueue_caq_result.whas
+Ready signal: cacheAddrQueue_caq_result.whas &&
+	      (cacheAddrQueue_caq_the_fifof.i_notEmpty ||
+	       cacheAddrQueue_caq_enqw.whas)
 Conflict-free: iBufferResponse, handleCacheResponse
 Sequenced before (restricted): flushAddress, flush
 Sequenced after (restricted): handleIBufferRequest

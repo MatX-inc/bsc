@@ -4089,8 +4089,22 @@ conAp' _ (ICPrim _ PrimGetModuleName) _ as = internalError ("PrimGetModuleName "
 -- ord C_n  -->  n
 -- ord (if c t e)  -->  if c (ord t) (ord e)
 -- ord _  -->  _
+--
+-- The argument of an evaluated chr is a value: conAp' PrimChr applies
+-- chr to the WHNF of its argument, and evalHeap moves that argument
+-- to a WHNF cell (PrimChr is not one of its lazy operators).  So
+-- ord (chr e) returns e as it is, reading a heap reference as any
+-- reference is read (evalAp' expands a constant cell and keeps the
+-- reference to any other), and does not evaluate e again: eval1
+-- cannot tell a value from an unevaluated application of the same
+-- shape, and conAp' is not the identity on a strict primitive's
+-- application -- the PrimBNot over a dynamic selection that
+-- iTransExpr returns for "sel == 0" would be pushed into the arms of
+-- the selection (pushBNot), one inverter per element in place of one
+-- after the selection.
 conAp' _ (ICPrim _ PrimOrd) o [T f, T sz, E e] = evalStaticOp e (aitBit sz) handleOrd
-  where handleOrd (IAps (ICon _ (ICPrim _ PrimChr)) _ [e']) = eval1 e'
+  where handleOrd (IAps (ICon _ (ICPrim _ PrimChr)) _ [e'@(IRefT _ _ _ _)]) = eval1 e'
+        handleOrd (IAps (ICon _ (ICPrim _ PrimChr)) _ [e']) = return (pExpr e')
         handleOrd (IAps (ICon _ (ICCon { conTagInfo = cti })) _ _) =
             return $ pExpr $ iMkLitAt (getIExprPosition e) (aitBit sz) (conTag cti)
         handleOrd e' = nfError "primOrd" e'
