@@ -3302,30 +3302,105 @@ mkApUH :: HExpr -> [Arg] -> G HExpr
 mkApUH f es = do es' <- mapM evalArgUH es
                  return (mkAp f es')
 
+-- How often the body of a lambda chain being applied can evaluate one of
+-- the chain's parameters.  A lambda that the stack saturates (a parameter
+-- of the function being applied, or a let in the body) is applied exactly
+-- once, so its body counts like any other sub-expression; a lambda the
+-- stack does not saturate can be applied any number of times, so an
+-- occurrence under one is evaluated once per application of that lambda.
+data Occ = Once | OnceUnderLam | Many
+
+-- The Occ of each parameter of the lambda chain e that the argument stack
+-- as saturates, in the chain's body (a parameter without an entry has no
+-- occurrence).  The traversal stops once every parameter has been seen
+-- twice.
+occCounts :: HExpr -> [Arg] -> M.Map Id Occ
+occCounts e0 as0 = chain S.empty e0 as0
+  where
+    chain bs (ILam i _ b) (E _ : as) = chain (S.insert i bs) b as
+    chain bs (ILAM _ _ b) (T _ : as) = chain bs b as
+    chain bs e as = snd (go False (bs, M.empty) e as)
+    -- lam: under a lambda that the stack does not saturate
+    -- bs: the parameters not yet seen twice; m: the counts so far
+    go :: Bool -> (S.Set Id, M.Map Id Occ) -> HExpr -> [Arg]
+       -> (S.Set Id, M.Map Id Occ)
+    go _   r@(bs, _) _ _ | S.null bs = r
+    go lam (bs, m) (ILam i _ b) as =
+        -- i is rebound below, so its occurrences there are not counted
+        let (bs', m') = case as of
+                          E _ : as' -> go lam (S.delete i bs, m) b as'
+                          _         -> go True (S.delete i bs, m) b []
+        in if i `S.member` bs then (S.insert i bs', m') else (bs', m')
+    go lam r (ILAM _ _ b) as
+      | (T _ : as') <- as = go lam r b as'
+      | otherwise         = go True r b []
+    go lam r@(bs, m) (IVar i) _
+      | not (i `S.member` bs) = r
+      | M.member i m          = (S.delete i bs, M.insert i Many m)
+      | lam                   = (bs, M.insert i OnceUnderLam m)
+      | otherwise             = (bs, M.insert i Once m)
+    go lam r (IAps f ts es) as =
+        foldl' (\r' e -> go lam r' e [])
+               (go lam r f (map T ts ++ map E es ++ as)) es
+    go lam r (ICon _ (ICUndet { imVal = Just e })) _ = go lam r e []
+    go _   r (ICon _ _) _      = r
+    go _   r (IRefT _ _ _ _) _ = r
+
+-- What the parameter i (of type t, with occurrence count occs) of a lambda
+-- being applied stands for in its body: the argument a itself when the
+-- body evaluates i at most once, so that the substitution costs no
+-- evaluation and no heap cell; otherwise a heap cell holding a, whose
+-- single evaluation every occurrence shares.  An occurrence under a lambda
+-- the application does not saturate is evaluated once per application of
+-- that lambda, so it too gets a cell -- unless i is an ActionValue.
+-- Executing an ActionValue applies its world function, and each execution
+-- is a separate occurrence of the action, with its own numbering of the
+-- foreign calls inside (conAp' numbers an ICForeign when it is evaluated,
+-- and cacheableDef re-evaluates an ActionValue definition at every use for
+-- the same reason): a cell holding the argument outside the lambda would
+-- be evaluated once and make every execution the same occurrence.  A keep
+-- id names its value in generated code, so it always gets a cell.
+-- Substituting a captures nothing: eSubstBatch renames a binder of the
+-- body that occurs free in a, and arguments on the stack are closed anyway
+-- (evalAp' evaluates closed expressions only, and its IAps clause pushes
+-- their sub-expressions unchanged).
+bindArg :: String -> M.Map Id Occ -> Id -> IType -> HExpr -> G HExpr
+bindArg tag occs i t a
+  | not (isKeepId i) && substitutable (M.lookup i occs) = return a
+  | otherwise = toHeap tag t a (Just i)
+  where
+    substitutable Nothing             = True   -- no occurrence
+    substitutable (Just Once)         = True
+    substitutable (Just OnceUnderLam) = isitActionValue t
+    substitutable (Just Many)         = False
+
 -- Accumulate substitutions when applying to a chain of ILam/ILAM
 -- This batches substitutions to avoid repeated hyper calls
 --
-evalApAccum :: String -> M.Map Id HExpr -> M.Map Id IType -> HExpr -> [Arg] -> G PExpr
+-- occs: the occurrence counts of the chain's parameters (occCounts of the
+-- chain and the stack it was entered with)
+evalApAccum :: String -> M.Map Id Occ -> M.Map Id HExpr -> M.Map Id IType
+            -> HExpr -> [Arg] -> G PExpr
 
 -- Continue accumulating for ILam with expression argument
-evalApAccum tag exprCtx typeCtx (ILam i t body) (E a : as) = do
+evalApAccum tag occs exprCtx typeCtx (ILam i t body) (E a : as) = do
   -- Apply accumulated type variable substitutions to t before allocating the heap cell.
   -- typeCtx may bind type vars that appear in t (e.g. for polymorphic functions like
   -- displayHex :: forall a sa. (Bits a sa) => a -> Action, where t = ITVar a until
   -- the ILAM args have been accumulated into typeCtx).
   norm <- getTypeNormalizerC
   let t' = changedOrId norm (tSubstBatch typeCtx t)
-  a' <- toHeap "apply-accum" t' a (Just i)
+  a' <- bindArg "apply-accum" occs i t' a
   -- position information is clobbered by this point
   when doDebug $ traceM ("accum apply arg=" ++ ppReadable (a', a))
-  evalApAccum "ILam-accum" (M.insert i a' exprCtx) typeCtx body as
+  evalApAccum "ILam-accum" occs (M.insert i a' exprCtx) typeCtx body as
 
 -- Continue accumulating for ILAM with type argument
-evalApAccum tag exprCtx typeCtx e@(ILAM i k body) (T t : as) =
-  evalApAccum "ILAM-accum" exprCtx (M.insert i t typeCtx) body as
+evalApAccum tag occs exprCtx typeCtx e@(ILAM i k body) (T t : as) =
+  evalApAccum "ILAM-accum" occs exprCtx (M.insert i t typeCtx) body as
 
 -- Hit something else: apply accumulated substitutions if any, then continue
-evalApAccum tag exprCtx typeCtx e args = do
+evalApAccum tag _ exprCtx typeCtx e args = do
   when (doDebug || doTraceExpandBatchSubst) $
     traceM ("applying batched subst: " ++
              show (M.size exprCtx) ++ " exprs, " ++
@@ -3383,12 +3458,13 @@ evalAp' f@(ICon i (ICDef t e)) as = do -- doFunExpand is true
 evalAp' e@(ICon i ic)          as = conAp i ic e as
 -- it's WHNF
 evalAp' e@(ILam _ _ _)         [] = return (pExpr e)
--- place arg onto heap, substitute arg with heap reference in function body
-evalAp'   (ILam i t e)   (E a:as) = do
-        a' <- toHeap "apply" t a (Just i)
+-- substitute the arg, or a heap reference to it, for the binder in the body
+evalAp' f@(ILam i t e)   (E a:as) = do
+        let occs = occCounts f (E a:as)
+        a' <- bindArg "apply" occs i t a
         -- position information is clobbered by this point
         when doDebug $ traceM ("apply arg=" ++ ppReadable (a', a))
-        evalApAccum "ILam" (M.singleton i a') M.empty e as
+        evalApAccum "ILam" occs (M.singleton i a') M.empty e as
 evalAp'   f@(ILam _ _ _) (T t:as) = internalError("evalAp' ILam: " ++ ppReadable (f,t))
 
 -- it's WHNF
@@ -3396,7 +3472,8 @@ evalAp' e@(ILAM _ _ _)         [] = return (pExpr e)
 -- substitute type
 -- We can put t directly into typeCtx because the simpNumT case of evalAp' took care of
 -- simplifying any unsimplified numeric types
-evalAp'   (ILAM i k e)   (T t:as) = evalApAccum "ILAM" M.empty (M.singleton i t) e as
+evalAp' f@(ILAM i k e)   (T t:as) =
+        evalApAccum "ILAM" (occCounts f (T t:as)) M.empty (M.singleton i t) e as
 evalAp'   f@(ILAM _ _ _) (E e:as) = internalError ("evalAp' ILAM:" ++ ppReadable (f,e))
 -- place applications args on the stack and evaluate function
 evalAp' e@(IAps f tys es)      as =

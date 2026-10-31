@@ -44,9 +44,9 @@ module sysRegToReg(CLK,
   wire rg$EN;
 
   // remaining internal signals
-  wire [47 : 0] IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d27;
-  wire [31 : 0] IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d20;
-  wire [7 : 0] _0_CONCAT_idx_PLUS_1___d35;
+  wire [47 : 0] IF_idx_EQ_5_3_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_ETC___d33;
+  wire [31 : 0] IF_idx_EQ_3_9_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_ETC___d32;
+  wire [7 : 0] _0_CONCAT_idx_PLUS_1___d6;
 
   // register done
   assign done$D_IN = 1'd1 ;
@@ -58,22 +58,22 @@ module sysRegToReg(CLK,
 
   // register rg
   assign rg$D_IN =
-	     { IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d27,
-	       (idx == 3'd1) ? _0_CONCAT_idx_PLUS_1___d35 : rg[15:8],
-	       (idx == 3'd0) ? _0_CONCAT_idx_PLUS_1___d35 : rg[7:0] } ;
+	     { (idx == 3'd7) ? _0_CONCAT_idx_PLUS_1___d6 : rg[63:56],
+	       (idx == 3'd6) ? _0_CONCAT_idx_PLUS_1___d6 : rg[55:48],
+	       IF_idx_EQ_5_3_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_ETC___d33 } ;
   assign rg$EN = !done ;
 
   // remaining internal signals
-  assign IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d20 =
-	     { (idx == 3'd7) ? _0_CONCAT_idx_PLUS_1___d35 : rg[63:56],
-	       (idx == 3'd6) ? _0_CONCAT_idx_PLUS_1___d35 : rg[55:48],
-	       (idx == 3'd5) ? _0_CONCAT_idx_PLUS_1___d35 : rg[47:40],
-	       (idx == 3'd4) ? _0_CONCAT_idx_PLUS_1___d35 : rg[39:32] } ;
-  assign IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d27 =
-	     { IF_idx_EQ_7_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_B_ETC___d20,
-	       (idx == 3'd3) ? _0_CONCAT_idx_PLUS_1___d35 : rg[31:24],
-	       (idx == 3'd2) ? _0_CONCAT_idx_PLUS_1___d35 : rg[23:16] } ;
-  assign _0_CONCAT_idx_PLUS_1___d35 = { 5'd0, idx } + 8'd1 ;
+  assign IF_idx_EQ_3_9_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_ETC___d32 =
+	     { (idx == 3'd3) ? _0_CONCAT_idx_PLUS_1___d6 : rg[31:24],
+	       (idx == 3'd2) ? _0_CONCAT_idx_PLUS_1___d6 : rg[23:16],
+	       (idx == 3'd1) ? _0_CONCAT_idx_PLUS_1___d6 : rg[15:8],
+	       (idx == 3'd0) ? _0_CONCAT_idx_PLUS_1___d6 : rg[7:0] } ;
+  assign IF_idx_EQ_5_3_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_ETC___d33 =
+	     { (idx == 3'd5) ? _0_CONCAT_idx_PLUS_1___d6 : rg[47:40],
+	       (idx == 3'd4) ? _0_CONCAT_idx_PLUS_1___d6 : rg[39:32],
+	       IF_idx_EQ_3_9_THEN_0_CONCAT_idx_PLUS_1_ELSE_rg_ETC___d32 } ;
+  assign _0_CONCAT_idx_PLUS_1___d6 = { 5'd0, idx } + 8'd1 ;
 
   // handling of inlined registers
 
