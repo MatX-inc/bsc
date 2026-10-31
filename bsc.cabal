@@ -133,9 +133,15 @@ library
     Deriving
     DisjointTest
     DynamicMap
+    ECO.Backend
+    ECO.Graph
     ECO.Interface
+    ECO.Namespace
+    ECO.Observe
     ECO.Options
     ECO.Replay
+    ECO.Types
+    ECO.Validate
     ECO.VerilogInfo
     EquivalenceClass
     Error
