@@ -1,0 +1,85 @@
+package CanonIds where
+
+import Vector
+
+-- Typeclass-heavy source for the canonical-word tests (canonids.exp):
+-- type synonyms, an associated type function, primitive numeric type
+-- functions, a fundep class with instance contexts and derived
+-- instances, all applied at ground types, so that substitution, synonym
+-- expansion, unification and instance resolution run on types that
+-- carry a canonical word.
+
+type Byte = UInt 8
+type Pair a = (a, a)
+type Lane n = Vector n (Bit 8)
+
+data Color = Red | Green | Blue
+  deriving (Eq, Bits, Bounded)
+
+struct Packet n =
+    { tag :: Color
+    ; body :: Bit n
+    ; len :: UInt (TLog (TAdd n 1))
+    }
+  deriving (Eq, Bits)
+
+class Encode a n | a -> n where
+    type EncSize a = n
+    encode :: a -> Bit n
+
+instance Encode Color 2 where
+    encode c = pack c
+
+instance Encode Bool 1 where
+    encode b = pack b
+
+instance Encode (UInt k) k where
+    encode x = pack x
+
+instance Encode (Bit k) k where
+    encode b = b
+
+instance (Encode a sa, Encode b sb) => Encode (a, b) (TAdd sa sb) where
+    encode (x, y) = encode x ++ encode y
+
+instance (Encode a sa) => Encode (Vector n a) (TMul n sa) where
+    encode v = pack (map encode v)
+
+data Encoded a = Encoded (Bit (EncSize a))
+
+wrap :: (Encode a sa) => a -> Encoded a
+wrap x = Encoded (encode x)
+
+topBit :: (Encode a sa) => a -> Bit 1
+topBit x = case wrap x of
+             Encoded b -> msb b
+
+class Checksum a where
+    checksum :: a -> Byte
+
+instance Checksum (Bit n) where
+    checksum _ = fromInteger (valueOf n)
+
+instance (Checksum a, Checksum b) => Checksum (a, b) where
+    checksum (x, y) = checksum x + checksum y
+
+instance (Checksum a) => Checksum (Vector n a) where
+    checksum v = foldr (\x acc -> checksum x + acc) 0 v
+
+{-# verilog sysCanonIds #-}
+sysCanonIds :: Module Empty
+sysCanonIds = module
+    cnt :: Reg Byte <- mkReg 0
+    lane :: Reg (Lane 4) <- mkReg (replicate 0)
+    pkt :: Reg (Packet 33) <- mkReg (Packet { tag = Red; body = 0; len = 0 })
+    rules
+      "step": when True ==>
+        action
+          cnt := cnt + 1
+          lane := map (\b -> b + pack cnt) lane
+          pkt := Packet { tag = if cnt == 3 then Blue else Green
+                        ; body = encode (lane, cnt == 0)
+                        ; len = 33 }
+          $display "%0d %b %0d %b" cnt (encode (pkt.tag, cnt))
+                   (checksum (lane, pack pkt)) (topBit (pkt.tag, cnt))
+      "done": when cnt == 7 ==> $finish 0
