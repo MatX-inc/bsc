@@ -40,7 +40,7 @@ import SpeedyString(InternSnapshot, snapshotInternState, restoreInternState)
 import Version(bscVersionStr)
 
 replaySchema :: String
-replaySchema = "bsc-eco-native-replay-2"
+replaySchema = "bsc-eco-native-replay-3"
 
 adapterSchema :: String
 adapterSchema = "bsc-eco-native-adapter-2"
