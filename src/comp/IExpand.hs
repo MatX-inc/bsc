@@ -4016,8 +4016,27 @@ conAp' _ (ICPrim _ PrimOrd) o [T f, T sz, E e] = evalStaticOp e (aitBit sz) hand
         handleOrd e' = nfError "primOrd" e'
 
 -- chr (ord e)  -->  e
--- chr (if c t e)  -->  if c (chr t) (chr e)
-conAp' _ (ICPrim _ PrimChr) o [T sz, T to, E e] = evalStaticOp e to handleChr
+-- chr (sel arr i)  -->  sel (map chr arr) i
+-- chr (if c t e)  -->  chr (if c t e), the conditional kept as ONE cell
+--
+-- A conditional is not pushed through.  chr over a Bit-typed
+-- conditional is the canonical form of an enum-typed conditional
+-- (improveIf's PrimChr clause lifts chr out of the arms), and inside an
+-- evaluated conditional the push has nothing to fold: ord never
+-- survives evaluation, so no arm is "ord e", and an undetermined arm
+-- stays the Bit-typed undetermined value that improveIf keeps (pushed,
+-- it would become an enum-typed one, which improveIf drops).  The push
+-- (evalStaticOp) walks a shared conditional DAG once per PATH and
+-- rebuilds it inline, exponential in the DAG's depth; pushBNot returns
+-- such DAGs, and Prelude's not applies chr to every one of them.  The
+-- heaped argument keeps the DAG shared, and its implicit condition is
+-- recovered when the cell is unheaped.
+conAp' _ (ICPrim _ PrimChr) o [T sz, T to, E e] = do
+    (ee, P _ e') <- evalUH e
+    case e' of
+      IAps (ICon _ (ICPrim _ PrimIf)) _ _ ->
+          bldAp' "chr-if" o [T sz, T to, E ee]
+      _ -> evalStaticOp ee to handleChr
   where handleChr (IAps (ICon _ (ICPrim _ PrimOrd)) [to', _] [e']) | to == to' = eval1 e'
         handleChr e' = return $ pExpr $ mkAp o [T sz, T to, E e']
 
