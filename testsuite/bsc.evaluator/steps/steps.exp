@@ -1,0 +1,31 @@
+# Tests for the accounting of unfolding steps (the -steps budget)
+
+# A user wrapper around a class method (x + 1 on Integer or Bit#(8))
+# costs no step: the wrapper is harmless and the method it selects
+# is simple, so a chain of 300 wrappers fits in a budget of 100 steps
+compile_verilog_pass HarmlessChain.bsv sysHarmlessChain "-steps 100"
+
+# A class method that recurses through its own dictionary is counted
+# at every selection of the method, so the recursion runs out of
+# steps (G0024) instead of running unbounded
+compile_verilog_fail_error RecursiveMethod.bsv G0024 1 "" "-steps 100"
+
+# The same recursion through a user wrapper around the method: the
+# wrapper is not harmless, since the method it selects reaches the
+# wrapper again
+compile_verilog_fail_error RecursiveMethodWrapper.bsv G0024 1 "" "-steps 100"
+
+# A recursive function called through a local alias of itself (bound,
+# since it is used twice): the alias is the reference to the function,
+# so every call through it is an unfolding that counts, and the chain
+# of 30 fits in a budget of 400 steps
+compile_verilog_pass RecursiveAlias.bsv sysRecursiveAlias "-steps 400"
+
+# The alias bound outside the function's lambda, so that it holds the
+# definition's value: the recursion still runs out of steps (G0024)
+compile_verilog_fail_error RecursiveAliasLet.bs G0024 1 "" "-steps 100"
+
+# The same without a base case: the steps budget must stop it (the heap
+# cap turns an uncounted recursion into a failure rather than a hang)
+compile_verilog_fail_error RecursiveAliasInf.bs G0024 1 "" \
+    "-steps 100 +RTS -M512M -RTS"

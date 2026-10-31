@@ -18,7 +18,8 @@ module IExpandUtils(
         addSubmodComments, {-getSubmodComments,-}
         addPort, getPortWires, savePortType,
         saveRules, getSavedRules, clearSavedRules, replaceSavedRules,
-        setBackendSpecific, cacheDef, lookupCExprCache, insertCExprCache,
+        setBackendSpecific, cacheDef, harmlessDef, harmlessField,
+        lookupCExprCache, insertCExprCache,
         addStateVar, step, updHeap, getHeap, {- filterHeapPtrs, -}
         getSymTab, getDefEnv, getFlags, getErrHandle, getModuleName,
         getBNotCache, updBNotCache,
@@ -595,6 +596,15 @@ data GState = GState {
         -- cache partially-evaluated top-level definitions
         defCache :: !(M.Map Id HExpr),
 
+        -- whether a top-level definition is harmless (see harmlessDef),
+        -- decided once per definition Id from its body alone
+        harmlessDefs :: !(M.Map Id Bool),
+
+        -- whether a field of the tuple a top-level definition builds is
+        -- simple (see simpleField), decided once per definition Id and
+        -- field index from the bodies alone
+        simpleFields :: !(M.Map (Id, Integer) Bool),
+
         -- cache dynamically evaluated CSyntax expressions
         cexprCache :: !(M.Map (CExpr, IType) HExpr),
 
@@ -663,6 +673,8 @@ initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
                       port_wires = M.empty,
                       backend_specific = False,
                       defCache = M.empty,
+                      harmlessDefs = M.empty,
+                      simpleFields = M.empty,
                       cexprCache = M.empty,
                       savedRules = [],
                       badEvaluation = False,
@@ -2835,13 +2847,24 @@ toHeap :: String -> IType -> HExpr -> Maybe Id -> G HExpr
 -- proper handling of actionvalues
 toHeap tag t e@(ICon _ (ICForeign {})) cell_name = do
   addHeapUnev tag t e cell_name
--- definitions must be heaped for correct handling of actionvalues
+-- A reference to a definition of function type stays the reference:
+-- a function is applied, never stored, and the reference is already
+-- shared by name, so every application of it (through a parameter
+-- bound to the reference, a tuple field, a constructor's argument)
+-- goes through evalDef and is counted or not by evalDef's rule; a
+-- cell holding the function would be applied without one.  A
+-- reference to a definition of any other type is replaced by the
+-- definition's value: its cached cell (cacheDef), or for a definition
+-- re-evaluated at every use (an ActionValue, a Clock, a Reset) a
+-- fresh cell, so that the use is an occurrence of its own.
 -- a top-level definition should have no free variables by construction
 -- Don't use t for caching because, for polymorphic defs, it may be the
 -- instantiated type of the definition in the current context.
-toHeap tag t (ICon i (ICDef t' e)) cell_name = do
-  e' <- cacheDef i t' e
-  toHeap tag t e' cell_name
+toHeap tag t d@(ICon i (ICDef t' e)) cell_name
+  | isFunType (dropForAll t') = return d
+  | otherwise = do
+      (e', _) <- cacheDef i t' e
+      toHeap tag t e' cell_name
 toHeap _   _ e@(ICon _ _)      _ = return e
 toHeap _   _ e@(IRefT _ _ _ _) _ = return e
 toHeap tag t e cell_name = do
@@ -2856,10 +2879,13 @@ toHeap tag t e cell_name = do
 -- for arrays
 {-# INLINE toHeapCon #-}
 toHeapCon :: String -> IType -> HExpr -> Maybe Id -> G HExpr
--- expand out ICDef as in toHeap
-toHeapCon tag t (ICon i (ICDef t' e)) cell_name = do
-  e' <- cacheDef i t' e
-  toHeapCon tag t e' cell_name
+-- expand out ICDef as in toHeap; the reference to a definition of
+-- function type is itself heaped
+toHeapCon tag t d@(ICon i (ICDef t' e)) cell_name
+  | isFunType (dropForAll t') = addHeapUnev tag t d cell_name
+  | otherwise = do
+      (e', _) <- cacheDef i t' e
+      toHeapCon tag t e' cell_name
 -- heap all other constants
 toHeapCon tag t e@(ICon _ _) cell_name = do
   addHeapUnev tag t e cell_name
@@ -2908,17 +2934,60 @@ inferName expr@(IAps (ICon con_name (ICSel {})) [_] [object])
 inferName expr@(ICon inst_name (ICStateVar {})) = return (Just inst_name)
 inferName _ = return Nothing
 
+-- ---------------
+
+-- The definition cache
+--
+-- Every use of a top-level definition (ICDef) that the evaluator
+-- applies, or heaps as a value, passes through cacheDef (from
+-- evalDef, and from toHeap and toHeapCon for a definition that is not
+-- a function: a function's reference is kept, see toHeap), which
+-- decides whether the definition's value is shared and reports
+-- whether the value was already cached (such a use evaluates nothing,
+-- which evalDef's step accounting relies on).
+-- The cache (defCache in GState) maps the definition's Id to the heap
+-- reference holding its value.  A top-level definition is closed and
+-- its body is fixed for the whole compile, so the Id alone determines
+-- the value and is the key; the cache belongs to the per-module
+-- GState, so a cached definition is evaluated at most once per
+-- synthesized module.  The CAFs a package relies on (lifted
+-- dictionaries, constant tables) are definitions like any other, so
+-- this is also where their one evaluation per module is shared.
+--
+-- cacheableDef is the rule, by the definition's type and the shape of
+-- its body:
+--
+--   * a definition of type Clock or Reset is not cached, whatever its
+--     shape: a pure value of either type involves no work, and the
+--     evaluator relies on re-evaluating one (e.g. for disabled clocks).
+--   * a definition of ActionValue type is not cached, whatever its
+--     shape: each use is a separate occurrence of the action (an
+--     ActionValue foreign call, for one, is numbered per occurrence by
+--     newFFCallNo), so the uses must not share one cell.
+--   * an application (IAps) is cached.  It may evaluate to anything --
+--     a dictionary tuple, a constant table, a module, a function --
+--     and that evaluation is the work worth doing once per module.
+--   * a lambda or type abstraction (ILam, ILAM) is not cached.  It is
+--     already a value, and the work is in applying it, which happens
+--     at each use with that use's own arguments.
+--   * a constant (ICon) or a heap reference (IRefT) is not cached:
+--     evaluating either again costs nothing, and a heap reference is
+--     already shared.  A variable (IVar) cannot occur, since a
+--     top-level definition has no free variables.
+
+cacheableDef :: IType -> HExpr -> Bool
+cacheableDef t _ | unCacheableType t = False
+cacheableDef _ (IAps _ _ _) = True
+cacheableDef _ _ = False
+
 unCacheableType :: IType -> Bool
--- top-level pure values of Clock and Reset involve no work
--- and sometimes we want to play games (e.g. disabled clocks)
 unCacheableType (ITCon i _ _) = i == idClock ||
                                 i == idReset
 unCacheableType t = isitActionValue t
 
---- caching of previously evaluated definitions
-cacheDef :: Id -> IType -> HExpr -> G HExpr
-cacheDef i t e | unCacheableType t = return e
-cacheDef i t e@(IAps _ _ _) = do
+cacheDef :: Id -> IType -> HExpr -> G (HExpr, Bool)
+cacheDef i t e | not (cacheableDef t e) = return (e, False)
+cacheDef i t e = do
   s <- get
   let m = defCache s
   case (M.lookup i m) of
@@ -2926,15 +2995,162 @@ cacheDef i t e@(IAps _ _ _) = do
                     -- e' should be a constant or heap reference,
                     -- so it should be cheap to print
                     traceM ("cache hit: " ++ ppReadable (i, t, e'))
-                  return e'
+                  return (e', True)
     Nothing -> do e' <- toHeap "cache-def" t e (Just i)
                   s <- get
                   let m' = M.insert i e' m
                   put (s { defCache = m' })
                   when doTraceDefCache $
                     traceM ("cache miss: " ++ ppReadable (i, t))
-                  return e'
-cacheDef i t e = return e -- no application, not worth caching
+                  return (e', False)
+
+-- ---------------
+
+-- Harmless definitions and simple fields
+--
+-- A definition is harmless when its body is simple: built of nothing
+-- but lambdas, type lambdas, variables (a top-level definition has
+-- no free variables, so these are its own parameters), primitives,
+-- literals, don't-cares, plain tuples, references to harmless
+-- definitions and selections of simple fields.  Applying such a
+-- body does work bounded by the bodies it reaches, which are
+-- finitely many and acyclic: it cannot recurse and cannot grow the
+-- term beyond the arguments it is given, so evalDef does not count
+-- its unfolding as a step.  A reference to a definition still being
+-- decided closes a cycle (a recursive definition, directly or
+-- through others) and is not harmless; a constructor, a tuple with
+-- fields (a dictionary, a struct), a foreign call or a heap
+-- reference is not simple.
+--
+-- A field selected from a definition's tuple (a class method from
+-- an instance's dictionary or from a dictionary LiftDicts made a
+-- definition, a struct constant's field) is simple when the field's
+-- body is, found in the definition by defField.  The selection is a
+-- bounded pick, so the dictionary is not required to be harmless
+-- (none is: a dictionary is a tuple with fields); a field still
+-- being decided is a method that recurses through its own
+-- dictionary, directly or through others, and is not simple.  A
+-- field that is itself a dictionary (the superclass of the
+-- instance's class) is simple too: the pick yields a value, whose
+-- own fields are decided at their own selections.  A selection from
+-- any other tuple expression (a dictionary parameter, a heap
+-- reference, a dictionary function's application) is not simple.
+--
+-- The verdicts depend only on the bodies, which are fixed for the
+-- compile, so each is decided once, per definition Id (harmlessDefs)
+-- or per definition Id and field index (simpleFields), and kept for
+-- the module's evaluation beside defCache.
+
+harmlessDef :: Id -> HExpr -> G Bool
+harmlessDef i e = do
+  s <- get
+  case M.lookup i (harmlessDefs s) of
+    Just b -> return b
+    Nothing -> do
+      -- while i is undecided, a reference back to it is a recursion
+      put (s { harmlessDefs = M.insert i False (harmlessDefs s) })
+      b <- simpleBody M.empty e
+      modify (\s' -> s' { harmlessDefs = M.insert i b (harmlessDefs s') })
+      return b
+
+-- Whether selecting field k from the tuple expression d is harmless:
+-- the tuple is a definition's and the field is simple, or the tuple
+-- is not a definition's.  Selecting a field of a definition's tuple
+-- reaches the field's body, which the selection applies or hands on
+-- as a value: a step (see evalDef) unless the body is simple.  A
+-- tuple that arrived as a value (a dictionary parameter, a
+-- submodule's interface) is left alone: whatever its fields unfold
+-- reaches a definition, or a definition's tuple, before it can
+-- recurse, and is counted there.
+harmlessField :: HExpr -> Integer -> G Bool
+harmlessField d k = case tupleDef d of
+                      Just (i, e) -> simpleField i e k
+                      Nothing -> return True
+
+-- the definition a tuple expression refers to, with its body: a
+-- reference to a definition or a type instance of one
+tupleDef :: IExpr a -> Maybe (Id, IExpr a)
+tupleDef (ICon i (ICDef _ e)) = Just (i, e)
+tupleDef (IAps (ICon i (ICDef _ e)) _ []) = Just (i, e)
+tupleDef _ = Nothing
+
+simpleField :: Id -> HExpr -> Integer -> G Bool
+simpleField i e k = do
+  s <- get
+  case M.lookup (i, k) (simpleFields s) of
+    Just b -> return b
+    Nothing -> do
+      -- while the field is undecided, a selection of it is a recursion
+      put (s { simpleFields = M.insert (i, k) False (simpleFields s) })
+      b <- case defField M.empty e k of
+             Just (lets, f) | dictRef lets f -> return True
+                            | otherwise -> simpleBody lets f
+             Nothing -> return False
+      modify (\s' -> s' { simpleFields = M.insert (i, k) b (simpleFields s') })
+      return b
+
+-- Field k of the tuple a definition's body builds, with the bindings
+-- of the lets around the tuple in which the field is to be read.
+-- The body is the tuple application under type lambdas and lets
+-- (the typechecker binds an instance's methods by let, one each,
+-- and places the variables in the tuple), or a type instance or
+-- alias of another such definition (a closed body, read with no
+-- lets of its own).
+defField :: M.Map Id HExpr -> HExpr -> Integer ->
+            Maybe (M.Map Id HExpr, HExpr)
+defField lets (ILAM _ _ e) k = defField lets e k
+defField lets (IAps (ILam v _ e) [] (a : as)) k =
+    defField (M.insert v a lets) (iAps e [] as) k
+defField lets (IAps (ICon _ (ICTuple {})) _ es) k =
+    fmap ((,) lets) (listToMaybe (genericDrop k es))
+defField _ (IAps (ICon _ (ICDef _ e)) _ []) k = defField M.empty e k
+defField _ (ICon _ (ICDef _ e)) k = defField M.empty e k
+defField _ _ _ = Nothing
+
+-- a reference to a dictionary definition, or a let variable bound to
+-- one (see defField)
+dictRef :: M.Map Id HExpr -> HExpr -> Bool
+dictRef lets (IVar v) | Just e <- M.lookup v lets = dictRef (M.delete v lets) e
+dictRef _ (ICon _ (ICDef t _)) = itIsDictType (dropForAll t)
+dictRef _ (IAps (ICon _ (ICDef t _)) _ []) = itIsDictType (dropForAll t)
+dictRef _ _ = False
+
+-- Whether a body is simple (see above).  The map holds the let
+-- bindings in scope around the body (a dictionary's methods, see
+-- defField); a variable bound there stands for its binding, which
+-- is walked in its place, and any other variable is a parameter.
+simpleBody :: M.Map Id HExpr -> HExpr -> G Bool
+simpleBody = go
+  where
+    go lets (ILam i _ e) = go (M.delete i lets) e
+    go lets (ILAM _ _ e) = go lets e
+    go lets (IAps (ICon _ (ICSel { selNo = k })) _ (d : es)) =
+        case tupleDef d of
+          Just (i, e) -> simpleField i e k `andThen` goAll lets es
+          Nothing -> return False
+    go lets (IAps f _ es) = go lets f `andThen` goAll lets es
+    go lets (IVar v) = case M.lookup v lets of
+                         Just e -> go (M.delete v lets) e
+                         Nothing -> return True
+    go _ (ICon i (ICDef _ e)) = harmlessDef i e
+    go lets (ICon _ (ICUndet { imVal = Just e })) = go lets e
+    go _ (ICon _ c) = return (simpleCon c)
+    go _ _ = return False
+
+    goAll _ [] = return True
+    goAll lets (e : es) = go lets e `andThen` goAll lets es
+
+    andThen m1 m2 = do b <- m1
+                       if b then m2 else return False
+
+    simpleCon (ICPrim {}) = True
+    simpleCon (ICInt {}) = True
+    simpleCon (ICReal {}) = True
+    simpleCon (ICChar {}) = True
+    simpleCon (ICString {}) = True
+    simpleCon (ICUndet {}) = True
+    simpleCon (ICTuple { fieldIds = [] }) = True
+    simpleCon _ = False
 
 -- caching of dynamically evaluated CSyntax expressions
 lookupCExprCache :: CExpr -> IType -> G (Maybe HExpr)

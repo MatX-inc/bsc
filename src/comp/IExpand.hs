@@ -23,7 +23,7 @@ import Data.Maybe
 import Data.Foldable(foldrM)
 import Numeric(showIntAtBase)
 import Data.Char(intToDigit, ord, chr)
-import Control.Monad(when, foldM, zipWithM, mapAndUnzipM)
+import Control.Monad(when, unless, foldM, zipWithM, mapAndUnzipM)
 import Control.Monad.Fix(mfix)
 --import Control.Monad.Fix
 import Control.Monad.State(State, evalState, liftIO, get, put)
@@ -88,8 +88,8 @@ import IStateLoc
 -- Trace Flags
 
 -- doProfile
---   Keep a map of the number of times a top-level def is entered in evalAp
---   (the number of unfolding steps), indexed by the position of the call Id,
+--   Keep a map of the number of unfolding steps counted for each top-level
+--   def (see evalDef), indexed by the position of the call Id,
 --   and display the map on each step warning and at the end of evaluation.
 doProfile :: Bool
 doProfile = elem "-trace-profile" progArgs
@@ -139,8 +139,7 @@ doTraceClock = elem "-trace-clock" progArgs
 
 -- doTraceSteps
 --   At the end of evaluation, display the total number of evaluation steps
---   (the number of times a top-level function was evaluated, including
---   when using a cached value)
+--   (the unfoldings of top-level definitions that evalDef counts)
 doTraceSteps :: Bool
 doTraceSteps = elem "-trace-eval-steps" progArgs
 
@@ -3480,12 +3479,29 @@ evalAp str e es = do
       traceM ("evalAp exit  " ++ str' ++ " ]:\n"++ ppReadable (mkAp e es, r))
   return r
 
+-- A step (see step) is an unfolding that can recurse or grow the
+-- term: the application of a definition's body, or the selection of
+-- a field from a definition's tuple (a class method from its
+-- instance's dictionary; see doSel).  Two uses of a definition do no
+-- such work and are not steps: a reference to a value already in the
+-- definition cache that is not applied to arguments (a dictionary
+-- CAF read for a method selection, a constant table), which
+-- evaluates nothing, and a harmless definition (harmlessDef), whose
+-- body cannot recurse.  A cached value applied to arguments is a
+-- function whose body the application unfolds, and counts.  A
+-- reference to a definition of function type is never replaced by a
+-- cell (toHeap), so every application of a definition, through
+-- whatever alias of it, arrives here.  The step budget (-steps)
+-- therefore bounds the unfoldings that can run away, not the
+-- combinators between them.
 {-# INLINE evalDef #-}
 evalDef :: Id -> IType -> HExpr -> [Arg] -> G PExpr
 evalDef i t e as = do
+  (e', cached) <- cacheDef i t (stampUseSite (getIdPosition i) e)
+  unless (cached && null as) $ do
+    harmless <- harmlessDef i e
+    unless harmless $ step i
   -- recurse into evaluating e
-  step i
-  e' <- cacheDef i t (stampUseSite (getIdPosition i) e)
   evalAp "ICDef" e' as
 
 -- evaluate a function application
@@ -3680,13 +3696,19 @@ mkBitsMethodSel prim_i selty meth_i = do
 -- method, picked out of the dictionary argument (the primitives take the
 -- Bits dictionary; see Prelude.bs).  A dictionary in WHNF is an ICTuple
 -- application whose fieldIds name the class methods, so the method is
--- taken from it directly by name.
-unfoldBitsCoercion :: String -> Id -> HExpr -> [Arg] -> G PExpr
-unfoldBitsCoercion tag meth_i dictE rest = do
+-- taken from it directly by name.  The selection is a step unless the
+-- method is harmless, as it is in doSel; the step is charged to the
+-- method at the primitive's position, the selector mkBitsMethodSel
+-- would build.
+unfoldBitsCoercion :: String -> Id -> Id -> HExpr -> [Arg] -> G PExpr
+unfoldBitsCoercion tag prim_i meth_i dictE rest = do
     (_, P pd d) <- evalUH dictE
     case d of
       IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms
-        | Just k <- findIndex (qualEq meth_i) fs, k < length ms ->
+        | Just k <- findIndex (qualEq meth_i) fs, k < length ms -> do
+            harmless <- harmlessField dictE (toInteger k)
+            unless harmless $
+                step (setIdPosition (getIdPosition prim_i) meth_i)
             addPredG pd $ evalAp tag (ms !! k) rest
       _ -> internalError ("unfoldBitsCoercion (" ++ tag ++ "): " ++
                           "unexpected dictionary: " ++ ppReadable d)
@@ -3852,7 +3874,7 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
               toHeapArg a = return a
           as'' <- mapM toHeapArg as'
 -}
-          evalStaticOp' True True False e resType (doSel sel c tys ty n as')
+          evalStaticOp' True True False e resType (doSel sel c tys ty n as' e)
       _ -> internalError ("conAp': ICSel: " ++ ppReadable (mkAp sel as))
 
 -- constructors are non-strict
@@ -4177,7 +4199,7 @@ conAp' i ci@(ICPrim _ PrimPack) _ [T ta, T tn, E d, E x]
           ICon _ (ICLazyUnpack { lzTa = ta', lzOrig = b }) | ta == ta' ->
               return (P px b)
           ICon _ (ICUndet {}) ->
-              addPredG px $ unfoldBitsCoercion "PrimPack" idPack d [E xee]
+              addPredG px $ unfoldBitsCoercion "PrimPack" i idPack d [E xee]
           _ -> do
               sel <- mkBitsMethodSel i (iConType ci) idPack
               aref <- toHeap "coerce" (aitBit tn)
@@ -4199,9 +4221,9 @@ conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
           ICon _ (ICLazyPack { lzTa = ta', lzOrig = v }) | ta == ta' ->
               return (P px v)
           ICon _ (ICUndet {}) ->
-              addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
+              addPredG px $ unfoldBitsCoercion "PrimUnpack" i idUnpack d [E xee]
           ICon _ (ICInt {}) ->
-              addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
+              addPredG px $ unfoldBitsCoercion "PrimUnpack" i idUnpack d [E xee]
           _ -> do
               sel <- mkBitsMethodSel i (iConType ci) idUnpack
               aref <- toHeap "coerce" ta
@@ -4212,10 +4234,10 @@ conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
               -- NB: px is deliberately NOT attached (see PrimPack above)
               return (P pTrue (ICon i node))
 
-conAp' _ (ICPrim _ PrimPack) _ (T _ : T _ : E d : rest) =
-        unfoldBitsCoercion "PrimPack" idPack d rest
-conAp' _ (ICPrim _ PrimUnpack) _ (T _ : T _ : E d : rest) =
-        unfoldBitsCoercion "PrimUnpack" idUnpack d rest
+conAp' i (ICPrim _ PrimPack) _ (T _ : T _ : E d : rest) =
+        unfoldBitsCoercion "PrimPack" i idPack d rest
+conAp' i (ICPrim _ PrimUnpack) _ (T _ : T _ : E d : rest) =
+        unfoldBitsCoercion "PrimUnpack" i idUnpack d rest
 
 -- Special case of doPrimOp that checks bounds and keeps the base.
 conAp' tfs (ICPrim _ PrimIntegerToBit) fe [T ty@(ITNum k), E e] = evalStaticOp e (itBitN k) handleInt
@@ -5809,12 +5831,19 @@ evalSelAp pos (IRefT t ptr _ ref) as@(_ : _) = do
         evalAp "sel k" (iePrimWhenPred t p (stampUseSite pos e)) as
 evalSelAp pos e as = evalAp "sel k" (stampUseSite pos e) as
 
+-- e0 is the tuple expression as written: whether the selection is a
+-- step depends on the definition the tuple comes from, visible there
+-- and not in its evaluated form
 doSel :: HExpr -> Id -> [IType] -> IType -> Integer -> [Arg] ->
-         HExpr -> (HPred, HExpr) -> G PExpr
-doSel sel s tys ty n as ee (p, e) =
+         HExpr -> HExpr -> (HPred, HExpr) -> G PExpr
+doSel sel s tys ty n as e0 ee (p, e) =
     case e of
         -- (e1,...en).k  -->  ek
         IAps (ICon id (ICTuple ictup_ty _)) _ es -> do
+            -- selecting a field of a definition's tuple (a class
+            -- method) is a step unless the field is harmless
+            harmless <- harmlessField e0 n
+            unless harmless $ step s
             let tupleError id = internalError $ "indexing `" ++ show id ++ "' out of bounds; do you need to recompile dependencies?"
                 index xs i id = if length xs > i then xs!!i else tupleError id
             let field_e = index es (fromInteger n) id
