@@ -7,10 +7,13 @@ Tcl modules beside it in lib/tcl8/, and bin/<tool> becomes a launcher that runs
 the tool on that loader (upstream's old wrapper.sh layout, plus a loader). The
 launcher's library path names only the install, and it sets TCL_LIBRARY to the
 copied script library: init.tcl demands the exact patchlevel of the libtcl it
-shipped with, and Tcl would otherwise try the host's library first. The
-launcher uses builtins only, since one action passes no PATH, and sets
-BLUESPECDIR, which bsc would otherwise derive from the loader's path. It does
-not resolve symlinks. Bundling again is harmless.
+shipped with, and Tcl would otherwise try the host's library first. A host
+extension that looks for its own scripts beside Tcl's library, as Itcl 3 and
+Itk 3 do, has to be told where they are (ITCL_LIBRARY, ITK_LIBRARY); one that
+asks pkgconfig or searches auto_path, as Tk does, needs nothing. The launcher
+uses builtins only, since one action passes no PATH, and sets BLUESPECDIR,
+which bsc would otherwise derive from the loader's path. It does not resolve
+symlinks. Bundling again is harmless.
 
 This file lives in two repositories, which cannot reach each other:
 tools/bsc-release/releaseprep/runtime.py in MatX-inc/matx, which bsc-rp imports

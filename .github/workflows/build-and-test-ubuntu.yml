@@ -810,6 +810,14 @@ jobs:
           # Inform the tests of the path to bdw
           export BDW=$PWD/../bdw/inst/bin/bdw
 
+          # A bundled install's Tcl library is its own, and Itcl 3 and Itk 3
+          # look for their scripts beside Tcl's rather than through pkgconfig
+          # or auto_path, so bdw's needs are named the way Itcl documents.
+          if [ "${{ inputs.bundle_runtime }}" = true ]; then
+              export ITCL_LIBRARY=/usr/share/tcltk/itcl3.4
+              export ITK_LIBRARY=/usr/share/tcltk/itk3.4
+          fi
+
           # Always archive logs, even if make fails (and terminates this script
           # because it's invoked with :set -eo pipefile)
           trap ./testsuite/archive_logs.sh EXIT
