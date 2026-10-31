@@ -93,7 +93,13 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
                    `addClassesUQ` (preClasses symT) -- pre-defined classes
 
         -- instances from the imported packages
-        iinstqs = nub [ (i, qt) | CImpSign _ _ (CSignature _ _ _ ds) <- impsigs,
+        -- (an instance reaches us through every signature that lists it;
+        -- the first occurrence is kept.  On (Id, CQType), (==) is
+        -- (compare == EQ): Id and TyVar compare the same components both
+        -- ways, Type's Eq is defined by cmp, and the rest is derived, so
+        -- the Set-based dedup keeps exactly the first occurrences.)
+        iinstqs = stableOrdNub
+                      [ (i, qt) | CImpSign _ _ (CSignature _ _ _ ds) <- impsigs,
                                   CIinstance i qt <- ds ]
         qconv qt =
                 case convCQType symT qt of
@@ -111,11 +117,13 @@ mkSymTab' warn errh (CPackage mi _ imps impsigs _ ds _) =
         -- but it is simpler to check them while converting to bss
         fundepErrs = concatMap chkFunDeps cls_fd
 
-        -- instances from this package and from the imports
-        -- unsorted because we handle this at the class level
-        insts :: QInsts
-        insts = [ QInst mi (qconv qt) | Cinstance qt _ <- ds ] ++
-                [ QInst mi (qconv qt) | (mi, qt) <- iinstqs ]
+        -- instances from this package and from the imports, grouped by
+        -- class; within a class the order is this one (local instances,
+        -- then imported) and unsorted, because sorting is handled at the
+        -- class level
+        insts :: QInstMap
+        insts = groupQInsts ([ QInst mi (qconv qt) | Cinstance qt _ <- ds ] ++
+                             [ QInst mi (qconv qt) | (mi, qt) <- iinstqs ])
 
         -- a symbol table containing all pre-defined items and all items
         -- from imported packages (except instances and classes)
@@ -341,6 +349,21 @@ instance Ord QInst where
       compare (mkInstId mi1 t1) (mkInstId mi2 t2)
 
 type QInsts = [QInst]
+
+-- The instances grouped by class (the head's leftmost constructor),
+-- each class's list in instance-list order.
+type QInstMap = M.Map Id QInsts
+
+groupQInsts :: QInsts -> QInstMap
+-- A left fold: the heads are converted, and a conversion error is
+-- raised, in instance-list order; each class's list is accumulated
+-- reversed and turned around once, so it keeps instance-list order.
+groupQInsts qis = M.map reverse (foldl' addQInst M.empty qis)
+  where addQInst m qi@(QInst _ (_ :=> t)) =
+            case leftCon t of
+              Just ci -> M.insertWith (++) ci [qi] m
+              -- a head without a constructor belongs to no class
+              Nothing -> m
 
 instance PPrint QInst where
   pPrint d p (QInst i qt) = text "(QInst" <+> pPrint d p i <+> pPrint d p qt <> text ")"
@@ -889,7 +912,7 @@ mustConvCQType r _ qt =
     Left msg -> internalError ("mustConvCQType:\n" ++ ppReadable msg)
 
 mkTypeSyms :: ErrorHandle
-           -> (Id -> [Id]) -> Maybe Id -> Maybe Id -> M.Map Id Kind -> [CDefn] -> QInsts
+           -> (Id -> [Id]) -> Maybe Id -> Maybe Id -> M.Map Id Kind -> [CDefn] -> QInstMap
            -> SymTab -> (SymTab, [EMsg])
 mkTypeSyms errh mkQuals maybePackageName src_pkg iks defs qts s =
     let importedTypeInfos = concatMap (getTI errh maybePackageName src_pkg r iks) defs
@@ -1043,12 +1066,11 @@ getK iks ik =
 -- Legacy O(n^2) instance ordering + overlap check (used when -legacy-inst-index).
 -- Exempt auto-derived classes (e.g. Generic) from overlap checking for
 -- performance; sort remaining instances most-specific-first via tsort.
-getQInstsLegacy :: Id -> [[Bool]] -> QInsts -> (QInsts, [EMsg])
+getQInstsLegacy :: Id -> [[Bool]] -> QInstMap -> (QInsts, [EMsg])
 getQInstsLegacy ci _ qts
-  | ci `elem` autoderivedClasses =
-    ([ qi | qi@(QInst _ ( _ :=> t)) <- qts, leftCon t == Just ci ], [])
+  | ci `elem` autoderivedClasses = (getQInsts ci qts, [])
 getQInstsLegacy ci bss qts = (cls_qts', errs)
-  where cls_qts  = [ qi | qi@(QInst _ ( _ :=> t)) <- qts, leftCon t == Just ci ]
+  where cls_qts  = getQInsts ci qts
         cls_qt_g = [ (qi, lt_qis) | qi <- cls_qts,
                                     let more_specific qi' = cmpQInsts bss qi' qi == Right (Just LT),
                                     let lt_qis = filter more_specific cls_qts ]
@@ -1059,10 +1081,10 @@ getQInstsLegacy ci bss qts = (cls_qts', errs)
         chk_pairs = uniquePairs cls_qts
         errs = fst $ partitionEithers $ map (uncurry (cmpQInsts bss)) chk_pairs
 
-getQInsts :: Id -> QInsts -> QInsts
--- Filter instances to those belonging to class ci.
+getQInsts :: Id -> QInstMap -> QInsts
+-- The instances belonging to class ci (see groupQInsts).
 -- Overlap checking is integrated into buildInstIndex.
-getQInsts ci qts = [ qi | qi@(QInst _ (_ :=> t)) <- qts, leftCon t == Just ci ]
+getQInsts ci qts = M.findWithDefault [] ci qts
 
 doInst :: Maybe Id -> SymTab -> Class -> QInst -> Inst
 doInst currentPkg r c (QInst mi p@(ps :=> t)) =
@@ -1108,7 +1130,7 @@ getCls :: ErrorHandle -> Maybe Id -> Maybe Id -> M.Map Id Kind -> SymTab ->
           -- sort member list override: for CIclass (fields hidden), the
           -- defining package's list threaded through the signature
           Maybe [Id] ->
-          QInsts -> (Class, [EMsg])
+          QInstMap -> (Class, [EMsg])
 getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
     let k = getK iks ik
         i = iKName ik
@@ -1413,7 +1435,7 @@ groundT _ _ = internalError "MakeSymTab.groundT"
 -----
 
 addImpSyms :: ErrorHandle ->
-              QInsts -> (SymTab, [EMsg]) -> CImportedSignature -> (SymTab, [EMsg])
+              QInstMap -> (SymTab, [EMsg]) -> CImportedSignature -> (SymTab, [EMsg])
 addImpSyms errh insts (s, errs0) (CImpSign name qf (CSignature pkgName _ _ ds)) =
 --        trace ("DEBUG: addImpSyms: " ++ name ++ "\n") $
         let mi = Nothing
