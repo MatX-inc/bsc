@@ -1,0 +1,33 @@
+package CanonIdsUse where
+
+import Vector
+import CanonIds
+
+-- Second package of the two-package -u compile in canonids.exp: it is
+-- compiled after CanonIds in the same bsc process, with its own derived
+-- instances, a synthesized module whose interface GenWrap wraps, and
+-- parser identifiers of its own, all of which must be forced only as
+-- the structural paths force them (the intern_other witness).
+
+data Shade = Light Color | Dark Color
+  deriving (Eq, Bits)
+
+type Frame = (Shade, Packet 33)
+
+interface Source =
+    next :: ActionValue (Pair Byte)
+    frame :: Frame
+
+instance Encode Shade 3 where
+    encode (Light c) = 0b0 ++ encode c
+    encode (Dark c) = 0b1 ++ encode c
+
+{-# verilog mkSource #-}
+mkSource :: Module Source
+mkSource = module
+    cnt :: Reg Byte <- mkReg 0
+    lane :: Reg (Lane 4) <- mkReg (replicate 0)
+    interface
+      next = do cnt := cnt + 1
+                return (cnt, checksum lane)
+      frame = (Dark Green, Packet { tag = Red; body = encode (lane, cnt == 0); len = 33 })

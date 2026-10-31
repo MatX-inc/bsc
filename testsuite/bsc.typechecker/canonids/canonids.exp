@@ -1,0 +1,57 @@
+# Tests for the canonical word that CType attaches to ground types
+# (CType.hs, "Canonical identity").  The word may only shortcut work
+# whose result is unchanged, so nothing the compiler produces may depend
+# on it.
+#
+# -check-ctype-ids makes every EQ answered from two canonical words (cmp,
+# Unify's mgu and match) also be decided structurally and compares every
+# IConv memo hit with a fresh conversion (an internal error on
+# disagreement), and -no-ctype-ids keeps the gate shut, so every
+# comparison, substitution, synonym expansion and unification takes its
+# structural path.  Both compiles must succeed, and the .bo and the
+# generated Verilog must be identical with and without the words.
+# -trace-ctype-stats prints the counters at exit: the ones checked here
+# show that the words were in use (cmp answered EQ from words, the
+# IConv memo hit) and that computing them interned no string of their
+# own except the typechecker's _tctyvarN and _tctempN names
+# (intern_other), none of them a binder of a letrec group with more
+# than one binder (letrec_offender, over letrec_group groups checked).
+
+erase CanonIds.bo
+compile_backend_pass CanonIds.bs {-check-ctype-ids -trace-ctype-stats}
+find_regexp CanonIds.bs.bsc-out {ctype-stats cmp_eq_by_word [1-9]}
+find_regexp CanonIds.bs.bsc-out {ctype-stats iconv_memo_hit [1-9]}
+find_n_strings CanonIds.bs.bsc-out {ctype-stats intern_other 0} 1
+find_regexp CanonIds.bs.bsc-out {ctype-stats letrec_group [1-9]}
+find_n_strings CanonIds.bs.bsc-out {ctype-stats letrec_offender 0} 1
+move CanonIds.bo CanonIds.words.bo
+move sysCanonIds.v sysCanonIds.words.v
+
+compile_backend_pass CanonIds.bs {-no-ctype-ids -trace-ctype-stats}
+find_n_strings CanonIds.bs.bsc-out {ctype-stats table_hit 0} 1
+find_n_strings CanonIds.bs.bsc-out {ctype-stats cmp_eq_by_word 0} 1
+compare_file CanonIds.bo CanonIds.words.bo
+compare_file sysCanonIds.v sysCanonIds.words.v
+
+# Two packages in one bsc process: -u recompiles CanonIds and then
+# CanonIdsUse.  The gate, opened for the first package, must be shut
+# again while the second package's parser thunks, GenWrap, Deriving and
+# symbol-table builds run, so computing words still interns nothing of
+# its own, and the second package's .bo and Verilog must be identical
+# with and without the words.
+erase CanonIds.bo
+erase CanonIdsUse.bo
+compile_backend_pass CanonIdsUse.bs {-check-ctype-ids -trace-ctype-stats}
+find_n_strings CanonIdsUse.bs.bsc-out {compiling } 2
+find_regexp CanonIdsUse.bs.bsc-out {ctype-stats cmp_eq_by_word [1-9]}
+find_n_strings CanonIdsUse.bs.bsc-out {ctype-stats intern_other 0} 1
+find_n_strings CanonIdsUse.bs.bsc-out {ctype-stats letrec_offender 0} 1
+move CanonIdsUse.bo CanonIdsUse.words.bo
+move mkSource.v mkSource.words.v
+
+erase CanonIds.bo
+compile_backend_pass CanonIdsUse.bs {-no-ctype-ids -trace-ctype-stats}
+find_n_strings CanonIdsUse.bs.bsc-out {compiling } 2
+find_n_strings CanonIdsUse.bs.bsc-out {ctype-stats table_hit 0} 1
+compare_file CanonIdsUse.bo CanonIdsUse.words.bo
+compare_file mkSource.v mkSource.words.v
