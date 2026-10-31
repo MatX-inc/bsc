@@ -9,9 +9,10 @@ Install `bsc` and `bluehs` from the same build. Each group keeps its
 artifacts in a `work_*` directory removed by the normal cleanup.
 
 Environment: `PRODUCTION_BSC` (a second compiler for ordinary-output
-comparisons; untested when unset), `ECO_LIBDIR` (an extra `-i` library
-directory for the dependency group). No Python, RTL parser or external RTL
-tool is needed.
+comparisons; untested when unset), `CORE_REPLAY_BSC` (an executable of a
+different native version for the adaptation version guard; untested when
+unset), `ECO_LIBDIR` (an extra `-i` library directory for the dependency
+group). No Python, RTL parser or external RTL tool is needed.
 
 Native groups
 -------------
@@ -23,4 +24,5 @@ Native groups
 | `replay/sidecar.exp` (#242) | A fresh process restores the intern table, outputs and headers of a capture; captures record flags, paths, bytes and escaped hash filenames; a bad schema, bad producer, changed working directory, modified payload or dependency bytes are rejected. |
 | `replay/dependency.exp` (#242) | Multi-module replay with a Verilog filter, a BDPI foreign dependency and library lookups: exact replay bytes for each module and for a symlinked library alias, rejection of modified filter or foreign bytes and of a changed original lookup identity, a preserved foreign dependency symlink, and ordinary-output parity with `PRODUCTION_BSC`. |
 | `replay/incremental.exp` (#242) | Capture regenerates every module-producing package under `-u` even when ordinary outputs are current, for a first build, a cached build and a recapture; an imported helper without a synthesised module is rebuilt; each captured module replays exactly and strictly. |
-| `replay/native.exp` (#242) | Native capture, exact and repeated replay and production parity; ECO options come from `argv` only (`BSC_OPTIONS` can neither redirect a replay nor request a capture); capture refuses an existing stem and leaves the source intact; a replay or adaptation whose output would alias, hard-link into, or lie inside the capture creates nothing there; a modified native payload is rejected; adaptation reproduces the ordinary bytes, writes its receipt beside the new capture, rejects a tampered captured output before any write and a forged output digest at the byte control, and leaves no divergent RTL, capture or receipt on failure. |
+| `replay/native.exp` (#242, #253) | Native capture, exact and repeated replay, production parity, companion export and native `VProgram` retention; ECO options come from `argv` only (`BSC_OPTIONS` can neither redirect a replay nor request a capture); capture refuses an existing stem and leaves the source intact; a replay or adaptation whose output would alias, hard-link into, or lie inside the capture creates nothing there; a modified native payload is rejected; adaptation reproduces the ordinary bytes, writes its receipt and companions beside the new capture, rejects a tampered captured output before any write and a forged output digest at the byte control, and leaves no divergent RTL, capture or receipt on failure. |
+| `verilog-info/verilog_info.exp` (#253) | Captures retain the native AST and typed child metadata, render exactly and refuse relocation; a comment with an embedded newline, an identifier containing `;` and a wire used before its declaration are refused before any byte is written; `Gates.hs` captures every fixture of this suite and each passes both gates and emits its captured bytes; replay refuses to overwrite bound companions; with `CORE_REPLAY_BSC`, adaptation rejects a different native version before running any control or capture and preserves every source artifact. |
