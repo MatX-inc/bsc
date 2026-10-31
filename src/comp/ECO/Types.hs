@@ -2,7 +2,6 @@
 -- identifiers: native interning handles must never cross capture boundaries.
 module ECO.Types where
 
-import Warmup ()
 
 type EcoKey = String
 
