@@ -3534,13 +3534,27 @@ evalHeap (ptr, ref) = do
             -- create IRefs for arguments of other potentially non-strict
             -- applications (e.g., ICCon) to prevent repeat evaluation later
             P p (IAps f ts as) -> do
+                -- A strict primitive's application is a cell's value only
+                -- while it is unsaturated: it is then a function (conAp'
+                -- has evaluated the operands it holds and applies the
+                -- primitive once the remaining arguments arrive), kept
+                -- like a lazy application.  A saturated one is reduced
+                -- by conAp' and never reaches a cell.  The primitive's
+                -- value arguments are the arrows of its type after the
+                -- foralls: IConv erases the dictionaries of the numeric
+                -- provisos and of the dropDicts primitives along with
+                -- their arrows, and a class arrow it keeps (primPack's
+                -- Bits, say) is matched by a dictionary argument, so the
+                -- count agrees either way.
                 let isLazyOp (ICon _ (ICCon {})) = True
                     isLazyOp (ICon _ (ICTuple {})) = True
-                    isLazyOp (ICon _ (ICPrim _ p)) | p == PrimChr ||
+                    isLazyOp (ICon _ (ICPrim t p)) | p == PrimChr ||
                                                      realPrimOp p = False
-                                                   | strictPrim p = internalError ("evalHeap - prim should be evaluated:" ++ ppReadable (p, pe'))
+                                                   | strictPrim p && saturated t =
+                                                       internalError ("evalHeap - prim should be evaluated:" ++ ppReadable (p, pe'))
                                                    | otherwise = True
                     isLazyOp _ = False
+                    saturated t = length as >= length (fst (itGetArrows (dropForAll t)))
                 argTys <- takeArgTypes (length as) <$> instFunType (iGetType f) ts
                 let th t a = if isLazyOp f
                              then toHeap "move-ap" t a Nothing
