@@ -228,7 +228,7 @@ data CPred = CPred { cpred_tc   :: CTypeclass  -- ^ constraint class, e.g., "Eq"
 -- see the Has_tpl_n instances in the Prelude
 cmp :: Type -> Type -> Ordering
 -- Equal canonical words imply equality under the structural clauses below
--- (see "Canonical identity": equal words <=> equal key <=> Eq-equal leaf
+-- (see "Canonical identity": equal words => equal key => Eq-equal leaf
 -- or Eq-equal children), so EQ may be answered from the slots.  LT and GT
 -- never are: every Map and Set order over types stays the structural one.
 cmp x y | i >= 0, i == typeCanonWordNode y = eqByWord x y
@@ -249,12 +249,7 @@ cmp (TDefMonad _) (TDefMonad _) = EQ
 cmp (TDefMonad _) _  = GT
 
 instance Eq Type where
-    -- With words on both sides the words decide in both directions: the
-    -- word is a function of the key, so Eq-equal trees have equal words
-    -- (see "Canonical identity").  Otherwise structurally, as before.
-    x == y  =  case (typeCanonWordNode x, typeCanonWordNode y) of
-                 (i, j) | i >= 0 && j >= 0 -> eqByWords x y i j
-                 _ -> cmp x y == EQ
+    x == y  =  cmp x y == EQ
 
 instance Eq TyVar where
     TyVar i n _ == TyVar i' n' _  =  (n, i) == (n', i')
@@ -350,17 +345,21 @@ instance Ord TyCon where
 --           function reduction are the identity on the type.
 --
 -- Keys.  A TAp is keyed by its children's words; a TyCon by (qualifier,
--- base) -- the kind and the sort payload are not in the key because Eq
--- TyCon ignores both for qualified names, and under the
--- one-tycon-per-qualified-name invariant (see Eq TyCon) the name
--- determines the sort and hence the normal bit, which -check-ctype-ids
--- verifies on every table hit; a TyNum by its value (Eq ignores the
--- position).  Refused (slot -1): an unqualified TyCon (the invariant
--- does not cover it), a TyStr leaf (its FString may be an unforced
--- mkFString thunk -- cTCon, Pred.apTFun, normTAp -- and forcing it would
--- intern a string otherwise interned later), and a TAp with a refused
--- child.  Two trees that are Eq-equal therefore get the same word, and
--- two trees with different words are not Eq-equal.
+-- base, normal bit); a TyNum by its value (Eq ignores the position).
+-- The kind and the sort payload are not in a TyCon's key because Eq
+-- TyCon ignores both for qualified names.  The normal bit IS in the key
+-- because the same qualified name arrives with different sort tags --
+-- cTCon builds TIabstract placeholders for names the symbol table knows
+-- as synonyms -- and the shortcuts must see the sort tags of the tree
+-- they are given, as the walks they replace do (expandSyn expands a
+-- TItype head and leaves a placeholder alone).  Refused (slot -1): an
+-- unqualified TyCon (the one-tycon-per-qualified-name invariant behind
+-- Eq TyCon does not cover it), a TyStr leaf (its FString may be an
+-- unforced mkFString thunk -- cTCon, Pred.apTFun, normTAp -- and forcing
+-- it would intern a string otherwise interned later), and a TAp with a
+-- refused child.  Equal words therefore imply Eq-equal trees.  The
+-- converse fails only across a name's normal and non-normal arrivals,
+-- so nothing answers NE from the words.
 --
 -- Forcing.  Computing a word forces both children to WHNF and, for a
 -- TyCon leaf, the TyCon, its Id (two strict FString fields), the sort
@@ -392,9 +391,9 @@ instance Ord TyCon where
 -- consulted in them.
 
 data CKey = CKAp {-# UNPACK #-} !Int {-# UNPACK #-} !Int   -- child words
-          | CKCon !FString !FString                        -- qualifier, base
+          | CKCon !FString !FString !Bool                  -- qualifier, base, normal
           | CKNum !Integer
-          deriving (Eq, Ord, Show)
+          deriving (Eq, Ord)
 
 data CanonTable = CanonTable !(M.Map CKey Int) {-# UNPACK #-} !Int
 
@@ -426,28 +425,23 @@ disableCanonIds = writeIORef canonGate False
 normalWord :: Int -> Bool
 normalWord w = w >= 0 && odd w
 
--- Find or allocate the word of a key.
+-- Find or allocate the word of a key; the normal bit is part of every
+-- key, so the word's parity is a function of the key.
 lookupOrInsert :: CKey -> Bool -> IO Int
 lookupOrInsert key normal = do
     CanonTable m0 _ <- readIORef canonTable
     case M.lookup key m0 of
-      Just w  -> hit w
+      Just w  -> bumpCTypeStat TableHit >> return w
       Nothing -> do
         (w, new) <- atomicModifyIORef' canonTable alloc
-        if new then bumpCTypeStat TableNew >> return w else hit w
+        bumpCTypeStat (if new then TableNew else TableHit)
+        return w
   where
     alloc st@(CanonTable m n) =
         case M.lookup key m of
           Just w  -> (st, (w, False))
           Nothing -> let w = 2 * n + (if normal then 1 else 0)
                      in  (CanonTable (M.insert key w m) (n + 1), (w, True))
-    -- the normal bit is a function of the key: checked on every hit
-    hit w = do
-        bumpCTypeStat TableHit
-        when (checkCanonIds && normalWord w /= normal) $
-            internalError ("CType.lookupOrInsert: normal bit disagrees " ++
-                           "for a repeated key: " ++ show (key, w, normal))
-        return w
 
 -- The key and normal bit of a leaf, or the reason it is refused.
 data LeafKey = LeafKey !CKey !Bool | LeafUnqual | LeafTyStr
@@ -455,7 +449,7 @@ data LeafKey = LeafKey !CKey !Bool | LeafUnqual | LeafTyStr
 leafKey :: TyCon -> LeafKey
 leafKey (TyCon i _ sort)
     | isUnqualId i = LeafUnqual
-    | otherwise = LeafKey (CKCon (getIdQual i) (getIdBase i)) normal
+    | otherwise = LeafKey (CKCon (getIdQual i) (getIdBase i) normal) normal
   where normal = case sort of
                    TItype _ _ -> False
                    TIatf {} -> False
@@ -580,21 +574,12 @@ eqByWord x y
                        ++ show (x, y))
     | otherwise = ctypeStat CmpEqByWord x `seq` EQ
 
--- The Eq answer when both sides carry words.
-eqByWords :: Type -> Type -> Int -> Int -> Bool
-eqByWords x y i j
-    | checkCanonIds && r /= eqStructural x y =
-        internalError ("CType.==: canonical words disagree with structure: "
-                       ++ show (i, j, x, y))
-    | otherwise = ctypeStat (if r then CmpEqByWord else CmpNeByWord) x `seq` r
-  where r = i == j
-
 -- Counters, kept and printed (by bsc at exit) only under
 -- -trace-ctype-stats; every bump is a no-op otherwise.
 data CTypeStat
     = TApBuilt | TConBuilt | PreGateBuilt | TableHit | TableNew
     | RefuseChild | RefuseUnqual | RefuseTyStr | LeafRecompute
-    | CmpEqByWord | CmpNeByWord | InternDelta
+    | CmpEqByWord | InternDelta
     | SeqCTypeShortcut | ApSubShortcut | TvShortcut | ExpandSynShortcut
     | InstShortcut | MguShortcut | MatchShortcut | GetFreeTShortcut
     | ChkTApShortcut | IConvMemoHit | IConvMemoMiss
@@ -611,7 +596,6 @@ statName RefuseUnqual = "refuse_unqual"
 statName RefuseTyStr = "refuse_tystr"
 statName LeafRecompute = "leaf_recompute"
 statName CmpEqByWord = "cmp_eq_by_word"
-statName CmpNeByWord = "cmp_ne_by_word"
 statName InternDelta = "intern_delta"
 statName SeqCTypeShortcut = "seq_ctype_shortcut"
 statName ApSubShortcut = "apsub_shortcut"
@@ -630,8 +614,7 @@ ctypeStatsOn :: Bool
 ctypeStatsOn = "-trace-ctype-stats" `elem` progArgs
 
 -- -check-ctype-ids: every identity decision is also made structurally
--- and a disagreement is an internal error; every table hit checks the
--- normal bit.
+-- and a disagreement is an internal error.
 {-# NOINLINE checkCanonIds #-}
 checkCanonIds :: Bool
 checkCanonIds = "-check-ctype-ids" `elem` progArgs
