@@ -30,6 +30,11 @@ compare_file ModByZero.bsv.bsc-vcomp-out
 compile_verilog_fail_error NegativeExp.bsv G0060
 compare_file NegativeExp.bsv.bsc-vcomp-out
 
+# Integer exponent is negative inside a function of the same package:
+# the error reports the operator inside the function
+compile_verilog_fail_error NegativeExp_SamePkgFn.bsv G0060
+compare_file NegativeExp_SamePkgFn.bsv.bsc-vcomp-out
+
 # Integer log base zero
 compile_verilog_fail_error LogZero.bsv G0085
 compare_file LogZero.bsv.bsc-vcomp-out
