@@ -23,7 +23,7 @@ import Data.Maybe
 import Data.Foldable(foldrM)
 import Numeric(showIntAtBase)
 import Data.Char(intToDigit, ord, chr)
-import Control.Monad(when, foldM, zipWithM, mapAndUnzipM)
+import Control.Monad(when, unless, foldM, zipWithM, mapAndUnzipM)
 import Control.Monad.Fix(mfix)
 --import Control.Monad.Fix
 import Control.Monad.State(State, evalState, liftIO, get, put)
@@ -80,15 +80,16 @@ import qualified IfcBetterInfo as BetterInfo
 import ITransform(iTransExpr)
 
 import IOUtil(progArgs)
-import ISyntaxXRef(mapIExprPosition)
+import ISyntaxXRef(mapIExprPosition, usablePosition, fillIExprPosition,
+                   spineHeadPosition, restampReaches)
 import IStateLoc
 
 -----------------------------------------------------------------------------
 -- Trace Flags
 
 -- doProfile
---   Keep a map of the number of times a top-level def is entered in evalAp
---   (the number of unfolding steps), indexed by the position of the call Id,
+--   Keep a map of the number of unfolding steps counted for each top-level
+--   def (see evalDef), indexed by the position of the call Id,
 --   and display the map on each step warning and at the end of evaluation.
 doProfile :: Bool
 doProfile = elem "-trace-profile" progArgs
@@ -109,12 +110,11 @@ doFunExpand2 = length (filter (== "-trace-fun-expand") progArgs) > 1
 
 -- -hack-eager-pack-unpack
 --   Debugging aid (not a supported configuration): disable the holding of
---   pack/unpack coercions and resolve them eagerly instead -- ISimplify
---   resolves the ones with statically-known dictionaries (see
---   ISimplify.selectDictMethod), and the evaluator unfolds the rest on
---   contact -- reproducing the behavior of a compiler without coercion
---   holding, at the same pipeline stages.  Useful for A/B comparison of
---   the netlist effects of coercion cancellation.
+--   pack/unpack coercions and unfold every one of them on contact (the
+--   method is picked out of the dictionary argument, see
+--   unfoldBitsCoercion), reproducing the behavior of a compiler without
+--   coercion holding.  Useful for A/B comparison of the netlist effects
+--   of coercion cancellation.
 doEagerPackUnpack :: Bool
 doEagerPackUnpack = elem "-hack-eager-pack-unpack" progArgs
 
@@ -138,8 +138,7 @@ doTraceClock = elem "-trace-clock" progArgs
 
 -- doTraceSteps
 --   At the end of evaluation, display the total number of evaluation steps
---   (the number of times a top-level function was evaluated, including
---   when using a cached value)
+--   (the unfoldings of top-level definitions that evalDef counts)
 doTraceSteps :: Bool
 doTraceSteps = elem "-trace-eval-steps" progArgs
 
@@ -2708,7 +2707,7 @@ walkList f es = do
 -----------------------------------------------------------------------------
 
 -- XXX noPosition is used for showPrimError and showPrimMessage
--- because the available position (post-isimplify) is bogus
+-- because the available position is bogus
 -- the position of the def of error/message in the Prelude
 
 showPrim :: (Position -> String -> G ()) -> Position -> HExpr -> G ()
@@ -3302,30 +3301,148 @@ mkApUH :: HExpr -> [Arg] -> G HExpr
 mkApUH f es = do es' <- mapM evalArgUH es
                  return (mkAp f es')
 
+-- How often the body of a lambda chain being applied can evaluate one of
+-- the chain's parameters.  A lambda that the stack saturates (a parameter
+-- of the function being applied, or a let in the body) is applied exactly
+-- once, so its body counts like any other sub-expression; a lambda the
+-- stack does not saturate can be applied any number of times, so an
+-- occurrence under one is evaluated once per application of that lambda.
+data Occ = Once | OnceUnderLam | Many
+
+-- The Occ of each parameter of the lambda chain e that the argument stack
+-- as saturates, in the chain's body (a parameter without an entry has no
+-- occurrence).  The traversal stops once every parameter has been seen
+-- twice.
+occCounts :: HExpr -> [Arg] -> M.Map Id Occ
+occCounts e0 as0 = chain S.empty e0 as0
+  where
+    chain bs (ILam i _ b) (E _ : as) = chain (S.insert i bs) b as
+    chain bs (ILAM _ _ b) (T _ : as) = chain bs b as
+    chain bs e as = snd (go False (bs, M.empty) e as)
+    -- lam: under a lambda that the stack does not saturate
+    -- bs: the parameters not yet seen twice; m: the counts so far
+    go :: Bool -> (S.Set Id, M.Map Id Occ) -> HExpr -> [Arg]
+       -> (S.Set Id, M.Map Id Occ)
+    go _   r@(bs, _) _ _ | S.null bs = r
+    go lam (bs, m) (ILam i _ b) as =
+        -- i is rebound below, so its occurrences there are not counted
+        let (bs', m') = case as of
+                          E _ : as' -> go lam (S.delete i bs, m) b as'
+                          _         -> go True (S.delete i bs, m) b []
+        in if i `S.member` bs then (S.insert i bs', m') else (bs', m')
+    go lam r (ILAM _ _ b) as
+      | (T _ : as') <- as = go lam r b as'
+      | otherwise         = go True r b []
+    go lam r@(bs, m) (IVar i) _
+      | not (i `S.member` bs) = r
+      | M.member i m          = (S.delete i bs, M.insert i Many m)
+      | lam                   = (bs, M.insert i OnceUnderLam m)
+      | otherwise             = (bs, M.insert i Once m)
+    go lam r (IAps f ts es) as =
+        foldl' (\r' e -> go lam r' e [])
+               (go lam r f (map T ts ++ map E es ++ as)) es
+    go lam r (ICon _ (ICUndet { imVal = Just e })) _ = go lam r e []
+    go _   r (ICon _ _) _      = r
+    go _   r (IRefT _ _ _ _) _ = r
+
+-- What the parameter i (of type t, with occurrence count occs) of a lambda
+-- being applied stands for in its body: the argument a itself when the
+-- body evaluates i at most once, so that the substitution costs no
+-- evaluation and no heap cell; otherwise a heap cell holding a, whose
+-- single evaluation every occurrence shares.  An occurrence under a lambda
+-- the application does not saturate is evaluated once per application of
+-- that lambda, so it too gets a cell -- unless i is an ActionValue.
+-- Executing an ActionValue applies its world function, and each execution
+-- is a separate occurrence of the action, with its own numbering of the
+-- foreign calls inside (conAp' numbers an ICForeign when it is evaluated,
+-- and cacheableDef re-evaluates an ActionValue definition at every use for
+-- the same reason): a cell holding the argument outside the lambda would
+-- be evaluated once and make every execution the same occurrence.  A keep
+-- id names its value in generated code, so it always gets a cell.
+-- Substituting a captures nothing: eSubstBatch renames a binder of the
+-- body that occurs free in a, and arguments on the stack are closed anyway
+-- (evalAp' evaluates closed expressions only, and its IAps clause pushes
+-- their sub-expressions unchanged).
+bindArg :: String -> M.Map Id Occ -> Id -> IType -> HExpr -> G HExpr
+bindArg tag occs i t a
+  | not (isKeepId i) && substitutable (M.lookup i occs) = return a
+  | otherwise = toHeap tag t a (Just i)
+  where
+    substitutable Nothing             = True   -- no occurrence
+    substitutable (Just Once)         = True
+    substitutable (Just OnceUnderLam) = isitActionValue t
+    substitutable (Just Many)         = False
+
+-- The evaluator unfolds code at a use site: a definition's body in
+-- evalDef, a class dictionary's method in evalSelAp, and the argument
+-- bound to a lambda's parameter in evalAp' and evalApAccum.  The
+-- unfolded expression takes the use site's position when that is
+-- usable and the head of its own spine has none (library code, or a
+-- generated binder); code whose spine starts at a usable position
+-- keeps it.  The stamp fills positions in and never replaces a usable
+-- one (fillIExprPosition), so a user-written sub-expression on the
+-- reach keeps its own position too.  The reach is
+-- updateIExprPosition's (the spine and sole arguments), at the cost of
+-- one spine walk per unfolding, and an error raised by a primitive
+-- inside a library wrapper then reports the user's line.  A heap
+-- reference is left alone: a definition is stamped before it is
+-- cached, so its cached value keeps the positions of the use that
+-- evaluated it, and an argument already on the heap keeps its cell's.
+needsUseSite :: Position -> HExpr -> Bool
+needsUseSite _ (IRefT _ _ _ _) = False
+needsUseSite pos e =
+    usablePosition pos && not (usablePosition (spineHeadPosition e))
+
+stampUseSite :: Position -> HExpr -> HExpr
+stampUseSite pos e | needsUseSite pos e = fillIExprPosition pos e
+                   | otherwise = e
+
+-- The argument bound to a lambda's parameter stands wherever the body
+-- refers to the parameter once the body is substituted.  When such a
+-- reference lies within updateIExprPosition's reach of the body, the
+-- argument is on the spine that the application unfolds to and takes
+-- the use site's position as stampUseSite gives it; an argument the
+-- body only passes on keeps its own.  The use site is the binder's
+-- own position when that is usable (a lambda the user wrote, or a
+-- binder FixupDefs stamped when it tied a reference to an imported
+-- definition), and otherwise the position at the head of the body's
+-- spine, which carries the use site's stamp once the body has been
+-- unfolded (the stamp leaves the binders alone).
+stampBoundArg :: Id -> HExpr -> HExpr -> HExpr
+stampBoundArg i body a
+    | needsUseSite pos a && restampReaches i body = fillIExprPosition pos a
+    | otherwise = a
+  where binder = getIdPosition i
+        pos | usablePosition binder = binder
+            | otherwise = spineHeadPosition body
+
 -- Accumulate substitutions when applying to a chain of ILam/ILAM
 -- This batches substitutions to avoid repeated hyper calls
 --
-evalApAccum :: String -> M.Map Id HExpr -> M.Map Id IType -> HExpr -> [Arg] -> G PExpr
+-- occs: the occurrence counts of the chain's parameters (occCounts of the
+-- chain and the stack it was entered with)
+evalApAccum :: String -> M.Map Id Occ -> M.Map Id HExpr -> M.Map Id IType
+            -> HExpr -> [Arg] -> G PExpr
 
 -- Continue accumulating for ILam with expression argument
-evalApAccum tag exprCtx typeCtx (ILam i t body) (E a : as) = do
+evalApAccum tag occs exprCtx typeCtx (ILam i t body) (E a : as) = do
   -- Apply accumulated type variable substitutions to t before allocating the heap cell.
   -- typeCtx may bind type vars that appear in t (e.g. for polymorphic functions like
   -- displayHex :: forall a sa. (Bits a sa) => a -> Action, where t = ITVar a until
   -- the ILAM args have been accumulated into typeCtx).
   norm <- getTypeNormalizerC
   let t' = changedOrId norm (tSubstBatch typeCtx t)
-  a' <- toHeap "apply-accum" t' a (Just i)
+  a' <- bindArg "apply-accum" occs i t' (stampBoundArg i body a)
   -- position information is clobbered by this point
   when doDebug $ traceM ("accum apply arg=" ++ ppReadable (a', a))
-  evalApAccum "ILam-accum" (M.insert i a' exprCtx) typeCtx body as
+  evalApAccum "ILam-accum" occs (M.insert i a' exprCtx) typeCtx body as
 
 -- Continue accumulating for ILAM with type argument
-evalApAccum tag exprCtx typeCtx e@(ILAM i k body) (T t : as) =
-  evalApAccum "ILAM-accum" exprCtx (M.insert i t typeCtx) body as
+evalApAccum tag occs exprCtx typeCtx e@(ILAM i k body) (T t : as) =
+  evalApAccum "ILAM-accum" occs exprCtx (M.insert i t typeCtx) body as
 
 -- Hit something else: apply accumulated substitutions if any, then continue
-evalApAccum tag exprCtx typeCtx e args = do
+evalApAccum tag _ exprCtx typeCtx e args = do
   when (doDebug || doTraceExpandBatchSubst) $
     traceM ("applying batched subst: " ++
              show (M.size exprCtx) ++ " exprs, " ++
@@ -3361,12 +3478,29 @@ evalAp str e es = do
       traceM ("evalAp exit  " ++ str' ++ " ]:\n"++ ppReadable (mkAp e es, r))
   return r
 
+-- A step (see step) is an unfolding that can recurse or grow the
+-- term: the application of a definition's body, or the selection of
+-- a field from a definition's tuple (a class method from its
+-- instance's dictionary; see doSel).  Two uses of a definition do no
+-- such work and are not steps: a reference to a value already in the
+-- definition cache that is not applied to arguments (a dictionary
+-- CAF read for a method selection, a constant table), which
+-- evaluates nothing, and a harmless definition (harmlessDef), whose
+-- body cannot recurse.  A cached value applied to arguments is a
+-- function whose body the application unfolds, and counts.  A
+-- reference to a definition of function type is never replaced by a
+-- cell (toHeap), so every application of a definition, through
+-- whatever alias of it, arrives here.  The step budget (-steps)
+-- therefore bounds the unfoldings that can run away, not the
+-- combinators between them.
 {-# INLINE evalDef #-}
 evalDef :: Id -> IType -> HExpr -> [Arg] -> G PExpr
 evalDef i t e as = do
+  (e', cached) <- cacheDef i t (stampUseSite (getIdPosition i) e)
+  unless (cached && null as) $ do
+    harmless <- harmlessDef i e
+    unless harmless $ step i
   -- recurse into evaluating e
-  step i
-  e' <- cacheDef i t e
   evalAp "ICDef" e' as
 
 -- evaluate a function application
@@ -3383,12 +3517,13 @@ evalAp' f@(ICon i (ICDef t e)) as = do -- doFunExpand is true
 evalAp' e@(ICon i ic)          as = conAp i ic e as
 -- it's WHNF
 evalAp' e@(ILam _ _ _)         [] = return (pExpr e)
--- place arg onto heap, substitute arg with heap reference in function body
-evalAp'   (ILam i t e)   (E a:as) = do
-        a' <- toHeap "apply" t a (Just i)
+-- substitute the arg, or a heap reference to it, for the binder in the body
+evalAp' f@(ILam i t e)   (E a:as) = do
+        let occs = occCounts f (E a:as)
+        a' <- bindArg "apply" occs i t (stampBoundArg i e a)
         -- position information is clobbered by this point
         when doDebug $ traceM ("apply arg=" ++ ppReadable (a', a))
-        evalApAccum "ILam" (M.singleton i a') M.empty e as
+        evalApAccum "ILam" occs (M.singleton i a') M.empty e as
 evalAp'   f@(ILam _ _ _) (T t:as) = internalError("evalAp' ILam: " ++ ppReadable (f,t))
 
 -- it's WHNF
@@ -3396,7 +3531,8 @@ evalAp' e@(ILAM _ _ _)         [] = return (pExpr e)
 -- substitute type
 -- We can put t directly into typeCtx because the simpNumT case of evalAp' took care of
 -- simplifying any unsimplified numeric types
-evalAp'   (ILAM i k e)   (T t:as) = evalApAccum "ILAM" M.empty (M.singleton i t) e as
+evalAp' f@(ILAM i k e)   (T t:as) =
+        evalApAccum "ILAM" (occCounts f (T t:as)) M.empty (M.singleton i t) e as
 evalAp'   f@(ILAM _ _ _) (E e:as) = internalError ("evalAp' ILAM:" ++ ppReadable (f,e))
 -- place applications args on the stack and evaluate function
 evalAp' e@(IAps f tys es)      as =
@@ -3457,13 +3593,27 @@ evalHeap (ptr, ref) = do
             -- create IRefs for arguments of other potentially non-strict
             -- applications (e.g., ICCon) to prevent repeat evaluation later
             P p (IAps f ts as) -> do
+                -- A strict primitive's application is a cell's value only
+                -- while it is unsaturated: it is then a function (conAp'
+                -- has evaluated the operands it holds and applies the
+                -- primitive once the remaining arguments arrive), kept
+                -- like a lazy application.  A saturated one is reduced
+                -- by conAp' and never reaches a cell.  The primitive's
+                -- value arguments are the arrows of its type after the
+                -- foralls: IConv erases the dictionaries of the numeric
+                -- provisos and of the dropDicts primitives along with
+                -- their arrows, and a class arrow it keeps (primPack's
+                -- Bits, say) is matched by a dictionary argument, so the
+                -- count agrees either way.
                 let isLazyOp (ICon _ (ICCon {})) = True
                     isLazyOp (ICon _ (ICTuple {})) = True
-                    isLazyOp (ICon _ (ICPrim _ p)) | p == PrimChr ||
+                    isLazyOp (ICon _ (ICPrim t p)) | p == PrimChr ||
                                                      realPrimOp p = False
-                                                   | strictPrim p = internalError ("evalHeap - prim should be evaluated:" ++ ppReadable (p, pe'))
+                                                   | strictPrim p && saturated t =
+                                                       internalError ("evalHeap - prim should be evaluated:" ++ ppReadable (p, pe'))
                                                    | otherwise = True
                     isLazyOp _ = False
+                    saturated t = length as >= length (fst (itGetArrows (dropForAll t)))
                 argTys <- takeArgTypes (length as) <$> instFunType (iGetType f) ts
                 let th t a = if isLazyOp f
                              then toHeap "move-ap" t a Nothing
@@ -3545,13 +3695,19 @@ mkBitsMethodSel prim_i selty meth_i = do
 -- method, picked out of the dictionary argument (the primitives take the
 -- Bits dictionary; see Prelude.bs).  A dictionary in WHNF is an ICTuple
 -- application whose fieldIds name the class methods, so the method is
--- taken from it directly by name.
-unfoldBitsCoercion :: String -> Id -> HExpr -> [Arg] -> G PExpr
-unfoldBitsCoercion tag meth_i dictE rest = do
+-- taken from it directly by name.  The selection is a step unless the
+-- method is harmless, as it is in doSel; the step is charged to the
+-- method at the primitive's position, the selector mkBitsMethodSel
+-- would build.
+unfoldBitsCoercion :: String -> Id -> Id -> HExpr -> [Arg] -> G PExpr
+unfoldBitsCoercion tag prim_i meth_i dictE rest = do
     (_, P pd d) <- evalUH dictE
     case d of
       IAps (ICon _ (ICTuple { fieldIds = fs })) _ ms
-        | Just k <- findIndex (qualEq meth_i) fs, k < length ms ->
+        | Just k <- findIndex (qualEq meth_i) fs, k < length ms -> do
+            harmless <- harmlessField dictE (toInteger k)
+            unless harmless $
+                step (setIdPosition (getIdPosition prim_i) meth_i)
             addPredG pd $ evalAp tag (ms !! k) rest
       _ -> internalError ("unfoldBitsCoercion (" ++ tag ++ "): " ++
                           "unexpected dictionary: " ++ ppReadable d)
@@ -3717,7 +3873,7 @@ conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
               toHeapArg a = return a
           as'' <- mapM toHeapArg as'
 -}
-          evalStaticOp' True True False e resType (doSel sel c tys ty n as')
+          evalStaticOp' True True False e resType (doSel sel c tys ty n as' e)
       _ -> internalError ("conAp': ICSel: " ++ ppReadable (mkAp sel as))
 
 -- constructors are non-strict
@@ -3932,15 +4088,48 @@ conAp' _ (ICPrim _ PrimGetModuleName) _ as = internalError ("PrimGetModuleName "
 -- ord C_n  -->  n
 -- ord (if c t e)  -->  if c (ord t) (ord e)
 -- ord _  -->  _
+--
+-- The argument of an evaluated chr is a value: conAp' PrimChr applies
+-- chr to the WHNF of its argument, and evalHeap moves that argument
+-- to a WHNF cell (PrimChr is not one of its lazy operators).  So
+-- ord (chr e) returns e as it is, reading a heap reference as any
+-- reference is read (evalAp' expands a constant cell and keeps the
+-- reference to any other), and does not evaluate e again: eval1
+-- cannot tell a value from an unevaluated application of the same
+-- shape, and conAp' is not the identity on a strict primitive's
+-- application -- the PrimBNot over a dynamic selection that
+-- iTransExpr returns for "sel == 0" would be pushed into the arms of
+-- the selection (pushBNot), one inverter per element in place of one
+-- after the selection.
 conAp' _ (ICPrim _ PrimOrd) o [T f, T sz, E e] = evalStaticOp e (aitBit sz) handleOrd
-  where handleOrd (IAps (ICon _ (ICPrim _ PrimChr)) _ [e']) = eval1 e'
+  where handleOrd (IAps (ICon _ (ICPrim _ PrimChr)) _ [e'@(IRefT _ _ _ _)]) = eval1 e'
+        handleOrd (IAps (ICon _ (ICPrim _ PrimChr)) _ [e']) = return (pExpr e')
         handleOrd (IAps (ICon _ (ICCon { conTagInfo = cti })) _ _) =
             return $ pExpr $ iMkLitAt (getIExprPosition e) (aitBit sz) (conTag cti)
         handleOrd e' = nfError "primOrd" e'
 
 -- chr (ord e)  -->  e
--- chr (if c t e)  -->  if c (chr t) (chr e)
-conAp' _ (ICPrim _ PrimChr) o [T sz, T to, E e] = evalStaticOp e to handleChr
+-- chr (sel arr i)  -->  sel (map chr arr) i
+-- chr (if c t e)  -->  chr (if c t e), the conditional kept as ONE cell
+--
+-- A conditional is not pushed through.  chr over a Bit-typed
+-- conditional is the canonical form of an enum-typed conditional
+-- (improveIf's PrimChr clause lifts chr out of the arms), and inside an
+-- evaluated conditional the push has nothing to fold: ord never
+-- survives evaluation, so no arm is "ord e", and an undetermined arm
+-- stays the Bit-typed undetermined value that improveIf keeps (pushed,
+-- it would become an enum-typed one, which improveIf drops).  The push
+-- (evalStaticOp) walks a shared conditional DAG once per PATH and
+-- rebuilds it inline, exponential in the DAG's depth; pushBNot returns
+-- such DAGs, and Prelude's not applies chr to every one of them.  The
+-- heaped argument keeps the DAG shared, and its implicit condition is
+-- recovered when the cell is unheaped.
+conAp' _ (ICPrim _ PrimChr) o [T sz, T to, E e] = do
+    (ee, P _ e') <- evalUH e
+    case e' of
+      IAps (ICon _ (ICPrim _ PrimIf)) _ _ ->
+          bldAp' "chr-if" o [T sz, T to, E ee]
+      _ -> evalStaticOp ee to handleChr
   where handleChr (IAps (ICon _ (ICPrim _ PrimOrd)) [to', _] [e']) | to == to' = eval1 e'
         handleChr e' = return $ pExpr $ mkAp o [T sz, T to, E e']
 
@@ -4001,9 +4190,9 @@ conAp' _ (ICPrim _ PrimUnpack) _ (T ta : T tn : E _ : E x : rest)
 -- is nothing for cancellation to save (a one-bit padded singleton's
 -- body is a constant or a don't-care, cheaper still); meanwhile held
 -- one-bit values (e.g. Bool) would permeate the rule-condition
--- machinery, the most shape-sensitive part of the evaluator.
--- ISimplify resolves the statically-resolvable small ones before we
--- ever see them (see ISimplify.selectDictMethod).
+-- machinery, the most shape-sensitive part of the evaluator.  They
+-- fall through to the unfolding clauses below, which pick the method
+-- out of the dictionary on contact.
 -- A held node carries the payload heaped (lzOrig) alongside an
 -- unevaluated application
 -- of the underlying class method (lzApplied); consumers that demand the
@@ -4023,7 +4212,7 @@ conAp' i ci@(ICPrim _ PrimPack) _ [T ta, T tn, E d, E x]
           ICon _ (ICLazyUnpack { lzTa = ta', lzOrig = b }) | ta == ta' ->
               return (P px b)
           ICon _ (ICUndet {}) ->
-              addPredG px $ unfoldBitsCoercion "PrimPack" idPack d [E xee]
+              addPredG px $ unfoldBitsCoercion "PrimPack" i idPack d [E xee]
           _ -> do
               sel <- mkBitsMethodSel i (iConType ci) idPack
               aref <- toHeap "coerce" (aitBit tn)
@@ -4045,9 +4234,9 @@ conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
           ICon _ (ICLazyPack { lzTa = ta', lzOrig = v }) | ta == ta' ->
               return (P px v)
           ICon _ (ICUndet {}) ->
-              addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
+              addPredG px $ unfoldBitsCoercion "PrimUnpack" i idUnpack d [E xee]
           ICon _ (ICInt {}) ->
-              addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
+              addPredG px $ unfoldBitsCoercion "PrimUnpack" i idUnpack d [E xee]
           _ -> do
               sel <- mkBitsMethodSel i (iConType ci) idUnpack
               aref <- toHeap "coerce" ta
@@ -4058,10 +4247,10 @@ conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
               -- NB: px is deliberately NOT attached (see PrimPack above)
               return (P pTrue (ICon i node))
 
-conAp' _ (ICPrim _ PrimPack) _ (T _ : T _ : E d : rest) =
-        unfoldBitsCoercion "PrimPack" idPack d rest
-conAp' _ (ICPrim _ PrimUnpack) _ (T _ : T _ : E d : rest) =
-        unfoldBitsCoercion "PrimUnpack" idUnpack d rest
+conAp' i (ICPrim _ PrimPack) _ (T _ : T _ : E d : rest) =
+        unfoldBitsCoercion "PrimPack" i idPack d rest
+conAp' i (ICPrim _ PrimUnpack) _ (T _ : T _ : E d : rest) =
+        unfoldBitsCoercion "PrimUnpack" i idUnpack d rest
 
 -- Special case of doPrimOp that checks bounds and keeps the base.
 conAp' tfs (ICPrim _ PrimIntegerToBit) fe [T ty@(ITNum k), E e] = evalStaticOp e (itBitN k) handleInt
@@ -5643,16 +5832,40 @@ doOut out c tys ty cti as ee (p, e) =
         -- otherwise fail
         _ -> internalError ("doOut: " ++ ppReadable (out, e, as))
 
+-- Apply the method selected from a class dictionary at its selection
+-- site.  The method is shared through the heap cell of the
+-- dictionary's tuple field, so the selection site's position goes on
+-- the copy of the value's spine that this application unfolds
+-- (stampUseSite), never on the cell; a selection without arguments
+-- returns the field as evalAp does, still a shared reference.
+evalSelAp :: Position -> HExpr -> [Arg] -> G PExpr
+evalSelAp pos (IRefT t ptr _ ref) as@(_ : _) = do
+        (P p e) <- evalHeap (ptr, ref)
+        evalAp "sel k" (iePrimWhenPred t p (stampUseSite pos e)) as
+evalSelAp pos e as = evalAp "sel k" (stampUseSite pos e) as
+
+-- e0 is the tuple expression as written: whether the selection is a
+-- step depends on the definition the tuple comes from, visible there
+-- and not in its evaluated form
 doSel :: HExpr -> Id -> [IType] -> IType -> Integer -> [Arg] ->
-         HExpr -> (HPred, HExpr) -> G PExpr
-doSel sel s tys ty n as ee (p, e) =
+         HExpr -> HExpr -> (HPred, HExpr) -> G PExpr
+doSel sel s tys ty n as e0 ee (p, e) =
     case e of
         -- (e1,...en).k  -->  ek
         IAps (ICon id (ICTuple ictup_ty _)) _ es -> do
+            -- selecting a field of a definition's tuple (a class
+            -- method) is a step unless the field is harmless
+            harmless <- harmlessField e0 n
+            unless harmless $ step s
             let tupleError id = internalError $ "indexing `" ++ show id ++ "' out of bounds; do you need to recompile dependencies?"
                 index xs i id = if length xs > i then xs!!i else tupleError id
             let field_e = index es (fromInteger n) id
-                dflt_res = addPredG p $ evalAp "sel k" field_e as
+                -- a class dictionary's method is applied at the
+                -- selection site; an interface's method keeps its own
+                -- positions
+                is_dict = itIsDictType (snd (itGetArrows (dropForAll ictup_ty)))
+                dflt_res | is_dict = addPredG p $ evalSelAp (getPosition s) field_e as
+                         | otherwise = addPredG p $ evalAp "sel k" field_e as
             -- if method conditions are not being preserved,
             -- just return the default result
             flags <- getFlags

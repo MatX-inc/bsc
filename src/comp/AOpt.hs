@@ -13,7 +13,7 @@ module AOpt(aOpt,
 
 import Control.Monad(when, foldM, zipWithM)
 import Control.Monad.State.Strict(State, StateT, evalState, evalStateT, liftIO,
-                                  gets, get, put)
+                                  gets, get, put, modify)
 import Data.List(sortBy, genericLength, sort, transpose, partition, groupBy, nub)
 import Util(mapFst)
 import qualified Data.Map as M
@@ -1571,7 +1571,29 @@ getOp _ e = [e]
 -- XXX CUDD as the solver.  With Yices, we may be able to maintain state
 -- XXX across defs and to follow non-inlined defs.
 
-type SIO a = StateT SATState IO a
+-- The solver, and the optimized form of each And/Or expression already
+-- seen in this package.  The preceding aExpand inlines a small definition
+-- into every one of its uses, so the same conjunction can reach this pass
+-- once per use site (the condition gating a replicated bit mask arrives
+-- once per bit), and each copy would repeat the same solver queries.
+--
+-- Contract: the optimized form of an And/Or node is a function of the node
+-- alone, so an entry stays valid for the rest of the optAndOrDefs call
+-- whatever is optimized before or after it.  Every query is asserted
+-- inside a push and pop of the solver's context against a SATState
+-- created with no definitions and no state instances, so no query leaves
+-- an assertion behind and a def, a port and a method call are free
+-- variables in every query (an ASAny a fresh one at each conversion); the
+-- results the backends cache (STP's proofMapS, Yices' proofMap) are keyed
+-- on the term and are therefore functions of the term themselves.  The
+-- memo is keyed on the expression as it arrives,
+-- before its operands are optimized, under the AExpr ordering (structural,
+-- identifiers by name), the equivalence the solver's expression map and the
+-- CSE maps already use.  The memo lives for one optAndOrDefs call.
+data AndOrState = AndOrState { aos_sat :: SATState,
+                               aos_memo :: M.Map AExpr AExpr }
+
+type SIO a = StateT AndOrState IO a
 
 -- This can pass over each ADef and optimize the expression looking
 -- for redundant and or terms
@@ -1580,7 +1602,7 @@ optAndOrDefs str errh flags defs | not $ optAndOr flags = return defs
 optAndOrDefs str errh flags defs = do
   -- soft fail, no defs
   s <- initSATState str errh flags False [] []
-  evalStateT (mapM optAndOrDef defs) s
+  evalStateT (mapM optAndOrDef defs) (AndOrState s M.empty)
 
 optAndOrDef :: ADef -> SIO ADef
 optAndOrDef adef@(ADef i t e p) = do
@@ -1591,28 +1613,17 @@ optAndOrDef adef@(ADef i t e p) = do
 
 -- The main worker function
 optAndOrExpr :: AExpr -> SIO AExpr
--- process And Expressions
--- Note that the use of reverse here is a heuristic. based on how we build these expressions
--- We may want to do a pass each way?
-optAndOrExpr (APrim i t@(ATBit 1) op es)
-    | (op == PrimBAnd) || (op == PrimAnd) = do
-  es1 <- mapM optAndOrExpr es
-  let (e1, er1) = unconsOrErr "AOpt.optAndOrExpr And" (reverse es1)
-  es2 <- foldM testBuildAnd [e1] er1
-  checkIfConst  $ case es2 of
-                    [e] -> e
-                    es3 -> (APrim i t op (es3))
---
--- Optimize Or expressions
-optAndOrExpr (APrim i t@(ATBit 1) op es)
-    | (op == PrimBOr) || (op == PrimOr) = do
-  es1 <- mapM optAndOrExpr es
-  let (e1,er1) = unconsOrErr "AOpt.optAndOrExpr Or" (reverse es1)
-  es2 <- foldM testBuildOr [e1] er1
-  checkIfConst $ case es2 of
-                   [e] -> e
-                   es3 -> (APrim i t op (es3))
-
+-- And/Or expressions are optimized once each; see AndOrState
+optAndOrExpr e@(APrim _ (ATBit 1) op _)
+    | (op == PrimBAnd) || (op == PrimAnd) ||
+      (op == PrimBOr) || (op == PrimOr) = do
+  memo <- gets aos_memo
+  case (M.lookup e memo) of
+    Just e1 -> return e1
+    Nothing -> do
+      e1 <- optAndOrPrim e
+      modify (\s -> s { aos_memo = M.insert e e1 (aos_memo s) })
+      return e1
 --
 -- traverse down other prim expressions
 optAndOrExpr (APrim i t op es) = do
@@ -1622,15 +1633,39 @@ optAndOrExpr (APrim i t op es) = do
 -- ignore other expressions
 optAndOrExpr e = return e
 
+optAndOrPrim :: AExpr -> SIO AExpr
+-- process And Expressions
+-- Note that the use of reverse here is a heuristic. based on how we build these expressions
+-- We may want to do a pass each way?
+optAndOrPrim (APrim i t@(ATBit 1) op es)
+    | (op == PrimBAnd) || (op == PrimAnd) = do
+  es1 <- mapM optAndOrExpr es
+  let (e1, er1) = unconsOrErr "AOpt.optAndOrExpr And" (reverse es1)
+  es2 <- foldM testBuildAnd [e1] er1
+  checkIfConst  $ case es2 of
+                    [e] -> e
+                    es3 -> (APrim i t op (es3))
+--
+-- Optimize Or expressions
+optAndOrPrim (APrim i t@(ATBit 1) op es)
+    | (op == PrimBOr) || (op == PrimOr) = do
+  es1 <- mapM optAndOrExpr es
+  let (e1,er1) = unconsOrErr "AOpt.optAndOrExpr Or" (reverse es1)
+  es2 <- foldM testBuildOr [e1] er1
+  checkIfConst $ case es2 of
+                   [e] -> e
+                   es3 -> (APrim i t op (es3))
+optAndOrPrim e = internalError ("AOpt.optAndOrPrim: " ++ ppReadable e)
+
 
 testBuildAnd :: [AExpr] -> AExpr -> SIO  [AExpr]
 testBuildAnd aas b = do
-  s <- get
+  s <- gets aos_sat
   let aaE = case aas of
               [a] -> a
               _   -> (APrim defaultAId aTBool PrimBAnd aas)
   ((aImpliesB,bImpliesA), s1) <- liftIO $ checkBiImplication s aaE b
-  put s1
+  modify (\st -> st { aos_sat = s1 })
   -- liftIO $ putStrLn ("testBuildAnd: " ++ show (length aas))
   return $ case (aImpliesB,bImpliesA) of
              (True, _ ) -> aas
@@ -1639,12 +1674,12 @@ testBuildAnd aas b = do
 
 testBuildOr :: [AExpr] -> AExpr -> SIO  [AExpr]
 testBuildOr aas b = do
-  s <- get
+  s <- gets aos_sat
   let aaE = case aas of
               [a] -> a
               _   -> (APrim defaultAId aTBool PrimBOr aas)
   ((aImpliesB,bImpliesA), s1) <- liftIO $ checkBiImplication s aaE b
-  put s1
+  modify (\st -> st { aos_sat = s1 })
   return $ case (aImpliesB,bImpliesA) of
              (True, _ ) -> [b]
              (_, True ) -> aas
@@ -1654,9 +1689,9 @@ testBuildOr aas b = do
 checkIfConst :: AExpr -> SIO AExpr
 checkIfConst expr =
     do
-       s <- get
+       s <- gets aos_sat
        (mconst, s1) <- liftIO $ isConstExpr s expr
-       put s1
+       modify (\st -> st { aos_sat = s1 })
        case mconst of
          Just True  -> return aTrue
          Just False -> return aFalse

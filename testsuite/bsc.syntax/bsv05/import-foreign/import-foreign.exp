@@ -82,17 +82,17 @@ compile_fail_error ImportForeignModule_UndeclaredClock_Port.bsv P0134
 compile_fail_error ImportForeignModule_UndeclaredReset_Port.bsv P0137
 
 # test that ports can have an associated clock
-compile_pass ImportForeignModule_PortWithClock.bsv {-disimplify}
+compile_pass ImportForeignModule_PortWithClock.bsv {-dfixup}
 find_regexp ImportForeignModule_PortWithClock.bsv.bsc-out \
     {port \(D_IN, \[\]\) clocked_by \(aClk\) reset_by \(no_reset\);}
 
 # test that ports can have an associated clock and reset
-compile_pass ImportForeignModule_PortWithClockReset.bsv {-disimplify}
+compile_pass ImportForeignModule_PortWithClockReset.bsv {-dfixup}
 find_regexp ImportForeignModule_PortWithClockReset.bsv.bsc-out \
     {port \(D_IN, \[\]\) clocked_by \(aClk\) reset_by \(aRst\);}
 
 # test that ports can have port properties
-compile_pass ImportForeignModule_PortWithProp.bsv {-disimplify}
+compile_pass ImportForeignModule_PortWithProp.bsv {-dfixup}
 find_regexp ImportForeignModule_PortWithProp.bsv.bsc-out \
     {port \(D_IN, \[reg\]\) clocked_by \(no_clock\) reset_by \(no_reset\);}
 

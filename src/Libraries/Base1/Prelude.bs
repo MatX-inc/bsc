@@ -3249,8 +3249,6 @@ primitive primRealIsNegativeZero :: Real -> Bit 1
 
 --- Misc
 
--- XXX Minor inefficiency:
--- This doesn't inline properly in ISimplify because `bind' isn't known.
 bind_ :: (Monad m) => m a -> m b -> m b
 bind_ x y = x `bind` \ _ -> y
 

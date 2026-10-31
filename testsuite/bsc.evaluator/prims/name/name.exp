@@ -14,6 +14,14 @@ find_n_strings sysMakeNameBadName.v {assign thisisabadname$PROBE = !rg ;} 1
 # Test that dynamic strings trigger an error
 compile_verilog_fail_error MakeNameDynamicString.bsv G0012
 
+# Test that a partial application of primMakeName is a value: through ($)
+# and passed to a combinator that applies it twice
+compile_verilog_pass MakeNamePartial.bs
+if { $vtest == 1 } {
+find_n_strings sysMakeNamePartial.v {reg [7 : 0] srbMem;} 1
+find_n_strings sysMakeNamePartial.v {reg [7 : 0] turnTap;} 1
+}
+
 # -----
 
 # Test primGetParamName (and primSetStateName) used in a Monad instance

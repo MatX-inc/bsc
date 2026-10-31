@@ -1,0 +1,20 @@
+package RecursiveAliasInf(sysRecursiveAliasInf) where
+
+-- The same shape without a base case: the budget of unfolding steps
+-- is the only bound on the recursion, and elaboration must stop with
+-- G0024 (the heap cap in the test makes a runaway fail rather than run
+-- until killed).
+
+loop :: Integer -> Integer
+loop =
+  let l = loop
+  in \ x -> 1 + l (x + 1)
+
+{-# verilog sysRecursiveAliasInf #-}
+sysRecursiveAliasInf :: Module Empty
+sysRecursiveAliasInf =
+  module
+    rules
+      "r1": when True ==> action
+         $display (loop 0)
+         $finish 0

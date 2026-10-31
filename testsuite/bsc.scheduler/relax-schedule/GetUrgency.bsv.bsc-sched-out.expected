@@ -55,8 +55,8 @@ Schedule dump file created: mkGetTest.sched
 Method schedule
 ---------------
 Method: get
-Ready signal: (bypass_fifo_the_fifof.i_notEmpty || bypass_fifo_enqw.whas) &&
-	      bypass_fifo_result.whas
+Ready signal: bypass_fifo_result.whas &&
+	      (bypass_fifo_the_fifof.i_notEmpty || bypass_fifo_enqw.whas)
 Conflicts: get
  
 Rule schedule

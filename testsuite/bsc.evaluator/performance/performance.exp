@@ -7,3 +7,9 @@ compile_verilog_pass TestPIf.bsv "" "+RTS -M265M -RTS"
 # involved), so a per-path push cannot terminate, while the memoized
 # push (pushBNot in IExpand) compiles it in seconds with default limits.
 compile_verilog_pass BNotShared.bsv
+
+# The same DAG reaches primChr when a negation's result is a heap cell
+# (bound to a name that is used twice): primChr must keep a conditional
+# argument as one shared cell rather than push into its arms per path.
+# (The heap cap turns a per-path push into a prompt failure.)
+compile_verilog_pass BNotSharedLet.bsv "" "+RTS -M512M -RTS"

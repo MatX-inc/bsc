@@ -12,6 +12,7 @@ import Id
 import DefProp(DefProp(..), defPropsDictEvidence)
 import ISyntax
 import ISyntaxXRef(updateIExprPosition)
+import Position(Position)
 import ISyntaxUtil(iDefsMap, itIsDictType)
 import Util(tracep)
 --import Debug.Trace
@@ -202,7 +203,7 @@ fixupDefs buckets (IPackage mi _ ps ds own_atf_cache) ipkgs =
 
         -- Create a recursive data structure by populating the map "m"
         -- with defs created using the map itself
-        m = M.fromList [ (i, e) | (IDef i _ e _) <- ads' ]
+        m = M.fromList [ (i, (getIdPosition i, e)) | (IDef i _ e _) <- ads' ]
         ads' = map (redirectDictProps redirects)
                    (iDefsMap (fixUp redirects m) ads)
 
@@ -259,7 +260,11 @@ updDef buckets d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
 
 -- ===============
 
-fixUp :: M.Map Id Id -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
+-- Every definition in scope, keyed by name: the definition's own
+-- position and its body
+type DefMap a = M.Map Id (Position, IExpr a)
+
+fixUp :: M.Map Id Id -> DefMap a -> IExpr a -> IExpr a
 fixUp r m (ILam i t e) = ILam i t (fixUp r m e)
 fixUp r m (ILAM i k e) = ILAM i k (fixUp r m e)
 fixUp r m (IAps f ts es) = IAps (fixUp r m f) ts (map (fixUp r m) es)
@@ -268,18 +273,28 @@ fixUp r m (ICon i (ICDef t _)) =
     in  ICon i' (ICDef t (get m i'))
 fixUp _ _ e = e
 
-get :: M.Map Id (IExpr a) -> Id -> IExpr a
-get m i = let value = get2 m i
-              pos = (getIdPosition i)
-          in -- trace("LookupX "
-                -- ++ (ppReadable i) ++ " => "
-                -- ++ (ppReadable (updateIExprPosition pos value))) $
-             (updateIExprPosition pos value)
+-- The body tied to a reference.  A reference whose position is a use
+-- site is tied to a copy of the body stamped with that position (over
+-- the spine and the sole arguments, as far as updateIExprPosition
+-- reaches), so that the code unfolded at the use site reports the use
+-- site.  A reference carrying the definition's own position names no
+-- use site: IConv resolves a reference to a definition of the package
+-- being compiled through the package environment, so it carries the
+-- definition's Id, and the .bo of an imported package carries the
+-- references to its own definitions the same way.  Such a reference
+-- is tied to the body as it is: stamping the body with the
+-- definition's position would replace the position of each line
+-- inside the definition with that of its name.
+get :: DefMap a -> Id -> IExpr a
+get m i | pos == def_pos = value
+        | otherwise = updateIExprPosition pos value
+  where (def_pos, value) = get2 m i
+        pos = getIdPosition i
 
-get2 :: M.Map Id (IExpr a) -> Id -> IExpr a
+get2 :: DefMap a -> Id -> (Position, IExpr a)
 get2 m i =
     case M.lookup i m of
-    Just e -> e
+    Just d -> d
     Nothing -> internalError (
         "fixupDefs.get: "
         ++ pfpString i ++ "\n"

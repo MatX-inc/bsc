@@ -67,8 +67,8 @@ module sysRegOfVec(CLK,
   wire rg$EN;
 
   // remaining internal signals
-  wire [47 : 0] IF_write_idx_EQ_7_THEN_write_val_ELSE_rg_BITS__ETC___d22;
-  wire [31 : 0] IF_write_idx_EQ_7_THEN_write_val_ELSE_rg_BITS__ETC___d15;
+  wire [47 : 0] IF_write_idx_EQ_5_THEN_write_val_ELSE_rg_BITS__ETC___d28;
+  wire [31 : 0] IF_write_idx_EQ_3_4_THEN_write_val_ELSE_rg_BIT_ETC___d27;
 
   // action method write
   assign RDY_write = 1'd1 ;
@@ -91,21 +91,21 @@ module sysRegOfVec(CLK,
 
   // register rg
   assign rg$D_IN =
-	     { IF_write_idx_EQ_7_THEN_write_val_ELSE_rg_BITS__ETC___d22,
-	       (write_idx == 3'd1) ? write_val : rg[15:8],
-	       (write_idx == 3'd0) ? write_val : rg[7:0] } ;
+	     { (write_idx == 3'd7) ? write_val : rg[63:56],
+	       (write_idx == 3'd6) ? write_val : rg[55:48],
+	       IF_write_idx_EQ_5_THEN_write_val_ELSE_rg_BITS__ETC___d28 } ;
   assign rg$EN = EN_write ;
 
   // remaining internal signals
-  assign IF_write_idx_EQ_7_THEN_write_val_ELSE_rg_BITS__ETC___d15 =
-	     { (write_idx == 3'd7) ? write_val : rg[63:56],
-	       (write_idx == 3'd6) ? write_val : rg[55:48],
-	       (write_idx == 3'd5) ? write_val : rg[47:40],
-	       (write_idx == 3'd4) ? write_val : rg[39:32] } ;
-  assign IF_write_idx_EQ_7_THEN_write_val_ELSE_rg_BITS__ETC___d22 =
-	     { IF_write_idx_EQ_7_THEN_write_val_ELSE_rg_BITS__ETC___d15,
-	       (write_idx == 3'd3) ? write_val : rg[31:24],
-	       (write_idx == 3'd2) ? write_val : rg[23:16] } ;
+  assign IF_write_idx_EQ_3_4_THEN_write_val_ELSE_rg_BIT_ETC___d27 =
+	     { (write_idx == 3'd3) ? write_val : rg[31:24],
+	       (write_idx == 3'd2) ? write_val : rg[23:16],
+	       (write_idx == 3'd1) ? write_val : rg[15:8],
+	       (write_idx == 3'd0) ? write_val : rg[7:0] } ;
+  assign IF_write_idx_EQ_5_THEN_write_val_ELSE_rg_BITS__ETC___d28 =
+	     { (write_idx == 3'd5) ? write_val : rg[47:40],
+	       (write_idx == 3'd4) ? write_val : rg[39:32],
+	       IF_write_idx_EQ_3_4_THEN_write_val_ELSE_rg_BIT_ETC___d27 } ;
 
   // handling of inlined registers
 

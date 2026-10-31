@@ -1,6 +1,7 @@
 package TupleExpand() where
 
--- make sure tuple expansion in ISimplify doesn't "go off the deep end"
+-- two top-level structs built from each other's fields: compiling the
+-- package (nothing is elaborated) must not follow the cycle
 struct My_pair1 = {fst :: Bit 16; snd :: Bit 16}
   deriving(Eq, Bits)
 

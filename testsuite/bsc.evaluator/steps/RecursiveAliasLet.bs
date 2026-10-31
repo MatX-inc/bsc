@@ -1,0 +1,20 @@
+package RecursiveAliasLet(sysRecursiveAliasLet) where
+
+-- A recursive function whose alias is bound outside its lambda: the
+-- definition's value is the lambda, and the recursion applies that
+-- value through the alias.  The recursion is deeper than the test's
+-- budget of unfolding steps, so elaboration must stop with G0024.
+
+loop :: Integer -> Integer
+loop =
+  let l = loop
+  in \ x -> if x == 0 then 0 else 1 + l (x - 1)
+
+{-# verilog sysRecursiveAliasLet #-}
+sysRecursiveAliasLet :: Module Empty
+sysRecursiveAliasLet =
+  module
+    rules
+      "r1": when True ==> action
+         $display (loop 1000)
+         $finish 0

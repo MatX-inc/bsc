@@ -1,0 +1,29 @@
+package MakeNamePartial where
+
+-- A strict primitive (primMakeName) partially applied, so that the
+-- unsaturated application is a value during elaboration: as the
+-- argument of ($)'s lambda, and passed to a combinator that applies
+-- it twice.  The registers must get the names.
+
+withString :: (IsModule m c) => String -> m a -> m a
+withString name = setStateName $ primMakeName name $ getStringPosition name
+
+both :: (Position__ -> Name__) -> Position__ -> Position__ -> (Name__, Name__)
+both f p q = (f p, f q)
+
+withTwo :: (IsModule m c) => String -> m a -> m a
+withTwo name m =
+  let (n1, _) = both (primMakeName name) (getStringPosition name)
+                     (getStringPosition name)
+  in setStateName n1 m
+
+{-# verilog sysMakeNamePartial #-}
+sysMakeNamePartial :: Module Empty
+sysMakeNamePartial =
+  module
+    r :: Reg (UInt 8) <- withString "srbMem" mkRegU
+    s :: Reg (UInt 8) <- withTwo "turnTap" mkRegU
+    rules
+      "step": when True ==> action
+        r := r + 1
+        s := s + r

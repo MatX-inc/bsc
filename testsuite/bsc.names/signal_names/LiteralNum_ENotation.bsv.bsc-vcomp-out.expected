@@ -34,9 +34,9 @@ rg_start :: ABSTRACT:  Prelude.VReg = RegN
 				      port types=D_IN -> Prelude.Bool
 						 Q_OUT -> Prelude.Bool
 -- AP local definitions
-rg_start___d1 :: Bit 1;
-rg_start___d1  = rg_start.read;
--- IdProp rg_start___d1[IdP_from_rhs]
+rg_start__h50 :: Bit 1;
+rg_start__h50  = rg_start.read;
+-- IdProp rg_start__h50[IdP_keep]
 signed_0___d2 :: Bit 32;
 signed_0___d2  = Prelude.$signed 32'd0;
 -- IdProp signed_0___d2[IdP_from_rhs,IdP_signed]
@@ -63,7 +63,7 @@ _2d454369260617026eneg2___d9  = 2.454369260617026e-2;
 -- IdProp _2d454369260617026eneg2___d9[IdP_from_rhs]
 -- AP rules
 rule RL_do_disp "do_disp":
- when rg_start___d1
+ when rg_start__h50
   ==> { rg_start.write 1'd0;
 	Prelude.$display "%d: %f" signed_0___d2 _3d0679615757712823eneg3___d3;
 	Prelude.$display "%d: %f" signed_1___d4 _6d135923151542565eneg3___d5;
