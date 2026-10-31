@@ -29,6 +29,7 @@ import CtxRed
 import SymTab
 import Assump
 import CSubst(cSubstN)
+import CType(isGroundNode, ctypeStat, CTypeStat(..))
 import CFreeVars(getFVC, getFTCC)
 import Util(separate, apFst, quote)
 
@@ -275,6 +276,8 @@ getFreeD vs (CLValueSign (CDefT i vs' qt cs) qs) =
 getFreeD vs _ = internalError "TypeCheck.getFreeD: not CLValueSign"
 
 getFreeT :: [TyVar] -> CType -> [TyVar]
+-- a ground type has no TVar anywhere, so the walk below yields []
+getFreeT _ t | isGroundNode t = ctypeStat GetFreeTShortcut t `seq` []
 getFreeT vs (TVar v) | v `notElem` vs = [v]
 getFreeT vs (TAp t1 t2) = getFreeT vs t1 ++ getFreeT vs t2
 getFreeT vs t = []

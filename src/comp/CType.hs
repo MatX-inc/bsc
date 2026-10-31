@@ -8,7 +8,8 @@ module CType(
   CType, TyVar(..), TyCon(..), TISort(..), StructSubType(..),
 
   -- ** Canonical identity
-  typeCanonWord, isGroundType, isNormalType, isGroundNode, isNormalNode,
+  typeCanonWord, typeCanonWordNode,
+  isGroundType, isNormalType, isGroundNode, isNormalNode,
   enableCanonIds, disableCanonIds, CTypeStat(..), ctypeStat, bumpCTypeStat, cTypeStats,
 
   -- ** Examining Types
@@ -594,7 +595,9 @@ data CTypeStat
     = TApBuilt | TConBuilt | PreGateBuilt | TableHit | TableNew
     | RefuseChild | RefuseUnqual | RefuseTyStr | LeafRecompute
     | CmpEqByWord | CmpNeByWord | InternDelta
-    | SeqCTypeShortcut
+    | SeqCTypeShortcut | ApSubShortcut | TvShortcut | ExpandSynShortcut
+    | InstShortcut | MguShortcut | MatchShortcut | GetFreeTShortcut
+    | ChkTApShortcut
     deriving (Eq, Ord, Enum, Bounded)
 
 statName :: CTypeStat -> String
@@ -611,6 +614,14 @@ statName CmpEqByWord = "cmp_eq_by_word"
 statName CmpNeByWord = "cmp_ne_by_word"
 statName InternDelta = "intern_delta"
 statName SeqCTypeShortcut = "seq_ctype_shortcut"
+statName ApSubShortcut = "apsub_shortcut"
+statName TvShortcut = "tv_shortcut"
+statName ExpandSynShortcut = "expandsyn_shortcut"
+statName InstShortcut = "inst_shortcut"
+statName MguShortcut = "mgu_shortcut"
+statName MatchShortcut = "match_shortcut"
+statName GetFreeTShortcut = "getfreet_shortcut"
+statName ChkTApShortcut = "chktap_shortcut"
 
 {-# NOINLINE ctypeStatsOn #-}
 ctypeStatsOn :: Bool
