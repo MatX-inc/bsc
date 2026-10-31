@@ -21,7 +21,7 @@ import CtxRed (cCtxReduceIO)
 import Deriving (derive)
 import Error (ErrorHandle, bsError, initErrorHandle)
 import FStringCompat (mkFString)
-import FixupDefs (fixupDefs, mkDictBuckets)
+import FixupDefs (fixupDefs, mkDictBuckets, mkDictRedirects)
 import Flags (Flags (..))
 import FlagsDecode (adjustFinalFlags, decodeFlags, defaultFlags)
 import IConv (iConvPackage)
@@ -93,7 +93,8 @@ compileStrings errh flags source = do
   let found = [b | CImpSign _ _ (CSignature i _ _ _) <- impsigs, Just b <- [M.lookup (getIdString i) binmap]]
       binmods = [(p, h) | (_, _, _, p, h) <- found]
   internalSymt <- mkSymTab errh (replaceImportedSignatures mctx [s | (_, _, s, _, _) <- found])
-  let (imodf, alldefsList) = fixupDefs (mkDictBuckets binmods) imod binmods
+  let dictBuckets = mkDictBuckets binmods
+      (imodf, alldefsList) = fixupDefs (mkDictRedirects dictBuckets imod binmods) imod binmods
       IPackage _ _ _ defs atf = iSimplify (iSimpDicts imodf)
       alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
       atfAll = foldl' mergeIATFCaches atf [ipkg_atf_cache m | (m, _) <- binmods]
