@@ -1,0 +1,28 @@
+# Tests for the walked-bit table of interned ITypes (IType.hs, instance
+# NFData IType).  Only the first rnf of an interior node or tycon leaf
+# walks its fields; a later rnf finds the node's bit and returns.  The
+# first walk forces what the instance forced before, in the same order,
+# and a later walk forced nothing, so no string's first interning moves:
+# the .bo, the generated Verilog and the intern table
+# (-trace-intern-table) must be identical by default, under
+# -check-rnf-ground (every visit that finds a bit walks the fields as
+# well, and that walk must intern no string and build no node) and under
+# -hack-no-rnf-ground (no bit is read or set).
+
+erase RnfGround.bo
+compile_backend_pass RnfGround.bs {-check-rnf-ground -trace-intern-table}
+move RnfGround.bo RnfGround.checked.bo
+move sysRnfGround.v sysRnfGround.checked.v
+move RnfGround.intern.json RnfGround.checked.intern.json
+
+erase RnfGround.bo
+compile_backend_pass RnfGround.bs {-trace-intern-table}
+compare_file RnfGround.bo RnfGround.checked.bo
+compare_file sysRnfGround.v sysRnfGround.checked.v
+compare_file RnfGround.intern.json RnfGround.checked.intern.json
+
+erase RnfGround.bo
+compile_backend_pass RnfGround.bs {-hack-no-rnf-ground -trace-intern-table}
+compare_file RnfGround.bo RnfGround.checked.bo
+compare_file sysRnfGround.v sysRnfGround.checked.v
+compare_file RnfGround.intern.json RnfGround.checked.intern.json
