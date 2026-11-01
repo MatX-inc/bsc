@@ -415,12 +415,17 @@ type HeapPointer = Int
 -- type Heap s = STArray s HeapPointer (Maybe HeapCell)
 -- immutable heap used at the end of evaluation
 -- type IHeap = Array HeapPointer (Maybe HeapCell)
+-- A cell is in one of four states.  HUnev and HHole are the two kinds
+-- of thunk: an unevaluated expression, and a hole that exists only while
+-- a module fixpoint (PrimModuleFix) is being forced and that evaluation
+-- must not demand (the EModuleLoop error in evalHeap is the analogue of
+-- GHC's BLACKHOLE).  HWHNF and HNF hold the evaluated expression.
 data HeapCell = HUnev { hc_hexpr :: HExpr, hc_name :: NameInfo }
               | HWHNF { hc_pexpr :: PExpr, hc_name :: NameInfo }
               | HNF { hc_pexpr :: PExpr, hc_wire_set :: HWireSet,
                       hc_name :: NameInfo }
-              | HLoop { hc_name :: NameInfo }
-        deriving (Show, Eq, Ord)
+              | HHole { hc_name :: NameInfo }
+        deriving (Show)
 
 -- should I drop the predicate for better printing of error messages?
 heapCellToHExpr :: HeapCell -> HExpr
@@ -428,13 +433,13 @@ heapCellToHExpr (HUnev { hc_hexpr = e }) = e
 -- heapCellToHExpr (Harray { hc_hexpr = e }) = e
 heapCellToHExpr (HWHNF { hc_pexpr = p }) = (pExprToHExpr p)
 heapCellToHExpr (HNF { hc_pexpr = p }) = (pExprToHExpr p)
-heapCellToHExpr (HLoop mn) = internalError ("heapCellToHExpr.HLoop: " ++ ppReadable mn)
+heapCellToHExpr (HHole mn) = internalError ("heapCellToHExpr.HHole: " ++ ppReadable mn)
 
 heapCellToPExpr :: HeapCell -> PExpr
 heapCellToPExpr (HWHNF { hc_pexpr = p }) = p
 heapCellToPExpr (HNF { hc_pexpr = p }) = p
 heapCellToPExpr (HUnev { hc_hexpr = e }) = internalError("heapCellToPExpr.HUnev: " ++ ppReadable e)
-heapCellToPExpr (HLoop mn) = internalError ("heapCellToPExpr.HLoop: " ++ ppReadable mn)
+heapCellToPExpr (HHole mn) = internalError ("heapCellToPExpr.HHole: " ++ ppReadable mn)
 
 instance PPrint HeapCell where
         pPrint d p (HUnev { hc_hexpr = e, hc_name = name}) =
@@ -445,8 +450,40 @@ instance PPrint HeapCell where
             text "HWHNF" <+> pPrint d p e <+> pPrint d 0 name
         pPrint d p (HNF { hc_pexpr = e, hc_name = name, hc_wire_set = ws}) =
             text "HNF" <+> pPrint d p e <+> pPrint d 0 name <+> pPrint d 0 ws
-        pPrint d p (HLoop name) =
-            text "HLoop" <+> pPrint d 0 name
+        pPrint d p (HHole name) =
+            text "HHole" <+> pPrint d 0 name
+
+-- Equality and ordering are over the state of the cell: its expression,
+-- predicate, wire set and name, compared as the derived instances did
+-- (constructor order, then the fields in declaration order).  A field
+-- that describes the cell rather than its value (bookkeeping the
+-- evaluator keeps about how the cell came to be) must never enter the
+-- comparison, so the instances name the compared fields explicitly
+-- instead of being derived.  The only comparison in the compiler is a
+-- -trace-debug sort of (pointer, cell) pairs, which the pointer decides.
+instance Eq HeapCell where
+    c1 == c2 = compare c1 c2 == EQ
+
+instance Ord HeapCell where
+    compare (HUnev { hc_hexpr = e1, hc_name = n1 })
+            (HUnev { hc_hexpr = e2, hc_name = n2 }) =
+        compare (e1, n1) (e2, n2)
+    compare (HWHNF { hc_pexpr = p1, hc_name = n1 })
+            (HWHNF { hc_pexpr = p2, hc_name = n2 }) =
+        compare (p1, n1) (p2, n2)
+    compare (HNF { hc_pexpr = p1, hc_wire_set = w1, hc_name = n1 })
+            (HNF { hc_pexpr = p2, hc_wire_set = w2, hc_name = n2 }) =
+        compare (p1, w1, n1) (p2, w2, n2)
+    compare (HHole { hc_name = n1 }) (HHole { hc_name = n2 }) =
+        compare n1 n2
+    compare c1 c2 = compare (heapCellRank c1) (heapCellRank c2)
+
+-- the constructor order of HeapCell, for comparing cells in different states
+heapCellRank :: HeapCell -> Int
+heapCellRank (HUnev {}) = 0
+heapCellRank (HWHNF {}) = 1
+heapCellRank (HNF {}) = 2
+heapCellRank (HHole {}) = 3
 
 newtype HeapData = HeapData (IORef (HeapCell))
 
@@ -2742,7 +2779,7 @@ unheap (P p e_orig@(IRefT _ _ _ r)) = do
         e <- getHeap r
         case e of
             (HUnev {}) -> internalError ("IExpandUtils.unheap: unevaluated")
-            (HLoop name) -> internalError("IExpandUtils.unheap: HLoop " ++ ppReadable name)
+            (HHole name) -> internalError("IExpandUtils.unheap: HHole " ++ ppReadable name)
             (HWHNF { hc_pexpr = P _ (IRefT _ _ _ _) }) ->
                 internalError ("IExpandUtils.unheap: WHNF IRefT")
             (HWHNF { hc_pexpr = P p' e, hc_name = n } ) ->
@@ -2760,7 +2797,7 @@ unheapU e_orig@(IRefT _ _ _ r) = do
         e <- getHeap r
         case e of
             (HUnev { hc_hexpr = e }) -> return e
-            (HLoop name) -> internalError ("unheapU: HLoop " ++ ppReadable name)
+            (HHole name) -> internalError ("unheapU: HHole " ++ ppReadable name)
             (HWHNF { hc_pexpr = P _ (IRefT _ _ _ _) } ) ->
                 internalError ("unheapU: IRefT")
             (HWHNF { hc_pexpr = e, hc_name = n }) ->
@@ -2786,7 +2823,7 @@ unheapNFNoImp e_orig@(IRefT _ _ _ r) = do
         e <- getHeap r
         case e of
             (HUnev { }) -> internalError ("unheapNFNoImp: HUnev " ++ ppReadable (e_orig, e))
-            (HLoop name) -> internalError ("unheapNFNoImp: HLoop " ++ ppReadable name)
+            (HHole name) -> internalError ("unheapNFNoImp: HHole " ++ ppReadable name)
             (HWHNF { }) -> internalError ("unheapNFNoImp: HWHNF " ++ ppReadable (e_orig, e))
             (HNF { hc_pexpr = (P _ e) }) ->
                 return e -- (mapIExprPosition cross (e_orig, e))
@@ -3445,7 +3482,7 @@ instance Wireable HExpr where
             case cell of
               (HUnev { hc_hexpr = he }) -> P pTrue he
               (HWHNF { hc_pexpr = pe }) -> pe
-              (HLoop name) -> internalError ("IExpand.extractWires HLoop: " ++
+              (HHole name) -> internalError ("IExpand.extractWires HHole: " ++
                                              ppReadable name)
               (HNF { hc_pexpr = pe }) -> pe
     -- might "p" include wires from the other fields?
@@ -3484,8 +3521,8 @@ instance Wireable HExpr where
                 -- XXX should be evaluated because clock ops are strict
                 (HUnev { hc_hexpr = e }) -> ?upd ref e >>= extractWires
                 (HWHNF { hc_pexpr = P p e }) -> ?upd ref e >>= \ e' -> extractWires (P p e')
-                (HLoop name) ->
-                    internalError ("IExpand.extractWires HLoop: " ++ ppReadable name)
+                (HHole name) ->
+                    internalError ("IExpand.extractWires HHole: " ++ ppReadable name)
                 (HNF { hc_pexpr = P p e, hc_wire_set = ws}) ->
                     -- attempt to reuse the WireSet if possible
                     case (?mkws ws) of

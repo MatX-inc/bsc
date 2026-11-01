@@ -1672,7 +1672,7 @@ handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModule
         when doDebug $ traceM "handlePrim: enter PrimModuleFix"
         showModProgress ns ("Attempting recursive module instantiation")
         let name = stateLocToId ns
-        (ptr, ref) <- addHeapCell "prim-mod-fix" (HLoop (Just name))
+        (ptr, ref) <- addHeapCell "prim-mod-fix" (HHole (Just name))
         let rt = IRefT t ptr (getPosition name) ref
         stno <- getStateNo
         old_rblobs <- getSavedRules
@@ -3023,8 +3023,8 @@ walkNF e =
                 HUnev { hc_hexpr = e } -> do
                     e' <- unheapAll e
                     internalError ("walkNF unev: " ++ ppReadable (e, e'))
-                HLoop name ->
-                    internalError ("walkNF loop: " ++ ppReadable name)
+                HHole name ->
+                    internalError ("walkNF hole: " ++ ppReadable name)
                 -- reuse ref for better CSE
                 -- duplication of pred in ref is harmless because of set-based predicates
                 HNF { hc_pexpr = P p e, hc_wire_set =  ws} -> do
@@ -3443,9 +3443,9 @@ evalHeap :: (HeapPointer, HeapData) -> G PExpr
 evalHeap (ptr, ref) = do
     hc <- getHeap ref
     case hc of
-     HLoop (Just name) -> errG (getPosition name, EModuleLoop (pfpString name))
+     HHole (Just name) -> errG (getPosition name, EModuleLoop (pfpString name))
      -- XXX should not be possible (we hope)
-     HLoop (Nothing)   -> errG (noPosition, EModuleLoop "<unknown>")
+     HHole (Nothing)   -> errG (noPosition, EModuleLoop "<unknown>")
      HWHNF { hc_pexpr = e } -> return e
      HNF { hc_pexpr = e } -> return e
      HUnev { hc_hexpr = e, hc_name = expr_name } -> do
