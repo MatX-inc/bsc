@@ -33,7 +33,7 @@ module IExpandUtils(
         addHeapCell, addHeapUnev, newClock, newReset,
         addHeapPred,
         stampFor, stampForKey, pushDefFrame, pushRootFrame,
-        withMetaFrame, withCellMetaFrame,
+        withMetaFrame, withCellMetaFrame, withCellDefFrame,
         addInputClock, addOutputClock, addInputReset, addOutputReset,
         getClkGateUses, clearClkGateUses, setClkGateUses,
         assertNoClkGateUses, addClkGateUse, addInhighClkGate,
@@ -112,8 +112,8 @@ import Changed
 import IConv(iConvT)
 import IExpandMeta(MetaStore, SiteTable, SiteKind(..), SiteKey, idSiteKey,
                    primSiteKey, boundSiteKey, Frame, CellMeta, headSiteOf,
-                   newMetaStore, lookupSite, mintSite, pushFrame, pushRoot,
-                   swapFrame, swapCellFrame, stampMeta, readSiteTable)
+                   cellDefSite, newMetaStore, lookupSite, mintSite, pushFrame,
+                   pushRoot, swapFrame, swapCellFrame, stampMeta, readSiteTable)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -567,7 +567,14 @@ data GStateRO = GStateRO {
         flags :: !Flags,
         -- the evaluator metadata store (sites, frames, the frame
         -- register); one per elaboration, created by runG
-        metaStore :: !MetaStore
+        metaStore :: !MetaStore,
+        -- the definitions carrying DefP_Recursive, the recursion points
+        -- (FixupDefs.markRecursiveDefs); only their sites enter a
+        -- frame's recursive-site map.  Strict: the driver builds the set
+        -- from the definition list, so initGState forces that list's
+        -- spine and every definition's property list, which the .bo
+        -- reader decoded at load; no string is interned.
+        recDefs :: !(S.Set Id)
         }
 
 -- full evaluator state
@@ -673,11 +680,11 @@ data GState = GState {
         }
 
 initGState :: ErrorHandle -> Flags ->
-              SymTab -> M.Map Id HExpr ->
+              SymTab -> M.Map Id HExpr -> S.Set Id ->
               IATFCache -> MetaStore ->
               Id -> Bool -> [PProp] ->
               GState
-initGState errh flags symt alldefs atf_cache store defId is_noinlined_func pps =
+initGState errh flags symt alldefs recdefs atf_cache store defId is_noinlined_func pps =
     let gsro = GStateRO { errHandle = errh,
                           symtab = symt,
                           checkMaxStep = redStepsMaxIntervals flags /= 0,
@@ -685,7 +692,8 @@ initGState errh flags symt alldefs atf_cache store defId is_noinlined_func pps =
                           stepWarnInterval = redStepsWarnInterval flags,
                           flags = flags,
                           defenv = alldefs,
-                          metaStore = store
+                          metaStore = store,
+                          recDefs = recdefs
                         }
         gs = GState { stepNo = 0,
                       nextWarnStep = redStepsWarnInterval flags,
@@ -753,11 +761,11 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            goutput :: a }
 
 runG :: ErrorHandle -> Flags ->
-        SymTab -> M.Map Id HExpr ->
+        SymTab -> M.Map Id HExpr -> S.Set Id ->
         IATFCache ->
         Id -> Bool -> [PProp] -> G a ->
         IO (GOutput a)
-runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
+runG errh flags symt alldefs recdefs atf_cache defId is_noinlined_func pps gFn =
   do -- Under -metadata-scramble every number the metadata store mints is
      -- perturbed with a seed taken from the clock, so that no two runs
      -- agree and nothing can depend on the store (see IExpandMeta);
@@ -768,7 +776,7 @@ runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
                      return (if s == 0 then 1 else s)
              else return 0
      store <- newMetaStore seed
-     let gs = initGState errh flags symt alldefs atf_cache store defId is_noinlined_func pps
+     let gs = initGState errh flags symt alldefs recdefs atf_cache store defId is_noinlined_func pps
      (retval, gs') <- runStateT gFn gs
      -- convert the relevant info in the final GState into the GOutput
      do
@@ -2695,6 +2703,25 @@ withCellMetaFrame cell act = do
   _ <- liftIO (swapFrame st old)
   return r
 
+-- Run the application of a cell's value under a frame of the cell's
+-- definition site, when the cell holds a definition's partial
+-- application.  The unfolding of a definition that returns a function
+-- is completed only when that function meets its arguments, which
+-- happens after the demanded cell's own frame was restored; the frame
+-- pushed here is that completion, and an iteration of a recursion
+-- point continues its count in it.  Any other cell's value is applied
+-- under the current frame.
+{-# INLINE withCellDefFrame #-}
+withCellDefFrame :: HeapData -> G a -> G a
+withCellDefFrame ref act = do
+  cell <- getHeap ref
+  case cellDefSite (hc_meta cell) of
+    Nothing -> act
+    Just (site, recursive) -> do
+      st <- getMetaStore
+      fr <- liftIO (pushFrame st site recursive)
+      withMetaFrame fr act
+
 -- Push the frame of an unfolding of the definition i under the current
 -- frame; the caller runs the unfolding under it.
 pushDefFrame :: Id -> G Frame
@@ -2720,8 +2747,9 @@ noSiteFacts = (False, False)
 -- weak head normal form before elaboration (the typechecker's Ids, the
 -- .bo reader's per-def names, the lifted dictionaries' through the
 -- ISimpDicts map), so forcing the environment's spine interns nothing.
--- The recursive fact is False until the recursion-point property exists.
--- The lookup comes first so that the facts are built only on a miss.
+-- The recursive fact is the definition's DefP_Recursive property,
+-- collected into recDefs by the driver.  The lookup comes first so that
+-- the facts are built only on a miss.
 mintDefSite :: MetaStore -> Id -> G (Int, Bool)
 mintDefSite st i = do
   let key = idSiteKey SKDef i
@@ -2730,12 +2758,14 @@ mintDefSite st i = do
     Just hit -> return hit
     Nothing -> do
       denv <- getDefEnv
+      recs <- getRecDefs
       let pos = getIdPosition i
           useSite = pos /= noPosition &&
                     case M.lookupIndex i denv of
                       Just ix -> getIdPosition (fst (M.elemAt ix denv)) /= pos
                       Nothing -> False
-      liftIO (mintSite st key (useSite, False))
+          recursive = S.member i recs
+      liftIO (mintSite st key (useSite, recursive))
 
 -- The header of a cell created now for the expression e: the site of
 -- e's root node and the current frame.  The site is read in O(1) from
@@ -2762,7 +2792,7 @@ stampFor e = do
                           return s
             RSKey key -> liftIO (fst <$> mintSite st key noSiteFacts)
             RSHead r -> do cell <- getHeap r
-                           return (headSiteOf (hc_meta cell))
+                           return (headSiteOf st (hc_meta cell))
   liftIO (stampMeta st site)
 
 -- the header of a cell whose site key the caller has in hand
@@ -2887,6 +2917,11 @@ getSymTab = do s <- get
 getDefEnv :: G (M.Map Id HExpr)
 getDefEnv = do s <- get
                return (defenv (ro s))
+
+{-# INLINE getRecDefs #-}
+getRecDefs :: G (S.Set Id)
+getRecDefs = do s <- get
+                return (recDefs (ro s))
 
 {-# INLINE getFlags #-}
 getFlags :: G Flags

@@ -253,18 +253,18 @@ iExpandPref = "__h"
 --   except when they are simple enough to be inlined.
 --   The actual elaboration work is done by iExpandModuleDef
 iExpand :: ErrorHandle -> Flags ->
-           SymTab -> M.Map Id HExpr ->
+           SymTab -> M.Map Id HExpr -> S.Set Id ->
            IATFCache ->
            Bool -> [PProp] -> HDef ->
            IO (IModule HeapData)
-iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
+iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
   -- unbuffer output if we're tracing
   when (doAnyTrace || showElabProgress flags) $
       do hSetBuffering stdout LineBuffering
          hSetBuffering stderr LineBuffering
   -- execute the static elaboration
   -- go is of type GOutput X, where X is the large tuple output of iExpandModuleDef
-  go <- runG errh flags symt alldefs atf_cache mi is_noinlined_func pps $
+  go <- runG errh flags symt alldefs recdefs atf_cache mi is_noinlined_func pps $
             iExpandModuleDef def
   -- trace the steps and heap size
   when doTraceSteps $ putStrLn ("expansion steps: " ++ (show (go_steps go)))
@@ -425,7 +425,7 @@ iExpandStrings errh flags symt alldefs atf_cache (IDef i t e _) = do
                      EGeneric ("Cannot evaluate " ++ quote (getIdString i) ++
                                " to strings: its type is " ++ ppString t ++
                                ", not List String"))]
-  go <- runG errh flags symt alldefs atf_cache i False [] $
+  go <- runG errh flags symt alldefs S.empty atf_cache i False [] $
             pushTopValueSchedNameScope i >> evalStringList e
   return (fst (goutput go))
 
@@ -3477,7 +3477,9 @@ evalAp' (IRefT t ptr _ ref)              as = do
 --        when (p /= pTrue) $ traceM ("implicit function condition lost: " ++ ppReadable (p, e)) -- XXX
         let e' = iePrimWhenPred t p e
         when doDebug $ traceM ("iref ap " ++ ppReadable (mkAp e as))
-        evalAp "IRefT" e' as
+        -- a cell holding a definition's partial application completes
+        -- that definition's unfolding here (see withCellDefFrame)
+        withCellDefFrame ref (evalAp "IRefT" e' as)
 -- (there are no variables because they have been turned into IModVars)
 -- XXX redundant, as it's caught by last clause?
 evalAp' e@(IVar i)             as = internalError ("evalAp IVar: " ++ ppReadable (i,as))

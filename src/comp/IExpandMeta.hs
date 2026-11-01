@@ -3,7 +3,7 @@ module IExpandMeta(
         SiteKind(..), SiteKey, idSiteKey, primSiteKey, rootSiteKey, boundSiteKey,
         SiteRow(..), SiteTable, siteRow, siteTableSize,
         -- frames and cell headers
-        Frame, CellMeta, headSiteOf,
+        Frame, CellMeta, headSiteOf, cellDefSite,
         -- the store and the hooks the evaluator calls
         MetaStore, newMetaStore, lookupSite, mintSite, pushFrame, pushRoot,
         swapFrame, swapCellFrame, stampMeta, readSiteTable,
@@ -39,11 +39,12 @@ import Prim(PrimOp)
 --    String that is never interned; rendering reads existing strings.
 --  * Every field is strict; a frame points only at frames already built.
 --  * Nothing here allocates a heap cell, forces a cell or reads one.
---  * Under -metadata-scramble every number the store mints (site ids,
---    frame ids, counts, the row bits) is perturbed with a per-run seed
---    where it is created, so an evaluator decision that read the store
---    would change the output of the scramble run.  The dump is then
---    suppressed, because the store's content is garbage by design.
+--  * Under -metadata-scramble every number the store mints (site ids
+--    and their fact bits, frame ids, counts, the row bits) is perturbed
+--    with a per-run seed where it is created, so an evaluator decision
+--    that read the store would change the output of the scramble run.
+--    The dump is then suppressed, because the store's content is
+--    garbage by design.
 
 -- The kind of expression a site stands for.  SKBound is a boundary
 -- constant (a port, a parameter, a clock, a literal, ...) whose
@@ -103,26 +104,43 @@ data SiteRow = SiteRow { sr_key :: !SiteKey,
 -- bit), kept beside the key so that a lookup hit reads nothing else.
 data SiteRef = SiteRef {-# UNPACK #-} !Int !Bool
 
+-- st_recKeys maps the site of a recursion point's reference to the key
+-- its iterations are counted under: the site of the definition itself
+-- (its identifier at no position), so that iterations entered through
+-- different references of one definition (a call site, the definition's
+-- own self-reference) continue one count.
 data SiteTable = SiteTable { st_next :: {-# UNPACK #-} !Int,
                              st_ids :: !(M.Map SiteKey SiteRef),
-                             st_rows :: !(IM.IntMap SiteRow) }
+                             st_rows :: !(IM.IntMap SiteRow),
+                             st_recKeys :: !(IM.IntMap Int) }
 
 emptySiteTable :: SiteTable
-emptySiteTable = SiteTable 1 M.empty IM.empty
+emptySiteTable = SiteTable 1 M.empty IM.empty IM.empty
 
 siteTableSize :: SiteTable -> Int
 siteTableSize t = IM.size (st_rows t)
 
--- A site id whose head-site bit is set names the site of the cell at
--- the head of an application whose head is a heap reference: the
--- application's own site is not known on the mirror (the node carries
--- no annotation), so the cell takes the head cell's site, marked.
--- Row lookups mask the bit.
-headSiteBit :: Int
+-- Three high bits of a site id carry facts the evaluator's hot paths
+-- test without a row lookup.  Bit 58: the site is a definition site.
+-- Bit 59: that definition is a recursion point.  Bit 60: the site was
+-- borrowed from the cell at the head of an application whose head is a
+-- heap reference (the application's own site is not known on the
+-- mirror, the node carries no annotation).  Row lookups mask them.
+-- The scramble seed (a clock reading below 2^41) does not reach them
+-- by xor, so each is set from its fact through perturbBool (insertSite,
+-- headSiteOf) and the poison run inverts all three; cellDefSite, the
+-- one reader on the evaluator's side, then decides every push the
+-- other way, which is store state and must not reach the output.
+defSiteBit, recSiteBit, headSiteBit :: Int
+defSiteBit = bit 58
+recSiteBit = bit 59
 headSiteBit = bit 60
 
+siteBits :: Int
+siteBits = defSiteBit .|. recSiteBit .|. headSiteBit
+
 siteRow :: SiteTable -> Int -> Maybe SiteRow
-siteRow t s = IM.lookup (s .&. complement headSiteBit) (st_rows t)
+siteRow t s = IM.lookup (plainSite s) (st_rows t)
 
 -- A frame: one definition unfolding, or a root.  fr_count is the
 -- iteration count of a recursion point (one more than the count of the
@@ -164,9 +182,24 @@ data CellMeta = CellMeta { cm_site :: {-# UNPACK #-} !Int,
 instance Show CellMeta where
     show (CellMeta s f) = "CellMeta " ++ show s ++ " (" ++ show f ++ ")"
 
+-- the site of a cell that borrows the site of the cell at its head
 {-# INLINE headSiteOf #-}
-headSiteOf :: CellMeta -> Int
-headSiteOf m = cm_site m .|. headSiteBit
+headSiteOf :: MetaStore -> CellMeta -> Int
+headSiteOf st m
+  | perturbBool st True = cm_site m .|. headSiteBit
+  | otherwise = cm_site m .&. complement headSiteBit
+
+-- The site and recursive bit of a cell that holds a definition's
+-- partial application (its site is a definition site, not borrowed
+-- from a head), or Nothing for any other cell.  Read when a cell's
+-- value is applied, so it tests the bits and touches no table.
+{-# INLINE cellDefSite #-}
+cellDefSite :: CellMeta -> Maybe (Int, Bool)
+cellDefSite m =
+    let s = cm_site m
+    in  if testBit s 58 && not (testBit s 60)
+        then Just (s, testBit s 59)
+        else Nothing
 
 -- The store: the site table, the frame counter, the frame register
 -- (the frame current for the next allocation) and the scramble seed
@@ -210,21 +243,46 @@ mintSite st key facts = do
       Just (SiteRef s r) -> return (s, r)
       Nothing -> do
         let (useSite, recursive) = facts
-            s = perturb st (st_next t)
-            r = perturbBool st recursive
-            row = SiteRow key (perturbBool st useSite) r
-            t' = SiteTable { st_next = st_next t + 1,
-                             st_ids = M.insert key (SiteRef s r) (st_ids t),
-                             st_rows = IM.insert s row (st_rows t) }
-        writeIORef (ms_sites st) $! t'
+        (s, r, t') <- insertSite st t key useSite recursive
+        -- a recursion point's reference counts its iterations under the
+        -- definition's own position-free site, minted here when needed
+        t'' <- case key of
+                 IdKey b q p SKDef | r, p /= noPosition -> do
+                   let dkey = IdKey b q noPosition SKDef
+                   (dk, _, td) <- case M.lookup dkey (st_ids t') of
+                                    Just (SiteRef dk dr) -> return (dk, dr, t')
+                                    Nothing -> insertSite st t' dkey False recursive
+                   return td { st_recKeys = IM.insert (plainSite s) dk (st_recKeys td) }
+                 _ -> return t'
+        writeIORef (ms_sites st) $! t''
         return (s, r)
 
+-- the row of a new site: its id (with the fact bits) and recursive bit
+insertSite :: MetaStore -> SiteTable -> SiteKey -> Bool -> Bool
+           -> IO (Int, Bool, SiteTable)
+insertSite st t key useSite recursive = do
+    let s0 = perturb st (st_next t)
+        r = perturbBool st recursive
+        isDef = perturbBool st (siteKeyKind key == SKDef)
+        s = s0 .|. (if isDef then defSiteBit else 0)
+               .|. (if r then recSiteBit else 0)
+        row = SiteRow key (perturbBool st useSite) r
+        t' = t { st_next = st_next t + 1,
+                 st_ids = M.insert key (SiteRef s r) (st_ids t),
+                 st_rows = IM.insert s0 row (st_rows t) }
+    return (s, r, t')
+
+plainSite :: Int -> Int
+plainSite s = s .&. complement siteBits
+
 -- Push a frame for a site under the register's frame and return it
--- (the caller runs the unfolding under it with withFrame).  A push at
--- a recursion point whose site is already on the chain continues that
--- iteration: the new frame's parent is the predecessor's parent and its
--- count one more; the frames between the two iterations belong to the
--- previous iteration's body and stay on the cells they stamped.
+-- (the caller runs the unfolding between two swaps).  A push at a
+-- recursion point whose definition is already on the chain continues
+-- that iteration: the new frame's parent is the predecessor's parent
+-- and its count one more; the frames between the two iterations belong
+-- to the previous iteration's body and stay on the cells they stamped.
+-- The map is keyed by the definition (st_recKeys), the frame keeps the
+-- site of the reference that entered the iteration.
 pushFrame :: MetaStore -> Int -> Bool -> IO Frame
 pushFrame st site recursive = do
     parent <- readIORef (ms_frame st)
@@ -232,16 +290,19 @@ pushFrame st site recursive = do
     writeIORef (ms_nextFrame st) $! n + 1
     let fid = perturb st n
         rec = frameRec parent
-        fr = case (recursive, IM.lookup site rec) of
-               (True, Just (RecEntry c p)) ->
-                   let c' = perturb st (c + 1)
-                   in  Frame fid site c' p
-                             (IM.insert site (RecEntry c' p) (frameRec p))
-               (True, Nothing) ->
-                   let c1 = perturb st 1
-                   in  Frame fid site c1 parent
-                             (IM.insert site (RecEntry c1 parent) rec)
-               (False, _) -> Frame fid site (perturb st 1) parent rec
+    fr <- if recursive
+          then do t <- readIORef (ms_sites st)
+                  let key = IM.findWithDefault site (plainSite site) (st_recKeys t)
+                  return $ case IM.lookup key rec of
+                    Just (RecEntry c p) ->
+                        let c' = perturb st (c + 1)
+                        in  Frame fid site c' p
+                                  (IM.insert key (RecEntry c' p) (frameRec p))
+                    Nothing ->
+                        let c1 = perturb st 1
+                        in  Frame fid site c1 parent
+                                  (IM.insert key (RecEntry c1 parent) rec)
+          else return (Frame fid site (perturb st 1) parent rec)
     return $! fr
 
 -- Push a root frame: a rule, a method or an instantiation.  A root
