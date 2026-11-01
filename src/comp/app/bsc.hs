@@ -95,6 +95,7 @@ import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
 import CType(enableCanonIds, disableCanonIds, cTypeStats)
+import IType(internStats)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
@@ -193,12 +194,14 @@ main = do
     bsCatch (hmain args) `CE.finally` (dumpCTypeStats >> dumpInternTable)
 
 -- Hidden flag -trace-ctype-stats: print the CType canonical-identity
--- counters at exit, including on the exitWith paths (hence finally).
+-- counters and the IType intern-table sizes at exit, including on the
+-- exitWith paths (hence finally).
 dumpCTypeStats :: IO ()
 dumpCTypeStats = when ("-trace-ctype-stats" `elem` progArgs) $ do
     stats <- cTypeStats
+    sizes <- internStats
     hPutStr stderr (unlines [ "ctype-stats " ++ name ++ " " ++ show n
-                            | (name, n) <- stats ])
+                            | (name, n) <- stats ++ sizes ])
 
 -- Hidden flag -trace-intern-table: write the SpeedyString table at exit,
 -- one "id<TAB>spelling" line per entry in id order, the spelling as show

@@ -1,0 +1,39 @@
+# Tests for the walked-bit table of interned ITypes (IType.hs, instance
+# NFData IType).  The first rnf of an interior node or tycon leaf walks
+# its fields as the instance always did and then sets the node's bit;
+# every later rnf finds the bit and returns at once, so the deepseq at
+# every phase boundary (TopUtils.dump) walks a shared type once instead
+# of once per occurrence and per dump.  The first walk forces what the
+# instance forced before, in the same order, and a later walk forced
+# nothing, so no string's first interning moves: the .bo, the generated
+# Verilog and the intern table (-trace-intern-table) must be identical
+# by default, under -check-rnf-ground (the walk of the fields runs on
+# every visit that found a bit as well, and must intern no string and
+# build no node) and under -hack-no-rnf-ground (no bit is read or set:
+# the walk on every rnf, as before).  -trace-ctype-stats prints
+# rnf_ground_walk, the first walks, and rnf_ground_skip, the visits
+# that found a bit set; both are zero under -hack-no-rnf-ground.
+
+erase RnfGround.bo
+compile_backend_pass RnfGround.bs {-check-rnf-ground -trace-intern-table -trace-ctype-stats}
+find_regexp RnfGround.bs.bsc-out {ctype-stats rnf_ground_skip [1-9]}
+find_regexp RnfGround.bs.bsc-out {ctype-stats rnf_ground_walk [1-9]}
+move RnfGround.bo RnfGround.checked.bo
+move sysRnfGround.v sysRnfGround.checked.v
+move RnfGround.intern.tsv RnfGround.checked.intern.tsv
+
+erase RnfGround.bo
+compile_backend_pass RnfGround.bs {-trace-intern-table -trace-ctype-stats}
+find_regexp RnfGround.bs.bsc-out {ctype-stats rnf_ground_skip [1-9]}
+find_regexp RnfGround.bs.bsc-out {ctype-stats rnf_ground_walk [1-9]}
+compare_file RnfGround.bo RnfGround.checked.bo
+compare_file sysRnfGround.v sysRnfGround.checked.v
+compare_file RnfGround.intern.tsv RnfGround.checked.intern.tsv
+
+erase RnfGround.bo
+compile_backend_pass RnfGround.bs {-hack-no-rnf-ground -trace-intern-table -trace-ctype-stats}
+find_n_strings RnfGround.bs.bsc-out {ctype-stats rnf_ground_skip 0} 1
+find_n_strings RnfGround.bs.bsc-out {ctype-stats rnf_ground_walk 0} 1
+compare_file RnfGround.bo RnfGround.checked.bo
+compare_file sysRnfGround.v sysRnfGround.checked.v
+compare_file RnfGround.intern.tsv RnfGround.checked.intern.tsv

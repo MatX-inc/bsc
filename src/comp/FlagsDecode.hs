@@ -500,6 +500,7 @@ traceflags :: [String]
 traceflags = [
           "check-csubst-shortcut",
           "check-ctype-ids",
+          "check-rnf-ground",
           "check-writebin",
           "debug-eval-free-vars",
           "no-ctype-ids",
@@ -582,6 +583,7 @@ traceflags = [
           "hack-no-icheck-package",
           "hack-no-icheck-passes",
           "hack-no-itype-ftv-cache",
+          "hack-no-rnf-ground",
           "hack-no-writebin",
           "hack-strict-inst-tree",
           "outlaw-sv-kws-as-classic-ids",

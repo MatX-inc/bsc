@@ -721,10 +721,13 @@ eqWordOn :: Bool
 eqWordOn = not ("-hack-no-eq-word" `elem` progArgs)
 
 -- Counters, kept and printed (by bsc at exit) only under
--- -trace-ctype-stats; every bump is a no-op otherwise.  The last two
--- belong to the .bo/.ba writer (BinData.indexBytes): the indices it
--- checked against the generic encoder under -check-writebin, and the
--- ones it encoded generically under -hack-no-writebin.
+-- -trace-ctype-stats; every bump is a no-op otherwise.  WriteBinChecked
+-- and WriteBinGeneric belong to the .bo/.ba writer (BinData.indexBytes):
+-- the indices it checked against the generic encoder under
+-- -check-writebin, and the ones it encoded generically under
+-- -hack-no-writebin.  The last two belong to the rnf memo of interned
+-- ITypes (IType.hs, NFData IType): the first walks of interned nodes,
+-- and the visits answered from a node's bit.
 data CTypeStat
     = TApBuilt | TConBuilt | PreGateBuilt | TableHit | TableNew
     | RefuseChild | RefuseUnqual | RefuseTyStr | LeafRecompute
@@ -735,6 +738,7 @@ data CTypeStat
     | ChkTApShortcut | IConvMemoHit | IConvMemoMiss
     | CSubstShortcut | CSubstNodeShortcut
     | WriteBinChecked | WriteBinGeneric
+    | RnfGroundWalk | RnfGroundSkip
     deriving (Eq, Ord, Enum, Bounded)
 
 statName :: CTypeStat -> String
@@ -769,6 +773,8 @@ statName CSubstShortcut = "csubst_shortcut"
 statName CSubstNodeShortcut = "csubst_node_shortcut"
 statName WriteBinChecked = "writebin_checked"
 statName WriteBinGeneric = "writebin_generic"
+statName RnfGroundWalk = "rnf_ground_walk"
+statName RnfGroundSkip = "rnf_ground_skip"
 
 {-# NOINLINE ctypeStatsOn #-}
 ctypeStatsOn :: Bool
