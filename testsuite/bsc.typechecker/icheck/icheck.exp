@@ -1,0 +1,20 @@
+# Tests for -trace-intern-table, which writes the SpeedyString table
+# when bsc exits: every interned spelling with its id, one
+# "id<TAB>spelling" line per entry in id order.  Ids compare by intern
+# id, so a change that moves the first forcing of a string can change
+# Map and Set orders and the generated names with them; two compiles
+# whose tables are identical interned the same strings in the same
+# order.  The dump goes to the file named by BSC_INTERN_DUMP, or without
+# it next to the .bo as <package>.intern.tsv.  Two compiles of the same
+# source must leave identical tables, and the table starts at id 0.
+
+erase ICheck.bo
+compile_backend_pass ICheck.bs {-trace-intern-table}
+find_regexp ICheck.intern.tsv {^0\t"}
+move ICheck.intern.tsv ICheck.default.intern.tsv
+
+erase ICheck.bo
+set ::env(BSC_INTERN_DUMP) "ICheck.env.intern.tsv"
+compile_backend_pass ICheck.bs {-trace-intern-table}
+unset ::env(BSC_INTERN_DUMP)
+compare_file ICheck.env.intern.tsv ICheck.default.intern.tsv

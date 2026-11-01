@@ -62,6 +62,9 @@ module_*.cxx
 *.expandif
 *.dump
 
+# Interned-string tables written by -trace-intern-table
+*.intern.tsv
+
 # Versions of output files generated with specific flags
 *.no-inline-inout
 *.no-inline-reg

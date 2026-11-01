@@ -23,6 +23,8 @@ import Numeric(showOct)
 
 import Control.Monad(when, unless, filterM, liftM, foldM)
 import Control.Monad.Except(runExceptT)
+import Data.IORef(IORef, newIORef, readIORef, writeIORef)
+import System.IO.Unsafe(unsafePerformIO)
 import Control.Concurrent(forkIO)
 import Control.Concurrent.MVar(newEmptyMVar, putMVar, takeMVar)
 import qualified Control.Exception as CE
@@ -57,6 +59,7 @@ import TopUtils
 import SystemCheck(doSystemCheck)
 import BuildSystem
 import IOUtil(getEnvDef, progArgs)
+import SpeedyString(InternSnapshot(..), snapshotInternState)
 
 -- compiler libs
 --import FStringCompat
@@ -188,7 +191,7 @@ main = do
     hSetEncoding stderr utf8
     args <- getArgs
     -- bsc can raise exception,  catch them here  print the message and exit out.
-    bsCatch (hmain args) `CE.finally` dumpCTypeStats
+    bsCatch (hmain args) `CE.finally` (dumpCTypeStats >> dumpInternTable)
 
 -- Hidden flag -trace-ctype-stats: print the CType canonical-identity
 -- counters at exit, including on the exitWith paths (hence finally).
@@ -197,6 +200,31 @@ dumpCTypeStats = when ("-trace-ctype-stats" `elem` progArgs) $ do
     stats <- cTypeStats
     hPutStr stderr (unlines [ "ctype-stats " ++ name ++ " " ++ show n
                             | (name, n) <- stats ])
+
+-- Hidden flag -trace-intern-table: write the SpeedyString table at exit,
+-- one "id<TAB>spelling" line per entry in id order, the spelling as show
+-- prints it, so that two compiles can be compared for the order in which
+-- they interned their strings (Ids compare by intern id).  The file is
+-- the one named by BSC_INTERN_DUMP or, when that is unset, the
+-- <package>.intern.tsv beside the .bo of the package compiled last
+-- (internDumpFile, recorded by compilePackage).  It runs in main's
+-- finally, after every output has been written and forced, so it sees the
+-- table a compile leaves behind; and it interns nothing itself: the path
+-- is a plain String and the entries are read from the table.
+dumpInternTable :: IO ()
+dumpInternTable = when ("-trace-intern-table" `elem` progArgs) $ do
+    env_file <- getEnvDef "BSC_INTERN_DUMP" ""
+    dflt_file <- readIORef internDumpFile
+    case (if null env_file then dflt_file else Just env_file) of
+      Nothing -> return ()
+      Just file -> do
+        snap <- snapshotInternState
+        writeFile file (unlines [ show i ++ "\t" ++ show s
+                                | (i, s) <- internEntries snap ])
+
+{-# NOINLINE internDumpFile #-}
+internDumpFile :: IORef (Maybe FilePath)
+internDumpFile = unsafePerformIO (newIORef Nothing)
 
 -- Use with hugs top level
 hmain :: [String] -> IO ()
@@ -434,6 +462,9 @@ compilePackage
     pwd <- getCurrentDirectory
     let name = createEncodedFullFilePath name_orig pwd
         dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
+
+    -- where -trace-intern-table writes its dump (see dumpInternTable)
+    writeIORef internDumpFile (Just (putInDir (bdir flags) name "intern.tsv"))
 
     clkTime <- getClockTime
     epochTime <- getPOSIXTime
