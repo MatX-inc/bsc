@@ -84,6 +84,15 @@ import Data.Maybe(fromJust, fromMaybe, maybeToList, mapMaybe)
 
 type ExprMap = M.Map Id AExpr
 
+-- The ready condition of each method, by method name (not RDY).  A ready
+-- signal is a value method, so its interface entry is an AIDef.
+readyExprMap :: [AIFace] -> ExprMap
+readyExprMap ifc =
+    M.fromList [ (dropReadyPrefixId i, adef_expr d)
+               | AIDef { aif_name = i, aif_value = d } <- ifc
+               , isRdyId i
+               ]
+
 aAddScheduleDefs :: Flags -> [PProp] -> APackage -> AScheduleInfo ->
                     IO APackage
 aAddScheduleDefs flags pps pkg aschedinfo =
@@ -101,29 +110,20 @@ aAddScheduleDefs flags pps pkg aschedinfo =
          pkgpos    = getPosition (apkg_name pkg)
 
      -- Build maps for ready and enable values and collect
-     -- proof obligations associated with always_ready, always_en, etc.
+     -- proof obligations associated with always_en, etc.
      -- The ExprMaps map from a method name (not RDY) to the expression
      -- for that method's ready or enable condition.
-     let pre_rdy_map = M.fromList $
-                       [ (dropReadyPrefixId (aif_name m), adef_expr $ aif_value m)
-                       | m <- ifc0
-                       , isRdyId (aif_name m)
-                       ]
+     let rdy_map     = readyExprMap ifc0
          pre_en_map  = M.fromList $
                        [ (aif_name m, e)
                        | m <- ifc0
                        , (Just e) <- [getMethodEnExpr m]
                        ]
-         (rdy_map, rdy_proof_obs) =
-             handleAlwaysReady (unsafeAlwaysRdy flags) pkgpos pps pre_rdy_map
          (en_map, enrdy_proof_obs) =
              handleEnableWhenReady pps rdy_map pre_en_map
 
      -- Build proof obligations for always_enabled methods of submodules
      let ensub_proof_obs = handleSubmodAlwaysEnabled mumap insts0
-
-     let proofs1        = proofs0 ++ rdy_proof_obs ++ enrdy_proof_obs ++
-                          ensub_proof_obs
 
      -- Handle user-generated rules by building CAN_FIREs
      -- from their predicates and WILL_FIREs from the conflict
@@ -145,6 +145,14 @@ aAddScheduleDefs flags pps pkg aschedinfo =
                           | (n,cs) <- conflicts
                           ]
          ifc1           = map (replaceReadyExpr rule_map rule_conflicts) ifc0
+
+     -- always_ready is checked on the RDY after urgency: a more urgent
+     -- conflicting rule r makes it CAN_FIRE_m && !WILL_FIRE_r.
+     let final_rdy_map = readyExprMap ifc1
+         rdy_proof_obs = handleAlwaysReady (unsafeAlwaysRdy flags) pkgpos pps final_rdy_map
+
+     let proofs1        = proofs0 ++ rdy_proof_obs ++ enrdy_proof_obs ++
+                          ensub_proof_obs
 
      -- Rewrite all rule predicates to use WILL_FIRE values
      let rules1 = map replaceRulePredicate rules0
@@ -185,16 +193,14 @@ mustBeTrue warn pkgpos m e =
       fn  = (if warn then warnUnlessProof else errorUnlessProof) [msg]
   in (po, MsgFn "ENotAlwaysReady" fn)
 
--- Apply properties that modify ready values by updating the ExprMap
--- entries and accumulating associated proof obligations.
+-- Proof obligations that the RDY of each always_ready method is True.
 handleAlwaysReady :: Bool -> Position -> [PProp] -> ExprMap ->
-                     (ExprMap,[(ProofObligation AExpr, MsgFn)])
-handleAlwaysReady warn pkgpos pps pre_rdy_map =
-  let (m, proofs) = unzip (map doRdy (M.toList pre_rdy_map))
-  in (M.fromList m, concat proofs)
-  where doRdy (n,e) | isAlwaysRdy pps (mkRdyId n) =
-          ((n,e), [mustBeTrue warn pkgpos n e])
-        doRdy (n,e) = ((n,e),[])
+                     [(ProofObligation AExpr, MsgFn)]
+handleAlwaysReady warn pkgpos pps rdy_map =
+  [ mustBeTrue warn pkgpos n e
+  | (n,e) <- M.toList rdy_map
+  , isAlwaysRdy pps (mkRdyId n)
+  ]
 
 handleEnableWhenReady :: [PProp] -> ExprMap -> ExprMap ->
                          (ExprMap,[(ProofObligation AExpr, MsgFn)])

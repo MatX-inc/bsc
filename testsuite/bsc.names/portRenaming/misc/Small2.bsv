@@ -47,6 +47,8 @@ interface Combined#(type a) ;
 module mkSmallTest2 ( Combined#(int) ) ;
 
    FIFOF#(int) tfifo <- mkUGFIFOF ;
+   // for fifoifcAE.enqueue2, so its always_enabled methods do not conflict
+   FIFOF#(int) tfifo2 <- mkUGFIFOF ;
 
    method Action topcenqueue( int d) ;
       tfifo.clear ;
@@ -87,7 +89,7 @@ module mkSmallTest2 ( Combined#(int) ) ;
       endmethod
 
       method  Action enqueue2( data ) ; // if (tfifo.notFull) ;
-         tfifo.enq( data ) ;
+         tfifo2.enq( data ) ;
       endmethod
 
       method  ActionValue#(int) dequeue() ;

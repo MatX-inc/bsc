@@ -12,6 +12,23 @@ test_c_veri_bsv_modules_options AlwaysEnabledGated1 mkTestGated1 "-unsafe-always
 
 test_c_veri_bsv_modules_options AlwaysEnabledGated2 mkTestGated2 "-unsafe-always-ready"
 
+# G0129: always_enabled methods that conflict on a register
+compile_verilog_fail_error AlwaysEnabledConflict.bs G0129 1
+# Demoted, the hardware matches no serial execution of the methods
+compile_verilog_pass_warning AlwaysEnabledConflict.bs G0129 1 mkAEConflict "-demote-errors G0129"
+link_verilog_no_main_pass {TbAlwaysEnabledConflict.v mkAEConflict.v} sysTbAlwaysEnabledConflict
+sim_verilog sysTbAlwaysEnabledConflict
+compare_file sysTbAlwaysEnabledConflict.out
+# G0129 through a submodule method that conflicts with itself
+compile_verilog_fail_error AlwaysEnabledConflictSub.bs G0129 1
+# G0129 through one part of a split method
+compile_verilog_fail_error AlwaysEnabledConflictSplit.bs G0129 1
+# SB and CF methods, and a method that conflicts with itself, are accepted
+compile_verilog_pass AlwaysEnabledComposable.bs
+# Methods with valid-bit arguments: G0129, or a warning when demoted
+compile_verilog_fail_error AlwaysEnabledValid.bs G0129 1
+compile_verilog_pass_warning AlwaysEnabledValid.bs G0129 1 sysAlwaysEnabledValid "-demote-errors G0129"
+
 compile_verilog_pass TestEnableFail.bsv
 if { $vtest == 1 } {
 find_n_emsg TestEnableFail.bsv.bsc-vcomp-out Warning G0015 2
@@ -64,3 +81,8 @@ compile_verilog_pass AlwaysReady_OnSubinterface.bsv
 
 # ===============
 
+# G0006: a more urgent conflicting rule blocks an always_ready value method
+compile_verilog_fail_error AlwaysReadyBlocked.bsv G0006 1 mkAlwaysReadyBlocked
+# With -unsafe-always-ready, the parent reads val while it is blocked and
+# gets a value no serialization gives (the UNSOUND lines)
+test_veri_only_bsv_modules_options AlwaysReadyBlocked {mkAlwaysReadyBlocked} "-unsafe-always-ready" sysAlwaysReadyBlocked.v.out.expected
