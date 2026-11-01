@@ -1,0 +1,42 @@
+# Tests for the CSubst shortcut (CSubst.hs, instance CSubst Type).  After
+# a definition's dictionary bindings are solved, tiExpl and tiImpls walk
+# its typechecked body with the inlining substitution, whose tycon map
+# is empty, and the Type instance returns a type annotation as it is,
+# instead of a rebuilt copy, when the tyvar map is empty too or the node
+# is ground or a TCon leaf.  -check-csubst-shortcut recomputes the full
+# walk on every shortcut and raises an internal error when the result
+# is not structurally equal, and the counters show the shortcut was
+# taken: csubst_shortcut for whole types (the explicitly typed
+# definitions' bodies) and csubst_node_shortcut for ground nodes under
+# a non-empty tyvar map, which tiImpls builds only when it generalizes
+# an untyped let binding with a class context, i.e. under -let-gen (off
+# by default).  -hack-no-csubst-shortcut rebuilds every type as before,
+# and the .bo and the generated Verilog must be identical either way.
+
+erase CSubstShortcut.bo
+compile_backend_pass CSubstShortcut.bs {-check-csubst-shortcut -trace-ctype-stats}
+find_regexp CSubstShortcut.bs.bsc-out {ctype-stats csubst_shortcut [1-9]}
+find_n_strings CSubstShortcut.bs.bsc-out {ctype-stats csubst_node_shortcut 0} 1
+move CSubstShortcut.bo CSubstShortcut.shortcut.bo
+move sysCSubstShortcut.v sysCSubstShortcut.shortcut.v
+
+compile_backend_pass CSubstShortcut.bs {-hack-no-csubst-shortcut -trace-ctype-stats}
+find_n_strings CSubstShortcut.bs.bsc-out {ctype-stats csubst_shortcut 0} 1
+compare_file CSubstShortcut.bo CSubstShortcut.shortcut.bo
+compare_file sysCSubstShortcut.v sysCSubstShortcut.shortcut.v
+
+# Under -let-gen the local definition with a class context is
+# generalized, and tiImpls inlines its dictionary bindings with the
+# tyvar map renaming its generic variables.
+erase CSubstShortcut.bo
+compile_backend_pass CSubstShortcut.bs {-let-gen -check-csubst-shortcut -trace-ctype-stats}
+find_regexp CSubstShortcut.bs.bsc-out {ctype-stats csubst_shortcut [1-9]}
+find_regexp CSubstShortcut.bs.bsc-out {ctype-stats csubst_node_shortcut [1-9]}
+move CSubstShortcut.bo CSubstShortcut.letgen.bo
+move sysCSubstShortcut.v sysCSubstShortcut.letgen.v
+
+compile_backend_pass CSubstShortcut.bs {-let-gen -hack-no-csubst-shortcut -trace-ctype-stats}
+find_n_strings CSubstShortcut.bs.bsc-out {ctype-stats csubst_shortcut 0} 1
+find_n_strings CSubstShortcut.bs.bsc-out {ctype-stats csubst_node_shortcut 0} 1
+compare_file CSubstShortcut.bo CSubstShortcut.letgen.bo
+compare_file sysCSubstShortcut.v sysCSubstShortcut.letgen.v
