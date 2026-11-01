@@ -149,6 +149,11 @@ compile_pass_warning PatCond.bs T0166 1
 # blow up compile time
 compile_pass_no_warning OutOfRange.bsv
 
+# a literal match over a wide Bit type is analyzed through the unbounded
+# path; the finite path's bit-cube cost grows with the width, so a wide
+# domain must not be treated as finite (this width hung before the cap)
+compile_pass_no_warning WideBitDomain.bsv
+
 # the incomplete match in a typeclass default is reported once, at the
 # class declaration, not per inheriting instance
 compile_pass_warning ClassDefault.bs T0165 1
