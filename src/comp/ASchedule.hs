@@ -4203,8 +4203,10 @@ makeRuleMethodUseMaps (NoConflictSet setPC) ruleUseMap =
           where
             convRuleUses (p, m) = (p, M.map (map convMethodUses . M.toList) m)
 
+            -- A rule uses a method when any of its uses happens, so the
+            -- conditions are ORed; ANDing them could hide a real conflict.
             convMethodUses :: (AId, [UniqueUse]) -> (AId, AExpr)
-            convMethodUses (m, uus) = (m, aAnds (map extractCondition uus))
+            convMethodUses (m, uus) = (m, aOrs (map extractCondition uus))
 
         -- convert the use-info into pc conflict info
         pc_conflict_map = M.map mkPCConflictInfo full_use_map
