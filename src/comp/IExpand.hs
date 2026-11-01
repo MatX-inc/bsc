@@ -1701,7 +1701,9 @@ handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModule
         new_rblobs <- getSavedRules
         -- correctly writing the recursive reference (making sure it is evaluated and unheaped)
         -- requires some contortions
-        _ <- do e'' <- (addPredG p' $ eval1 e') >>= unheap
+        _ <- do pe <- addPredG p' $ eval1 e'
+                aliasRead ptr pe
+                e'' <- unheap pe
                 updHeap "moduleFix" (ptr, ref) (HWHNF e'' Nothing)
         -- handle any recursively deferred rules
         oldAggressive <- isAggressive
@@ -2832,8 +2834,13 @@ walkNF e =
     nfError "walkNF" e
   else do
     when (doDebug || doTraceNF) $ traceM ("walkNF " ++ ppReadable e)
-    let upd p e@(IRefT _ _ _ _) ws = do
-            P p' e' <- unheap (P p e)
+    let upd p r@(IRefT _ q _ _) ws = do
+            -- the cell being walked takes the value of the cell r
+            -- refers to
+            case e of
+              IRefT _ ptr _ _ -> unionAlias ptr q
+              _ -> return ()
+            P p' e' <- unheap (P p r)
             upd p' e' ws
         upd p n ws =
             let pn = P p n in
@@ -3500,7 +3507,10 @@ evalHeap (ptr, ref) = do
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, e))
         -- we don't use evalUH here because we don't want to trigger
         -- lazy bit-array fusing
-        pe' <- eval1 e >>= unheap
+        pe1 <- eval1 e
+        -- the cell takes the value of the cell the result refers to
+        aliasRead ptr pe1
+        pe' <- unheap pe1
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, pe'))
         case pe' of
             P _ (IAps (ICon _ (ICUndet { })) _ _) -> internalError ("evalHeap: " ++ ppReadable (ptr, pe'))

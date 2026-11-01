@@ -3,7 +3,8 @@
 # generated Verilog does not depend on the store's content).
 
 # The dump prints every cell of the elaborated module with its site, its
-# binder and the chain of definition unfoldings it was created under.
+# binder, its alias class and the chain of definition unfoldings it was
+# created under.
 # Positions in files other than the tests' own (Meta*.bsv) are reduced to
 # the file name, so that a library edit does not move the expected output.
 proc filter_dump { fname } {
@@ -35,13 +36,15 @@ compare_file MetaDump.bsv.bsc-vcomp-out.filtered MetaDump.bsv.bsc-vcomp-out.expe
 
 erase sysMetaDump.plain.v
 
-# Binders: every cell bound to a parameter (an argument, a let-bound
-# value) or moved into a field or operand of a struct or another lazy
-# application carries that binder, pinned by the dump of a package
-# exercising each; the operand that a tagged union's constructor
-# application moves into a cell is not a kept cell once the value is
-# extracted, so the dump has no line for it.  The Verilog is unchanged
-# by the flags.
+# Binders and alias classes: every cell bound to a parameter (an
+# argument, a let-bound value) or moved into a field or operand of a
+# struct or another lazy application carries that binder, and cells
+# that hold one value (a value that evaluates to another, a reference
+# re-heaped under a condition, a value extracted from a tagged union
+# and the operand cell its constructor application moved, which is not
+# a kept cell and appears only as the root of that class) share a
+# class, pinned by the dump of a package exercising each; the Verilog
+# is unchanged by the flags.
 erase MetaBinder.bo
 compile_verilog_pass MetaBinder.bsv sysMetaBinder
 move sysMetaBinder.v sysMetaBinder.plain.v

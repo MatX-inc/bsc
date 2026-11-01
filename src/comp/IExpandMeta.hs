@@ -6,14 +6,18 @@ module IExpandMeta(
         Frame, Binder(..), CellMeta, noBinder, headSiteOf, cellDefSite,
         -- the store and the hooks the evaluator calls
         MetaStore, newMetaStore, lookupSite, mintSite, pushFrame, pushRoot,
-        swapFrame, swapCellFrame, stampMeta, readSiteTable,
-        -- the query interface, read by the rebuild and the dump alone
-        siteOf, frameOf, binderOf, chainOf, renderSite, renderDump
+        swapFrame, swapCellFrame, stampMeta, aliasUnion,
+        -- the tables after elaboration and the query interface, read by
+        -- the rebuild and the dump alone
+        MetaTables(..), AliasMap, readMetaTables,
+        siteOf, frameOf, binderOf, chainOf, aliasClassOf, renderSite, renderDump
         ) where
 
+import Control.Monad(when)
 import Data.Bits(bit, (.|.), (.&.), complement, xor, testBit)
 import Data.IORef
 import qualified Data.IntMap.Strict as IM
+import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
 import System.FilePath(takeFileName)
 
@@ -28,9 +32,10 @@ import Prim(PrimOp)
 -- The store records, for every heap cell, the lexical site of the
 -- expression the cell was created for, the chain of definition
 -- unfoldings it was created under (the frame), rooted at a rule, a
--- method or an instantiation, and the binder the cell's value was bound
+-- method or an instantiation, the binder the cell's value was bound
 -- to (a parameter, or the index of a field or operand it was moved
--- into).  It is written by the evaluator through
+-- into), and the alias class of cells that hold one value.  It is
+-- written by the evaluator through
 -- the hooks below and read only through the query interface, by the
 -- rebuild at the end of elaboration and by the -metadata-dump printer.
 --
@@ -233,11 +238,13 @@ cellDefSite m =
         else Nothing
 
 -- The store: the site table, the frame counter, the frame register
--- (the frame current for the next allocation) and the scramble seed
--- (0 when scrambling is off).  One store per module elaboration.
+-- (the frame current for the next allocation), the alias classes and
+-- the scramble seed (0 when scrambling is off).  One store per module
+-- elaboration.
 data MetaStore = MetaStore { ms_sites :: !(IORef SiteTable),
                              ms_nextFrame :: !(IORef Int),
                              ms_frame :: !(IORef Frame),
+                             ms_alias :: !(IORef AliasMap),
                              ms_seed :: {-# UNPACK #-} !Int }
 
 newMetaStore :: Int -> IO MetaStore
@@ -245,7 +252,8 @@ newMetaStore seed = do
     sites <- newIORef emptySiteTable
     next <- newIORef 1
     reg <- newIORef TopFrame
-    return (MetaStore sites next reg seed)
+    alias <- newIORef IM.empty
+    return (MetaStore sites next reg alias seed)
 
 -- The one scrambling function: identity when the seed is 0.
 perturb :: MetaStore -> Int -> Int
@@ -387,8 +395,62 @@ stampMeta st site b = do
     return $! CellMeta site fr binder
   where mint key = fst <$> mintSite st key (False, False)
 
-readSiteTable :: MetaStore -> IO SiteTable
-readSiteTable st = readIORef (ms_sites st)
+-- ===============
+-- Alias classes
+--
+-- Two cells hold one value when one takes the value read from the
+-- other: a demanded cell whose expression evaluates to a reference, a
+-- cell walked to normal form through a reference, a reference re-heaped
+-- under an implicit condition, and a cell whose content is itself a
+-- reference.  The classes are a union-find over cell pointers: a map
+-- from a pointer to its parent, absent for a root, with path
+-- compression on find; a cell in no union is its own class and has no
+-- entry.  The root of a class is its smallest pointer (the earliest
+-- cell), so a class has one representative whatever the order of its
+-- unions, and every link goes from a larger pointer to a smaller one,
+-- so a find terminates on the perturbed entries of the scramble run
+-- as well.
+type AliasMap = IM.IntMap Int
+
+-- the root of p's class, compressing the path to it
+aliasFind :: MetaStore -> Int -> IO Int
+aliasFind st p = do
+    m <- readIORef (ms_alias st)
+    let root = walk p
+        walk x = maybe x walk (IM.lookup x m)
+        compress x acc = case IM.lookup x acc of
+                           Just y | y /= root -> compress y (IM.insert x root acc)
+                           _ -> acc
+    case IM.lookup p m of
+      Just y | y /= root -> writeIORef (ms_alias st) $! compress p m
+      _ -> return ()
+    return root
+
+-- Join the classes of p and q: one insert when they differ.
+aliasUnion :: MetaStore -> Int -> Int -> IO ()
+aliasUnion st p q = do
+    rp <- aliasFind st p
+    rq <- aliasFind st q
+    when (rp /= rq) $ do
+      let a = perturb st rp
+          b = perturb st rq
+      modifyIORef' (ms_alias st) (IM.insert (max a b) (min a b))
+
+-- the root of p's class in a snapshot of the map
+aliasClassOf :: AliasMap -> Int -> Int
+aliasClassOf m = walk
+  where walk x = maybe x walk (IM.lookup x m)
+
+-- The tables of the store after elaboration: the site table and the
+-- alias classes.
+data MetaTables = MetaTables { mt_sites :: !SiteTable,
+                               mt_alias :: !AliasMap }
+
+readMetaTables :: MetaStore -> IO MetaTables
+readMetaTables st = do
+    sites <- readIORef (ms_sites st)
+    alias <- readIORef (ms_alias st)
+    return (MetaTables sites alias)
 
 -- ===============
 -- The query interface
@@ -458,14 +520,21 @@ renderSite t s =
 
 -- One line per cell, in the order given (the caller passes ascending
 -- pointer order): the pointer, the cell's site, its binder when it has
--- one, then the chain of frames from the creating frame to the root,
--- each as site#count.
-renderDump :: SiteTable -> [(Int, CellMeta)] -> String
-renderDump t cells = unlines (map line cells)
+-- one, the root of its alias class when the class has another cell,
+-- then the chain of frames from the creating frame to the root, each
+-- as site#count.
+renderDump :: MetaTables -> [(Int, CellMeta)] -> String
+renderDump (MetaTables t am) cells = unlines (map line cells)
   where line (p, m) =
             "_" ++ show p ++ ": " ++ renderSite t (siteOf m) ++
-            binder (binderOf m) ++
+            binder (binderOf m) ++ alias p ++
             concatMap link (chainOf m)
         binder b | b == noBinder = ""
                  | otherwise = ", " ++ renderSite t b
+        -- a cell is in a class with another cell when it has a parent
+        -- or is one
+        alias p | IM.member p am || IS.member p parents =
+                    ", alias _" ++ show (aliasClassOf am p)
+                | otherwise = ""
+        parents = IS.fromList (IM.elems am)
         link (s, c) = " <- " ++ renderSite t s ++ "#" ++ show c

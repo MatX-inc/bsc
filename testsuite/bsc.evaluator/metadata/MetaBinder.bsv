@@ -22,7 +22,9 @@ module sysMetaBinder(MetaBinderIfc);
    Reg#(Bit#(8)) cnt <- mkReg(0);
    Reg#(Bit#(8)) acc <- mkReg(0);
    Reg#(Bit#(8)) sel <- mkReg(0);
+   Reg#(Bit#(8)) tot <- mkReg(0);
    FIFO#(Bit#(8)) q <- mkFIFO;
+   FIFO#(Pair) qp <- mkFIFO;
 
    // a static loop whose result the evaluator, not the simplifier, decides
    Integer three = 0;
@@ -35,16 +37,21 @@ module sysMetaBinder(MetaBinderIfc);
       // a let-bound value, and one that evaluates to it (an alias)
       Bit#(8) a = cnt * 5;
       Bit#(8) b = (three == 3) ? a : s;
-      acc <= s + b;
+      tot <= s + b;
    endrule
 
    rule moves;
       // a struct under a dynamic condition on a method with an
-      // implicit condition: its fields are moved into cells, and a
-      // field selected inline is re-heaped under the condition
+      // implicit condition: the fields of the conditional are moved
+      // into cells of their own (p_lo, p_hi)
       Pair p = (q.first > cnt) ? Pair { lo: cnt + 2, hi: cnt - 2 }
                                : Pair { lo: cnt - 7, hi: cnt + 7 };
       sel <= p.lo + p.hi;
+      // a struct read from a method with an implicit condition: a field
+      // selected inline is re-heaped under that condition
+      Pair r = qp.first;
+      acc <= r.lo ^ r.hi;
+      qp.deq;
       // a tagged union whose operand is moved into a cell, then extracted
       Maybe#(Bit#(8)) m = tagged Valid (cnt + 9);
       if (m matches tagged Valid .v)

@@ -34,6 +34,7 @@ module IExpandUtils(
         addHeapPred,
         stampFor, stampForKey, pushDefFrame, pushRootFrame,
         withMetaFrame, withCellMetaFrame, withCellDefFrame,
+        unionAlias, aliasRead,
         addInputClock, addOutputClock, addInputReset, addOutputReset,
         getClkGateUses, clearClkGateUses, setClkGateUses,
         assertNoClkGateUses, addClkGateUse, addInhighClkGate,
@@ -110,11 +111,11 @@ import Verilog(vKeywords, vIsValidIdent)
 import Changed
 
 import IConv(iConvT)
-import IExpandMeta(MetaStore, SiteTable, SiteKind(..), SiteKey, idSiteKey,
+import IExpandMeta(MetaStore, MetaTables, SiteKind(..), SiteKey, idSiteKey,
                    primSiteKey, boundSiteKey, Frame, Binder(..), CellMeta,
                    headSiteOf, cellDefSite, newMetaStore, lookupSite, mintSite,
                    pushFrame, pushRoot, swapFrame, swapCellFrame, stampMeta,
-                   readSiteTable)
+                   aliasUnion, readMetaTables)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -757,8 +758,9 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_backend_specific :: Bool,
                            go_ffcallNo :: Int,
                            go_atfCache :: IATFCache,
-                           -- the site table of the metadata store
-                           go_meta :: SiteTable,
+                           -- the tables of the metadata store (sites,
+                           -- alias classes)
+                           go_meta :: MetaTables,
                            goutput :: a }
 
 runG :: ErrorHandle -> Flags ->
@@ -811,7 +813,7 @@ runG errh flags symt alldefs recdefs atf_cache defId is_noinlined_func pps gFn =
          let rblobs = savedRules gs'
          when (not (null rblobs)) $
              internalError ("IExpandUtils.runG - unexpanded ruleblobs: " ++ ppReadable rblobs)
-         meta <- readSiteTable store
+         meta <- readMetaTables store
          return $ (GOutput {
                      go_clock_domains = (M.toList (clock_domains gs')),
                      go_resets = (all_resets gs'),
@@ -2611,11 +2613,23 @@ addHeapUnev b tag t e cell_name_orig = do
 
 -- add an expression to the heap, noting it is WHNF
 addHeapWHNF :: Binder -> String -> IType -> PExpr -> Maybe Id -> G HExpr
-addHeapWHNF b tag t pe@(P _ e) cell_name_orig = do
+addHeapWHNF = addHeapWHNFAlias Nothing
+
+-- addHeapWHNF for a value read from another cell (toHeapWHNFBinder
+-- re-heaping a reference under a condition): the new cell and the cell
+-- it was read from hold one value, so their alias classes are joined
+-- (see IExpandMeta) on the pointer addHeapCell returns, before the
+-- reference to the new cell is built.
+addHeapWHNFAlias :: Maybe HeapPointer -> Binder -> String -> IType -> PExpr
+                 -> Maybe Id -> G HExpr
+addHeapWHNFAlias partner b tag t pe@(P _ e) cell_name_orig = do
   cell_name <- improveCellName e cell_name_orig
   meta <- stampFor b e
   let newcell = (HWHNF { hc_pexpr = pe, hc_name = cell_name, hc_meta = meta })
   (p, r) <- addHeapCell tag newcell
+  case partner of
+    Just q -> unionAlias p q
+    Nothing -> return ()
   let pos = getIExprPosition e
   let result = mkIRefT t p pos r
   when doTraceHeap $ traceM ("addHeapWHNF " ++ ppString cell_name ++ " [" ++
@@ -2667,6 +2681,11 @@ updHeap :: String -> (HeapPointer, HeapData) -> (CellMeta -> HeapCell) -> G ()
 updHeap tag (p, HeapData ref) mkcell = do
    o <- getHeap (HeapData ref)
    let e = mkcell (hc_meta o)
+   -- a cell whose content is a reference holds that cell's value
+   case e of
+     HWHNF { hc_pexpr = P _ (IRefT _ q _ _) } -> unionAlias p q
+     HNF { hc_pexpr = P _ (IRefT _ q _ _) } -> unionAlias p q
+     _ -> return ()
    when doTraceHeap2 $
       traceM ("old val [" ++ tag ++ "]: " ++ "(_" ++ show p ++ ", " ++ ppReadable o ++ ")")
    when doTraceHeap $
@@ -2725,6 +2744,21 @@ withCellDefFrame ref act = do
       st <- getMetaStore
       fr <- liftIO (pushFrame st site recursive)
       withMetaFrame fr act
+
+-- Record that the cells p and q hold one value (see IExpandMeta).
+{-# INLINE unionAlias #-}
+unionAlias :: HeapPointer -> HeapPointer -> G ()
+unionAlias p q = do
+  st <- getMetaStore
+  liftIO (aliasUnion st p q)
+
+-- The cell p takes the value of an evaluated expression, which unheap
+-- is about to read through its reference when it is one: p and the
+-- referenced cell then hold one value.
+{-# INLINE aliasRead #-}
+aliasRead :: HeapPointer -> PExpr -> G ()
+aliasRead p (P _ (IRefT _ q _ _)) = unionAlias p q
+aliasRead _ _ = return ()
 
 -- Push the frame of an unfolding of the definition i under the current
 -- frame; the caller runs the unfolding under it.
@@ -3156,7 +3190,12 @@ toHeapWHNFBinder b tag _ (P p e) cell_name
 toHeapWHNFBinder b tag t pe@(P p e) cell_name = do
     -- Pointing to an IRefT (because p /= pTrue) is not WHNF
     pe' <- unheap pe
-    addHeapWHNF b tag t pe' cell_name
+    -- a reference re-heaped under p: the new cell holds the value read
+    -- from e's cell, so the two are aliases
+    let partner = case e of
+                    IRefT _ q _ _ -> Just q
+                    _ -> Nothing
+    addHeapWHNFAlias partner b tag t pe' cell_name
 
 {-# INLINE toHeapWHNFCon #-}
 toHeapWHNFCon :: String -> IType -> HExpr -> Maybe Id -> G HExpr
