@@ -1,0 +1,18 @@
+checking package dependencies
+compiling MetaBinder.bsv
+code generation for sysMetaBinder starts
+metadata census for sysMetaBinder:
+  cells reachable 40, defs lifted 27, defs with chains 26
+  roots pushed: rule 2, methodroot 2, inst 6
+  pushes: unfoldings 162, completions 3, roots 10
+  frames on chains 24: use-site 9, definition-site 15, root 0
+  defs by site: use-site 0, definition-site 1, prim 21, con 1, method 4, foreign 0, lambda 0, bound 0, inst 0; head-site 0, shared 0, merged 0
+  depth: 2:1 3:12 4:5 5:3 6:4 8:1
+  count: 1:24
+  alias classes 50
+  cost: frame pushes 175, context-table operations 64 for 24 contexts
+  chains walked 165, loops re-entered 0, repeated non-recursion sites 20 (def Prelude.bind_ x11; def Prelude.bind_ [Prelude.bs] x4; def Prelude.__avFunc [Prelude.bs] x4; def Prelude.bind_ [MetaBinder.bsv:34:4] u x1)
+  name hints: 11 cells bound to a parameter, 3 outside the library, each named by it
+  method-condition positions: 0 calls, 0 kept, 0 on chains
+Verilog file created: sysMetaBinder.v
+All packages are up to date.

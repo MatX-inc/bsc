@@ -646,6 +646,7 @@ defaultFlags bluespecdir = Flags {
         letGen = False,
         liftDicts = True,
         maxTIStackDepth = 1000,
+        metadataCensus = False,
         metadataDump = False,
         metadataOut = Nothing,
         metadataScramble = False,
@@ -1359,6 +1360,10 @@ externalFlags = [
              (Just (FRTString (show . maxTIStackDepth))),
           "maximum stack depth for fundep and SAT analysis in typecheck", Hidden)),
 
+        ("metadata-census",
+         (Toggle (\f x -> f {metadataCensus=x}) (showIfTrue metadataCensus),
+          "print the census of the evaluator metadata store and run its cross-checks", Hidden)),
+
         ("metadata-dump",
          (Toggle (\f x -> f {metadataDump=x}) (showIfTrue metadataDump),
           "print the site and frame chain of every heap cell of the elaborated module", Hidden)),
@@ -2021,6 +2026,7 @@ showFlagsRaw flags =
           ("liftDicts", show (liftDicts flags)),
           ("linkFlags", show (linkFlags flags)),
           ("maxTIStackDepth", show (maxTIStackDepth flags)),
+          ("metadataCensus", show (metadataCensus flags)),
           ("metadataDump", show (metadataDump flags)),
           ("metadataOut", show (metadataOut flags)),
           ("metadataScramble", show (metadataScramble flags)),

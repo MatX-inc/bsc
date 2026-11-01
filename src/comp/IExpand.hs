@@ -23,7 +23,7 @@ import Data.Maybe
 import Data.Foldable(foldrM)
 import Numeric(showIntAtBase)
 import Data.Char(intToDigit, ord, chr)
-import Control.Monad(when, foldM, zipWithM, mapAndUnzipM)
+import Control.Monad(when, unless, foldM, zipWithM, mapAndUnzipM)
 import Control.Monad.Fix(mfix)
 --import Control.Monad.Fix
 import Control.Monad.State(State, evalState, liftIO, get, put)
@@ -77,7 +77,9 @@ import IExpandUtils
 import IExpandMeta(SiteKind(..), idSiteKey, rootSiteKey, Binder(..), renderDump,
                    MetaTables(..), emptyContextTable, internFrame, siteOf,
                    frameOf, binderOf, aliasUnions, aliasMembers, aliasClassOf,
-                   noCell, DefRecord(..), ModuleMeta(..))
+                   noCell, DefRecord(..), ModuleMeta(..), AliasMap,
+                   renderCensus, checkProfile, checkKeptPositions, checkNameHints,
+                   aliasClassCount)
 import Wires
 import IWireSet
 import qualified IfcBetterInfo as BetterInfo
@@ -378,7 +380,11 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
       -- canonical pointer (deciding whether a pointer is lifted forces
       -- the decision of pDef that defs1 forces, and nothing else of it)
       lifted = IS.fromList [ p | (p, (_, Just _)) <- ptr_info ]
-      meta = buildModuleMeta (go_meta go) (go_roots go) (go_defcache go)
+      -- the alias classes after the CSE unions: a cell eqPtrs identified
+      -- with its canonical holds the canonical's value, so their classes
+      -- are joined on the snapshot of the store's union-find
+      aliases = aliasUnions (IM.toAscList ptr_map) (mt_alias (go_meta go))
+      meta = buildModuleMeta (go_meta go) (go_roots go) (go_defcache go) aliases
                              iheap ptr_map cell_refs lifted
 
       -- XXX the rules names should be constructed properly
@@ -412,6 +418,49 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
   when (metadataDump flags && not (metadataScramble flags)) $
       putStr (renderDump (go_meta go)
                          [ (p, hc_meta c) | (p, c) <- IM.toAscList iheap ])
+
+  -- -metadata-census: the census of the store for this module, from the
+  -- metadata table and the headers of the kept cells, and the
+  -- cross-checks against the evaluator's own bookkeeping: the frames
+  -- per site against the profiling map and the name hints against the
+  -- binders, a mismatch of either being a broken invariant of the store
+  -- that stops the compile, and the positions kept for method
+  -- conditions against the chains, which is reported.  Suppressed under
+  -- -metadata-scramble like the dump.
+  when (metadataCensus flags && not (metadataScramble flags)) $ do
+      let metaOf p = hc_meta (fromJustOrErr "iExpand: census cell" (IM.lookup p iheap))
+          defs = [ (r, metaOf (dr_ptr r)) | r <- IM.elems (mm_defs meta) ]
+          profile = [ (i, pos, n) | (i, pm) <- M.toList (go_profile go),
+                                    (pos, n) <- M.toList pm ]
+          hints = [ (p, hc_meta c, hc_name c) | (p, c) <- IM.toAscList iheap ]
+          -- the action method calls whose selector kept the positions of
+          -- the selections it was reached through (-method-conditions)
+          kept = [ (p, hc_meta c, poss)
+                 | (p, c@(HNF { hc_pexpr = P _ e })) <- IM.toAscList iheap,
+                   IAps (ICon m (ICSel {})) _ (ICon _ (ICStateVar {}) : _) <- [e],
+                   Just poss <- [getIdInlinedPositions m], not (null poss) ]
+          -- the wrapper's name carries a trailing marker character
+          modName = initOrErr "iExpand: census module name" (getIdBaseString mi)
+          nKept = sum [ length poss | (_, _, poss) <- kept ]
+          missing = length (checkKeptPositions (mm_sites meta) kept)
+          (bound, named, badHints) = checkNameHints (mm_sites meta) hints
+      putStr (renderCensus modName meta (go_census go) (IM.size iheap)
+                           (aliasClassCount aliases) defs)
+      case checkProfile (mm_sites meta) (go_census go) profile of
+        [] -> return ()
+        ms -> internalError ("iExpand: census frames per site differ from the profiling map:\n"
+                             ++ unlines ms)
+      unless (null badHints) $
+          internalError ("iExpand: census name hints differ from the binders:\n"
+                         ++ unlines badHints)
+      putStrLn ("  name hints: " ++ show bound ++ " cells bound to a parameter, "
+                ++ show named ++ " outside the library, each named by it")
+      -- reported, not asserted: a method call's cell is built once, in
+      -- the instantiation that provides the method, and every selection
+      -- of it in the parent shares that cell, so the positions of the
+      -- selections are not frames on its chain
+      putStrLn ("  method-condition positions: " ++ show (length kept) ++ " calls, "
+                ++ show nKept ++ " kept, " ++ show (nKept - missing) ++ " on chains")
 
   when doDebug $ do
       traceM ("iExpand done\n" ++ ppReadable (sort (IM.toList iheap))
@@ -848,8 +897,9 @@ eqPtrs heap ptrs =
 -- Build the module metadata table (IExpandMeta) from the headers of the
 -- kept cells, after CSE: the context of every kept cell is interned from
 -- its frame chain, bottom-up and memoized by frame id; the cells eqPtrs
--- identified under a canonical contribute their contexts to its record
--- and join its alias class (the CSE unions); the reverse reference index
+-- identified under a canonical contribute their contexts to its record,
+-- and its alias class is read from the classes after the CSE unions
+-- (aliases, joined by the caller); the reverse reference index
 -- over the expressions of the canonical cells gives each cell its
 -- parent; and the facts of a cell the rebuild inlines rather than lifts
 -- (pDef's simple, action and pair cells) fold into the record of every
@@ -857,10 +907,10 @@ eqPtrs heap ptrs =
 -- references, which is acyclic because eqPtrs tsorted the same graph.
 -- Nothing here reads the result: the table is carried on the IModule for
 -- the side file.
-buildModuleMeta :: MetaTables -> [Int] -> IS.IntSet -> IM.IntMap HeapCell ->
-                   IM.IntMap HeapPointer -> [(HeapPointer, [HeapPointer])] ->
-                   IS.IntSet -> ModuleMeta
-buildModuleMeta tables roots defcache iheap ptr_map refs lifted =
+buildModuleMeta :: MetaTables -> [Int] -> IS.IntSet -> AliasMap ->
+                   IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
+                   [(HeapPointer, [HeapPointer])] -> IS.IntSet -> ModuleMeta
+buildModuleMeta tables roots defcache aliases iheap ptr_map refs lifted =
     let ptran p = IM.findWithDefault p p ptr_map
         cellOf p = case IM.lookup p iheap of
                      Just c -> c
@@ -880,11 +930,9 @@ buildModuleMeta tables roots defcache iheap ptr_map refs lifted =
 
         -- the CSE unions: the cells identified under each canonical, in
         -- pointer order (built from the descending list, so that each
-        -- cell is consed onto the front), and the alias class of each
-        -- joined with its canonical's (the two cells hold one value)
+        -- cell is consed onto the front)
         merged = IMS.fromListWith (++)
                      [ (h, [p]) | (p, h) <- IM.toDescList ptr_map ]
-        aliases = aliasUnions (IM.toAscList ptr_map) (mt_alias tables)
         aliased = aliasMembers aliases
         aliasOf p | IS.member p aliased = aliasClassOf aliases p
                   | otherwise = noCell

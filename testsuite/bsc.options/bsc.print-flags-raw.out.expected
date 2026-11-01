@@ -49,6 +49,7 @@ Flags {
 	liftDicts = True,
 	linkFlags = [],
 	maxTIStackDepth = 1000,
+	metadataCensus = False,
 	metadataDump = False,
 	metadataOut = Nothing,
 	metadataScramble = False,
