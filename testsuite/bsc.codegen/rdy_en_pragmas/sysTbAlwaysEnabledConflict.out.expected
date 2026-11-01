@@ -1,0 +1,8 @@
+cycle 1: c before = 0, a;b or b;a gives 3, hardware gives 1
+UNSOUND: no serial execution of a and b gives 1
+cycle 2: c before = 1, a;b or b;a gives 4, hardware gives 2
+UNSOUND: no serial execution of a and b gives 2
+cycle 3: c before = 2, a;b or b;a gives 5, hardware gives 3
+UNSOUND: no serial execution of a and b gives 3
+cycle 4: c before = 3, a;b or b;a gives 6, hardware gives 4
+UNSOUND: no serial execution of a and b gives 4

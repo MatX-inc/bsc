@@ -1031,6 +1031,7 @@ data ErrMsg =
 
         | EEnableNotHigh String [String]
         | EEnableAlwaysLow String [String]
+        | EAlwaysEnabledConflict String String
 
         | ESplitInsideNoSplit String
 
@@ -4140,6 +4141,15 @@ getErrorText (WSVStdIdentExternal name) =
             "and cannot be renamed in the generated Verilog.  Some tools " ++
             "(for example verilator) will fail to parse code that uses " ++
             "this name.  Consider renaming it in the source."))
+
+getErrorText (EAlwaysEnabledConflict m1 m2) =
+    (Generate 134, empty,
+     s2par ("The methods " ++ quote m1 ++ " and " ++ quote m2 ++
+            " are always enabled, but the schedule of this module does" ++
+            " not allow them to execute in the same cycle.  An always" ++
+            " enabled method executes in every cycle, so the methods must" ++
+            " be conflict-free or sequenced (use -show-schedule to see" ++
+            " the schedule)."))
 
 
 ---------------------------------------------------------------------------
