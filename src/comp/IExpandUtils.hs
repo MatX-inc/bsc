@@ -316,7 +316,7 @@ canLiftCond' m (IAps (ICon _ (ICPrim _ PrimArrayDynSelect))
           then (False, m)
           else let cells = Array.elems arr
                    reachable_cells = take (2 ^ idx_sz) cells
-                   cellToExpr (ArrayCell ptr ref) = IRefT elem_ty ptr S.empty ref
+                   cellToExpr (ArrayCell ptr ref) = IRefT elem_ty ptr noPosition ref
                    -- check the index and the reachable cells
                    es = (idx_e : map cellToExpr reachable_cells)
                in  canLiftCond'_List m es
@@ -2499,12 +2499,12 @@ addHeapCell tag cell = do
   return (p, HeapData ref)
 
 -- Construct an "IRefT" expression referring to a heap cell.
--- The deepseq forces the type and position in the IRefT so that
--- they will not be thunks holding references to the original expression.
-mkIRefT :: IType -> HeapPointer -> S.Set Position -> HeapData -> HExpr
-mkIRefT t p poss r =
-  let result = IRefT t p poss r
-  in  deepseq result result
+-- The deepseq forces the type so that it is not a thunk holding a
+-- reference to the original expression.  The position needs nothing:
+-- it is a strict field of a type whose fields are all strict, so
+-- building the node forces it as far as rnf would.
+mkIRefT :: IType -> HeapPointer -> Position -> HeapData -> HExpr
+mkIRefT t p pos r = t `deepseq` IRefT t p pos r
 
 addHeapUnev :: String -> IType -> HExpr -> Maybe Id -> G HExpr
 addHeapUnev tag t e cell_name_orig = do
@@ -2512,8 +2512,8 @@ addHeapUnev tag t e cell_name_orig = do
  let newcell = (HUnev { hc_hexpr = e, hc_name = cell_name })
  (p, r) <- addHeapCell tag newcell
  -- trace_hcell p e
- let poss = S.singleton $ getIExprPosition e
- let result = mkIRefT t p poss r
+ let pos = getIExprPosition e
+ let result = mkIRefT t p pos r
  when doTraceHeap $ traceM ("addHeapUnev " ++ ppString cell_name ++ " [" ++
                             prPositionConcise (getPosition cell_name) ++ "] " ++
                             ppReadable (result,t,e))
@@ -2525,8 +2525,8 @@ addHeapWHNF tag t pe@(P _ e) cell_name_orig = do
   cell_name <- improveCellName e cell_name_orig
   let newcell = (HWHNF { hc_pexpr = pe, hc_name = cell_name })
   (p, r) <- addHeapCell tag newcell
-  let poss = S.singleton $ getIExprPosition e
-  let result = mkIRefT t p poss r
+  let pos = getIExprPosition e
+  let result = mkIRefT t p pos r
   when doTraceHeap $ traceM ("addHeapWHNF " ++ ppString cell_name ++ " [" ++
                              prPositionConcise (getPosition cell_name) ++ "] " ++
                              ppReadable (result,t,pe))
@@ -2558,8 +2558,8 @@ addHeapPred tag e = do
       ws = wsEmpty     -- no wire set
   let newcell = (HNF { hc_pexpr = pe, hc_wire_set = ws, hc_name = Nothing })
   (p, r) <- addHeapCell tag newcell
-  let poss = S.singleton $ getIExprPosition e
-  let result = mkIRefT t p poss r
+  let pos = getIExprPosition e
+  let result = mkIRefT t p pos r
   when doTraceHeap $ traceM ("addHeapPred " ++ ppReadable (result,e))
   return result
 
@@ -2824,7 +2824,7 @@ unheapAll e = do
                             (ITAp c t) | (c == itPrimArray) -> t
                             _ -> internalError ("unheapAll: array type")
                 mapFn (ArrayCell ptr ref) = do
-                    unheapAll (IRefT elem_ty ptr S.empty ref)
+                    unheapAll (IRefT elem_ty ptr noPosition ref)
             es <- mapM mapFn (Array.elems arr)
             let ic = case icPrimBuildArray (length es) of
                        (ICon _ ci) -> ICon i ci

@@ -450,7 +450,7 @@ data IExpr a
         | ILAM Id IKind (IExpr a)        -- vanishes after IExpand
         | ICon Id (IConInfo a)
         -- IRef is only used during reduction, it refers to a "heap" cell
-        | IRefT IType !Int (S.Set Position) a -- vanishes after IExpand
+        | IRefT IType !Int !Position a -- vanishes after IExpand
 
 instance Show (IExpr a) where
   show (ILam i t e)   = "(ILam " ++ show i ++ " " ++ show t ++ " " ++ show e ++ ")"
@@ -1277,7 +1277,7 @@ instance NFData (IExpr a) where
     rnf (IVar i) = rnf i
     rnf (ILAM i k e) = rnf3 i k e
     rnf (ICon i ic) = rnf2 i ic
-    rnf (IRefT t p poss _) = rnf2 t poss
+    rnf (IRefT t p pos _) = rnf2 t pos
 
 instance NFData (IConInfo a) where
 --    rnf (ICDef x1 x2) = rnf2 x1 x2
@@ -1366,11 +1366,10 @@ getIExprPositionCrossInternal _ (ICon i (ICSel _ _ _)) =
 
 
 getIExprPositionCrossInternal _ (ICon i _) = getIdPosition i
--- The positions stamped on the heap ref (collected out of band when
--- expressions are rewritten).  There is no type fallback: Ids embedded
+-- The position stamped on the heap ref when its cell was allocated
+-- (see getIExprPosition).  There is no type fallback: Ids embedded
 -- in ITypes carry no positions (IType normalizes them on entry).
-getIExprPositionCrossInternal _ (IRefT _ _ poss _) =
-    firstPos (S.toAscList poss)
+getIExprPositionCrossInternal _ (IRefT _ _ pos _) = pos
 
 
 -- #############################################################################
@@ -1412,15 +1411,14 @@ getIExprPosition (IVar i) = getIdPosition i
 
 getIExprPosition (ILAM i _ e) = firstPos [getIdPosition i, getIExprPosition e]
 getIExprPosition (ICon i _) = getIdPosition i
--- The positions stamped on the heap ref (collected out of band when
--- expressions are rewritten).
--- When poss has several entries the pick is by Ord Position, whose
--- FString file component compares by intern order.  Today every live
--- poss is a singleton allocation seed, so the pick rule is moot; when
--- issue #863 re-enables stamping at the evaluator sites, revisit it
--- (recency is not representable in a set).
-getIExprPosition (IRefT _ _ poss _) =
-    firstPos (S.toAscList poss)
+-- A heap ref carries one position, its allocation seed: the position
+-- this function computed for the expression the cell was created for
+-- (IExpandUtils.addHeapUnev and kin).  The field is strict, so that
+-- walk happens when the ref is built, not when a reader first asks.
+-- Issue #863 asks for the position to follow the rewrites a cell goes
+-- through afterwards; that is evaluator-side provenance, which this
+-- field does not represent.
+getIExprPosition (IRefT _ _ pos _) = pos
 
 --------
 
