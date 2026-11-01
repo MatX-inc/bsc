@@ -1,0 +1,19 @@
+checking package dependencies
+compiling MixedLitRedundant.bsv
+Warning: "MixedLitRedundant.bsv", line 5, column 15: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    8'd3
+Warning: "MixedLitRedundant.bsv", line 17, column 15: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    'b????
+Warning: "MixedLitRedundant.bsv", line 26, column 15: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    'h00??
+Warning: "MixedLitRedundant.bsv", line 35, column 15: (T0166)
+  This pattern in this case expression can never match, because the preceding
+  patterns cover all of its cases:
+    'o00?
+All packages are up to date.

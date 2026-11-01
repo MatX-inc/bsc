@@ -25,6 +25,9 @@ module TIMonad(
         , tiRecoveringFromError
         , tiRecoveringFromErrorxx
         , disambiguateStruct
+        , withPatObligationOwner
+        , PatMatchToken, beginPatObligation, finishPatObligation
+        , apSubPatObligations, flushPatObligations
         ) where
 
 #if defined(__GLASGOW_HASKELL__) && (__GLASGOW_HASKELL__ >= 804)
@@ -35,10 +38,14 @@ import PFPrint
 import Id
 import IdPrint
 import Position
-import CSyntax(CExpr(..))
+import CSyntax(CExpr(..), CClause)
 import CType
 import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
-import Flags(Flags, maxTIStackDepth)
+import Flags(Flags, maxTIStackDepth,
+             warnIncompletePatterns, warnOverlappingPatterns)
+import TCPatCheck(PatMatchContext, PatMatchTypedRow,
+                  PatMatchObligation, mkClausesObligation,
+                  completePatMatchObligation, checkPatMatches)
 import Subst
 import Pred
 import Scheme
@@ -50,6 +57,7 @@ import Control.Monad(when)
 import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
+import Data.List(sortBy)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Util(headOrErr)
@@ -93,6 +101,13 @@ type CATFCache = M.Map (Id, [Type]) Type
 mergeCATFCaches :: CATFCache -> CATFCache -> CATFCache
 mergeCATFCaches = M.union
 
+-- Include the position because Id equality deliberately ignores it; local
+-- definitions with the same name in different scopes are distinct owners.
+type PatMatchOwner = (Id, Position)
+
+newtype PatMatchToken = PatMatchToken Int
+    deriving (Eq, Ord, Show)
+
 -- typechecking state that is restored in case of error
 data TStateRecover = TStateRecover {
   tsCurSubst :: !Subst, -- current substitution
@@ -104,7 +119,17 @@ data TStateRecover = TStateRecover {
   -- this definition, so repeated queries are answered from here
   -- rather than re-posed
   tsNumProven :: S.Set Pred,
-  tsNumRefuted :: S.Set Pred
+  tsNumRefuted :: S.Set Pred,
+  -- pattern matches to be checked for exhaustiveness/redundancy once
+  -- the enclosing top-level definition has been typechecked
+  tsPatMatchObligations ::
+      [(PatMatchToken, Maybe PatMatchOwner, PatMatchObligation)],
+  -- source-order reservation number; recoverable so failed typechecking does
+  -- not leave holes with observable ordering effects
+  tsNextPatMatchToken :: Int,
+  -- enclosing source definitions, innermost first; copied defaults are
+  -- wrapped in a generated definition and suppress all nested obligations
+  tsPatMatchOwnerStack :: [Id]
 }
 
 type TSSatElement = EPred
@@ -178,7 +203,10 @@ initRecoverState = TStateRecover {
     tsExplPreds = [],
     tsSatStack = mkSizedStack [mkSizedStack []],
     tsNumProven = S.empty,
-    tsNumRefuted = S.empty
+    tsNumRefuted = S.empty,
+    tsPatMatchObligations = [],
+    tsNextPatMatchToken = 0,
+    tsPatMatchOwnerStack = []
   }
 
 data TIResult a = TIResult {
@@ -263,6 +291,9 @@ tiRecoveringFromError' do_something create_fake_output = do
              (after consultation with Ravi.)
             -}
             s <- getSubst
+            -- pattern-match obligations in the state need the same
+            -- treatment as the answer, before their tyvars are trimmed
+            apSubPatObligations s
             updSubst (trimSubst dummy)
             return (apSub s answer)
           ))
@@ -283,6 +314,110 @@ tiRecoveringFromErrorxx do_something _ = do_something
 twarn :: WMsg -> TI ()
 twarn w = lift (modify (addWarning w))
   where addWarning w s = s { tsWarns = w:(tsWarns s) }
+
+-- Run an action while recording which source definition owns any pattern
+-- matches encountered beneath it.  Restore the old owner stack on both
+-- success and failure: callers may catch a typechecking error and continue
+-- with the same recoverable state.
+withPatObligationOwner :: Id -> TI a -> TI a
+withPatObligationOwner i action = do
+    old_owners <- gets tsPatMatchOwnerStack
+    modify (\ st -> st { tsPatMatchOwnerStack = i : old_owners })
+    catchError
+        (do result <- action
+            restoreOwners old_owners
+            return result)
+        (\ es -> do restoreOwners old_owners
+                    throwError es)
+  where
+    restoreOwners owners =
+        modify (\ st -> st { tsPatMatchOwnerStack = owners })
+
+-- Reserve source order for a match before its clauses are typechecked.  The
+-- obligation lives in recoverable state, so both the reservation and any
+-- nested matches disappear if the enclosing typecheck fails.
+beginPatObligation :: PatMatchContext -> Position -> Type -> [CClause]
+                   -> TI (Maybe PatMatchToken)
+beginPatObligation ctx pos ty cls = do
+    flags <- getFlags
+    owners <- gets tsPatMatchOwnerStack
+    let copied_or_generated = any isInternal owners
+        source_owner = case owners of
+                         [] -> Nothing
+                         (i:_) -> Just (i, getPosition i)
+    if not (warnIncompletePatterns flags || warnOverlappingPatterns flags) ||
+       copied_or_generated
+      then return Nothing
+      else case mkClausesObligation ctx pos ty cls of
+             Nothing -> return Nothing
+             Just o -> do
+               n <- gets tsNextPatMatchToken
+               let token = PatMatchToken n
+               modify (\ st -> st {
+                   tsPatMatchObligations =
+                       (token, source_owner, o) : tsPatMatchObligations st,
+                   tsNextPatMatchToken = n + 1 })
+               return (Just token)
+
+-- Attach typed rows to an earlier reservation.  Apply the current
+-- substitution immediately, before any enclosing scope gets a chance to trim
+-- the type variables created while checking these clauses.
+finishPatObligation :: Maybe PatMatchToken -> [PatMatchTypedRow] -> TI ()
+finishPatObligation Nothing _ = return ()
+finishPatObligation (Just token) typedRows = do
+    s <- getSubst
+    let typedRows' = apSub s typedRows
+        finish entry@(token', owner, o)
+          | token /= token' = entry
+          | otherwise =
+              case completePatMatchObligation o typedRows' of
+                Just o' -> (token', owner, o')
+                Nothing -> entry
+    modify (\ st -> st { tsPatMatchObligations =
+                             map finish (tsPatMatchObligations st) })
+
+-- Apply a substitution to the recorded obligations; must be called
+-- whenever the substitution is about to be trimmed, so that the column
+-- types are resolved before their tyvars disappear.
+apSubPatObligations :: Subst -> TI ()
+apSubPatObligations s =
+    modify (\ st -> st { tsPatMatchObligations =
+                             map apSubEntry (tsPatMatchObligations st) })
+  where
+    apSubEntry (token, owner, o) = (token, owner, apSub s o)
+
+-- Check the recorded pattern-match obligations (once the enclosing
+-- top-level definition has typechecked) and report the warnings.
+-- Copied typeclass defaults are excluded when they are recorded: TCheck's
+-- findFieldDefault wraps inherited clauses in a generated definition Id, and
+-- the enclosing-owner stack suppresses both its clauses and matches nested
+-- in its body.  Do not infer provenance from source filenames here, because
+-- an included source body legitimately has a different filename from its
+-- enclosing definition.
+-- Type normalization is supplied by TypeCheck to avoid an import cycle with
+-- TCMisc.  It is threaded through the checker so that both top-level column
+-- types and nested constructor/struct payload types can expand closed type
+-- functions before their pattern domains are classified.
+flushPatObligations :: (Flags -> SymTab -> Type -> Type) -> TI ()
+flushPatObligations expandTy = do
+    obs <- gets tsPatMatchObligations
+    when (not (null obs)) $ do
+        s <- getSubst
+        flags <- getFlags
+        r <- getSymTab
+        -- Reservations retain source order even though nested matches finish
+        -- first.  Every surviving token represents a distinct match: copied
+        -- defaults are suppressed when recording, and failed typechecking
+        -- attempts restore the recoverable obligation state.  In particular,
+        -- do not deduplicate by source syntax, because one include can expand
+        -- to several distinct matches under the same owner.
+        let ordered = sortBy byToken obs
+            obs' = map apSubEntry ordered
+            byToken (t1, _, _) (t2, _, _) = compare t1 t2
+            apSubEntry (_, _, o) = apSub s o
+            normTy = expandTy flags r
+        mapM_ twarn (concatMap (checkPatMatches flags r normTy) obs')
+        modify (\ st -> st { tsPatMatchObligations = [] })
 
 -- Record that a symbol from a package was used
 recordPackageUse :: Maybe Id -> TI ()

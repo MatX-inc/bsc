@@ -1,0 +1,7 @@
+checking package dependencies
+compiling GuardPlaceLinkIncomplete.bsv
+Warning: "GuardPlaceLinkIncomplete.bsv", line 6, column 12: (T0165)
+  Pattern matching in this case expression is not exhaustive. The following
+  pattern is not covered:
+    tagged Valid False
+All packages are up to date.

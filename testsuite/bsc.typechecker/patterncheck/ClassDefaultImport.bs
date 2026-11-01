@@ -1,0 +1,11 @@
+package ClassDefaultImport () where
+
+import ClassDefaultProvider
+
+data T = T
+
+-- Inheriting an imported default must not re-report the provider's match.
+instance MyClass T where {}
+
+useit :: T -> Bool
+useit t = conv t (Just True)

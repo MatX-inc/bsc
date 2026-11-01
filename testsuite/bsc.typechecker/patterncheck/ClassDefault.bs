@@ -1,0 +1,17 @@
+package ClassDefault where
+
+-- the incomplete match in the default is reported once, at the class
+-- declaration, not again for each instance that inherits it
+class MyClass a where
+  conv :: a -> Maybe Bool -> Bool
+  conv _ m = case m of
+               Just x -> x
+
+data T = T
+data U = U
+
+instance MyClass T where {}
+instance MyClass U where {}
+
+useit :: T -> U -> Bool
+useit t u = conv t (Just True) && conv u (Just False)

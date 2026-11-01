@@ -102,6 +102,7 @@ data Flags = Flags {
         optSched :: Bool,
         optUndet :: Bool,
         parallelSimLink :: Integer,
+        patternCheckFuel :: Int,
         printFlags :: Bool,
         printFlagsHidden :: Bool,
         printFlagsRaw :: Bool,
@@ -167,7 +168,9 @@ data Flags = Flags {
         verilogDeclareAllFirst :: Bool,
         verilogFilter :: [String],
         warnActionShadowing :: Bool,
+        warnIncompletePatterns :: Bool,
         warnMethodUrgency :: Bool,
+        warnOverlappingPatterns :: Bool,
         warnUndetPred :: Bool,
         -- Invocation controls; native serialization restores their defaults.
         ecoOptions :: ECOOptions
