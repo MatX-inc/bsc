@@ -23,9 +23,14 @@ import Prelude hiding ((<>))
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import Data.IORef(IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Data.Maybe(isJust, fromJust)
-import System.IO.Unsafe(unsafePerformIO)
+import Data.Array.IO(IOUArray)
+import Data.Array.MArray(newArray, getBounds)
+import Data.Array.Base(unsafeRead, unsafeWrite)
+import Control.Exception(evaluate)
+import Control.Monad(forM_, when)
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 
 import ErrorUtil(internalError)
 import IOUtil(progArgs)
@@ -44,6 +49,7 @@ import Position(noPosition)
 import Util(itos)
 import FStringCompat(FString, mkNumFString)
 import PreStrings(fsEmpty)
+import SpeedyString(internCount)
 
 -- ==============================
 -- IKind, IType
@@ -85,7 +91,7 @@ data IType
         = ITForAll_ {-# UNPACK #-} !Int !VarSet !Id !IKind IType
         | ITAp_ {-# UNPACK #-} !Int !VarSet IType IType
         | ITVar_ !Id
-        | ITCon_ !Id !IKind !TISort
+        | ITCon_ {-# UNPACK #-} !Int !Id !IKind !TISort
         | ITNum !Integer
         | ITStr !FString
 
@@ -107,7 +113,7 @@ pattern ITVar i <- ITVar_ i
   where ITVar i = mkITVar i
 
 pattern ITCon :: Id -> IKind -> TISort -> IType
-pattern ITCon i k s <- ITCon_ i k s
+pattern ITCon i k s <- ITCon_ _ i k s
   where ITCon i k s = mkITCon i k s
 
 {-# COMPLETE ITForAll, ITAp, ITVar, ITCon, ITNum, ITStr #-}
@@ -292,7 +298,9 @@ tidyCT (TDefMonad _) = TDefMonad noPosition
 mkITVar :: Id -> IType
 mkITVar i = ITVar_ (tidyTypeId i)
 
--- ITCon leaves are interned by qualified name.  Soundness rests on
+-- ITCon leaves are interned by qualified name and carry their index in
+-- the table as a unique (in-process identity only, for the rnf bit
+-- table below).  Soundness rests on
 -- the one-tycon-per-qualified-name invariant (front-end enforced,
 -- tconcheck-verified): the qualified Id determines the kind and sort,
 -- so a by-name hit may return the canonical node without normalizing
@@ -322,7 +330,7 @@ mkITCon i k s
         -- HasCallStack to mkITCon and the ITCon pattern signature and
         -- render callStack here.
         internalError ("IType.mkITCon: unqualified tycon " ++
-                       show (ITCon_ i k s))
+                       show (ITCon_ 0 i k s))
     | otherwise = unsafePerformIO $ do
         let key = (getIdQual i, getIdBase i)
         TConTable m0 <- readIORef tconTable
@@ -333,7 +341,8 @@ mkITCon i k s
     go key st@(TConTable m) =
         case M.lookup key m of
           Just t  -> (st, t)
-          Nothing -> let t = ITCon_ (tidyTypeId i) k (tidySort (getIdQual i) s)
+          Nothing -> let t = ITCon_ (M.size m) (tidyTypeId i) k
+                                    (tidySort (getIdQual i) s)
                      in  (TConTable (M.insert key t m), t)
 
 -- --------------------------------
@@ -379,7 +388,7 @@ data NodeKey
 tKey :: IType -> TKey
 tKey (ITForAll_ u _ _ _ _) = TKNode u
 tKey (ITAp_ u _ _ _)       = TKNode u
-tKey (ITCon_ i _ _)        = TKCon (getIdQual i) (getIdBase i)
+tKey (ITCon_ _ i _ _)      = TKCon (getIdQual i) (getIdBase i)
 tKey (ITVar_ i)            = TKVar (getIdBase i)
 tKey (ITNum n)             = TKNum n
 tKey (ITStr s)             = TKStr s
@@ -504,13 +513,109 @@ instance Show IType where
 
 -- --------------------------------
 -- NFData Instances
+--
+-- Only an interned node's first rnf walks its fields; its bit
+-- (walkedNodes by intern unique, walkedTycons by tycon unique) answers
+-- every later one, because TopUtils.dump deepseqs every stage and keeps
+-- reaching the same shared nodes.  The bit must not move a first
+-- forcing, which is what fixes a string's intern id:
+--
+--  * a node's children are in weak head normal form before the node
+--    exists (its intern key forces their strict TKey fields), and its
+--    Id, kind and sort are strict fields, so a walk forces only the
+--    lazy contents of the kind and the sort, as before and in the same
+--    order (i, k, t and i, k, s);
+--  * a later walk of the same immutable node forces nothing the first
+--    did not, so skipping it changes no forcing;
+--  * markWalked sets the bit only once the walk has returned, so a walk
+--    that raised an internal error runs again on the next rnf.
+--
+-- -hack-no-rnf-ground neither reads nor sets a bit.  -check-rnf-ground
+-- also walks every node whose bit is set, and that walk must intern no
+-- string and build no node.  Each guard spells its walk out so that a
+-- visit that skips it builds no thunk for it.
 instance NFData IType where
-    rnf (ITForAll i k t) = rnf3 i k t
-    rnf (ITAp a b) = rnf2 a b
-    rnf (ITVar i) = rnf i
-    rnf (ITCon i k s) = rnf3 i k s
+    rnf (ITForAll_ u _ i k t)
+        | hackNoRnfGround = rnf3 i k t
+        | not (isWalked walkedNodes u) =
+            markWalked walkedNodes u (rnf3 i k t)
+        | checkRnfGround = rnfChecked (rnf3 i k t)
+        | otherwise = ()
+    rnf (ITAp_ u _ f a)
+        | hackNoRnfGround = rnf2 f a
+        | not (isWalked walkedNodes u) =
+            markWalked walkedNodes u (rnf2 f a)
+        | checkRnfGround = rnfChecked (rnf2 f a)
+        | otherwise = ()
+    rnf (ITVar_ i) = rnf i
+    rnf (ITCon_ u i k s)
+        | hackNoRnfGround = rnf3 i k s
+        | not (isWalked walkedTycons u) =
+            markWalked walkedTycons u (rnf3 i k s)
+        | checkRnfGround = rnfChecked (rnf3 i k s)
+        | otherwise = ()
     rnf (ITNum i) = rnf i
     rnf (ITStr s) = rnf s
+
+-- One bit per unique: set once the node's walk has completed.
+type WalkedTable = IORef (IOUArray Int Bool)
+
+{-# NOINLINE walkedNodes #-}
+walkedNodes :: WalkedTable
+walkedNodes = unsafePerformIO (newArray (0, 65535) False >>= newIORef)
+
+{-# NOINLINE walkedTycons #-}
+walkedTycons :: WalkedTable
+walkedTycons = unsafePerformIO (newArray (0, 1023) False >>= newIORef)
+
+-- A unique beyond the table's bounds has not been walked (the table
+-- grows when a bit is set, not when one is read).
+isWalked :: WalkedTable -> Int -> Bool
+isWalked ref u = unsafeDupablePerformIO $ do
+    arr <- readIORef ref
+    (_, hi) <- getBounds arr
+    if u > hi then return False else unsafeRead arr u
+
+-- Set the bit of a node whose walk returned the () argument: the match
+-- on () evaluates the walk before the bit is set.
+{-# NOINLINE markWalked #-}
+markWalked :: WalkedTable -> Int -> () -> ()
+markWalked ref u () = unsafePerformIO $ do
+    arr <- readIORef ref
+    (_, hi) <- getBounds arr
+    arr' <- if u <= hi then return arr else do
+        new <- newArray (0, max u (2 * hi + 1)) False
+        forM_ [0 .. hi] $ \i -> unsafeRead arr i >>= unsafeWrite new i
+        writeIORef ref new
+        return new
+    unsafeWrite arr' u True
+
+-- The oracle's walk of a node whose bit is set: it must intern no
+-- string and build no node.  The walk must arrive unevaluated, since
+-- the counts are read before it runs (a $! at a call site voids this).
+{-# NOINLINE rnfChecked #-}
+rnfChecked :: () -> ()
+rnfChecked walk = unsafePerformIO $ do
+    s0 <- internCount
+    InternTable _ n0 <- readIORef internTable
+    TConTable c0 <- readIORef tconTable
+    evaluate walk
+    s1 <- internCount
+    InternTable _ n1 <- readIORef internTable
+    TConTable c1 <- readIORef tconTable
+    when (s1 /= s0 || n1 /= n0 || M.size c1 /= M.size c0) $
+        internalError ("IType.rnf: the walk after the bit interned " ++
+                       show (s1 - s0) ++ " strings and built " ++
+                       show (n1 - n0) ++ " interior and " ++
+                       show (M.size c1 - M.size c0) ++ " tycon nodes")
+
+{-# NOINLINE hackNoRnfGround #-}
+hackNoRnfGround :: Bool
+hackNoRnfGround = "-hack-no-rnf-ground" `elem` progArgs
+
+{-# NOINLINE checkRnfGround #-}
+checkRnfGround :: Bool
+checkRnfGround = "-check-rnf-ground" `elem` progArgs
 
 instance NFData IKind where
     rnf IKStar = ()
