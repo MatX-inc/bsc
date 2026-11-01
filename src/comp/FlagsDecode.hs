@@ -647,6 +647,7 @@ defaultFlags bluespecdir = Flags {
         liftDicts = True,
         maxTIStackDepth = 1000,
         metadataDump = False,
+        metadataOut = Nothing,
         metadataScramble = False,
         methodBVI = False,
         methodConf = False,
@@ -1362,6 +1363,11 @@ externalFlags = [
          (Toggle (\f x -> f {metadataDump=x}) (showIfTrue metadataDump),
           "print the site and frame chain of every heap cell of the elaborated module", Hidden)),
 
+        ("metadata-out",
+         (Arg "dir" (\f s -> Left (f {metadataOut = Just s}))
+                    (Just (FRTMaybeString metadataOut)),
+          "write the evaluator metadata side file of each elaborated module into the directory", Hidden)),
+
         ("metadata-scramble",
          (Toggle (\f x -> f {metadataScramble=x}) (showIfTrue metadataScramble),
           "perturb the evaluator metadata store with a per-run seed (output must not change)", Hidden)),
@@ -2016,6 +2022,7 @@ showFlagsRaw flags =
           ("linkFlags", show (linkFlags flags)),
           ("maxTIStackDepth", show (maxTIStackDepth flags)),
           ("metadataDump", show (metadataDump flags)),
+          ("metadataOut", show (metadataOut flags)),
           ("metadataScramble", show (metadataScramble flags)),
           ("methodBVI", show (methodBVI flags)),
           ("methodConditions", show (methodConditions flags)),

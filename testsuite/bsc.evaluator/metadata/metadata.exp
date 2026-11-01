@@ -63,4 +63,45 @@ compare_file MetaBinder.bsv.bsc-vcomp-out.filtered MetaBinder.bsv.bsc-vcomp-out.
 
 erase sysMetaBinder.plain.v
 
+# The side file (-metadata-out): one line per root and per lifted def of
+# a module in which one expression (a + b) is built under two rules and
+# a method, so that the rebuild's CSE identifies three cells as one def
+# standing for three contexts (merged, and one alias class), the
+# argument of a function is bound to its parameter (binder), a def's
+# value is read by another def (parent), a value evaluates to another
+# (alias) and a static loop counts its iterations.  Pinned after the
+# position filter of the dump, pointer normalisation (every __h<n> def
+# name reduced to __h, every _<n> parent or alias root to _N) and line
+# sorting: set equality per module.  The sort runs under the C locale,
+# so the pinned order is the byte order whatever locale the harness or
+# the caller's shell sets.  The Verilog of the compile with the flag is
+# identical to the plain one.
+proc filter_side { fname } {
+    global env
+    sed $fname $fname.filtered {} \
+        {-e s/\\\[MetaSide\\.bsv:/@@MetaSide.bsv:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g -e s/__h\[0-9\]+/__h/g -e s/(parent|alias)\ _\[0-9\]+/\\1\ _N/g}
+    if { [info exists env(LC_ALL)] } { set lc_all_save $env(LC_ALL) }
+    set env(LC_ALL) C
+    sort $fname.filtered $fname.sorted
+    if { [info exists lc_all_save] } {
+        set env(LC_ALL) $lc_all_save
+    } else {
+        unset env(LC_ALL)
+    }
+}
+
+erase MetaSide.bo
+compile_verilog_pass MetaSide.bsv sysMetaSide
+move sysMetaSide.v sysMetaSide.plain.v
+
+erase MetaSide.bo
+erase sysMetaSide.metadata
+compile_verilog_pass MetaSide.bsv sysMetaSide {-metadata-out .}
+compare_file sysMetaSide.v sysMetaSide.plain.v
+filter_side sysMetaSide.metadata
+compare_file sysMetaSide.metadata.sorted sysMetaSide.metadata.expected
+erase sysMetaSide.metadata
+
+erase sysMetaSide.plain.v
+
 }
