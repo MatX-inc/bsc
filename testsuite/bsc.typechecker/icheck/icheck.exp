@@ -7,14 +7,42 @@
 # order.  The dump goes to the file named by BSC_INTERN_DUMP, or without
 # it next to the .bo as <package>.intern.tsv.  Two compiles of the same
 # source must leave identical tables, and the table starts at id 0.
+#
+# The compiles run with -v, which prints "types OK" for every internal
+# check that ran: four package-level checks (iPCheck after internal,
+# fixup, isimpdicts and isimplify) and, per synthesized module, the
+# module check after expanded, six more after the post-expansion passes
+# (iMCheck after Fmt inline, inline, transform, splitIf, lift and
+# transform) and the ASyntax checks; two modules here, 46 in all.
 
 erase ICheck.bo
-compile_backend_pass ICheck.bs {-trace-intern-table}
+compile_backend_pass ICheck.bs {-trace-intern-table -v}
+find_n_strings ICheck.bs.bsc-out {types OK} 46
 find_regexp ICheck.intern.tsv {^0\t"}
-move ICheck.intern.tsv ICheck.default.intern.tsv
+move ICheck.intern.tsv ICheck.checked.intern.tsv
+move ICheck.bo ICheck.checked.bo
+move mkCounter.v mkCounter.checked.v
+move sysICheck.v sysICheck.checked.v
 
 erase ICheck.bo
 set ::env(BSC_INTERN_DUMP) "ICheck.env.intern.tsv"
-compile_backend_pass ICheck.bs {-trace-intern-table}
+compile_backend_pass ICheck.bs {-trace-intern-table -v}
 unset ::env(BSC_INTERN_DUMP)
-compare_file ICheck.env.intern.tsv ICheck.default.intern.tsv
+compare_file ICheck.env.intern.tsv ICheck.checked.intern.tsv
+
+# -hack-no-icheck-package makes the four package-level checks no-ops and
+# -hack-no-icheck-passes the six post-expansion module checks; the check
+# after expanded and the ASyntax checks still run, so sixteen "types OK"
+# lines fewer.  A check is a pure re-typing whose Bool only feeds an
+# internal error, but it is also the first consumer of the pass's lazy
+# result, so skipping it is admissible only if the dump that follows
+# forces the same thunks and no string is first interned in a different
+# order: the .bo, both generated Verilog files and the intern table
+# must be identical to the checked compile's.
+erase ICheck.bo
+compile_backend_pass ICheck.bs {-trace-intern-table -hack-no-icheck-package -hack-no-icheck-passes -v}
+find_n_strings ICheck.bs.bsc-out {types OK} 30
+compare_file ICheck.bo ICheck.checked.bo
+compare_file mkCounter.v mkCounter.checked.v
+compare_file sysICheck.v sysICheck.checked.v
+compare_file ICheck.intern.tsv ICheck.checked.intern.tsv
