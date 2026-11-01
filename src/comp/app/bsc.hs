@@ -690,13 +690,13 @@ compilePackage
     t <- dump errh flags t DFfixup dumpnames imodf
 
     start flags DFisimpdicts
-    let imodsd = iSimpDicts imodf
+    let (imodsd, dictBodies) = iSimpDicts imodf
     iPCheck flags symt imodsd "isimpdicts"
     t <- dump errh flags t DFisimpdicts dumpnames imodsd
 
     start flags DFisimplify
     let imods :: IPackage PreElab
-        imods = iSimplify imodsd
+        imods = iSimplify alldefs dictBodies imodsd
     iPCheck flags symt imods "isimplify"
     t <- dump errh flags t DFisimplify dumpnames imods
     stats flags DFisimplify imods

@@ -20,8 +20,11 @@ trace_simp_dicts = "-trace-simp-dicts" `elem` progArgs
 -- This enables ISimplify to inline them efficiently
 
 
-iSimpDicts :: IPackage PreElab -> IPackage PreElab
-iSimpDicts pkg@(IPackage { ipkg_defs = ds }) = pkg { ipkg_defs = ds'' }
+-- Also returns the map the ICDef nodes of the output are wired to
+-- (the simplified bodies before fixUp), from which ISimplify builds
+-- the second half of its self-reference memo.
+iSimpDicts :: IPackage PreElab -> (IPackage PreElab, M.Map Id (IExpr PreElab))
+iSimpDicts pkg@(IPackage { ipkg_defs = ds }) = (pkg { ipkg_defs = ds'' }, m)
   where ds' = map simpDict ds
         m = M.fromList [ (i, e') | IDef i _ e' _ <- ds' ]
         ds'' = iDefsMap (fixUp m) ds'

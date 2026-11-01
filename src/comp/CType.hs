@@ -725,9 +725,11 @@ eqWordOn = not ("-hack-no-eq-word" `elem` progArgs)
 -- and WriteBinGeneric belong to the .bo/.ba writer (BinData.indexBytes):
 -- the indices it checked against the generic encoder under
 -- -check-writebin, and the ones it encoded generically under
--- -hack-no-writebin.  The last two belong to the rnf memo of interned
--- ITypes (IType.hs, NFData IType): the first walks of interned nodes,
--- and the visits answered from a node's bit.
+-- -hack-no-writebin.  The RnfGround pair belongs to the rnf memo of
+-- interned ITypes (IType.hs, NFData IType): the first walks of interned
+-- nodes, and the visits answered from a node's bit.  The ISimplify
+-- counters belong to the self-reference guard memo of
+-- ISimplify.selectTuple (see notSelfRef there).
 data CTypeStat
     = TApBuilt | TConBuilt | PreGateBuilt | TableHit | TableNew
     | RefuseChild | RefuseUnqual | RefuseTyStr | LeafRecompute
@@ -739,6 +741,8 @@ data CTypeStat
     | CSubstShortcut | CSubstNodeShortcut
     | WriteBinChecked | WriteBinGeneric
     | RnfGroundWalk | RnfGroundSkip
+    | ISimplifyQuery | ISimplifySelfRef | ISimplifyMemoRef | ISimplifyMemoFill
+    | ISimplifyMemoWalk
     deriving (Eq, Ord, Enum, Bounded)
 
 statName :: CTypeStat -> String
@@ -775,6 +779,11 @@ statName WriteBinChecked = "writebin_checked"
 statName WriteBinGeneric = "writebin_generic"
 statName RnfGroundWalk = "rnf_ground_walk"
 statName RnfGroundSkip = "rnf_ground_skip"
+statName ISimplifyQuery = "isimplify_query"
+statName ISimplifySelfRef = "isimplify_self_ref"
+statName ISimplifyMemoRef = "isimplify_memo_ref"
+statName ISimplifyMemoFill = "isimplify_memo_fill"
+statName ISimplifyMemoWalk = "isimplify_memo_walk"
 
 {-# NOINLINE ctypeStatsOn #-}
 ctypeStatsOn :: Bool
