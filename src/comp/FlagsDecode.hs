@@ -577,6 +577,7 @@ traceflags = [
           "hack-gate-clock-inputs",
           "hack-gate-default-clock",
           "hack-no-csubst-shortcut",
+          "hack-no-eq-word",
           "hack-no-itype-ftv-cache",
           "hack-no-rnf-ground",
           "hack-strict-inst-tree",
