@@ -1,0 +1,55 @@
+package UseCondMultiUse where
+
+-- "reader" calls rf.sub under sel and under not sel, so it always uses rf.sub,
+-- and conflicts with "writer" (sub SB upd, but out._read SB out._write).
+
+import RegFile
+
+type Data = Bit 8
+
+oldVal :: Data
+oldVal = 10
+
+newVal :: Data
+newVal = 42
+
+{-# synthesize sysUseCondMultiUse #-}
+sysUseCondMultiUse :: Module Empty
+sysUseCondMultiUse =
+  module
+    rf :: RegFile (Bit 2) Data <- mkRegFileFull
+    cycle :: Reg (UInt 4) <- mkReg 0
+    sel :: Reg Bool <- mkReg True
+    a1 :: Reg (Bit 2) <- mkReg 0
+    a2 :: Reg (Bit 2) <- mkReg 1
+    out :: Reg Data <- mkReg 0
+    seen :: Reg Data <- mkReg 0
+    wrote :: Reg Data <- mkReg 0
+    wFired :: Reg Bool <- mkReg False
+    rFired :: Reg Bool <- mkReg False
+
+    rules
+      "count": when True ==> cycle := cycle + 1
+
+      "init": when cycle == 0 ==> rf.upd 0 oldVal
+
+      "writer": when cycle == 1 ==> do
+        rf.upd a1 newVal
+        wrote := newVal
+        wFired := True
+        seen := out
+
+      "reader": when cycle == 1 ==> do
+        rFired := True
+        if sel then out := rf.sub a1 else out := rf.sub a2 + 1
+
+      "check": when cycle == 2 ==> do
+        -- In bsc's order (writer, reader), reader reads what writer stored.
+        if wFired && rFired
+          then if out /= wrote
+                 then $display "UNSOUND: reader read %0d, writer stored %0d"
+                        out wrote
+                 else $display "writer and reader fired together"
+          else $display "writer fired: %b, reader fired: %b (not together; conflict respected)"
+                 wFired rFired
+        $finish 0
