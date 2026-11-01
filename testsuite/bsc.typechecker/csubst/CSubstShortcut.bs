@@ -1,0 +1,60 @@
+package CSubstShortcut where
+
+import Vector
+
+-- Source for the CSubst shortcut tests (csubst.exp): an explicitly
+-- typed definition with a class context, whose solved dictionary
+-- bindings tiExpl inlines into the body with an empty tyvar map (every
+-- type annotation is returned whole), and a local implicitly typed
+-- definition with a class context, which tiImpls generalizes under
+-- -let-gen and whose generic type variables it then renames through
+-- the tyvar map (the ground annotation beside them is returned
+-- unrebuilt while the variables are walked), both used at ground
+-- types by a synthesized module.
+
+class Encode a n | a -> n where
+    encode :: a -> Bit n
+
+instance Encode Bool 1 where
+    encode b = pack b
+
+instance Encode (UInt k) k where
+    encode x = pack x
+
+instance (Encode a sa, Encode b sb) => Encode (a, b) (TAdd sa sb) where
+    encode (x, y) = encode x ++ encode y
+
+instance (Encode a sa) => Encode (Vector n a) (TMul n sa) where
+    encode v = pack (map encode v)
+
+-- explicitly typed, with contexts solved into dictionary bindings
+checksum :: (Encode a n, Add n k 64) => a -> UInt 8
+checksum x =
+    let wide :: Bit 64
+        wide = zeroExtend (encode x)
+        w :: UInt 64
+        w = unpack wide
+    in  truncate w
+
+-- the local definition is implicitly typed and has a class context:
+-- under -let-gen it is generalized and its dictionary bindings are
+-- inlined with the tyvar map renaming its generic variables, while
+-- the Bit 4 annotation beside them is ground; without -let-gen it is
+-- monomorphic and the tyvar map is empty
+probe :: Bool -> (Bit 1, Bit 4)
+probe flag =
+    let enc x = (encode x, (1 :: Bit 4))
+    in  enc flag
+
+{-# verilog sysCSubstShortcut #-}
+sysCSubstShortcut :: Module Empty
+sysCSubstShortcut = module
+    cnt :: Reg (UInt 8) <- mkReg 0
+    lane :: Reg (Vector 4 (UInt 8)) <- mkReg (replicate 0)
+    rules
+      "step": when True ==>
+        action
+          cnt := cnt + 1
+          lane := map (\b -> b + cnt) lane
+          $display "%0d %0d %0d %b" cnt (checksum (lane, cnt == 0)) (checksum cnt) (pack (probe (cnt == 3)))
+      "done": when cnt == 7 ==> $finish 0
