@@ -73,7 +73,7 @@ import ISyntaxSubst(eSubst, eSubstBatch, tSubstBatch)
 import IConv(iConvT, iConvExpr)
 import ISyntaxUtil
 import IExpandUtils
-import IExpandMeta(SiteKind(..), idSiteKey, rootSiteKey, renderDump)
+import IExpandMeta(SiteKind(..), idSiteKey, rootSiteKey, Binder(..), renderDump)
 import Wires
 import IWireSet
 import qualified IfcBetterInfo as BetterInfo
@@ -3374,7 +3374,8 @@ evalApAccum tag exprCtx typeCtx (ILam i t body) (E a : as) = do
   -- the ILAM args have been accumulated into typeCtx).
   norm <- getTypeNormalizerC
   let t' = changedOrId norm (tSubstBatch typeCtx t)
-  a' <- toHeap "apply-accum" t' a (Just i)
+  -- the argument's cell records i as its binder
+  a' <- toHeapBinder (BoundTo i) "apply-accum" t' a (Just i)
   -- position information is clobbered by this point
   when doDebug $ traceM ("accum apply arg=" ++ ppReadable (a', a))
   evalApAccum "ILam-accum" (M.insert i a' exprCtx) typeCtx body as
@@ -3447,7 +3448,7 @@ evalAp' e@(ICon i ic)          as = conAp i ic e as
 evalAp' e@(ILam _ _ _)         [] = return (pExpr e)
 -- place arg onto heap, substitute arg with heap reference in function body
 evalAp'   (ILam i t e)   (E a:as) = do
-        a' <- toHeap "apply" t a (Just i)
+        a' <- toHeapBinder (BoundTo i) "apply" t a (Just i)
         -- position information is clobbered by this point
         when doDebug $ traceM ("apply arg=" ++ ppReadable (a', a))
         evalApAccum "ILam" (M.singleton i a') M.empty e as
@@ -3510,7 +3511,9 @@ evalHeap (ptr, ref) = do
                     struct_field_names =
                          [Just (prefix (unQualId name)) | name <- field_names]
                 argTys <- takeArgTypes (length as) <$> instFunType (iGetType f) ts
-                as' <- mapM (\(t, a, n) -> toHeap "move-tuple" t a n) $ zip3 argTys as struct_field_names
+                -- each field's cell records the field's index as its binder
+                as' <- mapM (\(k, t, a, n) -> toHeapBinder (MovedTo k) "move-tuple" t a n) $
+                       zip4 [0..] argTys as struct_field_names
                 when doDebug $ traceM ("evalHeap move #1\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
                 {-           (mapIExprPosition cross
@@ -3531,10 +3534,12 @@ evalHeap (ptr, ref) = do
                                                    | otherwise = True
                     isLazyOp _ = False
                 argTys <- takeArgTypes (length as) <$> instFunType (iGetType f) ts
-                let th t a = if isLazyOp f
-                             then toHeap "move-ap" t a Nothing
-                             else toHeapWHNF "move-ap" t (P pTrue a) Nothing
-                as' <- zipWithM th argTys as
+                -- each operand's cell records the operand's index as its binder
+                let th (k, t, a) =
+                        if isLazyOp f
+                        then toHeapBinder (MovedTo k) "move-ap" t a Nothing
+                        else toHeapWHNFBinder (MovedTo k) "move-ap" t (P pTrue a) Nothing
+                as' <- mapM th (zip3 [0..] argTys as)
                 when doDebug $ traceM ("evalHeap move #2\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
                 {-            (mapIExprPosition cross
@@ -6224,7 +6229,7 @@ iArrayInRange arr = Array.inRange (Array.bounds arr)
 
 mkArrayCell :: HExpr -> G (ArrayCell HeapData)
 mkArrayCell e = do
-   meta <- stampFor e
+   meta <- stampFor NoBinder e
    let hcell = HUnev e Nothing meta
    (p, r) <- addHeapCell "mk-array-cell" hcell
    return (ArrayCell p r)

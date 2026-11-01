@@ -1,0 +1,35 @@
+checking package dependencies
+compiling MetaBinder.bsv
+code generation for sysMetaBinder starts
+_106: prim PrimUnpack, field 1 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_248: def Prelude.toPrimAction [MetaBinder.bsv:34:7] u, field 3 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_251: def MetaBinder.scale [MetaBinder.bsv:11:18], binder s [MetaBinder.bsv:34:15] <- def Prelude.toPrimAction [MetaBinder.bsv:34:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_253: prim PrimIf, binder b [MetaBinder.bsv:37:15] <- def Prelude.toPrimAction [MetaBinder.bsv:34:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_254: prim PrimAdd, binder x [Prelude.bs] <- def Prelude.toPrimAction [MetaBinder.bsv:34:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_260: prim PrimXor, binder y [MetaBinder.bsv:11:43] <- def MetaBinder.scale [MetaBinder.bsv:11:18]#1 <- def Prelude.toPrimAction [MetaBinder.bsv:34:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_271: prim PrimConcat <- def MetaBinder.scale [MetaBinder.bsv:11:18]#1 <- def Prelude.toPrimAction [MetaBinder.bsv:34:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_272: prim PrimSelect, field 0 <- def MetaBinder.scale [MetaBinder.bsv:11:18]#1 <- def Prelude.toPrimAction [MetaBinder.bsv:34:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_273: prim PrimInv, field 1 <- def MetaBinder.scale [MetaBinder.bsv:11:18]#1 <- def Prelude.toPrimAction [MetaBinder.bsv:34:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_290: prim PrimMul <- def Prelude.toPrimAction [MetaBinder.bsv:34:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_292: def Prelude.toPrimAction [MetaBinder.bsv:45:7] u, field 3 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_305: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs] <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_310: prim PrimAdd, binder x [Prelude.bs] <- def Prelude.bind_ [MetaBinder.bsv:47:11] u#1 <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_316: prim PrimWhen, field 2
+_319: method FIFOF_.i_notEmpty [FIFOF_.bsv], field 0 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1
+_320: prim PrimULE <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_321: prim PrimBNot <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_324: prim PrimIf, field 0 <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_325: prim PrimIf, field 1 <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_326: prim PrimAdd <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_327: prim PrimSub <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_328: prim PrimSub <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_329: prim PrimAdd <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_351: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs] <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_356: prim PrimJoinActions, field 1 <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_371: con Prelude.Valid [MetaBinder.bsv:50:28], binder x [Prelude.bs] <- def Prelude.bind_ [MetaBinder.bsv:51:14] u#1 <- def Prelude.bind_ [MetaBinder.bsv:50:7] u#1 <- def Prelude.bind_ [MetaBinder.bsv:47:11] u#1 <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_391: method Prelude.avAction [Prelude.bs], field 1 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_396: method FIFOF_.deq [FIFOF_.bsv] <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaBinder.bsv:45:7] u#1 <- def Prelude.addRules [MetaBinder.bsv:32:4] u#1 <- def Prelude.bind_ [MetaBinder.bsv:32:4] u#1
+_479: method FIFOF_.i_notFull [FIFOF_.bsv], field 0 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1
+_492: method FIFOF_.enq [FIFOF_.bsv] <- def Prelude.bitsToActionValue_ [Prelude.bs]#1 <- methodroot put [MetaBinder.bsv:21:8]#1
+Verilog file created: sysMetaBinder.v
+All packages are up to date.

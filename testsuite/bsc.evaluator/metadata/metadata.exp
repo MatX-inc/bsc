@@ -1,14 +1,14 @@
 # Tests for the evaluator metadata store (IExpandMeta): the -metadata-dump
-# output on a known package, and the -metadata-scramble identity (the
+# output on known packages, and the -metadata-scramble identity (the
 # generated Verilog does not depend on the store's content).
 
-# The dump prints every cell of the elaborated module with its site and
-# the chain of definition unfoldings it was created under.  Positions in
-# files other than the test's own are reduced to the file name, so that
-# a library edit does not move the expected output.
+# The dump prints every cell of the elaborated module with its site, its
+# binder and the chain of definition unfoldings it was created under.
+# Positions in files other than the tests' own (Meta*.bsv) are reduced to
+# the file name, so that a library edit does not move the expected output.
 proc filter_dump { fname } {
     sed $fname $fname.filtered {} \
-        {-e s/\\\[MetaDump\\.bsv:/@@MetaDump.bsv:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g}
+        {-e s/\\\[(Meta\[A-Za-z\]*\\.bsv):/@@\\1:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g}
 }
 
 if { $vtest == 1 } {
@@ -34,5 +34,30 @@ filter_dump MetaDump.bsv.bsc-vcomp-out
 compare_file MetaDump.bsv.bsc-vcomp-out.filtered MetaDump.bsv.bsc-vcomp-out.expected
 
 erase sysMetaDump.plain.v
+
+# Binders: every cell bound to a parameter (an argument, a let-bound
+# value) or moved into a field or operand of a struct or another lazy
+# application carries that binder, pinned by the dump of a package
+# exercising each; the operand that a tagged union's constructor
+# application moves into a cell is not a kept cell once the value is
+# extracted, so the dump has no line for it.  The Verilog is unchanged
+# by the flags.
+erase MetaBinder.bo
+compile_verilog_pass MetaBinder.bsv sysMetaBinder
+move sysMetaBinder.v sysMetaBinder.plain.v
+
+erase MetaBinder.bo
+compile_verilog_pass MetaBinder.bsv sysMetaBinder {-metadata-scramble -metadata-dump}
+compare_file sysMetaBinder.v sysMetaBinder.plain.v
+find_n_strings MetaBinder.bsv.bsc-vcomp-out {#} 0
+
+erase MetaBinder.bo
+erase sysMetaBinder.v
+compile_verilog_pass MetaBinder.bsv sysMetaBinder {-metadata-dump}
+compare_file sysMetaBinder.v sysMetaBinder.plain.v
+filter_dump MetaBinder.bsv.bsc-vcomp-out
+compare_file MetaBinder.bsv.bsc-vcomp-out.filtered MetaBinder.bsv.bsc-vcomp-out.expected
+
+erase sysMetaBinder.plain.v
 
 }
