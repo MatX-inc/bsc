@@ -2,7 +2,7 @@
 {-# LANGUAGE BangPatterns #-}
 module SpeedyString(SString, toString, fromString, (++), concat, filter,
                     InternSnapshot(..), snapshotInternState, validSnapshot,
-                    renderInternTable) where
+                    renderInternTable, internCount) where
 
 import Prelude hiding((++), concat, filter)
 import qualified Prelude((++), filter)
@@ -110,6 +110,10 @@ freshInt :: IO Int
 freshInt = do fresh <- readVar nextInt
               writeVar nextInt (fresh + 1)
               return fresh
+
+-- The number of strings interned so far.
+internCount :: IO Int
+internCount = readVar nextInt
 
 
 -- A capture contains every spelling, including entries no longer reachable
