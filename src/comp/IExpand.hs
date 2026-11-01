@@ -755,10 +755,11 @@ eqPtrs heap ptrs =
                         case IM.lookup i ptrm of
                         Nothing -> e
                         -- hd_ref errors because we don't use it once we have the iheap
-                        -- poss must be a real value (S.empty): the position
-                        -- readers and NFData force it.  The ref payload is
-                        -- genuinely never touched, so it stays an error.
-                        Just i' -> IRefT t i' S.empty (internalError "eqPtrs ref")
+                        -- the position must be a real value (noPosition): the
+                        -- strict field and the position readers force it.  The
+                        -- ref payload is genuinely never touched, so it stays
+                        -- an error.
+                        Just i' -> IRefT t i' noPosition (internalError "eqPtrs ref")
                     -- canonicalize array element pointers the same way,
                     -- so that selections over CSE-equal arrays compare
                     -- equal (cmpC compares arrays by ac_ptr); like the
@@ -1672,7 +1673,7 @@ handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModule
         showModProgress ns ("Attempting recursive module instantiation")
         let name = stateLocToId ns
         (ptr, ref) <- addHeapCell "prim-mod-fix" (HLoop (Just name))
-        let rt = IRefT t ptr (S.singleton $ getPosition name) ref
+        let rt = IRefT t ptr (getPosition name) ref
         stno <- getStateNo
         old_rblobs <- getSavedRules
         clearSavedRules
@@ -2649,7 +2650,7 @@ findNF (IAps (ICon _ (ICPrim _ PrimCase)) _ (idx:def:n0:e0:_)) = findNF e0
 findNF (IAps (ICon _ (ICPrim _ PrimArrayDynSelect)) [elem_t, _] [a, _]) =
     let findNFInArray (ICon i (ICLazyArray _ arr _)) =
             case (Array.elems arr) of
-              (ArrayCell ptr ref : _) -> findNF (IRefT elem_t ptr S.empty ref)
+              (ArrayCell ptr ref : _) -> findNF (IRefT elem_t ptr noPosition ref)
               _ -> internalError ("findNFInArray: no elements")
         findNFInArray e@(IRefT {}) = do P _ e' <- unheap (pExpr e)
                                         findNFInArray e'
@@ -2857,7 +2858,7 @@ walkNF e =
                       (ICon i (ICLazyArray arr_t arr u)) -> do
                         let cells = Array.elems arr
                         let mapFn (ArrayCell ptr ref) = do
-                                (P p _, ws) <- walkNF (IRefT elem_t ptr S.empty ref)
+                                (P p _, ws) <- walkNF (IRefT elem_t ptr noPosition ref)
                                 return (p, ws)
                         (ps, wss) <- mapAndUnzipM mapFn cells
                         let e' = IAps f ts [arr_e, idx_e']
@@ -3094,7 +3095,7 @@ evalUH e = do
                            evalAp "Uninit Vector" icon [T t, E pos, E name]
                          _ | isBitType t -> do
                            let cells = Array.elems arr
-                           let f (ArrayCell p r) = (1, IRefT itBit1 p S.empty r)
+                           let f (ArrayCell p r) = (1, IRefT itBit1 p noPosition r)
                            let e_szs = map f cells
                            let fused = snd $ foldl1 fuse e_szs
                            eval1 fused
@@ -3278,7 +3279,7 @@ evalStaticOpInArray' doUH doBK doUndet
         -- leave the preds in the array elems, walkNF will collect them
         let cells = Array.elems arr
             mapFn (ArrayCell ref_p ref_r) = do
-                let ref_e = IRefT elem_ty ref_p S.empty ref_r
+                let ref_e = IRefT elem_ty ref_p noPosition ref_r
                 ref_pe' <- evalStaticOp' doUH doBK doUndet
                                          ref_e resultType handler
                 return (pExprToHExpr ref_pe')
@@ -4607,7 +4608,7 @@ conAp' sel_i sel_c@(ICPrim _ PrimArrayDynSelect) _
                            u = undefKindToInteger UDontCare
                        in  doBuildUndefined elem_ty pos u as'
                   else let (ArrayCell ptr ref) = arr Array.! n
-                       in  evalAp "DynSel const" (IRefT elem_ty ptr S.empty ref) as'
+                       in  evalAp "DynSel const" (IRefT elem_ty ptr noPosition ref) as'
           _ -> do
             -- check if they're all the same
             -- (this will also convert selection from 1-element arrays
@@ -4619,7 +4620,7 @@ conAp' sel_i sel_c@(ICPrim _ PrimArrayDynSelect) _
                            _ -> internalError ("doDynSel: empty array")
             if all_eq
               then let (ArrayCell ptr ref) = head cells
-                       elem_e = IRefT elem_ty ptr S.empty ref
+                       elem_e = IRefT elem_ty ptr noPosition ref
                        -- still need to check the bounds
                        sel_pos = getPosition sel_i
                        res_e = mkDynSelBoundsCheck sel_pos idx_sz
@@ -4628,7 +4629,7 @@ conAp' sel_i sel_c@(ICPrim _ PrimArrayDynSelect) _
               else do
                 -- apply the elements to as' and eval
                 let mapFn (ArrayCell ptr ref) = do
-                        let r = IRefT elem_ty ptr S.empty ref
+                        let r = IRefT elem_ty ptr noPosition ref
                         (pe, P p e') <- evalUH (mkAp r as')
                         return (pe, p, e')
                 -- "pes" are used to construct the result if no progress is made
@@ -4763,7 +4764,7 @@ getBuriedPreds (IAps ic@(ICon _ (ICPrim _ PrimArrayDynSelect))
     then return pTrue
     else do
       let cells = Array.elems arr
-          mapFn (ArrayCell ptr ref) = getBuriedPreds (IRefT elem_ty ptr S.empty ref)
+          mapFn (ArrayCell ptr ref) = getBuriedPreds (IRefT elem_ty ptr noPosition ref)
       pidx <- getBuriedPreds idx
       pes <- mapM mapFn cells
       return (pConj pidx (pSel idx idx_sz pes))
@@ -4844,7 +4845,7 @@ getBuriedPreds (ICon _ (ICLazyArray arr_ty arr u)) =
                       (ITAp c t) | (c == itPrimArray) -> t
                       _ -> internalError ("getBuriedPreds: array type: " ++
                                           ppReadable arr_ty)
-          mkRef (ArrayCell p r) = IRefT elem_ty p S.empty r
+          mkRef (ArrayCell p r) = IRefT elem_ty p noPosition r
       getBuriedPredsForced (map mkRef (Array.elems arr))
 getBuriedPreds e@(ICon _ _) = do
   --traceM("getBuriedPreds: con: e = " ++ ppReadable e ++ show e)
@@ -4955,7 +4956,7 @@ doArraySelect f (T elem_t : E arr_e : E idx_e : as) = do
         let handleArraySelect ic@(ICon _ (ICLazyArray { iArray = arr })) =
                 if iArrayInRange arr index then do
                   (p, r) <- iArraySelect arr index
-                  evalAp "array-select" (IRefT elem_t p S.empty r) as
+                  evalAp "array-select" (IRefT elem_t p noPosition r) as
                 else
                   -- this is the same as the "paradox handling" in doOut
                   evalAp "array-select-paradox" (icUndet elem_t UNotUsed) as
@@ -5177,8 +5178,8 @@ improveIf f t cnd (ICon i1 (ICLazyArray { iConType = ct1, iArray = arr1 }))
          refs2 = Array.elems arr2
      refs' <- zipWithM (\ref1 ref2 -> if (ac_ptr ref1) == (ac_ptr ref2) then
                                        return ref1
-                                      else do let e1 = IRefT elemType (ac_ptr ref1) S.empty (ac_ref ref1)
-                                              let e2 = IRefT elemType (ac_ptr ref2) S.empty (ac_ref ref2)
+                                      else do let e1 = IRefT elemType (ac_ptr ref1) noPosition (ac_ref ref1)
+                                              let e2 = IRefT elemType (ac_ptr ref2) noPosition (ac_ref ref2)
                                               let cell' = IAps f [elemType] [cnd, e1, e2]
                                               IRefT _ p _ r <- toHeapCon "improve-if" elemType cell' Nothing
                                               return (ArrayCell p r))
@@ -5989,7 +5990,7 @@ instance HeapToDef HExpr where
 --    collPtrs (ICon _ (ICStateVar { iVar = iv })) m = collPtrs iv m
     collPtrs (ICon _ (ICLazyArray _ arr _)) m =
         let elem_ty = (undefined :: IType)
-            mkRef (ArrayCell p r) = IRefT elem_ty p S.empty r
+            mkRef (ArrayCell p r) = IRefT elem_ty p noPosition r
             refs = map mkRef (Array.elems arr)
         in  collPtrs refs m
     collPtrs (ICon _ _) m = m
@@ -6014,7 +6015,7 @@ instance HeapToDef HExpr where
               let elem_ty = case arr_ty of
                               (ITAp c t) | (c == itPrimArray) -> t
                               _ -> internalError ("hToDef: array type")
-                  mkRef (ArrayCell p r) = IRefT elem_ty p S.empty r
+                  mkRef (ArrayCell p r) = IRefT elem_ty p noPosition r
                   refs = map mkRef (Array.elems arr)
                   -- use library code to make the primitive, but preserve the Id
                   ic = case icPrimBuildArray (length refs) of

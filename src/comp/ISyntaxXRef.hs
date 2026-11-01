@@ -5,8 +5,6 @@ module ISyntaxXRef(
                    mapIExprPositionConservative
                   ) where
 
-import qualified Data.Set as S
-
 import ISyntax
 import Id
 import Position(Position, noPosition, isUsefulPosition)
@@ -23,13 +21,12 @@ updateIExprPosition pos (IVar i) = (IVar (setIdPosition pos i))
 updateIExprPosition pos (ILAM i kind e) = (ILAM (setIdPosition pos i) kind (updateIExprPosition pos e))
 updateIExprPosition pos iexpr@(ICon i (ICStateVar t isv)) = iexpr
 updateIExprPosition pos (ICon i info) = (ICon (setIdPosition pos i) info)
--- The heap ref's position set carries the stamped position out of
--- band; the type itself is deliberately not restamped.  Rewriting the
+-- The heap ref carries one position; restamp it like the Ids above.
+-- The type itself is deliberately not restamped.  Rewriting the
 -- positions of the Ids inside a type rebuilds the whole type, and
 -- once ITypes are hash-consed the rebuild re-canonicalizes to the
 -- original node, dropping the stamps anyway.
-updateIExprPosition pos (IRefT t p poss r) = (IRefT t p poss' r)
-  where poss' = S.insert pos poss
+updateIExprPosition pos (IRefT t p _ r) = (IRefT t p pos r)
 
 
 updateIExprPosition2 :: Position -> IExpr a -> IExpr a
@@ -48,8 +45,7 @@ updateIExprPosition2 pos (IVar i) = (IVar (setIdPosition pos i))
 updateIExprPosition2 pos (ILAM i kind e) = (ILAM (setIdPosition pos i) kind (updateIExprPosition pos e))
 updateIExprPosition2 pos iexpr@(ICon i (ICStateVar t isv)) = iexpr
 updateIExprPosition2 pos (ICon i info) = (ICon (setIdPosition pos i) info)
-updateIExprPosition2 pos (IRefT t p poss r) = (IRefT t p poss' r)
-  where poss' = S.insert pos poss
+updateIExprPosition2 pos (IRefT t p _ r) = (IRefT t p pos r)
 
 mapIExprPosition :: Bool -> (IExpr a, IExpr a) -> IExpr a
 mapIExprPosition False (expr_0, expr_1) = expr_1
