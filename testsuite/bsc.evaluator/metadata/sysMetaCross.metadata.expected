@@ -1,0 +1,11 @@
+bsc-metadata 1
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaCross.bsv:14:4] u#1 -> def Prelude.addRules [MetaCross.bsv:14:4] u#1 -> def Prelude.toPrimAction [MetaCross.bsv:15:7] u#1 -> def MetaCrossLib.incr [MetaCross.bsv:15:12] u#1 -> def MetaCrossLib.scale [MetaCross.bsv:15:17] u#1 -> def MetaCrossLib.incr [MetaCross.bsv:15:17] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder field 0 | alias - | tiers -
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaCross.bsv:14:4] u#1 -> def Prelude.addRules [MetaCross.bsv:14:4] u#1 -> def Prelude.toPrimAction [MetaCross.bsv:19:7] u#1 -> def MetaCrossLib.viaScale [MetaCross.bsv:19:12] u#1 -> def MetaCrossLib.incr [MetaCross.bsv:19:12] u#1 -> def MetaCrossLib.scale [MetaCross.bsv:19:12] u#1 -> def MetaCrossLib.incr [MetaCrossLib.bsv:10:19] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder field 0 | alias - | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+module sysMetaCross
+root inst a [MetaCross.bsv:11:19]
+root inst b [MetaCross.bsv:12:19]
+root methodroot value [MetaCross.bsv:10:8]
+root rule direct
+root rule indirect

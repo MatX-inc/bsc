@@ -1,0 +1,11 @@
+bsc-metadata 1
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaCSE.bsv:17:4] u#1 -> def Prelude.addRules [MetaCSE.bsv:17:4] u#1 -> def Prelude.toPrimAction [MetaCSE.bsv:22:7] u#1 -> def MetaCSE.incr [MetaCSE.bsv:3:19]#1 | contexts 2 | merged 1 {prim PrimAdd @ def Prelude.bind_ [MetaCSE.bsv:17:4] u#1 -> def Prelude.addRules [MetaCSE.bsv:17:4] u#1 -> def Prelude.toPrimAction [MetaCSE.bsv:18:7] u#1 -> def MetaCSE.incr [MetaCSE.bsv:3:19]#1} | folded 0 | parent _N | binder field 0 | alias _N | tiers m
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+module sysMetaCSE
+root inst a [MetaCSE.bsv:13:19]
+root inst b [MetaCSE.bsv:14:19]
+root inst c [MetaCSE.bsv:15:19]
+root methodroot value [MetaCSE.bsv:12:8]
+root rule down
+root rule up

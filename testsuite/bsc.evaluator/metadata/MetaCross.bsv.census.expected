@@ -1,0 +1,18 @@
+checking package dependencies
+compiling MetaCross.bsv
+code generation for sysMetaCross starts
+metadata census for sysMetaCross:
+  cells reachable 6, defs lifted 4, defs with chains 4
+  roots pushed: rule 2, methodroot 1, inst 2
+  pushes: unfoldings 52, completions 0, roots 5
+  frames on chains 15: use-site 11, definition-site 4, root 0
+  defs by site: use-site 0, definition-site 0, prim 4, con 0, method 0, foreign 0, lambda 0, bound 0, inst 0; head-site 0, shared 0, merged 0
+  depth: 2:2 6:1 7:1
+  count: 1:15
+  alias classes 14
+  cost: frame pushes 57, context-table operations 18 for 13 contexts
+  chains walked 52, loops re-entered 0, repeated non-recursion sites 3 (def Prelude.bind_ [Prelude.bs] x2; def Prelude.bind_ [MetaCross.bsv:14:4] u x1)
+  name hints: 0 cells bound to a parameter, 0 outside the library, each named by it
+  method-condition positions: 0 calls, 0 kept, 0 on chains
+Verilog file created: sysMetaCross.v
+All packages are up to date.

@@ -1,7 +1,8 @@
 # Tests for the evaluator metadata store (IExpandMeta): the -metadata-dump
 # output on known packages, the -metadata-scramble identity (the
-# generated Verilog does not depend on the store's content), and the
-# -metadata-census output with its cross-checks.
+# generated Verilog does not depend on the store's content), the
+# -metadata-census output with its cross-checks, and the -metadata-out
+# side file.
 
 # The dump prints every cell of the elaborated module with its site, its
 # binder, its alias class and the chain of definition unfoldings it was
@@ -14,9 +15,30 @@ proc filter_dump { fname } {
         {-e s/\\\[(Meta\[A-Za-z\]*\\.bsv):/@@\\1:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g}
 }
 
+# The side file (-metadata-out), one line per root and per lifted def of
+# a module, is pinned after the position filter of the dump, pointer
+# normalisation (every __h<n> def name reduced to __h, every _<n> parent
+# or alias root to _N) and line sorting: set equality per module.  The
+# sort runs under the C locale, so the pinned order is the byte order
+# whatever locale the harness or the caller's shell sets.
+proc filter_side { fname } {
+    global env
+    sed $fname $fname.filtered {} \
+        {-e s/\\\[(Meta\[A-Za-z\]*\\.bsv):/@@\\1:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g -e s/__h\[0-9\]+/__h/g -e s/(parent|alias)\ _\[0-9\]+/\\1\ _N/g}
+    if { [info exists env(LC_ALL)] } { set lc_all_save $env(LC_ALL) }
+    set env(LC_ALL) C
+    sort $fname.filtered $fname.sorted
+    if { [info exists lc_all_save] } {
+        set env(LC_ALL) $lc_all_save
+    } else {
+        unset env(LC_ALL)
+    }
+}
+
 # One module: its Verilog must be the same byte for byte for a plain
-# compile, under the dump and under the scramble; the dump and the
-# census are as pinned.  "extra" names other flags of the census run.
+# compile, under the dump, under the scramble, under the census and with
+# the side file written; the dump, the census and the side file are as
+# pinned.  "extra" names other flags of the census run.
 proc metadata_golden { pkg top {extra {}} } {
     erase $pkg.bo
     compile_verilog_pass $pkg.bsv $top
@@ -41,6 +63,15 @@ proc metadata_golden { pkg top {extra {}} } {
     filter_dump $pkg.bsv.bsc-vcomp-out
     compare_file $pkg.bsv.bsc-vcomp-out.filtered $pkg.bsv.census.expected
 
+    erase $pkg.bo
+    erase $top.v
+    erase $top.metadata
+    compile_verilog_pass $pkg.bsv $top {-metadata-out .}
+    compare_file $top.v $top.plain.v
+    filter_side $top.metadata
+    compare_file $top.metadata.sorted $top.metadata.expected
+    erase $top.metadata
+
     erase $top.plain.v
 }
 
@@ -63,45 +94,40 @@ metadata_golden MetaDump sysMetaDump -keep-method-conds
 # binders
 metadata_golden MetaBinder sysMetaBinder
 
-# The side file (-metadata-out): one line per root and per lifted def of
-# a module in which one expression (a + b) is built under two rules and
-# a method, so that the rebuild's CSE identifies three cells as one def
-# standing for three contexts (merged, and one alias class), the
-# argument of a function is bound to its parameter (binder), a def's
-# value is read by another def (parent), a value evaluates to another
-# (alias) and a static loop counts its iterations.  Pinned after the
-# position filter of the dump, pointer normalisation (every __h<n> def
-# name reduced to __h, every _<n> parent or alias root to _N) and line
-# sorting: set equality per module.  The sort runs under the C locale,
-# so the pinned order is the byte order whatever locale the harness or
-# the caller's shell sets.  The Verilog of the compile with the flag is
-# identical to the plain one.
-proc filter_side { fname } {
-    global env
-    sed $fname $fname.filtered {} \
-        {-e s/\\\[MetaSide\\.bsv:/@@MetaSide.bsv:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g -e s/__h\[0-9\]+/__h/g -e s/(parent|alias)\ _\[0-9\]+/\\1\ _N/g}
-    if { [info exists env(LC_ALL)] } { set lc_all_save $env(LC_ALL) }
-    set env(LC_ALL) C
-    sort $fname.filtered $fname.sorted
-    if { [info exists lc_all_save] } {
-        set env(LC_ALL) $lc_all_save
-    } else {
-        unset env(LC_ALL)
-    }
-}
+# The side file of a module in which one expression (a + b) is built
+# under two rules and a method, so that the rebuild's CSE identifies
+# three cells as one def standing for three contexts (merged, and one
+# alias class), the argument of a function is bound to its parameter
+# (binder), a def's value is read by another def (parent), a value
+# evaluates to another (alias) and a static loop counts its iterations.
+metadata_golden MetaSide sysMetaSide
 
-erase MetaSide.bo
-compile_verilog_pass MetaSide.bsv sysMetaSide
-move sysMetaSide.v sysMetaSide.plain.v
+# The known-answer goldens, one shape of chain each.
+# a vector map: element i is built in iteration i of the map
+metadata_golden MetaVecMap sysMetaVecMap
 
-erase MetaSide.bo
-erase sysMetaSide.metadata
-compile_verilog_pass MetaSide.bsv sysMetaSide {-metadata-out .}
-compare_file sysMetaSide.v sysMetaSide.plain.v
-filter_side sysMetaSide.metadata
-compare_file sysMetaSide.metadata.sorted sysMetaSide.metadata.expected
-erase sysMetaSide.metadata
+# nested static loops: inner iterations under the outer iteration
+metadata_golden MetaNested sysMetaNested
 
-erase sysMetaSide.plain.v
+# a loop re-entered from its own body: a zipWith over a vector of vectors
+# runs the library's zipWith loop inside an iteration of itself, so one
+# static loop site is on a chain twice, as two dynamic instances; the
+# census counts the site's nested instances and its nesting depth
+metadata_golden MetaReenter sysMetaReenter
+
+# a local recursive binding (a primFix loop)
+metadata_golden MetaFix sysMetaFix
+
+# two functions recursive through each other
+metadata_golden MetaMutual sysMetaMutual
+
+# one expression built under two rules: a CSE merge, whose def stands
+# for two contexts
+metadata_golden MetaCSE sysMetaCSE
+
+# a cross-package call site against the same call inside the package
+erase MetaCrossLib.bo
+compile_pass MetaCrossLib.bsv
+metadata_golden MetaCross sysMetaCross
 
 }

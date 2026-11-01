@@ -1,0 +1,11 @@
+checking package dependencies
+compiling MetaCross.bsv
+code generation for sysMetaCross starts
+_112: def Prelude.toPrimAction [MetaCross.bsv:15:7] u, field 3, alias _112 <- def Prelude.addRules [MetaCross.bsv:14:4] u#1 <- def Prelude.bind_ [MetaCross.bsv:14:4] u#1
+_126: prim PrimAdd, field 0 <- def MetaCrossLib.incr [MetaCross.bsv:15:17] u#1 <- def MetaCrossLib.scale [MetaCross.bsv:15:17] u#1 <- def MetaCrossLib.incr [MetaCross.bsv:15:12] u#1 <- def Prelude.toPrimAction [MetaCross.bsv:15:7] u#1 <- def Prelude.addRules [MetaCross.bsv:14:4] u#1 <- def Prelude.bind_ [MetaCross.bsv:14:4] u#1
+_129: prim PrimUnpack, field 0, alias _127 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_133: def Prelude.toPrimAction [MetaCross.bsv:19:7] u, field 3, alias _133 <- def Prelude.addRules [MetaCross.bsv:14:4] u#1 <- def Prelude.bind_ [MetaCross.bsv:14:4] u#1
+_147: prim PrimAdd, field 0 <- def MetaCrossLib.incr [MetaCrossLib.bsv:10:19] u#1 <- def MetaCrossLib.scale [MetaCross.bsv:19:12] u#1 <- def MetaCrossLib.incr [MetaCross.bsv:19:12] u#1 <- def MetaCrossLib.viaScale [MetaCross.bsv:19:12] u#1 <- def Prelude.toPrimAction [MetaCross.bsv:19:7] u#1 <- def Prelude.addRules [MetaCross.bsv:14:4] u#1 <- def Prelude.bind_ [MetaCross.bsv:14:4] u#1
+_150: prim PrimUnpack, field 0, alias _148 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+Verilog file created: sysMetaCross.v
+All packages are up to date.
