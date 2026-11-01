@@ -20,7 +20,7 @@ module IExpandMeta(
         emptyModuleMeta, defNameString, sideFileSchema, renderSideFile,
         -- the ledger the packages carry
         MetaLedger(..), emptyMetaLedger, PassTag(..), MetaEvent(..),
-        appendEvent, resolveId, renderLedger,
+        appendEvent, appendEvents, resolveId, renderLedger,
         -- the census (-metadata-census)
         Census, readCensus, recordUnfolding, recordCompletion, aliasClassCount,
         renderCensus, checkProfile, checkKeptPositions, checkNameHints
@@ -876,9 +876,20 @@ instance NFData MetaLedger where
 instance PPrint MetaLedger where
     pPrint _ _ _ = empty
 
--- The one write: a pass appends the event it has in hand.
+-- The one write: a pass appends the event it has in hand.  The event
+-- itself is not forced (the list cell is), so a pass that writes an
+-- event forces none of the ids it names before the package's deepseq
+-- does, which walks the defs, rules and interface before the ledger.
 appendEvent :: MetaEvent -> MetaLedger -> MetaLedger
 appendEvent ev (MetaLedger mm) = MetaLedger (mm { mm_events = ev : mm_events mm })
+
+-- A pure pass appends the events of one rebuild of the package, oldest
+-- first (the last of the list becomes the most recent).  Each append is
+-- forced as it is made, so no chain of appends is left for the stage's
+-- deepseq to walk; the events stay unforced as above.
+appendEvents :: [MetaEvent] -> MetaLedger -> MetaLedger
+appendEvents [] l = l
+appendEvents (ev : evs) l = let l' = appendEvent ev l in l' `seq` appendEvents evs l'
 
 -- Resolve a final id to the ids whose records it stands for, in the
 -- order they were found, with the events on the way, oldest first.
@@ -928,12 +939,16 @@ renderLedger stage (MetaLedger mm) =
               show (length (mm_events mm)) ++ " events")
              : map renderEvent (reverse (mm_events mm)))
 
+-- One event on one line; an Inlined that names no user (a map-driven
+-- substitution) and a Created from no id carry no arrow.
 renderEvent :: MetaEvent -> String
 renderEvent ev =
     case ev of
       Renamed t from to -> line "renamed" t (ids [from] ++ " -> " ++ ids [to])
       Merged t froms into -> line "merged" t (ids froms ++ " -> " ++ ids [into])
+      Inlined t from [] -> line "inlined" t (ids [from])
       Inlined t from intos -> line "inlined" t (ids [from] ++ " -> " ++ ids intos)
+      Created t to [] -> line "created" t (ids [to])
       Created t to froms -> line "created" t (ids [to] ++ " <- " ++ ids froms)
       Dropped t from -> line "dropped" t (ids [from])
   where

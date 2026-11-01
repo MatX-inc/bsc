@@ -117,8 +117,9 @@ compile_verilog_pass MetaSide.bsv sysMetaSide
 move sysMetaSide.v sysMetaSide.plain.v
 
 # -dmetadata: the ledger after the ISyntax stages, the APackage stages
-# and the ASPackage stages (the table's sizes and its events, none yet),
-# printed only when that dump is requested; the Verilog does not change
+# and the ASPackage stages (the table's sizes and its events: those of
+# the ISyntax passes, on the module's defs and rules), printed only when
+# that dump is requested; the Verilog does not change
 erase MetaSide.bo
 erase MetaSide.ledger
 compile_verilog_pass MetaSide.bsv sysMetaSide {-dmetadata=MetaSide.ledger}

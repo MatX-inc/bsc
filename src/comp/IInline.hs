@@ -1,5 +1,5 @@
 module IInline(iInline, iSortDs) where
-import Data.List(group, sort, nub)
+import Data.List(group, sort, nub, partition)
 import Util
 import qualified Data.Set as S
 import qualified Data.Map as M
@@ -10,13 +10,19 @@ import Id
 import ISyntax
 import ISyntaxUtil(irulesMap, iDefsMap)
 import IInlineUtil(iSubst, iSubstIfc)
+import IExpandMeta(PassTag, MetaEvent(..), appendEvents)
 import Prim
 import Data.Maybe(catMaybes)
 -- import Debug.Trace(trace)
 
 
-iInline :: Bool -> IModule a -> IModule a
-iInline inlSimp = iInline1 . iInlineS inlSimp -- . iSortDs
+-- The tag names the stage that runs the pass on the ledger events it
+-- writes: the driver's inline stage, or the transform stage, which runs
+-- the single-use inlining at its end.
+iInline :: PassTag -> Bool -> IModule a -> IModule a
+iInline tag inlSimp imod =
+    let (imod_s, simple_inlined) = iInlineS tag inlSimp imod
+    in  iInline1 tag simple_inlined imod_s -- . iSortDs
 --iInline inlSimp = iInlineAll
 
 -- Sort definitions in dependency order
@@ -33,13 +39,21 @@ iSortDs imod@(IModule { imod_local_defs = ds }) =
     in  imod { imod_local_defs = ds' }
 
 
--- Inline definitions that are simple
-iInlineS :: Bool -> IModule a -> IModule a
-iInlineS False m = m
-iInlineS True imod@(IModule { imod_local_defs = ds,
-                              imod_rules      = rs,
-                              imod_interface  = ifc}) =
+-- Inline definitions that are simple.  The substitution is a map
+-- applied to every expression and holds no referrer, so the ledger
+-- records each simple def as inlined into users it does not name; the
+-- def itself stays in the package, unreferenced, until iInline1 drops
+-- it as unused, which is no event of its own (the ids are returned so
+-- that iInline1 writes none).  A def kept even unused is substituted
+-- too but stays a def, so it has no event.
+iInlineS :: PassTag -> Bool -> IModule a -> (IModule a, S.Set Id)
+iInlineS _ False m = (m, S.empty)
+iInlineS tag True imod@(IModule { imod_local_defs = ds,
+                                  imod_rules      = rs,
+                                  imod_interface  = ifc}) =
     let smap = M.fromList [ (i, iSubst smap dmap e) | IDef i _ e _ <- ds, not (isKeepId i), simple e ]
+        inlined_ids = [ i | i <- M.keys smap, not (hasIdProp i IdP_keepEvenUnused) ]
+        events = [ Inlined tag i [] | i <- inlined_ids ]
         ds' = iDefsMap (iSubst smap dmap) ds
         dmap = M.fromList [ (i, e) | IDef i t e _ <- ds' ]
         ifc' = map (iSubstIfc smap dmap) ifc
@@ -69,38 +83,51 @@ iInlineS True imod@(IModule { imod_local_defs = ds,
         --
         simple _ = False
 
-    in  imod { imod_local_defs  = ds',
-               imod_rules       = rs',
-               imod_interface   = ifc',
-               imod_state_insts = state_vars' }
+    in  (imod { imod_local_defs  = ds',
+                imod_rules       = rs',
+                imod_interface   = ifc',
+                imod_state_insts = state_vars',
+                imod_meta        = appendEvents events (imod_meta imod) },
+         S.fromList inlined_ids)
 
-ruleVars :: IRules a -> [Id]
-ruleVars (IRules sps rs) = concatMap leafVars rs
-    where leafVars r = iValVars (irule_pred r) ++ iValVars (irule_body r)
+-- the references of each rule, with the rule
+ruleVars :: IRules a -> [(Id, [Id])]
+ruleVars (IRules sps rs) = map leafVars rs
+    where leafVars r = (getIRuleId r,
+                        iValVars (irule_pred r) ++ iValVars (irule_body r))
 
-varVars :: (a, IStateVar b) -> [Id]
-varVars (_, IStateVar { isv_iargs = es }) =
+-- the references of an instance's arguments, with the instance
+varVars :: (Id, IStateVar b) -> (Id, [Id])
+varVars (name, IStateVar { isv_iargs = es }) =
         let vs = concatMap iValVars es
-        in  vs ++ vs                -- XXX
+        in  (name, vs ++ vs)        -- XXX
 
--- Inline definitions used once
-iInline1 :: IModule a -> IModule a
-iInline1 = iInlineUseLimit 1
+-- Inline definitions used once (simple_inlined: the defs iInlineS has
+-- recorded as inlined, unused here and given no second event)
+iInline1 :: PassTag -> S.Set Id -> IModule a -> IModule a
+iInline1 tag simple_inlined = iInlineUseLimit tag simple_inlined 1
 
 -- iInlineAll :: IModule a -> IModule a
 -- iInlineAll = iInlineUseLimit 100000
 
-iInlineUseLimit :: Int -> IModule a -> IModule a
-iInlineUseLimit use_limit
+iInlineUseLimit :: PassTag -> S.Set Id -> Int -> IModule a -> IModule a
+iInlineUseLimit tag simple_inlined use_limit
                 imod@(IModule { imod_state_insts = itvs,
                                 imod_local_defs  = ds,
                                 imod_rules       = rs,
                                 imod_interface   = ifc }) =
-    let ifcRuleVars = concatMap ruleVars (catMaybes [ mrs | IEFace _ _ _ mrs _ _ <- ifc ])
+    let -- the roots of the use count: the method values and the defs
+        -- kept even unused by their own ids, and the references of the
+        -- rules, the instance arguments and the method bodies, each
+        -- with the rule or instance that holds them (the user the
+        -- ledger names when one is inlined)
+        ruleRefs = ruleVars rs
+        instRefs = map varVars itvs
+        ifcRuleRefs = concatMap ruleVars (catMaybes [ mrs | IEFace _ _ _ mrs _ _ <- ifc ])
         is = [ i | (IEFace i _ (Just (e, _)) _ _ _) <- ifc ]
-             ++ ruleVars rs
-             ++ concatMap varVars itvs
-             ++ ifcRuleVars
+             ++ concatMap snd ruleRefs
+             ++ concatMap snd instRefs
+             ++ concatMap snd ifcRuleRefs
              ++ [ i | (IDef i _ _ _) <- ds, keepEvenUnused i]
         keepEvenUnused :: Id -> Bool
         keepEvenUnused i = hasIdProp i IdP_keepEvenUnused
@@ -108,15 +135,19 @@ iInlineUseLimit use_limit
         dm = M.fromList ([(i, e) | IDef i _ e _ <- ds ] ++
                          [ (i, e) | (IEFace i _ (Just (e,_)) _ _ _) <- ifc ])
         get i = case M.lookup i dm of (Just e) -> e; _-> internalError ("iInlineUseLimit " ++ ppString use_limit ++ ": " ++ ppReadable i)
-        step allIds done [] = allIds
-        step allIds done (i:pend) =
+        -- the walk keeps the references of each def or method value it
+        -- visits, with the visitor, most recently visited first; a def
+        -- is visited after the def, rule or instance it is reached
+        -- through, so a def used once comes after its one user
+        step allIds refs done [] = (allIds, refs)
+        step allIds refs done (i:pend) =
                 if i `S.member` done then
-                    step allIds done pend
+                    step allIds refs done pend
                 else
                     let is = iValVars (get i)
                     in  -- trace ("add " ++ ppReadable (i, is)) $
-                        step (is ++ allIds) (S.insert i done) (nub is ++ pend)
-        dis = step is S.empty (remOrdDup (sort is))
+                        step (is ++ allIds) ((i, is) : refs) (S.insert i done) (nub is ++ pend)
+        (dis, defRefs) = step is [] S.empty (remOrdDup (sort is))
         ics = [ (i, length is) | is@(i:_) <- group (sort dis), i `S.member` defids ]
         onemap = M.fromList [ (i, iSubst onemap dmap (get i))
                              | (i, n_uses) <- ics, not (isKeepId i),
@@ -127,7 +158,7 @@ iInlineUseLimit use_limit
         uses = M.fromList ics
         getc' i = M.findWithDefault 0 i uses
         getc i = {- trace ("getc: " ++ ppReadable (i, getc' i)) $ -} getc' i
-        ds'' = filter (\ (IDef i _ _ _) ->
+        (ds'', gone) = partition (\ (IDef i _ _ _) ->
                         let uses = getc i in
                         (keepEvenUnused i || uses > 0 && isKeepId i)
                         || uses > use_limit) ds'
@@ -136,10 +167,24 @@ iInlineUseLimit use_limit
                       | (name, sv@(IStateVar { isv_iargs = es }))
                             <- imod_state_insts imod,
                         let es' = map (iSubst onemap dmap) es ]
+        -- the ledger: a def inlined (in onemap) went into the def,
+        -- method value, rule or instance holding its one reference,
+        -- which the walk above kept; deepest first, so that a def
+        -- inlined into a def that was itself inlined is recorded
+        -- before it (defRefs is most recently visited first, and the
+        -- roots come after every def).  A def that went without being
+        -- inlined had no reachable reference and is dropped, unless
+        -- iInlineS substituted it and recorded that already.
+        inlined = [ Inlined tag v [u]
+                  | (u, vs) <- defRefs ++ ruleRefs ++ instRefs ++ ifcRuleRefs,
+                    v <- vs, M.member v onemap ]
+        dropped = [ Dropped tag i | IDef i _ _ _ <- gone, not (M.member i onemap),
+                                    not (S.member i simple_inlined) ]
         new_imod = imod { imod_local_defs = ds'',
                           imod_rules = rs',
                           imod_interface = ifc',
-                          imod_state_insts = state_vars' }
+                          imod_state_insts = state_vars',
+                          imod_meta = appendEvents (inlined ++ dropped) (imod_meta imod) }
     in new_imod
 
 iValVars :: IExpr a -> [Id]

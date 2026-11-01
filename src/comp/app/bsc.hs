@@ -113,7 +113,7 @@ import GenForeign(genForeign)
 import DefProp(DefProp(..))
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
-import IExpandMeta(renderSideFile, renderLedger, MetaLedger(..))
+import IExpandMeta(renderSideFile, renderLedger, MetaLedger(..), PassTag(..))
 import ITransform(iTransform)
 import IInline(iInline)
 import IInlineFmt(iInlineFmt)
@@ -896,7 +896,7 @@ genModule
     start flags DFinline
     let imod_inline@(IModule { imod_interface = ifc }) =
             if inlineISyntax flags
-            then (iInline (inlineSimple flags) imod_fmt)
+            then (iInline PTInline (inlineSimple flags) imod_fmt)
             else imod_fmt
     iMCheck flags symt imod_inline "inline"
     t <- dump errh flags t DFinline dumpnames imod_inline
