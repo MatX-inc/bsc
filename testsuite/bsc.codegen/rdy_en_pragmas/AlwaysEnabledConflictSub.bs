@@ -1,0 +1,19 @@
+package AlwaysEnabledConflictSub where
+
+import FIFOF
+
+-- G0134: both methods call f.enq, which conflicts with itself.
+-- always_enabled is given on the module, not the interface.
+
+interface AEConflictSub =
+    enq1 :: Bit 8 -> Action
+    enq2 :: Bit 8 -> Action
+
+{-# properties sysAlwaysEnabledConflictSub = { synthesize, alwaysReady, alwaysEnabled } #-}
+sysAlwaysEnabledConflictSub :: Module AEConflictSub
+sysAlwaysEnabledConflictSub =
+  module
+    f :: FIFOF (Bit 8) <- mkUGFIFOF
+    interface
+      enq1 x = f.enq x
+      enq2 x = f.enq x

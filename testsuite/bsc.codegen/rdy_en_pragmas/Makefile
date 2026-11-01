@@ -2,4 +2,6 @@
 
 CONFDIR = $(realpath ../..)
 
+KEEPFILES = TbAlwaysEnabledConflict.v
+
 include $(CONFDIR)/clean.mk

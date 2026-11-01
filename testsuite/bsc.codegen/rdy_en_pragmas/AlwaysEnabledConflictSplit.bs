@@ -1,0 +1,19 @@
+package AlwaysEnabledConflictSplit where
+
+-- G0134: only the part of split method a that writes c conflicts with b,
+-- and a split method takes the most restrictive annotation of its parts.
+
+interface AEConflictSplit =
+    a :: Action {-# always_enabled #-}
+    b :: Action {-# always_enabled #-}
+
+{-# synthesize sysAlwaysEnabledConflictSplit #-}
+sysAlwaysEnabledConflictSplit :: Module AEConflictSplit
+sysAlwaysEnabledConflictSplit =
+  module
+    sel :: Reg Bool <- mkReg False
+    c :: Reg (Bit 8) <- mkReg 0
+    d :: Reg (Bit 8) <- mkReg 0
+    interface
+      a = splitIf sel (d := d + 1) (c := c + 1)
+      b = c := c + 2

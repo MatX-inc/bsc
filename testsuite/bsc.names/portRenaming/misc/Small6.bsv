@@ -4,6 +4,8 @@ import Small6Ifc :: * ;
 (* synthesize  *)
 module mkSmallTest6 ( Fifo_ifc#(Bit#(3))) ;
    FIFOF#(Bit#(3)) tfifo <- mkUGFIFOF ;
+   // for enqueue2, so the always_enabled methods do not conflict
+   FIFOF#(Bit#(3)) tfifo2 <- mkUGFIFOF ;
 
    method first_element ;
       return tfifo.first ;
@@ -14,7 +16,7 @@ module mkSmallTest6 ( Fifo_ifc#(Bit#(3))) ;
    endmethod
 
    method  Action enqueue2( data ) ; // if (tfifo.notFull) ;
-      tfifo.enq( data ) ;
+      tfifo2.enq( data ) ;
    endmethod
 
    method  ActionValue#(Bit#(3)) dequeue() ;
