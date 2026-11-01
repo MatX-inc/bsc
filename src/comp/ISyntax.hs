@@ -1643,22 +1643,30 @@ getIExprPositionCross iexpr =
 -- #
 -- #############################################################################
 
+-- This walk runs when IExpand replaces heap references by their defs
+-- (hToDef, through ISyntaxXRef.mapIExprPosition), so it is the first
+-- to force the Ids of the generated defs, interning them in the order
+-- it reaches them.  It keeps firstPosForcing's extent: stopping at the
+-- first useful position would intern them in another order, and the
+-- later def tsorts (AExpand.tsortDefs) break ties by intern order, so
+-- generated signal numbers (the AVeriQuirks case temporaries) would
+-- change.
 getIExprPositionCrossInternal :: Int -> IExpr a -> Position
 getIExprPositionCrossInternal 10 _ = noPosition
 
 getIExprPositionCrossInternal n (ILam i _ e) =
     let pos = (getIExprPositionCrossInternal (n + 1) e)
-    in  firstPos [pos, getIdPosition i]
+    in  firstPosForcing [pos, getIdPosition i]
 
 getIExprPositionCrossInternal n (IAps_ _ e ts es) =
     let pos = (getIExprPositionCrossInternal (n + 1) e)
-    in  firstPos (pos : (map (getIExprPositionCrossInternal (n + 1)) es))
+    in  firstPosForcing (pos : (map (getIExprPositionCrossInternal (n + 1)) es))
 
 getIExprPositionCrossInternal _ (IVar i) = getIdPosition i
 
 getIExprPositionCrossInternal n (ILAM i _ e) =
     let pos = (getIExprPositionCrossInternal (n + 1) e)
-    in  firstPos [pos, getIdPosition i]
+    in  firstPosForcing [pos, getIdPosition i]
 
 getIExprPositionCrossInternal _ (ICon_ _ i (ICSel _ _ _)) =
     if (isPassThroughOp i)
@@ -1673,7 +1681,7 @@ getIExprPositionCrossInternal _ (ICon_ _ i _) = getIdPosition i
 -- expressions are rewritten).  There is no type fallback: Ids embedded
 -- in ITypes carry no positions (IType normalizes them on entry).
 getIExprPositionCrossInternal _ (IRefT _ _ poss _) =
-    firstPos (S.toAscList poss)
+    firstPosForcing (S.toAscList poss)
 
 
 -- #############################################################################

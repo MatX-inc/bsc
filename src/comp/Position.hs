@@ -95,6 +95,21 @@ firstPos ps = go ps Nothing
             | isUsefulPosition p = p
             | otherwise          = go rest (Just (fromMaybe p fallback))
 
+-- The same answer as firstPos, forced further: to the second useful
+-- position, or to the end of the list when there is at most one.
+-- The Ids a position walk reaches are interned as it forces them, and
+-- Ord Id is intern order, which the def tsorts (AExpand.tsortDefs)
+-- break ties by; a walk whose extent decides generated names keeps
+-- this extent where firstPos stops early.
+firstPosForcing :: [Position] -> Position
+firstPosForcing ps = case filter (/= noPosition) ps of
+              []  -> noPosition
+              [p] -> p
+              psf@(p0:_) -> case filter isUsefulPosition psf of
+                              []  -> p0
+                              [p] -> p
+                              (p:_) -> p
+
 -- #############################################################################
 -- #
 -- #############################################################################
