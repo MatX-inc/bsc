@@ -1,0 +1,36 @@
+# Tests for the .bo and .ba writer (BinData.assemble).  The writer
+# emits the container through a ByteString Builder and encodes every
+# table index and chunk number with indexBytes, the Bin Int encoding
+# in Int arithmetic.  -check-writebin compares each of those with the
+# generic encoder's bytes (an internal error on disagreement) and
+# -hack-no-writebin uses the generic encoder; the .bo, the .ba and
+# the Verilog of a compile must be identical under either and under
+# neither.  -trace-ctype-stats prints the counters at exit: the ones
+# checked here show that each switch was live (indices checked under
+# -check-writebin and none encoded generically; the reverse under
+# -hack-no-writebin).
+
+erase WriteBin.bo
+compile_verilog_pass WriteBin.bs sysWriteBin {-elab -check-writebin -trace-ctype-stats}
+find_regexp WriteBin.bs.bsc-vcomp-out {ctype-stats writebin_checked [1-9]}
+find_n_strings WriteBin.bs.bsc-vcomp-out {ctype-stats writebin_generic 0} 1
+move WriteBin.bo WriteBin.check.bo
+move sysWriteBin.ba sysWriteBin.check.ba
+move sysWriteBin.v sysWriteBin.check.v
+
+erase WriteBin.bo
+compile_verilog_pass WriteBin.bs sysWriteBin {-elab -hack-no-writebin -trace-ctype-stats}
+find_n_strings WriteBin.bs.bsc-vcomp-out {ctype-stats writebin_checked 0} 1
+find_regexp WriteBin.bs.bsc-vcomp-out {ctype-stats writebin_generic [1-9]}
+move WriteBin.bo WriteBin.generic.bo
+move sysWriteBin.ba sysWriteBin.generic.ba
+move sysWriteBin.v sysWriteBin.generic.v
+
+erase WriteBin.bo
+compile_verilog_pass WriteBin.bs sysWriteBin {-elab}
+compare_file WriteBin.bo WriteBin.check.bo
+compare_file WriteBin.bo WriteBin.generic.bo
+compare_file sysWriteBin.ba sysWriteBin.check.ba
+compare_file sysWriteBin.ba sysWriteBin.generic.ba
+compare_file sysWriteBin.v sysWriteBin.check.v
+compare_file sysWriteBin.v sysWriteBin.generic.v

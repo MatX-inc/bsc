@@ -499,6 +499,7 @@ describeFlags showHidden =
 traceflags :: [String]
 traceflags = [
           "check-ctype-ids",
+          "check-writebin",
           "debug-eval-free-vars",
           "no-ctype-ids",
           "no-use-layout",
@@ -575,6 +576,7 @@ traceflags = [
           "hack-gate-clock-inputs",
           "hack-gate-default-clock",
           "hack-no-itype-ftv-cache",
+          "hack-no-writebin",
           "hack-strict-inst-tree",
           "outlaw-sv-kws-as-classic-ids",
           "show-qualifiers",

@@ -687,7 +687,10 @@ eqByWord :: Type -> Type -> Ordering
 eqByWord x y = checkEqByWord "CType.cmp" x y (ctypeStat CmpEqByWord x `seq` EQ)
 
 -- Counters, kept and printed (by bsc at exit) only under
--- -trace-ctype-stats; every bump is a no-op otherwise.
+-- -trace-ctype-stats; every bump is a no-op otherwise.  The last two
+-- belong to the .bo/.ba writer (BinData.indexBytes): the indices it
+-- checked against the generic encoder under -check-writebin, and the
+-- ones it encoded generically under -hack-no-writebin.
 data CTypeStat
     = TApBuilt | TConBuilt | PreGateBuilt | TableHit | TableNew
     | RefuseChild | RefuseUnqual | RefuseTyStr | LeafRecompute
@@ -696,6 +699,7 @@ data CTypeStat
     | SeqCTypeShortcut | ApSubShortcut | TvShortcut | ExpandSynShortcut
     | InstShortcut | MguShortcut | MatchShortcut | GetFreeTShortcut
     | ChkTApShortcut | IConvMemoHit | IConvMemoMiss
+    | WriteBinChecked | WriteBinGeneric
     deriving (Eq, Ord, Enum, Bounded)
 
 statName :: CTypeStat -> String
@@ -725,6 +729,8 @@ statName GetFreeTShortcut = "getfreet_shortcut"
 statName ChkTApShortcut = "chktap_shortcut"
 statName IConvMemoHit = "iconv_memo_hit"
 statName IConvMemoMiss = "iconv_memo_miss"
+statName WriteBinChecked = "writebin_checked"
+statName WriteBinGeneric = "writebin_generic"
 
 {-# NOINLINE ctypeStatsOn #-}
 ctypeStatsOn :: Bool
