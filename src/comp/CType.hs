@@ -252,8 +252,18 @@ cmp (TGen _ _) _        = GT
 cmp (TDefMonad _) (TDefMonad _) = EQ
 cmp (TDefMonad _) _  = GT
 
+-- Two different normal words answer NE at once (see "Canonical
+-- identity": on normal trees the word is injective on the structure
+-- cmp compares), skipping the structural descent; every other pair is
+-- decided by cmp.  Only (==) takes this shortcut: compare never answers
+-- LT or GT from words, so every Map and Set order over types stays the
+-- structural one.  x is forced before y, as cmp forces them, and a
+-- normal tree is already in weak head normal form at every node.
 instance Eq Type where
-    x == y  =  cmp x y == EQ
+    x == y | eqWordOn, normalWord i, normalWord j, i /= j = neByWord x y
+           | otherwise = cmp x y == EQ
+      where i = typeCanonWordNode x
+            j = typeCanonWordNode y
 
 instance Eq TyVar where
     TyVar i n _ == TyVar i' n' _  =  (n, i) == (n', i')
@@ -363,7 +373,12 @@ instance Ord TyCon where
 -- it would intern a string otherwise interned later), and a TAp with a
 -- refused child.  Equal words therefore imply Eq-equal trees.  The
 -- converse fails only across a name's normal and non-normal arrivals,
--- so nothing answers NE from the words.
+-- so NE is answered from the words only when both are normal (Eq Type):
+-- a normal leaf's key is the (qualifier, base) that Ord TyCon compares
+-- for two qualified names, or the TyNum value, and a normal TAp's key
+-- is its normal children's words, so by induction two normal trees that
+-- cmp finds EQ have the same key at every level and the same word,
+-- and different normal words mean cmp is not EQ.
 --
 -- Forcing.  Computing a word forces both children to WHNF and, for a
 -- TyCon leaf, the TyCon, its Id (two strict FString fields), the sort
@@ -686,12 +701,31 @@ checkEqByWord site x y r
 eqByWord :: Type -> Type -> Ordering
 eqByWord x y = checkEqByWord "CType.cmp" x y (ctypeStat CmpEqByWord x `seq` EQ)
 
+-- The NE answer of (==)'s word shortcut, from two different normal words.
+-- Under -check-ctype-ids the two types are also compared structurally,
+-- and equality is an internal error.
+neByWord :: Type -> Type -> Bool
+neByWord x y
+    | checkCanonIds && eqStructural x y =
+        internalError ("CType.==: different normal canonical words "
+                       ++ "for equal types: " ++ show (x, y))
+    | otherwise = ctypeStat CmpNeByWord x `seq` False
+
+-- The hidden flag -hack-no-eq-word (registered with the other
+-- progArgs-queried flags in FlagsDecode.traceflags, so the command-line
+-- parser accepts it; BSC_OPTIONS reaches progArgs too) keeps (==) on
+-- cmp, so no NE is answered from the words.  Absent the flag the
+-- shortcut is on (the default).
+{-# NOINLINE eqWordOn #-}
+eqWordOn :: Bool
+eqWordOn = not ("-hack-no-eq-word" `elem` progArgs)
+
 -- Counters, kept and printed (by bsc at exit) only under
 -- -trace-ctype-stats; every bump is a no-op otherwise.
 data CTypeStat
     = TApBuilt | TConBuilt | PreGateBuilt | TableHit | TableNew
     | RefuseChild | RefuseUnqual | RefuseTyStr | LeafRecompute
-    | CmpEqByWord | InternDelta | InternTcTemp | InternOther
+    | CmpEqByWord | CmpNeByWord | InternDelta | InternTcTemp | InternOther
     | LetrecGroup | LetrecOffender
     | SeqCTypeShortcut | ApSubShortcut | TvShortcut | ExpandSynShortcut
     | InstShortcut | MguShortcut | MatchShortcut | GetFreeTShortcut
@@ -709,6 +743,7 @@ statName RefuseUnqual = "refuse_unqual"
 statName RefuseTyStr = "refuse_tystr"
 statName LeafRecompute = "leaf_recompute"
 statName CmpEqByWord = "cmp_eq_by_word"
+statName CmpNeByWord = "cmp_ne_by_word"
 statName InternDelta = "intern_delta"
 statName InternTcTemp = "intern_tctemp"
 statName InternOther = "intern_other"
@@ -732,8 +767,9 @@ ctypeStatsOn = "-trace-ctype-stats" `elem` progArgs
 
 -- -check-ctype-ids: every answer taken from two equal words -- cmp's EQ
 -- and Unify's mgu and match shortcuts -- is also decided structurally
--- (checkEqByWord), and every IConv memo hit is compared with a fresh
--- conversion of the type; a disagreement is an internal error.  The
+-- (checkEqByWord), as is every NE that (==) answers from two different
+-- normal words (neByWord), and every IConv memo hit is compared with a
+-- fresh conversion of the type; a disagreement is an internal error.  The
 -- one-sided shortcuts (apSub, tv, expandSyn, inst, getFreeT, chkTAp,
 -- TCMisc's expTFun, normT, expandSynN and the badCon scan) return their
 -- input on the ground or normal flag and are not checked here: they
