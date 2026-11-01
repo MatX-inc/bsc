@@ -79,6 +79,7 @@ import Data.Char(isAlphaNum)
 import System.Time -- XXX: from old-time package
 import Debug.Trace(traceM)
 import qualified Data.Array as Array
+import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
 
@@ -115,7 +116,7 @@ import IExpandMeta(MetaStore, MetaTables, SiteKind(..), SiteKey, idSiteKey,
                    primSiteKey, boundSiteKey, Frame, Binder(..), CellMeta,
                    headSiteOf, cellDefSite, newMetaStore, lookupSite, mintSite,
                    pushFrame, pushRoot, swapFrame, swapCellFrame, stampMeta,
-                   aliasUnion, readMetaTables)
+                   aliasUnion, readMetaTables, readRoots)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -759,8 +760,14 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_ffcallNo :: Int,
                            go_atfCache :: IATFCache,
                            -- the tables of the metadata store (sites,
-                           -- alias classes)
+                           -- alias classes), the sites of its root
+                           -- frames in push order, and the pointers of
+                           -- the definition-cache cells (the cells shared
+                           -- by every unfolding of a definition, see
+                           -- cacheDef)
                            go_meta :: MetaTables,
+                           go_roots :: [Int],
+                           go_defcache :: IS.IntSet,
                            goutput :: a }
 
 runG :: ErrorHandle -> Flags ->
@@ -814,6 +821,7 @@ runG errh flags symt alldefs recdefs atf_cache defId is_noinlined_func pps gFn =
          when (not (null rblobs)) $
              internalError ("IExpandUtils.runG - unexpanded ruleblobs: " ++ ppReadable rblobs)
          meta <- readMetaTables store
+         roots <- readRoots store
          return $ (GOutput {
                      go_clock_domains = (M.toList (clock_domains gs')),
                      go_resets = (all_resets gs'),
@@ -830,6 +838,8 @@ runG errh flags symt alldefs recdefs atf_cache defId is_noinlined_func pps gFn =
                      go_ffcallNo = ffcallNo gs',
                      go_atfCache = atfCache gs',
                      go_meta = meta,
+                     go_roots = roots,
+                     go_defcache = IS.fromList [ p | IRefT _ p _ _ <- M.elems (defCache gs') ],
                      goutput = retval
                     })
 

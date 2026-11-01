@@ -103,6 +103,7 @@ import ConTagInfo
 import VModInfo(VModInfo, vArgs, vName, VName(..), {- VeriPortProp(..), -}
                 VArgInfo(..), VFieldInfo(..), isParam, VWireInfo)
 import DefProp(DefProp)
+import IExpandMeta(ModuleMeta)
 import Pragma(Pragma, PProp, RulePragma, ISchedulePragma,
               CSchedulePragma, SchedulePragma(..),
               extractSchedPragmaIds, removeSchedPragmaIds, mapSPIds)
@@ -169,7 +170,20 @@ data IModule a
                 imod_interface :: [IEFace a],           -- package interface
                 imod_ffcallNo :: Int,                    -- next available unique ffcalNo
                 -- comments on submodule instantiations
-                imod_instance_comments :: [(Id, [String])]
+                imod_instance_comments :: [(Id, [String])],
+                -- The evaluator's metadata table (sites, contexts, roots
+                -- and one record per lifted def), filled by the rebuild
+                -- at the end of elaboration and read by nothing that
+                -- orders or chooses.  Not serialized; the passes copy it
+                -- through their record updates.  Lazy, and forced by
+                -- the expanded-stage dump's deepseq (TopUtils.dump) as
+                -- the last field, after the defs: the table forces
+                -- nothing of the module earlier than it was forced
+                -- before the field existed.  Until then it retains the
+                -- heap cells it is built from; after it every record
+                -- is strict and holds pointers, site and context ids
+                -- and the cells' name hints, nothing of the heap.
+                imod_meta :: ModuleMeta
           }
          deriving (Show)
 
@@ -1079,7 +1093,9 @@ instance PPrint (IPackage a) where
   where sep a b c = b $+$ a $+$ c
 
 instance PPrint (IModule a) where
- pPrint d p (IModule mi fmod be wi ps ks as clks rsts vs pts ds rs ifc ffcalNo cmap) =
+ -- imod_meta is not printed: the side file (-metadata-out) renders it,
+ -- and a dump must not change with the metadata table
+ pPrint d p (IModule mi fmod be wi ps ks as clks rsts vs pts ds rs ifc ffcalNo cmap _) =
         (text "IModule" <+> ppId d mi <> if fmod then text " -- function" else text "") $+$
         (case be of
              Nothing -> empty
@@ -1256,8 +1272,8 @@ instance NFData (IPackage a) where
     rnf (IPackage i lps ps ds atfCache) = rnf5 i ps lps ds atfCache
 
 instance NFData (IModule a) where
-    rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16) =
-        rnf16 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16
+    rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17) =
+        rnf17 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17
 
 instance NFData (IEFace a) where
     rnf (IEFace x1 x2 x3 x4 x5 x6) = rnf6 x1 x2 x3 x4 x5 x6

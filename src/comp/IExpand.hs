@@ -33,6 +33,7 @@ import System.IO(Handle, BufferMode(..), IOMode(..), stdout, stderr,
 import System.FilePath(isRelative)
 import qualified Data.Array as Array
 import qualified Data.IntMap as IM
+import qualified Data.IntMap.Strict as IMS
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -73,7 +74,10 @@ import ISyntaxSubst(eSubst, eSubstBatch, tSubstBatch)
 import IConv(iConvT, iConvExpr)
 import ISyntaxUtil
 import IExpandUtils
-import IExpandMeta(SiteKind(..), idSiteKey, rootSiteKey, Binder(..), renderDump)
+import IExpandMeta(SiteKind(..), idSiteKey, rootSiteKey, Binder(..), renderDump,
+                   MetaTables(..), emptyContextTable, internFrame, siteOf,
+                   frameOf, binderOf, aliasUnions, aliasMembers, aliasClassOf,
+                   noCell, DefRecord(..), ModuleMeta(..))
 import Wires
 import IWireSet
 import qualified IfcBetterInfo as BetterInfo
@@ -299,7 +303,7 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
       -- a property we expect in IModule and which the function "pDef"
       -- below also relies on (since "pDef" and "m" are recursively built,
       -- the lazy knot terminates only on acyclic references)
-      (cse_ptrs, ptr_map) = eqPtrs iheap ptrs0
+      (cse_ptrs, ptr_map, cell_refs) = eqPtrs iheap ptrs0
       -- function for translating old pointers to new ones
       ptran p = IM.findWithDefault p p ptr_map
 
@@ -370,6 +374,13 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
       -- (the entries in "ptr_info" that are not inlined, and contain a def)
       defs1 = [ d | (_, (_, Just d)) <- ptr_info ]
 
+      -- the metadata table: one record per lifted def, keyed by its
+      -- canonical pointer (deciding whether a pointer is lifted forces
+      -- the decision of pDef that defs1 forces, and nothing else of it)
+      lifted = IS.fromList [ p | (p, (_, Just _)) <- ptr_info ]
+      meta = buildModuleMeta (go_meta go) (go_roots go) (go_defcache go)
+                             iheap ptr_map cell_refs lifted
+
       -- XXX the rules names should be constructed properly
       -- XXX to begin with rather than fixed up at the end
       rules_cleanup = cleanupFinalRules flags rules_heap
@@ -387,7 +398,7 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
                      (go_clock_domains go) (go_resets go)
                      insts' (go_port_types go)
                      defs rules_cleanup ifc'
-                     (go_ffcallNo go) comments_map
+                     (go_ffcallNo go) comments_map meta
       -- if preserving method conditions, then remove the book-keeping info
       imod = removeInlinedPositions flags imod0
 
@@ -691,12 +702,14 @@ removeInlinedPositions flags imod0 =
 -- this code does CSE and tsorts the defs, in preparation for converting
 -- to IDefs in the resulting IModule.
 
--- eqPtrs has two outputs:
+-- eqPtrs has three outputs:
 -- 1. a tsorted list of the heap pointers (used to build the output module)
 -- 2. a heap-reference to heap-reference map that seems to be used to do
 -- some sort of heap compression and/or CSE (is this still useful)?
+-- 3. the pointers each cell's expression references (the graph the
+-- tsort was computed from), for the metadata table's reverse index
 eqPtrs :: IM.IntMap HeapCell -> [HeapPointer] ->
-          ([HeapPointer], IM.IntMap HeapPointer)
+          ([HeapPointer], IM.IntMap HeapPointer, [(HeapPointer, [HeapPointer])])
 eqPtrs heap ptrs =
     let getHeapCell p = case (IM.lookup p heap) of
                         Just cell -> cell
@@ -830,7 +843,91 @@ eqPtrs heap ptrs =
     in  --traces (show (length ptrs, length (M.elems dsm))) $
         --traces (show (IM.toList ptrm)) $
         --traces (show (M.elems dsm)) $
-        (M.elems dsm, ptrm)
+        (M.elems dsm, ptrm, g)
+
+-- Build the module metadata table (IExpandMeta) from the headers of the
+-- kept cells, after CSE: the context of every kept cell is interned from
+-- its frame chain, bottom-up and memoized by frame id; the cells eqPtrs
+-- identified under a canonical contribute their contexts to its record
+-- and join its alias class (the CSE unions); the reverse reference index
+-- over the expressions of the canonical cells gives each cell its
+-- parent; and the facts of a cell the rebuild inlines rather than lifts
+-- (pDef's simple, action and pair cells) fold into the record of every
+-- lifted def whose expression absorbs it, through the closure of folded
+-- references, which is acyclic because eqPtrs tsorted the same graph.
+-- Nothing here reads the result: the table is carried on the IModule for
+-- the side file.
+buildModuleMeta :: MetaTables -> [Int] -> IS.IntSet -> IM.IntMap HeapCell ->
+                   IM.IntMap HeapPointer -> [(HeapPointer, [HeapPointer])] ->
+                   IS.IntSet -> ModuleMeta
+buildModuleMeta tables roots defcache iheap ptr_map refs lifted =
+    let ptran p = IM.findWithDefault p p ptr_map
+        cellOf p = case IM.lookup p iheap of
+                     Just c -> c
+                     Nothing -> internalError ("buildModuleMeta: " ++ show p)
+        metaOf p = hc_meta (cellOf p)
+
+        -- the context of every kept cell; the fold is strict in the
+        -- table, the memo and the map, so no chain of thunks builds up
+        internCell ((!t, !memo), !m) (p, c) =
+            let (st', ctx) = internFrame (t, memo) (frameOf (hc_meta c))
+            in  (st', IM.insert p ctx m)
+        ((contexts, _), ctxOf) =
+            foldl' internCell ((emptyContextTable, IM.empty), IM.empty)
+                   (IM.toAscList iheap)
+        ctxAt p = IM.findWithDefault 0 p ctxOf
+        factOf p = (siteOf (metaOf p), ctxAt p)
+
+        -- the CSE unions: the cells identified under each canonical, in
+        -- pointer order (built from the descending list, so that each
+        -- cell is consed onto the front), and the alias class of each
+        -- joined with its canonical's (the two cells hold one value)
+        merged = IMS.fromListWith (++)
+                     [ (h, [p]) | (p, h) <- IM.toDescList ptr_map ]
+        aliases = aliasUnions (IM.toAscList ptr_map) (mt_alias tables)
+        aliased = aliasMembers aliases
+        aliasOf p | IS.member p aliased = aliasClassOf aliases p
+                  | otherwise = noCell
+
+        -- the reverse index: references between canonical cells, and
+        -- the lowest canonical cell referencing each cell
+        crefs = IM.fromList [ (p, map ptran qs) | (p, qs) <- refs, ptran p == p ]
+        parents = IMS.fromListWith min
+                      [ (q, p) | (p, qs) <- IM.toAscList crefs, q <- qs ]
+
+        -- the folded cells each folded cell stands for (itself and the
+        -- closure of its folded references); the knot is acyclic
+        isLifted p = IS.member p lifted
+        foldedClosure =
+            IM.mapMaybeWithKey
+                (\ p qs -> if isLifted p then Nothing
+                           else Just (IS.unions (IS.singleton p :
+                                                 map closureOf (filter (not . isLifted) qs))))
+                crefs
+        closureOf q = IM.findWithDefault IS.empty q foldedClosure
+        foldedOf p = IS.toAscList (IS.unions (map closureOf
+                         (filter (not . isLifted) (IM.findWithDefault [] p crefs))))
+
+        record p =
+            let (site, ctx) = factOf p
+                mergedFacts = map factOf (IM.findWithDefault [] p merged)
+                foldedFacts = map factOf (foldedOf p)
+            in  DefRecord { dr_ptr = p,
+                            dr_hint = hc_name (cellOf p),
+                            dr_site = site,
+                            dr_context = ctx,
+                            dr_contexts = IS.fromList (ctx : map snd mergedFacts ++
+                                                       map snd foldedFacts),
+                            dr_merged = mergedFacts,
+                            dr_folded = foldedFacts,
+                            dr_parent = IM.findWithDefault noCell p parents,
+                            dr_shared = IS.member p defcache,
+                            dr_binder = binderOf (metaOf p),
+                            dr_alias = aliasOf p }
+    in  ModuleMeta { mm_sites = mt_sites tables,
+                     mm_contexts = contexts,
+                     mm_roots = roots,
+                     mm_defs = IM.fromSet record lifted }
 
 
 -----------------------------------------------------------------------------

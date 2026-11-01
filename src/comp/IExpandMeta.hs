@@ -6,21 +6,31 @@ module IExpandMeta(
         Frame, Binder(..), CellMeta, noBinder, headSiteOf, cellDefSite,
         -- the store and the hooks the evaluator calls
         MetaStore, newMetaStore, lookupSite, mintSite, pushFrame, pushRoot,
-        swapFrame, swapCellFrame, stampMeta, aliasUnion,
+        swapFrame, swapCellFrame, stampMeta, aliasUnion, readRoots,
         -- the tables after elaboration and the query interface, read by
         -- the rebuild and the dump alone
         MetaTables(..), AliasMap, readMetaTables,
-        siteOf, frameOf, binderOf, chainOf, aliasClassOf, renderSite, renderDump
+        siteOf, frameOf, binderOf, chainOf, aliasClassOf, aliasMembers,
+        renderSite, renderDump,
+        -- the module metadata table, built by the rebuild
+        ContextTable, emptyContextTable, contextTableSize, internFrame,
+        contextChain, aliasUnions, noCell, DefRecord(..), ModuleMeta(..),
+        emptyModuleMeta, defNameString, sideFileSchema, renderSideFile
         ) where
 
 import Control.Monad(when)
 import Data.Bits(bit, (.|.), (.&.), complement, xor, testBit)
+import Data.Char(isAlphaNum)
 import Data.IORef
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
+import Data.List(intercalate)
+import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import System.FilePath(takeFileName)
 
+import ErrorUtil(internalError)
+import Eval(NFData(..), rnf2, rnf3, rnf4, rnf11)
 import FStringCompat(FString, getFString)
 import Id(Id, getIdBase, getIdQual, getIdPosition)
 import Position(Position(..), noPosition)
@@ -35,9 +45,11 @@ import Prim(PrimOp)
 -- method or an instantiation, the binder the cell's value was bound
 -- to (a parameter, or the index of a field or operand it was moved
 -- into), and the alias class of cells that hold one value.  It is
--- written by the evaluator through
--- the hooks below and read only through the query interface, by the
--- rebuild at the end of elaboration and by the -metadata-dump printer.
+-- written by the evaluator through the hooks below and read only
+-- through the query interface: by the rebuild at the end of
+-- elaboration, which also builds the module metadata table from it
+-- (IExpand.buildModuleMeta; the side-file renderer, renderSideFile,
+-- reads that table), and by the -metadata-dump printer.
 --
 -- Rules that keep the store invisible to the generated output:
 --
@@ -238,13 +250,15 @@ cellDefSite m =
         else Nothing
 
 -- The store: the site table, the frame counter, the frame register
--- (the frame current for the next allocation), the alias classes and
--- the scramble seed (0 when scrambling is off).  One store per module
+-- (the frame current for the next allocation), the alias classes, the
+-- sites of the root frames pushed so far (most recent first) and the
+-- scramble seed (0 when scrambling is off).  One store per module
 -- elaboration.
 data MetaStore = MetaStore { ms_sites :: !(IORef SiteTable),
                              ms_nextFrame :: !(IORef Int),
                              ms_frame :: !(IORef Frame),
                              ms_alias :: !(IORef AliasMap),
+                             ms_roots :: !(IORef [Int]),
                              ms_seed :: {-# UNPACK #-} !Int }
 
 newMetaStore :: Int -> IO MetaStore
@@ -253,7 +267,8 @@ newMetaStore seed = do
     next <- newIORef 1
     reg <- newIORef TopFrame
     alias <- newIORef IM.empty
-    return (MetaStore sites next reg alias seed)
+    roots <- newIORef []
+    return (MetaStore sites next reg alias roots seed)
 
 -- The one scrambling function: identity when the seed is 0.
 perturb :: MetaStore -> Int -> Int
@@ -362,6 +377,7 @@ pushRoot :: MetaStore -> Int -> IO Frame
 pushRoot st site = do
     n <- readIORef (ms_nextFrame st)
     writeIORef (ms_nextFrame st) $! n + 1
+    modifyIORef' (ms_roots st) (site :)
     return $! Frame (perturb st n) site (perturb st 1) TopFrame IM.empty
 
 -- Set the register to a frame and return the frame it held.  The
@@ -441,6 +457,31 @@ aliasClassOf :: AliasMap -> Int -> Int
 aliasClassOf m = walk
   where walk x = maybe x walk (IM.lookup x m)
 
+-- the cells in a class with another cell: those with a parent and those
+-- that are one
+aliasMembers :: AliasMap -> IS.IntSet
+aliasMembers m = IS.union (IM.keysSet m) (IS.fromList (IM.elems m))
+
+-- aliasFind on a snapshot: the root of p's class and the map with the
+-- path to it compressed.  Every link still goes from a larger pointer
+-- to a smaller one, so the walk terminates.
+aliasFindIn :: Int -> AliasMap -> (Int, AliasMap)
+aliasFindIn p m =
+    let walk x path = case IM.lookup x m of
+                        Just y -> walk y (x : path)
+                        Nothing -> (x, path)
+        (root, path) = walk p []
+    in  (root, L.foldl' (\ acc x -> IM.insert x root acc) m path)
+
+-- aliasUnion on a snapshot, for each pair in turn: the unions the
+-- rebuild makes after elaboration (the cells CSE identifies).
+aliasUnions :: [(Int, Int)] -> AliasMap -> AliasMap
+aliasUnions pairs m0 = L.foldl' step m0 pairs
+  where step m (p, q) =
+            let (rp, m1) = aliasFindIn p m
+                (rq, m2) = aliasFindIn q m1
+            in  if rp == rq then m2 else IM.insert (max rp rq) (min rp rq) m2
+
 -- The tables of the store after elaboration: the site table and the
 -- alias classes.
 data MetaTables = MetaTables { mt_sites :: !SiteTable,
@@ -451,6 +492,10 @@ readMetaTables st = do
     sites <- readIORef (ms_sites st)
     alias <- readIORef (ms_alias st)
     return (MetaTables sites alias)
+
+-- the sites of the root frames, in push order
+readRoots :: MetaStore -> IO [Int]
+readRoots st = reverse <$> readIORef (ms_roots st)
 
 -- ===============
 -- The query interface
@@ -531,10 +576,257 @@ renderDump (MetaTables t am) cells = unlines (map line cells)
             concatMap link (chainOf m)
         binder b | b == noBinder = ""
                  | otherwise = ", " ++ renderSite t b
-        -- a cell is in a class with another cell when it has a parent
-        -- or is one
-        alias p | IM.member p am || IS.member p parents =
-                    ", alias _" ++ show (aliasClassOf am p)
+        alias p | IS.member p members = ", alias _" ++ show (aliasClassOf am p)
                 | otherwise = ""
-        parents = IS.fromList (IM.elems am)
+        members = aliasMembers am
         link (s, c) = " <- " ++ renderSite t s ++ "#" ++ show c
+
+-- ===============
+-- The module metadata table
+--
+-- Built once by the rebuild (IExpand.buildModuleMeta) from the headers
+-- of the cells it keeps, after CSE, and carried on the IModule.  It is
+-- read by nothing that orders or chooses: the side file renders it, and
+-- it is never serialized.
+
+-- A context is one distinct frame chain, as the triple (parent context,
+-- site, count); context 0 is the top, under which no frame was pushed.
+-- Contexts are interned bottom-up from the frames of the kept cells,
+-- memoized by frame id, so that frames no kept cell references are never
+-- visited and identical chains share one id.  This is the only place
+-- context ids exist; nothing during evaluation reads or writes them.
+data ContextTable = ContextTable { ct_next :: {-# UNPACK #-} !Int,
+                                   ct_ids :: !(M.Map (Int, Int, Int) Int),
+                                   ct_rows :: !(IM.IntMap (Int, Int, Int)) }
+
+emptyContextTable :: ContextTable
+emptyContextTable = ContextTable 1 M.empty IM.empty
+
+contextTableSize :: ContextTable -> Int
+contextTableSize t = IM.size (ct_rows t)
+
+-- Intern the chain of a frame and return its context id; the memo (by
+-- frame id) is threaded through the cells of one module.  The recursion
+-- is one step per frame of the chain not yet memoized.
+internFrame :: (ContextTable, IM.IntMap Int) -> Frame
+            -> ((ContextTable, IM.IntMap Int), Int)
+internFrame st TopFrame = (st, 0)
+internFrame st@(_, memo) (Frame { fr_id = fid, fr_site = s, fr_count = c,
+                                  fr_parent = parent }) =
+    case IM.lookup fid memo of
+      Just ctx -> (st, ctx)
+      Nothing ->
+        let ((t1, memo1), pctx) = internFrame st parent
+            key = (pctx, s, c)
+        in  case M.lookup key (ct_ids t1) of
+              Just ctx -> ((t1, IM.insert fid ctx memo1), ctx)
+              Nothing ->
+                let ctx = ct_next t1
+                    t2 = ContextTable (ctx + 1)
+                                      (M.insert key ctx (ct_ids t1))
+                                      (IM.insert ctx key (ct_rows t1))
+                in  ((t2, IM.insert fid ctx memo1), ctx)
+
+-- (site, count) of every frame of a context, from the root
+contextChain :: ContextTable -> Int -> [(Int, Int)]
+contextChain t = go []
+  where go acc 0 = acc
+        go acc ctx = case IM.lookup ctx (ct_rows t) of
+                       Just (p, s, c) -> go ((s, c) : acc) p
+                       Nothing -> internalError ("IExpandMeta.contextChain: " ++
+                                                 show ctx)
+
+-- The record of a lifted def: the cell it was lifted from and the cells
+-- that stand behind it.  The tiers are derived when the record is
+-- rendered: use-site and definition-site from the site row, head-site
+-- from the site's bit, shared from dr_shared, merged from dr_merged.
+--
+-- The record does not hold the def's Id.  The rebuild coins that Id
+-- lazily, and forcing it interns its strings; the order in which the
+-- passes after elaboration first force the def names is an input to
+-- the generated output (identifier ordering is by intern id), so the
+-- table must never force one.  It holds the cell's name hint instead,
+-- which the evaluator forced when it wrote it, and renders the name
+-- the rebuild coins from the hint and the pointer (defNameString).
+data DefRecord = DefRecord {
+        -- the canonical heap pointer of the cell, and its name hint
+        dr_ptr :: {-# UNPACK #-} !Int,
+        dr_hint :: !(Maybe Id),
+        -- the site of the cell and the context of its frame chain
+        dr_site :: {-# UNPACK #-} !Int,
+        dr_context :: {-# UNPACK #-} !Int,
+        -- every context the def stands for: its own, those of the cells
+        -- CSE identified with it and those of the cells folded into its
+        -- expression
+        dr_contexts :: !IS.IntSet,
+        -- the (site, context) of each cell CSE identified with this one,
+        -- in pointer order
+        dr_merged :: ![(Int, Int)],
+        -- the (site, context) of each cell the rebuild inlined into the
+        -- def's expression instead of lifting it, in pointer order
+        dr_folded :: ![(Int, Int)],
+        -- the lowest canonical pointer of a kept cell whose expression
+        -- references this cell, or noCell when none does (the cell is
+        -- referenced from a rule, a method or an instance alone)
+        dr_parent :: {-# UNPACK #-} !Int,
+        -- the cell is a definition-cache cell (shared by every unfolding
+        -- of its definition)
+        dr_shared :: !Bool,
+        -- the site of the cell's binder (the parameter its expression
+        -- was an argument of, or the index of the field or operand it
+        -- was moved into), or noBinder
+        dr_binder :: {-# UNPACK #-} !Int,
+        -- the root of the cell's alias class after the CSE unions, when
+        -- the class holds another cell, or noCell
+        dr_alias :: {-# UNPACK #-} !Int
+    }
+
+-- Heap pointers start at 0, so -1 is free to mean no cell.
+noCell :: Int
+noCell = -1
+
+instance NFData DefRecord where
+    rnf (DefRecord x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11) =
+        rnf11 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11
+
+-- The name the rebuild gives the def lifted from a cell: the name hint
+-- with its illegal characters dropped, its base extended by the pointer
+-- (IExpand.pDef, with "__h" as iExpandPref), rendered as getIdString
+-- renders the Id.  Pure string operations over existing strings: nothing
+-- is interned.
+defNameString :: Int -> Maybe Id -> String
+defNameString p hint =
+    let suffix = "__h" ++ show p
+    in  case hint of
+          Nothing -> suffix
+          Just i ->
+            let legal = filter (\ c -> isAlphaNum c || c == '_')
+                base = legal (getFString (getIdBase i)) ++ suffix
+                qual = legal (getFString (getIdQual i))
+            in  if null qual then base else qual ++ "." ++ base
+
+-- The table: the sites, the contexts, the root sites (rules, methods and
+-- instantiations, in push order) and the def records, keyed by the
+-- canonical heap pointer (the number the def's name ends in).
+data ModuleMeta = ModuleMeta { mm_sites :: !SiteTable,
+                               mm_contexts :: !ContextTable,
+                               mm_roots :: ![Int],
+                               mm_defs :: !(IM.IntMap DefRecord) }
+
+emptyModuleMeta :: ModuleMeta
+emptyModuleMeta = ModuleMeta emptySiteTable emptyContextTable [] IM.empty
+
+-- compact, so that the derived Show of an IModule stays printable
+instance Show ModuleMeta where
+    show mm = "ModuleMeta sites " ++ show (siteTableSize (mm_sites mm)) ++
+              " contexts " ++ show (contextTableSize (mm_contexts mm)) ++
+              " roots " ++ show (length (mm_roots mm)) ++
+              " defs " ++ show (IM.size (mm_defs mm))
+
+instance NFData SiteKey where
+    rnf (IdKey b q p k) = rnf4 b q p k
+    rnf (PrimKey op) = rnf op
+    rnf (RootKey n k) = rnf2 n k
+    rnf BoundKey = ()
+    rnf (FieldKey n) = rnf n
+
+instance NFData SiteKind where
+    rnf k = k `seq` ()
+
+instance NFData SiteRow where
+    rnf (SiteRow k u r) = rnf3 k u r
+
+instance NFData SiteRef where
+    rnf (SiteRef s r) = rnf2 s r
+
+instance NFData RecKey where
+    rnf (RecKey k u) = rnf2 k u
+
+instance NFData SiteTable where
+    rnf (SiteTable n ids rows recs) = rnf4 n ids rows recs
+
+instance NFData ContextTable where
+    rnf (ContextTable n ids rows) = rnf3 n ids rows
+
+instance NFData ModuleMeta where
+    rnf (ModuleMeta s c r d) = rnf4 s c r d
+
+-- ===============
+-- The side file
+--
+-- One line per root and per lifted def, in pointer order, after the
+-- schema line and the module name.  Sites are rendered as in the dump
+-- (kind, name, file, line, column, flags) and chains root-first as
+-- site#count links, so that the file reads without the tables; the
+-- only numbers in it are the pointers in the def names.  A def line:
+--
+--   def <name> | site <site> | chain <chain> | contexts <n>
+--     | merged <n> {<site> @ <chain>}... | folded <n> {<site> @ <chain>}...
+--     | parent <cell> | binder <binder> | alias <cell> | tiers <letters or ->
+--
+-- where a cell is the name of the def lifted from it, _<pointer> when
+-- no def was (a folded cell; the root of an alias class is the class's
+-- earliest cell, lifted or not), or - for none; a binder is a parameter
+-- as <name> [<file>:<line>:<col>], a field or operand as field <n>, or -;
+--
+-- and the tier letters are u (use-site), d (definition-site),
+-- h (head-site), s (shared) and m (merged).
+
+sideFileSchema :: String
+sideFileSchema = "bsc-metadata 1"
+
+-- a binder site without its kind word, which the column's label gives
+renderBinderSite :: SiteTable -> Int -> String
+renderBinderSite t b =
+    case siteRow t b of
+      Just (SiteRow { sr_key = IdKey base qual p SKBinder }) ->
+          renderName base qual ++ renderPosition p
+      _ -> renderSite t b
+
+renderChain :: SiteTable -> ContextTable -> Int -> String
+renderChain _ _ 0 = "-"
+renderChain st ct ctx =
+    intercalate " -> " [ renderSite st s ++ "#" ++ show c
+                       | (s, c) <- contextChain ct ctx ]
+
+renderSideFile :: String -> ModuleMeta -> String
+renderSideFile modName mm =
+    unlines ([sideFileSchema, "module " ++ modName] ++
+             [ "root " ++ renderSite st s | s <- mm_roots mm ] ++
+             map renderDef (IM.elems (mm_defs mm)))
+  where
+    st = mm_sites mm
+    ct = mm_contexts mm
+    renderDef r =
+        intercalate " | "
+            [ "def " ++ defName r,
+              "site " ++ renderSite st (dr_site r),
+              "chain " ++ renderChain st ct (dr_context r),
+              "contexts " ++ show (IS.size (dr_contexts r)),
+              "merged " ++ renderFacts (dr_merged r),
+              "folded " ++ renderFacts (dr_folded r),
+              "parent " ++ renderCell (dr_parent r),
+              "binder " ++ renderBinder (dr_binder r),
+              "alias " ++ renderCell (dr_alias r),
+              "tiers " ++ renderTiers r ]
+    renderFacts fs =
+        show (length fs) ++
+        concat [ " {" ++ renderSite st s ++ " @ " ++ renderChain st ct c ++ "}"
+               | (s, c) <- fs ]
+    defName r = defNameString (dr_ptr r) (dr_hint r)
+    renderCell p | p == noCell = "-"
+                 | otherwise = case IM.lookup p (mm_defs mm) of
+                                 Just pr -> defName pr
+                                 Nothing -> "_" ++ show p
+    renderBinder b | b == noBinder = "-"
+                   | otherwise = renderBinderSite st b
+    renderTiers r =
+        let row = siteRow st (dr_site r)
+            isDef = maybe False ((== SKDef) . siteKeyKind . sr_key) row
+            use = maybe False sr_useSite row
+            letters = [ c | (c, on) <- [('u', use),
+                                        ('d', isDef && not use),
+                                        ('h', testBit (dr_site r) 60),
+                                        ('s', dr_shared r),
+                                        ('m', not (null (dr_merged r)))], on ]
+        in  if null letters then "-" else letters
