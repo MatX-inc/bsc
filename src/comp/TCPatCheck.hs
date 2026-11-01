@@ -166,6 +166,17 @@ data LitDomain = LDFinite Integer Integer  -- lo, hi (inclusive)
                | LDInfinite
     deriving (Eq)
 
+-- | The widest Bit/UInt/Int type whose values are treated as a finite literal
+-- domain.  The finite path reasons with symbolic bit-cubes of the column
+-- width, and both the cube operations and the number of partitioned cells
+-- scale with that width, so a wide domain would spend the whole analysis
+-- budget on big-integer cube arithmetic.  Exhaustiveness over a domain this
+-- wide is only ever reachable through a wildcard/default, which the unbounded
+-- (LDInfinite) path already handles, so capping the width costs no precision
+-- on any match a user could actually write.
+maxFiniteLitWidth :: Integer
+maxFiniteLitWidth = 64
+
 data LitKey = LKInt Integer | LKStr String | LKChar Char | LKReal Double
     deriving (Eq, Ord)
 
@@ -222,9 +233,16 @@ colKind normTy r t =
           Just tcid
             | tcid `qualEq` idBit || tcid `qualEq` idUInt ->
                 case tyConArgs t' of
-                  -- bound the width, so that the 2^n domain value stays
-                  -- cheap to compute and compare
-                  [n] | isTNum n, getTNum n <= 65536 ->
+                  -- Only treat the width as a finite literal domain when it is
+                  -- narrow.  The finite path builds symbolic bit-cubes of this
+                  -- width and partitions them (domainCube/partitionCubes); the
+                  -- per-operation cost grows with the width, so a wide domain
+                  -- can burn the whole fuel budget on big-integer cube work
+                  -- before abandoning.  Wide domains cannot be matched
+                  -- exhaustively without a wildcard anyway, and the unbounded
+                  -- path handles the wildcard, so nothing is lost by treating
+                  -- them as infinite.
+                  [n] | isTNum n, getTNum n <= maxFiniteLitWidth ->
                     let w = getTNum n
                     in  CKLit (LDFinite 0 (2^w - 1))
                   [n] | isTNum n -> CKLit LDInfinite
@@ -234,7 +252,7 @@ colKind normTy r t =
                   [n] | isTNum n, getTNum n == 0 ->
                     -- Prelude's inLiteralRange for Int#(0) admits exactly 0.
                     CKLit (LDFinite 0 0)
-                  [n] | isTNum n, getTNum n >= 1, getTNum n <= 65536 ->
+                  [n] | isTNum n, getTNum n >= 1, getTNum n <= maxFiniteLitWidth ->
                     let w = getTNum n
                     in  CKLit (LDFinite (negate (2^(w-1))) (2^(w-1) - 1))
                   [n] | isTNum n -> CKLit LDInfinite
@@ -910,7 +928,7 @@ bitColumnWidth normTy t =
       t' | Just tcid <- leftCon t', tcid `qualEq` idBit,
            [n] <- tyConArgs t', isTNum n,
            let width = getTNum n,
-           width >= 0, width <= 65536 -> Just width
+           width >= 0, width <= maxFiniteLitWidth -> Just width
       _ -> Nothing
 
 canonicalLitKey :: NormType -> CType -> LitKey -> Maybe LitKey
