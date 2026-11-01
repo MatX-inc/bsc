@@ -1,0 +1,19 @@
+package AlwaysEnabledValid where
+
+-- G0134 (a C b on c), demotable for an environment that never asserts both
+-- valid bits in the same cycle.
+
+interface AEValid =
+    a   :: Bool -> Action {-# always_enabled #-}
+    b   :: Bool -> Action {-# always_enabled #-}
+    cur :: Bit 8          {-# always_ready #-}
+
+{-# synthesize sysAlwaysEnabledValid #-}
+sysAlwaysEnabledValid :: Module AEValid
+sysAlwaysEnabledValid =
+  module
+    c :: Reg (Bit 8) <- mkReg 0
+    interface
+      a v = if v then c := c + 1 else noAction
+      b v = if v then c := c + 2 else noAction
+      cur = c
