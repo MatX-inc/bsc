@@ -82,6 +82,13 @@ data Flags = Flags {
         letGen :: Bool,
         liftDicts :: Bool,
         maxTIStackDepth :: Int,
+        -- Evaluator metadata capture controls of this invocation (see
+        -- IExpandMeta): print the site and frame chain of every heap
+        -- cell of the elaborated module; perturb the metadata store
+        -- with a per-run seed.  Like ecoOptions, neither is stored in
+        -- a .ba (GenABin writes nothing and reads False).
+        metadataDump :: Bool,
+        metadataScramble :: Bool,
         methodBVI :: Bool,
         methodConf :: Bool,
         methodConditions :: Bool,

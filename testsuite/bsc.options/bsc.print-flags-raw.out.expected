@@ -49,6 +49,8 @@ Flags {
 	liftDicts = True,
 	linkFlags = [],
 	maxTIStackDepth = 1000,
+	metadataDump = False,
+	metadataScramble = False,
 	methodBVI = False,
 	methodConditions = False,
 	methodConf = False,

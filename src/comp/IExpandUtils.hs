@@ -68,6 +68,7 @@ import Control.Monad(when, liftM)
 import Control.Monad.State.Strict(StateT, runStateT, evalStateT, lift, liftIO,
                                   gets, get, put, modify)
 import Data.IORef
+import Data.Time.Clock.POSIX(getPOSIXTime)
 import System.IO.Unsafe
 import Data.List
 import Data.Maybe
@@ -107,6 +108,7 @@ import Verilog(vKeywords, vIsValidIdent)
 import Changed
 
 import IConv(iConvT)
+import IExpandMeta(MetaStore, SiteTable, newMetaStore, readSiteTable)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -542,7 +544,10 @@ data GStateRO = GStateRO {
         checkMaxStep :: !Bool,
         maxStep :: !Integer,
         stepWarnInterval :: !Integer,
-        flags :: !Flags
+        flags :: !Flags,
+        -- the evaluator metadata store (sites, frames, the frame
+        -- register); one per elaboration, created by runG
+        metaStore :: !MetaStore
         }
 
 -- full evaluator state
@@ -649,17 +654,18 @@ data GState = GState {
 
 initGState :: ErrorHandle -> Flags ->
               SymTab -> M.Map Id HExpr ->
-              IATFCache ->
+              IATFCache -> MetaStore ->
               Id -> Bool -> [PProp] ->
               GState
-initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
+initGState errh flags symt alldefs atf_cache store defId is_noinlined_func pps =
     let gsro = GStateRO { errHandle = errh,
                           symtab = symt,
                           checkMaxStep = redStepsMaxIntervals flags /= 0,
                           maxStep = redSteps flags,
                           stepWarnInterval = redStepsWarnInterval flags,
                           flags = flags,
-                          defenv = alldefs
+                          defenv = alldefs,
+                          metaStore = store
                         }
         gs = GState { stepNo = 0,
                       nextWarnStep = redStepsWarnInterval flags,
@@ -722,6 +728,8 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_backend_specific :: Bool,
                            go_ffcallNo :: Int,
                            go_atfCache :: IATFCache,
+                           -- the site table of the metadata store
+                           go_meta :: SiteTable,
                            goutput :: a }
 
 runG :: ErrorHandle -> Flags ->
@@ -730,7 +738,17 @@ runG :: ErrorHandle -> Flags ->
         Id -> Bool -> [PProp] -> G a ->
         IO (GOutput a)
 runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
-  do let gs = initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps
+  do -- Under -metadata-scramble every number the metadata store mints is
+     -- perturbed with a seed taken from the clock, so that no two runs
+     -- agree and nothing can depend on the store (see IExpandMeta);
+     -- a seed of 0 means no perturbation.
+     seed <- if metadataScramble flags
+             then do t <- getPOSIXTime
+                     let s = floor (t * 1000) :: Int
+                     return (if s == 0 then 1 else s)
+             else return 0
+     store <- newMetaStore seed
+     let gs = initGState errh flags symt alldefs atf_cache store defId is_noinlined_func pps
      (retval, gs') <- runStateT gFn gs
      -- convert the relevant info in the final GState into the GOutput
      do
@@ -764,6 +782,7 @@ runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
          let rblobs = savedRules gs'
          when (not (null rblobs)) $
              internalError ("IExpandUtils.runG - unexpanded ruleblobs: " ++ ppReadable rblobs)
+         meta <- readSiteTable store
          return $ (GOutput {
                      go_clock_domains = (M.toList (clock_domains gs')),
                      go_resets = (all_resets gs'),
@@ -779,6 +798,7 @@ runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
                      go_backend_specific = backend_specific gs',
                      go_ffcallNo = ffcallNo gs',
                      go_atfCache = atfCache gs',
+                     go_meta = meta,
                      goutput = retval
                     })
 

@@ -646,6 +646,8 @@ defaultFlags bluespecdir = Flags {
         letGen = False,
         liftDicts = True,
         maxTIStackDepth = 1000,
+        metadataDump = False,
+        metadataScramble = False,
         methodBVI = False,
         methodConf = False,
         methodConditions = False,
@@ -1356,6 +1358,14 @@ externalFlags = [
              (Just (FRTString (show . maxTIStackDepth))),
           "maximum stack depth for fundep and SAT analysis in typecheck", Hidden)),
 
+        ("metadata-dump",
+         (Toggle (\f x -> f {metadataDump=x}) (showIfTrue metadataDump),
+          "print the site and frame chain of every heap cell of the elaborated module", Hidden)),
+
+        ("metadata-scramble",
+         (Toggle (\f x -> f {metadataScramble=x}) (showIfTrue metadataScramble),
+          "perturb the evaluator metadata store with a per-run seed (output must not change)", Hidden)),
+
         ("o",
          (Arg "name" (\f s -> Left (f {oFile = s})) (Just (FRTString oFile)),
           "name of generated executable", Visible)),
@@ -2005,6 +2015,8 @@ showFlagsRaw flags =
           ("liftDicts", show (liftDicts flags)),
           ("linkFlags", show (linkFlags flags)),
           ("maxTIStackDepth", show (maxTIStackDepth flags)),
+          ("metadataDump", show (metadataDump flags)),
+          ("metadataScramble", show (metadataScramble flags)),
           ("methodBVI", show (methodBVI flags)),
           ("methodConditions", show (methodConditions flags)),
           ("methodConf", show (methodConf flags)),
