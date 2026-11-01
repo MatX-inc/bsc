@@ -616,6 +616,13 @@ data ErrMsg =
         | WNeverAssigned String -- ^ variable was declared but not assigned
         | WDeprecated String String String -- ^ what, it's name, optional text
         | WUnusedImport String -- ^ package name that was imported but not used
+        | WNonExhaustivePattern
+            String   -- ^ description of the match construct
+            [String] -- ^ example patterns that are not covered
+            Bool     -- ^ whether the example list was truncated
+        | WRedundantPattern
+            String   -- ^ description of the match construct
+            String   -- ^ the pattern that can never match
         | EObsolete String String String -- ^ what, it's name, optional text
         | MRestrictions String String  -- ^ please refer to the section on ____ in the Bluespec User Guide for restrictions on using ___
         | WExperimental String  -- ^ support for ___ is experimental
@@ -3112,6 +3119,21 @@ getErrorText (WTransitiveIncoherentMatch pred root_pred root_inst) =
      s2par ("Proviso " ++ pred ++ " is satisfied by a dictionary that transitively " ++
             "depends on an incoherent match of " ++ root_pred ++
             " against instance " ++ root_inst))
+
+getErrorText (WNonExhaustivePattern ctx examples truncated) =
+    (Type 165, empty,
+     s2par ("Pattern matching in " ++ ctx ++ " is not exhaustive." ++
+            " The following " ++
+            (if length examples == 1 && not truncated
+             then "pattern is" else "patterns are") ++
+            " not covered:") $$
+     nest 2 (vcat (map text (examples ++ (if truncated then ["..."] else [])))))
+
+getErrorText (WRedundantPattern ctx pat) =
+    (Type 166, empty,
+     s2par ("This pattern in " ++ ctx ++ " can never match, because" ++
+            " the preceding patterns cover all of its cases:") $$
+     nest 2 (text pat))
 
 -- Generation Errors
 

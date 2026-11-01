@@ -1,0 +1,14 @@
+package HigherRankPayload where
+
+data HR = H (UInt 8) (a -> a)
+        | N (UInt 8)
+
+-- The higher-rank field inside H is opaque, but N is still visibly missing.
+missingOuterConstructor :: HR -> Bool
+missingOuterConstructor (H _ _) = True
+
+-- Likewise, the opaque H payload must not suppress redundancy of an outer N.
+duplicateOuterConstructor :: HR -> Bool
+duplicateOuterConstructor (H _ _) = True
+duplicateOuterConstructor (N _) = False
+duplicateOuterConstructor (N _) = True

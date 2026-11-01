@@ -42,6 +42,7 @@ Compiler flags:
 -opt-undetermined-vals  aggressive optimization of undetermined values
 -p path                 directory path (``:'' sep.) for source and intermediate files
 -parallel-sim-link jobs specify the # of simultaneous jobs when linking Bluesim
+-pattern-check-fuel n   maximum pattern-matrix operations per analysis
 -print-flags            print flag values after command-line parsing
 -promote-warnings list  treat a list of warnings as errors (``:'' sep list of tags)
 -q                      same as -quiet
@@ -88,7 +89,9 @@ Compiler flags:
 -vsearch path           search path (``:'' sep.) for Verilog files
 -vsim simulator         specify which Verilog simulator to use
 -warn-action-shadowing  warn when a rule's action is overwritten by a later rule
+-warn-incomplete-patterns warn when pattern matching does not cover all possible values
 -warn-method-urgency    warn when a method's urgency is arbitrarily chosen
+-warn-overlapping-patterns warn when a pattern can never match (shadowed by earlier patterns)
 
 Most flags may be preceded by a ``no-'' to reverse the effect.
 Flags later on the command line override earlier ones.

@@ -12,6 +12,7 @@ ContextOnClassSubset.ContextOnClassSubset.Foo~Prelude.Bit~32~Prelude.Bit~16~Prel
 ContextOnClassSubset.ContextOnClassSubset.Foo~Prelude.Bit~32~Prelude.Bit~16~Prelude.Bit~8 =
   let _bar :: Prelude.Bit 32 -> Prelude.Bit 16 -> Prelude.Bit 8
       _bar = PrimBuildUndefined ·(Prelude.Bit 32 -> Prelude.Bit 16 -> Prelude.Bit 8) _ 1
+      -- IdProp: _bar[IdPDisplayName "bar"]
   in  ContextOnClassSubset.Foo
 	·(Prelude.Bit 32)
 	·(Prelude.Bit 16)

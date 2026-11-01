@@ -2231,6 +2231,12 @@ The following flags might be useful in debugging a BSV design:
                          been detected
 -warn-method-urgency     warn when a method's urgency is arbitrarily chosen
 -warn-action-shadowing   warn when a rule's action is overwritten by a later rule
+-warn-incomplete-patterns warn when pattern matching does not cover all
+                         possible values
+-warn-overlapping-patterns warn when a pattern can never match (shadowed by
+                         earlier patterns)
+-pattern-check-fuel n    limit each pattern-match analysis to n matrix
+                         operations (default 100000)
 -suppress-warnings list  ignore a list of warnings (`:' sep list of tags)
 -promote-warnings list   treat a list of warnings as errors (`:' sep list of tags)
 -demote-errors list      treat a list of errors as warnings (`:' sep list of tags)
@@ -2253,6 +2259,9 @@ The following flags might be useful in debugging a BSV design:
 %\index{-Werror@\te{-Werror} (compiler flag)}
 \index{-warn-method-urgency@\te{-warn-method-urgency} (compiler flag)}
 \index{-warn-action-shadowing@\te{-warn-action-shadowing} (compiler flag)}
+\index{-warn-incomplete-patterns@\te{-warn-incomplete-patterns} (compiler flag)}
+\index{-warn-overlapping-patterns@\te{-warn-overlapping-patterns} (compiler flag)}
+\index{-pattern-check-fuel@\te{-pattern-check-fuel} (compiler flag)}
 \index{-continue-after-errors@\te{-continue-after-errors} (compiler flag)}
 \index{-suppress-warnings@\te{-suppress-warnings} (compiler flag)}
 %\index{-show-all-warnings@\te{-show-all-warnings} (compiler flag)}
@@ -2351,6 +2360,42 @@ overwritten by the state update of the second method.  This can only
 occur for methods  which are annotated as non-conflicting, for
 example,  register writes.  Otherwise the Action methods will
 conflict. This flag is on by default.
+
+The {\bf\tt -warn-incomplete-patterns} flag displays a warning (tag
+{\bf\tt T0165}) when the arms of a pattern-matching case expression or
+the clauses of a function definition do not cover all possible values
+of the matched expression, along with examples of the values that are
+not matched.  Pattern-matching case statements are not reported as
+incomplete, because statement lowering supplies an implicit no-op
+default arm.  When no pattern matches at
+elaboration time, the result is an undetermined value, which is
+rarely the intent.  Matching over the entire domain of a sized
+numeric type (for example, both literals of \te{Bit\#(1)}, or all
+$2^n$ values of \te{Bit\#(n)} or \te{UInt\#(n)}) is
+recognized as complete.  Unions of mixed \te{Bit} literal patterns
+containing \te{?} wildcard digits are analyzed symbolically and can
+also be recognized as complete.  Typed Boolean guards (\te{\&\&\&}
+or \te{when}) made from \te{True}, \te{False}, variables, \te{not}
+(or \te{!}), \te{\&\&}, and \te{||} are analyzed propositionally.
+For example, otherwise identical arms guarded by \te{g} and
+\te{not g} jointly cover both values of \te{g}.  Other guard
+expressions and pattern generators are handled conservatively: they
+are assumed to be able to fail and do not contribute to completeness.
+This flag is on by default.
+
+The {\bf\tt -warn-overlapping-patterns} flag displays a warning (tag
+{\bf\tt T0166}) when a pattern in a case expression, a
+pattern-matching case statement, or a function clause can never
+match, because preceding patterns and supported Boolean guards cover
+all of the values and guard valuations that reach it.  Unsupported
+guards do not make later arms redundant.  This flag is on by default.
+
+The {\bf\tt -pattern-check-fuel} flag sets the maximum number of
+guard-formula and pattern-matrix operations used by each exhaustiveness or
+redundancy analysis.  Its argument must be a positive integer and defaults to
+100000.  If the checker exhausts this budget before proving that a match is
+incomplete or that an arm is redundant, it conservatively emits no warning
+for the unfinished analysis.
 
 The {\bf\tt -suppress-warnings, -promote-warnings,} and {\bf\tt -demote-errors} flags provide control over which
 warnings and errors are displayed.  The flags take a list of specific  warnings
