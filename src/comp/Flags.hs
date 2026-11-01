@@ -274,6 +274,9 @@ data DumpFlag
         | DFaddSchedAssumps
         | DFremoveAssumps
         | DFdropundet
+        -- the metadata ledger (IExpandMeta), printed on request after
+        -- the ISyntax, the APackage and the ASPackage stages
+        | DFmetadata
         | DFwriteABin
         | DFwrappergen
         | DFwrappercomp

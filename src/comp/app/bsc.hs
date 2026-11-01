@@ -113,7 +113,7 @@ import GenForeign(genForeign)
 import DefProp(DefProp(..))
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
-import IExpandMeta(renderSideFile, MetaLedger(..))
+import IExpandMeta(renderSideFile, renderLedger, MetaLedger(..))
 import ITransform(iTransform)
 import IInline(iInline)
 import IInlineFmt(iInlineFmt)
@@ -938,6 +938,7 @@ genModule
     imod_drop <- iDropRules errh flags imod_param
     stats flags DFidroprules imod_drop
     t <- dump errh flags t DFidroprules dumpnames imod_drop
+    t <- dumpLedger errh flags t dumpnames "idroprules" (imod_meta imod_drop)
 
     -- Generate ATS
     -- ATS stands for "Abstract Transition System" from James C. Hoe's Ph.D. thesis
@@ -1085,6 +1086,7 @@ genModule
     start flags DFdropundet
     let amod_no_undet = aDropUndet errh flags amod_no_assumps
     t <- dump errh flags t DFdropundet dumpnames amod_no_undet
+    t <- dumpLedger errh flags t dumpnames "dropundet" (apkg_meta amod_no_undet)
 
     -- the amod doesn't change beyond this point
     let amod_final = amod_no_undet
@@ -1168,6 +1170,17 @@ genModule
     t <- dump errh flags t DFwrappergen dumpnames def
     return (def)
 
+
+-- -dmetadata: print the metadata ledger of the package after the named
+-- stage (the table's sizes and the events; IExpandMeta.renderLedger),
+-- only when that dump is requested by name, as -dATSexpand is; -dall
+-- does not include it, so the package dumps are what they were.
+dumpLedger :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> String ->
+              MetaLedger -> IO TimeInfo
+dumpLedger errh flags t dumpnames stage ledger =
+    if isJust (lookup DFmetadata (dumps flags))
+    then dumpStr errh flags t DFmetadata dumpnames (renderLedger stage ledger)
+    else return t
 
 -- -metadata-out: write the evaluator metadata side file of the elaborated
 -- module (IExpandMeta.renderSideFile), <module>.metadata, into the
@@ -1406,6 +1419,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
             (asCheck flags aumod "finalcleanup")
        t <- dump errh flags t DFfinalcleanup dumpnames aumod
        stats flags DFfinalcleanup aumod
+       t <- dumpLedger errh flags t dumpnames "finalcleanup" (aspkg_meta aumod)
 
        start flags DFIOproperties
        let (ioprops, ips) = getIOProps flags aumod

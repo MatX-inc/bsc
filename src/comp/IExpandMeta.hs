@@ -18,7 +18,7 @@ module IExpandMeta(
         emptyModuleMeta, defNameString, sideFileSchema, renderSideFile,
         -- the ledger the packages carry
         MetaLedger(..), emptyMetaLedger, PassTag(..), MetaEvent(..),
-        appendEvent, resolveId,
+        appendEvent, resolveId, renderLedger,
         -- the census (-metadata-census)
         Census, readCensus, recordUnfolding, recordCompletion, aliasClassCount,
         renderCensus, checkProfile, checkKeptPositions, checkNameHints
@@ -42,7 +42,7 @@ import System.FilePath(takeFileName)
 import ErrorUtil(internalError)
 import Eval(NFData(..), rnf2, rnf3, rnf4, rnf5, rnf11)
 import FStringCompat(FString, getFString)
-import Id(Id, getIdBase, getIdQual, getIdPosition)
+import Id(Id, getIdBase, getIdQual, getIdPosition, getIdString)
 import PPrint(PPrint(..), empty)
 import Position(Position(..), noPosition, isPreludePosition)
 import Prim(PrimOp)
@@ -893,6 +893,32 @@ resolveId (MetaLedger mm) final = go (mm_events mm) (S.singleton final) [final] 
     add (y : ys) st@(seen, ids)
         | S.member y seen = add ys st
         | otherwise = add ys (S.insert y seen, y : ids)
+
+-- The ledger as the metadata dump stage (-dmetadata) prints it after
+-- the named stage: the sizes of the table and the number of events on
+-- one line, then the events, oldest first, one per line, the ids
+-- rendered by getIdString (which reads existing strings).
+renderLedger :: String -> MetaLedger -> String
+renderLedger stage (MetaLedger mm) =
+    unlines (("ledger after " ++ stage ++ ": " ++
+              show (siteTableSize (mm_sites mm)) ++ " sites, " ++
+              show (contextTableSize (mm_contexts mm)) ++ " contexts, " ++
+              show (length (mm_roots mm)) ++ " roots, " ++
+              show (IM.size (mm_defs mm)) ++ " defs, " ++
+              show (length (mm_events mm)) ++ " events")
+             : map renderEvent (reverse (mm_events mm)))
+
+renderEvent :: MetaEvent -> String
+renderEvent ev =
+    case ev of
+      Renamed t from to -> line "renamed" t (ids [from] ++ " -> " ++ ids [to])
+      Merged t froms into -> line "merged" t (ids froms ++ " -> " ++ ids [into])
+      Inlined t from intos -> line "inlined" t (ids [from] ++ " -> " ++ ids intos)
+      Created t to froms -> line "created" t (ids [to] ++ " <- " ++ ids froms)
+      Dropped t from -> line "dropped" t (ids [from])
+  where
+    line kind t rest = kind ++ " (" ++ drop 2 (show t) ++ "): " ++ rest
+    ids = unwords . map getIdString
 
 -- ===============
 -- The side file
