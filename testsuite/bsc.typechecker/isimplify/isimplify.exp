@@ -1,0 +1,74 @@
+# Tests for the self-reference guard memo of ISimplify (selectTuple and
+# selectDictMethod).  A method selection from a statically known
+# dictionary is resolved to the selected field unless the dictionary is
+# reachable from that field through the ICDef nodes; the guard used to
+# walk the field's whole closure at every site and now answers from
+# per-def reachability sets.  -check-isimplify-memo also runs the
+# original walk at every site and raises an internal error when the two
+# disagree; -hack-no-isimplify-memo keeps the original walk.  The
+# counters show the guard ran (isimplify_query), met the self-referential
+# dictionary (isimplify_self_ref) and answered from the sets
+# (isimplify_memo_fill, isimplify_memo_ref; zero under the hack), and
+# the .bo, the generated Verilog and the intern table must be identical
+# across the three compiles.
+
+erase ISimplifyMemo.bo
+compile_backend_pass ISimplifyMemo.bs {-check-isimplify-memo -trace-ctype-stats -trace-intern-table}
+find_regexp ISimplifyMemo.bs.bsc-out {ctype-stats isimplify_query [1-9]}
+find_regexp ISimplifyMemo.bs.bsc-out {ctype-stats isimplify_self_ref [1-9]}
+find_regexp ISimplifyMemo.bs.bsc-out {ctype-stats isimplify_memo_ref [1-9]}
+find_regexp ISimplifyMemo.bs.bsc-out {ctype-stats isimplify_memo_fill [1-9]}
+move ISimplifyMemo.bo ISimplifyMemo.checked.bo
+move sysISimplifyMemo.v sysISimplifyMemo.checked.v
+move ISimplifyMemo.intern.tsv ISimplifyMemo.checked.intern.tsv
+
+erase ISimplifyMemo.bo
+compile_backend_pass ISimplifyMemo.bs {-trace-ctype-stats -trace-intern-table}
+find_regexp ISimplifyMemo.bs.bsc-out {ctype-stats isimplify_memo_fill [1-9]}
+compare_file ISimplifyMemo.bo ISimplifyMemo.checked.bo
+compare_file sysISimplifyMemo.v sysISimplifyMemo.checked.v
+compare_file ISimplifyMemo.intern.tsv ISimplifyMemo.checked.intern.tsv
+
+erase ISimplifyMemo.bo
+compile_backend_pass ISimplifyMemo.bs {-hack-no-isimplify-memo -trace-ctype-stats -trace-intern-table}
+find_regexp ISimplifyMemo.bs.bsc-out {ctype-stats isimplify_query [1-9]}
+find_regexp ISimplifyMemo.bs.bsc-out {ctype-stats isimplify_self_ref [1-9]}
+find_n_strings ISimplifyMemo.bs.bsc-out {ctype-stats isimplify_memo_ref 0} 1
+find_n_strings ISimplifyMemo.bs.bsc-out {ctype-stats isimplify_memo_fill 0} 1
+find_n_strings ISimplifyMemo.bs.bsc-out {ctype-stats isimplify_memo_walk 0} 1
+compare_file ISimplifyMemo.bo ISimplifyMemo.checked.bo
+compare_file sysISimplifyMemo.v sysISimplifyMemo.checked.v
+compare_file ISimplifyMemo.intern.tsv ISimplifyMemo.checked.intern.tsv
+
+# The second package has a selected field whose direct references
+# include a lifted dictionary built from an instance context no method
+# uses: iSimpDicts' beta-reduction drops that argument, so the def's two
+# bodies differ in whether they reach the selected dictionary, the sets
+# cannot answer the site and the guard falls back to the original walk
+# (isimplify_memo_walk).  The outputs must again be identical across the
+# three compiles.
+
+erase ISimplifyMemoMask.bo
+compile_backend_pass ISimplifyMemoMask.bs {-check-isimplify-memo -trace-ctype-stats -trace-intern-table}
+find_regexp ISimplifyMemoMask.bs.bsc-out {ctype-stats isimplify_query [1-9]}
+find_regexp ISimplifyMemoMask.bs.bsc-out {ctype-stats isimplify_memo_ref [1-9]}
+find_regexp ISimplifyMemoMask.bs.bsc-out {ctype-stats isimplify_memo_walk [1-9]}
+move ISimplifyMemoMask.bo ISimplifyMemoMask.checked.bo
+move sysISimplifyMemoMask.v sysISimplifyMemoMask.checked.v
+move ISimplifyMemoMask.intern.tsv ISimplifyMemoMask.checked.intern.tsv
+
+erase ISimplifyMemoMask.bo
+compile_backend_pass ISimplifyMemoMask.bs {-trace-ctype-stats -trace-intern-table}
+find_regexp ISimplifyMemoMask.bs.bsc-out {ctype-stats isimplify_memo_walk [1-9]}
+compare_file ISimplifyMemoMask.bo ISimplifyMemoMask.checked.bo
+compare_file sysISimplifyMemoMask.v sysISimplifyMemoMask.checked.v
+compare_file ISimplifyMemoMask.intern.tsv ISimplifyMemoMask.checked.intern.tsv
+
+erase ISimplifyMemoMask.bo
+compile_backend_pass ISimplifyMemoMask.bs {-hack-no-isimplify-memo -trace-ctype-stats -trace-intern-table}
+find_regexp ISimplifyMemoMask.bs.bsc-out {ctype-stats isimplify_query [1-9]}
+find_n_strings ISimplifyMemoMask.bs.bsc-out {ctype-stats isimplify_memo_ref 0} 1
+find_n_strings ISimplifyMemoMask.bs.bsc-out {ctype-stats isimplify_memo_walk 0} 1
+compare_file ISimplifyMemoMask.bo ISimplifyMemoMask.checked.bo
+compare_file sysISimplifyMemoMask.v sysISimplifyMemoMask.checked.v
+compare_file ISimplifyMemoMask.intern.tsv ISimplifyMemoMask.checked.intern.tsv
