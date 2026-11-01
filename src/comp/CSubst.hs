@@ -6,9 +6,12 @@ module CSubst (
               ) where
 
 import CSyntax
+import CType(isGroundNode, isTCon, eqStructural, CTypeStat(..), ctypeStat)
 import Util(mapSnd)
 import Id(Id)
 import CFreeVars (getPV, getLDefs)
+import ErrorUtil(internalError)
+import IOUtil(progArgs)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
@@ -246,6 +249,7 @@ instance CSubst CPred where
         CPred (CTypeclass (cSubstTConId r cls)) (map (cSubst r) ts)
 
 instance CSubst Type where
+    cSubst r t | cSubstTypeShared r t = cSubstTypeShortcut r t
     cSubst r (TVar v) = cSubstTyVar r v
     cSubst r (TCon (TyCon i k s)) = TCon (TyCon (cSubstTConId r i) k s)
     cSubst r t@(TCon (TyNum {})) = t
@@ -253,6 +257,75 @@ instance CSubst Type where
     cSubst r (TAp t1 t2) = TAp (cSubst r t1) (cSubst r t2)
     cSubst r t@(TGen {}) = t
     cSubst r t@(TDefMonad {}) = t
+
+-- The walk above is the identity on a type when the tycon map is empty
+-- and either the tyvar map is empty or the type is ground (no TVar
+-- inside; the canonical word's ground flag, read from the slot), and on
+-- a TCon leaf when the tycon map is empty: cSubstTConId returns the Id
+-- itself, cSubstTyVar returns the variable, and a TAp is rebuilt from
+-- its own children, so the copy is field-identical to the original
+-- (the same Id, kind, sort and position objects).  Return the original
+-- instead: it saves the rebuild's table lookups and allocation (in the
+-- typecheck phase of a large module nearly every TCon and TAp built was
+-- one of these copies, once per enclosing explicit definition), and the
+-- original's canonical word is the copy's, since the key is the same,
+-- so every word shortcut answers as it would on the copy; a node built
+-- before the gate keeps its -1 where the copy would have got a word,
+-- which only declines a shortcut.  What changes is demand, at the nodes
+-- built before the gate only.  The rebuild forces, at each node, the
+-- children to WHNF and a TyCon leaf's Id (the copy's mkTAp reads its
+-- children's words, its mkTCon the leaf's key); a node built with the
+-- gate open did the same when it was built, so at such a node the
+-- rebuild forced nothing new, and the node itself is forced by its
+-- consumer, where the copy's node was; at a node built before the gate
+-- (slot -1) the children and the Id are unforced, and the rebuild
+-- forced them at substitution time where the original leaves them to
+-- its consumer.  Such an Id is a symbol-table key, PreId or
+-- .bo-decoded Id interned before the gate (CType.hs, Forcing), so no
+-- string is interned by that either way.  The one caller with a
+-- non-empty tycon map (TypeCheck.qualifyClassDefaults) takes the full
+-- walk.
+--
+-- -hack-no-csubst-shortcut (registered with the other progArgs-queried
+-- flags in FlagsDecode.traceflags; BSC_OPTIONS reaches progArgs too)
+-- disables the shortcut, and -check-csubst-shortcut recomputes the full
+-- walk on every shortcut and raises an internal error when its result
+-- is not structurally equal to the original.  Under -trace-ctype-stats,
+-- csubst_shortcut counts the whole types returned with both maps empty
+-- and csubst_node_shortcut the ground nodes and TCon leaves returned
+-- under a non-empty tyvar map.
+cSubstTypeShared :: CSEnv -> Type -> Bool
+cSubstTypeShared (ctmap, _, _, vtmap) t =
+    cSubstShortcutOn && M.null ctmap &&
+    (M.null vtmap || isGroundNode t || isTCon t)
+
+cSubstTypeShortcut :: CSEnv -> Type -> Type
+cSubstTypeShortcut r@(_, _, _, vtmap) t
+    | checkCSubstShortcut && not (eqStructural t t') =
+        internalError ("CSubst.cSubst: shortcut disagrees with the walk: "
+                       ++ show (t, t'))
+    | M.null vtmap = ctypeStat CSubstShortcut t
+    | otherwise = ctypeStat CSubstNodeShortcut t
+  where t' = cSubstTypeWalk r t
+
+-- The walk with no shortcut at any level: the oracle for
+-- -check-csubst-shortcut.
+cSubstTypeWalk :: CSEnv -> Type -> Type
+cSubstTypeWalk r (TVar v) = cSubstTyVar r v
+cSubstTypeWalk r (TCon (TyCon i k s)) = TCon (TyCon (cSubstTConId r i) k s)
+cSubstTypeWalk r t@(TCon (TyNum {})) = t
+cSubstTypeWalk r t@(TCon (TyStr {})) = t
+cSubstTypeWalk r (TAp t1 t2) = TAp (cSubstTypeWalk r t1) (cSubstTypeWalk r t2)
+cSubstTypeWalk r t@(TGen {}) = t
+cSubstTypeWalk r t@(TDefMonad {}) = t
+
+{-# NOINLINE cSubstShortcutOn #-}
+cSubstShortcutOn :: Bool
+cSubstShortcutOn = not ("-hack-no-csubst-shortcut" `elem` progArgs)
+
+{-# NOINLINE checkCSubstShortcut #-}
+checkCSubstShortcut :: Bool
+checkCSubstShortcut = "-check-csubst-shortcut" `elem` progArgs
 
 instance CSubst CPat where
     cSubst r (CPCon i ps) = CPCon (cSubstConId r i) (map (cSubst r) ps)

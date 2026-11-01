@@ -12,7 +12,7 @@ module CType(
   isGroundType, isNormalType, isGroundNode, isNormalNode,
   enableCanonIds, disableCanonIds, CTypeStat(..), ctypeStat, bumpCTypeStat, cTypeStats,
   checkLetrecBinders,
-  checkEqByWord, checkCanonIds,
+  checkEqByWord, checkCanonIds, eqStructural,
 
   -- ** Examining Types
   getTyVarId, getTypeKind,
@@ -696,6 +696,7 @@ data CTypeStat
     | SeqCTypeShortcut | ApSubShortcut | TvShortcut | ExpandSynShortcut
     | InstShortcut | MguShortcut | MatchShortcut | GetFreeTShortcut
     | ChkTApShortcut | IConvMemoHit | IConvMemoMiss
+    | CSubstShortcut | CSubstNodeShortcut
     deriving (Eq, Ord, Enum, Bounded)
 
 statName :: CTypeStat -> String
@@ -725,6 +726,8 @@ statName GetFreeTShortcut = "getfreet_shortcut"
 statName ChkTApShortcut = "chktap_shortcut"
 statName IConvMemoHit = "iconv_memo_hit"
 statName IConvMemoMiss = "iconv_memo_miss"
+statName CSubstShortcut = "csubst_shortcut"
+statName CSubstNodeShortcut = "csubst_node_shortcut"
 
 {-# NOINLINE ctypeStatsOn #-}
 ctypeStatsOn :: Bool
@@ -738,6 +741,7 @@ ctypeStatsOn = "-trace-ctype-stats" `elem` progArgs
 -- TCMisc's expTFun, normT, expandSynN and the badCon scan) return their
 -- input on the ground or normal flag and are not checked here: they
 -- rest on the flags' definition, and -no-ctype-ids turns them all off.
+-- CSubst's shortcut has its own oracle, -check-csubst-shortcut.
 {-# NOINLINE checkCanonIds #-}
 checkCanonIds :: Bool
 checkCanonIds = "-check-ctype-ids" `elem` progArgs
