@@ -1,0 +1,60 @@
+package WriteBin where
+
+import Vector
+import FIFO
+
+-- Source for the .bo and .ba writer tests (writebin.exp): a data type
+-- and a struct with derived instances, a class with instances, a few
+-- functions (each def body is a lazy chunk in the .bo) and a
+-- synthesized module, so that every kind of shared value (strings,
+-- Ids, positions, types, ITypes) occurs, with more distinct Ids and
+-- strings than one base-254 index digit holds.
+
+data Op = Add | Sub | Mul | Xor
+  deriving (Eq, Bits, Bounded)
+
+struct Cmd n =
+    { op :: Op
+    ; lhs :: Bit n
+    ; rhs :: Bit n
+    }
+  deriving (Eq, Bits)
+
+class Apply a where
+    apply :: Op -> a -> a -> a
+
+instance Apply (Bit n) where
+    apply Add x y = x + y
+    apply Sub x y = x - y
+    apply Mul x y = x * y
+    apply Xor x y = x ^ y
+
+instance (Apply a) => Apply (Vector n a) where
+    apply op = zipWith (apply op)
+
+eval :: Cmd n -> Bit n
+eval c = apply c.op c.lhs c.rhs
+
+step :: Vector 4 (Cmd 16) -> Vector 4 (Bit 16)
+step = map eval
+
+advance :: UInt 8 -> Cmd 16 -> Cmd 16
+advance n c = c { op = unpack (truncate (pack n)); lhs = c.lhs + 1; rhs = c.rhs - 1 }
+
+{-# verilog sysWriteBin #-}
+sysWriteBin :: Module Empty
+sysWriteBin = module
+    cnt :: Reg (UInt 8) <- mkReg 0
+    cmds :: Reg (Vector 4 (Cmd 16)) <- mkReg (replicate (Cmd { op = Add; lhs = 0; rhs = 1 }))
+    q :: FIFO (Vector 4 (Bit 16)) <- mkFIFO
+    rules
+      "issue": when True ==>
+        action
+          cnt := cnt + 1
+          cmds := map (advance cnt) cmds
+          q.enq (step cmds)
+      "drain": when True ==>
+        action
+          q.deq
+          $display "%0d %h" cnt (pack q.first)
+      "done": when cnt == 9 ==> $finish 0

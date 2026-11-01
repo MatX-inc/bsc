@@ -167,7 +167,7 @@ writeVerilogInfo opts directory moduleName header final program ordinary = do
             referencePath = stem ++ ".output.v"
             payload = ASTPayload header program (aspkg_state_instances final)
         createDirectoryIfMissing True directory
-        BS.writeFile payloadPath (magic `BS.append` BS.pack (encode payload))
+        BS.writeFile payloadPath (magic `BS.append` encode payload)
         copyFile ordinary referencePath
         payloadId <- fileIdentity payloadPath
         outputId <- fileIdentity referencePath
@@ -212,10 +212,10 @@ readVerilogInfo path = do
     -- value and serialization fixed point in this table, rather than imposing
     -- a false cross-process canonical-byte requirement. The original payload
     -- is still bound by its exact recorded SHA256.
-    let encoded = BS.pack (encode payload)
+    let encoded = encode payload
         reread = decodeStrict encoded :: ASTPayload
     unless (normalizePayloadRelations reread == normalizePayloadRelations payload &&
-            BS.pack (encode reread) == encoded) $
+            encode reread == encoded) $
         failVerilogInfo "AST native codec roundtrip lost information"
     unless (vGetMainModName program == aeModule envelope &&
             aeModule envelope == rbModuleName (rmBackend manifest)) $
