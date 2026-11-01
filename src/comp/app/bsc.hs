@@ -113,7 +113,7 @@ import GenForeign(genForeign)
 import DefProp(DefProp(..))
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
-import IExpandMeta(renderSideFile)
+import IExpandMeta(renderSideFile, MetaLedger(..))
 import ITransform(iTransform)
 import IInline(iInline)
 import IInlineFmt(iInlineFmt)
@@ -1184,7 +1184,7 @@ writeMetadataFile errh flags prefix modstr imod =
         createDirectoryIfMissing True dir
         fname_init <- genFileName mkMetaName (Just dir) prefix modstr
         let fname = getFullFilePath fname_init
-        writeFileCatch errh fname (renderSideFile modstr (imod_meta imod))
+        writeFileCatch errh fname (renderSideFile modstr (ledgerMeta (imod_meta imod)))
         unless (quiet flags) $
             putStrLnF ("Metadata file created: " ++ getRelativeFilePath fname_init)
       _ -> return ()

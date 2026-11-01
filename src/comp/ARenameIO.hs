@@ -30,42 +30,30 @@ import DefProp(DefProp)
 
 aRenameIO :: Flags -> ASPackage -> ASPackage
 aRenameIO flags pkg =
-    let mi    = aspkg_name pkg
-        fmod  = aspkg_is_wrapped pkg
-        ps    = aspkg_parameters pkg
-        exps  = aspkg_outputs pkg
-        imps  = aspkg_inputs pkg
-        iomps = aspkg_inouts pkg
-        vs    = aspkg_state_instances pkg
+    let vs    = aspkg_state_instances pkg
         svars = aspkg_state_outputs pkg
         defs  = aspkg_values pkg
         iods  = aspkg_inout_values pkg
         fs    = aspkg_foreign_calls pkg
         ws    = aspkg_inlined_ports pkg
         si    = aspkg_signal_info pkg
-        cmap  = aspkg_comment_info pkg
 
         -- This is the submodule connection map
         -- (see comment on "createVerilogNameMap" for examples)
         vmap = createVerilogNameMap flags pkg
 
+        -- the name, parameters, outputs, inputs, inouts, comments and
+        -- metadata ledger are kept as they are
         new_pkg =
-            ASPackage mi
-                      fmod
-                      ps
-                      exps
-                      imps
-                      iomps
-                      (map (trI vmap) vs)      -- names in state arg exprs
-                      -- remove duplicates because output wires may be hooked up
-                      -- to more than one method (e.g. FIFOF_.notFull, FIFOF_.i_notFull)
-                      (fastNub (mapFst (tr vmap) svars)) -- state output names
-                      (map (trD vmap) defs)    -- names of defs & in def exprs
-                      (map (trIOD vmap) iods)  -- names in iodef exprs
-                      (map (trFB vmap) fs)     -- names in foreign block exprs
-                      (map (tr vmap) ws)       -- inlined port names
-                      (trSI vmap si)           -- names in signal info
-                      cmap  -- instance names should not have changed
+            pkg { aspkg_state_instances = map (trI vmap) vs,  -- names in state arg exprs
+                  -- remove duplicates because output wires may be hooked up
+                  -- to more than one method (e.g. FIFOF_.notFull, FIFOF_.i_notFull)
+                  aspkg_state_outputs = fastNub (mapFst (tr vmap) svars), -- state output names
+                  aspkg_values = map (trD vmap) defs,    -- names of defs & in def exprs
+                  aspkg_inout_values = map (trIOD vmap) iods,  -- names in iodef exprs
+                  aspkg_foreign_calls = map (trFB vmap) fs,     -- names in foreign block exprs
+                  aspkg_inlined_ports = map (tr vmap) ws,       -- inlined port names
+                  aspkg_signal_info = trSI vmap si }            -- names in signal info
 
     in
         new_pkg

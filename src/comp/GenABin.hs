@@ -22,6 +22,7 @@ import Verilog
 
 import ABin
 import BinData
+import IExpandMeta(emptyMetaLedger)
 import FileIOUtil(writeBinaryFileCatch)
 
 import qualified Data.Set as S
@@ -207,7 +208,9 @@ instance Bin APackage where
                              apkg_interface = aifcs,
                              apkg_inst_comments = ics,
                              apkg_inst_tree = inst_tree,
-                             apkg_proof_obligations = []
+                             apkg_proof_obligations = [],
+                             -- the ledger is not stored in the package
+                             apkg_meta = emptyMetaLedger
                                     })
 
 -- ----------

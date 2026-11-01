@@ -326,7 +326,8 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
                             apkg_interface = aSubst subst_map aifc,
                             apkg_inst_comments = cmap,
                             apkg_inst_tree = mkInstTree imod,
-                            apkg_proof_obligations = [] })
+                            apkg_proof_obligations = [],
+                            apkg_meta = imod_meta imod })
 
 aAbstractInput :: IAbstractInput -> AAbstractInput
 aAbstractInput (IAI_Port (i,t)) = (AAI_Port (i, aTypeConv i t))
