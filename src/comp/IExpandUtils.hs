@@ -32,6 +32,8 @@ module IExpandUtils(
         extractWireSet,
         addHeapCell, addHeapUnev, newClock, newReset,
         addHeapPred,
+        stampFor, stampForKey, pushDefFrame, pushRootFrame,
+        withMetaFrame, withCellMetaFrame,
         addInputClock, addOutputClock, addInputReset, addOutputReset,
         getClkGateUses, clearClkGateUses, setClkGateUses,
         assertNoClkGateUses, addClkGateUse, addInhighClkGate,
@@ -108,7 +110,10 @@ import Verilog(vKeywords, vIsValidIdent)
 import Changed
 
 import IConv(iConvT)
-import IExpandMeta(MetaStore, SiteTable, newMetaStore, readSiteTable)
+import IExpandMeta(MetaStore, SiteTable, SiteKind(..), SiteKey, idSiteKey,
+                   primSiteKey, boundSiteKey, Frame, CellMeta, headSiteOf,
+                   newMetaStore, lookupSite, mintSite, pushFrame, pushRoot,
+                   swapFrame, swapCellFrame, stampMeta, readSiteTable)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -422,11 +427,20 @@ type HeapPointer = Int
 -- a module fixpoint (PrimModuleFix) is being forced and that evaluation
 -- must not demand (the EModuleLoop error in evalHeap is the analogue of
 -- GHC's BLACKHOLE).  HWHNF and HNF hold the evaluated expression.
-data HeapCell = HUnev { hc_hexpr :: HExpr, hc_name :: NameInfo }
-              | HWHNF { hc_pexpr :: PExpr, hc_name :: NameInfo }
+--
+-- Every state carries hc_meta, the header written when the cell was
+-- allocated (its site and frame, see IExpandMeta) and copied across
+-- every state transition by updHeap; it is never read by the evaluator
+-- except to resume a demanded cell under its frame.
+data HeapCell = HUnev { hc_hexpr :: HExpr, hc_name :: NameInfo,
+                        hc_meta :: {-# UNPACK #-} !CellMeta }
+              | HWHNF { hc_pexpr :: PExpr, hc_name :: NameInfo,
+                        hc_meta :: {-# UNPACK #-} !CellMeta }
               | HNF { hc_pexpr :: PExpr, hc_wire_set :: HWireSet,
-                      hc_name :: NameInfo }
-              | HHole { hc_name :: NameInfo }
+                      hc_name :: NameInfo,
+                      hc_meta :: {-# UNPACK #-} !CellMeta }
+              | HHole { hc_name :: NameInfo,
+                        hc_meta :: {-# UNPACK #-} !CellMeta }
         deriving (Show)
 
 -- should I drop the predicate for better printing of error messages?
@@ -435,13 +449,13 @@ heapCellToHExpr (HUnev { hc_hexpr = e }) = e
 -- heapCellToHExpr (Harray { hc_hexpr = e }) = e
 heapCellToHExpr (HWHNF { hc_pexpr = p }) = (pExprToHExpr p)
 heapCellToHExpr (HNF { hc_pexpr = p }) = (pExprToHExpr p)
-heapCellToHExpr (HHole mn) = internalError ("heapCellToHExpr.HHole: " ++ ppReadable mn)
+heapCellToHExpr (HHole { hc_name = mn }) = internalError ("heapCellToHExpr.HHole: " ++ ppReadable mn)
 
 heapCellToPExpr :: HeapCell -> PExpr
 heapCellToPExpr (HWHNF { hc_pexpr = p }) = p
 heapCellToPExpr (HNF { hc_pexpr = p }) = p
 heapCellToPExpr (HUnev { hc_hexpr = e }) = internalError("heapCellToPExpr.HUnev: " ++ ppReadable e)
-heapCellToPExpr (HHole mn) = internalError ("heapCellToPExpr.HHole: " ++ ppReadable mn)
+heapCellToPExpr (HHole { hc_name = mn }) = internalError ("heapCellToPExpr.HHole: " ++ ppReadable mn)
 
 instance PPrint HeapCell where
         pPrint d p (HUnev { hc_hexpr = e, hc_name = name}) =
@@ -452,7 +466,7 @@ instance PPrint HeapCell where
             text "HWHNF" <+> pPrint d p e <+> pPrint d 0 name
         pPrint d p (HNF { hc_pexpr = e, hc_name = name, hc_wire_set = ws}) =
             text "HNF" <+> pPrint d p e <+> pPrint d 0 name <+> pPrint d 0 ws
-        pPrint d p (HHole name) =
+        pPrint d p (HHole { hc_name = name }) =
             text "HHole" <+> pPrint d 0 name
 
 -- Equality and ordering are over the state of the cell: its expression,
@@ -539,7 +553,13 @@ unsafeDerefHeap (HeapData ref) = unsafePerformIO (readIORef ref)
 data GStateRO = GStateRO {
         errHandle :: !ErrorHandle,
         symtab :: !SymTab,
-        -- lazy because computing the defenv may be expensive and (often) unnecessary
+        -- Lazy: the evaluator reads it through getDefEnv alone.  The
+        -- first definition site minted in an elaboration forces it
+        -- (mintDefSite's lookupIndex), which builds the map over every
+        -- definition in scope and forces each definition's Id; those are
+        -- the typechecker's, or the .bo reader's over its eagerly
+        -- interned string table, so no string is interned, at the cost
+        -- of one map construction per elaboration.
         defenv :: M.Map Id HExpr,
         checkMaxStep :: !Bool,
         maxStep :: !Integer,
@@ -2566,7 +2586,8 @@ mkIRefT t p pos r = t `deepseq` IRefT t p pos r
 addHeapUnev :: String -> IType -> HExpr -> Maybe Id -> G HExpr
 addHeapUnev tag t e cell_name_orig = do
  cell_name <- improveCellName e cell_name_orig
- let newcell = (HUnev { hc_hexpr = e, hc_name = cell_name })
+ meta <- stampFor e
+ let newcell = (HUnev { hc_hexpr = e, hc_name = cell_name, hc_meta = meta })
  (p, r) <- addHeapCell tag newcell
  -- trace_hcell p e
  let pos = getIExprPosition e
@@ -2580,7 +2601,8 @@ addHeapUnev tag t e cell_name_orig = do
 addHeapWHNF :: String -> IType -> PExpr -> Maybe Id -> G HExpr
 addHeapWHNF tag t pe@(P _ e) cell_name_orig = do
   cell_name <- improveCellName e cell_name_orig
-  let newcell = (HWHNF { hc_pexpr = pe, hc_name = cell_name })
+  meta <- stampFor e
+  let newcell = (HWHNF { hc_pexpr = pe, hc_name = cell_name, hc_meta = meta })
   (p, r) <- addHeapCell tag newcell
   let pos = getIExprPosition e
   let result = mkIRefT t p pos r
@@ -2613,7 +2635,9 @@ addHeapPred tag e = do
   let t = itBit1       -- boolean condition
       pe = P pTrue e   -- no implicit condition
       ws = wsEmpty     -- no wire set
-  let newcell = (HNF { hc_pexpr = pe, hc_wire_set = ws, hc_name = Nothing })
+  meta <- stampFor e
+  let newcell = (HNF { hc_pexpr = pe, hc_wire_set = ws, hc_name = Nothing,
+                       hc_meta = meta })
   (p, r) <- addHeapCell tag newcell
   let pos = getIExprPosition e
   let result = mkIRefT t p pos r
@@ -2624,10 +2648,13 @@ addHeapPred tag e = do
 getHeap :: HeapData -> G HeapCell
 getHeap (HeapData ref) = liftIO (readIORef ref)
 
+-- The new cell is built from the old cell's header, so that the header
+-- written at allocation is the one the cell carries for its whole life.
 {-# INLINE updHeap #-}
-updHeap :: String -> (HeapPointer, HeapData) -> HeapCell -> G ()
-updHeap tag (p, HeapData ref) e = do
+updHeap :: String -> (HeapPointer, HeapData) -> (CellMeta -> HeapCell) -> G ()
+updHeap tag (p, HeapData ref) mkcell = do
    o <- getHeap (HeapData ref)
+   let e = mkcell (hc_meta o)
    when doTraceHeap2 $
       traceM ("old val [" ++ tag ++ "]: " ++ "(_" ++ show p ++ ", " ++ ppReadable o ++ ")")
    when doTraceHeap $
@@ -2637,6 +2664,139 @@ updHeap tag (p, HeapData ref) e = do
    let best_name = maybe old_name Just new_name
    let e' = e { hc_name = best_name }
    deepseq best_name $ liftIO (writeIORef ref e')
+
+-- ---------------
+-- Evaluator metadata (see IExpandMeta): the frame hooks and the stamp.
+
+{-# INLINE getMetaStore #-}
+getMetaStore :: G MetaStore
+getMetaStore = do s <- get
+                  return (metaStore (ro s))
+
+-- Run an evaluation under a frame (a definition unfolding or a root),
+-- restoring the caller's frame afterwards.
+{-# INLINE withMetaFrame #-}
+withMetaFrame :: Frame -> G a -> G a
+withMetaFrame fr act = do
+  st <- getMetaStore
+  old <- liftIO (swapFrame st fr)
+  r <- act
+  _ <- liftIO (swapFrame st old)
+  return r
+
+-- Run the evaluation of a demanded cell under the frame the cell was
+-- created in, so that the cells it allocates belong to that frame.
+{-# INLINE withCellMetaFrame #-}
+withCellMetaFrame :: HeapCell -> G a -> G a
+withCellMetaFrame cell act = do
+  st <- getMetaStore
+  old <- liftIO (swapCellFrame st (hc_meta cell))
+  r <- act
+  _ <- liftIO (swapFrame st old)
+  return r
+
+-- Push the frame of an unfolding of the definition i under the current
+-- frame; the caller runs the unfolding under it.
+pushDefFrame :: Id -> G Frame
+pushDefFrame i = do
+  st <- getMetaStore
+  (site, recursive) <- mintDefSite st i
+  liftIO (pushFrame st site recursive)
+
+-- Push a root frame (a rule, a method or an instantiation).
+pushRootFrame :: SiteKey -> G Frame
+pushRootFrame key = do
+  st <- getMetaStore
+  (site, _) <- liftIO (mintSite st key noSiteFacts)
+  liftIO (pushRoot st site)
+
+noSiteFacts :: (Bool, Bool)
+noSiteFacts = (False, False)
+
+-- The site of a definition reference.  The use-site fact compares the
+-- reference's position with the definition's own, found by name in the
+-- definition environment (Id ordering ignores positions); the pair is
+-- forced only when the row is first minted.  Every definition Id is in
+-- weak head normal form before elaboration (the typechecker's Ids, the
+-- .bo reader's per-def names, the lifted dictionaries' through the
+-- ISimpDicts map), so forcing the environment's spine interns nothing.
+-- The recursive fact is False until the recursion-point property exists.
+-- The lookup comes first so that the facts are built only on a miss.
+mintDefSite :: MetaStore -> Id -> G (Int, Bool)
+mintDefSite st i = do
+  let key = idSiteKey SKDef i
+  found <- liftIO (lookupSite st key)
+  case found of
+    Just hit -> return hit
+    Nothing -> do
+      denv <- getDefEnv
+      let pos = getIdPosition i
+          useSite = pos /= noPosition &&
+                    case M.lookupIndex i denv of
+                      Just ix -> getIdPosition (fst (M.elemAt ix denv)) /= pos
+                      Nothing -> False
+      liftIO (mintSite st key (useSite, False))
+
+-- The header of a cell created now for the expression e: the site of
+-- e's root node and the current frame.  The site is read in O(1) from
+-- the root node, or from the head of an application.  Which identifiers
+-- the stamp may force: a definition, constructor, selector, foreign
+-- function, module or state variable head is keyed on its identifier,
+-- which is already in weak head normal form (source and .bo identifiers
+-- are built before elaboration, a state variable's by uniqueStateName
+-- before its constant exists, a substitution's clone with a bang); a
+-- primitive is keyed on its operator alone, because the evaluator builds
+-- primitive heads from PreIds whose strings need not have been interned
+-- yet, and forcing one earlier than the position walk does would move an
+-- intern id; a heap reference takes the referenced cell's site under
+-- the head-site bit; a lambda is keyed on its binder; every other
+-- constant shares the boundary row and has nothing read, because the
+-- evaluator builds some of those identifiers lazily from fresh strings
+-- (ports, parameters, names).
+{-# INLINE stampFor #-}
+stampFor :: HExpr -> G CellMeta
+stampFor e = do
+  st <- getMetaStore
+  site <- case rootOf e of
+            RSDef i -> do (s, _) <- mintDefSite st i
+                          return s
+            RSKey key -> liftIO (fst <$> mintSite st key noSiteFacts)
+            RSHead r -> do cell <- getHeap r
+                           return (headSiteOf (hc_meta cell))
+  liftIO (stampMeta st site)
+
+-- the header of a cell whose site key the caller has in hand
+stampForKey :: SiteKey -> G CellMeta
+stampForKey key = do
+  st <- getMetaStore
+  (site, _) <- liftIO (mintSite st key noSiteFacts)
+  liftIO (stampMeta st site)
+
+-- The root of an expression being heaped, classified for the stamp: a
+-- definition reference (whose row carries the use-site fact), any
+-- other site key, or the cell at the head of an application.
+data RootSite = RSDef Id | RSKey SiteKey | RSHead HeapData
+
+rootOf :: HExpr -> RootSite
+rootOf (IAps f _ _) = rootOf f
+rootOf (ILam i _ _) = RSKey (idSiteKey SKLambda i)
+rootOf (ILAM i _ _) = RSKey (idSiteKey SKLambda i)
+rootOf (IRefT _ _ _ r) = RSHead r
+rootOf (ICon i ic) = conRoot i ic
+rootOf (IVar _) = RSKey boundSiteKey
+
+conRoot :: Id -> IConInfo HeapData -> RootSite
+conRoot i (ICDef {}) = RSDef i
+conRoot _ (ICPrim { primOp = op }) = RSKey (primSiteKey op)
+conRoot i (ICCon {}) = RSKey (idSiteKey SKCon i)
+conRoot i (ICIs {}) = RSKey (idSiteKey SKCon i)
+conRoot i (ICOut {}) = RSKey (idSiteKey SKCon i)
+conRoot i (ICTuple {}) = RSKey (idSiteKey SKCon i)
+conRoot i (ICSel {}) = RSKey (idSiteKey SKMethod i)
+conRoot i (ICForeign {}) = RSKey (idSiteKey SKForeign i)
+conRoot i (ICVerilog {}) = RSKey (idSiteKey SKInst i)
+conRoot i (ICStateVar {}) = RSKey (idSiteKey SKInst i)
+conRoot _ _ = RSKey boundSiteKey
 
 -- Type normalization function used in evaluation.
 -- Fully traverse and reduce all type function applications where possible.
@@ -2799,7 +2959,7 @@ unheap (P p e_orig@(IRefT _ _ _ r)) = do
         e <- getHeap r
         case e of
             (HUnev {}) -> internalError ("IExpandUtils.unheap: unevaluated")
-            (HHole name) -> internalError("IExpandUtils.unheap: HHole " ++ ppReadable name)
+            (HHole { hc_name = name }) -> internalError("IExpandUtils.unheap: HHole " ++ ppReadable name)
             (HWHNF { hc_pexpr = P _ (IRefT _ _ _ _) }) ->
                 internalError ("IExpandUtils.unheap: WHNF IRefT")
             (HWHNF { hc_pexpr = P p' e, hc_name = n } ) ->
@@ -2817,7 +2977,7 @@ unheapU e_orig@(IRefT _ _ _ r) = do
         e <- getHeap r
         case e of
             (HUnev { hc_hexpr = e }) -> return e
-            (HHole name) -> internalError ("unheapU: HHole " ++ ppReadable name)
+            (HHole { hc_name = name }) -> internalError ("unheapU: HHole " ++ ppReadable name)
             (HWHNF { hc_pexpr = P _ (IRefT _ _ _ _) } ) ->
                 internalError ("unheapU: IRefT")
             (HWHNF { hc_pexpr = e, hc_name = n }) ->
@@ -2843,7 +3003,7 @@ unheapNFNoImp e_orig@(IRefT _ _ _ r) = do
         e <- getHeap r
         case e of
             (HUnev { }) -> internalError ("unheapNFNoImp: HUnev " ++ ppReadable (e_orig, e))
-            (HHole name) -> internalError ("unheapNFNoImp: HHole " ++ ppReadable name)
+            (HHole { hc_name = name }) -> internalError ("unheapNFNoImp: HHole " ++ ppReadable name)
             (HWHNF { }) -> internalError ("unheapNFNoImp: HWHNF " ++ ppReadable (e_orig, e))
             (HNF { hc_pexpr = (P _ e) }) ->
                 return e -- (mapIExprPosition cross (e_orig, e))
@@ -3502,7 +3662,7 @@ instance Wireable HExpr where
             case cell of
               (HUnev { hc_hexpr = he }) -> P pTrue he
               (HWHNF { hc_pexpr = pe }) -> pe
-              (HHole name) -> internalError ("IExpand.extractWires HHole: " ++
+              (HHole { hc_name = name }) -> internalError ("IExpand.extractWires HHole: " ++
                                              ppReadable name)
               (HNF { hc_pexpr = pe }) -> pe
     -- might "p" include wires from the other fields?
@@ -3541,7 +3701,7 @@ instance Wireable HExpr where
                 -- XXX should be evaluated because clock ops are strict
                 (HUnev { hc_hexpr = e }) -> ?upd ref e >>= extractWires
                 (HWHNF { hc_pexpr = P p e }) -> ?upd ref e >>= \ e' -> extractWires (P p e')
-                (HHole name) ->
+                (HHole { hc_name = name }) ->
                     internalError ("IExpand.extractWires HHole: " ++ ppReadable name)
                 (HNF { hc_pexpr = P p e, hc_wire_set = ws}) ->
                     -- attempt to reuse the WireSet if possible

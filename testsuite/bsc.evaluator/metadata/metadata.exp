@@ -1,0 +1,38 @@
+# Tests for the evaluator metadata store (IExpandMeta): the -metadata-dump
+# output on a known package, and the -metadata-scramble identity (the
+# generated Verilog does not depend on the store's content).
+
+# The dump prints every cell of the elaborated module with its site and
+# the chain of definition unfoldings it was created under.  Positions in
+# files other than the test's own are reduced to the file name, so that
+# a library edit does not move the expected output.
+proc filter_dump { fname } {
+    sed $fname $fname.filtered {} \
+        {-e s/\\\[MetaDump\\.bsv:/@@MetaDump.bsv:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g}
+}
+
+if { $vtest == 1 } {
+
+# the reference: the generated Verilog of a plain compile
+erase MetaDump.bo
+compile_verilog_pass MetaDump.bsv sysMetaDump
+move sysMetaDump.v sysMetaDump.plain.v
+
+# the store scrambled: the Verilog does not change and the dump is
+# suppressed (no chain line, which every dump line marks with #)
+erase MetaDump.bo
+compile_verilog_pass MetaDump.bsv sysMetaDump {-metadata-scramble -metadata-dump}
+compare_file sysMetaDump.v sysMetaDump.plain.v
+find_n_strings MetaDump.bsv.bsc-vcomp-out {#} 0
+
+# the dump: the Verilog does not change and the chains are as pinned
+erase MetaDump.bo
+erase sysMetaDump.v
+compile_verilog_pass MetaDump.bsv sysMetaDump {-metadata-dump}
+compare_file sysMetaDump.v sysMetaDump.plain.v
+filter_dump MetaDump.bsv.bsc-vcomp-out
+compare_file MetaDump.bsv.bsc-vcomp-out.filtered MetaDump.bsv.bsc-vcomp-out.expected
+
+erase sysMetaDump.plain.v
+
+}

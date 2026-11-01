@@ -5,13 +5,12 @@ module IExpandMeta(
         -- frames and cell headers
         Frame, CellMeta, headSiteOf,
         -- the store and the hooks the evaluator calls
-        MetaStore, newMetaStore, mintSite, pushFrame, withFrame, stampMeta,
-        readSiteTable,
+        MetaStore, newMetaStore, lookupSite, mintSite, pushFrame, pushRoot,
+        swapFrame, swapCellFrame, stampMeta, readSiteTable,
         -- the query interface, read by the rebuild and the dump alone
         siteOf, frameOf, chainOf, renderSite, renderDump
         ) where
 
-import Control.Monad.IO.Class(MonadIO, liftIO)
 import Data.Bits(bit, (.|.), (.&.), complement, xor, testBit)
 import Data.IORef
 import qualified Data.IntMap.Strict as IM
@@ -165,6 +164,7 @@ data CellMeta = CellMeta { cm_site :: {-# UNPACK #-} !Int,
 instance Show CellMeta where
     show (CellMeta s f) = "CellMeta " ++ show s ++ " (" ++ show f ++ ")"
 
+{-# INLINE headSiteOf #-}
 headSiteOf :: CellMeta -> Int
 headSiteOf m = cm_site m .|. headSiteBit
 
@@ -189,6 +189,15 @@ perturb st n = n `xor` ms_seed st
 
 perturbBool :: MetaStore -> Bool -> Bool
 perturbBool st b = if ms_seed st == 0 then b else not b
+
+-- Look a site up without minting it: its id and recursive bit.
+{-# INLINE lookupSite #-}
+lookupSite :: MetaStore -> SiteKey -> IO (Maybe (Int, Bool))
+lookupSite st key = do
+    t <- readIORef (ms_sites st)
+    return $! case M.lookup key (st_ids t) of
+                Just (SiteRef s r) -> Just (s, r)
+                Nothing -> Nothing
 
 -- Look a site up, or mint it.  The facts (use-site, recursive) are
 -- forced only when the row is inserted, so a caller may compute them
@@ -235,18 +244,35 @@ pushFrame st site recursive = do
                (False, _) -> Frame fid site (perturb st 1) parent rec
     return $! fr
 
--- Run an action with the register set to a frame, restoring the caller's
--- frame afterwards.  A save and restore suffices: the evaluator has no
--- catch sites, so an error aborts the compile.
-withFrame :: MonadIO m => MetaStore -> Frame -> m a -> m a
-withFrame st fr act = do
-    old <- liftIO (readIORef (ms_frame st))
-    liftIO (writeIORef (ms_frame st) fr)
-    r <- act
-    liftIO (writeIORef (ms_frame st) old)
-    return r
+-- Push a root frame: a rule, a method or an instantiation.  A root
+-- chains to nothing: the unfoldings that created the rule or the
+-- instance are hierarchy, not provenance of the values built under it.
+pushRoot :: MetaStore -> Int -> IO Frame
+pushRoot st site = do
+    n <- readIORef (ms_nextFrame st)
+    writeIORef (ms_nextFrame st) $! n + 1
+    return $! Frame (perturb st n) site (perturb st 1) TopFrame IM.empty
+
+-- Set the register to a frame and return the frame it held.  The
+-- evaluator runs an unfolding between a swap to its frame and a swap
+-- back; a save and restore suffices, because the evaluator has no catch
+-- sites and an error aborts the compile.
+{-# INLINE swapFrame #-}
+swapFrame :: MetaStore -> Frame -> IO Frame
+swapFrame st fr = do
+    old <- readIORef (ms_frame st)
+    writeIORef (ms_frame st) fr
+    return old
+
+-- The same, to the frame a cell was created in: a demanded cell resumes
+-- its evaluation there, so the cells that evaluation allocates belong
+-- to the frame that created the demanded one.
+{-# INLINE swapCellFrame #-}
+swapCellFrame :: MetaStore -> CellMeta -> IO Frame
+swapCellFrame st m = swapFrame st (cm_frame m)
 
 -- The header for a cell allocated now at a site.
+{-# INLINE stampMeta #-}
 stampMeta :: MetaStore -> Int -> IO CellMeta
 stampMeta st site = do
     fr <- readIORef (ms_frame st)
