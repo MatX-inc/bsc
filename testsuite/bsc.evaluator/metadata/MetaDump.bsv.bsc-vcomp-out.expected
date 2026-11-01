@@ -20,7 +20,7 @@ _855: method FIFOF_.i_notEmpty [FIFOF_.bsv] <- def Prelude.bind_#1 <- def Prelud
 _866: method FIFOF_.deq [FIFOF_.bsv] <- def Prelude.toPrimAction [MetaDump.bsv:31:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
 _872: method Prelude.write [Prelude.bs] <- def Prelude.fromPrimAction [Prelude.bs]#1 <- def Prelude.bind_ [MetaDump.bsv:31:7] u#1 <- def Prelude.toPrimAction [MetaDump.bsv:31:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
 _878: method FIFOF_.first [FIFOF_.bsv] <- def Prelude.fromPrimAction [Prelude.bs]#1 <- def Prelude.bind_ [MetaDump.bsv:31:7] u#1 <- def Prelude.toPrimAction [MetaDump.bsv:31:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
-_932: prim PrimAdd <- def Prelude.primFix [Prelude.bs] r#3 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
+_932: prim PrimAdd <- def Prelude.primFix [MetaDump.bsv:37:7] ur#3 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
 _933: prim PrimAdd <- def Prelude.primFix [MetaDump.bsv:37:7] ur#2 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
 _934: prim PrimAdd <- def Prelude.primFix [MetaDump.bsv:37:7] ur#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
 _1012: method FIFOF_.i_notFull [FIFOF_.bsv] <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1

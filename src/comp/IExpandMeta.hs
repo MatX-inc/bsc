@@ -105,14 +105,19 @@ data SiteRow = SiteRow { sr_key :: !SiteKey,
 data SiteRef = SiteRef {-# UNPACK #-} !Int !Bool
 
 -- st_recKeys maps the site of a recursion point's reference to the key
--- its iterations are counted under: the site of the definition itself
--- (its identifier at no position), so that iterations entered through
--- different references of one definition (a call site, the definition's
--- own self-reference) continue one count.
+-- its iterations are counted under, the site of the definition itself
+-- (its identifier at no position), and records whether the reference
+-- is a use site; a reference at the definition's own position, or at
+-- no position, has no entry and is its own key.  See pushFrame for how
+-- the two facts decide whether a push continues a loop or nests one.
 data SiteTable = SiteTable { st_next :: {-# UNPACK #-} !Int,
                              st_ids :: !(M.Map SiteKey SiteRef),
                              st_rows :: !(IM.IntMap SiteRow),
-                             st_recKeys :: !(IM.IntMap Int) }
+                             st_recKeys :: !(IM.IntMap RecKey) }
+
+-- the definition key of a recursion point's reference and whether the
+-- reference is a use site (its position is not the definition's own)
+data RecKey = RecKey {-# UNPACK #-} !Int !Bool
 
 emptySiteTable :: SiteTable
 emptySiteTable = SiteTable 1 M.empty IM.empty IM.empty
@@ -144,14 +149,15 @@ siteRow t s = IM.lookup (plainSite s) (st_rows t)
 
 -- A frame: one definition unfolding, or a root.  fr_count is the
 -- iteration count of a recursion point (one more than the count of the
--- nearest same-site frame on the chain); fr_rec maps every recursion
--- point site on the chain to its count and the frame it was pushed
--- under, so a push at the same site finds its predecessor in O(log n)
--- without walking the chain.  The map entry records the count and the
--- parent instead of the frame itself, so that a frame never points at
--- itself through its own map.  TopFrame is the register's value before
--- any root frame is pushed (module arguments, instantiation of the
--- top module's state).
+-- nearest iteration of the same loop on the chain); fr_rec maps every
+-- recursion point on the chain, by definition key, to its nearest
+-- iteration: the count, the frame it was pushed under and the site that
+-- entered the loop, so a push finds its predecessor in O(log n) without
+-- walking the chain.  The map entry records the count and the parent
+-- instead of the frame itself, so that a frame never points at itself
+-- through its own map.  TopFrame is the register's value before any
+-- root frame is pushed: module arguments, the instantiation of the
+-- top module's state.
 data Frame = TopFrame
            | Frame { fr_id :: {-# UNPACK #-} !Int,
                      fr_site :: {-# UNPACK #-} !Int,
@@ -159,8 +165,9 @@ data Frame = TopFrame
                      fr_parent :: !Frame,
                      fr_rec :: !(IM.IntMap RecEntry) }
 
--- the count and the parent frame of a recursion point on the chain
-data RecEntry = RecEntry {-# UNPACK #-} !Int !Frame
+-- the count, the parent frame and the entry site of a recursion
+-- point's nearest iteration on the chain
+data RecEntry = RecEntry {-# UNPACK #-} !Int !Frame {-# UNPACK #-} !Int
 
 frameRec :: Frame -> IM.IntMap RecEntry
 frameRec TopFrame = IM.empty
@@ -252,7 +259,8 @@ mintSite st key facts = do
                    (dk, _, td) <- case M.lookup dkey (st_ids t') of
                                     Just (SiteRef dk dr) -> return (dk, dr, t')
                                     Nothing -> insertSite st t' dkey False recursive
-                   return td { st_recKeys = IM.insert (plainSite s) dk (st_recKeys td) }
+                   let rk = RecKey (plainSite dk) (perturbBool st useSite)
+                   return td { st_recKeys = IM.insert (plainSite s) rk (st_recKeys td) }
                  _ -> return t'
         writeIORef (ms_sites st) $! t''
         return (s, r)
@@ -277,12 +285,19 @@ plainSite s = s .&. complement siteBits
 
 -- Push a frame for a site under the register's frame and return it
 -- (the caller runs the unfolding between two swaps).  A push at a
--- recursion point whose definition is already on the chain continues
--- that iteration: the new frame's parent is the predecessor's parent
--- and its count one more; the frames between the two iterations belong
--- to the previous iteration's body and stay on the cells they stamped.
--- The map is keyed by the definition (st_recKeys), the frame keeps the
--- site of the reference that entered the iteration.
+-- recursion point looks the definition up in the register's map.  It
+-- continues the iteration found there when the reference is the one
+-- that entered the loop, or when it is the definition's own reference
+-- (the self-reference in its body, through which every iteration after
+-- the first arrives): the new frame carries the entry site, its parent
+-- is the predecessor's parent and its count one more; the frames
+-- between the two iterations belong to the previous iteration's body
+-- and stay on the cells they stamped.  A reference at a different use
+-- site is a different loop of the same definition (two static loops
+-- are two primFix sites) and nests a new iteration count under the
+-- current frame.  One entry per definition: the inner loop's entry
+-- shadows the outer's in the frames under it, and the outer's own
+-- frames keep theirs.
 pushFrame :: MetaStore -> Int -> Bool -> IO Frame
 pushFrame st site recursive = do
     parent <- readIORef (ms_frame st)
@@ -290,18 +305,21 @@ pushFrame st site recursive = do
     writeIORef (ms_nextFrame st) $! n + 1
     let fid = perturb st n
         rec = frameRec parent
+        plain = plainSite site
     fr <- if recursive
           then do t <- readIORef (ms_sites st)
-                  let key = IM.findWithDefault site (plainSite site) (st_recKeys t)
+                  let RecKey key useSite =
+                          IM.findWithDefault (RecKey plain False) plain (st_recKeys t)
+                      fresh = let c1 = perturb st 1
+                              in  Frame fid site c1 parent
+                                        (IM.insert key (RecEntry c1 parent site) rec)
                   return $ case IM.lookup key rec of
-                    Just (RecEntry c p) ->
+                    Just (RecEntry c p entry)
+                      | plainSite entry == plain || not useSite ->
                         let c' = perturb st (c + 1)
-                        in  Frame fid site c' p
-                                  (IM.insert key (RecEntry c' p) (frameRec p))
-                    Nothing ->
-                        let c1 = perturb st 1
-                        in  Frame fid site c1 parent
-                                  (IM.insert key (RecEntry c1 parent) rec)
+                        in  Frame fid entry c' p
+                                  (IM.insert key (RecEntry c' p entry) (frameRec p))
+                    _ -> fresh
           else return (Frame fid site (perturb st 1) parent rec)
     return $! fr
 
