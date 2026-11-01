@@ -5,13 +5,13 @@ metadata census for sysMetaCSE:
   cells reachable 6, defs lifted 3, defs with chains 3
   roots pushed: rule 2, methodroot 1, inst 3
   pushes: unfoldings 55, completions 0, roots 6
-  frames on chains 8: use-site 3, definition-site 5, root 0
+  frames on chains 8: use-site 8, definition-site 0, root 0
   defs by site: use-site 0, definition-site 0, prim 3, con 0, method 0, foreign 0, lambda 0, bound 0, inst 0; head-site 0, shared 0, merged 1
   depth: 2:2 4:1
   count: 1:8
   alias classes 14
   cost: frame pushes 61, context-table operations 13 for 8 contexts
-  chains walked 55, loops re-entered 0, repeated non-recursion sites 4 (def Prelude.bind_ [Prelude.bs] x3; def Prelude.bind_ [MetaCSE.bsv:17:4] u x1)
+  chains walked 55, loops re-entered 0, repeated non-recursion sites 1 (def Prelude.bind_ [MetaCSE.bsv:17:4] u x1)
   name hints: 0 cells bound to a parameter, 0 outside the library, each named by it
   method-condition positions: 0 calls, 0 kept, 0 on chains
 Verilog file created: sysMetaCSE.v

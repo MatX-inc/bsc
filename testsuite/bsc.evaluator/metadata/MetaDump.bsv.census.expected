@@ -5,13 +5,13 @@ metadata census for sysMetaDump:
   cells reachable 26, defs lifted 12, defs with chains 12
   roots pushed: rule 2, methodroot 2, inst 7
   pushes: unfoldings 322, completions 20, roots 11
-  frames on chains 20: use-site 13, definition-site 7, root 0
+  frames on chains 20: use-site 14, definition-site 6, root 0
   defs by site: use-site 0, definition-site 0, prim 2, con 0, method 10, foreign 0, lambda 0, bound 0, inst 0; head-site 0, shared 0, merged 0
   depth: 2:6 4:1 6:5
   count: 1:14 2:2 3:2 4:2
   alias classes 74
   cost: frame pushes 353, context-table operations 48 for 25 contexts
-  chains walked 342, loops re-entered 0, repeated non-recursion sites 18 (def Prelude.bind_ x6; def Prelude.bind_ [Prelude.bs] x6; def Prelude.__avFunc [Prelude.bs] x5; def Prelude.bind_ [MetaDump.bsv:23:4] u x1)
+  chains walked 342, loops re-entered 0, repeated non-recursion sites 12 (def Prelude.bind_ x6; def Prelude.__avFunc [Prelude.bs] u x5; def Prelude.bind_ [MetaDump.bsv:23:4] u x1)
   name hints: 5 cells bound to a parameter, 0 outside the library, each named by it
   method-condition positions: 14 calls, 15 kept, 0 on chains
 Verilog file created: sysMetaDump.v

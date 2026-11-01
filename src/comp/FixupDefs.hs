@@ -15,6 +15,8 @@ import Id
 import DefProp(DefProp(..), defPropsDictEvidence)
 import ISyntax
 import ISyntaxXRef(updateIExprPosition)
+import Position(Position)
+import FStringCompat(FString)
 import ISyntaxUtil(iDefsMap, itIsDictType)
 import SCC(scc)
 import Util(tracep)
@@ -212,19 +214,24 @@ fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
         -- XXX pragmas multiple times.
         ps' = nub $ concat $ ps : [ ps | IPackage _ _ ps _ _ <- ms ]
 
-        -- Get all the defs from this package and the imported packages
-        ads = concat (ds : map (\ (IPackage _ _ _ ds _) -> ds) ms)
+        -- The defs of this package and of the imported packages, each
+        -- list with the name of the package that defines them
+        pkgDefs = (mi, ds) : [ (n, defs) | IPackage n _ _ defs _ <- ms ]
 
         -- Create a recursive data structure by populating the map "m"
-        -- with defs created using the map itself
-        m = M.fromList [ (i, e) | (IDef i _ e _) <- ads' ]
-        ads' = map (redirectDictProps redirects)
-                   (iDefsMap (fixUp redirects m) ads)
+        -- with defs created using the map itself; an entry carries the
+        -- name of its package, which "get" compares with the package of
+        -- the definition it is tying a reference in
+        m = M.fromList [ (i, (getIdBase pmi, d))
+                       | (pmi, pds) <- pkgDefs', d@(IDef i _ _ _) <- pds ]
+        pkgDefs' = [ (pmi, fixPkg pmi pds) | (pmi, pds) <- pkgDefs ]
+        ads' = concatMap snd pkgDefs'
+        fixPkg pmi pds = map (redirectDictProps redirects)
+                             (iDefsMap (fixUp redirects (getIdBase pmi) m) pds)
 
         -- The new package contents
         ipkg_sigs = [ (mi, s) | (m@(IPackage mi _ _ _ _), s) <- ipkgs ]
-        ds' = map (redirectDictProps redirects)
-                  (iDefsMap (fixUp redirects m) ds)
+        ds' = fixPkg mi ds
         dropDict i t = case M.lookup i redirects of
                          Just _ -> tracep trace_drop_dicts
                                        ("dropDict: " ++ ppReadable (i, t))
@@ -257,18 +264,53 @@ fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
 -- imported definitions are dropped, since package imports form a DAG
 -- and no cycle can pass through them.  A property set earlier is
 -- stripped first, so the marking is idempotent.
+--
+-- The recursion edges, the references from a recursion point to a
+-- definition of its own component (its self-references among them),
+-- are moved to the referenced definition's own position, while every
+-- other reference keeps its occurrence's position (IConv.iConvVar).
+-- Such a reference is an iteration of a loop, not a new use of the
+-- definition: the store continues a loop's count at a reference that
+-- carries the definition's own position (IExpandMeta.pushFrame) and
+-- reports every iteration at the site that entered the loop.  The
+-- restamp is idempotent too.
 markRecursiveDefs :: [IDef a] -> [IDef a]
 markRecursiveDefs ds =
     let locals = S.fromList [ i | IDef i _ _ _ <- ds ]
         nodes = [ (i, localDefRefs locals S.empty e) | IDef i _ e _ <- ds ]
         selfRefs = S.fromList [ i | (i, rs) <- nodes, S.member i rs ]
-        cyclic = S.fromList (concat [ c | c <- scc [ (i, S.toList rs) | (i, rs) <- nodes ],
-                                          not (null (drop 1 c)) ])
+        comps = scc [ (i, S.toList rs) | (i, rs) <- nodes ]
+        cyclic = S.fromList (concat [ c | c <- comps, not (null (drop 1 c)) ])
         recursive = S.union selfRefs cyclic
+        -- the component of every definition, and its own position, by
+        -- name (Id ordering ignores positions, so a reference finds
+        -- its definition's entry)
+        compOf = M.fromList [ (i, n) | (n, c) <- zip [0 :: Int ..] comps, i <- c ]
+        ownPos = M.fromList [ (i, getIdPosition i) | IDef i _ _ _ <- ds ]
+        -- the position a reference from the recursion point d keeps:
+        -- the referenced definition's own, when both are in one component
+        edgePos d j | M.lookup j compOf == M.lookup d compOf = M.lookup j ownPos
+                    | otherwise = Nothing
         mark (IDef i t e ps) =
             let ps' = filter (/= DefP_Recursive) ps
-            in  IDef i t e (if S.member i recursive then DefP_Recursive : ps' else ps')
+            in  if S.member i recursive
+                then IDef i t (restampEdges (edgePos i) e) (DefP_Recursive : ps')
+                else IDef i t e ps'
     in  map mark ds
+
+-- The body of a recursion point with every reference the function
+-- maps to a position moved to that position (the recursion edges, see
+-- markRecursiveDefs).  The spine is rebuilt for recursion points alone,
+-- and fixUp rebuilds it again right after.
+restampEdges :: (Id -> Maybe Position) -> IExpr a -> IExpr a
+restampEdges f (ILam i t e) = ILam i t (restampEdges f e)
+restampEdges f (ILAM i k e) = ILAM i k (restampEdges f e)
+restampEdges f (IAps g ts es) = IAps (restampEdges f g) ts (map (restampEdges f) es)
+restampEdges f e@(ICon i ic@(ICDef {})) =
+    case f i of
+      Just p -> ICon (setIdPosition p i) ic
+      Nothing -> e
+restampEdges _ e = e
 
 -- the local definitions an expression references, accumulated
 localDefRefs :: S.Set Id -> S.Set Id -> IExpr a -> S.Set Id
@@ -310,27 +352,44 @@ updDef redirects d@(IDef i _ _ _) ipkg@(IPackage { ipkg_defs = ds }) ips =
 
 -- ===============
 
-fixUp :: DictRedirects -> M.Map Id (IExpr a) -> IExpr a -> IExpr a
-fixUp r m (ILam i t e) = ILam i t (fixUp r m e)
-fixUp r m (ILAM i k e) = ILAM i k (fixUp r m e)
-fixUp r m (IAps f ts es) = IAps (fixUp r m f) ts (map (fixUp r m) es)
-fixUp r m (ICon i (ICDef t _)) =
-    let i' = M.findWithDefault i i r
-    in  ICon i' (ICDef t (get m i'))
-fixUp _ _ e = e
+-- The definitions in scope by name, each with the name of the package
+-- that defines it
+type DefMap a = M.Map Id (FString, IDef a)
 
-get :: M.Map Id (IExpr a) -> Id -> IExpr a
-get m i = let value = get2 m i
-              pos = (getIdPosition i)
-          in -- trace("LookupX "
+-- fixUp ties the references in the definitions of the package named p
+fixUp :: DictRedirects -> FString -> DefMap a -> IExpr a -> IExpr a
+fixUp r p m (ILam i t e) = ILam i t (fixUp r p m e)
+fixUp r p m (ILAM i k e) = ILAM i k (fixUp r p m e)
+fixUp r p m (IAps f ts es) = IAps (fixUp r p m f) ts (map (fixUp r p m) es)
+fixUp r p m (ICon i (ICDef t _)) =
+    let i' = M.findWithDefault i i r
+    in  ICon i' (ICDef t (get p m i'))
+fixUp _ _ _ e = e
+
+-- The body tied to a reference in a definition of the package p: a
+-- copy of the referenced definition's body, stamped over its spine
+-- and sole arguments (as far as updateIExprPosition reaches) with the
+-- definition's own position when the definition is p's own, and with
+-- the reference's position, its use site, when it is imported.  Every
+-- reference carries its occurrence's position (IConv.iConvVar, the
+-- .bo of an imported package), which the evaluator's metadata store
+-- reads from the reference itself (IExpandMeta.mintDefSite); the
+-- stamp is read by the position-valued primitives
+-- (PrimGetStringPosition and kin, IExpand) from the unfolded body and
+-- printed into the generated code, so a same-package unfolding keeps
+-- reporting its definition.
+get :: FString -> DefMap a -> Id -> IExpr a
+get p m i = let (dp, IDef di _ value _) = get2 m i
+                pos = if dp == p then getIdPosition di else getIdPosition i
+            in -- trace("LookupX "
                 -- ++ (ppReadable i) ++ " => "
                 -- ++ (ppReadable (updateIExprPosition pos value))) $
              (updateIExprPosition pos value)
 
-get2 :: M.Map Id (IExpr a) -> Id -> IExpr a
+get2 :: DefMap a -> Id -> (FString, IDef a)
 get2 m i =
     case M.lookup i m of
-    Just e -> e
+    Just x -> x
     Nothing -> internalError (
         "fixupDefs.get: "
         ++ pfpString i ++ "\n"

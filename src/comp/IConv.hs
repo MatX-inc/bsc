@@ -91,6 +91,22 @@ iConvVar flags r env i =
         --trace ("lookup " ++ ppReadable i ++ show env) $
         case M.lookup i env of
         Just (IVar i') -> IVar (setIdPosition (getIdPosition i) i')
+        -- A reference to a definition of this package carries the
+        -- occurrence's position, as a reference to an imported
+        -- definition does: the .bo stores the reference's Id, and the
+        -- evaluator's metadata store reads the position from the
+        -- reference (IExpandMeta.mintDefSite).  Id equality and
+        -- ordering ignore the position, and FixupDefs stamps the body
+        -- it ties to a reference of the definition's own package with
+        -- the definition's position (FixupDefs.get), so nothing but
+        -- the reference's Id moves.  The recursion edges are moved
+        -- back to the definition's own position by
+        -- FixupDefs.markRecursiveDefs.  A reference the compiler
+        -- synthesized at no position (the PreIds references to
+        -- exposeCurrentClock and the like) is the definition's own
+        -- node, at the definition's position.
+        Just (ICon i' ic@(ICDef {})) | getIdPosition i /= noPosition ->
+            ICon (setIdPosition (getIdPosition i) i') ic
         Just e  -> e
         Nothing ->
                 case findVar r i of
