@@ -12,6 +12,7 @@ module IType(
   ,fTVarSet
   ,vsEmpty, vsSingleton, vsUnion, vsInsert, vsDelete, vsMember, vsNull
   ,ftvCacheEnabled
+  ,internStats
   ,iToCT
   ,iToCK
    )
@@ -23,9 +24,14 @@ import Prelude hiding ((<>))
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import Data.IORef(IORef, newIORef, readIORef, writeIORef, atomicModifyIORef')
 import Data.Maybe(isJust, fromJust)
-import System.IO.Unsafe(unsafePerformIO)
+import Data.Array.IO(IOUArray)
+import Data.Array.MArray(newArray, getBounds)
+import Data.Array.Base(unsafeRead, unsafeWrite)
+import Control.Exception(evaluate)
+import Control.Monad(forM_, when)
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 
 import ErrorUtil(internalError)
 import IOUtil(progArgs)
@@ -34,7 +40,8 @@ import PreIds(idArrow, idId, idTNumToStr)
 import TypeOps(opNumT, opStrT)
 import CType(Type(..), CType, TyCon(..), TyVar(..), Kind(..),
              TISort(..), StructSubType(..),
-             cTApplys, cTVar, cTCon, cTNum, cTStr)
+             cTApplys, cTVar, cTCon, cTNum, cTStr,
+             CTypeStat(..), ctypeStat)
 import Pragma(IfcPragma(..))
 import StdPrel(tiArrow)
 import Eval(NFData(..), rnf3, rnf2, rnf)
@@ -44,6 +51,7 @@ import Position(noPosition)
 import Util(itos)
 import FStringCompat(FString, mkNumFString)
 import PreStrings(fsEmpty)
+import SpeedyString(internCount)
 
 -- ==============================
 -- IKind, IType
@@ -85,7 +93,7 @@ data IType
         = ITForAll_ {-# UNPACK #-} !Int !VarSet !Id !IKind IType
         | ITAp_ {-# UNPACK #-} !Int !VarSet IType IType
         | ITVar_ !Id
-        | ITCon_ !Id !IKind !TISort
+        | ITCon_ {-# UNPACK #-} !Int !Id !IKind !TISort
         | ITNum !Integer
         | ITStr !FString
 
@@ -107,7 +115,7 @@ pattern ITVar i <- ITVar_ i
   where ITVar i = mkITVar i
 
 pattern ITCon :: Id -> IKind -> TISort -> IType
-pattern ITCon i k s <- ITCon_ i k s
+pattern ITCon i k s <- ITCon_ _ i k s
   where ITCon i k s = mkITCon i k s
 
 {-# COMPLETE ITForAll, ITAp, ITVar, ITCon, ITNum, ITStr #-}
@@ -292,7 +300,10 @@ tidyCT (TDefMonad _) = TDefMonad noPosition
 mkITVar :: Id -> IType
 mkITVar i = ITVar_ (tidyTypeId i)
 
--- ITCon leaves are interned by qualified name.  Soundness rests on
+-- ITCon leaves are interned by qualified name and carry their index in
+-- the table as a unique (arrival order, like the interior uniques:
+-- in-process identity only, used by the rnf bit table below).
+-- Soundness rests on
 -- the one-tycon-per-qualified-name invariant (front-end enforced,
 -- tconcheck-verified): the qualified Id determines the kind and sort,
 -- so a by-name hit may return the canonical node without normalizing
@@ -322,7 +333,7 @@ mkITCon i k s
         -- HasCallStack to mkITCon and the ITCon pattern signature and
         -- render callStack here.
         internalError ("IType.mkITCon: unqualified tycon " ++
-                       show (ITCon_ i k s))
+                       show (ITCon_ 0 i k s))
     | otherwise = unsafePerformIO $ do
         let key = (getIdQual i, getIdBase i)
         TConTable m0 <- readIORef tconTable
@@ -333,7 +344,8 @@ mkITCon i k s
     go key st@(TConTable m) =
         case M.lookup key m of
           Just t  -> (st, t)
-          Nothing -> let t = ITCon_ (tidyTypeId i) k (tidySort (getIdQual i) s)
+          Nothing -> let t = ITCon_ (M.size m) (tidyTypeId i) k
+                                    (tidySort (getIdQual i) s)
                      in  (TConTable (M.insert key t m), t)
 
 -- --------------------------------
@@ -379,7 +391,7 @@ data NodeKey
 tKey :: IType -> TKey
 tKey (ITForAll_ u _ _ _ _) = TKNode u
 tKey (ITAp_ u _ _ _)       = TKNode u
-tKey (ITCon_ i _ _)        = TKCon (getIdQual i) (getIdBase i)
+tKey (ITCon_ _ i _ _)      = TKCon (getIdQual i) (getIdBase i)
 tKey (ITVar_ i)            = TKVar (getIdBase i)
 tKey (ITNum n)             = TKNum n
 tKey (ITStr s)             = TKStr s
@@ -504,13 +516,146 @@ instance Show IType where
 
 -- --------------------------------
 -- NFData Instances
+--
+-- rnf walks an interned node's fields once.  The first rnf of a node
+-- runs the walk the instance always ran -- rnf3 i k t for ITForAll,
+-- rnf2 f a for ITAp, rnf3 i k s for ITCon -- and then sets the node's
+-- bit in walkedNodes (interior nodes, by intern unique) or
+-- walkedTycons (ITCon, by tycon unique); every later rnf of the node
+-- finds the bit and returns at once, so the deepseq at every phase
+-- boundary (TopUtils.dump) walks a shared type once instead of once
+-- per occurrence and per dump.  What the first walk forces, per field:
+--
+--  * the children of an interior node (f and a, or t) are in weak head
+--    normal form before the node exists: internAp and mkITForAll build
+--    the intern key from tKey of each child, and the table lookup
+--    forces the key's strict TKey fields.  So rnf of a child is the
+--    child's own first walk or bit, or for an ITVar rnf of its strict
+--    Id, which is () once the Id is in weak head normal form (Id.hs),
+--    or the strict Integer or FString of an ITNum or ITStr: nothing a
+--    leaf holds is left for the walk to force;
+--  * a binder Id and an ITCon's Id are strict fields, forced at
+--    construction, and rnf Id needs nothing more;
+--  * a kind (the binder kind, an ITCon's kind) is a strict field whose
+--    IKFun children are lazy, and an ITCon's sort is a strict field
+--    whose contents (tidySort's walk of the payload: its Ids, a TItype
+--    body, constructor and field lists) are lazy.  These the first walk
+--    forces, as the instance did before, in the same order (i, k, t
+--    and i, k, s).
+--
+-- A later rnf of the same node forced nothing even before the bit: rnf
+-- is deterministic over immutable data, so the closures it would
+-- pattern-match or seq were all evaluated by the first walk.  The bit
+-- therefore omits only walks that forced nothing, and the sequence of
+-- first forcings -- the one thing that could move a string's intern id
+-- -- is unchanged.  markWalked takes the walk's result as an argument,
+-- so the bit is set only after the walk completed; a walk that raised
+-- an internal error leaves the bit clear and the next rnf runs it
+-- again, as before.  The tables are metadata of the intern tables: one
+-- bit per unique, grown by doubling, never serialized, printed,
+-- compared or keyed on; the nodes themselves are unchanged.
+--
+-- -hack-no-rnf-ground reads and sets no bit, so rnf walks the fields on
+-- every visit as before; -check-rnf-ground walks the fields on every
+-- visit whose bit is set as well, and that walk must intern no string
+-- and build no node (an internal error otherwise).  Both are argv
+-- strings registered in FlagsDecode.traceflags, so the command-line
+-- parser accepts them (BSC_OPTIONS reaches progArgs too).  Under
+-- -trace-ctype-stats, rnf_ground_walk counts the first walks and
+-- rnf_ground_skip the visits that found a bit set.  Each clause spells
+-- its walk out per guard so that no thunk for it is built on the
+-- visits that skip it.
 instance NFData IType where
-    rnf (ITForAll i k t) = rnf3 i k t
-    rnf (ITAp a b) = rnf2 a b
-    rnf (ITVar i) = rnf i
-    rnf (ITCon i k s) = rnf3 i k s
+    rnf (ITForAll_ u _ i k t)
+        | hackNoRnfGround = rnf3 i k t
+        | not (isWalked walkedNodes u) =
+            markWalked walkedNodes u (ctypeStat RnfGroundWalk (rnf3 i k t))
+        | checkRnfGround = ctypeStat RnfGroundSkip u `seq` rnfChecked (rnf3 i k t)
+        | otherwise = ctypeStat RnfGroundSkip u `seq` ()
+    rnf (ITAp_ u _ f a)
+        | hackNoRnfGround = rnf2 f a
+        | not (isWalked walkedNodes u) =
+            markWalked walkedNodes u (ctypeStat RnfGroundWalk (rnf2 f a))
+        | checkRnfGround = ctypeStat RnfGroundSkip u `seq` rnfChecked (rnf2 f a)
+        | otherwise = ctypeStat RnfGroundSkip u `seq` ()
+    rnf (ITVar_ i) = rnf i
+    rnf (ITCon_ u i k s)
+        | hackNoRnfGround = rnf3 i k s
+        | not (isWalked walkedTycons u) =
+            markWalked walkedTycons u (ctypeStat RnfGroundWalk (rnf3 i k s))
+        | checkRnfGround = ctypeStat RnfGroundSkip u `seq` rnfChecked (rnf3 i k s)
+        | otherwise = ctypeStat RnfGroundSkip u `seq` ()
     rnf (ITNum i) = rnf i
     rnf (ITStr s) = rnf s
+
+-- One bit per unique: set once the node's walk has completed.
+type WalkedTable = IORef (IOUArray Int Bool)
+
+{-# NOINLINE walkedNodes #-}
+walkedNodes :: WalkedTable
+walkedNodes = unsafePerformIO (newArray (0, 65535) False >>= newIORef)
+
+{-# NOINLINE walkedTycons #-}
+walkedTycons :: WalkedTable
+walkedTycons = unsafePerformIO (newArray (0, 1023) False >>= newIORef)
+
+-- A unique beyond the table's bounds has not been walked (the table
+-- grows when a bit is set, not when one is read).
+isWalked :: WalkedTable -> Int -> Bool
+isWalked ref u = unsafeDupablePerformIO $ do
+    arr <- readIORef ref
+    (_, hi) <- getBounds arr
+    if u > hi then return False else unsafeRead arr u
+
+-- Set the bit of a node whose walk returned the () argument: the match
+-- on () evaluates the walk before the bit is set.
+{-# NOINLINE markWalked #-}
+markWalked :: WalkedTable -> Int -> () -> ()
+markWalked ref u () = unsafePerformIO $ do
+    arr <- readIORef ref
+    (_, hi) <- getBounds arr
+    arr' <- if u <= hi then return arr else do
+        new <- newArray (0, max u (2 * hi + 1)) False
+        forM_ [0 .. hi] $ \i -> unsafeRead arr i >>= unsafeWrite new i
+        writeIORef ref new
+        return new
+    unsafeWrite arr' u True
+
+-- The oracle's walk of a node whose bit is set: the first walk forced
+-- the same closures, so this one must intern no string and build no
+-- interned node.
+{-# NOINLINE rnfChecked #-}
+rnfChecked :: () -> ()
+rnfChecked walk = unsafePerformIO $ do
+    s0 <- internCount
+    InternTable _ n0 <- readIORef internTable
+    TConTable c0 <- readIORef tconTable
+    evaluate walk
+    s1 <- internCount
+    InternTable _ n1 <- readIORef internTable
+    TConTable c1 <- readIORef tconTable
+    when (s1 /= s0 || n1 /= n0 || M.size c1 /= M.size c0) $
+        internalError ("IType.rnf: the walk after the bit interned " ++
+                       show (s1 - s0) ++ " strings and built " ++
+                       show (n1 - n0) ++ " interior and " ++
+                       show (M.size c1 - M.size c0) ++ " tycon nodes")
+
+-- The sizes of the two intern tables, printed by bsc at exit under
+-- -trace-ctype-stats beside the CType counters: they bound the bit
+-- tables' size.
+internStats :: IO [(String, Int)]
+internStats = do
+    InternTable _ n <- readIORef internTable
+    TConTable c <- readIORef tconTable
+    return [("itype_nodes", n), ("itype_tycons", M.size c)]
+
+{-# NOINLINE hackNoRnfGround #-}
+hackNoRnfGround :: Bool
+hackNoRnfGround = "-hack-no-rnf-ground" `elem` progArgs
+
+{-# NOINLINE checkRnfGround #-}
+checkRnfGround :: Bool
+checkRnfGround = "-check-rnf-ground" `elem` progArgs
 
 instance NFData IKind where
     rnf IKStar = ()
