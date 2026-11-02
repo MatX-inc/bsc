@@ -11,7 +11,8 @@ import Version(bscVersionStr)
 import BinData
 import IExpandMeta(ModuleMeta(..), SiteTable(..), SiteKey(..), SiteKind,
                    SiteRow(..), RecKey(..), ContextTable(..), DefRecord(..),
-                   MetaEvent(..), PassTag, siteIdsFromRows, contextIdsFromRows)
+                   MetaEvent(..), PassTag, siteIdsFromRows, contextIdsFromRows,
+                   IdentRecord(..), IdentKind, IdentOrigin(..))
 import FileIOUtil(writeBinaryFileCatch)
 
 import qualified Data.IntMap.Strict as IM
@@ -26,9 +27,11 @@ import qualified Data.ByteString as B
 -- <module>.bxref, written beside the module's .ba under -bxref, is the
 -- module's cross-reference: the evaluator's metadata table
 -- (IExpandMeta.ModuleMeta: the sites, the contexts, the roots and one
--- record per lifted def) and the ledger of what the passes since
+-- record per lifted def), the ledger of what the passes since
 -- elaboration did to the def and rule ids, as the ledger stood when
--- the module's code was generated.  It is an artifact of its own: the
+-- the module's code was generated, and the identifier records of the
+-- Verilog backend's join (VerilogMeta: each identifier of the
+-- generated module with what it stands for).  It is an artifact of its own: the
 -- .ba never carries the table or the ledger, and nothing in a compile
 -- reads a .bxref; its readers are the tools (dumpbxref).  The file is
 -- the format tag below, then one BinData container holding a
@@ -38,7 +41,7 @@ import qualified Data.ByteString as B
 -- .bxref file tag -- change this whenever the .bxref format changes
 -- See also GenABin.header and GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bxref-20261102-2"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bxref-20261102-3"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -64,7 +67,11 @@ data BXrefFile = BXrefFile {
         bx_module :: String,
         bx_stage :: BXrefStage,
         -- the table and the ledger
-        bx_meta :: ModuleMeta
+        bx_meta :: ModuleMeta,
+        -- the identifier records of the generated module, in
+        -- declaration order; empty at the bluesim and schederr stages,
+        -- where no Verilog identifier exists
+        bx_idents :: [IdentRecord]
     }
 
 genBXrefFile :: ErrorHandle -> (Position -> Position) -> String -> BXrefFile
@@ -96,17 +103,19 @@ readBXrefFile errh nm s =
 -- st_ids would make the bytes depend on the live intern table.
 
 instance Bin BXrefFile where
-    writeBytes (BXrefFile v m s mm) =
+    writeBytes (BXrefFile v m s mm is) =
         section "BXrefFile" $
         do toBin v
            toBin m
            toBin s
            toBin mm
+           toBin is
     readBytes = do v <- fromBin
                    m <- fromBin
                    s <- fromBin
                    mm <- fromBin
-                   return (BXrefFile v m s mm)
+                   is <- fromBin
+                   return (BXrefFile v m s mm is)
 
 instance Bin BXrefStage where
     writeBytes s = putI (fromEnum s)
@@ -229,6 +238,45 @@ instance Bin MetaEvent where
                      4 -> do t <- fromBin; a <- fromBin
                              return (Dropped t a)
                      n -> internalError ("GenBXref.Bin(MetaEvent).readBytes: " ++ show n)
+
+-- The history, ascending event positions, is written as the
+-- differences between consecutive positions (the first from zero):
+-- small numbers, which the Int encoding writes in two bytes where the
+-- positions of a ledger of a hundred thousand events take four, and
+-- the history is the bulk of the records.
+instance Bin IdentRecord where
+    writeBytes (IdentRecord s i ks os h) =
+        do toBin s
+           toBin i
+           toBin ks
+           toBin os
+           toBin (zipWith (-) h (0 : h))
+    readBytes = do s <- fromBin
+                   i <- fromBin
+                   ks <- fromBin
+                   os <- fromBin
+                   ds <- fromBin
+                   return (IdentRecord s i ks os (drop 1 (scanl (+) 0 ds)))
+
+instance Bin IdentKind where
+    writeBytes k = putI (fromEnum k)
+    readBytes = fmap toEnumOrErr getI
+
+instance Bin IdentOrigin where
+    writeBytes (ODef p) = do putI 0; toBin p
+    writeBytes (ORoot s) = do putI 1; toBin s
+    writeBytes (ORule n) = do putI 2; toBin n
+    writeBytes (OPass t n) = do putI 3; toBin t; toBin n
+    writeBytes (OUnresolved n) = do putI 4; toBin n
+    readBytes = do i <- getI
+                   case i of
+                     0 -> fmap ODef fromBin
+                     1 -> fmap ORoot fromBin
+                     2 -> fmap ORule fromBin
+                     3 -> do t <- fromBin; n <- fromBin
+                             return (OPass t n)
+                     4 -> fmap OUnresolved fromBin
+                     n -> internalError ("GenBXref.Bin(IdentOrigin).readBytes: " ++ show n)
 
 -- an enumeration's index back to the value, within its bounds
 toEnumOrErr :: (Enum a, Bounded a, Show a) => Int -> a

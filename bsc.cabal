@@ -313,6 +313,7 @@ library
     VPrims
     VVerilogDollar
     Verilog
+    VerilogMeta
     Version
     WaveCheck
     WireAnalysis

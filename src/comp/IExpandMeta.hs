@@ -21,6 +21,11 @@ module IExpandMeta(
         -- the ledger the packages carry
         MetaLedger(..), emptyMetaLedger, PassTag(..), MetaEvent(..),
         appendEvent, appendEvents, resolveId, checkClosure, renderLedger,
+        renderEvent, siteKeyKind, renderName,
+        -- the identifier records of the Verilog backend's join
+        IdentKind(..), IdentOrigin(..), IdentRecord(..), identUnresolved,
+        createdFromNothing, resolveIds, checkResolveIds,
+        renderIdent, renderIdents,
         -- the census (-metadata-census)
         Census, readCensus, recordUnfolding, recordCompletion, aliasClassCount,
         renderCensus, checkProfile, checkKeptPositions, checkNameHints
@@ -1010,6 +1015,166 @@ renderEvent ev =
   where
     line kind t rest = kind ++ " (" ++ drop 2 (show t) ++ "): " ++ rest
     ids = unwords . map getIdString
+
+-- ===============
+-- The identifier records
+--
+-- The join at the Verilog backend (VerilogMeta.verilogIdents) walks
+-- the declaration positions of the generated module and resolves the
+-- id behind each identifier through the ledger to the records it
+-- stands for; -bxref writes the records into the .bxref as bx_idents,
+-- and dumpbxref renders them (--idents, --resolve).  A record holds
+-- strings and table keys (def pointers, root site ids, event
+-- positions), no Id, so that a reader rebuilds nothing and interns
+-- nothing beyond the table's own strings.
+
+-- the declaration position an identifier was read from
+data IdentKind = IKInput | IKOutput | IKInout | IKParameter
+               | IKWire | IKReg | IKInstance | IKRule
+        deriving (Eq, Ord, Show, Enum, Bounded)
+
+showIdentKind :: IdentKind -> String
+showIdentKind IKInput = "input"
+showIdentKind IKOutput = "output"
+showIdentKind IKInout = "inout"
+showIdentKind IKParameter = "parameter"
+showIdentKind IKWire = "wire"
+showIdentKind IKReg = "reg"
+showIdentKind IKInstance = "instance"
+showIdentKind IKRule = "rule"
+
+-- What a final id stands for: the record of a lifted def (the key of
+-- mm_defs, the pointer the def's name ends in); a root site of the
+-- table (a method, an instance or a rule root, by site id); a rule
+-- whose root row the join did not find, by the rule's id; an id a
+-- pass created from nothing (a port def no call reaches, a def of the
+-- scheduler's), by the pass and the id; or none.
+data IdentOrigin
+    = ODef !Int
+    | ORoot !Int
+    | ORule !String
+    | OPass !PassTag !String
+    | OUnresolved !String
+        deriving (Eq, Ord, Show)
+
+-- One identifier of the generated module: its spelling; the id of the
+-- final package it was printed from, as a string (the spelling unless
+-- the backend renamed it: a SystemVerilog std-package collision or
+-- -remove-dollar); its declaration positions in the module's order;
+-- what it stands for, sorted; and the events on the way from the
+-- evaluator's defs to it, as positions in the ledger (0 the oldest).
+data IdentRecord = IdentRecord {
+        ir_ident :: !String,
+        ir_id :: !String,
+        ir_kinds :: ![IdentKind],
+        ir_origins :: ![IdentOrigin],
+        ir_history :: ![Int]
+    }
+
+-- an identifier that stands for nothing the table knows
+identUnresolved :: IdentRecord -> Bool
+identUnresolved r = case ir_origins r of
+                      [OUnresolved _] -> True
+                      _ -> False
+
+-- the ids a pass created from nothing, with the pass
+createdFromNothing :: MetaLedger -> M.Map Id PassTag
+createdFromNothing (MetaLedger mm) =
+    M.fromList [ (to, t) | Created t to [] <- mm_events mm ]
+
+-- Resolve every id of a list through the ledger at once: for each,
+-- the ids whose records it stands for, sorted by name, and the
+-- positions of the events on the way, oldest first (0 the oldest
+-- event of the ledger).  Per id the answer is resolveId's, which walks
+-- the events once per id; here one walk, newest first, carries a map
+-- from each id in hand to the set of given ids it is in hand for, so
+-- an event costs the ids it moves and the whole walk costs the size of
+-- the answer, not the ids times the events.  -metadata-census checks
+-- the two against each other (checkResolveIds).  Pure, over existing
+-- ids; run by the Verilog backend's join and by tools, never by a pass.
+resolveIds :: MetaLedger -> [Id] -> M.Map Id ([Id], [Int])
+resolveIds (MetaLedger mm) finals =
+    M.fromList [ (f, (M.findWithDefault [] f origins,
+                      M.findWithDefault [] f history))
+               | f <- finals ]
+  where
+    events = mm_events mm
+    count = length events
+    -- holds: an id in hand -> the given ids it is in hand for;
+    -- history: a given id -> the positions of the events taken, newest
+    -- first as the walk goes, so oldest first when it ends
+    (holds, history) =
+        L.foldl' step (M.fromList [ (f, S.singleton f) | f <- finals ], M.empty)
+                 (zip [count - 1, count - 2 ..] events)
+    step st@(hs, hist) (n, ev) =
+        case ev of
+          Renamed _ from to | Just fs <- M.lookup to hs ->
+              (addAll [from] fs (M.delete to hs), note n fs hist)
+          Merged _ froms into | Just fs <- M.lookup into hs ->
+              (addAll froms fs hs, note n fs hist)
+          Inlined _ from intos
+            | let fs = S.unions (mapMaybe (`M.lookup` hs) intos), not (S.null fs) ->
+              (addAll [from] fs hs, note n fs hist)
+          Created _ to froms | not (null froms), Just fs <- M.lookup to hs ->
+              (addAll froms fs (M.delete to hs), note n fs hist)
+          _ -> st
+    addAll xs fs hs = L.foldl' (\ h x -> M.insertWith S.union x fs h) hs xs
+    note n fs hist = S.foldr (\ f h -> M.insertWith (++) f [n] h) hist fs
+    origins = M.map (sortBy (comparing getIdString))
+                    (M.fromListWith (++)
+                         [ (f, [x]) | (x, fs) <- M.toList holds, f <- S.toList fs ])
+
+-- resolveIds against resolveId on the ids given, as sets of origins
+-- and as event sequences; the disagreements, one line each
+checkResolveIds :: MetaLedger -> [Id] -> [String]
+checkResolveIds ledger@(MetaLedger mm) ids =
+    concat [ [ getIdString i ++ ": origins " ++ unwords (map getIdString os) ++
+               " (resolveIds) against " ++ unwords (map getIdString os') ++ " (resolveId)"
+             | S.fromList os /= S.fromList os' ] ++
+             [ getIdString i ++ ": history " ++ show ns ++ " (resolveIds) against " ++
+               show (length evs) ++ " events (resolveId)"
+             | map render ns /= map renderEvent evs ]
+           | (i, (os, ns)) <- M.toList (resolveIds ledger ids),
+             let (os', evs) = resolveId ledger i ]
+  where
+    byPosition = IM.fromList (zip [0 ..] (reverse (mm_events mm)))
+    render n = maybe ("no event " ++ show n) renderEvent (IM.lookup n byPosition)
+
+-- An identifier's line:
+--
+--   ident <spelling> | id <id> | kind <k>,<k> | origins <o>, <o> | history <n>,<n>
+--
+-- where the id field appears only when the spelling differs from it,
+-- and an origin is def <name>, root <site>, root rule <id>,
+-- pass <Pass> <id> or unresolved <id>.
+renderIdent :: ModuleMeta -> IdentRecord -> String
+renderIdent mm r =
+    intercalate " | "
+        (["ident " ++ ir_ident r] ++
+         [ "id " ++ ir_id r | ir_id r /= ir_ident r ] ++
+         ["kind " ++ intercalate "," (map showIdentKind (ir_kinds r)),
+          "origins " ++ intercalate ", " (map (renderOrigin mm) (ir_origins r)),
+          "history " ++ intercalate "," (map show (ir_history r))])
+
+renderOrigin :: ModuleMeta -> IdentOrigin -> String
+renderOrigin mm o =
+    case o of
+      ODef p -> "def " ++ maybe ("_" ++ show p) defName (IM.lookup p (mm_defs mm))
+      ORoot s -> "root " ++ renderSite (mm_sites mm) s
+      ORule n -> "root rule " ++ n
+      OPass t n -> "pass " ++ drop 2 (show t) ++ " " ++ n
+      OUnresolved n -> "unresolved " ++ n
+  where defName d = defNameString (dr_ptr d) (dr_hint d)
+
+-- the identifier lines in the module's order, then
+--   summary idents <n> resolved <n> unresolved <n>
+renderIdents :: ModuleMeta -> [IdentRecord] -> String
+renderIdents mm rs =
+    unlines (map (renderIdent mm) rs ++
+             ["summary idents " ++ show (length rs) ++
+              " resolved " ++ show (length rs - unresolved) ++
+              " unresolved " ++ show unresolved])
+  where unresolved = length (filter identUnresolved rs)
 
 -- ===============
 -- The side file
