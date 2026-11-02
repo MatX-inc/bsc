@@ -7,9 +7,11 @@ import Id(mkId, getIdBaseString)
 import FStringCompat(mkFString)
 import Control.Monad.State
 import qualified Data.Map as M
+import Data.Maybe(maybeToList)
 import ASyntax
 import ASyntaxUtil(mapMAExprs)
 import SignalNaming
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 
 -- ===============
@@ -33,7 +35,13 @@ data NIState = NIState {
     nis_defs     :: [ADef],
     -- reverse lookup of defs processed or added so far,
     -- to avoid creating new ids for the exprs which already have ids
-    nis_rlookup  :: M.Map (AExpr,AType) AId
+    nis_rlookup  :: M.Map (AExpr,AType) AId,
+    -- the def, rule, method or instance whose expressions are being
+    -- lifted, which a def addExpr adds is Created from in the ledger
+    nis_owner    :: Maybe AId,
+    -- the ledger events (IExpandMeta), most recent first; consed
+    -- unevaluated, reading no counter
+    nis_events   :: [MetaEvent]
   }
 
 -- Monad type
@@ -71,9 +79,17 @@ addExpr t e = do
             do
               nid <- genIdFromAExpr e
               addDef (ADef nid t e [])
+              owner <- gets nis_owner
+              modify (\ s -> s { nis_events =
+                                   Created PTNoInline nid (maybeToList owner)
+                                   : nis_events s })
               return nid
         -- don't create a new id for an expression that already has an id
         Just fid -> return fid
+
+-- lift under the given def, rule, method or instance as the owner
+setOwner :: AId -> NIStateMonad ()
+setOwner i = modify (\ s -> s { nis_owner = Just i })
 
 
 -- ===============
@@ -90,7 +106,9 @@ aNoInline flags apkg =
         initState = NIState {
                               nis_uniqueId = 1,
                               nis_defs = [],
-                              nis_rlookup = M.empty
+                              nis_rlookup = M.empty,
+                              nis_owner = Nothing,
+                              nis_events = []
                             }
 
         -- fields of the package
@@ -110,16 +128,20 @@ aNoInline flags apkg =
           -- to be retrieved at the end)
           mapM_ liftADef defs
 
-          -- map over ifcs
-          ifc' <- mapMAExprs (liftAExpr False) ifc
-          -- map over rules
-          rs' <- mapMAExprs (liftAExpr False) rs
-          -- map over state
-          insts' <- mapMAExprs (liftAExpr False) insts
+          -- map over ifcs, rules and state, one element at a time with
+          -- the element as the owner (mapMAExprs over a list is this
+          -- mapM)
+          ifc' <- mapM (\ m -> do setOwner (aif_name m)
+                                  mapMAExprs (liftAExpr False) m) ifc
+          rs' <- mapM (\ r -> do setOwner (arule_id r)
+                                 mapMAExprs (liftAExpr False) r) rs
+          insts' <- mapM (\ inst -> do setOwner (avi_vname inst)
+                                       mapMAExprs (liftAExpr False) inst) insts
 
           -- get back the final list of defs
           -- (original defs with lifting, plus any new defs)
           defs' <- gets nis_defs
+          events <- gets nis_events
 
           -- now that all ANoInlineFunCall are top-level defs,
           -- assign instance names to each one
@@ -129,7 +151,9 @@ aNoInline flags apkg =
           return (apkg { apkg_interface = ifc',
                          apkg_rules = rs',
                          apkg_state_instances = insts',
-                         apkg_local_defs = defs'' })
+                         apkg_local_defs = defs'',
+                         apkg_meta = appendEvents (reverse events)
+                                                  (apkg_meta apkg) })
     in
         evalState action initState
 
@@ -139,6 +163,7 @@ aNoInline flags apkg =
 -- This doesn't return the defs, because they are returned via the monad
 liftADef :: ADef -> NIStateMonad ()
 liftADef (ADef i t e p) = do
+    setOwner i
     -- Top level case does not need to be pulled out
     e' <- liftAExpr True e
     addDef (ADef i t e' p)

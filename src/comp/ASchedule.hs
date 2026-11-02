@@ -55,6 +55,7 @@ import IOUtil(progArgs)
 import FileNameUtil
 import FileIOUtil(writeFileCatch)
 import TopUtils(putStrLnF, mkTimestampComment)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 import AUses(-- re-exported interface
              MethodUsesMap, MethodUsers, MethodId(..), UniqueUse(..),
              MethodUsesList,
@@ -514,7 +515,8 @@ type Step1Output =
      RuleMethodUseMap,
      [(AId, [ARuleId])],
      Maybe Backend,
-     [ADef]
+     [ADef],
+     [MetaEvent]
     )
 
 aSchedule_step1 :: ErrorHandle -> Flags -> String -> a -> APackage
@@ -534,7 +536,8 @@ aSchedule_step1 errh flags prefix pps amod = do
 
       -- Moved this here (from AAddSchedAssumps.hs) because we need to add
       -- new rules and that's messy to do post-scheduling
-      (rules_me, orders) = addAllMEAssumps schedPragmas rules_user
+      -- (with the ledger event of each new rule)
+      (rules_me, orders, me_events) = addAllMEAssumps schedPragmas rules_user
       userARules = rules_user ++ rules_me
 
   let tr s = tracep trace_sched_steps ("aSchedule: " ++ s)
@@ -617,7 +620,7 @@ aSchedule_step1 errh flags prefix pps amod = do
   -- produce a map of how every rule uses variables and methods
   -- as well as the inverse map about how each method is used
   -- both maps are returned in the SchedInfo for use by later passes
-  let (ruleUseMap, methodUseMap, new_defs) =
+  let (ruleUseMap, methodUseMap, new_defs, new_events) =
           tr "let buildUseMaps" $ buildUseMaps defs rules state
 
   -- add in the new definitions (so we don't have to change code below)
@@ -1143,6 +1146,7 @@ aSchedule_step1 errh flags prefix pps amod = do
          , mutatorMap
          , gen_backend1
          , new_defs
+         , me_events ++ new_events
          )
 
 -- NOTE: aSchedule' was split into 3 functions because of a memory explosion
@@ -1176,7 +1180,8 @@ type Step2Output =
      RuleMethodUseMap,
      [(AId, [ARuleId])],
      Maybe Backend,
-     [ADef]
+     [ADef],
+     [MetaEvent]
     )
 aSchedule_step2 :: ErrorHandle -> Flags -> String -> a
                 -> [(ARuleId, ARuleId, [PathNode])] -> APackage
@@ -1204,6 +1209,7 @@ aSchedule_step2 errh flags prefix pps urgency_pairs amod ( scConflictMap0
                                                          , mutatorMap
                                                          , gen_backend1
                                                          , new_defs
+                                                         , new_events
                                                          ) = do
   let tr s = tracep trace_sched_steps ("aSchedule: " ++ s)
       nm = apkg_name amod
@@ -1451,6 +1457,7 @@ aSchedule_step2 errh flags prefix pps urgency_pairs amod ( scConflictMap0
          , mutatorMap
          , gen_backend2
          , new_defs
+         , new_events
          )
 
 -- NOTE: aSchedule' was split into 3 functions because of a memory explosion
@@ -1486,6 +1493,7 @@ aSchedule_step3 errh flags prefix pps amod ( scConflictMap0
                                            , mutatorMap
                                            , gen_backend2
                                            , new_defs
+                                           , new_events
                                            ) = do
 
   let tr s = tracep trace_sched_steps ("aSchedule: " ++ s)
@@ -1792,9 +1800,12 @@ aSchedule_step3 errh flags prefix pps amod ( scConflictMap0
   -- ====================
   -- Return
 
+  -- the defs made for use conditions join the package, with their
+  -- ledger events (Created from the def, rule or instance analyzed)
   return (amod { apkg_backend = gen_backend2,
                  apkg_rules = userARules,
-                 apkg_local_defs = apkg_local_defs amod ++ new_defs
+                 apkg_local_defs = apkg_local_defs amod ++ new_defs,
+                 apkg_meta = appendEvents new_events (apkg_meta amod)
                 })
 
 -- ========================================================================
@@ -5250,14 +5261,18 @@ pfp = pfPrint PDReadable 0
 -- # ME Assumps code
 -- #############################################################################
 
-addAllMEAssumps :: [ASchedulePragma] -> [ARule] -> ([ARule],[(ARuleId,[ARuleId])])
+-- (the new rules, their orders and, for the ledger, each new rule's
+-- Created event)
+addAllMEAssumps :: [ASchedulePragma] -> [ARule]
+                -> ([ARule],[(ARuleId,[ARuleId])],[MetaEvent])
 addAllMEAssumps pragmas rules =
   let new_id i = addSuffix (mk_homeless_id "__me_check") i
-      pairs = concat (zipWith (addMEAssumps pragmas) rules (map new_id [0..]))
-      (new_rules, orders) = unzip pairs
-  in (new_rules, orders)
+      triples = concat (zipWith (addMEAssumps pragmas) rules (map new_id [0..]))
+      (new_rules, orders, events) = unzip3 triples
+  in (new_rules, orders, events)
 
-addMEAssumps :: [ASchedulePragma] -> ARule -> ARuleId -> [(ARule,(ARuleId,[ARuleId]))]
+addMEAssumps :: [ASchedulePragma] -> ARule -> ARuleId
+             -> [(ARule,(ARuleId,[ARuleId]),MetaEvent)]
 addMEAssumps pragmas r@(ARule { arule_id = rid }) new_id = rs
   where me_pairs = extractMEPairsSP pragmas
         getRule ids = headOrErr "addMEAssumps getRule" ids
@@ -5273,7 +5288,11 @@ addMEAssumps pragmas r@(ARule { arule_id = rid }) new_id = rs
                                    else [(r { arule_id = new_id,
                                               arule_pred = aTrue,
                                               arule_actions = [],
-                                              arule_assumps = assumps }, (new_id, id_list))]
+                                              arule_assumps = assumps }, (new_id, id_list),
+                                          -- the ledger: the check rule is
+                                          -- Created from the rule it is
+                                          -- a copy of
+                                          Created PTSchedule new_id [rid])]
 
 mkMEAssump :: ([Id], [Id]) -> [(AAssumption, [Id])]
 mkMEAssump ([], _) = []

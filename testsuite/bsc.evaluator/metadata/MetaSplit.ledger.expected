@@ -35,7 +35,7 @@ resolved: 2 of 4 defs and rules stand for other ids
 
 -----
 === metadata (MetaSplit sysMetaSplit):
-ledger after dropundet: 161 sites, 7 contexts, 5 roots, 4 defs, 29 events
+ledger after dropundet: 161 sites, 7 contexts, 5 roots, 4 defs, 41 events
 inlined (Inline): __h152 -> __h153
 inlined (Inline): __h153 -> RL_pick
 created (Transform): __i1 <- __h151
@@ -65,10 +65,22 @@ created (Transform): __j5 <- value
 inlined (Transform): __j5 -> value
 dropped (Transform): __j3
 dropped (Transform): __j4
+created (Conv): a___d1 <- __h148
+merged (Conv): __h148 -> a___d1
+created (Conv): b___d2 <- __h151
+merged (Conv): __h151 -> b___d2
+created (Conv): a_ULE_b___d3 <- RL_pick_T
+created (Conv): NOT_a_ULE_b___d4 <- RL_pick_F
+created (Schedule): CAN_FIRE_RL_pick_T <- RL_pick_T
+created (Schedule): CAN_FIRE_RL_pick_F <- RL_pick_F
+created (Schedule): CAN_FIRE_value <- value
+created (Schedule): WILL_FIRE_RL_pick_T <- RL_pick_T
+created (Schedule): WILL_FIRE_RL_pick_F <- RL_pick_F
+created (Schedule): WILL_FIRE_value <- value
 
 -----
 === metadata (MetaSplit sysMetaSplit):
-ledger after finalcleanup: 161 sites, 7 contexts, 5 roots, 4 defs, 29 events
+ledger after finalcleanup: 161 sites, 7 contexts, 5 roots, 4 defs, 41 events
 inlined (Inline): __h152 -> __h153
 inlined (Inline): __h153 -> RL_pick
 created (Transform): __i1 <- __h151
@@ -98,5 +110,17 @@ created (Transform): __j5 <- value
 inlined (Transform): __j5 -> value
 dropped (Transform): __j3
 dropped (Transform): __j4
+created (Conv): a___d1 <- __h148
+merged (Conv): __h148 -> a___d1
+created (Conv): b___d2 <- __h151
+merged (Conv): __h151 -> b___d2
+created (Conv): a_ULE_b___d3 <- RL_pick_T
+created (Conv): NOT_a_ULE_b___d4 <- RL_pick_F
+created (Schedule): CAN_FIRE_RL_pick_T <- RL_pick_T
+created (Schedule): CAN_FIRE_RL_pick_F <- RL_pick_F
+created (Schedule): CAN_FIRE_value <- value
+created (Schedule): WILL_FIRE_RL_pick_T <- RL_pick_T
+created (Schedule): WILL_FIRE_RL_pick_F <- RL_pick_F
+created (Schedule): WILL_FIRE_value <- value
 
 -----

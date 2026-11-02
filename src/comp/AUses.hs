@@ -72,6 +72,7 @@ import Position
 import Id
 import FStringCompat
 import Data.List(union, partition, foldl')
+import Data.Maybe(maybeToList)
 import Util
 import PPrint
 import PVPrint
@@ -79,7 +80,8 @@ import ErrorUtil(internalError)
 import Prim
 import IntLit
 import Control.Monad(liftM, mapAndUnzipM)
-import Control.Monad.State.Strict(State, runState, get, put)
+import Control.Monad.State.Strict(State, runState, get, put, modify)
+import IExpandMeta(PassTag(..), MetaEvent(..))
 -- import Debug.Trace
 
 
@@ -513,7 +515,15 @@ data UCState = UCState { nextNo :: !Int,
                          new_defs :: [ADef],
                          defMap :: DefMap,
                          defUseMap :: DefUseMap,
-                         cseMap :: M.Map AExpr (AId, AType)
+                         cseMap :: M.Map AExpr (AId, AType),
+                         -- the def, rule or instance whose uses are
+                         -- being computed, which a def newDef makes
+                         -- meanwhile is Created from in the ledger
+                         uc_owner :: Maybe Id,
+                         -- the ledger events (IExpandMeta), most recent
+                         -- first; consed unevaluated by newDef, which
+                         -- reads no counter for them
+                         uc_events :: [MetaEvent]
                        }
 
 type UCM a = State (UCState) a
@@ -533,7 +543,7 @@ getDefUses i = do
       dm <- getDefMap
       let err = errNoDef i
       let e = M.findWithDefault err i dm
-      uses <- eDomain e
+      uses <- withOwnerUC i (eDomain e)
       s <- get
       let um' = M.insert i uses (defUseMap s)
       put (s { defUseMap = um' })
@@ -547,12 +557,24 @@ initUCState defs = UCState {
                      -- is throwing away props incorrect?
                      cseMap = M.fromList [(e, (i,t)) | ADef i t e _props <- defs ],
                      defMap = M.fromList [(i, e) | ADef i _ e _props <- defs ],
-                     defUseMap = M.empty
+                     defUseMap = M.empty,
+                     uc_owner = Nothing,
+                     uc_events = []
                    }
 
-runUCState :: [ADef] -> UCM a -> (a, [ADef])
-runUCState defs m = (res, new_defs s)
+-- the result, the defs made and the ledger events (oldest first)
+runUCState :: [ADef] -> UCM a -> (a, [ADef], [MetaEvent])
+runUCState defs m = (res, new_defs s, reverse (uc_events s))
    where (res, s) = runState m (initUCState defs)
+
+-- compute under the given def, rule or instance as the owner
+withOwnerUC :: Id -> UCM a -> UCM a
+withOwnerUC i m = do
+  saved <- liftM uc_owner get
+  modify (\ s -> s { uc_owner = Just i })
+  r <- m
+  modify (\ s -> s { uc_owner = saved })
+  return r
 
 aUsesPref :: String
 aUsesPref = "__duses"
@@ -574,7 +596,8 @@ newDef e = do
   s <- get
   let new_defs' = def : (new_defs s)
   let cseMap' = M.insert e (i,t) (cseMap s)
-  put (s { new_defs = new_defs', cseMap = cseMap' })
+  let ev = Created PTSchedule i (maybeToList (uc_owner s))
+  put (s { new_defs = new_defs', cseMap = cseMap', uc_events = ev : uc_events s })
   return (i, t)
 
 getCseMap :: UCM (M.Map AExpr (AId, AType))
@@ -758,9 +781,11 @@ addTrue e uc
 -- ==============================
 -- Function: Build the RuleUsesMap and use it to build the MethodUsesMap
 
-buildUseMaps :: [ADef] -> [Rule] -> [AVInst] -> (RuleUsesMap, MethodUsesMap, [ADef])
-buildUseMaps defs rules avis = (rum, mum, reverse new_defs)
-  where ((rum, mum), new_defs) = runUCState defs m
+-- the two maps, the defs made for use conditions and their ledger events
+buildUseMaps :: [ADef] -> [Rule] -> [AVInst]
+             -> (RuleUsesMap, MethodUsesMap, [ADef], [MetaEvent])
+buildUseMaps defs rules avis = (rum, mum, reverse new_defs, events)
+  where ((rum, mum), new_defs, events) = runUCState defs m
         m = do rum <- ruleUsesMap rules
                -- traceM (ppReadable rum)
                mum <- createMethodUsesMap rum avis
@@ -768,7 +793,8 @@ buildUseMaps defs rules avis = (rum, mum, reverse new_defs)
 
 ruleUsesMap :: [Rule] -> UCM RuleUsesMap
 ruleUsesMap rules = liftM M.fromList (mapM f rules)
-  where f r = do ru <- rUses r
+  where f r = withOwnerUC (ruleName r) $
+              do ru <- rUses r
                  let rp = aAnds (rulePred r)
                  return (ruleName r, (rp, ru))
 
@@ -1005,7 +1031,7 @@ invertRuleUsesMap rMap =
 -- the defUseMap and the defMap instead of reusing them
 aInstUseMap :: [AVInst] -> UCM [(AId, ExprUses)]
 aInstUseMap avis = mapM iUses avis
-  where iUses avi = do
+  where iUses avi = withOwnerUC (avi_vname avi) $ do
           arg_uses <- (mapM eDomain (avi_iargs avi) >>= mergeExprUsesM)
           return (avi_vname avi, arg_uses)
 

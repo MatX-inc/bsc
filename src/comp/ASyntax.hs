@@ -185,15 +185,19 @@ data APackage = APackage {
             -- proof obligations which have not yet been discharged
     apkg_proof_obligations :: [(ProofObligation AExpr, MsgFn)],
             -- the evaluator's metadata table and the ledger of what the
-            -- passes since elaboration did to the def and rule ids
-            -- (IExpandMeta): set by aConv from the IModule, kept by
-            -- every pass's record update, read by nothing that orders
+            -- passes since elaboration did to the def, rule, method and
+            -- instance ids (IExpandMeta): set by aConv from the IModule
+            -- with its own events, appended to by every pass that
+            -- renames, merges, inlines, creates or drops an id, kept by
+            -- the others' record updates, read by nothing that orders
             -- or chooses; not serialized (Bin APackage writes nothing
             -- and reads the empty ledger), never in the .ba: -bxref
-            -- writes it to the module's .bxref file (GenBXref).  Strict,
-            -- so that a construction that omits it is a compile-time
-            -- error.
-    apkg_meta :: !MetaLedger
+            -- writes it to the module's .bxref file (GenBXref).  Lazy,
+            -- and the last field the NFData instance forces, so that
+            -- the events a pass appends are first demanded by the
+            -- stage's deepseq after every other field, when every id
+            -- they name has been forced by the pass itself.
+    apkg_meta :: MetaLedger
     } deriving (Eq, Show)
 
 instance NFData APackage where
@@ -295,8 +299,9 @@ data ASPackage = ASPackage {
         -- user comments to be included in the output RTL
         aspkg_comment_info :: ASPCommentInfo,
         -- the metadata table and ledger (see apkg_meta): set by aState
-        -- from the APackage, kept by every pass's record update
-        aspkg_meta :: !MetaLedger
+        -- from the APackage with its own events, appended to by the
+        -- passes after it; lazy and forced last, as apkg_meta is
+        aspkg_meta :: MetaLedger
     }
         deriving (Eq, Show)
 

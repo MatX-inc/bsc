@@ -46,7 +46,7 @@ resolved: 2 of 5 defs and rules stand for other ids
 
 -----
 === metadata (MetaMerge sysMetaMerge):
-ledger after dropundet: 223 sites, 11 contexts, 8 roots, 8 defs, 40 events
+ledger after dropundet: 223 sites, 11 contexts, 8 roots, 8 defs, 53 events
 inlined (Inline): __h324 -> __h325
 inlined (Inline): __h325 -> __h326
 inlined (Inline): __h251 -> __h253
@@ -87,10 +87,23 @@ renamed (Transform): __j4 -> __h326
 created (Transform): __j6 <- value
 inlined (Transform): __j6 -> value
 dropped (Transform): __j3
+created (Conv): a___d1 <- __h247
+merged (Conv): __h247 -> a___d1
+created (Conv): b___d2 <- __h250
+merged (Conv): __h250 -> b___d2
+created (Conv): a_ULE_b___d3 <- __h326
+created (Conv): IF_a_ULE_b_THEN_b_ELSE_a___d4 <- __h326
+merged (Conv): __h326 -> IF_a_ULE_b_THEN_b_ELSE_a___d4
+created (Conv): IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5 <- __i7
+merged (Conv): __i7 -> IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): CAN_FIRE_value <- value
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_value <- value
 
 -----
 === metadata (MetaMerge sysMetaMerge):
-ledger after finalcleanup: 223 sites, 11 contexts, 8 roots, 8 defs, 40 events
+ledger after finalcleanup: 223 sites, 11 contexts, 8 roots, 8 defs, 53 events
 inlined (Inline): __h324 -> __h325
 inlined (Inline): __h325 -> __h326
 inlined (Inline): __h251 -> __h253
@@ -131,5 +144,18 @@ renamed (Transform): __j4 -> __h326
 created (Transform): __j6 <- value
 inlined (Transform): __j6 -> value
 dropped (Transform): __j3
+created (Conv): a___d1 <- __h247
+merged (Conv): __h247 -> a___d1
+created (Conv): b___d2 <- __h250
+merged (Conv): __h250 -> b___d2
+created (Conv): a_ULE_b___d3 <- __h326
+created (Conv): IF_a_ULE_b_THEN_b_ELSE_a___d4 <- __h326
+merged (Conv): __h326 -> IF_a_ULE_b_THEN_b_ELSE_a___d4
+created (Conv): IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5 <- __i7
+merged (Conv): __i7 -> IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): CAN_FIRE_value <- value
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_value <- value
 
 -----

@@ -30,6 +30,7 @@ import Error(internalError, ErrMsg(..), showErrorList, ErrorHandle)
 import Id
 import Util(unzipWith, ordPairBy)
 import Util(mapSnd)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 -- | Method name mapped to condition of usage
 type MethodCondMap = M.Map AMethodId AExpr
@@ -180,9 +181,16 @@ aAddCFConditionWires errh r alldefs flags apkg schedinfo =
    else do
     rWireInstFn <- getRWireInstFn errh flags r alldefs
     let mkWireInst r (MethodId obj meth)= rWireInstFn (mkCFCondWireInstId r obj meth)
-    let newWires = concatMap (buildWireInsts ruleMethodMap mkWireInst) (S.toList cfRules)
+    let newWiresByRule = [ (r, buildWireInsts ruleMethodMap mkWireInst r)
+                         | r <- S.toList cfRules ]
+        newWires = concatMap snd newWiresByRule
+        -- the ledger: each condition wire is an instance Created from
+        -- the rule whose method-call conditions it carries
+        events = [ Created PTAddCFConditionWires (avi_vname w) [r]
+                 | (r, ws) <- newWiresByRule, w <- ws ]
     return (apkg { apkg_rules = rules',
-                   apkg_state_instances = oldState ++ newWires },
+                   apkg_state_instances = oldState ++ newWires,
+                   apkg_meta = appendEvents events (apkg_meta apkg) },
             schedinfo { asi_resource_alloc_table = newRat,
                         asi_method_uses_map = newUseMap })
 

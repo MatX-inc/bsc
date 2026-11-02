@@ -2,7 +2,9 @@ module ARankMethCalls(aRankMethCalls) where
 
 import Data.List
 import Data.Maybe
+import qualified Data.Set as S
 import Control.Monad(when)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 import ASyntax
 import FStringCompat
@@ -79,6 +81,8 @@ aRankMethCallsInternal errh orig_ranks orig_pkg =
            find_rule name = maybeToList (lookup name rule_map)
            find_meth name = maybeToList (lookup name method_map)
            -- rank local definitions and all defs they refer to
+           -- (each ranked copy with its ledger event: Created from the
+           -- def it was copied from)
            cvt_defs v done_defs done_ids [] = done_defs
            cvt_defs v done_defs done_ids (def_id:def_ids)
                | def_id `elem` done_ids = cvt_defs v done_defs done_ids def_ids
@@ -86,7 +90,9 @@ aRankMethCallsInternal errh orig_ranks orig_pkg =
                    let (ranked_def, more_def_ids) =
                            rankMethCalls v (find_def def_id)
                        fixup_name def@(ADef { adef_objid = name }) =
-                           def { adef_objid = rankId v name }
+                           let name' = rankId v name
+                           in  (def { adef_objid = name' },
+                                Created PTRankMethCalls name' [name])
                        -- XXX rename def LHS
                        new_def_ids = def_ids `union` (more_def_ids \\ done_ids)
                    in  cvt_defs v (map fixup_name ranked_def ++ done_defs)
@@ -100,19 +106,27 @@ aRankMethCallsInternal errh orig_ranks orig_pkg =
                        -- XXX rename LHS
                        rankMethCalls ver (concatMap find_rule meth_rule_names)
                    defs_to_rewrite = defs_to_rewrite_1 `union` defs_to_rewrite_2
-                   defs = cvt_defs ver [] [] defs_to_rewrite
-               in  (methods, rules, defs)
-           (methss, ruless, defss) =
-               unzip3 [convert_one_rank ver meths_rules
+                   (defs, def_events) = unzip (cvt_defs ver [] [] defs_to_rewrite)
+               in  (methods, rules, defs, def_events)
+           (methss, ruless, defss, evss) =
+               unzip4 [convert_one_rank ver meths_rules
                        | (meths_rules, ver) <- zip ranks_with_rdys [0..]]
            -- add methods not mentioned in performance spec
            unranked_names_with_rdys =
                concat [[m, mkRdyId m] | m <- unranked_names]
            unranked_meths = concatMap find_meth unranked_names_with_rdys
+           -- the ledger: the ranked copies, then every original def,
+           -- which the copies replace, is Dropped
+           new_defs = concat defss
+           new_def_ids = S.fromList (map adef_objid new_defs)
+           events = concat evss ++
+                    [ Dropped PTRankMethCalls i
+                    | (i, _) <- def_map, not (S.member i new_def_ids) ]
 --       mapM_ (traceM . ('\n' :) . show) ranked_ifc
        return (orig_pkg { apkg_interface = concat methss ++ unranked_meths,
                           apkg_rules = concat ruless,
-                          apkg_local_defs = concat defss })
+                          apkg_local_defs = new_defs,
+                          apkg_meta = appendEvents events (apkg_meta orig_pkg) })
 
 -- class of types which contain methods and method calls with a function
 -- to append a rank to all method definitions and calls
