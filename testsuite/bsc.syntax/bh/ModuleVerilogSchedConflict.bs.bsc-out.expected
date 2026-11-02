@@ -1,0 +1,6 @@
+checking package dependencies
+compiling ModuleVerilogSchedConflict.bs
+Error: "ModuleVerilogSchedConflict.bs", line 13, column 43: (T0159)
+  The scheduling annotation `get <> set' contradicts the annotation `get <
+  set' at "ModuleVerilogSchedConflict.bs", line 13, column 20. A pair of
+  methods can have only one scheduling relation.

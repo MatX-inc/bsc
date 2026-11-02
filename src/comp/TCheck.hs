@@ -11,7 +11,8 @@ import Data.Ix(range)
 import ListMap(lookupWithDefaultBy)
 import SCC(scc)
 import Util(findDup, concatMapM,
-            headOrErr, initOrErr, lastOrErr, fromJustOrErr)
+            headOrErr, initOrErr, lastOrErr, fromJustOrErr,
+            ordPair, stableOrdNub)
 import Util(fst3)
 import IntLit
 import IntegerUtil(mask)
@@ -44,7 +45,8 @@ import CType(noTyVarNo, getTyVarId, getArrows, isTConArrow, leftTyCon,
              isTypeActionValue, isTypeActionValue_, getActionValueArg,
              splitTAp, tyConArgs, cTVarKind)
 import VModInfo(VSchedInfo, VFieldInfo(..), VArgInfo(..), VPort)
-import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
+import SchedInfo(SchedInfo(..), MethodConflictInfo(..),
+                 MethodConflictOp(CF, SB, SBR, C))
 import SymTab
 import Pragma(PProp(..))
 import CSubst
@@ -849,6 +851,11 @@ tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps) = do
              let mci = methodConflictInfo sch
              in  [ m | (m,m') <- sSB mci, m == m' ]
     chkSchedInfo methnames sch
+    -- Only Classic syntax leaves a method's output and enable to chkVeriIfc;
+    -- the BVI parser requires one of them (EForeignModOutputOrEnable)
+    let isClassicFormat (Method { vf_outputs = [], vf_enable = Nothing }) = True
+        isClassicFormat _ = False
+        is_classic_import = ui && all isClassicFormat fields
     let fieldnames = methnames ++ clocknames ++ resetnames ++ inoutnames
 --    traceM("Field names: " ++ ppReadable(fieldnames))
     -- monadic evaluations for ty below
@@ -869,8 +876,12 @@ tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps) = do
                                     EForeignModMissingField (pfpString i)
                                         name_str name_pos_str)
                         _ -> do fields' <- mapM (chkVeriIfc self_sb_methods) fields
+                                sch' <- if is_classic_import
+                                        then chkClassicSchedInfo
+                                                 (getPosition exp) fields' sch
+                                        else return sch
                                 let e' = CmoduleVerilogT ty name' ui clks rsts
-                                                         ses' fields' sch ps
+                                                         ses' fields' sch' ps
                                 return (eq_ps ++ nps {- ++ concat pss -} ++ concat qss, e')
      _ -> err (getPosition exp, ENotAnInterface)
 
@@ -3269,6 +3280,81 @@ chkUnsyncMeths field_set ms =
     in  case unknown of
             [] -> return ()
             i : _ -> err (getIdPosition i, EUnboundField (pfpString i))
+
+-- Rejects contradictory annotations (T0159) and gives unannotated pairs the
+-- BVI defaults (P0200), as mkVModInfo needs each pair annotated exactly once.
+chkClassicSchedInfo :: Position -> [VFieldInfo] -> VSchedInfo -> TI VSchedInfo
+chkClassicSchedInfo pos fields si = do
+    let mci = methodConflictInfo si
+        -- The Classic parser gives only these four relations.  Sorting by
+        -- position reports a contradiction at the later annotation.
+        anns = sortOn annPos
+                   [ (i1, op, i2) | (op, ps) <- [(CF, sCF mci), (SB, sSB mci),
+                                                 (SBR, sSBR mci), (C, sC mci)],
+                                    (i1, i2) <- ps ]
+        annPos (i1, _, i2) = (getPosition i1, getPosition i2)
+        annPair (i1, _, i2) = ordPair (i1, i2)
+        -- the operators the Classic parser reads
+        opStr CF = "<>"
+        opStr SB = "<"
+        opStr SBR = "<<"
+        opStr C = "><"
+        opStr op = show op
+        annStrs (i1, op, i2) = (pfpString i1, opStr op, pfpString i2)
+        -- CF and C are symmetric, so for them the swapped pair is a repeat
+        isRepeat (a1, op1, b1) (a2, op2, b2) =
+            (op1 == op2) &&
+            ((op1 == CF) || (op1 == C) || ((a1, b1) == (a2, b2)))
+        chkAnn (seen, es) ann@(i1, _, _) =
+            case M.lookup (annPair ann) seen of
+              Nothing -> (M.insert (annPair ann) ann seen, es)
+              Just prev@(p1, _, _)
+                | isRepeat prev ann -> (seen, es)
+                | otherwise ->
+                    let e = (getPosition i1,
+                             EContradictorySchedule (annStrs ann)
+                                 (getPosition p1) (annStrs prev))
+                    in  (seen, e : es)
+        (annotated, conflicts) = foldl' chkAnn (M.empty, []) anns
+    unless (null conflicts) $
+        errs "chkClassicSchedInfo" (reverse conflicts)
+
+    let isAnnotated m1 m2 = M.member (ordPair (m1, m2)) annotated
+        values  = [ n | Method { vf_name = n, vf_enable = Nothing } <- fields ]
+        actions = [ n | Method { vf_name = n, vf_enable = Just _ } <- fields ]
+        -- the missing pairs among ms, each grouped under its earlier method
+        missingAmong ms = [ (m, ms') | (m : rest) <- tails ms,
+                                       let ms' = filter (not . isAnnotated m)
+                                                        (m : rest),
+                                       not (null ms') ]
+        default_cf = missingAmong values
+        default_sb = [ (v, acts) | v <- values,
+                                   let acts = filter (not . isAnnotated v)
+                                                     actions,
+                                   not (null acts) ]
+        default_c  = missingAmong actions
+        -- one warning for the methods missing the same list of annotations
+        defaultWarns op ds =
+            let firsts = M.fromListWith (++)
+                             [ (ms, [m]) | (m, ms) <- reverse ds ]
+            in  [ (pos, WNoSchedulingAnnotation (map pfpString m1s) op
+                                                (map pfpString ms))
+                  | ms <- stableOrdNub (map snd ds),
+                    Just m1s <- [M.lookup ms firsts] ]
+        expand groups = [ (m1, m2) | (m1, ms) <- groups, m2 <- ms ]
+    -- TI keeps the latest warning first, so these are added in reverse to be
+    -- reported in the BVI parser's order
+    mapM_ twarn $ reverse $
+        defaultWarns "conflict-free" default_cf ++
+        defaultWarns "conflict" default_c ++
+        defaultWarns "sequenced-before" default_sb
+    -- sSB and sSBR may repeat a pair (mkVModInfo removes repeats of the
+    -- symmetric CF and C pairs itself)
+    let mci' = mci { sCF  = sCF mci ++ expand default_cf,
+                     sSB  = stableOrdNub (sSB mci) ++ expand default_sb,
+                     sSBR = stableOrdNub (sSBR mci),
+                     sC   = sC mci ++ expand default_c }
+    return (si { methodConflictInfo = mci' })
 
 -----------------------------------------------------------------------------
 
