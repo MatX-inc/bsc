@@ -7,10 +7,11 @@
 # The byte-level properties (each mode writes only its own files, the .bi
 # of the two modes is the same bytes, an edit inside bodies leaves the .bi
 # unchanged and changes the .bcheck, an interface edit changes both, the
-# .bi bytes do not depend on the directory, the .bcheck's depend on the
-# directory unless -remap-path-prefix maps it, a .bi on the path changes
-# nothing about a full compile, the .bi holds the .bo's signature and the
-# .bcheck prints as the -dliftdicts dump) are checked by run_checkonly.sh.
+# .bi bytes depend neither on the directory nor on whether the imports
+# were read as .bo or as .bi, the .bcheck's depend on the directory unless
+# -remap-path-prefix maps it, a .bi on the path changes nothing about a
+# full compile, the .bi holds the .bo's signature and the .bcheck prints as
+# the -dliftdicts dump) are checked by run_checkonly.sh.
 
 set here [pwd]
 set testdir [file join $srcdir $subdir]

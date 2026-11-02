@@ -9,7 +9,7 @@ module BinData ( Byte
                , getN, getB, getI -- , getBytesRead
                , Bin(..)
                , section
-               , encode, encodeWith, decode, decodeWithHash
+               , encode, encodeWith, encodeNormalised, decode, decodeWithHash
                ) where
 
 {- Routines for converting structures to/from byte strings.
@@ -1547,6 +1547,29 @@ share' k x bc =
             Nothing    -> (out_data $ do { putI 0; writeBytes x },
                            addKey k x bc)
 
+-- The interface writer's sharing (encodeNormalised): the Position
+-- transform is applied to an Id or a Type before its key is computed, as
+-- share applies it to a Position, so the key is the value as written and
+-- two occurrences that write the same bytes share one entry.  share keys
+-- an Id or a Type on its original positions, which the .bo writer's bytes
+-- depend on; under a transform that drops lines and columns
+-- (Position.interfacePosition) that keying gave one imported name two
+-- entries when it had been read from a .bo (full positions) and one when
+-- it had been read from a .bi (positions already normalised).  The TISort
+-- in a type constructor's key is left as it is: Ord on Type, TyCon and Id
+-- ignores positions.  Of the Id properties only IdPInlinedPositions holds
+-- positions; IExpand attaches it to method calls, and no signature
+-- carries it.  No IType reaches an interface file (its payload is a
+-- CSignature and the closure's package names), so IT, like S and P, is
+-- keyed as in share.
+shareNormalised :: (Position -> Position) -> BinElem -> BinCache ->
+                   ([BinElem], BinCache)
+shareNormalised normP (I i) bc =
+    share' (id_key (setIdPosition (normP (getIdPosition i)) i)) i bc
+shareNormalised normP (T t) bc =
+    share' (type_key (mapTypePosition normP t)) t bc
+shareNormalised normP be bc = share normP be bc
+
 
 compress :: (Position -> Position) -> [BinElem] -> [BinElem]
 compress remapP bes = compress' (bes, unknownCache)
@@ -1557,6 +1580,18 @@ compress remapP bes = compress' (bes, unknownCache)
           let (bes, cache') = share remapP x cache
           in -- trace ((show x) ++ " -> " ++ (show bes)) $
              compress' (bes ++ xs, cache')
+        compress' ([], _) = []
+
+-- compress with shareNormalised: the same loop, kept apart so that the
+-- .bo writer's path above is untouched
+compressNormalised :: (Position -> Position) -> [BinElem] -> [BinElem]
+compressNormalised normP bes = compress' (bes, unknownCache)
+  where compress' ((x@(B _):xs), cache) = x:(compress' (xs, cache))
+        compress' ((x@(Start _):xs), cache) = x:(compress' (xs, cache))
+        compress' ((x@(End):xs), cache) = x:(compress' (xs, cache))
+        compress' ((x:xs), cache) =
+          let (bes, cache') = shareNormalised normP x cache
+          in compress' (bes ++ xs, cache')
         compress' ([], _) = []
 
 -- Run the Out monad and extract a byte stream.  The resulting
@@ -1581,6 +1616,19 @@ encode = encodeWith id
 -- (-remap-path-prefix; see share)
 encodeWith :: (Bin a) => (Position -> Position) -> a -> [Byte]
 encodeWith remapP x = runOutWith remapP (toBin x)
+
+-- encode with a Position transform applied to the stored positions and to
+-- the sharing keys of Ids and types (see shareNormalised); the interface
+-- writers (GenBin.genBiFile) use it, the .bo and .ba writers
+-- encodeWith
+encodeNormalised :: (Bin a) => (Position -> Position) -> a -> [Byte]
+encodeNormalised normP x =
+    let Out xs _ = toBin x
+        bes   = compressNormalised normP $ toList xs
+        bytes = concat [ bs | B bs <- bes ]
+    in if trace_bindata
+       then trace (showHist (buildHistogram bes)) $ bytes
+       else bytes
 
 runIn :: In a -> BS.ByteString -> Bool -> (a, Int, String)
 runIn (In f) bs do_hash =

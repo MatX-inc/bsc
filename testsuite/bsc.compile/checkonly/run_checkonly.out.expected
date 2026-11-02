@@ -22,6 +22,7 @@ DIFFER A.bcheck (interface edit)
 IDENTICAL A.bi (other directory)
 IDENTICAL A.bi (absolute path)
 NO-DIRECTORY-IN A.bi
+IDENTICAL A.bi (imports read as .bo)
 IDENTICAL A.bo (A.bi present)
 IDENTICAL B.bo (A.bi present or absent)
 SAME-SIGNATURE dumpbo -bi A.bo A.bi

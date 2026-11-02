@@ -4,9 +4,10 @@
 # <Pkg>.bi, the same bytes, and <Pkg>.bcheck, the typechecked package, and
 # nothing else.  An edit inside definition bodies leaves the .bi unchanged
 # and changes the .bcheck; an interface edit changes both.  The .bi bytes
-# do not depend on the directory; the .bcheck keeps real positions, so its
-# bytes name the directory unless -remap-path-prefix maps it, and are the
-# same from two directories mapped to one prefix.  A .bi on the path changes nothing
+# depend neither on the directory nor on whether the imports were read as
+# .bo or as .bi; the .bcheck keeps real positions, so its bytes name the
+# directory unless -remap-path-prefix maps it, and are the same from two
+# directories mapped to one prefix.  A .bi on the path changes nothing
 # about a full compile.  The signature a .bi holds is the one its .bo
 # holds, and the package a .bcheck holds (the typechecked package after
 # dictionary lifting, with its lifted dictionaries) prints as the
@@ -18,12 +19,13 @@ BSC=${BSC:-bsc}
 DUMPBO=${DUMPBO:-dumpbo}
 
 rm -rf work
-mkdir -p work/one work/two work/three work/sub/deeper work/remap/a work/remap/b \
-         work/full work/kinded work/defaults
+mkdir -p work/one work/two work/three work/sub/deeper work/libbo work/frombo \
+         work/remap/a work/remap/b work/full work/kinded work/defaults
 cp A1.bs work/one/A.bs
 cp A2.bs work/two/A.bs
 cp A3.bs work/three/A.bs
 cp A1.bs work/sub/deeper/A.bs
+cp A1.bs work/frombo/A.bs
 cp A1.bs work/remap/a/A.bs
 cp A1.bs work/remap/b/A.bs
 cp A1.bs work/full/A.bs
@@ -125,6 +127,15 @@ check "IDENTICAL A.bi (other directory)" cmp -s work/one/A.bi work/sub/deeper/A.
 ( cd work/sub/deeper && rm -f A.bi A.bcheck && $BSC -signature-only "$PWD/A.bs" ) > work/sub-abs.log 2>&1
 check "IDENTICAL A.bi (absolute path)" cmp -s work/one/A.bi work/sub/deeper/A.bi
 check "NO-DIRECTORY-IN A.bi" sh -c '! grep -qa "work/one" work/one/A.bi'
+
+# nor do the .bi bytes depend on whether the imports were read as .bo or
+# as .bi: the installed Libraries carry a .bi beside every .bo, so a path
+# with the Preludes' .bo files alone makes the compile read them as .bo
+BLUESPECDIR=${BLUESPECDIR:-$($BSC -help | sed -n 's/^Bluespec directory: //p')}
+LIBDIR=$BLUESPECDIR/Libraries
+cp "$LIBDIR/Prelude.bo" "$LIBDIR/PreludeBSV.bo" work/libbo/
+( cd work/frombo && $BSC -signature-only -p ../libbo A.bs ) > work/frombo.log 2>&1
+check "IDENTICAL A.bi (imports read as .bo)" cmp -s work/one/A.bi work/frombo/A.bi
 
 # a full compile is unaffected by a .bi on the path: the .bo of A and of B
 # are the same bytes with and without A.bi present

@@ -72,7 +72,12 @@ readBinFile errh nm s =
 -- The Position transform the .bi writer is given normalises every stored
 -- position (Position.interfacePosition): a signature carries the position
 -- of every Id in it, and the lists of use positions of CItype and CIclass,
--- so without it an edit that only moves lines would move the bytes.
+-- so without it an edit that only moves lines would move the bytes.  It
+-- is applied to the sharing keys as well (BinData.encodeNormalised): an Id
+-- read from a .bo carries a line and a column that one read from a .bi
+-- does not, and keyed on those one imported name would be written twice
+-- from the one and once from the other.  The .bcheck writer is encodeWith,
+-- the .bo's, since its positions are real.
 --
 -- The .bcheck is the typechecked package itself, after Simplify and
 -- LiftDicts (bsc.hs genCheckOnly: the form a full compile hands to IConv),
@@ -102,7 +107,7 @@ genBiFile :: ErrorHandle -> (Position -> Position) ->
              String -> [Id] -> CSignature -> IO ()
 genBiFile errh remapP fn depends bi_sig =
     writeBinaryFileCatch errh fn
-        (biHeader ++ encodeWith remapP (depends, bi_sig))
+        (biHeader ++ encodeNormalised remapP (depends, bi_sig))
 
 readBiFile :: ErrorHandle -> String -> B.ByteString ->
               IO ([Id], CSignature)
