@@ -1018,6 +1018,7 @@ data ErrMsg =
 
         | EEnableNotHigh String [String]
         | EEnableAlwaysLow String [String]
+        | EAlwaysEnabledConflict String String
 
         | ESplitInsideNoSplit String
 
@@ -3998,6 +3999,15 @@ getErrorText (WRuleUndetPred is_meth rule poss) =
               s2par ("Don't-care values were introduced at the following positions:") $$
               nest 4 (vcat (map (text . prPosition) poss))
     )
+
+getErrorText (EAlwaysEnabledConflict m1 m2) =
+    (Generate 129, empty,
+     s2par ("The methods " ++ quote m1 ++ " and " ++ quote m2 ++
+            " are always enabled, but the schedule of this module does" ++
+            " not allow them to execute in the same cycle.  An always" ++
+            " enabled method executes in every cycle, so the methods must" ++
+            " be conflict-free or sequenced (use -show-schedule to see" ++
+            " the schedule)."))
 
 
 ---------------------------------------------------------------------------

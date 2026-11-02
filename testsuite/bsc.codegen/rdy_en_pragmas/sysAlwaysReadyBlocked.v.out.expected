@@ -1,0 +1,6 @@
+cycle 0: x=0 r fires=0  atomic val (order val,r)=0 (order r,val)=0  hardware val=0
+cycle 1: x=1 r fires=1  atomic val (order val,r)=0 (order r,val)=2  hardware val=1
+UNSOUND: val=1 while r fires, but every serialization of r and val gives 0 or 2
+cycle 2: x=2 r fires=0  atomic val (order val,r)=0 (order r,val)=0  hardware val=0
+cycle 3: x=3 r fires=1  atomic val (order val,r)=0 (order r,val)=4  hardware val=3
+UNSOUND: val=3 while r fires, but every serialization of r and val gives 0 or 4

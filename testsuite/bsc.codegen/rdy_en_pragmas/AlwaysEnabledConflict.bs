@@ -1,0 +1,19 @@
+package AlwaysEnabledConflict where
+
+-- G0129: always_enabled a and b both write c, so a C b.  Demoted, the
+-- hardware adds 1 to c per cycle where any serial order adds 3.
+
+interface AEConflict =
+    a   :: Action {-# always_enabled #-}
+    b   :: Action {-# always_enabled #-}
+    cur :: Bit 8  {-# always_ready #-}
+
+{-# synthesize mkAEConflict #-}
+mkAEConflict :: Module AEConflict
+mkAEConflict =
+  module
+    c :: Reg (Bit 8) <- mkReg 0
+    interface
+      a = c := c + 1
+      b = c := c + 2
+      cur = c
