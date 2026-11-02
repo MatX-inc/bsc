@@ -40,6 +40,7 @@ import Eval
 import Version(bscVersionStr)
 import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..),
              ErrorHandle, bsError, bsErrorNoExit, bsWarning,
+             bsErrorDemotable,
              showErrorList, showWarningList, getErrMsgTag)
 import ErrorMonad(ErrorMonad(..))
 import PFPrint
@@ -48,7 +49,7 @@ import SCC(scc,tsort)
 import Id(Id, emptyId, getIdString, getIdBaseString, getIdPosition,
           isRdyId, addToBase, mk_homeless_id, mkIdWillFire, addSuffix)
 import Position
-import Flags(Flags(..))
+import Flags(Flags(..), MsgListFlag(..))
 import VModInfo(vSched, vFields, VSchedInfo, VMethodConflictInfo, VFieldInfo(..))
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import IOUtil(progArgs)
@@ -1737,6 +1738,17 @@ aSchedule_step3 errh flags prefix pps amod ( scConflictMap0
       traceM (pp $ sep [text "External Scheduling Info:",
                         nest 2 $ pPrint PDReadable 0 vSchedInfo])
 
+  -- G0134 is demotable, for environments that keep conflicting
+  -- always_enabled methods from acting in the same cycle
+  let ae_errs = checkAlwaysEnabledMethods nm pps ifs vSchedInfo
+      ae_demoted = case (demoteErrors flags) of
+                     AllMsgs -> True
+                     SomeMsgs tags -> "G0134" `elem` tags
+  when (not (null ae_errs)) $
+    if ae_demoted
+    then convIO $ bsErrorDemotable errh ae_errs
+    else throwError (EMsgs ae_errs)
+
   -- ====================
 
   -- make a reachables map, which includes all edges (even through methods)
@@ -3351,6 +3363,31 @@ findUnsyncMethods ifcRuleNames sub_schedinfo_map method_meth_map =
      | r <- ifcRuleNames
      , any is_unsync (M.findWithDefault [] r method_meth_map)
      ]
+
+-- --------------------
+
+-- always_enabled methods execute in every cycle, so each pair of them must be
+-- CF, SB or SBR in vSchedInfo (split methods reassembled).
+checkAlwaysEnabledMethods :: AId -> [PProp] -> [AIFace] -> VSchedInfo ->
+                             [EMsg]
+checkAlwaysEnabledMethods moduleId pps ifs vsi =
+    let mci = methodConflictInfo vsi
+        ae_ifs = [ m | m <- ifs, aIfaceHasAction m,
+                       isAlwaysEn pps (aif_name m) ]
+        ae_meths = map aif_name ae_ifs
+        -- only a method with several ports can execute twice in one cycle
+        multiPorted m = case aif_fieldinfo m of
+                          Method { vf_mult = n } -> n > 1
+                          _ -> False
+        self_pairs = [ (aif_name m, aif_name m) | m <- ae_ifs, multiPorted m ]
+        composable = S.fromList (sCF mci ++ sSB mci ++ sSBR mci)
+        isComposable (m1,m2) = S.member (m1,m2) composable ||
+                               S.member (m2,m1) composable
+        bad_pairs = filter (not . isComposable)
+                           (uniquePairs ae_meths ++ self_pairs)
+        mkErr (m1,m2) = (getPosition moduleId,
+                         EAlwaysEnabledConflict (pfpString m1) (pfpString m2))
+    in  map mkErr bad_pairs
 
 -- --------------------
 

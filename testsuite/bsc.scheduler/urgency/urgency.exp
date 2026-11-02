@@ -38,8 +38,10 @@ compile_verilog_pass_warning_bug NoErrorDueToSeq2.bsv G0010 1082 0
 
 # --------------------------------------------------
 # always_enabled should not be allowed for modules with conflicting methods
+# (bar and baz both write the register): G0134
 
-compile_verilog_schedule_fail_bug AlwaysEnabled.bsv sysAlwaysEnabled 469
+compile_verilog_schedule_fail AlwaysEnabled.bsv sysAlwaysEnabled
+find_n_error AlwaysEnabled.bsv.bsc-sched-out G0134 1
 
 # --------------------------------------------------
 
