@@ -96,7 +96,7 @@ import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
 import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
-               IEFace(..), IDef(..), IExpr(..), fdVars)
+               IEFace(..), IDef(..), IExpr(..), IRules(..), getIRuleId, fdVars)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
@@ -113,7 +113,8 @@ import GenForeign(genForeign)
 import DefProp(DefProp(..))
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
-import IExpandMeta(renderSideFile, renderLedger, MetaLedger(..), PassTag(..))
+import IExpandMeta(renderSideFile, renderLedger, checkClosure,
+                   MetaLedger(..), ModuleMeta(..), PassTag(..))
 import ITransform(iTransform)
 import IInline(iInline)
 import IInlineFmt(iInlineFmt)
@@ -890,6 +891,7 @@ genModule
     imod_fmt <- iInlineFmt errh imod0
     iMCheck flags symt imod_fmt "Fmt inline"
     t <- dump errh flags t DFinlineFmt dumpnames imod_fmt
+    checkLedger flags "inlineFmt" imod0 imod_fmt
     stats flags DFinlineFmt imod_fmt
 
     -- Inline defs
@@ -900,12 +902,14 @@ genModule
             else imod_fmt
     iMCheck flags symt imod_inline "inline"
     t <- dump errh flags t DFinline dumpnames imod_inline
+    checkLedger flags "inline" imod_fmt imod_inline
     stats flags DFinline imod_inline
 
     start flags DFtransform
     let imod_trans = iTransform errh flags "__i" imod_inline
     iMCheck flags symt imod_trans "transform"
     t <- dump errh flags t DFtransform dumpnames imod_trans
+    checkLedger flags "transform" imod_inline imod_trans
     stats flags DFtransform imod_trans
 
     -- Split rules containing if statements
@@ -913,6 +917,7 @@ genModule
     let imod_splitif = iSplitIf flags imod_trans
     iMCheck flags symt imod_splitif "splitIf"
     t <- dump errh flags t DFsplitIf dumpnames imod_splitif
+    checkLedger flags "splitIf" imod_trans imod_splitif
     stats flags DFsplitIf imod_splitif
 
     -- Lift where possible
@@ -920,6 +925,7 @@ genModule
     let imod_lift = iLift errh flags imod_splitif
     iMCheck flags symt imod_lift "lift"
     t <- dump errh flags t DFlift dumpnames imod_lift
+    checkLedger flags "lift" imod_splitif imod_lift
     stats flags DFlift imod_lift
 
     -- Transform to simpler form (take 2)
@@ -927,6 +933,7 @@ genModule
     let imod_trans2 = iTransform errh flags "__j" imod_lift
     iMCheck flags symt imod_trans2 "transform"
     t <- dump errh flags t DFtransform dumpnames imod_trans2
+    checkLedger flags "transform" imod_lift imod_trans2
     stats flags DFtransform imod_trans2
 
     -- Inline expressions for submodule instantiation parameters
@@ -934,12 +941,15 @@ genModule
     start flags DFiparams
     imod_param <- iParams errh imod_trans2
     t <- dump errh flags t DFiparams dumpnames imod_param
+    checkLedger flags "iparams" imod_trans2 imod_param
 
     start flags DFidroprules
     imod_drop <- iDropRules errh flags imod_param
     stats flags DFidroprules imod_drop
     t <- dump errh flags t DFidroprules dumpnames imod_drop
-    t <- dumpLedger errh flags t dumpnames "idroprules" (imod_meta imod_drop)
+    checkLedger flags "idroprules" imod_param imod_drop
+    t <- dumpLedger errh flags t dumpnames "idroprules" (imodDefRuleIds imod_drop)
+             (imod_meta imod_drop)
 
     -- Generate ATS
     -- ATS stands for "Abstract Transition System" from James C. Hoe's Ph.D. thesis
@@ -1089,7 +1099,7 @@ genModule
     start flags DFdropundet
     let amod_no_undet = aDropUndet errh flags amod_no_assumps
     t <- dump errh flags t DFdropundet dumpnames amod_no_undet
-    t <- dumpLedger errh flags t dumpnames "dropundet" (apkg_meta amod_no_undet)
+    t <- dumpLedger errh flags t dumpnames "dropundet" [] (apkg_meta amod_no_undet)
 
     -- the amod doesn't change beyond this point
     let amod_final = amod_no_undet
@@ -1182,15 +1192,51 @@ genModule
 
 
 -- -dmetadata: print the metadata ledger of the package after the named
--- stage (the table's sizes and the events; IExpandMeta.renderLedger),
--- only when that dump is requested by name, as -dATSexpand is; -dall
--- does not include it, so the package dumps are what they were.
+-- stage (the table's sizes, the events and the resolution of the ids
+-- given; IExpandMeta.renderLedger), only when that dump is requested by
+-- name, as -dATSexpand is; -dall does not include it, so the package
+-- dumps are what they were.
 dumpLedger :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> String ->
-              MetaLedger -> IO TimeInfo
-dumpLedger errh flags t dumpnames stage ledger =
+              [Id] -> MetaLedger -> IO TimeInfo
+dumpLedger errh flags t dumpnames stage ids ledger =
     if isJust (lookup DFmetadata (dumps flags))
-    then dumpStr errh flags t DFmetadata dumpnames (renderLedger stage ledger)
+    then dumpStr errh flags t DFmetadata dumpnames (renderLedger stage ids ledger)
     else return t
+
+-- -metadata-check: the closure of the ledger events a stage wrote over
+-- the ids of the package it took and the package it made
+-- (IExpandMeta.checkClosure).  A violation is a pass that changed an id
+-- without an event, or an event that names an id the package does not
+-- have: a broken invariant of the ledger, which stops the compile.  Run
+-- after the stage's dump, which has forced both packages.
+checkLedger :: Flags -> String -> IModule a -> IModule a -> IO ()
+checkLedger flags stage before after =
+    when (metadataCheck flags) $
+        case checkClosure (imodLedgerIds before) (imodLedgerIds after) new_events of
+          [] -> return ()
+          ms -> internalError ("ledger closure after " ++ stage ++ ":\n" ++ unlines ms)
+  where
+    events_before = mm_events (ledgerMeta (imod_meta before))
+    events_after = mm_events (ledgerMeta (imod_meta after))
+    -- the events the stage appended, oldest first
+    new_events = reverse (take (length events_after - length events_before) events_after)
+
+-- the ids a ledger event may name on an IModule: its defs and rules
+-- (below), its methods and its instances
+imodLedgerIds :: IModule a -> S.Set Id
+imodLedgerIds imod =
+    S.fromList (imodDefRuleIds imod ++
+                map ief_name (imod_interface imod) ++
+                map fst (imod_state_insts imod))
+
+-- the defs and rules (the module's and the method bodies') of an
+-- IModule, whose resolution the ledger dump prints
+imodDefRuleIds :: IModule a -> [Id]
+imodDefRuleIds imod =
+    [ i | IDef i _ _ _ <- imod_local_defs imod ] ++
+    ruleIds (imod_rules imod) ++
+    concat [ ruleIds rs | IEFace { ief_body = Just rs } <- imod_interface imod ]
+  where ruleIds (IRules _ rs) = map getIRuleId rs
 
 -- -metadata-out: write the evaluator metadata side file of the elaborated
 -- module (IExpandMeta.renderSideFile), <module>.metadata, into the
@@ -1456,7 +1502,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
             (asCheck flags aumod "finalcleanup")
        t <- dump errh flags t DFfinalcleanup dumpnames aumod
        stats flags DFfinalcleanup aumod
-       t <- dumpLedger errh flags t dumpnames "finalcleanup" (aspkg_meta aumod)
+       t <- dumpLedger errh flags t dumpnames "finalcleanup" [] (aspkg_meta aumod)
 
        start flags DFIOproperties
        let (ioprops, ips) = getIOProps flags aumod

@@ -116,6 +116,12 @@ inlined (Transform): __j19 -> RL_r3
 inlined (Transform): __j23 -> RL_r4
 dropped (Transform): __j13
 dropped (Transform): __j12
+resolved: 5 of 14 defs and rules stand for other ids
+  __i11 <- RL_r1
+  y__h663 <- y__h663 __h670
+  RL_r2 <- RL_r2 __h386 __h389
+  RL_r3 <- RL_r3 __h651 __h640 __h629
+  RL_r4 <- RL_r4 __h657 __h668
 
 -----
 === metadata (MetaSide sysMetaSide):

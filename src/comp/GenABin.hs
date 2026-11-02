@@ -555,11 +555,12 @@ instance Bin MsgListFlag where
 -- should automatically verify no typos at compile-time XXX
 -- ECO controls belong to this invocation. They must not reactivate a capture
 -- or output path when loading native flags, and do not change the .ba format.
--- The evaluator metadata controls (bxref, metadataCensus, metadataDump,
--- metadataOut, metadataScramble) are invocation controls too: written
--- as nothing and read as their defaults, so that flags loaded from a
--- .ba never turn a cross-reference file, a census, a dump, a side file
--- or a scramble back on.
+-- The evaluator metadata controls (bxref, metadataCensus,
+-- metadataCheck, metadataDump, metadataOut, metadataScramble) are
+-- invocation controls too: written as nothing and read as their
+-- defaults, so that flags loaded from a .ba never turn a
+-- cross-reference file, a census, a check, a dump, a side file or a
+-- scramble back on.
 instance Bin Flags where
     writeBytes (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 _ a_007 a_008 a_009
@@ -567,7 +568,7 @@ instance Bin Flags where
                 a_020 a_021 a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
                 a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
                 a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_047 a_048 a_049
-                a_050 _ _ _ _ a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
+                a_050 _ _ _ _ _ a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
                 a_060 a_061 a_062 a_063 a_064 a_065 a_066 a_067 a_068 a_069
                 a_070 a_071 a_072 a_073 a_074 a_075 a_076 a_077 a_078 a_079
                 a_080 a_081 a_082 a_083 a_084 a_085 a_086 a_087 a_088 a_089
@@ -668,7 +669,7 @@ instance Bin Flags where
                 a_020 a_021 a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
                 a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
                 a_040 a_041 a_042 a_043 a_044 a_045 a_046 a_047 a_048 a_049
-                a_050 False False Nothing False a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
+                a_050 False False False Nothing False a_051 a_052 a_053 a_054 a_055 a_056 a_057 a_058 a_059
                 a_060 a_061 a_062 a_063 a_064 a_065 a_066 a_067 a_068 a_069
                 a_070 a_071 a_072 a_073 a_074 a_075 a_076 a_077 a_078 a_079
                 a_080 a_081 a_082 a_083 a_084 a_085 a_086 a_087 a_088 a_089

@@ -648,6 +648,7 @@ defaultFlags bluespecdir = Flags {
         liftDicts = True,
         maxTIStackDepth = 1000,
         metadataCensus = False,
+        metadataCheck = False,
         metadataDump = False,
         metadataOut = Nothing,
         metadataScramble = False,
@@ -1369,6 +1370,10 @@ externalFlags = [
          (Toggle (\f x -> f {metadataCensus=x}) (showIfTrue metadataCensus),
           "print the census of the evaluator metadata store and run its cross-checks", Hidden)),
 
+        ("metadata-check",
+         (Toggle (\f x -> f {metadataCheck=x}) (showIfTrue metadataCheck),
+          "check the closure of the metadata ledger's events over the package's ids after every pass", Hidden)),
+
         ("metadata-dump",
          (Toggle (\f x -> f {metadataDump=x}) (showIfTrue metadataDump),
           "print the site and frame chain of every heap cell of the elaborated module", Hidden)),
@@ -2033,6 +2038,7 @@ showFlagsRaw flags =
           ("linkFlags", show (linkFlags flags)),
           ("maxTIStackDepth", show (maxTIStackDepth flags)),
           ("metadataCensus", show (metadataCensus flags)),
+          ("metadataCheck", show (metadataCheck flags)),
           ("metadataDump", show (metadataDump flags)),
           ("metadataOut", show (metadataOut flags)),
           ("metadataScramble", show (metadataScramble flags)),
