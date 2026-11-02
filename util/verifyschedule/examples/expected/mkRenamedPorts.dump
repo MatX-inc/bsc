@@ -24,6 +24,7 @@ execution order:
        fires on WILL_FIRE_b, can fire CAN_FIRE_b
        guard CAN_FIRE_b
        reads r.read when 1'b1
+       reads r.read out of order: after a call of r.write
        calls r.write when 1'd1 with r_PLUS_1___d4
 
 use conditions (recomputed):

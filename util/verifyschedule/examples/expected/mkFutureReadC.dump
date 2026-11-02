@@ -1,0 +1,63 @@
+module mkFutureReadC (package FutureReadC), from mkFutureReadC.ba
+inputs:  
+outputs: 
+
+children:
+  f : FakeMod   [val CF val, act C [act, val]]
+    act (action)
+      copy -: enable f$EN_act arg f$act_1 :: Bit 8
+    val (value), sees same-cycle act
+      copy -: result f$val :: Bit 8
+  c : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result c$read :: Bit 1
+    write (action)
+  x : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable x$EN_write arg x$write_1 :: Bit 8
+  y : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result y$read :: Bit 8
+    write (action)
+      copy -: enable y$EN_write arg y$write_1 :: Bit 8
+  z : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable z$EN_write arg z$write_1 :: Bit 8
+
+execution order:
+  1. RL_reader   [rule reader ("FutureReadC.bsv", line 37, column 9)]
+       fires on WILL_FIRE_RL_reader, can fire CAN_FIRE_RL_reader
+       guard CAN_FIRE_RL_reader
+       reads c.read when 1'b1
+       reads f.val when c__h207
+       reads y.read when 1'b1
+       calls x.write when c__h207 with f_val____d2
+       calls z.write when 1'd1 with y___d3
+  2. RL_setter   [rule setter ("FutureReadC.bsv", line 42, column 9)]
+       fires on WILL_FIRE_RL_setter, can fire CAN_FIRE_RL_setter
+       guard CAN_FIRE_RL_setter
+       reads c.read when 1'b1
+       reads y.read when 1'b1
+       calls f.act when NOT_c___d4 with 8'd5
+       calls y.write when 1'd1 with y_PLUS_1___d5
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_reader RL_setter
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
+  confirmed RL_reader / RL_setter: f.val then f.act

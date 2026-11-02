@@ -52,6 +52,7 @@ execution order:
        reads f.i_notEmpty when NOT_f_notEmpty_OR_NOT_g_notEmpty_OR_b___d8
        reads f.notEmpty when (! NOT_g_notEmpty___d5) && f_i_notEmpty____d1 && (! b__h343)
        reads g.notEmpty when (! NOT_f_notEmpty___d3) && f_i_notEmpty____d1 && (! b__h343)
+       reads f.notEmpty out of order: after a call of f.enq
        calls r.write when 1'd1 with f_first____d10
        calls f.deq when 1'd1 with 
 

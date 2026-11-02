@@ -53,10 +53,14 @@ The file has five sections:
    earlier step left it. `stepSequential` is the `State` of the last
    versions. A step runs when the hardware fires it. It sees submodule
    outputs as they stand before it, has its guard checked there, and has
-   each method call checked against what earlier steps did. A flag
-   (`illegal_access`, `guard_violated`, an enable, a read) is set once any
-   step sets it; another field keeps what the last step that wrote it
-   wrote.
+   each action-method call checked against what earlier steps did. A
+   value it reads where the submodule's annotations forbid it (after a
+   call in the cycle that it may not follow, or in one rule with a call it
+   may not share a rule with) is arbitrary: a value of the step's own,
+   which a congruence ties to the hardware's only when the step does not
+   fire or no such call came first. A flag (`illegal_access`,
+   `guard_violated`, an enable) is set once any step sets it; another
+   field keeps what the last step that wrote it wrote.
 
    When the module exports conflict-free pairs of methods, each step is
    also stated as an effect on the whole state (`Run.fp.<step>`,
@@ -68,7 +72,9 @@ The file has five sections:
    steps of the method that comes first in it, and those that must follow
    them, moved after the other method's last step. A step's view is then a
    function of the calls it sees (`view@<step>`, a free variable), so that
-   in another order it sees what that order's calls make it see.
+   in another order it sees what that order's calls make it see; for a
+   read the annotations rule out, of whether the step fires after a call
+   that makes it arbitrary.
 4. **Post-Scheduled Synchronous Hardware Semantics.** Every submodule input
    and module output as bsc's back end computes it (`Hw.*`), collected
    into `stepScheduled`.
@@ -102,7 +108,9 @@ The file has five sections:
    `CF.iv` lists the ranges of steps each moved step is checked against,
    and a step that reads and flags nothing and sets only fields of its own
    commutes with all, `Run.free`); other pairs by facts `bv_decide`
-   proves from the hypotheses in one proof (`Run.comms`, `Comm.<a>.<b>`;
+   proves from the hypotheses in one proof (`Run.comms`, `Comm.<a>.<b>`,
+   given also that a view function gives equal values at arguments equal
+   in value, which the proof proves for each two of its applications;
    each pair's facts are a definition, `Run.sem_<x>_<y>`, and the pairs'
    are gathered by a balanced tree of definitions, so that each pair
    reaches its own through few small unfoldings). The
@@ -162,6 +170,22 @@ nothing here needs that.
   `sub`) is one method per port. The one exception: bsc's wire primitives
   (`RWire`, `RWire0`, `BypassWire`) get the behaviour of their Verilog,
   output equals input within the cycle.
+* **A read the annotations rule out is arbitrary.** A value method read
+  after a call of the same submodule that it may not follow (a register's
+  `_read` after its `_write`, a FIFO's `notEmpty` after its `enq`), or in
+  one rule with a call it may not share a rule with, returns no value the
+  submodule promises. The step then sees an arbitrary value, a free
+  variable of the cycle: its congruence ties it to the hardware's value
+  only when the step does not fire or no such call came first. So the
+  theorem holds whatever such a read returns, or the proof fails. Which
+  reads are such follows from the expressions each step reads and from the
+  annotations alone. A read is not counted after a call by a step bsc
+  proved never to fire with it (the theorem's `disjoint_` fact; each step
+  fires only when its `CAN_FIRE` holds). An action method called where the
+  annotations forbid it is illegal (`illegal_access`), with the calls'
+  exact conditions. So is a system task that reads where they forbid it,
+  under the task's own condition: a task's effect is not modelled, so its
+  reads have no value to make arbitrary.
 * **The datapath is abstract, the control concrete.** Booleans are
   booleans. A wider value is a token and an operator on such values is an
   uninterpreted function, made consistent by Ackermann's congruences. Each
@@ -190,13 +214,18 @@ saying where it comes from. A file has only the structures it needs.
   time if one fails.
 * `Congruence`: functional consistency. These facts hold by construction;
   they are hypotheses only to keep the uninterpreted functions out of the
-  SAT problem.
+  SAT problem. A read the annotations rule out is tied to the hardware's
+  value only when its step does not fire or no call it may not follow came
+  first.
 
 Beyond the hypotheses, the proof trusts Lean's kernel and `bv_decide`'s
-compiled certificate checker. It trusts bsc's use analysis
-(`AUses.buildUseMaps`, run again): a method use is checked for legality only
-under the condition that analysis says it matters, and a read outside it
-takes the start-of-cycle value unchecked. It also trusts this tool's extraction, which
+compiled certificate checker, and the conditions of the action calls in
+bsc's packages. It does not trust bsc's use analysis (`AUses.buildUseMaps`,
+run again): the conditions under which that analysis says a method use
+matters only choose which disjointness facts to ask bsc's solver for. A
+fact the solver confirms is true of the hardware whatever the condition,
+and a wrong condition only yields a weaker fact or none, so the proof can
+only fail. It trusts this tool's extraction, which
 is not itself verified: a bug there could make the model differ from bsc's
 hardware. The generated file is written to be read against the design, and
 `--dump-design` shows the extracted model.
@@ -208,14 +237,17 @@ The tool runs in three pure phases:
 1. **Extraction** (`Design`). Read the `.ba` and run `aState`. Then rebuild
    the three things the `.ba` does not record:
    * the conditions under which each method use matters (bsc's
-     `AUses.buildUseMaps`, run again);
+     `AUses.buildUseMaps`, run again), only as hints of which disjointness
+     facts to ask for;
    * which copy of a multi-ported method serves each use (from the
      resource allocation table);
    * the disjointness facts bsc relied on without recording them (asked of
      its solver again).
 
    Then list the steps in execution order, with each step's guard, the
-   submodule outputs it reads, its calls, and its outputs.
+   submodule outputs it reads, its calls, and its outputs, and find the
+   reads the annotations rule out, in the schedule's order or in another
+   order to check.
 2. **Analysis** (`Proof`). Evaluate each step in the sequential semantics,
    and every hardware signal. Abstract the datapath. Find the values each
    step observes within the cycle, with their congruences. Build the orders
@@ -231,7 +263,12 @@ The tool runs in three pure phases:
 * Exported clocks, clock gates and resets are not compared; the tool warns
   when a module has them.
 * `$display` and other system tasks are not modelled. bsc's run-time checks
-  are the exception: they are assertions.
+  are the exception: they are assertions. A task's reads are checked only
+  against the annotations, under the task's condition.
+* Two value methods of one submodule whose annotations forbid reading one
+  after the other (possible only in an imported module) are handled
+  conservatively: a read after any read of the other by a step that fired
+  is arbitrary, whether or not the earlier read mattered. The tool warns.
 * A Lean structure has at most 255 fields. A larger `Inputs` is split into
   parts, and larger hypothesis structures into several. A `View` or `State`
   that large is not handled yet.
@@ -270,8 +307,11 @@ Lean:
 | `SysTasks` | System tasks, which are not modelled, next to a forwarded value. |
 | `BviSchedKinds` | An imported Verilog child with `P` and a self-`SBR` annotation. |
 | `AssertedSchedules` | `mutually_exclusive` and `conflict_free`, which bsc checks at run time. |
-| `NotEmptyOrder` | A guard whose method uses matter only under conditions, which bsc's scheduler exploits. |
+| `NotEmptyOrder` | A guard whose method uses matter only under conditions, which bsc's scheduler exploits: a guard read after an `enq` it may not follow sees an arbitrary value, which does not matter. |
 | `RenamedPorts` | Methods with renamed enable and ready ports, and an `always_ready` method. |
 | `LeanNames` | bsc names that Lean reserves, or defines itself in a structure's namespace. |
 | `AvArg` | An action-value method whose argument is a value that sees same-cycle calls (a CReg port). |
 | `CfOrders` | Several pairwise-CF methods: orders checked by commutation, free steps, footprints and a semantic fact; `mutate.py`'s order mutant. |
+| `UseFact` | A register read after a write it may not follow, which only a fact bsc's solver proves about the two uses' conditions shows not to matter. |
+| `FutureReadC` | A value method read before a call it conflicts with (`C`), in an imported child: the read sees an arbitrary value unless it sees the cycle's calls. |
+| `RdyAfterWrite` | A ready signal reading a register a conflicting method writes first: the read is arbitrary only when its method fires, since the ready signal is an output in every cycle. |

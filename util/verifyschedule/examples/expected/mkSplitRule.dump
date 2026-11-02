@@ -31,6 +31,7 @@ execution order:
        fires on WILL_FIRE_RL_clrA, can fire CAN_FIRE_RL_clrA
        guard CAN_FIRE_RL_clrA
        reads ya.read when 1'b1
+       reads ya.read out of order: after a call of ya.write
        calls ya.write when 1'd1 with 8'd0
   3. RL_route_F   [rule route_F ("SplitRule.bsv", line 20, column 9)]
        fires on WILL_FIRE_RL_route_F, can fire CAN_FIRE_RL_route_F
@@ -43,6 +44,7 @@ execution order:
        fires on WILL_FIRE_RL_clrB, can fire CAN_FIRE_RL_clrB
        guard CAN_FIRE_RL_clrB
        reads yb.read when 1'b1
+       reads yb.read out of order: after a call of yb.write
        calls yb.write when 1'd1 with 8'd0
 
 use conditions (recomputed):

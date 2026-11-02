@@ -1,0 +1,65 @@
+module mkUseFact (package UseFact), from mkUseFact.ba
+inputs:  
+outputs: 
+
+children:
+  mode : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result mode$read :: Bit 4
+    write (action)
+      copy -: enable mode$EN_write arg mode$write_1 :: Bit 4
+  r : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r$read :: Bit 8
+    write (action)
+      copy -: enable r$EN_write arg r$write_1 :: Bit 8
+  z : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result z$read :: Bit 8
+    write (action)
+      copy -: enable z$EN_write arg z$write_1 :: Bit 8
+  out : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable out$EN_write arg out$write_1 :: Bit 8
+
+execution order:
+  1. RL_up   [rule up ("UseFact.bsv", line 22, column 9)]
+       fires on WILL_FIRE_RL_up, can fire CAN_FIRE_RL_up
+       guard CAN_FIRE_RL_up
+       reads mode.read when 1'b1
+       reads z.read when 1'b1
+       calls r.write when 1'd1 with z_PLUS_1___d4
+  2. RL_emit   [rule emit ("UseFact.bsv", line 26, column 9)]
+       fires on WILL_FIRE_RL_emit, can fire CAN_FIRE_RL_emit
+       guard CAN_FIRE_RL_emit
+       reads mode.read when 1'b1
+       reads r.read when ! mode_ULE_9___d5
+       reads z.read when 1'b1
+       reads r.read out of order: after a call of r.write
+       calls out.write when NOT_mode_ULE_9___d6 with r___d7
+       calls z.write when 1'd1 with z_PLUS_2___d8
+  3. RL_tick   [rule tick ("UseFact.bsv", line 31, column 9)]
+       fires on WILL_FIRE_RL_tick, can fire CAN_FIRE_RL_tick
+       guard CAN_FIRE_RL_tick
+       reads mode.read when 1'b1
+       calls mode.write when 1'd1 with mode_PLUS_1___d9
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_up RL_emit RL_tick
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
+  confirmed RL_up / RL_emit: r.write then r.read

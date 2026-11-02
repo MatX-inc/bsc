@@ -1,0 +1,55 @@
+module mkRdyAfterWrite (package RdyAfterWrite), from mkRdyAfterWrite.ba
+inputs:  setR_x :: Bit 8 EN_setR :: Bit 1 EN_useR :: Bit 1
+outputs: RDY_setR :: Bit 1 RDY_useR :: Bit 1
+
+children:
+  r : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r$read :: Bit 8
+    write (action)
+      copy -: enable r$EN_write arg r$write_1 :: Bit 8
+  s : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result s$read :: Bit 8
+    write (action)
+      copy -: enable s$EN_write arg s$write_1 :: Bit 8
+  out : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable out$EN_write arg out$write_1 :: Bit 8
+
+execution order:
+  1. setR   [method setR]
+       fires on WILL_FIRE_setR, can fire CAN_FIRE_setR
+       guard CAN_FIRE_setR
+       reads s.read when 1'b1
+       calls r.write when 1'd1 with setR_x
+       calls out.write when 1'd1 with s___d1
+       output RDY_setR = CAN_FIRE_setR
+  2. useR   [method useR]
+       fires on WILL_FIRE_useR, can fire CAN_FIRE_useR
+       guard CAN_FIRE_useR
+       reads r.read when 1'b1
+       reads s.read when 1'b1
+       reads r.read out of order: after a call of r.write
+       calls s.write when 1'd1 with s_PLUS_1___d2
+       output RDY_useR = CAN_FIRE_useR
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: setR useR
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                (setR, useR)
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      (setR, EN_setR) (useR, EN_useR)
+ready (method, RDY):       (setR, RDY_setR) (useR, RDY_useR)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
+  UNCONFIRMED setR / useR: r.write then r.read

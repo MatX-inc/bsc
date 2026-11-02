@@ -91,6 +91,7 @@ execution order:
        reads mode.read when 1'b1
        reads outQ.i_notFull when ! NOT_mode_EQ_2___d9
        reads r.read when mode___d1 == 2'd2
+       reads r.read out of order: after a call of r.write
        calls outQ.enq when mode_EQ_2___d8 with r___d3
        calls _read_RL_emitA$EN_r.wset when 1'b1 with mode___d1 == 2'd2
        calls _read_RL_emitA$EN_mode.wset when 1'b1 with 1'b1
@@ -106,6 +107,7 @@ execution order:
        guard CAN_FIRE_RL_down
        reads limit.read when 1'b1
        reads r.read when 1'b1
+       reads r.read out of order: after a call of r.write
        calls r.write when 1'd1 with r_MINUS_1___d7
   6. __me_check_0   [rule up]
        fires on WILL_FIRE___me_check_0, can fire CAN_FIRE___me_check_0

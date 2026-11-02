@@ -46,6 +46,7 @@ execution order:
        guard CAN_FIRE_RL_clear
        reads cnt.read when 1'b1
        reads go.read when 1'b1
+       reads cnt.read out of order: after a call of cnt.write
        calls cnt.write when 1'd1 with 8'd0
        calls go.write when 1'd1 with NOT_go___d6
 
