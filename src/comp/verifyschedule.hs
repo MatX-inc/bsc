@@ -56,9 +56,13 @@ only chooses which disjointness facts to ask bsc's solver for: a read is
 arbitrary wherever the annotations rule it out, whatever the use conditions
 say, so a wrong use condition can only make a proof fail.  It does not rely
 on the scheduler or on 'aState': if the hardware they produce does not
-implement the rules, the proof fails, usually with a counterexample.  It
-covers the 'ASPackage' only, not the passes of the Verilog back end after
-'aState' (wire inlining, renaming and the like).
+implement the rules, the proof fails, usually with a counterexample.  The
+exception is system tasks: the theorem checks that what a task prints
+depends only on reads the annotations allow, but it does not compare the
+hardware's task calls with the sequential execution's, so how 'aState'
+transcribes them is trusted.  It covers the 'ASPackage' only, not the
+passes of the Verilog back end after 'aState' (wire inlining, renaming
+and the like).
 
 The program is three phases:
 
@@ -3755,6 +3759,61 @@ substRaw f t0 = evalState (go t0) IM.empty
     -- (each operand at its own position: none is dropped as a repeat)
     set ts = F.foldl' (\acc (k, x) -> tsAt k x acc) tsEmpty <$> mapM (\(k, x) -> (,) k <$> go x) (M.toList (tsOps ts))
 
+-- | 'substRaw' that keeps each subterm nothing in which is replaced as it
+-- is, so that a term with nothing to replace costs one walk.
+substKeep :: (Term -> Maybe Term) -> Term -> Term
+substKeep f t0 = fromMaybe t0 (evalState (go t0) IM.empty)
+  where
+    -- the new term, or Nothing if it is the same
+    go t | atomic t  = return (f t)
+         | otherwise = do
+             known <- gets (IM.lookup (termId t))
+             case known of
+                 Just r  -> return r
+                 Nothing -> do
+                     r <- case t of
+                         TNot _ a      -> fmap mkNot <$> go a
+                         TAnd _ ts     -> fmap mkAnd <$> set ts
+                         TOr _ ts      -> fmap mkOr <$> set ts
+                         TEq _ a b     -> do
+                             ma <- go a
+                             mb <- go b
+                             return (if isNothing ma && isNothing mb then Nothing
+                                     else Just (mkEq (fromMaybe a ma) (fromMaybe b mb)))
+                         TCond _ c a b -> do
+                             mc <- go c
+                             ma <- go a
+                             mb <- go b
+                             return (if isNothing mc && isNothing ma && isNothing mb then Nothing
+                                     else Just (mkCond (fromMaybe c mc) (fromMaybe a ma) (fromMaybe b mb)))
+                         _             -> return Nothing
+                     modify' (IM.insert (termId t) r)
+                     return r
+    set ts = do
+        let kxs = M.toList (tsOps ts)
+        ms <- mapM (go . snd) kxs
+        return (if all isNothing ms then Nothing
+                else Just (F.foldl' (\acc ((k, x), m) -> tsAt k (fromMaybe x m) acc) tsEmpty (zip kxs ms)))
+
+-- | @a || b || ...@ as written, nothing simplified ('rawAnd').
+rawOr :: [Term] -> Term
+rawOr ts = case ts of
+    []  -> TLit False
+    [x] -> x
+    _   -> mkOr (F.foldl' (\acc (k, x) -> tsAt k x acc) tsEmpty (zip [0 :: Int ..] ts))
+
+-- | The body of a definition of the execution as Lean reads it.
+rawSBody :: SBody -> Term
+rawSBody b = case b of
+    BOr p ds -> rawOr ([ p | p /= TLit False ] ++ map fst ds)
+    BOrC p c -> rawOr [p, c]
+    BT t     -> t
+
+-- | A definition the file prints: a shared one (section 2), the hardware's
+-- (section 4) or one of the execution's (section 3).
+data DKey = DShared String | DHw String | DSeq [String]
+    deriving (Eq, Ord)
+
 -- | Build the field-by-field execution of the schedule's order, and with
 -- other orders, each step's effect.
 buildSeq :: Bool -> Design -> [StepT] -> [Field] -> M.Map String Field -> M.Map String Term
@@ -4058,8 +4117,12 @@ data StepOut = StepOut
 -- through a precedence-aware printer that breaks long Boolean chains and
 -- priority muxes over several lines.  Definitions are @noncomputable@,
 -- which keeps Lean's compiler out of the way; most are @def@s, opaque to
--- @bv_decide@, whose equations the proof supplies.  Selections use @bif@
--- and nothing uses @match@, two constructs @bv_decide@ handles poorly.
+-- @bv_decide@, whose equations the proof supplies, each as an @rfl@ fact.
+-- Selections use @bif@ and nothing uses @match@, two constructs
+-- @bv_decide@ handles poorly.
+--
+-- Lean's memory grows with the square of a file's commands (at @-j1@), so
+-- definitions used once are written in and the rest share @mutual@ blocks.
 
 -- | The Lean namespace for a module: its name, capitalised.
 leanNamespace :: Design -> String
@@ -4129,9 +4192,8 @@ sortName s = case s of
     _        -> "Bool"
 
 -- | How the printer renders a 'TView': inside a definition with a view
--- parameter @v@, or as the hardware sees it.  (A step's own terms have
--- their views' variables in them already, 'buildSeq'.)
-data VMode = VParam | VHw
+-- parameter @v@, as the hardware sees it, or at a view given as text.
+data VMode = VParam | VHw | VSub String
 
 -- | A view, for the equations the proof supplies: the hardware's, or one
 -- step's (by its Lean name).
@@ -4161,6 +4223,9 @@ data PCtx = PCtx
       -- ^ names of definitions that a definition of the sequential
       -- execution's namespace could hide, so written with the module's
     , pcNs     :: String
+    , pcPath   :: Char -> String -> String
+      -- ^ a field's path in @Inputs@ (@'i'@), @View@ (@'v'@) or @State@
+      -- (@'s'@): @part<k>.x@ in a structure split into parts
     }
 
 -- | A qualified Lean name, each component quoted as needed.
@@ -4175,11 +4240,12 @@ ppT c p t = ppS c p t ""
 -- | 'ppT' as a difference list, so that nesting does not copy the text.
 ppS :: PCtx -> Int -> Term -> ShowS
 ppS c p t = case t of
-    TIn x      -> str "i." . str (q x)
-    TSt x      -> str "s." . str (q x)
+    TIn x      -> str "i." . str (pcPath c 'i' x)
+    TSt x      -> str "s." . str (pcPath c 's' x)
     TView f    -> case pcView c of
-        VParam -> str "v." . str (q f)
-        VHw    -> maybe (str "v." . str (q f)) (ppS c p . fdHw) (M.lookup f (pcFields c))
+        VParam -> str "v." . str (vpath f)
+        VHw    -> maybe (str "v." . str (vpath f)) (ppS c p . fdHw) (M.lookup f (pcFields c))
+        VSub vt -> str vt . str "." . str (vpath f)
     TRef x dyn -> app (rootRef x : "i" : [ viewArg | dyn ])
     THw x      -> app [hwName x, "i"]
     TAtHw x    -> app [rootRef x, "i", "(View.hw i)"]
@@ -4187,9 +4253,9 @@ ppS c p t = case t of
     TDef xs    -> app [qual xs, "i"]
     TUnset s   -> str ("0#" ++ show (pcWidth c s))
     TRd k s    -> str ("(Run.rd rs " ++ show k ++ ")." ++ valGet s)
-    TProj v f  -> str ("(" ++ qual v ++ " i)." ++ q f)
+    TProj v f  -> str ("(" ++ qual v ++ " i)." ++ vpath f)
     TFld k s   -> str ("(s " ++ show k ++ ")." ++ valGet s)
-    TVF v as f -> str "(" . viewFun v as . str (")." ++ q f)
+    TVF v as f -> str "(" . viewFun v as . str (")." ++ vpath f)
     TAtVF x v as -> parenS (p >= 5) (str (rootRef x) . str " i (" . viewFun v as . str ")")
     TLit b     -> str (if b then "true" else "false")
     TConst s v -> str (M.findWithDefault (show v) (s, v) (pcConst c))
@@ -4203,12 +4269,14 @@ ppS c p t = case t of
   where
     str = showString
     app ws = parenS (p >= 5) (str (unwords ws))
+    vpath = pcPath c 'v'
     viewArg = case pcView c of
         VParam -> "v"
         VHw    -> "(View.hw i)"
+        VSub vt -> vt
     rootRef x | S.member x (pcShadow c) = q (pcNs c) ++ "." ++ rootName x
               | otherwise = rootName x
-    viewFun v as = str ("i." ++ q v) . foldr (\a acc -> str " " . ppS c 5 a . acc) id as
+    viewFun v as = str ("i." ++ pcPath c 'i' v) . foldr (\a acc -> str " " . ppS c 5 a . acc) id as
     -- (&& and || associate to the left; an operand after the first that is
     -- of the same operator, which only a term built without the smart
     -- constructors has, keeps its parentheses)
@@ -4227,12 +4295,20 @@ layout c w p t
     | null (drop w flat) = [flat]   -- (forcing at most w + 1 characters of it)
     | needsParens = parenLines (layout c (w - 2) 0 t)
     | otherwise = case t of
-        TAnd _ ts -> joinOp "&&" (operandLines isAnd 3 (tsList ts))
-        TOr _ ts  -> joinOp "||" (operandLines isOr 2 (tsList ts))
+        TAnd _ ts -> joinOp "&&" (operandLines isAnd 3 (spine isAnd (tsList ts)))
+        TOr _ ts  -> joinOp "||" (operandLines isOr 2 (spine isOr (tsList ts)))
         TCond {} -> condChain t
         _ -> [flat]
   where
     flat = ppT c p t
+    -- (a first operand of the same operator, as a definition written in
+    -- makes, is the left of one chain, laid out as one list)
+    spine same xs = case xs of
+        (h : rest) -> go h rest
+        []         -> []
+      where go x acc | same x, (h : r) <- opsOf x = go h (r ++ acc)
+                     | otherwise = x : acc
+    opsOf x = case x of { TAnd _ ts -> tsList ts; TOr _ ts -> tsList ts; _ -> [] }
     -- (as in 'ppS': a later operand of the same operator keeps its parentheses)
     operandLines same lvl xs = [ if k > (0 :: Int) && same x then parenLines (layout c (w - 5) 0 x)
                                  else layout c (w - 3) lvl x
@@ -4306,6 +4382,32 @@ wrapJoin w sep = go
 wrap :: Int -> String -> [String]
 wrap w = wrapJoin w " " . words
 
+-- | Part of a section: a small definition, which may share a @mutual@
+-- block; comment lines, which may sit in one; or anything else.
+data Chunk = CDef [String] | CNote [String] | COther [String]
+
+-- | A section's chunks, small definitions in @mutual@ blocks of up to 100
+-- (fewer commands); one over 20,000 characters stays a command of its own.
+bundle :: [Chunk] -> [String]
+bundle = go [] (0 :: Int)
+  where
+    -- the open block, last chunk first, and how many definitions it has
+    go run n cs = case cs of
+        [] -> close run n []
+        (CDef ls : rest)
+            | sum (map length ls) > 20000 -> close run n (ls ++ go [] 0 rest)
+            | n + 1 == 100 -> close (ls : run) (n + 1) (go [] 0 rest)
+            | otherwise -> go (ls : run) (n + 1) rest
+        (CNote ls : rest)
+            | n == 0 -> ls ++ go [] 0 rest
+            | otherwise -> go (ls : run) n rest
+        (COther ls : rest) -> close run n (ls ++ go [] 0 rest)
+    close run n after
+        | n >= 2 = case concat (reverse run) of
+                       ("" : ls) -> "" : "mutual" : ls ++ "end" : after
+                       ls        -> "mutual" : ls ++ "end" : after
+        | otherwise = concat (reverse run) ++ after
+
 -- | A banner comment for one of the five sections.
 banner :: String -> [String]
 banner title =
@@ -4341,7 +4443,15 @@ emitLean d pf = unlines $ concat
     fieldMap = M.fromList [ (fdName f, f) | f <- pfFields pf ]
     hasView  = not (null (pfFields pf))
     sq       = pfSeq pf
-    ctx m    = PCtx m fieldMap constNames strNames width S.empty ns
+    ctx m    = PCtx m fieldMap constNames strNames width S.empty ns fieldPath
+    -- a field's path in a structure split into parts (no accessor names it)
+    fieldPath kind x = case kind of
+        'i' | splitInputs, Just k <- M.lookup x inputPartOf -> q (partField k) ++ "." ++ q x
+        'v' -> viewPath x
+        's' -> sp x
+        _   -> q x
+    inputPartOf = M.fromList [ (vaName v, k) | (k, vs) <- inputParts, v <- vs ]
+    inPath = fieldPath 'i'
     -- (the names a definition in a namespace of section 3 could see first)
     stateNames = S.fromList [ n | (n, _, _) <- stateFieldList ]
     shadow   = S.union stateNames (S.fromList ["any", "val", "stepSequential", fireNameFor stateNames])
@@ -4360,6 +4470,69 @@ emitLean d pf = unlines $ concat
     strNames = M.fromList [ (str, q (filter (/= '»') (show str))) | str <- pfStrings pf ]
     zero s   = if isToken s then "0#" ++ show (width s) else "false"
     boolStmt t = ppT hwC 4 t ++ " = true"
+
+    -- A definition used once (a field of a step record counted as often as
+    -- `Agree` reads it) is written in; one facts or views name is kept.
+    inlined k = M.lookup k useCounts == Just (1 :: Int)
+    useCounts = M.fromListWith (\a b -> min 2 (a + b)) $
+        [ (k, if ok then 1 else 2) | (vp, t) <- bodySites, (k, ok) <- refOccs vp t [] ]
+        ++ [ (k, if ok then max 1 m else 2) | (m, t) <- fieldSites, (k, ok) <- refOccs False t [] ]
+        ++ [ (k, 2) | t <- fixedSites, k <- namesIn t ]
+    bodySites = [ (True, ldBody l) | l <- pfSeqDefs pf ]
+                ++ [ (False, ldBody l) | l <- pfHwDefs pf ]
+                ++ [ (False, t) | x <- soDefs sq, t <- sbodyParts (sdBody x) ]
+    sbodyParts b = case b of { BOr p ds -> p : map fst ds; BOrC p c -> [p, c]; BT t -> [t] }
+    fieldSites = [ (M.findWithDefault 0 ('s', n) agreeUses, t) | (n, _, _) <- stateFieldList, Just t <- [M.lookup n (soFinals sq)] ]
+                 ++ [ (M.findWithDefault 0 ('h', n) agreeUses, t) | not modeB, (n, _, _) <- stateFieldList, Just t <- [hwTerm n] ]
+    -- (with other orders, `stepScheduled` keeps the hardware's definitions,
+    -- whose muxes mutate.py's order mutant reorders)
+    fixedSites = [ t | modeB, (n, _, _) <- stateFieldList, Just t <- [hwTerm n] ]
+                 ++ [ t | (_, _, t) <- pfEnv pf ++ pfPrims pf ++ pfOracles pf ++ pfUser pf ]
+                 ++ map snd (concatMap congTerms (pfCongs pf))
+                 ++ map fdHw (pfFields pf)
+                 ++ [ a | v <- soViews sq, Just (_, as) <- [vwFun v], a <- as ]
+                 ++ concat [ sbFire sb : map snd (sbW sb ++ sbO sb) ++ sbAfter sb | modeB, sb <- sbs ]
+    -- the definition an atom names, and whether a use there may be written in
+    -- (not at a view other than the one the definition has)
+    refKey vparam t = case t of
+        TRef x dyn  -> Just (DShared x, vparam || not dyn)
+        TAtHw x     -> Just (DShared x, False)
+        TAt x _     -> Just (DShared x, False)
+        TAtVF x _ _ -> Just (DShared x, False)
+        THw x       -> Just (DHw x, x /= oneHotKey)
+        TDef ns     -> Just (DSeq ns, True)
+        _           -> Nothing
+    -- the definitions a term names, as often as it is printed
+    refOccs vp t rest = case t of
+        TVF _ as _   -> foldr (refOccs vp) rest as
+        TAtVF _ _ as -> keyed (foldr (refOccs vp) rest as)
+        _ | atomic t -> keyed rest
+          | otherwise -> foldr (refOccs vp) rest (subTerms t)
+      where keyed r = maybe r (: r) (refKey vp t)
+    -- the definitions a term names (each distinct subterm looked at once)
+    namesIn t0 = go [t0] IS.empty
+      where go [] _ = []
+            go (t : ts) seen = case t of
+                TVF _ as _   -> go (as ++ ts) seen
+                TAtVF _ _ as -> keyed t (go (as ++ ts) seen)
+                _ | atomic t -> keyed t (go ts seen)
+                  | IS.member (termId t) seen -> go ts seen
+                  | otherwise -> go (subTerms t ++ ts) (IS.insert (termId t) seen)
+            keyed t r = maybe r ((: r) . fst) (refKey False t)
+    -- a term with the definitions used once written in
+    expand = substKeep (\a -> case refKey True a of
+                                  Just (k, _) | inlined k -> ML.lookup k expBodies
+                                  _ -> Nothing)
+    -- each definition's body as Lean reads it, those used once written in
+    expBodies = ML.fromList ([ (DShared (ldName l), expand (ldBody l)) | l <- pfSeqDefs pf ]
+                             ++ [ (DHw (ldName l), expand (ldBody l)) | l <- pfHwDefs pf ]
+                             ++ [ (DSeq (sdName x), expand (rawSBody (sdBody x))) | x <- soDefs sq ])
+    sharedBody l = ML.findWithDefault (ldBody l) (DShared (ldName l)) expBodies
+    hwBody l = ML.findWithDefault (ldBody l) (DHw (ldName l)) expBodies
+    expSBody b = case b of
+        BOr p ds -> BOr (expand p) [ (expand t, why) | (t, why) <- ds ]
+        BOrC p c -> BOrC (expand p) (expand c)
+        BT t     -> BT (expand t)
 
     fileHeader =
         [ "/-"
@@ -4473,11 +4646,7 @@ emitLean d pf = unlines $ concat
                             ++ [""]
                           | (k, fs) <- stateParts ]
                    ++ ["structure State where"]
-                   ++ [ "  " ++ q (statePartField k) ++ " : State." ++ partType k | (k, _) <- stateParts ]
-                   ++ ["", "-- each field under its own name"]
-                   ++ [ "noncomputable abbrev State." ++ q n ++ " (s : State) : " ++ sortName srt
-                        ++ " := s." ++ q (statePartField k) ++ "." ++ q n
-                      | (k, fs) <- stateParts, (n, srt, _) <- fs ])
+                   ++ [ "  " ++ q (statePartField k) ++ " : State." ++ partType k | (k, _) <- stateParts ])
         ++ ["", "/-- The start of a cycle: nothing called yet. -/"
            , "noncomputable abbrev State.init : State :="]
         ++ stateLiteral (const zero) []
@@ -4542,21 +4711,21 @@ emitLean d pf = unlines $ concat
                  | (k, (n, v)) <- zip [1 :: Int ..] kvs ]
 
     -- 2. ---------------------------------------------------------------------
-    section2 =
-        concat [ doc ("Constant " ++ constLabel s v ++ " (token code " ++ show k ++ ").")
-                 ++ ["noncomputable abbrev " ++ q (constLabel s v) ++ " : " ++ sortName s ++ " := "
-                     ++ show k ++ "#" ++ show (width s)]
-               | (s, vs) <- M.toList (pfConsts pf), (k, v) <- zip [1 :: Integer ..] vs ]
-        ++ concat [ doc ("String constant " ++ show str ++ ".")
-                    ++ ["noncomputable abbrev " ++ strNames M.! str ++ " : TokStr := "
-                        ++ show k ++ "#" ++ show (width SString)]
-                  | (k, str) <- zip [1 :: Integer ..] (pfStrings pf) ]
-        ++ [ "" | not (M.null (pfConsts pf) && null (pfStrings pf)) ]
-        ++ (if hasView then viewStruct else [])
-        ++ doc "The free variables of one cycle.  The theorem holds for every value of each."
-        ++ inputsDecl
-        ++ (if hasView then viewHw else [])
-        ++ concatMap (sharedDef) (pfSeqDefs pf)
+    section2 = bundle $
+        [ CDef (doc ("Constant " ++ constLabel s v ++ " (token code " ++ show k ++ ").")
+                ++ ["noncomputable abbrev " ++ q (constLabel s v) ++ " : " ++ sortName s ++ " := "
+                    ++ show k ++ "#" ++ show (width s)])
+        | (s, vs) <- M.toList (pfConsts pf), (k, v) <- zip [1 :: Integer ..] vs ]
+        ++ [ CDef (doc ("String constant " ++ show str ++ ".")
+                   ++ ["noncomputable abbrev " ++ strNames M.! str ++ " : TokStr := "
+                       ++ show k ++ "#" ++ show (width SString)])
+           | (k, str) <- zip [1 :: Integer ..] (pfStrings pf) ]
+        ++ [ COther ([ "" | not (M.null (pfConsts pf) && null (pfStrings pf)) ]
+                     ++ (if hasView then viewStruct else [])
+                     ++ doc "The free variables of one cycle.  The theorem holds for every value of each."
+                     ++ inputsDecl
+                     ++ (if hasView then viewHw else [])) ]
+        ++ [ CDef (sharedDef l) | l <- pfSeqDefs pf, not (inlined (DShared (ldName l))) ]
     groups = nubOrd (map vaGroup (pfVars pf))
     groupTitle g = case g of
         GInput    -> "module inputs"
@@ -4577,8 +4746,8 @@ emitLean d pf = unlines $ concat
             [ ("-- " ++ groupTitle g, "") : [ (q (vaName v) ++ " : " ++ sortName (vaSort v), note v)
                                             | v <- M.findWithDefault [] g byGroup ]
             | g <- nubOrd (map vaGroup vs) ]
-    -- More variables than a structure may have go in parts, and an accessor
-    -- for each keeps `i.x` meaning what it means in a single structure.
+    -- More variables than a structure may have go in parts, each variable
+    -- written by its path (`i.part<k>.x`).
     splitInputs = length inputVars > maxFields
     inputParts = zip [1 :: Int ..] (chunksOf maxFields inputVars)
     partPrefix = freePrefix "part" (map vaName inputVars)
@@ -4591,10 +4760,6 @@ emitLean d pf = unlines $ concat
                    | (k, vs) <- inputParts ]
             ++ ["structure Inputs where"]
             ++ [ "  " ++ q (partField k) ++ " : Inputs." ++ partType k | (k, _) <- inputParts ]
-            ++ ["", "-- each variable under its own name"]
-            ++ [ "noncomputable abbrev Inputs." ++ q (vaName v) ++ " (i : Inputs) : " ++ sortName (vaSort v)
-                 ++ " := i." ++ q (partField k) ++ "." ++ q (vaName v)
-               | (k, vs) <- inputParts, v <- vs ]
     groupRank g = case g of
         GInput -> 0 :: Int; GStart -> 1; GWire -> 2; GDatapath -> 3; GTask -> 4; GUnspec -> 5; GStep _ _ -> 6
     note v = let n = vaNote v in if n == vaName v then "" else n
@@ -4608,11 +4773,7 @@ emitLean d pf = unlines $ concat
                             ++ map ("  " ++) (renderCLines (viewLines fs)) ++ [""]
                           | (k, fs) <- viewParts ]
                    ++ ["structure View where"]
-                   ++ [ "  " ++ q (viewPartField k) ++ " : View." ++ partType k | (k, _) <- viewParts ]
-                   ++ ["", "-- each value under its own name"]
-                   ++ [ "noncomputable abbrev View." ++ q (fdName f) ++ " (v : View) : " ++ sortName (fdSort f)
-                        ++ " := v." ++ q (viewPartField k) ++ "." ++ q (fdName f)
-                      | (k, fs) <- viewParts, f <- fs ])
+                   ++ [ "  " ++ q (viewPartField k) ++ " : View." ++ partType k | (k, _) <- viewParts ])
         ++ [""]
     viewHw =
         ["", "/-- The values the hardware sees. -/"
@@ -4637,7 +4798,7 @@ emitLean d pf = unlines $ concat
         [""]
         ++ defLines ("noncomputable def " ++ rootName (ldName l) ++ " (i : Inputs)"
                      ++ (if ldDyn l then " (v : View)" else "") ++ " : " ++ sortName (ldSort l) ++ " :=")
-                    (layout (ctx VParam) 92 0 (ldBody l))
+                    (layout (ctx VParam) 92 0 (sharedBody l))
 
     -- 3. ---------------------------------------------------------------------
     section3 =
@@ -4667,18 +4828,26 @@ emitLean d pf = unlines $ concat
         , "run, in terms of each field as the last earlier step left it (or as `State.init` has"
         , "it); a field the step leaves alone has no definition.  A later call of a method"
         , "replaces an earlier one's arguments; a flag (`illegal_access`, `guard_violated`, a"
-        , "call's enable" ++ (if null flagFields then "" else ", a read") ++ ") is set once any step sets it. -/" ]
-        ++ concatMap seqGroup (soGroups sq)
+        , "call's enable" ++ (if null flagFields then "" else ", a read") ++ ") is set once any step sets it."
+        , "Here as elsewhere, a value used in one place only is written there, not defined. -/" ]
+        ++ bundle (concatMap seqGroup (soGroups sq))
         ++ [ "", "/-- One cycle, one rule at a time: each field as the last step that wrote it left it. -/"
            , "noncomputable def stepSequential (i : Inputs) : State :=" ]
-        ++ stateLiteral (\n s -> maybe (zero s) (ppT seqC 0) (M.lookup n (soFinals sq))) []
+        ++ stateLiteral (\n s -> maybe (zero s) (longValue . expand) (M.lookup n (soFinals sq))) []
         ++ (if modeB then runSection3 else [])
+    -- (a long value, as definitions written in make, over several lines)
+    longValue t = intercalate ("\n" ++ replicate 10 ' ') (layout seqC 80 0 t)
+    -- a step's definitions, after a comment naming it (those written where
+    -- they are used left out)
     seqGroup (_, descr, fds, view, ds)
-        | isNothing view && null fds && null ds = []
-        | otherwise = ["", "/-! ### " ++ commentSafe descr ++ " -/"] ++ concatMap printDef fds ++ maybe [] viewDef view
-                      ++ concatMap printDef ds
+        | isNothing view && null defs = []
+        | otherwise = CNote ["", "-- " ++ filter (/= '\n') descr]
+                      : map (CDef . printDef) (filter keepDef fds) ++ [ CDef (viewDef vw) | Just vw <- [view] ]
+                      ++ map (CDef . printDef) (filter keepDef ds)
+      where defs = filter keepDef (fds ++ ds)
+    keepDef x = not (inlined (DSeq (sdName x)))
     printDef x = defLines ("noncomputable def " ++ qual (sdName x) ++ " (i : Inputs) : " ++ sortName (sdSort x) ++ " :=")
-                          (bodyLines (sdBody x))
+                          (bodyLines (expSBody (sdBody x)))
     -- a flag's definition reads as the value before OR'ed with what sets it,
     -- one reason to a line
     bodyLines b = case b of
@@ -4703,14 +4872,14 @@ emitLean d pf = unlines $ concat
                             ++ (if S.null (dHavocPorts d) then "" else " or that it may read out of order") ++ ".")
                ++ [ "noncomputable def " ++ qual (vwName vw) ++ " (i : Inputs) : View :="
                , "  { View.hw i with" ]
-               ++ [ "    " ++ viewPath f ++ " := i." ++ q v ++ (if j == nFlds then " }" else ",")
+               ++ [ "    " ++ viewPath f ++ " := i." ++ inPath v ++ (if j == nFlds then " }" else ",")
                   | (j, (f, v)) <- zip [1 :: Int ..] (vwVars vw) ]
         Just (vf, args) ->
             [""] ++ doc ("What " ++ vwStep vw ++ " sees of the values that change within the cycle"
                          ++ (if S.null (dHavocPorts d) then "" else " or that it may read out of order")
                          ++ ": its view as a function of the calls it sees, at the calls it sees in this order.")
             ++ defLines ("noncomputable def " ++ qual (vwName vw) ++ " (i : Inputs) : View :=")
-                        (wrapJoin 88 " " (("i." ++ q vf) : map (ppT seqC 5) args))
+                        (wrapJoin 88 " " (("i." ++ inPath vf) : map (ppT seqC 5) args))
     -- Other orders ------------------------------------------------------------
     --
     -- With exported conflict-free pairs ('withOrders'), each step is also an
@@ -4858,7 +5027,7 @@ emitLean d pf = unlines $ concat
             readArr = IM.fromList (zip [0 ..] (sbR sb))
             letV = case sbView sb of
                 Nothing -> []
-                Just (vf, idxs) -> [ unwords (("let v :=" ++ " i." ++ q vf)
+                Just (vf, idxs) -> [ unwords (("let v := i." ++ inPath vf)
                                               : [ ppT effC 5 (if gated then rawAnd (sbFire sb) rd else rd)
                                                 | (j, gated) <- idxs, let rd = TRd j (fieldSortN (readArr IM.! j)) ]) ]
             items ls = case ls of
@@ -5268,7 +5437,7 @@ emitLean d pf = unlines $ concat
             [ "  obtain ⟨" ++ intercalate ", " [ var | (_, var, _, _) <- hyps ] ++ "⟩ := h" ]
             ++ concat [ bracket ", " ("  obtain ⟨", "⟩ := " ++ var) (map q [ n | (n, _, _) <- fs ])
                       | (_, var, _, fs) <- hyps ])
-        ++ map ("  " ++) (wrapJoin 96 "; " (map eqHave commInsts))
+        ++ haveBlocks (map eqHave commInsts)
         ++ (if null viewCongs then [] else
               "  -- a view function gives equal values at arguments equal in value" : map ("  " ++) viewCongs)
         ++ bracket ", " ("  dsimp only [", "]") semNames
@@ -5285,10 +5454,10 @@ emitLean d pf = unlines $ concat
     -- equal fields.
     viewCongs =
         [ "have : " ++ concatMap (\(a, b) -> ppT hwC 4 a ++ " = " ++ ppT hwC 4 b ++ " → ") diffs
-          ++ "(i." ++ q v ++ concatMap ((' ' :) . ppT hwC 5) as1 ++ ")." ++ q g ++ " = (i." ++ q v
-          ++ concatMap ((' ' :) . ppT hwC 5) as2 ++ ")." ++ q g ++ " :="
-          ++ (if null diffs then " rfl" else "\n    fun " ++ unwords hs ++ " => congrArg (fun w : View => w." ++ q g ++ ") ("
-                                            ++ F.foldl' (\acc p -> "congr (" ++ acc ++ ") " ++ p) ("congrArg i." ++ q v ++ " " ++ head' prfs) (drop 1 prfs)
+          ++ "(i." ++ inPath v ++ concatMap ((' ' :) . ppT hwC 5) as1 ++ ")." ++ viewPath g ++ " = (i." ++ inPath v
+          ++ concatMap ((' ' :) . ppT hwC 5) as2 ++ ")." ++ viewPath g ++ " :="
+          ++ (if null diffs then " rfl" else "\n    fun " ++ unwords hs ++ " => congrArg (fun w : View => w." ++ viewPath g ++ ") ("
+                                            ++ F.foldl' (\acc p -> "congr (" ++ acc ++ ") " ++ p) ("congrArg i." ++ inPath v ++ " " ++ head' prfs) (drop 1 prfs)
                                             ++ ")")
         | ((v, as1), (_, as2)) <- S.toList appPairs
         , let apps = M.findWithDefault M.empty v vfApps
@@ -5309,8 +5478,8 @@ emitLean d pf = unlines $ concat
     -- definitions whose equations it has at such an application
     vfApps = M.fromListWith (M.unionWith S.union)
         ([ (v, M.singleton as (S.singleton g)) | (_, fs) <- provedPairs, (_, l, r) <- fs, (v, as, g) <- vfAtoms l ++ vfAtoms r ]
-         ++ [ (v, M.singleton as (S.fromList [ g | TView g <- universeT (ldBody l) ]))
-            | IDef n (Just (VKFun v as)) <- commInsts, Just l <- [M.lookup n seqDefMap] ])
+         ++ [ (v, M.singleton as (S.fromList [ g | TView g <- universeT b ]))
+            | IDef n (Just (VKFun v as)) <- commInsts, Just b <- [ML.lookup (DShared n) expBodies] ])
     vfAtoms t = [ (v, as, g) | TVF v as g <- universeT t ]
     -- the pairs of applications of one view function in one pair's facts
     appPairs = S.fromList
@@ -5742,59 +5911,58 @@ emitLean d pf = unlines $ concat
         , "every submodule input (enables and argument muxes) and every module output,"
         , "as functions of the cycle's inputs.  Definitions the hardware shares with the"
         , "rules, CAN_FIRE and WILL_FIRE among them, are in section 2; a signal that"
-        , "needs no definition of its own is written into `stepScheduled` directly."
+        , "needs no definition of its own, or is used only there, is written into"
+        , "`stepScheduled` directly."
         ++ (if null (pfMuxes pf) then " -/" else "") ]
         ++ (if null (pfMuxes pf) then []
             else [ "A mux is read as a priority mux; for a parallel one (`PrimMux`) the theorem"
                  , "also proves its selectors one-hot (`Hw.oneHot`), so the reading is exact. -/" ])
-        ++ concatMap hwDef [ l | l <- pfHwDefs pf, '\1' `notElem` ldName l ]
+        ++ bundle [ CDef (hwDef l) | l <- pfHwDefs pf, '\1' `notElem` ldName l, keepHw l ]
         ++ ["", "/-- The cycle as the hardware runs it. -/"
            , "noncomputable def stepScheduled (i : Inputs) : State :="]
         ++ stateLiteral hwValue [ (n, "the sequential run's bookkeeping, not compared") | (n, _) <- flagFields ]
-        ++ oneHotDef
+        ++ bundle oneHotDef
+    keepHw l = not (inlined (DHw (ldName l)))
     isMux nm = nm == oneHotKey || "mux_" `isPrefixOf` nm
     isTail nm = "ors\1" `isPrefixOf` nm
-    disjointDefs = case [ l | l <- pfHwDefs pf, '\1' `elem` ldName l, not (isMux (ldName l)), not (isTail (ldName l)) ] of
+    hwBoolDef l = CDef (defLines ("noncomputable def " ++ hwName (ldName l) ++ " (i : Inputs) : Bool :=")
+                                 (layout hwDefC 92 0 (hwBody l)))
+    disjointDefs = case [ l | l <- pfHwDefs pf, '\1' `elem` ldName l, not (isMux (ldName l)), not (isTail (ldName l))
+                            , keepHw l ] of
         [] -> []
-        ls -> [ "", "/-! Conditions that facts of section 5 say are pairwise disjoint, by groups:"
-              , "`Hw.<group>.upto_k` holds when one of the group's first k conditions does. -/" ]
-              ++ concat [ defLines ("noncomputable def " ++ hwName (ldName l) ++ " (i : Inputs) : Bool :=")
-                                   (layout hwDefC 92 0 (ldBody l))
-                        | l <- ls ]
-    tailDefsText = case [ l | l <- pfHwDefs pf, isTail (ldName l) ] of
+        ls -> COther [ "", "/-! Conditions that facts of section 5 say are pairwise disjoint, by groups:"
+                     , "`Hw.<group>.upto_k` holds when one of the group's first k conditions does. -/" ]
+              : map hwBoolDef ls
+    tailDefsText = case [ l | l <- pfHwDefs pf, isTail (ldName l), keepHw l ] of
         [] -> []
-        ls -> [ "", "/-! The tails the long disjunctions of section 5's assertions share: `Hw.ors.<k>` is a"
-              , "disjunct OR'ed with the tail after it. -/" ]
-              ++ concat [ defLines ("noncomputable def " ++ hwName (ldName l) ++ " (i : Inputs) : Bool :=")
-                                   (layout hwDefC 92 0 (ldBody l))
-                        | l <- ls ]
+        ls -> COther [ "", "/-! The tails the long disjunctions of section 5's assertions share: `Hw.ors.<k>` is a"
+                     , "disjunct OR'ed with the tail after it. -/" ]
+              : map hwBoolDef ls
     hwDef l =
         [""]
         ++ defLines ("noncomputable def " ++ hwName (ldName l) ++ " (i : Inputs) : " ++ sortName (ldSort l) ++ " :=")
-                    (layout hwDefC 92 0 (ldBody l))
-    hwValue n s
-        | Just t <- M.lookup n (pfHwPorts pf) = ppT hwC 0 t
-        | Just t <- M.lookup n outputMap = ppT hwC 0 t
-        | otherwise = zero s
+                    (layout hwDefC 92 0 (hwBody l))
+    hwValue n s = maybe (zero s) (ppT hwC 0 . expand) (hwTerm n)
+    hwTerm n = case M.lookup n (pfHwPorts pf) of
+        Just t  -> Just t
+        Nothing -> M.lookup n outputMap
     -- each output's hardware value (the first, as a search would find it)
     outputMap = M.fromListWith (\_ old -> old) [ (o, t) | (o, _, t, _) <- pfOutputs pf ]
-    oneHotDef = disjointDefs ++ tailDefsText ++ case [ l | l <- pfHwDefs pf, '\1' `elem` ldName l, isMux (ldName l) ] of
+    oneHotDef = disjointDefs ++ tailDefsText ++ case [ l | l <- pfHwDefs pf, '\1' `elem` ldName l, isMux (ldName l), keepHw l ] of
         [] -> []
         ls -> let (chains, final) = partition ((/= oneHotKey) . ldName) ls
               in (if null chains then []
-                  else [ "", "/-! For each parallel mux, `Hw.mux_<m>.seen_k`: whether some selector up to the"
-                       , "k-th is set (the first is the first selector itself). -/" ])
-                 ++ concat [ defLines ("noncomputable def " ++ hwName (ldName l) ++ " (i : Inputs) : Bool :=")
-                                      (layout hwDefC 92 0 (ldBody l))
-                           | l <- chains ]
-                 ++ concat [ [""] ++ doc "Every parallel mux in the hardware has at most one selector set: none is \
-                                         \set once an earlier one is."
-                             ++ defLines "noncomputable def Hw.oneHot (i : Inputs) : Bool :=" (layout hwDefC 92 0 (ldBody l))
-                           | l <- final ]
+                  else [ COther [ "", "/-! For each parallel mux, `Hw.mux_<m>.seen_k`: whether some selector up to the"
+                                , "k-th is set (the first is the first selector itself). -/" ] ])
+                 ++ map hwBoolDef chains
+                 ++ [ COther ([""] ++ doc "Every parallel mux in the hardware has at most one selector set: none is \
+                                          \set once an earlier one is."
+                              ++ defLines "noncomputable def Hw.oneHot (i : Inputs) : Bool :=" (layout hwDefC 92 0 (hwBody l)))
+                    | l <- final ]
 
     -- 5. ---------------------------------------------------------------------
     section5 =
-        concatMap agreePort (pfPorts pf)
+        bundle [ CDef (agreePort k) | k <- agreeShapes ]
         ++ ["", "/-- The sequential execution was legal and agrees with the hardware on every"
            , "    submodule call and every module output (each when it is meaningful). -/"
            , "noncomputable def Agree (i : Inputs) (s h : State) : Bool :="]
@@ -5814,34 +5982,51 @@ emitLean d pf = unlines $ concat
     -- a port's fields: its enable, then its arguments
     portFields p = [ (en, SBool) | Just en <- [ptEnable p] ] ++ [ (a, sortOf t) | (a, t) <- ptArgs p ]
     hwPortTerms p = [ M.findWithDefault (TIn n) n (pfHwPorts pf) | (n, _) <- portFields p ]
-    agreePort p =
-        let params = [ ("en", SBool) | Just _ <- [ptEnable p] ]
-                     ++ [ ("a" ++ show k, sortOf t) | (k, (_, t)) <- zip [1 :: Int ..] (ptArgs p) ]
+    -- One abbreviation per shape of port (an enable or not, the arguments'
+    -- sorts), in the order the ports first have each.
+    portShape p = (isJust (ptEnable p), [ sortOf t | (_, t) <- ptArgs p ])
+    shapeName (en, srts) = "Agree." ++ q ((if en then "call" else "args") ++ concatMap (\x -> "_" ++ sortName x) srts)
+    agreeShapes = reverse (snd (F.foldl' (\(seen, acc) p -> let k = portShape p
+                                                           in if S.member k seen then (seen, acc)
+                                                              else (S.insert k seen, k : acc))
+                                         (S.empty, []) (pfPorts pf)))
+    agreePort k@(en, srts) =
+        let params = [ ("en", SBool) | en ]
+                     ++ [ ("a" ++ show j, srt) | (j, srt) <- zip [1 :: Int ..] srts ]
             binders = unwords [ "(" ++ v ++ " : " ++ sortName srt ++ ")" | (v, srt) <- params ++ [ ("h_" ++ v, srt) | (v, srt) <- params ] ]
-            argEqs = [ "a" ++ show k ++ " == h_a" ++ show k | k <- [1 .. length (ptArgs p)] ]
+            argEqs = [ "a" ++ show j ++ " == h_a" ++ show j | j <- [1 .. length srts] ]
             argText = case argEqs of
                 []  -> "true"
                 [a] -> a
                 _   -> "(" ++ intercalate " && " argEqs ++ ")"
-            body = case ptEnable p of
-                Just _ -> "en == h_en" ++ (if null argEqs then "" else " && (!en || " ++ argText ++ ")")
-                Nothing -> argText
-        in ["", "/-- Both drive " ++ portLabel p ++ " the same way: the sequential execution's fields first,"
-           , "    then the hardware's. -/"]
-           ++ defLines ("noncomputable abbrev Agree." ++ q (portLabel p) ++ " " ++ binders ++ " : Bool :=") [body]
+            body = if en then "en == h_en" ++ (if null argEqs then "" else " && (!en || " ++ argText ++ ")")
+                   else argText
+        in ["", "/-- Both drive a port " ++ (if en then "with an enable" else "without one")
+                ++ (if null srts then "" else " and " ++ show (length srts) ++ " argument(s)")
+                ++ " the same way: the sequential"
+           , "    execution's fields first, then the hardware's. -/"]
+           ++ defLines ("noncomputable abbrev " ++ shapeName k ++ " " ++ binders ++ " : Bool :=") [body]
     agreeTerms =
         ["!s." ++ sp "illegal_access", "!s." ++ sp "guard_violated"]
-        ++ [ unwords (("Agree." ++ q (portLabel p)) : [ "s." ++ sp n | (n, _) <- portFields p ]
+        ++ [ unwords (shapeName (portShape p) : [ "s." ++ sp n | (n, _) <- portFields p ]
                       ++ [ "h." ++ sp n | (n, _) <- portFields p ])
            | p <- pfPorts pf ]
         ++ [ case masks of
                [] -> "s." ++ sp o ++ " == h." ++ sp o
                _  -> "(" ++ intercalate " || " (map maskNeg masks) ++ " || s." ++ sp o ++ " == h." ++ sp o ++ ")"
            | (o, _, _, masks) <- pfOutputs pf ]
+    -- how often `Agree`, its abbreviations unfolded, reads each field of the
+    -- sequential state ('s') and of the hardware's ('h')
+    agreeUses = M.fromListWith (+) $
+        [ (('s', "illegal_access"), 1 :: Int), (('s', "guard_violated"), 1) ]
+        ++ concat [ [ (('s', en), if null (ptArgs p) then 1 else 2), (('h', en), 1) ] | p <- pfPorts pf, Just en <- [ptEnable p] ]
+        ++ [ ((side, a), 1) | p <- pfPorts pf, (a, _) <- ptArgs p, side <- "sh" ]
+        ++ concat [ (('s', o), 1) : (('h', o), 1) : [ (('h', r), 1) | WhenOutput r <- masks ]
+                  | (o, _, _, masks) <- pfOutputs pf ]
     maskNeg m = case m of
         WhenOutput r   -> "!h." ++ sp r
-        WhenInput en   -> "!i." ++ q en
-        WhenNotInput en -> "i." ++ q en
+        WhenInput en   -> "!i." ++ inPath en
+        WhenNotInput en -> "i." ++ inPath en
     hypStruct (nm, _, what, hs) =
         [""] ++ doc what ++ ["structure " ++ nm ++ " (i : Inputs) : Prop where"]
         ++ concat [ map ("  " ++) (doc cmt) ++ ["  " ++ q n ++ " :"] ++ ["    " ++ stmt]
@@ -5884,10 +6069,10 @@ emitLean d pf = unlines $ concat
             ++ concat [ bracket ", " ("  obtain ⟨", "⟩ := " ++ var) (map q [ n | (n, _, _) <- fs ])
                       | (_, var, _, fs) <- hyps ])
         ++ [ "  -- the equation of every definition the hypotheses reach" | not (null hypInsts) ]
-        ++ map ("  " ++) (wrapJoin 96 "; " (map eqHave hypInsts))
+        ++ haveBlocks (map eqHave hypInsts)
         ++ notVacuous
         ++ [ "  -- the equation of every other definition the conclusions reach" | not (null goalInsts) ]
-        ++ map ("  " ++) (wrapJoin 96 "; " (map eqHave goalInsts))
+        ++ haveBlocks (map eqHave goalInsts)
         ++ bracket ", " ("  dsimp only [", "]") goalNames
         ++ [ "  " ++ bvDecide ]
     -- items after an opening, as many to a line as fit, then a closing
@@ -5896,24 +6081,56 @@ emitLean d pf = unlines $ concat
         (l : ls) -> let ws = (open ++ l) : map ("    " ++) ls
                         brk = reverse (dropWhile (== ' ') (reverse sep))   -- the separator at a line's end
                     in map (++ brk) (init ws) ++ [last ws ++ close]
-    goalBase = [ "stepSequential", "stepScheduled", "Agree" ] ++ [ "Agree." ++ q (portLabel p) | p <- pfPorts pf ]
+    goalBase = [ "stepSequential", "stepScheduled", "Agree" ] ++ map shapeName agreeShapes
+    -- An equation by `rfl`, the body written out (at the view): unlike
+    -- `eq_1`, it makes Lean build no lemma, whose memory grows superlinearly.
     eqHave x = case x of
-        IDef n Nothing  -> "have := " ++ rootName n ++ ".eq_1 i"
-        IDef n (Just k) -> "have := " ++ rootName n ++ ".eq_1 i " ++ viewText k
-        IHw n           -> "have := " ++ hwName n ++ ".eq_1 i"
-        IVer ns         -> "have := " ++ qual ns ++ ".eq_1 i"
-        IProj k f       -> "have : " ++ viewText k ++ "." ++ q f ++ " = " ++ projValue k f ++ " := rfl"
+        IDef n Nothing  -> rflHave proofC (TRef n False) (DShared n)
+        IDef n (Just k) -> rflHave (proofC { pcView = VSub (viewText k) }) (viewInst n k) (DShared n)
+        IHw n           -> rflHave proofC (THw n) (DHw n)
+        IVer ns         -> rflHave proofC (TDef ns) (DSeq ns)
+        IProj k f       -> [ "have : " ++ viewText k ++ "." ++ viewPath f ++ " = " ++ projValue k f ++ " := rfl" ]
+    viewInst n k = case k of
+        VKHw       -> TAtHw n
+        VKAt v     -> TAt n v
+        VKFun v as -> TAtVF n v as
+    rflHave c lhs key =
+        let l = "have : " ++ ppT proofC 4 lhs ++ " ="
+            body = ML.findWithDefault (TLit False) key expBodies
+        in case layout c 86 4 body of
+               [b] | length l + length b < 92 -> [l ++ " " ++ b ++ " := rfl"]
+               bs -> l : map ("    " ++) (init bs) ++ ["    " ++ last bs ++ " := rfl"]
+    -- (in the proof, a fact or a hypothesis of that name would hide a definition)
+    proofC = hwC { pcShadow = S.fromList ("this" : [ var | (_, var, _, _) <- hyps ]
+                                          ++ [ n | (_, _, _, fs) <- hyps, (n, _, _) <- fs ]) }
+    -- The equations in parenthesized blocks of 64 (fewer, larger steps cost
+    -- Lean less memory), as many to a line as fit.
+    haveBlocks hs = concatMap block (chunksOf 64 hs)
+      where
+        block items =
+            let n = length items
+                sep = zipWith (\k ls -> if k == n then ls else onLast (++ ";") ls) [1 :: Int ..] items
+            in case pack sep of
+                   []       -> []
+                   (l : ls) -> onLast (++ ")") (("  (" ++ l) : map ("   " ++) ls)
+        pack items = case items of
+            [] -> []
+            ([l] : rest) -> let (line, rest') = fill l rest in line : pack rest'
+            (ls : rest) -> ls ++ pack rest
+        fill cur items = case items of
+            ([l] : rest) | length cur + 1 + length l <= 93 -> fill (cur ++ " " ++ l) rest
+            _ -> (cur, items)
+        onLast f ls = case reverse ls of
+            (z : zs) -> reverse (f z : zs)
+            []       -> []
     viewText k = case k of
         VKHw    -> "(View.hw i)"
         VKAt v  -> "(" ++ qual v ++ " i)"
-        VKFun v as -> "(i." ++ q v ++ concatMap (\a -> " " ++ ppT hwC 5 a) as ++ ")"
+        VKFun v as -> "(i." ++ inPath v ++ concatMap (\a -> " " ++ ppT hwC 5 a) as ++ ")"
     projValue k f = case k of
-        VKAt v | Just var <- M.lookup v viewVars >>= M.lookup f -> "i." ++ q var
-        _ -> maybe (zero SBool) (ppT hwC 0 . fdHw) (M.lookup f fieldMap)
+        VKAt v | Just var <- M.lookup v viewVars >>= M.lookup f -> "i." ++ inPath var
+        _ -> maybe (zero SBool) (ppT hwC 4 . fdHw) (M.lookup f fieldMap)
     viewVars = M.fromList [ (vwName v, M.fromList (vwVars v)) | v <- soViews sq ]
-    seqDefMap = M.fromList [ (ldName l, l) | l <- pfSeqDefs pf ]
-    hwDefMap  = M.fromList [ (ldName l, l) | l <- pfHwDefs pf ]
-    sdefMap   = M.fromList [ (sdName x, x) | x <- soDefs sq ]
     -- the applications a term printed in a mode makes directly (in front
     -- of others, so that nesting does not copy them)
     direct m t = directTo m t []
@@ -5933,12 +6150,13 @@ emitLean d pf = unlines $ concat
     -- (each field's, made once)
     inlineDirect = ML.map (direct RInline . fdHw) fieldMap
     -- what an application's equation mentions in turn
+    -- (a body with the definitions used once written in, as its equation has it)
     instBody x = case x of
-        IDef n mk -> [ (maybe RInline RProj mk, ldBody l) | Just l <- [M.lookup n seqDefMap] ]
-        IHw n     -> [ (RInline, ldBody l) | Just l <- [M.lookup n hwDefMap] ]
+        IDef n mk -> [ (maybe RInline RProj mk, b) | Just b <- [ML.lookup (DShared n) expBodies] ]
+        IHw n     -> [ (RInline, b) | Just b <- [ML.lookup (DHw n) expBodies] ]
         IProj (VKAt v) f | Just vars <- M.lookup v viewVars, M.member f vars -> []
         IProj _ f -> [ (RInline, fdHw fd) | Just fd <- [M.lookup f fieldMap] ]
-        IVer ns   -> [ (RInline, sdTerm (sdBody x')) | Just x' <- [M.lookup ns sdefMap] ]
+        IVer ns   -> [ (RInline, b) | Just b <- [ML.lookup (DSeq ns) expBodies] ]
     hypRoots = [ (RInline, t) | (_, _, t) <- pfEnv pf ++ pfPrims pf ++ pfOracles pf ++ pfUser pf ]
                ++ concatMap congTerms (pfCongs pf)
     congTerms c = (RInline, cgLhs c) : (RInline, cgRhs c)
@@ -5947,9 +6165,9 @@ emitLean d pf = unlines $ concat
                                  PPort port ts -> map ((,) RInline) (ts ++ hwPortTerms port)
                                  PTrue t -> [(RInline, t)]
                            | p <- cgPremises c ]
-    goalRoots = [ (RInline, t) | t <- M.elems (soFinals sq) ]
-                ++ [ (RInline, t) | t <- M.elems (pfHwPorts pf) ]
-                ++ [ (RInline, t) | (_, _, t, _) <- pfOutputs pf ]
+    goalRoots = [ (RInline, expand t) | t <- M.elems (soFinals sq) ]
+                ++ [ (RInline, expand t) | t <- M.elems (pfHwPorts pf) ]
+                ++ [ (RInline, expand t) | (_, _, t, _) <- pfOutputs pf ]
                 ++ [ (RInline, THw oneHotKey) | not (null (pfMuxes pf)) ]
     (hypInsts, seenH, fullH) = closure S.empty S.empty hypRoots
     (goalInsts, _, _) = closure seenH fullH goalRoots
@@ -5965,9 +6183,9 @@ emitLean d pf = unlines $ concat
             | otherwise = case x of
                 IDef n (Just k@(VKAt _)) | S.member n full ->
                     go (S.insert x seen) full (x : acc) (atInst k (ML.findWithDefault [] n defAtoms) ++ xs)
-                IDef n (Just (VKAt _)) -> go (S.insert x seen) (S.insert n full) (x : acc) (expand x ++ xs)
-                _ -> go (S.insert x seen) full (x : acc) (expand x ++ xs)
-        expand x = [ y | (m, t) <- instBody x, y <- direct m t ]
+                IDef n (Just (VKAt _)) -> go (S.insert x seen) (S.insert n full) (x : acc) (mentions x ++ xs)
+                _ -> go (S.insert x seen) full (x : acc) (mentions x ++ xs)
+        mentions x = [ y | (m, t) <- instBody x, y <- direct m t ]
     -- the view-dependent atoms of a term, as 'directTo' in a mode RProj
     -- meets them (a term without any is not 'dynamic'), the first of each
     viewAtoms t rest = case t of
@@ -5975,7 +6193,7 @@ emitLean d pf = unlines $ concat
         TRef n True   -> Right n : rest
         _ | not (dynamic t) -> rest
         _             -> foldr viewAtoms rest (subTerms t)
-    defAtoms = ML.map (\l -> nubOrd (viewAtoms (ldBody l) [])) seqDefMap
+    defAtoms = ML.fromList [ (n, nubOrd (viewAtoms b [])) | (DShared n, b) <- ML.toList expBodies ]
     atInst k = concatMap (either (\f -> [ IProj k f | not (viewAtom k) ]) (\n -> [IDef n (Just k)]))
     -- (with other orders, a step's view is a function's value: each field of
     -- it is an atom, with no equation)
@@ -5983,7 +6201,7 @@ emitLean d pf = unlines $ concat
     congStmt c =
         let prem p = case p of
                 PEq x y -> ppT hwC 4 x ++ " = " ++ ppT hwC 4 y
-                PPort port ts -> unwords (("Agree." ++ q (portLabel port)) : map (ppT hwC 5) (ts ++ hwPortTerms port))
+                PPort port ts -> unwords (shapeName (portShape port) : map (ppT hwC 5) (ts ++ hwPortTerms port))
                                  ++ " = true"
                 PTrue t -> boolStmt t
         in concatMap (\p -> prem p ++ " → ") (cgPremises c) ++ ppT hwC 4 (cgLhs c) ++ " = " ++ ppT hwC 4 (cgRhs c)

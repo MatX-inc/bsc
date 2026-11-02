@@ -50,7 +50,8 @@ The file has five sections:
 3. **Pre-Scheduled Sequential Semantics.** The one-rule-at-a-time execution,
    field by field: for each step and each `State` field it writes, one
    definition `Seq.<step>.<field>`, in terms of each field as the last
-   earlier step left it. `stepSequential` is the `State` of the last
+   earlier step left it (a version used in one place only is written out
+   there instead). `stepSequential` is the `State` of the last
    versions. A step runs when the hardware fires it. It sees submodule
    outputs as they stand before it, has its guard checked there, and has
    each action-method call, and each system task's reads, checked against
@@ -134,11 +135,19 @@ The file has five sections:
    design. The definitions of sections 2, 3 and 4 and the views are
    definitions, not abbreviations, so `bv_decide` treats each application of
    one as a value of its own; the proof supplies the equation of every
-   application the facts and the goal reach (`d.eq_1`, or `rfl` for a field
-   of a view). Unfolded instead, the definitions every fact shares would be
-   copied into each fact. Each equation is printed once, in the one proof:
-   first those the hypotheses reach, which is all the consistency check
-   needs, then the rest. The theorems take their hypotheses as one
+   application the facts and the goal reach, as `have : d i = <body> :=
+   rfl` (at the view an application has, if any), in blocks of 64.
+   Unfolded instead, the definitions every fact shares would be copied
+   into each fact. Each equation is printed once, in the one proof: first
+   those the hypotheses reach, which is all the consistency check needs,
+   then the rest. A definition used in one place only (counting a use in
+   `stepSequential` or `stepScheduled` as often as `Agree` reads that
+   field) is written out there instead, which copies nothing; one that a
+   fact, a congruence, a view or the other orders' sections name is
+   always kept. Lean's memory at `-j1` grows with the square of the number
+   of top-level commands, so the small definitions share `mutual` blocks of
+   up to 100, and there is one `Agree.<shape>` abbreviation per shape of
+   port. The theorems take their hypotheses as one
    structure, `Hyps`, which that proof takes apart. The theorem's conclusion names
    `stepSequential` and `stepScheduled`, which are definitions for the same
    reason: `bv_decide` also unfolds the abbreviations in the statement of
@@ -257,15 +266,19 @@ saying where it comes from. A file has only the structures it needs.
 
 Beyond the hypotheses, the proof trusts Lean's kernel and `bv_decide`'s
 compiled certificate checker, and the conditions of the action calls in
-bsc's packages. It does not trust bsc's use analysis (`AUses.buildUseMaps`,
-run again): the conditions under which that analysis says a method use
-matters only choose which disjointness facts to ask bsc's solver for. A
-fact the solver confirms is true of the hardware whatever the condition,
-and a wrong condition only yields a weaker fact or none, so the proof can
-only fail. It trusts this tool's extraction, which is not itself verified:
-a bug there could make the model differ from bsc's hardware. The generated
-file is written to be read against the design, and `--dump-design` shows
-the extracted model, with bsc's use conditions marked as hints.
+bsc's packages. It also trusts how `aState` transcribes system-task calls:
+the theorem checks that what a task prints, and whether it prints, depends
+only on reads the annotations allow, but it does not compare the
+hardware's task calls with the sequential execution's. It does not trust
+bsc's use analysis (`AUses.buildUseMaps`, run again): the conditions under
+which that analysis says a method use matters only choose which
+disjointness facts to ask bsc's solver for. A fact the solver confirms is
+true of the hardware whatever the condition, and a wrong condition only
+yields a weaker fact or none, so the proof can only fail. It trusts this
+tool's extraction, which is not itself verified: a bug there could make
+the model differ from bsc's hardware. The generated file is written to be
+read against the design, and `--dump-design` shows the extracted model,
+with bsc's use conditions marked as hints.
 
 ## How it works
 
@@ -305,9 +318,9 @@ The tool runs in three pure phases:
   against the annotations, as above. Whether a read reaches a task, or what
   a step does, is decided by the selections on the way, not by the
   operators: a read in `x && false` still counts.
-* A Lean structure has at most 255 fields. A larger `Inputs` is split into
-  parts, and larger hypothesis structures into several. A `View` or `State`
-  that large is not handled yet.
+* A Lean structure has at most 255 fields. A larger `Inputs`, `View` or
+  `State` is split into parts (a field is then written by its path,
+  `i.part<k>.x`), and larger hypothesis structures into several.
 * A failing proof prints a counterexample. It shows either a real
   disagreement between bsc's hardware and the sequential semantics, or
   something outside the model. `bv_decide` calls it "potentially spurious"

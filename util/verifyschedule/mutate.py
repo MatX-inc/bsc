@@ -78,6 +78,23 @@ def mutants(text, per_kind):
         yield "arg " + m.group(2), "\n".join(new)
 
 
+def def_body(lines, k):
+    """The body of the definition whose header is line k, on one line."""
+    body = [lines[k].split(" :=", 1)[1].strip()]
+    j = k + 1
+    while j < len(lines) and lines[j].startswith("  "):
+        body.append(lines[j].strip())
+        j += 1
+    return " ".join(b for b in body if b)
+
+
+def restate(text, name, body):
+    """The proof states each definition's equation by `rfl`, its body written
+    out: restate a mutated definition's from its new body."""
+    pat = re.compile(r"have : " + re.escape(name) + r" i =.*? := rfl", re.S)
+    return pat.sub(lambda m: "have : " + name + " i = (" + body + ") := rfl", text)
+
+
 def order_mutants(text, per_kind):
     """For each pair of steps that commute only by a fact (a `Comm.<a>.<b>`
     lemma, a moved after b), widen b's guard by a's (CAN_FIRE), so that both
@@ -108,6 +125,7 @@ def order_mutants(text, per_kind):
                     and line.strip().endswith("= true") and line.startswith("    ")):
                 lines[k] = "    true = true"
         # the muxes give b, the later step, priority
+        swapped = set()
         k = 0
         while k < len(lines):
             m1 = re.match(r"^  (else )?bif WILL_FIRE_" + re.escape(a) + r" i then (.*)$", lines[k])
@@ -116,10 +134,19 @@ def order_mutants(text, per_kind):
                 lead = "  else " if m1.group(1) else "  "
                 lines[k] = lead + "bif WILL_FIRE_" + b + " i then " + m2.group(1)
                 lines[k + 1] = "  else bif WILL_FIRE_" + a + " i then " + m1.group(2)
+                h = k
+                while not lines[h].startswith("noncomputable def "):
+                    h -= 1
+                swapped.add(h)
                 k += 2
             else:
                 k += 1
+        # (and the equations of the definitions changed say so)
+        heads = sorted(swapped) + [h for h, l in enumerate(lines)
+                                   if l.startswith("noncomputable def CAN_FIRE_" + b + " (i : Inputs)")]
         new = "\n".join(lines)
+        for h in heads:
+            new = restate(new, lines[h].split()[2], def_body(lines, h))
         # and their one-hot condition is gone
         new = new.replace("!(WILL_FIRE_" + a + " i && WILL_FIRE_" + b + " i)", "true")
         cut = new.find("\n/-! ### Other orders", new.find("\ntheorem schedule_sound"))
