@@ -1,0 +1,135 @@
+=== metadata (MetaMerge sysMetaMerge):
+ledger after idroprules: 223 sites, 11 contexts, 8 roots, 8 defs, 40 events
+inlined (Inline): __h324 -> __h325
+inlined (Inline): __h325 -> __h326
+inlined (Inline): __h251 -> __h253
+created (Transform): __i1 <- __h250
+created (Transform): __i2 <- __h247
+created (Transform): __i3 <- __h253
+created (Transform): __i4 <- __h253
+created (Transform): __i5 <- __h322
+created (Transform): __i6 <- __h326
+merged (Transform): __h250 -> __i1
+merged (Transform): __h247 -> __i2
+merged (Transform): __h253 -> __i4
+merged (Transform): __h322 -> __i5
+merged (Transform): __h326 -> __i5
+renamed (Transform): __i2 -> __h247
+renamed (Transform): __i1 -> __h250
+renamed (Transform): __i5 -> __h326
+renamed (Transform): __i4 -> __h253
+created (Transform): __i7 <- RL_step
+created (Transform): __i8 <- value
+inlined (Transform): __i8 -> value
+dropped (Transform): __i3
+dropped (Transform): __h253
+dropped (Transform): __i6
+created (Transform): __j1 <- __h250
+created (Transform): __j2 <- __h247
+created (Transform): __j3 <- __h326
+created (Transform): __j4 <- __h326
+created (Transform): __j5 <- __i7
+merged (Transform): __h250 -> __j1
+merged (Transform): __h247 -> __j2
+merged (Transform): __h326 -> __j4
+merged (Transform): __i7 -> __j5
+renamed (Transform): __j2 -> __h247
+renamed (Transform): __j1 -> __h250
+renamed (Transform): __j5 -> __i7
+renamed (Transform): __j4 -> __h326
+created (Transform): __j6 <- value
+inlined (Transform): __j6 -> value
+dropped (Transform): __j3
+resolved: 2 of 5 defs and rules stand for other ids
+  __i7 <- RL_step
+  __h326 <- __h326 __h322 __h325 __h324
+
+-----
+=== metadata (MetaMerge sysMetaMerge):
+ledger after dropundet: 223 sites, 11 contexts, 8 roots, 8 defs, 40 events
+inlined (Inline): __h324 -> __h325
+inlined (Inline): __h325 -> __h326
+inlined (Inline): __h251 -> __h253
+created (Transform): __i1 <- __h250
+created (Transform): __i2 <- __h247
+created (Transform): __i3 <- __h253
+created (Transform): __i4 <- __h253
+created (Transform): __i5 <- __h322
+created (Transform): __i6 <- __h326
+merged (Transform): __h250 -> __i1
+merged (Transform): __h247 -> __i2
+merged (Transform): __h253 -> __i4
+merged (Transform): __h322 -> __i5
+merged (Transform): __h326 -> __i5
+renamed (Transform): __i2 -> __h247
+renamed (Transform): __i1 -> __h250
+renamed (Transform): __i5 -> __h326
+renamed (Transform): __i4 -> __h253
+created (Transform): __i7 <- RL_step
+created (Transform): __i8 <- value
+inlined (Transform): __i8 -> value
+dropped (Transform): __i3
+dropped (Transform): __h253
+dropped (Transform): __i6
+created (Transform): __j1 <- __h250
+created (Transform): __j2 <- __h247
+created (Transform): __j3 <- __h326
+created (Transform): __j4 <- __h326
+created (Transform): __j5 <- __i7
+merged (Transform): __h250 -> __j1
+merged (Transform): __h247 -> __j2
+merged (Transform): __h326 -> __j4
+merged (Transform): __i7 -> __j5
+renamed (Transform): __j2 -> __h247
+renamed (Transform): __j1 -> __h250
+renamed (Transform): __j5 -> __i7
+renamed (Transform): __j4 -> __h326
+created (Transform): __j6 <- value
+inlined (Transform): __j6 -> value
+dropped (Transform): __j3
+
+-----
+=== metadata (MetaMerge sysMetaMerge):
+ledger after finalcleanup: 223 sites, 11 contexts, 8 roots, 8 defs, 40 events
+inlined (Inline): __h324 -> __h325
+inlined (Inline): __h325 -> __h326
+inlined (Inline): __h251 -> __h253
+created (Transform): __i1 <- __h250
+created (Transform): __i2 <- __h247
+created (Transform): __i3 <- __h253
+created (Transform): __i4 <- __h253
+created (Transform): __i5 <- __h322
+created (Transform): __i6 <- __h326
+merged (Transform): __h250 -> __i1
+merged (Transform): __h247 -> __i2
+merged (Transform): __h253 -> __i4
+merged (Transform): __h322 -> __i5
+merged (Transform): __h326 -> __i5
+renamed (Transform): __i2 -> __h247
+renamed (Transform): __i1 -> __h250
+renamed (Transform): __i5 -> __h326
+renamed (Transform): __i4 -> __h253
+created (Transform): __i7 <- RL_step
+created (Transform): __i8 <- value
+inlined (Transform): __i8 -> value
+dropped (Transform): __i3
+dropped (Transform): __h253
+dropped (Transform): __i6
+created (Transform): __j1 <- __h250
+created (Transform): __j2 <- __h247
+created (Transform): __j3 <- __h326
+created (Transform): __j4 <- __h326
+created (Transform): __j5 <- __i7
+merged (Transform): __h250 -> __j1
+merged (Transform): __h247 -> __j2
+merged (Transform): __h326 -> __j4
+merged (Transform): __i7 -> __j5
+renamed (Transform): __j2 -> __h247
+renamed (Transform): __j1 -> __h250
+renamed (Transform): __j5 -> __i7
+renamed (Transform): __j4 -> __h326
+created (Transform): __j6 <- value
+inlined (Transform): __j6 -> value
+dropped (Transform): __j3
+
+-----

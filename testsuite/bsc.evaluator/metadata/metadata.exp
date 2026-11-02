@@ -194,4 +194,52 @@ erase MetaCrossLib.bo
 compile_pass MetaCrossLib.bsv
 metadata_golden MetaCross sysMetaCross
 
+# The ledger of the ISyntax passes, one small package per event shape,
+# pinned as -dmetadata prints it after iDropRules (the events of every
+# pass since elaboration and the resolution of each def and rule that
+# stands for other ids), with -metadata-check asserting at every pass
+# boundary that the ids of the package follow the events, and the
+# .bxref of the same run carrying the events the dump printed after the
+# last ASPackage pass; the Verilog does not change with any of the flags.
+proc ledger_golden { pkg top {extra {}} } {
+    erase $pkg.bo
+    compile_verilog_pass $pkg.bsv $top
+    move $top.v $top.plain.v
+
+    erase $pkg.bo
+    erase $pkg.ledger
+    erase $top.bxref
+    compile_verilog_pass $pkg.bsv $top "-dmetadata=$pkg.ledger -metadata-check -bxref $extra"
+    compare_file $top.v $top.plain.v
+    compare_file $pkg.ledger
+    if { [do_internal_checks] } {
+        dumpbxref $top.bxref --events
+        final_ledger $pkg.ledger $pkg.ledger.final
+        compare_file [make_dumpbxref_output_name $top.bxref] $pkg.ledger.final
+        erase $pkg.ledger.final
+    }
+    erase $pkg.ledger
+    erase $top.bxref
+    erase $top.plain.v
+}
+
+# the Fmt defs of a display, inlined into its foreign call by iInlineFmt
+ledger_golden MetaFmt sysMetaFmt
+
+# a def used once, inlined into its user by iInline
+ledger_golden MetaInline sysMetaInline
+
+# two defs the transform stage's CSE merges after its local rewrite
+ledger_golden MetaMerge sysMetaMerge
+
+# a rule split on its condition: one rule per arm, from the root
+ledger_golden MetaSplit sysMetaSplit
+
+# a condition lifted into a conditional expression, which the second
+# transform stage makes a def created from the rule
+ledger_golden MetaLift sysMetaLift
+
+# a rule that never fires, dropped by iDropRules
+ledger_golden MetaDrop sysMetaDrop
+
 }

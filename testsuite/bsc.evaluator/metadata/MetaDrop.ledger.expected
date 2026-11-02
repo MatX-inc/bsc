@@ -1,0 +1,58 @@
+=== metadata (MetaDrop sysMetaDrop):
+ledger after idroprules: 155 sites, 4 contexts, 5 roots, 1 defs, 15 events
+created (Transform): __i1 <- __h133
+merged (Transform): __h133 -> __i1
+renamed (Transform): __i1 -> __h133
+created (Transform): __i2 <- RL_step
+created (Transform): __i3 <- value
+inlined (Transform): __i3 -> value
+inlined (Transform): __i2 -> RL_step
+created (Transform): __j1 <- __h133
+merged (Transform): __h133 -> __j1
+renamed (Transform): __j1 -> __h133
+created (Transform): __j2 <- RL_step
+created (Transform): __j3 <- value
+inlined (Transform): __j3 -> value
+inlined (Transform): __j2 -> RL_step
+dropped (DropRules): RL_never
+resolved: 0 of 2 defs and rules stand for other ids
+
+-----
+=== metadata (MetaDrop sysMetaDrop):
+ledger after dropundet: 155 sites, 4 contexts, 5 roots, 1 defs, 15 events
+created (Transform): __i1 <- __h133
+merged (Transform): __h133 -> __i1
+renamed (Transform): __i1 -> __h133
+created (Transform): __i2 <- RL_step
+created (Transform): __i3 <- value
+inlined (Transform): __i3 -> value
+inlined (Transform): __i2 -> RL_step
+created (Transform): __j1 <- __h133
+merged (Transform): __h133 -> __j1
+renamed (Transform): __j1 -> __h133
+created (Transform): __j2 <- RL_step
+created (Transform): __j3 <- value
+inlined (Transform): __j3 -> value
+inlined (Transform): __j2 -> RL_step
+dropped (DropRules): RL_never
+
+-----
+=== metadata (MetaDrop sysMetaDrop):
+ledger after finalcleanup: 155 sites, 4 contexts, 5 roots, 1 defs, 15 events
+created (Transform): __i1 <- __h133
+merged (Transform): __h133 -> __i1
+renamed (Transform): __i1 -> __h133
+created (Transform): __i2 <- RL_step
+created (Transform): __i3 <- value
+inlined (Transform): __i3 -> value
+inlined (Transform): __i2 -> RL_step
+created (Transform): __j1 <- __h133
+merged (Transform): __h133 -> __j1
+renamed (Transform): __j1 -> __h133
+created (Transform): __j2 <- RL_step
+created (Transform): __j3 <- value
+inlined (Transform): __j3 -> value
+inlined (Transform): __j2 -> RL_step
+dropped (DropRules): RL_never
+
+-----

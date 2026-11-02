@@ -1,0 +1,98 @@
+=== metadata (MetaInline sysMetaInline):
+ledger after idroprules: 157 sites, 5 contexts, 5 roots, 4 defs, 28 events
+inlined (Inline): __h152 -> __h149
+inlined (Inline): __h155 -> __h149
+inlined (Inline): __h149 -> __h157
+inlined (Inline): __h157 -> RL_step
+created (Transform): __i1 <- RL_step
+created (Transform): __i2 <- RL_step
+created (Transform): __i3 <- RL_step
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- value
+inlined (Transform): __i1 -> __i3
+inlined (Transform): __i2 -> __i3
+inlined (Transform): __i3 -> __i4
+inlined (Transform): __i4 -> __i5
+inlined (Transform): __i6 -> value
+inlined (Transform): __i5 -> RL_step
+created (Transform): __j1 <- RL_step
+created (Transform): __j2 <- RL_step
+created (Transform): __j3 <- RL_step
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- value
+inlined (Transform): __j1 -> __j3
+inlined (Transform): __j2 -> __j3
+inlined (Transform): __j3 -> __j4
+inlined (Transform): __j4 -> __j5
+inlined (Transform): __j6 -> value
+inlined (Transform): __j5 -> RL_step
+resolved: 1 of 1 defs and rules stand for other ids
+  RL_step <- RL_step __h157 __h149 __h155 __h152
+
+-----
+=== metadata (MetaInline sysMetaInline):
+ledger after dropundet: 157 sites, 5 contexts, 5 roots, 4 defs, 28 events
+inlined (Inline): __h152 -> __h149
+inlined (Inline): __h155 -> __h149
+inlined (Inline): __h149 -> __h157
+inlined (Inline): __h157 -> RL_step
+created (Transform): __i1 <- RL_step
+created (Transform): __i2 <- RL_step
+created (Transform): __i3 <- RL_step
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- value
+inlined (Transform): __i1 -> __i3
+inlined (Transform): __i2 -> __i3
+inlined (Transform): __i3 -> __i4
+inlined (Transform): __i4 -> __i5
+inlined (Transform): __i6 -> value
+inlined (Transform): __i5 -> RL_step
+created (Transform): __j1 <- RL_step
+created (Transform): __j2 <- RL_step
+created (Transform): __j3 <- RL_step
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- value
+inlined (Transform): __j1 -> __j3
+inlined (Transform): __j2 -> __j3
+inlined (Transform): __j3 -> __j4
+inlined (Transform): __j4 -> __j5
+inlined (Transform): __j6 -> value
+inlined (Transform): __j5 -> RL_step
+
+-----
+=== metadata (MetaInline sysMetaInline):
+ledger after finalcleanup: 157 sites, 5 contexts, 5 roots, 4 defs, 28 events
+inlined (Inline): __h152 -> __h149
+inlined (Inline): __h155 -> __h149
+inlined (Inline): __h149 -> __h157
+inlined (Inline): __h157 -> RL_step
+created (Transform): __i1 <- RL_step
+created (Transform): __i2 <- RL_step
+created (Transform): __i3 <- RL_step
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- value
+inlined (Transform): __i1 -> __i3
+inlined (Transform): __i2 -> __i3
+inlined (Transform): __i3 -> __i4
+inlined (Transform): __i4 -> __i5
+inlined (Transform): __i6 -> value
+inlined (Transform): __i5 -> RL_step
+created (Transform): __j1 <- RL_step
+created (Transform): __j2 <- RL_step
+created (Transform): __j3 <- RL_step
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- value
+inlined (Transform): __j1 -> __j3
+inlined (Transform): __j2 -> __j3
+inlined (Transform): __j3 -> __j4
+inlined (Transform): __j4 -> __j5
+inlined (Transform): __j6 -> value
+inlined (Transform): __j5 -> RL_step
+
+-----
