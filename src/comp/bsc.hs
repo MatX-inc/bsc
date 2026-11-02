@@ -83,6 +83,7 @@ import Deriving(derive)
 import SymTab
 import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
                   getPackagesUsedInTypes)
+import TIMonad(CATFCache)
 import TypeCheck(cCtxReduceIO, cTypeCheck, mergeCATFCaches)
 import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
@@ -100,7 +101,7 @@ import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
 import GenBin(genBinFile)
 import GenWrap(genWrap, WrapInfo(..))
-import GenFuncWrap(genFuncWrap, addFuncWrap)
+import GenFuncWrap(genFuncWrap, addFuncWrap, FuncInfo)
 import GenForeign(genForeign)
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
@@ -321,7 +322,53 @@ compilePackage ::
     String ->
     CPackage ->
     IO (Bool, BinMap HeapData, HashMap)
-compilePackage
+compilePackage errh flags tStart binmap0 hashmap0 name_orig min = do
+    cr <- ctxReducePackage errh flags tStart binmap0 hashmap0 name_orig min
+    tc <- typeCheckPackage errh flags cr
+    compileTypeChecked errh flags cr tc
+
+-- The package after context reduction: what the front end of a compile
+-- (reading the imports through the symbol table rebuilt after ctxreduce)
+-- hands to the typechecker and to the code generator.
+data CtxReduced = CtxReduced {
+        cr_name :: String,            -- encoded full path of the source file
+        cr_dumpnames :: DumpNames,
+        cr_pkgId :: Id,
+        -- the values of the Environment module (see "adjEnv")
+        cr_env :: [(String, IExpr HeapData)],
+        cr_time :: TimeInfo,
+        cr_binmap :: BinMap HeapData,
+        cr_hashmap :: HashMap,
+        -- the imported signatures in dependency order (BinUtil.readImports)
+        cr_impsigs :: [CImportedSignature],
+        cr_funcs :: [FuncInfo],       -- `noinline' functions (GenFuncWrap)
+        cr_gens :: [WrapInfo],        -- modules to generate (GenWrap)
+        cr_pkg :: CPackage,           -- the package after ctxreduce
+        cr_symt :: SymTab,            -- its symbol table
+        cr_pkgsUsedInTypes :: S.Set Id,
+        cr_pkgsUsedInCtxReduce :: S.Set Id,
+        cr_atfCache :: CATFCache      -- type-function reductions from ctxreduce
+        }
+
+-- The package after typechecking
+data TypeChecked = TypeChecked {
+        tc_pkg :: CPackage,
+        tc_errors :: Bool,            -- an error was reported and recovered from
+        tc_pkgsUsedInCode :: S.Set Id,
+        tc_atfCache :: CATFCache,     -- type-function reductions from typecheck
+        tc_time :: TimeInfo
+        }
+
+ctxReducePackage ::
+    ErrorHandle ->
+    Flags ->
+    TimeInfo ->
+    BinMap HeapData ->
+    HashMap ->
+    String ->
+    CPackage ->
+    IO CtxReduced
+ctxReducePackage
     errh
     flags                -- user switches
     tStart
@@ -426,6 +473,22 @@ compilePackage
     symt <- mkSymTab errh mctx
     t <- dump errh flags t DFsympostctxreduce dumpnames symt
 
+    return (CtxReduced { cr_name = name, cr_dumpnames = dumpnames,
+                         cr_pkgId = pkgId, cr_env = env, cr_time = t,
+                         cr_binmap = binmap, cr_hashmap = hashmap,
+                         cr_impsigs = impsigs, cr_funcs = funcs, cr_gens = gens,
+                         cr_pkg = mctx, cr_symt = symt,
+                         cr_pkgsUsedInTypes = pkgsUsedInTypes,
+                         cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
+                         cr_atfCache = atfCacheFromCtxReduce })
+
+typeCheckPackage :: ErrorHandle -> Flags -> CtxReduced -> IO TypeChecked
+typeCheckPackage
+    errh
+    flags
+    (CtxReduced { cr_dumpnames = dumpnames, cr_time = t,
+                  cr_pkg = mctx, cr_symt = symt }) = do
+
     -- Turn instance declarations into ordinary definitions
     start flags DFconvinst
     let minst = cConvInst errh symt mctx
@@ -436,6 +499,28 @@ compilePackage
     (mod, tcErrors, pkgsUsedInCode, ctypeATFCache) <- cTypeCheck errh flags symt minst
     --putStr (ppReadable mod)
     t <- dump errh flags t DFtypecheck dumpnames mod
+
+    return (TypeChecked { tc_pkg = mod, tc_errors = tcErrors,
+                          tc_pkgsUsedInCode = pkgsUsedInCode,
+                          tc_atfCache = ctypeATFCache, tc_time = t })
+
+-- From the typechecked package to the generated modules and the .bo file
+compileTypeChecked ::
+    ErrorHandle -> Flags -> CtxReduced -> TypeChecked ->
+    IO (Bool, BinMap HeapData, HashMap)
+compileTypeChecked
+    errh
+    flags
+    (CtxReduced { cr_name = name, cr_dumpnames = dumpnames, cr_pkgId = pkgId,
+                  cr_env = env, cr_binmap = binmap, cr_hashmap = hashmap,
+                  cr_impsigs = impsigs, cr_funcs = funcs, cr_gens = gens,
+                  cr_pkg = mctx, cr_symt = symt,
+                  cr_pkgsUsedInTypes = pkgsUsedInTypes,
+                  cr_pkgsUsedInCtxReduce = pkgsUsedInCtxReduce,
+                  cr_atfCache = atfCacheFromCtxReduce })
+    (TypeChecked { tc_pkg = mod, tc_errors = tcErrors,
+                   tc_pkgsUsedInCode = pkgsUsedInCode,
+                   tc_atfCache = ctypeATFCache, tc_time = t }) = do
 
     --when (early flags) $ return ()
     let prefix = dirName name ++ "/"
