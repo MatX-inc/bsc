@@ -1,0 +1,18 @@
+package B where
+
+-- imports A in its signatures and its bodies
+
+import A
+
+twice :: Bit 8 -> Bit 8
+twice x = f (f x)
+
+mkB :: Module Counter
+mkB =
+  module
+    c :: Counter <- mkCounter
+    rules
+      "go": when isRed Red ==> c.incr
+    interface
+      incr = c.incr
+      value = twice c.value

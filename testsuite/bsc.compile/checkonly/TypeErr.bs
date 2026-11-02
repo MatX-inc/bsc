@@ -1,0 +1,9 @@
+package TypeErr where
+
+-- a type error inside a body: -check-only fails, -signature-only still
+-- writes the interface (the signature does not depend on the body)
+
+import A
+
+broken :: Bit 8 -> Bit 8
+broken x = f True

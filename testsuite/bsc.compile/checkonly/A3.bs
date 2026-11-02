@@ -1,0 +1,30 @@
+package A where
+
+-- A1.bs with an interface change: a new exported function and a wider
+-- type for "f"
+
+data Color = Red | Green
+           deriving (Eq, Bits)
+
+interface Counter =
+    incr :: Action
+    value :: Bit 8
+
+f :: Bit 16 -> Bit 16
+f x = x + 1
+
+h :: Bit 8 -> Bit 8
+h x = x + 2
+
+isRed :: Color -> Bool
+isRed c = c == Red
+
+mkCounter :: Module Counter
+mkCounter =
+  module
+    r :: Reg (Bit 8) <- mkReg 0
+    rules
+      "tick": when True ==> r := h r
+    interface
+      incr = r := r + 1
+      value = r

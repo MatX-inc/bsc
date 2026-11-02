@@ -1,0 +1,4 @@
+Error: "Prelude.bs": (T0099)
+  Duplicate typeclass instances defined for Prelude.Eq A.ColorThe previous
+  instance was defined at "Dupe.bs", line 9, column 9 Please remove an
+  applicable instance declaration or deriving request

@@ -1,0 +1,28 @@
+WROTE A.bi ONLY (-signature-only)
+WROTE A.bi A.bcheck ONLY (-check-only)
+IDENTICAL A.bi (-signature-only, -check-only)
+TAG A.bi bsc-bi-20261102-1
+TAG A.bcheck bsc-bcheck-20261102-2
+SAME-PACKAGE dumpbo A.bcheck, -dliftdicts
+LIFTED-DICTIONARIES-IN A.bcheck (dumpbo -stats)
+DEPENDS A.bcheck Prelude PreludeBSV
+WROTE Kinded.bcheck (kind-annotated type parameters)
+SAME-PACKAGE dumpbo Kinded.bcheck, -dliftdicts
+LET-STATEMENT-IN Defaults -dliftdicts (class default method)
+SAME-PACKAGE dumpbo Defaults.bcheck, -dliftdicts
+IDENTICAL A.bcheck (recompiled)
+IDENTICAL A.bcheck (two directories, -remap-path-prefix)
+NO-DIRECTORY-IN A.bcheck (-remap-path-prefix)
+DIFFER A.bcheck (two directories, no -remap-path-prefix)
+DIRECTORY-IN A.bcheck
+IDENTICAL A.bi (body-only edit)
+DIFFER A.bcheck (body-only edit)
+DIFFER A.bi (interface edit)
+DIFFER A.bcheck (interface edit)
+IDENTICAL A.bi (other directory)
+IDENTICAL A.bi (absolute path)
+NO-DIRECTORY-IN A.bi
+IDENTICAL A.bo (A.bi present)
+IDENTICAL B.bo (A.bi present or absent)
+SAME-SIGNATURE dumpbo -bi A.bo A.bi
+DEPENDS A.bi Prelude PreludeBSV

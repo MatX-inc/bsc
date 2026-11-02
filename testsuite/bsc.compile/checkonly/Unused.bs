@@ -1,0 +1,9 @@
+package Unused where
+
+-- imports A and uses nothing from it: T0157 under a full compile and
+-- under -check-only alike
+
+import A
+
+one :: Bit 8
+one = 1
