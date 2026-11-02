@@ -603,9 +603,11 @@ mkVModInfo vName vClk vRst
        -- e.g. (a, b) CF (a, b) ==> (a, a) (a, b) (b, b)
        -- NOT  (a, b) CF (a, b) ==> (a, a) (a, b) (b, a) (a, b)
        cleanup = fastNub . (map ordPair)
+       -- drop exact repeats of SB and SBR pairs before ordPair, so that
+       -- a SB b with b SB a still fails the check
        sched_pairs = map ordPair $
-                     (cleanup (sCF vMethConf)) ++ sSB vMethConf ++
-                     (cleanup (sP  vMethConf)) ++ sSBR vMethConf ++
+                     (cleanup (sCF vMethConf)) ++ fastNub (sSB vMethConf) ++
+                     (cleanup (sP  vMethConf)) ++ fastNub (sSBR vMethConf) ++
                      (cleanup (sC  vMethConf)) ++ me_pairs ++ ext_pairs
        ext_pairs  = selfPairs (sEXT vMethConf)
        -- might have duplicates if a method is annotated ME with itself
