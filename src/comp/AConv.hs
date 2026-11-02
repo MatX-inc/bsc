@@ -183,7 +183,7 @@ checkForeignInRules method rs =
 
 
 aDo :: IModule a -> M APackage
-aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcalNo cmap) = do
+aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcalNo cmap _) = do
         flags <- getFlags
 
         -- AVInst keeps the types of method ports

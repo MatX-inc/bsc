@@ -18,7 +18,7 @@ import Data.Char(isSpace, toLower, ord)
 import Data.List(nub, partition, intersperse, sort,
             isPrefixOf, isSuffixOf, unzip5, intercalate, foldl')
 import Data.Time.Clock.POSIX(getPOSIXTime)
-import Data.Maybe(isJust, isNothing)
+import Data.Maybe(isJust, isNothing, fromMaybe)
 import Numeric(showOct)
 
 import Control.Monad(when, unless, filterM, liftM, foldM)
@@ -43,7 +43,7 @@ import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
 import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remapPath,
-                    mkAName, mkVName, mkVPICName, mkDPICName,
+                    mkAName, mkVName, mkMetaName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
                     bscSrcSuffix, binSuffix,
@@ -113,6 +113,7 @@ import GenForeign(genForeign)
 import DefProp(DefProp(..))
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
+import IExpandMeta(renderSideFile)
 import ITransform(iTransform)
 import IInline(iInline)
 import IInlineFmt(iInlineFmt)
@@ -872,6 +873,7 @@ genModule
     t <- dump errh flags t DFexpanded dumpnames imod0
     when (showIESyntax flags) (putStrLnF (show imod0))
     stats flags DFexpanded imod0
+    writeMetadataFile errh flags prefix modstr imod0
 
     progArgs <- getArgs
     when ("-trace-state-loc" `elem` progArgs) $ do
@@ -1166,6 +1168,35 @@ genModule
     t <- dump errh flags t DFwrappergen dumpnames def
     return (def)
 
+
+-- -metadata-out: write the evaluator metadata side file of the elaborated
+-- module (IExpandMeta.renderSideFile), <module>.metadata, into the
+-- directory the flag names, or beside the capture as one of its
+-- companions when an ECO capture is being taken.  Nothing is written
+-- under -metadata-scramble, whose store holds perturbed numbers by
+-- design.  The file renders the module's metadata table and forces no
+-- def name (see IExpandMeta.DefRecord).
+writeMetadataFile :: ErrorHandle -> Flags -> String -> String ->
+                     IModule HeapData -> IO ()
+writeMetadataFile errh flags prefix modstr imod =
+    case metadataDirectory flags of
+      Just dir | not (metadataScramble flags) -> do
+        createDirectoryIfMissing True dir
+        fname_init <- genFileName mkMetaName (Just dir) prefix modstr
+        let fname = getFullFilePath fname_init
+        writeFileCatch errh fname (renderSideFile modstr (imod_meta imod))
+        unless (quiet flags) $
+            putStrLnF ("Metadata file created: " ++ getRelativeFilePath fname_init)
+      _ -> return ()
+
+-- the directory of the side file: the capture directory under
+-- -eco-capture (ECO.Observe places the other companions there), else
+-- the -metadata-out directory
+metadataDirectory :: Flags -> Maybe FilePath
+metadataDirectory flags =
+    case metadataOut flags of
+      Nothing -> Nothing
+      Just dir -> Just (fromMaybe dir (ecoCapture (ecoOptions flags)))
 
 writeABin :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
              String -> String -> String -> CQType ->

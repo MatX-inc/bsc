@@ -1,0 +1,30 @@
+bsc-metadata 1
+def __h | site def MetaSide.mix [MetaSide.bsv:25:18] | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 -> def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder x [Prelude.bs] | alias - | tiers d
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 -> def Prelude.toPrimAction [MetaSide.bsv:41:7] u#1 -> def MetaSide.twice [MetaSide.bsv:17:19]#1 | contexts 3 | merged 2 {prim PrimAdd @ def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 -> def Prelude.toPrimAction [MetaSide.bsv:37:7] u#1 -> def MetaSide.twice [MetaSide.bsv:17:19]#1} {prim PrimAdd @ def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def MetaSide.twice [MetaSide.bsv:17:19]#1} | folded 0 | parent _N | binder field 0 | alias _N | tiers m
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 -> def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 -> def Prelude.primFix [MetaSide.bsv:45:7] ur#1 -> def Prelude.bind_ [MetaSide.bsv:46:12] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder - | alias - | tiers -
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 -> def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 -> def Prelude.primFix [MetaSide.bsv:45:7] ur#2 -> def Prelude.bind_ [MetaSide.bsv:46:12] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder - | alias - | tiers -
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 -> def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 -> def Prelude.primFix [MetaSide.bsv:45:7] ur#3 -> def Prelude.bind_ [MetaSide.bsv:46:12] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder - | alias - | tiers -
+def __h | site prim PrimBNot | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 | contexts 1 | merged 0 | folded 0 | parent - | binder field 2 | alias - | tiers -
+def __h | site prim PrimConcat | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 -> def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 -> def MetaSide.mix [MetaSide.bsv:25:18]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder - | alias - | tiers -
+def __h | site prim PrimEQ | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder - | alias - | tiers -
+def __h | site prim PrimInv | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 -> def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 -> def MetaSide.mix [MetaSide.bsv:25:18]#1 | contexts 1 | merged 0 | folded 0 | parent y__h | binder field 1 | alias - | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 1 {method Prelude.read [Prelude.bs] @ def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1} | folded 0 | parent __h | binder field 0 | alias _N | tiers m
+def b_BITS_7_TO_2___h | site prim PrimSelect | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 -> def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 -> def MetaSide.mix [MetaSide.bsv:25:18]#1 | contexts 1 | merged 0 | folded 0 | parent y__h | binder field 0 | alias - | tiers -
+def y__h | site prim PrimXor | chain def Prelude.bind_ [MetaSide.bsv:36:4] u#1 -> def Prelude.addRules [MetaSide.bsv:36:4] u#1 -> def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 -> def MetaSide.mix [MetaSide.bsv:25:18]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder y [MetaSide.bsv:25:41] | alias - | tiers -
+module sysMetaSide
+root inst a [MetaSide.bsv:31:19]
+root inst b [MetaSide.bsv:32:19]
+root inst c [MetaSide.bsv:34:18]
+root inst vs_0 [MetaSide.bsv:33:31]
+root inst vs_1 [MetaSide.bsv:33:31]
+root inst vs_2 [MetaSide.bsv:33:31]
+root methodroot put [MetaSide.bsv:30:8]
+root methodroot sum [MetaSide.bsv:30:8]
+root rule r1
+root rule r2
+root rule r3
+root rule r4

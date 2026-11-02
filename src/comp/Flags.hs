@@ -84,10 +84,12 @@ data Flags = Flags {
         maxTIStackDepth :: Int,
         -- Evaluator metadata capture controls of this invocation (see
         -- IExpandMeta): print the site and frame chain of every heap
-        -- cell of the elaborated module; perturb the metadata store
-        -- with a per-run seed.  Like ecoOptions, neither is stored in
-        -- a .ba (GenABin writes nothing and reads False).
+        -- cell of the elaborated module; write the metadata side file
+        -- of every elaborated module into a directory; perturb the
+        -- metadata store with a per-run seed.  Like ecoOptions, none is
+        -- stored in a .ba (GenABin writes nothing and reads the default).
         metadataDump :: Bool,
+        metadataOut :: Maybe String,
         metadataScramble :: Bool,
         methodBVI :: Bool,
         methodConf :: Bool,

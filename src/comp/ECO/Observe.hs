@@ -30,8 +30,11 @@ checkECOOutputPaths :: ECOOptions -> FilePath -> ReplayManifest -> FilePath ->
                        String -> [FilePath] -> IO ()
 checkECOOutputPaths opts manifestPath manifest outputDir moduleName ordinary = do
     let stem = observationDirectory opts outputDir </> moduleName
+        -- .metadata is the evaluator metadata side file (-metadata-out),
+        -- written beside the capture as a companion
         observations = [stem ++ suffix | suffix <-
-            [".eco-preopt", ".eco-graph", ".eco-ast", ".eco-ast.bin", ".eco-ast.output.v"]]
+            [".eco-preopt", ".eco-graph", ".eco-ast", ".eco-ast.bin", ".eco-ast.output.v",
+             ".metadata"]]
         outputs = ordinary ++ observations
     checkReplayOutputPaths manifestPath manifest outputs
     ordinaryOverlap <- outputPathsOverlap ordinary observations
