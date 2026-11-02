@@ -6,6 +6,7 @@ module Pred(
             PredAncestor(..),
             getPredAncestors, mkPredAncestor, addPredAncestors,
             expandSyn, predToType, qualToType, mkInst,
+            Candidate(..), candidateInst, candidatesFromInsts,
             Instantiate(..),
             predToCPred, qualTypeToCQType,
             pureInputPositions,
@@ -189,6 +190,14 @@ data Class
             inputPositions :: [Int],      -- pure-input positions for PredTrie (pureInputPositions funDeps (length csig))
                                           -- empty when all positions are outputs: trie degenerates to a flat list
             genInsts :: [TyVar] -> Maybe [TyVar] -> Pred -> [Inst],
+            -- the instances of genInsts, in its order, each marked as one
+            -- to try or as one the lookup ruled out: an instance with a
+            -- constructor head at a pure-input position where the
+            -- predicate has a type-variable head, which a one-way match
+            -- of the predicate can never select (PredTrie.lookupCandidates);
+            -- reducePred walks this list and passes the ruled-out ones
+            -- over without instantiating them
+            genCandidates :: [TyVar] -> Maybe [TyVar] -> Pred -> [Candidate Inst],
             getInsts :: [Inst],           -- flat list for display/analysis
             allowIncoherent :: Maybe Bool, -- Just False = always coherent
                                            -- Just True  = always incoherent
@@ -236,7 +245,8 @@ instance NFData Class where
             rnf (tyConOf c)         `seq`
             rnf (funDeps c)         `seq`
             rnf (inputPositions c)  `seq`
-            -- funDeps2, genInsts, getInsts intentionally not forced
+            -- funDeps2, genInsts, genCandidates, getInsts
+            -- intentionally not forced
             rnf (allowIncoherent c) `seq`
             rnf (isComm c)          `seq`
             rnf (pkg_src c)         `seq`
@@ -266,6 +276,28 @@ instance NFData Inst where
 
 mkInst :: CExpr -> Qual Pred -> Maybe Id -> Inst
 mkInst e i pkg = Inst e (tv i) i pkg
+
+-- An instance as the walk of reducePred visits it: one to try
+-- (instantiate and match), or one the lookup ruled out, which cannot
+-- match the predicate one-way and is passed over without being
+-- instantiated, with the draws and the capture check the walk made for
+-- it when it tried every instance (see reducePred).
+data Candidate a = Try a | RuledOut a
+
+instance Functor Candidate where
+    fmap f (Try x)      = Try (f x)
+    fmap f (RuledOut x) = RuledOut (f x)
+
+candidateInst :: Candidate a -> a
+candidateInst (Try x)      = x
+candidateInst (RuledOut x) = x
+
+-- genCandidates for a class whose lookup rules nothing out: the numeric
+-- classes generate their instances from the predicate, and the legacy
+-- flat index tries every instance.
+candidatesFromInsts :: ([TyVar] -> Maybe [TyVar] -> Pred -> [Inst])
+                    -> [TyVar] -> Maybe [TyVar] -> Pred -> [Candidate Inst]
+candidatesFromInsts gen bvs dvs p = map Try (gen bvs dvs p)
 
 instance Types Inst where
     apSub s (Inst e _ i pkg) = Inst (apSub s e) [] (apSub s i) pkg
