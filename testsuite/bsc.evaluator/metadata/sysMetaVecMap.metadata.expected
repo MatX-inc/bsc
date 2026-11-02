@@ -1,0 +1,14 @@
+bsc-metadata 1
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaVecMap.bsv:21:4] u#1 -> def Prelude.addRules [MetaVecMap.bsv:21:4] u#1 -> def Prelude.toPrimAction [MetaVecMap.bsv:22:7] u#1 -> def Array.map [MetaVecMap.bsv:22:35] u#1 -> def Prelude.primFix [Vector.bs] ur#1 -> def Prelude.primFix [Array.bsv] ur#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder field 0 | alias - | tiers -
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaVecMap.bsv:21:4] u#1 -> def Prelude.addRules [MetaVecMap.bsv:21:4] u#1 -> def Prelude.toPrimAction [MetaVecMap.bsv:22:7] u#1 -> def Array.map [MetaVecMap.bsv:22:35] u#1 -> def Prelude.primFix [Vector.bs] ur#1 -> def Prelude.primFix [Array.bsv] ur#2 | contexts 1 | merged 0 | folded 0 | parent _N | binder field 0 | alias - | tiers -
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaVecMap.bsv:21:4] u#1 -> def Prelude.addRules [MetaVecMap.bsv:21:4] u#1 -> def Prelude.toPrimAction [MetaVecMap.bsv:22:7] u#1 -> def Array.map [MetaVecMap.bsv:22:35] u#1 -> def Prelude.primFix [Vector.bs] ur#1 -> def Prelude.primFix [Array.bsv] ur#3 | contexts 1 | merged 0 | folded 0 | parent _N | binder field 0 | alias - | tiers -
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaVecMap.bsv:21:4] u#1 | contexts 1 | merged 0 | folded 0 | parent - | binder - | alias - | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+module sysMetaVecMap
+root inst regs_0 [MetaVecMap.bsv:19:31]
+root inst regs_1 [MetaVecMap.bsv:19:31]
+root inst regs_2 [MetaVecMap.bsv:19:31]
+root methodroot sum [MetaVecMap.bsv:18:8]
+root rule tick

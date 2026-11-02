@@ -1,0 +1,18 @@
+checking package dependencies
+compiling MetaFix.bsv
+code generation for sysMetaFix starts
+metadata census for sysMetaFix:
+  cells reachable 8, defs lifted 7, defs with chains 7
+  roots pushed: rule 1, methodroot 1, inst 4
+  pushes: unfoldings 152, completions 12, roots 6
+  frames on chains 15: use-site 6, definition-site 9, root 0
+  defs by site: use-site 0, definition-site 0, prim 7, con 0, method 0, foreign 0, lambda 0, bound 0, inst 0; head-site 0, shared 0, merged 0
+  depth: 2:4 5:3
+  count: 1:12 2:1 3:1 4:1
+  alias classes 24
+  cost: frame pushes 170, context-table operations 18 for 9 contexts
+  chains walked 164, loops re-entered 0, repeated non-recursion sites 5 (def Prelude.bind_ [Prelude.bs] x4; def Prelude.bind_ [MetaFix.bsv:22:4] u x1)
+  name hints: 0 cells bound to a parameter, 0 outside the library, each named by it
+  method-condition positions: 0 calls, 0 kept, 0 on chains
+Verilog file created: sysMetaFix.v
+All packages are up to date.

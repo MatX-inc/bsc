@@ -81,6 +81,7 @@ import Debug.Trace(traceM)
 import qualified Data.Array as Array
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
+import qualified Data.Map.Strict as MS
 import qualified Data.Set as S
 
 import Eval
@@ -116,7 +117,8 @@ import IExpandMeta(MetaStore, MetaTables, SiteKind(..), SiteKey, idSiteKey,
                    primSiteKey, boundSiteKey, Frame, Binder(..), CellMeta,
                    headSiteOf, cellDefSite, newMetaStore, lookupSite, mintSite,
                    pushFrame, pushRoot, swapFrame, swapCellFrame, stampMeta,
-                   aliasUnion, readMetaTables, readRoots)
+                   aliasUnion, readMetaTables, readRoots,
+                   Census, readCensus, recordUnfolding, recordCompletion)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -768,6 +770,9 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_meta :: MetaTables,
                            go_roots :: [Int],
                            go_defcache :: IS.IntSet,
+                           -- the census counters of the store (empty
+                           -- unless -metadata-census)
+                           go_census :: Census,
                            goutput :: a }
 
 runG :: ErrorHandle -> Flags ->
@@ -785,7 +790,9 @@ runG errh flags symt alldefs recdefs atf_cache defId is_noinlined_func pps gFn =
                      let s = floor (t * 1000) :: Int
                      return (if s == 0 then 1 else s)
              else return 0
-     store <- newMetaStore seed
+     -- the census counts under -metadata-census, but not in the
+     -- scramble run, whose store holds perturbed numbers by design
+     store <- newMetaStore seed (metadataCensus flags && not (metadataScramble flags))
      let gs = initGState errh flags symt alldefs recdefs atf_cache store defId is_noinlined_func pps
      (retval, gs') <- runStateT gFn gs
      -- convert the relevant info in the final GState into the GOutput
@@ -822,6 +829,7 @@ runG errh flags symt alldefs recdefs atf_cache defId is_noinlined_func pps gFn =
              internalError ("IExpandUtils.runG - unexpanded ruleblobs: " ++ ppReadable rblobs)
          meta <- readMetaTables store
          roots <- readRoots store
+         census <- readCensus store
          return $ (GOutput {
                      go_clock_domains = (M.toList (clock_domains gs')),
                      go_resets = (all_resets gs'),
@@ -840,6 +848,7 @@ runG errh flags symt alldefs recdefs atf_cache defId is_noinlined_func pps gFn =
                      go_meta = meta,
                      go_roots = roots,
                      go_defcache = IS.fromList [ p | IRefT _ p _ _ <- M.elems (defCache gs') ],
+                     go_census = census,
                      goutput = retval
                     })
 
@@ -888,10 +897,14 @@ step i = do s <- get
             -- do common update
             let c = stepNo s
             let s' = s { stepNo = c + 1 }
-            if (doProfile) then do
+            -- the census cross-checks its frames against this map; the
+            -- counts are added strictly, because a lazy insert leaves one
+            -- thunk per unfolding on a definition's count and forcing the
+            -- hottest definition's count at the end overflows the stack
+            if (doProfile || metadataCensus (flags (ro s))) then do
               let prof = profilingMap s
               let pos_map = M.singleton (getPosition i) 1
-              let prof' = M.insertWith (M.unionWith (+)) i pos_map prof
+              let prof' = MS.insertWith (MS.unionWith (+)) i pos_map prof
               put (s' { profilingMap = prof' })
              else put s'
 
@@ -2753,6 +2766,7 @@ withCellDefFrame ref act = do
     Just (site, recursive) -> do
       st <- getMetaStore
       fr <- liftIO (pushFrame st site recursive)
+      liftIO (recordCompletion st fr)
       withMetaFrame fr act
 
 -- Record that the cells p and q hold one value (see IExpandMeta).
@@ -2776,7 +2790,9 @@ pushDefFrame :: Id -> G Frame
 pushDefFrame i = do
   st <- getMetaStore
   (site, recursive) <- mintDefSite st i
-  liftIO (pushFrame st site recursive)
+  fr <- liftIO (pushFrame st site recursive)
+  liftIO (recordUnfolding st site fr)
+  return fr
 
 -- Push a root frame (a rule, a method or an instantiation).
 pushRootFrame :: SiteKey -> G Frame

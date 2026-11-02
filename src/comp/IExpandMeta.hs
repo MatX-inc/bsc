@@ -15,7 +15,10 @@ module IExpandMeta(
         -- the module metadata table, built by the rebuild
         ContextTable, emptyContextTable, contextTableSize, internFrame,
         contextChain, aliasUnions, noCell, DefRecord(..), ModuleMeta(..),
-        emptyModuleMeta, defNameString, sideFileSchema, renderSideFile
+        emptyModuleMeta, defNameString, sideFileSchema, renderSideFile,
+        -- the census (-metadata-census)
+        Census, readCensus, recordUnfolding, recordCompletion, aliasClassCount,
+        renderCensus, checkProfile, checkKeptPositions, checkNameHints
         ) where
 
 import Control.Monad(when)
@@ -24,16 +27,18 @@ import Data.Char(isAlphaNum)
 import Data.IORef
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
-import Data.List(intercalate)
+import Data.List(intercalate, sortBy)
 import qualified Data.List as L
 import qualified Data.Map.Strict as M
+import Data.Maybe(mapMaybe)
+import Data.Ord(comparing)
 import System.FilePath(takeFileName)
 
 import ErrorUtil(internalError)
 import Eval(NFData(..), rnf2, rnf3, rnf4, rnf11)
 import FStringCompat(FString, getFString)
 import Id(Id, getIdBase, getIdQual, getIdPosition)
-import Position(Position(..), noPosition)
+import Position(Position(..), noPosition, isPreludePosition)
 import Prim(PrimOp)
 
 -- ===============
@@ -251,24 +256,27 @@ cellDefSite m =
 
 -- The store: the site table, the frame counter, the frame register
 -- (the frame current for the next allocation), the alias classes, the
--- sites of the root frames pushed so far (most recent first) and the
--- scramble seed (0 when scrambling is off).  One store per module
--- elaboration.
+-- sites of the root frames pushed so far (most recent first), the
+-- scramble seed (0 when scrambling is off), and the census counters
+-- with the flag that turns them on.  One store per module elaboration.
 data MetaStore = MetaStore { ms_sites :: !(IORef SiteTable),
                              ms_nextFrame :: !(IORef Int),
                              ms_frame :: !(IORef Frame),
                              ms_alias :: !(IORef AliasMap),
                              ms_roots :: !(IORef [Int]),
-                             ms_seed :: {-# UNPACK #-} !Int }
+                             ms_seed :: {-# UNPACK #-} !Int,
+                             ms_census :: !Bool,
+                             ms_counts :: !(IORef Census) }
 
-newMetaStore :: Int -> IO MetaStore
-newMetaStore seed = do
+newMetaStore :: Int -> Bool -> IO MetaStore
+newMetaStore seed census = do
     sites <- newIORef emptySiteTable
     next <- newIORef 1
     reg <- newIORef TopFrame
     alias <- newIORef IM.empty
     roots <- newIORef []
-    return (MetaStore sites next reg alias roots seed)
+    counts <- newIORef emptyCensus
+    return (MetaStore sites next reg alias roots seed census counts)
 
 -- The one scrambling function: identity when the seed is 0.
 perturb :: MetaStore -> Int -> Int
@@ -378,6 +386,7 @@ pushRoot st site = do
     n <- readIORef (ms_nextFrame st)
     writeIORef (ms_nextFrame st) $! n + 1
     modifyIORef' (ms_roots st) (site :)
+    recordRoot st site
     return $! Frame (perturb st n) site (perturb st 1) TopFrame IM.empty
 
 -- Set the register to a frame and return the frame it held.  The
@@ -595,12 +604,15 @@ renderDump (MetaTables t am) cells = unlines (map line cells)
 -- memoized by frame id, so that frames no kept cell references are never
 -- visited and identical chains share one id.  This is the only place
 -- context ids exist; nothing during evaluation reads or writes them.
+-- ct_ops counts the steps of internFrame, one per frame whose chain was
+-- looked up, memoized or not: the census's context-table cost counter.
 data ContextTable = ContextTable { ct_next :: {-# UNPACK #-} !Int,
                                    ct_ids :: !(M.Map (Int, Int, Int) Int),
-                                   ct_rows :: !(IM.IntMap (Int, Int, Int)) }
+                                   ct_rows :: !(IM.IntMap (Int, Int, Int)),
+                                   ct_ops :: {-# UNPACK #-} !Int }
 
 emptyContextTable :: ContextTable
-emptyContextTable = ContextTable 1 M.empty IM.empty
+emptyContextTable = ContextTable 1 M.empty IM.empty 0
 
 contextTableSize :: ContextTable -> Int
 contextTableSize t = IM.size (ct_rows t)
@@ -611,21 +623,22 @@ contextTableSize t = IM.size (ct_rows t)
 internFrame :: (ContextTable, IM.IntMap Int) -> Frame
             -> ((ContextTable, IM.IntMap Int), Int)
 internFrame st TopFrame = (st, 0)
-internFrame st@(_, memo) (Frame { fr_id = fid, fr_site = s, fr_count = c,
-                                  fr_parent = parent }) =
-    case IM.lookup fid memo of
-      Just ctx -> (st, ctx)
-      Nothing ->
-        let ((t1, memo1), pctx) = internFrame st parent
-            key = (pctx, s, c)
-        in  case M.lookup key (ct_ids t1) of
-              Just ctx -> ((t1, IM.insert fid ctx memo1), ctx)
-              Nothing ->
-                let ctx = ct_next t1
-                    t2 = ContextTable (ctx + 1)
-                                      (M.insert key ctx (ct_ids t1))
-                                      (IM.insert ctx key (ct_rows t1))
-                in  ((t2, IM.insert fid ctx memo1), ctx)
+internFrame (t0, memo) (Frame { fr_id = fid, fr_site = s, fr_count = c,
+                                fr_parent = parent }) =
+    let t = t0 { ct_ops = ct_ops t0 + 1 }
+    in  case IM.lookup fid memo of
+          Just ctx -> ((t, memo), ctx)
+          Nothing ->
+            let ((t1, memo1), pctx) = internFrame (t, memo) parent
+                key = (pctx, s, c)
+            in  case M.lookup key (ct_ids t1) of
+                  Just ctx -> ((t1, IM.insert fid ctx memo1), ctx)
+                  Nothing ->
+                    let ctx = ct_next t1
+                        t2 = t1 { ct_next = ctx + 1,
+                                  ct_ids = M.insert key ctx (ct_ids t1),
+                                  ct_rows = IM.insert ctx key (ct_rows t1) }
+                    in  ((t2, IM.insert fid ctx memo1), ctx)
 
 -- (site, count) of every frame of a context, from the root
 contextChain :: ContextTable -> Int -> [(Int, Int)]
@@ -746,7 +759,7 @@ instance NFData SiteTable where
     rnf (SiteTable n ids rows recs) = rnf4 n ids rows recs
 
 instance NFData ContextTable where
-    rnf (ContextTable n ids rows) = rnf3 n ids rows
+    rnf (ContextTable n ids rows ops) = rnf4 n ids rows ops
 
 instance NFData ModuleMeta where
     rnf (ModuleMeta s c r d) = rnf4 s c r d
@@ -830,3 +843,279 @@ renderSideFile modName mm =
                                         ('s', dr_shared r),
                                         ('m', not (null (dr_merged r)))], on ]
         in  if null letters then "-" else letters
+
+-- ===============
+-- The census (-metadata-census)
+--
+-- The counters exist only under -metadata-census: every hook tests
+-- ms_census first, so a plain run pays one test per push and allocates
+-- nothing here.  The census is suppressed under -metadata-scramble,
+-- whose store holds perturbed numbers by design, so the fact bits a
+-- walk reads are true facts.  The evaluator prints the census at the
+-- end of elaboration (renderCensus) from the module metadata table and
+-- the headers of the lifted defs' cells, and runs the cross-checks
+-- there (checkProfile and checkNameHints assert, checkKeptPositions
+-- reports); the chain walk runs at every push (recordUnfolding,
+-- recordCompletion) and counts the loops re-entered and the other
+-- sites repeated on a chain.
+
+data Census = Census {
+        -- pushes at definition unfoldings (pushDefFrame)
+        cs_unfoldings :: {-# UNPACK #-} !Int,
+        -- pushes at the application of a cell's value (withCellDefFrame)
+        cs_completions :: {-# UNPACK #-} !Int,
+        -- root pushes by kind (fromEnum of the SiteKind)
+        cs_roots :: !(IM.IntMap Int),
+        -- unfolding pushes per site of the reference unfolded
+        cs_perSite :: !(IM.IntMap Int),
+        -- chains walked
+        cs_walks :: {-# UNPACK #-} !Int,
+        -- loops re-entered, by the site of the recursion point found on
+        -- the chain above a frame of it
+        cs_nested :: !(IM.IntMap Nesting),
+        -- sites of definitions that are not recursion points found
+        -- repeated on the chain of a new frame, by site
+        cs_repeats :: !(IM.IntMap Int)
+        }
+
+-- A loop re-entered, aggregated over its dynamic instances: the nested
+-- instances of the site (frames of it pushed with a count of 1 under a
+-- frame of it), the iterations of those instances (every frame of it
+-- pushed under one) and the deepest nesting (frames of it on one chain).
+data Nesting = Nesting {-# UNPACK #-} !Int {-# UNPACK #-} !Int {-# UNPACK #-} !Int
+
+joinNesting :: Nesting -> Nesting -> Nesting
+joinNesting (Nesting i n d) (Nesting i' n' d') = Nesting (i + i') (n + n') (max d d')
+
+emptyCensus :: Census
+emptyCensus = Census 0 0 IM.empty IM.empty 0 IM.empty IM.empty
+
+readCensus :: MetaStore -> IO Census
+readCensus st = readIORef (ms_counts st)
+
+-- Count an unfolding push, by the site of the reference unfolded (the
+-- frame of a continued iteration carries the loop's entry site), and
+-- walk its chain.
+recordUnfolding :: MetaStore -> Int -> Frame -> IO ()
+recordUnfolding st site fr = when (ms_census st) $
+    modifyIORef' (ms_counts st) $ \cs ->
+        let cs' = cs { cs_unfoldings = cs_unfoldings cs + 1,
+                       cs_perSite = IM.insertWith (+) (plainSite site) 1 (cs_perSite cs) }
+        in  walkChain fr cs'
+
+-- Count a completion push (the application of a cell's value) and walk
+-- its chain.
+recordCompletion :: MetaStore -> Frame -> IO ()
+recordCompletion st fr = when (ms_census st) $
+    modifyIORef' (ms_counts st) $ \cs ->
+        walkChain fr (cs { cs_completions = cs_completions cs + 1 })
+
+recordRoot :: MetaStore -> Int -> IO ()
+recordRoot st site = when (ms_census st) $ do
+    t <- readIORef (ms_sites st)
+    let kind = maybe SKBound (siteKeyKind . sr_key) (siteRow t site)
+    modifyIORef' (ms_counts st) $ \cs ->
+        cs { cs_roots = IM.insertWith (+) (fromEnum kind) 1 (cs_roots cs) }
+
+frameSite :: Frame -> Int
+frameSite TopFrame = 0
+frameSite (Frame { fr_site = s }) = s
+
+-- Walk the whole chain of a new frame.  Every frame is pushed after
+-- its parent (pushFrame takes the register's frame or an ancestor of
+-- it as the parent, pushRoot none) and the census runs with the seed
+-- 0, so the ids are push numbers and fall toward the root: no frame is
+-- on its own chain twice, and a chain that does not fall stops the
+-- compile.  A repeated site is counted by what the site is, never
+-- asserted.  A recursion point's site above a frame of it is a loop
+-- re-entered: the loop's body ran the same loop again, through the
+-- same reference, as a nested dynamic instance (a zipWith over a
+-- vector of vectors runs the Vector package's zipWith loop inside an
+-- iteration of itself when an element is forced).  Between the two
+-- frames runs a loop of the same definition through another reference
+-- (every static loop is a primFix reference), whose entry shadows the
+-- outer instance's in the register's map, so the push nested a fresh
+-- count under the current frame (pushFrame): two instances of one
+-- site, not two iterations of one loop.  A repeated site whose
+-- definition is not a recursion point is the evaluator heaping a
+-- definition's arguments under the definition's own frame and
+-- applying continuations inside the unfolding that received them, so
+-- a definition applied within its own argument (a monadic bind whose
+-- continuation binds again, f (f x)) nests under itself without
+-- recursing.
+walkChain :: Frame -> Census -> Census
+walkChain TopFrame cs = cs
+walkChain fr@(Frame { fr_id = i, fr_site = s, fr_count = c, fr_parent = p }) cs =
+    let site = plainSite s
+        -- the frames above that carry the site, each checked against
+        -- the id of the frame below it
+        above = go i fr 0 p
+        go _ _ n TopFrame = n
+        go j child n a@(Frame { fr_id = k, fr_site = t, fr_parent = q })
+          | k >= j =
+              internalError ("IExpandMeta.walkChain: a frame is on the chain of one pushed before it: "
+                             ++ show a ++ " above " ++ show child)
+          | otherwise = let n' = if plainSite t == site then n + 1 else n
+                        in  n' `seq` go k a n' q
+        cs' = cs { cs_walks = cs_walks cs + 1 }
+    in  if above == 0 then cs'
+        else if testBit s 59
+        then cs' { cs_nested = IM.insertWith joinNesting site
+                                 (Nesting (if c == 1 then 1 else 0) 1 (above + 1))
+                                 (cs_nested cs') }
+        else cs' { cs_repeats = IM.insertWith (+) site 1 (cs_repeats cs') }
+
+-- A full distribution: every value present with its multiplicity, in
+-- ascending order; no buckets.
+distribution :: [Int] -> [(Int, Int)]
+distribution xs = IM.toAscList (IM.fromListWith (+) [ (x, 1) | x <- xs ])
+
+showDistribution :: [(Int, Int)] -> String
+showDistribution d = unwords [ show v ++ ":" ++ show n | (v, n) <- d ]
+
+-- the classes that hold another cell: a cell in such a class has an
+-- entry or is the root some entry points at, and a root has no entry,
+-- so the classes are the roots the entries point at
+aliasClassCount :: AliasMap -> Int
+aliasClassCount m = IS.size (IS.fromList (IM.elems m) `IS.difference` IM.keysSet m)
+
+-- The census of one module: the lifted defs, each as its record in the
+-- module table with the header of its cell; the roots and frames by
+-- kind; the depth and count distributions; the alias classes after the
+-- CSE unions; and the cost counters.  The shared and merged facts are
+-- the records' (dr_shared, dr_merged), the context-table operations
+-- are the steps internFrame took over the kept cells (ct_ops).
+renderCensus :: String -> ModuleMeta -> Census -> Int -> Int
+             -> [(DefRecord, CellMeta)] -> String
+renderCensus modName mm cs cells aliasClasses defs = unlines $
+    [ "metadata census for " ++ modName ++ ":",
+      "  cells reachable " ++ show cells ++ ", defs lifted " ++ show (length defs)
+        ++ ", defs with chains " ++ show (length withChains),
+      "  roots pushed: " ++ byKind rootKinds (cs_roots cs),
+      "  pushes: unfoldings " ++ show (cs_unfoldings cs)
+        ++ ", completions " ++ show (cs_completions cs)
+        ++ ", roots " ++ show rootPushes,
+      "  frames on chains " ++ show (IM.size frames) ++ ": "
+        ++ counts [("use-site", frameUse), ("definition-site", frameDef),
+                   ("root", frameRoot)],
+      "  defs by site: " ++ counts
+        [ ("use-site", nDef True), ("definition-site", nDef False),
+          ("prim", nKind SKPrim), ("con", nKind SKCon), ("method", nKind SKMethod),
+          ("foreign", nKind SKForeign), ("lambda", nKind SKLambda),
+          ("bound", nKind SKBound), ("inst", nKind SKInst) ]
+        ++ "; head-site " ++ show (count (testBit60 . dr_site) defs)
+        ++ ", shared " ++ show (count dr_shared defs)
+        ++ ", merged " ++ show (count (not . null . dr_merged) defs),
+      "  depth: " ++ showDistribution (distribution (map (length . chainOf . snd) withChains)),
+      "  count: " ++ showDistribution (distribution [ c | Frame { fr_count = c } <- IM.elems frames ]),
+      "  alias classes " ++ show aliasClasses,
+      "  cost: frame pushes " ++ show (cs_unfoldings cs + cs_completions cs + rootPushes)
+        ++ ", context-table operations " ++ show (ct_ops ct)
+        ++ " for " ++ show (contextTableSize ct) ++ " contexts",
+      "  chains walked " ++ show (cs_walks cs)
+        ++ ", loops re-entered " ++ show (IM.size (cs_nested cs)) ++ nestings
+        ++ ", repeated non-recursion sites " ++ show (sum (IM.elems (cs_repeats cs)))
+        ++ repeats ]
+  where
+    t = mm_sites mm
+    ct = mm_contexts mm
+    withChains = [ d | d@(_, m) <- defs, not (null (chainOf m)) ]
+    rootKinds = [SKRule, SKMethodRoot, SKInst]
+    rootPushes = sum (IM.elems (cs_roots cs))
+    byKind ks m = counts [ (showSiteKind k, IM.findWithDefault 0 (fromEnum k) m) | k <- ks ]
+    counts kvs = intercalate ", " [ k ++ " " ++ show v | (k, v) <- kvs ]
+    count f = length . filter (f . fst)
+    testBit60 s = testBit s 60
+    -- every distinct frame on the chains of the lifted defs
+    frames = L.foldl' addChain IM.empty withChains
+    addChain m (_, cm) = go (cm_frame cm) m
+      where go TopFrame acc = acc
+            go fr@(Frame { fr_id = i, fr_parent = p }) acc
+              | IM.member i acc = acc
+              | otherwise = go p (IM.insert i fr acc)
+    frameFacts = [ (siteRow t (frameSite fr), fr) | fr <- IM.elems frames ]
+    frameUse = length [ () | (Just r, _) <- frameFacts, isDefRow r, sr_useSite r ]
+    frameDef = length [ () | (Just r, _) <- frameFacts, isDefRow r, not (sr_useSite r) ]
+    frameRoot = length [ () | (Just r, _) <- frameFacts, siteKeyKind (sr_key r) `elem` rootKinds ]
+    isDefRow r = siteKeyKind (sr_key r) == SKDef
+    defRows = [ (siteRow t (dr_site r), r) | (r, _) <- defs ]
+    nDef u = length [ () | (Just r, _) <- defRows, isDefRow r, sr_useSite r == u ]
+    nKind k = length [ () | (Just r, _) <- defRows, siteKeyKind (sr_key r) == k ]
+    -- the five most re-entered loops: the nested instances, their
+    -- iterations and the deepest nesting
+    nestings = case sortBy (comparing (\ (_, Nesting i _ _) -> negate i)) (IM.toList (cs_nested cs)) of
+                 [] -> ""
+                 ns -> " (" ++ intercalate "; " [ renderSite t s ++ ": " ++ show i ++ " instances, "
+                                                  ++ show n ++ " iterations, depth " ++ show d
+                                                | (s, Nesting i n d) <- take 5 ns ] ++ ")"
+    repeats = case sortBy (comparing (negate . snd)) (IM.toList (cs_repeats cs)) of
+                [] -> ""
+                rs -> " (" ++ intercalate "; " [ renderSite t s ++ " x" ++ show n
+                                               | (s, n) <- take 5 rs ] ++ ")"
+
+-- The unfolding pushes per definition site against the profiling map
+-- (IExpandUtils.step counts every unfolding by definition and
+-- position): every entry of each must be in the other with the same
+-- count.  Returns the mismatches rendered.
+checkProfile :: SiteTable -> Census -> [(Id, Position, Int)] -> [String]
+checkProfile t cs profile =
+    let pushes = [ (key, n) | (s, n) <- IM.toList (cs_perSite cs),
+                              Just (SiteRow { sr_key = key }) <- [siteRow t s] ]
+        pushMap = M.fromListWith (+) pushes
+        profMap = M.fromListWith (+)
+                    [ (IdKey (getIdBase i) (getIdQual i) p SKDef, n) | (i, p, n) <- profile ]
+        onlyPushes = [ renderKey k ++ ": " ++ show n ++ " frames, no profile entry"
+                     | (k, n) <- M.toList (M.difference pushMap profMap) ]
+        onlyProf = [ renderKey k ++ ": " ++ show n ++ " unfoldings profiled, no frame"
+                   | (k, n) <- M.toList (M.difference profMap pushMap) ]
+        differ = [ renderKey k ++ ": " ++ show a ++ " frames, " ++ show b ++ " unfoldings profiled"
+                 | (k, (a, b)) <- M.toList (M.intersectionWith (,) pushMap profMap), a /= b ]
+    in  onlyPushes ++ onlyProf ++ differ
+
+renderKey :: SiteKey -> String
+renderKey (IdKey b q p k) = showSiteKind k ++ " " ++ renderName b q ++ renderPosition p
+renderKey (PrimKey op) = "prim " ++ show op
+renderKey (RootKey n k) = showSiteKind k ++ " " ++ n
+renderKey BoundKey = "bound -"
+renderKey (FieldKey n) = "field " ++ show n
+
+-- The name hints against the binders.  A cell heaped as the argument
+-- of a lambda takes its parameter as its binder and as its name hint
+-- (IExpandUtils.toHeapBinder with BoundTo), and improveCellName keeps
+-- the hint when the parameter's position is outside the library, so
+-- every such cell is named by its parameter; a hint at a library
+-- position is replaced by one inferred from the expression and is not
+-- checked.  Returns the number of cells bound to a parameter, the
+-- number of those checked, and the cells whose hint is not their
+-- parameter, rendered.
+checkNameHints :: SiteTable -> [(Int, CellMeta, Maybe Id)] -> (Int, Int, [String])
+checkNameHints t cells =
+    let bound = [ (p, m, hint, key)
+                | (p, m, hint) <- cells,
+                  Just (SiteRow { sr_key = key@(IdKey _ _ _ SKBinder) }) <- [siteRow t (binderOf m)] ]
+        checked = [ c | c@(_, _, _, IdKey _ _ pos _) <- bound, not (isPreludePosition pos) ]
+        hintKey n = idSiteKey SKBinder n
+        renderHint = maybe "-" (\ n -> renderName (getIdBase n) (getIdQual n) ++
+                                      renderPosition (getIdPosition n))
+        bad = [ "_" ++ show p ++ " (" ++ renderSite t (siteOf m) ++ "): binder "
+                ++ renderKey key ++ ", name hint " ++ renderHint hint
+              | (p, m, hint, key) <- checked, maybe True ((/= key) . hintKey) hint ]
+    in  (length bound, length checked, bad)
+
+-- The positions kept for method conditions against the chains: a
+-- position recorded on a method call (the selections the call was
+-- reached through) is on the chain when it is the position of the
+-- cell's own site or of the site of a frame on its chain.  Returns the
+-- (cell, position) pairs that are not, rendered; the evaluator reports
+-- their number.
+checkKeptPositions :: SiteTable -> [(Int, CellMeta, [Position])] -> [String]
+checkKeptPositions t cells =
+    [ "_" ++ show p ++ " (" ++ renderSite t (siteOf m) ++ "): position" ++ renderPosition pos
+    | (p, m, poss) <- cells,
+      let onChain = mapMaybe (sitePosition t) (siteOf m : map fst (chainOf m)),
+      pos <- poss, pos `notElem` onChain ]
+
+sitePosition :: SiteTable -> Int -> Maybe Position
+sitePosition t s = case siteRow t s of
+                     Just (SiteRow { sr_key = IdKey _ _ p _ }) -> Just p
+                     _ -> Nothing

@@ -1,0 +1,18 @@
+checking package dependencies
+compiling MetaReenter.bsv
+code generation for sysMetaReenter starts
+metadata census for sysMetaReenter:
+  cells reachable 19, defs lifted 12, defs with chains 12
+  roots pushed: rule 1, methodroot 1, inst 8
+  pushes: unfoldings 744, completions 58, roots 10
+  frames on chains 31: use-site 15, definition-site 16, root 0
+  defs by site: use-site 0, definition-site 0, prim 12, con 0, method 0, foreign 0, lambda 0, bound 0, inst 0; head-site 0, shared 0, merged 0
+  depth: 2:8 9:4
+  count: 1:28 2:3
+  alias classes 82
+  cost: frame pushes 812, context-table operations 47 for 23 contexts
+  chains walked 802, loops re-entered 4 (def Prelude.primFix [Array.bsv] ur: 8 instances, 16 iterations, depth 2; def Prelude.primFix [Array.bsv] ur: 4 instances, 8 iterations, depth 2; def Prelude.primFix [Vector.bs] ur: 4 instances, 4 iterations, depth 2; def Prelude.primFix [Vector.bs] ur: 2 instances, 2 iterations, depth 2), repeated non-recursion sites 11 (def Prelude.bind_ [Prelude.bs] x8; def Prelude.__avFunc [Prelude.bs] x2; def Prelude.bind_ [MetaReenter.bsv:28:4] u x1)
+  name hints: 4 cells bound to a parameter, 0 outside the library, each named by it
+  method-condition positions: 0 calls, 0 kept, 0 on chains
+Verilog file created: sysMetaReenter.v
+All packages are up to date.

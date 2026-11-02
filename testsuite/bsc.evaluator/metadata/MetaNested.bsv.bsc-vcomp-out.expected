@@ -1,0 +1,13 @@
+checking package dependencies
+compiling MetaNested.bsv
+code generation for sysMetaNested starts
+_333: def Prelude.toPrimAction [MetaNested.bsv:14:7] u, field 3, alias _333 <- def Prelude.addRules [MetaNested.bsv:13:4] u#1 <- def Prelude.bind_ [MetaNested.bsv:13:4] u#1
+_495: prim PrimUnpack, field 0, alias _493 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_554: prim PrimAdd, field 0 <- def Prelude.primFix [MetaNested.bsv:20:10] ur#1 <- def Prelude.primFix [MetaNested.bsv:19:7] ur#3 <- def Prelude.bind_ [MetaNested.bsv:13:4] u#1
+_568: prim PrimAdd, field 0 <- def Prelude.primFix [MetaNested.bsv:20:10] ur#2 <- def Prelude.primFix [MetaNested.bsv:19:7] ur#2 <- def Prelude.bind_ [MetaNested.bsv:13:4] u#1
+_569: prim PrimAdd, field 0 <- def Prelude.primFix [MetaNested.bsv:20:10] ur#1 <- def Prelude.primFix [MetaNested.bsv:19:7] ur#2 <- def Prelude.bind_ [MetaNested.bsv:13:4] u#1
+_599: prim PrimUnpack, field 0, alias _597 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_681: prim PrimUnpack, field 0, alias _679 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_698: prim PrimUnpack, field 0, alias _696 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+Verilog file created: sysMetaNested.v
+All packages are up to date.

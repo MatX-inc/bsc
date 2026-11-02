@@ -1,0 +1,29 @@
+checking package dependencies
+compiling MetaSide.bsv
+code generation for sysMetaSide starts
+metadata census for sysMetaSide:
+  cells reachable 27, defs lifted 16, defs with chains 16
+  roots pushed: rule 4, methodroot 2, inst 6
+  pushes: unfoldings 237, completions 12, roots 12
+  frames on chains 23: use-site 11, definition-site 12, root 0
+  defs by site: use-site 0, definition-site 1, prim 15, con 0, method 0, foreign 0, lambda 0, bound 0, inst 0; head-site 0, shared 0, merged 2
+  depth: 2:7 3:1 4:5 5:3
+  count: 1:21 2:1 3:1
+  alias classes 54
+  cost: frame pushes 261, context-table operations 48 for 19 contexts
+  chains walked 249, loops re-entered 0, repeated non-recursion sites 10 (def Prelude.bind_ [Prelude.bs] x6; def Prelude.__avFunc [Prelude.bs] x2; def Prelude.bind_ x1; def Prelude.bind_ [MetaSide.bsv:36:4] u x1)
+  name hints: 4 cells bound to a parameter, 1 outside the library, each named by it
+  method-condition positions: 0 calls, 0 kept, 0 on chains
+Warning: "MetaSide.bsv", line 30, column 8: (G0010)
+  Rule "r1" was treated as more urgent than "r2". Conflicts:
+    "r1" cannot fire before "r2": calls to a.write vs. a.read
+    "r2" cannot fire before "r1": calls to b.write vs. b.read
+Warning: "MetaSide.bsv", line 30, column 8: (G0117)
+  Rule `put' shadows the effects of `r1' when they execute in the same clock
+  cycle. Affected method calls:
+    a.write
+  To silence this warning, use the `-no-warn-action-shadowing' flag.
+Warning: "MetaSide.bsv", line 40, column 9: (G0021)
+  According to the generated schedule, rule `r2' can never fire.
+Verilog file created: sysMetaSide.v
+All packages are up to date.

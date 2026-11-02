@@ -1,85 +1,30 @@
 # Tests for the evaluator metadata store (IExpandMeta): the -metadata-dump
-# output on known packages, and the -metadata-scramble identity (the
-# generated Verilog does not depend on the store's content).
+# output on known packages, the -metadata-scramble identity (the
+# generated Verilog does not depend on the store's content), the
+# -metadata-census output with its cross-checks, and the -metadata-out
+# side file.
 
 # The dump prints every cell of the elaborated module with its site, its
 # binder, its alias class and the chain of definition unfoldings it was
 # created under.
 # Positions in files other than the tests' own (Meta*.bsv) are reduced to
 # the file name, so that a library edit does not move the expected output.
+# The census renders a site the same way where it names one.
 proc filter_dump { fname } {
     sed $fname $fname.filtered {} \
         {-e s/\\\[(Meta\[A-Za-z\]*\\.bsv):/@@\\1:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g}
 }
 
-if { $vtest == 1 } {
-
-# the reference: the generated Verilog of a plain compile
-erase MetaDump.bo
-compile_verilog_pass MetaDump.bsv sysMetaDump
-move sysMetaDump.v sysMetaDump.plain.v
-
-# the store scrambled: the Verilog does not change and the dump is
-# suppressed (no chain line, which every dump line marks with #)
-erase MetaDump.bo
-compile_verilog_pass MetaDump.bsv sysMetaDump {-metadata-scramble -metadata-dump}
-compare_file sysMetaDump.v sysMetaDump.plain.v
-find_n_strings MetaDump.bsv.bsc-vcomp-out {#} 0
-
-# the dump: the Verilog does not change and the chains are as pinned
-erase MetaDump.bo
-erase sysMetaDump.v
-compile_verilog_pass MetaDump.bsv sysMetaDump {-metadata-dump}
-compare_file sysMetaDump.v sysMetaDump.plain.v
-filter_dump MetaDump.bsv.bsc-vcomp-out
-compare_file MetaDump.bsv.bsc-vcomp-out.filtered MetaDump.bsv.bsc-vcomp-out.expected
-
-erase sysMetaDump.plain.v
-
-# Binders and alias classes: every cell bound to a parameter (an
-# argument, a let-bound value) or moved into a field or operand of a
-# struct or another lazy application carries that binder, and cells
-# that hold one value (a value that evaluates to another, a reference
-# re-heaped under a condition, a value extracted from a tagged union
-# and the operand cell its constructor application moved, which is not
-# a kept cell and appears only as the root of that class) share a
-# class, pinned by the dump of a package exercising each; the Verilog
-# is unchanged by the flags.
-erase MetaBinder.bo
-compile_verilog_pass MetaBinder.bsv sysMetaBinder
-move sysMetaBinder.v sysMetaBinder.plain.v
-
-erase MetaBinder.bo
-compile_verilog_pass MetaBinder.bsv sysMetaBinder {-metadata-scramble -metadata-dump}
-compare_file sysMetaBinder.v sysMetaBinder.plain.v
-find_n_strings MetaBinder.bsv.bsc-vcomp-out {#} 0
-
-erase MetaBinder.bo
-erase sysMetaBinder.v
-compile_verilog_pass MetaBinder.bsv sysMetaBinder {-metadata-dump}
-compare_file sysMetaBinder.v sysMetaBinder.plain.v
-filter_dump MetaBinder.bsv.bsc-vcomp-out
-compare_file MetaBinder.bsv.bsc-vcomp-out.filtered MetaBinder.bsv.bsc-vcomp-out.expected
-
-erase sysMetaBinder.plain.v
-
-# The side file (-metadata-out): one line per root and per lifted def of
-# a module in which one expression (a + b) is built under two rules and
-# a method, so that the rebuild's CSE identifies three cells as one def
-# standing for three contexts (merged, and one alias class), the
-# argument of a function is bound to its parameter (binder), a def's
-# value is read by another def (parent), a value evaluates to another
-# (alias) and a static loop counts its iterations.  Pinned after the
-# position filter of the dump, pointer normalisation (every __h<n> def
-# name reduced to __h, every _<n> parent or alias root to _N) and line
-# sorting: set equality per module.  The sort runs under the C locale,
-# so the pinned order is the byte order whatever locale the harness or
-# the caller's shell sets.  The Verilog of the compile with the flag is
-# identical to the plain one.
+# The side file (-metadata-out), one line per root and per lifted def of
+# a module, is pinned after the position filter of the dump, pointer
+# normalisation (every __h<n> def name reduced to __h, every _<n> parent
+# or alias root to _N) and line sorting: set equality per module.  The
+# sort runs under the C locale, so the pinned order is the byte order
+# whatever locale the harness or the caller's shell sets.
 proc filter_side { fname } {
     global env
     sed $fname $fname.filtered {} \
-        {-e s/\\\[MetaSide\\.bsv:/@@MetaSide.bsv:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g -e s/__h\[0-9\]+/__h/g -e s/(parent|alias)\ _\[0-9\]+/\\1\ _N/g}
+        {-e s/\\\[(Meta\[A-Za-z\]*\\.bsv):/@@\\1:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g -e s/__h\[0-9\]+/__h/g -e s/(parent|alias)\ _\[0-9\]+/\\1\ _N/g}
     if { [info exists env(LC_ALL)] } { set lc_all_save $env(LC_ALL) }
     set env(LC_ALL) C
     sort $fname.filtered $fname.sorted
@@ -90,18 +35,99 @@ proc filter_side { fname } {
     }
 }
 
-erase MetaSide.bo
-compile_verilog_pass MetaSide.bsv sysMetaSide
-move sysMetaSide.v sysMetaSide.plain.v
+# One module: its Verilog must be the same byte for byte for a plain
+# compile, under the dump, under the scramble, under the census and with
+# the side file written; the dump, the census and the side file are as
+# pinned.  "extra" names other flags of the census run.
+proc metadata_golden { pkg top {extra {}} } {
+    erase $pkg.bo
+    compile_verilog_pass $pkg.bsv $top
+    move $top.v $top.plain.v
 
-erase MetaSide.bo
-erase sysMetaSide.metadata
-compile_verilog_pass MetaSide.bsv sysMetaSide {-metadata-out .}
-compare_file sysMetaSide.v sysMetaSide.plain.v
-filter_side sysMetaSide.metadata
-compare_file sysMetaSide.metadata.sorted sysMetaSide.metadata.expected
-erase sysMetaSide.metadata
+    erase $pkg.bo
+    compile_verilog_pass $pkg.bsv $top {-metadata-scramble -metadata-dump}
+    compare_file $top.v $top.plain.v
+    find_n_strings $pkg.bsv.bsc-vcomp-out {#} 0
 
-erase sysMetaSide.plain.v
+    erase $pkg.bo
+    erase $top.v
+    compile_verilog_pass $pkg.bsv $top {-metadata-dump}
+    compare_file $top.v $top.plain.v
+    filter_dump $pkg.bsv.bsc-vcomp-out
+    compare_file $pkg.bsv.bsc-vcomp-out.filtered $pkg.bsv.bsc-vcomp-out.expected
+
+    erase $pkg.bo
+    erase $top.v
+    compile_verilog_pass $pkg.bsv $top "-metadata-census $extra"
+    compare_file $top.v $top.plain.v
+    filter_dump $pkg.bsv.bsc-vcomp-out
+    compare_file $pkg.bsv.bsc-vcomp-out.filtered $pkg.bsv.census.expected
+
+    erase $pkg.bo
+    erase $top.v
+    erase $top.metadata
+    compile_verilog_pass $pkg.bsv $top {-metadata-out .}
+    compare_file $top.v $top.plain.v
+    filter_side $top.metadata
+    compare_file $top.metadata.sorted $top.metadata.expected
+    erase $top.metadata
+
+    erase $top.plain.v
+}
+
+if { $vtest == 1 } {
+
+# a static loop, a recursive function, implicit conditions, a method;
+# the census run keeps the positions of method conditions, which the
+# census checks against the chains of the method calls
+metadata_golden MetaDump sysMetaDump -keep-method-conds
+
+# Binders and alias classes: every cell bound to a parameter (an
+# argument, a let-bound value) or moved into a field or operand of a
+# struct or another lazy application carries that binder, and cells
+# that hold one value (a value that evaluates to another, a reference
+# re-heaped under a condition, a value extracted from a tagged union
+# and the operand cell its constructor application moved, which is not
+# a kept cell and appears only as the root of that class) share a
+# class, pinned by the dump of a package exercising each; the census
+# checks the name hints of the cells bound to a parameter against their
+# binders
+metadata_golden MetaBinder sysMetaBinder
+
+# The side file of a module in which one expression (a + b) is built
+# under two rules and a method, so that the rebuild's CSE identifies
+# three cells as one def standing for three contexts (merged, and one
+# alias class), the argument of a function is bound to its parameter
+# (binder), a def's value is read by another def (parent), a value
+# evaluates to another (alias) and a static loop counts its iterations.
+metadata_golden MetaSide sysMetaSide
+
+# The known-answer goldens, one shape of chain each.
+# a vector map: element i is built in iteration i of the map
+metadata_golden MetaVecMap sysMetaVecMap
+
+# nested static loops: inner iterations under the outer iteration
+metadata_golden MetaNested sysMetaNested
+
+# a loop re-entered from its own body: a zipWith over a vector of vectors
+# runs the library's zipWith loop inside an iteration of itself, so one
+# static loop site is on a chain twice, as two dynamic instances; the
+# census counts the site's nested instances and its nesting depth
+metadata_golden MetaReenter sysMetaReenter
+
+# a local recursive binding (a primFix loop)
+metadata_golden MetaFix sysMetaFix
+
+# two functions recursive through each other
+metadata_golden MetaMutual sysMetaMutual
+
+# one expression built under two rules: a CSE merge, whose def stands
+# for two contexts
+metadata_golden MetaCSE sysMetaCSE
+
+# a cross-package call site against the same call inside the package
+erase MetaCrossLib.bo
+compile_pass MetaCrossLib.bsv
+metadata_golden MetaCross sysMetaCross
 
 }
