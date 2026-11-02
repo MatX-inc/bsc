@@ -1,0 +1,39 @@
+package ValueMethodOnePort(sysValueMethodOnePort, GP) where
+
+-- A value method (get) and an action method (put) of a synthesized
+-- module conflict, and both call the one-port value method of a
+-- synthesized submodule with their own arguments.  A value method has
+-- no enable, so its use is live whenever the method is ready and the
+-- port cannot be shared: bsc reports a resource error (G0002), for
+-- Bluesim as well.  Before, the port was driven by get's argument in
+-- every cycle get was ready, so put read the wrong value, silently.
+
+interface Look =
+    look :: Bit 8 -> Bit 8
+
+{-# synthesize mkLook #-}
+mkLook :: Module Look
+mkLook = module
+    base :: Reg (Bit 8) <- mkReg 100
+    interface
+      look x = base + x
+
+interface GP =
+    get :: Bit 8 -> Bit 8
+    put :: Bit 8 -> Action
+    val :: Bit 8
+
+-- get reads a, which put writes (get before put), and get reads w,
+-- which put writes (put before get): the methods conflict.
+{-# synthesize sysValueMethodOnePort #-}
+sysValueMethodOnePort :: Module GP
+sysValueMethodOnePort = module
+    c :: Look <- mkLook
+    a :: Reg (Bit 8) <- mkReg 0
+    w :: RWire (Bit 8) <- mkRWire
+    interface
+      get x = c.look x + a + fromMaybe 0 w.wget
+      put y = do
+          w.wset y
+          a := c.look y
+      val = a

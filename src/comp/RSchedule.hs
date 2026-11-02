@@ -104,26 +104,28 @@ data StackItem v r = Vertex (v,[v]) | Edge r
 --  * RMaxs
 --  * rMap
 --  * areSimult
+--  * canArb (whether arbitration may drop the edge between two rules)
 -- Output:
 --  * RAT
 --  * [RRM]
 
 rSchedule :: Id -> ResourceFlag -> M.Map MethodId Integer -> MethodUsesMap ->
-             (RuleId -> RuleId -> Bool) -> ErrorMonad (RAT,[RRM])
-rSchedule moduleId rFlag rMaxs rMap areSimult =
+             (RuleId -> RuleId -> Bool) -> (RuleId -> RuleId -> Bool) ->
+             ErrorMonad (RAT,[RRM])
+rSchedule moduleId rFlag rMaxs rMap areSimult canArb =
     -- We don't need to worry about keys conflicting when combining xxs
     -- because those keys came from the keys of rMap.
     let concatTuple (xxs,yys) = (M.unions xxs, concat yys)
-        f = rSchedule' moduleId rFlag rMaxs areSimult
+        f = rSchedule' moduleId rFlag rMaxs areSimult canArb
     in
         mapM f (M.toList rMap) >>= return . concatTuple . unzip
 
 
 rSchedule' :: Id -> ResourceFlag -> M.Map MethodId Integer ->
-              (RuleId -> RuleId -> Bool) ->
+              (RuleId -> RuleId -> Bool) -> (RuleId -> RuleId -> Bool) ->
               (MethodId, [(UniqueUse, MethodUsers)]) ->
               ErrorMonad (RAT, [RRM])
-rSchedule' moduleId rFlag rMaxs areSimult mu@(mId, uses0) =
+rSchedule' moduleId rFlag rMaxs areSimult canArb mu@(mId, uses0) =
     let
         -- XXX condition-insensitive resource allocation
         -- our graph allocation is not smart enough to handle
@@ -141,8 +143,20 @@ rSchedule' moduleId rFlag rMaxs areSimult mu@(mId, uses0) =
                          errDropEdges mId rMax
                 RFsimple -> -- reschedule
                             -- arbitrate resource (drop edge in graph)
-                            simpleDropEdges moduleId areSimult (mId, uses) rMax
+                            simpleDropEdges moduleId areSimult canArb (mId, uses) rMax
+
+        -- With no port limit (rMax 0) every use goes to one port and the
+        -- schedule is trusted to keep the callers apart, but no schedule
+        -- keeps a value method's use off that port: two uses with
+        -- different arguments by a simultaneous pair that cannot be
+        -- arbitrated would share it wrongly, so report the resource error
+        -- (as for a one-port method).
+        unsharable = rMax == 0 &&
+            or [ not (canArb r r') && areSimult r r'
+               | ((u, (_, rs, _)), (u', (_, rs', _))) <- allPairs uses,
+                 differentArgs u u', r <- rs, r' <- rs' ]
     in do
+         when unsharable (errDropEdges mId 1 () g)
          when trace_ralloc
              (traceM $ "rSchedule: allocating " ++ show (length uses) ++
                        " uses of " ++ ppString mId ++ "; " ++
@@ -246,15 +260,17 @@ eArbitrate moduleId (r,r') =
 -- Function: simpleDropEdges
 
 simpleDropEdges :: Id -> (RuleId -> RuleId -> Bool) ->
+                   (RuleId -> RuleId -> Bool) ->
                    (MethodId, [(UniqueUse, MethodUsers)]) ->
                    Integer -> StkL -> UUGraph -> ErrorMonad (StkL, UUGraph)
-simpleDropEdges moduleId areSimult (mId,uses) rMax st g =
+simpleDropEdges moduleId areSimult canArb (mId,uses) rMax st g =
     if all null droppable || any sameRule rs
     then errDropEdges mId rMax st g
     else EMWarning warn (st',g')
     where droppable = [map fromActionOf w
                        | v <- G.vertices g, v' <- G.neighbors g v,
-                       w <- maybeToList (G.lookup (v,v') g), all isActionOf w]
+                       w <- maybeToList (G.lookup (v,v') g), all isActionOf w,
+                       all (uncurry canArb . fromActionOf) w]
           rs = case droppable of
                (xs:_) -> xs
                _      -> internalError "simpleDropEdges: nothing to drop!"
