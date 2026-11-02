@@ -205,3 +205,14 @@ compile_pass IfcArgNamesLower.bs
 compile_pass IfcArgNamesUpper.bs
 compile_fail_error IfcArgNamesQual.bs P0005
 
+# Scheduling annotations of a Classic "module verilog"
+# Two annotations give a pair of methods different relations
+compile_fail ModuleVerilogSchedConflict.bs
+compare_file [make_bsc_output_name ModuleVerilogSchedConflict.bs]
+# Each of two methods is SB the other
+compile_fail_error ModuleVerilogSchedSwap.bs T0159
+# Repeating an annotation is allowed
+compile_pass ModuleVerilogSchedRepeat.bs
+# Unannotated pairs get the import "BVI" defaults
+compile_backend_pass ModuleVerilogSchedDefault.bs
+compare_file [make_bsc_output_name ModuleVerilogSchedDefault.bs]
