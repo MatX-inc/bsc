@@ -24,12 +24,13 @@ bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix, cSuffix,
   cxxSuffix, cppSuffix, ccSuffix, hSuffix, comodSuffix, objSuffix, arSuffix,
   soSuffix, verSuffix, verSuffix2, verSuffix3, verSuffix4, verSuffix5,
   verSuffix6, vhdlSuffix, vhdlSuffix2, useSuffix, scheduleSuffix, dotSuffix,
-  vcdSuffix, makeSuffix, metaSuffix :: String
+  vcdSuffix, makeSuffix, metaSuffix, bxrefSuffix :: String
 bscSrcSuffix = "bs"
 bsvSrcSuffix = "bsv"
 binSuffix = "bo"
 abinSuffix = "ba"
 metaSuffix = "metadata"
+bxrefSuffix = "bxref"
 cSuffix   = "c"
 cxxSuffix = "cxx"
 cppSuffix = "cpp"
@@ -66,10 +67,12 @@ mkPre (Just d)  _ = d ++ "/"
 --   s   = a base filename string
 -- append a dot suffix for the type of file
 mkVName, mkAName, mkSchedName, mkCxxName, mkCName, mkHName, mkObjName,
-  mkSoName, mkDOTName, mkMakeName, mkMetaName :: Maybe String -> String -> String -> String
+  mkSoName, mkDOTName, mkMakeName, mkMetaName,
+  mkBXrefName :: Maybe String -> String -> String -> String
 mkVName     m pre s = mkPre m pre ++ s ++ "." ++ verSuffix
 mkAName     m pre s = mkPre m pre ++ s ++ "." ++ abinSuffix
 mkMetaName  m pre s = mkPre m pre ++ s ++ "." ++ metaSuffix
+mkBXrefName m pre s = mkPre m pre ++ s ++ "." ++ bxrefSuffix
 mkSchedName m pre s = mkPre m pre ++ s ++ "." ++ scheduleSuffix
 mkCxxName   m pre s = mkPre m pre ++ s ++ "." ++ cxxSuffix
 mkCName     m pre s = mkPre m pre ++ s ++ "." ++ cSuffix

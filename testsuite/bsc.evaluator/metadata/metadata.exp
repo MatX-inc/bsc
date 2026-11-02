@@ -117,6 +117,25 @@ compile_verilog_pass MetaSide.bsv sysMetaSide {-dmetadata=MetaSide.ledger}
 compare_file sysMetaSide.v sysMetaSide.plain.v
 compare_file MetaSide.ledger
 erase MetaSide.ledger
+
+# -bxref: the module's cross-reference file, sysMetaSide.bxref, written
+# beside the .ba with the metadata table and the ledger as it stands
+# after the Verilog backend.  The Verilog does not change, and the .ba
+# is byte for byte the plain compile's: the file is a companion of the
+# .ba, not a part of it.
+erase MetaSide.bo
+erase sysMetaSide.ba
+compile_verilog_pass MetaSide.bsv sysMetaSide {-elab}
+compare_file sysMetaSide.v sysMetaSide.plain.v
+move sysMetaSide.ba sysMetaSide.plain.ba
+erase MetaSide.bo
+erase sysMetaSide.bxref
+compile_verilog_pass MetaSide.bsv sysMetaSide {-bxref -elab}
+compare_file sysMetaSide.v sysMetaSide.plain.v
+compare_file sysMetaSide.ba sysMetaSide.plain.ba
+erase sysMetaSide.bxref
+erase sysMetaSide.ba
+erase sysMetaSide.plain.ba
 erase sysMetaSide.plain.v
 
 # The known-answer goldens, one shape of chain each.

@@ -175,9 +175,10 @@ data IModule a
                 -- and one record per lifted def), filled by the rebuild
                 -- at the end of elaboration, with the ledger of what the
                 -- passes since did to the def and rule ids; read by
-                -- nothing that orders or chooses.  Not serialized; the
-                -- passes copy it through their record updates and aConv
-                -- carries it onto the APackage.  Lazy, and forced by
+                -- nothing that orders or chooses.  Not in the .bo (-bxref
+                -- writes it to the module's .bxref); the passes copy it
+                -- through their record updates and aConv carries it onto
+                -- the APackage.  Lazy, and forced by
                 -- the expanded-stage dump's deepseq (TopUtils.dump) as
                 -- the last field, after the defs: the table forces
                 -- nothing of the module earlier than it was forced

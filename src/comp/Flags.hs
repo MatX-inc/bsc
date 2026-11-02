@@ -33,6 +33,11 @@ data Flags = Flags {
         -- never settable from the command line -- see codegenNames
         blockCodegen :: Bool,
         bluespecDir :: String,
+        -- -bxref: write the module's cross-reference file, <module>.bxref
+        -- (GenBXref: the evaluator's metadata table and the ledger of the
+        -- passes since elaboration), beside the .ba.  An invocation
+        -- control like the metadata controls below: not stored in a .ba.
+        bxref :: Bool,
         cIncPath :: [String],
         cLibPath :: [String],
         cLibs :: [String],

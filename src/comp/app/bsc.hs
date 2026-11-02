@@ -43,7 +43,7 @@ import ParseOp
 import PFPrint
 import Util(headOrErr, fromJustOrErr, joinByFst, quote, fst3)
 import FileNameUtil(baseName, hasDotSuf, dropSuf, dirName, mangleFileName, remapPath,
-                    mkAName, mkVName, mkMetaName, mkVPICName, mkDPICName,
+                    mkAName, mkVName, mkMetaName, mkBXrefName, mkVPICName, mkDPICName,
                     mkNameWithoutSuffix,
                     mkSoName, mkObjName, mkMakeName,
                     bscSrcSuffix, binSuffix,
@@ -144,6 +144,7 @@ import ABin(ABin(..), ABinModInfo(..), ABinForeignFuncInfo(..),
 import ABinUtil(readAndCheckABin, readAndCheckABinPathCatch, getABIHierarchy,
                 assertNoSchedErr)
 import GenABin(genABinFile)
+import GenBXref(BXrefFile(..), BXrefStage(..), genBXrefFile)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap,
                         mkImportDeclarations, isPoly)
 import VPIWrappers(genVPIWrappers, genVPIRegistrationArray)
@@ -265,7 +266,7 @@ replayBackend errh manifest replay abmi flags = do
     createDirectoryIfMissing True out
     setErrorHandleFlags errh flags
     t <- getNow
-    (_, _, _, backendInfo, observe) <- genModuleVerilog errh (abmi_pps abmi) flags
+    (_, _, _, _, backendInfo, observe) <- genModuleVerilog errh (abmi_pps abmi) flags
         (Nothing, Nothing, Just modName) t "" modName
         (rbHeader info) (rbMethodConflict info) (rbMethodBVI info)
         (abmi_pathinfo abmi) (abmi_aschedinfo abmi) (abmi_apkg abmi)
@@ -1018,6 +1019,8 @@ genModule
                                   prefix modstr srcName (orig_cqt wi)
                                   schedule_info amod_clean
                          else return t
+                    writeBXrefFile errh flags prefix modstr BXSchedErr
+                        (apkg_meta amod_clean)
                     exitFail errh
     t <- dump errh flags t DFschedule dumpnames (asi_schedule schedule_info)
     stats flags DFschedule amod_sched
@@ -1116,19 +1119,22 @@ genModule
     --           XXX it would be nice if the Bluesim backend had the same info
     -- * vprog = the Verilog data structure, for recording in the .ba file,
     --           so that it's available to bluetcl
+    -- * ledger = the metadata ledger as the backend left it (the final
+    --           ASPackage's for Verilog, the APackage's otherwise), for
+    --           the .bxref file
     -- * backendInfo = the backend context an ECO capture retains, Nothing
     --           unless a capture was requested
     -- * observe = the deferred ECO observations, run once the native .ba
     --           has been written
-    (t, veriPortProps, vprog, backendInfo, observe)
+    (t, veriPortProps, vprog, ledger, backendInfo, observe)
         <- if (backend flags == Just Verilog)
-           then do (t', ips, v, info, obs)
+           then do (t', ips, v, l, info, obs)
                        <- genModuleVerilog
                              errh pps flags dumpnames t prefix modstr
                              blurb methodConflictBlurb methodConflictBVI
                              vPathInfo sched_info'' amod_final Nothing
-                   return (t', ips, Just v, info, obs)
-           else return (t, [], Nothing, Nothing, return ())
+                   return (t', ips, Just v, l, info, obs)
+           else return (t, [], Nothing, apkg_meta amod_final, Nothing, return ())
 
     t <- if (genABin flags)
          then writeABin errh pps flags dumpnames t prefix
@@ -1136,6 +1142,10 @@ genModule
                   sched_info'' methodConflict vPathInfo
                   amod_final vprog
          else return t
+
+    -- the cross-reference file, if requested, beside the .ba
+    writeBXrefFile errh flags prefix modstr
+        (if isJust vprog then BXVerilog else BXBluesim) ledger
 
     let ecoOpts = ecoOptions flags
     case ecoCapture ecoOpts of
@@ -1210,6 +1220,32 @@ metadataDirectory flags =
     case metadataOut flags of
       Nothing -> Nothing
       Just dir -> Just (fromMaybe dir (ecoCapture (ecoOptions flags)))
+
+-- -bxref: write the module's cross-reference file (GenBXref),
+-- <module>.bxref, beside the .ba, or beside the capture as one of its
+-- companions when an ECO capture is being taken (the directory rule of
+-- the side file), with the ledger as it stands once the module's code
+-- has been generated.  Nothing is written under -metadata-scramble,
+-- whose store holds perturbed numbers by design.  Encoding the table
+-- reads its strings and interns none.
+writeBXrefFile :: ErrorHandle -> Flags -> String -> String -> BXrefStage ->
+                  MetaLedger -> IO ()
+writeBXrefFile errh flags prefix modstr stage ledger =
+    when (bxref flags && not (metadataScramble flags)) $ do
+        let captureDir = ecoCapture (ecoOptions flags)
+        maybe (return ()) (createDirectoryIfMissing True) captureDir
+        fname_init <- genFileName mkBXrefName (maybe (bdir flags) Just captureDir)
+                          prefix modstr
+        let fname = getFullFilePath fname_init
+            remapP = remapPositionFile (remapPathPrefix flags)
+            bxfile = BXrefFile { bx_version = bscVersionStr True,
+                                 bx_module = modstr,
+                                 bx_stage = stage,
+                                 bx_meta = ledgerMeta ledger }
+        genBXrefFile errh remapP fname bxfile
+        unless (quiet flags) $
+            putStrLnF ("Cross-reference file created: " ++
+                       getRelativeFilePath fname_init)
 
 writeABin :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
              String -> String -> String -> CQType ->
@@ -1312,6 +1348,7 @@ genModuleVerilog :: ErrorHandle
                  -> IO (TimeInfo,
                         [VPort],   -- port properties for the import-BVI
                         VProgram,  -- generated Verilog
+                        MetaLedger, -- the final ASPackage's ledger, for the .bxref
                         Maybe ReplayBackend, -- lazy context only when capture is requested
                         IO ())     -- deferred observations after native capture
 genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
@@ -1473,8 +1510,9 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Return
        -- * the port properties (to be included in the import-BVI)
        -- * the Verilog structure (for accessing in bluetcl)
+       -- * the ledger after the last ASPackage pass (for the .bxref)
        -- Decide whether context is needed now; keep the captured payload lazy.
-       backendInfo `seq` return (t, ips, vprog, backendInfo, observation)
+       backendInfo `seq` return (t, ips, vprog, aspkg_meta aumod, backendInfo, observation)
 
 
 -- Write a Verilog program to file (along with its use file)

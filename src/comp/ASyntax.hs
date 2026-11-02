@@ -189,8 +189,10 @@ data APackage = APackage {
             -- (IExpandMeta): set by aConv from the IModule, kept by
             -- every pass's record update, read by nothing that orders
             -- or chooses; not serialized (Bin APackage writes nothing
-            -- and reads the empty ledger).  Strict, so that a
-            -- construction that omits it is a compile-time error.
+            -- and reads the empty ledger), never in the .ba: -bxref
+            -- writes it to the module's .bxref file (GenBXref).  Strict,
+            -- so that a construction that omits it is a compile-time
+            -- error.
     apkg_meta :: !MetaLedger
     } deriving (Eq, Show)
 

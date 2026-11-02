@@ -1,7 +1,8 @@
 module IExpandMeta(
         -- sites
-        SiteKind(..), SiteKey, idSiteKey, primSiteKey, rootSiteKey, boundSiteKey,
-        SiteRow(..), SiteTable, siteRow, siteTableSize,
+        SiteKind(..), SiteKey(..), idSiteKey, primSiteKey, rootSiteKey, boundSiteKey,
+        SiteRow(..), SiteRef(..), RecKey(..), SiteTable(..), siteRow, siteTableSize,
+        siteIdsFromRows,
         -- frames, binders and cell headers
         Frame, Binder(..), CellMeta, noBinder, headSiteOf, cellDefSite,
         -- the store and the hooks the evaluator calls
@@ -13,8 +14,9 @@ module IExpandMeta(
         siteOf, frameOf, binderOf, chainOf, aliasClassOf, aliasMembers,
         renderSite, renderDump,
         -- the module metadata table, built by the rebuild
-        ContextTable, emptyContextTable, contextTableSize, internFrame,
-        contextChain, aliasUnions, noCell, DefRecord(..), ModuleMeta(..),
+        ContextTable(..), emptyContextTable, contextTableSize, internFrame,
+        contextChain, contextIdsFromRows, aliasUnions, noCell, DefRecord(..),
+        ModuleMeta(..),
         emptyModuleMeta, defNameString, sideFileSchema, renderSideFile,
         -- the ledger the packages carry
         MetaLedger(..), emptyMetaLedger, PassTag(..), MetaEvent(..),
@@ -344,6 +346,18 @@ insertSite st t key useSite recursive = do
 plainSite :: Int -> Int
 plainSite s = s .&. complement siteBits
 
+-- The key map of a table read back from a .bxref (GenBXref writes the
+-- rows alone): a site's id is its row key with the fact bits
+-- insertSite sets, from the row's kind and recursive flag, as an
+-- unperturbed table has them.
+siteIdsFromRows :: IM.IntMap SiteRow -> M.Map SiteKey SiteRef
+siteIdsFromRows rows =
+    M.fromList [ (sr_key row, SiteRef (siteId s row) (sr_recursive row))
+               | (s, row) <- IM.toList rows ]
+  where siteId s row =
+            s .|. (if siteKeyKind (sr_key row) == SKDef then defSiteBit else 0)
+              .|. (if sr_recursive row then recSiteBit else 0)
+
 -- Push a frame for a site under the register's frame and return it
 -- (the caller runs the unfolding between two swaps).  A push at a
 -- recursion point looks the definition up in the register's map.  It
@@ -602,7 +616,8 @@ renderDump (MetaTables t am) cells = unlines (map line cells)
 -- Built once by the rebuild (IExpand.buildModuleMeta) from the headers
 -- of the cells it keeps, after CSE, and carried on the IModule.  It is
 -- read by nothing that orders or chooses: the side file renders it, and
--- it is never serialized.
+-- -bxref writes it to the module's .bxref (GenBXref); the .ba never
+-- carries it.
 
 -- A context is one distinct frame chain, as the triple (parent context,
 -- site, count); context 0 is the top, under which no frame was pushed.
@@ -654,6 +669,11 @@ contextChain t = go []
                        Just (p, s, c) -> go ((s, c) : acc) p
                        Nothing -> internalError ("IExpandMeta.contextChain: " ++
                                                  show ctx)
+
+-- the key map of a context table read back from a .bxref: the inverse
+-- of its rows
+contextIdsFromRows :: IM.IntMap (Int, Int, Int) -> M.Map (Int, Int, Int) Int
+contextIdsFromRows rows = M.fromList [ (key, ctx) | (ctx, key) <- IM.toList rows ]
 
 -- The record of a lifted def: the cell it was lifted from and the cells
 -- that stand behind it.  The tiers are derived when the record is

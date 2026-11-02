@@ -595,6 +595,7 @@ defaultFlags bluespecdir = Flags {
         biasMethodScheduling = False,
         blockCodegen = False,
         bluespecDir = bluespecdir,
+        bxref = False,
         cIncPath = [],
         cLibPath = [],
         cLibs = [],
@@ -1225,6 +1226,10 @@ externalFlags = [
         ("bug-debug",
          (Toggle (\f x -> f {cDebug=x}) (showIfTrue cDebug),
           "enable C debugging / profiling", Hidden)),
+
+        ("bxref",
+         (Toggle (\f x -> f {bxref=x}) (showIfTrue bxref),
+          "write the module's metadata cross-reference file (.bxref) beside the .ba", Hidden)),
 
         ("ignore-assertions",
          (NoArg (\f -> Left $ f {disableAssertions=True}) (Just disableAssertions),
@@ -1982,6 +1987,7 @@ showFlagsRaw flags =
           ("bdir", show (bdir flags)),
           ("biasMethodScheduling", show (biasMethodScheduling flags)),
           ("bluespecDir", show (bluespecDir flags)),
+          ("bxref", show (bxref flags)),
           ("cDebug", show (cDebug flags)),
           ("cFlags", show (cFlags flags)),
           ("cIncPath", show (cIncPath flags)),
