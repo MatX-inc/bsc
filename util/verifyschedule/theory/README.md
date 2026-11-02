@@ -20,6 +20,12 @@ Prototypes, not yet used by the generator. Lean 4.35, core library only.
   FIFO2).  `Example.lean` has a two-level hierarchy and negative cases that
   must fail (a sandwiching SB export, a wrong mux argument, a forbidden
   parent order, an RWire loop); `split/` composes across separately
-  compiled files.  Build `Modular.olean` as above (add -DElab.async=false
-  under a memory cap).  Open points, mostly per-module proof cost, are in
-  `design.md`.
+  compiled files.  Each module's own system-task calls are part of its
+  contract, unordered against other modules' (not true across synthesis
+  boundaries in Verilog).  `Scan.lean` proves the linear scan that gives
+  the obligation's pair facts, `EmitLemmas.lean` and `SiteCond.lean` the
+  emission and site-condition lemmas, and `Fifo2R.lean` an always-ready
+  FIFO2 `first`.  `build.sh` builds everything, capped.  `e2e/`, `scan/`,
+  `sites/` and `emit/` hold the prototype emitter and measurement tools.
+  Open points are in `design.md`; the open review items are in the commit
+  that added this.

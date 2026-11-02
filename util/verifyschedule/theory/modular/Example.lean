@@ -56,6 +56,18 @@ relating the FSM's state comparisons).  Every built module now also carries
 its acyclicity certificate (`acyc`), and `Top.top`, `Asm.top` give both
 halves of `Built.top`.
 
+System tasks: `Show` is a parent whose rule `show` is
+`if (isOn c.getB) $display(c.getA)`, the display a port of its `Tasks 1`
+child; `Show.top` is its contract with the task trace, `Show.display` the
+trace end to end.  Negatives:
+(k) `ShowLate`: the display's read of `c.getA` placed after a `c.setA` in
+    the same rule.
+(l) `ShowCond`: the display's enable omits its condition.
+(m) `TaskOrder`: two displays whose statement order is the reverse of the
+    order the child's annotations force.
+`TaskRev.not_realizes`: a task module whose hardware prints in reverse
+order violates the contract itself.
+
 Build: `lean -o build/Modular.olean Modular.lean`, then
 `LEAN_PATH=build lean Example.lean`.
 -/
@@ -453,7 +465,7 @@ theorem not_realizes : ¬ Realizes mod := by
     · cases m <;> simp [annSB, Child.ann] at hm
       simp [w, gSB]
     · cases m <;> simp [gSB, lastArg] at hx <;> subst hx <;> rfl
-  obtain ⟨τ, fin, hg, hex, hs'⟩ := h s [gSB] w _ s' g rfl hL hD hhw ⟨trivial, fun _ => trivial⟩
+  obtain ⟨τ, fin, hg, hex, hs', -⟩ := h s [gSB] w _ s' g rfl hL hD hhw ⟨trivial, fun _ => trivial⟩
     (fun c _ h => by simp [annSB, Child.ann] at h)
   obtain ⟨ρ, post, rfl, hpost⟩ := groups_cons_split τ gSB [] hg
   obtain ⟨ρ', rfl⟩ := groups_nil_rules post hpost
@@ -2312,6 +2324,478 @@ theorem not_obl : ¬ Obl (Fsm.P natOps (fun _ _ => true)) := by
 
 end FsmNo
 
+/-! ## System tasks (decision 5)
+
+`mkShow` has children `c : mkChild` and `T : Tasks 1`, its one `$display`
+statement.  Rule `show` is `if (isOn c.getB) $display(c.getA)`, rule `bump`
+is `c.setA(inc c.getA)`.  `comb` drives `T`'s enable with the statement's
+condition and its argument with `c.getA`.  `Show.top` is the contract with
+the module's task trace (log `⟨.T, ()⟩`) in it, and `Show.hw_trace` spells
+that trace out: the hardware prints `c.getA` exactly when `isOn c.getB`. -/
+namespace Show
+
+inductive K where
+  | c | T
+  deriving DecidableEq
+
+inductive R where
+  | show | bump
+  deriving DecidableEq
+
+abbrev CI : K → Iface
+  | .c => Child.X
+  | .T => Tasks.X 1
+
+structure Ops (V : Type) where
+  z : V
+  inc : V → V
+  isOn : V → Bool
+
+section
+variable {V : Type} (ops : Ops V)
+
+/-- rule show: if (isOn c.getB) $display(c.getA);  rule bump: c.setA(inc c.getA) -/
+def rbody : R → Prog K (fun j => (CI j).M) V
+  | .show => .call .c Child.M.getB ops.z (fun b => .call .c Child.M.getA ops.z (fun a =>
+      Prog.callIf (ops.isOn b) .T (0 : Fin 1) a ops.z (fun _ => .ret ops.z)))
+  | .bump => .call .c Child.M.getA ops.z (fun v => .call .c Child.M.setA (ops.inc v) (fun _ => .ret ops.z))
+
+/-- The display's enable is its condition (`good`), or wrongly WILL_FIRE_show alone. -/
+def comb (good : Bool) (oc : (j : K) → Outs (CI j).M V) (w : Wires Empty V) :
+    ((j : K) → Wires (CI j).M V) × Outs Empty V :=
+  (fun j => match j with
+    | .c => Top.childW ops.z true (ops.inc ((oc .c).ret Child.M.getA))
+    | .T => ⟨fun _ => if good then ops.isOn ((oc .c).ret Child.M.getB) else true,
+             fun _ => (oc .c).ret Child.M.getA⟩,
+   ⟨fun m => m.elim, fun m => m.elim⟩)
+
+abbrev P (good : Bool) : Parent V where
+  I := K
+  decI := inferInstance
+  kids := [.c, .T]
+  kids_nodup := by decide
+  kids_all := fun j => by cases j <;> decide
+  CI := CI
+  X := NoX
+  PR := R
+  body := fun m => m.elim
+  rbody := rbody ops
+  comb := comb ops good
+  asm _ _ := True
+  onehot _ _ := True
+
+variable (good : Bool) (oc : (j : K) → Outs (CI j).M V)
+theorem trR_show_on (h : ops.isOn ((oc .c).ret .getB) = true) : trR (P ops good) oc .show =
+    ([⟨.c, (.getB, ops.z)⟩, ⟨.c, (.getA, ops.z)⟩, ⟨.T, ((0 : Fin 1), (oc .c).ret .getA)⟩], some ops.z) := by
+  simp [trR, rbody, trace, Prog.callIf, h]
+theorem trR_show_off (h : ops.isOn ((oc .c).ret .getB) = false) : trR (P ops good) oc .show =
+    ([⟨.c, (.getB, ops.z)⟩, ⟨.c, (.getA, ops.z)⟩], some ops.z) := by
+  simp [trR, rbody, trace, Prog.callIf, h]
+theorem trR_bump : trR (P ops good) oc .bump =
+    ([⟨.c, (.getA, ops.z)⟩, ⟨.c, (.setA, ops.inc ((oc .c).ret .getA))⟩], some ops.z) := rfl
+end
+
+def fp : Empty ⊕ R → List (Σ j, (CI j).M)
+  | .inl m => m.elim
+  | .inr .show => [⟨.c, Child.M.getB⟩, ⟨.c, Child.M.getA⟩, ⟨.T, (0 : Fin 1)⟩]
+  | .inr .bump => [⟨.c, Child.M.getA⟩, ⟨.c, Child.M.setA⟩]
+
+def users : (j : K) → (CI j).M → List (Empty ⊕ R)
+  | .c, .getA => [.inr .show, .inr .bump]
+  | .c, .getB => [.inr .show]
+  | .c, .setA => [.inr .bump]
+  | .T, _ => [.inr .show]
+
+macro "showan" : tactic => `(tactic| simp [CI, Child.X, Child.ann, Tasks.X, taskAnn, Ann.Follow, Ann.Group] at *)
+
+section
+variable {V : Type} (ops : Ops V)
+
+/-- `show`'s calls may precede `bump`'s, whether or not it displays. -/
+theorem okT_show_bump (oc : (j : K) → Outs (CI j).M V) :
+    OkT (P ops true) (trR (P ops true) oc .show).1 (trR (P ops true) oc .bump).1 := by
+  intro j a ha b hb
+  rw [trR_bump] at hb
+  cases hc : ops.isOn ((oc .c).ret .getB)
+  · rw [trR_show_off ops true oc hc] at ha
+    cases j <;> pj <;> (rcases ha with rfl | rfl) <;> (rcases hb with rfl | rfl) <;> showan
+  · rw [trR_show_on ops true oc hc] at ha
+    cases j <;> pj
+    · rcases ha with rfl | rfl <;> (rcases hb with rfl | rfl) <;> showan
+
+/-- The certificate: `show` before `bump` (`getA SB setA`); the display's
+    enable and argument, per user, like any child port's. -/
+def cert : Cert (P ops true) where
+  rules := [.show, .bump]
+  rules_nodup := by simp
+  fire _ _ _ := true
+  hit _ _ m _ := m.elim
+  fp := fp
+  users := users
+  users_ok s := by rcases s with m | r; exact m.elim; cases r <;> simp [fp, users]
+  fp_ok oc w s c hc := by
+    rcases s with m | r
+    · exact m.elim
+    · cases r
+      · cases h : ops.isOn ((oc .c).ret .getB)
+        · simp only [trS, trR_show_off ops true oc h, List.mem_cons, List.not_mem_nil, or_false] at hc
+          rcases hc with rfl | rfl <;> simp [fp]
+        · simp only [trS, trR_show_on ops true oc h, List.mem_cons, List.not_mem_nil, or_false] at hc
+          rcases hc with rfl | rfl | rfl <;> simp [fp]
+      · simp only [trS, trR_bump, List.mem_cons, List.not_mem_nil, or_false] at hc
+        rcases hc with rfl | rfl <;> simp [fp]
+  selfAnn m := m.elim
+  fireIn _ _ r _ := by cases r <;> simp
+  resM _ _ m := m.elim
+  resR oc w r _ _ := by
+    cases r
+    · cases h : ops.isOn ((oc .c).ret .getB)
+      · rw [trR_show_off ops true oc h]; rfl
+      · rw [trR_show_on ops true oc h]; rfl
+    · rfl
+  rdyM _ _ m := m.elim
+  rdyR oc w r _ _ c _ h := by rcases c with ⟨j, cm, x⟩; cases j <;> showan
+  grpM _ _ m := m.elim
+  grpR oc w r _ _ := by
+    intro j a b h
+    cases r
+    · cases hc : ops.isOn ((oc .c).ret .getB)
+      · rw [trR_show_off ops true oc hc] at h
+        cases j <;> pj <;> first | exact absurd h pair_sub_single | exact absurd h pair_sub_nil |
+          (obtain ⟨rfl, rfl⟩ := pair_sub_two h; showan)
+      · rw [trR_show_on ops true oc hc] at h
+        cases j <;> pj <;> first | exact absurd h pair_sub_single | exact absurd h pair_sub_nil |
+          (obtain ⟨rfl, rfl⟩ := pair_sub_two h; showan)
+    · rw [trR_bump] at h
+      cases j <;> pj <;> first | exact absurd h pair_sub_single | exact absurd h pair_sub_nil |
+        (obtain ⟨rfl, rfl⟩ := pair_sub_two h; showan)
+  mm _ _ m := m.elim
+  mmg _ _ m := m.elim
+  h1 _ _ m := m.elim
+  h2 _ _ m := m.elim
+  h3 _ _ m := m.elim
+  h4 oc w r1 r2 _ _ _ hne hn := by
+    cases r1 <;> cases r2
+    · exact absurd rfl hne
+    · exact absurd (okT_show_bump ops oc) hn
+    · exact List.Sublist.refl _
+    · exact absurd rfl hne
+  en oc w j cm _ hcm := by
+    cases j
+    · cases cm
+      · showan
+      · showan
+      · simp only [users, List.mem_cons, List.not_mem_nil, or_false, exists_eq_or_imp, exists_eq_left]
+        unf
+        simp [comb, Top.childW, trR_bump, proj_cons_self]
+    · rw [fin1 cm]
+      simp only [users, List.mem_cons, List.not_mem_nil, or_false, exists_eq_or_imp, exists_eq_left]
+      unf
+      cases hc : ops.isOn ((oc .c).ret .getB)
+      · simp [comb, hc, trR_show_off ops true oc hc, proj_cons_ne, proj_nil]
+      · simp [comb, hc, trR_show_on ops true oc hc, proj_cons_ne, proj_cons_self, proj_nil]
+  enV _ _ m := m.elim
+  arg oc w j cm _ s hs _ x hx := by
+    cases j
+    · cases cm <;> simp only [users, List.mem_cons, List.not_mem_nil, or_false] at hs
+      · rcases hs with rfl | rfl <;> unf
+        · cases hc : ops.isOn ((oc .c).ret .getB)
+          · rw [trR_show_off ops true oc hc] at hx; pj; subst hx; rfl
+          · rw [trR_show_on ops true oc hc] at hx; pj; subst hx; rfl
+        · rw [trR_bump] at hx; pj; subst hx; rfl
+      · subst hs; unf
+        cases hc : ops.isOn ((oc .c).ret .getB)
+        · rw [trR_show_off ops true oc hc] at hx; pj; subst hx; rfl
+        · rw [trR_show_on ops true oc hc] at hx; pj; subst hx; rfl
+      · subst hs; unf; rw [trR_bump] at hx; pj; subst hx; rfl
+    · simp only [users, List.mem_cons, List.not_mem_nil, or_false] at hs
+      subst hs; unf
+      cases hc : ops.isOn ((oc .c).ret .getB)
+      · rw [trR_show_off ops true oc hc] at hx; pj
+      · rw [trR_show_on ops true oc hc] at hx; pj; rcases hx with ⟨-, rfl⟩; rfl
+  alw oc w j cm _ h := by cases j <;> showan
+  onehot _ _ _ := trivial
+
+/-- **mkShow's obligation**: the display's condition and argument, and its
+    place before `bump`'s write, are checked like any child call. -/
+theorem obl : Obl (P ops true) := obl_of_cert (P ops true) (cert ops)
+
+/-- What `comb` reads: `c.setA`'s data reads `c.getA`; the display's enable
+    and argument read `c.getB` and `c.getA`.  No child has a path. -/
+def acyc : Acyc (P ops true) :=
+  Acyc.ofMoore (P ops true)
+    (fun j p => match j, p with
+      | .c, .setA => [⟨.c, Child.M.getA⟩]
+      | .T, _ => [⟨.c, Child.M.getB⟩, ⟨.c, Child.M.getA⟩]
+      | _, _ => [])
+    (fun _ _ => []) (fun q => q.elim) (fun q => q.elim)
+    (by
+      intro oc oc' w w' j p hD hW
+      cases j
+      · cases p <;> dep <;> simp [comb, Top.childW, *]
+      · dep; simp [comb, *])
+    (by intro oc oc' w w' q; exact q.elim)
+    (fun j p q => by cases j <;> rfl) (fun q => q.elim)
+
+abbrev impl : (j : K) → Module V (CI j)
+  | .c => Child.mod (⟨ops.z, ops.inc⟩ : ToyOps V)
+  | .T => Tasks 1
+
+abbrev mod : Module V NoX := (P ops true).toModule (impl ops)
+
+theorem built [Inhabited V] : Built NoX (mod ops) :=
+  Built.node (P ops true) (impl ops) (fun j => match j with
+    | .c => Child.built _
+    | .T => Built.leaf _ (tasks_realizes 1) (tasks_causal 1))
+    (fun j => aliased_of_none _ _ (fun p q => by cases j <;> rfl) (fun a p => by cases j <;> rfl))
+    (obl ops) (acyc ops)
+
+/-- **mkShow realizes its contract, task trace included, and is not vacuous.** -/
+theorem top [Inhabited V] : Realizes (mod ops) ∧
+    ∀ s w, (mod ops).clean s = s → ∃ o s' g, (mod ops).hw s w o s' g := (built ops).top
+
+/-- The hardware's trace of mkShow's own log: `c.getA` when `isOn c.getB`.
+    `top` equates it with the run's calls of `T`. -/
+theorem hw_trace (s : (mod ops).S) (w : Wires Empty V) (o : Outs Empty V) (s' : (mod ops).S)
+    (g : (mod ops).Sig) (h : (mod ops).hw s w o s' g) :
+    (mod ops).trc g ⟨.T, ()⟩ =
+      if ops.isOn ((g.oc .c).ret .getB) then [(0, (g.oc .c).ret .getA)] else [] := by
+  obtain ⟨-, hch, -, -, hd⟩ := h
+  obtain ⟨hwc, -⟩ := hd trivial
+  obtain ⟨-, hT⟩ := hch .T
+  show taskTrace (g.sub .T) = _
+  rw [hT, hwc]
+  cases hc : ops.isOn ((g.oc .c).ret .getB) <;> simp [taskTrace, comb, hc, List.finRange]
+
+/-- **The display, end to end**: in every covered cycle, a one-at-a-time run
+    that agrees with the hardware makes exactly the hardware's display calls:
+    one, of `c.getA`, when `isOn c.getB`, else none. -/
+theorem display [Inhabited V] (s : (mod ops).S) (σ : List (List (Empty × V))) (w : Wires Empty V)
+    (o : Outs Empty V) (s' : (mod ops).S) (g : (mod ops).Sig) (hc : (mod ops).clean s = s)
+    (hL : Legal NoX.ann σ) (hD : Drives NoX.ann w σ) (hh : (mod ops).hw s w o s' g) (hok : (mod ops).ok g) :
+    ∃ τ fin, groups τ = σ ∧ Exec (mod ops) o s τ fin ∧ s' = (mod ops).clean fin ∧
+      (mod ops).log fin ⟨.T, ()⟩ =
+        if ops.isOn ((g.oc .c).ret .getB) then [(0, (g.oc .c).ret .getA)] else [] := by
+  obtain ⟨τ, fin, h1, h2, h3, h4⟩ := (top ops).1 s σ w o s' g hc hL hD hh hok (fun c _ _ => c.1.elim)
+  exact ⟨τ, fin, h1, h2, h3, (h4 ⟨.T, ()⟩).symm.trans (hw_trace ops s w o s' g hh)⟩
+end
+end Show
+
+/-! ## (k) The display's read placed after the child write
+
+Rule `late` is `c.setA(c.getA + 1); $display(c.getA)` with the display's
+read emitted after the write.  `getA SB setA` forbids it. -/
+namespace ShowLate
+open Show (K CI)
+
+def rbody : Unit → Prog K (fun j => (CI j).M) Nat
+  | () => .call .c Child.M.getA 0 (fun v => .call .c Child.M.setA (v + 1) (fun _ =>
+      .call .c Child.M.getA 0 (fun a => .call .T (0 : Fin 1) a (fun _ => .ret 0))))
+
+abbrev P : Parent Nat where
+  I := K
+  decI := inferInstance
+  kids := [.c, .T]
+  kids_nodup := by decide
+  kids_all := fun j => by cases j <;> decide
+  CI := CI
+  X := NoX
+  PR := Unit
+  body := fun m => m.elim
+  rbody := rbody
+  comb := fun oc _ => (fun j => match j with
+    | .c => Top.childW 0 true ((oc .c).ret Child.M.getA + 1)
+    | .T => ⟨fun _ => true, fun _ => (oc .c).ret Child.M.getA⟩, ⟨fun m => m.elim, fun m => m.elim⟩)
+  asm _ _ := True
+  onehot _ _ := True
+
+/-- The display is enabled, so `late` is in every order, and its own calls on
+    `c` put `getA` after `setA`. -/
+theorem not_obl : ¬ Obl P := by
+  intro h
+  let oc : (j : K) → Outs (CI j).M Nat := fun _ => ⟨fun _ => true, fun _ => 0⟩
+  obtain ⟨-, τP, hg, -, hj⟩ := h oc ⟨fun m => m.elim, fun m => m.elim⟩ [] trivial (by noal)
+    (legal_nil _ (fun m => m.elim)) ⟨fun m => m.elim, fun m => m.elim⟩ (fun _ h => by simp at h)
+  obtain ⟨x, hx⟩ := ((hj .T).2.1.en (0 : Fin 1) rfl).mp rfl
+  obtain ⟨l, hl, hxl⟩ := List.mem_flatten.mp hx
+  obtain ⟨e, he, rfl⟩ := List.mem_map.mp hl
+  rcases e with g | r
+  · have := mem_groups_of_inl he; rw [hg] at this; simp at this
+  · have hc : proj K.c (stepTrace P oc (.inr r)) =
+        [(Child.M.getA, 0), (Child.M.setA, 1), (Child.M.getA, 0)] := rfl
+    have hgrp := (hj .c).1.group _ (List.mem_map.mpr ⟨_, he, rfl⟩) (Child.M.setA, 1) (Child.M.getA, 0)
+      (by rw [hc]; exact List.Sublist.cons _ (List.Sublist.refl _))
+    have := hgrp.1.1 (by decide)
+    simp [Child.X, Child.ann] at this
+
+end ShowLate
+
+/-! ## (l) The display fired under the wrong condition
+
+`Show` with `T`'s enable WILL_FIRE_show alone, omitting `isOn c.getB`. -/
+namespace ShowCond
+open Show (K CI R)
+
+def natOps : Show.Ops Nat := ⟨0, (· + 1), (· != 0)⟩
+
+/-- With `c.getB = 0` no step calls the display, but its enable is on. -/
+theorem not_obl : ¬ Obl (Show.P natOps false) := by
+  intro h
+  let oc : (j : K) → Outs (CI j).M Nat := fun _ => ⟨fun _ => true, fun _ => 0⟩
+  obtain ⟨-, τP, hg, -, hj⟩ := h oc ⟨fun m => m.elim, fun m => m.elim⟩ [] trivial (by noal)
+    (legal_nil _ (fun m => m.elim)) ⟨fun m => m.elim, fun m => m.elim⟩ (fun _ h => by simp at h)
+  obtain ⟨x, hx⟩ := ((hj .T).2.1.en (0 : Fin 1) rfl).mp rfl
+  obtain ⟨l, hl, hxl⟩ := List.mem_flatten.mp hx
+  obtain ⟨e, he, rfl⟩ := List.mem_map.mp hl
+  rcases e with g | r
+  · have := mem_groups_of_inl he; rw [hg] at this; simp at this
+  · have h0 : ∀ r : R, proj K.T (stepTrace (Show.P natOps false) oc (.inr r)) = [] := by
+      intro r; cases r <;> rfl
+    rw [h0] at hxl; simp at hxl
+
+end ShowCond
+
+/-! ## (m) Two displays in the wrong statement order
+
+Rule `wr` is `c.setA(0); $display(0)` (statement 0), rule `rd` is
+`$display(c.getA)` (statement 1).  The child forces `rd` before `wr`
+(`getA SB setA`), so the run prints statement 1 first; the hardware prints
+statement 0 first. -/
+namespace TaskOrder
+open Show (K)
+
+inductive R where
+  | wr | rd
+  deriving DecidableEq
+
+abbrev CI : K → Iface
+  | .c => Child.X
+  | .T => Tasks.X 2
+
+def rbody : R → Prog K (fun j => (CI j).M) Nat
+  | .wr => .call .c Child.M.setA 0 (fun _ => .call .T (0 : Fin 2) 0 (fun _ => .ret 0))
+  | .rd => .call .c Child.M.getA 0 (fun a => .call .T (1 : Fin 2) a (fun _ => .ret 0))
+
+abbrev P : Parent Nat where
+  I := K
+  decI := inferInstance
+  kids := [.c, .T]
+  kids_nodup := by decide
+  kids_all := fun j => by cases j <;> decide
+  CI := CI
+  X := NoX
+  PR := R
+  body := fun m => m.elim
+  rbody := rbody
+  comb := fun oc _ => (fun j => match j with
+    | .c => Top.childW 0 true 0
+    | .T => ⟨fun _ => true, fun t => if t = 0 then 0 else (oc .c).ret Child.M.getA⟩,
+    ⟨fun m => m.elim, fun m => m.elim⟩)
+  asm _ _ := True
+  onehot _ _ := True
+
+/-- Both displays are enabled, so both rules are in every order: `wr` first
+    breaks `getA SB setA`, `rd` first breaks the statement order. -/
+theorem not_obl : ¬ Obl P := by
+  intro h
+  let oc : (j : K) → Outs (CI j).M Nat := fun _ => ⟨fun _ => true, fun _ => 0⟩
+  obtain ⟨-, τP, hg, -, hj⟩ := h oc ⟨fun m => m.elim, fun m => m.elim⟩ [] trivial (by noal)
+    (legal_nil _ (fun m => m.elim)) ⟨fun m => m.elim, fun m => m.elim⟩ (fun _ h => by simp at h)
+  have hT0 : proj K.T (stepTrace P oc (.inr .wr)) = [((0 : Fin 2), 0)] := rfl
+  have hT1 : proj K.T (stepTrace P oc (.inr .rd)) = [((1 : Fin 2), 0)] := rfl
+  have hc0 : proj K.c (stepTrace P oc (.inr .wr)) = [(Child.M.setA, 0)] := rfl
+  have hc1 : proj K.c (stepTrace P oc (.inr .rd)) = [(Child.M.getA, 0)] := rfl
+  -- the step that calls statement `t` is in the order
+  have hin : ∀ t : Fin 2, ∃ r, (.inr r : List (Empty × Nat) ⊕ R) ∈ τP ∧
+      ∃ x, (t, x) ∈ proj K.T (stepTrace P oc (.inr r)) := by
+    intro t
+    obtain ⟨x, hx⟩ := ((hj .T).2.1.en t rfl).mp rfl
+    obtain ⟨l, hl, hxl⟩ := List.mem_flatten.mp hx
+    obtain ⟨e, he, rfl⟩ := List.mem_map.mp hl
+    rcases e with g | r
+    · have := mem_groups_of_inl he; rw [hg] at this; simp at this
+    · exact ⟨r, he, x, hxl⟩
+  obtain ⟨r0, h0, x0, hx0⟩ := hin 0
+  obtain ⟨r1, h1, x1, hx1⟩ := hin 1
+  have e0 : r0 = .wr := by
+    cases r0
+    · rfl
+    · rw [hT1] at hx0; simp at hx0
+  have e1 : r1 = .rd := by
+    cases r1
+    · rw [hT0] at hx1; simp at hx1
+    · rfl
+  subst e0 e1
+  rcases either_sublist h0 h1 (by simp) with hs | hs
+  · have := ((hj .c).1.order _ _ (pair_flatten_map (fun e => proj K.c (stepTrace P oc e)) hs
+      (x := (Child.M.setA, 0)) (y := (Child.M.getA, 0)) (by rw [hc0]; simp) (by rw [hc1]; simp))).1 (by decide)
+    simp [Child.X, Child.ann] at this
+  · have := ((hj .T).1.order _ _ (pair_flatten_map (fun e => proj K.T (stepTrace P oc e)) hs
+      (x := ((1 : Fin 2), 0)) (y := ((0 : Fin 2), 0)) (by rw [hT1]; simp) (by rw [hT0]; simp))).1 (by decide)
+    simp [Tasks.X, taskAnn] at this
+
+end TaskOrder
+
+/-! ## The contract compares traces
+
+`Tasks 2` with hardware that runs its two statements in reverse order does
+not realize the contract: the trace part of `Realizes` has content. -/
+namespace TaskRev
+
+abbrev mod : Module Nat (Tasks.X 2) := { Tasks 2 with trc := fun g _ => (taskTrace g).reverse }
+
+theorem execG_log (o : Outs (Fin 2) Nat) (s t : mod.S) (l : List (Fin 2 × Nat))
+    (h : ExecG mod o s l t) : t = s ++ l.map (fun c => (c.1.val, c.2)) := by
+  induction h with
+  | nil s => simp
+  | @cons s s1 s2 m x l hm _ ih =>
+    have e : s1 = s ++ [(m.val, x)] := hm
+    rw [ih, e]; simp
+
+theorem exec_log (o : Outs (Fin 2) Nat) (s t : mod.S) (τ : List (List (Fin 2 × Nat) ⊕ mod.R))
+    (h : Exec mod o s τ t) : t = s ++ (groups τ).flatten.map (fun c => (c.1.val, c.2)) := by
+  induction h with
+  | nil s => simp [groups]
+  | @grp s s1 s2 g τ hg _ ih => rw [ih, execG_log o _ _ _ hg]; simp [groups]
+  | @rule s s1 s2 r τ hr _ ih => exact r.elim
+
+/-- One caller calls statement 0, then statement 1. -/
+def σ2 : List (List (Fin 2 × Nat)) := [[(0, 5), (1, 6)]]
+def w2 : Wires (Fin 2) Nat := ⟨fun _ => true, fun t => if t = 0 then 5 else 6⟩
+
+theorem legal2 : Legal (taskAnn 2) σ2 := by
+  refine ⟨fun c1 c2 hs => ?_, fun g hg c1 c2 hs => ?_, fun m hm => by simp [taskAnn] at hm⟩
+  · simp only [σ2, List.flatten_cons, List.flatten_nil, List.append_nil] at hs
+    obtain ⟨rfl, rfl⟩ := pair_sub_two hs
+    simp [Ann.Follow, taskAnn]
+  · simp only [σ2, List.mem_singleton] at hg
+    subst hg
+    obtain ⟨rfl, rfl⟩ := pair_sub_two hs
+    simp [Ann.Group, Ann.Follow, taskAnn]
+
+theorem drives2 : Drives (taskAnn 2) w2 σ2 := by
+  refine ⟨fun m _ => ⟨fun _ => ⟨w2.arg m, ?_⟩, fun _ => rfl⟩, fun m x hx => ?_⟩
+  · revert m; rw [Fin.forall_fin_two]
+    exact ⟨fun _ _ => by simp [σ2, w2], fun _ _ => by simp [σ2, w2]⟩
+  · have key : ∀ m : Fin 2, lastArg m σ2.flatten = some (w2.arg m) := by
+      rw [Fin.forall_fin_two]; exact ⟨rfl, rfl⟩
+    rw [key m] at hx; exact Option.some.inj hx
+
+/-- The hardware prints statement 1 before statement 0; every run that
+    agrees with it prints 0 before 1. -/
+theorem not_realizes : ¬ Realizes mod := by
+  intro h
+  obtain ⟨τ, fin, hg, hex, -, htr⟩ := h [] σ2 w2 ⟨fun _ => true, fun _ => 0⟩ [] w2 rfl legal2 drives2
+    ⟨rfl, rfl⟩ trivial (fun c _ h => by simp [taskAnn] at h)
+  have hfin := exec_log _ _ _ _ hex
+  rw [hg] at hfin
+  have := htr ()
+  rw [hfin] at this
+  revert this; decide
+
+end TaskRev
+
+
 end Ex
 
 #print axioms Ex.Child.obl
@@ -2350,3 +2834,12 @@ end Ex
 #print axioms Ex.Fsm.skel
 #print axioms Ex.Fsm.obl
 #print axioms Ex.FsmNo.not_obl
+#print axioms Ex.Show.obl
+#print axioms Ex.Show.built
+#print axioms Ex.Show.top
+#print axioms Ex.Show.hw_trace
+#print axioms Ex.Show.display
+#print axioms Ex.ShowLate.not_obl
+#print axioms Ex.ShowCond.not_obl
+#print axioms Ex.TaskOrder.not_obl
+#print axioms Ex.TaskRev.not_realizes

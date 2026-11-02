@@ -33,6 +33,9 @@ scheduling annotations it exports (CF, SB, SBR, C).  This file defines
   certificate (`Acyc`), and `Built.causal` to the whole instance tree;
 * output aliases (`Ann.same`, `Ann.rdyRet`, `Aliased`): ports that share one
   output wire, as FIFO2's `notFull`, `i_notFull` and `enq`'s RDY do;
+* system tasks: a module's task statements are the ports of a `Tasks` child
+  whose log the contract compares, per module, with the hardware's task
+  calls (`Module.L`, `log`, `trc`; `tasks_realizes`);
 * primitive contracts: `CReg n` (and `Reg = CReg 1`); the wire model and
   bsc's eleven wire imports, each with its exact ports and schedule
   (`Realizes.restrict`); `FIFO2` with `vMk2FIFOF`'s eight ports and schedule
@@ -165,6 +168,10 @@ structure Iface where
 
 attribute [instance] Iface.decM
 
+/-- A system-task call (`$display`, `$write`, `$finish`, ...): its statement's
+    index in its module's Verilog, and its arguments (one tuple value). -/
+abbrev TaskCall (V : Type) := Nat × V
+
 /-- A module implementing interface `X`. -/
 structure Module (V : Type) (X : Iface) where
   /-- State, as the one-at-a-time semantics sees it. -/
@@ -190,6 +197,15 @@ structure Module (V : Type) (X : Iface) where
       run-time checks) of the module and of every module below it hold on
       the cycle's signals. -/
   ok : Sig → Prop
+  /-- The task logs of this module and the modules below it, one per module
+      with system tasks (its `Tasks` child).  None by default. -/
+  L : Type := Empty
+  /-- The task calls a one-at-a-time run has made so far this cycle, per log. -/
+  log : S → L → List (TaskCall V) := fun _ _ => []
+  /-- The task calls the hardware makes in a cycle, per log, in statement order. -/
+  trc : Sig → L → List (TaskCall V) := fun _ _ => []
+  /-- A cycle starts with empty logs. -/
+  log_clean : ∀ s l, log (clean s) l = [] := by intros; rfl
 
 section Exec
 variable {X : Iface} (Mo : Module V X) (o : Outs X.M V)
@@ -223,12 +239,22 @@ def groups {α β : Type} : List (α ⊕ β) → List α
     `groups τ = σ` (the calls in order, each caller's calls together, the
     module's rules between callers only) has every step enabled, every call
     returning the hardware's result, and ends in a state whose cycle end is
-    the hardware's next state. -/
+    the hardware's next state.  For each module with system tasks (each
+    log `l`), the hardware's task calls (enabled statements, arguments,
+    statement order) are that module's calls in the run, in run order.
+
+    Different modules' task calls are not ordered against each other: in
+    Verilog each synthesized module's tasks run in its own always block, and
+    blocks on one clock edge run in an unspecified order, so output and
+    shared-state tasks (an unseeded `$random`) may interleave differently.
+    Bluesim should follow the full one-at-a-time order; that is a property
+    of the Bluesim back end, outside this proof. -/
 def Realizes {X : Iface} (Mo : Module V X) : Prop :=
   ∀ (s : Mo.S) (σ : List (List (X.M × V))) (w : Wires X.M V) (o : Outs X.M V) (s' : Mo.S) (g : Mo.Sig),
     Mo.clean s = s → Legal X.ann σ → Drives X.ann w σ → Mo.hw s w o s' g → Mo.ok g →
     (∀ c ∈ σ.flatten, X.ann.alwaysRdy c.1 = false → o.rdy c.1 = true) →
-    ∃ (τ : List (List (X.M × V) ⊕ Mo.R)) (fin : Mo.S), groups τ = σ ∧ Exec Mo o s τ fin ∧ s' = Mo.clean fin
+    ∃ (τ : List (List (X.M × V) ⊕ Mo.R)) (fin : Mo.S), groups τ = σ ∧ Exec Mo o s τ fin ∧ s' = Mo.clean fin ∧
+      ∀ l, Mo.trc g l = Mo.log fin l
 
 /-- **Causal totality** (non-vacuity): the outputs are a function `out` of
     the state and the inputs, depending on port `q`'s outputs only through
@@ -251,7 +277,8 @@ theorem aliased_of_none {X : Iface} (toB : V → Bool) (Mo : Module V X)
 /-- The same module, exporting annotations `A` instead. -/
 def Module.reann {X : Iface} (Mo : Module V X) (A : Ann X.M) : Module V ⟨X.M, X.decM, A⟩ :=
   { S := Mo.S, R := Mo.R, meth := Mo.meth, rule := Mo.rule, clean := Mo.clean,
-    clean_idem := Mo.clean_idem, Sig := Mo.Sig, hw := Mo.hw, ok := Mo.ok }
+    clean_idem := Mo.clean_idem, Sig := Mo.Sig, hw := Mo.hw, ok := Mo.ok,
+    L := Mo.L, log := Mo.log, trc := Mo.trc, log_clean := Mo.log_clean }
 
 theorem execG_reann {X : Iface} (Mo : Module V X) (A : Ann X.M) (o : Outs X.M V) :
     ∀ (s t : Mo.S) (g : List (X.M × V)), ExecG Mo o s g t → ExecG (Mo.reann A) o s g t := by
@@ -275,9 +302,9 @@ theorem Realizes.mono {X : Iface} (Mo : Module V X) (A : Ann X.M)
     (hR : ∀ m, A.alwaysRdy m = X.ann.alwaysRdy m)
     (h : Realizes Mo) : Realizes (Mo.reann A) := by
   intro s σ w o s' g hc hl hd hh hok hr
-  obtain ⟨τ, fin, h1, h2, h3⟩ := h s σ w o s' g hc (hL σ hl) (hD w σ hd) hh hok
+  obtain ⟨τ, fin, h1, h2, h3, h4⟩ := h s σ w o s' g hc (hL σ hl) (hD w σ hd) hh hok
     (fun c hc' h' => hr c hc' ((hR c.1).trans h'))
-  exact ⟨τ, fin, h1, exec_reann Mo A o s fin τ h2, h3⟩
+  exact ⟨τ, fin, h1, exec_reann Mo A o s fin τ h2, h3, h4⟩
 
 /-! ## Built modules -/
 
@@ -380,7 +407,9 @@ structure PSig where
     are exactly `comb`'s.  The data wires (child arguments, results) are
     `comb`'s when the parallel muxes' selectors are one-hot, and otherwise
     unconstrained: an AND-OR of several data values is not modelled.  Its
-    assertions: its own `asm` on its signals, and its children's. -/
+    assertions: its own `asm` on its signals, and its children's.  Its task
+    logs: its children's, each kept apart (its own tasks are its `Tasks`
+    child's). -/
 @[reducible] def Parent.toModule : Module V P.X where
   S := (j : P.I) → (impl j).S
   R := P.PR ⊕ (Σ j, (impl j).R)
@@ -395,6 +424,10 @@ structure PSig where
     (∀ j, (g.wc j).en = ((P.comb g.oc w).1 j).en) ∧ o.rdy = (P.comb g.oc w).2.rdy ∧
     (P.onehot g.oc w → g.wc = (P.comb g.oc w).1 ∧ o = (P.comb g.oc w).2)
   ok g := P.asm g.oc g.w ∧ ∀ j, (impl j).ok (g.sub j)
+  L := Σ j, (impl j).L
+  log s l := (impl l.1).log (s l.1) l.2
+  trc g l := (impl l.1).trc (g.sub l.1) l.2
+  log_clean s l := (impl l.1).log_clean (s l.1) l.2
 
 end Built
 
@@ -755,7 +788,8 @@ theorem merge (oc : (j : P.I) → Outs (P.CI j).M V) (o : Outs P.X.M V) :
 
 /-- **The composition theorem.**  If every child realizes its contract and
     respects its output aliases, and the parent meets its obligation, the
-    parent realizes its contract. -/
+    parent realizes its contract.  Each child's task log stays its own: the
+    merged run is compared with the hardware per log. -/
 theorem compose (hC : ∀ j, Realizes (impl j)) (hA : ∀ j, Aliased P.toB (impl j)) (hO : Obl P) :
     Realizes (P.toModule impl) := by
   intro s σ w o s' g hcl hL hD hhw hok hrdy
@@ -770,17 +804,19 @@ theorem compose (hC : ∀ j, Realizes (impl j)) (hA : ∀ j, Aliased P.toB (impl
   obtain ⟨hwc, ho⟩ := hdata hoh
   subst ho
   have : ∀ j, ∃ q : List (List ((P.CI j).M × V) ⊕ (impl j).R) × (impl j).S,
-      groups q.1 = sigmaJ P g.oc τP j ∧ Exec (impl j) (g.oc j) (s j) q.1 q.2 ∧ s' j = (impl j).clean q.2 := by
+      groups q.1 = sigmaJ P g.oc τP j ∧ Exec (impl j) (g.oc j) (s j) q.1 q.2 ∧ s' j = (impl j).clean q.2 ∧
+        ∀ l, (impl j).trc (g.sub j) l = (impl j).log q.2 l := by
     intro j
     have hcj := hchild j
     rw [hwc] at hcj
-    obtain ⟨τ, fin, h1, h2, h3⟩ := hC j (s j) (sigmaJ P g.oc τP j) ((P.comb g.oc w).1 j) (g.oc j) (s' j)
+    obtain ⟨τ, fin, h1, h2, h3, h4⟩ := hC j (s j) (sigmaJ P g.oc τP j) ((P.comb g.oc w).1 j) (g.oc j) (s' j)
       (g.sub j) (congrFun hcl j) (hj j).1 (hj j).2.1 hcj (hokc j) (hj j).2.2
-    exact ⟨(τ, fin), h1, h2, h3⟩
+    exact ⟨(τ, fin), h1, h2, h3, h4⟩
   obtain ⟨f, hf⟩ := choose_fun this
   obtain ⟨τ, hτg, hτ⟩ := merge P impl g.oc (P.comb g.oc w).2 τP s (fun j => (f j).2) (fun j => (f j).1)
     (fun j => (hf j).1) (fun j => (hf j).2.1) hstep
-  exact ⟨τ, fun j => (f j).2, hτg.trans hgP, hτ, funext fun j => (hf j).2.2⟩
+  -- each child's task log is its own run's: the merge keeps every child's final state
+  exact ⟨τ, fun j => (f j).2, hτg.trans hgP, hτ, funext fun j => (hf j).2.2.1, fun l => (hf l.1).2.2.2 l.2⟩
 
 end ComposeP
 
@@ -975,7 +1011,14 @@ theorem Built.causal [Inhabited V] {X : Iface} {Mo : Module V X} (h : Built X Mo
 /-- **The top theorem, in full**: every hardware cycle in which the
     assertions hold agrees with a one-at-a-time run (for every legal call
     sequence on the ports), and every input has a hardware cycle.  `Mo.ok`
-    unfolds to the conjunction of each instance's `asm` on its signals. -/
+    unfolds to the conjunction of each instance's `asm` on its signals.
+
+    The agreement includes each module's system-task calls (condition,
+    arguments, order), compared per module: Verilog runs each synthesized
+    module's tasks in its own always block, in an unspecified order on one
+    clock edge, so different modules' calls are not ordered against each
+    other.  Bluesim should follow the full one-at-a-time order; that is a
+    property of the Bluesim back end, outside this proof. -/
 theorem Built.top [Inhabited V] {X : Iface} {Mo : Module V X} (h : Built X Mo) :
     Realizes Mo ∧ ∀ s w, Mo.clean s = s → ∃ o s' g, Mo.hw s w o s' g := by
   refine ⟨h.realizes, fun s w hc => ?_⟩
@@ -1480,7 +1523,7 @@ end CRegFacts
 theorem creg_realizes (n : Nat) : Realizes (CReg (V := V) n) := by
   intro s σ w o s' _ _ hL hD hhw _ _
   obtain ⟨hret, hs'⟩ := hhw
-  refine ⟨σ.map .inl, foldW s σ.flatten, groups_map_inl σ, ?_, ?_⟩
+  refine ⟨σ.map .inl, foldW s σ.flatten, groups_map_inl σ, ?_, ?_, fun l => nomatch l⟩
   · apply exec_map_inl
     apply execG_creg o σ.flatten s
     intro p i x q e
@@ -1553,6 +1596,10 @@ def Module.restrict {X : Iface} (Mo : Module V X) (X' : Iface) (f : X'.M → X.M
     (∀ p, (∀ m, f m ≠ p) → wX.en p = false) ∧
     (∀ m, o.rdy m = oX.rdy (f m)) ∧ (∀ m, o.ret m = oX.ret (f m))
   ok := Mo.ok
+  L := Mo.L
+  log := Mo.log
+  trc := Mo.trc
+  log_clean := Mo.log_clean
 
 /-- `X'` is `X` restricted along `f`, with annotations at least as strict. -/
 structure Restricts (X X' : Iface) (f : X'.M → X.M) : Prop where
@@ -1722,9 +1769,9 @@ theorem Realizes.restrict (Mo : Module V X) (hX : Restricts X X' f) (h : Realize
       · rfl
       · have := hX.alwaysRdy _ e; simp only [liftC] at hn; rw [this] at hn; cases hn
     have := hrdy a ha hn'; rw [hrd] at this; exact this
-  obtain ⟨τ, fin, hg, hex, hs'⟩ := h s σ wX oX s' g hc hL' hD' hX' hok hrdy'
+  obtain ⟨τ, fin, hg, hex, hs', htr⟩ := h s σ wX oX s' g hc hL' hD' hX' hok hrdy'
   obtain ⟨τ', hg', hex'⟩ := exec_restrict Mo o oX hret τ σ' s fin (hg.trans hσ) hex
-  exact ⟨τ', fin, hg', hex', hs'⟩
+  exact ⟨τ', fin, hg', hex', hs', htr⟩
 
 open Classical in
 /-- `X'`'s wires as `X`'s: the ports outside `f`'s image idle. -/
@@ -1890,7 +1937,7 @@ theorem wire_realizes (ofBool : Bool → V) (always : Bool) : Realizes (Wire ofB
       · simp only [Bool.false_or]; exact (hD.en _ rfl).mpr ⟨x, hx⟩
       · rfl
     obtain ⟨u, hu⟩ := execG_wsets ofBool always o A none hA
-    refine ⟨some x, groups_map_inl σ, exec_map_inl _ _ σ _ _ ?_, hs'⟩
+    refine ⟨some x, groups_map_inl σ, exec_map_inl _ _ σ _ _ ?_, hs', fun l => nomatch l⟩
     rw [e]
     have hm : (Wire ofBool always).meth WireM.wset x u (o.ret WireM.wset) (some x) := rfl
     refine execG_append' _ _ _ _ hu (.cons hm ?_)
@@ -1914,7 +1961,7 @@ theorem wire_realizes (ofBool : Bool → V) (always : Bool) : Realizes (Wire ofB
       cases e : w.en .wset
       · rfl
       · exact absurd ((hD.en _ rfl).mp e) hset
-    refine ⟨none, groups_map_inl σ, exec_map_inl _ _ σ _ _ ?_, hs'⟩
+    refine ⟨none, groups_map_inl σ, exec_map_inl _ _ σ _ _ ?_, hs', fun l => nomatch l⟩
     apply execG_reads ofBool false o _ none hq
     · intro d hd; cases hd
     · rw [hhas, hen]; rfl
@@ -3294,7 +3341,7 @@ theorem fifo2_realizes (ofBool : Bool → V) : Realizes (FIFO2 ofBool) := by
       (fun y hy => rdyF y (hAsub _ hy)) hfirst hne hnf hine' hinf'
     let n := f2next s (w.en .enq) (w.en .deq) (w.arg .enq)
     have hCe : w.en .clear = true := hCi.mpr ⟨y, by rw [eL]; simp⟩
-    refine ⟨f2clr n, groups_map_inl σ, exec_map_inl _ _ σ _ _ ?_, ?_⟩
+    refine ⟨f2clr n, groups_map_inl σ, exec_map_inl _ _ σ _ _ ?_, ?_, fun l => nomatch l⟩
     · rw [eL]
       have hmc : (FIFO2 ofBool).meth .clear y n (o.ret .clear) (f2clr n) :=
         ⟨by simp [F2.contents, f2clr], by simp [F2.valid, f2clr], rfl, rfl⟩
@@ -3320,7 +3367,8 @@ theorem fifo2_realizes (ofBool : Bool → V) : Realizes (FIFO2 ofBool) := by
       cases e : w.en .clear
       · rfl
       · obtain ⟨y, hy⟩ := hCi.mp e; exact absurd rfl (hno _ hy)
-    refine ⟨f2next s (w.en .enq) (w.en .deq) (w.arg .enq), groups_map_inl σ, exec_map_inl _ _ σ _ _ ?_, ?_⟩
+    refine ⟨f2next s (w.en .enq) (w.en .deq) (w.arg .enq), groups_map_inl σ, exec_map_inl _ _ σ _ _ ?_, ?_,
+      fun l => nomatch l⟩
     · exact f2_run ofBool o s (w.en .enq) (w.en .deq) (w.arg .enq) σ.flatten fol hno hEi hDi harg
         (fun h => by obtain ⟨x, hx⟩ := hEi.mp h; exact rdyE x hx)
         (fun h => by obtain ⟨x, hx⟩ := hDi.mp h; exact rdyD x hx) rdyF hfirst hne hnf hine' hinf'
@@ -3399,6 +3447,141 @@ theorem fifo20_aliased (ofBool : Bool → V) (toB : V → Bool) (h : ∀ b, toB 
   Aliased.restrict toB _ (fifo2_aliased ofBool toB h) (fun _ _ h => h) (fun _ _ h => h)
 
 end Prim2
+
+/-! ### System tasks
+
+A module's task statements, in Verilog order, are the ports of one `Tasks n`
+child; `comb` drives port `t` with statement `t`'s condition and arguments,
+so the obligation checks them like any child call, and `t SB t'` (`t < t'`)
+fixes their order.  A value-returning task's result is a free output. -/
+
+section Tasks
+
+/-- Statement `p` runs before statement `q` (`p SB q`); each runs at most
+    once a cycle. -/
+def taskAnn (n : Nat) : Ann (Fin n) where
+  prec p q := decide (p < q)
+  sbr _ _ := false
+  conf p q := decide (p = q)
+  share _ := false
+  hasEn _ := true
+  alwaysEn _ := false
+  alwaysRdy _ := true
+
+abbrev Tasks.X (n : Nat) : Iface := ⟨Fin n, inferInstance, taskAnn n⟩
+
+/-- The hardware's task calls: the enabled statements in order, each with its
+    arguments. -/
+def taskTrace {n : Nat} (w : Wires (Fin n) V) : List (TaskCall V) :=
+  (List.finRange n).filterMap (fun t => if w.en t then some (t.val, w.arg t) else none)
+
+/-- A module's `n` task statements: a call appends to the cycle's log; the
+    hardware's calls are `taskTrace` of the statements' wires. -/
+@[reducible] def Tasks (n : Nat) : Module V (Tasks.X n) where
+  S := List (TaskCall V)
+  R := Empty
+  meth := fun (t : Fin n) x s _ s' => s' = s ++ [(t.val, x)]
+  rule := fun r => r.elim
+  clean _ := []
+  clean_idem _ := rfl
+  Sig := Wires (Fin n) V
+  hw _ w _ s' g := s' = [] ∧ g = w
+  ok _ := True
+  L := Unit
+  log s _ := s
+  trc g _ := taskTrace g
+  log_clean _ _ := rfl
+
+theorem execG_tasks {n : Nat} (o : Outs (Fin n) V) :
+    ∀ (l : List (Fin n × V)) (s : List (TaskCall V)),
+      ExecG (Tasks (V := V) n) o s l (s ++ l.map (fun c => (c.1.val, c.2)))
+  | [], s => by rw [List.map_nil, List.append_nil]; exact .nil _
+  | (t, x) :: l, s => by
+    have ih := execG_tasks o l (s ++ [(t.val, x)])
+    rw [List.append_assoc, List.singleton_append] at ih
+    rw [List.map_cons]
+    exact .cons rfl ih
+
+/-- Two strictly increasing lists with the same members are equal. -/
+theorem fin_sorted_eq {n : Nat} : ∀ (l1 l2 : List (Fin n)), l1.Pairwise (· < ·) → l2.Pairwise (· < ·) →
+    (∀ x, x ∈ l1 ↔ x ∈ l2) → l1 = l2
+  | [], [], _, _, _ => rfl
+  | [], b :: _, _, _, h => by simpa using (h b).mpr (List.mem_cons_self ..)
+  | a :: _, [], _, _, h => by simpa using (h a).mp (List.mem_cons_self ..)
+  | a :: l1, b :: l2, h1, h2, h => by
+    rw [List.pairwise_cons] at h1 h2
+    have hab : a = b := by
+      rcases List.mem_cons.mp ((h a).mp (List.mem_cons_self ..)) with e | e
+      · exact e
+      · rcases List.mem_cons.mp ((h b).mpr (List.mem_cons_self ..)) with e' | e'
+        · exact e'.symm
+        · exact absurd (Fin.lt_trans (h1.1 b e') (h2.1 a e)) (Fin.lt_irrefl _)
+    subst hab
+    rw [fin_sorted_eq l1 l2 h1.2 h2.2 (fun x => ⟨fun hx => ?_, fun hx => ?_⟩)]
+    · rcases List.mem_cons.mp ((h x).mp (List.mem_cons_of_mem _ hx)) with e | e
+      · subst e; exact absurd (h1.1 _ hx) (Fin.lt_irrefl _)
+      · exact e
+    · rcases List.mem_cons.mp ((h x).mpr (List.mem_cons_of_mem _ hx)) with e | e
+      · subst e; exact absurd (h2.1 _ hx) (Fin.lt_irrefl _)
+      · exact e
+
+theorem filterMap_ite_eq {α β : Type} (p : α → Bool) (f : α → β) :
+    ∀ (L : List α), L.filterMap (fun t => if p t then some (f t) else none) = (L.filter p).map f
+  | [] => rfl
+  | a :: L => by
+    cases h : p a <;> simp [List.filterMap_cons, List.filter_cons, h, filterMap_ite_eq p f L]
+
+/-- In a legal, driven sequence the statements' calls are the hardware's,
+    in order. -/
+theorem taskTrace_eq {n : Nat} {σ : List (List (Fin n × V))} {w : Wires (Fin n) V}
+    (hL : Legal (taskAnn n) σ) (hD : Drives (taskAnn n) w σ) :
+    taskTrace w = σ.flatten.map (fun c => (c.1.val, c.2)) := by
+  have hsort : σ.flatten.Pairwise (fun a b => a.1 < b.1) := by
+    rw [List.pairwise_iff_forall_sublist]
+    intro a b hab
+    have hf := hL.order a b hab
+    have hne : a.1 ≠ b.1 := by
+      intro e; have := hf.2.1; simp [taskAnn, e] at this
+    have hnlt : ¬ b.1 < a.1 := by
+      intro hlt; have := hf.1 hne; simp [taskAnn, hlt] at this
+    have hv : a.1.val ≠ b.1.val := fun e => hne (Fin.ext e)
+    have hv' : ¬ b.1.val < a.1.val := hnlt
+    exact show a.1.val < b.1.val by omega
+  have harg : ∀ c ∈ σ.flatten, c.2 = w.arg c.1 := call_arg hL hD (fun m => .inl (by simp [taskAnn]))
+  have hkeys : σ.flatten.map Prod.fst = (List.finRange n).filter w.en := by
+    apply fin_sorted_eq
+    · exact List.pairwise_map.mpr hsort
+    · exact (List.pairwise_lt_finRange n).filter _
+    · intro t
+      rw [List.mem_filter, List.mem_map]
+      constructor
+      · rintro ⟨c, hc, rfl⟩; exact ⟨List.mem_finRange _, (hD.en c.1 rfl).mpr ⟨c.2, hc⟩⟩
+      · rintro ⟨-, he⟩; obtain ⟨x, hx⟩ := (hD.en t rfl).mp he; exact ⟨(t, x), hx, rfl⟩
+  rw [taskTrace, filterMap_ite_eq w.en (fun t => (t.val, w.arg t)), ← hkeys, List.map_map]
+  refine List.map_congr_left fun c hc => ?_
+  show (c.1.val, w.arg c.1) = (c.1.val, c.2)
+  rw [harg c hc]
+
+/-- **The task statements realize their contract**: in every legal order,
+    the calls are the hardware's, with its conditions and arguments. -/
+theorem tasks_realizes (n : Nat) : Realizes (Tasks (V := V) n) := by
+  intro s σ w o s' g hc hL hD hhw _ _
+  obtain ⟨hs', hg⟩ := hhw
+  have hs : s = [] := hc.symm
+  subst hs hs' hg
+  refine ⟨σ.map .inl, σ.flatten.map (fun c => (c.1.val, c.2)), groups_map_inl σ, ?_, rfl,
+    fun _ => taskTrace_eq hL hD⟩
+  apply exec_map_inl
+  have := execG_tasks o σ.flatten []
+  rwa [List.nil_append] at this
+
+theorem tasks_causal [Inhabited V] (n : Nat) : Causal (Tasks (V := V) n) :=
+  ⟨fun _ _ => ⟨fun _ => true, fun _ => default⟩, fun _ _ _ _ _ => ⟨rfl, rfl⟩, fun _ w _ => ⟨[], w, rfl, rfl⟩⟩
+
+theorem tasks_aliased (toB : V → Bool) (n : Nat) : Aliased toB (Tasks (V := V) n) :=
+  aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl)
+
+end Tasks
 
 
 /-! ## Emission support
@@ -3910,3 +4093,7 @@ end Modular
 #print axioms Modular.legal_of_pairs
 #print axioms Modular.obl_of_cert
 
+#print axioms Modular.tasks_realizes
+#print axioms Modular.tasks_causal
+#print axioms Modular.tasks_aliased
+#print axioms Modular.Realizes.mono
