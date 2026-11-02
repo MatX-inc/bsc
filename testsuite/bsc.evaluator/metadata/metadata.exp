@@ -35,6 +35,14 @@ proc filter_side { fname } {
     }
 }
 
+# The ledger as -dmetadata prints it after the last ASPackage pass (its
+# finalcleanup section: the sizes line and the events), under the stage
+# name a .bxref written at the end of the Verilog backend carries, which
+# is what dumpbxref --events prints for that file
+proc final_ledger { fname out } {
+    sed $fname $out {-e /^ledger\ after\ finalcleanup/,/^-----/!d -e /^-----/d -e /./!d -e s/finalcleanup/verilog/} {}
+}
+
 # One module: its Verilog must be the same byte for byte for a plain
 # compile, under the dump, under the scramble, under the census and with
 # the side file written; the dump, the census and the side file are as
@@ -122,7 +130,11 @@ erase MetaSide.ledger
 # beside the .ba with the metadata table and the ledger as it stands
 # after the Verilog backend.  The Verilog does not change, and the .ba
 # is byte for byte the plain compile's: the file is a companion of the
-# .ba, not a part of it.
+# .ba, not a part of it.  dumpbxref renders the table line for line as
+# the side file of the same run (both through filter_side) and the
+# events as -dmetadata prints them after the last ASPackage pass (the
+# finalcleanup section of the ledger expectation above, under the
+# file's stage name).
 erase MetaSide.bo
 erase sysMetaSide.ba
 compile_verilog_pass MetaSide.bsv sysMetaSide {-elab}
@@ -130,9 +142,21 @@ compare_file sysMetaSide.v sysMetaSide.plain.v
 move sysMetaSide.ba sysMetaSide.plain.ba
 erase MetaSide.bo
 erase sysMetaSide.bxref
-compile_verilog_pass MetaSide.bsv sysMetaSide {-bxref -elab}
+erase sysMetaSide.metadata
+compile_verilog_pass MetaSide.bsv sysMetaSide {-bxref -elab -metadata-out .}
 compare_file sysMetaSide.v sysMetaSide.plain.v
 compare_file sysMetaSide.ba sysMetaSide.plain.ba
+if { [do_internal_checks] } {
+    dumpbxref sysMetaSide.bxref --table
+    filter_side [make_dumpbxref_output_name sysMetaSide.bxref]
+    filter_side sysMetaSide.metadata
+    compare_file sysMetaSide.bxref.dumpbxref-out.sorted sysMetaSide.metadata.sorted
+    dumpbxref sysMetaSide.bxref --events
+    final_ledger MetaSide.ledger.expected MetaSide.ledger.final
+    compare_file [make_dumpbxref_output_name sysMetaSide.bxref] MetaSide.ledger.final
+    erase MetaSide.ledger.final
+}
+erase sysMetaSide.metadata
 erase sysMetaSide.bxref
 erase sysMetaSide.ba
 erase sysMetaSide.plain.ba

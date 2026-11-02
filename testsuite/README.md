@@ -102,7 +102,7 @@ installs it.
 
 The test suite is currently able to use the following developer
 tools, if they exist in the `TEST_RELEASE` `bin` directory:
-`dumpbo`, `dumpba`, `vcdcheck`, and `bsc2bsv`.
+`dumpbo`, `dumpba`, `dumpbxref`, `vcdcheck`, and `bsc2bsv`.
 
 After each compilation that generates a `.bo` file, the suite
 can perform a sanity check by running `dumpbo` on the file

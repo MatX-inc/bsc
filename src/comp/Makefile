@@ -178,7 +178,7 @@ PACKAGES = \
 # target names its own. Anything not listed keeps its main beside the
 # library modules.
 MAINSRC = $@.hs
-bsc bsc2bsv bsv2bsc dumpbo dumpba vcdcheck showrules: MAINSRC = app/$@.hs
+bsc bsc2bsv bsv2bsc dumpbo dumpba dumpbxref vcdcheck showrules: MAINSRC = app/$@.hs
 bluetcl: MAINSRC = app/bluetcl_Main.hs
 GHCMAKEFLAGS = --make $(MAINSRC) -o $@ -j$(GHCJOBS)
 GHCCOMPILEFLAGS = -o $@ -c $<
@@ -292,7 +292,7 @@ SOURCES = BuildVersion.hs BuildSystem.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
 BSCEXES = bsc
 TCLEXES = bluetcl
 BO2BLOOGLEEXES = bo2bloogle
-UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba fstcheck fstscopes vcdcheck
+UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba dumpbxref fstcheck fstscopes vcdcheck
 SHOWRULESEXES = showrules
 # Build-consistency checkers: installed as part of the normal install
 # (not just install-extra), because the library build runs them
@@ -381,6 +381,12 @@ dumpbo: $(SOURCES)
 
 .PHONY: dumpba
 dumpba: $(SOURCES)
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
+	$(POSTBUILDCOMMAND)
+
+.PHONY: dumpbxref
+dumpbxref: $(SOURCES)
 	$(PREBUILDCOMMAND)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
