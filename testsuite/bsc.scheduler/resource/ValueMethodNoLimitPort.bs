@@ -1,0 +1,22 @@
+package ValueMethodNoLimitPort(sysValueMethodNoLimitPort, Two) where
+
+import ProbeWire
+
+-- The id method of mkProbeWire conflicts with itself, so it has no port
+-- limit: every use goes to one port and the schedule keeps the callers
+-- apart.  Two exported value methods that call it with their own
+-- arguments are both live whenever ready, so the port cannot be shared
+-- and bsc reports a resource error (G0002).  Before, the port carried
+-- get1's argument and a parent reading only get2 saw get1's result.
+
+interface Two =
+    get1 :: Bit 8 -> Bit 8
+    get2 :: Bit 8 -> Bit 8
+
+{-# synthesize sysValueMethodNoLimitPort #-}
+sysValueMethodNoLimitPort :: Module Two
+sysValueMethodNoLimitPort = module
+    pw :: ProbeWire (Bit 8) <- mkProbeWire
+    interface
+      get1 x = pw.id x
+      get2 y = pw.id y
