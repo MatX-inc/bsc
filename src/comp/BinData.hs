@@ -94,6 +94,7 @@ import Undefined
 import Prim hiding(PrimArg(..))
 
 import Util(hashInit, nextHashByte, showHash)
+import IOUtil(progArgs)
 
 import Data.List(sort, intercalate, mapAccumL)
 import Control.Monad(liftM, ap, when)
@@ -110,6 +111,8 @@ import Data.Word
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Unsafe as BSU
 import qualified Data.ByteString.Lazy as B
+import Data.ByteString.Builder(Builder, byteString, toLazyByteString)
+import qualified Data.ByteString.Builder.Prim as BP
 import qualified Data.Text.Lazy as T
 import qualified Data.Text.Lazy.Encoding as TE
 import qualified Data.Text as TS
@@ -1788,13 +1791,52 @@ plainBytes x = concatMap plain (out_data (writeBytes x))
         plain End = []
         plain e = internalError $ "BinData.plainBytes: " ++ show e
 
+-- The hidden flags -check-writebin and -hack-no-writebin (registered
+-- with the other progArgs-queried flags in FlagsDecode.traceflags, so
+-- the command-line parser accepts them; BSC_OPTIONS reaches progArgs
+-- too) cover the one shortcut the writer takes, indexBytes: under the
+-- check every index it encodes is compared with the generic encoder's
+-- bytes, and under the hack the generic encoder is used.  Under
+-- -trace-ctype-stats the checked and the generically encoded indices
+-- are counted (writebin_checked and writebin_generic in the
+-- ctype-stats dump), so a test can see that the switch was live.
+{-# NOINLINE checkWriteBin #-}
+checkWriteBin :: Bool
+checkWriteBin = "-check-writebin" `elem` progArgs
+
+{-# NOINLINE hackNoWriteBin #-}
+hackNoWriteBin :: Bool
+hackNoWriteBin = "-hack-no-writebin" `elem` progArgs
+
+-- The bytes of a table index or chunk number: the Bin Int encoding
+-- (the base-254 digits of the value, most significant first, then
+-- endPos; see the Bin Integer instance) in Int arithmetic, instead of
+-- through the Integer instance and the Out monad once per occurrence
+-- of a shared value.
+indexBytes :: Int -> [Byte]
+indexBytes n
+  | n < 0 = internalError $ "BinData.indexBytes: negative index " ++ show n
+  | hackNoWriteBin = ctypeStat WriteBinGeneric (plainBytes n)
+  | checkWriteBin =
+      if bs == plainBytes n
+      then ctypeStat WriteBinChecked bs
+      else internalError $ "BinData.indexBytes: " ++ show (n, bs, plainBytes n)
+  | otherwise = bs
+  where bs = digits n [endPos]
+        digits 0 acc = acc
+        digits m acc = digits (m `quot` 254) (fromIntegral (m `rem` 254) : acc)
+
+-- A byte run as a Builder
+runBytes :: [Byte] -> Builder
+runBytes = BP.primMapListFixed BP.word8
+
 -- Walk the element stream once, left to right.  Bytes go to the
 -- innermost open table entry, or else to the bodies region, which is
 -- produced lazily as the walk proceeds; the state is strict.  Index
 -- assignment (per kind, first occurrence, parent before children) is
 -- the same as the previous in-stream scheme's, so the output remains a
 -- pure function of the content.
-assemble :: (Position -> Position) -> [BinElem] -> [Byte]
+assemble :: (Position -> Position) -> [BinElem] -> Builder
 assemble remapP = assembleGo st0 [] 0
   where st0 = WState { wsRemap = remapP, wsCache = unknownCache
                      , wsStrings = []
@@ -1803,16 +1845,16 @@ assemble remapP = assembleGo st0 [] 0
 
 -- arguments: the cold state, the open entries (innermost first), the
 -- number of bytes emitted to the bodies region so far, the elements
-assembleGo :: WState -> [Frame] -> Int -> [BinElem] -> [Byte]
+assembleGo :: WState -> [Frame] -> Int -> [BinElem] -> Builder
 assembleGo !st frames !main [] = finish st frames main
 assembleGo !st frames !main (B bs : xs) = emit bs st frames main xs
 assembleGo !st frames !main (Start _ : xs) = assembleGo st frames main xs
 assembleGo !st frames !main (End : xs) = assembleGo st frames main xs
 assembleGo !st frames !main (S s : xs) =
   case knownAs s s (wsCache st) of
-    Just idx -> emit (plainBytes idx) st frames main xs
+    Just idx -> emit (indexBytes idx) st frames main xs
     Nothing  -> let (idx, cache') = addKey s s (wsCache st)
-                in emit (plainBytes idx)
+                in emit (indexBytes idx)
                         st { wsCache = cache', wsStrings = s : wsStrings st }
                         frames main xs
 -- The Position transform (-remap-path-prefix) is applied before
@@ -1834,10 +1876,11 @@ assembleGo !st frames !main (EntryEnd : xs) =
 assembleGo !st frames !main (LazyStart : xs) =
   case frames of
     [] -> let c = wsNChunks st
-              bs = plainBytes c
+              bs = indexBytes c
               !start = main + length bs
-          in bs ++ assembleGo st { wsNChunks = c + 1, wsOpen = (c, start) : wsOpen st }
-                              frames start xs
+          in runBytes bs <>
+             assembleGo st { wsNChunks = c + 1, wsOpen = (c, start) : wsOpen st }
+                        frames start xs
     _  -> internalError "BinData.assemble: lazy value inside a shared value"
 assembleGo !st frames !main (LazyEnd : xs) =
   case wsOpen st of
@@ -1847,27 +1890,27 @@ assembleGo !st frames !main (LazyEnd : xs) =
                  frames main xs
     [] -> internalError "BinData.assemble: unbalanced lazy value"
 
-emit :: [Byte] -> WState -> [Frame] -> Int -> [BinElem] -> [Byte]
+emit :: [Byte] -> WState -> [Frame] -> Int -> [BinElem] -> Builder
 emit bs !st frames !main xs =
   case frames of
-    [] -> bs ++ assembleGo st frames (main + length bs) xs
+    [] -> runBytes bs <> assembleGo st frames (main + length bs) xs
     (Frame k n runs : fs) -> assembleGo st (Frame k n (bs : runs) : fs) main xs
 
 -- A shared occurrence: its index, and on first occurrence its payload,
 -- routed to a new table entry (nested shared values inside it get
 -- their own indices and entries as the walk reaches them).
 shared :: (Bin v, Shared k v) =>
-          TableKind -> k -> v -> WState -> [Frame] -> Int -> [BinElem] -> [Byte]
+          TableKind -> k -> v -> WState -> [Frame] -> Int -> [BinElem] -> Builder
 shared kind key v !st frames !main xs =
   case knownAs key v (wsCache st) of
-    Just idx -> emit (plainBytes idx) st frames main xs
+    Just idx -> emit (indexBytes idx) st frames main xs
     Nothing  -> let (idx, cache') = addKey key v (wsCache st)
-                in emit (plainBytes idx) st { wsCache = cache' } frames main
+                in emit (indexBytes idx) st { wsCache = cache' } frames main
                         (EntryStart kind idx : out_data (writeBytes v) ++ (EntryEnd : xs))
 
 -- The bodies region is complete: emit the tables, the string table,
 -- the chunk index and the footer.
-finish :: WState -> [Frame] -> Int -> [Byte]
+finish :: WState -> [Frame] -> Int -> Builder
 finish st frames bodiesEnd
   | not (null frames) = internalError "BinData.assemble: unclosed table entry"
   | not (null (wsOpen st)) = internalError "BinData.assemble: unclosed lazy value"
@@ -1885,11 +1928,11 @@ finish st frames bodiesEnd
                 lens = map BS.length es
                 offs = scanl (+) 0 lens
                 xs = start + sum lens
-                bytes = concatMap BS.unpack es ++ concatMap u32Bytes offs
+                bytes = mconcat (map byteString es) <> runBytes (concatMap u32Bytes offs)
             in (xs + 4 * (n + 1), ((start, xs, n), bytes))
           (strStart, tableParts) = mapAccumL tableRegion bodiesEnd allKinds
           tableFields = map fst tableParts
-          tableBytes = concatMap snd tableParts
+          tableBytes = mconcat (map snd tableParts)
           strs = reverse (wsStrings st)
           nStr = length strs
           strBytes = u32Bytes nStr ++ concatMap (plainBytes . getFString) strs
@@ -1903,16 +1946,17 @@ finish st frames bodiesEnd
                       , fChunkStart = chunkStart, fChunkCount = nChunks }
       in if nStr /= (let (Known n _) = string_cache (wsCache st) in n)
          then internalError "BinData.assemble: string table"
-         else tableBytes ++ strBytes ++ chunkBytes ++ footerBytes ft
+         else tableBytes <> runBytes strBytes <> runBytes chunkBytes
+              <> runBytes (footerBytes ft)
 
--- Run the Out monad and extract a byte stream.  The resulting
--- byte stream is generated lazily through the monad and preserves
--- sharing.
+-- Run the Out monad and extract the encoding as a lazy byte string,
+-- generated chunk by chunk as the walk proceeds, with sharing
+-- preserved.
 
-runOutWith :: (Position -> Position) -> Out () -> [Byte]
+runOutWith :: (Position -> Position) -> Out () -> B.ByteString
 runOutWith remapP (Out xs _) =
     let bes   = toList xs
-        bytes = assemble remapP bes
+        bytes = toLazyByteString (assemble remapP bes)
     in -- trace ("xs = " ++ (show xs)) $
        -- trace ("bytes = " ++ (show bytes)) $
        if trace_bindata
@@ -1920,12 +1964,12 @@ runOutWith remapP (Out xs _) =
        else bytes
 
 -- Convenience function for encoding structures in the Bin typeclass
-encode :: (Bin a) => a -> [Byte]
-encode = encodeWith id
+encode :: (Bin a) => a -> BS.ByteString
+encode = B.toStrict . encodeWith id
 
 -- encode with a Position transform applied to stored positions
 -- (-remap-path-prefix; see assemble)
-encodeWith :: (Bin a) => (Position -> Position) -> a -> [Byte]
+encodeWith :: (Bin a) => (Position -> Position) -> a -> B.ByteString
 encodeWith remapP x = runOutWith remapP (toBin x)
 
 -- ------------------------------------------------------------------

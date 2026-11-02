@@ -7,6 +7,7 @@ import Control.Exception(evaluate)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import Position
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
@@ -43,7 +44,8 @@ genBinFile :: ErrorHandle -> (Position -> Position) ->
 genBinFile errh remapP fn bi_sig bo_sig ipkg =
     let poisoned = any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]
     in writeBinaryFileCatch errh fn
-           (header ++ encodeWith remapP (bi_sig, bo_sig, BoPackage poisoned ipkg))
+           (BL.append (BL.fromStrict headerBS)
+                      (encodeWith remapP (bi_sig, bo_sig, BoPackage poisoned ipkg)))
 
 -- The authenticating hash is a fold over every byte after the tag,
 -- computed here (eagerly) from the raw bytes: it does not depend on

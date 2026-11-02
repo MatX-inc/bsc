@@ -220,7 +220,7 @@ captureReplay directory nativePath flags info = do
     unless (original == nativeCopy) $ copyFile original nativeCopy
     -- Preserve effective native flags rather than reconstructing command-line
     -- spelling. Invocation-only ECO controls are excluded by the native codec.
-    BS.writeFile flagsPath (BS.pack (encode flags))
+    BS.writeFile flagsPath (encode flags)
     outputs <- forM (zip (rbOutputs info) savedOutputs) $ \(path,savedPath) -> do
         copyFile path savedPath
         identity <- fileIdentity savedPath

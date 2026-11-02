@@ -29,6 +29,7 @@ import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 
 -- import Debug.Trace
 
@@ -42,7 +43,7 @@ headerBS = B.pack header
 
 genABinFile :: ErrorHandle -> (Position -> Position) -> String -> ABin -> IO ()
 genABinFile errh remapP fn abin =
-    writeBinaryFileCatch errh fn (header ++ encodeWith remapP abin)
+    writeBinaryFileCatch errh fn (BL.append (BL.fromStrict headerBS) (encodeWith remapP abin))
 
 -- A .ba marks nothing lazy, and its readers (linking, the -u staleness
 -- check) consume and validate the whole file, so it is decoded
