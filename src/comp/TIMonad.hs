@@ -7,7 +7,7 @@ module TIMonad(
         getAllowIncoherent, maskAllowIncoherent,
         getFlags, setFlags, getSymTab,
         getSubst, clearSubst, extSubst, updSubst,
-        newTVar, newTVarId, isNewTVar, newDict, newVar,
+        newTVar, newTVarId, skipTVar, isNewTVar, newDict, newVar,
         freshInst,
         VPred(..), getVPredPositions, expandSynVPred,
         EPred(..), Infer2, CheckT, TaskCheckT,
@@ -50,6 +50,7 @@ import Control.Monad(when)
 import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
                            lift, gets, get, put, modify)
+import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Util(headOrErr)
@@ -430,6 +431,26 @@ newTVarId msg k x = do
   case tv of
     TVar i -> return (i, tv)
     _ -> internalError (msg ++ ": call to newTVarId failed")
+
+-- The draw of newTVar without its variable: advance the counter as
+-- newTVar does for a variable of kind k at position pos, passing over,
+-- as its loop does, a number that a bound variable has, so that a
+-- caller that passes an instance over without instantiating it leaves
+-- the counter where instantiating it would have.  The bound variables
+-- and the set of their numbers are the caller's, fetched once for all
+-- its draws: newTVar concatenates the bound stack and scans it at
+-- every call, and TyVar equality compares the number before the name,
+-- so the set decides a draw and the scan, which is what forces the
+-- variable's name, runs only for a number the set holds, as newTVar's
+-- scan does.
+skipTVar :: [TyVar] -> IS.IntSet -> String -> Kind -> Position -> TI ()
+skipTVar bvs bvnums msg k pos = loopVar
+  where
+    loopVar = do
+        n <- getTyVarNum
+        if (IS.member n bvnums && TyVar (enumId "tctyvar" pos n) n k `elem` bvs)
+          then loopVar
+          else when doVarTrace $ traceM ("newTVar: " ++ show n ++ " " ++ msg)
 
 -- distinguish TyVars with generated names from those with user-given names
 isNewTVar :: TyVar -> Bool
