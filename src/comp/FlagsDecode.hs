@@ -554,6 +554,7 @@ traceflags = [
           "trace-state-loc",
           "trace-syn",
           "trace-tcvar",
+          "trace-tc-dict-share",
           "trace-tc-reducepred",
           "trace-tc-satisfy",
           "trace-type",

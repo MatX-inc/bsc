@@ -1,0 +1,19 @@
+package DictSharingTrace where
+
+import DictSharing
+
+-- Three fields of one type: the traversal of Pair is derived for the
+-- first field and replayed for the other two, which the hidden
+-- -trace-tc-dict-share switch reports for the satisfy call that
+-- typechecks the definition.
+
+struct Three =
+  a :: Pair
+  b :: Pair
+  c :: Pair
+
+three :: Three
+three = Three { a = pair; b = pair; c = pair }
+
+threeLeaves :: Integer
+threeLeaves = countLeaves three

@@ -1,0 +1,35 @@
+package DictSharingRetry where
+
+-- A partial reduction that satisfy puts aside and retries: the proviso
+-- Foo (T 8 t) of the literal 5 reduces through the T instance, whose
+-- context leaves Foo t open while t is undetermined, and the given
+-- Foo b could still discharge the predicate after refinement, so the
+-- attempt is dropped and the predicate retried after defaulting.  The
+-- ground goal Bar (UInt 8) solved inside the dropped attempt must not be
+-- reused by the later Foo (T2 8): it was solved under a substitution the
+-- retry does not keep.
+
+class Foo a where
+  foo :: a -> Integer
+
+class Bar a where
+  bar :: a -> Integer
+
+instance Bar (UInt 8) where
+  bar _ = 1
+
+instance Foo Integer where
+  foo _ = 3
+
+data T n a = T a (UInt n)
+
+data T2 n = T2 (UInt n)
+
+instance (Foo a, Bar (UInt n)) => Foo (T n a) where
+  foo (T x y) = foo x + bar y
+
+instance (Bar (UInt n)) => Foo (T2 n) where
+  foo (T2 y) = bar y
+
+f :: (Foo b) => b -> Integer
+f b = foo (T 5 (3 :: UInt 8)) + foo (T2 (3 :: UInt 8)) + foo b

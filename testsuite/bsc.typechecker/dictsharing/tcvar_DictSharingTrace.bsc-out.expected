@@ -1,0 +1,994 @@
+newDict: 1000
+
+newTVar: 1000 ctxRedCQType
+newTVar: 1001 ctxRedCQType
+newTVar: 1002 ctxRedCQType
+newTVar: 1003 ctxRedCQType
+newTVar: 1004 ctxRedCQType
+newTVar: 1005 ctxRedCQType
+newTVar: 1000 tiRecoveringFromError
+newTVar: 1001 tiExpl''
+newTVar: 1002 tiClause t
+newTVar: 1003 tiRecoveringFromError
+newTVar: 1004 tiExpl''
+newTVar: 1005 tiClause ts
+newTVar: 1006 tiClause t
+newTVar: 1007 freshInstT N C
+newTVar: 1008 freshInstT N C
+newTVar: 1009 tiExpr CApply
+newTVar: 1010 freshInstT N C
+newTVar: 1011 freshInstT N C
+newTVar: 1012 freshInstT N C
+newTVar: 1013 freshInstT N C
+newTVar: 1014 tiExpr CApply
+newTVar: 1015 freshInstT N C
+newTVar: 1016 freshInstT N C
+newTVar: 1017 tiExpr CStruct
+newTVar: 1018 tiExpr CStruct
+newTVar: 1019 freshInstT N G
+newTVar: 1020 freshInstT N G
+newTVar: 1022 tiExpl''
+newTVar: 1023 tiClause t
+newTVar: 1024 freshInstT N C
+newTVar: 1025 freshInstT N C
+newTVar: 1026 tiExpr CApply
+newTVar: 1027 freshInstT N C
+newTVar: 1028 freshInstT N C
+newTVar: 1029 freshInstT N C
+newTVar: 1030 tiExpr CApply
+newTVar: 1031 freshInstT N C
+newTVar: 1032 tiSelect
+newTVar: 1033 freshInstT N G
+newTVar: 1034 freshInstT N G
+newTVar: 1036 tiExpl''
+newTVar: 1037 tiClause t
+newTVar: 1038 tiExpr CStruct
+newTVar: 1039 tiExpr CStruct
+newTVar: 1040 freshInstT N G
+newTVar: 1041 freshInstT N G
+newTVar: 1043 tiExpl''
+newTVar: 1044 tiClause t
+newTVar: 1045 freshInstT N C
+newTVar: 1046 freshInstT N C
+newTVar: 1047 tiExpr CApply
+newTVar: 1048 freshInstT N C
+newTVar: 1049 freshInstT N C
+newTVar: 1050 freshInstT N C
+newTVar: 1051 tiExpr CApply
+newTVar: 1052 freshInstT N C
+newTVar: 1053 tiSelect
+newTVar: 1054 freshInstT N G
+newTVar: 1055 freshInstT N G
+newTVar: 1057 tiExpl''
+newTVar: 1058 tiClause t
+newTVar: 1059 freshInstT N C
+newTVar: 1060 freshInstT N C
+newTVar: 1061 tiExpr CApply
+newTVar: 1062 freshInstT N C
+newTVar: 1063 freshInstT N C
+newTVar: 1064 freshInstT N C
+newTVar: 1065 tiExpr CApply
+newTVar: 1066 freshInstT N C
+newTVar: 1067 tiSelect
+newTVar: 1068 tiRecoveringFromError
+newTVar: 1069 tiExpl''
+newTVar: 1070 tiClause ts
+newTVar: 1071 tiClause t
+newTVar: 1072 freshInst A
+newTVar: 1073 freshInst A
+newTVar: 1074 freshInst A
+newTVar: 1075 freshInst A
+newTVar: 1076 tiPat CPstruct
+newTVar: 1077 tiPat CPstruct
+newTVar: 1078 freshInst B
+newTVar: 1079 freshInst B
+newTVar: 1080 freshInst A
+newTVar: 1081 freshInst A
+newTVar: 1082 freshInst A
+newTVar: 1083 freshInst B
+newTVar: 1084 freshInst B
+newTVar: 1085 tiPat CPstruct
+newTVar: 1086 tiPat CPstruct
+newTVar: 1087 freshInst B
+newTVar: 1088 freshInst B
+newTVar: 1089 freshInst A
+newTVar: 1090 freshInst A
+newTVar: 1091 freshInst A
+newTVar: 1092 freshInst B
+newTVar: 1093 freshInst B
+newTVar: 1094 freshInst A
+newTVar: 1095 freshInst A
+newTVar: 1096 freshInst A
+newTVar: 1098 tiExpl''
+newTVar: 1099 tiClause t
+newTVar: 1101 tiExpl''
+newTVar: 1102 tiClause t
+newTVar: 1104 tiExpl''
+newTVar: 1105 tiClause t
+newTVar: 1106 tiExpr CStruct
+newTVar: 1107 tiExpr CStruct
+newTVar: 1108 freshInstT N G
+newTVar: 1109 freshInstT N G
+newTVar: 1111 tiExpl''
+newTVar: 1112 tiClause t
+newTVar: 1113 freshInstT N G
+newTVar: 1114 freshInstT N G
+newTVar: 1116 tiExpl''
+newTVar: 1117 tiClause t
+newTVar: 1000 tiRecoveringFromError
+newTVar: 1001 tiExpl''
+newTVar: 1002 tiClause t
+newTVar: 1004 tiExpl''
+newTVar: 1005 tiClause t
+newTVar: 1007 tiExpl''
+newTVar: 1008 tiClause t
+newTVar: 1010 tiExpl''
+newTVar: 1011 tiClause t
+newTVar: 1000 tiRecoveringFromError
+newTVar: 1001 tiExpl''
+newTVar: 1002 tiClause t
+newTVar: 1003 tiExpr CApply
+newTVar: 1004 freshInstT N E
+newDict: 1005
+
+newTVar: 1006 freshInstT N E
+newDict: 1007
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~a ·r ·a ((DictSharing.CountLeaves' r,
+						    Prelude.Generic a
+								    r) => DictSharing.CountLeaves a) (Just (DictSharing)))
+
+newTVar: 1008 newInst
+newTVar: 1009 newInst
+newDict: 1010
+
+newDict: 1011
+
+newInst (Inst DictSharingTrace.Prelude.Generic~DictSharingTrace.Three~Prelude.Meta~Prelude.MetaData~Three~DictSharingTrace~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Three~0~3~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~a~0~Prelude.Conc~DictSharing.Pair~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~b~1~Prelude.Conc~DictSharing.Pair~Prelude.Meta~Prelude.MetaField~c~2~Prelude.Conc~DictSharing.Pair ((Prelude.Generic DictSharingTrace.Three
+																																																					  (Prelude.Meta
+																																																					   (Prelude.MetaData
+																																																					    "Three"
+																																																					    "DictSharingTrace"
+																																																					    ()
+																																																					    1)
+																																																					   (Prelude.Meta
+																																																					    (Prelude.MetaConsNamed
+																																																					     "Three"
+																																																					     0
+																																																					     3)
+																																																					    (Prelude.Meta
+																																																					     (Prelude.MetaField
+																																																					      "a"
+																																																					      0)
+																																																					     (Prelude.Conc
+																																																					      DictSharing.Pair),
+																																																					     Prelude.Meta
+																																																					     (Prelude.MetaField
+																																																					      "b"
+																																																					      1)
+																																																					     (Prelude.Conc
+																																																					      DictSharing.Pair),
+																																																					     Prelude.Meta
+																																																					     (Prelude.MetaField
+																																																					      "c"
+																																																					      2)
+																																																					     (Prelude.Conc
+																																																					      DictSharing.Pair)))))) (Just (DictSharingTrace)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1012 newInst
+newTVar: 1013 newInst
+newDict: 1014
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1015 newInst
+newTVar: 1016 newInst
+newDict: 1017
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+	·r2
+	·r1 ((DictSharing.CountLeaves' r2, DictSharing.CountLeaves' r1) => DictSharing.CountLeaves' (r1,
+												     r2)) (Just (DictSharing)))
+
+newTVar: 1018 newInst
+newTVar: 1019 newInst
+newDict: 1020
+
+newDict: 1021
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+	·r2
+	·r1 ((DictSharing.CountLeaves' r2, DictSharing.CountLeaves' r1) => DictSharing.CountLeaves' (r1,
+												     r2)) (Just (DictSharing)))
+
+newTVar: 1022 newInst
+newTVar: 1023 newInst
+newDict: 1024
+
+newDict: 1025
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1026 newInst
+newTVar: 1027 newInst
+newDict: 1028
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1029 newInst
+newDict: 1030
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~a ·r ·a ((DictSharing.CountLeaves' r,
+						    Prelude.Generic a
+								    r) => DictSharing.CountLeaves a) (Just (DictSharing)))
+
+newTVar: 1031 newInst
+newTVar: 1032 newInst
+newDict: 1033
+
+newDict: 1034
+
+newInst (Inst DictSharing.Prelude.Generic~DictSharing.Pair~Prelude.Meta~Prelude.MetaData~Pair~DictSharing~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Pair~0~2~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~p0~0~Prelude.Conc~Prelude.UInt~8~Prelude.Meta~Prelude.MetaField~p1~1~Prelude.Conc~Prelude.Bool ((Prelude.Generic DictSharing.Pair
+																																								  (Prelude.Meta
+																																								   (Prelude.MetaData
+																																								    "Pair"
+																																								    "DictSharing"
+																																								    ()
+																																								    1)
+																																								   (Prelude.Meta
+																																								    (Prelude.MetaConsNamed
+																																								     "Pair"
+																																								     0
+																																								     2)
+																																								    (Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p0"
+																																								      0)
+																																								     (Prelude.Conc
+																																								      (Prelude.UInt
+																																								       8)),
+																																								     Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p1"
+																																								      1)
+																																								     (Prelude.Conc
+																																								      Prelude.Bool)))))) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1035 newInst
+newTVar: 1036 newInst
+newDict: 1037
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1038 newInst
+newTVar: 1039 newInst
+newDict: 1040
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+	·r2
+	·r1 ((DictSharing.CountLeaves' r2, DictSharing.CountLeaves' r1) => DictSharing.CountLeaves' (r1,
+												     r2)) (Just (DictSharing)))
+
+newTVar: 1041 newInst
+newTVar: 1042 newInst
+newDict: 1043
+
+newDict: 1044
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1045 newInst
+newTVar: 1046 newInst
+newDict: 1047
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1048 newInst
+newDict: 1049
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.Bool ((DictSharing.CountLeaves Prelude.Bool)) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1050 newInst
+newTVar: 1051 newInst
+newDict: 1052
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1053 newInst
+newDict: 1054
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.UInt~n ·n ((DictSharing.CountLeaves (Prelude.UInt
+										       n))) (Just (DictSharing)))
+
+newTVar: 1055 newInst
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1056 newInst
+newTVar: 1057 newInst
+newDict: 1058
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1059 newInst
+newDict: 1060
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~a ·r ·a ((DictSharing.CountLeaves' r,
+						    Prelude.Generic a
+								    r) => DictSharing.CountLeaves a) (Just (DictSharing)))
+
+newTVar: 1061 newInst
+newTVar: 1062 newInst
+newDict: 1063
+
+newDict: 1064
+
+newInst (Inst DictSharing.Prelude.Generic~DictSharing.Pair~Prelude.Meta~Prelude.MetaData~Pair~DictSharing~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Pair~0~2~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~p0~0~Prelude.Conc~Prelude.UInt~8~Prelude.Meta~Prelude.MetaField~p1~1~Prelude.Conc~Prelude.Bool ((Prelude.Generic DictSharing.Pair
+																																								  (Prelude.Meta
+																																								   (Prelude.MetaData
+																																								    "Pair"
+																																								    "DictSharing"
+																																								    ()
+																																								    1)
+																																								   (Prelude.Meta
+																																								    (Prelude.MetaConsNamed
+																																								     "Pair"
+																																								     0
+																																								     2)
+																																								    (Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p0"
+																																								      0)
+																																								     (Prelude.Conc
+																																								      (Prelude.UInt
+																																								       8)),
+																																								     Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p1"
+																																								      1)
+																																								     (Prelude.Conc
+																																								      Prelude.Bool)))))) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1065 newInst
+newTVar: 1066 newInst
+newDict: 1067
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1068 newInst
+newTVar: 1069 newInst
+newDict: 1070
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+	·r2
+	·r1 ((DictSharing.CountLeaves' r2, DictSharing.CountLeaves' r1) => DictSharing.CountLeaves' (r1,
+												     r2)) (Just (DictSharing)))
+
+newTVar: 1071 newInst
+newTVar: 1072 newInst
+newDict: 1073
+
+newDict: 1074
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1075 newInst
+newTVar: 1076 newInst
+newDict: 1077
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1078 newInst
+newDict: 1079
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.Bool ((DictSharing.CountLeaves Prelude.Bool)) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1080 newInst
+newTVar: 1081 newInst
+newDict: 1082
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1083 newInst
+newDict: 1084
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.UInt~n ·n ((DictSharing.CountLeaves (Prelude.UInt
+										       n))) (Just (DictSharing)))
+
+newTVar: 1085 newInst
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1086 newInst
+newTVar: 1087 newInst
+newDict: 1088
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1089 newInst
+newDict: 1090
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~a ·r ·a ((DictSharing.CountLeaves' r,
+						    Prelude.Generic a
+								    r) => DictSharing.CountLeaves a) (Just (DictSharing)))
+
+newTVar: 1091 newInst
+newTVar: 1092 newInst
+newDict: 1093
+
+newDict: 1094
+
+newInst (Inst DictSharing.Prelude.Generic~DictSharing.Pair~Prelude.Meta~Prelude.MetaData~Pair~DictSharing~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Pair~0~2~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~p0~0~Prelude.Conc~Prelude.UInt~8~Prelude.Meta~Prelude.MetaField~p1~1~Prelude.Conc~Prelude.Bool ((Prelude.Generic DictSharing.Pair
+																																								  (Prelude.Meta
+																																								   (Prelude.MetaData
+																																								    "Pair"
+																																								    "DictSharing"
+																																								    ()
+																																								    1)
+																																								   (Prelude.Meta
+																																								    (Prelude.MetaConsNamed
+																																								     "Pair"
+																																								     0
+																																								     2)
+																																								    (Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p0"
+																																								      0)
+																																								     (Prelude.Conc
+																																								      (Prelude.UInt
+																																								       8)),
+																																								     Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p1"
+																																								      1)
+																																								     (Prelude.Conc
+																																								      Prelude.Bool)))))) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1095 newInst
+newTVar: 1096 newInst
+newDict: 1097
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1098 newInst
+newTVar: 1099 newInst
+newDict: 1100
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+	·r2
+	·r1 ((DictSharing.CountLeaves' r2, DictSharing.CountLeaves' r1) => DictSharing.CountLeaves' (r1,
+												     r2)) (Just (DictSharing)))
+
+newTVar: 1101 newInst
+newTVar: 1102 newInst
+newDict: 1103
+
+newDict: 1104
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1105 newInst
+newTVar: 1106 newInst
+newDict: 1107
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1108 newInst
+newDict: 1109
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.Bool ((DictSharing.CountLeaves Prelude.Bool)) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1110 newInst
+newTVar: 1111 newInst
+newDict: 1112
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1113 newInst
+newDict: 1114
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.UInt~n ·n ((DictSharing.CountLeaves (Prelude.UInt
+										       n))) (Just (DictSharing)))
+
+newTVar: 1115 newInst
+newInst (Inst DictSharing.DictSharing.CountLeaves~a ·r ·a ((DictSharing.CountLeaves' r,
+						    Prelude.Generic a
+								    r) => DictSharing.CountLeaves a) (Just (DictSharing)))
+
+newTVar: 1116 newInst
+newTVar: 1117 newInst
+newDict: 1118
+
+newDict: 1119
+
+newInst (Inst DictSharingTrace.Prelude.Generic~DictSharingTrace.Three~Prelude.Meta~Prelude.MetaData~Three~DictSharingTrace~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Three~0~3~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~a~0~Prelude.Conc~DictSharing.Pair~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~b~1~Prelude.Conc~DictSharing.Pair~Prelude.Meta~Prelude.MetaField~c~2~Prelude.Conc~DictSharing.Pair ((Prelude.Generic DictSharingTrace.Three
+																																																					  (Prelude.Meta
+																																																					   (Prelude.MetaData
+																																																					    "Three"
+																																																					    "DictSharingTrace"
+																																																					    ()
+																																																					    1)
+																																																					   (Prelude.Meta
+																																																					    (Prelude.MetaConsNamed
+																																																					     "Three"
+																																																					     0
+																																																					     3)
+																																																					    (Prelude.Meta
+																																																					     (Prelude.MetaField
+																																																					      "a"
+																																																					      0)
+																																																					     (Prelude.Conc
+																																																					      DictSharing.Pair),
+																																																					     Prelude.Meta
+																																																					     (Prelude.MetaField
+																																																					      "b"
+																																																					      1)
+																																																					     (Prelude.Conc
+																																																					      DictSharing.Pair),
+																																																					     Prelude.Meta
+																																																					     (Prelude.MetaField
+																																																					      "c"
+																																																					      2)
+																																																					     (Prelude.Conc
+																																																					      DictSharing.Pair)))))) (Just (DictSharingTrace)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1120 newInst
+newTVar: 1121 newInst
+newDict: 1122
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1123 newInst
+newTVar: 1124 newInst
+newDict: 1125
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+	·r2
+	·r1 ((DictSharing.CountLeaves' r2, DictSharing.CountLeaves' r1) => DictSharing.CountLeaves' (r1,
+												     r2)) (Just (DictSharing)))
+
+newTVar: 1126 newInst
+newTVar: 1127 newInst
+newDict: 1128
+
+newDict: 1129
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+	·r2
+	·r1 ((DictSharing.CountLeaves' r2, DictSharing.CountLeaves' r1) => DictSharing.CountLeaves' (r1,
+												     r2)) (Just (DictSharing)))
+
+newTVar: 1130 newInst
+newTVar: 1131 newInst
+newDict: 1132
+
+newDict: 1133
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1134 newInst
+newTVar: 1135 newInst
+newDict: 1136
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1137 newInst
+newDict: 1138
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~a ·r ·a ((DictSharing.CountLeaves' r,
+						    Prelude.Generic a
+								    r) => DictSharing.CountLeaves a) (Just (DictSharing)))
+
+newTVar: 1139 newInst
+newTVar: 1140 newInst
+newDict: 1141
+
+newDict: 1142
+
+newInst (Inst DictSharing.Prelude.Generic~DictSharing.Pair~Prelude.Meta~Prelude.MetaData~Pair~DictSharing~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Pair~0~2~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~p0~0~Prelude.Conc~Prelude.UInt~8~Prelude.Meta~Prelude.MetaField~p1~1~Prelude.Conc~Prelude.Bool ((Prelude.Generic DictSharing.Pair
+																																								  (Prelude.Meta
+																																								   (Prelude.MetaData
+																																								    "Pair"
+																																								    "DictSharing"
+																																								    ()
+																																								    1)
+																																								   (Prelude.Meta
+																																								    (Prelude.MetaConsNamed
+																																								     "Pair"
+																																								     0
+																																								     2)
+																																								    (Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p0"
+																																								      0)
+																																								     (Prelude.Conc
+																																								      (Prelude.UInt
+																																								       8)),
+																																								     Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p1"
+																																								      1)
+																																								     (Prelude.Conc
+																																								      Prelude.Bool)))))) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1143 newInst
+newTVar: 1144 newInst
+newDict: 1145
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1146 newInst
+newTVar: 1147 newInst
+newDict: 1148
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+	·r2
+	·r1 ((DictSharing.CountLeaves' r2, DictSharing.CountLeaves' r1) => DictSharing.CountLeaves' (r1,
+												     r2)) (Just (DictSharing)))
+
+newTVar: 1149 newInst
+newTVar: 1150 newInst
+newDict: 1151
+
+newDict: 1152
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1153 newInst
+newTVar: 1154 newInst
+newDict: 1155
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1156 newInst
+newDict: 1157
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.Bool ((DictSharing.CountLeaves Prelude.Bool)) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1158 newInst
+newTVar: 1159 newInst
+newDict: 1160
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1161 newInst
+newDict: 1162
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.UInt~n ·n ((DictSharing.CountLeaves (Prelude.UInt
+										       n))) (Just (DictSharing)))
+
+newTVar: 1163 newInst
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1164 newInst
+newTVar: 1165 newInst
+newDict: 1166
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1167 newInst
+newDict: 1168
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~a ·r ·a ((DictSharing.CountLeaves' r,
+						    Prelude.Generic a
+								    r) => DictSharing.CountLeaves a) (Just (DictSharing)))
+
+newTVar: 1169 newInst
+newTVar: 1170 newInst
+newDict: 1171
+
+newDict: 1172
+
+newInst (Inst DictSharing.Prelude.Generic~DictSharing.Pair~Prelude.Meta~Prelude.MetaData~Pair~DictSharing~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Pair~0~2~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~p0~0~Prelude.Conc~Prelude.UInt~8~Prelude.Meta~Prelude.MetaField~p1~1~Prelude.Conc~Prelude.Bool ((Prelude.Generic DictSharing.Pair
+																																								  (Prelude.Meta
+																																								   (Prelude.MetaData
+																																								    "Pair"
+																																								    "DictSharing"
+																																								    ()
+																																								    1)
+																																								   (Prelude.Meta
+																																								    (Prelude.MetaConsNamed
+																																								     "Pair"
+																																								     0
+																																								     2)
+																																								    (Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p0"
+																																								      0)
+																																								     (Prelude.Conc
+																																								      (Prelude.UInt
+																																								       8)),
+																																								     Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p1"
+																																								      1)
+																																								     (Prelude.Conc
+																																								      Prelude.Bool)))))) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1173 newInst
+newTVar: 1174 newInst
+newDict: 1175
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1176 newInst
+newTVar: 1177 newInst
+newDict: 1178
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+	·r2
+	·r1 ((DictSharing.CountLeaves' r2, DictSharing.CountLeaves' r1) => DictSharing.CountLeaves' (r1,
+												     r2)) (Just (DictSharing)))
+
+newTVar: 1179 newInst
+newTVar: 1180 newInst
+newDict: 1181
+
+newDict: 1182
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1183 newInst
+newTVar: 1184 newInst
+newDict: 1185
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1186 newInst
+newDict: 1187
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.Bool ((DictSharing.CountLeaves Prelude.Bool)) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1188 newInst
+newTVar: 1189 newInst
+newDict: 1190
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1191 newInst
+newDict: 1192
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.UInt~n ·n ((DictSharing.CountLeaves (Prelude.UInt
+										       n))) (Just (DictSharing)))
+
+newTVar: 1193 newInst
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1194 newInst
+newTVar: 1195 newInst
+newDict: 1196
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1197 newInst
+newDict: 1198
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~a ·r ·a ((DictSharing.CountLeaves' r,
+						    Prelude.Generic a
+								    r) => DictSharing.CountLeaves a) (Just (DictSharing)))
+
+newTVar: 1199 newInst
+newTVar: 1200 newInst
+newDict: 1201
+
+newDict: 1202
+
+newInst (Inst DictSharing.Prelude.Generic~DictSharing.Pair~Prelude.Meta~Prelude.MetaData~Pair~DictSharing~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Pair~0~2~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~p0~0~Prelude.Conc~Prelude.UInt~8~Prelude.Meta~Prelude.MetaField~p1~1~Prelude.Conc~Prelude.Bool ((Prelude.Generic DictSharing.Pair
+																																								  (Prelude.Meta
+																																								   (Prelude.MetaData
+																																								    "Pair"
+																																								    "DictSharing"
+																																								    ()
+																																								    1)
+																																								   (Prelude.Meta
+																																								    (Prelude.MetaConsNamed
+																																								     "Pair"
+																																								     0
+																																								     2)
+																																								    (Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p0"
+																																								      0)
+																																								     (Prelude.Conc
+																																								      (Prelude.UInt
+																																								       8)),
+																																								     Prelude.Meta
+																																								     (Prelude.MetaField
+																																								      "p1"
+																																								      1)
+																																								     (Prelude.Conc
+																																								      Prelude.Bool)))))) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1203 newInst
+newTVar: 1204 newInst
+newDict: 1205
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1206 newInst
+newTVar: 1207 newInst
+newDict: 1208
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+	·r2
+	·r1 ((DictSharing.CountLeaves' r2, DictSharing.CountLeaves' r1) => DictSharing.CountLeaves' (r1,
+												     r2)) (Just (DictSharing)))
+
+newTVar: 1209 newInst
+newTVar: 1210 newInst
+newDict: 1211
+
+newDict: 1212
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1213 newInst
+newTVar: 1214 newInst
+newDict: 1215
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1216 newInst
+newDict: 1217
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.Bool ((DictSharing.CountLeaves Prelude.Bool)) (Just (DictSharing)))
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+	·r
+	·m ((DictSharing.CountLeaves' r) => DictSharing.CountLeaves' (Prelude.Meta m
+								      r)) (Just (DictSharing)))
+
+newTVar: 1218 newInst
+newTVar: 1219 newInst
+newDict: 1220
+
+newInst (Inst DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a
+	·a ((DictSharing.CountLeaves a) => DictSharing.CountLeaves' (Prelude.Conc a)) (Just (DictSharing)))
+
+newTVar: 1221 newInst
+newDict: 1222
+
+newInst (Inst DictSharing.DictSharing.CountLeaves~Prelude.UInt~n ·n ((DictSharing.CountLeaves (Prelude.UInt
+										       n))) (Just (DictSharing)))
+
+newTVar: 1223 newInst

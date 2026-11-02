@@ -10,7 +10,8 @@ module SolvedBinds(SolvedBind, mkSolvedBind, SolvedBinds, Bind,
                    recursiveBinds, nonRecursiveBinds,
                    bindClasses, bindTypes, directIncoherences,
                    getRecursiveDefls, getNonRecursiveDefls,
-                   getIncoherentIds, computeTransitiveIncoherent) where
+                   getIncoherentIds, computeTransitiveIncoherent,
+                   bindTyVars, renameBinds) where
 
 import Prelude hiding ((<>))
 
@@ -24,6 +25,8 @@ import Id
 import CSyntax
 import CSyntaxTypes()
 import CFreeVars(getFVE)
+import CSubst(CSEnv, cSubstN)
+import CType(hasTyVar)
 import PPrint
 import Position
 import Pred(Class, Pred)
@@ -88,14 +91,19 @@ data SolvedBinds = SolvedBinds {
   incoherentIds :: S.Set Id,
   bindClasses :: M.Map Id Class,                   -- class per bind (for allowIncoherent check)
   bindTypes :: M.Map Id Type,                      -- type per bind (for diagnostic messages)
-  directIncoherences :: M.Map Id DirectIncoherence -- root cause per directly-incoherent bind
+  directIncoherences :: M.Map Id DirectIncoherence, -- root cause per directly-incoherent bind
+  -- the type variables of the bindings' types and expressions, carried
+  -- along the merges so that a record of a block (TCMisc.recordWalk)
+  -- does not walk the types of every block merged into it again
+  bindTyVars :: S.Set TyVar
 } deriving (Show)
 
 instance Types SolvedBinds where
   apSub s sbs = sbs {
     recursiveBinds = [ ((i, apSub s t, apSub s e), fv) | ((i, t, e), fv) <- recursiveBinds sbs ],
     nonRecursiveBinds = [ ((i, apSub s t, apSub s e), fv) | ((i, t, e), fv) <- nonRecursiveBinds sbs ],
-    bindTypes = M.map (apSub s) (bindTypes sbs)
+    bindTypes = M.map (apSub s) (bindTypes sbs),
+    bindTyVars = substTyVars s (bindTyVars sbs)
   }
   tv sbs = recTVs `union` nonRecTVs
     where recTVs    = tv [ (t, e) | ((_, t, e), _) <- recursiveBinds sbs ]
@@ -108,7 +116,7 @@ sbsEmpty sbs = null (recursiveBinds sbs) && null (nonRecursiveBinds sbs)
 -- Note: Both self-recursive and non-recursive bindings are independent of accum
 -- Self-recursive bindings depend only on themselves, fresh variables, and source EPreds
 fromSB :: SolvedBind -> SolvedBinds
-fromSB (SolvedBind b@(i, t, _) fv isRec isInc cls) =
+fromSB (SolvedBind b@(i, t, e) fv isRec isInc cls) =
   if isRec
     then SolvedBinds {
       recursiveBinds = [(b, fv)],
@@ -118,7 +126,8 @@ fromSB (SolvedBind b@(i, t, _) fv isRec isInc cls) =
       incoherentIds = if isInc then S.singleton i else S.empty,
       bindClasses = maybe M.empty (M.singleton i) cls,
       bindTypes = M.singleton i t,
-      directIncoherences = M.empty
+      directIncoherences = M.empty,
+      bindTyVars = vs
     }
     else SolvedBinds {
       recursiveBinds = [],
@@ -128,25 +137,39 @@ fromSB (SolvedBind b@(i, t, _) fv isRec isInc cls) =
       incoherentIds = if isInc then S.singleton i else S.empty,
       bindClasses = maybe M.empty (M.singleton i) cls,
       bindTypes = M.singleton i t,
-      directIncoherences = M.empty
+      directIncoherences = M.empty,
+      bindTyVars = vs
     }
+  where vs = exprTyVars e (typeTyVars t S.empty)
 
 infixl 6 <++ -- directional append new <++ old
 
 -- Merge bindings, maintaining categorization and topological order
 -- CRITICAL: Always merge as (new <++ old), never swap!
 -- Invariant: new.nonRec doesn't depend on old
+-- The invariants are checked at the first demand of either list of
+-- bindings, not when the blocks are merged: recording a block for
+-- sharing (TCMisc.recordWalk) demands neither list, so it runs no
+-- check; the checks run where a list is first demanded: for a
+-- recorded block, at the first lookup hit on it, where TCMisc.sat's
+-- wholeBlock tests its recursive list (whether or not the replay then
+-- proceeds), or by the consumer of the satisfy call's result, whose
+-- lists contain the block's, whichever comes first; a replay's
+-- renameBinds walks the lists after wholeBlock.
 (<++) :: SolvedBinds -> SolvedBinds -> SolvedBinds
-new <++ old
-    -- Check invariant here
-    | any (dependsOn oldAllIds) (nonRecursiveBinds new) =
-        internalError $ "SolvedBinds invariant violated: new depends on old!\n" ++
-                        "new: " ++ ppReadable new ++ "\n" ++
-                        "old: " ++ ppReadable old
-    | noBadDeps = result
-    | otherwise = internalError $ "nonRecursive depending on recursive in result: " ++
-                                  ppReadable (new, old, result)
+new <++ old = result
     where dependsOn s ((_,_,_), fv) = not $ S.disjoint fv s
+          checked xs
+            | any (dependsOn oldAllIds) (nonRecursiveBinds new) =
+                internalError $ "SolvedBinds invariant violated: new depends on old!\n" ++
+                                "new: " ++ ppReadable new ++ "\n" ++
+                                "old: " ++ ppReadable old
+            | noBadDeps = xs
+            -- printed with the unchecked lists: the checked ones are the
+            -- thunks under evaluation
+            | otherwise = internalError $ "nonRecursive depending on recursive in result: " ++
+                                          ppReadable (new, old, result { recursiveBinds = recs,
+                                                                         nonRecursiveBinds = nonRec })
           oldAllIds = recursiveIds old `S.union` nonRecursiveIds old
           promoteTransitively [] nonRecs = ([], nonRecs)
           promoteTransitively promoted nonRecs = (promoted ++ transitivePromoted, finalNonRecs)
@@ -158,17 +181,20 @@ new <++ old
           -- Updates for cached sets
           newRecIds = S.fromList [i | ((i, _, _), _) <- recursiveBinds new ++ newlyRec]
           nowNotNonRecIds = S.fromList [ i | ((i, _ , _), _)  <- newlyRec ]
+          recs = newlyRec ++ recursiveBinds new ++ recursiveBinds old
+          nonRec = nonRecursiveBinds new ++ stillNonRec
           result = SolvedBinds {
-                      recursiveBinds = newlyRec ++ recursiveBinds new ++ recursiveBinds old,
-                      nonRecursiveBinds = nonRecursiveBinds new ++ stillNonRec,
+                      recursiveBinds = checked recs,
+                      nonRecursiveBinds = checked nonRec,
                       recursiveIds = newRecIds `S.union` recursiveIds old,
                       nonRecursiveIds = nonRecursiveIds new `S.union` (nonRecursiveIds old `S.difference` nowNotNonRecIds),
                       incoherentIds = incoherentIds new `S.union` incoherentIds old,
                       bindClasses = bindClasses new `M.union` bindClasses old,
                       bindTypes = bindTypes new `M.union` bindTypes old,
-                      directIncoherences = directIncoherences new `M.union` directIncoherences old
+                      directIncoherences = directIncoherences new `M.union` directIncoherences old,
+                      bindTyVars = bindTyVars new `S.union` bindTyVars old
                    }
-          noBadDeps = all (not . dependsOn (recursiveIds result)) (nonRecursiveBinds result)
+          noBadDeps = all (not . dependsOn (recursiveIds result)) nonRec
 
 -- Compute the transitive closure of incoherence across all bindings: any
 -- binding whose free variables reference an incoherent Id is itself incoherent.
@@ -229,7 +255,8 @@ emptySBs = SolvedBinds {
              incoherentIds = S.empty,
              bindClasses = M.empty,
              bindTypes = M.empty,
-             directIncoherences = M.empty
+             directIncoherences = M.empty,
+             bindTyVars = S.empty
            }
 
 instance PPrint SolvedBinds where
@@ -247,3 +274,53 @@ getNonRecursiveDefls = map (mkDefl . fst) . nonRecursiveBinds
 
 getIncoherentIds :: SolvedBinds -> S.Set Id
 getIncoherentIds = incoherentIds
+
+-- The same bindings under other names: the substitution renames (or
+-- binds) type variables, the map sends every binding's id to its new
+-- id, and references to ids outside the map (the given dictionaries)
+-- stay.  Used by TCMisc.replaySolvedBinds to give a later occurrence
+-- of a ground predicate the derivation recorded for the first one under
+-- the names the instance walk would draw now.  Only non-recursive,
+-- coherent bindings are copied (sat records no others), so the
+-- recursive and incoherence fields are checked empty.  A type or
+-- expression without a type variable is kept rather than copied.
+renameBinds :: Subst -> M.Map Id Id -> SolvedBinds -> SolvedBinds
+renameBinds s m sbs
+  | not (null (recursiveBinds sbs)) || not (S.null (incoherentIds sbs)) =
+      internalError ("SolvedBinds.renameBinds: recursive or incoherent: " ++
+                     ppReadable sbs)
+  | otherwise = sbs {
+      nonRecursiveBinds = [ ((ren i, subT t, cSubstN env (subE e)), S.map ren fv)
+                          | ((i, t, e), fv) <- nonRecursiveBinds sbs ],
+      nonRecursiveIds = S.map ren (nonRecursiveIds sbs),
+      bindClasses = M.mapKeys ren (bindClasses sbs),
+      bindTypes = M.map subT (M.mapKeys ren (bindTypes sbs)),
+      bindTyVars = substTyVars s (bindTyVars sbs) }
+  where ren i = M.findWithDefault i i m
+        ground = isNullSubst s
+        subT t = if ground || not (hasTyVar t) then t else apSub s t
+        subE e = if ground || S.null (exprTyVars e S.empty) then e else apSub s e
+        env :: CSEnv
+        env = (M.empty, M.empty, M.map CVar m, M.empty)
+
+-- The type variables of the types the substitution gives these
+-- variables (a substituted block's bindTyVars)
+substTyVars :: Subst -> S.Set TyVar -> S.Set TyVar
+substTyVars s vs
+  | isNullSubst s = vs
+  | otherwise = S.foldr (\ v acc -> typeTyVars (apSub s (TVar v)) acc) S.empty vs
+
+-- The type variables of a binding's type and expression, collected
+-- without the lists tv builds
+typeTyVars :: Type -> S.Set TyVar -> S.Set TyVar
+typeTyVars (TVar v) acc = S.insert v acc
+typeTyVars (TAp l r) acc = typeTyVars l (typeTyVars r acc)
+typeTyVars _ acc = acc
+
+-- A dictionary expression is an instance applied to its types and its
+-- context's dictionaries (TCMisc.byInst); any other shape goes through tv
+exprTyVars :: CExpr -> S.Set TyVar -> S.Set TyVar
+exprTyVars (CVar _) acc = acc
+exprTyVars (CApply f es) acc = foldr exprTyVars (exprTyVars f acc) es
+exprTyVars (CTApply e ts) acc = foldr typeTyVars (exprTyVars e acc) ts
+exprTyVars e acc = foldr S.insert acc (tv e)

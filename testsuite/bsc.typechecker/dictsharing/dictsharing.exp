@@ -1,0 +1,50 @@
+# Reuse of the derivation of equal ground predicates within one satisfy
+# call (TCMisc.sat, replaySolvedBinds): a Generic-representation
+# traversal with a catch-all instance, over nested structs whose fields
+# repeat a few types, derives the traversal of a field type once per
+# satisfy call and replays it for the other field occurrences, under the
+# dictionary ids and type variables the walk would draw.
+
+# The traversal computes the same value with the shared dictionaries
+test_c_veri DictSharing
+
+# The mechanism: -trace-tc-dict-share prints one line per satisfy call
+# that replayed a derivation (two for a definition, whose predicates are
+# solved once while its body is checked and once more by tiExpl), with
+# the counter numbers the replays drew, and the typecheck dump holds the
+# same bindings as the derivation without reuse: one Generic dictionary
+# per field occurrence (585), since a hit replays the recorded bindings
+# instead of deriving them
+compile_pass DictSharing.bs {-trace-tc-dict-share -dtypecheck=typecheck_%p.out} 1
+find_n_strings typecheck_DictSharing.out {:: Prelude.Generic } 585
+find_n_strings DictSharing.bs.bsc-out {satisfy: 80 derivations recorded, 21 replayed, 20802 counter numbers drawn by the replays} 2
+
+# A small definition: the pinned line counts the ground predicates the
+# call recorded, the later occurrences that replayed them and the
+# numbers the replays drew
+compile_pass DictSharingTrace.bs {-trace-tc-dict-share} 1
+find_n_strings DictSharingTrace.bs.bsc-out {satisfy: 19 derivations recorded, 2 replayed, 54 counter numbers drawn by the replays} 2
+
+# A replay leaves the typechecked program and the fresh-name counter
+# where the walk would have left them: the typecheck dump of that
+# definition, and the sequence of counter draws -trace-tcvar prints for
+# the package, are the files the compiler without this reuse writes
+# (both .expected files were written by that compiler, the dump with
+# its trailing whitespace trimmed, which compare_file ignores); a reuse
+# that drew other numbers for the replayed bindings would renumber
+# every _tcdictN and _tctyvarN after the first hit
+compile_pass DictSharingTrace.bs {-dtypecheck=typecheck_%p.out} 1
+compare_file typecheck_DictSharingTrace.out
+compile_pass DictSharingTrace.bs {-trace-tcvar} 1
+compare_file DictSharingTrace.bs.bsc-out tcvar_DictSharingTrace.bsc-out.expected
+
+# Never shared: a recursive or an incoherent result.  The recursive-Bits
+# error (T0115) keeps its position and the incoherent-match diagnostics
+# their count; see bsc.compile/letrec, bsc.typechecker/deriving
+# (RecDeriveStructManyFields) and bsc.typechecker/typeclasses/coherence.
+
+# A ground goal solved inside a partial reduction that satisfy puts aside
+# is dropped with it (its bindings were solved under a substitution the
+# retry does not keep), so a later equal predicate derives its own
+compile_pass DictSharingRetry.bs {-trace-tc-dict-share} 1
+find_n_strings DictSharingRetry.bs.bsc-out {satisfy:} 0
