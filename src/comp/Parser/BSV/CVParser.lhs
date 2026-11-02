@@ -4456,12 +4456,21 @@ a "module verilog":
 > pVMethodConflict =
 >     do pos <- getPos
 >        -- pTheString "schedule" -- (now already read)
->        i1s <- option [] (fmap (:[]) pDottedName <|> pInParens (pCommaSep pDottedName))
+>        let pNames = fmap (:[]) pDottedName <|>
+>                     pInParens (pCommaSep1 pDottedName
+>                                <?> "scheduling name(s)")
+>        -- the first list is optional only to parse the prefix form
+>        -- of ME and EXT, as in "schedule ME (a, b);"
+>        i1s <- option [] pNames
 >        posOp <- getPos
 >        op  <- pMethodConflictOp
->        when ((not (null i1s)) && (op==ME || op==EXT)) (failWithErr (posOp, EBadMethodConflictOpList))
->        i2s <- fmap (:[]) pDottedName <|> pInParens (pCommaSep pDottedName)
->               <?> "scheduling name(s)"
+>        -- ME and EXT are not implemented for imported modules
+>        when (op==ME || op==EXT)
+>             (failWithErr (posOp, EUnsupportedMethodConflictOp (show op)))
+>        when (null i1s)
+>             (failWithErr (posOp, ESyntax (quote (show op))
+>                                          ["scheduling name(s)"]))
+>        i2s <- pNames <?> "scheduling name(s)"
 >        pSemi
 >        return (i1s, op, i2s)
 
