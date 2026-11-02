@@ -95,6 +95,19 @@ created (Schedule): CAN_FIRE_RL_step <- RL_step
 created (Schedule): CAN_FIRE_value <- value
 created (Schedule): WILL_FIRE_RL_step <- RL_step
 created (Schedule): WILL_FIRE_value <- value
+resolved: 12 of 12 defs and rules stand for other ids
+  WILL_FIRE_value <- value
+  WILL_FIRE_RL_step <- RL_step __h141 __h137 __h133
+  CAN_FIRE_value <- value
+  CAN_FIRE_RL_step <- RL_step __h141 __h137 __h133
+  unsigned_a_PLUS_b___d6 <- RL_step __h141 __h137 __h133
+  unsigned_a___d2 <- RL_step __h141 __h137 __h133
+  unsigned_b___d4 <- RL_step __h141 __h137 __h133
+  b___d3 <- __h164
+  a___d1 <- __h163
+  a_PLUS_1___d7 <- RL_step __h141 __h137 __h133
+  a_PLUS_b___d5 <- RL_step __h141 __h137 __h133
+  RL_step <- RL_step __h141 __h137 __h133
 
 -----
 === metadata (MetaFmt sysMetaFmt):
@@ -170,5 +183,12 @@ dropped (Expand): WILL_FIRE_value
 inlined (Expand): CAN_FIRE_RL_step -> WILL_FIRE_RL_step
 inlined (Expand): CAN_FIRE_value -> RDY_value
 inlined (Expand): WILL_FIRE_RL_step -> a$EN
+resolved: 6 of 6 defs and rules stand for other ids
+  value <- value __h163
+  RDY_value <- RDY_value value
+  a$D_IN <- RL_step __h163 __h141 __h137 __h133
+  a$EN <- RL_step __h141 __h137 __h133
+  b$EN <- b$EN_write
+  b$D_IN <- b$write_1
 
 -----

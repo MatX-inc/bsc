@@ -77,6 +77,19 @@ created (Schedule): CAN_FIRE_value <- value
 created (Schedule): WILL_FIRE_RL_pick_T <- RL_pick_T
 created (Schedule): WILL_FIRE_RL_pick_F <- RL_pick_F
 created (Schedule): WILL_FIRE_value <- value
+resolved: 12 of 12 defs and rules stand for other ids
+  WILL_FIRE_value <- value
+  WILL_FIRE_RL_pick_F <- RL_pick __h153 __h152
+  WILL_FIRE_RL_pick_T <- RL_pick __h153 __h152
+  CAN_FIRE_value <- value
+  CAN_FIRE_RL_pick_F <- RL_pick __h153 __h152
+  CAN_FIRE_RL_pick_T <- RL_pick __h153 __h152
+  b___d2 <- __h151
+  a___d1 <- __h148
+  NOT_a_ULE_b___d4 <- RL_pick __h153 __h152
+  a_ULE_b___d3 <- RL_pick __h153 __h152
+  RL_pick_T <- RL_pick __h153 __h152
+  RL_pick_F <- RL_pick __h153 __h152
 
 -----
 === metadata (MetaSplit sysMetaSplit):
@@ -153,5 +166,14 @@ dropped (FinalCleanup): MUX_c$write_1__SEL_1
 dropped (FinalCleanup): MUX_c$write_1__SEL_2
 dropped (FinalCleanup): MUX_c$write_1__VAL_1
 dropped (FinalCleanup): MUX_c$write_1__VAL_2
+resolved: 8 of 9 defs and rules stand for other ids
+  RDY_value <- RDY_value value
+  a_ULE_b___d3 <- RL_pick __h148 __h151 __h153 __h152
+  c$D_IN <- RL_pick __h153 __h152
+  c$EN <- RL_pick __h153 __h152
+  a$D_IN <- a$write_1
+  a$EN <- a$EN_write
+  b$EN <- b$EN_write
+  b$D_IN <- b$write_1
 
 -----

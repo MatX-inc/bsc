@@ -42,6 +42,13 @@ created (Schedule): CAN_FIRE_RL_step <- RL_step
 created (Schedule): CAN_FIRE_value <- value
 created (Schedule): WILL_FIRE_RL_step <- RL_step
 created (Schedule): WILL_FIRE_value <- value
+resolved: 6 of 7 defs and rules stand for other ids
+  WILL_FIRE_value <- value
+  WILL_FIRE_RL_step <- RL_step
+  CAN_FIRE_value <- value
+  CAN_FIRE_RL_step <- RL_step
+  a___d1 <- __h133
+  a_PLUS_1___d2 <- RL_step
 
 -----
 === metadata (MetaDrop sysMetaDrop):
@@ -83,5 +90,11 @@ dropped (Expand): WILL_FIRE_value
 inlined (Expand): CAN_FIRE_RL_step -> WILL_FIRE_RL_step
 inlined (Expand): CAN_FIRE_value -> RDY_value
 inlined (Expand): WILL_FIRE_RL_step -> a$EN
+resolved: 5 of 6 defs and rules stand for other ids
+  RDY_value <- RDY_value value
+  a$D_IN <- RL_step __h133
+  a$EN <- RL_step
+  c$EN <- c$EN_write
+  c$D_IN <- c$write_1
 
 -----

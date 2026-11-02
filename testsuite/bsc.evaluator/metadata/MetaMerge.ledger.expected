@@ -100,6 +100,16 @@ created (Schedule): CAN_FIRE_RL_step <- RL_step
 created (Schedule): CAN_FIRE_value <- value
 created (Schedule): WILL_FIRE_RL_step <- RL_step
 created (Schedule): WILL_FIRE_value <- value
+resolved: 9 of 10 defs and rules stand for other ids
+  WILL_FIRE_value <- value
+  WILL_FIRE_RL_step <- RL_step
+  CAN_FIRE_value <- value
+  CAN_FIRE_RL_step <- RL_step
+  b___d2 <- __h250
+  a___d1 <- __h247
+  IF_a_ULE_b_THEN_b_ELSE_a___d4 <- __h326 __h322 __h325 __h324
+  a_ULE_b___d3 <- __h326 __h322 __h325 __h324
+  IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5 <- RL_step
 
 -----
 === metadata (MetaMerge sysMetaMerge):
@@ -190,5 +200,20 @@ inlined (Expand): IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5 -> d$D_IN f$D_IN
 inlined (Expand): CAN_FIRE_RL_step -> WILL_FIRE_RL_step
 inlined (Expand): CAN_FIRE_value -> RDY_value
 inlined (Expand): WILL_FIRE_RL_step -> c$EN e$EN d$EN f$EN
+resolved: 14 of 15 defs and rules stand for other ids
+  RDY_value <- RDY_value value
+  IF_a_ULE_b_THEN_b_ELSE_a___d4 <- __h326 __h322 __h247 __h250 __h325 __h324
+  c$D_IN <- RL_step
+  d$D_IN <- RL_step
+  e$D_IN <- RL_step
+  f$D_IN <- RL_step
+  c$EN <- RL_step
+  d$EN <- RL_step
+  e$EN <- RL_step
+  f$EN <- RL_step
+  a$D_IN <- a$write_1
+  a$EN <- a$EN_write
+  b$EN <- b$EN_write
+  b$D_IN <- b$write_1
 
 -----

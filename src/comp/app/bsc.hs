@@ -119,7 +119,8 @@ import ITransform(iTransform)
 import IInline(iInline)
 import IInlineFmt(iInlineFmt)
 import Params(iParams)
-import ASyntax(APackage(..), ASPackage(..),
+import ASyntax(APackage(..), ASPackage(..), ADef(..), ARule(..), AIFace(..),
+               AVInst(..), aIfaceRules,
                ppeAPackage,
                getAPackageFieldInfos)
 import ASyntaxUtil(getForeignCallNames)
@@ -957,6 +958,7 @@ genModule
     amod <- aConv errh pps flags imod_drop
     aCheck flags amod "ATS"
     t <- dump errh flags t DFATS dumpnames amod
+    checkLedgerIA flags "ATS" imod_drop amod
     amod == amod `seq` return ()
     t <- if (isJust $ lookup DFATSexpand $ dumps flags)
          then dumpStr errh flags t DFATSexpand dumpnames $
@@ -980,12 +982,14 @@ genModule
     amod_ranked <- aRankMethCalls errh pps amod
     aCheck flags amod_ranked "ATSperfspec"
     t <- dump errh flags t DFATSperfspec dumpnames amod_ranked
+    checkLedgerA flags "ATSperfspec" amod amod_ranked
 
 -- splice in the identifiers set by ActionValue tasks into the ATaskAction calls
     start flags DFATSsplice
     let amod_splice = aTaskSplice amod_ranked
     aCheck flags amod_splice "ATSsplice"
     t <- dump errh flags t DFATSsplice dumpnames amod_splice
+    checkLedgerA flags "ATSsplice" amod_ranked amod_splice
     stats flags DFATSsplice amod_splice
 
 -- clean up ATS (merge any ME calls to the same action in the same rule)
@@ -993,6 +997,7 @@ genModule
     amod_clean <- aCleanup errh flags amod_splice
     aCheck flags amod_clean "ATSclean"
     t <- dump errh flags t DFATSclean dumpnames amod_clean
+    checkLedgerA flags "ATSclean" amod_splice amod_clean
 
     start flags DFdumpLambdaCalculus
     lc_pkg <- convAPackageToLambdaCalc errh flags amod_clean
@@ -1033,6 +1038,9 @@ genModule
                         (apkg_meta amod_clean)
                     exitFail errh
     t <- dump errh flags t DFschedule dumpnames (asi_schedule schedule_info)
+    -- (the package itself is not dumped here; the check forces its ids
+    -- in def order, as the next stage's dump does)
+    checkLedgerA flags "schedule" amod_clean amod_sched
     stats flags DFschedule amod_sched
     start flags DFresources
     t <- dump errh flags t DFresources dumpnames
@@ -1047,6 +1055,7 @@ genModule
                                        amod_sched
                                        schedule_info
     t <- dump errh flags t DFscheduledefs dumpnames amod_scheduled
+    checkLedgerA flags "scheduledefs" amod_sched amod_scheduled
 
     start flags DFdumpschedule
     -- only difference from amod_scheduled to amod_dump is some rules removed
@@ -1055,12 +1064,14 @@ genModule
     let schedule_final = asi_schedule schedule_info_updated
     let ms = (amod_dump, schedule_final)
     t <- dump errh flags t DFdumpschedule dumpnames ms
+    checkLedgerA flags "dumpschedule" amod_scheduled amod_dump
 
     -- prove any proof obligations accumulated at this point
     start flags DFcheckproofs
     -- the obligations are removed from the module
     (amod_check, ok) <- aCheckProofs errh flags amod_dump
     t <- dump errh flags t DFcheckproofs dumpnames ok
+    checkLedgerA flags "checkproofs" amod_dump amod_check
 
     -- Add scheduler edges to the path graph
     -- (we assume that pathGraphInfo is consistent with amod_checked, because
@@ -1073,6 +1084,7 @@ genModule
     start flags DFnoinline
     let amod_noinline = aNoInline flags amod_check
     t <- dump errh flags t DFnoinline dumpnames amod_noinline
+    checkLedgerA flags "noinline" amod_check amod_noinline
 
     -- add scheduling assumptions (ME, CF, etc.) to APackage (in two steps)
     start flags DFaddSchedAssumps
@@ -1086,12 +1098,14 @@ genModule
              (amod_assumps,
               asi_method_uses_map sched_info'',
               asi_resource_alloc_table sched_info'')
+    checkLedgerA flags "addSchedAssumps" amod_noinline amod_assumps
 
     -- move assumption actions into rule bodies
     start flags DFremoveAssumps
     let amod_no_assumps = aRemoveAssumps amod_assumps
     aCheck flags amod_no_assumps "aRemoveAssumps"
     t <- dump errh flags t DFremoveAssumps dumpnames amod_no_assumps
+    checkLedgerA flags "removeAssumps" amod_assumps amod_no_assumps
 
     -- drop ASAny with "chosen" values
     -- just before the split because other paths add new expressions
@@ -1099,7 +1113,9 @@ genModule
     start flags DFdropundet
     let amod_no_undet = aDropUndet errh flags amod_no_assumps
     t <- dump errh flags t DFdropundet dumpnames amod_no_undet
-    t <- dumpLedger errh flags t dumpnames "dropundet" [] (apkg_meta amod_no_undet)
+    checkLedgerA flags "dropundet" amod_no_assumps amod_no_undet
+    t <- dumpLedger errh flags t dumpnames "dropundet" (apkgDefRuleIds amod_no_undet)
+             (apkg_meta amod_no_undet)
 
     -- the amod doesn't change beyond this point
     let amod_final = amod_no_undet
@@ -1205,21 +1221,52 @@ dumpLedger errh flags t dumpnames stage ids ledger =
 
 -- -metadata-check: the closure of the ledger events a stage wrote over
 -- the ids of the package it took and the package it made
--- (IExpandMeta.checkClosure).  A violation is a pass that changed an id
--- without an event, or an event that names an id the package does not
--- have: a broken invariant of the ledger, which stops the compile.  Run
--- after the stage's dump, which has forced both packages.
-checkLedger :: Flags -> String -> IModule a -> IModule a -> IO ()
-checkLedger flags stage before after =
+-- (IExpandMeta.checkClosure), at every stage boundary from iInlineFmt
+-- to finalCleanup, the two conversions (aConv, aState) included.  A
+-- violation is a pass that changed an id without an event, or an event
+-- that names an id the package does not have: a broken invariant of the
+-- ledger, which stops the compile.  Run after the stage's dump, which
+-- has forced both packages.
+checkLedgerIds :: Flags -> String -> (S.Set Id, MetaLedger) -> (S.Set Id, MetaLedger)
+               -> IO ()
+checkLedgerIds flags stage (ids_before, ledger_before) (ids_after, ledger_after) =
     when (metadataCheck flags) $
-        case checkClosure (imodLedgerIds before) (imodLedgerIds after) new_events of
+        case checkClosure ids_before ids_after new_events of
           [] -> return ()
           ms -> internalError ("ledger closure after " ++ stage ++ ":\n" ++ unlines ms)
   where
-    events_before = mm_events (ledgerMeta (imod_meta before))
-    events_after = mm_events (ledgerMeta (imod_meta after))
+    events_before = mm_events (ledgerMeta ledger_before)
+    events_after = mm_events (ledgerMeta ledger_after)
     -- the events the stage appended, oldest first
     new_events = reverse (take (length events_after - length events_before) events_after)
+
+-- the check at an ISyntax stage
+checkLedger :: Flags -> String -> IModule a -> IModule a -> IO ()
+checkLedger flags stage before after =
+    checkLedgerIds flags stage (imodLedgerIds before, imod_meta before)
+                               (imodLedgerIds after, imod_meta after)
+
+-- at the conversion to ASyntax, and at an APackage stage
+checkLedgerIA :: Flags -> String -> IModule a -> APackage -> IO ()
+checkLedgerIA flags stage before after =
+    checkLedgerIds flags stage (imodLedgerIds before, imod_meta before)
+                               (apkgLedgerIds after, apkg_meta after)
+
+checkLedgerA :: Flags -> String -> APackage -> APackage -> IO ()
+checkLedgerA flags stage before after =
+    checkLedgerIds flags stage (apkgLedgerIds before, apkg_meta before)
+                               (apkgLedgerIds after, apkg_meta after)
+
+-- at state generation, and at an ASPackage stage
+checkLedgerAS :: Flags -> String -> APackage -> ASPackage -> IO ()
+checkLedgerAS flags stage before after =
+    checkLedgerIds flags stage (apkgLedgerIds before, apkg_meta before)
+                               (aspkgLedgerIds after, aspkg_meta after)
+
+checkLedgerS :: Flags -> String -> ASPackage -> ASPackage -> IO ()
+checkLedgerS flags stage before after =
+    checkLedgerIds flags stage (aspkgLedgerIds before, aspkg_meta before)
+                               (aspkgLedgerIds after, aspkg_meta after)
 
 -- the ids a ledger event may name on an IModule: its defs and rules
 -- (below), its methods and its instances
@@ -1228,6 +1275,37 @@ imodLedgerIds imod =
     S.fromList (imodDefRuleIds imod ++
                 map ief_name (imod_interface imod) ++
                 map fst (imod_state_insts imod))
+
+-- the same on an APackage: its defs and rules (below), its methods and
+-- its instances
+apkgLedgerIds :: APackage -> S.Set Id
+apkgLedgerIds apkg =
+    S.fromList (apkgDefRuleIds apkg ++
+                map aif_name (apkg_interface apkg) ++
+                map avi_vname (apkg_state_instances apkg))
+
+-- the defs and rules (the module's and the methods') of an APackage,
+-- whose resolution the ledger dump prints; a value method's def has
+-- the method's id
+apkgDefRuleIds :: APackage -> [Id]
+apkgDefRuleIds apkg =
+    map adef_objid (apkg_local_defs apkg) ++
+    map arule_id (apkg_rules apkg) ++
+    concatMap (map arule_id . aIfaceRules) (apkg_interface apkg)
+
+-- the same on an ASPackage: its defs (below) and its instances; its
+-- inputs, state outputs and inlined ports are port names, which no
+-- pass makes or drops as an id
+aspkgLedgerIds :: ASPackage -> S.Set Id
+aspkgLedgerIds aspkg =
+    S.fromList (aspkgDefIds aspkg ++
+                map avi_vname (aspkg_state_instances aspkg))
+
+-- the defs of an ASPackage (its values and its inout values), whose
+-- resolution the ledger dump prints
+aspkgDefIds :: ASPackage -> [Id]
+aspkgDefIds aspkg =
+    map adef_objid (aspkg_values aspkg ++ aspkg_inout_values aspkg)
 
 -- the defs and rules (the module's and the method bodies') of an
 -- IModule, whose resolution the ledger dump prints
@@ -1425,6 +1503,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- after aState, method calls should no longer exist
        asMethCheck flags asmod "astate"
        t <- dump errh flags t DFastate dumpnames asmod
+       checkLedgerAS flags "astate" atsPackage asmod
        stats flags DFastate asmod
 
        -- Get rid of wires (and warn about BypassWire where necessary)
@@ -1436,6 +1515,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        when (not (null wireErrors))   $ bsError errh wireErrors
        asCheck flags asmodNoWires "ainlinewires"
        t <- dump errh flags t DFrwire dumpnames asmodNoWires
+       checkLedgerS flags "rwire" asmod asmodNoWires
        stats flags DFrwire asmodNoWires
 
        -- Inline CReg modules (replacing with Reg modules)
@@ -1445,6 +1525,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                | otherwise = asmodNoWires
        asCheck flags asmodNoCReg "ainlinecreg"
        t <- dump errh flags t DFcreg dumpnames asmodNoCReg
+       checkLedgerS flags "creg" asmodNoWires asmodNoCReg
        stats flags DFrwire asmodNoCReg
 
        -- Rename submodule ports from the method-notation to the actual
@@ -1453,6 +1534,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        let armod = aRenameIO flags asmodNoCReg
        asCheck flags armod "renameio"
        t <- dump errh flags t DFrenameio dumpnames armod
+       checkLedgerS flags "renameio" asmodNoCReg armod
        stats flags DFrenameio armod
 
        -- drop unused defs
@@ -1460,6 +1542,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        let adropmod = aDropDefs armod
        asCheck flags adropmod "adropdefs"
        t <- dump errh flags t DFadropdefs dumpnames adropmod
+       checkLedgerS flags "adropdefs" armod adropmod
        stats flags DFadropdefs adropmod
 
        -- Improve
@@ -1472,6 +1555,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        aomod <- aOpt errh flags keptmod
        asCheck flags aomod "aopt"
        t <- dump errh flags t DFaopt dumpnames aomod
+       -- (the backend plan keeps defs and changes no id)
+       checkLedgerS flags "aopt" adropmod aomod
        stats flags DFaopt aomod
 
        -- Expand some primitives
@@ -1481,6 +1566,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Check that referenced signal names exist
        asSignalCheck flags asynmod "synthesize"
        t <- dump errh flags t DFsynthesize dumpnames asynmod
+       checkLedgerS flags "asynthesize" aomod asynmod
        stats flags DFsynthesize asynmod
 
        -- Transform to adapt to Verilog quirks
@@ -1491,6 +1577,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        when (not (keepAddSize flags))
             (asCheck flags aqmod "veriquirks")
        t <- dump errh flags t DFveriquirks dumpnames aqmod
+       checkLedgerS flags "averiquirks" asynmod aqmod
        stats flags DFveriquirks aqmod
 
        -- Transform to adapt to Verilog quirks
@@ -1502,7 +1589,9 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
             (asCheck flags aumod "finalcleanup")
        t <- dump errh flags t DFfinalcleanup dumpnames aumod
        stats flags DFfinalcleanup aumod
-       t <- dumpLedger errh flags t dumpnames "finalcleanup" [] (aspkg_meta aumod)
+       checkLedgerS flags "finalcleanup" aqmod aumod
+       t <- dumpLedger errh flags t dumpnames "finalcleanup" (aspkgDefIds aumod)
+                (aspkg_meta aumod)
 
        start flags DFIOproperties
        let (ioprops, ips) = getIOProps flags aumod

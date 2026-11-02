@@ -71,6 +71,17 @@ created (Schedule): CAN_FIRE_RL_step <- RL_step
 created (Schedule): CAN_FIRE_value <- value
 created (Schedule): WILL_FIRE_RL_step <- RL_step
 created (Schedule): WILL_FIRE_value <- value
+resolved: 10 of 10 defs and rules stand for other ids
+  WILL_FIRE_value <- value
+  WILL_FIRE_RL_step <- RL_step __h157 __h149 __h155 __h152
+  CAN_FIRE_value <- value
+  CAN_FIRE_RL_step <- RL_step __h157 __h149 __h155 __h152
+  b___d2 <- RL_step __h157 __h149 __h155 __h152
+  a___d1 <- RL_step __h157 __h149 __h155 __h152
+  a_PLUS_b_MUL_3_BITS_7_TO_0___d5 <- RL_step __h157 __h149 __h155 __h152
+  a_PLUS_b_MUL_3___d4 <- RL_step __h157 __h149 __h155 __h152
+  a_PLUS_b___d3 <- RL_step __h157 __h149 __h155 __h152
+  RL_step <- RL_step __h157 __h149 __h155 __h152
 
 -----
 === metadata (MetaInline sysMetaInline):
@@ -135,5 +146,16 @@ inlined (Expand): CAN_FIRE_value -> RDY_value
 inlined (Expand): WILL_FIRE_RL_step -> c$EN
 created (VeriQuirks): a_PLUS_b__q1 <- a_PLUS_b_MUL_3___d4
 created (VeriQuirks): _3__q2 <- a_PLUS_b_MUL_3___d4
+resolved: 10 of 11 defs and rules stand for other ids
+  RDY_value <- RDY_value value
+  a_PLUS_b__q1 <- RL_step __h157 __h149 __h155 __h152
+  _3__q2 <- RL_step __h157 __h149 __h155 __h152
+  a_PLUS_b_MUL_3___d4 <- RL_step __h157 __h149 __h155 __h152
+  c$D_IN <- RL_step __h157 __h149 __h155 __h152
+  c$EN <- RL_step __h157 __h149 __h155 __h152
+  a$D_IN <- a$write_1
+  a$EN <- a$EN_write
+  b$D_IN <- b$write_1
+  b$EN <- b$EN_write
 
 -----

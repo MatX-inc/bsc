@@ -288,6 +288,44 @@ created (Schedule): WILL_FIRE_RL_r3 <- RL_r3
 created (Schedule): WILL_FIRE_RL_r4 <- RL_r4
 created (Schedule): WILL_FIRE_sum <- sum
 created (Schedule): WILL_FIRE_put <- put
+resolved: 37 of 40 defs and rules stand for other ids
+  WILL_FIRE_put <- put
+  WILL_FIRE_sum <- sum
+  WILL_FIRE_RL_r4 <- RL_r4 __h657 __h668
+  WILL_FIRE_RL_r3 <- RL_r3 __h651 __h640 __h629
+  WILL_FIRE_RL_r2 <- RL_r2 __h386 __h389
+  WILL_FIRE_RL_r1 <- RL_r1
+  CAN_FIRE_put <- put
+  CAN_FIRE_sum <- sum
+  CAN_FIRE_RL_r4 <- RL_r4 __h657 __h668
+  CAN_FIRE_RL_r3 <- RL_r3 __h651 __h640 __h629
+  CAN_FIRE_RL_r2 <- RL_r2 __h386 __h389
+  CAN_FIRE_RL_r1 <- RL_r1
+  vs_2___d13 <- __h650
+  vs_1___d10 <- __h639
+  vs_0___d7 <- __h628
+  b___d2 <- __h383
+  a___d1 <- __h380
+  a_PLUS_1_6_BITS_6_TO_0___d17 <- RL_r4 __h657 __h668
+  b_BITS_1_TO_0___d20 <- y__h663 __h670
+  b_EQ_7___d5 <- RL_r2 __h386 __h389
+  a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0___d18 <- RL_r4 __h657 __h668
+  y__h663 <- y__h663 __h670
+  NOT_b_EQ_7___d6 <- RL_r2 __h386 __h389
+  INV_b_BITS_1_TO_0_0___d21 <- y__h663 __h670
+  a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0_8_PLUS_b_BIT_ETC___d23 <- RL_r4 __h657 __h668
+  vs_2_3_PLUS_vs_2_3_4_PLUS_7___d15 <- RL_r3 __h651 __h640 __h629
+  vs_2_3_PLUS_vs_2_3___d14 <- RL_r3 __h651 __h640 __h629
+  vs_1_0_PLUS_vs_1_0_1_PLUS_7___d12 <- RL_r3 __h651 __h640 __h629
+  vs_1_0_PLUS_vs_1_0___d11 <- RL_r3 __h651 __h640 __h629
+  vs_0_PLUS_vs_0_PLUS_7___d9 <- RL_r3 __h651 __h640 __h629
+  vs_0_PLUS_vs_0___d8 <- RL_r3 __h651 __h640 __h629
+  a_PLUS_b_PLUS_a_PLUS_b___d4 <- RL_r1
+  a_PLUS_1___d16 <- RL_r4 __h657 __h668
+  a_PLUS_b___d3 <- __h399
+  RL_r2 <- RL_r2 __h386 __h389
+  RL_r3 <- RL_r3 __h651 __h640 __h629
+  RL_r4 <- RL_r4 __h657 __h668
 
 -----
 === metadata (MetaSide sysMetaSide):
@@ -525,5 +563,24 @@ dropped (FinalCleanup): MUX_a$write_1__SEL_1
 dropped (FinalCleanup): MUX_a$write_1__SEL_2
 dropped (FinalCleanup): MUX_a$write_1__VAL_1
 dropped (FinalCleanup): MUX_a$write_1__VAL_2
+resolved: 18 of 18 defs and rules stand for other ids
+  RDY_sum <- RDY_sum sum
+  RDY_put <- RDY_put put
+  y__h663 <- b_BITS_7_TO_2___h669 y__h663 __h383 __h670
+  a_PLUS_b___d3 <- __h399 __h380 __h383
+  sum <- sum RL_r1
+  a$D_IN <- put RL_r1
+  b$D_IN <- RL_r2 RL_r1 __h386 __h389
+  a_PLUS_1__q1 <- RL_r4 __h380 __h657 __h668
+  c$D_IN <- RL_r4 __h380 __h657 __h668
+  vs_1$D_IN <- RL_r3 __h639 __h651 __h640 __h629
+  vs_0$D_IN <- RL_r3 __h628 __h651 __h640 __h629
+  vs_2$D_IN <- RL_r3 __h650 __h651 __h640 __h629
+  a$EN <- put RL_r1
+  b$EN <- RL_r2 RL_r1 __h383 __h386 __h389
+  c$EN <- RL_r4 __h657 __h668
+  vs_0$EN <- RL_r3 __h651 __h640 __h629
+  vs_1$EN <- RL_r3 __h651 __h640 __h629
+  vs_2$EN <- RL_r3 __h651 __h640 __h629
 
 -----

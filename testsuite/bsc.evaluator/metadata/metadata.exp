@@ -36,11 +36,13 @@ proc filter_side { fname } {
 }
 
 # The ledger as -dmetadata prints it after the last ASPackage pass (its
-# finalcleanup section: the sizes line and the events), under the stage
-# name a .bxref written at the end of the Verilog backend carries, which
-# is what dumpbxref --events prints for that file
+# finalcleanup section: the sizes line and the events; the resolution
+# of the final defs printed after them is left out, since the file
+# carries no ids to resolve), under the stage name a .bxref written at
+# the end of the Verilog backend carries, which is what dumpbxref
+# --events prints for that file
 proc final_ledger { fname out } {
-    sed $fname $out {-e /^ledger\ after\ finalcleanup/,/^-----/!d -e /^-----/d -e /./!d -e s/finalcleanup/verilog/} {}
+    sed $fname $out {-e /^ledger\ after\ finalcleanup/,/^-----/!d -e /^-----/d -e /./!d -e /^resolved:/d -e /^\ \ /d -e s/finalcleanup/verilog/} {}
 }
 
 # One module: its Verilog must be the same byte for byte for a plain
@@ -117,12 +119,13 @@ compile_verilog_pass MetaSide.bsv sysMetaSide
 move sysMetaSide.v sysMetaSide.plain.v
 
 # -dmetadata: the ledger after the ISyntax stages, the APackage stages
-# and the ASPackage stages (the table's sizes and its events: those of
-# the ISyntax passes, on the module's defs and rules, and after the
-# ISyntax stages the resolution of each def and rule that stands for
-# other ids), printed only when that dump is requested; -metadata-check
-# asserts at every ISyntax pass boundary that the package's ids follow
-# the events; the Verilog does not change
+# and the ASPackage stages (the table's sizes and its events, those of
+# every pass since elaboration on the package's def, rule, method and
+# instance ids, and after each group the resolution of each def and
+# rule that stands for other ids), printed only when that dump is
+# requested; -metadata-check asserts at every pass boundary, from
+# iInlineFmt to finalCleanup, that the package's ids follow the events;
+# the Verilog does not change
 erase MetaSide.bo
 erase MetaSide.ledger
 compile_verilog_pass MetaSide.bsv sysMetaSide {-dmetadata=MetaSide.ledger -metadata-check}
@@ -194,16 +197,18 @@ erase MetaCrossLib.bo
 compile_pass MetaCrossLib.bsv
 metadata_golden MetaCross sysMetaCross
 
-# The ledger of the ISyntax passes, one small package per event shape,
-# pinned as -dmetadata prints it after iDropRules (the events of every
-# pass since elaboration and the resolution of each def and rule that
-# stands for other ids), with -metadata-check asserting at every pass
-# boundary that the ids of the package follow the events, and the
-# .bxref of the same run carrying the events the dump printed after the
-# last ASPackage pass; the Verilog does not change with any of the flags.
+# The ledger goldens, one small package per event shape, pinned as
+# -dmetadata prints the ledger after iDropRules, after aDropUndet and
+# after finalCleanup (the events of every pass since elaboration and
+# the resolution of each def and rule that stands for other ids), with
+# -metadata-check asserting at every pass boundary that the ids of the
+# package follow the events, and the .bxref of the same run carrying
+# the events the dump printed after the last ASPackage pass; the
+# Verilog does not change with any of the flags.  "extra" names other
+# flags of both compiles.
 proc ledger_golden { pkg top {extra {}} } {
     erase $pkg.bo
-    compile_verilog_pass $pkg.bsv $top
+    compile_verilog_pass $pkg.bsv $top "$extra"
     move $top.v $top.plain.v
 
     erase $pkg.bo
