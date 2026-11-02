@@ -77,7 +77,7 @@ import IExpandUtils
 import IExpandMeta(SiteKind(..), idSiteKey, rootSiteKey, Binder(..), renderDump,
                    MetaTables(..), emptyContextTable, internFrame, siteOf,
                    frameOf, binderOf, aliasUnions, aliasMembers, aliasClassOf,
-                   noCell, DefRecord(..), ModuleMeta(..), AliasMap,
+                   noCell, DefRecord(..), ModuleMeta(..), MetaLedger(..), AliasMap,
                    renderCensus, checkProfile, checkKeptPositions, checkNameHints,
                    aliasClassCount)
 import Wires
@@ -404,7 +404,7 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
                      (go_clock_domains go) (go_resets go)
                      insts' (go_port_types go)
                      defs rules_cleanup ifc'
-                     (go_ffcallNo go) comments_map meta
+                     (go_ffcallNo go) comments_map (MetaLedger meta)
       -- if preserving method conditions, then remove the book-keeping info
       imod = removeInlinedPositions flags imod0
 
@@ -975,7 +975,8 @@ buildModuleMeta tables roots defcache aliases iheap ptr_map refs lifted =
     in  ModuleMeta { mm_sites = mt_sites tables,
                      mm_contexts = contexts,
                      mm_roots = roots,
-                     mm_defs = IM.fromSet record lifted }
+                     mm_defs = IM.fromSet record lifted,
+                     mm_events = [] }
 
 
 -----------------------------------------------------------------------------

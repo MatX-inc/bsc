@@ -142,6 +142,7 @@ import ProofObligation(ProofObligation, MsgFn)
 import Flags
 import qualified Data.Map as M
 import ISyntax(IType)
+import IExpandMeta(MetaLedger)
 import InstNodes(InstTree)
 
 -- packages converted from ISyntax
@@ -182,12 +183,23 @@ data APackage = APackage {
             -- instantiation tree of rules and methods
     apkg_inst_tree :: InstTree,
             -- proof obligations which have not yet been discharged
-    apkg_proof_obligations :: [(ProofObligation AExpr, MsgFn)]
+    apkg_proof_obligations :: [(ProofObligation AExpr, MsgFn)],
+            -- the evaluator's metadata table and the ledger of what the
+            -- passes since elaboration did to the def and rule ids
+            -- (IExpandMeta): set by aConv from the IModule, kept by
+            -- every pass's record update, read by nothing that orders
+            -- or chooses; not serialized (Bin APackage writes nothing
+            -- and reads the empty ledger), never in the .ba: -bxref
+            -- writes it to the module's .bxref file (GenBXref).  Strict,
+            -- so that a construction that omits it is a compile-time
+            -- error.
+    apkg_meta :: !MetaLedger
     } deriving (Eq, Show)
 
 instance NFData APackage where
-    rnf (APackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17) =
-        rnf17 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17
+    rnf (APackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17
+                  n18) =
+        rnf18 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18
 
 getAPackageFieldInfos :: APackage -> [VFieldInfo]
 getAPackageFieldInfos = map aif_fieldinfo . apkg_interface
@@ -281,13 +293,16 @@ data ASPackage = ASPackage {
         -- info about which Ids are for what purpose
         aspkg_signal_info :: ASPSignalInfo,
         -- user comments to be included in the output RTL
-        aspkg_comment_info :: ASPCommentInfo
+        aspkg_comment_info :: ASPCommentInfo,
+        -- the metadata table and ledger (see apkg_meta): set by aState
+        -- from the APackage, kept by every pass's record update
+        aspkg_meta :: !MetaLedger
     }
         deriving (Eq, Show)
 
 instance NFData ASPackage where
-    rnf (ASPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14) =
-        rnf14 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14
+    rnf (ASPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15) =
+        rnf15 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15
 
 data ASPSignalInfo = ASPSignalInfo {
         -- input params, ports, clocks, and resets are all in one list
@@ -1421,7 +1436,7 @@ ppVTI :: PDetail -> (VModInfo, [AExpr], [(AId, Integer)]) -> Doc
 ppVTI d (vi, es, ns) = sep [pPrint d 0 (vName vi), pPrint d 0 vi, pPrint d 0 es, pPrint d 0 ns]
 
 instance PPrint ASPackage where
-    pPrint d p pack@(ASPackage mi fmod ps exps is ios ss sos ds iods fs ws ids cmap) =
+    pPrint d p pack@(ASPackage mi fmod ps exps is ios ss sos ds iods fs ws ids cmap _) =
         (text "ASPackage" <+> ppId d mi <> if fmod then text " -- function" else text "") $+$
         text "-- ASPackage parameters" $+$
         (text "" <+> sep (map (pPrint d 0) ps) <> text ";") $+$

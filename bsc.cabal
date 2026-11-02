@@ -159,6 +159,7 @@ library
     ForeignFunctions
     GHCPretty
     GenABin
+    GenBXref
     GenBin
     GenForeign
     GenFuncWrap
@@ -375,6 +376,13 @@ executable dumpba
     bytestring >=0.11.5.4
   ghc-options: -main-is Main_dumpba
   main-is: dumpba.hs
+
+executable dumpbxref
+  import: common_exes
+  build-depends:
+    bytestring >=0.11.5.4
+  ghc-options: -main-is Main_dumpbxref
+  main-is: dumpbxref.hs
 
 executable dumpbo
   import: common_exes

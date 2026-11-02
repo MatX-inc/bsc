@@ -299,6 +299,23 @@ proc which_dumpba {} {
     return $dumpba
 }
 
+proc which_dumpbxref {} {
+    global env
+
+    if { [info exists DUMPBXREF] && [file exists $DUMPBXREF] } then {
+        set dumpbxref [absolute_filename $DUMPBXREF]
+    } elseif { [info exists env(DUMPBXREF)] && [file exists $env(DUMPBXREF)] } then {
+        set dumpbxref [absolute_filename $env(DUMPBXREF)]
+    } else {
+        set dumpbxref [which dumpbxref]
+    }
+    if {$dumpbxref == 0} then {
+        perror "can't find dumpbxref -- set DUMPBXREF to /path/filename"
+        exit 1
+    }
+    return $dumpbxref
+}
+
 proc which_vcdcheck {} {
     global env
 
@@ -1251,6 +1268,11 @@ proc make_dumpba_output_name { file } {
     return $filename
 }
 
+proc make_dumpbxref_output_name { file } {
+    set filename "$file.dumpbxref-out"
+    return $filename
+}
+
 proc make_vcdcheck_output_name { file } {
     set filename "$file.vcdcheck-out"
     return $filename
@@ -1448,6 +1470,27 @@ proc dumpba {source} {
     set cmd "$dumpba $source >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "dumpba" $cmd 2]
+
+    cd $here
+    return [expr $status == 0]
+}
+
+# file needs to be an *absolute* path for invoking dumpbxref;
+# options are dumpbxref's (--table, --events)
+proc dumpbxref {source {options ""}} {
+    global dumpbxref
+    global srcdir
+    global subdir
+
+    bsc_initialize
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
+    set output [make_dumpbxref_output_name $source]
+    set cmd "$dumpbxref $options $source >& $output"
+    verbose "Executing: $cmd" 4
+    set status [exec_with_log "dumpbxref" $cmd 2]
 
     cd $here
     return [expr $status == 0]
@@ -4137,6 +4180,7 @@ proc bsc_initialize {} {
 
     global dumpbo
     global dumpba
+    global dumpbxref
     global vcdcheck
     global bsc2bsv
 
@@ -4154,6 +4198,7 @@ proc bsc_initialize {} {
         if [do_internal_checks] {
             set dumpbo [which_dumpbo]
             set dumpba [which_dumpba]
+            set dumpbxref [which_dumpbxref]
             set vcdcheck [which_vcdcheck]
             set bsc2bsv [which_bsc2bsv]
         }

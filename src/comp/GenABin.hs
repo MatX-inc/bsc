@@ -22,6 +22,7 @@ import Verilog
 
 import ABin
 import BinData
+import IExpandMeta(emptyMetaLedger)
 import FileIOUtil(writeBinaryFileCatch)
 
 import qualified Data.Set as S
@@ -207,7 +208,9 @@ instance Bin APackage where
                              apkg_interface = aifcs,
                              apkg_inst_comments = ics,
                              apkg_inst_tree = inst_tree,
-                             apkg_proof_obligations = []
+                             apkg_proof_obligations = [],
+                             -- the ledger is not stored in the package
+                             apkg_meta = emptyMetaLedger
                                     })
 
 -- ----------
@@ -552,13 +555,14 @@ instance Bin MsgListFlag where
 -- should automatically verify no typos at compile-time XXX
 -- ECO controls belong to this invocation. They must not reactivate a capture
 -- or output path when loading native flags, and do not change the .ba format.
--- The evaluator metadata controls (metadataCensus, metadataDump,
+-- The evaluator metadata controls (bxref, metadataCensus, metadataDump,
 -- metadataOut, metadataScramble) are invocation controls too: written
 -- as nothing and read as their defaults, so that flags loaded from a
--- .ba never turn a census, a dump, a side file or a scramble back on.
+-- .ba never turn a cross-reference file, a census, a dump, a side file
+-- or a scramble back on.
 instance Bin Flags where
     writeBytes (Flags
-                a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
+                a_000 a_001 a_002 a_003 a_004 a_005 a_006 _ a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
                 a_020 a_021 a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
                 a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039
@@ -659,7 +663,7 @@ instance Bin Flags where
            a_128, a_129, a_130, a_131, a_132, a_133, a_134) <- rd_chunk8
           (a_135, a_136, a_137) <- rd_chunk9
           return (Flags
-                a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
+                a_000 a_001 a_002 a_003 a_004 a_005 a_006 False a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
                 a_020 a_021 a_022 a_023 a_024 a_025 a_026 a_027 a_028 a_029
                 a_030 a_031 a_032 a_033 a_034 a_035 a_036 a_037 a_038 a_039

@@ -1,7 +1,8 @@
 module IExpandMeta(
         -- sites
-        SiteKind(..), SiteKey, idSiteKey, primSiteKey, rootSiteKey, boundSiteKey,
-        SiteRow(..), SiteTable, siteRow, siteTableSize,
+        SiteKind(..), SiteKey(..), idSiteKey, primSiteKey, rootSiteKey, boundSiteKey,
+        SiteRow(..), SiteRef(..), RecKey(..), SiteTable(..), siteRow, siteTableSize,
+        siteIdsFromRows,
         -- frames, binders and cell headers
         Frame, Binder(..), CellMeta, noBinder, headSiteOf, cellDefSite,
         -- the store and the hooks the evaluator calls
@@ -13,9 +14,13 @@ module IExpandMeta(
         siteOf, frameOf, binderOf, chainOf, aliasClassOf, aliasMembers,
         renderSite, renderDump,
         -- the module metadata table, built by the rebuild
-        ContextTable, emptyContextTable, contextTableSize, internFrame,
-        contextChain, aliasUnions, noCell, DefRecord(..), ModuleMeta(..),
+        ContextTable(..), emptyContextTable, contextTableSize, internFrame,
+        contextChain, contextIdsFromRows, aliasUnions, noCell, DefRecord(..),
+        ModuleMeta(..),
         emptyModuleMeta, defNameString, sideFileSchema, renderSideFile,
+        -- the ledger the packages carry
+        MetaLedger(..), emptyMetaLedger, PassTag(..), MetaEvent(..),
+        appendEvent, resolveId, renderLedger,
         -- the census (-metadata-census)
         Census, readCensus, recordUnfolding, recordCompletion, aliasClassCount,
         renderCensus, checkProfile, checkKeptPositions, checkNameHints
@@ -24,6 +29,7 @@ module IExpandMeta(
 import Control.Monad(when)
 import Data.Bits(bit, (.|.), (.&.), complement, xor, testBit)
 import Data.Char(isAlphaNum)
+import Data.Data(Data(..), mkNoRepType)
 import Data.IORef
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
@@ -32,12 +38,14 @@ import qualified Data.List as L
 import qualified Data.Map.Strict as M
 import Data.Maybe(mapMaybe)
 import Data.Ord(comparing)
+import qualified Data.Set as S
 import System.FilePath(takeFileName)
 
 import ErrorUtil(internalError)
-import Eval(NFData(..), rnf2, rnf3, rnf4, rnf11)
+import Eval(NFData(..), rnf2, rnf3, rnf4, rnf5, rnf11)
 import FStringCompat(FString, getFString)
-import Id(Id, getIdBase, getIdQual, getIdPosition)
+import Id(Id, getIdBase, getIdQual, getIdPosition, getIdString)
+import PPrint(PPrint(..), empty)
 import Position(Position(..), noPosition, isPreludePosition)
 import Prim(PrimOp)
 
@@ -338,6 +346,18 @@ insertSite st t key useSite recursive = do
 plainSite :: Int -> Int
 plainSite s = s .&. complement siteBits
 
+-- The key map of a table read back from a .bxref (GenBXref writes the
+-- rows alone): a site's id is its row key with the fact bits
+-- insertSite sets, from the row's kind and recursive flag, as an
+-- unperturbed table has them.
+siteIdsFromRows :: IM.IntMap SiteRow -> M.Map SiteKey SiteRef
+siteIdsFromRows rows =
+    M.fromList [ (sr_key row, SiteRef (siteId s row) (sr_recursive row))
+               | (s, row) <- IM.toList rows ]
+  where siteId s row =
+            s .|. (if siteKeyKind (sr_key row) == SKDef then defSiteBit else 0)
+              .|. (if sr_recursive row then recSiteBit else 0)
+
 -- Push a frame for a site under the register's frame and return it
 -- (the caller runs the unfolding between two swaps).  A push at a
 -- recursion point looks the definition up in the register's map.  It
@@ -596,7 +616,8 @@ renderDump (MetaTables t am) cells = unlines (map line cells)
 -- Built once by the rebuild (IExpand.buildModuleMeta) from the headers
 -- of the cells it keeps, after CSE, and carried on the IModule.  It is
 -- read by nothing that orders or chooses: the side file renders it, and
--- it is never serialized.
+-- -bxref writes it to the module's .bxref (GenBXref); the .ba never
+-- carries it.
 
 -- A context is one distinct frame chain, as the triple (parent context,
 -- site, count); context 0 is the top, under which no frame was pushed.
@@ -648,6 +669,11 @@ contextChain t = go []
                        Just (p, s, c) -> go ((s, c) : acc) p
                        Nothing -> internalError ("IExpandMeta.contextChain: " ++
                                                  show ctx)
+
+-- the key map of a context table read back from a .bxref: the inverse
+-- of its rows
+contextIdsFromRows :: IM.IntMap (Int, Int, Int) -> M.Map (Int, Int, Int) Int
+contextIdsFromRows rows = M.fromList [ (key, ctx) | (ctx, key) <- IM.toList rows ]
 
 -- The record of a lifted def: the cell it was lifted from and the cells
 -- that stand behind it.  The tiers are derived when the record is
@@ -719,17 +745,21 @@ defNameString p hint =
             in  if null qual then base else qual ++ "." ++ base
 
 -- The table: the sites, the contexts, the root sites (rules, methods and
--- instantiations, in push order) and the def records, keyed by the
--- canonical heap pointer (the number the def's name ends in).
+-- instantiations, in push order), the def records, keyed by the
+-- canonical heap pointer (the number the def's name ends in), and the
+-- events of the passes after elaboration (the ledger below), most
+-- recent first, so that a pass appends by consing (appendEvent).
 data ModuleMeta = ModuleMeta { mm_sites :: !SiteTable,
                                mm_contexts :: !ContextTable,
                                mm_roots :: ![Int],
-                               mm_defs :: !(IM.IntMap DefRecord) }
+                               mm_defs :: !(IM.IntMap DefRecord),
+                               mm_events :: ![MetaEvent] }
 
 emptyModuleMeta :: ModuleMeta
-emptyModuleMeta = ModuleMeta emptySiteTable emptyContextTable [] IM.empty
+emptyModuleMeta = ModuleMeta emptySiteTable emptyContextTable [] IM.empty []
 
--- compact, so that the derived Show of an IModule stays printable
+-- compact, so that the derived Show of an IModule stays printable; the
+-- events are not counted, so the text does not change with the ledger
 instance Show ModuleMeta where
     show mm = "ModuleMeta sites " ++ show (siteTableSize (mm_sites mm)) ++
               " contexts " ++ show (contextTableSize (mm_contexts mm)) ++
@@ -762,7 +792,153 @@ instance NFData ContextTable where
     rnf (ContextTable n ids rows ops) = rnf4 n ids rows ops
 
 instance NFData ModuleMeta where
-    rnf (ModuleMeta s c r d) = rnf4 s c r d
+    rnf (ModuleMeta s c r d e) = rnf5 s c r d e
+
+-- ===============
+-- The ledger
+--
+-- The passes between elaboration and Verilog rename, merge, inline,
+-- create and drop defs and rules.  Each writes what it did as an event
+-- with the ids it had in hand, under its own tag, onto the event list
+-- of the module metadata table; its own data structures, counters and
+-- orders are untouched, and the events are read by nothing but the
+-- resolution below, the dump and the tools.  The ledger rides every
+-- package as one field (IModule.imod_meta, APackage.apkg_meta,
+-- ASPackage.aspkg_meta): each conversion copies it forward and every
+-- other pass keeps it by record update.
+
+-- The pass an event was written by, in driver order: the ISyntax
+-- passes after elaboration, the conversion to ASyntax, the ASyntax
+-- passes before and after state generation (the ECO backend's keep
+-- plan, ECO.Backend.applyBackendPlan, among the latter), and the
+-- Verilog backend's expansion of defs into their users.
+data PassTag = PTInlineFmt | PTInline | PTTransform | PTSplitIf | PTLift
+             | PTParams | PTDropRules
+             | PTConv | PTRankMethCalls | PTTaskSplice | PTCleanup
+             | PTSchedule | PTAddScheduleDefs | PTNoInline
+             | PTAddCFConditionWires | PTAddSchedAssumps | PTRemoveAssumps
+             | PTState | PTInlineWires | PTInlineCReg | PTRenameIO
+             | PTDropDefs | PTBackendPlan | PTOpt | PTExpand
+        deriving (Eq, Ord, Show, Enum, Bounded)
+
+-- One event: what a pass did to def or rule ids.  The ids are the
+-- package's at the stage the pass ran (Id on an IModule, AId on an
+-- APackage or ASPackage, which is the same type).
+data MetaEvent
+    = Renamed !PassTag !Id !Id      -- from, to: one id became another
+    | Merged !PassTag ![Id] !Id     -- from, into: several defs became one
+    | Inlined !PassTag !Id ![Id]    -- from, into: a def went into its users
+    | Created !PassTag !Id ![Id]    -- to, from: a def built from others
+    | Dropped !PassTag !Id          -- from: a def or rule removed
+
+instance NFData PassTag where
+    rnf t = t `seq` ()
+
+instance NFData MetaEvent where
+    rnf (Renamed t a b) = rnf3 t a b
+    rnf (Merged t as b) = rnf3 t as b
+    rnf (Inlined t a bs) = rnf3 t a bs
+    rnf (Created t a bs) = rnf3 t a bs
+    rnf (Dropped t a) = rnf2 t a
+
+-- The ledger as a package field.  The instances are what keep the field
+-- out of the generated output: Eq and Ord are constant, so a comparison
+-- of packages (APackage and ASPackage derive Eq) never sees it; Data is
+-- a leaf, so a generic traversal never descends into it; NFData forces
+-- the table and the events, so a package's deepseq forces the ledger
+-- where it forces the package; PPrint prints nothing, so no package
+-- dump changes with the ledger (the metadata dump stage prints it on
+-- request); Show is the table's compact line, so the expanded module's
+-- Show is unchanged.
+newtype MetaLedger = MetaLedger { ledgerMeta :: ModuleMeta }
+
+emptyMetaLedger :: MetaLedger
+emptyMetaLedger = MetaLedger emptyModuleMeta
+
+instance Eq MetaLedger where
+    _ == _ = True
+
+instance Ord MetaLedger where
+    compare _ _ = EQ
+
+instance Show MetaLedger where
+    show (MetaLedger mm) = show mm
+
+instance Data MetaLedger where
+    gfoldl _ z x = z x
+    gunfold _ _ _ = internalError "IExpandMeta.MetaLedger: gunfold"
+    toConstr _ = internalError "IExpandMeta.MetaLedger: toConstr"
+    dataTypeOf _ = mkNoRepType "IExpandMeta.MetaLedger"
+
+instance NFData MetaLedger where
+    rnf (MetaLedger mm) = rnf mm
+
+instance PPrint MetaLedger where
+    pPrint _ _ _ = empty
+
+-- The one write: a pass appends the event it has in hand.
+appendEvent :: MetaEvent -> MetaLedger -> MetaLedger
+appendEvent ev (MetaLedger mm) = MetaLedger (mm { mm_events = ev : mm_events mm })
+
+-- Resolve a final id to the ids whose records it stands for, in the
+-- order they were found, with the events on the way, oldest first.
+-- The events are walked from the most recent: a Renamed to an id in
+-- hand replaces it by its source; a Merged into one adds the merged
+-- ids beside it; an Inlined into one adds the inlined id; a Created of
+-- one replaces it by its sources, when it has any (a def created from
+-- nothing stands for itself); a Dropped changes nothing, a dropped id
+-- being no final id.  Pure; run by emission and by tools, never by a
+-- pass.
+resolveId :: MetaLedger -> Id -> ([Id], [MetaEvent])
+resolveId (MetaLedger mm) final = go (mm_events mm) (S.singleton final) [final] []
+  where
+    -- seen: the ids in hand; ids: the same, most recently found first;
+    -- evs: the events taken, most recent first
+    go [] _ ids evs = (reverse ids, evs)
+    go (ev : rest) seen ids evs =
+        case ev of
+          Renamed _ from to | S.member to seen ->
+              taken (add [from] (remove to (seen, ids)))
+          Merged _ froms into | S.member into seen ->
+              taken (add froms (seen, ids))
+          Inlined _ from intos | any (`S.member` seen) intos ->
+              taken (add [from] (seen, ids))
+          Created _ to froms | S.member to seen, not (null froms) ->
+              taken (add froms (remove to (seen, ids)))
+          _ -> go rest seen ids evs
+      where
+        taken (seen', ids') = go rest seen' ids' (ev : evs)
+    remove x (seen, ids) = (S.delete x seen, filter (/= x) ids)
+    add [] st = st
+    add (y : ys) st@(seen, ids)
+        | S.member y seen = add ys st
+        | otherwise = add ys (S.insert y seen, y : ids)
+
+-- The ledger as the metadata dump stage (-dmetadata) prints it after
+-- the named stage: the sizes of the table and the number of events on
+-- one line, then the events, oldest first, one per line, the ids
+-- rendered by getIdString (which reads existing strings).
+renderLedger :: String -> MetaLedger -> String
+renderLedger stage (MetaLedger mm) =
+    unlines (("ledger after " ++ stage ++ ": " ++
+              show (siteTableSize (mm_sites mm)) ++ " sites, " ++
+              show (contextTableSize (mm_contexts mm)) ++ " contexts, " ++
+              show (length (mm_roots mm)) ++ " roots, " ++
+              show (IM.size (mm_defs mm)) ++ " defs, " ++
+              show (length (mm_events mm)) ++ " events")
+             : map renderEvent (reverse (mm_events mm)))
+
+renderEvent :: MetaEvent -> String
+renderEvent ev =
+    case ev of
+      Renamed t from to -> line "renamed" t (ids [from] ++ " -> " ++ ids [to])
+      Merged t froms into -> line "merged" t (ids froms ++ " -> " ++ ids [into])
+      Inlined t from intos -> line "inlined" t (ids [from] ++ " -> " ++ ids intos)
+      Created t to froms -> line "created" t (ids [to] ++ " <- " ++ ids froms)
+      Dropped t from -> line "dropped" t (ids [from])
+  where
+    line kind t rest = kind ++ " (" ++ drop 2 (show t) ++ "): " ++ rest
+    ids = unwords . map getIdString
 
 -- ===============
 -- The side file

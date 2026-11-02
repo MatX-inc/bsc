@@ -5,6 +5,7 @@ Flags {
 	bdir = Nothing,
 	biasMethodScheduling = False,
 	bluespecDir = "BLUESPECDIR",
+	bxref = False,
 	cDebug = False,
 	cFlags = [],
 	cIncPath = [],

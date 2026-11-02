@@ -103,7 +103,7 @@ import ConTagInfo
 import VModInfo(VModInfo, vArgs, vName, VName(..), {- VeriPortProp(..), -}
                 VArgInfo(..), VFieldInfo(..), isParam, VWireInfo)
 import DefProp(DefProp)
-import IExpandMeta(ModuleMeta)
+import IExpandMeta(MetaLedger)
 import Pragma(Pragma, PProp, RulePragma, ISchedulePragma,
               CSchedulePragma, SchedulePragma(..),
               extractSchedPragmaIds, removeSchedPragmaIds, mapSPIds)
@@ -173,9 +173,12 @@ data IModule a
                 imod_instance_comments :: [(Id, [String])],
                 -- The evaluator's metadata table (sites, contexts, roots
                 -- and one record per lifted def), filled by the rebuild
-                -- at the end of elaboration and read by nothing that
-                -- orders or chooses.  Not serialized; the passes copy it
-                -- through their record updates.  Lazy, and forced by
+                -- at the end of elaboration, with the ledger of what the
+                -- passes since did to the def and rule ids; read by
+                -- nothing that orders or chooses.  Not in the .bo (-bxref
+                -- writes it to the module's .bxref); the passes copy it
+                -- through their record updates and aConv carries it onto
+                -- the APackage.  Lazy, and forced by
                 -- the expanded-stage dump's deepseq (TopUtils.dump) as
                 -- the last field, after the defs: the table forces
                 -- nothing of the module earlier than it was forced
@@ -183,7 +186,7 @@ data IModule a
                 -- heap cells it is built from; after it every record
                 -- is strict and holds pointers, site and context ids
                 -- and the cells' name hints, nothing of the heap.
-                imod_meta :: ModuleMeta
+                imod_meta :: MetaLedger
           }
          deriving (Show)
 
