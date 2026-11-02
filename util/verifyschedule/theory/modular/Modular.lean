@@ -52,7 +52,8 @@ scheduling annotations it exports (CF, SB, SBR, C).  This file defines
   (checked against bsc's schedule statements), and `FIFO20`;
 * `obl_of_cert`: the obligation from a per-cycle certificate of finite facts
   (per step, per child port over its users, and per pair of steps), with the
-  parent-level all-orders placement of rules proved once (`place_ok`);
+  parent-level all-orders placement of rules proved once (`place_ok`); `obl_of_certL` the same with
+  last-caller ports (`CertL`: a self-SBR port carries the argument of the step last in `lp`);
 * emission support: constants and their law (`EqC`, `amoChain_of_law`),
   conditional calls and reads (`Prog.callIf`, `trace_callIf`, `Within`,
   `calls_iff_any`), and footprint-level ordering facts (`okT_of_static`,
@@ -2745,7 +2746,7 @@ theorem Env.toC {P : Parent V} {oc : (j : P.I) → Outs (P.CI j).M V} {w : Wires
     about child ports (`en`, `arg`, `alw`) range over the port's users only,
     and those about a step's calls (`rdy*`, `enV`) over its trace, so their
     total size is the total number of child-port uses. -/
-structure Cert where
+structure CertB where
   rules : List P.PR
   rules_nodup : rules.Nodup
   fire : ((j : P.I) → Outs (P.CI j).M V) → Wires P.X.M V → P.PR → Bool
@@ -2795,16 +2796,65 @@ structure Cert where
   /-- a method without an enable calls no port with one -/
   enV : ∀ oc w m, Env P oc w → P.X.ann.hasEn m = false → P.X.ann.alwaysEn m = false → Avail P oc w m →
     ∀ c ∈ (trM P oc w m).1, (P.CI c.1).ann.hasEn c.2.1 = false
-  /-- argument muxes, per child port over its users: every call carries the
-      mux's value -/
-  arg : ∀ oc w j cm, Env P oc w → ∀ s ∈ users j cm, Av P fire oc w s →
-    ∀ x, (cm, x) ∈ proj j (trS P oc w s) → ((P.comb oc w).1 j).arg cm = x
   /-- always_enabled child ports are called every cycle -/
   alw : ∀ oc w j cm, Env P oc w → (P.CI j).ann.alwaysEn cm = true →
     ∃ s ∈ users j cm, On P fire oc w s ∧ Calls P (trS P oc w s) j cm
   /-- the parallel muxes' selectors are one-hot (from the assertions, the
       aliases and the exported C pairs only) -/
   onehot : ∀ oc w, EnvC P oc w → P.onehot oc w
+
+/-- **The per-cycle certificate**: `CertB` and today's argument check (every call's argument
+    on the port). -/
+structure Cert extends CertB P where
+  /-- argument muxes, per child port over its users: every call carries the
+      mux's value -/
+  arg : ∀ oc w j cm, Env P oc w → ∀ s ∈ users j cm, Av P fire oc w s →
+    ∀ x, (cm, x) ∈ proj j (trS P oc w s) → ((P.comb oc w).1 j).arg cm = x
+
+/-- **The certificate with last-caller ports** `lc` (self-SBR, with an enable): such a port carries
+    the argument of the step last in `lp`; every other port keeps today's check (`argN`). -/
+structure CertL extends CertB P where
+  lc : (j : P.I) → (P.CI j).M → Bool
+  lc_ok : ∀ j cm, lc j cm = true → (P.CI j).ann.sbr cm cm = true ∧ (P.CI j).ann.hasEn cm = true
+  lp : Step P → Nat
+  /-- on a last-caller port, `lp` orders rules by rank and puts methods before rules -/
+  lpRR : ∀ oc r1 r2 j cm, lc j cm = true → Calls P (trR P oc r1).1 j cm → Calls P (trR P oc r2).1 j cm →
+    [r1, r2] <+ rules → lp (.inr r1) < lp (.inr r2)
+  lpMR : ∀ oc w m r j cm, lc j cm = true → Calls P (trM P oc w m).1 j cm → Calls P (trR P oc r).1 j cm →
+    lp (.inl m) < lp (.inr r)
+  /-- a method and a rule on one last-caller port: the method's caller comes first -/
+  lcMR : ∀ oc w m r j cm, Env P oc w → Avail P oc w m → fire oc w r = true → lc j cm = true →
+    Calls P (trM P oc w m).1 j cm → Calls P (trR P oc r).1 j cm → hit oc w m r = true
+  /-- two rules on one last-caller port: the later one is hit wherever the earlier one is -/
+  lcRR : ∀ oc w m r1 r2 j cm, Env P oc w → Avail P oc w m → fire oc w r1 = true → fire oc w r2 = true →
+    lc j cm = true → Calls P (trR P oc r1).1 j cm → Calls P (trR P oc r2).1 j cm →
+    lp (.inr r1) < lp (.inr r2) → hit oc w m r1 = true → hit oc w m r2 = true
+  /-- two methods on one last-caller port: exported so that the later never precedes the earlier -/
+  lcMM : ∀ oc w m1 m2 j cm, Env P oc w → Avail P oc w m1 → Avail P oc w m2 → lc j cm = true →
+    Calls P (trM P oc w m1).1 j cm → Calls P (trM P oc w m2).1 j cm → lp (.inl m1) < lp (.inl m2) →
+    ¬ P.X.ann.Follow (m2, w.arg m2) (m1, w.arg m1)
+  /-- every other port: every call carries the mux's value -/
+  argN : ∀ oc w j cm, Env P oc w → lc j cm = false → ∀ s ∈ users j cm, Av P fire oc w s →
+    ∀ x, (cm, x) ∈ proj j (trS P oc w s) → ((P.comb oc w).1 j).arg cm = x
+  /-- a last-caller port carries the argument of the last step in `lp` that calls it -/
+  argL : ∀ oc w j cm, Env P oc w → lc j cm = true → ∀ s ∈ users j cm, On P fire oc w s →
+    ∀ x, (cm, x) ∈ proj j (trS P oc w s) →
+    (∀ s' ∈ users j cm, lp s < lp s' → On P fire oc w s' → ¬ Calls P (trS P oc w s') j cm) →
+    ((P.comb oc w).1 j).arg cm = x
+
+/-- Today's certificate is a last-caller certificate without last-caller ports. -/
+def Cert.toL (C : Cert P) : CertL P where
+  toCertB := C.toCertB
+  lc _ _ := false
+  lc_ok _ _ h := by cases h
+  lp _ := 0
+  lpRR _ _ _ _ _ h := by cases h
+  lpMR _ _ _ _ _ _ h := by cases h
+  lcMR _ _ _ _ _ _ _ _ _ h := by cases h
+  lcRR _ _ _ _ _ _ _ _ _ _ _ h := by cases h
+  lcMM _ _ _ _ _ _ _ _ _ h := by cases h
+  argN oc w j cm hE _ := C.arg oc w j cm hE
+  argL _ _ _ _ _ h := by cases h
 
 theorem okT_flatMap_left {α : Type} (A : List α) (f : α → List (Σ j, (P.CI j).M × V))
     (t : List (Σ j, (P.CI j).M × V)) (h : ∀ a ∈ A, OkT P (f a) t) : OkT P (A.flatMap f) t := by
@@ -2924,8 +2974,47 @@ theorem avail_of {oc : (j : P.I) → Outs (P.CI j).M V} {w : Wires P.X.M V} {σ 
   · exact .inr (hrdy c hc h)
   · exact .inl rfl
 
-/-- **The obligation from a certificate, at the certificate's own order** (`orderOf`). -/
-theorem obl_of_cert_at (C : Cert P) (oc : (j : P.I) → Outs (P.CI j).M V) (w : Wires P.X.M V)
+/-- The steps a position of `placeOrder` stands for: a caller group's methods, or a rule. -/
+def posSteps (G : Nat → List (P.X.M × V)) : Nat ⊕ P.PR → List (Step P)
+  | .inl k => (G k).map (fun c => .inl c.1)
+  | .inr r => [.inr r]
+
+/-- Two positions call every last-caller port in `lp` order. -/
+def LcOk (lc : (j : P.I) → (P.CI j).M → Bool) (lp : Step P → Nat) (oc : (j : P.I) → Outs (P.CI j).M V)
+    (w : Wires P.X.M V) (G : Nat → List (P.X.M × V)) (x y : Nat ⊕ P.PR) : Prop :=
+  ∀ j cm, lc j cm = true → ∀ sx ∈ posSteps P G x, ∀ sy ∈ posSteps P G y,
+    Calls P (trS P oc w sx) j cm → Calls P (trS P oc w sy) j cm → lp sx ≤ lp sy
+
+theorem lastArg_append {M : Type} [DecidableEq M] (m : M) :
+    ∀ (l1 l2 : List (M × V)), lastArg m (l1 ++ l2) = match lastArg m l2 with
+      | some y => some y
+      | none => lastArg m l1
+  | [], l2 => by simp only [List.nil_append]; cases lastArg m l2 <;> rfl
+  | c :: l1, l2 => by
+    simp only [List.cons_append, lastArg]
+    rw [lastArg_append m l1 l2]
+    cases lastArg m l2 <;> rfl
+
+/-- The last call of `m` in a flattened map lies at one position, after which no call of `m`. -/
+theorem lastArg_flatten_split {M α : Type} [DecidableEq M] (m : M) (f : α → List (M × V)) :
+    ∀ (L : List α) (x : V), lastArg m (L.map f).flatten = some x →
+      ∃ pre y post, L = pre ++ y :: post ∧ (m, x) ∈ f y ∧ ∀ z ∈ post, ∀ v, (m, v) ∉ f z
+  | [], x, h => by simp [lastArg] at h
+  | a :: L, x, h => by
+    rw [List.map_cons, List.flatten_cons, lastArg_append] at h
+    cases hl : lastArg m (L.map f).flatten with
+    | some y =>
+      simp only [hl, Option.some.injEq] at h
+      subst h
+      obtain ⟨pre, y', post, e, hy, hp⟩ := lastArg_flatten_split m f L y hl
+      exact ⟨a :: pre, y', post, by rw [e]; rfl, hy, hp⟩
+    | none =>
+      simp only [hl] at h
+      refine ⟨[], a, L, rfl, lastArg_mem m _ x h, fun z hz v hv => lastArg_none m _ hl v ?_⟩
+      exact List.mem_flatten.mpr ⟨f z, List.mem_map_of_mem hz, hv⟩
+
+/-- **The obligation from a last-caller certificate, at its own order** (`orderOf`). -/
+theorem obl_of_certL_at (C : CertL P) (oc : (j : P.I) → Outs (P.CI j).M V) (w : Wires P.X.M V)
     (σ : List (List (P.X.M × V))) (hasm : P.asm oc w) (hal : ∀ j, AliasOK P.toB (P.CI j).ann (oc j))
     (hL : Legal P.X.ann σ) (hD : Drives P.X.ann w σ)
     (hrdy : ∀ c ∈ σ.flatten, P.X.ann.alwaysRdy c.1 = false → (P.comb oc w).2.rdy c.1 = true) :
@@ -3041,7 +3130,90 @@ theorem obl_of_cert_at (C : Cert P) (oc : (j : P.I) → Outs (P.CI j).M V) (w : 
     rwa [List.filter_cons_of_pos ((hrs r2).mp hr2), List.filter_cons_of_pos ((hrs r1).mp hr1),
       List.filter_nil] at h'
   let order := placeOrder σ.length rs hitK
-  have hpairs := place_ok σ.length rs (C.rules_nodup.sublist List.filter_sublist) hitK OK Hgg H1 H2 H3 H4
+  -- the same placement keeps every last-caller port's calls in `lp` order
+  let OK' : Nat ⊕ P.PR → Nat ⊕ P.PR → Prop := fun x y => OK x y ∧ LcOk P C.lc C.lp oc w G x y
+  have memG : ∀ k s, s ∈ posSteps P G (.inl k) → ∃ c ∈ G k, s = .inl c.1 := by
+    intro k s hs
+    obtain ⟨c, hc, e⟩ := List.mem_map.mp hs
+    exact ⟨c, hc, e.symm⟩
+  have memR : ∀ r s, s ∈ posSteps P G (.inr r) → s = .inr r := fun r s hs => List.mem_singleton.mp hs
+  have Hgg' : ∀ k1 k2, k1 < k2 → k2 < σ.length → OK' (.inl k1) (.inl k2) := by
+    intro k1 k2 hlt hk2
+    refine ⟨Hgg k1 k2 hlt hk2, fun j cm hlc sx hsx sy hsy hcx hcy => ?_⟩
+    obtain ⟨c, hc, rfl⟩ := memG k1 sx hsx
+    obtain ⟨c', hc', rfl⟩ := memG k2 sy hsy
+    apply Nat.le_of_not_lt
+    intro hgt
+    have hf : P.X.ann.Follow (c.1, w.arg c.1) (c'.1, w.arg c'.1) := by
+      rw [← harg c (hGσ _ _ hc), ← harg c' (hGσ _ _ hc')]
+      exact hL.order c c' (pair_getD σ k1 k2 c c' hlt hc hc')
+    exact C.lcMM oc w c'.1 c.1 j cm hE (havail c' (hGσ _ _ hc')) (havail c (hGσ _ _ hc)) hlc hcy hcx hgt hf
+  have H1' : ∀ k r, k < σ.length → r ∈ rs → ¬ OK' (.inr r) (.inl k) → hitK k r = true := by
+    intro k r hk hr hn
+    apply Classical.byContradiction
+    intro hh
+    apply hn
+    refine ⟨Classical.byContradiction fun ho => hh (H1 k r hk hr ho), fun j cm hlc sx hsx sy hsy hcx hcy => ?_⟩
+    obtain rfl := memR r sx hsx
+    obtain ⟨c, hc, rfl⟩ := memG k sy hsy
+    exact absurd (List.any_eq_true.mpr ⟨c, hc, C.lcMR oc w c.1 r j cm hE (havail c (hGσ _ _ hc))
+      ((hrs r).mp hr) hlc hcy hcx⟩) hh
+  have H2' : ∀ k r1 r2, k < σ.length → r1 ∈ rs → r2 ∈ rs → hitK k r1 = true → ¬ OK' (.inr r2) (.inr r1) →
+      hitK k r2 = true := by
+    intro k r1 r2 hk hr1 hr2 hh hn
+    apply Classical.byContradiction
+    intro hh2
+    apply hn
+    refine ⟨Classical.byContradiction fun ho => hh2 (H2 k r1 r2 hk hr1 hr2 hh ho),
+      fun j cm hlc sx hsx sy hsy hcx hcy => ?_⟩
+    obtain rfl := memR r2 sx hsx
+    obtain rfl := memR r1 sy hsy
+    apply Nat.le_of_not_lt
+    intro hlt
+    obtain ⟨c, hc, hh'⟩ := List.any_eq_true.mp hh
+    exact hh2 (List.any_eq_true.mpr ⟨c, hc, C.lcRR oc w c.1 r1 r2 j cm hE (havail c (hGσ _ _ hc))
+      ((hrs r1).mp hr1) ((hrs r2).mp hr2) hlc hcy hcx hlt hh'⟩)
+  have H3' : ∀ k k' r, k < σ.length → k' < σ.length → r ∈ rs → hitK k r = true → ¬ OK' (.inl k') (.inr r) →
+      k < k' := by
+    intro k k' r hk hk' hr hh hn
+    apply Classical.byContradiction
+    intro hlt
+    apply hn
+    refine ⟨Classical.byContradiction fun ho => hlt (H3 k k' r hk hk' hr hh ho),
+      fun j cm hlc sx hsx sy hsy hcx hcy => ?_⟩
+    obtain ⟨c, hc, rfl⟩ := memG k' sx hsx
+    obtain rfl := memR r sy hsy
+    exact Nat.le_of_lt (C.lpMR oc w c.1 r j cm hlc hcx hcy)
+  have H4' : ∀ r1 r2, r1 ∈ rs → r2 ∈ rs → r1 ≠ r2 → ¬ OK' (.inr r1) (.inr r2) → [r2, r1] <+ rs := by
+    intro r1 r2 hr1 hr2 hne hn
+    rcases either_sublist hr2 hr1 (Ne.symm hne) with h | h
+    · exact h
+    · exfalso
+      apply hn
+      refine ⟨Classical.byContradiction fun ho => ?_, fun j cm hlc sx hsx sy hsy hcx hcy => ?_⟩
+      · exact nodup_pair_both (C.rules_nodup.sublist List.filter_sublist) h (H4 r1 r2 hr1 hr2 hne ho)
+      · obtain rfl := memR r1 sx hsx
+        obtain rfl := memR r2 sy hsy
+        exact Nat.le_of_lt (C.lpRR oc r1 r2 j cm hlc hcx hcy (h.trans List.filter_sublist))
+  have hpairs' := place_ok σ.length rs (C.rules_nodup.sublist List.filter_sublist) hitK OK' Hgg' H1' H2' H3' H4'
+  have hpairs : ∀ x y, [x, y] <+ order → OK x y := fun x y h => (hpairs' x y h).1
+  have hinl : ∀ k, k < σ.length → (.inl k : Nat ⊕ P.PR) ∈ order := by
+    intro k hk
+    have : k ∈ groups order := by rw [placeOrder_groups σ.length rs hitK]; exact List.mem_range.mpr hk
+    have hmem : ∀ (L : List (Nat ⊕ P.PR)), k ∈ groups L → (.inl k : Nat ⊕ P.PR) ∈ L := by
+      intro L
+      induction L with
+      | nil => intro h; simp [groups] at h
+      | cons a L ih =>
+        intro h
+        cases a with
+        | inl a =>
+          simp only [groups, List.mem_cons] at h
+          rcases h with e | h
+          · rw [e]; exact List.mem_cons_self ..
+          · exact List.mem_cons_of_mem _ (ih h)
+        | inr a => exact List.mem_cons_of_mem _ (ih h)
+    exact hmem order this
   let τP := order.map toE
   have hτP : orderOf C.rules (C.fire oc w) (C.hit oc w) σ = τP := rfl
   rw [hτP]
@@ -3160,17 +3332,92 @@ theorem obl_of_cert_at (C : Cert P) (oc : (j : P.I) → Outs (P.CI j).M V) (w : 
           · simp only [Bool.true_and, Bool.or_eq_true]
             exact .inl ((hD.en c.1 hEn).mpr ⟨c.2, hc⟩)
         · exact ⟨.inr r, inUsers j (.inr r) _ hy', hr, x, hy'⟩
-    · have hm := lastArg_mem cm _ x hx
-      obtain ⟨e, he, hy⟩ := (hflat j _).mp hm
-      rcases hsteps e he j _ hy with ⟨c, hc, hy'⟩ | ⟨r, hr, hy'⟩
-      · exact C.arg oc w j cm hE (.inl c.1) (inUsers j (.inl c.1) _ hy') (havail c hc) x hy'
-      · exact C.arg oc w j cm hE (.inr r) (inUsers j (.inr r) _ hy') hr x hy'
+    · cases hlc : C.lc j cm
+      · have hm := lastArg_mem cm _ x hx
+        obtain ⟨e, he, hy⟩ := (hflat j _).mp hm
+        rcases hsteps e he j _ hy with ⟨c, hc, hy'⟩ | ⟨r, hr, hy'⟩
+        · exact C.argN oc w j cm hE hlc (.inl c.1) (inUsers j (.inl c.1) _ hy') (havail c hc) x hy'
+        · exact C.argN oc w j cm hE hlc (.inr r) (inUsers j (.inr r) _ hy') hr x hy'
+      · -- a last-caller port: the run's last call is the last caller's in `lp`
+        obtain ⟨hsbr, hen⟩ := C.lc_ok j cm hlc
+        have hsig : sigmaJ P oc τP j = order.map (fun e => proj j (tr (toE e))) := by
+          show τP.map _ = _
+          rw [List.map_map]; rfl
+        rw [hsig] at hx
+        obtain ⟨pre, y, post, hord, hy, hpost⟩ := lastArg_flatten_split cm (fun e => proj j (tr (toE e))) order x hx
+        have hyo : y ∈ order := by rw [hord]; exact List.mem_append_right _ (List.mem_cons_self ..)
+        obtain ⟨s, hsy, hsx, hon⟩ : ∃ s ∈ posSteps P G y, (cm, x) ∈ proj j (trS P oc w s) ∧ On P C.fire oc w s := by
+          rcases placeOrder_mem hyo with ⟨r, rfl, hr⟩ | ⟨k, rfl, hk⟩
+          · exact ⟨.inr r, List.mem_singleton_self _, hy, (hrs r).mp hr⟩
+          · have hy2 : (cm, x) ∈ proj j ((G k).flatMap (fun c => (trM P oc w c.1).1)) := by
+              rw [← trGm, ← trG]; exact hy
+            rw [proj_flatMap] at hy2
+            obtain ⟨l, hl, hxl⟩ := List.mem_flatten.mp hy2
+            obtain ⟨c, hc, rfl⟩ := List.mem_map.mp hl
+            refine ⟨.inl c.1, List.mem_map_of_mem (f := fun c => (Sum.inl c.1 : Step P)) hc, hxl, ?_⟩
+            show called P w c.1 = true
+            unfold called
+            cases hEn : P.X.ann.hasEn c.1
+            · cases hA : P.X.ann.alwaysEn c.1
+              · have := C.enV oc w c.1 hE hEn hA (havail c (hGσ _ _ hc)) _ (mem_proj j _ _ hxl)
+                change (P.CI j).ann.hasEn cm = false at this
+                rw [hen] at this; cases this
+              · simp
+            · simp only [Bool.true_and, Bool.or_eq_true]
+              exact .inl ((hD.en c.1 hEn).mpr ⟨c.2, hGσ _ _ hc⟩)
+        apply C.argL oc w j cm hE hlc s (inUsers j s _ hsx) hon x hsx
+        rintro s' - hlt hon' ⟨z, hz⟩
+        obtain ⟨x', hx'o, hs'x', hz'⟩ : ∃ x' ∈ order, s' ∈ posSteps P G x' ∧ (cm, z) ∈ proj j (tr (toE x')) := by
+          rcases s' with m' | r'
+          · obtain ⟨c', hc', rfl⟩ := hcalled m' hon'
+            obtain ⟨k', hk', hck'⟩ := mem_flatten_getD σ c' hc'
+            refine ⟨.inl k', hinl k' hk', List.mem_map_of_mem (f := fun c => (Sum.inl c.1 : Step P)) hck', ?_⟩
+            rw [trG, trGm, proj_flatMap]
+            exact List.mem_flatten.mpr ⟨_, List.mem_map.mpr ⟨c', hck', rfl⟩, hz⟩
+          · exact ⟨.inr r', mem_placeOrder_inr ((hrs r').mpr hon'), List.mem_singleton_self _, hz⟩
+        rw [hord] at hx'o
+        rcases List.mem_append.mp hx'o with hpre | hyp
+        · have hle := (hpairs' x' y (by show [x', y] <+ order; rw [hord]; exact sub_pair_left hpre)).2 j cm hlc s' hs'x' s hsy ⟨z, hz⟩ ⟨x, hsx⟩
+          exact Nat.lt_irrefl _ (Nat.lt_of_lt_of_le hlt hle)
+        · rcases List.mem_cons.mp hyp with rfl | hpo
+          · rcases placeOrder_mem hyo with ⟨r, rfl, -⟩ | ⟨k, rfl, hk⟩
+            · rw [memR r s' hs'x', memR r s hsy] at hlt; exact Nat.lt_irrefl _ hlt
+            · obtain ⟨c, hc, rfl⟩ := memG k s hsy
+              obtain ⟨c', hc', rfl⟩ := memG k s' hs'x'
+              by_cases e : c = c'
+              · subst e; exact Nat.lt_irrefl _ hlt
+              · rcases either_sublist hc hc' e with h | h
+                · have hg : P.X.ann.Group (c.1, w.arg c.1) (c'.1, w.arg c'.1) := by
+                    rw [← harg c (hGσ _ _ hc), ← harg c' (hGσ _ _ hc')]
+                    exact hL.group _ (getD_mem σ k hk) c c' h
+                  have := (C.mmg oc w c.1 c'.1 hE (havail c (hGσ _ _ hc)) (havail c' (hGσ _ _ hc')) hg j _ hsx _ hz).2.1
+                  rw [hsbr] at this; cases this
+                · have hg : P.X.ann.Group (c'.1, w.arg c'.1) (c.1, w.arg c.1) := by
+                    rw [← harg c (hGσ _ _ hc), ← harg c' (hGσ _ _ hc')]
+                    exact hL.group _ (getD_mem σ k hk) c' c h
+                  have := (C.mmg oc w c'.1 c.1 hE (havail c' (hGσ _ _ hc')) (havail c (hGσ _ _ hc)) hg j _ hz _ hsx).2.1
+                  rw [hsbr] at this; cases this
+          · exact hpost x' hpo z hz'
   · -- ready
     intro c hc hnr
     obtain ⟨e, he, hy⟩ := (hflat j _).mp hc
     rcases hsteps e he j _ hy with ⟨c', hc', hy'⟩ | ⟨r, hr, hy'⟩
     · exact C.rdyM oc w c'.1 hE (havail c' hc') _ (mem_proj j _ _ hy') hnr
     · exact C.rdyR oc w r hE hr _ (mem_proj j _ _ hy') hnr
+
+
+/-- **The obligation from a certificate, at the certificate's own order** (`orderOf`). -/
+theorem obl_of_cert_at (C : Cert P) (oc : (j : P.I) → Outs (P.CI j).M V) (w : Wires P.X.M V)
+    (σ : List (List (P.X.M × V))) (hasm : P.asm oc w) (hal : ∀ j, AliasOK P.toB (P.CI j).ann (oc j))
+    (hL : Legal P.X.ann σ) (hD : Drives P.X.ann w σ)
+    (hrdy : ∀ c ∈ σ.flatten, P.X.ann.alwaysRdy c.1 = false → (P.comb oc w).2.rdy c.1 = true) :
+    P.onehot oc w ∧ groups (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) = σ ∧
+      (∀ e ∈ orderOf C.rules (C.fire oc w) (C.hit oc w) σ, StepOK P oc (P.comb oc w).2 e) ∧
+      ∀ j, Legal (P.CI j).ann (sigmaJ P oc (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) j) ∧
+        Drives (P.CI j).ann ((P.comb oc w).1 j) (sigmaJ P oc (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) j) ∧
+        ∀ c ∈ (sigmaJ P oc (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) j).flatten,
+          (P.CI j).ann.alwaysRdy c.1 = false → (oc j).rdy c.1 = true :=
+  obl_of_certL_at P C.toL oc w σ hasm hal hL hD hrdy
 
 /-- **The obligation from a certificate.** -/
 theorem obl_of_cert (C : Cert P) : Obl P := by
@@ -3192,9 +3439,22 @@ structure CertU (F : ParentU V) where
   trU : ∀ (oc : (j : F.I) → Outs (F.CI j).M V) (w : Wires F.X.M V) (s : F.Step) (u u' : F.Step → Nat → V),
     Env F.base oc w → Av F.base fire oc w s → trS (F.at u) oc w s = trS (F.at u') oc w s
 
-/-- **The family obligation from a certificate whose order does not depend on `u`**: the
-    order is `orderOf` of the fixed rules, firing and hits; `σC` is any one `u`'s calls. -/
-theorem oblU_of_cert [Inhabited V] (F : ParentU V) (C : CertU F) : OblU F := by
+/-- **`CertU` with last-caller certificates**: rules, firing and hits fixed before `u`, and the
+    same calls at every `u`. -/
+structure CertUL (F : ParentU V) where
+  rules : List F.PR
+  fire : ((j : F.I) → Outs (F.CI j).M V) → Wires F.X.M V → F.PR → Bool
+  hit : ((j : F.I) → Outs (F.CI j).M V) → Wires F.X.M V → F.X.M → F.PR → Bool
+  cert : ∀ u : F.Step → Nat → V, CertL (F.at u)
+  rules_eq : ∀ u, (cert u).rules = rules
+  fire_eq : ∀ u, (cert u).fire = fire
+  hit_eq : ∀ u, (cert u).hit = hit
+  trU : ∀ (oc : (j : F.I) → Outs (F.CI j).M V) (w : Wires F.X.M V) (s : F.Step) (u u' : F.Step → Nat → V),
+    Env F.base oc w → Av F.base fire oc w s → trS (F.at u) oc w s = trS (F.at u') oc w s
+
+/-- **The family obligation from a last-caller certificate**: the order is `orderOf` of the fixed
+    rules, firing and hits; `σC` is any one `u`'s calls. -/
+theorem oblU_of_certL [Inhabited V] (F : ParentU V) (C : CertUL F) : OblU F := by
   intro oc w σ hasm hal hL hD hrdy
   have hat : ∀ u : F.Step → Nat → V, F.onehot oc w ∧ groups (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) = σ ∧
       (∀ e ∈ orderOf C.rules (C.fire oc w) (C.hit oc w) σ, StepOK (F.at u) oc (F.comb oc w).2 e) ∧
@@ -3203,7 +3463,7 @@ theorem oblU_of_cert [Inhabited V] (F : ParentU V) (C : CertU F) : OblU F := by
         ∀ c ∈ (sigmaJ (F.at u) oc (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) j).flatten,
           (F.CI j).ann.alwaysRdy c.1 = false → (oc j).rdy c.1 = true := by
     intro u
-    have h := obl_of_cert_at (F.at u) (C.cert u) oc w σ hasm hal hL hD hrdy
+    have h := obl_of_certL_at (F.at u) (C.cert u) oc w σ hasm hal hL hD hrdy
     rw [C.rules_eq u, C.fire_eq u, C.hit_eq u] at h
     exact h
   let u0 : F.Step → Nat → V := fun _ _ => default
@@ -3244,6 +3504,23 @@ theorem oblU_of_cert [Inhabited V] (F : ParentU V) (C : CertU F) : OblU F := by
   refine ⟨(hat u0).1, τP, fun j => sigmaJ (F.at u0) oc τP j, (hat u0).2.1, fun j => (hat u0).2.2.2 j,
     fun u => ⟨(hat u).2.2.1, fun j => ?_⟩⟩
   exact List.map_congr_left (fun e he => by rw [hsame u e he])
+
+
+/-- Today's family certificate as a last-caller one. -/
+def CertU.toL {F : ParentU V} (C : CertU F) : CertUL F where
+  rules := C.rules
+  fire := C.fire
+  hit := C.hit
+  cert u := (C.cert u).toL
+  rules_eq u := C.rules_eq u
+  fire_eq u := C.fire_eq u
+  hit_eq u := C.hit_eq u
+  trU := C.trU
+
+/-- **The family obligation from a certificate whose order does not depend on `u`**: the
+    order is `orderOf` of the fixed rules, firing and hits; `σC` is any one `u`'s calls. -/
+theorem oblU_of_cert [Inhabited V] (F : ParentU V) (C : CertU F) : OblU F :=
+  oblU_of_certL F C.toL
 
 end Cert
 
@@ -4604,6 +4881,9 @@ end Modular
 #print axioms Modular.causal_toModuleU
 #print axioms Modular.obl_of_cert_at
 #print axioms Modular.oblU_of_cert
+#print axioms Modular.obl_of_certL_at
+#print axioms Modular.oblU_of_certL
+#print axioms Modular.lastArg_flatten_split
 #print axioms Modular.callsOf_congr
 #print axioms Modular.callsOf_envHw_u
 #print axioms Modular.aliased_toModuleU

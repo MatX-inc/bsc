@@ -18,6 +18,8 @@ mkdir -p build split/build e2e/build
 run build Modular.lean build/Modular
 run build EmitLemmas.lean build/EmitLemmas
 run build Scan.lean build/Scan
+run build LastCaller.lean build/LastCaller
+run build LastCallerEx.lean
 run build SiteCond.lean build/SiteCond
 run build Example.lean build/Example
 run build Scale.lean

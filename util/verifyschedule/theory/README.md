@@ -26,7 +26,11 @@ Prototypes, not yet used by the generator. Lean 4.35, core library only.
   of its contract, unordered against other modules' (not true across
   synthesis boundaries in Verilog).  `Scan.lean` proves the linear scan
   that gives the obligation's pair facts, and `EmitLemmas.lean` and
-  `SiteCond.lean` the emission and site-condition lemmas.  `build.sh`
+  `SiteCond.lean` the emission and site-condition lemmas.
+  `LastCaller.lean` lets a primitive's self-SBR action port take several
+  callers in one cycle (bsc's last-caller mux): a block lemma from the
+  annotations and one law per primitive, keyed by annotation;
+  `LastCallerEx.lean` has its examples and the negatives that must fail.  `build.sh`
   builds everything, capped; the benchmark and e2e files it reads are
   generated (`emit/gen/`, `scan/*/gen*.py`, `e2e/tools/mke2e.py`).  `e2e/`,
   `scan/`, `sites/` and `emit/` hold the prototype emitter and measurement

@@ -187,7 +187,9 @@ class Enc:
 class EncS(Enc):
     """Enc where, while `on`, an atom over a conditional read y of the step stands for the model's
     site value: ite(cond_y, the atom over y's port, the same atom over a fresh value of y).
-    `sub` maps (inst, meth) to cond_y's literal.  Atoms over a fresh value are free (sound for UNSAT)."""
+    `sub` maps (inst, meth) to cond_y's literal.  Atoms over a fresh value are free (sound for UNSAT).
+    Every atom kind is wrapped: b() (ids, comparisons, terms, ports, case arms) and eqatom() ('eq'
+    literals of a reach formula)."""
 
     def __init__(self, D):
         super().__init__(D)
@@ -218,6 +220,11 @@ class EncS(Enc):
         if k not in d:
             d[k] = self.atom(('eq', cx, k))
         return d[k]
+
+    def eqatom(self, x, kexpr):
+        # an 'eq' literal (case arm, array selection) also reads site values while `on` (r7 review s2 minor 1)
+        rd = set(self.D.expr_reads(x)) | set(self.D.expr_reads(kexpr))
+        return self._wrap(rd, lambda S: self._eqatom(x, kexpr, S))
 
     def b(self, e):
         D = self.D

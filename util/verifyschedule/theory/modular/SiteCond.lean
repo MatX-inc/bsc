@@ -1,8 +1,9 @@
 /- SiteCond.lean: unconditional sites, weakened conditions, dropping later-site literals for
-   `SitesOK`, and weakening against the obligation (`oblU_weakens`), over `Modular`'s site lists.
+   `SitesOK`, and weakening against the obligation (`oblU_weakens` for `ParentU.withSites`,
+   `oblU_weakensX` for the generated files' `Emit.withSitesX`), over `Modular`'s site lists.
    A file's conditions need no soundness lemma: its obligation is checked for them, at every
    skipped value with the order fixed first (`OblU`).  Core Lean only. -/
-import Modular
+import EmitLemmas
 
 set_option autoImplicit false
 open scoped List
@@ -511,6 +512,72 @@ theorem oblU_weakens (F : ParentU V) (ssM ssM' : F.X.M → List (Site F.I (fun j
   · rw [← hsig j]
     exact sub2_map _ _ τP (fun e he => hstep j e he)
 
+/-- **Weakening against the obligation, in the generated files' form** (`Emit.withSitesX`: a method's
+    sites and result take its argument `x`, sites from 0).  The conclusion of `oblU_weakens`. -/
+theorem oblU_weakensX (F : ParentU V) (ssM ssM' : F.X.M → V → List (Site F.I (fun j => (F.CI j).M) V))
+    (resM : F.X.M → V → (Nat → V) → Option V) (ssR ssR' : F.PR → List (Site F.I (fun j => (F.CI j).M) V))
+    (resR : F.PR → (Nat → V) → Option V)
+    (hwM : ∀ m x, Weakens (ssM m x) (ssM' m x)) (hwR : ∀ r, Weakens (ssR r) (ssR' r))
+    (hM : ∀ m x, SitesOK (ssM m x) 0) (hM' : ∀ m x, SitesOK (ssM' m x) 0)
+    (hR : ∀ r, SitesOK (ssR r) 0) (hR' : ∀ r, SitesOK (ssR' r) 0)
+    (hself : ∀ m, F.X.ann.conf m m = true ∨ F.X.ann.share m = true)
+    (h : OblU (Emit.withSitesX F ssM resM ssR resR)) :
+    ∀ (oc : (j : F.I) → Outs (F.CI j).M V) (w : Wires F.X.M V) (σ : List (List (F.X.M × V))),
+      F.asm oc w → (∀ j, AliasOK F.toB (F.CI j).ann (oc j)) → Legal F.X.ann σ → Drives F.X.ann w σ →
+      (∀ c ∈ σ.flatten, F.X.ann.alwaysRdy c.1 = false → (F.comb oc w).2.rdy c.1 = true) →
+      F.onehot oc w ∧ ∃ (τP : List (List (F.X.M × V) ⊕ F.PR)) (σC : (j : F.I) → List (List ((F.CI j).M × V))),
+        groups τP = σ ∧
+        (∀ j, Legal (F.CI j).ann (σC j) ∧ Drives (F.CI j).ann ((F.comb oc w).1 j) (σC j) ∧
+          ∀ c ∈ (σC j).flatten, (F.CI j).ann.alwaysRdy c.1 = false → (oc j).rdy c.1 = true) ∧
+        ∀ u' : F.Step → Nat → V,
+          (∀ e ∈ τP, StepOK ((Emit.withSitesX F ssM' resM ssR' resR).at u') oc (F.comb oc w).2 e) ∧
+          ∀ j, Sub2 (σC j) (sigmaJ ((Emit.withSitesX F ssM' resM ssR' resR).at u') oc τP j) := by
+  intro oc w σ hasm hal hL hD hrdy
+  obtain ⟨hoh, τP, σC, hg, hσC, hu⟩ := h oc w σ hasm hal hL hD hrdy
+  refine ⟨hoh, τP, σC, hg, hσC, fun u' => ?_⟩
+  -- the exact family at the weakened environments; a method's at its port's argument
+  let E : F.Step → Nat → V := fun s => match s with
+    | .inl m => envHw (u' (.inl m)) oc (ssM' m (w.arg m)) 0 (u' (.inl m))
+    | .inr r => envHw (u' (.inr r)) oc (ssR' r) 0 (u' (.inr r))
+  obtain ⟨hst, hsig⟩ := hu E
+  have hmeth : ∀ m, (trace oc (runSites (E (.inl m)) (resM m (w.arg m)) (ssM m (w.arg m)) 0 (E (.inl m)))).2 =
+        (trace oc (runSites (u' (.inl m)) (resM m (w.arg m)) (ssM' m (w.arg m)) 0 (u' (.inl m)))).2 ∧
+      (trace oc (runSites (E (.inl m)) (resM m (w.arg m)) (ssM m (w.arg m)) 0 (E (.inl m)))).1 <+
+        (trace oc (runSites (u' (.inl m)) (resM m (w.arg m)) (ssM' m (w.arg m)) 0 (u' (.inl m)))).1 := fun m =>
+    trace_weakens_at _ oc _ (hwM m (w.arg m)) 0 _ _ (hM m _) (hM' m _) (fun k hk => absurd hk (Nat.not_lt_zero _))
+      (fun k _ => rfl)
+  have hrule : ∀ r, (trace oc (runSites (E (.inr r)) (resR r) (ssR r) 0 (E (.inr r)))).2 =
+        (trace oc (runSites (u' (.inr r)) (resR r) (ssR' r) 0 (u' (.inr r)))).2 ∧
+      (trace oc (runSites (E (.inr r)) (resR r) (ssR r) 0 (E (.inr r)))).1 <+
+        (trace oc (runSites (u' (.inr r)) (resR r) (ssR' r) 0 (u' (.inr r)))).1 := fun r =>
+    trace_weakens_at _ oc _ (hwR r) 0 _ _ (hR r) (hR' r) (fun k hk => absurd hk (Nat.not_lt_zero _))
+      (fun k _ => rfl)
+  -- calls in σ carry their port's argument
+  have harg : ∀ g, .inl g ∈ τP → ∀ c ∈ g, c.2 = w.arg c.1 := fun g hgτ c hc =>
+    call_arg hL hD hself c (List.mem_flatten.mpr ⟨g, hg ▸ mem_groups_of_inl hgτ, hc⟩)
+  have hstep : ∀ j, ∀ e ∈ τP, proj j (stepTrace ((Emit.withSitesX F ssM resM ssR resR).at E) oc e) <+
+      proj j (stepTrace ((Emit.withSitesX F ssM' resM ssR' resR).at u') oc e) := by
+    intro j e he
+    apply proj_sublist
+    rcases e with g | r
+    · apply flatMap_sublist
+      intro c hc
+      rw [harg g he c hc]
+      exact (hmeth c.1).2
+    · exact (hrule r).2
+  refine ⟨fun e he => ?_, fun j => ?_⟩
+  · rcases e with g | r
+    · intro c hc
+      have := hst (.inl g) he c hc
+      rw [harg g he c hc] at this ⊢
+      exact (hmeth c.1).1 ▸ this
+    · have h1 : (trace oc (runSites (E (.inr r)) (resR r) (ssR r) 0 (E (.inr r)))).2.isSome = true :=
+        hst (.inr r) he
+      show (trace oc (runSites (u' (.inr r)) (resR r) (ssR' r) 0 (u' (.inr r)))).2.isSome = true
+      rw [← (hrule r).1]; exact h1
+  · rw [← hsig j]
+    exact sub2_map _ _ τP (fun e he => hstep j e he)
+
 end SiteCond
 
 #print axioms SiteCond.readsBefore_always
@@ -532,3 +599,4 @@ end SiteCond
 #print axioms SiteCond.envHw_congr_rho
 #print axioms SiteCond.trace_weakens_at
 #print axioms SiteCond.oblU_weakens
+#print axioms SiteCond.oblU_weakensX

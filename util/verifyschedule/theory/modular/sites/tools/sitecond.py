@@ -38,6 +38,8 @@ from bapkg import APkg, parse_expr  # noqa: E402
 from satc import Enc, EncS, litval  # noqa: E402
 
 SC = bool(os.environ.get('SITES_SC'))   # the both-way short-circuit option (rule.md section 8)
+# round 7 review s2 fixes of the site-value readiness check, all on; probes switch one off to measure it
+RDY_FIX = {'exact': True, 'one_lit': True, 'hw_drop': True}
 DATA = os.environ.get('SITES_DATA') or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
 
 
@@ -171,11 +173,108 @@ def parse_dump(path):
         elif ln.startswith('mutually_exclusive (user):'):
             D['me'] = pairs(ln)
         if sec == 'facts':
-            m = re.match(r'^  (confirmed|UNCONFIRMED) (\S+) / (\S+): (\S+)(?: \(any of the (\d+) uses before\))? then (\S+)', ln)
-            if m:
-                D['facts'].append({'ok': m.group(1) == 'confirmed', 'a': m.group(2), 'b': m.group(3),
-                                   'p': m.group(4), 'q': m.group(6)})
+            f = parse_fact_line(ln)
+            if f:
+                D['facts'].append(f)
     return D
+
+
+def parse_fact_line(ln):
+    # "confirmed a / b: p (any of the n uses before) then q", either indentation (a chain's pairs: 4)
+    m = re.match(r'^\s+(confirmed|UNCONFIRMED) (\S+) / (\S+): (\S+)(?: \(any of the (\d+) uses before\))? then (\S+)\s*$', ln)
+    if not m:
+        return None
+    return {'ok': m.group(1) == 'confirmed', 'a': m.group(2), 'b': m.group(3), 'p': m.group(4), 'q': m.group(6),
+            'n': int(m.group(5)) if m.group(5) is not None else None, 'text': ln.strip()}
+
+
+def strip_copy(label):
+    return re.sub(r'\[\d+\]$', '', label)
+
+
+class BscFacts:
+    """bsc's confirmed use-level disjointness facts, keyed exactly (both steps kept; r7 review s2
+    minor 3).  As schedlean's disjointCandidates builds them:
+      * "a / b: p then q" covers the use p of step a and the use q of step b;
+      * "a / b: K (any of the n uses before) then q" covers the use q of b against every use in a step
+        before b (execution order) of K, a port label, or inst.meth for any copy of the method.
+    A fact text also listed UNCONFIRMED covers nothing.  Each fact is about bsc's conditions (the
+    read's use condition, the call's condition) with the step's guard: a user must check that its
+    own conditions imply them (use_cond)."""
+
+    def __init__(self, dump):
+        self.pos = {st['name']: i for i, st in enumerate(dump['steps'])}
+        bad = set(f['text'].split(' ', 1)[1] for f in dump['facts'] if not f['ok'])
+        self.single, self.chain = {}, {}
+        for f in dump['facts']:
+            body = f['text'].split(' ', 1)[1]
+            if not f['ok'] or body in bad:
+                continue
+            if f['n'] is None:
+                self.single[(f['a'], f['p'], f['b'], f['q'])] = f['text']
+            else:
+                self.chain.setdefault((f['b'], f['q']), []).append((f['p'], f['a'], f['text']))
+        self.uses = {}          # (step, label) -> [condition text]: bsc's conditions of the uses
+        self.guard = {}         # step -> its guard text (bsc's facts include it), or None
+        for st in dump['steps']:
+            self.guard[st['name']] = st['guard']
+            for lab, cond in st['reads']:
+                self.uses.setdefault((st['name'], lab), []).append(cond)
+            for lab, cond, _ in st['calls']:
+                self.uses.setdefault((st['name'], lab), []).append(cond)
+
+    def _one(self, a, pa, b, pb):
+        t = self.single.get((a, pa, b, pb))
+        if t is not None:
+            return t
+        if a not in self.pos or b not in self.pos or not self.pos[a] < self.pos[b]:
+            return None
+        for K, a0, text in self.chain.get((b, pb), []):
+            if (pa == K or strip_copy(pa) == K) and self.pos[a] <= self.pos.get(a0, -1):
+                return text
+        return None
+
+    def covers(self, a, pa, b, pb):
+        """The confirmed fact covering use pa of step a and use pb of step b, or None."""
+        return self._one(a, pa, b, pb) or self._one(b, pb, a, pa)
+
+    def use_cond(self, step, label):
+        """bsc's condition texts of the step's uses with this label (the facts are about their OR)."""
+        return self.uses.get((step, label), [])
+
+    def use_guard(self, step):
+        return self.guard.get(step)
+
+
+def lit_exprs(L):
+    """The expressions a reach literal reads: ('c', e) -> [e]; ('eq', idx, lab) -> [idx, lab]."""
+    return [L[1]] if L[0] == 'c' else [L[1], L[2]]
+
+
+def enc_lit(E, L):
+    return E.b(L[1]) if L[0] == 'c' else E.eqatom(L[1], L[2])
+
+
+def enc_formula(E, f, RCx, fsx, memo=None):
+    """A reach formula's literal in encoder E (site values where E is an EncS that is `on`)."""
+    if memo is None:
+        memo = {}
+    if f in memo:
+        return memo[f]
+    nd_ = fsx.nodes[f]
+    if nd_[0] == 'T':
+        r = 1
+    elif nd_[0] == 'F':
+        r = -1
+    elif nd_[0] == 'lit':
+        v = enc_lit(E, RCx.lit[nd_[1]])
+        r = v if nd_[2] else -v
+    elif nd_[0] == 'and':
+        r = E.AND([enc_formula(E, x, RCx, fsx, memo) for x in nd_[1]])
+    else:
+        r = E.OR([enc_formula(E, x, RCx, fsx, memo) for x in nd_[1]])
+    memo[f] = r
+    return r
 
 
 # ---------------------------------------------------------------- formulas
@@ -330,6 +429,14 @@ class Design:
             for a, b in (('notEmpty', 'i_notEmpty'), ('notFull', 'i_notFull')):
                 if a in ms and b in ms:
                     self.alias[(k, a)] = b
+
+    def exact(self):
+        """This design with every port its own atom (no output aliases): a file's facts quantify
+        over every child output, without AliasOK, so a verdict labelling one must not use them."""
+        import copy
+        D2 = copy.copy(self)
+        D2.alias, D2._canon = {}, {}
+        return D2
 
     # -- Boolean view for the SAT encoder
     def bool_def(self, n):
@@ -954,8 +1061,11 @@ def analyse(ddir, outdir, workdir):
     def linfo(RCx, key):
         k2 = (id(RCx), key)
         if k2 not in litcache:
-            e = RCx.lit[key][1]
-            litcache[k2] = (D.expr_reads(e), D.expr_hw(e))
+            rd, hw = set(), set()
+            for e in lit_exprs(RCx.lit[key]):
+                rd |= D.expr_reads(e)
+                hw |= D.expr_hw(e)
+            litcache[k2] = (frozenset(rd), frozenset(hw))
         return litcache[k2]
 
     def order_pass(isc, rkey, px, RCx, fsx, first=None):
@@ -1139,23 +1249,7 @@ def analyse(ddir, outdir, workdir):
 
     # SAT: encode formulas
     def enc_f(E, f, memo):
-        if f in memo:
-            return memo[f]
-        nd_ = fs.nodes[f]
-        if nd_[0] == 'T':
-            r = 1
-        elif nd_[0] == 'F':
-            r = -1
-        elif nd_[0] == 'lit':
-            L = RC.lit[nd_[1]]
-            v = E.b(L[1]) if L[0] == 'c' else E.eqatom(L[1], L[2])
-            r = v if nd_[2] else -v
-        elif nd_[0] == 'and':
-            r = E.AND([enc_f(E, x, memo) for x in nd_[1]])
-        else:
-            r = E.OR([enc_f(E, x, memo) for x in nd_[1]])
-        memo[f] = r
-        return r
+        return enc_formula(E, f, RC, fs, memo)
 
     def bsc_expr(s):
         try:
@@ -1224,23 +1318,7 @@ def analyse(ddir, outdir, workdir):
         return bool(D.expr_reads(e) & RPORTS)
 
     def enc_x(E, f, memo, RCx, fsx):
-        if f in memo:
-            return memo[f]
-        nd_ = fsx.nodes[f]
-        if nd_[0] == 'T':
-            r = 1
-        elif nd_[0] == 'F':
-            r = -1
-        elif nd_[0] == 'lit':
-            L = RCx.lit[nd_[1]]
-            v = E.b(L[1]) if L[0] == 'c' else E.eqatom(L[1], L[2])
-            r = v if nd_[2] else -v
-        elif nd_[0] == 'and':
-            r = E.AND([enc_x(E, x, memo, RCx, fsx) for x in nd_[1]])
-        else:
-            r = E.OR([enc_x(E, x, memo, RCx, fsx) for x in nd_[1]])
-        memo[f] = r
-        return r
+        return enc_formula(E, f, RCx, fsx, memo)
 
     def rdy_holds(st, s, f, RCx, fsx):
         E = Enc(D)
@@ -1328,15 +1406,28 @@ def analyse(ddir, outdir, workdir):
 
     # (r) in the site-value form (round 7 review s1 M1): a literal over a conditional read y of the
     # step reads y's site value ite(cond_y, port_y, fresh). Checked per site: readiness (guard & R &
-    # !RDY UNSAT) and, where R reads another conditional read, invariance (guard & R != R_ports UNSAT)
+    # !RDY UNSAT) and, where R reads another conditional read, invariance (guard & R != R_ports UNSAT).
+    # Round 7 review s2: the formula is the file's exactly -- one ready literal (the file's), every
+    # port its own atom (DX), 'eq' literals at site values (EncS.eqatom), hardware-wire literals dropped.
+    DX = D.exact()
+
+    def rdy_lit(st, x):
+        """The ready literal the file states for readiness read x: the first of its ready ports the
+        step reads (model.py's choice; condsites.py hands the emitter only this one)."""
+        rd = set((y['inst'], y['meth']) for y in st['sites'] if y['kind'] == 'read')
+        for p in x['rdy']:
+            if p in rd:
+                return p
+        return None
+
     def cond_reads(st):
-        """The step's conditional reads: (inst, meth) -> ('r', ready ports) | ('a', formula)."""
+        """The step's conditional reads: (inst, meth) -> ('r', ready literal or None) | ('a', formula)."""
         out = {}
         for x in st['sites']:
             if x['kind'] != 'read' or not x['need']:
                 continue
             if 'r' in x['need']:
-                out[(x['inst'], x['meth'])] = ('r', x['rdy'])
+                out[(x['inst'], x['meth'])] = ('r', rdy_lit(st, x) if RDY_FIX['one_lit'] else tuple(x['rdy']))
             elif x.get('cond_used', fs.T) != fs.T:
                 out[(x['inst'], x['meth'])] = ('a', x['cond_used'])
         return out
@@ -1344,21 +1435,40 @@ def analyse(ddir, outdir, workdir):
     def f_reads(f, RCx, fsx):
         rd = set()
         for key, pol in fsx.lits(f):
-            rd |= set(D.expr_reads(RCx.lit[key][1]))
+            rd |= linfo(RCx, key)[0]
         return rd
+
+    def rdy_formula(st, s, drop=frozenset()):
+        """R_seq of readiness site s as the file states it: literals over a hardware wire or an input
+        (which the file's R, an operator over the step's reads, cannot read) and literals over `drop`
+        replaced by true (monotone weakening; the verdict is for the result)."""
+        f = s['reach_b']
+        hwk = set(key for key, pol in fsb.lits(f) if linfo(RCb, key)[1]) if RDY_FIX['hw_drop'] else set()
+        if hwk:
+            f = fsb.subst(f, hwk)
+        if drop:
+            f = fsb.subst(f, set(key for key, pol in fsb.lits(f) if linfo(RCb, key)[0] & set(drop)))
+        return f, len(hwk)
+
+    def port_atom(E, Dx, ps):
+        if ps is None:
+            return None
+        if isinstance(ps[0], str):
+            ps = [ps]
+        return E.OR([E.atom(('port', Dx.canon(('call', p[0], p[1], [])))) for p in ps])
 
     def rdy_site_check(st, s, drop=frozenset()):
         """The readiness facts of site s in the site-value form, literals over `drop` removed."""
-        f = s['reach_b']
-        if drop:
-            f = fsb.subst(f, set(key for key, pol in fsb.lits(f) if linfo(RCb, key)[0] & set(drop)))
+        f, nhw = rdy_formula(st, s, drop)
         crs = cond_reads(st)
         Y = sorted(f_reads(f, RCb, fsb) & set(crs))
-        E = EncS(D)
+        Dx = DX if RDY_FIX['exact'] else D
+        lit = rdy_lit(st, s) if RDY_FIX['one_lit'] else tuple(s['rdy'])
+        E = EncS(Dx)
         for y in Y:
             kind, c = crs[y]
             if kind == 'r':
-                E.sub[y] = E.OR([E.atom(('port', D.canon(('call', p[0], p[1], [])))) for p in c])
+                E.sub[y] = port_atom(E, Dx, c) if c is not None else E.atom(('cfree',) + y)
             elif not (f_reads(c, RC, fs) & set(crs)):
                 E.sub[y] = enc_f(E, c, {})
             else:
@@ -1367,17 +1477,22 @@ def analyse(ddir, outdir, workdir):
         E.on = True
         rS = enc_x(E, f, {}, RCb, fsb)
         E.on = False
-        rl = E.OR([E.atom(('port', D.canon(('call', p[0], p[1], [])))) for p in s['rdy']])
-        ok_r = E.sat([g, rS, -rl], workdir) is False
         others = [y for y in Y if y != (s['inst'], s['meth'])]
+        if lit is None:
+            # no ready port read by the step: the file cannot state the fact (fail safe)
+            return dict(f=f, Y=Y, others=others, rdy=False, inv=None if not others else False, ok=False,
+                        lit=None, hw=nhw)
+        rl = port_atom(E, Dx, lit)
+        ok_r = E.sat([g, rS, -rl], workdir) is False
         ok_i = None
         if others:
             rP = enc_x(E, f, {}, RCb, fsb)
             ok_i = E.sat([g, E.OR([E.AND([rS, -rP]), E.AND([-rS, rP])])], workdir) is False
-        return dict(f=f, Y=Y, others=others, rdy=ok_r, inv=ok_i, ok=ok_r and ok_i is not False)
+        return dict(f=f, Y=Y, others=others, rdy=ok_r, inv=ok_i, ok=ok_r and ok_i is not False, lit=lit, hw=nhw)
 
     rv = {'sites': len(rsites), 'ok': 0, 'rdy': 0, 'inv_needed': 0, 'inv': 0, 'self_only': 0,
-          'none': 0, 'left': []}
+          'none': 0, 'left': [], 'hw_lits': 0, 'hw_sites': 0, 'eq_lits': 0, 'eq_over_cond': 0, 'nolit': 0,
+          'lit_not_first': 0}
     for st, s in rsites:
         r_ = rdy_site_check(st, s)
         s['rdy_sv'] = r_
@@ -1387,8 +1502,18 @@ def analyse(ddir, outdir, workdir):
         rv['inv'] += bool(r_['inv'])
         rv['self_only'] += bool(r_['Y']) and not r_['others']
         rv['none'] += not r_['Y']
+        rv['hw_lits'] += r_['hw']
+        rv['hw_sites'] += bool(r_['hw'])
+        rv['nolit'] += r_['lit'] is None
+        rv['lit_not_first'] += RDY_FIX['one_lit'] and r_['lit'] is not None and r_['lit'] != s['rdy'][0]
+        crs_ = set(cond_reads(st))
+        for key, pol in fsb.lits(r_['f']):
+            if RCb.lit[key][0] == 'eq':
+                rv['eq_lits'] += 1
+                rv['eq_over_cond'] += bool(linfo(RCb, key)[0] & crs_)
         if not r_['ok']:
-            rv['left'].append((st['name'], s['label'], 'rdy' if not r_['rdy'] else 'inv'))
+            rv['left'].append((st['name'], s['label'], 'nolit' if r_['lit'] is None else
+                               ('rdy' if not r_['rdy'] else 'inv')))
     res['rdy_sv'] = rv
 
     # the dynamic facts each conditional read needs, under three conditions
@@ -1402,18 +1527,11 @@ def analyse(ddir, outdir, workdir):
               if a and a[0] == 'call' and a[1] == s['inst'] and a[2] == s['meth']]
         return cs or [('lit', "1'd1")]
 
-    # bsc states "a / b: p (any of the k uses before) then q": the later step b and its use q
-    # against every earlier use of p, so a fact is keyed by (b, p, q)
-    confirmed = set()
-    for fct in dump['facts']:
-        if fct['ok']:
-            confirmed.add((fct['b'], fct['p'], fct['q']))
+    # bsc's confirmed facts, keyed by both steps and both uses (BscFacts)
+    BF = BscFacts(dump)
 
     def is_confirmed(st, s, st2, s2):
-        e1, e2 = (st2, s2), (st, s)
-        if e1[0]['idx'] > e2[0]['idx']:
-            e1, e2 = e2, e1
-        return (e2[0]['name'], e1[1]['label'], e2[1]['label']) in confirmed
+        return BF.covers(st['name'], s['label'], st2['name'], s2['label']) is not None
 
     def model_atoms(E, roots):
         # the atoms a satisfying assignment sets (for judging a witness by hand)
@@ -1584,12 +1702,14 @@ def analyse(ddir, outdir, workdir):
                     st['name'], s['label'], 'ok' if s.get('rdy_used') else 'FAILS', 'ok' if s.get('rdy_bsc') else 'fails',
                     s.get('rdy_bias')))
                 sv = s.get('rdy_sv', {})
-                f.write('  site-value form: R reads conditional reads %s; readiness %s; invariance %s\n' % (
-                    sv.get('Y'), 'holds' if sv.get('rdy') else 'FAILS',
-                    'not needed' if sv.get('inv') is None else ('holds' if sv.get('inv') else 'FAILS')))
+                f.write('  site-value form: ready literal %s; hardware-wire literals dropped %s; R reads conditional '
+                        'reads %s; readiness %s; invariance %s\n' % (
+                            sv.get('lit'), sv.get('hw'), sv.get('Y'), 'holds' if sv.get('rdy') else 'FAILS',
+                            'not needed' if sv.get('inv') is None else ('holds' if sv.get('inv') else 'FAILS')))
     # for the end-to-end emitter: the conditional sites and the formulas behind them
-    res['_ctx'] = dict(D=D, need=need_sites, RC=RC, fs=fs, RCb=RCb, fsb=fsb, steps=steps, ap=ap,
-                       rdy_site_check=rdy_site_check, linfo=linfo, enc_f=enc_f)
+    res['_ctx'] = dict(D=D, DX=DX, need=need_sites, RC=RC, fs=fs, RCb=RCb, fsb=fsb, steps=steps, ap=ap,
+                       rdy_site_check=rdy_site_check, rdy_lit=rdy_lit, linfo=linfo, enc_f=enc_f,
+                       bsc_facts=BF, parse=lambda txt: parse_expr(txt, ap.insts))
     return res
 
 
