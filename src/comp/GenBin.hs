@@ -351,7 +351,7 @@ instance Bin CExpr where
     writeBytes (CStructT t ies) = do putI 34; toBin t; toBin ies
     writeBytes (CSelectT i1 i2) = do putI 35; toBin i1; toBin i2
     writeBytes (CLitT t l) = do putI 36; toBin t; toBin l
-    writeBytes (CAnyT pos uk t) = do putI 37; toBin pos; toBin uk
+    writeBytes (CAnyT pos uk t) = do putI 37; toBin pos; toBin uk; toBin t
     writeBytes (CmoduleVerilogT t e b vc vr va vf vs vp) =
         do putI 38; toBin t; toBin e; toBin b; toBin vc; toBin vr; toBin va;
            toBin vf; toBin vs; toBin vp
@@ -477,7 +477,7 @@ instance Bin CStmt where
             1 -> do p <- fromBin; me <- fromBin; ps <- fromBin; e <- fromBin;
                     return (CSBind p me ps e)
             2 -> do ds <- fromBin; return (CSletseq ds)
-            3 -> do ds <- fromBin; return (CSletseq ds)
+            3 -> do ds <- fromBin; return (CSletrec ds)
             4 -> do me <- fromBin; e <- fromBin; return (CSExpr me e)
             n -> internalError $ "GenBin.Bin(CStmt).readBytes: " ++ show n
 
