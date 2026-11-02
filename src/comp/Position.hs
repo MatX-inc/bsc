@@ -2,6 +2,7 @@
 module Position where
 
 import Data.List(partition)
+import Data.Maybe(fromMaybe)
 import qualified Data.Generics as Generic
 
 import Eval(NFData(..))
@@ -82,20 +83,32 @@ instance HasPosition Position where
 -- #############################################################################
 
 
+-- The first useful position, else the first one that is not noPosition,
+-- else noPosition.  This stops at the first useful position: the list is
+-- often built lazily from a walk over an expression (getIExprPosition),
+-- and looking further would walk the rest of the expression.
 firstPos :: [Position] -> Position
-firstPos ps = case filter (/= noPosition) ps of
+firstPos ps = go ps Nothing
+  where go [] fallback = fromMaybe noPosition fallback
+        go (p:rest) fallback
+            | p == noPosition    = go rest fallback
+            | isUsefulPosition p = p
+            | otherwise          = go rest (Just (fromMaybe p fallback))
+
+-- The same answer as firstPos, forced further: to the second useful
+-- position, or to the end of the list when there is at most one.
+-- The Ids a position walk reaches are interned as it forces them, and
+-- Ord Id is intern order, which the def tsorts (AExpand.tsortDefs)
+-- break ties by; a walk whose extent decides generated names keeps
+-- this extent where firstPos stops early.
+firstPosForcing :: [Position] -> Position
+firstPosForcing ps = case filter (/= noPosition) ps of
               []  -> noPosition
               [p] -> p
-              psf -> firstPos2 psf
-
-firstPos2 :: [Position] -> Position
-firstPos2 [] = noPosition
-firstPos2 ps = case filter isUsefulPosition ps of
-              []  -> -- trace("none " ++ (show (length ps)) ++ "\n") $
-                     head ps
-              [p] -> p
-              filtered -> -- trace("first " ++ (show (length filtered)) ++ "\n") $
-                          head filtered
+              psf@(p0:_) -> case filter isUsefulPosition psf of
+                              []  -> p0
+                              [p] -> p
+                              (p:_) -> p
 
 -- #############################################################################
 -- #
