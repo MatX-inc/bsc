@@ -74,23 +74,23 @@ execution order:
   1. take   [method take]
        fires on WILL_FIRE_take, can fire CAN_FIRE_take
        guard CAN_FIRE_take
-       reads outQ.first when 1'b1
-       reads outQ.i_notEmpty when 1'b1
+       reads outQ.first  (hint: used when 1'b1)
+       reads outQ.i_notEmpty  (hint: used when 1'b1)
        calls outQ.deq when 1'd1 with 
        output RDY_take = CAN_FIRE_take
        output take = outQ.first  (when WhenInput "EN_take")
   2. RL_up   [rule up ("AssertedSchedules.bsv", line 30, column 9)]
        fires on WILL_FIRE_RL_up, can fire CAN_FIRE_RL_up
        guard CAN_FIRE_RL_up
-       reads mode.read when 1'b1
-       reads r.read when 1'b1
+       reads mode.read  (hint: used when 1'b1)
+       reads r.read  (hint: used when 1'b1)
        calls r.write when 1'd1 with r_PLUS_1___d4
   3. RL_emitA   [rule emitA ("AssertedSchedules.bsv", line 39, column 9)]
        fires on WILL_FIRE_RL_emitA, can fire CAN_FIRE_RL_emitA
        guard CAN_FIRE_RL_emitA
-       reads mode.read when 1'b1
-       reads outQ.i_notFull when ! NOT_mode_EQ_2___d9
-       reads r.read when mode___d1 == 2'd2
+       reads mode.read  (hint: used when 1'b1)
+       reads outQ.i_notFull  (hint: used when ! NOT_mode_EQ_2___d9)
+       reads r.read  (hint: used when mode___d1 == 2'd2)
        reads r.read out of order: after a call of r.write
        calls outQ.enq when mode_EQ_2___d8 with r___d3
        calls _read_RL_emitA$EN_r.wset when 1'b1 with mode___d1 == 2'd2
@@ -105,8 +105,8 @@ execution order:
   5. RL_down   [rule down ("AssertedSchedules.bsv", line 34, column 9)]
        fires on WILL_FIRE_RL_down, can fire CAN_FIRE_RL_down
        guard CAN_FIRE_RL_down
-       reads limit.read when 1'b1
-       reads r.read when 1'b1
+       reads limit.read  (hint: used when 1'b1)
+       reads r.read  (hint: used when 1'b1)
        reads r.read out of order: after a call of r.write
        calls r.write when 1'd1 with r_MINUS_1___d7
   6. __me_check_0   [rule up]
@@ -116,8 +116,8 @@ execution order:
   7. RL_emitB   [rule emitB ("AssertedSchedules.bsv", line 43, column 9)]
        fires on WILL_FIRE_RL_emitB, can fire CAN_FIRE_RL_emitB
        guard CAN_FIRE_RL_emitB
-       reads limit.read when 1'b1
-       reads outQ.i_notFull when ! NOT_limit_EQ_9_2___d13
+       reads limit.read  (hint: used when 1'b1)
+       reads outQ.i_notFull  (hint: used when ! NOT_limit_EQ_9_2___d13)
        calls outQ.enq when limit_EQ_9___d12 with limit___d5
        calls _read_RL_emitB$EN_limit.wset when 1'b1 with 1'b1
        calls _enq_RL_emitB$EN_outQ.wset when 1'b1 with limit_EQ_9___d12

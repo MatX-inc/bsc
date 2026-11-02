@@ -41,17 +41,17 @@ execution order:
   1. push   [method push]
        fires on WILL_FIRE_push, can fire CAN_FIRE_push
        guard CAN_FIRE_push
-       reads f.i_notFull when 1'b1
+       reads f.i_notFull  (hint: used when 1'b1)
        calls f.enq when 1'd1 with push_x
        output RDY_push = CAN_FIRE_push
   2. RL_drain   [rule drain ("NotEmptyOrder.bsv", line 23, column 9)]
        fires on WILL_FIRE_RL_drain, can fire CAN_FIRE_RL_drain
        guard CAN_FIRE_RL_drain
-       reads b.read when f_i_notEmpty____d1 && (! NOT_f_notEmpty_OR_NOT_g_notEmpty___d6)
-       reads f.first when 1'b1
-       reads f.i_notEmpty when NOT_f_notEmpty_OR_NOT_g_notEmpty_OR_b___d8
-       reads f.notEmpty when (! NOT_g_notEmpty___d5) && f_i_notEmpty____d1 && (! b__h343)
-       reads g.notEmpty when (! NOT_f_notEmpty___d3) && f_i_notEmpty____d1 && (! b__h343)
+       reads b.read  (hint: used when f_i_notEmpty____d1 && (! NOT_f_notEmpty_OR_NOT_g_notEmpty___d6))
+       reads f.first  (hint: used when 1'b1)
+       reads f.i_notEmpty  (hint: used when NOT_f_notEmpty_OR_NOT_g_notEmpty_OR_b___d8)
+       reads f.notEmpty  (hint: used when (! NOT_g_notEmpty___d5) && f_i_notEmpty____d1 && (! b__h343))
+       reads g.notEmpty  (hint: used when (! NOT_f_notEmpty___d3) && f_i_notEmpty____d1 && (! b__h343))
        reads f.notEmpty out of order: after a call of f.enq
        calls r.write when 1'd1 with f_first____d10
        calls f.deq when 1'd1 with 

@@ -27,18 +27,18 @@ execution order:
   1. RL_ra   [rule ra ("BviSchedKinds.bsv", line 46, column 9)]
        fires on WILL_FIRE_RL_ra, can fire CAN_FIRE_RL_ra
        guard CAN_FIRE_RL_ra
-       reads r.read when 1'b1
+       reads r.read  (hint: used when 1'b1)
        calls o.a when 1'd1 with r___d1
   2. RL_rb   [rule rb ("BviSchedKinds.bsv", line 50, column 9)]
        fires on WILL_FIRE_RL_rb, can fire CAN_FIRE_RL_rb
        guard CAN_FIRE_RL_rb
-       reads r.read when 1'b1
+       reads r.read  (hint: used when 1'b1)
        calls o.b when 1'd1 with r___d1
   3. RL_rc   [rule rc ("BviSchedKinds.bsv", line 54, column 9)]
        fires on WILL_FIRE_RL_rc, can fire CAN_FIRE_RL_rc
        guard CAN_FIRE_RL_rc
-       reads o.v when 1'b1
-       reads r.read when 1'b1
+       reads o.v  (hint: used when 1'b1)
+       reads r.read  (hint: used when 1'b1)
        reads o.v out of order: after a call of o.a
        reads o.v out of order: after a call of o.b
        calls o.c when 1'd1 with 
@@ -46,7 +46,7 @@ execution order:
   4. RL_rd   [rule rd ("BviSchedKinds.bsv", line 59, column 9)]
        fires on WILL_FIRE_RL_rd, can fire CAN_FIRE_RL_rd
        guard CAN_FIRE_RL_rd
-       reads q.read when 1'b1
+       reads q.read  (hint: used when 1'b1)
        calls o.c when 1'd1 with 
        calls q.write when 1'd1 with q_MINUS_1___d10
 

@@ -22,15 +22,15 @@ execution order:
   1. setR   [method setR]
        fires on WILL_FIRE_setR, can fire CAN_FIRE_setR
        guard CAN_FIRE_setR
-       reads s.read when 1'b1
+       reads s.read  (hint: used when 1'b1)
        calls r.write when 1'd1 with setR_x
        calls out.write when 1'd1 with s___d1
        output RDY_setR = CAN_FIRE_setR
   2. useR   [method useR]
        fires on WILL_FIRE_useR, can fire CAN_FIRE_useR
        guard CAN_FIRE_useR
-       reads r.read when 1'b1
-       reads s.read when 1'b1
+       reads r.read  (hint: used when 1'b1)
+       reads s.read  (hint: used when 1'b1)
        reads r.read out of order: after a call of r.write
        calls s.write when 1'd1 with s_PLUS_1___d2
        output RDY_useR = CAN_FIRE_useR

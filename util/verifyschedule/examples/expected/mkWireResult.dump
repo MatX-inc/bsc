@@ -21,9 +21,9 @@ children:
 execution order:
   1. get   [value method get ("WireResult.bsv", line 14, column 8)]
        fires on WILL_FIRE_get, can fire CAN_FIRE_get
-       reads r.read when 1'b1
-       reads w.wget when w_whas____d2
-       reads w.whas when 1'b1
+       reads r.read  (hint: used when 1'b1)
+       reads w.wget  (hint: used when w_whas____d2)
+       reads w.whas  (hint: used when 1'b1)
        output RDY_get = CAN_FIRE_get
        output get = r___d1 + IF_w_whas_THEN_w_wget_ELSE_0___d4  (when WhenOutput "RDY_get" WhenNotInput "EN_put")
   2. put   [method put]

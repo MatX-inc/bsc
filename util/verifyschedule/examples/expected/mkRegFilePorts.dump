@@ -29,16 +29,16 @@ children:
 execution order:
   1. peek   [value method peek ("RegFilePorts.bsv", line 22, column 8)]
        fires on WILL_FIRE_peek, can fire CAN_FIRE_peek
-       reads rf.sub[3] when 1'b1
+       reads rf.sub[3]  (hint: used when 1'b1)
        output RDY_peek = CAN_FIRE_peek
        output peek = rf.sub peek_a  (when WhenOutput "RDY_peek")
   2. RL_sum3   [rule sum3 ("RegFilePorts.bsv", line 28, column 9)]
        fires on WILL_FIRE_RL_sum3, can fire CAN_FIRE_RL_sum3
        guard CAN_FIRE_RL_sum3
-       reads i.read when 1'b1
-       reads rf.sub[0] when 1'b1
-       reads rf.sub[1] when 1'b1
-       reads rf.sub[2] when 1'b1
+       reads i.read  (hint: used when 1'b1)
+       reads rf.sub[0]  (hint: used when 1'b1)
+       reads rf.sub[1]  (hint: used when 1'b1)
+       reads rf.sub[2]  (hint: used when 1'b1)
        calls acc.write when 1'd1 with rf_sub_i_PLUS_rf_sub_i_PLUS_1_PLUS_rf_sub_i_PL_ETC___d8
        calls i.write when 1'd1 with i_PLUS_3___d9
   3. poke   [method poke]
@@ -49,7 +49,7 @@ execution order:
   4. RL_fill   [rule fill ("RegFilePorts.bsv", line 33, column 9)]
        fires on WILL_FIRE_RL_fill, can fire CAN_FIRE_RL_fill
        guard CAN_FIRE_RL_fill
-       reads wa.read when 1'b1
+       reads wa.read  (hint: used when 1'b1)
        calls rf.upd when 1'd1 with wa___d10, _0_CONCAT_wa_0_1_MUL_3_2_BITS_7_TO_0___d13
        calls wa.write when 1'd1 with wa_0_PLUS_1___d14
 

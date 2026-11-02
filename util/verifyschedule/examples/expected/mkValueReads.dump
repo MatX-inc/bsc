@@ -1,0 +1,65 @@
+module mkValueReads (package ValueReads), from mkValueReads.ba
+inputs:  
+outputs: 
+
+children:
+  t : TwoMod   [v1 CF v1, v2 CF v2, v1 SB v2]
+    v1 (value)
+      copy -: result t$v1 :: Bit 8
+    v2 (value)
+      copy -: result t$v2 :: Bit 8
+  mode : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result mode$read :: Bit 4
+    write (action)
+  q : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result q$read :: Bit 8
+    write (action)
+      copy -: enable q$EN_write arg q$write_1 :: Bit 8
+  x : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable x$EN_write arg x$write_1 :: Bit 8
+  y : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable y$EN_write arg y$write_1 :: Bit 8
+
+execution order:
+  1. RL_b   [rule b ("ValueReads.bsv", line 35, column 9)]
+       fires on WILL_FIRE_RL_b, can fire CAN_FIRE_RL_b
+       guard CAN_FIRE_RL_b
+       reads mode.read  (hint: used when 1'b1)
+       reads q.read  (hint: used when 1'b1)
+       reads t.v2  (hint: used when mode_ULT_3___d3)
+       calls y.write when 1'd1 with q___d1
+       calls x.write when mode_ULT_3___d3 with t_v2____d4
+  2. RL_a   [rule a ("ValueReads.bsv", line 40, column 9)]
+       fires on WILL_FIRE_RL_a, can fire CAN_FIRE_RL_a
+       guard CAN_FIRE_RL_a
+       reads mode.read  (hint: used when 1'b1)
+       reads q.read  (hint: used when 1'b1)
+       reads t.v1  (hint: used when ! mode_ULE_9___d6)
+       reads t.v1 out of order: after a read of t.v2
+       calls q.write when 1'd1 with q_PLUS_1___d5
+       calls y.write when NOT_mode_ULE_9___d7 with t_v1____d8
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_b RL_a
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
+  confirmed RL_b / RL_a: t.v2 then t.v1

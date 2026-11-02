@@ -33,19 +33,19 @@ execution order:
   1. RL_incr   [rule incr ("CRegPorts.bsv", line 17, column 9)]
        fires on WILL_FIRE_RL_incr, can fire CAN_FIRE_RL_incr
        guard CAN_FIRE_RL_incr
-       reads c.port0__read when 1'b1
-       reads phase.read when 1'b1
+       reads c.port0__read  (hint: used when 1'b1)
+       reads phase.read  (hint: used when 1'b1)
        calls c.port0__write when 1'd1 with c_port0__read_PLUS_1___d3
   2. RL_dbl   [rule dbl ("CRegPorts.bsv", line 22, column 9)]
        fires on WILL_FIRE_RL_dbl, can fire CAN_FIRE_RL_dbl
        guard CAN_FIRE_RL_dbl
-       reads c.port1__read when 1'b1
+       reads c.port1__read  (hint: used when 1'b1)
        calls c.port1__write when 1'd1 with c_port1__read_BITS_6_TO_0_CONCAT_0___d7
   3. RL_obs   [rule obs ("CRegPorts.bsv", line 27, column 9)]
        fires on WILL_FIRE_RL_obs, can fire CAN_FIRE_RL_obs
        guard CAN_FIRE_RL_obs
-       reads c.port2__read when 1'b1
-       reads phase.read when 1'b1
+       reads c.port2__read  (hint: used when 1'b1)
+       reads phase.read  (hint: used when 1'b1)
        calls seen.write when 1'd1 with c_port2__read____d8
        calls phase.write when 1'd1 with NOT_phase___d9
 

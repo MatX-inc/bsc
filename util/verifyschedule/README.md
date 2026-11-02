@@ -53,14 +53,22 @@ The file has five sections:
    earlier step left it. `stepSequential` is the `State` of the last
    versions. A step runs when the hardware fires it. It sees submodule
    outputs as they stand before it, has its guard checked there, and has
-   each action-method call checked against what earlier steps did. A
-   value it reads where the submodule's annotations forbid it (after a
-   call in the cycle that it may not follow, or in one rule with a call it
-   may not share a rule with) is arbitrary: a value of the step's own,
-   which a congruence ties to the hardware's only when the step does not
-   fire or no such call came first. A flag (`illegal_access`,
-   `guard_violated`, an enable) is set once any step sets it; another
-   field keeps what the last step that wrote it wrote.
+   each action-method call, and each system task's reads, checked against
+   what earlier steps did. A value it reads where the submodule's
+   annotations forbid it (after a call in the cycle that it may not
+   follow, or in one rule with a call it may not share a rule with) is
+   arbitrary: a value of the step's own, which a congruence ties to the
+   hardware's only when the step does not fire or no such call came first.
+   A flag (`illegal_access`, `guard_violated`, an enable, a read that a
+   later read may not follow) is set once any step sets it; another field
+   keeps what the last step that wrote it wrote. When a read reaches what
+   a task prints, or what a step does, is worked out from the top (see
+   *The model*). Only for a definition on the way that several others, or
+   the step itself, refer to is the condition the step's own
+   (`<def>@prints@<step>`, `<def>@does@<step>`, a definition when more
+   than one term uses it); along a chain of definitions only one other
+   refers to, the conditions are the same for every step (`<def>@up`,
+   `<def>@reaches@<copy>`, `<def>@reaches@<def>`).
 
    When the module exports conflict-free pairs of methods, each step is
    also stated as an effect on the whole state (`Run.fp.<step>`,
@@ -85,7 +93,8 @@ The file has five sections:
            : Agree i (stepSequential i) (stepScheduled i) = true
 
    `Agree` says the sequential run kept every guard and every method
-   ordering rule, and that both runs make the same calls with the same
+   ordering rule, and printed nothing from a read those rules forbid (see
+   *The model*), and that both runs make the same calls with the same
    arguments and produce the same outputs, each when it matters (a value
    method's result only when it is ready, for instance). When the hardware
    has a parallel mux, the conclusion also has `Hw.oneHot i = true`: its
@@ -181,11 +190,39 @@ nothing here needs that.
   reads are such follows from the expressions each step reads and from the
   annotations alone. A read is not counted after a call by a step bsc
   proved never to fire with it (the theorem's `disjoint_` fact; each step
-  fires only when its `CAN_FIRE` holds). An action method called where the
-  annotations forbid it is illegal (`illegal_access`), with the calls'
-  exact conditions. So is a system task that reads where they forbid it,
-  under the task's own condition: a task's effect is not modelled, so its
-  reads have no value to make arbitrary.
+  fires only when its `CAN_FIRE` holds, and the `CAN_FIRE` the step's firing
+  implies is the very definition the fact names). A read of a value method
+  after a read of another that its annotations forbid (possible only in an
+  imported module) counts only when the earlier read mattered: when the
+  value it read reached what its step did, as for system tasks below.
+  That is sound because a value method has no effect: a read whose value
+  reaches nothing cannot be told apart from no read at all. An action
+  method called where the annotations forbid it is illegal
+  (`illegal_access`), with the calls' exact conditions.
+* **What a system task prints must be what the hardware prints.** A
+  `$display` or other system task has no effect on the submodules, and the
+  tool does not model what it does or compare its arguments with the
+  hardware's task. But what it prints is observable, so its reads are not
+  made arbitrary, as other reads are. Instead the theorem proves that no
+  task prints, or decides whether to print on, a value read where the
+  annotations rule the read out: such a read is illegal (`illegal_access`)
+  when its value can reach the task's condition, or one of its arguments
+  while the condition holds. Whether it can follows the selections between
+  the read and the task, as the sequential semantics makes them: an arm of
+  an `if`, a `case`, a mux or an array selection counts only when its
+  condition selects it, and through any other operator the read reaches
+  the result. The condition is worked out from the top, through the
+  definitions between the task and the read, so that a chain of n
+  selections over n reads takes a size linear in n, not n². So
+  `$display(counters[j].readCount)` in a rule that also calls
+  `counters[j+1].incCount` is legal: it reads every copy, but prints only
+  copy `j`, which the rule does not increment. When the theorem holds,
+  every value a task prints, and whether it prints, depends only on reads
+  the annotations allow where the task runs; such a read sees what the
+  hardware's wire shows once the calls before it agree (the congruences),
+  and the theorem proves that they do. That the hardware's task computes
+  its arguments from the same expressions is `aState`'s transcription, which
+  is not checked.
 * **The datapath is abstract, the control concrete.** Booleans are
   booleans. A wider value is a token and an operator on such values is an
   uninterpreted function, made consistent by Ackermann's congruences. Each
@@ -225,10 +262,10 @@ run again): the conditions under which that analysis says a method use
 matters only choose which disjointness facts to ask bsc's solver for. A
 fact the solver confirms is true of the hardware whatever the condition,
 and a wrong condition only yields a weaker fact or none, so the proof can
-only fail. It trusts this tool's extraction, which
-is not itself verified: a bug there could make the model differ from bsc's
-hardware. The generated file is written to be read against the design, and
-`--dump-design` shows the extracted model.
+only fail. It trusts this tool's extraction, which is not itself verified:
+a bug there could make the model differ from bsc's hardware. The generated
+file is written to be read against the design, and `--dump-design` shows
+the extracted model, with bsc's use conditions marked as hints.
 
 ## How it works
 
@@ -262,13 +299,12 @@ The tool runs in three pure phases:
   refused, as are modules with size parameters.
 * Exported clocks, clock gates and resets are not compared; the tool warns
   when a module has them.
-* `$display` and other system tasks are not modelled. bsc's run-time checks
-  are the exception: they are assertions. A task's reads are checked only
-  against the annotations, under the task's condition.
-* Two value methods of one submodule whose annotations forbid reading one
-  after the other (possible only in an imported module) are handled
-  conservatively: a read after any read of the other by a step that fired
-  is arbitrary, whether or not the earlier read mattered. The tool warns.
+* `$display` and other system tasks are not modelled, and their arguments
+  are not compared with the hardware's; bsc's run-time checks are the
+  exception: they are assertions. What a task prints is checked only
+  against the annotations, as above. Whether a read reaches a task, or what
+  a step does, is decided by the selections on the way, not by the
+  operators: a read in `x && false` still counts.
 * A Lean structure has at most 255 fields. A larger `Inputs` is split into
   parts, and larger hypothesis structures into several. A `View` or `State`
   that large is not handled yet.
@@ -315,3 +351,6 @@ Lean:
 | `UseFact` | A register read after a write it may not follow, which only a fact bsc's solver proves about the two uses' conditions shows not to matter. |
 | `FutureReadC` | A value method read before a call it conflicts with (`C`), in an imported child: the read sees an arbitrary value unless it sees the cycle's calls. |
 | `RdyAfterWrite` | A ready signal reading a register a conflicting method writes first: the read is arbitrary only when its method fires, since the ready signal is an output in every cycle. |
+| `TaskSelect` | `$display(counters[j].readCount)` next to `counters[j+1].incCount`, with `readCount SBR incCount` (bsc's `SBRValueOK_small`, smaller): the task reads every copy, but prints only the one `j` selects, which the rule does not increment. |
+| `TaskChain` | A task printing a value chosen by a chain of selections over reads that are out of order where the chain does not select them: the condition under which each read reaches the task takes a definition per link (`<def>@up`), not one per link and read. |
+| `ValueReads` | An imported child whose value methods may not be read in one order (`v1 SB v2`): a read of `v1` after a read of `v2` counts only when the earlier read mattered, here under a condition disjoint from the later read's. |

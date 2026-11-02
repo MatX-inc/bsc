@@ -26,21 +26,21 @@ execution order:
        output RDY_put = CAN_FIRE_put
   2. cur   [value method cur ("ValueAfterAction.bsv", line 20, column 8)]
        fires on WILL_FIRE_cur, can fire CAN_FIRE_cur
-       reads r.read when 1'b1
+       reads r.read  (hint: used when 1'b1)
        output RDY_cur = CAN_FIRE_cur
        output cur = def__h503  (when WhenOutput "RDY_cur")
   3. fwd   [value method fwd ("ValueAfterAction.bsv", line 20, column 8)]
        fires on WILL_FIRE_fwd, can fire CAN_FIRE_fwd
-       reads bp.wget when bp_whas____d1
-       reads bp.whas when 1'b1
-       reads r.read when ! bp_whas____d1
+       reads bp.wget  (hint: used when bp_whas____d1)
+       reads bp.whas  (hint: used when 1'b1)
+       reads r.read  (hint: used when ! bp_whas____d1)
        output RDY_fwd = CAN_FIRE_fwd
        output fwd = _if_ bp_whas____d1 IF_bp_whas_THEN_bp_wget_ELSE_DONTCARE___d3 def__h503  (when WhenOutput "RDY_fwd")
   4. RL_commit   [rule commit ("ValueAfterAction.bsv", line 24, column 9)]
        fires on WILL_FIRE_RL_commit, can fire CAN_FIRE_RL_commit
        guard CAN_FIRE_RL_commit
-       reads bp.wget when 1'b1
-       reads bp.whas when 1'b1
+       reads bp.wget  (hint: used when 1'b1)
+       reads bp.whas  (hint: used when 1'b1)
        calls r.write when 1'd1 with IF_bp_whas_THEN_bp_wget_ELSE_DONTCARE___d3
 
 use conditions (recomputed):

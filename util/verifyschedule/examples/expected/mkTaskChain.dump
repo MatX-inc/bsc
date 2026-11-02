@@ -1,0 +1,105 @@
+module mkTaskChain (package TaskChain), from mkTaskChain.ba
+inputs:  
+outputs: 
+
+children:
+  r_0 : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r_0$read :: Bit 8
+    write (action)
+      copy -: enable r_0$EN_write arg r_0$write_1 :: Bit 8
+  r_1 : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r_1$read :: Bit 8
+    write (action)
+      copy -: enable r_1$EN_write arg r_1$write_1 :: Bit 8
+  r_2 : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r_2$read :: Bit 8
+    write (action)
+      copy -: enable r_2$EN_write arg r_2$write_1 :: Bit 8
+  r_3 : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r_3$read :: Bit 8
+    write (action)
+      copy -: enable r_3$EN_write arg r_3$write_1 :: Bit 8
+  r_4 : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r_4$read :: Bit 8
+    write (action)
+      copy -: enable r_4$EN_write arg r_4$write_1 :: Bit 8
+  r_5 : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r_5$read :: Bit 8
+    write (action)
+      copy -: enable r_5$EN_write arg r_5$write_1 :: Bit 8
+  x : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result x$read :: Bit 3
+    write (action)
+  y : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result y$read :: Bit 6
+    write (action)
+  q : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result q$read :: Bit 8
+    write (action)
+      copy -: enable q$EN_write arg q$write_1 :: Bit 8
+
+execution order:
+  1. RL_a   [rule a ("TaskChain.bsv", line 21, column 9)]
+       fires on WILL_FIRE_RL_a, can fire CAN_FIRE_RL_a
+       guard CAN_FIRE_RL_a
+       reads q.read  (hint: used when bsc_uses_11)
+       reads x.read  (hint: used when 1'b1)
+       calls r_0.write when x_EQ_0___d2 with q___d3
+       calls r_1.write when x_EQ_1___d4 with q___d3
+       calls r_2.write when x_EQ_2___d5 with q___d3
+       calls r_3.write when x_EQ_3___d6 with q___d3
+       calls r_4.write when x_EQ_4___d7 with q___d3
+       calls r_5.write when x_EQ_5___d8 with q___d3
+  2. RL_b   [rule b ("TaskChain.bsv", line 26, column 9)]
+       fires on WILL_FIRE_RL_b, can fire CAN_FIRE_RL_b
+       guard CAN_FIRE_RL_b
+       reads q.read  (hint: used when 1'b1)
+       reads r_0.read  (hint: used when y_BIT_0___h1052 && (! (x__h508 == 3'd0)))
+       reads r_1.read  (hint: used when (! (x__h508 == 3'd1)) && y_BIT_1___h1078 && (! y_0_BIT_0_1_AND_NOT_x_EQ_0_2___d13))
+       reads r_2.read  (hint: used when (! (x__h508 == 3'd2)) && (! y_0_BIT_1_5_AND_NOT_x_EQ_1_6___d17) && y_BIT_2___h1104 && (! y_0_BIT_0_1_AND_NOT_x_EQ_0_2___d13))
+       reads r_3.read  (hint: used when (! (x__h508 == 3'd3)) && (! y_0_BIT_2_9_AND_NOT_x_EQ_2_0___d21) && (! y_0_BIT_1_5_AND_NOT_x_EQ_1_6___d17) && y_BIT_3___h1130 && (! y_0_BIT_0_1_AND_NOT_x_EQ_0_2___d13))
+       reads r_4.read  (hint: used when (! (x__h508 == 3'd4)) && (! y_0_BIT_3_3_AND_NOT_x_EQ_3_4___d25) && (! y_0_BIT_2_9_AND_NOT_x_EQ_2_0___d21) && (! y_0_BIT_1_5_AND_NOT_x_EQ_1_6___d17) && y_BIT_4___h1156 && (! y_0_BIT_0_1_AND_NOT_x_EQ_0_2___d13))
+       reads r_5.read  (hint: used when (! (x__h508 == 3'd5)) && (! y_0_BIT_4_7_AND_NOT_x_EQ_4_8___d29) && (! y_0_BIT_3_3_AND_NOT_x_EQ_3_4___d25) && (! y_0_BIT_2_9_AND_NOT_x_EQ_2_0___d21) && (! y_0_BIT_1_5_AND_NOT_x_EQ_1_6___d17) && y_BIT_5___h1182 && (! y_0_BIT_0_1_AND_NOT_x_EQ_0_2___d13))
+       reads x.read  (hint: used when bsc_uses_39)
+       reads y.read  (hint: used when bsc_uses_42)
+       a system task (when 1'd1) reads r_0.read out of order: after a call of r_0.write
+       a system task (when 1'd1) reads r_1.read out of order: after a call of r_1.write
+       a system task (when 1'd1) reads r_2.read out of order: after a call of r_2.write
+       a system task (when 1'd1) reads r_3.read out of order: after a call of r_3.write
+       a system task (when 1'd1) reads r_4.read out of order: after a call of r_4.write
+       a system task (when 1'd1) reads r_5.read out of order: after a call of r_5.write
+       calls q.write when 1'd1 with q_PLUS_1___d9
+       1 system task(s), their effects not modelled
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_a RL_b
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
+  confirmed RL_a / RL_b: r_0.write then r_0.read
+  confirmed RL_a / RL_b: r_1.write then r_1.read
+  confirmed RL_a / RL_b: r_2.write then r_2.read
+  confirmed RL_a / RL_b: r_3.write then r_3.read
+  confirmed RL_a / RL_b: r_4.write then r_4.read
+  confirmed RL_a / RL_b: r_5.write then r_5.read

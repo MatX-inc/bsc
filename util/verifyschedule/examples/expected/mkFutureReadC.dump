@@ -30,16 +30,16 @@ execution order:
   1. RL_reader   [rule reader ("FutureReadC.bsv", line 37, column 9)]
        fires on WILL_FIRE_RL_reader, can fire CAN_FIRE_RL_reader
        guard CAN_FIRE_RL_reader
-       reads c.read when 1'b1
-       reads f.val when c__h207
-       reads y.read when 1'b1
+       reads c.read  (hint: used when 1'b1)
+       reads f.val  (hint: used when c__h207)
+       reads y.read  (hint: used when 1'b1)
        calls x.write when c__h207 with f_val____d2
        calls z.write when 1'd1 with y___d3
   2. RL_setter   [rule setter ("FutureReadC.bsv", line 42, column 9)]
        fires on WILL_FIRE_RL_setter, can fire CAN_FIRE_RL_setter
        guard CAN_FIRE_RL_setter
-       reads c.read when 1'b1
-       reads y.read when 1'b1
+       reads c.read  (hint: used when 1'b1)
+       reads y.read  (hint: used when 1'b1)
        calls f.act when NOT_c___d4 with 8'd5
        calls y.write when 1'd1 with y_PLUS_1___d5
 

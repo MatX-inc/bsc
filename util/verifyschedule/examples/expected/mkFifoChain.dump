@@ -76,38 +76,38 @@ execution order:
   1. RL_s0   [rule s0 ("FifoChain.bsv", line 25, column 9)]
        fires on WILL_FIRE_RL_s0, can fire CAN_FIRE_RL_s0
        guard CAN_FIRE_RL_s0
-       reads n.read when 1'b1
-       reads q2.i_notFull when 1'b1
+       reads n.read  (hint: used when 1'b1)
+       reads q2.i_notFull  (hint: used when 1'b1)
        calls q2.enq when 1'd1 with n___d2
        calls n.write when 1'd1 with n_PLUS_1___d3
   2. RL_s2   [rule s2 ("FifoChain.bsv", line 35, column 9)]
        fires on WILL_FIRE_RL_s2, can fire CAN_FIRE_RL_s2
        guard CAN_FIRE_RL_s2
-       reads qb_rv.port0__read when ql_i_notEmpty____d12
-       reads ql.first when 1'b1
-       reads ql.i_notEmpty when ! qb_rv_port0__read_BIT_8___d10
+       reads qb_rv.port0__read  (hint: used when ql_i_notEmpty____d12)
+       reads ql.first  (hint: used when 1'b1)
+       reads ql.i_notEmpty  (hint: used when ! qb_rv_port0__read_BIT_8___d10)
        calls qb_rv.port0__write when 1'd1 with _1_CONCAT_ql_first__4_PLUS_1_5___d16
        calls ql.deq when 1'd1 with 
   3. RL_s1   [rule s1 ("FifoChain.bsv", line 30, column 9)]
        fires on WILL_FIRE_RL_s1, can fire CAN_FIRE_RL_s1
        guard CAN_FIRE_RL_s1
-       reads q2.first when 1'b1
-       reads q2.i_notEmpty when ql_i_notFull____d4
-       reads ql.i_notFull when q2_i_notEmpty____d5
+       reads q2.first  (hint: used when 1'b1)
+       reads q2.i_notEmpty  (hint: used when ql_i_notFull____d4)
+       reads ql.i_notFull  (hint: used when q2_i_notEmpty____d5)
        calls ql.enq when 1'd1 with q2_first_PLUS_1___d8
        calls q2.deq when 1'd1 with 
   4. RL_s4   [rule s4 ("FifoChain.bsv", line 45, column 9)]
        fires on WILL_FIRE_RL_s4, can fire CAN_FIRE_RL_s4
        guard CAN_FIRE_RL_s4
-       reads qp_rv.port0__read when 1'b1
-       reads sum.read when 1'b1
+       reads qp_rv.port0__read  (hint: used when 1'b1)
+       reads sum.read  (hint: used when 1'b1)
        calls sum.write when 1'd1 with sum_9_PLUS_qp_rv_port0__read__7_BITS_7_TO_0_0___d31
        calls qp_rv.port0__write when 1'd1 with _0_CONCAT_DONTCARE___d26
   5. RL_s3   [rule s3 ("FifoChain.bsv", line 40, column 9)]
        fires on WILL_FIRE_RL_s3, can fire CAN_FIRE_RL_s3
        guard CAN_FIRE_RL_s3
-       reads qb_rv.port1__read when 1'b1
-       reads qp_rv.port1__read when qb_rv_port1__read__7_BIT_8___d18
+       reads qb_rv.port1__read  (hint: used when 1'b1)
+       reads qp_rv.port1__read  (hint: used when qb_rv_port1__read__7_BIT_8___d18)
        calls qp_rv.port1__write when 1'd1 with _1_CONCAT_qb_rv_port1__read__7_BITS_7_TO_0_3_PL_ETC___d25
        calls qb_rv.port1__write when 1'd1 with _0_CONCAT_DONTCARE___d26
 

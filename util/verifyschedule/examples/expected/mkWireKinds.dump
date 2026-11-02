@@ -64,7 +64,7 @@ execution order:
   1. RL_produce   [rule produce ("WireKinds.bsv", line 34, column 9)]
        fires on WILL_FIRE_RL_produce, can fire CAN_FIRE_RL_produce
        guard CAN_FIRE_RL_produce
-       reads src.read when 1'b1
+       reads src.read  (hint: used when 1'b1)
        calls rw.wset when 1'd1 with src___d1
        calls w.wset when 1'd1 with src_PLUS_1___d2
        calls dw.wset when 1'd1 with src_PLUS_2___d4
@@ -72,24 +72,24 @@ execution order:
   2. RL_tick   [rule tick ("WireKinds.bsv", line 29, column 9)]
        fires on WILL_FIRE_RL_tick, can fire CAN_FIRE_RL_tick
        guard CAN_FIRE_RL_tick
-       reads src.read when 1'b1
+       reads src.read  (hint: used when 1'b1)
        calls src.write when 1'd1 with src_PLUS_1___d2
        calls bw.wset when 1'd1 with src___d1
   3. RL_consume_w   [rule consume_w ("WireKinds.bsv", line 42, column 9)]
        fires on WILL_FIRE_RL_consume_w, can fire CAN_FIRE_RL_consume_w
        guard CAN_FIRE_RL_consume_w
-       reads w.wget when 1'b1
-       reads w.whas when 1'b1
+       reads w.wget  (hint: used when 1'b1)
+       reads w.whas  (hint: used when 1'b1)
        calls sinkW.write when 1'd1 with w_wget____d6
   4. RL_consume_rest   [rule consume_rest ("WireKinds.bsv", line 47, column 9)]
        fires on WILL_FIRE_RL_consume_rest, can fire CAN_FIRE_RL_consume_rest
        guard CAN_FIRE_RL_consume_rest
-       reads bw.wget when 1'b1
-       reads dw.wget when dw_whas____d10
-       reads dw.whas when 1'b1
-       reads pw.whas when 1'b1
-       reads rw.wget when rw_whas____d7
-       reads rw.whas when 1'b1
+       reads bw.wget  (hint: used when 1'b1)
+       reads dw.wget  (hint: used when dw_whas____d10)
+       reads dw.whas  (hint: used when 1'b1)
+       reads pw.whas  (hint: used when 1'b1)
+       reads rw.wget  (hint: used when rw_whas____d7)
+       reads rw.whas  (hint: used when 1'b1)
        calls sink.write when 1'd1 with IF_rw_whas_THEN_rw_wget_ELSE_0_PLUS_IF_dw_whas_ETC___d15
        calls flag.write when 1'd1 with pw_whas____d16
 

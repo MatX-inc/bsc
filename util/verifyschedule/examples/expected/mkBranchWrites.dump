@@ -28,10 +28,10 @@ execution order:
   1. RL_step   [rule step ("BranchWrites.bsv", line 23, column 9)]
        fires on WILL_FIRE_RL_step, can fire CAN_FIRE_RL_step
        guard CAN_FIRE_RL_step
-       reads mode.read when 1'b1
-       reads r.read when bsc_uses_1
-       reads s.read when ! sel__h184
-       reads sel.read when 1'b1
+       reads mode.read  (hint: used when 1'b1)
+       reads r.read  (hint: used when bsc_uses_1)
+       reads s.read  (hint: used when ! sel__h184)
+       reads sel.read  (hint: used when 1'b1)
        calls r.write when 1'd1 with IF_sel_THEN_r_PLUS_1_ELSE_s___d5
        calls s.write when _dfoo1 with _dfoo2
        calls sel.write when 1'd1 with NOT_sel___d10

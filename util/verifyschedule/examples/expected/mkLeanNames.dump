@@ -17,19 +17,19 @@ children:
 execution order:
   1. init   [value method init ("LeanNames.bsv", line 13, column 8)]
        fires on WILL_FIRE_init, can fire CAN_FIRE_init
-       reads rec.read when 1'b1
+       reads rec.read  (hint: used when 1'b1)
        output RDY_init = CAN_FIRE_init
        output init = rec___d1  (when WhenOutput "RDY_init")
   2. hw   [value method hw ("LeanNames.bsv", line 13, column 8)]
        fires on WILL_FIRE_hw, can fire CAN_FIRE_hw
-       reads hwReg.read when 1'b1
+       reads hwReg.read  (hint: used when 1'b1)
        output RDY_hw = CAN_FIRE_hw
        output hw = hwReg__h269  (when WhenOutput "RDY_hw")
   3. RL_using   [rule using ("LeanNames.bsv", line 17, column 9)]
        fires on WILL_FIRE_RL_using, can fire CAN_FIRE_RL_using
        guard CAN_FIRE_RL_using
-       reads hwReg.read when 1'b1
-       reads rec.read when 1'b1
+       reads hwReg.read  (hint: used when 1'b1)
+       reads rec.read  (hint: used when 1'b1)
        calls hwReg.write when 1'd1 with NOT_hwReg___d5
   4. mk   [method mk]
        fires on WILL_FIRE_mk, can fire CAN_FIRE_mk

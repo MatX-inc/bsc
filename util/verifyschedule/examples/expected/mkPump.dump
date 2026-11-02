@@ -22,21 +22,21 @@ execution order:
   1. take   [method take]
        fires on WILL_FIRE_take, can fire CAN_FIRE_take
        guard CAN_FIRE_take
-       reads src.RDY_pop when 1'b1
+       reads src.RDY_pop  (hint: used when 1'b1)
        calls src.pop when 1'd1 with 
        output RDY_take = CAN_FIRE_take
        output take = src_pop___d5 + take_bias  (when WhenInput "EN_take")
   2. total   [value method total ("ActionValuePump.bsv", line 36, column 8)]
        fires on WILL_FIRE_total, can fire CAN_FIRE_total
-       reads acc.read when 1'b1
+       reads acc.read  (hint: used when 1'b1)
        output RDY_total = CAN_FIRE_total
        output total = acc___d4  (when WhenOutput "RDY_total")
   3. RL_drain   [rule drain ("ActionValuePump.bsv", line 41, column 9)]
        fires on WILL_FIRE_RL_drain, can fire CAN_FIRE_RL_drain
        guard CAN_FIRE_RL_drain
-       reads acc.read when 1'b1
-       reads en.read when src_RDY_pop____d1
-       reads src.RDY_pop when en___d2
+       reads acc.read  (hint: used when 1'b1)
+       reads en.read  (hint: used when src_RDY_pop____d1)
+       reads src.RDY_pop  (hint: used when en___d2)
        calls src.pop when 1'd1 with 
        calls acc.write when 1'd1 with acc_PLUS_src_pop___d6
 

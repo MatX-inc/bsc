@@ -14,13 +14,21 @@ whose main theorem says that, in every clock cycle,
     in the schedule's logical execution order, produces; and
 
   * that one-rule-at-a-time execution is itself legal: every rule's guard
-    holds where the rule runs, and no submodule has its action methods
-    called in an order its scheduling annotations forbid.
+    holds where the rule runs, no submodule has its action methods called
+    in an order its scheduling annotations forbid, and no system task
+    prints, or decides whether to print on, a value read where those
+    annotations forbid the read.
 
 A value method read where its submodule's annotations forbid it (after a
 call in the cycle that it may not follow) returns an arbitrary value in that
 execution, a universally quantified variable, so the agreement must hold
-whatever the value is.
+whatever the value is.  What a system task (@$display@ and the like) prints
+is observable, so a task's reads are not made arbitrary: such a read is
+illegal when its value can reach the task's condition, or one of its
+arguments while the condition holds, following the selections on the way
+('reachPass').  Every value a task prints is then one the submodules promise
+where the task runs.  A task's effect is not modelled otherwise, and its
+arguments are not compared with the hardware's.
 
 A second theorem says the same of the orders a parent may choose: for each
 pair of methods the module exports as conflict-free, the order that runs
@@ -47,10 +55,10 @@ expressions into Lean.  bsc's use analysis ('AUses.buildUseMaps', run again)
 only chooses which disjointness facts to ask bsc's solver for: a read is
 arbitrary wherever the annotations rule it out, whatever the use conditions
 say, so a wrong use condition can only make a proof fail.  It does not rely
-on the scheduler or on 'aState': if the hardware
-they produce does not implement the rules, the proof fails, usually with a
-counterexample.  It covers the 'ASPackage' only, not the passes of the
-Verilog back end after 'aState' (wire inlining, renaming and the like).
+on the scheduler or on 'aState': if the hardware they produce does not
+implement the rules, the proof fails, usually with a counterexample.  It
+covers the 'ASPackage' only, not the passes of the Verilog back end after
+'aState' (wire inlining, renaming and the like).
 
 The program is three phases:
 
@@ -152,6 +160,9 @@ main = do
         else do
             let proof = analyse design facts
                 file  = fromMaybe (leanNamespace design ++ ".lean") (optOutput opts)
+            case pfErrors proof of
+                [] -> return ()
+                es -> die (intercalate "; " es)
             withFile file WriteMode $ \h -> do
                 hSetEncoding h utf8
                 hPutStr h (emitLean design proof)
@@ -373,13 +384,13 @@ data Step = Step
       -- in the expressions themselves (through definitions)
     , stChecks   :: [AExpr]          -- ^ conditions of bsc's run-time checks
     , stTasks    :: Int              -- ^ system tasks (not modelled)
-    , stTaskReads :: [(AExpr, [Port], [Port])]
-      -- ^ each system task's condition, the copies that reads, and the
-      -- copies its arguments read
+    , stTaskReads :: [(AExpr, [AExpr], [Port])]
+      -- ^ each system task's condition, its arguments, and the copies the
+      -- two read
     , stSites    :: [Site]           -- ^ its reads the annotations rule out
-    , stTaskSites :: [(Maybe AExpr, [Site])]
-      -- ^ those of its system tasks, each group with the condition under
-      -- which the task makes it (none: a read of the condition itself)
+    , stTaskSites :: [(AExpr, [AExpr], [Site])]
+      -- ^ those of its system tasks, with each task's condition and
+      -- arguments (every task, in the order of 'stTaskReads')
     , stOutputs  :: [Output]         -- ^ module outputs observed at this step
     }
 
@@ -387,9 +398,10 @@ data Step = Step
 -- value-method copy read, and the use of the same submodule it may not come
 -- after.  That use is a call of an action copy by an earlier step (in some
 -- checked order), or by the step itself when the two may not share a rule
--- ('siWithin'); or, failing any better knowledge, a read of another value
--- method by an earlier step.  Such a read sees an arbitrary value when the
--- step fires and the use was made.
+-- ('siWithin'); or a read of another value method by an earlier step, which
+-- counts when the value it read reached what that step did ('dReadFlags').
+-- Such a read sees an arbitrary value when the step fires and the use was
+-- made.
 data Site = Site { siPort :: Port, siUse :: Port, siWithin :: Bool }
 
 data StepKind = RuleStep | ActionMethodStep | ValueMethodStep
@@ -454,7 +466,12 @@ data Design = Design
       -- it out ('stSites')
     , dReadFlags  :: [Port]
       -- ^ value-method copies a later read of another value method may not
-      -- follow: whether a step read each this cycle is recorded
+      -- follow: whether a step's read of each mattered this cycle is recorded
+    , dRelied     :: [String]
+      -- ^ the CAN_FIRE signals of the steps whose disjointness facts left
+      -- reads out of 'stSites' ('havocSites') because of their sequential
+      -- firing ('ViaSequential'): each must be one definition in both
+      -- semantics
     , dUnspec     :: String                -- ^ @-unspecified-to@
     , dWarnings   :: [String]
     }
@@ -761,7 +778,7 @@ extractDesign path version abmi aspkg = do
                                      | f <- ifc, isMethodField f, not (isRdyId (aif_name f))
                                      , g <- M.findWithDefault [] (mkRdyId (aif_name f)) rdyIfcMap ]
             , dOrders = [], dUnrealized = [], dExportedCF = [], dUseDefs = useDefs
-            , dHavocPorts = S.empty, dReadFlags = []
+            , dHavocPorts = S.empty, dReadFlags = [], dRelied = []
             , dUnspec = unSpecTo (abmi_flags abmi)
             , dWarnings = [ "outputs not compared (not method results): " ++ unwords otherOuts | not (null otherOuts) ]
                           ++ [ "bsc reported a dynamic execution order (" ++ takeWhile (/= '\n') w ++ ")"
@@ -787,14 +804,10 @@ extractDesign path version abmi aspkg = do
         stepMapOf ss = M.fromListWith (\_ old -> old) [ (stName st, st) | st <- ss ]
         ordered = partial { dSteps = steps, dStepMap = stepMapOf steps, dMethodSteps = stepsMap
                           , dOrders = orders, dUnrealized = unrealized, dExportedCF = cfs }
-        (sited, havoc, flags) = havocSites ordered
-        flagNote = [ "reads of value methods after reads of others their annotations forbid in one "
-                     ++ "cycle (" ++ unwords (map portLabel flags) ++ ") see arbitrary values: a "
-                     ++ "fallback that does not know when the earlier reads matter"
-                   | not (null flags) ]
+        (sited, havoc, flags, relied) = havocSites ordered
     return ordered { dSteps = sited, dStepMap = stepMapOf sited
-                   , dHavocPorts = havoc, dReadFlags = flags
-                   , dWarnings = dWarnings partial ++ swapNotes ++ flagNote }
+                   , dHavocPorts = havoc, dReadFlags = flags, dRelied = relied
+                   , dWarnings = dWarnings partial ++ swapNotes }
   where
     clockResetIds (AAI_Clock o g) = getIdString o : maybe [] (pure . getIdString) g
     clockResetIds (AAI_Reset r)   = [getIdString r]
@@ -1122,7 +1135,7 @@ extractStep d lks callCopy useConds hwOuts sid =
             , stGuard = Just (arule_pred r), stCalls = calls, stChecks = checks
             , stTasks = length [ () | a <- arule_actions r, isTask a ]
             , stReads = readsOf exprs, stReadSites = found exprs
-            , stTaskReads = [ (c, found [c], found args) | a <- arule_actions r, isTask a, (c : args) <- [aact_args a] ]
+            , stTaskReads = [ (c, args, found (c : args)) | a <- arule_actions r, isTask a, (c : args) <- [aact_args a] ]
             , stSites = [], stTaskSites = []
             , stOutputs = outs }
     isTask a  = case a of { AFCall {} -> not (aact_assump a); ATaskAction {} -> not (aact_assump a); _ -> False }
@@ -1157,7 +1170,12 @@ extractStep d lks callCopy useConds hwOuts sid =
 
 -- | The value-method copies an expression reads, through definitions.
 exprReads :: Design -> AExpr -> S.Set Port
-exprReads d = \e0 -> into e0 S.empty   -- (the table is made once per design)
+exprReads d = fst (readTables d)
+
+-- | 'exprReads', and the copies each definition reads, from one table
+-- (made once per design, for every expression they are applied to).
+readTables :: Design -> (AExpr -> S.Set Port, String -> S.Set Port)
+readTables d = (\e0 -> into e0 S.empty, \n -> ML.findWithDefault S.empty n table)
   where
     -- knot-tied through the definitions, so the table must be lazy
     table = ML.map (\df -> into (adef_expr df) S.empty) (dSeqDefs d)
@@ -1170,6 +1188,7 @@ exprReads d = \e0 -> into e0 S.empty   -- (the table is made once per design)
             in foldr into (maybe acc (`S.insert` acc) here) args
         ATupleSel _ x _   -> into x acc
         ATuple _ xs       -> foldr into acc xs
+        ASAny _ (Just v)  -> into v acc
         APrim _ _ _ xs    -> foldr into acc xs
         AFunCall { ae_args = xs } -> foldr into acc xs
         ANoInlineFunCall { ae_args = xs } -> foldr into acc xs
@@ -1196,68 +1215,86 @@ posNote i = let p = ppString (getIdPosition i)
 -- matters is left to the exact conditions of the calls and to the proof.
 
 -- | Each step with its sites ('stSites', 'stTaskSites'), the copies with a
--- site, and the value copies whose reads a later read may not follow
--- ('dReadFlags').
+-- site, the value copies whose reads a later read may not follow
+-- ('dReadFlags'), and the CAN_FIRE signals the sites rely on ('dRelied').
 --
 -- A read at step x is a site for a use u when a step making u comes before
 -- x in the schedule's order or, when other orders are checked, in one of
 -- them (a moved step runs after the steps of its range that stay,
--- 'orderBlock').  A step bsc proved never to fire with x does not count:
--- the theorem has that fact ('disjoint_' in section 5) whenever both steps
--- have a CAN_FIRE, and each fires only when its CAN_FIRE holds
--- ('firesOnlyWhenCan'), so whenever x fires no step it leaves out made u.
+-- 'orderBlock').  A use is a call of an action copy, or a read of a value
+-- copy (in the step's own expressions or a system task's).  A step bsc
+-- proved never to fire with x does not count: the theorem has that fact
+-- ('disjoint_' in section 5) whenever both steps have a CAN_FIRE, and each
+-- fires only when its CAN_FIRE holds ('firesOnlyWhenCan'), so whenever x
+-- fires no step it leaves out made u.
 --
 -- The work is per read and use, not per pair of steps: the steps that make
 -- each use are a set of positions, and whether one in a range of positions
 -- is not left out is a few lookups, each meeting a left-out position once.
-havocSites :: Design -> ([Step], S.Set Port, [Port])
-havocSites d = (sited, S.fromList [ siPort s | st <- sited, s <- stSites st ], flagPorts)
+-- For a block of several moved steps, the positions of the steps of its
+-- range that stay are made once per block and use, so that no moved step's
+-- range walks past the other moved steps.
+havocSites :: Design -> ([Step], S.Set Port, [Port], [String])
+havocSites d = (sited, S.fromList [ siPort s | st <- sited, s <- stSites st ], flagPorts, relied)
   where
     steps = dSteps d
     stepArr = IM.fromList (zip [0 :: Int ..] steps)
     pos = M.fromList (zip (map stName steps) [0 :: Int ..])
     distinct = M.size pos == length steps
     callsAt = IM.map (\st -> S.fromList (map clPort (stCalls st))) stepArr
-    -- each use, with the positions of the steps that make it: the action
-    -- copies they call, and the value copies they read
-    usePos = M.fromListWith IS.union
-                 ([ (c, IS.singleton k) | (k, cs) <- IM.toList callsAt, c <- S.toList cs ]
-                  ++ [ (p, IS.singleton k) | (k, st) <- IM.toList stepArr, p <- stReadSites st ])
+    taskReads st = [ p | (_, _, ps) <- stTaskReads st, p <- ps ]
+    -- the uses of each step: the action copies it calls, and the value
+    -- copies it reads
+    usesAt = IM.map (\st -> S.unions [ S.fromList (map clPort (stCalls st)), S.fromList (stReadSites st)
+                                     , S.fromList (taskReads st) ])
+                    stepArr
+    -- each use, with the positions of the steps that make it
+    usePos = M.fromListWith IS.union [ (u, IS.singleton k) | (k, us) <- IM.toList usesAt, u <- S.toList us ]
     useIdx = useIndex id (M.keys usePos)
     -- the uses a read may not follow: action copies, and value copies of
     -- other methods (two reads of one method see the same value)
-    readPorts = S.unions [ S.fromList (stReadSites st ++ concat [ cr ++ ar | (_, cr, ar) <- stTaskReads st ])
-                         | st <- steps ]
+    readPorts = S.unions [ S.fromList (stReadSites st ++ taskReads st) | st <- steps ]
     candidates = ML.fromList [ (p, [ u | u <- concat (conflicting d NoPrecede p useIdx)
                                        , ptKind u /= ValueMethod || ptMeth u /= ptMeth p ])
                              | p <- S.toList readPorts ]
     candidatesOf p = ML.findWithDefault [] p candidates
-    -- the ranges of positions that come before each step in some order,
-    -- each with the positions in it that do not (moved with the step)
-    extra | not distinct = IM.empty
-          | otherwise = IM.fromListWith (++) (concat
-              [ case orderBlock pos o of
-                    Just (_, t, [x]) -> [(x, [(x + 1, t, IS.empty)])]
-                    Just (_, t, ms)  -> [ (x, [(x + 1, t, IS.fromList ms)]) | x <- ms ]
-                    Nothing -> []
-              | o <- drop 1 (dOrders d) ])
+    -- the blocks the other orders move: one step, or several
+    blocks | not distinct = []
+           | otherwise = [ b | o <- drop 1 (dOrders d), Just b@(_, _, _ : _) <- [orderBlock pos o] ]
+    multi = zip [0 :: Int ..] [ b | b@(_, _, _ : _ : _) <- blocks ]
+    -- of each block of several steps, the positions in its range of the
+    -- steps that stay, by the use they make (each block's made when first
+    -- asked for)
+    stays = ML.fromList [ (b, M.fromListWith IS.union [ (u, IS.singleton k) | k <- [lo .. t - 1], IS.notMember k movedSet
+                                                                          , u <- S.toList (usesAt IM.! k) ])
+                        | (b, (lo, t, moved)) <- multi, let movedSet = IS.fromList moved ]
+    -- the ranges of positions that come before each step in some order:
+    -- the positions before it; those up to the end of its range, for a step
+    -- moved alone (the longest of those); and for a step of a block of
+    -- several, those of the block's staying steps after it
+    extra = IM.fromListWith (++) ([ (x, [(x + 1, t, Nothing)]) | (_, t, [x]) <- blocks ]
+                                  ++ [ (x, [(x + 1, t, Just b)]) | (b, (_, t, moved)) <- multi, x <- moved ])
     rangesOf k =
         let rs = IM.findWithDefault [] k extra
-            singles = [ t | (_, t, moved) <- rs, IS.null moved ]
-        in (0, k, IS.empty) : [ (k + 1, maximum singles, IS.empty) | not (null singles) ]
-           ++ [ r | r@(_, _, moved) <- rs, not (IS.null moved) ]
+            singles = [ t | (_, t, Nothing) <- rs ]
+        in (0, k, Nothing) : [ (k + 1, maximum singles, Nothing) | not (null singles) ]
+           ++ [ r | r@(_, _, Just _) <- rs ]
     -- the steps bsc proved never fire with each, by the facts the theorem has
+    same = sameAtHw d
     canFireDef st = M.member (stCanFire st) (dHwDefs d)
-    prunable
-        | not distinct = IM.empty
-        | otherwise = IM.fromListWith IS.union
-            [ (x, IS.singleton y)
-            | (a, b) <- dDisjoint d, Just ka <- [M.lookup a pos], Just kb <- [M.lookup b pos]
-            , all (\k -> let st = stepArr IM.! k in canFireDef st && firesOnlyWhenCan d st) [ka, kb]
-            , (x, y) <- [(ka, kb), (kb, ka)] ]
-    -- does a step at a position in [lo, hi), other than those left out, make u?
-    madeIn u lo hi out = go lo
-      where ks = M.findWithDefault IS.empty u usePos
+    reasonAt = IM.map (\st -> if canFireDef st then firesOnlyWhenCan d same st else Nothing) stepArr
+    disjointPos
+        | not distinct = []
+        | otherwise = [ (ka, kb) | (a, b) <- dDisjoint d, Just ka <- [M.lookup a pos], Just kb <- [M.lookup b pos]
+                                 , isJust (reasonAt IM.! ka), isJust (reasonAt IM.! kb) ]
+    prunable = IM.fromListWith IS.union [ (x, IS.singleton y) | (ka, kb) <- disjointPos, (x, y) <- [(ka, kb), (kb, ka)] ]
+    relied = S.toList (S.fromList [ stCanFire (stepArr IM.! k) | (ka, kb) <- disjointPos, k <- [ka, kb]
+                                                              , reasonAt IM.! k == Just ViaSequential ])
+    -- does a step at a position of a range, other than those left out, make u?
+    madeIn u (lo, hi, src) out = go lo
+      where ks = case src of
+                Nothing -> M.findWithDefault IS.empty u usePos
+                Just b  -> M.findWithDefault IS.empty u (stays ML.! b)
             go k = case IS.lookupGE k ks of
                 Just r | r < hi -> not (out r) || go (r + 1)
                 _ -> False
@@ -1267,42 +1304,120 @@ havocSites d = (sited, S.fromList [ siPort s | st <- sited, s <- stSites st ], f
             own = useIndex id (S.toList (callsAt IM.! k))
         in [ s | p <- ps
                , s <- [ Site p u False | u <- candidatesOf p
-                                       , any (\(lo, hi, moved) -> madeIn u lo hi (\r -> IS.member r moved || IS.member r px)) rs ]
+                                       , any (\r -> madeIn u r (`IS.member` px)) rs ]
                       ++ [ Site p u True | u <- concat (conflicting d NoShare p own) ] ]
     sited = [ st { stSites = sitesAt k (stReadSites st)
-                 , stTaskSites = concat
-                       [ [ (Nothing, ss) | let ss = sitesAt k cr, not (null ss) ]
-                         ++ [ (Just c, ss) | let ss = sitesAt k (filter (`S.notMember` crSet) ar), not (null ss) ]
-                       | (c, cr, ar) <- stTaskReads st, let crSet = S.fromList cr ] }
+                 , stTaskSites = [ (c, args, sitesAt k ps) | (c, args, ps) <- stTaskReads st ] }
             | (k, st) <- zip [0 ..] steps ]
-    flagPorts = S.toList (S.fromList [ siUse s | st <- sited, s <- stSites st ++ concatMap snd (stTaskSites st)
+    flagPorts = S.toList (S.fromList [ siUse s | st <- sited
+                                               , s <- stSites st ++ concat [ ss | (_, _, ss) <- stTaskSites st ]
                                                , ptKind (siUse s) == ValueMethod ])
 
 -- | Does a step fire only when its CAN_FIRE holds, by the definitions the
--- theorem states?  A rule's WILL_FIRE is its CAN_FIRE AND'ed with what
--- blocks it.  An action method's is its enable, which the environment's
--- @ready_@ fact allows only when the method's ready signal, its CAN_FIRE,
--- holds; and a value method's step fires only when its ready signal holds.
--- A step whose CAN_FIRE is constantly true qualifies too.
-firesOnlyWhenCan :: Design -> Step -> Bool
-firesOnlyWhenCan d st = canTrue || any isCan fireConj || any viaEnable fireConj || valueReady
+-- theorem states, and why?  The facts that rely on it ('disjoint_' in
+-- section 5) are about the hardware's CAN_FIRE signals.
+--
+-- A step whose hardware CAN_FIRE is constantly true qualifies.  So does an
+-- action method whose WILL_FIRE is its enable, when the hardware computes
+-- its ready output, which the environment's @ready_@ fact says the enable
+-- implies, as its CAN_FIRE AND'ed with more: that is all about the
+-- hardware's definitions ('ViaHardware').  Otherwise the step's firing is
+-- its sequential WILL_FIRE (or, for a value method, its sequential ready
+-- signal), read at the hardware's view, AND'ed with more: a rule's WILL_FIRE
+-- is its CAN_FIRE AND'ed with what blocks it, and a value method's ready
+-- signal is its CAN_FIRE AND'ed with more.  That CAN_FIRE is the sequential
+-- one, so it must be one definition in both semantics: @same@ ('sameAtHw')
+-- says the two packages define it alike, and the analysis checks that it
+-- became one Lean definition ('ViaSequential').
+firesOnlyWhenCan :: Design -> (String -> Bool) -> Step -> Maybe FireReason
+firesOnlyWhenCan d same st
+    | canTrue || any viaEnable fireConj = Just ViaHardware
+    | same (stCanFire st) && (any isCan fireConj || valueReady) = Just ViaSequential
+    | otherwise = Nothing
   where
-    defOf n = adef_expr <$> M.lookup n (dSeqDefs d)
+    seqDef n = adef_expr <$> M.lookup n (dSeqDefs d)
+    hwDef n = adef_expr <$> M.lookup n (dHwDefs d)
     conj e = case e of
         APrim _ _ op args | op == PrimBAnd || op == PrimAnd -> concatMap conj args
         _ -> [e]
     isCan e = case e of { ASDef _ i -> getIdString i == stCanFire st; _ -> False }
-    canTrue = case defOf (stCanFire st) of { Just (ASInt _ _ il) -> ilValue il /= 0; _ -> False }
-    fireConj = maybe [] conj (defOf (stFire st))
-    -- the method's ready signal is an output (so the environment has its
-    -- ready_ fact) and is its CAN_FIRE
-    readyIsCan = case stMethod st of
-        Just m | M.member m (dReady d), Just r <- M.lookup m (dReadyDef d) -> maybe False (any isCan . conj) (defOf r)
-        _ -> False
+    canTrue = case hwDef (stCanFire st) of { Just (ASInt _ _ il) -> ilValue il /= 0; _ -> False }
+    fireConj = maybe [] conj (seqDef (stFire st))
+    -- is the CAN_FIRE among some conjuncts of a hardware signal, through
+    -- the definitions they name (each looked into once)?
+    canAmong _ [] = False
+    canAmong seen (x : xs) = case x of
+        _ | isCan x -> True
+        ASDef _ i | let n = getIdString i, S.notMember n seen, Just e <- hwDef n -> canAmong (S.insert n seen) (conj e ++ xs)
+        _ -> canAmong seen xs
+    -- the method's ready output, which the environment's ready_ fact is
+    -- about, as the hardware computes it
+    readyOutIsCan = case stMethod st >>= (`M.lookup` dReady d) of
+        Just r -> maybe False (canAmong S.empty . conj) (hwDef r)
+        Nothing -> False
     viaEnable e = case (e, stMethod st) of
-        (ASPort _ i, Just m) -> M.lookup m (dEnables d) == Just (getIdString i) && readyIsCan
+        (ASPort _ i, Just m) -> M.lookup m (dEnables d) == Just (getIdString i) && readyOutIsCan
         _ -> False
-    valueReady = stKind st == ValueMethodStep && readyIsCan
+    -- the ready signal a value method's step fires on (only when it is an
+    -- output): the sequential definition, read at the hardware's view
+    valueReady = stKind st == ValueMethodStep && case stMethod st of
+        Just m | M.member m (dReady d), Just r <- M.lookup m (dReadyDef d) -> maybe False (any isCan . conj) (seqDef r)
+        _ -> False
+
+-- | Why a step fires only when its CAN_FIRE holds ('firesOnlyWhenCan'): by
+-- the hardware's definitions alone, or by its sequential firing, which
+-- needs the CAN_FIRE to be one definition in both semantics.
+data FireReason = ViaHardware | ViaSequential
+    deriving Eq
+
+-- | Is a definition of the 'APackage', read at the hardware's view, the
+-- 'ASPackage''s definition of the same name?  The two are compared as
+-- expressions, through the definitions they name (each pair once), where a
+-- read of a value method without arguments in the one is the child's output
+-- wire for the same copy in the other: 'aState' makes the one of the other,
+-- and at the hardware's view such a read is that wire.  A definition that is
+-- a mere name on one side only is looked through.  Anything else differing
+-- makes them different.  (Partially applied, the table is made once.)
+sameAtHw :: Design -> String -> Bool
+sameAtHw d = \n -> ML.findWithDefault False n table
+  where
+    -- knot-tied through the definitions, so the table must be lazy
+    table = ML.fromList [ (n, eqE (adef_expr s) (adef_expr h))
+                        | (n, s) <- M.toList (dSeqDefs d), Just h <- [M.lookup n (dHwDefs d)] ]
+    alias defs i = case adef_expr <$> M.lookup (getIdString i) defs of
+        Just e@(ASDef {}) -> Just e
+        Just e@(ASPort {}) -> Just e
+        Just e@(ASInt {}) -> Just e
+        _ -> Nothing
+    eqE s h = case (s, h) of
+        (ASAny _ (Just v), _) -> eqE v h
+        (_, ASAny _ (Just w)) -> eqE s w
+        (ASDef _ i, ASDef _ j) | getIdString i == getIdString j -> ML.findWithDefault False (getIdString i) table
+        (ASDef _ i, _) | Just s' <- alias (dSeqDefs d) i -> eqE s' h
+        (_, ASDef _ j) | Just h' <- alias (dHwDefs d) j -> eqE s h'
+        (AMethCall {}, _) -> readIs s 0 h
+        (ATupleSel _ r@(AMethCall {}) k, _) -> readIs r (fromInteger k - 1) h
+        (APrim _ t op xs, APrim _ t' op' ys) -> op == op' && t == t' && all2 xs ys
+        (ATupleSel _ x k, ATupleSel _ y k') -> k == k' && eqE x y
+        (ATuple _ xs, ATuple _ ys) -> all2 xs ys
+        (AFunCall _ _ f _ xs, AFunCall _ _ g _ ys) -> f == g && all2 xs ys
+        _ -> leaf s && s == h
+    all2 xs ys = length xs == length ys && and (zipWith eqE xs ys)
+    leaf e = case e of
+        ASInt {} -> True; ASStr {} -> True; ASPort {} -> True; ASParam {} -> True
+        ASAny _ Nothing -> True
+        _ -> False
+    -- a read without arguments, and the output wire of its copy
+    readIs r k h = case (r, h) of
+        (AMethCall _ o m [], ASDef _ j) | not (M.member (getIdString j) (dHwDefs d)) -> wireOf o m r k j
+        (AMethCall _ o m [], ASPort _ j) -> wireOf o m r k j
+        _ -> False
+    wireOf o m r k j =
+        let inst = getIdString o
+            port = lookupMeth d inst (getIdBaseString m) >>= \mt -> readPortFor d mt inst r
+        in case (port, M.lookup (getIdString j) (dStateOuts d)) of
+            (Just p, Just (p', k')) -> portKey p == portKey p' && k == k'
+            _ -> False
 
 -- ----------------------------------------------------------------------------
 -- ** Disjointness facts bsc relied on but did not record
@@ -1502,8 +1617,9 @@ confirmDisjointness errh flags apkg d candidates =
 
 -- | The extracted model, for checking phase 1 on its own (@-dump-design@),
 -- with the candidate disjointness facts and those the solver confirmed.
--- The condition of each read ("reads ... when") is bsc's use condition, a
--- hint for which facts to ask for; the reads out of order are the sites.
+-- The condition shown with each read ("hint: used when") is bsc's use
+-- condition, only a hint for which facts to ask for; the reads out of order
+-- are the sites, whatever the hints say.
 dumpDesign :: Design -> [Candidate] -> [DisjointFact] -> [String]
 dumpDesign d cands facts =
     [ "module " ++ dModule d ++ " (package " ++ dPackage d ++ "), from " ++ dSource d
@@ -1525,18 +1641,18 @@ dumpDesign d cands facts =
     ++ concat [ [ "  " ++ show k ++ ". " ++ stName st ++ "   [" ++ stDescr st ++ "]"
                 , "       fires on " ++ stFire st ++ ", can fire " ++ stCanFire st ]
                 ++ [ "       guard " ++ ppString g | Just g <- [stGuard st] ]
-                ++ [ "       reads " ++ portLabel p ++ " when " ++ ppString c | (p, c) <- stReads st ]
+                ++ [ "       reads " ++ portLabel p ++ "  (hint: used when " ++ ppString c ++ ")" | (p, c) <- stReads st ]
                 ++ [ "       reads " ++ portLabel (siPort s) ++ " out of order: " ++ siteText s | s <- stSites st ]
-                ++ [ "       a system task reads " ++ portLabel (siPort s) ++ " out of order: " ++ siteText s
-                     ++ maybe "" (\c -> ", when " ++ ppString c) mc
-                   | (mc, ss) <- stTaskSites st, s <- ss ]
+                ++ [ "       a system task (when " ++ ppString c ++ ") reads " ++ portLabel (siPort s)
+                     ++ " out of order: " ++ siteText s
+                   | (c, _, ss) <- stTaskSites st, s <- ss ]
                 ++ [ "       calls " ++ portLabel (clPort c) ++ " when " ++ ppString (clCond c)
                      ++ " with " ++ intercalate ", " (map ppString (clArgs c)) | c <- stCalls st ]
                 ++ [ "       check " ++ ppString c | c <- stChecks st ]
                 ++ [ "       output " ++ ouName o ++ " = " ++ ppString (ouSeq o)
                      ++ (if null (ouMask o) then "" else "  (when " ++ unwords (map show (ouMask o)) ++ ")")
                    | o <- stOutputs st ]
-                ++ [ "       " ++ show (stTasks st) ++ " system task(s), not modelled" | stTasks st > 0 ]
+                ++ [ "       " ++ show (stTasks st) ++ " system task(s), their effects not modelled" | stTasks st > 0 ]
               | (k, st) <- zip [1 :: Int ..] (dSteps d) ]
     ++ [ "", "use conditions (recomputed):" ]
     ++ [ "  " ++ getIdString (adef_objid u) ++ " = " ++ ppString (adef_expr u) | u <- dUseDefs d ]
@@ -2102,6 +2218,8 @@ data Acc = Acc
     , acUnspec   :: M.Map (Side, String) Int    -- ^ unspecified values met, per definition
     , acNextSuffix :: M.Map (Bool, String) Int
       -- ^ for 'freshName': below this suffix, every @base#k@ is taken
+    , acReach    :: M.Map String Term
+      -- ^ the conditions of 'reachPass' made so far, by name ('shareReach')
     , acWarnings :: [String]
     }
 
@@ -2542,6 +2660,315 @@ pairApplications = do
         _           -> Nothing
 
 -- ----------------------------------------------------------------------------
+-- ** When a read reaches a value
+-- ----------------------------------------------------------------------------
+--
+-- What a system task prints is observable, so a task may not print a value
+-- read where the annotations rule the read out; and a value method read
+-- after a read of another that its annotations forbid sees an arbitrary
+-- value only when the earlier read mattered.  Both ask when the value of a
+-- read reaches a value the step produces: here, as a condition of the
+-- sequential semantics.
+--
+-- A read reaches a value along the selections between them, as 'eval'
+-- makes them: the arm of an if, a case, a mux or an array selection that
+-- the read is in counts only when its condition selects it (for the arms of
+-- a priority mux or a case, a condition implied by its being selected; for
+-- an array, its index being the element's).  Through any other operator,
+-- and into a selection's conditions, the read reaches the result whenever
+-- it reaches the operand.  The condition is the OR, over the paths from the
+-- value down to the read, of the AND of the selections on each path.
+--
+-- That holds of several reads at once: if none of a set of reads reaches
+-- an expression, the expression has the same value whatever all of them
+-- return.  (By induction on the expression: none reaches a selection's
+-- condition, which is then the same, and picks the same arm, which none
+-- reaches.)  So a condition over several reads may be read off each read's.
+-- The conditions are exact about which arm is selected, not about
+-- operators that ignore an operand (@x && false@ still counts @x@).
+--
+-- The paths go through definitions, which many expressions share.  Worked
+-- out per definition and per read, the conditions of a chain of n
+-- selections over n reads would take n^2/2 definitions; so they are worked
+-- out from the top instead.  For a step, each definition on the way gets
+-- the condition under which its value reaches what the step produces, and
+-- a read's condition is the OR, over the definitions that read it, of
+-- theirs AND'ed with how the read reaches them.  A definition that only
+-- one other refers to, and no step directly, gets to the step only through
+-- that one, so its condition is that one's AND'ed with how it reaches that
+-- one.  Along a chain of such definitions, how each reaches the top of the
+-- chain (its /head/: a definition several refer to, or a step refers to
+-- directly) is a definition of its own, @<def>\@up@, the same for every
+-- step; so are the conditions under which the reads of the chain, and the
+-- heads it refers to, reach the head (@<head>\@reaches\@<copy>@,
+-- @<head>\@reaches\@<head>@: a copy is named @inst.meth@, a definition has
+-- no dot).  Only a head's condition is the step's own:
+-- @<head>\@prints\@<step>@ for what the step's system tasks print,
+-- @<head>\@does\@<step>@ for all the step does.  So each definition is
+-- walked once, and a step adds a condition for each head on its way to the
+-- reads it asks about: on a chain, one.
+--
+-- The selections inside a definition are evaluated under a context of
+-- their own (@<def>\@reaches@): an unspecified value in one is a variable
+-- of its own, which only adds a free variable to the theorem, rather than
+-- taking the number of one of the definition's.
+
+-- | What an expression's value comes from, for 'reachPass': a definition it
+-- refers to, or a copy it reads.
+data RChild = RDef String | RRead Port
+    deriving (Eq, Ord)
+
+-- | The copies of interest (those of every step's question), and the
+-- copies each definition reads ('exprReads', its table shared).
+data ReachCtx = ReachCtx { rcTargets :: S.Set Port, rcDefReads :: String -> S.Set Port }
+
+-- | The reads of copies of @targets@ an expression makes, and the
+-- definitions it refers to that read one, each with the conditions under
+-- which it reaches the expression's value (each AND'ed with @c0@), one per
+-- occurrence.  It stops at a definition, and walks into the expression
+-- otherwise, following the selections as above.
+reachEdges :: ReachCtx -> S.Set Port -> Term -> AExpr -> Gen (M.Map RChild [Term])
+reachEdges rc targets c0 e0 = go c0 e0 M.empty
+  where
+    add k c = M.insertWith (++) k [c]
+    goAll c xs acc = foldM (\a x -> go c x a) acc xs
+    go c e acc
+        | c == TLit False = return acc
+        | otherwise = case e of
+            AMethCall _ o m args -> readOf c o m e args acc
+            ATupleSel _ inner@(AMethCall _ o m args) _ -> readOf c o m inner args acc
+            ATupleSel _ (ATuple _ es) k | k >= 1, (x : _) <- drop (fromInteger k - 1) es -> go c x acc
+            ATupleSel _ inner _ -> go c inner acc
+            ATuple _ xs -> goAll c xs acc
+            ASAny _ (Just v) -> go c v acc
+            ASDef _ i
+                -- a WILL_FIRE signal is read at the hardware's view, not by the step
+                | "WILL_FIRE_" `isPrefixOf` n -> return acc
+                | S.disjoint (rcDefReads rc n) targets -> return acc
+                | otherwise -> return (add (RDef n) c acc)
+              where n = getIdString i
+            APrim _ t op args | not (datapathPrim t op args) -> prim c op args acc
+            APrim _ _ _ args -> goAll c args acc
+            AFunCall { ae_args = xs } -> goAll c xs acc
+            ANoInlineFunCall { ae_args = xs } -> goAll c xs acc
+            _ -> return acc
+    readOf c o m use args acc = do
+        d <- gets acDesign
+        let inst = getIdString o
+            port = lookupMeth d inst (getIdBaseString m) >>= \mt -> readPortFor d mt inst use
+            acc' = case port of
+                Just p | S.member p targets -> add (RRead p) c acc
+                _ -> acc
+        goAll c args acc'
+    prim c op args acc = case (op, args) of
+        (PrimIf, [cd, a, b]) -> do
+            acc1 <- go c cd acc
+            ct <- eval Seq cd
+            acc2 <- go (tAnd [c, ct]) a acc1
+            go (tAnd [c, tNot ct]) b acc2
+        (PrimMux, _) -> mux
+        (PrimPriMux, _) -> mux
+        (PrimCase, idx : dflt : arms) -> do
+            acc1 <- go c idx acc
+            it <- eval Seq idx
+            -- (each arm when the index is its label: the first such is
+            -- selected, so this is implied by its being selected)
+            (acc2, labels) <- foldM (\(a, ls) (l, v) -> do
+                                         a1 <- go c l a
+                                         lt <- eval Seq l
+                                         a2 <- go (tAnd [c, tEq it lt]) v a1
+                                         return (a2, tEq it lt : ls))
+                                    (acc1, []) (pairUp arms)
+            go (tAnd (c : map tNot (reverse labels))) dflt acc2
+        (PrimArrayDynSelect, [arr, idx]) -> do
+            d <- gets acDesign
+            let es = arrayElemsSeq d arr
+                w = case sortOf (aType idx) of { SBool -> 1; SBits b -> b; _ -> 0 }
+                len = length es
+                -- (as 'eval': the elements an index of its width can select)
+                n = min len (if w >= 20 then len else 2 ^ w)
+            acc1 <- go c idx acc
+            if null es
+                -- an array 'eval' does not see into: every element counts
+                then go c arr acc1
+                else do
+                    it <- eval Seq idx
+                    ks <- mapM (\k -> constant (aType idx) (toInteger k)) [0 .. n - 1]
+                    -- Element k counts when the index is k.  When the elements
+                    -- cover every index, 'eval' also takes the last for an index
+                    -- that is none of them, which only a token can be: a real
+                    -- index is one of the constants, all of them terms of the
+                    -- file, so the theorem about tokens covers every real one.
+                    foldM (\a (kk, x) -> go (tAnd [c, tEq it kk]) x a) acc1 (zip ks (take n es))
+        _ -> goAll c args acc
+      where
+        -- (selector, value) pairs, the first true selector winning, and the
+        -- default arm 'eval' recognises last
+        mux = do
+            let ps = pairUp args
+                (arms, dflt) = case reverse ps of
+                    ((APrim _ _ PrimBNot [_], v) : rest) -> (reverse rest, Just v)
+                    _                                    -> (ps, Nothing)
+            acc1 <- goAll c (map fst arms) acc
+            sels <- mapM (eval Seq . fst) arms
+            acc2 <- foldM (\a (s, v) -> go (tAnd [c, s]) v a) acc1 (zip sels (map snd arms))
+            maybe (return acc2) (\v -> go (tAnd (c : map tNot sels)) v acc2) dflt
+
+-- | The OR of the conditions under which something reaches a value, but
+-- for one that is another AND'ed with more (@x || c && x@ is @x@): a read
+-- that reaches a selection's condition and one of its arms reaches it
+-- whenever it reaches the condition.
+orAll :: [Term] -> Term
+orAll ts = tOr [ t | t <- ts, not (absorbed t) ]
+  where
+    present = S.fromList (map HKey ts)
+    -- (an operand of a conjunction looked up in the others, or the others
+    -- in its operands, whichever are fewer)
+    absorbed t = case t of
+        TAnd _ ops
+            | S.size present <= M.size (tsOps ops) -> any (\(HKey x) -> M.member (HKey x) (tsIndex ops)) (S.toList present)
+            | otherwise -> any (\o -> S.member (HKey o) present) (tsList ops)
+        _ -> False
+
+-- | The definitions on the way from the steps' values to the copies of
+-- interest, each with what it refers to ('reachEdges', the conditions
+-- relative to its own value), and how they hang together.
+data RGraph = RGraph
+    { rgEdges  :: M.Map String (M.Map RChild Term)
+    , rgParent :: M.Map String String
+      -- ^ a definition one other refers to and no step does directly: that one
+    , rgOrder  :: M.Map String Int
+      -- ^ each definition's place: after every definition that refers to it
+    , rgRegion :: ML.Map String (M.Map Port [(String, Term, Bool)], M.Map String [(String, Term, Bool)])
+      -- ^ of each head, the reads of its chain and the heads its chain
+      -- refers to, each with the definition of the chain that does, how,
+      -- and whether that definition reaches the head unconditionally
+    }
+
+-- | The definitions on the way from the given ones (those the steps refer
+-- to) to the copies of interest.
+reachGraph :: ReachCtx -> [String] -> Gen RGraph
+reachGraph rc roots = do
+    edges <- explore roots M.empty
+    let rootSet = S.fromList roots
+        parents = M.fromListWith S.union [ (c, S.singleton n) | (n, es) <- M.toList edges, RDef c <- M.keys es ]
+        parentOf = M.fromList [ (c, S.findMin ps) | (c, ps) <- M.toList parents
+                                                  , S.size ps == 1, S.notMember c rootSet ]
+        kids n = [ c | RDef c <- maybe [] M.keys (M.lookup n edges) ]
+        -- (depth first: each definition once it has been put after all it
+        -- refers to, so the list has every definition before them)
+        visit (seen, out) n
+            | S.member n seen = (seen, out)
+            | otherwise = let (seen', out') = F.foldl' visit (S.insert n seen, out) (kids n)
+                          in (seen', n : out')
+        order = M.fromList (zip (snd (F.foldl' visit (S.empty, []) roots)) [0 :: Int ..])
+        -- a head's chain: through the definitions only one of the chain
+        -- refers to, each of which therefore refers to the chain once
+        region h = walk True (M.empty, M.empty) h
+        walk open acc n = F.foldl' (step open n) acc (M.toList (M.findWithDefault M.empty n edges))
+        step open n (occ, hs) (ch, l) = case ch of
+            RRead p -> (M.insertWith (++) p [(n, l, open)] occ, hs)
+            RDef c | M.member c parentOf -> walk (open && l == TLit True) (occ, hs) c
+                   | otherwise -> (occ, M.insertWith (++) c [(n, l, open)] hs)
+    return RGraph { rgEdges = edges, rgParent = parentOf, rgOrder = order
+                  , rgRegion = ML.fromList [ (h, region h) | h <- M.keys edges, M.notMember h parentOf ] }
+  where
+    explore [] acc = return acc
+    explore (n : ns) acc
+        | M.member n acc = explore ns acc
+        | otherwise = do
+            d <- gets acDesign
+            es <- case M.lookup n (dSeqDefs d) of
+                Just df -> do
+                    outer <- gets acCtx
+                    modify' (\a -> a { acCtx = Just (n ++ "@reaches") })
+                    m <- reachEdges rc (rcTargets rc) (TLit True) (adef_expr df)
+                    modify' (\a -> a { acCtx = outer })
+                    return (M.map orAll m)
+                Nothing -> return M.empty
+            explore ([ c | RDef c <- M.keys es ] ++ ns) (M.insert n es acc)
+
+-- | A condition of 'reachPass' as a definition of its own, made once by its
+-- name (an atom is itself).
+shareReach :: String -> Gen Term -> Gen Term
+shareReach name mk = do
+    memo <- gets acReach
+    case M.lookup name memo of
+        Just r -> return r
+        Nothing -> do
+            t <- mk
+            r <- if atomic t then return t else do
+                     modify' (\a -> a { acSeqDefs = LDef name SBool t (dynamic t) : acSeqDefs a })
+                     return (TRef name (dynamic t))
+            modify' (\a -> a { acReach = M.insert name r (acReach a) })
+            return r
+
+-- | When a definition's value reaches its chain's head's (@<def>\@up@;
+-- @true@ for the head).
+upRef :: RGraph -> String -> Gen Term
+upRef g m = case M.lookup m (rgParent g) of
+    Nothing -> return (TLit True)
+    Just p -> shareReach (m ++ "@up") $ do
+        up <- upRef g p
+        return (tAnd [up, M.findWithDefault (TLit False) (RDef m) (M.findWithDefault M.empty p (rgEdges g))])
+
+-- | When a read of a copy (@Left@), or a head's value (@Right@), reaches a
+-- head's value through its chain (@<head>\@reaches\@<copy or head>@).
+chainRef :: RGraph -> String -> Either Port String -> Gen Term
+chainRef g h x = shareReach (h ++ "@reaches@" ++ either portLabel id x) $ do
+    let (occ, hs) = ML.findWithDefault (M.empty, M.empty) h (rgRegion g)
+        uses = either (\p -> M.findWithDefault [] p occ) (\k -> M.findWithDefault [] k hs) x
+    -- (a use that reaches the head unconditionally is all of it: no
+    -- definitions are made for the others, which it absorbs)
+    if any (\(_, l, open) -> open && l == TLit True) uses then return (TLit True)
+        else orAll <$> mapM (\(n, l, _) -> (\up -> tAnd [up, l]) <$> upRef g n) uses
+
+-- | For one step, from what its values refer to (each with the condition
+-- under which it counts, 'reachEdges'): the condition under which the read
+-- of each copy of @targets@ reaches one of them.  The heads are taken in
+-- the graph's order, so each once every head that refers to it is done.
+-- A head's condition is a definition, @<head>\@<label>@, when more than
+-- one term uses it; one term only, it is written there, so that a run of
+-- heads each of which leads to one other is still written once.
+reachPass :: ReachCtx -> RGraph -> String -> S.Set Port -> M.Map RChild [Term] -> Gen (M.Map Port Term)
+reachPass rc g label targets top = do
+    found <- heads (S.fromList (map keyOf (M.keys start))) start []
+    return (M.map orAll (M.fromListWith (++) (direct ++ found)))
+  where
+    relevant n = not (S.disjoint (rcDefReads rc n) targets)
+    direct = [ (p, ts) | (RRead p, ts) <- M.toList top, S.member p targets ]
+    start = M.fromList [ (n, ts) | (RDef n, ts) <- M.toList top, relevant n ]
+    keyOf n = (M.findWithDefault (-1) n (rgOrder g), n)
+    -- the copies of interest a head's chain reads, by the fewer to walk
+    readsOf occ
+        | S.size targets < M.size occ = [ p | p <- S.toList targets, M.member p occ ]
+        | otherwise = [ p | p <- M.keys occ, S.member p targets ]
+    heads queue incoming found = case S.minView queue of
+        Nothing -> return found
+        Just ((_, h), queue') -> do
+            let c = orAll (M.findWithDefault [] h incoming)
+                (occ, hs) = ML.findWithDefault (M.empty, M.empty) h (rgRegion g)
+                ps = readsOf occ
+                ks = [ k | k <- M.keys hs, relevant k ]
+            if c == TLit False then heads queue' incoming found else do
+                -- (a definition only when more than one term uses it)
+                here <- if length ps + length ks <= 1 then return c
+                        else shareReach (h ++ "@" ++ label) (return c)
+                rs <- forM ps $ \p -> (\t -> (p, [tAnd [here, t]])) <$> chainRef g h (Left p)
+                kcs <- forM ks $ \k -> (\t -> (k, tAnd [here, t])) <$> chainRef g h (Right k)
+                heads (F.foldl' (\q (k, _) -> S.insert (keyOf k) q) queue' kcs)
+                      (F.foldl' (\m (k, t) -> M.insertWith (++) k [t] m) incoming kcs)
+                      (rs ++ found)
+
+-- | The elements of an array, through the sequential definitions, as
+-- 'eval' finds them (none when it cannot).
+arrayElemsSeq :: Design -> AExpr -> [AExpr]
+arrayElemsSeq d arr = case arr of
+    APrim _ _ PrimBuildArray es -> es
+    ASDef _ i -> maybe [] (arrayElemsSeq d . adef_expr) (M.lookup (getIdString i) (dSeqDefs d))
+    _ -> []
+
+-- ----------------------------------------------------------------------------
 -- ** The proof object
 -- ----------------------------------------------------------------------------
 
@@ -2552,7 +2979,12 @@ data StepT = StepT
     , sxGuard   :: Maybe Term                -- ^ the guard, as the step sees it
     , sxCalls   :: [(Port, Term, [Term])]
     , sxOutputs :: [(Output, Term)]
-    , sxTasks   :: [(Term, [Site])]          -- ^ its system tasks' sites, each with its condition
+    , sxTasks   :: [(Term, Site)]
+      -- ^ its system tasks' sites, each with when its value reaches what the
+      -- task prints or whether it prints ('reachPass')
+    , sxFlags   :: [(Port, Term)]
+      -- ^ the copies in 'dReadFlags' it reads, each with when the value read
+      -- reaches what the step does: then a later read may not follow it
     , sxFields  :: [String]                  -- ^ fields of the step's view
     , sxFieldSet :: S.Set String             -- ^ the same, as a set
     , sxIllegal :: [(String, Term)]          -- ^ why the step could be illegal
@@ -2585,6 +3017,8 @@ data Proof = Proof
       -- ^ an exported @a SB b@ (or @SBR@); the pairs of their steps that do
       -- not commute, each of which must run in that order; and those that do
     , pfWarnings  :: [String]
+    , pfErrors    :: [String]
+      -- ^ why the file would not prove what it says: then it is not written
     }
 
 -- | Run the analysis.
@@ -2597,7 +3031,7 @@ analyse d facts = finish (runState build acc0)
                , acSeqMemo = M.empty, acHwMemo = M.empty, acSeqDefs = [], acHwDefs = []
                , acHwApps = M.empty, acSeqApps = M.empty, acStatic = [], acMuxes = []
                , acCtx = Nothing, acFresh = 1, acUnspec = M.empty, acNextSuffix = M.empty
-               , acWarnings = [] }
+               , acReach = M.empty, acWarnings = [] }
     ports = [ p | c <- map (dChildren d M.!) (dChildOrder d), mt <- methodsOf c
                 , mtKind mt /= ValueMethod, p <- mtCopies mt ]
     methodsOf c = map (chMethods c M.!) (chOrder c)
@@ -2613,7 +3047,7 @@ analyse d facts = finish (runState build acc0)
             \(s, t) -> (,) s <$> hwSignal s t
         hwOuts <- forM (dOutputs d) $ \(o, t) -> (,) o <$> hwSignal o t
         -- the sequential semantics, step by step
-        steps <- forM (dSteps d) $ \st -> do
+        evaluated <- forM (dSteps d) $ \st -> do
             fire0 <- ident Seq aTBool (stFire st)
             fire <- case (stKind st, stMethod st) of
                 -- a value method's result is used only when it is ready (an
@@ -2635,10 +3069,56 @@ analyse d facts = finish (runState build acc0)
             cls  <- forM (stCalls st) $ \c ->
                         (,,) (clPort c) <$> eval Seq (clCond c) <*> mapM (eval Seq) (clArgs c)
             outs <- forM (stOutputs st) $ \o -> (,) o <$> eval Seq (ouSeq o)
-            tks  <- forM (stTaskSites st) $ \(mc, ss) -> (\c -> (c, ss)) <$> maybe (return (TLit True)) (eval Seq) mc
-            return StepT { sxStep = st, sxFire = fire, sxGuard = g, sxCalls = cls
-                         , sxOutputs = outs, sxTasks = tks, sxFields = [], sxFieldSet = S.empty
-                         , sxIllegal = [] }
+            -- what the step's values refer to, for 'reachPass': for the copies
+            -- its system tasks read where the annotations rule them out, its
+            -- tasks; for the copies with a read flag it reads, all it does:
+            -- its guard, its calls, its outputs and its tasks.  An argument
+            -- of a call or a task counts only when the call is made or the
+            -- task's condition holds.
+            let taskPorts = S.fromList [ siPort s | (_, _, ss) <- stTaskSites st, s <- ss ]
+                flagged = S.fromList [ p | p <- stReadSites st ++ [ p | (_, _, ps) <- stTaskReads st, p <- ps ]
+                                         , S.member p readFlagSet ]
+                edges ts = reachEdges reachCtx ts
+                -- (the task's condition evaluated only when an argument
+                -- reads something of interest)
+                taskEdges ts (c, args) = do
+                    rc <- edges ts (TLit True) c
+                    ras <- M.unionsWith (++) <$> mapM (edges ts (TLit True)) args
+                    if M.null ras then return rc else do
+                        ct <- eval Seq c
+                        return (M.unionWith (++) rc (M.map (map (\t -> tAnd [ct, t])) ras))
+            taskTop <- if S.null taskPorts then return M.empty else
+                M.unionsWith (++) <$> mapM (taskEdges taskPorts) [ (c, args) | (c, args, ss) <- stTaskSites st, not (null ss) ]
+            flagTop <- if S.null flagged then return M.empty else do
+                rg <- maybe (return M.empty) (edges flagged (TLit True)) (stGuard st)
+                rcs <- forM (zip (stCalls st) cls) $ \(c, (_, ct, _)) -> do
+                           r <- edges flagged (TLit True) (clCond c)
+                           M.unionsWith (++) . (r :) <$> mapM (edges flagged ct) (clArgs c)
+                ros <- mapM (edges flagged (TLit True) . ouSeq) (stOutputs st)
+                rts <- mapM (taskEdges flagged) [ (c, args) | (c, args, ps) <- stTaskReads st, any (`S.member` flagged) ps ]
+                return (M.unionsWith (++) (rg : rcs ++ ros ++ rts))
+            return ( StepT { sxStep = st, sxFire = fire, sxGuard = g, sxCalls = cls
+                           , sxOutputs = outs, sxTasks = [], sxFlags = []
+                           , sxFields = [], sxFieldSet = S.empty, sxIllegal = [] }
+                   , (taskPorts, taskTop, flagged, flagTop) )
+        -- when each read of interest reaches what the step asks about, from
+        -- the definitions on the way for all the steps at once
+        graph <- reachGraph reachCtx (S.toList (S.fromList [ n | (_, (_, tt, _, ft)) <- evaluated
+                                                               , RDef n <- M.keys tt ++ M.keys ft ]))
+        steps <- forM (zip [0 :: Int ..] evaluated) $ \(k, (sx, (taskPorts, taskTop, flagged, flagTop))) -> do
+            let st = sxStep sx
+                label = if M.findWithDefault 0 (stName st) stepNameCount > (1 :: Int)
+                            then stName st ++ "#" ++ show k else stName st
+            taskReach <- if M.null taskTop then return M.empty
+                         else reachPass reachCtx graph ("prints@" ++ label) taskPorts taskTop
+            flagReach <- if M.null flagTop then return M.empty
+                         else reachPass reachCtx graph ("does@" ++ label) flagged flagTop
+            -- (a copy's sites are the same for every task of the step that
+            -- reads it, so one condition, over all the step's tasks, serves
+            -- each site once)
+            let sites = distinctSites [ s | (_, _, ss) <- stTaskSites st, s <- ss ]
+            return sx { sxTasks = [ (t, s) | s <- sites, Just t <- [M.lookup (siPort s) taskReach], t /= TLit False ]
+                      , sxFlags = [ (p, t) | p <- S.toList flagged, Just t <- [M.lookup p flagReach], t /= TLit False ] }
         -- assumptions about the environment, from the exported schedule
         env <- fmap concat $ sequence
             [ forM [ (en, rdy) | (m, en) <- M.toList (dEnables d), Just rdy <- [M.lookup m (dReady d)] ] $
@@ -2785,7 +3265,7 @@ analyse d facts = finish (runState build acc0)
             withFields sx =
                 let ts = sxFire sx : maybe [] pure (sxGuard sx)
                          ++ concat [ c : as | (_, c, as) <- sxCalls sx ] ++ map snd (sxOutputs sx)
-                         ++ map fst (sxTasks sx)
+                         ++ map fst (sxTasks sx) ++ map snd (sxFlags sx)
                     fs = closeFields (S.unions (map termFields ts))
                 in sx { sxFire = rw (sxFire sx), sxFields = S.toList fs, sxFieldSet = fs }
             -- the State's fields: each child's ports, the outputs, the
@@ -2800,8 +3280,24 @@ analyse d facts = finish (runState build acc0)
                 ++ [ (o, sortOf t, "output " ++ o) | (o, t) <- dOutputs d ]
                 ++ [ ("illegal_access", SBool, "a submodule saw an order its annotations forbid")
                    , ("guard_violated", SBool, "a rule ran with a false guard") ]
-                ++ [ (stateField p, SBool, portLabel p ++ " read") | p <- dReadFlags d ]
+                ++ [ (stateField p, SBool, portLabel p ++ " read where its value mattered") | p <- dReadFlags d ]
             seqOut = buildSeq (withOrders d) d steps fields fieldMap (M.map rw hwPorts) rw stateFields
+            -- The conditions of 'reachPass' the execution refers to.  One a
+            -- step's run simplified away (its read is out of order only after
+            -- a use no earlier step makes in the schedule's order) is left out.
+            reachNames = S.fromList [ n | TRef n _ <- M.elems (acReach acc) ]
+            reachRefs t = [ n | x <- universeT t, n <- refName x, S.member n reachNames ]
+            refName x = case x of
+                TRef n _ -> [n]; TAt n _ -> [n]; TAtHw n -> [n]; TAtVF n _ _ -> [n]; _ -> []
+            seqRoots = [ sdTerm (sdBody x) | x <- soDefs seqOut ]
+                       ++ concat [ map snd (sbW sb ++ sbO sb) ++ sbAfter sb | sb <- soSteps seqOut ]
+                       ++ concat [ cgLhs c : cgRhs c : [ t | PTrue t <- cgPremises c ] | c <- soCongs seqOut ]
+            liveReach = reachClose S.empty (concatMap reachRefs seqRoots)
+            reachClose seen ns = case ns of
+                [] -> seen
+                (n : rest) | S.member n seen -> reachClose seen rest
+                           | otherwise -> reachClose (S.insert n seen)
+                                                     (maybe [] (reachRefs . ldBody) (M.lookup n seqMap) ++ rest)
             congs = reverse (acStatic acc) ++ appCongs ++ twinCongs
             -- a definition both semantics compute as an application, but of
             -- arguments written differently: equal arguments, equal results
@@ -2857,7 +3353,7 @@ analyse d facts = finish (runState build acc0)
             { pfSteps = steps
             , pfVars = vars0
             , pfFields = fields
-            , pfSeqDefs = seqDefs
+            , pfSeqDefs = [ l | l <- seqDefs, S.notMember (ldName l) reachNames || S.member (ldName l) liveReach ]
             , pfHwDefs = hwDefs ++ oneHotDefs muxes ++ envChains ++ oracleChains ++ [ l { ldBody = rw (ldBody l) } | l <- chainLDefs ]
                          ++ tailDefs
             , pfPorts = ports
@@ -2883,6 +3379,12 @@ analyse d facts = finish (runState build acc0)
                                  , let (pairs, skipped) = partition (\(x, y) -> not (commute d instUses x y)) all'
                                  , not (null all') ]
             , pfWarnings = reverse (acWarnings acc)
+              -- a site left out because a step fires only when its CAN_FIRE
+              -- holds relies on the disjointness fact's CAN_FIRE being the
+              -- one the step's firing implies: the same Lean definition
+            , pfErrors = [ "the hardware's " ++ n ++ " is not the sequential one, which reads left out of "
+                           ++ "the arbitrary ones rely on (an internal error)"
+                         | n <- dRelied d, not (S.member n shared) ]
             }
     -- each step's uses, by instance, for 'commute' (the first step of a name)
     instUses n = ML.lookup n instUsesMap
@@ -2891,6 +3393,19 @@ analyse d facts = finish (runState build acc0)
     masksMap = M.map (concat . reverse)
                      (M.fromListWith (++) [ (ouName out, [ouMask out]) | st <- dSteps d, out <- stOutputs st ])
     allUsedPorts sxs = S.toList (S.fromList [ p | s <- sxs, (p, _, _) <- sxCalls s ])
+    readFlagSet = S.fromList (dReadFlags d)
+    -- the copies whose reads 'reachPass' follows: those a system task reads
+    -- where the annotations rule them out, and those with a read flag
+    reachCtx = ReachCtx { rcTargets = S.fromList ([ siPort s | st <- dSteps d, (_, _, ss) <- stTaskSites st, s <- ss ]
+                                                  ++ dReadFlags d)
+                        , rcDefReads = snd (readTables d) }
+    -- steps of the same name, which a step's own conditions tell apart
+    stepNameCount = M.fromListWith (+) [ (stName st, 1) | st <- dSteps d ]
+    -- (the first of each, by the copy read and the use)
+    distinctSites ss = reverse (snd (F.foldl' (\(seen, acc) s -> let k = (siPort s, siUse s, siWithin s)
+                                                                in if S.member k seen then (seen, acc)
+                                                                   else (S.insert k seen, s : acc))
+                                              (S.empty, []) ss))
 
 -- | Are orders other than the schedule's checked?
 withOrders :: Design -> Bool
@@ -2912,9 +3427,10 @@ ceilLog2 n = until (\k -> 2 ^ k >= n) (+ 1) 0
 -- rule, and which uses would make a system task's read illegal.  The calls'
 -- conditions are exact.  Its other reads are not checked: where the
 -- annotations rule one out, it sees an arbitrary value instead ('Site').
--- A task's effect is not modelled, so its reads have no value to make
--- arbitrary; a task that reads where the annotations rule it out, under the
--- task's own condition, is illegal.
+-- What a system task prints is observable, and must be what the hardware
+-- prints, so a task's reads are not made arbitrary: a read the annotations
+-- rule out is illegal when its value reaches the task's condition, or one
+-- of its arguments while the condition holds ('reachPass').
 --
 -- @earlier p2@ gives the action copies of p2's instance that p2 may not
 -- follow, in the order of the child's methods.
@@ -2935,11 +3451,11 @@ stepLegality d earlier sx = sx { sxIllegal = cross ++ within ++ tasks }
     usedRef p = TSt (stateField p)
     callCond = M.fromListWith (\new old -> tOr [old, new]) [ (p, c) | (p, c, _) <- sxCalls sx ]
     tasks = [ if siWithin s
-                then ("a system task reads " ++ portLabel (siPort s) ++ " with a call of " ++ portLabel (siUse s)
-                      ++ " in one rule", tAnd [tc, M.findWithDefault (TLit False) (siUse s) callCond])
-                else ("a system task reads " ++ portLabel (siPort s) ++ " after " ++ portLabel (siUse s)
+                then ("a system task can print " ++ portLabel (siPort s) ++ " read with a call of "
+                      ++ portLabel (siUse s) ++ " in one rule", tAnd [tc, M.findWithDefault (TLit False) (siUse s) callCond])
+                else ("a system task can print " ++ portLabel (siPort s) ++ " read after " ++ portLabel (siUse s)
                      , tAnd [tc, usedRef (siUse s)])
-            | (tc, ss) <- sxTasks sx, s <- ss ]
+            | (tc, s) <- sxTasks sx ]
 
 -- | The State field that records whether a port has been used this cycle.
 stateField :: Port -> String
@@ -3256,7 +3772,6 @@ buildSeq withOrders d steps fields fieldMap hwPorts rw stateFields =
     fieldSort g = snd (fieldInfo IM.! g)
     fireName = fireNameFor (S.fromList [ f | (f, _, _) <- stateFields ])
     fieldIdx = M.fromList (zip (map fdName fields) [0 :: Int ..])
-    readFlagSet = S.fromList (dReadFlags d)
     zeroOf g = case fieldSort g of { s | isToken s -> TUnset s; _ -> TLit False }
     -- the schedule's run: each step with the versions before and after it
     (outs, finalVers) = runAll (IM.fromList [ (g, zeroOf g) | g <- IM.keys fieldInfo ])
@@ -3284,8 +3799,9 @@ buildSeq withOrders d steps fields fieldMap hwPorts rw stateFields =
                 rs -> let grouped = M.toList (M.fromListWith (++) [ (t, [why]) | (why, t) <- reverse rs ])
                       in [ ("illegal_access", ESticky [ (fa t, intercalate "; " ws) | (t, ws) <- grouped ]) ]
             -- the value copies whose reads a later read may not follow: a
-            -- step that reads one sets its flag when it fires
-            flagE = [ (stateField p, ESticky [(fireT, "")]) | p <- stReadSites st, S.member p readFlagSet ]
+            -- step that reads one sets its flag when it fires and the value
+            -- read reaches what it does
+            flagE = [ (stateField p, ESticky [(fa c, "")]) | (p, c) <- sxFlags sx ]
             callsOf = M.fromListWith (++) [ (p, [(c, as)]) | (p, c, as) <- reverse (sxCalls sx) ]
             callE = concat
                 [ [ (en, ESticky [(fa (tOr (map fst calls)), "")]) | Just en <- [ptEnable p] ]
@@ -3866,10 +4382,12 @@ emitLean d pf = unlines $ concat
              , ""
              , "* every rule that fires has a true guard where it runs,"
              , "* no submodule has its action methods called in an order its scheduling"
-             , "  annotations forbid" ++ (if anyTaskSites then "," else ", and") ]
-          ++ [ l | anyTaskSites
-                 , l <- [ "* no system task reads a value method where those annotations forbid it,"
-                        , "  under the task's own condition, and" ] ]
+             , "  annotations forbid" ++ (if tasks > 0 then "," else ", and") ]
+          ++ [ l | tasks > 0
+                 , l <- [ "* no system task prints, or decides whether to print on, a value read where"
+                        , "  those annotations forbid the read: such a read is illegal when its value can"
+                        , "  reach the task's condition, or one of its arguments while the condition"
+                        , "  holds, following the selections (if, case, mux, array index) on the way, and" ] ]
           ++ [ "* the hardware makes the same method calls on every submodule as that"
              , "  sequential execution, with the same arguments whenever a call happens, and"
              , "  produces the same module outputs." ]
@@ -3899,12 +4417,15 @@ emitLean d pf = unlines $ concat
           ++ [ "The proof is by `bv_decide`, whose SAT certificate Lean checks with compiled"
              , "code: the axioms printed at the end are Lean's standard three plus that check." ]
           ++ (if tasks > 0
-                then [ "", "**Not modelled.** " ++ show tasks ++ " system task call(s) (`$display` and the like) have no"
-                     , "effect on submodules and are not compared." ]
+                then [ "", "**System tasks.** " ++ show tasks ++ " system task call(s) (`$display` and the like) have no"
+                     , "effect on submodules, and their arguments are not compared with the hardware's."
+                     , "What a task prints is observable and must be what the hardware prints, so its"
+                     , "reads are not made arbitrary: by the third point above, what it prints, and"
+                     , "whether it prints, depends only on reads the annotations allow where it runs,"
+                     , "which see what the hardware does once the calls before them agree." ]
                 else [])
           ++ [ "-/" ] )
       where tasks = sum (map (stTasks . sxStep) steps)
-            anyTaskSites = any (not . null . stTaskSites . sxStep) steps
             -- the hypotheses this file has, in the order the theorem takes them
             assumed = case [ text | (has, text) <- assumptions, has ] of
                 [] -> "**What is assumed:** nothing; `schedule_sound` has no hypotheses."
@@ -4003,10 +4524,10 @@ emitLean d pf = unlines $ concat
         ++ [ ("-- the sequential execution's own record", "")
            , ("illegal_access : Bool", "a submodule saw an order its annotations forbid")
            , ("guard_violated : Bool", "a rule ran with a false guard") ]
-        ++ [ ("-- reads so far: a later read of a value method that may not follow one sees an arbitrary value", "")
+        ++ [ ("-- reads so far that mattered: a later read of a value method that may not follow one sees an arbitrary value", "")
            | not (null flagFields) ]
         ++ [ (q n ++ " : Bool", cmt) | (n, cmt) <- flagFields ]
-    flagFields = [ (stateField p, portLabel p ++ " read") | p <- pfFlagPorts pf ]
+    flagFields = [ (stateField p, portLabel p ++ " read where its value mattered") | p <- pfFlagPorts pf ]
     -- a child's header: its module and annotations (wrapped), and whether bsc
     -- made it (the conflict_free checks' wires have names starting with _)
     childHeader c =
@@ -4127,8 +4648,21 @@ emitLean d pf = unlines $ concat
         , "what earlier steps did, and records its calls.  A value it reads where the"
         , "submodule's annotations forbid it (after a call it may not follow) is arbitrary:"
         , "its view has a value of its own there, which a congruence (section 5) ties to the"
-        , "hardware's only when the step does not fire or no such call came first."
-        , ""
+        , "hardware's only when the step does not fire or no such call came first." ]
+        ++ (if not (any (not . null . sxTasks) steps) then [] else
+           [ "A system task's reads are not arbitrary: one the annotations forbid is illegal when"
+           , "its value can reach what the task prints, or whether it prints, following the"
+           , "selections on the way." ])
+        ++ (if not (any (\sx -> not (null (sxTasks sx)) || not (null (sxFlags sx))) steps) then [] else
+           [ "When a read reaches a value is worked out from the top.  A definition several others"
+           , "refer to, or a step itself, heads a chain of definitions only one other refers to:"
+           , "`<def>@up` says when one of the chain reaches its head, `<head>@reaches@<copy>` when a"
+           , "read in the chain does, and `<head>@reaches@<def>` when the head of another chain it"
+           , "refers to does, the same for every step.  `<head>@prints@<step>` says when a head's"
+           , "value reaches what the step's tasks print or whether they print, and"
+           , "`<head>@does@<step>` when it reaches anything the step does." ])
+        ++
+        [ ""
         , "For each field a step writes, `Seq.<step>.<field>` is the field once the step has"
         , "run, in terms of each field as the last earlier step left it (or as `State.init` has"
         , "it); a field the step leaves alone has no definition.  A later call of a method"

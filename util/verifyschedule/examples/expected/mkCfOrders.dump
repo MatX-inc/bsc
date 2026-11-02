@@ -27,18 +27,18 @@ execution order:
   1. put0   [method put0]
        fires on WILL_FIRE_put0, can fire CAN_FIRE_put0
        guard CAN_FIRE_put0
-       reads turn.read when 1'b1
+       reads turn.read  (hint: used when 1'b1)
        calls last.write when 1'd1 with put0_v
        output RDY_put0 = CAN_FIRE_put0
   2. put1   [method put1]
        fires on WILL_FIRE_put1, can fire CAN_FIRE_put1
        guard CAN_FIRE_put1
-       reads turn.read when 1'b1
+       reads turn.read  (hint: used when 1'b1)
        calls last.write when 1'd1 with put1_v_PLUS_1___d5
        output RDY_put1 = CAN_FIRE_put1
   3. peek   [value method peek ("CfOrders.bsv", line 25, column 8)]
        fires on WILL_FIRE_peek, can fire CAN_FIRE_peek
-       reads y.read when 1'b1
+       reads y.read  (hint: used when 1'b1)
        output RDY_peek = CAN_FIRE_peek
        output peek = y.read  (when WhenOutput "RDY_peek")
   4. poke   [method poke]
@@ -48,14 +48,14 @@ execution order:
        output RDY_poke = CAN_FIRE_poke
   5. count   [value method count ("CfOrders.bsv", line 25, column 8)]
        fires on WILL_FIRE_count, can fire CAN_FIRE_count
-       reads n.read when 1'b1
+       reads n.read  (hint: used when 1'b1)
        output RDY_count = CAN_FIRE_count
        output count = n___d1  (when WhenOutput "RDY_count")
   6. RL_tally   [rule tally ("CfOrders.bsv", line 31, column 9)]
        fires on WILL_FIRE_RL_tally, can fire CAN_FIRE_RL_tally
        guard CAN_FIRE_RL_tally
-       reads n.read when 1'b1
-       reads turn.read when 1'b1
+       reads n.read  (hint: used when 1'b1)
+       reads turn.read  (hint: used when 1'b1)
        calls n.write when 1'd1 with n_PLUS_1___d2
        calls turn.write when 1'd1 with turn_PLUS_1___d4
 

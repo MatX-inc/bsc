@@ -35,14 +35,14 @@ execution order:
   1. RL_incr   [rule incr ("AvArg.bsv", line 26, column 9)]
        fires on WILL_FIRE_RL_incr, can fire CAN_FIRE_RL_incr
        guard CAN_FIRE_RL_incr
-       reads c.port0__read when 1'b1
-       reads phase.read when 1'b1
+       reads c.port0__read  (hint: used when 1'b1)
+       reads phase.read  (hint: used when 1'b1)
        calls c.port0__write when 1'd1 with c_port0__read_PLUS_1___d3
   2. RL_consume   [rule consume ("AvArg.bsv", line 30, column 9)]
        fires on WILL_FIRE_RL_consume, can fire CAN_FIRE_RL_consume
        guard CAN_FIRE_RL_consume
-       reads c.port1__read when 1'b1
-       reads phase.read when 1'b1
+       reads c.port1__read  (hint: used when 1'b1)
+       reads phase.read  (hint: used when 1'b1)
        calls p.take when 1'd1 with c_port1__read____d4
        calls r.write when 1'd1 with p_take___d5
        calls phase.write when 1'd1 with NOT_phase___d6

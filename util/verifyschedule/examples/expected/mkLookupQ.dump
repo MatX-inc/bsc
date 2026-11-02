@@ -52,14 +52,14 @@ execution order:
   1. request   [method request]
        fires on WILL_FIRE_request, can fire CAN_FIRE_request
        guard CAN_FIRE_request
-       reads credits.read when 1'b1
+       reads credits.read  (hint: used when 1'b1)
        calls reqW.wset when 1'd1 with request_key
        output RDY_request = CAN_FIRE_request
   2. response   [method response]
        fires on WILL_FIRE_response, can fire CAN_FIRE_response
        guard CAN_FIRE_response
-       reads respQ.first when 1'b1
-       reads respQ.i_notEmpty when 1'b1
+       reads respQ.first  (hint: used when 1'b1)
+       reads respQ.i_notEmpty  (hint: used when 1'b1)
        calls respQ.deq when 1'd1 with 
        calls retW.wset when 1'd1 with 
        output RDY_response = CAN_FIRE_response
@@ -67,22 +67,22 @@ execution order:
   3. RL_lookup   [rule lookup ("LookupQ.bsv", line 34, column 9)]
        fires on WILL_FIRE_RL_lookup, can fire CAN_FIRE_RL_lookup
        guard CAN_FIRE_RL_lookup
-       reads reqW.wget when 1'b1
-       reads reqW.whas when respQ_i_notFull____d1
-       reads respQ.i_notFull when reqW_whas____d2
-       reads tbl.sub[0] when 1'b1
+       reads reqW.wget  (hint: used when 1'b1)
+       reads reqW.whas  (hint: used when respQ_i_notFull____d1)
+       reads respQ.i_notFull  (hint: used when reqW_whas____d2)
+       reads tbl.sub[0]  (hint: used when 1'b1)
        calls respQ.enq when 1'd1 with tbl_sub_reqW_wget___d5
   4. RL_account   [rule account ("LookupQ.bsv", line 39, column 9)]
        fires on WILL_FIRE_RL_account, can fire CAN_FIRE_RL_account
        guard CAN_FIRE_RL_account
-       reads credits.read when 1'b1
-       reads reqW.whas when 1'b1
-       reads retW.whas when 1'b1
+       reads credits.read  (hint: used when 1'b1)
+       reads reqW.whas  (hint: used when 1'b1)
+       reads retW.whas  (hint: used when 1'b1)
        calls credits.write when 1'd1 with IF_retW_whas_THEN_IF_reqW_whas_THEN_credits_MI_ETC___d11
   5. RL_fill   [rule fill ("LookupQ.bsv", line 46, column 9)]
        fires on WILL_FIRE_RL_fill, can fire CAN_FIRE_RL_fill
        guard CAN_FIRE_RL_fill
-       reads fillIdx.read when 1'b1
+       reads fillIdx.read  (hint: used when 1'b1)
        calls tbl.upd when 1'd1 with fillIdx___d12, _0_CONCAT_fillIdx_2_5_MUL_0x11_6_BITS_7_TO_0___d17
        calls fillIdx.write when 1'd1 with fillIdx_2_PLUS_1___d18
 

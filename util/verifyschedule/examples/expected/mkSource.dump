@@ -13,7 +13,7 @@ execution order:
   1. pop   [method pop]
        fires on WILL_FIRE_pop, can fire CAN_FIRE_pop
        guard CAN_FIRE_pop
-       reads cnt.read when 1'b1
+       reads cnt.read  (hint: used when 1'b1)
        calls cnt.write when 1'd1 with cnt_MINUS_1___d2
        output RDY_pop = CAN_FIRE_pop
        output pop = cnt___d1  (when WhenInput "EN_pop")

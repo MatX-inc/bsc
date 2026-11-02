@@ -1,0 +1,89 @@
+module mkTaskSelect (package TaskSelect), from mkTaskSelect.ba
+inputs:  
+outputs: 
+
+children:
+  counters_0 : mkCounter   [RDY_incCount CF [RDY_incCount, incCount, readCount], RDY_readCount CF [RDY_incCount, RDY_readCount, incCount, readCount], readCount CF readCount, [incCount, readCount] SBR incCount]
+    readCount (value)
+      copy -: result counters_0$readCount :: Bit 26
+    RDY_readCount (value)
+    incCount (action)
+      copy -: enable counters_0$EN_incCount
+    RDY_incCount (value)
+      copy -: result counters_0$RDY_incCount :: Bit 1
+  counters_1 : mkCounter   [RDY_incCount CF [RDY_incCount, incCount, readCount], RDY_readCount CF [RDY_incCount, RDY_readCount, incCount, readCount], readCount CF readCount, [incCount, readCount] SBR incCount]
+    readCount (value)
+      copy -: result counters_1$readCount :: Bit 26
+    RDY_readCount (value)
+    incCount (action)
+      copy -: enable counters_1$EN_incCount
+    RDY_incCount (value)
+      copy -: result counters_1$RDY_incCount :: Bit 1
+  counters_2 : mkCounter   [RDY_incCount CF [RDY_incCount, incCount, readCount], RDY_readCount CF [RDY_incCount, RDY_readCount, incCount, readCount], readCount CF readCount, [incCount, readCount] SBR incCount]
+    readCount (value)
+      copy -: result counters_2$readCount :: Bit 26
+    RDY_readCount (value)
+    incCount (action)
+      copy -: enable counters_2$EN_incCount
+    RDY_incCount (value)
+      copy -: result counters_2$RDY_incCount :: Bit 1
+  counters_3 : mkCounter   [RDY_incCount CF [RDY_incCount, incCount, readCount], RDY_readCount CF [RDY_incCount, RDY_readCount, incCount, readCount], readCount CF readCount, [incCount, readCount] SBR incCount]
+    readCount (value)
+      copy -: result counters_3$readCount :: Bit 26
+    RDY_readCount (value)
+    incCount (action)
+      copy -: enable counters_3$EN_incCount
+    RDY_incCount (value)
+      copy -: result counters_3$RDY_incCount :: Bit 1
+  j : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result j$read :: Bit 2
+    write (action)
+      copy -: enable j$EN_write arg j$write_1 :: Bit 2
+
+execution order:
+  1. RL_test   [rule test ("TaskSelect.bsv", line 40, column 9)]
+       fires on WILL_FIRE_RL_test, can fire CAN_FIRE_RL_test
+       guard CAN_FIRE_RL_test
+       reads counters_0.RDY_incCount  (hint: used when 1'b1)
+       reads counters_0.readCount  (hint: used when j___d1 == 2'd0)
+       reads counters_1.RDY_incCount  (hint: used when 1'b1)
+       reads counters_1.readCount  (hint: used when j___d1 == 2'd1)
+       reads counters_2.RDY_incCount  (hint: used when 1'b1)
+       reads counters_2.readCount  (hint: used when j___d1 == 2'd2)
+       reads counters_3.RDY_incCount  (hint: used when 1'b1)
+       reads counters_3.readCount  (hint: used when j___d1 == 2'd3)
+       reads j.read  (hint: used when 1'b1)
+       a system task (when 1'd1) reads counters_0.readCount out of order: with its own call of counters_0.incCount
+       a system task (when 1'd1) reads counters_1.readCount out of order: with its own call of counters_1.incCount
+       a system task (when 1'd1) reads counters_2.readCount out of order: with its own call of counters_2.incCount
+       a system task (when 1'd1) reads counters_3.readCount out of order: with its own call of counters_3.incCount
+       calls counters_0.incCount when j_PLUS_1_EQ_0___d14 with 
+       calls counters_1.incCount when j_PLUS_1_EQ_1___d15 with 
+       calls counters_2.incCount when j_PLUS_1_EQ_2___d16 with 
+       calls counters_3.incCount when j_PLUS_1_EQ_3___d17 with 
+       calls j.write when 1'd1 with j_PLUS_1___d2
+       1 system task(s), their effects not modelled
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_test
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
+  confirmed RL_test / RL_test: counters_0.readCount with counters_0.incCount in one rule
+  confirmed RL_test / RL_test: counters_1.readCount with counters_1.incCount in one rule
+  confirmed RL_test / RL_test: counters_2.readCount with counters_2.incCount in one rule
+  confirmed RL_test / RL_test: counters_3.readCount with counters_3.incCount in one rule
+warning: bsc reported a dynamic execution order (Warning: "TaskSelect.bsv", line 40, column 9: (G0096))

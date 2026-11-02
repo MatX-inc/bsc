@@ -12,18 +12,18 @@ children:
 execution order:
   1. v   [value method v ("RenamedPorts.bsv", line 11, column 8)]
        fires on WILL_FIRE_v, can fire CAN_FIRE_v
-       reads r.read when 1'b1
+       reads r.read  (hint: used when 1'b1)
        output v = r___d1
   2. a   [method a]
        fires on WILL_FIRE_a, can fire CAN_FIRE_a
        guard CAN_FIRE_a
-       reads r.read when 1'b1
+       reads r.read  (hint: used when 1'b1)
        calls r.write when 1'd1 with r_PLUS_a_x___d2
        output ok_a = CAN_FIRE_a
   3. b   [method b]
        fires on WILL_FIRE_b, can fire CAN_FIRE_b
        guard CAN_FIRE_b
-       reads r.read when 1'b1
+       reads r.read  (hint: used when 1'b1)
        reads r.read out of order: after a call of r.write
        calls r.write when 1'd1 with r_PLUS_1___d4
 

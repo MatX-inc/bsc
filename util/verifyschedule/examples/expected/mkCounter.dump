@@ -1,0 +1,57 @@
+module mkCounter (package TaskSelect), from mkCounter.ba
+inputs:  EN_incCount :: Bit 1
+outputs: readCount :: Bit 26 RDY_readCount :: Bit 1 RDY_incCount :: Bit 1
+
+children:
+  counter : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result counter$read :: Bit 26
+    write (action)
+      copy -: enable counter$EN_write arg counter$write_1 :: Bit 26
+  counterWire : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable counterWire$EN_wset arg counterWire$wset_1 :: Bit 26
+    whas (value), sees same-cycle wset
+      copy -: result counterWire$whas :: Bit 1
+    wget (value), sees same-cycle wset
+      copy -: result counterWire$wget :: Bit 26
+    wire: counterWire$wget = counterWire$wset_1 within the cycle
+    wire: counterWire$whas = counterWire$EN_wset within the cycle
+
+execution order:
+  1. readCount   [value method readCount ("TaskSelect.bsv", line 19, column 8)]
+       fires on WILL_FIRE_readCount, can fire CAN_FIRE_readCount
+       reads counter.read  (hint: used when 1'b1)
+       output RDY_readCount = CAN_FIRE_readCount
+       output readCount = counter___d1  (when WhenOutput "RDY_readCount")
+  2. RL_driveCounter   [rule driveCounter ("TaskSelect.bsv", line 23, column 9)]
+       fires on WILL_FIRE_RL_driveCounter, can fire CAN_FIRE_RL_driveCounter
+       guard CAN_FIRE_RL_driveCounter
+       reads counter.read  (hint: used when 1'b1)
+       calls counterWire.wset when 1'd1 with counter___d1
+       calls counter.write when 1'd1 with 26'd0
+  3. incCount   [method incCount]
+       fires on WILL_FIRE_incCount, can fire CAN_FIRE_incCount
+       guard CAN_FIRE_incCount
+       reads counterWire.wget  (hint: used when 1'b1)
+       reads counterWire.whas  (hint: used when 1'b1)
+       calls counter.write when 1'd1 with IF_counterWire_whas_THEN_counterWire_wget_ELSE_ETC___d5
+       output RDY_incCount = CAN_FIRE_incCount
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: readCount RL_driveCounter incCount
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           readCount SBR incCount
+enables (method, EN):      (incCount, EN_incCount)
+ready (method, RDY):       (incCount, RDY_incCount) (readCount, RDY_readCount)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

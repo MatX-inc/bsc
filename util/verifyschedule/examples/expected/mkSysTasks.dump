@@ -22,17 +22,17 @@ execution order:
   1. RL_first_r   [rule first_r ("SysTasks.bsv", line 17, column 9)]
        fires on WILL_FIRE_RL_first_r, can fire CAN_FIRE_RL_first_r
        guard CAN_FIRE_RL_first_r
-       reads cyc.read when 1'b1
+       reads cyc.read  (hint: used when 1'b1)
        calls note.wset when 1'd1 with cyc_BITS_6_TO_0_CONCAT_0___d3
-       1 system task(s), not modelled
+       1 system task(s), their effects not modelled
   2. RL_second_r   [rule second_r ("SysTasks.bsv", line 22, column 9)]
        fires on WILL_FIRE_RL_second_r, can fire CAN_FIRE_RL_second_r
        guard CAN_FIRE_RL_second_r
-       reads cyc.read when 1'b1
-       reads note.wget when note_whas____d5
-       reads note.whas when 1'b1
+       reads cyc.read  (hint: used when 1'b1)
+       reads note.wget  (hint: used when note_whas____d5)
+       reads note.whas  (hint: used when 1'b1)
        calls cyc.write when 1'd1 with cyc_PLUS_1___d4
-       3 system task(s), not modelled
+       3 system task(s), their effects not modelled
 
 use conditions (recomputed):
 

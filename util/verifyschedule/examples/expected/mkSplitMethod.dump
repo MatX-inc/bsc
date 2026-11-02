@@ -26,7 +26,7 @@ execution order:
   1. put_T   [method put]
        fires on WILL_FIRE_put_T, can fire CAN_FIRE_put_T
        guard CAN_FIRE_put_T
-       reads sel.read when 1'b1
+       reads sel.read  (hint: used when 1'b1)
        calls a.write when 1'd1 with put_x
        output RDY_put = CAN_FIRE_put_T || CAN_FIRE_put_F
   2. setC   [method setC]
@@ -36,18 +36,18 @@ execution order:
        output RDY_setC = CAN_FIRE_setC
   3. peek   [value method peek ("SplitMethod.bsv", line 15, column 8)]
        fires on WILL_FIRE_peek, can fire CAN_FIRE_peek
-       reads b.read when 1'b1
+       reads b.read  (hint: used when 1'b1)
        output RDY_peek = CAN_FIRE_peek
        output peek = b.read  (when WhenOutput "RDY_peek")
   4. put_F   [method put]
        fires on WILL_FIRE_put_F, can fire CAN_FIRE_put_F
        guard CAN_FIRE_put_F
-       reads sel.read when 1'b1
+       reads sel.read  (hint: used when 1'b1)
        calls b.write when 1'd1 with put_x
   5. RL_flip   [rule flip ("SplitMethod.bsv", line 21, column 9)]
        fires on WILL_FIRE_RL_flip, can fire CAN_FIRE_RL_flip
        guard CAN_FIRE_RL_flip
-       reads sel.read when 1'b1
+       reads sel.read  (hint: used when 1'b1)
        calls sel.write when 1'd1 with NOT_sel___d2
 
 use conditions (recomputed):

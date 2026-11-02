@@ -13,7 +13,7 @@ execution order:
   1. take   [method take]
        fires on WILL_FIRE_take, can fire CAN_FIRE_take
        guard CAN_FIRE_take
-       reads cnt.read when 1'b1
+       reads cnt.read  (hint: used when 1'b1)
        calls cnt.write when 1'd1 with cnt_PLUS_take_bias___d2
        output RDY_take = CAN_FIRE_take
        output take = cnt___d1  (when WhenInput "EN_take")

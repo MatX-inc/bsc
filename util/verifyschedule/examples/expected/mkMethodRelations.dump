@@ -22,13 +22,13 @@ children:
 execution order:
   1. getA   [value method getA ("MethodRelations.bsv", line 25, column 8)]
        fires on WILL_FIRE_getA, can fire CAN_FIRE_getA
-       reads a.read when 1'b1
+       reads a.read  (hint: used when 1'b1)
        output RDY_getA = CAN_FIRE_getA
        output getA = a___d3  (when WhenOutput "RDY_getA")
   2. incA   [method incA]
        fires on WILL_FIRE_incA, can fire CAN_FIRE_incA
        guard CAN_FIRE_incA
-       reads a.read when 1'b1
+       reads a.read  (hint: used when 1'b1)
        calls a.write when 1'd1 with a_PLUS_1___d4
        output RDY_incA = CAN_FIRE_incA
   3. setA   [method setA]
@@ -38,14 +38,14 @@ execution order:
        output RDY_setA = CAN_FIRE_setA
   4. getB   [value method getB ("MethodRelations.bsv", line 25, column 8)]
        fires on WILL_FIRE_getB, can fire CAN_FIRE_getB
-       reads b.read when 1'b1
+       reads b.read  (hint: used when 1'b1)
        output RDY_getB = CAN_FIRE_getB
        output getB = b___d2  (when WhenOutput "RDY_getB")
   5. RL_mv   [rule mv ("MethodRelations.bsv", line 30, column 9)]
        fires on WILL_FIRE_RL_mv, can fire CAN_FIRE_RL_mv
        guard CAN_FIRE_RL_mv
-       reads b.read when 1'b1
-       reads on.read when 1'b1
+       reads b.read  (hint: used when 1'b1)
+       reads on.read  (hint: used when 1'b1)
        calls a.write when 1'd1 with b___d2
   6. setB   [method setB]
        fires on WILL_FIRE_setB, can fire CAN_FIRE_setB

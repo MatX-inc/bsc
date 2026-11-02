@@ -27,25 +27,25 @@ execution order:
   1. RL_shadow   [rule shadow ("UrgencyBlocking.bsv", line 39, column 9)]
        fires on WILL_FIRE_RL_shadow, can fire CAN_FIRE_RL_shadow
        guard CAN_FIRE_RL_shadow
-       reads snap.read when 1'b1
+       reads snap.read  (hint: used when 1'b1)
        calls lastOp.write when 1'd1 with 2'd2
   2. RL_snapshot   [rule snapshot ("UrgencyBlocking.bsv", line 35, column 9)]
        fires on WILL_FIRE_RL_snapshot, can fire CAN_FIRE_RL_snapshot
        guard CAN_FIRE_RL_snapshot
-       reads cnt.read when 1'b1
+       reads cnt.read  (hint: used when 1'b1)
        calls snap.write when 1'd1 with cnt___d2
   3. RL_bump   [rule bump ("UrgencyBlocking.bsv", line 25, column 9)]
        fires on WILL_FIRE_RL_bump, can fire CAN_FIRE_RL_bump
        guard CAN_FIRE_RL_bump
-       reads cnt.read when 1'b1
-       reads go.read when 1'b1
+       reads cnt.read  (hint: used when 1'b1)
+       reads go.read  (hint: used when 1'b1)
        calls cnt.write when 1'd1 with cnt_PLUS_1___d3
        calls lastOp.write when 1'd1 with 2'd1
   4. RL_clear   [rule clear ("UrgencyBlocking.bsv", line 30, column 9)]
        fires on WILL_FIRE_RL_clear, can fire CAN_FIRE_RL_clear
        guard CAN_FIRE_RL_clear
-       reads cnt.read when 1'b1
-       reads go.read when 1'b1
+       reads cnt.read  (hint: used when 1'b1)
+       reads go.read  (hint: used when 1'b1)
        reads cnt.read out of order: after a call of cnt.write
        calls cnt.write when 1'd1 with 8'd0
        calls go.write when 1'd1 with NOT_go___d6
