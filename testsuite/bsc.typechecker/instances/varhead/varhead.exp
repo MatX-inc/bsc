@@ -1,0 +1,17 @@
+# The instance lookup for a predicate whose head is a type variable:
+# only an instance with a variable at that position can match it, so the
+# constructor-headed instances are not tried (see VarHeadLookup.bs).
+
+# The resolution: pack, unpack, defaultValue and == of the two ground
+# instantiations behave as derived.
+test_c_veri_bs_modules_options VarHeadLookup {} {-trace-tc-reducepred} sysVarHeadLookup.out.expected
+
+# The reducePred trace lists the instances the lookup left every
+# predicate to try.  Nothing in the package asks for a K* type, so a K*
+# instance can be among them only for a variable-headed predicate, as
+# every one of them was before the lookup was narrowed.
+find_n_strings VarHeadLookup.bs.bsc-vcomp-out {(Inst VarHeadLookup.Prelude.Bits~VarHeadLookup.K} 0
+find_n_strings VarHeadLookup.bs.bsc-vcomp-out {(Inst VarHeadLookup.Prelude.DefaultValue~VarHeadLookup.K} 0
+# The narrowed lookup still answers the variable-headed DefaultValue
+# predicates with the Literal catch-all instance (and nothing else).
+find_regexp VarHeadLookup.bs.bsc-vcomp-out {Prelude.Prelude.DefaultValue~t}

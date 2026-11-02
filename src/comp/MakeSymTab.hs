@@ -1170,12 +1170,13 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
           ("getTI CIclass: variable " ++ ppReadable v ++
            " not found in class " ++ ppReadable qi)
           (M.lookup v vs_idx_map)
-        mkClass genInsts' getInsts' =
+        mkClass genInsts' genCandidates' getInsts' =
           Class {
             name = CTypeclass qi,
             csig = tvs,
             super = [ (c', IsIn (mustFindClass r c') (map conv ts)) | CPred c' ts <- ps ],
             genInsts  = genInsts',
+            genCandidates = genCandidates',
             getInsts  = getInsts',
             tyConOf = TyCon qi (Just k)
                       (TIstruct SClass
@@ -1193,7 +1194,8 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
     in if useLegacyInstIndex
        then let (qinsts, errs) = getQInstsLegacy qi bss qts
                 all_insts = map (doInst mi r c) qinsts
-                c = mkClass (\ _ _ _ -> all_insts) all_insts
+                genAll = \ _ _ _ -> all_insts
+                c = mkClass genAll (candidatesFromInsts genAll) all_insts
             in (c, errs)
        else let qinsts    = getQInsts qi qts
                 all_insts = map (doInst mi r c) qinsts
@@ -1275,8 +1277,15 @@ getCls errh mi src_pkg iks r incoh ps ik vs fds ats ifs msort qts =
                 -- must be visible to trigger the incoherent path in
                 -- sat/satisfyX and propagate fd_subst correctly.  Using
                 -- Bound would hide those instances and produce T0029 errors.
+                -- A type-variable head queries Var instead: lookupCandidates
+                -- marks the items under the constructor branches there as
+                -- ruled out, so reducePred's walk still sees them, in the
+                -- same order, without trying them.
+                instOf (_, _, inst) = inst
                 c = mkClass (\ _ _ p ->
                                  [ inst | (_, _, inst) <- lookupPredTrie (predQuery S.empty p) trie ])
+                            (\ _ _ p ->
+                                 map (fmap instOf) (lookupCandidates (predQuery S.empty p) trie))
                             all_insts
             in (c, errs)
 
