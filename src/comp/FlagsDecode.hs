@@ -499,6 +499,7 @@ describeFlags showHidden =
 traceflags :: [String]
 traceflags = [
           "check-ctype-ids",
+          "check-isimplify-memo",
           "debug-eval-free-vars",
           "no-ctype-ids",
           "no-use-layout",
@@ -575,6 +576,7 @@ traceflags = [
           "hack-eager-pack-unpack",
           "hack-gate-clock-inputs",
           "hack-gate-default-clock",
+          "hack-no-isimplify-memo",
           "hack-no-itype-ftv-cache",
           "hack-strict-inst-tree",
           "outlaw-sv-kws-as-classic-ids",
