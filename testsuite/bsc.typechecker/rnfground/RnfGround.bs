@@ -1,0 +1,49 @@
+package RnfGround where
+
+import Vector
+
+-- Source for the IType rnf memo tests (rnfground.exp): a struct and an
+-- interface, whose tycons carry field lists in their sort payloads, a
+-- vector of a numeric size, and a polymorphic function, whose type is
+-- quantified in the .bo, all used at ground types by a synthesized
+-- module with a submodule, so the deepseq at every phase boundary
+-- reaches the same interior nodes, tycon leaves and quantified type
+-- many times over.
+
+struct Pair =
+    first :: UInt 8
+    second :: Bit 4
+  deriving (Bits, Eq)
+
+interface Acc =
+    push :: Pair -> Action
+    total :: UInt 16
+
+swap :: Pair -> Pair
+swap p = Pair { first = zeroExtend (unpack p.second);
+                second = truncate (pack p.first) }
+
+sumVec :: Vector n (UInt 8) -> UInt 16
+sumVec v = foldr (\ x s -> s + zeroExtend x) 0 v
+
+mkAcc :: Module Acc
+mkAcc = module
+    t :: Reg (UInt 16) <- mkReg 0
+    interface
+      push p = t := t + zeroExtend p.first + zeroExtend (unpack p.second)
+      total = t
+
+{-# verilog sysRnfGround #-}
+sysRnfGround :: Module Empty
+sysRnfGround = module
+    cnt :: Reg (UInt 8) <- mkReg 0
+    lane :: Reg (Vector 4 (UInt 8)) <- mkReg (replicate 0)
+    acc :: Acc <- mkAcc
+    rules
+      "step": when True ==>
+        action
+          cnt := cnt + 1
+          lane := map (\ b -> b + cnt) lane
+          acc.push (swap (Pair { first = cnt; second = truncate (pack cnt) }))
+          $display "%0d %0d %0d" cnt (sumVec lane) acc.total
+      "done": when cnt == 7 ==> $finish 0
