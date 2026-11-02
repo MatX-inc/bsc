@@ -129,6 +129,44 @@ compile_fail_error ImportForeignModule_MethodDupClockedBy.bsv P0197
 compile_fail_error ImportForeignModule_DupSchedule.bsv P0201
 # Here the overlap is OK because the relationship is the same
 compile_pass ImportForeignModule_DupScheduleOK.bsv
+# P repeated, including in the swapped order, since P is symmetric
+compile_pass ImportForeignModule_DupScheduleP.bsv
+# SB repeated exactly
+compile_pass ImportForeignModule_DupScheduleSB.bsv
+# SBR repeated exactly
+compile_pass ImportForeignModule_DupScheduleSBR.bsv
+# SB and SBR are not symmetric, so the swapped order disagrees
+compile_fail_error ImportForeignModule_DupScheduleRevSB.bsv P0201
+compile_fail_error ImportForeignModule_DupScheduleRevSBR.bsv P0201
+compile_fail_error ImportForeignModule_DupScheduleSBvsSBR.bsv P0201
+# A single statement can also disagree with itself
+compile_fail_error ImportForeignModule_DupScheduleOneStmt.bsv P0201
+
+# ----------
+
+# Test that the ME and EXT scheduling annotations, which BSC does not
+# implement, are reported as unsupported
+compile_fail_error ImportForeignModule_ScheduleME.bsv P0225
+compare_file [make_bsc_output_name ImportForeignModule_ScheduleME.bsv]
+# the infix form of ME, with two lists
+compile_fail_error ImportForeignModule_ScheduleMETwoLists.bsv P0225
+compare_file [make_bsc_output_name ImportForeignModule_ScheduleMETwoLists.bsv]
+compile_fail_error ImportForeignModule_ScheduleEXT.bsv P0225
+compare_file [make_bsc_output_name ImportForeignModule_ScheduleEXT.bsv]
+
+# ----------
+
+# Test that each list of methods in a schedule statement must name at
+# least one method
+# both lists empty
+compile_fail_error ImportForeignModule_ScheduleEmptyLists.bsv P0005
+compare_file [make_bsc_output_name ImportForeignModule_ScheduleEmptyLists.bsv]
+# the second list empty
+compile_fail_error ImportForeignModule_ScheduleEmptySecondList.bsv P0005
+compare_file [make_bsc_output_name ImportForeignModule_ScheduleEmptySecondList.bsv]
+# the first list omitted, as in the prefix form of ME and EXT
+compile_fail_error ImportForeignModule_ScheduleNoFirstList.bsv P0005
+compare_file [make_bsc_output_name ImportForeignModule_ScheduleNoFirstList.bsv]
 
 # ----------
 
