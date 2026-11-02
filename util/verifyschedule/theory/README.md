@@ -8,8 +8,18 @@ Prototypes, not yet used by the generator. Lean 4.35, core library only.
   (`Gen.serial`), a per-field block check, and a parent-order check
   (`Gen.all_orders_parent`).  `Example.lean` instantiates it on a toy design.
   Build: `lean -o Generic.olean Generic.lean`, then
-  `LEAN_PATH=. lean Example.lean`.  Open points are in `design.md`; argument-
+  `LEAN_PATH=.:<toolchain>/lib/lean lean Example.lean`.  Open points are in `design.md`; argument-
   less value methods will become one step read any number of times, replacing
   the K read copies used here.
-- `modular/` (to follow): the per-module contract `Realizes`, the
-  composition theorem and primitive contracts.
+- `modular/`: the per-module contract `Realizes` (for every legal parent
+  call sequence there is a one-at-a-time run, with each caller's calls kept
+  together, that matches the hardware's outputs and next state), the
+  composition theorem `Modular.compose`, the induction over the instance
+  tree `Built.realizes` / `Built.top` (with non-vacuity), and primitive
+  contracts checked against bsc's Verilog (Reg, the wire family, CReg n,
+  FIFO2).  `Example.lean` has a two-level hierarchy and negative cases that
+  must fail (a sandwiching SB export, a wrong mux argument, a forbidden
+  parent order, an RWire loop); `split/` composes across separately
+  compiled files.  Build `Modular.olean` as above (add -DElab.async=false
+  under a memory cap).  Open points, mostly per-module proof cost, are in
+  `design.md`.
