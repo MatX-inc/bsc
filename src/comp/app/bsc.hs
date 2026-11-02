@@ -148,7 +148,7 @@ import ABin(ABin(..), ABinModInfo(..), ABinForeignFuncInfo(..),
 import ABinUtil(readAndCheckABin, readAndCheckABinPathCatch, getABIHierarchy,
                 assertNoSchedErr)
 import GenABin(genABinFile)
-import GenBXref(BXrefFile(..), BXrefStage(..), genBXrefFile)
+import GenBXref(BXrefFile(..), BXrefStage(..), genBXrefFile, checkIdentTable)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap,
                         mkImportDeclarations, isPoly)
 import VPIWrappers(genVPIWrappers, genVPIRegistrationArray)
@@ -1356,7 +1356,10 @@ metadataDirectory flags =
 -- has been generated, and the identifier records of the Verilog
 -- backend's join.  Nothing is written under -metadata-scramble, whose
 -- store holds perturbed numbers by design.  Encoding the table reads
--- its strings and interns none.
+-- its strings and interns none.  Under -metadata-check the identifier
+-- records are also taken through the file's identifier table and back
+-- (GenBXref.checkIdentTable): a record that does not come back as it
+-- went in is a broken encoding, which stops the compile.
 writeBXrefFile :: ErrorHandle -> Flags -> String -> String -> BXrefStage ->
                   MetaLedger -> [IdentRecord] -> IO ()
 writeBXrefFile errh flags prefix modstr stage ledger idents =
@@ -1367,12 +1370,18 @@ writeBXrefFile errh flags prefix modstr stage ledger idents =
                           prefix modstr
         let fname = getFullFilePath fname_init
             remapP = remapPositionFile (remapPathPrefix flags)
+            meta = ledgerMeta ledger
             bxfile = BXrefFile { bx_version = bscVersionStr True,
                                  bx_module = modstr,
                                  bx_stage = stage,
-                                 bx_meta = ledgerMeta ledger,
+                                 bx_meta = meta,
                                  bx_idents = idents }
         genBXrefFile errh remapP fname bxfile
+        when (metadataCheck flags) $
+            case checkIdentTable meta idents of
+              [] -> return ()
+              ms -> internalError ("identifier records of " ++ modstr ++
+                                   " through the .bxref table:\n" ++ unlines ms)
         unless (quiet flags) $
             putStrLnF ("Cross-reference file created: " ++
                        getRelativeFilePath fname_init)
