@@ -175,6 +175,7 @@ library
     IConvLet
     IDropRules
     IExpand
+    IExpandMeta
     IExpandUtils
     IInline
     IInlineFmt

@@ -36,6 +36,12 @@ data DefProp
       -- ^ the lifted dictionaries the evidence references, in slot order
   | DefP_DictTypes [IType]
       -- ^ the types the evidence references, in slot order
+  -- The definition is a recursion point: it is in a nontrivial strongly
+  -- connected component of its package's definition reference graph, or
+  -- it references itself (primFix).  Computed by FixupDefs.markRecursiveDefs
+  -- when the package is compiled and carried in the .bo, so that the
+  -- evaluator reads it without decoding the body (see IExpandMeta).
+  | DefP_Recursive
   deriving (Eq, Ord, Show)
 
 instance PPrint DefProp where
@@ -49,6 +55,7 @@ instance NFData DefProp where
   rnf (DefP_DictRendering s) = rnf s
   rnf (DefP_DictKids ks) = rnf ks
   rnf (DefP_DictTypes ts) = rnf ts
+  rnf DefP_Recursive = ()
 
 -- --------------------
 

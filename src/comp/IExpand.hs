@@ -73,6 +73,7 @@ import ISyntaxSubst(eSubst, eSubstBatch, tSubstBatch)
 import IConv(iConvT, iConvExpr)
 import ISyntaxUtil
 import IExpandUtils
+import IExpandMeta(SiteKind(..), idSiteKey, rootSiteKey, renderDump)
 import Wires
 import IWireSet
 import qualified IfcBetterInfo as BetterInfo
@@ -252,18 +253,18 @@ iExpandPref = "__h"
 --   except when they are simple enough to be inlined.
 --   The actual elaboration work is done by iExpandModuleDef
 iExpand :: ErrorHandle -> Flags ->
-           SymTab -> M.Map Id HExpr ->
+           SymTab -> M.Map Id HExpr -> S.Set Id ->
            IATFCache ->
            Bool -> [PProp] -> HDef ->
            IO (IModule HeapData)
-iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
+iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
   -- unbuffer output if we're tracing
   when (doAnyTrace || showElabProgress flags) $
       do hSetBuffering stdout LineBuffering
          hSetBuffering stderr LineBuffering
   -- execute the static elaboration
   -- go is of type GOutput X, where X is the large tuple output of iExpandModuleDef
-  go <- runG errh flags symt alldefs atf_cache mi is_noinlined_func pps $
+  go <- runG errh flags symt alldefs recdefs atf_cache mi is_noinlined_func pps $
             iExpandModuleDef def
   -- trace the steps and heap size
   when doTraceSteps $ putStrLn ("expansion steps: " ++ (show (go_steps go)))
@@ -394,6 +395,13 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
   --        traceM ("Def: " ++ ppReadable (i, getPosition i, getIdProps i, p, props))
   --mapM_ traceMethodPred mpdefs
 
+  -- -metadata-dump: the site and frame chain of every cell the module
+  -- reaches, in pointer order.  Suppressed under -metadata-scramble,
+  -- whose store holds perturbed numbers by design.
+  when (metadataDump flags && not (metadataScramble flags)) $
+      putStr (renderDump (go_meta go)
+                         [ (p, hc_meta c) | (p, c) <- IM.toAscList iheap ])
+
   when doDebug $ do
       traceM ("iExpand done\n" ++ ppReadable (sort (IM.toList iheap))
                                ++ ppReadable rules
@@ -417,7 +425,7 @@ iExpandStrings errh flags symt alldefs atf_cache (IDef i t e _) = do
                      EGeneric ("Cannot evaluate " ++ quote (getIdString i) ++
                                " to strings: its type is " ++ ppString t ++
                                ", not List String"))]
-  go <- runG errh flags symt alldefs atf_cache i False [] $
+  go <- runG errh flags symt alldefs S.empty atf_cache i False [] $
             pushTopValueSchedNameScope i >> evalStringList e
   return (fst (goutput go))
 
@@ -1307,7 +1315,8 @@ iExpandField _ implicitCond _ (i, bi, e, t) | t == itClock = do
   when (implicitCond /= pTrue) $ do
       -- XXX this error message should be improved (see EModPortHasImplicit)
       deferErrors [(getIExprPosition e, EHasImplicit (ppReadable e))]
-  (c, e') <- evalClock e
+  fr <- pushRootFrame (idSiteKey SKMethodRoot i)
+  (c, e') <- withMetaFrame fr (evalClock e)
   -- if the output clock is defined as an input clock, that input clock
   -- must either have a gate port or the missing port must be inhigh
   addInhighClkGate c
@@ -1321,7 +1330,8 @@ iExpandField modId implicitCond _ (i, bi, e, t) | t == itReset = do
   when (implicitCond /= pTrue) $
       -- XXX this error message should be improved (see EModPortHasImplicit)
       deferErrors [(getIExprPosition e, EHasImplicit (ppReadable e))]
-  (r, e') <- evalReset e
+  fr <- pushRootFrame (idSiteKey SKMethodRoot i)
+  (r, e') <- withMetaFrame fr (evalReset e)
   let modPos = getPosition modId
   fi <- makeOutputRstn modPos i (BetterInfo.mi_prefix bi) r
   setIfcSchedNameScopeProgress Nothing
@@ -1333,7 +1343,8 @@ iExpandField modId implicitCond clkRst (i, bi, e, t) | isitInout_ t = do
   when (implicitCond /= pTrue) $
       -- XXX this error message should be improved (see EModPortHasImplicit)
       deferErrors [(getIExprPosition e, EHasImplicit (ppReadable e))]
-  (iinout, e') <- evalInout e
+  fr <- pushRootFrame (idSiteKey SKMethodRoot i)
+  (iinout, e') <- withMetaFrame fr (evalInout e)
   let modPos = getPosition modId
   (ws, fi) <- makeIfcInout modPos i (BetterInfo.mi_prefix bi) iinout
   setIfcSchedNameScopeProgress Nothing
@@ -1345,12 +1356,16 @@ iExpandField modId implicitCond clkRst (i, bi, e, t) | isRdyId i =
 iExpandField modId implicitCond clkRst (i, bi, e, t) = do
    showTopProgress ("Elaborating method " ++ quote (pfpString i))
    setIfcSchedNameScopeProgress (Just (IEP_Method i False))
-   (_, P p e') <- evalUH e
+   -- the root frame of the method: iExpandMethod re-enters itself per
+   -- argument, so the root is pushed here, once
+   fr <- pushRootFrame (idSiteKey SKMethodRoot i)
+   (_, P p e') <- withMetaFrame fr (evalUH e)
    let (ins, outs, eb) = case e' of
         ICon _ (ICMethod _ ins outs eb) -> (ins, outs, eb)
         _ -> internalError ("iExpandField: expected ICMethod: " ++ ppReadable e')
    (its, ((IDef i1 t1 e1 _), ws1, fi1), ((IDef wi wt we _), ws2, fi2))
-       <- iExpandMethod modId 1 [] (pConj implicitCond p) clkRst (i, bi, ins, outs, eb)
+       <- withMetaFrame fr $
+          iExpandMethod modId 1 [] (pConj implicitCond p) clkRst (i, bi, ins, outs, eb)
    let wp1 = wsToProps ws1 -- default clock domain forced in by iExpandField
    let wp2 = wsToProps ws2
    setIfcSchedNameScopeProgress Nothing
@@ -1672,7 +1687,12 @@ handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModule
         when doDebug $ traceM "handlePrim: enter PrimModuleFix"
         showModProgress ns ("Attempting recursive module instantiation")
         let name = stateLocToId ns
-        (ptr, ref) <- addHeapCell "prim-mod-fix" (HLoop (Just name))
+        -- The hole's header is keyed on the instance name.  The key
+        -- forces name, which addHeapCell's deepseq of hc_name forces in
+        -- any case on the next line; nothing but the store's lookup
+        -- runs between the two.
+        meta <- stampForKey (idSiteKey SKInst name)
+        (ptr, ref) <- addHeapCell "prim-mod-fix" (HHole (Just name) meta)
         let rt = IRefT t ptr (getPosition name) ref
         stno <- getStateNo
         old_rblobs <- getSavedRules
@@ -1963,10 +1983,22 @@ newState b ui t tss vi ns es = do
          reset_map <- handleResetConnections clock_map e
          let v  = IStateVar b ui no vi es t tss clock_map reset_map ns
          chkStateVarTypes i0 t tss
-         i <- uniqueStateName i0
-         when doTraceLoc $  traceM("new state id: " ++ (ppString i))
-         addStateVar (i, v)
-         return $ ICon i (ICStateVar t v)
+         -- The root frame of the instantiation, keyed on its name i0.
+         -- The key forces i0 here, where uniqueStateName forced it before
+         -- (Data.Map.lookup is strict in its key), and not earlier: the
+         -- clock connections above compare the Clock field identifiers
+         -- (getClockGate, addInhighClkGate), PreIds constants whose
+         -- strings may be interned by that comparison, so a push ahead
+         -- of them would move such a string's intern id behind the
+         -- instance name's.  Nothing above allocates a cell (findNF reads
+         -- evaluated cells and the arguments were evaluated by the
+         -- caller), so no cell of the instantiation escapes the frame.
+         fr <- pushRootFrame (idSiteKey SKInst i0)
+         withMetaFrame fr $ do
+           i <- uniqueStateName i0
+           when doTraceLoc $  traceM("new state id: " ++ (ppString i))
+           addStateVar (i, v)
+           return $ ICon i (ICStateVar t v)
 
        -- -----
 
@@ -2291,7 +2323,14 @@ convRules curClkRstn@(curClk, _) ns p0 e = do
         showRuleProgress ns hide str' ("Elaborating rule")
         pushRuleSchedNameScope locId hide
 
-        (c', a', ws) <- evalRule (ns, hide, str') rps rId p' c a
+        -- The root frame of the rule, keyed on the rule's name string,
+        -- which the key reads as a String and never interns.  Its
+        -- FString was interned above by newIStateLocForRule, whose insert
+        -- of locId into the strict stateLocMap compares it with the keys
+        -- already there; rId is forced only after the body (iRUnion) and
+        -- is not read here.
+        fr <- pushRootFrame (rootSiteKey SKRule str')
+        (c', a', ws) <- withMetaFrame fr (evalRule (ns, hide, str') rps rId p' c a)
 
         let ruleExpr = iePrimWhen itAction c' a'
         chkClockDomain "rule" rId ws ruleExpr
@@ -2802,9 +2841,10 @@ walkNF e =
             o@(IRefT _ ptr _ ref) -> do
               old_cell <- getHeap ref
               let old_name = hc_name old_cell
-                  new_cell = HNF { hc_pexpr = P p n, -- (mapIExprPosition cross (o,n)),
-                                   hc_wire_set = ws,
-                                   hc_name = old_name }
+                  new_cell m = HNF { hc_pexpr = P p n, -- (mapIExprPosition cross (o,n)),
+                                     hc_wire_set = ws,
+                                     hc_name = old_name,
+                                     hc_meta = m }
               updHeap "walkNF" (ptr, ref) new_cell
               return (if isCon n then
                           (P p n, ws) -- (mapIExprPosition cross (o,n)), ws)
@@ -3023,8 +3063,8 @@ walkNF e =
                 HUnev { hc_hexpr = e } -> do
                     e' <- unheapAll e
                     internalError ("walkNF unev: " ++ ppReadable (e, e'))
-                HLoop name ->
-                    internalError ("walkNF loop: " ++ ppReadable name)
+                HHole { hc_name = name } ->
+                    internalError ("walkNF hole: " ++ ppReadable name)
                 -- reuse ref for better CSE
                 -- duplication of pred in ref is harmless because of set-based predicates
                 HNF { hc_pexpr = P p e, hc_wire_set =  ws} -> do
@@ -3386,7 +3426,10 @@ evalDef i t e as = do
   -- recurse into evaluating e
   step i
   e' <- cacheDef i t e
-  evalAp "ICDef" e' as
+  -- the unfolding runs under its own frame (cacheDef's cell, shared by
+  -- every unfolding of i, is stamped under the caller's)
+  fr <- pushDefFrame i
+  withMetaFrame fr (evalAp "ICDef" e' as)
 
 -- evaluate a function application
 -- [arg] is a stack of application arguments on the left spine of the expression
@@ -3434,7 +3477,9 @@ evalAp' (IRefT t ptr _ ref)              as = do
 --        when (p /= pTrue) $ traceM ("implicit function condition lost: " ++ ppReadable (p, e)) -- XXX
         let e' = iePrimWhenPred t p e
         when doDebug $ traceM ("iref ap " ++ ppReadable (mkAp e as))
-        evalAp "IRefT" e' as
+        -- a cell holding a definition's partial application completes
+        -- that definition's unfolding here (see withCellDefFrame)
+        withCellDefFrame ref (evalAp "IRefT" e' as)
 -- (there are no variables because they have been turned into IModVars)
 -- XXX redundant, as it's caught by last clause?
 evalAp' e@(IVar i)             as = internalError ("evalAp IVar: " ++ ppReadable (i,as))
@@ -3443,12 +3488,13 @@ evalHeap :: (HeapPointer, HeapData) -> G PExpr
 evalHeap (ptr, ref) = do
     hc <- getHeap ref
     case hc of
-     HLoop (Just name) -> errG (getPosition name, EModuleLoop (pfpString name))
+     HHole { hc_name = Just name } -> errG (getPosition name, EModuleLoop (pfpString name))
      -- XXX should not be possible (we hope)
-     HLoop (Nothing)   -> errG (noPosition, EModuleLoop "<unknown>")
+     HHole { hc_name = Nothing }   -> errG (noPosition, EModuleLoop "<unknown>")
      HWHNF { hc_pexpr = e } -> return e
      HNF { hc_pexpr = e } -> return e
-     HUnev { hc_hexpr = e, hc_name = expr_name } -> do
+     -- a demanded cell is evaluated under the frame it was created in
+     HUnev { hc_hexpr = e, hc_name = expr_name } -> withCellMetaFrame hc $ do
         -- updHeap (ptr, ref) (internalError "blackHole")
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, e))
         -- we don't use evalUH here because we don't want to trigger
@@ -3470,7 +3516,8 @@ evalHeap (ptr, ref) = do
                 {-           (mapIExprPosition cross
                                 ((heapCellToHExpr hc),
                                  (IAps f ts (map (mapIExprPosition cross) (zip as as'))))) -}
-                let new_cell = HWHNF { hc_pexpr = pe'', hc_name = expr_name }
+                let new_cell m = HWHNF { hc_pexpr = pe'', hc_name = expr_name,
+                                         hc_meta = m }
                 updHeap "evalHeap-tuple" (ptr,ref) new_cell
                 return pe''
             -- create IRefs for arguments of other potentially non-strict
@@ -3493,11 +3540,13 @@ evalHeap (ptr, ref) = do
                 {-            (mapIExprPosition cross
                                 ((heapCellToHExpr hc),
                                  (IAps f ts (map (mapIExprPosition cross) (zip as as'))))) -}
-                let new_cell = HWHNF { hc_pexpr = pe'', hc_name = expr_name }
+                let new_cell m = HWHNF { hc_pexpr = pe'', hc_name = expr_name,
+                                         hc_meta = m }
                 updHeap "evalHeap-IAps" (ptr,ref) new_cell
                 return pe''
             _ -> do
-                let new_cell = HWHNF {hc_pexpr = pe', hc_name = expr_name }
+                let new_cell m = HWHNF { hc_pexpr = pe', hc_name = expr_name,
+                                         hc_meta = m }
                 updHeap "evalHeap" (ptr,ref) new_cell
                 return pe'
 
@@ -6175,7 +6224,8 @@ iArrayInRange arr = Array.inRange (Array.bounds arr)
 
 mkArrayCell :: HExpr -> G (ArrayCell HeapData)
 mkArrayCell e = do
-   let hcell = HUnev e Nothing
+   meta <- stampFor e
+   let hcell = HUnev e Nothing meta
    (p, r) <- addHeapCell "mk-array-cell" hcell
    return (ArrayCell p r)
 

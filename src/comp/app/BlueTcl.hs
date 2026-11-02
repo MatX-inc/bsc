@@ -1176,6 +1176,8 @@ tclModule ["methodconditions", modname] = do
            doProp (DefP_DictRendering {}) = []
            doProp (DefP_DictKids {}) = []
            doProp (DefP_DictTypes {}) = []
+           -- the recursion-point property lives on IDefs, not ADefs
+           doProp DefP_Recursive = []
            convert :: ADef -> HTclObj
            convert (ADef i _t e ps) =
                 TLst $ [ TStr (getIdBaseString i)

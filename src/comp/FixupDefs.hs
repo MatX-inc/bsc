@@ -1,9 +1,10 @@
-module FixupDefs(fixupDefs, updDef,
+module FixupDefs(fixupDefs, updDef, markRecursiveDefs,
                  DictBuckets, mkDictBuckets,
                  DictRedirects, mkDictRedirects) where
 
 import Control.Monad.State.Strict(State, evalState, gets, modify)
 import Data.List(nub)
+import qualified Data.List as L
 import Data.Maybe(isJust)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -15,6 +16,7 @@ import DefProp(DefProp(..), defPropsDictEvidence)
 import ISyntax
 import ISyntaxXRef(updateIExprPosition)
 import ISyntaxUtil(iDefsMap, itIsDictType)
+import SCC(scc)
 import Util(tracep)
 --import Debug.Trace
 
@@ -240,6 +242,42 @@ fixupDefs redirects (IPackage mi _ ps ds own_atf_cache) ipkgs =
         --trace ("fixup " ++ ppReadable (map fst (M.toList m))) $
         (IPackage mi ipkg_sigs ps' ds'' own_atf_cache, ads')
 
+
+-- ===============
+
+-- Mark the recursion points of a package: every definition in a
+-- nontrivial strongly connected component of the package's definition
+-- reference graph, and every definition that references itself (primFix
+-- in the Prelude is one).  The evaluator's metadata store consults a
+-- frame's recursive-site map only at such definitions (IExpandMeta), so
+-- the property is computed once, before the package's .bo is written,
+-- and read back with the definition without decoding its body.
+-- References are the ICDef heads reachable through ILam, ILAM and IAps,
+-- the nodes fixUp visits, never entering iConDef; references to
+-- imported definitions are dropped, since package imports form a DAG
+-- and no cycle can pass through them.  A property set earlier is
+-- stripped first, so the marking is idempotent.
+markRecursiveDefs :: [IDef a] -> [IDef a]
+markRecursiveDefs ds =
+    let locals = S.fromList [ i | IDef i _ _ _ <- ds ]
+        nodes = [ (i, localDefRefs locals S.empty e) | IDef i _ e _ <- ds ]
+        selfRefs = S.fromList [ i | (i, rs) <- nodes, S.member i rs ]
+        cyclic = S.fromList (concat [ c | c <- scc [ (i, S.toList rs) | (i, rs) <- nodes ],
+                                          not (null (drop 1 c)) ])
+        recursive = S.union selfRefs cyclic
+        mark (IDef i t e ps) =
+            let ps' = filter (/= DefP_Recursive) ps
+            in  IDef i t e (if S.member i recursive then DefP_Recursive : ps' else ps')
+    in  map mark ds
+
+-- the local definitions an expression references, accumulated
+localDefRefs :: S.Set Id -> S.Set Id -> IExpr a -> S.Set Id
+localDefRefs locals acc (ILam _ _ e) = localDefRefs locals acc e
+localDefRefs locals acc (ILAM _ _ e) = localDefRefs locals acc e
+localDefRefs locals acc (IAps f _ es) = L.foldl' (localDefRefs locals) (localDefRefs locals acc f) es
+localDefRefs locals acc (ICon i (ICDef {}))
+    | S.member i locals = S.insert i acc
+localDefRefs _ acc _ = acc
 
 -- ===============
 

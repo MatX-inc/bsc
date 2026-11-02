@@ -102,7 +102,7 @@ import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
 import LiftDicts(liftDictsPkg)
 import ISimpDicts(iSimpDicts)
-import FixupDefs(fixupDefs, updDef, mkDictBuckets, mkDictRedirects)
+import FixupDefs(fixupDefs, updDef, mkDictBuckets, mkDictRedirects, markRecursiveDefs)
 import ISyntaxCheck(tCheckIPackage, tCheckIModule)
 import ISimplify(iSimplify)
 import BinUtil(BinMap, HashMap, readImports, replaceImportedSignatures)
@@ -110,6 +110,7 @@ import GenBin(genBinFile)
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign)
+import DefProp(DefProp(..))
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
 import ITransform(iTransform)
@@ -650,9 +651,15 @@ compilePackage
     -- whole compile (see mkDictRedirects); "updDef" reuses it per
     -- synthesized module instead of rebuilding the evidence map over
     -- every imported def each time
-    let dictRedirects = mkDictRedirects dictBuckets imod binmods
-    let (imodf, alldefsList) = fixupDefs dictRedirects imod binmods
+    -- mark this package's recursion points, a definition property the
+    -- evaluator's metadata store reads and the .bo carries
+    let imodm = imod { ipkg_defs = markRecursiveDefs (ipkg_defs imod) }
+    let dictRedirects = mkDictRedirects dictBuckets imodm binmods
+    let (imodf, alldefsList) = fixupDefs dictRedirects imodm binmods
     let alldefs = M.fromList [(i, e) | IDef i _ e _ <- alldefsList]
+        -- the recursion points among every definition in scope
+        recDefs = S.fromList [ i | IDef i _ _ ps <- alldefsList,
+                                   any (== DefP_Recursive) ps ]
     iPCheck flags symt imodf "fixup"
     t <- dump errh flags t DFfixup dumpnames imodf
 
@@ -735,7 +742,7 @@ compilePackage
                 def_comp = do
                   def <- genModule errh wi fwrapper flags dumpnames'
                              prefix (getIdBaseString pkgId)
-                             internalSymt alldefs elabATFCache (getDef im i')
+                             internalSymt alldefs recDefs elabATFCache (getDef im i')
                   return (def, True)
                 ex_comp s = do
                   hFlush stdout >> hPutStr stderr s
@@ -826,6 +833,7 @@ genModule ::
     String -> -- source package name
     SymTab ->
     M.Map Id (IExpr HeapData) ->
+    S.Set Id -> -- the recursion points among the definitions
     IATFCache ->
     IDef HeapData ->
     IO (CDefn)
@@ -841,6 +849,7 @@ genModule
     srcName
     symt
     alldefs
+    recdefs
     atf_cache
     def  =
 
@@ -858,7 +867,7 @@ genModule
 
     -- "run" it
     start flags DFexpanded
-    imod0 <- iExpand errh flags symt alldefs atf_cache fwrapper pps def
+    imod0 <- iExpand errh flags symt alldefs recdefs atf_cache fwrapper pps def
     iMCheck flags symt imod0 "expanded"
     t <- dump errh flags t DFexpanded dumpnames imod0
     when (showIESyntax flags) (putStrLnF (show imod0))
