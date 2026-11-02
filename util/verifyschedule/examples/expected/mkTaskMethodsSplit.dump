@@ -1,0 +1,64 @@
+module mkTaskMethodsSplit (package TaskMethods), from mkTaskMethodsSplit.ba
+inputs:  put_1 :: Bit 8 poke_1 :: Bit 8 EN_put :: Bit 1 EN_poke :: Bit 1
+outputs: RDY_put :: Bit 1 RDY_poke :: Bit 1
+
+children:
+  a : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable a$EN_write arg a$write_1 :: Bit 8
+  b : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable b$EN_write arg b$write_1 :: Bit 8
+  mode : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result mode$read :: Bit 1
+    write (action)
+      copy -: enable mode$EN_write arg mode$write_1 :: Bit 1
+
+execution order:
+  1. put   [method put]
+       fires on WILL_FIRE_put, can fire CAN_FIRE_put
+       guard CAN_FIRE_put
+       reads mode.read  (hint: used when 1'b1)
+       calls a.write when 1'd1 with put_1
+       output RDY_put = CAN_FIRE_put
+       task #0 $display when mode__h283 with "put %0d", put_1
+  2. poke   [method poke]
+       fires on WILL_FIRE_poke, can fire CAN_FIRE_poke
+       guard CAN_FIRE_poke
+       reads mode.read  (hint: used when 1'b1)
+       calls b.write when 1'd1 with poke_1
+       output RDY_poke = CAN_FIRE_poke
+       task #1 $display when NOT_mode___d2 with "poke %0d", poke_1
+  3. RL_flip   [rule flip ("TaskMethods.bs", line 33, column 6)]
+       fires on WILL_FIRE_RL_flip, can fire CAN_FIRE_RL_flip
+       guard CAN_FIRE_RL_flip
+       reads mode.read  (hint: used when 1'b1)
+       calls mode.write when 1'd1 with NOT_mode___d2
+       task #2 $display when 1'd1 with "flip"
+
+system-task calls of the hardware, in the order of its always block:
+  task #0: $display [Prelude.$display ("TaskMethods.bs", line 39, column 25)] when WILL_FIRE_put && mode__h283
+  task #1: $display [Prelude.$display ("TaskMethods.bs", line 42, column 39)] when WILL_FIRE_poke && NOT_mode___d2
+  task #2: $display [Prelude.$display ("TaskMethods.bs", line 35, column 10)] when WILL_FIRE_RL_flip
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: put poke RL_flip
+  CF_poke_put: poke put RL_flip
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               (poke, put)
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      (poke, EN_poke) (put, EN_put)
+ready (method, RDY):       (poke, RDY_poke) (put, RDY_put)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

@@ -63,7 +63,10 @@ execution order:
        calls counters_2.incCount when j_PLUS_1_EQ_2___d16 with 
        calls counters_3.incCount when j_PLUS_1_EQ_3___d17 with 
        calls j.write when 1'd1 with j_PLUS_1___d2
-       1 system task(s), their effects not modelled
+       task #0 $display when 1'd1 with SEL_ARR_counters_0_readCount_counters_1_readCo_ETC___d13
+
+system-task calls of the hardware, in the order of its always block:
+  task #0: $display [Prelude.$display ("TaskSelect.bsv", line 41, column 7)] when WILL_FIRE_RL_test
 
 use conditions (recomputed):
 

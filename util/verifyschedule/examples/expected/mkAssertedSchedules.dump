@@ -113,6 +113,7 @@ execution order:
        fires on WILL_FIRE___me_check_0, can fire CAN_FIRE___me_check_0
        guard CAN_FIRE___me_check_0
        check WILL_FIRE_RL_up && WILL_FIRE_RL_down
+       task #0 $error (run-time check) when WILL_FIRE_RL_up && WILL_FIRE_RL_down with "Error: \"AssertedSchedules.bsv\", line 29, column 29: (R0001)\n  Mutually exclusive rules (from the ME sets [RL_up] and [RL_down] ) fired in\n  the same clock cycle.\n"
   7. RL_emitB   [rule emitB ("AssertedSchedules.bsv", line 43, column 9)]
        fires on WILL_FIRE_RL_emitB, can fire CAN_FIRE_RL_emitB
        guard CAN_FIRE_RL_emitB
@@ -123,11 +124,16 @@ execution order:
        calls _enq_RL_emitB$EN_outQ.wset when 1'b1 with limit_EQ_9___d12
        calls _i_notFull_RL_emitB$EN_outQ.wset when 1'b1 with ! NOT_limit_EQ_9_2___d13
        check WILL_FIRE_RL_emitA && limit_EQ_9___d12 && _enq_RL_emitA$EN_outQ.wget
+       task #1 $error (run-time check) when WILL_FIRE_RL_emitA && limit_EQ_9___d12 && _enq_RL_emitA$EN_outQ.wget with "Error: \"AssertedSchedules.bsv\", line 43, column 9: (R0002)\n  Conflict-free rules RL_emitB and RL_emitA called conflicting methods enq and\n  enq of module instance outQ.\n"
   8. setLimit   [method setLimit]
        fires on WILL_FIRE_setLimit, can fire CAN_FIRE_setLimit
        guard CAN_FIRE_setLimit
        calls limit.write when 1'd1 with setLimit_x
        output RDY_setLimit = CAN_FIRE_setLimit
+
+system-task calls of the hardware, in the order of its always block:
+  task #0: $error [Prelude.$error] when WILL_FIRE___me_check_0 && WILL_FIRE_RL_up && WILL_FIRE_RL_down
+  task #1: $error [Prelude.$error] when WILL_FIRE_RL_emitB && WILL_FIRE_RL_emitA && limit_EQ_9___d12 && _enq_RL_emitA$EN_outQ$wget
 
 use conditions (recomputed):
 

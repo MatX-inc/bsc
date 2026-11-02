@@ -24,7 +24,7 @@ execution order:
        guard CAN_FIRE_RL_first_r
        reads cyc.read  (hint: used when 1'b1)
        calls note.wset when 1'd1 with cyc_BITS_6_TO_0_CONCAT_0___d3
-       1 system task(s), their effects not modelled
+       task #0 $display when 1'd1 with "first: cyc=%0d", cyc___d1
   2. RL_second_r   [rule second_r ("SysTasks.bsv", line 22, column 9)]
        fires on WILL_FIRE_RL_second_r, can fire CAN_FIRE_RL_second_r
        guard CAN_FIRE_RL_second_r
@@ -32,7 +32,15 @@ execution order:
        reads note.wget  (hint: used when note_whas____d5)
        reads note.whas  (hint: used when 1'b1)
        calls cyc.write when 1'd1 with cyc_PLUS_1___d4
-       3 system task(s), their effects not modelled
+       task #1 $display when note_whas____d5 with "second: note=%0d", note_wget____d6
+       task #2 $write when 1'd1 with "tick\n"
+       task #3 $finish when cyc_EQ_5___d7 with 32'd0
+
+system-task calls of the hardware, in the order of its always block:
+  task #0: $display [Prelude.$display ("SysTasks.bsv", line 19, column 7)] when WILL_FIRE_RL_first_r
+  task #1: $display [Prelude.$display ("SysTasks.bsv", line 25, column 10)] when WILL_FIRE_RL_second_r && note_whas____d5
+  task #2: $write [Prelude.$write ("SysTasks.bsv", line 26, column 7)] when WILL_FIRE_RL_second_r
+  task #3: $finish [Prelude._finish_ ("SysTasks.bsv", line 28, column 10)] when WILL_FIRE_RL_second_r && cyc_EQ_5___d7
 
 use conditions (recomputed):
 

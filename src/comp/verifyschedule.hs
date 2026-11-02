@@ -11,7 +11,8 @@ whose main theorem says that, in every clock cycle,
     the scheduled 'APackage', with its CAN_FIRE / WILL_FIRE logic, argument
     muxes and method enables -- drives exactly the submodule method calls and
     module outputs that executing the fired rules and methods one at a time,
-    in the schedule's logical execution order, produces; and
+    in the schedule's logical execution order, produces, and makes the same
+    system-task calls in the same order with the same arguments; and
 
   * that one-rule-at-a-time execution is itself legal: every rule's guard
     holds where the rule runs, no submodule has its action methods called
@@ -27,8 +28,13 @@ is observable, so a task's reads are not made arbitrary: such a read is
 illegal when its value can reach the task's condition, or one of its
 arguments while the condition holds, following the selections on the way
 ('reachPass').  Every value a task prints is then one the submodules promise
-where the task runs.  A task's effect is not modelled otherwise, and its
-arguments are not compared with the hardware's.
+where the task runs.  Each task call is also compared with the hardware's:
+its position among the cycle's calls made (0 when not made) and its
+arguments, the hardware's order being that of the module's always block for
+tasks ('aspkg_foreign_calls', as bsc's Verilog back end prints it).  A
+value-returning task's result is a free variable both share.  This is a
+property of the module's Verilog: calls of different modules in one cycle
+come in an order Verilog leaves open.
 
 A second theorem says the same of the orders a parent may choose: for each
 pair of methods the module exports as conflict-free, the order that runs
@@ -56,13 +62,12 @@ only chooses which disjointness facts to ask bsc's solver for: a read is
 arbitrary wherever the annotations rule it out, whatever the use conditions
 say, so a wrong use condition can only make a proof fail.  It does not rely
 on the scheduler or on 'aState': if the hardware they produce does not
-implement the rules, the proof fails, usually with a counterexample.  The
-exception is system tasks: the theorem checks that what a task prints
-depends only on reads the annotations allow, but it does not compare the
-hardware's task calls with the sequential execution's, so how 'aState'
-transcribes them is trusted.  It covers the 'ASPackage' only, not the
-passes of the Verilog back end after 'aState' (wire inlining, renaming
-and the like).
+implement the rules, the proof fails, usually with a counterexample.  It
+covers the 'ASPackage' only, not the passes of the Verilog back end after
+'aState' (wire inlining, renaming and the like; for system tasks, the
+printing of each call as @if (cond) task(args)@ in its block's order, the
+reset guard around it, and the removal of calls whose condition is
+constant false).
 
 The program is three phases:
 
@@ -91,7 +96,7 @@ import qualified Data.Foldable as F
 import qualified Data.IntMap.Strict as IM
 import qualified Data.IntSet as IS
 import GHC.Exts(isTrue#, reallyUnsafePtrEquality#)
-import Data.List(intercalate, isPrefixOf, partition, sortOn, tails, transpose)
+import Data.List(intercalate, isPrefixOf, mapAccumL, partition, sortOn, tails, transpose)
 import qualified Data.Map.Lazy as ML
 import qualified Data.Map.Strict as M
 import Data.Maybe(catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
@@ -109,6 +114,7 @@ import ABin(ABin(..), ABinModInfo(..))
 import ASchedule(AScheduleInfo(..), MethodId(..), UniqueUse(..))
 import AScheduleInfo(SchedNode(..), erdbToList)
 import AState(aState)
+import AVerilogUtil(vNameToTask)
 import ASyntax
 import ASyntaxUtil(aType, aAnd, aOr, aOrs, aSubst, argInputPorts)
 import AUses(Rule(..), buildUseMaps, extractCondition, rumToMethodUseMap,
@@ -116,7 +122,7 @@ import AUses(Rule(..), buildUseMaps, extractCondition, rumToMethodUseMap,
 import BackendNamingConventions(isRWire, isRWire0, isBypassWire)
 import DisjointTest(initDisjointTestState, checkDisjointExprWithCtx)
 import Error(ErrorHandle, initErrorHandle)
-import Flags(Flags, unSpecTo)
+import Flags(Flags, unSpecTo, useDPI)
 import GenABin(readABinFile)
 import Id(getIdString, getIdBaseString, mkIdCanFire, mkIdWillFire, mkRdyId,
           isRdyId, getIdPosition, setIdBaseString, mk_homeless_id)
@@ -387,7 +393,6 @@ data Step = Step
       -- ^ the value-method copies its guard, calls and outputs read, found
       -- in the expressions themselves (through definitions)
     , stChecks   :: [AExpr]          -- ^ conditions of bsc's run-time checks
-    , stTasks    :: Int              -- ^ system tasks (not modelled)
     , stTaskReads :: [(AExpr, [AExpr], [Port])]
       -- ^ each system task's condition, its arguments, and the copies the
       -- two read
@@ -395,6 +400,9 @@ data Step = Step
     , stTaskSites :: [(AExpr, [AExpr], [Site])]
       -- ^ those of its system tasks, with each task's condition and
       -- arguments (every task, in the order of 'stTaskReads')
+    , stTaskCalls :: [TaskCall]
+      -- ^ its system-task calls, bsc's run-time checks among them, in
+      -- program order, each with its index in the cycle's ('tcTag')
     , stOutputs  :: [Output]         -- ^ module outputs observed at this step
     }
 
@@ -410,6 +418,29 @@ data Site = Site { siPort :: Port, siUse :: Port, siWithin :: Bool }
 
 data StepKind = RuleStep | ActionMethodStep | ValueMethodStep
     deriving (Eq, Show)
+
+-- | A system-task (or foreign-function) call: the task as Verilog names it,
+-- its id and source position, its condition and its arguments.
+data TaskCall = TaskCall
+    { tcName  :: String
+    , tcId    :: String
+    , tcCond  :: AExpr
+    , tcArgs  :: [AExpr]
+    , tcCheck :: Bool                -- ^ one of bsc's run-time checks
+    , tcTag   :: Int                 -- ^ its index among the cycle's calls
+    , tcPos   :: String              -- ^ its source position, for comments
+    }
+
+-- | A call of the hardware's always block: the step whose WILL_FIRE its
+-- condition starts with, and the sequential call it is ('matchTasks').
+data HwTask = HwTask
+    { htName :: String
+    , htId   :: String
+    , htStep :: Maybe String
+    , htCond :: AExpr
+    , htArgs :: [AExpr]
+    , htTag  :: Maybe Int
+    }
 
 -- | A guarded call of a child action method.
 data Call = Call
@@ -477,6 +508,10 @@ data Design = Design
       -- firing ('ViaSequential'): each must be one definition in both
       -- semantics
     , dUnspec     :: String                -- ^ @-unspecified-to@
+    , dHwTasks    :: [HwTask]
+      -- ^ the system-task calls of the hardware's always block, in the
+      -- order bsc's Verilog back end prints them
+    , dTaskTags   :: Int                   -- ^ how many sequential calls there are
     , dWarnings   :: [String]
     }
 
@@ -752,7 +787,7 @@ extractDesign path version abmi aspkg = do
                                , rdy `S.member` hwOutSet ]
         exportedC = [ p | p@(a, b) <- names (sC exported), a /= b ]
         -- the RDY fields of the interface, by name, in interface order
-        rdyIfcMap = M.fromListWith (flip (++)) [ (aif_name g, [g]) | g@AIDef {} <- ifc ]
+        rdyIfcMap = M.fromListWith (++) [ (aif_name g, [g]) | g@AIDef {} <- reverse ifc ]
         -- what each step needs to find its rule or method
         ruleMap   = M.fromListWith (\_ old -> old) [ (arule_id r, r) | r <- apkg_rules apkg ]
         methodBySched = M.fromListWith (\_ old -> old)
@@ -784,6 +819,7 @@ extractDesign path version abmi aspkg = do
             , dOrders = [], dUnrealized = [], dExportedCF = [], dUseDefs = useDefs
             , dHavocPorts = S.empty, dReadFlags = [], dRelied = []
             , dUnspec = unSpecTo (abmi_flags abmi)
+            , dHwTasks = [], dTaskTags = 0
             , dWarnings = [ "outputs not compared (not method results): " ++ unwords otherOuts | not (null otherOuts) ]
                           ++ [ "bsc reported a dynamic execution order (" ++ takeWhile (/= '\n') w ++ ")"
                           | (_, tag, w) <- asi_warnings asi
@@ -792,9 +828,11 @@ extractDesign path version abmi aspkg = do
     -- (one partial application, so that its table of definitions is shared)
     let readsIn = exprReads partial
         lookups = StepLookups { slRule = ruleMap, slMethod = methodBySched, slRdy = rdyIfcMap
-                              , slReads = readsIn }
-    steps <- concat <$> mapM (extractStep partial lookups callCopy useConds hwOutSet) order
-    let names' = map stName steps
+                              , slReads = readsIn, slDPI = useDPI (abmi_flags abmi) }
+    steps0 <- concat <$> mapM (extractStep partial lookups callCopy useConds hwOutSet) order
+    let (steps, nTags) = numberTasks steps0
+        hwTasks = matchTasks steps (hardwareTasks aspkg)
+        names' = map stName steps
         -- (reversed, so that each prepended step leaves them in order)
         stepsMap = M.fromListWith (++) [ (m, [stName st]) | st <- reverse steps, Just m <- [stMethod st] ]
         stepsOf m = M.findWithDefault [] m stepsMap
@@ -807,7 +845,8 @@ extractDesign path version abmi aspkg = do
                       ++ "another scheduling constraint; that swap is not checked" | (a, b) <- unrealized ]
         stepMapOf ss = M.fromListWith (\_ old -> old) [ (stName st, st) | st <- ss ]
         ordered = partial { dSteps = steps, dStepMap = stepMapOf steps, dMethodSteps = stepsMap
-                          , dOrders = orders, dUnrealized = unrealized, dExportedCF = cfs }
+                          , dOrders = orders, dUnrealized = unrealized, dExportedCF = cfs
+                          , dHwTasks = hwTasks, dTaskTags = nTags }
         (sited, havoc, flags, relied) = havocSites ordered
     return ordered { dSteps = sited, dStepMap = stepMapOf sited
                    , dHavocPorts = havoc, dReadFlags = flags, dRelied = relied
@@ -1066,6 +1105,7 @@ data StepLookups = StepLookups
       -- its body by id (the first, if repeated)
     , slRdy    :: M.Map AId [AIFace]       -- ^ the value fields of each name (RDY)
     , slReads  :: AExpr -> S.Set Port      -- ^ 'exprReads', its table shared
+    , slDPI    :: Bool                     -- ^ bsc's @-use-dpi@: how Verilog names imported functions
     }
 
 -- | One entry of the logical execution order, or nothing for names that are
@@ -1123,9 +1163,9 @@ extractStep d lks callCopy useConds hwOuts sid =
             , stDescr = "value method " ++ n ++ posNote (aif_name f)
             , stFire = getIdString (mkIdWillFire (aif_name f))
             , stCanFire = getIdString (mkIdCanFire (aif_name f))
-            , stGuard = Nothing, stCalls = [], stChecks = [], stTasks = 0
+            , stGuard = Nothing, stCalls = [], stChecks = []
             , stReads = readsOf (map ouSeq outs), stReadSites = found (map ouSeq outs)
-            , stTaskReads = [], stSites = [], stTaskSites = []
+            , stTaskReads = [], stSites = [], stTaskSites = [], stTaskCalls = []
             , stOutputs = outs }
     ruleStep kind meth r outs descr = do
         calls <- mapM mkCall [ a | a@ACall {} <- arule_actions r ]
@@ -1137,10 +1177,10 @@ extractStep d lks callCopy useConds hwOuts sid =
             , stFire = getIdString (mkIdWillFire (arule_id r))
             , stCanFire = getIdString (mkIdCanFire (arule_id r))
             , stGuard = Just (arule_pred r), stCalls = calls, stChecks = checks
-            , stTasks = length [ () | a <- arule_actions r, isTask a ]
             , stReads = readsOf exprs, stReadSites = found exprs
             , stTaskReads = [ (c, args, found (c : args)) | a <- arule_actions r, isTask a, (c : args) <- [aact_args a] ]
             , stSites = [], stTaskSites = []
+            , stTaskCalls = mapMaybe (taskCall (slDPI lks)) (arule_actions r)
             , stOutputs = outs }
     isTask a  = case a of { AFCall {} -> not (aact_assump a); ATaskAction {} -> not (aact_assump a); _ -> False }
     mkCall a@(ACall o m (cond : args)) = do
@@ -1205,6 +1245,70 @@ readTables d = (\e0 -> into e0 S.empty, \n -> ML.findWithDefault S.empty n table
 posNote :: AId -> String
 posNote i = let p = ppString (getIdPosition i)
             in if null p || p == "Unknown position" then "" else " (" ++ p ++ ")"
+
+-- | A rule's system-task or foreign-function call, named as 'aState' names
+-- it for Verilog ('vNameToTask' for an imported C function).
+taskCall :: Bool -> AAction -> Maybe TaskCall
+taskCall dpi a = case a of
+    AFCall { aact_objid = i, afcall_fun = f, afcall_isC = isC, aact_args = c : args, aact_assump = chk } ->
+        Just (mk i f isC c args chk)
+    ATaskAction { aact_objid = i, ataskact_fun = f, ataskact_isC = isC, aact_args = c : args, aact_assump = chk } ->
+        Just (mk i f isC c args chk)
+    _ -> Nothing
+  where
+    mk i f isC c args chk = TaskCall { tcName = if isC then vNameToTask dpi f else f
+                                     , tcId = getIdString i ++ posNote i
+                                     , tcCond = c, tcArgs = args, tcCheck = chk, tcTag = 0, tcPos = posNote i }
+
+-- | Number the steps' task calls in the schedule's order, from 0.
+numberTasks :: [Step] -> ([Step], Int)
+numberTasks = go 0
+  where
+    go n [] = ([], n)
+    go n (st : rest) =
+        let k = length (stTaskCalls st)
+            st' = st { stTaskCalls = [ tc { tcTag = n + j } | (j, tc) <- zip [0 ..] (stTaskCalls st) ] }
+            (rest', n') = go (n + k) rest
+        in (st' : rest', n')
+
+-- | The 'ASPackage''s system-task calls in the order Verilog prints them
+-- ('vForeignBlock'), each condition WILL_FIRE AND'ed with the call's own.
+hardwareTasks :: ASPackage -> [HwTask]
+hardwareTasks aspkg =
+    [ HwTask { htName = afc_fun fc
+             , htId = getIdString (afc_name fc) ++ posNote (afc_name fc)
+             , htStep = stepOf c, htCond = c, htArgs = args, htTag = Nothing }
+    | (_, fcs) <- aspkg_foreign_calls aspkg, fc <- fcs, (c : args) <- [afc_args fc] ]
+  where
+    stepOf c = case c of
+        ASDef _ i | Just r <- fireOf i -> Just r
+        APrim _ _ PrimBAnd (ASDef _ i : _) | Just r <- fireOf i -> Just r
+        _ -> Nothing
+    fireOf i = let n = getIdString i
+               in if "WILL_FIRE_" `isPrefixOf` n then Just (drop (length "WILL_FIRE_") n) else Nothing
+
+-- | Each hardware call's sequential call: the next unmatched one of the same
+-- step, task and id.  The match only chooses what the theorem compares.
+matchTasks :: [Step] -> [HwTask] -> [HwTask]
+matchTasks steps hws = reverse (frth (F.foldl' one (S.empty, byStep0, byId0, []) hws))
+  where
+    -- (reversed, so that each prepended call leaves the lists in program order)
+    calls = reverse [ (stName st, tc) | st <- steps, tc <- stTaskCalls st ]
+    byStep0 = M.fromListWith (++) [ ((Just r, tcName tc, tcId tc), [tcTag tc]) | (r, tc) <- calls ]
+    byId0 = M.fromListWith (++) [ ((tcName tc, tcId tc), [tcTag tc]) | (_, tc) <- calls ]
+    frth (_, _, _, x) = x
+    -- (each list keeps what is left of it, so each candidate is passed once)
+    one (used, byStep, byId, acc) h = case htStep h of
+        Just _ ->
+            let key = (htStep h, htName h, htId h)
+            in case dropWhile (`S.member` used) (M.findWithDefault [] key byStep) of
+                   (k : rest) -> (S.insert k used, M.insert key rest byStep, byId, h { htTag = Just k } : acc)
+                   [] -> (used, M.delete key byStep, byId, h : acc)
+        Nothing ->
+            let key = (htName h, htId h)
+            in case dropWhile (`S.member` used) (M.findWithDefault [] key byId) of
+                   (k : rest) -> (S.insert k used, byStep, M.insert key rest byId, h { htTag = Just k } : acc)
+                   [] -> (used, byStep, M.delete key byId, h : acc)
 
 -- ----------------------------------------------------------------------------
 -- ** Reads the annotations rule out
@@ -1656,8 +1760,16 @@ dumpDesign d cands facts =
                 ++ [ "       output " ++ ouName o ++ " = " ++ ppString (ouSeq o)
                      ++ (if null (ouMask o) then "" else "  (when " ++ unwords (map show (ouMask o)) ++ ")")
                    | o <- stOutputs st ]
-                ++ [ "       " ++ show (stTasks st) ++ " system task(s), their effects not modelled" | stTasks st > 0 ]
+                ++ [ "       task #" ++ show (tcTag tc) ++ " " ++ tcName tc ++ (if tcCheck tc then " (run-time check)" else "")
+                     ++ " when " ++ ppString (tcCond tc)
+                     ++ (if null (tcArgs tc) then "" else " with " ++ intercalate ", " (map ppString (tcArgs tc)))
+                   | tc <- stTaskCalls st ]
               | (k, st) <- zip [1 :: Int ..] (dSteps d) ]
+    ++ (if null (dHwTasks d) then [] else
+        "" : "system-task calls of the hardware, in the order of its always block:"
+        : [ "  " ++ maybe "matches none" (\k -> "task #" ++ show k) (htTag h) ++ ": " ++ htName h ++ " [" ++ htId h ++ "]"
+            ++ " when " ++ ppString (htCond h)
+          | h <- dHwTasks d ])
     ++ [ "", "use conditions (recomputed):" ]
     ++ [ "  " ++ getIdString (adef_objid u) ++ " = " ++ ppString (adef_expr u) | u <- dUseDefs d ]
     ++ [ "", "orders checked:" ]
@@ -1718,6 +1830,7 @@ dumpDesign d cands facts =
 -- | The sort of a symbolic value.
 data Sort = SBool | SBits Integer | SString | SUnit
           | SView [Sort]          -- ^ a step's view as a function of the calls it sees
+          | SPos                  -- ^ a position in the cycle's system-task calls (concrete)
     deriving (Eq, Ord, Show)
 
 sortOf :: AType -> Sort
@@ -1763,6 +1876,7 @@ data Term
     | TOr {-# UNPACK #-} !Info TSet
     | TEq {-# UNPACK #-} !Info Term Term
     | TCond {-# UNPACK #-} !Info Term Term Term   -- ^ @bif c then a else b@
+    | TAdd {-# UNPACK #-} !Info Term Term         -- ^ @a + b@ of task-call positions ('SPos')
 
 -- | A hash of a term (equal terms have equal hashes), whether it is
 -- 'dynamic', and its id ('intern'), computed when first needed.
@@ -1805,6 +1919,7 @@ termId t = case t of
     TOr (Info _ _ i) _       -> i
     TEq (Info _ _ i) _ _     -> i
     TCond (Info _ _ i) _ _ _ -> i
+    TAdd (Info _ _ i) _ _    -> i
     _ -> error "verifyschedule: termId of an atom"
 
 nodeArg :: Term -> NodeArg
@@ -1891,6 +2006,7 @@ termHash t = case t of
     TOr (Info h _ _) _       -> h
     TEq (Info h _ _) _ _     -> h
     TCond (Info h _ _) _ _ _ -> h
+    TAdd (Info h _ _) _ _    -> h
   where str = F.foldl' (\h c -> mix h (fromEnum c))
 
 mix :: Int -> Int -> Int
@@ -1912,6 +2028,10 @@ mkCond :: Term -> Term -> Term -> Term
 mkCond c a b = TCond (Info (mix (mix (mix 16 (termHash c)) (termHash a)) (termHash b))
                            (dynamic c || dynamic a || dynamic b)
                            (intern (NodeKey 4 [nodeArg c, nodeArg a, nodeArg b]))) c a b
+
+mkAdd :: Term -> Term -> Term
+mkAdd a b = TAdd (Info (mix (mix 25 (termHash a)) (termHash b)) (dynamic a || dynamic b)
+                       (intern (NodeKey 5 [nodeArg a, nodeArg b]))) a b
 
 instance Eq Term where
     a == b
@@ -1941,6 +2061,7 @@ instance Eq Term where
             (TOr i _, TOr j _)           -> sameNode i j
             (TEq i _ _, TEq j _ _)       -> sameNode i j
             (TCond i _ _ _, TCond j _ _ _) -> sameNode i j
+            (TAdd i _ _, TAdd j _ _)     -> sameNode i j
             _                            -> False
 
 -- | Are two compound terms equal?  (Different hashes say no at once.)
@@ -1976,6 +2097,7 @@ instance Ord Term where
             (TEq i x1 x2, TEq j y1 y2)   -> unlessSame i j (compare x1 y1 <> compare x2 y2)
             (TCond i x1 x2 x3, TCond j y1 y2 y3) ->
                 unlessSame i j (compare x1 y1 <> compare x2 y2 <> compare x3 y3)
+            (TAdd i x1 x2, TAdd j y1 y2) -> unlessSame i j (compare x1 y1 <> compare x2 y2)
             _                            -> compare (tag a) (tag b)
       where
         unlessSame i j o = if sameNode i j then EQ else o
@@ -1985,6 +2107,7 @@ instance Ord Term where
             TConst _ _ -> 6; TStr _ -> 7; TSt _ -> 8; TNot _ _ -> 9; TAnd _ _ -> 10; TOr _ _ -> 11
             TEq _ _ _ -> 12; TCond _ _ _ _ -> 13; TDef _ -> 14; TAt _ _ -> 15; TUnset _ -> 16
             TRd _ _ -> 17; TProj _ _ -> 18; TFld _ _ -> 19; TVF _ _ _ -> 20; TAtVF _ _ _ -> 21
+            TAdd _ _ _ -> 22
 
 -- | As the plain tree would be shown.
 instance Show Term where
@@ -2014,6 +2137,7 @@ instance Show Term where
         TEq _ x y      -> showString "TEq " . showsPrec 11 x . showChar ' ' . showsPrec 11 y
         TCond _ x y z  -> showString "TCond " . showsPrec 11 x . showChar ' ' . showsPrec 11 y
                           . showChar ' ' . showsPrec 11 z
+        TAdd _ x y     -> showString "TAdd " . showsPrec 11 x . showChar ' ' . showsPrec 11 y
 
 tNot :: Term -> Term
 tNot (TLit b)   = TLit (not b)
@@ -2074,6 +2198,16 @@ tCond c a b
     | a == TLit False && b == TLit True = tNot c
     | otherwise = mkCond c a b
 
+-- | @a + b@ of task-call positions, a zero dropped.
+tAdd :: Term -> Term -> Term
+tAdd a (TConst SPos 0) = a
+tAdd (TConst SPos 0) b = b
+tAdd a b = mkAdd a b
+
+-- | One more position when a call is made: @bif c then 1 else 0@.
+tInc :: Term -> Term
+tInc c = tCond c (TConst SPos 1) (TConst SPos 0)
+
 atomic :: Term -> Bool
 atomic t = case t of
     TIn _ -> True; TView _ -> True; TRef _ _ -> True; THw _ -> True; TAtHw _ -> True
@@ -2091,6 +2225,7 @@ dynamic t = case t of
     TOr (Info _ dyn _) _       -> dyn
     TEq (Info _ dyn _) _ _     -> dyn
     TCond (Info _ dyn _) _ _ _ -> dyn
+    TAdd (Info _ dyn _) _ _    -> dyn
     _           -> False
 
 -- | Every subterm of a term, the term first (each distinct compound subterm
@@ -2107,6 +2242,7 @@ subTerms :: Term -> [Term]
 subTerms t = case t of
     TNot _ a -> [a]; TAnd _ ts -> tsList ts; TOr _ ts -> tsList ts; TEq _ a b -> [a, b]
     TCond _ a b c -> [a, b, c]
+    TAdd _ a b -> [a, b]
     _ -> []
 
 -- | Rewrite a term: @f@ replaces a subterm, or leaves it to be rebuilt from
@@ -2148,6 +2284,12 @@ mapTerm f t = fromMaybe t (evalState (changed t) M.empty)
                 return $ case (ma, mb, mc) of
                     (Nothing, Nothing, Nothing) -> Nothing
                     _ -> Just (tCond (fromMaybe a ma) (fromMaybe b mb) (fromMaybe c mc))
+            TAdd _ a b    -> do
+                ma <- changed a
+                mb <- changed b
+                return $ case (ma, mb) of
+                    (Nothing, Nothing) -> Nothing
+                    _ -> Just (tAdd (fromMaybe a ma) (fromMaybe b mb))
             _             -> return Nothing
     parts xs = do
         ms <- mapM changed xs
@@ -2989,6 +3131,8 @@ data StepT = StepT
     , sxFlags   :: [(Port, Term)]
       -- ^ the copies in 'dReadFlags' it reads, each with when the value read
       -- reaches what the step does: then a later read may not follow it
+    , sxTaskCalls :: [(Int, Term, [Term])]
+      -- ^ its system-task calls in program order: index, condition, arguments
     , sxFields  :: [String]                  -- ^ fields of the step's view
     , sxFieldSet :: S.Set String             -- ^ the same, as a set
     , sxIllegal :: [(String, Term)]          -- ^ why the step could be illegal
@@ -3017,6 +3161,7 @@ data Proof = Proof
     , pfStrings   :: [String]
     , pfWidths    :: M.Map Sort Integer
     , pfCounts    :: M.Map Sort Int
+    , pfTaskPorts :: [TaskPort]              -- ^ the system-task calls' fields of the State
     , pfOrderFacts :: [(String, String, String, [(String, String)], [(String, String)])]
       -- ^ an exported @a SB b@ (or @SBR@); the pairs of their steps that do
       -- not commute, each of which must run in that order; and those that do
@@ -3024,6 +3169,22 @@ data Proof = Proof
     , pfErrors    :: [String]
       -- ^ why the file would not prove what it says: then it is not written
     }
+
+-- | A system-task call's fields of the State: its position among the
+-- cycle's calls made, from 1 (0 when it is not made), and its arguments.
+data TaskPort = TaskPort
+    { tpPos  :: String
+    , tpArgs :: [(String, Sort)]
+    , tpNote :: String               -- ^ the call, for comments
+    }
+
+-- | The State field counting the system-task calls made so far.
+tasksField :: String
+tasksField = "$tasks"
+
+-- | A task's arguments as the theorem compares them: a zero-bit one has no value.
+taskArgs :: [AExpr] -> [AExpr]
+taskArgs = filter ((/= SUnit) . sortOf . aType)
 
 -- | Run the analysis.
 analyse :: Design -> [DisjointFact] -> Proof
@@ -3073,6 +3234,8 @@ analyse d facts = finish (runState build acc0)
             cls  <- forM (stCalls st) $ \c ->
                         (,,) (clPort c) <$> eval Seq (clCond c) <*> mapM (eval Seq) (clArgs c)
             outs <- forM (stOutputs st) $ \o -> (,) o <$> eval Seq (ouSeq o)
+            tcs  <- forM (stTaskCalls st) $ \tc ->
+                        (,,) (tcTag tc) <$> eval Seq (tcCond tc) <*> mapM (eval Seq) (taskArgs (tcArgs tc))
             -- what the step's values refer to, for 'reachPass': for the copies
             -- its system tasks read where the annotations rule them out, its
             -- tasks; for the copies with a read flag it reads, all it does:
@@ -3102,7 +3265,7 @@ analyse d facts = finish (runState build acc0)
                 rts <- mapM (taskEdges flagged) [ (c, args) | (c, args, ps) <- stTaskReads st, any (`S.member` flagged) ps ]
                 return (M.unionsWith (++) (rg : rcs ++ ros ++ rts))
             return ( StepT { sxStep = st, sxFire = fire, sxGuard = g, sxCalls = cls
-                           , sxOutputs = outs, sxTasks = [], sxFlags = []
+                           , sxOutputs = outs, sxTasks = [], sxFlags = [], sxTaskCalls = tcs
                            , sxFields = [], sxFieldSet = S.empty, sxIllegal = [] }
                    , (taskPorts, taskTop, flagged, flagTop) )
         -- when each read of interest reaches what the step asks about, from
@@ -3188,9 +3351,22 @@ analyse d facts = finish (runState build acc0)
                                          ++ "the rules never fire in the same cycle"
                                     else "bsc's run-time check in " ++ stName st ++ " never fires"
                        , tNot (tAnd [fire, ct]) )
+        -- the hardware's system-task calls, in its order, and how many of
+        -- the calls before each it makes ('Hw.«$tasks@k»')
+        hwTasks <- forM (dHwTasks d) $ \h -> (,,) h <$> eval Hw (htCond h) <*> mapM (eval Hw) (taskArgs (htArgs h))
+        -- (a call made is at the count after it)
+        let posStep (k, pos, acc) (_, en, _) = do
+                let next = tAdd pos (tInc en)
+                    name = tasksField ++ "@" ++ show (k + 1)
+                next' <- if atomic next then return next else do
+                    modify' (\a -> a { acHwDefs = LDef name SPos next False : acHwDefs a })
+                    return (THw name)
+                return (k + 1, next', tCond en next' (TConst SPos 0) : acc)
+        (_, hwCount, hwPosRev) <- foldM posStep (0 :: Int, TConst SPos 0, []) hwTasks
+        let hwTaskTerms = zipWith (\(h, en, as) pos -> (h, en, as, pos)) hwTasks (reverse hwPosRev)
         -- every observed value now exists; give the applications theirs
         pairApplications
-        return (hwPorts, hwOuts, steps, env, prims, recorded ++ derived, user, chainLDefs)
+        return (hwPorts, hwOuts, steps, env, prims, recorded ++ derived, user, chainLDefs, (hwTaskTerms, hwCount))
     -- a method's enable: its input, or True for an action method with no
     -- enable port (always_enabled: the parent enables it in every cycle)
     enableOf m = case M.lookup m (dEnables d) of
@@ -3207,7 +3383,7 @@ analyse d facts = finish (runState build acc0)
     -- hardware counterpart ('ppT'), known only once 'pairApplications' ran.
     evalAtHw = eval Seq
 
-    finish ((hwPorts, hwOuts, steps0, env, prims, oracles, user, chainLDefs), acc) =
+    finish ((hwPorts0, hwOuts, steps0, env, prims, oracles, user, chainLDefs, (hwTaskTerms, hwCount)), acc) =
         let fields   = reverse [ acFields acc M.! n | n <- acFieldOrd acc ]
             fieldMap = M.fromList [ (fdName f, f) | f <- fields ]
             seqDefs  = reverse (acSeqDefs acc)
@@ -3255,6 +3431,29 @@ analyse d facts = finish (runState build acc0)
                         let new = [ m | m <- S.toList (ML.findWithDefault S.empty n fieldDeps)
                                       , not (S.member m seen) ]
                         in go (foldr S.insert seen new) (new ++ todo)
+            -- each sequential call's fields, then those of each hardware call
+            -- matching none (or with other argument sorts); the hardware's values
+            seqCalls = [ (stName (sxStep sx), tc) | sx <- steps0, tc <- stTaskCalls (sxStep sx) ]
+            seqSorts = IM.fromList [ (tcTag tc, map (sortOf . aType) (taskArgs (tcArgs tc))) | (_, tc) <- seqCalls ]
+            hwSorts h = map (sortOf . aType) (taskArgs (htArgs h))
+            (_, hwAssigned) = mapAccumL assign (dTaskTags d) hwTaskTerms
+            assign next (h, en, as, pos) = case htTag h of
+                Just k | IM.lookup k seqSorts == Just (hwSorts h) -> (next, (k, False, h, en, as, pos))
+                _ -> (next + 1, (next, True, h, en, as, pos))
+            taskPort k srts note = TaskPort { tpPos = taskPosField k
+                                            , tpArgs = [ (taskArgField k j, srt) | (j, srt) <- zip [1 :: Int ..] srts ]
+                                            , tpNote = note }
+            taskPorts = [ taskPort (tcTag tc) (seqSorts IM.! tcTag tc)
+                                   (tcName tc ++ " in " ++ r ++ tcPos tc ++ (if tcCheck tc then ", a run-time check" else ""))
+                        | (r, tc) <- seqCalls ]
+                        ++ [ taskPort k (hwSorts h) ("the hardware's " ++ htName h ++ " [" ++ htId h ++ "], which no rule makes")
+                           | (k, True, h, _, _, _) <- hwAssigned ]
+            portByTag = IM.fromList (zip (map (\(_, tc) -> tcTag tc) seqCalls ++ [ k | (k, True, _, _, _, _) <- hwAssigned ])
+                                         taskPorts)
+            hwTaskVals = concat [ (tpPos tp, pos) : zip (map fst (tpArgs tp)) as
+                                | (k, _, _, _, as, pos) <- hwAssigned, let tp = portByTag IM.! k ]
+                         ++ [ (tasksField, hwCount) | not (null taskPorts) ]
+            hwPorts = M.union hwPorts0 (M.fromList hwTaskVals)
             usedPorts = allUsedPorts steps0
             -- the action copies of each instance, numbered, and the ones
             -- each called copy may not follow, in that order
@@ -3270,6 +3469,7 @@ analyse d facts = finish (runState build acc0)
                 let ts = sxFire sx : maybe [] pure (sxGuard sx)
                          ++ concat [ c : as | (_, c, as) <- sxCalls sx ] ++ map snd (sxOutputs sx)
                          ++ map fst (sxTasks sx) ++ map snd (sxFlags sx)
+                         ++ concat [ c : as | (_, c, as) <- sxTaskCalls sx ]
                     fs = closeFields (S.unions (map termFields ts))
                 in sx { sxFire = rw (sxFire sx), sxFields = S.toList fs, sxFieldSet = fs }
             -- the State's fields: each child's ports, the outputs, the
@@ -3285,6 +3485,10 @@ analyse d facts = finish (runState build acc0)
                 ++ [ ("illegal_access", SBool, "a submodule saw an order its annotations forbid")
                    , ("guard_violated", SBool, "a rule ran with a false guard") ]
                 ++ [ (stateField p, SBool, portLabel p ++ " read where its value mattered") | p <- dReadFlags d ]
+                ++ [ (tasksField, SPos, "calls made so far") | not (null taskPorts) ]
+                ++ concat [ (tpPos tp, SPos, tpNote tp)
+                            : [ (a, srt, "  argument " ++ show j) | (j, (a, srt)) <- zip [1 :: Int ..] (tpArgs tp) ]
+                          | tp <- taskPorts ]
             seqOut = buildSeq (withOrders d) d steps fields fieldMap (M.map rw hwPorts) rw stateFields
             -- The conditions of 'reachPass' the execution refers to.  One a
             -- step's run simplified away (its read is out of order only after
@@ -3349,6 +3553,7 @@ analyse d facts = finish (runState build acc0)
                                          ++ [ (s, S.size cs) | (s, cs) <- M.toList (acConsts acc) ]
                                          ++ [ (SString, S.size (acStrings acc)) | not (S.null (acStrings acc)) ])
             widths = M.map (\n -> max 1 (ceilLog2 (toInteger n + 1))) counts
+                     `M.union` M.fromList [ (SPos, max 1 (ceilLog2 (toInteger (length taskPorts) + 1))) | not (null taskPorts) ]
             muxes = [ (n, map rw ss) | (n, ss) <- reverse (acMuxes acc) ]
             (envFacts, envChains) = disjointChains "conflicts" [ (n, c, rw t) | (n, c, t) <- env ]
             (userTerms, tailDefs) = orTails [ rw t | (_, _, t) <- user ]
@@ -3378,6 +3583,7 @@ analyse d facts = finish (runState build acc0)
             , pfStrings = S.toList (acStrings acc)
             , pfWidths = widths
             , pfCounts = counts
+            , pfTaskPorts = taskPorts
             , pfOrderFacts = [ (a, r, b, pairs, skipped) | (a, r, b) <- dExportedSB d
                                  , let all' = [ (x, y) | x <- methodSteps d a, y <- methodSteps d b ]
                                  , let (pairs, skipped) = partition (\(x, y) -> not (commute d instUses x y)) all'
@@ -3570,6 +3776,7 @@ orTails ts0 = (ts', reverse (otDefs st))
                          TNot _ a      -> tNot <$> go a
                          TEq _ a b     -> tEq <$> go a <*> go b
                          TCond _ c a b -> tCond <$> go c <*> go a <*> go b
+                         TAdd _ a b    -> tAdd <$> go a <*> go b
                          _             -> return t
                      modify' (\o -> o { otMemo = IM.insert (termId t) r (otMemo o) })
                      return r
@@ -3642,6 +3849,31 @@ data Effect
       -- ^ the calls that write it, in order, each a condition and a value: a
       -- later call wins, and with none the field keeps its value
     | EUncond Term                   -- ^ a module output, which the step sets
+    | ETasks [(Term, Int, [(Int, Term, Term)])]
+      -- ^ (of the count of calls made) each system-task call: when it is made,
+      -- its position's field, and its arguments' fields, values and unset values
+
+-- | The fields of the k-th system-task call: its position, from 1 (0 when
+-- it is not made), and its arguments ('TaskPort').
+taskPosField :: Int -> String
+taskPosField k = "$task" ++ show k
+
+taskArgField :: Int -> Int -> String
+taskArgField k j = "$task" ++ show k ++ "_" ++ show j
+
+-- | A step's system-task calls as ordinary effects, counts written out; a
+-- call's own fields are set (unset when it is not made), never read.
+expandTasks :: (Int, Effect) -> [(Int, Effect)]
+expandTasks (g, e) = case e of
+    ETasks calls ->
+        let step cnt (en, posF, args) =
+                let next = tAdd cnt (tInc en)
+                in ( next
+                   , (posF, EUncond (tCond en next (TConst SPos 0)))
+                     : [ (a, EUncond (tCond en x z)) | (a, x, z) <- args ] )
+            (final, effs) = mapAccumL step (TSt tasksField) calls
+        in concat effs ++ [(g, EUncond final)]
+    _ -> [(g, e)]
 
 -- | Which calls of a child an observed value sees: those before the step,
 -- also the step's own, or every call of the cycle.
@@ -3753,6 +3985,7 @@ substRaw f t0 = evalState (go t0) IM.empty
                          TOr _ ts      -> mkOr <$> set ts
                          TEq _ a b     -> mkEq <$> go a <*> go b
                          TCond _ c a b -> mkCond <$> go c <*> go a <*> go b
+                         TAdd _ a b    -> mkAdd <$> go a <*> go b
                          _             -> return t
                      modify' (IM.insert (termId t) r)
                      return r
@@ -3786,6 +4019,11 @@ substKeep f t0 = fromMaybe t0 (evalState (go t0) IM.empty)
                              mb <- go b
                              return (if isNothing mc && isNothing ma && isNothing mb then Nothing
                                      else Just (mkCond (fromMaybe c mc) (fromMaybe a ma) (fromMaybe b mb)))
+                         TAdd _ a b    -> do
+                             ma <- go a
+                             mb <- go b
+                             return (if isNothing ma && isNothing mb then Nothing
+                                     else Just (mkAdd (fromMaybe a ma) (fromMaybe b mb)))
                          _             -> return Nothing
                      modify' (IM.insert (termId t) r)
                      return r
@@ -3831,7 +4069,7 @@ buildSeq withOrders d steps fields fieldMap hwPorts rw stateFields =
     fieldSort g = snd (fieldInfo IM.! g)
     fireName = fireNameFor (S.fromList [ f | (f, _, _) <- stateFields ])
     fieldIdx = M.fromList (zip (map fdName fields) [0 :: Int ..])
-    zeroOf g = case fieldSort g of { s | isToken s -> TUnset s; _ -> TLit False }
+    zeroOf g = case fieldSort g of { SPos -> TConst SPos 0; s | isToken s -> TUnset s; _ -> TLit False }
     -- the schedule's run: each step with the versions before and after it
     (outs, finalVers) = runAll (IM.fromList [ (g, zeroOf g) | g <- IM.keys fieldInfo ])
                                (S.fromList [ ["Seq", stName (sxStep sx), fireName] | sx <- steps ])
@@ -3862,6 +4100,12 @@ buildSeq withOrders d steps fields fieldMap hwPorts rw stateFields =
             -- read reaches what it does
             flagE = [ (stateField p, ESticky [(fa c, "")]) | (p, c) <- sxFlags sx ]
             callsOf = M.fromListWith (++) [ (p, [(c, as)]) | (p, c, as) <- reverse (sxCalls sx) ]
+            taskE = [ ( tasksField
+                      , ETasks [ ( fa c, fidOf (taskPosField k)
+                                 , [ (g, x, zeroOf g) | (j, x) <- zip [1 :: Int ..] as, let g = fidOf (taskArgField k j) ] )
+                               | (k, c, as) <- sxTaskCalls sx ] )
+                    | not (null (sxTaskCalls sx)) ]
+            fidOf x = fromMaybe (error ("verifyschedule: no field " ++ x)) (fid x)
             callE = concat
                 [ [ (en, ESticky [(fa (tOr (map fst calls)), "")]) | Just en <- [ptEnable p] ]
                   -- (each argument's values over the calls: every call has one per port)
@@ -3869,12 +4113,12 @@ buildSeq withOrders d steps fields fieldMap hwPorts rw stateFields =
                      | ((a, _), col) <- zip (ptArgs p) (transpose (map snd calls)) ]
                 | p <- nubOrd [ p | (p, _, _) <- sxCalls sx ], let calls = callsOf M.! p ]
             -- (a field written twice keeps the last)
-            effs0 = [ (g, e) | (f, e) <- outs' ++ guardE ++ illE ++ flagE ++ callE, Just g <- [fid f] ]
+            effs0 = [ (g, e) | (f, e) <- outs' ++ guardE ++ illE ++ flagE ++ callE ++ taskE, Just g <- [fid f] ]
             lastOf = IM.fromList [ (g, k) | (k, (g, _)) <- zip [0 :: Int ..] effs0 ]
             effs = [ (g, e) | (k, (g, e)) <- zip [0 ..] effs0, lastOf IM.! g == k ]
             -- the observed values, arguments first
             flds = sortOn (\f -> M.findWithDefault 0 f fieldIdx) (sxFields sx)
-            sitesOf = M.fromListWith (flip (++)) [ (siPort s, [s]) | s <- stSites st ]
+            sitesOf = M.fromListWith (++) [ (siPort s, [s]) | s <- reverse (stSites st) ]
             callConds = M.fromListWith (\new old -> tOr [old, new]) [ (c, k) | (c, k, _) <- sxCalls sx ]
             specs = [ obsSpec sx sitesOf callConds f | fn <- flds, Just f <- [M.lookup fn fieldMap] ]
         in StepS { ssName = name, ssDescr = stDescr st, ssFire = fireT, ssFireDef = fireDef, ssEffects = effs
@@ -4019,6 +4263,17 @@ buildSeq withOrders d steps fields fieldMap hwPorts rw stateFields =
                                 let body = foldr (\(c, x) r -> tCond (cl c) (cl x) r) prev (reverse arms)
                                 in if body == prev then acc else define acc g (BT body)
                             EUncond x -> define acc g (BT (cl x))
+                            -- a version of the count after each call made,
+                            -- which is the call's position
+                            ETasks calls ->
+                                let call (a0, cnt) (en, posF, args) =
+                                        let en' = cl en
+                                            a1@(_, c1, _) = define a0 g (BT (tAdd cnt (tInc en')))
+                                            cnt' = c1 IM.! g
+                                            a2 = F.foldl' (\a (af, x, z) -> define a af (BT (tCond en' (cl x) z))) a1 args
+                                            a3 = define a2 posF (BT (tCond en' cnt' (TConst SPos 0)))
+                                        in if en' == TLit False then (a0, cnt) else (a3, cnt')
+                                in fst (F.foldl' call (acc, prev) calls)
                             ESticky xs ->
                                 case [ (t', why) | (t, why) <- xs, let t' = cl t, t' /= TLit False ] of
                                     [] -> acc
@@ -4027,13 +4282,14 @@ buildSeq withOrders d steps fields fieldMap hwPorts rw stateFields =
                 in (r, c, ns, Nothing)
             -- with other orders: the step's effect, and the versions it gives
             effectsB =
-                let effs = ssEffects st
+                let effs = concatMap expandTasks (ssEffects st)
                     stName' g = TSt (fieldName g)
                     ws0 = [ (g, u) | (g, e) <- effs
                                    , u <- case e of
                                        EArms arms -> [foldr (\(c, x) r -> tCond c x r) (stName' g) (reverse arms)]
                                        EUncond x  -> [x]
                                        ESticky _  -> []
+                                       ETasks _   -> []
                                    , u /= stName' g ]
                     os0 = [ (g, c) | (g, ESticky xs) <- effs, let c = tOr (map fst xs), c /= TLit False ]
                     reads = S.toAscList (S.fromList (concatMap (stFields . snd) ws0 ++ concatMap (stFields . snd) os0
@@ -4189,6 +4445,7 @@ sortName s = case s of
     SBits n  -> "Tok" ++ show n
     SString  -> "TokStr"
     SView as -> concatMap (\a -> sortName a ++ " → ") as ++ "View"
+    SPos     -> "TaskPos"
     _        -> "Bool"
 
 -- | How the printer renders a 'TView': inside a definition with a view
@@ -4258,6 +4515,7 @@ ppS c p t = case t of
     TVF v as f -> str "(" . viewFun v as . str (")." ++ vpath f)
     TAtVF x v as -> parenS (p >= 5) (str (rootRef x) . str " i (" . viewFun v as . str ")")
     TLit b     -> str (if b then "true" else "false")
+    TConst SPos v -> str (show v ++ "#" ++ show (pcWidth c SPos))
     TConst s v -> str (M.findWithDefault (show v) (s, v) (pcConst c))
     TStr s     -> str (M.findWithDefault (show s) s (pcStr c))
     TNot _ a   -> parenS (p >= 4) (str "!" . ppS c 4 a)
@@ -4266,6 +4524,7 @@ ppS c p t = case t of
     TEq _ a b  -> parenS (p >= 4) (ppS c 4 a . str " == " . ppS c 4 b)
     TCond _ x a b -> parenS (p >= 2) (str "bif " . ppS c 0 x . str " then " . ppS c 0 a
                                     . str " else " . ppS c 0 b)
+    TAdd _ a b -> parenS (p >= 5) (ppS c 4 a . str " + " . ppS c 5 b)
   where
     str = showString
     app ws = parenS (p >= 5) (str (unwords ws))
@@ -4317,6 +4576,7 @@ layout c w p t
     isOr x = case x of { TOr _ _ -> True; _ -> False }
     needsParens = case t of
         TCond {} -> p >= 2; TOr {} -> p >= 3; TAnd {} -> p >= 4; TEq {} -> p >= 4; TNot {} -> p >= 4
+        TAdd {} -> p >= 5
         _ -> False
     -- a priority mux reads best as one arm per line
     condChain x = go True x
@@ -4468,7 +4728,7 @@ emitLean d pf = unlines $ concat
         SBits n -> show n ++ "'d" ++ show v
         _       -> show v
     strNames = M.fromList [ (str, q (filter (/= '»') (show str))) | str <- pfStrings pf ]
-    zero s   = if isToken s then "0#" ++ show (width s) else "false"
+    zero s   = if isToken s || s == SPos then "0#" ++ show (width s) else "false"
     boolStmt t = ppT hwC 4 t ++ " = true"
 
     -- A definition used once (a field of a step record counted as often as
@@ -4563,7 +4823,10 @@ emitLean d pf = unlines $ concat
                         , "  holds, following the selections (if, case, mux, array index) on the way, and" ] ]
           ++ [ "* the hardware makes the same method calls on every submodule as that"
              , "  sequential execution, with the same arguments whenever a call happens, and"
-             , "  produces the same module outputs." ]
+             , "  produces the same module outputs" ++ (if tasks > 0 then ", and" else ".") ]
+          ++ [ l | tasks > 0
+                 , l <- [ "* it makes the same system-task calls, in the same order (the order of its"
+                        , "  always block for tasks), with the same arguments." ] ]
           ++ (if S.null (dHavocPorts d) then []
               else [ ""
                    , "A value method read where its submodule's annotations forbid it, after a call"
@@ -4590,15 +4853,17 @@ emitLean d pf = unlines $ concat
           ++ [ "The proof is by `bv_decide`, whose SAT certificate Lean checks with compiled"
              , "code: the axioms printed at the end are Lean's standard three plus that check." ]
           ++ (if tasks > 0
-                then [ "", "**System tasks.** " ++ show tasks ++ " system task call(s) (`$display` and the like) have no"
-                     , "effect on submodules, and their arguments are not compared with the hardware's."
-                     , "What a task prints is observable and must be what the hardware prints, so its"
-                     , "reads are not made arbitrary: by the third point above, what it prints, and"
-                     , "whether it prints, depends only on reads the annotations allow where it runs,"
-                     , "which see what the hardware does once the calls before them agree." ]
+                then [ "", "**System tasks.** " ++ show tasks ++ " system-task call(s) (`$display` and the like, bsc's"
+                     , "run-time checks among them).  Each is compared with the hardware's call: its position"
+                     , "among the calls made (`TaskPos`, 0 if not made) and, when made, its arguments.  The"
+                     , "hardware's order is that of the module's always block for tasks, as bsc's Verilog"
+                     , "back end prints it; a value-returning task's result is a free variable both share."
+                     , "By the third point above, what a task prints, and whether it prints, depends only"
+                     , "on reads the annotations allow where it runs.  This is a property of this module's"
+                     , "Verilog: calls of different modules in one cycle come in an order Verilog leaves open." ]
                 else [])
           ++ [ "-/" ] )
-      where tasks = sum (map (stTasks . sxStep) steps)
+      where tasks = length (pfTaskPorts pf)
             -- the hypotheses this file has, in the order the theorem takes them
             assumed = case [ text | (has, text) <- assumptions, has ] of
                 [] -> "**What is assumed:** nothing; `schedule_sound` has no hypotheses."
@@ -4635,10 +4900,17 @@ emitLean d pf = unlines $ concat
                          ++ (if M.findWithDefault 0 s (pfCounts pf) == 1 then " term" else " terms")
                          ++ " in the proof and the unset code, so " ++ show w ++ "-bit tokens.")
                     ++ ["abbrev " ++ sortName s ++ " := BitVec " ++ show w, ""]
-                  | (s, w) <- M.toList (pfWidths pf) ]
+                  | (s, w) <- M.toList (pfWidths pf), s /= SPos ]
+        ++ concat [ doc ("Positions in the cycle's system-task calls, from 1 (0 if not made): "
+                         ++ show (length (pfTaskPorts pf)) ++ " calls in all, so " ++ show w
+                         ++ "-bit numbers.  Unlike a token, a position is a number.")
+                    ++ ["abbrev TaskPos := BitVec " ++ show w, ""]
+                  | Just w <- [M.lookup SPos (pfWidths pf)] ]
         ++ doc ("What one cycle does, as seen by the submodules: for each copy of each action \
                 \method in use, whether it is called and with what arguments; the module's \
-                \outputs; and whether the execution broke a rule.")
+                \outputs; " ++ (if null (pfTaskPorts pf) then "and whether the execution broke a rule." else
+                "whether the execution broke a rule; and for each system-task call, its position \
+                \among the calls made, from 1 (0 if it is not made), and its arguments."))
         ++ (if not splitState
               then ["structure State where"] ++ map ("  " ++) (renderCLines stateFields)
               else concat [ ["structure State." ++ partType k ++ " where"]
@@ -4696,6 +4968,12 @@ emitLean d pf = unlines $ concat
         ++ [ ("-- reads so far that mattered: a later read of a value method that may not follow one sees an arbitrary value", "")
            | not (null flagFields) ]
         ++ [ (q n ++ " : Bool", cmt) | (n, cmt) <- flagFields ]
+        ++ [ ("-- the system-task calls, in the schedule's order (then the hardware's own), and the count so far", "")
+           | not (null (pfTaskPorts pf)) ]
+        ++ [ (q tasksField ++ " : TaskPos", "calls made so far") | not (null (pfTaskPorts pf)) ]
+        ++ concat [ (q (tpPos tp) ++ " : TaskPos", tpNote tp)
+                    : [ (q a ++ " : " ++ sortName srt, "  argument " ++ show j) | (j, (a, srt)) <- zip [1 :: Int ..] (tpArgs tp) ]
+                  | tp <- pfTaskPorts pf ]
     flagFields = [ (stateField p, portLabel p ++ " read where its value mattered") | p <- pfFlagPorts pf ]
     -- a child's header: its module and annotations (wrapped), and whether bsc
     -- made it (the conflict_free checks' wires have names starting with _)
@@ -4828,8 +5106,12 @@ emitLean d pf = unlines $ concat
         , "run, in terms of each field as the last earlier step left it (or as `State.init` has"
         , "it); a field the step leaves alone has no definition.  A later call of a method"
         , "replaces an earlier one's arguments; a flag (`illegal_access`, `guard_violated`, a"
-        , "call's enable" ++ (if null flagFields then "" else ", a read") ++ ") is set once any step sets it."
-        , "Here as elsewhere, a value used in one place only is written there, not defined. -/" ]
+        , "call's enable" ++ (if null flagFields then "" else ", a read") ++ ") is set once any step sets it." ]
+        ++ [ l | not (null (pfTaskPorts pf))
+               , l <- [ "A system-task call made records its arguments and its position, the count of calls"
+                      , "made up to it (`«$tasks»`, of which a step has a version after each call it makes);"
+                      , "one not made, position 0." ] ]
+        ++ [ "Here as elsewhere, a value used in one place only is written there, not defined. -/" ]
         ++ bundle (concatMap seqGroup (soGroups sq))
         ++ [ "", "/-- One cycle, one rule at a time: each field as the last step that wrote it left it. -/"
            , "noncomputable def stepSequential (i : Inputs) : State :=" ]
@@ -5320,8 +5602,10 @@ emitLean d pf = unlines $ concat
 
     exportedThm =
         [ "", "/-- **The orders a parent may choose.**  For each pair of methods the module exports as"
-        , "    conflict-free, the order that runs either one first agrees with the hardware too. -/"
-        , "theorem exported_CF (i : Inputs)" ++ hArg ++ " :"
+        , "    conflict-free, the order that runs either one first agrees with the hardware too"
+          ++ (if null (pfTaskPorts pf) then ". -/" else ",")
+        ] ++ [ "    its system-task calls included, each at its position in that order. -/" | not (null (pfTaskPorts pf)) ] ++
+        [ "theorem exported_CF (i : Inputs)" ++ hArg ++ " :"
         , "    ∀ o ∈ CF.orders, Agree i (Run.toState (o.run i)) (stepScheduled i) = true := by"
         , "  intro o ho"
         , "  have hc := CF.checks o ho"
@@ -5917,12 +6201,23 @@ emitLean d pf = unlines $ concat
         ++ (if null (pfMuxes pf) then []
             else [ "A mux is read as a priority mux; for a parallel one (`PrimMux`) the theorem"
                  , "also proves its selectors one-hot (`Hw.oneHot`), so the reading is exact. -/" ])
-        ++ bundle [ CDef (hwDef l) | l <- pfHwDefs pf, '\1' `notElem` ldName l, keepHw l ]
-        ++ ["", "/-- The cycle as the hardware runs it. -/"
-           , "noncomputable def stepScheduled (i : Inputs) : State :="]
-        ++ stateLiteral hwValue [ (n, "the sequential run's bookkeeping, not compared") | (n, _) <- flagFields ]
+        ++ bundle ([ CDef (hwDef l) | l <- pfHwDefs pf, '\1' `notElem` ldName l, not (isTaskPos (ldName l)), keepHw l ]
+                   ++ (case [ l | l <- pfHwDefs pf, isTaskPos (ldName l), keepHw l ] of
+                         [] -> []
+                         ls -> CNote [ "", "-- The hardware's system-task calls, in the order of its always block: `Hw.«$tasks@k»`"
+                                     , "-- is how many of the first k it makes, the k-th's position if it makes it." ]
+                               : map (CDef . hwDef) ls))
+        ++ [""] ++ doc ("The cycle as the hardware runs it" ++ (if null (pfTaskPorts pf) then "." else
+                ".  Each call of its always block fills the fields of the sequential call it is \
+                \(of the same rule, task and source position): its position, when it is made the \
+                \count of the block's calls made up to it, and its arguments."))
+        ++ [ "noncomputable def stepScheduled (i : Inputs) : State :="]
+        ++ stateLiteral hwValue ([ (n, "the sequential run's bookkeeping, not compared") | (n, _) <- flagFields ]
+                                 ++ [ (tasksField, "the count of calls made, not compared (the positions say it)")
+                                    | not (null (pfTaskPorts pf)) ])
         ++ bundle oneHotDef
     keepHw l = not (inlined (DHw (ldName l)))
+    isTaskPos nm = (tasksField ++ "@") `isPrefixOf` nm
     isMux nm = nm == oneHotKey || "mux_" `isPrefixOf` nm
     isTail nm = "ors\1" `isPrefixOf` nm
     hwBoolDef l = CDef (defLines ("noncomputable def " ++ hwName (ldName l) ++ " (i : Inputs) : Bool :=")
@@ -5962,10 +6257,16 @@ emitLean d pf = unlines $ concat
 
     -- 5. ---------------------------------------------------------------------
     section5 =
-        bundle [ CDef (agreePort k) | k <- agreeShapes ]
-        ++ ["", "/-- The sequential execution was legal and agrees with the hardware on every"
-           , "    submodule call and every module output (each when it is meaningful). -/"
-           , "noncomputable def Agree (i : Inputs) (s h : State) : Bool :="]
+        bundle ([ CDef (agreePort k) | k <- agreeShapes ] ++ [ CDef (agreeTask k) | k <- taskShapes ])
+        ++ [""]
+        ++ (if null (pfTaskPorts pf)
+              then [ "/-- The sequential execution was legal and agrees with the hardware on every"
+                   , "    submodule call and every module output (each when it is meaningful). -/" ]
+              else doc "The sequential execution was legal and agrees with the hardware on every \
+                       \submodule call, every module output (each when it is meaningful) and every \
+                       \system-task call: its position among the calls made (0: not made) and, when \
+                       \made, its arguments, so that both make the same calls in the same order.")
+        ++ [ "noncomputable def Agree (i : Inputs) (s h : State) : Bool :="]
         ++ map ("  " ++) (joinOp "&&" (map pure agreeTerms))
         ++ concatMap hypStruct hyps
         ++ hypsDecl
@@ -5986,10 +6287,31 @@ emitLean d pf = unlines $ concat
     -- sorts), in the order the ports first have each.
     portShape p = (isJust (ptEnable p), [ sortOf t | (_, t) <- ptArgs p ])
     shapeName (en, srts) = "Agree." ++ q ((if en then "call" else "args") ++ concatMap (\x -> "_" ++ sortName x) srts)
-    agreeShapes = reverse (snd (F.foldl' (\(seen, acc) p -> let k = portShape p
-                                                           in if S.member k seen then (seen, acc)
-                                                              else (S.insert k seen, k : acc))
-                                         (S.empty, []) (pfPorts pf)))
+    agreeShapes = reverse (snd (F.foldl' (\(seen, acc) k -> if S.member k seen then (seen, acc)
+                                                            else (S.insert k seen, k : acc))
+                                         (S.empty, []) (map portShape (pfPorts pf))))
+    -- a system-task call: its position (0 when not made), then its arguments
+    taskFields tp = (tpPos tp, SPos) : tpArgs tp
+    taskShape tp = map snd (tpArgs tp)
+    taskShapes = reverse (snd (F.foldl' (\(seen, acc) k -> if S.member k seen then (seen, acc)
+                                                           else (S.insert k seen, k : acc))
+                                        (S.empty, []) (map taskShape (pfTaskPorts pf))))
+    taskShapeName srts = "Agree." ++ q ("task" ++ concatMap (\x -> "_" ++ sortName x) srts)
+    agreeTask srts =
+        let params = ("p", SPos) : [ ("a" ++ show j, srt) | (j, srt) <- zip [1 :: Int ..] srts ]
+            binders = unwords [ "(" ++ v ++ " : " ++ sortName srt ++ ")" | (v, srt) <- params ++ [ ("h_" ++ v, srt) | (v, srt) <- params ] ]
+            argEqs = [ "a" ++ show j ++ " == h_a" ++ show j | j <- [1 .. length srts] ]
+            argText = case argEqs of
+                [a] -> a
+                _   -> "(" ++ intercalate " && " argEqs ++ ")"
+            -- (the sequential position read once, so that its definition is written in)
+            body = "p == h_p" ++ (if null argEqs then "" else " && (h_p == 0 || " ++ argText ++ ")")
+        in ["", "/-- Both make a system-task call at the same position (0: neither makes it)"
+                ++ (if null srts then ":" else ",")
+           , "    " ++ (if null srts then "" else "with the same " ++ show (length srts) ++ " argument(s): ")
+                ++ "the sequential execution's fields first,"
+           , "    then the hardware's. -/"]
+           ++ defLines ("noncomputable abbrev " ++ taskShapeName srts ++ " " ++ binders ++ " : Bool :=") [body]
     agreePort k@(en, srts) =
         let params = [ ("en", SBool) | en ]
                      ++ [ ("a" ++ show j, srt) | (j, srt) <- zip [1 :: Int ..] srts ]
@@ -6015,6 +6337,9 @@ emitLean d pf = unlines $ concat
                [] -> "s." ++ sp o ++ " == h." ++ sp o
                _  -> "(" ++ intercalate " || " (map maskNeg masks) ++ " || s." ++ sp o ++ " == h." ++ sp o ++ ")"
            | (o, _, _, masks) <- pfOutputs pf ]
+        ++ [ unwords (taskShapeName (taskShape tp) : [ "s." ++ sp n | (n, _) <- taskFields tp ]
+                      ++ [ "h." ++ sp n | (n, _) <- taskFields tp ])
+           | tp <- pfTaskPorts pf ]
     -- how often `Agree`, its abbreviations unfolded, reads each field of the
     -- sequential state ('s') and of the hardware's ('h')
     agreeUses = M.fromListWith (+) $
@@ -6023,6 +6348,9 @@ emitLean d pf = unlines $ concat
         ++ [ ((side, a), 1) | p <- pfPorts pf, (a, _) <- ptArgs p, side <- "sh" ]
         ++ concat [ (('s', o), 1) : (('h', o), 1) : [ (('h', r), 1) | WhenOutput r <- masks ]
                   | (o, _, _, masks) <- pfOutputs pf ]
+        ++ concat [ (('s', tpPos tp), 1) : (('h', tpPos tp), if null (tpArgs tp) then 1 else 2)
+                    : [ ((side, a), 1) | (a, _) <- tpArgs tp, side <- "sh" ]
+                  | tp <- pfTaskPorts pf ]
     maskNeg m = case m of
         WhenOutput r   -> "!h." ++ sp r
         WhenInput en   -> "!i." ++ inPath en
@@ -6081,7 +6409,7 @@ emitLean d pf = unlines $ concat
         (l : ls) -> let ws = (open ++ l) : map ("    " ++) ls
                         brk = reverse (dropWhile (== ' ') (reverse sep))   -- the separator at a line's end
                     in map (++ brk) (init ws) ++ [last ws ++ close]
-    goalBase = [ "stepSequential", "stepScheduled", "Agree" ] ++ map shapeName agreeShapes
+    goalBase = [ "stepSequential", "stepScheduled", "Agree" ] ++ map shapeName agreeShapes ++ map taskShapeName taskShapes
     -- An equation by `rfl`, the body written out (at the view): unlike
     -- `eq_1`, it makes Lean build no lemma, whose memory grows superlinearly.
     eqHave x = case x of
@@ -6231,8 +6559,14 @@ emitLean d pf = unlines $ concat
         ["", "/-- **Schedule soundness for `" ++ dModule d ++ "`.**  In every cycle in which the"
         , "    environment obeys the exported schedule, the hardware does what executing"
         , "    the fired rules one at a time, in the logical execution order, does"
-          ++ (if null (pfMuxes pf) then ". -/" else ",") ]
-        ++ [ "    and every parallel mux in the hardware has one-hot selectors. -/" | not (null (pfMuxes pf)) ]
+          ++ (if null (pfMuxes pf) then (if null (pfTaskPorts pf) then ". -/" else ".") else ",") ]
+        ++ [ "    and every parallel mux in the hardware has one-hot selectors" ++ (if null (pfTaskPorts pf) then ". -/" else ".")
+           | not (null (pfMuxes pf)) ]
+        ++ (if null (pfTaskPorts pf) then [] else
+           [ "    That includes its system-task calls, made in the order of its always block for"
+           , "    tasks: a property of this module's Verilog, since Verilog leaves open the order of"
+           , "    different modules' calls in one cycle (Bluesim, which follows the whole design's"
+           , "    rule order, may print those in another). -/" ])
     theorem =
         scheduleDoc
         ++ [ "theorem schedule_sound (i : Inputs)" ++ hArg, "    : " ++ conclusion ++ " := by" ]

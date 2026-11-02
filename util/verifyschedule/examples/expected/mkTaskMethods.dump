@@ -1,0 +1,50 @@
+module mkTaskMethods (package TaskMethods), from mkTaskMethods.ba
+inputs:  put_1 :: Bit 8 poke_1 :: Bit 8 EN_put :: Bit 1 EN_poke :: Bit 1
+outputs: RDY_put :: Bit 1 RDY_poke :: Bit 1
+
+children:
+  a : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable a$EN_write arg a$write_1 :: Bit 8
+  b : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable b$EN_write arg b$write_1 :: Bit 8
+
+execution order:
+  1. put   [method put]
+       fires on WILL_FIRE_put, can fire CAN_FIRE_put
+       guard CAN_FIRE_put
+       calls a.write when 1'd1 with put_1
+       output RDY_put = CAN_FIRE_put
+       task #0 $display when 1'd1 with "put %0d", put_1
+  2. poke   [method poke]
+       fires on WILL_FIRE_poke, can fire CAN_FIRE_poke
+       guard CAN_FIRE_poke
+       calls b.write when 1'd1 with poke_1
+       output RDY_poke = CAN_FIRE_poke
+       task #1 $display when 1'd1 with "poke %0d", poke_1
+
+system-task calls of the hardware, in the order of its always block:
+  task #0: $display [Prelude.$display ("TaskMethods.bs", line 20, column 12)] when WILL_FIRE_put
+  task #1: $display [Prelude.$display ("TaskMethods.bs", line 23, column 12)] when WILL_FIRE_poke
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: put poke
+  CF_poke_put: poke put
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               (poke, put)
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      (poke, EN_poke) (put, EN_put)
+ready (method, RDY):       (poke, RDY_poke) (put, RDY_put)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

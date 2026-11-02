@@ -1,0 +1,63 @@
+module mkTaskOrder (package TaskOrder), from mkTaskOrder.ba
+inputs:  
+outputs: 
+
+children:
+  cnt : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result cnt$read :: Bit 8
+    write (action)
+      copy -: enable cnt$EN_write arg cnt$write_1 :: Bit 8
+  w : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable w$EN_wset arg w$wset_1 :: Bit 8
+    whas (value), sees same-cycle wset
+      copy -: result w$whas :: Bit 1
+    wget (value), sees same-cycle wset
+      copy -: result w$wget :: Bit 8
+    wire: w$wget = w$wset_1 within the cycle
+    wire: w$whas = w$EN_wset within the cycle
+
+execution order:
+  1. RL_produce   [rule produce ("TaskOrder.bs", line 12, column 6)]
+       fires on WILL_FIRE_RL_produce, can fire CAN_FIRE_RL_produce
+       guard CAN_FIRE_RL_produce
+       reads cnt.read  (hint: used when 1'b1)
+       calls w.wset when 1'd1 with cnt_PLUS_1___d4
+       task #0 $display when 1'd1 with "produce %0d", cnt___d1
+  2. RL_consume   [rule consume ("TaskOrder.bs", line 15, column 6)]
+       fires on WILL_FIRE_RL_consume, can fire CAN_FIRE_RL_consume
+       guard CAN_FIRE_RL_consume
+       reads cnt.read  (hint: used when 1'b1)
+       reads w.wget  (hint: used when w_whas____d5)
+       reads w.whas  (hint: used when 1'b1)
+       calls cnt.write when 1'd1 with cnt_PLUS_1___d4
+       task #1 $time when 1'd1
+       task #2 $display when w_whas____d5 with "consume %0d at %0t", w_wget____d6, TASK_time___d7
+       task #3 $display when NOT_w_whas___d8 with "nothing at %0t", TASK_time___d7
+       task #4 $finish when cnt_EQ_10___d9 with 32'd0
+
+system-task calls of the hardware, in the order of its always block:
+  task #0: $display [Prelude.$display ("TaskOrder.bs", line 14, column 10)] when WILL_FIRE_RL_produce
+  task #1: $time [Prelude.__time__ ("Prelude.bs", line 3355, column 26)] when WILL_FIRE_RL_consume
+  task #2: $display [Prelude.$display ("TaskOrder.bs", line 20, column 25)] when WILL_FIRE_RL_consume && w_whas____d5
+  task #3: $display [Prelude.$display ("TaskOrder.bs", line 21, column 25)] when WILL_FIRE_RL_consume && NOT_w_whas___d8
+  task #4: $finish [Prelude._finish_ ("TaskOrder.bs", line 22, column 28)] when WILL_FIRE_RL_consume && cnt_EQ_10___d9
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_produce RL_consume
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

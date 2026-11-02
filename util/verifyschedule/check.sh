@@ -4,9 +4,12 @@
 #     expected/<module>.dump: extraction tested on its own;
 #   * check the Lean file verifyschedule writes; and
 #   * check that mutants of its hardware fail to check (mutate.py).
+# A module whose source says "check.sh: <module> fails with a counterexample
+# in <theorem>" must instead fail in that theorem alone, with a counterexample,
+# while schedule_sound still checks.
 #
 #   check.sh                       all of examples/
-#   check.sh LookupQ.bsv ...       some of them (names or paths)
+#   check.sh LookupQ.bsv ...       some of them (names or paths, .bsv or .bs)
 #
 # BSC and LEAN name the tools (default: the checkout's inst/bin/bsc, else bsc
 # on PATH; lean on PATH, else ~/.elan/bin/lean).  MUTANTS is the number of
@@ -40,26 +43,38 @@ else
     OUT=$(mktemp -d "${TMPDIR:-/tmp}/verifyschedule.XXXXXX"); keep=0
 fi
 
-[ $# -gt 0 ] || set -- "$HERE"/examples/*.bsv
+# the declarations the errors in a Lean log are in (FILE.lean LOG)
+error_decls() {
+    sed -n 's/^[^:]*:\([0-9]*\):[0-9]*: error.*/\1/p' "$2" | sort -n | uniq |
+        awk 'NR == FNR { at[$1] = 1; next }
+             /^[^ \t\/-]/ { d = $1; for (k = 1; k < NF; k++) if ($k ~ /^(theorem|def|abbrev|structure|instance)$/) { d = $(k + 1); break } }
+             FNR in at { print d }' - "$1" | sort -u
+}
+
+[ $# -gt 0 ] || set -- "$HERE"/examples/*.bsv "$HERE"/examples/*.bs
 failed=0
 for f in "$@"; do
     case "$f" in
         */*) src=$(cd "$(dirname "$f")" && pwd)/$(basename "$f") ;;
         *)   src=$HERE/examples/$f ;;
     esac
-    name=$(basename "$src" .bsv)
+    base=$(basename "$src")
+    name=${base%.*}
     dir=$OUT/$name
     rm -rf "$dir"; mkdir -p "$dir"
     # compiled from its own directory, so positions name the file alone
     if ! (cd "$(dirname "$src")" && "$BSC" -elab -u -verilog -bdir "$dir" -vdir "$dir" \
-            -info-dir "$dir" "$name.bsv") > "$dir/bsc.log" 2>&1; then
+            -info-dir "$dir" "$base") > "$dir/bsc.log" 2>&1; then
         echo "FAIL  $name: bsc (see $dir/bsc.log)"; failed=1; continue
     fi
     for ba in "$dir"/*.ba; do
         [ -f "$ba" ] || continue
         mod=$(basename "$ba" .ba)
         # only the modules this file defines
-        grep -q "^ *module *$mod\b" "$src" || continue
+        case $base in
+            *.bs) grep -q "^ *$mod *::" "$src" || continue ;;
+            *)    grep -q "^ *module *$mod\b" "$src" || continue ;;
+        esac
         what="$name/$mod"
         # extraction
         (cd "$dir" && "$VS" --dump-design "$mod.ba") > "$dir/$mod.dump" 2>&1
@@ -76,6 +91,18 @@ for f in "$@"; do
         fi
         lf=$(sed -n 's/^verifyschedule: wrote //p' "$dir/$mod.vs.log")
         start=$(date +%s)
+        want=$(sed -n "s/.*check.sh: $mod fails with a counterexample in \([^ ]*\).*/\1/p" "$src" | head -1)
+        if [ -n "$want" ]; then
+            log=$dir/$mod.lean.log
+            if (cd "$dir" && "$LEAN" "$lf" > "$mod.lean.log" 2>&1) || ! grep -q "counterexample" "$log" \
+                    || [ "$(error_decls "$dir/$lf" "$log")" != "$want" ] \
+                    || ! grep -q "\.schedule_sound' depends on axioms" "$log" || grep -q "sorryAx" "$log"; then
+                echo "FAIL  $what: not a counterexample in $want alone, schedule_sound checked (see $log)"
+                failed=1; continue
+            fi
+            echo "ok    $what  ($(( $(date +%s) - start ))s, a counterexample in $want, as expected)"
+            continue
+        fi
         if ! (cd "$dir" && "$LEAN" "$lf" > "$mod.lean.log" 2>&1) \
                 || grep -q "error\|sorryAx" "$dir/$mod.lean.log"; then
             echo "FAIL  $what: lean (see $dir/$mod.lean.log)"; failed=1; continue

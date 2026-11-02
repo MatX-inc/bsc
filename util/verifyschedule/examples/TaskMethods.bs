@@ -1,0 +1,42 @@
+package TaskMethods where
+
+-- Exported conflict-free methods that print: a parent may call them in
+-- either order, but Verilog prints in one.
+
+interface TaskMethods =
+    put  :: Bit 8 -> Action
+    poke :: Bit 8 -> Action
+
+-- check.sh: mkTaskMethods fails with a counterexample in Run.comms
+-- (both methods called: in the order poke, put the calls change places)
+{-# verilog mkTaskMethods #-}
+mkTaskMethods :: Module TaskMethods
+mkTaskMethods = module
+    a :: Reg (Bit 8) <- mkReg 0
+    b :: Reg (Bit 8) <- mkReg 0
+    interface
+        put x = do
+            a := x
+            $display "put %0d" x
+        poke x = do
+            b := x
+            $display "poke %0d" x
+
+-- The same, but the two never print in one cycle: either order agrees.
+{-# verilog mkTaskMethodsSplit #-}
+mkTaskMethodsSplit :: Module TaskMethods
+mkTaskMethodsSplit = module
+    a :: Reg (Bit 8) <- mkReg 0
+    b :: Reg (Bit 8) <- mkReg 0
+    mode :: Reg Bool <- mkReg False
+    rules
+      "flip": when True ==> do
+          mode := not mode
+          $display "flip"
+    interface
+        put x = do
+            a := x
+            if mode then $display "put %0d" x else noAction
+        poke x = do
+            b := x
+            if mode then noAction else $display "poke %0d" x

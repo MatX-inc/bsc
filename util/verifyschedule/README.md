@@ -5,7 +5,8 @@
 whose main theorem states that the hardware bsc built --- the
 `CAN_FIRE`/`WILL_FIRE` logic, the submodule enables and the argument muxes ---
 does in every clock cycle what running the rules and methods that fire, one at
-a time, in bsc's logical execution order, does. Further theorems check the
+a time, in bsc's logical execution order, does, down to the system tasks it
+calls and their order. Further theorems check the
 module's exported scheduling annotations against its hardware. Lean checks the file with
 nothing but its core library; the proofs are by `bv_decide`.
 
@@ -33,7 +34,9 @@ standard error. `--dump-design` prints the model the tool extracted instead
 
 The `.ba` file must come from the same build of bsc as the tool. The Lean file needs Lean 4 (tested with
 v4.35.0) and no Mathlib or lake. Small modules check in seconds, and the
-largest designs in bsc's testsuite in a minute or two.
+largest designs in bsc's testsuite in a few minutes (about seven for
+`sysConflictFreeOKLarge`, whose two rules make 2050 system-task calls, 1536
+of them bsc's run-time checks).
 
 ## What the file proves
 
@@ -41,8 +44,12 @@ The file has five sections:
 
 1. **Submodule & Method State Structure.** `State` records, for each copy
    of each action method of each submodule, whether a cycle calls it and
-   with what arguments; the module's outputs; and two flags,
-   `guard_violated` and `illegal_access`.
+   with what arguments; the module's outputs; two flags,
+   `guard_violated` and `illegal_access`; and for each system-task call
+   (`$display`, `$finish`, bsc's run-time checks, ...), its position among
+   the calls made, from 1, or 0 when it is not made (`«$task<k>»`, a
+   `TaskPos` number), and its arguments (`«$task<k>_<j>»`), with the count
+   of calls made so far (`«$tasks»`).
 2. **Combinational Definitions & Symbolic Datapath Tokens.** The token
    sorts and constants, the free variables of a cycle (`Inputs`), the values
    that change within a cycle as one step sees them (`View`), and every
@@ -55,7 +62,9 @@ The file has five sections:
    versions. A step runs when the hardware fires it. It sees submodule
    outputs as they stand before it, has its guard checked there, and has
    each action-method call, and each system task's reads, checked against
-   what earlier steps did. A value it reads where the submodule's
+   what earlier steps did. Each system-task call it makes, in program
+   order, takes the next position and records its arguments as they are
+   where the step runs. A value it reads where the submodule's
    annotations forbid it (after a call in the cycle that it may not
    follow, or in one rule with a call it may not share a rule with) is
    arbitrary: a value of the step's own, which a congruence ties to the
@@ -79,14 +88,20 @@ The file has five sections:
    steps of the schedule's order, and `CF.Order.run` an order of
    `CF.orders`: for each exported CF pair, the schedule's order with the
    steps of the method that comes first in it, and those that must follow
-   them, moved after the other method's last step. A step's view is then a
+   them, moved after the other method's last step; there a step's
+   system-task calls take their positions in that order. A step's view is then a
    function of the calls it sees (`view@<step>`, a free variable), so that
    in another order it sees what that order's calls make it see; for a
    read the annotations rule out, of whether the step fires after a call
    that makes it arbitrary.
 4. **Post-Scheduled Synchronous Hardware Semantics.** Every submodule input
    and module output as bsc's back end computes it (`Hw.*`), collected
-   into `stepScheduled`.
+   into `stepScheduled`; and the system-task calls of the module's always
+   block for tasks, in its order, each `if (cond) task(args)`. Each fills
+   the fields of the sequential call of the same rule, task and source
+   position: its arguments, and its position, the count of the block's
+   calls made up to it (`Hw.«$tasks@k»`). One that matches no sequential
+   call fills fields of its own, which the sequential run never sets.
 5. **Disjointness Oracles & Main Schedule Soundness Theorem.** `Agree`,
    the hypotheses, and the theorems:
 
@@ -97,7 +112,12 @@ The file has five sections:
    ordering rule, and printed nothing from a read those rules forbid (see
    *The model*), and that both runs make the same calls with the same
    arguments and produce the same outputs, each when it matters (a value
-   method's result only when it is ready, for instance). When the hardware
+   method's result only when it is ready, for instance). That includes the
+   system-task calls: each has the same position in both (0 if neither
+   makes it) and, when made, the same arguments. So both make the same
+   calls, in the same order, with the same arguments: the order of this
+   module's Verilog, which leaves open how different modules' calls in one
+   cycle interleave (see *Limitations*). When the hardware
    has a parallel mux, the conclusion also has `Hw.oneHot i = true`: its
    selectors are one-hot, so reading it as a priority mux is exact.
 
@@ -123,7 +143,18 @@ The file has five sections:
    in value, which the proof proves for each two of its applications;
    each pair's facts are a definition, `Run.sem_<x>_<y>`, and the pairs'
    are gathered by a balanced tree of definitions, so that each pair
-   reaches its own through few small unfoldings). The
+   reaches its own through few small unfoldings). Two steps with
+   system-task calls never commute by footprint, as both count the calls.
+   When both can make a call in one cycle, their calls change positions,
+   that fact fails, and so does the proof, with that cycle as the
+   counterexample. For two methods that both print (`TaskMethods`) the
+   difference is real: the hardware's order is fixed, and a parent may
+   call them the other way round. bsc warns of it (G0020). The block an
+   order moves also passes the steps between it and the other method's
+   last step, some of which another legal order might leave on its other
+   side: a counterexample from such a step's calls may come from the order
+   chosen, not from every order the parent allows (in the bsc testsuite
+   designs tried, no order moves a step with calls past another). The
    schedule's run is the field-by-field execution of section 3, step by
    step and by definition (`Run.link`, `Run.final`). `CF.checks` decides,
    for each order, that it moves only such steps and runs all of one
@@ -147,7 +178,7 @@ The file has five sections:
    always kept. Lean's memory at `-j1` grows with the square of the number
    of top-level commands, so the small definitions share `mutual` blocks of
    up to 100, and there is one `Agree.<shape>` abbreviation per shape of
-   port. The theorems take their hypotheses as one
+   port, and of system-task call. The theorems take their hypotheses as one
    structure, `Hyps`, which that proof takes apart. The theorem's conclusion names
    `stepSequential` and `stepScheduled`, which are definitions for the same
    reason: `bv_decide` also unfolds the abbreviations in the statement of
@@ -209,10 +240,13 @@ nothing here needs that.
   method called where the annotations forbid it is illegal
   (`illegal_access`), with the calls' exact conditions.
 * **What a system task prints must be what the hardware prints.** A
-  `$display` or other system task has no effect on the submodules, and the
-  tool does not model what it does or compare its arguments with the
-  hardware's task. But what it prints is observable, so its reads are not
-  made arbitrary, as other reads are. Instead the theorem proves that no
+  `$display` or other system task has no effect on the submodules, but
+  what it prints, and when, is observable. So each call is compared with
+  the hardware's, as above: its position and its arguments. A
+  value-returning task's result (`$time`, `$random`, `$fopen`,
+  `$test$plusargs`, ...) is a free variable both runs share: the result is
+  the hardware's. The task's reads are not made arbitrary, as other reads
+  are. Instead the theorem also proves that no
   task prints, or decides whether to print on, a value read where the
   annotations rule the read out: such a read is illegal (`illegal_access`)
   when its value can reach the task's condition, or one of its arguments
@@ -229,9 +263,10 @@ nothing here needs that.
   every value a task prints, and whether it prints, depends only on reads
   the annotations allow where the task runs; such a read sees what the
   hardware's wire shows once the calls before it agree (the congruences),
-  and the theorem proves that they do. That the hardware's task computes
-  its arguments from the same expressions is `aState`'s transcription, which
-  is not checked.
+  and the theorem proves that they do. The comparison does not make this
+  check redundant: a read only a task makes is not arbitrary, so even out
+  of order it sees, by its congruence, the hardware's value, and the
+  comparison passes; only this check says the annotations allow it.
 * **The datapath is abstract, the control concrete.** Booleans are
   booleans. A wider value is a token and an operator on such values is an
   uninterpreted function, made consistent by Ackermann's congruences. Each
@@ -266,10 +301,25 @@ saying where it comes from. A file has only the structures it needs.
 
 Beyond the hypotheses, the proof trusts Lean's kernel and `bv_decide`'s
 compiled certificate checker, and the conditions of the action calls in
-bsc's packages. It also trusts how `aState` transcribes system-task calls:
-the theorem checks that what a task prints, and whether it prints, depends
-only on reads the annotations allow, but it does not compare the
-hardware's task calls with the sequential execution's. It does not trust
+bsc's packages. Of the system tasks, it takes the hardware's calls from
+the `ASPackage` (`aspkg_foreign_calls`, which `aState` fills with each
+rule's calls, rules in execution order), the list bsc's Verilog back end
+prints, and trusts the back end after `aState` to keep each call, its
+order, condition and arguments: `vForeignBlock` prints one
+`always @(negedge CLK)` block, each call `if (cond) task(args)` in list
+order (an `$SVA` call becomes an `assert` outside it), and AVeriQuirks
+drops the calls whose condition is constant false. It also trusts the
+rewrites the back end makes in printing a call: `$fatal(code, msg)` as
+`$display(msg); $finish(code)`, `$error`/`$warning`/`$info` as `$display`
+outside SystemVerilog mode, a string-mux argument as an if/else of two
+calls, and a C function's wide result as its first argument.
+Verilog also skips a call while its rule's reset is asserted, which is
+not modelled: the theorem's trace is that of a cycle out of reset. The
+trace is this module's alone: how calls of different modules in one cycle
+interleave, and task state they share, are left out (see *Limitations*). It
+matches each hardware call to a sequential one by rule, task (as Verilog
+names it) and source position; the match only chooses what is compared,
+so a wrong one can only make the proof fail. It does not trust
 bsc's use analysis (`AUses.buildUseMaps`, run again): the conditions under
 which that analysis says a method use matters only choose which
 disjointness facts to ask bsc's solver for. A fact the solver confirms is
@@ -295,9 +345,10 @@ The tool runs in three pure phases:
      its solver again).
 
    Then list the steps in execution order, with each step's guard, the
-   submodule outputs it reads, its calls, and its outputs, and find the
-   reads the annotations rule out, in the schedule's order or in another
-   order to check.
+   submodule outputs it reads, its calls, its system-task calls and its
+   outputs; match each of the hardware's system-task calls to a step's
+   (`matchTasks`); and find the reads the annotations rule out, in the
+   schedule's order or in another order to check.
 2. **Analysis** (`Proof`). Evaluate each step in the sequential semantics,
    and every hardware signal. Abstract the datapath. Find the values each
    step observes within the cycle, with their congruences. Build the orders
@@ -312,12 +363,21 @@ The tool runs in three pure phases:
   refused, as are modules with size parameters.
 * Exported clocks, clock gates and resets are not compared; the tool warns
   when a module has them.
-* `$display` and other system tasks are not modelled, and their arguments
-  are not compared with the hardware's; bsc's run-time checks are the
-  exception: they are assertions. What a task prints is checked only
-  against the annotations, as above. Whether a read reaches a task, or what
-  a step does, is decided by the selections on the way, not by the
-  operators: a read in `x && false` still counts.
+* The order of system-task calls is a property of the module's Verilog. It
+  does not hold across synthesis boundaries: Verilog leaves open the order
+  of different modules' always blocks on one clock edge, so their calls in
+  one cycle can come in any order, and a task with state shared between
+  modules (an unseeded `$random`) can give different results. Bluesim
+  follows the whole design's rule order, a property of its back end outside
+  this tool, so Bluesim and Verilog can print such calls in different
+  orders.
+* What a task does is not modelled beyond its call: a value-returning
+  task's result is a free variable, and a call's arguments are values,
+  not formatted text. Two different calls that print the same text count
+  as different calls. bsc's run-time checks are also assertions.
+* Whether a read reaches a task, or what a step does, is decided by the
+  selections on the way, not by the operators: a read in `x && false`
+  still counts.
 * A Lean structure has at most 255 fields. A larger `Inputs`, `View` or
   `State` is split into parts (a field is then written by its path,
   `i.part<k>.x`), and larger hypothesis structures into several.
@@ -330,9 +390,12 @@ The tool runs in three pure phases:
 
 ## Examples
 
-`examples/` holds small designs, each exercising a part of the model, and
-`check.sh` compiles each with bsc, runs the tool and checks the result with
-Lean:
+`examples/` holds small designs (BSV, and Bluespec Classic `.bs`), each
+exercising a part of the model, and `check.sh` compiles each with bsc, runs
+the tool and checks the result with Lean; a module whose source says
+`check.sh: <module> fails with a counterexample in <theorem>` must instead
+fail in that theorem alone, with a counterexample, while `schedule_sound`
+checks:
 
     util/verifyschedule/check.sh               # all of them
     util/verifyschedule/check.sh LookupQ.bsv   # some of them
@@ -353,7 +416,10 @@ Lean:
 | `BranchWrites` | One register written under disjoint conditions in one rule. |
 | `ValueAfterAction` | A value method reading state an action method writes in the same cycle. |
 | `WireResult` | A value method's result computed from a wire that sees same-cycle calls. |
-| `SysTasks` | System tasks, which are not modelled, next to a forwarded value. |
+| `SysTasks` | System tasks in two rules, printing a forwarded value, and a conditional `$finish`. |
+| `TaskOrder` | Tasks in two rules that fire in one cycle (`mutate.py`'s task-order mutant swaps them), tasks under complementary conditions, a value-returning `$time` (Verilog sets a temporary to it before the calls that print it), and a conditional `$finish`. |
+| `TaskMethods` | Two exported CF methods that print. `mkTaskMethods` fails with a counterexample in `Run.comms`, as `check.sh` expects: a parent calling both in the order the hardware does not print them. `mkTaskMethodsSplit`, whose two never print in one cycle, proves. |
+| `ValTasks` | Value-returning tasks, each result a variable both semantics share: `$random` written to a register and printed, `$test$plusargs` guarding a print, `$stime`, and `$fopen`'s handle used by `$fdisplay`. |
 | `BviSchedKinds` | An imported Verilog child with `P` and a self-`SBR` annotation. |
 | `AssertedSchedules` | `mutually_exclusive` and `conflict_free`, which bsc checks at run time. |
 | `NotEmptyOrder` | A guard whose method uses matter only under conditions, which bsc's scheduler exploits: a guard read after an `enq` it may not follow sees an arbitrary value, which does not matter. |

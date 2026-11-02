@@ -1,0 +1,31 @@
+package ValTasks where
+
+-- Value-returning tasks: $random feeds a register and a print, $test$plusargs
+-- guards a print, and $fopen's handle, kept in a register, is $fdisplay's.
+
+interface ValTasks =
+    kick :: Bit 8 -> Action
+
+{-# verilog mkValTasks #-}
+mkValTasks :: Module ValTasks
+mkValTasks = module
+    r :: Reg (Int 32) <- mkReg 0
+    fh :: Reg File <- mkReg InvalidFile
+    w :: RWire (Bit 8) <- mkRWire
+    rules
+      "opener": when fh == InvalidFile ==> do
+          h <- $fopen "vt.out" "w"
+          fh := h
+      "roll": when True ==> do
+          x <- $random
+          r := x
+          verbose <- $test$plusargs "verbose"
+          if verbose then $display "roll %0d" x else noAction
+          t <- $stime
+          case w.wget of
+              Valid v -> $fdisplay fh "kick %0d at %0d" v t
+              Invalid -> noAction
+    interface
+        kick v = do
+            w.wset v
+            $display "kick %0d" v

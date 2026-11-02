@@ -1,0 +1,22 @@
+package TaskOrder where
+
+-- Tasks in two rules that fire in one cycle; in one rule, tasks under
+-- complementary conditions, a value-returning $time and a conditional $finish.
+
+{-# verilog mkTaskOrder #-}
+mkTaskOrder :: Module Empty
+mkTaskOrder = module
+    cnt :: Reg (Bit 8) <- mkReg 0
+    w :: RWire (Bit 8) <- mkRWire
+    rules
+      "produce": when cnt[0:0] == 0 ==> do
+          w.wset (cnt + 1)
+          $display "produce %0d" cnt
+      "consume": when True ==> do
+          -- the result is the hardware's in both semantics: a free variable
+          t <- $time
+          cnt := cnt + 1
+          case w.wget of
+              Valid v -> $display "consume %0d at %0t" v t
+              Invalid -> $display "nothing at %0t" t
+          if cnt == 10 then $finish 0 else noAction

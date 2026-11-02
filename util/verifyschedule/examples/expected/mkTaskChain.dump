@@ -78,7 +78,10 @@ execution order:
        a system task (when 1'd1) reads r_4.read out of order: after a call of r_4.write
        a system task (when 1'd1) reads r_5.read out of order: after a call of r_5.write
        calls q.write when 1'd1 with q_PLUS_1___d9
-       1 system task(s), their effects not modelled
+       task #0 $display when 1'd1 with "%d", acc__h1033
+
+system-task calls of the hardware, in the order of its always block:
+  task #0: $display [Prelude.$display ("TaskChain.bsv", line 31, column 7)] when WILL_FIRE_RL_b
 
 use conditions (recomputed):
 

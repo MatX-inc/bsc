@@ -1,0 +1,76 @@
+module mkValTasks (package ValTasks), from mkValTasks.ba
+inputs:  kick_1 :: Bit 8 EN_kick :: Bit 1
+outputs: RDY_kick :: Bit 1
+
+children:
+  r : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable r$EN_write arg r$write_1 :: Bit 32
+  fh : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result fh$read :: Bit 32
+    write (action)
+      copy -: enable fh$EN_write arg fh$write_1 :: Bit 32
+  w : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable w$EN_wset arg w$wset_1 :: Bit 8
+    whas (value), sees same-cycle wset
+      copy -: result w$whas :: Bit 1
+    wget (value), sees same-cycle wset
+      copy -: result w$wget :: Bit 8
+    wire: w$wget = w$wset_1 within the cycle
+    wire: w$whas = w$EN_wset within the cycle
+
+execution order:
+  1. kick   [method kick]
+       fires on WILL_FIRE_kick, can fire CAN_FIRE_kick
+       guard CAN_FIRE_kick
+       calls w.wset when 1'd1 with kick_1
+       output RDY_kick = CAN_FIRE_kick
+       task #0 $display when 1'd1 with "kick %0d", kick_1
+  2. RL_roll   [rule roll ("ValTasks.bs", line 19, column 6)]
+       fires on WILL_FIRE_RL_roll, can fire CAN_FIRE_RL_roll
+       guard CAN_FIRE_RL_roll
+       reads fh.read  (hint: used when w_whas____d7)
+       reads w.wget  (hint: used when w_whas____d7)
+       reads w.whas  (hint: used when 1'b1)
+       calls r.write when 1'd1 with TASK_random___d4
+       task #1 $random when 1'd1
+       task #2 $test$plusargs when 1'd1 with "verbose"
+       task #3 $display when TASK_testplusargs___d5 with "roll %0d", signed_TASK_random___d6
+       task #4 $stime when 1'd1
+       task #5 $fdisplay when w_whas____d7 with fh__h246, "kick %0d at %0d", w_wget____d8, TASK_stime___d9
+  3. RL_opener   [rule opener ("ValTasks.bs", line 16, column 6)]
+       fires on WILL_FIRE_RL_opener, can fire CAN_FIRE_RL_opener
+       guard CAN_FIRE_RL_opener
+       reads fh.read  (hint: used when 1'b1)
+       calls fh.write when 1'd1 with TASK_fopen___d3
+       task #6 $fopen when 1'd1 with "vt.out", "w"
+
+system-task calls of the hardware, in the order of its always block:
+  task #0: $display [Prelude.$display ("ValTasks.bs", line 31, column 12)] when WILL_FIRE_kick
+  task #1: $random [Prelude.$random ("ValTasks.bs", line 20, column 15)] when WILL_FIRE_RL_roll
+  task #2: $test$plusargs [Prelude.__testplusargs__ ("Prelude.bs", line 3468, column 37)] when WILL_FIRE_RL_roll
+  task #3: $display [Prelude.$display ("ValTasks.bs", line 23, column 26)] when WILL_FIRE_RL_roll && TASK_testplusargs___d5
+  task #4: $stime [Prelude.__stime__ ("Prelude.bs", line 3358, column 27)] when WILL_FIRE_RL_roll
+  task #5: $fdisplay [Prelude.$fdisplay ("ValTasks.bs", line 26, column 25)] when WILL_FIRE_RL_roll && w_whas____d7
+  task #6: $fopen [Prelude.$fopen ("ValTasks.bs", line 17, column 15)] when WILL_FIRE_RL_opener
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: kick RL_roll RL_opener
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      (kick, EN_kick)
+ready (method, RDY):       (kick, RDY_kick)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
