@@ -9,7 +9,7 @@ import PPrint
 import PVPrint
 import FStringCompat
 import PreStrings(fsEmpty)
-import FileNameUtil(getRelativeFilePath, remapPath)
+import FileNameUtil(getRelativeFilePath, remapPath, baseName)
 
 data Position = Position {
     pos_file :: !FString,
@@ -32,6 +32,22 @@ remapPositionFile [] p = p
 remapPositionFile prefixes p@(Position f l c is_stdlib) =
     let f' = mkFString (remapPath prefixes (getFString f))
     in  if f' == f then p else Position f' l c is_stdlib
+
+-- The position stored in an interface file (.bi, see GenBin): the
+-- base name of the file alone.  Line and column are dropped so that an edit
+-- inside a definition body, which moves every later declaration, cannot
+-- change the bytes of the interface; the directory is dropped so that the
+-- same source compiled in two build directories writes the same bytes (the
+-- -remap-path-prefix mapping is not applied, since the base name does not
+-- depend on the directory it would rewrite).  A diagnostic that cites an
+-- imported declaration then names its file: prPosition prints a position
+-- without a line as the file name alone.  Positions without a file
+-- (noPosition, cmdPosition) are kept, so their printing survives.
+interfacePosition :: Position -> Position
+interfacePosition p@(Position f l c is_stdlib)
+    | f == fsEmpty = p
+    | otherwise = Position (mkFString (baseName (getFString f))) (-1) (-1)
+                           is_stdlib
 
 instance Eq Position where
   (Position f1 l1 c1 _) == (Position f2 l2 c2 _) = (f1, l1, c1) == (f2, l2, c2)

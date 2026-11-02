@@ -69,6 +69,11 @@ readBinFile errh nm s =
 -- interface the same.  Whether an interface file is stale is the build's
 -- business, or -u's (Depend), not the importer's.
 --
+-- The Position transform the .bi writer is given normalises every stored
+-- position (Position.interfacePosition): a signature carries the position
+-- of every Id in it, and the lists of use positions of CItype and CIclass,
+-- so without it an edit that only moves lines would move the bytes.
+--
 -- The .bcheck is the typechecked package itself, after Simplify and
 -- LiftDicts (bsc.hs genCheckOnly: the form a full compile hands to IConv),
 -- with its lifted dictionaries and the same dependency names in front:

@@ -74,7 +74,8 @@ import Error(internalError, ErrMsg(..),
              ErrorHandle, initErrorHandle, setErrorHandleFlags,
              bsError, bsWarning, bsMessage,
              exitFail, exitOK, exitFailWith)
-import Position(noPosition, cmdPosition, remapPositionFile)
+import Position(noPosition, cmdPosition, remapPositionFile,
+                interfacePosition)
 import CVPrint
 import Id
 import Backend
@@ -551,8 +552,9 @@ genSignatureOnly
     start flags DFwriteBin
     (bi_sig, _) <- genUserSign errh symt mctx
     let bi_filename = putInDir (bdir flags) name biSuffix
-        remapP = remapPositionFile (remapPathPrefix flags)
-    genBiFile errh remapP bi_filename (signatureDepends cr) bi_sig
+    -- positions are stored normalised (Position.interfacePosition), so the
+    -- bytes depend on neither line numbers nor the build directory
+    genBiFile errh interfacePosition bi_filename (signatureDepends cr) bi_sig
     when (verbose flags) $
          putStrLnF ("Interface file created: " ++
                     getRelativeFilePath bi_filename)
@@ -619,7 +621,8 @@ genCheckOnly
     let bi_filename = putInDir (bdir flags) name biSuffix
         remapP = remapPositionFile (remapPathPrefix flags)
         depends = signatureDepends cr
-    genBiFile errh remapP bi_filename depends bi_sig
+    -- positions normalised as for -signature-only (Position.interfacePosition)
+    genBiFile errh interfacePosition bi_filename depends bi_sig
     when (verbose flags) $
          putStrLnF ("Interface file created: " ++
                     getRelativeFilePath bi_filename)
@@ -639,7 +642,8 @@ genCheckOnly
         stats flags DFliftdicts mod_lifted
         start flags DFwriteBcheck
         let bcheck_filename = putInDir (bdir flags) name bcheckSuffix
-        -- positions are the real ones, remapped as the .bo's are
+        -- positions are the real ones, remapped as the .bo's are (not
+        -- normalised: a consumer of the typechecked package needs them)
         genBcheckFile errh remapP bcheck_filename depends mod_lifted
                       (lifted_defs :: [IDef ()])
         when (verbose flags) $
