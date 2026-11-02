@@ -2,6 +2,7 @@ module BinUtil (
                 BinMap, BinFile,
                 HashMap,
                 readImports,
+                outputSuffixes, importSuffixes,
                 readBin, sortImportedSignatures,
                 replaceImportedSignatures
                ) where
@@ -11,6 +12,7 @@ import qualified Data.Map as M
 import Flags(Flags,
              ifcPath,
              enablePoisonPills,
+             checkOnly, signatureOnly, signatureCompile,
              usePrelude,
              verbose)
 import Position(noPosition)
@@ -22,9 +24,9 @@ import Prim
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError, bsWarning)
 import PFPrint
 import SCC
-import FileNameUtil(binSuffix)
+import FileNameUtil(binSuffix, biSuffix, bcheckSuffix)
 import FileIOUtil(readBinFilePath)
-import GenBin(readBinFile)
+import GenBin(readBinFile, readBiFile)
 import Util(fromJustOrErr, fromMaybeM,
             map_insertManyWith, map_insertManyWithKeyM)
 
@@ -167,30 +169,76 @@ addPrelude flags imps | usePrelude flags = CImpId False idPrelude :
                                            imps
                       | otherwise = imps
 
--- Import one .bo file
+-- The binary files a compile writes for a package, in the order it writes
+-- them: a check compile the .bi and the .bcheck, a -signature-only compile
+-- the .bi, a full compile the .bo.  Depend times every one of them, the
+-- oldest deciding and a missing one making the package stale.
+outputSuffixes :: Flags -> [String]
+outputSuffixes flags
+    | checkOnly flags = [biSuffix, bcheckSuffix]
+    | signatureOnly flags = [biSuffix]
+    | otherwise = [binSuffix]
+
+-- The binary files that can satisfy an import, most preferred first: the
+-- probe doImport makes below, for Depend's source-less packages.  Under a
+-- signature-only compile the package's .bi, then a full .bo, so that
+-- libraries shipped as .bo alone resolve; a full compile reads .bo files
+-- only; a .bcheck is never an import.
+importSuffixes :: Flags -> [String]
+importSuffixes flags
+    | signatureCompile flags = [biSuffix, binSuffix]
+    | otherwise = [binSuffix]
+
+-- Import one package: its interface file (.bi) under a signature-only
+-- compile when there is one, else its .bo file (importSuffixes)
 doImport :: ErrorHandle -> Flags -> HashMap -> Id ->
             IO (String, CSignature, CSignature, IPackage a, String,
                 HashMap, [Id])
 doImport errh flags hashmap i = do
-    let binname = getIdString i ++ "." ++ binSuffix
+    let boname = getIdString i ++ "." ++ binSuffix
+        biname = getIdString i ++ "." ++ biSuffix
         missingErr = (getIdPosition i,
-                      EMissingBinFile binname (pfpString i))
+                      EMissingBinFile boname (pfpString i))
         pillMsg = if (enablePoisonPills flags)
                   then bsWarning errh
                   else bsError errh
-    (file, name) <- fromMaybeM (bsError errh [missingErr]) $
-                      readBinFilePath errh (getIdPosition i)
-                          (verbose flags) binname (ifcPath flags)
-    (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _ _), hash)
-        <- readBinFile errh name file
-    when (pi /= i) $
-        bsError errh [(noPosition, EBinFilePkgNameMismatch name
-                                       (pfpString i) (pfpString pi))]
-    when (any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]) $
-        pillMsg [(getIdPosition pi, WPoisonedDefFile binname)]
-    hashmap' <- mergeHashes errh hashmap pi hash impHashes
-    let impNames = map fst impHashes
-    return (name, bi_sig, bo_sig, ipkg, hash, hashmap', impNames)
+        find nm = readBinFilePath errh (getIdPosition i)
+                      (verbose flags) nm (ifcPath flags)
+    -- Under a signature-only compile prefer the package's interface file,
+    -- the one either mode writes for its dependents (and a "bsc -u" in
+    -- either mode keeps current), and fall back to a full .bo, so that
+    -- libraries shipped as .bo alone resolve.  A .bcheck is never looked
+    -- for: it is not an import.  Source wins over all of them -- that is
+    -- Depend's business, not ours.
+    mbi <- if signatureCompile flags then find biname else return Nothing
+    case mbi of
+      Just (file, name) -> do
+        (depends, bi_sig) <- readBiFile errh name file
+        let CSignature pi _ _ _ = bi_sig
+        when (pi /= i) $
+            bsError errh [(noPosition, EBinFilePkgNameMismatch name
+                                           (pfpString i) (pfpString pi))]
+        -- "depends" plays the part "impHashes" plays for a .bo: the transitive
+        -- closure that drives both the load worklist and readImports' qualmap.
+        -- The signature's own import list cannot serve -- GenSign prunes it.
+        -- There are no hashes to merge: an interface file records names only
+        -- (see GenBin), so the .bo files of a closure still check each other
+        -- as before while an interface file is taken as the build delivered
+        -- it.
+        let ipkg = IPackage pi [ (d, "") | d <- depends ] [] [] M.empty
+        return (name, bi_sig, bi_sig, ipkg, "", hashmap, depends)
+      Nothing -> do
+        (file, name) <- fromMaybeM (bsError errh [missingErr]) $ find boname
+        (bi_sig, bo_sig, ipkg@(IPackage pi impHashes _ _ _), hash)
+            <- readBinFile errh name file
+        when (pi /= i) $
+            bsError errh [(noPosition, EBinFilePkgNameMismatch name
+                                           (pfpString i) (pfpString pi))]
+        when (any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]) $
+            pillMsg [(getIdPosition pi, WPoisonedDefFile boname)]
+        hashmap' <- mergeHashes errh hashmap pi hash impHashes
+        let impNames = map fst impHashes
+        return (name, bi_sig, bo_sig, ipkg, hash, hashmap', impNames)
 
 hasPoisonPill :: IExpr a -> Bool
 hasPoisonPill (ILam _ _ e)  = hasPoisonPill e

@@ -8,6 +8,7 @@ include ../common.mk
 .PHONY: build
 build: $(BUILDDIR)
 	$(BSC) -u $(BSCFLAGS) Contexts.bsv
+	$(BSC) -u $(BSCFLAGS) -signature-only Contexts.bsv
 	cp -p Contexts.defines $(BUILDDIR)
 
 $(BUILDDIR):

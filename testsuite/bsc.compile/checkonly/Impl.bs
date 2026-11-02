@@ -1,0 +1,9 @@
+package Impl where
+
+-- uses A only inside a definition body, which is still a use: no T0157
+-- in either mode
+
+import A
+
+one :: Bit 8
+one = f 0

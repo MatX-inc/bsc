@@ -20,14 +20,22 @@ import Util(rTake)
 -- Names
 
 -- various suffixes
-bscSrcSuffix, bsvSrcSuffix, binSuffix, abinSuffix, cSuffix,
-  cxxSuffix, cppSuffix, ccSuffix, hSuffix, comodSuffix, objSuffix, arSuffix,
+bscSrcSuffix, bsvSrcSuffix, binSuffix, biSuffix, bcheckSuffix, abinSuffix,
+  cSuffix, cxxSuffix, cppSuffix, ccSuffix, hSuffix, comodSuffix, objSuffix, arSuffix,
   soSuffix, verSuffix, verSuffix2, verSuffix3, verSuffix4, verSuffix5,
   verSuffix6, vhdlSuffix, vhdlSuffix2, useSuffix, scheduleSuffix, dotSuffix,
   vcdSuffix, makeSuffix :: String
 bscSrcSuffix = "bs"
 bsvSrcSuffix = "bsv"
 binSuffix = "bo"
+-- The signature-only compiles write the package signature as a .bi,
+-- the file their dependents import (-signature-only after context
+-- reduction, -check-only after typechecking); -check-only also writes the
+-- typechecked package as a .bcheck, which nothing imports.  Each has a
+-- suffix of its own, so neither can be mistaken for a .bo by a compile
+-- that needs definitions.
+biSuffix = "bi"
+bcheckSuffix = "bcheck"
 abinSuffix = "ba"
 cSuffix   = "c"
 cxxSuffix = "cxx"

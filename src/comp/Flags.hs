@@ -8,6 +8,7 @@ module Flags(
              hasDump, hasDumpStrict, dumpInfo,
 
              Verbosity(..), extraVerbose, verbose, quiet,
+             signatureCompile,
              moreTalkative, lessTalkative, setVerbose,
         ) where
 
@@ -41,6 +42,7 @@ data Flags = Flags {
         cppFlags :: [String],
         linkFlags :: [String],
         cdir :: Maybe String,
+        checkOnly :: Bool,
         cpp :: Bool,
         defines :: [String],
         demoteErrors :: MsgListFlag,
@@ -139,6 +141,7 @@ data Flags = Flags {
         showSchedule :: Bool,
         showStats :: Bool,
         showUpds :: Bool,
+        signatureOnly :: Bool,
         simplifyCSyntax :: Bool,
         strictMethodSched :: Bool,
         suppressWarnings :: MsgListFlag,
@@ -188,6 +191,12 @@ setVerbose True  f = f { verbosity = max Verbose (verbosity f) }
 quiet :: Flags -> Bool
 quiet = (== Quiet) . verbosity
 
+-- Whether this compile stops before code generation and writes only the
+-- package's signature: -check-only after typechecking, -signature-only
+-- after context reduction
+signatureCompile :: Flags -> Bool
+signatureCompile flags = checkOnly flags || signatureOnly flags
+
 moreTalkative :: Flags -> Flags
 moreTalkative f =
   case verbosity f of
@@ -231,6 +240,7 @@ data DumpFlag
         | DFisimpdicts
         | DFisimplify
         | DFwriteBin
+        | DFwriteBcheck
 
         -- module generation
         | DFexpanded

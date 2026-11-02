@@ -1,0 +1,13 @@
+package Top where
+
+-- the top of the three-package chain for the -u tests
+
+import A
+import B
+
+mkTop :: Module Empty
+mkTop =
+  module
+    b :: Counter <- mkB
+    rules
+      "poke": when b.value == 0 ==> b.incr

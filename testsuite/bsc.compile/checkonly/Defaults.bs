@@ -1,0 +1,17 @@
+package Defaults where
+
+-- A class default method is typechecked at its instances, so the do
+-- block of this one keeps its let statement (a CSletrec) in the
+-- typechecked package: the one place a .bcheck holds a let statement
+-- rather than a let expression.  The .bcheck round-trip exercises the
+-- CStmt reader's arm for it.
+
+class MkThing a where
+  mkThing :: Module a
+  mkThing = do
+    let n :: Integer
+        n = 5
+    error (integerToString n)
+
+instance MkThing (Reg (Bit 8)) where
+  mkThing = mkReg 0

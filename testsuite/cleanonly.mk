@@ -8,6 +8,7 @@ DONTKEEPFILES ?= xxxx
 
 TRYDELFILES = $(wildcard \
 	*.bi \
+	*.bcheck \
 	*.bo \
 	*.ba \
 	*inline-reg \

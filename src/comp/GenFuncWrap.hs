@@ -1,5 +1,5 @@
 module GenFuncWrap(genFuncWrap, addFuncWrap,
-                   makeGenFuncId
+                   makeGenFuncId, FuncInfo
                   ) where
 
 import Data.Maybe(isJust)

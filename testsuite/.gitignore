@@ -12,6 +12,8 @@ groups.list
 testrun.html
 
 # BSC objects
+*.bi
+*.bcheck
 *.bo
 *.ba
 

@@ -1,0 +1,253 @@
+# Signature-only compiles: -signature-only writes the package's signature
+# as a .bi after context reduction; -check-only typechecks and writes the
+# same .bi and, beside it, the typechecked package (after dictionary
+# lifting) as a .bcheck.  Both
+# read their imports as .bi before .bo; a .bcheck is never an import.
+#
+# The byte-level properties (each mode writes only its own files, the .bi
+# of the two modes is the same bytes, an edit inside bodies leaves the .bi
+# unchanged and changes the .bcheck, an interface edit changes both, the
+# .bi bytes depend neither on the directory nor on whether the imports
+# were read as .bo or as .bi, the .bcheck's depend on the directory unless
+# -remap-path-prefix maps it, a .bi on the path changes nothing about a
+# full compile, the .bi holds the .bo's signature and the .bcheck prints as
+# the -dliftdicts dump) are checked by run_checkonly.sh.
+
+set here [pwd]
+set testdir [file join $srcdir $subdir]
+
+cd $testdir
+set status [exec_with_log_and_return "checkonly" \
+                "./run_checkonly.sh >& run_checkonly.out" \
+                lasterr 2]
+cd $here
+
+set output_file   [file join $testdir run_checkonly.out]
+set expected_file [file join $testdir run_checkonly.out.expected]
+
+if { $status != 0 } {
+    fail "checkonly: run_checkonly.sh exited non-zero ($lasterr)"
+} elseif { ![file exists $expected_file] } {
+    unresolved "checkonly: no expected file"
+} elseif { [catch {exec diff -u $expected_file $output_file} diff_err] } {
+    fail "checkonly: output differs from expected"
+} else {
+    pass "checkonly: interface and typechecked files are as expected"
+}
+
+# The compiles here run without the -u that bsc_compile adds by default
+# (nodeps = 1), so that which binary files exist is exactly what each test
+# arranged; the -u tests pass -u themselves.  A signature-only compile
+# writes no .bo, so compile_pass's intermediate-file check does not apply:
+# these helpers compile and look at the diagnostics only.
+proc sig_compile_pass { source options } {
+    incr_stat "compile_pass"
+    if [bsc_compile $source $options 1] then {
+        pass "`$source' compiles with $options"
+    } else {
+        fail "`$source' should compile with $options"
+    }
+}
+
+proc sig_compile_pass_warning { source tag expcount options } {
+    if [bsc_compile $source $options 1] then {
+        find_n_warning [make_bsc_output_name $source] $tag $expcount
+    } else {
+        fail "`$source' should compile with $options"
+    }
+}
+
+proc sig_compile_pass_no_warning { source options } {
+    sig_compile_pass $source $options
+    no_warnings [make_bsc_output_name $source]
+}
+
+# whether a file written (or not) by a compile exists
+proc file_written { file } {
+    global testdir
+    if { [file exists [file join $testdir $file]] } {
+        pass "$file is written"
+    } else {
+        fail "$file should be written"
+    }
+}
+
+proc file_not_written { file } {
+    global testdir
+    if { [file exists [file join $testdir $file]] } {
+        fail "$file should not be written"
+    } else {
+        pass "$file is not written"
+    }
+}
+
+proc erase_outputs { pkg } {
+    erase $pkg.bo
+    erase $pkg.bi
+    erase $pkg.bcheck
+}
+
+# ---------------
+# Checking against an interface alone: B imports A, and no A.bo exists
+
+erase_outputs A
+erase_outputs B
+copy A1.bs A.bs
+sig_compile_pass A.bs {-signature-only}
+file_written A.bi
+file_not_written A.bo
+file_not_written A.bcheck
+
+# the check reads A.bi (there is no A.bo) and writes B.bi and B.bcheck only
+sig_compile_pass B.bs {-check-only -v}
+find_n_strings [make_bsc_output_name B.bs] {A.bi} 1
+file_written B.bi
+file_written B.bcheck
+file_not_written B.bo
+
+# a .bcheck is never an import: with A.bcheck present and no A.bi (and no
+# A.bo), the check of B reports the missing binary (S0003), as does
+# -signature-only; with A.bi back it compiles
+sig_compile_pass A.bs {-check-only}
+file_written A.bcheck
+erase A.bi
+compile_fail_error B.bs S0003 1 {-check-only} 1
+compile_fail_error B.bs S0003 1 {-signature-only} 1
+sig_compile_pass A.bs {-signature-only}
+sig_compile_pass B.bs {-check-only}
+
+# ---------------
+# A file of one kind fed to a compile that wants another is refused
+# (S0005), not silently taken as an empty package: a .bi over A.bo for a
+# full compile, a .bcheck over A.bi for a check
+
+copy A.bi A.bo
+compile_fail_error B.bs S0005 1 {} 1
+erase A.bo
+copy A.bcheck A.bi
+compile_fail_error B.bs S0005 1 {-check-only} 1
+erase_outputs A
+
+# ---------------
+# Diagnostics agree between a full compile and a check compile
+
+compile_pass A.bs {} 1
+sig_compile_pass A.bs {-signature-only}
+
+# a dead import warns in both modes; -signature-only cannot know (the
+# bodies are not typechecked) and does not warn
+compile_pass_warning Unused.bs T0157 1
+sig_compile_pass_warning Unused.bs T0157 1 {-check-only}
+sig_compile_pass_no_warning Unused.bs {-signature-only}
+
+# an import used only inside a body is a use: no warning in either mode
+compile_pass_no_warning Impl.bs {} 1
+sig_compile_pass_no_warning Impl.bs {-check-only}
+
+# duplicate foreign link names are reported in both modes
+compile_fail_error Dup.bsv T0091 1 {} 1
+compile_fail_error Dup.bsv T0091 1 {-check-only} 1
+
+# a dead import plus a duplicate link name reports T0091 alone in both
+compile_fail_error Both.bsv T0091 1 {} 1
+find_n_warning [make_bsc_output_name Both.bsv] T0157 0
+compile_fail_error Both.bsv T0091 1 {-check-only} 1
+find_n_warning [make_bsc_output_name Both.bsv] T0157 0
+
+# an instance that A already derives: T0099 in both modes.  The message
+# cites the class's declaration in the Prelude, which a check compile reads
+# from Prelude.bi, whose positions carry the file name alone
+compile_fail_error Dupe.bs T0099 1 {} 1
+compile_fail_error Dupe.bs T0099 1 {-check-only} 1
+compare_file [make_bsc_output_name Dupe.bs]
+compile_fail_error Dupe.bs T0099 1 {-signature-only} 1
+
+# a type error in a body fails -check-only, which then writes neither file
+# (the error stops the compile before the writes), but not
+# -signature-only, which still writes the .bi
+erase_outputs TypeErr
+compile_fail TypeErr.bs {} 1
+compile_fail TypeErr.bs {-check-only} 1
+file_not_written TypeErr.bcheck
+file_not_written TypeErr.bi
+sig_compile_pass TypeErr.bs {-signature-only}
+file_written TypeErr.bi
+
+# with -continue-after-errors the typecheck reports the error and goes on:
+# the check still fails, writes the .bi (the interface does not depend on
+# the body) and not the .bcheck, whose existence means the package
+# typechecked clean
+erase_outputs TypeErr
+compile_fail TypeErr.bs {-check-only -continue-after-errors} 1
+file_written TypeErr.bi
+file_not_written TypeErr.bcheck
+
+# ---------------
+# Flag conflicts: a backend, linking, -c, or the other mode; -g without a
+# backend keeps its own diagnostic
+
+compile_fail_error A.bs S0100 1 {-check-only -verilog} 1
+compile_fail_error A.bs S0100 1 {-signature-only -sim} 1
+compile_fail_error A.bs S0100 1 {-check-only -signature-only} 1
+compile_fail_error A.bs S0014 1 {-check-only -g mkCounter} 1
+
+# ---------------
+# -u times the mode's own outputs: with every .bo present, -u
+# -signature-only still writes a .bi per package and -u -check-only a
+# .bcheck per package (the .bi files being current); a rerun is a no-op; a
+# missing .bcheck or .bi makes its package stale, and -u recompiles it and
+# its dependent as for any recompiled package; a touched source likewise;
+# a full -u is unaffected by the .bi and .bcheck files
+
+erase_outputs A
+erase_outputs B
+erase_outputs Top
+compile_pass A.bs {} 1
+compile_pass B.bs {} 1
+compile_pass Top.bs {} 1
+
+sig_compile_pass Top.bs {-u -signature-only -show-compiles}
+find_n_strings [make_bsc_output_name Top.bs] {compiling} 3
+sig_compile_pass Top.bs {-u -signature-only -show-compiles}
+find_n_strings [make_bsc_output_name Top.bs] {compiling} 0
+
+sig_compile_pass Top.bs {-u -check-only -show-compiles}
+find_n_strings [make_bsc_output_name Top.bs] {compiling} 3
+file_written A.bcheck
+file_written B.bcheck
+file_written Top.bcheck
+sig_compile_pass Top.bs {-u -check-only -show-compiles}
+find_n_strings [make_bsc_output_name Top.bs] {compiling} 0
+
+erase B.bcheck
+sig_compile_pass Top.bs {-u -check-only -show-compiles}
+find_n_strings [make_bsc_output_name Top.bs] {compiling} 2
+file_written B.bcheck
+erase B.bi
+sig_compile_pass Top.bs {-u -check-only -show-compiles}
+find_n_strings [make_bsc_output_name Top.bs] {compiling} 2
+file_written B.bi
+
+# make sure the modification time differs from the files just written
+after 1500
+file mtime [file join $testdir B.bs] [clock seconds]
+sig_compile_pass Top.bs {-u -check-only -show-compiles}
+find_n_strings [make_bsc_output_name Top.bs] {compiling} 2
+
+# the full -u recompiles what the touch made stale, then nothing, although
+# the .bi and .bcheck files are newer than every .bo
+compile_pass Top.bs {-u -show-compiles} 1
+find_n_strings [make_bsc_output_name Top.bs] {compiling} 2
+compile_pass Top.bs {-u -show-compiles} 1
+find_n_strings [make_bsc_output_name Top.bs] {compiling} 0
+
+# ---------------
+# The Libraries ship a .bi beside every .bo, and a check compile reads it
+
+if { [file exists [file join $env(BLUESPECDIR) Libraries Prelude.bi]] } {
+    pass "Libraries/Prelude.bi is installed"
+} else {
+    fail "Libraries/Prelude.bi should be installed"
+}
+sig_compile_pass Impl.bs {-check-only -v}
+find_n_strings [make_bsc_output_name Impl.bs] {Prelude.bi} 1

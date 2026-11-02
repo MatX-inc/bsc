@@ -1,0 +1,32 @@
+package A where
+
+-- The package every test in this directory imports: A2.bs changes only
+-- definition bodies (the interface stays the same), A3.bs changes the
+-- interface (a new exported function and a wider type for "f").  The
+-- register's don't-care reset value is a CAnyT in the typechecked
+-- package, the form whose Bin instance the .bcheck round-trip exercises;
+-- the dictionaries of its definitions (over fixed types) are lifted, so
+-- the file carries lifted dictionaries as well.
+
+data Color = Red | Green
+           deriving (Eq, Bits)
+
+interface Counter =
+    incr :: Action
+    value :: Bit 8
+
+f :: Bit 8 -> Bit 8
+f x = x + 1
+
+isRed :: Color -> Bool
+isRed c = c == Red
+
+mkCounter :: Module Counter
+mkCounter =
+  module
+    r :: Reg (Bit 8) <- mkReg _
+    rules
+      "tick": when True ==> r := f r
+    interface
+      incr = r := r + 1
+      value = r

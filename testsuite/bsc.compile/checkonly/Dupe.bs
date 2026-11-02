@@ -1,0 +1,10 @@
+package Dupe where
+
+-- an instance A already derives: T0099 in both modes.  The message cites
+-- the class's declaration in the Prelude, which a check compile reads from
+-- Prelude.bi: its positions carry the file name alone (no line or column)
+
+import A
+
+instance Eq Color where
+   (==) _ _ = True

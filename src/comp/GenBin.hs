@@ -1,12 +1,15 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenBin(genBinFile, readBinFile) where
+module GenBin(genBinFile, readBinFile,
+              genBiFile, readBiFile,
+              genBcheckFile, readBcheckFile) where
 
 import Control.Monad(when)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
 import Position
+import Id(Id)
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import ISyntax
@@ -46,6 +49,181 @@ readBinFile errh nm s =
                     decodeWithHash $ B.drop hlen s
             in return (bi_sig, bo_sig, ipkg, hash)
        else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+
+-- ----------
+-- .bi and .bcheck: the files the signature-only modes write.
+--
+-- The .bi is the package's interface, written by -signature-only after
+-- context reduction and by -check-only after typechecking (the same
+-- bytes): the user-visible signature, which is what readImports feeds to
+-- the typechecker (mkCImp), and the names of the packages in the
+-- transitive import closure (what a .bo records in ipkg_depends; it
+-- drives readImports' load worklist and cannot be recovered from the
+-- signature's own import list, which GenSign prunes).  bo_sig is
+-- deliberately absent: it is consumed only via replaceImportedSignatures,
+-- downstream of IConv, which neither mode reaches.  The .bi is the file a
+-- signature-only compile's dependents import (BinUtil.doImport), so its
+-- bytes must depend on the package and on its imports' interfaces alone:
+-- no hashes of the files the writer read, so that a build keyed on
+-- content can skip every dependent of a package whose change left its
+-- interface the same.  Whether an interface file is stale is the build's
+-- business, or -u's (Depend), not the importer's.
+--
+-- The Position transform the .bi writer is given normalises every stored
+-- position (Position.interfacePosition): a signature carries the position
+-- of every Id in it, and the lists of use positions of CItype and CIclass,
+-- so without it an edit that only moves lines would move the bytes.  It
+-- is applied to the sharing keys as well (BinData.encodeNormalised): an Id
+-- read from a .bo carries a line and a column that one read from a .bi
+-- does not, and keyed on those one imported name would be written twice
+-- from the one and once from the other.  The .bcheck writer is encodeWith,
+-- the .bo's, since its positions are real.
+--
+-- The .bcheck is the typechecked package itself, after Simplify and
+-- LiftDicts (bsc.hs genCheckOnly: the form a full compile hands to IConv),
+-- with its lifted dictionaries and the same dependency names in front:
+-- the witness that the package typechecked, and what a tool wanting full
+-- type information (an LSP) reads.  Nothing imports a
+-- .bcheck, so its bytes may, and do, depend on definition bodies and on
+-- real positions.  The positions in it are the real ones (file, line,
+-- column), transformed only by -remap-path-prefix as the .bo's are: a
+-- consumer needs them.  The import signatures inside the package are
+-- written as names (see Bin CImportedSignature): they are the imports'
+-- own .bi files.
+--
+-- Each has its own tag, distinct from the .bo tag, so the S0005 version
+-- guard rejects one fed to a compile that wants definitions rather than
+-- that compile silently finding none, and a .bcheck fed to a compile that
+-- wants an interface.
+biHeader, bcheckHeader :: [Byte]
+biHeader = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bi-20261102-1"
+bcheckHeader = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bcheck-20261102-2"
+
+biHeaderBS, bcheckHeaderBS :: B.ByteString
+biHeaderBS = B.pack biHeader
+bcheckHeaderBS = B.pack bcheckHeader
+
+genBiFile :: ErrorHandle -> (Position -> Position) ->
+             String -> [Id] -> CSignature -> IO ()
+genBiFile errh remapP fn depends bi_sig =
+    writeBinaryFileCatch errh fn
+        (biHeader ++ encodeNormalised remapP (depends, bi_sig))
+
+readBiFile :: ErrorHandle -> String -> B.ByteString ->
+              IO ([Id], CSignature)
+readBiFile errh nm s =
+    let hlen = B.length biHeaderBS
+    in if B.take hlen s == biHeaderBS
+       then return (decode (B.drop hlen s))
+       else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+
+-- The lifted dictionaries are the IDefs LiftDicts built for the package
+-- (bsc.hs genCheckOnly); the list is empty under -no-lift-dicts.
+genBcheckFile :: ErrorHandle -> (Position -> Position) ->
+                 String -> [Id] -> CPackage -> [IDef a] -> IO ()
+genBcheckFile errh remapP fn depends pkg lifted =
+    writeBinaryFileCatch errh fn
+        (bcheckHeader ++ encodeWith remapP (depends, pkg, lifted))
+
+readBcheckFile :: ErrorHandle -> String -> B.ByteString ->
+                  IO ([Id], CPackage, [IDef a])
+readBcheckFile errh nm s =
+    let hlen = B.length bcheckHeaderBS
+    in if B.take hlen s == bcheckHeaderBS
+       then return (decode (B.drop hlen s))
+       else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+
+-- ----------
+-- Bin CPackage, and the forms a package holds that a signature does not
+--
+-- A typechecked package's top-level values are CValueSign (CDefT ...):
+-- cConvInst has turned every Cinstance into definitions, and the
+-- typechecker rejects a CValue (a value without a signature,
+-- TypeCheck.tiOneDef), so those two stay unwritable in Bin CDefn below.
+-- Bin CDefn is shared with the .bo, whose writer drops the derivings of
+-- Cdata and Cstruct (nothing derives after reading a .bo), so a package
+-- writes its definitions through PkgDefn, which keeps them: a reader of
+-- the typechecked package sees the deriving clauses as written.
+
+instance Bin CPackage where
+    writeBytes (CPackage i exps imps impsigs fixs defs incs) =
+        section "CPackage" $
+        do toBin i; toBin exps; toBin imps; toBin impsigs; toBin fixs
+           toBin (map PkgDefn defs); toBin incs
+    readBytes = do i <- fromBin
+                   exps <- fromBin
+                   imps <- fromBin
+                   impsigs <- fromBin
+                   fixs <- fromBin
+                   defs <- fromBin
+                   incs <- fromBin
+                   return (CPackage i exps imps impsigs fixs
+                               [ d | PkgDefn d <- defs ] incs)
+
+newtype PkgDefn = PkgDefn CDefn
+
+instance Bin PkgDefn where
+    writeBytes (PkgDefn (Cdata vis ik vs ocs cs ders)) =
+        do putI 0; toBin vis; toBin ik; toBin vs; toBin ocs; toBin cs
+           toBin ders
+    writeBytes (PkgDefn (Cstruct vis st ik is fs ders)) =
+        do putI 1; toBin vis; toBin st; toBin ik; toBin is; toBin fs
+           toBin ders
+    writeBytes (PkgDefn d) = do putI 2; toBin d
+    readBytes = do tag <- getI
+                   case tag of
+                     0 -> do vis <- fromBin; ik <- fromBin; vs <- fromBin
+                             ocs <- fromBin; cs <- fromBin; ders <- fromBin
+                             return (PkgDefn (Cdata vis ik vs ocs cs ders))
+                     1 -> do vis <- fromBin; st <- fromBin; ik <- fromBin
+                             is <- fromBin; fs <- fromBin; ders <- fromBin
+                             return (PkgDefn (Cstruct vis st ik is fs ders))
+                     2 -> do d <- fromBin; return (PkgDefn d)
+                     n -> internalError $ "GenBin.Bin(PkgDefn).readBytes: " ++ show n
+
+instance Bin CDeriving where
+    writeBytes (CStock cs) = do putI 0; toBin cs
+    writeBytes (CVia c i) = do putI 1; toBin c; toBin i
+    readBytes = do tag <- getI
+                   case tag of
+                     0 -> do cs <- fromBin; return (CStock cs)
+                     1 -> do c <- fromBin; i <- fromBin; return (CVia c i)
+                     n -> internalError $ "GenBin.Bin(CDeriving).readBytes: " ++ show n
+
+instance Bin CExport where
+    writeBytes (CExpVar i) = do putI 0; toBin i
+    writeBytes (CExpCon i) = do putI 1; toBin i
+    writeBytes (CExpConAll i) = do putI 2; toBin i
+    writeBytes (CExpPkg i) = do putI 3; toBin i
+    readBytes = do tag <- getI
+                   i <- fromBin
+                   case tag of
+                     0 -> return (CExpVar i)
+                     1 -> return (CExpCon i)
+                     2 -> return (CExpConAll i)
+                     3 -> return (CExpPkg i)
+                     n -> internalError $ "GenBin.Bin(CExport).readBytes: " ++ show n
+
+instance Bin CImport where
+    writeBytes (CImpId q i) = do toBin q; toBin i
+    readBytes = do q <- fromBin; i <- fromBin; return (CImpId q i)
+
+-- An imported signature is written as the import's name and qualifier
+-- alone and read back with an empty signature: the signatures are the
+-- imports' own .bi files (each the size of its package's interface, and
+-- the Preludes are in every closure), which a consumer reads through
+-- BinUtil.readImports as the compiler does.  The file name it was read
+-- from is not stored either; it names a directory of the writing host.
+-- The package prints the same either way (PPrint CImportedSignature uses
+-- the name and the qualifier).
+instance Bin CImportedSignature where
+    writeBytes (CImpSign _ q (CSignature i _ _ _)) = do toBin q; toBin i
+    readBytes = do q <- fromBin; i <- fromBin
+                   return (CImpSign "" q (CSignature i [] [] []))
+
+instance Bin CInclude where
+    writeBytes (CInclude s) = toBin s
+    readBytes = do s <- fromBin; return (CInclude s)
 
 -- ----------
 -- Bin CSignature
@@ -98,6 +276,8 @@ instance Bin CDefn where
     writeBytes (CIValueSign i cqt) = do putI 9; toBin i; toBin cqt
     writeBytes (CItype ik is poss) = do putI 10; toBin ik; toBin is; toBin poss
     writeBytes (CPragma p) = do putI 11; toBin p
+    -- only in a typechecked package (see Bin CPackage)
+    writeBytes (CValueSign d) = do putI 12; toBin d
     writeBytes def = internalError $ "GenBin.Bin(CDefn) not supported " ++ ppReadable def
     readBytes = do when doTrace $ traceM ("read CDefn")
                    tag <- getI
@@ -161,6 +341,8 @@ instance Bin CDefn where
                               ik <- fromBin; is <- fromBin; poss <- fromBin
                               return (CItype ik is poss)
                      11 -> do p <- fromBin; return (CPragma p)
+                     12 -> do d <- fromBin
+                              return (CValueSign d)
                      n  -> internalError $ "GenBin.Bin(CDefn).readBytes: " ++ show n
 
 -- ----------
@@ -169,13 +351,16 @@ instance Bin CDefn where
 instance Bin IdK where
     writeBytes (IdK i)       = do putI 0; toBin i
     writeBytes (IdKind i k)  = do putI 1; toBin i; toBin k
-    writeBytes (IdPKind i k) =
-        internalError $ "GenBin.Bin(IdK).writeBytes: IdPKind"
+    -- the kind a BSV declaration gives a type parameter, kept by the
+    -- package's own definitions through typechecking: written by the
+    -- .bcheck, never by a signature (GenSign writes inferred kinds)
+    writeBytes (IdPKind i k) = do putI 2; toBin i; toBin k
     readBytes = do when doTrace $ traceM ("read IdK")
                    tag <- getI;
                    case tag of
                      0 -> do i <- fromBin; return (IdK i)
                      1 -> do i <- fromBin; k <- fromBin; return (IdKind i k)
+                     2 -> do i <- fromBin; k <- fromBin; return (IdPKind i k)
                      n -> internalError $ "GenBin.Bin(IdK).readBytes: " ++ show n
 
 -- ----------
@@ -351,7 +536,7 @@ instance Bin CExpr where
     writeBytes (CStructT t ies) = do putI 34; toBin t; toBin ies
     writeBytes (CSelectT i1 i2) = do putI 35; toBin i1; toBin i2
     writeBytes (CLitT t l) = do putI 36; toBin t; toBin l
-    writeBytes (CAnyT pos uk t) = do putI 37; toBin pos; toBin uk
+    writeBytes (CAnyT pos uk t) = do putI 37; toBin pos; toBin uk; toBin t
     writeBytes (CmoduleVerilogT t e b vc vr va vf vs vp) =
         do putI 38; toBin t; toBin e; toBin b; toBin vc; toBin vr; toBin va;
            toBin vf; toBin vs; toBin vp
@@ -477,7 +662,7 @@ instance Bin CStmt where
             1 -> do p <- fromBin; me <- fromBin; ps <- fromBin; e <- fromBin;
                     return (CSBind p me ps e)
             2 -> do ds <- fromBin; return (CSletseq ds)
-            3 -> do ds <- fromBin; return (CSletseq ds)
+            3 -> do ds <- fromBin; return (CSletrec ds)
             4 -> do me <- fromBin; e <- fromBin; return (CSExpr me e)
             n -> internalError $ "GenBin.Bin(CStmt).readBytes: " ++ show n
 

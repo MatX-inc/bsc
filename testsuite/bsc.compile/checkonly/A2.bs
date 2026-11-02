@@ -1,0 +1,41 @@
+package A where
+
+-- A1.bs with edits inside bodies only: extra comment lines so that every
+-- later declaration moves, a local definition with its own signature, a
+-- new rule, a new local identifier introduced before the existing ones,
+-- and a different clause for isRed.  The interface (the exported names
+-- and their types) is unchanged.
+--
+-- (these lines shift everything below by several lines)
+--
+
+data Color = Red | Green
+           deriving (Eq, Bits)
+
+interface Counter =
+    incr :: Action
+    value :: Bit 8
+
+f :: Bit 8 -> Bit 8
+f x = let y :: Bit 8
+          y = x
+      in  y + 1
+
+isRed :: Color -> Bool
+isRed c = case c of
+            Red -> True
+            Green -> False
+
+mkCounter :: Module Counter
+mkCounter =
+  module
+    let inc :: Bit 8
+        inc = 1
+    aa :: Reg Bool <- mkReg False
+    r :: Reg (Bit 8) <- mkReg 0
+    rules
+      "tick": when True ==> r := f r
+      "flag": when r == 7 ==> aa := True
+    interface
+      incr = r := r + inc
+      value = r

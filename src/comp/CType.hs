@@ -28,7 +28,7 @@ module CType(
 
   -- ** Constructing Types
   noType, tVar, tVarKind, cTVar, cTVarKind, cTVarNum, cTCon, cTNum, cTStr,
-  cTApplys, setTypePosition,
+  cTApplys, setTypePosition, mapTypePosition,
 
   -- * Kinds
   Kind(..), PartialKind(..),
@@ -704,3 +704,17 @@ setTypePosition pos (TCon (TyStr s _)) = (TCon (TyStr s pos))
 setTypePosition pos (TAp f a) = (TAp (setTypePosition pos f) (setTypePosition pos a))
 setTypePosition pos (TGen _ n)    = (TGen pos n)
 setTypePosition pos (TDefMonad _) = (TDefMonad pos)
+
+-- the type with a Position transform applied to every position it holds:
+-- those of its variables' and constructors' Ids, of its numeric and string
+-- literals and of its quantified variables
+mapTypePosition :: (Position -> Position) -> Type -> Type
+mapTypePosition f = go
+  where go (TVar (TyVar i n k)) = TVar (TyVar (onId i) n k)
+        go (TCon (TyCon i k s)) = TCon (TyCon (onId i) k s)
+        go (TCon (TyNum n p))   = TCon (TyNum n (f p))
+        go (TCon (TyStr s p))   = TCon (TyStr s (f p))
+        go (TAp a b)            = TAp (go a) (go b)
+        go (TGen p n)           = TGen (f p) n
+        go (TDefMonad p)        = TDefMonad (f p)
+        onId i = setIdPosition (f (getIdPosition i)) i
