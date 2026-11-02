@@ -242,6 +242,13 @@ decodeArgs prog args cdir =
                  else (warnings, DError errors)
 
 
+-- The flag that put a signature-only compile in force, for its
+-- diagnostics (when both are given, their own conflict is reported first)
+signatureCompileFlagName :: Flags -> String
+signatureCompileFlagName flags
+    | checkOnly flags = "-check-only"
+    | otherwise = "-signature-only"
+
 -- check that the flags are OK for compiling Bluespec src file
 checkBSrcFlags :: Flags -> String -> Decoded
 checkBSrcFlags flags filename =
@@ -261,8 +268,13 @@ checkBSrcFlags flags filename =
         if (removeVerilogDollar flags && (backend flags /= Just Verilog))
         then DError [(cmdPosition, EDollarNoVerilog)]
         else
-        -- A check compile stops after typechecking, so a backend request
-        -- (which is a codegen request) cannot be honored
+        -- The two signature-only modes exclude each other
+        if (checkOnly flags && signatureOnly flags)
+        then DError [(cmdPosition, ESignatureOnlyConflict "-check-only"
+                                                          "-signature-only")]
+        else
+        -- A signature-only compile stops before code generation, so a
+        -- backend request (which is a codegen request) cannot be honored
         -- XXX -g is refused under -check-only only as collateral: it reads
         -- XXX as a codegen request, so S0014 demands a backend.  Its other
         -- XXX half declares a synthesis boundary, which a check compile
@@ -271,8 +283,10 @@ checkBSrcFlags flags filename =
         -- XXX cutoff.  Blocked because bsc only wraps when generating
         -- XXX (bsc.hs: generating = backend flags /= Nothing).  Revisit if
         -- XXX wrapping moves after typechecking onto an asserted package.
-        if (checkOnly flags && (backend flags /= Nothing))
-        then DError [(cmdPosition, ECheckOnlyConflict "-sim/-verilog")]
+        if (signatureCompile flags && (backend flags /= Nothing))
+        then DError [(cmdPosition, ESignatureOnlyConflict
+                                       (signatureCompileFlagName flags)
+                                       "-sim/-verilog")]
         else
         -- If the user hasn't allowed Bluesim/Verilog to diverge,
         -- then don't-cares can only be 2-state values
@@ -309,12 +323,15 @@ checkLinkFlags flags names =
         if (removeVerilogDollar flags)
         then DError [(cmdPosition, EDollarLink)]
         else
-        -- -check-only stops after typechecking a source file, so there is
-        -- nothing for it to do here.  Guarded on a backend being set: with
-        -- none, ENoBackendLinking below is the more useful diagnostic and
-        -- this combination was already invalid without -check-only.
-        if (checkOnly flags && backend flags /= Nothing)
-        then DError [(cmdPosition, ECheckOnlyConflict "linking")]
+        -- A signature-only compile stops before code generation of a source
+        -- file, so there is nothing for it to do here.  Guarded on a backend
+        -- being set: with none, ENoBackendLinking below is the more useful
+        -- diagnostic and this combination was already invalid without the
+        -- mode flag.
+        if (signatureCompile flags && backend flags /= Nothing)
+        then DError [(cmdPosition, ESignatureOnlyConflict
+                                       (signatureCompileFlagName flags)
+                                       "linking")]
         else
         -- Verilog backend
         if (backend flags == Just Verilog)
@@ -374,12 +391,14 @@ checkCodeGenFlags flags names =
             if (genSysC flags)
             then DError [(cmdPosition, EGenWithSystemC)]
             else
-            -- -check-only stops after typechecking a source file, so it has
-            -- nothing to do in -c mode either.  Guarded on a backend being
-            -- set, as for linking: without one, ENoBackendCodeGen below is
-            -- the more useful diagnostic.
-            if (checkOnly flags && backend flags /= Nothing)
-            then DError [(cmdPosition, ECheckOnlyConflict "-c")]
+            -- A signature-only compile stops before code generation of a
+            -- source file, so it has nothing to do in -c mode either.
+            -- Guarded on a backend being set, as for linking: without one,
+            -- ENoBackendCodeGen below is the more useful diagnostic.
+            if (signatureCompile flags && backend flags /= Nothing)
+            then DError [(cmdPosition, ESignatureOnlyConflict
+                                           (signatureCompileFlagName flags)
+                                           "-c")]
             else
             case (backend flags) of
               Nothing -> DError [(cmdPosition, ENoBackendCodeGen mods)]
@@ -728,6 +747,7 @@ defaultFlags bluespecdir = Flags {
         showSchedule = False,
         showStats = False,
         showUpds = True,
+        signatureOnly = False,
         simplifyCSyntax = False,
         strictMethodSched = True,
         suppressWarnings = SomeMsgs [],
@@ -1661,6 +1681,12 @@ externalFlags = [
          (Toggle (\f x -> f {showVersion=x}) (showIfTrue showVersion),
           "include compiler version in generated files", Visible)),
 
+        ("signature-only",
+         (Toggle (\f x -> f {signatureOnly=x}) (showIfTrue signatureOnly),
+          "stop after context reduction and write the package signature " ++
+          "as a .bi file; imports prefer .bi and fall back to .bo",
+          Visible)),
+
         ("sim",
          let setFn f = case setBackend f Bluesim of
                          Left f' -> Left f' { genABin = True }
@@ -2094,6 +2120,7 @@ showFlagsRaw flags =
           ("showStats", show (showStats flags)),
           ("showUpds", show (showUpds flags)),
           ("showVersion", show (showVersion flags)),
+          ("signatureOnly", show (signatureOnly flags)),
           ("simplifyCSyntax", show (simplifyCSyntax flags)),
           ("strictMethodSched", show (strictMethodSched flags)),
           ("suppressWarnings", show (suppressWarnings flags)),

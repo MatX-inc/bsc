@@ -11,7 +11,7 @@ import qualified Data.Map as M
 import Flags(Flags,
              ifcPath,
              enablePoisonPills,
-             checkOnly,
+             signatureCompile,
              usePrelude,
              verbose)
 import Position(noPosition)
@@ -168,8 +168,8 @@ addPrelude flags imps | usePrelude flags = CImpId False idPrelude :
                                            imps
                       | otherwise = imps
 
--- Import one package: its interface file (.bi) under -check-only when
--- there is one, else its .bo file
+-- Import one package: its interface file (.bi) under a signature-only
+-- compile when there is one, else its .bo file
 doImport :: ErrorHandle -> Flags -> HashMap -> Id ->
             IO (String, CSignature, CSignature, IPackage a, String,
                 HashMap, [Id])
@@ -183,12 +183,13 @@ doImport errh flags hashmap i = do
                   else bsError errh
         find nm = readBinFilePath errh (getIdPosition i)
                       (verbose flags) nm (ifcPath flags)
-    -- Under -check-only prefer the package's interface file, the one a
-    -- check compile writes for its dependents, and fall back to a full .bo,
-    -- so that libraries shipped as .bo alone resolve.  A .bcheck is never
-    -- looked for: it is not an import.  Source wins over all of them --
-    -- that is Depend's business, not ours.
-    mbi <- if checkOnly flags then find biname else return Nothing
+    -- Under a signature-only compile prefer the package's interface file,
+    -- the one either mode writes for its dependents (and a "bsc -u" in
+    -- either mode keeps current), and fall back to a full .bo, so that
+    -- libraries shipped as .bo alone resolve.  A .bcheck is never looked
+    -- for: it is not an import.  Source wins over all of them -- that is
+    -- Depend's business, not ours.
+    mbi <- if signatureCompile flags then find biname else return Nothing
     case mbi of
       Just (file, name) -> do
         (depends, bi_sig) <- readBiFile errh name file

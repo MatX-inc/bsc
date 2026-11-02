@@ -561,19 +561,20 @@ instance Bin Flags where
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
-                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138) =
+                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138 a_139) =
        do
           wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4;
           wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8; wr_chunk9
       where
-        -- The 139-field serialization is split into NOINLINE chunks so
+        -- The 140-field serialization is split into NOINLINE chunks so
         -- that GHC optimizes bounded pieces: compiling it as a single
         -- monadic chain needs more than 15GB of heap.
         {-# NOINLINE wr_chunk0 #-}
-        -- a_016 (checkOnly) is not stored: a check compile refuses every
-        -- backend and stops before genForeign, so no .ba is ever written
-        -- with it set, and leaving it out keeps the bytes of every .ba
-        -- (the reader supplies the default)
+        -- a_016 (checkOnly) and a_110 (signatureOnly) are not stored: a
+        -- signature-only compile refuses every backend and stops before
+        -- genForeign, so no .ba is ever written with either set, and
+        -- leaving them out keeps the bytes of every .ba (the reader
+        -- supplies the defaults)
         wr_chunk0 =
           do
              toBin a_000; toBin a_001; toBin a_002; toBin a_003; toBin a_004;
@@ -619,7 +620,7 @@ instance Bin Flags where
         wr_chunk7 =
           do
              toBin a_105; toBin a_106; toBin a_107; toBin a_108; toBin a_109;
-             toBin a_110; toBin a_111; toBin a_112; toBin a_113; toBin a_114;
+             toBin a_111; toBin a_112; toBin a_113; toBin a_114;
              toBin a_115; toBin a_116; toBin a_117; toBin a_118; toBin a_119
         {-# NOINLINE wr_chunk8 #-}
         wr_chunk8 =
@@ -630,7 +631,7 @@ instance Bin Flags where
         {-# NOINLINE wr_chunk9 #-}
         wr_chunk9 =
           do
-             toBin a_135; toBin a_136; toBin a_137; toBin a_138
+             toBin a_135; toBin a_136; toBin a_137; toBin a_138; toBin a_139
     readBytes =
        do
           (a_000, a_001, a_002, a_003, a_004, a_005, a_006, a_007,
@@ -651,7 +652,7 @@ instance Bin Flags where
            a_113, a_114, a_115, a_116, a_117, a_118, a_119) <- rd_chunk7
           (a_120, a_121, a_122, a_123, a_124, a_125, a_126, a_127,
            a_128, a_129, a_130, a_131, a_132, a_133, a_134) <- rd_chunk8
-          (a_135, a_136, a_137, a_138) <- rd_chunk9
+          (a_135, a_136, a_137, a_138, a_139) <- rd_chunk9
           return (Flags
                 a_000 a_001 a_002 a_003 a_004 a_005 a_006 a_007 a_008 a_009
                 a_010 a_011 a_012 a_013 a_014 a_015 a_016 a_017 a_018 a_019
@@ -666,7 +667,7 @@ instance Bin Flags where
                 a_100 a_101 a_102 a_103 a_104 a_105 a_106 a_107 a_108 a_109
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
-                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138)
+                a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138 a_139)
       where
         {-# NOINLINE rd_chunk0 #-}
         rd_chunk0 =
@@ -730,8 +731,10 @@ instance Bin Flags where
         rd_chunk7 =
           do
              a_105 <- fromBin; a_106 <- fromBin; a_107 <- fromBin; a_108 <- fromBin; a_109 <- fromBin;
-             a_110 <- fromBin; a_111 <- fromBin; a_112 <- fromBin; a_113 <- fromBin; a_114 <- fromBin;
+             a_111 <- fromBin; a_112 <- fromBin; a_113 <- fromBin; a_114 <- fromBin;
              a_115 <- fromBin; a_116 <- fromBin; a_117 <- fromBin; a_118 <- fromBin; a_119 <- fromBin
+             -- a_110 (signatureOnly) is not stored, see wr_chunk0
+             let a_110 = False
              return (a_105, a_106, a_107, a_108, a_109, a_110, a_111, a_112,
                      a_113, a_114, a_115, a_116, a_117, a_118, a_119)
         {-# NOINLINE rd_chunk8 #-}
@@ -745,8 +748,9 @@ instance Bin Flags where
         {-# NOINLINE rd_chunk9 #-}
         rd_chunk9 =
           do
-             a_135 <- fromBin; a_136 <- fromBin; a_137 <- fromBin; a_138 <- fromBin
-             return (a_135, a_136, a_137, a_138)
+             a_135 <- fromBin; a_136 <- fromBin; a_137 <- fromBin; a_138 <- fromBin;
+             a_139 <- fromBin
+             return (a_135, a_136, a_137, a_138, a_139)
 
 -- ----------
 

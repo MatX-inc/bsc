@@ -325,10 +325,13 @@ compilePackage ::
     IO (Bool, BinMap HeapData, HashMap)
 compilePackage errh flags tStart binmap0 hashmap0 name_orig min = do
     cr <- ctxReducePackage errh flags tStart binmap0 hashmap0 name_orig min
-    tc <- typeCheckPackage errh flags cr
-    if checkOnly flags
-      then genCheckOnly errh flags cr tc
-      else compileTypeChecked errh flags cr tc
+    if signatureOnly flags
+      then genSignatureOnly errh flags cr
+      else do
+        tc <- typeCheckPackage errh flags cr
+        if checkOnly flags
+          then genCheckOnly errh flags cr tc
+          else compileTypeChecked errh flags cr tc
 
 -- The package after context reduction: what the front end of a compile
 -- (reading the imports through the symbol table rebuilt after ctxreduce)
@@ -531,6 +534,31 @@ signatureDepends :: CtxReduced -> [Id]
 signatureDepends (CtxReduced { cr_impsigs = impsigs }) =
     [ i | CImpSign _ _ (CSignature i _ _ _) <- impsigs ]
 
+-- -signature-only: the package's user-visible signature is complete once
+-- the contexts are reduced, so write it as the .bi and stop.  genUserSign
+-- needs only symt (sympostctxreduce) and mctx (ctxreduce), and this is the
+-- bi_sig a full compile puts in the .bo.  Typechecking is skipped on
+-- purpose: a body that would fail to typecheck still yields its interface,
+-- so the packages that import it are checked on their own account.
+genSignatureOnly :: ErrorHandle -> Flags -> CtxReduced ->
+                    IO (Bool, BinMap HeapData, HashMap)
+genSignatureOnly
+    errh
+    flags
+    cr@(CtxReduced { cr_name = name, cr_dumpnames = dumpnames, cr_time = t,
+                     cr_binmap = binmap, cr_hashmap = hashmap,
+                     cr_pkg = mctx, cr_symt = symt }) = do
+    start flags DFwriteBin
+    (bi_sig, _) <- genUserSign errh symt mctx
+    let bi_filename = putInDir (bdir flags) name biSuffix
+        remapP = remapPositionFile (remapPathPrefix flags)
+    genBiFile errh remapP bi_filename (signatureDepends cr) bi_sig
+    when (verbose flags) $
+         putStrLnF ("Interface file created: " ++
+                    getRelativeFilePath bi_filename)
+    _ <- dumpStr errh flags t DFwriteBin dumpnames bi_filename
+    return (True, binmap, hashmap)
+
 -- -check-only: the package typechecked, which was the whole question.
 -- Write its interface as the .bi, the typechecked package as the .bcheck,
 -- and stop.
@@ -558,6 +586,11 @@ signatureDepends (CtxReduced { cr_impsigs = impsigs }) =
 -- typechecker's dictionary bindings repeat one dictionary expression at
 -- every use and LiftDicts pools them, so the lifted package is the
 -- smaller one to store and to decode.
+--
+-- The .bi is the one -signature-only writes (the same bytes: genUserSign
+-- on the same symt and mctx), so the .bi files a "bsc -u -check-only" run
+-- writes serve the dependents in the same run as their interfaces, and a
+-- tree checked that way needs no -signature-only pass.
 --
 -- genUserSign needs only symt (sympostctxreduce) and mctx (ctxreduce).
 genCheckOnly :: ErrorHandle -> Flags -> CtxReduced -> TypeChecked ->

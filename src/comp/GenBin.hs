@@ -51,21 +51,23 @@ readBinFile errh nm s =
        else bsError errh [(noPosition, EBinFileVerMismatch nm)]
 
 -- ----------
--- .bi and .bcheck: the two files a check compile (-check-only) writes.
+-- .bi and .bcheck: the files the signature-only modes write.
 --
--- The .bi is the package's interface: the user-visible signature, which
--- is what readImports feeds to the typechecker (mkCImp), and the names of
--- the packages in the transitive import closure (what a .bo records in
--- ipkg_depends; it drives readImports' load worklist and cannot be
--- recovered from the signature's own import list, which GenSign prunes).
--- bo_sig is deliberately absent: it is consumed only via
--- replaceImportedSignatures, downstream of IConv, which a check compile
--- never reaches.  The .bi is the file a check compile's dependents import
--- (BinUtil.doImport), so its bytes must depend on the package and on its
--- imports' interfaces alone: no hashes of the files the writer read, so
--- that a build keyed on content can skip every dependent of a package
--- whose change left its interface the same.  Whether an interface file is
--- stale is the build's business, or -u's (Depend), not the importer's.
+-- The .bi is the package's interface, written by -signature-only after
+-- context reduction and by -check-only after typechecking (the same
+-- bytes): the user-visible signature, which is what readImports feeds to
+-- the typechecker (mkCImp), and the names of the packages in the
+-- transitive import closure (what a .bo records in ipkg_depends; it
+-- drives readImports' load worklist and cannot be recovered from the
+-- signature's own import list, which GenSign prunes).  bo_sig is
+-- deliberately absent: it is consumed only via replaceImportedSignatures,
+-- downstream of IConv, which neither mode reaches.  The .bi is the file a
+-- signature-only compile's dependents import (BinUtil.doImport), so its
+-- bytes must depend on the package and on its imports' interfaces alone:
+-- no hashes of the files the writer read, so that a build keyed on
+-- content can skip every dependent of a package whose change left its
+-- interface the same.  Whether an interface file is stale is the build's
+-- business, or -u's (Depend), not the importer's.
 --
 -- The .bcheck is the typechecked package itself, after Simplify and
 -- LiftDicts (bsc.hs genCheckOnly: the form a full compile hands to IConv),

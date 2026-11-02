@@ -109,6 +109,7 @@ Flags {
 	showStats = False,
 	showUpds = True,
 	showVersion = True,
+	signatureOnly = False,
 	simplifyCSyntax = False,
 	strictMethodSched = True,
 	suppressWarnings = SomeMsgs [],

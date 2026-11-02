@@ -28,10 +28,12 @@ bscSrcSuffix, bsvSrcSuffix, binSuffix, biSuffix, bcheckSuffix, abinSuffix,
 bscSrcSuffix = "bs"
 bsvSrcSuffix = "bsv"
 binSuffix = "bo"
--- A check compile (-check-only) writes the package signature as a .bi,
--- the file its dependents import, and the typechecked package as a
--- .bcheck, which nothing imports.  Each has a suffix of its own, so
--- neither can be mistaken for a .bo by a compile that needs definitions.
+-- The signature-only compiles write the package signature as a .bi,
+-- the file their dependents import (-signature-only after context
+-- reduction, -check-only after typechecking); -check-only also writes the
+-- typechecked package as a .bcheck, which nothing imports.  Each has a
+-- suffix of its own, so neither can be mistaken for a .bo by a compile
+-- that needs definitions.
 biSuffix = "bi"
 bcheckSuffix = "bcheck"
 abinSuffix = "ba"

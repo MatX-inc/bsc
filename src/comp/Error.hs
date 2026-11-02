@@ -1131,7 +1131,7 @@ data ErrMsg =
         | ETooManyBackends
         | EDollarNoVerilog
         | EDollarLink
-        | ECheckOnlyConflict String
+        | ESignatureOnlyConflict String String
         | EWrongBackend String String
         | ENoOptUndetNoXZ String
 
@@ -4664,12 +4664,13 @@ getErrorText EGenWithSystemC =
     (System 99, empty,
      s2par ("The flag -c is not supported with -systemc; use -sim."))
 
-getErrorText (ECheckOnlyConflict fl) =
+getErrorText (ESignatureOnlyConflict mode fl) =
     (System 100, empty,
-     s2par ("The flag -check-only cannot be combined with " ++ fl ++ ": " ++
-            "a check compile stops after typechecking and writes only " ++
-            "the package's signature and typechecked form, so no module " ++
-            "can be elaborated, generated or linked."))
+     s2par ("The flag " ++ mode ++ " cannot be combined with " ++ fl ++
+            ": a signature-only compile stops before code generation and " ++
+            "writes only the package's signature (and, under -check-only, " ++
+            "its typechecked form), so no module can be elaborated, " ++
+            "generated or linked."))
 
 -- Runtime errors
 getErrorText (EMutuallyExclusiveRulesFire r1 r2) =
