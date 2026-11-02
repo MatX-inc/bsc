@@ -1,0 +1,67 @@
+module mkUseOdd (package BviSchedKinds), from mkUseOdd.ba
+inputs:  
+outputs: 
+
+children:
+  o : OddPrim   [v CF v, v SB [a, b, c], a P c, c SBR c, a C [a, b], b C [a, b, c]]
+    a (action)
+      copy -: enable o$EN_a arg o$a_1 :: Bit 8
+    b (action)
+      copy -: enable o$EN_b arg o$b_1 :: Bit 8
+    c (action)
+      copy -: enable o$EN_c
+    v (value)
+      copy -: result o$v :: Bit 8
+  r : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r$read :: Bit 8
+    write (action)
+      copy -: enable r$EN_write arg r$write_1 :: Bit 8
+  q : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result q$read :: Bit 8
+    write (action)
+      copy -: enable q$EN_write arg q$write_1 :: Bit 8
+
+execution order:
+  1. RL_ra   [rule ra ("BviSchedKinds.bsv", line 46, column 9)]
+       fires on WILL_FIRE_RL_ra, can fire CAN_FIRE_RL_ra
+       guard CAN_FIRE_RL_ra
+       reads r.read when 1'b1
+       calls o.a when 1'd1 with r___d1
+  2. RL_rb   [rule rb ("BviSchedKinds.bsv", line 50, column 9)]
+       fires on WILL_FIRE_RL_rb, can fire CAN_FIRE_RL_rb
+       guard CAN_FIRE_RL_rb
+       reads r.read when 1'b1
+       calls o.b when 1'd1 with r___d1
+  3. RL_rc   [rule rc ("BviSchedKinds.bsv", line 54, column 9)]
+       fires on WILL_FIRE_RL_rc, can fire CAN_FIRE_RL_rc
+       guard CAN_FIRE_RL_rc
+       reads o.v when 1'b1
+       reads r.read when 1'b1
+       calls o.c when 1'd1 with 
+       calls r.write when 1'd1 with r_PLUS_o_v___d6
+  4. RL_rd   [rule rd ("BviSchedKinds.bsv", line 59, column 9)]
+       fires on WILL_FIRE_RL_rd, can fire CAN_FIRE_RL_rd
+       guard CAN_FIRE_RL_rd
+       reads q.read when 1'b1
+       calls o.c when 1'd1 with 
+       calls q.write when 1'd1 with q_MINUS_1___d10
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_ra RL_rb RL_rc RL_rd
+
+disjoint guards (bsc):     (RL_ra, RL_rb)
+urgency blocking (r, by):  (RL_rc, RL_ra) (RL_rc, RL_rb) (RL_rd, RL_ra) (RL_rd, RL_rb)
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

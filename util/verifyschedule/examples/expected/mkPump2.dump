@@ -1,0 +1,37 @@
+module mkPump2 (package AvArg), from mkPump2.ba
+inputs:  take_bias :: Bit 8 EN_take :: Bit 1
+outputs: take :: Bit 8 RDY_take :: Bit 1
+
+children:
+  cnt : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result cnt$read :: Bit 8
+    write (action)
+      copy -: enable cnt$EN_write arg cnt$write_1 :: Bit 8
+
+execution order:
+  1. take   [method take]
+       fires on WILL_FIRE_take, can fire CAN_FIRE_take
+       guard CAN_FIRE_take
+       reads cnt.read when 1'b1
+       calls cnt.write when 1'd1 with cnt_PLUS_take_bias___d2
+       output RDY_take = CAN_FIRE_take
+       output take = cnt___d1  (when WhenInput "EN_take")
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: take
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      (take, EN_take)
+ready (method, RDY):       (take, RDY_take)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

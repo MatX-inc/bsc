@@ -1,0 +1,57 @@
+module mkLeanNames (package LeanNames), from mkLeanNames.ba
+inputs:  mk_from :: Bit 8 EN_mk :: Bit 1
+outputs: init :: Bit 8 RDY_init :: Bit 1 RDY_mk :: Bit 1 hw :: Bit 1 RDY_hw :: Bit 1
+
+children:
+  rec : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result rec$read :: Bit 8
+    write (action)
+      copy -: enable rec$EN_write arg rec$write_1 :: Bit 8
+  hwReg : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result hwReg$read :: Bit 1
+    write (action)
+      copy -: enable hwReg$EN_write arg hwReg$write_1 :: Bit 1
+
+execution order:
+  1. init   [value method init ("LeanNames.bsv", line 13, column 8)]
+       fires on WILL_FIRE_init, can fire CAN_FIRE_init
+       reads rec.read when 1'b1
+       output RDY_init = CAN_FIRE_init
+       output init = rec___d1  (when WhenOutput "RDY_init")
+  2. hw   [value method hw ("LeanNames.bsv", line 13, column 8)]
+       fires on WILL_FIRE_hw, can fire CAN_FIRE_hw
+       reads hwReg.read when 1'b1
+       output RDY_hw = CAN_FIRE_hw
+       output hw = hwReg__h269  (when WhenOutput "RDY_hw")
+  3. RL_using   [rule using ("LeanNames.bsv", line 17, column 9)]
+       fires on WILL_FIRE_RL_using, can fire CAN_FIRE_RL_using
+       guard CAN_FIRE_RL_using
+       reads hwReg.read when 1'b1
+       reads rec.read when 1'b1
+       calls hwReg.write when 1'd1 with NOT_hwReg___d5
+  4. mk   [method mk]
+       fires on WILL_FIRE_mk, can fire CAN_FIRE_mk
+       guard CAN_FIRE_mk
+       calls rec.write when 1'd1 with mk_from
+       output RDY_mk = CAN_FIRE_mk
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: init hw RL_using mk
+  CF_hw_init: hw init RL_using mk
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               (hw, init)
+unrealizable CF swaps:     -
+exported SB/SBR:           init SB mk hw SBR mk
+enables (method, EN):      (mk, EN_mk)
+ready (method, RDY):       (hw, RDY_hw) (init, RDY_init) (mk, RDY_mk)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

@@ -1,0 +1,71 @@
+module mkSplitMethod (package SplitMethod), from mkSplitMethod.ba
+inputs:  put_x :: Bit 8 setC_x :: Bit 8 EN_put :: Bit 1 EN_setC :: Bit 1
+outputs: RDY_put :: Bit 1 RDY_setC :: Bit 1 peek :: Bit 8 RDY_peek :: Bit 1
+
+children:
+  sel : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result sel$read :: Bit 1
+    write (action)
+      copy -: enable sel$EN_write arg sel$write_1 :: Bit 1
+  a : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable a$EN_write arg a$write_1 :: Bit 8
+  b : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result b$read :: Bit 8
+    write (action)
+      copy -: enable b$EN_write arg b$write_1 :: Bit 8
+  c : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable c$EN_write arg c$write_1 :: Bit 8
+
+execution order:
+  1. put_T   [method put]
+       fires on WILL_FIRE_put_T, can fire CAN_FIRE_put_T
+       guard CAN_FIRE_put_T
+       reads sel.read when 1'b1
+       calls a.write when 1'd1 with put_x
+       output RDY_put = CAN_FIRE_put_T || CAN_FIRE_put_F
+  2. setC   [method setC]
+       fires on WILL_FIRE_setC, can fire CAN_FIRE_setC
+       guard CAN_FIRE_setC
+       calls c.write when 1'd1 with setC_x
+       output RDY_setC = CAN_FIRE_setC
+  3. peek   [value method peek ("SplitMethod.bsv", line 15, column 8)]
+       fires on WILL_FIRE_peek, can fire CAN_FIRE_peek
+       reads b.read when 1'b1
+       output RDY_peek = CAN_FIRE_peek
+       output peek = b.read  (when WhenOutput "RDY_peek")
+  4. put_F   [method put]
+       fires on WILL_FIRE_put_F, can fire CAN_FIRE_put_F
+       guard CAN_FIRE_put_F
+       reads sel.read when 1'b1
+       calls b.write when 1'd1 with put_x
+  5. RL_flip   [rule flip ("SplitMethod.bsv", line 21, column 9)]
+       fires on WILL_FIRE_RL_flip, can fire CAN_FIRE_RL_flip
+       guard CAN_FIRE_RL_flip
+       reads sel.read when 1'b1
+       calls sel.write when 1'd1 with NOT_sel___d2
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: put_T setC peek put_F RL_flip
+  CF_put_setC: setC put_T peek put_F RL_flip
+  CF_peek_setC: put_T peek setC put_F RL_flip
+
+disjoint guards (bsc):     (put_F, put_T)
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               (put, setC) (peek, setC)
+unrealizable CF swaps:     -
+exported SB/SBR:           peek SB put
+enables (method, EN):      (put, EN_put) (setC, EN_setC)
+ready (method, RDY):       (peek, RDY_peek) (put, RDY_put) (setC, RDY_setC)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

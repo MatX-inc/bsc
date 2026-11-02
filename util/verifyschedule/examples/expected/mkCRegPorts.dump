@@ -1,0 +1,68 @@
+module mkCRegPorts (package CRegPorts), from mkCRegPorts.ba
+inputs:  
+outputs: 
+
+children:
+  c : CRegN5   [port0__read CF port0__read, port1__read CF port1__read, port2__read CF port2__read, port3__read CF port3__read, port4__read CF port4__read, port0__read SB port0__write, port1__read SB port1__write, port2__read SB port2__write, port3__read SB port3__write, port4__read SB port4__write, port0__read SBR [port1__read, port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port0__write SBR [port0__write, port1__read, port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port1__read SBR [port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port1__write SBR [port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port2__read SBR [port3__read, port3__write, port4__read, port4__write], port2__write SBR [port2__write, port3__read, port3__write, port4__read, port4__write], port3__read SBR [port4__read, port4__write], port3__write SBR [port3__write, port4__read, port4__write], port4__write SBR port4__write]
+    port0__read (value)
+      copy -: result c$port0__read :: Bit 8
+    port0__write (action)
+      copy -: enable c$EN_port0__write arg c$port0__write_1 :: Bit 8
+    port1__read (value), sees same-cycle port0__write
+      copy -: result c$port1__read :: Bit 8
+    port1__write (action), sees same-cycle port0__write
+      copy -: enable c$EN_port1__write arg c$port1__write_1 :: Bit 8
+    port2__read (value), sees same-cycle port0__write, port1__write
+      copy -: result c$port2__read :: Bit 8
+    port2__write (action), sees same-cycle port0__write, port1__write
+    port3__read (value), sees same-cycle port0__write, port1__write, port2__write
+    port3__write (action), sees same-cycle port0__write, port1__write, port2__write
+    port4__read (value), sees same-cycle port0__write, port1__write, port2__write, port3__write
+    port4__write (action), sees same-cycle port0__write, port1__write, port2__write, port3__write
+  seen : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable seen$EN_write arg seen$write_1 :: Bit 8
+  phase : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result phase$read :: Bit 1
+    write (action)
+      copy -: enable phase$EN_write arg phase$write_1 :: Bit 1
+
+execution order:
+  1. RL_incr   [rule incr ("CRegPorts.bsv", line 17, column 9)]
+       fires on WILL_FIRE_RL_incr, can fire CAN_FIRE_RL_incr
+       guard CAN_FIRE_RL_incr
+       reads c.port0__read when 1'b1
+       reads phase.read when 1'b1
+       calls c.port0__write when 1'd1 with c_port0__read_PLUS_1___d3
+  2. RL_dbl   [rule dbl ("CRegPorts.bsv", line 22, column 9)]
+       fires on WILL_FIRE_RL_dbl, can fire CAN_FIRE_RL_dbl
+       guard CAN_FIRE_RL_dbl
+       reads c.port1__read when 1'b1
+       calls c.port1__write when 1'd1 with c_port1__read_BITS_6_TO_0_CONCAT_0___d7
+  3. RL_obs   [rule obs ("CRegPorts.bsv", line 27, column 9)]
+       fires on WILL_FIRE_RL_obs, can fire CAN_FIRE_RL_obs
+       guard CAN_FIRE_RL_obs
+       reads c.port2__read when 1'b1
+       reads phase.read when 1'b1
+       calls seen.write when 1'd1 with c_port2__read____d8
+       calls phase.write when 1'd1 with NOT_phase___d9
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_incr RL_dbl RL_obs
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

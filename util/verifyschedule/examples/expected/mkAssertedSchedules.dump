@@ -1,0 +1,152 @@
+module mkAssertedSchedules (package AssertedSchedules), from mkAssertedSchedules.ba
+inputs:  setMode_m :: Bit 2 setLimit_x :: Bit 8 EN_setMode :: Bit 1 EN_setLimit :: Bit 1 EN_take :: Bit 1
+outputs: RDY_setMode :: Bit 1 RDY_setLimit :: Bit 1 take :: Bit 8 RDY_take :: Bit 1
+
+children:
+  r : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r$read :: Bit 8
+    write (action)
+      copy -: enable r$EN_write arg r$write_1 :: Bit 8
+  mode : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result mode$read :: Bit 2
+    write (action)
+      copy -: enable mode$EN_write arg mode$write_1 :: Bit 2
+  limit : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result limit$read :: Bit 8
+    write (action)
+      copy -: enable limit$EN_write arg limit$write_1 :: Bit 8
+  outQ : FIFO2   [deq CF [enq, i_notEmpty, i_notFull], enq CF [deq, first, i_notEmpty, i_notFull], [first, notEmpty, notFull] CF [first, i_notEmpty, i_notFull, notEmpty, notFull], [i_notEmpty, i_notFull] CF [clear, first, i_notEmpty, i_notFull, notEmpty, notFull], first SB [clear, deq], [notEmpty, notFull] SB [clear, deq, enq], [clear, deq, enq] SBR clear, deq C deq, enq C enq]
+    enq (action)
+      copy -: enable outQ$EN_enq arg outQ$enq_1 :: Bit 8
+    deq (action)
+      copy -: enable outQ$EN_deq
+    first (value)
+      copy -: result outQ$first :: Bit 8
+    notFull (value)
+    i_notFull (value)
+      copy -: result outQ$i_notFull :: Bit 1
+    notEmpty (value)
+    i_notEmpty (value)
+      copy -: result outQ$i_notEmpty :: Bit 1
+    clear (action), sees same-cycle enq, deq
+  _read_RL_emitA$EN_r : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable _read_RL_emitA$EN_r$EN_wset arg _read_RL_emitA$EN_r$wset_1 :: Bit 1
+    whas (value), sees same-cycle wset
+    wget (value), sees same-cycle wset
+  _read_RL_emitA$EN_mode : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable _read_RL_emitA$EN_mode$EN_wset arg _read_RL_emitA$EN_mode$wset_1 :: Bit 1
+    whas (value), sees same-cycle wset
+    wget (value), sees same-cycle wset
+  _enq_RL_emitA$EN_outQ : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable _enq_RL_emitA$EN_outQ$EN_wset arg _enq_RL_emitA$EN_outQ$wset_1 :: Bit 1
+    whas (value), sees same-cycle wset
+    wget (value), sees same-cycle wset
+      copy -: result _enq_RL_emitA$EN_outQ$wget :: Bit 1
+    wire: _enq_RL_emitA$EN_outQ$wget = _enq_RL_emitA$EN_outQ$wset_1 within the cycle
+  _i_notFull_RL_emitA$EN_outQ : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable _i_notFull_RL_emitA$EN_outQ$EN_wset arg _i_notFull_RL_emitA$EN_outQ$wset_1 :: Bit 1
+    whas (value), sees same-cycle wset
+    wget (value), sees same-cycle wset
+  _read_RL_emitB$EN_limit : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable _read_RL_emitB$EN_limit$EN_wset arg _read_RL_emitB$EN_limit$wset_1 :: Bit 1
+    whas (value), sees same-cycle wset
+    wget (value), sees same-cycle wset
+  _enq_RL_emitB$EN_outQ : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable _enq_RL_emitB$EN_outQ$EN_wset arg _enq_RL_emitB$EN_outQ$wset_1 :: Bit 1
+    whas (value), sees same-cycle wset
+    wget (value), sees same-cycle wset
+  _i_notFull_RL_emitB$EN_outQ : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable _i_notFull_RL_emitB$EN_outQ$EN_wset arg _i_notFull_RL_emitB$EN_outQ$wset_1 :: Bit 1
+    whas (value), sees same-cycle wset
+    wget (value), sees same-cycle wset
+
+execution order:
+  1. take   [method take]
+       fires on WILL_FIRE_take, can fire CAN_FIRE_take
+       guard CAN_FIRE_take
+       reads outQ.first when 1'b1
+       reads outQ.i_notEmpty when 1'b1
+       calls outQ.deq when 1'd1 with 
+       output RDY_take = CAN_FIRE_take
+       output take = outQ.first  (when WhenInput "EN_take")
+  2. RL_up   [rule up ("AssertedSchedules.bsv", line 30, column 9)]
+       fires on WILL_FIRE_RL_up, can fire CAN_FIRE_RL_up
+       guard CAN_FIRE_RL_up
+       reads mode.read when 1'b1
+       reads r.read when 1'b1
+       calls r.write when 1'd1 with r_PLUS_1___d4
+  3. RL_emitA   [rule emitA ("AssertedSchedules.bsv", line 39, column 9)]
+       fires on WILL_FIRE_RL_emitA, can fire CAN_FIRE_RL_emitA
+       guard CAN_FIRE_RL_emitA
+       reads mode.read when 1'b1
+       reads outQ.i_notFull when ! NOT_mode_EQ_2___d9
+       reads r.read when mode___d1 == 2'd2
+       calls outQ.enq when mode_EQ_2___d8 with r___d3
+       calls _read_RL_emitA$EN_r.wset when 1'b1 with mode___d1 == 2'd2
+       calls _read_RL_emitA$EN_mode.wset when 1'b1 with 1'b1
+       calls _enq_RL_emitA$EN_outQ.wset when 1'b1 with mode_EQ_2___d8
+       calls _i_notFull_RL_emitA$EN_outQ.wset when 1'b1 with ! NOT_mode_EQ_2___d9
+  4. setMode   [method setMode]
+       fires on WILL_FIRE_setMode, can fire CAN_FIRE_setMode
+       guard CAN_FIRE_setMode
+       calls mode.write when 1'd1 with setMode_m
+       output RDY_setMode = CAN_FIRE_setMode
+  5. RL_down   [rule down ("AssertedSchedules.bsv", line 34, column 9)]
+       fires on WILL_FIRE_RL_down, can fire CAN_FIRE_RL_down
+       guard CAN_FIRE_RL_down
+       reads limit.read when 1'b1
+       reads r.read when 1'b1
+       calls r.write when 1'd1 with r_MINUS_1___d7
+  6. __me_check_0   [rule up]
+       fires on WILL_FIRE___me_check_0, can fire CAN_FIRE___me_check_0
+       guard CAN_FIRE___me_check_0
+       check WILL_FIRE_RL_up && WILL_FIRE_RL_down
+  7. RL_emitB   [rule emitB ("AssertedSchedules.bsv", line 43, column 9)]
+       fires on WILL_FIRE_RL_emitB, can fire CAN_FIRE_RL_emitB
+       guard CAN_FIRE_RL_emitB
+       reads limit.read when 1'b1
+       reads outQ.i_notFull when ! NOT_limit_EQ_9_2___d13
+       calls outQ.enq when limit_EQ_9___d12 with limit___d5
+       calls _read_RL_emitB$EN_limit.wset when 1'b1 with 1'b1
+       calls _enq_RL_emitB$EN_outQ.wset when 1'b1 with limit_EQ_9___d12
+       calls _i_notFull_RL_emitB$EN_outQ.wset when 1'b1 with ! NOT_limit_EQ_9_2___d13
+       check WILL_FIRE_RL_emitA && limit_EQ_9___d12 && _enq_RL_emitA$EN_outQ.wget
+  8. setLimit   [method setLimit]
+       fires on WILL_FIRE_setLimit, can fire CAN_FIRE_setLimit
+       guard CAN_FIRE_setLimit
+       calls limit.write when 1'd1 with setLimit_x
+       output RDY_setLimit = CAN_FIRE_setLimit
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: take RL_up RL_emitA setMode RL_down __me_check_0 RL_emitB setLimit
+  CF_setLimit_setMode: take RL_up RL_emitA RL_down __me_check_0 RL_emitB setLimit setMode
+  CF_setMode_take: RL_up RL_emitA setMode take RL_down __me_check_0 RL_emitB setLimit
+  CF_setLimit_take: RL_up RL_emitA setMode RL_down __me_check_0 RL_emitB setLimit take
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): (RL_up, RL_down)
+exported C:                -
+exported CF:               (setLimit, setMode) (setMode, take) (setLimit, take)
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      (setLimit, EN_setLimit) (setMode, EN_setMode) (take, EN_take)
+ready (method, RDY):       (setLimit, RDY_setLimit) (setMode, RDY_setMode) (take, RDY_take)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
+  confirmed RL_up / RL_emitA: r.write then r.read
+  UNCONFIRMED RL_up / RL_down: r.write then r.read
+  UNCONFIRMED RL_emitA / RL_emitB: outQ.enq then outQ.enq

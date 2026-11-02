@@ -1,0 +1,75 @@
+module mkNotEmptyOrder (package NotEmptyOrder), from mkNotEmptyOrder.ba
+inputs:  push_x :: Bit 8 EN_push :: Bit 1
+outputs: RDY_push :: Bit 1
+
+children:
+  f : SizedFIFO   [deq CF [enq, i_notEmpty, i_notFull], enq CF [deq, first, i_notEmpty, i_notFull], [first, notEmpty, notFull] CF [first, i_notEmpty, i_notFull, notEmpty, notFull], [i_notEmpty, i_notFull] CF [clear, first, i_notEmpty, i_notFull, notEmpty, notFull], first SB [clear, deq], [notEmpty, notFull] SB [clear, deq, enq], [clear, deq, enq] SBR clear, deq C deq, enq C enq]
+    enq (action)
+      copy -: enable f$EN_enq arg f$enq_1 :: Bit 8
+    deq (action)
+      copy -: enable f$EN_deq
+    first (value)
+      copy -: result f$first :: Bit 8
+    notFull (value)
+    i_notFull (value)
+      copy -: result f$i_notFull :: Bit 1
+    notEmpty (value)
+      copy -: result f$notEmpty :: Bit 1
+    i_notEmpty (value)
+      copy -: result f$i_notEmpty :: Bit 1
+    clear (action), sees same-cycle enq, deq
+  g : SizedFIFO   [deq CF [enq, i_notEmpty, i_notFull], enq CF [deq, first, i_notEmpty, i_notFull], [first, notEmpty, notFull] CF [first, i_notEmpty, i_notFull, notEmpty, notFull], [i_notEmpty, i_notFull] CF [clear, first, i_notEmpty, i_notFull, notEmpty, notFull], first SB [clear, deq], [notEmpty, notFull] SB [clear, deq, enq], [clear, deq, enq] SBR clear, deq C deq, enq C enq]
+    enq (action)
+    deq (action)
+    first (value)
+    notFull (value)
+    i_notFull (value)
+    notEmpty (value)
+      copy -: result g$notEmpty :: Bit 1
+    i_notEmpty (value)
+    clear (action), sees same-cycle enq, deq
+  r : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable r$EN_write arg r$write_1 :: Bit 8
+  b : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result b$read :: Bit 1
+    write (action)
+
+execution order:
+  1. push   [method push]
+       fires on WILL_FIRE_push, can fire CAN_FIRE_push
+       guard CAN_FIRE_push
+       reads f.i_notFull when 1'b1
+       calls f.enq when 1'd1 with push_x
+       output RDY_push = CAN_FIRE_push
+  2. RL_drain   [rule drain ("NotEmptyOrder.bsv", line 23, column 9)]
+       fires on WILL_FIRE_RL_drain, can fire CAN_FIRE_RL_drain
+       guard CAN_FIRE_RL_drain
+       reads b.read when f_i_notEmpty____d1 && (! NOT_f_notEmpty_OR_NOT_g_notEmpty___d6)
+       reads f.first when 1'b1
+       reads f.i_notEmpty when NOT_f_notEmpty_OR_NOT_g_notEmpty_OR_b___d8
+       reads f.notEmpty when (! NOT_g_notEmpty___d5) && f_i_notEmpty____d1 && (! b__h343)
+       reads g.notEmpty when (! NOT_f_notEmpty___d3) && f_i_notEmpty____d1 && (! b__h343)
+       calls r.write when 1'd1 with f_first____d10
+       calls f.deq when 1'd1 with 
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: push RL_drain
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      (push, EN_push)
+ready (method, RDY):       (push, RDY_push)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
+  confirmed push / RL_drain: f.enq then f.notEmpty

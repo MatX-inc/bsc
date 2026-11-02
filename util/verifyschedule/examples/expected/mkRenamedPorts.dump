@@ -1,0 +1,46 @@
+module mkRenamedPorts (package RenamedPorts), from mkRenamedPorts.ba
+inputs:  a_x :: Bit 8 go_a :: Bit 1 go_b :: Bit 1
+outputs: ok_a :: Bit 1 v :: Bit 8
+
+children:
+  r : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r$read :: Bit 8
+    write (action)
+      copy -: enable r$EN_write arg r$write_1 :: Bit 8
+
+execution order:
+  1. v   [value method v ("RenamedPorts.bsv", line 11, column 8)]
+       fires on WILL_FIRE_v, can fire CAN_FIRE_v
+       reads r.read when 1'b1
+       output v = r___d1
+  2. a   [method a]
+       fires on WILL_FIRE_a, can fire CAN_FIRE_a
+       guard CAN_FIRE_a
+       reads r.read when 1'b1
+       calls r.write when 1'd1 with r_PLUS_a_x___d2
+       output ok_a = CAN_FIRE_a
+  3. b   [method b]
+       fires on WILL_FIRE_b, can fire CAN_FIRE_b
+       guard CAN_FIRE_b
+       reads r.read when 1'b1
+       calls r.write when 1'd1 with r_PLUS_1___d4
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: v a b
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                (a, b)
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           v SB a v SB b
+enables (method, EN):      (a, go_a) (b, go_b)
+ready (method, RDY):       (a, ok_a)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
+  UNCONFIRMED a / b: r.write then r.read

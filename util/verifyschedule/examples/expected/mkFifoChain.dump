@@ -1,0 +1,130 @@
+module mkFifoChain (package FifoChain), from mkFifoChain.ba
+inputs:  
+outputs: 
+
+children:
+  q2 : FIFO2   [deq CF [enq, i_notEmpty, i_notFull], enq CF [deq, first, i_notEmpty, i_notFull], [first, notEmpty, notFull] CF [first, i_notEmpty, i_notFull, notEmpty, notFull], [i_notEmpty, i_notFull] CF [clear, first, i_notEmpty, i_notFull, notEmpty, notFull], first SB [clear, deq], [notEmpty, notFull] SB [clear, deq, enq], [clear, deq, enq] SBR clear, deq C deq, enq C enq]
+    enq (action)
+      copy -: enable q2$EN_enq arg q2$enq_1 :: Bit 8
+    deq (action)
+      copy -: enable q2$EN_deq
+    first (value)
+      copy -: result q2$first :: Bit 8
+    notFull (value)
+    i_notFull (value)
+      copy -: result q2$i_notFull :: Bit 1
+    notEmpty (value)
+    i_notEmpty (value)
+      copy -: result q2$i_notEmpty :: Bit 1
+    clear (action), sees same-cycle enq, deq
+  ql : FIFOL1   [first CF [enq, first, i_notEmpty, i_notFull, notEmpty, notFull], [i_notEmpty, i_notFull, notEmpty, notFull] CF [first, i_notEmpty, i_notFull, notEmpty, notFull], first SB [clear, deq], [i_notEmpty, notEmpty] SB [clear, deq, enq], [i_notFull, notFull] SB [clear, enq], [clear, enq] SBR clear, deq SBR [clear, enq, i_notFull, notFull], deq C deq, enq C enq]
+    enq (action), sees same-cycle deq
+      copy -: enable ql$EN_enq arg ql$enq_1 :: Bit 8
+    deq (action)
+      copy -: enable ql$EN_deq
+    first (value)
+      copy -: result ql$first :: Bit 8
+    notFull (value), sees same-cycle deq
+    i_notFull (value), sees same-cycle deq
+      copy -: result ql$i_notFull :: Bit 1
+    notEmpty (value)
+    i_notEmpty (value)
+      copy -: result ql$i_notEmpty :: Bit 1
+    clear (action), sees same-cycle enq, deq
+  qb_rv : CRegN5   [port0__read CF port0__read, port1__read CF port1__read, port2__read CF port2__read, port3__read CF port3__read, port4__read CF port4__read, port0__read SB port0__write, port1__read SB port1__write, port2__read SB port2__write, port3__read SB port3__write, port4__read SB port4__write, port0__read SBR [port1__read, port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port0__write SBR [port0__write, port1__read, port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port1__read SBR [port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port1__write SBR [port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port2__read SBR [port3__read, port3__write, port4__read, port4__write], port2__write SBR [port2__write, port3__read, port3__write, port4__read, port4__write], port3__read SBR [port4__read, port4__write], port3__write SBR [port3__write, port4__read, port4__write], port4__write SBR port4__write]
+    port0__read (value)
+      copy -: result qb_rv$port0__read :: Bit 9
+    port0__write (action)
+      copy -: enable qb_rv$EN_port0__write arg qb_rv$port0__write_1 :: Bit 9
+    port1__read (value), sees same-cycle port0__write
+      copy -: result qb_rv$port1__read :: Bit 9
+    port1__write (action), sees same-cycle port0__write
+      copy -: enable qb_rv$EN_port1__write arg qb_rv$port1__write_1 :: Bit 9
+    port2__read (value), sees same-cycle port0__write, port1__write
+    port2__write (action), sees same-cycle port0__write, port1__write
+    port3__read (value), sees same-cycle port0__write, port1__write, port2__write
+    port3__write (action), sees same-cycle port0__write, port1__write, port2__write
+    port4__read (value), sees same-cycle port0__write, port1__write, port2__write, port3__write
+    port4__write (action), sees same-cycle port0__write, port1__write, port2__write, port3__write
+  qp_rv : CRegN5   [port0__read CF port0__read, port1__read CF port1__read, port2__read CF port2__read, port3__read CF port3__read, port4__read CF port4__read, port0__read SB port0__write, port1__read SB port1__write, port2__read SB port2__write, port3__read SB port3__write, port4__read SB port4__write, port0__read SBR [port1__read, port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port0__write SBR [port0__write, port1__read, port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port1__read SBR [port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port1__write SBR [port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port2__read SBR [port3__read, port3__write, port4__read, port4__write], port2__write SBR [port2__write, port3__read, port3__write, port4__read, port4__write], port3__read SBR [port4__read, port4__write], port3__write SBR [port3__write, port4__read, port4__write], port4__write SBR port4__write]
+    port0__read (value)
+      copy -: result qp_rv$port0__read :: Bit 9
+    port0__write (action)
+      copy -: enable qp_rv$EN_port0__write arg qp_rv$port0__write_1 :: Bit 9
+    port1__read (value), sees same-cycle port0__write
+      copy -: result qp_rv$port1__read :: Bit 9
+    port1__write (action), sees same-cycle port0__write
+      copy -: enable qp_rv$EN_port1__write arg qp_rv$port1__write_1 :: Bit 9
+    port2__read (value), sees same-cycle port0__write, port1__write
+    port2__write (action), sees same-cycle port0__write, port1__write
+    port3__read (value), sees same-cycle port0__write, port1__write, port2__write
+    port3__write (action), sees same-cycle port0__write, port1__write, port2__write
+    port4__read (value), sees same-cycle port0__write, port1__write, port2__write, port3__write
+    port4__write (action), sees same-cycle port0__write, port1__write, port2__write, port3__write
+  n : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result n$read :: Bit 8
+    write (action)
+      copy -: enable n$EN_write arg n$write_1 :: Bit 8
+  sum : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result sum$read :: Bit 8
+    write (action)
+      copy -: enable sum$EN_write arg sum$write_1 :: Bit 8
+
+execution order:
+  1. RL_s0   [rule s0 ("FifoChain.bsv", line 25, column 9)]
+       fires on WILL_FIRE_RL_s0, can fire CAN_FIRE_RL_s0
+       guard CAN_FIRE_RL_s0
+       reads n.read when 1'b1
+       reads q2.i_notFull when 1'b1
+       calls q2.enq when 1'd1 with n___d2
+       calls n.write when 1'd1 with n_PLUS_1___d3
+  2. RL_s2   [rule s2 ("FifoChain.bsv", line 35, column 9)]
+       fires on WILL_FIRE_RL_s2, can fire CAN_FIRE_RL_s2
+       guard CAN_FIRE_RL_s2
+       reads qb_rv.port0__read when ql_i_notEmpty____d12
+       reads ql.first when 1'b1
+       reads ql.i_notEmpty when ! qb_rv_port0__read_BIT_8___d10
+       calls qb_rv.port0__write when 1'd1 with _1_CONCAT_ql_first__4_PLUS_1_5___d16
+       calls ql.deq when 1'd1 with 
+  3. RL_s1   [rule s1 ("FifoChain.bsv", line 30, column 9)]
+       fires on WILL_FIRE_RL_s1, can fire CAN_FIRE_RL_s1
+       guard CAN_FIRE_RL_s1
+       reads q2.first when 1'b1
+       reads q2.i_notEmpty when ql_i_notFull____d4
+       reads ql.i_notFull when q2_i_notEmpty____d5
+       calls ql.enq when 1'd1 with q2_first_PLUS_1___d8
+       calls q2.deq when 1'd1 with 
+  4. RL_s4   [rule s4 ("FifoChain.bsv", line 45, column 9)]
+       fires on WILL_FIRE_RL_s4, can fire CAN_FIRE_RL_s4
+       guard CAN_FIRE_RL_s4
+       reads qp_rv.port0__read when 1'b1
+       reads sum.read when 1'b1
+       calls sum.write when 1'd1 with sum_9_PLUS_qp_rv_port0__read__7_BITS_7_TO_0_0___d31
+       calls qp_rv.port0__write when 1'd1 with _0_CONCAT_DONTCARE___d26
+  5. RL_s3   [rule s3 ("FifoChain.bsv", line 40, column 9)]
+       fires on WILL_FIRE_RL_s3, can fire CAN_FIRE_RL_s3
+       guard CAN_FIRE_RL_s3
+       reads qb_rv.port1__read when 1'b1
+       reads qp_rv.port1__read when qb_rv_port1__read__7_BIT_8___d18
+       calls qp_rv.port1__write when 1'd1 with _1_CONCAT_qb_rv_port1__read__7_BITS_7_TO_0_3_PL_ETC___d25
+       calls qb_rv.port1__write when 1'd1 with _0_CONCAT_DONTCARE___d26
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_s0 RL_s2 RL_s1 RL_s4 RL_s3
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

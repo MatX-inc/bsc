@@ -1,0 +1,68 @@
+module mkUrgencyBlocking (package UrgencyBlocking), from mkUrgencyBlocking.ba
+inputs:  
+outputs: 
+
+children:
+  cnt : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result cnt$read :: Bit 8
+    write (action)
+      copy -: enable cnt$EN_write arg cnt$write_1 :: Bit 8
+  snap : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result snap$read :: Bit 8
+    write (action)
+      copy -: enable snap$EN_write arg snap$write_1 :: Bit 8
+  go : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result go$read :: Bit 1
+    write (action)
+      copy -: enable go$EN_write arg go$write_1 :: Bit 1
+  lastOp : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable lastOp$EN_write arg lastOp$write_1 :: Bit 2
+
+execution order:
+  1. RL_shadow   [rule shadow ("UrgencyBlocking.bsv", line 39, column 9)]
+       fires on WILL_FIRE_RL_shadow, can fire CAN_FIRE_RL_shadow
+       guard CAN_FIRE_RL_shadow
+       reads snap.read when 1'b1
+       calls lastOp.write when 1'd1 with 2'd2
+  2. RL_snapshot   [rule snapshot ("UrgencyBlocking.bsv", line 35, column 9)]
+       fires on WILL_FIRE_RL_snapshot, can fire CAN_FIRE_RL_snapshot
+       guard CAN_FIRE_RL_snapshot
+       reads cnt.read when 1'b1
+       calls snap.write when 1'd1 with cnt___d2
+  3. RL_bump   [rule bump ("UrgencyBlocking.bsv", line 25, column 9)]
+       fires on WILL_FIRE_RL_bump, can fire CAN_FIRE_RL_bump
+       guard CAN_FIRE_RL_bump
+       reads cnt.read when 1'b1
+       reads go.read when 1'b1
+       calls cnt.write when 1'd1 with cnt_PLUS_1___d3
+       calls lastOp.write when 1'd1 with 2'd1
+  4. RL_clear   [rule clear ("UrgencyBlocking.bsv", line 30, column 9)]
+       fires on WILL_FIRE_RL_clear, can fire CAN_FIRE_RL_clear
+       guard CAN_FIRE_RL_clear
+       reads cnt.read when 1'b1
+       reads go.read when 1'b1
+       calls cnt.write when 1'd1 with 8'd0
+       calls go.write when 1'd1 with NOT_go___d6
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_shadow RL_snapshot RL_bump RL_clear
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  (RL_clear, RL_bump)
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

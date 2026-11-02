@@ -1,0 +1,76 @@
+module mkMethodRelations (package MethodRelations), from mkMethodRelations.ba
+inputs:  setA_x :: Bit 8 setB_x :: Bit 8 EN_setA :: Bit 1 EN_incA :: Bit 1 EN_setB :: Bit 1
+outputs: RDY_setA :: Bit 1 RDY_incA :: Bit 1 RDY_setB :: Bit 1 getA :: Bit 8 RDY_getA :: Bit 1 getB :: Bit 8 RDY_getB :: Bit 1
+
+children:
+  a : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result a$read :: Bit 8
+    write (action)
+      copy -: enable a$EN_write arg a$write_1 :: Bit 8
+  b : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result b$read :: Bit 8
+    write (action)
+      copy -: enable b$EN_write arg b$write_1 :: Bit 8
+  on : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result on$read :: Bit 1
+    write (action)
+      copy -: enable on$EN_write arg on$write_1 :: Bit 1
+
+execution order:
+  1. getA   [value method getA ("MethodRelations.bsv", line 25, column 8)]
+       fires on WILL_FIRE_getA, can fire CAN_FIRE_getA
+       reads a.read when 1'b1
+       output RDY_getA = CAN_FIRE_getA
+       output getA = a___d3  (when WhenOutput "RDY_getA")
+  2. incA   [method incA]
+       fires on WILL_FIRE_incA, can fire CAN_FIRE_incA
+       guard CAN_FIRE_incA
+       reads a.read when 1'b1
+       calls a.write when 1'd1 with a_PLUS_1___d4
+       output RDY_incA = CAN_FIRE_incA
+  3. setA   [method setA]
+       fires on WILL_FIRE_setA, can fire CAN_FIRE_setA
+       guard CAN_FIRE_setA
+       calls a.write when 1'd1 with setA_x
+       output RDY_setA = CAN_FIRE_setA
+  4. getB   [value method getB ("MethodRelations.bsv", line 25, column 8)]
+       fires on WILL_FIRE_getB, can fire CAN_FIRE_getB
+       reads b.read when 1'b1
+       output RDY_getB = CAN_FIRE_getB
+       output getB = b___d2  (when WhenOutput "RDY_getB")
+  5. RL_mv   [rule mv ("MethodRelations.bsv", line 30, column 9)]
+       fires on WILL_FIRE_RL_mv, can fire CAN_FIRE_RL_mv
+       guard CAN_FIRE_RL_mv
+       reads b.read when 1'b1
+       reads on.read when 1'b1
+       calls a.write when 1'd1 with b___d2
+  6. setB   [method setB]
+       fires on WILL_FIRE_setB, can fire CAN_FIRE_setB
+       guard CAN_FIRE_setB
+       calls b.write when 1'd1 with setB_x
+       calls on.write when 1'd1 with setB_x_BIT_0___d5
+       output RDY_setB = CAN_FIRE_setB
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: getA incA setA getB RL_mv setB
+  CF_getB_setA: getA incA getB setA RL_mv setB
+  CF_getB_incA: getA getB incA setA RL_mv setB
+  CF_getA_getB: getB getA incA setA RL_mv setB
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               (getB, setA) (getB, incA) (getA, getB)
+unrealizable CF swaps:     -
+exported SB/SBR:           getA SB setA getA SB incA getB SB setB setA SBR setB incA SBR setA incA SBR setB getA SBR setB
+enables (method, EN):      (incA, EN_incA) (setA, EN_setA) (setB, EN_setB)
+ready (method, RDY):       (getA, RDY_getA) (getB, RDY_getB) (incA, RDY_incA) (setA, RDY_setA) (setB, RDY_setB)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

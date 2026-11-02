@@ -1,0 +1,64 @@
+module mkSplitRule (package SplitRule), from mkSplitRule.ba
+inputs:  
+outputs: 
+
+children:
+  x : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result x$read :: Bit 8
+    write (action)
+      copy -: enable x$EN_write arg x$write_1 :: Bit 8
+  ya : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result ya$read :: Bit 8
+    write (action)
+      copy -: enable ya$EN_write arg ya$write_1 :: Bit 8
+  yb : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result yb$read :: Bit 8
+    write (action)
+      copy -: enable yb$EN_write arg yb$write_1 :: Bit 8
+
+execution order:
+  1. RL_route_T   [rule route_T ("SplitRule.bsv", line 20, column 9)]
+       fires on WILL_FIRE_RL_route_T, can fire CAN_FIRE_RL_route_T
+       guard CAN_FIRE_RL_route_T
+       reads x.read when 1'b1
+       reads ya.read when 1'b1
+       calls ya.write when 1'd1 with ya_PLUS_x___d4
+       calls x.write when 1'd1 with x_PLUS_1___d5
+  2. RL_clrA   [rule clrA ("SplitRule.bsv", line 29, column 9)]
+       fires on WILL_FIRE_RL_clrA, can fire CAN_FIRE_RL_clrA
+       guard CAN_FIRE_RL_clrA
+       reads ya.read when 1'b1
+       calls ya.write when 1'd1 with 8'd0
+  3. RL_route_F   [rule route_F ("SplitRule.bsv", line 20, column 9)]
+       fires on WILL_FIRE_RL_route_F, can fire CAN_FIRE_RL_route_F
+       guard CAN_FIRE_RL_route_F
+       reads x.read when 1'b1
+       reads yb.read when 1'b1
+       calls yb.write when 1'd1 with yb_PLUS_x___d8
+       calls x.write when 1'd1 with x_PLUS_1___d5
+  4. RL_clrB   [rule clrB ("SplitRule.bsv", line 33, column 9)]
+       fires on WILL_FIRE_RL_clrB, can fire CAN_FIRE_RL_clrB
+       guard CAN_FIRE_RL_clrB
+       reads yb.read when 1'b1
+       calls yb.write when 1'd1 with 8'd0
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_route_T RL_clrA RL_route_F RL_clrB
+
+disjoint guards (bsc):     (RL_route_F, RL_route_T)
+urgency blocking (r, by):  (RL_route_F, RL_clrB) (RL_route_T, RL_clrA)
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

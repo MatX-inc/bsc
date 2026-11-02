@@ -1,0 +1,106 @@
+module mkLookupQ (package LookupQ), from mkLookupQ.ba
+inputs:  request_key :: Bit 2 EN_request :: Bit 1 EN_response :: Bit 1
+outputs: RDY_request :: Bit 1 response :: Bit 8 RDY_response :: Bit 1
+
+children:
+  tbl : RegFile   [sub CF sub, sub SB upd, upd C upd]
+    upd (action)
+      copy -: enable tbl$EN_upd arg tbl$upd_1 :: Bit 2 arg tbl$upd_2 :: Bit 8
+    sub (value)
+      copy 0: arg tbl$sub_0_1 :: Bit 2 result tbl$sub_0 :: Bit 8
+  respQ : FIFO2   [deq CF [enq, i_notEmpty, i_notFull], enq CF [deq, first, i_notEmpty, i_notFull], [first, notEmpty, notFull] CF [first, i_notEmpty, i_notFull, notEmpty, notFull], [i_notEmpty, i_notFull] CF [clear, first, i_notEmpty, i_notFull, notEmpty, notFull], first SB [clear, deq], [notEmpty, notFull] SB [clear, deq, enq], [clear, deq, enq] SBR clear, deq C deq, enq C enq]
+    enq (action)
+      copy -: enable respQ$EN_enq arg respQ$enq_1 :: Bit 8
+    deq (action)
+      copy -: enable respQ$EN_deq
+    first (value)
+      copy -: result respQ$first :: Bit 8
+    notFull (value)
+    i_notFull (value)
+      copy -: result respQ$i_notFull :: Bit 1
+    notEmpty (value)
+    i_notEmpty (value)
+      copy -: result respQ$i_notEmpty :: Bit 1
+    clear (action), sees same-cycle enq, deq
+  credits : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result credits$read :: Bit 2
+    write (action)
+      copy -: enable credits$EN_write arg credits$write_1 :: Bit 2
+  fillIdx : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result fillIdx$read :: Bit 2
+    write (action)
+      copy -: enable fillIdx$EN_write arg fillIdx$write_1 :: Bit 2
+  reqW : RWire   [[wget, whas] CF [wget, whas], wset SBR [wget, whas], wset C wset]
+    wset (action)
+      copy -: enable reqW$EN_wset arg reqW$wset_1 :: Bit 2
+    whas (value), sees same-cycle wset
+      copy -: result reqW$whas :: Bit 1
+    wget (value), sees same-cycle wset
+      copy -: result reqW$wget :: Bit 2
+    wire: reqW$wget = reqW$wset_1 within the cycle
+    wire: reqW$whas = reqW$EN_wset within the cycle
+  retW : RWire0   [whas CF whas, wset SBR whas, wset C wset]
+    wset (action)
+      copy -: enable retW$EN_wset
+    whas (value), sees same-cycle wset
+      copy -: result retW$whas :: Bit 1
+    wire: retW$whas = retW$EN_wset within the cycle
+
+execution order:
+  1. request   [method request]
+       fires on WILL_FIRE_request, can fire CAN_FIRE_request
+       guard CAN_FIRE_request
+       reads credits.read when 1'b1
+       calls reqW.wset when 1'd1 with request_key
+       output RDY_request = CAN_FIRE_request
+  2. response   [method response]
+       fires on WILL_FIRE_response, can fire CAN_FIRE_response
+       guard CAN_FIRE_response
+       reads respQ.first when 1'b1
+       reads respQ.i_notEmpty when 1'b1
+       calls respQ.deq when 1'd1 with 
+       calls retW.wset when 1'd1 with 
+       output RDY_response = CAN_FIRE_response
+       output response = respQ.first  (when WhenInput "EN_response")
+  3. RL_lookup   [rule lookup ("LookupQ.bsv", line 34, column 9)]
+       fires on WILL_FIRE_RL_lookup, can fire CAN_FIRE_RL_lookup
+       guard CAN_FIRE_RL_lookup
+       reads reqW.wget when 1'b1
+       reads reqW.whas when respQ_i_notFull____d1
+       reads respQ.i_notFull when reqW_whas____d2
+       reads tbl.sub[0] when 1'b1
+       calls respQ.enq when 1'd1 with tbl_sub_reqW_wget___d5
+  4. RL_account   [rule account ("LookupQ.bsv", line 39, column 9)]
+       fires on WILL_FIRE_RL_account, can fire CAN_FIRE_RL_account
+       guard CAN_FIRE_RL_account
+       reads credits.read when 1'b1
+       reads reqW.whas when 1'b1
+       reads retW.whas when 1'b1
+       calls credits.write when 1'd1 with IF_retW_whas_THEN_IF_reqW_whas_THEN_credits_MI_ETC___d11
+  5. RL_fill   [rule fill ("LookupQ.bsv", line 46, column 9)]
+       fires on WILL_FIRE_RL_fill, can fire CAN_FIRE_RL_fill
+       guard CAN_FIRE_RL_fill
+       reads fillIdx.read when 1'b1
+       calls tbl.upd when 1'd1 with fillIdx___d12, _0_CONCAT_fillIdx_2_5_MUL_0x11_6_BITS_7_TO_0___d17
+       calls fillIdx.write when 1'd1 with fillIdx_2_PLUS_1___d18
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: request response RL_lookup RL_account RL_fill
+  CF_request_response: response request RL_lookup RL_account RL_fill
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               (request, response)
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      (request, EN_request) (response, EN_response)
+ready (method, RDY):       (request, RDY_request) (response, RDY_response)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

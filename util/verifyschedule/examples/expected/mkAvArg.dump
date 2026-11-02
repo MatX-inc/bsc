@@ -1,0 +1,66 @@
+module mkAvArg (package AvArg), from mkAvArg.ba
+inputs:  
+outputs: 
+
+children:
+  c : CRegN5   [port0__read CF port0__read, port1__read CF port1__read, port2__read CF port2__read, port3__read CF port3__read, port4__read CF port4__read, port0__read SB port0__write, port1__read SB port1__write, port2__read SB port2__write, port3__read SB port3__write, port4__read SB port4__write, port0__read SBR [port1__read, port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port0__write SBR [port0__write, port1__read, port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port1__read SBR [port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port1__write SBR [port1__write, port2__read, port2__write, port3__read, port3__write, port4__read, port4__write], port2__read SBR [port3__read, port3__write, port4__read, port4__write], port2__write SBR [port2__write, port3__read, port3__write, port4__read, port4__write], port3__read SBR [port4__read, port4__write], port3__write SBR [port3__write, port4__read, port4__write], port4__write SBR port4__write]
+    port0__read (value)
+      copy -: result c$port0__read :: Bit 8
+    port0__write (action)
+      copy -: enable c$EN_port0__write arg c$port0__write_1 :: Bit 8
+    port1__read (value), sees same-cycle port0__write
+      copy -: result c$port1__read :: Bit 8
+    port1__write (action), sees same-cycle port0__write
+    port2__read (value), sees same-cycle port0__write, port1__write
+    port2__write (action), sees same-cycle port0__write, port1__write
+    port3__read (value), sees same-cycle port0__write, port1__write, port2__write
+    port3__write (action), sees same-cycle port0__write, port1__write, port2__write
+    port4__read (value), sees same-cycle port0__write, port1__write, port2__write, port3__write
+    port4__write (action), sees same-cycle port0__write, port1__write, port2__write, port3__write
+  p : mkPump2   [RDY_take CF [RDY_take, take], take C take]
+    take (actionvalue)
+      copy -: enable p$EN_take arg p$take_1 :: Bit 8 result p$take :: Bit 8
+    RDY_take (value)
+  r : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable r$EN_write arg r$write_1 :: Bit 8
+  phase : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result phase$read :: Bit 1
+    write (action)
+      copy -: enable phase$EN_write arg phase$write_1 :: Bit 1
+
+execution order:
+  1. RL_incr   [rule incr ("AvArg.bsv", line 26, column 9)]
+       fires on WILL_FIRE_RL_incr, can fire CAN_FIRE_RL_incr
+       guard CAN_FIRE_RL_incr
+       reads c.port0__read when 1'b1
+       reads phase.read when 1'b1
+       calls c.port0__write when 1'd1 with c_port0__read_PLUS_1___d3
+  2. RL_consume   [rule consume ("AvArg.bsv", line 30, column 9)]
+       fires on WILL_FIRE_RL_consume, can fire CAN_FIRE_RL_consume
+       guard CAN_FIRE_RL_consume
+       reads c.port1__read when 1'b1
+       reads phase.read when 1'b1
+       calls p.take when 1'd1 with c_port1__read____d4
+       calls r.write when 1'd1 with p_take___d5
+       calls phase.write when 1'd1 with NOT_phase___d6
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_incr RL_consume
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

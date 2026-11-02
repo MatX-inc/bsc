@@ -1,0 +1,72 @@
+module mkRegFilePorts (package RegFilePorts), from mkRegFilePorts.ba
+inputs:  peek_a :: Bit 3 poke_a :: Bit 3 poke_d :: Bit 8 EN_poke :: Bit 1
+outputs: peek :: Bit 8 RDY_peek :: Bit 1 RDY_poke :: Bit 1
+
+children:
+  rf : RegFile   [sub CF sub, sub SB upd, upd C upd]
+    upd (action)
+      copy -: enable rf$EN_upd arg rf$upd_1 :: Bit 3 arg rf$upd_2 :: Bit 8
+    sub (value)
+      copy 0: arg rf$sub_0_1 :: Bit 3 result rf$sub_0 :: Bit 8
+      copy 1: arg rf$sub_1_1 :: Bit 3 result rf$sub_1 :: Bit 8
+      copy 2: arg rf$sub_2_1 :: Bit 3 result rf$sub_2 :: Bit 8
+      copy 3: arg rf$sub_3_1 :: Bit 3 result rf$sub_3 :: Bit 8
+  i : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result i$read :: Bit 3
+    write (action)
+      copy -: enable i$EN_write arg i$write_1 :: Bit 3
+  wa : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result wa$read :: Bit 3
+    write (action)
+      copy -: enable wa$EN_write arg wa$write_1 :: Bit 3
+  acc : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+    write (action)
+      copy -: enable acc$EN_write arg acc$write_1 :: Bit 8
+
+execution order:
+  1. peek   [value method peek ("RegFilePorts.bsv", line 22, column 8)]
+       fires on WILL_FIRE_peek, can fire CAN_FIRE_peek
+       reads rf.sub[3] when 1'b1
+       output RDY_peek = CAN_FIRE_peek
+       output peek = rf.sub peek_a  (when WhenOutput "RDY_peek")
+  2. RL_sum3   [rule sum3 ("RegFilePorts.bsv", line 28, column 9)]
+       fires on WILL_FIRE_RL_sum3, can fire CAN_FIRE_RL_sum3
+       guard CAN_FIRE_RL_sum3
+       reads i.read when 1'b1
+       reads rf.sub[0] when 1'b1
+       reads rf.sub[1] when 1'b1
+       reads rf.sub[2] when 1'b1
+       calls acc.write when 1'd1 with rf_sub_i_PLUS_rf_sub_i_PLUS_1_PLUS_rf_sub_i_PL_ETC___d8
+       calls i.write when 1'd1 with i_PLUS_3___d9
+  3. poke   [method poke]
+       fires on WILL_FIRE_poke, can fire CAN_FIRE_poke
+       guard CAN_FIRE_poke
+       calls rf.upd when 1'd1 with poke_a, poke_d
+       output RDY_poke = CAN_FIRE_poke
+  4. RL_fill   [rule fill ("RegFilePorts.bsv", line 33, column 9)]
+       fires on WILL_FIRE_RL_fill, can fire CAN_FIRE_RL_fill
+       guard CAN_FIRE_RL_fill
+       reads wa.read when 1'b1
+       calls rf.upd when 1'd1 with wa___d10, _0_CONCAT_wa_0_1_MUL_3_2_BITS_7_TO_0___d13
+       calls wa.write when 1'd1 with wa_0_PLUS_1___d14
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: peek RL_sum3 poke RL_fill
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  (RL_fill, poke)
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           peek SB poke
+enables (method, EN):      (poke, EN_poke)
+ready (method, RDY):       (peek, RDY_peek) (poke, RDY_poke)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

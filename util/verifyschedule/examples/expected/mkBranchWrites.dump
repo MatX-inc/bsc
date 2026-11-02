@@ -1,0 +1,56 @@
+module mkBranchWrites (package BranchWrites), from mkBranchWrites.ba
+inputs:  
+outputs: 
+
+children:
+  sel : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result sel$read :: Bit 1
+    write (action)
+      copy -: enable sel$EN_write arg sel$write_1 :: Bit 1
+  mode : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result mode$read :: Bit 2
+    write (action)
+      copy -: enable mode$EN_write arg mode$write_1 :: Bit 2
+  r : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result r$read :: Bit 8
+    write (action)
+      copy -: enable r$EN_write arg r$write_1 :: Bit 8
+  s : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result s$read :: Bit 8
+    write (action)
+      copy -: enable s$EN_write arg s$write_1 :: Bit 8
+
+execution order:
+  1. RL_step   [rule step ("BranchWrites.bsv", line 23, column 9)]
+       fires on WILL_FIRE_RL_step, can fire CAN_FIRE_RL_step
+       guard CAN_FIRE_RL_step
+       reads mode.read when 1'b1
+       reads r.read when bsc_uses_1
+       reads s.read when ! sel__h184
+       reads sel.read when 1'b1
+       calls r.write when 1'd1 with IF_sel_THEN_r_PLUS_1_ELSE_s___d5
+       calls s.write when _dfoo1 with _dfoo2
+       calls sel.write when 1'd1 with NOT_sel___d10
+       calls mode.write when 1'd1 with mode_PLUS_1___d11
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: RL_step
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      -
+ready (method, RDY):       -
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

@@ -1,0 +1,37 @@
+module mkSource (package ActionValuePump), from mkSource.ba
+inputs:  EN_pop :: Bit 1
+outputs: pop :: Bit 8 RDY_pop :: Bit 1
+
+children:
+  cnt : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result cnt$read :: Bit 8
+    write (action)
+      copy -: enable cnt$EN_write arg cnt$write_1 :: Bit 8
+
+execution order:
+  1. pop   [method pop]
+       fires on WILL_FIRE_pop, can fire CAN_FIRE_pop
+       guard CAN_FIRE_pop
+       reads cnt.read when 1'b1
+       calls cnt.write when 1'd1 with cnt_MINUS_1___d2
+       output RDY_pop = CAN_FIRE_pop
+       output pop = cnt___d1  (when WhenInput "EN_pop")
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: pop
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  -
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               -
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      (pop, EN_pop)
+ready (method, RDY):       (pop, RDY_pop)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:

@@ -1,0 +1,60 @@
+module mkPump (package ActionValuePump), from mkPump.ba
+inputs:  take_bias :: Bit 8 EN_take :: Bit 1
+outputs: take :: Bit 8 RDY_take :: Bit 1 total :: Bit 8 RDY_total :: Bit 1
+
+children:
+  src : mkSource   [RDY_pop CF [RDY_pop, pop], pop C pop]
+    pop (actionvalue)
+      copy -: enable src$EN_pop result src$pop :: Bit 8
+    RDY_pop (value)
+      copy -: result src$RDY_pop :: Bit 1
+  acc : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result acc$read :: Bit 8
+    write (action)
+      copy -: enable acc$EN_write arg acc$write_1 :: Bit 8
+  en : RegN   [read CF read, read SB write, write SBR write]
+    read (value)
+      copy -: result en$read :: Bit 1
+    write (action)
+
+execution order:
+  1. take   [method take]
+       fires on WILL_FIRE_take, can fire CAN_FIRE_take
+       guard CAN_FIRE_take
+       reads src.RDY_pop when 1'b1
+       calls src.pop when 1'd1 with 
+       output RDY_take = CAN_FIRE_take
+       output take = src_pop___d5 + take_bias  (when WhenInput "EN_take")
+  2. total   [value method total ("ActionValuePump.bsv", line 36, column 8)]
+       fires on WILL_FIRE_total, can fire CAN_FIRE_total
+       reads acc.read when 1'b1
+       output RDY_total = CAN_FIRE_total
+       output total = acc___d4  (when WhenOutput "RDY_total")
+  3. RL_drain   [rule drain ("ActionValuePump.bsv", line 41, column 9)]
+       fires on WILL_FIRE_RL_drain, can fire CAN_FIRE_RL_drain
+       guard CAN_FIRE_RL_drain
+       reads acc.read when 1'b1
+       reads en.read when src_RDY_pop____d1
+       reads src.RDY_pop when en___d2
+       calls src.pop when 1'd1 with 
+       calls acc.write when 1'd1 with acc_PLUS_src_pop___d6
+
+use conditions (recomputed):
+
+orders checked:
+  schedule: take total RL_drain
+  CF_take_total: total take RL_drain
+
+disjoint guards (bsc):     -
+urgency blocking (r, by):  (RL_drain, take)
+mutually_exclusive (user): -
+exported C:                -
+exported CF:               (take, total)
+unrealizable CF swaps:     -
+exported SB/SBR:           
+enables (method, EN):      (take, EN_take)
+ready (method, RDY):       (take, RDY_take) (total, RDY_total)
+unspecified values:        A
+
+disjointness bsc relied on but did not record:
