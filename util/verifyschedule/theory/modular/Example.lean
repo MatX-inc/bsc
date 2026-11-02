@@ -68,6 +68,17 @@ trace end to end.  Negatives:
 `TaskRev.not_realizes`: a task module whose hardware prints in reverse
 order violates the contract itself.
 
+Skipped values (round 6 soundness review 2): modules are families
+(`Parent.toU`, `ModuleU`), built with `OblU`, which fixes the order before
+the skipped values.
+(n) `UOrder`: the reviewer's probe, whose order must change with a skipped
+    value: `∀ u, Obl (F.at u)` holds (`obl_each`), `OblU F` is false
+    (`not_oblU`).
+(o) `RdyPort`: a generated child `mkG` with a guarded `get` and its ready
+    output `rdyGet` (exact, aliased to `get`'s RDY: `G.aliased`); its parent
+    reads `g.get` only under the literal `g.rdyGet`, proved by `oblU_of_cert`
+    (`U.obl`), the readiness from the alias; `U.top` for the tree.
+
 Build: `lean -o build/Modular.olean Modular.lean`, then
 `LEAN_PATH=build lean Example.lean`.
 -/
@@ -277,9 +288,10 @@ theorem obl : Obl (P ops) := obl_of_cert (P ops) (cert ops)
     implementations of its children's interfaces that realize theirs, the
     module realizes its own contract.  This is what a generated file states;
     it mentions the children only through `CI`. -/
-theorem realizes_of (impl : (j : K) → Module V (CI j)) (hC : ∀ j, Realizes (impl j)) :
-    Realizes ((P ops).toModule impl) :=
-  compose (P ops) impl hC (fun j => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl)) (obl ops)
+theorem realizes_of (impl : (j : K) → ModuleU V (CI j)) (hC : ∀ j, RealizesU (impl j)) :
+    RealizesU ((P ops).toU.toModuleU impl) :=
+  compose (P ops).toU impl hC (fun j => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl))
+    (oblU_of_obl _ (obl ops))
 
 /-- What `comb` reads (the netlist's fan-in), for the acyclicity
     certificate: `b`'s write data reads `a`; `a`'s write reads `setA`'s
@@ -296,14 +308,14 @@ def acyc : Acyc (P ops) :=
     (fun j p q => reg_nopath p q) (fun _ _ h => by simp at h)
 
 /-- mkChild, built from two registers. -/
-abbrev impl : (j : K) → Module V (CI j) := fun _ => Reg
-abbrev mod : Module V X := (P ops).toModule impl
+abbrev impl : (j : K) → ModuleU V (CI j) := fun _ => Reg.toU
+abbrev mod : ModuleU V X := (P ops).toU.toModuleU impl
 
 theorem built : Built X (mod ops) :=
-  Built.node (P ops) impl (fun _ => Built.leaf _ reg_realizes (creg_causal 1))
-    (fun _ => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl)) (obl ops) (acyc ops)
+  Built.node (P ops).toU impl (fun _ => Built.leaf _ reg_realizes (creg_causal 1))
+    (fun _ => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl)) (oblU_of_obl _ (obl ops)) (acyc ops).toU
 
-theorem realizes : Realizes (mod ops) := (built ops).realizes
+theorem realizes : RealizesU (mod ops) := (built ops).realizes
 
 end
 end Child
@@ -329,7 +341,10 @@ theorem mem_groups_of_inl {α β : Type} : ∀ {τ : List (α ⊕ β)} {g : α},
 
 /-! ## (a) mkChild exporting `getB SB setA`: the rule `move` is sandwiched -/
 namespace ChildSB
-open Child (K M R CI impl)
+open Child (K M R CI)
+
+/-- mkChild's registers, as plain modules (for the module-level counterexample). -/
+abbrev impl : (j : K) → Module Nat (CI j) := fun _ => Reg
 
 def annSB : Ann M := { Child.ann with sbr := fun _ _ => false }
 abbrev XSB : Iface := ⟨M, inferInstance, annSB⟩
@@ -449,7 +464,7 @@ theorem not_realizes : ¬ Realizes mod := by
   let g : mod.Sig := ⟨w, oc, (P.comb oc w).1, fun _ => ()⟩
   have hhw : mod.hw s w (P.comb oc w).2 s' g :=
     ⟨rfl, fun j => by cases j <;> exact ⟨fun i => by rw [fin1 i]; rfl, by rfl⟩,
-      fun _ => rfl, rfl, fun _ => ⟨rfl, rfl⟩⟩
+      fun _ => rfl, rfl, fun _ _ => rfl, fun _ => ⟨rfl, rfl⟩⟩
   have hL : Legal XSB.ann [gSB] := by
     refine ⟨fun c1 c2 hs => ?_, fun g' hg c1 c2 hs => ?_, fun m hm => by cases m <;> simp [annSB, Child.ann] at hm⟩
     · simp only [gSB, List.flatten_cons, List.flatten_nil, List.append_nil] at hs
@@ -663,11 +678,11 @@ def cert : Cert (P ops) where
 /-- **mkTop's obligation.** -/
 theorem obl : Obl (P ops) := obl_of_cert (P ops) (cert ops)
 
-abbrev impl : (j : K) → Module V (CI j)
+abbrev impl : (j : K) → ModuleU V (CI j)
   | .c => Child.mod ops
-  | .t => Reg
+  | .t => Reg.toU
 
-abbrev mod : Module V X := (P ops).toModule (impl ops)
+abbrev mod : ModuleU V X := (P ops).toU.toModuleU (impl ops)
 
 /-- What `comb` reads: `c.setA`'s data reads `c.getA`, `t`'s write data
     reads `c.getB`; `get` and `peek` return `t` and `c.getA`.  mkChild
@@ -686,21 +701,21 @@ def acyc : Acyc (P ops) :=
 
 /-- The instance tree. -/
 theorem built : Built X (mod ops) :=
-  Built.node (P ops) (impl ops) (fun j => match j with
+  Built.node (P ops).toU (impl ops) (fun j => match j with
     | .c => Child.built ops
     | .t => Built.leaf _ reg_realizes (creg_causal 1))
     (fun j => aliased_of_none _ _ (fun p q => by cases j <;> rfl) (fun a p => by cases j <;> rfl))
-    (obl ops) (acyc ops)
+    (oblU_of_obl _ (obl ops)) (acyc ops).toU
 
 /-- **The top module realizes its contract**, for every value type and every
     interpretation of the operators: from the registers' contracts and the
     two modules' obligations. -/
-theorem realizes : Realizes (mod ops) := (built ops).realizes
+theorem realizes : RealizesU (mod ops) := (built ops).realizes
 
 /-- **And it is not vacuous**: every input has a hardware cycle, from every
     state a cycle can start in (`Built.top`, from the registers' causality
     and the two acyclicity certificates). -/
-theorem top [Inhabited V] : Realizes (mod ops) ∧
+theorem top [Inhabited V] : RealizesU (mod ops) ∧
     ∀ s w, (mod ops).clean s = s → ∃ o s' g, (mod ops).hw s w o s' g := (built ops).top
 
 end
@@ -1293,7 +1308,7 @@ abbrev impl (ofBool : Bool → V) : (j : K) → Module V (CI j)
   | .mode => Reg
   | .q => FIFO2 ofBool
 
-abbrev mod (ofBool : Bool → V) : Module V X := (P ops).toModule (impl ofBool)
+abbrev mod (ofBool : Bool → V) : ModuleU V X := (P ops).toU.toModuleU (fun j => (impl ofBool j).toU)
 
 /-- What `comb` reads: `cnt`'s write reads `mode` and `cnt`; `q.enq` reads
     the methods' wires; RDY reads `q`'s RDY.  The children have no paths. -/
@@ -1313,20 +1328,20 @@ def acyc : Acyc (P ops) :=
 /-- The instance tree, for a FIFO encoding of flags that the design's Bool
     reading inverts. -/
 theorem built (ofBool : Bool → V) (hB : ∀ b, ops.toB (ofBool b) = b) : Built X (mod ops ofBool) :=
-  Built.node (P ops) (impl ofBool) (fun j => match j with
+  Built.node (P ops).toU (fun j => (impl ofBool j).toU) (fun j => match j with
     | .cnt => Built.leaf _ reg_realizes (creg_causal 1)
     | .mode => Built.leaf _ reg_realizes (creg_causal 1)
     | .q => Built.leaf _ (fifo2_realizes ofBool) (fifo2_causal ofBool))
     (fun j => match j with
       | .cnt => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl)
       | .mode => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl)
-      | .q => fifo2_aliased ofBool ops.toB hB)
-    (obl ops) (acyc ops)
+      | .q => (fifo2_aliased ofBool ops.toB hB).toU)
+    (oblU_of_obl _ (obl ops)) (acyc ops).toU
 
 /-- **It realizes its contract, in every cycle in which the assertion
     holds**, and every input has a hardware cycle. -/
 theorem top [Inhabited V] (ofBool : Bool → V) (hB : ∀ b, ops.toB (ofBool b) = b) :
-    Realizes (mod ops ofBool) ∧
+    RealizesU (mod ops ofBool) ∧
       ∀ s w, (mod ops ofBool).clean s = s → ∃ o s' g, (mod ops ofBool).hw s w o s' g :=
   (built ops ofBool hB).top
 
@@ -1729,18 +1744,18 @@ abbrev impl (ofBool : Bool → V) : (j : K) → Module V (CI j)
   | .w => RWire ofBool true false
   | .t => Reg
 
-abbrev mod (ofBool : Bool → V) : Module V NoX := (P z).toModule (impl ofBool)
+abbrev mod (ofBool : Bool → V) : ModuleU V NoX := (P z).toU.toModuleU (fun j => (impl ofBool j).toU)
 
 theorem built [Inhabited V] (ofBool : Bool → V) : Built NoX (mod z ofBool) :=
-  Built.node (P z) (impl ofBool) (fun j => match j with
+  Built.node (P z).toU (fun j => (impl ofBool j).toU) (fun j => match j with
     | .r => Built.leaf _ reg_realizes (creg_causal 1)
     | .w => Built.leaf _ (rwire_realizes ofBool true false) (rwire_causal ofBool true false)
     | .t => Built.leaf _ reg_realizes (creg_causal 1))
     (fun j => aliased_of_none _ _ (fun p q => by cases j <;> rfl) (fun a p => by cases j <;> rfl))
-    (obl z) (acyc z)
+    (oblU_of_obl _ (obl z)) (acyc z).toU
 
 /-- **Realizes, and every input has a hardware cycle**, through the wire's path. -/
-theorem top [Inhabited V] (ofBool : Bool → V) : Realizes (mod z ofBool) ∧
+theorem top [Inhabited V] (ofBool : Bool → V) : RealizesU (mod z ofBool) ∧
     ∀ s w, (mod z ofBool).clean s = s → ∃ o s' g, (mod z ofBool).hw s w o s' g :=
   (built z ofBool).top
 end
@@ -1840,7 +1855,7 @@ abbrev mod : Module Bool NoX := P.toModule impl
 /-- But no hardware cycle exists, from any state, for any input. -/
 theorem hw_empty (s : mod.S) (w : Wires Empty Bool) (o : Outs Empty Bool) (s' : mod.S) (g : mod.Sig) :
     ¬ mod.hw s w o s' g := by
-  rintro ⟨-, hc, hen, -, -⟩
+  rintro ⟨-, hc, hen, -, -, -⟩
   obtain ⟨wX, oX, ⟨-, hhas, -⟩, hen', -, -, -, hret⟩ := hc ()
   have e1 : (g.oc ()).ret WireM.whas = oX.ret WireM.whas := hret WireM.whas
   have e2 : wX.en WireM.wset = (g.wc ()).en WireM.wset := hen' WireM.wset
@@ -2119,9 +2134,10 @@ def acyc : Acyc (P ops) :=
     (fun j p q => rfl) (fun _ _ h => by simp at h)
 
 theorem built [Inhabited V] (ofBool : Bool → V) (hB : ∀ b, ops.toB (ofBool b) = b) :
-    Built X ((P ops).toModule (fun _ => FIFO2 ofBool)) :=
-  Built.node (P ops) (fun _ => FIFO2 ofBool) (fun _ => Built.leaf _ (fifo2_realizes ofBool) (fifo2_causal ofBool))
-    (fun _ => fifo2_aliased ofBool ops.toB hB) (obl ops) (acyc ops)
+    Built X ((P ops).toU.toModuleU (fun _ => (FIFO2 ofBool).toU)) :=
+  Built.node (P ops).toU (fun _ => (FIFO2 ofBool).toU)
+    (fun _ => Built.leaf _ (fifo2_realizes ofBool) (fifo2_causal ofBool))
+    (fun _ => (fifo2_aliased ofBool ops.toB hB).toU) (oblU_of_obl _ (obl ops)) (acyc ops).toU
 end
 end AliasEx
 
@@ -2537,21 +2553,21 @@ def acyc : Acyc (P ops true) :=
     (by intro oc oc' w w' q; exact q.elim)
     (fun j p q => by cases j <;> rfl) (fun q => q.elim)
 
-abbrev impl : (j : K) → Module V (CI j)
+abbrev impl : (j : K) → ModuleU V (CI j)
   | .c => Child.mod (⟨ops.z, ops.inc⟩ : ToyOps V)
-  | .T => Tasks 1
+  | .T => (Tasks 1).toU
 
-abbrev mod : Module V NoX := (P ops true).toModule (impl ops)
+abbrev mod : ModuleU V NoX := (P ops true).toU.toModuleU (impl ops)
 
 theorem built [Inhabited V] : Built NoX (mod ops) :=
-  Built.node (P ops true) (impl ops) (fun j => match j with
+  Built.node (P ops true).toU (impl ops) (fun j => match j with
     | .c => Child.built _
     | .T => Built.leaf _ (tasks_realizes 1) (tasks_causal 1))
     (fun j => aliased_of_none _ _ (fun p q => by cases j <;> rfl) (fun a p => by cases j <;> rfl))
-    (obl ops) (acyc ops)
+    (oblU_of_obl _ (obl ops)) (acyc ops).toU
 
 /-- **mkShow realizes its contract, task trace included, and is not vacuous.** -/
-theorem top [Inhabited V] : Realizes (mod ops) ∧
+theorem top [Inhabited V] : RealizesU (mod ops) ∧
     ∀ s w, (mod ops).clean s = s → ∃ o s' g, (mod ops).hw s w o s' g := (built ops).top
 
 /-- The hardware's trace of mkShow's own log: `c.getA` when `isOn c.getB`.
@@ -2560,7 +2576,7 @@ theorem hw_trace (s : (mod ops).S) (w : Wires Empty V) (o : Outs Empty V) (s' : 
     (g : (mod ops).Sig) (h : (mod ops).hw s w o s' g) :
     (mod ops).trc g ⟨.T, ()⟩ =
       if ops.isOn ((g.oc .c).ret .getB) then [(0, (g.oc .c).ret .getA)] else [] := by
-  obtain ⟨-, hch, -, -, hd⟩ := h
+  obtain ⟨-, hch, -, -, -, hd⟩ := h
   obtain ⟨hwc, -⟩ := hd trivial
   obtain ⟨-, hT⟩ := hch .T
   show taskTrace (g.sub .T) = _
@@ -2573,11 +2589,13 @@ theorem hw_trace (s : (mod ops).S) (w : Wires Empty V) (o : Outs Empty V) (s' : 
 theorem display [Inhabited V] (s : (mod ops).S) (σ : List (List (Empty × V))) (w : Wires Empty V)
     (o : Outs Empty V) (s' : (mod ops).S) (g : (mod ops).Sig) (hc : (mod ops).clean s = s)
     (hL : Legal NoX.ann σ) (hD : Drives NoX.ann w σ) (hh : (mod ops).hw s w o s' g) (hok : (mod ops).ok g) :
-    ∃ τ fin, groups τ = σ ∧ Exec (mod ops) o s τ fin ∧ s' = (mod ops).clean fin ∧
+    ∃ τ, groups τ = σ ∧ ∀ u, ∃ fin, Exec ((mod ops).at u) o s τ fin ∧ s' = (mod ops).clean fin ∧
       (mod ops).log fin ⟨.T, ()⟩ =
         if ops.isOn ((g.oc .c).ret .getB) then [(0, (g.oc .c).ret .getA)] else [] := by
-  obtain ⟨τ, fin, h1, h2, h3, h4⟩ := (top ops).1 s σ w o s' g hc hL hD hh hok (fun c _ _ => c.1.elim)
-  exact ⟨τ, fin, h1, h2, h3, (h4 ⟨.T, ()⟩).symm.trans (hw_trace ops s w o s' g hh)⟩
+  obtain ⟨τ, h1, hu⟩ := (top ops).1 s σ w o s' g hc hL hD hh hok (fun c _ _ => c.1.elim)
+  refine ⟨τ, h1, fun u => ?_⟩
+  obtain ⟨fin, h2, h3, h4⟩ := hu u
+  exact ⟨fin, h2, h3, (h4 ⟨.T, ()⟩).symm.trans (hw_trace ops s w o s' g hh)⟩
 end
 end Show
 
@@ -2795,6 +2813,563 @@ theorem not_realizes : ¬ Realizes mod := by
 
 end TaskRev
 
+/-! ## (n) A run order chosen per skipped value (round 6 soundness review 2, M1)
+
+The reviewer's probe as a family: rule `A` reads `x` under condition `false` and enqueues
+into `c` or `d` by the skipped value.  `∀ u, Obl (F.at u)` holds, each `u` with its own
+order (`obl_each`); the family obligation, which fixes the order first, is false. -/
+namespace UOrder
+
+inductive FP | enq | deq deriving DecidableEq
+
+def pipeAnn : Ann FP where
+  prec p q := p == .deq && q == .enq
+  sbr _ _ := false
+  conf p q := p == q
+  share _ := false
+  hasEn _ := true
+  alwaysEn _ := false
+  alwaysRdy _ := true
+
+def bypAnn : Ann FP := { pipeAnn with prec := fun p q => p == .enq && q == .deq }
+
+def eAnn : Ann Unit where
+  prec _ _ := false
+  sbr _ _ := false
+  conf _ _ := true
+  share _ := false
+  hasEn _ := true
+  alwaysEn _ := false
+  alwaysRdy _ := true
+
+/-- `c` a pipeline FIFO (deq SB enq), `d` a bypass FIFO (enq SB deq), `e` one port, `x` a register. -/
+inductive K | c | d | e | x deriving DecidableEq
+
+abbrev CI : K → Iface
+  | .c => ⟨FP, inferInstance, pipeAnn⟩
+  | .d => ⟨FP, inferInstance, bypAnn⟩
+  | .e => ⟨Unit, inferInstance, eAnn⟩
+  | .x => Reg.X
+
+abbrev CM := fun j : K => (CI j).M
+
+inductive R | Y | X | A | Z deriving DecidableEq
+
+/-- Rule bodies at their own skipped values `v`; `A` skips its read of `x`. -/
+def rbody : R → (Nat → Nat) → Prog K CM Nat
+  | .Y, _ => .call (CM := CM) .d FP.enq 0 (fun _ => .ret 0)
+  | .X, _ => .call (CM := CM) .c FP.deq 0 (fun _ => .call (CM := CM) .d FP.deq 0
+      (fun _ => .call (CM := CM) .x Reg.write 5 (fun _ => .ret 0)))
+  | .A, v => Prog.callIf (CM := CM) false .x Reg.read 0 (v 0) (fun r => .call (CM := CM) .e () 0
+      (fun _ => if r = 0 then .call (CM := CM) .c FP.enq 0 (fun _ => .ret 0)
+                else .call (CM := CM) .d FP.enq 0 (fun _ => .ret 0)))
+  | .Z, _ => .call (CM := CM) .c FP.enq 0 (fun _ => .ret 0)
+
+def wires : (j : K) → Wires (CI j).M Nat
+  | .c => ⟨fun _ => true, fun _ => 0⟩
+  | .d => ⟨fun _ => true, fun _ => 0⟩
+  | .e => ⟨fun _ => true, fun _ => 0⟩
+  | .x => ⟨fun m => m.isWr, fun m => if m.isWr then 5 else 0⟩
+
+abbrev F : ParentU Nat where
+  I := K
+  decI := inferInstance
+  kids := [.c, .d, .e, .x]
+  kids_nodup := by decide
+  kids_all := fun j => by cases j <;> decide
+  CI := CI
+  X := NoX
+  PR := R
+  body m _ _ := m.elim
+  rbody := rbody
+  comb _ _ := (wires, ⟨fun m => m.elim, fun m => m.elim⟩)
+  asm _ _ := True
+  onehot _ _ := True
+
+/-- A's skipped value. -/
+abbrev sv (u : F.Step → Nat → Nat) : Nat := u (.inr .A) 0
+
+theorem emptyL (g : List (Empty × Nat)) : g = [] := by
+  cases g with
+  | nil => rfl
+  | cons a _ => exact a.1.elim
+
+theorem groups_app (σ : List (List (Empty × Nat))) (rs : List R) :
+    groups ((σ.map .inl ++ rs.map .inr : List (List (Empty × Nat) ⊕ R))) = σ := by
+  induction σ with
+  | nil => induction rs with
+    | nil => rfl
+    | cons r rs ih => simpa [groups] using ih
+  | cons g σ ih => simp [groups, ih]
+
+theorem flat_sigmaJ (u : F.Step → Nat → Nat) (oc : (j : K) → Outs (CI j).M Nat) (σ : List (List (Empty × Nat)))
+    (rs : List R) (j : K) :
+    (sigmaJ (F.at u) oc (σ.map .inl ++ rs.map .inr) j).flatten =
+      (rs.map (fun r => proj j (trace oc (rbody r (u (.inr r)))).1)).flatten := by
+  have h0 : ∀ g ∈ σ, proj (CM := CM) j (stepTrace (F.at u) oc (.inl g)) = [] := by
+    intro g _; rw [emptyL g]; rfl
+  simp only [sigmaJ, List.map_append, List.map_map, List.flatten_append]
+  have : (σ.map ((fun e => proj j (stepTrace (F.at u) oc e)) ∘ Sum.inl)).flatten = [] := by
+    rw [List.flatten_eq_nil_iff]
+    intro l hl
+    obtain ⟨g, hg, rfl⟩ := List.mem_map.mp hl
+    exact h0 g hg
+  rw [this, List.nil_append]
+  rfl
+
+/-- The order: Y, X, A when A's skipped value is 0; else A, X, Z. -/
+def rs (u : F.Step → Nat → Nat) : List R := if sv u = 0 then [.Y, .X, .A] else [.A, .X, .Z]
+
+def fl : (j : K) → List ((CI j).M × Nat)
+  | .c => [(FP.deq, 0), (FP.enq, 0)]
+  | .d => [(FP.enq, 0), (FP.deq, 0)]
+  | .e => [((), 0)]
+  | .x => [(Reg.write, 5)]
+
+theorem flat_eq (u : F.Step → Nat → Nat) (oc : (j : K) → Outs (CI j).M Nat) (j : K) :
+    ((rs u).map (fun r => proj j (trace oc (rbody r (u (.inr r)))).1)).flatten = fl j := by
+  unfold rs
+  by_cases h : sv u = 0 <;> cases j <;> simp_all [rbody, trace, Prog.callIf, proj, fl]
+
+theorem grp_len (u : F.Step → Nat → Nat) (oc : (j : K) → Outs (CI j).M Nat) (σ : List (List (Empty × Nat))) (j : K) :
+    ∀ g ∈ sigmaJ (F.at u) oc (σ.map .inl ++ (rs u).map .inr) j, g.length ≤ 1 := by
+  intro g hg
+  simp only [sigmaJ, List.map_append, List.map_map, List.mem_append, List.mem_map, Function.comp] at hg
+  rcases hg with ⟨g', hg', rfl⟩ | ⟨r, hr, rfl⟩
+  · rw [emptyL g']; simp [stepTrace, proj]
+  · show (proj j (trace oc (rbody r (u (.inr r)))).1).length ≤ 1
+    cases r <;> cases j <;> by_cases h : sv u = 0 <;> simp_all [rbody, trace, Prog.callIf, proj]
+
+theorem legal_of {M : Type} [DecidableEq M] (A : Ann M) (σ' : List (List (M × Nat))) (L : List (M × Nat))
+    (hf : σ'.flatten = L) (hg : ∀ g ∈ σ', g.length ≤ 1) (ho : ∀ c1 c2, [c1, c2] <+ L → A.Follow c1 c2)
+    (ha : ∀ m, A.alwaysEn m = false) : Legal A σ' :=
+  ⟨fun c1 c2 h => ho c1 c2 (hf ▸ h),
+   fun g hgm c1 c2 h => absurd (Nat.le_trans h.length_le (hg g hgm)) (by simp),
+   fun m hm => by rw [ha m] at hm; cases hm⟩
+
+theorem legalJ (j : K) (σ' : List (List ((CI j).M × Nat))) (hf : σ'.flatten = fl j)
+    (hg : ∀ g ∈ σ', g.length ≤ 1) : Legal (CI j).ann σ' := by
+  cases j
+  · refine legal_of _ σ' _ hf hg (fun c1 c2 h => ?_) (fun _ => rfl)
+    obtain ⟨rfl, rfl⟩ := pair_sub_two h; simp [Ann.Follow, CI, pipeAnn]
+  · refine legal_of _ σ' _ hf hg (fun c1 c2 h => ?_) (fun _ => rfl)
+    obtain ⟨rfl, rfl⟩ := pair_sub_two h; simp [Ann.Follow, CI, bypAnn, pipeAnn]
+  · exact legal_of _ σ' _ hf hg (fun c1 c2 h => absurd h.length_le (by simp [fl])) (fun _ => rfl)
+  · exact legal_of _ σ' _ hf hg (fun c1 c2 h => absurd h.length_le (by simp [fl])) (fun _ => rfl)
+
+theorem drivesJ (j : K) (σ' : List (List ((CI j).M × Nat))) (hf : σ'.flatten = fl j) :
+    Drives (CI j).ann (wires j) σ' := by
+  refine ⟨fun m hm => ?_, fun m x hx => ?_⟩ <;> rw [hf] at * <;> cases j
+  · cases m <;> simp [wires, fl]
+  · cases m <;> simp [wires, fl]
+  · simp [wires, fl]
+  · rcases m with ⟨i⟩ | ⟨i⟩ <;> rw [fin1 i] at * <;> simp_all [wires, fl, cregAnn, CRegM.isWr]
+  · cases m <;> simp [lastArg, fl] at hx <;> simp [wires, hx]
+  · cases m <;> simp [lastArg, fl] at hx <;> simp [wires, hx]
+  · simp [lastArg, fl] at hx; simp [wires, hx]
+  · rcases m with ⟨i⟩ | ⟨i⟩ <;> rw [fin1 i] at * <;> simp_all [lastArg, fl, wires, CRegM.isWr]
+
+/-- **The old statement holds**: at each `u` some order meets the obligation. -/
+theorem obl_each (u : F.Step → Nat → Nat) : Obl (F.at u) := by
+  intro oc w σ _ _ _ _ _
+  refine ⟨trivial, σ.map .inl ++ (rs u).map .inr, groups_app σ (rs u), ?_, fun j => ?_⟩
+  · intro e he
+    rcases List.mem_append.mp he with h | h
+    · obtain ⟨g, -, rfl⟩ := List.mem_map.mp h
+      intro c hc; rw [emptyL g] at hc; cases hc
+    · obtain ⟨r, -, rfl⟩ := List.mem_map.mp h
+      show (trace oc (rbody r (u (.inr r)))).2.isSome = true
+      cases r <;> by_cases h : sv u = 0 <;> simp_all [rbody, trace, Prog.callIf]
+  · have hf := (flat_sigmaJ u oc σ (rs u) j).trans (flat_eq u oc j)
+    refine ⟨legalJ j _ hf (grp_len u oc σ j), drivesJ j _ hf, fun c _ ha => ?_⟩
+    cases j <;> simp [CI, pipeAnn, bypAnn, eAnn, cregAnn] at ha
+
+/-- **The family obligation is false**: `e.enq` is called, so `A` is in the order fixed
+    before `u`, and `A`'s calls on `c` differ between skipped values 0 and 1. -/
+theorem not_oblU : ¬ OblU F := by
+  intro h
+  let oc : (j : K) → Outs (CI j).M Nat := fun _ => ⟨fun _ => true, fun _ => 0⟩
+  let w : Wires Empty Nat := ⟨fun e => e.elim, fun e => e.elim⟩
+  obtain ⟨-, τP, σC, -, hσC, hu⟩ := h oc w [] trivial
+    (fun j => by cases j <;> exact aliasOK_of_none _ _ _ (fun _ _ => rfl) (fun _ _ => rfl))
+    (legal_nil _ (fun e => e.elim)) ⟨fun e => e.elim, fun e => e.elim⟩ (fun c hc => by simp at hc)
+  let u0 : F.Step → Nat → Nat := fun _ _ => 0
+  let u1 : F.Step → Nat → Nat := fun _ _ => 1
+  -- `e`'s port is enabled, so some step of the order calls it: only `A` does
+  obtain ⟨x, hx⟩ := ((hσC .e).2.1.en () rfl).mp rfl
+  rw [← (hu u0).2 .e] at hx
+  simp only [sigmaJ, List.mem_flatten, List.mem_map] at hx
+  obtain ⟨l, ⟨e, he, rfl⟩, hm⟩ := hx
+  have hA : e = .inr .A := by
+    rcases e with g | r
+    · rw [emptyL g] at hm; simp [stepTrace, proj] at hm
+    · cases r <;> simp [stepTrace, rbody, trace, Prog.callIf, proj] at hm ⊢
+  subst hA
+  -- the same order induces different calls on `c` at the two assignments
+  have hc := ((hu u0).2 .c).trans ((hu u1).2 .c).symm
+  have := (List.map_inj_left.mp hc) (.inr .A) he
+  simp [stepTrace, rbody, trace, Prog.callIf, proj, u0, u1] at this
+
+end UOrder
+
+/-! ## (o) A generated child's ready output as a site condition; a conditional read
+
+`mkG` has a guarded value method `get` (ready when register `v` holds) and its ready
+output `rdyGet`: an exact port aliased to `get`'s RDY (`rdyRet`), so `mkG` respects the
+alias in every cycle (`aliased_toModuleU`).  `mkU`'s rule reads `g.rdyGet`, then `g.get`
+only under that literal, and writes `t` under it.  Its obligation comes from a certificate
+whose order is fixed before the skipped value (`oblU_of_cert`); the readiness of the
+conditional read comes from the alias (`certAt.rdyR`).  The tree is `Built`. -/
+namespace RdyPort
+
+structure Ops (V : Type) where
+  z : V
+  toB : V → Bool
+
+namespace G
+
+inductive K | v | d deriving DecidableEq
+inductive M | get | rdyGet | put deriving DecidableEq
+
+/-- `get` and `rdyGet` SB `put`; `put` C `put`; `get` guarded, `rdyGet` its RDY. -/
+def ann : Ann M where
+  prec p q := match p, q with
+    | .get, .put | .rdyGet, .put => true
+    | _, _ => false
+  sbr _ _ := false
+  conf p q := match p, q with | .put, .put => true | _, _ => false
+  share m := match m with | .put => false | _ => true
+  hasEn m := match m with | .put => true | _ => false
+  alwaysEn _ := false
+  alwaysRdy m := match m with | .get => false | _ => true
+  rdyRet a p := match a, p with | .get, .rdyGet => true | _, _ => false
+
+abbrev X : Iface := ⟨M, inferInstance, ann⟩
+abbrev CI : K → Iface := fun _ => Reg.X
+
+section
+variable {V : Type} (ops : Ops V)
+
+def body : M → V → Prog K (fun j => (CI j).M) V
+  | .get, _ => .call .d Reg.read ops.z .ret
+  | .rdyGet, _ => .call .v Reg.read ops.z .ret
+  | .put, x => .call .v Reg.write x (fun _ => .call .d Reg.write x (fun _ => .ret ops.z))
+
+/-- `RDY_get` is `v`; `rdyGet` returns `v`, the wire whose Bool reading is that RDY. -/
+def comb (oc : (j : K) → Outs (CI j).M V) (w : Wires M V) : ((j : K) → Wires (CI j).M V) × Outs M V :=
+  (fun _ => regW ops.z (w.en .put) (w.arg .put),
+   ⟨fun m => match m with | .get => ops.toB ((oc .v).ret Reg.read) | _ => true,
+    fun m => match m with | .get => (oc .d).ret Reg.read | .rdyGet => (oc .v).ret Reg.read | .put => ops.z⟩)
+
+abbrev P : Parent V where
+  I := K
+  decI := inferInstance
+  kids := [.v, .d]
+  kids_nodup := by decide
+  kids_all := fun j => by cases j <;> decide
+  CI := CI
+  X := X
+  PR := Empty
+  body := body ops
+  rbody r := r.elim
+  comb := comb ops
+  asm _ _ := True
+  onehot _ _ := True
+  toB := ops.toB
+  exactRet m := match m with | .rdyGet => true | _ => false
+
+variable (oc : (j : K) → Outs (CI j).M V) (w : Wires M V)
+theorem trM_get : trM (P ops) oc w .get = ([⟨.d, (Reg.read, ops.z)⟩], some ((oc .d).ret Reg.read)) := rfl
+theorem trM_rdy : trM (P ops) oc w .rdyGet = ([⟨.v, (Reg.read, ops.z)⟩], some ((oc .v).ret Reg.read)) := rfl
+theorem trM_put : trM (P ops) oc w .put =
+    ([⟨.v, (Reg.write, w.arg .put)⟩, ⟨.d, (Reg.write, w.arg .put)⟩], some ops.z) := rfl
+end
+
+def fp : M ⊕ Empty → List (Σ j, (CI j).M)
+  | .inl .get => [⟨.d, Reg.read⟩]
+  | .inl .rdyGet => [⟨.v, Reg.read⟩]
+  | .inl .put => [⟨.v, Reg.write⟩, ⟨.d, Reg.write⟩]
+  | .inr r => r.elim
+
+def users : (j : K) → (CI j).M → List (M ⊕ Empty)
+  | .v, .rd _ => [.inl .rdyGet]
+  | .d, .rd _ => [.inl .get]
+  | _, .wr _ => [.inl .put]
+
+section
+variable {V : Type} (ops : Ops V)
+
+def cert : Cert (P ops) where
+  rules := []
+  rules_nodup := List.nodup_nil
+  fire _ _ r := r.elim
+  hit _ _ _ r := r.elim
+  fp := fp
+  users := users
+  users_ok s := by
+    rcases s with m | r
+    · cases m <;> simp [fp, users]
+    · exact r.elim
+  fp_ok oc w s c hc := by
+    rcases s with m | r
+    · cases m <;> simp only [trS, trM_get, trM_rdy, trM_put, List.mem_cons, List.not_mem_nil, or_false] at hc <;>
+        (first | (rcases hc with rfl | rfl) | subst hc) <;> simp [fp]
+    · exact r.elim
+  selfAnn m := by cases m <;> simp [X, ann]
+  fireIn _ _ r := r.elim
+  resM oc w m _ _ := by cases m <;> rfl
+  resR _ _ r := r.elim
+  rdyM oc w m _ _ c _ h := by simp [CI, Reg.X, CReg.X, cregAnn] at h
+  rdyR _ _ r := r.elim
+  grpM oc w m _ _ := by
+    intro j a b h
+    cases m <;> cases j <;> simp only [trM_get, trM_rdy, trM_put] at h <;> pj <;>
+      first | exact absurd h pair_sub_single | exact absurd h pair_sub_nil
+  grpR _ _ r := r.elim
+  mm oc w m1 m2 _ _ _ hF := by
+    cases m1 <;> cases m2 <;>
+      first
+      | (exfalso; simp [Ann.Follow, X, ann] at hF; done)
+      | (intro j a ha b hb; cases j <;> simp only [trM_get, trM_rdy, trM_put] at ha hb <;> pj <;>
+          subst ha hb <;> simp [CI, Reg.X, CReg.X, cregAnn, Ann.Follow])
+  mmg oc w m1 m2 _ _ _ hF := by
+    cases m1 <;> cases m2 <;>
+      first
+      | (exfalso; simp [Ann.Group, Ann.Follow, X, ann] at hF; done)
+      | (intro j a ha b hb; cases j <;> simp only [trM_get, trM_rdy, trM_put] at ha hb <;> pj <;>
+          subst ha hb <;> simp [CI, Reg.X, CReg.X, cregAnn, Ann.Follow, Ann.Group])
+  h1 _ _ _ r := r.elim
+  h2 _ _ _ r := r.elim
+  h3 _ _ _ _ r := r.elim
+  h4 _ _ r := r.elim
+  en oc w j cm _ hcm := by
+    cases cm with
+    | rd i => simp [CI, Reg.X, CReg.X, cregAnn] at hcm
+    | wr i =>
+      rw [fin1 i]
+      cases j <;> simp [users, comb, regW, On, Calls, trS, trM_put, called, X, ann, proj]
+  enV oc w m _ h1 h2 _ c hc := by
+    cases m <;> simp only [trM_get, trM_rdy, trM_put, List.mem_cons, List.not_mem_nil, or_false] at hc <;>
+      simp [X, ann] at h1 <;> subst hc <;> rfl
+  arg oc w j cm _ s hs _ x hx := by
+    cases j <;> cases cm <;> simp only [users, List.mem_cons, List.not_mem_nil, or_false] at hs <;> subst hs <;>
+      simp only [trS, trM_get, trM_rdy, trM_put] at hx <;> pj <;> (rcases hx with ⟨-, rfl⟩; rfl)
+  alw oc w j cm _ h := by simp [CI, Reg.X, CReg.X, cregAnn] at h
+  onehot _ _ _ := trivial
+
+theorem obl : Obl (P ops) := obl_of_cert (P ops) (cert ops)
+
+def acyc : Acyc (P ops) :=
+  Acyc.ofMoore (P ops) (fun _ _ => []) (fun _ p => match p with | .wr _ => [.put] | _ => [])
+    (fun q => match q with
+      | .get => [⟨.v, Reg.read⟩, ⟨.d, Reg.read⟩] | .rdyGet => [⟨.v, Reg.read⟩] | .put => [])
+    (fun _ => [])
+    (by intro oc oc' w w' j p hD hW; cases j <;> cases p <;> dep <;> simp [comb, regW, *])
+    (by intro oc oc' w w' q hD hW; cases q <;> dep <;> simp [comb, *])
+    (fun j p q => reg_nopath p q) (fun _ _ h => by simp at h)
+
+abbrev impl : (j : K) → ModuleU V (CI j) := fun _ => Reg.toU
+abbrev mod : ModuleU V X := (P ops).toU.toModuleU impl
+
+theorem built : Built X (mod ops) :=
+  Built.node (P ops).toU impl (fun _ => Built.leaf _ reg_realizes (creg_causal 1))
+    (fun _ => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl)) (oblU_of_obl _ (obl ops)) (acyc ops).toU
+
+/-- **`mkG` respects its ready-output alias in every hardware cycle.** -/
+theorem aliased (toB : V → Bool) (h : toB = ops.toB) : Aliased toB (mod ops).hwm :=
+  aliased_toModuleU (P ops).toU impl toB (fun p q hpq => by cases p <;> cases q <;> cases hpq)
+    (fun a p hap => by
+      cases a <;> cases p <;> (first | exact ⟨rfl, fun oc w => by subst h; rfl⟩ | cases hap))
+end
+end G
+
+namespace U
+
+inductive K | g | t deriving DecidableEq
+abbrev CI : K → Iface
+  | .g => G.X
+  | .t => Reg.X
+inductive R | cp deriving DecidableEq
+
+section
+variable {V : Type} (ops : Ops V)
+
+/-- rule `r`: `if (g.rdyGet) t <= g.get`; the read of `g.get` taken only under its ready literal. -/
+def rbody : R → (Nat → V) → Prog K (fun j => (CI j).M) V
+  | .cp, v => .call .g G.M.rdyGet ops.z (fun c => Prog.callIf (ops.toB c) .g G.M.get ops.z (v 1)
+      (fun x => Prog.callIf (ops.toB c) .t Reg.write x (v 2) (fun _ => .ret ops.z)))
+
+def comb (oc : (j : K) → Outs (CI j).M V) (w : Wires Empty V) :
+    ((j : K) → Wires (CI j).M V) × Outs Empty V :=
+  (fun j => match j with
+    | .g => ⟨fun _ => false, fun _ => ops.z⟩
+    | .t => regW ops.z (ops.toB ((oc .g).ret G.M.rdyGet)) ((oc .g).ret G.M.get),
+   ⟨fun e => e.elim, fun e => e.elim⟩)
+
+abbrev F : ParentU V where
+  I := K
+  decI := inferInstance
+  kids := [.g, .t]
+  kids_nodup := by decide
+  kids_all := fun j => by cases j <;> decide
+  CI := CI
+  X := NoX
+  PR := R
+  body m _ _ := m.elim
+  rbody := rbody ops
+  comb := comb ops
+  asm _ _ := True
+  onehot _ _ := True
+  toB := ops.toB
+
+/-- The rule's calls at every skipped value: the literal, then the read and the write under it. -/
+def calls (oc : (j : K) → Outs (CI j).M V) : List (Σ j, (CI j).M × V) :=
+  ⟨.g, (G.M.rdyGet, ops.z)⟩ :: (if ops.toB ((oc .g).ret G.M.rdyGet) then
+    [⟨.g, (G.M.get, ops.z)⟩, ⟨.t, (Reg.write, (oc .g).ret G.M.get)⟩] else [])
+
+theorem trR_r (u : (F ops).Step → Nat → V) (oc : (j : K) → Outs (CI j).M V) :
+    trR ((F ops).at u) oc .cp = (calls ops oc, some ops.z) := by
+  simp only [trR, ParentU.at, rbody, calls]
+  cases h : ops.toB ((oc .g).ret G.M.rdyGet) <;> simp [trace, Prog.callIf, h]
+end
+
+def fp : Empty ⊕ R → List (Σ j, (CI j).M)
+  | .inl m => m.elim
+  | .inr .cp => [⟨.g, G.M.rdyGet⟩, ⟨.g, G.M.get⟩, ⟨.t, Reg.write⟩]
+
+def users : (j : K) → (CI j).M → List (Empty ⊕ R)
+  | .g, .rdyGet => [.inr .cp]
+  | .g, .get => [.inr .cp]
+  | .g, .put => []
+  | .t, .rd _ => []
+  | .t, .wr _ => [.inr .cp]
+
+section
+variable {V : Type} (ops : Ops V)
+
+/-- The certificate at skipped values `u`; its rules, firing and hits do not mention `u`. -/
+def certAt (u : (F ops).Step → Nat → V) : Cert ((F ops).at u) where
+  rules := [.cp]
+  rules_nodup := by simp
+  fire _ _ _ := true
+  hit _ _ m _ := m.elim
+  fp := fp
+  users := users
+  users_ok s := by
+    rcases s with m | r
+    · exact m.elim
+    · cases r; simp [fp, users]
+  fp_ok oc w s c hc := by
+    rcases s with m | r
+    · exact m.elim
+    · cases r
+      simp only [trS, trR_r, calls] at hc
+      split at hc <;> simp only [List.mem_cons, List.not_mem_nil, or_false] at hc <;>
+        (try rcases hc with rfl | rfl | rfl) <;> (try subst hc) <;> simp [fp]
+  selfAnn m := m.elim
+  fireIn _ _ r _ := by cases r; simp
+  resM _ _ m := m.elim
+  resR oc w r _ _ := by cases r; simp [trR_r]
+  rdyM _ _ m := m.elim
+  grpM _ _ m := m.elim
+  rdyR oc w r hE _ c hc h := by
+    cases r
+    obtain ⟨-, hal, -⟩ := hE
+    simp only [trR_r, calls] at hc
+    by_cases hb : ops.toB ((oc .g).ret G.M.rdyGet) = true
+    · simp only [hb, ↓reduceIte, List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl | rfl
+      · simp [G.X, G.ann] at h
+      · -- the conditional read's readiness: its ready literal and the child's alias
+        show (oc .g).rdy G.M.get = true
+        rw [(hal .g).2 G.M.get G.M.rdyGet rfl]
+        exact hb
+      · simp [CI, Reg.X, CReg.X, cregAnn] at h
+    · simp only [hb, Bool.false_eq_true, ↓reduceIte, List.mem_cons, List.not_mem_nil, or_false] at hc
+      subst hc
+      simp [G.X, G.ann] at h
+  grpR oc w r _ _ := by
+    cases r
+    intro j a b h
+    simp only [trR_r, calls] at h
+    cases j <;> by_cases hb : ops.toB ((oc .g).ret G.M.rdyGet) = true <;>
+      simp only [hb, Bool.false_eq_true, ↓reduceIte] at h <;> pj <;>
+      first
+      | exact absurd h pair_sub_single
+      | exact absurd h pair_sub_nil
+      | (obtain ⟨rfl, rfl⟩ := pair_sub_two h; simp [Ann.Group, Ann.Follow, G.X, G.ann])
+  mm _ _ m := m.elim
+  mmg _ _ m := m.elim
+  h1 _ _ m := m.elim
+  h2 _ _ m := m.elim
+  h3 _ _ m := m.elim
+  h4 oc w r1 r2 _ _ _ hne := by cases r1; cases r2; exact absurd rfl hne
+  en oc w j cm _ hcm := by
+    cases j
+    · cases cm <;> simp [G.X, G.ann] at hcm
+      simp [users, comb]
+    · cases cm with
+      | rd i => simp [CI, Reg.X, CReg.X, cregAnn] at hcm
+      | wr i =>
+        rw [fin1 i]
+        by_cases hb : ops.toB ((oc .g).ret G.M.rdyGet) = true <;>
+          simp [users, comb, regW, On, Calls, trS, trR_r, calls, hb, proj]
+  enV _ _ m := m.elim
+  arg oc w j cm _ s hs _ x hx := by
+    cases j <;> cases cm <;> simp only [users, List.mem_cons, List.not_mem_nil, or_false] at hs <;>
+      subst hs <;> simp only [trS, trR_r, calls] at hx <;>
+      by_cases hb : ops.toB ((oc .g).ret G.M.rdyGet) = true <;>
+      simp only [hb, Bool.false_eq_true, ↓reduceIte] at hx <;> pj <;>
+      first | (rcases hx with ⟨-, rfl⟩; rfl) | (subst hx; rfl) | rfl | simp_all [comb, regW]
+  alw oc w j cm _ h := by cases j <;> simp [G.X, G.ann, CI, Reg.X, CReg.X, cregAnn] at h
+  onehot _ _ _ := trivial
+
+/-- **The certificate fixed before `u`**: one rule list, firing and hits for every `u`. -/
+def cert : CertU (F ops) where
+  rules := [.cp]
+  fire _ _ _ := true
+  hit _ _ m _ := m.elim
+  cert u := certAt ops u
+  rules_eq _ := rfl
+  fire_eq _ := rfl
+  hit_eq _ := rfl
+  trU oc w s u u' _ _ := by
+    rcases s with m | r
+    · exact m.elim
+    · cases r; simp only [trS, trR_r]
+
+theorem obl [Inhabited V] : OblU (F ops) := oblU_of_cert (F ops) (cert ops)
+
+def acyc : Acyc (F ops).base :=
+  Acyc.ofMoore (F ops).base
+    (fun j p => match j, p with | .t, .wr _ => [⟨.g, G.M.rdyGet⟩, ⟨.g, G.M.get⟩] | _, _ => [])
+    (fun _ _ => []) (fun q => q.elim) (fun q => q.elim)
+    (by intro oc oc' w w' j p hD hW; cases j <;> cases p <;> dep <;> simp [comb, regW, *])
+    (fun _ _ _ _ q => q.elim)
+    (fun j p q => by cases j <;> first | exact reg_nopath p q | rfl) (fun q => q.elim)
+
+abbrev impl : (j : K) → ModuleU V (CI j)
+  | .g => G.mod ops
+  | .t => Reg.toU
+
+abbrev mod : ModuleU V NoX := (F ops).toModuleU (impl ops)
+
+theorem built [Inhabited V] : Built NoX (mod ops) :=
+  Built.node (F ops) (impl ops) (fun j => match j with
+    | .g => G.built ops
+    | .t => Built.leaf _ reg_realizes (creg_causal 1))
+    (fun j => match j with
+      | .g => G.aliased ops ops.toB rfl
+      | .t => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl))
+    (obl ops) (acyc ops)
+
+/-- **`mkU` realizes its contract, its run fixed before its and `mkG`'s skipped values.** -/
+theorem top [Inhabited V] : RealizesU (mod ops) ∧
+    ∀ s w, (mod ops).clean s = s → ∃ o s' g, (mod ops).hw s w o s' g := (built ops).top
+end
+end U
+end RdyPort
+
 
 end Ex
 
@@ -2843,3 +3418,8 @@ end Ex
 #print axioms Ex.ShowCond.not_obl
 #print axioms Ex.TaskOrder.not_obl
 #print axioms Ex.TaskRev.not_realizes
+#print axioms Ex.UOrder.obl_each
+#print axioms Ex.UOrder.not_oblU
+#print axioms Ex.RdyPort.G.aliased
+#print axioms Ex.RdyPort.U.obl
+#print axioms Ex.RdyPort.U.top

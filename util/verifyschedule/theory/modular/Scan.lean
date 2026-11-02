@@ -321,6 +321,8 @@ structure Design where
   exMR : Tab Nat
   /-- by rule: earlier rules whose pair has a dynamic `OkT` proof -/
   escR : Tab Nat
+  /-- rule codes for the `ur` bit sets, `exR` and `escR` (rules in no mask may share one code) -/
+  rc : Nat → Nat := fun i => i
 
 namespace Design
 variable (D : Design)
@@ -369,12 +371,14 @@ structure Acc where
   ph : Nat
   bm : Nat
 
-def bumpR (g i : Nat) (o : SS) : SS := ⟨Nat.add g 1, o.um, Nat.lor o.ur (Nat.pow 2 i), o.hu⟩
+/-- Pass 1 records only the step; the rule's code goes in with its hit set (pass 2), so `ur`
+    holds earlier rules only and needs no bit for the rule itself. -/
+def bumpR (g : Nat) (o : SS) : SS := ⟨Nat.add g 1, o.um, o.ur, o.hu⟩
 
-def rNew (i : Nat) (t : ST) (e : Ent) : ST := Tr.set D.d t e.slot (bumpR (Nat.add D.nM i) i (gt D.d t e.slot))
+def rNew (i : Nat) (t : ST) (e : Ent) : ST := Tr.set D.d t e.slot (bumpR (Nat.add D.nM i) (gt D.d t e.slot))
 
 def rChk (i : Nat) (e : Ent) (t' : ST) : Bool :=
-  subB (D.orAt t' e.1 SS.ur (D.kc e.2.1 e.2.2).cin) (Nat.lor (Nat.lor (D.exR.get i) (D.escR.get i)) (Nat.pow 2 i))
+  subB (D.orAt t' e.1 SS.ur (D.kc e.2.1 e.2.2).cin) (Nat.lor (D.exR.get i) (D.escR.get i))
 
 def rAcc (a : Acc) (e : Ent) (t' : ST) : Acc :=
   ⟨t', Nat.lor a.dh (D.orAt t' e.1 SS.um (D.kc e.2.1 e.2.2).cout), Nat.lor a.ph (D.orAt t' e.1 SS.hu (D.kc e.2.1 e.2.2).cout),
@@ -393,12 +397,12 @@ def rEnts (i : Nat) : List Ent → Acc → Option Acc
     | some a' => rEnts i es a'
     | none => none
 
-def bumpH (H : Nat) (o : SS) : SS := ⟨o.last, o.um, o.ur, Nat.lor o.hu H⟩
+def bumpH (c H : Nat) (o : SS) : SS := ⟨o.last, o.um, Nat.lor o.ur (Nat.pow 2 c), Nat.lor o.hu H⟩
 
-/-- Pass 2: the rule's hit set into its slots. -/
-def setHu (H : Nat) : List Ent → ST → ST
+/-- Pass 2: the rule's code and hit set into its slots. -/
+def setHu (c H : Nat) : List Ent → ST → ST
   | [], t => t
-  | e :: es, t => setHu H es (Tr.set D.d t e.slot (bumpH H (gt D.d t e.slot)))
+  | e :: es, t => setHu c H es (Tr.set D.d t e.slot (bumpH c H (gt D.d t e.slot)))
 
 /-- `h3`: every method hitting the rule is exported SBR before, or C with,
     every method `m'` the rule may not follow. -/
@@ -412,7 +416,7 @@ def rStep (i : Nat) (t : ST) : Option ST :=
   match D.rEnts i (D.fpR.get i) ⟨t, 0, 0, 0⟩ with
   | none => none
   | some a =>
-    bif D.h3chk (D.hitOf i a) (clr a.bm (D.exMR.get i)) then some (D.setHu (D.hitOf i a) (D.fpR.get i) a.t)
+    bif D.h3chk (D.hitOf i a) (clr a.bm (D.exMR.get i)) then some (D.setHu (D.rc i) (D.hitOf i a) (D.fpR.get i) a.t)
     else none
 
 def mStep (k : Nat) (t : ST) : Option ST := D.mEnts k (D.fpM.get k) t
@@ -491,8 +495,8 @@ theorem le_set (d : Nat) (t : ST) (k : Nat) (v : SS) (h : SS.le (gt d t k) v) : 
   · exact SS.le_refl _
 
 theorem le_bumpM (k : Nat) (o : SS) : SS.le o (Design.bumpM k o) := ⟨Sub.or_l _ _, Sub.refl _, Sub.refl _⟩
-theorem le_bumpR (g i : Nat) (o : SS) : SS.le o (Design.bumpR g i o) := ⟨Sub.refl _, Sub.or_l _ _, Sub.refl _⟩
-theorem le_bumpH (H : Nat) (o : SS) : SS.le o (Design.bumpH H o) := ⟨Sub.refl _, Sub.refl _, Sub.or_l _ _⟩
+theorem le_bumpR (g : Nat) (o : SS) : SS.le o (Design.bumpR g o) := SS.le_refl _
+theorem le_bumpH (c H : Nat) (o : SS) : SS.le o (Design.bumpH c H o) := ⟨Sub.refl _, Sub.or_l _ _, Sub.or_l _ _⟩
 
 /-- `[x, y] <+ l` splits `l` at `y` with `x` before it. -/
 theorem sub_pair_split {β : Type} {x y : β} : ∀ {l : List β}, [x, y] <+ l → ∃ pre post, l = pre ++ y :: post ∧ x ∈ pre
@@ -650,20 +654,19 @@ theorem AccLe.trans {d : Nat} {a b c : Acc} (h1 : AccLe d a b) (h2 : AccLe d b c
 
 theorem rEnt_le {i : Nat} {a a' : Acc} {e : Ent} (h : D.rEnt i a e = some a') : AccLe D.d a a' := by
   rw [(D.rEnt_spec h).2.2]
-  exact ⟨le_set _ _ _ _ (le_bumpR _ _ _), Sub.or_l _ _, Sub.or_l _ _, Sub.or_l _ _⟩
+  exact ⟨le_set _ _ _ _ (le_bumpR _ _), Sub.or_l _ _, Sub.or_l _ _, Sub.or_l _ _⟩
 
-def MarkR (g i : Nat) (o : SS) : Prop := o.last = g + 1 ∧ o.ur.testBit i = true
+def MarkR (g : Nat) (o : SS) : Prop := o.last = g + 1
 
-theorem markR_bump (g i : Nat) (o : SS) : MarkR g i (bumpR g i o) :=
-  ⟨rfl, testBit_or_r (by rw [testBit_pow]; simp)⟩
+theorem markR_bump (g : Nat) (o : SS) : MarkR g (bumpR g o) := rfl
 
-theorem rEnt_keep {i : Nat} {Q : SS → Prop} (hQ : ∀ o, Q (bumpR (D.nM + i) i o)) {a a' : Acc} {e : Ent}
+theorem rEnt_keep {i : Nat} {Q : SS → Prop} (hQ : ∀ o, Q (bumpR (D.nM + i) o)) {a a' : Acc} {e : Ent}
     (h : D.rEnt i a e = some a') (s : Nat) (hs : Q (gt D.d a.t s)) : Q (gt D.d a'.t s) := by
   rw [(D.rEnt_spec h).2.2]; exact keep_set _ _ _ _ _ hs (hQ _)
 
 theorem rEnt_mark {i : Nat} {a a' : Acc} {e : Ent} (h : D.rEnt i a e = some a') :
-    MarkR (D.nM + i) i (gt D.d a'.t e.slot) := by
-  rw [(D.rEnt_spec h).2.2]; unfold rAcc rNew; dsimp only; rw [gt_set_self]; exact markR_bump _ _ _
+    MarkR (D.nM + i) (gt D.d a'.t e.slot) := by
+  rw [(D.rEnt_spec h).2.2]; unfold rAcc rNew; dsimp only; rw [gt_set_self]; exact markR_bump _ _
 
 theorem rEnts_split {i : Nat} : ∀ (pre : List Ent) (e : Ent) (post : List Ent) (a a'' : Acc),
     D.rEnts i (pre ++ e :: post) a = some a'' →
@@ -690,7 +693,7 @@ theorem rEnts_le {i : Nat} : ∀ (es : List Ent) (a a' : Acc), D.rEnts i es a = 
     | none => rw [he] at h; cases h
     | some a1 => rw [he] at h; exact (D.rEnt_le he).trans (rEnts_le es a1 a' h)
 
-theorem rEnts_keep {i : Nat} {Q : SS → Prop} (hQ : ∀ o, Q (bumpR (D.nM + i) i o)) :
+theorem rEnts_keep {i : Nat} {Q : SS → Prop} (hQ : ∀ o, Q (bumpR (D.nM + i) o)) :
     ∀ (es : List Ent) (a a' : Acc), D.rEnts i es a = some a' → ∀ s, Q (gt D.d a.t s) → Q (gt D.d a'.t s)
   | [], a, a', h, s, hs => by simp only [rEnts, Option.some.injEq] at h; subst h; exact hs
   | e :: es, a, a', h, s, hs => by
@@ -700,7 +703,7 @@ theorem rEnts_keep {i : Nat} {Q : SS → Prop} (hQ : ∀ o, Q (bumpR (D.nM + i) 
     | some a1 => rw [he] at h; exact rEnts_keep hQ es a1 a' h s (D.rEnt_keep hQ he s hs)
 
 theorem rEnts_mark {i : Nat} : ∀ (es : List Ent) (a a' : Acc), D.rEnts i es a = some a' →
-    ∀ e ∈ es, MarkR (D.nM + i) i (gt D.d a'.t e.slot)
+    ∀ e ∈ es, MarkR (D.nM + i) (gt D.d a'.t e.slot)
   | [], _, _, _, e, he => by cases he
   | x :: es, a, a', h, e, he => by
     simp only [rEnts] at h
@@ -709,31 +712,33 @@ theorem rEnts_mark {i : Nat} : ∀ (es : List Ent) (a a' : Acc), D.rEnts i es a 
     | some a1 =>
       rw [hx] at h
       rcases List.mem_cons.mp he with rfl | he'
-      · exact D.rEnts_keep (markR_bump _ i) es a1 a' h _ (D.rEnt_mark hx)
+      · exact D.rEnts_keep (markR_bump _) es a1 a' h _ (D.rEnt_mark hx)
       · exact rEnts_mark es a1 a' h e he'
 
-theorem setHu_le (H : Nat) : ∀ (es : List Ent) (t : ST), Le D.d t (D.setHu H es t)
+theorem setHu_le (c H : Nat) : ∀ (es : List Ent) (t : ST), Le D.d t (D.setHu c H es t)
   | [], _ => Le.refl _ _
-  | _ :: es, _ => (le_set _ _ _ _ (le_bumpH _ _)).trans (setHu_le H es _)
+  | _ :: es, _ => (le_set _ _ _ _ (le_bumpH _ _ _)).trans (setHu_le c H es _)
 
-theorem setHu_keep {Q : SS → Prop} (H : Nat) (hQ : ∀ o, Q o → Q (bumpH H o)) :
-    ∀ (es : List Ent) (t : ST), (∀ s, Q (gt D.d t s)) → ∀ s, Q (gt D.d (D.setHu H es t) s)
+theorem setHu_keep {Q : SS → Prop} (c H : Nat) (hQ : ∀ o, Q o → Q (bumpH c H o)) :
+    ∀ (es : List Ent) (t : ST), (∀ s, Q (gt D.d t s)) → ∀ s, Q (gt D.d (D.setHu c H es t) s)
   | [], _, h, s => h s
-  | _ :: es, _, h, s => setHu_keep H hQ es _ (fun s' => keep_set _ _ _ _ _ (h s') (hQ _ (h _))) s
+  | _ :: es, _, h, s => setHu_keep c H hQ es _ (fun s' => keep_set _ _ _ _ _ (h s') (hQ _ (h _))) s
 
-theorem setHu_mark (H : Nat) : ∀ (es : List Ent) (t : ST), ∀ e ∈ es, Sub H (gt D.d (D.setHu H es t) e.slot).hu
+theorem setHu_mark (c H : Nat) : ∀ (es : List Ent) (t : ST), ∀ e ∈ es,
+    (gt D.d (D.setHu c H es t) e.slot).ur.testBit c = true ∧ Sub H (gt D.d (D.setHu c H es t) e.slot).hu
   | [], _, _, he => by cases he
   | x :: es, t, e, he => by
     rcases List.mem_cons.mp he with rfl | he'
-    · have h0 : Sub H (gt D.d (Tr.set D.d t e.slot (bumpH H (gt D.d t e.slot))) e.slot).hu := by
-        rw [gt_set_self]; exact Sub.or_r _ _
-      have := (D.setHu_le H es (Tr.set D.d t e.slot (bumpH H (gt D.d t e.slot)))) e.slot
-      exact h0.trans this.2.2
-    · exact setHu_mark H es _ e he'
+    · have h0 : (gt D.d (Tr.set D.d t e.slot (bumpH c H (gt D.d t e.slot))) e.slot).ur.testBit c = true ∧
+          Sub H (gt D.d (Tr.set D.d t e.slot (bumpH c H (gt D.d t e.slot))) e.slot).hu := by
+        rw [gt_set_self]; exact ⟨testBit_or_r (by rw [testBit_pow]; simp), Sub.or_r _ _⟩
+      have := (D.setHu_le c H es (Tr.set D.d t e.slot (bumpH c H (gt D.d t e.slot)))) e.slot
+      exact ⟨this.2.1 c h0.1, h0.2.trans this.2.2⟩
+    · exact setHu_mark c H es _ e he'
 
 theorem rStep_spec {i : Nat} {t t' : ST} (h : D.rStep i t = some t') :
     ∃ a, D.rEnts i (D.fpR.get i) ⟨t, 0, 0, 0⟩ = some a ∧ D.h3chk (D.hitOf i a) (clr a.bm (D.exMR.get i)) = true ∧
-      t' = D.setHu (D.hitOf i a) (D.fpR.get i) a.t := by
+      t' = D.setHu (D.rc i) (D.hitOf i a) (D.fpR.get i) a.t := by
   unfold rStep at h
   cases ha : D.rEnts i (D.fpR.get i) ⟨t, 0, 0, 0⟩ with
   | none => rw [ha] at h; cases h
@@ -766,7 +771,7 @@ theorem st_succ {g : Nat} {t' : ST} (h : D.F g (D.st g) = some t') : D.st (g + 1
 
 structure Inv (g : Nat) (t : ST) : Prop where
   um : ∀ m, m < g → m < D.nM → ∀ e ∈ D.fpM.get m, (gt D.d t e.slot).um.testBit m = true
-  ur : ∀ i, D.nM + i < g → ∀ e ∈ D.fpR.get i, (gt D.d t e.slot).ur.testBit i = true
+  ur : ∀ i, D.nM + i < g → ∀ e ∈ D.fpR.get i, (gt D.d t e.slot).ur.testBit (D.rc i) = true
   hu : ∀ i, D.nM + i < g → ∀ e ∈ D.fpR.get i, Sub (D.hitS i) (gt D.d t e.slot).hu
   last : ∀ s, (gt D.d t s).last ≤ g
 
@@ -796,16 +801,16 @@ theorem inv_succ {g : Nat} (hI : D.Inv g (D.st g)) (hok : (D.F g (D.st g)).isSom
     · rw [D.F_ge hg] at hF
       obtain ⟨a, ha, -, rfl⟩ := D.rStep_spec hF
       have hle1 := (D.rEnts_le _ _ _ ha).1
-      have hle2 := D.setHu_le (D.hitOf (g - D.nM) a) (D.fpR.get (g - D.nM)) a.t
+      have hle2 := D.setHu_le (D.rc (g - D.nM)) (D.hitOf (g - D.nM) a) (D.fpR.get (g - D.nM)) a.t
       have hle : Le D.d (D.st g) _ := hle1.trans hle2
       have hg' : D.nM + (g - D.nM) = g := by omega
       refine ⟨fun m hm hmM e he => (hle e.slot).1 m (hI.um m (by omega) hmM e he), fun i hi e he => ?_,
         fun i hi e he => ?_, ?_⟩
       · by_cases e' : D.nM + i < g
-        · exact (hle e.slot).2.1 i (hI.ur i e' e he)
+        · exact (hle e.slot).2.1 _ (hI.ur i e' e he)
         · have : i = g - D.nM := by omega
           subst this
-          exact (hle2 e.slot).2.1 _ (D.rEnts_mark _ _ _ ha e he).2
+          exact (D.setHu_mark _ _ _ _ e he).1
       · by_cases e' : D.nM + i < g
         · exact (hI.hu i e' e he).trans (hle e.slot).2.2
         · have : i = g - D.nM := by omega
@@ -813,11 +818,11 @@ theorem inv_succ {g : Nat} (hI : D.Inv g (D.st g)) (hok : (D.F g (D.st g)).isSom
           have hh : D.hitS (g - D.nM) = D.hitOf (g - D.nM) a := by
             unfold hitS; rw [hg', ha]
           rw [hh]
-          exact D.setHu_mark _ _ _ e he
+          exact (D.setHu_mark _ _ _ _ e he).2
       · have h1 : ∀ s, (gt D.d a.t s).last ≤ g + 1 := fun s =>
           D.rEnts_keep (Q := fun o => o.last ≤ g + 1) (fun o => by show D.nM + (g - D.nM) + 1 ≤ g + 1; omega)
             _ _ _ ha s (Nat.le_succ_of_le (hI.last s))
-        exact D.setHu_keep (Q := fun o => o.last ≤ g + 1) _ (fun o h => h) _ _ h1
+        exact D.setHu_keep (Q := fun o => o.last ≤ g + 1) _ _ (fun o h => h) _ _ h1
 
 theorem inv_st (hok : D.Ok) : ∀ g, g ≤ D.n → D.Inv g (D.st g)
   | 0, _ => D.inv_zero
@@ -856,7 +861,7 @@ theorem rEnt_at (hok : D.Ok) {i : Nat} (hi : i < D.nR) {pre post : List Ent} {e 
     (hl : D.fpR.get i = pre ++ e :: post) :
     ∃ ap ap' a, D.rEnt i ap e = some ap' ∧ Le D.d (D.st (D.nM + i)) ap.t ∧ AccLe D.d ap' a ∧
       D.hitS i = D.hitOf i a ∧ D.h3chk (D.hitOf i a) (clr a.bm (D.exMR.get i)) = true ∧
-      ∀ x ∈ pre, MarkR (D.nM + i) i (gt D.d ap.t x.slot) := by
+      ∀ x ∈ pre, MarkR (D.nM + i) (gt D.d ap.t x.slot) := by
   obtain ⟨a, ha, hh, hc⟩ := D.rStep_at hok hi
   rw [hl] at ha
   obtain ⟨ap, ap', h1, h2, h3⟩ := D.rEnts_split pre e post _ _ ha
@@ -903,7 +908,7 @@ theorem grpR_static (hok : D.Ok) {i : Nat} (hi : i < D.nR) {b κ c1 c2 : Nat}
   intro hc
   obtain ⟨pre, post, hl, hx⟩ := sub_pair_split h
   obtain ⟨ap, ap', a, h2, -, -, -, -, hm⟩ := D.rEnt_at hok hi hl
-  exact D.noneLast_spec (D.rEnt_spec h2).1 hc (hm _ hx).1
+  exact D.noneLast_spec (D.rEnt_spec h2).1 hc (hm _ hx)
 
 /-- Two methods' uses in conflict: the methods are exported so, or exclusive.
     (`selI`, `selO`, `TI`, `TO`: the `Follow` tables, or the `Group` ones.) -/
@@ -1000,19 +1005,14 @@ theorem mm_static_out (hok : D.Ok) (selO : KC → List Nat) (TO : Tab Nat)
     the two are exclusive, or escaped. -/
 theorem h4_static (hok : D.Ok) {i1 i2 : Nat} (hlt : i1 < i2) (h2 : i2 < D.nR) {b κ c1 c2 : Nat}
     (e1 : (b, κ, c1) ∈ D.fpR.get i1) (e2 : (b, κ, c2) ∈ D.fpR.get i2) (hin : c1 ∈ (D.kc κ c2).cin) :
-    (D.exR.get i2).testBit i1 = true ∨ (D.escR.get i2).testBit i1 = true := by
+    (D.exR.get i2).testBit (D.rc i1) = true ∨ (D.escR.get i2).testBit (D.rc i1) = true := by
   obtain ⟨pre, post, hl⟩ := List.append_of_mem e2
   obtain ⟨ap, ap', a, h2', hle, -⟩ := D.rEnt_at hok h2 hl
   obtain ⟨-, hc, -⟩ := D.rEnt_spec h2'
-  have hb : (gt D.d (D.rNew i2 ap.t (b, κ, c2)) (b + c1)).ur.testBit i1 = true :=
-    ((hle.trans (le_set _ _ _ _ (le_bumpR _ _ _))) (b + c1)).2.1 i1
+  have hb : (gt D.d (D.rNew i2 ap.t (b, κ, c2)) (b + c1)).ur.testBit (D.rc i1) = true :=
+    ((hle.trans (le_set _ _ _ _ (le_bumpR _ _))) (b + c1)).2.1 _
       ((D.inv_st hok (D.nM + i2) (by unfold n; omega)).ur i1 (by omega) _ e1)
-  have := testBit_of_subB hc (D.testBit_orAt _ _ SS.ur hin hb)
-  rcases testBit_or_cases this with h | h
-  · rcases testBit_or_cases h with h | h
-    · exact .inl h
-    · exact .inr h
-  · rw [testBit_pow] at h; simp at h; omega
+  exact testBit_or_cases (testBit_of_subB hc (D.testBit_orAt _ _ SS.ur hin hb))
 
 /-- A rule's use a method's use may not follow: the method hits the rule. -/
 theorem h1_static (hok : D.Ok) {m i : Nat} (hm : m < D.nM) (hi : i < D.nR) {b κ c1 c2 : Nat}
@@ -1022,7 +1022,7 @@ theorem h1_static (hok : D.Ok) {m i : Nat} (hm : m < D.nM) (hi : i < D.nR) {b κ
   obtain ⟨ap, ap', a, h2', hle, hfin, hh, -⟩ := D.rEnt_at hok hi hl
   obtain ⟨-, -, he⟩ := D.rEnt_spec h2'
   have hb : (gt D.d (D.rNew i ap.t (b, κ, c1)) (b + c2)).um.testBit m = true :=
-    ((hle.trans (le_set _ _ _ _ (le_bumpR _ _ _))) (b + c2)).1 m
+    ((hle.trans (le_set _ _ _ _ (le_bumpR _ _))) (b + c2)).1 m
       ((D.inv_st hok (D.nM + i) (by unfold n; omega)).um m (by omega) hm _ e2)
   have hdh : a.dh.testBit m = true := by
     apply hfin.2.1
@@ -1043,7 +1043,7 @@ theorem h2_static (hok : D.Ok) {i1 i2 : Nat} (hlt : i1 < i2) (h2 : i2 < D.nR) {b
   obtain ⟨ap, ap', a, h2', hle, hfin, hh, -⟩ := D.rEnt_at hok h2 hl
   obtain ⟨-, -, he⟩ := D.rEnt_spec h2'
   have hb : (gt D.d (D.rNew i2 ap.t (b, κ, c2)) (b + c1)).hu.testBit m = true :=
-    ((hle.trans (le_set _ _ _ _ (le_bumpR _ _ _))) (b + c1)).2.2 m
+    ((hle.trans (le_set _ _ _ _ (le_bumpR _ _))) (b + c1)).2.2 m
       ((D.inv_st hok (D.nM + i2) (by unfold n; omega)).hu i1 (by omega) _ e1 m hm)
   have hph : a.ph.testBit m = true := by
     apply hfin.2.2.1
@@ -1065,7 +1065,7 @@ theorem h3_static (hok : D.Ok) {m' i : Nat} (hm' : m' < D.nM) (hi : i < D.nR) {b
   obtain ⟨ap, ap', a, h2', hle, hfin, hh, hc, -⟩ := D.rEnt_at hok hi hl
   obtain ⟨-, -, he⟩ := D.rEnt_spec h2'
   have hb : (gt D.d (D.rNew i ap.t (b, κ, c2)) (b + c1)).um.testBit m' = true :=
-    ((hle.trans (le_set _ _ _ _ (le_bumpR _ _ _))) (b + c1)).1 m'
+    ((hle.trans (le_set _ _ _ _ (le_bumpR _ _))) (b + c1)).1 m'
       ((D.inv_st hok (D.nM + i) (by unfold n; omega)).um m' (by omega) hm' _ e1)
   have hbm : a.bm.testBit m' = true := by
     apply hfin.2.2.2
@@ -1248,11 +1248,11 @@ structure GlueOK (D : Design) (G : Glue P D)
     ((P.X.ann.prec m m' = true ∧ P.X.ann.sbr m m' = true) ∨ P.X.ann.conf m m' = true ∨ P.X.ann.conf m' m = true)
   exM : ∀ oc w m1 m2, Env P oc w → (D.exM.get (G.mi m2)).testBit (G.mi m1) = true →
     Avail P oc w m1 → Avail P oc w m2 → G.mi m1 = G.mi m2
-  exR : ∀ oc w r1 r2, Env P oc w → (D.exR.get (G.rk r2)).testBit (G.rk r1) = true →
+  exR : ∀ oc w r1 r2, Env P oc w → (D.exR.get (G.rk r2)).testBit (D.rc (G.rk r1)) = true →
     fire oc w r1 = true → fire oc w r2 = true → G.rk r1 = G.rk r2
   exMR : ∀ oc w m r, Env P oc w → (D.exMR.get (G.rk r)).testBit (G.mi m) = true →
     Avail P oc w m → fire oc w r = true → False
-  esc : ∀ oc w r1 r2, Env P oc w → (D.escR.get (G.rk r2)).testBit (G.rk r1) = true →
+  esc : ∀ oc w r1 r2, Env P oc w → (D.escR.get (G.rk r2)).testBit (D.rc (G.rk r1)) = true →
     fire oc w r1 = true → fire oc w r2 = true → OkT P (trR P oc r1).1 (trR P oc r2).1
 
 /-- The pair fields of `Cert`, with the rules, firing and hits they share. -/
@@ -1656,13 +1656,17 @@ theorem calledChain {V : Type} (P : Parent V) {oc : (j : P.I) → Outs (P.CI j).
   amoChain_of_pairwise _ _ (fun m m' h h1 h2 => by
     have := hE.2.2.2 m m' h.1 h1 h2; rw [h.2] at this; cases this) ms false hp (fun h => by cases h)
 
-/-- A bit set of numbers. -/
-def bits (l : List Nat) : Nat := l.foldr (fun a acc => 2 ^ a ||| acc) 0
+/-- A bit set of numbers, by the recursor (the kernel reduces it directly; no compiled code). -/
+noncomputable def bits (l : List Nat) : Nat := List.rec 0 (fun a _ acc => Nat.lor (Nat.pow 2 a) acc) l
+
+theorem bits_cons (a : Nat) (l : List Nat) : bits (a :: l) = 2 ^ a ||| bits l := rfl
 
 theorem mem_of_testBit_bits : ∀ {l : List Nat} {a : Nat}, (bits l).testBit a = true → a ∈ l
-  | [], a, h => by simp [bits] at h
+  | [], a, h => by
+    have e : bits [] = 0 := rfl
+    rw [e] at h; simp at h
   | x :: l, a, h => by
-    simp only [bits, List.foldr_cons] at h
+    rw [bits_cons] at h
     rcases testBit_or_cases h with h | h
     · rw [Nat.testBit_two_pow] at h; simp at h; subst h; exact List.mem_cons_self ..
     · exact List.mem_cons_of_mem _ (mem_of_testBit_bits h)
@@ -1695,18 +1699,57 @@ theorem excl_of_groups (act : Nat → Bool) (mem gid : Nat → List Nat) (gmask 
   intro hne
   exact amoChain_excl act (mem g) false (hch g) x (mem_of_testBit_bits hgx) y (hg y g hgy) hne hx hy
 
-/-- Rules' exception groups as `GlueOK.exR` (codes are rank positions). -/
+/-- A rule whose code is in a code set: some member has that code. -/
+theorem mem_of_testBit_bits_map {rc : Nat → Nat} {l : List Nat} {c : Nat} (h : (bits (l.map rc)).testBit c = true) :
+    ∃ x ∈ l, rc x = c := List.mem_map.mp (mem_of_testBit_bits h)
+
+/-- **Codes are injective where they are nonzero**, from an inverse table (both facts decided). -/
+theorem rc_inj {rc rinv : Nat → Nat} {n : Nat} (hinv : ∀ x, x < n → rc x = 0 ∨ rinv (rc x) = x) {x x1 : Nat}
+    (hx : x < n) (hnz : rc x ≠ 0) (hx1 : x1 < n) (e : rc x1 = rc x) : x1 = x := by
+  rcases hinv x hx with h | h
+  · exact absurd h hnz
+  rcases hinv x1 hx1 with h1 | h1
+  · rw [e] at h1; exact absurd h1 hnz
+  rw [← h1, e, h]
+
+/-- `exR_of_chains`' injectivity hypothesis from an inverse code table and the members' codes
+    (two decided checks, linear in the rules and the groups). -/
+theorem chains_inj (D : Design) (rinv : Nat → Nat) (memT : Tab (List Nat)) (ng : Nat)
+    (hinv : (List.range D.nR).all (fun x => Nat.beq (D.rc x) 0 || Nat.beq (rinv (D.rc x)) x) = true)
+    (hm : Emit.Tab.allB (fun _ l => l.all (fun x => Nat.blt x D.nR && !Nat.beq (D.rc x) 0)) memT 0 ng = true) :
+    ∀ g, g < ng → ∀ x ∈ memT.get g, ∀ x1, x1 < D.nR → D.rc x1 = D.rc x → x1 = x := by
+  intro g hg x hx x1 hx1 e
+  have hm' := List.all_eq_true.mp (Emit.Tab.allB_spec _ memT 0 ng hm g (Nat.zero_le _) hg) x hx
+  rw [Bool.and_eq_true] at hm'
+  have hnz : D.rc x ≠ 0 := fun h0 => by rw [h0] at hm'; simp at hm'
+  have hinv' : ∀ y, y < D.nR → D.rc y = 0 ∨ rinv (D.rc y) = y := by
+    intro y hy
+    have h := List.all_eq_true.mp hinv y (List.mem_range.mpr hy)
+    rw [Bool.or_eq_true] at h
+    rcases h with h | h
+    · exact .inl (Nat.eq_of_beq_eq_true h)
+    · exact .inr (Nat.eq_of_beq_eq_true h)
+  exact rc_inj hinv' (Nat.blt_eq.mp hm'.1) hnz hx1 e
+
+/-- Rules' exception groups as `GlueOK.exR`: masks over codes, members' codes injective. -/
 theorem exR_of_groups {V : Type} (P : Parent V) {D : Design} (G : Glue P D)
     (fire : ((j : P.I) → Outs (P.CI j).M V) → Wires P.X.M V → P.PR → Bool)
-    (rk_at : ∀ r, G.ruleAt (G.rk r) = r) (mem gid : Nat → List Nat) (gmask : Nat → Nat)
+    (rk_lt : ∀ r, G.rk r < D.nR) (rk_at : ∀ r, G.ruleAt (G.rk r) = r) (mem gid : Nat → List Nat)
     (hch : ∀ oc w, Env P oc w → ∀ g, amoChain false ((mem g).map (fun i => fire oc w (G.ruleAt i))))
-    (hm : ∀ g, gmask g = bits (mem g)) (hg : ∀ x g, g ∈ gid x → x ∈ mem g)
-    (hT : ∀ y, Sub (D.exR.get y) (orMask (gid y) gmask)) :
-    ∀ oc w r1 r2, Env P oc w → (D.exR.get (G.rk r2)).testBit (G.rk r1) = true →
+    (hg : ∀ x g, g ∈ gid x → x ∈ mem g)
+    (hinj : ∀ g, ∀ x ∈ mem g, ∀ x1, x1 < D.nR → D.rc x1 = D.rc x → x1 = x)
+    (hT : ∀ y, Sub (D.exR.get y) (orMask (gid y) (fun g => bits ((mem g).map D.rc)))) :
+    ∀ oc w r1 r2, Env P oc w → (D.exR.get (G.rk r2)).testBit (D.rc (G.rk r1)) = true →
       fire oc w r1 = true → fire oc w r2 = true → G.rk r1 = G.rk r2 := by
   intro oc w r1 r2 hE hb f1 f2
-  exact excl_of_groups (fun i => fire oc w (G.ruleAt i)) mem gid gmask (fun y => D.exR.get y) (hch oc w hE) hm hg hT
-    _ _ hb (by simp only [rk_at]; exact f1) (by simp only [rk_at]; exact f2)
+  obtain ⟨g, hgy, hgx⟩ := testBit_orMask (hT _ _ hb)
+  obtain ⟨x, hx, e⟩ := mem_of_testBit_bits_map hgx
+  have e1 := hinj g x hx _ (rk_lt r1) e.symm
+  subst e1
+  apply Classical.byContradiction
+  intro hne
+  exact amoChain_excl (fun i => fire oc w (G.ruleAt i)) (mem g) false (hch oc w hE g) _ hx _ (hg _ g hgy) hne
+    (by simp only [rk_at]; exact f1) (by simp only [rk_at]; exact f2)
 
 /-- **Escaped pairs**: a list of rank-position pairs, each with its own
     dynamic proof, as a mask. -/
@@ -1721,20 +1764,23 @@ theorem esc_of_list {Q : Nat → Nat → Prop} (L : List (Nat × Nat)) (hL : ∀
   rw [e, e2] at this
   exact this
 
-/-- `GlueOK.esc` from escaped pairs. -/
+/-- `GlueOK.esc` from escaped pairs (masks over codes; each pair's earlier rule has its own code). -/
 theorem esc_of_pairs {V : Type} (P : Parent V) {D : Design} (G : Glue P D)
     (fire : ((j : P.I) → Outs (P.CI j).M V) → Wires P.X.M V → P.PR → Bool)
-    (rk_at : ∀ r, G.ruleAt (G.rk r) = r) (L : List (Nat × Nat))
+    (rk_lt : ∀ r, G.rk r < D.nR) (rk_at : ∀ r, G.ruleAt (G.rk r) = r) (L : List (Nat × Nat))
     (hL : ∀ p ∈ L, ∀ oc w, Env P oc w → fire oc w (G.ruleAt p.1) = true → fire oc w (G.ruleAt p.2) = true →
       OkT P (trR P oc (G.ruleAt p.1)).1 (trR P oc (G.ruleAt p.2)).1)
-    (hT : ∀ i, Sub (D.escR.get i) (bits ((L.filter (fun p => p.2 == i)).map Prod.fst))) :
-    ∀ oc w r1 r2, Env P oc w → (D.escR.get (G.rk r2)).testBit (G.rk r1) = true →
+    (hinj : ∀ p ∈ L, ∀ x1, x1 < D.nR → D.rc x1 = D.rc p.1 → x1 = p.1)
+    (hT : ∀ i, Sub (D.escR.get i) (bits ((L.filter (fun p => p.2 == i)).map (fun p => D.rc p.1)))) :
+    ∀ oc w r1 r2, Env P oc w → (D.escR.get (G.rk r2)).testBit (D.rc (G.rk r1)) = true →
       fire oc w r1 = true → fire oc w r2 = true → OkT P (trR P oc r1).1 (trR P oc r2).1 := by
   intro oc w r1 r2 hE hb f1 f2
-  have := esc_of_list (Q := fun i1 i2 => ∀ oc w, Env P oc w → fire oc w (G.ruleAt i1) = true →
-    fire oc w (G.ruleAt i2) = true → OkT P (trR P oc (G.ruleAt i1)).1 (trR P oc (G.ruleAt i2)).1) L hL _ hT _ _ hb
-  have h := this oc w hE (by rw [rk_at]; exact f1) (by rw [rk_at]; exact f2)
-  rw [rk_at, rk_at] at h
+  obtain ⟨p, hp, e⟩ := List.mem_map.mp (mem_of_testBit_bits (hT _ _ hb))
+  have hp' := List.mem_filter.mp hp
+  have e2 : p.2 = G.rk r2 := beq_iff_eq.mp hp'.2
+  have e1 : G.rk r1 = p.1 := hinj p hp'.1 _ (rk_lt r1) e.symm
+  have h := hL p hp'.1 oc w hE (by rw [← e1, rk_at]; exact f1) (by rw [e2, rk_at]; exact f2)
+  rw [← e1, e2, rk_at, rk_at] at h
   exact h
 
 /-- `subB`, as `Sub`. -/
@@ -1911,6 +1957,37 @@ theorem okT_except {V : Type} (P : Parent V) (okP : (j : P.I) → (P.CI j).M →
   · exact (hbad j a.1 b.1 (h1 _ (mem_proj j t1 a ha)) (h2 _ (mem_proj j t2 b hb)) e ⟨a.2, ha⟩ ⟨b.2, hb⟩).elim
   · exact hok j a b e
 
+/-- **An escaped pair over numbered site lists**, with no list scan: each site of the first step,
+    against each port of its child, may be followed (`okP`) or pairs with every site of the second
+    step on that port in `bad`, whose pairs the two conditions exclude. Decided per first-step
+    site through the second step's index lists, so linear in the sites. -/
+theorem okT_except_fn {V : Type} (P : Parent V) (okP : (j : P.I) → (P.CI j).M → (P.CI j).M → Bool)
+    (hok : ∀ j (a b : (P.CI j).M × V), okP j a.1 b.1 = true → (P.CI j).ann.Follow a b)
+    (ports : (j : P.I) → List (P.CI j).M) (hp : ∀ j m, m ∈ ports j)
+    (ρ1 ρ2 : Nat → V) (site1 site2 : Nat → Site P.I (fun j => (P.CI j).M) V) (k1 k2 : Nat)
+    (key1 : Tab (Σ j, (P.CI j).M)) (key2 : Nat → Σ j, (P.CI j).M)
+    (hkey1 : ∀ i, (⟨(site1 i).j, (site1 i).m⟩ : Σ j, (P.CI j).M) = key1.get i)
+    (hkey2 : ∀ i, (⟨(site2 i).j, (site2 i).m⟩ : Σ j, (P.CI j).M) = key2 i)
+    (idx2 : (Σ j, (P.CI j).M) → List Nat) (hchk2 : ∀ i, i < k2 → i ∈ idx2 (key2 i)) (bad : List (Nat × Nat))
+    (hc : Emit.Tab.allB (fun i p => (ports p.1).all (fun b => okP p.1 p.2 b ||
+      (idx2 ⟨p.1, b⟩).all (fun i2 => bad.contains (i, i2)))) key1 0 k1 = true)
+    (hbad : Emit.AllL (fun q => (site1 q.1).cond ρ1 = true → (site2 q.2).cond ρ2 = true → False) bad) :
+    OkT P (callsOf ρ1 (Emit.sitesF site1 k1)) (callsOf ρ2 (Emit.sitesF site2 k2)) := by
+  intro j ⟨a1, a2⟩ ha b hb
+  obtain ⟨s, hs, hc1, -⟩ := mem_proj_callsOf (I := P.I) (CM := fun j => (P.CI j).M) ρ1 j a1 a2 (Emit.sitesF site1 k1) ha
+  rw [List.mem_filter] at hs
+  obtain ⟨i1, hi1, rfl⟩ := Emit.mem_sitesF hs.1
+  have e1 : key1.get i1 = ⟨j, a1⟩ := (hkey1 i1).symm.trans ((Emit.onPort_iff (I := P.I) (CM := fun j => (P.CI j).M) (V := V) j a1 _).mp hs.2)
+  obtain ⟨i2, hi2, hc2, -⟩ := Emit.mem_proj_fn (I := P.I) (CM := fun j => (P.CI j).M) ρ2 site2 k2 key2 hkey2 idx2 hchk2 j b.1 b.2 hb
+  have h := Emit.Tab.allB_spec _ key1 0 k1 hc i1 (Nat.zero_le _) hi1
+  rw [e1] at h
+  have h' := List.all_eq_true.mp h b.1 (hp j b.1)
+  rw [Bool.or_eq_true] at h'
+  rcases h' with h' | h'
+  · exact hok j (a1, a2) b h'
+  · have hm := List.contains_iff_mem.mp (List.all_eq_true.mp h' i2 hi2)
+    exact (Emit.AllL.mem hbad _ hm hc1 hc2).elim
+
 end SitesGlue
 
 /-! ## Glue for generated modules: enables over users, muxes, exclusions -/
@@ -1942,6 +2019,22 @@ theorem en_list (P : Parent V) (fire : ((j : P.I) → Outs (P.CI j).M V) → Wir
   · rintro ⟨b, hb, e⟩
     obtain ⟨s, hs, rfl⟩ := List.mem_map.mp hb
     exact ⟨s, hs, (hOn s).mpr e, Emit.AllL.mem hc s hs⟩
+  · rintro ⟨s, hs, ho, -⟩
+    exact ⟨on s, List.mem_map_of_mem hs, (hOn s).mp ho⟩
+
+/-- **An enable over a port's users**, the users given as a literal (`hl`, decided) and their calls
+    as one fact for all (from a balanced proof): no nested list proof. -/
+theorem en_lit (P : Parent V) (fire : ((j : P.I) → Outs (P.CI j).M V) → Wires P.X.M V → P.PR → Bool)
+    (oc : (j : P.I) → Outs (P.CI j).M V) (w : Wires P.X.M V) (j : P.I) (cm : (P.CI j).M)
+    (on : Step P → Bool) (hOn : ∀ s, On P fire oc w s ↔ on s = true) (us lit : List (Step P)) (hl : us = lit)
+    (hc : ∀ s ∈ us, Calls P (trS P oc w s) j cm) :
+    (orL (lit.map on) = true ↔ ∃ s ∈ us, On P fire oc w s ∧ Calls P (trS P oc w s) j cm) := by
+  subst hl
+  rw [orL_true]
+  constructor
+  · rintro ⟨b, hb, e⟩
+    obtain ⟨s, hs, rfl⟩ := List.mem_map.mp hb
+    exact ⟨s, hs, (hOn s).mpr e, hc s hs⟩
   · rintro ⟨s, hs, ho, -⟩
     exact ⟨on s, List.mem_map_of_mem hs, (hOn s).mp ho⟩
 
@@ -2019,6 +2112,130 @@ theorem forall_split {R : Nat → Prop} {T cov unc : List Nat}
   · exact h1 y h'
   · exact Emit.AllL.mem h2 y h'
 
+/-- Each member's later members lie in its cover set, decided in one pass over the reversed
+    `(member, cover)` list: `acc` holds the bits of the members passed so far (the later ones). -/
+noncomputable def covB (l : List (Nat × Nat)) : Nat → Bool :=
+  List.rec (fun _ => true) (fun e _ ih acc => subB acc e.2 && ih (Nat.lor acc (Nat.pow 2 e.1))) l
+
+theorem covB_cons (e : Nat × Nat) (l : List (Nat × Nat)) (acc : Nat) :
+    covB (e :: l) acc = (subB acc e.2 && covB l (Nat.lor acc (Nat.pow 2 e.1))) := rfl
+
+theorem covB_sub : ∀ (l : List (Nat × Nat)) (acc : Nat), covB l acc = true → ∀ e ∈ l, Sub acc e.2
+  | [], _, _, e, he => by cases he
+  | x :: l, acc, h, e, he => by
+    rw [covB_cons, Bool.and_eq_true] at h
+    rcases List.mem_cons.mp he with rfl | he'
+    · exact sub_of_subB h.1
+    · exact (Sub.or_l acc (Nat.pow 2 x.1)).trans (covB_sub l _ h.2 e he')
+
+theorem covB_pairwise {R : Nat → Nat → Prop} : ∀ (l : List (Nat × Nat)) (acc : Nat), covB l acc = true →
+    (∀ e ∈ l, ∀ y, e.2.testBit y = true → R e.1 y) → ((l.map Prod.fst).reverse).Pairwise R
+  | [], _, _, _ => List.Pairwise.nil
+  | x :: l, acc, h, hc => by
+    have h' := h
+    rw [covB_cons, Bool.and_eq_true] at h'
+    have ih := covB_pairwise l _ h'.2 (fun e he => hc e (List.mem_cons_of_mem _ he))
+    rw [List.map_cons, List.reverse_cons, List.pairwise_append]
+    refine ⟨ih, List.pairwise_singleton _ _, fun a ha b hb => ?_⟩
+    rw [List.mem_singleton] at hb
+    subst hb
+    rw [List.mem_reverse, List.mem_map] at ha
+    obtain ⟨e, he, rfl⟩ := ha
+    apply hc e (List.mem_cons_of_mem _ he)
+    apply covB_sub l _ h'.2 e he
+    exact testBit_or_r (by rw [testBit_pow]; simp)
+
+/-- A member's cover set: its run-time check's list and its uncovered later members. Irreducible,
+    so that only the kernel computes it (the elaborator would otherwise evaluate it per member). -/
+@[irreducible] noncomputable def cvS (cov unc : List Nat) : Nat := Nat.lor (bits cov) (bits unc)
+
+theorem cover_of {R : Nat → Prop} {cov unc : List Nat} (h1 : ∀ y ∈ cov, R y) (h2 : Emit.AllL R unc) :
+    ∀ y, (cvS cov unc).testBit y = true → R y := by
+  intro y hy
+  unfold cvS at hy
+  rcases testBit_or_cases hy with h | h
+  · exact h1 y (mem_of_testBit_bits h)
+  · exact Emit.AllL.mem h2 y (mem_of_testBit_bits h)
+
+/-- **A mux's chain from its members' cover sets**, a table of `(member, cover)` in mux order: one
+    linear decided pass (`covB`) replaces the per-member tail lists; the cover facts are a balanced
+    proof tree; only the uncovered pairs keep a proof each. -/
+theorem amoChain_of_cover (f : Nat → Bool) (R : Nat → Nat → Prop)
+    (hR : ∀ x y, R x y → f x = true → f y = true → False) (ms : Tab (Nat × Nat)) (ks : List Nat)
+    (hk : ms.toList.map Prod.fst = ks) (hc : covB ms.toList.reverse 0 = true)
+    (hcv : Emit.Tab.All (fun e => ∀ y, e.2.testBit y = true → R e.1 y) ms) : amoChain false (ks.map f) := by
+  have hp := covB_pairwise ms.toList.reverse 0 hc (fun e he => Emit.Tab.all_mem hcv e (List.mem_reverse.mp he))
+  rw [List.map_reverse, List.reverse_reverse, hk] at hp
+  exact amoChain_of_pairwise f R hR _ false hp (fun h => by cases h)
+
+/-! ### Suffix-shaped checks (cost review r7-1 M1): bsc's `mutually_exclusive` group, linear -/
+
+/-- One `mutually_exclusive` group's run-time checks in bsc's order: each member against every later
+    member (`ASchedule.mkMEPairs`, keyed by the first rule), as one statement over the member list. -/
+def SufAsm (f : Nat → Bool) : List Nat → Prop
+  | x :: y :: l => (f x && orL ((y :: l).map f)) = false ∧ SufAsm f (y :: l)
+  | _ => True
+
+/-- A group's checks exclude every pair of its members (by induction; no per-member work). -/
+theorem sufAsm_pairwise (f : Nat → Bool) : ∀ (l : List Nat), SufAsm f l →
+    l.Pairwise (fun x y => f x = true → f y = true → False)
+  | [], _ => List.Pairwise.nil
+  | [x], _ => List.pairwise_singleton _ x
+  | x :: y :: l, h => List.Pairwise.cons (fun z hz => forall_of_check h.1 z hz) (sufAsm_pairwise f (y :: l) h.2)
+
+/-- Two members of a group by position. -/
+theorem sufAsm_excl {f : Nat → Bool} {l : List Nat} (h : SufAsm f l) {a b x y : Nat} (hx : l[a]? = some x)
+    (hy : l[b]? = some y) (hab : Nat.blt a b = true) (h1 : f x = true) (h2 : f y = true) : False := by
+  obtain ⟨ha, ex⟩ := List.getElem?_eq_some_iff.mp hx
+  obtain ⟨hb, ey⟩ := List.getElem?_eq_some_iff.mp hy
+  have := List.pairwise_iff_getElem.mp (sufAsm_pairwise f l h) a b ha hb (Nat.blt_eq.mp hab)
+  rw [ex, ey] at this
+  exact this h1 h2
+
+theorem testBit_bits_of_mem : ∀ {l : List Nat} {a : Nat}, a ∈ l → (bits l).testBit a = true
+  | x :: l, a, h => by
+    rw [bits_cons]
+    rcases List.mem_cons.mp h with rfl | h'
+    · exact testBit_or_l (by rw [Nat.testBit_two_pow]; simp)
+    · exact testBit_or_r (testBit_bits_of_mem h')
+
+/-- **A mux's chain over one group**: its members of the group `gs`, in group order (a sublist of
+    the group, decided in one pass), need no per-member data or decision. -/
+theorem amoChain_of_grp (f : Nat → Bool) (gs grp : List Nat) (hsub : gs.isSublist grp = true)
+    (hA : SufAsm f grp) : amoChain false (gs.map f) :=
+  amoChain_of_pairwise f _ (fun _ _ h => h) gs false
+    ((sufAsm_pairwise f grp hA).sublist (List.isSublist_iff_sublist.mp hsub)) (fun h => by cases h)
+
+/-- **A mux's chain: other members `ks` with cover sets, then a group's members `gs`.** `covB`
+    starts from the bits of `gs`, so each cover set contains the group members; the pairs within
+    `gs` come from the group's checks. -/
+theorem amoChain_of_cover_grp (f : Nat → Bool) (ms : Tab (Nat × Nat)) (ks gs grp : List Nat)
+    (hk : ms.toList.map Prod.fst = ks) (hc : covB ms.toList.reverse (bits gs) = true)
+    (hcv : Emit.Tab.All (fun e => ∀ y, e.2.testBit y = true → f e.1 = true → f y = true → False) ms)
+    (hsub : gs.isSublist grp = true) (hA : SufAsm f grp) : amoChain false ((ks ++ gs).map f) := by
+  have hcv' : ∀ e ∈ ms.toList.reverse, ∀ y, e.2.testBit y = true → f e.1 = true → f y = true → False :=
+    fun e he => Emit.Tab.all_mem hcv e (List.mem_reverse.mp he)
+  have hp1 := covB_pairwise (R := fun x y => f x = true → f y = true → False) ms.toList.reverse (bits gs) hc hcv'
+  rw [List.map_reverse, List.reverse_reverse, hk] at hp1
+  have hp2 := (sufAsm_pairwise f grp hA).sublist (List.isSublist_iff_sublist.mp hsub)
+  have hx : ∀ x ∈ ks, ∀ y ∈ gs, f x = true → f y = true → False := by
+    intro x hx y hy
+    rw [← hk] at hx
+    obtain ⟨e, he, rfl⟩ := List.mem_map.mp hx
+    have he' := List.mem_reverse.mpr he
+    exact hcv' e he' y (covB_sub _ _ hc e he' y (testBit_bits_of_mem hy))
+  exact amoChain_of_pairwise f _ (fun _ _ h => h) _ false (List.pairwise_append.mpr ⟨hp1, hp2, hx⟩)
+    (fun h => by cases h)
+
+/-- **Selection of a mux entry by table position** (the mux list is a table read over `range'`;
+    the entry is a lookup, not a list walk). -/
+theorem arg_muxT {u p : Nat} {G : Nat → Bool × V} (d : V) (h : amoChain false (((List.range' 0 u).map G).map Prod.fst))
+    (hp : Nat.blt p u = true) (hb : (G p).1 = true) : pmux ((List.range' 0 u).map G) d = (G p).2 := by
+  apply pmux_get d h
+  rw [List.getElem?_map, List.getElem?_range' (Nat.blt_eq.mp hp)]
+  simp only [Nat.zero_add, Nat.one_mul, Option.map_some]
+  rw [← hb]
+
 /-- A conditional call's enable: `WILL_FIRE` and the condition, whose value at the step's
     environment is the hardware's. -/
 theorem en_tk {a b c : Bool} (h : c = b) : (a && b) = true ↔ a = true ∧ c = true := by
@@ -2037,14 +2254,17 @@ theorem blt_of_le_blt {a m b : Nat} (h1 : a ≤ m) (h2 : Nat.blt m b = true) : N
 theorem exR_of_partners (P : Parent V) {D : Design} (G : Glue P D)
     (fire : ((j : P.I) → Outs (P.CI j).M V) → Wires P.X.M V → P.PR → Bool)
     (rk_lt : ∀ r, G.rk r < D.nR) (rk_at : ∀ r, G.ruleAt (G.rk r) = r) (pl : Tab (List Nat))
-    (hT : ∀ i, i < D.nR → D.exR.get i = bits (pl.get i))
+    (hT : ∀ i, i < D.nR → D.exR.get i = bits ((pl.get i).map D.rc))
+    (hinj : ∀ i, i < D.nR → ∀ x ∈ pl.get i, ∀ x1, x1 < D.nR → D.rc x1 = D.rc x → x1 = x)
     (hL : Emit.Tab.AllR (fun i l => Emit.AllL (fun i' => ∀ oc w, Env P oc w →
       fire oc w (G.ruleAt i') = true → fire oc w (G.ruleAt i) = true → False) l) pl 0 D.nR) :
-    ∀ oc w r1 r2, Env P oc w → (D.exR.get (G.rk r2)).testBit (G.rk r1) = true →
+    ∀ oc w r1 r2, Env P oc w → (D.exR.get (G.rk r2)).testBit (D.rc (G.rk r1)) = true →
       fire oc w r1 = true → fire oc w r2 = true → G.rk r1 = G.rk r2 := by
   intro oc w r1 r2 hE hb f1 f2
   rw [hT _ (rk_lt r2)] at hb
-  have hm := mem_of_testBit_bits hb
+  obtain ⟨x, hm, e⟩ := mem_of_testBit_bits_map hb
+  have e1 := hinj _ (rk_lt r2) x hm _ (rk_lt r1) e.symm
+  rw [← e1] at hm
   have := Emit.AllL.mem (Emit.Tab.get_allR _ 0 D.nR hL (G.rk r2) (Nat.zero_le _) (rk_lt r2)) _ hm oc w hE
   rw [rk_at, rk_at] at this
   exact (this f1 f2).elim
@@ -2057,13 +2277,16 @@ theorem exR_of_chains (P : Parent V) {D : Design} (G : Glue P D)
     (hch : Emit.Tab.AllR (fun _ l => ∀ oc w, Env P oc w → amoChain false (l.map (fun i => fire oc w (G.ruleAt i))))
       memT 0 ng)
     (hg : ∀ x, x < D.nR → ∀ g ∈ gidT.get x, g < ng ∧ x ∈ memT.get g)
-    (hT : ∀ y, y < D.nR → Sub (D.exR.get y) (orMask (gidT.get y) (fun g => bits (memT.get g)))) :
-    ∀ oc w r1 r2, Env P oc w → (D.exR.get (G.rk r2)).testBit (G.rk r1) = true →
+    (hinj : ∀ g, g < ng → ∀ x ∈ memT.get g, ∀ x1, x1 < D.nR → D.rc x1 = D.rc x → x1 = x)
+    (hT : ∀ y, y < D.nR → Sub (D.exR.get y) (orMask (gidT.get y) (fun g => bits ((memT.get g).map D.rc)))) :
+    ∀ oc w r1 r2, Env P oc w → (D.exR.get (G.rk r2)).testBit (D.rc (G.rk r1)) = true →
       fire oc w r1 = true → fire oc w r2 = true → G.rk r1 = G.rk r2 := by
   intro oc w r1 r2 hE hb f1 f2
   obtain ⟨g, hgy, hgx⟩ := testBit_orMask (hT _ (rk_lt r2) _ hb)
-  have hx := mem_of_testBit_bits hgx
   obtain ⟨hng, hy⟩ := hg _ (rk_lt r2) g hgy
+  obtain ⟨x, hx, e⟩ := mem_of_testBit_bits_map hgx
+  have e1 := hinj g hng x hx _ (rk_lt r1) e.symm
+  rw [← e1] at hx
   have hch' := Emit.Tab.get_allR _ 0 ng hch g (Nat.zero_le _) hng oc w hE
   apply Classical.byContradiction
   intro hne
@@ -2102,4 +2325,13 @@ end Modular
 #print axioms Modular.Scan.forall_of_check
 #print axioms Modular.Scan.forall_split
 #print axioms Modular.Scan.en_list
+#print axioms Modular.Scan.en_lit
 #print axioms Modular.Scan.arg_mux
+#print axioms Modular.Scan.amoChain_of_cover
+#print axioms Modular.Scan.amoChain_of_grp
+#print axioms Modular.Scan.amoChain_of_cover_grp
+#print axioms Modular.Scan.sufAsm_excl
+#print axioms Modular.Scan.arg_muxT
+#print axioms Modular.Scan.okT_except_fn
+#print axioms Modular.Scan.rc_inj
+#print axioms Modular.Scan.chains_inj

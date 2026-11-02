@@ -176,6 +176,13 @@ theorem calls_all {f : (Σ j, CM j) → Bool} (key : Tab (Σ j, CM j)) (sf : Nat
   rw [← e]
   exact Tab.allB_spec _ key 0 k hc i (Nat.zero_le _) hi
 
+/-- **A numbered site list makes the same calls at two environments** when every site agrees
+    on its condition, and on its argument where taken (per site: `CertU.trU`). -/
+theorem callsOf_fn_congr (site : Nat → Site I CM V) (k : Nat) (ρ ρ' : Nat → V)
+    (h : ∀ i, i < k → (site i).cond ρ = (site i).cond ρ' ∧ ((site i).cond ρ = true → (site i).arg ρ = (site i).arg ρ')) :
+    callsOf ρ (sitesF site k) = callsOf ρ' (sitesF site k) :=
+  callsOf_congr ρ ρ' _ (fun s hs => by obtain ⟨i, hi, rfl⟩ := mem_sitesF hs; exact h i hi)
+
 variable (u : Nat → V) (oc : (j : I) → Outs (CM j) V)
 
 /-- **Each value of a numbered site list**, with no list scan. -/
@@ -291,6 +298,67 @@ theorem mem_usersOf : ∀ {uses : List (S × Nat)} {s : S} {i : Nat}, i ∈ idxO
       exact .inr (mem_usersOf h')
 
 end Uses
+
+/-! ## A port's uses as a table keyed by step (lookups, not list walks) -/
+
+/-- The leaves of a table, in order. -/
+def Tab.toList {α : Type uT} : Tab α → List α
+  | .leaf a => [a]
+  | .node _ l r => l.toList ++ r.toList
+
+theorem Tab.get_mem {α : Type uT} : ∀ (t : Tab α) (k : Nat), t.get k ∈ t.toList
+  | .leaf a, _ => List.mem_singleton_self a
+  | .node mid l r, k => by
+    rw [Tab.get_node]
+    cases Nat.blt k mid
+    · exact List.mem_append_right _ (Tab.get_mem r k)
+    · exact List.mem_append_left _ (Tab.get_mem l k)
+
+/-- Every leaf of a table has `Q`: a balanced conjunction, so a proof is a tree of pairs. -/
+def Tab.All {α : Type uT} (Q : α → Prop) : Tab α → Prop
+  | .leaf a => Q a
+  | .node _ l r => Tab.All Q l ∧ Tab.All Q r
+
+theorem Tab.all_mem {α : Type uT} {Q : α → Prop} : ∀ {t : Tab α}, Tab.All Q t → ∀ e ∈ t.toList, Q e
+  | .leaf _, h, e, he => by rw [List.mem_singleton.mp he]; exact h
+  | .node _ l r, h, e, he => by
+    rcases List.mem_append.mp he with he | he
+    · exact Tab.all_mem h.1 e he
+    · exact Tab.all_mem h.2 e he
+
+/-- A port's sites in step `k`: the leaf found for `k`, if it is `k`'s (leaves are `(step, sites)`). -/
+def idxT (t : Tab (Nat × List Nat)) (k : Nat) : List Nat :=
+  bif Nat.beq (t.get k).1 k then (t.get k).2 else []
+
+/-- The steps with a site on the port. -/
+def usersT (t : Tab (Nat × List Nat)) : List Nat :=
+  t.toList.filterMap (fun e => bif e.2.isEmpty then none else some e.1)
+
+theorem mem_usersT {t : Tab (Nat × List Nat)} {k i : Nat} (h : i ∈ idxT t k) : k ∈ usersT t := by
+  unfold idxT at h
+  cases hb : Nat.beq (t.get k).1 k
+  · rw [hb] at h; cases h
+  · rw [hb] at h
+    have ek : (t.get k).1 = k := Nat.eq_of_beq_eq_true hb
+    have hne : (t.get k).2.isEmpty = false := by
+      cases e : (t.get k).2 with
+      | nil => rw [e] at h; cases h
+      | cons _ _ => rfl
+    unfold usersT
+    rw [List.mem_filterMap]
+    exact ⟨t.get k, Tab.get_mem t k, by rw [hne, ek]; rfl⟩
+
+/-- A fact for every step with a site on the port, from a balanced proof over its uses table. -/
+theorem usersT_all {t : Tab (Nat × List Nat)} {Q : Nat → Prop}
+    (h : Tab.All (fun e => e.2.isEmpty = false → Q e.1) t) : ∀ k ∈ usersT t, Q k := by
+  intro k hk
+  unfold usersT at hk
+  obtain ⟨e, he, hk⟩ := List.mem_filterMap.mp hk
+  cases hb : e.2.isEmpty
+  · rw [hb] at hk
+    cases hk
+    exact Tab.all_mem h e he hb
+  · rw [hb] at hk; cases hk
 
 /-- From a step's decided check: every site index is in its port's index list. -/
 theorem chk_spec {α : Type} (idx : α → List Nat) (key : Tab α) (k : Nat)
@@ -441,6 +509,22 @@ theorem okT_of_cls {C : Type} [DecidableEq C] (cls : (Σ j, (P.CI j).M) → C) (
 
 end PerPort
 
+/-! ## Steps whose skipped values are their own (design §18 trust point 7, as a Lean fact) -/
+
+/-- Rules as site lists: each rule's program takes its skipped values `v` only through
+    `runSites` (as its skipped values and initial environment); its sites and result do not
+    receive `v`. A generated file proves `F ops E = (F ops E).withRuleSites …` by `rfl`. -/
+@[reducible] def withRuleSites {V : Type} (F : ParentU V) (ssR : F.PR → List (Site F.I (fun j => (F.CI j).M) V))
+    (resR : F.PR → (Nat → V) → Option V) : ParentU V :=
+  { F with rbody := fun r v => runSites v (resR r) (ssR r) 0 v }
+
+/-- Rules and methods as site lists; a method's sites and result receive its argument `x`,
+    never its skipped values. -/
+@[reducible] def withSitesX {V : Type} (F : ParentU V) (ssM : F.X.M → V → List (Site F.I (fun j => (F.CI j).M) V))
+    (resM : F.X.M → V → (Nat → V) → Option V) (ssR : F.PR → List (Site F.I (fun j => (F.CI j).M) V))
+    (resR : F.PR → (Nat → V) → Option V) : ParentU V :=
+  { withRuleSites F ssR resR with body := fun m x v => runSites v (resM m x) (ssM m x) 0 v }
+
 end Emit
 
 #print axioms Emit.Tab.get_allR
@@ -455,3 +539,7 @@ end Emit
 #print axioms Emit.forall_filter
 #print axioms Emit.dep_of_all
 #print axioms Emit.en_one
+#print axioms Emit.mem_usersT
+#print axioms Emit.Tab.all_mem
+#print axioms Emit.usersT_all
+#print axioms Emit.callsOf_fn_congr

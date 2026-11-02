@@ -43,7 +43,28 @@ theorem no_trans : ¬ ∀ (eqv : Nat → Nat → Bool), (∀ x, eqv x x = true) 
     simp only [Bool.and_comm]) 0 1 2
   simp at this
 
+/-- The laws are satisfiable together: equality on `Nat` with the constants as numbers. -/
+def natEqC : EqC Nat := ⟨fun x k => x == k, fun x k k' hne h1 h2 => hne (by simp at h1 h2; omega)⟩
+
+def natEqV : EqV Nat natEqC where
+  eqv x y := x == y
+  refl x := by simp
+  symm x y := Bool.beq_comm
+  trans x y z h1 h2 := by simp at h1 h2 ⊢; omega
+  cong x y k h := by simp at h; simp [natEqC, h]
+
+/-- **Transitivity is the law the fact needs**: a comparison with every other law, for some
+    module constants, makes both selectors true at 0, 1, 2. -/
+theorem no_trans_cong : ∃ (E : EqC Nat) (eqv : Nat → Nat → Bool), (∀ x, eqv x x = true) ∧
+    (∀ x y, eqv x y = eqv y x) ∧ (∀ x y k, eqv x y = true → E.eqc x k = E.eqc y k) ∧
+    (eqv 0 1 && (eqv 1 2 && !eqv 0 2)) = true :=
+  ⟨⟨fun _ _ => false, fun _ _ _ _ h _ => by cases h⟩,
+   fun x y => decide (x ≤ y + 1) && decide (y ≤ x + 1),
+   fun x => by simp, fun x y => by simp only [Bool.and_comm], fun _ _ _ _ => rfl, by decide⟩
+
 end EqvTest
 
 #print axioms EqvTest.onehot
 #print axioms EqvTest.no_trans
+#print axioms EqvTest.natEqV
+#print axioms EqvTest.no_trans_cong

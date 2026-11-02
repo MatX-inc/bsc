@@ -115,6 +115,8 @@ def main():
     U, NSTEPS, SEG, out = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
     seed = int(sys.argv[5]) if len(sys.argv) > 5 else 1
     D, nK = gen(U, NSTEPS, seed)
+    if os.environ.get('SCAN_CODES', '1') == '1':
+        S.compress(D)
     ok, states, info = S.run_scan(D)
     assert ok, info
     uses = sum(len(f) for f in D.fpM) + sum(len(f) for f in D.fpR)

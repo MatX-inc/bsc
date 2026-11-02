@@ -200,11 +200,13 @@ theorem glueOK : GlueOK (P z inc tB) D (G z inc tB) (fire z inc tB) where
   exM := fun _ _ _ _ _ h => by simp [D, Tab.get] at h
   exR := fun _ _ _ _ _ h => by simp [D, Tab.get] at h
   exMR := fun _ _ _ _ _ h => by simp [D, Tab.get] at h
-  esc := esc_of_pairs (P z inc tB) (G z inc tB) (fire z inc tB) (fun r => (by decide : ∀ r : Fin 4, ruleAt (rk r) = r) r)
+  esc := esc_of_pairs (P z inc tB) (G z inc tB) (fire z inc tB) (fun r => (by decide : ∀ r : Fin 4, rk r < 4) r)
+    (fun r => (by decide : ∀ r : Fin 4, ruleAt (rk r) = r) r)
     [(1, 2)] (fun p hp oc w _ h1 _ => by
       simp only [List.mem_singleton] at hp
       subst hp
       exact incA_late z inc tB oc w h1)
+    (fun _ _ _ _ e => e)
     (fun i => by
       rw [escR_get]
       by_cases h : i = 2

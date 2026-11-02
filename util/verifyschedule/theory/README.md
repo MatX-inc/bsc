@@ -11,21 +11,24 @@ Prototypes, not yet used by the generator. Lean 4.35, core library only.
   `LEAN_PATH=.:<toolchain>/lib/lean lean Example.lean`.  Open points are in `design.md`; argument-
   less value methods will become one step read any number of times, replacing
   the K read copies used here.
-- `modular/`: the per-module contract `Realizes` (for every legal parent
+- `modular/`: the per-module contract `RealizesU` (for every legal parent
   call sequence there is a one-at-a-time run, with each caller's calls kept
-  together, that matches the hardware's outputs and next state), the
-  composition theorem `Modular.compose`, the induction over the instance
-  tree `Built.realizes` / `Built.top` (with non-vacuity), and primitive
-  contracts checked against bsc's Verilog (Reg, the wire family, CReg n,
-  FIFO2).  `Example.lean` has a two-level hierarchy and negative cases that
-  must fail (a sandwiching SB export, a wrong mux argument, a forbidden
-  parent order, an RWire loop); `split/` composes across separately
-  compiled files.  Each module's own system-task calls are part of its
-  contract, unordered against other modules' (not true across synthesis
-  boundaries in Verilog).  `Scan.lean` proves the linear scan that gives
-  the obligation's pair facts, `EmitLemmas.lean` and `SiteCond.lean` the
-  emission and site-condition lemmas, and `Fifo2R.lean` an always-ready
-  FIFO2 `first`.  `build.sh` builds everything, capped.  `e2e/`, `scan/`,
-  `sites/` and `emit/` hold the prototype emitter and measurement tools.
-  Open points are in `design.md`; the open review items are in the commit
-  that added this.
+  together, fixed before the values of conditional reads, that matches the
+  hardware's outputs and next state for every such value), the
+  composition theorem `Modular.compose` from the obligation `OblU`, the
+  induction over the instance tree `Built.realizes` / `Built.top` (with
+  non-vacuity), and primitive contracts checked against bsc's Verilog
+  (Reg, the wire family, CReg n, FIFO2).  `Example.lean` has a two-level
+  hierarchy and negative cases that must fail (a sandwiching SB export, a
+  wrong mux argument, a forbidden parent order, an RWire loop, an order
+  that depends on a conditional read's value); `split/` composes across
+  separately compiled files.  Each module's own system-task calls are part
+  of its contract, unordered against other modules' (not true across
+  synthesis boundaries in Verilog).  `Scan.lean` proves the linear scan
+  that gives the obligation's pair facts, and `EmitLemmas.lean` and
+  `SiteCond.lean` the emission and site-condition lemmas.  `build.sh`
+  builds everything, capped; the benchmark and e2e files it reads are
+  generated (`emit/gen/`, `scan/*/gen*.py`, `e2e/tools/mke2e.py`).  `e2e/`,
+  `scan/`, `sites/` and `emit/` hold the prototype emitter and measurement
+  tools.  Open points are in `design.md`; the open review items are in the
+  commit that added this.

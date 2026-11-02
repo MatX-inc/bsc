@@ -23,8 +23,16 @@ scheduling annotations it exports (CF, SB, SBR, C).  This file defines
   (`asm`) are part of `ok`, which `Realizes` assumes in so many words;
 * `Obl`: the per-module obligation, stated on the children's *interfaces*
   only;
-* `compose`: children that realize their contracts plus a parent that meets
-  its obligation give a parent that realizes its contract; `Built.realizes`:
+* skipped values: a generated step reads some sites only under a condition
+  and otherwise continues with a skipped value.  `ParentU` gives each step
+  its own (`u : Step → Nat → V`), `ModuleU` a module whose one-at-a-time
+  steps take those of every module below, and `OblU`/`RealizesU` fix the
+  order, the children's call sequences and the run *before* the skipped
+  values, which the every-assignment argument needs; `oblU_of_cert` gives
+  `OblU` from a certificate whose rules, firing and hits do not mention
+  them (`CertU`);
+* `compose`: children that realize their contracts plus a family that meets
+  its obligation give a module that realizes its contract; `Built.realizes`:
   by induction over the instance tree, the top module realizes its contract;
 * `Causal` (non-vacuity): a module's outputs are a function of its state and
   of the inputs on its declared combinational paths, and its hardware has a
@@ -32,7 +40,9 @@ scheduling annotations it exports (CF, SB, SBR, C).  This file defines
   gives it to a parent from its children's and a decided acyclicity
   certificate (`Acyc`), and `Built.causal` to the whole instance tree;
 * output aliases (`Ann.same`, `Ann.rdyRet`, `Aliased`): ports that share one
-  output wire, as FIFO2's `notFull`, `i_notFull` and `enq`'s RDY do;
+  output wire, as FIFO2's `notFull`, `i_notFull` and `enq`'s RDY do; a
+  generated module's ready output read as a port (`Parent.exactRet`,
+  `aliased_toModuleU`);
 * system tasks: a module's task statements are the ports of a `Tasks` child
   whose log the contract compares, per module, with the hardware's task
   calls (`Module.L`, `log`, `trc`; `tasks_realizes`);
@@ -377,8 +387,19 @@ structure Parent (V : Type) where
   /-- The design's Bool reading of a one-bit value (for children's output
       aliases, `Ann.rdyRet`). -/
   toB : V → Bool := fun _ => false
+  /-- Ports whose result is a wire `comb` computes without a data mux (a method's ready
+      output `RDY_m`, read as a port), so the hardware drives it exactly. -/
+  exactRet : X.M → Bool := fun _ => false
 
 attribute [instance] Parent.decI
+
+/-- A built module's internal signals: its input wires, its children's outputs and inputs,
+    and each child's own signals.  It mentions interfaces only, not programs. -/
+structure PSig (V : Type) (X : Iface) (I : Type) (CI : I → Iface) (Sg : I → Type) where
+  w : Wires X.M V
+  oc : (j : I) → Outs (CI j).M V
+  wc : (j : I) → Wires (CI j).M V
+  sub : (j : I) → Sg j
 
 section Built
 variable (P : Parent V) (impl : (j : P.I) → Module V (P.CI j))
@@ -390,14 +411,6 @@ inductive RunP : Prog P.I (fun j => (P.CI j).M) V → ((j : P.I) → (impl j).S)
   | call {j : P.I} {m : (P.CI j).M} {x : V} {k : V → Prog P.I (fun j => (P.CI j).M) V}
       {s : (j : P.I) → (impl j).S} {s1 : (impl j).S} {v r : V} {s2 : (j : P.I) → (impl j).S} :
       (impl j).meth m x (s j) v s1 → RunP (k v) (upd s j s1) r s2 → RunP (.call j m x k) s r s2
-
-/-- A built module's internal signals: its input wires, its children's
-    outputs and inputs, and each child's own signals. -/
-structure PSig where
-  w : Wires P.X.M V
-  oc : (j : P.I) → Outs (P.CI j).M V
-  wc : (j : P.I) → Wires (P.CI j).M V
-  sub : (j : P.I) → (impl j).Sig
 
 /-- The module a parent and its children's implementations make.  Its state
     is the children's states, its rules its own and its children's.
@@ -419,9 +432,10 @@ structure PSig where
     | .inr ⟨j, r⟩ => ∃ t, (impl j).rule r (s j) t ∧ s' = upd s j t
   clean s := fun j => (impl j).clean (s j)
   clean_idem s := funext fun j => (impl j).clean_idem (s j)
-  Sig := PSig P impl
+  Sig := PSig V P.X P.I P.CI (fun j => (impl j).Sig)
   hw s w o s' g := g.w = w ∧ (∀ j, (impl j).hw (s j) (g.wc j) (g.oc j) (s' j) (g.sub j)) ∧
     (∀ j, (g.wc j).en = ((P.comb g.oc w).1 j).en) ∧ o.rdy = (P.comb g.oc w).2.rdy ∧
+    (∀ m, P.exactRet m = true → o.ret m = (P.comb g.oc w).2.ret m) ∧
     (P.onehot g.oc w → g.wc = (P.comb g.oc w).1 ∧ o = (P.comb g.oc w).2)
   ok g := P.asm g.oc g.w ∧ ∀ j, (impl j).ok (g.sub j)
   L := Σ j, (impl j).L
@@ -430,6 +444,212 @@ structure PSig where
   log_clean s l := (impl l.1).log_clean (s l.1) l.2
 
 end Built
+
+/-! ## Skipped values, fixed after the run
+
+A step reads some sites only under a condition and otherwise continues with a skipped
+value.  The every-assignment argument (set each skipped value to what the real read
+returns at its position) needs the run fixed before the skipped values, at every level.
+`ParentU` gives each step its own skipped values; `ModuleU`'s steps take those of every
+module below; `RealizesU` chooses the run before them. -/
+
+/-- A module whose one-at-a-time steps take skipped values `u : U`; its hardware does not. -/
+structure ModuleU (V : Type) (X : Iface) where
+  U : Type
+  S : Type
+  R : Type
+  meth : U → X.M → V → S → V → S → Prop
+  rule : U → R → S → S → Prop
+  clean : S → S
+  clean_idem : ∀ s, clean (clean s) = clean s
+  Sig : Type
+  hw : S → Wires X.M V → Outs X.M V → S → Sig → Prop
+  ok : Sig → Prop
+  L : Type := Empty
+  log : S → L → List (TaskCall V) := fun _ _ => []
+  trc : Sig → L → List (TaskCall V) := fun _ _ => []
+  log_clean : ∀ s l, log (clean s) l = [] := by intros; rfl
+
+/-- The module at skipped values `u`. -/
+@[reducible] def ModuleU.at {X : Iface} (Mo : ModuleU V X) (u : Mo.U) : Module V X where
+  S := Mo.S
+  R := Mo.R
+  meth := Mo.meth u
+  rule := Mo.rule u
+  clean := Mo.clean
+  clean_idem := Mo.clean_idem
+  Sig := Mo.Sig
+  hw := Mo.hw
+  ok := Mo.ok
+  L := Mo.L
+  log := Mo.log
+  trc := Mo.trc
+  log_clean := Mo.log_clean
+
+/-- The hardware alone, for `Causal` and `Aliased` (they read no one-at-a-time step). -/
+@[reducible] def ModuleU.hwm {X : Iface} (Mo : ModuleU V X) : Module V X where
+  S := Mo.S
+  R := Empty
+  meth _ _ _ _ _ := False
+  rule r _ _ := r.elim
+  clean := Mo.clean
+  clean_idem := Mo.clean_idem
+  Sig := Mo.Sig
+  hw := Mo.hw
+  ok := Mo.ok
+  L := Mo.L
+  log := Mo.log
+  trc := Mo.trc
+  log_clean := Mo.log_clean
+
+/-- A module without skipped values (a primitive, a BVI leaf, a module off path A). -/
+@[reducible] def Module.toU {X : Iface} (Mo : Module V X) : ModuleU V X where
+  U := Unit
+  S := Mo.S
+  R := Mo.R
+  meth _ := Mo.meth
+  rule _ := Mo.rule
+  clean := Mo.clean
+  clean_idem := Mo.clean_idem
+  Sig := Mo.Sig
+  hw := Mo.hw
+  ok := Mo.ok
+  L := Mo.L
+  log := Mo.log
+  trc := Mo.trc
+  log_clean := Mo.log_clean
+
+/-- **The contract with skipped values**: the run `τ` is chosen before them, and at every
+    assignment `u` it runs the module at `u` to the hardware's next state and task calls. -/
+def RealizesU {X : Iface} (Mo : ModuleU V X) : Prop :=
+  ∀ (s : Mo.S) (σ : List (List (X.M × V))) (w : Wires X.M V) (o : Outs X.M V) (s' : Mo.S) (g : Mo.Sig),
+    Mo.clean s = s → Legal X.ann σ → Drives X.ann w σ → Mo.hw s w o s' g → Mo.ok g →
+    (∀ c ∈ σ.flatten, X.ann.alwaysRdy c.1 = false → o.rdy c.1 = true) →
+    ∃ τ : List (List (X.M × V) ⊕ Mo.R), groups τ = σ ∧ ∀ u : Mo.U, ∃ fin : Mo.S,
+      Exec (Mo.at u) o s τ fin ∧ s' = Mo.clean fin ∧ ∀ l, Mo.trc g l = Mo.log fin l
+
+theorem Module.toU_at {X : Iface} (Mo : Module V X) (u : Unit) : Mo.toU.at u = Mo := rfl
+
+theorem realizesU_toU {X : Iface} (Mo : Module V X) (h : Realizes Mo) : RealizesU Mo.toU := by
+  intro s σ w o s' g hc hl hd hh hok hr
+  obtain ⟨τ, fin, h1, h2, h3, h4⟩ := h s σ w o s' g hc hl hd hh hok hr
+  exact ⟨τ, h1, fun _ => ⟨fin, h2, h3, h4⟩⟩
+
+/-- The run fixed before `u` is in particular a run at each `u`. -/
+theorem RealizesU.at {X : Iface} {Mo : ModuleU V X} (h : RealizesU Mo) (u : Mo.U) : Realizes (Mo.at u) := by
+  intro s σ w o s' g hc hl hd hh hok hr
+  obtain ⟨τ, h1, h2⟩ := h s σ w o s' g hc hl hd hh hok hr
+  obtain ⟨fin, h3, h4, h5⟩ := h2 u
+  exact ⟨τ, fin, h1, h3, h4, h5⟩
+
+theorem Causal.toU {X : Iface} {Mo : Module V X} (h : Causal Mo) : Causal Mo.toU.hwm := h
+
+theorem Aliased.toU {X : Iface} {toB : V → Bool} {Mo : Module V X} (h : Aliased toB Mo) :
+    Aliased toB Mo.toU.hwm := h
+
+/-- A parent whose programs take their step's skipped values (`body m x v`, `rbody r v`). -/
+structure ParentU (V : Type) where
+  I : Type
+  decI : DecidableEq I
+  kids : List I
+  kids_nodup : kids.Nodup
+  kids_all : ∀ j, j ∈ kids
+  CI : I → Iface
+  X : Iface
+  PR : Type
+  body : X.M → V → (Nat → V) → Prog I (fun j => (CI j).M) V
+  rbody : PR → (Nat → V) → Prog I (fun j => (CI j).M) V
+  comb : ((j : I) → Outs (CI j).M V) → Wires X.M V → ((j : I) → Wires (CI j).M V) × Outs X.M V
+  asm : ((j : I) → Outs (CI j).M V) → Wires X.M V → Prop
+  onehot : ((j : I) → Outs (CI j).M V) → Wires X.M V → Prop
+  toB : V → Bool := fun _ => false
+  exactRet : X.M → Bool := fun _ => false
+
+attribute [instance] ParentU.decI
+
+/-- A family's steps; `u : F.Step → Nat → V` gives each step its own skipped values. -/
+abbrev ParentU.Step (F : ParentU V) : Type := F.X.M ⊕ F.PR
+
+/-- The parent at skipped values `u`: step `s` sees `u s` only, so no two steps share one. -/
+@[reducible] def ParentU.at (F : ParentU V) (u : F.Step → Nat → V) : Parent V where
+  I := F.I
+  decI := F.decI
+  kids := F.kids
+  kids_nodup := F.kids_nodup
+  kids_all := F.kids_all
+  CI := F.CI
+  X := F.X
+  PR := F.PR
+  body m x := F.body m x (u (.inl m))
+  rbody r := F.rbody r (u (.inr r))
+  comb := F.comb
+  asm := F.asm
+  onehot := F.onehot
+  toB := F.toB
+  exactRet := F.exactRet
+
+/-- The part of a family that reads no program (for `Acyc`, `Env`, `Av`). -/
+@[reducible] def ParentU.base (F : ParentU V) : Parent V where
+  I := F.I
+  decI := F.decI
+  kids := F.kids
+  kids_nodup := F.kids_nodup
+  kids_all := F.kids_all
+  CI := F.CI
+  X := F.X
+  PR := F.PR
+  body _ _ := .fail
+  rbody _ := .fail
+  comb := F.comb
+  asm := F.asm
+  onehot := F.onehot
+  toB := F.toB
+  exactRet := F.exactRet
+
+/-- A parent without skipped values, as a family. -/
+@[reducible] def Parent.toU (P : Parent V) : ParentU V where
+  I := P.I
+  decI := P.decI
+  kids := P.kids
+  kids_nodup := P.kids_nodup
+  kids_all := P.kids_all
+  CI := P.CI
+  X := P.X
+  PR := P.PR
+  body m x _ := P.body m x
+  rbody r _ := P.rbody r
+  comb := P.comb
+  asm := P.asm
+  onehot := P.onehot
+  toB := P.toB
+  exactRet := P.exactRet
+
+theorem Parent.toU_at (P : Parent V) (u : P.toU.Step → Nat → V) : P.toU.at u = P := rfl
+
+/-- The module a family builds; at `u` it is `(F.at u.1).toModule` of the children at `u.2`. -/
+@[reducible] def ParentU.toModuleU (F : ParentU V) (impl : (j : F.I) → ModuleU V (F.CI j)) :
+    ModuleU V F.X where
+  U := (F.Step → Nat → V) × ((j : F.I) → (impl j).U)
+  S := (j : F.I) → (impl j).S
+  R := F.PR ⊕ (Σ j, (impl j).R)
+  meth u := ((F.at u.1).toModule (fun j => (impl j).at (u.2 j))).meth
+  rule u := ((F.at u.1).toModule (fun j => (impl j).at (u.2 j))).rule
+  clean s := fun j => (impl j).clean (s j)
+  clean_idem s := funext fun j => (impl j).clean_idem (s j)
+  Sig := PSig V F.X F.I F.CI (fun j => (impl j).Sig)
+  hw s w o s' g := g.w = w ∧ (∀ j, (impl j).hw (s j) (g.wc j) (g.oc j) (s' j) (g.sub j)) ∧
+    (∀ j, (g.wc j).en = ((F.comb g.oc w).1 j).en) ∧ o.rdy = (F.comb g.oc w).2.rdy ∧
+    (∀ m, F.exactRet m = true → o.ret m = (F.comb g.oc w).2.ret m) ∧
+    (F.onehot g.oc w → g.wc = (F.comb g.oc w).1 ∧ o = (F.comb g.oc w).2)
+  ok g := F.asm g.oc g.w ∧ ∀ j, (impl j).ok (g.sub j)
+  L := Σ j, (impl j).L
+  log s l := (impl l.1).log (s l.1) l.2
+  trc g l := (impl l.1).trc (g.sub l.1) l.2
+  log_clean s l := (impl l.1).log_clean (s l.1) l.2
+
+theorem ParentU.toModuleU_at (F : ParentU V) (impl : (j : F.I) → ModuleU V (F.CI j))
+    (u : (F.toModuleU impl).U) :
+    (F.toModuleU impl).at u = (F.at u.1).toModule (fun j => (impl j).at (u.2 j)) := rfl
 
 /-! ## The per-module obligation -/
 
@@ -524,6 +744,26 @@ def Obl : Prop :=
         Drives (P.CI j).ann ((P.comb oc w).1 j) (sigmaJ P oc τP j) ∧
         ∀ c ∈ (sigmaJ P oc τP j).flatten, (P.CI j).ann.alwaysRdy c.1 = false → (oc j).rdy c.1 = true
 
+/-- **The obligation with skipped values**: the order `τP` and every child's call sequence
+    `σC j` are chosen before `u`; at every `u` the steps keep their guards, return the
+    parent's outputs and make exactly those calls. -/
+def OblU (F : ParentU V) : Prop :=
+  ∀ (oc : (j : F.I) → Outs (F.CI j).M V) (w : Wires F.X.M V) (σ : List (List (F.X.M × V))),
+    F.asm oc w → (∀ j, AliasOK F.toB (F.CI j).ann (oc j)) → Legal F.X.ann σ → Drives F.X.ann w σ →
+    (∀ c ∈ σ.flatten, F.X.ann.alwaysRdy c.1 = false → (F.comb oc w).2.rdy c.1 = true) →
+    F.onehot oc w ∧ ∃ (τP : List (List (F.X.M × V) ⊕ F.PR)) (σC : (j : F.I) → List (List ((F.CI j).M × V))),
+      groups τP = σ ∧
+      (∀ j, Legal (F.CI j).ann (σC j) ∧ Drives (F.CI j).ann ((F.comb oc w).1 j) (σC j) ∧
+        ∀ c ∈ (σC j).flatten, (F.CI j).ann.alwaysRdy c.1 = false → (oc j).rdy c.1 = true) ∧
+      ∀ u : F.Step → Nat → V, (∀ e ∈ τP, StepOK (F.at u) oc (F.comb oc w).2 e) ∧
+        ∀ j, sigmaJ (F.at u) oc τP j = σC j
+
+/-- A parent without skipped values meets the family obligation when it meets its own. -/
+theorem oblU_of_obl (P : Parent V) (h : Obl P) : OblU P.toU := by
+  intro oc w σ h1 h2 h3 h4 h5
+  obtain ⟨hoh, τP, hg, hs, hj⟩ := h oc w σ h1 h2 h3 h4 h5
+  exact ⟨hoh, τP, fun j => sigmaJ P oc τP j, hg, hj, fun _ => ⟨hs, fun _ => rfl⟩⟩
+
 end Obl
 
 /-! ## The composition theorem -/
@@ -607,6 +847,32 @@ theorem groups_cons_split {α β : Type} : ∀ (τ : List (α ⊕ β)) (g : α) 
   | .inr b :: τ, g, gs, h => by
     obtain ⟨ρ, post, h1, h2⟩ := groups_cons_split τ g gs h
     exact ⟨b :: ρ, post, by simp [h1], h2⟩
+
+/-- A run's rules before its first group, and what follows that group. -/
+def leadR {α β : Type} : List (α ⊕ β) → List β × List (α ⊕ β)
+  | [] => ([], [])
+  | .inl _ :: l => ([], l)
+  | .inr b :: l => (b :: (leadR l).1, (leadR l).2)
+
+theorem leadR_split {α β : Type} : ∀ (τ : List (α ⊕ β)) (g : α) (gs : List α), groups τ = g :: gs →
+    τ = (leadR τ).1.map .inr ++ .inl g :: (leadR τ).2 ∧ groups (leadR τ).2 = gs
+  | [], g, gs, h => by simp [groups] at h
+  | .inl a :: τ, g, gs, h => by
+    simp only [groups, List.cons.injEq] at h
+    obtain ⟨rfl, rfl⟩ := h
+    exact ⟨rfl, rfl⟩
+  | .inr b :: τ, g, gs, h => by
+    obtain ⟨h1, h2⟩ := leadR_split τ g gs h
+    refine ⟨?_, h2⟩
+    simp only [leadR, List.map_cons, List.cons_append]
+    exact congrArg _ h1
+
+theorem leadR_nil {α β : Type} : ∀ (τ : List (α ⊕ β)), groups τ = [] → τ = (leadR τ).1.map .inr
+  | [], _ => rfl
+  | .inl a :: τ, h => by simp [groups] at h
+  | .inr b :: τ, h => by
+    simp only [leadR, List.map_cons]
+    exact congrArg _ (leadR_nil τ h)
 
 section ComposeP
 variable (P : Parent V) (impl : (j : P.I) → Module V (P.CI j))
@@ -694,131 +960,157 @@ theorem exec_child_rules (o : Outs P.X.M V) (oc : (j : P.I) → Outs (P.CI j).M 
       rw [upd_upd] at ih
       exact .rule ⟨s1, hr, rfl⟩ ih
 
-/-- All children's rules, run inside the parent. -/
-theorem exec_all_rules (o : Outs P.X.M V) (oc : (j : P.I) → Outs (P.CI j).M V)
+/-- Children's rules, child by child, as steps of the parent. -/
+def kidRules {I G PR : Type} {Rj : I → Type} (kids : List I) (ρ : (j : I) → List (Rj j)) :
+    List (G ⊕ (PR ⊕ Σ j, Rj j)) :=
+  kids.flatMap (fun j => (ρ j).map (fun r => .inr (.inr ⟨j, r⟩)))
+
+/-- **The merged run**, from the parent's steps and the children's runs alone: before each
+    parent step, each child's rules up to its group for that step. -/
+def mergeL {I G PR : Type} {Gj Rj : I → Type} (kids : List I) :
+    List (G ⊕ PR) → ((j : I) → List (Gj j ⊕ Rj j)) → List (G ⊕ (PR ⊕ Σ j, Rj j))
+  | [], τs => kidRules kids (fun j => (leadR (τs j)).1)
+  | e :: τP, τs => kidRules kids (fun j => (leadR (τs j)).1) ++
+      Sum.map id Sum.inl e :: mergeL kids τP (fun j => (leadR (τs j)).2)
+
+theorem groups_kidRules {I G PR : Type} {Rj : I → Type} (ρ : (j : I) → List (Rj j)) :
+    ∀ (kids : List I), groups (kidRules (G := G) (PR := PR) kids ρ) = []
+  | [] => rfl
+  | j :: kids => by
+    have h : ∀ (l : List (Rj j)),
+        groups ((l.map (fun r => (Sum.inr (Sum.inr ⟨j, r⟩) : G ⊕ (PR ⊕ Σ j, Rj j)))) ++
+          kidRules kids ρ) = [] := by
+      intro l
+      induction l with
+      | nil => exact groups_kidRules ρ kids
+      | cons _ _ ih => simpa [groups] using ih
+    exact h (ρ j)
+
+/-- The merged run keeps the parent's groups, whatever the children's runs. -/
+theorem groups_mergeL {I G PR : Type} {Gj Rj : I → Type} (kids : List I) :
+    ∀ (τP : List (G ⊕ PR)) (τs : (j : I) → List (Gj j ⊕ Rj j)), groups (mergeL kids τP τs) = groups τP
+  | [], τs => groups_kidRules _ kids
+  | e :: τP, τs => by
+    simp only [mergeL]
+    rw [groups_append, groups_kidRules, List.nil_append]
+    cases e with
+    | inl g => simp [groups, groups_mergeL kids τP]
+    | inr r => simp [groups, groups_mergeL kids τP]
+
+/-- The children's rules `ρ j`, run inside the parent, child by child. -/
+theorem exec_kidRules (o : Outs P.X.M V) (oc : (j : P.I) → Outs (P.CI j).M V)
     (b : (j : P.I) → (impl j).S) :
-    ∀ (L : List P.I), L.Nodup → ∀ (a : (j : P.I) → (impl j).S),
-      (∀ j ∈ L, ∃ ρ : List (impl j).R, Exec (impl j) (oc j) (a j) (ρ.map .inr) (b j)) →
-      ∃ τ : List (List (P.X.M × V) ⊕ (P.toModule impl).R), groups τ = [] ∧
-        Exec (P.toModule impl) o a τ (fun j => if j ∈ L then b j else a j)
-  | [], _, a, _ => ⟨[], rfl, by simp only [List.not_mem_nil, ite_false]; exact .nil _⟩
-  | j0 :: L, hnd, a, h => by
-    obtain ⟨ρ, hρ⟩ := h j0 (List.mem_cons_self ..)
-    have h1 := exec_child_rules P impl o oc j0 ρ a (b j0) hρ
-    have hnd' := (List.nodup_cons.mp hnd)
-    obtain ⟨τ2, hg2, h2⟩ := exec_all_rules o oc b L hnd'.2 (upd a j0 (b j0)) (fun j hj => by
+    ∀ (L : List P.I), L.Nodup → ∀ (a : (j : P.I) → (impl j).S) (ρ : (j : P.I) → List (impl j).R),
+      (∀ j ∈ L, Exec (impl j) (oc j) (a j) ((ρ j).map .inr) (b j)) →
+      Exec (P.toModule impl) o a (kidRules (G := List (P.X.M × V)) (PR := P.PR) L ρ)
+        (fun j => if j ∈ L then b j else a j)
+  | [], _, a, ρ, _ => by
+    simp only [kidRules, List.flatMap_nil, List.not_mem_nil, ite_false]; exact .nil _
+  | j0 :: L, hnd, a, ρ, h => by
+    have h1 := exec_child_rules P impl o oc j0 (ρ j0) a (b j0) (h j0 (List.mem_cons_self ..))
+    have hnd' := List.nodup_cons.mp hnd
+    have h2 := exec_kidRules o oc b L hnd'.2 (upd a j0 (b j0)) ρ (fun j hj => by
       have hne : j ≠ j0 := fun e => hnd'.1 (e ▸ hj)
       rw [upd_ne _ _ hne]
       exact h j (List.mem_cons_of_mem _ hj))
-    refine ⟨ρ.map (fun r => .inr (.inr ⟨j0, r⟩)) ++ τ2, ?_, ?_⟩
-    · rw [groups_append, hg2]
-      have : ∀ ρ' : List (impl j0).R,
-          groups (ρ'.map (fun r => (Sum.inr (Sum.inr ⟨j0, r⟩) : List (P.X.M × V) ⊕ (P.toModule impl).R))) = [] := by
-        intro ρ'; induction ρ' with
-        | nil => rfl
-        | cons _ _ ih => simp [groups, ih]
-      rw [this]; rfl
-    · have e : (fun j => if j ∈ L then b j else upd a j0 (b j0) j) =
-          (fun j => if j ∈ j0 :: L then b j else a j) := funext fun j => by
-        by_cases hj : j = j0
-        · subst hj; simp [hnd'.1, upd_same]
-        · simp [hj, upd_ne _ _ hj]
-      rw [← e]
-      exact exec_append _ _ _ _ h1 h2
+    have e : (fun j => if j ∈ L then b j else upd a j0 (b j0) j) =
+        (fun j => if j ∈ j0 :: L then b j else a j) := funext fun j => by
+      by_cases hj : j = j0
+      · subst hj; simp [hnd'.1, upd_same]
+      · simp [hj, upd_ne _ _ hj]
+    rw [← e]
+    simp only [kidRules, List.flatMap_cons]
+    exact exec_append _ _ _ _ h1 h2
 
-/-- The children's runs merge into one run of the parent: child rules go
-    between parent steps, never inside one. -/
-theorem merge (oc : (j : P.I) → Outs (P.CI j).M V) (o : Outs P.X.M V) :
+/-- **The children's runs merge into one run of the parent**, along `mergeL`: child rules
+    go between parent steps, never inside one. -/
+theorem merge_exec (oc : (j : P.I) → Outs (P.CI j).M V) (o : Outs P.X.M V) :
     ∀ (τP : List (List (P.X.M × V) ⊕ P.PR)) (a fin : (j : P.I) → (impl j).S)
       (τs : (j : P.I) → List (List ((P.CI j).M × V) ⊕ (impl j).R)),
       (∀ j, groups (τs j) = sigmaJ P oc τP j) →
       (∀ j, Exec (impl j) (oc j) (a j) (τs j) (fin j)) →
       (∀ e ∈ τP, StepOK P oc o e) →
-      ∃ τ : List (List (P.X.M × V) ⊕ (P.toModule impl).R), groups τ = groups τP ∧
-        Exec (P.toModule impl) o a τ fin
+      Exec (P.toModule impl) o a (mergeL P.kids τP τs) fin
   | [], a, fin, τs, hg, hx, _ => by
-    have : ∀ j ∈ P.kids, ∃ ρ : List (impl j).R, Exec (impl j) (oc j) (a j) (ρ.map .inr) (fin j) := by
+    have hr : ∀ j ∈ P.kids, Exec (impl j) (oc j) (a j) ((leadR (τs j)).1.map .inr) (fin j) := by
       intro j _
-      obtain ⟨ρ, hρ⟩ := groups_nil_rules (τs j) (by rw [hg j]; rfl)
-      exact ⟨ρ, hρ ▸ hx j⟩
-    obtain ⟨τ, hτg, hτ⟩ := exec_all_rules P impl o oc fin P.kids P.kids_nodup a this
-    refine ⟨τ, hτg, ?_⟩
+      have hx' := hx j
+      rwa [leadR_nil (τs j) (by rw [hg j]; rfl)] at hx'
+    have h := exec_kidRules P impl o oc fin P.kids P.kids_nodup a (fun j => (leadR (τs j)).1) hr
     have e : (fun j => if j ∈ P.kids then fin j else a j) = fin := funext fun j => by
       simp [P.kids_all j]
-    rwa [e] at hτ
+    rw [e] at h
+    exact h
   | e :: τP, a, fin, τs, hg, hx, hst => by
-    have hsp : ∀ j, ∃ q : List (impl j).R × List (List ((P.CI j).M × V) ⊕ (impl j).R) × (impl j).S × (impl j).S,
-        Exec (impl j) (oc j) (a j) (q.1.map .inr) q.2.2.1 ∧
-        ExecG (impl j) (oc j) q.2.2.1 (proj j (stepTrace P oc e)) q.2.2.2 ∧
-        Exec (impl j) (oc j) q.2.2.2 q.2.1 (fin j) ∧
-        groups q.2.1 = sigmaJ P oc τP j := by
+    have hsp : ∀ j, ∃ q : (impl j).S × (impl j).S,
+        Exec (impl j) (oc j) (a j) ((leadR (τs j)).1.map .inr) q.1 ∧
+        ExecG (impl j) (oc j) q.1 (proj j (stepTrace P oc e)) q.2 ∧
+        Exec (impl j) (oc j) q.2 (leadR (τs j)).2 (fin j) := by
       intro j
-      obtain ⟨ρ, post, h1, h2⟩ := groups_cons_split (τs j) _ _ (by rw [hg j]; rfl)
+      obtain ⟨h1, -⟩ := leadR_split (τs j) _ _ (by rw [hg j]; rfl)
       have hx' := hx j
       rw [h1] at hx'
       obtain ⟨u, hu1, hu2⟩ := exec_split _ _ _ _ hx'
       cases hu2 with
       | grp hg' hrest =>
         rename_i v
-        exact ⟨(ρ, post, u, v), hu1, hg', hrest, h2⟩
+        exact ⟨(u, v), hu1, hg', hrest⟩
     obtain ⟨f, hf⟩ := choose_fun hsp
-    obtain ⟨τ1, hτ1g, hτ1⟩ := exec_all_rules P impl o oc (fun j => (f j).2.2.1) P.kids P.kids_nodup a
-      (fun j _ => ⟨(f j).1, (hf j).1⟩)
-    have e1 : (fun j => if j ∈ P.kids then (f j).2.2.1 else a j) = (fun j => (f j).2.2.1) :=
+    have hτ1 := exec_kidRules P impl o oc (fun j => (f j).1) P.kids P.kids_nodup a
+      (fun j => (leadR (τs j)).1) (fun j _ => (hf j).1)
+    have e1 : (fun j => if j ∈ P.kids then (f j).1 else a j) = (fun j => (f j).1) :=
       funext fun j => by simp [P.kids_all j]
     rw [e1] at hτ1
-    obtain ⟨τ2, hτ2g, hτ2⟩ := merge oc o τP (fun j => (f j).2.2.2) fin (fun j => (f j).2.1)
-      (fun j => (hf j).2.2.2) (fun j => (hf j).2.2.1) (fun e' he' => hst e' (List.mem_cons_of_mem _ he'))
+    have hτ2 := merge_exec oc o τP (fun j => (f j).2) fin (fun j => (leadR (τs j)).2)
+      (fun j => (leadR_split (τs j) _ _ (by rw [hg j]; rfl)).2) (fun j => (hf j).2.2)
+      (fun e' he' => hst e' (List.mem_cons_of_mem _ he'))
+    simp only [mergeL]
     match e, hst, hf with
     | .inl g, hst, hf =>
-      have hstep : ExecG (P.toModule impl) o (fun j => (f j).2.2.1) g (fun j => (f j).2.2.2) :=
+      have hstep : ExecG (P.toModule impl) o (fun j => (f j).1) g (fun j => (f j).2) :=
         execG_parent P impl oc o g _ _ (hst (.inl g) (List.mem_cons_self ..)) (fun j => (hf j).2.1)
-      refine ⟨τ1 ++ .inl g :: τ2, ?_, ?_⟩
-      · rw [groups_append, hτ1g]; simp [groups, hτ2g]
-      · exact exec_append _ _ _ _ hτ1 (.grp hstep hτ2)
+      exact exec_append _ _ _ _ hτ1 (.grp hstep hτ2)
     | .inr r, hst, hf =>
       have hok := hst (.inr r) (List.mem_cons_self ..)
       simp only [StepOK, Option.isSome_iff_exists] at hok
       obtain ⟨v, hv⟩ := hok
-      have hrun : RunP P impl (P.rbody r) (fun j => (f j).2.2.1) v (fun j => (f j).2.2.2) :=
+      have hrun : RunP P impl (P.rbody r) (fun j => (f j).1) v (fun j => (f j).2) :=
         runP_of_trace P impl oc (P.rbody r) _ _ v hv (fun j => (hf j).2.1)
-      refine ⟨τ1 ++ .inr (.inl r) :: τ2, ?_, ?_⟩
-      · rw [groups_append, hτ1g]; simp [groups, hτ2g]
-      · exact exec_append _ _ _ _ hτ1 (.rule ⟨v, hrun⟩ hτ2)
+      exact exec_append _ _ _ _ hτ1 (.rule ⟨v, hrun⟩ hτ2)
 
-/-- **The composition theorem.**  If every child realizes its contract and
-    respects its output aliases, and the parent meets its obligation, the
-    parent realizes its contract.  Each child's task log stays its own: the
-    merged run is compared with the hardware per log. -/
-theorem compose (hC : ∀ j, Realizes (impl j)) (hA : ∀ j, Aliased P.toB (impl j)) (hO : Obl P) :
-    Realizes (P.toModule impl) := by
+end ComposeP
+
+/-- **The composition theorem.**  If every child realizes its contract and respects its
+    output aliases, and the family meets its obligation, the module realizes its contract
+    with the run fixed before every skipped value; each child's task log stays its own. -/
+theorem compose (F : ParentU V) (impl : (j : F.I) → ModuleU V (F.CI j)) (hC : ∀ j, RealizesU (impl j))
+    (hA : ∀ j, Aliased F.toB (impl j).hwm) (hO : OblU F) : RealizesU (F.toModuleU impl) := by
   intro s σ w o s' g hcl hL hD hhw hok hrdy
-  obtain ⟨hgw, hchild, -, hrd, hdata⟩ := hhw
+  obtain ⟨hgw, hchild, -, hrd, -, hdata⟩ := hhw
   obtain ⟨hasm, hokc⟩ := hok
   rw [hgw] at hasm
-  have hal : ∀ j, AliasOK P.toB (P.CI j).ann (g.oc j) := fun j =>
+  have hal : ∀ j, AliasOK F.toB (F.CI j).ann (g.oc j) := fun j =>
     hA j (s j) (g.wc j) (g.oc j) (s' j) (g.sub j) (congrFun hcl j) (hchild j)
-  have hrdy' : ∀ c ∈ σ.flatten, P.X.ann.alwaysRdy c.1 = false → (P.comb g.oc w).2.rdy c.1 = true :=
+  have hrdy' : ∀ c ∈ σ.flatten, F.X.ann.alwaysRdy c.1 = false → (F.comb g.oc w).2.rdy c.1 = true :=
     fun c hc h => hrd ▸ hrdy c hc h
-  obtain ⟨hoh, τP, hgP, hstep, hj⟩ := hO g.oc w σ hasm hal hL hD hrdy'
+  obtain ⟨hoh, τP, σC, hgP, hσC, hu⟩ := hO g.oc w σ hasm hal hL hD hrdy'
   obtain ⟨hwc, ho⟩ := hdata hoh
   subst ho
-  have : ∀ j, ∃ q : List (List ((P.CI j).M × V) ⊕ (impl j).R) × (impl j).S,
-      groups q.1 = sigmaJ P g.oc τP j ∧ Exec (impl j) (g.oc j) (s j) q.1 q.2 ∧ s' j = (impl j).clean q.2 ∧
-        ∀ l, (impl j).trc (g.sub j) l = (impl j).log q.2 l := by
+  -- each child's run comes from its call sequence alone, before any skipped value
+  have hch : ∀ j, ∃ τj : List (List ((F.CI j).M × V) ⊕ (impl j).R), groups τj = σC j ∧
+      ∀ uj : (impl j).U, ∃ fin : (impl j).S, Exec ((impl j).at uj) (g.oc j) (s j) τj fin ∧
+        s' j = (impl j).clean fin ∧ ∀ l, (impl j).trc (g.sub j) l = (impl j).log fin l := by
     intro j
     have hcj := hchild j
     rw [hwc] at hcj
-    obtain ⟨τ, fin, h1, h2, h3, h4⟩ := hC j (s j) (sigmaJ P g.oc τP j) ((P.comb g.oc w).1 j) (g.oc j) (s' j)
-      (g.sub j) (congrFun hcl j) (hj j).1 (hj j).2.1 hcj (hokc j) (hj j).2.2
-    exact ⟨(τ, fin), h1, h2, h3, h4⟩
-  obtain ⟨f, hf⟩ := choose_fun this
-  obtain ⟨τ, hτg, hτ⟩ := merge P impl g.oc (P.comb g.oc w).2 τP s (fun j => (f j).2) (fun j => (f j).1)
-    (fun j => (hf j).1) (fun j => (hf j).2.1) hstep
-  -- each child's task log is its own run's: the merge keeps every child's final state
-  exact ⟨τ, fun j => (f j).2, hτg.trans hgP, hτ, funext fun j => (hf j).2.2.1, fun l => (hf l.1).2.2.2 l.2⟩
-
-end ComposeP
+    exact hC j (s j) (σC j) ((F.comb g.oc w).1 j) (g.oc j) (s' j) (g.sub j) (congrFun hcl j)
+      (hσC j).1 (hσC j).2.1 hcj (hokc j) (hσC j).2.2
+  obtain ⟨τs, hτs⟩ := choose_fun hch
+  refine ⟨mergeL F.kids τP τs, (groups_mergeL F.kids τP τs).trans hgP, fun u => ?_⟩
+  obtain ⟨fin, hfin⟩ := choose_fun (fun j => (hτs j).2 (u.2 j))
+  refine ⟨fin, ?_, funext fun j => (hfin j).2.1, fun l => (hfin l.1).2.2 l.2⟩
+  exact merge_exec (F.at u.1) (fun j => (impl j).at (u.2 j)) g.oc (F.comb g.oc w).2 τP s fin τs
+    (fun j => (hτs j).1.trans ((hu u.1).2 j).symm) (fun j => (hfin j).1) (hu u.1).1
 
 /-! ## Non-vacuity: causal totality, proved once
 
@@ -982,36 +1274,45 @@ theorem causal_toModule [Inhabited V] (P : Parent V) (impl : (j : P.I) → Modul
       exact h
     obtain ⟨f, hf⟩ := choose_fun hj
     exact ⟨fun j => (f j).1, ⟨w, fixOC A impl out default s w, (P.comb (fixOC A impl out default s w) w).1,
-      fun j => (f j).2⟩, rfl, hf, fun _ => rfl, rfl, fun _ => ⟨rfl, rfl⟩⟩
+      fun j => (f j).2⟩, rfl, hf, fun _ => rfl, rfl, fun _ _ => rfl, fun _ => ⟨rfl, rfl⟩⟩
 
 /-- The instance tree: leaves are modules with a contract and causal
     totality (a primitive's, proved below, or an imported Verilog module's,
-    assumed), nodes are parents that meet their obligations, with an
-    acyclicity certificate, over built children that respect their output
-    aliases. -/
-inductive Built : (X : Iface) → Module V X → Prop
-  | leaf {X : Iface} (Mo : Module V X) : Realizes Mo → Causal Mo → Built X Mo
-  | node (P : Parent V) (impl : (j : P.I) → Module V (P.CI j)) :
-      (∀ j, Built (P.CI j) (impl j)) → (∀ j, Aliased P.toB (impl j)) → Obl P → Acyc P →
-      Built P.X (P.toModule impl)
+    assumed), nodes are families that meet their obligations (`OblU`, the
+    order before the skipped values), with an acyclicity certificate, over
+    built children that respect their output aliases. -/
+inductive Built : (X : Iface) → ModuleU V X → Prop
+  | leaf {X : Iface} (Mo : Module V X) : Realizes Mo → Causal Mo → Built X Mo.toU
+  | node (F : ParentU V) (impl : (j : F.I) → ModuleU V (F.CI j)) :
+      (∀ j, Built (F.CI j) (impl j)) → (∀ j, Aliased F.toB (impl j).hwm) → OblU F → Acyc F.base →
+      Built F.X (F.toModuleU impl)
 
-/-- **The hierarchy theorem.**  A built module realizes its contract. -/
-theorem Built.realizes {X : Iface} {Mo : Module V X} (h : Built X Mo) : Realizes Mo := by
+/-- **The hierarchy theorem.**  A built module realizes its contract, with one run fixed
+    before the skipped values of every module in the tree. -/
+theorem Built.realizes {X : Iface} {Mo : ModuleU V X} (h : Built X Mo) : RealizesU Mo := by
   induction h with
-  | leaf Mo h _ => exact h
-  | node P impl _ hA hO _ ih => exact compose P impl ih hA hO
+  | leaf Mo h _ => exact realizesU_toU Mo h
+  | node F impl _ hA hO _ ih => exact compose F impl ih hA hO
+
+/-- A family of causal children with an acyclicity certificate is causal (its hardware
+    reads no program, so `causal_toModule` applies to its `u`-free part). -/
+theorem causal_toModuleU [Inhabited V] (F : ParentU V) (impl : (j : F.I) → ModuleU V (F.CI j))
+    (hC : ∀ j, Causal (impl j).hwm) (A : Acyc F.base) : Causal (F.toModuleU impl).hwm :=
+  causal_toModule F.base (fun j => (impl j).hwm) hC A
 
 /-- **And its contract is not vacuous**: it has a hardware cycle for every
     input, from every state a cycle can start in. -/
-theorem Built.causal [Inhabited V] {X : Iface} {Mo : Module V X} (h : Built X Mo) : Causal Mo := by
+theorem Built.causal [Inhabited V] {X : Iface} {Mo : ModuleU V X} (h : Built X Mo) : Causal Mo.hwm := by
   induction h with
   | leaf Mo _ h => exact h
-  | node P impl _ _ _ A ih => exact causal_toModule P impl ih A
+  | node F impl _ _ _ A ih => exact causal_toModuleU F impl ih A
 
 /-- **The top theorem, in full**: every hardware cycle in which the
     assertions hold agrees with a one-at-a-time run (for every legal call
     sequence on the ports), and every input has a hardware cycle.  `Mo.ok`
     unfolds to the conjunction of each instance's `asm` on its signals.
+    The run is fixed before the skipped values of every module in the tree,
+    and agrees with the hardware at every assignment of them.
 
     The agreement includes each module's system-task calls (condition,
     arguments, order), compared per module: Verilog runs each synthesized
@@ -1019,12 +1320,32 @@ theorem Built.causal [Inhabited V] {X : Iface} {Mo : Module V X} (h : Built X Mo
     clock edge, so different modules' calls are not ordered against each
     other.  Bluesim should follow the full one-at-a-time order; that is a
     property of the Bluesim back end, outside this proof. -/
-theorem Built.top [Inhabited V] {X : Iface} {Mo : Module V X} (h : Built X Mo) :
-    Realizes Mo ∧ ∀ s w, Mo.clean s = s → ∃ o s' g, Mo.hw s w o s' g := by
+theorem Built.top [Inhabited V] {X : Iface} {Mo : ModuleU V X} (h : Built X Mo) :
+    RealizesU Mo ∧ ∀ s w, Mo.clean s = s → ∃ o s' g, Mo.hw s w o s' g := by
   refine ⟨h.realizes, fun s w hc => ?_⟩
   obtain ⟨out, -, ht⟩ := h.causal
   obtain ⟨s', g, hg⟩ := ht s w hc
   exact ⟨out s w, s', g, hg⟩
+
+/-- An acyclicity certificate reads only `comb` and the interfaces, so a parent's moves to
+    its family. -/
+def Acyc.toU {P : Parent V} (A : Acyc P) : Acyc P.toU.base := { A with }
+
+/-- **A built module respects its output aliases** when each aliased result is an exact
+    port and `comb` computes the alias (a ready output: `rdy a = toB (ret p)`). -/
+theorem aliased_toModuleU (F : ParentU V) (impl : (j : F.I) → ModuleU V (F.CI j)) (toB : V → Bool)
+    (hs : ∀ p q, F.X.ann.same p q = true → F.exactRet p = true ∧ F.exactRet q = true ∧
+      ∀ oc w, (F.comb oc w).2.ret p = (F.comb oc w).2.ret q)
+    (hr : ∀ a p, F.X.ann.rdyRet a p = true → F.exactRet p = true ∧
+      ∀ oc w, (F.comb oc w).2.rdy a = toB ((F.comb oc w).2.ret p)) :
+    Aliased toB (F.toModuleU impl).hwm := by
+  intro s w o s' g _ hh
+  obtain ⟨hgw, -, -, hrd, hex, -⟩ := hh
+  refine ⟨fun p q hpq => ?_, fun a p hap => ?_⟩
+  · obtain ⟨hp, hq, he⟩ := hs p q hpq
+    rw [hex p hp, hex q hq, he]
+  · obtain ⟨hp, he⟩ := hr a p hap
+    rw [hrd, hex p hp, he]
 
 section Lists
 
@@ -2586,9 +2907,34 @@ theorem mem_proj {I : Type} {inst : DecidableEq I} {CM : I → Type} (j : I) :
     · rw [proj_cons_ne _ _ hj] at h
       exact List.mem_cons_of_mem _ (mem_proj j l c h)
 
-/-- **The obligation from a certificate.** -/
-theorem obl_of_cert (C : Cert P) : Obl P := by
-  intro oc w σ hasm hal hL hD hrdy
+/-- The order `obl_of_cert` builds from the rules, which fire and the hits alone:
+    `placeOrder` over the callers' groups. -/
+def orderOf {M R : Type} (rules : List R) (fireB : R → Bool) (hitB : M → R → Bool)
+    (σ : List (List (M × V))) : List (List (M × V) ⊕ R) :=
+  (placeOrder σ.length (rules.filter fireB) (fun k r => (σ.getD k []).any (fun c => hitB c.1 r))).map
+    (Sum.map (fun k => σ.getD k []) id)
+
+/-- Every method called in a legal, driven, ready sequence may be called. -/
+theorem avail_of {oc : (j : P.I) → Outs (P.CI j).M V} {w : Wires P.X.M V} {σ : List (List (P.X.M × V))}
+    (hD : Drives P.X.ann w σ)
+    (hrdy : ∀ c ∈ σ.flatten, P.X.ann.alwaysRdy c.1 = false → (P.comb oc w).2.rdy c.1 = true) :
+    ∀ c ∈ σ.flatten, Avail P oc w c.1 := fun c hc => by
+  refine ⟨?_, fun he => (hD.en c.1 he).mpr ⟨c.2, hc⟩⟩
+  cases h : P.X.ann.alwaysRdy c.1
+  · exact .inr (hrdy c hc h)
+  · exact .inl rfl
+
+/-- **The obligation from a certificate, at the certificate's own order** (`orderOf`). -/
+theorem obl_of_cert_at (C : Cert P) (oc : (j : P.I) → Outs (P.CI j).M V) (w : Wires P.X.M V)
+    (σ : List (List (P.X.M × V))) (hasm : P.asm oc w) (hal : ∀ j, AliasOK P.toB (P.CI j).ann (oc j))
+    (hL : Legal P.X.ann σ) (hD : Drives P.X.ann w σ)
+    (hrdy : ∀ c ∈ σ.flatten, P.X.ann.alwaysRdy c.1 = false → (P.comb oc w).2.rdy c.1 = true) :
+    P.onehot oc w ∧ groups (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) = σ ∧
+      (∀ e ∈ orderOf C.rules (C.fire oc w) (C.hit oc w) σ, StepOK P oc (P.comb oc w).2 e) ∧
+      ∀ j, Legal (P.CI j).ann (sigmaJ P oc (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) j) ∧
+        Drives (P.CI j).ann ((P.comb oc w).1 j) (sigmaJ P oc (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) j) ∧
+        ∀ c ∈ (sigmaJ P oc (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) j).flatten,
+          (P.CI j).ann.alwaysRdy c.1 = false → (oc j).rdy c.1 = true := by
   have harg : ∀ c ∈ σ.flatten, c.2 = w.arg c.1 := call_arg hL hD C.selfAnn
   have havail : ∀ c ∈ σ.flatten, Avail P oc w c.1 := fun c hc => by
     refine ⟨?_, fun he => (hD.en c.1 he).mpr ⟨c.2, hc⟩⟩
@@ -2697,6 +3043,8 @@ theorem obl_of_cert (C : Cert P) : Obl P := by
   let order := placeOrder σ.length rs hitK
   have hpairs := place_ok σ.length rs (C.rules_nodup.sublist List.filter_sublist) hitK OK Hgg H1 H2 H3 H4
   let τP := order.map toE
+  have hτP : orderOf C.rules (C.fire oc w) (C.hit oc w) σ = τP := rfl
+  rw [hτP]
   -- the child calls of the steps of τP
   have hsteps : ∀ e ∈ τP, ∀ j y, y ∈ proj j (tr e) →
       (∃ c ∈ σ.flatten, y ∈ proj j (trM P oc w c.1).1) ∨ (∃ r, C.fire oc w r = true ∧ y ∈ proj j (trR P oc r).1) := by
@@ -2757,7 +3105,7 @@ theorem obl_of_cert (C : Cert P) : Obl P := by
     · obtain ⟨c, hc, rfl⟩ := hcalled m hs
       exact ⟨x, hcallIn c hc j _ hx⟩
     · exact ⟨x, hruleIn r hs j _ hx⟩
-  refine ⟨C.onehot oc w ⟨hE.1, hE.2.1, hE.2.2.2⟩, τP, ?_, ?_, fun j => ⟨?_, ?_, ?_⟩⟩
+  refine ⟨C.onehot oc w ⟨hE.1, hE.2.1, hE.2.2.2⟩, ?_, ?_, fun j => ⟨?_, ?_, ?_⟩⟩
   · -- the groups of τP are σ
     show groups (order.map (Sum.map G id)) = σ
     rw [groups_map_sum, placeOrder_groups]
@@ -2823,6 +3171,79 @@ theorem obl_of_cert (C : Cert P) : Obl P := by
     rcases hsteps e he j _ hy with ⟨c', hc', hy'⟩ | ⟨r, hr, hy'⟩
     · exact C.rdyM oc w c'.1 hE (havail c' hc') _ (mem_proj j _ _ hy') hnr
     · exact C.rdyR oc w r hE hr _ (mem_proj j _ _ hy') hnr
+
+/-- **The obligation from a certificate.** -/
+theorem obl_of_cert (C : Cert P) : Obl P := by
+  intro oc w σ hasm hal hL hD hrdy
+  obtain ⟨h1, h2, h3, h4⟩ := obl_of_cert_at P C oc w σ hasm hal hL hD hrdy
+  exact ⟨h1, _, h2, h3, h4⟩
+
+/-- **A certificate with skipped values**: the rules, which fire and the hits are fixed
+    before `u`; at every `u` a `Cert` uses them, and a step that makes its calls makes the
+    same calls at every `u` (so the children's call sequences are fixed too). -/
+structure CertU (F : ParentU V) where
+  rules : List F.PR
+  fire : ((j : F.I) → Outs (F.CI j).M V) → Wires F.X.M V → F.PR → Bool
+  hit : ((j : F.I) → Outs (F.CI j).M V) → Wires F.X.M V → F.X.M → F.PR → Bool
+  cert : ∀ u : F.Step → Nat → V, Cert (F.at u)
+  rules_eq : ∀ u, (cert u).rules = rules
+  fire_eq : ∀ u, (cert u).fire = fire
+  hit_eq : ∀ u, (cert u).hit = hit
+  trU : ∀ (oc : (j : F.I) → Outs (F.CI j).M V) (w : Wires F.X.M V) (s : F.Step) (u u' : F.Step → Nat → V),
+    Env F.base oc w → Av F.base fire oc w s → trS (F.at u) oc w s = trS (F.at u') oc w s
+
+/-- **The family obligation from a certificate whose order does not depend on `u`**: the
+    order is `orderOf` of the fixed rules, firing and hits; `σC` is any one `u`'s calls. -/
+theorem oblU_of_cert [Inhabited V] (F : ParentU V) (C : CertU F) : OblU F := by
+  intro oc w σ hasm hal hL hD hrdy
+  have hat : ∀ u : F.Step → Nat → V, F.onehot oc w ∧ groups (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) = σ ∧
+      (∀ e ∈ orderOf C.rules (C.fire oc w) (C.hit oc w) σ, StepOK (F.at u) oc (F.comb oc w).2 e) ∧
+      ∀ j, Legal (F.CI j).ann (sigmaJ (F.at u) oc (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) j) ∧
+        Drives (F.CI j).ann ((F.comb oc w).1 j) (sigmaJ (F.at u) oc (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) j) ∧
+        ∀ c ∈ (sigmaJ (F.at u) oc (orderOf C.rules (C.fire oc w) (C.hit oc w) σ) j).flatten,
+          (F.CI j).ann.alwaysRdy c.1 = false → (oc j).rdy c.1 = true := by
+    intro u
+    have h := obl_of_cert_at (F.at u) (C.cert u) oc w σ hasm hal hL hD hrdy
+    rw [C.rules_eq u, C.fire_eq u, C.hit_eq u] at h
+    exact h
+  let u0 : F.Step → Nat → V := fun _ _ => default
+  let τP := orderOf C.rules (C.fire oc w) (C.hit oc w) σ
+  have hE : Env F.base oc w := by
+    have havail := avail_of F.base hD hrdy
+    have hcalled : ∀ m, called F.base w m = true → ∃ c ∈ σ.flatten, c.1 = m := by
+      intro m hm
+      unfold called at hm
+      simp only [Bool.or_eq_true, Bool.and_eq_true] at hm
+      rcases hm with ⟨h1, h2⟩ | h
+      · obtain ⟨x, hx⟩ := (hD.en m h1).mp h2
+        exact ⟨(m, x), hx, rfl⟩
+      · obtain ⟨x, hx⟩ := hL.always m h
+        exact ⟨(m, x), hx, rfl⟩
+    refine ⟨hasm, hal, fun m hm => ?_, fun m m' hne hm hm' => ?_⟩
+    · obtain ⟨c, hc, rfl⟩ := hcalled m hm; exact havail c hc
+    · obtain ⟨c, hc, rfl⟩ := hcalled m hm
+      obtain ⟨c', hc', rfl⟩ := hcalled m' hm'
+      have hcc : c ≠ c' := fun e => hne (by rw [e])
+      rcases either_sublist hc hc' hcc with h | h
+      · exact (hL.order _ _ h).2.1
+      · exact (hL.order _ _ h).2.2.1
+  -- every step of τP makes the same calls at every u
+  have hsame : ∀ u, ∀ e ∈ τP, stepTrace (F.at u) oc e = stepTrace (F.at u0) oc e := by
+    intro u e he
+    obtain ⟨x, hx, rfl⟩ := List.mem_map.mp he
+    rcases placeOrder_mem hx with ⟨r, rfl, hr⟩ | ⟨k, rfl, hk⟩
+    · exact C.trU oc w (.inr r) u u0 hE (List.mem_filter.mp hr).2
+    · show (σ.getD k []).flatMap (fun c => (trace oc (F.body c.1 c.2 (u (.inl c.1)))).1) =
+        (σ.getD k []).flatMap (fun c => (trace oc (F.body c.1 c.2 (u0 (.inl c.1)))).1)
+      apply flatMap_congr'
+      intro c hc
+      have hcσ := getD_mem_flatten σ k c hc
+      have harg : c.2 = w.arg c.1 := call_arg hL hD (C.cert u0).selfAnn c hcσ
+      rw [harg]
+      exact C.trU oc w (.inl c.1) u u0 hE (avail_of F.base hD hrdy c hcσ)
+  refine ⟨(hat u0).1, τP, fun j => sigmaJ (F.at u0) oc τP j, (hat u0).2.1, fun j => (hat u0).2.2.2 j,
+    fun u => ⟨(hat u).2.2.1, fun j => ?_⟩⟩
+  exact List.map_congr_left (fun e he => by rw [hsame u e he])
 
 end Cert
 
@@ -3897,6 +4318,75 @@ theorem envHw_at : ∀ (ss : List (Site I CM V)) (n : Nat) (ρ : Nat → V), Sit
     rw [show n + (i + 1) = n + 1 + i by omega, this]
     rfl
 
+omit oc in
+/-- Two environments give the same calls when every site taken in one is taken in the
+    other with the same argument (per site, from value lemmas). -/
+theorem callsOf_congr (ρ ρ' : Nat → V) : ∀ (ss : List (Site I CM V)),
+    (∀ s ∈ ss, s.cond ρ = s.cond ρ' ∧ (s.cond ρ = true → s.arg ρ = s.arg ρ')) →
+    callsOf ρ ss = callsOf ρ' ss
+  | [], _ => rfl
+  | s :: ss, h => by
+    obtain ⟨hc, ha⟩ := h s (List.mem_cons_self ..)
+    simp only [callsOf]
+    rw [callsOf_congr ρ ρ' ss (fun s' hs' => h s' (List.mem_cons_of_mem _ hs')), ← hc]
+    cases e : s.cond ρ
+    · rfl
+    · simp only [↓reduceIte, ha e]
+
+/-- **A site list's calls do not depend on its skipped values** when every condition and
+    argument reads only positions in `T`: below `n` (where `ρ`, `ρ'` agree) or always taken. -/
+theorem callsOf_envHw_u (u' : Nat → V) (ss : List (Site I CM V)) (n : Nat) (ρ ρ' : Nat → V)
+    (T : Nat → Prop) (h : SitesOK ss n)
+    (hT : ∀ k, T k → k < n ∨ ∃ (i : Nat) (hi : i < ss.length), k = n + i ∧ ∀ ρ, ss[i].cond ρ = true)
+    (hlo : ∀ k, k < n → ρ k = ρ' k)
+    (hR : ∀ s ∈ ss, ∀ ρ1 ρ2 : Nat → V, (∀ k, T k → ρ1 k = ρ2 k) → s.cond ρ1 = s.cond ρ2 ∧ s.arg ρ1 = s.arg ρ2) :
+    callsOf (envHw u oc ss n ρ) ss = callsOf (envHw u' oc ss n ρ') ss := by
+  have hag : ∀ k, T k → envHw u oc ss n ρ k = envHw u' oc ss n ρ' k := by
+    intro k hk
+    rcases hT k hk with hk' | ⟨i, hi, rfl, hc⟩
+    · rw [envHw_below u oc ss n ρ k hk', envHw_below u' oc ss n ρ' k hk']; exact hlo k hk'
+    · rw [envHw_at u oc ss n ρ h i hi, envHw_at u' oc ss n ρ' h i hi, hc, hc]; rfl
+  apply callsOf_congr
+  intro s hs
+  obtain ⟨h1, h2⟩ := hR s hs _ _ hag
+  exact ⟨h1, fun _ => h2⟩
+
+/-- **A site list's calls do not depend on its skipped values** when each site is safe: if the
+    earlier sites agree on their conditions, and on their values where taken, then the site
+    agrees on its condition, and on its argument where taken (review fix 2, checked per site). -/
+theorem callsOf_envHw_safe (u' : Nat → V) (ss : List (Site I CM V)) (n : Nat) (ρ ρ' : Nat → V)
+    (h : SitesOK ss n) (hlo : ∀ k, k < n → ρ k = ρ' k)
+    (hS : ∀ (i : Nat) (hi : i < ss.length) (ρ1 ρ2 : Nat → V), (∀ k, k < n → ρ1 k = ρ2 k) →
+      (∀ (j : Nat) (hj : j < i), ss[j].cond ρ1 = ss[j].cond ρ2 ∧
+        (ss[j].cond ρ1 = true → ρ1 (n + j) = ρ2 (n + j))) →
+      ss[i].cond ρ1 = ss[i].cond ρ2 ∧ (ss[i].cond ρ1 = true → ss[i].arg ρ1 = ss[i].arg ρ2)) :
+    callsOf (envHw u oc ss n ρ) ss = callsOf (envHw u' oc ss n ρ') ss := by
+  have hb : ∀ k, k < n → envHw u oc ss n ρ k = envHw u' oc ss n ρ' k := fun k hk => by
+    rw [envHw_below u oc ss n ρ k hk, envHw_below u' oc ss n ρ' k hk]; exact hlo k hk
+  have hP : ∀ i (hi : i < ss.length), ss[i].cond (envHw u oc ss n ρ) = ss[i].cond (envHw u' oc ss n ρ') ∧
+      (ss[i].cond (envHw u oc ss n ρ) = true →
+        envHw u oc ss n ρ (n + i) = envHw u' oc ss n ρ' (n + i) ∧
+        ss[i].arg (envHw u oc ss n ρ) = ss[i].arg (envHw u' oc ss n ρ')) := by
+    have hm : ∀ m i (hi : i < ss.length), i < m → ss[i].cond (envHw u oc ss n ρ) = ss[i].cond (envHw u' oc ss n ρ') ∧
+        (ss[i].cond (envHw u oc ss n ρ) = true →
+          envHw u oc ss n ρ (n + i) = envHw u' oc ss n ρ' (n + i) ∧
+          ss[i].arg (envHw u oc ss n ρ) = ss[i].arg (envHw u' oc ss n ρ')) := by
+      intro m
+      induction m with
+      | zero => intro i _ him; exact absurd him (Nat.not_lt_zero _)
+      | succ m ih =>
+        intro i hi him
+        obtain ⟨hc, ha⟩ := hS i hi _ _ hb (fun j hj =>
+          ⟨(ih j (by omega) (by omega)).1, fun hcj => ((ih j (by omega) (by omega)).2 hcj).1⟩)
+        refine ⟨hc, fun hci => ⟨?_, ha hci⟩⟩
+        rw [envHw_at u oc ss n ρ h i hi, envHw_at u' oc ss n ρ' h i hi, if_pos hci, if_pos (hc ▸ hci)]
+    intro i hi
+    exact hm (i + 1) i hi (Nat.lt_succ_self i)
+  apply callsOf_congr
+  intro s hs
+  obtain ⟨i, hi, rfl⟩ := List.getElem_of_mem hs
+  exact ⟨(hP i hi).1, fun hc => ((hP i hi).2 hc).2⟩
+
 variable [∀ j, DecidableEq (CM j)] [DecidableEq I]
 
 /-- Site `s` is on port `cm` of child `j`. -/
@@ -3968,6 +4458,15 @@ theorem callsOf_ports (ρ : Nat → V) : ∀ (ss : List (Site I CM V)),
     · exact (callsOf_ports ρ ss).cons _
 
 end Sites
+
+/-- **A family whose steps are site lists**: every skipped value is the step's own (`runSites
+    v`), by construction.  Method `m` starts at site 1 with its argument at `ρ 0`; a rule at 0. -/
+@[reducible] def ParentU.withSites (F : ParentU V) (ssM : F.X.M → List (Site F.I (fun j => (F.CI j).M) V))
+    (resM : F.X.M → (Nat → V) → Option V) (ssR : F.PR → List (Site F.I (fun j => (F.CI j).M) V))
+    (resR : F.PR → (Nat → V) → Option V) : ParentU V :=
+  { F with
+    body := fun m x v => runSites v (resM m) (ssM m) 1 (setN v 0 x)
+    rbody := fun r v => runSites v (resR r) (ssR r) 0 v }
 
 section Emit2
 variable (P : Parent V)
@@ -4097,3 +4596,15 @@ end Modular
 #print axioms Modular.tasks_causal
 #print axioms Modular.tasks_aliased
 #print axioms Modular.Realizes.mono
+#print axioms Modular.realizesU_toU
+#print axioms Modular.RealizesU.at
+#print axioms Modular.oblU_of_obl
+#print axioms Modular.merge_exec
+#print axioms Modular.groups_mergeL
+#print axioms Modular.causal_toModuleU
+#print axioms Modular.obl_of_cert_at
+#print axioms Modular.oblU_of_cert
+#print axioms Modular.callsOf_congr
+#print axioms Modular.callsOf_envHw_u
+#print axioms Modular.aliased_toModuleU
+#print axioms Modular.callsOf_envHw_safe

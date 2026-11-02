@@ -182,3 +182,103 @@ class Enc:
         if rc == 20:
             return False
         return None
+
+
+class EncS(Enc):
+    """Enc where, while `on`, an atom over a conditional read y of the step stands for the model's
+    site value: ite(cond_y, the atom over y's port, the same atom over a fresh value of y).
+    `sub` maps (inst, meth) to cond_y's literal.  Atoms over a fresh value are free (sound for UNSAT)."""
+
+    def __init__(self, D):
+        super().__init__(D)
+        self.sub = {}
+        self.on = False
+
+    def _wrap(self, reads, mk):
+        ys = sorted(set(reads) & set(self.sub)) if self.on else []
+        if not ys:
+            return mk(())
+        out = []
+        for mask in range(1 << len(ys)):
+            S = tuple(y for i, y in enumerate(ys) if mask >> i & 1)
+            out.append(self.AND([-self.sub[y] if y in S else self.sub[y] for y in ys] + [mk(S)]))
+        return self.OR(out)
+
+    def _atom(self, key, S):
+        return self.atom(key + (('skip',) + S,) if S else key)
+
+    def _eqatom(self, x, kexpr, S):
+        k = litval(kexpr[1]) if kexpr[0] == 'lit' else None
+        cx = self.D.canon(x)
+        if S:
+            cx = (cx, S)
+        if k is None:
+            return self.atom(('eqv', cx, self.D.canon(kexpr)))
+        d = self.eqs.setdefault(cx, {})
+        if k not in d:
+            d[k] = self.atom(('eq', cx, k))
+        return d[k]
+
+    def b(self, e):
+        D = self.D
+        t = e[0]
+        if t == 'lit':
+            bl = is_bool_lit(e)
+            if bl is not None:
+                return 1 if bl else -1
+            return self.atom(('lit', e[1]))
+        if t == 'id':
+            n = e[1]
+            mk_ = (n, self.on)
+            if mk_ in self.memo:
+                return self.memo[mk_]
+            de = D.bool_def(n)
+            if de is None:
+                v = self._wrap(D.expr_reads(e), lambda S: self._atom(('id', n), S))
+            else:
+                self.memo[mk_] = self.atom(('cyc', n, self.on))
+                v = self.b(de)
+            self.memo[mk_] = v
+            return v
+        if t == 'un' and e[1] in ('!', '~'):
+            return -self.b(e[2])
+        if t == 'bin':
+            op = e[1]
+            if op == '&&' or (op == '&' and D.boolish(e[2]) and D.boolish(e[3])):
+                return self.AND([self.b(e[2]), self.b(e[3])])
+            if op == '||' or (op == '|' and D.boolish(e[2]) and D.boolish(e[3])):
+                return self.OR([self.b(e[2]), self.b(e[3])])
+            if op in ('==', '!='):
+                l, r = e[2], e[3]
+                bl = is_bool_lit(r)
+                if bl is None:
+                    bl, l, r = is_bool_lit(l), r, l
+                if bl is not None and D.boolish(l):
+                    x = self.b(l) if bl else -self.b(l)
+                    return x if op == '==' else -x
+                rd = D.expr_reads(e)
+                if r[0] == 'lit':
+                    x = self._wrap(rd, lambda S: self._eqatom(l, r, S))
+                elif l[0] == 'lit':
+                    x = self._wrap(rd, lambda S: self._eqatom(r, l, S))
+                else:
+                    key = ('eqv',) + tuple(sorted([D.canon(l), D.canon(r)]))
+                    x = self._wrap(rd, lambda S: self._atom(key, S))
+                return x if op == '==' else -x
+            return self._wrap(D.expr_reads(e), lambda S: self._atom(('t', D.canon(e)), S))
+        if t == 'if':
+            return self.ITE(self.b(e[1]), self.b(e[2]), self.b(e[3]))
+        if t == 'case':
+            idx = e[1]
+            rd = D.expr_reads(idx)
+            sel, prev = [], []
+            for lab, val in e[2]:
+                q = self._wrap(rd, lambda S, lab=lab: self._eqatom(idx, lab, S))
+                sel.append(self.AND([q] + [-p for p in prev] + [self.b(val)]))
+                prev.append(q)
+            if e[3] is not None:
+                sel.append(self.AND([-p for p in prev] + [self.b(e[3])]))
+            return self.OR(sel)
+        if t == 'call':
+            return self._wrap(D.expr_reads(e), lambda S: self._atom(('port', D.canon(e)), S))
+        return self._wrap(D.expr_reads(e), lambda S: self._atom(('t', D.canon(e)), S))

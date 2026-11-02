@@ -35,7 +35,7 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bapkg import APkg, parse_expr  # noqa: E402
-from satc import Enc, litval  # noqa: E402
+from satc import Enc, EncS, litval  # noqa: E402
 
 SC = bool(os.environ.get('SITES_SC'))   # the both-way short-circuit option (rule.md section 8)
 DATA = os.environ.get('SITES_DATA') or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
@@ -541,7 +541,7 @@ class Reach:
 
     def __init__(self, D, fs, targets, mode=None, isR=None, flips=frozenset()):
         self.D, self.fs, self.targets = D, fs, targets
-        self.mode, self.isR, self.flips = mode, isR, flips   # mode 'bias': the readiness rule
+        self.mode, self.isR, self.flips = mode, isR, flips   # mode 'seq': the readiness rule
         self.lit = {}          # key -> ('c', expr) | ('eq', idx, lab)
         self.memo = {}
 
@@ -599,14 +599,10 @@ class Reach:
             elif t == 'app':
                 for a in x[2]:
                     stack.append((a, c))
-            elif t == 'bin' and self.mode == 'bias' and x[1] in ('&&', '||'):
-                # the readiness rule: short-circuit, a readiness operand first, else left to right
+            elif t == 'bin' and self.mode == 'seq' and x[1] in ('&&', '||'):
+                # Ravi's rule (2026-11-02): operands in bsc's expression order; a later operand
+                # is reached only under the earlier one's short-circuit outcome
                 a, b = x[2], x[3]
-                swap = self.isR(b) and not self.isR(a)
-                if canon_expr(x) in self.flips:
-                    swap = not swap
-                if swap:
-                    a, b = b, a
                 ka = self.litkey('c', a)
                 stack.append((a, c))
                 stack.append((b, fs.AND([c, fs.lit(ka, x[1] == '&&')])))
@@ -1287,66 +1283,113 @@ def analyse(ddir, outdir, workdir):
         return acc
 
     rsites = [(st, s) for st, s in need_sites if 'r' in s['need']]
-    rb = {'sites': len(rsites), 'cons': sum(1 for _, s in rsites if s.get('rdy_used')), 'bias': 0, 'bias_d': 0,
-          'search': 0, 'dropped': 0, 'left': []}
+    # the readiness rule: short-circuit reach sequenced by expression structure (no bias, no search);
+    # the file's condition is the ready literal, so the check is guard & R_seq & !RDY UNSAT
+    rb = {'sites': len(rsites), 'cons': sum(1 for _, s in rsites if s.get('rdy_used')), 'seq': 0, 'seq_d': 0,
+          'cyc_steps': 0, 'cyc_sites': 0, 'later_lits': 0, 'sites_with_drop': 0, 'left': [], 'left_d': []}
+    RCb = fsb = None
     if rsites:
-        import itertools
-        # the bias is per site: the operand that reads the site's own ready signal comes first
         fsb = FS()
-        RCb = None
+        RCb = Reach(D, fsb, frozenset((s['inst'], s['meth']) for _, s in rsites), mode='seq')
         for st, s in rsites:
             s['rb_mark'] = True
-            own = frozenset(s['rdy'])
-            RCs = Reach(D, fsb, frozenset([(s['inst'], s['meth'])]), mode='bias',
-                        isR=lambda e, own=own: bool(D.expr_reads(e) & own))
-            if RCb is not None:
-                RCs.lit = RCb.lit          # one literal table for the order pass
-            RCb = RCs
             items, _ = step_items(st)
-            top = RCs.top([(e, fsb.T if c is None else fsb.lit(RCs.litkey('c', c[1]), True)) for e, c in items])
+            top = RCb.top([(e, fsb.T if c is None else fsb.lit(RCb.litkey('c', c[1]), True)) for e, c in items])
             s['reach_b'] = top.get((s['inst'], s['meth']), fsb.F)
         rfirst = lambda x: x['kind'] == 'read' and (x['inst'], x['meth']) in RPORTS
-        order_pass(lambda s: bool(s.get('rb_mark')), 'reach_b', 'b_', RCb, fsb, rfirst)
+        r2 = order_pass(lambda s: bool(s.get('rb_mark')), 'reach_b', 'b_', RCb, fsb, rfirst)
+        rb['cyc_steps'], rb['cyc_sites'], rb['later_lits'] = r2[0], r2[1], r2[3] + r2[4]
         for st, s in rsites:
-            # Under the guard, R_b implies RDY exactly when this holds; then the condition is weakened
-            # to the RDY literal itself (exact under the guard), read first in the step: no literal drops.
             ok_b = rdy_holds(st, s, s['reach_b'], RCb, fsb)
-            ok_bd = rdy_holds(st, s, s['b_reach_d'], RCb, fsb)
-            rb['bias'] += ok_b
-            rb['bias_d'] += ok_bd
-            rb['dropped'] += bool(s.get('b_drop'))
+            ok_bd = rdy_holds(st, s, s.get('b_reach_d', s['reach_b']), RCb, fsb)
+            rb['seq'] += ok_b
+            rb['seq_d'] += ok_bd
+            rb['sites_with_drop'] += bool(s.get('b_drop'))
             s['rdy_bias'] = 'ok' if ok_b else 'fails'
             s['rdy_bias_d'] = ok_bd
-            if ok_b:
-                continue
-            items, _ = step_items(st)
-            ops = set()
-            for e, _ in items:
-                opkeys(e, (s['inst'], s['meth']), ops, set())
-            ops = sorted(ops)
-            found = None
-            tries = 0
-            for kk in range(1, min(3, len(ops)) + 1):
-                for combo in itertools.combinations(ops, kk):
-                    tries += 1
-                    if tries > 2000:
-                        break
-                    fsf = FS()
-                    RCf = Reach(D, fsf, frozenset([(s['inst'], s['meth'])]), mode='bias',
-                                isR=lambda e, own=frozenset(s['rdy']): bool(D.expr_reads(e) & own), flips=frozenset(combo))
-                    top = RCf.top([(e, fsf.T if c is None else fsf.lit(RCf.litkey('c', c[1]), True)) for e, c in items])
-                    if rdy_holds(st, s, top.get((s['inst'], s['meth']), fsf.F), RCf, fsf):
-                        found = combo
-                        break
-                if found or tries > 2000:
-                    break
-            if found:
-                rb['search'] += 1
-                s['rdy_bias'] = 'ok after flipping %d of %d operators' % (len(found), len(ops))
-            else:
-                s['rdy_bias'] = 'fails (%d operators, %d tries)' % (len(ops), tries)
+            if not ok_b:
                 rb['left'].append((st['name'], s['label']))
+            if not ok_bd:
+                rb['left_d'].append((st['name'], s['label']))
+        # cyclic literals: those reading a conditional read of the same step (the site itself or
+        # another one), dropped (weakened to true) for the file's use conditions; the rest stay
+        for st, s in rsites:
+            cports = set((x['inst'], x['meth']) for x in st['sites'] if x['kind'] == 'read' and x['need'])
+            cyc = set(key for (key, pol) in fsb.lits(s['reach_b']) if linfo(RCb, key)[0] & cports)
+            s['cyc_drop'] = cyc
+            s['reach_c'] = fsb.subst(s['reach_b'], cyc) if cyc else s['reach_b']
+            s['rdy_ok_c'] = rdy_holds(st, s, s['reach_c'], RCb, fsb)
+            rb['cyc_lits'] = rb.get('cyc_lits', 0) + len(cyc)
+            rb['cyc_lit_sites'] = rb.get('cyc_lit_sites', 0) + bool(cyc)
+            rb['seq_c'] = rb.get('seq_c', 0) + s['rdy_ok_c']
+            if not s['rdy_ok_c']:
+                rb.setdefault('left_c', []).append((st['name'], s['label']))
     res['rdy_bias'] = rb
+
+    # (r) in the site-value form (round 7 review s1 M1): a literal over a conditional read y of the
+    # step reads y's site value ite(cond_y, port_y, fresh). Checked per site: readiness (guard & R &
+    # !RDY UNSAT) and, where R reads another conditional read, invariance (guard & R != R_ports UNSAT)
+    def cond_reads(st):
+        """The step's conditional reads: (inst, meth) -> ('r', ready ports) | ('a', formula)."""
+        out = {}
+        for x in st['sites']:
+            if x['kind'] != 'read' or not x['need']:
+                continue
+            if 'r' in x['need']:
+                out[(x['inst'], x['meth'])] = ('r', x['rdy'])
+            elif x.get('cond_used', fs.T) != fs.T:
+                out[(x['inst'], x['meth'])] = ('a', x['cond_used'])
+        return out
+
+    def f_reads(f, RCx, fsx):
+        rd = set()
+        for key, pol in fsx.lits(f):
+            rd |= set(D.expr_reads(RCx.lit[key][1]))
+        return rd
+
+    def rdy_site_check(st, s, drop=frozenset()):
+        """The readiness facts of site s in the site-value form, literals over `drop` removed."""
+        f = s['reach_b']
+        if drop:
+            f = fsb.subst(f, set(key for key, pol in fsb.lits(f) if linfo(RCb, key)[0] & set(drop)))
+        crs = cond_reads(st)
+        Y = sorted(f_reads(f, RCb, fsb) & set(crs))
+        E = EncS(D)
+        for y in Y:
+            kind, c = crs[y]
+            if kind == 'r':
+                E.sub[y] = E.OR([E.atom(('port', D.canon(('call', p[0], p[1], [])))) for p in c])
+            elif not (f_reads(c, RC, fs) & set(crs)):
+                E.sub[y] = enc_f(E, c, {})
+            else:
+                E.sub[y] = E.atom(('cfree',) + y)      # a condition over conditional reads: free
+        g = E.b(guard_expr(st))
+        E.on = True
+        rS = enc_x(E, f, {}, RCb, fsb)
+        E.on = False
+        rl = E.OR([E.atom(('port', D.canon(('call', p[0], p[1], [])))) for p in s['rdy']])
+        ok_r = E.sat([g, rS, -rl], workdir) is False
+        others = [y for y in Y if y != (s['inst'], s['meth'])]
+        ok_i = None
+        if others:
+            rP = enc_x(E, f, {}, RCb, fsb)
+            ok_i = E.sat([g, E.OR([E.AND([rS, -rP]), E.AND([-rS, rP])])], workdir) is False
+        return dict(f=f, Y=Y, others=others, rdy=ok_r, inv=ok_i, ok=ok_r and ok_i is not False)
+
+    rv = {'sites': len(rsites), 'ok': 0, 'rdy': 0, 'inv_needed': 0, 'inv': 0, 'self_only': 0,
+          'none': 0, 'left': []}
+    for st, s in rsites:
+        r_ = rdy_site_check(st, s)
+        s['rdy_sv'] = r_
+        rv['ok'] += r_['ok']
+        rv['rdy'] += r_['rdy']
+        rv['inv_needed'] += bool(r_['others'])
+        rv['inv'] += bool(r_['inv'])
+        rv['self_only'] += bool(r_['Y']) and not r_['others']
+        rv['none'] += not r_['Y']
+        if not r_['ok']:
+            rv['left'].append((st['name'], s['label'], 'rdy' if not r_['rdy'] else 'inv'))
+    res['rdy_sv'] = rv
 
     # the dynamic facts each conditional read needs, under three conditions
     def wf(st):
@@ -1540,6 +1583,13 @@ def analyse(ddir, outdir, workdir):
                 f.write('READY %s / %s: under the used condition %s, under bsc\'s %s; readiness rule: %s\n' % (
                     st['name'], s['label'], 'ok' if s.get('rdy_used') else 'FAILS', 'ok' if s.get('rdy_bsc') else 'fails',
                     s.get('rdy_bias')))
+                sv = s.get('rdy_sv', {})
+                f.write('  site-value form: R reads conditional reads %s; readiness %s; invariance %s\n' % (
+                    sv.get('Y'), 'holds' if sv.get('rdy') else 'FAILS',
+                    'not needed' if sv.get('inv') is None else ('holds' if sv.get('inv') else 'FAILS')))
+    # for the end-to-end emitter: the conditional sites and the formulas behind them
+    res['_ctx'] = dict(D=D, need=need_sites, RC=RC, fs=fs, RCb=RCb, fsb=fsb, steps=steps, ap=ap,
+                       rdy_site_check=rdy_site_check, linfo=linfo, enc_f=enc_f)
     return res
 
 
@@ -1551,7 +1601,7 @@ def fmt(r):
             'facts used ok %d notShown %d; bsc ok %d notShown %d; true ok %d notShown %d | '
             'shared %d clash %d | rdy %d/%d (ok under used %d, bsc %d) | actPairs %d grp %d | '
             'facts: unsat %d sameAsConfirmed %d atRisk %d | twoWay %d rerankFailPairs %d rerankReads %d moved %d | '
-            'bscFacts %s | all %s | rdyRule %s | perr %d') % (
+            'bscFacts %s | all %s | rdyRule %s | rdySiteValue %s | perr %d') % (
         r['design'], r['sites'], r['reads'], r['need'], nb['a'], nb['b'], nb['c'], nb['r'],
         r['exact_hw'], r['reach_true'], r['cyc_steps'], r['cyc_sites'], r['hard_cyc'],
         r['dropped'], r['dropped_hw'], r['to_true'],
@@ -1563,7 +1613,7 @@ def fmt(r):
         r['act_pairs'], r['grp_fail'],
         r['fact_class']['abstract_unsat'], r['fact_class']['same_as_confirmed'], r['fact_class']['at_risk'],
         r['two_way'], r['rerank_fail_pairs'], r['rerank_reads'], r['rerank_moved'],
-        r['fclass'], r.get('all'), r.get('rdy_bias'), r['parse_errors'])
+        r['fclass'], r.get('all'), r.get('rdy_bias'), r.get('rdy_sv'), r['parse_errors'])
 
 
 def main():

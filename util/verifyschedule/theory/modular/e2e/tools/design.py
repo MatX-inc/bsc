@@ -65,7 +65,7 @@ class Design:
             if ln and not ln.startswith(' '):
                 sec = None
                 for key, nm in [('disjoint guards (bsc):', 'disj'), ('urgency blocking', 'urg'),
-                                ('mutually_exclusive (user):', 'me')]:
+                                ('mutually_exclusive (user):', 'me'), ('exported CF:', 'CF')]:
                     if ln.startswith(key):
                         self.info[nm] = pairs(ln.split(":", 1)[1])
             if sec == 'kids':

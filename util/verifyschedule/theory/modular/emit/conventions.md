@@ -418,6 +418,148 @@ facts, site lists, arms and `Acyc`.
     258k);
   - FIFO-like kinds with more ports.
 
+## Round 7: wide ports, large tables, escapes (C10–C15)
+
+These replace C7 and extend C2 and C4. They are used by `e2e/tools/mke2e.py`
+and measured by the probes named below (round 7 cost review, majors 1–2 and
+minors 4–6). Library lemmas are in `EmitLemmas.lean` and `Scan.lean`.
+
+### C10. No declaration grows with a table
+
+`stab(name, ty, items)` in the emitter writes a balanced table whose
+subtrees of at most `E2E_SPLITW` source characters (default 20,000) are their
+own definitions `name_lo_hi`; the top definition only links them. A proof
+over such a table (`stabproof`) has one theorem per subtree definition, in
+the same shape, so no theorem grows either (`tqAll`, `sq_k`, `rqT`, `sqT`,
+the mux chains). Every per-rule, per-statement and per-instance table is
+emitted this way: footprints (`fpRT`), site keys and functions (`key_k`,
+`sf_k`), results (`resT`), guards (`gT`), checks (`chkLst`, `chkHead`),
+uses (`uses_<kind>`, `tusesT`), task enables and arguments (`tenT`,
+`targT`), groups (`memT`, `gidT`), masks and codes (`exRT`, `rcT`,
+`rinvT`). The scan probes do the same (`scan/tools/scanlib.py`:
+`emit_table`, `emit_design`, checkpoint subtrees in `emit_tree`).
+
+The whole module is a `noncomputable section`: nothing in it is run by the
+compiler, so no table is compiled.
+
+Measured on the task-chain probe (`scan/tasks/`, checkpoint every 64 rules),
+whole file:
+
+| statements | wall | kernel | peak RSS | round 6 (review) wall, RSS |
+|---|---|---|---|---|
+| 10,240 | 14.8 s | 10.0 s | 1.05 GB | 19.5 s, 1.27 GB |
+| 20,480 | 30.4 s | 20.9 s | 1.53 GB | 44.4 s, 1.97 GB |
+| 40,960 | 65.6 s | 46.6 s | 2.58 GB | 129.1 s, 3.51 GB |
+| 81,920 | 139.6 s | 99.0 s | 4.69 GB | 434.5 s, 6.64 GB |
+
+×2.05–2.15 per doubling in wall time (was ×2.3–3.4); the part outside the
+kernel is 4.5 / 9.2 / 18.4 / 39.5 s, linear.
+
+### C11. A port's uses are a table keyed by rule
+
+```lean
+structure Uses (M : Type) where
+  uses : M → Tab (Nat × List Nat)   -- leaves (rule, sites), midpoints rule numbers
+  us : M → List Nat                 -- the users, as a list (cheap for the elaborator to unfold)
+def users (j : I) (cm : (CI j).M) : List St := (usL ⟨j, cm⟩).map (fun k => .inr (rR k))
+def idx (s : St) (p : Σ j : I, (CI j).M) : List Nat := match s with | .inl e => e.elim | .inr r => idxT (usesAt p) r.val
+theorem usOK_fifo : Tab.allB (fun _ U => [FL.enq, …].all (fun m => usersT (U.uses m) == U.us m)) uses_fifo 0 (nk .fifo) = true := by
+  decide +kernel
+```
+
+- `idxT t k` is one lookup (O(log users)): the per-user `hx` facts and the
+  per-site check `chkAll` no longer walk the port's use list.
+- The list `us` is tied to the table by one decided check per kind
+  (`usOK_<kind>`, linear); `usersT_eq` and `mem_usersT` give
+  `Cert.users_ok`. Without the list, every per-port proof unfolded `usersT`
+  in the elaborator, which doubled the per-instance section (sysArithPipe
+  without tasks: 654 against 323 Mhb).
+- **Ports with more than 8 users** (`E2E_BIGPORT`): the per-user facts are a
+  balanced proof over the uses table, `users_all` (from `Tab.All (fun e =>
+  e.2.isEmpty = false → Q (.inr (rR e.1))) (usesAt ⟨j, cm⟩)` to `∀ s ∈ users
+  j cm, Q s`), and the enable's iff is `en_lit`. A nested `⟨p₁, …, pₙ,
+  trivial⟩` against `AllL` elaborates in time quadratic in n (15 s at 512
+  entries in the chain probe); the balanced tree is linear. Smaller ports
+  keep the `AllL` forms, which are cheaper at a few users.
+
+### C12. A mux is a table; an entry is a lookup
+
+```lean
+def mT_q : Tab ((V : Type) → Ops V → EqC V → OC V → Bool × V) := …    -- (WILL_FIRE, argument) per member
+def mlist_q (V) (ops) (E) (oc) : List (Bool × V) := (List.range' 0 u).map (fun t => (mT_q.get t) V ops E oc)
+-- user at position p:  (arg_muxT ops.z (chain_q …) (p := p) rfl hav).trans (aRk …)
+```
+
+`arg_muxT` gets `l[p]?` from `List.getElem?_map`/`getElem?_range'` and a
+table lookup, not a walk of p list cells.
+
+### C13. A mux's chain is one decided pass over cover sets
+
+```lean
+def msT_q : Tab (Nat × Nat) := … (k, cvS (chkLst.get c) [uncovered later members]) …
+theorem chain_q … : amoChain false ((mlist_q V ops E oc).map Prod.fst) :=
+  amoChain_of_cover (fun k => WF ops E oc k) R hR msT_q [members] (by decide +kernel) (by decide +kernel)
+    ⟨⟨cover_of (chkC ops E oc hA c rfl) ⟨pairwise proofs of the uncovered⟩, …⟩, …⟩
+```
+
+- `covB` walks the members from the last, keeping the bit set of the later
+  ones, and checks it is inside each member's cover set: O(members + the
+  check lists' entries) in the kernel, where round 6 decided
+  `T.all (cov.contains ∨ unc.contains)` per member (cubic).
+- `cvS` (a member's check bits OR its uncovered members' bits) is
+  `@[irreducible]`: only the kernel computes it. Left reducible, the
+  elaborator evaluated each member's check list while matching the proof
+  (15.5 s against 1.5 s at 512 members).
+- `bits` and `covB` are defined by the recursor (`noncomputable`), which
+  the kernel reduces directly (4× faster than structural recursion here).
+- Only the pairs no check covers keep a proof each.
+
+Chain probe (`scan/chain7/genchain7.py`, the review's shape: member k's
+check lists all later members, so the checks alone are u²/2 entries):
+
+| members | chain section (wall) | chain theorem: kernel, elaboration | whole file wall, peak RSS | round 6 (review): wall, kernel, RSS |
+|---|---|---|---|---|
+| 64 | 0.3 s | —, 0.12 s | 0.84 s, 0.52 GB | 2.9 s, 1.75 s, 0.57 GB |
+| 128 | 0.6 s | —, 0.26 s | 1.60 s, 0.58 GB | 21.1 s, 16.5 s, 0.79 GB |
+| 256 | 1.3 s | 0.13 s, 0.53 s | 4.57 s, 0.76 GB | 172.0 s, 152 s, 1.78 GB |
+| 512 | 3.0 s | 0.81 s, 1.17 s | 14.2 s, 1.42 GB | — |
+| 1,024 | 7.5 s | 2.74 s, 2.58 s | 51.2 s, 3.94 GB | — |
+
+(`scan/chain7/logs/`; "—": below the profiler's 100 ms threshold.) The
+chain section grows ×2.0–2.5 per doubling; its kernel part is the `covB`
+pass reading the u²/2 check entries. The rest of each file is the check
+lists themselves, the module's assertions (10.7 s at 512, 42.5 s at 1,024).
+
+### C14. Rule codes in the scan
+
+`Design.rc` (default `fun i => i`) numbers the rules for the scan's rule
+bit sets, `exR` and `escR`. The emitter gives every member of an exception
+group its own code and all other rules code 0, which no mask contains;
+`chains_inj` (two decided checks over an inverse table `rinvT`) gives the
+injectivity `exR_of_chains` needs. A rule's own bit is no longer recorded
+before its check (pass 2 records it), so code 0 can be shared. The slot
+records in checkpoints no longer grow with the number of rules.
+
+### C15. Escapes over numbered site tables
+
+`okT_except_fn` proves an escaped pair's `OkT` from the two steps' key
+tables: for each site of the first step and each port of its child, either
+the port order is fine (`okP`) or every site of the second step on that port
+(its index list, `idxT`) pairs with it in the short `bad` list, whose pairs
+the conditions exclude (`hbad`, one proof per bad pair). The check is one
+`Tab.allB` over the first step's keys.
+
+Probe `scan/esc7/genescfn.py` (two W-site steps, one bad pair):
+
+| sites per step | escape (check + theorem) | of which the escape check (kernel) | the second step's index check (kernel) |
+|---|---|---|---|
+| 512 | 0.8 s | 0.42 s | 0.32 s |
+| 2,500 | 6.0 s | 3.27 s | 2.41 s |
+| 5,000 | 10.1 s | 5.37 s | 4.20 s |
+
+So an escape costs about 1.1–1.3 ms per site of its first step, linear; the
+index check is the one every step already has (`chkAll`).
+
 ## For comparison (round 5 and its review)
 
 | probe | 32 | 64 | 128 | 256 | growth per doubling |
@@ -426,7 +568,7 @@ facts, site lists, arms and `Acyc`.
 | review `Comb<n>_arm` (per-arm, `dep` only) | 0.85 s | 1.56 s | 3.44 s | 8.81 s | ×1.8, ×2.2, ×2.6 |
 | round 5 `Sites<k>` (one step of 2k+1 sites, full `Obl`) | 12.6 s (65 sites) | 33.8 s (129) | 118.8 s (257) | — | ×2.7, ×3.5 |
 
-## Library additions (`EmitLemmas.lean`, imports `Modular`, unchanged)
+## Library additions (`EmitLemmas.lean`, imports `Modular`)
 
 - **Tables:** `Tab`, `Tab.get`, `Tab.get_node`, `Tab.AllR`, `Tab.get_allR`,
   `Tab.one`, `Tab.allB`, `Tab.allB_spec`, `blt_true`, `blt_false`.
@@ -443,3 +585,110 @@ facts, site lists, arms and `Acyc`.
 - **`Acyc`:** `forall_filter`, `Wires.ext'`, `dep_of_all`, `AllL`, `allL_of`.
 - **Probe-local** (C9): `pairwise_range'`, `nodup_of_mono`, `mono_spec`,
   `okT_of_cls`.
+- **Round 7** (C11–C12): `Tab.toList`, `Tab.get_mem`, `Tab.All`, `Tab.all_mem`,
+  `idxT`, `usersT`, `mem_usersT`, `usersT_all`. In `Scan.lean`: `covB`,
+  `cvS`, `cover_of`, `amoChain_of_cover`, `arg_muxT`, `en_lit`,
+  `okT_except_fn`, `rc_inj`, `chains_inj`.
+
+## C16. Round 7: the family statement in emitted files
+
+- A file defines `F : ParentU V` whose step programs are `runSites v … v` of
+  the step's own skipped values (`body m x v`, `rbody r v`); `P u := F.at u`.
+- `certU : CertU F` (rules, firing and hits fixed before `u`; `cert u`; `rfl`
+  equations) and `obl : OblU F := oblU_of_cert _ certU`; `acyc : Acyc F.base`;
+  `top : RealizesU (F.toModuleU …)`.
+- `trU` from a per-site tree `HQ` (each site's condition and argument agree at
+  two skipped values when the step may run), dispatched by `callsOf_fn_congr`.
+  Where a guarded site is conditional, a second tree `RY` gives each taken
+  site's readiness (CAN_FIRE, the guard's lifted `!c ∨ RDY`, or the child's
+  alias for a readiness read).
+- Value lemmas take the step's argument `x` (rules pass `z`), so each lemma's
+  environment is syntactically the step's; with `envR` against an `envS … x`
+  goal the 60-rule file's `HQ` section took 52 s, with matching lemmas 3.1 s.
+- Rules and methods share one table index (rules first, method `m` at
+  `nR + m`); uses tables are keyed by that index.
+- Mux selectors carry the users' call conditions where a user is conditional
+  or no recorded exclusion covers a pair; their one-hot chains are pairwise
+  over selectors, from static exclusions or solver-confirmed caller facts.
+- Escapes: `okT_exceptZ` (an fx-aware `okT_except_fn`) with a closed decided
+  table check per escaped pair and one dynamic fact per bad site pair.
+
+## Round 7 revision (C17–C19; reviews r7-1)
+
+### C17. bsc's `mutually_exclusive` groups are stated once (cost review r7-1 M1)
+
+bsc's run-time checks are pairwise: `ASchedule.mkMEPairs` builds every pair
+of a group and `mkMEAssump` keys each pair by its first rule, so the check of
+member j lists every later member and a u-member group has u²/2 check
+entries. The emitter now finds these groups (a chain of checks whose lists
+are suffixes of one list) and asserts, as a generator check, that every
+check of the group is exactly `(x_j, [x_j+1 … x_n])`. It then writes:
+
+```lean
+def grpT : Tab (List Nat) := …                    -- each group's members, bsc's order: O(u) data
+def asmP ops E oc : Prop :=
+  (∀ g, Nat.blt g nG = true → SufAsm (WF ops E oc) (grpT.get g)) ∧     -- the group's checks
+  ∀ c, Nat.blt c nC = true → (WF … (chkHead.get c) && orL …) = false  -- other checks, one by one
+def G_k … := WFd_head … && orL (((grpT.get g).drop (j+1)).map (fun y => (wfdT.get y) V ops E oc))
+theorem chain_q … := amoChain_of_grp (fun k => WF ops E oc k) [members] (grpT.get g) (by decide +kernel) (hA.1 g rfl)
+```
+
+- `SufAsm f (x :: y :: l) = (f x && orL ((y :: l).map f)) = false ∧ SufAsm f (y :: l)`
+  (`Scan.lean`): exactly the group's checks, so the module's assertions are
+  still bsc's list (trust point 3).
+- `sufAsm_pairwise` (induction, proved once) gives every pair; a mux's
+  members of the group, in group order, are a sublist decided in one pass
+  (`List.isSublist`), with no per-member data or decision
+  (`amoChain_of_grp`).
+- A mux with members outside the group (sysArithPipe's two largest)
+  places them first, with cover sets as in C13, and `covB` starts from the
+  group members' bits (`amoChain_of_cover_grp`); the pairs with a group
+  member are proved one by one, as before.
+- A pair inside a group, needed elsewhere, comes from `meG` (positions in
+  `grpT.get g`, decided).
+- Checks that are not group suffixes keep C13's form. sysArithPipe's 94
+  checks are two groups (51 and 45 members); mkBufferControl has none.
+
+### C18. The scan in segments (cost review r7-1 M2)
+
+`mke2e.py` cuts the scan before a step that would take a segment past
+`E2E_SEG_USES` footprint entries (default 4,096, the gate's bound) and writes
+each checkpoint as the full state there (`scanlib.emit_tree`, subtree
+definitions), one decided `seg_j` per segment, `segZ` for the last, and
+`scanOK := D.ok_of_chain [(m_j, cp_j)…] ⟨seg_0, …, segZ⟩`. A step with more
+uses than a segment fails a generator assertion (the gate's uses-per-step
+bound). `SysArithPipe60.lean` is emitted with `E2E_SEG_USES=128` (several
+segments) as the regression test; the full sysArithPipe with 600-use
+segments (4 segments) is measured in design.md §13.
+
+### C19. Readiness facts over site values, and steps by `rfl` (soundness review r7-1)
+
+- A readiness `R` reads the site values of the step's conditional reads
+  (the read itself included). Facts: `rdy_n : ∀ oc t…, WF k → ops.g n (…
+  (if RDY_y then port_y else t_y) …) = true → RDY_x` and, where `R` reads
+  another conditional read, `inv_n : ∀ oc t…, WF k → ops.g n (site values)
+  = ops.g n (ports)`. `evs_k_j` rewrites a site value to that `if`; a split's
+  selector proof is `congrArg … evs … ▸ inv_n` (or `inv_self` from `rdy_n`
+  when `R` reads only its own site). Each fact's label is the site tool's
+  verdict for that formula; an unconfirmed one goes to `Unconfirmed`.
+- An `R` literal over a read not before some site that splits on `R` is
+  dropped and counted, and the tool is re-asked for the formula emitted
+  (0 in mkBufferControl).
+- Escape facts are labelled per fact: the solver over the two steps'
+  `WILL_FIRE` and the two sites' conditions as the file states them (all 50
+  of mkBufferControl's), or bsc's confirmed fact.
+- `F_sites : F ops E = withSitesX (F ops E) …` (or `withRuleSites`) by `rfl`
+  (`EmitLemmas.lean`): each step's program takes its skipped values only
+  through `runSites`; its sites and result receive the method's argument,
+  never `v`.
+
+### Large steps (Em series, cost review r7-1 M2 (c))
+
+`out/Em512.lean` and `out/Em1024.lean` are regenerated with `trU` (byte-identical
+to the cost reviewer's: 132.5 / 293.2 s user, 3.60 / 8.13 GB for a 1,025- and a
+2,049-site step). `out/Em1536.lean` (a 3,073-site step): 517.1 s wall, 476.3 s
+user, 12.9 GB at load 21 (`out/Em1536.log`). `out/Em2048.lean` (a 4,097-site step)
+did not complete: exit 1 after 1,251 s wall, 812 s user, 294 s system, 16.9 GB peak
+RSS under the 24 GB address-space cap, at load 45–60 (`out/Em2048.log`). The gate
+bounds a step at 3,072 sites (design.md §10), and `mke2e.py` asserts it
+(`E2E_STEP_SITES`).

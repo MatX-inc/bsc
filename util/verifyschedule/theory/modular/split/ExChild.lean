@@ -144,9 +144,10 @@ theorem obl : Obl (P ops) := obl_of_cert (P ops) (cert ops)
     implementations of its children's interfaces that realize theirs, the
     module realizes its own contract.  This is what a generated file states;
     it mentions the children only through `CI`. -/
-theorem realizes_of (impl : (j : K) → Module V (CI j)) (hC : ∀ j, Realizes (impl j)) :
-    Realizes ((P ops).toModule impl) :=
-  compose (P ops) impl hC (fun j => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl)) (obl ops)
+theorem realizes_of (impl : (j : K) → ModuleU V (CI j)) (hC : ∀ j, RealizesU (impl j)) :
+    RealizesU ((P ops).toU.toModuleU impl) :=
+  compose (P ops).toU impl hC (fun j => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl))
+    (oblU_of_obl _ (obl ops))
 
 /-- What `comb` reads, for the acyclicity certificate (registers: no paths). -/
 def acyc : Acyc (P ops) :=

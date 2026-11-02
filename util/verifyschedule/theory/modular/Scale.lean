@@ -130,7 +130,7 @@ def cert : Cert (P n z) where
 
 theorem obl : Obl (P n z) := obl_of_cert (P n z) (cert n z)
 
-abbrev mod : Module V NoX := (P n z).toModule (fun _ => Reg)
+abbrev mod : ModuleU V NoX := (P n z).toU.toModuleU (fun _ => (Reg (V := V)).toU)
 
 theorem reg_nopath (p q : CRegM 1) : (cregAnn 1).path p q = false := by
   cases p <;> cases q <;> rename_i a b <;> rw [fin1 a, fin1 b] <;> rfl
@@ -149,18 +149,18 @@ def acyc : Acyc (P n z) :=
     (fun _ _ _ _ q => q.elim) (fun j p q => reg_nopath p q) (fun q => q.elim)
 
 theorem built : Built NoX (mod n z) :=
-  Built.node (P n z) (fun _ => Reg) (fun _ => Built.leaf _ reg_realizes (creg_causal 1))
-    (fun _ => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl)) (obl n z) (acyc n z)
+  Built.node (P n z).toU (fun _ => (Reg (V := V)).toU) (fun _ => Built.leaf _ reg_realizes (creg_causal 1))
+    (fun _ => aliased_of_none _ _ (fun _ _ => rfl) (fun _ _ => rfl)) (oblU_of_obl _ (obl n z)) (acyc n z).toU
 
-theorem realizes : Realizes (mod n z) := (built n z).realizes
+theorem realizes : RealizesU (mod n z) := (built n z).realizes
 end
 
 /-- **4096 children and 4096 rules.** -/
-theorem realizes4096 : Realizes (mod 4096 (0 : Nat)) := realizes 4096 0
+theorem realizes4096 : RealizesU (mod 4096 (0 : Nat)) := realizes 4096 0
 
 /-- And it has a hardware cycle for every input (from 4096 register leaves
     and one acyclicity certificate, proved for every `n`). -/
-theorem top4096 : Realizes (mod 4096 (0 : Nat)) ∧
+theorem top4096 : RealizesU (mod 4096 (0 : Nat)) ∧
     ∀ s w, (mod 4096 (0 : Nat)).clean s = s → ∃ o s' g, (mod 4096 (0 : Nat)).hw s w o s' g :=
   (built 4096 0).top
 

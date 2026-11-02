@@ -5,6 +5,7 @@ import Scan
 
 open Modular Scan
 open Emit (Tab)
+open scoped List
 
 namespace ScanTasks
 
@@ -234,6 +235,36 @@ theorem not_okT (oc : (j : (Pbad z inc).I) → Outs ((Pbad z inc).CI j).M V) :
   have := (h 1 _ ha _ hb).1 (show (tk 2 : Fin 3) ≠ tk 1 by decide)
   simp [CI, taskAnn, tk] at this
 
+/-! ### `no_chain` tied to `Pbad` through the certificate's pair facts -/
+
+/-- **No pair facts exist for `Pbad` in rank order `[0, 1, 2]`** whenever rules 0 and 1 fire in
+    some covered cycle: `h4` would rank rule 1 before rule 0 (`not_okT`). -/
+theorem no_pairFacts
+    (fire : ((j : (Pbad z inc).I) → Outs ((Pbad z inc).CI j).M V) → Wires (Pbad z inc).X.M V → (Pbad z inc).PR → Bool)
+    (oc : (j : (Pbad z inc).I) → Outs ((Pbad z inc).CI j).M V) (w : Wires (Pbad z inc).X.M V)
+    (hE : Env (Pbad z inc) oc w) (h0 : fire oc w 0 = true) (h1 : fire oc w 1 = true) :
+    PairFacts (Pbad z inc) [0, 1, 2] fire → False := by
+  intro pf
+  have h : ([1, 0] : List (Fin 3)) <+ [0, 1, 2] :=
+    pf.h4 oc w 0 1 hE h0 h1 (show (0 : Fin 3) ≠ 1 by decide) (not_okT z inc oc)
+  exact absurd h (by decide)
+
+/-- Every cycle of `Pbad` is covered: no assertions, no aliases, no methods. -/
+theorem env_all (oc : (j : (Pbad z inc).I) → Outs ((Pbad z inc).CI j).M V) (w : Wires (Pbad z inc).X.M V) :
+    Env (Pbad z inc) oc w := by
+  refine ⟨trivial, fun j => ?_, fun m => m.elim0, fun m => m.elim0⟩
+  match j with
+  | ⟨0, _⟩ => exact aliasOK_of_none _ _ _ (fun _ _ => rfl) (fun _ _ => rfl)
+  | ⟨1, _⟩ => exact aliasOK_of_none _ _ _ (fun _ _ => rfl) (fun _ _ => rfl)
+  | ⟨n + 2, h⟩ => exact absurd h (by omega)
+
+/-- **`Pbad` has no pair facts in rank order for a firing in which rules 0 and 1 both fire.** -/
+theorem no_pairFacts_all
+    (fire : ((j : (Pbad z inc).I) → Outs ((Pbad z inc).CI j).M V) → Wires (Pbad z inc).X.M V → (Pbad z inc).PR → Bool)
+    (oc : (j : (Pbad z inc).I) → Outs ((Pbad z inc).CI j).M V) (w : Wires (Pbad z inc).X.M V)
+    (h0 : fire oc w 0 = true) (h1 : fire oc w 1 = true) : PairFacts (Pbad z inc) [0, 1, 2] fire → False :=
+  no_pairFacts z inc fire oc w (env_all z inc oc w) h0 h1
+
 end ScanTasks
 
 #print axioms ScanTasks.ok
@@ -241,3 +272,5 @@ end ScanTasks
 #print axioms ScanTasks.pairs
 #print axioms ScanTasks.no_chain
 #print axioms ScanTasks.not_okT
+#print axioms ScanTasks.no_pairFacts
+#print axioms ScanTasks.no_pairFacts_all

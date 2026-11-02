@@ -4,8 +4,12 @@ This answers the question behind decision 1: what happens if every site
 condition is schedlean's own conservative approximation, with both operands
 of `&&` and `||` unconditional?
 
-- **Sound**, and proved so in Lean: any condition is checked, and weakening
-  one only adds obligations (§3).
+- **Fail safe, not a soundness lemma.** Every condition a file states is
+  checked by that file's obligation (`trU` and the value proofs): a condition
+  that is too strong fails it. Weakening a condition keeps every step's result
+  and adds only calls, so it costs completeness (`SiteCond.oblU_weakens`, §3).
+  The step from the model to the real design is an argument outside Lean
+  (design.md §7).
 - **Not cyclic in practice.** No conditional site in the corpus has a
   cyclic condition, so no literal is dropped. Cycles appear only in a stress
   test that makes every read conditional, and dropping removes them (§5).
@@ -124,7 +128,8 @@ most `propext` and `Quot.sound`.
    - `uncond_at`: the syntactic form with `cond := [[]]` is `Site.always` at
      every position, with no literal to drop.
    - `envHw_arg`: the method's argument is at `ρ 0`.
-2. **Weakening is sound.** `Weakens ss ss'` holds when `ss'` has the same
+2. **Weakening keeps results and adds calls** (a completeness cost, not a
+   soundness lemma; round 7's `oblU_weakens`). `Weakens ss ss'` holds when `ss'` has the same
    ports and arguments as `ss`, and each condition of `ss'` holds wherever
    the matching one of `ss` does.
    - `weakens_env_exact`, which needs `SitesOK` only for `ss'`: in the
@@ -147,7 +152,7 @@ most `propext` and `Quot.sound`.
    - `Cond.dropFrom_local`: the dropped condition reads only earlier
      positions.
    - `sitesOK_dropLater`, `weakens_dropLater`, `at_eq_exact`.
-   - `dropLater_sound` combines these with item 2 for exact conditions that
+   - `dropLater_spec` combines these with item 2 for exact conditions that
      may be cyclic.
    - The two `example`s are decision 1's cyclic pair in the order
      `C D A B`: `A`'s literal `B` is dropped, and `B` keeps `A`.
@@ -359,17 +364,17 @@ Each keeps every condition checked and none trusts bsc.
 
 ## 9. Replacement for design.md §7, "use-condition bugs … are therefore caught"
 
-> One rewrite per use site. A use that depends on the skipped value cannot
-> be proved for every `u`, so a condition that is too strong makes the
-> proof fail. One that is too weak only adds legality and readiness
-> obligations: weakening is sound (`SiteCond.dropLater_sound`). Every site
-> condition is schedlean's own: a call's exact condition, `true` for a
-> read, or the reach condition for the few reads that need one. bsc's use
-> conditions are not used, so an error in bsc's use analysis cannot change
-> what is proved. A schedule that bsc justified only by a wrong use
-> condition still fails, at that pair's legality fact. (With today's bsc,
-> the flat file already passes mkDeblockFilter and mkMCR, where such errors
-> were found.)
+> One rewrite per use site. With the order and every child's call sequence
+> fixed before the skipped values (`OblU`), a use that depends on a skipped
+> value cannot be proved for every `u`, so a condition that is too strong makes
+> the proof fail. Weakening keeps every step's result and adds only calls
+> (`SiteCond.oblU_weakens`): it costs completeness (legality and readiness of
+> the extra calls), and is not a soundness lemma. Every site condition is
+> schedlean's own: a call's exact condition, `true` for a read, the reach
+> condition for the few reads that need one, or the ready literal for a
+> readiness read. bsc's use conditions are not used, so an error in bsc's use
+> analysis cannot change what is proved. A schedule that bsc justified only by
+> a wrong use condition still fails, at that pair's legality fact.
 
 ## 10. Revision 2: the readiness rule and the compilation modes (design.md §7)
 
@@ -380,10 +385,64 @@ Each keeps every condition checked and none trusts bsc.
   ¬RDY` is UNSAT), read first, so no literal is dropped. 22 of the 24 corpus
   readiness sites hold (13 under the conservative rule of §1); the 2 left
   (mkPrediction `RL_outputing / outstatefifo.first`, mkBufferControl
-  `RL_inputing / shortTermPicList_returnList.first`) use `FIFO2R`
-  (`../Fifo2R.lean`). `tools/sitecond.py` prints the counts as `rdyRule`;
+  `RL_inputing / shortTermPicList_returnList.first`) fail safe. `tools/sitecond.py` prints the counts as `rdyRule`;
   `SITES_RDY_TRACE=1` prints each site's condition and witnesses
   (`out_trace/`).
 - **Four bsc modes**: `modes/compile.sh` (default, `-no-aggressive-conditions`,
   `-no-sched-conditions`, both), `modes/run_sites.sh`, `modes/results.txt`.
   The tool reads the newer dump format (`reads X  (hint: used when C)`) too.
+
+## 11. Round 7: the readiness rule sequenced by expression structure
+
+Ravi's decision (2026-11-02): `&&` and `||` are sequenced by the structure of
+the expression as bsc builds it (an n-ary `&&` or `||` is its argument list in
+order); a later operand's condition includes the earlier operands'
+short-circuit outcome (true for `&&`, false for `||`). This replaces the
+readiness-first bias and the orientation search (`tools/sitecond_r6.py` keeps
+the round-6 tool). The read's condition stays its ready literal; the check is
+`guard ∧ R_seq ∧ ¬RDY` UNSAT. Results (`modes7/`, `modes7/run_sites.sh`):
+
+| mode | readiness sites | recovered | failing (fail safe) |
+|---|---|---|---|
+| default | 24 | 22 | mkBufferControl `RL_inputing / shortTermPicList_returnList.first`, mkPrediction `RL_outputing / outstatefifo.first` |
+| `-no-sched-conditions` | 24 | 22 | the same two |
+| `-no-aggressive-conditions`, both off | 0 | — | — |
+
+**The site-value form (round 7 revision, soundness review r7-1 M1).** The
+first round-7 verdict above (`rdyRule`) encoded a literal over a conditional
+read on the hardware's port. The model reads the skipped value there whenever
+the read is skipped, so that verdict did not show the uses independent of the
+skipped values. The verdict now used is `rdySiteValue`
+(`tools/sitecond.py`, `rdy_site_check`; encoder `satc.EncS`):
+
+- a literal over a conditional read `y` of the same step (the site itself
+  included) reads `y`'s site value, `ite(cond_y, port_y, fresh)`, where
+  `cond_y` is `y`'s ready literal (an (a) read's: its reach condition);
+- **readiness**: `guard ∧ R(site values) ∧ ¬RDY` UNSAT;
+- **invariance**, where `R` reads another conditional read:
+  `guard ∧ R(site values) ≠ R(ports)` UNSAT. Where `R` reads only the site
+  itself, Lean derives invariance from readiness (`inv_self`).
+
+The file states exactly these facts (`rdy_n`, `inv_n` over `ops.g n` of the
+site values) and each is labelled with this verdict; its `R` reads the site
+values, so `trU` checks the use. A negative control (`modes7/neg_rdy.py`, output `modes7/neg_rdy.txt`) with
+the ready literals replaced by free atoms loses mkBufferControl's
+`RL_adjustingFreeSlots / longTermPicList_returnList.first`, as it must.
+
+| mode | readiness sites | all facts confirmed | of which need invariance (all hold) | failing (fail safe) |
+|---|---|---|---|---|
+| default | 24 | 22 | 7 | mkBufferControl `RL_inputing / shortTermPicList_returnList.first`, mkPrediction `RL_outputing / outstatefifo.first` |
+| `-no-sched-conditions` | 24 | 22 | 7 | the same two |
+| `-no-aggressive-conditions`, both off | 0 | — | — | — |
+
+Whole-literal dropping (the decided fallback) is used only where an `R` would
+read a site that is not before a site splitting on it; the emitter then drops
+those literals, counts them, and re-asks the tool for the formula it emits.
+mkBufferControl needs none (0 later-site literals). For the three designs not
+emitted the count assumes the same; they are flat for action shadowing anyway.
+With whole-literal dropping everywhere (the first fix the review offered) the
+count would be 13 of 24 (mkBufferControl 1/5, mkPrediction 2/9,
+mkDeblockFilter 9/9, mkMCR 1/1). The order pass's later-site drops for the
+reach conditions themselves: 5 literals in mkBufferControl, 65 in
+mkPrediction; cycles before weakening: mkBufferControl 3 steps / 4 sites,
+mkPrediction 2 / 5.
