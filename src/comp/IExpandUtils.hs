@@ -34,6 +34,7 @@ module IExpandUtils(
         addHeapPred,
         stampFor, stampForKey, pushDefFrame, pushRootFrame,
         withMetaFrame, withCellMetaFrame, withCellDefFrame,
+        unionAlias, aliasRead,
         addInputClock, addOutputClock, addInputReset, addOutputReset,
         getClkGateUses, clearClkGateUses, setClkGateUses,
         assertNoClkGateUses, addClkGateUse, addInhighClkGate,
@@ -49,8 +50,8 @@ module IExpandUtils(
         findBoundaryClock, isClockAncestor,
         isPrimType, isParamOnlyType,
         HeapPointer, unheap, unheapU, shallowUnheap, unheapAll,
-        toHeap, toHeapCon, toHeapWHNFCon,
-        toHeapWHNF,
+        toHeap, toHeapBinder, toHeapCon, toHeapWHNFCon,
+        toHeapWHNF, toHeapWHNFBinder,
         realPrimOp,
         integerPrim, realPrim, stringPrim, charPrim, handleBoolPrim,
         strictPrim, condPrim,
@@ -110,10 +111,11 @@ import Verilog(vKeywords, vIsValidIdent)
 import Changed
 
 import IConv(iConvT)
-import IExpandMeta(MetaStore, SiteTable, SiteKind(..), SiteKey, idSiteKey,
-                   primSiteKey, boundSiteKey, Frame, CellMeta, headSiteOf,
-                   cellDefSite, newMetaStore, lookupSite, mintSite, pushFrame,
-                   pushRoot, swapFrame, swapCellFrame, stampMeta, readSiteTable)
+import IExpandMeta(MetaStore, MetaTables, SiteKind(..), SiteKey, idSiteKey,
+                   primSiteKey, boundSiteKey, Frame, Binder(..), CellMeta,
+                   headSiteOf, cellDefSite, newMetaStore, lookupSite, mintSite,
+                   pushFrame, pushRoot, swapFrame, swapCellFrame, stampMeta,
+                   aliasUnion, readMetaTables)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -756,8 +758,9 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_backend_specific :: Bool,
                            go_ffcallNo :: Int,
                            go_atfCache :: IATFCache,
-                           -- the site table of the metadata store
-                           go_meta :: SiteTable,
+                           -- the tables of the metadata store (sites,
+                           -- alias classes)
+                           go_meta :: MetaTables,
                            goutput :: a }
 
 runG :: ErrorHandle -> Flags ->
@@ -810,7 +813,7 @@ runG errh flags symt alldefs recdefs atf_cache defId is_noinlined_func pps gFn =
          let rblobs = savedRules gs'
          when (not (null rblobs)) $
              internalError ("IExpandUtils.runG - unexpanded ruleblobs: " ++ ppReadable rblobs)
-         meta <- readSiteTable store
+         meta <- readMetaTables store
          return $ (GOutput {
                      go_clock_domains = (M.toList (clock_domains gs')),
                      go_resets = (all_resets gs'),
@@ -2591,10 +2594,13 @@ addHeapCell tag cell = do
 mkIRefT :: IType -> HeapPointer -> Position -> HeapData -> HExpr
 mkIRefT t p pos r = t `deepseq` IRefT t p pos r
 
-addHeapUnev :: String -> IType -> HExpr -> Maybe Id -> G HExpr
-addHeapUnev tag t e cell_name_orig = do
+-- The binder is written into the header of the new cell (see
+-- IExpandMeta): the parameter the expression is an argument of, or the
+-- index of the field or operand it is moved into.
+addHeapUnev :: Binder -> String -> IType -> HExpr -> Maybe Id -> G HExpr
+addHeapUnev b tag t e cell_name_orig = do
  cell_name <- improveCellName e cell_name_orig
- meta <- stampFor e
+ meta <- stampFor b e
  let newcell = (HUnev { hc_hexpr = e, hc_name = cell_name, hc_meta = meta })
  (p, r) <- addHeapCell tag newcell
  -- trace_hcell p e
@@ -2606,12 +2612,24 @@ addHeapUnev tag t e cell_name_orig = do
  return result -- (mapIExprPosition cross (e, result))
 
 -- add an expression to the heap, noting it is WHNF
-addHeapWHNF :: String -> IType -> PExpr -> Maybe Id -> G HExpr
-addHeapWHNF tag t pe@(P _ e) cell_name_orig = do
+addHeapWHNF :: Binder -> String -> IType -> PExpr -> Maybe Id -> G HExpr
+addHeapWHNF = addHeapWHNFAlias Nothing
+
+-- addHeapWHNF for a value read from another cell (toHeapWHNFBinder
+-- re-heaping a reference under a condition): the new cell and the cell
+-- it was read from hold one value, so their alias classes are joined
+-- (see IExpandMeta) on the pointer addHeapCell returns, before the
+-- reference to the new cell is built.
+addHeapWHNFAlias :: Maybe HeapPointer -> Binder -> String -> IType -> PExpr
+                 -> Maybe Id -> G HExpr
+addHeapWHNFAlias partner b tag t pe@(P _ e) cell_name_orig = do
   cell_name <- improveCellName e cell_name_orig
-  meta <- stampFor e
+  meta <- stampFor b e
   let newcell = (HWHNF { hc_pexpr = pe, hc_name = cell_name, hc_meta = meta })
   (p, r) <- addHeapCell tag newcell
+  case partner of
+    Just q -> unionAlias p q
+    Nothing -> return ()
   let pos = getIExprPosition e
   let result = mkIRefT t p pos r
   when doTraceHeap $ traceM ("addHeapWHNF " ++ ppString cell_name ++ " [" ++
@@ -2643,7 +2661,7 @@ addHeapPred tag e = do
   let t = itBit1       -- boolean condition
       pe = P pTrue e   -- no implicit condition
       ws = wsEmpty     -- no wire set
-  meta <- stampFor e
+  meta <- stampFor NoBinder e
   let newcell = (HNF { hc_pexpr = pe, hc_wire_set = ws, hc_name = Nothing,
                        hc_meta = meta })
   (p, r) <- addHeapCell tag newcell
@@ -2663,6 +2681,11 @@ updHeap :: String -> (HeapPointer, HeapData) -> (CellMeta -> HeapCell) -> G ()
 updHeap tag (p, HeapData ref) mkcell = do
    o <- getHeap (HeapData ref)
    let e = mkcell (hc_meta o)
+   -- a cell whose content is a reference holds that cell's value
+   case e of
+     HWHNF { hc_pexpr = P _ (IRefT _ q _ _) } -> unionAlias p q
+     HNF { hc_pexpr = P _ (IRefT _ q _ _) } -> unionAlias p q
+     _ -> return ()
    when doTraceHeap2 $
       traceM ("old val [" ++ tag ++ "]: " ++ "(_" ++ show p ++ ", " ++ ppReadable o ++ ")")
    when doTraceHeap $
@@ -2722,6 +2745,21 @@ withCellDefFrame ref act = do
       fr <- liftIO (pushFrame st site recursive)
       withMetaFrame fr act
 
+-- Record that the cells p and q hold one value (see IExpandMeta).
+{-# INLINE unionAlias #-}
+unionAlias :: HeapPointer -> HeapPointer -> G ()
+unionAlias p q = do
+  st <- getMetaStore
+  liftIO (aliasUnion st p q)
+
+-- The cell p takes the value of an evaluated expression, which unheap
+-- is about to read through its reference when it is one: p and the
+-- referenced cell then hold one value.
+{-# INLINE aliasRead #-}
+aliasRead :: HeapPointer -> PExpr -> G ()
+aliasRead p (P _ (IRefT _ q _ _)) = unionAlias p q
+aliasRead _ _ = return ()
+
 -- Push the frame of an unfolding of the definition i under the current
 -- frame; the caller runs the unfolding under it.
 pushDefFrame :: Id -> G Frame
@@ -2768,8 +2806,8 @@ mintDefSite st i = do
       liftIO (mintSite st key (useSite, recursive))
 
 -- The header of a cell created now for the expression e: the site of
--- e's root node and the current frame.  The site is read in O(1) from
--- the root node, or from the head of an application.  Which identifiers
+-- e's root node, the current frame and the binder b.  The site is
+-- read in O(1) from the root or an application's head.  Which identifiers
 -- the stamp may force: a definition, constructor, selector, foreign
 -- function, module or state variable head is keyed on its identifier,
 -- which is already in weak head normal form (source and .bo identifiers
@@ -2784,8 +2822,8 @@ mintDefSite st i = do
 -- evaluator builds some of those identifiers lazily from fresh strings
 -- (ports, parameters, names).
 {-# INLINE stampFor #-}
-stampFor :: HExpr -> G CellMeta
-stampFor e = do
+stampFor :: Binder -> HExpr -> G CellMeta
+stampFor b e = do
   st <- getMetaStore
   site <- case rootOf e of
             RSDef i -> do (s, _) <- mintDefSite st i
@@ -2793,14 +2831,14 @@ stampFor e = do
             RSKey key -> liftIO (fst <$> mintSite st key noSiteFacts)
             RSHead r -> do cell <- getHeap r
                            return (headSiteOf st (hc_meta cell))
-  liftIO (stampMeta st site)
+  liftIO (stampMeta st site b)
 
 -- the header of a cell whose site key the caller has in hand
 stampForKey :: SiteKey -> G CellMeta
 stampForKey key = do
   st <- getMetaStore
   (site, _) <- liftIO (mintSite st key noSiteFacts)
-  liftIO (stampMeta st site)
+  liftIO (stampMeta st site NoBinder)
 
 -- The root of an expression being heaped, classified for the stamp: a
 -- definition reference (whose row carries the use-site fact), any
@@ -3097,26 +3135,33 @@ unheapAllNFNoImp e = do
 
 {-# INLINE toHeap #-}
 toHeap :: String -> IType -> HExpr -> Maybe Id -> G HExpr
+toHeap = toHeapBinder NoBinder
+
+-- toHeap for a value bound to a parameter or moved into a field or
+-- operand: the binder goes into the header of the cell created.  No
+-- cell is created for a constant or a reference, which keep the header
+-- they have.
+toHeapBinder :: Binder -> String -> IType -> HExpr -> Maybe Id -> G HExpr
 -- foreign function calls must be forced onto the heap for
 -- proper handling of actionvalues
-toHeap tag t e@(ICon _ (ICForeign {})) cell_name = do
-  addHeapUnev tag t e cell_name
+toHeapBinder b tag t e@(ICon _ (ICForeign {})) cell_name = do
+  addHeapUnev b tag t e cell_name
 -- definitions must be heaped for correct handling of actionvalues
 -- a top-level definition should have no free variables by construction
 -- Don't use t for caching because, for polymorphic defs, it may be the
 -- instantiated type of the definition in the current context.
-toHeap tag t (ICon i (ICDef t' e)) cell_name = do
+toHeapBinder b tag t (ICon i (ICDef t' e)) cell_name = do
   e' <- cacheDef i t' e
-  toHeap tag t e' cell_name
-toHeap _   _ e@(ICon _ _)      _ = return e
-toHeap _   _ e@(IRefT _ _ _ _) _ = return e
-toHeap tag t e cell_name = do
+  toHeapBinder b tag t e' cell_name
+toHeapBinder _ _   _ e@(ICon _ _)      _ = return e
+toHeapBinder _ _   _ e@(IRefT _ _ _ _) _ = return e
+toHeapBinder b tag t e cell_name = do
         -- these errors have never happened, disable checks for now.
         when (doDebugFreeVars && not (S.null (fVars e))) $
              internalError ("toHeap: fv " ++ ppReadable (fVars e) ++ ppReadable e)
         when (doDebugFreeVars && not (S.null (ftVars e))) $
              internalError ("toHeap: ftv " ++ ppReadable (ftVars e) ++ ppReadable e)
-        addHeapUnev tag t e cell_name
+        addHeapUnev b tag t e cell_name
 
 -- Used when you absolutely need to get an IRefT back
 -- for arrays
@@ -3128,25 +3173,34 @@ toHeapCon tag t (ICon i (ICDef t' e)) cell_name = do
   toHeapCon tag t e' cell_name
 -- heap all other constants
 toHeapCon tag t e@(ICon _ _) cell_name = do
-  addHeapUnev tag t e cell_name
+  addHeapUnev NoBinder tag t e cell_name
 toHeapCon tag t e cell_name = toHeap tag t e cell_name
 
 {-# INLINE toHeapWHNF #-}
 toHeapWHNF :: String -> IType -> PExpr -> Maybe Id -> G HExpr
-toHeapWHNF _  _ (P p e@(ICon _ _)) _ | p == pTrue = return e
-toHeapWHNF _  _ (P p e@(IRefT _ _ _ _)) _ | p == pTrue = return e
-toHeapWHNF tag _ (P p e) cell_name
+toHeapWHNF = toHeapWHNFBinder NoBinder
+
+-- toHeapWHNF with a binder, as toHeapBinder
+toHeapWHNFBinder :: Binder -> String -> IType -> PExpr -> Maybe Id -> G HExpr
+toHeapWHNFBinder _ _  _ (P p e@(ICon _ _)) _ | p == pTrue = return e
+toHeapWHNFBinder _ _  _ (P p e@(IRefT _ _ _ _)) _ | p == pTrue = return e
+toHeapWHNFBinder b tag _ (P p e) cell_name
   | IAps (ICon _ (ICPrim _ PrimWhenPred)) [t] [ICon _ (ICPred _ p'), e'] <- e =
-    toHeapWHNF tag t (P (pConj p p') e') cell_name
-toHeapWHNF tag t pe@(P p e) cell_name = do
+    toHeapWHNFBinder b tag t (P (pConj p p') e') cell_name
+toHeapWHNFBinder b tag t pe@(P p e) cell_name = do
     -- Pointing to an IRefT (because p /= pTrue) is not WHNF
     pe' <- unheap pe
-    addHeapWHNF tag t pe' cell_name
+    -- a reference re-heaped under p: the new cell holds the value read
+    -- from e's cell, so the two are aliases
+    let partner = case e of
+                    IRefT _ q _ _ -> Just q
+                    _ -> Nothing
+    addHeapWHNFAlias partner b tag t pe' cell_name
 
 {-# INLINE toHeapWHNFCon #-}
 toHeapWHNFCon :: String -> IType -> HExpr -> Maybe Id -> G HExpr
 toHeapWHNFCon tag t e@(ICon _ _) cell_name = do
-    addHeapWHNF tag t (P pTrue e) cell_name
+    addHeapWHNF NoBinder tag t (P pTrue e) cell_name
 toHeapWHNFCon tag t e cell_name = toHeapWHNF tag t (P pTrue e) cell_name
 
 -- inferName: given an expression, try to infer a reasonable name from it

@@ -2,18 +2,22 @@ module IExpandMeta(
         -- sites
         SiteKind(..), SiteKey, idSiteKey, primSiteKey, rootSiteKey, boundSiteKey,
         SiteRow(..), SiteTable, siteRow, siteTableSize,
-        -- frames and cell headers
-        Frame, CellMeta, headSiteOf, cellDefSite,
+        -- frames, binders and cell headers
+        Frame, Binder(..), CellMeta, noBinder, headSiteOf, cellDefSite,
         -- the store and the hooks the evaluator calls
         MetaStore, newMetaStore, lookupSite, mintSite, pushFrame, pushRoot,
-        swapFrame, swapCellFrame, stampMeta, readSiteTable,
-        -- the query interface, read by the rebuild and the dump alone
-        siteOf, frameOf, chainOf, renderSite, renderDump
+        swapFrame, swapCellFrame, stampMeta, aliasUnion,
+        -- the tables after elaboration and the query interface, read by
+        -- the rebuild and the dump alone
+        MetaTables(..), AliasMap, readMetaTables,
+        siteOf, frameOf, binderOf, chainOf, aliasClassOf, renderSite, renderDump
         ) where
 
+import Control.Monad(when)
 import Data.Bits(bit, (.|.), (.&.), complement, xor, testBit)
 import Data.IORef
 import qualified Data.IntMap.Strict as IM
+import qualified Data.IntSet as IS
 import qualified Data.Map.Strict as M
 import System.FilePath(takeFileName)
 
@@ -26,9 +30,12 @@ import Prim(PrimOp)
 -- The evaluator metadata store
 --
 -- The store records, for every heap cell, the lexical site of the
--- expression the cell was created for and the chain of definition
+-- expression the cell was created for, the chain of definition
 -- unfoldings it was created under (the frame), rooted at a rule, a
--- method or an instantiation.  It is written by the evaluator through
+-- method or an instantiation, the binder the cell's value was bound
+-- to (a parameter, or the index of a field or operand it was moved
+-- into), and the alias class of cells that hold one value.  It is
+-- written by the evaluator through
 -- the hooks below and read only through the query interface, by the
 -- rebuild at the end of elaboration and by the -metadata-dump printer.
 --
@@ -51,21 +58,28 @@ import Prim(PrimOp)
 -- identifier the stamp does not read, because the evaluator builds some
 -- of those identifiers lazily from strings that may not be interned yet;
 -- all such cells share one row.  SKRule, SKMethodRoot and SKInst are
--- the roots of frame chains.
+-- the roots of frame chains.  SKBinder and SKField are the binders a
+-- cell's value can be bound to: the parameter an argument was heaped
+-- for, and the index of the field or operand a value was moved into;
+-- such a site appears only in a header's binder field, never as the
+-- site a cell is created for.
 data SiteKind = SKDef | SKPrim | SKCon | SKMethod | SKForeign | SKLambda
               | SKBound | SKRule | SKMethodRoot | SKInst
+              | SKBinder | SKField
         deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- A site key.  Identifier-based keys compare by intern id and position
 -- (O(1) per component); a primitive is keyed on its operator alone,
 -- because the evaluator builds primitive heads from PreIds whose strings
 -- need not have been interned yet and the stamp must not force them; a
--- root is keyed on a name string that is read, never interned.
+-- root is keyed on a name string that is read, never interned; a moved
+-- field or operand is keyed on its index.
 data SiteKey
   = IdKey !FString !FString !Position !SiteKind  -- base, qualifier, position, kind
   | PrimKey !PrimOp
   | RootKey !String !SiteKind
   | BoundKey
+  | FieldKey !Int
         deriving (Eq, Ord)
 
 idSiteKey :: SiteKind -> Id -> SiteKey
@@ -87,6 +101,14 @@ siteKeyKind (IdKey _ _ _ k) = k
 siteKeyKind (PrimKey {}) = SKPrim
 siteKeyKind (RootKey _ k) = k
 siteKeyKind BoundKey = SKBound
+siteKeyKind (FieldKey {}) = SKField
+
+-- The binder a cell is created with: none; the parameter an argument
+-- is bound to, whose identifier is in weak head normal form (a source
+-- binder, or a clone that substitution builds with a bang) so that
+-- keying on it interns nothing; or the index of the field or operand a
+-- value is moved into when a tuple or a lazy application is evaluated.
+data Binder = NoBinder | BoundTo !Id | MovedTo !Int
 
 -- A site row: the key and the facts recorded when the site was minted.
 -- sr_useSite says that the reference carried an occurrence position
@@ -180,14 +202,21 @@ instance Show Frame where
         "frame " ++ show i ++ " site " ++ show s ++ " count " ++ show c
 
 -- The header every heap cell carries: the site of the expression the
--- cell was created for and the frame current when it was created.
--- It is written once, at allocation, and copied across every state
--- transition of the cell.
+-- cell was created for, the frame current when it was created, and the
+-- site of its binder (noBinder when the cell was created for no
+-- parameter, field or operand).  It is written once, at allocation,
+-- and copied across every state transition of the cell.
 data CellMeta = CellMeta { cm_site :: {-# UNPACK #-} !Int,
-                           cm_frame :: !Frame }
+                           cm_frame :: !Frame,
+                           cm_binder :: {-# UNPACK #-} !Int }
+
+-- Site ids start at 1, so 0 is free to mean no binder.
+noBinder :: Int
+noBinder = 0
 
 instance Show CellMeta where
-    show (CellMeta s f) = "CellMeta " ++ show s ++ " (" ++ show f ++ ")"
+    show (CellMeta s f b) = "CellMeta " ++ show s ++ " (" ++ show f ++ ")" ++
+                            (if b == noBinder then "" else " binder " ++ show b)
 
 -- the site of a cell that borrows the site of the cell at its head
 {-# INLINE headSiteOf #-}
@@ -209,11 +238,13 @@ cellDefSite m =
         else Nothing
 
 -- The store: the site table, the frame counter, the frame register
--- (the frame current for the next allocation) and the scramble seed
--- (0 when scrambling is off).  One store per module elaboration.
+-- (the frame current for the next allocation), the alias classes and
+-- the scramble seed (0 when scrambling is off).  One store per module
+-- elaboration.
 data MetaStore = MetaStore { ms_sites :: !(IORef SiteTable),
                              ms_nextFrame :: !(IORef Int),
                              ms_frame :: !(IORef Frame),
+                             ms_alias :: !(IORef AliasMap),
                              ms_seed :: {-# UNPACK #-} !Int }
 
 newMetaStore :: Int -> IO MetaStore
@@ -221,7 +252,8 @@ newMetaStore seed = do
     sites <- newIORef emptySiteTable
     next <- newIORef 1
     reg <- newIORef TopFrame
-    return (MetaStore sites next reg seed)
+    alias <- newIORef IM.empty
+    return (MetaStore sites next reg alias seed)
 
 -- The one scrambling function: identity when the seed is 0.
 perturb :: MetaStore -> Int -> Int
@@ -350,15 +382,75 @@ swapFrame st fr = do
 swapCellFrame :: MetaStore -> CellMeta -> IO Frame
 swapCellFrame st m = swapFrame st (cm_frame m)
 
--- The header for a cell allocated now at a site.
+-- The header for a cell allocated now at a site, with its binder (whose
+-- site is minted here, on the first cell bound to it).
 {-# INLINE stampMeta #-}
-stampMeta :: MetaStore -> Int -> IO CellMeta
-stampMeta st site = do
+stampMeta :: MetaStore -> Int -> Binder -> IO CellMeta
+stampMeta st site b = do
     fr <- readIORef (ms_frame st)
-    return $! CellMeta site fr
+    binder <- case b of
+                NoBinder -> return noBinder
+                BoundTo i -> mint (idSiteKey SKBinder i)
+                MovedTo n -> mint (FieldKey n)
+    return $! CellMeta site fr binder
+  where mint key = fst <$> mintSite st key (False, False)
 
-readSiteTable :: MetaStore -> IO SiteTable
-readSiteTable st = readIORef (ms_sites st)
+-- ===============
+-- Alias classes
+--
+-- Two cells hold one value when one takes the value read from the
+-- other: a demanded cell whose expression evaluates to a reference, a
+-- cell walked to normal form through a reference, a reference re-heaped
+-- under an implicit condition, and a cell whose content is itself a
+-- reference.  The classes are a union-find over cell pointers: a map
+-- from a pointer to its parent, absent for a root, with path
+-- compression on find; a cell in no union is its own class and has no
+-- entry.  The root of a class is its smallest pointer (the earliest
+-- cell), so a class has one representative whatever the order of its
+-- unions, and every link goes from a larger pointer to a smaller one,
+-- so a find terminates on the perturbed entries of the scramble run
+-- as well.
+type AliasMap = IM.IntMap Int
+
+-- the root of p's class, compressing the path to it
+aliasFind :: MetaStore -> Int -> IO Int
+aliasFind st p = do
+    m <- readIORef (ms_alias st)
+    let root = walk p
+        walk x = maybe x walk (IM.lookup x m)
+        compress x acc = case IM.lookup x acc of
+                           Just y | y /= root -> compress y (IM.insert x root acc)
+                           _ -> acc
+    case IM.lookup p m of
+      Just y | y /= root -> writeIORef (ms_alias st) $! compress p m
+      _ -> return ()
+    return root
+
+-- Join the classes of p and q: one insert when they differ.
+aliasUnion :: MetaStore -> Int -> Int -> IO ()
+aliasUnion st p q = do
+    rp <- aliasFind st p
+    rq <- aliasFind st q
+    when (rp /= rq) $ do
+      let a = perturb st rp
+          b = perturb st rq
+      modifyIORef' (ms_alias st) (IM.insert (max a b) (min a b))
+
+-- the root of p's class in a snapshot of the map
+aliasClassOf :: AliasMap -> Int -> Int
+aliasClassOf m = walk
+  where walk x = maybe x walk (IM.lookup x m)
+
+-- The tables of the store after elaboration: the site table and the
+-- alias classes.
+data MetaTables = MetaTables { mt_sites :: !SiteTable,
+                               mt_alias :: !AliasMap }
+
+readMetaTables :: MetaStore -> IO MetaTables
+readMetaTables st = do
+    sites <- readIORef (ms_sites st)
+    alias <- readIORef (ms_alias st)
+    return (MetaTables sites alias)
 
 -- ===============
 -- The query interface
@@ -368,6 +460,10 @@ siteOf = cm_site
 
 frameOf :: CellMeta -> Frame
 frameOf = cm_frame
+
+-- the site of the cell's binder, or noBinder
+binderOf :: CellMeta -> Int
+binderOf = cm_binder
 
 -- (site, count) of every frame from the cell's frame to the root
 chainOf :: CellMeta -> [(Int, Int)]
@@ -386,6 +482,8 @@ showSiteKind SKBound = "bound"
 showSiteKind SKRule = "rule"
 showSiteKind SKMethodRoot = "methodroot"
 showSiteKind SKInst = "inst"
+showSiteKind SKBinder = "binder"
+showSiteKind SKField = "field"
 
 -- The position's file is rendered as its base name: the dump is a
 -- debugging aid and must not depend on the directory layout.
@@ -413,6 +511,7 @@ renderSite t s =
                      PrimKey op -> show op
                      RootKey n _ -> n
                      BoundKey -> "-"
+                     FieldKey n -> show n
             flags = [ c | (c, on) <- [('h', testBit s 60),
                                       ('u', sr_useSite row),
                                       ('r', sr_recursive row)], on ]
@@ -420,11 +519,22 @@ renderSite t s =
             (if null flags then "" else " " ++ flags)
 
 -- One line per cell, in the order given (the caller passes ascending
--- pointer order): the pointer, the cell's site, then the chain of
--- frames from the creating frame to the root, each as site#count.
-renderDump :: SiteTable -> [(Int, CellMeta)] -> String
-renderDump t cells = unlines (map line cells)
+-- pointer order): the pointer, the cell's site, its binder when it has
+-- one, the root of its alias class when the class has another cell,
+-- then the chain of frames from the creating frame to the root, each
+-- as site#count.
+renderDump :: MetaTables -> [(Int, CellMeta)] -> String
+renderDump (MetaTables t am) cells = unlines (map line cells)
   where line (p, m) =
             "_" ++ show p ++ ": " ++ renderSite t (siteOf m) ++
+            binder (binderOf m) ++ alias p ++
             concatMap link (chainOf m)
+        binder b | b == noBinder = ""
+                 | otherwise = ", " ++ renderSite t b
+        -- a cell is in a class with another cell when it has a parent
+        -- or is one
+        alias p | IM.member p am || IS.member p parents =
+                    ", alias _" ++ show (aliasClassOf am p)
+                | otherwise = ""
+        parents = IS.fromList (IM.elems am)
         link (s, c) = " <- " ++ renderSite t s ++ "#" ++ show c
