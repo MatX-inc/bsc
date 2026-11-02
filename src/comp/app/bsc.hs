@@ -96,7 +96,7 @@ import PoisonUtils(mkPoisonedCDefn)
 import GenSign(genUserSign, genEverythingSign)
 import Simplify(simplify)
 import ISyntax(IPackage(..), IModule(..), IATFCache, mergeIATFCaches,
-               IEFace(..), IDef(..), IExpr(..), fdVars)
+               IEFace(..), IDef(..), IExpr(..), fdVars, PreElab, PostElab)
 import ISyntaxUtil(iMkRealBool, iMkLitSize, iMkString{-, itSplit -}, isTrue)
 import InstNodes(getIStateLocs, flattenInstTree)
 import IConv(iConvPackage, iConvDef)
@@ -111,7 +111,6 @@ import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign)
 import IExpand(iExpand)
-import IExpandUtils(HeapData)
 import ITransform(iTransform)
 import IInline(iInline)
 import IInlineFmt(iInlineFmt)
@@ -407,11 +406,11 @@ compilePackage ::
     ErrorHandle ->
     Flags ->
     TimeInfo ->
-    BinMap HeapData ->
+    BinMap ->
     HashMap ->
     String ->
     CPackage ->
-    IO (Bool, BinMap HeapData, HashMap)
+    IO (Bool, BinMap, HashMap)
 compilePackage
     errh
     flags                -- user switches
@@ -662,7 +661,7 @@ compilePackage
     t <- dump errh flags t DFisimpdicts dumpnames imodsd
 
     start flags DFisimplify
-    let imods :: IPackage HeapData
+    let imods :: IPackage PreElab
         imods = iSimplify imodsd
     iPCheck flags symt imods "isimplify"
     t <- dump errh flags t DFisimplify dumpnames imods
@@ -677,7 +676,7 @@ compilePackage
     let elabATFCache = foldl' mergeIATFCaches (ipkg_atf_cache imods)
                               [ ipkg_atf_cache m | (m, _) <- binmods ]
 
-    let orderGens :: IPackage HeapData -> [WrapInfo] -> [WrapInfo]
+    let orderGens :: IPackage PreElab -> [WrapInfo] -> [WrapInfo]
         orderGens (IPackage pid _ _ ds _) gs =
                 --trace (ppReadable (gis, g, os)) $
                                               map get os
@@ -721,7 +720,7 @@ compilePackage
     --   doesn't update "alldefs"; this is likely OK because it is only used
     --   to build undefined values (in IExpand) and to insert RWires
     --   (in AAddSchedAssumps)
-    let gen :: (IPackage HeapData, Bool) -> [WrapInfo] -> IO (IPackage HeapData, Bool)
+    let gen :: (IPackage PreElab, Bool) -> [WrapInfo] -> IO (IPackage PreElab, Bool)
         gen (im, !success) []  = return (im, success)
         gen (im, !success) (wi@(WrapInfo { mod_nm = i, wrapped_mod = i' }) : xs) = do
             let (mfile, mpkg, _) = dumpnames
@@ -825,12 +824,12 @@ genModule ::
     String -> -- prefix
     String -> -- source package name
     SymTab ->
-    M.Map Id (IExpr HeapData) ->
+    M.Map Id (IExpr PreElab) ->
     IATFCache ->
-    IDef HeapData ->
+    IDef PreElab ->
     IO (CDefn)
 
--- [IDef HeapData], VSchedInfo, VPathInfo, VWireInfo, [VFieldInfo], [VPort])
+-- [IDef PreElab], VSchedInfo, VPathInfo, VWireInfo, [VFieldInfo], [VPort])
 genModule
     errh
     wi
@@ -1068,7 +1067,7 @@ genModule
     aCheck flags amod_no_assumps "aRemoveAssumps"
     t <- dump errh flags t DFremoveAssumps dumpnames amod_no_assumps
 
-    -- drop ASAny with "chosen" values
+    -- drop ASAny (pick values for undetermined expressions)
     -- just before the split because other paths add new expressions
     -- and because we might choose more undets in pathsPostSched
     start flags DFdropundet
@@ -2486,7 +2485,7 @@ missingUserFiles flags cSrcFiles = filterM cantFind cSrcFiles
 -- ===============
 
 compileCDefToIDef :: ErrorHandle -> Flags -> DumpNames -> SymTab ->
-                     IPackage a -> CDefn -> IO (IDef a, Bool)
+                     IPackage PreElab -> CDefn -> IO (IDef PreElab, Bool)
 compileCDefToIDef errh flags dumpnames symt ipkg def =
  do
     let pkgid = ipkg_name ipkg
@@ -2516,7 +2515,7 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
 
 -- ===============
 
-iPCheck :: Flags -> SymTab -> IPackage a -> String -> IO ()
+iPCheck :: Flags -> SymTab -> IPackage PreElab -> String -> IO ()
 iPCheck flags symt ipkg desc = -- deepseq ipkg $
         if doICheck flags && not (tCheckIPackage flags symt ipkg)
             then internalError (
@@ -2527,7 +2526,7 @@ iPCheck flags symt ipkg desc = -- deepseq ipkg $
                     then putStrLnF "types OK"
                     else return ()
 
-iMCheck :: Flags -> SymTab -> IModule a -> String -> IO ()
+iMCheck :: Flags -> SymTab -> IModule PostElab -> String -> IO ()
 iMCheck flags symt imod desc =
     if doICheck flags && not (tCheckIModule flags symt imod)
         then internalError (

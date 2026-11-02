@@ -27,7 +27,6 @@ import FlagsDecode (adjustFinalFlags, decodeFlags, defaultFlags)
 import IConv (iConvPackage)
 import LiftDicts (liftDictsPkg)
 import IExpand (iExpandStrings)
-import IExpandUtils (HDef, HExpr)
 import ISimpDicts (iSimpDicts)
 import ISimplify (iSimplify)
 import ISyntax
@@ -69,7 +68,7 @@ searchFlags bluespecdir = do
 -- module, giving what iExpandStrings takes: the symbol table with every
 -- imported definition visible, the definitions of Strings and its imports,
 -- and the ATF cache of all of them.
-compileStrings :: ErrorHandle -> Flags -> String -> IO (SymTab, M.Map Id HExpr, IATFCache, [HDef])
+compileStrings :: ErrorHandle -> Flags -> String -> IO (SymTab, M.Map Id (IExpr PreElab), IATFCache, [IDef PreElab])
 compileStrings errh flags source = do
   let lflags = LFlags { lf_is_stdlib = False, lf_allow_sv_kws = True }
   cpkg <- case parse pPackage (lexStart lflags (mkFString "Strings.bs") source) of
@@ -100,7 +99,7 @@ compileStrings errh flags source = do
       atfAll = foldl' mergeIATFCaches atf [ipkg_atf_cache m | (m, _) <- binmods]
   pure (internalSymt, alldefs, atfAll, defs)
 
-evaluate :: Flags -> SymTab -> M.Map Id HExpr -> IATFCache -> [HDef] -> String -> IO ()
+evaluate :: Flags -> SymTab -> M.Map Id (IExpr PreElab) -> IATFCache -> [IDef PreElab] -> String -> IO ()
 evaluate flags symt alldefs atf defs name =
   case [d | d@(IDef i _ _ _) <- defs, getIdBaseString i == name] of
     [] -> putStrLn (name ++ ": no such definition")

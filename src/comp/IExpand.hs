@@ -1,6 +1,8 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances, TypeSynonymInstances, RelaxedPolyRec, PatternGuards, ScopedTypeVariables #-}
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE TypeFamilies, TypeApplications #-}
+{-# OPTIONS_GHC -Werror=inaccessible-code -Werror=overlapping-patterns #-}
 -- Todo
 --  * Use a set to keep track of variable values to handle x==c1 || x==c2
 --  * Don't generate x!=0 && x!=1 && x!= 2 ...
@@ -80,7 +82,8 @@ import qualified IfcBetterInfo as BetterInfo
 import ITransform(iTransExpr)
 
 import IOUtil(progArgs)
-import ISyntaxXRef(mapIExprPosition)
+import ISyntaxXRef(mapIExprPositionRef)
+import Unsafe.Coerce(unsafeCoerce)
 import IStateLoc
 
 -----------------------------------------------------------------------------
@@ -247,16 +250,32 @@ iExpandPref = "__h"
 -----------------------------------------------------------------------------
 
 -- iExpand
+-- The package definitions enter the evaluator as PreElab terms and are
+-- used as Elab terms.  The two phases share one representation: every
+-- PreElab constructor is also an Elab constructor of the same data type
+-- with the same tag and field layout (the GADT return types only restrict
+-- which constructors may occur, and Elab admits every PreElab one); Ann
+-- PreElab and Ann Elab are the same type; and Ref PreElab is Void, so no
+-- IRefT or ArrayCell (and no evaluator-made constant) exists in a PreElab
+-- term.  The retag is therefore the identity on the heap, done with
+-- unsafeCoerce (Data.Coerce.coerce is refused: a GADT's index is nominal).
+-- This is the only place a term changes phase without being rebuilt; the
+-- other edge, Elab -> PostElab, is pDef's rebuild (hToDef).
+retagPreToElab :: (M.Map Id (IExpr PreElab), IDef PreElab)
+               -> (M.Map Id (IExpr Elab), IDef Elab)
+retagPreToElab = unsafeCoerce
+
 --   Elaborate a toplevel module definition (for which RTL is being generated).
 --   Heap references become local defs in the module (named with "__h"),
 --   except when they are simple enough to be inlined.
 --   The actual elaboration work is done by iExpandModuleDef
 iExpand :: ErrorHandle -> Flags ->
-           SymTab -> M.Map Id HExpr ->
+           SymTab -> M.Map Id (IExpr PreElab) ->
            IATFCache ->
-           Bool -> [PProp] -> HDef ->
-           IO (IModule HeapData)
-iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _ _) = do
+           Bool -> [PProp] -> IDef PreElab ->
+           IO (IModule PostElab)
+iExpand errh flags symt alldefs0 atf_cache is_noinlined_func pps def0 = do
+  let (alldefs, def@(IDef mi _ _ _)) = retagPreToElab (alldefs0, def0)
   -- unbuffer output if we're tracing
   when (doAnyTrace || showElabProgress flags) $
       do hSetBuffering stdout LineBuffering
@@ -312,7 +331,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
                          -> (e, legalizeNameInfo name)
                     hres -> internalError ("heapOf " ++ ppReadable (p, hres))
 
-      pDef :: HeapPointer -> (HExpr, Maybe HDef)
+      pDef :: HeapPointer -> (IExpr PostElab, Maybe (IDef PostElab))
       pDef p0 =
           let -- translate the old pointer to the new pointer
               p = ptran p0
@@ -330,7 +349,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
                         mkId noPosition (mkFString (iExpandPref ++ show p))
               -- update the body of the IDef that we're creating
               -- (this is recursive, since "m" is built with "pDef")
-              e' = hToDef m e
+              e' = hToDef hd_env e
               -- whether the expression is "simple" and therefore doesn't
               -- need to be lifted to an IDef
               simple (ICon _ _) = True
@@ -360,10 +379,22 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       -- replacing the old pointers with the expressions of the new pointers
       m = IM.fromList [(p, mget (ptran p)) | p <- ptrs0 ]
 
+      -- the environment of the rebuild: the pointer map and the state
+      -- variables rebuilt once each (both lazy, both knotted through
+      -- "hd_env" itself; see HToDefEnv)
+      hd_env = HToDefEnv { hd_ptrs = m, hd_svs = sv_tab }
+      sv_tab = IM.fromList [ (isv_uid sv, rebuildStateVar hd_env sv)
+                             | (_, sv) <- insts ]
+
       -- replaces pointers in the insts, rules, and ifcs
-      insts' = hToDef m insts
-      rules_heap = hToDef m rules
-      ifc'   = hToDef m ifc
+      insts' = hToDef hd_env insts
+      rules_heap = hToDef hd_env rules
+      ifc'   = hToDef hd_env ifc
+      -- the clocks and resets only change phase (their wires select from
+      -- the state variables, which the table shares)
+      clock_domains' = [ (d, map (hToDef hd_env) cs)
+                         | (d, cs) <- go_clock_domains go ]
+      resets' = map (hToDef hd_env) (go_resets go)
 
       -- the final defs for the IModule
       -- (the entries in "ptr_info" that are not inlined, and contain a def)
@@ -383,7 +414,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
 
       -- the expanded module
       imod0 = IModule mi is_noinlined_func mbe wi [] iks args
-                     (go_clock_domains go) (go_resets go)
+                     clock_domains' resets'
                      insts' (go_port_types go)
                      defs rules_cleanup ifc'
                      (go_ffcallNo go) comments_map
@@ -395,7 +426,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
   --mapM_ traceMethodPred mpdefs
 
   when doDebug $ do
-      traceM ("iExpand done\n" ++ ppReadable (sort (IM.toList iheap))
+      traceM ("iExpand done\n" ++ ppReadable (IM.toList iheap)
                                ++ ppReadable rules
                                ++ ppReadable ifc)
       traceM ("iExpand done mod\n" ++ ppReadable imod)
@@ -408,10 +439,13 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
 --   the same static elaboration that iExpand applies to a module, for tools
 --   that compute text in Bluespec. Elaboration-time primitives run as they
 --   would for a module, so a message or $display prints to stdout.
+--   The definitions enter as PreElab terms and are retagged once here,
+--   under the invariant stated at retagPreToElab.
 iExpandStrings :: ErrorHandle -> Flags ->
-                  SymTab -> M.Map Id HExpr ->
-                  IATFCache -> HDef -> IO [String]
-iExpandStrings errh flags symt alldefs atf_cache (IDef i t e _) = do
+                  SymTab -> M.Map Id (IExpr PreElab) ->
+                  IATFCache -> IDef PreElab -> IO [String]
+iExpandStrings errh flags symt alldefs0 atf_cache def0 = do
+  let (alldefs, IDef i t e _) = retagPreToElab (alldefs0, def0)
   when (t /= itList itString) $
       bsError errh [(getPosition i,
                      EGeneric ("Cannot evaluate " ++ quote (getIdString i) ++
@@ -421,17 +455,17 @@ iExpandStrings errh flags symt alldefs atf_cache (IDef i t e _) = do
             pushTopValueSchedNameScope i >> evalStringList e
   return (fst (goutput go))
 
-generateMethodPreds :: forall a . Bool -> IRules a -> [IDef a]
+generateMethodPreds :: Bool -> IRules PostElab -> [IDef PostElab]
 generateMethodPreds flag (IRules _ rs) =
   if (not flag) then [] else concatMap one_rule rs where
-    one_rule :: IRule a -> [IDef a]
+    one_rule :: IRule PostElab -> [IDef PostElab]
     one_rule r = gen_defs (irule_name r) $ collect_ifs $ irule_body r
-    collect_ifs :: IExpr a ->
-                   [(IExpr a, IExpr a)]  -- pred, meth call
+    collect_ifs :: IExpr PostElab ->
+                   [(IExpr PostElab, IExpr PostElab)]  -- pred, meth call
     collect_ifs e = -- trace ("collect_ifs " ++ (show e) ) $
                      collect_ifs' e
-    collect_ifs' :: IExpr a ->
-                   [(IExpr a, IExpr a)]  -- pred, meth call
+    collect_ifs' :: IExpr PostElab ->
+                   [(IExpr PostElab, IExpr PostElab)]  -- pred, meth call
     collect_ifs' (IAps (ICon _ (ICPrim { primOp = PrimIf })) _ [cnd, thn, els]) =
       let true_branch = collect_ifs thn
           false_branch = collect_ifs els
@@ -468,7 +502,7 @@ generateMethodPreds flag (IRules _ rs) =
         = collect_ifs e
     -- need to recurse further into e? XXX
     collect_ifs' e = [(iTrue,e)]
-    add_to_pred :: IExpr a -> (IExpr a, IExpr a) -> (IExpr a, IExpr a)
+    add_to_pred :: IExpr PostElab -> (IExpr PostElab, IExpr PostElab) -> (IExpr PostElab, IExpr PostElab)
     add_to_pred new (old, action) = (ieAndOpt new old, action)
 
     -- tiny state monad to get unique numbers.  This is a lazy
@@ -479,10 +513,10 @@ generateMethodPreds flag (IRules _ rs) =
       n <- get
       put $ n+1
       return n
-    gen_defs :: Id -> [(IExpr a, IExpr a)] -> [IDef a]
+    gen_defs :: Id -> [(IExpr PostElab, IExpr PostElab)] -> [IDef PostElab]
     gen_defs rulename predmethods = concat $ evalState (mapM (makeDef rulename) predmethods ) 1
 
-    makeDef :: Id -> (IExpr a, IExpr a) -> State Integer [IDef a]
+    makeDef :: Id -> (IExpr PostElab, IExpr PostElab) -> State Integer [IDef PostElab]
     makeDef rulename (predicate, expr)
       | not $ isTrue predicate =
         -- trace ("now evaluating " ++ ppReadable rulename ++ " " ++ ppReadable (predicate, expr)
@@ -490,7 +524,7 @@ generateMethodPreds flag (IRules _ rs) =
         -- ) $
         mapM (onepred rulename predicate) (unpack_method_call expr)
     makeDef _ _ = return [] -- isTrue, for actions with no conditions
-    onepred :: Id -> IExpr a -> (Id, Id) -> State Integer (IDef a)
+    onepred :: Id -> IExpr PostElab -> (Id, Id) -> State Integer (IDef PostElab)
     onepred rulename predicate (state, method) = do
           -- traceM $ "onepred " ++ ppReadable (predicate, state, method)
           uniquenum <- nextNumber
@@ -525,13 +559,13 @@ generateMethodPreds flag (IRules _ rs) =
       in
           addIdProps (mkId noPosition fstr) props
 
-unpack_method_call :: IExpr a -> [(Id,Id)]
+unpack_method_call :: IExpr PostElab -> [(Id,Id)]
 unpack_method_call e = -- trace ("unpack_method_call " ++ (show e)) $
                        unpack_method_call' [] e
 -- This accumulates a list of positions along the way, to support "avAction_"
 -- wrappers; in some places we sanity check that it's an empty list, because
 -- positions are not expected to be accumulated in those situations.
-unpack_method_call' :: [Position] -> IExpr a -> [(Id,Id)]
+unpack_method_call' :: [Position] -> IExpr PostElab -> [(Id,Id)]
 -- no action
 unpack_method_call' _ (ICon _ (ICPrim { primOp = PrimNoActions })) =
   []
@@ -576,7 +610,7 @@ unpack_method_call' _ e =
 -- rebuilding must stay lazy; consumers only force finite prefixes of
 -- such wires.  Subtrees that cannot contain an ICon are returned
 -- unchanged, rather than reallocated.
-removeInlinedPositions :: Flags -> IModule HeapData -> IModule HeapData
+removeInlinedPositions :: Flags -> IModule PostElab -> IModule PostElab
 removeInlinedPositions flags imod0 | (not (methodConditions flags)) = imod0
 removeInlinedPositions flags imod0 =
     imod0 { imod_clock_domains =
@@ -589,90 +623,61 @@ removeInlinedPositions flags imod0 =
             imod_interface = map rmIFace (imod_interface imod0)
           }
   where
-    rmExpr :: HExpr -> HExpr
-    rmExpr (ILam i t e) = ILam i t (rmExpr e)
+    rmExpr :: IExpr PostElab -> IExpr PostElab
     rmExpr (IAps f ts es) = IAps (rmExpr f) ts (map rmExpr es)
-    rmExpr e@(IVar _) = e
-    rmExpr (ILAM i k e) = ILAM i k (rmExpr e)
     rmExpr (ICon i ic) = ICon (removeIdInlinedPositions i) (rmConInfo ic)
-    rmExpr e@(IRefT _ _ _ _) = e
 
     -- only the payloads that can carry an IExpr are rebuilt;
     -- all other constructors are returned unchanged
-    rmConInfo :: IConInfo HeapData -> IConInfo HeapData
-    rmConInfo (ICDef t d) = ICDef t (rmExpr d)
-    rmConInfo (ICUndet t k mv) = ICUndet t k (fmap rmExpr mv)
+    rmConInfo :: IConInfo PostElab -> IConInfo PostElab
     rmConInfo (ICStateVar t sv) = ICStateVar t (rmStateVar sv)
     rmConInfo (ICValue t d) = ICValue t (rmExpr d)
-    rmConInfo (ICMethod t ins outs m) = ICMethod t ins outs (rmExpr m)
     rmConInfo (ICClock t c) = ICClock t (rmClock c)
     rmConInfo (ICReset t r) = ICReset t (rmReset r)
     rmConInfo (ICInout t io) = ICInout t (rmInout io)
-    rmConInfo (ICLazyArray t arr mu) =
-        -- the array cells are heap references, thus leaves
-        ICLazyArray t arr (fmap (\ (e1, e2) -> (rmExpr e1, rmExpr e2)) mu)
-    rmConInfo (ICPred t p) = ICPred t (rmPred p)
     rmConInfo ic@(ICPrim {}) = ic
     rmConInfo ic@(ICForeign {}) = ic
     rmConInfo ic@(ICCon {}) = ic
-    rmConInfo ic@(ICIs {}) = ic
-    rmConInfo ic@(ICOut {}) = ic
     rmConInfo ic@(ICTuple {}) = ic
     rmConInfo ic@(ICSel {}) = ic
-    rmConInfo ic@(ICVerilog {}) = ic
+    rmConInfo ic@(ICUndet {}) = ic
     rmConInfo ic@(ICInt {}) = ic
     rmConInfo ic@(ICReal {}) = ic
     rmConInfo ic@(ICString {}) = ic
     rmConInfo ic@(ICChar {}) = ic
-    rmConInfo ic@(ICHandle {}) = ic
     rmConInfo ic@(ICMethArg {}) = ic
     rmConInfo ic@(ICModPort {}) = ic
     rmConInfo ic@(ICModParam {}) = ic
-    rmConInfo ic@(ICIFace {}) = ic
-    rmConInfo ic@(ICRuleAssert {}) = ic
-    rmConInfo ic@(ICSchedPragmas {}) = ic
-    rmConInfo ic@(ICName {}) = ic
-    rmConInfo ic@(ICAttrib {}) = ic
-    rmConInfo ic@(ICPosition {}) = ic
-    rmConInfo ic@(ICType {}) = ic
 
-    rmClock :: HClock -> HClock
+    rmClock :: IClock PostElab -> IClock PostElab
     rmClock c = c { ic_wires = rmExpr (ic_wires c) }
 
-    rmReset :: HReset -> HReset
+    rmReset :: IReset PostElab -> IReset PostElab
     rmReset r = r { ir_clock = rmClock (ir_clock r),
                     ir_wire = rmExpr (ir_wire r) }
 
-    rmInout :: HInout -> HInout
+    rmInout :: IInout PostElab -> IInout PostElab
     rmInout io = io { io_clock = rmClock (io_clock io),
                       io_reset = rmReset (io_reset io),
                       io_wire = rmExpr (io_wire io) }
 
-    rmStateVar :: HStateVar -> HStateVar
+    rmStateVar :: IStateVar PostElab -> IStateVar PostElab
     rmStateVar sv =
         sv { isv_iargs = map rmExpr (isv_iargs sv),
              isv_clocks = [ (i, rmClock c) | (i, c) <- isv_clocks sv ],
              isv_resets = [ (i, rmReset r) | (i, r) <- isv_resets sv ] }
 
-    rmPred :: HPred -> HPred
-    rmPred (PConj ps) = PConj (S.map rmPTerm ps)
-
-    rmPTerm :: PTerm HeapData -> PTerm HeapData
-    rmPTerm (PAtom e) = PAtom (rmExpr e)
-    rmPTerm (PIf c t e) = PIf (rmExpr c) (rmPred t) (rmPred e)
-    rmPTerm (PSel idx sz ps) = PSel (rmExpr idx) sz (map rmPred ps)
-
-    rmDef :: HDef -> HDef
+    rmDef :: IDef PostElab -> IDef PostElab
     rmDef (IDef i t e p) = IDef i t (rmExpr e) p
 
-    rmRules :: HRules -> HRules
+    rmRules :: IRules PostElab -> IRules PostElab
     rmRules (IRules sps rs) = IRules sps (map rmRule rs)
 
-    rmRule :: HRule -> HRule
+    rmRule :: IRule PostElab -> IRule PostElab
     rmRule r = r { irule_pred = rmExpr (irule_pred r),
                    irule_body = rmExpr (irule_body r) }
 
-    rmIFace :: HEFace -> HEFace
+    rmIFace :: IEFace PostElab -> IEFace PostElab
     rmIFace ief =
         ief { ief_value = fmap (\ (e, t) -> (rmExpr e, t)) (ief_value ief),
               ief_body = fmap rmRules (ief_body ief) }
@@ -721,6 +726,8 @@ eqPtrs heap ptrs =
         -- future rewrite that has a reason to change them may.
         hptrs e0 = reverse (snd (go e0 (IS.empty, [])))
           where
+            -- (GADT matches under MonoLocalBinds need the signature)
+            go :: HExpr -> (IS.IntSet, [HeapPointer]) -> (IS.IntSet, [HeapPointer])
             go (IAps f _ es) acc = foldl (flip go) acc (f:es)
             go (ICon _ (ICStateVar { iVar = IStateVar { isv_iargs = es } })) acc =
                 foldl (flip go) acc es
@@ -773,8 +780,10 @@ eqPtrs heap ptrs =
                                   Just q' -> ArrayCell q' (internalError "eqPtrs ref")
                         in  ICon i (ic { iArray = fmap remap arr })
                     sub e = e
-                in  case M.lookup e dsm of
-                    Nothing -> (M.insert e p dsm, ptrm)
+                    -- (the map is keyed by the structural order of
+                    -- expressions, cmpE)
+                in  case M.lookup (ExprKey e) dsm of
+                    Nothing -> (M.insert (ExprKey e) p dsm, ptrm)
                     Just h -> (dsm, IM.insert p h ptrm)
         (dsm0, ptrm0) = foldl' (flip step) (M.empty, IM.empty) ptrs'
 
@@ -829,7 +838,7 @@ eqPtrs heap ptrs =
 -- convert top level module definition for which code is being generated
 iExpandModuleDef ::
     HDef ->
-    G ([(Id, IKind)], [IAbstractInput], [VArgInfo], [IEFace HeapData])
+    G ([(Id, IKind)], [IAbstractInput], [VArgInfo], [IEFace Elab])
 iExpandModuleDef (IDef i t e _) = do
     -- this was to allow code-gen of modules with numeric parameters,
     -- but we don't support that, so set the list of such params to null
@@ -1243,7 +1252,7 @@ findModArgResetByAttr pps arg_id =
 -- iExpandField probably needs to be called in a type-driven order
 -- (i.e. clocks, resets, other stuff) so that boundary clocks and resets can
 -- be reconciled for each other and for methods
-iExpandIface :: Id -> (HClock, HReset) -> PExpr -> G [IEFace HeapData]
+iExpandIface :: Id -> (HClock, HReset) -> PExpr -> G [IEFace Elab]
 iExpandIface modId clkRst (P pi e@(IAps c@(ICon _ (ICTuple { fieldIds = fs0 })) ts es)) = do
         flags <- getFlags
         symt <- getSymTab
@@ -1299,7 +1308,7 @@ iExpandIface _ _ e = internalError ("iExpandIface: " ++ ppReadable e)
 
 -- expand an interface field
 iExpandField :: Id -> HPred -> (HClock, HReset) ->
-                (Id, BetterInfo.BetterInfo, HExpr, IType) -> G [IEFace HeapData]
+                (Id, BetterInfo.BetterInfo, HExpr, IType) -> G [IEFace Elab]
 iExpandField _ implicitCond _ (i, bi, e, t) | t == itClock = do
   showTopProgress ("Elaborating output clock " ++ quote (pfpString i))
   setIfcSchedNameScopeProgress (Just (IEP_OutputClock i))
@@ -1376,7 +1385,7 @@ iExpandMethod modId n args implicitCond clkRst@(curClk, _) (i, bi, ins, outs, e)
 
 iExpandMethodLam :: Id -> Integer -> [Id] -> HPred ->
                  (HClock, HReset) -> (Id, BetterInfo.BetterInfo, [[String]], [String], HExpr) ->
-                 Id -> IType -> Pred HeapData ->
+                 Id -> IType -> Pred Elab ->
                  G ([IMethodInput], (HDef, HWireSet, VFieldInfo),
                     (HDef, HWireSet, VFieldInfo))
 iExpandMethodLam modId n args implicitCond clkRst (i, bi, ins, outs, eb) li ty p = do
@@ -1410,7 +1419,7 @@ iExpandMethodLam modId n args implicitCond clkRst (i, bi, ins, outs, eb) li ty p
 buildArgExpr :: IType -> [(Id, IType)] -> HExpr
 buildArgExpr ty arg_ports
   | ty == itPrimUnit =
-      ICon idPrimUnit (ICTuple { iConType = itPrimUnit, fieldIds = [] })
+      ICon idPrimUnit (ICTuple { ictTuple = itPrimUnit, fieldIds = [] })
   | otherwise = case ty of
       ITAp (ITAp (ITCon ip _ _) t1) t2 | ip == idPrimPair ->
         let n1 = length (itTupleElems t1)
@@ -1424,7 +1433,7 @@ buildArgExpr ty arg_ports
                                   ppReadable ty
 
 iExpandMethod' :: HPred -> HClock -> (Id, BetterInfo.BetterInfo, [String], HExpr) ->
-                  Pred HeapData ->
+                  Pred Elab ->
                  G ([IMethodInput], (HDef, HWireSet, VFieldInfo),
                     (HDef, HWireSet, VFieldInfo))
 iExpandMethod' implicitCond curClk (i, bi, outs, e0) p0 = do
@@ -1999,7 +2008,7 @@ newState b ui t tss vi ns es = do
 
          let clockarg_map = map fst2of3 clockargnum_map
          let clockwires_map =
-                 let mkICSel n = ICSel { iConType = itClock,
+                 let mkICSel n = ICSel { ictSel = itClock,
                                          selNo = n,
                                          numSel = genericLength (vFields vi) }
                  in  [ (id, wires) |
@@ -2057,7 +2066,10 @@ newState b ui t tss vi ns es = do
          -- resets to the parent module which we are elaborating)
          top_in_resets <- getInputResets
          let isInputReset r = r `elem` top_in_resets
-         let lookupResetClock rid cid =
+         -- (used with a reset and with an Id as the first argument; the
+         -- signature keeps it polymorphic under MonoLocalBinds)
+         let lookupResetClock :: PPrint r => r -> Id -> HClock
+             lookupResetClock rid cid =
                  fromJustOrErr
                     ("IExpand.newState: reset clock not in clock map " ++
                      ppReadable (rid,cid))
@@ -2162,7 +2174,7 @@ newState b ui t tss vi ns es = do
                                      ppReadable i)
 
          let resetwire_map =
-                 let mkICSel n = ICSel { iConType = itReset,
+                 let mkICSel n = ICSel { ictSel = itReset,
                                          selNo = n,
                                          numSel = genericLength (vFields vi) }
                  in  [ (id, clock, wire) |
@@ -2379,7 +2391,7 @@ evalRule (ns, hide, name) asrts rId p c e = do
 
 -----------------------------------------------------------------------------
 
-type PMap = M.Map (PTerm HeapData) (HExpr, HWireSet)
+type PMap = M.Map (PTermKey Elab) (HExpr, HWireSet)
 
 -- Compute the final condition for a rule/method
 -- (the choice of conservative vs aggressive is applied here)
@@ -2397,16 +2409,16 @@ evalPred' :: PMap -> HPred -> G ((HExpr, HWireSet), PMap)
 evalPred' m (PConj ps) = do
   let f (rs, m) p = do (r, m') <- evalPTerm m p
                        return (r:rs, m')
-  (ress, m') <- foldM f ([], m) (S.toList ps)
+  (ress, m') <- foldM f ([], m) (map unPTermKey (S.toList ps))
   let (es, wss) = unzip (reverse ress)
       res = (foldr ieAnd iTrue es, wsJoinMany wss)
   --traceM ("evalPred " ++ ppReadable es)
   -- Note that we don't memoize the joined result
   return (res, m')
 
-evalPTerm :: PMap -> PTerm HeapData -> G ((HExpr, HWireSet), PMap)
+evalPTerm :: PMap -> PTerm Elab -> G ((HExpr, HWireSet), PMap)
 evalPTerm m op =
-  case (M.lookup op m) of
+  case (M.lookup (PTermKey op) m) of
   Just res -> return (res, m)
   Nothing ->
     case op of
@@ -2418,7 +2430,7 @@ evalPTerm m op =
         -- creating a heap ref (if necessary) to avoid duplication
         res_r <- addHeapPred "aggr1" res_e
         let res = (res_r, wsJoin ws ws')
-            m'' = M.insert op res m'
+            m'' = M.insert (PTermKey op) res m'
         --traceM ("evalPTerm PAtom " ++ ppReadable (e, (p', e')))
         return (res, m'')
     (PIf c t e) -> do
@@ -2453,7 +2465,7 @@ evalPTerm m op =
        -- creating a heap ref (if necessary) to avoid duplication
        res_r <- addHeapPred "aggr2" res_e
        let res = (res_r, res_ws)
-           res_m' = M.insert op res res_m
+           res_m' = M.insert (PTermKey op) res res_m
        return (res, res_m')
     (PSel idx idx_sz es) -> do
        let foldFn (ews_acc, m_acc) e = do
@@ -2488,7 +2500,7 @@ evalPTerm m op =
        -- creating a heap ref (if necessary) to avoid duplication
        res_r <- addHeapPred "aggr3" res_e
        let res = (res_r, res_ws)
-           res_m' = M.insert op res res_m
+           res_m' = M.insert (PTermKey op) res res_m
        return (res, res_m')
 
 -----------------------------------------------------------------------------
@@ -3502,7 +3514,7 @@ evalHeap (ptr, ref) = do
 
 -- used when IAps expr@(ICon name coninfo) ...
 -- so Id is name, IConInfo is coninfo, IExpr is expr, as are the accumulated arguments
-conAp :: Id -> IConInfo HeapData -> HExpr -> [Arg] -> G PExpr
+conAp :: Id -> IConInfo Elab -> HExpr -> [Arg] -> G PExpr
 conAp i ic e as | not doConAp = conAp' i ic e as
 conAp i ic e as = do -- doConAp is True
   traceM ("conAp enter: " ++ ppReadable i ++ "\n" ++ ppReadable (mkAp e as))
@@ -3554,7 +3566,7 @@ mkBitsMethodSel prim_i selty meth_i = do
       Just (TypeInfo _ _ _ (TIstruct _ fs) _)
         | Just k <- findIndex (qualEq meth_i) fs ->
           return (ICon (setIdPosition (getIdPosition prim_i) meth_i)
-                       (ICSel { iConType = selty,
+                       (ICSel { ictSel = selty,
                                 selNo = toInteger k,
                                 numSel = toInteger (length fs) }))
       ti -> internalError ("mkBitsMethodSel: " ++ ppReadable (meth_i, ti))
@@ -3574,7 +3586,7 @@ unfoldBitsCoercion tag meth_i dictE rest = do
       _ -> internalError ("unfoldBitsCoercion (" ++ tag ++ "): " ++
                           "unexpected dictionary: " ++ ppReadable d)
 
-conAp' :: Id -> IConInfo HeapData -> HExpr -> [Arg] -> G PExpr
+conAp' :: Id -> IConInfo Elab -> HExpr -> [Arg] -> G PExpr
 
 -- Delta rules: execute primitives (constants)
 
@@ -3583,7 +3595,6 @@ conAp' _ (ICStateVar { }) e as = bldApUH' "ICStateVar" e as
 conAp' _ (ICMethArg { })  e as = bldApUH' "ICMethArg" e as
 conAp' _ (ICModPort { })  e as = bldApUH' "ICModPort" e as
 conAp' _ (ICModParam { }) e as = bldApUH' "ICModParam" e as
-conAp' _ (ICValue { })    e as = bldApUH' "ICValue" e as
 -- held coercions are WHNF values
 conAp' _ (ICLazyPack { })   e as = bldApUH' "ICLazyPack" e as
 conAp' _ (ICLazyUnpack { }) e as = bldApUH' "ICLazyUnpack" e as
@@ -3642,7 +3653,7 @@ conAp' i (ICPrim _ PrimMethod) _ [T t, E eInNames, E eOutNames, E meth] = do
   (outNames, _) <- evalStringList eOutNames
   P p meth' <- eval1 meth
   return $ P p $ ICon (dummyId noPosition) $ ICMethod {
-    iConType = t,
+    ictMethod = t,
     iInputNames = inNames,
     iOutputNames = outNames,
     iMethod = meth'
@@ -3659,7 +3670,7 @@ conAp' i (ICPrim _ PrimNoInline) _ [T _t, E eInNames, E eOutNames, E fe] = do
   (outNames, _) <- evalStringList eOutNames
   P p fe' <- eval1 fe
   case fe' of
-    ICon fi fc@(ICForeign { iConType = ft }) ->
+    ICon fi fc@(ICForeign { ictForeign = ft }) ->
       let (argTys, resTy) = itGetArrows ft
           -- pair each (non-zero-width) port name with its size, flattening a
           -- bitified tuple type into the bit-sizes of its ports
@@ -3674,13 +3685,13 @@ conAp' i (ICPrim _ PrimNoInline) _ [T _t, E eInNames, E eOutNames, E fe] = do
                         ppReadable fe')
 
 -- XXX is this still needed?
-conAp' i (ICUndet { iConType = t })  e as | t == itClock =
+conAp' i (ICUndet { ictUndet = t })  e as | t == itClock =
    errG (getIdPosition i, EUndeterminedClock)
-conAp' i (ICUndet { iConType = t })  e as | t == itReset =
+conAp' i (ICUndet { ictUndet = t })  e as | t == itReset =
    errG (getIdPosition i, EUndeterminedReset)
-conAp' i (ICUndet { iConType = t })  e as | (isitInout_ t) =
+conAp' i (ICUndet { ictUndet = t })  e as | (isitInout_ t) =
    errG (getIdPosition i, EUndeterminedInout)
-conAp' i (ICUndet { iConType = t })  e as | t == itRules =
+conAp' i (ICUndet { ictUndet = t })  e as | t == itRules =
    errG (getIdPosition i, EUndeterminedRules)
 conAp' _ (ICUndet { }) f as0@(E _ : as) = internalError ("conAp' undet: " ++ ppReadable (mkAp f as0))
 conAp' _ (ICUndet { })  e as = bldApUH' "ICUndet" e as
@@ -3698,14 +3709,14 @@ conAp' _ (ICReset { })      e as = bldApUH' "ICReset" e as
 conAp' _ (ICInout { })      e as = bldApUH' "ICInout" e as
 
 -- Data types
-conAp' _ (ICIs { conTagInfo = cti }) i as =
+conAp' _ (ICIs _ cti) i as =
     case dropT as of
       [ E e ] -> do
           let tys = takeT as
               ty = itBit1
           evalStaticOp' True True False e ty (doIs i tys cti)
       _ -> internalError ("conAp': ICIs: " ++ ppReadable (mkAp i as))
-conAp' c (ICOut { iConType = outty, conTagInfo = cti }) o as = do
+conAp' c (ICOut outty cti) o as = do
     case dropT as of
       E e : as' -> do
           let tys = takeT as
@@ -3721,7 +3732,7 @@ conAp' c (ICOut { iConType = outty, conTagInfo = cti }) o as = do
 -}
           evalStaticOp' True True False e resType (doOut o c tys ty cti as')
       _ -> internalError ("conAp': ICOut: " ++ ppReadable (mkAp o as))
-conAp' c (ICSel { iConType = selty, selNo = n }) sel as = do
+conAp' c (ICSel { ictSel = selty, selNo = n }) sel as = do
     case dropT as of
       E e : as' -> do
           let tys = takeT as
@@ -3915,13 +3926,13 @@ conAp' i (ICPrim _ PrimBuildModule) _ [T t, E name, E clock, E reset, E mod_expr
 conAp' i (ICPrim _ PrimInoutUncast) _ [T sz, T t, E inout] = do
   (_,e) <- evalInout inout
   case e of
-    (ICon i ci@(ICInout {})) -> return $ pExpr (ICon i ci { iConType = itInoutT t })
+    (ICon i ci@(ICInout {})) -> return $ pExpr (ICon i ci { ictInout = itInoutT t })
     _ -> internalError "PrimInoutUncast"
 
 conAp' i (ICPrim _ PrimInoutCast) _ [T t, T (ITNum sz), E inout] = do
   (_,e) <- evalInout inout
   case e of
-    (ICon i ci@(ICInout {})) -> return $ pExpr (ICon i ci { iConType = itInout_N sz })
+    (ICon i ci@(ICInout {})) -> return $ pExpr (ICon i ci { ictInout = itInout_N sz })
     _ -> internalError "PrimInoutCast"
 
 -- get names from ILam so we can replicate lambda-bound hack for augmented module monads
@@ -4046,7 +4057,7 @@ conAp' i ci@(ICPrim _ PrimPack) _ [T ta, T tn, E d, E x]
               sel <- mkBitsMethodSel i (iConType ci) idPack
               aref <- toHeap "coerce" (aitBit tn)
                              (IAps sel [ta, tn] [d, xee]) Nothing
-              let node = ICLazyPack { iConType = aitBit tn, lzTa = ta,
+              let node = ICLazyPack { ictLazyPack = aitBit tn, lzTa = ta,
                                       lzTn = tn, lzOrig = xee,
                                       lzApplied = aref }
               -- NB: px is deliberately NOT attached here: the payload's
@@ -4070,7 +4081,7 @@ conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
               sel <- mkBitsMethodSel i (iConType ci) idUnpack
               aref <- toHeap "coerce" ta
                              (IAps sel [ta, tn] [d, xee]) Nothing
-              let node = ICLazyUnpack { iConType = ta, lzTa = ta,
+              let node = ICLazyUnpack { ictLazyUnpack = ta, lzTa = ta,
                                         lzTn = tn, lzOrig = xee,
                                         lzApplied = aref }
               -- NB: px is deliberately NOT attached (see PrimPack above)
@@ -4191,12 +4202,12 @@ conAp' i (ICPrim _ PrimUninitBitArray) fe [T (ITNum len), E pos, E name] = do
   let uninit_bit n = mkArrayCell $ IAps icPrimUninitialized [itBit1] [pos', name'']
         where name'' = iMkStrConcat name' (iMkString ("[" ++ (show n) ++ "]"))
   elems <- mapM uninit_bit [0..len-1]
-  let arr :: Array.Array Integer (ArrayCell HeapData)
+  let arr :: Array.Array Integer (ArrayCell Elab)
       arr = Array.listArray (0, len-1) elems
   return (pExpr (ICon i (ICLazyArray (itBitN len) arr (Just (pos', name')))))
 
 conAp' tfs (ICPrim _ PrimUIntBitsToInteger) fe [T (ITNum k), E e] = evalStaticOp e itInteger handleInt
-  where handleInt (ICon i ci@(ICInt { })) = return $ pExpr $ ICon i (ci { iConType = itInteger })
+  where handleInt (ICon i ci@(ICInt { })) = return $ pExpr $ ICon i (ci { ictInt = itInteger })
         handleInt e' = do -- traceM "primUIntBitsToInteger";
                           -- traceM (show e ++ "\n")
                           -- traceM (show e' ++ "\n")
@@ -4206,9 +4217,9 @@ conAp' tfs (ICPrim _ PrimUIntBitsToInteger) fe [T (ITNum k), E e] = evalStaticOp
 conAp' tfs (ICPrim _ PrimIntBitsToInteger) fe [T (ITNum k), E e] = evalStaticOp e itInteger handleInt
   where handleInt (ICon i ci@(ICInt { iVal = v@IntLit {ilValue = l} })) = do
           if l < 2^(k-1) then
-            return $ pExpr $ ICon i (ci {iConType = itInteger})
+            return $ pExpr $ ICon i (ci {ictInt = itInteger})
            else
-            return $ pExpr $ ICon i (ci {iConType = itInteger, iVal = v {ilValue = l - 2^k}})
+            return $ pExpr $ ICon i (ci {ictInt = itInteger, iVal = v {ilValue = l - 2^k}})
         handleInt e' = do -- traceM "primIntBitsToInteger";
                           -- traceM (show e ++ "\n")
                           -- traceM (show e' ++ "\n")
@@ -4874,9 +4885,9 @@ getBuriedPredsForced es = do
 -- XXX Would be obsoleted by a PPrint version that follows heap refs
 
 ppPConjRefs :: HPred -> G ()
-ppPConjRefs (PConj ps) = mapM_ ppPTermRefs (S.toList ps)
+ppPConjRefs (PConj ps) = mapM_ (ppPTermRefs . unPTermKey) (S.toList ps)
 
-ppPTermRefs :: PTerm HeapData -> G ()
+ppPTermRefs :: PTerm Elab -> G ()
 ppPTermRefs (PAtom e) = ppExprRefs e
 ppPTermRefs (PIf c t e) = do ppExprRefs c
                              _ <- ppPConjRefs t
@@ -4898,7 +4909,7 @@ ppExprRefs r@(IRefT _ _ _ _) = do
 -----------------------------------------------------------------------------
 
 doArrayNew :: HExpr -> [Arg] -> G PExpr
-doArrayNew f@(ICon cn (ICPrim {primOp = PrimArrayNew, iConType = conType })) [T t, E e1, E val] = do
+doArrayNew f@(ICon cn (ICPrim {primOp = PrimArrayNew, ictPrim = conType })) [T t, E e1, E val] = do
      -- save val to prevent redundant evaluation
      val' <- toHeap "array-new" t val Nothing
      norm <- getTypeNormalizer
@@ -4919,7 +4930,7 @@ doArrayLength f as@[T elem_t, E arr_e] =
     evalStaticOp arr_e itInteger handleArrayLength
   where handleArrayLength (ICon ci (ICLazyArray {iArray = arr})) = do
           ln <- iArrayLength arr
-          return $ pExpr $ ICon ci (ICInt { iConType = itInteger, iVal = ilDec ln })
+          return $ pExpr $ ICon ci (ICInt { ictInt = itInteger, iVal = ilDec ln })
         handleArrayLength (IAps (ICon _ (ICPrim _ PrimArrayDynUpdate))
                                 ts [arr_e2, idx_e, val_e]) = do
           -- update does not change the array length, so recurse into arr_e2
@@ -4969,7 +4980,7 @@ doArraySelect f (T elem_t : E arr_e : E idx_e : as) = do
                 -- just return the original value.
                 (P p0 res0) <- evalStaticOp upd_arr_e elem_t handleArraySelect
                 let upd_idx_t = aitBit (ITNum upd_idx_sz)
-                    idx_bits_e = ICon idx_i (idx_ic { iConType = upd_idx_t })
+                    idx_bits_e = ICon idx_i (idx_ic { ictInt = upd_idx_t })
                     eq_e = iePrimEQ (ITNum upd_idx_sz) upd_idx_e idx_bits_e
                     if_e = ieIf elem_t eq_e upd_val_e res0
                 -- despite the name, this is actually 1 greater than the max
@@ -4990,7 +5001,7 @@ doArraySelect f as = internalError("IExpand.doArraySelect : " ++ ppReadable f ++
 -- See comments on doArraySelect.
 --
 doArrayUpdate :: HExpr -> [Arg] -> G PExpr
-doArrayUpdate f@(ICon upd_i (ICPrim {iConType = opType}))
+doArrayUpdate f@(ICon upd_i (ICPrim {ictPrim = opType}))
               as@[T elem_t, E arr_e, E idx_e, E val_e] = do
   (_, P idx_p idx_e') <- evalUH idx_e
   case idx_e' of
@@ -5167,8 +5178,8 @@ improveIf f t cnd thn els@(ICon _ (ICLazyUnpack { lzApplied = a })) = do
     if pa == pTrue then improveIf f t cnd thn aw
      else return (IAps f [t] [cnd, thn, els], False)
 -- merge cells if the arrays have the same size (since our bounds are always 0 .. n - 1)
-improveIf f t cnd (ICon i1 (ICLazyArray { iConType = ct1, iArray = arr1 }))
-                  (ICon i2 (ICLazyArray { iConType = ct2, iArray = arr2 })) | Array.bounds arr1 == Array.bounds arr2 =
+improveIf f t cnd (ICon i1 (ICLazyArray { ictLazyArray = ct1, iArray = arr1 }))
+                  (ICon i2 (ICLazyArray { ictLazyArray = ct2, iArray = arr2 })) | Array.bounds arr1 == Array.bounds arr2 =
   do when doTraceIf $ traceM("improveIf array triggered" ++ show i1 ++ show i2)
      let elemType = case t of
                       ITAp _ te -> te -- type must be (PrimArray t)
@@ -5184,7 +5195,7 @@ improveIf f t cnd (ICon i1 (ICLazyArray { iConType = ct1, iArray = arr1 }))
                                               return (ArrayCell p r))
                        refs1 refs2
      -- XXX use i1 or i2?
-     return ((ICon i1 (ICLazyArray { iConType = ct1, iArray = Array.listArray (Array.bounds arr1) refs', uninit = Nothing })), True)
+     return ((ICon i1 (ICLazyArray { ictLazyArray = ct1, iArray = Array.listArray (Array.bounds arr1) refs', uninit = Nothing })), True)
 
 -- XXX This can lead to a static array not evaluating away?
 {-
@@ -5722,8 +5733,10 @@ doSel sel s tys ty n as ee (p, e) =
 
         -- select inouts out of state variables
         e@(ICon id (ICStateVar {iVar = v})) | isitInout_ ty -> do
-          let hclk = getIfcInoutClock s v
-              hrst = getIfcInoutReset s v
+          -- (the calls are typed at Elab, not at the ICStateVar payload's
+          -- refined phase, so the specialised helpers are used)
+          let hclk = getIfcInoutClock @Elab s v
+              hrst = getIfcInoutReset @Elab s v
               sz = getInout_Size ty
               wire = (IAps sel tys [e])
               inout = makeInout hclk hrst wire
@@ -5739,7 +5752,7 @@ doSel sel s tys ty n as ee (p, e) =
               IAps csel@(ICon ic sel2@(ICSel { })) tys2 args@(sv@(ICon _ (ICStateVar { })):_) -> do
                 resType <- dropArrows (length args) <$> instFunType (iConType sel2) tys2
                 let newSelTy = (iGetTypeNorm norm sv) `itFun` resType
-                let sel2' = sel2 { iConType = newSelTy }
+                let sel2' = sel2 { ictSel = newSelTy }
                 let e'' = (IAps (ICon ic sel2') [] [sv])
                 addPredG p $
                     bldApUH' "Sel AVValue_ 1" sel (map T tys ++ [E e''])
@@ -5926,32 +5939,52 @@ doSetSelPosition icon ty poss ee (p, e) = do
 
 -- After the evaluator has been run, this is used to determine which heap
 -- references are being used in the result (collPtrs collects the pointers)
--- and to inline the defs in place of the heap pointers (with hToDef).
+-- and to rebuild the result with the defs inlined in place of the heap
+-- pointers (hToDef).  The rebuild is also the change of phase from Elab
+-- to PostElab: every node is rebuilt through the PostElab constructors,
+-- and the constructors that only exist during elaboration (binders, heap
+-- references, the pre-elaboration constants) have no PostElab form, so
+-- meeting one here is an evaluator invariant violation.
+
+-- What the rebuild needs: the PostElab expressions replacing the heap
+-- pointers, and the rebuilt state variables by unique number.  A state
+-- variable's clocks and resets select from the state variable itself, so
+-- the rebuilt instances are shared through this table (one rebuilt record
+-- per instance, tying the same knot the evaluator built) instead of being
+-- unrolled at each occurrence.
+data HToDefEnv = HToDefEnv {
+    hd_ptrs :: IM.IntMap (IExpr PostElab),
+    hd_svs :: IM.IntMap (IStateVar PostElab)
+}
 
 class HeapToDef a where
+    type Rebuilt a
     collPtrs :: a -> IM.IntMap HeapCell -> IM.IntMap HeapCell
-    hToDef :: IM.IntMap HExpr -> a -> a
-
-    hToDef _ x = x
+    hToDef :: HToDefEnv -> a -> Rebuilt a
 
 instance HeapToDef a => HeapToDef [a] where
+    type Rebuilt [a] = [Rebuilt a]
     collPtrs [] = id
     collPtrs (x:xs) = collPtrs xs . collPtrs x
     hToDef m xs = map (hToDef m) xs
 
 instance (HeapToDef a, HeapToDef b) => HeapToDef (a, b) where
+    type Rebuilt (a, b) = (Rebuilt a, Rebuilt b)
     collPtrs (a, b) = collPtrs b . collPtrs a
     hToDef m (a, b) = (hToDef m a, hToDef m b)
 
 instance (HeapToDef a, HeapToDef b, HeapToDef c) => HeapToDef (a, b, c) where
+    type Rebuilt (a, b, c) = (Rebuilt a, Rebuilt b, Rebuilt c)
     collPtrs (a, b, c) = collPtrs c . collPtrs b . collPtrs a
     hToDef m (a, b, c) = (hToDef m a, hToDef m b, hToDef m c)
 
 instance (HeapToDef a, HeapToDef b, HeapToDef c, HeapToDef d) => HeapToDef (a, b, c, d) where
+    type Rebuilt (a, b, c, d) = (Rebuilt a, Rebuilt b, Rebuilt c, Rebuilt d)
     collPtrs (a, b, c, d) = collPtrs d . collPtrs c . collPtrs b . collPtrs a
     hToDef m (a, b, c, d) = (hToDef m a, hToDef m b, hToDef m c, hToDef m d)
 
 instance HeapToDef HEFace where
+    type Rebuilt HEFace = IEFace PostElab
     collPtrs (IEFace i x e rs wp fi)
         = collPtrs fi .
           collPtrs wp .
@@ -5964,27 +5997,38 @@ instance HeapToDef HEFace where
                   (hToDef m rs) (hToDef m wp) (hToDef m fi))
 
 instance HeapToDef VFieldInfo where
+    type Rebuilt VFieldInfo = VFieldInfo
     collPtrs i = id
+    hToDef _ x = x
 
 instance HeapToDef Id where
+    type Rebuilt Id = Id
     collPtrs i = id
+    hToDef _ x = x
 
 instance HeapToDef IType where
+    type Rebuilt IType = IType
     collPtrs t = id
+    hToDef _ x = x
 
 instance HeapToDef WireProps where
+    type Rebuilt WireProps = WireProps
     collPtrs t = id
+    hToDef _ x = x
 
 instance (HeapToDef a) => HeapToDef (Maybe a) where
+    type Rebuilt (Maybe a) = Maybe (Rebuilt a)
     collPtrs Nothing = id
     collPtrs (Just x) = collPtrs x
     hToDef m x = fmap (hToDef m) x
 
 instance HeapToDef HDef where
+    type Rebuilt HDef = IDef PostElab
     collPtrs (IDef i t e _) = collPtrs e
-    hToDef m def = iDefMap (hToDef m) def
+    hToDef m (IDef i t e p) = IDef i t (hToDef m e) p
 
 instance HeapToDef HExpr where
+    type Rebuilt HExpr = IExpr PostElab
     collPtrs (IAps f ts es) m = collPtrs (f:es) m
 --    collPtrs (ICon _ (ICStateVar { iVar = iv })) m = collPtrs iv m
     collPtrs (ICon _ (ICLazyArray _ arr _)) m =
@@ -6006,8 +6050,8 @@ instance HeapToDef HExpr where
                 e -> internalError ("collPtrs: " ++ ppReadable e)
     collPtrs e m = internalError ("collPtrs: " ++ ppReadable e)
 
-    hToDef m (IAps f ts es) = IAps f ts (hToDef m es)
-    hToDef m (ICon i ic@(ICStateVar { })) = ICon i (ic { iVar = hToDef m (iVar ic) })
+    hToDef m (IAps f ts es) = IAps (hToDef m f) ts (hToDef m es)
+    hToDef m (ICon i (ICStateVar t sv)) = ICon i (ICStateVar t (hToDef m sv))
     hToDef m (ICon i (ICLazyArray arr_ty arr u)) =
         case u of
           Nothing ->
@@ -6025,8 +6069,8 @@ instance HeapToDef HExpr where
               in (IAps ic ts es)
           _ -> internalError ("hToDef: uninitialized array")
     hToDef m r@(IRefT _ p _ _) =
-        let value = case IM.lookup p m of
-                    Just e -> (mapIExprPosition True (r, e))
+        let value = case IM.lookup p (hd_ptrs m) of
+                    Just e -> (mapIExprPositionRef True (r, e))
                     Nothing -> internalError ("hToDef IRefT " ++ show p)
         in value
     -- A held coercion surviving inline (not behind a heap ref, so not
@@ -6040,17 +6084,104 @@ instance HeapToDef HExpr where
     hToDef _ e@(ICon _ (ICLazyUnpack { })) =
         internalError ("hToDef: held coercion escaped elaboration: " ++
                        showTypeless e)
-    hToDef m e = e
+    -- the payloads that carry wires
+    hToDef m (ICon i (ICClock t c)) = ICon i (ICClock t (hToDef m c))
+    hToDef m (ICon i (ICReset t r)) = ICon i (ICReset t (hToDef m r))
+    hToDef m (ICon i (ICInout t io)) = ICon i (ICInout t (hToDef m io))
+    -- the leaves, rebuilt at PostElab
+    hToDef _ (ICon i (ICPrim t p)) = ICon i (ICPrim t p)
+    hToDef _ (ICon i (ICForeign t n c ps tvns fc)) = ICon i (ICForeign t n c ps tvns fc)
+    hToDef _ (ICon i (ICCon t cti)) = ICon i (ICCon t cti)
+    hToDef _ (ICon i (ICTuple t fs)) = ICon i (ICTuple t fs)
+    hToDef _ (ICon i (ICSel t n k)) = ICon i (ICSel t n k)
+    hToDef _ (ICon i (ICUndet t k)) = ICon i (ICUndet t k)
+    hToDef _ (ICon i (ICInt t v)) = ICon i (ICInt t v)
+    hToDef _ (ICon i (ICReal t r)) = ICon i (ICReal t r)
+    hToDef _ (ICon i (ICString t str)) = ICon i (ICString t str)
+    hToDef _ (ICon i (ICChar t c)) = ICon i (ICChar t c)
+    hToDef _ (ICon i (ICMethArg t)) = ICon i (ICMethArg t)
+    hToDef _ (ICon i (ICModPort t)) = ICon i (ICModPort t)
+    hToDef _ (ICon i (ICModParam t)) = ICon i (ICModParam t)
+    -- The binders and the constants of the phases before and during
+    -- elaboration have no form after it.  They are all accessible at
+    -- Elab, the type of this instance's input, so the types cannot
+    -- exclude them here: this edge is where the evaluator's invariant
+    -- (none reaches the result) is checked, one arm per variant and no
+    -- wildcard, so that a variant added to a later phase is an
+    -- incomplete-pattern warning here instead of a silent runtime
+    -- failure.  (A downstream pass failed on an escapee before, as
+    -- Params did on an ICDef.)  These arms refuse what the types admit;
+    -- they are not fallbacks for cases the types exclude.
+    hToDef _ e@(ILam {}) = escapedElab "ILam" e
+    hToDef _ e@(IVar {}) = escapedElab "IVar" e
+    hToDef _ e@(ILAM {}) = escapedElab "ILAM" e
+    -- the constants of the phases with binders (PreElab and Elab)
+    hToDef _ e@(ICon _ (ICDef {})) = escapedElab "ICDef" e
+    hToDef _ e@(ICon _ (ICIs {})) = escapedElab "ICIs" e
+    hToDef _ e@(ICon _ (ICOut {})) = escapedElab "ICOut" e
+    hToDef _ e@(ICon _ (ICVerilog {})) = escapedElab "ICVerilog" e
+    hToDef _ e@(ICon _ (ICRuleAssert {})) = escapedElab "ICRuleAssert" e
+    hToDef _ e@(ICon _ (ICSchedPragmas {})) = escapedElab "ICSchedPragmas" e
+    hToDef _ e@(ICon _ (ICName {})) = escapedElab "ICName" e
+    hToDef _ e@(ICon _ (ICAttrib {})) = escapedElab "ICAttrib" e
+    hToDef _ e@(ICon _ (ICPosition {})) = escapedElab "ICPosition" e
+    hToDef _ e@(ICon _ (ICType {})) = escapedElab "ICType" e
+    -- the constants of elaboration itself
+    hToDef _ e@(ICon _ (ICHandle {})) = escapedElab "ICHandle" e
+    hToDef _ e@(ICon _ (ICMethod {})) = escapedElab "ICMethod" e
+    hToDef _ e@(ICon _ (ICPred {})) = escapedElab "ICPred" e
+
+-- an expression with no form after elaboration reached the rebuild
+escapedElab :: String -> HExpr -> a
+escapedElab what e =
+    internalError ("hToDef: " ++ what ++ " escaped elaboration: " ++
+                   showTypeless e)
 
 instance HeapToDef HStateVar where
+    type Rebuilt HStateVar = IStateVar PostElab
     collPtrs    (IStateVar { isv_iargs = es }) = collPtrs es
-    hToDef m sv@(IStateVar { isv_iargs = es }) = sv { isv_iargs = hToDef m es }
+    -- the instances registered by the evaluator (all of them, see
+    -- newState) are rebuilt once, through the table
+    hToDef m sv = case IM.lookup (isv_uid sv) (hd_svs m) of
+                    Just sv' -> sv'
+                    Nothing -> rebuildStateVar m sv
+
+-- the one rebuild of a state variable: its arguments through the heap
+-- map, its clocks and resets (whose wires select from the variable
+-- itself) through the table
+rebuildStateVar :: HToDefEnv -> HStateVar -> IStateVar PostElab
+rebuildStateVar m sv =
+    sv { isv_iargs = hToDef m (isv_iargs sv),
+         isv_clocks = [ (i, hToDef m c) | (i, c) <- isv_clocks sv ],
+         isv_resets = [ (i, hToDef m r) | (i, r) <- isv_resets sv ] }
+
+instance HeapToDef HClock where
+    type Rebuilt HClock = IClock PostElab
+    -- clock wires are not searched for heap pointers (they never were):
+    -- the references they contain are to state variables
+    collPtrs _ = id
+    hToDef m c = c { ic_wires = hToDef m (ic_wires c) }
+
+instance HeapToDef HReset where
+    type Rebuilt HReset = IReset PostElab
+    collPtrs _ = id
+    hToDef m r = r { ir_clock = hToDef m (ir_clock r),
+                     ir_wire = hToDef m (ir_wire r) }
+
+instance HeapToDef HInout where
+    type Rebuilt HInout = IInout PostElab
+    collPtrs _ = id
+    hToDef m io = io { io_clock = hToDef m (io_clock io),
+                       io_reset = hToDef m (io_reset io),
+                       io_wire = hToDef m (io_wire io) }
 
 instance HeapToDef HRules where
+    type Rebuilt HRules = IRules PostElab
     collPtrs (IRules sps rs) = collPtrs rs
     hToDef m (IRules sps rs) = IRules sps (hToDef m rs)
 
 instance HeapToDef HRule where
+    type Rebuilt HRule = IRule PostElab
     collPtrs r = collPtrs (irule_body r) . collPtrs (irule_pred r)
 
     hToDef m r = r { irule_pred = hToDef m $ irule_pred r ,
@@ -6124,8 +6255,6 @@ getStateVars clk lvs vs (ICon i (ICModParam t) : xs) =
     do is <- getStateVars clk lvs vs xs
        return (i:is)
 getStateVars clk lvs vs (ICon _ (ICValue _ e) : xs) = getStateVars clk lvs vs (e : xs)
-getStateVars clk lvs vs (ICon i (ICIFace { }) : xs) = do is <- getStateVars clk lvs vs xs
-                                                         return (i:is)
 getStateVars clk lvs vs (ICon _ _ : xs) = getStateVars clk lvs vs xs
 getStateVars clk lvs vs (x@(IRefT _ _ _ _) : xs) = do uhx <- unheapU x
                                                   getStateVars clk lvs vs (uhx : xs)
@@ -6135,7 +6264,7 @@ getStateVars clk lvs vs (x@(IRefT _ _ _ _) : xs) = do uhx <- unheapU x
 
 -- Primitive Arrays (Lazy)
 
-iMkArray :: IType -> Integer -> HExpr -> G (ILazyArray HeapData)
+iMkArray :: IType -> Integer -> HExpr -> G (ILazyArray Elab)
 iMkArray t ln val =
  do
    let n = ln - 1 :: Integer
@@ -6147,14 +6276,14 @@ iMkArray t ln val =
    -- traceM ("goodarray: " ++ (show arr))
    return arr
 
-iArrayLength :: ILazyArray HeapData -> G (Integer)
+iArrayLength :: ILazyArray Elab -> G (Integer)
 iArrayLength arr =
  do
    let (_, max) = Array.bounds arr
    when doDebug $ traceM ("iArrayLength: " ++ (show (max + 1)))
    return (max + 1)
 
-iArraySelect :: ILazyArray HeapData -> Integer -> G (HeapPointer, HeapData)
+iArraySelect :: ILazyArray Elab -> Integer -> G (HeapPointer, HeapData)
 iArraySelect arr ix =
  do
    let (max, min) = Array.bounds arr
@@ -6162,17 +6291,17 @@ iArraySelect arr ix =
    let ptr = arr Array.! ix
    return (ac_ptr ptr, ac_ref ptr)
 
-iArrayUpdate :: ILazyArray HeapData -> Integer -> HExpr -> G (ILazyArray HeapData)
+iArrayUpdate :: ILazyArray Elab -> Integer -> HExpr -> G (ILazyArray Elab)
 iArrayUpdate arr ix pv =
  do
    -- traceM ("iArrayUpdate: " ++ (show ix) ++ " from array bounds " ++ (show (max, min)))
    cell <- mkArrayCell pv
    return (arr Array.// [(ix, cell)])
 
-iArrayInRange :: ILazyArray HeapData -> Integer -> Bool
+iArrayInRange :: ILazyArray Elab -> Integer -> Bool
 iArrayInRange arr = Array.inRange (Array.bounds arr)
 
-mkArrayCell :: HExpr -> G (ArrayCell HeapData)
+mkArrayCell :: HExpr -> G (ArrayCell Elab)
 mkArrayCell e = do
    let hcell = HUnev e Nothing
    (p, r) <- addHeapCell "mk-array-cell" hcell
@@ -6221,7 +6350,7 @@ reportNonSynthTypeInModuleArg modId modExpr =
                      mkEMsg v
 
 
-getNonSynthTypes :: IExpr a -> [IType]
+getNonSynthTypes :: forall a . IExpr a -> [IType]
 getNonSynthTypes expr =
     let
         -- we only want to catch types which are fully known (no variables)
@@ -6231,10 +6360,13 @@ getNonSynthTypes expr =
         isAllTCon _ = False
 
         -- the ILAM should be the first things
+        -- (GADT matches under MonoLocalBinds need the signatures)
+        getTyVars :: [Id] -> IExpr a -> ([Id], IExpr a)
         getTyVars ts (ILAM t _ e) = getTyVars (t:ts) e
         getTyVars ts e = (ts,e)
 
         -- the ILam should be next
+        getVars :: [(Id, IType)] -> IExpr a -> [(Id, IType)]
         getVars vts (ILam _
                           (ITAp (ITAp (ITCon c _ _)
                                       v)

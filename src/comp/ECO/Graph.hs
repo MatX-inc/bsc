@@ -198,9 +198,9 @@ expressionShape expr = case expr of
     ASStr _ _ val -> ("string:" ++ show val,[],False)
     ATuple _ args -> ("tuple",args,False)
     ATupleSel _ arg ix -> ("tuple-select:" ++ show ix,[arg],False)
-    -- Record the existing don't-care and its optional chosen value exactly.
-    -- Naming never completes it or replaces it with an old expression.
-    ASAny _ val -> ("any",maybe [] (:[]) val,False)
+    -- Record the existing don't-care exactly.  Naming never completes
+    -- it or replaces it with an old expression.
+    ASAny _ -> ("any",[],False)
     AMethCall _ obj meth args ->
         ("method:" ++ show (getIdString obj,getIdString meth),args,True)
     AMethValue _ obj meth ->
