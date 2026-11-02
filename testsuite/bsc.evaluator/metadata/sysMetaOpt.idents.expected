@@ -1,0 +1,15 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident a | kind reg | origins root inst a [MetaOpt.bsv:7:19]
+ident a$D_IN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule step
+ident a$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule step
+ident b | kind reg | origins root inst b [MetaOpt.bsv:8:19]
+ident b$D_IN | kind wire | origins pass State b$write_1
+ident b$EN | kind wire | origins pass State b$EN_write
+ident c | kind reg | origins root inst c [MetaOpt.bsv:9:19]
+ident c$D_IN | kind wire | origins pass State c$write_1
+ident c$EN | kind wire | origins pass State c$EN_write
+ident d | kind reg | origins root inst d [MetaOpt.bsv:10:19]
+ident d$D_IN | kind wire | origins pass State d$write_1
+ident d$EN | kind wire | origins pass State d$EN_write
+summary idents 14 resolved 12 unresolved 2

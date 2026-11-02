@@ -1,0 +1,11 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident value | kind output,wire | origins def __h, def __h, root methodroot value [MetaCross.bsv:10:8]
+ident RDY_value | kind output,wire | origins root methodroot value [MetaCross.bsv:10:8]
+ident a | kind reg | origins root inst a [MetaCross.bsv:11:19]
+ident a$D_IN | kind wire | origins def __h, def __h, root rule direct
+ident a$EN | kind wire | origins def __h, root rule direct
+ident b | kind reg | origins root inst b [MetaCross.bsv:12:19]
+ident b$D_IN | kind wire | origins def __h, def __h, root rule indirect
+ident b$EN | kind wire | origins def __h, root rule indirect
+summary idents 10 resolved 8 unresolved 2

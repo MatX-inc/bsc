@@ -1,0 +1,17 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident value | kind output,wire | origins root methodroot value [MetaInline.bsv:9:8]
+ident RDY_value | kind output,wire | origins root methodroot value [MetaInline.bsv:9:8]
+ident a | kind reg | origins root inst a [MetaInline.bsv:10:19]
+ident a$D_IN | kind wire | origins pass State a$write_1
+ident a$EN | kind wire | origins pass State a$EN_write
+ident b | kind reg | origins root inst b [MetaInline.bsv:11:19]
+ident b$D_IN | kind wire | origins pass State b$write_1
+ident b$EN | kind wire | origins pass State b$EN_write
+ident c | kind reg | origins root inst c [MetaInline.bsv:12:19]
+ident c$D_IN | kind wire | origins def __h, def __h, def __h, def __h, root rule step
+ident c$EN | kind wire | origins def __h, def __h, def __h, def __h, root rule step
+ident a_PLUS_b_MUL_3___d4 | kind wire | origins def __h, def __h, def __h, def __h, root rule step
+ident _3__q2 | kind wire | origins def __h, def __h, def __h, def __h, root rule step
+ident a_PLUS_b__q1 | kind wire | origins def __h, def __h, def __h, def __h, root rule step
+summary idents 16 resolved 14 unresolved 2

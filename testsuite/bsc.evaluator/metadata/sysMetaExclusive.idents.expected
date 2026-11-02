@@ -1,0 +1,18 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident a | kind reg | origins root inst a [MetaExclusive.bsv:10:19]
+ident a$D_IN | kind wire | origins def d__h, root rule one, root rule two
+ident a$EN | kind wire | origins def d__h, def __h, def __h, root rule one, root rule two
+ident b | kind reg | origins root inst b [MetaExclusive.bsv:11:19]
+ident b$D_IN | kind wire | origins def __h, def __h, def __h, root rule step
+ident b$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, root rule two, root rule flip, root rule step
+ident c | kind reg | origins root inst c [MetaExclusive.bsv:12:19]
+ident c$D_IN | kind wire | origins def __h, def __h, root rule left, root rule right
+ident c$EN | kind wire | origins def __h, def __h, root rule left, root rule right
+ident d | kind reg | origins root inst d [MetaExclusive.bsv:13:15]
+ident d$D_IN | kind wire | origins def __h, def __h, def __h, def __h, def __h, root rule two, root rule flip, root rule step
+ident d$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, root rule two, root rule flip, root rule step
+ident MUX_a$write_1__VAL_1 | kind wire | origins def __h, root rule one
+ident MUX_a$write_1__VAL_2 | kind wire | origins def __h, root rule two
+ident MUX_d$write_1__VAL_2 | kind wire | origins def __h, def __h, def __h, root rule step
+summary idents 17 resolved 15 unresolved 2

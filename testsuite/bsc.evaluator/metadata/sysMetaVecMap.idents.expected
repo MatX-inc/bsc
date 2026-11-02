@@ -1,0 +1,14 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident sum | kind output,wire | origins def __h, def __h, def __h, def __h, root methodroot sum [MetaVecMap.bsv:18:8]
+ident RDY_sum | kind output,wire | origins def __h, root methodroot sum [MetaVecMap.bsv:18:8]
+ident regs_0 | kind reg | origins root inst regs_0 [MetaVecMap.bsv:19:31]
+ident regs_0$D_IN | kind wire | origins def __h, def __h, def __h, def __h, root rule tick
+ident regs_0$EN | kind wire | origins def __h, def __h, def __h, root rule tick
+ident regs_1 | kind reg | origins root inst regs_1 [MetaVecMap.bsv:19:31]
+ident regs_1$D_IN | kind wire | origins def __h, def __h, def __h, def __h, root rule tick
+ident regs_1$EN | kind wire | origins def __h, def __h, def __h, root rule tick
+ident regs_2 | kind reg | origins root inst regs_2 [MetaVecMap.bsv:19:31]
+ident regs_2$D_IN | kind wire | origins def __h, def __h, def __h, def __h, root rule tick
+ident regs_2$EN | kind wire | origins def __h, def __h, def __h, root rule tick
+summary idents 13 resolved 11 unresolved 2

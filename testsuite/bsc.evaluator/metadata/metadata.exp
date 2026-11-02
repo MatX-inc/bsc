@@ -45,10 +45,37 @@ proc final_ledger { fname out } {
     sed $fname $out {-e /^ledger\ after\ finalcleanup/,/^-----/!d -e /^-----/d -e /./!d -e /^resolved:/d -e /^\ \ /d -e s/finalcleanup/verilog/} {}
 }
 
+# The identifier records of a .bxref (dumpbxref --idents): one line per
+# identifier of the generated module with its declaration positions and
+# what it stands for, pinned after the position filter and the pointer
+# normalisation of the side file and without the history field (the
+# positions of the events on the way, which move with every event a
+# pass gains).  -metadata-check holds the closure at the Verilog level
+# in every run that writes the file, so an identifier that stands for
+# nothing is one the pinned list names (a clock, a reset, a parameter).
+proc filter_idents { fname } {
+    sed $fname $fname.filtered {} \
+        {-e s/\\\[(Meta\[A-Za-z\]*\.bsv):/@@\\1:/g -e s/\\\[(\[^]:\]+):\[0-9\]+:\[0-9\]+\\\]/\[\\1\]/g -e s/@@/\[/g -e s/__h\[0-9\]+/__h/g -e {s/\ \|\ history\ [0-9,]*$//}}
+}
+
+proc idents_golden { top {expected {}} } {
+    if { $expected == "" } { set expected $top.idents.expected }
+    if { [do_internal_checks] } {
+        dumpbxref $top.bxref --idents
+        move [make_dumpbxref_output_name $top.bxref] $top.idents
+        filter_idents $top.idents
+        compare_file $top.idents.filtered $expected
+        erase $top.idents
+        erase $top.idents.filtered
+    }
+}
+
 # One module: its Verilog must be the same byte for byte for a plain
-# compile, under the dump, under the scramble, under the census and with
-# the side file written; the dump, the census and the side file are as
-# pinned.  "extra" names other flags of the census run.
+# compile, under the dump, under the scramble, under the census (with
+# the ledger's closure checked at every stage), with the side file
+# written and with the .bxref written; the dump, the census, the side
+# file and the identifier records are as pinned.  "extra" names other
+# flags of the census run.
 proc metadata_golden { pkg top {extra {}} } {
     erase $pkg.bo
     compile_verilog_pass $pkg.bsv $top
@@ -68,7 +95,7 @@ proc metadata_golden { pkg top {extra {}} } {
 
     erase $pkg.bo
     erase $top.v
-    compile_verilog_pass $pkg.bsv $top "-metadata-census $extra"
+    compile_verilog_pass $pkg.bsv $top "-metadata-census -metadata-check $extra"
     compare_file $top.v $top.plain.v
     filter_dump $pkg.bsv.bsc-vcomp-out
     compare_file $pkg.bsv.bsc-vcomp-out.filtered $pkg.bsv.census.expected
@@ -81,6 +108,14 @@ proc metadata_golden { pkg top {extra {}} } {
     filter_side $top.metadata
     compare_file $top.metadata.sorted $top.metadata.expected
     erase $top.metadata
+
+    erase $pkg.bo
+    erase $top.v
+    erase $top.bxref
+    compile_verilog_pass $pkg.bsv $top {-bxref -metadata-check}
+    compare_file $top.v $top.plain.v
+    idents_golden $top
+    erase $top.bxref
 
     erase $top.plain.v
 }
@@ -223,6 +258,7 @@ proc ledger_golden { pkg top {extra {}} } {
         compare_file [make_dumpbxref_output_name $top.bxref] $pkg.ledger.final
         erase $pkg.ledger.final
     }
+    idents_golden $top
     erase $pkg.ledger
     erase $top.bxref
     erase $top.plain.v
@@ -294,5 +330,23 @@ ledger_golden MetaExclusive sysMetaExclusive
 # port's mux and enable, built with an arm for its uses, are created
 # (State) from the rule that stays alone
 ledger_golden MetaStarved sysMetaStarved -remove-starved-rules
+
+# The identifier records at the Verilog level (plan section 16), on the
+# packages above: a method's ports stand for the method (MetaPort), an
+# instance and its ports for the instance (MetaRename), a rule's firing
+# signals for the rule (MetaFire), the defs inlined into an identifier
+# for their records (MetaExpand), and the clock and the reset for
+# nothing, pinned.
+
+# a module parameter: pinned among the unresolved identifiers
+ledger_golden MetaParam sysMetaParam
+
+# -remove-dollar: the instance ports are spelled without '$', and each
+# record names the id of the final package it was printed from
+erase MetaRename.bo
+erase sysMetaRename.bxref
+compile_verilog_pass MetaRename.bsv sysMetaRename {-bxref -metadata-check -remove-dollar}
+idents_golden sysMetaRename sysMetaRename.nodollar.idents.expected
+erase sysMetaRename.bxref
 
 }

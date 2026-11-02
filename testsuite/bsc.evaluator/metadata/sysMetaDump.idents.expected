@@ -1,0 +1,34 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident total | kind output,wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule step, root methodroot total [MetaDump.bsv:16:8]
+ident RDY_total | kind output,wire | origins def __h, def __h, def __h, root methodroot total [MetaDump.bsv:16:8]
+ident poke_x | kind input | origins root methodroot poke [MetaDump.bsv:16:8]
+ident EN_poke | kind input | origins root methodroot poke [MetaDump.bsv:16:8]
+ident RDY_poke | kind output,wire | origins def __h, root methodroot poke [MetaDump.bsv:16:8]
+ident cnt | kind reg | origins root inst cnt [MetaDump.bsv:18:19]
+ident cnt$D_IN | kind wire | origins def __h, root rule step
+ident cnt$EN | kind wire | origins def __h, root rule step
+ident last | kind reg | origins root inst last [MetaDump.bsv:19:19]
+ident last$D_IN | kind wire | origins def __h, def __h, root rule drain
+ident last$EN | kind wire | origins def __h, def __h, root rule drain
+ident regs_0 | kind reg | origins root inst regs_0 [MetaDump.bsv:17:31]
+ident regs_0$D_IN | kind wire | origins def __h, root rule step
+ident regs_0$EN | kind wire | origins def __h, root rule step
+ident regs_1 | kind reg | origins root inst regs_1 [MetaDump.bsv:17:31]
+ident regs_1$D_IN | kind wire | origins def __h, def __h, root rule step
+ident regs_1$EN | kind wire | origins def __h, root rule step
+ident regs_2 | kind reg | origins root inst regs_2 [MetaDump.bsv:17:31]
+ident regs_2$D_IN | kind wire | origins def __h, def __h, root rule step
+ident regs_2$EN | kind wire | origins def __h, root rule step
+ident regs_3 | kind reg | origins root inst regs_3 [MetaDump.bsv:17:31]
+ident regs_3$D_IN | kind wire | origins def __h, def __h, root rule step
+ident regs_3$EN | kind wire | origins def __h, root rule step
+ident q$D_IN | kind wire | origins root methodroot poke [MetaDump.bsv:16:8]
+ident q$D_OUT | kind wire | origins root inst q [MetaDump.bsv:20:20]
+ident q$CLR | kind wire | origins pass State q$EN_clear
+ident q$DEQ | kind wire | origins def __h, def __h, root rule drain
+ident q$EMPTY_N | kind wire | origins root inst q [MetaDump.bsv:20:20]
+ident q$ENQ | kind wire | origins root methodroot poke [MetaDump.bsv:16:8]
+ident q$FULL_N | kind wire | origins root inst q [MetaDump.bsv:20:20]
+ident q | kind instance | origins root inst q [MetaDump.bsv:20:20]
+summary idents 33 resolved 31 unresolved 2

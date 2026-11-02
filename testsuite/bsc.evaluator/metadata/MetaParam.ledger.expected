@@ -1,0 +1,80 @@
+=== metadata (MetaParam sysMetaParam):
+ledger after idroprules: 148 sites, 4 contexts, 3 roots, 1 defs, 9 events
+inlined (Inline): __h94 -> RL_bump
+created (Transform): __i1 <- RL_bump
+created (Transform): __i2 <- RL_bump
+inlined (Transform): __i2 -> RL_bump
+created (Transform): __j1 <- __i1
+merged (Transform): __i1 -> __j1
+renamed (Transform): __j1 -> __i1
+created (Transform): __j2 <- RL_bump
+inlined (Transform): __j2 -> RL_bump
+resolved: 2 of 2 defs and rules stand for other ids
+  __i1 <- RL_bump __h94
+  RL_bump <- RL_bump __h94
+
+-----
+=== metadata (MetaParam sysMetaParam):
+ledger after dropundet: 148 sites, 4 contexts, 3 roots, 1 defs, 16 events
+inlined (Inline): __h94 -> RL_bump
+created (Transform): __i1 <- RL_bump
+created (Transform): __i2 <- RL_bump
+inlined (Transform): __i2 -> RL_bump
+created (Transform): __j1 <- __i1
+merged (Transform): __i1 -> __j1
+renamed (Transform): __j1 -> __i1
+created (Transform): __j2 <- RL_bump
+inlined (Transform): __j2 -> RL_bump
+created (Conv): r___d1 <- __i1
+merged (Conv): __i1 -> r___d1
+created (Conv): r_PLUS_k___d2 <- RL_bump
+created (Schedule): CAN_FIRE_RL_bump <- RL_bump
+created (Schedule): CAN_FIRE_out <- out
+created (Schedule): WILL_FIRE_RL_bump <- RL_bump
+created (Schedule): WILL_FIRE_out <- out
+resolved: 7 of 7 defs and rules stand for other ids
+  WILL_FIRE_out <- out
+  WILL_FIRE_RL_bump <- RL_bump __h94
+  CAN_FIRE_out <- out
+  CAN_FIRE_RL_bump <- RL_bump __h94
+  r___d1 <- RL_bump __h94
+  r_PLUS_k___d2 <- RL_bump __h94
+  RL_bump <- RL_bump __h94
+
+-----
+=== metadata (MetaParam sysMetaParam):
+ledger after finalcleanup: 148 sites, 4 contexts, 3 roots, 1 defs, 27 events
+inlined (Inline): __h94 -> RL_bump
+created (Transform): __i1 <- RL_bump
+created (Transform): __i2 <- RL_bump
+inlined (Transform): __i2 -> RL_bump
+created (Transform): __j1 <- __i1
+merged (Transform): __i1 -> __j1
+renamed (Transform): __j1 -> __i1
+created (Transform): __j2 <- RL_bump
+inlined (Transform): __j2 -> RL_bump
+created (Conv): r___d1 <- __i1
+merged (Conv): __i1 -> r___d1
+created (Conv): r_PLUS_k___d2 <- RL_bump
+created (Schedule): CAN_FIRE_RL_bump <- RL_bump
+created (Schedule): CAN_FIRE_out <- out
+created (Schedule): WILL_FIRE_RL_bump <- RL_bump
+created (Schedule): WILL_FIRE_out <- out
+created (State): r$write_1 <- RL_bump
+created (State): r$EN_write <- RL_bump
+dropped (State): RL_bump
+renamed (RenameIO): r$write_1 -> r$D_IN
+renamed (RenameIO): r$EN_write -> r$EN
+inlined (Expand): r___d1 -> r_PLUS_k___d2 out
+inlined (Expand): r_PLUS_k___d2 -> r$D_IN
+dropped (Expand): WILL_FIRE_out
+inlined (Expand): CAN_FIRE_RL_bump -> WILL_FIRE_RL_bump
+inlined (Expand): CAN_FIRE_out -> RDY_out
+inlined (Expand): WILL_FIRE_RL_bump -> r$EN
+resolved: 4 of 4 defs and rules stand for other ids
+  out <- out RL_bump __h94
+  RDY_out <- RDY_out out
+  r$D_IN <- RL_bump __h94
+  r$EN <- RL_bump __h94
+
+-----

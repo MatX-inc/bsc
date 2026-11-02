@@ -1,0 +1,17 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident total | kind output,wire | origins def __h, def __h, def __h, def __h, def __h, def __h, root methodroot total [MetaNested.bsv:10:8]
+ident RDY_total | kind output,wire | origins def __h, def __h, def __h, def __h, def __h, root methodroot total [MetaNested.bsv:10:8]
+ident grid_0_0 | kind reg | origins root inst grid_0_0 [MetaNested.bsv:11:43]
+ident grid_0_0$D_IN | kind wire | origins def __h, root rule tick
+ident grid_0_0$EN | kind wire | origins root rule tick
+ident grid_0_1 | kind reg | origins root inst grid_0_1 [MetaNested.bsv:11:43]
+ident grid_0_1$D_IN | kind wire | origins pass State grid_0_1$write_1
+ident grid_0_1$EN | kind wire | origins pass State grid_0_1$EN_write
+ident grid_1_0 | kind reg | origins root inst grid_1_0 [MetaNested.bsv:11:43]
+ident grid_1_0$D_IN | kind wire | origins pass State grid_1_0$write_1
+ident grid_1_0$EN | kind wire | origins pass State grid_1_0$EN_write
+ident grid_1_1 | kind reg | origins root inst grid_1_1 [MetaNested.bsv:11:43]
+ident grid_1_1$D_IN | kind wire | origins pass State grid_1_1$write_1
+ident grid_1_1$EN | kind wire | origins pass State grid_1_1$EN_write
+summary idents 16 resolved 14 unresolved 2

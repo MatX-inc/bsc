@@ -25,7 +25,10 @@ module IExpandMeta(
         -- the identifier records of the Verilog backend's join
         IdentKind(..), IdentOrigin(..), IdentRecord(..), identUnresolved,
         createdFromNothing, resolveIds, checkResolveIds,
-        renderIdent, renderIdents,
+        renderIdent, renderIdents, renderIdentSet,
+        -- the position-free rendering of sites
+        SiteIndex, siteIndex, renderSiteFree, renderChainFree, renderDefLine,
+        renderDefFree,
         -- the census (-metadata-census)
         Census, readCensus, recordUnfolding, recordCompletion, aliasClassCount,
         renderCensus, checkProfile, checkKeptPositions, checkNameHints
@@ -1217,35 +1220,38 @@ renderChain st ct ctx =
 renderSideFile :: String -> ModuleMeta -> String
 renderSideFile modName mm =
     unlines ([sideFileSchema, "module " ++ modName] ++
-             [ "root " ++ renderSite st s | s <- mm_roots mm ] ++
-             map renderDef (IM.elems (mm_defs mm)))
+             [ "root " ++ renderSite (mm_sites mm) s | s <- mm_roots mm ] ++
+             map (renderDefLine mm) (IM.elems (mm_defs mm)))
+
+-- one def's line of the side file
+renderDefLine :: ModuleMeta -> DefRecord -> String
+renderDefLine mm r =
+    intercalate " | "
+        [ "def " ++ defName r,
+          "site " ++ renderSite st (dr_site r),
+          "chain " ++ renderChain st ct (dr_context r),
+          "contexts " ++ show (IS.size (dr_contexts r)),
+          "merged " ++ renderFacts (dr_merged r),
+          "folded " ++ renderFacts (dr_folded r),
+          "parent " ++ renderCell (dr_parent r),
+          "binder " ++ renderBinder (dr_binder r),
+          "alias " ++ renderCell (dr_alias r),
+          "tiers " ++ renderTiers ]
   where
     st = mm_sites mm
     ct = mm_contexts mm
-    renderDef r =
-        intercalate " | "
-            [ "def " ++ defName r,
-              "site " ++ renderSite st (dr_site r),
-              "chain " ++ renderChain st ct (dr_context r),
-              "contexts " ++ show (IS.size (dr_contexts r)),
-              "merged " ++ renderFacts (dr_merged r),
-              "folded " ++ renderFacts (dr_folded r),
-              "parent " ++ renderCell (dr_parent r),
-              "binder " ++ renderBinder (dr_binder r),
-              "alias " ++ renderCell (dr_alias r),
-              "tiers " ++ renderTiers r ]
     renderFacts fs =
         show (length fs) ++
         concat [ " {" ++ renderSite st s ++ " @ " ++ renderChain st ct c ++ "}"
                | (s, c) <- fs ]
-    defName r = defNameString (dr_ptr r) (dr_hint r)
+    defName d = defNameString (dr_ptr d) (dr_hint d)
     renderCell p | p == noCell = "-"
                  | otherwise = case IM.lookup p (mm_defs mm) of
                                  Just pr -> defName pr
                                  Nothing -> "_" ++ show p
     renderBinder b | b == noBinder = "-"
                    | otherwise = renderBinderSite st b
-    renderTiers r =
+    renderTiers =
         let row = siteRow st (dr_site r)
             isDef = maybe False ((== SKDef) . siteKeyKind . sr_key) row
             use = maybe False sr_useSite row
@@ -1255,6 +1261,135 @@ renderSideFile modName mm =
                                         ('s', dr_shared r),
                                         ('m', not (null (dr_merged r)))], on ]
         in  if null letters then "-" else letters
+
+-- ===============
+-- The position-free rendering
+--
+-- A site is rendered a second way for comparisons across an edit that
+-- moves lines (design 12.6): not by its position but by the
+-- definition it lies in, its head and its rank among the sites of that
+-- head in that definition, as @<definition>/<head>[<rank>].  The
+-- enclosing definition of a site is the site of the innermost frame of
+-- a context that placed it: for a frame's site, its parent frame's
+-- site (the module itself at the root); for a record's site, and for
+-- the sites merged or folded into the record, the innermost frame of
+-- the context recorded with it; the first placing wins, in context and
+-- then pointer order.  The rank orders the sites with one enclosing
+-- definition and one head by position, so it changes only when an
+-- application of that head is added, removed or reordered inside the
+-- definition.  A site without a position (a primitive, keyed on its
+-- operator; a root, keyed on its name) renders as in the positional
+-- form, and the counts of a chain stay on its links, so an OLD and a
+-- NEW capture pair their loop iterations by count.  Derived from the
+-- tables alone, at rendering time.
+
+data SiteIndex = SiteIndex { si_module :: String,
+                             si_encl :: IM.IntMap Int,
+                             si_rank :: IM.IntMap Int }
+
+siteIndex :: String -> ModuleMeta -> SiteIndex
+siteIndex modName mm = SiteIndex modName encl rank
+  where
+    st = mm_sites mm
+    ct = mm_contexts mm
+    -- the site of a context's innermost frame; 0 at the top
+    innermost ctx = case IM.lookup ctx (ct_rows ct) of
+                      Just (_, s, _) -> plainSite s
+                      Nothing -> 0
+    placed = [ (plainSite s, innermost p) | (p, s, _) <- IM.elems (ct_rows ct) ] ++
+             concat [ (plainSite (dr_site r), innermost (dr_context r)) :
+                      [ (plainSite s, innermost c) | (s, c) <- dr_merged r ++ dr_folded r ]
+                    | r <- IM.elems (mm_defs mm) ]
+    encl = IM.fromListWith (\ _ old -> old) placed
+    groups = M.fromListWith (++)
+                 [ ((IM.findWithDefault (-1) s encl, renderName b q), [(p, s)])
+                 | (s, SiteRow { sr_key = IdKey b q p _ }) <- IM.toAscList (st_rows st),
+                   p /= noPosition ]
+    rank = IM.fromList [ (s, n) | grp <- M.elems groups,
+                                  (n, (_, s)) <- zip [1 :: Int ..]
+                                                     (sortBy (comparing byPosition) grp) ]
+    byPosition (p, _) = (getFString (pos_file p), pos_line p, pos_column p)
+
+renderSiteFree :: SiteTable -> SiteIndex -> Int -> String
+renderSiteFree t ix s =
+    case siteRow t s of
+      Nothing -> "site " ++ show s ++ " (no row)"
+      Just row ->
+        let key = sr_key row
+            body = case key of
+                     IdKey b q p _
+                       | p == noPosition -> renderName b q
+                       | otherwise -> "@" ++ enclosing ++ "/" ++ headName b q ++
+                                      "[" ++ maybe "?" show (IM.lookup plain (si_rank ix)) ++ "]"
+                     PrimKey op -> show op
+                     RootKey n _ -> n
+                     BoundKey -> "-"
+                     FieldKey n -> show n
+            flags = [ c | (c, on) <- [('h', testBit s 60),
+                                      ('u', sr_useSite row),
+                                      ('r', sr_recursive row)], on ]
+        in  showSiteKind (siteKeyKind key) ++ " " ++ body ++
+            (if null flags then "" else " " ++ flags)
+  where
+    plain = plainSite s
+    (enclosing, enclQual) = enclName (IM.findWithDefault (-1) plain (si_encl ix))
+    enclName e
+      | e == 0 = (si_module ix, "")
+      | e < 0 = ("?", "")
+      | otherwise =
+          case siteRow t e of
+            Just (SiteRow { sr_key = IdKey b q _ _ }) -> (renderName b q, getFString q)
+            Just (SiteRow { sr_key = RootKey n k }) -> (showSiteKind k ++ ":" ++ n, "")
+            Just (SiteRow { sr_key = PrimKey op }) -> (show op, "")
+            _ -> ("?", "")
+    headName b q | getFString q == enclQual = getFString b
+                 | otherwise = renderName b q
+
+renderChainFree :: SiteTable -> ContextTable -> SiteIndex -> Int -> String
+renderChainFree _ _ _ 0 = "-"
+renderChainFree st ct ix ctx =
+    intercalate " -> " [ renderSiteFree st ix s ++ "#" ++ show c
+                       | (s, c) <- contextChain ct ctx ]
+
+-- a def's sites in the position-free form: its own, its chain and the
+-- sites merged and folded into it
+renderDefFree :: ModuleMeta -> SiteIndex -> DefRecord -> String
+renderDefFree mm ix r =
+    intercalate " | "
+        [ "free " ++ defNameString (dr_ptr r) (dr_hint r),
+          "site " ++ renderSiteFree st ix (dr_site r),
+          "chain " ++ renderChainFree st ct ix (dr_context r),
+          "merged " ++ facts (dr_merged r),
+          "folded " ++ facts (dr_folded r) ]
+  where
+    st = mm_sites mm
+    ct = mm_contexts mm
+    facts fs = show (length fs) ++
+               concat [ " {" ++ renderSiteFree st ix s ++ " @ " ++
+                        renderChainFree st ct ix c ++ "}"
+                      | (s, c) <- fs ]
+
+-- An identifier's record set (dumpbxref --resolve): its line, then
+-- each origin's record in both renderings (a def's side-file line and
+-- its position-free line, a root's site both ways), then the events
+-- of its history, each with its position in the ledger.
+renderIdentSet :: String -> ModuleMeta -> IdentRecord -> String
+renderIdentSet modName mm r =
+    unlines (renderIdent mm r :
+             concatMap origin (ir_origins r) ++ map event (ir_history r))
+  where
+    ix = siteIndex modName mm
+    st = mm_sites mm
+    origin (ODef p) =
+        case IM.lookup p (mm_defs mm) of
+          Just d -> ["  " ++ renderDefLine mm d, "  " ++ renderDefFree mm ix d]
+          Nothing -> ["  def _" ++ show p ++ " (no record)"]
+    origin (ORoot s) = ["  root " ++ renderSite st s,
+                        "  free root " ++ renderSiteFree st ix s]
+    origin o = ["  " ++ renderOrigin mm o]
+    byPosition = IM.fromList (zip [0 ..] (reverse (mm_events mm)))
+    event n = "  event " ++ show n ++ ": " ++
+              maybe "(none)" renderEvent (IM.lookup n byPosition)
 
 -- ===============
 -- The census (-metadata-census)

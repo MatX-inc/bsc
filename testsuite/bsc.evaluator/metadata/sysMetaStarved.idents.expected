@@ -1,0 +1,7 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident a | kind reg | origins root inst a [MetaStarved.bsv:9:19]
+ident a$D_IN | kind wire | origins root rule hog, root rule starved
+ident a$EN | kind wire | origins root rule hog, root rule starved
+ident MUX_a$write_1__VAL_1 | kind wire | origins def __h, root rule hog
+summary idents 6 resolved 4 unresolved 2

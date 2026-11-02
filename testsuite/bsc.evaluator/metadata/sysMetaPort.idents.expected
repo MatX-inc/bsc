@@ -1,0 +1,17 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident put_x | kind input | origins root methodroot put [MetaPort.bsv:11:8]
+ident EN_put | kind input | origins root methodroot put [MetaPort.bsv:11:8]
+ident RDY_put | kind output,wire | origins def __h, root rule down, root methodroot put [MetaPort.bsv:11:8]
+ident a | kind reg | origins root inst a [MetaPort.bsv:12:19]
+ident a$D_IN | kind reg | origins def c__h, def __h, def __h, root rule up, root rule down, root methodroot put [MetaPort.bsv:11:8]
+ident a$EN | kind wire | origins def c__h, def __h, def __h, root rule up, root rule down, root methodroot put [MetaPort.bsv:11:8]
+ident b | kind reg | origins root inst b [MetaPort.bsv:13:19]
+ident b$D_IN | kind wire | origins pass State b$write_1
+ident b$EN | kind wire | origins pass State b$EN_write
+ident c | kind reg | origins root inst c [MetaPort.bsv:14:15]
+ident c$D_IN | kind wire | origins def c__h, def __h, root rule down, root methodroot put [MetaPort.bsv:11:8]
+ident c$EN | kind wire | origins def __h, root rule down, root methodroot put [MetaPort.bsv:11:8]
+ident MUX_a$write_1__VAL_2 | kind wire | origins def __h, root rule down
+ident MUX_a$write_1__VAL_3 | kind wire | origins def __h, def __h, root rule up
+summary idents 16 resolved 14 unresolved 2

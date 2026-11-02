@@ -1,0 +1,29 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident sum | kind output,wire | origins root rule r1, root methodroot sum [MetaSide.bsv:30:8]
+ident RDY_sum | kind output,wire | origins root methodroot sum [MetaSide.bsv:30:8]
+ident put_x | kind input | origins root methodroot put [MetaSide.bsv:30:8]
+ident EN_put | kind input | origins root methodroot put [MetaSide.bsv:30:8]
+ident RDY_put | kind output,wire | origins root methodroot put [MetaSide.bsv:30:8]
+ident a | kind reg | origins root inst a [MetaSide.bsv:31:19]
+ident a$D_IN | kind wire | origins root rule r1, root methodroot put [MetaSide.bsv:30:8]
+ident a$EN | kind wire | origins root rule r1, root methodroot put [MetaSide.bsv:30:8]
+ident b | kind reg | origins root inst b [MetaSide.bsv:32:19]
+ident b$D_IN | kind wire | origins def __h, def __h, root rule r1, root rule r2
+ident b$EN | kind wire | origins def __h, def __h, def __h, root rule r1, root rule r2
+ident c | kind reg | origins root inst c [MetaSide.bsv:34:18]
+ident c$D_IN | kind wire | origins def __h, def __h, def __h, root rule r4
+ident c$EN | kind wire | origins def __h, def __h, root rule r4
+ident vs_0 | kind reg | origins root inst vs_0 [MetaSide.bsv:33:31]
+ident vs_0$D_IN | kind wire | origins def __h, def __h, def __h, def __h, root rule r3
+ident vs_0$EN | kind wire | origins def __h, def __h, def __h, root rule r3
+ident vs_1 | kind reg | origins root inst vs_1 [MetaSide.bsv:33:31]
+ident vs_1$D_IN | kind wire | origins def __h, def __h, def __h, def __h, root rule r3
+ident vs_1$EN | kind wire | origins def __h, def __h, def __h, root rule r3
+ident vs_2 | kind reg | origins root inst vs_2 [MetaSide.bsv:33:31]
+ident vs_2$D_IN | kind wire | origins def __h, def __h, def __h, def __h, root rule r3
+ident vs_2$EN | kind wire | origins def __h, def __h, def __h, root rule r3
+ident a_PLUS_1__q1 | kind wire | origins def __h, def __h, def __h, root rule r4
+ident a_PLUS_b___d3 | kind wire | origins def __h, def __h, def __h
+ident y__h | kind wire | origins def __h, def y__h, def b_BITS_7_TO_2___h, def __h
+summary idents 28 resolved 26 unresolved 2

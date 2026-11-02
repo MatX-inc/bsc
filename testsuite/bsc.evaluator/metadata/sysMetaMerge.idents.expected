@@ -1,0 +1,24 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident value | kind output,wire | origins root methodroot value [MetaMerge.bsv:11:8]
+ident RDY_value | kind output,wire | origins root methodroot value [MetaMerge.bsv:11:8]
+ident a | kind reg | origins root inst a [MetaMerge.bsv:12:19]
+ident a$D_IN | kind wire | origins pass State a$write_1
+ident a$EN | kind wire | origins pass State a$EN_write
+ident b | kind reg | origins root inst b [MetaMerge.bsv:13:19]
+ident b$D_IN | kind wire | origins pass State b$write_1
+ident b$EN | kind wire | origins pass State b$EN_write
+ident c | kind reg | origins root inst c [MetaMerge.bsv:14:19]
+ident c$D_IN | kind wire | origins root rule step
+ident c$EN | kind wire | origins root rule step
+ident d | kind reg | origins root inst d [MetaMerge.bsv:15:19]
+ident d$D_IN | kind wire | origins root rule step
+ident d$EN | kind wire | origins root rule step
+ident e | kind reg | origins root inst e [MetaMerge.bsv:16:19]
+ident e$D_IN | kind wire | origins root rule step
+ident e$EN | kind wire | origins root rule step
+ident f | kind reg | origins root inst f [MetaMerge.bsv:17:19]
+ident f$D_IN | kind wire | origins root rule step
+ident f$EN | kind wire | origins root rule step
+ident IF_a_ULE_b_THEN_b_ELSE_a___d4 | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h
+summary idents 23 resolved 21 unresolved 2
