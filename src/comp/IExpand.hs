@@ -610,7 +610,6 @@ removeInlinedPositions flags imod0 =
     rmConInfo ic@(ICMethArg {}) = ic
     rmConInfo ic@(ICModPort {}) = ic
     rmConInfo ic@(ICModParam {}) = ic
-    rmConInfo ic@(ICIFace {}) = ic
     rmConInfo ic@(ICRuleAssert {}) = ic
     rmConInfo ic@(ICSchedPragmas {}) = ic
     rmConInfo ic@(ICName {}) = ic
@@ -6073,45 +6072,6 @@ eAssertion rId a str =
 isCon :: HExpr -> Bool
 isCon (ICon _ _) = True
 isCon _ = False
-
--- XXX keep track of lambda vars
-{-
-getStateVars :: ClockE -> [Id] -> [Id] -> [HExpr] -> G [Id]
-getStateVars clk lvs vs [] = return []
-getStateVars clk lvs vs (ILam i _ e : xs) = getStateVars clk (i:lvs) vs (e : xs)
-getStateVars clk lvs vs (IAps e _ es : xs) = getStateVars clk lvs vs (e : es ++ xs)
-getStateVars clk lvs vs (IVar i : xs) = do is <- getStateVars clk lvs vs xs
-                                           if (i `elem` lvs) then
-                                             return is
-                                            else return (i:is)
-getStateVars clk lvs vs (ILAM _ _ e : xs) = getStateVars clk lvs vs (e : xs)
-getStateVars clk lvs vs (ICon i (ICDef _ e) : xs) = if i `elem` vs then
-                                                      getStateVars clk lvs vs xs
-                                                     else getStateVars clk lvs (i:vs) (e : xs)
-getStateVars clk lvs vs (ICon i (ICStateVar _ (IStateVar _ _ _ vi es _ _ _ sl)) : xs) =
-        do
-           is <- getStateVars clk lvs vs (es' ++ xs)
-           --trace (ppReadable (clks, clk)) $
-           (if all (clk ==) clks then (return is) else (return (i:is)))
-  where clks = [ e | (ClockArg i, e) <- ies ]
-        isCR (ClockArg i) = True
-        isCR (Port vn _ _) = vn `elem` vRst vi
-        isCR _ = False
-        ies = zip (vArgs vi) es
-        es' = [ e | (a, e) <- zip (vArgs vi) es, not (isCR a) ]
-getStateVars clk lvs vs (ICon i (ICModPort t) : xs) =
-    do is <- getStateVars clk lvs vs xs
-       return (i:is)
-getStateVars clk lvs vs (ICon i (ICModParam t) : xs) =
-    do is <- getStateVars clk lvs vs xs
-       return (i:is)
-getStateVars clk lvs vs (ICon _ (ICValue _ e) : xs) = getStateVars clk lvs vs (e : xs)
-getStateVars clk lvs vs (ICon i (ICIFace { }) : xs) = do is <- getStateVars clk lvs vs xs
-                                                         return (i:is)
-getStateVars clk lvs vs (ICon _ _ : xs) = getStateVars clk lvs vs xs
-getStateVars clk lvs vs (x@(IRefT _ _ _ _) : xs) = do uhx <- unheapU x
-                                                  getStateVars clk lvs vs (uhx : xs)
--}
 
 --------------------------------------------------------------------------
 
