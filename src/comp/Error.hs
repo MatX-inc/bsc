@@ -623,6 +623,7 @@ data ErrMsg =
         | EBadSpecialArgs
         | EBadMethodConflictOp
         | EBadMethodConflictOpList
+        | EUnsupportedMethodConflictOp String
         | WNoSchedulingAnnotation [String] String [String]
         | ENestedModulePragma -- ^ pragmas not allowed in nested modules
         | ETerminalAction -- ^ action ends a block that requires a return value
@@ -1948,6 +1949,10 @@ getErrorText (EDefaultResetNoSuchArg name) =
             "default_reset attribute does not exist.  If the intent was " ++
             "to provide a port name for the implicit default reset, use " ++
             "the " ++ quote "default_reset_port" ++ " attribute instead."))
+getErrorText (EUnsupportedMethodConflictOp op) =
+    (Parse 226, empty,
+     s2par ("The scheduling operator " ++ quote op ++
+            " is not supported for imported modules"))
 
 getErrorText (ENonHaskellOperator op cs) =
     (Parse 227, empty,
