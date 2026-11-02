@@ -1,0 +1,3 @@
+checking package dependencies
+Error: "ImportForeignModule_ScheduleEmptyLists.bsv", line 12, column 14: (P0005)
+  Unexpected `)'; expected scheduling name(s)
