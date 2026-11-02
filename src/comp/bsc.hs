@@ -1237,7 +1237,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- concrete widths, and hence the monomorphized wrappers, is only known
        -- from the generated Verilog's DPI import declarations.
        when (useDPI flags) $ do
-           let VProgram _ vdpis _ = vprog
+           let VProgram _ vdpis _ _ = vprog
            ff_blurb <- mkGenFileHeader flags
            _ <- genDPIWrappers errh flags prefix ff_blurb vdpis
            return ()

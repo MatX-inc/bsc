@@ -65,6 +65,7 @@ aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
             IO VProgram
 aVerilog errh flags pps aspack ffmap =
     do let vprog0 = VProgram (map renameInoutPorts mods) dpi_decls comments
+                            string_param_default
        -- Gate the identifier legalization below on a cheap scan of the
        -- positions where a colliding name can originate.  The scan is
        -- sound by the invariant documented at vModuleDeclVIds: every VId
@@ -139,6 +140,10 @@ aVerilog errh flags pps aspack ffmap =
                 , vco_def_widths =
                     M.fromList [ (i, aSize t) | ADef i t _ _ <- aspkg_values aspack ]
                 }
+        -- what `BSV_PARAMETER_STRING defaults to in this file
+        -- (a predefine of the macro by the tool environment wins over it)
+        string_param_default =
+            if systemVerilogOutput flags then VSPParameterString else VSPParameter
         -- look for pass-through comments, taking care of \n
         -- XXX should these attach to the main module instead of the
         -- XXX entire file (attached to file in case of multiple modules)
@@ -446,19 +451,17 @@ aVerilog errh flags pps aspack ffmap =
         -- XXX might be good to allow the user to specify a default
 
         args :: [VArg]
-        args =        [ VAParameter (vId i) r v isStr
+        args =        [ VAParameter (vId i) pt v
                      | (i, t) <- ps,
-                       let (r, v, isStr) = case t of
-                                      ATBit sz -> (Just (VEConst (sz-1),
-                                                         VEConst 0),
-                                             VEWConst (mkVId "0") sz 2 0, False)
-                                      -- under -system-verilog-output, emit a SV
-                                      -- `string` parameter so $display treats it
-                                      -- as a string, not a packed bit-vector
-                                      ATString _ -> (Nothing, VEString "",
-                                                     systemVerilogOutput flags)
-                                      ATReal -> (Nothing, VEReal 0.0, False)
-                                      _ -> (Nothing, VEConst 0, False) ] ++
+                       let (pt, v) = case t of
+                                      ATBit sz -> (VPTBits (Just (VEConst (sz-1),
+                                                                 VEConst 0)),
+                                             VEWConst (mkVId "0") sz 2 0)
+                                      -- a String parameter is declared through
+                                      -- `BSV_PARAMETER_STRING (see Verilog.hs)
+                                      ATString _ -> (VPTString, VEString "")
+                                      ATReal -> (VPTBits Nothing, VEReal 0.0)
+                                      _ -> (VPTBits Nothing, VEConst 0) ] ++
                 [ VAInput (vId i) (vSize t)
                      | (i, t) <- is ] ++
                 filterSharedInout
@@ -2056,7 +2059,7 @@ instance VUse VExpr where
 
 renameSVStdIdents :: [(String, Position)] -> VProgram
                   -> (VProgram, [(String, String, Position)], [(String, Position)])
-renameSVStdIdents foreign_funcs (VProgram vmods dpis comments) =
+renameSVStdIdents foreign_funcs (VProgram vmods dpis comments strdef) =
     let dpi_names = S.fromList ([ s | VDPI (VId s _ _) _ _ _ _ <- dpis ] ++
                                 [ s | VDPI _ _ _ _ args <- dpis,
                                       (VId s _ _, _, _) <- args ])
@@ -2083,7 +2086,7 @@ renameSVStdIdents foreign_funcs (VProgram vmods dpis comments) =
         externs = M.toList $ M.fromListWith (\_ old -> old)
                       (dpi_clashes ++ foreign_clashes ++
                        concat [ e | (_, _, e) <- results ])
-    in  (VProgram vmods' dpis comments, renamed, externs)
+    in  (VProgram vmods' dpis comments strdef, renamed, externs)
 
 -- The set argument is the names that are externally determined for the
 -- whole program (DPI function and argument names, foreign Verilog
@@ -2160,7 +2163,7 @@ vargVIds :: VArg -> [VId]
 vargVIds (VAInput i _)       = [i]
 vargVIds (VAInout i mi _)    = i : maybe [] (:[]) mi
 vargVIds (VAOutput i _)      = [i]
-vargVIds (VAParameter i _ _ _) = [i]
+vargVIds (VAParameter i _ _) = [i]
 
 -- Every declaration-position identifier of a module: the module's own
 -- name, its port and parameter names, and, per body item, the names it
