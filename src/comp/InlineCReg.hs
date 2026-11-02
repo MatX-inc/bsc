@@ -10,6 +10,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import BackendNamingConventions
 import ErrorUtil(internalError)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 
 --
@@ -63,6 +64,11 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
 
         -- any new definitions
         new_defs = concatMap (\(a,b,c,d,e) -> e) creg_tuples
+
+        -- the ledger: the defs of the CReg's ports and of its register
+        -- are Created from the instance, which keeps its name as a Reg
+        events = [ Created PTInlineCReg d [i]
+                 | (i, _, _, _, ds) <- creg_tuples, ADef d _ _ _ <- ds ]
 
         -- new Reg instances
         new_vs = map (\(a,b,c,d,e) -> c) creg_tuples
@@ -155,5 +161,6 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
               , aspkg_values = defs ++ new_defs
               , aspkg_inlined_ports = ips ++ creg_ports
               , aspkg_signal_info = si'
+              , aspkg_meta = appendEvents events (aspkg_meta pkg)
               }
 

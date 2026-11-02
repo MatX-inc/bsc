@@ -80,7 +80,7 @@ created (Schedule): WILL_FIRE_value <- value
 
 -----
 === metadata (MetaSplit sysMetaSplit):
-ledger after finalcleanup: 161 sites, 7 contexts, 5 roots, 4 defs, 41 events
+ledger after finalcleanup: 161 sites, 7 contexts, 5 roots, 4 defs, 72 events
 inlined (Inline): __h152 -> __h153
 inlined (Inline): __h153 -> RL_pick
 created (Transform): __i1 <- __h151
@@ -122,5 +122,36 @@ created (Schedule): CAN_FIRE_value <- value
 created (Schedule): WILL_FIRE_RL_pick_T <- RL_pick_T
 created (Schedule): WILL_FIRE_RL_pick_F <- RL_pick_F
 created (Schedule): WILL_FIRE_value <- value
+created (State): MUX_c$write_1__SEL_1 <- RL_pick_F
+created (State): MUX_c$write_1__SEL_2 <- RL_pick_T
+created (State): MUX_c$write_1__VAL_1 <- RL_pick_F
+created (State): MUX_c$write_1__VAL_2 <- RL_pick_T
+created (State): c$write_1 <- RL_pick_F RL_pick_T
+created (State): c$EN_write <- RL_pick_F RL_pick_T
+created (State): a$write_1
+created (State): a$EN_write
+created (State): b$write_1
+created (State): b$EN_write
+dropped (State): RL_pick_T
+dropped (State): RL_pick_F
+renamed (RenameIO): c$write_1 -> c$D_IN
+renamed (RenameIO): c$EN_write -> c$EN
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): b$EN_write -> b$EN
+inlined (Expand): a___d1 -> a_ULE_b___d3 MUX_c$write_1__VAL_1
+inlined (Expand): b___d2 -> a_ULE_b___d3 MUX_c$write_1__VAL_2
+inlined (Expand): NOT_a_ULE_b___d4 -> CAN_FIRE_RL_pick_F
+dropped (Expand): WILL_FIRE_value
+inlined (Expand): CAN_FIRE_RL_pick_T -> WILL_FIRE_RL_pick_T
+inlined (Expand): CAN_FIRE_RL_pick_F -> WILL_FIRE_RL_pick_F
+inlined (Expand): CAN_FIRE_value -> RDY_value
+inlined (Expand): WILL_FIRE_RL_pick_T -> c$EN
+inlined (Expand): WILL_FIRE_RL_pick_F -> c$D_IN c$EN
+dropped (FinalCleanup): MUX_c$write_1__SEL_1
+dropped (FinalCleanup): MUX_c$write_1__SEL_2
+dropped (FinalCleanup): MUX_c$write_1__VAL_1
+dropped (FinalCleanup): MUX_c$write_1__VAL_2
 
 -----

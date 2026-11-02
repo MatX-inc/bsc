@@ -291,7 +291,7 @@ created (Schedule): WILL_FIRE_put <- put
 
 -----
 === metadata (MetaSide sysMetaSide):
-ledger after finalcleanup: 420 sites, 19 contexts, 12 roots, 16 defs, 162 events
+ledger after finalcleanup: 420 sites, 19 contexts, 12 roots, 16 defs, 233 events
 inlined (Inline): __h670 -> y__h663
 inlined (Inline): __h668 -> __h657
 inlined (Inline): __h389 -> __h386
@@ -454,5 +454,76 @@ created (Schedule): WILL_FIRE_RL_r3 <- RL_r3
 created (Schedule): WILL_FIRE_RL_r4 <- RL_r4
 created (Schedule): WILL_FIRE_sum <- sum
 created (Schedule): WILL_FIRE_put <- put
+created (State): MUX_a$write_1__SEL_1 <- put
+created (State): MUX_a$write_1__SEL_2 <- RL_r1
+created (State): MUX_a$write_1__VAL_1 <- put
+created (State): MUX_a$write_1__VAL_2 <- RL_r1
+created (State): a$write_1 <- put RL_r1
+created (State): b$write_1 <- RL_r2
+created (State): c$write_1 <- RL_r4
+created (State): vs_0$write_1 <- RL_r3
+created (State): vs_1$write_1 <- RL_r3
+created (State): vs_2$write_1 <- RL_r3
+created (State): a$EN_write <- put RL_r1
+created (State): b$EN_write <- RL_r2
+created (State): c$EN_write <- RL_r4
+created (State): vs_0$EN_write <- RL_r3
+created (State): vs_1$EN_write <- RL_r3
+created (State): vs_2$EN_write <- RL_r3
+dropped (State): RL_r1
+dropped (State): RL_r2
+dropped (State): RL_r3
+dropped (State): RL_r4
+dropped (State): put
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): c$write_1 -> c$D_IN
+renamed (RenameIO): vs_0$write_1 -> vs_0$D_IN
+renamed (RenameIO): vs_1$write_1 -> vs_1$D_IN
+renamed (RenameIO): vs_2$write_1 -> vs_2$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): b$EN_write -> b$EN
+renamed (RenameIO): c$EN_write -> c$EN
+renamed (RenameIO): vs_0$EN_write -> vs_0$EN
+renamed (RenameIO): vs_1$EN_write -> vs_1$EN
+renamed (RenameIO): vs_2$EN_write -> vs_2$EN
+inlined (Expand): a___d1 -> a_PLUS_1___d16 a_PLUS_b___d3
+inlined (Expand): b___d2 -> b_BITS_7_TO_2___h669 b_BITS_1_TO_0___d20 b_EQ_7___d5 a_PLUS_b___d3
+inlined (Expand): vs_0___d7 -> vs_0_PLUS_vs_0___d8
+inlined (Expand): vs_0_PLUS_vs_0___d8 -> vs_0_PLUS_vs_0_PLUS_7___d9
+inlined (Expand): vs_1___d10 -> vs_1_0_PLUS_vs_1_0___d11
+inlined (Expand): vs_1_0_PLUS_vs_1_0___d11 -> vs_1_0_PLUS_vs_1_0_1_PLUS_7___d12
+inlined (Expand): vs_2___d13 -> vs_2_3_PLUS_vs_2_3___d14
+inlined (Expand): vs_2_3_PLUS_vs_2_3___d14 -> vs_2_3_PLUS_vs_2_3_4_PLUS_7___d15
+inlined (Expand): a_PLUS_1___d16 -> a_PLUS_1_6_BITS_6_TO_0___d17
+inlined (Expand): a_PLUS_1_6_BITS_6_TO_0___d17 -> a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0___d18
+inlined (Expand): a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0___d18 -> a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0_8_PLUS_b_BIT_ETC___d23
+inlined (Expand): b_BITS_1_TO_0___d20 -> INV_b_BITS_1_TO_0_0___d21
+inlined (Expand): INV_b_BITS_1_TO_0_0___d21 -> y__h663
+inlined (Expand): b_EQ_7___d5 -> NOT_b_EQ_7___d6
+inlined (Expand): NOT_b_EQ_7___d6 -> CAN_FIRE_RL_r2
+inlined (Expand): vs_0_PLUS_vs_0_PLUS_7___d9 -> vs_0$D_IN
+inlined (Expand): a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0_8_PLUS_b_BIT_ETC___d23 -> c$D_IN
+inlined (Expand): vs_1_0_PLUS_vs_1_0_1_PLUS_7___d12 -> vs_1$D_IN
+inlined (Expand): vs_2_3_PLUS_vs_2_3_4_PLUS_7___d15 -> vs_2$D_IN
+dropped (Expand): WILL_FIRE_sum
+inlined (Expand): b_BITS_7_TO_2___h669 -> y__h663
+inlined (Expand): a_PLUS_b_PLUS_a_PLUS_b___d4 -> sum MUX_a$write_1__VAL_2 b$D_IN
+inlined (Expand): CAN_FIRE_RL_r1 -> WILL_FIRE_RL_r1
+inlined (Expand): CAN_FIRE_RL_r2 -> WILL_FIRE_RL_r2
+inlined (Expand): CAN_FIRE_RL_r3 -> WILL_FIRE_RL_r3
+inlined (Expand): CAN_FIRE_RL_r4 -> WILL_FIRE_RL_r4
+inlined (Expand): CAN_FIRE_sum -> RDY_sum
+inlined (Expand): CAN_FIRE_put -> RDY_put
+inlined (Expand): WILL_FIRE_RL_r1 -> WILL_FIRE_RL_r2 MUX_a$write_1__SEL_2 a$D_IN a$EN
+inlined (Expand): WILL_FIRE_RL_r2 -> b$EN
+inlined (Expand): WILL_FIRE_RL_r3 -> vs_0$EN vs_1$EN vs_2$EN
+inlined (Expand): WILL_FIRE_RL_r4 -> c$EN
+inlined (Expand): WILL_FIRE_put -> MUX_a$write_1__SEL_1 a$D_IN a$EN
+created (VeriQuirks): a_PLUS_1__q1 <- c$D_IN
+dropped (FinalCleanup): MUX_a$write_1__SEL_1
+dropped (FinalCleanup): MUX_a$write_1__SEL_2
+dropped (FinalCleanup): MUX_a$write_1__VAL_1
+dropped (FinalCleanup): MUX_a$write_1__VAL_2
 
 -----
