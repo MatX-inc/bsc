@@ -129,9 +129,13 @@ data Binder = NoBinder | BoundTo !Id | MovedTo !Int
 
 -- A site row: the key and the facts recorded when the site was minted.
 -- sr_useSite says that the reference carried an occurrence position
--- different from the definition's own (an imported definition); it is
--- False for package-local references, which carry the definition's
--- position, and for every kind but SKDef.  sr_recursive says the
+-- different from the definition's own.  A reference carries its
+-- occurrence's position (IConv.iConvVar, the .bo reader) unless it is
+-- a recursion edge, which FixupDefs.markRecursiveDefs keeps at the
+-- definition's own position so that an iteration continues its loop's
+-- count (pushFrame), or one the compiler synthesizes at the
+-- definition's own position or at no position; it is False for those
+-- and for every kind but SKDef.  sr_recursive says the
 -- definition is a recursion point (a nontrivial component of its
 -- package's definition graph, or a self-reference); only such sites
 -- enter a frame's recursive-site map.
@@ -343,8 +347,9 @@ plainSite s = s .&. complement siteBits
 -- recursion point looks the definition up in the register's map.  It
 -- continues the iteration found there when the reference is the one
 -- that entered the loop, or when it is the definition's own reference
--- (the self-reference in its body, through which every iteration after
--- the first arrives): the new frame carries the entry site, its parent
+-- (a recursion edge, through which every iteration after the first
+-- arrives; FixupDefs.markRecursiveDefs keeps those at the definition's
+-- own position): the new frame carries the entry site, its parent
 -- is the predecessor's parent and its count one more; the frames
 -- between the two iterations belong to the previous iteration's body
 -- and stay on the cells they stamped.  A reference at a different use

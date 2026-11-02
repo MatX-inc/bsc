@@ -2,8 +2,8 @@ checking package dependencies
 compiling MetaMutual.bsv
 code generation for sysMetaMutual starts
 _82: def Prelude.toPrimAction [MetaMutual.bsv:20:7] u, field 3, alias _82 <- def Prelude.addRules [MetaMutual.bsv:19:4] u#1 <- def Prelude.bind_ [MetaMutual.bsv:19:4] u#1
-_145: prim PrimAdd, field 0 <- def MetaMutual.stepA [MetaMutual.bsv:3:19] r#2 <- def Prelude.toPrimAction [MetaMutual.bsv:20:7] u#1 <- def Prelude.addRules [MetaMutual.bsv:19:4] u#1 <- def Prelude.bind_ [MetaMutual.bsv:19:4] u#1
-_146: prim PrimAdd, field 0 <- def MetaMutual.stepB [MetaMutual.bsv:7:19] r#1 <- def MetaMutual.stepA [MetaMutual.bsv:3:19] r#1 <- def Prelude.toPrimAction [MetaMutual.bsv:20:7] u#1 <- def Prelude.addRules [MetaMutual.bsv:19:4] u#1 <- def Prelude.bind_ [MetaMutual.bsv:19:4] u#1
-_149: prim PrimUnpack, field 0, alias _147 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_145: prim PrimAdd, field 0 <- def MetaMutual.stepA [MetaMutual.bsv:20:14] ur#2 <- def Prelude.toPrimAction [MetaMutual.bsv:20:7] u#1 <- def Prelude.addRules [MetaMutual.bsv:19:4] u#1 <- def Prelude.bind_ [MetaMutual.bsv:19:4] u#1
+_146: prim PrimAdd, field 0 <- def MetaMutual.stepB [MetaMutual.bsv:7:19] r#1 <- def MetaMutual.stepA [MetaMutual.bsv:20:14] ur#1 <- def Prelude.toPrimAction [MetaMutual.bsv:20:7] u#1 <- def Prelude.addRules [MetaMutual.bsv:19:4] u#1 <- def Prelude.bind_ [MetaMutual.bsv:19:4] u#1
+_149: prim PrimUnpack, field 0, alias _147 <- def Prelude.bind_ [Prelude.bs] u#1 <- def Prelude.bind_ [Prelude.bs] u#1
 Verilog file created: sysMetaMutual.v
 All packages are up to date.
