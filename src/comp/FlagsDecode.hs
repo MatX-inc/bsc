@@ -574,6 +574,7 @@ traceflags = [
           "hack-eager-pack-unpack",
           "hack-gate-clock-inputs",
           "hack-gate-default-clock",
+          "hack-no-eq-word",
           "hack-no-itype-ftv-cache",
           "hack-strict-inst-tree",
           "outlaw-sv-kws-as-classic-ids",
