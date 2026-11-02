@@ -247,4 +247,52 @@ ledger_golden MetaLift sysMetaLift
 # a rule that never fires, dropped by iDropRules
 ledger_golden MetaDrop sysMetaDrop
 
+# The ledger of aConv and the ASyntax passes, one small package per
+# event shape of plan section 15, pinned the same way: the finalcleanup
+# block holds the events of state generation and the backend passes and
+# the resolution of each def of the final package.
+
+# a method-call port def: the write port of a register written by two
+# rules and a method is a mux whose selector, value and output defs
+# aState creates from the rules and the method, and whose output def
+# aRenameIO renames to the Verilog port name
+ledger_golden MetaPort sysMetaPort
+
+# a CAN_FIRE signal: the CAN_FIRE and WILL_FIRE defs of two conflicting
+# rules, created from the rules by the schedule stage, the CAN_FIRE
+# inlined into the WILL_FIRE by aExpand
+ledger_golden MetaFire sysMetaFire
+
+# a def inlined by aExpand: a chain of single-use defs inlined into the
+# write port that uses them
+ledger_golden MetaExpand sysMetaExpand
+
+# a renamed instance port: a FIFO's enqueue and dequeue port defs,
+# renamed from method notation to the Verilog port names
+ledger_golden MetaRename sysMetaRename
+
+# a def created by aOpt: under -opt-if-mux the condition of an if turned
+# into a mux becomes a def of its own, created from the def optimized
+ledger_golden MetaOpt sysMetaOpt -opt-if-mux
+
+# a merge in aConv where the source name won over the CSE name: a
+# function argument bound to a parameter and used twice keeps the
+# parameter's name through the ISyntax passes, is merged into the CSE
+# def of its expression and gives the CSE def its name back
+ledger_golden MetaNamed sysMetaNamed
+
+# a mutually exclusive pair: the scheduler adds a rule whose assumption
+# checks the exclusion at run time, created (Schedule) from the first
+# rule of the pair and dropped (State) once its CAN_FIRE and WILL_FIRE
+# stand for it; beside it a conflict-free pair, whose condition wires
+# are instances created (AddCFConditionWires) and dropped
+# (InlineWires), and a preempting pair, which adds no id
+ledger_golden MetaExclusive sysMetaExclusive
+
+# a starved rule, dropped (DumpSchedule) under -remove-starved-rules
+# after the schedule stage made its CAN_FIRE and WILL_FIRE; the write
+# port's mux and enable, built with an arm for its uses, are created
+# (State) from the rule that stays alone
+ledger_golden MetaStarved sysMetaStarved -remove-starved-rules
+
 }

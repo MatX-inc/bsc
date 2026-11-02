@@ -1,0 +1,289 @@
+=== metadata (MetaOpt sysMetaOpt):
+ledger after idroprules: 111 sites, 5 contexts, 5 roots, 10 defs, 57 events
+inlined (Inline): __h165 -> __h166
+inlined (Inline): __h159 -> __h160
+inlined (Inline): __h160 -> __h167
+inlined (Inline): __h166 -> __h167
+inlined (Inline): __h167 -> RL_step
+inlined (Inline): __h172 -> RL_step
+inlined (Inline): __h173 -> RL_step
+created (Transform): __i1 <- __h163
+created (Transform): __i2 <- __h155
+created (Transform): __i3 <- __h158
+merged (Transform): __h163 -> __i1
+merged (Transform): __h155 -> __i2
+merged (Transform): __h158 -> __i3
+renamed (Transform): __i2 -> __h155
+renamed (Transform): __i1 -> __h163
+renamed (Transform): __i3 -> __h158
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- RL_step
+created (Transform): __i7 <- RL_step
+created (Transform): __i8 <- RL_step
+created (Transform): __i9 <- RL_step
+created (Transform): __i10 <- RL_step
+created (Transform): __i11 <- RL_step
+inlined (Transform): __i9 -> __i11
+inlined (Transform): __i10 -> __i11
+inlined (Transform): __i11 -> RL_step
+dropped (Transform): __i4
+dropped (Transform): __i7
+dropped (Transform): __i5
+dropped (Transform): __i8
+dropped (Transform): __i6
+created (Transform): __j1 <- __h163
+created (Transform): __j2 <- __h155
+created (Transform): __j3 <- __h158
+merged (Transform): __h163 -> __j1
+merged (Transform): __h155 -> __j2
+merged (Transform): __h158 -> __j3
+renamed (Transform): __j2 -> __h155
+renamed (Transform): __j1 -> __h163
+renamed (Transform): __j3 -> __h158
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- RL_step
+created (Transform): __j7 <- RL_step
+created (Transform): __j8 <- RL_step
+created (Transform): __j9 <- RL_step
+created (Transform): __j10 <- RL_step
+created (Transform): __j11 <- RL_step
+inlined (Transform): __j9 -> __j11
+inlined (Transform): __j10 -> __j11
+inlined (Transform): __j11 -> RL_step
+dropped (Transform): __j4
+dropped (Transform): __j7
+dropped (Transform): __j5
+dropped (Transform): __j8
+dropped (Transform): __j6
+resolved: 1 of 4 defs and rules stand for other ids
+  RL_step <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+
+-----
+=== metadata (MetaOpt sysMetaOpt):
+ledger after dropundet: 111 sites, 5 contexts, 5 roots, 10 defs, 77 events
+inlined (Inline): __h165 -> __h166
+inlined (Inline): __h159 -> __h160
+inlined (Inline): __h160 -> __h167
+inlined (Inline): __h166 -> __h167
+inlined (Inline): __h167 -> RL_step
+inlined (Inline): __h172 -> RL_step
+inlined (Inline): __h173 -> RL_step
+created (Transform): __i1 <- __h163
+created (Transform): __i2 <- __h155
+created (Transform): __i3 <- __h158
+merged (Transform): __h163 -> __i1
+merged (Transform): __h155 -> __i2
+merged (Transform): __h158 -> __i3
+renamed (Transform): __i2 -> __h155
+renamed (Transform): __i1 -> __h163
+renamed (Transform): __i3 -> __h158
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- RL_step
+created (Transform): __i7 <- RL_step
+created (Transform): __i8 <- RL_step
+created (Transform): __i9 <- RL_step
+created (Transform): __i10 <- RL_step
+created (Transform): __i11 <- RL_step
+inlined (Transform): __i9 -> __i11
+inlined (Transform): __i10 -> __i11
+inlined (Transform): __i11 -> RL_step
+dropped (Transform): __i4
+dropped (Transform): __i7
+dropped (Transform): __i5
+dropped (Transform): __i8
+dropped (Transform): __i6
+created (Transform): __j1 <- __h163
+created (Transform): __j2 <- __h155
+created (Transform): __j3 <- __h158
+merged (Transform): __h163 -> __j1
+merged (Transform): __h155 -> __j2
+merged (Transform): __h158 -> __j3
+renamed (Transform): __j2 -> __h155
+renamed (Transform): __j1 -> __h163
+renamed (Transform): __j3 -> __h158
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- RL_step
+created (Transform): __j7 <- RL_step
+created (Transform): __j8 <- RL_step
+created (Transform): __j9 <- RL_step
+created (Transform): __j10 <- RL_step
+created (Transform): __j11 <- RL_step
+inlined (Transform): __j9 -> __j11
+inlined (Transform): __j10 -> __j11
+inlined (Transform): __j11 -> RL_step
+dropped (Transform): __j4
+dropped (Transform): __j7
+dropped (Transform): __j5
+dropped (Transform): __j8
+dropped (Transform): __j6
+created (Conv): b___d1 <- __h155
+merged (Conv): __h155 -> b___d1
+created (Conv): c___d2 <- __h158
+merged (Conv): __h158 -> c___d2
+created (Conv): b_ULE_c___d3 <- RL_step
+created (Conv): NOT_b_ULE_c___d4 <- RL_step
+created (Conv): d___d5 <- __h163
+merged (Conv): __h163 -> d___d5
+created (Conv): d_EQ_3___d6 <- RL_step
+created (Conv): NOT_d_EQ_3___d7 <- RL_step
+created (Conv): NOT_b_ULE_c_AND_NOT_d_EQ_3___d8 <- RL_step
+created (Conv): b_PLUS_d___d9 <- RL_step
+created (Conv): c_MINUS_d___d10 <- RL_step
+created (Conv): IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11 <- RL_step
+created (Schedule): __duses1 <- IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+created (Schedule): __duses2 <- IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+created (Schedule): __duses3 <- IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+created (Schedule): __duses4 <- IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+resolved: 18 of 18 defs and rules stand for other ids
+  WILL_FIRE_RL_step <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  CAN_FIRE_RL_step <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  __duses4 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  __duses3 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  __duses2 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  __duses1 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  d___d5 <- __h163
+  c___d2 <- __h158
+  b___d1 <- __h155
+  IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  d_EQ_3___d6 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  NOT_b_ULE_c_AND_NOT_d_EQ_3___d8 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  NOT_b_ULE_c___d4 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  NOT_d_EQ_3___d7 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  b_ULE_c___d3 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  c_MINUS_d___d10 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  b_PLUS_d___d9 <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  RL_step <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+
+-----
+=== metadata (MetaOpt sysMetaOpt):
+ledger after finalcleanup: 111 sites, 5 contexts, 5 roots, 10 defs, 113 events
+inlined (Inline): __h165 -> __h166
+inlined (Inline): __h159 -> __h160
+inlined (Inline): __h160 -> __h167
+inlined (Inline): __h166 -> __h167
+inlined (Inline): __h167 -> RL_step
+inlined (Inline): __h172 -> RL_step
+inlined (Inline): __h173 -> RL_step
+created (Transform): __i1 <- __h163
+created (Transform): __i2 <- __h155
+created (Transform): __i3 <- __h158
+merged (Transform): __h163 -> __i1
+merged (Transform): __h155 -> __i2
+merged (Transform): __h158 -> __i3
+renamed (Transform): __i2 -> __h155
+renamed (Transform): __i1 -> __h163
+renamed (Transform): __i3 -> __h158
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- RL_step
+created (Transform): __i7 <- RL_step
+created (Transform): __i8 <- RL_step
+created (Transform): __i9 <- RL_step
+created (Transform): __i10 <- RL_step
+created (Transform): __i11 <- RL_step
+inlined (Transform): __i9 -> __i11
+inlined (Transform): __i10 -> __i11
+inlined (Transform): __i11 -> RL_step
+dropped (Transform): __i4
+dropped (Transform): __i7
+dropped (Transform): __i5
+dropped (Transform): __i8
+dropped (Transform): __i6
+created (Transform): __j1 <- __h163
+created (Transform): __j2 <- __h155
+created (Transform): __j3 <- __h158
+merged (Transform): __h163 -> __j1
+merged (Transform): __h155 -> __j2
+merged (Transform): __h158 -> __j3
+renamed (Transform): __j2 -> __h155
+renamed (Transform): __j1 -> __h163
+renamed (Transform): __j3 -> __h158
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- RL_step
+created (Transform): __j7 <- RL_step
+created (Transform): __j8 <- RL_step
+created (Transform): __j9 <- RL_step
+created (Transform): __j10 <- RL_step
+created (Transform): __j11 <- RL_step
+inlined (Transform): __j9 -> __j11
+inlined (Transform): __j10 -> __j11
+inlined (Transform): __j11 -> RL_step
+dropped (Transform): __j4
+dropped (Transform): __j7
+dropped (Transform): __j5
+dropped (Transform): __j8
+dropped (Transform): __j6
+created (Conv): b___d1 <- __h155
+merged (Conv): __h155 -> b___d1
+created (Conv): c___d2 <- __h158
+merged (Conv): __h158 -> c___d2
+created (Conv): b_ULE_c___d3 <- RL_step
+created (Conv): NOT_b_ULE_c___d4 <- RL_step
+created (Conv): d___d5 <- __h163
+merged (Conv): __h163 -> d___d5
+created (Conv): d_EQ_3___d6 <- RL_step
+created (Conv): NOT_d_EQ_3___d7 <- RL_step
+created (Conv): NOT_b_ULE_c_AND_NOT_d_EQ_3___d8 <- RL_step
+created (Conv): b_PLUS_d___d9 <- RL_step
+created (Conv): c_MINUS_d___d10 <- RL_step
+created (Conv): IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11 <- RL_step
+created (Schedule): __duses1 <- IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+created (Schedule): __duses2 <- IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+created (Schedule): __duses3 <- IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+created (Schedule): __duses4 <- IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (State): a$write_1 <- RL_step
+created (State): a$EN_write <- RL_step
+created (State): b$write_1
+created (State): b$EN_write
+created (State): c$write_1
+created (State): c$EN_write
+created (State): d$write_1
+created (State): d$EN_write
+dropped (State): RL_step
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): b$EN_write -> b$EN
+renamed (RenameIO): c$write_1 -> c$D_IN
+renamed (RenameIO): c$EN_write -> c$EN
+renamed (RenameIO): d$write_1 -> d$D_IN
+renamed (RenameIO): d$EN_write -> d$EN
+dropped (DropDefs): __duses4
+dropped (DropDefs): __duses3
+dropped (DropDefs): __duses2
+dropped (DropDefs): __duses1
+inlined (Expand): d___d5 -> d_EQ_3___d6 c_MINUS_d___d10 b_PLUS_d___d9
+inlined (Expand): d_EQ_3___d6 -> NOT_d_EQ_3___d7
+inlined (Expand): b___d1 -> b_ULE_c___d3 b_PLUS_d___d9
+inlined (Expand): c___d2 -> b_ULE_c___d3 c_MINUS_d___d10
+inlined (Expand): b_ULE_c___d3 -> NOT_b_ULE_c___d4
+inlined (Expand): NOT_b_ULE_c___d4 -> NOT_b_ULE_c_AND_NOT_d_EQ_3___d8
+inlined (Expand): NOT_d_EQ_3___d7 -> NOT_b_ULE_c_AND_NOT_d_EQ_3___d8
+inlined (Expand): b_PLUS_d___d9 -> IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+inlined (Expand): c_MINUS_d___d10 -> IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+inlined (Expand): NOT_b_ULE_c_AND_NOT_d_EQ_3___d8 -> IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+created (Opt): _dm1 <- IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11
+inlined (Expand): IF_NOT_b_ULE_c_AND_NOT_d_EQ_3_THEN_b_PLUS_d_EL_ETC___d11 -> a$D_IN
+inlined (Expand): CAN_FIRE_RL_step -> WILL_FIRE_RL_step
+inlined (Expand): WILL_FIRE_RL_step -> a$EN
+inlined (Expand): _dm1 -> a$D_IN
+resolved: 8 of 8 defs and rules stand for other ids
+  a$D_IN <- RL_step __h158 __h155 __h163 __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  a$EN <- RL_step __h173 __h172 __h167 __h166 __h160 __h159 __h165
+  b$D_IN <- b$write_1
+  b$EN <- b$EN_write
+  c$D_IN <- c$write_1
+  c$EN <- c$EN_write
+  d$D_IN <- d$write_1
+  d$EN <- d$EN_write
+
+-----

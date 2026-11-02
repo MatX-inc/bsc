@@ -1,0 +1,284 @@
+=== metadata (MetaFire sysMetaFire):
+ledger after idroprules: 160 sites, 7 contexts, 6 roots, 7 defs, 54 events
+inlined (Inline): __h144 -> __h138
+inlined (Inline): __h124 -> __h118
+inlined (Inline): __h118 -> RL_up
+inlined (Inline): __h138 -> RL_down
+created (Transform): __i1 <- __h142
+created (Transform): __i2 <- __h122
+created (Transform): __i3 <- __h135
+merged (Transform): __h142 -> __i1
+merged (Transform): __h122 -> __i2
+merged (Transform): __h135 -> __i3
+renamed (Transform): __i2 -> __h122
+renamed (Transform): __i1 -> __h142
+renamed (Transform): __i3 -> __h135
+created (Transform): __i4 <- RL_up
+created (Transform): __i5 <- RL_up
+created (Transform): __i6 <- RL_up
+created (Transform): __i7 <- RL_down
+created (Transform): __i8 <- RL_down
+created (Transform): __i9 <- RL_down
+created (Transform): __i10 <- RL_count
+created (Transform): __i11 <- RL_count
+inlined (Transform): __i6 -> RL_up
+inlined (Transform): __i9 -> RL_down
+inlined (Transform): __i10 -> RL_count
+inlined (Transform): __i11 -> RL_count
+dropped (Transform): __i7
+dropped (Transform): __i8
+dropped (Transform): __i5
+dropped (Transform): __i4
+created (Transform): __j1 <- __h142
+created (Transform): __j2 <- __h122
+created (Transform): __j3 <- __h135
+merged (Transform): __h142 -> __j1
+merged (Transform): __h122 -> __j2
+merged (Transform): __h135 -> __j3
+renamed (Transform): __j2 -> __h122
+renamed (Transform): __j1 -> __h142
+renamed (Transform): __j3 -> __h135
+created (Transform): __j4 <- RL_up
+created (Transform): __j5 <- RL_up
+created (Transform): __j6 <- RL_up
+created (Transform): __j7 <- RL_down
+created (Transform): __j8 <- RL_down
+created (Transform): __j9 <- RL_down
+created (Transform): __j10 <- RL_count
+created (Transform): __j11 <- RL_count
+inlined (Transform): __j6 -> RL_up
+inlined (Transform): __j9 -> RL_down
+inlined (Transform): __j10 -> RL_count
+inlined (Transform): __j11 -> RL_count
+dropped (Transform): __j7
+dropped (Transform): __j8
+dropped (Transform): __j5
+dropped (Transform): __j4
+resolved: 2 of 6 defs and rules stand for other ids
+  RL_up <- RL_up __h118 __h124
+  RL_down <- RL_down __h138 __h144
+
+-----
+=== metadata (MetaFire sysMetaFire):
+ledger after dropundet: 160 sites, 7 contexts, 6 roots, 7 defs, 74 events
+inlined (Inline): __h144 -> __h138
+inlined (Inline): __h124 -> __h118
+inlined (Inline): __h118 -> RL_up
+inlined (Inline): __h138 -> RL_down
+created (Transform): __i1 <- __h142
+created (Transform): __i2 <- __h122
+created (Transform): __i3 <- __h135
+merged (Transform): __h142 -> __i1
+merged (Transform): __h122 -> __i2
+merged (Transform): __h135 -> __i3
+renamed (Transform): __i2 -> __h122
+renamed (Transform): __i1 -> __h142
+renamed (Transform): __i3 -> __h135
+created (Transform): __i4 <- RL_up
+created (Transform): __i5 <- RL_up
+created (Transform): __i6 <- RL_up
+created (Transform): __i7 <- RL_down
+created (Transform): __i8 <- RL_down
+created (Transform): __i9 <- RL_down
+created (Transform): __i10 <- RL_count
+created (Transform): __i11 <- RL_count
+inlined (Transform): __i6 -> RL_up
+inlined (Transform): __i9 -> RL_down
+inlined (Transform): __i10 -> RL_count
+inlined (Transform): __i11 -> RL_count
+dropped (Transform): __i7
+dropped (Transform): __i8
+dropped (Transform): __i5
+dropped (Transform): __i4
+created (Transform): __j1 <- __h142
+created (Transform): __j2 <- __h122
+created (Transform): __j3 <- __h135
+merged (Transform): __h142 -> __j1
+merged (Transform): __h122 -> __j2
+merged (Transform): __h135 -> __j3
+renamed (Transform): __j2 -> __h122
+renamed (Transform): __j1 -> __h142
+renamed (Transform): __j3 -> __h135
+created (Transform): __j4 <- RL_up
+created (Transform): __j5 <- RL_up
+created (Transform): __j6 <- RL_up
+created (Transform): __j7 <- RL_down
+created (Transform): __j8 <- RL_down
+created (Transform): __j9 <- RL_down
+created (Transform): __j10 <- RL_count
+created (Transform): __j11 <- RL_count
+inlined (Transform): __j6 -> RL_up
+inlined (Transform): __j9 -> RL_down
+inlined (Transform): __j10 -> RL_count
+inlined (Transform): __j11 -> RL_count
+dropped (Transform): __j7
+dropped (Transform): __j8
+dropped (Transform): __j5
+dropped (Transform): __j4
+created (Conv): b___d1 <- __h122
+merged (Conv): __h122 -> b___d1
+created (Conv): b_EQ_0___d2 <- RL_up
+created (Conv): NOT_b_EQ_0___d3 <- RL_up
+created (Conv): a___d4 <- __h135
+merged (Conv): __h135 -> a___d4
+created (Conv): a_PLUS_b___d5 <- RL_up
+created (Conv): c___d6 <- __h142
+merged (Conv): __h142 -> c___d6
+created (Conv): c_ULE_5___d7 <- RL_down
+created (Conv): NOT_c_ULE_5___d8 <- RL_down
+created (Conv): a_MINUS_c___d9 <- RL_down
+created (Conv): b_PLUS_1___d10 <- RL_count
+created (Conv): c_PLUS_2___d11 <- RL_count
+created (Schedule): CAN_FIRE_RL_up <- RL_up
+created (Schedule): CAN_FIRE_RL_down <- RL_down
+created (Schedule): CAN_FIRE_RL_count <- RL_count
+created (Schedule): WILL_FIRE_RL_up <- RL_up
+created (Schedule): WILL_FIRE_RL_down <- RL_down
+created (Schedule): WILL_FIRE_RL_count <- RL_count
+resolved: 19 of 20 defs and rules stand for other ids
+  WILL_FIRE_RL_count <- RL_count
+  WILL_FIRE_RL_down <- RL_down __h138 __h144
+  WILL_FIRE_RL_up <- RL_up __h118 __h124
+  CAN_FIRE_RL_count <- RL_count
+  CAN_FIRE_RL_down <- RL_down __h138 __h144
+  CAN_FIRE_RL_up <- RL_up __h118 __h124
+  c___d6 <- __h142
+  b___d1 <- __h122
+  a___d4 <- __h135
+  b_EQ_0___d2 <- RL_up __h118 __h124
+  NOT_b_EQ_0___d3 <- RL_up __h118 __h124
+  NOT_c_ULE_5___d8 <- RL_down __h138 __h144
+  c_ULE_5___d7 <- RL_down __h138 __h144
+  a_MINUS_c___d9 <- RL_down __h138 __h144
+  a_PLUS_b___d5 <- RL_up __h118 __h124
+  b_PLUS_1___d10 <- RL_count
+  c_PLUS_2___d11 <- RL_count
+  RL_up <- RL_up __h118 __h124
+  RL_down <- RL_down __h138 __h144
+
+-----
+=== metadata (MetaFire sysMetaFire):
+ledger after finalcleanup: 160 sites, 7 contexts, 6 roots, 7 defs, 111 events
+inlined (Inline): __h144 -> __h138
+inlined (Inline): __h124 -> __h118
+inlined (Inline): __h118 -> RL_up
+inlined (Inline): __h138 -> RL_down
+created (Transform): __i1 <- __h142
+created (Transform): __i2 <- __h122
+created (Transform): __i3 <- __h135
+merged (Transform): __h142 -> __i1
+merged (Transform): __h122 -> __i2
+merged (Transform): __h135 -> __i3
+renamed (Transform): __i2 -> __h122
+renamed (Transform): __i1 -> __h142
+renamed (Transform): __i3 -> __h135
+created (Transform): __i4 <- RL_up
+created (Transform): __i5 <- RL_up
+created (Transform): __i6 <- RL_up
+created (Transform): __i7 <- RL_down
+created (Transform): __i8 <- RL_down
+created (Transform): __i9 <- RL_down
+created (Transform): __i10 <- RL_count
+created (Transform): __i11 <- RL_count
+inlined (Transform): __i6 -> RL_up
+inlined (Transform): __i9 -> RL_down
+inlined (Transform): __i10 -> RL_count
+inlined (Transform): __i11 -> RL_count
+dropped (Transform): __i7
+dropped (Transform): __i8
+dropped (Transform): __i5
+dropped (Transform): __i4
+created (Transform): __j1 <- __h142
+created (Transform): __j2 <- __h122
+created (Transform): __j3 <- __h135
+merged (Transform): __h142 -> __j1
+merged (Transform): __h122 -> __j2
+merged (Transform): __h135 -> __j3
+renamed (Transform): __j2 -> __h122
+renamed (Transform): __j1 -> __h142
+renamed (Transform): __j3 -> __h135
+created (Transform): __j4 <- RL_up
+created (Transform): __j5 <- RL_up
+created (Transform): __j6 <- RL_up
+created (Transform): __j7 <- RL_down
+created (Transform): __j8 <- RL_down
+created (Transform): __j9 <- RL_down
+created (Transform): __j10 <- RL_count
+created (Transform): __j11 <- RL_count
+inlined (Transform): __j6 -> RL_up
+inlined (Transform): __j9 -> RL_down
+inlined (Transform): __j10 -> RL_count
+inlined (Transform): __j11 -> RL_count
+dropped (Transform): __j7
+dropped (Transform): __j8
+dropped (Transform): __j5
+dropped (Transform): __j4
+created (Conv): b___d1 <- __h122
+merged (Conv): __h122 -> b___d1
+created (Conv): b_EQ_0___d2 <- RL_up
+created (Conv): NOT_b_EQ_0___d3 <- RL_up
+created (Conv): a___d4 <- __h135
+merged (Conv): __h135 -> a___d4
+created (Conv): a_PLUS_b___d5 <- RL_up
+created (Conv): c___d6 <- __h142
+merged (Conv): __h142 -> c___d6
+created (Conv): c_ULE_5___d7 <- RL_down
+created (Conv): NOT_c_ULE_5___d8 <- RL_down
+created (Conv): a_MINUS_c___d9 <- RL_down
+created (Conv): b_PLUS_1___d10 <- RL_count
+created (Conv): c_PLUS_2___d11 <- RL_count
+created (Schedule): CAN_FIRE_RL_up <- RL_up
+created (Schedule): CAN_FIRE_RL_down <- RL_down
+created (Schedule): CAN_FIRE_RL_count <- RL_count
+created (Schedule): WILL_FIRE_RL_up <- RL_up
+created (Schedule): WILL_FIRE_RL_down <- RL_down
+created (Schedule): WILL_FIRE_RL_count <- RL_count
+created (State): MUX_a$write_1__SEL_1 <- RL_up
+created (State): MUX_a$write_1__SEL_2 <- RL_down
+created (State): MUX_a$write_1__VAL_1 <- RL_up
+created (State): MUX_a$write_1__VAL_2 <- RL_down
+created (State): a$write_1 <- RL_up RL_down
+created (State): b$write_1 <- RL_count
+created (State): c$write_1 <- RL_count
+created (State): a$EN_write <- RL_up RL_down
+created (State): b$EN_write <- RL_count
+created (State): c$EN_write <- RL_count
+dropped (State): RL_up
+dropped (State): RL_down
+dropped (State): RL_count
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): c$write_1 -> c$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): b$EN_write -> b$EN
+renamed (RenameIO): c$EN_write -> c$EN
+inlined (Expand): c___d6 -> c_ULE_5___d7 a_MINUS_c___d9 c_PLUS_2___d11
+inlined (Expand): c_ULE_5___d7 -> NOT_c_ULE_5___d8
+inlined (Expand): b___d1 -> b_EQ_0___d2 a_PLUS_b___d5 b_PLUS_1___d10
+inlined (Expand): b_EQ_0___d2 -> NOT_b_EQ_0___d3
+inlined (Expand): a___d4 -> a_MINUS_c___d9 a_PLUS_b___d5
+inlined (Expand): NOT_b_EQ_0___d3 -> CAN_FIRE_RL_up
+inlined (Expand): a_PLUS_b___d5 -> MUX_a$write_1__VAL_1
+inlined (Expand): NOT_c_ULE_5___d8 -> CAN_FIRE_RL_down
+inlined (Expand): a_MINUS_c___d9 -> MUX_a$write_1__VAL_2
+inlined (Expand): b_PLUS_1___d10 -> b$D_IN
+inlined (Expand): c_PLUS_2___d11 -> c$D_IN
+inlined (Expand): CAN_FIRE_RL_up -> WILL_FIRE_RL_up
+inlined (Expand): CAN_FIRE_RL_count -> WILL_FIRE_RL_count
+inlined (Expand): WILL_FIRE_RL_count -> c$EN b$EN
+inlined (Expand): WILL_FIRE_RL_up -> WILL_FIRE_RL_down MUX_a$write_1__SEL_2 a$D_IN a$EN
+inlined (Expand): WILL_FIRE_RL_down -> a$EN
+dropped (FinalCleanup): MUX_a$write_1__SEL_1
+dropped (FinalCleanup): MUX_a$write_1__SEL_2
+resolved: 9 of 9 defs and rules stand for other ids
+  CAN_FIRE_RL_down <- RL_down __h142 __h138 __h144
+  MUX_a$write_1__VAL_1 <- RL_up __h135 __h122 __h118 __h124
+  MUX_a$write_1__VAL_2 <- RL_down __h135 __h142 __h138 __h144
+  a$D_IN <- RL_up RL_down __h122 __h138 __h118 __h124 __h144
+  b$D_IN <- RL_count __h122
+  c$D_IN <- RL_count __h142
+  a$EN <- RL_up RL_down __h122 __h138 __h118 __h124 __h144
+  b$EN <- RL_count
+  c$EN <- RL_count
+
+-----

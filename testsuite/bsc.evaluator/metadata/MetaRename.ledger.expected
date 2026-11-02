@@ -1,0 +1,193 @@
+=== metadata (MetaRename sysMetaRename):
+ledger after idroprules: 223 sites, 16 contexts, 5 roots, 5 defs, 34 events
+inlined (Inline): __h196 -> RL_fill
+inlined (Inline): __h260 -> RL_drain
+inlined (Inline): __h273 -> RL_drain
+inlined (Inline): __h278 -> RL_drain
+created (Transform): __i1 <- __h221
+merged (Transform): __h221 -> __i1
+renamed (Transform): __i1 -> __h221
+created (Transform): __i2 <- RL_fill
+created (Transform): __i3 <- RL_fill
+created (Transform): __i4 <- RL_drain
+created (Transform): __i5 <- RL_drain
+created (Transform): __i6 <- RL_drain
+created (Transform): __i7 <- RL_drain
+inlined (Transform): __i5 -> __i7
+inlined (Transform): __i6 -> __i7
+inlined (Transform): __i2 -> RL_fill
+inlined (Transform): __i3 -> RL_fill
+inlined (Transform): __i4 -> RL_drain
+inlined (Transform): __i7 -> RL_drain
+created (Transform): __j1 <- __h221
+merged (Transform): __h221 -> __j1
+renamed (Transform): __j1 -> __h221
+created (Transform): __j2 <- RL_fill
+created (Transform): __j3 <- RL_fill
+created (Transform): __j4 <- RL_drain
+created (Transform): __j5 <- RL_drain
+created (Transform): __j6 <- RL_drain
+created (Transform): __j7 <- RL_drain
+inlined (Transform): __j5 -> __j7
+inlined (Transform): __j6 -> __j7
+inlined (Transform): __j2 -> RL_fill
+inlined (Transform): __j3 -> RL_fill
+inlined (Transform): __j4 -> RL_drain
+inlined (Transform): __j7 -> RL_drain
+resolved: 2 of 3 defs and rules stand for other ids
+  RL_fill <- RL_fill __h196
+  RL_drain <- RL_drain __h278 __h273 __h260
+
+-----
+=== metadata (MetaRename sysMetaRename):
+ledger after dropundet: 223 sites, 16 contexts, 5 roots, 5 defs, 46 events
+inlined (Inline): __h196 -> RL_fill
+inlined (Inline): __h260 -> RL_drain
+inlined (Inline): __h273 -> RL_drain
+inlined (Inline): __h278 -> RL_drain
+created (Transform): __i1 <- __h221
+merged (Transform): __h221 -> __i1
+renamed (Transform): __i1 -> __h221
+created (Transform): __i2 <- RL_fill
+created (Transform): __i3 <- RL_fill
+created (Transform): __i4 <- RL_drain
+created (Transform): __i5 <- RL_drain
+created (Transform): __i6 <- RL_drain
+created (Transform): __i7 <- RL_drain
+inlined (Transform): __i5 -> __i7
+inlined (Transform): __i6 -> __i7
+inlined (Transform): __i2 -> RL_fill
+inlined (Transform): __i3 -> RL_fill
+inlined (Transform): __i4 -> RL_drain
+inlined (Transform): __i7 -> RL_drain
+created (Transform): __j1 <- __h221
+merged (Transform): __h221 -> __j1
+renamed (Transform): __j1 -> __h221
+created (Transform): __j2 <- RL_fill
+created (Transform): __j3 <- RL_fill
+created (Transform): __j4 <- RL_drain
+created (Transform): __j5 <- RL_drain
+created (Transform): __j6 <- RL_drain
+created (Transform): __j7 <- RL_drain
+inlined (Transform): __j5 -> __j7
+inlined (Transform): __j6 -> __j7
+inlined (Transform): __j2 -> RL_fill
+inlined (Transform): __j3 -> RL_fill
+inlined (Transform): __j4 -> RL_drain
+inlined (Transform): __j7 -> RL_drain
+created (Conv): q_i_notFull____d1 <- RL_fill
+created (Conv): a___d2 <- __h221
+merged (Conv): __h221 -> a___d2
+created (Conv): a_PLUS_1___d3 <- RL_fill
+created (Conv): q_i_notEmpty____d4 <- RL_drain
+created (Conv): b___d5 <- RL_drain
+created (Conv): q_first____d6 <- RL_drain
+created (Conv): b_PLUS_q_first___d7 <- RL_drain
+created (Schedule): CAN_FIRE_RL_fill <- RL_fill
+created (Schedule): CAN_FIRE_RL_drain <- RL_drain
+created (Schedule): WILL_FIRE_RL_fill <- RL_fill
+created (Schedule): WILL_FIRE_RL_drain <- RL_drain
+resolved: 13 of 13 defs and rules stand for other ids
+  WILL_FIRE_RL_drain <- RL_drain __h278 __h273 __h260
+  WILL_FIRE_RL_fill <- RL_fill __h196
+  CAN_FIRE_RL_drain <- RL_drain __h278 __h273 __h260
+  CAN_FIRE_RL_fill <- RL_fill __h196
+  b___d5 <- RL_drain __h278 __h273 __h260
+  a___d2 <- __h221
+  q_first____d6 <- RL_drain __h278 __h273 __h260
+  q_i_notEmpty____d4 <- RL_drain __h278 __h273 __h260
+  q_i_notFull____d1 <- RL_fill __h196
+  a_PLUS_1___d3 <- RL_fill __h196
+  b_PLUS_q_first___d7 <- RL_drain __h278 __h273 __h260
+  RL_fill <- RL_fill __h196
+  RL_drain <- RL_drain __h278 __h273 __h260
+
+-----
+=== metadata (MetaRename sysMetaRename):
+ledger after finalcleanup: 223 sites, 16 contexts, 5 roots, 5 defs, 75 events
+inlined (Inline): __h196 -> RL_fill
+inlined (Inline): __h260 -> RL_drain
+inlined (Inline): __h273 -> RL_drain
+inlined (Inline): __h278 -> RL_drain
+created (Transform): __i1 <- __h221
+merged (Transform): __h221 -> __i1
+renamed (Transform): __i1 -> __h221
+created (Transform): __i2 <- RL_fill
+created (Transform): __i3 <- RL_fill
+created (Transform): __i4 <- RL_drain
+created (Transform): __i5 <- RL_drain
+created (Transform): __i6 <- RL_drain
+created (Transform): __i7 <- RL_drain
+inlined (Transform): __i5 -> __i7
+inlined (Transform): __i6 -> __i7
+inlined (Transform): __i2 -> RL_fill
+inlined (Transform): __i3 -> RL_fill
+inlined (Transform): __i4 -> RL_drain
+inlined (Transform): __i7 -> RL_drain
+created (Transform): __j1 <- __h221
+merged (Transform): __h221 -> __j1
+renamed (Transform): __j1 -> __h221
+created (Transform): __j2 <- RL_fill
+created (Transform): __j3 <- RL_fill
+created (Transform): __j4 <- RL_drain
+created (Transform): __j5 <- RL_drain
+created (Transform): __j6 <- RL_drain
+created (Transform): __j7 <- RL_drain
+inlined (Transform): __j5 -> __j7
+inlined (Transform): __j6 -> __j7
+inlined (Transform): __j2 -> RL_fill
+inlined (Transform): __j3 -> RL_fill
+inlined (Transform): __j4 -> RL_drain
+inlined (Transform): __j7 -> RL_drain
+created (Conv): q_i_notFull____d1 <- RL_fill
+created (Conv): a___d2 <- __h221
+merged (Conv): __h221 -> a___d2
+created (Conv): a_PLUS_1___d3 <- RL_fill
+created (Conv): q_i_notEmpty____d4 <- RL_drain
+created (Conv): b___d5 <- RL_drain
+created (Conv): q_first____d6 <- RL_drain
+created (Conv): b_PLUS_q_first___d7 <- RL_drain
+created (Schedule): CAN_FIRE_RL_fill <- RL_fill
+created (Schedule): CAN_FIRE_RL_drain <- RL_drain
+created (Schedule): WILL_FIRE_RL_fill <- RL_fill
+created (Schedule): WILL_FIRE_RL_drain <- RL_drain
+created (State): a$write_1 <- RL_fill
+created (State): b$write_1 <- RL_drain
+created (State): q$enq_1 <- RL_fill
+created (State): a$EN_write <- RL_fill
+created (State): b$EN_write <- RL_drain
+created (State): q$EN_deq <- RL_drain
+created (State): q$EN_enq <- RL_fill
+created (State): q$EN_clear
+dropped (State): RL_fill
+dropped (State): RL_drain
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): q$enq_1 -> q$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): b$EN_write -> b$EN
+renamed (RenameIO): q$EN_deq -> q$DEQ
+renamed (RenameIO): q$EN_enq -> q$ENQ
+renamed (RenameIO): q$EN_clear -> q$CLR
+inlined (Expand): b___d5 -> b_PLUS_q_first___d7
+inlined (Expand): a___d2 -> a_PLUS_1___d3 q$D_IN
+inlined (Expand): q_first____d6 -> b_PLUS_q_first___d7
+inlined (Expand): q_i_notFull____d1 -> CAN_FIRE_RL_fill
+inlined (Expand): a_PLUS_1___d3 -> a$D_IN
+inlined (Expand): q_i_notEmpty____d4 -> CAN_FIRE_RL_drain
+inlined (Expand): b_PLUS_q_first___d7 -> b$D_IN
+inlined (Expand): CAN_FIRE_RL_fill -> WILL_FIRE_RL_fill
+inlined (Expand): CAN_FIRE_RL_drain -> WILL_FIRE_RL_drain
+inlined (Expand): WILL_FIRE_RL_fill -> a$EN q$ENQ
+inlined (Expand): WILL_FIRE_RL_drain -> b$EN q$DEQ
+resolved: 8 of 8 defs and rules stand for other ids
+  a$D_IN <- RL_fill __h221 __h196
+  b$D_IN <- RL_drain __h278 __h273 __h260
+  q$D_IN <- RL_fill __h221 __h196
+  a$EN <- RL_fill __h196
+  b$EN <- RL_drain __h278 __h273 __h260
+  q$DEQ <- RL_drain __h278 __h273 __h260
+  q$ENQ <- RL_fill __h196
+  q$CLR <- q$EN_clear
+
+-----
