@@ -1,0 +1,35 @@
+package ModuleVerilogSchedDefault where
+
+interface VFifo8 =
+    enq      :: Bit 8 -> PrimAction
+    deq      :: PrimAction
+    first    :: Bit 8
+    notEmpty :: Bit 1
+
+-- Most pairs of methods have no annotation
+vMkFifo8 :: Module VFifo8
+vMkFifo8 =
+    module verilog "Fifo8" "CLK" "RST_N" {
+        enq      = "D_IN" "ENQ";
+        deq      = "DEQ";
+        first    = "D_OUT";
+        notEmpty = "EMPTY_N";
+    } [ first <> notEmpty, enq << enq ]
+
+{-# verilog sysModuleVerilogSchedDefault #-}
+sysModuleVerilogSchedDefault :: Module Empty
+sysModuleVerilogSchedDefault =
+    module
+        f <- vMkFifo8
+        a :: Reg Bool <- mkRegU
+        b :: Reg Bool <- mkRegU
+        r1 :: Reg (Bit 8) <- mkReg 0
+        r2 :: Reg (Bit 8) <- mkReg 0
+        rules
+          -- first is CF with itself and SB deq and enq, so these
+          -- rules are not reported as conflicting
+          "read1": when True ==> r1 := f.first
+          "read2": when f.notEmpty == 1 ==> r2 := f.first
+          -- deq and enq conflict, which is reported
+          "pop": when a ==> fromPrimAction f.deq
+          "push": when b ==> fromPrimAction (f.enq 0)

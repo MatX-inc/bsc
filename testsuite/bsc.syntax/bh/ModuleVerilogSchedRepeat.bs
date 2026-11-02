@@ -1,0 +1,14 @@
+package ModuleVerilogSchedRepeat where
+
+interface VReg8 =
+    get :: Bit 8
+    set :: Bit 8 -> PrimAction
+
+-- each annotation is given twice
+vMkReg8 :: Module VReg8
+vMkReg8 =
+    module verilog "Reg8" "CLK" {
+        get = "Q_OUT";
+        set = "D_IN" "EN";
+    } [ get <> get, get < set, set << set,
+        get <> get, get < set, set << set ]

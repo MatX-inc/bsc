@@ -3221,17 +3221,21 @@ The following {\veri} code is one possible implementation of \te{RegN}:
 
 \subsubsection{Scheduling information}
 The scheduling information is used to describe what operations can
-be performed at the same time.  Currently, three relations can be described:
-Conflict Free (\te{<>}), Sequentially Composable (\te{<}), and
+be performed at the same time.  Currently, four relations can be described:
+Conflict Free (\te{<>}), Sequentially Composable (\te{<}),
 Restricted Sequentially Composable (\verb'<<') (which means sequentially
-composable, but not parallelly composable).
+composable, but not parallelly composable), and Conflict (\te{><}) (which
+means the methods cannot be used in the same cycle).
 These relations are simply given by enumerating the elements of the
 set (of method name pairs) that make up the relation.
 A shorthand is provided for generating sets where the left or right
 component is the same.
 
-In the absence of scheduling information both relations are considered to be empty,
-which is always a safe approximation.
+A pair of methods may be given only one relation, though it may be repeated.
+A pair given no relation gets the same default as \BSV{}'s \te{import "BVI"},
+with a warning: two value methods are conflict free, a value method is
+sequentially composable before an action method, and two action methods
+conflict.
 
 % ----------------
 
