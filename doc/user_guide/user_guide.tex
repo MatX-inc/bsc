@@ -1863,7 +1863,7 @@ arbitration can be useful when experimenting.
 -i dir                  override $BLUESPECDIR
 -p path                 directory path (`:' sep.) for source and intermediate
                         files
--bdir dir               output directory for .bo and .ba files
+-bdir dir               output directory for .bo, .ba, .bi and .bcheck files
 -simdir dir             output directory for Bluesim intermediate files
 -vdir dir               output directory for .v files
 -vsearch path           search path (`:' sep.) for Verilog files
@@ -2104,6 +2104,47 @@ there, the compiler then searches in the directory specified by the
 files are assumed to be in the same directory as the source unless
 the {\bf\tt -simdir} or {\bf\tt -vdir} flag is used, respectively.
 
+
+% -------------------------
+
+\subsection{Checking packages without code generation}
+\label{signature-only-compiles}
+\index{-check-only@\te{-check-only} (compiler flag)}
+\index{-signature-only@\te{-signature-only} (compiler flag)}
+\index{.bi@\te{.bi} (file type)}
+\index{.bcheck@\te{.bcheck} (file type)}
+\begin{centerboxverbatim}
+-check-only             stop after typechecking and write the package signature
+                        as a .bi file and the typechecked package as a .bcheck
+                        file; imports prefer .bi and fall back to .bo
+-signature-only         stop after context reduction and write the package
+                        signature as a .bi file; imports prefer .bi and fall
+                        back to .bo
+\end{centerboxverbatim}
+
+These flags answer a question about a package without producing its
+{\bf\tt .bo} file.  With {\bf\tt -signature-only}, the compiler parses
+the package, reads its imports and resolves the types of its exported
+definitions, then writes the package's interface -- the names of the
+packages it imports, directly or indirectly, and the signature of every
+exported definition -- to a {\bf\tt .bi} file and stops.  With
+{\bf\tt -check-only}, the compiler also typechecks the definition
+bodies, writes the same {\bf\tt .bi} file and the typechecked package to
+a {\bf\tt .bcheck} file, and stops.  No {\bf\tt .bcheck} file is written
+when the typecheck reports an error.
+
+Under either flag an imported package is read from its {\bf\tt .bi} file
+when one is found on the path and from its {\bf\tt .bo} file otherwise;
+the installed libraries provide both.  A {\bf\tt .bcheck} file is never
+read as an import, so an edit inside definition bodies, which changes a
+package's {\bf\tt .bcheck} file, changes no input of the packages that
+import it.  Both files are written to the directory given by
+{\bf\tt -bdir}, as {\bf\tt .bo} files are, and with {\bf\tt -u} a
+package is recompiled when the files its mode writes are missing or
+older than its source (see Section \ref{auto-recompile}).
+
+Neither flag can be combined with a back end ({\bf\tt -sim},
+{\bf\tt -verilog}), with linking, with {\bf\tt -c}, or with the other.
 
 % -------------------------
 
