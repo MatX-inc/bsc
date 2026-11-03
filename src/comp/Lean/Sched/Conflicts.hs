@@ -2,58 +2,15 @@
 -- | Which child method uses may share a cycle, and an index to find conflicts.
 module Lean.Sched.Conflicts where
 
-import Control.Exception(evaluate)
-import Control.Monad(foldM, forM, forM_, when)
-import Control.Monad.State.Strict(State, evalState, gets, modify', runState)
-import qualified Data.ByteString as BS
-import Data.Char(isAsciiLower, isAsciiUpper, isDigit, toUpper)
-import Data.Containers.ListUtils(nubOrd)
-import Data.IORef(IORef, newIORef, readIORef, writeIORef)
-import qualified Data.Foldable as F
-import qualified Data.IntMap.Strict as IM
-import qualified Data.IntSet as IS
-import GHC.Exts(isTrue#, reallyUnsafePtrEquality#)
-import Data.List(intercalate, isPrefixOf, mapAccumL, partition, sortOn, tails, transpose)
-import qualified Data.Map.Lazy as ML
-import qualified Data.Map.Strict as M
-import Data.Maybe(catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
-import qualified Data.Sequence as Sq
-import qualified Data.Set as S
-import System.Console.GetOpt(ArgDescr(..), ArgOrder(..), OptDescr(..), getOpt, usageInfo)
-import System.Environment(getArgs)
-import System.Exit(exitFailure, exitSuccess)
-import System.FilePath(takeFileName)
-import System.IO.Unsafe(unsafePerformIO)
-import System.IO(IOMode(..), hPutStr, hPutStrLn, hSetEncoding, stderr,
-                 stdout, utf8, withFile)
+import Data.Containers.ListUtils (nubOrd)
+import Data.List (sortOn)
+import qualified Data.Map.Strict as M (Map, dropWhileAntitone, empty, findWithDefault, lookup, size,
+    takeWhileAntitone, toAscList, insertWith)
+import qualified Data.Map.Lazy as ML (fromList)
+import qualified Data.Set as S (member)
 
-import ABin(ABin(..), ABinModInfo(..))
-import ASchedule(AScheduleInfo(..), MethodId(..), UniqueUse(..))
-import AScheduleInfo(SchedNode(..), erdbToList)
-import AState(aState)
-import AVerilogUtil(vNameToTask)
-import ASyntax
-import ASyntaxUtil(aType, aAnd, aOr, aOrs, aSubst, argInputPorts)
-import AUses(Rule(..), buildUseMaps, extractCondition, rumToMethodUseMap,
-             ruleName, rulePred, ruleAncestor)
-import BackendNamingConventions(isRWire, isRWire0, isBypassWire)
-import DisjointTest(initDisjointTestState, checkDisjointExprWithCtx)
-import Error(ErrorHandle, initErrorHandle)
-import Flags(Flags, unSpecTo, useDPI)
-import GenABin(readABinFile)
-import Id(getIdString, getIdBaseString, mkIdCanFire, mkIdWillFire, mkRdyId,
-          isRdyId, getIdPosition, setIdBaseString, mk_homeless_id)
-import IntegerUtil(aaaa)
-import IntLit(IntLit(..))
-import PPrint(ppString)
-import Pragma(SchedulePragma(..))
-import Prim(PrimOp(..))
-import RSchedule(ratToNestedLists)
-import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
-import VModInfo(vName, vFields, vSched, vPath, VFieldInfo(..), VPathInfo(..),
-                getVNameString, mkNamedOutputs)
-
-import Lean.Sched.Types
+import Lean.Sched.Types (childOf, portKey, Child(chConf), ConflictKind(..), Conflicts(cfNoShare, cfSBR, cfCF,
+    cfSB, cfNoFollow, cfNoPrecede), Design, Port(ptMeth, ptInst), UseIndex(..))
 
 -- | The conflict tables of 'Conflicts', over the given methods of a child.
 --

@@ -247,7 +247,7 @@ GHCOPTDEBUGFLAGS = $(GHCOPTFLAGS) $(GHCDEBUG)
 SOURCES_WO_EXTRA_BUILDVERSION = \
 	*.hs *.lhs \
 	Parser/*.hs Parser/BSV/*.lhs Parser/Classic/*.hs \
-	Lean/*.hs Lean/Sched/*.hs \
+	Lean/*.hs Lean/Sched/*.hs Lean/Sched/Emit/*.hs \
 	Libs/*.hs \
 	GHC/posix/*.hs \
 	$(PARSEC_HS)/*.hs \

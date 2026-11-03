@@ -1,0 +1,7 @@
+package Grow512(sysGrow512) where
+
+import Grow
+
+{-# synthesize sysGrow512 #-}
+sysGrow512 :: Module Empty
+sysGrow512 = mkGrow 512

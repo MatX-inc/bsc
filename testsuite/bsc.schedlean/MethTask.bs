@@ -1,0 +1,21 @@
+package MethTask where
+
+-- A rule's task call (checked) and a method's task call (G0020: left out of task agreement).
+interface MethTaskIfc =
+  put :: Bit 8 -> Action
+  get :: Bit 8
+
+{-# verilog mkMethTask #-}
+mkMethTask :: Module MethTaskIfc
+mkMethTask = module
+  r :: Reg (Bit 8) <- mkReg 0
+  c :: Reg (Bit 8) <- mkReg 0
+  rules
+    "tick": when True ==> do
+      c := c + 1
+      $display "tick %d" c
+  interface
+    put x = do
+      r := x
+      $display "put %d" x
+    get = c

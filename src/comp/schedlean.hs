@@ -7,34 +7,38 @@ schedule verifier ("Lean.Sched.*") and writes what it returns.
 -}
 module Main_schedlean (main) where
 
-import Control.DeepSeq(force)
-import Control.Exception(evaluate)
-import Control.Monad(forM, forM_, unless, when)
-import qualified Data.ByteString as BS
-import Data.Char(isDigit)
-import Data.List(intercalate)
-import Data.Maybe(fromMaybe)
-import System.Console.GetOpt(ArgDescr(..), ArgOrder(..), OptDescr(..), getOpt, usageInfo)
-import System.Environment(getArgs)
-import System.Exit(ExitCode(..), exitWith, exitSuccess)
-import System.IO(IOMode(..), hPutStr, hPutStrLn, hSetEncoding, stderr, stdout, utf8, withFile)
+import ABin (ABin(..), ABinModInfo(..))
+import AState (aState)
+import Control.DeepSeq (force)
+import Control.Exception (evaluate)
+import Control.Monad (forM_, when)
+import Data.Char (isDigit)
+import Data.List (intercalate)
+import Data.Maybe (fromMaybe)
+import Error (initErrorHandle)
+import GenABin (readABinFile)
+import PPrint (ppReadable)
+import System.Console.GetOpt (ArgDescr(..), ArgOrder(..), OptDescr(..), getOpt, usageInfo)
+import System.Environment (getArgs)
+import System.Exit (ExitCode(..), exitWith, exitSuccess)
+import System.FilePath (takeBaseName)
+import System.IO (IOMode(..), hPutStr, hPutStrLn, hSetEncoding, stderr, stdout, utf8, withFile)
+import Version (bluespec, versionStr)
+import qualified Data.ByteString as BS (readFile)
 
-import ABin(ABin(..), ABinModInfo(..))
-import AState(aState)
-import Error(ErrorHandle, initErrorHandle)
-import Flags(Flags)
-import GenABin(readABinFile)
-import PPrint(ppReadable)
-import Version(bluespec, versionStr)
-
-import Lean.Sched.Types(Design(..))
-import Lean.Sched.Extract(extractDesign, renameSchedulerUses)
-import Lean.Sched.BscFacts(disjointCandidates, confirmDisjointness)
-import Lean.Sched.Show(dumpDesign)
-import Lean.Sched.Flat(Proof(..), analyse, emitLean, leanNamespace)
-import Lean.Sched.Time
-import Lean.Solver(Verdict(..), newSolver, solveCNF, readDimacs)
-import Lean.Sched.APkg(parseAPkg, showAPkg)
+import Lean.Sched.APkg (parseAPkg, showAPkg, showAPkgNoSched, memAPkgText)
+import Lean.Sched.Bounds (applyLimits, defaultBounds)
+import Lean.Sched.BscFacts (disjointCandidates, confirmDisjointnessMore)
+import Lean.Sched.Emit (Emitted(..), emitModule)
+import Lean.Sched.Expr (memAPkg)
+import Lean.Sched.Extract (extractDesign, renameSchedulerUses)
+import Lean.Sched.Flat (Proof(..), analyse, emitLean)
+import Lean.Sched.Gate (gateReport)
+import Lean.Sched.Run (Input(..))
+import Lean.Sched.Show (dumpDesign)
+import Lean.Sched.Time (newTimer, phase, reportTotals)
+import Lean.Sched.Types (Design(..), leanNamespace)
+import Lean.Sched.Views (showView, viewNames, solverCheck)
 
 versionString :: String
 versionString = versionStr True (bluespec ++ " schedlean utility")
@@ -65,7 +69,8 @@ options =
     [ Option ['o'] ["output"] (ReqArg (\f o -> o { optOutput = Just f }) "FILE")
         "write the Lean file to FILE (default: <Module>.lean)"
     , Option [] ["show-model"] (OptArg (\w o -> o { optShow = Just (fromMaybe "" w) }) "WHAT")
-        "print the extracted model instead (WHAT: empty for the design; apkg, the APackage as dumpba prints it; apkg-tree, its parse)"
+        ("print an intermediate view instead (WHAT: empty for the extracted design; apkg, apkg-tree, apkg-text, apkg-mem, apkg-memtext: "
+         ++ "the APackage; sites, the site conditions; model, the module model and scan; facts, the gate's facts and shadow classes)")
     , Option [] ["gate"] (NoArg (\o -> o { optGate = True }))
         "report whether the modular proof applies (GATE record and summary row)"
     , Option [] ["time-phases"] (NoArg (\o -> o { optTime = True }))
@@ -121,8 +126,6 @@ main = do
                 exitWith (ExitFailure 2)
     when (optCheck opts) $ die 2 "--check is not implemented yet"
     when (optMutants opts /= Nothing) $ die 2 "--mutants is not implemented yet"
-    when (not (null (optLimits opts)) || optFirstRules opts /= Nothing || optNoTasks opts) $
-        die 2 "the measurement options are not implemented yet"
     timer <- newTimer (optTime opts)
     errh <- initErrorHandle
     (abmi, version) <- phase timer "read" $ do
@@ -132,27 +135,40 @@ main = do
         let baText = ppReadable abin ++ "Hash: " ++ hash ++ "\n"
         when (optShow opts == Just "apkg") $ putStr baText >> exitSuccess
         when (optShow opts == Just "apkg-tree") $ mapM_ putStrLn (showAPkg (parseAPkg baText)) >> exitSuccess
+        when (optShow opts == Just "apkg-text") $ mapM_ putStrLn (showAPkgNoSched (parseAPkg baText)) >> exitSuccess
+        case abin of
+            ABinMod m _ | optShow opts == Just "apkg-mem" -> mapM_ putStrLn (showAPkgNoSched (memAPkg (abmi_apkg m))) >> exitSuccess
+                        | optShow opts == Just "apkg-memtext" -> mapM_ putStrLn (showAPkgNoSched (memAPkgText (abmi_apkg m))) >> exitSuccess
+            _ -> return ()
         case abin of
             ABinMod abmi ver   -> evaluate (force (abmi_apkg abmi, abmi_aschedinfo abmi)) >> pure (abmi, ver)
             ABinForeignFunc {} -> die 1 (input ++ " describes a foreign function, not a module")
             ABinModSchedErr {} -> die 1 (input ++ " is from a module that did not schedule")
     let flags = abmi_flags abmi
-    forM_ (optSolverCheck opts) $ \dir -> solverCheck errh flags dir >> exitSuccess
+    forM_ (optSolverCheck opts) $ \dir -> solverCheck errh flags dir >>= mapM_ putStrLn >> exitSuccess
+    let known = maybe True (`elem` ("" : viewNames)) (optShow opts)
+    when (not known) $ die 2 ("--show-model=" ++ fromMaybe "" (optShow opts) ++ " is not implemented yet")
     aspkg <- phase timer "astate" $
         aState errh flags (abmi_pps abmi) (abmi_aschedinfo abmi) (abmi_apkg abmi) >>= evaluate . force
     let abmi' = abmi { abmi_apkg = renameSchedulerUses (abmi_apkg abmi) }
+        -- the CF-swap orders (cubic in methods) only for the extraction dump and the flat file
+        full = optFlat opts || optShow opts `elem` [Just "", Just "inverted-check"]
     design <- phase timer "extract" $
-        either (die 1) (evaluate . force) (extractDesign input version abmi' aspkg)
-    (cands, facts) <- phase timer "bsc-facts" $ do
+        either (die 1) (evaluate . force) (extractDesign full input version abmi' aspkg)
+    (cands, facts, more) <- phase timer "bsc-facts" $ do
         let cands = force (disjointCandidates design)
-        facts <- confirmDisjointness errh flags (abmi_apkg abmi') design cands
-        evaluate (force (cands, facts))
+        (facts, more) <- confirmDisjointnessMore errh flags (abmi_apkg abmi') design cands
+        _ <- evaluate (force (cands, facts))
+        return (cands, facts, more)
+    bounds <- either (die 2) return (applyLimits (optLimits opts) defaultBounds)
+    let inp = Input design cands facts more abmi bounds (takeBaseName input) flags errh timer
+        ok = either (die 1) return
     case () of
-      _ | Just what <- optShow opts -> do
-            unless (null what) $ die 2 ("--show-model=" ++ what ++ " is not implemented yet")
+      _ | Just "" <- optShow opts -> do
             ls <- phase timer "emit" $ evaluate (force (dumpDesign design cands facts))
             phase timer "write" $ mapM_ putStrLn ls
-        | optGate opts -> die 2 "--gate is not implemented yet"
+        | Just what <- optShow opts -> showView inp what >>= ok >>= phase timer "write" . mapM_ putStrLn
+        | optGate opts -> gateReport inp >>= ok >>= mapM_ putStrLn
         | optFlat opts -> do
             let file = fromMaybe (leanNamespace design ++ ".lean") (optOutput opts)
             proof <- phase timer "analyse" $ evaluate (analyse design facts)
@@ -164,23 +180,15 @@ main = do
             forM_ (dWarnings design ++ pfWarnings proof) $ \w ->
                 hPutStrLn stderr ("schedlean: warning: " ++ w)
             putStrLn ("schedlean: wrote " ++ file)
-        | otherwise -> die 2 "the modular emitter is not implemented yet (use --flat)"
+        | otherwise -> do
+            -- the modular file: its notes, its parts, then the summary lines
+            let file = fromMaybe (leanNamespace design ++ ".lean") (optOutput opts)
+                base = reverse (drop 1 (dropWhile (/= '.') (reverse file)))
+            em <- emitModule inp (not (optNoTasks opts)) (optFirstRules opts) file >>= ok
+            let (notes, rest) = span (\l -> take 5 l == "note:") (emLog em)
+            mapM_ putStrLn notes
+            phase timer "write" $ forM_ (emParts em) $ \(pn, t) -> do
+                let f = maybe file (\i -> base ++ "_p" ++ show i ++ ".lean") pn
+                withFile f WriteMode $ \h -> hSetEncoding h utf8 >> hPutStr h t
+            mapM_ putStrLn rest
     reportTotals timer
-
--- | bsc's solver on the prototype's logged queries: every verdict must agree.
-solverCheck :: ErrorHandle -> Flags -> FilePath -> IO ()
-solverCheck errh flags dir = do
-    sv <- newSolver errh flags
-    ls <- lines <$> readFile (dir ++ "/verdicts.log")
-    rs <- forM [ (q, rc) | l <- ls, [q, rc] <- [words l] ] $ \(q, rc) -> do
-        cls <- readDimacs <$> readFile (dir ++ "/" ++ q ++ ".cnf")
-        v <- solveCNF sv (q ++ "_") cls
-        let want = case rc of { "10" -> Just Sat; "20" -> Just Unsat; _ -> Nothing }
-            ok = maybe True (== v) want
-        unless ok $ putStrLn ("MISMATCH " ++ q ++ " cadical " ++ rc ++ " bsc " ++ show v)
-        return (ok, want, v)
-    let n = length rs
-        bad = length [ () | (False, _, _) <- rs ]
-        cnt w = length [ () | (_, _, v) <- rs, v == w ]
-    putStrLn ("solver-check: " ++ show n ++ " queries, " ++ show bad ++ " mismatches; bsc unsat "
-              ++ show (cnt Unsat) ++ ", sat " ++ show (cnt Sat) ++ ", unknown " ++ show (cnt Unknown))

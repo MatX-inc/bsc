@@ -2,65 +2,62 @@
 -- | Phase 1: the Design, from the .ba and aState.
 module Lean.Sched.Extract where
 
-import Control.Exception(evaluate)
-import Control.Monad(foldM, forM, forM_, when)
-import Control.Monad.State.Strict(State, evalState, gets, modify', runState)
-import qualified Data.ByteString as BS
-import Data.Char(isAsciiLower, isAsciiUpper, isDigit, toUpper)
-import Data.Containers.ListUtils(nubOrd)
-import Data.IORef(IORef, newIORef, readIORef, writeIORef)
-import qualified Data.Foldable as F
-import qualified Data.IntMap.Strict as IM
-import qualified Data.IntSet as IS
-import GHC.Exts(isTrue#, reallyUnsafePtrEquality#)
-import Data.List(intercalate, isPrefixOf, mapAccumL, partition, sortOn, tails, transpose)
-import qualified Data.Map.Lazy as ML
-import qualified Data.Map.Strict as M
-import Data.Maybe(catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
-import qualified Data.Sequence as Sq
-import qualified Data.Set as S
-import System.Console.GetOpt(ArgDescr(..), ArgOrder(..), OptDescr(..), getOpt, usageInfo)
-import System.Environment(getArgs)
-import System.Exit(exitFailure, exitSuccess)
-import System.FilePath(takeFileName)
-import System.IO.Unsafe(unsafePerformIO)
-import System.IO(IOMode(..), hPutStr, hPutStrLn, hSetEncoding, stderr,
-                 stdout, utf8, withFile)
+import ABin (ABinModInfo(abmi_flags, abmi_apkg, abmi_aschedinfo, abmi_src_name))
+import ASchedule (AScheduleInfo(..), MethodId(..), UniqueUse(..))
+import AScheduleInfo (SchedNode(..), erdbToList)
+import ASyntax (aIfaceSchedNames, aTrue, apkgIsMCD, mkMethId, splitPortNums, AAbstractInput(AAI_Reset,
+    AAI_Clock), AAction(aact_assump, ACall, AFCall, afcall_fun, afcall_isC, ATaskAction, aact_objid,
+    ataskact_fun, ataskact_isC, aact_args), AClock(AClock), ADef(adef_expr, adef_objid, ADef), AExpr(ASDef,
+    AMethValue, ATaskValue, ASPort, ASParam, ASInt, ASReal, ASStr, ASClock, ASReset, ASInout, AMGate,
+    AMethCall, ATupleSel, ATuple, ASAny, AFunCall, ANoInlineFunCall, ae_args, APrim), AForeignCall(afc_name,
+    afc_args, afc_fun), AIFace(aif_name, AIAction, aif_pred, AIActionValue, aif_value, aif_fieldinfo, AIDef,
+    aif_body), AId, AInout(AInout), ANoInlineFun, APackage(apkg_interface, apkg_name, apkg_size_params,
+    apkg_state_instances, apkg_inputs, apkg_schedule_pragmas, apkg_local_defs, apkg_rules), AReset(AReset),
+    ARule(arule_id, arule_parent, arule_descr, arule_pred, arule_actions), ARuleId, ASPMethodInfo(aspm_name,
+    aspm_menableid, aspm_mrdyid), ASPSignalInfo(aspsi_methods), ASPackage(aspkg_foreign_calls, aspkg_values,
+    aspkg_inputs, aspkg_outputs, aspkg_signal_info, aspkg_state_instances), ASchedule(asch_rev_exec_order,
+    asch_scheduler), AScheduler(ASchedEsposito), AType(ATBit, ATTuple), AVInst(avi_vname, avi_vmi, avi_iarray,
+    avi_meth_types), MethodPart(MethodResult, MethodEnable, MethodArg))
+import ASyntaxUtil (aOrs, aSubst, argInputPorts)
+import AUses (buildUseMaps, extractCondition, rumToMethodUseMap, Rule(..))
+import AVerilogUtil (vNameToTask)
+import BackendNamingConventions (isRWire, isRWire0, isBypassWire)
+import Control.Monad (when)
+import Data.Containers.ListUtils (nubOrd)
+import Data.List (isPrefixOf, sortOn)
+import Data.Maybe (isJust, listToMaybe, mapMaybe)
+import Flags (Flags(useDPI, unSpecTo))
+import Id (getIdBaseString, getIdPosition, getIdString, isRdyId, mkIdCanFire, mkIdWillFire, mkRdyId,
+    setIdBaseString, Id)
+import IntLit (IntLit(..))
+import PPrint (ppString, ppReadable)
+import Pragma (SchedulePragma(..))
+import Prim (PrimOp(..))
+import RSchedule (ratToNestedLists)
+import SchedInfo (SchedInfo(..), MethodConflictInfo(..))
+import VModInfo (vName, vFields, vSched, vPath, VFieldInfo(..), VPathInfo(..), getVNameString, mkNamedOutputs)
+import qualified Data.Foldable as F (Foldable(foldl'))
+import qualified Data.IntMap.Strict as IM ((!), fromList)
+import qualified Data.IntSet as IS (member, fromList)
+import qualified Data.Map.Strict as M (Map, (!), delete, elems, empty, findWithDefault, lookup, member, toList,
+    insert, fromList, fromListWith, map)
+import qualified Data.Map.Lazy as ML (findWithDefault, map)
+import qualified Data.Set as S (Set, member, notMember, delete, empty, fromList, insert, null, singleton,
+    toAscList, toList, union, unions)
 
-import ABin(ABin(..), ABinModInfo(..))
-import ASchedule(AScheduleInfo(..), MethodId(..), UniqueUse(..))
-import AScheduleInfo(SchedNode(..), erdbToList)
-import AState(aState)
-import AVerilogUtil(vNameToTask)
-import ASyntax
-import ASyntaxUtil(aType, aAnd, aOr, aOrs, aSubst, argInputPorts)
-import AUses(Rule(..), buildUseMaps, extractCondition, rumToMethodUseMap,
-             ruleName, rulePred, ruleAncestor)
-import BackendNamingConventions(isRWire, isRWire0, isBypassWire)
-import DisjointTest(initDisjointTestState, checkDisjointExprWithCtx)
-import Error(ErrorHandle, initErrorHandle)
-import Flags(Flags, unSpecTo, useDPI)
-import GenABin(readABinFile)
-import Id(getIdString, getIdBaseString, mkIdCanFire, mkIdWillFire, mkRdyId,
-          isRdyId, getIdPosition, setIdBaseString, mk_homeless_id)
-import IntegerUtil(aaaa)
-import IntLit(IntLit(..))
-import PPrint(ppString)
-import Pragma(SchedulePragma(..))
-import Prim(PrimOp(..))
-import RSchedule(ratToNestedLists)
-import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
-import VModInfo(vName, vFields, vSched, vPath, VFieldInfo(..), VPathInfo(..),
-                getVNameString, mkNamedOutputs)
+import Lean.Sched.Conflicts (conflictTables, mayFollow)
+import Lean.Sched.Order (ordersOf, unrealizedOf)
+import Lean.Sched.OutOfOrder (havocSites)
+import Lean.Sched.Types (lookupMeth, portLabel, readPortFor, Call(clArgs, Call, clPort, clCond), Child(..),
+    Conflicts(cfSBR, Conflicts, cfCF, cfNoFollow, cfNoPrecede, cfNoShare, cfSB), Design(..), HwTask(..),
+    Mask(WhenInput, WhenOutput, WhenNotInput), Meth(mtCopies, Meth, mtKind, mtDeps, mtName),
+    MethKind(ValueMethod, ActionMethod, ActionValueMethod), Order(Order), Output(ouSeq, ouName, ouMask,
+    Output), Port(..), Step(..), StepKind(ActionMethodStep, ValueMethodStep, RuleStep), TaskCall(..))
 
-import Lean.Sched.Types
-import Lean.Sched.Conflicts
-import Lean.Sched.Order
-import Lean.Sched.OutOfOrder
-
--- | Build the 'Design', or say why the module is out of scope.
-extractDesign :: FilePath -> String -> ABinModInfo -> ASPackage -> Either String Design
-extractDesign path version abmi aspkg = do
+-- | Build the 'Design', or say why the module is out of scope; @full@ adds the CF-swap orders
+-- and out-of-order sites (cubic in methods), which the modular path does not read.
+extractDesign :: Bool -> FilePath -> String -> ABinModInfo -> ASPackage -> Either String Design
+extractDesign full path version abmi aspkg = do
     let apkg = abmi_apkg abmi
         asi  = abmi_aschedinfo abmi
         name = getIdString (apkg_name apkg)
@@ -72,12 +69,8 @@ extractDesign path version abmi aspkg = do
         ifc       = apkg_interface apkg
         defs0     = [ aif_value f | f@AIDef {} <- ifc ] ++ [ aif_value f | f@AIActionValue {} <- ifc ]
                     ++ apkg_local_defs apkg
-        -- The .ba drops the conditions under which each method use matters
-        -- (GenABin's Bin UseCond), so they are recomputed as the scheduler
-        -- computed them, by AUses.buildUseMaps.  Its definitions are named
-        -- apart from the package's ('renameSchedulerUses' made room).
-        -- WILL_FIRE (and through it RDY) is scheduling logic the scheduler
-        -- itself added; to the use analysis, as to the scheduler, it is opaque
+        -- the use conditions the .ba drops, recomputed as the scheduler did (AUses.buildUseMaps,
+        -- names apart from the package's); WILL_FIRE (and RDY through it) stays opaque
         opaqueFires = [ if "WILL_FIRE_" `isPrefixOf` getIdString i then ADef i t (ASPort t i) ps else df
                       | df@(ADef i t _ ps) <- defs0 ]
         (ruleUses, _, newDefs) = buildUseMaps opaqueFires (scheduledRules apkg) (apkg_state_instances apkg)
@@ -114,11 +107,8 @@ extractDesign path version abmi aspkg = do
                            , a <- ga, b <- gb ]
         userMESet = S.fromList userME
         isUserME a b = S.member (a, b) userMESet || S.member (b, a) userMESet
-        disjoint  = nubOrd [ (min a b, max a b)
-                           | (r1, (ds, _)) <- erdbToList (asi_exclusive_rules_db asi)
-                           , r2 <- ds
-                           , let a = getIdString r1, let b = getIdString r2
-                           , a /= b, not (isUserME a b) ]
+        disjoint  = nubNamePairs (const True) (\a b -> S.null userMESet || not (isUserME a b))
+                                 [ (r1, r2) | (r1, (ds, _)) <- erdbToList (asi_exclusive_rules_db asi), r2 <- ds ]
         blocks    = S.fromList [ (getIdString r, getIdString b)
                                | ASchedEsposito rs <- asch_scheduler (asi_schedule asi)
                                , (r, bs) <- rs, b <- bs ]
@@ -167,7 +157,7 @@ extractDesign path version abmi aspkg = do
             , dReadyDef = M.fromList [ (getIdString (aif_name f), getIdString (adef_objid (aif_value g)))
                                      | f <- ifc, isMethodField f, not (isRdyId (aif_name f))
                                      , g <- M.findWithDefault [] (mkRdyId (aif_name f)) rdyIfcMap ]
-            , dOrders = [], dUnrealized = [], dExportedCF = [], dUseDefs = useDefs
+            , dOrders = [], dExecEdges = [], dUnrealized = [], dExportedCF = [], dUseDefs = useDefs
             , dHavocPorts = S.empty, dReadFlags = [], dRelied = []
             , dUnspec = unSpecTo (abmi_flags abmi)
             , dHwTasks = [], dTaskTags = 0
@@ -187,18 +177,19 @@ extractDesign path version abmi aspkg = do
         -- (reversed, so that each prepended step leaves them in order)
         stepsMap = M.fromListWith (++) [ (m, [stName st]) | st <- reverse steps, Just m <- [stMethod st] ]
         stepsOf m = M.findWithDefault [] m stepsMap
-        cfs = nubOrd [ (min a b, max a b) | (a, b) <- names (sCF exported), a /= b
-                                          , not (null (stepsOf a)), not (null (stepsOf b)) ]
+        cfs = nubNamePairs (not . null . stepsOf) (\_ _ -> True) (sCF exported)
         execEdges = nubOrd [ (getIdString p, getIdString r)
                            | (Exec r, preds) <- asi_sched_graph asi, Exec p <- preds ]
-    (orders, unrealized) <- ordersOf names' execEdges stepsOf cfs
+    (orders, unrealized) <- if full then ordersOf names' execEdges stepsOf cfs
+                            else Right ([Order "" ("", "") names' (length names') [] ("", "")]
+                                       , unrealizedOf names' execEdges stepsOf cfs)
     let swapNotes = [ "the exported " ++ a ++ " CF " ++ b ++ " cannot be realized without breaking "
                       ++ "another scheduling constraint; that swap is not checked" | (a, b) <- unrealized ]
         stepMapOf ss = M.fromListWith (\_ old -> old) [ (stName st, st) | st <- ss ]
         ordered = partial { dSteps = steps, dStepMap = stepMapOf steps, dMethodSteps = stepsMap
-                          , dOrders = orders, dUnrealized = unrealized, dExportedCF = cfs
+                          , dOrders = orders, dExecEdges = execEdges, dUnrealized = unrealized, dExportedCF = cfs
                           , dHwTasks = hwTasks, dTaskTags = nTags }
-        (sited, havoc, flags, relied) = havocSites ordered
+        (sited, havoc, flags, relied) = if full then havocSites ordered else (steps, S.empty, [], [])
     return ordered { dSteps = sited, dStepMap = stepMapOf sited
                    , dHavocPorts = havoc, dReadFlags = flags, dRelied = relied
                    , dWarnings = dWarnings partial ++ swapNotes }
@@ -207,11 +198,8 @@ extractDesign path version abmi aspkg = do
     clockResetIds (AAI_Reset r)   = [getIdString r]
     clockResetIds _               = []
 
--- | bsc's scheduler leaves the definitions it made for use conditions
--- (@__duses1@, ...) in the package, and rules may refer to them (the checks
--- of @conflict_free@ do).  'buildUseMaps', run again, numbers its own from
--- @__duses1@ too, and reuses existing definitions of equal expressions, so
--- the scheduler's are renamed apart before it runs.
+-- | The scheduler's use-condition definitions (@__duses1@, ...), which conflict_free checks read,
+-- renamed apart so that 'buildUseMaps', run again, numbers its own from @__duses1@ too.
 renameSchedulerUses :: APackage -> APackage
 renameSchedulerUses apkg
     | null old  = apkg
@@ -227,10 +215,36 @@ renameSchedulerUses apkg
     sub     = M.fromList [ (i, ASDef t (newId i)) | ADef i t _ _ <- old ]
     renameDef (ADef i t e p) = ADef (if isOld i then newId i else i) t (aSubst sub e) p
 
--- | The first of @base@, @_base@, @__base@, ... that no name starts with
--- (@base@ itself starting with something else than @_@).  A name blocks
--- the one with as many underscores as it has before @base@.
+-- | The first of @base@, @_base@, @__base@, ... that no name starts with (a name blocks the
+-- one with as many underscores as it has before @base@).
 freePrefix :: String -> [String] -> String
+-- | A schedule's CF, SB, SBR and C statements as bsc's printer groups and orders them.
+schedStmts :: MethodConflictInfo Id -> [([String], String, [String])]
+schedStmts mci = [ (nms a, r, nms b) | (r, ps) <- [("CF", sCF mci), ("SB", sSB mci), ("SBR", sSBR mci), ("C", sC mci)]
+                                     , (a, b) <- groups ps ]
+  where
+    nms = map ppString
+    key = ppReadable
+    collect ps = M.fromListWith S.union [ (a, S.singleton b) | (a, b) <- ps ]
+    sortI = sortOn key
+    groups ps = let m1 = collect ps
+                    m2 = collect [ (t, a) | (a, t) <- M.toList m1 ]
+                in sortOn (map key . fst) [ (sortI (S.toList s2), sortI (S.toList s1)) | (s1, s2) <- M.toList m2 ]
+
+-- | Unordered pairs of distinct names, first occurrences in order, each name made once and
+-- compared by its rank in string order (no string comparisons per pair).
+nubNamePairs :: (String -> Bool) -> (String -> String -> Bool) -> [(Id, Id)] -> [(String, String)]
+nubNamePairs keepName keepPair raw = [ (back IM.! x, back IM.! y) | (x, y) <- nubOrd ps ]
+  where
+    strs = M.fromList [ (i, getIdString i) | i <- S.toList (S.fromList (concat [ [a, b] | (a, b) <- raw ])) ]
+    rankS = M.fromList (zip (S.toAscList (S.fromList (M.elems strs))) [0 :: Int ..])
+    back = IM.fromList [ (r, n) | (n, r) <- M.toList rankS ]
+    okR = IS.fromList [ r | (n, r) <- M.toList rankS, keepName n ]
+    rankI = M.map (rankS M.!) strs
+    rank i = rankI M.! i
+    ps = [ (min ra rb, max ra rb) | (a, b) <- raw, let ra = rank a, let rb = rank b, ra /= rb
+                                  , IS.member ra okR, IS.member rb okR, keepPair (back IM.! ra) (back IM.! rb) ]
+
 freePrefix base names = replicate (until (`S.notMember` blocked) (+ 1) 0) '_' ++ base
   where blocked = S.fromList [ length us | n <- names, let (us, rest) = span (== '_') n
                                          , base `isPrefixOf` rest ]
@@ -243,10 +257,8 @@ bodyOf f = case f of { AIAction { aif_body = rs } -> rs; AIActionValue { aif_bod
 isMethodField :: AIFace -> Bool
 isMethodField f = case f of { AIDef {} -> True; AIAction {} -> True; AIActionValue {} -> True; _ -> False }
 
--- | Rules and methods as the scheduler sees them, for 'buildUseMaps'
--- (the same conversion as 'ASchedule.cvtARule' and 'ASchedule.cvtIfc').
--- The checks of assumptions are left out: the scheduler ignores a rule's
--- assumptions, which become actions only after it ran ('ARemoveAssumps').
+-- | Rules and methods as the scheduler sees them, for 'buildUseMaps' (as 'ASchedule.cvtARule'
+-- and 'cvtIfc'); assumption checks left out, as the scheduler ignores them.
 scheduledRules :: APackage -> [Rule]
 scheduledRules apkg =
     concatMap fromIfc (apkg_interface apkg)
@@ -281,6 +293,7 @@ extractChild avi = Child
     , chOrder   = map mtName meths
     , chConf    = conf
     , chSched   = ppString (methodConflictInfo (vSched vmi))
+    , chStmts   = schedStmts (methodConflictInfo (vSched vmi))
     , chAlias   = M.fromList [ (sig, canon) | (port, sig) <- valueOuts
                                             , Just canon <- [M.lookup port firstSig] ]
     , chWires   = [ (o, i) | (vo, vi) <- wireEqs, Just o <- [signalOf vo], Just i <- [signalOf vi] ]
@@ -349,10 +362,8 @@ extractChild avi = Child
                               , (portM, t) <- zip (splitPortNums grp) grp ]
                 , ptResults = [ (sig k (MethodResult pm), t)
                               | (pm, t) <- zip (splitPortNums resTys) resTys ] }
-            -- the other action methods it sees: those SB or SBR of it, those
-            -- with an input that has a path to one of its outputs, and those
-            -- in use that may not follow it (a later call makes what a read
-            -- saw arbitrary), in the order of 'actionNames'
+            -- the other action methods it sees, in 'actionNames' order: SB or SBR of it, with a path
+            -- from an input to one of its outputs, or in use and unable to follow it
             observed = S.delete m (S.fromList (M.findWithDefault [] m sbOf
                                                ++ [ a | o <- portsOut f, i <- M.findWithDefault [] o pathsTo
                                                       , a <- M.findWithDefault [] i inputOwners ]
@@ -362,9 +373,8 @@ extractChild avi = Child
                 , mtDeps = map snd (sortOn fst [ (k, a) | a <- S.toList observed
                                                         , k <- M.findWithDefault [] a actionPos ]) }
 
--- | The copy of a multi-ported method serving each value-method use, numbered
--- as 'aState' numbers them: the resource allocation table assigns uses to
--- port numbers, and 'aState' renumbers the ports in use densely from 0.
+-- | The copy of a multi-ported method serving each value-method use, numbered densely from 0
+-- as 'aState' renumbers the resource allocation table's ports.
 valueCopyTable :: AScheduleInfo -> M.Map (String, String) (M.Map AExpr Integer)
 valueCopyTable asi = M.fromList
     [ (k, M.fromList [ (e, c) | (UUExpr e _, c) <- uses ]) | (k, uses) <- denseRat asi ]
@@ -383,12 +393,8 @@ actionCopyTable asi = M.fromList
 lookupCallCopy :: AAction -> CallCopies -> Maybe Integer
 lookupCallCopy a t = callKey a >>= (`M.lookup` t)
 
--- | A key of a call, equal exactly when the calls are ('=='), so that a
--- table of calls is a map.  The derived 'Ord' of 'AExpr' cannot serve: its
--- 'Eq' ignores some fields (the ids of primitive applications and
--- literals, and a clock's type) that the derived 'Ord' compares.  A call
--- that is not equal to itself (a NaN argument), or not an 'ACall', equals
--- no use and has no key.
+-- | A call's key, equal exactly when the calls are ('=='; the derived 'Ord' compares fields 'Eq'
+-- ignores); a call unequal to itself, or not an 'ACall', has none.
 data CallKey = CallKey AId AId [ExprKey]
     deriving (Eq, Ord)
 
@@ -439,9 +445,8 @@ denseRat asi =
 data StepLookups = StepLookups
     { slRule   :: M.Map ARuleId ARule      -- ^ each rule by id (the first, if repeated)
     , slMethod :: M.Map ARuleId (AIFace, M.Map ARuleId ARule)
-      -- ^ the method field each scheduled name belongs to (its own name, or
-      -- a rule of its body), the first in interface order, and the rules of
-      -- its body by id (the first, if repeated)
+      -- ^ the method field each scheduled name belongs to (the first in interface order), and
+      -- its body's rules by id (the first, if repeated)
     , slRdy    :: M.Map AId [AIFace]       -- ^ the value fields of each name (RDY)
     , slReads  :: AExpr -> S.Set Port      -- ^ 'exprReads', its table shared
     , slDPI    :: Bool                     -- ^ bsc's @-use-dpi@: how Verilog names imported functions

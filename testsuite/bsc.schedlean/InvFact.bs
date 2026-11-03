@@ -1,0 +1,21 @@
+package InvFact where
+
+-- method a reads r when flag; rule y writes r only when not flag; b writes what y reads
+interface Ifc =
+    a :: Action
+    b :: Bit 8 -> Action
+
+{-# verilog mkInvFact #-}
+mkInvFact :: Module Ifc
+mkInvFact = module
+    flag :: Reg Bool <- mkReg False
+    r :: Reg (Bit 8) <- mkReg 0
+    s :: Reg (Bit 8) <- mkReg 0
+    t :: Reg (Bit 8) <- mkReg 0
+    u :: Reg (Bit 8) <- mkReg 0
+    rules
+      "y": when True ==> action
+               if flag then u := s else r := s
+    interface
+      a = if flag then t := r else noAction
+      b x = s := x

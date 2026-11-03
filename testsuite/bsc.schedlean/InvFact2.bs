@@ -1,0 +1,30 @@
+package InvFact2 where
+
+-- as InvFact, with a rule z that must follow a (it writes v, which a reads) and moves with it
+interface Ifc =
+    a :: Action
+    b :: Bit 8 -> Action
+    c :: Bit 8 -> Action
+
+{-# verilog mkInvFact2 #-}
+mkInvFact2 :: Module Ifc
+mkInvFact2 = module
+    flag :: Reg Bool <- mkReg False
+    r :: Reg (Bit 8) <- mkReg 0
+    s :: Reg (Bit 8) <- mkReg 0
+    t :: Reg (Bit 8) <- mkReg 0
+    u :: Reg (Bit 8) <- mkReg 0
+    v :: Reg (Bit 8) <- mkReg 0
+    w :: Reg (Bit 8) <- mkReg 0
+    rules
+      "y": when True ==> action
+               if flag then u := s else r := s
+      "z": when True ==> action
+               v := w
+               if flag then noAction else r := 1
+      "q": when True ==> action
+               if flag then u := 2 else w := v
+    interface
+      a = if flag then t := r + v else noAction
+      b x = s := x
+      c x = w := x

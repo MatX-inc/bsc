@@ -7,12 +7,12 @@ module Lean.Sched.Py
     , findSub, rfindSub, isPySpace
     ) where
 
-import Data.Char(isSpace, ord)
-import Data.List(isPrefixOf, isSuffixOf, isInfixOf, tails)
-import qualified Data.Map.Strict as M
-import qualified Data.Sequence as Sq
-import qualified Data.Foldable as F
-import Numeric(showHex)
+import Data.Char (isSpace, ord)
+import Data.List (isPrefixOf, isSuffixOf, isInfixOf, tails)
+import Numeric (showHex)
+import qualified Data.Foldable as F (Foldable(toList))
+import qualified Data.Map.Strict as M (Map, (!), empty, lookup, member, size, insert, adjust, insertWith)
+import qualified Data.Sequence as Sq (Seq, empty, (|>))
 
 -- | A Python dict: lookups by key, iteration in first-insertion order.
 data OMap k v = OMap !(M.Map k v) !(Sq.Seq k)

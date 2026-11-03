@@ -2,68 +2,36 @@
 -- | Disjointness facts bsc relied on but did not record, confirmed by its solver.
 module Lean.Sched.BscFacts where
 
-import Control.Exception(evaluate)
-import Control.Monad(foldM, forM, forM_, when)
-import Control.Monad.State.Strict(State, evalState, gets, modify', runState)
-import qualified Data.ByteString as BS
-import Data.Char(isAsciiLower, isAsciiUpper, isDigit, toUpper)
-import Data.Containers.ListUtils(nubOrd)
-import Data.IORef(IORef, newIORef, readIORef, writeIORef)
-import qualified Data.Foldable as F
-import qualified Data.IntMap.Strict as IM
-import qualified Data.IntSet as IS
-import GHC.Exts(isTrue#, reallyUnsafePtrEquality#)
-import Data.List(intercalate, isPrefixOf, mapAccumL, partition, sortOn, tails, transpose)
-import qualified Data.Map.Lazy as ML
-import qualified Data.Map.Strict as M
-import Data.Maybe(catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
-import qualified Data.Sequence as Sq
-import qualified Data.Set as S
-import System.Console.GetOpt(ArgDescr(..), ArgOrder(..), OptDescr(..), getOpt, usageInfo)
-import System.Environment(getArgs)
-import System.Exit(exitFailure, exitSuccess)
-import System.FilePath(takeFileName)
-import System.IO.Unsafe(unsafePerformIO)
-import System.IO(IOMode(..), hPutStr, hPutStrLn, hSetEncoding, stderr,
-                 stdout, utf8, withFile)
+import ASyntax (aTBool, aTrue, ADef(ADef), AExpr(ASDef), APackage(apkg_state_instances))
+import ASyntaxUtil (aAnd, aOr, aOrs)
+import AUses (ruleAncestor, ruleName, rulePred)
+import Control.DeepSeq (NFData)
+import Control.Monad (foldM)
+import Data.Char (isDigit)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
+import Data.List (sortOn)
+import DisjointTest (initDisjointTestState, checkDisjointExprWithCtx)
+import Error (ErrorHandle)
+import Flags (Flags)
+import GHC.Generics (Generic)
+import Id (mk_homeless_id)
+import qualified Data.Foldable as F (Foldable(foldl', toList))
+import qualified Data.IntMap.Strict as IM ((!), empty, findWithDefault, toList, fromList, insertWith, map)
+import qualified Data.IntSet as IS (member, fromList)
+import qualified Data.Map.Strict as M (Map, (!), elems, empty, findWithDefault, keys, lookup, member, size,
+    insert, fromList, fromListWith, insertWith)
+import qualified Data.Set as S (Set, member, empty, fromList, insert, singleton, toList, union)
+import qualified Data.Sequence as Sq (Seq, empty, length, null, (|>))
 
-import Control.DeepSeq(NFData)
-import GHC.Generics(Generic)
-import ABin(ABin(..), ABinModInfo(..))
-import ASchedule(AScheduleInfo(..), MethodId(..), UniqueUse(..))
-import AScheduleInfo(SchedNode(..), erdbToList)
-import AState(aState)
-import AVerilogUtil(vNameToTask)
-import ASyntax
-import ASyntaxUtil(aType, aAnd, aOr, aOrs, aSubst, argInputPorts)
-import AUses(Rule(..), buildUseMaps, extractCondition, rumToMethodUseMap,
-             ruleName, rulePred, ruleAncestor)
-import BackendNamingConventions(isRWire, isRWire0, isBypassWire)
-import DisjointTest(initDisjointTestState, checkDisjointExprWithCtx)
-import Error(ErrorHandle, initErrorHandle)
-import Flags(Flags, unSpecTo, useDPI)
-import GenABin(readABinFile)
-import Id(getIdString, getIdBaseString, mkIdCanFire, mkIdWillFire, mkRdyId,
-          isRdyId, getIdPosition, setIdBaseString, mk_homeless_id)
-import IntegerUtil(aaaa)
-import IntLit(IntLit(..))
-import PPrint(ppString)
-import Pragma(SchedulePragma(..))
-import Prim(PrimOp(..))
-import RSchedule(ratToNestedLists)
-import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
-import VModInfo(vName, vFields, vSched, vPath, VFieldInfo(..), VPathInfo(..),
-                getVNameString, mkNamedOutputs)
+import Lean.Sched.Conflicts (conflicting, conflictingIn, emptyUseIndex, mergeOn, useIndex, useIndexCons)
+import Lean.Sched.Extract (freePrefix, scheduledRules)
+import Lean.Sched.Order (orderBlock, ordersOf)
+import Lean.Sched.Types (portKey, portLabel, Call(clCond, clPort), ConflictKind(NoFollow, NoPrecede, NoShare),
+    Design(dSteps, dOrders, dSeqDefs, dDisjointSet, dBlocks, dMethodSteps, dExportedCF, dStepMap, dExecEdges),
+    Port(ptMeth, ptInst), Step(stGuard, stMethod, stReads, stCalls, stName))
 
-import Lean.Sched.Types
-import Lean.Sched.Conflicts
-import Lean.Sched.Extract
-import Lean.Sched.Order
-
--- | A pair of uses whose conditions must be disjoint: of one step, and of
--- another or the same; or of a step, and of any of the earlier uses a chain
--- lists ('dfChain'): then the first condition is the OR of the chain's
--- first k members.
+-- | Two uses whose conditions must be disjoint (of one step or two), or a use and a chain's
+-- first k members ('dfChain'), whose condition is then their OR.
 data DisjointFact = DisjointFact
     { dfStep1, dfStep2 :: String
     , dfCond1, dfCond2 :: AExpr        -- ^ each including its rule's predicate
@@ -71,32 +39,18 @@ data DisjointFact = DisjointFact
     , dfChain :: Maybe (Chain, Int)
     }
 
--- | The uses of one method (or one port) of a child, in the order of the
--- steps, each with its step and its condition (with the rule's predicate):
--- a later use that may not follow them is checked against the OR of those
--- before it, once, rather than against each.
+-- | A child method's (or port's) uses in step order, with their guarded conditions: a later
+-- use that may not follow them is checked once against the OR of those before it.
 data Chain = Chain { cnName :: String, cnMembers :: [(String, AExpr)] }
 
 -- | What the solver is asked: a fact, or a chained fact with the facts to
 -- ask instead if it is not confirmed (one for each earlier use).
 data Candidate = Single DisjointFact | Chained DisjointFact [DisjointFact]
 
--- | The candidate facts, in a form the solver can check.
---
--- In the schedule's order, a use that may not follow some earlier uses of
--- a child's method (or port: two copies of a method are separate ports) is
--- checked against all of them at once when they come from two or more
--- steps: the earlier uses of each such method form a chain ('Chain'), and
--- the use's condition must be disjoint from the OR of the chain's members
--- before it, which a chain of definitions writes in a size linear in the
--- members.  So there is one fact per use, not per pair of uses.  Pairs of
--- uses in one step that may not share a rule are checked pair by pair.
---
--- An order other than the schedule's runs some steps before steps they come
--- after in the schedule ('orderBlock'); each such pair of steps is checked
--- once, however many orders run it so.
+-- | The candidate facts: one per use against a chain of earlier uses from two or more steps,
+-- pairs within a step pair by pair, and each step pair a CF-swap order inverts once.
 disjointCandidates :: Design -> [Candidate]
-disjointCandidates d = seqCands ++ map Single (nubOn key (invFacts ++ within))
+disjointCandidates d = seqCands ++ map Single (nubFacts (invFacts ++ within))
   where
     stepArr = IM.fromList (zip [0 :: Int ..] (dSteps d))
     pos = M.fromList (zip (map stName (dSteps d)) [0 :: Int ..])
@@ -109,7 +63,6 @@ disjointCandidates d = seqCands ++ map Single (nubOn key (invFacts ++ within))
     seqFact s1 s2 p1 c1 p2 c2 =
         DisjointFact (stName s1) (stName s2) (withGuard s1 c1) (withGuard s2 c2)
                      (portLabel p1 ++ " then " ++ portLabel p2) Nothing
-    key f = (dfStep1 f, dfStep2 f, dfWhy f)
 
     -- the schedule's order: going forwards, each step meets an index of the
     -- earlier uses (by method, and by port), each bucket in step order
@@ -123,10 +76,8 @@ disjointCandidates d = seqCands ++ map Single (nubOn key (invFacts ++ within))
             !byMeth' = F.foldl' (\m (j, (p, c)) -> add m (ptInst p, ptMeth p) (b, j, p, c)) byMeth us
             !byPort' = F.foldl' (\m (j, (p, c)) -> add m (portKey p) (b, j, p, c)) byPort us
         in ((byMeth', byPort'), here : out)
-    -- the facts of one later use and one bucket of earlier uses (sorted as
-    -- pairing each step with each later one would sort them)
-    -- (the earlier uses are listed only when needed: for the pairs, or the
-    -- longest chain of a method)
+    -- the facts of a later use against a bucket of earlier ones, in pair order (the earlier
+    -- uses listed only for the pairs or a method's longest chain)
     cands sb b j2 p2 c2 bucket =
         let earlier = F.toList (bkUses bucket)
             pairs = [ ((a, b, j1, j2), seqFact (stepArr IM.! a) sb p1 c1 p2 c2)
@@ -142,10 +93,8 @@ disjointCandidates d = seqCands ++ map Single (nubOn key (invFacts ++ within))
         in if bkSteps bucket >= 2 then [((a0, b, j0, j2), Chained chained (map snd pairs))]
            else [ (k, Single f) | (k, f) <- pairs ]
 
-    -- the orders other than the schedule's: each pair of steps one of them
-    -- runs the other way round, once (for an order that moves one step, the
-    -- steps it moves it past are those up to its range's end; only those
-    -- after the furthest any earlier order moved it past are new)
+    -- each step pair some other order runs the other way round, once (only steps past the
+    -- furthest an earlier order moved a step are new)
     invFacts
         | not distinct = []
         | otherwise = concat (snd (F.foldl' invert (IM.empty, []) (drop 1 (dOrders d))))
@@ -194,16 +143,25 @@ addUse bk u@(a, _, _, _) =
         newStep = Sq.null (bkUses bk) || lastStep /= a
     in bk { bkUses = bkUses bk Sq.|> u, bkSteps = bkSteps bk + (if newStep then 1 else 0), bkLast = u }
 
+-- | Facts with one text (steps and reason) kept once per pair of conditions, so that a
+-- label with two uses has each use's fact checked (bscUseCond ORs their conditions).
+nubFacts :: [DisjointFact] -> [DisjointFact]
+nubFacts = go M.empty
+  where go _ [] = []
+        go seen (f : fs)
+            | any (\(a, b) -> a == dfCond1 f && b == dfCond2 f) old = go seen fs
+            | otherwise = f : go (M.insert k ((dfCond1 f, dfCond2 f) : old) seen) fs
+          where k = (dfStep1 f, dfStep2 f, dfWhy f)
+                old = M.findWithDefault [] k seen
+
 nubOn :: Ord k => (a -> k) -> [a] -> [a]
 nubOn f = go S.empty
   where go _ [] = []
         go seen (x : xs) | S.member (f x) seen = go seen xs
                          | otherwise = x : go (S.insert (f x) seen) xs
 
--- | Re-ask bsc's disjointness solver (Yices or STP, as configured) about
--- each candidate ('disjointCandidates'); keep the confirmed facts.  A chain
--- is given to the solver as definitions, each the OR of the one before and
--- one more member, so that each fact on it is a query of one definition.
+-- | bsc's disjointness solver on each candidate, keeping the confirmed facts; a chain is
+-- given as definitions, each the OR of the one before and one more member.
 confirmDisjointness :: ErrorHandle -> Flags -> APackage -> Design -> [Candidate] -> IO [DisjointFact]
 confirmDisjointness errh flags apkg d candidates =
     case candidates of
@@ -252,3 +210,198 @@ deriving instance Generic Chain
 instance NFData Chain
 deriving instance Generic Candidate
 instance NFData Candidate
+
+-- ---------------------------------------------------------------- the modular path
+
+-- | 'confirmDisjointness', also returning a way to ask more facts of the same state.
+confirmDisjointnessMore :: ErrorHandle -> Flags -> APackage -> Design -> [Candidate]
+                        -> IO ([DisjointFact], [DisjointFact] -> IO [DisjointFact])
+confirmDisjointnessMore errh flags apkg d candidates = do
+    let rules = [ (ruleName r, rulePred r, ruleAncestor r) | r <- scheduledRules apkg ]
+    st0 <- initDisjointTestState "schedlean" errh flags (M.elems (dSeqDefs d) ++ chainDefs) (apkg_state_instances apkg) rules
+    (st1, kept) <- foldM check (st0, []) candidates
+    ref <- newIORef st1
+    let more fs = do
+            st <- readIORef ref
+            (st', ks) <- foldM (\(s, ks) f -> do { (ok, s') <- ask s f; return (s', if ok then f : ks else ks) }) (st, []) fs
+            writeIORef ref st'
+            return (reverse ks)
+    return (reverse kept, more)
+  where
+    chains = map fst (M.elems (M.fromListWith (\new old -> if snd new > snd old then new else old)
+                                   [ (cnName c, (c, n)) | Chained (DisjointFact { dfChain = Just (c, n) }) _ <- candidates ]))
+    prefix = freePrefix "uses_upto_" (M.keys (dSeqDefs d))
+    prefixId c k = mk_homeless_id (prefix ++ show (chainIdx M.! cnName c) ++ "_" ++ show k)
+    chainIdx = M.fromList (zip (map cnName chains) [0 :: Int ..])
+    chainDefs = concat [ [ ADef (prefixId c k) aTBool (if k == 1 then e else aOr (ASDef aTBool (prefixId c (k - 1))) e) []
+                         | (k, (_, e)) <- zip [1 :: Int ..] (cnMembers c) ]
+                       | c <- chains ]
+    ask st f = do
+        let lhs = case dfChain f of
+                Just (c, k) -> ASDef aTBool (prefixId c k)
+                Nothing     -> dfCond1 f
+        (res, st') <- checkDisjointExprWithCtx st aTrue aTrue lhs (dfCond2 f)
+        return (res == Just True, st')
+    check (st, kept) cand = case cand of
+        Single f -> do
+            (ok, st') <- ask st f
+            return (st', if ok then f : kept else kept)
+        Chained f fbs -> do
+            (ok, st') <- ask st f
+            if ok then return (st', f : kept)
+            else foldM (\(s1, ks) g -> do { (ok', s2) <- ask s1 g; return (s2, if ok' then g : ks else ks) }) (st', kept) fbs
+
+-- | The CF-swap candidates of one pair (@y@ later, @x@ earlier), made only when a swap can move
+-- @x@ past @y@: the earlier method moves @x@, and the later method's last step is not before @y@.
+invertedFacts :: Design -> String -> String -> [DisjointFact]
+invertedFacts d yn xn
+    | not distinct = []
+    | Just y <- M.lookup yn pos, Just x <- M.lookup xn pos, x < y, inverted x y = nubFacts (pairFacts y x)
+    | otherwise = []
+  where
+    steps = dSteps d
+    names = map stName steps
+    pos = M.fromList (zip names [0 :: Int ..])
+    distinct = M.size pos == length steps
+    stepArr = IM.fromList (zip [0 :: Int ..] steps)
+    uses s = stReads s ++ [ (clPort c, clCond c) | c <- stCalls s ]
+    withGuard s c = maybe c (\g -> aAnd g c) (stGuard s)
+    excluded a b = S.member (min a b, max a b) (dDisjointSet d)
+                   || S.member (a, b) (dBlocks d) || S.member (b, a) (dBlocks d)
+    pairFacts y x =
+        let sy = stepArr IM.! y
+            sx = stepArr IM.! x
+            later = useIndex (fst . snd) (zip [0 :: Int ..] (uses sx))
+        in if excluded (stName sy) (stName sx) then []
+           else [ DisjointFact (stName sy) (stName sx) (withGuard sy c1) (withGuard sx c2)
+                               (portLabel p1 ++ " then " ++ portLabel p2) Nothing
+                | (p1, c1) <- uses sy
+                , (_, (p2, c2)) <- mergeOn fst (conflicting d NoFollow p1 later) ]
+    edges = [ (a, b) | (a, b) <- dExecEdges d, M.member a pos, M.member b pos ]
+    predsOf = M.fromListWith (++) [ (b, [a]) | (a, b) <- edges ]
+    ancestors x0 = go [x0] (S.singleton x0)
+      where go [] seen = seen
+            go (v : st) seen = let ps = [ p | p <- M.findWithDefault [] v predsOf, not (S.member p seen) ]
+                               in go (ps ++ st) (foldr S.insert seen ps)
+    stepsOf m = M.findWithDefault [] m (dMethodSteps d)
+    cfBy = M.fromListWith (++) (concat [ [(a, [(a, b)]), (b, [(a, b)])] | (a, b) <- dExportedCF d ])
+    inverted x y =
+        let xs = ancestors (names !! x)
+            ms = S.fromList [ m | n <- S.toList xs, Just st <- [M.lookup n (dStepMap d)], Just m <- [stMethod st] ]
+            firstOf m = minimum (map (pos M.!) (stepsOf m))
+            lastOf m = maximum (map (pos M.!) (stepsOf m))
+            cands = S.toList (S.fromList
+                [ cf | m <- S.toList ms, cf@(a, b) <- M.findWithDefault [] m cfBy
+                     , not (null (stepsOf a)), not (null (stepsOf b))
+                     , let (e, l) = if firstOf a < firstOf b then (a, b) else (b, a)
+                     , S.member e ms, firstOf e <= x, lastOf l >= y ])
+        in any (\cf -> case ordersOf names (dExecEdges d) stepsOf [cf] of
+                         Right (_ : o : _, _) -> case orderBlock pos o of
+                             Just (_, t, [xi]) -> xi == x && y < t
+                             Just (f, t, ms') -> x `elem` ms' && f <= y && y < t && y `notElem` ms'
+                             Nothing -> False
+                         _ -> False) cands
+
+-- | sitecond.BscFacts: bsc's confirmed facts keyed by both steps and uses (the dump's lines);
+-- a pair's CF-swap facts are asked when it is first looked up ('invertedFacts').
+data BscLookup = BscLookup
+    { blPos    :: M.Map String Int
+    , blSingle :: IORef (M.Map (String, String, String, String) String)
+    , blChain  :: M.Map (String, String) [(String, String, String)]
+    , blBad    :: IORef (S.Set String)
+    , blDone   :: IORef (S.Set (String, String))
+    , blUses   :: M.Map (String, String) [AExpr]
+    , blGuard  :: M.Map String (Maybe AExpr)
+    , blMore   :: (String, String) -> IO [(Bool, String, String, String)]
+    }
+
+-- | A fact line's fields: confirmed, the steps, and its reason.
+factFields :: Bool -> DisjointFact -> (Bool, String, String, String)
+factFields ok f = (ok, dfStep1 f, dfStep2 f, dfWhy f)
+
+newBscLookup :: Design -> [Candidate] -> [DisjointFact] -> ([DisjointFact] -> IO [DisjointFact]) -> IO BscLookup
+newBscLookup d cands facts more = do
+    let confirmed = S.fromList [ (dfStep1 f, dfStep2 f, dfWhy f) | f <- facts ]
+        isOk f = S.member (dfStep1 f, dfStep2 f, dfWhy f) confirmed
+        ls = concat [ case c of
+                        Single f -> [factFields (isOk f) f]
+                        Chained f fbs -> factFields (isOk f) f : (if isOk f then [] else map (\g -> factFields (isOk g) g) fbs)
+                    | c <- cands ]
+        parsed = [ x | l <- ls, Just x <- [parseFact l] ]
+        bad = S.fromList [ body | (False, body, _) <- parsed ]
+        good = [ (body, k) | (True, body, k) <- parsed, not (S.member body bad) ]
+        single = M.fromList [ ((a, p, b, q), text) | (_, Left (a, p, b, q, text)) <- good ]
+        chain = M.fromListWith (flip (++)) [ ((b, q), [(p, a, text)]) | (_, Right (a, p, b, q, text)) <- good ]
+        steps = dSteps d
+    sr <- newIORef single
+    br <- newIORef bad
+    dr <- newIORef S.empty
+    return BscLookup
+        { blPos = M.fromList (zip (map stName steps) [0 ..])
+        , blSingle = sr, blChain = chain, blBad = br, blDone = dr
+        , blUses = M.fromListWith (flip (++)) ([ ((stName st, portLabel p), [c]) | st <- steps, (p, c) <- stReads st ]
+                                              ++ [ ((stName st, portLabel (clPort c)), [clCond c]) | st <- steps, c <- stCalls st ])
+        , blGuard = M.fromList [ (stName st, stGuard st) | st <- steps ]
+        , blMore = \(yn, xn) -> do
+            let fs = invertedFacts d yn xn
+            ok <- more fs
+            let oks = S.fromList [ (dfStep1 f, dfStep2 f, dfWhy f) | f <- ok ]
+            return [ factFields (S.member (dfStep1 f, dfStep2 f, dfWhy f) oks) f | f <- fs ]
+        }
+
+-- | parse_fact_line: (confirmed, body, single (a, p, b, q, text) or chain (a0, K, b, q, text)).
+parseFact :: (Bool, String, String, String) -> Maybe (Bool, String, Either (String, String, String, String, String) (String, String, String, String, String))
+parseFact (ok, a, b, why)
+    | any (any (== ' ')) [a, b] = Nothing
+    | otherwise = case words why of
+        [p, "then", q] | why == unwords [p, "then", q] -> Just (ok, body, Left (a, p, b, q, text))
+        [k, "(any", "of", "the", n, "uses", "before)", "then", q] | all (`elem` "0123456789") n, not (null n)
+                                                                  , why == unwords [k, "(any", "of", "the", n, "uses", "before)", "then", q]
+            -> Just (ok, body, Right (a, k, b, q, text))
+        _ -> Nothing
+  where body = a ++ " / " ++ b ++ ": " ++ why
+        text = (if ok then "confirmed " else "UNCONFIRMED ") ++ body
+
+-- | BscFacts.covers: the confirmed fact covering use @pa@ of step @a@ and use @pb@ of @b@.
+bscCovers :: BscLookup -> String -> String -> String -> String -> IO (Maybe String)
+bscCovers bl a pa b pb = do
+    r <- one a pa b pb
+    case r of
+        Just t -> return (Just t)
+        Nothing -> one b pb a pa
+  where
+    pos = blPos bl
+    one x px y py = do
+        -- facts of the CF-swap orders, for a pair whose earlier step is the second
+        case (M.lookup x pos, M.lookup y pos) of
+            (Just i, Just j) | i > j -> do
+                done <- readIORef (blDone bl)
+                if S.member (x, y) done then return () else do
+                    writeIORef (blDone bl) (S.insert (x, y) done)
+                    ls <- blMore bl (x, y)
+                    let parsed = [ v | l <- ls, Just v <- [parseFact l] ]
+                    modifyIORef' (blBad bl) (S.union (S.fromList [ body | (False, body, _) <- parsed ]))
+                    bad <- readIORef (blBad bl)
+                    modifyIORef' (blSingle bl) (\m -> foldl (\m' (k, t) -> M.insert k t m') m
+                        [ ((a', p', b', q'), t) | (True, body, Left (a', p', b', q', t)) <- parsed, not (S.member body bad) ])
+            _ -> return ()
+        single <- readIORef (blSingle bl)
+        case M.lookup (x, px, y, py) single of
+            Just t -> return (Just t)
+            Nothing -> case (M.lookup x pos, M.lookup y pos) of
+                (Just i, Just j) | i < j ->
+                    return (case [ t | (k, a0, t) <- M.findWithDefault [] (y, py) (blChain bl)
+                                     , px == k || stripCopy px == k, i <= M.findWithDefault (-1) a0 pos ] of
+                              (t : _) -> Just t
+                              [] -> Nothing)
+                _ -> return Nothing
+    stripCopy l = case reverse l of
+        (']' : r1) | (ds@(_ : _), '[' : r2) <- span isDigit r1 -> reverse r2
+        _ -> l
+
+-- | BscFacts.use_cond and use_guard: bsc's conditions of a step's uses with a label, and its guard.
+bscUseCond :: BscLookup -> String -> String -> [AExpr]
+bscUseCond bl st lab = M.findWithDefault [] (st, lab) (blUses bl)
+
+bscUseGuard :: BscLookup -> String -> Maybe AExpr
+bscUseGuard bl st = M.findWithDefault Nothing st (blGuard bl)

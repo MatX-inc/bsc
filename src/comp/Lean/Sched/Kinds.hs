@@ -1,0 +1,252 @@
+-- | Child kinds as the modular file models them (model.py): the library
+-- primitives with Lean models, the assumed leaves, and the gate's generic kinds.
+module Lean.Sched.Kinds
+    ( PM(..), pmRepr, KindDef(..), kdCode, kdFx, Sched, schedRel, ofSched, makeKinds, kindOrder, kindOf
+    , genericKind, ctrSched, noValueTasks, tasksKind, parseSched, schedNames, libSets, ifcTypes
+    ) where
+
+import ASyntax (APackage(..), AVInst(..), AType(..))
+import Control.Exception (catch, IOException)
+import Data.List (elemIndex, isInfixOf)
+import Data.Maybe (fromMaybe)
+import Flags (Flags(..))
+import Id (getIdString)
+import PPrint (ppString)
+import System.Directory (listDirectory)
+import System.Environment (lookupEnv)
+import System.FilePath ((</>))
+import qualified Data.Map.Strict as M (Map, (!), fromList)
+import qualified Data.Set as S (Set, fromList)
+
+import Lean.Sched.Py (isPySpace, pyReprStr, pySplit, strip)
+
+-- | A port of a kind: a method name, or a task statement's number.
+data PM = PS String | PT Int
+    deriving (Eq, Ord, Show)
+
+pmRepr :: PM -> String
+pmRepr (PS s) = pyReprStr s
+pmRepr (PT k) = show k
+
+-- | model.KindDef: ports in code order and the annotation, as the Lean interfaces.
+data KindDef = KindDef
+    { kdName :: String, kdIface :: Maybe String, kdMType :: Maybe String, kdPorts :: [PM], kdLPorts :: Maybe [String]
+    , kdPrec, kdSbr, kdConf :: PM -> PM -> Bool
+    , kdShare, kdHasEn, kdAlwaysRdy, kdHasArg :: PM -> Bool
+    , kdPaths :: [(PM, PM)], kdBuilder, kdUsesc :: Maybe String, kdLib :: Bool
+    }
+
+kdCode :: KindDef -> PM -> Int
+kdCode k p = fromMaybe (error ("schedlean: no port " ++ show p ++ " in kind " ++ kdName k)) (elemIndex p (kdPorts k))
+
+-- | An argument-less value port: every call carries z.
+kdFx :: KindDef -> PM -> Bool
+kdFx k p = kdShare k p && not (kdHasArg k p)
+
+-- | bsc's schedule statements, as design.parse_sched reads the printed annotation.
+type Sched = [([String], String, [String])]
+
+schedRel :: Sched -> String -> String -> Maybe String
+schedRel sl p q = case [ r | (ps, r, qs) <- sl, p `elem` ps, q `elem` qs ] of
+    (r : _) -> Just r
+    [] -> Nothing
+
+ofSched :: Sched -> (PM -> PM -> Bool, PM -> PM -> Bool, PM -> PM -> Bool)
+ofSched sl = (prec, sbr, conf)
+  where
+    rel (PS p) (PS q) = schedRel sl p q
+    rel _ _ = Nothing
+    prec p q = p /= q && rel p q `elem` [Just "SB", Just "SBR"]
+    sbr p q = rel p q == Just "SBR"
+    conf p q = let a = rel p q; b = rel q p in a == Just "C" || b == Just "C" || (a == Nothing && b == Nothing)
+
+-- | design.parse_sched on the text inside the child line's brackets.
+parseSched :: String -> Sched
+parseSched s = [ x | item <- splitTop s, Just x <- [one item] ]
+  where
+    splitTop str = [ strip x | x <- go (0 :: Int) "" str, not (null (strip x)) ]
+      where go _ cur [] = [reverse cur]
+            go d cur (c : r)
+                | c == ',' && d == 0 = reverse cur : go d "" r
+                | otherwise = go d' (c : cur) r
+              where d' | c `elem` "[(" = d + 1
+                       | c `elem` "])" = d - 1
+                       | otherwise = d
+    one item = do
+        (g1, r1) <- grp item
+        r2 <- spaces r1
+        let (rel, r3) = break isPySpace r2
+        if rel `elem` ["CF", "SB", "SBR", "C"] then Just () else Nothing
+        r4 <- spaces r3
+        (g3, r5) <- grp r4
+        if null r5 then Just (schedNames g1, rel, schedNames g3) else Nothing
+    spaces str = let (a, b) = span isPySpace str in if null a then Nothing else Just b
+    grp str = case str of
+        ('[' : r) | (a, ']' : b) <- break (== ']') r -> Just ('[' : a ++ "]", b)
+        _ -> let (a, b) = break isPySpace str in if null a then Nothing else Just (a, b)
+
+schedNames :: String -> [String]
+schedNames t0 = case strip t0 of
+    ('[' : r) -> [ strip x | x <- pySplit "," (init r), not (null (strip x)) ]
+    t -> [t]
+
+flPorts, f2Ports :: [String]
+flPorts = ["enq", "deq", "first", "notFull", "i_notFull", "notEmpty", "i_notEmpty", "clear"]
+f2Ports = ["enq", "deq", "first", "notEmpty", "notFull", "i_notEmpty", "i_notFull", "clear"]
+
+rfCopies :: Int
+rfCopies = 5
+
+mkKind :: String -> Maybe String -> Maybe String -> [PM] -> Maybe [String] -> (PM -> PM -> Bool) -> (PM -> PM -> Bool)
+       -> (PM -> PM -> Bool) -> (PM -> Bool) -> (PM -> Bool) -> (PM -> Bool) -> [(PM, PM)] -> Maybe String -> Maybe String
+       -> Bool -> Maybe (PM -> Bool) -> KindDef
+mkKind n i mt ps lps prec sbr conf share en rdy paths b u lib ha =
+    KindDef n i mt ps lps prec sbr conf share en rdy (fromMaybe dflt ha) paths b u lib
+  where dflt p = en p && p `notElem` [PS "deq", PS "clear"]
+
+inS :: [String] -> PM -> Bool
+inS xs (PS p) = p `elem` xs
+inS _ _ = False
+
+pairIn :: [(String, String)] -> PM -> PM -> Bool
+pairIn xs (PS p) (PS q) = (p, q) `elem` xs
+pairIn _ _ _ = False
+
+-- | model.make_kinds, with the design's FIFOL1 and ConfigRegN schedules.
+makeKinds :: Sched -> Sched -> M.Map String KindDef
+makeKinds fifoSched cfgSched = M.fromList [ (kdName k, k) | k <- ks ]
+  where
+    isW = (== PS "write")
+    sps = map PS
+    pre q = Just . map (q ++)
+    (pc, sc, cc) = ofSched cfgSched
+    (pf, sf, cf) = ofSched fifoSched
+    f2prec = pairIn [("first", "deq"), ("first", "clear"), ("notEmpty", "deq"), ("notEmpty", "enq"), ("notEmpty", "clear")
+                    , ("notFull", "deq"), ("notFull", "enq"), ("notFull", "clear"), ("deq", "clear"), ("enq", "clear")]
+    f2sbr = pairIn [("deq", "clear"), ("enq", "clear"), ("clear", "clear")]
+    f2conf = pairIn [("enq", "enq"), ("deq", "deq")]
+    f2share = not . inS ["enq", "deq", "clear"]
+    f2en = inS ["enq", "deq", "clear"]
+    f2rdy = not . inS ["enq", "deq", "first"]
+    rfp = "upd" : [ 's' : show c | c <- [0 .. rfCopies - 1] ]
+    isS = (/= PS "upd")
+    w3 = ["wset", "wget", "whas"]
+    rw n sbrRead multi =
+        mkKind n (Just ("RWire.X " ++ pyBool sbrRead ++ " " ++ pyBool multi)) (Just "WireM") (sps w3) (pre "WireM." w3)
+               (\p q -> p == PS "wset" && q /= PS "wset")
+               (\p q -> (sbrRead && ((p == PS "wset" && q /= PS "wset") || (q == PS "wset" && p /= PS "wset")))
+                        || (multi && p == PS "wset" && q == PS "wset"))
+               (\p q -> not multi && p == PS "wset" && q == PS "wset")
+               (/= PS "wset") (== PS "wset") (const True) [(PS "wset", PS "wget"), (PS "wset", PS "whas")]
+               (Just "wireW") (Just "wireU") True Nothing
+    w0 = ["wset", "whas"]
+    rw0 n sbrRead multi =
+        mkKind n (Just ("RWire0.X " ++ pyBool sbrRead ++ " " ++ pyBool multi)) (Just "Wire0M") (sps w0) (pre "Wire0M." w0)
+               (\p q -> p == PS "wset" && q == PS "whas")
+               (\p q -> (sbrRead && p /= q) || (multi && p == PS "wset" && q == PS "wset"))
+               (\p q -> not multi && p == PS "wset" && q == PS "wset")
+               (== PS "whas") (== PS "wset") (const True) [(PS "wset", PS "whas")]
+               (Just "wire0W") (Just "wire0U") True (Just (const False))
+    pyBool b = if b then "true" else "false"
+    ks =
+        [ mkKind "reg" (Just "Reg.X") (Just "CRegM 1") (sps ["read", "write"]) (Just ["Reg.read", "Reg.write"])
+                 (\p q -> not (isW p) && isW q) (\p q -> isW p && isW q) (\_ _ -> False)
+                 (not . isW) isW (const True) [] (Just "regW") (Just "regU") True Nothing
+        , mkKind "cfg" (Just "Cfg.X") (Just "CfgM") (sps ["read", "write"]) (Just ["CfgM.read", "CfgM.write"]) pc sc cc
+                 (== PS "read") (== PS "write") (const True) [] (Just "cfgW") (Just "cfgU") False Nothing
+        , mkKind "fifo" (Just "FL.X") (Just "FL") (sps flPorts) (pre "FL." flPorts) pf sf cf
+                 (not . inS ["enq", "deq", "clear"]) (inS ["enq", "deq", "clear"]) (not . inS ["enq", "deq", "first"])
+                 [ (PS a, PS b) | (a, b) <- [("deq", "enq"), ("deq", "notFull"), ("deq", "i_notFull"), ("deq", "clear"), ("enq", "clear")] ]
+                 (Just "fifoW") (Just "fifoU") False Nothing
+        , mkKind "f2" (Just "FIFO2.X") (Just "FifoM") (sps f2Ports) (pre "FifoM." f2Ports) f2prec f2sbr f2conf
+                 f2share f2en f2rdy [] (Just "f2W") (Just "f2U") True Nothing
+        , mkKind "sf" (Just "FIFO2.X") (Just "FifoM") (sps f2Ports) (pre "FifoM." f2Ports) f2prec f2sbr f2conf
+                 f2share f2en f2rdy [] (Just "f2W") (Just "f2U") False Nothing
+        , mkKind "rf" (Just "RF.X") (Just "RFM") (sps rfp) (pre "RFM." rfp)
+                 (\p q -> isS p && q == PS "upd") (\_ _ -> False) (\p q -> p == PS "upd" && q == PS "upd")
+                 isS (== PS "upd") (const True) [ (PS ('s' : show c), PS ('s' : show c)) | c <- [0 .. rfCopies - 1] ]
+                 (Just "rfW") (Just "rfU") False (Just (const True))
+        , rw "rwS" True True, rw "rwC" True False, rw0 "rw0S" True True, rw0 "rw0C" True False ]
+
+kindOrder :: [String]
+kindOrder = ["reg", "cfg", "fifo", "f2", "sf", "rf", "rwS", "rwC", "rw0S", "rw0C", "tasks"]
+
+-- | model.kind_of: the library primitive a child's Verilog module is.
+kindOf :: String -> String -> Either String String
+kindOf typ ss
+    | typ `elem` ["RegN", "RegUN", "RegA"] = Right "reg"
+    | typ == "ConfigRegN" = Right "cfg"
+    | typ == "FIFOL1" = Right "fifo"
+    | typ == "FIFO2" = Right "f2"
+    | typ == "SizedFIFO" = Right "sf"
+    | typ == "RegFile" = Right "rf"
+    | typ == "RWire" = Right (if "wset SBR [wget, whas, wset]" `isInfixOf` ss then "rwS" else "rwC")
+    | typ == "RWire0" = Right (if "wset SBR [whas, wset]" `isInfixOf` ss then "rw0S" else "rw0C")
+    | otherwise = Left ("unsupported child type " ++ typ)
+
+-- | LastCaller.ctrAnn, Counter's corrected schedule (Ravi's decision).
+ctrSched :: Sched
+ctrSched = [ (["value"], "SB", ["addA", "addB", "setC", "setF"]), (["setC"], "SB", ["addA", "addB"])
+           , (["addA", "addB", "setC", "setF"], "SBR", ["setF"]), (["addA"], "C", ["addA"]), (["addB"], "C", ["addB"])
+           , (["value"], "CF", ["value"]), (["addA"], "CF", ["addB"]), (["addB"], "CF", ["addA"]), (["setC"], "CF", ["setC"]) ]
+
+-- | model.generic_kind (the gate only): every method and copy a port, from the
+-- declared schedule; a synthesized child's action methods C with themselves.
+genericKind :: String -> String -> Sched -> [(String, String, String, Bool)] -> Bool -> Bool -> KindDef
+genericKind name typ sl0 meths synth lib =
+    mkKind name Nothing Nothing [ PS p | p <- ports ] Nothing prec sbr conf (not . act) act (const True) [] Nothing Nothing False
+           (Just (\(PS p) -> harg M.! p))
+  where
+    ports = [ p | (p, _, _, _) <- meths ]
+    base = M.fromList [ (p, b) | (p, b, _, _) <- meths ]
+    kind = M.fromList [ (p, k) | (p, _, k, _) <- meths ]
+    harg = M.fromList [ (p, h) | (p, _, _, h) <- meths ]
+    sl = if typ == "Counter" && lib && not synth then ctrSched else sl0
+    rel a b = schedRel sl a b
+    actS p = kind M.! p /= "value"
+    act (PS p) = actS p
+    act _ = False
+    bs p = base M.! p
+    prec (PS p) (PS q) = p /= q && bs p /= bs q && rel (bs p) (bs q) `elem` [Just "SB", Just "SBR"]
+    prec _ _ = False
+    sbr (PS p) (PS q)
+        | bs p == bs q && (p /= q || (synth && actS p)) = p == q && not synth && rel (bs p) (bs q) == Just "SBR"
+        | otherwise = rel (bs p) (bs q) == Just "SBR"
+    sbr _ _ = False
+    conf (PS p) (PS q)
+        | bs p == bs q && p /= q = False
+        | p == q && synth && actS p = True
+        | otherwise = let a = rel (bs p) (bs q); b = rel (bs q) (bs p)
+                      in a == Just "C" || b == Just "C" || (a == Nothing && b == Nothing)
+    conf _ _ = False
+
+-- | The task statements' kind: one port per statement, in rank order.
+tasksKind :: Int -> KindDef
+tasksKind nT = mkKind "tasks" (Just "Tasks.X nT") (Just "Fin nT") [ PT t | t <- [0 .. nT - 1] ] Nothing
+                      lt (\_ _ -> False) (==) (const False) (const True) (const True) [] Nothing Nothing True (Just (const True))
+  where lt (PT a) (PT b) = a < b
+        lt _ _ = False
+
+-- | System tasks that return nothing: the only task calls a method may make.
+noValueTasks :: S.Set String
+noValueTasks = S.fromList ([ '$' : t ++ sfx | t <- ["display", "write", "fdisplay", "fwrite"], sfx <- ["", "b", "h", "o"] ]
+    ++ [ "$finish", "$stop", "$fflush", "$fclose", "$dumpvars", "$dumpon", "$dumpoff", "$dumpfile", "$dumpall"
+       , "$dumpflush", "$error", "$warning", "$info", "$fatal", "_finish_", "_stop_" ])
+
+-- | Each instance's interface type name (the APackage printout's word after ABSTRACT:).
+ifcTypes :: APackage -> [(String, String)]
+ifcTypes apkg = [ (getIdString (avi_vname v), ppString t) | v <- apkg_state_instances apkg, ATAbstract t _ <- [avi_type v] ]
+
+-- | bsc's library Verilog modules and packages, from $BLUESPECDIR (else the .ba's).
+libSets :: Flags -> IO (Either String (S.Set String, S.Set String))
+libSets flags = do
+    env <- lookupEnv "BLUESPECDIR"
+    let dir = fromMaybe (bluespecDir flags) env
+        ls d = listDirectory d `catch` (\e -> const (return []) (e :: IOException))
+    vs <- ls (dir </> "Verilog")
+    bos <- ls (dir </> "Libraries")
+    return $ if null vs || null bos
+        then Left ("no bsc library in " ++ dir ++ " (set BLUESPECDIR to bsc's lib directory)")
+        else Right ( S.fromList [ take (length f - 2) f | f <- vs, endsWith f ".v" ]
+                   , S.fromList [ take (length f - 3) f | f <- bos, endsWith f ".bo" ] )
+  where endsWith f sfx = reverse sfx == take (length sfx) (reverse f)

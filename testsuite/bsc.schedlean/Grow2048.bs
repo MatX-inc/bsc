@@ -1,0 +1,7 @@
+package Grow2048(sysGrow2048) where
+
+import Grow
+
+{-# synthesize sysGrow2048 #-}
+sysGrow2048 :: Module Empty
+sysGrow2048 = mkGrow 2048

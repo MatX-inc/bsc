@@ -2,65 +2,77 @@
 -- | The flat (whole-module) Lean emitter, kept behind --flat for comparison.
 module Lean.Sched.Flat where
 
-import Control.Exception(evaluate)
-import Control.Monad(foldM, forM, forM_, when)
-import Control.Monad.State.Strict(State, evalState, gets, modify', runState)
-import qualified Data.ByteString as BS
-import Data.Char(isAsciiLower, isAsciiUpper, isDigit, toUpper)
-import Data.Containers.ListUtils(nubOrd)
-import Data.IORef(IORef, newIORef, readIORef, writeIORef)
-import qualified Data.Foldable as F
-import qualified Data.IntMap.Strict as IM
-import qualified Data.IntSet as IS
-import GHC.Exts(isTrue#, reallyUnsafePtrEquality#)
-import Data.List(intercalate, isPrefixOf, mapAccumL, partition, sortOn, tails, transpose)
-import qualified Data.Map.Lazy as ML
-import qualified Data.Map.Strict as M
-import Data.Maybe(catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
-import qualified Data.Sequence as Sq
-import qualified Data.Set as S
-import System.Console.GetOpt(ArgDescr(..), ArgOrder(..), OptDescr(..), getOpt, usageInfo)
-import System.Environment(getArgs)
-import System.Exit(exitFailure, exitSuccess)
-import System.FilePath(takeFileName)
-import System.IO.Unsafe(unsafePerformIO)
-import System.IO(IOMode(..), hPutStr, hPutStrLn, hSetEncoding, stderr,
-                 stdout, utf8, withFile)
+import ASyntax (aTBool, ADef(adef_expr, adef_type), AExpr(ASDef, ASInt, ASStr, ASPort, ASParam, AMethValue,
+    ATaskValue, AMethCall, ATupleSel, ATuple, ASAny, AFunCall, ANoInlineFunCall, ae_args, APrim), AId,
+    ANoInlineFun(ANoInlineFun), AType)
+import ASyntaxUtil (argInputPorts, ATypeC(aType))
+import Control.Exception (evaluate)
+import Control.Monad (foldM, forM, forM_, when)
+import Control.Monad.State.Strict (State, evalState, gets, modify', runState)
+import Data.Char (isDigit, isAsciiLower, isAsciiUpper)
+import Data.Containers.ListUtils (nubOrd)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.List (mapAccumL, intercalate, isPrefixOf, partition, sortOn, transpose)
+import Data.Maybe (fromMaybe, catMaybes, isJust, isNothing, mapMaybe)
+import GHC.Exts (isTrue#, reallyUnsafePtrEquality#)
+import Id (getIdBaseString, getIdString)
+import IntLit (IntLit(..))
+import IntegerUtil (aaaa)
+import PPrint (ppString)
+import Prim (PrimOp(..))
+import System.FilePath (takeFileName)
+import System.IO.Unsafe (unsafePerformIO)
+import qualified Data.Foldable as F (Foldable(foldl', foldr), foldlM)
+import qualified Data.IntMap.Strict as IM (IntMap, (!), empty, findWithDefault, keys, keysSet, lookup, size,
+    toList, fromList, fromListWith, insert)
+import qualified Data.IntSet as IS (member, difference, empty, fromAscList, fromList, insert, intersection,
+    minView, singleton, toAscList, union)
+import qualified Data.Map.Strict as M (null, Map, (!), delete, elems, empty, findWithDefault, keys, lookup,
+    lookupMax, lookupMin, member, notMember, size, toList, union, insert, fromList, fromListWith, insertWith,
+    map, singleton, unionWith, unionsWith)
+import qualified Data.Map.Lazy as ML (Map, (!), findWithDefault, fromList, lookup, map, toList)
+import qualified Data.Set as S (Set, member, notMember, disjoint, empty, findMin, fromList, insert,
+    intersection, minView, null, singleton, size, toAscList, toList, union, unions)
 
-import ABin(ABin(..), ABinModInfo(..))
-import ASchedule(AScheduleInfo(..), MethodId(..), UniqueUse(..))
-import AScheduleInfo(SchedNode(..), erdbToList)
-import AState(aState)
-import AVerilogUtil(vNameToTask)
-import ASyntax
-import ASyntaxUtil(aType, aAnd, aOr, aOrs, aSubst, argInputPorts)
-import AUses(Rule(..), buildUseMaps, extractCondition, rumToMethodUseMap,
-             ruleName, rulePred, ruleAncestor)
-import BackendNamingConventions(isRWire, isRWire0, isBypassWire)
-import DisjointTest(initDisjointTestState, checkDisjointExprWithCtx)
-import Error(ErrorHandle, initErrorHandle)
-import Flags(Flags, unSpecTo, useDPI)
-import GenABin(readABinFile)
-import Id(getIdString, getIdBaseString, mkIdCanFire, mkIdWillFire, mkRdyId,
-          isRdyId, getIdPosition, setIdBaseString, mk_homeless_id)
-import IntegerUtil(aaaa)
-import IntLit(IntLit(..))
-import PPrint(ppString)
-import Pragma(SchedulePragma(..))
-import Prim(PrimOp(..))
-import RSchedule(ratToNestedLists)
-import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
-import VModInfo(vName, vFields, vSched, vPath, VFieldInfo(..), VPathInfo(..),
-                getVNameString, mkNamedOutputs)
+import Lean.BV (bvSortName, bvSortOf, BVSort(BVString, BVBool, BVUnit, BVBits))
+import Lean.Print (chunksOf, commentSafe, doc, leanKeywordSet, wrap, wrapJoin)
+import Lean.Sched.BscFacts (Chain(cnName, cnMembers), DisjointFact(dfWhy, dfChain, dfCond1, dfCond2, dfStep1,
+    dfStep2))
+import Lean.Sched.Conflicts (conflicting, emptyUseIndex, mayFollow, mergeOn, useIndex, useIndexCons)
+import Lean.Sched.Extract (freePrefix, readTables)
+import Lean.Sched.Order (commute, methodSteps, orderBlock, stepInstUses)
+import Lean.Sched.Types (childOf, leanNamespace, lookupMeth, portKey, portLabel, readPortFor, Call(clArgs,
+    clPort, clCond), Child(chSched, chAlias, chOrder, chWires, chMethods, chConf, chModule, chInst),
+    ConflictKind(NoShare, NoPrecede), Conflicts(cfSBR, cfSB), Design(dModule, dUnspec, dInputOrder, dInputs,
+    dReadyDef, dSeqDefs, dExportedCBy, dReady, dExportedC, dStateOuts, dDisjoint, dHwTasks, dEnables, dHwDefs,
+    dTaskTags, dOutputs, dExportedSB, dRelied, dStepMap, dReadFlags, dSteps, dSource, dPackage, dVersion,
+    dChildren, dChildOrder, dOrders, dUnrealized, dHavocPorts), HwTask(htId, htCond, htArgs, htTag, htName),
+    Mask(..), Meth(mtDeps, mtKind, mtCopies), MethKind(ValueMethod), Order(orMoved, orName, orPair),
+    Output(ouName, ouSeq, ouMask), Port(ptArgs, ptResults, ptMeth, ptKind, ptInst, ptEnable), Site(siUse,
+    siPort, siWithin), Step(stName, stReadSites, stGuard, stCalls, stTaskReads, stChecks, stFire, stKind,
+    stMethod, stCanFire, stTaskCalls, stOutputs, stTaskSites, stSites, stDescr), StepKind(ValueMethodStep),
+    TaskCall(tcTag, tcCond, tcArgs, tcName, tcPos, tcCheck))
 
-import Lean.Print
-import Lean.BV
-import Lean.Sched.Types
-import Lean.Sched.Conflicts
-import Lean.Sched.Order
-import Lean.Sched.Extract
-import Lean.Sched.OutOfOrder
-import Lean.Sched.BscFacts
+-- | The sort of a symbolic value: a bit-vector sort, a step's view, or a task position.
+data Sort = SBool | SBits Integer | SString | SUnit
+          | SView [Sort]          -- ^ a step's view as a function of the calls it sees
+          | SPos                  -- ^ a position in the cycle's system-task calls (concrete)
+    deriving (Eq, Ord, Show)
+
+sortOf :: AType -> Sort
+sortOf t = case bvSortOf t of
+    BVBool -> SBool
+    BVBits n -> SBits n
+    BVString -> SString
+    BVUnit -> SUnit
+
+sortName :: Sort -> String
+sortName s = case s of
+    SBits n  -> bvSortName (BVBits n)
+    SString  -> bvSortName BVString
+    SView as -> concatMap (\a -> sortName a ++ " → ") as ++ "View"
+    SPos     -> "TaskPos"
+    _        -> "Bool"
 
 -- | A symbolic value: a Lean expression over the cycle's free variables.
 --
@@ -2582,11 +2594,6 @@ data StepOut = StepOut
     , roViewName :: [String] }
 
 -- | The Lean namespace for a module: its name, capitalised.
-leanNamespace :: Design -> String
-leanNamespace d = case dModule d of
-    (c : cs) -> toUpper c : cs
-    []       -> "Module"
-
 -- | Names Lean generates in a structure's namespace, and the ones this file
 -- adds there ('State.init', 'View.hw', 'Hw.oneHot').
 structureNames :: [String]

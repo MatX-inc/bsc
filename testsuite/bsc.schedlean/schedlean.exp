@@ -1,0 +1,84 @@
+# schedlean: the gate, the modular file and the extraction views on small designs.
+# SCHEDLEAN names the tool (default: schedlean beside bsc); the tests are skipped without it.
+
+proc which_schedlean {} {
+    global env
+    if { [info exists env(SCHEDLEAN)] && [file exists $env(SCHEDLEAN)] } then {
+        return [absolute $env(SCHEDLEAN)]
+    }
+    set s [file join [file dirname [which_bsc]] schedlean]
+    if { [file exists $s] } then { return $s }
+    return ""
+}
+
+# run schedlean ARGS in the test directory, its output to OUT; pass if it exits with STATUS
+proc schedlean_run { args out {status 0} } {
+    global srcdir subdir schedlean
+    incr_stat "schedlean"
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set cmd "$schedlean $args >& $out"
+    verbose "Executing: $cmd" 4
+    set rc [catch "exec sh -c \"$cmd\"" result]
+    set got [expr { $rc == 0 ? 0 : [lindex $::errorCode 2] }]
+    if { $got == $status } then {
+        pass "schedlean $args exits with $status"
+    } else {
+        fail "schedlean $args exits with $got, not $status"
+    }
+    cd $here
+}
+
+set schedlean [which_schedlean]
+if { $schedlean == "" } then {
+    unsupported "schedlean not found (set SCHEDLEAN)"
+    return
+}
+
+# designs written for schedlean (Classic): an inverted CF-swap fact, a run-time check joining two rules,
+# and a method's task call (bsc G0020) beside a rule's
+foreach {src mod} {InvFact.bs mkInvFact InvFact2.bs mkInvFact2 MeJoin.bs sysMeJoin MethTask.bs mkMethTask} {
+    compile_verilog_pass $src $mod "-elab"
+    schedlean_run "--gate $mod.ba" $mod.gate.out
+    compare_file $mod.gate.out
+}
+
+# the CF-swap facts asked pair by pair equal those of every swapped order
+foreach mod {mkInvFact mkInvFact2} {
+    schedlean_run "--show-model=inverted-check $mod.ba" $mod.inverted.out
+    compare_file $mod.inverted.out
+}
+
+# the modular file, and the emitter's stop on a check line with two rules on its first side
+schedlean_run "-o MethTask.lean mkMethTask.ba" mkMethTask.emit.out
+compare_file mkMethTask.emit.out
+compare_file MethTask.lean
+schedlean_run "-o SysMeJoin.lean sysMeJoin.ba" sysMeJoin.emit.out 1
+compare_file sysMeJoin.emit.out
+
+# linear cost (plan section 5.1): a step of n/4 sites in each of four rules; the emission phases'
+# CPU time at four times the size at most 2.5 squared times as much, and every phase at a 512k stack
+proc schedlean_cpu { log } {
+    set f [open $log r]
+    set cpu ""
+    while { [gets $f line] >= 0 } {
+        if { [regexp {^schedlean: total emission wall [0-9.]+ cpu ([0-9.]+)} $line _ c] } then { set cpu $c }
+    }
+    close $f
+    return $cpu
+}
+foreach n {512 2048} {
+    compile_verilog_pass Grow$n.bs sysGrow$n "-elab"
+    schedlean_run "--gate --time-phases sysGrow$n.ba +RTS -K512k -RTS" sysGrow$n.gate.log
+}
+schedlean_run "--show-model sysGrow2048.ba +RTS -K512k -RTS" sysGrow2048.show.log
+set here [absolute $srcdir]
+set c1 [schedlean_cpu [file join $here $subdir sysGrow512.gate.log]]
+set c4 [schedlean_cpu [file join $here $subdir sysGrow2048.gate.log]]
+if { $c1 == "" || $c4 == "" } then {
+    fail "schedlean --time-phases gave no emission total"
+} elseif { $c4 <= 6.25 * $c1 + 0.05 } then {
+    pass "schedlean emission grows linearly ($c1 s at 512, $c4 s at 2048)"
+} else {
+    fail "schedlean emission grows faster than linear ($c1 s at 512, $c4 s at 2048)"
+}

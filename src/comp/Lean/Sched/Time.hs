@@ -2,12 +2,12 @@
 -- before its clock is read, with extraction and emission totals.
 module Lean.Sched.Time (Timer, newTimer, phase, phaseNote, reportTotals, extractionPhases) where
 
-import Control.Monad(when)
-import Data.IORef(IORef, newIORef, readIORef, modifyIORef')
-import GHC.Clock(getMonotonicTime)
-import System.CPUTime(getCPUTime)
-import System.IO(hPutStrLn, stderr)
-import Text.Printf(printf)
+import Control.Monad (when)
+import Data.IORef (IORef, newIORef, readIORef, modifyIORef')
+import GHC.Clock (getMonotonicTime)
+import System.CPUTime (getCPUTime)
+import System.IO (hPutStrLn, stderr)
+import Text.Printf (printf)
 
 data Timer = Timer Bool (IORef [(String, Double, Double)])
 

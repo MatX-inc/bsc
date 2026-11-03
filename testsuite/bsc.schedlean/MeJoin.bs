@@ -1,0 +1,20 @@
+package MeJoin(sysMeJoin) where
+
+-- r1 and r2 may fire together (both write a; r2 wins); only r3 is asserted exclusive with them
+{-# verilog sysMeJoin #-}
+sysMeJoin :: Module Empty
+sysMeJoin =
+  module
+    a :: Reg (Bit 8) <- mkReg 0
+    b :: Reg (Bit 8) <- mkReg 0
+    m :: Reg (Bit 2) <- mkReg 0
+    let left :: Rules
+        left = rules
+                 "r1": when m /= 3 ==> a := a + 1
+                 "r2": when m /= 2 ==> a := b
+        right :: Rules
+        right = rules
+                 "r3": when m == 3 ==> b := b + 1
+    addRules (rJoinMutuallyExclusive left right)
+    rules
+      "tick": when True ==> m := m + 1

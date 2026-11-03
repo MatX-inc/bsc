@@ -2,58 +2,13 @@
 -- | The schedule verifier's model of one bsc module (the Design).
 module Lean.Sched.Types where
 
-import Control.Exception(evaluate)
-import Control.Monad(foldM, forM, forM_, when)
-import Control.Monad.State.Strict(State, evalState, gets, modify', runState)
-import qualified Data.ByteString as BS
-import Data.Char(isAsciiLower, isAsciiUpper, isDigit, toUpper)
-import Data.Containers.ListUtils(nubOrd)
-import Data.IORef(IORef, newIORef, readIORef, writeIORef)
-import qualified Data.Foldable as F
-import qualified Data.IntMap.Strict as IM
-import qualified Data.IntSet as IS
-import GHC.Exts(isTrue#, reallyUnsafePtrEquality#)
-import Data.List(intercalate, isPrefixOf, mapAccumL, partition, sortOn, tails, transpose)
-import qualified Data.Map.Lazy as ML
-import qualified Data.Map.Strict as M
-import Data.Maybe(catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
-import qualified Data.Sequence as Sq
-import qualified Data.Set as S
-import System.Console.GetOpt(ArgDescr(..), ArgOrder(..), OptDescr(..), getOpt, usageInfo)
-import System.Environment(getArgs)
-import System.Exit(exitFailure, exitSuccess)
-import System.FilePath(takeFileName)
-import System.IO.Unsafe(unsafePerformIO)
-import System.IO(IOMode(..), hPutStr, hPutStrLn, hSetEncoding, stderr,
-                 stdout, utf8, withFile)
-
-import Control.DeepSeq(NFData)
-import GHC.Generics(Generic)
-import ABin(ABin(..), ABinModInfo(..))
-import ASchedule(AScheduleInfo(..), MethodId(..), UniqueUse(..))
-import AScheduleInfo(SchedNode(..), erdbToList)
-import AState(aState)
-import AVerilogUtil(vNameToTask)
-import ASyntax
-import ASyntaxUtil(aType, aAnd, aOr, aOrs, aSubst, argInputPorts)
-import AUses(Rule(..), buildUseMaps, extractCondition, rumToMethodUseMap,
-             ruleName, rulePred, ruleAncestor)
-import BackendNamingConventions(isRWire, isRWire0, isBypassWire)
-import DisjointTest(initDisjointTestState, checkDisjointExprWithCtx)
-import Error(ErrorHandle, initErrorHandle)
-import Flags(Flags, unSpecTo, useDPI)
-import GenABin(readABinFile)
-import Id(getIdString, getIdBaseString, mkIdCanFire, mkIdWillFire, mkRdyId,
-          isRdyId, getIdPosition, setIdBaseString, mk_homeless_id)
-import IntegerUtil(aaaa)
-import IntLit(IntLit(..))
-import PPrint(ppString)
-import Pragma(SchedulePragma(..))
-import Prim(PrimOp(..))
-import RSchedule(ratToNestedLists)
-import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
-import VModInfo(vName, vFields, vSched, vPath, VFieldInfo(..), VPathInfo(..),
-                getVNameString, mkNamedOutputs)
+import ASyntax (ADef, AExpr, AType)
+import Control.DeepSeq (NFData)
+import Data.Char (toUpper)
+import Data.Maybe (listToMaybe)
+import GHC.Generics (Generic)
+import qualified Data.Map.Strict as M (Map, (!), empty, findWithDefault, lookup)
+import qualified Data.Set as S (Set)
 
 
 -- | A child submodule instance, seen only through its 'VModInfo'.
@@ -64,6 +19,7 @@ data Child = Child
     , chOrder   :: [String]                  -- ^ methods, as declared
     , chConf    :: Conflicts
     , chSched   :: String                    -- ^ the annotations, for comments
+    , chStmts   :: [([String], String, [String])]  -- ^ its CF, SB, SBR and C statements, in printed order
     , chAlias   :: M.Map String String
       -- ^ result wire of an argument-free value method -> the first such wire
       -- reading the same Verilog output port (e.g. a FIFO's notEmpty and
@@ -252,6 +208,7 @@ data Design = Design
     , dReady      :: M.Map String String   -- ^ method -> its ready port (an output)
     , dReadyDef   :: M.Map String String   -- ^ method -> the definition of its ready signal
     , dOrders     :: [Order]
+    , dExecEdges  :: [(String, String)]     -- ^ bsc's execution-order edges between steps
     , dExportedCF :: [(String, String)]     -- ^ exported CF pairs of methods with steps
     , dUseDefs    :: [ADef]                 -- ^ the use-condition definitions recomputed
     , dUnrealized :: [(String, String)]
@@ -338,3 +295,9 @@ readPortFor d mt inst use = case mtCopies mt of
 
 lookupMeth :: Design -> String -> String -> Maybe Meth
 lookupMeth d inst m = M.lookup inst (dChildren d) >>= M.lookup m . chMethods
+
+-- | The Lean namespace (and default file stem) of a module: its name, capitalised.
+leanNamespace :: Design -> String
+leanNamespace d = case dModule d of
+    (c : cs) -> toUpper c : cs
+    []       -> "Module"

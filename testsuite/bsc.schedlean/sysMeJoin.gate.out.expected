@@ -1,0 +1,6 @@
+GATE {"name": "sysMeJoin", "scan": "ok", "slots": 8, "codes": 1, "seg_uses": 4, "mod_facts": 1, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [["a.write", 2]], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 2, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 2, "step_fallback": [], "unguarded": []}
+counts sysMeJoin                    5     12     1      3      3      3      1     2     0     0
+unrealized 0
+shadow sysMeJoin ports with two callers 1, solver calls 1, shadowing ports 1 [L 1]; lc callers max 2; ports relying on mutually_exclusive 0, conflict_free 0; last caller admits all
+shadow L a.write [RegN] callers 2
+sysMeJoin                default  A     emitter no  shadow ports [L 1] lc callers max 2 slots 8 codes 1 esc 0 facts 0 (-) pairwise 2 seg_uses 4 mod_facts 1 step 3

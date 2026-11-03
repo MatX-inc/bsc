@@ -1,143 +1,28 @@
 -- | The APackage as the prototype read it: bsc's own printout of the .ba
 -- (dumpba's text, made in memory) parsed into expression trees, exactly as bapkg.py.
 module Lean.Sched.APkg
-    ( E(..), Act(..), APkg(..), parseAPkg, parseExpr, parseAction, tokenize, Tok
-    , reprE, reprAct, eKids, showAPkg
+    ( parseAPkg, parseExpr, parseAction, showAPkg, showAPkgNoSched, parseToks, actionToks, exprToks, memAPkgText
     ) where
 
-import Data.Char(isAsciiLower, isAsciiUpper, isDigit, isHexDigit)
-import Data.List(isPrefixOf)
-import qualified Data.Array as A
-import qualified Data.Map.Strict as M
-import qualified Data.Set as S
+import ASyntax (binOp, AAction(ATaskAction, ACall, AFCall), AExpr(ASStr, APrim, ANoInlineFunCall, AFunCall,
+    ATaskValue, AMethCall, AMethValue, ATuple, ATupleSel, ASPort, ASParam, ASDef, ASInt), APackage,
+    AType(ATBit))
+import Data.Char (isDigit, isAsciiLower, isAsciiUpper)
+import Data.List (intercalate, isPrefixOf)
+import Id (getIdString, unQualId)
+import IntLit (showSizedVeriIntLit, showVeriIntLit)
+import PPrint (ppString)
+import Prim (PrimOp(..))
+import qualified Data.Array as A (Array, (!), listArray)
+import qualified Data.Map.Strict as M (lookup)
+import qualified Data.Set as S (Set, member, fromList, toAscList)
 
-import Lean.Sched.Py
-
--- | bapkg's expression tuples.
-data E = EId String | ELit String | ECall String String [E] | EIf E E E
-       | ECase E [(E, E)] (Maybe E) | ESel E E | EApp E [E] | EBin String E E
-       | EUn String E | ETup [E]
-    deriving (Eq, Show)
-
--- Python orders tuples by their first field (the tag) and then the rest.
-instance Ord E where
-    compare a b = compare (key a) (key b)
-      where key x = (tag x, x')
-              where x' = map Left (strs x) ++ map Right (kids x)
-            tag x = case x of
-                EId _ -> "id"; ELit _ -> "lit"; ECall {} -> "call"; EIf {} -> "if"; ECase {} -> "case"
-                ESel {} -> "sel"; EApp {} -> "app"; EBin {} -> "bin"; EUn {} -> "un"; ETup _ -> "tup"
-            strs x = case x of
-                EId s -> [s]; ELit s -> [s]; ECall i m _ -> [i, m]; EBin o _ _ -> [o]; EUn o _ -> [o]; _ -> []
-            kids = eKids
-
--- | The subexpressions, in tuple order.
-eKids :: E -> [E]
-eKids x = case x of
-    ECall _ _ as -> as
-    EIf c a b -> [c, a, b]
-    ECase i arms d -> i : concat [ [l, v] | (l, v) <- arms ] ++ maybe [] pure d
-    ESel a i -> [a, i]
-    EApp h as -> h : as
-    EBin _ a b -> [a, b]
-    EUn _ a -> [a]
-    ETup xs -> xs
-    _ -> []
-
--- | Python's repr of the tuple.
-reprE :: E -> String
-reprE x = case x of
-    EId s -> t2 "id" (pyReprStr s)
-    ELit s -> t2 "lit" (pyReprStr s)
-    ECall i m as -> tup [pyReprStr "call", pyReprStr i, pyReprStr m, lst (map reprE as)]
-    EIf c a b -> tup [pyReprStr "if", reprE c, reprE a, reprE b]
-    ECase i arms d -> tup [pyReprStr "case", reprE i, lst [ tup [reprE l, reprE v] | (l, v) <- arms ], maybe "None" reprE d]
-    ESel a i -> tup [pyReprStr "sel", reprE a, reprE i]
-    EApp h as -> tup [pyReprStr "app", reprE h, lst (map reprE as)]
-    EBin o a b -> tup [pyReprStr "bin", pyReprStr o, reprE a, reprE b]
-    EUn o a -> tup [pyReprStr "un", pyReprStr o, reprE a]
-    ETup xs -> tup [pyReprStr "tup", lst (map reprE xs)]
-  where t2 t s = tup [pyReprStr t, s]
-        tup xs = "(" ++ commas xs ++ ")"
-        lst xs = "[" ++ commas xs ++ "]"
-        commas = foldr1' (\a b -> a ++ ", " ++ b)
-        foldr1' _ [] = ""
-        foldr1' f ys = foldr1 f ys
-
--- | A rule action: a child call, a task (or other function) call, or anything else.
-data Act = ACallA String String (Maybe E) [E] | ATask String (Maybe E) [E] | AOther String (Maybe E)
-    deriving (Eq, Show)
-
-reprAct :: Act -> String
-reprAct a = case a of
-    ACallA i m c as -> "('call', " ++ pyReprStr i ++ ", " ++ pyReprStr m ++ ", " ++ mc c ++ ", " ++ l as ++ ")"
-    ATask n c as -> "('task', " ++ pyReprStr n ++ ", " ++ mc c ++ ", " ++ l as ++ ")"
-    AOther s c -> "('other', " ++ pyReprStr s ++ ", " ++ mc c ++ ", [])"
-  where mc = maybe "None" reprE
-        l as = "[" ++ intercalate' (map reprE as) ++ "]"
-        intercalate' [] = ""
-        intercalate' xs = foldr1 (\p q -> p ++ ", " ++ q) xs
-
--- ---------------------------------------------------------------- tokens
-
-type Tok = (String, String)
-
-ops :: [String]
-ops = [".<=", ".>=", ".<", ".>", "&&", "||", "==", "!=", "<=", ">=", "<<", ">>", "++", "->"]
-      ++ map pure "-+*/%<>&|^!~()[]{},;?:="
-
-tokenize :: String -> Either String [Tok]
-tokenize = go
-  where
-    go [] = Right []
-    go s@(c : cs)
-        | isPySpace c = go (dropWhile isPySpace cs)
-        | c == '"', Just (lit, rest) <- strLit cs "\"" = ((("str", lit)) :) <$> go rest
-        | isDigit c, Just (lit, rest) <- numLit s = (("lit", lit) :) <$> go rest
-        | idStart c = let (v, rest) = ident s in (("id", v) :) <$> go rest
-        | (o : _) <- [ o | o <- ops, o `isPrefixOf` s ] = (("op", o) :) <$> go (drop (length o) s)
-        | otherwise = Left ("cannot tokenize at " ++ pyReprStr (take 40 s))
-    strLit ('"' : r) acc = Just (reverse ('"' : acc), r)
-    strLit ('\\' : x : r) acc | x /= '\n' = strLit r (x : '\\' : acc)
-    strLit ('\\' : _) _ = Nothing
-    strLit (x : r) acc = strLit r (x : acc)
-    strLit [] _ = Nothing
-    idStart x = isAsciiLower x || isAsciiUpper x || x == '_' || x == '$'
-    idChar x = idStart x || isDigit x || x == '\''
-    ident s = let (a, r) = span idChar s
-                  (b, r') = dots r
-              in (a ++ b, r')
-    dots ('.' : x : r) | idStart x = let (a, r1) = span idChar (x : r)
-                                         (b, r2) = dots r1
-                                     in ('.' : a ++ b, r2)
-    dots r = ("", r)
-    numLit s =
-        let (ds, r) = span isDigit s
-            sized = case r of
-                ('\'' : r1) ->
-                    let (sg, r2) = case r1 of { (x : y) | x `elem` "sS" -> ([x], y); _ -> ("", r1) }
-                    in case r2 of
-                        (b : r3) | b `elem` "bdhoBDHO" ->
-                            let (v, r4) = span (`elem` "0123456789abcdefABCDEFxXzZ_?") r3
-                            in if null v then Nothing else Just (ds ++ "'" ++ sg ++ [b] ++ v, r4)
-                        _ -> Nothing
-                _ -> Nothing
-            hex = case s of
-                ('0' : 'x' : r1) -> let (v, r2) = span isHexDigit r1
-                                    in if null v then Nothing else Just ("0x" ++ v, r2)
-                _ -> Nothing
-            plain = case r of
-                ('.' : r1) | (f@(_ : _), r2) <- span isDigit r1 -> Just (ds ++ "." ++ f, r2)
-                _ -> Just (ds, r)
-        in case sized of { Just x -> Just x; Nothing -> case hex of { Just x -> Just x; Nothing -> plain } }
+import Lean.Sched.Expr (memAPkgWith, isOne)
+import Lean.Sched.Py (endsWith, findSub, isPySpace, omAdjust, omEmpty, omFromList, omInsert, omSetDefault,
+    omToList, pyReprStr, pySplit, pyWords, rfindSub, rstrip, startsWith, strip, OMap)
+import Lean.Sched.Tree (binPrec, classifyAct, reprAct, reprE, tokenize, APkg(..), Act, E(..), Tok)
 
 -- ---------------------------------------------------------------- parser
-
-binPrec :: M.Map String Int
-binPrec = M.fromList
-    [ ("||", 1), ("&&", 2), ("|", 3), ("^", 4), ("&", 5), ("==", 6), ("!=", 6)
-    , ("<", 7), ("<=", 7), (">", 7), (">=", 7), (".<", 7), (".<=", 7), (".>", 7), (".>=", 7)
-    , ("<<", 8), (">>", 8), ("++", 8), ("+", 9), ("-", 9), ("*", 10), ("/", 10), ("%", 10) ]
 
 data PS = PS { psToks :: A.Array Int Tok, psN :: Int, psInsts :: S.Set String }
 
@@ -252,6 +137,22 @@ parseExpr insts s = do
         then Left ("trailing tokens in " ++ pyReprStr (take 80 s))
         else Right e
 
+-- | 'parseExpr' on tokens already made (the in-memory route, "Lean.Sched.Expr").
+parseToks :: S.Set String -> [Tok] -> Either String E
+parseToks insts ts = do
+    let ps = mkPS insts ts
+    (e, i) <- pExpr 0 ps 0
+    if fst (peekAt ps i) /= "eof" then Left "trailing tokens" else Right e
+
+-- | 'parseAction' on the tokens of the condition (when not 1) and of the call.
+actionToks :: S.Set String -> Maybe [Tok] -> [Tok] -> Either String Act
+actionToks insts mc ts = do
+    cond <- case mc of
+        Nothing -> Right Nothing
+        Just cs -> (Just . fst) <$> pExpr 0 (mkPS insts cs) 0
+    (act, _) <- pApp (mkPS insts ts) 0
+    return (classifyAct insts cond act)
+
 parseAction :: S.Set String -> String -> Either String Act
 parseAction insts s = do
     ts <- tokenize s
@@ -264,15 +165,7 @@ parseAction insts s = do
         else do
             (a, _) <- pApp (mkPS insts ts) 0
             return (Nothing, a)
-    return $ case act of
-        ECall i m as -> ACallA i m cond as
-        EApp (EId n) as
-            | '.' `elem` n, (inst, _ : meth) <- break (== '.') n, inst `S.member` insts -> ACallA inst meth cond as
-            | otherwise -> ATask n cond as
-        EId n
-            | '.' `elem` n, (inst, _ : meth) <- break (== '.') n, inst `S.member` insts -> ACallA inst meth cond []
-            | otherwise -> ATask n cond []
-        _ -> AOther (take 60 (reprE act)) cond
+    return (classifyAct insts cond act)
   where
     -- the first top-level 'then', or the last token (as the prototype's loop leaves k)
     thenAt ts = go (0 :: Int) (zip [0 ..] ts)
@@ -284,19 +177,6 @@ parseAction insts s = do
                 | otherwise = go d r
 
 -- ---------------------------------------------------------------- the package
-
-data APkg = APkg
-    { apInsts   :: S.Set String
-    , apDefs    :: OMap String E
-    , apTypes   :: OMap String String
-    , apRules   :: OMap String (E, [Act])
-    , apIfcVals :: OMap String E
-    , apMethArgs :: OMap String [String]
-    , apErrors  :: [String]
-    , apUsesMap :: OMap String [(String, [[String]])]
-    , apRalloc  :: OMap String [(String, Integer)]
-    , apGuarded :: OMap String Bool
-    }
 
 -- | bapkg's split_top: at top-level separators, outside brackets and strings.
 splitTopB :: Char -> String -> [String]
@@ -583,16 +463,117 @@ parseSched t = (uses, ralloc)
 
 -- | --show-model=apkg-tree: the parse, for comparison with bapkg.py's.
 showAPkg :: APkg -> [String]
-showAPkg ap =
+showAPkg ap = let (a, b) = break (\l -> startsWith l "guarded " || startsWith l "errors ") (showAPkgNoSched ap)
+              in a ++ schedLines ap ++ b
+
+schedLines :: APkg -> [String]
+schedLines ap =
+       [ "uses " ++ n ++ " = " ++ "[" ++ commas [ "(" ++ pyReprStr s ++ ", [" ++ commas [ "[" ++ commas (map pyReprStr r) ++ "]" | r <- rr ] ++ "])" | (s, rr) <- us ] ++ "]" | (n, us) <- omToList (apUsesMap ap) ]
+    ++ [ "ralloc " ++ n ++ " = " ++ "[" ++ commas [ "(" ++ pyReprStr s ++ ", " ++ show k ++ ")" | (s, k) <- al ] ++ "]" | (n, al) <- omToList (apRalloc ap) ]
+  where commas [] = ""
+        commas xs = foldr1 (\a b -> a ++ ", " ++ b) xs
+
+-- | The same without the schedule tables, which the in-memory route keeps as bsc's own records.
+showAPkgNoSched :: APkg -> [String]
+showAPkgNoSched ap =
     [ "insts " ++ unwords (S.toAscList (apInsts ap)) ]
     ++ [ "def " ++ n ++ " = " ++ reprE e | (n, e) <- omToList (apDefs ap) ]
     ++ [ "type " ++ n ++ " = " ++ t | (n, t) <- omToList (apTypes ap) ]
     ++ [ "rule " ++ n ++ " " ++ reprE p ++ " " ++ "[" ++ commas (map reprAct as) ++ "]" | (n, (p, as)) <- omToList (apRules ap) ]
     ++ [ "ifc " ++ n ++ " = " ++ reprE e | (n, e) <- omToList (apIfcVals ap) ]
     ++ [ "args " ++ n ++ " = " ++ "[" ++ commas (map pyReprStr as) ++ "]" | (n, as) <- omToList (apMethArgs ap) ]
-    ++ [ "uses " ++ n ++ " = " ++ "[" ++ commas [ "(" ++ pyReprStr s ++ ", [" ++ commas [ "[" ++ commas (map pyReprStr r) ++ "]" | r <- rr ] ++ "])" | (s, rr) <- us ] ++ "]" | (n, us) <- omToList (apUsesMap ap) ]
-    ++ [ "ralloc " ++ n ++ " = " ++ "[" ++ commas [ "(" ++ pyReprStr s ++ ", " ++ show k ++ ")" | (s, k) <- al ] ++ "]" | (n, al) <- omToList (apRalloc ap) ]
     ++ [ "guarded " ++ n ++ " = " ++ (if b then "True" else "False") | (n, b) <- omToList (apGuarded ap) ]
     ++ [ "errors " ++ show (length (apErrors ap)) ]
   where commas [] = ""
         commas xs = foldr1 (\a b -> a ++ ", " ++ b) xs
+
+-- ---------------------------------------------------------------- the in-memory package, through text
+
+-- | The tokens of bsc's printout of an expression at precedence @p@ (ASyntax's
+-- PPrint AExpr), as the prototype's tokenizer splits that text.
+exprToks :: Int -> AExpr -> Either String [Tok]
+exprToks p e = case e of
+    APrim _ _ o es@(_ : _ : _) | binOp o -> do
+        ops <- tokenize (ppString o)
+        xs <- mapM (exprToks 1) es
+        paren (p > 0) (intercalate ops xs)
+    APrim _ _ PrimCase (x : dd : ces) -> do
+        xi <- exprToks 0 x
+        arms <- pairsOf ces
+        d <- exprToks 0 dd
+        return ([idT "case"] ++ xi ++ [idT "of"] ++ concat arms ++ [idT "_", opT "->"] ++ d)
+    APrim _ _ PrimPriMux es -> muxT "primux" es
+    APrim _ _ PrimMux es -> muxT "mux" es
+    APrim _ _ o es -> do
+        ops <- tokenize (ppString o)
+        xs <- mapM (exprToks 1) es
+        paren (p > 0) (ops ++ concat xs)
+    ANoInlineFunCall _ i _ es -> app i es
+    AFunCall _ i _ _ es -> app i es
+    ATaskValue _ i _ _ n -> paren (p > 0) =<< tokenize (getIdString i ++ "#" ++ show n)
+    AMethCall _ i m es -> do
+        h <- tokenize (getIdString i ++ "." ++ getIdString (unQualId m))
+        xs <- mapM (exprToks 1) es
+        paren (p > 0 && not (null es)) (h ++ concat xs)
+    AMethValue _ i m -> paren (p > 0) =<< tokenize (getIdString i ++ "." ++ getIdString (unQualId m))
+    ATuple _ es -> do
+        xs <- mapM (exprToks 0) es
+        return ([opT "("] ++ intercalate [opT ","] xs ++ [opT ")"])
+    ATupleSel _ x k -> do
+        xs <- exprToks 1 x
+        ks <- tokenize (show k)
+        return (xs ++ [opT "["] ++ ks ++ [opT "]"])
+    ASPort _ i -> tokenize (getIdString i)
+    ASParam _ i -> tokenize (getIdString i)
+    ASDef _ i -> tokenize (getIdString i)
+    ASInt _ (ATBit sz) il -> tokenize (showSizedVeriIntLit sz il)
+    ASInt _ _ il -> tokenize (showVeriIntLit il)
+    ASStr _ _ s -> tokenize (show s)
+    _ -> tokenize (ppString e)      -- reals, don't-cares, clocks, resets, inouts, gates
+  where
+    idT s = ("id", s)
+    opT s = ("op", s)
+    paren b ts = Right (if b then opT "(" : ts ++ [opT ")"] else ts)
+    app i es = do
+        h <- tokenize (getIdString i)
+        xs <- mapM (exprToks 1) es
+        paren (p > 0) (h ++ concat xs)
+    pairsOf (x : y : r) = do
+        a <- exprToks 0 x
+        b <- exprToks 0 y
+        rest <- pairsOf r
+        return ((a ++ [opT "->"] ++ b) : rest)
+    pairsOf [] = Right []
+    pairsOf _ = Left "odd case arms"
+    muxT nm es = do
+        let grp (x : y : r) = do
+                a <- exprToks 0 x
+                b <- exprToks 0 y
+                rest <- grp r
+                return (([opT "("] ++ a ++ [opT ","] ++ b ++ [opT ")"]) : rest)
+            grp [] = Right []
+            grp _ = Left "odd mux arms"
+        gs <- grp es
+        paren (p > 0) (idT nm : concat gs)
+
+-- | 'memAPkg' through bsc's printer's tokens and the prototype's parser (the parity oracle).
+memAPkgText :: APackage -> APkg
+memAPkgText = memAPkgWith (\insts e -> exprToks 0 e >>= parseToks insts) actText
+  where
+    actText insts a = case a of
+        ACall i m (c : es) -> do
+            h <- tokenize (getIdString i ++ "." ++ getIdString (unQualId m))
+            call h c es
+        AFCall i _ _ (c : es) _ -> do
+            h <- tokenize (getIdString i)
+            call h c es
+        ATaskAction i _ _ n (c : es) _ _ _ -> do
+            h <- tokenize (getIdString i ++ "#" ++ show n)
+            call h c es
+        _ -> Left "an action without a condition"
+      where
+        call h c es = do
+            mc <- if isOne c then Right Nothing else Just <$> exprToks 0 c
+            xs <- mapM (exprToks 1) es
+            actionToks insts mc (h ++ concat xs)
+

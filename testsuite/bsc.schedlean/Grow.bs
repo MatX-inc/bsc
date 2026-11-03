@@ -1,0 +1,16 @@
+package Grow(mkGrow) where
+
+import List
+
+-- n registers shifted by four rules, each writing a quarter of them (a wide step per rule)
+mkGrow :: Integer -> Module Empty
+mkGrow n =
+  module
+    rs :: List (Reg (Bit 8)) <- List.mapM (\ _ -> mkReg 0) (upto 1 n)
+    let q = n `div` 4
+        pairs = zip rs (List.append (List.drop 1 rs) (List.take 1 rs))
+        quarter k = List.take q (List.drop (k * q) pairs)
+        copy :: (Reg (Bit 8), Reg (Bit 8)) -> Action
+        copy (r, s) = r := s
+        shift k = rules { "w": when True ==> joinActions (List.map copy (quarter k)) }
+    addRules (foldr (<+>) emptyRules (List.map shift (upto 0 3)))

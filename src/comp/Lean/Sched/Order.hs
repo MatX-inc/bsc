@@ -2,70 +2,22 @@
 -- | The logical execution orders to check: the schedule's and the CF swaps.
 module Lean.Sched.Order where
 
-import Control.Exception(evaluate)
-import Control.Monad(foldM, forM, forM_, when)
-import Control.Monad.State.Strict(State, evalState, gets, modify', runState)
-import qualified Data.ByteString as BS
-import Data.Char(isAsciiLower, isAsciiUpper, isDigit, toUpper)
-import Data.Containers.ListUtils(nubOrd)
-import Data.IORef(IORef, newIORef, readIORef, writeIORef)
-import qualified Data.Foldable as F
-import qualified Data.IntMap.Strict as IM
-import qualified Data.IntSet as IS
-import GHC.Exts(isTrue#, reallyUnsafePtrEquality#)
-import Data.List(intercalate, isPrefixOf, mapAccumL, partition, sortOn, tails, transpose)
-import qualified Data.Map.Lazy as ML
-import qualified Data.Map.Strict as M
-import Data.Maybe(catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
-import qualified Data.Sequence as Sq
-import qualified Data.Set as S
-import System.Console.GetOpt(ArgDescr(..), ArgOrder(..), OptDescr(..), getOpt, usageInfo)
-import System.Environment(getArgs)
-import System.Exit(exitFailure, exitSuccess)
-import System.FilePath(takeFileName)
-import System.IO.Unsafe(unsafePerformIO)
-import System.IO(IOMode(..), hPutStr, hPutStrLn, hSetEncoding, stderr,
-                 stdout, utf8, withFile)
+import Data.Bits (bit, testBit, (.|.))
+import Data.List (tails)
+import Data.Maybe (mapMaybe)
+import qualified Data.IntMap.Strict as IM (findWithDefault, fromListWith)
+import qualified Data.IntSet as IS (member, notMember, fromList)
+import qualified Data.Map.Strict as M (null, Map, (!), delete, empty, findWithDefault, lookup, member, size,
+    toList, insert, adjust, fromList, fromListWith, intersectionWith)
+import qualified Data.Map.Lazy as ML ((!), fromDistinctAscList, fromList, lookup)
+import qualified Data.Set as S (Set, member, notMember, empty, fromList, insert, minView, singleton, size,
+    toList, union)
 
-import ABin(ABin(..), ABinModInfo(..))
-import ASchedule(AScheduleInfo(..), MethodId(..), UniqueUse(..))
-import AScheduleInfo(SchedNode(..), erdbToList)
-import AState(aState)
-import AVerilogUtil(vNameToTask)
-import ASyntax
-import ASyntaxUtil(aType, aAnd, aOr, aOrs, aSubst, argInputPorts)
-import AUses(Rule(..), buildUseMaps, extractCondition, rumToMethodUseMap,
-             ruleName, rulePred, ruleAncestor)
-import BackendNamingConventions(isRWire, isRWire0, isBypassWire)
-import DisjointTest(initDisjointTestState, checkDisjointExprWithCtx)
-import Error(ErrorHandle, initErrorHandle)
-import Flags(Flags, unSpecTo, useDPI)
-import GenABin(readABinFile)
-import Id(getIdString, getIdBaseString, mkIdCanFire, mkIdWillFire, mkRdyId,
-          isRdyId, getIdPosition, setIdBaseString, mk_homeless_id)
-import IntegerUtil(aaaa)
-import IntLit(IntLit(..))
-import PPrint(ppString)
-import Pragma(SchedulePragma(..))
-import Prim(PrimOp(..))
-import RSchedule(ratToNestedLists)
-import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
-import VModInfo(vName, vFields, vSched, vPath, VFieldInfo(..), VPathInfo(..),
-                getVNameString, mkNamedOutputs)
+import Lean.Sched.Types (Call(clPort), Child(chConf), Conflicts(cfCF), Design(dMethodSteps, dChildren),
+    Order(orFrom, Order, orWindow), Port(ptMeth, ptInst), Step(stCalls, stReadSites))
 
-import Lean.Sched.Types
-import Lean.Sched.Conflicts
-
--- | The orders to check: the schedule's, and one per exported CF pair.
---
--- A CF export lets a parent run the two methods in the other relative
--- order.  Everything else stays constrained as bsc's scheduler left it: the
--- swapped order is a topological sort of the scheduler's execution-order
--- edges ('asi_sched_graph') plus one edge putting the later method first,
--- keeping every other step as close to its original position as possible.
--- A direct edge between the two methods is an arbitrary choice the CF
--- export makes irrelevant, so it is dropped.  A pair whose swap would
--- break a constraint is left out (and noted).
+-- | The schedule's order and one per exported CF pair: bsc's execution edges plus the later
+-- method first, other steps kept in place (a direct edge between the two dropped; unrealizable swaps noted).
 ordersOf :: [String] -> [(String, String)] -> (String -> [String]) -> [(String, String)]
          -> Either String ([Order], [(String, String)])
 ordersOf names edges stepsOf cfs = case backward of
@@ -83,24 +35,16 @@ ordersOf names edges stepsOf cfs = case backward of
     tailAt k = M.findWithDefault [] k tailsAt
     -- the edges between steps, checked once rather than in every swap
     edges' = [ (x, y) | (x, y) <- edges, M.member x pos, M.member y pos ]
-    -- Every edge goes forward in the schedule's order: bsc's execution order
-    -- is the execution nodes of a topological sort ('flattenCombinedGraph')
-    -- of a graph with all of 'asi_sched_graph''s edges but the arbitrary
-    -- choices it adds afterwards, which it reads off that same order.  So the
-    -- topological sort gives back the schedule's order, and a swapped one
-    -- differs from it only in a window ('window'), which is all that has to
-    -- be sorted.  (An edge going backward is reported as an error.)
+    -- every edge goes forward in the schedule (bsc's order is a sort of these edges), so a
+    -- swapped order differs only in a window, which is all that is sorted (a backward edge is an error)
     distinct = S.size (S.fromList names) == n
     backward = [ (x, y) | (x, y) <- edges', pos M.! x >= pos M.! y ]
     predsOf = M.fromListWith S.union [ (y, S.singleton x) | (x, y) <- edges' ]
     succsOf = M.fromListWith S.union [ (x, S.singleton y) | (x, y) <- edges' ]
     swaps = [ swapped a b sa sb | (a, b) <- cfs, let sa = stepsOf a, let sb = stepsOf b
                                 , not (null sa), not (null sb) ]
-    -- each method's steps (several when bsc split it): all of the later
-    -- method's go before all of the earlier one's.  Rather than as an edge
-    -- from each of the one to each of the other, that is counted once: an
-    -- earlier method's step also waits until none of the later method's
-    -- steps is left to run.
+    -- each method's steps (several when bsc split it); the earlier method's wait until none of
+    -- the later method's are left, counted once rather than as an edge per pair
     swapped a b sa sb =
         let first ss = minimum (map (pos M.!) ss)
             aFirst = first sa < first sb
@@ -121,24 +65,14 @@ ordersOf names edges stepsOf cfs = case backward of
                Nothing -> Left (a, b)
            -- (with a step repeated, the sort never places every position)
            else Left (a, b)
-    -- Kahn's algorithm, always taking the earliest available step, where a
-    -- step of the earlier method (eS) also waits for the later method's
-    -- (lS), from the first step of the two methods, f, up to the first
-    -- position from which the swapped order is the schedule's again: (f, the steps in between, that position).  The
-    -- steps before f come out as they are, all of them before any of the
-    -- two methods' steps.  The steps are taken in the schedule's order (a
-    -- step is available when its predecessors have run), except that one
-    -- whose predecessors have not all run waits, and runs, before any later
-    -- step, once they have: the earliest step available is always a waiting
-    -- one, if any is.  Once nothing waits and both methods' steps have all
-    -- run, every step so far has run, and the rest run in order.
+    -- Kahn's algorithm from the methods' first step f to where the order is the schedule's again,
+    -- the earliest available step first (a waiting one before any later step); the rest run in order
     window e l eS lS = go f S.empty M.empty M.empty (S.size lS) S.empty []
       where
         f = minimum (map (pos M.!) (e ++ l))
         lastSpecial = maximum (map (pos M.!) (e ++ l))
-        -- the swapped order's edges, other than those from each of the later
-        -- method's steps to each of the earlier one's: no edge goes the
-        -- other way between them
+        -- the swapped order's edges, but those from the later method's steps to the earlier's
+        -- (no edge goes the other way between them)
         ownPreds y | S.member y eS = filter (`S.notMember` lS) (S.toList (M.findWithDefault S.empty y predsOf))
                    | S.member y lS = filter (`S.notMember` eS) (S.toList (M.findWithDefault S.empty y predsOf))
                    | otherwise     = S.toList (M.findWithDefault S.empty y predsOf)
@@ -146,11 +80,8 @@ ordersOf names edges stepsOf cfs = case backward of
                    | S.member x eS = filter (`S.notMember` lS) (S.toList (M.findWithDefault S.empty x succsOf))
                    | otherwise     = S.toList (M.findWithDefault S.empty x succsOf)
         ran done y = pos M.! y < f || S.member y done
-        -- the next position to look at, the waiting steps that can run (by
-        -- position), the others with how many of their own predecessors
-        -- they wait for (the earlier method's apart: they also wait for
-        -- the later method's steps), how many of the later method's steps
-        -- are left, the steps run, and the window so far (last first)
+        -- the next position, waiting steps that can run, the others with their predecessors left,
+        -- the later method's steps left, the steps run and the window so far (last first)
         go next ready waiting waitingE lLeft done acc = case S.minView ready of
             Just ((_, x), ready') -> run x next ready' waiting waitingE lLeft done acc
             Nothing
@@ -180,14 +111,36 @@ ordersOf names edges stepsOf cfs = case backward of
                   (foldr M.delete waiting' newlyW) (foldr M.delete waitingE' newlyE) lLeft'
                   (S.insert x done) (x : acc)
 
--- | An order other than the schedule's, as the schedule's with some steps of
--- a range moved after the others: the range's first position, the position
--- after its last, and the positions moved, in order (none when the order is
--- the schedule's).  'ordersOf' makes only orders of this form: the earlier
--- method's steps, and the steps that must follow them, wait for the later
--- method's last step and then run in their order, right after it (Kahn's
--- algorithm always takes the earliest step available, and the waiting ones
--- first).  'Nothing' says the order is not of this form.
+-- | The unrealizable CF swaps without the orders: a swap deadlocks only where a successor of the
+-- earlier method's steps reaches a predecessor of the later's, so only those pairs are swapped.
+unrealizedOf :: [String] -> [(String, String)] -> (String -> [String]) -> [(String, String)] -> [(String, String)]
+unrealizedOf names edges stepsOf cfs
+    | any (\(x, y) -> x >= y) edgesI = []
+    | otherwise = either (const []) snd (ordersOf names edges stepsOf cands)
+  where
+    n = length names
+    pos = M.fromList (zip names [0 :: Int ..])
+    distinct = M.size pos == n
+    edgesI = [ (pos M.! x, pos M.! y) | (x, y) <- edges, M.member x pos, M.member y pos ]
+    succsI = IM.fromListWith (++) [ (x, [y]) | (x, y) <- edgesI ]
+    predsI = IM.fromListWith (++) [ (y, [x]) | (x, y) <- edgesI ]
+    -- each step's descendants (edges go forward, so later positions come first)
+    reach = ML.fromDistinctAscList [ (i, foldl' (.|.) 0 [ bit y .|. (reach ML.! y) | y <- IM.findWithDefault [] i succsI ]) | i <- [0 .. n - 1] ]
+    -- per method: its steps, its outside successors' descendants (themselves included), its outside predecessors
+    info = ML.fromList [ (m, (ss, rx, ys)) | m <- S.toList (S.fromList (concat [ [a, b] | (a, b) <- cfs ]))
+                       , let ss = map (pos M.!) (stepsOf m)
+                             sS = IS.fromList ss
+                             rx = foldl' (.|.) 0 [ bit x .|. (reach ML.! x) | s <- ss, x <- IM.findWithDefault [] s succsI, IS.notMember x sS ]
+                             ys = [ y | s <- ss, y <- IM.findWithDefault [] s predsI, IS.notMember y sS ] ]
+    cands = [ p | p@(a, b) <- cfs, not distinct || maybe False id (outside a b) ]
+    outside a b = do
+        (sa, rxa, ysa) <- ML.lookup a info
+        (sb, rxb, ysb) <- ML.lookup b info
+        if null sa || null sb then Nothing
+        else Just (if minimum sa < minimum sb then any (testBit (rxa :: Integer)) ysb else any (testBit (rxb :: Integer)) ysa)
+
+-- | An order as the schedule's with some steps of a range moved after the others (range start,
+-- end, positions moved), the only form 'ordersOf' makes; Nothing for any other order.
 orderBlock :: M.Map String Int -> Order -> Maybe (Int, Int, [Int])
 orderBlock pos o
     | length ps /= length (orWindow o) = Nothing
@@ -205,10 +158,8 @@ orderBlock pos o
     rest = [ p | p <- [f .. t - 1], not (IS.member p movedSet) ]
     ascending xs = and (zipWith (<) xs (drop 1 xs))
 
--- | Do two steps commute: is each of their uses of a submodule conflict-free
--- with each of the other's?  Then their relative order cannot matter.  (Two
--- writes of one register may come in either order, but not to the same
--- effect.)  @usesOf@ gives each step's 'stepInstUses', made once per step.
+-- | Do two steps commute (each use of a submodule conflict-free with each of the other's)?
+-- @usesOf@ gives each step's 'stepInstUses', made once per step.
 commute :: Design -> (String -> Maybe (M.Map String (S.Set String))) -> String -> String -> Bool
 commute d usesOf x y = case (usesOf x, usesOf y) of
     -- uses of different instances always commute, so only each instance's

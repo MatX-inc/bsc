@@ -1,0 +1,5 @@
+GATE {"name": "mkInvFact", "scan": "AssertionError ('h3', 0, 1)", "slots": 10, "codes": null, "seg_uses": null, "mod_facts": 0, "escapes": null, "esc_facts": null, "esc_facts_max_per_pair": 0, "esc_facts_how": null, "esc_facts_unconfirmed": null, "esc_facts_err": null, "esc_facts_fallback": null, "lc": [], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts mkInvFact                    3      8     0      4      3      1      1     1     0     1
+unrealized 0
+shadow mkInvFact ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+mkInvFact                default  flat  emitter no  shadow ports [-] lc callers max 0 slots 10 codes None esc None facts None (-) pairwise 0 seg_uses None mod_facts 0 | emitter scan fails: AssertionError ('h3', 0, 1) step 4
