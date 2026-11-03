@@ -1,0 +1,10 @@
+# Generic native-AST candidate and proof/replay checks; no MatX source here.
+namespace eval eco_live_aliases {
+    if {[eco_sdk_env "ECO live aliases" yosys]} {
+        set root [file normalize [file join [pwd] eco-live-aliases-[pid]-[clock clicks]]]
+        file mkdir $root
+        set script [file join $here ASTLiveAliases.hs]
+        set source [file join $sdk lib ECOASTLiveAliases.hs]
+        eco_run_script "ECO live aliases: directed candidate/proof/replay" [file join $root directed.log] $script [file join $root run] $script $source $yosys
+    }
+}
