@@ -48,3 +48,38 @@ compare_file DictSharingTrace.bs.bsc-out tcvar_DictSharingTrace.bsc-out.expected
 # retry does not keep), so a later equal predicate derives its own
 compile_pass DictSharingRetry.bs {-trace-tc-dict-share} 1
 find_n_strings DictSharingRetry.bs.bsc-out {satisfy:} 0
+
+# The order in which the generated dictionary binders of a package are
+# first interned reaches the .bo: IConv orders the independent
+# projection binders of a recursive dictionary group by the interning
+# ordinal of their spelling, and the typechecker's counter restarts per
+# definition, so a spelling recurs and keeps the ordinal of its first
+# interning.  A replay evaluates no identifier of a recorded derivation
+# (SolvedBinds.Deriv names the walk's dictionaries by number), so the
+# consumer of a replayed block interns the same spellings in the same
+# order as it interns the walk's own.  The generated names of the .bo,
+# in the order the .bo stream first writes them, are pinned to the list
+# the compiler without this reuse writes (the .tcnames.out.expected file was
+# written by that compiler; the numbers depend on the Prelude's instance
+# set, as typecheck_DictSharingTrace.out.expected's do); a reuse that
+# evaluated the recorded identifiers at the hit moves two of them.
+proc bo_generated_names { bo out } {
+    global srcdir
+    global subdir
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set status [catch {exec sh -c "tr -c '\[:print:\]' '\\n' < $bo | grep -oE '_tc(dict|temp)\[0-9\]+' > $out"}]
+    cd $here
+    return $status
+}
+compile_pass DictSharingMutRec.bs {-trace-tc-dict-share} 1
+find_n_strings DictSharingMutRec.bs.bsc-out {satisfy:} 31
+bo_generated_names DictSharingMutRec.bo DictSharingMutRec.tcnames.out
+compare_file DictSharingMutRec.tcnames.out
+
+# The same list with the reuse switched off: the derivations recorded
+# beside the bindings change nothing by themselves
+compile_pass DictSharingMutRec.bs {-no-tc-dict-share} 1
+find_n_strings DictSharingMutRec.bs.bsc-out {satisfy:} 0
+bo_generated_names DictSharingMutRec.bo DictSharingMutRec.tcnames.out
+compare_file DictSharingMutRec.tcnames.out

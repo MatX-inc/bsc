@@ -48,7 +48,7 @@ import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
 import Flags(Flags, maxTIStackDepth)
 import Subst
 import Pred
-import SolvedBinds(SolvedBinds)
+import SolvedBinds(Deriv)
 import Scheme
 import Assump
 import SymTab
@@ -161,23 +161,22 @@ data DictCacheFrame = DictCacheFrame {
   dcDrawn :: !Int
 }
 
--- A recorded derivation (TCMisc.sat): the bindings the instance walk
--- derived for the first occurrence of a ground predicate, what the
--- walk consumed, and the names a replay renumbers.
+-- A recorded derivation (TCMisc.sat): how the instance walk built the
+-- block for the first occurrence of a ground predicate, by the numbers
+-- the walk drew (SolvedBinds.Deriv: no identifier of the block is
+-- held or evaluated), and what the walk consumed.
 -- TCMisc.replaySolvedBinds states how a later occurrence takes it.
 -- The fields are built when the entry is recorded (nothing of the
--- walk's state outlives it) but deDicts, a function of the entry's own
--- fields computed on its first replay.
+-- walk's state outlives it).
 data DictCacheEntry = DictCacheEntry {
-  deRoot :: !Id,            -- the first occurrence's dictionary variable
-  deBinds :: !SolvedBinds,  -- the block satMany merged for it
+  deRootNum :: !Int,        -- the first occurrence's dictionary number
+  deDeriv :: !Deriv,        -- the derivation of the block satMany merged
+                            -- for it
   deSubst :: !Subst,        -- the walk's own substitution, restricted to
                             -- the type variables free in the block: the
                             -- part a replay has to apply (the rest binds
                             -- variables the block does not mention)
   deSpan :: !WalkSpan,      -- what the walk drew and how deep it went
-  deDicts :: [(Id, Int)],   -- the block's dictionary ids but the root,
-                            -- with their numbers
   deVars :: ![TyVar]        -- the walk's type variables left free in the
                             -- block or in the substitution's range
 }

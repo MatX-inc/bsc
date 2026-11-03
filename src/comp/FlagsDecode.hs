@@ -572,6 +572,7 @@ traceflags = [
           "hack-gate-clock-inputs",
           "hack-gate-default-clock",
           "hack-no-itype-ftv-cache",
+          "no-tc-dict-share",
           "hack-strict-inst-tree",
           "outlaw-sv-kws-as-classic-ids",
           "show-qualifiers",
