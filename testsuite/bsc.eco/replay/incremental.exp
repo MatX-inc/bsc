@@ -1,0 +1,86 @@
+# Capture must rerun code generation even when ordinary -u outputs are current.
+bsc_initialize
+namespace eval eco_incremental {
+    proc run {label arguments logfile} {
+        set status [exec_with_log "ECO incremental $label" \
+            [list env BSC_OPTIONS= $::bsc {*}$arguments >& $logfile]]
+        if {$status} {
+            set f [open $logfile]; verbose -log [read $f] 0; close $f
+            fail "ECO incremental: $label"
+            return 0
+        }
+        pass "ECO incremental: $label"
+        return 1
+    }
+
+    set previous [pwd]
+    try {
+        set here [file dirname [file normalize [info script]]]
+        cd $here
+        set work [file join $here work_incremental]
+        file delete -force $work
+        file mkdir $work/build $work/reference
+        set modules {mkReplayIncrementalTop mkReplayIncrementalChild}
+        set flags [list -u -verilog -elab -g mkReplayIncrementalTop \
+            -no-show-timestamps -no-show-version \
+            -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched \
+            -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr \
+            -bdir $work/build -vdir $work/build -info-dir $work/build]
+        set source $here/ReplayIncrementalTop.bs
+        if {![run {ordinary warm build} [list {*}$flags $source] $work/ordinary.log]} {return}
+        foreach module $modules {
+            file copy $work/build/$module.v $work/reference/$module.v
+        }
+        if {![run {ordinary cached build} [list {*}$flags $source] $work/cached.log]} {return}
+        set f [open $work/cached.log]; set contents [read $f]; close $f
+        if {[string first "compiling " $contents] < 0} {
+            pass "ECO incremental: ordinary cached build skips recompilation"
+        } else {
+            verbose -log $contents 0
+            fail "ECO incremental: ordinary cached build skips recompilation"
+        }
+
+        # Keep every ordinary output directory unchanged: a new -vdir would
+        # already trigger code generation and hide the missing capture bug.
+        foreach mode {first recapture dependency} {
+            if {$mode eq "dependency"} {
+                # This imported package has no synthesized module. It still
+                # needs -u dependency rebuilding before the captured modules.
+                file delete $work/build/ReplayIncrementalHelper.bo
+            }
+            set capture $work/capture-$mode
+            if {![run "$mode capture from cached outputs" \
+                    [list {*}$flags -eco-capture $capture $source] $work/$mode.log]} {continue}
+            if {$mode eq "dependency"} {
+                if {[file exists $work/build/ReplayIncrementalHelper.bo]} {
+                    pass "ECO incremental: rebuilds missing imported helper"
+                } else {fail "ECO incremental: rebuilds missing imported helper"}
+            }
+            foreach module $modules {
+                set complete 1
+                foreach suffix {ba flags intern replay output-0.v} {
+                    set path $capture/$module.$suffix
+                    if {![file exists $path] || [file size $path] == 0} {set complete 0}
+                }
+                if {!$complete} {
+                    fail "ECO incremental: $mode $module complete capture"
+                    continue
+                }
+                pass "ECO incremental: $mode $module complete capture"
+                if {[exec_with_log "ECO incremental $mode capture bytes" [list cmp \
+                        $work/reference/$module.v $work/build/$module.v]]} {
+                    fail "ECO incremental: $mode $module preserves ordinary bytes"
+                } else {pass "ECO incremental: $mode $module preserves ordinary bytes"}
+                if {![run "$mode $module strict replay" \
+                        [list -eco-replay $capture/$module.replay \
+                            -eco-output $work/replay-$mode] $work/$mode-$module-replay.log]} {continue}
+                if {[exec_with_log "ECO incremental $mode replay bytes" [list cmp \
+                        $work/reference/$module.v $work/replay-$mode/$module.v]]} {
+                    fail "ECO incremental: $mode $module exact replay bytes"
+                } else {pass "ECO incremental: $mode $module exact replay bytes"}
+            }
+        }
+    } finally {
+        cd $previous
+    }
+}
