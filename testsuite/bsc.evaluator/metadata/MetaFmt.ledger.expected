@@ -1,0 +1,128 @@
+=== metadata (MetaFmt sysMetaFmt):
+ledger after idroprules: 203 sites, 8 contexts, 4 roots, 8 defs, 38 events
+inlined (InlineFmt): __h134
+inlined (InlineFmt): __h138
+inlined (InlineFmt): f__h113
+inlined (Inline): __h133 -> RL_step
+inlined (Inline): __h137 -> RL_step
+inlined (Inline): __h141 -> RL_step
+created (Transform): __i1 <- __h163
+created (Transform): __i2 <- __h164
+merged (Transform): __h163 -> __i1
+merged (Transform): __h164 -> __i2
+renamed (Transform): __i1 -> __h163
+renamed (Transform): __i2 -> __h164
+created (Transform): __i3 <- RL_step
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- RL_step
+created (Transform): __i7 <- RL_step
+inlined (Transform): __i5 -> __i6
+inlined (Transform): __i3 -> RL_step
+inlined (Transform): __i4 -> RL_step
+inlined (Transform): __i6 -> RL_step
+inlined (Transform): __i7 -> RL_step
+created (Transform): __j1 <- __h163
+created (Transform): __j2 <- __h164
+merged (Transform): __h163 -> __j1
+merged (Transform): __h164 -> __j2
+renamed (Transform): __j1 -> __h163
+renamed (Transform): __j2 -> __h164
+created (Transform): __j3 <- RL_step
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- RL_step
+created (Transform): __j7 <- RL_step
+inlined (Transform): __j5 -> __j6
+inlined (Transform): __j3 -> RL_step
+inlined (Transform): __j4 -> RL_step
+inlined (Transform): __j6 -> RL_step
+inlined (Transform): __j7 -> RL_step
+resolved: 1 of 3 defs and rules stand for other ids
+  RL_step <- RL_step __h141 __h137 __h133
+
+-----
+=== metadata (MetaFmt sysMetaFmt):
+ledger after dropundet: 203 sites, 8 contexts, 4 roots, 8 defs, 38 events
+inlined (InlineFmt): __h134
+inlined (InlineFmt): __h138
+inlined (InlineFmt): f__h113
+inlined (Inline): __h133 -> RL_step
+inlined (Inline): __h137 -> RL_step
+inlined (Inline): __h141 -> RL_step
+created (Transform): __i1 <- __h163
+created (Transform): __i2 <- __h164
+merged (Transform): __h163 -> __i1
+merged (Transform): __h164 -> __i2
+renamed (Transform): __i1 -> __h163
+renamed (Transform): __i2 -> __h164
+created (Transform): __i3 <- RL_step
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- RL_step
+created (Transform): __i7 <- RL_step
+inlined (Transform): __i5 -> __i6
+inlined (Transform): __i3 -> RL_step
+inlined (Transform): __i4 -> RL_step
+inlined (Transform): __i6 -> RL_step
+inlined (Transform): __i7 -> RL_step
+created (Transform): __j1 <- __h163
+created (Transform): __j2 <- __h164
+merged (Transform): __h163 -> __j1
+merged (Transform): __h164 -> __j2
+renamed (Transform): __j1 -> __h163
+renamed (Transform): __j2 -> __h164
+created (Transform): __j3 <- RL_step
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- RL_step
+created (Transform): __j7 <- RL_step
+inlined (Transform): __j5 -> __j6
+inlined (Transform): __j3 -> RL_step
+inlined (Transform): __j4 -> RL_step
+inlined (Transform): __j6 -> RL_step
+inlined (Transform): __j7 -> RL_step
+
+-----
+=== metadata (MetaFmt sysMetaFmt):
+ledger after finalcleanup: 203 sites, 8 contexts, 4 roots, 8 defs, 38 events
+inlined (InlineFmt): __h134
+inlined (InlineFmt): __h138
+inlined (InlineFmt): f__h113
+inlined (Inline): __h133 -> RL_step
+inlined (Inline): __h137 -> RL_step
+inlined (Inline): __h141 -> RL_step
+created (Transform): __i1 <- __h163
+created (Transform): __i2 <- __h164
+merged (Transform): __h163 -> __i1
+merged (Transform): __h164 -> __i2
+renamed (Transform): __i1 -> __h163
+renamed (Transform): __i2 -> __h164
+created (Transform): __i3 <- RL_step
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- RL_step
+created (Transform): __i7 <- RL_step
+inlined (Transform): __i5 -> __i6
+inlined (Transform): __i3 -> RL_step
+inlined (Transform): __i4 -> RL_step
+inlined (Transform): __i6 -> RL_step
+inlined (Transform): __i7 -> RL_step
+created (Transform): __j1 <- __h163
+created (Transform): __j2 <- __h164
+merged (Transform): __h163 -> __j1
+merged (Transform): __h164 -> __j2
+renamed (Transform): __j1 -> __h163
+renamed (Transform): __j2 -> __h164
+created (Transform): __j3 <- RL_step
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- RL_step
+created (Transform): __j7 <- RL_step
+inlined (Transform): __j5 -> __j6
+inlined (Transform): __j3 -> RL_step
+inlined (Transform): __j4 -> RL_step
+inlined (Transform): __j6 -> RL_step
+inlined (Transform): __j7 -> RL_step
+
+-----

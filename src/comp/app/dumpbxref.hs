@@ -33,7 +33,7 @@ main = do
     let bx = readBXrefFile errh fname file
         stage = bxrefStageName (bx_stage bx)
         table = renderSideFile (bx_module bx) (bx_meta bx)
-        events = renderLedger stage (MetaLedger (bx_meta bx))
+        events = renderLedger stage [] (MetaLedger (bx_meta bx))
     hSetEncoding stdout utf8
     case part of
       Table -> putStr table

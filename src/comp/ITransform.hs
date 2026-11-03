@@ -22,6 +22,7 @@ import Control.Monad(foldM, forM)
 import Control.Monad.State.Strict(State, runState, gets, get, put)
 import Data.List((\\))
 import qualified Data.Map.Strict as M
+import Data.Maybe(maybeToList)
 import qualified Data.Set as S
 
 import IntegerUtil(mask, integerAnd)
@@ -40,6 +41,7 @@ import ISyntax
 import ISyntaxUtil
 import IPrims(doPrimOp)
 import IInline(iSortDs, iInline)
+import IExpandMeta(MetaLedger, PassTag(..), MetaEvent(..), appendEvents)
 import BExpr
 
 -- For boolean opt
@@ -83,7 +85,7 @@ iTransExprLoop e =
 
 iTransform :: ErrorHandle -> Flags -> String -> IModule a -> IModule a
 iTransform errh flags prefix =
-          iInline False .                -- XXX only for debug
+          iInline PTTransform False .    -- XXX only for debug
         iTransform1 1 errh flags prefix . iSortDs
 
 iTransform1 :: Integer -> ErrorHandle -> Flags -> String ->
@@ -95,8 +97,10 @@ iTransform1 no errh flags prefix imod@(IModule { imod_state_insts = itvs,
     imod { imod_state_insts = itvs',
            imod_local_defs  = ds',
            imod_rules       = rs',
-           imod_interface   = ifc' }
-  where ((itvs', rs', ifc'), ds') = runT errh flags no prefix trMod
+           imod_interface   = ifc',
+           imod_meta        = ledger' }
+  where ((itvs', rs', ifc'), ds', ledger') =
+            runT errh flags no prefix (imod_meta imod) trMod
         trMod = do
             mapM_ iTrDef ds
             iTransFixupDefNames flags
@@ -104,26 +108,30 @@ iTransform1 no errh flags prefix imod@(IModule { imod_state_insts = itvs,
             ifc' <- mapM iTrIfc ifc
             -- clock and reset expressions (in nc and nr) are just wires - do not simplify
             itvs' <- mapM (\ (i, sv@(IStateVar { isv_iargs = es })) ->
-                             do es' <- mapM (iTrExprL emptyCtx []) es
+                             do setOwnerT i
+                                es' <- mapM (iTrExprL emptyCtx []) es
                                 return (i, sv { isv_iargs = es' }))
                           itvs
             return (itvs', rs', ifc')
 
 iTrIfc :: IEFace a -> T (IEFace a) a
 iTrIfc (IEFace i its met mrs wp fi)
-    = do met' <- forM met (appFstM  $ iTrExprL emptyCtx [])
+    = do setOwnerT i
+         met' <- forM met (appFstM  $ iTrExprL emptyCtx [])
          mrs' <- forM mrs iTrRules
          return (IEFace i its met' mrs' wp fi)
 
 iTrDef :: IDef a -> T () a
 iTrDef def@(IDef i t e p) = do
           -- traceM ("iTrDef start " ++ ppReadable def)
+        setOwnerT i
         e' <- iTrExprL emptyCtx [] e
         -- traceM ("iTrDef process " ++ ppReadable (i, e', expVal e'))
         addDefT i t e' p
 
 iTrRule :: IRule a -> T (IRule a) a
 iTrRule r = do
+        setOwnerT (irule_name r)
         doBO <- getDoBO
         let ctx = emptyCtx
         -- traceM("iTrRule start " ++ ppReadable (irule_name r))
@@ -1443,13 +1451,28 @@ data TState a = TState {
         --   * the def ("IDef defname deftype e")
         -- When the monad is run, because all exprs are inlined and then CSE'd
         -- back up, the defs for the package will come from this map.
-        cse_map :: M.Map (IExpr a) (IExpr a, IDef a)
+        cse_map :: M.Map (IExpr a) (IExpr a, IDef a),
+
+        -- The ledger events of this run (IExpandMeta), most recent
+        -- first: the CSE defs created, the defs merged into them or
+        -- inlined and the renames of the fixup, each with the ids in
+        -- hand.  A write conses an unevaluated event onto the list and
+        -- forces nothing: the events, and the fixup's batch among them,
+        -- are first demanded when the stage's deepseq reaches the
+        -- module's ledger, after its defs, rules and interface, so no
+        -- id is forced before the pass forces it itself.  The counter,
+        -- the maps and their orders are untouched by a write.
+        events :: [MetaEvent],
+        -- The def, rule, method or instance under transformation, which
+        -- a CSE def created meanwhile is Created from.
+        owner :: Maybe Id
         }
 
 type T b a = State (TState a) b
 
-runT :: ErrorHandle -> Flags -> Integer -> String -> T b a -> (b, [IDef a])
-runT errh flags no prefix xforms =
+runT :: ErrorHandle -> Flags -> Integer -> String -> MetaLedger -> T b a ->
+        (b, [IDef a], MetaLedger)
+runT errh flags no prefix ledger0 xforms =
     let initState :: TState a
         initState = TState { errHandle = errh
                            , flags = flags
@@ -1457,6 +1480,8 @@ runT errh flags no prefix xforms =
                            , idNo = no
                            , def_map = M.empty
                            , cse_map = M.empty
+                           , events = []
+                           , owner = Nothing
                            }
     in case runState xforms initState of
          (x, ts) ->
@@ -1467,7 +1492,15 @@ runT errh flags no prefix xforms =
                         , defPropsHasNoCSE props
                       ]
                   defs = defs_from_cse ++ non_cse_defs
-              in  (x, defs)
+                  -- the ledger, with this run's events appended oldest
+                  -- first (a thunk the module's deepseq forces last)
+                  ledger = appendEvents (reverse (events ts)) ledger0
+              in  (x, defs, ledger)
+
+setOwnerT :: Id -> T () a
+setOwnerT i = do
+  ts <- get
+  put $ ts { owner = Just i }
 
 getDoBO :: T Bool a
 getDoBO = do
@@ -1489,7 +1522,11 @@ newExprT t e = do
             d = IDef i t e []  -- props get lost here, but restored in iTransRenameIdsInDef
             cmap' = M.insert e (e', d) cmap
             !n'   = n + 1
-        cmap' `seq` put $ ts { idNo = n', cse_map = cmap' }
+            -- the ledger: the def is created from the owner (the def,
+            -- rule, method or instance whose expression it is part of);
+            -- the event is not forced, so neither is the new id
+            ev = Created PTTransform i (maybeToList (owner ts))
+        cmap' `seq` put $ ts { idNo = n', cse_map = cmap', events = ev : events ts }
         -- traceM ("newExprT " ++ ppString e ++ " -> " ++ ppString (e',d))
         return e'
 
@@ -1729,6 +1766,28 @@ iTransFixupDefNames flags = do
       rename_map :: M.Map Id Id
       rename_map = M.map (snd . S.findMax) cse_ids_map
 
+      -- The ledger.  A def whose expression became a reference to a CSE
+      -- def is merged into it (a def kept out of CSE survives by its own
+      -- name instead); one whose expression became anything else (a
+      -- constant, a port, an argument, an action or a tuple) is no def
+      -- of the output, its users holding the expression now: inlined,
+      -- into users this pass does not have in hand.  Then each CSE def
+      -- that takes a def's name is renamed to it.  The batch is put on
+      -- the event list as one thunk, so that nothing is forced here:
+      -- the stage's deepseq, which reaches the ledger after the defs
+      -- (whose renaming has forced rename_map and every id named), is
+      -- what walks it.
+      def_events :: [MetaEvent]
+      def_events =
+          [ case e of
+              ICon cse_name (ICValue {}) -> Merged PTTransform [def_name] cse_name
+              _ -> Inlined PTTransform def_name []
+          | (def_name, (_, e, props)) <- M.toList old_defmap
+          , not (defPropsHasNoCSE props) ]
+      rename_events :: [MetaEvent]
+      rename_events = [ Renamed PTTransform cse_name def_name
+                      | (cse_name, def_name) <- M.toList rename_map ]
+
       -- function to rename ICValue references (to use the new CSE name)
       rename_expr = iTransRenameIdsInExpr rename_map
 
@@ -1753,7 +1812,9 @@ iTransFixupDefNames flags = do
 
       new_state :: TState a
       new_state = transform_state { def_map = new_defmap,
-                                    cse_map = new_csemap }
+                                    cse_map = new_csemap,
+                                    events = reverse (def_events ++ rename_events)
+                                             ++ events transform_state }
   put new_state
 
 -- given a map from old to new identifiers, replace all occurrences

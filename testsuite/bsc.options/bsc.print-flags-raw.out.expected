@@ -51,6 +51,7 @@ Flags {
 	linkFlags = [],
 	maxTIStackDepth = 1000,
 	metadataCensus = False,
+	metadataCheck = False,
 	metadataDump = False,
 	metadataOut = Nothing,
 	metadataScramble = False,

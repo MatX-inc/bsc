@@ -1,0 +1,116 @@
+=== metadata (MetaLift sysMetaLift):
+ledger after idroprules: 155 sites, 6 contexts, 5 roots, 4 defs, 34 events
+inlined (Inline): __h147 -> __h148
+inlined (Inline): __h148 -> RL_pick
+created (Transform): __i1 <- __h146
+created (Transform): __i2 <- __h143
+merged (Transform): __h146 -> __i1
+merged (Transform): __h143 -> __i2
+renamed (Transform): __i2 -> __h143
+renamed (Transform): __i1 -> __h146
+created (Transform): __i3 <- RL_pick
+created (Transform): __i4 <- RL_pick
+created (Transform): __i5 <- RL_pick
+created (Transform): __i6 <- RL_pick
+created (Transform): __i7 <- value
+inlined (Transform): __i7 -> value
+inlined (Transform): __i6 -> RL_pick
+inlined (Transform): __i5 -> RL_pick
+dropped (Transform): __i3
+dropped (Transform): __i4
+created (Transform): __j1 <- __h146
+created (Transform): __j2 <- __h143
+merged (Transform): __h146 -> __j1
+merged (Transform): __h143 -> __j2
+renamed (Transform): __j2 -> __h143
+renamed (Transform): __j1 -> __h146
+created (Transform): __j3 <- RL_pick
+created (Transform): __j4 <- RL_pick
+created (Transform): __j5 <- RL_pick
+created (Transform): __j6 <- RL_pick
+created (Transform): __j7 <- value
+inlined (Transform): __j4 -> __j6
+inlined (Transform): __j5 -> __j6
+inlined (Transform): __j7 -> value
+inlined (Transform): __j6 -> RL_pick
+dropped (Transform): __j3
+resolved: 1 of 3 defs and rules stand for other ids
+  RL_pick <- RL_pick __h148 __h147
+
+-----
+=== metadata (MetaLift sysMetaLift):
+ledger after dropundet: 155 sites, 6 contexts, 5 roots, 4 defs, 34 events
+inlined (Inline): __h147 -> __h148
+inlined (Inline): __h148 -> RL_pick
+created (Transform): __i1 <- __h146
+created (Transform): __i2 <- __h143
+merged (Transform): __h146 -> __i1
+merged (Transform): __h143 -> __i2
+renamed (Transform): __i2 -> __h143
+renamed (Transform): __i1 -> __h146
+created (Transform): __i3 <- RL_pick
+created (Transform): __i4 <- RL_pick
+created (Transform): __i5 <- RL_pick
+created (Transform): __i6 <- RL_pick
+created (Transform): __i7 <- value
+inlined (Transform): __i7 -> value
+inlined (Transform): __i6 -> RL_pick
+inlined (Transform): __i5 -> RL_pick
+dropped (Transform): __i3
+dropped (Transform): __i4
+created (Transform): __j1 <- __h146
+created (Transform): __j2 <- __h143
+merged (Transform): __h146 -> __j1
+merged (Transform): __h143 -> __j2
+renamed (Transform): __j2 -> __h143
+renamed (Transform): __j1 -> __h146
+created (Transform): __j3 <- RL_pick
+created (Transform): __j4 <- RL_pick
+created (Transform): __j5 <- RL_pick
+created (Transform): __j6 <- RL_pick
+created (Transform): __j7 <- value
+inlined (Transform): __j4 -> __j6
+inlined (Transform): __j5 -> __j6
+inlined (Transform): __j7 -> value
+inlined (Transform): __j6 -> RL_pick
+dropped (Transform): __j3
+
+-----
+=== metadata (MetaLift sysMetaLift):
+ledger after finalcleanup: 155 sites, 6 contexts, 5 roots, 4 defs, 34 events
+inlined (Inline): __h147 -> __h148
+inlined (Inline): __h148 -> RL_pick
+created (Transform): __i1 <- __h146
+created (Transform): __i2 <- __h143
+merged (Transform): __h146 -> __i1
+merged (Transform): __h143 -> __i2
+renamed (Transform): __i2 -> __h143
+renamed (Transform): __i1 -> __h146
+created (Transform): __i3 <- RL_pick
+created (Transform): __i4 <- RL_pick
+created (Transform): __i5 <- RL_pick
+created (Transform): __i6 <- RL_pick
+created (Transform): __i7 <- value
+inlined (Transform): __i7 -> value
+inlined (Transform): __i6 -> RL_pick
+inlined (Transform): __i5 -> RL_pick
+dropped (Transform): __i3
+dropped (Transform): __i4
+created (Transform): __j1 <- __h146
+created (Transform): __j2 <- __h143
+merged (Transform): __h146 -> __j1
+merged (Transform): __h143 -> __j2
+renamed (Transform): __j2 -> __h143
+renamed (Transform): __j1 -> __h146
+created (Transform): __j3 <- RL_pick
+created (Transform): __j4 <- RL_pick
+created (Transform): __j5 <- RL_pick
+created (Transform): __j6 <- RL_pick
+created (Transform): __j7 <- value
+inlined (Transform): __j4 -> __j6
+inlined (Transform): __j5 -> __j6
+inlined (Transform): __j7 -> value
+inlined (Transform): __j6 -> RL_pick
+dropped (Transform): __j3
+
+-----

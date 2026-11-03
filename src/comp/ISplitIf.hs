@@ -17,6 +17,7 @@ import FStringCompat(FString, concatFString, getFString, mkFString)
 import Control.Monad(msum)
 import Util(makePairs, flattenPairs)
 import Util(mapSnd)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 import Data.List(genericLength)
 -- import Debug.Trace(trace)
 
@@ -37,9 +38,12 @@ iSplitIf flags imod@(IModule { imod_rules = rules,
                                imod_interface = methods })
   = --trace ("iSplitIf happens!") $
     let
-       (smaps, new_methods) = unzip $ map (iSplitIface flags) methods
+       (smaps, new_methods, method_events) =
+           unzip3 $ map (iSplitIface flags) methods
        -- provide the method split map, in case any rule pragmas mention methods
-       (_, new_rules) = do_iExpandIfRules flags (concat smaps) rules
+       -- (a rule split away is no rule of the module: its root is dropped)
+       (_, new_rules, rule_events) =
+           do_iExpandIfRules flags False (concat smaps) rules
     in case check_rules isIfWrapper new_rules of
           (Just x) -> internalError ("iSplitIf Error " ++ (ppReadable x))
           _
@@ -49,21 +53,27 @@ iSplitIf flags imod@(IModule { imod_rules = rules,
                                                ++ (ppReadable x))
                     _ -> --trace ("============m1\n"++(show new_methods)) $
                          imod { imod_rules = new_rules ,
-                                imod_interface = new_methods }
+                                imod_interface = new_methods,
+                                imod_meta = appendEvents
+                                                (concat method_events ++ rule_events)
+                                                (imod_meta imod) }
 
 -- --------------------------
 
 -- expand `if' in rules to multiple rules
-do_iExpandIfRules :: Flags.Flags -> SPIdSplitMap -> IRules a ->
-                     (SPIdSplitMap, IRules a)
-do_iExpandIfRules flags method_split_map (IRules sps rs)
+-- (root_stays: the rules are a method's, whose id remains the method's
+-- when its rule is split away; see iExpandIfRule)
+do_iExpandIfRules :: Flags.Flags -> Bool -> SPIdSplitMap -> IRules a ->
+                     (SPIdSplitMap, IRules a, [MetaEvent])
+do_iExpandIfRules flags root_stays method_split_map (IRules sps rs)
   = --trace ("ie before : " ++ (ppReadable rs)) $
     --trace ("ie kenta  : " ++ (ppReadable m1)) $
-    (idsplitmap, IRules sps' rs')
-  where xs = unzip m1
-        m1 = map (iExpandIfRule flags) rs
-        idsplitmap = concat (fst xs)
-        rs' = concat (snd xs)
+    (idsplitmap, IRules sps' rs', events)
+  where (idsplitmaps, rss, eventss) = unzip3 m1
+        m1 = map (iExpandIfRule flags root_stays) rs
+        idsplitmap = concat idsplitmaps
+        rs' = concat rss
+        events = concat eventss
         sps' = splitSchedPragmaIds (method_split_map ++ idsplitmap) sps
 
 data Branch_taken a =
@@ -343,9 +353,12 @@ make_branch_cond (BranchCaseDefault e_idx es_arms sz_idx) =
     let mkNEq e_arm = ieNot $ iePrimEQ (ITNum sz_idx) e_idx e_arm
     in  foldl ieAnd iTrue (map mkNEq es_arms)
 
-iExpandIfRule :: forall itype . Flags.Flags -> IRule itype ->
-                 (SPIdSplitMap, [IRule itype])
-iExpandIfRule flags
+-- The ledger: each rule split from the root is Created from it; the
+-- root, no rule of the module any more, is then Dropped, unless it is a
+-- method's (root_stays), whose id stays as the method's.
+iExpandIfRule :: forall itype . Flags.Flags -> Bool -> IRule itype ->
+                 (SPIdSplitMap, [IRule itype], [MetaEvent])
+iExpandIfRule flags root_stays
     r@(IRule { irule_name = i
              , irule_description = description
              , irule_pred = predicate
@@ -405,7 +418,12 @@ iExpandIfRule flags
              [_] -> []
              _   -> [(i,map getIRuleId new_rules)]
 
-     in (sched , new_rules)
+        events = case paths of
+             [_] -> []
+             _   -> [ Created PTSplitIf (getIRuleId r') [i] | r' <- new_rules ] ++
+                    [ Dropped PTSplitIf i | not root_stays ]
+
+     in (sched , new_rules, events)
 
 
 -- These return Nothing if the check was successful,
@@ -431,7 +449,8 @@ check_rule whatp r = check_if_wrappers whatp $ irule_body r
 
 -- methods
 
-iSplitIface :: Flags.Flags -> IEFace itype -> (SPIdSplitMap, IEFace itype)
+iSplitIface :: Flags.Flags -> IEFace itype ->
+               (SPIdSplitMap, IEFace itype, [MetaEvent])
 iSplitIface flags ieface@(IEFace i xargs (Just (e,t)) Nothing wp fi)
     = if (t == itAction) then
             let irule = IRule i [] (getIdString i) wp iTrue e Nothing []
@@ -441,18 +460,19 @@ iSplitIface flags ieface@(IEFace i xargs (Just (e,t)) Nothing wp fi)
             -- warn about never-ready methods, but AAddScheduleDefs does that
             -- for us, later.
             -- irules_opt <- optRules (iLiftThenExpandIfRules flags irules)
-                (smap, irules_opt) = do_iExpandIfRules flags [] irules
-            in (smap, IEFace i xargs Nothing (Just irules_opt) wp fi)
+                (smap, irules_opt, events) = do_iExpandIfRules flags True [] irules
+            in (smap, IEFace i xargs Nothing (Just irules_opt) wp fi, events)
       else case e of
             (IAps (ICon av (ICTuple {fieldIds = [_val_id,_act_id]}))
                       [_] [val_,act_])
                 | (av == idActionValue_)
                 -> let irule = IRule i [] (getIdString i) wp iTrue act_ Nothing []
                        irules = IRules [] [irule] -- no sps
-                       (smap, irules_opt) = do_iExpandIfRules flags [] irules
+                       (smap, irules_opt, events) =
+                           do_iExpandIfRules flags True [] irules
                     in (smap, IEFace i xargs (mkExpression val_ t)
-                                       (Just irules_opt) wp fi)
-            _ -> ([], ieface)
+                                       (Just irules_opt) wp fi, events)
+            _ -> ([], ieface, [])
 
 iSplitIface _ _ = internalError ("iSplitIface: no expression or unexpected rule")
 

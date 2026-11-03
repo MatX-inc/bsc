@@ -3,7 +3,7 @@ import PPrint
 import ErrorUtil
 import ISyntax
 import IInlineUtil(iSubstIfc, iSubstWhen)
-import ISyntaxUtil(itString, icJoinActions, itBit, irulesMap, irulesMapM, itFmt, itGetArrows, itFun, itInst, itAction, iGetType, joinActions, iMkString, isitAction, isitActionValue_, iDefMapM, iDefsMap, emptyFmt)
+import ISyntaxUtil(itString, icJoinActions, itBit, irulesMap, itFmt, itGetArrows, itFun, itInst, itAction, iGetType, joinActions, iMkString, isitAction, isitActionValue_, iDefMapM, iDefsMap, emptyFmt)
 import Id
 import Prim
 import PreIds(idActionValue_, idArrow, tmpVarIds, idAVValue_, idAVAction_, idPrimFmtConcat)
@@ -13,20 +13,45 @@ import Control.Monad.State
 import Error(EMsg, ErrorHandle, bsError)
 import Position(noPosition)
 import CType(TISort(..), StructSubType(..))
+import IExpandMeta(MetaLedger, PassTag(..), MetaEvent(..), appendEvent, appendEvents)
 import qualified Data.Map as M
+import Data.List(partition)
 -- import Debug.Trace(trace)
 
-type F a = StateT (Int, [IDef a]) (ExceptT EMsg (IO))
+-- the next foreign-call number, the defs added for split calls, the def,
+-- rule, method or instance whose expression is being split (the ledger
+-- names it as what a def added meanwhile is created from) and the
+-- ledger of the module (IExpandMeta)
+data FState a = FState { fs_callNo :: Int,
+                         fs_defs :: [IDef a],
+                         fs_owner :: Maybe Id,
+                         fs_ledger :: MetaLedger }
+
+type F a = StateT (FState a) (ExceptT EMsg (IO))
 
 newFFCallNo :: (F a) Integer
-newFFCallNo = do (n, ds) <- get
-                 put ((n + 1), ds)
+newFFCallNo = do st <- get
+                 let n = fs_callNo st
+                 put st { fs_callNo = n + 1 }
                  return (toInteger n)
 
+-- the ledger: each def added is created from the owner
 addDefs :: [IDef a] -> (F a) ()
-addDefs ds = do (n, ds') <- get
-                put (n, ds' ++ ds)
+addDefs ds = do st <- get
+                let owner = maybe [] (: []) (fs_owner st)
+                    ledger' = appendEvents [ Created PTInlineFmt i owner | IDef i _ _ _ <- ds ]
+                                           (fs_ledger st)
+                ledger' `seq` put st { fs_defs = fs_defs st ++ ds, fs_ledger = ledger' }
                 return ()
+
+setOwner :: Id -> (F a) ()
+setOwner i = do st <- get
+                put st { fs_owner = Just i }
+
+addEvent :: MetaEvent -> (F a) ()
+addEvent ev = do st <- get
+                 let ledger' = appendEvent ev (fs_ledger st)
+                 ledger' `seq` put st { fs_ledger = ledger' }
 
 -- #############################################################################
 -- #
@@ -37,11 +62,14 @@ iInlineFmt errh imod =
     do let imod_fmt = iInlineFmts imod
        let ffcallNo = (imod_ffcallNo imod_fmt)
        let ds       = (imod_local_defs imod_fmt)
-       result <- runExceptT (runStateT (splitFmtsF imod_fmt) (ffcallNo, []))
+       let st0 = FState { fs_callNo = ffcallNo, fs_defs = [],
+                          fs_owner = Nothing, fs_ledger = imod_meta imod_fmt }
+       result <- runExceptT (runStateT (splitFmtsF imod_fmt) st0)
        case result of
-            Right x@(imod', (ffcallNo', ds')) ->
-                return (imod' {imod_local_defs = ds ++ ds',
-                               imod_ffcallNo = ffcallNo'})
+            Right x@(imod', st) ->
+                return (imod' {imod_local_defs = ds ++ fs_defs st,
+                               imod_ffcallNo = fs_callNo st,
+                               imod_meta = fs_ledger st})
             Left msg -> bsError errh [msg]
 
 splitFmtsF :: IModule a -> F a (IModule a)
@@ -49,13 +77,24 @@ splitFmtsF imod@(IModule { imod_local_defs  = ds,
                            imod_rules       = rs,
                            imod_interface   = ifc,
                            imod_state_insts = state_vars}) =
-    do  let ds' = [ IDef id t e p | IDef id t e p <- ds, (t /= itFmt) ] -- remove (now unused defs)
-            updateDef = iDefMapM ssplitFmt
+    do  -- remove (now unused) defs of type Fmt: iInlineFmts inlined every
+        -- one, so none is expected here; the ledger records any dropped
+        let (ds', fmt_ds) = partition (\ (IDef _ t _ _) -> t /= itFmt) ds
+        mapM_ (\ (IDef i _ _ _) -> addEvent (Dropped PTInlineFmt i)) fmt_ds
+        let updateDef d@(IDef i _ _ _) = do setOwner i
+                                            iDefMapM ssplitFmt d
         ds'' <- mapM updateDef ds'
 
         ifc' <- ssplitFmt_ifc ifc
-        rs'  <- irulesMapM ssplitFmt rs
-        let updateStateVar (name, sv@(IStateVar { isv_iargs = es })) = do es' <- mapM ssplitFmt es
+        let IRules sps rules = rs
+            updateRule r = do setOwner (irule_name r)
+                              p' <- ssplitFmt (irule_pred r)
+                              a' <- ssplitFmt (irule_body r)
+                              return r { irule_pred = p', irule_body = a' }
+        rules' <- mapM updateRule rules
+        let rs' = IRules sps rules'
+        let updateStateVar (name, sv@(IStateVar { isv_iargs = es })) = do setOwner name
+                                                                          es' <- mapM ssplitFmt es
                                                                           return (name, sv { isv_iargs = es' })
         state_vars' <- mapM updateStateVar (imod_state_insts imod)
         return imod { imod_local_defs  = ds'',
@@ -593,7 +632,8 @@ isFFWithFmts e = isActionFFWithFmts e || isAVFFWithFmts e
 
 ssplitFmt_ifc :: [IEFace a] -> F a [IEFace a]
 ssplitFmt_ifc ifc_list
-    = do let updateIfc (IEFace i xs (Just (e,t)) rules wp fi) = do e' <- ssplitFmt e
+    = do let updateIfc (IEFace i xs (Just (e,t)) rules wp fi) = do setOwner i
+                                                                   e' <- ssplitFmt e
                                                                    return (IEFace i xs (Just (e',t)) rules wp fi)
              updateIfc (IEFace i xs _ rules wp fi)            = return (internalError("ssplitFmt_ifc: expression not found"))
          ifc_list' <- mapM updateIfc ifc_list
@@ -636,12 +676,17 @@ iInlineFmtsT tst imod@(IModule { imod_local_defs = ds,
                       | (name, sv@(IStateVar { isv_iargs = es }))
                             <- imod_state_insts imod,
                         let es' = map (iSubstWhen tst smap dmap) es ]
-        ds'' = [ IDef id t e p | IDef id t e p <- ds', (t /= itFmt || (not (tst e))) ] -- remove any def of type Fmt
+        -- remove any def of type Fmt (that tst admits); the ledger
+        -- records each as inlined, into users the substitution does
+        -- not have in hand
+        (ds'', inlined) = partition (\ (IDef _ t e _) -> t /= itFmt || (not (tst e))) ds'
+        events = [ Inlined PTInlineFmt i [] | IDef i _ _ _ <- inlined ]
 
     in imod { imod_local_defs  = ds'',
               imod_rules       = rs',
               imod_interface   = ifc',
-              imod_state_insts = state_vars' }
+              imod_state_insts = state_vars',
+              imod_meta        = appendEvents events (imod_meta imod) }
 
 
 -- #############################################################################

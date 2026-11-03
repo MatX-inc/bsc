@@ -1,0 +1,102 @@
+=== metadata (MetaSplit sysMetaSplit):
+ledger after idroprules: 161 sites, 7 contexts, 5 roots, 4 defs, 29 events
+inlined (Inline): __h152 -> __h153
+inlined (Inline): __h153 -> RL_pick
+created (Transform): __i1 <- __h151
+created (Transform): __i2 <- __h148
+merged (Transform): __h151 -> __i1
+merged (Transform): __h148 -> __i2
+renamed (Transform): __i2 -> __h148
+renamed (Transform): __i1 -> __h151
+created (Transform): __i3 <- RL_pick
+created (Transform): __i4 <- RL_pick
+created (Transform): __i5 <- value
+inlined (Transform): __i5 -> value
+dropped (Transform): __i3
+dropped (Transform): __i4
+created (SplitIf): RL_pick_T <- RL_pick
+created (SplitIf): RL_pick_F <- RL_pick
+dropped (SplitIf): RL_pick
+created (Transform): __j1 <- __h151
+created (Transform): __j2 <- __h148
+merged (Transform): __h151 -> __j1
+merged (Transform): __h148 -> __j2
+renamed (Transform): __j2 -> __h148
+renamed (Transform): __j1 -> __h151
+created (Transform): __j3 <- RL_pick_T
+created (Transform): __j4 <- RL_pick_F
+created (Transform): __j5 <- value
+inlined (Transform): __j5 -> value
+dropped (Transform): __j3
+dropped (Transform): __j4
+resolved: 2 of 4 defs and rules stand for other ids
+  RL_pick_T <- RL_pick __h153 __h152
+  RL_pick_F <- RL_pick __h153 __h152
+
+-----
+=== metadata (MetaSplit sysMetaSplit):
+ledger after dropundet: 161 sites, 7 contexts, 5 roots, 4 defs, 29 events
+inlined (Inline): __h152 -> __h153
+inlined (Inline): __h153 -> RL_pick
+created (Transform): __i1 <- __h151
+created (Transform): __i2 <- __h148
+merged (Transform): __h151 -> __i1
+merged (Transform): __h148 -> __i2
+renamed (Transform): __i2 -> __h148
+renamed (Transform): __i1 -> __h151
+created (Transform): __i3 <- RL_pick
+created (Transform): __i4 <- RL_pick
+created (Transform): __i5 <- value
+inlined (Transform): __i5 -> value
+dropped (Transform): __i3
+dropped (Transform): __i4
+created (SplitIf): RL_pick_T <- RL_pick
+created (SplitIf): RL_pick_F <- RL_pick
+dropped (SplitIf): RL_pick
+created (Transform): __j1 <- __h151
+created (Transform): __j2 <- __h148
+merged (Transform): __h151 -> __j1
+merged (Transform): __h148 -> __j2
+renamed (Transform): __j2 -> __h148
+renamed (Transform): __j1 -> __h151
+created (Transform): __j3 <- RL_pick_T
+created (Transform): __j4 <- RL_pick_F
+created (Transform): __j5 <- value
+inlined (Transform): __j5 -> value
+dropped (Transform): __j3
+dropped (Transform): __j4
+
+-----
+=== metadata (MetaSplit sysMetaSplit):
+ledger after finalcleanup: 161 sites, 7 contexts, 5 roots, 4 defs, 29 events
+inlined (Inline): __h152 -> __h153
+inlined (Inline): __h153 -> RL_pick
+created (Transform): __i1 <- __h151
+created (Transform): __i2 <- __h148
+merged (Transform): __h151 -> __i1
+merged (Transform): __h148 -> __i2
+renamed (Transform): __i2 -> __h148
+renamed (Transform): __i1 -> __h151
+created (Transform): __i3 <- RL_pick
+created (Transform): __i4 <- RL_pick
+created (Transform): __i5 <- value
+inlined (Transform): __i5 -> value
+dropped (Transform): __i3
+dropped (Transform): __i4
+created (SplitIf): RL_pick_T <- RL_pick
+created (SplitIf): RL_pick_F <- RL_pick
+dropped (SplitIf): RL_pick
+created (Transform): __j1 <- __h151
+created (Transform): __j2 <- __h148
+merged (Transform): __h151 -> __j1
+merged (Transform): __h148 -> __j2
+renamed (Transform): __j2 -> __h148
+renamed (Transform): __j1 -> __h151
+created (Transform): __j3 <- RL_pick_T
+created (Transform): __j4 <- RL_pick_F
+created (Transform): __j5 <- value
+inlined (Transform): __j5 -> value
+dropped (Transform): __j3
+dropped (Transform): __j4
+
+-----

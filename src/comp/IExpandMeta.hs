@@ -20,7 +20,7 @@ module IExpandMeta(
         emptyModuleMeta, defNameString, sideFileSchema, renderSideFile,
         -- the ledger the packages carry
         MetaLedger(..), emptyMetaLedger, PassTag(..), MetaEvent(..),
-        appendEvent, resolveId, renderLedger,
+        appendEvent, appendEvents, resolveId, checkClosure, renderLedger,
         -- the census (-metadata-census)
         Census, readCensus, recordUnfolding, recordCompletion, aliasClassCount,
         renderCensus, checkProfile, checkKeptPositions, checkNameHints
@@ -876,9 +876,20 @@ instance NFData MetaLedger where
 instance PPrint MetaLedger where
     pPrint _ _ _ = empty
 
--- The one write: a pass appends the event it has in hand.
+-- The one write: a pass appends the event it has in hand.  The event
+-- itself is not forced (the list cell is), so a pass that writes an
+-- event forces none of the ids it names before the package's deepseq
+-- does, which walks the defs, rules and interface before the ledger.
 appendEvent :: MetaEvent -> MetaLedger -> MetaLedger
 appendEvent ev (MetaLedger mm) = MetaLedger (mm { mm_events = ev : mm_events mm })
+
+-- A pure pass appends the events of one rebuild of the package, oldest
+-- first (the last of the list becomes the most recent).  Each append is
+-- forced as it is made, so no chain of appends is left for the stage's
+-- deepseq to walk; the events stay unforced as above.
+appendEvents :: [MetaEvent] -> MetaLedger -> MetaLedger
+appendEvents [] l = l
+appendEvents (ev : evs) l = let l' = appendEvent ev l in l' `seq` appendEvents evs l'
 
 -- Resolve a final id to the ids whose records it stands for, in the
 -- order they were found, with the events on the way, oldest first.
@@ -914,26 +925,81 @@ resolveId (MetaLedger mm) final = go (mm_events mm) (S.singleton final) [final] 
         | S.member y seen = add ys st
         | otherwise = add ys (S.insert y seen, y : ids)
 
+-- The closure of the events one stage wrote over the ids of its package
+-- (-metadata-check).  Replayed oldest first over the set of ids the
+-- stage began with (its defs, rules, methods and instances), every event
+-- names ids the package has at that point (the id a Created or a Renamed
+-- makes is not one yet; every other id named is), and the set they
+-- leave is the set of ids the stage ended with: no id went or came
+-- without an event.  The violations, one line each; none when the
+-- closure holds.
+checkClosure :: S.Set Id -> S.Set Id -> [MetaEvent] -> [String]
+checkClosure before after = go before
+  where
+    go s [] =
+        [ getIdString i ++ " is gone without an event"
+        | i <- S.toList (S.difference s after) ] ++
+        [ getIdString i ++ " appeared without an event"
+        | i <- S.toList (S.difference after s) ]
+    go s (ev : evs) =
+        case ev of
+          Renamed _ from to ->
+              has [from] ++ hasNot [to] ++ go (S.insert to (S.delete from s)) evs
+          Merged _ froms into ->
+              has (into : froms) ++ go (foldr S.delete s froms) evs
+          Inlined _ from intos ->
+              has (from : intos) ++ go (S.delete from s) evs
+          Created _ to froms ->
+              hasNot [to] ++ has froms ++ go (S.insert to s) evs
+          Dropped _ from ->
+              has [from] ++ go (S.delete from s) evs
+      where
+        has is = [ renderEvent ev ++ ": " ++ getIdString i ++
+                   " is not an id of the package here"
+                 | i <- is, not (S.member i s) ]
+        hasNot is = [ renderEvent ev ++ ": " ++ getIdString i ++
+                      " is an id of the package already"
+                    | i <- is, S.member i s ]
+
 -- The ledger as the metadata dump stage (-dmetadata) prints it after
 -- the named stage: the sizes of the table and the number of events on
 -- one line, then the events, oldest first, one per line, the ids
--- rendered by getIdString (which reads existing strings).
-renderLedger :: String -> MetaLedger -> String
-renderLedger stage (MetaLedger mm) =
+-- rendered by getIdString (which reads existing strings); then, of the
+-- ids given (the stage's defs and rules), those that stand for other
+-- ids (resolveId), each with the ids it stands for.  The resolution is
+-- a walk of the events per id; the dump is a debugging aid.
+renderLedger :: String -> [Id] -> MetaLedger -> String
+renderLedger stage ids ledger@(MetaLedger mm) =
     unlines (("ledger after " ++ stage ++ ": " ++
               show (siteTableSize (mm_sites mm)) ++ " sites, " ++
               show (contextTableSize (mm_contexts mm)) ++ " contexts, " ++
               show (length (mm_roots mm)) ++ " roots, " ++
               show (IM.size (mm_defs mm)) ++ " defs, " ++
               show (length (mm_events mm)) ++ " events")
-             : map renderEvent (reverse (mm_events mm)))
+             : map renderEvent (reverse (mm_events mm))
+             ++ resolved)
+  where
+    resolutions = [ (i, origins) | i <- ids,
+                                   let (origins, _) = resolveId ledger i,
+                                   origins /= [i] ]
+    resolved
+      | null ids = []
+      | otherwise =
+          ("resolved: " ++ show (length resolutions) ++ " of " ++
+           show (length ids) ++ " defs and rules stand for other ids")
+          : [ "  " ++ getIdString i ++ " <- " ++ unwords (map getIdString os)
+            | (i, os) <- resolutions ]
 
+-- One event on one line; an Inlined that names no user (a map-driven
+-- substitution) and a Created from no id carry no arrow.
 renderEvent :: MetaEvent -> String
 renderEvent ev =
     case ev of
       Renamed t from to -> line "renamed" t (ids [from] ++ " -> " ++ ids [to])
       Merged t froms into -> line "merged" t (ids froms ++ " -> " ++ ids [into])
+      Inlined t from [] -> line "inlined" t (ids [from])
       Inlined t from intos -> line "inlined" t (ids [from] ++ " -> " ++ ids intos)
+      Created t to [] -> line "created" t (ids [to])
       Created t to froms -> line "created" t (ids [to] ++ " <- " ++ ids froms)
       Dropped t from -> line "dropped" t (ids [from])
   where

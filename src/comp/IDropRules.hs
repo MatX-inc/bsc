@@ -14,6 +14,7 @@ import Pragma
 import DefProp
 import Error(internalError, ErrMsg(..), ErrorHandle, bsWarning)
 import ISyntax
+import IExpandMeta(MetaLedger, PassTag(..), MetaEvent(..), appendEvents)
 import Prim
 import VModInfo(VFieldInfo(..))
 import Util(fromJustOrErr)
@@ -76,10 +77,12 @@ dropFalseRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
     -- drop the pragmas and defs associated with the dropped rules
     let dropped_rule_ids = map getIRuleId dropped_rules
         sps' = removeSchedPragmaIds dropped_rule_ids sps
-        ds' = removeIDefMethodPredsByRuleId dropped_rule_ids ds
+        (ds', dropped_defs) = removeIDefMethodPredsByRuleId dropped_rule_ids ds
 
     return $ imod { imod_rules       = (IRules sps' rs')
                   , imod_local_defs  = ds'
+                  , imod_meta        = droppedEvents dropped_rule_ids dropped_defs
+                                           (imod_meta imod)
                   }
 
 
@@ -118,11 +121,21 @@ dropEmptyRules errh flags imod@(IModule { imod_rules = (IRules sps rs),
     -- drop the pragmas and defs associated with the dropped rules
     let dropped_rule_ids = map getIRuleId dropped_rules
         sps' = removeSchedPragmaIds dropped_rule_ids sps
-        ds' = removeIDefMethodPredsByRuleId dropped_rule_ids ds
+        (ds', dropped_defs) = removeIDefMethodPredsByRuleId dropped_rule_ids ds
 
     return $ imod { imod_rules       = (IRules sps' rs')
                   , imod_local_defs  = ds'
+                  , imod_meta        = droppedEvents dropped_rule_ids dropped_defs
+                                           (imod_meta imod)
                   }
+
+
+-- the ledger: the dropped rules and the method-predicate defs dropped
+-- with them
+droppedEvents :: [Id] -> [IDef a] -> MetaLedger -> MetaLedger
+droppedEvents rule_ids defs =
+    appendEvents ([ Dropped PTDropRules i | i <- rule_ids ] ++
+                  [ Dropped PTDropRules i | IDef i _ _ _ <- defs ])
 
 
 -- will the rule never fire
@@ -145,8 +158,9 @@ isNoActionRule (IRule {
 isNoActionRule _ = False
 
 
-removeIDefMethodPredsByRuleId :: [Id] -> [IDef a] -> [IDef a]
-removeIDefMethodPredsByRuleId [] ds = ds
+-- the defs kept and the defs dropped
+removeIDefMethodPredsByRuleId :: [Id] -> [IDef a] -> ([IDef a], [IDef a])
+removeIDefMethodPredsByRuleId [] ds = (ds, [])
 removeIDefMethodPredsByRuleId dropped_rule_ids ds =
     let
         dropped_id_set = S.fromList dropped_rule_ids
@@ -163,7 +177,7 @@ removeIDefMethodPredsByRuleId dropped_rule_ids ds =
             (hasIdProp i IdPMethodPredicate) &&
             (isForDroppedRule ps)
     in
-        filter (not . dropDef) ds
+        partition (not . dropDef) ds
 
 
 warnUndetPreds :: ErrorHandle -> Flags -> IModule a -> IO ()
