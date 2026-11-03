@@ -111,7 +111,7 @@ sealCost context provider planPath observations=do
  need(not(null observations))"missing ordinary objective observation"
  forM_(contextSources context)unchanged
  planHash<-hashFile planPath
- let envelope=CostEnvelope 1 planHash(costPolicy provider)(contextSources context)
+ let envelope=CostEnvelope 2 planHash(costPolicy provider)(contextSources context)
       (contextOldASTHash context)(contextOldWitnessHash context)observations
  writeFile(contextDirectory context</>"objective.plan")(show envelope++"\n")
  pure envelope
@@ -124,7 +124,7 @@ verifyCostEnvelope provider old planPath envelopePath output programs=do
  originalEnvelope<-fileIdentity envelopePath
  text<-readFile envelopePath
  envelope<-maybe(fail"invalid ECO objective envelope")pure(readMaybe text)
- need(costSchema envelope==1)"unsupported objective envelope schema"
+ need(costSchema envelope==2)"unsupported objective envelope schema"
  need(costPolicyIdentity envelope==costPolicy provider)"objective policy differs from requested policy"
  sourceIDs<-mapM fileIdentity(nub(costSources provider))
  need(sourceIDs==costSourceIdentities envelope)"objective source identities changed"

@@ -38,7 +38,7 @@ main=do
     (ContextAST context ast(fiPath(frOutput result)))
   let measured=case mode of TranslatedRaw->translatedRaw metric;TranslatedNormalized->translatedNormalized metric
   check("branch and final emission use the same translated metric "++show mode)(frSelectedCost result==measured)
-  check("translated flow reports explicit schema and policy "++show mode)(frSchema result==5&&frSelectedCost result/=frOrdinaryCost result&&
+  check("translated flow reports explicit schema and policy "++show mode)(frSchema result==6&&frSelectedCost result/=frOrdinaryCost result&&
     frObjectivePolicy result==(if mode==TranslatedRaw then "translated-raw-v1" else "translated-normalized-v1"))
  -- This deliberately simple callback makes the authenticated kept branch the
  -- preferred one even if ordinary whole-file costs would suggest another tie.

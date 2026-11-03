@@ -18,7 +18,7 @@ main = do
     (fail "flow worsened ordinary output")
   unless (frSelected result /= "ordinary-rollback")
     (fail "fixture did not exercise a proved improving branch")
-  unless (frSchema result == 5 && frObjectivePolicy result == "whole-file-raw-v1" &&
+  unless (frSchema result == 6 && frObjectivePolicy result == "whole-file-raw-v1" &&
           frConfig result `elem` frInputs result)
     (fail "flow report does not bind its effective configuration")
   verified <- doesFileExist (output </> "verified" </> "upstream-qualification.json")

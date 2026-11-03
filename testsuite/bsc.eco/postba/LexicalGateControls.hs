@@ -9,7 +9,7 @@ import ECOBind(readRecord)
 import ECOJSON(EvidenceJSON(..),parseEvidenceJSON)
 import ECO.Replay(FileIdentity(..),fileIdentity)
 import Verilog
-import BinData(encode,decode)
+import BinData(encode,decodeStrict)
 import GenABin()
 import qualified Data.ByteString as B
 import qualified Data.Generics as G
@@ -53,8 +53,8 @@ main=do
  need(index>0)"fixture plan has no accepted step"
  let step=last steps
  context<-readVerilogInfo(if branch=="kept"then flow</>"kept"</>modul<.>"eco-ast"else flow</>"adapted-new"</>"capture"</>modul<.>"eco-ast")
- reference<-if index==1 then pure(viProgram context)else decode<$>B.readFile(bundle</>stepArtifact(steps!!(index-2)))
- accepted<-decode<$>B.readFile(bundle</>stepArtifact step)
+ reference<-if index==1 then pure(viProgram context)else decodeStrict<$>B.readFile(bundle</>stepArtifact(steps!!(index-2)))
+ accepted<-decodeStrict<$>B.readFile(bundle</>stepArtifact step)
  need(isRight(lexicallyEmittable accepted>>declaredBeforeUse accepted))"the accepted step is not emittable"
  let VProgram[m]dpis comments=accepted
      ports=[getVIdString(vargName a)|a<-concatMap fst(vm_ports m)]

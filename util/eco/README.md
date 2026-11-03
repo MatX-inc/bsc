@@ -171,14 +171,14 @@ it does the following, in order, under `cfOutput`:
 4. for each branch (`ordinary`, and `kept` when proved) matches OLD to the
    branch graph (`<branch>-match.eco-plan`, when F01 is enabled) and runs
    the bounded search into
-   `<branch>-search/`: `search.plan` (the accepted steps, schema 3),
+   `<branch>-search/`: `search.plan` (the accepted steps, schema 4),
    `steps/N.ast`, `selected.ast`, `selected.v`, `objective.plan`, the
    `objective/` scoring witnesses, every candidate's `.ast`/`.v`, its
    `.proof.json` or `.rejected` note, and `summary.txt`;
 5. selects the branch with the smaller objective cost, never worse than
    ordinary NEW (otherwise `ordinary-rollback`), emits `mkDemo.v` through the
    capture's renderer and filters, and writes `flow-objective.report` and
-   `flow.report` (schema 5, binding the configuration, every input, the
+   `flow.report` (schema 6, binding the configuration, every input, the
    branch plans and the output);
 6. calls the shared verifier on its own output directory with roots derived
    from `effective.config` (`verified/`, see Replay below) and fails unless the
