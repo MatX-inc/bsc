@@ -692,3 +692,233 @@ did not complete: exit 1 after 1,251 s wall, 812 s user, 294 s system, 16.9 GB p
 RSS under the 24 GB address-space cap, at load 45–60 (`out/Em2048.log`). The gate
 bounds a step at 3,072 sites (design.md §10), and `mke2e.py` asserts it
 (`E2E_STEP_SITES`).
+
+## Round 8 (C20–C24; cost review r7-2)
+
+The emitter with these conventions is `e2e/tools/mke2e.py` (the round-8 merge; the cost piece's own copy
+is `e2e/tools/r8pieces/mke2e_cost.py`); the probes and their logs are in `cost/` (`cost/logs/summary.txt`
+lists every run, `cost/tools/run.sh` is the capped runner). C25 and C26 below are the merge's other pieces.
+
+### C20. Exception groups decided against one mask per group (M2)
+
+`cmT : Tab Nat` holds each group's code mask, `bits` of its members' codes, checked once
+(`cmAll`, `Scan.cm_of_check`). Membership of a rule in its groups is a mask lookup
+(`ghg`: `testBit (cmT.get g) (D.rc x)`, `Scan.gid_of_check`), and the exception masks are subsets
+of an OR of group masks (`ghT` over `cmT.get`). `Scan.exR_of_cmask` gives `GlueOK.exR` from these
+and the members' injective codes, so no decision walks a group's member list once per member
+(the old `ghg` was O(u²) list steps in one decision).
+
+Every decision over a whole table (`stMono`, `chainAll`, `chkAll`, `fpAll`, `fpAllM`, `cmAll`,
+`ghg`, `ghT`) is one decision per subtree definition of the table (`allB_thm`, combined by
+`EmitLemmas.Tab.allB_node`); the task-chain probe does the same for `inT` and `monoT`
+(`scanlib.emit_allB`).
+
+### C21. At most 128 entries per table definition
+
+`split_struct` also cuts a table at 128 entries (`E2E_SPLITN`), so a proof over a table
+(`stabproof`) has at most 128 leaves per declaration. Before, a table of short entries (`gT`, the
+guards) stayed one definition, and `rqT` over it was one declaration with a leaf per step
+(1,647 leaves in the 824-user port probe). Per-kind arm tables are split the same way, and
+`eaAll_κ` / `dqAll_κ` follow them (`stabproof`).
+
+### C22. Two kernel and unifier blow-ups in the emitted proofs
+
+- `certU.rules` is stated as `(List.range nR).map rR`, not `(G ops E z).rules`. Checking
+  `rules_eq` by `rfl` made the kernel compare `P ops E u` with `P ops E z`; with one rule every
+  one-leaf table lookup reduces for a symbolic index, and the comparison unfolded the whole step
+  program (an 8-site single-rule module: 17.2 s of kernel time in `certU`; 128 sites: over 20 GB).
+- `RD` (a step's ready signals, ANDed into its `CAN_FIRE`) is `@[irreducible]`; the three proofs
+  that read it `unfold RD`. Unifying a port's enable with its user's `stepOn` used to evaluate `RD`
+  over the whole step, once per child instance: a 1,024-site step spent 645 s in the per-instance
+  lemmas and then ran out of memory.
+
+### C23. A module in parts (whole-file bound)
+
+A file above 4 MB of source (`GATE_PART`) is cut into parts of about 2 MB (`E2E_PART_BYTES`), each
+importing the one before (`NAME_p0.lean`, …, then `NAME.lean`, which holds `obl`, `top` and the
+`#print axioms`). Cuts fall between top-level declarations; a cut inside a `section` closes it
+and reopens it (`section` / `variable {V : Type}`, asserted). The statement and the trust story
+are unchanged: the last part's `#print axioms` covers its imports, and `leanchecker --fresh` of
+the last part replays all of them. `cost/tools/runparts.sh` builds the parts in order. Peak memory
+is the largest part's, not the whole module's.
+
+### C24. The gate's bounds in the file
+
+`mke2e.py` asserts every numeric bound of design.md §11 item 6 before it writes the scan, writes
+each bound and the module's value into the file (`/-! Gate bounds … -/`), and appends the parts
+line (`/-! Gate: k part(s) … -/`). An environment variable (`E2E_SEG_USES`, `E2E_STEP_SITES`,
+`E2E_PART_BYTES`) can lower a bound, never raise it. Probes beyond a bound replace the constant
+in a copy of the emitter's source (`PROBE_GATE` in `cost/port/genport8.py`, `cost/big/genbig.py`),
+and the file then states the replaced bound. Since review r8-1 (cost minor 7) the list also holds
+the escape bound (64 escaped rule pairs, gate item 1) and the table settings `E2E_SPLITN` (128
+entries per table definition), `E2E_SPLITW` (20,000 characters) and `E2E_BIGPORT` (8 users listed
+entry by entry), each asserted to be at most its default and written into the file (as "setting
+used", not a module value, since review r8-2). Since review r8-2 it also holds the facts bound (4,096
+dynamic facts in one escaped pair, C27).
+
+### Round 8 measurements (`cost/logs/summary.txt`; GiB; load quoted, 32 cores, shared)
+
+Wide port (`cost/port/genport8.py`: one register written by U rules, bsc's suffix checks, one group):
+
+| users | sites | r7 emitter (cost review r7-2) | C20 only, one file | C20–C22, one file | C20–C23, in parts |
+|---|---|---|---|---|---|
+| 412 | 1,236 | 112.7–145.9 s user, 3.46–3.78 GB | 106.8 s, 2.70 GB (load 16) | 76.4 s, 3.41 GB (load 12) | 5 parts of 0.4 MB: 115.3 s, 1.25 GB (C20 only) |
+| 824 | 2,472 | 312.6–400.1 s, 8.25–9.95 GB | 251.8 s, 5.88 GB (load 14) | 183.0 s, 7.50 GB (load 12) | 3 parts: 227.9 s, 3.60 GB (load 17–24) |
+| 1,648 | 4,944 | — | out of memory at 15.0 GB | — | 5 parts: 540.7 s, 3.88 GB (load 24–75) |
+| 3,296 | 9,888 | — | — | — | 10 parts: 1,161 s, 4.14 GB (load 20–35) |
+
+- The `glue` transient is gone: at 824 users the peak is the scan's (5.88 GB, C20 only), and `glue`
+  falls to 3.40 GB; `cmAll`/`ghg`/`ghT` take 1.51 s at 412 users and 3.65 s at 824 (12 → 27 Mhb).
+- One file still grows ×2.2 per doubling in memory (C21–C22 together add about a quarter, and take
+  a quarter to a third off the time); parts hold the peak
+  at 3.6–4.1 GB from 824 to 3,296 users. User time in parts ×2.37, ×2.15 per doubling, at unequal
+  loads; per-section heartbeats in one file grow ×2.0–2.1.
+
+Large steps on this emitter (`cost/big/genbig.py`: one step reading and writing its own registers,
+a quarter of its sites task statements, plus a 2-site step), the scan in one segment:
+
+| step | one file | heartbeats, per-instance lemmas |
+|---|---|---|
+| 514 | 32.9 s wall, 32.7 s user, 1.00 GB (load 13) | 413 Mhb |
+| 1,026 | 69.4 / 69.2 s, 1.50 GB | 880 Mhb |
+| 2,050 | 148.3 / 147.1 s, 2.69 GB | 1,873 Mhb |
+| 4,098 | 3 parts: 503 s wall, 433 s user, 3.32 GB (load 20–31) | — |
+
+Before C22, a 1,024-site single-rule step ran 1,248 s and failed at 19.5 GB; 128- and 256-site ones
+also passed 19 GB. Every section's heartbeats double with the step except the scan's (42 → 176 Mhb
+from 2,050 to 4,098 uses, one segment), which the segment bound holds.
+
+sysConflictFreeOKLarge's shape (`cost/big/parts/Bcfq*.lean`: steps of 3,074 / 2,562 / 2,050 /
+1,027 / 3 sites with 1,024 / 512 / 0 / 513 / 1 statements, 3,334 registers, 8,716 sites, 3 scan
+segments): 6 parts, 1,736 s wall, 1,146 s user, 3.36 GB (load 33–62), `obl` and `top` with the
+standard three axioms.
+
+Task chain (`scan/tools/gentasksC.py`, `inT` and `monoT` per subtree): 20,480 / 40,960 / 81,920
+statements: 36.0 / 65.0 / 143.7 s wall, 1.25 / 1.75 / 2.74 GB (r7: 30.4 / 65.6 / 139.6 s,
+1.45 / 2.46 / 4.47 GB); `inT` 2.10 / 3.90 / 8.30 s of kernel time in 8 / 16 / 32 decisions of at
+most 0.29 s (r7: one decision, 7.0 and 14.8 s at the last two).
+
+Conditional-user mux (`genport8.py … 1`, every user's call conditional, all users in one group):
+
+| users | chain pair by pair (`PS`, r7 form) | chain from the group (`PT`, `Scan.amoChain_le_range`) | per-instance lemmas (`PT`) |
+|---|---|---|---|
+| 16 | 1.47 s, 28 Mhb | 0.54 s, 4 Mhb; file proved, 7.3 s user | 13 Mhb |
+| 64 | 65.9 s, 1,421 Mhb (2,016 pairs) | 2.52 s, 10 Mhb; file proved, 32.9 s user | 164 Mhb |
+| 256 | — | 6.48 s, 37 Mhb | 9,180 Mhb, 366 s, and the enable proofs fail |
+
+The chain is now linear when the users lie in one group. The enable proof of a port with a
+conditional user (and of every port in a module with methods) still lists the users' pairs
+(`en_pairs`), which grows faster than u² and fails at 256 users. So the gate bounds such a port,
+and a mux whose pairs are proved one by one, at 64 users (corpus: 20, mkMCR, a module with a
+method; 11 with conditional users, mkMCR `t_state.write`). A table form of that enable proof, as
+`en_lit` does for unconditional users, would remove the bound.
+
+## Round 8, the merge: last caller and method task calls (C25–C26)
+
+### C25. Last-caller ports (`LastCaller.lean`; design.md §8)
+
+- **Which ports.** A child action port is a last-caller port when its kind and port are in the
+  emitter's key (`LC_KEY`: RegN/RegUN/RegA `write`, ConfigRegN/UN/A `write`), at least two steps call it
+  with different argument expressions, and the solver finds two callers that may both call in one
+  cycle (both `WILL_FIRE`s and both call conditions, every port its own atom). Pairs a recorded
+  exclusion covers are skipped (`excl_lc`): urgency, disjoint guards and run-time checks between rules;
+  since review r8-1, bsc's disjoint guards and urgency between a rule and a method, and exported C
+  between two methods. Every other port keeps today's argument check (`CertL.argN`, the old `Cert.arg`).
+- **The mux.** `lcT_q` lists the callers latest first (greatest rank first), each entry the pair
+  (selector, argument) with selector `WILL_FIRE ∧ call condition`; `arg_… := pmux (lclist_q …) ops.z`,
+  bsc's `PrimPriMux` before AOpt (trust point 1). `argL_of_pmuxN` gives `CertL.argL` with one selection
+  fact per entry; the order is one `incB` decision and one list equality, so the check is linear in
+  callers. bsc's folded mux (the last arm as the default) has `argL_of_pmuxF`/`NF`, not used by the
+  synthetic netlist.
+- **The order facts.** Each last-caller port gets one virtual scan slot (`vbK`, a kind `κv` with
+  `cout 0 = [0]`) appended to every caller's footprint (`virtT`, `fpAll … ++ virtT.get k`), so the
+  unchanged scan keeps its callers in rank order (`lcMR_of_scan`, `lcRR_of_scan`, `lcMM_of_scan`, from
+  `vchk`, `hkv`, `hvR`, `hvM`). The model is monkeypatched (`M.design`, `M.kind_tables`); `model.py` is
+  unchanged.
+- **Certificate.** `cert` is `LC.PairFacts.toCertL`, `certU : CertUL`, `obl := oblU_of_certL`. A file
+  with a last-caller port or a ConfigRegN child imports `LastCaller` instead of `Scan`.
+- **ConfigRegN** is LastCaller's model (`LC.CfgReg`, `Built.leaf _ LC.cfg_realizes LC.cfg_causal`);
+  `cfgAnn_lib : cfgAnn = LC.cfgAnn := rfl` checks the instance's schedule against the library's.
+  `E2E_CFGLIB=0` keeps the assumed leaf; `E2E_LC=0` turns last caller off.
+- **Not emitted:** method callers on a last-caller port (asserted), CReg ports, RWireSBR, PulseWireOR,
+  FIFO `clear`, Counter `setF` (their laws are proved, the corpus does not need them).
+- With no last-caller port and no ConfigRegN child the output is the cost piece's, byte for byte
+  (checked on SysArithPipe60 with `E2E_CFGLIB=0`).
+
+### C26. Task calls inside interface methods (Ravi's decision, design.md §12)
+
+Since review r8-1 a left-out call must be a system task that returns nothing (`model.NOVALUE_TASKS`);
+any other task or BDPI call in a method stops the emitter.
+
+System-task and BDPI calls made inside interface methods (bsc warning G0020) are not statements of
+the module's `Tasks` child: they are neither in the task trace nor in the scan's task positions
+(chain kinds), and the method's step has no task site. Task calls in rules stay statements, numbered
+in rank order. `model.py` records each method it skips (`M.mtasks`); the emitter prints
+`note: NAME: method m: k task call(s) left out of task agreement (bsc G0020)` and writes the same list
+into the file's header comment and `top`'s docstring. Example: `e2e/mtask/` (design.md §12).
+
+## Review r8-2 (C27–C28)
+
+### C27. An escaped pair's table check, linear in its facts (cost review r8-2 M1)
+
+Each escaped pair `(r1, r2)` emits `escB_n : Tab (Nat × List Nat)`, its bad site pairs as a search tree
+keyed by first-step site (each node's `mid` the key of its right half's first entry; leaves `(i, i2s)`
+with `i2s` ascending; at most 128 entries per definition, `stab_keyed`), and decides
+
+    Tab.allB (fun i p => (portsJ p.1).all (fun b => okP p.1 p.2 b ||
+      subS (idxT (usesAt ⟨p.1, b⟩) r2) (idxT escB_n i))) key_r1 0 k1
+
+once per subtree of `key_r1` (`allB_thm`, as C20). `Emit.subS l1 l2` walks `l2` once, dropping `l1`'s
+leading entries equal to each element (`subS_mem`: every entry of `l1` is in `l2`), so a site with F
+partners costs O(F) and the pair O(its facts). `okT_exceptZ` (in the file) and `Scan.okT_except_fnS`
+take `Tab.All` over `escB_n` (one `AllL` of facts per leaf, a balanced proof shaped as the table,
+`taball`). Round 8's form, `bad.contains (i, i2)` over a literal list of all bad pairs, was quadratic.
+Probe `scan/escS/genescS.py` (spread: W sites with one partner; fan: one site with W partners; neg:
+a partner missing, must fail at the decision); `scan/escS/run.txt`. The emitter also asserts one site per
+port in each step, which keeps the step index check `hchkT` linear (the fan probe's index check is
+quadratic: 32 s at 1,024 sites of one step on one port, 474 s at 4,096).
+
+### C28. User assertions in the file
+
+A file's first comment lists the user assertions it assumes (`mutually_exclusive` groups by size and
+single checks; they are `asmP`). A `conflict_free` check line stops the emitter (not stated in a file
+yet); a check step with several `mutually_exclusive` lines is the gate's run only.
+
+
+## Review r8b-1 (C29–C31)
+
+### C29. A first-step task statement in an escaped pair is one comparison (cost review r8b-1 M1)
+
+Task statements are numbered in rank order (generator check 5), so every statement of the earlier rule `r1`
+is below `lo`, the later rule `r2`'s first statement. Each pair's check is
+
+    Tab.allB (fun i p => (isT p.1.1 && Nat.blt (tnum p.1.1 p.2) lo) || (portsJ p.1).all (…as C27…)) key_r1 0 k1
+    Tab.allB (fun _ p => !isT p.1.1 || Nat.ble lo (tnum p.1.1 p.2)) key_r2 0 k2          -- escT2S_n
+
+each decided once per subtree. `isT` and `tnum` are per-kind definitions in the file (`tnum .tasks t = t.val`,
+0 elsewhere); `okP_task` proves `okP` for two task ports in number order from `taskAnn`, and `okT_exceptZ`
+takes `lo` and the second decision. A task site of `r1` is then O(1), not a loop over the `nT` ports of the
+`Tasks` child (round 8's form: O(t1 × nT) per pair). Non-task sites keep C27's loop over their kind's ports
+(at most a library kind's port count). Negative: `scan/escT/EscT_neg_8.lean` (`lo` one too high) fails at
+`escT2S_0`.
+
+### C30. Facts in groups of at most 128 fields (cost review r8b-1 M2)
+
+`Hyps` and `Unconfirmed` hold their facts in sub-structures `HypsG<k>`, `UnconfirmedG<k>` of at most
+`GATE_STRUCT = 128` fields each; the top structure has the fixed fields (`disj`, `tob`) and one field `g<k>` per
+group, and every use is `hy.g<k>.esc_n` (the emitter rewrites the projections when it writes the file). One
+structure declaration grows about ×5 per doubling of its fields, so no structure is wider than 128. A module
+has at most `GATE_MOD_FACTS = 16,384` facts (128 groups), asserted and written into the header; the gate's run
+counts them (escape facts, readiness and invariance facts, and every unexcluded user pair of a port counted for
+the pairwise bound, an upper bound on the caller-exclusivity facts). The emitter also checks the pairwise bound
+before it enumerates a mux's pairs, so a wide pairwise port stops it before any solver call.
+
+### C31. `mutually_exclusive` lines read by structure (soundness review r8b-1 M1)
+
+`sites/tools/mecheck.py` reads a check line as bsc's `aAnd (aOrs WF as) (aOrs WF bs)`: `A && B`, each side one
+`WILL_FIRE` or a parenthesised `||`, accepted only when re-rendering gives the line back; any other line of
+`WILL_FIRE` signals raises. The exclusions are `as × bs`. The emitter, the gate's scan and the shadow tool all
+read lines through it, and the emitter's model and the shadow tool assert that the pairs equal the dumper's
+`mutually_exclusive (user)` list. A file states one check per line with one head (`|as| = 1`; a longer first
+side stops the emitter), and asserts that each stated check, re-rendered, is bsc's line; the gate's scan takes
+the `|as|` checks `(a, bs)`, which together are exactly bsc's line. Negative control `e2e/mejoin/`.

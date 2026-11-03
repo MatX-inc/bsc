@@ -71,6 +71,11 @@ theorem Tab.allB_spec {α : Type uT} (f : Nat → α → Bool) : ∀ (t : Tab α
     · exact Tab.allB_spec f r mid hi h.2 k (blt_false hb) h2
     · exact Tab.allB_spec f l lo mid h.1 k h1 (blt_true hb)
 
+/-- A decided `allB` over a node from its halves, each its own kernel decision (cost review r7-2 M2). -/
+theorem Tab.allB_node {α : Type uT} {f : Nat → α → Bool} {mid lo hi : Nat} {l r : Tab α}
+    (h1 : Tab.allB f l lo mid = true) (h2 : Tab.allB f r mid hi = true) : Tab.allB f (.node mid l r) lo hi = true := by
+  simp only [Tab.allB, h1, h2, Bool.and_self]
+
 /-- Congruence in two arguments, with the function given (no higher-order unification). -/
 theorem congr2 {α β γ : Type} (f : α → β → γ) {a a' : α} {b b' : β} (h1 : a = a') (h2 : b = b') :
     f a b = f a' b' := by subst h1 h2; rfl
@@ -360,6 +365,40 @@ theorem usersT_all {t : Tab (Nat × List Nat)} {Q : Nat → Prop}
     exact Tab.all_mem h e he hb
   · rw [hb] at hk; cases hk
 
+/-- `l1`'s entries occur in `l2` in `l2`'s order: one pass over both lists (cost review r8-2 M1). -/
+def subS : List Nat → List Nat → Bool
+  | l1, [] => l1.isEmpty
+  | l1, b :: l2 => subS (l1.dropWhile (fun a => Nat.beq a b)) l2
+
+theorem mem_dropWhile_or (p : Nat → Bool) : ∀ (l : List Nat) (x : Nat), x ∈ l → p x = true ∨ x ∈ l.dropWhile p
+  | [], _, h => by cases h
+  | a :: l, x, h => by
+    cases hp : p a
+    · right; simp only [List.dropWhile, hp]; exact h
+    · rcases List.mem_cons.mp h with e | h
+      · left; rw [e]; exact hp
+      · simp only [List.dropWhile, hp]; exact mem_dropWhile_or p l x h
+
+theorem subS_mem : ∀ (l2 l1 : List Nat), subS l1 l2 = true → ∀ x ∈ l1, x ∈ l2
+  | [], l1, h, x, hx => by
+    cases l1 with
+    | nil => cases hx
+    | cons _ _ => simp [subS] at h
+  | b :: l2, l1, h, x, hx => by
+    have h' : subS (l1.dropWhile (fun a => Nat.beq a b)) l2 = true := h
+    rcases mem_dropWhile_or (fun a => Nat.beq a b) l1 x hx with e | hx
+    · rw [Nat.eq_of_beq_eq_true e]; exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (subS_mem l2 _ h' x hx)
+
+/-- An entry of a keyed table's list for `k` comes from a leaf `(k, l)`. -/
+theorem mem_idxT {t : Tab (Nat × List Nat)} {k i : Nat} (h : i ∈ idxT t k) :
+    ∃ e ∈ t.toList, e.1 = k ∧ i ∈ e.2 := by
+  unfold idxT at h
+  cases hb : Nat.beq (t.get k).1 k
+  · rw [hb] at h; cases h
+  · rw [hb] at h
+    exact ⟨t.get k, Tab.get_mem t k, Nat.eq_of_beq_eq_true hb, h⟩
+
 /-- From a step's decided check: every site index is in its port's index list. -/
 theorem chk_spec {α : Type} (idx : α → List Nat) (key : Tab α) (k : Nat)
     (h : Tab.allB (fun i p => (idx p).contains i) key 0 k = true) : ∀ i, i < k → i ∈ idx (key.get i) :=
@@ -543,3 +582,6 @@ end Emit
 #print axioms Emit.Tab.all_mem
 #print axioms Emit.usersT_all
 #print axioms Emit.callsOf_fn_congr
+#print axioms Emit.Tab.allB_node
+#print axioms Emit.subS_mem
+#print axioms Emit.mem_idxT

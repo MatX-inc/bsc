@@ -44,6 +44,26 @@ def pairs(line):
     return re.findall(r'\(([^,()]+), ([^,()]+)\)', line)
 
 
+def ba_synth(txt):
+    """Instances of synthesized modules: the APackage prints a synthesized module's generated interface
+    type with a trailing soft hyphen (U+00AD); a library primitive's or a user BVI import's has none."""
+    return set(m.group(1) for m in re.finditer(r'^\s+(\S+) :: ABSTRACT:\s*(\S+) = (\S+)', txt, re.M)
+               if m.group(2).endswith('\u00ad'))
+
+
+# bsc's library packages (src/Libraries): a non-synthesized child whose interface type is declared in one is a
+# library primitive; any other is a user BVI import (an assumed BVI leaf with its declared schedule)
+BSC_LIB = '/home/ravi/bluespec/lean/bsc/src/Libraries'
+BSC_PKGS = set(re.sub(r'\.bsv?$', '', f) for _, _, fs in os.walk(BSC_LIB) for f in fs
+               if f.endswith('.bs') or f.endswith('.bsv'))
+
+
+def ba_bvi(txt):
+    """Instances of user BVI imports: neither synthesized nor declared in a bsc library package."""
+    return set(m.group(1) for m in re.finditer(r'^\s+(\S+) :: ABSTRACT:\s*(\S+) = (\S+)', txt, re.M)
+               if not m.group(2).endswith('\u00ad') and m.group(2).split('.')[0] not in BSC_PKGS)
+
+
 class Design:
     def __init__(self, dump, ba):
         self.kids = {}        # name -> (type, sched string, sched list)
@@ -52,7 +72,10 @@ class Design:
         self.steps = []
         self.info = {}
         self._dump(open(dump).read().split('\n'))
-        self.A = bapkg.APkg(open(ba).read()) if ba else None
+        txt = open(ba).read() if ba else ''
+        self.A = bapkg.APkg(txt) if ba else None
+        self.synth = ba_synth(txt)
+        self.bvi = ba_bvi(txt)
         self._memo = {}
 
     def _dump(self, L):
@@ -65,9 +88,11 @@ class Design:
             if ln and not ln.startswith(' '):
                 sec = None
                 for key, nm in [('disjoint guards (bsc):', 'disj'), ('urgency blocking', 'urg'),
-                                ('mutually_exclusive (user):', 'me'), ('exported CF:', 'CF')]:
+                                ('mutually_exclusive (user):', 'me'), ('exported CF:', 'CF'), ('exported C:', 'C')]:
                     if ln.startswith(key):
                         self.info[nm] = pairs(ln.split(":", 1)[1])
+                if ln.startswith('exported SB/SBR:'):
+                    self.info['SBSBR'] = re.findall(r'(\S+) (SBR|SB) (\S+)', ln.split(':', 1)[1])
             if sec == 'kids':
                 m = re.match(r'^  (\S+) : (\S+)\s+\[(.*)\]\s*$', ln)
                 if m:
@@ -82,6 +107,9 @@ class Design:
                     sees = [x.strip() for x in (m.group(3) or '').split(',') if x.strip()]
                     self.ports[kid][meth] = dict(kind=m.group(2), hasarg=False, sees=sees)
                     continue
+                mc_ = re.match(r'^      copy (\S+):', ln)
+                if kid and meth and mc_:
+                    self.ports[kid][meth].setdefault('copies', []).append(mc_.group(1))
                 if kid and meth and re.match(r'^      copy', ln) and ' arg ' in ln:
                     self.ports[kid][meth]['hasarg'] = True
                 continue
@@ -90,7 +118,8 @@ class Design:
                 if m:
                     cur = dict(name=m.group(2), kind=m.group(3), reads=[], calls=[], checks=[], ooo=[])
                     self.steps.append(cur); continue
-                m = re.match(r'^       reads (\S+?)\.(\S+) when (.*)$', ln)
+                m = re.match(r'^       reads (\S+?)\.(\S+) when (.*)$', ln) or \
+                    re.match(r'^       reads (\S+?)\.(\S+)  \(hint: used when (.*)\)$', ln)   # bsc-fix-all dumps
                 if m:
                     cur['reads'].append((m.group(1), m.group(2), m.group(3))); continue
                 m = re.match(r'^       calls (\S+?)\.(\S+) when (.*?) with ?(.*)$', ln)

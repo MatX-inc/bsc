@@ -253,6 +253,33 @@ def emit_table(name, ty, items, weights=None, W=512):
     return '\n'.join(defs + ['noncomputable def %s : Emit.Tab (%s) := %s' % (name, ty, top)])
 
 
+def emit_allB(thm, f, name, items, weights=None, W=512):
+    """`theorem thm : Emit.Tab.allB f name 0 n = true` for a table written by `emit_table(name, ..)` with the same
+    items, weights and W: one kernel decision per subtree definition (cost review r7-2 minor 5)."""
+    if weights is None:
+        weights = [1] * len(items)
+    pre = [0]
+    for x in weights:
+        pre.append(pre[-1] + x)
+    out = []
+
+    def go(lo, hi, top):
+        if pre[hi] - pre[lo] <= W or hi - lo == 1:
+            if top:
+                return None
+            nm = '%s_%d_%d' % (thm, lo, hi)
+            out.append('theorem %s : Emit.Tab.allB (%s) %s_%d_%d %d %d = true := by decide +kernel' % (nm, f, name, lo, hi, lo, hi))
+            return nm
+        mid = (lo + hi) // 2
+        return '(Emit.Tab.allB_node %s %s)' % (go(lo, mid, False), go(mid, hi, False))
+    top = go(0, len(items), True)
+    if top is None:
+        out.append('theorem %s : Emit.Tab.allB (%s) %s 0 %d = true := by decide +kernel' % (thm, f, name, len(items)))
+    else:
+        out.append('theorem %s : Emit.Tab.allB (%s) %s 0 %d = true :=\n  %s' % (thm, f, name, len(items), top))
+    return '\n'.join(out)
+
+
 def tab_runs(vals):
     """A Tab literal over Nat values with runs of equal values merged into one leaf."""
     runs = []

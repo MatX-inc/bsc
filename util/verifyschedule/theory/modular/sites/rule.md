@@ -446,3 +446,25 @@ mkDeblockFilter 9/9, mkMCR 1/1). The order pass's later-site drops for the
 reach conditions themselves: 5 literals in mkBufferControl, 65 in
 mkPrediction; cycles before weakening: mkBufferControl 3 steps / 4 sites,
 mkPrediction 2 / 5.
+
+## 12. Round 8: four latent gaps closed (soundness review r7-2 minors 1–4)
+
+None of these changed a verdict or a count in any mode (`modes8_min/compare.txt`; rerun with the
+merged tools in `../gate8/sites_*`). The readiness count stays 22 of 24 in the default and
+`-no-sched-conditions` modes, with the same two failing sites.
+
+1. **`'eq'` literals** (case arms, array selections) read site values: `satc.EncS.eqatom`.
+2. **One ready literal**: the tool's `cond_y` and conclusion are the literal the file states (the
+   first ready port the step reads; `rdy_lit`), and the facts are checked with every port its own
+   atom (`Design.exact()`: `notEmpty` and `i_notEmpty` apart), because the file's facts carry no
+   `AliasOK`. `condsites.py` hands the emitter exactly that literal.
+3. **bsc's facts keyed exactly** (`BscFacts`): both steps and both uses; a chain covers every earlier
+   use of its port; a text also listed UNCONFIRMED covers nothing; and the stated conditions with `WF`
+   must imply bsc's guard and use condition (`mke2e.py` `bsc_fact`).
+4. **Input and wire literals in `R`** are dropped (monotone weakening) and the formula re-checked;
+   `condsites.py` asserts none remain in a stated `R` or (a) condition (corpus: 0).
+
+Negative controls (`modes8_min/neg_sitecond.txt`, `neg_bscfacts.txt`): round 7's tool confirms four
+false readiness facts (`eqcase`, `eqsel`, `alias`, `hwlit`), the new tool none; the bsc key gets 9 of
+9 cases right. The two decisions to confirm with Ravi (soundness review r7-2 minor 6) are in
+design.md §7.

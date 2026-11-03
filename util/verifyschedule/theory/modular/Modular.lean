@@ -45,7 +45,8 @@ scheduling annotations it exports (CF, SB, SBR, C).  This file defines
   `aliased_toModuleU`);
 * system tasks: a module's task statements are the ports of a `Tasks` child
   whose log the contract compares, per module, with the hardware's task
-  calls (`Module.L`, `log`, `trc`; `tasks_realizes`);
+  calls (`Module.L`, `log`, `trc`; `tasks_realizes`); task calls inside
+  interface methods are not statements (bsc G0020), so they are not compared;
 * primitive contracts: `CReg n` (and `Reg = CReg 1`); the wire model and
   bsc's eleven wire imports, each with its exact ports and schedule
   (`Realizes.restrict`); `FIFO2` with `vMk2FIFOF`'s eight ports and schedule
@@ -259,7 +260,10 @@ def groups {α β : Type} : List (α ⊕ β) → List α
     blocks on one clock edge run in an unspecified order, so output and
     shared-state tasks (an unseeded `$random`) may interleave differently.
     Bluesim should follow the full one-at-a-time order; that is a property
-    of the Bluesim back end, outside this proof. -/
+    of the Bluesim back end, outside this proof.
+
+    Task calls inside interface methods (bsc warning G0020) are not `Tasks` statements in
+    generated modules, so this agreement does not cover them; task calls in rules it does. -/
 def Realizes {X : Iface} (Mo : Module V X) : Prop :=
   ∀ (s : Mo.S) (σ : List (List (X.M × V))) (w : Wires X.M V) (o : Outs X.M V) (s' : Mo.S) (g : Mo.Sig),
     Mo.clean s = s → Legal X.ann σ → Drives X.ann w σ → Mo.hw s w o s' g → Mo.ok g →
@@ -1281,7 +1285,8 @@ theorem causal_toModule [Inhabited V] (P : Parent V) (impl : (j : P.I) → Modul
     totality (a primitive's, proved below, or an imported Verilog module's,
     assumed), nodes are families that meet their obligations (`OblU`, the
     order before the skipped values), with an acyclicity certificate, over
-    built children that respect their output aliases. -/
+    built children that respect their output aliases.  An assumed synthesized leaf must export
+    every action method C with itself (bsc's exported self relation is no guarantee). -/
 inductive Built : (X : Iface) → ModuleU V X → Prop
   | leaf {X : Iface} (Mo : Module V X) : Realizes Mo → Causal Mo → Built X Mo.toU
   | node (F : ParentU V) (impl : (j : F.I) → ModuleU V (F.CI j)) :
@@ -1320,7 +1325,8 @@ theorem Built.causal [Inhabited V] {X : Iface} {Mo : ModuleU V X} (h : Built X M
     module's tasks in its own always block, in an unspecified order on one
     clock edge, so different modules' calls are not ordered against each
     other.  Bluesim should follow the full one-at-a-time order; that is a
-    property of the Bluesim back end, outside this proof. -/
+    property of the Bluesim back end, outside this proof.  Task calls inside
+    interface methods (bsc G0020) are not statements, so they are not compared. -/
 theorem Built.top [Inhabited V] {X : Iface} {Mo : ModuleU V X} (h : Built X Mo) :
     RealizesU Mo ∧ ∀ s w, Mo.clean s = s → ∃ o s' g, Mo.hw s w o s' g := by
   refine ⟨h.realizes, fun s w hc => ?_⟩

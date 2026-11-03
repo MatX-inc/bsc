@@ -1030,7 +1030,7 @@ def analyse(ddir, outdir, workdir):
             gl = E.b(g)
             rl = E.OR([E.atom(('port', D.canon(('call', p[0], p[1], [])))) for p in rp])
             sat = E.sat([gl, -rl], workdir)
-            if sat:
+            if sat is not False:      # a solver timeout (None) counts as possibly not ready
                 s['need'].add('r')
                 s['rdy'] = rp
                 ready_bad.append((st['name'], s['label']))
@@ -1270,11 +1270,11 @@ def analyse(ddir, outdir, workdir):
             E = Enc(D)
             b = E.b(be)
             r = enc_f(E, f, {})
-            b_imp_r = not E.sat([b, -r], workdir)
+            b_imp_r = E.sat([b, -r], workdir) is False
             E2 = Enc(D)
             b2 = E2.b(be)
             r2 = enc_f(E2, f, {})
-            r_imp_b = not E2.sat([r2, -b2], workdir)
+            r_imp_b = E2.sat([r2, -b2], workdir) is False
             if b_imp_r and r_imp_b:
                 k = 'eq'
             elif b_imp_r:

@@ -234,6 +234,82 @@ theorem argL_of_pmuxN (P : Parent V) (fire : ((j : P.I) → Outs (P.CI j).M V) �
     obtain ⟨t, ht, e⟩ := List.mem_map.mp this
     exact List.mem_map.mpr ⟨t, ht, by rw [hstpf, e]⟩
 
+/-- A priority mux whose selectors are all off yields its default. -/
+theorem pmux_off : ∀ (l : List (Bool × V)) (d : V), (∀ e ∈ l, e.1 = false) → Scan.pmux l d = d
+  | [], _, _ => rfl
+  | e :: l, d, h => by
+    simp only [Scan.pmux, h e (List.mem_cons_self ..), Bool.cond_false]
+    exact pmux_off l d (fun e' he' => h e' (List.mem_cons_of_mem _ he'))
+
+/-- `argL_of_pmux` for bsc's optimized mux (AOpt folds the lowest-priority arm into the default):
+    arms `0 … u-1` with selectors, and arm `u`, the earliest caller, unconditional. -/
+theorem argL_of_pmuxF (P : Parent V) (fire : ((j : P.I) → Outs (P.CI j).M V) → Wires P.X.M V → P.PR → Bool)
+    (oc : (j : P.I) → Outs (P.CI j).M V) (w : Wires P.X.M V) (j : P.I) (cm : (P.CI j).M)
+    (lp : Step P → Nat) (us : List (Step P)) (u : Nat) (G : Nat → Bool × V) (stp : Nat → Step P)
+    (keyf : Nat → Nat) (hk : ∀ t, lp (stp t) = keyf t)
+    (hdec : Scan.incB (((List.range' 0 (u + 1)).map keyf).reverse) = true)
+    (hstp : ∀ t ∈ List.range' 0 (u + 1), stp t ∈ us)
+    (hus : ∀ s ∈ us, s ∈ (List.range' 0 (u + 1)).map stp)
+    (hQ : Emit.AllL (fun t => ((G t).1 = true → On P fire oc w (stp t) ∧ Calls P (trS P oc w (stp t)) j cm) ∧
+      (On P fire oc w (stp t) → ∀ x, (cm, x) ∈ proj j (trS P oc w (stp t)) → (G t).1 = true ∧ (G t).2 = x))
+      (List.range' 0 u))
+    (hL : On P fire oc w (stp u) → ∀ x, (cm, x) ∈ proj j (trS P oc w (stp u)) → (G u).2 = x) :
+    ∀ s ∈ us, On P fire oc w s → ∀ x, (cm, x) ∈ proj j (trS P oc w s) →
+      (∀ s' ∈ us, lp s < lp s' → On P fire oc w s' → ¬ Calls P (trS P oc w s') j cm) →
+      Scan.pmux ((List.range' 0 u).map G) (G u).2 = x := by
+  intro s hs hon x hx hlater
+  obtain ⟨t, ht, rfl⟩ := List.mem_map.mp (hus s hs)
+  have hp := Scan.pairwise_of_incB _ hdec
+  rw [List.pairwise_reverse, List.pairwise_map, List.range'_concat, List.pairwise_append] at hp
+  obtain ⟨hpre, _, hlast⟩ := hp
+  have hpre' : (List.range' 0 u).Pairwise (fun a c => lp (stp c) < lp (stp a)) :=
+    hpre.imp (fun h => by rw [hk, hk]; exact h)
+  have hsub : ∀ a ∈ List.range' 0 u, a ∈ List.range' 0 (u + 1) := by
+    intro a ha; rw [List.range'_concat]; exact List.mem_append_left _ ha
+  -- an arm above a later-in-`lp` firing caller is off
+  have off : ∀ a ∈ List.range' 0 u, lp (stp t) < lp (stp a) → (G a).1 = false := by
+    intro a ha hlt
+    cases e : (G a).1
+    · rfl
+    · obtain ⟨hon', hc'⟩ := (Emit.AllL.mem hQ a ha).1 e
+      exact (hlater (stp a) (hstp a (hsub a ha)) hlt hon' hc').elim
+  rw [List.range'_concat] at ht
+  rcases List.mem_append.mp ht with ht' | ht'
+  · obtain ⟨h1, h2⟩ := (Emit.AllL.mem hQ t ht').2 hon x hx
+    rw [← h2]
+    exact pmux_last G (fun t => lp (stp t)) _ _ hpre' t ht' h1 off
+  · have htu : t = u := by simpa using ht'
+    subst htu
+    rw [pmux_off _ _ (fun e he => by
+      obtain ⟨a, ha, rfl⟩ := List.mem_map.mp he
+      exact off a ha (by rw [hk, hk]; exact hlast a ha t (by simp)))]
+    exact hL hon x hx
+
+/-- `argL_of_pmuxF` with the users given by numbers, as `argL_of_pmuxN`. -/
+theorem argL_of_pmuxNF (P : Parent V) (fire : ((j : P.I) → Outs (P.CI j).M V) → Wires P.X.M V → P.PR → Bool)
+    (oc : (j : P.I) → Outs (P.CI j).M V) (w : Wires P.X.M V) (j : P.I) (cm : (P.CI j).M)
+    (lp : Step P → Nat) (us : List (Step P)) (u : Nat) (G : Nat → Bool × V) (stp : Nat → Step P)
+    (keyf : Nat → Nat) (hk : ∀ t, lp (stp t) = keyf t)
+    (hdec : Scan.incB (((List.range' 0 (u + 1)).map keyf).reverse) = true)
+    (ks : List Nat) (f : Nat → Step P) (idx : Nat → Nat) (hus_eq : us = ks.map f) (hstpf : ∀ t, stp t = f (idx t))
+    (hperm : (List.range' 0 (u + 1)).map idx = ks.reverse)
+    (hQ : Emit.AllL (fun t => ((G t).1 = true → On P fire oc w (stp t) ∧ Calls P (trS P oc w (stp t)) j cm) ∧
+      (On P fire oc w (stp t) → ∀ x, (cm, x) ∈ proj j (trS P oc w (stp t)) → (G t).1 = true ∧ (G t).2 = x))
+      (List.range' 0 u))
+    (hL : On P fire oc w (stp u) → ∀ x, (cm, x) ∈ proj j (trS P oc w (stp u)) → (G u).2 = x) :
+    ∀ s ∈ us, On P fire oc w s → ∀ x, (cm, x) ∈ proj j (trS P oc w s) →
+      (∀ s' ∈ us, lp s < lp s' → On P fire oc w s' → ¬ Calls P (trS P oc w s') j cm) →
+      Scan.pmux ((List.range' 0 u).map G) (G u).2 = x := by
+  subst hus_eq
+  refine argL_of_pmuxF P fire oc w j cm lp _ u G stp keyf hk hdec (fun t ht => ?_) (fun s hs => ?_) hQ hL
+  · rw [hstpf]
+    have : idx t ∈ ks.reverse := by rw [← hperm]; exact List.mem_map_of_mem ht
+    exact List.mem_map_of_mem (List.mem_reverse.mp this)
+  · obtain ⟨k, hk', rfl⟩ := List.mem_map.mp hs
+    have : k ∈ (List.range' 0 (u + 1)).map idx := by rw [hperm]; exact List.mem_reverse.mpr hk'
+    obtain ⟨t, ht, e⟩ := List.mem_map.mp this
+    exact List.mem_map.mpr ⟨t, ht, by rw [hstpf, e]⟩
+
 /-! ## The block lemma, from the annotations alone (proved once) -/
 
 section Block
@@ -563,13 +639,14 @@ theorem realizes_lastWins (Mo : Module V X) (hR : Mo.R → False) (m : X.M) (A1 
 end Generic
 
 
-/-! ## The last-caller key and the per-primitive laws -/
+/-! ## The last-caller key and the per-primitive laws (reference facts: only `cfg_lastWins` is used;
+Lean checks `CertL.lc_ok` on the child model's annotation, whose proved `Realizes` carries the law) -/
 
 section Laws
 variable {M : Type} [DecidableEq M]
 
-/-- **The last-caller key**, on a primitive's annotation (its `VModInfo`, not its Verilog name):
-    `m` is self-SBR with an enable, and no port that observes `m` after it shares a caller with it. -/
+/-- **The last-caller key** on an annotation (reference; the shadow tool applies it to the instance's
+    schedule): `m` self-SBR with an enable, and no port that observes `m` after it in one caller. -/
 def lcKey (A : Ann M) (ports : List M) (m : M) : Bool :=
   A.sbr m m && A.hasEn m && !A.conf m m && !A.share m &&
   ports.all (fun q => q == m || !A.prec m q || A.sbr m q)
@@ -983,6 +1060,8 @@ end Modular
 #print axioms Modular.LC.lcRR_of_scan
 #print axioms Modular.LC.lcMM_of_scan
 #print axioms Modular.LC.argL_of_pmux
+#print axioms Modular.LC.argL_of_pmuxF
+#print axioms Modular.LC.argL_of_pmuxNF
 #print axioms Modular.LC.block
 #print axioms Modular.LC.execG_rbl
 #print axioms Modular.LC.realizes_lastWins

@@ -162,6 +162,36 @@ class Enc:
                     self.cl.append([np_, -v])
                     pre = np_
 
+    def sat_model(self, roots, workdir):
+        """As sat, with cadical's witness: (True, {variable: value}), (False, None) or (None, None)."""
+        self.finish()
+        cls = self.cl + [[r] for r in roots]
+        fd, path = tempfile.mkstemp(suffix='.cnf', dir=workdir)
+        with os.fdopen(fd, 'w') as f:
+            f.write('p cnf %d %d\n' % (self.n, len(cls)))
+            for c in cls:
+                f.write(' '.join(map(str, c)) + ' 0\n')
+        try:
+            r = subprocess.run([CADICAL, '-q', path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                               timeout=120, text=True)
+            rc = r.returncode
+        except subprocess.TimeoutExpired:
+            rc = None
+        finally:
+            os.unlink(path)
+        if rc == 10:
+            val = {}
+            for ln in r.stdout.split('\n'):
+                if ln.startswith('v '):
+                    for x in ln[2:].split():
+                        x = int(x)
+                        if x:
+                            val[abs(x)] = x > 0
+            return True, val
+        if rc == 20:
+            return False, None
+        return None, None
+
     def sat(self, roots, workdir):
         """Is the conjunction of the literal list `roots` satisfiable?"""
         self.finish()
@@ -175,6 +205,8 @@ class Enc:
             r = subprocess.run([CADICAL, '-q', path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                timeout=120)
             rc = r.returncode
+        except subprocess.TimeoutExpired:
+            rc = None      # unknown: every caller treats None as not UNSAT (fails safe)
         finally:
             os.unlink(path)
         if rc == 10:

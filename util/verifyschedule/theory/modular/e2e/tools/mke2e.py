@@ -1,4 +1,4 @@
-"""Emit one corpus module's modular obligation file (emit/conventions.md, sites/rule.md).
+"""Emit one corpus module's modular obligation file (emit/conventions.md, sites/rule.md, design.md).
 
 usage: python3 -I mke2e.py DUMP BA OUT.lean NAME [NSTEPS]
 
@@ -9,8 +9,28 @@ methods; exact call conditions; conditional reads under schedlean's conditions
 (sites/tools/sitecond.py: conservative reach, and readiness under the ready
 literal with the use-level fact over R_seq); escapes with their dynamic facts;
 several urgency blockers; FIFO2 (library), SizedFIFO and RegFile (assumed).
+Round 8, merged from three pieces:
+- last caller: a self-SBR primitive port two callers may drive in one cycle carries the last
+  caller's argument (bsc's priority mux), checked by `CertL.argL`; its callers use one virtual scan
+  slot each, so the scan keeps them in rank order (LastCaller.lean); ConfigRegN is LastCaller's model;
+- cost (cost review r7-2; emit/conventions.md C20-C24): exception groups against one mask per group;
+  whole-table decisions split per subtree; at most 128 entries per table definition; the gate's
+  bounds asserted and written into the file; a module above 4 MB in parts;
+- soundness minors (review-soundness-r7-2.md): every solver-labelled fact is checked with each port
+  its own atom (the file's facts carry no AliasOK); bsc's confirmed facts keyed by both steps and both
+  uses, used only where each stated condition implies bsc's; each fact labelled by its source;
+- task calls inside interface methods (bsc G0020) are left out of the module's task trace and of the
+  scan's task positions (Ravi's decision); the emitter prints a note naming each one.
+Review r8-2: an escaped pair's table check is keyed by first-step site and linear in its facts (C27,
+at most 4,096 per pair); the gate's run computes every escape fact as a file does (escape_facts, gate
+item 2); user assertions (mutually_exclusive and conflict_free checks) are hypotheses, assumed in the
+gate's solver calls, listed in the file's first comment; a conflict_free check stops the emitter.
+Review r8b-1: a first-step task statement of an escaped pair is one comparison (C29, isT/tnum/okP_task); the
+facts sit in groups of at most 128 fields, at most 16,384 per module (C30); mutually_exclusive lines are read by
+structure (sites/tools/mecheck.py, C31); the gate's run also prints seg_uses, mod_facts, esc_facts_fallback.
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -19,15 +39,45 @@ import model   # noqa: E402
 
 dump, ba, out, NAME = sys.argv[1:5]
 NST = int(sys.argv[5]) if len(sys.argv) > 5 else None
+GATE_RUN = model.GATE   # E2E_GATE=1: the gate's scan run (gate8/gatescan.sh); prints one GATE line, writes no file
+GATE_ESC = 64            # scan/esc7: escaped rule pairs (each with its dynamic facts), gate item 1
+GATE_ESC_FACTS = 4096    # scan/escS: dynamic facts of one escaped pair (the keyed, linear check), measured to 4,096
+# numeric gate bounds calibrated by the cost probes (design.md §11 item 6, §17; runs in cost/logs/summary.txt)
+GATE_SEG = 4096          # scan/: uses per scan segment (a segment's kernel time grows faster than its uses)
+GATE_SLOTS = 8192        # scan/: slots in the state
+GATE_CODES = 4096        # scan/: rule codes
+GATE_STEP = 4096         # cost/big Bu512..Bu4096: sites in one step, linear on this emitter; = GATE_SEG
+GATE_PORT_USERS = 3296   # cost/port P412..P3296: users of one port, linear in parts
+GATE_GROUP = 3296        # the same probe: one exception group of all the users
+GATE_SELMUX = 64         # cost/port PS16/64, PT16/64/256: a port whose enable (and chain, outside one group) is by pairs
+GATE_LC_USERS = 512      # lc/probe LcProbe64..512: callers of one last-caller port, linear to 512 (1,024 not buildable)
+GATE_PART = 4000000      # cost/port, cost/big: source bytes in one Lean file (a part); larger modules are split
+GATE_STRUCT = 128        # cost review r8b-1 M2: fields of one structure (Hyps, Unconfirmed in groups of this many)
+GATE_MOD_FACTS = 16384   # the same: facts of one module (GATE_STRUCT groups of GATE_STRUCT), measured to 16,384
+
+
+def gate_exit(**kw):
+    import json
+    print('GATE ' + json.dumps(dict(name=NAME, **kw)))
+    sys.exit(0)
+
+
 D = design.Design(dump, ba)
 CS = None
-if os.environ.get('E2E_SITES', '1') == '1':
-    import condsites  # noqa: E402
-    CS, CSRES = condsites.conditional_sites(os.path.dirname(os.path.abspath(dump)),
-                                            os.path.join(os.path.dirname(os.path.abspath(out)), 'sitework_' + NAME))
-M = model.Model(D, NST, CS)
+try:
+    if os.environ.get('E2E_SITES', '1') == '1':
+        import condsites  # noqa: E402
+        CS, CSRES = condsites.conditional_sites(os.path.dirname(os.path.abspath(dump)),
+                                                os.path.join(os.path.dirname(os.path.abspath(out)), 'sitework_' + NAME))
+    M = model.Model(D, NST, CS)
+except Exception as ex_:
+    if not GATE_RUN:
+        raise
+    gate_exit(error='model: %s: %s' % (type(ex_).__name__, str(ex_)[:200]))
 K = M.K
 nR, nM, nS = M.nR, M.nM, M.nS
+# conflict_free checks (user assertions, Ravi's decision) enter the gate's solver calls; a file cannot state them yet
+assert GATE_RUN or not M.cf_checks, 'conflict_free run-time checks (user assertions) are not emitted yet'
 MET = nM > 0
 
 
@@ -53,8 +103,33 @@ class MAnn:
         return a == b or (cls.names[a], cls.names[b]) not in cls.cf
 
 
-if MET:
-    assert all(not MAnn.conf(a, b) for a in range(nM) for b in range(nM) if a != b), 'non-CF method pairs'
+class GMAnn(MAnn):
+    """The gate's scan run only: bsc's exported relations (CF, SB, SBR; unlisted pairs and each method with
+    itself C), which the theory admits and this emitter cannot yet write (prec/sbr between methods)."""
+    sb = set((a_, b_) for a_, r_, b_ in D.info.get('SBSBR', []) if r_ == 'SB')
+    sbrs = set((a_, b_) for a_, r_, b_ in D.info.get('SBSBR', []) if r_ == 'SBR')
+
+    @classmethod
+    def prec(cls, a, b):
+        x, y = cls.names[a], cls.names[b]
+        return a != b and ((x, y) in cls.sb or (x, y) in cls.sbrs)
+
+    @classmethod
+    def sbr(cls, a, b):
+        return (cls.names[a], cls.names[b]) in cls.sbrs
+
+    @classmethod
+    def conf(cls, a, b):
+        x, y = cls.names[a], cls.names[b]
+        return a == b or not ((x, y) in cls.cf or (x, y) in cls.sb or (x, y) in cls.sbrs or (y, x) in cls.sb or
+                              (y, x) in cls.sbrs)
+
+
+GATE_NONCF = MET and not all(not MAnn.conf(a, b) for a in range(nM) for b in range(nM) if a != b)
+if GATE_RUN:
+    MAnn = GMAnn
+elif MET:
+    assert not GATE_NONCF, 'non-CF method pairs'
 # bsc's mutually_exclusive checks as suffix groups (cost review r7-1 M1): a group [x0, .., xn] has
 # the checks (x_j, [x_j+1 .. xn]) for every j < n; the file states it once (SufAsm), O(n) data
 GROUPS, CHK_G = [], {}
@@ -78,21 +153,330 @@ for c0_, ch0_ in enumerate(M.checks):
         assert M.checks[c_]['lst'] == seq_[j_ + 1:], 'a check is not its group suffix'   # generator check
         CHK_G[c_] = (g_, j_)
 LITC = [c_ for c_ in range(len(M.checks)) if c_ not in CHK_G]     # checks stated one by one
+# trust point 3 (soundness review r8b-1 M1): each check a file states, re-rendered, is bsc's line (one rule on its
+# first side: model.py stops on a multi-rule side outside the gate's run); a check missing a rule is weaker
+if not GATE_RUN:
+    for ch_ in M.checks:
+        if ch_['full']:
+            assert model.mecheck.render([M.rules[ch_['head']]['name']], [M.rules[x_]['name'] for x_ in ch_['lst']]) == \
+                ch_['line'].strip(), 'a stated check differs from bsc\'s line: %s' % ch_['line'][:80]
 LITI = {c_: n_ for n_, c_ in enumerate(LITC)}
-need, esc, Dn = M.scan_masks(MAnn if MET else None)
+def is_uncond(st):
+    return st['cond'][0] == 'true'
+
+
+# ---- escape facts: per escaped pair, per statically failing site pair, the dynamic exclusion (gate item 2,
+# computed here for the gate's run as for a file: review r8-2 M1)
+if CS is not None:
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'sites', 'tools'))
+    from satc import Enc as EncE  # noqa: E402
+    # every port its own atom (the site tool's exact view): the facts quantify over every child output
+    SDE, APE = CSRES['_ctx']['DX'], CSRES['_ctx']['ap']
+    BFE, PARSE = CSRES['_ctx']['bsc_facts'], CSRES['_ctx']['parse']
+    WORKE = os.path.join(os.path.dirname(os.path.abspath(out)), 'sitework_' + NAME)
+    CSL = {(k_, e_['label']): e_ for k_, v_ in CS.items() for e_ in v_}
+
+    def wfe(n):
+        x_ = 'WILL_FIRE_' + n
+        return ('id', x_) if x_ in SDE.defs else ('id', 'CAN_FIRE_' + n)
+
+    # conflict_free checks as assumptions: `!(WILL_FIRE_R && line)`, each instrumentation wire's wget read as its
+    # one unconditional writer's argument (the dump's "wget = wset_1 within the cycle"), whas as its WILL_FIRE
+    _wr = {}
+    for rn_, (_, acts_) in APE.rules.items():
+        for a_ in acts_:
+            if a_ and a_[0] == 'call' and a_[2] == 'wset':
+                _wr.setdefault(a_[1], []).append((rn_, a_[3], a_[4]))
+
+    def _true(c):
+        return c is None or (c[0] == 'lit' and c[1] in ("1'd1", "1'b1"))
+
+    def _res(e):
+        if isinstance(e, tuple) and len(e) == 4 and e[0] == 'call' and not e[3] and e[2] in ('wget', 'whas'):
+            ws_ = _wr.get(e[1], [])
+            if len(ws_) == 1 and _true(ws_[0][1]) and ws_[0][2]:
+                return ws_[0][2][0] if e[2] == 'wget' else wfe(ws_[0][0])
+            return e
+        if isinstance(e, tuple):
+            return tuple(_res(x) if isinstance(x, (tuple, list)) else x for x in e)
+        if isinstance(e, list):
+            return [_res(x) for x in e]
+        return e
+    CFA = []        # (rule, the names its line reads, the resolved line)
+    for (rn_, line_) in M.cf_checks:
+        nm_ = set(re.findall(r'WILL_FIRE_(\S+?)(?=[\s)&|]|$)', line_)) | {rn_}
+        CFA.append((rn_, nm_, _res(PARSE(line_))))
+
+    def cf_roots(E, names):
+        """The conflict_free assertions that name one of the steps, as literals assumed true."""
+        return [-E.AND([E.b(wfe(rn_)), E.b(ex_)]) for (rn_, nm_, ex_) in CFA if nm_ & set(names)]
+
+    def site_lit(E, k, st):
+        """The site's condition as the file states it, as a literal of E."""
+        if st['kind'] == 'read':
+            if is_uncond(st):
+                return 1
+            e_ = CSL[(M.rules[k]['name'], st['label'])]
+            if e_['kind'] == 'rdy':
+                return E.OR([E.atom(('port', E.D.canon(('call', p_[0], p_[1], [])))) for p_ in e_['rdy']])
+            return e_['enc'](E)
+        if st['kind'] == 'task':
+            return 1    # a task statement's condition: true is the weaker cover
+        inst_, meth_ = st['label'].rsplit('.', 1)
+        meth_ = 'sub' if meth_.startswith('sub') else meth_
+        cs_ = [a[3] for a in APE.rules.get(M.rules[k]['name'], (None, []))[1]
+               if a and a[0] == 'call' and a[1] == inst_ and a[2] == meth_]
+        cs_ = [c if c is not None else ('lit', "1'd1") for c in cs_] or [('lit', "1'd1")]
+        return E.OR([E.b(c) for c in cs_])
+
+    def bsc_fact(k1, s1, lit1, k2, s2, lit2):
+        """bsc's confirmed fact for these two sites (keyed by both steps and both uses, r7 review s2
+        minor 3), provided each site's stated condition (with WF) implies bsc's condition (with the
+        step's guard); else None."""
+        if s1['kind'] == 'task' or s2['kind'] == 'task':
+            return None
+        n1, n2 = M.rules[k1]['name'], M.rules[k2]['name']
+        text = BFE.covers(n1, s1['label'], n2, s2['label'])
+        if text is None:
+            return None
+        for (n, s, litf) in ((n1, s1, lit1), (n2, s2, lit2)):
+            E = EncE(SDE)
+            try:
+                cs_ = [PARSE(t) for t in BFE.use_cond(n, s['label'])]
+                g_ = BFE.use_guard(n)
+                g_ = PARSE(g_) if g_ else ('lit', "1'd1")
+            except Exception:
+                return None
+            if not cs_:
+                return None
+            if E.sat([E.b(wfe(n)), litf(E), -E.AND([E.b(g_), E.OR([E.b(c) for c in cs_])])], WORKE) is not False:
+                return None
+        return text
+
+
+def escape_facts(ESC):
+    """Per escaped pair and failing site pair: 'solver' (this site pair and the conditions the file states,
+    every port its own atom), 'bsc' (bsc's fact keyed by both steps and uses, the stated conditions implying
+    bsc's), 'assert' (the solver with the conflict_free assertions assumed: a user assertion), or None."""
+    out_, errs_ = [], []
+    for (r1, r2, bad) in ESC:
+        for (i1, i2) in bad:
+            s1, s2 = M.rules[r1]['sites'][i1], M.rules[r2]['sites'][i2]
+            how, btext = None, None
+            if CS is not None:
+                try:
+                    names_ = (M.rules[r1]['name'], M.rules[r2]['name'])
+                    E_ = EncE(SDE)
+                    roots_ = [E_.b(wfe(names_[0])), E_.b(wfe(names_[1])), site_lit(E_, r1, s1), site_lit(E_, r2, s2)]
+                    if E_.sat(roots_, WORKE) is False:
+                        how = 'solver'
+                    else:
+                        btext = bsc_fact(r1, s1, lambda E, k=r1, s=s1: site_lit(E, k, s),
+                                         r2, s2, lambda E, k=r2, s=s2: site_lit(E, k, s))
+                        how = 'bsc' if btext else None
+                        if how is None and CFA:
+                            # a file states escape facts without asm (Hyps): a fact that holds only under a
+                            # conflict_free check would make Hyps unsatisfiable, so 'assert' is the gate's only
+                            assert GATE_RUN, 'an escape fact needing a conflict_free check in a file'
+                            E_ = EncE(SDE)
+                            roots_ = [E_.b(wfe(names_[0])), E_.b(wfe(names_[1])), site_lit(E_, r1, s1),
+                                      site_lit(E_, r2, s2)] + cf_roots(E_, names_)
+                            if E_.sat(roots_, WORKE) is False:
+                                how = 'assert'
+                except Exception as ex_:
+                    if not GATE_RUN:
+                        raise
+                    errs_.append('%s %s' % (type(ex_).__name__, str(ex_)[:80]))
+            out_.append(dict(r1=r1, r2=r2, i1=i1, i2=i2, ok=how is not None, how=how, bsc=btext))
+    return out_, errs_
+
+
+# ---- last caller: self-SBR primitive ports (keyed by kind and port) two callers may drive at once
+LC_KEY = {('reg', 'write'), ('cfg', 'write')}
+CFG_LIB = 'cfg' in M.kinds and os.environ.get('E2E_CFGLIB', '1') == '1'   # ConfigRegN: LastCaller's model
+U0 = M.users()
+# one site per port per step (bsc's dump gives each copy of a method its own port; corpus maximum 1): the step
+# index check (hchkT, `contains` per site) is then linear; a second site would make it quadratic (scan/escS fan)
+assert all(len(set(st_['port'] for st_ in r_['sites'])) == len(r_['sites']) for r_ in M.rules), \
+    'two sites of one step on one port'
+LCP = []
+if CS is not None and os.environ.get('E2E_LC', '1') == '1':
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'sites', 'tools'))
+    from satc import Enc as EncL  # noqa: E402
+    SDL, APL = CSRES['_ctx']['DX'], CSRES['_ctx']['ap']     # every port its own atom, as the cx facts
+    WORKL = os.path.join(os.path.dirname(os.path.abspath(out)), 'sitework_' + NAME)
+
+    def wfl(n):
+        x_ = 'WILL_FIRE_' + n
+        return ('id', x_) if x_ in SDL.defs else ('id', 'CAN_FIRE_' + n)
+
+    def ccl(n, inst, meth):
+        cs_ = [a[3] for a in APL.rules.get(n, (None, []))[1] if a and a[0] == 'call' and a[1] == inst and a[2] == meth]
+        return [c if c is not None else ('lit', "1'd1") for c in cs_] or [('lit', "1'd1")]
+    RM_EXCL = set()      # bsc's recorded exclusions between a rule and a method (disjoint guards, urgency)
+    for a_, b_ in D.info.get('disj', []) + D.info.get('urg', []) + D.info.get('me', []):
+        RM_EXCL.add((a_, b_))
+        RM_EXCL.add((b_, a_))
+
+    def excl_lc(x, y):
+        if (x >= nR) != (y >= nR):
+            return (M.rules[x]['name'], M.rules[y]['name']) in RM_EXCL
+        if x >= nR:
+            return MAnn.conf(x - nR, y - nR)       # two methods exported C are never both called (Env)
+        return M.excl_src(x, y) is not None
+    LC_METH = []
+    for p_, us_ in sorted(U0.items()):
+        if (p_[0], p_[2]) not in LC_KEY or len(us_) < 2:
+            continue
+        ks_ = sorted(set(k_ for k_, _ in us_))
+        if len(set(repr(M.rules[k_]['sites'][si_]['arg']) for k_, si_ in us_)) < 2:
+            continue
+        inst_ = M.byk[p_[0]][p_[1]]
+        shadow_ = False
+        for a_ in range(len(ks_)):
+            for b_ in range(a_ + 1, len(ks_)):
+                x_, y_ = ks_[a_], ks_[b_]
+                if shadow_ or excl_lc(x_, y_):
+                    continue
+                E_ = EncL(SDL)
+                roots_ = [E_.b(wfl(M.rules[x_]['name'])), E_.b(wfl(M.rules[y_]['name'])),
+                          E_.OR([E_.b(c) for c in ccl(M.rules[x_]['name'], inst_, p_[2])]),
+                          E_.OR([E_.b(c) for c in ccl(M.rules[y_]['name'], inst_, p_[2])])] + \
+                    cf_roots(E_, (M.rules[x_]['name'], M.rules[y_]['name']))
+                if E_.sat(roots_, WORKL) is not False:
+                    shadow_ = True
+        if shadow_:
+            if not all(k_ < nR for k_, _ in us_):
+                LC_METH.append(inst_ + '.' + p_[2])
+            assert GATE_RUN or not LC_METH, 'a last-caller port with method users (not emitted yet)'
+            LCP.append(p_)
+VB = {p_: M.nslots + t_ for t_, p_ in enumerate(LCP)}
+KV = len(M.kinds)
+if LCP:
+    _kt0 = M.kind_tables
+    M.kind_tables = lambda: _kt0() + [[([], [0], [], [])]]
+    _des0 = M.design
+
+    def _des(exR, escR=None, mann=None):
+        Dx = _des0(exR, escR, mann)
+        for p_ in LCP:
+            for k_ in sorted(set(k_ for k_, _ in U0[p_])):
+                (Dx.fpR[k_] if k_ < nR else Dx.fpM[k_ - nR]).append((VB[p_], KV, 0))   # methods: the gate's run only
+        return Dx
+    M.design = _des
+    M.nslots += len(LCP)
+    M.d = max(1, (M.nslots - 1).bit_length())
+VIRT = [[(VB[p_], KV, 0) for p_ in LCP if any(k_ == k for k_, _ in U0[p_])] for k in range(nR)]
+
+
+
+try:
+    need, esc, Dn = M.scan_masks(MAnn if MET else None)
+except (ValueError, AssertionError) as ex_:
+    if not GATE_RUN:
+        raise
+    need = esc = Dn = None
+    SCAN_ERR = '%s %s' % (type(ex_).__name__, ex_)
+if GATE_RUN:
+    # the gate's scan verdict and counts from this emitter's own model (cost review r8-1 M1)
+    import copy as copy_
+    codes_ = None
+    if Dn is not None:
+        codes_ = len(set(model.scanlib.compress(copy_.deepcopy(Dn)).rc))
+    lcu_ = [[M.byk[p_[0]][p_[1]] + '.' + p_[2], len(set(k_ for k_, _ in U0[p_]))] for p_ in LCP]
+    # gate item 2 (review r8-2 M1): every failing site pair of every escaped pair, checked as a file checks it
+    ef_ = ef_err_ = None
+    fpp_ = nef_ = 0
+    if esc is not None:
+        esc_l_ = M.esc_pairs(esc)
+        fpp_ = max([len(b_) for _, _, b_ in esc_l_] + [0])
+        nef_ = sum(len(b_) for _, _, b_ in esc_l_)
+        if CS is None:
+            ef_err_ = ['no site conditions (condsites)']
+        elif fpp_ <= GATE_ESC_FACTS:
+            ef_, ef_err_ = escape_facts(esc_l_)
+    lab_ = lambda f: '%s/%s %s/%s' % (M.rules[f['r1']]['name'], M.rules[f['r1']]['sites'][f['i1']].get('label'),
+                                      M.rules[f['r2']]['name'], M.rules[f['r2']]['sites'][f['i2']].get('label'))
+    # user assertions relied on: scan exclusions whose only source is a mutually_exclusive check, escape facts
+    # confirmed only with a conflict_free check assumed
+    me_need_ = 0 if need is None else sum(1 for i_ in range(nR) for x_ in range(nR)
+                                          if (need[i_] >> x_) & 1 and (M.excl_src(x_, i_) or ('',))[0] == 'me')
+    # the pairwise bound as the emitter counts it (cost review r8-2 minor 5): an action port's users when one is
+    # conditional or the module has methods (en_pairs), or a user pair has no recorded exclusion (SELMUX), without
+    # the emitter's one-group exception (an upper bound)
+    pw_ = cxub_ = 0
+    for p_, us_ in U0.items():
+        if p_[0] == 'tasks' or not K[p_[0]].has_en(p_[2]):
+            continue
+        ks_ = sorted(set(k_ for k_, _ in us_))
+        if len(ks_) < 2:
+            continue
+        cond_ = any(not is_uncond(M.rules[k_]['sites'][si_]) for k_, si_ in us_)
+        noex_ = K[p_[0]].hasarg(p_[2]) and any(M.excl_src(a_, b_) is None for a_ in ks_ for b_ in ks_
+                                                if a_ < b_ and a_ < nR and b_ < nR)
+        if cond_ or MET or noex_:
+            pw_ = max(pw_, len(ks_))
+            # caller-exclusivity facts arise only on such ports (a SELMUX mux): every user pair no recorded exclusion
+            # covers, counted pair by pair up to the pairwise bound and as n(n-1)/2 above it (flat there anyway)
+            n_ = len(ks_)
+            cxub_ += (sum(1 for a_ in range(n_) for b_ in range(a_ + 1, n_) if M.excl_src(ks_[a_], ks_[b_]) is None)
+                      if n_ <= GATE_SELMUX else n_ * (n_ - 1) // 2)
+    # cost review r8b-1 minor 2: the largest step's uses in the scan (virtual last-caller slots included), which
+    # the segment bound must hold (a step is never split); and the module's facts (M2), with the caller-exclusivity
+    # facts counted as every user pair of an enabled port that no recorded exclusion covers (an upper bound)
+    seg_ = None if Dn is None else max([len(x_) for x_ in Dn.fpR] + [len(x_) for x_ in Dn.fpM] + [0])
+    gate_exit(scan='ok' if Dn is not None else SCAN_ERR, slots=M.nslots, codes=codes_, seg_uses=seg_,
+              mod_facts=nef_ + len(M.facts) + cxub_,
+              escapes=None if esc is None else sum(bin(x_).count('1') for x_ in esc),
+              esc_facts=None if ef_ is None else len(ef_), esc_facts_max_per_pair=fpp_,
+              esc_facts_how=None if ef_ is None else {h_: sum(1 for f_ in ef_ if f_['how'] == h_)
+                                                      for h_ in ('solver', 'bsc', 'assert', None)},
+              esc_facts_unconfirmed=None if ef_ is None else [lab_(f_) for f_ in ef_ if not f_['ok']][:8],
+              esc_facts_err=ef_err_ or None,
+              # a step the site builder could not build (whole-step fallback): its facts are not checked as a file
+              # would state them (soundness review r8b-1 minor 2), so summary.py does not count them
+              esc_facts_fallback=None if ef_ is None else sum(1 for f_ in ef_ if M.rules[f_['r1']].get('fallback') or
+                                                                M.rules[f_['r2']].get('fallback')),
+              lc=lcu_, lc_method=LC_METH, noncf_methods=GATE_NONCF, mtasks=M.mtasks,
+              generic=sorted('%s' % t_ for (t_, _) in M.gen),
+              generic_class={t_: M.gcls[g_] for (t_, _), g_ in M.gen.items()},
+              me_checks=len(M.checks), cf_checks=len(M.cf_checks), me_needed_pairs=me_need_,
+              pairwise=pw_, step_fallback=M.step_fallback, unguarded=getattr(M, 'unguarded', []))
 ESC = M.esc_pairs(esc)
 U = M.users()
 nT = M.nT
+# task calls inside interface methods: not statements (bsc G0020; Ravi's decision, design.md §11)
+for m_, n_ in M.mtasks:
+    print('note: %s: method %s: %d task call(s) left out of task agreement (bsc G0020)' % (NAME, m_, n_))
+MTASK_NOTE = ('\n   Task calls inside interface methods (bsc G0020) are left out of task agreement: %s.'
+              % ', '.join('%s (%d)' % x for x in M.mtasks)) if M.mtasks else ''
+# user assertions (Ravi's decision): bsc's run-time checks enter `asm`; the theorem covers the cycles they pass
+ASM_NOTE = ('\n   Assumed user assertions (bsc\'s run-time checks, in `asm`): %d mutually_exclusive group(s) of %s rules '
+            '(`grpT`) and %d single check(s) (`chkHead`, `chkLst`).' % (len(GROUPS), ', '.join(str(len(g_)) for g_ in GROUPS) or '0',
+                                                                  len(LITC))) if M.checks else \
+    '\n   Assumed user assertions (bsc\'s run-time checks): none.'
 
 L = []
 w = L.append
 MARK = os.environ.get('MARK') == '1'
 
 
+CUTS = []   # top-level positions in L where the file may be split into parts (E2E_PART_BYTES)
+
+
 def mark(label):
+    CUTS.append(len(L))
     if MARK:
-        w('\n#eval show IO Unit from do let t ← IO.monoMsNow; let h ← IO.getNumHeartbeats; '
-          'IO.println s!"@@ %s {t} {h}"\n' % label)
+        w(mark_text(label))
+
+
+def mark_text(label):
+    return ('\n#eval show IO Unit from do let t ← IO.monoMsNow; let h ← IO.getNumHeartbeats; '
+          'let st ← IO.FS.readFile "/proc/self/status"; '
+          'let m := (st.splitOn "\\n").filter (fun l => l.startsWith "VmRSS" || l.startsWith "VmHWM"); '
+          'IO.eprintln s!"@@ %s {t} {h} {m}"; '
+          'let f ← IO.FS.Handle.mk "%s" .append; f.putStrLn s!"@@ %s {t} {h} {m}"; f.flush\n'
+          % (label, os.path.abspath(out) + '.marks', label))
 
 
 def tab(items, ind='  '):
@@ -115,13 +499,17 @@ def tab_range(items, lo, hi, ind='  '):
     return '(.node %d %s\n%s%s)' % (mid, tab_range(items, lo, mid, ind), ind, tab_range(items, mid, hi, ind))
 
 
+SPLITN = int(os.environ.get('E2E_SPLITN', '128'))   # entries per table definition (proofs over it: leaves per declaration)
+BIGPORT = int(os.environ.get('E2E_BIGPORT', '8'))   # users of a port up to which its proofs list every entry
+
+
 def split_struct(items, W):
     pre = [0]
     for x in items:
         pre.append(pre[-1] + len(x))
 
     def go(lo, hi, top):
-        if pre[hi] - pre[lo] <= W or hi - lo == 1:
+        if (pre[hi] - pre[lo] <= W and hi - lo <= SPLITN) or hi - lo == 1:
             return ('whole' if top else 'chunk', lo, hi)
         mid = (lo + hi) // 2
         return ('node', mid, go(lo, mid, False), go(mid, hi, False))
@@ -145,6 +533,38 @@ def stab(name, ty, items, W=None):
     w('def %s : %s :=\n  %s' % (name, ty, top))
 
 
+def stab_keyed(name, ty, keys, items):
+    """`def name : ty` as a search tree over ascending `keys` (each node's `mid` the key of its right half's
+    first entry), subtrees of at most SPLITN entries / SPLITW characters their own definitions."""
+    st = split_struct(items, SPLITW)
+    SPLITS[name] = st
+
+    def tr(lo, hi):
+        if hi - lo == 1:
+            return '(.leaf (%s))' % items[lo]
+        mid = (lo + hi) // 2
+        return '(.node %d %s\n  %s)' % (keys[mid], tr(lo, mid), tr(mid, hi))
+
+    def render(x):
+        if x[0] == 'whole':
+            return tr(x[1], x[2])
+        if x[0] == 'chunk':
+            nm = '%s_%d_%d' % (name, x[1], x[2])
+            w('def %s : %s :=\n  %s' % (nm, ty, tr(x[1], x[2])))
+            return nm
+        return '(.node %d %s\n  %s)' % (keys[x[1]], render(x[2]), render(x[3]))
+    w('def %s : %s :=\n  %s' % (name, ty, render(st)))
+
+
+def taball(name, leaves):
+    """A proof of `Tab.All Q name`: pairs shaped as the table, one leaf proof per entry."""
+    def render(x):
+        if x[0] in ('whole', 'chunk'):
+            return tabpair(leaves[x[1]:x[2]])
+        return '⟨%s,\n  %s⟩' % (render(x[2]), render(x[3]))
+    return render(SPLITS[name])
+
+
 def stabproof(name, thm, params, args, stmt, leaves, one=True):
     st = SPLITS[name]
     fmt = tabproof if one else tabpair
@@ -159,6 +579,23 @@ def stabproof(name, thm, params, args, stmt, leaves, one=True):
             return '%s %s' % (nm, args)
         return '⟨%s,\n  %s⟩' % (render(x[2]), render(x[3]))
     return render(st)
+
+
+def allB_thm(thm, f, name, n):
+    """`theorem thm : Tab.allB f name 0 n = true`: one kernel decision per subtree definition of `name`
+    (C10), so that no decision grows with the table (cost review r7-2 M2, minor 5)."""
+    st = SPLITS[name]
+
+    def render(x):
+        if x[0] == 'chunk':
+            nm = '%s_%d_%d' % (thm, x[1], x[2])
+            w('theorem %s : Tab.allB (%s) %s_%d_%d %d %d = true := by decide +kernel' % (nm, f, name, x[1], x[2], x[1], x[2]))
+            return nm
+        return '(Tab.allB_node %s %s)' % (render(x[2]), render(x[3]))
+    if st[0] == 'whole':
+        w('theorem %s : Tab.allB (%s) %s 0 %s = true := by decide +kernel' % (thm, f, name, n))
+    else:
+        w('theorem %s : Tab.allB (%s) %s 0 %s = true :=\n  %s' % (thm, f, name, n, render(st)))
 
 
 def tabpair(items, ind='  '):
@@ -430,10 +867,6 @@ def arg_val(k, st, c):
     return val(k, st['arg'], c)
 
 
-def is_uncond(st):
-    return st['cond'][0] == 'true'
-
-
 def guard_hw(k):
     return ex(k, M.rules[k]['guard'], hw(k), xhw(k), True)
 
@@ -528,55 +961,11 @@ for k_, r_ in enumerate(M.rules):
             FACTS[s_['inv']]['k'] = k_
 assert M.fan_outside == 0, 'an R literal reads a port that is not a read site of its step'
 
-# escape facts: per escaped pair, per statically failing site pair, the dynamic exclusion
-import re as _re  # noqa: E402
-BSC_CONF = set()
-for ln in open(dump).read().split('\n'):
-    mm_ = _re.match(r'^\s+confirmed (\S+) / (\S+): (\S+)(?: \(any of the \d+ uses before\))? then (\S+)$', ln)
-    if mm_:
-        BSC_CONF.add((mm_.group(2), mm_.group(3), mm_.group(4)))
-EFACTS = []        # dict(r1, r2, i1, i2, ok, how)
-if CS is not None:
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'sites', 'tools'))
-    from satc import Enc as EncE  # noqa: E402
-    SDE, APE = CSRES['_ctx']['D'], CSRES['_ctx']['ap']
-    WORKE = os.path.join(os.path.dirname(os.path.abspath(out)), 'sitework_' + NAME)
-    CSL = {(k_, e_['label']): e_ for k_, v_ in CS.items() for e_ in v_}
-
-    def wfe(n):
-        x_ = 'WILL_FIRE_' + n
-        return ('id', x_) if x_ in SDE.defs else ('id', 'CAN_FIRE_' + n)
-
-    def site_lit(E, k, st):
-        """The site's condition as the file states it, as a literal of E."""
-        if st['kind'] == 'read':
-            if is_uncond(st):
-                return 1
-            e_ = CSL[(M.rules[k]['name'], st['label'])]
-            if e_['kind'] == 'rdy':
-                return E.OR([E.atom(('port', SDE.canon(('call', p_[0], p_[1], [])))) for p_ in e_['rdy']])
-            return e_['enc'](E)
-        if st['kind'] == 'task':
-            return 1    # a task statement's condition: true is the weaker cover
-        inst_, meth_ = st['label'].rsplit('.', 1)
-        meth_ = 'sub' if meth_.startswith('sub') else meth_
-        cs_ = [a[3] for a in APE.rules.get(M.rules[k]['name'], (None, []))[1]
-               if a and a[0] == 'call' and a[1] == inst_ and a[2] == meth_]
-        cs_ = [c if c is not None else ('lit', "1'd1") for c in cs_] or [('lit', "1'd1")]
-        return E.OR([E.b(c) for c in cs_])
-for (r1, r2, bad) in ESC:
-    for (i1, i2) in bad:
-        s1, s2 = M.rules[r1]['sites'][i1], M.rules[r2]['sites'][i2]
-        key = (M.rules[r2]['name'], s1['label'], s2['label'])
-        how = 'bsc' if key in BSC_CONF else None
-        if CS is not None:
-            # this fact, for this site pair and the conditions this file states (r7 review s1 minor 3)
-            E_ = EncE(SDE)
-            roots_ = [E_.b(wfe(M.rules[r1]['name'])), E_.b(wfe(M.rules[r2]['name'])),
-                      site_lit(E_, r1, s1), site_lit(E_, r2, s2)]
-            if E_.sat(roots_, WORKE) is False:
-                how = 'solver'
-        EFACTS.append(dict(r1=r1, r2=r2, i1=i1, i2=i2, ok=how is not None, how=how))
+# the escape bounds (gate item 6) before any fact is solved (they are checked again with the others)
+assert len(ESC) <= GATE_ESC and max([len(b_) for _, _, b_ in ESC] + [0]) <= GATE_ESC_FACTS and \
+    sum(len(b_) for _, _, b_ in ESC) <= GATE_MOD_FACTS, 'gate: escaped pairs or their facts above the bound'
+EFACTS, _ = escape_facts(ESC)
+EFIDX = {(f_['r1'], f_['r2'], f_['i1'], f_['i2']): n_ for n_, f_ in enumerate(EFACTS)}
 UNCONF_E = [f for f in EFACTS if not f['ok']]
 HAS_UNCONF = bool(UNCONF or UNCONF_E)
 HR_ARG = ' (hr : Unconfirmed ops E)' if HAS_UNCONF else ''
@@ -585,8 +974,8 @@ HR_USE = ' hr' if HAS_UNCONF else ''
 # ---------------------------------------------------------------- header
 w('''/- %s: the modular obligation of one corpus module, emitted by e2e/tools/mke2e.py.
    Structure (children, steps, sites, users, exclusions) is the design's; data and
-   guards are opaque operators over their real fan-in (see e2e/README.md). -/
-import Scan
+   guards are opaque operators over their real fan-in (see e2e/README.md).%s%s -/
+%s
 open Modular Emit Scan
 open scoped List
 
@@ -610,7 +999,7 @@ structure Ops (V : Type) where
   g : Nat → V → Bool
   ofBool : Bool → V
   toB : V → Bool := fun _ => false
-''' % (NAME, NAME))
+''' % (NAME, MTASK_NOTE, ASM_NOTE, 'import LastCaller' if (LCP or CFG_LIB) else 'import Scan', NAME))
 w('''section
 variable {V : Type}
 /-- A split use of conditional reads: equal selections, and equal values where selected. -/
@@ -704,7 +1093,17 @@ def flAnn : Ann FL :=
 
 abbrev FL.X : Iface := ⟨FL, inferInstance, flAnn⟩
 ''' % sched_lean(M.fifo_sched, '.'))
-if 'cfg' in M.kinds:
+if 'cfg' in M.kinds and CFG_LIB:
+    w('''open LC (CfgM)
+
+/-- ConfigRegN: LastCaller's model, its schedule checked against this instance's. -/
+def cfgAnn : Ann CfgM :=
+  Ann.ofSched %s (fun m => m == .read) (fun m => m == .write) (fun _ => false) (fun _ => true)
+theorem cfgAnn_lib : cfgAnn = LC.cfgAnn := rfl
+
+abbrev Cfg.X : Iface := ⟨CfgM, inferInstance, cfgAnn⟩
+''' % sched_lean(M.cfg_sched, '.'))
+elif 'cfg' in M.kinds:
     w('''/-- ConfigRegN's ports. -/
 inductive CfgM where
   | read | write
@@ -1059,11 +1458,11 @@ section
 variable {V : Type}
 ''' + ('''/-- The ready signals of a step's unconditional guarded sites, ANDed into its CAN_FIRE (a conditional
     guarded call's readiness is in its guard `G`, a readiness read's comes from the child's alias). -/
-def RD (oc : OC V) (k : Nat) : Bool :=
+@[irreducible] def RD (oc : OC V) (k : Nat) : Bool :=
   (List.range' 0 (kR k)).all (fun i => alwaysRdyB ((keyT.get k).get i) || (ucT.get k).testBit i ||
     (oc ((keyT.get k).get i).1).rdy ((keyT.get k).get i).2)
 ''' if NEEDUC else '''/-- The ready signals of a rule's guarded calls, ANDed into its CAN_FIRE (calls are unconditional). -/
-def RD (oc : OC V) (k : Nat) : Bool :=
+@[irreducible] def RD (oc : OC V) (k : Nat) : Bool :=
   (List.range' 0 (kR k)).all (fun i => alwaysRdyB ((keyT.get k).get i) || (oc ((keyT.get k).get i).1).rdy ((keyT.get k).get i).2)
 '''))
 for k, r in enumerate(M.rules):
@@ -1172,7 +1571,8 @@ for n_, f in enumerate(EFACTS):
         '  /-- escape %s → %s: %s then %s (%s) -/\n  esc_%d : %s'
         % (M.rules[f['r1']]['name'], M.rules[f['r2']]['name'], M.rules[f['r1']]['sites'][f['i1']]['label'],
            M.rules[f['r2']]['sites'][f['i2']]['label'],
-           {'solver': 'this fact confirmed by the solver over these conditions', 'bsc': 'bsc\'s confirmed fact',
+           {'solver': 'this fact confirmed by the solver over these conditions',
+            'bsc': 'bsc: %s; these conditions imply bsc\'s' % f['bsc'],
             None: 'not confirmed'}[f['how']], n_, efact_stmt(f)))
 w('''
 section
@@ -1188,7 +1588,8 @@ def fire (ops : Ops V) (E : EqC V) : OC V → %s → Fin nR → Bool := fun oc _
 ''' if not MET else '''def stepOn (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires (Fin nM) V) : St → Bool
   | .inl m => calledM w m
   | .inr r => WF ops E oc r.val
-''') + '''/-- The module's assertions: bsc's run-time checks of `mutually_exclusive` (never `WF h && (WF y || …)`). -/
+''') + '''/-- The module's assertions: bsc's run-time checks of `mutually_exclusive`, each `!(WF h && (WF y || …))`
+    exactly as bsc's line (one rule on its first side), a group's checks as one `SufAsm`. -/
 def asmP (ops : Ops V) (E : EqC V) (oc : OC V) : Prop :=
   (∀ g, Nat.blt g nG = true → SufAsm (WF ops E oc) (grpT.get g)) ∧
   ∀ c, Nat.blt c nC = true → (WF ops E oc (chkHead.get c) && orL ((chkLst.get c).map (WF ops E oc))) = false
@@ -1280,6 +1681,7 @@ def argsite(k, si):
 
 portinfo = {}
 SELMUX = {}
+LCMUX = []
 for kd in M.kinds:
     if kd == 'tasks':
         continue
@@ -1308,7 +1710,24 @@ for kd in M.kinds:
                 argk = 'mux'
             if args and args[0][0] == 'x' and argk != 'none':
                 argk = 'single' if len(us) == 1 else 'mux'
-            if argk == 'mux':
+            if argk == 'mux' and p in LCP:
+                # last caller: bsc's priority mux, latest caller (greatest rank) first
+                q = len(LCMUX)
+                mus = sorted(us, key=lambda e: -e[0])
+                assert [k for k, _ in us] == sorted(k for k, _ in us), 'users of a port not in rank order'
+                assert len(set(k for k, _ in mus)) == len(mus), 'a step uses a last-caller port twice'
+                margs = [argsite(k, si) for k, si in mus]
+                stab('lcT_%d' % q, 'Tab ((V : Type) → Ops V → EqC V → OC V → Bool × V)',
+                     ['fun V (ops : Ops V) (E : EqC V) (oc : OC V) => ((%s, %s) : Bool × V)'
+                      % (entry(k, st), arg_hw(k, st)) for (k, _), st in zip(mus, margs)])
+                stab('lcsT_%d' % q, 'Tab Nat', [nat(k) for k, _ in mus])
+                w('def lclist_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : List (Bool × V) :=\n'
+                  '  (List.range\' 0 %d).map (fun t => (lcT_%d.get t) V ops E oc)' % (q, len(mus), q))
+                w('def arg_%s (ops : Ops V) (E : EqC V) (oc : OC V) (w : %s) : V := pmux (lclist_%d V ops E oc) ops.z'
+                  % (nm, WXM, q))
+                LCMUX.append((p, mus))
+                portinfo[p] = dict(users=us, argk='lc', lcq=q, args=args, mus=mus, margs=margs)
+            elif argk == 'mux':
                 q = len(muxes)
                 order_, plan = order_mux(us)
                 assert len(order_) == len(us), 'a step uses a mux port twice'
@@ -1397,8 +1816,8 @@ for kd in M.kinds:
         w('def arm_%s_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) (w : %s) : Wires (KI .%s).M V :=\n  %s'
           % (kd, i, WXM, kd, arm_body(kd, i)))
 for kd in M.kinds:
-    w('def arms_%s : Tab ((V : Type) → Ops V → EqC V → OC V → %s → Wires (KI .%s).M V) :=\n  %s'
-      % (kd, WXM, kd, tab(['arm_%s_%d' % (kd, i) for i in range(len(M.byk[kd]))])))
+    stab('arms_%s' % kd, 'Tab ((V : Type) → Ops V → EqC V → OC V → %s → Wires (KI .%s).M V)' % (WXM, kd),
+         ['arm_%s_%d' % (kd, i) for i in range(len(M.byk[kd]))])
 if MET:
     stab('retT', 'Tab ((V : Type) → Ops V → EqC V → OC V → V)',
          ['fun V (ops : Ops V) (E : EqC V) (oc : OC V) => %s' % ex(nR + m, M.rules[nR + m].get('res', ('z',)), hw(nR + m), 'ops.z')
@@ -1456,7 +1875,7 @@ CFACTS = []
 if CS is not None:
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'sites', 'tools'))
     from satc import Enc  # noqa: E402
-    SDX, APX = CSRES['_ctx']['D'], CSRES['_ctx']['ap']
+    SDX, APX = CSRES['_ctx']['DX'], CSRES['_ctx']['ap']     # every port its own atom
     WORK = os.path.join(os.path.dirname(os.path.abspath(out)), 'sitework_' + NAME)
 
     def wfx(n):
@@ -1470,12 +1889,15 @@ for q, (p_, mus_, plan_) in enumerate(muxes):
     if not SELMUX.get(q):
         continue
     ks_ = [k for k, _ in mus_]
+    # the pairwise bound (gate item 6) before any pair is enumerated or solved (it is checked again with the others)
+    assert (MGRP.get(q) and len(MGRP[q][1]) == len(mus_)) or len(ks_) <= GATE_SELMUX, \
+        'gate: users of one port proved pair by pair %d above the bound %d' % (len(ks_), GATE_SELMUX)
     for a_ in range(len(ks_)):
         for b_ in range(a_ + 1, len(ks_)):
             x_, y_ = ks_[a_], ks_[b_]
             if M.excl_src(x_, y_) is not None:
                 continue
-            ok_ = False
+            how_, btext_ = None, None
             if CS is not None:
                 inst_ = M.byk[p_[0]][p_[1]]
                 meth_ = 'sub' if p_[0] == 'rf' and p_[2] != 'upd' else p_[2]
@@ -1483,11 +1905,37 @@ for q, (p_, mus_, plan_) in enumerate(muxes):
                 roots_ = [E_.b(wfx(M.rules[x_]['name'])), E_.b(wfx(M.rules[y_]['name'])),
                           E_.OR([E_.b(c) for c in ccx(M.rules[x_]['name'], inst_, meth_)]),
                           E_.OR([E_.b(c) for c in ccx(M.rules[y_]['name'], inst_, meth_)])]
-                ok_ = E_.sat(roots_, WORK) is False
-                lab = '%s.%s' % (inst_, meth_)
-                ok_ = ok_ or (M.rules[y_]['name'], lab, lab) in BSC_CONF
-            CFACTS.append(dict(q=q, x=x_, y=y_, sx=dict(mus_)[x_], sy=dict(mus_)[y_], ok=ok_))
+                if E_.sat(roots_, WORK) is False:
+                    how_ = 'solver'
+                else:
+                    sx_, sy_ = M.rules[x_]['sites'][dict(mus_)[x_]], M.rules[y_]['sites'][dict(mus_)[y_]]
+                    btext_ = bsc_fact(x_, sx_, lambda E, n=M.rules[x_]['name']: E.OR([E.b(c) for c in ccx(n, inst_, meth_)]),
+                                      y_, sy_, lambda E, n=M.rules[y_]['name']: E.OR([E.b(c) for c in ccx(n, inst_, meth_)]))
+                    how_ = 'bsc' if btext_ else None
+            CFACTS.append(dict(q=q, x=x_, y=y_, sx=dict(mus_)[x_], sy=dict(mus_)[y_], ok=how_ is not None,
+                               how=how_, bsc=btext_))
 CFIND = {(f['q'], f['x'], f['y']): n_ for n_, f in enumerate(CFACTS)}
+if CS is not None and os.environ.get('E2E_BSC_STATS'):
+    # measurement only: bsc's coverage of every fact, exact keys with the condition check, against
+    # the round-7 key (later step, p, q), which dropped the first step
+    _old = set((f_['b'], f_['p'], f_['q']) for f_ in sitecond_facts(dump) if f_['ok'])
+
+    def _oldkey(k1, s1, k2, s2):
+        if s1['kind'] == 'task' or s2['kind'] == 'task':
+            return False
+        return (M.rules[k2]['name'], s1['label'], s2['label']) in _old
+    _ne = sum(1 for f_ in EFACTS if bsc_fact(f_['r1'], M.rules[f_['r1']]['sites'][f_['i1']],
+                                             lambda E, k=f_['r1'], s=M.rules[f_['r1']]['sites'][f_['i1']]: site_lit(E, k, s),
+                                             f_['r2'], M.rules[f_['r2']]['sites'][f_['i2']],
+                                             lambda E, k=f_['r2'], s=M.rules[f_['r2']]['sites'][f_['i2']]: site_lit(E, k, s)))
+    _oe = sum(1 for f_ in EFACTS if _oldkey(f_['r1'], M.rules[f_['r1']]['sites'][f_['i1']], f_['r2'],
+                                            M.rules[f_['r2']]['sites'][f_['i2']]))
+    _nk = sum(1 for f_ in EFACTS if f_['how'] != 'task' and M.rules[f_['r1']]['sites'][f_['i1']]['kind'] != 'task'
+              and M.rules[f_['r2']]['sites'][f_['i2']]['kind'] != 'task'
+              and BFE.covers(M.rules[f_['r1']]['name'], M.rules[f_['r1']]['sites'][f_['i1']]['label'],
+                             M.rules[f_['r2']]['name'], M.rules[f_['r2']]['sites'][f_['i2']]['label']))
+    print('bsc coverage of escape facts: round-7 key %d, exact key %d, exact key and conditions implied %d (of %d); '
+          'solver %d' % (_oe, _nk, _ne, len(EFACTS), sum(1 for f_ in EFACTS if f_['how'] == 'solver')))
 
 
 def cfact_stmt(f):
@@ -1503,21 +1951,44 @@ def cfact_stmt(f):
 for n_, f in enumerate(CFACTS):
     (hy_fields if f['ok'] else un_fields).append(
         '  /-- callers of one port never both call: %s, %s (%s) -/\n  cx_%d : %s'
-        % (M.rules[f['x']]['name'], M.rules[f['y']]['name'], 'solver: exclusive' if f['ok'] else 'solver: may both call',
+        % (M.rules[f['x']]['name'], M.rules[f['y']]['name'],
+           {'solver': 'solver: exclusive', 'bsc': 'bsc: %s' % f['bsc'], None: 'solver: may both call'}[f['how']],
            n_, cfact_stmt(f)))
 HAS_UNCONF = HAS_UNCONF or any(not f['ok'] for f in CFACTS)
 HR_ARG = ' (hr : Unconfirmed ops E)' if HAS_UNCONF else ''
 HR_USE = ' hr' if HAS_UNCONF else ''
+# the facts in sub-structures of at most GATE_STRUCT fields (cost review r8b-1 M2: one structure declaration grows
+# about x5 per doubling of its fields, so no structure is wider than GATE_STRUCT; the top one has one field per group)
+FPATH = {'hy': {}, 'hr': {}}
+NFIX = sum(1 for f_ in hy_fields if not re.search(r'^  (rdy|inv|esc|cx)_\d+ :', f_, re.M))
+assert all(re.search(r'^  (rdy|inv|esc|cx)_\d+ :', f_, re.M) for f_ in hy_fields[NFIX:] + un_fields)
+MOD_FACTS = len(hy_fields) - NFIX + len(un_fields)
+
+
+def struct_groups(sname, src, facts):
+    out_ = []
+    for q_, a_ in enumerate(range(0, len(facts), GATE_STRUCT)):
+        grp_ = facts[a_:a_ + GATE_STRUCT]
+        out_.append('/-- %s, facts %d to %d. -/\nstructure %sG%d (ops : Ops V) (E : EqC V) : Prop where\n%s'
+                    % (sname, a_, a_ + len(grp_) - 1, sname, q_, '\n'.join(grp_)))
+        for f_ in grp_:
+            FPATH[src][re.search(r'^  ((?:rdy|inv|esc|cx)_\d+) :', f_, re.M).group(1)] = 'g%d' % q_
+    return '\n'.join(out_) + ('\n' if out_ else ''), ['  g%d : %sG%d ops E' % (q_, sname, q_)
+                                                     for q_ in range((len(facts) + GATE_STRUCT - 1) // GATE_STRUCT)]
+
+
+HG_TXT, HG_FIELDS = struct_groups('Hyps', 'hy', hy_fields[NFIX:])
+UG_TXT, UG_FIELDS = struct_groups('Unconfirmed', 'hr', un_fields)
 w("""section
 variable {V : Type}
-/-- bsc's solver verdicts, hypotheses as today: disjointness (CAN_FIRE of each pair); the
+""" + HG_TXT + UG_TXT + """/-- bsc's solver verdicts, hypotheses as today: disjointness (CAN_FIRE of each pair); the
     use-level readiness facts over R_seq, each escape's dynamic exclusion and the callers'
-    exclusivity at a mux, as confirmed by the solver over schedlean's conditions. -/
+    exclusivity at a mux, as confirmed by the solver over schedlean's conditions (in groups `gK`). -/
 structure Hyps (ops : Ops V) (E : EqC V) : Prop where
-""" + '\n'.join(hy_fields) + '\n' + (("""/-- Facts the site tool refutes (or bsc did not confirm): a module that needs one is off path A
+""" + '\n'.join(hy_fields[:NFIX] + HG_FIELDS) + '\n' + (("""/-- Facts the site tool refutes (or bsc did not confirm): a module that needs one is off path A
     (fail safe); this file states them so that its cost and structure can be measured. -/
 structure Unconfirmed (ops : Ops V) (E : EqC V) : Prop where
-""" + '\n'.join(un_fields) + '\n') if HAS_UNCONF else '') + """
+""" + '\n'.join(UG_FIELDS) + '\n') if HAS_UNCONF else '') + """
 theorem meX (ops : Ops V) (E : EqC V) (oc : OC V) (hA : asmP ops E oc) (c p : Nat) {y : Nat}
     (hc : Nat.blt c nC = true) (hp : (chkLst.get c)[p]? = some y)
     (h1 : WF ops E oc (chkHead.get c) = true) (h2 : WF ops E oc y = true) : False :=
@@ -1683,7 +2154,7 @@ def RQ (ops : Ops V) (E : EqC V) %s (k : Nat) (g : (V : Type) → Ops V → EqC 
 
 def hg_term(k, hf):
     """guard_hw = true from hf : PRE (rule) — the guard part of CAN_FIRE."""
-    g = 'g_of_cf (cf_of_wf %s)' % hf if k < nR else 'g_of_cf %s' % hf
+    g = 'g_of_cf (cf_of_wf %s)' % hf if k < nR else 'g_of_cf (show CF ops E oc %d = true from %s)' % (k, hf)
     if RDC[k]:
         g = '((Bool.and_eq_true _ _).mp (%s)).1' % g
     return g
@@ -1793,6 +2264,7 @@ variable {V : Type}
 theorem rd_at {oc : OC V} {k : Nat} (h : RD oc k = true) (i : Nat) (hi : i < kR k)
     (ha : alwaysRdyB ((keyT.get k).get i) = false) (hu : (ucT.get k).testBit i = false) :
     (oc ((keyT.get k).get i).1).rdy ((keyT.get k).get i).2 = true := by
+  unfold RD at h
   have h2 := List.all_eq_true.mp h i (List.mem_range'.mpr ⟨i, hi, by omega⟩)
   simp only [ha, hu, Bool.false_or] at h2
   exact h2
@@ -1862,10 +2334,10 @@ theorem sitesB_spec (f : Nat → Nat → (Σ j : I, (CI j).M) → Bool)
   rcases h1 with h1 | h1
   · have := Nat.eq_of_beq_eq_true h1; simp only [kR] at hi; omega
   · exact Tab.allB_spec _ _ 0 (kT.get k) h1 i (Nat.zero_le _) hi
-theorem chkAll : Tab.allB (fun k keys => Nat.beq (kT.get k) 0 ||
-    Tab.allB (fun i p => (idxT (usesAt p) k).contains i) keys 0 (kT.get k)) keyT 0 nS = true := by
-  decide +kernel
-theorem hchkT (k : Nat) (hk : k < nS) : ∀ i, i < kR k → i ∈ idxT (usesAt ((keyT.get k).get i)) k := by
+''')
+allB_thm('chkAll', '''fun k keys => Nat.beq (kT.get k) 0 ||
+    Tab.allB (fun i p => (idxT (usesAt p) k).contains i) keys 0 (kT.get k)''', 'keyT', 'nS')
+w('''theorem hchkT (k : Nat) (hk : k < nS) : ∀ i, i < kR k → i ∈ idxT (usesAt ((keyT.get k).get i)) k := by
   intro i hi
   have h := sitesB_spec (fun k i p => (idxT (usesAt p) k).contains i) chkAll k hk i hi
   simpa using h
@@ -1974,6 +2446,33 @@ def cx_of(k, si, h):
 for q, (p, us, plan) in enumerate(muxes):
     ks = [k for k, _ in us]
     assert all(k < nR for k in ks), 'a mux with method users'
+    gq0 = MGRP.get(q)
+    if SELMUX.get(q) and gq0 and len(gq0[1]) == len(ks):
+        # every user in one group (conditional users): each selector implies its user's WF, and the users'
+        # chain comes from the group (amoChain_le_range): one implication per entry, no pairwise proofs
+        assert gq0[1] == ks
+        nchk_pairs += len(ks) * (len(ks) - 1) // 2
+        stab('gsT_%d' % q, 'Tab Nat', [nat(k) for k in ks])
+        SELQ = ('(fun (t : Nat) (e : (V : Type) → Ops V → EqC V → OC V → Bool × V) => (e V ops E oc).1 = true → '
+                'WF ops E oc (gsT_%d.get t) = true)' % q)
+        prf = stabproof('mT_%d' % q, 'sel_%d' % q, '(ops : Ops V) (E : EqC V) (oc : OC V)', 'ops E oc',
+                        lambda nm, lo, hi: 'Tab.AllR %s %s %d %d' % (SELQ, nm, lo, hi),
+                        ['Tab.one (Q := %s) (i := %d) (a := mT_%d.get %d) (%s)'
+                         % (SELQ, t_, q, t_, 'fun h => h' if is_uncond(argsite(k, si)) else
+                            'fun h => ((Bool.and_eq_true _ _).mp h).1') for t_, (k, si) in enumerate(us)],
+                        one=False)
+        w('theorem sel_%d (ops : Ops V) (E : EqC V) (oc : OC V) : Tab.AllR %s mT_%d 0 %d :=\n  %s' % (q, SELQ, q, len(ks), prf))
+        w('theorem chain_%d (ops : Ops V) (E : EqC V) %s (oc : OC V) (hA : asmP ops E oc) :\n'
+          '    amoChain false ((mlist_%d V ops E oc).map Prod.fst) := by\n'
+          '  have hg := amoChain_of_grp (fun k => WF ops E oc k) ((List.range\' 0 %d).map gsT_%d.get) (grpT.get %d) (by decide +kernel) (hA.1 %d rfl)\n'
+          '  rw [List.map_map] at hg\n'
+          '  have h := amoChain_le_range (fun t => ((mT_%d.get t) V ops E oc).1) (fun t => WF ops E oc (gsT_%d.get t)) %d 0\n'
+          '    false false id (fun t _ ht => Tab.get_allR _ 0 %d (sel_%d ops E oc) t (Nat.zero_le _) (by omega)) hg\n'
+          '  unfold mlist_%d\n'
+          '  rw [List.map_map]\n'
+          '  exact h'
+          % (q, HYP, q, len(ks), q, gq0[0], gq0[0], q, q, len(ks), len(ks), q, q))
+        continue
     if SELMUX.get(q):
         sis = dict(us)
         w('def selq_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) (k : Nat) : Bool :=\n  %s'
@@ -2066,6 +2565,8 @@ def kc(t):
 
 kt = M.kind_tables()
 stab('fpRT', 'Tab (List Ent)', [ents(l) for l in Dn.fpR])
+if LCP:
+    stab('virtT', 'Tab (List Ent)', [ents(l) for l in VIRT])
 if MET:
     stab('fpMT', 'Tab (List Ent)', [ents(l) for l in Dn.fpM])
 stab('ktT', 'Tab (Tab KC)', [tab([kc(t) for t in kd]) for kd in kt])
@@ -2107,6 +2608,7 @@ stab('rcT', 'Tab Nat', [nat(x) for x in rcode])
 stab('rinvT', 'Tab Nat', [nat(x) for x in rinv])
 stab('memT', 'Tab (List Nat)', ['[' + ', '.join(map(str, g)) + ']' for g in groups] or ['[]'])
 stab('gidT', 'Tab (List Nat)', ['[' + ', '.join(map(str, g)) + ']' for g in gid])
+stab('cmT', 'Tab Nat', [nat(sum(1 << rcode[x] for x in set(g))) for g in groups] or ['0'])
 w('abbrev ng : Nat := %d' % len(groups))
 if MET:
     nfI, nfO, ngI, ngO, h3ok = M.meth_tables(MAnn)
@@ -2133,15 +2635,46 @@ w('''def D : Design where
 ''' % (('nM', M.d, 'fpMT', 'nfIT', 'nfOT', 'ngIT', 'ngOT') if MET else ('0', M.d, '.leaf []', '.leaf 0', '.leaf 0', '.leaf 0', '.leaf 0')))
 mark('design')
 # the scan in segments (cost review r7-1 M2): a cut before the step that would take a segment past
-# SEG_USES footprint entries; each checkpoint is the full state there (design.md §10's gate)
-SEG_USES = int(os.environ.get('E2E_SEG_USES', '4096'))
-# the gate's numeric bounds (design.md §10 item 6), as generator checks
-assert SEG_USES <= 4096, 'segments of at most 4,096 uses'
-assert M.nslots <= 8192, 'a state of at most 8,192 slots'
-assert len(rinv) <= 4096, 'at most 4,096 rule codes'
-assert max(len(r_['sites']) for r_ in M.rules) <= int(os.environ.get('E2E_STEP_SITES', '3072')), 'sites in one step'
+# SEG_USES footprint entries; each checkpoint is the full state there (design.md §11, the gate)
+# the gate's numeric bounds (design.md §11 item 6), as generator checks (cost review r7-2 M1, M2, minors 4, 6):
+# an environment variable may lower a bound, never raise it; the bounds and the module's values go into the file
+GATE_BOUNDS = [  # (name, environment variable, bound, the module's value)
+    ('uses in one scan segment (the module: uses of its largest step)', 'E2E_SEG_USES', GATE_SEG,
+     max([len(x_) for x_ in Dc.fpM] + [len(x_) for x_ in Dc.fpR] + [0])),
+    ('slots in the state', None, GATE_SLOTS, M.nslots),
+    ('rule codes', None, GATE_CODES, len(rinv)),
+    ('sites in one step', 'E2E_STEP_SITES', GATE_STEP, max([len(r_['sites']) for r_ in M.rules] + [0])),
+    ('users of one port (mux members)', None, GATE_PORT_USERS, max([len(us_) for us_ in U.values()] + [0])),
+    ('members of one exception group', None, GATE_GROUP, max([len(g_) for g_ in groups + GROUPS] + [0])),
+    ('callers of one last-caller port', None, GATE_LC_USERS, max([len(set(k_ for k_, _ in U0[p_])) for p_ in LCP] + [0])),
+    ('escaped rule pairs', None, GATE_ESC, len(ESC)),
+    ('dynamic facts of one escaped pair', None, GATE_ESC_FACTS, max([len(b_) for _, _, b_ in ESC] + [0])),
+    ('facts of one module (escape, caller-exclusivity, readiness and invariance)', None, GATE_MOD_FACTS, MOD_FACTS),
+    ('fields of one fact group (Hyps and Unconfirmed in groups gK)', None, GATE_STRUCT,
+     max(min(GATE_STRUCT, len(hy_fields) - NFIX), min(GATE_STRUCT, len(un_fields)))),
+    ('entries per table definition (C21)', 'E2E_SPLITN', 128, SPLITN),
+    ('source characters per table definition (C21)', 'E2E_SPLITW', 20000, SPLITW),
+    ('users of a port listed entry by entry (en_list / en_lit threshold)', 'E2E_BIGPORT', 8, BIGPORT),
+    ('users of one port proved pair by pair (a conditional user, or a module with methods)', None, GATE_SELMUX,
+     max([len(muxes[q_][1]) for q_ in range(len(muxes)) if SELMUX.get(q_) and not (
+         MGRP.get(q_) and len(MGRP[q_][1]) == len(muxes[q_][1]))] +
+         [len(set(k_ for k_, _ in us_)) for p_, us_ in U.items()   # en_pairs: enable proofs of action ports only
+          if p_[0] != 'tasks' and K[p_[0]].has_en(p_[2])
+          and (MET or not all(is_uncond(M.rules[k_]['sites'][si_]) for k_, si_ in us_))] + [0])),
+]
+GATE_USED = {}
+for (bn_, ev_, bd_, val_) in GATE_BOUNDS:
+    used_ = int(os.environ.get(ev_, str(bd_))) if ev_ else bd_
+    assert used_ <= bd_ and used_ >= 1, 'gate: %s raised above %d by %s' % (bn_, bd_, ev_)
+    GATE_USED[bn_] = used_
+    assert val_ is None or val_ <= used_, 'gate: %s %d above the bound %d' % (bn_, val_, used_)
+SETTINGS = ('E2E_SPLITN', 'E2E_SPLITW', 'E2E_BIGPORT')    # the emitter's table settings: no module value
+w('/-! Gate bounds (design.md §11 item 6), each with this module\'s value (a table setting: the value used):\n' + ''.join(
+    '  * %s: at most %d%s, %s %s\n' % (bn_, GATE_USED[bn_], '' if GATE_USED[bn_] == bd_ else ' (lowered from %d)' % bd_,
+                                      'setting used' if ev_ in SETTINGS else 'this module',
+                                      '-' if val_ is None else '%d' % val_) for (bn_, ev_, bd_, val_) in GATE_BOUNDS) + '-/')
+SEG_USES = GATE_USED['uses in one scan segment (the module: uses of its largest step)']
 uses_ = [len(Dc.fpM[k_]) for k_ in range(Dc.nM)] + [len(Dc.fpR[i_]) for i_ in range(Dc.nR)]
-assert max(uses_ + [0]) <= SEG_USES, 'a step with more uses than a segment (gate: uses per step)'
 cuts_, acc_ = [], 0
 for g_, n_ in enumerate(uses_):
     if acc_ + n_ > SEG_USES and acc_ > 0:
@@ -2166,6 +2699,13 @@ w('def posK : (κ : Kind) → (KI κ).M → Nat\n' + ''.join(
     ('  | .tasks => fun t => t.val\n' if kd == 'tasks' else '  | .%s => fun _ => 0\n' % kd) for kd in M.kinds))
 stab('stT', 'Tab Nat', [nat(M.tstart[k]) for k in range(nR)])
 w('def stF (g : Nat) : Nat := bif Nat.blt g nR then stT.get g else %d' % nT)
+allB_thm('stMono', 'fun g x => Nat.ble x %d && Nat.ble x (bif Nat.blt (g + 1) nR then stT.get (g + 1) else %d)' % (nT, nT),
+         'stT', 'nR')
+allB_thm('chainAll', '''fun k keys =>
+    incB ((((List.range' 0 (kT.get k)).map keys.get).filter (fun p => chB p.1)).map (fun p => posK p.1.1 p.2)) &&
+    ((((List.range' 0 (kT.get k)).map keys.get).filter (fun p => chB p.1)).map (fun p => posK p.1.1 p.2)).all
+      (fun x => Nat.ble (bif Nat.blt k nR then stF k else 0) x && Nat.blt x (bif Nat.blt k nR then stF (k + 1) else 0))''',
+         'keyT', 'nS')
 w('''/-- Chain intervals by the scan's step position (methods first, then rules by rank). -/
 def cloG (g : Nat) : Nat := if g < D.nM then 0 else stF (g - D.nM)
 def chiG (g : Nat) : Nat := if g < D.nM then 0 else stF (g - D.nM + 1)
@@ -2173,13 +2713,6 @@ theorem cloG_r (r : Nat) : cloG (D.nM + r) = stF r := by
   unfold cloG; rw [if_neg (Nat.not_lt.mpr (Nat.le_add_right _ _)), Nat.add_sub_cancel_left]
 theorem chiG_r (r : Nat) : chiG (D.nM + r) = stF (r + 1) := by
   unfold chiG; rw [if_neg (Nat.not_lt.mpr (Nat.le_add_right _ _)), Nat.add_sub_cancel_left]
-theorem stMono : Tab.allB (fun g x => Nat.ble x %d && Nat.ble x (bif Nat.blt (g + 1) nR then stT.get (g + 1) else %d))
-    stT 0 nR = true := by decide +kernel
-theorem chainAll : Tab.allB (fun k keys =>
-    incB ((((List.range' 0 (kT.get k)).map keys.get).filter (fun p => chB p.1)).map (fun p => posK p.1.1 p.2)) &&
-    ((((List.range' 0 (kT.get k)).map keys.get).filter (fun p => chB p.1)).map (fun p => posK p.1.1 p.2)).all
-      (fun x => Nat.ble (bif Nat.blt k nR then stF k else 0) x && Nat.blt x (bif Nat.blt k nR then stF (k + 1) else 0))) keyT 0 nS = true := by
-  decide +kernel
 theorem cmonoG (g1 g2 : Nat) (h : g1 < g2) : chiG g1 ≤ cloG g2 := by
   have hm := mono_of_succ stF (stF_mono stT nR %d stMono)
   unfold chiG cloG
@@ -2188,7 +2721,7 @@ theorem cmonoG (g1 g2 : Nat) (h : g1 < g2) : chiG g1 ≤ cloG g2 := by
   · exact Nat.zero_le _
   · omega
   · exact hm _ _ (by omega)
-''' % (nT, nT, nT))
+''' % nT)
 w('''section
 variable {V : Type}
 def G (ops : Ops V) (E : EqC V) (u : St → Nat → V) : Glue (P ops E u) D where
@@ -2207,24 +2740,38 @@ def G (ops : Ops V) (E : EqC V) (u : St → Nat → V) : Glue (P ops E u) D wher
 end
 
 def entK (p : Σ j : I, (CI j).M) : Ent := (baseOf p.1, kindN p.1.1, codeK p.1.1 p.2)
-theorem fpAll : Tab.allB (fun k l => l == (List.range' 0 (kT.get k)).map (fun i => entK ((keyT.get k).get i))) fpRT 0 nR = true := by
-  decide +kernel
-''' % ('m.val' if MET else 'm.elim') + ('''theorem fpAllM : Tab.allB (fun m l => l == (List.range' 0 (kT.get (nR + m))).map (fun i => entK ((keyT.get (nR + m)).get i))) fpMT 0 nM = true := by
-  decide +kernel
-''' if MET else '') + '''theorem ghg : Tab.allB (fun x l => l.all (fun g => Nat.blt g ng && (memT.get g).contains x)) gidT 0 nR = true := by
-  decide +kernel
-theorem ghT : Tab.allB (fun y n => subB n (orMask (gidT.get y) (fun g => bits ((memT.get g).map D.rc)))) exRT 0 nR = true := by
-  decide +kernel
-theorem hinj_ok : ∀ g, g < ng → ∀ x ∈ memT.get g, ∀ x1, x1 < D.nR → D.rc x1 = D.rc x → x1 = x :=
-  chains_inj D rinvT.get memT ng (by decide +kernel) (by decide +kernel)
-theorem hg_ok : ∀ x, x < nR → ∀ g ∈ gidT.get x, g < ng ∧ x ∈ memT.get g := by
+''' % ('m.val' if MET else 'm.elim'))
+allB_thm('fpAll', "fun k l => l == (List.range' 0 (kT.get k)).map (fun i => entK ((keyT.get k).get i))"
+         + (' ++ virtT.get k' if LCP else ''), 'fpRT', 'nR')
+if MET:
+    allB_thm('fpAllM', "fun m l => l == (List.range' 0 (kT.get (nR + m))).map (fun i => entK ((keyT.get (nR + m)).get i))",
+             'fpMT', 'nM')
+mark('g_fp')
+# exception groups: each group's code mask once (cmT), memberships and masks against it (cost review r7-2 M2)
+if groups:
+    allB_thm('cmAll', 'fun g l => Nat.beq (cmT.get g) (bits (l.map D.rc))', 'memT', 'ng')
+    w('theorem hcm_ok : ∀ g, g < ng → cmT.get g = bits ((memT.get g).map D.rc) := cm_of_check memT cmT D.rc ng cmAll')
+    allB_thm('ghg', 'fun x l => l.all (fun g => Nat.blt g ng && Nat.beq (Nat.land (Nat.shiftRight (cmT.get g) (D.rc x)) 1) 1)',
+             'gidT', 'nR')
+    w('theorem hg_ok : ∀ x, x < nR → ∀ g ∈ gidT.get x, g < ng ∧ (cmT.get g).testBit (D.rc x) = true :=\n'
+      '  gid_of_check gidT cmT D.rc nR ng ghg')
+    allB_thm('ghT', 'fun y n => subB n (orMask (gidT.get y) cmT.get)', 'exRT', 'nR')
+    w('''theorem hinj_ok : ∀ g, g < ng → ∀ x ∈ memT.get g, ∀ x1, x1 < D.nR → D.rc x1 = D.rc x → x1 = x :=
+  chains_inj D rinvT.get memT ng (by decide +kernel) (by decide +kernel)''')
+else:
+    w('''theorem hcm_ok : ∀ g, g < ng → cmT.get g = bits ((memT.get g).map D.rc) := fun _ h => absurd h (Nat.not_lt_zero _)
+theorem hg_ok : ∀ x, x < nR → ∀ g ∈ gidT.get x, g < ng ∧ (cmT.get g).testBit (D.rc x) = true := by
   intro x hx g hg
-  have h := List.all_eq_true.mp (Tab.allB_spec _ gidT 0 nR ghg x (Nat.zero_le _) hx) g hg
-  simp only [Bool.and_eq_true, List.contains_iff_mem] at h
-  exact ⟨Nat.blt_eq.mp h.1, h.2⟩
-theorem hT_ok : ∀ y, y < nR → Sub (exRT.get y) (orMask (gidT.get y) (fun g => bits ((memT.get g).map D.rc))) :=
-  fun y hy => sub_of_subB (Tab.allB_spec _ exRT 0 nR ghT y (Nat.zero_le _) hy)
-''')
+  have h := Tab.allB_spec (fun _ l => l.isEmpty) gidT 0 nR (by decide +kernel) x (Nat.zero_le _) hx
+  simp only [List.isEmpty_iff] at h
+  rw [h] at hg
+  simp at hg
+theorem hinj_ok : ∀ g, g < ng → ∀ x ∈ memT.get g, ∀ x1, x1 < D.nR → D.rc x1 = D.rc x → x1 = x := fun _ h => absurd h (Nat.not_lt_zero _)''')
+    allB_thm('ghT', 'fun y n => Nat.beq n 0', 'exRT', 'nR')
+w('''theorem hT_ok : ∀ y, y < nR → Sub (exRT.get y) (orMask (gidT.get y) cmT.get) :=
+''' + ('  fun y hy => sub_of_subB (Tab.allB_spec _ exRT 0 nR ghT y (Nat.zero_le _) hy)' if groups else
+       '  fun y hy i h => by rw [Nat.eq_of_beq_eq_true (Tab.allB_spec _ exRT 0 nR ghT y (Nat.zero_le _) hy)] at h; simp at h'))
+mark('g_groups')
 for kd in M.kinds:
     if kd == 'tasks':
         w('theorem ports_tasks : ∀ p : (KI .tasks).M, p ∈ List.finRange nT := List.mem_finRange')
@@ -2240,6 +2787,11 @@ theorem portsJ_ok (j : I) (m : (CI j).M) : m ∈ portsJ j := by
   obtain ⟨κ, i⟩ := j
   cases κ
 ''' + ''.join('  · exact ports_%s m\n' % kd for kd in M.kinds))
+# a task port's statement number (cost review r8b-1 M1: an escaped pair's first-step task site is one comparison)
+w('''/-- The `Tasks` child, and a task port's statement number (0 elsewhere); statements are numbered in rank order. -/
+def isT : Kind → Bool
+''' + ''.join('  | .%s => %s\n' % (kd, 'true' if kd == 'tasks' else 'false') for kd in M.kinds) + '''def tnum : (κ : Kind) → (KI κ).M → Nat
+''' + ''.join('  | .%s => %s\n' % (kd, 'fun t => t.val' if kd == 'tasks' else 'fun _ => 0') for kd in M.kinds))
 w('''section
 variable {V : Type}
 theorem testBit_leaf0 (k i : Nat) : ((Tab.leaf 0 : Tab Nat).get k).testBit i = false := by simp [Tab.get]
@@ -2252,8 +2804,8 @@ theorem fpR_ok (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (r :
   rw [beq_iff_eq] at h
   show (sitesF (siteR ops E r.val) (kR r.val)).map (G ops E u).entS <+ fpRT.get r.val
   rw [h, sitesF_map]
-  exact List.Sublist.refl _
-
+  exact %s
+''' % ('List.sublist_append_left _ _' if LCP else 'List.Sublist.refl _') + '''
 theorem zR_ok (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (r : Fin nR) :
     ∀ c ∈ (trR (P ops E u) oc r).1, (G ops E u).fx ((G ops E u).kind c.1) ((G ops E u).code c.1 c.2.1) = true → c.2.2 = (G ops E u).z := by
   rw [trR_eq]
@@ -2312,7 +2864,7 @@ w('/-- Exception group `l`: its rules never two fire. -/\n'
   'def CHQ (ops : Ops V) (E : EqC V) (u : St → Nat → V) (g : Nat) (l : List Nat) : Prop :=\n'
   '  ∀ oc w, Env (P ops E u) oc w → amoChain false (l.map (fun i => fire ops E oc w (rR i)))')
 w('theorem chT (ops : Ops V) (E : EqC V) (u : St → Nat → V) %s : Tab.AllR (CHQ ops E u) memT 0 ng :=\n  %s'
-  % (HYP, tabproof(ch_items)))
+  % (HYP, tabproof(ch_items) if ch_items else 'fun _ _ h => absurd h (Nat.not_lt_zero _)'))
 
 # escapes: one dynamic proof per escaped pair
 w('''
@@ -2335,33 +2887,62 @@ theorem okP_follow (z : V) : ∀ j (a b : (CI j).M × V), okP j a.1 b.1 = true �
     · rw [hsh] at h; cases h
     · have e2 : fxP ⟨j, b.1⟩ = true := by rw [← he]; exact h
       rw [ha h, hb e2]
-/-- An escaped pair over numbered site tables, with flagged ports' calls carrying `z`. -/
+''')
+w('''/-- Two task statements in number order may follow each other (`taskAnn`: the lower one runs first). -/
+theorem okP_task (j : I) (a b : (CI j).M) (h : isT j.1 = true) (hab : tnum j.1 a < tnum j.1 b) : okP j a b = true := by
+  obtain ⟨κ, i⟩ := j
+  cases κ <;> simp only [isT, Bool.false_eq_true] at h''' + ('''
+  have hab' : (a : Fin nT).val < (b : Fin nT).val := hab
+  have hne : ¬ (a : Fin nT) = b := fun e => by rw [e] at hab'; exact Nat.lt_irrefl _ hab'
+  have hne' : ¬ (b : Fin nT) = a := fun e => hne e.symm
+  have hnl : ¬ (b : Fin nT) < a := fun e => Nat.lt_asymm hab' e
+  simp [okP, folP, taskAnn, hne, hne', hnl]''' if 'tasks' in M.kinds else ''))
+w('''/-- An escaped pair over numbered site tables, with flagged ports' calls carrying `z`; its bad site pairs
+    keyed by first-step site (`badT`, leaves `(i, i2s)`), each site's partners in one pass (`subS`): linear in
+    the facts (cost review r8-2 M1). A first-step task statement below `lo`, with every second-step one at
+    least `lo` (`hc2`), is one comparison, independent of `nT` (cost review r8b-1 M1). -/
 theorem okT_exceptZ (z : V) (ρ1 ρ2 : Nat → V) (site1 site2 : Nat → Site I (fun j => (CI j).M) V) (k1 k2 : Nat)
-    (key1 : Tab (Σ j, (CI j).M)) (key2 : Nat → Σ j, (CI j).M)
+    (key1 key2 : Tab (Σ j, (CI j).M))
     (hkey1 : ∀ i, (⟨(site1 i).j, (site1 i).m⟩ : Σ j, (CI j).M) = key1.get i)
-    (hkey2 : ∀ i, (⟨(site2 i).j, (site2 i).m⟩ : Σ j, (CI j).M) = key2 i)
-    (idx2 : (Σ j, (CI j).M) → List Nat) (hchk2 : ∀ i, i < k2 → i ∈ idx2 (key2 i)) (bad : List (Nat × Nat))
+    (hkey2 : ∀ i, (⟨(site2 i).j, (site2 i).m⟩ : Σ j, (CI j).M) = key2.get i)
+    (idx2 : (Σ j, (CI j).M) → List Nat) (hchk2 : ∀ i, i < k2 → i ∈ idx2 (key2.get i)) (badT : Tab (Nat × List Nat))
+    (lo : Nat)
     (hz1 : ∀ c ∈ callsOf ρ1 (sitesF site1 k1), fxP ⟨c.1, c.2.1⟩ = true → c.2.2 = z)
     (hz2 : ∀ c ∈ callsOf ρ2 (sitesF site2 k2), fxP ⟨c.1, c.2.1⟩ = true → c.2.2 = z)
-    (hc : Tab.allB (fun i p => (portsJ p.1).all (fun b => okP p.1 p.2 b ||
-      (idx2 ⟨p.1, b⟩).all (fun i2 => bad.contains (i, i2)))) key1 0 k1 = true)
-    (hbad : AllL (fun q => (site1 q.1).cond ρ1 = true → (site2 q.2).cond ρ2 = true → False) bad) :
+    (hc : Tab.allB (fun i p => (isT p.1.1 && Nat.blt (tnum p.1.1 p.2) lo) || (portsJ p.1).all (fun b => okP p.1 p.2 b ||
+      subS (idx2 ⟨p.1, b⟩) (idxT badT i))) key1 0 k1 = true)
+    (hc2 : Tab.allB (fun _ p => !isT p.1.1 || Nat.ble lo (tnum p.1.1 p.2)) key2 0 k2 = true)
+    (hbad : Tab.All (fun e : Nat × List Nat =>
+      AllL (fun i2 => (site1 e.1).cond ρ1 = true → (site2 i2).cond ρ2 = true → False) e.2) badT) :
     ∀ j, ∀ a ∈ proj j (callsOf ρ1 (sitesF site1 k1)), ∀ b ∈ proj j (callsOf ρ2 (sitesF site2 k2)), (CI j).ann.Follow a b := by
   intro j ⟨a1, a2⟩ ha b hb
   obtain ⟨s, hs, hc1, ha2⟩ := mem_proj_callsOf (I := I) (CM := fun j => (CI j).M) ρ1 j a1 a2 (sitesF site1 k1) ha
   rw [List.mem_filter] at hs
   obtain ⟨i1, hi1, rfl⟩ := mem_sitesF hs.1
   have e1 : key1.get i1 = ⟨j, a1⟩ := (hkey1 i1).symm.trans ((onPort_iff (I := I) (CM := fun j => (CI j).M) (V := V) j a1 _).mp hs.2)
-  obtain ⟨i2, hi2, hc2, -⟩ := mem_proj_fn (I := I) (CM := fun j => (CI j).M) ρ2 site2 k2 key2 hkey2 idx2 hchk2 j b.1 b.2 hb
+  obtain ⟨s2, hs2, hc2', -⟩ := mem_proj_callsOf (I := I) (CM := fun j => (CI j).M) ρ2 j b.1 b.2 (sitesF site2 k2) hb
+  rw [List.mem_filter] at hs2
+  obtain ⟨i2, hi2k, rfl⟩ := mem_sitesF hs2.1
+  have e2 : key2.get i2 = ⟨j, b.1⟩ := (hkey2 i2).symm.trans ((onPort_iff (I := I) (CM := fun j => (CI j).M) (V := V) j b.1 _).mp hs2.2)
+  have hi2 : i2 ∈ idx2 ⟨j, b.1⟩ := e2 ▸ hchk2 i2 hi2k
+  have hzF : okP j a1 b.1 = true → (CI j).ann.Follow (a1, a2) b := fun h' =>
+    okP_follow z j (a1, a2) b h' (fun hf => hz1 ⟨j, (a1, a2)⟩ (mem_proj j _ _ ha) hf)
+      (fun hf => hz2 ⟨j, b⟩ (mem_proj j _ _ hb) hf)
   have h := Tab.allB_spec _ key1 0 k1 hc i1 (Nat.zero_le _) hi1
-  rw [e1] at h
+  rw [e1, Bool.or_eq_true] at h
+  rcases h with h | h
+  · rw [Bool.and_eq_true] at h
+    have h2 := Tab.allB_spec _ key2 0 k2 hc2 i2 (Nat.zero_le _) hi2k
+    rw [e2, h.1, Bool.not_true, Bool.false_or] at h2
+    exact hzF (okP_task j a1 b.1 h.1 (Nat.lt_of_lt_of_le (Eq.mp Nat.blt_eq h.2) (Nat.le_of_ble_eq_true h2)))
   have h' := List.all_eq_true.mp h b.1 (portsJ_ok j b.1)
   rw [Bool.or_eq_true] at h'
   rcases h' with h' | h'
-  · exact okP_follow z j (a1, a2) b h' (fun hf => hz1 ⟨j, (a1, a2)⟩ (mem_proj j _ _ ha) hf)
-      (fun hf => hz2 ⟨j, b⟩ (mem_proj j _ _ hb) hf)
-  · have hm := List.contains_iff_mem.mp (List.all_eq_true.mp h' i2 hi2)
-    exact (AllL.mem hbad _ hm hc1 hc2).elim
+  · exact hzF h'
+  · obtain ⟨e, he, ek, hm⟩ := mem_idxT (subS_mem _ _ h' i2 hi2)
+    have hf := AllL.mem (Tab.all_mem hbad e he) i2 hm
+    rw [ek] at hf
+    exact (hf hc1 hc2').elim
 /-- `esc_of_pairs` with its table check needed only below `nR` (the escape table's last leaf may
     be a rule's). -/
 theorem esc_of_pairsB (u : St → Nat → V) (ops : Ops V) (E : EqC V) (L : List (Nat × Nat))
@@ -2381,23 +2962,40 @@ theorem esc_of_pairsB (u : St → Nat → V) (ops : Ops V) (E : EqC V) (L : List
   exact h
 ''')
 for n_e, (r1, r2, bad) in enumerate(ESC):
-    hb = []
+    assert bad, 'an escaped pair without a failing site pair'
+    byi = {}
     for (i1, i2) in bad:
-        fi = [f['r1'] == r1 and f['r2'] == r2 and f['i1'] == i1 and f['i2'] == i2 for f in EFACTS].index(True)
-        f = EFACTS[fi]
-        s1, s2 = M.rules[r1]['sites'][i1], M.rules[r2]['sites'][i2]
-        args = ['f1', 'f2']
-        c1 = Ctx('(u (.inr (rR %d)))' % r1, hf='f1')
-        c2 = Ctx('(u (.inr (rR %d)))' % r2, hf='f2')
-        if not is_uncond(s1):
-            args.append('((%s).symm.trans h1)' % cond_val(r1, s1, c1))
-        if not is_uncond(s2):
-            args.append('((%s).symm.trans h2)' % cond_val(r2, s2, c2))
-        src = 'hy' if f['ok'] else 'hr'
-        hb.append('fun h1 h2 => %s.esc_%d oc %s' % (src, fi, ' '.join(args)))
-    w('''theorem escChk_%d : Tab.allB (fun i p => (portsJ p.1).all (fun b => okP p.1 p.2 b ||
-    (idxT (usesAt ⟨p.1, b⟩) %d).all (fun i2 => [%s].contains (i, i2)))) (keyT.get %d) 0 (kT.get %d) = true := by
-  decide +kernel''' % (n_e, r2, ', '.join('(%d, %d)' % b for b in bad), r1, r1))
+        byi.setdefault(i1, []).append(i2)
+    keys_ = sorted(byi)
+    hb = []
+    for i1 in keys_:
+        hl = []
+        for i2 in sorted(byi[i1]):
+            fi = EFIDX[(r1, r2, i1, i2)]
+            f = EFACTS[fi]
+            s1, s2 = M.rules[r1]['sites'][i1], M.rules[r2]['sites'][i2]
+            args = ['f1', 'f2']
+            c1 = Ctx('(u (.inr (rR %d)))' % r1, hf='f1')
+            c2 = Ctx('(u (.inr (rR %d)))' % r2, hf='f2')
+            if not is_uncond(s1):
+                args.append('((%s).symm.trans h1)' % cond_val(r1, s1, c1))
+            if not is_uncond(s2):
+                args.append('((%s).symm.trans h2)' % cond_val(r2, s2, c2))
+            src = 'hy' if f['ok'] else 'hr'
+            hl.append('fun h1 h2 => %s.esc_%d oc %s' % (src, fi, ' '.join(args)))
+        hb.append(allL(hl))
+    # the bad site pairs keyed by first-step site, each site's partners ascending (as its port's index lists)
+    stab_keyed('escB_%d' % n_e, 'Tab (Nat × List Nat)', keys_,
+               ['(%d, [%s])' % (i1, ', '.join(map(str, sorted(byi[i1])))) for i1 in keys_])
+    # r2's first task statement: r1's (earlier in rank) are below it, so a task site of r1 is one comparison
+    lo_ = M.tstart[r2] if 'tasks' in M.kinds else 0
+    fchk_ = ('fun i p => (isT p.1.1 && Nat.blt (tnum p.1.1 p.2) %d) || (portsJ p.1).all (fun b => okP p.1 p.2 b || '
+             'subS (idxT (usesAt ⟨p.1, b⟩) %d) (idxT escB_%d i))' % (lo_, r2, n_e))
+    allB_thm('escChkS_%d' % n_e, fchk_, 'key_%d' % r1, len(M.rules[r1]['sites']))   # one decision per subtree (C20)
+    w('theorem escChk_%d : Tab.allB (%s) (keyT.get %d) 0 (kT.get %d) = true := escChkS_%d' % (n_e, fchk_, r1, r1, n_e))
+    fchk2_ = 'fun _ p => !isT p.1.1 || Nat.ble %d (tnum p.1.1 p.2)' % lo_
+    allB_thm('escT2S_%d' % n_e, fchk2_, 'key_%d' % r2, len(M.rules[r2]['sites']))
+    w('theorem escT2_%d : Tab.allB (%s) (keyT.get %d) 0 (kT.get %d) = true := escT2S_%d' % (n_e, fchk2_, r2, r2, n_e))
     w('''theorem esc_%d (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) (oc : OC V) (w : %s)
     (hE : Env (P ops E u) oc w) (f1 : fire ops E oc w (rR %d) = true) (f2 : fire ops E oc w (rR %d) = true) :
     OkT (P ops E u) (trR (P ops E u) oc (rR %d)).1 (trR (P ops E u) oc (rR %d)).1 := by
@@ -2406,10 +3004,10 @@ for n_e, (r1, r2, bad) in enumerate(ESC):
   rw [trR_eq] at hz1 hz2 ⊢
   rw [trR_eq]
   exact okT_exceptZ ops.z _ _ (siteR ops E (rR %d).val) (siteR ops E (rR %d).val)
-    (kR (rR %d).val) (kR (rR %d).val) (keyT.get (rR %d).val) (keyT.get (rR %d).val).get (fun _ => rfl) (fun _ => rfl)
-    (idx (.inr (rR %d))) (hchk (rR %d)) [%s] hz1 hz2 escChk_%d
-    %s''' % (n_e, HYP, WXM, r1, r2, r1, r2, r1, r2, r1, r2, r1, r2, r1, r2, r2, r2,
-             ', '.join('(%d, %d)' % b for b in bad), n_e, allL(hb)))
+    (kR (rR %d).val) (kR (rR %d).val) (keyT.get (rR %d).val) (keyT.get (rR %d).val) (fun _ => rfl) (fun _ => rfl)
+    (idx (.inr (rR %d))) (hchk (rR %d)) escB_%d %d hz1 hz2 escChk_%d escT2_%d
+    %s''' % (n_e, HYP, WXM, r1, r2, r1, r2, r1, r2, r1, r2, r1, r2, r1, r2, r2, r2, n_e, lo_, n_e, n_e,
+           taball('escB_%d' % n_e, hb)))
 if ESC:
     w('def escL : List (Nat × Nat) := [%s]' % ', '.join('(%d, %d)' % e for e in EPAIRS))
     stab('escMemT', 'Tab (List Nat)', ['[' + ', '.join(str(r1) for r1, _ in EPAIRS) + ']'])
@@ -2526,8 +3124,8 @@ theorem glueOK (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) : GlueOK (P o
   fpR oc r := fpR_ok ops E u oc r
   zM ''' + ('oc w m := zM_ok ops E u oc w m' if MET else '_ _ m := m.elim') + '''
   zR oc r := zR_ok ops E u oc r
-''' + nf + '''  exR := exR_of_chains (P ops E u) (G ops E u) (fire ops E) (fun r => r.isLt) rR_val memT gidT ng
-    (chT ops E u ''' + HYA + ''') hg_ok hinj_ok hT_ok
+''' + nf + '''  exR := exR_of_cmask (P ops E u) (G ops E u) (fire ops E) (fun r => r.isLt) rR_val memT gidT cmT ng
+    (chT ops E u ''' + HYA + ''') hcm_ok hg_ok hinj_ok hT_ok
   exMR ''' + ('_ _ m r _ h := by simp [D, Tab.get] at h' if MET else '_ _ m := m.elim') + '''
   esc := ''' + esc_field + '''
 
@@ -2537,8 +3135,103 @@ def pairs (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) : PairFacts (P ops
 end
 ''' % (HYP, HYA))
 mark('glue')
+if LCP:
+    W0 = '⟨fun e => e.elim, fun e => e.elim⟩' if not MET else '⟨fun _ => false, fun _ => ops.z⟩'
+    lck_arms, vbk_arms, vchk_thms, vchk_cases, lcok_cases = [], [], [], [], []
+    LCKD = {'reg': ('.wr _', '.rd _', 'regAll', 'Reg.write', 'Reg'), 'cfg': ('.write', '.read', 'cfgAll', 'CfgM.write', 'Cfg')}
+    for kd in M.kinds:
+        insts = [i for i in range(len(M.byk[kd])) if (kd, i, 'write') in LCP]
+        if kd in LCKD and insts:
+            pat, oth, allk, lpw, tn = LCKD[kd]
+            lck_arms.append('  | .%s => fun i m => match m with | %s => [%s].contains i | %s => false' % (kd, pat, ', '.join(map(str, insts)), oth))
+            stab('vb%sT' % tn, 'Tab Nat', [nat(VB.get((kd, i, 'write'), 0)) for i in range(len(M.byk[kd]))])
+            vbk_arms.append('  | .%s => fun i _ => vb%sT.get i' % (kd, tn))
+            vchk_thms.append('''theorem vchk_%s : ∀ i, i < nk .%s → lcK .%s i %s = true →
+    (((usesK .%s).get i).us %s).all (fun k => Nat.blt k nR && (virtT.get k).contains (vbK .%s i %s, κv, 0)) = true := by
+  decide +kernel''' % (kd, kd, kd, lpw, kd, lpw, kd, lpw))
+            vchk_cases.append('''  · revert hl
+    exact %s (Q := fun cm => lcK .%s i cm = true → (((usesK .%s).get i).us cm).all
+      (fun k => Nat.blt k nR && (virtT.get k).contains (vbK .%s i cm, κv, 0)) = true)
+      (fun h => absurd h (by simp [lcK])) (vchk_%s i hi) cm''' % (allk, kd, kd, kd, kd))
+            lcok_cases.append('''  · revert hl
+    exact %s (Q := fun cm => lcK .%s i cm = true → (KI .%s).ann.sbr cm cm = true ∧ (KI .%s).ann.hasEn cm = true)
+      (fun h => absurd h (by simp [lcK])) (fun _ => ⟨by decide, by decide⟩) cm''' % (allk, kd, kd, kd))
+        else:
+            assert not insts
+            lck_arms.append('  | .%s => fun _ _ => false' % kd)
+            vbk_arms.append('  | .%s => fun _ _ => 0' % kd)
+            vchk_cases.append('  · simp [lcJ, lcK] at hl')
+            lcok_cases.append('  · simp [lcJ, lcK] at hl')
+    w('''/-! ## Last caller: the ports, their virtual scan slots, the order facts -/
+
+/-- The last-caller ports: self-SBR primitive write ports two callers may drive in one cycle. -/
+def lcK : (κ : Kind) → Nat → (KI κ).M → Bool
+''' + '\n'.join(lck_arms) + '''
+def lcJ (j : I) (cm : (CI j).M) : Bool := lcK j.1 j.2.val cm
+/-- Each last-caller port's virtual slot (one per port, after the children's). -/
+def vbK : (κ : Kind) → Nat → (KI κ).M → Nat
+''' + '\n'.join(vbk_arms) + '''
+def vbJ (j : I) (cm : (CI j).M) : Nat := vbK j.1 j.2.val cm
+abbrev κv : Nat := %d
+theorem hkv : 0 ∈ (D.kc κv 0).cout := by decide +kernel
+''' % KV + '\n'.join(vchk_thms) + '''
+theorem vchk (j : I) (cm : (CI j).M) (hl : lcJ j cm = true) :
+    (usL ⟨j, cm⟩).all (fun k => Nat.blt k nR && (virtT.get k).contains (vbJ j cm, κv, 0)) = true := by
+  obtain ⟨κ, i, hi⟩ := j
+  cases κ
+''' + '\n'.join(vchk_cases) + '''
+theorem lcOk : ∀ (j : I) (cm : (CI j).M), lcJ j cm = true → (CI j).ann.sbr cm cm = true ∧ (CI j).ann.hasEn cm = true := by
+  intro j cm hl
+  obtain ⟨κ, i, hi⟩ := j
+  cases κ
+''' + '\n'.join(lcok_cases) + '''
+''')
+    LC_HVR = '''section
+variable {V : Type}
+/-- A rule calling a last-caller port uses the port's virtual slot. -/
+theorem hvR (ops : Ops V) (E : EqC V) (u : St → Nat → V) : ∀ (oc : OC V) (r : Fin nR) (j : I) (cm : (CI j).M),
+    lcJ j cm = true → Calls (P ops E u) (trR (P ops E u) oc r).1 j cm →
+    (vbJ j cm, κv, 0) ∈ D.fpR.get ((G ops E u).rk r) := by
+  intro oc r j cm hl ⟨x, hx⟩
+  have hus : (.inr r : St) ∈ users j cm :=
+    usersOk ops E (.inr r) ⟨j, cm⟩ (fpOk ops E u oc %s (.inr r) ⟨j, (cm, x)⟩ (mem_proj j _ _ hx))
+  obtain ⟨k, hk, e⟩ := List.mem_map.mp hus
+  have h2 := List.all_eq_true.mp (vchk j cm hl) k hk
+  simp only [Bool.and_eq_true] at h2
+  have hkR : k < nR := Nat.blt_eq.mp h2.1
+  %s
+  have er : r.val = k := by rw [← Sum.inr.inj e]; exact Nat.mod_eq_of_lt hkR
+  show (vbJ j cm, κv, 0) ∈ fpRT.get r.val
+  have h := Tab.allB_spec _ fpRT 0 nR fpAll r.val (Nat.zero_le _) r.isLt
+  rw [beq_iff_eq] at h
+  rw [h, er]
+  exact List.mem_append_right _ (List.contains_iff_mem.mp h2.2)
+''' % (W0, 'simp only [stOf, h2.1, cond_true] at e' if MET else '') + ('''/-- No method calls a last-caller port (its users are rules). -/
+theorem hvM (ops : Ops V) (E : EqC V) (u : St → Nat → V) : ∀ (oc : OC V) (w : Wires (Fin nM) V) (m : Fin nM) (j : I)
+    (cm : (CI j).M), lcJ j cm = true → Calls (P ops E u) (trM (P ops E u) oc w m).1 j cm →
+    (vbJ j cm, κv, 0) ∈ D.fpM.get ((G ops E u).mi m) := by
+  intro oc w m j cm hl ⟨x, hx⟩
+  have hus : (.inl m : St) ∈ users j cm :=
+    usersOk ops E (.inl m) ⟨j, cm⟩ (fpOk ops E u oc w (.inl m) ⟨j, (cm, x)⟩ (mem_proj j _ _ hx))
+  obtain ⟨k, hk, e⟩ := List.mem_map.mp hus
+  have h2 := List.all_eq_true.mp (vchk j cm hl) k hk
+  simp only [Bool.and_eq_true] at h2
+  simp only [stOf, h2.1, cond_true] at e
+  cases e
+''' if MET else '') + '''end
+'''
 
 # ---------------------------------------------------------------- EAQ per instance
+EAQ_ARG = ('(∀ cm : (KI κ).M, ∀ s ∈ users (⟨κ, ⟨i, h⟩⟩ : I) cm, Av (P ops E u) (fire ops E) oc w s →\n'
+           '      ∀ x, (cm, x) ∈ proj (⟨κ, ⟨i, h⟩⟩ : I) (trS (P ops E u) oc w s) → (A V ops E oc w).arg cm = x)')
+if LCP:
+    EAQ_ARG = ('(∀ cm : (KI κ).M, lcK κ i cm = false → ∀ s ∈ users (⟨κ, ⟨i, h⟩⟩ : I) cm, Av (P ops E u) (fire ops E) oc w s →\n'
+               '      ∀ x, (cm, x) ∈ proj (⟨κ, ⟨i, h⟩⟩ : I) (trS (P ops E u) oc w s) → (A V ops E oc w).arg cm = x) ∧\n'
+               '    (∀ cm : (KI κ).M, lcK κ i cm = true → ∀ s ∈ users (⟨κ, ⟨i, h⟩⟩ : I) cm, On (P ops E u) (fire ops E) oc w s →\n'
+               '      ∀ x, (cm, x) ∈ proj (⟨κ, ⟨i, h⟩⟩ : I) (trS (P ops E u) oc w s) →\n'
+               '      (∀ s\' ∈ users (⟨κ, ⟨i, h⟩⟩ : I) cm, LC.lpOf (G ops E u) s < LC.lpOf (G ops E u) s\' →\n'
+               '        On (P ops E u) (fire ops E) oc w s\' → ¬ Calls (P ops E u) (trS (P ops E u) oc w s\') (⟨κ, ⟨i, h⟩⟩ : I) cm) →\n'
+               '      (A V ops E oc w).arg cm = x)')
 w('/-! ## Enables and arguments: one lemma per child instance, dispatched by table -/\n')
 w('''section
 variable {V : Type}
@@ -2549,8 +3242,7 @@ def EAQ (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) (κ : Kind) (i : Nat
     (∀ cm : (KI κ).M, (KI κ).ann.hasEn cm = true →
       ((A V ops E oc w).en cm = true ↔ ∃ s ∈ users (⟨κ, ⟨i, h⟩⟩ : I) cm, On (P ops E u) (fire ops E) oc w s ∧
         Calls (P ops E u) (trS (P ops E u) oc w s) (⟨κ, ⟨i, h⟩⟩ : I) cm)) ∧
-    (∀ cm : (KI κ).M, ∀ s ∈ users (⟨κ, ⟨i, h⟩⟩ : I) cm, Av (P ops E u) (fire ops E) oc w s →
-      ∀ x, (cm, x) ∈ proj (⟨κ, ⟨i, h⟩⟩ : I) (trS (P ops E u) oc w s) → (A V ops E oc w).arg cm = x)
+    %s
 
 /-- A flagged (argument-less value) port's calls carry `z`. -/
 theorem zarg (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : %s) (j : I) (cm : (CI j).M)
@@ -2562,7 +3254,7 @@ theorem zarg (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : %
   | inr r =>
     have hc := mem_proj j _ _ hx
     exact (zR_ok ops E u oc r ⟨j, (cm, x)⟩ hc hf).symm
-''' % (HYP, WXM, WXM, WXM, 'exact e.elim' if not MET else 'exact (zM_ok ops E u oc w e ⟨j, (cm, x)⟩ (mem_proj j _ _ hx) hf).symm'))
+''' % (HYP, WXM, WXM, EAQ_ARG, WXM, 'exact e.elim' if not MET else 'exact (zM_ok ops E u oc w e ⟨j, (cm, x)⟩ (mem_proj j _ _ hx) hf).symm'))
 
 HXS = {}
 
@@ -2582,8 +3274,6 @@ def uses_leaves(p):
         by.setdefault(k, []).append(i)
     return [(k, by[k]) for k in sorted(by)]
 
-
-BIGPORT = int(os.environ.get('E2E_BIGPORT', '8'))
 
 
 def users_proof(p, leaf):
@@ -2695,7 +3385,7 @@ def TQ (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) (t : Nat) (f : (V : T
                              lambda nm, lo, hi: 'Tab.AllR (TQ ops E %s u) %s %d %d' % (HYA, nm, lo, hi), [tq_leaf(t) for t in range(nT)])))
     w('''theorem ea_tasks_0 (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) : EAQ ops E %s u .tasks 0 arm_tasks_0 := by
   intro h oc w hE
-  refine ⟨fun cm _ => ?_, fun cm => ?_⟩
+  refine ⟨fun cm _ => ?_, %s⟩
   · obtain ⟨t, ht⟩ := cm
     have e : (⟨t, ht⟩ : Fin nT) = tP t := Fin.ext (Nat.mod_eq_of_lt ht).symm
     have := (Tab.get_allR _ 0 nT (tqAll ops E %s u) t (Nat.zero_le _) ht oc w hE).1
@@ -2706,7 +3396,38 @@ def TQ (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) (t : Nat) (f : (V : T
     have := (Tab.get_allR _ 0 nT (tqAll ops E %s u) t (Nat.zero_le _) ht oc w hE).2
     rw [← e] at this
     exact this
-''' % (HYP, HYA, HYA, HYA))
+''' % (HYP, HYA, 'fun cm _ => ?_, fun cm hl => absurd hl (by simp [lcK])' if LCP else 'fun cm => ?_', HYA, HYA))
+
+def lc_proof(p, inst):
+    """`CertL.argL` for a last-caller port: its priority mux, latest caller first."""
+    pi = portinfo[p]
+    kd, i, m = p
+    lp = K[kd].lports[K[kd].code(m)]
+    q, mus, margs = pi['lcq'], pi['mus'], pi['margs']
+    ul = '[%s]' % ', '.join('.inr (rR %d)' % k for k in sorted(set(k for k, _ in U[p])))
+    ents_ = []
+    for (k, si), st in zip(mus, margs):
+        h = hx(kd, i, m, lp, k, si)
+        av = arg_val(k, st, Ctx('(u (.inr (rR %d)))' % k, hf='hav'))
+        ark = 'aRk ops E u oc w (rR %d) .%s %d h %s %d %s _ (fun _ => %s) x hx' % (k, kd, i, lp, si, h, av)
+        if is_uncond(st):
+            ents_.append('⟨fun hs => ⟨hs, cRk ops E u oc w (rR %d) .%s %d h %s %d %s rfl rfl rfl⟩,\n'
+                         '        fun hav x hx => ⟨hav, %s⟩⟩' % (k, kd, i, lp, si, h, ark))
+        else:
+            cvf = cond_val(k, st, Ctx('(u (.inr (rR %d)))' % k, hf='((Bool.and_eq_true _ _).mp hs).1'))
+            cva = cond_val(k, st, Ctx('(u (.inr (rR %d)))' % k, hf='hav'))
+            ents_.append('⟨fun hs => ⟨((Bool.and_eq_true _ _).mp hs).1, (cRkIff ops E u oc w (rR %d) .%s %d h %s %d %s rfl rfl).mpr\n'
+                         '          ((iff_of_eqB (%s)).mpr ((Bool.and_eq_true _ _).mp hs).2)⟩,\n'
+                         '        fun hav x hx => ⟨(Bool.and_eq_true _ _).mpr ⟨hav, (%s).symm.trans\n'
+                         '          (aRkC ops E u oc w (rR %d) .%s %d h %s %d %s x hx)⟩, %s⟩⟩'
+                         % (k, kd, i, lp, si, h, cvf, cva, k, kd, i, lp, si, h, ark))
+    return ('LC.argL_of_pmuxN (P ops E u) (fire ops E) oc w %s %s (LC.lpOf (G ops E u)) (users %s %s) %d\n'
+            '      (fun t => (lcT_%d.get t) V ops E oc) (fun t => .inr (rR (lcsT_%d.get t))) ops.z\n'
+            '      (fun t => D.nM + lcsT_%d.get t %% nR) (fun _ => rfl) (by decide +kernel)\n'
+            '      (((usesK .%s).get %d).us %s) (fun k => .inr (rR k)) (fun t => lcsT_%d.get t) rfl (fun _ => rfl)\n'
+            '      (by decide +kernel)\n      %s'
+            % (inst, lp, inst, lp, len(mus), q, q, q, kd, i, lp, q, allL(ents_)))
+
 
 ALL = {'reg': 'regAll', 'cfg': 'cfgAll', 'fifo': 'flAll', 'f2': 'f2All', 'sf': 'f2All', 'rf': 'rfAll',
        'rwS': 'wireAll', 'rwC': 'wireAll', 'rw0S': 'wire0All', 'rw0C': 'wire0All'}
@@ -2715,7 +3436,7 @@ for kd in M.kinds:
         continue
     for i in range(len(M.byk[kd])):
         inst = '⟨.%s, ⟨%d, h⟩⟩' % (kd, i)
-        ens, args = [], []
+        ens, args, argsL = [], [], []
         HXS.clear()
         for m in K[kd].ports:
             p = (kd, i, m)
@@ -2723,12 +3444,20 @@ for kd in M.kinds:
                 ens.append('fun _ => %s' % en_proof(p, inst))
             else:
                 ens.append('fun hh => by cases hh')
-            args.append(arg_proof(p, inst))
+            if not LCP:
+                args.append(arg_proof(p, inst))
+            elif p in LCP:
+                args.append('fun hl => absurd hl (by decide)')
+                argsL.append('fun _ => %s' % lc_proof(p, inst))
+            else:
+                args.append('fun _ => %s' % arg_proof(p, inst))
+                argsL.append('fun hl => absurd hl (by decide)')
         w('theorem ea_%s_%d (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) : EAQ ops E %s u .%s %d arm_%s_%d := by\n'
           % (kd, i, HYP, HYA, kd, i, kd, i) + ''.join('  have %s : %s := by decide +kernel\n' % (nm, st_) for nm, st_ in HXS.items()) +
           '  intro h oc w hE\n'
-          '  refine ⟨%s (%s), %s (%s)⟩'
-          % (ALL[kd], ')\n    ('.join(ens), ALL[kd], ')\n    ('.join(args)))
+          '  refine ⟨%s (%s), %s (%s)%s⟩'
+          % (ALL[kd], ')\n    ('.join(ens), ALL[kd], ')\n    ('.join(args),
+             (', %s (%s)' % (ALL[kd], ')\n    ('.join(argsL))) if LCP else ''))
 for kd in M.kinds:
     n = len(M.byk[kd])
     if kd == 'tasks':
@@ -2736,7 +3465,10 @@ for kd in M.kinds:
           '  Tab.one (ea_tasks_0 ops E %s u)' % (HYP, HYA, HYA))
         continue
     w('theorem eaAll_%s (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) : Tab.AllR (EAQ ops E %s u .%s) arms_%s 0 %d :=\n  %s'
-      % (kd, HYP, HYA, kd, kd, n, tabproof(['ea_%s_%d ops E %s u' % (kd, i, HYA) for i in range(n)])))
+      % (kd, HYP, HYA, kd, kd, n, stabproof('arms_%s' % kd, 'eaAll_%s' % kd, '(ops : Ops V) (E : EqC V) %s (u : St → Nat → V)' % HYP,
+                                            'ops E %s u' % HYA,
+                                            lambda nm, lo, hi, kd=kd: 'Tab.AllR (EAQ ops E %s u .%s) %s %d %d' % (HYA, kd, nm, lo, hi),
+                                            ['ea_%s_%d ops E %s u' % (kd, i, HYA) for i in range(n)])))
 w('''theorem eaAll (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) (κ : Kind) (i : Nat) (h : i < nk κ) :
     EAQ ops E %s u κ i ((arms κ).get i) := by
   cases κ
@@ -2756,6 +3488,7 @@ else:
   rw [trR_eq] at hc
   obtain ⟨i, hi, e⟩ := mem_keys (callsOf_fn_ports _ _ _ c hc)
   have hrd := rd_of_cf (cf_of_wf hf)
+  unfold RD at hrd
   have h2 := List.all_eq_true.mp hrd i (List.mem_range'.mpr ⟨i, hi, by omega⟩)
   rw [e] at h2
   simp only [alwaysRdyB, Bool.or_eq_true] at h2
@@ -2766,6 +3499,7 @@ else:
   rw [trM_eq] at hc
   obtain ⟨i, hi, e⟩ := mem_keys (callsOf_fn_ports _ _ _ c hc)
   have hrd := rd_of_cf (cf_of_avail hav)
+  unfold RD at hrd
   have h2 := List.all_eq_true.mp hrd i (List.mem_range'.mpr ⟨i, hi, by omega⟩)
   rw [e] at h2
   simp only [alwaysRdyB, Bool.or_eq_true] at h2
@@ -2819,9 +3553,9 @@ theorem onehot_ok (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) (oc : OC V
     (hC : EnvC (P ops E u) oc w) : onehotP ops E oc :=
   ''' % (HYP, WXM) + allL(['chain_%d ops E %s oc hC.1' % (q, HYA) for q in range(len(muxes))]) + '''
 
-def cert (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) : Cert (P ops E u) :=
-  PairFacts.toCert (P ops E u) (pairs ops E %s u) (fp ops E) users (usersOk ops E) (fpOk ops E u)
-''' % (HYP, HYA) + ('''    (fun m => m.elim) (fun _ _ m => m.elim)
+''' + (LC_HVR if LCP else '') + '''def cert (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) : %s (P ops E u) :=
+  %s (P ops E u) (pairs ops E %s u) (fp ops E) users (usersOk ops E) (fpOk ops E u)
+''' % (HYP, 'CertL' if LCP else 'Cert', 'LC.PairFacts.toCertL' if LCP else 'PairFacts.toCert', HYA) + ('''    (fun m => m.elim) (fun _ _ m => m.elim)
 ''' if not MET else '''    (fun m => Or.inl (decide_eq_true rfl)) (fun oc w m _ hav => resM_ok ops E %s u oc w m hav)
 ''' % HYA) + '''    (fun oc w r _ hf => resR_ok ops E %s u oc w r hf)
 ''' % HYA + ('''    (fun _ _ m => m.elim) (rdyR_ok ops E %s u)
@@ -2829,17 +3563,26 @@ def cert (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) : Cert (P ops E u) 
 ''' % (HYA, HYA)) + '''    (fun oc w j cm hE hcm => by obtain ⟨κ, i, hi⟩ := j; exact (eaAll ops E %s u κ i hi hi oc w hE).1 cm hcm)
 ''' % HYA + ('''    (fun _ _ m => m.elim)
 ''' if not MET else '''    (fun _ _ m _ h => by simp [X, xAnn] at h)
-''') + '''    (fun oc w j cm hE s hs hav x hx => by obtain ⟨κ, i, hi⟩ := j; exact (eaAll ops E %s u κ i hi hi oc w hE).2 cm s hs hav x hx)
+''') + ('''    (fun oc w j cm hE s hs hav x hx => by obtain ⟨κ, i, hi⟩ := j; exact (eaAll ops E %s u κ i hi hi oc w hE).2 cm s hs hav x hx)
     (fun oc w j cm _ h => by obtain ⟨κ, i⟩ := j; cases κ <;> cases cm <;> cases h)
     (onehot_ok ops E %s u)
-''' % (HYA, HYA) + ('''theorem cf_of_availB {ops : Ops V} {E : EqC V} {oc : OC V} {w : Wires (Fin nM) V} {m : Fin nM}
+''' % (HYA, HYA) if not LCP else '''    (fun oc w j cm _ h => by obtain ⟨κ, i⟩ := j; cases κ <;> cases cm <;> cases h)
+    (onehot_ok ops E %s u)
+    lcJ lcOk (LC.lpOf (G ops E u)) (LC.lpRR_of_scan (glueOK ops E %s u) lcJ) (LC.lpMR_of_scan (glueOK ops E %s u) lcJ)
+    (LC.lcMR_of_scan vbJ κv scanOK (glueOK ops E %s u) lcJ hkv HVM (hvR ops E u))
+    (LC.lcRR_of_scan vbJ κv scanOK (glueOK ops E %s u) lcJ hkv (hvR ops E u))
+    (LC.lcMM_of_scan vbJ κv scanOK (glueOK ops E %s u) lcJ hkv HVM)
+    (fun oc w j cm hE hl s hs hav x hx => by obtain ⟨κ, i, hi⟩ := j; exact (eaAll ops E %s u κ i hi hi oc w hE).2.1 cm hl s hs hav x hx)
+    (fun oc w j cm hE hl s hs hon x hx hlt => by
+      obtain ⟨κ, i, hi⟩ := j; exact (eaAll ops E %s u κ i hi hi oc w hE).2.2 cm hl s hs hon x hx hlt)
+'''.replace('HVM', '(hvM ops E u)' if MET else '(fun _ _ m => m.elim)') % ((HYA,) * 8)) + ('''theorem cf_of_availB {ops : Ops V} {E : EqC V} {oc : OC V} {w : Wires (Fin nM) V} {m : Fin nM}
     (h : Avail (F ops E).base oc w m) : CF ops E oc (nR + m.val) = true :=
   h.1.resolve_left (fun h' => by cases h')
 ''' if MET else '') + '''
 /-- **The certificate fixed before the skipped values**: rules, firing and hits do not mention
     `u`, and a step's calls are the same at every `u` (`trUS`). -/
-def certU (ops : Ops V) (E : EqC V) %s : CertU (F ops E) where
-  rules := (G ops E (fun _ _ => ops.z)).rules
+def certU (ops : Ops V) (E : EqC V) %s : %s (F ops E) where
+  rules := (List.range nR).map rR
   fire := fire ops E
   hit := (pairs ops E %s (fun _ _ => ops.z)).hit
   cert u := cert ops E %s u
@@ -2848,7 +3591,7 @@ def certU (ops : Ops V) (E : EqC V) %s : CertU (F ops E) where
   hit_eq _ := rfl
   trU oc w s u u' _ hav := by
     cases s with
-''' % (HYP, HYA, HYA) + ('''    | inl e => exact e.elim
+''' % (HYP, 'CertUL' if LCP else 'CertU', HYA, HYA) + ('''    | inl e => exact e.elim
 ''' if not MET else '''    | inl m => exact (trSM_eq ops E u oc w m).trans ((trUS ops E %s oc (nR + m.val) (mlt m) _ _ (w.arg m)
         (pre_m (cf_of_availB hav))).trans (trSM_eq ops E u' oc w m).symm)
 ''' % HYA) + '''    | inr r => exact (trS_eq ops E u oc w r).trans ((trUS ops E %s oc r.val (rlt r) _ _ ops.z (pre_r hav)).trans
@@ -2857,9 +3600,9 @@ def certU (ops : Ops V) (E : EqC V) %s : CertU (F ops E) where
 /-- **The module's obligation**: the order and every child's calls are fixed before the skipped
     values; for every value type, operators, constants and solver verdicts. -/
 theorem obl [Inhabited V] (ops : Ops V) (E : EqC V) %s : OblU (F ops E) :=
-  oblU_of_cert (F ops E) (certU ops E %s)
+  %s (F ops E) (certU ops E %s)
 end
-''' % (HYA, HYP, HYA))
+''' % (HYA, HYP, 'oblU_of_certL' if LCP else 'oblU_of_cert', HYA))
 mark('cert')
 
 # ---------------------------------------------------------------- Acyc
@@ -2952,6 +3695,10 @@ for it in range(1000):
         break
 else:
     rank = {}
+    NOACYC = True
+# a child's path input driven by a method's enable: Acyc's read lists take no inputs (not emitted)
+if any(k >= nR for kd in path_inputs if kd in M.kinds for i in range(len(M.byk[kd])) for m in path_inputs[kd]
+       for (k, _) in U.get((kd, i, m), [])):
     NOACYC = True
 NN = max([0] + [max(v) if isinstance(v, tuple) else v for v in rank.values()]) + 1
 
@@ -3200,7 +3947,9 @@ for kd in M.kinds:
         w('theorem dq_%s_%d (ops : Ops V) (E : EqC V) : DQ_%s ops E %d arm_%s_%d := fun h oc oc\' w w\' =>\n  %s'
           % (kd, i, kd, i, kd, i, ('⟨' + ', '.join(parts) + '⟩') if len(parts) > 1 else parts[0]))
     w('theorem dqAll_%s (ops : Ops V) (E : EqC V) : Tab.AllR (DQ_%s ops E) arms_%s 0 %d :=\n  %s'
-      % (kd, kd, kd, n, tabproof(['dq_%s_%d ops E' % (kd, i) for i in range(n)])))
+      % (kd, kd, kd, n, stabproof('arms_%s' % kd, 'dqAll_%s' % kd, '(ops : Ops V) (E : EqC V)', 'ops E',
+                                  lambda nm, lo, hi, kd=kd: 'Tab.AllR (DQ_%s ops E) %s %d %d' % (kd, nm, lo, hi),
+                                  ['dq_%s_%d ops E' % (kd, i) for i in range(n)])))
 w('end\n')
 
 
@@ -3298,9 +4047,18 @@ end
 mark('acyc')
 
 # ---------------------------------------------------------------- Built and top
+# assumed leaves: library primitives without a proved contract, never a synthesized module (soundness review
+# r8-1 minor 2: such a leaf would have to export every action method C with itself, as generated modules do,
+# so that bsc's exported self relation, wrong under bugs synth-sbr and synth-cf-share, never enters Lean)
+ASSUMED_LEAF = {'fifo': 'FIFOL1', 'cfg': 'ConfigRegN', 'sf': 'SizedFIFO', 'rf': 'RegFile'}
+LEAVES_ = [ASSUMED_LEAF[kd] for kd in M.kinds if kd in ASSUMED_LEAF and not (kd == 'cfg' and CFG_LIB)]
+assert all(kd in ASSUMED_LEAF or K[kd].lib or (kd == 'cfg' and CFG_LIB) for kd in M.kinds if kd != 'tasks'), \
+    'a child that is neither a library model nor an assumed primitive leaf'
+LEAVES_DOC = ('The assumed leaves (primitives whose library contracts are not yet proved): %s.' % ', '.join(LEAVES_)
+              if LEAVES_ else 'No assumed leaf: every child is a library model with a proved contract.')
 w('''/-! ## The built module and its top theorem -/
 
-/-- The assumed leaves (library contracts not yet proved): FIFOL1, ConfigRegN, SizedFIFO, RegFile. -/
+/-- ''' + LEAVES_DOC + ''' -/
 structure Leaves (V : Type) (toB : V → Bool) where
 ''' + ('''  fifo : Module V FL.X
   fifoR : Realizes fifo
@@ -3308,7 +4066,7 @@ structure Leaves (V : Type) (toB : V → Bool) where
 ''' if 'fifo' in M.kinds else '') + ('''  cfg : Module V Cfg.X
   cfgR : Realizes cfg
   cfgC : Causal cfg
-''' if 'cfg' in M.kinds else '') + ('''  sf : Module V FIFO2.X
+''' if 'cfg' in M.kinds and not CFG_LIB else '') + ('''  sf : Module V FIFO2.X
   sfR : Realizes sf
   sfC : Causal sf
   sfA : Aliased toB sf
@@ -3324,11 +4082,15 @@ def implK (ops : Ops V) (lv : Leaves V ops.toB) : (κ : Kind) → Module V (KI �
 IMPL = {'reg': 'Reg', 'cfg': 'lv.cfg', 'fifo': 'lv.fifo', 'tasks': 'Tasks nT', 'f2': 'FIFO2 ops.ofBool', 'sf': 'lv.sf',
         'rf': 'lv.rf', 'rwS': 'RWire ops.ofBool true true', 'rwC': 'RWire ops.ofBool true false',
         'rw0S': 'RWire0 ops.ofBool true true', 'rw0C': 'RWire0 ops.ofBool true false'}
+if CFG_LIB:
+    IMPL['cfg'] = 'LC.CfgReg'
 for kd in M.kinds:
     w('  | .%s => %s' % (kd, IMPL[kd]))
 
 
 def leaf(kd):
+    if kd == 'cfg' and CFG_LIB:
+        return 'Built.leaf _ LC.cfg_realizes LC.cfg_causal'
     return {'reg': 'Built.leaf _ reg_realizes (creg_causal 1)', 'cfg': 'Built.leaf _ lv.cfgR lv.cfgC',
             'fifo': 'Built.leaf _ lv.fifoR lv.fifoC', 'tasks': 'Built.leaf _ (tasks_realizes nT) (tasks_causal nT)',
             'f2': 'Built.leaf _ (fifo2_realizes _) (fifo2_causal _)', 'sf': 'Built.leaf _ lv.sfR lv.sfC',
@@ -3362,7 +4124,7 @@ theorem built [Inhabited V] (ops : Ops V) (E : EqC V) %s (lv : Leaves V ops.toB)
     (obl ops E %s) (acyc ops E)
 
 /-- **The module's top theorem**: the contract, with the run fixed before every skipped value
-    of the tree, and every input has a hardware cycle. -/
+    of the tree, and every input has a hardware cycle.%s -/
 theorem top [Inhabited V] (ops : Ops V) (E : EqC V) %s (lv : Leaves V ops.toB) :
     RealizesU %s ∧
     ∀ s w, %s.clean s = s → ∃ o s' g, %s.hw s w o s' g :=
@@ -3374,12 +4136,71 @@ end %s
 
 #print axioms %s.obl
 #print axioms %s.top
-''' % (HYA, HYP, TOPM, TOPM, TOPM, HYA, NAME, NAME, NAME))
+''' % (HYA, MTASK_NOTE.replace('\n   ', '\n    '), HYP, TOPM, TOPM, TOPM, HYA, NAME, NAME, NAME))
 
 
 if NOACYC:
     L = L_KEEP
-open(out, 'w').write('\n'.join(L) + '\n')
+# a fact's projection through its group (hy.esc_17 -> hy.g0.esc_17)
+_fre = re.compile(r'\b(hy|hr)\.((?:rdy|inv|esc|cx)_\d+)\b')
+L = [_fre.sub(lambda m_: '%s.%s.%s' % (m_.group(1), FPATH[m_.group(1)][m_.group(2)], m_.group(2)), l_) for l_ in L]
+# parts (cost review r7-2 M1): with E2E_PART_BYTES, the file is cut between top-level declarations into parts of
+# about that many bytes, each importing the one before; OUT.lean is the last part, and holds `obl`, `top` and the axioms
+PART_BYTES = int(os.environ.get('E2E_PART_BYTES', '0'))
+assert PART_BYTES <= GATE_PART, 'gate: parts above %d bytes' % GATE_PART
+HDR_END = next(i for i, l in enumerate(L) if '\nnoncomputable section\n' in '\n' + l + '\n')
+if not PART_BYTES and sum(len(l) + 1 for l in L) > GATE_PART:
+    PART_BYTES = GATE_PART // 2      # the whole-file bound (design.md §11 item 6): a larger module is split
+parts_, start_, acc_ = [], 0, 0
+import re as re_
+if PART_BYTES and not NOACYC:
+    # a cut may fall before any element outside `section … end` blocks, or inside one, which is then closed and
+    # reopened (every section of the file is `section` / `variable {V : Type}`, asserted)
+    import re as re_
+    depth_, dep_ = 0, []
+    for i_, l_ in enumerate(L):
+        dep_.append(depth_)
+        if i_ > HDR_END:
+            lns_ = l_.split('\n')
+            for j_, ln_ in enumerate(lns_):
+                if re_.match(r'^(noncomputable )?section\b', ln_):
+                    assert ln_ == 'section' and lns_[j_ + 1] == 'variable {V : Type}', 'a section the splitter cannot reopen'
+                    depth_ += 1
+                elif re_.match(r'^end\b', ln_):
+                    depth_ -= 1
+            assert depth_ <= 1
+    acc_ = 0
+    for i_, l_ in enumerate(L):
+        if i_ > HDR_END and acc_ + len(l_) + 1 > PART_BYTES and acc_ > 0 and i_ < len(L) - 1 and dep_[i_] in (0, 1) \
+                and dep_[i_ + 1] >= 0 and not L[i_].startswith('variable'):
+            parts_.append((start_, i_))
+            start_, acc_ = i_, 0
+        if i_ > HDR_END:
+            acc_ += len(l_) + 1
+parts_.append((start_, len(L)))
+base_ = os.path.splitext(out)[0]
+stem_ = os.path.basename(base_)
+hdr_ = '\n'.join(L[:HDR_END + 1])
+hdr_ = hdr_[:hdr_.index('\nnoncomputable section\n') + len('\nnoncomputable section\n')]
+for pi_, (a_, b_) in enumerate(parts_):
+    if pi_ == 0:
+        body_ = L[a_:b_]
+    else:
+        body_ = ([re_.sub(r'(?m)^import (Scan|LastCaller)$', 'import %s_p%d' % (stem_, pi_ - 1), hdr_, count=1)] +
+                 (['section\nvariable {V : Type}'] if dep_[a_] else []) + L[a_:b_])
+        if MARK:     # a mark at the part's start, so that its first section is timed
+            body_.insert(1, mark_text('part%d' % pi_))
+    if pi_ < len(parts_) - 1:
+        open('%s_p%d.lean' % (base_, pi_), 'w').write('\n'.join(body_) + ('\nend' if dep_[b_] else '') +
+                                                      '\nend\nend %s\n' % NAME)
+    else:
+        open(out, 'w').write('\n'.join(body_) + '\n')
+psz_ = [os.path.getsize('%s_p%d.lean' % (base_, i_)) for i_ in range(len(parts_) - 1)] + [os.path.getsize(out)]
+assert max(psz_) <= GATE_PART, 'gate: a part of %d bytes, above %d' % (max(psz_), GATE_PART)
+open(out, 'a').write('\n/-! Gate: %d part(s) (one Lean file each), the largest %d bytes, at most %d. -/\n'
+                     % (len(parts_), max(psz_), GATE_PART))
+if len(parts_) > 1:
+    print('parts %d: %s, then %s' % (len(parts_), ', '.join('%s_p%d.lean' % (base_, i_) for i_ in range(len(parts_) - 1)), out))
 nsites = sum(len(r['sites']) for r in M.rules)
 print('scan segments %d (at most %d uses each)' % (NSEG, SEG_USES))
 print('wrote %s: rules %d, methods %d, children %d, sites %d, task statements %d, muxes %d (member pairs: %d by checks, %d one by one), '

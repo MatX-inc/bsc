@@ -19,6 +19,8 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'scan', 'tools'))
 import scanlib  # noqa: E402
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'sites', 'tools'))
+import mecheck  # noqa: E402
 
 # ---- child kinds, mirroring the Lean interfaces exactly ----
 
@@ -146,8 +148,66 @@ def kind_of(typ, sched_str):
     raise ValueError('unsupported child type %s' % typ)
 
 
+# the gate's scan run (E2E_GATE=1, gate8/gatescan.sh) only: a child the emitter has no kind for gets a generic
+# kind from its dump schedule (every method and copy a port; copies of one method CF); a synthesized child's
+# action methods C with themselves, as generated modules export them; a user BVI import, an assumed BVI leaf,
+# its declared schedule (review r8-2 minor 3); Counter LastCaller's ctrAnn (minor 1); never used to emit a file
+GATE = os.environ.get('E2E_GATE') == '1'
+VLIB = '/home/ravi/bluespec/lean/bsc/src/Verilog'
+PRIMS = set(f[:-2] for f in os.listdir(VLIB) if f.endswith('.v')) if os.path.isdir(VLIB) else set()
+# LastCaller.ctrAnn (Ravi's decision, bug counter): addA C addA, addB C addB, setC SB the adds; value SB every
+# action, every action SBR setF; setC CF setC, addA CF addB, value CF value
+CTR_SCHED = [(['value'], 'SB', ['addA', 'addB', 'setC', 'setF']), (['setC'], 'SB', ['addA', 'addB']),
+             (['addA', 'addB', 'setC', 'setF'], 'SBR', ['setF']), (['addA'], 'C', ['addA']), (['addB'], 'C', ['addB']),
+             (['value'], 'CF', ['value']), (['addA'], 'CF', ['addB']), (['addB'], 'CF', ['addA']),
+             (['setC'], 'CF', ['setC'])]
+
+
+def generic_kind(name, typ, sl, meths, synth, lib=True):
+    """meths: [(port name, base method, kind 'value'/'action'/'actionvalue', hasarg)]; synth: a synthesized
+    module (else a library primitive or a user BVI import, whose declared schedule is taken); lib: a bsc library
+    primitive (only then does the Verilog name choose a corrected schedule: Counter's ctrAnn)."""
+    ports = [p for p, _, _, _ in meths]
+    base = {p: b for p, b, _, _ in meths}
+    kind = {p: k for p, _, k, _ in meths}
+    harg = {p: h for p, _, _, h in meths}
+    if typ == 'Counter' and lib and not synth:
+        sl = CTR_SCHED
+    rel = lambda a, b: sched_rel(sl, a, b)
+    act = lambda p: kind[p] != 'value'
+
+    def prec(p, q):
+        return p != q and base[p] != base[q] and rel(base[p], base[q]) in ('SB', 'SBR')
+
+    def sbr(p, q):
+        if base[p] == base[q] and (p != q or (synth and act(p))):
+            return p == q and not synth and rel(base[p], base[q]) == 'SBR'
+        return rel(base[p], base[q]) == 'SBR'
+
+    def conf(p, q):
+        if base[p] == base[q] and p != q:
+            return False
+        if p == q and synth and act(p):
+            return True
+        a, b = rel(base[p], base[q]), rel(base[q], base[p])
+        return a == 'C' or b == 'C' or (a is None and b is None)
+    return KindDef(name, None, None, ports, None, prec, sbr, conf, lambda m: not act(m), act, lambda m: True,
+                   [], None, None, False, hasarg=lambda p: harg[p])
+
+
 LIT = re.compile(r"^\d+'[dbh][0-9a-fA-F]+$")
+# system tasks that return nothing: the only task calls a method may make (they are left out, bsc G0020);
+# anything else ($time, $random, $test$plusargs, a BDPI function, ...) stops the emitter
+NOVALUE_TASKS = {'$' + t + sfx for t in ('display', 'write', 'fdisplay', 'fwrite') for sfx in ('', 'b', 'h', 'o')} | {
+    '$finish', '$stop', '$fflush', '$fclose', '$dumpvars', '$dumpon', '$dumpoff', '$dumpfile', '$dumpall',
+    '$dumpflush', '$error', '$warning', '$info', '$fatal', '_finish_', '_stop_'}
 TASKS = os.environ.get('E2E_TASKS', '1') == '1'
+
+
+def me_line(c):
+    """A mutually_exclusive check line, read by its structure (mecheck: `A && B`, each side one WILL_FIRE or a
+    parenthesised `||`; any other line of WILL_FIRE signals raises)."""
+    return mecheck.me_parse(c) is not None
 
 
 def port_meth(m):
@@ -162,6 +222,9 @@ class Model:
         self.cs = csites or {}
         rules = [s for s in D.steps if s['kind'] != 'method']
         meths = [s for s in D.steps if s['kind'] == 'method']
+        # trust point 3 (soundness review r8b-1 M1): the check lines, read by structure, assert exactly the
+        # dumper's mutually_exclusive pairs (the shadow tool reads the same lines through mecheck)
+        mecheck.same_pairs([c for s in D.steps for c in s['checks'] if me_line(c)], D.info.get('me', []))
         if nsteps is not None:
             real = [s for s in rules if not s['checks']][:nsteps]
             keep = set(s['name'] for s in real)
@@ -175,6 +238,18 @@ class Model:
                         sel.append(s)
             rules = sel
             meths = []
+        self.step_fallback = []
+        # user assertions (Ravi's decision): bsc's run-time checks, each an explicit hypothesis of the module's
+        # theorem (asm).  A mutually_exclusive check line reads only WILL_FIRE signals (a rule exclusion; a check
+        # step may carry several lines); any other line is a conflict_free check, a site-level assertion
+        # `!(WILL_FIRE_R && line)` in rule R, which the gate's solver calls assume (cf_checks)
+        self.cf_checks = []
+        for i_, s_ in enumerate(rules):
+            if s_['checks']:
+                me_ = [c for c in s_['checks'] if me_line(c)]
+                self.cf_checks += [(s_['name'], c) for c in s_['checks'] if not me_line(c)]
+                if len(me_) != len(s_['checks']):
+                    rules[i_] = dict(s_, checks=me_)
         self.steps = rules
         self.msteps = meths
         self.nR = len(rules)
@@ -199,17 +274,46 @@ class Model:
                 used.add(k)
         self.inst = {}
         self.byk = {k: [] for k in KIND_ORDER}
+        self.gen = {}                # the gate's scan run: (type, schedule) -> generic kind name
+        self.gcls = {}               # generic kind -> 'synth', 'bvi' (a user BVI import) or 'lib' (a bsc library primitive)
+        gports = {}
+        for k in D.kidorder:
+            if k in used:
+                for m_, pm_ in D.ports[k].items():
+                    cps_ = [c for c in pm_.get('copies', []) if c != '-']
+                    for p_ in (['%s[%s]' % (m_, c) for c in cps_] if cps_ else [m_]):
+                        gports.setdefault((D.kids[k][0], D.kids[k][1]), {}).setdefault(p_, (m_, pm_['kind'], pm_['hasarg']))
+        for s_ in rules + meths:
+            for (k, m, _) in s_['reads']:
+                gports.setdefault((D.kids[k][0], D.kids[k][1]), {}).setdefault(
+                    m, (port_meth(m)[0], 'value', D.ports[k].get(port_meth(m)[0], {}).get('hasarg', False)))
         for k in D.kidorder:
             if k not in used:
                 continue
             typ, ss, sl = D.kids[k]
-            kd = kind_of(typ, ss)
+            try:
+                if k in D.synth or k in D.bvi:   # a library model is chosen only for a bsc library primitive
+                    raise ValueError('child %s (%s) is %s' % (k, typ, 'synthesized' if k in D.synth else 'a user BVI import'))
+                kd = kind_of(typ, ss)
+            except ValueError:
+                if not GATE:
+                    raise
+                if (typ, ss) not in self.gen:
+                    gk = 'g%d' % len(self.gen)
+                    self.gen[(typ, ss)] = gk
+                    self.byk[gk] = []
+                    self.gcls[gk] = 'synth' if k in D.synth else ('bvi' if k in D.bvi else 'lib')
+                    self.K[gk] = generic_kind(gk, typ, sl, [(p_, b_, k_, h_) for p_, (b_, k_, h_) in gports[(typ, ss)].items()],
+                                              self.gcls[gk] == 'synth', self.gcls[gk] == 'lib')
+                kd = self.gen[(typ, ss)]
+                assert (self.gcls[kd] == 'synth') == (k in D.synth), 'a type both synthesized and not: %s' % typ
             if kd == 'fifo':
                 assert sl == self.fifo_sched, 'FIFOL1 schedules differ'
             if kd == 'cfg':
                 assert sl == self.cfg_sched, 'ConfigRegN schedules differ'
-            if kd in ('f2', 'sf'):
-                assert D.A is None or D.A.guarded.get(k, True), 'unguarded FIFO %s' % k
+            if kd in ('f2', 'sf') and not (D.A is None or D.A.guarded.get(k, True)):
+                assert GATE, 'unguarded FIFO %s' % k
+                self.unguarded = getattr(self, 'unguarded', []) + [k]
             self.inst[k] = (kd, len(self.byk[kd]))
             self.byk[kd].append(k)
         self.lits, self.ops_f, self.ops_g = {}, {}, {}
@@ -218,9 +322,9 @@ class Model:
         self.fan_outside = 0       # R literal reads that are not read sites of the step
         self.rules = []            # every step: rules then methods (table index = position)
         for s in rules:
-            self.rules.append(self._step(s, None))
+            self.rules.append(self._gstep(s, None))
         for s in meths:
-            self.rules.append(self._step(s, s['name']))
+            self.rules.append(self._gstep(s, s['name']))
         self.nS = len(self.rules)
         self._checks()
         self.tasks_on = TASKS
@@ -232,7 +336,8 @@ class Model:
             self.K['tasks'] = KindDef('tasks', 'Tasks.X nT', 'Fin nT', tp, None, lambda p, q: p < q,
                                       lambda p, q: False, lambda p, q: p == q, lambda m: False, lambda m: True,
                                       lambda m: True, [], None, None, True, hasarg=lambda p: True)
-        self.kinds = [k for k in KIND_ORDER if self.byk[k]]
+        self.kinds = [k for k in KIND_ORDER[:-1] + sorted(self.gen.values(), key=lambda g: int(g[1:])) + ['tasks']
+                      if self.byk.get(k)]
         self.kn = {k: i for i, k in enumerate(self.kinds)}
         self.off = {}
         o = 0
@@ -246,6 +351,8 @@ class Model:
     # ---- ports ----
     def port(self, child, meth):
         kd, i = self.inst[child]
+        if kd in self.K and kd.startswith('g'):
+            return (kd, i, meth)       # the gate's generic kind: every copy its own port
         m, c = port_meth(meth)
         if kd == 'rf' and m == 'sub':
             m = 's%d' % (c or 0)
@@ -330,6 +437,27 @@ class Model:
         e = (('g', self.gid(name), self._fan(st, fan, what)) if boolean else
              ('f', self.fid(name), self._fan(st, fan, what)))
         return self._wrap(st, e, boolean, name)
+
+    def _gstep(self, s, meth):
+        """_step; in the gate's scan run, a step the site builder cannot build (a fan-in through a call
+        with arguments, an (a) condition over a conditional read) gets its footprint only: every read in
+        dump order, then every call, as the emitter's own sites would list the same ports."""
+        if not GATE:
+            return self._step(s, meth)
+        try:
+            return self._step(s, meth)
+        except (AssertionError, ValueError, KeyError) as ex:
+            self.step_fallback.append('%s: %s' % (s['name'], str(ex)[:80]))
+            st = dict(name=s['name'], meth=meth, sites=[], readpos={}, checks=s['checks'], guard=('true',), tasks=[],
+                      res=('z',), fallback=True)
+            for (c, m, _) in s['reads']:
+                st['readpos'][(c, m)] = len(st['sites'])
+                st['sites'].append(dict(kind='read', port=self.port(c, m), label='%s.%s' % (c, m), arg=('z',),
+                                        cond=('true',), port_name=(c, m)))
+            for (c, m, cond, a) in s['calls']:
+                st['sites'].append(dict(kind='call', port=self.port(c, m), label='%s.%s' % (c, m), arg=('z',),
+                                        cond=('true',)))
+            return st
 
     # ---- one step as a site list ----
     def _step(self, s, meth):
@@ -575,15 +703,27 @@ class Model:
         for k, r in enumerate(self.rules):
             if not r['checks']:
                 continue
-            assert len(r['checks']) == 1
-            names = re.findall(r'WILL_FIRE_(\S+?)(?=[\s)&|]|$)', r['checks'][0])
-            hd, rest = names[0], names[1:]
-            if hd not in self.ri:
-                r['guard'] = ('false',)
-                continue
-            rest = [x for x in rest if x in self.ri]
-            r['guard'] = ('check', len(self.checks))
-            self.checks.append(dict(rule=k, head=self.ri[hd], lst=[self.ri[x] for x in rest]))
+            # several lines in one check step: the gate's scan run only (the emitter states one check per step)
+            assert GATE or len(r['checks']) == 1, 'a check step with %d check lines' % len(r['checks'])
+            first = True
+            for line in r['checks']:
+                # by structure (soundness review r8b-1 M1): `(OR as) && (OR bs)` excludes as x bs, nothing within a
+                # side; it is exactly the |as| checks (a, bs), one per a.  A file states one check per step, so it
+                # takes |as| = 1 (a multi-rule side stops the emitter); the gate's scan takes every (a, bs)
+                as_, bs_ = mecheck.me_parse(line)
+                assert GATE or len(as_) == 1, 'a mutually_exclusive check with %d rules on its first side (%s): ' \
+                    'not emitted yet' % (len(as_), line[:80])
+                for hd in as_:
+                    if hd not in self.ri:
+                        if first:
+                            r['guard'] = ('false',)
+                        continue
+                    rest = [x for x in bs_ if x in self.ri]
+                    if first:
+                        r['guard'] = ('check', len(self.checks))
+                    first = False
+                    self.checks.append(dict(rule=k, head=self.ri[hd], lst=[self.ri[x] for x in rest], line=line,
+                                            full=len(as_) == 1 and len(rest) == len(bs_)))
         # urgency: rule -> its blockers
         self.blk = {}
         for a, b in self.D.info.get('urg', []):
@@ -595,9 +735,22 @@ class Model:
         D = self.D
         self.nT = 0
         self.tstart = []
+        self.mtasks = []   # (method, task calls in its body): left out of task agreement (bsc G0020)
         for k, r in enumerate(self.rules):
             self.tstart.append(self.nT)
-            if not self.tasks_on or r['meth'] is not None or D.A is None:
+            if not self.tasks_on or D.A is None:
+                continue
+            if r['meth'] is not None:
+                # a method's task calls are not statements (Ravi: no guarantee for system functions in methods)
+                ts_ = [a for a in D.A.rules.get(r['name'], (None, []))[1] if a and a[0] == 'task']
+                n_ = len(ts_)
+                # a dropped call must return nothing: a value it returns would have no counterpart in the model
+                for a in ts_:
+                    if a[1].rsplit('.', 1)[-1] not in NOVALUE_TASKS:
+                        raise ValueError('method %s: task call %s may return a value (not modelled once left out)'
+                                         % (r['meth'], a[1]))
+                if n_:
+                    self.mtasks.append((r['meth'], n_))
                 continue
             pred, acts = D.A.rules.get(r['name'], (None, []))
             for a in acts:
@@ -605,16 +758,24 @@ class Model:
                     continue
                 t = self.nT
                 self.nT += 1
-                if r['checks']:
-                    cond, hw = ('true',), ('chk',)
-                elif a[2] is None:
+                try:
+                    if r['checks']:
+                        cond, hw = ('true',), ('chk',)
+                    elif a[2] is None:
+                        cond = hw = ('true',)
+                    else:
+                        cond = self.expr_ast(r, a[2], 'tcond_%d' % t, 'task condition', True)
+                        if cond[0] == 'gk':
+                            cond = ('g', cond[1], [])
+                        hw = cond
+                    args = [self.expr_ast(r, x, 'targ_%d_%d' % (t, q), 'task argument') for q, x in enumerate(a[3])]
+                except AssertionError as ex:
+                    if not GATE:
+                        raise
+                    # the gate's scan run: the statement's footprint (its chain slot) is all the scan reads
+                    self.step_fallback.append('%s task %d: %s' % (r['name'], t, str(ex)[:80]))
                     cond = hw = ('true',)
-                else:
-                    cond = self.expr_ast(r, a[2], 'tcond_%d' % t, 'task condition', True)
-                    if cond[0] == 'gk':
-                        cond = ('g', cond[1], [])
-                    hw = cond
-                args = [self.expr_ast(r, x, 'targ_%d_%d' % (t, q), 'task argument') for q, x in enumerate(a[3])]
+                    args = []
                 r['tasks'].append(t)
                 r['sites'].append(dict(kind='task', port=('tasks', 0, t), cond=cond, hw=hw, args=args, arg=('tup',)))
         self.tstart.append(self.nT)

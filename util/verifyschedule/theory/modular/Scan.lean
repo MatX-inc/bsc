@@ -1988,6 +1988,39 @@ theorem okT_except_fn {V : Type} (P : Parent V) (okP : (j : P.I) → (P.CI j).M 
   · have hm := List.contains_iff_mem.mp (List.all_eq_true.mp h' i2 hi2)
     exact (Emit.AllL.mem hbad _ hm hc1 hc2).elim
 
+/-- `okT_except_fn` with the bad pairs keyed by first-step site (`badT`, leaves `(i, i2s)`), each
+    site's partners checked in one pass (`subS`): linear in the facts (cost review r8-2 M1). -/
+theorem okT_except_fnS {V : Type} (P : Parent V) (okP : (j : P.I) → (P.CI j).M → (P.CI j).M → Bool)
+    (hok : ∀ j (a b : (P.CI j).M × V), okP j a.1 b.1 = true → (P.CI j).ann.Follow a b)
+    (ports : (j : P.I) → List (P.CI j).M) (hp : ∀ j m, m ∈ ports j)
+    (ρ1 ρ2 : Nat → V) (site1 site2 : Nat → Site P.I (fun j => (P.CI j).M) V) (k1 k2 : Nat)
+    (key1 : Tab (Σ j, (P.CI j).M)) (key2 : Nat → Σ j, (P.CI j).M)
+    (hkey1 : ∀ i, (⟨(site1 i).j, (site1 i).m⟩ : Σ j, (P.CI j).M) = key1.get i)
+    (hkey2 : ∀ i, (⟨(site2 i).j, (site2 i).m⟩ : Σ j, (P.CI j).M) = key2 i)
+    (idx2 : (Σ j, (P.CI j).M) → List Nat) (hchk2 : ∀ i, i < k2 → i ∈ idx2 (key2 i))
+    (badT : Tab (Nat × List Nat))
+    (hc : Emit.Tab.allB (fun i p => (ports p.1).all (fun b => okP p.1 p.2 b ||
+      Emit.subS (idx2 ⟨p.1, b⟩) (Emit.idxT badT i))) key1 0 k1 = true)
+    (hbad : Emit.Tab.All (fun e : Nat × List Nat =>
+      Emit.AllL (fun i2 => (site1 e.1).cond ρ1 = true → (site2 i2).cond ρ2 = true → False) e.2) badT) :
+    OkT P (callsOf ρ1 (Emit.sitesF site1 k1)) (callsOf ρ2 (Emit.sitesF site2 k2)) := by
+  intro j ⟨a1, a2⟩ ha b hb
+  obtain ⟨s, hs, hc1, -⟩ := mem_proj_callsOf (I := P.I) (CM := fun j => (P.CI j).M) ρ1 j a1 a2 (Emit.sitesF site1 k1) ha
+  rw [List.mem_filter] at hs
+  obtain ⟨i1, hi1, rfl⟩ := Emit.mem_sitesF hs.1
+  have e1 : key1.get i1 = ⟨j, a1⟩ := (hkey1 i1).symm.trans ((Emit.onPort_iff (I := P.I) (CM := fun j => (P.CI j).M) (V := V) j a1 _).mp hs.2)
+  obtain ⟨i2, hi2, hc2, -⟩ := Emit.mem_proj_fn (I := P.I) (CM := fun j => (P.CI j).M) ρ2 site2 k2 key2 hkey2 idx2 hchk2 j b.1 b.2 hb
+  have h := Emit.Tab.allB_spec _ key1 0 k1 hc i1 (Nat.zero_le _) hi1
+  rw [e1] at h
+  have h' := List.all_eq_true.mp h b.1 (hp j b.1)
+  rw [Bool.or_eq_true] at h'
+  rcases h' with h' | h'
+  · exact hok j (a1, a2) b h'
+  · obtain ⟨e, he, ek, hm⟩ := Emit.mem_idxT (Emit.subS_mem _ _ h' i2 hi2)
+    have hf := Emit.AllL.mem (Emit.Tab.all_mem hbad e he) i2 hm
+    rw [ek] at hf
+    exact (hf hc1 hc2).elim
+
 end SitesGlue
 
 /-! ## Glue for generated modules: enables over users, muxes, exclusions -/
@@ -2227,6 +2260,25 @@ theorem amoChain_of_cover_grp (f : Nat → Bool) (ms : Tab (Nat × Nat)) (ks gs 
   exact amoChain_of_pairwise f _ (fun _ _ h => h) _ false (List.pairwise_append.mpr ⟨hp1, hp2, hx⟩)
     (fun h => by cases h)
 
+/-- **A mux whose selectors imply members' `WILL_FIRE`** (conditional users): at-most-one passes to
+    smaller selectors, position by position (cost review r7-2 minor 4). -/
+theorem amoChain_le_range (F G : Nat → Bool) : ∀ (n s : Nat) (a1 a2 : Bool), (a1 = true → a2 = true) →
+    (∀ t, s ≤ t → t < s + n → F t = true → G t = true) →
+    amoChain a2 ((List.range' s n).map G) → amoChain a1 ((List.range' s n).map F)
+  | 0, _, _, _, _, _, _ => trivial
+  | n + 1, s, a1, a2, ha, h, hc => by
+    rw [List.range'_succ, List.map_cons] at hc ⊢
+    obtain ⟨h1, h2⟩ := hc
+    have hs := h s (Nat.le_refl _) (by omega)
+    refine ⟨?_, amoChain_le_range F G n (s + 1) (a1 || F s) (a2 || G s) ?_
+      (fun t ht1 ht2 => h t (by omega) (by omega)) h2⟩
+    · cases a1 <;> cases hF : F s <;> simp_all
+    · intro hh
+      simp only [Bool.or_eq_true] at hh ⊢
+      rcases hh with hh | hh
+      · exact .inl (ha hh)
+      · exact .inr (hs hh)
+
 /-- **Selection of a mux entry by table position** (the mux list is a table read over `range'`;
     the entry is a lookup, not a list walk). -/
 theorem arg_muxT {u p : Nat} {G : Nat → Bool × V} (d : V) (h : amoChain false (((List.range' 0 u).map G).map Prod.fst))
@@ -2293,6 +2345,52 @@ theorem exR_of_chains (P : Parent V) {D : Design} (G : Glue P D)
   exact amoChain_excl (fun i => fire oc w (G.ruleAt i)) (memT.get g) false hch' _ hx _ hy hne
     (by simp only [rk_at]; exact f1) (by simp only [rk_at]; exact f2)
 
+/-- `exR_of_chains` with each group's code mask stated once (`cmT`): membership and the exception
+    masks are decided per rule against the mask, linear in the groups (cost review r7-2 M2). -/
+theorem exR_of_cmask (P : Parent V) {D : Design} (G : Glue P D)
+    (fire : ((j : P.I) → Outs (P.CI j).M V) → Wires P.X.M V → P.PR → Bool)
+    (rk_lt : ∀ r, G.rk r < D.nR) (rk_at : ∀ r, G.ruleAt (G.rk r) = r) (memT gidT : Tab (List Nat))
+    (cmT : Tab Nat) (ng : Nat)
+    (hch : Emit.Tab.AllR (fun _ l => ∀ oc w, Env P oc w → amoChain false (l.map (fun i => fire oc w (G.ruleAt i))))
+      memT 0 ng)
+    (hcm : ∀ g, g < ng → cmT.get g = bits ((memT.get g).map D.rc))
+    (hg : ∀ x, x < D.nR → ∀ g ∈ gidT.get x, g < ng ∧ (cmT.get g).testBit (D.rc x) = true)
+    (hinj : ∀ g, g < ng → ∀ x ∈ memT.get g, ∀ x1, x1 < D.nR → D.rc x1 = D.rc x → x1 = x)
+    (hT : ∀ y, y < D.nR → Sub (D.exR.get y) (orMask (gidT.get y) cmT.get)) :
+    ∀ oc w r1 r2, Env P oc w → (D.exR.get (G.rk r2)).testBit (D.rc (G.rk r1)) = true →
+      fire oc w r1 = true → fire oc w r2 = true → G.rk r1 = G.rk r2 := by
+  intro oc w r1 r2 hE hb f1 f2
+  obtain ⟨g, hgy, hgx⟩ := testBit_orMask (hT _ (rk_lt r2) _ hb)
+  obtain ⟨hng, hy⟩ := hg _ (rk_lt r2) g hgy
+  rw [hcm g hng] at hgx hy
+  obtain ⟨x, hx, e⟩ := mem_of_testBit_bits_map hgx
+  have e1 := hinj g hng x hx _ (rk_lt r1) e.symm
+  rw [← e1] at hx
+  obtain ⟨y, hy', e'⟩ := mem_of_testBit_bits_map hy
+  have e2 := hinj g hng y hy' _ (rk_lt r2) e'.symm
+  rw [← e2] at hy'
+  have hch' := Emit.Tab.get_allR _ 0 ng hch g (Nat.zero_le _) hng oc w hE
+  apply Classical.byContradiction
+  intro hne
+  exact amoChain_excl (fun i => fire oc w (G.ruleAt i)) (memT.get g) false hch' _ hx _ hy' hne
+    (by simp only [rk_at]; exact f1) (by simp only [rk_at]; exact f2)
+
+/-- `exR_of_cmask`'s masks from one decided pass over the groups. -/
+theorem cm_of_check (memT : Tab (List Nat)) (cmT : Tab Nat) (rc : Nat → Nat) (ng : Nat)
+    (h : Emit.Tab.allB (fun g l => Nat.beq (cmT.get g) (bits (l.map rc))) memT 0 ng = true) :
+    ∀ g, g < ng → cmT.get g = bits ((memT.get g).map rc) := fun g hg =>
+  Nat.eq_of_beq_eq_true (Emit.Tab.allB_spec _ memT 0 ng h g (Nat.zero_le _) hg)
+
+/-- `exR_of_cmask`'s memberships from one decided pass over the rules, each a mask lookup. -/
+theorem gid_of_check (gidT : Tab (List Nat)) (cmT : Tab Nat) (rc : Nat → Nat) (nR ng : Nat)
+    (h : Emit.Tab.allB (fun x l => l.all (fun g =>
+      Nat.blt g ng && Nat.beq (Nat.land (Nat.shiftRight (cmT.get g) (rc x)) 1) 1)) gidT 0 nR = true) :
+    ∀ x, x < nR → ∀ g ∈ gidT.get x, g < ng ∧ (cmT.get g).testBit (rc x) = true := by
+  intro x hx g hg
+  have h1 := List.all_eq_true.mp (Emit.Tab.allB_spec _ gidT 0 nR h x (Nat.zero_le _) hx) g hg
+  rw [Bool.and_eq_true, tb_eq] at h1
+  exact ⟨Nat.blt_eq.mp h1.1, h1.2⟩
+
 end GenGlue
 
 end Scan
@@ -2333,5 +2431,10 @@ end Modular
 #print axioms Modular.Scan.sufAsm_excl
 #print axioms Modular.Scan.arg_muxT
 #print axioms Modular.Scan.okT_except_fn
+#print axioms Modular.Scan.okT_except_fnS
 #print axioms Modular.Scan.rc_inj
 #print axioms Modular.Scan.chains_inj
+#print axioms Modular.Scan.exR_of_cmask
+#print axioms Modular.Scan.cm_of_check
+#print axioms Modular.Scan.gid_of_check
+#print axioms Modular.Scan.amoChain_le_range
