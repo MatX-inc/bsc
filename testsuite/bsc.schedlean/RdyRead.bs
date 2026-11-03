@@ -1,0 +1,18 @@
+package RdyRead where
+
+import FIFO
+
+-- A FIFO read under a condition that is not one literal (-no-aggressive-conditions): a clean stop.
+{-# verilog mkRdyRead #-}
+mkRdyRead :: Module Empty
+mkRdyRead = module
+  st :: Reg (Bit 3) <- mkReg 0
+  r0 :: Reg (Bit 8) <- mkReg 0
+  q0 :: FIFO (Bit 8) <- mkFIFO
+  rules
+    "take": when True ==> action
+      if (st == 2) || (st == 0) then r0 := q0.first else noAction
+      st := 0
+    "fill": when st /= 2 ==> action
+      q0.enq (zeroExtend st)
+      if st == 1 then q0.deq else noAction

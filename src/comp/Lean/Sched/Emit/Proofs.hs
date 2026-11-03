@@ -44,7 +44,7 @@ evNeeds ec = (S.union ev0 ev1, evc, evs)
     (ev1, evs) = mconcat [ one k i | (k, i) <- S.toList evc ]
     one k i =
         let s = site ec k i
-            MG _ js = fromMaybe (MG 0 []) (sR s)
+            js = snd (gOf (sR s))
             y = yof ec k i
             condReads c = case c of
                 MLit j -> S.singleton (k, j)
@@ -52,6 +52,13 @@ evNeeds ec = (S.union ev0 ev1, evc, evs)
                 _ -> S.empty
             parts = [ if j `elem` y then (condReads (sCond (site ec k j)), S.singleton (k, j)) else (S.singleton (k, j), S.empty) | j <- js ]
         in mconcat (parts ++ [(condReads (sCond s), S.empty)])
+
+-- | A site's R (absent: no reads).
+gOf :: Maybe MX -> (Int, [Int])
+gOf r = case r of
+    Nothing -> (0, [])
+    Just (MG n js) -> (n, js)
+    Just e -> error ("schedlean: R is not a G: " ++ mxRepr e)
 
 rcong :: MX -> String
 rcong e = case e of
@@ -65,7 +72,7 @@ rcongK :: EC -> Int -> MX -> String
 rcongK ec k e = case e of
     MSplit is a b ->
         let rs = andc [ "congrArg (ops.g " ++ show n ++ ") (" ++ tupcong [ "h " ++ show j ++ " (by decide)" | j <- js ] ++ ")"
-                      | i <- is, let MG n js = fromMaybe (MG 0 []) (sR (site ec k i)) ]
+                      | i <- is, let (n, js) = gOf (sR (site ec k i)) ]
         in "cond_congr (" ++ rs ++ ") (" ++ rcongK ec k a ++ ") (" ++ rcongK ec k b ++ ")"
     _ -> rcong e
 
@@ -243,7 +250,9 @@ emitRY ec needuc = do
             | not (rdyG (sPort st)) = "fun _ _ _ _ _ _ ha => absurd ha (by decide)"
             | isUncond st = fmt "fun oc v x _ hf _ ha => rd_at (%s) %d (by decide) ha (by decide)" [hrd, show i]
             | sKind st == "read" =
-                let MLit lsite = sCond st
+                let lsite = case sCond st of
+                        MLit j -> j
+                        _ -> error ("schedlean: a ready-guarded read in step " ++ show k ++ " under a condition that is not one literal (not emitted yet)")
                     (kk, ii, mm) = sPort st
                     (lk, _, lm) = sitePort ec k lsite
                 in fmt "fun oc v x hal hf hc ha => ((hal (%s %d)).2 %s %s rfl).trans ((congrArg ops.toB (%s)).symm.trans hc)"

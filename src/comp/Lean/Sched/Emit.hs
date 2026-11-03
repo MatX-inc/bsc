@@ -4,12 +4,12 @@ module Lean.Sched.Emit
     ( emitFile, Emitted(..), emitModule
     ) where
 
-import Control.Exception (ErrorCall(..), evaluate, try)
+import Control.Exception (ErrorCall(..), SomeAsyncException, displayException, evaluate, fromException, throwIO, try)
 import Data.Array ((!), listArray)
 import Data.Bits (Bits(popCount))
 import Data.Char (ord, isAlphaNum)
 import Data.List (isPrefixOf, intercalate)
-import Data.Maybe (isNothing)
+import Data.Maybe (fromMaybe, isNothing)
 import System.FilePath (takeBaseName)
 import qualified Data.Foldable as F (Foldable(toList))
 import qualified Data.Map.Strict as M (Map, lookup)
@@ -40,6 +40,16 @@ data Emitted = Emitted { emParts :: [(Maybe Int, String)], emLog :: [String] }
 -- file's parts in memory (Left: the stop message).  @tasks@ and @firstRules@ are measurement options.
 emitModule :: Input -> Bool -> Maybe Int -> FilePath -> IO (Either String Emitted)
 emitModule inp tasks firstRules file = do
+    r <- try (emitModule' inp tasks firstRules file)
+    case r of
+        -- any exception (an error call, a failed pattern) is a stop; interrupts and overflows propagate
+        Left e | Just a <- fromException e -> throwIO (a :: SomeAsyncException)
+               | otherwise -> return (Left (dropPrefix "schedlean: " (maybe (displayException e) (\(ErrorCall m) -> m) (fromException e))))
+        Right x -> return x
+  where dropPrefix pre s = if take (length pre) s == pre then drop (length pre) s else s
+
+emitModule' :: Input -> Bool -> Maybe Int -> FilePath -> IO (Either String Emitted)
+emitModule' inp tasks firstRules file = do
     let t = inTimer inp
     r <- prepare inp
     case r of
@@ -56,12 +66,9 @@ emitModule inp tasks firstRules file = do
                         Left err -> return (Left err)
                         Right ec -> phase t "emit" $ do
                             let em = emitFile ec (inBounds inp) file
-                            -- the emitter's own stops (error calls) as stop messages
-                            x <- try (evaluate (sum (map (length . snd) (emParts em)) + length (concat (emLog em))))
-                            return $ case x of
-                                Left (ErrorCall msg) -> Left (dropPrefix "schedlean: " msg)
-                                Right _ -> Right em
-  where dropPrefix pre s = if take (length pre) s == pre then drop (length pre) s else s
+                            -- forced here, so the emitter's own stops are caught by emitModule
+                            _ <- evaluate (sum (map (length . snd) (emParts em)) + length (concat (emLog em)))
+                            return (Right em)
 
 -- | UTF-8 length of a string, as os.path.getsize counts it.
 utf8Len :: String -> Int
@@ -127,7 +134,7 @@ emitFile ec bnd out = Emitted files (notes ++ partsMsg ++ [segMsg, wroteMsg])
         (e, '.' : r) | '/' `notElem` e -> reverse r
         _ -> p
     hdr = let h = intercalate "\n" (take (hdrEnd + 1) ls)
-              Just ix = findIx "\nnoncomputable section\n" h
+              ix = fromMaybe (error "schedlean: the header has no noncomputable section") (findIx "\nnoncomputable section\n" h)
           in take (ix + length "\nnoncomputable section\n") h
     np = length parts
     body pi (a, b)

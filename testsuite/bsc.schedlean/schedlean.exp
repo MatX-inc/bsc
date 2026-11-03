@@ -35,10 +35,11 @@ if { $schedlean == "" } then {
     return
 }
 
-# designs written for schedlean (Classic): an inverted CF-swap fact, a run-time check joining two rules,
-# and a method's task call (bsc G0020) beside a rule's
-foreach {src mod} {InvFact.bs mkInvFact InvFact2.bs mkInvFact2 MeJoin.bs sysMeJoin MethTask.bs mkMethTask} {
-    compile_verilog_pass $src $mod "-elab"
+# designs written for schedlean (Classic): an inverted CF-swap fact, a run-time check joining two rules, a method's
+# task call (bsc G0020), a method writing its argument plus a read, a FIFO read under a non-literal condition (noagg)
+foreach {src mod opts} {InvFact.bs mkInvFact "" InvFact2.bs mkInvFact2 "" MeJoin.bs sysMeJoin "" MethTask.bs mkMethTask ""
+                        MethArg.bs mkMethArg "" RdyRead.bs mkRdyRead "-no-aggressive-conditions"} {
+    compile_verilog_pass $src $mod [string trim "-elab $opts"]
     schedlean_run "--gate $mod.ba" $mod.gate.out
     compare_file $mod.gate.out
 }
@@ -55,6 +56,14 @@ compare_file mkMethTask.emit.out
 compare_file MethTask.lean
 schedlean_run "-o SysMeJoin.lean sysMeJoin.ba" sysMeJoin.emit.out 1
 compare_file sysMeJoin.emit.out
+
+# a method's argument is one term where an ev_ lemma is applied to it; the read the emitter cannot state yet
+# is a clean stop
+schedlean_run "-o MethArg.lean mkMethArg.ba" mkMethArg.emit.out
+compare_file mkMethArg.emit.out
+compare_file MethArg.lean
+schedlean_run "-o RdyRead.lean mkRdyRead.ba" mkRdyRead.emit.out 1
+compare_file mkRdyRead.emit.out
 
 # linear cost (plan section 5.1): a step of n/4 sites in each of four rules; the emission phases'
 # CPU time at four times the size at most 2.5 squared times as much, and every phase at a 512k stack
@@ -81,4 +90,29 @@ if { $c1 == "" || $c4 == "" } then {
     pass "schedlean emission grows linearly ($c1 s at 512, $c4 s at 2048)"
 } else {
     fail "schedlean emission grows faster than linear ($c1 s at 512, $c4 s at 2048)"
+}
+
+# one synthesized child of n methods, its schedule relating n^2 method pairs: the facts phase's CPU time
+# at four times the methods at most 1.5 x 16 times as much
+proc schedlean_facts_cpu { log } {
+    set f [open $log r]
+    set cpu ""
+    while { [gets $f line] >= 0 } {
+        if { [regexp {^schedlean: phase facts wall [0-9.]+ cpu ([0-9.]+)} $line _ c] } then { set cpu $c }
+    }
+    close $f
+    return $cpu
+}
+foreach n {64 256} {
+    compile_verilog_pass Wide$n.bs sysWide$n "-elab"
+    schedlean_run "--gate --time-phases sysWide$n.ba +RTS -K512k -RTS" sysWide$n.gate.log
+}
+set w1 [schedlean_facts_cpu [file join $here $subdir sysWide64.gate.log]]
+set w4 [schedlean_facts_cpu [file join $here $subdir sysWide256.gate.log]]
+if { $w1 == "" || $w4 == "" } then {
+    fail "schedlean --time-phases gave no facts phase"
+} elseif { $w4 <= 24 * $w1 + 0.05 } then {
+    pass "schedlean facts phase grows with the child's method pairs ($w1 s at 64, $w4 s at 256)"
+} else {
+    fail "schedlean facts phase grows faster than the child's method pairs ($w1 s at 64, $w4 s at 256)"
 }

@@ -1,13 +1,15 @@
 -- | Child kinds as the modular file models them (model.py): the library
 -- primitives with Lean models, the assumed leaves, and the gate's generic kinds.
 module Lean.Sched.Kinds
-    ( PM(..), pmRepr, KindDef(..), kdCode, kdFx, Sched, schedRel, ofSched, makeKinds, kindOrder, kindOf
+    ( PM(..), pmRepr, KindDef(..), kdCode, kdFx, Sched, schedMap, schedRel, ofSched, makeKinds, kindOrder, kindOf
     , genericKind, ctrSched, noValueTasks, tasksKind, parseSched, schedNames, libSets, ifcTypes
     ) where
 
 import ASyntax (APackage(..), AVInst(..), AType(..))
 import Control.Exception (catch, IOException)
+import Data.Array.Unboxed (UArray, (!), accumArray, listArray)
 import Data.List (elemIndex, isInfixOf)
+import Data.Word (Word8)
 import Data.Maybe (fromMaybe)
 import Flags (Flags(..))
 import Id (getIdString)
@@ -15,8 +17,8 @@ import PPrint (ppString)
 import System.Directory (listDirectory)
 import System.Environment (lookupEnv)
 import System.FilePath ((</>))
-import qualified Data.Map.Strict as M (Map, (!), fromList)
-import qualified Data.Set as S (Set, fromList)
+import qualified Data.Map.Strict as M (Map, (!), findWithDefault, fromList, fromListWith, lookup, size)
+import qualified Data.Set as S (Set, fromList, toList)
 
 import Lean.Sched.Py (isPySpace, pyReprStr, pySplit, strip)
 
@@ -34,6 +36,8 @@ data KindDef = KindDef
     , kdPrec, kdSbr, kdConf :: PM -> PM -> Bool
     , kdShare, kdHasEn, kdAlwaysRdy, kdHasArg :: PM -> Bool
     , kdPaths :: [(PM, PM)], kdBuilder, kdUsesc :: Maybe String, kdLib :: Bool
+    , kdCodeRel :: Maybe (Int -> Int -> Bool, Int -> Int -> Bool, Int -> Int -> Bool)
+      -- ^ prec, sbr and conf over port codes, where a kind is large (the generic kinds)
     }
 
 kdCode :: KindDef -> PM -> Int
@@ -46,15 +50,18 @@ kdFx k p = kdShare k p && not (kdHasArg k p)
 -- | bsc's schedule statements, as design.parse_sched reads the printed annotation.
 type Sched = [([String], String, [String])]
 
-schedRel :: Sched -> String -> String -> Maybe String
-schedRel sl p q = case [ r | (ps, r, qs) <- sl, p `elem` ps, q `elem` qs ] of
-    (r : _) -> Just r
-    [] -> Nothing
+-- | Each related pair's relation, from the first statement naming it (built once per kind).
+schedMap :: Sched -> M.Map (String, String) String
+schedMap sl = M.fromListWith (\_ old -> old) [ ((p, q), r) | (ps, r, qs) <- sl, p <- ps, q <- qs ]
+
+schedRel :: M.Map (String, String) String -> String -> String -> Maybe String
+schedRel sm p q = M.lookup (p, q) sm
 
 ofSched :: Sched -> (PM -> PM -> Bool, PM -> PM -> Bool, PM -> PM -> Bool)
 ofSched sl = (prec, sbr, conf)
   where
-    rel (PS p) (PS q) = schedRel sl p q
+    sm = schedMap sl
+    rel (PS p) (PS q) = schedRel sm p q
     rel _ _ = Nothing
     prec p q = p /= q && rel p q `elem` [Just "SB", Just "SBR"]
     sbr p q = rel p q == Just "SBR"
@@ -101,7 +108,7 @@ mkKind :: String -> Maybe String -> Maybe String -> [PM] -> Maybe [String] -> (P
        -> (PM -> PM -> Bool) -> (PM -> Bool) -> (PM -> Bool) -> (PM -> Bool) -> [(PM, PM)] -> Maybe String -> Maybe String
        -> Bool -> Maybe (PM -> Bool) -> KindDef
 mkKind n i mt ps lps prec sbr conf share en rdy paths b u lib ha =
-    KindDef n i mt ps lps prec sbr conf share en rdy (fromMaybe dflt ha) paths b u lib
+    KindDef n i mt ps lps prec sbr conf share en rdy (fromMaybe dflt ha) paths b u lib Nothing
   where dflt p = en p && p `notElem` [PS "deq", PS "clear"]
 
 inS :: [String] -> PM -> Bool
@@ -194,31 +201,42 @@ ctrSched = [ (["value"], "SB", ["addA", "addB", "setC", "setF"]), (["setC"], "SB
 -- declared schedule; a synthesized child's action methods C with themselves.
 genericKind :: String -> String -> Sched -> [(String, String, String, Bool)] -> Bool -> Bool -> KindDef
 genericKind name typ sl0 meths synth lib =
-    mkKind name Nothing Nothing [ PS p | p <- ports ] Nothing prec sbr conf (not . act) act (const True) [] Nothing Nothing False
-           (Just (\(PS p) -> harg M.! p))
+    (mkKind name Nothing Nothing [ PS p | p <- ports ] Nothing prec sbr conf (not . act) act (const True) [] Nothing Nothing False
+            (Just hasArg)) { kdCodeRel = Just (precC, sbrC, confC) }
   where
     ports = [ p | (p, _, _, _) <- meths ]
-    base = M.fromList [ (p, b) | (p, b, _, _) <- meths ]
-    kind = M.fromList [ (p, k) | (p, _, k, _) <- meths ]
-    harg = M.fromList [ (p, h) | (p, _, _, h) <- meths ]
+    nP = length ports
     sl = if typ == "Counter" && lib && not synth then ctrSched else sl0
-    rel a b = schedRel sl a b
-    actS p = kind M.! p /= "value"
-    act (PS p) = actS p
+    -- ports and their methods by number, and the relation of each method pair (first statement wins)
+    portIx = M.fromList (zip ports [0 :: Int ..])
+    baseIx = M.fromList (zip (S.toList (S.fromList [ b | (_, b, _, _) <- meths ])) [0 :: Int ..])
+    nB = M.size baseIx
+    bOf = listArray (0, nP - 1) [ baseIx M.! b | (_, b, _, _) <- meths ] :: UArray Int Int
+    actA = listArray (0, nP - 1) [ k /= "value" | (_, _, k, _) <- meths ] :: UArray Int Bool
+    hargA = listArray (0, nP - 1) [ h | (_, _, _, h) <- meths ] :: UArray Int Bool
+    relA = accumArray (\old new -> if old == 0 then new else old) 0 (0, nB * nB - 1)
+               [ (a * nB + b, relCode r) | (ps, r, qs) <- sl, Just a <- map (`M.lookup` baseIx) ps
+                                         , Just b <- map (`M.lookup` baseIx) qs ] :: UArray Int Word8
+    relCode r = case r of { "CF" -> 1; "SB" -> 2; "SBR" -> 3; "C" -> 4; _ -> 5 } :: Word8
+    rel p q = relA ! (bOf ! p * nB + bOf ! q)
+    precC p q = p /= q && bOf ! p /= bOf ! q && rel p q `elem` [2, 3]
+    sbrC p q
+        | bOf ! p == bOf ! q && (p /= q || (synth && actA ! p)) = p == q && not synth && rel p q == 3
+        | otherwise = rel p q == 3
+    confC p q
+        | bOf ! p == bOf ! q && p /= q = False
+        | p == q && synth && actA ! p = True
+        | otherwise = let a = rel p q; b = rel q p in a == 4 || b == 4 || (a == 0 && b == 0)
+    ix p = M.findWithDefault (error ("schedlean: no port " ++ p ++ " in kind " ++ name)) p portIx
+    onPS f (PS p) (PS q) = f (ix p) (ix q)
+    onPS _ _ _ = False
+    prec = onPS precC
+    sbr = onPS sbrC
+    conf = onPS confC
+    act (PS p) = actA ! ix p
     act _ = False
-    bs p = base M.! p
-    prec (PS p) (PS q) = p /= q && bs p /= bs q && rel (bs p) (bs q) `elem` [Just "SB", Just "SBR"]
-    prec _ _ = False
-    sbr (PS p) (PS q)
-        | bs p == bs q && (p /= q || (synth && actS p)) = p == q && not synth && rel (bs p) (bs q) == Just "SBR"
-        | otherwise = rel (bs p) (bs q) == Just "SBR"
-    sbr _ _ = False
-    conf (PS p) (PS q)
-        | bs p == bs q && p /= q = False
-        | p == q && synth && actS p = True
-        | otherwise = let a = rel (bs p) (bs q); b = rel (bs q) (bs p)
-                      in a == Just "C" || b == Just "C" || (a == Nothing && b == Nothing)
-    conf _ _ = False
+    hasArg (PS p) = hargA ! ix p
+    hasArg _ = False
 
 -- | The task statements' kind: one port per statement, in rank order.
 tasksKind :: Int -> KindDef

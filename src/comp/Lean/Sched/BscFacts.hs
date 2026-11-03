@@ -1,6 +1,9 @@
 {-# LANGUAGE LambdaCase, MagicHash, BangPatterns, DeriveGeneric, DeriveAnyClass, StandaloneDeriving #-}
 -- | Disjointness facts bsc relied on but did not record, confirmed by its solver.
-module Lean.Sched.BscFacts where
+module Lean.Sched.BscFacts
+    ( DisjointFact(..), Chain(..), Candidate(..), BscLookup
+    , disjointCandidates, confirmDisjointnessMore, invertedFacts, newBscLookup, bscCovers, bscUseCond, bscUseGuard
+    ) where
 
 import ASyntax (aTBool, aTrue, ADef(ADef), AExpr(ASDef), APackage(apkg_state_instances))
 import ASyntaxUtil (aAnd, aOr, aOrs)
@@ -154,56 +157,6 @@ nubFacts = go M.empty
           where k = (dfStep1 f, dfStep2 f, dfWhy f)
                 old = M.findWithDefault [] k seen
 
-nubOn :: Ord k => (a -> k) -> [a] -> [a]
-nubOn f = go S.empty
-  where go _ [] = []
-        go seen (x : xs) | S.member (f x) seen = go seen xs
-                         | otherwise = x : go (S.insert (f x) seen) xs
-
--- | bsc's disjointness solver on each candidate, keeping the confirmed facts; a chain is
--- given as definitions, each the OR of the one before and one more member.
-confirmDisjointness :: ErrorHandle -> Flags -> APackage -> Design -> [Candidate] -> IO [DisjointFact]
-confirmDisjointness errh flags apkg d candidates =
-    case candidates of
-        [] -> return []
-        cands -> do
-            -- the definitions and rule predicates the scheduler gave it,
-            -- including the use conditions 'buildUseMaps' defines
-            let rules = [ (ruleName r, rulePred r, ruleAncestor r) | r <- scheduledRules apkg ]
-            st0 <- initDisjointTestState "schedlean" errh flags
-                       (M.elems (dSeqDefs d) ++ chainDefs) (apkg_state_instances apkg) rules
-            (_, kept) <- foldM check (st0, []) cands
-            return (reverse kept)
-  where
-    -- each chain once (by name, the longest: the later uses' chains extend
-    -- the earlier ones'), its prefixes as definitions
-    chains = map fst (M.elems (M.fromListWith (\new old -> if snd new > snd old then new else old)
-                                   [ (cnName c, (c, n)) | Chained (DisjointFact { dfChain = Just (c, n) }) _ <- candidates ]))
-    prefix = freePrefix "uses_upto_" (M.keys (dSeqDefs d))
-    prefixId c k = mk_homeless_id (prefix ++ show (chainIdx M.! cnName c) ++ "_" ++ show k)
-    chainIdx = M.fromList (zip (map cnName chains) [0 :: Int ..])
-    chainDefs = concat [ [ ADef (prefixId c k) aTBool (if k == 1 then e else aOr (ASDef aTBool (prefixId c (k - 1))) e) []
-                         | (k, (_, e)) <- zip [1 :: Int ..] (cnMembers c) ]
-                       | c <- chains ]
-    ask st f = do
-        let lhs = case dfChain f of
-                Just (c, k) -> ASDef aTBool (prefixId c k)
-                Nothing     -> dfCond1 f
-        (res, st') <- checkDisjointExprWithCtx st aTrue aTrue lhs (dfCond2 f)
-        return (res == Just True, st')
-    check (st, kept) cand = case cand of
-        Single f -> do
-            (ok, st') <- ask st f
-            return (st', if ok then f : kept else kept)
-        Chained f fbs -> do
-            (ok, st') <- ask st f
-            if ok then return (st', f : kept)
-            else foldM askOne (st', kept) fbs
-    askOne (s1, ks) g = do
-        (ok', s2) <- ask s1 g
-        return (s2, if ok' then g : ks else ks)
-
-
 deriving instance Generic DisjointFact
 instance NFData DisjointFact
 deriving instance Generic Chain
@@ -213,7 +166,8 @@ instance NFData Candidate
 
 -- ---------------------------------------------------------------- the modular path
 
--- | 'confirmDisjointness', also returning a way to ask more facts of the same state.
+-- | bsc's disjointness solver on each candidate, keeping the confirmed facts (a chain is given as
+-- definitions, each the OR of the one before and one more member), and a way to ask more of it.
 confirmDisjointnessMore :: ErrorHandle -> Flags -> APackage -> Design -> [Candidate]
                         -> IO ([DisjointFact], [DisjointFact] -> IO [DisjointFact])
 confirmDisjointnessMore errh flags apkg d candidates = do

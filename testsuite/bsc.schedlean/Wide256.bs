@@ -1,0 +1,13 @@
+package Wide256(sysWide256, mkWideKid256) where
+
+import Vector
+import Wide
+
+{-# verilog mkWideKid256 #-}
+{-# properties mkWideKid256 = { alwaysReady } #-}
+mkWideKid256 :: Module (WideIfc 256)
+mkWideKid256 = mkWideKid
+
+{-# verilog sysWide256 #-}
+sysWide256 :: Module Empty
+sysWide256 = mkWideTop mkWideKid256

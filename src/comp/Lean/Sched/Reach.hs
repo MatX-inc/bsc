@@ -29,10 +29,11 @@ litExprs (LEq a b) = [a, b]
 data RC = RC { rcSD :: SD, rcTargets :: S.Set Port2, rcSeq :: Bool }
 
 -- | The formulas, the literals by key (the first expressions seen), and R per definition.
-data RS = RS { rsFS :: !FS, rsLit :: !(M.Map LitKey Lit), rsMemo :: !(M.Map String (M.Map Port2 Int)) }
+data RS = RS { rsFS :: !FS, rsLit :: !(M.Map LitKey Lit), rsMemo :: !(M.Map String (M.Map Port2 Int))
+             , rsHit :: !(M.Map String Bool) }   -- ^ per definition: does it read a target?
 
 newRS :: RS
-newRS = RS fsEmpty M.empty M.empty
+newRS = RS fsEmpty M.empty M.empty M.empty
 
 type ReachM = State RS
 
@@ -59,8 +60,15 @@ edges rc ((x, c) : st) acc
     | c == fsF = edges rc st acc
     | otherwise = case x of
         EId n | isWF n || not (M.member n (sdDefs sd)) -> edges rc st acc
-              | not (S.null (S.intersection (defReads sd n) (rcTargets rc))) -> edges rc st (add (KDef n) acc)
-              | otherwise -> edges rc st acc
+              | otherwise -> do
+                  hits <- gets rsHit
+                  h <- case M.lookup n hits of
+                      Just h -> return h
+                      Nothing -> do
+                          let h = not (S.null (S.intersection (defReads sd n) (rcTargets rc)))
+                          modify' (\r -> r { rsHit = M.insert n h (rsHit r) })
+                          return h
+                  edges rc st (if h then add (KDef n) acc else acc)
         ECall i m as ->
             let acc' = if S.member (i, m) (rcTargets rc) then add (KPort (i, m)) acc else acc
             in edges rc ([ (a, c) | a <- as ] ++ st) acc'

@@ -1,0 +1,31 @@
+package Wide(WideM(..), WideIfc(..), mkWideKid, mkWideTop) where
+
+import Vector
+
+-- one synthesized child with n put/get methods; rule i calls put i with get (i+1)
+interface WideM =
+  put :: Bit 8 -> Action
+  get :: Bit 8
+
+interface (WideIfc :: # -> *) n =
+  ms :: Vector n WideM
+
+mkWideKid :: Module (WideIfc n)
+mkWideKid =
+  module
+    rs :: Vector n (Reg (Bit 8)) <- replicateM (mkReg 0)
+    let one :: Reg (Bit 8) -> WideM
+        one r = interface WideM
+                  put x = r := x
+                  get = r
+    interface WideIfc
+      ms = map one rs
+
+mkWideTop :: Module (WideIfc n) -> Module Empty
+mkWideTop mk =
+  module
+    wi <- mk
+    let w = wi.ms
+    let step :: WideM -> WideM -> Rules
+        step p g = rules { "s": when True ==> p.put (g.get + 1) }
+    addRules (foldr (<+>) emptyRules (zipWith step w (rotate w)))

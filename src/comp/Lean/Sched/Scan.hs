@@ -6,13 +6,14 @@ module Lean.Sched.Scan
     ) where
 
 import Data.Array (Array, (!), listArray)
+import Data.Maybe (fromMaybe)
 import Data.Bits (Bits((.&.), setBit, xor, testBit, shiftR, clearBit, bit, (.|.), complement))
 import qualified Data.Foldable as F (Foldable(toList))
 import qualified Data.IntMap.Strict as IM (IntMap, empty, findWithDefault, fromListWith, insert)
 import qualified Data.Map.Strict as M ((!), findWithDefault, keys, toList, fromList, fromListWith)
 import qualified Data.Set as S (fromList, size, toAscList, toList)
 
-import Lean.Sched.Kinds (kdFx, KindDef(kdShare, kdPorts, kdSbr, kdPrec, kdConf))
+import Lean.Sched.Kinds (kdFx, KindDef(kdShare, kdPorts, kdSbr, kdPrec, kdConf, kdCodeRel), PM)
 import Lean.Sched.Model (ent, MSite(sPort), MStep(tSites), Model(mK, mNSlots, mNM, mKinds, mBlk, mDFind,
     mMEFind, mRules, mNR), PyErr(PyErr))
 
@@ -68,15 +69,21 @@ type KC = ([Int], [Int], [Int], [Int])
 
 -- | scanlib.Kind.kc for every code of a kind.
 kindTable :: KindDef -> [KC]
-kindTable k = [ kc q0 | q0 <- ps ]
+kindTable k = [ kc q0 | q0 <- codes ]
   where
     ps = kdPorts k
-    code p = length (takeWhile (/= p) ps)
-    folP p q = (p == q || not (kdPrec k q p)) && not (kdConf k p q) && not (kdConf k q p)
-    grpP p q = folP p q && not (kdSbr k p q) && not (kdSbr k q p)
-    argP p q = p /= q || not (kdShare k p) || kdFx k p
-    kc q0 = ( [ code p | p <- ps, not (folP p q0 && argP p q0) ], [ code q | q <- ps, not (folP q0 q && argP q0 q) ]
-            , [ code p | p <- ps, not (grpP p q0 && argP p q0) ], [ code q | q <- ps, not (grpP q0 q && argP q0 q) ] )
+    n = length ps
+    codes = [0 .. n - 1]
+    pa = listArray (0, n - 1) ps :: Array Int PM
+    (precI, sbrI, confI) = fromMaybe (onPM kdPrec, onPM kdSbr, onPM kdConf) (kdCodeRel k)
+    onPM f a b = f k (pa ! a) (pa ! b)
+    shareA = listArray (0, n - 1) (map (kdShare k) ps) :: Array Int Bool
+    fxA = listArray (0, n - 1) (map (kdFx k) ps) :: Array Int Bool
+    folP p q = (p == q || not (precI q p)) && not (confI p q) && not (confI q p)
+    grpP p q = folP p q && not (sbrI p q) && not (sbrI q p)
+    argP p q = p /= q || not (shareA ! p) || fxA ! p
+    kc q0 = ( [ p | p <- codes, not (folP p q0 && argP p q0) ], [ q | q <- codes, not (folP q0 q && argP q0 q) ]
+            , [ p | p <- codes, not (grpP p q0 && argP p q0) ], [ q | q <- codes, not (grpP q0 q && argP q0 q) ] )
 
 data ScanDesign = ScanDesign
     { scNM, scNR, scD :: Int, scFpM, scFpR :: [[Ent]], scKt :: Array Int (Array Int KC)
@@ -190,7 +197,7 @@ compressCodes :: ScanDesign -> Int
 compressCodes sd = S.size (S.fromList rc)
   where
     part = S.fromList (concat [ bitsOf (a .|. b) | (a, b) <- zip (scExR sd) (scEscR sd) ])
-    codeOf = M.fromList (zip (S.toAscList part) [1 ..])
+    codeOf = M.fromList (zip (S.toAscList part) [1 :: Int ..])
     rc = [ M.findWithDefault 0 j codeOf | j <- [0 .. scNR sd - 1] ]
 
 -- | model.scan_masks: the exception bits the scan needs and the escaped pairs,

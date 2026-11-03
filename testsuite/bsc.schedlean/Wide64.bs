@@ -1,0 +1,13 @@
+package Wide64(sysWide64, mkWideKid64) where
+
+import Vector
+import Wide
+
+{-# verilog mkWideKid64 #-}
+{-# properties mkWideKid64 = { alwaysReady } #-}
+mkWideKid64 :: Module (WideIfc 64)
+mkWideKid64 = mkWideKid
+
+{-# verilog sysWide64 #-}
+sysWide64 :: Module Empty
+sysWide64 = mkWideTop mkWideKid64

@@ -1,0 +1,17 @@
+package MethArg where
+
+-- A method writes its argument combined with a register read (the argument in the ev_ lemma's x).
+interface MethArgIfc =
+  put :: Bit 8 -> Action
+  get :: Bit 8
+
+{-# verilog mkMethArg #-}
+mkMethArg :: Module MethArgIfc
+mkMethArg = module
+  r :: Reg (Bit 8) <- mkReg 0
+  v :: Reg (Bit 8) <- mkReg 0
+  rules
+    "tick": when True ==> r := r + 1
+  interface
+    put x = v := x + r
+    get = v

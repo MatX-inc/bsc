@@ -13,7 +13,7 @@ import Control.Monad.State.Strict (gets, modify', MonadIO(liftIO), MonadTrans(li
 import Data.Array (listArray, (!))
 import Data.Char (isAlphaNum, isDigit)
 import Data.List (elemIndex, intercalate, sort, sortOn)
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import PPrint (ppString)
 import qualified Data.Foldable as F (Foldable(toList))
 import qualified Data.Map.Strict as M (Map, (!), elems, empty, findWithDefault, keys, keysSet, lookup, member,
@@ -389,7 +389,7 @@ stepM cx s meth = do
                     let fan = [ x | x <- rfan, omMember x (sbRP sb) ]
                         r = MG g (sort [ fromMaybe 0 (omLookup x (sbRP sb)) | x <- fan ])
                     lift (modify' (\st -> st { msFanOut = msFanOut st + length [ x | x <- rfan, not (omMember x (sbRP sb)) ] }))
-                    return (setSite i (\x -> x { sCond = MLit (head lp), sCKind = Just "rdy", sR = Just r, sRdyE = Just e }) sb))
+                    return (setSite i (\x -> x { sCond = MLit (orDie "no ready literal" (listToMaybe lp)), sCKind = Just "rdy", sR = Just r, sRdyE = Just e }) sb))
         sb0 [0 .. Sq.length (sbSites sb0) - 1]
     forM_ (F.toList (sbSites sb1)) $ \site -> case (sCKind site, sR site) of
         (Just "reach", Just (MG _ js)) | any (\j -> isJust (sR (Sq.index (sbSites sb1) j))) js ->
@@ -402,9 +402,10 @@ stepM cx s meth = do
         rfIdx = [ i | (i, st) <- zip [0 ..] (F.toList (sbSites sb1)), let (kd, _, _) = sPort st, kd == "rf" ]
     sb2 <- foldM (\sb i -> do
         let site = Sq.index (sbSites sb) i
-            (_, ii, PS m) = sPort site
+            (_, ii, pm) = sPort site
+            m = case pm of { PS x -> x; PT _ -> error "schedlean: a RegFile copy on a task port" }
             inst = fromMaybe "" (lookupNth ii [ k | (k, ("rf", _)) <- omToList (cxInst cx) ])
-            copies = sort [ read (drop 1 m2) :: Int | st <- F.toList (sbSites sb), let (kd2, i2, PS m2) = sPort st, kd2 == "rf", i2 == ii ]
+            copies = sort [ read (drop 1 m2) :: Int | st <- F.toList (sbSites sb), (kd2, i2, PS m2) <- [sPort st], kd2 == "rf", i2 == ii ]
             args = M.findWithDefault [] inst subargs
             c = read (drop 1 m) :: Int
             ci = fromMaybe 0 (elemIndex c copies)
@@ -436,6 +437,9 @@ stepM cx s meth = do
         _ -> return MZ
     return (MStep name meth (sbSites sb4) (sbRP sb4) (dsChecks s) guard [] res False)
 
+orDie :: String -> Maybe a -> a
+orDie msg = fromMaybe (error ("schedlean: " ++ msg))
+
 lookupNth :: Int -> [a] -> Maybe a
 lookupNth i xs = case drop i xs of { (x : _) | i >= 0 -> Just x; _ -> Nothing }
 
@@ -451,11 +455,11 @@ rdyTerms cx sb0 = foldM one sb0 [ i | (i, s) <- zip [0 ..] (F.toList (sbSites sb
                                          , i <- splits (sCond s) ++ splits (sArg s) ++ concatMap splits (fromMaybe [] (sArgs s)) ]
     one sb i = do
         let site = Sq.index (sbSites sb) i
-            Just e = sRdyE site
-            Just (MG g fan0) = sR site
+            e = orDie "a readiness site without its record" (sRdyE site)
+            (g, fan0) = case sR site of { Just (MG g' f') -> (g', f'); _ -> error "schedlean: a readiness site without its R" }
             lim = M.findWithDefault n i firstUse
             late = [ j | j <- fan0, j >= lim ]
-            RRdy { rSV = sv0 } = srKind e
+            sv0 = case srKind e of { RRdy { rSV = x } -> x; _ -> error "schedlean: a readiness record of reach kind" }
         (sv, fan) <- if null late then return (sv0, fan0) else do
             lift (modify' (\st -> st { msLater = msLater st + length late }))
             let drop' = S.fromList [ fromMaybe ("", "") (sPortName (Sq.index (sbSites sb) j)) | j <- late ]
@@ -469,7 +473,7 @@ rdyTerms cx sb0 = foldM one sb0 [ i | (i, s) <- zip [0 ..] (F.toList (sbSites sb
         unless (yset == S.fromList (svY sv)) $
             throwPy "AssertionError" ("site-value reads differ in " ++ sbName sb ++ " / " ++ fromMaybe "" (sLabel site))
         nf <- lift (gets (Sq.length . msFacts))
-        let MLit litI = sCond site
+        let litI = case sCond site of { MLit x -> x; _ -> error "schedlean: a readiness site without its literal" }
             fact = MFact "rdy" i (Just litI) (svRdy sv) (sbName sb) (fromMaybe "" (sLabel site)) ys (length late)
             others = [ j | j <- ys, j /= i ]
         lift (modify' (\st -> st { msFacts = msFacts st Sq.|> fact }))
@@ -554,13 +558,16 @@ build gate tasksOn nsteps dv sites = do
         cfgS = case [ sl | (_, ("ConfigRegN", _, sl)) <- kidsOf ] of { (x : _) -> x; [] -> [] }
         k0 = makeKinds fifoS cfgS
         used = S.fromList ([ c | s <- rules ++ meths, (c, _) <- dsReads s ] ++ [ c | s <- rules ++ meths, (c, _, _, _) <- dsCalls s ])
+        -- each (type, schedule text) group by number, so ports are keyed without comparing schedule texts
+        grpNo = M.fromListWith (\_ old -> old) (zip [ (typ, ss) | (_, (typ, ss, _)) <- M.toList (dvKids dv) ] [0 :: Int ..])
+        kidGrp = M.map (\(typ, ss, _) -> grpNo M.! (typ, ss)) (dvKids dv)
         gp1 = foldl' (\om (key, p, v) -> omSetDefault key omEmpty (\o -> if omMember p o then o else omInsert p v o) om) omEmpty
-            ([ ((typ, ss), p, (m, dmKind pm, dmHasArg pm))
+            ([ (kidGrp M.! k, p, (m, dmKind pm, dmHasArg pm))
              | (k, (typ, ss, _)) <- kidsOf, S.member k used, (m, pm) <- maybe [] omToList (M.lookup k (dvPorts dv))
              , let cps = [ c | c <- dmCopies pm, c /= "-" ]
              , p <- if null cps then [m] else [ m ++ "[" ++ c ++ "]" | c <- cps ] ]
-             ++ [ ((typ, ss), m, (fst (portMeth m), "value", maybe False dmHasArg (M.lookup k (dvPorts dv) >>= omLookup (fst (portMeth m)))))
-                | s <- rules ++ meths, (k, m) <- dsReads s, Just (typ, ss, _) <- [M.lookup k (dvKids dv)] ])
+             ++ [ (g, m, (fst (portMeth m), "value", maybe False dmHasArg (M.lookup k (dvPorts dv) >>= omLookup (fst (portMeth m)))))
+                | s <- rules ++ meths, (k, m) <- dsReads s, Just g <- [M.lookup k kidGrp] ])
     -- instances: a library model only for a bsc library primitive; the gate's generic kinds otherwise
     (inst, byk, gen, gcls, kmap, ung) <- foldM (\(inst, byk, gen, gcls, kmap, ung) (k, (typ, ss, sl)) -> do
             let lib = if S.member k (dvSynth dv) || S.member k (dvBvi dv)
@@ -575,9 +582,9 @@ build gate tasksOn nsteps dv sites = do
                             Nothing ->
                                 let gk = 'g' : show (omSize gen)
                                     cls = if S.member k (dvSynth dv) then "synth" else if S.member k (dvBvi dv) then "bvi" else "lib"
-                                    ms = [ (p, b, kn, h) | (p, (b, kn, h)) <- maybe [] omToList (omLookup (typ, ss) gp1) ]
+                                    ms = [ (p, b, kn, h) | (p, (b, kn, h)) <- maybe [] omToList (omLookup (kidGrp M.! k) gp1) ]
                                 in (omInsert (typ, ss) gk gen, M.insert gk cls gcls, M.insert gk (genericKind gk typ sl ms (cls == "synth") (cls == "lib")) kmap)
-                        Just gkd = omLookup (typ, ss) gen1
+                        gkd = orDie "a generic kind not made" (omLookup (typ, ss) gen1)
                     unless ((gcls1 M.! gkd == "synth") == S.member k (dvSynth dv)) $
                         throwPy "AssertionError" ("a type both synthesized and not: " ++ typ)
                     return (gkd, gen1, gcls1, kmap1)
@@ -685,7 +692,7 @@ tasksM cx steps0 = do
     one (acc, nT, ts, mt) r = case tMeth r of
         Just m -> do
             let tsk = [ a | a@(ATask {}) <- actsOf (tName r) ]
-            forM_ tsk $ \(ATask nm _ _) -> unless (S.member (lastDot nm) noValueTasks) $
+            forM_ [ nm | ATask nm _ _ <- tsk ] $ \nm -> unless (S.member (lastDot nm) noValueTasks) $
                 throwPy "ValueError" ("method " ++ m ++ ": task call " ++ nm ++ " may return a value (not modelled once left out)")
             return (r : acc, nT, nT : ts, mt ++ [ (m, length tsk) | not (null tsk) ])
         Nothing -> do

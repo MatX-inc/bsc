@@ -1,7 +1,7 @@
 -- | What the emitter's sections share: the module's plan (model, scan, facts,
 -- muxes) and the renderings of a step's expressions (mke2e.py lines 662-876).
 module Lean.Sched.Emit.Ctx
-    ( EC(..), PInfo(..), VCtx(..), vctx, site, step, kd, ihelper, lport, lportOf, ocread, sitePort, stepL
+    ( EC(..), PInfo(..), VCtx(..), vctx, site, step, kd, ihelper, lport, lportOf, ocread, sitePort
     , isUncond, isCond, ex, rterm, rho, hw, xhw, condHw, argHw, guardHw, guardRho, svHw, rsv, yof
     , val, evt, evst, evct, condVal, argVal, rdyHw, excl, entry, fsrc, mxKind
     ) where
@@ -79,9 +79,6 @@ rdyHw ec (k, i, m) = "(oc (" ++ ihelper k ++ " " ++ show i ++ ")).rdy " ++ lport
 
 sitePort :: EC -> Int -> Int -> MPort
 sitePort ec k i = sPort (site ec k i)
-
-stepL :: EC -> Int -> String
-stepL ec k = if k < ecNR ec then ".inr (rR " ++ show k ++ ")" else ".inl (mM " ++ show (k - ecNR ec) ++ ")"
 
 isUncond :: MSite -> Bool
 isUncond s = sCond s == MTrue

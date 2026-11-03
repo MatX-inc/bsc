@@ -18,13 +18,13 @@ import qualified Data.Set as S (difference, fromList, size, toList)
 import Lean.Sched.BscFacts (Candidate(..), DisjointFact(..), invertedFacts)
 import Lean.Sched.Expr (memAPkg)
 import Lean.Sched.Facts (jsonDumps, GateFacts(gfEsc, gfScan, gfRecord, gfLCP))
-import Lean.Sched.Kinds (parseSched)
+import Lean.Sched.Kinds (parseSched, schedMap)
 import Lean.Sched.Model (bitLength, mportRepr, pyStrErr, showModel, MSite(sPort), MStep(tSites), Model(mD,
     mRules, mNSlots))
 import Lean.Sched.Run (gateModel, prepare, GateModel(gmFacts, gmModel), Input(inCands, inTimer, inDesign,
     inErrh, inFlags, inABMI, inName), Prep(pPrims, pSolver, pDV, pSites))
 import Lean.Sched.Shadow (shadowReport, ShadowOut(..))
-import Lean.Sched.Sites (Sites(..), analyseSites, showSites)
+import Lean.Sched.Sites (Sites(..), analyseSites, annOf, showSites)
 import Lean.Sched.Time (phase, phaseNote)
 import Lean.Sched.Types (Design(..), Step(..), Child(..))
 import Lean.Solver (Verdict(..), newSolver, solveCNF, readDimacs)
@@ -85,7 +85,10 @@ showView inp what = case what of
         -- test: each child's statements, read from bsc's records, equal the parse of its printed schedule
         let bad = [ chInst c | c <- M.elems (dChildren d), let t = unwords (words (chSched c))
                              , chStmts c /= parseSched (if take 1 t == "[" then init (drop 1 t) else t) ]
-        return (Right [ "sched: " ++ show (M.size (dChildren d)) ++ " children, " ++ show (length bad) ++ " differ " ++ unwords (take 5 bad) ])
+            -- Kinds reads a pair's first statement, Sites.annOf its last: they agree when none is related twice
+            twice = [ chInst c | c <- M.elems (dChildren d), schedMap (chStmts c) /= annOf (chStmts c) ]
+        return (Right [ "sched: " ++ show (M.size (dChildren d)) ++ " children, " ++ show (length bad) ++ " differ " ++ unwords (take 5 bad)
+                      , "sched: " ++ show (length twice) ++ " relate a pair twice " ++ unwords (take 5 twice) ])
     _ -> return (Right [])
   where
     t = inTimer inp

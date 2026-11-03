@@ -1,0 +1,5 @@
+GATE {"name": "mkRdyRead", "scan": "ok", "slots": 12, "codes": 2, "seg_uses": 5, "mod_facts": 1, "escapes": 1, "esc_facts": 1, "esc_facts_max_per_pair": 1, "esc_facts_how": {"solver": 1, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts mkRdyRead                    2     10     0      5      5      0      1     1     0     1
+unrealized 0
+shadow mkRdyRead ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+mkRdyRead                noagg    A     emitter no  shadow ports [-] lc callers max 0 slots 12 codes 2 esc 1 facts 1 (solver 1) pairwise 0 seg_uses 5 mod_facts 1 step 5

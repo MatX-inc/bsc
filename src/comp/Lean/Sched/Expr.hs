@@ -3,7 +3,7 @@
 module Lean.Sched.Expr
     ( memAPkg, memAPkgWith, isOne, aexprE, actE
     , SD(..), mkSD, exactSD, Port2, canonExpr, canon, boolish, boolDef
-    , exprReads, exprHw, exprCalls, defReads, arrayElems, width, litval, isBoolLit
+    , exprReads, exprSources, exprHw, exprCalls, exprCallsMany, defReads, arrayElems, width, litval, isBoolLit
     , FS, Node(..), LitKey, fsEmpty, fsT, fsF, fsNode, fsLit, fsAnd, fsOr, fsLits, fsSummary, fsSummaryFrom, fsSubst, fsText
     ) where
 
@@ -22,9 +22,9 @@ import VModInfo (vArgs, VArgInfo(..), getVNameString)
 import qualified Data.Array as A ((!), listArray)
 import qualified Data.IntMap.Strict as IM (IntMap, (!), empty, lookup, fromList, insert)
 import qualified Data.IntSet as IS (member, empty, insert, toList)
-import qualified Data.Map.Strict as M (Map, (!), empty, findWithDefault, keys, lookup, member, toList, union,
+import qualified Data.Map.Strict as M (Map, (!), empty, findWithDefault, keys, lookup, member, toList, union, unionsWith,
     insert, fromList, insertWith, unionWith)
-import qualified Data.Map.Lazy as ML (Map, (!), findWithDefault, fromList, lookup, map, mapWithKey)
+import qualified Data.Map.Lazy as ML (Map, (!), findWithDefault, fromList, lookup, map, mapWithKey, member)
 import qualified Data.Set as S (Set, member, empty, filter, fromList, insert, isProperSubsetOf, singleton,
     size, toList, union, unions)
 
@@ -174,7 +174,7 @@ memAPkgWith conv convAct apkg = APkg
     ifcTypes = [ (nm d, ppString (adef_type d)) | f <- ifc, d <- named f ]
     ifcArgs = [ (getIdString (aif_name f), case f of { AIDef {} -> []; _ -> map (getIdString . fst) (aIfaceArgs f) })
               | f <- ifc, isMeth f ]
-    bodyRules = concat [ aif_body f | f <- ifc, case f of { AIAction {} -> True; AIActionValue {} -> True; _ -> False } ]
+    bodyRules = concat [ case f of { AIAction { aif_body = b } -> b; AIActionValue { aif_body = b } -> b; _ -> [] } | f <- ifc ]
     ruleRes = [ (getIdString (arule_id r), orQ (pe (arule_pred r)), map act (arule_actions r), r)
               | r <- apkg_rules apkg ++ bodyRules ]
     rules = [ (n, (p, [ a | Right a <- as ])) | (n, p, as, _) <- ruleRes ]
@@ -253,6 +253,18 @@ exprReads sd = go S.empty . pure
         ECall i m as -> go (S.insert (i, m) acc) (as ++ st)
         _ -> go acc (eKids x ++ st)
 
+-- | What 'exprReads' unions: the ports called directly and the definitions read through.
+exprSources :: SD -> E -> ([Port2], [String])
+exprSources sd = go [] [] . pure
+  where
+    go ps ns [] = (ps, ns)
+    go ps ns (x : st) = case x of
+        EId n | isWF n -> go ps ns st
+              | ML.member n (sdReads sd) -> go ps (n : ns) st
+              | otherwise -> go ps ns st
+        ECall i m as -> go ((i, m) : ps) ns (as ++ st)
+        _ -> go ps ns (eKids x ++ st)
+
 defReads :: SD -> String -> S.Set Port2
 defReads sd n = ML.findWithDefault S.empty n (sdReads sd)
 
@@ -280,6 +292,19 @@ exprCalls sd = go M.empty . pure
               | otherwise -> go acc st
         ECall i m as -> go (M.insertWith S.union (i, m) (S.unions (map (exprReads sd) as)) acc) (as ++ st)
         _ -> go acc (eKids x ++ st)
+
+-- | The union of 'exprCalls' over expressions, each definition's table taken once.
+exprCallsMany :: SD -> [E] -> M.Map Port2 (S.Set Port2)
+exprCallsMany sd es0 = M.unionsWith S.union (direct : [ ML.findWithDefault M.empty n (sdCalls sd) | n <- S.toList defs ])
+  where
+    (direct, defs) = go M.empty S.empty es0
+    go acc ds [] = (acc, ds)
+    go acc ds (x : st) = case x of
+        EId n | isWF n -> go acc ds st
+              | ML.member n (sdCalls sd) -> go acc (S.insert n ds) st
+              | otherwise -> go acc ds st
+        ECall i m as -> go (M.insertWith S.union (i, m) (S.unions (map (exprReads sd) as)) acc) ds (as ++ st)
+        _ -> go acc ds (eKids x ++ st)
 
 -- | The elements of an array (PrimBuildArray), through up to 50 definitions.
 arrayElems :: SD -> E -> Maybe [E]

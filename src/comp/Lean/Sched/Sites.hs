@@ -18,22 +18,26 @@ import AScheduleInfo (AScheduleInfo(..))
 import ASyntax (AExpr, ADef(..))
 import Control.Monad (forM_, unless, foldM, forM)
 import Control.Monad.State.Strict (runState)
+import qualified Data.Array as A (listArray, (!))
+import Data.Array.Unboxed (UArray, (!), accumArray)
+import Data.Word (Word8)
 import Data.List (intercalate, sort, sortOn)
 import Data.Maybe (fromMaybe)
 import Id (getIdString, getIdBaseString)
-import qualified Data.IntSet as IS (member, empty, insert)
+import qualified Data.IntMap.Strict as IM ((!), findWithDefault, fromList, fromListWith, insert, map, toList)
+import qualified Data.IntSet as IS (member, empty, insert, delete, fromList, null, singleton, size, toList, union)
 import qualified Data.Map.Strict as M (Map, (!), elems, empty, findWithDefault, keys, keysSet, lookup, member,
-    toList, insert, fromList, fromListWith, map, unionWith, unionsWith)
+    size, toList, filter, insert, fromList, fromListWith, fromDistinctAscList, lookupIndex, map, unionWith)
 import qualified Data.Map.Lazy as ML ((!), map)
 import qualified Data.Set as S (Set, member, delete, difference, empty, filter, fromList, insert, intersection,
     minView, null, singleton, size, split, toAscList, toList, union, unions)
 
 import Lean.Sched.Enc (encAnd, encAtom, encB, encOr, encSat, encSetOn, encSetSub, newEnc, portAtom, AKey(AKey),
     KP(KS))
-import Lean.Sched.Expr (aexprE, canonExpr, exactSD, exprCalls, exprHw, exprReads, fsF, fsLit, fsLits, fsNode,
+import Lean.Sched.Expr (aexprE, canonExpr, defReads, exactSD, exprCallsMany, exprHw, exprReads, exprSources, fsF, fsLit, fsLits, fsNode,
     fsSubst, fsSummary, fsSummaryFrom, fsT, fsText, mkSD, LitKey, Node(NOr, NLit, NAnd), Port2, SD(sdDefs))
 import Lean.Sched.MECheck (cfNames, cfResolve, meParse, samePairs, suffixGroups)
-import Lean.Sched.Py (omLookup, startsWith)
+import Lean.Sched.Py (omLookup)
 import Lean.Sched.Reach (encFormula, liftFS, litExprs, litKey, newRS, reachTop, RC(rcSeq, RC), RS(rsFS, rsLit))
 import Lean.Sched.Tree (APkg(apInsts, apGuarded, apRules, apIfcVals, apMethArgs), Act(ACallA, ATask), E(EId,
     ELit))
@@ -46,7 +50,8 @@ import Lean.Solver (solverQueries, Solver, Verdict(Unsat))
 data SStep = SStep { ssName :: String, ssKind :: String, ssMeth :: Maybe String, ssIdx :: Int, ssSites :: [SSite], ssStep :: Step }
 
 -- | A use of a child port by a step: a read or a call, in the dump's order.
-data SSite = SSite { siRead :: Bool, siLabel :: String, siInst :: String, siMeth :: String, siCopy :: Maybe Integer, siPos :: Int }
+data SSite = SSite { siRead :: Bool, siLabel :: String, siInst :: String, siMeth :: String, siCopy :: Maybe Integer, siPos :: Int
+                   , siMIx :: Int }   -- ^ siMeth's number among its child's methods
 
 type SK = (Int, Int)        -- (step, site)
 
@@ -99,27 +104,38 @@ analyseSites sv d ap asi = do
                 ss = [ (True, portLabel p, p) | (p, _) <- stReads st, M.member (ptInst p) kids ]
                      ++ [ (False, portLabel (clPort c), clPort c) | c <- stCalls st, M.member (ptInst (clPort c)) kids ]
             in SStep (stName st) kind meth i
-                     [ SSite r l (ptInst p) (ptMeth p) (ptCopy p) k | (k, (r, l, p)) <- zip [0 ..] ss ] st
-        -- the child's relation (bsc's default C for unlisted pairs; two copies of one method CF)
-        ann = M.map (annOf . chStmts) kids
-        crel k (p0, p1) (q0', q1) | p0 == q0' && p1 /= q1 = "CF"
-                                  | Just r <- M.lookup (p0, q0') a = r
-                                  | M.member (q0', p0) a = "rev"
-                                  | otherwise = "C"
-          where a = ann M.! k
-        prec k p q = p /= q && crel k p q `elem` ["SB", "SBR"]
-        conf k p q = crel k p q == "C" || crel k q p == "C"
+                     [ SSite r l (ptInst p) (ptMeth p) (ptCopy p) k (mIx p)
+                     | (k, (r, l, p)) <- zip [0 ..] ss ] st
+        kidIx = M.map (\c -> M.fromDistinctAscList (zip (M.keys (chMethods c)) [0 ..])) kids
+        mIx p = M.findWithDefault (error ("schedlean: a site on " ++ portLabel p ++ ", which its child does not list")) (ptMeth p) (kidIx M.! ptInst p)
+        -- the child's relation by method number, the last statement naming a pair winning (annOf);
+        -- bsc's default C for unlisted pairs, two copies of one method CF
+        relOf = M.map (\c -> let ms = chMethods c; nm = M.size ms
+                             in (nm, accumArray (\_ new -> new) 0 (0, nm * nm - 1)
+                                       [ (a * nm + b, relCode r) | (ps, r, qs) <- chStmts c, Just a <- map (`M.lookupIndex` ms) ps
+                                                                 , Just b <- map (`M.lookupIndex` ms) qs ] :: UArray Int Word8)) kids
+        relCode r = case r of { "CF" -> 1; "SB" -> 2; "SBR" -> 3; "C" -> 4; _ -> 5 } :: Word8
+        crel k (p0, p1) (q0', q1)
+            | p0 == q0' && p1 /= q1 = 1
+            | r /= 0 = r
+            | rt ! (q0' * nm + p0) /= 0 = 6
+            | otherwise = 4
+          where (nm, rt) = relOf M.! k
+                r = rt ! (p0 * nm + q0')
+        prec k p q = p /= q && crel k p q `elem` [2, 3]
+        conf k p q = crel k p q == 4 || crel k q p == 4
         follow k a b = not (prec k b a) && not (conf k a b)
-        use s = (siMeth s, maybe "" (\c -> "[" ++ show c ++ "]") (siCopy s))
+        use s = (siMIx s, maybe "" (\c -> "[" ++ show c ++ "]") (siCopy s))
         exc = S.fromList (concat [ [(a, b), (b, a)] | (a, b) <- dDisjoint d ++ dUserME d ++ S.toList (dBlocks d) ])
         rules = [ s | s <- steps, ssKind s == "rule" ]
+        ruleArr = A.listArray (0, length rules - 1) rules
         -- (a)/(c): the footprint scan per use, in the prototype's loop order
         scan = sortOn fst
             [ ((x, y, i1, i2), ev)
             | let byInst = M.fromListWith (flip (++)) [ (siInst s, [(x, s)]) | (x, r) <- zip [0 :: Int ..] rules, s <- ssSites r ]
             , us <- M.elems byInst
-            , (x, s1) <- us, (y, s2) <- us, x < y
-            , let r1 = rules !! x, let r2 = rules !! y
+            , (x, s1) <- us, (y, s2) <- us, x < y, siRead s1 || siRead s2
+            , let r1 = ruleArr A.! x, let r2 = ruleArr A.! y
             , not (S.member (ssName r1, ssName r2) exc)
             , not (follow (siInst s1) (use s1) (use s2))
             , let i1 = siPos s1, let i2 = siPos s2
@@ -327,8 +343,8 @@ annOf stmts = foldl' (\m (ps, rel, qs) -> foldl' (\m' k -> M.insert k rel m') m 
 
 -- | sitecond's order_pass: per step a site order (data and SB order fixed, placed reads preferred),
 -- each condition without literals over a later site, a wire or another method's input.
-orderPass :: SD -> APkg -> (SStep -> ([(E, Maybe E)], [Act])) -> (String -> (String, String) -> (String, String) -> Bool)
-          -> (SSite -> (String, String)) -> (RC -> RS -> LitKey -> (S.Set Port2, S.Set String)) -> RC -> RS -> [SStep]
+orderPass :: SD -> APkg -> (SStep -> ([(E, Maybe E)], [Act])) -> (String -> (Int, String) -> (Int, String) -> Bool)
+          -> (SSite -> (Int, String)) -> (RC -> RS -> LitKey -> (S.Set Port2, S.Set String)) -> RC -> RS -> [SStep]
           -> (SStep -> SSite -> Bool) -> M.Map SK Int -> Either String (M.Map SK Int, RS)
 orderPass sd ap stepItems prec use linfo rc rs0 steps isc reach = foldM one (M.empty, rs0) steps
   where
@@ -344,17 +360,32 @@ orderPass sd ap stepItems prec use linfo rc rs0 steps isc reach = foldM one (M.e
               `S.union` maybe S.empty (\m -> if null m then S.empty else S.singleton ("EN_" ++ m)) (ssMeth st)
         byport = M.fromListWith (flip (++)) [ ((siInst s, siMeth s), [siPos s]) | s <- ss ]
         (items, acts) = stepItems st
-        argreads = M.unionsWith S.union [ exprCalls sd e | (e, _) <- items ]
+        argreads = exprCallsMany sd (map fst items)
         callacts = M.fromListWith (flip (++)) [ ((i, m), [(c, as)]) | ACallA i m c as <- acts ]
-        dataRds s
-            | siRead s = M.findWithDefault S.empty (siInst s, siMeth s) argreads
-            | otherwise = S.unions [ S.unions (maybe S.empty (exprReads sd) c : map (exprReads sd) as)
-                                   | (c, as) <- M.findWithDefault [] (siInst s, siMeth s) callacts ]
-        hard = M.fromListWith S.union (
-                 [ (i, S.empty) | i <- [0 .. n - 1] ]
-                 ++ [ (siPos s, S.fromList [ j | p <- S.toList (dataRds s), j <- M.findWithDefault [] p byport, j /= siPos s ]) | s <- ss ]
-                 ++ [ (siPos t, S.singleton (siPos s)) | grp <- M.elems byInstS, s <- grp, t <- grp, siPos s /= siPos t
-                                                       , prec (siInst s) (use s) (use t) ])
+        -- data order: the sites on the ports a site's data reads, through one node per shared read set
+        -- (a read port's argument reads, a definition's reads); a set holding the site's own port is expanded
+        srcsOf s
+            | siRead s = [ Right (Left (siInst s, siMeth s), M.findWithDefault S.empty (siInst s, siMeth s) argreads) ]
+            | otherwise = concat [ concatMap src (maybe as (: as) c) | (c, as) <- M.findWithDefault [] (siInst s, siMeth s) callacts ]
+          where src e = let (ps, ns) = exprSources sd e in map Left ps ++ [ Right (Right nm, defReads sd nm) | nm <- ns ]
+        nb = M.size byport
+        setSites rs | S.size rs <= nb = [ j | p <- S.toList rs, j <- M.findWithDefault [] p byport ]
+                    | otherwise = [ j | (p, js) <- M.toList byport, S.member p rs, j <- js ]
+        siteSrcs = [ (s, srcsOf s) | s <- ss ]
+        vSets = M.fromList [ (key, rs) | (s, srcs) <- siteSrcs, Right (key, rs) <- srcs, not (S.member (siInst s, siMeth s) rs) ]
+        vPreds = M.filter (not . IS.null) (M.map (IS.fromList . setSites) vSets)
+        vId = M.fromList (zip (M.keys vPreds) [n ..])
+        precPreds = IM.fromListWith IS.union [ (siPos t, IS.singleton (siPos s)) | grp <- M.elems byInstS, s <- grp, t <- grp
+                                                                                , siPos s /= siPos t, prec (siInst s) (use s) (use t) ]
+        sitePreds (s, srcs) =
+            let own = (siInst s, siMeth s)
+                direct = [ j | Left p <- srcs, j <- M.findWithDefault [] p byport ]
+                expanded = [ j | Right (_, rs) <- srcs, S.member own rs, j <- setSites rs ]
+                virt = [ v | Right (key, rs) <- srcs, not (S.member own rs), Just v <- [M.lookup key vId] ]
+            in IS.delete (siPos s) (IS.fromList (direct ++ expanded)) `IS.union` IS.fromList virt
+               `IS.union` IM.findWithDefault IS.empty (siPos s) precPreds
+        -- every node's predecessors: sites 0 .. n-1, then the read-set nodes
+        preds = IM.fromList ([ (siPos s, sitePreds x) | x@(s, _) <- siteSrcs ] ++ [ (vId M.! key, js) | (key, js) <- M.toList vPreds ])
         byInstS = M.fromListWith (flip (++)) [ (siInst s, [s]) | s <- ss ]
         soft = M.fromList [ (siPos s, if isc st s then S.fromList [ j | p <- S.toList (sum0 (reach M.! (ssIdx st, siPos s)))
                                                                       , j <- M.findWithDefault [] p byport ] else S.empty) | s <- ss ]
@@ -373,9 +404,9 @@ orderPass sd ap stepItems prec use linfo rc rs0 steps isc reach = foldM one (M.e
                         NAnd ys -> go (ys ++ q) (IS.insert f seen) acc
                         NOr ys -> go (ys ++ q) (IS.insert f seen) acc
                         _ -> go q (IS.insert f seen) acc
-        succs = M.fromListWith (++) [ (j, [i]) | (i, js) <- M.toList hard, j <- S.toList js ]
-        pos = kahn (M.fromList [ (i, S.size js) | (i, js) <- M.toList hard ]) cnt0
-                   (S.fromList [ (cnt0 M.! i, i) | (i, js) <- M.toList hard, S.null js ]) S.empty M.empty
+        succs = IM.fromListWith (++) [ (j, [i]) | (i, js) <- IM.toList preds, j <- IS.toList js ]
+        pos = kahn (IM.map IS.size preds) cnt0
+                   (S.fromList [ (cnt0 M.! i, i) | (i, js) <- IM.toList preds, i < n, IS.null js ]) S.empty M.empty
         -- the placeable site with the fewest soft predecessors left; counts kept as sites are placed
         cnt0 = M.map S.size soft
         softRev = M.fromListWith (++) [ (j, [i]) | (i, js) <- M.toList soft, j <- S.toList js ]
@@ -387,9 +418,13 @@ orderPass sd ap stepItems prec use linfo rc rs0 steps isc reach = foldM one (M.e
                     (cnt', avail2) = foldl' (\(cm, av) i -> let c = cm M.! i
                                                             in (M.insert i (c - 1) cm, if S.member (c, i) av then S.insert (c - 1, i) (S.delete (c, i) av) else av))
                                             (cnt, avail1) (M.findWithDefault [] best softRev)
-                    (indeg', newly) = foldl' (\(dg, nw) k -> let v = dg M.! k - 1 in (M.insert k v dg, if v == 0 then k : nw else nw))
-                                             (indeg, []) (M.findWithDefault [] best succs)
+                    (indeg', newly) = foldl' release (indeg, []) (IM.findWithDefault [] best succs)
                 in kahn indeg' cnt' (foldl' (\av k -> S.insert (cnt' M.! k, k) av) avail2 [ k | k <- newly, not (S.member k placed') ]) placed' ps'
+        -- a read-set node is passed as soon as its last site is placed
+        release (dg, nw) k = let v = dg IM.! k - 1; dg' = IM.insert k v dg
+                             in if v /= 0 then (dg', nw)
+                                else if k >= n then foldl' release (dg', nw) (IM.findWithDefault [] k succs)
+                                else (dg', k : nw)
         dropOne (acc', rs') s =
             let i = siPos s
                 f = reach M.! (ssIdx st, i)

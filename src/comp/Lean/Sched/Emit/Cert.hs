@@ -8,6 +8,7 @@ import Control.Monad (forM_, forM, when, unless)
 import Control.Monad.State.Strict (gets, modify', evalStateT, StateT)
 import Data.Array ((!), listArray)
 import Data.List (intercalate)
+import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as M ((!), findWithDefault, lookup, toList, fromList, fromListWith)
 
 import Lean.Print (allL, cut, fmt, stab, stabproof, w, W)
@@ -141,15 +142,20 @@ usersProof ec p leaf = do
 bigPort :: Int
 bigPort = 8
 
+-- | A users leaf's first site (usesLeaves never gives an empty list).
+site0 :: [Int] -> Int
+site0 (s : _) = s
+site0 [] = error "schedlean: a users leaf with no site"
+
 enProof :: EC -> MPort -> String -> HX String
 enProof ec p@(k, i, m) inst = do
     let lp = lportOf ec k m
         lv = usesLeaves ec p
         nR = ecNR ec
-        simple = not (ecMet ec) && all (\(st, sts) -> isUncond (site ec st (head sts))) lv
+        simple = not (ecMet ec) && all (\(st, sts) -> isUncond (site ec st (site0 sts))) lv
         leafS st sts = do
-            h <- hx ec k i m lp st (head sts)
-            return (fmt "cRk ops E u oc w (rR %d) .%s %d h %s %d %s rfl rfl rfl" [show st, k, show i, lp, show (head sts), h])
+            h <- hx ec k i m lp st (site0 sts)
+            return (fmt "cRk ops E u oc w (rR %d) .%s %d h %s %d %s rfl rfl rfl" [show st, k, show i, lp, show (site0 sts), h])
     if null lv then return "en_none (P ops E u) (fire ops E) oc w _ _ _ rfl _ rfl"
     else if simple then
         if length lv <= bigPort then do
@@ -160,7 +166,7 @@ enProof ec p@(k, i, m) inst = do
             return (fmt "en_lit (P ops E u) (fire ops E) oc w %s %s (stepOn ops E oc) (onIff ops E u oc w)\n      (users %s %s) _ rfl (%s)" [inst, lp, inst, lp, up])
     else do
         rs <- forM lv $ \(st, sts) -> do
-            let si = head sts
+            let si = site0 sts
                 s = site ec st si
                 stepT = if st < nR then ".inr (rR " ++ show st ++ ")" else ".inl (mM " ++ show (st - nR) ++ ")"
             h <- hx ec k i m lp st si
@@ -186,7 +192,7 @@ argProof ec p@(k, i, m) inst = do
         nR = ecNR ec
         hya = ecHya ec
         leaf st sts = do
-            let si = head sts
+            let si = site0 sts
                 s = site ec st si
             h <- hx ec k i m lp st si
             let core = if st < nR
@@ -194,7 +200,7 @@ argProof ec p@(k, i, m) inst = do
                              [show st, k, show i, lp, show si, h, argVal ec st s (VCtx ("(u (.inr (rR " ++ show st ++ ")))") "ops.z" "hav")]
                     else fmt "aMk ops E u oc w (mM %d) .%s %d h %s %d %s _ (fun _ => %s) x hx"
                              [show (st - nR), k, show i, lp, show si, h
-                             , argVal ec st s (VCtx ("(u (.inl (mM " ++ show (st - nR) ++ ")))") ("w.arg (mM " ++ show (st - nR) ++ ")") "(cf_of_avail hav)")]
+                             , argVal ec st s (VCtx ("(u (.inl (mM " ++ show (st - nR) ++ ")))") ("(w.arg (mM " ++ show (st - nR) ++ "))") "(cf_of_avail hav)")]
             case pinfo of
                 Just pi | piArgk pi == "mux" -> do
                     let selq = M.findWithDefault False (piQ pi) (ecSelmux ec)
@@ -214,7 +220,7 @@ argProof ec p@(k, i, m) inst = do
 
 lcProof :: EC -> MPort -> String -> HX String
 lcProof ec p@(k, i, m) inst = do
-    let Just pi = M.lookup p (ecPortInfo ec)
+    let pi = fromMaybe (error ("schedlean: last-caller port " ++ show p ++ " has no info")) (M.lookup p (ecPortInfo ec))
         lp = lportOf ec k m
         q = piQ pi
         mus = piMus pi

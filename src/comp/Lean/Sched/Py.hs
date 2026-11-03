@@ -1,9 +1,9 @@
 -- | Helpers that reproduce the prototype's Python behaviour exactly where the
 -- emitted text depends on it: insertion-ordered maps, repr, string splits.
 module Lean.Sched.Py
-    ( OMap, omEmpty, omInsert, omInsertWith, omLookup, omMember, omToList, omKeys, omElems
+    ( OMap, omEmpty, omInsert, omLookup, omMember, omToList, omElems
     , omFromList, omSize, omAdjust, omSetDefault
-    , pyReprStr, strip, lstrip, rstrip, splitOn1, pySplit, pyWords, isPrefix, startsWith, endsWith
+    , pyReprStr, strip, lstrip, rstrip, pySplit, pyWords, isPrefix, startsWith, endsWith
     , findSub, rfindSub, isPySpace
     ) where
 
@@ -11,7 +11,7 @@ import Data.Char (isSpace, ord)
 import Data.List (isPrefixOf, isSuffixOf, isInfixOf, tails)
 import Numeric (showHex)
 import qualified Data.Foldable as F (Foldable(toList))
-import qualified Data.Map.Strict as M (Map, (!), empty, lookup, member, size, insert, adjust, insertWith)
+import qualified Data.Map.Strict as M (Map, (!), empty, lookup, member, size, insert, adjust)
 import qualified Data.Sequence as Sq (Seq, empty, (|>))
 
 -- | A Python dict: lookups by key, iteration in first-insertion order.
@@ -22,10 +22,6 @@ omEmpty = OMap M.empty Sq.empty
 
 omInsert :: Ord k => k -> v -> OMap k v -> OMap k v
 omInsert k v (OMap m o) = OMap (M.insert k v m) (if M.member k m then o else o Sq.|> k)
-
--- | @f new old@, as 'M.insertWith'.
-omInsertWith :: Ord k => (v -> v -> v) -> k -> v -> OMap k v -> OMap k v
-omInsertWith f k v (OMap m o) = OMap (M.insertWith f k v m) (if M.member k m then o else o Sq.|> k)
 
 omAdjust :: Ord k => (v -> v) -> k -> OMap k v -> OMap k v
 omAdjust f k (OMap m o) = OMap (M.adjust f k m) o
@@ -44,9 +40,6 @@ omMember k (OMap m _) = M.member k m
 
 omToList :: Ord k => OMap k v -> [(k, v)]
 omToList (OMap m o) = [ (k, m M.! k) | k <- F.toList o ]
-
-omKeys :: OMap k v -> [k]
-omKeys (OMap _ o) = F.toList o
 
 omElems :: Ord k => OMap k v -> [v]
 omElems = map snd . omToList
@@ -79,12 +72,6 @@ strip, lstrip, rstrip :: String -> String
 strip = rstrip . lstrip
 lstrip = dropWhile isPySpace
 rstrip = reverse . dropWhile isPySpace . reverse
-
--- | Python's s.split(sep, 1).
-splitOn1 :: String -> String -> [String]
-splitOn1 sep s = case findSub sep s of
-    Nothing -> [s]
-    Just i  -> [take i s, drop (i + length sep) s]
 
 -- | Python's s.split(sep) with a non-empty separator.
 pySplit :: String -> String -> [String]
