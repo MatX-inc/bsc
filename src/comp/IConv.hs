@@ -8,7 +8,11 @@ import Data.List(union, findIndex)
 import Data.Maybe(catMaybes)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.IntMap.Strict as IM
 import qualified Data.List as List
+import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
+import Control.Monad(when)
+import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
 
 import Util(fromJustOrErr)
 import qualified SCC(tsort,Graph)
@@ -31,7 +35,10 @@ import Assump
 import Pred
 import SymTab
 import Type(tPrimPair, tBit, HasKind(..))
-import CType(cTVarKind, typeclassId, cTVarNum)
+import CType(cTVarKind, typeclassId, cTVarNum,
+             isNormalNode, typeCanonWordNode, bumpCTypeStat, CTypeStat(..),
+             checkLetrecBinders,
+             checkCanonIds)
 import TIMonad(CATFCache)
 import VModInfo(mkVModInfo, VName(..), VFieldInfo(..))
 import Type(tString, fn, tName, tAttributes)
@@ -190,12 +197,52 @@ iConvT :: Flags -> SymTab -> Type -> IType
 iConvT flags s t = iConvT' (expandSynN flags s t)
 
 iConvT' :: Type -> IType
-iConvT' (TVar (TyVar i _ _)) = ITVar i
-iConvT' (TCon (TyCon i (Just k) s)) = ITCon i (iConvK k) s
-iConvT' (TCon (TyNum n _)) = ITNum n
-iConvT' (TCon (TyStr s _)) = ITStr s
-iConvT' (TAp t1 t2) = ITAp (iConvT' t1) (iConvT' t2)
-iConvT' t = internalError("iConvT': " ++ ppReadable t)
+-- Normal ground types are memoized by canonical word: expandSynN is the
+-- identity on them, so the same large type is otherwise walked again at
+-- every use site.  Equal words mean Eq-equal CTypes, and the walk
+-- already converts Eq-equal CTypes to the same IType object (mkITCon
+-- interns by qualifier and base, mkITAp by its children; a normal type
+-- has none of mkITAp's reducible heads), so a hit returns the object the
+-- walk would have returned, and IType's unique allocation is unchanged
+-- because the skipped walk would only have hit IType's tables.
+iConvT' t | isNormalNode t = iConvTMemo (typeCanonWordNode t) t
+iConvT' t = iConvTWalk t
+
+-- One level of the conversion; subterms go back through the memo.
+iConvTWalk :: Type -> IType
+iConvTWalk (TVar (TyVar i _ _)) = ITVar i
+iConvTWalk (TCon (TyCon i (Just k) s)) = ITCon i (iConvK k) s
+iConvTWalk (TCon (TyNum n _)) = ITNum n
+iConvTWalk (TCon (TyStr s _)) = ITStr s
+iConvTWalk (TAp t1 t2) = ITAp (iConvT' t1) (iConvT' t2)
+iConvTWalk t = internalError("iConvT': " ++ ppReadable t)
+
+-- The memo: canonical word -> converted IType, process-global like the
+-- IType intern tables it mirrors, never reset (a word names one type
+-- for the life of the process).  Retains only ITypes that IType's own
+-- tables already keep.
+{-# NOINLINE iConvTMemoTable #-}
+iConvTMemoTable :: IORef (IM.IntMap IType)
+iConvTMemoTable = unsafePerformIO $ newIORef IM.empty
+
+{-# NOINLINE iConvTMemo #-}
+iConvTMemo :: Int -> Type -> IType
+iConvTMemo w t = unsafeDupablePerformIO $ do
+    m0 <- readIORef iConvTMemoTable
+    case IM.lookup w m0 of
+      Just it -> do bumpCTypeStat IConvMemoHit
+                    -- -check-ctype-ids: the hit is the object a fresh
+                    -- walk returns (Eq IType: equal uniques, else
+                    -- structural)
+                    when (checkCanonIds && it /= iConvTWalk t) $
+                        internalError ("IConv.iConvTMemo: memo disagrees with a fresh conversion: "
+                                       ++ ppReadable (t, it, iConvTWalk t))
+                    return it
+      Nothing -> do bumpCTypeStat IConvMemoMiss
+                    let it = iConvTWalk t
+                    it `seq` atomicModifyIORef' iConvTMemoTable
+                                 (\m -> (IM.insert w it m, ()))
+                    return it
 
 iConvK :: Kind -> IKind
 iConvK KStar = IKStar
@@ -382,7 +429,9 @@ iConvLet errh flags r env pvs ds = answer
                    Left cycles -> -- trace "inloop" $
                                   deal_with_cycles cycles
                    Right _ -> -- trace ("iConvLet: " ++ ppReadable ds ++ "\n\n\n" ++ ppReadable ites ++ "/iconvLet") $
-                              (env', ites)
+                              -- the order tsort gave this group is the
+                              -- one emitted (-trace-ctype-stats check)
+                              checkLetrecBinders d_ids (env', ites)
         ites = map f ds'
                where
                  f (CLValueSign (CDefT i vs qt cs) me) =

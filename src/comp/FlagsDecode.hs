@@ -498,7 +498,9 @@ describeFlags showHidden =
 
 traceflags :: [String]
 traceflags = [
+          "check-ctype-ids",
           "debug-eval-free-vars",
+          "no-ctype-ids",
           "no-use-layout",
           "trace-aopt",
           "trace-apaths",
@@ -509,6 +511,7 @@ traceflags = [
           "trace-atf-cache",
           "trace-atf-cache-miss",
           "trace-ctxreduce",
+          "trace-ctype-stats",
           "trace-debug",
           "trace-drop-dicts",
           "trace-eval-steps",

@@ -1303,7 +1303,9 @@ trCType' _ _ t@(TDefMonad _) = internalError "trCTypeN: TDefMonad"
 -- The tricky thing is that we have to expand synonyms before checking
 -- to implement LiberalTypeSynonyms correctly.
 chkTAp :: Type -> K.KI ()
-chkTAp = uncurry (chkTAp' [])  . splitTAp
+-- a normal type applies no synonym anywhere, so there is nothing to check
+chkTAp t | isNormalNode t = ctypeStat ChkTApShortcut t `seq` return ()
+chkTAp t = uncurry (chkTAp' []) (splitTAp t)
   where -- f and as should be the outputs of splitTAp, so there should be no remaining TAps
         chkTAp' _ f@(TAp _ _) as = internalError $ "chkTAp' unexpected TAp: " ++ ppReadable (f, as)
         chkTAp' syns (TCon (TyCon i _ (TItype n t))) as
