@@ -524,7 +524,13 @@ compilePackage
         -- module, via "updDef").
         dictBuckets = mkDictBuckets binmods
 
-    t <- dump errh flags t DFbinary dumpnames binmods
+    -- The imported packages' def bodies are decoded lazily (GenBin);
+    -- "dump" deepseqs its argument, which would decode every body of
+    -- every import here.  Force and print them only when -dbinary asks
+    -- for the dump; otherwise just record the phase.
+    t <- if hasDump flags DFbinary
+         then dump errh flags t DFbinary dumpnames binmods
+         else dumpStr errh flags t DFbinary dumpnames ""
 
     -- For "genModule" we construct a symbol table that includes all defs,
     -- not just those that are user visible.
