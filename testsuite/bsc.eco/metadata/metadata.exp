@@ -1,0 +1,202 @@
+# The ECO stage golden of the identifier records (plan section 16): OLD
+# and NEW captures of one module whose pipeline stages are built by one
+# static loop (MetaStages.bsv), NEW editing stage 2 alone.  Each side's
+# .bxref is written beside its capture; the stage identifiers are the
+# .eco-graph's node names, which is the join; every unedited stage
+# carries exactly one def record of its own (one no other stage
+# carries), rendered without positions (dumpbxref --resolve), the same
+# on both sides, and the edited stage's own records are not.  A replay
+# of OLD reproduces the Verilog
+# and writes no .bxref, and a replay into the capture directory is
+# refused before any write.
+bsc_initialize
+namespace eval eco_metadata {
+    set previous [pwd]
+    try {
+        set here [file dirname [file normalize [info script]]]
+        cd $here
+        set work [file join $here work_metadata]
+        file delete -force $work
+        file mkdir $work
+        set module mkMetaStages
+        set stages {0 1 2 3}
+        set flags {-u -verilog -elab -bxref -metadata-check -no-show-timestamps -no-show-version}
+        # dumpbxref: the one the internal checks found, else the one
+        # installed beside the compiler
+        set dumpbxref ""
+        if {[info exists ::dumpbxref] && $::dumpbxref ne "" && [file executable $::dumpbxref]} {
+            set dumpbxref $::dumpbxref
+        } elseif {[file executable [file join [file dirname $::bsc] dumpbxref]]} {
+            set dumpbxref [file join [file dirname $::bsc] dumpbxref]
+        }
+
+        foreach side {old new} {
+            set define [expr {$side eq "new" ? [list -D ECO_EDIT] : [list]}]
+            foreach mode {ordinary captured} {
+                set dir [file join $work $side-$mode]
+                file mkdir $dir
+                set cmd [list $::bsc {*}$flags {*}$define -bdir $dir -vdir $dir -info-dir $dir]
+                if {$mode eq "captured"} {lappend cmd -eco-capture [file join $work $side]}
+                lappend cmd [file join $here MetaStages.bsv] >& [file join $dir compile.log]
+                if {[exec_with_log "ECO metadata $side $mode compile" $cmd]} {
+                    set f [open $dir/compile.log]; verbose -log [read $f] 0; close $f
+                    fail "ECO metadata: $side $mode compilation"
+                    return
+                }
+                pass "ECO metadata: $side $mode compilation"
+            }
+            if {[exec_with_log "ECO metadata $side byte parity" [list cmp \
+                    $work/$side-ordinary/$module.v $work/$side-captured/$module.v]]} {
+                fail "ECO metadata: $side capture preserves ordinary RTL bytes"
+            } else {pass "ECO metadata: $side capture preserves ordinary RTL bytes"}
+            if {[file isfile $work/$side/$module.bxref] && [file isfile $work/$side/$module.eco-graph]} {
+                pass "ECO metadata: $side capture writes the .bxref beside the .eco-graph"
+            } else {
+                fail "ECO metadata: $side capture writes the .bxref beside the .eco-graph"
+                return
+            }
+        }
+        if {[exec_with_log "ECO metadata edit" [list cmp \
+                $work/old-ordinary/$module.v $work/new-ordinary/$module.v]]} {
+            pass "ECO metadata: the edit changes the Verilog"
+        } else {fail "ECO metadata: the edit changes the Verilog"}
+
+        if {$dumpbxref eq ""} {
+            untested "ECO metadata: identifier records (dumpbxref unavailable)"
+        } else {
+            set free [dict create]
+            foreach side {old new} {
+                set bxref $work/$side/$module.bxref
+                # the join by name: every stage def of the graph is an
+                # identifier of the .bxref
+                set f [open $work/$side/$module.eco-graph]; set graph [read $f]; close $f
+                set names [list]
+                foreach {whole name} [regexp -all -inline {enName = Just "([^"]*)"} $graph] {
+                    lappend names $name
+                }
+                if {[exec_with_log "ECO metadata $side idents" [list $dumpbxref --idents $bxref \
+                        > $work/$side.idents]]} {
+                    fail "ECO metadata: $side identifier records"
+                    continue
+                }
+                set f [open $work/$side.idents]; set idents [read $f]; close $f
+                set joined 1
+                foreach i $stages {
+                    set n "stages_${i}\$D_IN"
+                    set pattern "^ident [string map {$ \\$} $n] \\|"
+                    if {[lsearch -exact $names $n] < 0 || ![regexp -line $pattern $idents]} {
+                        verbose -log "stage identifier $n: in graph [expr {[lsearch -exact $names $n] >= 0}], in .bxref [regexp -line $pattern $idents]" 0
+                        set joined 0
+                    }
+                }
+                if {$joined} {
+                    pass "ECO metadata: $side stage identifiers are .eco-graph node names"
+                } else {fail "ECO metadata: $side stage identifiers are .eco-graph node names"}
+                # the position-free records of the stages, pointers
+                # normalised, one file per side, pinned
+                set out [open $work/$side.free w]
+                foreach i $stages {
+                    set n "stages_${i}\$D_IN"
+                    if {[exec_with_log "ECO metadata $side resolve $i" [list $dumpbxref --resolve $n $bxref \
+                            > $work/$side-stage$i.txt]]} {
+                        fail "ECO metadata: $side resolve stage $i"
+                        continue
+                    }
+                    set f [open $work/$side-stage$i.txt]; set lines [split [read $f] \n]; close $f
+                    foreach line $lines {
+                        if {[regexp {^  free (.*)$} $line -> rest]} {
+                            regsub -all {__h[0-9]+} $rest {__h} rest
+                            puts $out "stage $i: $rest"
+                            dict lappend free $side,$i $rest
+                        }
+                    }
+                }
+                close $out
+                # compare_file resolves srcdir and subdir against the
+                # directory the suite started in
+                cd $previous
+                compare_file work_metadata/$side.free MetaStages.$side.free.expected
+                cd $here
+            }
+            # the records of a stage's own: its def records that no other
+            # stage carries (a def inlined into the rule stands for every
+            # port the rule writes); one per unedited stage, the same on
+            # both sides, and the edited stage's not
+            set own [dict create]
+            foreach side {old new} {
+                foreach i $stages {
+                    set defs [lsearch -all -inline -glob [dict get $free $side,$i] "*__h | site *"]
+                    set others [list]
+                    foreach j $stages {
+                        if {$j != $i} {
+                            lappend others {*}[lsearch -all -inline -glob [dict get $free $side,$j] "*__h | site *"]
+                        }
+                    }
+                    dict set own $side,$i [lmap d $defs {expr {[lsearch -exact $others $d] >= 0 ? [continue] : $d}}]
+                }
+            }
+            set single 1
+            foreach {side is} {old {0 1 2 3} new {0 1 3}} {
+                foreach i $is {
+                    if {[llength [dict get $own $side,$i]] != 1} {
+                        verbose -log "$side stage $i: [llength [dict get $own $side,$i]] def records of its own" 0
+                        set single 0
+                    }
+                }
+            }
+            if {$single} {
+                pass "ECO metadata: every unedited stage carries one def record of its own"
+            } else {fail "ECO metadata: every unedited stage carries one def record of its own"}
+            set paired 1
+            foreach i {0 1 3} {
+                if {[dict get $own old,$i] ne [dict get $own new,$i]} {
+                    verbose -log "stage $i: OLD [dict get $own old,$i], NEW [dict get $own new,$i]" 0
+                    set paired 0
+                }
+            }
+            if {[dict get $own old,2] eq [dict get $own new,2]} {
+                verbose -log "stage 2: OLD and NEW records are the same" 0
+                set paired 0
+            }
+            if {$paired} {
+                pass "ECO metadata: the unedited stages pair and the edited stage does not"
+            } else {fail "ECO metadata: the unedited stages pair and the edited stage does not"}
+        }
+
+        # a replay of OLD into a fresh directory: the exact bytes, and no
+        # .bxref (a replay regenerates the Verilog from the .ba, whose
+        # package carries no table)
+        set manifest $work/old/$module.replay
+        if {[exec_with_log "ECO metadata replay" [list env BSC_OPTIONS= $::bsc -eco-replay $manifest \
+                -eco-output $work/replayed >& $work/replayed.log]]} {
+            set f [open $work/replayed.log]; verbose -log [read $f] 0; close $f
+            fail "ECO metadata: replay of the OLD capture"
+        } else {
+            if {[exec_with_log "ECO metadata replay bytes" [list cmp \
+                    $work/old-captured/$module.v $work/replayed/$module.v]]} {
+                fail "ECO metadata: replay exact bytes"
+            } else {pass "ECO metadata: replay exact bytes"}
+            if {![file exists $work/replayed/$module.bxref]} {
+                pass "ECO metadata: replay writes no .bxref"
+            } else {fail "ECO metadata: replay writes no .bxref"}
+        }
+        # a replay whose output is the capture directory is refused
+        # before any write, and the .bxref is left as it was
+        file copy $work/old/$module.bxref $work/old.bxref.before
+        set status [exec_with_log "ECO metadata replay into capture" [list env BSC_OPTIONS= $::bsc \
+            -eco-replay $manifest -eco-output $work/old >& $work/refused.log]]
+        set f [open $work/refused.log]; set contents [read $f]; close $f
+        if {$status && [string first "output would overwrite a bound capture or snapshot artifact" $contents] >= 0} {
+            pass "ECO metadata: rejects a replay into the capture directory"
+        } else {
+            verbose -log $contents 0
+            fail "ECO metadata: rejects a replay into the capture directory"
+        }
+        if {[exec_with_log "ECO metadata .bxref intact" [list cmp \
+                $work/old.bxref.before $work/old/$module.bxref]]} {
+            fail "ECO metadata: refused replay leaves the .bxref intact"
+        } else {pass "ECO metadata: refused replay leaves the .bxref intact"}
+    } finally {
+        cd $previous
+    }
+}

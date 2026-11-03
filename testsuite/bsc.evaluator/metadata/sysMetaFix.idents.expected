@@ -1,0 +1,18 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident value | kind output,wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick, root methodroot value [MetaFix.bsv:14:8]
+ident RDY_value | kind output,wire | origins root methodroot value [MetaFix.bsv:14:8]
+ident acc | kind reg | origins root inst acc [MetaFix.bsv:16:19]
+ident acc$D_IN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+ident acc$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+ident regs_0 | kind reg | origins root inst regs_0 [MetaFix.bsv:15:31]
+ident regs_0$D_IN | kind wire | origins pass State regs_0$write_1
+ident regs_0$EN | kind wire | origins pass State regs_0$EN_write
+ident regs_1 | kind reg | origins root inst regs_1 [MetaFix.bsv:15:31]
+ident regs_1$D_IN | kind wire | origins pass State regs_1$write_1
+ident regs_1$EN | kind wire | origins pass State regs_1$EN_write
+ident regs_2 | kind reg | origins root inst regs_2 [MetaFix.bsv:15:31]
+ident regs_2$D_IN | kind wire | origins pass State regs_2$write_1
+ident regs_2$EN | kind wire | origins pass State regs_2$EN_write
+ident acc_PLUS_regs_2_PLUS_regs_1_PLUS_regs_0___d7 | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+summary idents 17 resolved 15 unresolved 2

@@ -1,0 +1,17 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident a | kind reg | origins root inst a [MetaRename.bsv:9:19]
+ident a_D_IN | id a$D_IN | kind wire | origins def __h, def __h, root rule fill
+ident a_EN | id a$EN | kind wire | origins def __h, root rule fill
+ident b | kind reg | origins root inst b [MetaRename.bsv:10:19]
+ident b_D_IN | id b$D_IN | kind wire | origins def __h, def __h, def __h, root rule drain
+ident b_EN | id b$EN | kind wire | origins def __h, def __h, def __h, root rule drain
+ident q_D_IN | id q$D_IN | kind wire | origins def __h, def __h, root rule fill
+ident q_D_OUT | id q$D_OUT | kind wire | origins root inst q [MetaRename.bsv:8:20]
+ident q_CLR | id q$CLR | kind wire | origins pass State q$EN_clear
+ident q_DEQ | id q$DEQ | kind wire | origins def __h, def __h, def __h, root rule drain
+ident q_EMPTY_N | id q$EMPTY_N | kind wire | origins root inst q [MetaRename.bsv:8:20]
+ident q_ENQ | id q$ENQ | kind wire | origins def __h, root rule fill
+ident q_FULL_N | id q$FULL_N | kind wire | origins root inst q [MetaRename.bsv:8:20]
+ident q | kind instance | origins root inst q [MetaRename.bsv:8:20]
+summary idents 16 resolved 14 unresolved 2

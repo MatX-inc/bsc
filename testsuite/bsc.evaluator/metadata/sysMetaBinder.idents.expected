@@ -1,0 +1,43 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident out | kind output,wire | origins root methodroot out [MetaBinder.bsv:21:8]
+ident RDY_out | kind output,wire | origins root methodroot out [MetaBinder.bsv:21:8]
+ident put_v | kind input | origins root methodroot put [MetaBinder.bsv:21:8]
+ident EN_put | kind input | origins root methodroot put [MetaBinder.bsv:21:8]
+ident RDY_put | kind output,wire | origins def __h, root methodroot put [MetaBinder.bsv:21:8]
+ident acc | kind reg | origins root inst acc [MetaBinder.bsv:23:18]
+ident acc$D_IN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule moves
+ident acc$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule moves
+ident cnt | kind reg | origins root inst cnt [MetaBinder.bsv:22:18]
+ident cnt$D_IN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule moves
+ident cnt$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule moves
+ident sel | kind reg | origins root inst sel [MetaBinder.bsv:24:18]
+ident sel$D_IN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule moves
+ident sel$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule moves
+ident tot | kind reg | origins root inst tot [MetaBinder.bsv:25:18]
+ident tot$D_IN | kind wire | origins def b__h, def __h, def __h, root rule args
+ident tot$EN | kind wire | origins def __h, root rule args
+ident q$D_IN | kind wire | origins root methodroot put [MetaBinder.bsv:21:8]
+ident q$D_OUT | kind wire | origins root inst q [MetaBinder.bsv:26:19]
+ident q$CLR | kind wire | origins pass State q$EN_clear
+ident q$DEQ | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule moves
+ident q$EMPTY_N | kind wire | origins root inst q [MetaBinder.bsv:26:19]
+ident q$ENQ | kind wire | origins root methodroot put [MetaBinder.bsv:21:8]
+ident q$FULL_N | kind wire | origins root inst q [MetaBinder.bsv:26:19]
+ident qp$D_IN | kind wire | origins pass State qp$enq_1
+ident qp$D_OUT | kind wire | origins root inst qp [MetaBinder.bsv:27:16]
+ident qp$CLR | kind wire | origins pass State qp$EN_clear
+ident qp$DEQ | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule moves
+ident qp$EMPTY_N | kind wire | origins root inst qp [MetaBinder.bsv:27:16]
+ident qp$ENQ | kind wire | origins pass State qp$EN_enq
+ident cnt_MUL_5___d10 | kind wire | origins def __h, def b__h, def __h
+ident _5__q2 | kind wire | origins def __h, def b__h, def __h
+ident cnt_PLUS_1__q1 | kind wire | origins def __h, def s__h, def __h
+ident p_hi__h | kind wire | origins def __h, def p_hi__h, def __h, def __h
+ident p_lo__h | kind wire | origins def __h, def p_lo__h, def __h, def __h
+ident s__h | kind wire | origins def __h, def s__h, def __h
+ident y__h | kind wire | origins def __h, def y__h, def cnt_BITS_7_TO_2___h, def __h
+ident q_first__6_ULE_cnt___d17 | kind wire | origins def __h, def __h, def __h, def __h, def p_lo__h, def __h, def __h
+ident q | kind instance | origins root inst q [MetaBinder.bsv:26:19]
+ident qp | kind instance | origins root inst qp [MetaBinder.bsv:27:16]
+summary idents 42 resolved 40 unresolved 2

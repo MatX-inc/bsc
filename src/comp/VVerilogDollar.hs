@@ -1,4 +1,4 @@
-module VVerilogDollar (removeDollarsFromVerilog) where
+module VVerilogDollar (removeDollarsFromVerilog, dollarRenames) where
 import Id
 import FStringCompat
 import PreStrings (fsDollar)
@@ -22,6 +22,21 @@ removeDollarsFromVerilog vprog
         the_map :: The_map
         the_map = get_map_ids used_ids all_vids
       in everywhere (mkT (new_vid the_map)) vprog
+
+-- The renames removeDollarsFromVerilog applies, by identifier string:
+-- the string of each identifier holding a '$' to the string it is
+-- replaced by.  The same map the rewrite builds, computed again for
+-- the metadata join (VerilogMeta), which reads the ids of the program
+-- before the rewrite and needs the spellings after it; the new ids'
+-- strings were interned by the rewrite, so building them again
+-- interns nothing new.
+dollarRenames :: VProgram -> Map.Map String String
+dollarRenames vprog
+  = let
+        all_vids = get_vids vprog
+        the_map = get_map_ids (set_of_used_ids all_vids) all_vids
+      in Map.fromList [ (getIdString old, getIdString new)
+                      | (old, new) <- Map.toList the_map ]
 
 get_vids :: VProgram -> [VId]
 get_vids vprog

@@ -1,0 +1,12 @@
+stage 0: __h | site prim PrimUnpack | chain def @mkMetaStages/Prelude.bind_[2]#1 -> def @mkMetaStages/Prelude.bind_[2]#1 | merged 0 | folded 0
+stage 0: v__h | site lambda @Prelude.bind_/v[1] | chain def @mkMetaStages/Prelude.bind_[1] u#1 -> def @Prelude.bind_/addRules[1] u#1 -> def @Prelude.addRules/toPrimAction[1] u#1 -> def @Prelude.toPrimAction/primFix[1] ur#1 -> def @Prelude.primFix/bind_[1] u#1 | merged 0 | folded 0
+stage 0: root rule advance
+stage 1: __h | site prim PrimUnpack | chain def @mkMetaStages/Prelude.bind_[2]#1 -> def @mkMetaStages/Prelude.bind_[2]#1 | merged 0 | folded 0
+stage 1: v__h | site lambda @Prelude.bind_/v[1] | chain def @mkMetaStages/Prelude.bind_[1] u#1 -> def @Prelude.bind_/addRules[1] u#1 -> def @Prelude.addRules/toPrimAction[1] u#1 -> def @Prelude.toPrimAction/primFix[1] ur#2 -> def @Prelude.primFix/bind_[1] u#1 | merged 0 | folded 0
+stage 1: root rule advance
+stage 2: __h | site prim PrimUnpack | chain def @mkMetaStages/Prelude.bind_[2]#1 -> def @mkMetaStages/Prelude.bind_[2]#1 | merged 0 | folded 0
+stage 2: v__h | site lambda @Prelude.bind_/v[1] | chain def @mkMetaStages/Prelude.bind_[1] u#1 -> def @Prelude.bind_/addRules[1] u#1 -> def @Prelude.addRules/toPrimAction[1] u#1 -> def @Prelude.toPrimAction/primFix[1] ur#3 -> def @Prelude.primFix/bind_[1] u#1 | merged 0 | folded 0
+stage 2: root rule advance
+stage 3: __h | site prim PrimUnpack | chain def @mkMetaStages/Prelude.bind_[2]#1 -> def @mkMetaStages/Prelude.bind_[2]#1 | merged 0 | folded 0
+stage 3: v__h | site lambda @Prelude.bind_/v[1] | chain def @mkMetaStages/Prelude.bind_[1] u#1 -> def @Prelude.bind_/addRules[1] u#1 -> def @Prelude.addRules/toPrimAction[1] u#1 -> def @Prelude.toPrimAction/primFix[1] ur#4 -> def @Prelude.primFix/bind_[1] u#1 | merged 0 | folded 0
+stage 3: root rule advance

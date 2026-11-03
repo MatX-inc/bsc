@@ -1,0 +1,81 @@
+ident c$D_IN | kind wire | origins def __h, def __h, def __h, def __h, root rule step | history 0,1,2,3,4,5,6,7,8,10,11,12,13,15,16,17,18,19,20,22,23,24,25,27,32,37,44,53
+  def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaInline.bsv:14:4] u#1 -> def Prelude.addRules [MetaInline.bsv:14:4] u#1 -> def Prelude.toPrimAction [MetaInline.bsv:15:7] u#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias - | tiers -
+  free __h | site prim PrimAdd | chain def @sysMetaInline/Prelude.bind_[N] u#1 -> def @Prelude.bind_/addRules[N] u#1 -> def @Prelude.addRules/toPrimAction[N] u#1 | merged 0 | folded 0
+  def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+  free __h | site prim PrimUnpack | chain def @sysMetaInline/Prelude.bind_[N]#1 -> def @sysMetaInline/Prelude.bind_[N]#1 | merged 0 | folded 0
+  def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+  free __h | site prim PrimUnpack | chain def @sysMetaInline/Prelude.bind_[N]#1 -> def @sysMetaInline/Prelude.bind_[N]#1 | merged 0 | folded 0
+  def __h | site prim PrimMul | chain def Prelude.bind_ [MetaInline.bsv:14:4] u#1 -> def Prelude.addRules [MetaInline.bsv:14:4] u#1 -> def Prelude.toPrimAction [MetaInline.bsv:15:7] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder - | alias - | tiers -
+  free __h | site prim PrimMul | chain def @sysMetaInline/Prelude.bind_[N] u#1 -> def @Prelude.bind_/addRules[N] u#1 -> def @Prelude.addRules/toPrimAction[N] u#1 | merged 0 | folded 0
+  root rule step
+  free root rule step
+  event 0: inlined (Inline): __h -> __h
+  event 1: inlined (Inline): __h -> __h
+  event 2: inlined (Inline): __h -> __h
+  event 3: inlined (Inline): __h -> RL_step
+  event 4: created (Transform): __i1 <- RL_step
+  event 5: created (Transform): __i2 <- RL_step
+  event 6: created (Transform): __i3 <- RL_step
+  event 7: created (Transform): __i4 <- RL_step
+  event 8: created (Transform): __i5 <- RL_step
+  event 10: inlined (Transform): __i1 -> __i3
+  event 11: inlined (Transform): __i2 -> __i3
+  event 12: inlined (Transform): __i3 -> __i4
+  event 13: inlined (Transform): __i4 -> __i5
+  event 15: inlined (Transform): __i5 -> RL_step
+  event 16: created (Transform): __j1 <- RL_step
+  event 17: created (Transform): __j2 <- RL_step
+  event 18: created (Transform): __j3 <- RL_step
+  event 19: created (Transform): __j4 <- RL_step
+  event 20: created (Transform): __j5 <- RL_step
+  event 22: inlined (Transform): __j1 -> __j3
+  event 23: inlined (Transform): __j2 -> __j3
+  event 24: inlined (Transform): __j3 -> __j4
+  event 25: inlined (Transform): __j4 -> __j5
+  event 27: inlined (Transform): __j5 -> RL_step
+  event 32: created (Conv): a_PLUS_b_MUL_3_BITS_7_TO_0___d5 <- RL_step
+  event 37: created (State): c$write_1 <- RL_step
+  event 44: renamed (RenameIO): c$write_1 -> c$D_IN
+  event 53: inlined (Expand): a_PLUS_b_MUL_3_BITS_7_TO_0___d5 -> c$D_IN
+ident a_PLUS_b_MUL_3___d4 | kind wire | origins def __h, def __h, def __h, def __h, root rule step | history 0,1,2,3,4,5,6,7,8,10,11,12,13,15,16,17,18,19,20,22,23,24,25,27,28,29,30,31,50,51,52
+  def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaInline.bsv:14:4] u#1 -> def Prelude.addRules [MetaInline.bsv:14:4] u#1 -> def Prelude.toPrimAction [MetaInline.bsv:15:7] u#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias - | tiers -
+  free __h | site prim PrimAdd | chain def @sysMetaInline/Prelude.bind_[N] u#1 -> def @Prelude.bind_/addRules[N] u#1 -> def @Prelude.addRules/toPrimAction[N] u#1 | merged 0 | folded 0
+  def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+  free __h | site prim PrimUnpack | chain def @sysMetaInline/Prelude.bind_[N]#1 -> def @sysMetaInline/Prelude.bind_[N]#1 | merged 0 | folded 0
+  def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+  free __h | site prim PrimUnpack | chain def @sysMetaInline/Prelude.bind_[N]#1 -> def @sysMetaInline/Prelude.bind_[N]#1 | merged 0 | folded 0
+  def __h | site prim PrimMul | chain def Prelude.bind_ [MetaInline.bsv:14:4] u#1 -> def Prelude.addRules [MetaInline.bsv:14:4] u#1 -> def Prelude.toPrimAction [MetaInline.bsv:15:7] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder - | alias - | tiers -
+  free __h | site prim PrimMul | chain def @sysMetaInline/Prelude.bind_[N] u#1 -> def @Prelude.bind_/addRules[N] u#1 -> def @Prelude.addRules/toPrimAction[N] u#1 | merged 0 | folded 0
+  root rule step
+  free root rule step
+  event 0: inlined (Inline): __h -> __h
+  event 1: inlined (Inline): __h -> __h
+  event 2: inlined (Inline): __h -> __h
+  event 3: inlined (Inline): __h -> RL_step
+  event 4: created (Transform): __i1 <- RL_step
+  event 5: created (Transform): __i2 <- RL_step
+  event 6: created (Transform): __i3 <- RL_step
+  event 7: created (Transform): __i4 <- RL_step
+  event 8: created (Transform): __i5 <- RL_step
+  event 10: inlined (Transform): __i1 -> __i3
+  event 11: inlined (Transform): __i2 -> __i3
+  event 12: inlined (Transform): __i3 -> __i4
+  event 13: inlined (Transform): __i4 -> __i5
+  event 15: inlined (Transform): __i5 -> RL_step
+  event 16: created (Transform): __j1 <- RL_step
+  event 17: created (Transform): __j2 <- RL_step
+  event 18: created (Transform): __j3 <- RL_step
+  event 19: created (Transform): __j4 <- RL_step
+  event 20: created (Transform): __j5 <- RL_step
+  event 22: inlined (Transform): __j1 -> __j3
+  event 23: inlined (Transform): __j2 -> __j3
+  event 24: inlined (Transform): __j3 -> __j4
+  event 25: inlined (Transform): __j4 -> __j5
+  event 27: inlined (Transform): __j5 -> RL_step
+  event 28: created (Conv): a___d1 <- RL_step
+  event 29: created (Conv): b___d2 <- RL_step
+  event 30: created (Conv): a_PLUS_b___d3 <- RL_step
+  event 31: created (Conv): a_PLUS_b_MUL_3___d4 <- RL_step
+  event 50: inlined (Expand): a___d1 -> a_PLUS_b___d3
+  event 51: inlined (Expand): b___d2 -> a_PLUS_b___d3
+  event 52: inlined (Expand): a_PLUS_b___d3 -> a_PLUS_b_MUL_3___d4

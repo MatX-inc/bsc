@@ -1,0 +1,9 @@
+ident k | kind parameter | origins unresolved k
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident out | kind output,wire | origins def __h, root rule bump, root methodroot out [MetaParam.bsv:10:8]
+ident RDY_out | kind output,wire | origins root methodroot out [MetaParam.bsv:10:8]
+ident r | kind reg | origins root inst r [MetaParam.bsv:11:19]
+ident r$D_IN | kind wire | origins def __h, root rule bump
+ident r$EN | kind wire | origins def __h, root rule bump
+summary idents 8 resolved 5 unresolved 3

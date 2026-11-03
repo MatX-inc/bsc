@@ -21,6 +21,14 @@ module IExpandMeta(
         -- the ledger the packages carry
         MetaLedger(..), emptyMetaLedger, PassTag(..), MetaEvent(..),
         appendEvent, appendEvents, resolveId, checkClosure, renderLedger,
+        renderEvent, siteKeyKind, renderName,
+        -- the identifier records of the Verilog backend's join
+        IdentKind(..), IdentOrigin(..), IdentRecord(..), identUnresolved,
+        createdFromNothing, resolveIds, checkResolveIds,
+        renderIdent, renderIdents, renderIdentSet,
+        -- the position-free rendering of sites
+        SiteIndex, siteIndex, renderSiteFree, renderChainFree, renderDefLine,
+        renderDefFree,
         -- the census (-metadata-census)
         Census, readCensus, recordUnfolding, recordCompletion, aliasClassCount,
         renderCensus, checkProfile, checkKeptPositions, checkNameHints
@@ -1012,6 +1020,166 @@ renderEvent ev =
     ids = unwords . map getIdString
 
 -- ===============
+-- The identifier records
+--
+-- The join at the Verilog backend (VerilogMeta.verilogIdents) walks
+-- the declaration positions of the generated module and resolves the
+-- id behind each identifier through the ledger to the records it
+-- stands for; -bxref writes the records into the .bxref as bx_idents,
+-- and dumpbxref renders them (--idents, --resolve).  A record holds
+-- strings and table keys (def pointers, root site ids, event
+-- positions), no Id, so that a reader rebuilds nothing and interns
+-- nothing beyond the table's own strings.
+
+-- the declaration position an identifier was read from
+data IdentKind = IKInput | IKOutput | IKInout | IKParameter
+               | IKWire | IKReg | IKInstance | IKRule
+        deriving (Eq, Ord, Show, Enum, Bounded)
+
+showIdentKind :: IdentKind -> String
+showIdentKind IKInput = "input"
+showIdentKind IKOutput = "output"
+showIdentKind IKInout = "inout"
+showIdentKind IKParameter = "parameter"
+showIdentKind IKWire = "wire"
+showIdentKind IKReg = "reg"
+showIdentKind IKInstance = "instance"
+showIdentKind IKRule = "rule"
+
+-- What a final id stands for: the record of a lifted def (the key of
+-- mm_defs, the pointer the def's name ends in); a root site of the
+-- table (a method, an instance or a rule root, by site id); a rule
+-- whose root row the join did not find, by the rule's id; an id a
+-- pass created from nothing (a port def no call reaches, a def of the
+-- scheduler's), by the pass and the id; or none.
+data IdentOrigin
+    = ODef !Int
+    | ORoot !Int
+    | ORule !String
+    | OPass !PassTag !String
+    | OUnresolved !String
+        deriving (Eq, Ord, Show)
+
+-- One identifier of the generated module: its spelling; the id of the
+-- final package it was printed from, as a string (the spelling unless
+-- the backend renamed it: a SystemVerilog std-package collision or
+-- -remove-dollar); its declaration positions in the module's order;
+-- what it stands for, sorted; and the events on the way from the
+-- evaluator's defs to it, as positions in the ledger (0 the oldest).
+data IdentRecord = IdentRecord {
+        ir_ident :: !String,
+        ir_id :: !String,
+        ir_kinds :: ![IdentKind],
+        ir_origins :: ![IdentOrigin],
+        ir_history :: ![Int]
+    }
+
+-- an identifier that stands for nothing the table knows
+identUnresolved :: IdentRecord -> Bool
+identUnresolved r = case ir_origins r of
+                      [OUnresolved _] -> True
+                      _ -> False
+
+-- the ids a pass created from nothing, with the pass
+createdFromNothing :: MetaLedger -> M.Map Id PassTag
+createdFromNothing (MetaLedger mm) =
+    M.fromList [ (to, t) | Created t to [] <- mm_events mm ]
+
+-- Resolve every id of a list through the ledger at once: for each,
+-- the ids whose records it stands for, sorted by name, and the
+-- positions of the events on the way, oldest first (0 the oldest
+-- event of the ledger).  Per id the answer is resolveId's, which walks
+-- the events once per id; here one walk, newest first, carries a map
+-- from each id in hand to the set of given ids it is in hand for, so
+-- an event costs the ids it moves and the whole walk costs the size of
+-- the answer, not the ids times the events.  -metadata-census checks
+-- the two against each other (checkResolveIds).  Pure, over existing
+-- ids; run by the Verilog backend's join and by tools, never by a pass.
+resolveIds :: MetaLedger -> [Id] -> M.Map Id ([Id], [Int])
+resolveIds (MetaLedger mm) finals =
+    M.fromList [ (f, (M.findWithDefault [] f origins,
+                      M.findWithDefault [] f history))
+               | f <- finals ]
+  where
+    events = mm_events mm
+    count = length events
+    -- holds: an id in hand -> the given ids it is in hand for;
+    -- history: a given id -> the positions of the events taken, newest
+    -- first as the walk goes, so oldest first when it ends
+    (holds, history) =
+        L.foldl' step (M.fromList [ (f, S.singleton f) | f <- finals ], M.empty)
+                 (zip [count - 1, count - 2 ..] events)
+    step st@(hs, hist) (n, ev) =
+        case ev of
+          Renamed _ from to | Just fs <- M.lookup to hs ->
+              (addAll [from] fs (M.delete to hs), note n fs hist)
+          Merged _ froms into | Just fs <- M.lookup into hs ->
+              (addAll froms fs hs, note n fs hist)
+          Inlined _ from intos
+            | let fs = S.unions (mapMaybe (`M.lookup` hs) intos), not (S.null fs) ->
+              (addAll [from] fs hs, note n fs hist)
+          Created _ to froms | not (null froms), Just fs <- M.lookup to hs ->
+              (addAll froms fs (M.delete to hs), note n fs hist)
+          _ -> st
+    addAll xs fs hs = L.foldl' (\ h x -> M.insertWith S.union x fs h) hs xs
+    note n fs hist = S.foldr (\ f h -> M.insertWith (++) f [n] h) hist fs
+    origins = M.map (sortBy (comparing getIdString))
+                    (M.fromListWith (++)
+                         [ (f, [x]) | (x, fs) <- M.toList holds, f <- S.toList fs ])
+
+-- resolveIds against resolveId on the ids given, as sets of origins
+-- and as event sequences; the disagreements, one line each
+checkResolveIds :: MetaLedger -> [Id] -> [String]
+checkResolveIds ledger@(MetaLedger mm) ids =
+    concat [ [ getIdString i ++ ": origins " ++ unwords (map getIdString os) ++
+               " (resolveIds) against " ++ unwords (map getIdString os') ++ " (resolveId)"
+             | S.fromList os /= S.fromList os' ] ++
+             [ getIdString i ++ ": history " ++ show ns ++ " (resolveIds) against " ++
+               show (length evs) ++ " events (resolveId)"
+             | map render ns /= map renderEvent evs ]
+           | (i, (os, ns)) <- M.toList (resolveIds ledger ids),
+             let (os', evs) = resolveId ledger i ]
+  where
+    byPosition = IM.fromList (zip [0 ..] (reverse (mm_events mm)))
+    render n = maybe ("no event " ++ show n) renderEvent (IM.lookup n byPosition)
+
+-- An identifier's line:
+--
+--   ident <spelling> | id <id> | kind <k>,<k> | origins <o>, <o> | history <n>,<n>
+--
+-- where the id field appears only when the spelling differs from it,
+-- and an origin is def <name>, root <site>, root rule <id>,
+-- pass <Pass> <id> or unresolved <id>.
+renderIdent :: ModuleMeta -> IdentRecord -> String
+renderIdent mm r =
+    intercalate " | "
+        (["ident " ++ ir_ident r] ++
+         [ "id " ++ ir_id r | ir_id r /= ir_ident r ] ++
+         ["kind " ++ intercalate "," (map showIdentKind (ir_kinds r)),
+          "origins " ++ intercalate ", " (map (renderOrigin mm) (ir_origins r)),
+          "history " ++ intercalate "," (map show (ir_history r))])
+
+renderOrigin :: ModuleMeta -> IdentOrigin -> String
+renderOrigin mm o =
+    case o of
+      ODef p -> "def " ++ maybe ("_" ++ show p) defName (IM.lookup p (mm_defs mm))
+      ORoot s -> "root " ++ renderSite (mm_sites mm) s
+      ORule n -> "root rule " ++ n
+      OPass t n -> "pass " ++ drop 2 (show t) ++ " " ++ n
+      OUnresolved n -> "unresolved " ++ n
+  where defName d = defNameString (dr_ptr d) (dr_hint d)
+
+-- the identifier lines in the module's order, then
+--   summary idents <n> resolved <n> unresolved <n>
+renderIdents :: ModuleMeta -> [IdentRecord] -> String
+renderIdents mm rs =
+    unlines (map (renderIdent mm) rs ++
+             ["summary idents " ++ show (length rs) ++
+              " resolved " ++ show (length rs - unresolved) ++
+              " unresolved " ++ show unresolved])
+  where unresolved = length (filter identUnresolved rs)
+
+-- ===============
 -- The side file
 --
 -- One line per root and per lifted def, in pointer order, after the
@@ -1052,35 +1220,38 @@ renderChain st ct ctx =
 renderSideFile :: String -> ModuleMeta -> String
 renderSideFile modName mm =
     unlines ([sideFileSchema, "module " ++ modName] ++
-             [ "root " ++ renderSite st s | s <- mm_roots mm ] ++
-             map renderDef (IM.elems (mm_defs mm)))
+             [ "root " ++ renderSite (mm_sites mm) s | s <- mm_roots mm ] ++
+             map (renderDefLine mm) (IM.elems (mm_defs mm)))
+
+-- one def's line of the side file
+renderDefLine :: ModuleMeta -> DefRecord -> String
+renderDefLine mm r =
+    intercalate " | "
+        [ "def " ++ defName r,
+          "site " ++ renderSite st (dr_site r),
+          "chain " ++ renderChain st ct (dr_context r),
+          "contexts " ++ show (IS.size (dr_contexts r)),
+          "merged " ++ renderFacts (dr_merged r),
+          "folded " ++ renderFacts (dr_folded r),
+          "parent " ++ renderCell (dr_parent r),
+          "binder " ++ renderBinder (dr_binder r),
+          "alias " ++ renderCell (dr_alias r),
+          "tiers " ++ renderTiers ]
   where
     st = mm_sites mm
     ct = mm_contexts mm
-    renderDef r =
-        intercalate " | "
-            [ "def " ++ defName r,
-              "site " ++ renderSite st (dr_site r),
-              "chain " ++ renderChain st ct (dr_context r),
-              "contexts " ++ show (IS.size (dr_contexts r)),
-              "merged " ++ renderFacts (dr_merged r),
-              "folded " ++ renderFacts (dr_folded r),
-              "parent " ++ renderCell (dr_parent r),
-              "binder " ++ renderBinder (dr_binder r),
-              "alias " ++ renderCell (dr_alias r),
-              "tiers " ++ renderTiers r ]
     renderFacts fs =
         show (length fs) ++
         concat [ " {" ++ renderSite st s ++ " @ " ++ renderChain st ct c ++ "}"
                | (s, c) <- fs ]
-    defName r = defNameString (dr_ptr r) (dr_hint r)
+    defName d = defNameString (dr_ptr d) (dr_hint d)
     renderCell p | p == noCell = "-"
                  | otherwise = case IM.lookup p (mm_defs mm) of
                                  Just pr -> defName pr
                                  Nothing -> "_" ++ show p
     renderBinder b | b == noBinder = "-"
                    | otherwise = renderBinderSite st b
-    renderTiers r =
+    renderTiers =
         let row = siteRow st (dr_site r)
             isDef = maybe False ((== SKDef) . siteKeyKind . sr_key) row
             use = maybe False sr_useSite row
@@ -1090,6 +1261,135 @@ renderSideFile modName mm =
                                         ('s', dr_shared r),
                                         ('m', not (null (dr_merged r)))], on ]
         in  if null letters then "-" else letters
+
+-- ===============
+-- The position-free rendering
+--
+-- A site is rendered a second way for comparisons across an edit that
+-- moves lines (design 12.6): not by its position but by the
+-- definition it lies in, its head and its rank among the sites of that
+-- head in that definition, as @<definition>/<head>[<rank>].  The
+-- enclosing definition of a site is the site of the innermost frame of
+-- a context that placed it: for a frame's site, its parent frame's
+-- site (the module itself at the root); for a record's site, and for
+-- the sites merged or folded into the record, the innermost frame of
+-- the context recorded with it; the first placing wins, in context and
+-- then pointer order.  The rank orders the sites with one enclosing
+-- definition and one head by position, so it changes only when an
+-- application of that head is added, removed or reordered inside the
+-- definition.  A site without a position (a primitive, keyed on its
+-- operator; a root, keyed on its name) renders as in the positional
+-- form, and the counts of a chain stay on its links, so an OLD and a
+-- NEW capture pair their loop iterations by count.  Derived from the
+-- tables alone, at rendering time.
+
+data SiteIndex = SiteIndex { si_module :: String,
+                             si_encl :: IM.IntMap Int,
+                             si_rank :: IM.IntMap Int }
+
+siteIndex :: String -> ModuleMeta -> SiteIndex
+siteIndex modName mm = SiteIndex modName encl rank
+  where
+    st = mm_sites mm
+    ct = mm_contexts mm
+    -- the site of a context's innermost frame; 0 at the top
+    innermost ctx = case IM.lookup ctx (ct_rows ct) of
+                      Just (_, s, _) -> plainSite s
+                      Nothing -> 0
+    placed = [ (plainSite s, innermost p) | (p, s, _) <- IM.elems (ct_rows ct) ] ++
+             concat [ (plainSite (dr_site r), innermost (dr_context r)) :
+                      [ (plainSite s, innermost c) | (s, c) <- dr_merged r ++ dr_folded r ]
+                    | r <- IM.elems (mm_defs mm) ]
+    encl = IM.fromListWith (\ _ old -> old) placed
+    groups = M.fromListWith (++)
+                 [ ((IM.findWithDefault (-1) s encl, renderName b q), [(p, s)])
+                 | (s, SiteRow { sr_key = IdKey b q p _ }) <- IM.toAscList (st_rows st),
+                   p /= noPosition ]
+    rank = IM.fromList [ (s, n) | grp <- M.elems groups,
+                                  (n, (_, s)) <- zip [1 :: Int ..]
+                                                     (sortBy (comparing byPosition) grp) ]
+    byPosition (p, _) = (getFString (pos_file p), pos_line p, pos_column p)
+
+renderSiteFree :: SiteTable -> SiteIndex -> Int -> String
+renderSiteFree t ix s =
+    case siteRow t s of
+      Nothing -> "site " ++ show s ++ " (no row)"
+      Just row ->
+        let key = sr_key row
+            body = case key of
+                     IdKey b q p _
+                       | p == noPosition -> renderName b q
+                       | otherwise -> "@" ++ enclosing ++ "/" ++ headName b q ++
+                                      "[" ++ maybe "?" show (IM.lookup plain (si_rank ix)) ++ "]"
+                     PrimKey op -> show op
+                     RootKey n _ -> n
+                     BoundKey -> "-"
+                     FieldKey n -> show n
+            flags = [ c | (c, on) <- [('h', testBit s 60),
+                                      ('u', sr_useSite row),
+                                      ('r', sr_recursive row)], on ]
+        in  showSiteKind (siteKeyKind key) ++ " " ++ body ++
+            (if null flags then "" else " " ++ flags)
+  where
+    plain = plainSite s
+    (enclosing, enclQual) = enclName (IM.findWithDefault (-1) plain (si_encl ix))
+    enclName e
+      | e == 0 = (si_module ix, "")
+      | e < 0 = ("?", "")
+      | otherwise =
+          case siteRow t e of
+            Just (SiteRow { sr_key = IdKey b q _ _ }) -> (renderName b q, getFString q)
+            Just (SiteRow { sr_key = RootKey n k }) -> (showSiteKind k ++ ":" ++ n, "")
+            Just (SiteRow { sr_key = PrimKey op }) -> (show op, "")
+            _ -> ("?", "")
+    headName b q | getFString q == enclQual = getFString b
+                 | otherwise = renderName b q
+
+renderChainFree :: SiteTable -> ContextTable -> SiteIndex -> Int -> String
+renderChainFree _ _ _ 0 = "-"
+renderChainFree st ct ix ctx =
+    intercalate " -> " [ renderSiteFree st ix s ++ "#" ++ show c
+                       | (s, c) <- contextChain ct ctx ]
+
+-- a def's sites in the position-free form: its own, its chain and the
+-- sites merged and folded into it
+renderDefFree :: ModuleMeta -> SiteIndex -> DefRecord -> String
+renderDefFree mm ix r =
+    intercalate " | "
+        [ "free " ++ defNameString (dr_ptr r) (dr_hint r),
+          "site " ++ renderSiteFree st ix (dr_site r),
+          "chain " ++ renderChainFree st ct ix (dr_context r),
+          "merged " ++ facts (dr_merged r),
+          "folded " ++ facts (dr_folded r) ]
+  where
+    st = mm_sites mm
+    ct = mm_contexts mm
+    facts fs = show (length fs) ++
+               concat [ " {" ++ renderSiteFree st ix s ++ " @ " ++
+                        renderChainFree st ct ix c ++ "}"
+                      | (s, c) <- fs ]
+
+-- An identifier's record set (dumpbxref --resolve): its line, then
+-- each origin's record in both renderings (a def's side-file line and
+-- its position-free line, a root's site both ways), then the events
+-- of its history, each with its position in the ledger.
+renderIdentSet :: String -> ModuleMeta -> IdentRecord -> String
+renderIdentSet modName mm r =
+    unlines (renderIdent mm r :
+             concatMap origin (ir_origins r) ++ map event (ir_history r))
+  where
+    ix = siteIndex modName mm
+    st = mm_sites mm
+    origin (ODef p) =
+        case IM.lookup p (mm_defs mm) of
+          Just d -> ["  " ++ renderDefLine mm d, "  " ++ renderDefFree mm ix d]
+          Nothing -> ["  def _" ++ show p ++ " (no record)"]
+    origin (ORoot s) = ["  root " ++ renderSite st s,
+                        "  free root " ++ renderSiteFree st ix s]
+    origin o = ["  " ++ renderOrigin mm o]
+    byPosition = IM.fromList (zip [0 ..] (reverse (mm_events mm)))
+    event n = "  event " ++ show n ++ ": " ++
+              maybe "(none)" renderEvent (IM.lookup n byPosition)
 
 -- ===============
 -- The census (-metadata-census)

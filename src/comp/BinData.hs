@@ -6,6 +6,7 @@
 {-# LANGUAGE MagicHash, UnboxedTuples #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
 module BinData ( Byte
+               , Out, In
                , putBs, putB, putI
                , getN, getB, getI
                , Bin(..)

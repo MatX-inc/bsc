@@ -1,0 +1,14 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident value | kind output,wire | origins root methodroot value [MetaCSE.bsv:12:8]
+ident RDY_value | kind output,wire | origins root methodroot value [MetaCSE.bsv:12:8]
+ident a | kind reg | origins root inst a [MetaCSE.bsv:13:19]
+ident a$D_IN | kind wire | origins def __h, def __h, def __h, root rule up, root rule down
+ident a$EN | kind wire | origins root rule down
+ident b | kind reg | origins root inst b [MetaCSE.bsv:14:19]
+ident b$D_IN | kind wire | origins pass State b$write_1
+ident b$EN | kind wire | origins pass State b$EN_write
+ident c | kind reg | origins root inst c [MetaCSE.bsv:15:19]
+ident c$D_IN | kind wire | origins def __h, def __h, def __h, root rule up
+ident c$EN | kind wire | origins root rule up
+summary idents 13 resolved 11 unresolved 2

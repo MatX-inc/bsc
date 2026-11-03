@@ -1,0 +1,14 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident value | kind output,wire | origins root methodroot value [MetaLift.bsv:9:8]
+ident RDY_value | kind output,wire | origins root methodroot value [MetaLift.bsv:9:8]
+ident a | kind reg | origins root inst a [MetaLift.bsv:10:19]
+ident a$D_IN | kind wire | origins pass State a$write_1
+ident a$EN | kind wire | origins pass State a$EN_write
+ident b | kind reg | origins root inst b [MetaLift.bsv:11:19]
+ident b$D_IN | kind wire | origins pass State b$write_1
+ident b$EN | kind wire | origins pass State b$EN_write
+ident c | kind reg | origins root inst c [MetaLift.bsv:12:19]
+ident c$D_IN | kind wire | origins def __h, def __h, def __h, def __h, root rule pick
+ident c$EN | kind wire | origins def __h, def __h, root rule pick
+summary idents 13 resolved 11 unresolved 2

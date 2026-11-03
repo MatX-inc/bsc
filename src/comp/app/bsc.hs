@@ -114,7 +114,9 @@ import DefProp(DefProp(..))
 import IExpand(iExpand)
 import IExpandUtils(HeapData)
 import IExpandMeta(renderSideFile, renderLedger, checkClosure,
-                   MetaLedger(..), ModuleMeta(..), PassTag(..))
+                   MetaLedger(..), ModuleMeta(..), PassTag(..),
+                   IdentRecord, renderIdent, checkResolveIds)
+import VerilogMeta(IdentJoin(..), verilogIdents)
 import ITransform(iTransform)
 import IInline(iInline)
 import IInlineFmt(iInlineFmt)
@@ -146,7 +148,7 @@ import ABin(ABin(..), ABinModInfo(..), ABinForeignFuncInfo(..),
 import ABinUtil(readAndCheckABin, readAndCheckABinPathCatch, getABIHierarchy,
                 assertNoSchedErr)
 import GenABin(genABinFile)
-import GenBXref(BXrefFile(..), BXrefStage(..), genBXrefFile)
+import GenBXref(BXrefFile(..), BXrefStage(..), genBXrefFile, checkIdentTable)
 import ForeignFunctions(ForeignFunction(..), ForeignFuncMap,
                         mkImportDeclarations, isPoly)
 import VPIWrappers(genVPIWrappers, genVPIRegistrationArray)
@@ -268,7 +270,7 @@ replayBackend errh manifest replay abmi flags = do
     createDirectoryIfMissing True out
     setErrorHandleFlags errh flags
     t <- getNow
-    (_, _, _, _, backendInfo, observe) <- genModuleVerilog errh (abmi_pps abmi) flags
+    (_, _, _, _, _, backendInfo, observe) <- genModuleVerilog errh (abmi_pps abmi) flags
         (Nothing, Nothing, Just modName) t "" modName
         (rbHeader info) (rbMethodConflict info) (rbMethodBVI info)
         (abmi_pathinfo abmi) (abmi_aschedinfo abmi) (abmi_apkg abmi)
@@ -1035,7 +1037,7 @@ genModule
                                   schedule_info amod_clean
                          else return t
                     writeBXrefFile errh flags prefix modstr BXSchedErr
-                        (apkg_meta amod_clean)
+                        (apkg_meta amod_clean) []
                     exitFail errh
     t <- dump errh flags t DFschedule dumpnames (asi_schedule schedule_info)
     -- (the package itself is not dumped here; the check forces its ids
@@ -1148,19 +1150,21 @@ genModule
     -- * ledger = the metadata ledger as the backend left it (the final
     --           ASPackage's for Verilog, the APackage's otherwise), for
     --           the .bxref file
+    -- * idents = the identifier records of the Verilog backend's join
+    --           (VerilogMeta), for the .bxref file; none otherwise
     -- * backendInfo = the backend context an ECO capture retains, Nothing
     --           unless a capture was requested
     -- * observe = the deferred ECO observations, run once the native .ba
     --           has been written
-    (t, veriPortProps, vprog, ledger, backendInfo, observe)
+    (t, veriPortProps, vprog, ledger, idents, backendInfo, observe)
         <- if (backend flags == Just Verilog)
-           then do (t', ips, v, l, info, obs)
+           then do (t', ips, v, l, is, info, obs)
                        <- genModuleVerilog
                              errh pps flags dumpnames t prefix modstr
                              blurb methodConflictBlurb methodConflictBVI
                              vPathInfo sched_info'' amod_final Nothing
-                   return (t', ips, Just v, l, info, obs)
-           else return (t, [], Nothing, apkg_meta amod_final, Nothing, return ())
+                   return (t', ips, Just v, l, is, info, obs)
+           else return (t, [], Nothing, apkg_meta amod_final, [], Nothing, return ())
 
     t <- if (genABin flags)
          then writeABin errh pps flags dumpnames t prefix
@@ -1171,7 +1175,7 @@ genModule
 
     -- the cross-reference file, if requested, beside the .ba
     writeBXrefFile errh flags prefix modstr
-        (if isJust vprog then BXVerilog else BXBluesim) ledger
+        (if isJust vprog then BXVerilog else BXBluesim) ledger idents
 
     let ecoOpts = ecoOptions flags
     case ecoCapture ecoOpts of
@@ -1349,12 +1353,16 @@ metadataDirectory flags =
 -- <module>.bxref, beside the .ba, or beside the capture as one of its
 -- companions when an ECO capture is being taken (the directory rule of
 -- the side file), with the ledger as it stands once the module's code
--- has been generated.  Nothing is written under -metadata-scramble,
--- whose store holds perturbed numbers by design.  Encoding the table
--- reads its strings and interns none.
+-- has been generated, and the identifier records of the Verilog
+-- backend's join.  Nothing is written under -metadata-scramble, whose
+-- store holds perturbed numbers by design.  Encoding the table reads
+-- its strings and interns none.  Under -metadata-check the identifier
+-- records are also taken through the file's identifier table and back
+-- (GenBXref.checkIdentTable): a record that does not come back as it
+-- went in is a broken encoding, which stops the compile.
 writeBXrefFile :: ErrorHandle -> Flags -> String -> String -> BXrefStage ->
-                  MetaLedger -> IO ()
-writeBXrefFile errh flags prefix modstr stage ledger =
+                  MetaLedger -> [IdentRecord] -> IO ()
+writeBXrefFile errh flags prefix modstr stage ledger idents =
     when (bxref flags && not (metadataScramble flags)) $ do
         let captureDir = ecoCapture (ecoOptions flags)
         maybe (return ()) (createDirectoryIfMissing True) captureDir
@@ -1362,11 +1370,18 @@ writeBXrefFile errh flags prefix modstr stage ledger =
                           prefix modstr
         let fname = getFullFilePath fname_init
             remapP = remapPositionFile (remapPathPrefix flags)
+            meta = ledgerMeta ledger
             bxfile = BXrefFile { bx_version = bscVersionStr True,
                                  bx_module = modstr,
                                  bx_stage = stage,
-                                 bx_meta = ledgerMeta ledger }
+                                 bx_meta = meta,
+                                 bx_idents = idents }
         genBXrefFile errh remapP fname bxfile
+        when (metadataCheck flags) $
+            case checkIdentTable meta idents of
+              [] -> return ()
+              ms -> internalError ("identifier records of " ++ modstr ++
+                                   " through the .bxref table:\n" ++ unlines ms)
         unless (quiet flags) $
             putStrLnF ("Cross-reference file created: " ++
                        getRelativeFilePath fname_init)
@@ -1473,6 +1488,7 @@ genModuleVerilog :: ErrorHandle
                         [VPort],   -- port properties for the import-BVI
                         VProgram,  -- generated Verilog
                         MetaLedger, -- the final ASPackage's ledger, for the .bxref
+                        [IdentRecord], -- the identifier records of the join, for the .bxref
                         Maybe ReplayBackend, -- lazy context only when capture is requested
                         IO ())     -- deferred observations after native capture
 genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
@@ -1628,6 +1644,38 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                          vprog
        t <- dump errh flags t DFwriteVerilog dumpnames vfilenames
 
+       -- The join of the module's Verilog identifiers to the ledger
+       -- (VerilogMeta), read from the VProgram the printer printed
+       -- (vprog0, whose ids are the final package's; under
+       -- -remove-dollar the spellings come from the rename map) once
+       -- the Verilog is on disk, under -bxref (the records go into the
+       -- .bxref) or -metadata-check (every identifier must stand for a
+       -- record, or be a clock, reset or parameter: the closure at the
+       -- Verilog level) alone, and never on a replay or an adaptation,
+       -- whose package comes from a .ba and carries no table; with
+       -- neither flag the join is a thunk nothing forces.
+       -- -metadata-census checks the one-pass resolution against the
+       -- per-id one.
+       let joinWanted = (bxref flags || metadataCheck flags) &&
+                        isNothing (ecoReplay ecoOpts) && isNothing (ecoAdapt ecoOpts)
+           renames = if removeVerilogDollar flags
+                     then dollarRenames vprog0
+                     else M.empty
+           join = verilogIdents pprops aumod ips renames vprog0
+           idents = if joinWanted then ij_records join else []
+           finalMeta = ledgerMeta (aspkg_meta aumod)
+       when (joinWanted && metadataCheck flags) $
+           case ij_unresolved join of
+             [] -> return ()
+             rs -> internalError ("Verilog identifiers standing for no record in " ++
+                                  moduleName ++ ":\n" ++
+                                  unlines (map (renderIdent finalMeta) rs))
+       when (joinWanted && metadataCensus flags) $
+           case checkResolveIds (aspkg_meta aumod) (ij_ids join) of
+             [] -> return ()
+             ms -> internalError ("resolveIds against resolveId in " ++ moduleName ++
+                                  ":\n" ++ unlines ms)
+
        let backendInfo = case ecoCapture ecoOpts of
                Nothing -> Nothing
                Just _ -> Just (ReplayBackend moduleName blurb
@@ -1646,8 +1694,9 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- * the port properties (to be included in the import-BVI)
        -- * the Verilog structure (for accessing in bluetcl)
        -- * the ledger after the last ASPackage pass (for the .bxref)
+       -- * the identifier records of the join (for the .bxref)
        -- Decide whether context is needed now; keep the captured payload lazy.
-       backendInfo `seq` return (t, ips, vprog, aspkg_meta aumod, backendInfo, observation)
+       backendInfo `seq` return (t, ips, vprog, aspkg_meta aumod, idents, backendInfo, observation)
 
 
 -- Write a Verilog program to file (along with its use file)

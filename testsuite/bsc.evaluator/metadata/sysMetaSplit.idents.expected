@@ -1,0 +1,15 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident value | kind output,wire | origins root methodroot value [MetaSplit.bsv:8:8]
+ident RDY_value | kind output,wire | origins root methodroot value [MetaSplit.bsv:8:8]
+ident a | kind reg | origins root inst a [MetaSplit.bsv:9:19]
+ident a$D_IN | kind wire | origins pass State a$write_1
+ident a$EN | kind wire | origins pass State a$EN_write
+ident b | kind reg | origins root inst b [MetaSplit.bsv:10:19]
+ident b$D_IN | kind wire | origins pass State b$write_1
+ident b$EN | kind wire | origins pass State b$EN_write
+ident c | kind reg | origins root inst c [MetaSplit.bsv:11:19]
+ident c$D_IN | kind wire | origins def __h, def __h, root rule pick
+ident c$EN | kind wire | origins def __h, def __h, root rule pick
+ident a_ULE_b___d3 | kind wire | origins def __h, def __h, def __h, def __h, root rule pick
+summary idents 14 resolved 12 unresolved 2

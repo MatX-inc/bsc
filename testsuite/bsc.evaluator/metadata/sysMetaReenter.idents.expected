@@ -1,0 +1,29 @@
+ident CLK | kind input | origins unresolved CLK
+ident RST_N | kind input | origins unresolved RST_N
+ident total | kind output,wire | origins def __h, def __h, root methodroot total [MetaReenter.bsv:24:8]
+ident RDY_total | kind output,wire | origins root methodroot total [MetaReenter.bsv:24:8]
+ident a_0_0 | kind reg | origins root inst a_0_0 [MetaReenter.bsv:25:43]
+ident a_0_0$D_IN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+ident a_0_0$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+ident a_0_1 | kind reg | origins root inst a_0_1 [MetaReenter.bsv:25:43]
+ident a_0_1$D_IN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+ident a_0_1$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+ident a_1_0 | kind reg | origins root inst a_1_0 [MetaReenter.bsv:25:43]
+ident a_1_0$D_IN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+ident a_1_0$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+ident a_1_1 | kind reg | origins root inst a_1_1 [MetaReenter.bsv:25:43]
+ident a_1_1$D_IN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+ident a_1_1$EN | kind wire | origins def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, def __h, root rule tick
+ident b_0_0 | kind reg | origins root inst b_0_0 [MetaReenter.bsv:26:43]
+ident b_0_0$D_IN | kind wire | origins pass State b_0_0$write_1
+ident b_0_0$EN | kind wire | origins pass State b_0_0$EN_write
+ident b_0_1 | kind reg | origins root inst b_0_1 [MetaReenter.bsv:26:43]
+ident b_0_1$D_IN | kind wire | origins pass State b_0_1$write_1
+ident b_0_1$EN | kind wire | origins pass State b_0_1$EN_write
+ident b_1_0 | kind reg | origins root inst b_1_0 [MetaReenter.bsv:26:43]
+ident b_1_0$D_IN | kind wire | origins pass State b_1_0$write_1
+ident b_1_0$EN | kind wire | origins pass State b_1_0$EN_write
+ident b_1_1 | kind reg | origins root inst b_1_1 [MetaReenter.bsv:26:43]
+ident b_1_1$D_IN | kind wire | origins pass State b_1_1$write_1
+ident b_1_1$EN | kind wire | origins pass State b_1_1$EN_write
+summary idents 28 resolved 26 unresolved 2
