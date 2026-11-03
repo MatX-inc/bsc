@@ -1,0 +1,16 @@
+namespace eval eco_guide {
+    if {[eco_sdk_env "ECO guide" yosys]} {
+        set root [file normalize [file join [pwd] eco-guide-[pid]-[clock clicks]]]
+        set script [file join $here .. .. .. util eco examples run.sh]
+        set log "$root.log"
+        if {[catch {exec bash $script [which_bsc] $bluehs $sdk $yosys $::env(BLUESPECDIR) $root >$log 2>@1} message]} {
+            fail "ECO guide: packaged capture, configuration, metrics and replay commands"
+            set f [open $log]; verbose -log [read $f] 0; close $f
+        } elseif {![file exists [file join $root replayed-flow mkFanoutLoss.v]] || ![file exists [file join $root selected-metrics report.json]] || ![file exists [file join $root ordinary-metrics report.json]]} {
+            fail "ECO guide: complete example products"
+        } else {
+            pass "ECO guide: packaged capture, configuration, metrics and replay commands"
+            eco_run_script "ECO guide: shared full-flow fresh replay and trust-root controls" "$root-flow-replay-controls.log" [file join $here FlowReplayControls.hs] $bluehs $sdk [file join $root flow.config] [file join $root flow] "$root-flow-replay-controls"
+        }
+    }
+}

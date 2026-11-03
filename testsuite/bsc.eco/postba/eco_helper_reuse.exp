@@ -11,3 +11,27 @@ namespace eval eco_refinement_breadth {
   eco_run_script "ECO standard refinements: bounded family breadth" "$root.log" [file join $here ASTRefinements.hs] $yosys $root
  }
 }
+
+namespace eval eco_helper_flow {
+ if {[eco_sdk_env "ECO standard refinements" yosys]} {
+  set root [file normalize [file join [pwd] eco-refinements-[pid]-[clock clicks]]]
+  file mkdir $root
+  set captures {};set ok 1
+  foreach side {old new} {
+   set dir [file join $root $side];file mkdir $dir
+   set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -g mkHelperPipeline -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+   if {$side eq "new"} {lappend args -Xcpp -DECO_REMOVE_STAGE}
+   lappend args [file join $here HelperPipeline.bs]
+   if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+    fail "ECO standard refinements: capture $side";verbose -log $message 0;set ok 0
+   } else {pass "ECO standard refinements: capture $side"}
+   lappend captures [file join $dir capture mkHelperPipeline.replay]
+  }
+  if {$ok} {
+   set flow [file join $root flow]
+   if {[eco_run_script "ECO standard refinements: native translated flow and saved replay" [file join $root flow.log] [file join $here HelperReuseFlow.hs] [which_bsc] {*}$captures $::env(BLUESPECDIR) [file join $sdk build.manifest] $flow $yosys]} {
+    eco_run_script "ECO standard refinements: packaged CLI" [file join $root cli.log] [file join $sdk scripts captures.hs] --objective translated-normalized --refinements standard --invariants defer "$flow-cli.config"
+   }
+  }
+ }
+}

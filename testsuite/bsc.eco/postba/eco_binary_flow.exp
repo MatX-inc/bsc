@@ -1,0 +1,44 @@
+# A Binary-domain flow whose only improving candidate is equivalent only under
+# binary valuation, so a SAT miter decides it; a behaviour-changing twin whose
+# solver-decided candidates are all rejected; and the forged-solver controls:
+# the roots name the solver, never the flow directory.
+namespace eval eco_binary_flow {
+    if {[eco_sdk_env "ECO binary flow" yosys]} {
+        set root [file normalize [file join [pwd] eco-binary-flow-[pid]-[clock clicks]]]
+        file mkdir $root
+        set captures {}; set ok 1
+        foreach side {old new twin} {
+            set dir [file join $root $side]; file mkdir $dir
+            set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr -g mkBinaryFlow -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+            if {$side eq "new"} {lappend args -Xcpp -DECO_NEW}
+            if {$side eq "twin"} {lappend args -Xcpp -DECO_TWIN}
+            lappend args [file join $here BinaryFlow.bs]
+            if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+                fail "ECO binary flow: capture $side"; verbose -log $message 0; set ok 0
+            } else {pass "ECO binary flow: capture $side"}
+            lappend captures [file join $dir capture mkBinaryFlow.replay]
+        }
+        if {$ok} {
+            # The forged solver answers SUCCESS to every miter and records each
+            # invocation; shell-quote its marker path literally.
+            set fake [file join $root fake-solver.sh]
+            set calls [file join $root fake-solver.calls]
+            set f [open $fake w]
+            puts $f {#!/bin/sh}
+            puts $f "echo invoked >> '[string map [list ' '\\''] $calls]'"
+            puts $f {echo 'SAT proof finished - no model found: SUCCESS!'}
+            puts $f {exit 0}
+            close $f; file attributes $fake -permissions 0755
+            lassign $captures old new twin
+            foreach {name current solver what} [list new $new $yosys "SAT-decided flow" twin $twin $yosys "behaviour-changing twin flow" fake $twin $fake "forged solver driving the twin flow"] {
+                set config [file join $root "$name.config"]
+                set flow [file join $root "$name-flow"]
+                if {![eco_run_script "ECO binary flow: configure binary $name" [file join $root "$name-configure.log"] [file join $sdk scripts configure.hs] binary [which_bsc] mkBinaryFlow $old $current [pwd] [pwd] $::env(BLUESPECDIR) [file join $sdk build.manifest] $solver $flow $config]} {set ok 0; break}
+                if {![eco_run_script "ECO binary flow: $what with standard refinements" [file join $root "$name-flow.log"] [file join $sdk scripts captures.hs] --refinements standard $config]} {set ok 0; break}
+            }
+            if {$ok} {
+                eco_run_script "ECO binary flow: residual SAT proof, rejected twin candidates and forged-solver refusals" [file join $root checks.log] [file join $here BinaryFlowChecks.hs] $bluehs $sdk [file join $root new.config] [file join $root new-flow] [file join $root twin.config] [file join $root twin-flow] [file join $root fake-flow] $fake $calls [file join $root checks]
+            }
+        }
+    }
+}
