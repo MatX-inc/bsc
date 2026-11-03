@@ -8,3 +8,15 @@ ECOMatchTypes
 ECOAggressive
 ECOMatch
 ECOASTPlan
+ECOASTIdentity
+ECOASTAliases
+ECOASTDeclarations
+ECOASTTransform
+ECOASTSearch
+ECOStructurePolicy
+ECOASTVacancy
+ECOASTPreservation
+ECOASTShell
+ECOASTInactive
+ECOASTStateView
+ECOASTCost

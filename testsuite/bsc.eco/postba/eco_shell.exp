@@ -1,0 +1,16 @@
+namespace eval eco_shell {
+    if {[eco_sdk_env "ECO shell"]} {
+        set root [file normalize [file join [pwd] eco-shell-[pid]-[clock clicks]]]
+        file mkdir $root
+        foreach name {HistoricalShell InactiveHelpers PreservationBarriers} {
+            set args [list [file join $root $name]]
+            if {$name ne "PreservationBarriers"} {
+                if {$yosys == 0 || ![file executable $yosys]} {
+                    unsupported "ECO shell: Yosys unavailable"; continue
+                }
+                set args [concat [list $yosys] $args]
+            }
+            eco_run_script "ECO shell: $name" [file join $root "$name.log"] [file join $here "$name.hs"] {*}$args
+        }
+    }
+}

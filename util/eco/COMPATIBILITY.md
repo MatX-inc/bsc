@@ -25,6 +25,8 @@ Nothing in the stack migrates a capture between versions.
 | `MOD.eco-preopt`, `MOD.eco-graph` | `egSchema = 1` | #243 |
 | `keep.plan` | `ebpSchema = 1` | #243 |
 | `*.eco-plan` rename plans | `erpSchema = 1` | #246 |
+| `search.plan` | `planSchema = 3` | #247 |
+| `objective.plan` | `costSchema = 1` | #247 |
 | `build.manifest` | `sdkSchema = 4` | #246 |
 | proof receipts (`*.proof.json`, `ordinary-to-kept.json`, `proof-N.json`) | `"schema": 1` | #246 |
 

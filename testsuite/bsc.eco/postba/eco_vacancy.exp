@@ -1,0 +1,6 @@
+namespace eval eco_vacancy {
+    if {[eco_sdk_env "ECO vacancy" yosys]} {
+        set root [file normalize [file join [pwd] eco-vacancy-[pid]-[clock clicks]]]
+        eco_run_script "ECO vacancy: typed alternatives and proof controls" "$root.log" [file join $here StateVacancy.hs] $yosys $root
+    }
+}
