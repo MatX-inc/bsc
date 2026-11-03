@@ -294,10 +294,10 @@ satisfy' dvs es ps = do
                         sMany (dvsSub x_s dvs) (apSub x_s es) (new_ps ++ unchanged_rs) (x_sbs <++ sbs) (x_s @@ s) (apSub x_s (changed_rs ++ ps))
 
 expTConPred :: VPred -> TI [VPred]
-expTConPred (VPred e (PredWithPositions (IsIn c ts) pos anc)) = do
+expTConPred (VPred e n (PredWithPositions (IsIn c ts) pos anc)) = do
         vsts <- mapM expTFun ts
         let (vss, ts') = unzip vsts
-        return (VPred e (PredWithPositions (IsIn c ts') pos anc): concat vss)
+        return (VPred e n (PredWithPositions (IsIn c ts') pos anc): concat vss)
 
 -- Build a class predicate from a fully-applied ATF.  Given the ATF's
 -- class, param indices, target index, the ATF arguments, and the type
@@ -386,18 +386,18 @@ expTFun t = return ([], t)
 joinCtxs :: [TyVar] -> [VPred] -> Maybe ([VPred], Subst, SolvedBind)
 joinCtxs bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
   where blob_list = [((c, n, boolCompress (map not bs) ts), vp) |
-                     vp@(VPred _ (PredWithPositions (IsIn c ts) _ _)) <- vps,
+                     vp@(VPred _ _ (PredWithPositions (IsIn c ts) _ _)) <- vps,
                      (n, bs) <- zip [0..] (funDeps c)]
         joined_blob_list = joinByFst blob_list
-        matchPreds n (VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
-                     (VPred i' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
+        matchPreds n (VPred i ni pp@(PredWithPositions (IsIn c ts) pos anc))
+                     (VPred i' ni' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
           let bs = funDeps c !! n
           -- we could try to capture and use numeric equalities here
           -- but that would require being on the TI monad,
           -- which doesn't seem worth it
           (s, []) <- mgu bound_tyvars (boolCompress bs ts) (boolCompress bs ts')
-          let p'' = VPred i' (PredWithPositions (IsIn c ts') (pos' ++ pos) (anc' ++ anc))
-              rs  = p'':[ vp | vp@(VPred j _) <- vps, j /= i && j /= i']
+          let p'' = VPred i' ni' (PredWithPositions (IsIn c ts') (pos' ++ pos) (anc' ++ anc))
+              rs  = p'':[ vp | vp@(VPred j _ _) <- vps, j /= i && j /= i']
               pr = removePredPositions pp
               b = (i, predToType (apSub s pr), CVar i')
               sb = mkSolvedBind b False -- Joining equivalent predicates, not recursive
@@ -455,7 +455,7 @@ sat dvs ps p =
          -- tie the recursive knot!
          -- traces ("recursive knot: " ++ (ppString p) ++ " = " ++ (ppString lookfor_result))$
          case p of
-           (VPred vp (PredWithPositions (IsIn cl tys) poss _))
+           (VPred vp _ (PredWithPositions (IsIn cl tys) poss _))
             | (name cl) == (CTypeclass idBits)
                -> err (makeERecursiveBitsErrorMessage poss tys cl)
                   {-
@@ -470,7 +470,7 @@ sat dvs ps p =
                                   )
                                   -}
            -- if we satisfy numeric provisos recursively, we haven't proven it
-           (VPred vp (PredWithPositions (IsIn cl _) poss _)) | isPreClass cl ->
+           (VPred vp _ (PredWithPositions (IsIn cl _) poss _)) | isPreClass cl ->
                    return (SatResult [p] emptySBs nullSubst Provisional)
            _ -> satTrace ("sat recursive: " ++ ppReadable (p, b, s)) $
                 let sb = mkSolvedBind b True -- Found on stack, recursive
@@ -503,7 +503,7 @@ sat dvs ps p =
        -- predicates now found on the sat stack or among the givens
        -- (derivationUnchanged).
        let p_pred = toPred p
-           VPred p_id _ = p
+           VPred p_id _ _ = p
            shareable = not (isPreClass p_cl) && not (any hasTyVar p_tys)
            m_given = lookfor bound_tyvars p (concatMap bySuperE ps)
        m_shared <- case m_given of
@@ -538,7 +538,7 @@ sat dvs ps p =
                 case m_equals of
                   Just (b, (s, num_eqs)) -> do
                     satTrace ("sat in super (num eq): " ++ ppReadable (p, concatMap bySuperE ps, num_eqs)) $ return ()
-                    let VPred _ p_pwp = p
+                    let VPred _ _ p_pwp = p
                     eq_ps <- concatMapM (eqToVPred (getPredAncestors p_pwp) (getVPredPositions p)) num_eqs
                     let sb = mkSolvedBind b False -- From superclass, not recursive
                     SolveResult rs sbs s' <- satMany (dvsSub s dvs) (apSub s ps) [] (fromSB sb) s eq_ps
@@ -615,7 +615,7 @@ sat dvs ps p =
                   -- to importing compiles as if it were canonical.
                   let (vp_pred, inst_pred) = niceTypes (apSub s_final (toPred p, h))
                   let pos = getPosition $ getVPredPositions p
-                  let VPred dictId _ = p
+                  let VPred dictId _ _ = p
                       di = DirectIncoherence (apSub s_final (toPred p)) (apSub s_final h) pos
                       sbs' = addDirectIncoherence dictId di sbs
                   when (allowIncoherent c /= Just True) $
@@ -791,7 +791,7 @@ checkJoinCtxs tag rs s rs' = do
 batchSolveNumericPreds :: [EPred] -> [VPred] -> TI ([VPred], SolvedBinds)
 batchSolveNumericPreds es rs = do
     flags <- getFlags
-    let isNumVP (VPred _ (PredWithPositions (IsIn c _) _ _)) = isPreClass c
+    let isNumVP (VPred _ _ (PredWithPositions (IsIn c _) _ _)) = isPreClass c
         nps = filter isNumVP rs
     if not (useProvisoSAT flags) || null nps
       then return (rs, emptySBs)
@@ -813,7 +813,7 @@ batchSolveNumericPreds es rs = do
                 partition (\ (_, p) -> p `S.member` proven_cache) nnps
             (known_bad, misses) =
                 partition (\ (_, p) -> p `S.member` refuted_cache) rest
-            mkNumBind ((VPred w _), p) =
+            mkNumBind ((VPred w _ _), p) =
                 let t = predToType p
                 in  mkSolvedBind (w, t, mkNumInstBody t) False
             givens = [ p | EPred _ p <- es ]
@@ -822,8 +822,8 @@ batchSolveNumericPreds es rs = do
             -- their arrival order, which flows onward into retry order,
             -- inferred contexts, and error messages
             residualsWithout discharged =
-                let ds = S.fromList [ i | ((VPred i _), _) <- discharged ]
-                in  [ vp | vp@(VPred i _) <- rs, i `S.notMember` ds ]
+                let ds = S.fromList [ i | ((VPred i _ _), _) <- discharged ]
+                in  [ vp | vp@(VPred i _ _) <- rs, i `S.notMember` ds ]
             -- Prove each pending pred from the definition's givens, as
             -- the per-predicate code did.  Ground preds are closed
             -- arithmetic: they are queried with no assumptions at all,
@@ -911,8 +911,8 @@ satMany dvs es rs_accum sbs s ps =
     satMany' dvs es rs_accum sbs s (sortBy cmpPredConcreteness ps)
     where
         cmpPredConcreteness :: VPred -> VPred -> Ordering
-        cmpPredConcreteness (VPred _ (PredWithPositions (IsIn _ ts1) _ _))
-                            (VPred _ (PredWithPositions (IsIn _ ts2) _ _)) =
+        cmpPredConcreteness (VPred _ _ (PredWithPositions (IsIn _ ts1) _ _))
+                            (VPred _ _ (PredWithPositions (IsIn _ ts2) _ _)) =
             compare (concreteness ts2) (concreteness ts1) -- higher first
         concreteness ts = length (filter (not . isTVar) ts)
 
@@ -1042,13 +1042,13 @@ instance PPrint Reduction where
         pPrint d p ((qs, sb, us), (minst, mpkg))
 
 reducePred :: [EPred] -> DVS -> VPred -> TI (Maybe Reduction)
-reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
+reducePred _eps dvs (VPred w wn pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
     pushSatStackContext
     bound_tyvars <- getBoundTVs
     ts' <- mapM normT ts
     let pr' = IsIn c ts'
         pp' = PredWithPositions pr' pos anc
-        v' = VPred w pp'
+        v' = VPred w wn pp'
         -- Quick pre-check: can the instance head possibly match the predicate?
         -- Compares head type constructors at non-determined fundep positions.
         -- If both sides have a concrete non-synonym constructor and they
@@ -1274,7 +1274,7 @@ matchFDRow bound_tyvars mtch ts1 ts2 bs =
 -- instance for a dedicated error message.  Returns the normalized
 -- predicate and the instantiated head of the conflicting instance.
 findFunDepConflict :: VPred -> TI (Maybe (Pred, Pred))
-findFunDepConflict (VPred _ (PredWithPositions (IsIn c ts) pos _)) = do
+findFunDepConflict (VPred _ _ (PredWithPositions (IsIn c ts) pos _)) = do
     ai <- getAllowIncoherent
     if isPreClass c || outputFallThroughAllowed ai c
       then return Nothing
@@ -1319,7 +1319,7 @@ data InstMatch = InstMatch {
     }
 
 byInst :: VPred -> Inst -> TI (Match InstMatch)
-byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
+byInst (VPred i i_num p) (Inst e _ (ps :=> h) pkg) = do
     -- no longer necessary because reducePred now provides a fresh instance
     -- Inst e _ (ps :=> h) <- newInst ii (getPredPositions p)
     bound_tyvars <- getBoundTVs
@@ -1332,21 +1332,21 @@ byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
      Conflict -> return Conflict
      Match (inst_subst, (fd_subst, num_eqs)) -> do
         let s = fd_subst @@ inst_subst
-        vs <- mapM (const newDict) ps
+        vs <- mapM (const newDictN) ps
         -- if the instance is recursive (has a proviso for itself and expects
         -- a dictionary argument for that), then don't use a new dictionary
         -- for that argument, just pass the instance to itself
         let isSelfRec = any (== p) (apSub s ps)
-            vs' = zipWith (\ x y -> if (y == p) then i else x) vs (apSub s ps)
+            refs' = zipWith (\ x y -> if (y == p) then (i, i_num) else x) vs (apSub s ps)
         eq_ps <- mapM (eqToPred (getPredPositions p)) num_eqs
         let eq_pwps = map (mkPredWithPositions []) eq_ps
-        eq_vs <- mapM (const newDict) eq_pwps
+        eq_vs <- mapM (const newDictN) eq_pwps
         -- if p introduces a new predicate, carry on the position info,
         -- and record p (and its own reduction chain) as the ancestry of
         -- the residual, for error reporting in terms of the user-written
         -- root predicate
         let p_ancestors = mkPredAncestor p : getPredAncestors p
-            mkvpred x y = VPred x (addPredAncestors
+            mkvpred (x, n) y = VPred x n (addPredAncestors
                                        (addPredPositions y (getPredPositions p))
                                        p_ancestors)
             -- if the instance is recursive one of these will be unused?
@@ -1355,14 +1355,14 @@ byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
             e' = apSub s e
         ps'' <- concatMapM (expTConPred . expandSynVPred) ps'
         -- rtrace ("byInst: " ++ ppReadable (ps', e', t)) $ return ()
-        let binding = (i, t, CApply e' (map CVar vs'))
+        let binding = (i, t, CApply e' (map (CVar . fst) refs'))
             -- The binding's expression does not reference the deferred
             -- numeric-equality dictionaries (eq_vs), but it is only
             -- valid evidence if those equalities hold; record them as
             -- semantic dependencies so anything walking a binding's
             -- free variables (emission ordering, later reuse checks)
             -- sees the obligation (see SolvedBinds.addBindDeps).
-            solvedBind = addBindDeps eq_vs (mkSolvedBind binding isSelfRec)
+            solvedBind = addBindDeps (map fst eq_vs) (mkSolvedBind binding isSelfRec)
         return (Match (InstMatch ps'' solvedBind inst_subst fd_subst pkg))
 
 -- Create a new instance by replacing the type variables in the instance
@@ -1385,7 +1385,7 @@ newInst ii@(Inst _ vs _ _) poss = do
 
 lookfor :: [TyVar] -> VPred -> [EPred] -> Maybe (Bind, (Subst, [(Type, Type)]))
 lookfor bound_tyvars _ [] = Nothing
-lookfor bound_tyvars v@(VPred i pp) eps@(EPred e pr':ps) =
+lookfor bound_tyvars v@(VPred i _ pp) eps@(EPred e pr':ps) =
     let pr = removePredPositions pp
         meq x y = if x == y then Just nullSubst else Nothing
     in  -- traces ("lookfor " ++ ppReadable (pr, pr', ps)) $
@@ -1810,29 +1810,29 @@ unifyFnFromTo x e t = do
 -- they should not be re-introduced later (by predicate reduction)o
 mkVPred :: Position -> PredWithPositions -> TI [VPred]
 mkVPred pos p = do
-    v <- newDict
-    expTConPred (expandSynVPred $ VPred v (addPredPositions p [pos]))
+    (v, n) <- newDictN
+    expTConPred (expandSynVPred $ VPred v n (addPredPositions p [pos]))
 
 mkVPredNoNewPos :: PredWithPositions -> TI [VPred]
 mkVPredNoNewPos p = do
-    v <- newDict
-    expTConPred (expandSynVPred $ VPred v p)
+    (v, n) <- newDictN
+    expTConPred (expandSynVPred $ VPred v n p)
 
 -- entry point when we don't need synonyms reduced
 -- mainly deriving and other places where we check reducibility
 mkVPredFromPred :: [Position] -> Pred -> TI VPred
 mkVPredFromPred poss p = do
-  v <- newDict
-  return (VPred v $ mkPredWithPositions poss p)
+  (v, n) <- newDictN
+  return (VPred v n $ mkPredWithPositions poss p)
 
 toPredWithPositions :: VPred -> PredWithPositions
-toPredWithPositions (VPred _ p) = p
+toPredWithPositions (VPred _ _ p) = p
 
 toPred :: VPred -> Pred
 toPred p = removePredPositions (toPredWithPositions p)
 
 vpIsPreClass :: VPred -> Bool
-vpIsPreClass (VPred _ (PredWithPositions (IsIn cl _) _ _)) = isPreClass cl
+vpIsPreClass (VPred _ _ (PredWithPositions (IsIn cl _) _ _)) = isPreClass cl
 
 
 -- Close a set of variables with respect to predicates and their functional
@@ -1952,7 +1952,7 @@ niceTypes given_type =
 
 -- Classes with *-kind types which can be defaulted
 getStarDefaults :: S.Set TyVar -> VPred -> [(TyVar, [Type])]
-getStarDefaults fvs (VPred i (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
+getStarDefaults fvs (VPred i _ (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
     case ts of
       [TVar v, _] | cid == idPrimIndex,
                      not (S.member v fvs) -> [(v, [tInteger, tNat noPosition])]
@@ -1968,7 +1968,7 @@ getStarDefaults fvs (VPred i (PredWithPositions (IsIn (Class {name=(CTypeclass c
 
 -- Classes with #-kind types which can be defaulted
 getNumDefaults :: S.Set TyVar -> VPred -> [(TyVar, [Type])]
-getNumDefaults fvs (VPred i (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
+getNumDefaults fvs (VPred i _ (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
     case ts of
       [TVar v, t, _] | cid == idBitExtend,
                         not (S.member v fvs),
@@ -1985,7 +1985,7 @@ getNumDefaults fvs (VPred i (PredWithPositions (IsIn (Class {name=(CTypeclass ci
       _ -> []
 
 getForceDefaults :: S.Set TyVar -> VPred -> [(TyVar, Type)]
-getForceDefaults fvs (VPred i (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
+getForceDefaults fvs (VPred i _ (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
     case ts of
       [TVar v]    | cid == idStringLiteral,
                      not (S.member v fvs) -> [(v, tString)]
@@ -2300,17 +2300,17 @@ propagateFunDeps ps0 =
 -- never reduce (which we'll want to report an error about now, not later)
 --
 isReduciblePred :: VPred -> TI Bool
-isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos _)) |
+isReduciblePred (VPred i _ pp@(PredWithPositions p@(IsIn c ts) pos _)) |
     -- XXX for now, we don't consider Add, Max, Min, Log, Mul, Div, NumEq
     -- XXX (the "genInsts" of these classes doesn't handle "maybe reducible")
     (isPreClass c) = return True
-isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos anc)) = do
+isReduciblePred (VPred i n pp@(PredWithPositions p@(IsIn c ts) pos anc)) = do
     ts' <- mapM normT ts
     ai <- getAllowIncoherent
     bvs <- getBoundTVs
     let p' = IsIn c ts'
         pp' = PredWithPositions p' pos anc
-        v' = VPred i pp'
+        v' = VPred i n pp'
         -- Under ordered-clause fundep semantics, an instance whose input
         -- positions match but whose determined positions conflict makes
         -- the predicate unsatisfiable -- final, unless an earlier (more
@@ -2354,7 +2354,7 @@ isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos anc)) = do
 -- see earlierInstanceMayCapture) -- isReduciblePred uses it to
 -- decide whether a later conflict is conclusive.
 byInstIsReducible :: VPred -> Inst -> TI (Match (), Bool)
-byInstIsReducible (VPred i p) ii = do
+byInstIsReducible (VPred i _ p) ii = do
     (mv, Inst e _ (ps :=> h) _) <- newInst ii (getPredPositions p)
     bound_tyvars <- getBoundTVs
     let p_bare = removePredPositions p
@@ -2440,7 +2440,7 @@ matchTopIsReducible bound_tyvars p1@(IsIn c1 ts1) p2@(IsIn c2 ts2) =
 
 
 byExplPredIsReducible :: VPred -> EPred -> TI (Match ())
-byExplPredIsReducible (VPred _ p) (EPred _ ep) = do
+byExplPredIsReducible (VPred _ _ p) (EPred _ ep) = do
     bound_tyvars <- getBoundTVs
     return $
         matchExplPred bound_tyvars (removePredPositions p) ep

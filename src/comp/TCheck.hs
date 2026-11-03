@@ -507,9 +507,9 @@ tiExpr as td (CHasType (CAny {}) qt@(CQType [_] nt)) | nt == noType = do
     case qual_type of
       [PredWithPositions p poss _] :=> _ -> do
           -- poss is probably a list of only one position
-          VPred i pwp <- mkVPredFromPred poss p
+          VPred i n pwp <- mkVPredFromPred poss p
           let pwp' = addPredPositions pwp poss
-          return ([VPred i pwp'], CVar i)
+          return ([VPred i n pwp'], CVar i)
       _ -> internalError ("tiExpr: unexpected mkQualType result")
 
 {- fast special case
@@ -1264,7 +1264,7 @@ checkDisplayParam av_ok fmt_ok as e =
                  sizedLiteral <- sizedLiteralCls
                  stringLiteral <- stringLiteralCls
                  -- duplicate provisos are possible, so remove them
-                 let preds = nub [ pred | (VPred _ pp) <-  ps',
+                 let preds = nub [ pred | (VPred _ _ pp) <-  ps',
                                           let pred = removePredPositions pp,
                                           tvar `elem` (tv pred)]
                  -- traceM("proviso predicates: " ++ (ppReadable preds))
@@ -1353,7 +1353,7 @@ checkAssertParam as e =
                  -- traceM ("proviso variable: " ++ (ppReadable t))
                  do
                    -- duplicate provisos are possible, so remove them
-                   let preds = nub [ pred | (VPred _ pp) <-  ps',
+                   let preds = nub [ pred | (VPred _ _ pp) <-  ps',
                                             let pred = removePredPositions pp,
                                             tvar `elem` (tv pred)]
                    -- traceM("proviso predicates: " ++ (ppReadable preds))
@@ -2581,10 +2581,10 @@ tiExpl''' as0 i sc alts me (oqt@(oqs :=> ot), vts) = do
                 | otherwise      = ds_ground
         ds_up   | has_num_givens = []
                 | otherwise      = ds_open
-        dsh_ids = S.fromList [ w | VPred w _ <- ds_here ]
+        dsh_ids = S.fromList [ w | VPred w _ _ <- ds_here ]
     (stl_out, sbs_stl) <- batchSolveNumericPreds (apSub s_stl eqs)
                               (apSub s_stl rs2 ++ ds_here)
-    let (ds_h', rs2') = partition (\ (VPred w _) -> w `S.member` dsh_ids) stl_out
+    let (ds_h', rs2') = partition (\ (VPred w _ _) -> w `S.member` dsh_ids) stl_out
         ds = ds_h' ++ ds_up
 
     -- Skolem-escape check: a type variable quantified at this
@@ -3118,7 +3118,7 @@ tiImpls recursive as ibs = do
               let nqt@(_ :=> nt) = apSub (mkSubst gs_map) oqt
 
               -- the variable names for the dictionary arguments
-              let dict_vs = let getVPredId (VPred i _) = i
+              let dict_vs = let getVPredId (VPred i _ _) = i
                             in  map getVPredId rs_final
 
               let
@@ -3279,7 +3279,7 @@ doSCC ds =
 
 -- funny, this sees a system task application
 iAPs :: CExpr -> [Type] -> [VPred] -> CExpr
-iAPs f ts ps = cApply 7 (cTApply f ts) (map (\ (VPred i _) -> CVar i) ps)
+iAPs f ts ps = cApply 7 (cTApply f ts) (map (\ (VPred i _ _) -> CVar i) ps)
 
 optTrivLet :: CExpr -> CExpr
 optTrivLet (Cletseq [CLValueSign (CDefT x [] _ [CClause [] [] e]) []] (CVar x')) | x == x' = e

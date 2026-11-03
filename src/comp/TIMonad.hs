@@ -7,9 +7,9 @@ module TIMonad(
         getAllowIncoherent, maskAllowIncoherent,
         getFlags, setFlags, getSymTab,
         getSubst, clearSubst, extSubst, updSubst,
-        newTVar, newTVarId, isNewTVar, newDict, newVar,
+        newTVar, newTVarId, isNewTVar, newDict, newDictN, newVar,
         freshInst,
-        VPred(..), getVPredPositions, expandSynVPred,
+        VPred(..), noDictNum, getVPredPositions, expandSynVPred,
         EPred(..), Infer2, CheckT, TaskCheckT,
         getBoundTVs, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
@@ -232,7 +232,7 @@ mkTSSatElement :: (Maybe [TyVar]) -> [EPred] -> VPred -> TSSatElement
 -- variable to the pred.  We still will need to solve the pred "p".
 -- It is useful when there is recursion, where the solved "p" will
 -- refer right back to this predicate.
-mkTSSatElement _ _ (VPred i (PredWithPositions p _ _)) = EPred (CVar i) p
+mkTSSatElement _ _ (VPred i _ (PredWithPositions p _ _)) = EPred (CVar i) p
 
 type TSSatStack = SizedStack TSSatElement
 type TSSuperSatStack = SizedStack TSSatStack
@@ -756,12 +756,16 @@ isNewTVar (TyVar i _ _) =
     isBadId i
 
 newDict :: TI Id
-newDict = do
+newDict = fmap fst newDictN
+
+-- A fresh dictionary variable with the counter number it is named by
+newDictN :: TI (Id, Int)
+newDictN = do
  n <- getTyVarNum
  when doVarTrace $ do
    traceM ("newDict: " ++ ppReadable n)
    logDraw (DrewDict n)
- return (mkDictId n)
+ return (mkDictId n, n)
 
 -- The spelling of a generated dictionary variable or type variable, as
 -- newDict and newTVar name them; a replay (TCMisc.replaySolvedBinds)
@@ -804,28 +808,37 @@ freshInst msg x (Forall ks qt@(_ :=> t)) = do
 
 ------
 
--- VPred is an unsolved predicate (at least in satisfy, satMany, sat...)
-data VPred = VPred Id PredWithPositions
+-- VPred is an unsolved predicate (at least in satisfy, satMany, sat...):
+-- its dictionary variable, the counter number newDict named that
+-- variable by (noDictNum when it was not drawn from the counter), and
+-- the predicate.  The number lets the solver refer to the variable
+-- without evaluating its identifier (TCMisc.recordWalk).
+data VPred = VPred Id !Int PredWithPositions
     deriving (Show)
 
+-- The number of a dictionary variable that newDict did not draw: the
+-- counter starts above it, so it names no drawn variable
+noDictNum :: Int
+noDictNum = -1
+
 instance Types VPred where
-    apSub s (VPred i p) = VPred i (apSub s p)
-    tv (VPred _ p) = tv p
+    apSub s (VPred i n p) = VPred i n (apSub s p)
+    tv (VPred _ _ p) = tv p
 
 instance PPrint VPred where
 -- note that the colon (:) that gets printed here is NOT a list cons!
-    pPrint d p (VPred i q) = pparen (p>0) (ppId d i <> text":" <> pPrint d 10 q)
+    pPrint d p (VPred i _ q) = pparen (p>0) (ppId d i <> text":" <> pPrint d 10 q)
 
 getVPredPositions :: VPred -> [Position]
-getVPredPositions (VPred i p) = getPredPositions p
+getVPredPositions (VPred i _ p) = getPredPositions p
 
 -- the best position for a VPred should be its dictionary binding
 instance HasPosition VPred where
-  getPosition (VPred i p) = getPosition i
+  getPosition (VPred i _ p) = getPosition i
 
 
 expandSynVPred :: VPred -> VPred
-expandSynVPred (VPred i (PredWithPositions (IsIn c ts) poss anc)) = VPred i pwp'
+expandSynVPred (VPred i n (PredWithPositions (IsIn c ts) poss anc)) = VPred i n pwp'
   where pwp' = PredWithPositions p' poss anc
         p'   = IsIn c ts'
         ts'  = map expandSyn ts

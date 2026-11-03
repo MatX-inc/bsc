@@ -72,7 +72,7 @@ reportedPwp s pwp =
 rootVPreds :: [VPred] -> TI [VPred]
 rootVPreds vps = do
     s <- getSubst
-    let rootOf (VPred i pwp) = VPred i (reportedPwp s pwp)
+    let rootOf (VPred i n pwp) = VPred i n (reportedPwp s pwp)
     return (map rootOf vps)
 
 rootPredWPs :: [PredWithPositions] -> TI [PredWithPositions]
@@ -146,7 +146,7 @@ handleContextReduction mid pos vps0 =
 -- This helper function takes one predicate at a time
 handleContextReduction' :: Maybe Id -> Position -> (VPred, [VPred]) -> TI EMsg
 handleContextReduction' mid pos
-    p@((VPred vpi (PredWithPositions (IsIn c@(Class { name=(CTypeclass cid) }) ts) _ _)), _)
+    p@((VPred vpi _ (PredWithPositions (IsIn c@(Class { name=(CTypeclass cid) }) ts) _ _)), _)
     | cid == idBitwise =
         case ts of
             [t] -> return $ handleCtxRedBitwise pos p t
@@ -277,11 +277,11 @@ defaultContextReductionErr pos (p, reduced_ps) =
 -- then report an error about the mismatched size.
 
 handleCtxRedWrongBitSize :: Position -> (VPred, [VPred]) -> Class -> Type -> Integer -> TI EMsg
-handleCtxRedWrongBitSize pos (vp@(VPred vpi _), reduced_ps) c t sz = do
+handleCtxRedWrongBitSize pos (vp@(VPred vpi vpn _), reduced_ps) c t sz = do
     let default_err = defaultContextReductionErr pos (vp, reduced_ps)
     szv <- newTVar "handleCtxRedWrongBitSize" KNum vpi
     let p' = IsIn c [t,szv]
-        vp' = VPred vpi (PredWithPositions p' [] [])
+        vp' = VPred vpi vpn (PredWithPositions p' [] [])
     -- Use "satisfy", instead of "reducePred", because the size might
     -- result from arithmetic on the sizes of subtypes, via new predicates
     -- (so we need to continue until all preds are satisfied)
@@ -347,7 +347,7 @@ handleCtxRedBitReduce pos (vp, reduced_ps) vec_type vec_size =
 
 handleCtxRedBitExtend :: Position -> (VPred, [VPred]) -> Class ->
                          Type -> Type -> Type -> TI EMsg
-handleCtxRedBitExtend pos (vp@(VPred vpi _), reduced_ps) c szt1 szt2 t3 = do
+handleCtxRedBitExtend pos (vp@(VPred vpi vpn _), reduced_ps) c szt1 szt2 t3 = do
     let poss = filterPositions pos $ getVPredPositions vp
         badsize_err sz1 sz2 =
           (pos, ECtxRedBitExtendBadSizes sz1 sz2 poss)
@@ -358,7 +358,7 @@ handleCtxRedBitExtend pos (vp@(VPred vpi _), reduced_ps) c szt1 szt2 t3 = do
     szt1' <- newTVar "handleCtxRedBitExtend1" KNum vpi
     szt2' <- newTVar "handleCtxRedBitExtend2" KNum vpi
     let p' = IsIn c [szt1',szt2',t3]
-        vp' = VPred vpi (PredWithPositions p' [] [])
+        vp' = VPred vpi vpn (PredWithPositions p' [] [])
     x <- reducePred [] Nothing vp'
     case x of
       (Just (Reduction [vp2] b us _ _)) | (vpClassIs (CTypeclass idAdd) vp2) ->
@@ -424,11 +424,11 @@ wrongWriteArgErr pos p arr expected_val found_val =
 handleBracketCtxRed :: PredError -> ElemError ->
                        Position -> (VPred, [VPred]) -> Class ->
                        Type -> Type -> TI (EMsg)
-handleBracketCtxRed pred_error elem_error pos (vp@(VPred vpi _), _) c arr val = do
+handleBracketCtxRed pred_error elem_error pos (vp@(VPred vpi vpn _), _) c arr val = do
     -- create new val variable
     val_var <- newTVar "handleBracketCtxRed" KStar vpi
     let p' = IsIn c [arr, val_var]
-        vp' = VPred vpi (PredWithPositions p' [] [])
+        vp' = VPred vpi vpn (PredWithPositions p' [] [])
     x <- reducePred [] Nothing vp'
     case x of
       -- there is an instance of the bracket class for type "arr"
@@ -452,11 +452,11 @@ handleCtxRedPrimWriteable  = handleBracketCtxRed notWriteableErr  wrongWriteArgE
 
 handleCtxRedPrimIndex :: Position -> (VPred, [VPred]) -> Class ->
                          Type -> Type -> TI (EMsg)
-handleCtxRedPrimIndex pos (vp@(VPred vpi _), reduced_ps) c ix sz = do
+handleCtxRedPrimIndex pos (vp@(VPred vpi vpn _), reduced_ps) c ix sz = do
   -- create new size variable
    sz_var <- newTVar "handleCtxRedPrimIndex" KNum vpi
    let p' = IsIn c [ix, sz_var]
-       vp' = VPred vpi (PredWithPositions p' [] [])
+       vp' = VPred vpi vpn (PredWithPositions p' [] [])
    x <- reducePred [] Nothing vp'
    case x of
      -- there is an instance of PrimIndex for type "i"
@@ -482,7 +482,7 @@ wrongIndexSizeErr pos p ix real_sz sz = defaultContextReductionErr pos p
 
 isIsModuleArrow :: VPred -> Bool
 isIsModuleArrow
-    (VPred vpi (PredWithPositions (IsIn (Class { name=(CTypeclass cid) }) [mt, ct]) _ _))
+    (VPred vpi _ (PredWithPositions (IsIn (Class { name=(CTypeclass cid) }) [mt, ct]) _ _))
       | (cid == idIsModule) && (isArrow mt)
                   = True
 isIsModuleArrow _ = False
@@ -551,7 +551,7 @@ handleCtxRedWrapField mid pos (vp, reduced_ps) name userty =
                (True, (p : _)) -> p
                _ -> pos
       bitsPredType :: VPred -> [String]
-      bitsPredType (VPred _ (PredWithPositions (IsIn (Class { name=(CTypeclass cid) }) [t, _]) _ _))
+      bitsPredType (VPred _ _ (PredWithPositions (IsIn (Class { name=(CTypeclass cid) }) [t, _]) _ _))
         | cid == idBits = [pfpString t]
       bitsPredType _ = []
 
@@ -663,13 +663,13 @@ handleWeakCtxBitExtend :: Position -> Type -> [PredWithPositions] ->
                           TI (Either EMsg (PredWithPositions, [Pred]))
 handleWeakCtxBitExtend pos t qs pps@(pwp, _) = do
     let vpi = mkId noPosition (mkFString "_handleWeakCtxBitExtend")
-        vp  = VPred vpi pwp
+        vp  = VPred vpi noDictNum pwp
     x <- reducePred [] Nothing vp
     case x of
       Just (Reduction [vp2] b us _ _) ->
         -- separated out the matching of vp2 for readability
         case vp2 of
-          (VPred _ (PredWithPositions p2@(IsIn (Class {name=(CTypeclass cid)}) ts) poss _))
+          (VPred _ _ (PredWithPositions p2@(IsIn (Class {name=(CTypeclass cid)}) ts) poss _))
             | cid == idAdd -> do
                 -- we don't use the reduced preds that came with pwp,
                 -- because the tyvars in it won't match the ones in vp2
@@ -705,7 +705,7 @@ handleWeakCtxPrimSelectable :: Position -> Type -> [PredWithPositions] ->
                                TI (Either EMsg (PredWithPositions, [Pred]))
 handleWeakCtxPrimSelectable pos t qs pps@(pwp, _) = do
     let vpi = mkId noPosition (mkFString "_handleWeakCtxPrimSelectable")
-        vp  = VPred vpi pwp
+        vp  = VPred vpi noDictNum pwp
     case (removePredPositions pwp) of
       (IsIn c [arr, val]) -> do
         mesg <- isSelectionResultErr pos vp c arr val
@@ -716,11 +716,11 @@ handleWeakCtxPrimSelectable pos t qs pps@(pwp, _) = do
 
 isSelectionResultErr :: Position -> VPred -> Class ->
                         Type -> Type -> TI (Maybe EMsg)
-isSelectionResultErr pos vp@(VPred vpi _) c arr val = do
+isSelectionResultErr pos vp@(VPred vpi vpn _) c arr val = do
     -- create new val variable
     val_var <- newTVar "isSelectionResultErr (element)" KStar vpi
     let p' = IsIn c [arr, val_var]
-        vp' = VPred vpi (PredWithPositions p' [] [])
+        vp' = VPred vpi vpn (PredWithPositions p' [] [])
     x <- reducePred [] Nothing vp'
     bound_tyvars <- getBoundTVs
     case x of
@@ -743,7 +743,7 @@ handleWeakCtxPrimUpdateable :: Position -> Type -> [PredWithPositions] ->
                                TI (Either EMsg (PredWithPositions, [Pred]))
 handleWeakCtxPrimUpdateable pos t qs pps@(pwp, _) = do
     let vpi = mkId noPosition (mkFString "_handleWeakCtxPrimUpdateable")
-        vp  = VPred vpi pwp
+        vp  = VPred vpi noDictNum pwp
     case (removePredPositions pwp) of
       (IsIn c [arr, val]) -> do
         mesg <- isUpdateArgErr pos vp c arr val
@@ -754,11 +754,11 @@ handleWeakCtxPrimUpdateable pos t qs pps@(pwp, _) = do
 
 isUpdateArgErr :: Position -> VPred -> Class ->
                         Type -> Type -> TI (Maybe EMsg)
-isUpdateArgErr pos vp@(VPred vpi _) c arr val = do
+isUpdateArgErr pos vp@(VPred vpi vpn _) c arr val = do
     -- create new val variable
     val_var <- newTVar "isUpdateArgErr (element)" KStar vpi
     let p' = IsIn c [arr, val_var]
-        vp' = VPred vpi (PredWithPositions p' [] [])
+        vp' = VPred vpi vpn (PredWithPositions p' [] [])
     x <- reducePred [] Nothing vp'
     bound_tyvars <- getBoundTVs
     case x of
@@ -781,7 +781,7 @@ handleWeakCtxPrimWriteable :: Position -> Type -> [PredWithPositions] ->
                                TI (Either EMsg (PredWithPositions, [Pred]))
 handleWeakCtxPrimWriteable pos t qs pps@(pwp, _) = do
     let vpi = mkId noPosition (mkFString "_handleWeakCtxUpdateable")
-        vp  = VPred vpi pwp
+        vp  = VPred vpi noDictNum pwp
     case (removePredPositions pwp) of
       (IsIn c [arr, val]) -> do
         mesg <- isWriteArgErr pos vp c arr val
@@ -792,11 +792,11 @@ handleWeakCtxPrimWriteable pos t qs pps@(pwp, _) = do
 
 isWriteArgErr :: Position -> VPred -> Class ->
                         Type -> Type -> TI (Maybe EMsg)
-isWriteArgErr pos vp@(VPred vpi _) c arr val = do
+isWriteArgErr pos vp@(VPred vpi vpn _) c arr val = do
     -- create new val variable
     val_var <- newTVar "isWriteArgErr (element)" KStar vpi
     let p' = IsIn c [arr, val_var]
-        vp' = VPred vpi (PredWithPositions p' [] [])
+        vp' = VPred vpi vpn (PredWithPositions p' [] [])
     x <- reducePred [] Nothing vp'
     bound_tyvars <- getBoundTVs
     case x of
@@ -825,7 +825,7 @@ handleWeakCtxPrimParam pos _ _ (pwp, _) =
          let poss = filterPositions pos poss0
              ty_str = pfpString userty
          let vpi = mkId noPosition (mkFString "_handleWeakCtxPrimParam")
-             vp  = VPred vpi pwp
+             vp  = VPred vpi noDictNum pwp
          x <- reducePred [] Nothing vp
          case x of
            Just (Reduction vps _ _ _ _) -> do
@@ -844,7 +844,7 @@ handleWeakCtxPrimPort pos _ _ (pwp, _) =
          let poss = filterPositions pos poss0
              ty_str = pfpString userty
          let vpi = mkId noPosition (mkFString "_handleWeakCtxPrimPort")
-             vp  = VPred vpi pwp
+             vp  = VPred vpi noDictNum pwp
          x <- reducePred [] Nothing vp
          case x of
            Just (Reduction vps _ _ _ _) -> do
@@ -1075,7 +1075,7 @@ pwpClassIs cid1 (PredWithPositions (IsIn c@(Class { name=cid2 }) _) _ _)
 pwpClassIs _ _ = False
 
 vpClassIs :: CTypeclass -> VPred -> Bool
-vpClassIs cid (VPred _ pwp) = pwpClassIs cid pwp
+vpClassIs cid (VPred _ _ pwp) = pwpClassIs cid pwp
 
 
 {-
