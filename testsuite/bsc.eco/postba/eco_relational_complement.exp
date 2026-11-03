@@ -1,0 +1,15 @@
+# Strict proof controls need only bluehs; the independent X/Z oracle uses the
+# existing optional Icarus test tool, with no new compiler/package dependency.
+namespace eval eco_relational_complement {
+    if {[eco_sdk_env "ECO relational complement"]} {
+        set root [file normalize [file join [pwd] eco-relational-complement-[pid]-[clock clicks]]]
+        file mkdir $root
+        set script [file join $here ASTRelationalComplement.hs]
+        eco_run_script "ECO relational complement: directed strict controls" [file join $root directed.log] $script directed
+        if {$iverilog == 0 || $vvp == 0} {
+            unsupported "ECO relational complement: Icarus unavailable"
+        } else {
+            eco_run_script "ECO relational complement: exhaustive X/Z oracle" [file join $root oracle.log] $script oracle [file join $root oracle] $iverilog $vvp
+        }
+    }
+}

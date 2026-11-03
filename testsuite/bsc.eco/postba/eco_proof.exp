@@ -1,0 +1,19 @@
+# Optional matched bluehs SDK checks use the ordinary DejaGNU runner.
+namespace eval eco_sdk_proof {
+    if {[eco_sdk_env "ECO proof" yosys]} {
+        set root [file normalize [file join [pwd] eco-proof-[pid]-[clock clicks]]]
+        file mkdir $root
+        foreach script {ASTProof.hs ASTConcatProof.hs} {
+            set label [file rootname $script]
+            set extra {}
+            if {$script == "ASTConcatProof.hs"} {
+                if {$iverilog == 0 || $vvp == 0} {
+                    unsupported "ECO proof: ASTConcatProof Icarus unavailable"
+                    continue
+                }
+                set extra [list $iverilog $vvp]
+            }
+            eco_run_script "ECO proof: $label" [file join $root "$label.log"] [file join $here $script] $yosys [file join $root $label] {*}$extra
+        }
+    }
+}

@@ -1,0 +1,14 @@
+namespace eval eco_matching {
+    if {[eco_sdk_env "ECO matching"]} {
+        set root [file normalize [file join [pwd] eco-matching-[pid]-[clock clicks]]]
+        file mkdir $root
+        set scripts [list [file join $here ASTPlan.hs] [file join $here .. rename Rename.hs]]
+        foreach name {MatchTest GraphTest AggressiveTest} {
+            lappend scripts [file join $here .. .. eco match "$name.hs"]
+        }
+        foreach script $scripts {
+            set label [file rootname [file tail $script]]
+            eco_run_script "ECO matching: $label" [file join $root "$label.log"] $script
+        }
+    }
+}
