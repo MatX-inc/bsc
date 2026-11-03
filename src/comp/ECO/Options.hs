@@ -8,13 +8,14 @@ import Data.List (isPrefixOf)
 
 data ECOOptions = ECOOptions
     { ecoCapture :: Maybe FilePath
+    , ecoBackendPlan :: Maybe FilePath
     , ecoReplay :: Maybe FilePath
     , ecoOutput :: Maybe FilePath
     , ecoAdapt :: Maybe FilePath
     } deriving (Eq, Show)
 
 defaultECOOptions :: ECOOptions
-defaultECOOptions = ECOOptions Nothing Nothing Nothing Nothing
+defaultECOOptions = ECOOptions Nothing Nothing Nothing Nothing Nothing
 
 ecoEnabled :: ECOOptions -> Bool
 ecoEnabled o = o /= defaultECOOptions
@@ -25,8 +26,8 @@ ecoEnabled o = o /= defaultECOOptions
 data ECOInvocation
     = CompileInvocation (Maybe FilePath) [String]
       -- capture directory, ordinary compiler arguments
-    | ReplayInvocation FilePath FilePath
-      -- capture, output directory
+    | ReplayInvocation FilePath FilePath (Maybe FilePath)
+      -- capture, output directory, keep plan
     | AdaptInvocation FilePath FilePath
       -- capture, output directory
     deriving (Eq, Show)
@@ -34,8 +35,8 @@ data ECOInvocation
 invocationOptions :: ECOInvocation -> ECOOptions
 invocationOptions invocation = case invocation of
     CompileInvocation capture _ -> defaultECOOptions { ecoCapture = capture }
-    ReplayInvocation capture output -> defaultECOOptions
-        { ecoReplay = Just capture, ecoOutput = Just output }
+    ReplayInvocation capture output plan -> defaultECOOptions
+        { ecoReplay = Just capture, ecoOutput = Just output, ecoBackendPlan = plan }
     AdaptInvocation capture output -> defaultECOOptions
         { ecoAdapt = Just capture, ecoOutput = Just output }
 
@@ -43,10 +44,13 @@ parseECOOptions :: [String] -> Either String ECOInvocation
 parseECOOptions = go defaultECOOptions []
   where
     go o xs []
-        | ecoAdapt o /= Nothing && (ecoReplay o /= Nothing || ecoCapture o /= Nothing) =
+        | ecoAdapt o /= Nothing && (ecoReplay o /= Nothing || ecoCapture o /= Nothing || ecoBackendPlan o /= Nothing) =
             Left "-eco-adapt cannot be combined with replay or capture"
+        | ecoBackendPlan o /= Nothing && ecoReplay o == Nothing =
+            Left "-eco-backend-plan requires -eco-replay"
         | otherwise = validateInvocation o (reverse xs)
     go o xs (flag:value:rest)
+        | flag == "-eco-backend-plan" = once (ecoBackendPlan o) $ go (o {ecoBackendPlan = Just value}) xs rest
         | flag == "-eco-capture" = once (ecoCapture o) $ go (o {ecoCapture = Just value}) xs rest
         | flag == "-eco-replay" = once (ecoReplay o) $ go (o {ecoReplay = Just value}) xs rest
         | flag == "-eco-output" = once (ecoOutput o) $ go (o {ecoOutput = Just value}) xs rest
@@ -70,7 +74,7 @@ validateInvocation opts args = case ecoAdapt opts of
             | ecoCapture opts /= Nothing -> Left "-eco-capture cannot be combined with -eco-replay"
             | otherwise -> case ecoOutput opts of
                 Nothing -> Left "-eco-replay requires -eco-output DIR"
-                Just output -> Right (ReplayInvocation capture output)
+                Just output -> Right (ReplayInvocation capture output (ecoBackendPlan opts))
         Nothing
             | ecoOutput opts /= Nothing -> Left "-eco-output requires -eco-replay"
             | otherwise -> Right (CompileInvocation (ecoCapture opts) args)
