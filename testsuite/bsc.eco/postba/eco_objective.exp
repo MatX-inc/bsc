@@ -1,0 +1,8 @@
+# External translated objective; all deployed candidates retain complete RTL.
+namespace eval eco_objective {
+ if {[eco_sdk_env "ECO objective" yosys]} {
+  set root [file normalize [file join [pwd] eco-objective-[pid]-[clock clicks]]]
+  file mkdir $root
+  eco_run_script "ECO objective: search, proof and tamper controls" [file join $root directed.log] [file join $here ASTObjective.hs] [file join $root directed]
+ }
+}

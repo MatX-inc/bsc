@@ -1,0 +1,25 @@
+namespace eval eco_invariants {
+    if {[eco_sdk_env "ECO invariants" yosys]} {
+        set root [file normalize [file join [pwd] eco-invariants-[pid]-[clock clicks]]]
+        file mkdir $root
+        set captures {}; set ok 1
+        # Compiler observations are an optional producer layer. The core suite
+        # always checks synthetic obligations; enable native-positive controls
+        # only with a matched observation-producing compiler and SDK.
+        set native_observations [expr {[info exists ::env(ECO_NATIVE_OBSERVATIONS)] &&
+                                      $::env(ECO_NATIVE_OBSERVATIONS) eq "1"}]
+        foreach kind [expr {$native_observations ? {proved unproved} : {}}] {
+            set dir [file join $root $kind]; file mkdir $dir
+            set command [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -check-assert -g mkEvidence -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+            if {$kind eq "unproved"} {lappend command -Xcpp -DUNPROVED -unsafe-always-ready}
+            lappend command [file join $here Evidence.bs]
+            if {[catch {exec {*}$command >$dir/capture.log 2>@1} message]} {
+                fail "ECO invariants: $kind capture"; verbose -log $message 0; set ok 0
+            } else {pass "ECO invariants: $kind capture"}
+            lappend captures [file join $dir capture mkEvidence.eco-ast]
+        }
+        if {$ok} {
+            eco_run_script "ECO invariants: independent binding and proof" [file join $root invariants.log] [file join $here ASTInvariant.hs] $yosys [file join $root checks] {*}$captures
+        }
+    }
+}

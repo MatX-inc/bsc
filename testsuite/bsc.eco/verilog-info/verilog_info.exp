@@ -81,7 +81,10 @@ namespace eval eco_verilog_info {
         set fixtures [list \
             {backend/FanoutLoss.bs -cpp} \
             [list postba/FanoutLoss.bs [concat -cpp $flow]] \
+            {postba/CoreWithoutObservations.bs -cpp} \
+            {postba/Evidence.bs {-cpp -check-assert}} \
             {postba/StringParameter.bs -cpp} \
+            {postba/TranslatedMetric.bs -cpp} \
             {replay/ReplayDependencies.bs {}} \
             {replay/ReplayIncrementalTop.bs {-g mkReplayIncrementalTop}} \
             {replay/ReplaySmoke.bs {}}]

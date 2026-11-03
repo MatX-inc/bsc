@@ -1,3 +1,5 @@
 match.hs
 keep.hs
+invariants.hs
+measure.hs
 package-sdk.hs

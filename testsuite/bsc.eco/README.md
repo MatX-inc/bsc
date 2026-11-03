@@ -18,9 +18,11 @@ harness finds), `ECO_SDK` (a packaged SDK, see `util/eco/README.md`), `ECO_YOSYS
 when unset), `CORE_REPLAY_BSC` (an executable of a different native version
 for the adaptation version guard; untested when unset), `ECO_LIBDIR` (an
 extra `-i` library directory for the dependency group), `ECO_FUZZ_COUNT` and
-`ECO_FUZZ_SEED` (fuzz budget). A missing SDK, runtime, Yosys or Icarus makes
-a group `UNSUPPORTED`, never a pass. No Python, RTL parser or external RTL
-tool other than Yosys and Icarus is needed.
+`ECO_FUZZ_SEED` (fuzz budget), `ECO_NATIVE_OBSERVATIONS=1` (enables the
+observation-producer controls; needs the optional producer). A missing SDK,
+runtime, Yosys or Icarus makes a group `UNSUPPORTED`, never a pass. No
+Python, RTL parser or external RTL tool other than Yosys and Icarus is
+needed.
 
 Native groups
 -------------
@@ -50,6 +52,9 @@ External groups (`postba/`)
 | `eco_rules` (#247) | `TransformTest.hs` (the eleven-code feature table, every generated candidate passes both gates, 140 directed checks) and `TransformProofTest.hs` (proof gates with Yosys, `proveTautology` controls). |
 | `eco_search` (#247) | `ASTSearch.hs` (acceptance, hash-chain tamper rejection, gated initial rename) and `ASTExternalRules.hs` (an unbundled rule through the frozen SDK with negative controls for ports, behaviour, evidence, source mutation, duplicate registration, a use-before-declare and a comment-escape candidate, and a partial cost provider). |
 | `eco_shell`, `eco_vacancy`, `eco_state_view` (#247) | `HistoricalShell.hs`, `InactiveHelpers.hs`, `PreservationBarriers.hs`, `StateVacancy.hs`, `StateView.hs`: each family's candidates, barriers, strict/binary proofs and saved replay; every candidate is emittable. |
+| `eco_metrics`, `eco_translated_metrics` (#249) | Authenticated raw and normalized counts over captures and candidates, the packaged `measure.hs` CLI with the same OLD, comment/whitespace/structural controls, translate-off toggle controls, and five git-configuration sentinel/control pairs (ten checks) showing that repository attributes, local, global and ambient configuration and `core.autocrlf` cannot change a count. |
+| `eco_objective` (#249) | Translated objectives: search, proof and tamper controls. |
+| `eco_invariants`, `eco_core_without_observations` (#249) | Synthetic obligations are independently bound and proved; a core capture without a companion reports `unavailable-in-capture` with zero facts and explicit deferral; with `ECO_NATIVE_OBSERVATIONS=1` and the optional producer, proved and unproved captures are checked. |
 
 Groups that need Yosys are `UNSUPPORTED` without it; `eco_proof_fuzz`,
 `ASTConcatProof.hs` and the two X/Z oracles need Icarus.

@@ -1,0 +1,23 @@
+# Native AST synthesis-translated reporting; original emitted RTL is not parsed.
+namespace eval eco_translated_metrics {
+ if {[eco_sdk_env "ECO translated metrics"]} {
+  set root [file normalize [file join [pwd] eco-translated-metrics-[pid]-[clock clicks]]]
+  file mkdir $root
+  eco_run_script "ECO translated metrics: native toggle, comment and structural controls" [file join $root pure.log] [file join $here ASTTranslatedMetric.hs] pure [file join $root pure]
+  set contexts {}; set ok 1
+  foreach side {old new} {
+   set dir [file join $root $side];file mkdir $dir
+   set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -g mkTranslatedMetric -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+   if {$side eq "new"} {lappend args -Xcpp -DECO_NEW}
+   lappend args [file join $here TranslatedMetric.bs]
+   if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+    fail "ECO translated metrics: BH capture $side";verbose -log $message 0;set ok 0
+   } else {pass "ECO translated metrics: BH capture $side"}
+   lappend contexts [file join $dir capture mkTranslatedMetric.eco-ast]
+  }
+  if {$ok} {
+   eco_run_script "ECO translated metrics: authenticated translated and whole-file counts" [file join $root captures.log] [file join $here ASTTranslatedMetric.hs] captures {*}$contexts [file join $root checks]
+   eco_run_script "ECO translated metrics: packaged CLI" [file join $root cli.log] [file join $sdk scripts measure.hs] --translated {*}$contexts [file join $root cli]
+  }
+ }
+}
