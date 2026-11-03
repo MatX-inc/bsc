@@ -38,7 +38,8 @@ and nothing else in the stack re-establishes it.
 | 19 | `runCaptureFlow` (`util/eco/lib/ECOASTFlow.hs`) | #251 | `effective.config` is the first artifact; adaptation goes through the native CLI; OLD and NEW render exactly and share fixed ports; the kept branch exists only after `proof-keep` passed; every branch scores against the same OLD witness; the selection is never worse than ordinary NEW; input identities are unchanged; the deliverable goes through `emitVerilog`; `flow.report` is written and then the flow calls `replaySelectedFlow` on its own output and requires byte equality. |
 | 20 | `rootsFromConfig`, `loadFlow`, `replayFlow`, `adapterInputs`, `validateReplay` (`util/eco/lib/ECOASTReplay.hs`) | #251 | Roots never come from inside the flow directory; `effective.config` must agree with them by file identity (compiler, captures, manifest, solver, domain, timeout); both adapted captures link to the root captures through receipts with ordinary-byte parity; snapshot producers equal the compiler; the three snapshots are re-emitted as byte controls; every recorded plan chain is bound; the kept bridge is proved afresh; every step is re-proved with runners built from the roots; the objective envelope is re-verified; the re-emitted RTL must equal the flow's; every binding is re-hashed before the receipt is written. |
 | 21 | `selectPrefixesWithMetric` (`util/eco/lib/ECOASTSelection.hs`) | #251 | Each flow is loaded through row 20; all flows share the authenticated OLD and NEW ASTs, RTL and child metadata; a chosen prefix is replayed freshly, its bytes must equal the measured ones and its metric is measured again; every binding is rechecked before `completed.json`. |
-| 22 | `readEvidenceCompanion`, `consumeEvidenceJSON` (`util/eco/lib/ECOASTInvariant.hs`) | #249 | An absent companion means zero facts; a present one is bound to the capture, its `.ba`, its producer and payload; every supported obligation is lowered to a typed proposition and proved by `proveTautology` on the final AST; nothing is ever exported as an assumption. |
+| 22 | `finishDeclarationOrderFrom` (`util/eco/lib/ECOASTFinishOrder.hs`) | #252 | Solver, domain and timeout come from the roots; the module interface is fixed; upstream identities are bound; a proposal may change only declaration order or recorded wire identities; the search result and its saved-plan replay must agree and equal the scored proposal; the final dual-metric acceptance and the emitted metric must equal the score; a no-op is byte-identical. |
+| 23 | `readEvidenceCompanion`, `consumeEvidenceJSON` (`util/eco/lib/ECOASTInvariant.hs`) | #249 | An absent companion means zero facts; a present one is bound to the capture, its `.ba`, its producer and payload; every supported obligation is lowered to a typed proposition and proved by `proveTautology` on the final AST; nothing is ever exported as an assumption. |
 
 Trusted outside the stack: Yosys (`sat -prove`), the compiler's Verilog
 printer (read `ppOp` and the precedence table once; candidate ASTs have
@@ -48,7 +49,7 @@ only counts lines.
 ## PR chain
 
 Every PR is reviewed against its actual parent. #245 and #248 are
-prerequisites from upstream work; #244 is an optional leaf.
+prerequisites from upstream work; #244 and #254 are optional leaves.
 
 | PR | Branch | Parent | Contents |
 |---|---|---|---|
@@ -64,6 +65,8 @@ prerequisites from upstream work; #244 is an optional leaf.
 | #249 | `codex/eco-logical-pr03-objectives` | #247 | `ECOASTMetric`, `ECOASTTranslatedMetric`, `ECOASTTranslatedObjective`, `ECOASTInvariant`, `ECOInvariantExport`, `ECOBind`, `measure.hs`, `invariants.hs`; `eco_metrics`, `eco_translated_metrics`, `eco_objective`, `eco_invariants`, `eco_core_without_observations` |
 | #250 | `codex/eco-logical-pr04-refinements` | #249 | `ECOASTRefinements`, `ECOASTCorrespondence`, `ECOASTValueNames`, `ECOASTPipelineChain`, `ECOASTHelperReuse`, `ECOASTLiveAliases`, `ECOASTLiveShell`, `ECOASTAliasOrientation`; `eco_correspondence`, `eco_pipeline_chain`, `eco_helper_reuse`, `eco_live_aliases`, `eco_live_shell`, `eco_alias_orientation` |
 | #251 | `codex/eco-logical-pr05-flow` | #250 | `ECOASTFlow`, `ECOASTReplay`, `ECOASTSelection`, `captures.hs`, `configure.hs`, `replay.hs`, `select.hs`, `examples/run.sh`; `eco_flow`, `eco_guide`, `eco_selection`, `eco_binary_flow`, `eco_lexical_gates` |
+| #252 | `codex/eco-logical-pr06-declarations` | #251 | `ECOASTDeclarationOrder`, `ECOASTJointDeclarationOrder`, `ECOASTFinishOrder`, `finish-order.hs`; `eco_declaration_order`, `eco_finish_changed`; the four documents in this directory and `testsuite/bsc.eco/README.md` |
+| #254 | `codex/eco-optional-diagnostics` (optional) | #252 | bluehs renderers of backend and adaptation diagnostics; not part of the deployed series |
 
 ## Artifacts
 
@@ -100,9 +103,10 @@ matters.
 | `MOD.v` (flow deliverable) | `runCaptureFlow` through `emitVerilog` (#251) | the verifier compares | `frOutput` | the deliverable; re-derived by the verifier |
 | `flow.report` (schema 5), `flow-objective.report` | `runCaptureFlow` (#251) | `replayFlow` | `frInputs`, `frOutput`, `frConfig`, branch plans; report identity in evidence | untrusted selector of what to verify |
 | `summary.txt`, `<label>.log`, `<label>.log.command`, `selected-invariants/status.json` | `runCaptureFlow` (#251) | `examples/run.sh` reads `selected_branch` | none | provenance |
-| `verified/` and `replay.hs --flow OUT`: `old-control/`, `ordinary-control/`, `kept-control/`, `<branch>-input.ast`, `ordinary-to-kept/`, `ordinary-to-kept.json`, `replay/` (`input.ast`, `input.v`, `proof-N/`, `proof-N.json`, `selected.ast`, `selected.v`, `objective-*`), `qualified-input.ast`, `MOD.v`, `upstream-qualification.json` (schema 2) | `replayFlow` (#251) | nobody | every input identity inside the receipt | provenance: a receipt grants nothing; a later stage re-hashes what it binds |
+| `verified/` and `replay.hs --flow OUT`: `old-control/`, `ordinary-control/`, `kept-control/`, `<branch>-input.ast`, `ordinary-to-kept/`, `ordinary-to-kept.json`, `replay/` (`input.ast`, `input.v`, `proof-N/`, `proof-N.json`, `selected.ast`, `selected.v`, `objective-*`), `qualified-input.ast`, `MOD.v`, `upstream-qualification.json` (schema 2) | `replayFlow` (#251) | `finish-order.hs` binds the receipt and inputs as upstream identities | every input identity inside the receipt | provenance: a receipt grants nothing; a later stage re-hashes what it binds |
 | `select.hs OUT`: `flow-N/` controls, `old-authenticated.ast`, `new-authenticated.ast`, `<branch>-prefix-N/`, `frontier.json`, `RawFirst/`, `NormalizedFirst/` (`bundle/prefix.plan`, replay output, `selection.json`, `selected-metric/`), `completed.json` (schema 1) | `selectPrefixesWithMetric` (#251) | nobody | prefix plans bound through `loadFlow` | provenance |
-| `measure.hs OUT`: `report.json` (schema 2), `old.normalized.v`, `new.normalized.v`; `--translated`: `whole/`, `old.translated{,.normalized}.v`, `new.translated{,.normalized}.v`, `*.translated.ast` | `measureAST`, `measureTranslatedAST` (#249) | selection | identities inside the report | provenance: counts, never a proof |
+| `finish-order.hs OUT/finish`: `input.ast`, `input/MOD.v`, `score-raw/`, `score-normalized/`, `search[-N]/`, `replay[-N]/`, `attempt-N.json`, `selected.ast`, `MOD.v`, `metric/`, `finish-order.report`, `receipt.json` (schema 2) | `finishDeclarationOrderFrom` (#252) | nobody | every input identity inside the receipt | `MOD.v` is the finished deliverable, proved CURRENT-to-finished; the receipt is provenance |
+| `measure.hs OUT`: `report.json` (schema 2), `old.normalized.v`, `new.normalized.v`; `--translated`: `whole/`, `old.translated{,.normalized}.v`, `new.translated{,.normalized}.v`, `*.translated.ast` | `measureAST`, `measureTranslatedAST` (#249) | `finishDeclarationOrderFrom` (`metric/`), selection | identities inside the report | provenance: counts, never a proof |
 | `selected-invariants/report.json` (schema 1), `assertions.svh`; `invariants.hs OUT` | `ECOASTInvariant` (#249) | nobody | identities inside the report | provenance: proved propositions, never assumptions |
 | `MOD.replay.evidence` (schema 1 companion) | the optional producer (#244) only | `readEvidenceCompanion` (#249) | `reCapture`, `reABin`, `reSourceCapture`, `reObservedProducer`, `rePayload` | provenance: obligations are re-proved before use |
 | `build.manifest` (SDK schema 4), `lib/*.hs`, `scripts/*.hs` | `package-sdk.hs` (#246) | `--check`; `cfImplementationManifest` as a root | `trSdkManifest`; every verifier re-hashes it | provenance of the policy code; the soundness binding of every artifact is the native version stamp |
@@ -160,15 +164,18 @@ About 2,100 lines in this order; confirm the invariant at each stop.
    `replayASTPlanWith`, `replayASTPlanWithCost` (#247): row 18.
 7. `util/eco/lib/ECOASTReplay.hs` `rootsFromConfig`, `loadFlow`,
    `replayFlow`, `adapterInputs` (#251): row 20.
-8. `util/eco/lib/ECOASTFlow.hs` `runCaptureFlow` (#251): row 19;
-   `util/eco/lib/ECOASTSelection.hs` (row 21) and `util/eco/lib/ECOBind.hs`
-   as its helpers.
+8. `util/eco/lib/ECOASTFlow.hs` `runCaptureFlow` (#251) and
+   `util/eco/lib/ECOASTFinishOrder.hs` `finishDeclarationOrderFrom` (#252):
+   rows 19 and 22; `util/eco/lib/ECOASTSelection.hs` (row 21) and
+   `util/eco/lib/ECOBind.hs` as their helpers.
 9. Tests: `testsuite/bsc.eco/postba/ASTProof.hs`, `ASTProofFuzz.hs`,
    `FlowReplayControls.hs` (relocated copy accepted, forged solver refused,
    roots inside the flow refused), `BinaryFlowChecks.hs` (a Binary flow
    whose accepted step holds only under binary valuation and is decided by
    the root solver; a forged solver refused under the real roots), `LexicalGateControls.hs` (tampered plan steps refused by the
-   proof gate and the full-flow verifier),
+   proof gate and the full-flow verifier), `FinishChanged.hs` (a flow whose public
+   finishing stage changes the declaration order, proved fresh and replayed),
+   `FinishOrderCLIControls.hs`,
    `SelectionReject.hs`, `testsuite/bsc.eco/replay/native.exp`,
    `testsuite/bsc.eco/backend/backend.exp`,
    `testsuite/bsc.eco/verilog-info/verilog_info.exp`.

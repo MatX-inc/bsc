@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Public native-capture -> checked flow -> metrics -> fresh full-flow replay.
+# Public native-capture -> checked flow -> finishing -> metrics -> fresh full-flow replay.
 set -eu
 if [ "$#" -ne 6 ]; then
   echo "usage: run.sh BSC BLUEHS ECO_SDK YOSYS BLUESPECDIR FRESH_OUTPUT" >&2
@@ -41,6 +41,8 @@ for side in old new; do
   "$work/flow" "$work/flow.config"
 "$bluehs" -i "-i$sdk/lib" "$sdk/scripts/captures.hs" --objective translated-normalized \
   --refinements standard --structure ordinary --invariants defer "$work/flow.config" > "$work/flow.log" 2>&1
+"$bluehs" -i "-i$sdk/lib" "$sdk/scripts/finish-order.hs" "$work/flow.config" \
+  "$work/flow" "$work/finished" > "$work/finish-order.log" 2>&1
 old="$work/flow/adapted-old/capture/mkFanoutLoss.eco-ast"
 new="$work/flow/adapted-new/capture/mkFanoutLoss.eco-ast"
 "$bluehs" -i "-i$sdk/lib" "$sdk/scripts/measure.hs" "$old" "$new" "$work/ordinary-metrics"

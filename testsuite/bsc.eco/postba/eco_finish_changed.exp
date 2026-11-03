@@ -1,0 +1,25 @@
+# The finishing stage's changed path through the public command: a flow whose
+# search policy carries no layout feature (F01 and F21 with the vacancy
+# provider) reclaims the retired register's identity and leaves the register
+# groups in NEW's order; finish-order.hs restores OLD's order under a fresh
+# proof and saved-plan replay and binds every artifact in its receipt.
+namespace eval eco_finish_changed {
+    if {[eco_sdk_env "ECO finish changed" yosys]} {
+        set root [file normalize [file join [pwd] eco-finish-changed-[pid]-[clock clicks]]]
+        file mkdir $root
+        set captures {}; set ok 1
+        foreach side {old new} {
+            set dir [file join $root $side]; file mkdir $dir
+            set args [list [which_bsc] -u -cpp -verilog -elab -no-show-timestamps -keep-fires -keep-inlined-boundaries -no-inline-bool -no-opt-sched -no-opt-aggressive-inline -no-opt-join-defs -no-opt-AndOr -g mkFinishChanged -bdir $dir -vdir $dir -info-dir $dir -eco-capture [file join $dir capture]]
+            if {$side eq "new"} {lappend args -Xcpp -DECO_NEW}
+            lappend args [file join $here FinishChanged.bs]
+            if {[catch {exec {*}$args >$dir/capture.log 2>@1} message]} {
+                fail "ECO finish changed: capture $side"; verbose -log $message 0; set ok 0
+            } else {pass "ECO finish changed: capture $side"}
+            lappend captures [file join $dir capture mkFinishChanged.replay]
+        }
+        if {$ok} {
+            eco_run_script "ECO finish changed: vacancy-only flow finished by the public stage under a fresh proof, saved-plan replay and bound receipt" [file join $root checks.log] [file join $here FinishChanged.hs] $bluehs $sdk [which_bsc] {*}$captures [pwd] [pwd] $::env(BLUESPECDIR) [file join $sdk build.manifest] $yosys [file join $root checks]
+        }
+    }
+}
