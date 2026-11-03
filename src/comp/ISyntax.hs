@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE MagicHash #-}
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances #-}
 module ISyntax(
         IPackage(..),
@@ -84,6 +85,7 @@ import Prelude hiding ((<>))
 #endif
 
 import System.IO(Handle)
+import GHC.Exts(reallyUnsafePtrEquality#, isTrue#)
 import qualified Data.Map as M
 import Data.List(intercalate)
 
@@ -501,9 +503,21 @@ cmpE (ILAM _  _ _)   _               = LT
 cmpE (ICon _ _)      (ILam _ _ _)    = GT
 cmpE (ICon _ _)      (IAps _ _ _)    = GT
 cmpE (ICon _ _)      (IVar _)        = GT
-cmpE (ICon i1 ic1) (ICon i2 ic2)     =
+cmpE x@(ICon i1 ic1) y@(ICon i2 ic2) =
         case compare i1 i2 of
-        EQ -> case (cmpC ic1 ic2) of
+        -- One and the same node compares EQ without the payload tail: the
+        -- node is immutable, so cmpC and the inlined-position compare below
+        -- would compare every ingredient with itself, and each of them is
+        -- reflexive under compare except a Double (compare NaN NaN is GT),
+        -- which only the payloads in cmpCReachesReal can reach.  The
+        -- shortcut answers only after both Ids have been forced and compared
+        -- EQ, and its constructor test forces the payload to weak head
+        -- normal form where cmpC's ordC did, so nothing is forced earlier or
+        -- later than before; only the rest of the payload comparison and
+        -- the position compare are skipped.
+        EQ | isTrue# (reallyUnsafePtrEquality# x y), not (cmpCReachesReal ic1) -> EQ
+           | otherwise ->
+              case (cmpC ic1 ic2) of
                 -- inlined positions need to be considered in equality tests
                 EQ -> let mposs1 = getIdInlinedPositions i1
                           mposs2 = getIdInlinedPositions i2
@@ -724,6 +738,8 @@ data PTerm a = PAtom (IExpr a)
 -- ==============================
 -- IConInfo
 
+-- A constructor whose fields compared by cmpC embed an IExpr or a Double
+-- must also be listed in cmpCReachesReal.
 data IConInfo a =
           -- top level definition
           --  iconDef has the definition body
@@ -958,6 +974,22 @@ cmpC c1 c2 =
         ICPosition { iPosition = p1 } -> compare p1 (iPosition c2)
         ICType {iType = t1 } -> compare t1 (iType c2)
         ICPred {iPred = p1 } -> compare p1 (iPred c2)
+
+-- The payloads whose comparison in cmpC can reach a Double: an ICReal
+-- itself, and the payloads whose compared fields embed an IExpr (ICUndet's
+-- imVal, ICMethod's iMethod, ICPred's predicate, the lazy pack/unpack
+-- originals), which may contain one.  compare on Double is not reflexive
+-- (NaN), so cmpE's shortcut for a node compared with itself does not apply
+-- to them.  Every constructor whose compared fields embed an IExpr or a
+-- Double belongs in this list.
+cmpCReachesReal :: IConInfo a -> Bool
+cmpCReachesReal (ICReal { }) = True
+cmpCReachesReal (ICUndet { }) = True
+cmpCReachesReal (ICMethod { }) = True
+cmpCReachesReal (ICLazyPack { }) = True
+cmpCReachesReal (ICLazyUnpack { }) = True
+cmpCReachesReal (ICPred { }) = True
+cmpCReachesReal _ = False
 
 isIConInt, isIConReal, isIConParam :: IExpr a -> Bool
 isIConInt (ICon _ (ICInt { })) = True
