@@ -43,7 +43,7 @@ resolved: 1 of 3 defs and rules stand for other ids
 
 -----
 === metadata (MetaFmt sysMetaFmt):
-ledger after dropundet: 203 sites, 8 contexts, 4 roots, 8 defs, 38 events
+ledger after dropundet: 203 sites, 8 contexts, 4 roots, 8 defs, 51 events
 inlined (InlineFmt): __h134
 inlined (InlineFmt): __h138
 inlined (InlineFmt): f__h113
@@ -82,10 +82,36 @@ inlined (Transform): __j3 -> RL_step
 inlined (Transform): __j4 -> RL_step
 inlined (Transform): __j6 -> RL_step
 inlined (Transform): __j7 -> RL_step
+created (Conv): a___d1 <- __h163
+merged (Conv): __h163 -> a___d1
+created (Conv): unsigned_a___d2 <- RL_step
+created (Conv): b___d3 <- __h164
+merged (Conv): __h164 -> b___d3
+created (Conv): unsigned_b___d4 <- RL_step
+created (Conv): a_PLUS_b___d5 <- RL_step
+created (Conv): unsigned_a_PLUS_b___d6 <- RL_step
+created (Conv): a_PLUS_1___d7 <- RL_step
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): CAN_FIRE_value <- value
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_value <- value
+resolved: 12 of 12 defs and rules stand for other ids
+  WILL_FIRE_value <- value
+  WILL_FIRE_RL_step <- RL_step __h141 __h137 __h133
+  CAN_FIRE_value <- value
+  CAN_FIRE_RL_step <- RL_step __h141 __h137 __h133
+  unsigned_a_PLUS_b___d6 <- RL_step __h141 __h137 __h133
+  unsigned_a___d2 <- RL_step __h141 __h137 __h133
+  unsigned_b___d4 <- RL_step __h141 __h137 __h133
+  b___d3 <- __h164
+  a___d1 <- __h163
+  a_PLUS_1___d7 <- RL_step __h141 __h137 __h133
+  a_PLUS_b___d5 <- RL_step __h141 __h137 __h133
+  RL_step <- RL_step __h141 __h137 __h133
 
 -----
 === metadata (MetaFmt sysMetaFmt):
-ledger after finalcleanup: 203 sites, 8 contexts, 4 roots, 8 defs, 38 events
+ledger after finalcleanup: 203 sites, 8 contexts, 4 roots, 8 defs, 71 events
 inlined (InlineFmt): __h134
 inlined (InlineFmt): __h138
 inlined (InlineFmt): f__h113
@@ -124,5 +150,45 @@ inlined (Transform): __j3 -> RL_step
 inlined (Transform): __j4 -> RL_step
 inlined (Transform): __j6 -> RL_step
 inlined (Transform): __j7 -> RL_step
+created (Conv): a___d1 <- __h163
+merged (Conv): __h163 -> a___d1
+created (Conv): unsigned_a___d2 <- RL_step
+created (Conv): b___d3 <- __h164
+merged (Conv): __h164 -> b___d3
+created (Conv): unsigned_b___d4 <- RL_step
+created (Conv): a_PLUS_b___d5 <- RL_step
+created (Conv): unsigned_a_PLUS_b___d6 <- RL_step
+created (Conv): a_PLUS_1___d7 <- RL_step
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): CAN_FIRE_value <- value
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_value <- value
+created (State): a$write_1 <- RL_step
+created (State): a$EN_write <- RL_step
+created (State): b$write_1
+created (State): b$EN_write
+dropped (State): RL_step
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): b$EN_write -> b$EN
+inlined (Expand): b___d3 -> unsigned_b___d4 a_PLUS_b___d5
+inlined (Expand): a___d1 -> unsigned_a___d2 a_PLUS_1___d7 a_PLUS_b___d5 value
+inlined (Expand): a_PLUS_b___d5 -> unsigned_a_PLUS_b___d6
+dropped (Expand): unsigned_a___d2
+dropped (Expand): unsigned_b___d4
+dropped (Expand): unsigned_a_PLUS_b___d6
+inlined (Expand): a_PLUS_1___d7 -> a$D_IN
+dropped (Expand): WILL_FIRE_value
+inlined (Expand): CAN_FIRE_RL_step -> WILL_FIRE_RL_step
+inlined (Expand): CAN_FIRE_value -> RDY_value
+inlined (Expand): WILL_FIRE_RL_step -> a$EN
+resolved: 6 of 6 defs and rules stand for other ids
+  value <- value __h163
+  RDY_value <- RDY_value value
+  a$D_IN <- RL_step __h163 __h141 __h137 __h133
+  a$EN <- RL_step __h141 __h137 __h133
+  b$EN <- b$EN_write
+  b$D_IN <- b$write_1
 
 -----

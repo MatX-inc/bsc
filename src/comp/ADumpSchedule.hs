@@ -19,7 +19,7 @@ import Prelude hiding ((<>))
 import Control.Monad(unless, when, foldM)
 import System.IO(IOMode(..), hPutChar, hClose, stdout, hFlush)
 import Data.Maybe(fromMaybe)
-import Data.List(delete, find)
+import Data.List(delete, find, partition)
 import qualified Data.Set as S
 
 import ASyntax
@@ -28,6 +28,7 @@ import Error(internalError, showWarningList, getErrMsgTag, ErrMsg(..),
 import Id
 import SAT(initSATState, checkEq)
 import VModInfo(VSchedInfo)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 import SchedInfo(SchedInfo(..), MethodConflictInfo(..))
 import AScheduleInfo
 import ADumpScheduleInfo
@@ -185,12 +186,15 @@ aDumpSchedule errh flags pps prefix pkg aschedinfo = do
 
    -- Package and schedule minus any rules that can never fire
    --
-   let rs'  = [r | r@(ARule { arule_id = rid }) <- rs,
-                   not (rid `elem` falseWillFires)
-              ]
-       ds'  = removeADefMethodPredsByRuleId falseWillFires ds
+   let (gone_rs, rs') = partition (\ r -> arule_id r `elem` falseWillFires) rs
+       (ds', gone_ds) = removeADefMethodPredsByRuleId falseWillFires ds
+       -- the ledger: the rules that never fire are Dropped, and so are
+       -- the method-predicate defs removed with them
+       events = [ Dropped PTDumpSchedule (arule_id r) | r <- gone_rs ] ++
+                [ Dropped PTDumpSchedule i | ADef i _ _ _ <- gone_ds ]
        pkg' = pkg { apkg_rules = rs',
-                    apkg_local_defs = ds' }
+                    apkg_local_defs = ds',
+                    apkg_meta = appendEvents events (apkg_meta pkg) }
        sch' = dropScheduleIds falseWillFires sch
 
    -- Return the (possibly updated) package and schedule
@@ -382,8 +386,9 @@ dumpOneConflicts setCF setSB setSBR mid others = dumpConflicts mid others
                                        "Sched sets: " ++ (ppReadable (setCF, setSB, setSBR)))
 
 
-removeADefMethodPredsByRuleId :: [Id] -> [ADef] -> [ADef]
-removeADefMethodPredsByRuleId [] ds = ds
+-- the defs kept and the method-predicate defs of the dropped rules
+removeADefMethodPredsByRuleId :: [Id] -> [ADef] -> ([ADef], [ADef])
+removeADefMethodPredsByRuleId [] ds = (ds, [])
 removeADefMethodPredsByRuleId dropped_rule_ids ds =
     let
         dropped_id_set = S.fromList dropped_rule_ids
@@ -400,4 +405,4 @@ removeADefMethodPredsByRuleId dropped_rule_ids ds =
             (hasIdProp i IdPMethodPredicate) &&
             (isForDroppedRule ps)
     in
-        filter (not . dropDef) ds
+        partition (not . dropDef) ds

@@ -18,6 +18,7 @@ import Id (Id, getIdString, isRdyId, dropReadyPrefixId,
 import Position
 import BackendNamingConventions
 import PreIds(id_write)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 import qualified Data.Map as M
 
@@ -155,11 +156,17 @@ aAddScheduleDefs flags pps pkg aschedinfo =
      let cf_defs = user_cfs ++ ifc_cfs
          wf_defs = user_wfs ++ ifc_wfs
          defs1   = defs0 ++ cf_defs ++ wf_defs
+         -- the ledger: each CAN_FIRE and WILL_FIRE def is Created from
+         -- the rule (or value method) it was built for, which its
+         -- DefP_Rule property names
+         events  = [ Created PTSchedule i [ r | DefP_Rule r <- ps ]
+                   | ADef i _ _ ps <- cf_defs ++ wf_defs ]
 
      return pkg { apkg_local_defs        = defs1
                 , apkg_rules             = rules1
                 , apkg_interface         = ifc2
                 , apkg_proof_obligations = proofs1
+                , apkg_meta              = appendEvents events (apkg_meta pkg)
                 }
 
 -- Helper function for use with looking up list values

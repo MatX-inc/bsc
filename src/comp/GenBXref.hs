@@ -38,7 +38,7 @@ import qualified Data.ByteString as B
 -- .bxref file tag -- change this whenever the .bxref format changes
 -- See also GenABin.header and GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bxref-20261102-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bxref-20261102-2"
 
 headerBS :: B.ByteString
 headerBS = B.pack header

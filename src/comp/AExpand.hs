@@ -2,10 +2,12 @@ module AExpand (
                 aExpand,
                 aRemoveUnused, aSRemoveUnused, xaSRemoveUnused,
                 xaXExpand,
-                expandAPackage
+                expandAPackage,
+                InlinedInfo, defRefs
                 ) where
 
-import Data.List(group, sort, nub, genericLength)
+import Data.List(group, sort, sortBy, nub)
+import Data.Ord(comparing)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import PFPrint
@@ -18,6 +20,8 @@ import ASyntax
 import ASyntaxUtil
 import VModInfo
 import AConv(isLocalAId)
+import Util(stableOrdNub)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 --import Util(traces)
 --import Debug.Trace
 
@@ -39,6 +43,31 @@ data ExpandData a2 = ExpandData{
                              -- test function for expansion
                              sexpandTest :: ExpandTest a2
 }
+
+-- ==============================
+-- The ledger (IExpandMeta)
+
+-- The defs of the package a rewrite started from: the defs referring to
+-- each (most recent first), and each def's place in the dependency
+-- order of that package.  Read when the removal of unused defs after
+-- the rewrite writes the ledger: a removed def some def referred to was
+-- Inlined into those defs, which the rewrite (the expansion's
+-- substitution, or the optimizer's folding of a reference into its
+-- user) absorbed it into; one no def referred to was Dropped.  A use in
+-- an instance or a foreign call is not named.  The events follow the
+-- dependency order, so that a def's event precedes its users' (the
+-- closure check reads them in order).  The walk of the references and
+-- the sort are forced by the ledger alone, after the package's other
+-- fields; every id they read is one the removal's own walk of the kept
+-- defs, or the stage's dump, has forced.
+data InlinedInfo = InlinedInfo { ii_users :: M.Map AId [AId],
+                                 ii_order :: M.Map AId Int }
+
+defRefs :: [ADef] -> InlinedInfo
+defRefs ds =
+    InlinedInfo { ii_users = M.fromListWith (++) [ (v, [u]) | ADef u _ e _ <- ds,
+                                                             v <- aVars e ],
+                  ii_order = M.fromList (zip (map adef_objid (tsortADefs ds)) [0..]) }
 
 
 -- ==============================
@@ -67,19 +96,23 @@ data ExpandData a2 = ExpandData{
 -- expansion from a point inside the recursive structure.
 
 
-aExpand :: ErrorHandle -> Bool -> Bool -> Bool -> ASPackage -> ASPackage
-aExpand errh keepFires expnond expcheap pkg =
-    aSRemoveUnused keepFires
-                   (expandASPackage errh keepFires expnond expcheap pkg)
+-- (the InlinedInfo is the package the caller's rewriting started from,
+-- for the ledger; see above)
 
-xaXExpand :: ErrorHandle -> Bool -> Bool -> Bool -> ASPackage -> ASPackage
-xaXExpand errh keepFires expnond expcheap pkg =
-    xaSRemoveUnused keepFires
-        (expandASPackage errh keepFires expnond expcheap pkg)
+aExpand :: ErrorHandle -> Bool -> Bool -> Bool -> InlinedInfo -> ASPackage -> ASPackage
+aExpand errh keepFires expnond expcheap inl pkg =
+    let (pkg', dropped) = expandASPackage errh keepFires expnond expcheap pkg
+    in  aSRemoveUnusedWith PTExpand keepFires inl dropped pkg'
+
+xaXExpand :: ErrorHandle -> Bool -> Bool -> Bool -> InlinedInfo -> ASPackage -> ASPackage
+xaXExpand errh keepFires expnond expcheap inl pkg =
+    let (pkg', dropped) = expandASPackage errh keepFires expnond expcheap pkg
+    in  xaSRemoveUnusedWith PTExpand keepFires inl dropped pkg'
 
 
--- common core
-expandASPackage :: ErrorHandle -> Bool -> Bool -> Bool -> ASPackage -> ASPackage
+-- common core (also the defs the expansion left out as unused, for the
+-- ledger)
+expandASPackage :: ErrorHandle -> Bool -> Bool -> Bool -> ASPackage -> (ASPackage, [ADef])
 expandASPackage errh keepFires expnond expcheap pkg =
     let
         ss = aspkg_state_instances pkg
@@ -94,15 +127,16 @@ expandASPackage errh keepFires expnond expcheap pkg =
         muxes = aspsi_mux_selectors si ++
                 aspsi_mux_values si
 
-        (ss', ws', ds', fs') =
+        (ss', ws', ds', fs', dropped) =
             -- trace ("aExpand " ++ ppReadable ds) $
             aExpDefs errh keepFires expnond expcheap aoptExpandTest
                      sigInfo os ios muxes (ss, ws, ds, fs)
     in
-        pkg { aspkg_state_instances = ss',
-              aspkg_inlined_ports = ws',
-              aspkg_values = ds',
-              aspkg_foreign_calls = fs' }
+        (pkg { aspkg_state_instances = ss',
+               aspkg_inlined_ports = ws',
+               aspkg_values = ds',
+               aspkg_foreign_calls = fs' },
+         dropped)
 
 
 -- ==============================
@@ -148,7 +182,7 @@ expandASPackage errh keepFires expnond expcheap pkg =
 aExpDefs :: ErrorHandle -> Bool -> Bool -> Bool -> ExpandTest [AForeignBlock] ->
             ASPSignalInfo -> [AOutput] -> [AInput] -> [AId] ->
             ([AVInst], [AId], [ADef], [AForeignBlock]) ->
-            ([AVInst], [AId], [ADef], [AForeignBlock])
+            ([AVInst], [AId], [ADef], [AForeignBlock], [ADef])
 aExpDefs errh keepFires expnond expcheap expTest sigInfo os ios muxes (ss', ws', ds', fs') =
     let
         usemap = createUseMap muxes (ss', ws', ds', fs')
@@ -181,7 +215,7 @@ aExpDefs errh keepFires expnond expcheap expTest sigInfo os ios muxes (ss', ws',
         --                    ++ "keep schids" ++ ppReadable keepSchIds
         --       ) $
         -- do the expansion
-        expand edata M.empty sorted_defs []
+        expand edata M.empty sorted_defs [] []
 
 
 -- Topologically sort defs
@@ -235,8 +269,16 @@ createUseMap  muxes (ss', ws', ds', fs') = usemap
 -- which the expression depends.
 
 
-aSRemoveUnused :: Bool -> ASPackage -> ASPackage
-aSRemoveUnused keepfires pkg =
+-- The ledger is written under the given pass tag: a removed def that
+-- the rewrite before (the expansion, or the caller's own) folded into
+-- its users is Inlined into them, any other is Dropped (removedEvents);
+-- the "With" form takes the defs the expansion itself left out.
+
+aSRemoveUnused :: PassTag -> Bool -> InlinedInfo -> ASPackage -> ASPackage
+aSRemoveUnused tag keepfires inl pkg = aSRemoveUnusedWith tag keepfires inl [] pkg
+
+aSRemoveUnusedWith :: PassTag -> Bool -> InlinedInfo -> [ADef] -> ASPackage -> ASPackage
+aSRemoveUnusedWith tag keepfires inl dropped pkg =
     let ds = aspkg_values pkg
         vused = aVars (aspkg_state_instances pkg)
         fused = aVars (aspkg_foreign_calls pkg) ++
@@ -244,13 +286,26 @@ aSRemoveUnused keepfires pkg =
                         | (_,fcs) <- aspkg_foreign_calls pkg
                         , fc <- fcs ])
         fires = if keepfires then [i | (ADef i _t _e _) <- ds, isFire i] else []
-        ds' = (collDefs (vused ++ fused ++ fires ) ds)
+        (ds', gone) = (collDefs (vused ++ fused ++ fires ) ds)
     in
         -- trace ("aSRemoveUnused \nds = " ++ ppReadable ds ++
         --        "\n ds' = " ++ ppReadable ds') $
         --traces( "aSRemoveUnused : old defs: " ++ ppReadable ds ) $
         --traces( "aSRemoveUnused : new defs: " ++ ppReadable ds' ) $
-        pkg { aspkg_values = ds' }
+        pkg { aspkg_values = ds',
+              aspkg_meta = appendEvents (removedEvents tag inl (dropped ++ gone))
+                                        (aspkg_meta pkg) }
+
+-- the events of the defs removed, in the dependency order of the
+-- package the rewrite started from (a def made since it comes last; a
+-- def's users in their order, each once)
+removedEvents :: PassTag -> InlinedInfo -> [ADef] -> [MetaEvent]
+removedEvents tag inl gone =
+    [ case M.lookup i (ii_users inl) of
+        Just users -> Inlined tag i (stableOrdNub (reverse users))
+        Nothing -> Dropped tag i
+    | ADef i _ _ _ <- sortBy (comparing position) gone ]
+  where position (ADef i _ _ _) = M.findWithDefault maxBound i (ii_order inl)
 
 
 -- ==============================
@@ -269,7 +324,7 @@ aRemoveUnused apkg =
 --    ++ "\n   rused: " ++ ppReadable rused
 --    ++ "\n   iused: " ++ ppReadable iused) $
         apkg { apkg_local_defs = ds' }
-  where ds' = collDefs (vused ++ rused ++ iused) (apkg_local_defs apkg)
+  where ds' = fst (collDefs (vused ++ rused ++ iused) (apkg_local_defs apkg))
         vused = aVars (apkg_state_instances apkg)
         rused = aVars (apkg_rules apkg)
         iused = aVars (apkg_interface apkg)
@@ -290,18 +345,19 @@ aRemoveUnused apkg =
 -- defs for those ids are still come in the defs being considered.
 
 
--- collect used definitions (and everything they use)
-collDefs :: [AId] -> [ADef] -> [ADef]
-collDefs used ds = coll (S.fromList used) [] (reverse (tsortADefs ds))
-  where coll _    rs [] = rs
-        coll used rs (d@(ADef i _ e _) : ds) =
+-- collect used definitions (and everything they use); also the
+-- definitions dropped, in the same order
+collDefs :: [AId] -> [ADef] -> ([ADef], [ADef])
+collDefs used ds = coll (S.fromList used) [] [] (reverse (tsortADefs ds))
+  where coll _    rs gs [] = (rs, gs)
+        coll used rs gs (d@(ADef i _ e _) : ds) =
                 if isLocalAId i
                    && not (isKeepId i)
                    && not (S.member i used) then
                     --traces ("drop-coll " ++ ppString i) $
-                    coll used rs ds
+                    coll used rs (d:gs) ds
                 else
-                    coll (foldr S.insert used (aVars e)) (d:rs) ds
+                    coll (foldr S.insert used (aVars e)) (d:rs) gs ds
 
 
 -- ==============================
@@ -335,11 +391,16 @@ collDefs used ds = coll (S.fromList used) [] (reverse (tsortADefs ds))
 --   list.  Plus, xaSRemoveUnused takes keepFires as an argument.
 
 
-xaSRemoveUnused :: Bool -> ASPackage -> ASPackage
-xaSRemoveUnused keepFires pkg =
+xaSRemoveUnused :: PassTag -> Bool -> InlinedInfo -> ASPackage -> ASPackage
+xaSRemoveUnused tag keepFires inl pkg = xaSRemoveUnusedWith tag keepFires inl [] pkg
+
+xaSRemoveUnusedWith :: PassTag -> Bool -> InlinedInfo -> [ADef] -> ASPackage -> ASPackage
+xaSRemoveUnusedWith tag keepFires inl dropped pkg =
     -- trace ("xaSremoveUNused \nds = " ++ ppReadable ds ++
     --        "\n ds' = " ++ ppReadable ds' ++ "\n os = " ++ ppReadable os) $
-    pkg { aspkg_values = ds' }
+    pkg { aspkg_values = ds',
+          aspkg_meta = appendEvents (removedEvents tag inl (dropped ++ gone))
+                                    (aspkg_meta pkg) }
   where
         ds = aspkg_values pkg
         ss = aspkg_state_instances pkg
@@ -353,7 +414,8 @@ xaSRemoveUnused keepFires pkg =
                         | (_,fcs) <- aspkg_foreign_calls pkg
                         , fc <- fcs ])
         --
-        ds' = --traces("xasRemovedUnused oused: " ++ ppReadable oused ) $
+        (ds', gone) =
+              --traces("xasRemovedUnused oused: " ++ ppReadable oused ) $
               --traces("xasRemovedUnused fused: " ++ ppReadable fused ) $
               --traces("xasRemovedUnused vused: " ++ ppReadable vused ) $
               --traces("xasRemovedUnused defs: " ++ ppReadable ds ) $
@@ -398,19 +460,19 @@ xaSRemoveUnused keepFires pkg =
 --    firing signals when the -keep-fires flag is on.
 --
 
-xcollDefs :: Bool -> [AId] -> [ADef] -> [ADef]
+xcollDefs :: Bool -> [AId] -> [ADef] -> ([ADef], [ADef])
 xcollDefs keepFires used ds = --traces( "xCollDefs: " ++ ppReadable used ) $
-                              coll (S.fromList used) [] (reverse (tsortADefs ds))
-  where coll _    rs [] = rs
-        coll used rs (d@(ADef i _ e _) : ds) =
+                              coll (S.fromList used) [] [] (reverse (tsortADefs ds))
+  where coll _    rs gs [] = (rs, gs)
+        coll used rs gs (d@(ADef i _ e _) : ds) =
             if (((not keepFires)  || (not (isFire i)))
                 && (not (S.member i used))
                 && (not (hasIdProp i IdP_keepEvenUnused))
                ) then
                 --traces ("\n drop-coll " ++ ppString i ++ " " ++ ppReadable (hasIdProp i IdPCanFire)) $
-                coll used rs ds
+                coll used rs (d:gs) ds
                 else
-                    coll (foldr S.insert used (aVars e)) (d:rs) ds
+                    coll (foldr S.insert used (aVars e)) (d:rs) gs ds
 
 
 -- ==============================
@@ -676,26 +738,27 @@ mustInline e = isStringType (aType e)
 --    "reverse" after compiling the "nds")
 --  * the list of foreign function calls ("fs") with inlining applied
 --    to the "es"
-
+--  * the definitions left out as unused and not kept (for the ledger)
 
 expand :: (AExprs e2, PPrint e2) =>  ExpandData e2 -> (EMap AExpr) -> [ADef] -> [ADef]
-       -> ([AVInst], [AId], [ADef], e2)
+       -> [ADef] -> ([AVInst], [AId], [ADef], e2, [ADef])
 
 -- the end condition for the loop:
 -- we are done, so just substitute through the new definitions
 -- in the state variable instances and the foreign function calls
-expand  edata edefs [] nds =
+expand  edata edefs [] nds gone =
         (aSubst edefs ss,
          ws,
          reverse nds,
-         aSubst edefs fs)
+         aSubst edefs fs,
+         reverse gone)
     where
       fs = sfs edata
       ss = sss edata
       ws = sws edata
 
 -- the loop: consider the top definition and recurse on the rest
-expand edata edefs (ADef i t e ps : ds) nds =
+expand edata edefs (d@(ADef i t e ps) : ds) nds gone =
         let
             uses      = suses edata
             keep      = skeeps edata
@@ -705,9 +768,11 @@ expand edata edefs (ADef i t e ps : ds) nds =
             nuse = getUses uses i
 
             -- build list of new definitions
-            nds' = if nuse == 0 && not (S.member i keep)
+            unused = nuse == 0 && not (S.member i keep)
+            nds' = if unused
                then nds
                 else ADef i t e' ps : nds
+            gone' = if unused then d : gone else gone
 
             doExpand = (sexpandTest edata) edata i e'
 
@@ -717,7 +782,7 @@ expand edata edefs (ADef i t e ps : ds) nds =
                      else
                          edefs
         in
-            expand edata edefs' ds nds'
+            expand edata edefs' ds nds' gone'
 
 -- Tests on AId and AExpr to determine if the expression should be inlined during aOpt
 -- Based on number of heuristics which are good for synthesis.
@@ -760,7 +825,7 @@ expandAPackage errh apkg = apkgN
             }
           --
           -- do the expansion
-          (_,_, defs, (rules,ifc)) = expand edata M.empty sorted_defs []
+          (_,_, defs, (rules,ifc), _) = expand edata M.empty sorted_defs [] []
           -- rebuild the package
           apkgN = aRemoveUnused $ apkg { apkg_local_defs = defs,
                                          apkg_rules = rules,

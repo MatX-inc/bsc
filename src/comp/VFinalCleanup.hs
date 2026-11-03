@@ -1,6 +1,6 @@
 module VFinalCleanup (finalCleanup) where
 
-import Data.List(nub)
+import Data.List(nub, partition, sortOn)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Position(noPosition)
@@ -10,6 +10,7 @@ import FStringCompat(mkFString)
 import ASyntax
 import ASyntaxUtil
 import BackendNamingConventions(createVerilogNameMapForAVInst)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 --import Debug.Trace
 -- import Util(traces)
@@ -60,8 +61,18 @@ removeUnusedInsts :: Flags -> ASPackage -> ASPackage
 removeUnusedInsts flags package =
     package { aspkg_state_instances = ss'',
               aspkg_state_outputs = sos',
-              aspkg_values = ds' }
+              aspkg_values = ds',
+              aspkg_meta = appendEvents events (aspkg_meta package) }
     where
+          -- the ledger: the defs and instances not connected to an
+          -- output are Dropped, the defs in name order: a def nothing
+          -- uses has no place in the Verilog, so its position in the
+          -- def list after the expansions is one the output never
+          -- fixes, and it differs between builds of the compiler; the
+          -- instances keep the list order, which no pass changes
+          events = [ Dropped PTFinalCleanup i
+                   | i <- sortOn getIdString [ i | ADef i _ _ _ <- gone_ds ] ] ++
+                   [ Dropped PTFinalCleanup (avi_vname inst) | inst <- gone_ss ]
           keepInlinedMods = keepInlined flags
           ds = aspkg_values package
           ss = aspkg_state_instances package
@@ -74,12 +85,12 @@ removeUnusedInsts flags package =
           (cdefs,cinsts) = -- traces("conn outputs is: " ++ ppReadable markedConn) $
                            -- traces("conn package: " ++ ppReadable package ) $
                            connectedNode flags markedConn ss ds
-          ds' = filter isDefUsed ds
+          (ds', gone_ds) = partition isDefUsed ds
           isDefUsed :: ADef -> Bool
           isDefUsed def@(ADef i _ _ _) = S.member (adef_objid def) cdefs
-          ss'' = if (removeUnusedMods flags)
-                 then filter isModuleUsed ss
-                 else ss
+          (ss'', gone_ss) = if (removeUnusedMods flags)
+                            then partition isModuleUsed ss
+                            else (ss, [])
           isModuleUsed :: AVInst -> Bool
           isModuleUsed inst = S.member (avi_vname inst) cinsts
           sos' = if (removeUnusedMods flags)

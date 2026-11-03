@@ -4,9 +4,11 @@ import ASyntax
 import ASyntaxUtil
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.List(partition)
 import Control.Monad.State
 import AConv(isLocalAId)
 import Id
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 -- get all of the ASDef usage in a "thing"
 dVars :: (AExprs a) => a -> [AId]
@@ -21,7 +23,8 @@ dVars = findAExprs dVarsE
         dVarsE _ = []
 
 aDropDefs :: ASPackage -> ASPackage
-aDropDefs aspkg = aspkg { aspkg_values = defs' }
+aDropDefs aspkg = aspkg { aspkg_values = defs',
+                          aspkg_meta = appendEvents events (aspkg_meta aspkg) }
   where roots = dVars (aspkg_state_instances aspkg) ++
                 map fst (aspkg_outputs aspkg) ++
                 dVars (aspkg_foreign_calls aspkg) ++
@@ -41,7 +44,9 @@ aDropDefs aspkg = aspkg { aspkg_values = defs' }
         keepId i = True
         fires = [ i | d@(ADef i _ _ _) <- defs, isFire i]
         meth_ids = [i | d@(ADef i _ _ _) <- defs, isMethId i]
-        defs' = [ d | d@(ADef i _ _ _) <- defs, keepId i]
+        (defs', gone) = partition (\ (ADef i _ _ _) -> keepId i) defs
+        -- the ledger: each def removed is Dropped
+        events = [ Dropped PTDropDefs i | ADef i _ _ _ <- gone ]
 
 addUsed :: M.Map AId [AId] -> AId -> State (S.Set AId) ()
 addUsed dmap i = do

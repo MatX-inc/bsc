@@ -1,0 +1,378 @@
+=== metadata (MetaNamed sysMetaNamed):
+ledger after idroprules: 105 sites, 4 contexts, 3 roots, 7 defs, 87 events
+inlined (Inline): __h93 -> __h84
+inlined (Inline): __h104 -> __h84
+inlined (Inline): __h84 -> RL_step
+created (Transform): __i1 <- x__h89
+created (Transform): __i2 <- __h92
+created (Transform): __i3 <- __h92
+created (Transform): __i4 <- __h92
+created (Transform): __i5 <- __h91
+created (Transform): __i6 <- __h91
+created (Transform): __i7 <- __h91
+created (Transform): __i8 <- __h91
+created (Transform): __i9 <- __h91
+created (Transform): __i10 <- __h91
+created (Transform): __i11 <- __h91
+created (Transform): __i12 <- __h91
+created (Transform): __i13 <- y__h90
+merged (Transform): y__h90 -> __i13
+merged (Transform): x__h89 -> __i1
+merged (Transform): __h92 -> __i4
+merged (Transform): __h91 -> __i12
+renamed (Transform): __i12 -> __h91
+renamed (Transform): __i13 -> y__h90
+renamed (Transform): __i1 -> x__h89
+renamed (Transform): __i4 -> __h92
+created (Transform): __i14 <- RL_step
+created (Transform): __i15 <- RL_step
+created (Transform): __i16 <- RL_step
+created (Transform): __i17 <- RL_step
+created (Transform): __i18 <- RL_step
+created (Transform): __i19 <- RL_step
+created (Transform): __i20 <- RL_step
+inlined (Transform): __i15 -> __i16
+inlined (Transform): __i16 -> __i17
+inlined (Transform): __i17 -> __i18
+inlined (Transform): __i18 -> __i19
+inlined (Transform): __i3 -> __h92
+inlined (Transform): __i8 -> __i9
+inlined (Transform): __i7 -> __i10
+inlined (Transform): __i10 -> __h91
+inlined (Transform): __h91 -> y__h90
+inlined (Transform): __i14 -> __i20
+inlined (Transform): __i19 -> __i20
+inlined (Transform): __i20 -> RL_step
+dropped (Transform): __i6
+dropped (Transform): __i5
+created (Transform): __j1 <- x__h89
+created (Transform): __j2 <- __i2
+created (Transform): __j3 <- __h92
+created (Transform): __j4 <- __h92
+created (Transform): __j5 <- __i9
+created (Transform): __j6 <- __i9
+created (Transform): __j7 <- __i11
+created (Transform): __j8 <- y__h90
+created (Transform): __j9 <- y__h90
+created (Transform): __j10 <- y__h90
+created (Transform): __j11 <- y__h90
+merged (Transform): y__h90 -> __j11
+merged (Transform): x__h89 -> __j1
+merged (Transform): __h92 -> __j4
+merged (Transform): __i2 -> __j2
+merged (Transform): __i9 -> __j6
+merged (Transform): __i11 -> __j7
+renamed (Transform): __j2 -> __i2
+renamed (Transform): __j11 -> y__h90
+renamed (Transform): __j1 -> x__h89
+renamed (Transform): __j4 -> __h92
+renamed (Transform): __j6 -> __i9
+renamed (Transform): __j7 -> __i11
+created (Transform): __j12 <- RL_step
+created (Transform): __j13 <- RL_step
+created (Transform): __j14 <- RL_step
+created (Transform): __j15 <- RL_step
+created (Transform): __j16 <- RL_step
+created (Transform): __j17 <- RL_step
+created (Transform): __j18 <- RL_step
+inlined (Transform): __j13 -> __j14
+inlined (Transform): __j14 -> __j15
+inlined (Transform): __j15 -> __j16
+inlined (Transform): __j16 -> __j17
+inlined (Transform): __j3 -> __h92
+inlined (Transform): __j5 -> __i9
+inlined (Transform): __j8 -> __j9
+inlined (Transform): __j9 -> __j10
+inlined (Transform): __j10 -> y__h90
+inlined (Transform): __j12 -> __j18
+inlined (Transform): __j17 -> __j18
+inlined (Transform): __j18 -> RL_step
+resolved: 5 of 7 defs and rules stand for other ids
+  __i9 <- __h91
+  y__h90 <- __h91 y__h90
+  __i2 <- __h92
+  __i11 <- __h91
+  RL_step <- RL_step __h84 __h104 __h93
+
+-----
+=== metadata (MetaNamed sysMetaNamed):
+ledger after dropundet: 105 sites, 4 contexts, 3 roots, 7 defs, 112 events
+inlined (Inline): __h93 -> __h84
+inlined (Inline): __h104 -> __h84
+inlined (Inline): __h84 -> RL_step
+created (Transform): __i1 <- x__h89
+created (Transform): __i2 <- __h92
+created (Transform): __i3 <- __h92
+created (Transform): __i4 <- __h92
+created (Transform): __i5 <- __h91
+created (Transform): __i6 <- __h91
+created (Transform): __i7 <- __h91
+created (Transform): __i8 <- __h91
+created (Transform): __i9 <- __h91
+created (Transform): __i10 <- __h91
+created (Transform): __i11 <- __h91
+created (Transform): __i12 <- __h91
+created (Transform): __i13 <- y__h90
+merged (Transform): y__h90 -> __i13
+merged (Transform): x__h89 -> __i1
+merged (Transform): __h92 -> __i4
+merged (Transform): __h91 -> __i12
+renamed (Transform): __i12 -> __h91
+renamed (Transform): __i13 -> y__h90
+renamed (Transform): __i1 -> x__h89
+renamed (Transform): __i4 -> __h92
+created (Transform): __i14 <- RL_step
+created (Transform): __i15 <- RL_step
+created (Transform): __i16 <- RL_step
+created (Transform): __i17 <- RL_step
+created (Transform): __i18 <- RL_step
+created (Transform): __i19 <- RL_step
+created (Transform): __i20 <- RL_step
+inlined (Transform): __i15 -> __i16
+inlined (Transform): __i16 -> __i17
+inlined (Transform): __i17 -> __i18
+inlined (Transform): __i18 -> __i19
+inlined (Transform): __i3 -> __h92
+inlined (Transform): __i8 -> __i9
+inlined (Transform): __i7 -> __i10
+inlined (Transform): __i10 -> __h91
+inlined (Transform): __h91 -> y__h90
+inlined (Transform): __i14 -> __i20
+inlined (Transform): __i19 -> __i20
+inlined (Transform): __i20 -> RL_step
+dropped (Transform): __i6
+dropped (Transform): __i5
+created (Transform): __j1 <- x__h89
+created (Transform): __j2 <- __i2
+created (Transform): __j3 <- __h92
+created (Transform): __j4 <- __h92
+created (Transform): __j5 <- __i9
+created (Transform): __j6 <- __i9
+created (Transform): __j7 <- __i11
+created (Transform): __j8 <- y__h90
+created (Transform): __j9 <- y__h90
+created (Transform): __j10 <- y__h90
+created (Transform): __j11 <- y__h90
+merged (Transform): y__h90 -> __j11
+merged (Transform): x__h89 -> __j1
+merged (Transform): __h92 -> __j4
+merged (Transform): __i2 -> __j2
+merged (Transform): __i9 -> __j6
+merged (Transform): __i11 -> __j7
+renamed (Transform): __j2 -> __i2
+renamed (Transform): __j11 -> y__h90
+renamed (Transform): __j1 -> x__h89
+renamed (Transform): __j4 -> __h92
+renamed (Transform): __j6 -> __i9
+renamed (Transform): __j7 -> __i11
+created (Transform): __j12 <- RL_step
+created (Transform): __j13 <- RL_step
+created (Transform): __j14 <- RL_step
+created (Transform): __j15 <- RL_step
+created (Transform): __j16 <- RL_step
+created (Transform): __j17 <- RL_step
+created (Transform): __j18 <- RL_step
+inlined (Transform): __j13 -> __j14
+inlined (Transform): __j14 -> __j15
+inlined (Transform): __j15 -> __j16
+inlined (Transform): __j16 -> __j17
+inlined (Transform): __j3 -> __h92
+inlined (Transform): __j5 -> __i9
+inlined (Transform): __j8 -> __j9
+inlined (Transform): __j9 -> __j10
+inlined (Transform): __j10 -> y__h90
+inlined (Transform): __j12 -> __j18
+inlined (Transform): __j17 -> __j18
+inlined (Transform): __j18 -> RL_step
+created (Conv): a___d1 <- x__h89
+merged (Conv): x__h89 -> a___d1
+created (Conv): b___d2 <- __i2
+merged (Conv): __i2 -> b___d2
+created (Conv): b_BITS_7_TO_6___d3 <- y__h90
+created (Conv): b_BITS_5_TO_4___d4 <- __i9
+created (Conv): INV_b_BITS_5_TO_4___d5 <- __i9
+merged (Conv): __i9 -> INV_b_BITS_5_TO_4___d5
+created (Conv): b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4___d6 <- y__h90
+created (Conv): b_BITS_3_TO_2___d7 <- __i11
+merged (Conv): __i11 -> b_BITS_3_TO_2___d7
+created (Conv): b_BITS_1_TO_0___d8 <- __h92
+created (Conv): INV_b_BITS_1_TO_0___d9 <- __h92
+merged (Conv): __h92 -> INV_b_BITS_1_TO_0___d9
+created (Conv): b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_CONCAT__ETC___d10 <- y__h90
+merged (Conv): y__h90 -> b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_CONCAT__ETC___d10
+created (Conv): a_AND_b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_C_ETC___d11 <- RL_step
+created (Conv): b_BIT_6___d12 <- RL_step
+created (Conv): b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d13 <- RL_step
+created (Conv): b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d14 <- RL_step
+created (Conv): a_AND_b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_C_ETC___d15 <- RL_step
+renamed (Conv): a___d1 -> x__h89
+renamed (Conv): b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_CONCAT__ETC___d10 -> y__h90
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+resolved: 17 of 18 defs and rules stand for other ids
+  WILL_FIRE_RL_step <- RL_step __h84 __h104 __h93
+  CAN_FIRE_RL_step <- RL_step __h84 __h104 __h93
+  b___d2 <- __h92
+  b_BITS_7_TO_6___d3 <- __h91 y__h90
+  b_BITS_5_TO_4___d4 <- __h91
+  b_BITS_3_TO_2___d7 <- __h91
+  b_BITS_1_TO_0___d8 <- __h92
+  b_BIT_6___d12 <- RL_step __h84 __h104 __h93
+  b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d14 <- RL_step __h84 __h104 __h93
+  y__h90 <- __h91 y__h90
+  b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d13 <- RL_step __h84 __h104 __h93
+  b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4___d6 <- __h91 y__h90
+  INV_b_BITS_5_TO_4___d5 <- __h91
+  INV_b_BITS_1_TO_0___d9 <- __h92
+  a_AND_b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_C_ETC___d15 <- RL_step __h84 __h104 __h93
+  a_AND_b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_C_ETC___d11 <- RL_step __h84 __h104 __h93
+  RL_step <- RL_step __h84 __h104 __h93
+
+-----
+=== metadata (MetaNamed sysMetaNamed):
+ledger after finalcleanup: 105 sites, 4 contexts, 3 roots, 7 defs, 137 events
+inlined (Inline): __h93 -> __h84
+inlined (Inline): __h104 -> __h84
+inlined (Inline): __h84 -> RL_step
+created (Transform): __i1 <- x__h89
+created (Transform): __i2 <- __h92
+created (Transform): __i3 <- __h92
+created (Transform): __i4 <- __h92
+created (Transform): __i5 <- __h91
+created (Transform): __i6 <- __h91
+created (Transform): __i7 <- __h91
+created (Transform): __i8 <- __h91
+created (Transform): __i9 <- __h91
+created (Transform): __i10 <- __h91
+created (Transform): __i11 <- __h91
+created (Transform): __i12 <- __h91
+created (Transform): __i13 <- y__h90
+merged (Transform): y__h90 -> __i13
+merged (Transform): x__h89 -> __i1
+merged (Transform): __h92 -> __i4
+merged (Transform): __h91 -> __i12
+renamed (Transform): __i12 -> __h91
+renamed (Transform): __i13 -> y__h90
+renamed (Transform): __i1 -> x__h89
+renamed (Transform): __i4 -> __h92
+created (Transform): __i14 <- RL_step
+created (Transform): __i15 <- RL_step
+created (Transform): __i16 <- RL_step
+created (Transform): __i17 <- RL_step
+created (Transform): __i18 <- RL_step
+created (Transform): __i19 <- RL_step
+created (Transform): __i20 <- RL_step
+inlined (Transform): __i15 -> __i16
+inlined (Transform): __i16 -> __i17
+inlined (Transform): __i17 -> __i18
+inlined (Transform): __i18 -> __i19
+inlined (Transform): __i3 -> __h92
+inlined (Transform): __i8 -> __i9
+inlined (Transform): __i7 -> __i10
+inlined (Transform): __i10 -> __h91
+inlined (Transform): __h91 -> y__h90
+inlined (Transform): __i14 -> __i20
+inlined (Transform): __i19 -> __i20
+inlined (Transform): __i20 -> RL_step
+dropped (Transform): __i6
+dropped (Transform): __i5
+created (Transform): __j1 <- x__h89
+created (Transform): __j2 <- __i2
+created (Transform): __j3 <- __h92
+created (Transform): __j4 <- __h92
+created (Transform): __j5 <- __i9
+created (Transform): __j6 <- __i9
+created (Transform): __j7 <- __i11
+created (Transform): __j8 <- y__h90
+created (Transform): __j9 <- y__h90
+created (Transform): __j10 <- y__h90
+created (Transform): __j11 <- y__h90
+merged (Transform): y__h90 -> __j11
+merged (Transform): x__h89 -> __j1
+merged (Transform): __h92 -> __j4
+merged (Transform): __i2 -> __j2
+merged (Transform): __i9 -> __j6
+merged (Transform): __i11 -> __j7
+renamed (Transform): __j2 -> __i2
+renamed (Transform): __j11 -> y__h90
+renamed (Transform): __j1 -> x__h89
+renamed (Transform): __j4 -> __h92
+renamed (Transform): __j6 -> __i9
+renamed (Transform): __j7 -> __i11
+created (Transform): __j12 <- RL_step
+created (Transform): __j13 <- RL_step
+created (Transform): __j14 <- RL_step
+created (Transform): __j15 <- RL_step
+created (Transform): __j16 <- RL_step
+created (Transform): __j17 <- RL_step
+created (Transform): __j18 <- RL_step
+inlined (Transform): __j13 -> __j14
+inlined (Transform): __j14 -> __j15
+inlined (Transform): __j15 -> __j16
+inlined (Transform): __j16 -> __j17
+inlined (Transform): __j3 -> __h92
+inlined (Transform): __j5 -> __i9
+inlined (Transform): __j8 -> __j9
+inlined (Transform): __j9 -> __j10
+inlined (Transform): __j10 -> y__h90
+inlined (Transform): __j12 -> __j18
+inlined (Transform): __j17 -> __j18
+inlined (Transform): __j18 -> RL_step
+created (Conv): a___d1 <- x__h89
+merged (Conv): x__h89 -> a___d1
+created (Conv): b___d2 <- __i2
+merged (Conv): __i2 -> b___d2
+created (Conv): b_BITS_7_TO_6___d3 <- y__h90
+created (Conv): b_BITS_5_TO_4___d4 <- __i9
+created (Conv): INV_b_BITS_5_TO_4___d5 <- __i9
+merged (Conv): __i9 -> INV_b_BITS_5_TO_4___d5
+created (Conv): b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4___d6 <- y__h90
+created (Conv): b_BITS_3_TO_2___d7 <- __i11
+merged (Conv): __i11 -> b_BITS_3_TO_2___d7
+created (Conv): b_BITS_1_TO_0___d8 <- __h92
+created (Conv): INV_b_BITS_1_TO_0___d9 <- __h92
+merged (Conv): __h92 -> INV_b_BITS_1_TO_0___d9
+created (Conv): b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_CONCAT__ETC___d10 <- y__h90
+merged (Conv): y__h90 -> b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_CONCAT__ETC___d10
+created (Conv): a_AND_b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_C_ETC___d11 <- RL_step
+created (Conv): b_BIT_6___d12 <- RL_step
+created (Conv): b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d13 <- RL_step
+created (Conv): b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d14 <- RL_step
+created (Conv): a_AND_b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_C_ETC___d15 <- RL_step
+renamed (Conv): a___d1 -> x__h89
+renamed (Conv): b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_CONCAT__ETC___d10 -> y__h90
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (State): a$write_1 <- RL_step
+created (State): a$EN_write <- RL_step
+created (State): b$write_1
+created (State): b$EN_write
+dropped (State): RL_step
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): b$EN_write -> b$EN
+inlined (Expand): b___d2 -> b_BITS_7_TO_6___d3 b_BITS_5_TO_4___d4 b_BITS_3_TO_2___d7 b_BITS_1_TO_0___d8 b_BIT_6___d12
+inlined (Expand): b_BITS_1_TO_0___d8 -> INV_b_BITS_1_TO_0___d9
+inlined (Expand): b_BITS_5_TO_4___d4 -> INV_b_BITS_5_TO_4___d5
+inlined (Expand): b_BITS_7_TO_6___d3 -> b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4___d6
+inlined (Expand): INV_b_BITS_5_TO_4___d5 -> b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d13 b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4___d6
+inlined (Expand): b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4___d6 -> y__h90
+inlined (Expand): b_BITS_3_TO_2___d7 -> y__h90 b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d13
+inlined (Expand): INV_b_BITS_1_TO_0___d9 -> b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d14 y__h90
+inlined (Expand): a_AND_b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_C_ETC___d11 -> a_AND_b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_C_ETC___d15
+inlined (Expand): b_BIT_6___d12 -> b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d13
+inlined (Expand): b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d13 -> b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d14
+inlined (Expand): b_BIT_6_2_CONCAT_INV_b_BITS_5_TO_4_CONCAT_b_BI_ETC___d14 -> a_AND_b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_C_ETC___d15
+inlined (Expand): a_AND_b_BITS_7_TO_6_CONCAT_INV_b_BITS_5_TO_4_C_ETC___d15 -> a$D_IN
+inlined (Expand): x__h89 -> a$D_IN
+inlined (Expand): CAN_FIRE_RL_step -> WILL_FIRE_RL_step
+inlined (Expand): WILL_FIRE_RL_step -> a$EN
+resolved: 5 of 5 defs and rules stand for other ids
+  y__h90 <- __h91 __h92 y__h90
+  a$D_IN <- RL_step __h92 x__h89 __h91 __h84 __h104 __h93
+  a$EN <- RL_step __h84 __h104 __h93
+  b$D_IN <- b$write_1
+  b$EN <- b$EN_write
+
+-----

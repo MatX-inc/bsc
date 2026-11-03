@@ -125,7 +125,7 @@ resolved: 5 of 14 defs and rules stand for other ids
 
 -----
 === metadata (MetaSide sysMetaSide):
-ledger after dropundet: 420 sites, 19 contexts, 12 roots, 16 defs, 116 events
+ledger after dropundet: 420 sites, 19 contexts, 12 roots, 16 defs, 162 events
 inlined (Inline): __h670 -> y__h663
 inlined (Inline): __h668 -> __h657
 inlined (Inline): __h389 -> __h386
@@ -242,10 +242,94 @@ inlined (Transform): __j19 -> RL_r3
 inlined (Transform): __j23 -> RL_r4
 dropped (Transform): __j13
 dropped (Transform): __j12
+created (Conv): a___d1 <- __h380
+merged (Conv): __h380 -> a___d1
+created (Conv): b___d2 <- __h383
+merged (Conv): __h383 -> b___d2
+created (Conv): a_PLUS_b___d3 <- __h399
+merged (Conv): __h399 -> a_PLUS_b___d3
+created (Conv): a_PLUS_b_PLUS_a_PLUS_b___d4 <- __i11
+merged (Conv): __i11 -> a_PLUS_b_PLUS_a_PLUS_b___d4
+created (Conv): b_EQ_7___d5 <- RL_r2
+created (Conv): NOT_b_EQ_7___d6 <- RL_r2
+created (Conv): vs_0___d7 <- __h628
+merged (Conv): __h628 -> vs_0___d7
+created (Conv): vs_0_PLUS_vs_0___d8 <- RL_r3
+created (Conv): vs_0_PLUS_vs_0_PLUS_7___d9 <- RL_r3
+created (Conv): vs_1___d10 <- __h639
+merged (Conv): __h639 -> vs_1___d10
+created (Conv): vs_1_0_PLUS_vs_1_0___d11 <- RL_r3
+created (Conv): vs_1_0_PLUS_vs_1_0_1_PLUS_7___d12 <- RL_r3
+created (Conv): vs_2___d13 <- __h650
+merged (Conv): __h650 -> vs_2___d13
+created (Conv): vs_2_3_PLUS_vs_2_3___d14 <- RL_r3
+created (Conv): vs_2_3_PLUS_vs_2_3_4_PLUS_7___d15 <- RL_r3
+created (Conv): a_PLUS_1___d16 <- RL_r4
+created (Conv): a_PLUS_1_6_BITS_6_TO_0___d17 <- RL_r4
+created (Conv): a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0___d18 <- RL_r4
+created (Conv): b_BITS_7_TO_2___d19 <- b_BITS_7_TO_2___h669
+merged (Conv): b_BITS_7_TO_2___h669 -> b_BITS_7_TO_2___d19
+created (Conv): b_BITS_1_TO_0___d20 <- y__h663
+created (Conv): INV_b_BITS_1_TO_0_0___d21 <- y__h663
+created (Conv): b_BITS_7_TO_2_9_CONCAT_INV_b_BITS_1_TO_0_0_1___d22 <- y__h663
+merged (Conv): y__h663 -> b_BITS_7_TO_2_9_CONCAT_INV_b_BITS_1_TO_0_0_1___d22
+created (Conv): a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0_8_PLUS_b_BIT_ETC___d23 <- RL_r4
+renamed (Conv): b_BITS_7_TO_2___d19 -> b_BITS_7_TO_2___h669
+renamed (Conv): b_BITS_7_TO_2_9_CONCAT_INV_b_BITS_1_TO_0_0_1___d22 -> y__h663
+created (Schedule): CAN_FIRE_RL_r1 <- RL_r1
+created (Schedule): CAN_FIRE_RL_r2 <- RL_r2
+created (Schedule): CAN_FIRE_RL_r3 <- RL_r3
+created (Schedule): CAN_FIRE_RL_r4 <- RL_r4
+created (Schedule): CAN_FIRE_sum <- sum
+created (Schedule): CAN_FIRE_put <- put
+created (Schedule): WILL_FIRE_RL_r1 <- RL_r1
+created (Schedule): WILL_FIRE_RL_r2 <- RL_r2
+created (Schedule): WILL_FIRE_RL_r3 <- RL_r3
+created (Schedule): WILL_FIRE_RL_r4 <- RL_r4
+created (Schedule): WILL_FIRE_sum <- sum
+created (Schedule): WILL_FIRE_put <- put
+resolved: 37 of 40 defs and rules stand for other ids
+  WILL_FIRE_put <- put
+  WILL_FIRE_sum <- sum
+  WILL_FIRE_RL_r4 <- RL_r4 __h657 __h668
+  WILL_FIRE_RL_r3 <- RL_r3 __h651 __h640 __h629
+  WILL_FIRE_RL_r2 <- RL_r2 __h386 __h389
+  WILL_FIRE_RL_r1 <- RL_r1
+  CAN_FIRE_put <- put
+  CAN_FIRE_sum <- sum
+  CAN_FIRE_RL_r4 <- RL_r4 __h657 __h668
+  CAN_FIRE_RL_r3 <- RL_r3 __h651 __h640 __h629
+  CAN_FIRE_RL_r2 <- RL_r2 __h386 __h389
+  CAN_FIRE_RL_r1 <- RL_r1
+  vs_2___d13 <- __h650
+  vs_1___d10 <- __h639
+  vs_0___d7 <- __h628
+  b___d2 <- __h383
+  a___d1 <- __h380
+  a_PLUS_1_6_BITS_6_TO_0___d17 <- RL_r4 __h657 __h668
+  b_BITS_1_TO_0___d20 <- y__h663 __h670
+  b_EQ_7___d5 <- RL_r2 __h386 __h389
+  a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0___d18 <- RL_r4 __h657 __h668
+  y__h663 <- y__h663 __h670
+  NOT_b_EQ_7___d6 <- RL_r2 __h386 __h389
+  INV_b_BITS_1_TO_0_0___d21 <- y__h663 __h670
+  a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0_8_PLUS_b_BIT_ETC___d23 <- RL_r4 __h657 __h668
+  vs_2_3_PLUS_vs_2_3_4_PLUS_7___d15 <- RL_r3 __h651 __h640 __h629
+  vs_2_3_PLUS_vs_2_3___d14 <- RL_r3 __h651 __h640 __h629
+  vs_1_0_PLUS_vs_1_0_1_PLUS_7___d12 <- RL_r3 __h651 __h640 __h629
+  vs_1_0_PLUS_vs_1_0___d11 <- RL_r3 __h651 __h640 __h629
+  vs_0_PLUS_vs_0_PLUS_7___d9 <- RL_r3 __h651 __h640 __h629
+  vs_0_PLUS_vs_0___d8 <- RL_r3 __h651 __h640 __h629
+  a_PLUS_b_PLUS_a_PLUS_b___d4 <- RL_r1
+  a_PLUS_1___d16 <- RL_r4 __h657 __h668
+  a_PLUS_b___d3 <- __h399
+  RL_r2 <- RL_r2 __h386 __h389
+  RL_r3 <- RL_r3 __h651 __h640 __h629
+  RL_r4 <- RL_r4 __h657 __h668
 
 -----
 === metadata (MetaSide sysMetaSide):
-ledger after finalcleanup: 420 sites, 19 contexts, 12 roots, 16 defs, 116 events
+ledger after finalcleanup: 420 sites, 19 contexts, 12 roots, 16 defs, 233 events
 inlined (Inline): __h670 -> y__h663
 inlined (Inline): __h668 -> __h657
 inlined (Inline): __h389 -> __h386
@@ -362,5 +446,141 @@ inlined (Transform): __j19 -> RL_r3
 inlined (Transform): __j23 -> RL_r4
 dropped (Transform): __j13
 dropped (Transform): __j12
+created (Conv): a___d1 <- __h380
+merged (Conv): __h380 -> a___d1
+created (Conv): b___d2 <- __h383
+merged (Conv): __h383 -> b___d2
+created (Conv): a_PLUS_b___d3 <- __h399
+merged (Conv): __h399 -> a_PLUS_b___d3
+created (Conv): a_PLUS_b_PLUS_a_PLUS_b___d4 <- __i11
+merged (Conv): __i11 -> a_PLUS_b_PLUS_a_PLUS_b___d4
+created (Conv): b_EQ_7___d5 <- RL_r2
+created (Conv): NOT_b_EQ_7___d6 <- RL_r2
+created (Conv): vs_0___d7 <- __h628
+merged (Conv): __h628 -> vs_0___d7
+created (Conv): vs_0_PLUS_vs_0___d8 <- RL_r3
+created (Conv): vs_0_PLUS_vs_0_PLUS_7___d9 <- RL_r3
+created (Conv): vs_1___d10 <- __h639
+merged (Conv): __h639 -> vs_1___d10
+created (Conv): vs_1_0_PLUS_vs_1_0___d11 <- RL_r3
+created (Conv): vs_1_0_PLUS_vs_1_0_1_PLUS_7___d12 <- RL_r3
+created (Conv): vs_2___d13 <- __h650
+merged (Conv): __h650 -> vs_2___d13
+created (Conv): vs_2_3_PLUS_vs_2_3___d14 <- RL_r3
+created (Conv): vs_2_3_PLUS_vs_2_3_4_PLUS_7___d15 <- RL_r3
+created (Conv): a_PLUS_1___d16 <- RL_r4
+created (Conv): a_PLUS_1_6_BITS_6_TO_0___d17 <- RL_r4
+created (Conv): a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0___d18 <- RL_r4
+created (Conv): b_BITS_7_TO_2___d19 <- b_BITS_7_TO_2___h669
+merged (Conv): b_BITS_7_TO_2___h669 -> b_BITS_7_TO_2___d19
+created (Conv): b_BITS_1_TO_0___d20 <- y__h663
+created (Conv): INV_b_BITS_1_TO_0_0___d21 <- y__h663
+created (Conv): b_BITS_7_TO_2_9_CONCAT_INV_b_BITS_1_TO_0_0_1___d22 <- y__h663
+merged (Conv): y__h663 -> b_BITS_7_TO_2_9_CONCAT_INV_b_BITS_1_TO_0_0_1___d22
+created (Conv): a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0_8_PLUS_b_BIT_ETC___d23 <- RL_r4
+renamed (Conv): b_BITS_7_TO_2___d19 -> b_BITS_7_TO_2___h669
+renamed (Conv): b_BITS_7_TO_2_9_CONCAT_INV_b_BITS_1_TO_0_0_1___d22 -> y__h663
+created (Schedule): CAN_FIRE_RL_r1 <- RL_r1
+created (Schedule): CAN_FIRE_RL_r2 <- RL_r2
+created (Schedule): CAN_FIRE_RL_r3 <- RL_r3
+created (Schedule): CAN_FIRE_RL_r4 <- RL_r4
+created (Schedule): CAN_FIRE_sum <- sum
+created (Schedule): CAN_FIRE_put <- put
+created (Schedule): WILL_FIRE_RL_r1 <- RL_r1
+created (Schedule): WILL_FIRE_RL_r2 <- RL_r2
+created (Schedule): WILL_FIRE_RL_r3 <- RL_r3
+created (Schedule): WILL_FIRE_RL_r4 <- RL_r4
+created (Schedule): WILL_FIRE_sum <- sum
+created (Schedule): WILL_FIRE_put <- put
+created (State): MUX_a$write_1__SEL_1 <- put
+created (State): MUX_a$write_1__SEL_2 <- RL_r1
+created (State): MUX_a$write_1__VAL_1 <- put
+created (State): MUX_a$write_1__VAL_2 <- RL_r1
+created (State): a$write_1 <- put RL_r1
+created (State): b$write_1 <- RL_r2
+created (State): c$write_1 <- RL_r4
+created (State): vs_0$write_1 <- RL_r3
+created (State): vs_1$write_1 <- RL_r3
+created (State): vs_2$write_1 <- RL_r3
+created (State): a$EN_write <- put RL_r1
+created (State): b$EN_write <- RL_r2
+created (State): c$EN_write <- RL_r4
+created (State): vs_0$EN_write <- RL_r3
+created (State): vs_1$EN_write <- RL_r3
+created (State): vs_2$EN_write <- RL_r3
+dropped (State): RL_r1
+dropped (State): RL_r2
+dropped (State): RL_r3
+dropped (State): RL_r4
+dropped (State): put
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): c$write_1 -> c$D_IN
+renamed (RenameIO): vs_0$write_1 -> vs_0$D_IN
+renamed (RenameIO): vs_1$write_1 -> vs_1$D_IN
+renamed (RenameIO): vs_2$write_1 -> vs_2$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): b$EN_write -> b$EN
+renamed (RenameIO): c$EN_write -> c$EN
+renamed (RenameIO): vs_0$EN_write -> vs_0$EN
+renamed (RenameIO): vs_1$EN_write -> vs_1$EN
+renamed (RenameIO): vs_2$EN_write -> vs_2$EN
+inlined (Expand): a___d1 -> a_PLUS_1___d16 a_PLUS_b___d3
+inlined (Expand): b___d2 -> b_BITS_7_TO_2___h669 b_BITS_1_TO_0___d20 b_EQ_7___d5 a_PLUS_b___d3
+inlined (Expand): vs_0___d7 -> vs_0_PLUS_vs_0___d8
+inlined (Expand): vs_0_PLUS_vs_0___d8 -> vs_0_PLUS_vs_0_PLUS_7___d9
+inlined (Expand): vs_1___d10 -> vs_1_0_PLUS_vs_1_0___d11
+inlined (Expand): vs_1_0_PLUS_vs_1_0___d11 -> vs_1_0_PLUS_vs_1_0_1_PLUS_7___d12
+inlined (Expand): vs_2___d13 -> vs_2_3_PLUS_vs_2_3___d14
+inlined (Expand): vs_2_3_PLUS_vs_2_3___d14 -> vs_2_3_PLUS_vs_2_3_4_PLUS_7___d15
+inlined (Expand): a_PLUS_1___d16 -> a_PLUS_1_6_BITS_6_TO_0___d17
+inlined (Expand): a_PLUS_1_6_BITS_6_TO_0___d17 -> a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0___d18
+inlined (Expand): a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0___d18 -> a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0_8_PLUS_b_BIT_ETC___d23
+inlined (Expand): b_BITS_1_TO_0___d20 -> INV_b_BITS_1_TO_0_0___d21
+inlined (Expand): INV_b_BITS_1_TO_0_0___d21 -> y__h663
+inlined (Expand): b_EQ_7___d5 -> NOT_b_EQ_7___d6
+inlined (Expand): NOT_b_EQ_7___d6 -> CAN_FIRE_RL_r2
+inlined (Expand): vs_0_PLUS_vs_0_PLUS_7___d9 -> vs_0$D_IN
+inlined (Expand): a_PLUS_1_6_BITS_6_TO_0_7_CONCAT_0_8_PLUS_b_BIT_ETC___d23 -> c$D_IN
+inlined (Expand): vs_1_0_PLUS_vs_1_0_1_PLUS_7___d12 -> vs_1$D_IN
+inlined (Expand): vs_2_3_PLUS_vs_2_3_4_PLUS_7___d15 -> vs_2$D_IN
+dropped (Expand): WILL_FIRE_sum
+inlined (Expand): b_BITS_7_TO_2___h669 -> y__h663
+inlined (Expand): a_PLUS_b_PLUS_a_PLUS_b___d4 -> sum MUX_a$write_1__VAL_2 b$D_IN
+inlined (Expand): CAN_FIRE_RL_r1 -> WILL_FIRE_RL_r1
+inlined (Expand): CAN_FIRE_RL_r2 -> WILL_FIRE_RL_r2
+inlined (Expand): CAN_FIRE_RL_r3 -> WILL_FIRE_RL_r3
+inlined (Expand): CAN_FIRE_RL_r4 -> WILL_FIRE_RL_r4
+inlined (Expand): CAN_FIRE_sum -> RDY_sum
+inlined (Expand): CAN_FIRE_put -> RDY_put
+inlined (Expand): WILL_FIRE_RL_r1 -> WILL_FIRE_RL_r2 MUX_a$write_1__SEL_2 a$D_IN a$EN
+inlined (Expand): WILL_FIRE_RL_r2 -> b$EN
+inlined (Expand): WILL_FIRE_RL_r3 -> vs_0$EN vs_1$EN vs_2$EN
+inlined (Expand): WILL_FIRE_RL_r4 -> c$EN
+inlined (Expand): WILL_FIRE_put -> MUX_a$write_1__SEL_1 a$D_IN a$EN
+created (VeriQuirks): a_PLUS_1__q1 <- c$D_IN
+dropped (FinalCleanup): MUX_a$write_1__SEL_1
+dropped (FinalCleanup): MUX_a$write_1__SEL_2
+dropped (FinalCleanup): MUX_a$write_1__VAL_1
+dropped (FinalCleanup): MUX_a$write_1__VAL_2
+resolved: 18 of 18 defs and rules stand for other ids
+  RDY_sum <- RDY_sum sum
+  RDY_put <- RDY_put put
+  y__h663 <- b_BITS_7_TO_2___h669 y__h663 __h383 __h670
+  a_PLUS_b___d3 <- __h399 __h380 __h383
+  sum <- sum RL_r1
+  a$D_IN <- put RL_r1
+  b$D_IN <- RL_r2 RL_r1 __h386 __h389
+  a_PLUS_1__q1 <- RL_r4 __h380 __h657 __h668
+  c$D_IN <- RL_r4 __h380 __h657 __h668
+  vs_1$D_IN <- RL_r3 __h639 __h651 __h640 __h629
+  vs_0$D_IN <- RL_r3 __h628 __h651 __h640 __h629
+  vs_2$D_IN <- RL_r3 __h650 __h651 __h640 __h629
+  a$EN <- put RL_r1
+  b$EN <- RL_r2 RL_r1 __h383 __h386 __h389
+  c$EN <- RL_r4 __h657 __h668
+  vs_0$EN <- RL_r3 __h651 __h640 __h629
+  vs_1$EN <- RL_r3 __h651 __h640 __h629
+  vs_2$EN <- RL_r3 __h651 __h640 __h629
 
 -----

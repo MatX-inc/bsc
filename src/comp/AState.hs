@@ -9,7 +9,7 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 
 import Data.List(transpose, sortBy, partition,
-            unzip4, groupBy, intersect,
+            unzip4, unzip5, groupBy, intersect,
             genericLength)
 
 import Util
@@ -38,7 +38,8 @@ import AUses(useDropCond)
 import AVerilogUtil(vNameToTask)
 import RSchedule(RAT, ratToNestedLists)
 import Wires(WireProps(..))
-import Data.Maybe (listToMaybe)
+import Data.Maybe (listToMaybe, fromMaybe)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 --import Debug.Trace
 --import Util(traces)
@@ -213,10 +214,16 @@ aState' flags pps schedule_info apkg = do
         -- RDY ports.
         isAlwaysReadyMethod m = (isRdyId (aif_name m)) && (isAlwaysRdy pps (aif_name m))
         (always_rdy_ifc,other_ifc) = partition isAlwaysReadyMethod ifc
+        -- (each method's defs beside its name, for the ledger)
+        outs_by_method :: [(AId, [ADef])]
+        outs_by_method = [ (aif_name m, outputDefToADefs fmod pps m) | m <- other_ifc ]
         outs :: [ADef]
-        outs = concatMap (outputDefToADefs fmod pps) other_ifc
+        outs = concatMap snd outs_by_method
+        always_ready_by_method :: [(AId, [ADef])]
+        always_ready_by_method =
+            [ (aif_name m, outputDefToADefs fmod pps m) | m <- always_rdy_ifc ]
         always_ready_defs :: [ADef]
-        always_ready_defs = concatMap (outputDefToADefs fmod pps) always_rdy_ifc
+        always_ready_defs = concatMap snd always_ready_by_method
 
     --traceM( "ifc are: " ++ ppReadable ifc ) ;
     --traceM( "outs are: " ++ ppReadable outs ) ;
@@ -280,9 +287,9 @@ aState' flags pps schedule_info apkg = do
         outputIds  = map (\def -> ((adef_objid def),(adef_type def)))
                          (outs ++ clk_defs ++ rstn_defs)
 
-        -- list of tuples of lists (exported identifiers, definitions)
+        -- list of tuples of lists (method, exported identifiers, definitions)
         clk_blob =
-            [(clk_id:gate_id, clk_def:gate_def) |
+            [(n, clk_id:gate_id, clk_def:gate_def) |
                 (AIClock { aif_name = n,
                            aif_clock = AClock { aclock_osc = osc,
                                                 aclock_gate = gate } }) <- ifc,
@@ -301,10 +308,10 @@ aState' flags pps schedule_info apkg = do
                     gate_def = map (\i -> ADef i (ATBit 1) gate []) gate_id
             ]
 
-        clk_defs = concatMap snd clk_blob
+        clk_defs = concatMap (\ (_, _, ds) -> ds) clk_blob
 
-        (rstn_exps, rstn_defs) = unzip
-            [(rstn_id, rstn_def) |
+        (rstn_names, rstn_exps, rstn_defs) = unzip3
+            [(n, rstn_id, rstn_def) |
                 (AIReset { aif_name = n,
                            aif_reset = AReset { areset_wire = wire } }) <- ifc,
                 let rstn_vname =
@@ -316,8 +323,8 @@ aState' flags pps schedule_info apkg = do
                     rstn_def = (ADef rstn_id (ATBit 1) wire [])
             ]
 
-        (iot_exps, iot_defs) = unzip
-            [(iot_id, iot_def) |
+        (iot_names, iot_exps, iot_defs) = unzip3
+            [(n, iot_id, iot_def) |
                 (AIInout { aif_name = n,
                            aif_inout = AInout { ainout_wire = wire },
                            aif_fieldinfo =
@@ -349,12 +356,14 @@ aState' flags pps schedule_info apkg = do
                      then processActions new_defs (a:new_as) n rest
                      else processActions (ndef:new_defs) (nact:new_as) (n+1) rest
               _ -> processActions new_defs (a:new_as) n rest
+        -- (each dummy def beside its rule, for the ledger)
         forceReturns new_defs new_rs _ [] = (new_defs, reverse new_rs)
         forceReturns new_defs new_rs n (r:rest) =
             let (ds,new_as,n') = processActions [] [] n (arule_actions r)
                 r' = r { arule_actions = new_as }
-            in forceReturns (ds ++ new_defs) (r':new_rs) n' rest
-        (dummy_defs, rs') = forceReturns [] [] 1 rs
+            in forceReturns ([ (d, arule_id r) | d <- ds ] ++ new_defs) (r':new_rs) n' rest
+        (dummy_defs_by_rule, rs') = forceReturns [] [] 1 rs
+        dummy_defs = map fst dummy_defs_by_rule
 
         -- when "isC", translate from the call name to the
         -- system task wrapper name
@@ -418,27 +427,28 @@ aState' flags pps schedule_info apkg = do
         value_method_ids = [ i | (AIDef { aif_name = i }) <- ifc ]
 
         -- muxes for values (definitions)
-        (emux_selss, emux_valss, emux_outss, esss) =
-            unzip4 (map (mkEmuxssExpr exclusive_rules_db value_method_ids om) ers)
+        (emux_selss, emux_valss, emux_outss, esss, emux_evss) =
+            unzip5 (map (mkEmuxssExpr exclusive_rules_db value_method_ids om) ers)
 
         -- muxes for actions
         -- (we don't need a substitution for actionvalue value calls,
         --  because there is no multiplicity for action/actionvalue methods,
         --  so any value calls can be converted to use of the one port)
-        (amux_selss, amux_valss, amux_outss, _) =
-            unzip4 (map (mkEmuxssAction exclusive_rules_db value_method_ids om) ars)
+        (amux_selss, amux_valss, amux_outss, _, amux_evss) =
+            unzip5 (map (mkEmuxssAction exclusive_rules_db value_method_ids om) ars)
 
         mux_sel_defs = concat emux_selss ++ concat amux_selss
         mux_val_defs = concat emux_valss ++ concat amux_valss
         mux_out_defs = concat emux_outss ++ concat amux_outss
         mux_defsRed = mux_sel_defs ++ mux_val_defs ++ mux_out_defs
+        mux_events = concat emux_evss ++ concat amux_evss
         --
         -- filter out the redundant def from the new definitions
         -- leave the mux_val_defs since these may not have good names.
         esubmap = M.fromList $ genAliases (mux_sel_defs)
         mux_defs = map (aSubst esubmap)  mux_defsRed
 
-        enas = concatMap mkEnabless ars
+        (enas, ena_events) = concatUnzipMap mkEnabless ars
 
         -- substitution of value method calls to instance outputs
         substs = M.fromList (concat esss)
@@ -536,6 +546,44 @@ aState' flags pps schedule_info apkg = do
         defs'' :: [ADef]
         defs'' = defs' ++ edefs ++ dummy_defs
 
+        -- The ledger (IExpandMeta): the port defs of the value methods
+        -- and of the output clocks, resets and inouts are Created from
+        -- their methods (a port that keeps its method's id persists
+        -- without an event); the mux and enable defs from the rules
+        -- whose calls they arbitrate; the defs tying unused ports to
+        -- zero from nothing; the task-return defs from their rules.
+        -- Then every rule and method whose id is not a def's is gone: a
+        -- rule's record lives on in its CAN_FIRE and WILL_FIRE, a
+        -- method's in its ports.  A source that is no rule or method
+        -- of the package is left out: asi_method_uses_map still lists
+        -- the calls of a rule aDumpSchedule removed under
+        -- -remove-starved-rules, and the mux arm and enable built for
+        -- those uses would name it.  The comparisons read ids the pass
+        -- has in hand and are made when the ledger is forced, after
+        -- every other field of the package.
+        present_ids :: S.Set AId
+        present_ids = S.fromList (rs_ids ++ map aif_name ifc)
+        presentSources :: MetaEvent -> MetaEvent
+        presentSources (Created t i srcs) =
+            Created t i (filter (`S.member` present_ids) srcs)
+        presentSources ev = ev
+        state_events :: [MetaEvent]
+        state_events = map presentSources $
+            [ Created PTState p [m]
+            | (m, ds) <- outs_by_method ++ always_ready_by_method,
+              ADef p _ _ _ <- ds, p /= m ] ++
+            [ Created PTState i [n] | (n, ids, _) <- clk_blob, i <- ids, i /= n ] ++
+            [ Created PTState i [n] | (n, i) <- zip rstn_names rstn_exps, i /= n ] ++
+            [ Created PTState i [n] | (n, i) <- zip iot_names iot_exps, i /= n ] ++
+            mux_events ++ ena_events ++
+            [ Created PTState i [] | ADef i _ _ _ <- edefs ] ++
+            [ Created PTState (adef_objid d) [r] | (d, r) <- dummy_defs_by_rule ] ++
+            [ Dropped PTState r | r <- map aRuleName ors, not (S.member r dvars) ] ++
+            concat [ [ Dropped PTState m | not (S.member m dvars) ] ++
+                     [ Dropped PTState r | r <- map aRuleName (aIfaceRules m_ifc),
+                                           r /= m, not (S.member r dvars) ]
+                   | m_ifc <- ifc, let m = aif_name m_ifc ]
+
         --rdysToRemove = filter (isRdyToRemove pps) defs''
     -- traceM("Astate omns : " ++ ppReadable omns )
     -- traceM("Astate mvars : " ++ ppReadable mvars )
@@ -548,7 +596,7 @@ aState' flags pps schedule_info apkg = do
             ASPSignalInfo {
                 aspsi_inputs = map fst (param_args ++ port_args ++ inout_args),
 
-                aspsi_output_clks  = map mkSIClockTuple clk_blob,
+                aspsi_output_clks  = [ mkSIClockTuple (ids, ds) | (_, ids, ds) <- clk_blob ],
                 aspsi_output_rsts  = rstn_exps,
                 aspsi_ifc_iots  = iot_exps,
                 aspsi_methods = mkSignalInfoMethod ifc,
@@ -593,7 +641,8 @@ aState' flags pps schedule_info apkg = do
                            aspkg_inlined_ports   = [],
                            aspkg_signal_info     = signal_info,
                            aspkg_comment_info    = comment_info,
-                           aspkg_meta            = apkg_meta apkg }
+                           aspkg_meta            = appendEvents state_events
+                                                                (apkg_meta apkg) }
 
     -- does the number of uses (n) exceed the number of available ports (p)?
     let overused_ports = [ (o,m,k,n) | ((o,m),n) <- omns,
@@ -1012,24 +1061,27 @@ mkBlob mMap omMultMap (method@(MethodId obj met), usedPorts) =
 --  * a list of new mux output defs to add to the package
 --  * an expression substitution to replace old expressions with uses
 --    of the new definitions
+--  * the ledger events of the new defs, Created from the rules whose
+--    calls they arbitrate
 
 mkEmuxss :: ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
             ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob ->
-            ([ADef], [ADef], [ADef], AExprSubst)
+            ([ADef], [ADef], [ADef], AExprSubst, [MetaEvent])
 mkEmuxss tl cnd rdb value_method_ids om (((o, m), f), emrss) =
     let genfunct = mkEmuxs tl cnd rdb value_method_ids om o m
-        (sel_dss, val_dss, out_dss, sss) = unzip4 (zipWith genfunct (map (toMaybe f) [0..]) emrss)
-    in  (concat sel_dss, concat val_dss, concat out_dss, concat sss)
+        (sel_dss, val_dss, out_dss, sss, evss) =
+            unzip5 (zipWith genfunct (map (toMaybe f) [0..]) emrss)
+    in  (concat sel_dss, concat val_dss, concat out_dss, concat sss, concat evss)
 
 -- XXX The "const aTrue" suggests that the use is unconditional.
 -- XXX This assumption might change some if we fix Bug 37 with
 -- XXX conditional def/use analysis.
 mkEmuxssExpr :: ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
-             -> ([ADef], [ADef], [ADef], AExprSubst)
+             -> ([ADef], [ADef], [ADef], AExprSubst, [MetaEvent])
 mkEmuxssExpr = mkEmuxss id (const aTrue)
 
 mkEmuxssAction :: ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
-               -> ([ADef], [ADef], [ADef], AExprSubst)
+               -> ([ADef], [ADef], [ADef], AExprSubst, [MetaEvent])
 mkEmuxssAction = mkEmuxss tail head
 
 -- ---------------
@@ -1040,7 +1092,7 @@ mkEmuxssAction = mkEmuxss tail head
 mkEmuxs :: ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
            ExclusiveRulesDB -> [AId] -> OrderMap ->
            AId -> AId -> Maybe Integer -> MethPortBlob ->
-           ([ADef], [ADef], [ADef], AExprSubst)
+           ([ADef], [ADef], [ADef], AExprSubst, [MetaEvent])
 mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
     let
         -- Break each MethPortBlob into a list of the expressions for
@@ -1068,7 +1120,9 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
         def_tuples = zipWith (\(argN, portM) ->
                                   mkEmux rdb value_method_ids om ino o m argN portM)
                          portCoords arg_blobs
-        (sel_defs, val_defs, out_defs) = concatUnzip3 def_tuples
+        (sel_dss, val_dss, out_dss, evss) = unzip4 def_tuples
+        (sel_defs, val_defs, out_defs, events) =
+            (concat sel_dss, concat val_dss, concat out_dss, concat evss)
 
         mkPortSubsts (e, _) =
             case aType e of
@@ -1082,7 +1136,7 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
         subst = concatMap mkPortSubsts emrs
     in
         -- traces ("mkEmuxs " ++ ppReadable emrs ++ ppReadable xs) $
-        (sel_defs, val_defs, out_defs, subst)
+        (sel_defs, val_defs, out_defs, subst, events)
 
 
 -- ---------------
@@ -1104,13 +1158,16 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
 --  * A list of new definitions for selector signals into the mux
 --  * A list of new definitions for the values to be selected in the mux
 --  * The definition for the output of the mux
+--  * The ledger events: each new def Created from the rules of the uses
+--    it selects for (a use in a predicate has none)
 --
 mkEmux :: ExclusiveRulesDB -> [AId] -> OrderMap ->
           Maybe Integer -> AId -> AId -> Integer -> Maybe Integer ->
-          [(AExpr, AExpr, Maybe [ARuleId])] -> ([ADef], [ADef], [ADef])
-mkEmux exclusive_rules_db value_method_ids om ino o m argN portM [(e, _, _)] =
+          [(AExpr, AExpr, Maybe [ARuleId])] -> ([ADef], [ADef], [ADef], [MetaEvent])
+mkEmux exclusive_rules_db value_method_ids om ino o m argN portM [(e, _, mrs)] =
     -- Only one input to the mux
-    ([], [], [ ADef (argId ino o m argN portM) (aType e) e [] ])
+    let i = argId ino o m argN portM
+    in  ([], [], [ ADef i (aType e) e [] ], [Created PTState i (fromMaybe [] mrs)])
 mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_) =
     -- Multiple inputs
     let
@@ -1189,7 +1246,7 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         -- any new defs (because we want to give the return expr a name)
 
         mkArg :: (Integer, (AExpr, AExpr, Maybe [ARuleId])) ->
-                 ([AExpr], [ADef])
+                 ([AExpr], [ADef], [MetaEvent])
         mkArg (n, (e, _, mrs)) =
             let suffix = use2suffix n mrs
                 val_type = ae_type e
@@ -1200,28 +1257,32 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
             in
                 ([ASDef aTBool (selId suffix),
                   ASDef val_type val_id],
-                 [ADef val_id val_type e props])
+                 [ADef val_id val_type e props],
+                 [Created PTState val_id (fromMaybe [] mrs)])
 
         -- ---------------
         -- Function to make the definitions for the control signals
-        mkSel :: (Integer, (AExpr, AExpr, Maybe [ARuleId])) -> [ADef]
+        mkSel :: (Integer, (AExpr, AExpr, Maybe [ARuleId])) -> ([ADef], [MetaEvent])
         mkSel (n, (_, c, Just rs)) =
           let suffix = use2suffix n (Just rs)
               props :: [DefProp]
               props = map DefP_Rule rs -- record the source rule
           in
               if isTrue c then
-                 [ADef (selId suffix) aTBool (aOrs (map willfireId rs))
-                  props
-                 ]
+                 ([ADef (selId suffix) aTBool (aOrs (map willfireId rs))
+                   props
+                  ],
+                  [Created PTState (selId suffix) rs])
                else
 
                  -- if there is a non-split condition, create a
                  -- pre-selector signal which is the OR of the WFs,
                  -- and the selector will be the presel AND the cond
-                 [ADef (preSelId suffix) aTBool (aOrs (map willfireId rs)) props,
-                  ADef (selId suffix) aTBool
-                           (aAnd (ASDef aTBool (preSelId suffix)) c) props]
+                 ([ADef (preSelId suffix) aTBool (aOrs (map willfireId rs)) props,
+                   ADef (selId suffix) aTBool
+                            (aAnd (ASDef aTBool (preSelId suffix)) c) props],
+                  [Created PTState (preSelId suffix) rs,
+                   Created PTState (selId suffix) rs])
         -- only one input to the mux was handled by the first case of mkEmux
         mkSel x = internalError ("mkSel, match failed: " ++ ppReadable x)
 
@@ -1256,10 +1317,10 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         -- PrimMux takes a list of pairs of the selector ASDef and the
         -- expr that should result
         -- mux_pairs = the pairs, val_defs = the new Id defs for the vals
-        (mux_pairs, val_defs) = concatUnzipMap mkArg ers'
+        (mux_pairs, val_defs, val_events) = concatUnzip3 (map mkArg ers')
         default_pair = mkDefaultPair t mux_pairs
         -- The new Id defs for the mux selector control signals
-        sel_defs = concatMap mkSel ers'
+        (sel_defs, sel_events) = concatUnzipMap mkSel ers'
 
         -- The Id of this argument
         i = argId ino o m argN portM
@@ -1270,6 +1331,9 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         out_def = ADef i t (APrim i t
                                (if usePri then PrimPriMux else PrimMux)
                                (mux_pairs ++ default_pair) ) []
+        -- Created from the rules of every use it selects among
+        out_event :: MetaEvent
+        out_event = Created PTState i (concat [ rs | (_, _, Just rs) <- ers ])
 
         -- The uses used in predicates (should not be > 1)
         pred_uses = [ v | (v, _, Nothing) <- ers ]
@@ -1280,7 +1344,7 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         if (length pred_uses > 1)
         then internalError ("Multiple port use " ++
                             ppReadable (o, m, map fst3 ers))
-        else (sel_defs, val_defs, [out_def])
+        else (sel_defs, val_defs, [out_def], sel_events ++ val_events ++ [out_event])
 
 mkEmux _ _ _ _ _ _ _ _ _ = internalError "mkEMux"
 
@@ -1294,14 +1358,18 @@ mkDefaultPair t aexprs = [APrim  defaultAId (ATBit 1) PrimBNot [orCond] , ASAny 
 -- Function: mkEnabless
 --
 
-mkEnabless :: MethBlob -> [ADef]
-mkEnabless (((o, m), f), emrss) = concat (zipWith (mkEnables o m) (map (toMaybe f) [0..]) emrss)
+-- (the defs and their ledger events: each Created from the rules whose
+-- calls it enables)
+mkEnabless :: MethBlob -> ([ADef], [MetaEvent])
+mkEnabless (((o, m), f), emrss) =
+    concatUnzip (zipWith (mkEnables o m) (map (toMaybe f) [0..]) emrss)
 
-mkEnables :: AId -> AId -> Maybe Integer -> MethPortBlob -> [ADef]
+mkEnables :: AId -> AId -> Maybe Integer -> MethPortBlob -> ([ADef], [MetaEvent])
 mkEnables o m ino emrs =
         let mi = mkMethId o m ino MethodEnable
             (dss, ess) = unzip (zipWith mkE emrs [1..])
-            mkE :: (AExpr, Maybe [ARuleId]) -> Integer -> ([ADef], [AExpr])
+            -- (each def beside the rules it was made for)
+            mkE :: (AExpr, Maybe [ARuleId]) -> Integer -> ([(ADef, [ARuleId])], [AExpr])
             mkE (AMethCall _ _ _ (ASInt _ _ (IntLit _ _ 1) : _), Just is) _ =
                 ([], [ aWillFireId i | i <- is ])
             mkE (AMethCall _ _ _ (c : _), Just is) k =
@@ -1309,21 +1377,27 @@ mkEnables o m ino emrs =
                                                  mkNumFString k]) mi
                   iand = mkIdPre (concatFString [mkFString astAndPref,
                                                  mkNumFString k]) mi
-                  dor :: [ADef]
+                  dor :: [(ADef, [ARuleId])]
                   (dor, aor) =
                         case is of
                         [i] -> ([], aWillFireId i)
-                        _ -> ([ADef ior aTBool
-                               (aOrs [ aWillFireId i | i <- is ]) []],
+                        _ -> ([(ADef ior aTBool
+                                (aOrs [ aWillFireId i | i <- is ]) [], is)],
                               ASDef aTBool ior)
-                  dand :: ADef
-                  dand = ADef iand aTBool (aAnd aor c) []
+                  dand :: (ADef, [ARuleId])
+                  dand = (ADef iand aTBool (aAnd aor c) [], is)
               in
                   (dor ++ [dand], [ASDef aTBool iand])
             mkE _ _ = ([], [])
+            -- the rules of every use, which the enable is Created from
+            srcs = concat [ is | (_, Just is) <- emrs ]
         in case (concat dss, concat ess) of
-            ([ADef i _ e p], [ASDef _ i']) | i == i' -> [ADef mi aTBool e p] -- pass on props?
-            (ds, es)                               -> ds ++ [ADef mi aTBool (aOrs es) []]
+            ([(ADef i _ e p, _)], [ASDef _ i']) | i == i' ->
+                ([ADef mi aTBool e p], [Created PTState mi srcs]) -- pass on props?
+            (ds, es) ->
+                (map fst ds ++ [ADef mi aTBool (aOrs es) []],
+                 [ Created PTState (adef_objid d) rs | (d, rs) <- ds ] ++
+                 [Created PTState mi srcs])
 
 
 -- ==============================

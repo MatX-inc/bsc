@@ -15,6 +15,7 @@ import Util
 import IOUtil(progArgs)
 import PPrint(ppReadable, ppString)
 import Error(ErrorHandle)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 trace_disjoint_tests :: Bool
 trace_disjoint_tests = "-trace-disjoint-tests" `elem` progArgs
@@ -28,41 +29,50 @@ acleanupPref = "_dfoo"
 -- =====
 
 -- A state monad for generating identifiers and capturing definitions during the cleanup pass
-data CState = CState Integer [ADef] DisjointTestState
+-- (and, last, the ledger events of the definitions captured, most recent first)
+data CState = CState Integer [ADef] DisjointTestState [MetaEvent]
 
 -- Identifiers are _prefix# and the first is _prefix1
 -- prefix is acleanupPref
 initCState :: DisjointTestState -> CState
-initCState dts = CState 1 [] dts
+initCState dts = CState 1 [] dts []
 
 -- the state monad itself
 type CMonad   = StateT CState IO
 
-addDef :: ADef -> CMonad ()
-addDef d = do
-    (CState i ds dts) <- get
+-- add a def made for the rule given, which the ledger records it as
+-- Created from (the event is consed unevaluated; the counter is not read)
+addDef :: ARuleId -> ADef -> CMonad ()
+addDef rid d = do
+    (CState i ds dts evs) <- get
     dts' <- liftIO $ addADefToDisjointTestState dts [d]
-    put (CState i (d:ds) dts')
+    put (CState i (d:ds) dts' (Created PTCleanup (adef_objid d) [rid] : evs))
 
 getDefs :: CMonad [ADef]
 getDefs = do
-            (CState i ds dts) <- get
+            (CState i ds dts evs) <- get
             return (reverse ds)
+
+-- the ledger events, oldest first
+getEvents :: CMonad [MetaEvent]
+getEvents = do
+            (CState i ds dts evs) <- get
+            return (reverse evs)
 
 getDisjointTestState :: CMonad DisjointTestState
 getDisjointTestState = do
-    (CState i ds dts) <- get
+    (CState i ds dts evs) <- get
     return dts
 
 updateDisjointTestState :: DisjointTestState -> CMonad ()
 updateDisjointTestState dts = do
-    (CState i ds _) <- get
-    put (CState i ds dts)
+    (CState i ds _ evs) <- get
+    put (CState i ds dts evs)
 
 newName :: CMonad AId
 newName = do
-    (CState i ds dts) <- get
-    put (CState (i+1) ds dts)
+    (CState i ds dts evs) <- get
+    put (CState (i+1) ds dts evs)
     return $ mkId noPosition (mkFString (acleanupPref ++ itos i))
 
 
@@ -82,9 +92,11 @@ aCleanup errh flags apkg = do
                 userARules' <- mapM (cleanupRule flags Nothing) userARules
                 ifs' <- mapM (cleanupIfc flags) ifs
                 newDefs <- getDefs
+                events <- getEvents
 --              traceM (show newDefs)
                 let defs' = userDefs ++ newDefs
-                return (apkg { apkg_local_defs = defs', apkg_rules = userARules', apkg_interface = ifs' }))
+                return (apkg { apkg_local_defs = defs', apkg_rules = userARules', apkg_interface = ifs',
+                               apkg_meta = appendEvents events (apkg_meta apkg) }))
             initstate
 
 
@@ -95,7 +107,7 @@ cleanupRule flags mrdy (ARule id rps descr wp pred actions asmps splitorig) =
      let pred' = case mrdy of
                    Nothing -> pred
                    Just rdy -> aAnd rdy pred
-     actions' <- cleanupActions flags pred' actions
+     actions' <- cleanupActions flags id pred' actions
      -- don't cleanup assumption actions because they include no methods
      return (ARule id rps descr wp pred actions' asmps splitorig)
 
@@ -112,8 +124,8 @@ cleanupIfc _ ifc = return ifc
 
 -- merge mutually exclusive calls to the same action method
 -- really a later pass lifting (so I suppose no-lift no longer breaks anything)
-cleanupActions :: Flags -> AExpr -> [AAction] -> CMonad [AAction]
-cleanupActions flags pred as =
+cleanupActions :: Flags -> ARuleId -> AExpr -> [AAction] -> CMonad [AAction]
+cleanupActions flags rid pred as =
   let
       loop :: [AAction] -> [AAction] -> CMonad [AAction]
       loop merged [] = return (reverse merged)
@@ -140,8 +152,8 @@ cleanupActions flags pred as =
                    if (isDisjoint) then
                      do
                         newid <- newName
-                        addDef (ADef newid aTBool
-                                (APrim newid aTBool PrimBOr [cond, cond']) [])
+                        addDef rid (ADef newid aTBool
+                                    (APrim newid aTBool PrimBOr [cond, cond']) [])
                         -- A tuple-typed arg (SplitPorts) must stay a
                         -- literal ATuple all the way to the backend
                         -- (AVerilog only renders literal tuple defs), so
@@ -151,7 +163,7 @@ cleanupActions flags pred as =
                         let mergeOne arg arg' = do
                                 argid <- newName
                                 let argtyp = (aType arg)
-                                addDef (ADef argid argtyp
+                                addDef rid (ADef argid argtyp
                                     (APrim argid argtyp PrimIf
                                        [cond, arg, arg']) [])
                                 return (ASDef argtyp argid)

@@ -18,9 +18,10 @@ import Prim
 import DefProp(DefProp, defPropsHasNoCSE)
 import ASyntax
 import ASyntaxUtil(tsortADefs, aType, isConst, aSize, )
-import AExpand(aSRemoveUnused)
+import AExpand(aSRemoveUnused, defRefs)
 import AOpt(aOptBoolExpr)
 import IOUtil(progArgs)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 doTrace :: Bool
 doTrace = elem "-trace-syn" progArgs
@@ -39,7 +40,9 @@ aSynthesize flags p@(ASPackage { aspkg_values = ds }) =
         p
     else
         -- XXX use some fast removal of unused defs & renamings.
-        aImprove (p { aspkg_values = synDefs ds })
+        let (ds', events) = synDefs ds
+        in  aImprove (p { aspkg_values = ds',
+                          aspkg_meta = appendEvents events (aspkg_meta p) })
 
 -- ---------------
 
@@ -64,7 +67,10 @@ aImprove p@(ASPackage { aspkg_values = ds }) =
         repl e = e
         -- aOptBoolExpr is overkill...
         ds' = [ ADef i t (aOptBoolExpr (repl e)) p | ADef i t e p <- ds ]
-        p'' = aSRemoveUnused False (p { aspkg_values = ds' })
+        -- the ledger: a def removed as unused was inlined into the defs
+        -- that referred to it; any other is dropped
+        p'' = aSRemoveUnused PTSynthesize False (defRefs ds)
+                             (p { aspkg_values = ds' })
         ds'' = aspkg_values p''
     in  if length ds == length ds'' && ds == ds'' then        -- length check is a fast check for inequality
             (if doTrace then trace "aImprove done" else id)
@@ -88,8 +94,25 @@ data SState = SState {
                 cse_map :: (M.Map AExpr AId),
                 -- map of defs which have been deemed "simple"
                 -- (references to these can be inlined with the expression)
-                simple_map :: (M.Map AId AExpr)
+                simple_map :: (M.Map AId AExpr),
+                -- the def being synthesized, which a def newName makes
+                -- meanwhile is Created from in the ledger
+                s_owner :: Maybe AId,
+                -- the ledger events (IExpandMeta), most recent first;
+                -- consed unevaluated, reading no counter
+                s_events :: [MetaEvent]
               }
+
+-- synthesize under the given def as the owner
+setOwner :: AId -> S ()
+setOwner i = do
+  state <- get
+  put $ state { s_owner = Just i }
+
+addEvent :: MetaEvent -> S ()
+addEvent ev = do
+  state <- get
+  put $ state { s_events = ev : s_events state }
 
 type S a = State SState a
 
@@ -134,14 +157,18 @@ newName = do
 
 --------
 
-synDefs :: [ADef] -> [ADef]
+-- (with the ledger events of the defs made, oldest first)
+synDefs :: [ADef] -> ([ADef], [MetaEvent])
 synDefs ds =
     let initState = SState { uniqueId = 1,
                              defs = [],
                              cse_map = M.empty,
-                             simple_map = M.empty
+                             simple_map = M.empty,
+                             s_owner = Nothing,
+                             s_events = []
                            }
-    in  fst $ runState (synDefsS (tsortADefs ds)) initState
+        (ds', state) = runState (synDefsS (tsortADefs ds)) initState
+    in  (ds', reverse (s_events state))
 
 synDefsS :: [ADef] -> S [ADef]
 synDefsS ds = do
@@ -154,6 +181,7 @@ synDefsS ds = do
 
 toED :: ADef -> S ()
 toED (ADef i t e props) = do
+    setOwner i
     e' <- toE e
     addDefU i e' props
 
@@ -219,6 +247,9 @@ addExpr e = do
      Nothing -> do
         i <- newName
         addDef i e' []
+        -- the ledger: Created from the def being synthesized
+        owner <- gets s_owner
+        addEvent (Created PTSynthesize i (maybe [] (: []) owner))
         return i
 
 addDefU :: AId -> AExpr -> [DefProp] -> S ()
@@ -257,12 +288,15 @@ wireId i n = mkIdPre (mkFString (synthPref ++ itos n ++ "_")) i
 synDef :: (AId, AExpr, [DefProp]) -> S ()
 synDef (i, e, props) = do
     when doTrace $ trace ("synDef " ++ ppReadable (i, e)) $ return ()
+    setOwner i
     es <- synExp e
     case es of
      [e'] -> addDefU i e' props
      es -> do
         let is = map (wireId i) [0..length es-1]
         zipWithM_ (\i e -> addDefU i e props ) is es
+        -- the ledger: each wire of the def is Created from it
+        mapM_ (\ w -> addEvent (Created PTSynthesize w [i])) is
 --        trace (ppReadable (is, es)) $ return ()
         addDefU i (APrim i (aType e) PrimConcat (map (ASDef aTBool) (reverse is))) props
 
@@ -271,11 +305,15 @@ synExp (APrim aid t p es) = synPrim aid t p es
 synExp e@(ANoInlineFunCall t _ _ _) = do
         i <- newName
         addDef i e []
+        owner <- gets s_owner
+        addEvent (Created PTSynthesize i (maybe [] (: []) owner))
         --trace ("synExp: ANoInlineFunCall " ++ ppReadable (i, e)) $ return ()
         return (splitASDef t i)
 synExp e@(AFunCall t _ _ _ _) = do
         i <- newName
         addDef i e []
+        owner <- gets s_owner
+        addEvent (Created PTSynthesize i (maybe [] (: []) owner))
         --trace ("synExp: AFunCall " ++ ppReadable (i, e)) $ return ()
         return (splitASDef t i)
 

@@ -809,16 +809,21 @@ instance NFData ModuleMeta where
 
 -- The pass an event was written by, in driver order: the ISyntax
 -- passes after elaboration, the conversion to ASyntax, the ASyntax
--- passes before and after state generation (the ECO backend's keep
--- plan, ECO.Backend.applyBackendPlan, among the latter), and the
--- Verilog backend's expansion of defs into their users.
+-- passes before and after state generation (PTSchedule covers the
+-- scheduler's own defs and the CAN_FIRE and WILL_FIRE defs added from
+-- its result, PTDumpSchedule the rules it removes as never firing; the
+-- ECO backend's keep plan, ECO.Backend.applyBackendPlan, is among the
+-- latter), and the Verilog backend's passes: the expansion of defs
+-- into their users (PTExpand, run by aOpt), the optimizer's own defs
+-- (PTOpt), the synthesis, quirk and cleanup passes before Verilog.
 data PassTag = PTInlineFmt | PTInline | PTTransform | PTSplitIf | PTLift
              | PTParams | PTDropRules
              | PTConv | PTRankMethCalls | PTTaskSplice | PTCleanup
-             | PTSchedule | PTAddScheduleDefs | PTNoInline
+             | PTSchedule | PTAddScheduleDefs | PTDumpSchedule | PTNoInline
              | PTAddCFConditionWires | PTAddSchedAssumps | PTRemoveAssumps
              | PTState | PTInlineWires | PTInlineCReg | PTRenameIO
              | PTDropDefs | PTBackendPlan | PTOpt | PTExpand
+             | PTSynthesize | PTVeriQuirks | PTFinalCleanup
         deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- One event: what a pass did to def or rule ids.  The ids are the

@@ -14,6 +14,7 @@ import PreIds(idUnsigned)
 import FStringCompat(mkFString)
 import Control.Monad(when)
 import Control.Monad.State(State, evalState, gets, get, put)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 import qualified Data.Map as M
 import Prim
 import DefProp(defPropsHasNoCSE)
@@ -53,8 +54,20 @@ data QState = QState {
     -- reverse lookup of defs processed or added so far,
     -- to avoid creating new ids for the exprs which already have ids
     -- (defs marked NoCSE are not added to this map)
-    rlookup  :: M.Map (AExpr,AType) AId
+    rlookup  :: M.Map (AExpr,AType) AId,
+    -- the def or instance being processed, which a def addExpr adds
+    -- meanwhile is Created from in the ledger
+    qs_owner :: Maybe AId,
+    -- the ledger events (IExpandMeta), most recent first; consed
+    -- unevaluated, reading no counter
+    qs_events :: [MetaEvent]
   }
+
+-- process under the given def or instance as the owner
+setOwner :: Maybe AId -> QQState ()
+setOwner o = do
+    state <- get
+    put state { qs_owner = o }
 
 -- Monad type
 type QQState a = State QState a
@@ -93,6 +106,9 @@ addExpr t e = do
             do
               nid <- genIdFromAExpr e
               addDef (ADef nid t e [])
+              state <- get
+              put state { qs_events = Created PTVeriQuirks nid (maybe [] (: []) (qs_owner state))
+                                      : qs_events state }
               return nid
         -- don't create a new id for an expression that already has an id
         Just fid -> return fid
@@ -112,29 +128,36 @@ aVeriQuirks flags pkg =
                 qs_readableMux = readableMux flags,
                 uniqueId = 1,
                 defs = [],
-                rlookup = M.empty
+                rlookup = M.empty,
+                qs_owner = Nothing,
+                qs_events = []
                    }
 
         action =
             do
                 mapM_ aQDef (aspkg_values pkg)
                 is' <- mapM aQInst (aspkg_state_instances pkg)
+                setOwner Nothing
                 fs' <- mapM aQForeignBlock (aspkg_foreign_calls pkg)
                 ds' <- gets defs
+                events <- gets qs_events
                 return (pkg { aspkg_values = (reverse ds'),
                               aspkg_state_instances = is',
-                              aspkg_foreign_calls = fs' })
+                              aspkg_foreign_calls = fs',
+                              aspkg_meta = appendEvents (reverse events) (aspkg_meta pkg) })
 
 
 aQDef :: ADef -> QQState ()
 -- Top level case does not need to be pulled out
 aQDef (ADef i t e p) = do
+    setOwner (Just i)
     e' <- aQExp True e
     addDef (ADef i t e' p)
 
 
 aQInst :: AVInst -> QQState (AVInst)
 aQInst avi@(AVInst { avi_iargs = args }) = do
+  setOwner (Just (avi_vname avi))
   args' <- mapM (aQExp False) args
   return (avi { avi_iargs = args' })
 

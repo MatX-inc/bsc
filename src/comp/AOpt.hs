@@ -46,12 +46,13 @@ import FStringCompat(mkFString)
 import Id
 import ASyntax
 import ASyntaxUtil
-import AExpand(aExpand, xaSRemoveUnused, xaXExpand, expandAPackage)
+import AExpand(aExpand, xaSRemoveUnused, xaXExpand, expandAPackage, defRefs)
 import BoolExp
 import Prim
 import DefProp(defPropsHasNoCSE)
-import Data.Maybe(fromMaybe)
+import Data.Maybe(fromMaybe, maybeToList)
 import Util(anySame)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 import Util(tracep {- , traces -})
 import Debug.Trace
@@ -90,6 +91,7 @@ aOpt errh flags pkg0 | not (optATS flags) =
                    keepF
                    False    -- expnond
                    inlineB  -- expcheap
+                   (defRefs (aspkg_values pkg0))  -- for the ledger
                    pkg1
     in
         return pkg2
@@ -136,10 +138,13 @@ aOpt errh flags pkg0 = do
         -- expcheap  needed as True here to get aInsertCase to work.
         -- aExpand is needed here after scheduling tsort defs
         --
+        -- (the ledger reads the references of pkg0, which the case
+        -- insertion and the expansion fold into their users)
         pkg2 = aExpand errh
                    keepF
                    False    -- expnond
                    inlineB  -- expcheap
+                   (defRefs (aspkg_values pkg0))
                    pkg1B
 
         ds = aspkg_values pkg2
@@ -150,21 +155,25 @@ aOpt errh flags pkg0 = do
       traceM ("trace definitions, post expand (ds): " ++ ppReadable ds)
 
     -- optimize defs with "aOptDefs", then remove defs and expand again
+    -- (the ledger takes the events of the defs aOptDefs made)
     --
-    let (ds1, fb1, ss1) = aOptDefs bflags ds fb ss
+    let (ds1, fb1, ss1, opt_events) = aOptDefs bflags ds fb ss
     when debug $
       traceM ("trace defs, post aOptDefs (ds1): " ++ ppReadable ds1)
     let pkg3 = pkg2 { aspkg_values = ds1,
                       aspkg_foreign_calls = fb1,
-                      aspkg_state_instances = ss1 }
+                      aspkg_state_instances = ss1,
+                      aspkg_meta = appendEvents opt_events (aspkg_meta pkg2) }
         -- XXX EWC Not sure why optSched is used here ???
-        pkg4 = xaSRemoveUnused keepF pkg3
+        -- (the defs aOptDefs folded into their users are removed here)
+        pkg4 = xaSRemoveUnused PTExpand keepF (defRefs ds) pkg3
     when debug $
       traceM ("trace defs, post xaSRemoveUnused (ds2): " ++ ppReadable (aspkg_values pkg4))
     let pkg5 = xaXExpand errh
                    keepF
                    optsch  -- expnond
                    False   -- expcheap
+                   (defRefs (aspkg_values pkg4))
                    pkg4
 
     -- Run thru the SAT solver for and/or optimzation
@@ -191,6 +200,7 @@ aOpt errh flags pkg0 = do
                    keepF
                    optsch  -- expnond
                    False   -- expcheap
+                   (defRefs (aspkg_values pkg6))
                    pkg6
         pkg8 = aOptFinalPass flags pkg7
     --
@@ -270,7 +280,14 @@ type UseMap = (M.Map AId Int)
 data OState = OState { o_nextid :: Integer,
                        o_defs   :: [ADef],
                        o_defmap :: DefMap,
-                       o_usemap :: UseMap
+                       o_usemap :: UseMap,
+                       -- the def or instance being optimized, which a
+                       -- def mkDefS makes meanwhile is Created from in
+                       -- the ledger
+                       o_owner  :: Maybe AId,
+                       -- the ledger events (IExpandMeta), most recent
+                       -- first; consed unevaluated, reading no counter
+                       o_events :: [MetaEvent]
                      }
 
 -- start with Id 1, no defs, and an uninitialized map
@@ -278,8 +295,16 @@ initOState :: OState
 initOState = OState { o_nextid = 1,
                       o_defs   = [],
                       o_defmap = M.empty,
-                      o_usemap = M.empty
+                      o_usemap = M.empty,
+                      o_owner  = Nothing,
+                      o_events = []
                     }
+
+-- optimize under the given def or instance as the owner
+setOwner :: Maybe AId -> O ()
+setOwner o = do
+  s <- get
+  put s { o_owner = o }
 
 type O a = State OState a
 
@@ -390,9 +415,11 @@ expandUniqueVarRef _ _ e = e
 
 -- Top-level optimization function over all local defs
 --   calls aOptDef and aMuxOptDef on each def
-aOptDefs :: BFlags -> [ADef] -> [AForeignBlock] -> [AVInst] -> ([ADef],[AForeignBlock],[AVInst])
+-- (the ledger events of the defs made are returned last, oldest first)
+aOptDefs :: BFlags -> [ADef] -> [AForeignBlock] -> [AVInst]
+         -> ([ADef],[AForeignBlock],[AVInst],[MetaEvent])
 aOptDefs bflgs ds fblocks ss = (evalState optf initOState)
-  where optf :: O ( [ADef], [AForeignBlock], [AVInst] )
+  where optf :: O ( [ADef], [AForeignBlock], [AVInst], [MetaEvent] )
         optf = do
             --traceM ("FF " ++ ppReadable ds)
             setNonDefUses ss fblocks
@@ -408,11 +435,13 @@ aOptDefs bflgs ds fblocks ss = (evalState optf initOState)
             fb2 <- mapM (aMuxOptForeign bflgs) fb1
             ss1 <- mapM (aOptInstDefs bflgs) ss
             newdefs <- getDefs
-            return (newdefs,fb2,ss1)
+            events <- gets o_events
+            return (newdefs,fb2,ss1,reverse events)
 
 aOptInstDefs :: BFlags -> AVInst -> O AVInst
 aOptInstDefs bflgs inst =
     do
+      setOwner (Just (avi_vname inst))
       newArgs <- zipWithM (aOptInstArg bflgs) (vArgs (avi_vmi inst)) (avi_iargs inst)
       return inst {avi_iargs = newArgs}
 
@@ -481,6 +510,7 @@ aOptDef bflgs def = aOptDef_dflt bflgs def
 -- the default case for aOptDef (shared between the two branches above)
 aOptDef_dflt :: BFlags -> ADef -> O ()
 aOptDef_dflt bflgs def@(ADef i t e p) = do
+    setOwner (Just i)
     --e' <- aInsertCase e
     --when debug2 $ traceM( "aOptDef: IC: " ++ ppReadable e' )
     e'' <- aExp bflgs e
@@ -490,6 +520,7 @@ aOptDef_dflt bflgs def@(ADef i t e p) = do
 
 aOptForeignBlock :: BFlags -> AForeignBlock -> O AForeignBlock
 aOptForeignBlock bflgs (cs,afcs) = do
+  setOwner Nothing
   afcs1 <- mapM aOptForeignCalls afcs
   return (cs,afcs1)
       where aOptForeignCalls :: AForeignCall -> O AForeignCall
@@ -503,6 +534,7 @@ aOptForeignBlock bflgs (cs,afcs) = do
 
 aMuxOptForeign :: BFlags -> AForeignBlock -> O AForeignBlock
 aMuxOptForeign bflgs  (cs,afcs) = do
+  setOwner Nothing
   afcs1 <- mapM aMuxOptForeignCalls afcs
   return (cs,afcs1)
       where aMuxOptForeignCalls :: AForeignCall -> O AForeignCall
@@ -518,6 +550,7 @@ aMuxOptForeign bflgs  (cs,afcs) = do
 
 aMuxOptDef :: BFlags -> ADef -> O ()
 aMuxOptDef bflgs (ADef i t e p) = do
+    setOwner (Just i)
     e1 <- aMuxOptConst bflgs e
     e2 <- aMuxOpt bflgs e1
     addDef (ADef i t e2 p)
@@ -954,6 +987,9 @@ mkDefS e = do
     i <- newName
     let t = aType e
     addDef (ADef i t e [])
+    -- the ledger: Created from the def or instance being optimized
+    s <- get
+    put s { o_events = Created PTOpt i (maybeToList (o_owner s)) : o_events s }
     return (ASDef t i)
 
 -----

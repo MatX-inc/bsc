@@ -46,7 +46,7 @@ resolved: 2 of 5 defs and rules stand for other ids
 
 -----
 === metadata (MetaMerge sysMetaMerge):
-ledger after dropundet: 223 sites, 11 contexts, 8 roots, 8 defs, 40 events
+ledger after dropundet: 223 sites, 11 contexts, 8 roots, 8 defs, 53 events
 inlined (Inline): __h324 -> __h325
 inlined (Inline): __h325 -> __h326
 inlined (Inline): __h251 -> __h253
@@ -87,10 +87,33 @@ renamed (Transform): __j4 -> __h326
 created (Transform): __j6 <- value
 inlined (Transform): __j6 -> value
 dropped (Transform): __j3
+created (Conv): a___d1 <- __h247
+merged (Conv): __h247 -> a___d1
+created (Conv): b___d2 <- __h250
+merged (Conv): __h250 -> b___d2
+created (Conv): a_ULE_b___d3 <- __h326
+created (Conv): IF_a_ULE_b_THEN_b_ELSE_a___d4 <- __h326
+merged (Conv): __h326 -> IF_a_ULE_b_THEN_b_ELSE_a___d4
+created (Conv): IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5 <- __i7
+merged (Conv): __i7 -> IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): CAN_FIRE_value <- value
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_value <- value
+resolved: 9 of 10 defs and rules stand for other ids
+  WILL_FIRE_value <- value
+  WILL_FIRE_RL_step <- RL_step
+  CAN_FIRE_value <- value
+  CAN_FIRE_RL_step <- RL_step
+  b___d2 <- __h250
+  a___d1 <- __h247
+  IF_a_ULE_b_THEN_b_ELSE_a___d4 <- __h326 __h322 __h325 __h324
+  a_ULE_b___d3 <- __h326 __h322 __h325 __h324
+  IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5 <- RL_step
 
 -----
 === metadata (MetaMerge sysMetaMerge):
-ledger after finalcleanup: 223 sites, 11 contexts, 8 roots, 8 defs, 40 events
+ledger after finalcleanup: 223 sites, 11 contexts, 8 roots, 8 defs, 86 events
 inlined (Inline): __h324 -> __h325
 inlined (Inline): __h325 -> __h326
 inlined (Inline): __h251 -> __h253
@@ -131,5 +154,66 @@ renamed (Transform): __j4 -> __h326
 created (Transform): __j6 <- value
 inlined (Transform): __j6 -> value
 dropped (Transform): __j3
+created (Conv): a___d1 <- __h247
+merged (Conv): __h247 -> a___d1
+created (Conv): b___d2 <- __h250
+merged (Conv): __h250 -> b___d2
+created (Conv): a_ULE_b___d3 <- __h326
+created (Conv): IF_a_ULE_b_THEN_b_ELSE_a___d4 <- __h326
+merged (Conv): __h326 -> IF_a_ULE_b_THEN_b_ELSE_a___d4
+created (Conv): IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5 <- __i7
+merged (Conv): __i7 -> IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): CAN_FIRE_value <- value
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_value <- value
+created (State): c$write_1 <- RL_step
+created (State): d$write_1 <- RL_step
+created (State): e$write_1 <- RL_step
+created (State): f$write_1 <- RL_step
+created (State): c$EN_write <- RL_step
+created (State): d$EN_write <- RL_step
+created (State): e$EN_write <- RL_step
+created (State): f$EN_write <- RL_step
+created (State): a$write_1
+created (State): a$EN_write
+created (State): b$write_1
+created (State): b$EN_write
+dropped (State): RL_step
+renamed (RenameIO): c$write_1 -> c$D_IN
+renamed (RenameIO): d$write_1 -> d$D_IN
+renamed (RenameIO): e$write_1 -> e$D_IN
+renamed (RenameIO): f$write_1 -> f$D_IN
+renamed (RenameIO): c$EN_write -> c$EN
+renamed (RenameIO): d$EN_write -> d$EN
+renamed (RenameIO): e$EN_write -> e$EN
+renamed (RenameIO): f$EN_write -> f$EN
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): b$EN_write -> b$EN
+inlined (Expand): a___d1 -> IF_a_ULE_b_THEN_b_ELSE_a___d4 a_ULE_b___d3
+inlined (Expand): b___d2 -> IF_a_ULE_b_THEN_b_ELSE_a___d4 a_ULE_b___d3
+inlined (Expand): a_ULE_b___d3 -> IF_a_ULE_b_THEN_b_ELSE_a___d4
+dropped (Expand): WILL_FIRE_value
+inlined (Expand): IF_a_ULE_b_THEN_b_ELSE_a_PLUS_1___d5 -> d$D_IN f$D_IN
+inlined (Expand): CAN_FIRE_RL_step -> WILL_FIRE_RL_step
+inlined (Expand): CAN_FIRE_value -> RDY_value
+inlined (Expand): WILL_FIRE_RL_step -> c$EN e$EN d$EN f$EN
+resolved: 14 of 15 defs and rules stand for other ids
+  RDY_value <- RDY_value value
+  IF_a_ULE_b_THEN_b_ELSE_a___d4 <- __h326 __h322 __h247 __h250 __h325 __h324
+  c$D_IN <- RL_step
+  d$D_IN <- RL_step
+  e$D_IN <- RL_step
+  f$D_IN <- RL_step
+  c$EN <- RL_step
+  d$EN <- RL_step
+  e$EN <- RL_step
+  f$EN <- RL_step
+  a$D_IN <- a$write_1
+  a$EN <- a$EN_write
+  b$EN <- b$EN_write
+  b$D_IN <- b$write_1
 
 -----

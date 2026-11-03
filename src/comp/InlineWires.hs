@@ -10,6 +10,7 @@ import qualified Data.Set as S
 import BackendNamingConventions
 import Error(internalError, EMsg, WMsg)
 import Flags(Flags, removeCross)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 -- import Debug.Trace
 
@@ -64,9 +65,17 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
                         aspkg_state_outputs = nonwire_svars,
                          aspkg_values = (defs' ++ newdefs),
                         aspkg_inlined_ports = ws',
-                        aspkg_signal_info = si' }),
+                        aspkg_signal_info = si',
+                        aspkg_meta = appendEvents events (aspkg_meta pkg) }),
      warnings, errors)
-  where -- definition map (id -> value)
+  where -- the ledger, per wire: an input def Renamed to the output it
+        -- now carries, a new constant def Created from the instance,
+        -- and the instance Dropped
+        events = concat [ [ Renamed PTInlineWires old new | (old, new) <- subst ] ++
+                          [ Created PTInlineWires d [i] | ADef d _ _ _ <- new_ds ] ++
+                          [ Dropped PTInlineWires i ]
+                        | (i, _, new_ds, subst, _, _) <- rwire_tuples ]
+        -- definition map (id -> value)
         defmap = M.fromList [(i, e) | (ADef i _t e _) <- defs]
         defset = M.keysSet defmap
         -- find the RWires and RWire0s, and the remaining

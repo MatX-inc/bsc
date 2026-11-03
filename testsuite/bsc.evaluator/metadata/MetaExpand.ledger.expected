@@ -1,0 +1,184 @@
+=== metadata (MetaExpand sysMetaExpand):
+ledger after idroprules: 95 sites, 5 contexts, 4 roots, 6 defs, 35 events
+inlined (Inline): __h43 -> x__h109
+inlined (Inline): __h68 -> x__h109
+inlined (Inline): __h93 -> __h116
+inlined (Inline): __h116 -> __h111
+inlined (Inline): __h111 -> RL_step
+created (Transform): __i1 <- x__h109
+created (Transform): __i2 <- x__h109
+created (Transform): __i3 <- x__h109
+merged (Transform): x__h109 -> __i3
+renamed (Transform): __i3 -> x__h109
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- RL_step
+created (Transform): __i7 <- RL_step
+inlined (Transform): __i1 -> x__h109
+inlined (Transform): __i2 -> x__h109
+inlined (Transform): __i4 -> __i5
+inlined (Transform): __i5 -> __i6
+inlined (Transform): __i6 -> __i7
+inlined (Transform): __i7 -> RL_step
+created (Transform): __j1 <- x__h109
+created (Transform): __j2 <- x__h109
+created (Transform): __j3 <- x__h109
+merged (Transform): x__h109 -> __j3
+renamed (Transform): __j3 -> x__h109
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- RL_step
+created (Transform): __j7 <- RL_step
+inlined (Transform): __j1 -> x__h109
+inlined (Transform): __j2 -> x__h109
+inlined (Transform): __j4 -> __j5
+inlined (Transform): __j5 -> __j6
+inlined (Transform): __j6 -> __j7
+inlined (Transform): __j7 -> RL_step
+resolved: 2 of 2 defs and rules stand for other ids
+  x__h109 <- x__h109 __h68 __h43
+  RL_step <- RL_step __h111 __h116 __h93
+
+-----
+=== metadata (MetaExpand sysMetaExpand):
+ledger after dropundet: 95 sites, 5 contexts, 4 roots, 6 defs, 46 events
+inlined (Inline): __h43 -> x__h109
+inlined (Inline): __h68 -> x__h109
+inlined (Inline): __h93 -> __h116
+inlined (Inline): __h116 -> __h111
+inlined (Inline): __h111 -> RL_step
+created (Transform): __i1 <- x__h109
+created (Transform): __i2 <- x__h109
+created (Transform): __i3 <- x__h109
+merged (Transform): x__h109 -> __i3
+renamed (Transform): __i3 -> x__h109
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- RL_step
+created (Transform): __i7 <- RL_step
+inlined (Transform): __i1 -> x__h109
+inlined (Transform): __i2 -> x__h109
+inlined (Transform): __i4 -> __i5
+inlined (Transform): __i5 -> __i6
+inlined (Transform): __i6 -> __i7
+inlined (Transform): __i7 -> RL_step
+created (Transform): __j1 <- x__h109
+created (Transform): __j2 <- x__h109
+created (Transform): __j3 <- x__h109
+merged (Transform): x__h109 -> __j3
+renamed (Transform): __j3 -> x__h109
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- RL_step
+created (Transform): __j7 <- RL_step
+inlined (Transform): __j1 -> x__h109
+inlined (Transform): __j2 -> x__h109
+inlined (Transform): __j4 -> __j5
+inlined (Transform): __j5 -> __j6
+inlined (Transform): __j6 -> __j7
+inlined (Transform): __j7 -> RL_step
+created (Conv): a___d1 <- x__h109
+created (Conv): b___d2 <- x__h109
+created (Conv): a_XOR_b___d3 <- x__h109
+merged (Conv): x__h109 -> a_XOR_b___d3
+created (Conv): c___d4 <- RL_step
+created (Conv): a_XOR_b_AND_c___d5 <- RL_step
+created (Conv): a_XOR_b_AND_c_BITS_7_TO_4___d6 <- RL_step
+created (Conv): a_XOR_b_AND_c_BITS_7_TO_4_CONCAT_15___d7 <- RL_step
+renamed (Conv): a_XOR_b___d3 -> x__h109
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+resolved: 10 of 10 defs and rules stand for other ids
+  WILL_FIRE_RL_step <- RL_step __h111 __h116 __h93
+  CAN_FIRE_RL_step <- RL_step __h111 __h116 __h93
+  c___d4 <- RL_step __h111 __h116 __h93
+  b___d2 <- x__h109 __h68 __h43
+  a___d1 <- x__h109 __h68 __h43
+  a_XOR_b_AND_c_BITS_7_TO_4___d6 <- RL_step __h111 __h116 __h93
+  a_XOR_b_AND_c_BITS_7_TO_4_CONCAT_15___d7 <- RL_step __h111 __h116 __h93
+  x__h109 <- x__h109 __h68 __h43
+  a_XOR_b_AND_c___d5 <- RL_step __h111 __h116 __h93
+  RL_step <- RL_step __h111 __h116 __h93
+
+-----
+=== metadata (MetaExpand sysMetaExpand):
+ledger after finalcleanup: 95 sites, 5 contexts, 4 roots, 6 defs, 68 events
+inlined (Inline): __h43 -> x__h109
+inlined (Inline): __h68 -> x__h109
+inlined (Inline): __h93 -> __h116
+inlined (Inline): __h116 -> __h111
+inlined (Inline): __h111 -> RL_step
+created (Transform): __i1 <- x__h109
+created (Transform): __i2 <- x__h109
+created (Transform): __i3 <- x__h109
+merged (Transform): x__h109 -> __i3
+renamed (Transform): __i3 -> x__h109
+created (Transform): __i4 <- RL_step
+created (Transform): __i5 <- RL_step
+created (Transform): __i6 <- RL_step
+created (Transform): __i7 <- RL_step
+inlined (Transform): __i1 -> x__h109
+inlined (Transform): __i2 -> x__h109
+inlined (Transform): __i4 -> __i5
+inlined (Transform): __i5 -> __i6
+inlined (Transform): __i6 -> __i7
+inlined (Transform): __i7 -> RL_step
+created (Transform): __j1 <- x__h109
+created (Transform): __j2 <- x__h109
+created (Transform): __j3 <- x__h109
+merged (Transform): x__h109 -> __j3
+renamed (Transform): __j3 -> x__h109
+created (Transform): __j4 <- RL_step
+created (Transform): __j5 <- RL_step
+created (Transform): __j6 <- RL_step
+created (Transform): __j7 <- RL_step
+inlined (Transform): __j1 -> x__h109
+inlined (Transform): __j2 -> x__h109
+inlined (Transform): __j4 -> __j5
+inlined (Transform): __j5 -> __j6
+inlined (Transform): __j6 -> __j7
+inlined (Transform): __j7 -> RL_step
+created (Conv): a___d1 <- x__h109
+created (Conv): b___d2 <- x__h109
+created (Conv): a_XOR_b___d3 <- x__h109
+merged (Conv): x__h109 -> a_XOR_b___d3
+created (Conv): c___d4 <- RL_step
+created (Conv): a_XOR_b_AND_c___d5 <- RL_step
+created (Conv): a_XOR_b_AND_c_BITS_7_TO_4___d6 <- RL_step
+created (Conv): a_XOR_b_AND_c_BITS_7_TO_4_CONCAT_15___d7 <- RL_step
+renamed (Conv): a_XOR_b___d3 -> x__h109
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (State): a$write_1 <- RL_step
+created (State): a$EN_write <- RL_step
+created (State): b$write_1
+created (State): b$EN_write
+created (State): c$write_1
+created (State): c$EN_write
+dropped (State): RL_step
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): b$EN_write -> b$EN
+renamed (RenameIO): c$write_1 -> c$D_IN
+renamed (RenameIO): c$EN_write -> c$EN
+inlined (Expand): a___d1 -> x__h109
+inlined (Expand): b___d2 -> x__h109
+inlined (Expand): c___d4 -> a_XOR_b_AND_c___d5
+inlined (Expand): a_XOR_b_AND_c___d5 -> a_XOR_b_AND_c_BITS_7_TO_4___d6
+inlined (Expand): a_XOR_b_AND_c_BITS_7_TO_4___d6 -> a_XOR_b_AND_c_BITS_7_TO_4_CONCAT_15___d7
+inlined (Expand): a_XOR_b_AND_c_BITS_7_TO_4_CONCAT_15___d7 -> a$D_IN
+inlined (Expand): CAN_FIRE_RL_step -> WILL_FIRE_RL_step
+inlined (Expand): WILL_FIRE_RL_step -> a$EN
+created (VeriQuirks): x09_AND_c__q1 <- a$D_IN
+resolved: 8 of 8 defs and rules stand for other ids
+  x__h109 <- x__h109 __h68 __h43
+  x09_AND_c__q1 <- RL_step __h111 __h116 __h93
+  a$D_IN <- RL_step __h111 __h116 __h93
+  a$EN <- RL_step __h111 __h116 __h93
+  b$D_IN <- b$write_1
+  b$EN <- b$EN_write
+  c$EN <- c$EN_write
+  c$D_IN <- c$write_1
+
+-----

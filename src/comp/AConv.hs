@@ -2,10 +2,10 @@ module AConv (aConv, aTypeConv, isLocalAId) where
 
 import Util(itos, headOrErr, initOrErr, lastOrErr, log2, concatMapM, makePairs)
 import qualified Data.Map as M
-import Control.Monad(when, liftM, forM, zipWithM)
+import Control.Monad(when, unless, liftM, forM, zipWithM)
 import Control.Monad.Except(throwError)
 import Control.Monad.State(StateT, runStateT, gets, get, put)
-import Control.Monad.Reader(ReaderT, runReaderT, withReaderT, ask)
+import Control.Monad.Reader(ReaderT, runReaderT, withReaderT, asks)
 import PPrint(ppReadable, ppString)
 import PFPrint(pfpString)
 import Position
@@ -28,7 +28,8 @@ import ASyntaxUtil
 import GenWrapUtils(isGenId, dropGenSuffixId)
 import Prim
 import Data.List(genericLength, nub)
-import Data.Maybe(fromMaybe)
+import Data.Maybe(fromMaybe, maybeToList)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 import VModInfo(lookupOutputClockWires, lookupOutputResetWire,
                 lookupIfcInoutWire, vArgs, VArgInfo(..))
 import SignalNaming
@@ -71,12 +72,22 @@ data AState = AState {
         stVarMap :: IdMap, -- I-expr names to A-expr names
         ieDefMap :: IEDefMap, -- accumulated definitions
         flags :: Flags, -- to hold the flags on the Monad
-        wmsgs :: [WMsg] -- to hold accumulated warnings
+        wmsgs :: [WMsg], -- to hold accumulated warnings
+        -- the ledger events of the conversion (IExpandMeta), most
+        -- recent first; see addEvent
+        events :: [MetaEvent]
         }
 
 type IdMap = M.Map Id Id
 
-type M = ReaderT Bool (StateT AState (Either EMsg))
+-- What the conversion of an expression knows about its surroundings:
+-- whether its compound subexpressions may be CSE'd into defs (a
+-- submodule parameter's may not), and the def, rule, method or
+-- instance under conversion, which a def the CSE creates meanwhile is
+-- Created from in the ledger.
+data ConvCtx = ConvCtx { cc_nocse :: Bool, cc_owner :: Maybe Id }
+
+type M = ReaderT ConvCtx (StateT AState (Either EMsg))
 
 aInitState :: ErrorHandle -> IdMap -> Flags -> AState
 aInitState errh svm flags =
@@ -87,7 +98,8 @@ aInitState errh svm flags =
              stVarMap = svm,
              ieDefMap = M.empty,
              flags = flags,
-             wmsgs = []
+             wmsgs = [],
+             events = []
            }
 
 getMap :: M (M.Map AExpr (AId, AType, AExpr))
@@ -130,6 +142,18 @@ addWarning :: WMsg -> M ()
 addWarning w = do s <- get
                   put (s {wmsgs = w:(wmsgs s)})
 
+-- The ledger (IExpandMeta): a write conses an unevaluated event onto
+-- the state's list and forces nothing; the events are first demanded by
+-- the stage's deepseq of the APackage, whose ledger field is forced
+-- last.  varNo, the maps and their orders are untouched by a write.
+addEvent :: MetaEvent -> M ()
+addEvent ev = do s <- get
+                 put (s { events = ev : events s })
+
+-- convert under the given def, rule, method or instance as the owner
+withOwner :: Id -> M a -> M a
+withOwner i = withReaderT (\ c -> c { cc_owner = Just i })
+
 
 getFlags :: M Flags
 getFlags = liftM flags (get)
@@ -145,7 +169,7 @@ aConv :: ErrorHandle -> [PProp] -> Flags -> IModule a -> IO APackage
 aConv errh pps flags imod =
     let itr = makeIdMap (map fst (imod_state_insts imod))
         state = aInitState errh itr flags
-    in  case runStateT (runReaderT (aDo imod) False) state of
+    in  case runStateT (runReaderT (aDo imod) (ConvCtx False Nothing)) state of
           Left emsg -> bsError errh [emsg]
           Right (apkg, s) ->
               do
@@ -209,7 +233,7 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
         aitvs <- mapM (\ (i0, IStateVar b ui _ v es t tss _ _ hnames) ->
                         do i <- transId i0
                            let portTypes = lookupInstPorts (Just i0)
-                           es' <- zipWithM aExprArg (vArgs v) es
+                           es' <- withOwner i (zipWithM aExprArg (vArgs v) es)
                            -- XXX Lennart put a comment here to say "add ifc args in the AVInst list"
                            -- XXX because I think AVerilog filters out fake entries in the AVInst list as ifc args:
                            -- XXX patch in args here
@@ -310,6 +334,23 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
                                                return (d, acs))
                               clks
 
+        -- The ledger: the events written while converting (the CSE defs
+        -- created, the defs merged into them or inlined), oldest first;
+        -- then the fixup's renames, a CSE def taking a def's name back,
+        -- from the rename_map it already built; then the defs the module
+        -- referenced nowhere, which the conversion never reached and
+        -- which are gone.  Appended as one thunk the stage's deepseq
+        -- forces after the package's other fields.
+        conv_events <- gets events
+        let rename_events = [ Renamed PTConv cse_id def_id
+                            | (cse_id, (_, def_id)) <- M.toList rename_map,
+                              def_id /= cse_id ]
+            dropped_events = [ Dropped PTConv i
+                             | IDef i _ _ _ <- idefs, not (M.member i defMap) ]
+            ledger = appendEvents (reverse conv_events ++ rename_events ++
+                                   dropped_events)
+                                  (imod_meta imod)
+
         return  (APackage { apkg_name = unQualId (dropGenSuffixId mi),
                             apkg_is_wrapped = fmod,
                             apkg_backend = be,
@@ -327,7 +368,7 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
                             apkg_inst_comments = cmap,
                             apkg_inst_tree = mkInstTree imod,
                             apkg_proof_obligations = [],
-                            apkg_meta = imod_meta imod })
+                            apkg_meta = ledger })
 
 aAbstractInput :: IAbstractInput -> AAbstractInput
 aAbstractInput (IAI_Port (i,t)) = (AAI_Port (i, aTypeConv i t))
@@ -336,7 +377,7 @@ aAbstractInput (IAI_Reset r) = (AAI_Reset r)
 aAbstractInput (IAI_Inout r n) = (AAI_Inout r n)
 
 aIface :: Flags -> IEFace a -> M AIFace
-aIface flags iface@(IEFace i its maybe_e maybe_rs wp fi) = do
+aIface flags iface@(IEFace i its maybe_e maybe_rs wp fi) = withOwner i $ do
         --trace ("enter " ++ ppReadable i) $ return ()
         -- `its` is grouped by source-language argument (one inner list per
         -- argument); aif_inputs keeps that grouping, with one inner list of
@@ -391,7 +432,7 @@ aIface flags iface@(IEFace i its maybe_e maybe_rs wp fi) = do
                                    -- should internalError if size(val_)==0 XXX
 
 aRule :: IRule a -> M ARule
-aRule (IRule i rps s wp p a orig isl) = do
+aRule (IRule i rps s wp p a orig isl) = withOwner i $ do
         --trace ("enter rule " ++ ppReadable i) $ return ()
         p' <- aSExpr p
         as' <- aAction i a
@@ -460,7 +501,7 @@ dropPrimUnitArgs = filter (not . isPrimUnitArg)
 aSExpr :: IExpr a -> M AExpr
 aSExpr e = do
         e' <- aExpr e
-        noCSE <- ask
+        noCSE <- asks cc_nocse
         case e' of
          (ASInt _ _ _) -> return e'
          (ASDef _ _) -> return e'
@@ -481,7 +522,7 @@ aExprArg (Param _) = aExprNoCSE
 aExprArg _         = aExpr
 
 aExprNoCSE :: IExpr a -> M AExpr
-aExprNoCSE e = withReaderT (const True) (aExpr e)
+aExprNoCSE e = withReaderT (\ c -> c { cc_nocse = True }) (aExpr e)
 
 aExpr :: IExpr a -> M AExpr
 aExpr exp@(IAps (ICon isel (ICPrim _ PrimSelect)) [ITNum i1, ITNum i2, ITNum i3] [e]) = do
@@ -746,8 +787,18 @@ aEDef i e ps = do
            return a
          Nothing -> do
             -- traceM $ "not found"
-            a <- aSExpr e
+            a <- withOwner i (aSExpr e)
             addDA i a ps
+            -- the ledger: a def whose expression became a reference to
+            -- a CSE def is Merged into it (the fixup in aDo may give the
+            -- CSE def this def's name back); one whose expression became
+            -- a constant, a port or another simple expression is Inlined
+            -- into its users, which the def map does not name; a def
+            -- marked NoCSE stays a def under its own id
+            unless (defPropsHasNoCSE ps) $
+                case a of
+                  ASDef _ cse_id -> addEvent (Merged PTConv [i] cse_id)
+                  _ -> addEvent (Inlined PTConv i [])
             return a
 
 aTypeConv :: Id -> IType -> AType
@@ -1033,6 +1084,10 @@ find e t pos = do
          Nothing -> do
                 i <- newAIdFromAExpr pos e
                 addMap e i t
+                -- the ledger: the new def is Created from the def, rule,
+                -- method or instance whose expression it was lifted from
+                owner <- asks cc_owner
+                addEvent (Created PTConv i (maybeToList owner))
                 return (i, t, e)
 
 -----

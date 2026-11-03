@@ -1,0 +1,199 @@
+=== metadata (MetaPort sysMetaPort):
+ledger after idroprules: 242 sites, 8 contexts, 6 roots, 4 defs, 31 events
+inlined (Inline): __h183 -> RL_up
+created (Transform): __i1 <- c__h169
+created (Transform): __i2 <- __h180
+created (Transform): __i3 <- __h184
+merged (Transform): c__h169 -> __i1
+merged (Transform): __h180 -> __i2
+merged (Transform): __h184 -> __i3
+renamed (Transform): __i1 -> c__h169
+renamed (Transform): __i2 -> __h180
+renamed (Transform): __i3 -> __h184
+created (Transform): __i4 <- RL_up
+created (Transform): __i5 <- RL_up
+created (Transform): __i6 <- RL_down
+inlined (Transform): __i4 -> __i5
+inlined (Transform): __h184 -> put
+inlined (Transform): __i5 -> RL_up
+inlined (Transform): __i6 -> RL_down
+created (Transform): __j1 <- c__h169
+created (Transform): __j2 <- __h180
+merged (Transform): c__h169 -> __j1
+merged (Transform): __h180 -> __j2
+renamed (Transform): __j1 -> c__h169
+renamed (Transform): __j2 -> __h180
+created (Transform): __j3 <- RL_up
+created (Transform): __j4 <- RL_up
+created (Transform): __j5 <- RL_down
+created (Transform): __j6 <- RL_down
+inlined (Transform): __j3 -> __j4
+inlined (Transform): __j4 -> RL_up
+inlined (Transform): __j6 -> RL_down
+inlined (Transform): __j5 -> put
+resolved: 2 of 5 defs and rules stand for other ids
+  RL_up <- RL_up __h183
+  put <- put RL_down __h184
+
+-----
+=== metadata (MetaPort sysMetaPort):
+ledger after dropundet: 242 sites, 8 contexts, 6 roots, 4 defs, 46 events
+inlined (Inline): __h183 -> RL_up
+created (Transform): __i1 <- c__h169
+created (Transform): __i2 <- __h180
+created (Transform): __i3 <- __h184
+merged (Transform): c__h169 -> __i1
+merged (Transform): __h180 -> __i2
+merged (Transform): __h184 -> __i3
+renamed (Transform): __i1 -> c__h169
+renamed (Transform): __i2 -> __h180
+renamed (Transform): __i3 -> __h184
+created (Transform): __i4 <- RL_up
+created (Transform): __i5 <- RL_up
+created (Transform): __i6 <- RL_down
+inlined (Transform): __i4 -> __i5
+inlined (Transform): __h184 -> put
+inlined (Transform): __i5 -> RL_up
+inlined (Transform): __i6 -> RL_down
+created (Transform): __j1 <- c__h169
+created (Transform): __j2 <- __h180
+merged (Transform): c__h169 -> __j1
+merged (Transform): __h180 -> __j2
+renamed (Transform): __j1 -> c__h169
+renamed (Transform): __j2 -> __h180
+created (Transform): __j3 <- RL_up
+created (Transform): __j4 <- RL_up
+created (Transform): __j5 <- RL_down
+created (Transform): __j6 <- RL_down
+inlined (Transform): __j3 -> __j4
+inlined (Transform): __j4 -> RL_up
+inlined (Transform): __j6 -> RL_down
+inlined (Transform): __j5 -> put
+created (Conv): c___d1 <- c__h169
+merged (Conv): c__h169 -> c___d1
+created (Conv): a___d2 <- __h180
+merged (Conv): __h180 -> a___d2
+created (Conv): b___d3 <- RL_up
+created (Conv): a_PLUS_b___d4 <- RL_up
+created (Conv): NOT_c___d5 <- RL_down
+created (Conv): a_MINUS_1___d6 <- RL_down
+renamed (Conv): c___d1 -> c__h169
+created (Schedule): CAN_FIRE_RL_up <- RL_up
+created (Schedule): CAN_FIRE_RL_down <- RL_down
+created (Schedule): CAN_FIRE_put <- put
+created (Schedule): WILL_FIRE_RL_up <- RL_up
+created (Schedule): WILL_FIRE_RL_down <- RL_down
+created (Schedule): WILL_FIRE_put <- put
+resolved: 13 of 15 defs and rules stand for other ids
+  WILL_FIRE_put <- put RL_down __h184
+  WILL_FIRE_RL_down <- RL_down
+  WILL_FIRE_RL_up <- RL_up __h183
+  CAN_FIRE_put <- put RL_down __h184
+  CAN_FIRE_RL_down <- RL_down
+  CAN_FIRE_RL_up <- RL_up __h183
+  b___d3 <- RL_up __h183
+  a___d2 <- __h180
+  NOT_c___d5 <- RL_down
+  a_MINUS_1___d6 <- RL_down
+  a_PLUS_b___d4 <- RL_up __h183
+  RL_up <- RL_up __h183
+  put <- put RL_down __h184
+
+-----
+=== metadata (MetaPort sysMetaPort):
+ledger after finalcleanup: 242 sites, 8 contexts, 6 roots, 4 defs, 83 events
+inlined (Inline): __h183 -> RL_up
+created (Transform): __i1 <- c__h169
+created (Transform): __i2 <- __h180
+created (Transform): __i3 <- __h184
+merged (Transform): c__h169 -> __i1
+merged (Transform): __h180 -> __i2
+merged (Transform): __h184 -> __i3
+renamed (Transform): __i1 -> c__h169
+renamed (Transform): __i2 -> __h180
+renamed (Transform): __i3 -> __h184
+created (Transform): __i4 <- RL_up
+created (Transform): __i5 <- RL_up
+created (Transform): __i6 <- RL_down
+inlined (Transform): __i4 -> __i5
+inlined (Transform): __h184 -> put
+inlined (Transform): __i5 -> RL_up
+inlined (Transform): __i6 -> RL_down
+created (Transform): __j1 <- c__h169
+created (Transform): __j2 <- __h180
+merged (Transform): c__h169 -> __j1
+merged (Transform): __h180 -> __j2
+renamed (Transform): __j1 -> c__h169
+renamed (Transform): __j2 -> __h180
+created (Transform): __j3 <- RL_up
+created (Transform): __j4 <- RL_up
+created (Transform): __j5 <- RL_down
+created (Transform): __j6 <- RL_down
+inlined (Transform): __j3 -> __j4
+inlined (Transform): __j4 -> RL_up
+inlined (Transform): __j6 -> RL_down
+inlined (Transform): __j5 -> put
+created (Conv): c___d1 <- c__h169
+merged (Conv): c__h169 -> c___d1
+created (Conv): a___d2 <- __h180
+merged (Conv): __h180 -> a___d2
+created (Conv): b___d3 <- RL_up
+created (Conv): a_PLUS_b___d4 <- RL_up
+created (Conv): NOT_c___d5 <- RL_down
+created (Conv): a_MINUS_1___d6 <- RL_down
+renamed (Conv): c___d1 -> c__h169
+created (Schedule): CAN_FIRE_RL_up <- RL_up
+created (Schedule): CAN_FIRE_RL_down <- RL_down
+created (Schedule): CAN_FIRE_put <- put
+created (Schedule): WILL_FIRE_RL_up <- RL_up
+created (Schedule): WILL_FIRE_RL_down <- RL_down
+created (Schedule): WILL_FIRE_put <- put
+created (State): MUX_a$write_1__SEL_1 <- put
+created (State): MUX_a$write_1__SEL_2 <- RL_down
+created (State): MUX_a$write_1__SEL_3 <- RL_up
+created (State): MUX_a$write_1__VAL_1 <- put
+created (State): MUX_a$write_1__VAL_2 <- RL_down
+created (State): MUX_a$write_1__VAL_3 <- RL_up
+created (State): a$write_1 <- put RL_up RL_down
+created (State): c$write_1 <- put
+created (State): a$EN_write <- put RL_up RL_down
+created (State): c$EN_write <- put
+created (State): b$write_1
+created (State): b$EN_write
+dropped (State): RL_up
+dropped (State): RL_down
+dropped (State): put
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): c$write_1 -> c$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): c$EN_write -> c$EN
+renamed (RenameIO): b$write_1 -> b$D_IN
+renamed (RenameIO): b$EN_write -> b$EN
+inlined (Expand): a___d2 -> a_MINUS_1___d6 a_PLUS_b___d4
+inlined (Expand): b___d3 -> a_PLUS_b___d4
+inlined (Expand): a_PLUS_b___d4 -> MUX_a$write_1__VAL_3
+inlined (Expand): NOT_c___d5 -> CAN_FIRE_RL_down c$D_IN
+inlined (Expand): a_MINUS_1___d6 -> MUX_a$write_1__VAL_2
+inlined (Expand): c__h169 -> CAN_FIRE_RL_up CAN_FIRE_RL_down c$D_IN
+inlined (Expand): CAN_FIRE_RL_up -> WILL_FIRE_RL_up
+inlined (Expand): CAN_FIRE_RL_down -> WILL_FIRE_RL_down
+inlined (Expand): CAN_FIRE_put -> RDY_put
+inlined (Expand): WILL_FIRE_RL_up -> MUX_a$write_1__SEL_3 a$D_IN a$EN
+inlined (Expand): WILL_FIRE_put -> MUX_a$write_1__SEL_1 a$D_IN a$EN c$EN
+inlined (Expand): WILL_FIRE_RL_down -> a$D_IN a$EN
+dropped (FinalCleanup): MUX_a$write_1__SEL_1
+dropped (FinalCleanup): MUX_a$write_1__SEL_2
+dropped (FinalCleanup): MUX_a$write_1__SEL_3
+dropped (FinalCleanup): MUX_a$write_1__VAL_1
+resolved: 9 of 9 defs and rules stand for other ids
+  RDY_put <- RDY_put put RL_down __h184
+  MUX_a$write_1__VAL_3 <- RL_up __h180 __h183
+  MUX_a$write_1__VAL_2 <- RL_down __h180
+  a$D_IN <- put RL_up RL_down __h184 c__h169 __h183
+  c$D_IN <- put RL_down __h184 c__h169
+  a$EN <- put RL_up RL_down __h184 c__h169 __h183
+  c$EN <- put RL_down __h184
+  b$EN <- b$EN_write
+  b$D_IN <- b$write_1
+
+-----

@@ -1,0 +1,104 @@
+=== metadata (MetaStarved sysMetaStarved):
+ledger after idroprules: 99 sites, 4 contexts, 3 roots, 1 defs, 14 events
+created (Transform): __i1 <- __h75
+merged (Transform): __h75 -> __i1
+renamed (Transform): __i1 -> __h75
+created (Transform): __i2 <- RL_hog
+created (Transform): __i3 <- RL_starved
+inlined (Transform): __i2 -> RL_hog
+inlined (Transform): __i3 -> RL_starved
+created (Transform): __j1 <- __h75
+merged (Transform): __h75 -> __j1
+renamed (Transform): __j1 -> __h75
+created (Transform): __j2 <- RL_hog
+created (Transform): __j3 <- RL_starved
+inlined (Transform): __j2 -> RL_hog
+inlined (Transform): __j3 -> RL_starved
+resolved: 0 of 3 defs and rules stand for other ids
+
+-----
+=== metadata (MetaStarved sysMetaStarved):
+ledger after dropundet: 99 sites, 4 contexts, 3 roots, 1 defs, 23 events
+created (Transform): __i1 <- __h75
+merged (Transform): __h75 -> __i1
+renamed (Transform): __i1 -> __h75
+created (Transform): __i2 <- RL_hog
+created (Transform): __i3 <- RL_starved
+inlined (Transform): __i2 -> RL_hog
+inlined (Transform): __i3 -> RL_starved
+created (Transform): __j1 <- __h75
+merged (Transform): __h75 -> __j1
+renamed (Transform): __j1 -> __h75
+created (Transform): __j2 <- RL_hog
+created (Transform): __j3 <- RL_starved
+inlined (Transform): __j2 -> RL_hog
+inlined (Transform): __j3 -> RL_starved
+created (Conv): a___d1 <- __h75
+merged (Conv): __h75 -> a___d1
+created (Conv): a_PLUS_2___d2 <- RL_hog
+created (Conv): a_PLUS_1___d3 <- RL_starved
+created (Schedule): CAN_FIRE_RL_hog <- RL_hog
+created (Schedule): CAN_FIRE_RL_starved <- RL_starved
+created (Schedule): WILL_FIRE_RL_hog <- RL_hog
+created (Schedule): WILL_FIRE_RL_starved <- RL_starved
+dropped (DumpSchedule): RL_starved
+resolved: 7 of 8 defs and rules stand for other ids
+  WILL_FIRE_RL_starved <- RL_starved
+  WILL_FIRE_RL_hog <- RL_hog
+  CAN_FIRE_RL_starved <- RL_starved
+  CAN_FIRE_RL_hog <- RL_hog
+  a___d1 <- __h75
+  a_PLUS_2___d2 <- RL_hog
+  a_PLUS_1___d3 <- RL_starved
+
+-----
+=== metadata (MetaStarved sysMetaStarved):
+ledger after finalcleanup: 99 sites, 4 contexts, 3 roots, 1 defs, 42 events
+created (Transform): __i1 <- __h75
+merged (Transform): __h75 -> __i1
+renamed (Transform): __i1 -> __h75
+created (Transform): __i2 <- RL_hog
+created (Transform): __i3 <- RL_starved
+inlined (Transform): __i2 -> RL_hog
+inlined (Transform): __i3 -> RL_starved
+created (Transform): __j1 <- __h75
+merged (Transform): __h75 -> __j1
+renamed (Transform): __j1 -> __h75
+created (Transform): __j2 <- RL_hog
+created (Transform): __j3 <- RL_starved
+inlined (Transform): __j2 -> RL_hog
+inlined (Transform): __j3 -> RL_starved
+created (Conv): a___d1 <- __h75
+merged (Conv): __h75 -> a___d1
+created (Conv): a_PLUS_2___d2 <- RL_hog
+created (Conv): a_PLUS_1___d3 <- RL_starved
+created (Schedule): CAN_FIRE_RL_hog <- RL_hog
+created (Schedule): CAN_FIRE_RL_starved <- RL_starved
+created (Schedule): WILL_FIRE_RL_hog <- RL_hog
+created (Schedule): WILL_FIRE_RL_starved <- RL_starved
+dropped (DumpSchedule): RL_starved
+created (State): MUX_a$write_1__SEL_1 <- RL_hog
+created (State): MUX_a$write_1__SEL_2
+created (State): MUX_a$write_1__VAL_1 <- RL_hog
+created (State): MUX_a$write_1__VAL_2
+created (State): a$write_1 <- RL_hog
+created (State): a$EN_write <- RL_hog
+dropped (State): RL_hog
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+inlined (Expand): a___d1 -> a_PLUS_2___d2 a_PLUS_1___d3
+inlined (Expand): a_PLUS_2___d2 -> MUX_a$write_1__VAL_1
+inlined (Expand): a_PLUS_1___d3 -> MUX_a$write_1__VAL_2
+inlined (Expand): CAN_FIRE_RL_hog -> WILL_FIRE_RL_hog
+inlined (Expand): CAN_FIRE_RL_starved -> WILL_FIRE_RL_starved
+inlined (Expand): WILL_FIRE_RL_hog -> WILL_FIRE_RL_starved MUX_a$write_1__SEL_1 a$D_IN a$EN
+inlined (Expand): WILL_FIRE_RL_starved -> MUX_a$write_1__SEL_2 a$D_IN a$EN
+dropped (FinalCleanup): MUX_a$write_1__SEL_1
+dropped (FinalCleanup): MUX_a$write_1__SEL_2
+dropped (FinalCleanup): MUX_a$write_1__VAL_2
+resolved: 3 of 3 defs and rules stand for other ids
+  MUX_a$write_1__VAL_1 <- RL_hog __h75
+  a$D_IN <- RL_hog RL_starved
+  a$EN <- RL_hog RL_starved
+
+-----

@@ -13,6 +13,7 @@ import BackendNamingConventions(createVerilogNameMap,
                                 xLateIdUsingFStringMap)
 import Util(fastNub)
 import DefProp(DefProp)
+import IExpandMeta(PassTag(..), MetaEvent(..), appendEvents)
 
 -- ==============================
 -- Function: aRenameIO
@@ -42,18 +43,23 @@ aRenameIO flags pkg =
         -- (see comment on "createVerilogNameMap" for examples)
         vmap = createVerilogNameMap flags pkg
 
-        -- the name, parameters, outputs, inputs, inouts, comments and
-        -- metadata ledger are kept as they are
+        -- the defs with their names translated, each with its ledger
+        -- event when the name changed
+        (defs', def_events) = unzip (map (trDE vmap) defs)
+
+        -- the name, parameters, outputs, inputs, inouts and comments
+        -- are kept as they are
         new_pkg =
             pkg { aspkg_state_instances = map (trI vmap) vs,  -- names in state arg exprs
                   -- remove duplicates because output wires may be hooked up
                   -- to more than one method (e.g. FIFOF_.notFull, FIFOF_.i_notFull)
                   aspkg_state_outputs = fastNub (mapFst (tr vmap) svars), -- state output names
-                  aspkg_values = map (trD vmap) defs,    -- names of defs & in def exprs
+                  aspkg_values = defs',                  -- names of defs & in def exprs
                   aspkg_inout_values = map (trIOD vmap) iods,  -- names in iodef exprs
                   aspkg_foreign_calls = map (trFB vmap) fs,     -- names in foreign block exprs
                   aspkg_inlined_ports = map (tr vmap) ws,       -- inlined port names
-                  aspkg_signal_info = trSI vmap si }            -- names in signal info
+                  aspkg_signal_info = trSI vmap si,             -- names in signal info
+                  aspkg_meta = appendEvents (concat def_events) (aspkg_meta pkg) }
 
     in
         new_pkg
@@ -95,6 +101,14 @@ trE mp e                    = e
 -- translate a def
 trD :: FSMap -> ADef -> ADef
 trD mp (ADef i t e p)         = ADef (tr mp i) t (trE mp e) (map (trP mp) p)
+
+-- translate a def, with the ledger event of its name: Renamed when the
+-- map translates it (the comparison reads the two ids the translation
+-- has in hand, and is made when the ledger is forced)
+trDE :: FSMap -> ADef -> (ADef, [MetaEvent])
+trDE mp d@(ADef i _ _ _) =
+    let d'@(ADef i' _ _ _) = trD mp d
+    in  (d', [ Renamed PTRenameIO i i' | i' /= i ])
 
 -- there are currently no DefProps that mention state ports,
 -- so nothing to translate here

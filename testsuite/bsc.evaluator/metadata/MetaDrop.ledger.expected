@@ -19,7 +19,7 @@ resolved: 0 of 2 defs and rules stand for other ids
 
 -----
 === metadata (MetaDrop sysMetaDrop):
-ledger after dropundet: 155 sites, 4 contexts, 5 roots, 1 defs, 15 events
+ledger after dropundet: 155 sites, 4 contexts, 5 roots, 1 defs, 22 events
 created (Transform): __i1 <- __h133
 merged (Transform): __h133 -> __i1
 renamed (Transform): __i1 -> __h133
@@ -35,10 +35,24 @@ created (Transform): __j3 <- value
 inlined (Transform): __j3 -> value
 inlined (Transform): __j2 -> RL_step
 dropped (DropRules): RL_never
+created (Conv): a___d1 <- __h133
+merged (Conv): __h133 -> a___d1
+created (Conv): a_PLUS_1___d2 <- RL_step
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): CAN_FIRE_value <- value
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_value <- value
+resolved: 6 of 7 defs and rules stand for other ids
+  WILL_FIRE_value <- value
+  WILL_FIRE_RL_step <- RL_step
+  CAN_FIRE_value <- value
+  CAN_FIRE_RL_step <- RL_step
+  a___d1 <- __h133
+  a_PLUS_1___d2 <- RL_step
 
 -----
 === metadata (MetaDrop sysMetaDrop):
-ledger after finalcleanup: 155 sites, 4 contexts, 5 roots, 1 defs, 15 events
+ledger after finalcleanup: 155 sites, 4 contexts, 5 roots, 1 defs, 37 events
 created (Transform): __i1 <- __h133
 merged (Transform): __h133 -> __i1
 renamed (Transform): __i1 -> __h133
@@ -54,5 +68,33 @@ created (Transform): __j3 <- value
 inlined (Transform): __j3 -> value
 inlined (Transform): __j2 -> RL_step
 dropped (DropRules): RL_never
+created (Conv): a___d1 <- __h133
+merged (Conv): __h133 -> a___d1
+created (Conv): a_PLUS_1___d2 <- RL_step
+created (Schedule): CAN_FIRE_RL_step <- RL_step
+created (Schedule): CAN_FIRE_value <- value
+created (Schedule): WILL_FIRE_RL_step <- RL_step
+created (Schedule): WILL_FIRE_value <- value
+created (State): a$write_1 <- RL_step
+created (State): a$EN_write <- RL_step
+created (State): c$write_1
+created (State): c$EN_write
+dropped (State): RL_step
+renamed (RenameIO): a$write_1 -> a$D_IN
+renamed (RenameIO): a$EN_write -> a$EN
+renamed (RenameIO): c$write_1 -> c$D_IN
+renamed (RenameIO): c$EN_write -> c$EN
+inlined (Expand): a___d1 -> a_PLUS_1___d2
+inlined (Expand): a_PLUS_1___d2 -> a$D_IN
+dropped (Expand): WILL_FIRE_value
+inlined (Expand): CAN_FIRE_RL_step -> WILL_FIRE_RL_step
+inlined (Expand): CAN_FIRE_value -> RDY_value
+inlined (Expand): WILL_FIRE_RL_step -> a$EN
+resolved: 5 of 6 defs and rules stand for other ids
+  RDY_value <- RDY_value value
+  a$D_IN <- RL_step __h133
+  a$EN <- RL_step
+  c$EN <- c$EN_write
+  c$D_IN <- c$write_1
 
 -----
