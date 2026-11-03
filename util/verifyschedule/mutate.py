@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation test for a Lean file verifyschedule wrote: break the hardware and
+"""Mutation test for a flat Lean file schedlean wrote (--flat): break the hardware and
 check that the proof then fails.
 
     mutate.py [-n N] FILE.lean

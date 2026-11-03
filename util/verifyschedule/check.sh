@@ -1,8 +1,8 @@
 #!/bin/sh
 # Compile each example with bsc and, for every module it synthesizes,
-#   * compare the model verifyschedule extracts (--dump-design) with
+#   * compare the model schedlean extracts (--show-model) with
 #     expected/<module>.dump: extraction tested on its own;
-#   * check the Lean file verifyschedule writes; and
+#   * check the flat Lean file schedlean writes (--flat); and
 #   * check that mutants of its hardware fail to check (mutate.py).
 # A module whose source says "check.sh: <module> fails with a counterexample
 # in <theorem>" must instead fail in that theorem alone, with a counterexample,
@@ -21,7 +21,7 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-VS=${VS:-$REPO/inst/bin/verifyschedule}
+VS=${VS:-$REPO/inst/bin/schedlean}
 EXPECTED=$HERE/examples/expected
 MUTANTS=${MUTANTS:-2}
 UPDATE=${UPDATE:-0}
@@ -40,7 +40,7 @@ done
 if [ -n "${OUT:-}" ]; then
     mkdir -p "$OUT"; keep=1
 else
-    OUT=$(mktemp -d "${TMPDIR:-/tmp}/verifyschedule.XXXXXX"); keep=0
+    OUT=$(mktemp -d "${TMPDIR:-/tmp}/schedlean.XXXXXX"); keep=0
 fi
 
 # the declarations the errors in a Lean log are in (FILE.lean LOG)
@@ -77,7 +77,7 @@ for f in "$@"; do
         esac
         what="$name/$mod"
         # extraction
-        (cd "$dir" && "$VS" --dump-design "$mod.ba") > "$dir/$mod.dump" 2>&1
+        (cd "$dir" && "$VS" --show-model "$mod.ba") > "$dir/$mod.dump" 2>&1
         if [ "$UPDATE" = 1 ]; then
             mkdir -p "$EXPECTED"; cp "$dir/$mod.dump" "$EXPECTED/$mod.dump"
         elif [ ! -f "$EXPECTED/$mod.dump" ]; then
@@ -86,10 +86,10 @@ for f in "$@"; do
             echo "FAIL  $what: extraction differs (see $dir/$mod.dump.diff)"; failed=1; continue
         fi
         # the proof
-        if ! (cd "$dir" && "$VS" "$mod.ba" > "$mod.vs.log" 2>&1); then
-            echo "FAIL  $what: verifyschedule (see $dir/$mod.vs.log)"; failed=1; continue
+        if ! (cd "$dir" && "$VS" --flat "$mod.ba" > "$mod.vs.log" 2>&1); then
+            echo "FAIL  $what: schedlean (see $dir/$mod.vs.log)"; failed=1; continue
         fi
-        lf=$(sed -n 's/^verifyschedule: wrote //p' "$dir/$mod.vs.log")
+        lf=$(sed -n 's/^schedlean: wrote //p' "$dir/$mod.vs.log")
         start=$(date +%s)
         want=$(sed -n "s/.*check.sh: $mod fails with a counterexample in \([^ ]*\).*/\1/p" "$src" | head -1)
         if [ -n "$want" ]; then

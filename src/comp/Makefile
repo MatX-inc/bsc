@@ -247,6 +247,7 @@ GHCOPTDEBUGFLAGS = $(GHCOPTFLAGS) $(GHCDEBUG)
 SOURCES_WO_EXTRA_BUILDVERSION = \
 	*.hs *.lhs \
 	Parser/*.hs Parser/BSV/*.lhs Parser/Classic/*.hs \
+	Lean/*.hs Lean/Sched/*.hs \
 	Libs/*.hs \
 	GHC/posix/*.hs \
 	$(PARSEC_HS)/*.hs \
@@ -258,7 +259,7 @@ SOURCES = BuildVersion.hs BuildSystem.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
 
 BSCEXES = bsc
 TCLEXES = bluetcl
-UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck verifyschedule
+UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck schedlean
 SHOWRULESEXES = showrules
 
 EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES)
@@ -353,9 +354,9 @@ vcdcheck: $(SOURCES)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
 
-# verifyschedule asks bsc's disjointness solver, so it links the solvers as bsc does
-.PHONY: verifyschedule
-verifyschedule: $(SOURCES)
+# schedlean asks bsc's disjointness solver, so it links the solvers as bsc does
+.PHONY: schedlean
+schedlean: $(SOURCES)
 	$(PREBUILDCOMMAND)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS) $(BSC_BUILDLIBS)
 	$(POSTBUILDCOMMAND)

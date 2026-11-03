@@ -1,6 +1,6 @@
-# verifyschedule: bsc's schedules, checked in Lean
+# schedlean: bsc's schedules, checked in Lean
 
-`verifyschedule` validates bsc's scheduling one module at a time. From the
+`schedlean` (formerly `verifyschedule`) validates bsc's scheduling one module at a time. From the
 `.ba` file bsc writes for a module, it generates a self-contained Lean 4 file
 whose main theorem states that the hardware bsc built --- the
 `CAN_FIRE`/`WILL_FIRE` logic, the submodule enables and the argument muxes ---
@@ -11,25 +11,52 @@ module's exported scheduling annotations against its hardware. Lean checks the f
 nothing but its core library; the proofs are by `bv_decide`.
 
     bsc -elab -u -verilog LookupQ.bsv               # writes mkLookupQ.ba
-    inst/bin/verifyschedule mkLookupQ.ba            # writes MkLookupQ.lean
+    inst/bin/schedlean --flat mkLookupQ.ba          # writes MkLookupQ.lean
     lean MkLookupQ.lean                             # checks it
 
-The tool is `src/comp/verifyschedule.hs`, a bsc utility like `dumpba`:
-`make verifyschedule` in `src/comp` builds it, and `make install-src`
-installs it as `inst/bin/verifyschedule`.  On large designs it is Lean, not
-the tool, that takes the time.  (Work in progress: the tool is being renamed
-schedlean, and check.sh and mutate.py are to become `--check` and
-`--mutants` options of the tool itself.)
+This README describes the flat theorem, which `schedlean --flat` writes byte
+for byte as `verifyschedule` did; `--show-model` replaces `--dump-design`.
+The tool is a bsc utility like `dumpba` (see the next section). On large
+designs it is Lean, not the tool, that takes the time.  (Work in progress:
+check.sh and mutate.py are to become `--check` and `--mutants` options of
+the tool itself.)
+
+## schedlean (in progress)
+
+`schedlean` replaces `verifyschedule`: `make schedlean` in `src/comp` builds it,
+and it is installed as `inst/bin/schedlean` (the `UTILEXES` list). The driver
+`src/comp/schedlean.hs` only parses options, reads the `.ba` and writes files.
+The verifier is in hierarchical modules under `src/comp/Lean/`:
+
+- `Lean.Sched.*` is the schedule verifier: `Types`, `Extract`, `Conflicts`,
+  `Order`, `OutOfOrder`, `BscFacts`, `Show` (the extraction, moved out of
+  `verifyschedule.hs`), `Flat` (the flat theorem, kept behind `--flat` for
+  comparison), `Time` (`--time-phases`), and the start of the modular
+  emitter's port (`APkg`, `Py`);
+- `Lean.Print`, `Lean.BV` and `Lean.Solver` can be reused by other Lean
+  verifiers of bsc output. `Lean.Solver` asks bsc's own disjointness solver
+  (Yices or STP) about Boolean skeletons.
+
+Options: `-o/--output`, `--show-model` (today's `--dump-design`, byte for
+byte; `=apkg` prints the APackage as `dumpba` does; `=apkg-tree` prints the
+parse the modular emitter works from), `--flat`, `--time-phases` (wall and CPU
+time per phase on standard error, with totals for extraction and
+emission), `-V/--version` and `-h/--help`. `--gate`, `--check`,
+`--mutants`, `--lean` and the measurement options (`--limit`, `--first-rules`,
+`--no-task-agreement`) are parsed already. Each of them stops with "not
+implemented yet" until the modular emitter is ported. Until then the modular
+files still come from the Python prototype in `theory/modular`.
 
 ## Running it
 
 bsc writes a `.ba` file only with `-elab`. Then
 
-    verifyschedule [-o OUT.lean] [--dump-design] MODULE.ba
+    schedlean --flat [-o OUT.lean] MODULE.ba
+    schedlean --show-model MODULE.ba
 
 writes `<Module>.lean`, the module name capitalised (`mkLookupQ` gives
 `MkLookupQ.lean`, namespace `MkLookupQ`), or `OUT.lean`. Warnings go to
-standard error. `--dump-design` prints the model the tool extracted instead
+standard error. `--show-model` prints the model the tool extracted instead
 (see *How it works*), for checking that phase on its own.
 
 The `.ba` file must come from the same build of bsc as the tool. The Lean file needs Lean 4 (tested with
@@ -327,7 +354,7 @@ true of the hardware whatever the condition, and a wrong condition only
 yields a weaker fact or none, so the proof can only fail. It trusts this
 tool's extraction, which is not itself verified: a bug there could make
 the model differ from bsc's hardware. The generated file is written to be
-read against the design, and `--dump-design` shows the extracted model,
+read against the design, and `--show-model` shows the extracted model,
 with bsc's use conditions marked as hints.
 
 ## How it works
