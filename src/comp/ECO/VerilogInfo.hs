@@ -21,7 +21,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import System.Directory (canonicalizePath, copyFile, createDirectoryIfMissing,
                          withCurrentDirectory)
-import System.Environment (getExecutablePath)
 import System.FilePath ((</>), takeDirectory)
 import System.Process (callProcess)
 import Text.Read (readMaybe)
@@ -161,7 +160,7 @@ writeVerilogInfo opts directory moduleName header final program ordinary = do
       Just path -> do
         source <- fileIdentity path
         manifest <- readRecord (fiPath source) :: IO ReplayManifest
-        producer <- getExecutablePath >>= fileIdentity
+        producer <- producerIdentity
         plan <- mapM fileIdentity (ecoBackendPlan opts)
         let stem = directory </> moduleName ++ ".eco-ast"
             payloadPath = stem ++ ".bin"
