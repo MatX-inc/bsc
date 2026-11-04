@@ -58,6 +58,7 @@ data Flags = Flags {
         remapPathPrefix :: [(String, String)],
         enablePoisonPills :: Bool,
         codegenNames :: [String],
+        elabOnly :: Bool,
         entry :: Maybe String,
         expandATSlimit :: Int,
         expandIf :: Bool,
