@@ -73,6 +73,7 @@ Compiler flags:
 -sim                    compile BSV generating Bluesim object
 -simdir dir             output directory for Bluesim intermediate files
 -split-if               split "if" in actions
+-stable-verilog         deterministic Verilog emission (canonical names and ordering)
 -steps n                terminate elaboration after this many function unfolding steps
 -steps-max-intervals n  terminate elaboration after this number of unfolding messages
 -steps-warn-interval n  issue a warning each time this many unfolding steps are executed

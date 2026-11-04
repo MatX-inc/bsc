@@ -759,7 +759,7 @@ defaultFlags bluespecdir = Flags {
         warnMethodUrgency = True,
         warnUndetPred = False,
         semanticPortsComment = False,
-        stableVerilog = False
+        stableVerilog = True
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1607,7 +1607,7 @@ externalFlags = [
         ("stable-verilog",
          (Toggle (\f x -> f {stableVerilog=x}) (showIfTrue stableVerilog),
           "deterministic Verilog emission (canonical names and ordering)",
-          Hidden)),
+          Visible)),
 
         ("show-compiles",
          (Toggle (\f x -> f {showUpds=x}) (showIfTrue showUpds),
