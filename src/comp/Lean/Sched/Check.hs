@@ -1,14 +1,14 @@
 -- | --check and --mutants: the files schedlean writes, in Lean (each module's parts in build order,
 -- children before parents), and each hardware mutant's file, which must fail.
 module Lean.Sched.Check
-    ( CheckOpts(..), libModules, writeParts, writeEmitted, setupLean, checkFiles, reportCheck, missedCode
+    ( CheckOpts(..), writeEmitted, setupLean, checkFiles, reportCheck, pathBCode, oblOnlyCode
     , Checker, newChecker, checkModule, finishChecker
     ) where
 
 import Control.Monad (forM, forM_, unless, when)
-import Data.Char (isDigit)
+import Data.Char (isDigit, isSpace)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef, modifyIORef')
-import Data.List (intercalate)
+import Data.List (intercalate, isPrefixOf)
 import System.Directory (createDirectoryIfMissing, doesDirectoryExist, doesFileExist, removeDirectoryRecursive, removeFile)
 import System.Environment (getEnvironment, getExecutablePath)
 import System.FilePath ((</>), (<.>), dropExtension, takeBaseName, takeDirectory)
@@ -16,20 +16,26 @@ import System.IO (IOMode(..), hFlush, hPutStr, hPutStrLn, hSetEncoding, stderr, 
 import Text.Printf (printf)
 
 import Lean.Run (LeanConf(..), Result(..), Verdict(..), cannotRunCode, checkFile, defaultMemory, findLean, prepareLibrary,
-    verdictCode, verdictWord)
-import Lean.Sched.Emit (Emitted(..), MutantFile(..))
+    readFileUtf8, verdictCode, verdictWord)
+import Lean.Sched.Emit (Emitted(..), MutantFile(..), Proves(..), provesText)
 import Lean.Sched.Time (Timer, phase)
 
 data CheckOpts = CheckOpts { coLean :: Maybe FilePath, coLib :: Maybe FilePath, coTimeout :: Int, coTime :: Bool, coKeep :: Bool }
 
--- | The Lean library a modular file imports, in build order.
+-- | The Lean library a modular file imports, in build order (src/comp/Makefile's SCHEDLEANLIB reads this line).
 libModules :: [String]
 libModules = ["Modular", "EmitLemmas", "Scan", "LastCaller", "SiteCond"]
 
--- | A mutant file that checks.
+-- | A mutant file that checks; one not written, or failing in a definition rather than a theorem.
 missedCode, unwrittenCode :: Int
 missedCode = 8
 unwrittenCode = 9
+
+-- | A file that proves, but whose theorems rest on facts the solver did not confirm (path B); one that
+-- proves its obligation only (no Acyc/top).
+pathBCode, oblOnlyCode :: Int
+pathBCode = 10
+oblOnlyCode = 11
 
 -- | Write a module's parts (part k at @<stem>_p<k>.lean@, the last at @file@); their paths in
 -- build order.
@@ -123,11 +129,22 @@ checkParts co c dir isTop paths = go paths
         r <- checkOne co c f False (Just (dir </> takeBaseName f))
         if rVerdict r == Proved then go rest else return (r, logOf f)
 
--- | The check line: the verdict, and on a failure its reason (the first error, without the
--- file's path) and the log.
-reportCheck :: FilePath -> (Result, FilePath) -> IO ()
-reportCheck f (res, logf) = (>> hFlush stdout) $ putStrLn $ "check " ++ f ++ ": " ++ verdictWord (rVerdict res)
-    ++ (if rVerdict res == Proved then "" else ": " ++ shortReason (rReason res) ++ " (log " ++ logf ++ ")")
+-- | The check line: the verdict (for a file that proves, what it proves, when given), and on a failure its
+-- reason (the first error, without the file's path) and the log.
+reportCheck :: FilePath -> Maybe String -> (Result, FilePath) -> IO ()
+reportCheck f proved (res, logf) = (>> hFlush stdout) $ putStrLn $ "check " ++ f ++ ": "
+    ++ (if rVerdict res == Proved then maybe (verdictWord Proved) id proved
+        else verdictWord (rVerdict res) ++ ": " ++ shortReason (rReason res) ++ " (log " ++ logf ++ ")")
+
+-- | A file that proves: its check word unless top holds from Hyps alone, and the exit code.
+provedAs :: Proves -> (Maybe String, Int)
+provedAs pv = case provesText pv of
+    Nothing -> (Nothing, 0)
+    Just t | uncTotal pv > 0 -> (Just (t ++ "; not a proof of the module"), pathBCode)
+           | otherwise -> (Just t, oblOnlyCode)
+
+uncTotal :: Proves -> Int
+uncTotal pv = let (a, b) = pvUnconf pv in a + b
 
 -- | "/path/F.lean:12:3: error: msg" -> "line 12: msg".
 shortReason :: String -> String
@@ -151,13 +168,15 @@ newChecker co hier topFile = do
     c <- newIORef Nothing
     Checker co hier (dropExtension topFile ++ ".olean.d") c <$> newIORef 0 <*> newIORef False
 
+-- | The run's code: its first failure's, which a path-B or obligation-only file's code gives way to.
 setCode :: Checker -> Int -> IO ()
-setCode ck rc = modifyIORef' (ckCode ck) (\old -> if old /= 0 then old else rc)
+setCode ck rc = modifyIORef' (ckCode ck) (\old -> if old == 0 || (weak old && rc /= 0 && not (weak rc)) then rc else old)
+  where weak c = c `elem` [pathBCode, oblOnlyCode]
 
 -- | A module's written files (its parts, then its main file), then its mutants (each checked against
--- the real children), unless checking has stopped.
-checkModule :: Checker -> Bool -> [FilePath] -> Int -> [MutantFile] -> IO ()
-checkModule ck isTop paths nmut muts = do
+-- the real children), unless checking has stopped; a path-B or obligation-only file does not stop it.
+checkModule :: Checker -> Bool -> [FilePath] -> Proves -> Int -> [MutantFile] -> IO ()
+checkModule ck isTop paths pv nmut muts = do
     stopped <- readIORef (ckStopped ck)
     unless stopped $ do
         conf <- readIORef (ckConf ck) >>= maybe (setupLean (ckOpts ck) True >>= \r -> writeIORef (ckConf ck) (Just r) >> return r) return
@@ -170,14 +189,17 @@ checkModule ck isTop paths nmut muts = do
                 let c = c0 { lcPath = lcPath c0 ++ [ckDir ck] }
                     mainF = last paths
                 r@(res, _) <- checkParts (ckOpts ck) c (ckDir ck) isTop paths
-                reportCheck mainF r
+                let (word, code) = provedAs pv
+                reportCheck mainF word r
                 if rVerdict res /= Proved
                     then do
                         when (nmut > 0) $ putStrLn ("mutants: not run (the " ++ (if ckHier ck then "files do" else "file does") ++ " not prove)")
                         setCode ck (verdictCode (rVerdict res)) >> writeIORef (ckStopped ck) True
-                    else when (nmut > 0) $ do
-                        when (ckHier ck) $ putStrLn ("mutants of " ++ mainF ++ ":")
-                        runMutants (ckOpts ck) c mainF nmut muts >>= setCode ck
+                    else do
+                        setCode ck code
+                        when (nmut > 0) $ do
+                            when (ckHier ck) $ putStrLn ("mutants of " ++ mainF ++ ":")
+                            runMutants (ckOpts ck) c mainF (uncTotal pv > 0) nmut muts >>= setCode ck
 
 -- | The run's exit code from Lean, its .olean directory removed.
 finishChecker :: Checker -> IO Int
@@ -186,10 +208,10 @@ finishChecker ck = do
     when ex $ removeDirectoryRecursive (ckDir ck)
     readIORef (ckCode ck)
 
--- | Each mutant's file (@<stem>_mut<i>.lean@), which must fail (one not written is counted apart); a missed
--- or undecided one's files kept. Exit code 'missedCode', else 5 (no verdict), else 'unwrittenCode', else 0.
-runMutants :: CheckOpts -> LeanConf -> FilePath -> Int -> [MutantFile] -> IO Int
-runMutants co c file asked muts = do
+-- | Each mutant's file (@<stem>_mut<i>.lean@), which must fail in a theorem (else counted apart), kept unless killed;
+-- @weak@: a path-B file. Exit code 'missedCode', else 5 (no verdict), else 'unwrittenCode', else 0.
+runMutants :: CheckOpts -> LeanConf -> FilePath -> Bool -> Int -> [MutantFile] -> IO Int
+runMutants co c file weak asked muts = do
     let n = length muts
     when (n < asked) $ putStrLn ("mutants: " ++ show n ++ " candidate(s), fewer than the " ++ show asked ++ " asked for")
     outs <- forM (zip [1 :: Int ..] muts) $ \(i, mf) -> do
@@ -202,27 +224,66 @@ runMutants co c file asked muts = do
                 return (i, Nothing)
             Right em -> do
                 paths <- writeParts path (emParts em)
-                (res, _) <- checkFiles co c paths
+                (res, logf) <- checkFiles co c paths
                 -- running out of memory is no verdict on the mutant, as a timeout is not
                 let v0 = rVerdict res
                     v = if v0 == Failed && rReason res == "out of memory" then TimedOut else v0
-                    kept = coKeep co || v `elem` [Proved, TimedOut]
-                putStrLn (label ++ ": " ++ (case v of
-                    Proved -> "MISSED (the file checks; kept " ++ path ++ ")"
-                    TimedOut -> (if v0 == Failed then "out of memory" else "timeout") ++ " (kept " ++ path ++ ")"
+                -- a kill counts when Lean's first error is in a theorem, not in a definition the edit broke
+                at <- if v `elem` [Proved, TimedOut] then return Nothing else Just <$> firstErrorDecl logf
+                let kept = coKeep co || v `elem` [Proved, TimedOut] || maybe False (not . isThm) at
+                putStrLn (label ++ ": " ++ (case (v, at) of
+                    (Proved, _) -> "MISSED (the file checks; kept " ++ path ++ ")"
+                    (TimedOut, _) -> (if v0 == Failed then "out of memory" else "timeout") ++ " (kept " ++ path ++ ")"
+                    (_, Just d) | not (isThm d) -> "killed (definition error, " ++ d ++ "; kept " ++ path ++ ")"
                     _ -> "killed (" ++ verdictWord v ++ ")"))
                 unless kept $ forM_ paths $ \f -> do
                     removeFile f
                     ex <- doesFileExist (logOf f)
                     when ex (removeFile (logOf f))
-                return (i, Just v)
-    let missed = [ i | (i, Just Proved) <- outs ]
-        timedOut = [ i | (i, Just TimedOut) <- outs ]
+                return (i, Just (v, maybe True isThm at))
+    let missed = [ i | (i, Just (Proved, _)) <- outs ]
+        timedOut = [ i | (i, Just (TimedOut, _)) <- outs ]
+        defErr = [ i | (i, Just (v, False)) <- outs, v `notElem` [Proved, TimedOut] ]
         unwritten = [ i | (i, Nothing) <- outs ]
-        killed = n - length missed - length timedOut - length unwritten
+        killed = n - length missed - length timedOut - length unwritten - length defErr
     putStrLn ("mutants: " ++ show killed ++ " of " ++ show n ++ " killed"
               ++ concat [ "; missed: " ++ unwords (map show missed) | not (null missed) ]
               ++ concat [ "; no verdict: " ++ unwords (map show timedOut) | not (null timedOut) ]
-              ++ concat [ "; not written: " ++ unwords (map show unwritten) | not (null unwritten) ])
+              ++ concat [ "; definition error: " ++ unwords (map show defErr) | not (null defErr) ]
+              ++ concat [ "; not written: " ++ unwords (map show unwritten) | not (null unwritten) ]
+              ++ (if weak then " (weak evidence: the file's theorems rest on unconfirmed facts, under which a mutant may also prove)" else ""))
     return (if not (null missed) then missedCode else if not (null timedOut) then verdictCode TimedOut
-            else if not (null unwritten) then unwrittenCode else 0)
+            else if not (null unwritten && null defErr) then unwrittenCode else 0)
+  where isThm d = "theorem " `isPrefixOf` d
+
+-- | The declaration holding a log's first error ("theorem name", "def name", ...; "no error position" when
+-- the log names none), from the file and line Lean prints.
+firstErrorDecl :: FilePath -> IO String
+firstErrorDecl logf = do
+    txt <- readFileUtf8 logf
+    case [ loc | l <- lines txt, Just loc <- [errLoc l] ] of
+        [] -> return "no error position"
+        ((f, n) : _) -> do
+            ex <- doesFileExist f
+            if not ex then return ("no file " ++ f) else do
+                src <- readFileUtf8 f
+                let above = reverse (take n (lines src))
+                    decl = [ unwords (take 2 (words (dropMods l))) | l <- above, startsDecl l ]
+                return (case decl of { (d : _) -> d; [] -> "no declaration" })
+  where
+    -- "/path/F.lean:12:3: error: ..." -> (path, 12)
+    errLoc l = go "" l
+      where go acc r@(':' : rest)
+              | (ln@(_ : _), ':' : r2) <- span isDigit rest, (_ : _, ':' : ' ' : m) <- span isDigit r2, "error" `isPrefixOf` m =
+                  Just (reverse acc, read ln)
+              | otherwise = cont acc r
+            go acc r = cont acc r
+            cont acc (ch : r) = go (ch : acc) r
+            cont _ [] = Nothing
+    mods = ["noncomputable ", "private ", "protected ", "@[simp] ", "@[reducible] "]
+    dropMods l = case [ m | m <- mods, m `isPrefixOf` l ] of
+        (m : _) -> dropMods (drop (length m) l)
+        [] -> l
+    startsDecl l = case l of
+        (ch : _) -> not (isSpace ch) && any (`isPrefixOf` dropMods l) ["theorem ", "lemma ", "def ", "abbrev ", "structure ", "instance ", "inductive ", "opaque "]
+        [] -> False

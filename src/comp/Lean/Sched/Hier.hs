@@ -1,7 +1,7 @@
 -- | Synthesized children (design.md §3.1): the instance DAG (from each .ba's instances), children first,
 -- each child's place in a parent; a module is read in full only at its turn, one at a time.
 module Lean.Sched.Hier
-    ( Hier, synthInsts, loadHier, hierGate, hierEmit, HierFile(..)
+    ( Hier, synthInsts, loadHier, hierGate, hierEmit, HierFile(..), LoadErr(..), loadInput
     ) where
 
 import ABin (ABin(..), ABinModInfo(..))
@@ -21,7 +21,7 @@ import qualified Data.Map.Strict as M (Map, (!), empty, findWithDefault, fromLis
 import qualified Data.Set as S (Set, empty, fromList, insert, member, toList)
 
 import Lean.Sched.Bounds (Bounds)
-import Lean.Sched.Emit (Emitted(..), MutantFile, emitModule)
+import Lean.Sched.Emit (Emitted(..), MutantFile, emOff, emitModule)
 import Lean.Sched.Gate (gateReportS)
 import Lean.Sched.BscFacts (disjointCandidates, confirmDisjointnessMore)
 import Lean.Sched.Domain (domainOf, multiDomain, multiDomainVerdict)
@@ -58,31 +58,48 @@ peekBa errh path = do
             Nothing -> Right <$> evaluate (force (synthInsts (abmi_apkg abmi)))
         _ -> return (Left (path ++ " is not a module's .ba"))
 
--- | One .ba as the driver reads it: extraction, bsc's facts; a module of several clock domains is
--- not read (its own verdict).
+-- | Why a decoded module is not read: several clock domains (their clocks), or extraction's failure.
+data LoadErr = LoadMultiDomain String | LoadFailed String
+
+-- | A decoded module as every run reads it (the top and each child): its clock domain, then astate,
+-- extraction (@full@: with the CF-swap orders) and bsc's facts, each a phase named after @pre@.
+loadInput :: ErrorHandle -> Timer -> String -> Bounds -> Bool -> FilePath -> String -> ABinModInfo -> IO (Either LoadErr Input)
+loadInput errh timer pre bounds full path ver abmi = do
+    let flags = abmi_flags abmi
+        apkg0 = abmi_apkg abmi
+    case multiDomain (domainOf apkg0) of
+        Just why -> return (Left (LoadMultiDomain why))
+        Nothing -> do
+            aspkg <- phase timer (pre ++ "astate") $
+                aState errh flags (abmi_pps abmi) (abmi_aschedinfo abmi) apkg0 >>= evaluate . force
+            let abmi' = abmi { abmi_apkg = renameSchedulerUses apkg0 }
+            ed <- phase timer (pre ++ "extract") $
+                either (return . Left) (fmap Right . evaluate . force) (extractDesign full path ver abmi' aspkg)
+            case ed of
+                Left e -> return (Left (LoadFailed e))
+                Right d -> do
+                    (cands, facts, more, sv) <- phase timer (pre ++ "bsc-facts") $ do
+                        let cands = force (disjointCandidates d)
+                        (facts, more, sv) <- confirmDisjointnessMore errh flags (abmi_apkg abmi') d cands
+                        _ <- evaluate (force (cands, facts))
+                        return (cands, facts, more, sv)
+                    return (Right (Input d cands facts more sv abmi bounds (takeBaseName path) flags errh timer noHier))
+
+-- | A child's .ba at its turn: decoded a second time (peekBa decoded it for the DAG), then 'loadInput'; a
+-- module of several clock domains is not read (its own verdict).
 loadBa :: ErrorHandle -> Timer -> Bounds -> FilePath -> IO (Either String Input)
 loadBa errh timer bounds path = do
-    bytes <- BS.readFile path
-    let (abin, _) = readABinFile errh path bytes
+    abin <- phase timer "hier-read" $ do
+        bytes <- BS.readFile path
+        case fst (readABinFile errh path bytes) of
+            ABinMod abmi ver -> evaluate (force (abmi_apkg abmi, abmi_aschedinfo abmi)) >> return (Just (abmi, ver))
+            _ -> return Nothing
     case abin of
-        ABinMod abmi ver -> do
-            _ <- evaluate (force (abmi_apkg abmi, abmi_aschedinfo abmi))
-            let flags = abmi_flags abmi
-                apkg0 = abmi_apkg abmi
-            case multiDomain (domainOf apkg0) of
-                Just why -> return (Left (multiDomainVerdict ++ " (" ++ why ++ ")"))
-                Nothing -> do
-                    aspkg <- aState errh flags (abmi_pps abmi) (abmi_aschedinfo abmi) apkg0 >>= evaluate . force
-                    let abmi' = abmi { abmi_apkg = renameSchedulerUses apkg0 }
-                    case extractDesign False path ver abmi' aspkg of
-                        Left e -> return (Left e)
-                        Right d0 -> do
-                            d <- evaluate (force d0)
-                            let cands = force (disjointCandidates d)
-                            (facts, more, sv) <- confirmDisjointnessMore errh flags (abmi_apkg abmi') d cands
-                            _ <- evaluate (force (cands, facts))
-                            return (Right (Input d cands facts more sv abmi bounds (takeBaseName path) flags errh timer noHier))
-        _ -> return (Left (path ++ " is not a module's .ba"))
+        Just (abmi, ver) -> fmap (either (Left . why) Right) (loadInput errh timer "hier-" bounds False path ver abmi)
+        Nothing -> return (Left (path ++ " is not a module's .ba"))
+  where why e = case e of
+            LoadMultiDomain w -> multiDomainVerdict ++ " (" ++ w ++ ")"
+            LoadFailed m -> m
 
 -- | The DAG below a loaded top: each child's .ba beside its parent's, else in the search path.
 loadHier :: ErrorHandle -> Timer -> Bounds -> [FilePath] -> FilePath -> Input -> IO Hier
@@ -90,7 +107,7 @@ loadHier errh timer bounds dirs topPath top = do
     let topName = dModule (inDesign top)
         topNode = HNode topPath Nothing (synthInsts (abmi_apkg (inABMI top)))
     (nodes, _, order) <- go (M.insert topName topNode M.empty, S.empty, []) S.empty topName
-    return (Hier topName top nodes (reverse order) (\p -> phase timer "hier-read" (loadBa errh timer bounds p)))
+    return (Hier topName top nodes (reverse order) (loadBa errh timer bounds))
   where
     -- depth-first, children in instance order, post-order (kept reversed); a module is read once
     go st@(nodes, done, order) onPath mn

@@ -1,0 +1,3 @@
+'AxOpen.obl' depends on axioms: [propext, Classical.choice, Quot.sound]
+'AxOpen.top' depends on axioms: [propext,
+ Classical.choice,

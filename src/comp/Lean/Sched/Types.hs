@@ -300,6 +300,8 @@ lookupMeth d inst m = M.lookup inst (dChildren d) >>= M.lookup m . chMethods
 
 -- | The Lean namespace (and default file stem) of a module: its name, capitalised.
 leanNamespace :: Design -> String
-leanNamespace d = case dModule d of
-    (c : cs) -> toUpper c : cs
-    []       -> "Module"
+leanNamespace d = capital (dModule d)
+
+capital :: String -> String
+capital (c : cs) = toUpper c : cs
+capital [] = "Module"

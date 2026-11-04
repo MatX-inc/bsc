@@ -6,8 +6,9 @@
    bsc ANDs a clock's gate into every action call on the state it clocks (schedlean checks that each such
    call's enable implies it), so with the gate off that state is not called and holds. A gate is not part
    of the interface: a guard reading it is an operator of its other reads, covered for every `ops`, so for
-   each cycle's gate. Trust point: that a gated clock shares the default clock's edges is bsc's
-   clock_family attribute, a user assertion schedlean does not check. -/
+   each cycle's gate.
+   Trust point: the module's clocks (CLK_gclk, CLK) share one oscillator's edges, as bsc's
+   clock_family attribute (or a BVI import's same_family) asserts; schedlean does not check it. -/
 import Scan
 open Modular Emit Scan
 open scoped List
@@ -1556,8 +1557,9 @@ theorem built [Inhabited V] (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (lv : Le
     bsc ANDs a clock's gate into every action call on the state it clocks (schedlean checks that each such
     call's enable implies it), so with the gate off that state is not called and holds. A gate is not part
     of the interface: a guard reading it is an operator of its other reads, covered for every `ops`, so for
-    each cycle's gate. Trust point: that a gated clock shares the default clock's edges is bsc's
-    clock_family attribute, a user assertion schedlean does not check. -/
+    each cycle's gate.
+    Trust point: the module's clocks (CLK_gclk, CLK) share one oscillator's edges, as bsc's
+    clock_family attribute (or a BVI import's same_family) asserts; schedlean does not check it. -/
 theorem top [Inhabited V] (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (lv : Leaves V ops.toB) :
     RealizesU ((F ops E).toModuleU (fun j => (implK ops lv j.1).toU)) ∧
     ∀ s w, ((F ops E).toModuleU (fun j => (implK ops lv j.1).toU)).clean s = s → ∃ o s' g, ((F ops E).toModuleU (fun j => (implK ops lv j.1).toU)).hw s w o s' g :=
@@ -1571,4 +1573,4 @@ end GatedFamily
 #print axioms GatedFamily.top
 
 
-/-! Gate: 1 part(s) (one Lean file each), the largest 90477 bytes, at most 4000000. -/
+/-! Gate: 1 part(s) (one Lean file each), the largest 90564 bytes, at most 4000000. -/

@@ -8,7 +8,6 @@ schedule verifier ("Lean.Sched.*") and writes what it returns.
 module Main_schedlean (main) where
 
 import ABin (ABin(..), ABinModInfo(..))
-import AState (aState)
 import ASyntax (APackage(apkg_name), apkgIsMCD)
 import Control.DeepSeq (force)
 import Control.Exception (evaluate)
@@ -23,7 +22,6 @@ import PPrint (ppReadable)
 import System.Console.GetOpt (ArgDescr(..), ArgOrder(..), OptDescr(..), getOpt, usageInfo)
 import System.Environment (getArgs)
 import System.Exit (ExitCode(..), exitWith, exitSuccess)
-import System.FilePath (takeBaseName)
 import System.IO (IOMode(..), hFlush, hPutStr, hPutStrLn, hSetEncoding, stderr, stdout, utf8, withFile)
 import Version (bluespec, versionStr)
 import qualified Data.ByteString as BS (readFile)
@@ -31,16 +29,14 @@ import qualified Data.ByteString as BS (readFile)
 import Lean.Run (Result(..), cannotRunCode, defaultTimeout, verdictCode)
 import Lean.Sched.APkg (parseAPkg, showAPkg, showAPkgNoSched, memAPkgText)
 import Lean.Sched.Bounds (applyLimits, defaultBounds)
-import Lean.Sched.BscFacts (disjointCandidates, confirmDisjointnessMore)
 import Lean.Sched.Check (CheckOpts(..), checkFiles, checkModule, finishChecker, newChecker, reportCheck, setupLean, writeEmitted)
-import Lean.Sched.Hier (HierFile(..), hierEmit, hierGate, loadHier, synthInsts)
-import Lean.Sched.Domain (domainOf, multiDomain, multiDomainVerdict)
-import Lean.Sched.Emit (emitModule)
+import Lean.Sched.Hier (HierFile(..), LoadErr(..), hierEmit, hierGate, loadHier, loadInput, synthInsts)
+import Lean.Sched.Domain (multiDomainVerdict)
+import Lean.Sched.Emit (Emitted(emProves), emitModule)
 import Lean.Sched.Expr (memAPkg)
-import Lean.Sched.Extract (extractDesign, renameSchedulerUses)
 import Lean.Sched.Flat (Proof(..), analyse, emitLean)
 import Lean.Sched.Gate (gateReport, modeName, multiDomainReport)
-import Lean.Sched.Run (Input(..), noHier)
+import Lean.Sched.Run (Input(..))
 import Lean.Sched.Show (dumpDesign)
 import Lean.Sched.Time (newTimer, phase, reportTotals)
 import Lean.Sched.Types (Design(..), leanNamespace)
@@ -88,7 +84,7 @@ options =
     , Option [] ["flat"] (NoArg (\o -> o { optFlat = True }))
         "write the old flat (whole-module) theorem, for comparison (temporary)"
     , Option [] ["check"] (NoArg (\o -> o { optCheck = True }))
-        "check the file written (its parts in order) in Lean: proved, counterexample, vacuous, timeout or error"
+        "check the file written (its parts in order) in Lean: proved, path B, obligation only, counterexample, vacuous, timeout or error"
     , Option [] ["mutants"] (ReqArg (\n o -> num n (\k -> o { optMutants = Just k }) o) "N")
         ("check the modular file, then N mutants of its hardware (enable drop or force, argument, mux, guard read, "
          ++ "CF order, last-caller order, conflict_free condition), each of which must fail; mutant i is the same for every N >= i; "
@@ -137,7 +133,7 @@ exitText :: String
 exitText = unlines
     [ ""
     , "Exit status:"
-    , "  0  the file is written (with --check: it proves; with --mutants: and every mutant fails)"
+    , "  0  the file is written (with --check: it proves top from Hyps alone; with --mutants: and every mutant fails)"
     , "  1  no file: the emitter stops (the message says why), or the .ba is not a module"
     , "  2  usage error"
     , "  3  --check: Lean finds a counterexample (decide: a proposition is false; bv_decide: an assignment)"
@@ -146,7 +142,12 @@ exitText = unlines
     , "  6  --check: any other Lean error, a sorry, or an axiom outside propext, Classical.choice, Quot.sound"
     , "  7  --check: Lean could not run (not found, or its library did not build)"
     , "  8  --mutants: a mutant's file checks (a missed mutant; its file is kept)"
-    , "  9  --mutants: a mutant's file is not written (the emitter stops on it), no mutant missed or undecided" ]
+    , "  9  --mutants: a mutant's file is not written (the emitter stops on it), or fails in a definition, not a"
+    , "     theorem (its file is kept); no mutant missed or undecided"
+    , " 10  --check: path B: the file proves, but its theorems take facts the solver did not confirm as"
+    , "     hypotheses (Unconfirmed), so it is no proof of the module"
+    , " 11  --check: obligation only: the file proves obl from Hyps alone, and has no Acyc/top"
+    , "A hierarchy's code is its first failure's, else its first path-B or obligation-only file's." ]
 
 die :: Int -> String -> IO a
 die rc msg = hPutStrLn stderr ("schedlean: " ++ msg) >> exitWith (ExitFailure rc)
@@ -195,24 +196,18 @@ main = do
     -- one clock domain is checked; a module of several is reported, with no fallback
     let apkg0 = abmi_apkg abmi
         modName = getIdString (apkg_name apkg0)
-    when (optFlat opts && apkgIsMCD apkg0) $ die 1 (modName ++ ": modules with several clocks or resets are not supported (--flat)")
-    forM_ (multiDomain (domainOf apkg0)) $ \why ->
-        if optGate opts then mapM_ putStrLn (multiDomainReport modName (modeName flags) why) >> exitSuccess
-        else die 1 (modName ++ ": " ++ multiDomainVerdict ++ " (" ++ why ++ ")")
-    aspkg <- phase timer "astate" $
-        aState errh flags (abmi_pps abmi) (abmi_aschedinfo abmi) (abmi_apkg abmi) >>= evaluate . force
-    let abmi' = abmi { abmi_apkg = renameSchedulerUses (abmi_apkg abmi) }
         -- the CF-swap orders (cubic in methods) only for the extraction dump and the flat file
         full = optFlat opts || optShow opts `elem` [Just "", Just "inverted-check"]
-    design <- phase timer "extract" $
-        either (die 1) (evaluate . force) (extractDesign full input version abmi' aspkg)
-    (cands, facts, more, sv) <- phase timer "bsc-facts" $ do
-        let cands = force (disjointCandidates design)
-        (facts, more, sv) <- confirmDisjointnessMore errh flags (abmi_apkg abmi') design cands
-        _ <- evaluate (force (cands, facts))
-        return (cands, facts, more, sv)
+    when (optFlat opts && apkgIsMCD apkg0) $ die 1 (modName ++ ": modules with several clocks or resets are not supported (--flat)")
     bounds <- either (die 2) return (applyLimits (optLimits opts) defaultBounds)
-    let inp = Input design cands facts more sv abmi bounds (takeBaseName input) flags errh timer noHier
+    inp <- loadInput errh timer "" bounds full input version abmi >>= \r -> case r of
+        Right x -> return x
+        Left (LoadFailed e) -> die 1 e
+        Left (LoadMultiDomain why)
+            | optGate opts -> mapM_ putStrLn (multiDomainReport modName (modeName flags) why) >> exitSuccess
+            | otherwise -> die 1 (modName ++ ": " ++ multiDomainVerdict ++ " (" ++ why ++ ")")
+    let design = inDesign inp
+        (cands, facts) = (inCands inp, inFacts inp)
         ok = either (die 1) return
         co = CheckOpts (optLean opts) (optLeanLib opts) (optLeanTimeout opts) (optTime opts) (optKeepMutants opts)
     -- synthesized children (design.md §3.1): their files first, each module once
@@ -223,7 +218,7 @@ main = do
     ck <- newChecker co hierRun file
     let onFile isTop f em muts = do
             paths <- writeEmitted timer f em
-            when lean $ checkModule ck isTop paths nmut muts
+            when lean $ checkModule ck isTop paths (emProves em) nmut muts
     rc <- case () of
       _ | Just h <- hier, optGate opts -> hierGate h >>= ok >>= mapM_ putStrLn >> return 0
         | Just h <- hier -> do
@@ -252,7 +247,7 @@ main = do
             if not lean then return 0 else do
                 c <- setupLean co False >>= either (die cannotRunCode) return
                 r <- checkFiles co c [file]
-                reportCheck file r
+                reportCheck file Nothing r
                 return (verdictCode (rVerdict (fst r)))
         | otherwise -> do
             (em, muts) <- emitModule inp (not (optNoTasks opts)) (optFirstRules opts) file nmut >>= ok

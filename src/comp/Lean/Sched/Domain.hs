@@ -2,7 +2,7 @@
 -- | The module's clocks and resets: bsc's clock domains (one per family), its gated clocks and
 -- its resets. One domain is checked; each gate is a condition on the state its clock drives.
 module Lean.Sched.Domain
-    ( Domain(..), Clk(..), GateSrc(..), domainOf, multiDomain, multiDomainVerdict, gatedClocks, domainLine, domainNote, domainChecks
+    ( Domain(..), Clk(..), GateSrc(..), domainOf, multiDomain, multiDomainVerdict, domainLine, domainNote, domainChecks
     ) where
 
 import ASyntax (aTBool, AAbstractInput(AAI_Clock), AClock(AClock), ADef(adef_expr, adef_objid),
@@ -106,18 +106,18 @@ multiDomainVerdict = "not checked: multi-domain"
 gatedClocks :: Domain -> [Clk]
 gatedClocks d = [ c | cs <- dmDomains d, c <- cs, ckGate c /= Nothing ]
 
--- | The gate's line on clocks and resets: only for gated clocks or several resets.
+-- | The gate's line on clocks and resets: only for several clocks (gated or not) or several resets.
 domainLine :: Domain -> [String]
 domainLine d
-    | null (gatedClocks d) && length (dmResets d) <= 1 = []
+    | length (concat (dmDomains d)) <= 1 && null (gatedClocks d) && length (dmResets d) <= 1 = []
     | otherwise = [ "domain clocks " ++ unwords [ ckOsc c ++ maybe "" (\g -> "(gate " ++ gateName g ++ ")") (ckGate c)
                                                 | cs <- dmDomains d, c <- cs ]
                     ++ "; resets " ++ (if null (dmResets d) then "none" else unwords (map rst (dmResets d))) ]
   where rst r = r ++ (if length (dmResets d) > 1 then "(" ++ unwords (M.findWithDefault [] r (dmResetOf d)) ++ ")" else "")
 
--- | The top theorem's note on gated clocks and resets (empty for one ungated clock and one reset).
+-- | The top theorem's note on several clocks, gated clocks and resets (empty for one clock and one reset).
 domainNote :: Domain -> String
-domainNote d = concatMap ("\n   " ++) (gates ++ resets)
+domainNote d = concatMap ("\n   " ++) (gates ++ family ++ resets)
   where
     gs = [ (ckOsc c, g) | c <- gatedClocks d, Just (GateInput g _) <- [ckGate c] ]
     gates | null gs = []
@@ -126,8 +126,12 @@ domainNote d = concatMap ("\n   " ++) (gates ++ resets)
               , "bsc ANDs a clock's gate into every action call on the state it clocks (schedlean checks that each such"
               , "call's enable implies it), so with the gate off that state is not called and holds. A gate is not part"
               , "of the interface: a guard reading it is an operator of its other reads, covered for every `ops`, so for"
-              , "each cycle's gate. Trust point: that a gated clock shares the default clock's edges is bsc's"
-              , "clock_family attribute, a user assertion schedlean does not check." ]
+              , "each cycle's gate." ]
+    clocks = concat (dmDomains d)
+    family | length clocks <= 1 = []
+           | otherwise =
+               [ "Trust point: the module's clocks (" ++ intercalate ", " (map ckOsc clocks) ++ ") share one oscillator's edges, as bsc's"
+               , "clock_family attribute (or a BVI import's same_family) asserts; schedlean does not check it." ]
     resets | length (dmResets d) <= 1 = []
            | otherwise = [ "The module has " ++ show (length (dmResets d)) ++ " resets (" ++ intercalate ", " (dmResets d)
                            ++ "): the theorem covers the cycles", "outside reset, with every reset deasserted." ]

@@ -1,0 +1,4 @@
+scan segments 1 (at most 4096 uses each)
+wrote OblOnly.lean: rules 1, methods 1, children 2, sites 4, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=2, ag lemmas 1
+file OblOnly.lean: obligation only, no Acyc/top: method start drives w.wset, a path input, and Acyc has no input dependencies yet
+check OblOnly.lean: obligation only, no Acyc/top: method start drives w.wset, a path input, and Acyc has no input dependencies yet

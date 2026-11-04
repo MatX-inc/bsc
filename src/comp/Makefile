@@ -42,9 +42,10 @@ BINDIR=$(PREFIX)/bin
 # Where package information is installed
 LICDIR=$(PREFIX)/LICENSES
 
-# The Lean library schedlean --check compiles (once, into a cache) from $(PREFIX)/lib/schedlean
+# The Lean library schedlean --check compiles (once, into a cache) from $(PREFIX)/lib/schedlean:
+# the modules named on Lean/Sched/Check.hs's libModules line
 SCHEDLEANLIBDIR=$(PREFIX)/lib/schedlean
-SCHEDLEANLIB=$(addprefix $(TOP)/util/schedlean/theory/modular/,Modular.lean EmitLemmas.lean Scan.lean LastCaller.lean SiteCond.lean)
+SCHEDLEANLIB=$(addprefix $(TOP)/util/schedlean/theory/modular/,$(addsuffix .lean,$(shell sed -n 's/^libModules = \[\(.*\)\]$$/\1/p' $(TOP)/src/comp/Lean/Sched/Check.hs | tr -d '",')))
 
 # Top-level of where intermediate GHC files are stored
 BUILDDIR=$(TOP)/build/comp

@@ -2,7 +2,7 @@
 -- and their relations, as its own file states them and its parents' kinds take them.
 module Lean.Sched.Export
     ( XMeth(..), Export(exModule, exNS, exMeths), SynthKid(..), mkExport, exportOf, enableStop, forceExport, exMethAR, exPrecB, exSbrB, exConfB
-    , synthKind, viewCheck, viewKind, viewInHigh, isSynthKind, capital, portFn
+    , synthKind, viewCheck, viewKind, viewInHigh, isSynthKind, portFn
     ) where
 
 import ASyntax (ADef(..), AExpr(..), APackage(apkg_interface), AIFace(..), aIfaceArgs, isTrue)
@@ -10,7 +10,6 @@ import Data.Array (Array, listArray, (!))
 import Data.Array.Unboxed (UArray, accumArray)
 import qualified Data.Array.Unboxed as U ((!))
 import Data.Bits (testBit, (.|.))
-import Data.Char (toUpper)
 import Data.List (isPrefixOf)
 import Data.Word (Word8)
 import Id (getIdString)
@@ -20,7 +19,7 @@ import qualified Data.Map.Strict as M (Map, findWithDefault, fromList, lookup, m
 import qualified Data.Set as S (fromList)
 
 import Lean.Sched.Kinds (KindDef(..), PM(..), codedKind, schedCodes)
-import Lean.Sched.Types (Child(chMethods, chOrder, chStmts), Design(dModule, dSteps, dMethodSteps, dReadyDef,
+import Lean.Sched.Types (capital, Child(chMethods, chOrder, chStmts), Design(dModule, dSteps, dMethodSteps, dReadyDef,
     dSeqDefs, dExportedCF, dExportedSB), Meth(mtKind, mtConst, mtCopies, mtInHigh), MethKind(ValueMethod), Port(ptArgs),
     Step(stKind, stMethod), StepKind(ValueMethodStep, ActionMethodStep))
 
@@ -121,10 +120,6 @@ enableStop pps d apkg = case ([ m | (m, f) <- acts, isEnWhenRdy pps (aif_name f)
         (Method { vf_enable = Just (en, _) }, Just (ADef _ _ (ASPort _ i) _)) -> getIdString i == getVNameString en
         _ -> False
 
--- | A module's Lean namespace and file stem: its name capitalised.
-capital :: String -> String
-capital (c : cs) = toUpper c : cs
-capital [] = "Module"
 
 isSynthKind :: String -> Bool
 isSynthKind = ("syn" `isPrefixOf`)

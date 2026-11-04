@@ -104,6 +104,21 @@ foreach {src mod} {RegFileMeth.bs mkRegFileMeth ConflictFree3.bs sysConflictFree
 schedlean_run "-o ConflictFree3.lean sysConflictFree3.ba" sysConflictFree3.emit.out
 compare_file sysConflictFree3.emit.out
 
+# a bsc gated-clock bug (GateBug.bs, being filed): the escape stays unconfirmed, so the gate says flat and
+# the file is path B; a method driving an RWire's path input (obligation only: no Acyc/top); two ungated
+# clocks of one family (the domain line; the file names clock_family as a trust point); an always_ready
+# method on a gated clock (-unsafe-always-ready: enabled with its gate off, flat)
+foreach {src mod opts} {GateBug.bs sysGateBug "" OblOnly.bs sysOblOnly "" Fam.bs sysFam "" Uar.bs sysUar "-unsafe-always-ready"} {
+    compile_verilog_pass $src $mod [string trim "-elab $opts"]
+    schedlean_run "--gate $mod.ba" $mod.gate.out
+    compare_file $mod.gate.out
+}
+foreach {mod file} {sysGateBug GateBug sysOblOnly OblOnly sysFam Fam} {
+    schedlean_run "-o $file.lean $mod.ba" $mod.emit.out
+    compare_file $mod.emit.out
+}
+compare_file Fam.lean
+
 # a step above the fan-in bound (256): the gate names it, the emitter stops
 compile_verilog_pass FanIn.bs sysFanIn "-elab"
 schedlean_run "--gate sysFanIn.ba" sysFanIn.gate.out
@@ -241,9 +256,28 @@ if { $h4 <= 6 * $h1 + 0.05 } then {
     fail "schedlean grows faster than the modules of a hierarchy ($h1 s at 32, $h4 s at 128)"
 }
 
-# Lean that cannot run: the file is written, the run exits 7 (no Lean needed)
+# Lean that cannot run: the file is written, the run exits 7 (no Lean needed), with --mutants too
 schedlean_run "--check --lean /nonexistent -o MethTask.lean mkMethTask.ba" mkMethTask.nolean.out 7
 compare_file mkMethTask.nolean.out
+schedlean_run "--mutants 2 --lean /nonexistent -o MethTask.lean mkMethTask.ba" mkMethTask.nolean-mutants.out 7
+compare_file mkMethTask.nolean-mutants.out
+
+# a stand-in for Lean (FakeLean.sh, each file's log recorded in <stem>.fakelog) and a library of empty .olean
+# files: an axiom outside the standard three on a continuation line of a list Lean wraps (exit 6), the
+# standard three wrapped (proved), a list the log ends inside (exit 6), a run past its time limit (exit 5),
+# and mutants failing in a definition, not a theorem (exit 9)
+file attributes [file join $here $subdir FakeLean.sh] -permissions 0755
+file mkdir [file join $here $subdir fakelib]
+foreach m {Modular EmitLemmas Scan LastCaller SiteCond} { close [open [file join $here $subdir fakelib $m.olean] w] }
+set fake "--lean ./FakeLean.sh --lean-lib fakelib"
+foreach {stem status} {AxWrap 6 AxStd 0 AxOpen 6} {
+    schedlean_run "--check $fake -o $stem.lean mkMethTask.ba" $stem.fake.out $status
+    compare_file $stem.fake.out
+}
+schedlean_run "--check --lean-timeout 0 $fake -o Slow.lean mkMethTask.ba" Slow.fake.out 5
+compare_file Slow.fake.out
+schedlean_run "--mutants 2 $fake -o DefErr.lean mkMethTask.ba" DefErr.fake.out 9
+compare_file DefErr.fake.out
 
 # Lean (LEAN, else PATH; skipped without it): --check proves the file (also the gated-clock and two-reset
 # ones, and the hierarchies' files), --mutants kills every hardware mutant (MethTask's mutant 3 is the old
@@ -259,6 +293,16 @@ proc which_lean {} {
     return [lindex $l 0]
 }
 set lean [which_lean]
+# the Lean wall time of one file (by its name) in a --check --time-phases run
+proc schedlean_file_wall { log name } {
+    set f [open $log r]
+    set t ""
+    while { [gets $f line] >= 0 } {
+        if { [regexp {^schedlean: lean (\S+) wall ([0-9.]+)} $line _ n c] && [file tail $n] == $name } then { set t $c }
+    }
+    close $f
+    return $t
+}
 # the Lean wall time of a --check --time-phases run's files
 proc schedlean_lean_wall { log } {
     set f [open $log r]
@@ -313,6 +357,19 @@ if { $lean == "" } then {
     compare_file sysConflictFree3.check.out
     schedlean_run "--check --lean $lean -o SysHierSf.lean sysHierSf.ba" sysHierSf.check.out
     compare_file sysHierSf.check.out
+    # path B and obligation only: the gate-bug design's file proves, but its top takes an unconfirmed fact
+    # (exit 10, its mutants weak evidence); a method driving a path input gives obl alone (exit 11); two
+    # clocks of one family prove; a Lean run past its time limit is killed (exit 5)
+    schedlean_run "--check --lean $lean -o GateBug.lean sysGateBug.ba" sysGateBug.check.out 10
+    compare_file sysGateBug.check.out
+    schedlean_run "--mutants 2 --lean $lean -o GateBug.lean sysGateBug.ba" sysGateBug.mutants.out 10
+    compare_file sysGateBug.mutants.out
+    schedlean_run "--check --lean $lean -o OblOnly.lean sysOblOnly.ba" sysOblOnly.check.out 11
+    compare_file sysOblOnly.check.out
+    schedlean_run "--check --lean $lean -o Fam.lean sysFam.ba" sysFam.check.out
+    compare_file sysFam.check.out
+    schedlean_run "--check --lean-timeout 0 --lean $lean -o MethTask.lean mkMethTask.ba" mkMethTask.timeout.out 5
+    compare_file mkMethTask.timeout.out
     # a wide child as an assumed leaf (its .ba absent): the parent's Lean time at twice the methods at most
     # 2.5 times as much (the kind table checked by rows, the ports' facts a balanced tree)
     compile_verilog_pass Wide32.bs sysWide32 "-elab"
@@ -328,5 +385,21 @@ if { $lean == "" } then {
         pass "the wide parent's Lean time grows linearly with the child's methods ($l1 s at 32, $l2 s at 64)"
     } else {
         fail "the wide parent's Lean time grows faster than the child's methods ($l1 s at 32, $l2 s at 64)"
+    }
+    # a synthesized child's own file (MkWideKid64 and MkWideKid128: 128 and 256 methods, each under a one-rule
+    # parent): its Lean time at twice the methods at most 3 times as much (its method tables checked by rows;
+    # before, 4 times as much here and 6 at 512 methods)
+    compile_verilog_pass WideOne.bs sysWideOne64 "-elab"
+    foreach n {64 128} {
+        schedlean_run "--check --time-phases --lean $lean -o WO$n.lean sysWideOne$n.ba" sysWideOne$n.lean.log
+    }
+    set k1 [schedlean_file_wall [file join $here $subdir sysWideOne64.lean.log] MkWideKid64.lean]
+    set k2 [schedlean_file_wall [file join $here $subdir sysWideOne128.lean.log] MkWideKid128.lean]
+    if { $k1 == "" || $k2 == "" } then {
+        fail "schedlean --check --time-phases gave no Lean time for the wide child's own file"
+    } elseif { $k2 <= 3 * $k1 } then {
+        pass "the wide child's own Lean time grows with its .ba ($k1 s at 128 methods, $k2 s at 256)"
+    } else {
+        fail "the wide child's own Lean time grows faster than its .ba ($k1 s at 128 methods, $k2 s at 256)"
     }
 }

@@ -1,0 +1,24 @@
+package Uar where
+
+-- An always_ready method writing a register on a gated clock (bsc rejects it, G0006, unless
+-- -unsafe-always-ready): the hardware then writes the register with the gate off, which the gate's
+-- check finds (verdict flat).
+clockedBy :: (IsModule m mType) => Clock -> m a -> m a
+clockedBy c = changeSpecialWires (Just c) Nothing Nothing
+
+interface UarIfc =
+  set :: Bit 8 -> Action {-# always_ready #-}
+  peek :: Bit 8
+
+{-# synthesize sysUar {
+  gate_input_clocks = { gclk },
+  clock_family = { default_clock, gclk } } #-}
+sysUar :: Clock -> Module UarIfc
+sysUar gclk = module
+  g :: Reg (Bit 8) <- clockedBy gclk $ mkReg 0
+  a :: Reg (Bit 8) <- mkReg 0
+  rules
+    "base": when True ==> a := a + 1
+  interface
+    set x = g := x
+    peek = a + g

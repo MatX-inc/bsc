@@ -1,0 +1,21 @@
+package Fam where
+
+-- Two ungated clocks asserted to be one family (clock_family), a register on each: the gate's domain
+-- line lists both, and the file names clock_family as a trust point.
+clockedBy :: (IsModule m mType) => Clock -> m a -> m a
+clockedBy c = changeSpecialWires (Just c) Nothing Nothing
+
+interface FamIfc =
+  peek :: Bit 8
+
+{-# synthesize sysFam {
+  clock_family = { default_clock, clk2 } } #-}
+sysFam :: Clock -> Module FamIfc
+sysFam clk2 = module
+  a :: Reg (Bit 8) <- mkReg 0
+  b :: Reg (Bit 8) <- clockedBy clk2 $ mkReg 0
+  rules
+    "ra": when True ==> a := a + b
+    "rb": when True ==> b := b + 1
+  interface
+    peek = a

@@ -1,0 +1,27 @@
+package GateBug where
+
+-- A bsc scheduling bug with gated clocks (being filed): rb reads x in an if whose branch writes the gated
+-- y, so bsc folds the gate into the condition and loses rb's read of x. It then orders ra before rb with
+-- no conflict, which matches no rule order (rule semantics give y = 100 or y = 1; the Verilog gives 0).
+-- schedlean leaves the escape unconfirmed: the gate says flat, and the file's top is path B.
+clockedBy :: (IsModule m mType) => Clock -> m a -> m a
+clockedBy c = changeSpecialWires (Just c) Nothing Nothing
+
+interface GateBugIfc =
+  peek :: Bit 8
+
+{-# synthesize sysGateBug {
+  gate_input_clocks = { gclk },
+  clock_family = { default_clock, gclk } } #-}
+sysGateBug :: Clock -> Module GateBugIfc
+sysGateBug gclk = module
+  x :: Reg (Bit 8) <- clockedBy gclk $ mkReg 0
+  y :: Reg (Bit 8) <- clockedBy gclk $ mkReg 0
+  z :: Reg (Bit 8) <- mkReg 0
+  rules
+    "ra": when True ==> do
+      x := x + 1
+      y := 100
+    "rb": when True ==> if x < 8 then y := x else z := 1
+  interface
+    peek = y + z

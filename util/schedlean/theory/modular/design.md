@@ -91,7 +91,7 @@ pieces merged here, and the fixes for reviews r8-1, r8-2 and r8b-1):
 |---|---|---|---|
 | `Modular.lean` | the model, `ParentU`/`ModuleU`/`OblU`/`CertU`/`RealizesU`, composition, `Acyc`, `Built`, primitives, task traces; `CertB`/`Cert`/`CertL`, `obl_of_certL_at`, `oblU_of_certL` | 4,896 | 16.3 s, 16.1 s, 0.79 GiB |
 | `EmitLemmas.lean` | `Tab` (with `Tab.allB_node`), numbered site lists, per-port facts, `withSitesX`; the one-pass partner check `subS` (`subS_mem`, `mem_idxT`) | 587 | 0.9 s, 0.8 s, 0.51 GiB |
-| `Scan.lean` | the scan and `pairFacts_of_scan`, chain kinds, rule codes, `SufAsm` groups, group masks (`exR_of_cmask`), escapes (`okT_except_fn`, and the linear `okT_except_fnS`; emitted files use their own `okT_exceptZ`, with C29's task-site comparison) | 2,440 | 4.2 s, 4.1 s, 0.63 GiB |
+| `Scan.lean` | the scan and `pairFacts_of_scan`, chain kinds, rule codes, `SufAsm` groups, group masks (`exR_of_cmask`), escapes (`okT_except_fn`, and the linear `okT_except_fnS`; emitted files use their own `okT_exceptZ`, with C29's task-site comparison); a relation's columns as its rows' transpose, by rows (`trB`, `tr_spec`), and a synthesized child's method tables against its annotation by rows (`nfMask`, `ngMask`, `h3Mask`, `rowB`; round 9b) | 2,440 | 4.2 s, 4.1 s, 0.63 GiB |
 | `LastCaller.lean` | `CertL` from the scan (`PairFacts.toCertL`, `lc*_of_scan`), the priority mux (`argL_of_pmuxN`, and bsc's folded form `argL_of_pmuxF`/`NF`), the block lemma, `realizes_lastWins`, the reference key and laws, ConfigRegN and Counter models | 1,072 | 3.1 s, 3.1 s, 0.56 GiB |
 | `LastCallerEx.lean` | last caller non-vacuous, and its negatives | 266 | 0.6 s, 0.6 s, 0.50 GiB |
 | `SiteCond.lean` | weakened and dropped conditions; `oblU_weakens`, `oblU_weakensX` | 602 | 1.0 s, 1.0 s, 0.52 GiB |
@@ -271,9 +271,17 @@ once: `<NS>.lean` in the top file's directory, namespace `NS`, where `NS` is
 the module name capitalised (`mkCounter` → `MkCounter`), with its parts
 `<NS>_p<k>.lean` as for any file. A parent imports each child file on path A
 (`import MkCounter`, the last part). `--check` checks the files in that order,
-each child's `.olean` on its parents' path, and every file's `#print axioms`;
-`--mutants N` makes N mutants of each module, each checked against the real
-children. A design with no synthesized instance takes none of this (its run
+each child's `.olean` on its parents' path, and every file's `#print axioms`
+(each list read to its closing bracket: Lean wraps a long list, an axiom per
+line; soundness review r9b-3 M1); a file that proves is reported `proved` only
+when its `top` holds from `Hyps` alone: a file whose theorems take
+`Unconfirmed` facts is `path B: top under N unconfirmed facts` (exit 10), and
+one without `Acyc`/`top` is `obligation only, no Acyc/top: WHY` (exit 11;
+soundness review r9b-3 M2), and neither stops the run; `--gate`'s row says the
+same after `emitter yes`. `--mutants N` makes N mutants of each module, each
+checked against the real children; a kill counts only when Lean's first error
+is in a `theorem` (one in a definition is reported apart, exit 9), and a
+path-B file's mutants are labelled weak evidence. A design with no synthesized instance takes none of this (its run
 and file are as before).
 
 **A child's exported contract.** A module written as a synthesized child (not
@@ -388,9 +396,31 @@ module. `top` holds for every `ops E hy lv sub`.
   5.7/8.5/15.6/33.7 s, ×1.5–2.2 per doubling of the methods and ×1.9 per
   doubling of the parent's `.ba` at the last step, peak 0.61–1.16 GB (before:
   95.9 s and 4.3 GB at 256 ports); on path A 4.9/8.1/15.9/28.1 s (before:
-  78.4 s). The child's own file (6.7/11.9/28.7/114 s) decides its method tables
-  over every pair (`nfOK_*`), against a `.ba` that lists its schedule pair by
-  pair (34 KB to 706 KB): ×1.8–2.3 per doubling of that `.ba`.
+  78.4 s).
+- a synthesized child's own file checks its scan's method tables against its
+  exported annotation by rows (cost review r9b-3 M1): `trB` (`Scan`) decides,
+  for each relation, that its column tables are its row tables' transpose,
+  with `O(n)` operations on `n (n + 1)`-bit numbers (the rows packed at stride
+  `n + 1` against each column spread to that stride by one product with `n`
+  copies of it, masked to the diagonal; `tr_spec`); then each table row is one
+  subset test against a mask of the annotation's rows (`nfMask`, `ngMask`,
+  `h3Mask`; `rowB`). Before, `nfOK_*`/`ngOK_*`/`h3OK` tested every pair's bit
+  of a literal, and in a kernel decision a bit test on a literal costs more
+  the wider it is (measured: about 0.3 ms at 128 bits and 1.4 ms at 256, against
+  0.06 ms on a small or a computed number), so those checks grew faster than
+  n² (×9.7 per doubling of the methods). Likewise `cf_ar` takes its
+  always-ready methods from a balanced tree of proofs shaped as `arT`
+  (`Tab.finAll`), where `arL_ok` decided a membership in their list (50 s at
+  512 methods). Measured on Wide's child (64/128/256/512 methods, its `.ba`
+  82 KB/225 KB/706 KB/2.44 MB, which lists its schedule pair by pair), Lean
+  wall: 8.6/17.2/42.7/125.2 s, ×1.61/×1.73/×1.83 per doubling of its `.ba`
+  (before: 10.8/27.8/113/692 s, ×1.91/2.34/2.76). The whole path-A run (child
+  and parent, `--check`) takes 15.2/30.1/70.1/187.5 s, ×1.65/×1.73/×1.78 per
+  doubling of the two `.ba` files together (before: up to ×2.63), peak RSS
+  0.77/0.96/1.35/2.18 GB (before: 3.9 GB at 512 methods); what remains largest
+  at 512 methods is the readiness tables' decisions (`rqT_*`, about half).
+  The testsuite checks the child's own file at 128 against 256 methods
+  (`WideOne.bs`, at most ×3).
 
 A parent's `top` holds under its path-A children's own assumptions (their
 `Leaves` and `asm` reach it through `sub.synKlv` and `sub.synKhy`), so the
@@ -1678,11 +1708,18 @@ No Lean check sees these:
    its skipped values (argued, no theorem).
 3. **mkBufferControl's and mkMCR's `Acyc`/`top`**: blocked by the synthetic
    RegFile copy address muxes (mkBufferControl) and by `Acyc` without input
-   dependencies (mkMCR, a method's enable on an RWire's path input).
-   mkLookupQ and mkValueAfterAction prove `obl`; their `top` fails in the
-   `Acyc` agreement proof for method-called ports (`agWF_k` where
-   `calledM w (mM j) = calledM w' (mM j)` is needed), an emitter bug the old
-   `RecursionError` hid.
+   dependencies (mkMCR, a method's enable on an RWire's path input: method
+   `start` drives `t_hdr_rdy1.wset`). Their gate rows and `--check` say so
+   (`(file: obligation only, no Acyc/top: ...)`; testsuite `OblOnly.bs`). Fix
+   path: `Acyc`'s `Dw`/`reach` for method-driven path inputs (the library's
+   `Acyc` has the fields; the emitter sets them empty), with the module's
+   declared paths (`X.ann.path`) covering every output that reads such a
+   child output (`path_o`).
+   mkLookupQ (`request` drives `reqW.wset`) and mkValueAfterAction (`put`
+   drives `bp.wset`) have mkMCR's gap and prove `obl` only; mkBufferControl's
+   rows say the path inputs' ranks do not converge (the emitter's model of
+   those muxes makes a loop). Since round 9b's third review these four designs'
+   twelve gate rows say so after `emitter yes` (their verdicts are unchanged).
 4. **Last caller, not built:** method callers on a last-caller port (the
    theory covers them; the emitter asserts none: mkSolver3's was one until
    the emitter used bsc's rule–method disjointness); a method executing after

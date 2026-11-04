@@ -1978,6 +1978,145 @@ theorem kindOK_of_rows {n : Nat} {A : Ann (Fin n)} {kc : Nat → KC} {fx : Nat �
 
 end KindRows
 
+/-! ## A relation's columns as its rows' transpose, by rows (cost review r9b-3 M1)
+
+A synthesized child's annotation gives each relation as row and column tables, a pair related only
+where both say so (`kindRows`). Its own method tables are checked by rows once each relation's
+columns are shown to be its rows' transpose: `trB` decides that with `O(n)` operations on numbers of
+`n (n + 1)` bits, column `q` of the rows packed at stride `n + 1` against row `q` of the columns
+spread to that stride (a product with `n` copies of it, masked to the diagonal). -/
+
+section Transpose
+
+/-- Entries `f 0 .. f (k-1)`, each cut to `w` bits, at stride `s`. -/
+def pack (s w : Nat) (f : Nat → Nat) : Nat → Nat
+  | 0 => 0
+  | k + 1 => Nat.lor (pack s w f k) (Nat.shiftLeft (f k % 2 ^ w) (k * s))
+
+/-- Bits `0, s, .., (k-1) s`. -/
+def rep (s : Nat) : Nat → Nat
+  | 0 => 0
+  | k + 1 => rep s k + 2 ^ (k * s)
+
+theorem mul_le_of_lt {a b s : Nat} (h : a < b) : a * s + s ≤ b * s := by
+  have := Nat.mul_le_mul_right s (Nat.succ_le_of_lt h)
+  rwa [Nat.succ_mul] at this
+
+theorem testBit_pack {s w : Nat} (f : Nat → Nat) (hw : w ≤ s) :
+    ∀ (k p r : Nat), r < w → (pack s w f k).testBit (p * s + r) = (decide (p < k) && (f p).testBit r)
+  | 0, p, r, _ => by simp [pack]
+  | k + 1, p, r, hr => by
+    show ((pack s w f k) ||| ((f k % 2 ^ w) <<< (k * s))).testBit (p * s + r) = _
+    rw [Nat.testBit_or, testBit_pack f hw k p r hr, Nat.testBit_shiftLeft, Nat.testBit_mod_two_pow]
+    rcases Nat.lt_trichotomy p k with h | h | h
+    · have := mul_le_of_lt (s := s) h
+      have h1 : ¬ p * s + r ≥ k * s := by omega
+      simp [h, Nat.lt_succ_of_lt h, h1]
+    · subst h
+      simp [hr]
+    · have := mul_le_of_lt (s := s) h
+      have h1 : ¬ p * s + r - k * s < w := by omega
+      have h2 : ¬ p < k := by omega
+      have h3 : ¬ p < k + 1 := by omega
+      simp [h1, h2, h3]
+
+theorem mul_rep {s x : Nat} (hx : x < 2 ^ s) : ∀ k, x * rep s k < 2 ^ (k * s) ∧
+    ∀ j r, r < s → (x * rep s k).testBit (j * s + r) = (decide (j < k) && x.testBit r)
+  | 0 => ⟨by simp [rep], fun j r _ => by simp [rep]⟩
+  | k + 1 => by
+    obtain ⟨hb, ht⟩ := mul_rep hx k
+    have e : x * rep s (k + 1) = 2 ^ (k * s) * x + x * rep s k := by
+      show x * (rep s k + 2 ^ (k * s)) = _
+      rw [Nat.mul_add, Nat.add_comm, Nat.mul_comm x (2 ^ (k * s))]
+    refine ⟨?_, fun j r hr => ?_⟩
+    · rw [e]
+      have h2 : 2 ^ (k * s) * x + 2 ^ (k * s) ≤ 2 ^ ((k + 1) * s) :=
+        calc 2 ^ (k * s) * x + 2 ^ (k * s) = 2 ^ (k * s) * (x + 1) := by rw [Nat.mul_add, Nat.mul_one]
+          _ ≤ 2 ^ (k * s) * 2 ^ s := Nat.mul_le_mul_left _ hx
+          _ = 2 ^ ((k + 1) * s) := by rw [← Nat.pow_add, Nat.add_mul, Nat.one_mul]
+      omega
+    · rw [e, Nat.testBit_two_pow_mul_add _ hb]
+      split
+      · rename_i hlt
+        rw [ht j r hr]
+        have hj : j < k := by
+          rcases Nat.lt_or_ge j k with h | h
+          · exact h
+          · have := Nat.mul_le_mul_right s h; omega
+        simp [hj, Nat.lt_succ_of_lt hj]
+      · rename_i hge
+        rcases Nat.lt_trichotomy j k with h | h | h
+        · have := mul_le_of_lt (s := s) h; omega
+        · subst h; simp
+        · have := mul_le_of_lt (s := s) h
+          have h1 : x.testBit (j * s + r - k * s) = false :=
+            Nat.testBit_lt_two_pow (Nat.lt_of_lt_of_le hx (Nat.pow_le_pow_right (by decide) (by omega)))
+          have h2 : ¬ j < k + 1 := by omega
+          simp [h1, h2]
+
+/-- Column `q` of `R`'s rows is row `q` of `C`, for every `q < n` (each entry cut to `n` bits). -/
+def trB (n : Nat) (R C : Tab Nat) : Bool :=
+  Emit.Tab.allB (fun q c => Nat.beq (Nat.land (Nat.shiftRight (pack (n + 1) n R.get n) q) (pack (n + 1) 1 (fun _ => 1) n))
+    (Nat.land ((c % 2 ^ n) * rep n n) (pack (n + 1) 1 (fun _ => 1) n))) C 0 n
+
+theorem tr_spec {n : Nat} {R C : Tab Nat} (h : trB n R C = true) {p q : Nat} (hp : p < n) (hq : q < n) :
+    (R.get p).testBit q = (C.get q).testBit p := by
+  have e := Nat.eq_of_beq_eq_true (Emit.Tab.allB_spec _ C 0 n h q (Nat.zero_le _) hq)
+  have e2 := congrArg (fun x => x.testBit (p * (n + 1))) e
+  simp only [show ∀ a b : Nat, Nat.land a b = a &&& b from fun _ _ => rfl,
+    show ∀ a b : Nat, Nat.shiftRight a b = a >>> b from fun _ _ => rfl] at e2
+  have d : (pack (n + 1) 1 (fun _ => 1) n).testBit (p * (n + 1)) = true := by
+    have := testBit_pack (fun _ => 1) (Nat.succ_pos n) n p 0 (by decide)
+    rw [Nat.add_zero] at this
+    simp [this, hp]
+  have l : (pack (n + 1) n R.get n).testBit (q + p * (n + 1)) = (R.get p).testBit q := by
+    rw [Nat.add_comm q, testBit_pack R.get (Nat.le_succ n) n p q hq]; simp [hp]
+  have r : ((C.get q % 2 ^ n) * rep n n).testBit (p * (n + 1)) = (C.get q).testBit p := by
+    rw [Nat.mul_succ, (mul_rep (Nat.mod_lt _ (Nat.two_pow_pos n)) n).2 p p hp, Nat.testBit_mod_two_pow]; simp [hp]
+  rw [Nat.testBit_and, Nat.testBit_shiftRight, l, d, Bool.and_true, Nat.testBit_and, r, d, Bool.and_true] at e2
+  exact e2
+
+/-- A child's method-table row `e` may set bit `i` where the relation (row `p`, or the column table's
+    row) forbids that order, or a conflict does either way. -/
+def nfMask (p c cc e : Nat) : Nat := Nat.lor (Nat.lor (clr p (Nat.pow 2 e)) c) cc
+
+/-- `nfMask`, or where either way the relation `s` (rows `s`, columns `sc`) holds: a grouping. -/
+def ngMask (p c cc s sc e : Nat) : Nat := Nat.lor (Nat.lor (nfMask p c cc e) s) sc
+
+/-- Row `e` of `h3ok` may set bit `i ≠ e` where `i` precedes `e` and is SBR with it, or a conflict
+    holds either way. -/
+def h3Mask (pc sc a b e : Nat) : Nat := clr (Nat.lor (Nat.lor (Nat.land pc sc) a) b) (Nat.pow 2 e)
+
+theorem nfMask_bit {p c cc e i : Nat} (h : (nfMask p c cc e).testBit i = true) :
+    (i ≠ e ∧ p.testBit i = true) ∨ c.testBit i = true ∨ cc.testBit i = true := by
+  replace h : ((clr p (Nat.pow 2 e) ||| c) ||| cc).testBit i = true := h
+  simp only [Nat.testBit_or, testBit_clr, testBit_pow, Bool.or_eq_true, Bool.and_eq_true,
+    Bool.not_eq_true', decide_eq_false_iff_not] at h
+  rcases h with (⟨h1, h2⟩ | h) | h
+  · exact Or.inl ⟨fun e' => h2 e'.symm, h1⟩
+  · exact Or.inr (Or.inl h)
+  · exact Or.inr (Or.inr h)
+
+theorem h3Mask_bit {pc sc a b e i : Nat} (h : (h3Mask pc sc a b e).testBit i = true) :
+    i ≠ e ∧ ((pc.testBit i = true ∧ sc.testBit i = true) ∨ a.testBit i = true ∨ b.testBit i = true) := by
+  replace h : (clr (((pc &&& sc) ||| a) ||| b) (Nat.pow 2 e)).testBit i = true := h
+  simp only [testBit_clr, Nat.testBit_or, Nat.testBit_and, testBit_pow, Bool.or_eq_true, Bool.and_eq_true,
+    Bool.not_eq_true', decide_eq_false_iff_not] at h
+  exact ⟨fun e' => h.2 e'.symm, or_assoc.mp h.1⟩
+
+theorem ngMask_bit {p c cc s sc e i : Nat} (h : (ngMask p c cc s sc e).testBit i = true) :
+    (nfMask p c cc e).testBit i = true ∨ s.testBit i = true ∨ sc.testBit i = true := by
+  replace h : ((nfMask p c cc e ||| s) ||| sc).testBit i = true := h
+  simp only [Nat.testBit_or, Bool.or_eq_true] at h
+  exact or_assoc.mp h
+
+/-- A table checked by rows against masks: each set bit is in its row's mask. -/
+theorem rowB {T : Tab Nat} {f : Nat → Nat} {n : Nat} (h : Emit.Tab.allB (fun e x => subB x (f e)) T 0 n = true)
+    {e i : Nat} (he : e < n) (hb : (T.get e).testBit i = true) : (f e).testBit i = true :=
+  testBit_of_subB (Emit.Tab.allB_spec _ T 0 n h e (Nat.zero_le _) he) hb
+
+end Transpose
+
 /-! ## Site lists give the footprint and dummy-argument facts -/
 
 section SitesGlue
@@ -2551,6 +2690,11 @@ end Modular
 #print axioms Modular.Scan.Design.ok_of_chain
 #print axioms Modular.Scan.kindOK_of_chk
 #print axioms Modular.Scan.kindOK_of_rows
+#print axioms Modular.Scan.tr_spec
+#print axioms Modular.Scan.nfMask_bit
+#print axioms Modular.Scan.ngMask_bit
+#print axioms Modular.Scan.h3Mask_bit
+#print axioms Modular.Scan.rowB
 #print axioms Modular.Scan.kindOut_chain
 #print axioms Modular.Scan.Design.mm_static_out
 #print axioms Modular.Scan.h4_of_scan

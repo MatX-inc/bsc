@@ -1,7 +1,7 @@
 -- | The modular obligation file of one module (mke2e.py, emit/conventions.md):
 -- the sections in order, the facts' group paths, parts and the summary.
 module Lean.Sched.Emit
-    ( emitFile, Emitted(..), MutantFile(..), emitModule
+    ( emitFile, Emitted(..), Proves(..), emOff, provesText, MutantFile(..), emitModule
     ) where
 
 import Control.Exception (ErrorCall(..), SomeAsyncException, displayException, evaluate, fromException, throwIO, try)
@@ -9,18 +9,18 @@ import Data.Array ((!), listArray)
 import Data.Bits (Bits(popCount))
 import Data.Char (ord, isAlphaNum)
 import Data.List (isPrefixOf, intercalate)
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import System.FilePath (takeBaseName)
 import qualified Data.Foldable as F (Foldable(toList))
 import qualified Data.Map.Strict as M (Map, lookup)
 
 import Lean.Print (runW, w, WS(wsL))
 import Lean.Sched.Bounds (Bounds(bnGatePart))
-import Lean.Sched.Emit.Acyc (acycPlan, assumesOf, emitAcyc, emitTop, emitTopH, AcycPlan(apAgNeed, apNoAcyc, apNN))
+import Lean.Sched.Emit.Acyc (acycPlan, assumesOf, emitAcyc, emitTop, AcycPlan(apAgNeed, apNoAcyc, apNN))
 import Lean.Sched.Emit.Arms (emitArms, emitHyps)
 import Lean.Sched.Emit.Cert (emitCert, emitEAQ, emitLC)
-import Lean.Sched.Emit.Ctx (hierForm, isUncond, kd, step, EC(ecESC, ecNS, ecName, ecM, ecEFacts, ecNR, ecNM, ecNT,
-    ecMuxes, ecNeed, ecEdit, ecDomNote, ecHasUnconf))
+import Lean.Sched.Emit.Ctx (isUncond, kd, step, EC(ecESC, ecNS, ecName, ecM, ecEFacts, ecNR, ecNM, ecNT,
+    ecMuxes, ecNeed, ecEdit, ecDomNote, ecHasUnconf, ecCFacts))
 import Lean.Sched.Emit.Hdr (emitGuards, emitHeader, emitSites, emitUses)
 import Lean.Sched.Emit.Plan (mkPlan)
 import Lean.Sched.Domain (domainNote)
@@ -35,10 +35,30 @@ import Lean.Sched.Py (omSize)
 import Lean.Sched.Run (prepare, Input(inBounds, inTimer, inDesign), Prep(pBL, pSolver, pDV, pSites, pDomain, pDomainWhy))
 import Lean.Sched.Time (phase)
 
--- | The file's parts (path stem suffix and text) and the lines the prototype printed.
-data Emitted = Emitted { emParts :: [(Maybe Int, String)], emLog :: [String], emOff :: Maybe String, emAssume :: [String] }
-  -- ^ emOff: why a parent cannot build on the file (no top, or unconfirmed facts); Nothing on path A;
-  -- emAssume: what the file assumes (Acyc.assumesOf)
+-- | The file's parts (path stem suffix and text), the lines the prototype printed, what it proves and
+-- what it assumes (Acyc.assumesOf).
+data Emitted = Emitted { emParts :: [(Maybe Int, String)], emLog :: [String], emProves :: Proves, emAssume :: [String] }
+
+-- | What a file proves: the facts it states as hypotheses that the solver did not confirm (path B: escape
+-- and caller pairs, then readiness and invariance facts), and why it has no Acyc/top (Nothing: it has).
+data Proves = Proves { pvUnconf :: (Int, Int), pvNoTop :: Maybe String }
+
+-- | What a file proves when it is not top from Hyps alone (Nothing: it is), for the gate row and --check.
+provesText :: Proves -> Maybe String
+provesText (Proves (a, b) noTop) = case (a + b, noTop) of
+    (0, Nothing) -> Nothing
+    (0, Just why) -> Just ("obligation only, no Acyc/top: " ++ why)
+    (_, Nothing) -> Just ("path B: top under " ++ unc)
+    (_, Just why) -> Just ("path B: obligation only, under " ++ unc ++ "; no Acyc/top: " ++ why)
+  where unc = show (a + b) ++ " unconfirmed fact" ++ (if a + b == 1 then "" else "s")
+              ++ " (escape or caller pairs " ++ show a ++ ", readiness or invariance " ++ show b ++ ")"
+
+-- | Why a parent cannot build on the file (no top, or unconfirmed facts); Nothing on path A.
+emOff :: Emitted -> Maybe String
+emOff em = case emProves em of
+    Proves _ (Just _) -> Just "no Acyc/top"
+    Proves (a, b) Nothing | a + b > 0 -> Just "unconfirmed facts"
+    _ -> Nothing
 
 -- | A hardware mutant (--mutants): its kind, what it changes, and its file at a given path.
 data MutantFile = MutantFile { mfKind :: String, mfWhat :: String, mfEmit :: FilePath -> IO (Either String Emitted) }
@@ -95,11 +115,12 @@ utf8Len :: String -> Int
 utf8Len = sum . map (\c -> let o = ord c in if o < 0x80 then 1 else if o < 0x800 then 2 else if o < 0x10000 then 3 else 4)
 
 emitFile :: EC -> Bounds -> FilePath -> Emitted
-emitFile ec bnd out = Emitted files (notes ++ partsMsg ++ [segMsg, wroteMsg]) off (assumesOf ec)
+emitFile ec bnd out = Emitted files (notes ++ partsMsg ++ [segMsg, wroteMsg] ++ [ "file " ++ out ++ ": " ++ t | Just t <- [provesText proves] ])
+                               proves (assumesOf ec)
   where
-    off | apNoAcyc ap = Just "no Acyc/top"
-        | ecHasUnconf ec = Just "unconfirmed facts"
-        | otherwise = Nothing
+    unconfE = length [ () | (_, _, _, _, Nothing, _) <- ecEFacts ec ] + length [ () | (_, _, _, _, _, Nothing, _) <- ecCFacts ec ]
+    unconfF = length (filter (not . fOk) (mFacts m))
+    proves = Proves (if ecHasUnconf ec then (unconfE, unconfF) else (0, 0)) (apNoAcyc ap)
     nS = ecNS ec
     needuc = or [ not (isUncond s) && not (kdAlwaysRdy (kd ec k) p) | k <- [0 .. nS - 1], s <- F.toList (tSites (step ec k)), let (k, _, p) = sPort s ]
     ap = acycPlan ec
@@ -121,9 +142,9 @@ emitFile ec bnd out = Emitted files (notes ++ partsMsg ++ [segMsg, wroteMsg]) of
         emitEAQ ec
         emitCert ec hvr
         w "/-! ## Acyclicity: read lists as filters of allOuts -/\n"
-        if apNoAcyc ap
+        if isJust (apNoAcyc ap)
             then w ("end\nend " ++ ecName ec ++ "\n\n#print axioms " ++ ecName ec ++ ".obl\n")
-            else emitAcyc ec ap >> (if hierForm ec then emitTopH ec else emitTop ec)
+            else emitAcyc ec ap >> emitTop ec
         let (fp, _, _, _) = hy
         return (fp, cn, nseg, segUses)
     ((fpath, cn, nseg, segUses), ws) = runW prog
@@ -145,7 +166,7 @@ emitFile ec bnd out = Emitted files (notes ++ partsMsg ++ [segMsg, wroteMsg]) of
     isWordC c = isAlphaNum c || c == '_'
     depA = listArray (0, length depths - 1) depths
     dep i = depA ! i
-    parts | partBytes == 0 || apNoAcyc ap = [(0, length ls)]
+    parts | partBytes == 0 || isJust (apNoAcyc ap) = [(0, length ls)]
           | otherwise = go 0 0 0
       where go start acc i
               | i >= length ls = [(start, length ls)]

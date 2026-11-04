@@ -1,0 +1,4 @@
+scan segments 1 (at most 4096 uses each)
+wrote GateBug.lean: rules 3, methods 0, children 3, sites 8, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 1 (site pairs 1, unconfirmed 1), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+file GateBug.lean: path B: top under 1 unconfirmed fact (escape or caller pairs 1, readiness or invariance 0)
+check GateBug.lean: path B: top under 1 unconfirmed fact (escape or caller pairs 1, readiness or invariance 0); not a proof of the module

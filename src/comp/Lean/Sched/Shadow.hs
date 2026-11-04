@@ -25,7 +25,7 @@ import qualified Data.Set as S (Set, member, delete, difference, empty, filter, 
 
 import Lean.Sched.Enc (encAnd, encB, encOr, encSatA, mkAssume, newEnc, Assume, EncM)
 import Lean.Sched.Expr (SD(..), canonExpr, aexprE)
-import Lean.Sched.Kinds (cfgTypes)
+import Lean.Sched.Kinds (cfgTypes, regTypes)
 import Lean.Sched.MECheck (meParse, samePairs, suffixGroups, mePairs, cfNames)
 import Lean.Sched.Model (DView(..))
 import Lean.Sched.Py (omLookup, omToList)
@@ -37,13 +37,13 @@ import Lean.Solver (Solver, Verdict(Unknown, Unsat))
 
 -- | (bsc Verilog primitive, port) with a last-caller law proved in LastCaller.lean.
 decided :: S.Set (String, String)
-decided = S.fromList ([ (t, "write") | t <- ["RegN", "RegUN", "RegA", "ConfigRegN", "ConfigRegUN", "ConfigRegA"] ]
+decided = S.fromList ([ (t, "write") | t <- regTypes ++ cfgTypes ]
                       ++ [ (t, "port" ++ show k ++ "__write") | t <- ["CRegN5", "CRegUN5", "CRegA5"], k <- [0 .. 4 :: Int] ]
                       ++ [("RWire", "wset"), ("RWire0", "wset"), ("FIFO2", "clear"), ("Counter", "setF")])
 
 -- | The ones the emitter certifies (its kinds).
 wired :: S.Set (String, String)
-wired = S.filter (\(t, _) -> t `elem` ["RegN", "RegUN", "RegA"] ++ cfgTypes) decided
+wired = S.filter (\(t, _) -> t `elem` regTypes ++ cfgTypes) decided
 
 notIdempotent :: S.Set (String, String)
 notIdempotent = S.fromList [("Counter", "addA"), ("Counter", "addB")]

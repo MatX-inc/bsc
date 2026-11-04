@@ -1,0 +1,18 @@
+package WideOne(sysWideOne64, sysWideOne128, mkWideKid128) where
+
+import Vector
+import Wide
+import Wide64
+
+{-# verilog mkWideKid128 #-}
+{-# properties mkWideKid128 = { alwaysReady } #-}
+mkWideKid128 :: Module (WideIfc 128)
+mkWideKid128 = mkWideKid
+
+{-# verilog sysWideOne64 #-}
+sysWideOne64 :: Module Empty
+sysWideOne64 = mkWideOne mkWideKid64
+
+{-# verilog sysWideOne128 #-}
+sysWideOne128 :: Module Empty
+sysWideOne128 = mkWideOne mkWideKid128

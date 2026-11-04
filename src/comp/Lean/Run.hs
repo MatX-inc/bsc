@@ -3,7 +3,7 @@
 module Lean.Run
     ( LeanConf(..), defaultMemory, defaultTimeout, findLean
     , Verdict(..), verdictWord, verdictCode, cannotRunCode
-    , Result(..), runLean, classify, checkFile
+    , Result(..), runLean, classify, checkFile, readFileUtf8
     , libraryFiles, prepareLibrary
     ) where
 
@@ -132,7 +132,9 @@ classify axioms rc out = case rc of
         | code /= ExitSuccess -> (Failed, "lean exited with " ++ show code)
         | any (isInfixOf "declaration uses `sorry`") ls -> (Failed, "a declaration uses sorry")
         | axioms && null axl -> (Failed, "no #print axioms output")
-        | axioms, (l : _) <- filter (not . standard) axl -> (Failed, "an axiom outside the standard three: " ++ l)
+        | axioms && any null' axl -> (Failed, "a #print axioms list without its closing bracket")
+        | axioms, (a : _) <- [ a | Just as <- axl, a <- as, a `notElem` ["propext", "Classical.choice", "Quot.sound"] ] ->
+            (Failed, "an axiom outside the standard three: " ++ a)
         | otherwise -> (Proved, "")
   where
     ls = lines out
@@ -142,11 +144,27 @@ classify axioms rc out = case rc of
     firstErr = case errs of { (e : _) -> takeWhile (/= '\n') e; [] -> "" }
     -- decide's false proposition; bv_decide's counterexample (a possibly spurious one included)
     cex e = "proved that the proposition" `isInfixOf` e || ("The prover found a" `isInfixOf` e && "counterexample" `isInfixOf` e)
-    axl = [ l | l <- ls, "' depends on axioms: [" `isInfixOf` l || "' does not depend on any axioms" `isInfixOf` l ]
-    standard l = case break (== '[') l of
-        (_, '[' : r) -> all (`elem` ["propext", "Classical.choice", "Quot.sound"]) (items (takeWhile (/= ']') r))
-        _ -> True
+    axl = axiomLists ls
+    null' = maybe True (const False)
+
+-- | Each @#print axioms@ list's items, read to its closing bracket (Lean wraps a long list, an axiom
+-- per line); Nothing for a list the output ends inside.
+axiomLists :: [String] -> [Maybe [String]]
+axiomLists [] = []
+axiomLists (l : rest)
+    | "' does not depend on any axioms" `isInfixOf` l = Just [] : axiomLists rest
+    | Just r <- after "' depends on axioms: [" l = close r rest
+    | otherwise = axiomLists rest
+  where
+    close acc more = case break (== ']') acc of
+        (body, _ : _) -> Just (items body) : axiomLists more
+        _ -> case more of
+            (m : ms) -> close (acc ++ " " ++ m) ms
+            [] -> [Nothing]
     items s = filter (not . null) (map (filter (not . isSpace)) (splitOn ',' s))
+    after pat s = case [ drop (length pat) t | t <- tails' s, take (length pat) t == pat ] of
+        (t : _) -> Just t
+        [] -> Nothing
 
 tails' :: [a] -> [[a]]
 tails' [] = []
@@ -164,13 +182,13 @@ checkFile c axioms file olean logf = do
     absF <- makeAbsolute file
     let out = maybe [] (\o -> ["-o", o <.> "olean", "-i", o <.> "ilean"]) olean
     (rc, wall) <- runLean c (takeDirectory absF) (out ++ [absF]) logf
-    txt <- readFile' logf
+    txt <- readFileUtf8 logf
     let (v, why) = classify axioms rc txt
     return (Result v why wall)
 
--- | A log as UTF-8 (lenient), read strictly.
-readFile' :: FilePath -> IO String
-readFile' f = do
+-- | A file as UTF-8 (lenient), read strictly.
+readFileUtf8 :: FilePath -> IO String
+readFileUtf8 f = do
     b <- BS.readFile f
     let s = T.unpack (TE.decodeUtf8With TEE.lenientDecode b)
     length s `seq` return s
@@ -216,7 +234,7 @@ prepareLibrary c dir ms cache = do
                     go (m : rest) = do
                         let logf = tmp </> m <.> "log"
                         res <- checkFile c' False (absDir </> m <.> "lean") (Just (tmp </> m)) logf
-                        txt <- readFile' logf
+                        txt <- readFileUtf8 logf
                         if rVerdict res /= Proved || "sorryAx" `isInfixOf` txt
                             then return (Just ("the Lean library's " ++ m ++ ".lean did not build: " ++ verdictWord (rVerdict res)
                                                ++ (if null (rReason res) then "" else " (" ++ rReason res ++ ")") ++ "; see " ++ logf))

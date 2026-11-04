@@ -32,7 +32,7 @@ phaseNote :: Timer -> String -> IO ()
 phaseNote (Timer on _) s = when on $ hPutStrLn stderr ("schedlean: " ++ s)
 
 extractionPhases :: [String]
-extractionPhases = ["read", "astate", "extract", "bsc-facts", "hier", "hier-read"]
+extractionPhases = ["read", "astate", "extract", "bsc-facts", "hier", "hier-read", "hier-astate", "hier-extract", "hier-bsc-facts"]
 
 -- | Extraction is read through bsc-facts and the children's reading (hier); emission is everything after.
 reportTotals :: Timer -> IO ()

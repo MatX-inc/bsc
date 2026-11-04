@@ -728,67 +728,105 @@ nfNoMet = "  nfI m := m.elim\n\
 \  h3ok m := m.elim\n\
 \  exM _ _ m := m.elim\n"
 
--- | An exported module's method tables, checked against its annotation for every argument (§3.1).
+-- | An exported module's method tables, checked against its annotation by rows (§3.1).
 nfXMet :: String
-nfXMet = "  nfI m1 m2 h x y := notFollow_of m1 m2 (tab_spec nfIT nfB nfOK_I m1 m2 h) x y\n\
-\  nfO m1 m2 h x y := notFollow_of m1 m2 (tab_spec nfOT (fun a b => nfB b a) nfOK_O m2 m1 h) x y\n\
-\  ngI m1 m2 h x y := notGroup_of m1 m2 (tab_spec ngIT ngB ngOK_I m1 m2 h) x y\n\
-\  ngO m1 m2 h x y := notGroup_of m1 m2 (tab_spec ngOT (fun a b => ngB b a) ngOK_O m2 m1 h) x y\n\
-\  h3ok m m' h := h3_of m m' (tab_spec h3okT h3B h3OK m m' h)\n\
+nfXMet = "  nfI m1 m2 h x y := nfI_of m1 m2 h x y\n\
+\  nfO m1 m2 h x y := nfO_of m1 m2 h x y\n\
+\  ngI m1 m2 h x y := ngI_of m1 m2 h x y\n\
+\  ngO m1 m2 h x y := ngO_of m1 m2 h x y\n\
+\  h3ok m m' h := h3_of m m' h\n\
 \  exM _ _ m1 m2 _ h := by simp [D, Tab.get] at h\n"
 
 nfXText :: String
-nfXText = "/-- Where the scan's method tables set a bit, the exported annotation forbids that order for every\n\
-\    argument (`nfB`), or that grouping (`ngB`), or allows a method to hit before (`h3B`). -/\n\
-\def nfB (a b : Nat) : Bool :=\n\
-\  if a = b then xAnn.conf (mM a) (mM a) else xAnn.prec (mM b) (mM a) || xAnn.conf (mM a) (mM b) || xAnn.conf (mM b) (mM a)\n\
-\def ngB (a b : Nat) : Bool := nfB a b || xAnn.sbr (mM a) (mM b) || xAnn.sbr (mM b) (mM a)\n\
-\def h3B (a b : Nat) : Bool :=\n\
-\  !Nat.beq a b && ((xAnn.prec (mM a) (mM b) && xAnn.sbr (mM a) (mM b)) || xAnn.conf (mM a) (mM b) || xAnn.conf (mM b) (mM a))\n\
-\theorem tab_spec (T : Tab Nat) (f : Nat → Nat → Bool)\n\
-\    (hT : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || f i e)) T 0 nM = true)\n\
-\    (a b : Fin nM) (h : (T.get b.val).testBit a.val = true) : f a.val b.val = true := by\n\
-\  have h1 := List.all_eq_true.mp (Tab.allB_spec _ T 0 nM hT b.val (Nat.zero_le _) b.isLt) a.val (List.mem_range.mpr a.isLt)\n\
-\  rw [h] at h1\n\
-\  simpa using h1\n\
-\theorem notFollow_of (m1 m2 : Fin nM) (h : nfB m1.val m2.val = true) (x y : V) : ¬ X.ann.Follow (m1, x) (m2, y) := by\n\
-\  intro hf\n\
-\  obtain ⟨h1, h2, h3, -⟩ := hf\n\
-\  have h2' : xAnn.conf m1 m2 = false := h2\n\
-\  have h3' : xAnn.conf m2 m1 = false := h3\n\
-\  unfold nfB at h\n\
-\  simp only [mM_val] at h\n\
-\  by_cases e : m1 = m2\n\
-\  · subst e\n\
-\    rw [if_pos rfl, h2'] at h\n\
-\    exact absurd h (by decide)\n\
-\  · have h1' : xAnn.prec m2 m1 = false := h1 e\n\
-\    rw [if_neg (fun e' => e (Fin.ext e')), h1', h2', h3'] at h\n\
-\    exact absurd h (by decide)\n\
-\theorem notGroup_of (m1 m2 : Fin nM) (h : ngB m1.val m2.val = true) (x y : V) : ¬ X.ann.Group (m1, x) (m2, y) := by\n\
-\  intro hg\n\
-\  obtain ⟨hf, h4, h5⟩ := hg\n\
-\  unfold ngB at h\n\
-\  simp only [Bool.or_eq_true, mM_val] at h\n\
-\  rcases h with (h | h) | h\n\
-\  · exact notFollow_of m1 m2 h x y hf\n\
-\  · exact Bool.noConfusion ((show xAnn.sbr m1 m2 = false from h4).symm.trans h)\n\
-\  · exact Bool.noConfusion ((show xAnn.sbr m2 m1 = false from h5).symm.trans h)\n\
-\theorem h3_of (m m' : Fin nM) (h : h3B m.val m'.val = true) : m ≠ m' ∧\n\
+nfXText = "/-- The exported annotation's column tables are its row tables' transpose (`trB`, by rows), so the\n\
+\    scan's method tables are checked against it by rows (cost review r9b-3 M1). -/\n\
+\theorem precTr : trB nM xAnnPrecT xAnnPrecCT = true := by decide +kernel\n\
+\theorem sbrTr : trB nM xAnnSbrT xAnnSbrCT = true := by decide +kernel\n\
+\theorem confTr : trB nM xAnnConfT xAnnConfCT = true := by decide +kernel\n\
+\theorem xprec (p q : Fin nM) : xAnn.prec p q = (xAnnPrecT.get p.val).testBit q.val := by\n\
+\  show ((xAnnPrecT.get p.val).testBit q.val && (xAnnPrecCT.get q.val).testBit p.val) = _\n\
+\  rw [← tr_spec precTr p.isLt q.isLt, Bool.and_self]\n\
+\theorem xsbr (p q : Fin nM) : xAnn.sbr p q = (xAnnSbrT.get p.val).testBit q.val := by\n\
+\  show ((xAnnSbrT.get p.val).testBit q.val && (xAnnSbrCT.get q.val).testBit p.val) = _\n\
+\  rw [← tr_spec sbrTr p.isLt q.isLt, Bool.and_self]\n\
+\theorem xconf (p q : Fin nM) : xAnn.conf p q = (xAnnConfT.get p.val).testBit q.val := by\n\
+\  show ((xAnnConfT.get p.val).testBit q.val && (xAnnConfCT.get q.val).testBit p.val) = _\n\
+\  rw [← tr_spec confTr p.isLt q.isLt, Bool.and_self]\n\
+\theorem xprecC (p q : Fin nM) : xAnn.prec p q = (xAnnPrecCT.get q.val).testBit p.val := by\n\
+\  rw [xprec, tr_spec precTr p.isLt q.isLt]\n\
+\theorem xsbrC (p q : Fin nM) : xAnn.sbr p q = (xAnnSbrCT.get q.val).testBit p.val := by\n\
+\  rw [xsbr, tr_spec sbrTr p.isLt q.isLt]\n\
+\theorem xconfC (p q : Fin nM) : xAnn.conf p q = (xAnnConfCT.get q.val).testBit p.val := by\n\
+\  rw [xconf, tr_spec confTr p.isLt q.isLt]\n\
+\/-- Where the scan's method tables set a bit, the exported annotation forbids that order for every\n\
+\    argument (`nf`), or that grouping (`ng`), or lets a method hit before (`h3`): each row in its mask. -/\n\
+\theorem nfRowsI : Tab.allB (fun e x => subB x (nfMask (xAnnPrecT.get e) (xAnnConfT.get e) (xAnnConfCT.get e) e)) nfIT 0 nM = true := by\n\
+\  decide +kernel\n\
+\theorem nfRowsO : Tab.allB (fun e x => subB x (nfMask (xAnnPrecCT.get e) (xAnnConfT.get e) (xAnnConfCT.get e) e)) nfOT 0 nM = true := by\n\
+\  decide +kernel\n\
+\theorem ngRowsI : Tab.allB (fun e x => subB x (ngMask (xAnnPrecT.get e) (xAnnConfT.get e) (xAnnConfCT.get e) (xAnnSbrT.get e)\n\
+\    (xAnnSbrCT.get e) e)) ngIT 0 nM = true := by\n\
+\  decide +kernel\n\
+\theorem ngRowsO : Tab.allB (fun e x => subB x (ngMask (xAnnPrecCT.get e) (xAnnConfT.get e) (xAnnConfCT.get e) (xAnnSbrT.get e)\n\
+\    (xAnnSbrCT.get e) e)) ngOT 0 nM = true := by\n\
+\  decide +kernel\n\
+\theorem h3Rows : Tab.allB (fun e x => subB x (h3Mask (xAnnPrecCT.get e) (xAnnSbrCT.get e) (xAnnConfCT.get e) (xAnnConfT.get e) e))\n\
+\    h3okT 0 nM = true := by\n\
+\  decide +kernel\n\
+\theorem nfI_of (m1 m2 : Fin nM) (h : (nfIT.get m2.val).testBit m1.val = true) (x y : V) : ¬ X.ann.Follow (m1, x) (m2, y) := by\n\
+\  rintro ⟨h1, h2, h3, -⟩\n\
+\  rcases nfMask_bit (rowB nfRowsI m2.isLt h) with ⟨hne, hb⟩ | hb | hb\n\
+\  · have e : xAnn.prec m2 m1 = false := h1 (fun e => hne (congrArg Fin.val e))\n\
+\    exact Bool.noConfusion (e.symm.trans ((xprec m2 m1).trans hb))\n\
+\  · have e : xAnn.conf m2 m1 = false := h3\n\
+\    exact Bool.noConfusion (e.symm.trans ((xconf m2 m1).trans hb))\n\
+\  · have e : xAnn.conf m1 m2 = false := h2\n\
+\    exact Bool.noConfusion (e.symm.trans ((xconfC m1 m2).trans hb))\n\
+\theorem nfO_of (m1 m2 : Fin nM) (h : (nfOT.get m1.val).testBit m2.val = true) (x y : V) : ¬ X.ann.Follow (m1, x) (m2, y) := by\n\
+\  rintro ⟨h1, h2, h3, -⟩\n\
+\  rcases nfMask_bit (rowB nfRowsO m1.isLt h) with ⟨hne, hb⟩ | hb | hb\n\
+\  · have e : xAnn.prec m2 m1 = false := h1 (fun e => hne (congrArg Fin.val e).symm)\n\
+\    exact Bool.noConfusion (e.symm.trans ((xprecC m2 m1).trans hb))\n\
+\  · have e : xAnn.conf m1 m2 = false := h2\n\
+\    exact Bool.noConfusion (e.symm.trans ((xconf m1 m2).trans hb))\n\
+\  · have e : xAnn.conf m2 m1 = false := h3\n\
+\    exact Bool.noConfusion (e.symm.trans ((xconfC m2 m1).trans hb))\n\
+\theorem ngI_of (m1 m2 : Fin nM) (h : (ngIT.get m2.val).testBit m1.val = true) (x y : V) : ¬ X.ann.Group (m1, x) (m2, y) := by\n\
+\  rintro ⟨⟨h1, h2, h3, -⟩, h4, h5⟩\n\
+\  rcases ngMask_bit (rowB ngRowsI m2.isLt h) with hb | hb | hb\n\
+\  · rcases nfMask_bit hb with ⟨hne, hb⟩ | hb | hb\n\
+\    · have e : xAnn.prec m2 m1 = false := h1 (fun e => hne (congrArg Fin.val e))\n\
+\      exact Bool.noConfusion (e.symm.trans ((xprec m2 m1).trans hb))\n\
+\    · have e : xAnn.conf m2 m1 = false := h3\n\
+\      exact Bool.noConfusion (e.symm.trans ((xconf m2 m1).trans hb))\n\
+\    · have e : xAnn.conf m1 m2 = false := h2\n\
+\      exact Bool.noConfusion (e.symm.trans ((xconfC m1 m2).trans hb))\n\
+\  · have e : xAnn.sbr m2 m1 = false := h5\n\
+\    exact Bool.noConfusion (e.symm.trans ((xsbr m2 m1).trans hb))\n\
+\  · have e : xAnn.sbr m1 m2 = false := h4\n\
+\    exact Bool.noConfusion (e.symm.trans ((xsbrC m1 m2).trans hb))\n\
+\theorem ngO_of (m1 m2 : Fin nM) (h : (ngOT.get m1.val).testBit m2.val = true) (x y : V) : ¬ X.ann.Group (m1, x) (m2, y) := by\n\
+\  rintro ⟨⟨h1, h2, h3, -⟩, h4, h5⟩\n\
+\  rcases ngMask_bit (rowB ngRowsO m1.isLt h) with hb | hb | hb\n\
+\  · rcases nfMask_bit hb with ⟨hne, hb⟩ | hb | hb\n\
+\    · have e : xAnn.prec m2 m1 = false := h1 (fun e => hne (congrArg Fin.val e).symm)\n\
+\      exact Bool.noConfusion (e.symm.trans ((xprecC m2 m1).trans hb))\n\
+\    · have e : xAnn.conf m1 m2 = false := h2\n\
+\      exact Bool.noConfusion (e.symm.trans ((xconf m1 m2).trans hb))\n\
+\    · have e : xAnn.conf m2 m1 = false := h3\n\
+\      exact Bool.noConfusion (e.symm.trans ((xconfC m2 m1).trans hb))\n\
+\  · have e : xAnn.sbr m1 m2 = false := h4\n\
+\    exact Bool.noConfusion (e.symm.trans ((xsbr m1 m2).trans hb))\n\
+\  · have e : xAnn.sbr m2 m1 = false := h5\n\
+\    exact Bool.noConfusion (e.symm.trans ((xsbrC m2 m1).trans hb))\n\
+\theorem h3_of (m m' : Fin nM) (h : (h3okT.get m'.val).testBit m.val = true) : m ≠ m' ∧\n\
 \    ((X.ann.prec m m' = true ∧ X.ann.sbr m m' = true) ∨ X.ann.conf m m' = true ∨ X.ann.conf m' m = true) := by\n\
-\  unfold h3B at h\n\
-\  simp only [mM_val, Bool.and_eq_true, Bool.or_eq_true] at h\n\
-\  refine ⟨fun e => ?_, ?_⟩\n\
-\  · subst e; simp at h\n\
-\  · rcases h.2 with (h2 | h2) | h2\n\
-\    · exact Or.inl h2\n\
-\    · exact Or.inr (Or.inl h2)\n\
-\    · exact Or.inr (Or.inr h2)\n\
-\theorem nfOK_I : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || nfB i e)) nfIT 0 nM = true := by decide +kernel\n\
-\theorem nfOK_O : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || nfB e i)) nfOT 0 nM = true := by decide +kernel\n\
-\theorem ngOK_I : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || ngB i e)) ngIT 0 nM = true := by decide +kernel\n\
-\theorem ngOK_O : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || ngB e i)) ngOT 0 nM = true := by decide +kernel\n\
-\theorem h3OK : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || h3B i e)) h3okT 0 nM = true := by decide +kernel\n"
+\  obtain ⟨hne, hb⟩ := h3Mask_bit (rowB h3Rows m'.isLt h)\n\
+\  refine ⟨fun e => hne (congrArg Fin.val e), ?_⟩\n\
+\  rcases hb with ⟨hp, hs⟩ | hb | hb\n\
+\  · exact Or.inl ⟨(xprecC m m').trans hp, (xsbrC m m').trans hs⟩\n\
+\  · exact Or.inr (Or.inl ((xconfC m m').trans hb))\n\
+\  · exact Or.inr (Or.inr ((xconf m' m).trans hb))\n"
 
 -- | nfText after its method-table lemmas (the chain facts every module with methods states).
 nfRest :: String

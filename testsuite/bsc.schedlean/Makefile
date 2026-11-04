@@ -10,6 +10,7 @@ DONTKEEPFILES = MethTask.lean SysMeJoin.lean ConflictFree.lean MethArg.lean RdyR
 	sysWide64.alone.log sysWide256.alone.log alone SysAE.lean MkAccAE.lean SysChain*.lean MkA*.lean MkB*.lean \
 	sysChain32.emit.log sysChain128.emit.log schedlean-cache *.olean.d \
 	GatedMix.lean RegFileMeth.lean ConflictFree3.lean FanIn.lean SysHierSf.lean MkSfKid.lean sysWide32.lean.log \
-	sysWide64.lean.log
+	sysWide64.lean.log GateBug.lean OblOnly.lean Fam.lean AxWrap.lean AxStd.lean AxOpen.lean Slow.lean DefErr.lean fakelib \
+	MkWideKid*.lean WO64.lean WO128.lean sysWideOne64.lean.log sysWideOne128.lean.log
 
 include $(CONFDIR)/clean.mk

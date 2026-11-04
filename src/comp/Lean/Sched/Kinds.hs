@@ -1,7 +1,7 @@
 -- | Child kinds as the modular file models them (model.py): the library
 -- primitives with Lean models, the assumed leaves, and the gate's generic kinds.
 module Lean.Sched.Kinds
-    ( PM(..), pmRepr, KindDef(..), kdCode, kdFx, Sched, schedMap, schedRel, ofSched, makeKinds, kindOrder, kindOf, cfgTypes
+    ( PM(..), pmRepr, KindDef(..), kdCode, kdFx, Sched, schedMap, schedRel, ofSched, makeKinds, kindOrder, kindOf, regTypes, cfgTypes
     , genericKind, codedKind, schedCodes, ctrSched, noValueTasks, tasksKind, parseSched, schedNames, libSets, ifcTypes
     ) where
 
@@ -184,14 +184,16 @@ kindOrder :: [String]
 kindOrder = ["reg", "cfg", "fifo", "f2", "sf", "rf", "rwS", "rwC", "rw0S", "rw0C", "tasks"]
 
 -- | ConfigReg's Verilog modules: one Lean model (outside reset ConfigRegA behaves as ConfigRegN).
-cfgTypes :: [String]
+-- | bsc's register and ConfigReg primitives (Verilog modules), the kinds reg and cfg.
+regTypes, cfgTypes :: [String]
+regTypes = ["RegN", "RegUN", "RegA"]
 cfgTypes = ["ConfigRegN", "ConfigRegUN", "ConfigRegA"]
 
 -- | model.kind_of: the library primitive a child's Verilog module is (RegA, ConfigRegA: their
 -- synchronous models, outside reset; FIFOs select async reset by a Verilog define, not by name).
 kindOf :: String -> String -> Either String String
 kindOf typ ss
-    | typ `elem` ["RegN", "RegUN", "RegA"] = Right "reg"
+    | typ `elem` regTypes = Right "reg"
     | typ `elem` cfgTypes = Right "cfg"
     | typ == "FIFOL1" = Right "fifo"
     | typ == "FIFO2" = Right "f2"

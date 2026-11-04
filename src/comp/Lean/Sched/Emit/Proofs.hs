@@ -6,13 +6,13 @@ module Lean.Sched.Emit.Proofs
 
 import Control.Monad (forM_, when)
 import Data.Array ((!))
-import Data.List (elemIndex, intercalate)
+import Data.List (elemIndex)
 import Data.Maybe (fromMaybe)
 import qualified Data.Foldable as F (Foldable(toList))
 import qualified Data.Map.Strict as M ((!))
 import qualified Data.Set as S (Set, empty, fromList, singleton, toAscList, toList, union)
 
-import Lean.Print (allBThm, allL, andc, andget, cut, fmt, stab, stabproof, tabOr, tabproof, tupcong, w, W)
+import Lean.Print (allBThm, andc, andget, cut, fmt, stab, stabproof, tab, tabOr, tabproof, tabproofI, tupcong, w, W)
 import Lean.Sched.Emit.Ctx (argVal, condHw, condVal, evt, ihelper, isCond, isUncond, kd, lportOf, mxKind,
     ocread, site, sitePort, step, svHw, val, vctx, yof, EC(ecMet, ecM, ecKinds, ecNM, ecHyp, ecHya, ecNS, ecNR,
     ecRDC, ecWXM, ecExport), VCtx(cX, VCtx), exported)
@@ -318,14 +318,16 @@ emitRY ec needuc = do
 -- and its reads always ready (by computation), so `Avail` needs no RDY (design.md §3.1).
 cfArText :: EC -> String
 cfArText ec =
-    let ars = [ i | (i, x) <- zip [0 :: Int ..] (maybe [] exMeths (ecExport ec)), xmAR x ]
-        lst = "[" ++ intercalate ", " (map show ars) ++ "]"
-    in concat [ fmt "theorem cf_ar_%d (ops : Ops V) (E : EqC V) (oc : OC V) : CF ops E oc (nR + %d) = true := by\n  unfold CF RD; rfl\n" [show i, show i] | i <- ars ]
-       ++ fmt "theorem arL_ok : ∀ m : Fin nM, xAnn.alwaysRdy m = true → m.val ∈ (%s : List Nat) := by decide\n\
-\/-- An always-ready method can fire in every cycle. -/\n\
+    let xs = zip [0 :: Int ..] (maybe [] exMeths (ecExport ec))
+    in concat [ fmt "theorem cf_ar_%d (ops : Ops V) (E : EqC V) (oc : OC V) : CF ops E oc (nR + %d) = true := by\n  unfold CF RD; rfl\n" [show i, show i]
+              | (i, x) <- xs, xmAR x ]
+       ++ "def arT : Tab Unit :=\n  " ++ tab (map (const "()") xs) ++ "\n\
+\/-- An always-ready method can fire in every cycle: a balanced tree of proofs shaped as `arT`, one per method\n\
+\    (cost review r9b-3; a decided membership in the list of them grew faster than the methods). -/\n\
 \theorem cf_ar (ops : Ops V) (E : EqC V) (oc : OC V) (m : Fin nM) (h : xAnn.alwaysRdy m = true) : CF ops E oc (nR + m.val) = true :=\n\
-\  AllL.mem (P := fun i => CF ops E oc (nR + i) = true) (l := %s) %s m.val (arL_ok m h)\n"
-              [lst, lst, allL [ "cf_ar_" ++ show i ++ " ops E oc" | i <- ars ]]
+\  Tab.finAll (Q := fun m : Fin nM => xAnn.alwaysRdy m = true → CF ops E oc (nR + m.val) = true) mM mM_val arT\n    ("
+       ++ tabproofI "    " [ if xmAR x then "fun _ => cf_ar_" ++ show i ++ " ops E oc" else "fun h => absurd h (by decide)" | (i, x) <- xs ]
+       ++ ") m h\n"
 
 emitChecks :: EC -> W ()
 emitChecks ec = do

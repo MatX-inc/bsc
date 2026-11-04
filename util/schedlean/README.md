@@ -50,8 +50,10 @@ Options:
   (design.md §11): the `GATE` record (scan, escapes and their facts with how each was confirmed,
   last-caller ports, bounds, generic leaves, assertions relied on), a `counts` row (largest step,
   port users, run-time check groups), the shadow classes, and one summary row: design, mode, `A` or
-  `flat`, whether the emitter writes a file (a dry run in memory), and the reasons. A module with
-  gated clocks or several resets also gets a `domain` line (its clocks, gates and resets). A module
+  `flat`, whether the emitter writes a file (a dry run in memory) and, when the file's `top` does not
+  hold from `Hyps` alone, what it proves (`(file: obligation only, no Acyc/top: WHY)`, or `(file: path B:
+  top under N unconfirmed facts ...)`), and the reasons. A module with several clocks (gated or not)
+  or several resets also gets a `domain` line (its clocks, gates and resets). A module
   of several clock domains gets its own verdict, `not checked: multi-domain`, neither `A` nor `flat`
   (a `GATE` record with the verdict and the summary row with its domains; exit status 0); see
   *Clocks and resets*.
@@ -63,10 +65,16 @@ Options:
   one), `--first-rules N` keeps the first N steps (a partial theorem), `--no-task-agreement` leaves
   out task agreement (a weaker theorem).
 - `--check` checks the file written in Lean (the parts first, each compiled for the next) and prints
-  `check FILE: VERDICT`: `proved` (Lean exits 0, no error, no `sorry`, and every `#print axioms` lists
-  only `propext`, `Classical.choice`, `Quot.sound`), `counterexample` (`decide` proves a proposition
-  false, or `bv_decide` gives an assignment), `vacuous` (a `--flat` file's consistency check fails),
-  `timeout` or `error`, the reason and the log (`<stem>.check.log`). Works on `--flat` files too.
+  `check FILE: VERDICT`: `proved` (Lean exits 0, no error, no `sorry`, every `#print axioms` list, read
+  to its closing bracket however Lean wraps it, holds only `propext`, `Classical.choice`, `Quot.sound`,
+  and the file's `top` takes `Hyps` alone), `counterexample` (`decide` proves a proposition false, or
+  `bv_decide` gives an assignment), `vacuous` (a `--flat` file's consistency check fails), `timeout` or
+  `error`, the reason and the log (`<stem>.check.log`). A file that Lean proves but that is no proof of
+  the module gets its own verdict: `path B: top under N unconfirmed facts (...)` when its theorems take
+  facts the solver did not confirm as hypotheses (`Unconfirmed`; such a fact may be false, as in bsc's
+  gated-clock lost-read bug, `testsuite/bsc.schedlean/GateBug.bs`), and `obligation only, no Acyc/top:
+  WHY` when it has `obl` but no `top` (today: a method drives a path input, which `Acyc` cannot state
+  yet). Emission prints the same `file FILE: ...` line. Works on `--flat` files too.
 - `--mutants N` checks the modular file, then N mutants of its hardware, each of which must fail:
   an enable dropped or forced on, an argument under a fresh operator, two mux members' arguments
   exchanged, a guard reading another port, two task statements of steps in a forced order numbered the
@@ -75,11 +83,15 @@ Options:
   call in the hardware, while the check still reads the condition). Only mutants whose obligation
   is false are made (a step that can fire, a call that can be made, two steps that can fire together
   in a forced order), so a mutant whose file checks is a gap in the theorem. Kinds take turns and each
-  kind's candidates are spread over the design; the first N are the same for any larger N. A killed
-  mutant's files are removed, a missed or timed-out one's kept as `<stem>_mut<i>.lean`
-  (`--keep-mutants` keeps them all). A mutant the emitter refuses to write (only a CF-order one can
-  be) is reported `not written` and counted apart, not as killed: there is no Lean evidence for it.
-  `util/schedlean/mutate.py` mutates `--flat` files.
+  kind's candidates are spread over the design; the first N are the same for any larger N. A mutant
+  counts as killed only when Lean's first error is in a `theorem`; one failing in a definition (the
+  edit broke the rendering, not the proof) is reported `killed (definition error, ...)` and counted
+  apart. A killed mutant's files are removed, a missed, timed-out or definition-error one's kept as
+  `<stem>_mut<i>.lean` (`--keep-mutants` keeps them all). A mutant the emitter refuses to write (only
+  a CF-order one can be) is reported `not written` and counted apart, not as killed: there is no Lean
+  evidence for it. Mutants of a path-B file are weak evidence (under a false `Unconfirmed` fact a
+  mutant may prove too), and its mutants line says so. `util/schedlean/mutate.py` mutates `--flat`
+  files.
 - `--lean PATH` (else `$LEAN`, else `lean` on `PATH`), `--lean-timeout SECONDS` (default 1800);
   every Lean run is `-j1 -DElab.async=false` under a 24 GiB address-space cap (`prlimit`, else
   `ulimit -v`). `--lean-lib DIR` holds the library (`Modular`, `EmitLemmas`, `Scan`, `LastCaller`,
@@ -88,10 +100,13 @@ Options:
   (`make install-utils` installs the sources there), else the checkout's `theory/modular`.
 - `-p DIRS`/`--search-path DIRS` (colon-separated, may repeat): where synthesized children's `.ba`
   files are, after the parent's directory; see *Synthesized children*.
-- Exit status: 0 written (and proved, every mutant killed); 1 the emitter stops; 2 usage; 3
-  counterexample; 4 vacuous; 5 timeout (also a mutant's); 6 any other Lean error; 7 Lean could not
-  run (not found, or the library did not build); 8 a mutant's file checks; 9 a mutant's file is not
-  written (the emitter stops on it).
+- Exit status: 0 written (and proved from `Hyps` alone, every mutant killed); 1 the emitter stops; 2
+  usage; 3 counterexample; 4 vacuous; 5 timeout (also a mutant's); 6 any other Lean error, a `sorry`,
+  or an axiom outside the standard three; 7 Lean could not run (not found, or the library did not
+  build); 8 a mutant's file checks; 9 a mutant's file is not written (the emitter stops on it), or
+  fails in a definition; 10 path B (the file proves under unconfirmed facts); 11 obligation only (no
+  Acyc/top). A hierarchy's code is its first failure's, else its first path-B or obligation-only
+  file's.
 
 Library children are told apart from user imports through the installation: schedlean reads
 `$BLUESPECDIR` (set by the installed wrapper), else the bsc directory the `.ba` records.
@@ -111,9 +126,11 @@ The modular proof checks a module of **one clock domain** (bsc's clock domains a
   opaque operator of its other reads, and the theorem holds for every `ops`, so for the gate's value
   in each cycle. The emitter stops, and the gate fails, with a named reason when a gate is not an
   input (a gate a child drives, such as `mkGatedClock`'s, has no Lean model yet), when a child's
-  Verilog takes a gate as a port, or when a call may be enabled with its gate off. That a gated clock
-  shares the default clock's edges is the `clock_family` attribute, a user assertion schedlean does
-  not check (a trust point, named in the top theorem's docstring; see *What is trusted*).
+  Verilog takes a gate as a port, or when a call may be enabled with its gate off.
+- **Several clocks of the family**, gated or not: that they share one oscillator's edges is the
+  `clock_family` attribute (or a user BVI import's `same_family`), a user assertion schedlean does not
+  check. It is a trust point, named in the file's first comment and the top theorem's docstring, and
+  `--gate` prints the `domain` line with the clocks; see *What is trusted*.
 - **Several resets**: the theorem covers the cycles **outside reset**, with every reset deasserted;
   the file's first comment and the top theorem's docstring say so. A module of one reset is covered
   the same way (the library models have no reset), and its file is unchanged. Async-reset primitives (`RegA`, `ConfigRegA`; FIFOs choose async reset by a Verilog define,
@@ -132,8 +149,10 @@ beside the top file, each child's file imported by its parents. The instance tre
 `--check` checked, with its mutants) before the next is read, so a run holds one module at a time.
 `--gate` prints each module's record and rows, children first, then a `hierarchy` row giving each
 child instance its kind and place; `--check` checks the files in order (each child's compiled file on
-its parents' path), stopping at the first that does not prove, and `--mutants N` mutates each module
-once it proves, each mutant checked against the real children.
+its parents' path), stopping at the first that does not prove (a path-B or obligation-only child does
+not stop it: its parents take it as an assumed leaf), and `--mutants N` mutates each module once it
+proves, each mutant checked against the real children. Each child's `.ba` is decoded twice: once for
+the instance tree, and again in full at its turn.
 
 A child **on path A** enters its parent through its own file's `built` theorem (Lean's `Built.node`):
 its own solver verdicts, operators and assumed leaves become fields of the parent's `Subs` record, a
@@ -456,9 +475,11 @@ saying where it comes from. A file has only the structures it needs.
   confirmed facts are used.
 * `Assertions`: the user's `mutually_exclusive` and `conflict_free`
   assertions, and bsc's other run-time checks; bsc reports at simulation
-  time if one fails. A gated clock's `clock_family` attribute (it shares
-  the default clock's edges) is a user assertion too, checked by nothing;
-  the modular file names it in its top theorem's docstring.
+  time if one fails. The `clock_family` attribute of a module with several
+  clocks, gated or not (they share one oscillator's edges), and a user BVI
+  import's `same_family` are user assertions too, checked by nothing; the
+  modular file names them in its first comment and its top theorem's
+  docstring.
 * `Congruence`: functional consistency. These facts hold by construction;
   they are hypotheses only to keep the uninterpreted functions out of the
   SAT problem. A read the annotations rule out is tied to the hardware's

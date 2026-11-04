@@ -1,0 +1,6 @@
+GATE {"name": "sysUar", "scan": "ok", "slots": 4, "codes": 1, "seg_uses": 2, "mod_facts": 0, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts sysUar                       3      5     0      2      2      1      1     1     0     1
+unrealized 0
+domain clocks CLK_gclk(gate CLK_GATE_gclk) CLK; resets RST_N
+shadow sysUar ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+sysUar                   default  flat  emitter no  shadow ports [-] lc callers max 0 slots 4 codes 1 esc 0 facts 0 (-) pairwise 0 seg_uses 2 mod_facts 0 | the call of g.write in set (clock CLK_gclk) may be enabled with the gate CLK_GATE_gclk off step 2

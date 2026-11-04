@@ -1,4 +1,4 @@
-package Wide(WideM(..), WideIfc(..), mkWideKid, mkWideTop) where
+package Wide(WideM(..), WideIfc(..), mkWideKid, mkWideTop, mkWideOne) where
 
 import Vector
 
@@ -29,3 +29,11 @@ mkWideTop mk =
     let step :: WideM -> WideM -> Rules
         step p g = rules { "s": when True ==> p.put (g.get + 1) }
     addRules (foldr (<+>) emptyRules (zipWith step w (rotate w)))
+
+-- a parent calling only the child's first method (the child's own file is the measure)
+mkWideOne :: (Add 1 m n) => Module (WideIfc n) -> Module Empty
+mkWideOne mk =
+  module
+    wi <- mk
+    rules
+      "s": when True ==> (head wi.ms).put 1

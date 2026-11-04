@@ -17,7 +17,7 @@ import qualified Data.Set as S (member, empty, fromList, singleton, size, union)
 import Lean.Sched.Bounds (Bounds(bnGateMuxPairs, bnGateEsc, bnGateEscFacts, bnGateSeg, bnGateModFacts,
     bnGateSelmux, bnGateSlots, bnGateCodes, bnGateLcUsers, bnGateStep, bnGatePortUsers, bnGateGroup, bnGateFanIn))
 import Lean.Sched.Domain (domainLine, multiDomainVerdict)
-import Lean.Sched.Emit (emitFile, Emitted(..))
+import Lean.Sched.Emit (emitFile, emOff, provesText, Emitted(..))
 import Lean.Sched.Emit.Ctx (ecHasUnconf)
 import Lean.Sched.Emit.Plan (mkPlan)
 import Lean.Sched.Expr (memAPkg)
@@ -114,6 +114,7 @@ data GateIn = GateIn
     , giDomain :: [String]      -- ^ why the module's gated clocks are not modelled (Lean.Sched.Domain)
     , giSynth :: [String]       -- ^ the synthesized children the module cannot state (Lean.Sched.Hier)
     , giFanIn :: Int            -- ^ the largest step fan-in (Model.stepFanIn)
+    , giFile :: Maybe String    -- ^ what the emitter's file proves when it is not top from Hyps alone
     }
 
 -- | The failing gate items, in the prototype's order and words; none means path A.
@@ -209,7 +210,7 @@ gateRow name mode emits gi why =
     leaves = case look "generic_class" of
         Just (JO kv@(_ : _)) -> " leaves " ++ intercalate ", " [ k ++ ":" ++ pyStr v | (k, v) <- sortBy (\a b -> compare (fst a) (fst b)) kv ]
         _ -> ""
-    em = case emits of { Nothing -> ""; Just e -> " emitter " ++ (if e then "yes" else "no ") }
+    em = case emits of { Nothing -> ""; Just e -> " emitter " ++ (if e then "yes" else "no ") ++ maybe "" (\f -> " (file: " ++ f ++ ")") (giFile gi) }
 
 instance Eq J where
     a == b = case (a, b) of
@@ -248,7 +249,7 @@ gateReportS inp = do
     _ <- phase t "counts" (evaluate (cnStep1 counts + cnGroup counts + cnPairs counts + unreal))
     res <- case r of
         Left (Right err) -> return (Left err)
-        Left (Left err) -> return (Right ([("name", JS name), ("error", JS ("sites: " ++ take 200 err))], Nothing, Nothing, (False, False, Just "sites", []), (0, 0), [], [], []))
+        Left (Left err) -> return (Right ([("name", JS name), ("error", JS ("sites: " ++ take 200 err))], Nothing, Nothing, (False, False, Just "sites", [], Nothing), (0, 0), [], [], []))
         Right p -> do
             gm <- gateModel inp p
             sh <- phase t "shadow" $ shadowReport (pSolver p) d (pDV p) (pSites p) (pPrims p) name
@@ -259,13 +260,13 @@ gateReportS inp = do
                     let run = do
                             pe <- mkPlan (pSolver p) (gmShare gm) (pDV p) (pSites p) (pBL p) bnd (leanNamespace d) m
                             case pe of
-                                Left err -> return (False, False, Just ("the emitter stops: " ++ takeWhile (/= '\n') err), [])
+                                Left err -> return (False, False, Just ("the emitter stops: " ++ takeWhile (/= '\n') err), [], Nothing)
                                 Right ec -> do
                                     let em = emitFile ec bnd (leanNamespace d ++ ".lean")
                                     _ <- evaluate (sum (map (length . snd) (emParts em)) + length (concat (emLog em)))
-                                    return (True, ecHasUnconf ec, emOff em, emAssume em)
-                    run `catch` (\e -> const (return (False, False, Just "the emitter stops", [])) (e :: SomeException))
-                _ -> return (False, False, Just "the emitter stops", [])
+                                    return (True, ecHasUnconf ec, emOff em, emAssume em, provesText (emProves em))
+                    run `catch` (\e -> const (return (False, False, Just "the emitter stops", [], Nothing)) (e :: SomeException))
+                _ -> return (False, False, Just "the emitter stops", [], Nothing)
             let used c = either (const True) (omMember c . mInst) (gmModel gm)
                 synthWhy = [ "child " ++ c ++ " (" ++ exModule (skExport sk) ++ "): " ++ why
                            | (c, sk) <- M.toList (dvSynthK (pDV p)), Just why <- [skStop sk], used c ]
@@ -273,8 +274,8 @@ gateReportS inp = do
                           , pDomainWhy p, domainLine (pDomain p), synthWhy))
     return $ case res of
         Left err -> Left err
-        Right (rec, rdy, sh, (emits, unconf, off, asm), (mp, fi), dwhy, dline, swhy) ->
-            let gi = GateIn rec rdy sh counts unreal unconf mp dwhy swhy fi
+        Right (rec, rdy, sh, (emits, unconf, off, asm, file), (mp, fi), dwhy, dline, swhy) ->
+            let gi = GateIn rec rdy sh counts unreal unconf mp dwhy swhy fi file
                 why = gateReasons bnd gi
                 summ = case why of
                     (x : _) -> Just ("gate: " ++ x)

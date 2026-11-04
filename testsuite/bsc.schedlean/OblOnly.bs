@@ -1,0 +1,16 @@
+package OblOnly where
+
+-- A method drives an RWire's path input: the file proves obl but has no Acyc/top yet (Acyc has no input
+-- dependencies), which the gate row and --check say.
+interface OblIfc =
+  start :: Bit 8 -> Action
+
+{-# synthesize sysOblOnly #-}
+sysOblOnly :: Module OblIfc
+sysOblOnly = module
+  w :: RWire (Bit 8) <- mkRWire
+  r :: Reg (Bit 8) <- mkReg 0
+  rules
+    "take": when Just x <- w.wget ==> r := x
+  interface
+    start x = w.wset x
