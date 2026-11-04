@@ -487,10 +487,27 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
                             (case def_rst of
                                (Just _) -> [ setup_reset ]
                                Nothing  -> [])
+        -- record which waveform formats (-dump-formats) this model was
+        -- built with, so that the kernel can reject requests for other
+        -- formats; building with fst also registers the FST writer,
+        -- which is what links it (and its libz dependency) into the model
+        set_wave_formats =
+            let mask = sum [ v | (f, v) <- [("vcd", 1), ("fst", 2)]
+                               , f `elem` dumpFormats flags ]
+                set_stmt = stmt $ (var "vcd_set_allowed_formats") `cCall`
+                                    [ var "simHdl", mkUInt32 mask ]
+                reg_stmt = stmt $ (var "vcd_register_fst") `cCall`
+                                    [ var "simHdl" ]
+            in [ comment "waveform formats selected with -dump-formats"
+                         set_stmt ] ++
+               (if "fst" `elem` dumpFormats flags then [ reg_stmt ] else [])
+
         create_model_def =
           define create_model_decl
                  (block $ -- record the sim state handle
                           [ (mkVar "sim_hdl") `assign` (var "simHdl") ] ++
+                          -- record the available waveform dump formats
+                          set_wave_formats ++
                           -- clear reset counters
                           [ stmt $ (var "init_reset_request_counters") `cCall`
                                      [ var "sim_hdl" ] ] ++
