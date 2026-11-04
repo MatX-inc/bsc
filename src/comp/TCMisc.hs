@@ -18,6 +18,7 @@ module TCMisc(
 import Data.Maybe
 import Data.List
 import Control.Monad(foldM, when)
+import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
 import System.IO.Unsafe(unsafePerformIO)
@@ -879,11 +880,43 @@ reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
                         | otherwise              -> Just i
                     _                            -> Nothing
 
-        f :: Bool -> [Inst] -> TI (Maybe Reduction)
+        -- The predicate's own variables, for the capture check of a
+        -- ruled-out instance below, and the numbers of the bound type
+        -- variables, for its draws (skipInst; the bound stack is fixed
+        -- while the walk runs: nothing in it pushes or pops, and
+        -- expandSynN runs in a TI of its own); each demanded at most
+        -- once per reduction
+        pr_tvs = tv ts'
+        bound_nums = IS.fromList [ n | TyVar _ n _ <- bound_tyvars ]
+
+        -- The walk over the instances, in the order genInsts lists them.
+        -- One the lookup ruled out (RuledOut: a constructor head at a
+        -- pure-input position where the predicate has a type-variable
+        -- head, which the one-way match of byInst can never bind) is
+        -- passed over without being instantiated, but with the two
+        -- things the walk did for it when it tried every instance.  It
+        -- draws from the counter what newInst would have drawn
+        -- (skipInst), so that every generated name made later in this
+        -- definition keeps its number.  And it asks what the NoMatch arm
+        -- asks of every instance it passes, whether a fresh copy could
+        -- still capture the predicate after refinement, but of the
+        -- declared head: the same question when the instance's variables
+        -- are apart from the predicate's (renaming them then changes
+        -- nothing) or when the accumulator is already set; in the other
+        -- case the instance takes the general path and is rejected
+        -- there, with the same draws.
+        f :: Bool -> [Candidate Inst] -> TI (Maybe Reduction)
         f incoherent [] = return Nothing
-        f incoherent (i@(Inst _ _ (_ :=> h_orig) _):is)
-          | useLegacyInstIndex && not (canMatch pr' h_orig) = f incoherent is
-        f incoherent (i:is) = do
+        f incoherent (cand : is)
+          | useLegacyInstIndex
+          , Inst _ _ (_ :=> h_orig) _ <- candidateInst cand
+          , not (canMatch pr' h_orig) = f incoherent is
+        f incoherent (RuledOut i@(Inst _ vs (_ :=> h_orig) _) : is)
+          | incoherent || all (`notElem` pr_tvs) vs = do
+                skipInst bound_tyvars bound_nums i (getVPredPositions v')
+                f (incoherent || earlierInstanceMayCapture pr' (declaredHead h_orig)) is
+        f incoherent (cand : is) = do
+                let i = candidateInst cand
                 (m_tv, i'@(Inst _ _ (_ :=> h) _)) <- newInst i (getVPredPositions v')
                 x <- byInst v' i'
                 case x of
@@ -952,9 +985,9 @@ reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
                          sb''  = sb' { solvedClass = Just c }
                      return $ Just (Reduction qs sb'' fd_subst minst mpkg)
 
-    let is' = genInsts c bound_tyvars dvs pr'
-    r <- f False is'
-    rpTrace ("reducePred " ++ ppReadable (dvs, pr', is', r)) $ return ()
+    let cands = genCandidates c bound_tyvars dvs pr'
+    r <- f False cands
+    rpTrace ("reducePred " ++ ppReadable (dvs, pr', [ i | Try i <- cands ], r)) $ return ()
     popSatStackContext
     -- Numeric predicates that instance reduction cannot discharge are
     -- no longer sent to the proviso SAT solver here, one at a time
@@ -980,6 +1013,21 @@ predUnify bound_tyvars (IsIn c1 ts1) (IsIn c2 ts2)
 -- incoherence this check exists to detect.
 earlierInstanceMayCapture :: Pred -> Pred -> Bool
 earlierInstanceMayCapture = predUnify []
+
+-- The head byInst matches is the declared head after apSub, which
+-- rebuilds it through normTAp and expandSyn: a head free of synonyms
+-- and primitive type functions comes through unchanged (up to the
+-- renaming of its variables), and any other is put through the same
+-- normalisation here, so that the capture check reducePred takes on
+-- a declared head sees what it would see on a fresh copy.
+declaredHead :: Pred -> Pred
+declaredHead h@(IsIn _ ts)
+    | all normal ts = h
+    | otherwise     = apSub nullSubst h
+  where normal (TAp f a) = normal f && normal a
+        normal (TCon (TyCon _ _ (TItype {}))) = False
+        normal (TCon (TyCon i _ _)) = not (isPrimTFunName i)
+        normal _ = True
 
 -- The hatches that license output-driven fall-through (assumption A5
 -- in the design note): the class's own `incoherent' annotation, with
@@ -1181,6 +1229,24 @@ newInst ii@(Inst _ vs _ _) poss = do
                 (TVar x:xs) -> Just x
                 _ -> Nothing
     return (v, apSub (mkSubst (zip vs ts)) ii)
+
+-- Pass an instance over without instantiating it, drawing from the
+-- type-variable counter exactly what newInst draws for it: one draw
+-- per instance variable, at its kind and position, the bound-variable
+-- check included (skipTVar, with the bound variables and their numbers
+-- the caller fetched once).  The counter numbers every generated name
+-- of the run (_tctyvar, _tcdict, _tctemp) and restarts per definition,
+-- so a generated name's spelling recurs across definitions and
+-- packages and its interning order, which the order IConv gives the
+-- binders of a Cletrec group rests on, is fixed by whoever interned the
+-- spelling first: a walk that drew fewer numbers would renumber the
+-- names made after it in the definition and could move a __h wire
+-- name.
+skipInst :: [TyVar] -> IS.IntSet -> Inst -> [Position] -> TI ()
+skipInst bvs bvnums ii@(Inst _ vs _ _) poss = do
+    when doVarTrace $ traceM ("skipInst " ++ ppReadable ii)
+    mapM_ (\ v -> skipTVar bvs bvnums "skipInst" (kind v)
+                           (getMostUsefulPosition poss (getPosition v))) vs
 
 lookfor :: [TyVar] -> VPred -> [EPred] -> Maybe (Bind, (Subst, [(Type, Type)]))
 lookfor bound_tyvars _ [] = Nothing
