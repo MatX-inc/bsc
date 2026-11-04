@@ -21,6 +21,7 @@ module IExpandUtils(
         setBackendSpecific, cacheDef, lookupCExprCache, insertCExprCache,
         addStateVar, step, updHeap, getHeap, {- filterHeapPtrs, -}
         getSymTab, getDefEnv, getFlags, getErrHandle, getModuleName,
+        getMetaStore, swapChrBits, recordChrBits,
         getBNotCache, updBNotCache,
         getTypeNormalizer, getTypeNormalizerC, fullTypeNormalizer, mergeATFCache,
         instFunType,
@@ -124,7 +125,7 @@ import IExpandMeta(MetaStore, MetaTables, SiteKind(..), SiteKey, idSiteKey,
                    Tier(..), typeValidity, coercionValidity, constructedValidity,
                    validityTiers, windowValidity, meetValidity, refineMeta,
                    validityOf, rawValidity, bitCell, RepackKind(..),
-                   recordRepack, noCell)
+                   recordRepack, noCell, edgeOf, aliasEdge)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -579,6 +580,11 @@ data GStateRO = GStateRO {
         -- the evaluator metadata store (sites, frames, the frame
         -- register); one per elaboration, created by runG
         metaStore :: !MetaStore,
+        -- the register of the bits the chrs handled at the current
+        -- evaluation level read, each with the operand the handler
+        -- built the chr over (swapChrBits, recordChrBits; IExpandMeta,
+        -- "The move edge"); one per elaboration, created by runG
+        chrBits :: !(IORef [(Int, HExpr)]),
         -- the definitions carrying DefP_Recursive, the recursion points
         -- (FixupDefs.markRecursiveDefs); only their sites enter a
         -- frame's recursive-site map.  Strict: the driver builds the set
@@ -692,10 +698,10 @@ data GState = GState {
 
 initGState :: ErrorHandle -> Flags ->
               SymTab -> M.Map Id HExpr -> S.Set Id ->
-              IATFCache -> MetaStore ->
+              IATFCache -> MetaStore -> IORef [(Int, HExpr)] ->
               Id -> Bool -> [PProp] ->
               GState
-initGState errh flags symt alldefs recdefs atf_cache store defId is_noinlined_func pps =
+initGState errh flags symt alldefs recdefs atf_cache store chrReg defId is_noinlined_func pps =
     let gsro = GStateRO { errHandle = errh,
                           symtab = symt,
                           checkMaxStep = redStepsMaxIntervals flags /= 0,
@@ -704,6 +710,7 @@ initGState errh flags symt alldefs recdefs atf_cache store defId is_noinlined_fu
                           flags = flags,
                           defenv = alldefs,
                           metaStore = store,
+                          chrBits = chrReg,
                           recDefs = recdefs
                         }
         gs = GState { stepNo = 0,
@@ -799,7 +806,8 @@ runG errh flags symt alldefs recdefs atf_cache defId is_noinlined_func pps gFn =
      -- the census counts under -metadata-census, but not in the
      -- scramble run, whose store holds perturbed numbers by design
      store <- newMetaStore seed (metadataCensus flags && not (metadataScramble flags))
-     let gs = initGState errh flags symt alldefs recdefs atf_cache store defId is_noinlined_func pps
+     chrReg <- newIORef []
+     let gs = initGState errh flags symt alldefs recdefs atf_cache store chrReg defId is_noinlined_func pps
      (retval, gs') <- runStateT gFn gs
      -- convert the relevant info in the final GState into the GOutput
      do
@@ -2650,7 +2658,7 @@ addHeapWHNF = addHeapWHNFAlias Nothing
 -- it was read from hold one value, so their alias classes are joined
 -- (see IExpandMeta) on the pointer addHeapCell returns, before the
 -- reference to the new cell is built.
-addHeapWHNFAlias :: Maybe HeapPointer -> Binder -> String -> IType -> PExpr
+addHeapWHNFAlias :: Maybe (HeapPointer, HeapData) -> Binder -> String -> IType -> PExpr
                  -> Maybe Id -> G HExpr
 addHeapWHNFAlias partner b tag t pe@(P _ e) cell_name_orig = do
   cell_name <- improveCellName e cell_name_orig
@@ -2658,7 +2666,7 @@ addHeapWHNFAlias partner b tag t pe@(P _ e) cell_name_orig = do
   let newcell = (HWHNF { hc_pexpr = pe, hc_name = cell_name, hc_meta = meta })
   (p, r) <- addHeapCell tag newcell
   case partner of
-    Just q -> unionAlias p q
+    Just q -> unionAlias (p, r) q
     Nothing -> return ()
   let pos = getIExprPosition e
   let result = mkIRefT t p pos r
@@ -2716,8 +2724,19 @@ updHeap tag (p, HeapData ref) mkcell = do
    let e0 = mkcell (hc_meta o)
    -- a cell whose content is a reference holds that cell's value
    case e0 of
-     HWHNF { hc_pexpr = P _ (IRefT _ q _ _) } -> unionAlias p q
-     HNF { hc_pexpr = P _ (IRefT _ q _ _) } -> unionAlias p q
+     HWHNF { hc_pexpr = P _ (IRefT _ q _ r) } -> unionAlias (p, HeapData ref) (q, r)
+     HNF { hc_pexpr = P _ (IRefT _ q _ r) } -> unionAlias (p, HeapData ref) (q, r)
+     -- a held unpack: the cell the coercion applied holds this cell's
+     -- value once forced and is the parent of the fields moved out
+     -- of it, and the cell of the bits the coercion reads holds this
+     -- cell's bits, so both classes take this cell's move edge
+     -- (IExpandMeta, "The move edge")
+     HWHNF { hc_pexpr = P _ (ICon _ (ICLazyUnpack { lzOrig = src, lzApplied = IRefT _ q _ _ })) } -> do
+       st <- getMetaStore
+       liftIO (aliasEdge st q (edgeOf (hc_meta o)))
+       case src of
+         IRefT _ b _ _ -> liftIO (aliasEdge st b (edgeOf (hc_meta o)))
+         _ -> return ()
      _ -> return ()
    refined <- valueMeta o e0
    let e = maybe e0 mkcell refined
@@ -2761,6 +2780,28 @@ withCellMetaFrame cell act = do
   _ <- liftIO (swapFrame st old)
   return r
 
+-- The register of the bits the chrs handled at the current evaluation
+-- level read, most recent first, each with the operand expression the
+-- handler built the chr over (IExpandMeta, "The move edge"): evalHeap
+-- empties it for the cell it demands and restores the outer level's
+-- afterwards, IExpand.underArm empties it around the arms of a
+-- conditional and discards what they recorded, chrEvent records a
+-- chr's bits and operand, and evalHeap gives the recorded bits whose
+-- operand is the root chr's the cell's move edge.  Metadata: no
+-- evaluator decision reads it.
+swapChrBits :: [(Int, HExpr)] -> G [(Int, HExpr)]
+swapChrBits new = do
+  s <- get
+  let reg = chrBits (ro s)
+  old <- liftIO (readIORef reg)
+  liftIO (writeIORef reg new)
+  return old
+
+recordChrBits :: Int -> HExpr -> G ()
+recordChrBits p e = do
+  s <- get
+  liftIO (modifyIORef' (chrBits (ro s)) ((p, e) :))
+
 -- Run the application of a cell's value under a frame of the cell's
 -- definition site, when the cell holds a definition's partial
 -- application.  The unfolding of a definition that returns a function
@@ -2783,17 +2824,23 @@ withCellDefFrame ref act = do
 
 -- Record that the cells p and q hold one value (see IExpandMeta).
 {-# INLINE unionAlias #-}
-unionAlias :: HeapPointer -> HeapPointer -> G ()
-unionAlias p q = do
+-- The two cells hold one value: their classes are joined, and the
+-- class records the move edge of either (IExpandMeta, "The move
+-- edge"); the headers are read through the references and never
+-- written.
+unionAlias :: (HeapPointer, HeapData) -> (HeapPointer, HeapData) -> G ()
+unionAlias (p, rp) (q, rq) = do
   st <- getMetaStore
-  liftIO (aliasUnion st p q)
+  ep <- edgeOf . hc_meta <$> getHeap rp
+  eq <- edgeOf . hc_meta <$> getHeap rq
+  liftIO (aliasUnion st p ep q eq)
 
 -- The cell p takes the value of an evaluated expression, which unheap
 -- is about to read through its reference when it is one: p and the
 -- referenced cell then hold one value.
 {-# INLINE aliasRead #-}
-aliasRead :: HeapPointer -> PExpr -> G ()
-aliasRead p (P _ (IRefT _ q _ _)) = unionAlias p q
+aliasRead :: (HeapPointer, HeapData) -> PExpr -> G ()
+aliasRead p (P _ (IRefT _ q _ r)) = unionAlias p (q, r)
 aliasRead _ _ = return ()
 
 -- Push the frame of an unfolding of the definition i under the current
@@ -3096,10 +3143,18 @@ unpackEvent ta xee = coercionEvent RKUnpack ta xee
 
 -- The bits ee, whose weak head normal form is e', are converted to the
 -- enumeration to (chr): as unpackEvent, except that a literal is valid
--- by construction and records nothing.
+-- by construction and records nothing.  The bits' cell is recorded in
+-- the level's register with e', the operand the handler builds the
+-- chr over, for the edge of the cell whose value that chr is
+-- (IExpandMeta, "The move edge"; IExpand.evalHeap reads it, and
+-- IExpand.underArm discards what the arms of a conditional record).
 chrEvent :: IType -> HExpr -> HExpr -> G ()
 chrEvent _ _ (ICon _ (ICInt {})) = return ()
-chrEvent to ee _ = coercionEvent RKChr to ee
+chrEvent to ee e' = do
+  coercionEvent RKChr to ee
+  case ee of
+    IRefT _ p _ _ -> recordChrBits p e'
+    _ -> return ()
 
 -- The validity the coercion decides is written onto the cell of the
 -- bits (the value of the unpacked type lands in a cell that takes no
@@ -3478,7 +3533,7 @@ toHeapWHNFBinder b tag t pe@(P p e) cell_name = do
     -- a reference re-heaped under p: the new cell holds the value read
     -- from e's cell, so the two are aliases
     let partner = case e of
-                    IRefT _ q _ _ -> Just q
+                    IRefT _ q _ r -> Just (q, r)
                     _ -> Nothing
     addHeapWHNFAlias partner b tag t pe' cell_name
 

@@ -34,6 +34,7 @@ import System.FilePath(isRelative)
 import qualified Data.Array as Array
 import qualified Data.IntMap as IM
 import qualified Data.IntMap.Strict as IMS
+import qualified Data.IntMap.Lazy as IML
 import qualified Data.IntSet as IS
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -54,7 +55,8 @@ import FStringCompat
 import PreStrings(fsUnderscore)
 import PreIds
 import Flags
-import SymTab(SymTab, findType, TypeInfo(..))
+import SymTab(SymTab, findType, findField, TypeInfo(..), FieldInfo(..))
+import Assump(Assump(..))
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, bsError,
              recordHandleOpen, recordHandleClose)
 import Position
@@ -71,7 +73,7 @@ import DefProp
 import Changed(changedOrId)
 import ISyntax
 import ISyntaxSubst(eSubst, eSubstBatch, tSubstBatch)
-import IConv(iConvT, iConvExpr)
+import IConv(iConvT, iConvExpr, iConvSc)
 import ISyntaxUtil
 import IExpandUtils
 import IExpandMeta(SiteKind(..), idSiteKey, rootSiteKey, Binder(..), renderDump,
@@ -80,8 +82,12 @@ import IExpandMeta(SiteKind(..), idSiteKey, rootSiteKey, Binder(..), renderDump,
                    aliasMembers, aliasClassOf, noCell, DefRecord(..),
                    ModuleMeta(..), MetaLedger(..), forceModuleMeta, AliasMap,
                    Repack(..), RepackFact(..), meetValidity, undefKindCode,
+                   Edge(..), edgeOf, classEdgeOf, cellEdge, aliasEdge,
+                   View(..), wholeWidth, pathsOf, windowViews,
+                   composeViews, rowView, validityViews, dedupeViews,
+                   structFieldCount, bitCell,
                    renderCensus, checkProfile, checkKeptPositions, checkNameHints,
-                   checkBitGate, aliasClassCount)
+                   checkBitGate, checkEdges, checkViewWindows, aliasClassCount)
 import Wires
 import IWireSet
 import qualified IfcBetterInfo as BetterInfo
@@ -288,6 +294,36 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
 
   let norm = fullTypeNormalizer flags symt $ go_atfCache go
 
+  -- The declared type of field k of a struct type pt, for the derived
+  -- views (IExpandMeta, "Derived views"): the field selector's scheme
+  -- in the symbol table, converted as IConv.lookupSelType converts it,
+  -- instantiated at pt's arguments and normalized; Nothing where the
+  -- declaration has no field k (the index is checked against the
+  -- field list before it reads it), the symbol table has no one
+  -- selector for the type, or the scheme does not quantify exactly
+  -- pt's arguments.  Read at the rebuild alone; the selector's type is
+  -- an interned node the conversion builds from the declaration and
+  -- no string.
+  let fieldTypeAt pt k =
+          case leftmost pt of
+            ITCon ti _ (TIstruct _ fs)
+              | k >= 0 && k < length fs,
+                Just infos <- findField symt (fs !! k),
+                [sc] <- [ sc | FieldInfo { fi_id = ti', fi_assump = _ :>: sc } <- infos,
+                               qualEq ti ti' ],
+                let selTy = iConvSc flags symt sc
+                    args = typeArgs pt,
+                forallDepth selTy == length args,
+                ITAp (ITAp arr _) t <- itInstNorm (changedOrId norm) selTy args,
+                arr == itArrow -> Just t
+            _ -> Nothing
+      typeArgs t = go t []
+        where go (ITAp f a) acc = go f (a : acc)
+              go _ acc = acc
+      forallDepth :: IType -> Int
+      forallDepth (ITForAll _ _ t) = 1 + forallDepth t
+      forallDepth _ = 0
+
   -- turn heap into IDef definitions
   let
       -- collect a map of the heap pointers reachable from insts, rules, and ifc
@@ -386,8 +422,20 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
       -- with its canonical holds the canonical's value, so their classes
       -- are joined on the snapshot of the store's union-find
       aliases = aliasUnions (IM.toAscList ptr_map) (mt_alias (go_meta go))
+      -- the derived views of every reachable cell, read by the
+      -- rebuild, the dump and the census, and derived only when a
+      -- reader of the table asked for them (metadataConsumer): the
+      -- plain compile records no view, so that it performs none of
+      -- the derivation's work (the declared field types are read
+      -- through IConv's conversion and the normalizer, whose memo
+      -- counters would otherwise move under -trace-ctype-stats)
+      cellViews = deriveViews (go_meta go) (go_port_types go) fieldTypeAt iheap
+      derived
+          | metadataConsumer flags = Just (\ p -> IML.findWithDefault [] p cellViews)
+          | otherwise = Nothing
+      viewsAt = fromMaybe (const []) derived
       meta = buildModuleMeta (go_meta go) (go_roots go) (go_defcache go) aliases
-                             iheap ptr_map cell_refs lifted
+                             iheap ptr_map cell_refs lifted derived
 
       -- XXX the rules names should be constructed properly
       -- XXX to begin with rather than fixed up at the end
@@ -419,7 +467,7 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
   -- whose store holds perturbed numbers by design.
   when (metadataDump flags && not (metadataScramble flags)) $
       putStr (renderDump (go_meta go)
-                         [ (p, hc_meta c) | (p, c) <- IM.toAscList iheap ])
+                         [ (p, hc_meta c, viewsAt p) | (p, c) <- IM.toAscList iheap ])
 
   -- The table is built now, in full, so that the module retains nothing
   -- of the heap through it: its records are strict and hold pointers,
@@ -457,6 +505,13 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
           missing = length (checkKeptPositions (mm_sites meta) kept)
           (bound, named, badHints) = checkNameHints (mm_sites meta) hints
           (gated, withFacts, typedDefs, badGates) = checkBitGate (mm_sites meta) gates
+          ((nField, nPayload, nOperand, longest), badEdges) =
+              checkEdges (mm_sites meta) [ (p, hc_meta c) | (p, c) <- IM.toAscList iheap ]
+          (windowsChecked, badWindows) =
+              checkViewWindows (mm_sites meta) (mm_types meta)
+                  [ (p, r, hc_meta (cellOf p), IM.lookup p defTypes)
+                  | (p, r) <- IM.toAscList (mm_defs meta) ]
+          cellOf p = fromJustOrErr "iExpand: census def cell" (IM.lookup p iheap)
       putStr (renderCensus modName meta (go_census go) (IM.size iheap)
                            (aliasClassCount aliases) defs)
       case checkProfile (mm_sites meta) (go_census go) profile of
@@ -475,6 +530,19 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
                          ++ unlines badGates)
       putStrLn ("  bit gate: cells gated " ++ show gated ++ ", with facts " ++ show withFacts
                 ++ "; lifted defs gated as their types decide " ++ show typedDefs)
+      -- the edges: well formed under the types, acyclic and cut
+      unless (null badEdges) $
+          internalError ("iExpand: census edges differ from the types or the chains:\n"
+                         ++ unlines badEdges)
+      putStrLn ("  edges: cells moved " ++ show (nField + nPayload + nOperand)
+                ++ " (field " ++ show nField ++ ", payload " ++ show nPayload
+                ++ ", operand " ++ show nOperand ++ "), longest chain " ++ show longest)
+      -- the derived windows at Bit types against the defs' widths
+      unless (null badWindows) $
+          internalError ("iExpand: census views differ from the def types:\n"
+                         ++ unlines badWindows)
+      putStrLn ("  views: " ++ show windowsChecked
+                ++ " views and validities at a Bit type checked against the def's width")
       -- reported, not asserted: a method call's cell is built once, in
       -- the instantiation that provides the method, and every selection
       -- of it in the parent shares that cell, so the positions of the
@@ -914,6 +982,16 @@ eqPtrs heap ptrs =
         --traces (show (M.elems dsm)) $
         (M.elems dsm, ptrm, g)
 
+-- The invocations that read the derived views of the metadata table:
+-- the dump, the census, the side file, the cross-reference file and
+-- the scramble, which runs the derivation over a perturbed store.  The
+-- plain compile has no reader of them, derives none and performs no
+-- type conversion at the rebuild.
+metadataConsumer :: Flags -> Bool
+metadataConsumer flags =
+    metadataDump flags || metadataCensus flags || isJust (metadataOut flags) ||
+    metadataScramble flags || bxref flags
+
 -- Build the module metadata table (IExpandMeta) from the headers of the
 -- kept cells, after CSE: the context of every kept cell is interned from
 -- its frame chain, bottom-up and memoized by frame id; the cells eqPtrs
@@ -924,13 +1002,18 @@ eqPtrs heap ptrs =
 -- parent; and the facts of a cell the rebuild inlines rather than lifts
 -- (pDef's simple, action and pair cells) fold into the record of every
 -- lifted def whose expression absorbs it, through the closure of folded
--- references, which is acyclic because eqPtrs tsorted the same graph.
+-- references, which is acyclic because eqPtrs tsorted the same graph;
+-- and the views derived for every cell (deriveViews) are unioned over
+-- a def's cell and the cells CSE identified with it, when a reader of
+-- the table asked for views (Nothing: the plain compile, whose records
+-- carry no view, since nothing reads them).
 -- Nothing here reads the result: the table is carried on the IModule for
 -- the side file.
 buildModuleMeta :: MetaTables -> [Int] -> IS.IntSet -> AliasMap ->
                    IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
-                   [(HeapPointer, [HeapPointer])] -> IS.IntSet -> ModuleMeta
-buildModuleMeta tables roots defcache aliases iheap ptr_map refs lifted =
+                   [(HeapPointer, [HeapPointer])] -> IS.IntSet ->
+                   Maybe (HeapPointer -> [View]) -> ModuleMeta
+buildModuleMeta tables roots defcache aliases iheap ptr_map refs lifted derived =
     let ptran p = IM.findWithDefault p p ptr_map
         cellOf p = case IM.lookup p iheap of
                      Just c -> c
@@ -1017,6 +1100,7 @@ buildModuleMeta tables roots defcache aliases iheap ptr_map refs lifted =
                 folded = foldedOf p
                 foldedFacts = map factOf folded
                 mergedMetas = map metaOf mergedPtrs
+                repacks_p = concat [ IM.findWithDefault [] q repacksOf | q <- p : folded ]
             in  DefRecord { dr_ptr = p,
                             dr_hint = hc_name (cellOf p),
                             dr_site = site,
@@ -1029,12 +1113,19 @@ buildModuleMeta tables roots defcache aliases iheap ptr_map refs lifted =
                             dr_shared = IS.member p defcache,
                             dr_binder = binderOf (metaOf p),
                             dr_alias = aliasOf p,
-                            -- the validity meets over the cells CSE
-                            -- identified as one value
+                            -- the validity meets and the views union
+                            -- over the cells CSE identified as one
+                            -- value; the repacks attached to the def
+                            -- contribute the types they read the bits as
                             dr_validity = foldr meetValidity (validityOf (metaOf p))
                                                 (map validityOf mergedMetas),
-                            dr_repacks = concat [ IM.findWithDefault [] q repacksOf
-                                                | q <- p : folded ],
+                            dr_views = case derived of
+                                         Nothing -> []
+                                         Just viewsAt ->
+                                             dedupeViews
+                                                 (concatMap viewsAt (p : mergedPtrs) ++
+                                                  mapMaybe (rowView (mt_types tables) . rf_to) repacks_p),
+                            dr_repacks = repacks_p,
                             dr_undefs = concatMap undefsOf (p : folded) }
     in  ModuleMeta { mm_sites = mt_sites tables,
                      mm_contexts = contexts,
@@ -1914,7 +2005,7 @@ handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModule
         -- correctly writing the recursive reference (making sure it is evaluated and unheaped)
         -- requires some contortions
         _ <- do pe <- addPredG p' $ eval1 e'
-                aliasRead ptr pe
+                aliasRead (ptr, ref) pe
                 e'' <- unheap pe
                 updHeap "moduleFix" (ptr, ref) (HWHNF e'' Nothing)
         -- handle any recursively deferred rules
@@ -3048,11 +3139,11 @@ walkNF e =
     nfError "walkNF" e
   else do
     when (doDebug || doTraceNF) $ traceM ("walkNF " ++ ppReadable e)
-    let upd p r@(IRefT _ q _ _) ws = do
+    let upd p r@(IRefT _ q _ rq) ws = do
             -- the cell being walked takes the value of the cell r
             -- refers to
             case e of
-              IRefT _ ptr _ _ -> unionAlias ptr q
+              IRefT _ ptr _ ref -> unionAlias (ptr, ref) (q, rq)
               _ -> return ()
             P p' e' <- unheap (P p r)
             upd p' e' ws
@@ -3425,6 +3516,22 @@ evalUHn n e = do
             _ -> return pe
 -}
 
+-- The arms of a conditional, and the elements of a dynamic selection,
+-- are evaluated under an emptied register of the bits the chrs read
+-- (IExpandUtils chrBits), discarded afterwards: a chr handled in an
+-- arm reads bits that are the value's under the condition alone, so
+-- the register of a level holds the chrs applied outside every arm
+-- of that level and nothing else, and evalHeap, reading it once the
+-- cell's value is in hand, gives the edge to the recorded bits whose
+-- operand is the root chr's (IExpandMeta, "The move edge").  The
+-- register is metadata: no evaluator decision reads it.
+underArm :: G a -> G a
+underArm m = do
+    outer <- swapChrBits []
+    r <- m
+    _ <- swapChrBits outer
+    return r
+
 -- evaluate a static operator with potentially dynamic (or undetermined) arguments
 -- XXX When the same heap ref appears twice, this does twice the work!
 {-# INLINE evalStaticOp #-}
@@ -3471,8 +3578,11 @@ evalStaticOp' doUH doBK doUndet e resultType handler = do
 
     -- found dynamic expression
     IAps f@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els] -> do
-      P pthn thn' <- evalStaticOp' doUH doBK doUndet thn resultType handler
-      P pels els' <- evalStaticOp' doUH doBK doUndet els resultType handler
+      -- the arms under an emptied chr register (underArm)
+      (P pthn thn', P pels els') <- underArm $ do
+          pe_thn <- evalStaticOp' doUH doBK doUndet thn resultType handler
+          pe_els <- evalStaticOp' doUH doBK doUndet els resultType handler
+          return (pe_thn, pe_els)
       when doTraceIf $ traceM("evalStaticOp: improveIf try: " ++ ppReadable (t,thn',els'))
       (e'', _) <- improveIf f resultType cnd thn' els'
       when doTraceIf $ traceM("evalStaticOp: improveIf result: " ++ ppReadable e'')
@@ -3544,7 +3654,8 @@ evalStaticOpInArray' doUH doBK doUndet
                 ref_pe' <- evalStaticOp' doUH doBK doUndet
                                          ref_e resultType handler
                 return (pExprToHExpr ref_pe')
-        cell_es' <- mapM mapFn cells
+        -- the elements under an emptied chr register (underArm)
+        cell_es' <- underArm (mapM mapFn cells)
         (e', _) <- improveDynSel ic idx_e idx_sz
                         arr_i arr_ty' (Array.bounds arr) cell_es'
         return $ P arr_p e'
@@ -3706,6 +3817,89 @@ evalAp' (IRefT t ptr _ ref)              as = do
 -- XXX redundant, as it's caught by last clause?
 evalAp' e@(IVar i)             as = internalError ("evalAp IVar: " ++ ppReadable (i,as))
 
+-- The derived views of every reachable cell (IExpandMeta, "Derived
+-- views"), memoized per pointer in a lazy map over the final heap: a
+-- cell's views are read through the map by every reference to it, so
+-- each cell's expression is walked once, and the heap is acyclic
+-- (eqPtrs checked it), so the knot resolves.  A cell outside the gate
+-- has no views; its edge is a link for its children's paths alone.  A
+-- method call on an instance (a value in normal form, inline in an
+-- expression or a cell's own content) is the type of the method's
+-- output port, which the instance's module saved (savePortType, as
+-- IExpandUtils.methodValidity reads it).  The declared type of the
+-- field a cell's bits are the bits of (fieldType, from the symbol
+-- table) is a view when it is no Bit type.  Nothing here allocates a
+-- cell, forces a value the evaluator had not forced, mints an
+-- identifier or creates a string.
+deriveViews :: MetaTables -> PortTypeMap -> (IType -> Int -> Maybe IType)
+            -> IM.IntMap HeapCell -> IML.IntMap [View]
+deriveViews tables ports fieldType iheap = memo
+  where
+    tt = mt_types tables
+    memo = IML.fromAscList [ (p, cellViews p c) | (p, c) <- IM.toAscList iheap ]
+    viewsAt q = IML.findWithDefault [] q memo
+    -- the type rows of the repacks of each cell
+    repackRows = IMS.fromListWith (flip (++)) [ (rp_cell r, [rp_to r]) | r <- mt_repacks tables ]
+    cellViews p c
+      | not (bitCell m) = []
+      | otherwise = dedupeViews (pathsOf (classEdgeOf tables) p m ++
+                                 fieldViews p m ++
+                                 validityViews tt (validityOf m) ++
+                                 mapMaybe (rowView tt) (IM.findWithDefault [] p repackRows) ++
+                                 exprViews (cellExpr c))
+      where m = hc_meta c
+    -- the declared type of the field the cell's bits are the bits of
+    fieldViews p m =
+        case cellEdge (classEdgeOf tables) p m of
+          Field k pt _ _ | Just t <- fieldType pt k, not (isBitType t) -> [View t [] 0 wholeWidth]
+          _ -> []
+    -- the output port's type of a method call
+    methodViews m i v =
+        case M.lookup (Just i) ports of
+          Just ps | [Method { vf_outputs = [(pn, _)] }] <-
+                        [ f | f@(Method { vf_name = n }) <- vFields (isv_vmi v), n == unQualId m ],
+                    Just t <- M.lookup pn ps -> [View t [] 0 wholeWidth]
+          _ -> []
+    cellExpr (HNF { hc_pexpr = P _ e }) = e
+    cellExpr c = internalError ("deriveViews: not in normal form: " ++ ppReadable c)
+    exprViews e =
+        case e of
+          IRefT _ q _ _ -> viewsAt q
+          IAps (ICon m (ICSel {})) _ (ICon i (ICStateVar { iVar = v }) : _) -> methodViews m i v
+          IAps (ICon _ (ICPrim _ PrimIf)) _ [_, a, b] -> exprViews a ++ exprViews b
+          IAps (ICon _ (ICPrim _ PrimCase)) _ (_ : dflt : arms) ->
+              concatMap exprViews (dflt : armValues arms)
+          IAps (ICon _ (ICPrim _ PrimArrayDynSelect)) _ [ICon _ (ICLazyArray { iArray = arr }), _] ->
+              concat [ viewsAt (ac_ptr c) | c <- Array.elems arr ]
+          IAps (ICon _ (ICPrim _ PrimSelect)) [ITNum k, ITNum m, _] [x] ->
+              windowViews (fromInteger m) (fromInteger k) (exprViews x)
+          IAps (ICon _ (ICPrim _ PrimConcat)) [ITNum sx, ITNum sy, _] [x, y] ->
+              composeViews (exprViews x) (fromInteger sx) (exprViews y) (fromInteger sy) ++
+              packViews e
+          -- a held pack names the type its bits are the pack of
+          ICon _ (ICLazyPack { lzTa = ta }) -> [View ta [] 0 wholeWidth]
+          _ -> []
+    -- the values of a case's arms: its arguments after the index and
+    -- the default alternate between a tag and the arm's value
+    armValues (_ : v : rest) = v : armValues rest
+    armValues _ = []
+    -- the materialised derived pack: a concatenation whose leaves are
+    -- the field cells of one struct cell, every field in order from
+    -- the high bits down, is that struct's type
+    packViews e =
+        case leaves e of
+          Just ls@((_, pt, parent) : _)
+            | structFieldCount pt == Just (length ls),
+              and [ k == i && par == parent | ((k, _, par), i) <- zip ls [0 ..] ] ->
+                [View pt [] 0 wholeWidth]
+          _ -> []
+    leaves (IAps (ICon _ (ICPrim _ PrimConcat)) _ [x, y]) = (++) <$> leaves x <*> leaves y
+    leaves (IRefT _ q _ _) =
+        case IM.lookup q iheap of
+          Just c | Field k pt par _ <- edgeOf (hc_meta c) -> Just [(k, pt, par)]
+          _ -> Nothing
+    leaves _ = Nothing
+
 evalHeap :: (HeapPointer, HeapData) -> G PExpr
 evalHeap (ptr, ref) = do
     hc <- getHeap ref
@@ -3720,11 +3914,36 @@ evalHeap (ptr, ref) = do
         -- updHeap (ptr, ref) (internalError "blackHole")
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, e))
         -- we don't use evalUH here because we don't want to trigger
-        -- lazy bit-array fusing
+        -- lazy bit-array fusing; the chrs handled while this cell's
+        -- value is computed record their bits and their operand in
+        -- the level's register, emptied for this cell and restored
+        -- for the outer one (and emptied again around the arms of
+        -- every conditional, underArm)
+        outerChrs <- swapChrBits []
         pe1 <- eval1 e
+        chrs <- swapChrBits outerChrs
         -- the cell takes the value of the cell the result refers to
-        aliasRead ptr pe1
+        aliasRead (ptr, ref) pe1
         pe' <- unheap pe1
+        -- a chr at the root of the value whose operand a record of
+        -- this level carries is the chr the handler minted over those
+        -- bits, so they are this cell's bits and their class takes
+        -- this cell's move edge (IExpandMeta, "The move edge"); a chr
+        -- minted without the handler (the arms' chrs merged above a
+        -- conditional, improveIf's PrimChr rule) has an operand no
+        -- record carries, and a chr handled in an arm and returned as
+        -- the value of the whole (doIf's conditional of two equal
+        -- arms, improveDynSel's selection of equal elements) has a
+        -- record underArm discarded: no edge either way.  The
+        -- register holds the chrs applied outside every arm of this
+        -- level, a handful; the operands are compared as doIf
+        -- compares its arms.
+        case pe' of
+          P _ (IAps (ICon _ (ICPrim _ PrimChr)) _ [e_root])
+            | (q : _) <- [b | (b, e_chr) <- chrs, e_chr == e_root] -> do
+                st <- getMetaStore
+                liftIO (aliasEdge st q (edgeOf (hc_meta hc)))
+          _ -> return ()
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, pe'))
         case pe' of
             P _ (IAps (ICon _ (ICUndet { })) _ _) -> internalError ("evalHeap: " ++ ppReadable (ptr, pe'))
@@ -3734,9 +3953,21 @@ evalHeap (ptr, ref) = do
                            | otherwise = id
                     struct_field_names =
                          [Just (prefix (unQualId name)) | name <- field_names]
-                argTys <- takeArgTypes (length as) <$> instFunType (iGetType f) ts
-                -- each field's cell records the field's index as its binder
-                as' <- mapM (\(k, t, a, n) -> toHeapBinder (MovedTo k) "move-tuple" t a n) $
+                fTy <- instFunType (iGetType f) ts
+                let argTys = takeArgTypes (length as) fTy
+                    resTy = dropArrows (length as) fTy
+                    -- the parent's header, boxed once for the edges
+                    -- of all its fields
+                    parent = hc_meta hc
+                    -- each field's cell records its move edge
+                    -- (IExpandMeta): field k of the struct type
+                    -- resTy, this cell and its header; the fields of
+                    -- an interface are methods, not bits, and record
+                    -- the index alone
+                    edge k = case leftmost resTy of
+                               ITCon _ _ (TIstruct (SInterface _) _) -> Operand k
+                               _ -> Field k resTy ptr parent
+                as' <- mapM (\(k, t, a, n) -> toHeapBinder (MovedTo (edge k)) "move-tuple" t a n) $
                        zip4 [0..] argTys as struct_field_names
                 when doDebug $ traceM ("evalHeap move #1\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
@@ -3757,12 +3988,23 @@ evalHeap (ptr, ref) = do
                                                    | strictPrim p = internalError ("evalHeap - prim should be evaluated:" ++ ppReadable (p, pe'))
                                                    | otherwise = True
                     isLazyOp _ = False
-                argTys <- takeArgTypes (length as) <$> instFunType (iGetType f) ts
-                -- each operand's cell records the operand's index as its binder
-                let th (k, t, a) =
+                fTy <- instFunType (iGetType f) ts
+                let argTys = takeArgTypes (length as) fTy
+                    resTy = dropArrows (length as) fTy
+                    parent = hc_meta hc
+                    -- each operand's cell records its move edge: the
+                    -- operand of a constructor of the data type resTy
+                    -- is that constructor's payload, this cell and
+                    -- its header; the operand of a primitive is no
+                    -- field of a type and records the index alone
+                    edge k = case f of
+                               ICon _ (ICCon { conTagInfo = cti }) ->
+                                   Payload (fromInteger (conNo cti)) resTy ptr parent
+                               _ -> Operand k
+                    th (k, t, a) =
                         if isLazyOp f
-                        then toHeapBinder (MovedTo k) "move-ap" t a Nothing
-                        else toHeapWHNFBinder (MovedTo k) "move-ap" t (P pTrue a) Nothing
+                        then toHeapBinder (MovedTo (edge k)) "move-ap" t a Nothing
+                        else toHeapWHNFBinder (MovedTo (edge k)) "move-ap" t (P pTrue a) Nothing
                 as' <- mapM th (zip3 [0..] argTys as)
                 when doDebug $ traceM ("evalHeap move #2\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
@@ -4919,7 +5161,8 @@ conAp' sel_i sel_c@(ICPrim _ PrimArrayDynSelect) _
                         (pe, P p e') <- evalUH (mkAp r as')
                         return (pe, p, e')
                 -- "pes" are used to construct the result if no progress is made
-                (pes, ps, es) <- mapM mapFn cells >>= return . unzip3
+                -- (the elements under an emptied chr register, underArm)
+                (pes, ps, es) <- underArm (mapM mapFn cells) >>= return . unzip3
                 -- update the array type to account for applying to as'
                 let elem_ty' =
                         let skip [] t = t
@@ -5332,11 +5575,15 @@ doIf f@(ICon _ (ICPrim _ PrimIf)) [T t, E cnd, E thn, E els] = do
           if thn == els then
             eval1 thn
            else do -- evaluate to WHNF and try again
-             (ethn, P pthn thn') <- evalUH thn
+             -- each arm under an emptied chr register (underArm)
+             (ethn, P pthn thn') <- underArm (evalUH thn)
+             -- the then arm's value stands for the conditional; a chr
+             -- at its root was handled under underArm, so its record
+             -- is gone and the cell it lands in gets no edge from it
              if thn' == els then
               return (P pthn thn')
                else do
-                (eels, P pels els') <- evalUH els
+                (eels, P pels els') <- underArm (evalUH els)
                 -- additional equality tests have moved to improveIf
                 when doTraceIf $ traceM("improveIf try: " ++ ppReadable(t,thn',els'))
                 -- attempt to merge structure (constructor, array or tuple)

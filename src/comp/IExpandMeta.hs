@@ -6,6 +6,10 @@ module IExpandMeta(
         -- frames, binders and cell headers
         Frame, Binder(..), CellMeta, noBinder, headSiteOf, cellDefSite,
         bitCell, bitCellType,
+        -- the move edge and the derived views
+        Edge(..), edgeOf, classEdgeOf, cellEdge, Step(..), View(..), wholeWidth,
+        pathsOf, windowViews, composeViews, rowView, validityViews, dedupeViews,
+        structFieldCount, renderView,
         -- validity
         TypeTable(..), typeIdsFromRows, TypeKey(..), holeFree, bitWidth,
         rawValidity, validityView, validityTiers, meetValidity, Tier(..),
@@ -13,7 +17,7 @@ module IExpandMeta(
         refineMeta, RepackKind(..), Repack(..), recordRepack,
         -- the store and the hooks the evaluator calls
         MetaStore, newMetaStore, lookupSite, mintSite, pushFrame, pushRoot,
-        swapFrame, swapCellFrame, stampMeta, aliasUnion, readRoots,
+        swapFrame, swapCellFrame, stampMeta, aliasUnion, aliasEdge, readRoots,
         -- the tables after elaboration and the query interface, read by
         -- the rebuild and the dump alone
         MetaTables(..), AliasMap, readMetaTables,
@@ -31,7 +35,7 @@ module IExpandMeta(
         -- the census (-metadata-census)
         Census, readCensus, recordUnfolding, recordCompletion, aliasClassCount,
         renderCensus, checkProfile, checkKeptPositions, checkNameHints,
-        checkBitGate
+        checkBitGate, checkEdges, checkViewWindows
         ) where
 
 import Control.Monad(when)
@@ -44,11 +48,12 @@ import qualified Data.IntSet as IS
 import Data.List(intercalate, sortBy)
 import qualified Data.List as L
 import qualified Data.Map.Strict as M
-import Data.Maybe(mapMaybe)
+import Data.Maybe(mapMaybe, isNothing, isJust)
 import Data.Ord(comparing)
 import qualified Data.Set as S
 import System.FilePath(takeFileName)
 
+import CType(TISort(..), StructSubType(..))
 import ErrorUtil(internalError)
 import Eval(NFData(..), rnf2, rnf3, rnf4, rnf5)
 import FStringCompat(FString, getFString)
@@ -68,10 +73,13 @@ import Undefined(UndefKind(..))
 -- unfoldings it was created under (the frame), rooted at a rule, a
 -- method or an instantiation, the binder the cell's value was bound
 -- to (a parameter, or the index of a field or operand it was moved
--- into), the alias class of cells that hold one value, and for a
--- cell of type Bit n its validity (the one type whose encoding the
--- bits are known to satisfy, or raw, with the tier of that
--- knowledge).  It is written by the
+-- into), the move edge that created the cell (the parent struct or
+-- constructor cell and the field or constructor under the parent's
+-- type, from which the rebuild derives the paths the value has in
+-- the source types), the alias class of cells that hold one value,
+-- and for a cell of type Bit n its validity (the one type whose
+-- encoding the bits are known to satisfy, or raw, with the tier of
+-- that knowledge).  It is written by the
 -- evaluator through the hooks below and read only through the query
 -- interface: by the rebuild at the end of elaboration, which also
 -- builds the module metadata table from it (IExpand.buildModuleMeta;
@@ -145,9 +153,10 @@ siteKeyKind (FieldKey {}) = SKField
 -- The binder a cell is created with: none; the parameter an argument
 -- is bound to, whose identifier is in weak head normal form (a source
 -- binder, or a clone that substitution builds with a bang) so that
--- keying on it interns nothing; or the index of the field or operand a
--- value is moved into when a tuple or a lazy application is evaluated.
-data Binder = NoBinder | BoundTo !Id | MovedTo !Int
+-- keying on it interns nothing; or the move edge of a value moved into
+-- a field or operand when a tuple or a lazy application is evaluated
+-- (the edge's index is the binder's site, FieldKey).
+data Binder = NoBinder | BoundTo !Id | MovedTo !Edge
 
 -- A site row: the key and the facts recorded when the site was minted.
 -- sr_useSite says that the reference carried an occurrence position
@@ -243,29 +252,159 @@ instance Show Frame where
 -- The header every heap cell carries: the site of the expression the
 -- cell was created for, the frame current when it was created, the
 -- site of its binder (noBinder when the cell was created for no
--- parameter, field or operand) and the validity of its value
+-- parameter, field or operand), the validity of its value
 -- (rawValidity, or a type-window row with tier bits, under the gate
--- bit that says the cell's type admits facts, bitCellType).  The site,
--- frame, binder and gate are written once, at allocation, and copied
--- across every state transition of the cell; the validity is refined
--- when the cell's value is known (refineMeta: a value lands in the
--- cell, a coercion reads it, a boundary declares it) and otherwise
--- copied, and a cell outside the gate keeps it raw.
+-- bit that says the cell's type admits facts, bitCellType) and the
+-- move edge that created the cell (NoEdge for a cell that was not
+-- moved).  The site, frame, binder, gate and edge are written once,
+-- at allocation, and copied across every state transition of the
+-- cell; the validity is refined when the cell's value is known
+-- (refineMeta: a value lands in the cell, a coercion reads it, a
+-- boundary declares it) and otherwise copied, and a cell outside the
+-- gate keeps it raw.
 data CellMeta = CellMeta { cm_site :: {-# UNPACK #-} !Int,
                            cm_frame :: !Frame,
                            cm_binder :: {-# UNPACK #-} !Int,
-                           cm_validity :: {-# UNPACK #-} !Int }
+                           cm_validity :: {-# UNPACK #-} !Int,
+                           cm_edge :: !Edge }
 
 -- Site ids start at 1, so 0 is free to mean no binder.
 noBinder :: Int
 noBinder = 0
 
 instance Show CellMeta where
-    show m@(CellMeta s f b _) =
+    show m@(CellMeta s f b _ e) =
         "CellMeta " ++ show s ++ " (" ++ show f ++ ")" ++
         (if b == noBinder then "" else " binder " ++ show b) ++
         (if bitCell m then " bit" else "") ++
-        (if validityOf m == rawValidity then "" else " valid " ++ show (validityOf m))
+        (if validityOf m == rawValidity then "" else " valid " ++ show (validityOf m)) ++
+        (case e of
+           NoEdge -> ""
+           Operand k -> " operand " ++ show k
+           Field k _ p _ -> " field " ++ show k ++ " of _" ++ show p
+           Payload c _ p _ -> " payload of constructor " ++ show c ++ " of _" ++ show p)
+
+-- ===============
+-- The move edge
+--
+-- The one record the store keeps about where a cell's value came
+-- from: the move that created the cell, as evalHeap heaps the operands
+-- of an evaluated struct or constructor application, and of a lazy
+-- primitive, into cells of their own.  NoEdge: the cell was not moved
+-- (bound to a parameter, heaped for a definition, an array element, a
+-- root).  Operand k: the operand k of a lazy primitive (PrimIf,
+-- PrimCase, ...), no field of a type, never followed upward.  Field k
+-- pt p h: field k of a struct application of type pt, the parent cell
+-- p and its header h.  Payload con pt p h: the operand of constructor
+-- con of the data type pt (the operand index of a constructor is
+-- always 0, and the type alone does not say which constructor).  The
+-- parent's header, not its expression or its reference, so that the
+-- chain of edges retains no value: a parent that no surviving
+-- expression references is garbage before the rebuild runs, and the
+-- chain is what names the grandparent-rooted path.  The parent's
+-- pointer is the parent's identity for the rebuild (the materialised
+-- pack of one struct's field cells).
+-- Views are derived from the edges and the types at the rebuild
+-- (pathsOf, "Derived views" below) and never stored.
+--
+-- The edge of an alias class.  A moved cell often does not hold its
+-- value itself: a field cell whose expression is an unpack evaluates
+-- to a reference to the fresh cell the coercion built, which holds the
+-- struct and is the parent its fields are moved out of; and a value
+-- extracted from a constructor's payload is read by a fresh cell that
+-- takes the payload cell's value and survives where the payload cell
+-- does not.  The two cells of each pair hold one value and are one
+-- alias class (aliasUnion), and the value's origin is the edge of
+-- whichever of them was moved; so the class records that edge, once,
+-- the first a member brings (ms_classEdges, keyed by the class root),
+-- and the rebuild's walk (pathsOf) reads a class's edge where a
+-- header has none: for the cell itself and for every parent on the
+-- chain.  A held unpack is the same relation without an alias: the
+-- cell that holds the coercion (ICLazyUnpack) is the moved one, and
+-- the fresh cell the coercion applied (lzApplied) is where the struct
+-- lands and the parent its fields are moved out of, so that cell's
+-- class takes the holder's edge when the coercion lands (aliasEdge).
+-- The bits a coercion reads are the bits of the value its cell holds:
+-- the bits a held unpack reads (lzOrig) take the holder's edge for
+-- their class at the same landing, and the bits a chr reads take the
+-- chr cell's edge when that chr is the root of the cell's value: the
+-- chr's event records the bits' cell with the operand the handler
+-- built the chr over, in the evaluator's register of the current
+-- level (IExpandUtils chrBits, emptied by evalHeap for the cell it
+-- demands), and evalHeap, once the value is in hand and its root is
+-- a chr, gives the edge to the recorded bits whose operand is the
+-- root's (the equality doIf compares its arms with); so the bits of
+-- an enumeration field read the field's path and its declared type.
+-- A chr the evaluator mints without the handler, over the arms'
+-- chrs merged above a conditional (improveIf's PrimChr rule; a
+-- dynamic selection merges no chrs: a chr pushed into the elements
+-- stays in each), reads bits that are no cell and no record's
+-- operand, so it gives no edge: the field's path reaches neither
+-- arm, and a chr handled elsewhere at the level (in the condition,
+-- under a comparison) keeps its own record and matches no other
+-- root.  The arms of a conditional and the elements of a dynamic
+-- selection are evaluated under an emptied register, discarded
+-- afterwards (IExpand.underArm), so the register holds the chrs
+-- applied outside every arm of the level alone; a chr handled in an
+-- arm and returned as the value of the whole (a conditional of two
+-- equal arms, a selection of equal elements) has no record left and
+-- gives no edge.  The header of a cell is never rewritten for any of
+-- this.
+--
+-- The cut.  A List of n elements is n nested Cons applications; an
+-- edge chain that ran back to the head of the list would name the
+-- cell's position in the data, a table keyed on the elaborated value
+-- in another form (quadratic in the list's length).  When a Field or
+-- Payload edge is built (stampMeta), the chain above the parent is
+-- walked, and if the type constructor at the leftmost of pt already
+-- occurs as the pt of an edge on it, the new edge's parent header is
+-- the shared sentinel cutParent: the index, pt and the parent pointer
+-- are still recorded, the chain above is not.  A chain therefore
+-- holds each type constructor at most once, so its length is bounded
+-- by the number of distinct type constructors nested in the program's
+-- types, a recursive type yields exactly one unrolling of its path,
+-- and the headers retained from a surviving cell are bounded by the
+-- same number.  The walk compares interned identifiers and reads no
+-- string.
+data Edge = NoEdge
+          | Operand {-# UNPACK #-} !Int
+          | Field {-# UNPACK #-} !Int !IType {-# UNPACK #-} !Int !CellMeta
+          | Payload {-# UNPACK #-} !Int !IType {-# UNPACK #-} !Int !CellMeta
+
+-- the sentinel above a cut: a header with no edge
+cutParent :: CellMeta
+cutParent = CellMeta 0 TopFrame noBinder 0 NoEdge
+
+-- the index the binder's site records: the field or operand index
+edgeIndex :: Edge -> Int
+edgeIndex NoEdge = 0
+edgeIndex (Operand k) = k
+edgeIndex (Field k _ _ _) = k
+edgeIndex (Payload _ _ _ _) = 0
+
+-- the type constructor at the leftmost of a type
+tyCon :: IType -> Maybe Id
+tyCon (ITAp f _) = tyCon f
+tyCon (ITCon i _ _) = Just i
+tyCon _ = Nothing
+
+-- the edge as the header records it: the cut applied and the parent
+-- pointer perturbed like every cell number the store records
+cutEdge :: MetaStore -> Edge -> Edge
+cutEdge st (Field k pt p h) = Field k pt (perturb st p) (above pt h)
+cutEdge st (Payload c pt p h) = Payload c pt (perturb st p) (above pt h)
+cutEdge _ e = e
+
+above :: IType -> CellMeta -> CellMeta
+above pt h = case tyCon pt of
+               Just c | chainHas c (cm_edge h) -> cutParent
+               _ -> h
+
+chainHas :: Id -> Edge -> Bool
+chainHas c = go
+  where go (Field _ pt _ h) = tyCon pt == Just c || go (cm_edge h)
+        go (Payload _ pt _ h) = tyCon pt == Just c || go (cm_edge h)
+        go _ = False
 
 -- the site of a cell that borrows the site of the cell at its head
 {-# INLINE headSiteOf #-}
@@ -287,14 +426,16 @@ cellDefSite m =
         else Nothing
 
 -- The store: the site table, the frame counter, the frame register
--- (the frame current for the next allocation), the alias classes, the
--- sites of the root frames pushed so far (most recent first), the
--- scramble seed (0 when scrambling is off), and the census counters
--- with the flag that turns them on.  One store per module elaboration.
+-- (the frame current for the next allocation), the alias classes and
+-- their edges, the sites of the root frames pushed so far (most
+-- recent first), the scramble seed (0 when scrambling is off),
+-- and the census counters with the flag that turns them on.  One
+-- store per module elaboration.
 data MetaStore = MetaStore { ms_sites :: !(IORef SiteTable),
                              ms_nextFrame :: !(IORef Int),
                              ms_frame :: !(IORef Frame),
                              ms_alias :: !(IORef AliasMap),
+                             ms_classEdges :: !(IORef (IM.IntMap Edge)),
                              ms_roots :: !(IORef [Int]),
                              ms_types :: !(IORef TypeTable),
                              ms_repacks :: !(IORef [Repack]),
@@ -308,11 +449,12 @@ newMetaStore seed census = do
     next <- newIORef 1
     reg <- newIORef TopFrame
     alias <- newIORef IM.empty
+    classEdges <- newIORef IM.empty
     roots <- newIORef []
     types <- newIORef emptyTypeTable
     repacks <- newIORef []
     counts <- newIORef emptyCensus
-    return (MetaStore sites next reg alias roots types repacks
+    return (MetaStore sites next reg alias classEdges roots types repacks
                       seed census counts)
 
 -- The one scrambling function: identity when the seed is 0.
@@ -457,18 +599,22 @@ swapCellFrame :: MetaStore -> CellMeta -> IO Frame
 swapCellFrame st m = swapFrame st (cm_frame m)
 
 -- The header for a cell allocated now at a site, of a type, with its
--- binder (whose site is minted here, on the first cell bound to it).
--- The gate is set from the type (bitCellType); every cell starts raw.
+-- binder (whose site is minted here, on the first cell bound to it)
+-- and, for a moved value, its edge with the cut applied.  The gate is
+-- set from the type (bitCellType); every cell starts raw.
 {-# INLINE stampMeta #-}
 stampMeta :: MetaStore -> Int -> Binder -> IType -> IO CellMeta
 stampMeta st site b t = do
     fr <- readIORef (ms_frame st)
     let gate = if bitCellType t then bitGate else 0
-    binder <- case b of
-                NoBinder -> return noBinder
-                BoundTo i -> mint (idSiteKey SKBinder i)
-                MovedTo n -> mint (FieldKey n)
-    return $! CellMeta site fr binder gate
+    (binder, edge) <-
+        case b of
+          NoBinder -> return (noBinder, NoEdge)
+          BoundTo i -> do s <- mint (idSiteKey SKBinder i)
+                          return (s, NoEdge)
+          MovedTo e -> do s <- mint (FieldKey (edgeIndex e))
+                          return (s, cutEdge st e)
+    return $! CellMeta site fr binder gate edge
   where mint key = fst <$> mintSite st key (False, False)
 
 -- ===============
@@ -747,6 +893,178 @@ recordRepack st kind cell from to = do
     modifyIORef' (ms_repacks st) (Repack kind (perturb st cell) from to fr :)
 
 -- ===============
+-- Derived views
+--
+-- A view is one source interpretation of a gated cell's bits: a source
+-- type, a path into it (a struct field index or a data constructor per
+-- step) and a bit window of the value at the end of the path (an
+-- offset from its bit 0 and a width, or the whole value, wholeWidth).
+-- Views are not stored.  The rebuild derives them (IExpand.deriveViews)
+-- when the invocation reads the table (IExpand.metadataConsumer: the
+-- dump, the census, the side file, the cross-reference file, the
+-- scramble; the plain compile derives none and performs no type
+-- conversion), for the gated cells alone, from the edges (pathsOf:
+-- each ancestor on the chain gives one view, the ancestor's type
+-- with the path down
+-- to the cell), from the cell's validity and repacks (their type
+-- windows) and from the cell's final expression: a reference copies
+-- its cell's views; a conditional, a case and a dynamic selection
+-- union their arms'; an extraction windows its operand's
+-- (windowViews); a concatenation joins adjacent windows (composeViews),
+-- and a concatenation of the field cells of one struct cell in field
+-- order is that struct's type, the materialised derived pack; and
+-- from the field the cell's bits are the bits of (its Field edge, own
+-- or its class's), that field's declared type, which the rebuild
+-- reads from the type's declaration in the symbol table, when it is
+-- no Bit type (a Bit-typed field names nothing beyond the cell's own
+-- type).  What the old form recorded as an event and nothing in the
+-- edges, the types or the surviving expression can reconstruct is not
+-- a view: the enumeration under an ord of a chr (the node reduces
+-- away; the chr's own event carries the type), the type a declaration
+-- names on a cell already valid at another type, and the type a
+-- coercion names there when the coercion's cell was not moved (the
+-- validity word keeps the type it had), a pack materialised from values that are
+-- not the fields' own cells, and the positions of vector elements no
+-- surviving dynamic selection reaches (an element is allocated before
+-- any parent exists and has no edge).
+data Step = SField {-# UNPACK #-} !Int
+          | SCon !Id
+        deriving (Eq, Ord)
+
+data View = View !IType ![Step] {-# UNPACK #-} !Int {-# UNPACK #-} !Int
+        deriving (Eq, Ord)
+
+-- a step in weak head normal form is in normal form (an index, or an
+-- interned identifier read from a type's declaration); a view's type
+-- is an interned node, not walked (see TypeKey)
+instance NFData Step where
+    rnf s = s `seq` ()
+
+instance NFData View where
+    rnf (View _ path _ _) = rnf path
+
+edgeOf :: CellMeta -> Edge
+edgeOf = cm_edge
+
+-- The views of a cell from its edges, one per ancestor on the chain:
+-- the ancestor's type with the path from it down to the cell, whole
+-- window.  The cell's own Field or Payload edge, or its alias class's
+-- where it has none (classEdge, by pointer; an Operand edge names no
+-- field of a type, so a cell with one reads its class's edge as well:
+-- the bits of an enumeration field are an operand of the pair the
+-- derived unpack splits them into, and their class carries the chr
+-- cell's edge); above each parent, the parent header's edge, or its
+-- class's.  The step kind is the edge's, never guessed from the type:
+-- a chain ends where neither the header nor the class has a Field or
+-- Payload edge (a conditional of two structs is a struct-typed cell
+-- whose arms are operands, not fields).
+-- A constructor step is the constructor's name, read from the data
+-- type's declaration (TIdata).  The walk stops at a type constructor
+-- already on the path: the cut (above) applies it to the header
+-- chains at allocation, and a class hop is bounded the same way, so a
+-- path holds each type constructor once.
+pathsOf :: (Int -> Edge) -> Int -> CellMeta -> [View]
+pathsOf classEdge p m = go (cellEdge classEdge p m) [] []
+  where edgeAt q e = case e of
+                       Field {} -> e
+                       Payload {} -> e
+                       _ -> classEdge q
+        go (Field k pt par h) steps seen
+          | repeated pt seen = []
+          | otherwise =
+              let s = SField k : steps
+              in  View pt s 0 wholeWidth : go (edgeAt par (cm_edge h)) s (tyCon pt : seen)
+        go (Payload c pt par h) steps seen
+          | repeated pt seen = []
+          | otherwise =
+              let s = SCon (constructorName pt c) : steps
+              in  View pt s 0 wholeWidth : go (edgeAt par (cm_edge h)) s (tyCon pt : seen)
+        go _ _ _ = []
+        repeated pt seen = tyCon pt `elem` seen
+
+-- the Field or Payload edge of a cell: its own, or its alias class's
+-- where it has none
+cellEdge :: (Int -> Edge) -> Int -> CellMeta -> Edge
+cellEdge classEdge p m = case cm_edge m of
+                           e@(Field {}) -> e
+                           e@(Payload {}) -> e
+                           _ -> classEdge p
+
+-- constructor c of a data type, from its declaration
+constructorName :: IType -> Int -> Id
+constructorName pt c =
+    case leftmostCon pt of
+      Just (ITCon _ _ (TIdata cons _)) | c >= 0 && c < length cons -> cons !! c
+      _ -> internalError ("IExpandMeta.constructorName: " ++ show c ++ " of " ++ ppString pt)
+
+-- the leftmost of a type, when it is a constructor
+leftmostCon :: IType -> Maybe IType
+leftmostCon (ITAp f _) = leftmostCon f
+leftmostCon t@(ITCon {}) = Just t
+leftmostCon _ = Nothing
+
+-- the number of fields of a struct type (its declaration's), or
+-- Nothing for an interface or a type that is no struct
+structFieldCount :: IType -> Maybe Int
+structFieldCount pt =
+    case leftmostCon pt of
+      Just (ITCon _ _ (TIstruct (SInterface _) _)) -> Nothing
+      Just (ITCon _ _ (TIstruct _ fields)) -> Just (length fields)
+      _ -> Nothing
+
+-- the views of bits [m, m + k) of a value with the views vs: the same
+-- window of every view that covers it (a whole view covers every
+-- window)
+windowViews :: Int -> Int -> [View] -> [View]
+windowViews m k vs =
+    [ View ty path (o + m) k | View ty path o w <- vs, w == wholeWidth || m + k <= w ]
+
+-- the views of the concatenation of x (the high sx bits) and y (the
+-- low sy bits): one window per pair of adjacent windows of one path
+composeViews :: [View] -> Int -> [View] -> Int -> [View]
+composeViews xs sx ys sy =
+    [ View ty path oy (sx + sy)
+    | View ty path ox wx <- xs, wx == sx,
+      View ty' path' oy wy <- ys, wy == sy,
+      ty' == ty, path' == path, oy + sy == ox ]
+
+-- a type-window row as a view
+rowView :: TypeTable -> Int -> Maybe View
+rowView tt r = case IM.lookup r (tt_rows tt) of
+                 Just (TypeKey ty o w) -> Just (View ty [] o w)
+                 Nothing -> Nothing
+
+-- the view of a validity (its type window), none for raw
+validityViews :: TypeTable -> Int -> [View]
+validityViews tt v
+  | v == rawValidity = []
+  | otherwise = maybe [] (: []) (rowView tt (validityView v))
+
+-- each view once, in the order first derived (a function of the heap
+-- and the expressions, not of the intern table; the renderers sort by
+-- text)
+dedupeViews :: [View] -> [View]
+dedupeViews = go S.empty
+  where go _ [] = []
+        go seen (v : vs) | S.member v seen = go seen vs
+                         | otherwise = v : go (S.insert v seen) vs
+
+-- A view as "<type>", "<type>/<step>/<step>" for a path (a field as
+-- its index, a constructor by name), with " [<offset>+<width>]" for a
+-- window that is not the whole value; the type is printed by reading
+-- its identifiers' strings.
+renderView :: View -> String
+renderView (View ty path o w) =
+    ppString ty ++ concatMap step path ++
+    (if w == wholeWidth then "" else " [" ++ show o ++ "+" ++ show w ++ "]")
+  where step (SField k) = "/" ++ show k
+        step (SCon i) = "/" ++ getFString (getIdBase i)
+
+-- the views of a cell or a def, sorted by their text
+renderViews :: [View] -> [String]
+renderViews = L.sort . map renderView
+
+-- ===============
 -- Alias classes
 --
 -- Two cells hold one value when one takes the value read from the
@@ -777,15 +1095,50 @@ aliasFind st p = do
       _ -> return ()
     return root
 
--- Join the classes of p and q: one insert when they differ.
-aliasUnion :: MetaStore -> Int -> Int -> IO ()
-aliasUnion st p q = do
+-- Join the classes of p and q: one insert when they differ.  The
+-- class's edge (see "The move edge"): the one it has, else the one the
+-- other class had, else the Field or Payload edge of p or of q.
+aliasUnion :: MetaStore -> Int -> Edge -> Int -> Edge -> IO ()
+aliasUnion st p ep q eq = do
     rp <- aliasFind st p
     rq <- aliasFind st q
-    when (rp /= rq) $ do
-      let a = perturb st rp
-          b = perturb st rq
-      modifyIORef' (ms_alias st) (IM.insert (max a b) (min a b))
+    let a = perturb st rp
+        b = perturb st rq
+        r = min a b
+    when (rp /= rq) $
+      modifyIORef' (ms_alias st) (IM.insert (max a b) r)
+    ces <- readIORef (ms_classEdges st)
+    let own = IM.lookup r ces
+        other = if rp /= rq then IM.lookup (max a b) ces else Nothing
+        moved e@(Field {}) = Just e
+        moved e@(Payload {}) = Just e
+        moved _ = Nothing
+        new = case (own, other, moved ep, moved eq) of
+                (Just e, _, _, _) -> Just e
+                (_, Just e, _, _) -> Just e
+                (_, _, Just e, _) -> Just e
+                (_, _, _, e) -> e
+    case new of
+      Just e | isNothing own ->
+        writeIORef (ms_classEdges st) $! IM.insert r e (IM.delete (max a b) ces)
+      _ | isJust other -> writeIORef (ms_classEdges st) $! IM.delete (max a b) ces
+      _ -> return ()
+
+-- Record the Field or Payload edge e for the class of q when the
+-- class has none (the value cell of a held unpack, see "The move
+-- edge").
+aliasEdge :: MetaStore -> Int -> Edge -> IO ()
+aliasEdge st q e =
+    case e of
+      Field {} -> record
+      Payload {} -> record
+      _ -> return ()
+  where record = do
+          rq <- aliasFind st q
+          let r = perturb st rq
+          ces <- readIORef (ms_classEdges st)
+          when (isNothing (IM.lookup r ces)) $
+              writeIORef (ms_classEdges st) $! IM.insert r e ces
 
 -- the root of p's class in a snapshot of the map
 aliasClassOf :: AliasMap -> Int -> Int
@@ -821,16 +1174,22 @@ aliasUnions pairs m0 = L.foldl' step m0 pairs
 -- classes, the type-window table and the repacks (in event order).
 data MetaTables = MetaTables { mt_sites :: !SiteTable,
                                mt_alias :: !AliasMap,
+                               mt_classEdges :: !(IM.IntMap Edge),
                                mt_types :: !TypeTable,
                                mt_repacks :: ![Repack] }
+
+-- the edge of a cell's alias class, or NoEdge
+classEdgeOf :: MetaTables -> Int -> Edge
+classEdgeOf t p = IM.findWithDefault NoEdge (aliasClassOf (mt_alias t) p) (mt_classEdges t)
 
 readMetaTables :: MetaStore -> IO MetaTables
 readMetaTables st = do
     sites <- readIORef (ms_sites st)
     alias <- readIORef (ms_alias st)
+    classEdges <- readIORef (ms_classEdges st)
     types <- readIORef (ms_types st)
     repacks <- readIORef (ms_repacks st)
-    return (MetaTables sites alias types (reverse repacks))
+    return (MetaTables sites alias classEdges types (reverse repacks))
 
 -- the sites of the root frames, in push order
 readRoots :: MetaStore -> IO [Int]
@@ -929,13 +1288,15 @@ renderValidity tt v
 -- One line per cell, in the order given (the caller passes ascending
 -- pointer order): the pointer, the cell's site, its binder when it has
 -- one, the root of its alias class when the class has another cell,
--- its validity when it is not raw, then the chain of frames from the
--- creating frame to the root, each as site#count.
-renderDump :: MetaTables -> [(Int, CellMeta)] -> String
-renderDump (MetaTables t am tt _) cells = unlines (map line cells)
-  where line (p, m) =
+-- its validity when it is not raw and its derived views (the caller
+-- derives them, IExpand.deriveViews) when it has any, then the chain
+-- of frames from the creating frame to the root, each as site#count.
+renderDump :: MetaTables -> [(Int, CellMeta, [View])] -> String
+renderDump (MetaTables t am _ tt _) cells = unlines (map line cells)
+  where line (p, m, vs) =
             "_" ++ show p ++ ": " ++ renderSite t (siteOf m) ++
             binder (binderOf m) ++ alias p ++ validity (validityOf m) ++
+            views vs ++
             concatMap link (chainOf m)
         binder b | b == noBinder = ""
                  | otherwise = ", " ++ renderSite t b
@@ -943,6 +1304,8 @@ renderDump (MetaTables t am tt _) cells = unlines (map line cells)
                 | otherwise = ""
         validity v | v == rawValidity = ""
                    | otherwise = ", valid " ++ renderValidity tt v
+        views [] = ""
+        views vs = ", views {" ++ intercalate "; " (renderViews vs) ++ "}"
         members = aliasMembers am
         link (s, c) = " <- " ++ renderSite t s ++ "#" ++ show c
 
@@ -1055,8 +1418,12 @@ data DefRecord = DefRecord {
         -- the class holds another cell, or noCell
         dr_alias :: {-# UNPACK #-} !Int,
         -- the validity of the cell's value, met with that of the cells
-        -- CSE identified with it
+        -- CSE identified with it, and the views derived for the def:
+        -- the cell's and those of the cells CSE identified with it
+        -- (their edges may differ), each once, in the order derived;
+        -- none in the plain compile, which derives no view
         dr_validity :: {-# UNPACK #-} !Int,
+        dr_views :: ![View],
         -- the repacks of bits held by this cell, by a cell CSE
         -- identified with it or by a cell folded into it, in event order
         dr_repacks :: ![RepackFact],
@@ -1098,9 +1465,9 @@ noCell :: Int
 noCell = -1
 
 instance NFData DefRecord where
-    rnf (DefRecord x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14) =
+    rnf (DefRecord x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15) =
         rnf5 x1 x2 x3 x4 x5 `seq` rnf5 x6 x7 x8 x9 x10 `seq`
-        rnf4 x11 x12 x13 x14
+        rnf5 x11 x12 x13 x14 x15
 
 -- The name the rebuild gives the def lifted from a cell: the name hint
 -- with its illegal characters dropped, its base extended by the pointer
@@ -1357,7 +1724,7 @@ renderEvent ev =
 --   def <name> | site <site> | chain <chain> | contexts <n>
 --     | merged <n> {<site> @ <chain>}... | folded <n> {<site> @ <chain>}...
 --     | parent <cell> | binder <binder> | alias <cell> | tiers <letters or ->
---     | validity <type window> <letters or ->
+--     | validity <type window> <letters or -> | views <n> {<view>}...
 --     | repacks <n> {<repack>}... | undefined <n> {<kind>}...
 --
 -- where a cell is the name of the def lifted from it, _<pointer> when
@@ -1369,7 +1736,10 @@ renderEvent ev =
 -- h (head-site), s (shared) and m (merged); a type window is a type,
 -- with [<offset>+<width>] for a window that is not the whole type; a
 -- validity's letters are c (by construction), d (by declaration), a
--- (by assumption) and b (at a Bit type, trivially); a repack is
+-- (by assumption) and b (at a Bit type, trivially); a view is a type,
+-- with /<field index> or /<constructor> per step of its path and
+-- [<offset>+<width>] for a window that is not the whole value, the
+-- views of a def listed in the order of their text; a repack is
 -- "<unpack or chr> <cell> from <validity> to <type> @ <chain>"; an
 -- undefined value's kind is not-used, dont-care or no-match.
 --
@@ -1422,6 +1792,8 @@ renderSideFile modName mm =
               "alias " ++ renderCell (dr_alias r),
               "tiers " ++ renderTiers r,
               "validity " ++ renderValidity tt (dr_validity r),
+              "views " ++ show (length (dr_views r)) ++
+                  concat [ " {" ++ v ++ "}" | v <- renderViews (dr_views r) ],
               "repacks " ++ show (length (dr_repacks r)) ++
                   concat [ " {" ++ renderRepack rp ++ "}" | rp <- dr_repacks r ],
               "undefined " ++ show (length (dr_undefs r)) ++
@@ -1624,8 +1996,12 @@ renderCensus modName mm cs cells aliasClasses defs = unlines $
       "  validity: defs with a must-type " ++ show (length withType)
         ++ " (at a Bit type " ++ show (nTier 57)
         ++ "; by construction " ++ show (nTier 58) ++ ", by declaration " ++ show (nTier 59)
-        ++ ", by assumption " ++ show (nTier 60) ++ "), type windows "
-        ++ show (IM.size (tt_rows (mm_types mm))),
+        ++ ", by assumption " ++ show (nTier 60) ++ "), defs with views "
+        ++ show (count (not . null . dr_views) defs)
+        ++ ", derived views " ++ show (sum (map (length . dr_views . fst) defs))
+        ++ " (paths to depth " ++ show (maximum (0 : [ length path | (r, _) <- defs,
+                                                                     View _ path _ _ <- dr_views r ]))
+        ++ "), type windows " ++ show (IM.size (tt_rows (mm_types mm))),
       "  repacks " ++ show (length (mm_repacks mm))
         ++ " (unpack " ++ show (length [ () | r <- mm_repacks mm, rf_kind r == RKUnpack ])
         ++ ", chr " ++ show (length [ () | r <- mm_repacks mm, rf_kind r == RKChr ])
@@ -1725,6 +2101,73 @@ checkNameHints t cells =
                 ++ renderKey key ++ ", name hint " ++ renderHint hint
               | (p, m, hint, key) <- checked, maybe True ((/= key) . hintKey) hint ]
     in  (length bound, length checked, bad)
+
+-- The edges against the types and the chains, over every reachable
+-- cell: a Field edge names a field of a struct type that is not an
+-- interface, a Payload edge a constructor of a data type; the chain
+-- reaches NoEdge with no type constructor repeated (the cut); and
+-- every header on the chain was allocated no later than the cell
+-- (frame ids fall or stay toward the root: a parent is evaluated, in
+-- its own frame, before its operands are heaped; compared on the
+-- census run, whose seed is 0).  Returns the cells with an edge
+-- (field, payload, operand), the longest chain, and the mismatches
+-- rendered.
+checkEdges :: SiteTable -> [(Int, CellMeta)] -> ((Int, Int, Int, Int), [String])
+checkEdges t cells =
+    let edges = [ (p, m, e) | (p, m) <- cells, let e = cm_edge m, notNone e ]
+        notNone NoEdge = False
+        notNone _ = True
+        nField = length [ () | (_, _, Field {}) <- edges ]
+        nPayload = length [ () | (_, _, Payload {}) <- edges ]
+        nOperand = length [ () | (_, _, Operand {}) <- edges ]
+        chains = [ (p, m, walk (cm_edge m) [] (frameId (cm_frame m)) 0) | (p, m, _) <- edges ]
+        -- the chain from an edge: the constructors seen, the frame id
+        -- below, the steps taken; a fault stops the walk
+        walk (Field k pt _ h) seen fid n = step (fieldOk k pt) pt h seen fid n
+        walk (Payload c pt _ h) seen fid n = step (conOk c pt) pt h seen fid n
+        walk _ _ _ n = Right n
+        step ok pt h seen fid n
+          | not ok = Left ("edge " ++ show n ++ " names no field or constructor of " ++ ppString pt)
+          | tyCon pt `elem` map Just seen = Left ("the type constructor of " ++ ppString pt ++ " repeats on the chain")
+          | frameId (cm_frame h) > fid = Left ("the parent's frame " ++ show (cm_frame h) ++ " is above the cell's")
+          | otherwise = case tyCon pt of
+                          Just c -> walk (cm_edge h) (c : seen) (frameId (cm_frame h)) (n + 1)
+                          Nothing -> Left ("no type constructor at " ++ ppString pt)
+        fieldOk k pt = case structFieldCount pt of
+                         Just n -> k >= 0 && k < n
+                         Nothing -> False
+        conOk c pt = case leftmostCon pt of
+                       Just (ITCon _ _ (TIdata cons _)) -> c >= 0 && c < length cons
+                       _ -> False
+        frameId TopFrame = 0
+        frameId (Frame { fr_id = i }) = i
+        longest = maximum (0 : [ n | (_, _, Right n) <- chains ])
+        bad = [ "_" ++ show p ++ " (" ++ renderSite t (siteOf m) ++ "): " ++ msg
+              | (p, m, Left msg) <- chains ]
+    in  ((nField, nPayload, nOperand, longest), bad)
+
+-- The derived views and the validity of every lifted def of a Bit
+-- type against that type: a view or a validity at a Bit type with no
+-- path is the def's own bits, so a whole one has the def's width and
+-- a window has the def's width and lies inside its type (the window
+-- arithmetic of windowViews, composeViews and windowValidity).  A
+-- view through a path or at a type that is no Bit type has a width
+-- the evaluator does not know (no field layout is in hand) and is not
+-- checked.  Returns the views and validities checked and the
+-- mismatches rendered.
+checkViewWindows :: SiteTable -> TypeTable -> [(Int, DefRecord, CellMeta, Maybe IType)]
+                 -> (Int, [String])
+checkViewWindows t tt defs =
+    let checks = [ (p, m, v) | (p, r, m, Just ty) <- defs, let n = bitWidth ty, n /= wholeWidth,
+                               v <- dr_views r ++ validityViews tt (dr_validity r),
+                               View vty [] _ _ <- [v], bitWidth vty /= wholeWidth ]
+        faults = [ "_" ++ show p ++ " (" ++ renderSite t (siteOf m) ++ "): " ++ renderView v
+                   ++ " on a def of width " ++ show n
+                 | (p, r, m, Just ty) <- defs, let n = bitWidth ty, n /= wholeWidth,
+                   v@(View vty [] o w) <- dr_views r ++ validityViews tt (dr_validity r),
+                   let vw = bitWidth vty, vw /= wholeWidth,
+                   not (if w == wholeWidth then vw == n else w == n && o >= 0 && o + w <= vw) ]
+    in  (length checks, faults)
 
 -- The gate against the facts and the types: a cell with a validity is
 -- a gated cell, and the cell of a lifted def (whose type the rebuild

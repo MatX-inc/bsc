@@ -11,7 +11,7 @@ import Version(bscVersionStr)
 import BinData
 import IExpandMeta(ModuleMeta(..), SiteTable(..), SiteKey(..), SiteKind,
                    SiteRow(..), RecKey(..), ContextTable(..), TypeTable(..),
-                   TypeKey(..), RepackKind(..), RepackFact(..),
+                   TypeKey(..), View(..), Step(..), RepackKind(..), RepackFact(..),
                    DefRecord(..), MetaEvent(..), PassTag, siteIdsFromRows,
                    contextIdsFromRows, typeIdsFromRows)
 import FileIOUtil(writeBinaryFileCatch)
@@ -41,7 +41,7 @@ import qualified Data.ByteString as B
 -- .bxref file tag -- change this whenever the .bxref format changes
 -- See also GenABin.header and GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bxref-20261103-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bxref-20261103-2"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -98,8 +98,10 @@ readBXrefFile errh nm s =
 -- (IExpandMeta.siteIdsFromRows, contextIdsFromRows, typeIdsFromRows),
 -- and SiteKey and TypeKey order by intern id (the identifier's, the
 -- type's), so writing st_ids or tt_ids would make the bytes depend on
--- the live intern table.  A type key's type is written as the .bo
--- writes an IType.
+-- the live intern table.  A type key's or a view's type is written as
+-- the .bo writes an IType, and a view's constructor step as the .bo
+-- writes an Id; a def's views are written in the order the rebuild
+-- derived them.
 
 instance Bin BXrefFile where
     writeBytes (BXrefFile v m s mm) =
@@ -191,7 +193,7 @@ instance Bin ContextTable where
                    return (ContextTable n (contextIdsFromRows rowMap) rowMap ops)
 
 instance Bin DefRecord where
-    writeBytes (DefRecord p h s c cs m f par sh b a vd rps us) =
+    writeBytes (DefRecord p h s c cs m f par sh b a vd vs rps us) =
         do toBin p
            toBin h
            toBin s
@@ -204,6 +206,7 @@ instance Bin DefRecord where
            toBin b
            toBin a
            toBin vd
+           toBin vs
            toBin rps
            toBin us
     readBytes = do p <- fromBin
@@ -218,10 +221,11 @@ instance Bin DefRecord where
                    b <- fromBin
                    a <- fromBin
                    vd <- fromBin
+                   vs <- fromBin
                    rps <- fromBin
                    us <- fromBin
                    return (DefRecord p h s c (IS.fromDistinctAscList cs) m f par sh b a
-                                     vd rps us)
+                                     vd vs rps us)
 
 instance Bin TypeTable where
     writeBytes (TypeTable n _ rows) =
@@ -236,6 +240,20 @@ instance Bin TypeKey where
     writeBytes (TypeKey t o w) = do toBin t; toBin o; toBin w
     readBytes = do t <- fromBin; o <- fromBin; w <- fromBin
                    return (TypeKey t o w)
+
+instance Bin Step where
+    writeBytes (SField k) = do putI 0; toBin k
+    writeBytes (SCon i) = do putI 1; toBin i
+    readBytes = do n <- getI
+                   case n of
+                     0 -> SField <$> fromBin
+                     1 -> SCon <$> fromBin
+                     m -> internalError ("GenBXref.Bin(Step).readBytes: " ++ show m)
+
+instance Bin View where
+    writeBytes (View t p o w) = do toBin t; toBin p; toBin o; toBin w
+    readBytes = do t <- fromBin; p <- fromBin; o <- fromBin; w <- fromBin
+                   return (View t p o w)
 
 instance Bin RepackKind where
     writeBytes RKUnpack = putI 0
