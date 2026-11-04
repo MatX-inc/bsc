@@ -411,13 +411,21 @@ sat dvs ps p =
     whole_stack <- getSatStack
     bound_tyvars <- getBoundTVs
     let IsIn p_cl p_tys = toPred p
+        -- Only a ground result is recorded: a result whose arguments
+        -- hold a type variable is never consulted
+        -- (IExpandUtils.fullTypeNormalizer looks up concrete arguments
+        -- only), and it would carry this definition's type variables
+        -- into the package's .bo, where the cache is written in the
+        -- order of its keys, i.e. of the interning of their spellings
+        -- (ISyntax.ipkg_atf_cache).
         recordATFs s_final =
           let resolvedTys = apSub s_final p_tys
           in sequence_
-               [ recordATFResult (tcon_name atfTC)
-                                 [resolvedTys !! i | i <- paramIdxs]
-                                 (resolvedTys !! targetIdx)
-               | (atfTC, paramIdxs, targetIdx) <- assocTypes p_cl ]
+               [ recordATFResult (tcon_name atfTC) args result
+               | (atfTC, paramIdxs, targetIdx) <- assocTypes p_cl
+               , let args = [resolvedTys !! i | i <- paramIdxs]
+               , let result = resolvedTys !! targetIdx
+               , not (any hasTyVar (result : args)) ]
     let lookfor_result :: Maybe (Bind, (Subst, [(Type,Type)]))
         -- I'm a little worried that matching against the whole_stack
         -- will have lexical scoping issues where p will match against

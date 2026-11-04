@@ -9,7 +9,7 @@ module CType(
   getTyVarId, getTypeKind,
   isTNum, getTNum,
   isTStr, getTStr,
-  isTVar, isTCon, isIfc, isInterface, isDictType, isDictFun, isUpdateable,
+  isTVar, hasTyVar, isTCon, isIfc, isInterface, isDictType, isDictFun, isUpdateable,
   leftCon, leftTyCon, allTyCons, allTConNames, tyConArgs,
   splitTAp, normTAp,
   isATFAp,
@@ -415,6 +415,14 @@ getTStr (TCon (TyStr s _)) = s
 getTStr t = internalError $ "getTNum: not a type-level string -- " ++ (show t)
 
 isTVar :: Type -> Bool
+
+-- whether a type variable occurs in the type (a ground type is left as
+-- it is by a substitution, so a caller can keep it instead of copying it)
+hasTyVar :: Type -> Bool
+hasTyVar (TVar _) = True
+hasTyVar (TAp l r) = hasTyVar l || hasTyVar r
+hasTyVar _ = False
+
 isTVar (TVar _) = True
 isTVar _ = False
 

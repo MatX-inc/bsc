@@ -1,0 +1,175 @@
+package ATFCacheGround where
+
+-- Nested associated type functions in a field type: Slot tag (Pred Bool
+-- (LitPred lit)), the outer function's tag a parameter of the data type,
+-- so the derived Generic instance keeps the application unreduced.  Inside the walk of Count (Holder LitA), the Generic
+-- traversal reaches Count (Slot TagX (Pred Bool (LitPred LitA))), whose
+-- type functions expTFun expands into class predicates with fresh type
+-- variables: Lits LitA p (p the inner result) and SlotEnc TagX (Pred
+-- Bool p) s ts (ts the outer result, s a class parameter the type
+-- function does not cover).  The concreteness order solves the SlotEnc
+-- predicate first, while p is still a variable: its instance matches p
+-- generically, so the type function result the walk records for Slot
+-- is nonground, (Slot, [TagX, Pred Bool p]) -> Box p, with p a fresh
+-- variable of the walk; Lits LitA p binds p afterwards.  Count (Holder
+-- LitA) is ground and recorded; later occurrences replay it, re-recording
+-- the result under renumbered variables.  Count (Holder LitB) is walked
+-- for the first time after such a replay.  The .bo serializes the type
+-- function cache in the order of its leaves' interned identifiers.
+-- useBig1/useBig2 draw several thousand counter numbers before their
+-- walks (the counter restarts per definition), so the variables of
+-- their replays and first walks are spellings nothing earlier in the
+-- process interned.
+
+data TagX = TagX
+data TagY = TagY
+data LitA = LitA
+data LitB = LitB
+
+class Lits lit tp | lit -> tp where
+  type LitPred lit = tp
+  litv :: lit -> tp
+
+instance Lits LitA Bool where
+  litv _ = True
+
+instance Lits LitB (UInt 8) where
+  litv _ = 1
+
+data Pred t p = Pred t p
+
+data Box p = Box p
+
+class SlotEnc tag a s ts | tag a -> s ts where
+  type Slot tag a = ts
+  enc :: tag -> a -> ts
+
+instance SlotEnc TagX (Pred t p) (Maybe p) (Box p) where
+  enc _ (Pred _ p) = Box p
+
+data Box2 p = Box2 p p
+
+instance SlotEnc TagY (Pred t p) (Maybe p) (Box2 p) where
+  enc _ (Pred _ p) = Box2 p p
+
+instance (Count p) => Count (Box2 p) where
+  count (Box2 p q) = count p + count q + 2
+
+class Count a where
+  count :: a -> UInt 8
+
+instance Count (UInt 8) where
+  count x = x
+
+instance Count Bool where
+  count b = if b then 1 else 0
+
+instance (Count p) => Count (Box p) where
+  count (Box p) = count p + 1
+
+instance (Generic a r, Count' r) => Count a where
+  count x = count' (from x)
+
+class Count' r where
+  count' :: r -> UInt 8
+
+instance (Count' r1, Count' r2) => Count' (r1, r2) where
+  count' (x, y) = count' x + count' y
+
+instance (Count' r1, Count' r2) => Count' (Either r1 r2) where
+  count' (Left x) = count' x
+  count' (Right y) = count' y
+
+instance Count' () where
+  count' () = 0
+
+instance (Count' r) => Count' (Meta m r) where
+  count' (Meta x) = count' x
+
+instance (Count a) => Count' (Conc a) where
+  count' (Conc x) = count x
+
+data Holder tag lit = Holder (Slot tag (Pred Bool (LitPred lit))) (UInt 8)
+
+hA :: Holder TagX LitA
+hA = Holder (Box True) 1
+
+hB :: Holder TagX LitB
+hB = Holder (Box 2) 3
+
+hAx :: Bool -> UInt 8 -> Holder TagX LitA
+hAx b n = Holder (Box b) n
+
+hBx :: UInt 8 -> UInt 8 -> Holder TagX LitB
+hBx v n = Holder (Box v) n
+
+data Pair2 = Pair2 (Holder TagX LitA) (Holder TagY LitA)
+
+hY :: Holder TagY LitA
+hY = Holder (Box2 True False) 4
+
+data Rec = RN | RC (Holder TagX LitB) Rec Rec (Holder TagY LitB)
+
+hYB :: Holder TagY LitB
+hYB = Holder (Box2 5 6) 7
+
+useA :: UInt 8
+useA = count hA
+
+useB :: UInt 8 -> UInt 8
+useB x = x + count hA + count hB
+
+useC :: UInt 8 -> UInt 8
+useC x = count hB + count (Pair2 hA hY) + x
+
+useD :: UInt 8 -> UInt 8
+useD x = count hA + count (RC hB RN RN hYB) + count hB + x + 1 + 2 + 3
+
+useE :: UInt 8 -> UInt 8 -> UInt 8
+useE x y = x + 1 + 2 + 3 * x - 4 + (y >> 1) + (y << 2) + 5 + 6 + 7 + 8 + 9
+           + count hB + count hA + count (Pair2 (hAx (x > y) y) hY)
+
+useBig1 :: UInt 8 -> UInt 8 -> UInt 8
+useBig1 x y = count hA + count hB + x + (x & 1) + (y | 8) - 15 + (x ^ y) + (y >> 1) + (x << 1) * 43 + (x & 50) + (y | 57) - 64 + (x ^ y) + (y >> 1) + (x << 1) * 92 + (x & 99) + (y | 106) - 113 + (x ^ y) + (y >> 1) + (x << 1) * 141 + (x & 148) + (y | 155) - 162 + (x ^ y) + (y >> 1) + (x << 1) * 190 + (x & 197) + (y | 204) - 211 + (x ^ y) + (y >> 1) + (x << 1) * 239 + (x & 246) + (y | 2) - 9 + (x ^ y) + (y >> 1) + (x << 1) * 37 + (x & 44) + (y | 51) - 58 + (x ^ y) + (y >> 1) + (x << 1) * 86 + (x & 93) + (y | 100) - 107 + (x ^ y) + (y >> 1) + (x << 1) * 135 + (x & 142) + (y | 149) - 156 + (x ^ y)
+
+useBig2 :: UInt 8 -> UInt 8 -> UInt 8
+useBig2 x y = count hB + count hA + y + (x & 1) + (y | 8) - 15 + (x ^ y) + (y >> 1) + (x << 1) * 43 + (x & 50) + (y | 57) - 64 + (x ^ y) + (y >> 1) + (x << 1) * 92 + (x & 99) + (y | 106) - 113 + (x ^ y) + (y >> 1) + (x << 1) * 141 + (x & 148) + (y | 155) - 162 + (x ^ y) + (y >> 1) + (x << 1) * 190 + (x & 197) + (y | 204) - 211 + (x ^ y) + (y >> 1) + (x << 1) * 239 + (x & 246) + (y | 2) - 9 + (x ^ y) + (y >> 1) + (x << 1) * 37 + (x & 44) + (y | 51) - 58 + (x ^ y) + (y >> 1) + (x << 1) * 86 + (x & 93) + (y | 100) - 107 + (x ^ y) + (y >> 1) + (x << 1) * 135 + (x & 142) + (y | 149) - 156 + (x ^ y)
+
+interface Ifc =
+  get :: UInt 8
+  put :: UInt 8 -> Action
+
+mkNest :: Module Ifc
+mkNest =
+  module
+    r :: Reg (UInt 8) <- mkReg 0
+    s :: Reg (UInt 8) <- mkReg 1
+    rules
+      "a": when r > 3 ==> r := r + count (hAx (r > 1) s) + useA + count (hBx r s)
+      "b": when s > 4 ==> s := useB s + count hA + useC r + count (RC hB RN (RC hB RN RN hYB) hYB)
+    interface
+      get = r + s + useD r + useE s r + useBig1 r s + useBig2 s r
+      put x = r := x + count hB + count (Pair2 hA hY)
+
+mkNest2 :: Module Ifc
+mkNest2 =
+  module
+    r :: Reg (UInt 8) <- mkReg 0
+    rules
+      "a": when r > 3 ==> r := count (hAx (r > 1) r) + count hB + useE r r + count (Pair2 hA hY)
+    interface
+      get = r + useC r + count hA
+      put x = r := x + useD x + count (RC hB RN RN hYB)
+
+sysNest :: Module Empty
+sysNest =
+  module
+    n1 :: Ifc <- mkNest
+    n2 :: Ifc <- mkNest2
+    rules
+      when True ==> do
+        $display "get: " n1.get n2.get
+        $finish
+      when True ==> do
+        n1.put 3
+        n2.put 4
