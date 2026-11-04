@@ -5,6 +5,7 @@ module GenABin(genABinFile, readABinFile) where
 
 import Error(internalError, ErrMsg(..), ErrorHandle, bsErrorUnsafe)
 import Position
+import FStringCompat(FString)
 
 --import Time(ClockTime)
 import Backend
@@ -39,9 +40,9 @@ header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260715-8"
 headerBS :: B.ByteString
 headerBS = B.pack header
 
-genABinFile :: ErrorHandle -> String -> ABin -> IO ()
-genABinFile errh fn abin =
-    writeBinaryFileCatch errh fn (header ++ encode abin)
+genABinFile :: ErrorHandle -> (FString -> FString) -> String -> ABin -> IO ()
+genABinFile errh remapF fn abin =
+    writeBinaryFileCatch errh fn (header ++ encodeWith remapF abin)
 
 readABinFile :: ErrorHandle -> String -> B.ByteString -> (ABin, String)
 readABinFile errh nm s =

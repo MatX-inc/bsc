@@ -9,7 +9,7 @@ module BinData ( Byte
                , getN, getB, getI -- , getBytesRead
                , Bin(..)
                , section
-               , encode, decode, decodeWithHash
+               , encode, encodeWith, decode, decodeWithHash
                ) where
 
 {- Routines for converting structures to/from byte strings.
@@ -1506,6 +1506,10 @@ buildHistogram bes = snd (foldl build (["<UNCLAIMED>"], M.empty) bes)
 -- matching (Left value) the first time it is encountered
 -- and (Right idx) each time afterward, updating the cache
 -- to track known values.
+-- Positions arrive here already remapped (-remap-path-prefix; see
+-- compress), so the cache is keyed on the stored value: positions that
+-- remap equal share a single payload, and the reader (which
+-- reconstructs sharing by occurrence) sees a canonical stream.
 share :: BinElem -> BinCache -> ([BinElem], BinCache)
 share (S s)   bc = share' s s bc
 share (I i)   bc = share' (id_key i) i bc
@@ -1523,33 +1527,53 @@ share' k x bc =
                            addKey k x bc)
 
 
-compress :: [BinElem] -> [BinElem]
-compress bes = compress' (bes, unknownCache)
-  where compress' ((x@(B _):xs), cache) = x:(compress' (xs, cache))
-        compress' ((x@(Start _):xs), cache) = x:(compress' (xs, cache))
-        compress' ((x@(End):xs), cache) = x:(compress' (xs, cache))
-        compress' ((x:xs), cache) =
+-- The file-name transform (-remap-path-prefix) runs here once per
+-- distinct file name: it costs O(length of the path) per call, and a
+-- .bo holds many positions in few files.
+compress :: (FString -> FString) -> [BinElem] -> [BinElem]
+compress remapF bes = compress' (bes, unknownCache, M.empty)
+  where compress' ((x@(B _):xs), cache, memo) = x:(compress' (xs, cache, memo))
+        compress' ((x@(Start _):xs), cache, memo) = x:(compress' (xs, cache, memo))
+        compress' ((x@(End):xs), cache, memo) = x:(compress' (xs, cache, memo))
+        compress' ((P p:xs), cache, memo) =
+          let (p', memo') = remapPos p memo
+              (bes, cache') = share (P p') cache
+          in compress' (bes ++ xs, cache', memo')
+        compress' ((x:xs), cache, memo) =
           let (bes, cache') = share x cache
           in -- trace ((show x) ++ " -> " ++ (show bes)) $
-             compress' (bes ++ xs, cache')
-        compress' ([], _) = []
+             compress' (bes ++ xs, cache', memo)
+        compress' ([], _, _) = []
+        remapPos p memo =
+          let f = pos_file p
+              at f' = if f' == f then p else p { pos_file = f' }
+          in case M.lookup f memo of
+               Just f' -> (at f', memo)
+               Nothing -> let f' = remapF f
+                          in (at f', M.insert f f' memo)
 
 -- Run the Out monad and extract a byte stream.  The resulting
 -- byte stream is generated lazily through the monad and preserves
 -- sharing.
 
-runOut :: Out () -> [Byte]
-runOut (Out xs _) = let bes   = compress $ toList xs
-                        bytes = concat [ bs | B bs <- bes ]
-                    in -- trace ("xs = " ++ (show xs)) $
-                       -- trace ("bytes = " ++ (show bytes)) $
-                       if trace_bindata
-                       then trace (showHist (buildHistogram bes)) $ bytes
-                       else bytes
+runOutWith :: (FString -> FString) -> Out () -> [Byte]
+runOutWith remapF (Out xs _) =
+    let bes   = compress remapF $ toList xs
+        bytes = concat [ bs | B bs <- bes ]
+    in -- trace ("xs = " ++ (show xs)) $
+       -- trace ("bytes = " ++ (show bytes)) $
+       if trace_bindata
+       then trace (showHist (buildHistogram bes)) $ bytes
+       else bytes
 
 -- Convenience function for encoding structures in the Bin typeclass
 encode :: (Bin a) => a -> [Byte]
-encode x = runOut (toBin x)
+encode = encodeWith id
+
+-- encode with a file-name transform applied to stored positions
+-- (-remap-path-prefix; see compress)
+encodeWith :: (Bin a) => (FString -> FString) -> a -> [Byte]
+encodeWith remapF x = runOutWith remapF (toBin x)
 
 runIn :: In a -> BS.ByteString -> Bool -> (a, Int, String)
 runIn (In f) bs do_hash =

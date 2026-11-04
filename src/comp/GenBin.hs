@@ -7,6 +7,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
 import Position
+import FStringCompat(FString)
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import ISyntax
@@ -31,10 +32,11 @@ header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bo-20260715-8"
 headerBS :: B.ByteString
 headerBS = B.pack header
 
-genBinFile :: ErrorHandle ->
+genBinFile :: ErrorHandle -> (FString -> FString) ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
-genBinFile errh fn bi_sig bo_sig ipkg =
-    writeBinaryFileCatch errh fn (header ++ encode (bi_sig, bo_sig, ipkg))
+genBinFile errh remapF fn bi_sig bo_sig ipkg =
+    writeBinaryFileCatch errh fn
+        (header ++ encodeWith remapF (bi_sig, bo_sig, ipkg))
 
 readBinFile :: ErrorHandle -> String -> B.ByteString ->
                IO (CSignature, CSignature, IPackage a, String)
