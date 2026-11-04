@@ -1,0 +1,52 @@
+checking package dependencies
+compiling MetaDerived.bsv
+code generation for sysMetaDerived starts
+_169: prim PrimUnpack, field 1, valid Prelude.Bit 4 db, views {Prelude.Bit 4} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_194: prim PrimUnpack, field 1, valid Prelude.Bit 4 db, views {Prelude.Bit 4} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_220: prim PrimUnpack, field 1, alias _220, valid Prelude.Bit 8 db, views {Prelude.Bit 8} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_245: prim PrimUnpack, field 1, valid Prelude.Bit 8 db, views {Prelude.Bit 8} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_331: prim PrimUnpack, field 1, valid Prelude.Bit 8 db, views {Prelude.Bit 8} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_372: def Prelude.toPrimAction [MetaDerived.bsv:78:7] u, field 3, alias _372 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_376: prim PrimAdd, binder x [Prelude.bs], valid Prelude.Bit 4 cdb, views {Prelude.Bit 4} <- def Prelude.toPrimAction [MetaDerived.bsv:78:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_381: method Prelude.read [Prelude.bs], valid MetaDerived.Outer d, views {MetaDerived.Outer} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_396: def Prelude.unpack, field 0, alias _396, valid MetaDerived.Outer [2+4] d, views {MetaDerived.Inner/0; MetaDerived.Mid/1/0; MetaDerived.Outer [2+4]; MetaDerived.Outer/1/1/0} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_404: def Prelude.toPrimAction [MetaDerived.bsv:87:7] u, field 3 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_412: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs], alias _412 <- def Prelude.toPrimAction [MetaDerived.bsv:87:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_433: con MetaDerived.A [MetaDerived.bsv:90:17], binder x [Prelude.bs], alias _417, valid Prelude.Bit 8 cdb, views {MetaDerived.T/A; Prelude.Bit 8} <- def Prelude.bind_ [MetaDerived.bsv:90:28] u#1 <- def Prelude.toPrimAction [MetaDerived.bsv:87:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_461: con MetaDerived.B [MetaDerived.bsv:95:17], binder x [Prelude.bs], alias _460, valid Prelude.Bit 8 cdb, views {MetaDerived.T/B; Prelude.Bit 8} <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaDerived.bsv:87:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_462: method Prelude.write [Prelude.bs], binder a [Prelude.bs] <- def Prelude.fromPrimAction [Prelude.bs]#1 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaDerived.bsv:87:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_468: def Prelude.toPrimAction [MetaDerived.bsv:101:7] u, field 3 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_471: method Prelude.read [Prelude.bs], valid Prelude.Maybe MetaDerived.Inner d, views {Prelude.Maybe MetaDerived.Inner} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_477: prim PrimBNot <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_489: prim PrimBNot <- def Prelude.toPrimAction [MetaDerived.bsv:101:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_490: method MetaDerived.x [MetaDerived.bsv:102:20], binder x [Prelude.bs], alias _490, valid Prelude.Maybe MetaDerived.Inner [2+4] d, views {MetaDerived.Inner/0; Prelude.Maybe MetaDerived.Inner [2+4]} <- def Prelude.toPrimAction [MetaDerived.bsv:101:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_491: method Prelude.write [Prelude.bs], binder a [Prelude.bs] <- def Prelude.fromPrimAction [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaDerived.bsv:101:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_512: def Prelude.toPrimAction [MetaDerived.bsv:109:7] u, field 3, alias _512 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_517: prim PrimXor, binder x [Prelude.bs], valid Prelude.Bit 8 db, views {Prelude.Bit 8} <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_523: prim PrimAdd, field 0, valid Prelude.Bit 8 cb, views {MetaDerived.Chain/Link/0; MetaDerived.Chain_$Link/0; Prelude.Bit 8} <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_534: prim PrimAdd, valid Prelude.Bit 8 cb, views {Prelude.Bit 8} <- def MetaDerived.total [MetaDerived.bsv:51:18] r#1 <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_535: prim PrimAdd, valid Prelude.Bit 8 cb, views {Prelude.Bit 8} <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_537: prim PrimAdd, field 0, valid Prelude.Bit 8 cb, views {MetaDerived.Chain/Link/0; MetaDerived.Chain_$Link/0; Prelude.Bit 8} <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_541: prim PrimAdd, field 0, valid Prelude.Bit 8 cb, views {MetaDerived.Chain/Link/0; MetaDerived.Chain_$Link/0; Prelude.Bit 8} <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_562: method MetaDerived.hd [MetaDerived.bsv:54:21], binder x [Prelude.bs], alias _562, valid Prelude.Bit 8 cb, views {MetaDerived.Chain/Link/0; MetaDerived.Chain_$Link/0; Prelude.Bit 8} <- def MetaDerived.total [MetaDerived.bsv:51:18] r#3 <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_563: def MetaDerived.total [MetaDerived.bsv:51:18] r, binder y [Prelude.bs], valid Prelude.Bit 8 cb, views {Prelude.Bit 8} <- def MetaDerived.total [MetaDerived.bsv:51:18] r#3 <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_575: prim PrimAdd, valid Prelude.Bit 8 cb, views {Prelude.Bit 8} <- def MetaDerived.total [MetaDerived.bsv:51:18] r#2 <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_576: prim PrimAdd, valid Prelude.Bit 8 cb, views {Prelude.Bit 8} <- def MetaDerived.total [MetaDerived.bsv:51:18] r#1 <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_577: prim PrimAdd, valid Prelude.Bit 8 cb, views {Prelude.Bit 8} <- def Prelude.toPrimAction [MetaDerived.bsv:109:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_581: def Prelude.toPrimAction [MetaDerived.bsv:120:7] u, field 3, alias _581 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_585: prim PrimAdd, binder x [Prelude.bs], valid Prelude.Bit 8 cdb, views {Prelude.Bit 8} <- def Prelude.toPrimAction [MetaDerived.bsv:120:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_608: prim PrimSelect, views {Prelude.Bit 8 [1+1]} <- def Prelude.toPrimAction [MetaDerived.bsv:120:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_611: prim PrimIf, field 0, valid Prelude.Bit 8 db, views {MetaDerived.Word/0; Prelude.Bit 8} <- def Prelude.toPrimAction [MetaDerived.bsv:120:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_614: def Prelude.toPrimAction [MetaDerived.bsv:130:7] u, field 3, alias _614 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_619: prim PrimAdd, binder x [Prelude.bs], valid Prelude.Bit 16 cdb, views {Prelude.Bit 16} <- def Prelude.toPrimAction [MetaDerived.bsv:130:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_624: prim PrimXor, field 0, views {MetaDerived.Word/0} <- def Prelude.toPrimAction [MetaDerived.bsv:130:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_625: prim PrimAdd, field 1, valid Prelude.Bit 8 cb, views {MetaDerived.Word/1; Prelude.Bit 8} <- def Prelude.toPrimAction [MetaDerived.bsv:130:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_626: method Prelude.pack [MetaDerived.bsv:131:23], views {MetaDerived.Word} <- def Prelude.toPrimAction [MetaDerived.bsv:130:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+_630: prim PrimConcat <- def Prelude.toPrimAction [MetaDerived.bsv:130:7] u#1 <- def Prelude.addRules [MetaDerived.bsv:77:4] u#1 <- def Prelude.bind_ [MetaDerived.bsv:77:4] u#1
+Warning: "MetaDerived.bsv", line 64, column 8: (G0117)
+  Rule `choose_tag' shadows the effects of `choose_word' when they execute in
+  the same clock cycle. Affected method calls:
+    sel.write
+  To silence this warning, use the `-no-warn-action-shadowing' flag.
+Verilog file created: sysMetaDerived.v
+All packages are up to date.

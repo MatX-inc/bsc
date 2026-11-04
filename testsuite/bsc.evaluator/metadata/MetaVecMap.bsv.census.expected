@@ -10,9 +10,14 @@ metadata census for sysMetaVecMap:
   depth: 1:1 2:3 6:3
   count: 1:12 2:1 3:1
   alias classes 34
+  validity: defs with a must-type 7 (at a Bit type 4; by construction 4, by declaration 3, by assumption 0), defs with views 7, derived views 13 (paths to depth 1), type windows 3
+  repacks 0 (unpack 0, chr 0), on lifted defs 0; undefined values on lifted defs 0
   cost: frame pushes 269, context-table operations 26 for 14 contexts
   chains walked 264, loops re-entered 0, repeated non-recursion sites 5 (def Prelude.bind_ [Prelude.bs] x3; def Prelude.bind_ [MetaVecMap.bsv:21:4] u x1; def Prelude.__avFunc [Prelude.bs] x1)
   name hints: 3 cells bound to a parameter, 0 outside the library, each named by it
+  bit gate: cells gated 7, with facts 7; lifted defs gated as their types decide 7
+  edges: cells moved 8 (field 1, payload 6, operand 1), longest chain 1
+  views: 8 views and validities at a Bit type checked against the def's width
   method-condition positions: 0 calls, 0 kept, 0 on chains
 Verilog file created: sysMetaVecMap.v
 All packages are up to date.

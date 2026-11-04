@@ -10,9 +10,14 @@ metadata census for sysMetaBinder:
   depth: 2:1 3:12 4:5 5:3 6:4 8:1
   count: 1:24
   alias classes 50
+  validity: defs with a must-type 21 (at a Bit type 15; by construction 12, by declaration 12, by assumption 0), defs with views 23, derived views 28 (paths to depth 1), type windows 7
+  repacks 0 (unpack 0, chr 0), on lifted defs 0; undefined values on lifted defs 0
   cost: frame pushes 175, context-table operations 64 for 24 contexts
   chains walked 165, loops re-entered 0, repeated non-recursion sites 20 (def Prelude.bind_ x11; def Prelude.bind_ [Prelude.bs] x4; def Prelude.__avFunc [Prelude.bs] x4; def Prelude.bind_ [MetaBinder.bsv:34:4] u x1)
   name hints: 11 cells bound to a parameter, 3 outside the library, each named by it
+  bit gate: cells gated 27, with facts 21; lifted defs gated as their types decide 27
+  edges: cells moved 15 (field 6, payload 0, operand 9), longest chain 1
+  views: 32 views and validities at a Bit type checked against the def's width
   method-condition positions: 0 calls, 0 kept, 0 on chains
 Verilog file created: sysMetaBinder.v
 All packages are up to date.

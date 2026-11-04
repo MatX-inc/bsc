@@ -1,0 +1,41 @@
+checking package dependencies
+compiling MetaNonBit.bsv
+code generation for mkSub starts
+_64: prim PrimUnpack, field 1, alias _64, valid Prelude.Bit 8 db, views {Prelude.AVStruct (Prelude.Bit 8)/0; Prelude.Bit 8} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_119: prim PrimAdd, binder x [Prelude.bs], valid Prelude.Bit 8 cdb, views {Prelude.Bit 8} <- def Prelude.bind_ [MetaNonBit.bsv:32:9] u#1
+Verilog file created: mkSub.v
+code generation for sysMetaNonBit starts
+_110: prim PrimUnpack, field 1, alias _110, valid Prelude.Bit 8 db, views {Prelude.Bit 8} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_331: def Prelude.toPrimAction [MetaNonBit.bsv:57:7] u, field 3 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_343: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs], alias _343 <- def Prelude.toPrimAction [MetaNonBit.bsv:57:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_351: method Prelude._read [MetaNonBit.bsv:53:46], field 2, alias _85, valid Prelude.Bit 8 db, views {MetaNonBit.Mixed/2; Prelude.Bit 8}
+_352: prim PrimAdd, valid Prelude.Bit 8 cb, views {Prelude.Bit 8} <- def Prelude.fromPrimAction [MetaNonBit.bsv:57:7] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:57:7] u#1 <- def Prelude.toPrimAction [MetaNonBit.bsv:57:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_368: prim PrimAdd, binder x [Prelude.bs], valid Prelude.Bit 8 cdb, views {Prelude.Bit 8} <- def Prelude.bind_ [MetaNonBit.bsv:57:7] u#1 <- def Prelude.toPrimAction [MetaNonBit.bsv:57:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_369: method Prelude.write [Prelude.bs], binder a [Prelude.bs] <- def Prelude.fromPrimAction [Prelude.bs]#1 <- def Prelude.bind_ [MetaNonBit.bsv:57:7] u#1 <- def Prelude.toPrimAction [MetaNonBit.bsv:57:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_375: def Prelude.toPrimAction [MetaNonBit.bsv:64:7] u, field 3, alias _375 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_387: method Prelude.read [Prelude.bs], field 0, valid MetaNonBit.Hue d, views {MetaNonBit.Hue} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_389: prim PrimEQ, valid Prelude.Bit 1 cb, views {Prelude.Bit 1} <- def Prelude.toPrimAction [MetaNonBit.bsv:64:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_410: prim PrimSelect, field 0, views {Prelude.Bit 8 [0+2]} <- def Prelude.toPrimAction [MetaNonBit.bsv:64:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_416: def Prelude.toPrimAction [MetaNonBit.bsv:72:7] u, field 3, alias _416 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_425: prim PrimAdd, field 0, valid Prelude.Bit 4 cb, views {MetaNonBit.Pair/0; Prelude.Bit 4} <- def Prelude.toPrimAction [MetaNonBit.bsv:72:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_428: method Prelude.read [Prelude.bs], valid MetaNonBit.Pair d, views {MetaNonBit.Pair} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_431: prim PrimUnpack, field 0, alias _431, valid MetaNonBit.Pair [2+4] d, views {MetaNonBit.Pair [2+4]; MetaNonBit.Pair/0} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_434: prim PrimSelect, field 1, valid MetaNonBit.Pair [0+2] d, views {MetaNonBit.Hue; MetaNonBit.Pair [0+2]; MetaNonBit.Pair/1} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_438: prim PrimOrd, field 2, alias _438, valid Prelude.Bool d, views {Prelude.Bool} <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_439: def Prelude.toPrimAction [MetaNonBit.bsv:79:7] u, field 3 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_452: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs], alias _452 <- def Prelude.toPrimAction [MetaNonBit.bsv:79:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_453: method Prelude.avValue [Prelude.bs], binder v [Prelude.bs], alias _453, valid Prelude.Bit 8 db, views {Prelude.AVStruct (Prelude.Bit 8)/0; Prelude.Bit 8} <- def Prelude.toPrimAction [MetaNonBit.bsv:79:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_485: method MetaNonBit.take [MetaNonBit.bsv:24:33] <- def Prelude.toPrimAction [MetaNonBit.bsv:79:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_498: method MetaNonBit.take [MetaNonBit.bsv:24:33] <- def Prelude.toPrimAction [MetaNonBit.bsv:79:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_501: method FIFOF_.i_notFull [FIFOF_.bsv], field 0, valid Prelude.Bool d, views {Prelude.Bool} <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1
+_507: method Prelude.avAction [Prelude.bs], field 1, alias _507 <- def Prelude.toPrimAction [MetaNonBit.bsv:79:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_512: method FIFOF_.enq [FIFOF_.bsv] <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaNonBit.bsv:79:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_513: prim PrimOrd, field 2, alias _513, valid Prelude.Bool d, views {Prelude.Bool} <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_514: def Prelude.toPrimAction [MetaNonBit.bsv:84:7] u, field 3 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_524: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs], alias _524 <- def Prelude.toPrimAction [MetaNonBit.bsv:84:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_529: method FIFOF.first [MetaNonBit.bsv:84:16], binder x [Prelude.bs], alias _238, valid Prelude.Bit 8 db, views {Prelude.Bit 8} <- def Prelude.bind_ [MetaNonBit.bsv:84:11] u#1 <- def Prelude.toPrimAction [MetaNonBit.bsv:84:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_534: method FIFOF_.i_notEmpty [FIFOF_.bsv], field 0, valid Prelude.Bool d, views {Prelude.Bool} <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1
+_542: method Prelude.avAction [Prelude.bs], field 1, alias _542 <- def Prelude.toPrimAction [MetaNonBit.bsv:84:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+_547: method FIFOF_.deq [FIFOF_.bsv] <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaNonBit.bsv:84:7] u#1 <- def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 <- def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1
+Verilog file created: sysMetaNonBit.v
+All packages are up to date.

@@ -10,8 +10,10 @@ import Version(bscVersionStr)
 
 import BinData
 import IExpandMeta(ModuleMeta(..), SiteTable(..), SiteKey(..), SiteKind,
-                   SiteRow(..), RecKey(..), ContextTable(..), DefRecord(..),
-                   MetaEvent(..), PassTag, siteIdsFromRows, contextIdsFromRows)
+                   SiteRow(..), RecKey(..), ContextTable(..), TypeTable(..),
+                   TypeKey(..), View(..), Step(..), RepackKind(..), RepackFact(..),
+                   DefRecord(..), MetaEvent(..), PassTag, siteIdsFromRows,
+                   contextIdsFromRows, typeIdsFromRows)
 import FileIOUtil(writeBinaryFileCatch)
 
 import qualified Data.IntMap.Strict as IM
@@ -25,8 +27,9 @@ import qualified Data.ByteString as B
 --
 -- <module>.bxref, written beside the module's .ba under -bxref, is the
 -- module's cross-reference: the evaluator's metadata table
--- (IExpandMeta.ModuleMeta: the sites, the contexts, the roots and one
--- record per lifted def) and the ledger of what the passes since
+-- (IExpandMeta.ModuleMeta: the sites, the contexts, the type windows,
+-- the roots, one record per lifted def and the repacks) and the
+-- ledger of what the passes since
 -- elaboration did to the def and rule ids, as the ledger stood when
 -- the module's code was generated.  It is an artifact of its own: the
 -- .ba never carries the table or the ledger, and nothing in a compile
@@ -38,7 +41,7 @@ import qualified Data.ByteString as B
 -- .bxref file tag -- change this whenever the .bxref format changes
 -- See also GenABin.header and GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bxref-20261102-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-bxref-20261103-2"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -89,11 +92,16 @@ readBXrefFile errh nm s =
 -- than beside their types because BinData imports ISyntax, which
 -- carries the ledger.  An IntMap or IntSet is written as its ascending
 -- list and an enumeration as its index, checked against its bounds
--- when read, so the bytes are a function of the content.  The two
--- inverse maps of the tables (st_ids, ct_ids) are not written: both
--- are rebuilt from the rows on read (IExpandMeta.siteIdsFromRows,
--- contextIdsFromRows), and SiteKey orders by intern id, so writing
--- st_ids would make the bytes depend on the live intern table.
+-- when read, so the bytes are a function of the content.  The
+-- inverse maps of the tables (st_ids, ct_ids, tt_ids) are not
+-- written: all are rebuilt from the rows on read
+-- (IExpandMeta.siteIdsFromRows, contextIdsFromRows, typeIdsFromRows),
+-- and SiteKey and TypeKey order by intern id (the identifier's, the
+-- type's), so writing st_ids or tt_ids would make the bytes depend on
+-- the live intern table.  A type key's or a view's type is written as
+-- the .bo writes an IType, and a view's constructor step as the .bo
+-- writes an Id; a def's views are written in the order the rebuild
+-- derived them.
 
 instance Bin BXrefFile where
     writeBytes (BXrefFile v m s mm) =
@@ -113,18 +121,22 @@ instance Bin BXrefStage where
     readBytes = fmap toEnumOrErr getI
 
 instance Bin ModuleMeta where
-    writeBytes (ModuleMeta s c r d e) =
+    writeBytes (ModuleMeta s c ty r d rp e) =
         do toBin s
            toBin c
+           toBin ty
            toBin r
            toBin (IM.toAscList d)
+           toBin rp
            toBin e
     readBytes = do s <- fromBin
                    c <- fromBin
+                   ty <- fromBin
                    r <- fromBin
                    d <- fromBin
+                   rp <- fromBin
                    e <- fromBin
-                   return (ModuleMeta s c r (IM.fromDistinctAscList d) e)
+                   return (ModuleMeta s c ty r (IM.fromDistinctAscList d) rp e)
 
 instance Bin SiteTable where
     writeBytes (SiteTable n _ rows recs) =
@@ -181,7 +193,7 @@ instance Bin ContextTable where
                    return (ContextTable n (contextIdsFromRows rowMap) rowMap ops)
 
 instance Bin DefRecord where
-    writeBytes (DefRecord p h s c cs m f par sh b a) =
+    writeBytes (DefRecord p h s c cs m f par sh b a vd vs rps us) =
         do toBin p
            toBin h
            toBin s
@@ -193,6 +205,10 @@ instance Bin DefRecord where
            toBin sh
            toBin b
            toBin a
+           toBin vd
+           toBin vs
+           toBin rps
+           toBin us
     readBytes = do p <- fromBin
                    h <- fromBin
                    s <- fromBin
@@ -204,7 +220,56 @@ instance Bin DefRecord where
                    sh <- fromBin
                    b <- fromBin
                    a <- fromBin
-                   return (DefRecord p h s c (IS.fromDistinctAscList cs) m f par sh b a)
+                   vd <- fromBin
+                   vs <- fromBin
+                   rps <- fromBin
+                   us <- fromBin
+                   return (DefRecord p h s c (IS.fromDistinctAscList cs) m f par sh b a
+                                     vd vs rps us)
+
+instance Bin TypeTable where
+    writeBytes (TypeTable n _ rows) =
+        do toBin n
+           toBin (IM.toAscList rows)
+    readBytes = do n <- fromBin
+                   rows <- fromBin
+                   let rowMap = IM.fromDistinctAscList rows
+                   return (TypeTable n (typeIdsFromRows rowMap) rowMap)
+
+instance Bin TypeKey where
+    writeBytes (TypeKey t o w) = do toBin t; toBin o; toBin w
+    readBytes = do t <- fromBin; o <- fromBin; w <- fromBin
+                   return (TypeKey t o w)
+
+instance Bin Step where
+    writeBytes (SField k) = do putI 0; toBin k
+    writeBytes (SCon i) = do putI 1; toBin i
+    readBytes = do n <- getI
+                   case n of
+                     0 -> SField <$> fromBin
+                     1 -> SCon <$> fromBin
+                     m -> internalError ("GenBXref.Bin(Step).readBytes: " ++ show m)
+
+instance Bin View where
+    writeBytes (View t p o w) = do toBin t; toBin p; toBin o; toBin w
+    readBytes = do t <- fromBin; p <- fromBin; o <- fromBin; w <- fromBin
+                   return (View t p o w)
+
+instance Bin RepackKind where
+    writeBytes RKUnpack = putI 0
+    writeBytes RKChr = putI 1
+    readBytes = do i <- getI
+                   case i of
+                     0 -> return RKUnpack
+                     1 -> return RKChr
+                     n -> internalError ("GenBXref.Bin(RepackKind).readBytes: " ++ show n)
+
+instance Bin RepackFact where
+    writeBytes (RepackFact k c f t cx) =
+        do toBin k; toBin c; toBin f; toBin t; toBin cx
+    readBytes = do k <- fromBin; c <- fromBin; f <- fromBin; t <- fromBin
+                   cx <- fromBin
+                   return (RepackFact k c f t cx)
 
 instance Bin PassTag where
     writeBytes t = putI (fromEnum t)

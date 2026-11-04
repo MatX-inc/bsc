@@ -1,0 +1,43 @@
+checking package dependencies
+compiling MetaNonBit.bsv
+code generation for mkSub starts
+metadata census for mkSub:
+  cells reachable 2, defs lifted 2, defs with chains 2
+  roots pushed: rule 0, methodroot 1, inst 1
+  pushes: unfoldings 31, completions 0, roots 2
+  frames on chains 3: use-site 1, definition-site 2, root 0
+  defs by site: use-site 0, definition-site 0, prim 2, con 0, method 0, foreign 0, lambda 0, bound 0, inst 0; head-site 0, shared 0, merged 0
+  depth: 1:1 2:1
+  count: 1:3
+  alias classes 11
+  validity: defs with a must-type 2 (at a Bit type 2; by construction 1, by declaration 2, by assumption 0), defs with views 2, derived views 3 (paths to depth 1), type windows 1
+  repacks 0 (unpack 0, chr 0), on lifted defs 0; undefined values on lifted defs 0
+  cost: frame pushes 33, context-table operations 3 for 3 contexts
+  chains walked 31, loops re-entered 0, repeated non-recursion sites 1 (def Prelude.bind_ [Prelude.bs] x1)
+  name hints: 1 cells bound to a parameter, 0 outside the library, each named by it
+  bit gate: cells gated 2, with facts 2; lifted defs gated as their types decide 2
+  edges: cells moved 1 (field 0, payload 0, operand 1), longest chain 0
+  views: 4 views and validities at a Bit type checked against the def's width
+  method-condition positions: 0 calls, 0 kept, 0 on chains
+Verilog file created: mkSub.v
+code generation for sysMetaNonBit starts
+metadata census for sysMetaNonBit:
+  cells reachable 32, defs lifted 17, defs with chains 16
+  roots pushed: rule 5, methodroot 2, inst 6
+  pushes: unfoldings 140, completions 1, roots 13
+  frames on chains 22: use-site 10, definition-site 12, root 0
+  defs by site: use-site 0, definition-site 0, prim 10, con 0, method 7, foreign 0, lambda 0, bound 0, inst 0; head-site 0, shared 0, merged 0
+  depth: 2:7 3:4 4:2 5:1 6:2
+  count: 1:22
+  alias classes 44
+  validity: defs with a must-type 16 (at a Bit type 8; by construction 4, by declaration 13, by assumption 0), defs with views 17, derived views 23 (paths to depth 1), type windows 10
+  repacks 1 (unpack 1, chr 0), on lifted defs 0; undefined values on lifted defs 0
+  cost: frame pushes 154, context-table operations 52 for 21 contexts
+  chains walked 141, loops re-entered 0, repeated non-recursion sites 11 (def Prelude.bind_ x6; def Prelude.bind_ [Prelude.bs] x4; def Prelude.bind_ [MetaNonBit.bsv:56:4] u x1)
+  name hints: 7 cells bound to a parameter, 0 outside the library, each named by it
+  bit gate: cells gated 17, with facts 16; lifted defs gated as their types decide 17
+  edges: cells moved 18 (field 5, payload 0, operand 13), longest chain 1
+  views: 17 views and validities at a Bit type checked against the def's width
+  method-condition positions: 0 calls, 0 kept, 0 on chains
+Verilog file created: sysMetaNonBit.v
+All packages are up to date.

@@ -2,32 +2,32 @@ checking package dependencies
 compiling MetaSide.bsv
 code generation for sysMetaSide starts
 _366: def Prelude.toPrimAction [MetaSide.bsv:37:7] u, field 3, alias _366 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
-_377: prim PrimAdd, field 0 <- def MetaSide.twice [MetaSide.bsv:17:19]#1 <- def Prelude.toPrimAction [MetaSide.bsv:37:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
-_378: method Prelude.read [Prelude.bs], alias _378 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
-_380: prim PrimUnpack, field 0, alias _378 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
-_383: prim PrimUnpack, field 0, alias _381 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_377: prim PrimAdd, field 0, valid Prelude.Bit 8 cb, views {Prelude.Bit 8; Prelude.UInt 8/UInt} <- def MetaSide.twice [MetaSide.bsv:17:19]#1 <- def Prelude.toPrimAction [MetaSide.bsv:37:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
+_378: method Prelude.read [Prelude.bs], alias _378, valid Prelude.UInt 8 cd, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_380: prim PrimUnpack, field 0, alias _378, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_383: prim PrimUnpack, field 0, alias _381, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
 _386: prim PrimBNot, field 2 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 _387: def Prelude.toPrimAction [MetaSide.bsv:41:7] u, field 3, alias _387 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
-_389: prim PrimEQ <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
-_399: prim PrimAdd, field 0 <- def MetaSide.twice [MetaSide.bsv:17:19]#1 <- def Prelude.toPrimAction [MetaSide.bsv:41:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
+_389: prim PrimEQ, valid Prelude.Bit 1 cb, views {Prelude.Bit 1} <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
+_399: prim PrimAdd, field 0, valid Prelude.Bit 8 cb, views {Prelude.Bit 8; Prelude.UInt 8/UInt} <- def MetaSide.twice [MetaSide.bsv:17:19]#1 <- def Prelude.toPrimAction [MetaSide.bsv:41:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 _403: def Prelude.toPrimAction [MetaSide.bsv:45:7] u, field 3, alias _403 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 _424: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs], alias _424 <- def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 _554: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs], alias _554 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 _559: prim PrimJoinActions, field 1 <- def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 _590: prim PrimJoinActions, field 1, alias _585 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
-_628: prim PrimUnpack, field 0, alias _626 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
-_629: prim PrimAdd <- def Prelude.bind_ [MetaSide.bsv:46:12] u#1 <- def Prelude.primFix [MetaSide.bsv:45:7] ur#1 <- def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
-_639: prim PrimUnpack, field 0, alias _637 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
-_640: prim PrimAdd <- def Prelude.bind_ [MetaSide.bsv:46:12] u#1 <- def Prelude.primFix [MetaSide.bsv:45:7] ur#2 <- def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
-_650: prim PrimUnpack, field 0, alias _648 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
-_651: prim PrimAdd <- def Prelude.bind_ [MetaSide.bsv:46:12] u#1 <- def Prelude.primFix [MetaSide.bsv:45:7] ur#3 <- def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
+_628: prim PrimUnpack, field 0, alias _626, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_629: prim PrimAdd, valid Prelude.Bit 8 cb, views {Prelude.Bit 8} <- def Prelude.bind_ [MetaSide.bsv:46:12] u#1 <- def Prelude.primFix [MetaSide.bsv:45:7] ur#1 <- def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
+_639: prim PrimUnpack, field 0, alias _637, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_640: prim PrimAdd, valid Prelude.Bit 8 cb, views {Prelude.Bit 8} <- def Prelude.bind_ [MetaSide.bsv:46:12] u#1 <- def Prelude.primFix [MetaSide.bsv:45:7] ur#2 <- def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
+_650: prim PrimUnpack, field 0, alias _648, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_651: prim PrimAdd, valid Prelude.Bit 8 cb, views {Prelude.Bit 8} <- def Prelude.bind_ [MetaSide.bsv:46:12] u#1 <- def Prelude.primFix [MetaSide.bsv:45:7] ur#3 <- def Prelude.toPrimAction [MetaSide.bsv:45:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 _654: def Prelude.toPrimAction [MetaSide.bsv:50:7] u, field 3, alias _654 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
-_657: def MetaSide.mix [MetaSide.bsv:25:18], binder x [Prelude.bs] <- def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
+_657: def MetaSide.mix [MetaSide.bsv:25:18], binder x [Prelude.bs], valid Prelude.Bit 8 cdb, views {Prelude.Bit 8} <- def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 _663: prim PrimXor, binder y [MetaSide.bsv:25:41] <- def MetaSide.mix [MetaSide.bsv:25:18]#1 <- def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 _668: prim PrimConcat <- def MetaSide.mix [MetaSide.bsv:25:18]#1 <- def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
-_669: prim PrimSelect, field 0 <- def MetaSide.mix [MetaSide.bsv:25:18]#1 <- def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
+_669: prim PrimSelect, field 0, valid Prelude.UInt 8 [2+6] d, views {Prelude.UInt 8 [2+6]} <- def MetaSide.mix [MetaSide.bsv:25:18]#1 <- def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 _670: prim PrimInv, field 1 <- def MetaSide.mix [MetaSide.bsv:25:18]#1 <- def Prelude.toPrimAction [MetaSide.bsv:50:7] u#1 <- def Prelude.addRules [MetaSide.bsv:36:4] u#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
-_704: prim PrimAdd, field 0 <- def MetaSide.twice [MetaSide.bsv:17:19]#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
+_704: prim PrimAdd, field 0, valid Prelude.Bit 8 cb, views {Prelude.Bit 8; Prelude.UInt 8/UInt} <- def MetaSide.twice [MetaSide.bsv:17:19]#1 <- def Prelude.bind_ [MetaSide.bsv:36:4] u#1
 Warning: "MetaSide.bsv", line 30, column 8: (G0010)
   Rule "r1" was treated as more urgent than "r2". Conflicts:
     "r1" cannot fire before "r2": calls to a.write vs. a.read

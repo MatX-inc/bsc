@@ -10,9 +10,14 @@ metadata census for sysMetaNested:
   depth: 2:3 3:3
   count: 1:9 2:2 3:1
   alias classes 38
+  validity: defs with a must-type 6 (at a Bit type 2; by construction 2, by declaration 4, by assumption 0), defs with views 6, derived views 12 (paths to depth 1), type windows 3
+  repacks 0 (unpack 0, chr 0), on lifted defs 0; undefined values on lifted defs 0
   cost: frame pushes 280, context-table operations 18 for 9 contexts
   chains walked 274, loops re-entered 0, repeated non-recursion sites 5 (def Prelude.bind_ [Prelude.bs] x4; def Prelude.bind_ [MetaNested.bsv:13:4] u x1)
   name hints: 0 cells bound to a parameter, 0 outside the library, each named by it
+  bit gate: cells gated 7, with facts 7; lifted defs gated as their types decide 6
+  edges: cells moved 8 (field 0, payload 7, operand 1), longest chain 1
+  views: 4 views and validities at a Bit type checked against the def's width
   method-condition positions: 0 calls, 0 kept, 0 on chains
 Verilog file created: sysMetaNested.v
 All packages are up to date.

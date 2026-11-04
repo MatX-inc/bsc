@@ -1,0 +1,23 @@
+checking package dependencies
+compiling MetaChrCond.bsv
+code generation for sysMetaChrCond starts
+metadata census for sysMetaChrCond:
+  cells reachable 28, defs lifted 9, defs with chains 9
+  roots pushed: rule 2, methodroot 1, inst 11
+  pushes: unfoldings 148, completions 0, roots 14
+  frames on chains 8: use-site 4, definition-site 4, root 0
+  defs by site: use-site 0, definition-site 0, prim 2, con 0, method 7, foreign 0, lambda 0, bound 0, inst 0; head-site 0, shared 0, merged 5
+  depth: 2:2 3:7
+  count: 1:8
+  alias classes 25
+  validity: defs with a must-type 8 (at a Bit type 4; by construction 0, by declaration 6, by assumption 2), defs with views 9, derived views 14 (paths to depth 1), type windows 5
+  repacks 6 (unpack 0, chr 6), on lifted defs 6; undefined values on lifted defs 0
+  cost: frame pushes 162, context-table operations 53 for 20 contexts
+  chains walked 148, loops re-entered 0, repeated non-recursion sites 16 (def Prelude.bind_ [Prelude.bs] x11; def Prelude.__avFunc [Prelude.bs] x4; def Prelude.bind_ [MetaChrCond.bsv:50:4] u x1)
+  name hints: 14 cells bound to a parameter, 6 outside the library, each named by it
+  bit gate: cells gated 14, with facts 14; lifted defs gated as their types decide 9
+  edges: cells moved 10 (field 6, payload 0, operand 4), longest chain 1
+  views: 11 views and validities at a Bit type checked against the def's width
+  method-condition positions: 0 calls, 0 kept, 0 on chains
+Verilog file created: sysMetaChrCond.v
+All packages are up to date.
