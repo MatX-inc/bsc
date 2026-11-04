@@ -172,7 +172,7 @@ matches the original compile by construction.  Only environment/output flags
 `-u`) follow the `-c` invocation.  Foreign-function `.ba` files are found via
 the same `-p`/`-bdir` search path as at link time.
 
-With `-stable-verilog` (default on), the emitted Verilog is a pure function
+With `-stable-verilog` (default off), the emitted Verilog is a pure function
 of the `.ba`: every backend choice that used to lean on `Id`'s `Ord` (the
 SpeedyString intern order, which varies with compile history) instead uses
 the identifier's text -- topological-sort tie-breaks, CSE survivor names,
@@ -184,9 +184,9 @@ the point of generation: since a `-verilog` compile writes the `.ba` by
 default, `check_verilog_regen` (called from `bsc_compile_verilog` in
 `testsuite/config/unix.exp`, so every Verilog-compile proc gets it)
 regenerates each `.v` the compile just produced from its `.ba` with `-c`
-and requires a byte-identical result, skipping invocations whose flags
-make the comparison meaningless (`-no-stable-verilog`, `-elab-only`/
-`-no-elab`, relocated outputs, `-verilog-filter`).  The regeneration runs
+and requires a byte-identical result.  It checks only invocations that pass
+`-stable-verilog`, and skips those whose flags make the comparison
+meaningless (`-elab-only`/`-no-elab`, relocated outputs, `-verilog-filter`).  The regeneration runs
 in a fresh bsc process, which is the point: in the process that wrote the
 `.v` every string is already interned, so a same-process regen would see
 the same interning history and could not fail for interning-order

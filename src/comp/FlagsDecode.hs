@@ -759,7 +759,7 @@ defaultFlags bluespecdir = Flags {
         warnMethodUrgency = True,
         warnUndetPred = False,
         semanticPortsComment = False,
-        stableVerilog = True
+        stableVerilog = False
         }
 
 -- Default path value replaced in adjustFinalFlags

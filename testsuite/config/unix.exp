@@ -1656,10 +1656,14 @@ proc check_verilog_regen { logfile {options ""} } {
     # XPASS + plain FAIL pair), so known-bug tests are not checked
     if { $xfail_flag != 0 } { return }
 
+    # stable naming is off by default here, so only an invocation that
+    # asks for -stable-verilog promises a byte-identical regeneration
+    if { ![regexp -- {(^|\s)-stable-verilog(\s|$)} $options] } { return }
+
     # skip when the invocation makes the comparison meaningless:
-    # stable naming opted out, no .v (-elab-only) or no .ba (-no-elab)
-    # written, relocated outputs, or a post-processed .v
-    foreach optout [list {-no-stable-verilog} {-elab-only} {-no-elab} \
+    # no .v (-elab-only) or no .ba (-no-elab) written, relocated outputs,
+    # or a post-processed .v
+    foreach optout [list {-elab-only} {-no-elab} \
                         {-vdir} {-bdir} {-verilog-filter}] {
         if { [string first $optout $options] >= 0 } { return }
     }

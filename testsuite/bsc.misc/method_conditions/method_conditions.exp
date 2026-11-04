@@ -112,11 +112,11 @@ compile_verilog_pass MethodConds_TaskCond.bsv {} $opts
 find_regexp sysMethodConds_TaskCond.v \
     {wire COND\_RL\_r\_FUNCTION\_\$display\_3\, COND\_RL\_r\_s\_am1\_1\, COND\_RL\_r\_s\_am2\_2\;}
 find_regexp sysMethodConds_TaskCond.v \
-    {assign COND\_RL\_r\_FUNCTION\_\$display\_3 \= TASK\_getCond\_\_\_d1 \;}
+    {assign COND\_RL\_r\_FUNCTION\_\$display\_3 \= TASK\_getCond\_\_\_d4 \;}
 find_regexp sysMethodConds_TaskCond.v \
-    {assign COND\_RL\_r\_s\_am1\_1 \= TASK\_getCond\_\_\_d1 \;}
+    {assign COND\_RL\_r\_s\_am1\_1 \= TASK\_getCond\_\_\_d4 \;}
 find_regexp sysMethodConds_TaskCond.v \
-    {assign COND\_RL\_r\_s\_am2\_2 \= TASK\_getCond\_\_\_d1 \;}
+    {assign COND\_RL\_r\_s\_am2\_2 \= TASK\_getCond\_\_\_d4 \;}
 # And that the COND signals are not mingled with the actual design
 find_n_strings sysMethodConds_TaskCond.v {COND_RL_} 4
 # Check that bluetcl reports the appropriate positions
@@ -171,7 +171,7 @@ check_positions sysMethodConds_CaseCond
 compile_verilog_pass MethodConds_VecSelCond.bsv {} "$opts -aggressive-conditions"
 # Check that the conditions are in the Verilog
 find_regexp sysMethodConds_VecSelCond.v \
-    {reg COND\_RL\_r\_s\_am1\_1, SEL\_ARR\_cs\_0\_cs\_1\_cs\_2\_idx\_\_\_d1\;}
+    {reg COND\_RL\_r\_s\_am1\_1, SEL\_ARR\_cs\_0\_cs\_1\_cs\_2\_idx\_\_\_d6\;}
 # XXX This code could be shared with with "CASE_...__q1" rather than inlined
 # XXX (what happens is that it's inlined, but VeriQuirks lifts it back up,
 # XXX so maybe VeriQuirks needs to do a better job of CSE in the lifted exprs)
@@ -292,18 +292,16 @@ find_regexp sysMethodConds_MultiplicityCond.v \
        COND\_RL\_r2\_idx2\_write\_1;}
 # NB: which RegFile read port each rule's uses get is an arbitrary (but
 # deterministic) allocation choice; it flipped when pack/unpack coercion
-# holding changed evaluation order, and again under -stable-verilog, whose
-# text-ordered port coloring allocates the ports the other way round on this
-# branch.  The property being tested is only that each COND wire is a bare
-# read-port wire.
+# holding changed evaluation order.  The property being tested is only
+# that each COND wire is a bare read-port wire.
 find_regexp sysMethodConds_MultiplicityCond.v \
-    {assign COND\_RL\_r1\_FUNCTION\_\$display\_3 \= rf\$D\_OUT\_2 \;}
+    {assign COND\_RL\_r1\_FUNCTION\_\$display\_3 \= rf\$D\_OUT\_1 \;}
 find_regexp sysMethodConds_MultiplicityCond.v \
-    {assign COND\_RL\_r1\_s\_am1\_1 \= rf\$D\_OUT\_2 \;}
+    {assign COND\_RL\_r1\_s\_am1\_1 \= rf\$D\_OUT\_1 \;}
 find_regexp sysMethodConds_MultiplicityCond.v \
-    {assign COND\_RL\_r1\_s\_am2\_2 \= rf\$D\_OUT\_2 \;}
+    {assign COND\_RL\_r1\_s\_am2\_2 \= rf\$D\_OUT\_1 \;}
 find_regexp sysMethodConds_MultiplicityCond.v \
-    {assign COND\_RL\_r2\_idx2\_write\_1 \= rf\$D\_OUT\_1 \;}
+    {assign COND\_RL\_r2\_idx2\_write\_1 \= rf\$D\_OUT\_2 \;}
 # And that the COND signals are not mingled with the actual design
 find_n_strings sysMethodConds_MultiplicityCond.v {COND_RL_} 8
 # Check that bluetcl reports the appropriate positions
