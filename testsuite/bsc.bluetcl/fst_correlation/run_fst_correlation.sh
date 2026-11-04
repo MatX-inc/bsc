@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FST twin of ../vcd_correlation/run_correlation.sh: the same designs
+# FST twin of ../vcd_correlation/vcd_correlation.exp: the same designs
 # and wiretypemap correlation, but the waveforms are FST dumps --
 # iverilog via `vvp -fst` + the +bscfst plusarg, Bluesim via
 # -dump-formats fst + the +bscfst plusarg.  The FST hierarchies
@@ -60,7 +60,7 @@ build_verilog () {
 }
 
 # Build Bluesim only once -- -keep-inlined-boundaries doesn't affect it
-# (see run_correlation.sh); linked with -dump-formats fst.
+# (as in vcd_correlation.exp); linked with -dump-formats fst.
 {
   echo "[WireTypes] Compiling to Bluesim..."
   $BSC -p +:$SRC -bdir bo_sim -sim -simdir sim -elab -u -g sysWireTypeTest $SRC/WireTypesSim.bsv
