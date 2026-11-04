@@ -88,6 +88,11 @@ data TStatePersistent = TStatePersistent {
    tsATFCache :: CATFCache
 }
 
+-- The results of the associated type function applications the
+-- instance walks resolved, by function and arguments: ground only
+-- (TCMisc.sat records no other), so the map's order, the order its
+-- .bo form is written in (ISyntax.ipkg_atf_cache), depends on no type
+-- variable; consulted by IExpandUtils.fullTypeNormalizer.
 type CATFCache = M.Map (Id, [Type]) Type
 
 mergeCATFCaches :: CATFCache -> CATFCache -> CATFCache
