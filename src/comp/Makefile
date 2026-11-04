@@ -459,6 +459,12 @@ showrules: $(SOURCES)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
 
+.PHONY: bo2bloogle
+bo2bloogle: $(SOURCES)
+	$(PREBUILDCOMMAND)
+	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
+	$(POSTBUILDCOMMAND)
+
 # bluetcl has a Haskell main that hands control to Tcl through a C shim,
 # which is how the cabal executable is built too, so there is one entry
 # point to maintain rather than two.
@@ -499,7 +505,8 @@ endif
 # within each compile. Naming one executable directly still builds just it.
 .PHONY: install
 install:
-	$(MAKE) -j1 $(BSCEXES) $(TCLEXES) install-bsc install-bluetcl
+	$(MAKE) -j1 $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) \
+		install-bsc install-bluetcl install-bo2bloogle install-checkers
 
 .PHONY: install-extra
 install-extra:
@@ -519,7 +526,6 @@ install-bluetcl: $(PKGINFO)
 
 .PHONY: install-bo2bloogle
 install-bo2bloogle: $(addprefix $(BINDIR)/,$(BO2BLOOGLEEXES))
-install-bo2bloogle: $(addprefix $(BINDIR)/core/,$(BO2BLOOGLEEXES))
 install-bo2bloogle: $(PKGINFO)
 
 .PHONY: install-utils
@@ -532,7 +538,6 @@ install-showrules: $(PKGINFO)
 
 .PHONY: install-checkers
 install-checkers: $(addprefix $(BINDIR)/,$(CHECKEXES))
-install-checkers: $(addprefix $(BINDIR)/core/,$(CHECKEXES))
 install-checkers: $(PKGINFO)
 
 # ----
