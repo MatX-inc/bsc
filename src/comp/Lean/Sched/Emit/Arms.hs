@@ -10,13 +10,15 @@ import Data.Maybe (fromMaybe, isNothing)
 import qualified Data.Foldable as F (Foldable(toList))
 import qualified Data.Map.Strict as M (Map, (!), findWithDefault, lookup, union, fromList)
 
-import Lean.Print (cut, fmt, stab, w, W)
-import Lean.Sched.Emit.Ctx (argHw, condHw, entry, ex, hw, isUncond, kd, ocread, rsv, rterm, site, sitePort,
+import Lean.Print (cut, fmt, stab, tabOr, w, W)
+import Lean.Sched.Emit.Ctx (argHw, asmChk, condHw, entry, entryOn, ex, hw, isUncond, kd, ocread, rsv, rterm, site, sitePort,
     step, EC(ecHasUnconf, ecNS, ecWXM, ecPortInfo, ecNR, ecNT, ecSelmux, ecNM, ecXM, ecMuxes, ecMet, ecM,
-    ecKinds, ecFactK, ecEFacts, ecCFacts), PInfo(piArgk, piQ, piMus, piMargs, piUsers))
-import Lean.Sched.Kinds (KindDef(kdHasEn, kdPorts), PM(..))
+    ecKinds, ecFactK, ecEFacts, ecCFacts, ecEdit), HwEdit(..), PInfo(piArgk, piQ, piMus, piMargs, piUsers))
+import Lean.Sched.Export (isSynthKind)
+import Lean.Sched.Kinds (KindDef(kdHasEn, kdPorts, kdMType), PM(..))
 import Lean.Sched.Model (MFact(fKind, fSite, fY, fStep, fLabel, fOk, fLate), MSite(sLabel, sKind, sPort, sHw,
-    sCond), MStep(tName, tSites, tRes), MX(MLit, MChk), Model(mFacts, mByk))
+    sCond), MStep(tName, tSites, tRes), MX(MLit, MChk, MCfT), Model(mFacts, mByk, mOpsF), MPort)
+import Lean.Sched.Py (omSize)
 
 pmName :: PM -> String
 pmName (PS s) = s
@@ -26,6 +28,25 @@ pmName (PT t) = show t
 tuser :: EC -> M.Map Int (Int, Int, MSite)
 tuser ec = M.fromList [ (t, (k, i, st)) | k <- [0 .. ecNS ec - 1], (i, st) <- zip [0 ..] (F.toList (tSites (step ec k)))
                                         , sKind st == "task", (_, _, PT t) <- [sPort st] ]
+
+-- | A mutant's arguments and arms ('HwEdit'): user n's argument text, wrapped in a fresh
+-- operator for 'ArgWrap'; a mux's or last-caller mux's arms, reordered or exchanged.
+hwArg :: EC -> MPort -> Int -> String -> String
+hwArg ec p n a = case ecEdit ec of
+    ArgWrap p' n' | p' == p && n' == n -> freshF ec a
+    _ -> a
+
+freshF :: EC -> String -> String
+freshF ec a = "ops.f " ++ show (omSize (mOpsF (ecM ec))) ++ " (" ++ a ++ ")"
+
+hwArms :: EC -> MPort -> [(String, String)] -> [(String, String)]
+hwArms ec p rows = case ecEdit ec of
+    MuxSwap p' n | p' == p, n + 1 < length rows ->
+        let as = map snd rows
+            as' = take n as ++ [as !! (n + 1), as !! n] ++ drop (n + 2) as
+        in zip (map fst rows) as'
+    LcReverse p' | p' == p -> reverse rows
+    _ -> rows
 
 emitArms :: EC -> W ()
 emitArms ec = do
@@ -42,16 +63,23 @@ emitArms ec = do
             Just pi | not (null (piUsers pi)) -> do
                 let nm = k ++ "_" ++ show i ++ "_" ++ pmName pm
                     us = piUsers pi
+                    enBody = case ecEdit ec of
+                        EnForce p' | p' == p -> "true"
+                        EnDrop p' n | p' == p -> "orL [" ++ intercalate ", " [ entry ec k' (site ec k' si) | (j, (k', si)) <- zip [0 ..] us, j /= n ] ++ "]"
+                        CondDrop p' n | p' == p -> "orL [" ++ intercalate ", " [ if j == n then entryOn ec k' else entry ec k' (site ec k' si)
+                                                                               | (j, (k', si)) <- zip [0 ..] us ] ++ "]"
+                        _ -> "orL [" ++ intercalate ", " [ entry ec k' (site ec k' si) | (k', si) <- us ] ++ "]"
                 when (kdHasEn (kd ec k) pm) $
-                    w (fmt "def en_%s (ops : Ops V) (E : EqC V) (oc : OC V) (w : %s) : Bool := orL [%s]"
-                           [nm, wxm, intercalate ", " [ entry ec k' (site ec k' si) | (k', si) <- us ]])
+                    w (fmt "def en_%s (ops : Ops V) (E : EqC V) (oc : OC V) (w : %s) : Bool := %s"
+                           [nm, wxm, enBody])
                 case piArgk pi of
                     "lc" -> do
                         let q = piQ pi
                             mus = piMus pi
                         stab ("lcT_" ++ show q) "Tab ((V : Type) → Ops V → EqC V → OC V → Bool × V)"
-                             [ fmt "fun V (ops : Ops V) (E : EqC V) (oc : OC V) => ((%s, %s) : Bool × V)" [entry ec k' st, argHw ec k' st]
-                             | ((k', _), st) <- zip mus (piMargs pi) ]
+                             [ fmt "fun V (ops : Ops V) (E : EqC V) (oc : OC V) => ((%s, %s) : Bool × V)" [e, a]
+                             | (e, a) <- hwArms ec p [ (entry ec k' st, hwArg ec p n (argHw ec k' st))
+                                                     | (n, ((k', _), st)) <- zip [0 ..] (zip mus (piMargs pi)) ] ]
                         stab ("lcsT_" ++ show q) "Tab Nat" [ show k' | (k', _) <- mus ]
                         w (fmt "def lclist_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : List (Bool × V) :=\n  (List.range' 0 %d).map (fun t => (lcT_%d.get t) V ops E oc)"
                                [show q, show (length mus), show q])
@@ -61,26 +89,36 @@ emitArms ec = do
                             mus = piMus pi
                             sel = M.findWithDefault False q (ecSelmux ec)
                         stab ("mT_" ++ show q) "Tab ((V : Type) → Ops V → EqC V → OC V → Bool × V)"
-                             [ fmt "fun V (ops : Ops V) (E : EqC V) (oc : OC V) => ((%s, %s) : Bool × V)"
-                                   [if sel then entry ec k' st else "WF ops E oc " ++ show k', argHw ec k' st]
-                             | ((k', _), st) <- zip mus (piMargs pi) ]
+                             [ fmt "fun V (ops : Ops V) (E : EqC V) (oc : OC V) => ((%s, %s) : Bool × V)" [e, a]
+                             | (e, a) <- hwArms ec p [ (if sel then entry ec k' st else "WF ops E oc " ++ show k', hwArg ec p n (argHw ec k' st))
+                                                     | (n, ((k', _), st)) <- zip [0 ..] (zip mus (piMargs pi)) ] ]
                         w (fmt "def mlist_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : List (Bool × V) :=\n  (List.range' 0 %d).map (fun t => (mT_%d.get t) V ops E oc)"
                                [show q, show (length mus), show q])
                         w (fmt "def arg_%s (ops : Ops V) (E : EqC V) (oc : OC V) (w : %s) : V := pmux (mlist_%d V ops E oc) ops.z" [nm, wxm, show q])
                     "none" -> return ()
                     _ -> let (k', si) = head us
-                         in w (fmt "def arg_%s (ops : Ops V) (E : EqC V) (oc : OC V) (w : %s) : V := %s" [nm, wxm, argHw ec k' (site ec k' si)])
+                         in w (fmt "def arg_%s (ops : Ops V) (E : EqC V) (oc : OC V) (w : %s) : V := %s" [nm, wxm, hwArg ec p 0 (argHw ec k' (site ec k' si))])
             _ -> return ()
     w "end\n"
     let tu = tuser ec
-        tcondHw k st = if sHw st == Just MChk then "(gT.get " ++ show k ++ ") V ops E oc" else condHw ec k st
+        tcondHw k st = case sHw st of
+            Just MChk -> "(gT.get " ++ show k ++ ") V ops E oc"
+            Just (MCfT c) -> "cfL_" ++ show c ++ " V ops E oc"
+            _ -> condHw ec k st
     when (nT > 0) $ do
         w "/-- Task statement `t`: its enable (the statement's condition, `WILL_FIRE` included) and arguments. -/"
         stab "tenT" "Tab ((V : Type) → Ops V → EqC V → OC V → Bool)"
-             [ let (k, _, st) = tu M.! t in fmt "fun V (ops : Ops V) (E : EqC V) (oc : OC V) => WF ops E oc %d && %s" [show k, tcondHw k st]
+             [ let (k, _, st) = tu M.! t
+               in "fun V (ops : Ops V) (E : EqC V) (oc : OC V) => "
+                  ++ (case ecEdit ec of
+                        TaskEn t' b | t' == t -> if b then "true" else "false"
+                        _ -> fmt "WF ops E oc %d && %s" [show k, tcondHw k st])
              | t <- [0 .. nT - 1] ]
         stab "targT" "Tab ((V : Type) → Ops V → EqC V → OC V → V)"
-             [ let (k, _, st) = tu M.! t in "fun V (ops : Ops V) (E : EqC V) (oc : OC V) => " ++ argHw ec k st | t <- [0 .. nT - 1] ]
+             [ let (k, _, st) = tu M.! t
+                   a = argHw ec k st
+               in "fun V (ops : Ops V) (E : EqC V) (oc : OC V) => " ++ (if ecEdit ec == TaskArgWrap t then freshF ec a else a)
+             | t <- [0 .. nT - 1] ]
     let enT p@(k, i, pm) = if maybe False (not . null . piUsers) (M.lookup p pinfo)
                            then "en_" ++ k ++ "_" ++ show i ++ "_" ++ pmName pm ++ " ops E oc w" else "false"
         argT p@(k, i, pm) = case M.lookup p pinfo of
@@ -95,6 +133,9 @@ emitArms ec = do
             _ | k `elem` ["rwS", "rwC"] -> fmt "wireW (%s) (%s) ops.z" [enT (p "wset"), argT (p "wset")]
             _ | k `elem` ["rw0S", "rw0C"] -> fmt "wire0W (%s) ops.z" [enT (p "wset")]
             "tasks" -> "⟨fun t => (tenT.get t.val) V ops E oc, fun t => (targT.get t.val) V ops E oc⟩"
+            _ | isSynthKind k -> fmt "finW (n := %s) %s\n  %s"
+                                     [ drop 4 (fromMaybe "" (kdMType (kd ec k))), tabOr "false" [ if kdHasEn (kd ec k) pm then enT (k, i, pm) else "false" | pm <- kdPorts (kd ec k) ]
+                                     , tabOr "ops.z" [ argT (k, i, pm) | pm <- kdPorts (kd ec k) ] ]
             _ -> error ("schedlean: no arm for kind " ++ k)
     forM_ kinds $ \k -> forM_ [0 .. length (mByk m M.! k) - 1] $ \i ->
         w (fmt "def arm_%s_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) (w : %s) : Wires (KI .%s).M V :=\n  %s"
@@ -167,13 +208,15 @@ emitHyps ec = do
                 else let MLit j = sCond s
                      in fmt "∀ %s, WF ops E oc %d = true → %s = true → ops.toB (%s) = true" [bind, show k, lhs, ocread ec (sitePort ec k j)]
         hs2 r s = [ condHw ec r s ++ " = true" | not (isUncond s) ]
-        efactStmt (r1, r2, i1, i2, _, _) =
+        -- a fact confirmed only with the conflict_free checks assumed holds where they pass
+        prem how = [ "asmP ops E oc" | how == Just "assert" ]
+        efactStmt (r1, r2, i1, i2, how, _) =
             let s1 = site ec r1 i1
                 s2 = site ec r2 i2
-            in "∀ oc : OC V, " ++ intercalate " → " (["WF ops E oc " ++ show r1 ++ " = true", "WF ops E oc " ++ show r2 ++ " = true"]
+            in "∀ oc : OC V, " ++ intercalate " → " (prem how ++ ["WF ops E oc " ++ show r1 ++ " = true", "WF ops E oc " ++ show r2 ++ " = true"]
                                                     ++ hs2 r1 s1 ++ hs2 r2 s2 ++ ["False"])
-        cfactStmt (_, x, y, sx, sy, _, _) =
-            "∀ oc : OC V, " ++ intercalate " → " (concat [ ("WF ops E oc " ++ show k ++ " = true") : hs2 k (site ec k si) | (k, si) <- [(x, sx), (y, sy)] ] ++ ["False"])
+        cfactStmt (_, x, y, sx, sy, how, _) =
+            "∀ oc : OC V, " ++ intercalate " → " (prem how ++ concat [ ("WF ops E oc " ++ show k ++ " = true") : hs2 k (site ec k si) | (k, si) <- [(x, sx), (y, sy)] ] ++ ["False"])
         name k = tName (step ec k)
         label k i = fromMaybe "None" (sLabel (site ec k i))
         fixed = ["  disj : ∀ (oc : OC V) (d : Nat), Nat.blt d nD = true → (CF ops E oc (dAT.get d) && CF ops E oc (dBT.get d)) = false"]
@@ -189,9 +232,12 @@ emitHyps ec = do
         howText how bt = case how of
             Just "solver" -> "this fact confirmed by the solver over these conditions"
             Just "bsc" -> "bsc: " ++ fromMaybe "" bt ++ "; these conditions imply bsc's"
+            Just "assert" -> "confirmed by the solver with the conflict_free checks naming these steps assumed: under `asmP`"
             _ -> "not confirmed"
         cxF = [ (isJustS how, ("  /-- callers of one port never both call: " ++ name x ++ ", " ++ name y ++ " ("
-                               ++ (case how of { Just "solver" -> "solver: exclusive"; Just "bsc" -> "bsc: " ++ fromMaybe "" bt; _ -> "solver: may both call" })
+                               ++ (case how of { Just "solver" -> "solver: exclusive"; Just "bsc" -> "bsc: " ++ fromMaybe "" bt
+                                               ; Just "assert" -> "solver, with the conflict_free checks naming them assumed: under `asmP`"
+                                               ; _ -> "solver: may both call" })
                                ++ ") -/\n  cx_" ++ show n ++ " : " ++ cfactStmt f, "cx_" ++ show n))
               | (n, f@(_, x, y, _, _, how, bt)) <- zip [0 :: Int ..] (ecCFacts ec) ]
         allF = factF ++ escF ++ cxF
@@ -219,7 +265,7 @@ emitHyps ec = do
 \theorem meX (ops : Ops V) (E : EqC V) (oc : OC V) (hA : asmP ops E oc) (c p : Nat) {y : Nat}\n\
 \    (hc : Nat.blt c nC = true) (hp : (chkLst.get c)[p]? = some y)\n\
 \    (h1 : WF ops E oc (chkHead.get c) = true) (h2 : WF ops E oc y = true) : False :=\n\
-\  me_excl (hA.2 c hc) h1 (p := p) (by rw [List.getElem?_map, hp]; rfl) h2\n\
+\  me_excl (" ++ asmChk ec "hA" ++ " c hc) h1 (p := p) (by rw [List.getElem?_map, hp]; rfl) h2\n\
 \theorem meG (ops : Ops V) (E : EqC V) (oc : OC V) (hA : asmP ops E oc) (g a b : Nat) {x y : Nat}\n\
 \    (hg : Nat.blt g nG = true) (hx : (grpT.get g)[a]? = some x) (hy : (grpT.get g)[b]? = some y)\n\
 \    (hab : Nat.blt a b = true) (h1 : WF ops E oc x = true) (h2 : WF ops E oc y = true) : False :=\n\

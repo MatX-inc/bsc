@@ -1,0 +1,3 @@
+scan segments 1 (at most 4096 uses each)
+wrote RegFileMeth.lean: rules 1, methods 1, children 3, sites 5, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=2, ag lemmas 0
+check RegFileMeth.lean: proved

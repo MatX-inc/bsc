@@ -25,6 +25,7 @@ import qualified Data.Set as S (Set, member, delete, difference, empty, filter, 
 
 import Lean.Sched.Enc (encAnd, encB, encOr, encSatA, mkAssume, newEnc, Assume, EncM)
 import Lean.Sched.Expr (SD(..), canonExpr, aexprE)
+import Lean.Sched.Kinds (cfgTypes)
 import Lean.Sched.MECheck (meParse, samePairs, suffixGroups, mePairs, cfNames)
 import Lean.Sched.Model (DView(..))
 import Lean.Sched.Py (omLookup, omToList)
@@ -42,7 +43,7 @@ decided = S.fromList ([ (t, "write") | t <- ["RegN", "RegUN", "RegA", "ConfigReg
 
 -- | The ones the emitter certifies (its kinds).
 wired :: S.Set (String, String)
-wired = S.filter (\(t, _) -> t `elem` ["RegN", "RegUN", "RegA", "ConfigRegN"]) decided
+wired = S.filter (\(t, _) -> t `elem` ["RegN", "RegUN", "RegA"] ++ cfgTypes) decided
 
 notIdempotent :: S.Set (String, String)
 notIdempotent = S.fromList [("Counter", "addA"), ("Counter", "addB")]

@@ -1,0 +1,6 @@
+GATE {"name": "sysGatedChild", "scan": "ok", "slots": 6, "codes": 1, "seg_uses": 3, "mod_facts": 0, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": ["GatedClock"], "generic_class": {"GatedClock": "lib"}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": ["RL_gated: guard reads gc.new_clk.gate, not a read site of RL_gated"], "unguarded": []}
+counts sysGatedChild                2      5     0      3      2      0      1     1     0     0
+unrealized 0
+domain clocks gc$CLK_OUT(gate gc$CLK_GATE_OUT) CLK; resets RST_N
+shadow sysGatedChild ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+sysGatedChild            default  flat  emitter no  shadow ports [-] lc callers max 0 slots 6 codes 1 esc 0 facts 0 (-) pairwise 0 seg_uses 3 mod_facts 0 leaves GatedClock:lib | the gate gc$CLK_GATE_OUT of clock gc$CLK_OUT is the gate of instance gc's output clock new_clk, not an input of the module (not modelled) step 3

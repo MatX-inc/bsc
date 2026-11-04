@@ -55,9 +55,12 @@ pieces merged here, and the fixes for reviews r8-1, r8-2 and r8b-1):
   return nothing.
 - **User assertions** (Ravi's decision, §5). bsc's `mutually_exclusive` and
   `conflict_free` run-time checks are both explicit hypotheses of the
-  module's theorem (`asm`), assumed alike in gate items 1, 2 and 4, and
-  listed in an emitted file's first comment; a `conflict_free` check stops
-  the emitter. Since review r8b-1 a `mutually_exclusive` line is read by its
+  module's theorem (`asm`), assumed alike in gate items 1, 2 and 4, stated
+  in an emitted file's `asmP` and listed in its first comment. Since round
+  9b a file states `conflict_free` checks too (each instrumentation wire as
+  its writer's argument) and `mutually_exclusive` lines with several rules
+  on their first side, and a fact confirmed only with a `conflict_free`
+  check assumed is stated under `asmP` (C32). Since review r8b-1 a `mutually_exclusive` line is read by its
   structure (`as × bs`, C31) in the emitter, the gate and the shadow tool
   alike, checked against the dumper's pair list. Six corpus designs rely on
   one (§11).
@@ -102,10 +105,10 @@ pieces merged here, and the fixes for reviews r8-1, r8-2 and r8b-1):
 | `cost/` | the cost piece's probes and logs (`cost/logs/summary.txt`) | — | §17 |
 | `lc/` | the last-caller piece's probes (`lc/probe/`, `shadow9/`), its shadow runs and logs | — | §8, §17 |
 | `sites/` | `rule.md`, the site-condition rule | — | §5, §7, §8, §11 |
-| `../../../../src/comp/Lean/Sched/` | the generator, schedlean: the model, site conditions, scan, facts, shadow classes and gate (`Sites`, `Model`, `Scan`, `Facts`, `Shadow`, `Gate`), the emitter (`Emit`, `Emit.*`) | — | §5–§12 |
+| `../../../../src/comp/Lean/Sched/` | the generator, schedlean: the model, site conditions, scan, facts, shadow classes, clock domains and gate (`Sites`, `Model`, `Scan`, `Facts`, `Shadow`, `Domain`, `Gate`), synthesized children (`Export`, `Hier`), the emitter (`Emit`, `Emit.*`) | — | §3.1, §5–§12 |
 | `flat8/` | today's flat files' comparison set at one load (`run.sh`, `run.log`) | — | §14, §15 |
 | `tools/` | copies of the dumper (`shape-final.bin`) and the task-agreement flat generator (`task-final.bin`); the repaired atomizer (`atomize3.py`, cost review r8-2) and its control (`cutonly.py`); round 5's `atomize2.py`, which does not match today's flat files | — | §14, §21 |
-| `build.sh` | everything above in dependency order, with the negatives `EscS_neg_8` and `MethTaskBadEn` (must fail), logged to `build/all.log`; `build_mbc.sh` rebuilt MkBufferControl after its header's group-width row was made exact (appended to the same log) | — | — |
+| `build.sh` | everything above in dependency order, with the negative `EscS_neg_8` (must fail), logged to `build/all.log` (MethTask's negatives are `schedlean --mutants`, run by `e2e/regen.sh`); `build_mbc.sh` rebuilt MkBufferControl after its header's group-width row was made exact (appended to the same log) | — | — |
 
 Import order: `Modular` ← `EmitLemmas` ← `Scan` ← `LastCaller` ←
 {`LastCallerEx`, generated files with a last-caller port or a ConfigRegN
@@ -121,8 +124,8 @@ period and quoted as ranges). Memory is peak RSS in GiB (kB / 1,048,576).
 Kernel time is separated only in the escape probes (Lean's profiler, §17);
 not in the e2e measurements (§21). Every `#print axioms` lists at most
 `propext`, `Classical.choice`, `Quot.sound`, plus `bv_decide`'s axiom for
-`Ex.Asm.skel` and what is built on it; `sorryAx` appears only in the three
-negatives (`EscS_neg_8`, `EscT_neg_8`, `MethTaskBadEn`).
+`Ex.Asm.skel` and what is built on it; `sorryAx` appears only in the
+negatives (`EscS_neg_8`, `EscT_neg_8`, and schedlean's mutants).
 
 ## 1. The model and the contract
 
@@ -242,12 +245,191 @@ methods C with themselves" (below).
 (soundness review r8-1 minor 2), as generated modules do (`no_certL_sbr_self`).
 bsc's exported `m SBR m` or `m CF m` never enters a Lean annotation: under bugs
 `synth-sbr` and `synth-cf-share` it would make `hR : Realizes Mo` false
-(`acc_not_realizes`), and `top` vacuous for every cycle. Today the emitter
-admits no synthesized child at all, and it asserts that every assumed leaf is
-a library primitive (`ASSUMED_LEAF`: FIFOL1, SizedFIFO, RegFile, and
-ConfigRegN with `E2E_CFGLIB=0`); `Built`'s docstring states the rule. The
-gate's scan run gives a synthesized child's action methods C with themselves,
-and a user BVI import its declared schedule (§11).
+(`acc_not_realizes`), and `top` vacuous for every cycle. Since round 9b the
+emitter admits synthesized children (§3.1): on path A through their own files,
+else as assumed synthesized leaves; every other assumed leaf is a library
+primitive (`ASSUMED_LEAF`: FIFOL1, SizedFIFO, RegFile, and ConfigRegN with
+`E2E_CFGLIB=0`); `Built`'s docstring states the rule. The gate's scan run gives
+a synthesized child's action methods C with themselves (its export, or the
+parent's view of it, §3.1), and a user BVI import its declared schedule (§11).
+
+### 3.1 Synthesized children: one file per module (round 9b)
+
+A synthesized child on path A enters its parent as `Built.node`, through its
+own generated file, instead of an assumed leaf.
+
+**Files and order** (`Lean.Sched.Hier`). The modules of a run are the nodes of
+the instance DAG: the top module's `.ba`, and for each synthesized instance
+the `.ba` of its Verilog module, looked up beside the parent's `.ba`, then in
+each directory of `-p`/`--search-path` in turn. Each module is processed once
+per run, keyed by module name, however many instances use it: the DAG comes
+from each `.ba`'s instances alone, and a module is read in full (extraction,
+bsc's facts) only at its turn, its file written (and checked) before the next
+is read, so memory stays at one module (cost review r9b-1 M2). The files are
+written children first (a depth-first post-order in instance order), each
+once: `<NS>.lean` in the top file's directory, namespace `NS`, where `NS` is
+the module name capitalised (`mkCounter` → `MkCounter`), with its parts
+`<NS>_p<k>.lean` as for any file. A parent imports each child file on path A
+(`import MkCounter`, the last part). `--check` checks the files in that order,
+each child's `.olean` on its parents' path, and every file's `#print axioms`;
+`--mutants N` makes N mutants of each module, each checked against the real
+children. A design with no synthesized instance takes none of this (its run
+and file are as before).
+
+**A child's exported contract.** A module written as a synthesized child (not
+the top module) exports its whole interface in `X`:
+
+- each action and action-value method: an enable, C with itself (§3: bsc's
+  exported `m SBR m` / `m CF m` never enters a Lean annotation);
+- each value method without arguments: no enable, one argument wire (`share`),
+  CF with itself; its result is the method's value (the method is a step of
+  the file, `nR + m`, where the top file keeps it a step without calls outside
+  `X`);
+- between two distinct methods, bsc's exported relation: CF; `a SB b` is
+  `prec a b`; `a SBR b` also `sbr` both ways; C, or no statement, is `conf`;
+- `alwaysRdy` exactly for the methods bsc builds always ready: the method's
+  ready signal and its `CAN_FIRE` are the constant true (or `always_ready`).
+  bsc's wrapper of the child assumes such a ready output is 1, so the parent
+  never reads it (`true_ifc_ids` in `bsc.hs`). The file proves it: such a
+  method's guard is the constant `true` (not an opaque operator) and its reads
+  are always ready, so its `CAN_FIRE` is `true` in every cycle (`cf_ar_<m>`, by
+  `rfl`), and `Avail` needs no ready output (`cf_of_avail`). Every other method
+  keeps its ready output (`alwaysRdy` false);
+- no aliases (`same`, `rdyRet`) and no paths: the file's `acyc` proves its
+  outputs read no input (`Dwo := []`, checked against `xAnn.path` by `path_w`).
+
+Not exported yet, so the child is off path A: a value method with arguments
+(its result reads an input: a path, `Dwo`, and the argument in `retT`), and a
+method bsc split into several steps.
+
+**Not stated at all** (soundness review r9b-1 B1): an `always_enabled` or
+`enabled_when_ready` action method. bsc runs it in every cycle (or whenever it
+is ready), not on the parent's enable: the child's `.ba` has `WILL_FIRE_m = 1`
+and no `EN` input, and a parent's Verilog drives no enable. A contract with
+`hasEn` would make the child's file model `r := r + x` on `calledM w m`, false
+in a parent whose rule calls `m` only sometimes (bsc only warns, G0015). So the
+export is refused (the `.ba`'s `alwaysEnabled`/`enabledWhenReady` property, or
+a `WILL_FIRE_m` that is not `m`'s enable port), the parent's view marks such a
+method by its `inhigh` enable, and a parent using such a child stops, its gate
+row naming the child (verdict not A). Fix path: export `alwaysEn m` (and
+`hasEn m` false), and emit the parent's `alw` obligation (`CertB.alw`: a step
+that is on in every cycle calls the port), which needs a proof that some rule
+fires in every cycle. An assumed leaf whose `.ba` is absent is assumed to fire
+on its enable (its `enabled_when_ready`, unlike `always_enabled`, is not in the
+parent's view).
+
+The relations are bits by method, one row per method in a balanced table
+(`xAnnPrecT`, `xAnnSbrT`, `xAnnConfT`: `Tab.get` is logarithmic, where a list's
+`getD` made a decided pass over all pairs cubic, cost review r9b-1 M1), and
+again by columns (`xAnnPrecCT`, …, the rows' transpose): a pair is related
+where both say so, so a parent's kind check reads only rows (below). Columns
+that disagreed with the rows would only drop pairs from the relations, a
+stronger contract the child's own file must then prove.
+The scan's method tables say exactly where `Follow` and `Group` fail for every
+argument (`Scan.mannExport`: a value method's own bit is clear, two calls
+sharing one wire may follow each other), and the file checks each table
+against `xAnn` by a decided lemma for any annotation (`nfB`, `ngB`, `h3B`,
+`tab_spec`, `notFollow_of`, `notGroup_of`, `h3_of`), not only pairwise CF;
+`selfAnnX` and `enV_ok` (a method without an enable calls no port with one)
+are decided too. The top module keeps the old form (pairwise CF methods, else
+the emitter stops), so a design with no synthesized child gets the same file
+as before.
+
+A module without rules (a child of methods only) gets one rule that never
+fires (guard `false`, no sites): files index rules by `Fin nR` with `nR ≥ 1`,
+and a contract's rules are existential, so the extra rule changes no
+statement.
+
+**The parent.** Each child module is one kind `synK` (numbered by first
+instance), shared by all its instances: `KI .synK := NS.X`, its ports the
+child's method indices (`NS.mM i`, so a port's code is `m.val`; wires and uses
+by index, `finW`, `finU`), its annotation the child's export. The parent
+states one record of named hypotheses, `Subs`, with per instance of a child
+its operators, constants, solver verdicts, assumed leaves and own `Subs`
+(`synKops`, `synKE`, `synKhy`, `synKlv`, `synKsub`, each a function of
+`Fin (nk .synK)`). A child's file folds its inputs (method arguments other than
+a bare pass-through, module argument ports) into its opaque operators, which is
+sound for one module since `top` holds for every `ops`; two instances fed
+differently (`a.incr 1`, `b.incr a.value`; `mkCtr 1`, `mkCtr 2`) need different
+operators, so the entries are per instance, not per module (soundness review
+r9b-1 M1). Each module has its own `Ops` and `EqC`: literal numbers are per
+module. `top` holds for every `ops E hy lv sub`.
+
+- `implK ⟨.synK, i⟩ := NS.modU (sub.synKops i) (sub.synKE i) (sub.synKlv i)
+  (sub.synKsub i)` (a `ModuleU`; the library kinds become `Mo.toU`);
+- `Built.node`'s child premise is `NS.built (sub.synKops i) (sub.synKE i)
+  (sub.synKhy i) (sub.synKlv i) (sub.synKsub i)`, so `RealizesU` comes from the
+  child's `obl` and `Causal` from its `acyc`, through `Built.realizes` /
+  `Built.causal`;
+- `Aliased`: the child declares no aliases, so `aliased_of_none` for every
+  `toB`;
+- `Acyc`: the child has no paths, so its kind's `rk_ok`, `reach_w` and
+  `pin_all` cases are vacuous and its outputs have rank 0;
+- the scan sees the child's ports with its exported relations, as any kind
+  (`kind_synK` decides the scan's kind table against `NS.xAnn`); a rule's calls
+  of one child are put in an order its annotation allows where the action
+  order is wrong (bsc composes a rule's actions in parallel; `orderCalls`,
+  which moves nothing where the order is right);
+- a value read of a synthesized child whose ready output is bsc's constant and
+  read by no step needs no readiness fact (`Sites.rdyPort`);
+- a wide child costs the parent about linearly in its methods (cost reviews
+  r9b-1 M1, r9b-2 M1): the kind table is checked by rows (`kind_synK` by
+  `Scan.kindOK_of_rows`: for each port, its four table rows against bit masks
+  of the ports that its annotation's rows and columns let follow or group with
+  it, about n²/64 word operations in the kernel, where the pairwise check was
+  O(n² log n) kernel steps); a port's facts are a balanced tree of proofs shaped
+  as `fxT_synK` (`Tab.finAll`, each leaf at its port as the file writes it,
+  `NS.mM k`, or `pSynK k` for an assumed leaf: a closed term), so no proof's
+  type holds the other ports; the ports are `List.finRange n`
+  (`portsU_synK` is `List.mem_finRange`, nothing decided); and the wires, uses
+  and fixed codes are balanced tables (`finW`, `finU`, `fxT_synK`).
+  Measured on Wide (rule i calls `put i` with `get (i+1)`; 32 to 256 ports,
+  the parent's `.ba` 18 to 175 KB), Lean wall per file: off path A
+  5.7/8.5/15.6/33.7 s, ×1.5–2.2 per doubling of the methods and ×1.9 per
+  doubling of the parent's `.ba` at the last step, peak 0.61–1.16 GB (before:
+  95.9 s and 4.3 GB at 256 ports); on path A 4.9/8.1/15.9/28.1 s (before:
+  78.4 s). The child's own file (6.7/11.9/28.7/114 s) decides its method tables
+  over every pair (`nfOK_*`), against a `.ba` that lists its schedule pair by
+  pair (34 KB to 706 KB): ×1.8–2.3 per doubling of that `.ba`.
+
+A parent's `top` holds under its path-A children's own assumptions (their
+`Leaves` and `asm` reach it through `sub.synKlv` and `sub.synKhy`), so the
+parent's `Leaves` docstring, its header's user-assertion line and its
+hierarchy row name what each such child's file assumes: its assumed leaves,
+its user assertions, and its own path-A children's (soundness review r9b-2
+minor 3; testsuite `HierSf.bs`).
+
+No lemma is missing from the library: `Built.node` takes built children
+(`ModuleU`), and `compose`, `Built.top` are unchanged. Every file of the
+round-9b tests lists only `propext`, `Classical.choice` and `Quot.sound`.
+
+**Path A for a child in a parent** requires: its `.ba` is found and is one
+clock domain; its file is written with `obl`, `acyc` and `top` from `Hyps`
+alone (no `Unconfirmed`); the parent reads none of its ready ports (every
+method the parent uses is always ready); and the parent's view of the
+child's schedule (bsc's, in the parent's `.ba`) equals the child's export but
+for action methods' self pairs, and its always-ready methods (no `RDY_m`, or a
+`[const]` one) are the export's `alwaysRdy` ones (else the `.ba` files are out
+of step, or `-unsafe-always-ready` made them differ). In
+`--gate`, the child's own verdict must be A and its emitter's dry run must
+write such a file.
+
+**Off path A** the child stays an assumed synthesized leaf, named in `Leaves`
+per instance (`synK : Fin (nk .synK) → Module V sX_synK`, `synKR`, `synKC`,
+`synKA : ∀ i, Aliased toB (synK i)`; instances differ in their module ports),
+with its interface stated in the parent from the parent's view of bsc's
+schedule: every port a method, action methods C with themselves, value
+methods CF, each `RDY_m` an always-ready value port aliased to `m`'s ready
+output (`rdyRet m RDY_m`, as FIFO2's `notEmpty`), and `m` not always ready
+unless its `RDY_m` is bsc's constant. The parent's emitter stops on a read of
+such a leaf's value method with arguments (its argument is not modelled yet;
+the gate's model takes it as a leniency, so its emitter column says no). `--gate` prints each module's record and rows
+(children first) and one hierarchy row naming each child instance, its kind
+and module, and, off path A, why. Fix path for the commonest reason, a parent
+reading a child's ready port: export `RDY_m` as an exact port aliased to `m`'s
+ready (`rdyRet`, `ParentU.exactRet`, `aliased_toModuleU`, as
+`Example.RdyPort`); the child's file must then compute its ready value from
+its reads, through its own children's aliases.
 
 ## 4. Values, operators, constants
 
@@ -299,12 +481,35 @@ limit_EQ_9___d12 && _enq_RL_emitA$EN_outQ.wget`, reads as "`emitA` and `emitB`
 never both enqueue".
 
 - In an emitted file the `mutually_exclusive` checks are `asmP` (groups as
-  `SufAsm`), and the file's first comment lists them as assumed. A file
-  states one check per line with one rule on its first side; a longer first
-  side stops the emitter (fail safe; none in the corpus), and each stated
-  check, re-rendered, is asserted to be bsc's line. A file cannot state a
-  `conflict_free` check yet: the emitter stops on one (fail safe; no e2e
-  design has one).
+  `SufAsm`), and the file's first comment lists them as assumed. A line
+  with one rule on its first side is one check; each stated check,
+  re-rendered, is asserted to be bsc's line. Since round 9b a line
+  `(WF a₁ || …) && B` is stated as one check `(aᵢ, bs)` per rule of its first
+  side, which together are exactly the line (`!((a₁ ∨ a₂) ∧ B) ⟺ !(a₁ ∧ B) ∧
+  !(a₂ ∧ B)`); the emitter asserts that a line's checks have its first side as
+  heads, one list, and re-render together to bsc's line, and keeps them out
+  of suffix groups. The check step's guard is the whole line,
+  `orL [WFd_a₁, …] && orL [WFd_b, …]`.
+- **A `conflict_free` check in a file** (round 9b, C32). Check `c` in rule
+  `R` is stated in `asmP` as `(WF R && cfL_c) = false`: `cfL_c` is the line's
+  top-level conjuncts, each a `WILL_FIRE` signal (`WF k`) or a condition over
+  one step's reads, with each instrumentation wire's `wget` read as its one
+  unconditional writer's argument (the writer's call condition, over the
+  writer's reads) and `whas` as the writer's `WF` (trust point 3). bsc's line
+  is `aAnds [WILL_FIRE_r2, c1, wget]`, so `cfL_c` is `WF r2 && c1 && c2`; a line
+  with a firing signal or a wire below the top level (through definitions)
+  is not stated, and the emitter stops. bsc's `$error` that reports the
+  check is a task statement of `R` whose site condition is `false` (the step
+  never makes it) and whose hardware enable is `WF R && cfL_c`; its task
+  agreement holds because `asm` makes that enable false (`en_tcf`, `cfA_c`).
+  The instrumentation wires are children like any `RWire` (their `wset`
+  calls are sites of the rules that write them), read by nothing. A dynamic
+  fact the solver confirms only with the `conflict_free` checks naming
+  either step assumed (`assert`: an escape fact, or since round 9b the
+  exclusivity of two callers of one port, `cx_n`) is stated with an
+  `asmP ops E oc →` premise, so `Hyps` holds of every `oc` (soundness
+  review r8b-1 minor 1); the solver's assumptions are the file's, since the
+  emitter states every `conflict_free` line or stops.
 - In the gate both kinds are assumptions in items 1, 2 and 4 alike (§11), and
   the summary lists every design and pair that relies on one. A
   `mutually_exclusive` line enters the gate's scan as the `|as|` checks
@@ -583,8 +788,8 @@ annotation was written from ConfigReg.bs, not from a Verilog-independent fact.
   call (every port its own atom); exported method relations count
   (mkRenamedPorts' `a C b` is not shadowing).
 
-**In the emitter** (C25): `LC_KEY` is RegN/RegUN/RegA and ConfigRegN
-`write` (the emitter has no kind for ConfigRegUN and ConfigRegA); the other laws are proved but not wired (the corpus does not need
+**In the emitter** (C25): `LC_KEY` is RegN/RegUN/RegA and ConfigRegN/UN/A
+`write` (since round 9b ConfigRegUN and ConfigRegA take the `cfg` kind); the other laws are proved but not wired (the corpus does not need
 them). A port is a last-caller port when the solver finds two of its callers
 that may both call (every port its own atom), skipping pairs that a recorded
 exclusion covers: urgency, disjoint guards and run-time checks between rules,
@@ -690,6 +895,11 @@ r8-2 minor 4). A timeout is unknown in every tool (`satc.Enc.sat` returns
 - **C31** (review r8b-1) `mutually_exclusive` lines read by structure
   (`mecheck`), one rule on a stated line's first side, each stated check
   re-rendered to bsc's line (§5).
+- **C32** (round 9b) `conflict_free` checks in `asmP` (`cfL_c`, `cfR`, `cfT`,
+  `nF`; `asmP`'s single checks are then `.2.1`, its `conflict_free` part
+  `.2.2`); their reports' statements under `asm` (`en_tcf`, `cfA_c`); facts
+  confirmed only with them assumed under `asmP`; a `mutually_exclusive` line
+  with several rules on its first side as one check per rule of it (§5).
 
 ## 10. versus today's emitted file
 
@@ -752,7 +962,7 @@ rows, see *Round 9* below.)
    stated conditions (every port its own atom); else bsc's fact keyed by both
    steps and both uses, with each stated condition implying bsc's; else the
    solver with the `conflict_free` assertions naming either step assumed (a
-   user assertion). The `GATE` line reports the facts, how each is confirmed
+   user assertion; a file states such a fact under `asmP`, §5). The `GATE` line reports the facts, how each is confirmed
    (`solver`, `bsc`, `assert`, or unconfirmed) and the unconfirmed ones. A
    fact on a step the site builder could not build (item 1's footprint-only
    fallback) is not checked as a file would state it (the check takes the
@@ -803,6 +1013,17 @@ rows, see *Round 9* below.)
    - at most **2,016 mux member pairs proved one by one** (round 9a review: the pairwise
      port's 64 users), counted over ports with differing arguments as the pairs outside one
      check group (an upper bound); 512 callers on one register gave 130,816 pairs, about 18 MB;
+   - a **step fan-in of at most 256**: the operator inputs of its sites' conditions and
+     arguments, summed (cost reviews r9b-1 M3, r9b-2 M2). Each site states its own (the
+     `ea_`/`arg_` proofs and the step's `hq_` query restate an index mux of N reads at each of N
+     registers), so a step's text grows with the square of its fan-in. Per doubling of the `.ba`,
+     NoCfIdx (one rule indexing N registers) gave files ×2.1 and Lean ×2.0 (its 2.5 s import
+     removed) up to fan-in 288 (N = 16), then files ×2.6–2.9 to 1,088 and Lean ×3.8–4.2 to 624; the scaled
+     `sysConflictFreeOKLarge` gave ×4.1 from fan-in 592 to 2,208 and Lean ×12 near 4,096 (a 265 KB
+     `.ba`, a 12.1 MB file, 715 s). The bound sits at that knee; written files reach 234
+     (mkBufferControl). The emitter stops on it; the gate names it when it is the only reason
+     (testsuite `FanIn.bs`). Fix path: state a definition the sites share (bsc's `SEL_ARR_…` def)
+     once and refer to it by name, so a site's text is its own inputs only;
    - at most **512 callers of one last-caller port**, counting every user
      of the port (×1.53–2.17 per doubling to 512; 1,024 not buildable);
    - at most **64 escaped rule pairs** (item 1) and **4,096 dynamic facts in
@@ -828,6 +1049,32 @@ rows, see *Round 9* below.)
    than C21's settings, so the remaining risk is one long proof term.
 7. no assumed leaf without its hypothesis named in the top theorem, and an
    assumed synthesized leaf exports every action method C with itself (§3).
+   Since round 9b `--gate` checks a hierarchy module by module, children first
+   (§3.1): each module's record and rows, then a `hierarchy` row with each
+   child instance's kind and place (path A, or an assumed leaf and why). A
+   parent's model takes each child's export (path A) or the parent's view of
+   it (an assumed leaf, `RDY_m` aliased to `m`'s ready), as its emitter does.
+8. **one clock domain** (round 9b, `Lean.Sched.Domain`; bsc's domains are its
+   clock families). A module of several is not checked, with no fallback:
+   `--gate` gives it its own verdict, `not checked: multi-domain` (neither A
+   nor B), and the emitter stops. Gated clocks of the family and several
+   resets are modelled: bsc ANDs a clock's gate into the condition of every
+   action call on the state it clocks (`IExpand.handleMethod`), and the
+   gate checks for each such call that the step's guard (a method's ready
+   signal, which the contract assumes) and the call's condition imply the
+   gate, structurally or with bsc's solver; with the gate off that state is
+   not called and holds, as its model does without calls, whether or not
+   its oscillator ticks. The gate fails with a named reason when a gate is
+   not an input of the module (a gate a child drives: GatedClock has no
+   model), when a child's Verilog takes the gate as a port, or when a call's
+   enable may be on with its gate off. A gate input is outside the Lean
+   interface: a guard reading it is an opaque operator of its other reads,
+   and `top` holds for every `ops`, so for each cycle's gate value (bsc's
+   solver verdicts in `Hyps` treat the gate as a free variable). With several
+   resets, `top` covers the cycles outside reset, every reset deasserted
+   (its docstring says so); async-reset primitives (RegA, ConfigRegA) take
+   their synchronous models, which they equal outside reset, and FIFOs select
+   async reset by a Verilog define, not by name.
 
 **Corpus maxima against item 6** (`gate8/count_*.txt`, `gatescan_*.txt`):
 the largest step has 3,074 sites (sysConflictFreeOKLarge, every mode; the next
@@ -862,7 +1109,7 @@ default mode only.
 | sysArithPipe | A (proved end to end; relies on its two `mutually_exclusive` groups) | A | A | A |
 | sysConflictFreeOKLarge | flat (10,254 slots; scan, 1,536 escape facts (bsc's) and shadowing pass, the last through its `conflict_free` checks) | flat (the same) | flat | flat |
 | sysFloatTest | flat (10 escape facts unconfirmed) | flat (the same) | A (relies on its `mutually_exclusive` checks) | A |
-| mkAssertedSchedules | A (relies on its assertions: `(RL_up, RL_down)` `mutually_exclusive`, and the `outQ.enq` escape fact and shadow pair from its `conflict_free` check) | A | A | A |
+| mkAssertedSchedules | A (relies on its assertions: `(RL_up, RL_down)` `mutually_exclusive`, and the `outQ.enq` escape fact and shadow pair from its `conflict_free` check; since round 9b the emitter writes its file, which proves) | A | A | A |
 | mkBufferControl | flat (readiness fact refuted; its 50 escape facts confirmed by the solver; `lockInterLoads` is `L`) | **A** | flat (readiness) | **A** |
 | mkPrediction | flat (readiness fact refuted; 2 escape facts unconfirmed; 12 `L` ports and, every port its own atom, one `X`: `intraMemReqQ.enq`) | **A** (8 `L`) | flat (readiness; 12 `L`) | **A** (8 `L`) |
 | mkDeblockFilter | **A** (6 `L` ports) | **A** | **A** | **A** |
@@ -1076,12 +1323,12 @@ does `r := x; $display "put %d" x`. bsc warns G0020 for `put`. The emitter
 prints `note: MethTask: method put: 1 task call(s) left out of task agreement
 (bsc G0020)` and emits `nT = 1`: the `Tasks` child has the rule's statement
 only. `MethTask.obl` and `MethTask.top` are proved (2.6 s, 2.4 s, 0.54 GiB, load 14; standard
-three axioms). `MethTaskBadEn.lean` is the same file with the rule's task
+three axioms). The same file with the rule's task
 statement enabled in every cycle (`tenT` entry `true` instead of `WF 1 &&
-true`): it fails in `tqAll`, the task statement's enable proof (`neg.sh`,
-`neg.log`, and now in `build.sh`: rc 1, an application type mismatch at the
-statement's enable leaf, line 1163 (`en_one … (en_tk rfl)`; the header and the
-escape lemmas grew after review r8b-1), so `obl` and `top` then rest on `sorryAx`). So the rule's task call is checked, and the
+true`; round 9b: `schedlean --mutants`' "enable force" mutant, byte for byte the
+earlier hand-made `MethTaskBadEn.lean` but for its namespace) fails in `tqAll`, the
+task statement's enable proof: an application type mismatch at the
+statement's enable leaf, line 1163 (`en_one … (en_tk rfl)`), so `obl` and `top` then rest on `sorryAx`. So the rule's task call is checked, and the
 method's is not in the contract. Today's flat generator (task agreement)
 numbers both calls (`task #0` the method's, `task #1` the rule's).
 
@@ -1367,16 +1614,25 @@ chosen by kind and checked against the instance's schedule (`cfgAnn_lib`,
   different calls in a cycle; `accC_realizes`: the same port modelled C
   realizes.
 
-`e2e/mtask/MethTaskBadEn.lean`: a rule's task statement with a wrong enable
-fails (§12). `scan/escS/EscS_neg_8.lean`: an escaped pair with one site's
+`schedlean --mutants` (round 9b): each hardware mutant of a generated file
+fails (enable drop or force, argument, mux, guard read, CF order, last-caller
+order, and a call condition left out of a port's enable where a
+`conflict_free` check names both callers, so the two may both call in the
+hardware while `cfL_c` still reads the condition); on MethTask, the rule's
+task statement with a wrong enable (§12). A `conflict_free` check's report
+forced on fails; dropping it or changing its message is covered by `asm`
+(its enable is false wherever the check passes), so no such mutant is made:
+mkAssertedSchedules' report never enabled proves, checked by hand. `scan/escS/EscS_neg_8.lean`: an escaped pair with one site's
 partner left out of its keyed table fails at the decision (`decide` proves it
 false), so the linear check does check every partner (C27). `scan/escT/EscT_neg_8.lean`
 (cost review r8b-1 M1): the escaped pair of `EscT8` (8 task statements in
 each step) with `lo` one too high fails at the second step's decision
 (`escT2S_0`), so the task-site comparison checks the second step's numbering
 (C29). `e2e/mejoin/` (soundness review r8b-1 M1, the reviewer's design): a
-`mutually_exclusive` line with two rules on its first side stops the emitter,
-and the gate's run reads it as `as × bs` (§5).
+`mutually_exclusive` line with two rules on its first side stopped the emitter
+until round 9b; it is now stated as one check per rule of that side, the file
+proves, and `a.write` stays a last-caller port of `r1` and `r2`, as the gate's
+run (`as × bs`, §5) finds.
 
 ## 20. Emission trust points
 
@@ -1392,9 +1648,13 @@ No Lean check sees these:
    operator, so a too-strong (a) condition cannot fail there.
 2. Completeness of `onehot`: every AND-OR mux listed.
 3. `Mod.asm`'s content: only bsc's assertion list (a `mutually_exclusive`
-   group as `SufAsm`, asserted to be exactly bsc's checks); in the gate, a
+   group as `SufAsm`, asserted to be exactly bsc's checks); a
    `conflict_free` line read with each of bsc's instrumentation wires as its
-   one unconditional writer's argument (§5). Since soundness review r8b-1
+   one unconditional writer's argument (§5), in the gate and, since round 9b,
+   in the file's `cfL_c` and in the hardware enable of the `$error` that
+   reports it; a line's conjuncts are bsc's `aAnds` (a condition below the
+   top level that reads a firing signal or a wire stops the emitter). Since
+   soundness review r8b-1
    M1 the `mutually_exclusive` lines are read by structure (`mecheck`): a
    line is accepted only if re-rendering it gives it back, every stated check
    is asserted to re-render to bsc's line, and the lines' exclusions are
@@ -1456,8 +1716,10 @@ No Lean check sees these:
 11. `oblU_weakens`/`oblU_weakensX` derive results and the call superset;
     legality, readiness and `u`-independence of the extra calls are the
     obligations weakening adds. Neither is used in a proof.
-12. More primitives (FIFOL1, SizedFIFO, RegFile, BRAMs), RST, multiple
-    clocks, multi-cycle traces; `Leaves` not shown inhabited; value-returning
+12. More primitives (FIFOL1, SizedFIFO, RegFile, BRAMs), reset cycles (the
+    theorem covers cycles outside reset), several clock domains (not checked),
+    gates a child drives (GatedClock and the other clock generators have no
+    model), multi-cycle traces; `Leaves` not shown inhabited; value-returning
     tasks' results in rules are free outputs; a method's value-returning task
     call stops the emitter (§12).
 13. **Single-file memory** grows ×1.6–2.9 per doubling, with up to 39 %
@@ -1482,20 +1744,74 @@ No Lean check sees these:
     `tools/shape-final.bin` (cost review r8-1 minor 9). The bsc build the
     probes were compiled with (`bsc-fix-all/inst`) is gone, so the
     last-caller probes above 128 callers cannot be recompiled.
-17. **`conflict_free` checks cannot be stated in a file yet**: the gate
-    assumes them (§5, §11) and the emitter stops on one (fail safe). The
-    reading of bsc's check line (each instrumentation wire as its one
-    writer's argument) is the generator's (trust point 3). No e2e design has
-    one; mkAssertedSchedules and sysConflictFreeOKLarge would need it. A file
-    that states them must also state each escape fact confirmed only with a
-    `conflict_free` check assumed (`assert` in the `GATE` line) under `asmP`
-    (or `Env`): today's escape facts in `Hyps` carry no `asm` premise, so
-    such a fact stated there would be false and make `top` vacuous
-    (soundness review r8b-1 minor 1). `escape_facts` refuses `assert` outside
-    the gate's run. Likewise a `mutually_exclusive` line with several rules on
-    its first side is not emitted yet (the emitter stops; none in the corpus).
+17. **`conflict_free` checks in a file** (round 9b, §5, C32): stated in
+    `asmP`, and every escape or caller-exclusivity fact confirmed only with
+    them assumed is stated under `asmP`, so `Hyps` holds of every `oc`
+    (soundness review r8b-1 minor 1); a `mutually_exclusive` line with
+    several rules on its first side is one check per rule of that side.
+    mkAssertedSchedules (all four modes) now gets its file, which proves;
+    sysMeJoin and the testsuite's sysConflictFree too. What remains:
+    - the reading of bsc's line (its `aAnds` conjuncts, each instrumentation
+      wire as its one unconditional writer's argument) is the generator's
+      (trust point 3); a line in another form stops the emitter;
+    - an `assert` fact is a named hypothesis (the solver's verdict under the
+      stated checks), not derived in Lean from `cfL_c`, though for
+      mkAssertedSchedules it follows from it propositionally;
+    - the solver works on Boolean skeletons, so in sysConflictFreeOKLarge's
+      shape (`rs[i]`, `rs[i+1]`) `i == k` and `i + 1 == k` are separate atoms:
+      the exclusivity of two writers of `rs_k` is confirmed only with the
+      `conflict_free` checks assumed (`assert`), as the shadow tool finds;
+    - sysConflictFreeOKLarge itself stays flat (10,254 slots; the emitter now
+      checks the slot bound before the scan). Its source scaled to 16
+      registers gives a file that proves (1.3 MB, 57 s, 1.3 GiB); at 16, 32
+      and 64 registers its `conflict_free` parts double with the size, but
+      the file grows about fourfold (1.3, 5.6 and 31.8 MB): each of the n
+      `rs_k.write` sites restates the shared argument `rs[i] + i`, which reads
+      all n registers through a split (`hq_k`, `ea_reg_k`). Fix path: state a
+      definition shared by several sites of one step once, with its value
+      lemma, and refer to it.
 18. **Sites of one step on one port**: the step index check (`hchkT`) is
     quadratic in them; the emitter asserts one (corpus maximum 1, §6).
+19. **Synthesized children** (round 9b, §3.1): path A needs a child whose
+    methods the parent uses are always ready; a parent reading a child's
+    ready port keeps the child an assumed leaf (fix path: `RDY_m` as an exact
+    port, §3.1). Not exported yet: value methods with arguments (and a parent
+    reading one of an assumed leaf stops the emitter), methods bsc split into
+    several steps. The top module's value methods stay outside its `X`. Of
+    the five corpus designs with synthesized children (their children
+    compiled from the sources with this bsc), no child instance reaches path
+    A: mkAes's ROMs (mkSboxRom, mkInvSboxRom, mkRconRom) have value methods
+    with arguments; mkPump reads mkSource's ready port (mkSource itself gets
+    a file); mkDeblockFilter's children fail their own scans (mkWorkVector*,
+    mkLeftVector, mkTopVector, mkbSVector: an exported CF that only an RWire
+    scheduling hack realizes); mkPrediction's mkInterpolator fails `h3` and
+    has a last-caller order problem; sysFloatTest's floating-point children
+    pass their gates but get no `Acyc`/`top` (a method drives a FIFO's path
+    input, as mkMCR), and the parent reads their ready ports. The parents'
+    own verdicts are unchanged (mkAes A, the others flat for their own
+    reasons); with the children's `.ba` files absent, each `GATE` record and
+    row equals round 9a's but for the synthesized children leaving the
+    generic leaves (they are assumed synthesized leaves) and the hierarchy
+    row.
+20. **always_enabled and enabled_when_ready children** (soundness review
+    r9b-1 B1, §3.1): refused, and their parents stop. Fix path: export
+    `alwaysEn` and emit `CertB.alw` from a rule proved to fire in every cycle.
+21. **Library leaves shared by instances**: the parent's `Leaves` has one
+    `sf : Module V FIFO2.X` (and one `rf`) for all its SizedFIFO (RegFile)
+    instances, whose depths (sizes) may differ, so `top` covers designs whose
+    instances are one module (the per-instance argument of r9b-1 M1, found
+    while fixing it; synthesized children's entries are per instance since
+    round 9b). Changing it changes the e2e files (round 9a parity); fix path:
+    `sf : Fin (nk .sf) → Module V FIFO2.X`, as the synthesized leaves.
+22. **A wide child's kind check** (fixed, cost review r9b-2 M1): `kind_synK`
+    decided the scan's kind table against the child's annotation for every
+    pair of its n ports, O(n² log n) kernel steps (12.2 s of a 29 s parent at
+    128 ports). It is now checked by rows with bit operations
+    (`kindOK_of_rows`, §3.1), about n²/64 word operations; the kind table's
+    codes are still lists (`KC`), each port's turned into a mask once.
+23. **One reset**: the "cycles outside reset" caveat is in the README and,
+    for several resets, the file's docstring; a one-reset file keeps round
+    9a's text (e2e parity), so its docstring does not say it.
 
 ## 22. Review items and where they are fixed
 

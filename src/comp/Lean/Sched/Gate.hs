@@ -2,6 +2,7 @@
 -- Items from the model's record (Facts), readiness (Sites), shadow classes and the counts here.
 module Lean.Sched.Gate
     ( Counts(..), gateCounts, countRow, GateIn(..), gateReasons, gateRow, rdyLeft, modeName, gateReport
+    , gateReportS, GateSum, multiDomainReport
     ) where
 
 import ABin (ABinModInfo(..))
@@ -10,20 +11,22 @@ import Data.List (intercalate, isPrefixOf, sortBy)
 import Flags (Flags(..))
 import PPrint (ppString)
 import Text.Printf (printf)
-import qualified Data.Map.Strict as M ((!), elems, findWithDefault, fromList, fromListWith)
+import qualified Data.Map.Strict as M ((!), elems, findWithDefault, fromList, fromListWith, toList)
 import qualified Data.Set as S (member, empty, fromList, singleton, size, union)
 
 import Lean.Sched.Bounds (Bounds(bnGateMuxPairs, bnGateEsc, bnGateEscFacts, bnGateSeg, bnGateModFacts,
-    bnGateSelmux, bnGateSlots, bnGateCodes, bnGateLcUsers, bnGateStep, bnGatePortUsers, bnGateGroup))
+    bnGateSelmux, bnGateSlots, bnGateCodes, bnGateLcUsers, bnGateStep, bnGatePortUsers, bnGateGroup, bnGateFanIn))
+import Lean.Sched.Domain (domainLine, multiDomainVerdict)
 import Lean.Sched.Emit (emitFile, Emitted(..))
 import Lean.Sched.Emit.Ctx (ecHasUnconf)
 import Lean.Sched.Emit.Plan (mkPlan)
 import Lean.Sched.Expr (memAPkg)
 import Lean.Sched.Facts (J(..), GateFacts(..), jsonDumps)
-import Lean.Sched.Model (Model(..), muxPairs)
-import Lean.Sched.Py (omLookup)
+import Lean.Sched.Export (Export(exModule), SynthKid(skExport, skStop))
+import Lean.Sched.Model (DView(dvSynthK), Model(..), muxPairs, stepFanIn)
+import Lean.Sched.Py (omLookup, omMember)
 import Lean.Sched.Run (gateModel, prepare, GateModel(gmModel, gmShare, gmFacts), Input(inFlags, inTimer,
-    inDesign, inBounds, inName, inABMI), Prep(pSites, pAP, pPrims, pSolver, pDV, pBL))
+    inDesign, inBounds, inName, inABMI), Prep(pSites, pAP, pPrims, pSolver, pDV, pBL, pDomain, pDomainWhy))
 import Lean.Sched.Shadow (ShadowOut(..), shadowReport)
 import Lean.Sched.Sites (Sites(..), SiteRec(..), RecKind(..), RdySV(..))
 import Lean.Sched.Time (phase)
@@ -108,13 +111,17 @@ data GateIn = GateIn
     , giUnrealized :: Int
     , giUnconf :: Bool          -- ^ the emitter's file would take unconfirmed facts as hypotheses
     , giMuxPairs :: Int         -- ^ mux member pairs outside a check group (an upper bound on the file's)
+    , giDomain :: [String]      -- ^ why the module's gated clocks are not modelled (Lean.Sched.Domain)
+    , giSynth :: [String]       -- ^ the synthesized children the module cannot state (Lean.Sched.Hier)
+    , giFanIn :: Int            -- ^ the largest step fan-in (Model.stepFanIn)
     }
 
 -- | The failing gate items, in the prototype's order and words; none means path A.
 gateReasons :: Bounds -> GateIn -> [String]
 gateReasons bnd gi = why0 ++ [ "the file would state unconfirmed facts as hypotheses" | null why0, giUnconf gi ]
+    ++ [ "a step of fan-in " ++ show (giFanIn gi) ++ " (its sites' operator inputs)" | null why0, giFanIn gi > bnGateFanIn bnd ]
   where
-    why0 = unreal ++ scanWhy ++ rdyWhy ++ shWhy ++ ctWhy
+    why0 = giDomain gi ++ giSynth gi ++ unreal ++ scanWhy ++ rdyWhy ++ shWhy ++ ctWhy
     g = giRecord gi
     look k = lookup k g
     int k = case look k of { Just (JI n) -> Just n; _ -> Nothing }
@@ -214,10 +221,23 @@ instance Eq J where
         (JO x, JO y) -> x == y
         _ -> False
 
+-- | --gate on a module of several clock domains: its own verdict, neither path A nor B.
+multiDomainReport :: String -> String -> String -> [String]
+multiDomainReport name mode why =
+    [ "GATE " ++ jsonDumps (JO [("name", JS name), ("verdict", JS multiDomainVerdict)])
+    , printf "%-24s %-8s %s | %s" name mode multiDomainVerdict why ]
+
 -- | --gate: items 1-7 from the model, the shadow classes and the counts, and whether the
 -- emitter writes the file; the GATE record, count row, shadow lines and summary row.
 gateReport :: Input -> IO (Either String [String])
-gateReport inp = do
+gateReport inp = fmap (fmap (\(ls, _, _) -> ls)) (gateReportS inp)
+
+-- | The gate's verdict for a parent (design.md §3.1): path A and the emitter writes a file with a
+-- top theorem from Hyps alone; else why not.
+type GateSum = Maybe String
+
+gateReportS :: Input -> IO (Either String ([String], GateSum, [String]))
+gateReportS inp = do
     let t = inTimer inp
         d = inDesign inp
         bnd = inBounds inp
@@ -228,29 +248,37 @@ gateReport inp = do
     _ <- phase t "counts" (evaluate (cnStep1 counts + cnGroup counts + cnPairs counts + unreal))
     res <- case r of
         Left (Right err) -> return (Left err)
-        Left (Left err) -> return (Right ([("name", JS name), ("error", JS ("sites: " ++ take 200 err))], Nothing, Nothing, (False, False), 0))
+        Left (Left err) -> return (Right ([("name", JS name), ("error", JS ("sites: " ++ take 200 err))], Nothing, Nothing, (False, False, Just "sites", []), (0, 0), [], [], []))
         Right p -> do
             gm <- gateModel inp p
             sh <- phase t "shadow" $ shadowReport (pSolver p) d (pDV p) (pSites p) (pPrims p) name
                       >>= \x -> evaluate (length (concat (shLines x))) >> return x
             -- the emitter's run builds this model unless the gate's run was lenient, so it is reused
             ok <- phase t "emit-dry" $ case gmModel gm of
-                Right m | not (mLenient m) -> do
+                Right m | not (mLenient m), null (pDomainWhy p) -> do
                     let run = do
                             pe <- mkPlan (pSolver p) (gmShare gm) (pDV p) (pSites p) (pBL p) bnd (leanNamespace d) m
                             case pe of
-                                Left _ -> return (False, False)
+                                Left err -> return (False, False, Just ("the emitter stops: " ++ takeWhile (/= '\n') err), [])
                                 Right ec -> do
                                     let em = emitFile ec bnd (leanNamespace d ++ ".lean")
                                     _ <- evaluate (sum (map (length . snd) (emParts em)) + length (concat (emLog em)))
-                                    return (True, ecHasUnconf ec)
-                    run `catch` (\e -> const (return (False, False)) (e :: SomeException))
-                _ -> return (False, False)
-            return (Right (gfRecord (gmFacts gm), Just (rdyLeft (pSites p)), Just sh, ok, either (const 0) muxPairs (gmModel gm)))
+                                    return (True, ecHasUnconf ec, emOff em, emAssume em)
+                    run `catch` (\e -> const (return (False, False, Just "the emitter stops", [])) (e :: SomeException))
+                _ -> return (False, False, Just "the emitter stops", [])
+            let used c = either (const True) (omMember c . mInst) (gmModel gm)
+                synthWhy = [ "child " ++ c ++ " (" ++ exModule (skExport sk) ++ "): " ++ why
+                           | (c, sk) <- M.toList (dvSynthK (pDV p)), Just why <- [skStop sk], used c ]
+            return (Right (gfRecord (gmFacts gm), Just (rdyLeft (pSites p)), Just sh, ok, either (const (0, 0)) (\m -> (muxPairs m, stepFanIn m)) (gmModel gm)
+                          , pDomainWhy p, domainLine (pDomain p), synthWhy))
     return $ case res of
         Left err -> Left err
-        Right (rec, rdy, sh, (emits, unconf), mp) ->
-            let gi = GateIn rec rdy sh counts unreal unconf mp
+        Right (rec, rdy, sh, (emits, unconf, off, asm), (mp, fi), dwhy, dline, swhy) ->
+            let gi = GateIn rec rdy sh counts unreal unconf mp dwhy swhy fi
+                why = gateReasons bnd gi
+                summ = case why of
+                    (x : _) -> Just ("gate: " ++ x)
+                    [] -> fmap (\o -> if emits then o else "the emitter stops") off
             in Right ([ "GATE " ++ jsonDumps (JO rec), "counts " ++ countRow name counts, "unrealized " ++ show unreal ]
-                      ++ map ("shadow " ++) (maybe [] shLines sh)
-                      ++ [gateRow name (modeName (inFlags inp)) (Just emits) gi (gateReasons bnd gi)])
+                      ++ dline ++ map ("shadow " ++) (maybe [] shLines sh)
+                      ++ [gateRow name (modeName (inFlags inp)) (Just emits) gi why], summ, asm)

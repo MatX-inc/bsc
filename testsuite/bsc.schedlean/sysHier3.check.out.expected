@@ -1,0 +1,7 @@
+scan segments 1 (at most 4096 uses each)
+wrote MkGuarded.lean: rules 1, methods 2, children 1, sites 3, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+check MkGuarded.lean: proved
+scan segments 1 (at most 4096 uses each)
+wrote SysHier3.lean: rules 2, methods 0, children 3, sites 7, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+check SysHier3.lean: proved
+hierarchy sysHier3: modules 2 (mkGuarded, sysHier3); sysHier3.g syn0 mkGuarded assumed leaf: the parent reads its ready port RDY_avail

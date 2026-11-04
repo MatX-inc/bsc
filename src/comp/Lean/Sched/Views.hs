@@ -22,7 +22,7 @@ import Lean.Sched.Kinds (parseSched, schedMap)
 import Lean.Sched.Model (bitLength, mportRepr, pyStrErr, showModel, MSite(sPort), MStep(tSites), Model(mD,
     mRules, mNSlots))
 import Lean.Sched.Run (gateModel, prepare, GateModel(gmFacts, gmModel), Input(inCands, inTimer, inDesign,
-    inErrh, inFlags, inABMI, inName), Prep(pPrims, pSolver, pDV, pSites))
+    inABMI, inName, inSolver), Prep(pPrims, pSolver, pDV, pSites))
 import Lean.Sched.Shadow (shadowReport, ShadowOut(..))
 import Lean.Sched.Sites (Sites(..), analyseSites, annOf, showSites)
 import Lean.Sched.Time (phase, phaseNote)
@@ -36,8 +36,8 @@ viewNames = ["sites", "model", "facts", "inverted-check", "sched-check"]
 showView :: Input -> String -> IO (Either String [String])
 showView inp what = case what of
     "sites" -> do
-        sv <- newSolver (inErrh inp) (inFlags inp)
-        let ap = memAPkg (abmi_apkg (inABMI inp))
+        let sv = inSolver inp
+            ap = memAPkg (abmi_apkg (inABMI inp))
         r <- phase t "sites" $ analyseSites sv d ap (abmi_aschedinfo (inABMI inp))
         case r of
             Left err -> return (Right ["error " ++ err])

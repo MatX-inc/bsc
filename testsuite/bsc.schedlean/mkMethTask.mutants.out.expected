@@ -1,0 +1,11 @@
+note: MethTask: method put: 1 task call(s) left out of task agreement (bsc G0020)
+scan segments 1 (at most 4096 uses each)
+wrote MethTask.lean: rules 2, methods 1, children 3, sites 5, task statements 1, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+check MethTask.lean: proved
+mutant 1 of 6, enable drop: task statement 0 (RL_tick) never enabled: killed (error)
+mutant 2 of 6, argument change: task statement 0's arguments (RL_tick) under a fresh operator: killed (error)
+mutant 3 of 6, enable force: task statement 0 (RL_tick) enabled in every cycle: killed (error)
+mutant 4 of 6, argument change: the argument of r.write under a fresh operator: killed (error)
+mutant 5 of 6, enable drop: the enable of r.write leaves out put: killed (error)
+mutant 6 of 6, argument change: the argument of c.write under a fresh operator: killed (error)
+mutants: 6 of 6 killed

@@ -1,0 +1,16 @@
+GATE {"name": "mkLeaf", "scan": "ok", "slots": 2, "codes": 1, "seg_uses": 2, "mod_facts": 0, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": true, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts mkLeaf                       2      3     0      2      1      0      1     1     0     1
+unrealized 0
+shadow mkLeaf ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+mkLeaf                   default  A     emitter yes shadow ports [-] lc callers max 0 slots 2 codes 1 esc 0 facts 0 (-) pairwise 0 seg_uses 2 mod_facts 0 step 2
+GATE {"name": "mkMid", "scan": "ok", "slots": 4, "codes": 1, "seg_uses": 3, "mod_facts": 0, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": true, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts mkMid                        3      5     0      3      1      1      1     1     0     1
+unrealized 0
+shadow mkMid ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+mkMid                    default  A     emitter yes shadow ports [-] lc callers max 0 slots 4 codes 1 esc 0 facts 0 (-) pairwise 0 seg_uses 3 mod_facts 0 step 3
+GATE {"name": "sysHier2", "scan": "ok", "slots": 4, "codes": 2, "seg_uses": 2, "mod_facts": 0, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts sysHier2                     2      4     0      2      2      0      1     1     0     0
+unrealized 0
+shadow sysHier2 ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+sysHier2                 default  A     emitter yes shadow ports [-] lc callers max 0 slots 4 codes 2 esc 0 facts 0 (-) pairwise 0 seg_uses 2 mod_facts 0 step 2
+hierarchy sysHier2: modules 3 (mkLeaf, mkMid, sysHier2); mkMid.c syn0 mkLeaf path A; sysHier2.m syn0 mkMid path A; sysHier2.k syn1 mkLeaf path A

@@ -31,12 +31,13 @@ import Lean.Sched.Enc (encAnd, encB, encOr, encSatA, mkAssume, newEnc, portAtom,
 import Lean.Sched.Expr (SD(..), aexprE)
 import Lean.Sched.Kinds (KindDef(kdHasArg, kdHasEn), PM(PT, PS))
 import Lean.Sched.MECheck (cfNames)
-import Lean.Sched.Model (exclSrc, users, DView(dvSBSBR, dvA, dvDisj, dvUrg, dvMe, dvCF), MPort, MSite(sLabel,
+import Lean.Sched.Export (exConfB)
+import Lean.Sched.Model (exclSrc, users, DView(dvSBSBR, dvA, dvDisj, dvUrg, dvMe, dvCF, dvExport), MPort, MSite(sLabel,
     sArg, sKind, sCond), MStep(tFallback, tName, tSites), MX(MTrue), Model(mUnguarded, mByk, mNR, mNM, mRules,
     mNSlots, mK, mFacts, mMTasks, mGcls, mGen, mChecks, mCfChecks, mStepFallback), PyErr(..))
 import Lean.Sched.Py (omEmpty, omInsert, omToList, startsWith)
 import Lean.Sched.Reach (encFormulaShared)
-import Lean.Sched.Scan (compressCodes, escPairs, mannGate, mannPlain, scanMasks, MAnn(maRel), ScanDesign(scFpM,
+import Lean.Sched.Scan (compressCodes, escPairs, mannExport, mannGate, mannPlain, scanMasks, MAnn(maRel), ScanDesign(scFpM,
     scFpR))
 import Lean.Sched.Sites (Sites(..), SiteRec(..), RecKind(..))
 import Lean.Sched.Tree (APkg(apInsts, apRules), Act(ACallA), E(..))
@@ -259,10 +260,17 @@ newFactEngine sv share dv sites bl m mconf = do
                 meth0 = case pm of { PS s -> s; PT t -> show t }
                 meth = if kd == "rf" && meth0 /= "upd" then "sub" else meth0
                 cc k = encOrB (callConds ap (stepName k) inst meth)
-            v <- query (do { a <- encB (wfe (stepName x)); b <- encB (wfe (stepName y)); c <- cc x; c2 <- cc y; return [a, b, c, c2] })
+                base = do { a <- encB (wfe (stepName x)); b <- encB (wfe (stepName y)); c <- cc x; c2 <- cc y; return [a, b, c, c2] }
+            v <- query base
             if v == Unsat then return (Just "solver", Nothing) else do
                 bt <- bscFact (x, Sq.index (tSites (rules !! x)) sx, cc x) (y, Sq.index (tSites (rules !! y)) sy, cc y)
-                return (fmap (const "bsc") bt, bt)
+                case bt of
+                    Just t -> return (Just "bsc", Just t)
+                    -- with the conflict_free checks naming either step assumed (a file states it under asmP)
+                    Nothing | not (null cfa) -> do
+                        v2 <- queryCf base [stepName x, stepName y]
+                        return (if v2 == Unsat then Just "assert" else Nothing, Nothing)
+                            | otherwise -> return (Nothing, Nothing)
     return (FactEngine lcpF escapeFacts cxFact cfa)
 
 -- | The gate's facts and counts for a model (or the model's failure).
@@ -277,8 +285,8 @@ gateFacts sv share d dv sites bl bnd name (Right m) = do
         mnames = [ tName r | r <- drop nR (mRules m) ]
         plain = mannPlain mnames (dvCF dv)
         nonCF = met && any (\k -> popCount (maRel plain ! k) < nM - 1) [0 .. nM - 1]
-        mann = mannGate mnames (dvCF dv) (dvSBSBR dv)
-        mconf a b = a == b || not (testBit (maRel mann ! b) a)
+        mann = maybe (mannGate mnames (dvCF dv) (dvSBSBR dv)) mannExport (dvExport dv)
+        mconf a b = maybe (a == b || not (testBit (maRel mann ! b) a)) (\ex -> exConfB ex a b) (dvExport dv)
         rulesA = listArray (0, length (mRules m) - 1) (mRules m)
         rules = RA rulesA
         stepName k = tName (rules !! k)

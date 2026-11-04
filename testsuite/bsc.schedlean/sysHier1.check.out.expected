@@ -1,0 +1,10 @@
+scan segments 1 (at most 4096 uses each)
+wrote MkCounter.lean: rules 1, methods 2, children 1, sites 3, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+check MkCounter.lean: proved
+scan segments 1 (at most 4096 uses each)
+wrote MkPair.lean: rules 1, methods 3, children 2, sites 5, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+check MkPair.lean: proved
+scan segments 1 (at most 4096 uses each)
+wrote SysHier1.lean: rules 4, methods 0, children 5, sites 11, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+check SysHier1.lean: proved
+hierarchy sysHier1: modules 3 (mkCounter, mkPair, sysHier1); sysHier1.a syn0 mkCounter path A; sysHier1.b syn0 mkCounter path A; sysHier1.p syn1 mkPair path A

@@ -12,8 +12,9 @@ Corpus modules' modular obligations, written by schedlean (`regen.sh`) and check
 | `MkUrgencyBlocking.lean`, `modes8/MkUrgencyBlocking_{noagg,nosched,both}.lean` | mkUrgencyBlocking in the four bsc modes; `lastOp.write` is a last-caller port | `obl`, `acyc`, `top`, from `Hyps` alone |
 | `MkMCR.lean` | mkMCR: 28 rules, 1 method, 44 children; 3 RegN and 1 ConfigRegN last-caller ports | `obl` from `Hyps` alone; no `Acyc`/`top` (a method's enable drives an RWire's path input) |
 | `lcprobe/LcProbe64.lean` | 64 rules writing one register every cycle (last caller, 64 callers) | `obl`, `acyc`, `top` |
-| `mtask/MethTask.lean` | a rule's `$display` (a statement, checked) and a method's (bsc G0020, left out) | `obl`, `acyc`, `top`; `mtask/MethTaskBadEn.lean` (the rule's statement enabled always) fails |
-| `mejoin/` | soundness review r8b-1's negative control: `MeJoin.bs` joins `r1`, `r2` against `r3` (`rJoinMutuallyExclusive`), so bsc's check line has two rules on its first side | no file: the emitter stops (a file states one rule on a line's first side); `--gate` finds `a.write` a last-caller port of `r1` and `r2` (`regen.log`) |
+| `MkAssertedSchedules.lean` | mkAssertedSchedules: a `mutually_exclusive` pair (`up`, `down`) and a `conflict_free` pair (`emitA`, `emitB` both enqueue `outQ`), stated in `asmP` (`cfL_0`: the line with its instrumentation wire read as its writer's argument); the `outQ.enq` escape and mux facts under `asmP` | `obl`, `acyc`, `top`, from `Hyps` alone |
+| `mtask/MethTask.lean` | a rule's `$display` (a statement, checked) and a method's (bsc G0020, left out) | `obl`, `acyc`, `top`; its six hardware mutants (`--mutants 6`, among them the rule's statement enabled always) fail |
+| `mejoin/SysMeJoin.lean` | soundness review r8b-1's negative control: `MeJoin.bs` joins `r1`, `r2` against `r3` (`rJoinMutuallyExclusive`), so bsc's check line has two rules on its first side, stated as one check per rule of that side (until round 9b the emitter stopped) | `obl`, `acyc`, `top`; `a.write` is a last-caller port of `r1` and `r2`, as `--gate` finds (`regen.log`) |
 
 `regen.sh IN` writes every file above (IN holds the compiled `.ba` files, laid out as the script
 says) and logs schedlean's lines to `regen.log`:
@@ -39,8 +40,9 @@ labelled by its source (the solver for that pair and the stated conditions, ever
 or bsc's fact for exactly that pair, with the stated conditions implying bsc's), each pair's check
 keyed by first-step site and linear in its facts (C27); the last-caller ports (key: RegN/RegUN/RegA
 and ConfigRegN `write`; two callers the solver finds may both call); bsc's `mutually_exclusive`
-groups (one `SufAsm` per group), user assertions listed in the first comment (a `conflict_free`
-check stops the emitter); the fan-in of every expression.
+groups (one `SufAsm` per group), user assertions in `asmP` and listed in the first comment
+(`conflict_free` checks with each instrumentation wire read as its writer's argument); the fan-in of
+every expression.
 
 **Synthetic (the dump does not define them; generator requirements):** the netlist's definitions.
 `CAN_FIRE` is the AND of the unconditional guarded sites' RDYs and an opaque Boolean operator over the

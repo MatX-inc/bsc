@@ -1,0 +1,52 @@
+package GatedMix where
+
+-- A gated clock of the default family whose gate bsc folds into a rule's firing under an if (not a
+-- conjunct), so the gate check asks the solver; mkGatedMixMove adds an action method on gated state.
+import FIFO
+
+clockedBy :: (IsModule m mType) => Clock -> m a -> m a
+clockedBy c = changeSpecialWires (Just c) Nothing Nothing
+
+interface GatedMixIfc =
+  look :: Bit 8
+
+{-# synthesize sysGatedMix {
+  gate_input_clocks = { gclk },
+  clock_family = { default_clock, gclk } } #-}
+sysGatedMix :: Clock -> Module GatedMixIfc
+sysGatedMix gclk = module
+  q :: FIFO (Bit 8) <- clockedBy gclk $ mkFIFO
+  a :: Reg (Bit 8) <- mkReg 0
+  s :: Reg (Bit 8) <- mkReg 0
+  c :: Reg (Bit 8) <- clockedBy gclk $ mkReg 0
+  rules
+    "mix": when a > 7 ==> if s > 3 then c := s else a := 0
+    "move": when True ==> do
+      s := q.first
+      q.deq
+  interface
+    look = c + s
+
+interface GatedMoveIfc =
+  push :: Bit 8 -> Action
+  look :: Bit 8
+
+{-# synthesize mkGatedMixMove {
+  gate_input_clocks = { gclk },
+  clock_family = { default_clock, gclk } } #-}
+mkGatedMixMove :: Clock -> Module GatedMoveIfc
+mkGatedMixMove gclk = module
+  q :: FIFO (Bit 8) <- clockedBy gclk $ mkFIFO
+  w :: RWire (Bit 8) <- clockedBy gclk $ mkRWire
+  a :: Reg (Bit 8) <- mkReg 0
+  s :: Reg (Bit 8) <- mkReg 0
+  b :: Reg (Bit 8) <- clockedBy gclk $ mkReg 0
+  c :: Reg (Bit 8) <- clockedBy gclk $ mkReg 0
+  rules
+    "move": when True ==> do
+      s := q.first
+      q.deq
+    "mix": when a > 7 ==> if s > 3 then c := s else a := 0
+  interface
+    push x = c := x
+    look = b + s

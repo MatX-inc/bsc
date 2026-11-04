@@ -5,7 +5,7 @@ module Lean.Sched.Extract where
 import ABin (ABinModInfo(abmi_flags, abmi_apkg, abmi_aschedinfo, abmi_src_name))
 import ASchedule (AScheduleInfo(..), MethodId(..), UniqueUse(..))
 import AScheduleInfo (SchedNode(..), erdbToList)
-import ASyntax (aIfaceSchedNames, aTrue, apkgIsMCD, mkMethId, splitPortNums, AAbstractInput(AAI_Reset,
+import ASyntax (aIfaceSchedNames, aTrue, mkMethId, splitPortNums, AAbstractInput(AAI_Reset,
     AAI_Clock), AAction(aact_assump, ACall, AFCall, afcall_fun, afcall_isC, ATaskAction, aact_objid,
     ataskact_fun, ataskact_isC, aact_args), AClock(AClock), ADef(adef_expr, adef_objid, ADef), AExpr(ASDef,
     AMethValue, ATaskValue, ASPort, ASParam, ASInt, ASReal, ASStr, ASClock, ASReset, ASInout, AMGate,
@@ -35,7 +35,8 @@ import Pragma (SchedulePragma(..))
 import Prim (PrimOp(..))
 import RSchedule (ratToNestedLists)
 import SchedInfo (SchedInfo(..), MethodConflictInfo(..))
-import VModInfo (vName, vFields, vSched, vPath, VFieldInfo(..), VPathInfo(..), getVNameString, mkNamedOutputs)
+import VModInfo (vName, vFields, vSched, vPath, VFieldInfo(..), VPathInfo(..), VeriPortProp(VPconst, VPinhigh), getVNameString,
+    mkNamedOutputs)
 import qualified Data.Foldable as F (Foldable(foldl'))
 import qualified Data.IntMap.Strict as IM ((!), fromList)
 import qualified Data.IntSet as IS (member, fromList)
@@ -50,7 +51,7 @@ import Lean.Sched.Order (ordersOf, unrealizedOf)
 import Lean.Sched.OutOfOrder (havocSites)
 import Lean.Sched.Types (lookupMeth, portLabel, readPortFor, Call(clArgs, Call, clPort, clCond), Child(..),
     Conflicts(cfSBR, Conflicts, cfCF, cfNoFollow, cfNoPrecede, cfNoShare, cfSB), Design(..), HwTask(..),
-    Mask(WhenInput, WhenOutput, WhenNotInput), Meth(mtCopies, Meth, mtKind, mtDeps, mtName),
+    Mask(WhenInput, WhenOutput, WhenNotInput), Meth(mtCopies, Meth, mtKind, mtDeps, mtName, mtConst, mtInHigh),
     MethKind(ValueMethod, ActionMethod, ActionValueMethod), Order(Order), Output(ouSeq, ouName, ouMask,
     Output), Port(..), Step(..), StepKind(ActionMethodStep, ValueMethodStep, RuleStep), TaskCall(..))
 
@@ -61,8 +62,7 @@ extractDesign full path version abmi aspkg = do
     let apkg = abmi_apkg abmi
         asi  = abmi_aschedinfo abmi
         name = getIdString (apkg_name apkg)
-    when (apkgIsMCD apkg) $
-        Left (name ++ ": modules with several clocks or resets are not supported")
+    -- (the driver has already turned away a module of several clock domains, Lean.Sched.Domain)
     when (not (null (apkg_size_params apkg))) $
         Left (name ++ ": modules with size parameters are not supported")
     let children  = M.fromList [ (chInst c, c) | c <- map extractChild (aspkg_state_instances aspkg) ]
@@ -344,9 +344,9 @@ extractChild avi = Child
     actionPos = M.fromListWith (++) [ (a, [k]) | (k, a) <- zip [0 :: Int ..] actionNames ]
     portsIn f  = map fst (concat (vf_inputs f)) ++ maybe [] (pure . fst) (vf_enable f)
     portsOut f = map fst (vf_outputs f)
-    meths = [ mkMeth f ty | (f, ty) <- fields ]
+    meths = [ mkMeth f ty outs en | (f@Method { vf_outputs = outs, vf_enable = en }, ty) <- fields ]
     actionNames = [ getIdBaseString (vf_name f) | (f, (_, Just _, _)) <- fields ]
-    mkMeth f (argTys, enTy, resTys) =
+    mkMeth f (argTys, enTy, resTys) outs en =
         let m     = getIdBaseString (vf_name f)
             kind | isJust enTy && null resTys = ActionMethod
                  | isJust enTy                = ActionValueMethod
@@ -370,6 +370,8 @@ extractChild avi = Child
                                                ++ [ a | kind == ValueMethod, a <- actionNames
                                                       , M.findWithDefault 0 a used > 0, not (mayFollow conf m a) ]))
         in Meth { mtName = m, mtKind = kind, mtCopies = map port [0 .. nUsed - 1]
+                , mtConst = not (null outs) && all ((VPconst `elem`) . snd) outs
+                , mtInHigh = kind /= ValueMethod && maybe False ((VPinhigh `elem`) . snd) en
                 , mtDeps = map snd (sortOn fst [ (k, a) | a <- S.toList observed
                                                         , k <- M.findWithDefault [] a actionPos ]) }
 

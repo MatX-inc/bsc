@@ -1,0 +1,7 @@
+scan segments 1 (at most 4096 uses each)
+wrote MkSfKid.lean: rules 2, methods 2, children 3, sites 10, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+check MkSfKid.lean: proved
+scan segments 1 (at most 4096 uses each)
+wrote SysHierSf.lean: rules 2, methods 0, children 2, sites 5, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+check SysHierSf.lean: proved
+hierarchy sysHierSf: modules 2 (mkSfKid, sysHierSf); sysHierSf.k syn0 mkSfKid path A (its file assumes SizedFIFO)

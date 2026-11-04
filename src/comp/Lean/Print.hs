@@ -3,7 +3,7 @@
 module Lean.Print
     ( leanKeywords, leanKeywordSet, commentSafe, doc, chunksOf, wrapJoin, wrap
     , W, WS(..), runW, w, cut, Split(..)
-    , tab, tabRange, stab, stabKeyed, taball, stabproof, allBThm, tabpair, tabproof
+    , tab, tabOr, tabRange, stab, stabKeyed, taball, stabproof, allBThm, tabpair, tabproof, tabproofI
     , allL, tup, tupcong, andc, andget, andterm, listCong, nat, fmt, splitN, splitW
     ) where
 
@@ -101,6 +101,11 @@ splitW = 20000    -- source characters per table definition
 
 tab :: [String] -> String
 tab items = tabRange items 0 (length items)
+
+-- | A balanced table of the items, or the one-leaf table of @dflt@ when there are none.
+tabOr :: String -> [String] -> String
+tabOr dflt [] = "(.leaf (" ++ dflt ++ "))"
+tabOr _ items = tab items
 
 tabRange :: [String] -> Int -> Int -> String
 tabRange items = go
@@ -228,11 +233,15 @@ tabpairI ind items = go 0 (length items)
              | otherwise = let mid = (lo + hi) `div` 2 in "⟨" ++ go lo mid ++ ",\n" ++ ind ++ go mid hi ++ "⟩"
 
 tabproof :: [String] -> String
-tabproof items = go 0 (length items)
+tabproof = tabproofI "  "
+
+tabproofI :: String -> [String] -> String
+tabproofI _ [] = error "schedlean: a balanced proof of no entries"
+tabproofI ind items = go 0 (length items)
   where
     v = Sq.fromList items
     go lo hi | hi - lo == 1 = "Tab.one (" ++ Sq.index v lo ++ ")"
-             | otherwise = let mid = (lo + hi) `div` 2 in "⟨" ++ go lo mid ++ ",\n  " ++ go mid hi ++ "⟩"
+             | otherwise = let mid = (lo + hi) `div` 2 in "⟨" ++ go lo mid ++ ",\n" ++ ind ++ go mid hi ++ "⟩"
 
 allL :: [String] -> String
 allL [] = "trivial"

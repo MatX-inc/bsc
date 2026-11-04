@@ -1,0 +1,12 @@
+scan segments 1 (at most 4096 uses each)
+wrote Mutants.lean: rules 4, methods 0, children 4, sites 13, task statements 2, muxes 1 (member pairs: 0 by checks, 1 one by one), exR bits 1, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+check Mutants.lean: proved
+mutant 1 of 8, enable drop: task statement 0 (RL_a) never enabled: killed (error)
+mutant 2 of 8, argument change: task statement 0's arguments (RL_a) under a fresh operator: killed (error)
+mutant 3 of 8, mux priority swap: the mux of z.write: RL_c and RL_d exchange arguments: killed (error)
+mutant 4 of 8, guard read change: the guard of RL_c reads y.read for z.read: killed (error)
+mutant 5 of 8, CF-order-only: task statements 0 (RL_a) and 1 (RL_b) in the other order: killed (counterexample)
+mutant 6 of 8, last-caller order reversal: the last-caller mux of x.write: the first of its 2 callers wins: killed (error)
+mutant 7 of 8, enable force: task statement 0 (RL_a) enabled in every cycle: killed (error)
+mutant 8 of 8, argument change: the argument RL_b gives x.write under a fresh operator: killed (error)
+mutants: 8 of 8 killed

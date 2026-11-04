@@ -1,0 +1,26 @@
+package Chain(Link(..), mkLink, mkLink0) where
+
+-- a chain of synthesized modules: each level reads its child's value and bumps it
+interface Link =
+  value :: Bit 8
+  bump :: Action
+
+mkLink0 :: Module Link
+mkLink0 = module
+  s :: Reg (Bit 8) <- mkReg 0
+  interface
+    value = s
+    bump = s := s + 1
+
+mkLink :: Module Link -> Module Link
+mkLink sub = module
+  c <- sub
+  r :: Reg (Bit 8) <- mkReg 0
+  s :: Reg (Bit 8) <- mkReg 0
+  rules
+    "step": when True ==> do
+      r := r + c.value
+      c.bump
+  interface
+    value = r + s
+    bump = s := s + 1

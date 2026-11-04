@@ -1,0 +1,27 @@
+package ConflictFree3 where
+
+-- conflict_free over three rules: a read/write pair of one register (its check line reads the
+-- scheduler's use condition) and a FIFO enqueued by two of them, under nested conditions.
+import FIFO
+
+{-# verilog sysConflictFree3 #-}
+sysConflictFree3 :: Module Empty
+sysConflictFree3 =
+  module
+    m :: Reg (Bit 3) <- mkReg 0
+    x :: Reg (Bit 8) <- mkReg 0
+    y :: Reg (Bit 8) <- mkReg 0
+    q :: FIFO (Bit 8) <- mkFIFO
+    let ra :: Rules
+        ra = rules
+               "ra": when True ==> if m == 1 then (if y > 2 then x := y else q.enq y) else noAction
+        rb :: Rules
+        rb = rules
+               "rb": when True ==> if m == 2 then x := 5 else noAction
+        rc :: Rules
+        rc = rules
+               "rc": when True ==> if m == 4 then q.enq x else y := x
+    addRules (rJoinConflictFree ra (rJoinConflictFree rb rc))
+    rules
+      "tick": when True ==> m := m + 1
+      "drain": when True ==> q.deq

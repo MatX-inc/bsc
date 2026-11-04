@@ -1,0 +1,48 @@
+package Hier3 where
+
+-- A synthesized child off path A, an assumed leaf in the parent: mkGuarded's methods are guarded, so the
+-- parent reads their RDY ports; mkLookup's value method takes an argument (not exported yet, and the
+-- parent's emitter stops on the read), used by sysHierArg.
+interface Guarded =
+  take :: Action
+  avail :: Bit 8
+
+{-# verilog mkGuarded #-}
+mkGuarded :: Module Guarded
+mkGuarded = module
+  r :: Reg (Bit 8) <- mkReg 5
+  interface
+    take = r := r - 1
+      when r > 0
+    avail = r
+      when r > 0
+
+interface Lookup =
+  get :: Bit 8 -> Bit 8
+
+{-# verilog mkLookup #-}
+mkLookup :: Module Lookup
+mkLookup = module
+  r :: Reg (Bit 8) <- mkReg 3
+  interface
+    get x = r + x
+
+{-# verilog sysHier3 #-}
+sysHier3 :: Module Empty
+sysHier3 = module
+  g :: Guarded <- mkGuarded
+  t :: Reg (Bit 8) <- mkReg 0
+  u :: Reg (Bit 8) <- mkReg 0
+  rules
+    "use": when True ==> do
+      g.take
+      u := u + 1
+    "see": when True ==> t := g.avail
+
+{-# verilog sysHierArg #-}
+sysHierArg :: Module Empty
+sysHierArg = module
+  l :: Lookup <- mkLookup
+  t :: Reg (Bit 8) <- mkReg 0
+  rules
+    "use": when True ==> t := l.get t

@@ -1,0 +1,24 @@
+package AlwaysEn where
+
+-- A synthesized child with an always_enabled action method that the parent calls only sometimes:
+-- bsc warns (G0015), and the child's Verilog runs the method in every cycle.
+interface Acc =
+  add :: Bit 8 -> Action {-# always_ready, always_enabled #-}
+  total :: Bit 8
+
+{-# verilog mkAccAE #-}
+mkAccAE :: Module Acc
+mkAccAE = module
+  r :: Reg (Bit 8) <- mkReg 0
+  interface
+    add x = r := r + x
+    total = r
+
+{-# verilog sysAE #-}
+sysAE :: Module Empty
+sysAE = module
+  c :: Acc <- mkAccAE
+  t :: Reg (Bit 8) <- mkReg 0
+  rules
+    "ra": when t > 3 ==> c.add t
+    "rt": when True ==> t := t + 1

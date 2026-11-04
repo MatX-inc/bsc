@@ -1,0 +1,30 @@
+package TwoResets where
+
+-- Two resets on one clock, and async-reset registers (RegA, ConfigRegA): the theorem covers the
+-- cycles outside reset, where they behave as Reg and ConfigReg.
+import ConfigReg
+
+resetBy :: (IsModule m mType) => Reset -> m a -> m a
+resetBy r = changeSpecialWires Nothing (Just r) Nothing
+
+interface TwoResetsIfc =
+  put :: Bit 8 -> Action
+  get :: Bit 8
+
+{-# synthesize mkTwoResets #-}
+mkTwoResets :: Reset -> Module TwoResetsIfc
+mkTwoResets rst2 = module
+  a :: Reg (Bit 8) <- mkReg 0
+  b :: Reg (Bit 8) <- resetBy rst2 $ mkReg 0
+  c :: Reg (Bit 8) <- mkRegA 0
+  d :: Reg (Bit 8) <- resetBy rst2 $ mkConfigRegA 0
+  e :: Reg (Bit 8) <- resetBy rst2 $ mkRegA 0
+  rules
+    "step": when True ==> a := a + 1
+    "two": when True ==> b := b + a
+    "async": when a > 2 ==> do
+      c := b
+      d := c
+  interface
+    put x = e := x
+    get = d + e

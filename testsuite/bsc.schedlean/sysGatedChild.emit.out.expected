@@ -1,0 +1,1 @@
+schedlean: the gate gc$CLK_GATE_OUT of clock gc$CLK_OUT is the gate of instance gc's output clock new_clk, not an input of the module (not modelled)

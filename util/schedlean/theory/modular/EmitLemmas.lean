@@ -52,6 +52,16 @@ theorem Tab.one {α : Type uT} {Q : Nat → α → Prop} {i : Nat} {a : α} (h :
     ∀ k, i ≤ k → k < i + 1 → Q k a :=
   fun k h1 h2 => (show k = i by omega) ▸ h
 
+/-- `Q` at port `pt k` of `Fin n` (a table entry ignored), where `pt k` is the port as the file writes
+    it (a closed term): a fact per port of a wide child. -/
+def FinQ {α : Type uT} {n : Nat} (pt : Nat → Fin n) (Q : Fin n → Prop) (k : Nat) (_ : α) : Prop := Q (pt k)
+
+/-- `Q m` for every `m : Fin n`, from a balanced tree of proofs shaped as `t` (one leaf per index), so
+    that no proof's type holds the rest of the ports (cost review r9b-2 M1). -/
+theorem Tab.finAll {α : Type uT} {n : Nat} {Q : Fin n → Prop} (pt : Nat → Fin n) (hpt : ∀ m : Fin n, pt m.val = m)
+    (t : Tab α) (h : Tab.AllR (FinQ pt Q) t 0 n) : ∀ m, Q m :=
+  fun m => hpt m ▸ Tab.get_allR t 0 n h m.val (Nat.zero_le _) m.isLt
+
 /-- The Boolean version, for the kernel; each leaf must stand for exactly one index. -/
 def Tab.allB {α : Type uT} (f : Nat → α → Bool) : Tab α → Nat → Nat → Bool
   | .leaf a, lo, hi => Nat.beq hi (lo + 1) && f lo a

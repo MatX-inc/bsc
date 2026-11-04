@@ -6,19 +6,20 @@ module Lean.Sched.Emit.Proofs
 
 import Control.Monad (forM_, when)
 import Data.Array ((!))
-import Data.List (elemIndex)
+import Data.List (elemIndex, intercalate)
 import Data.Maybe (fromMaybe)
 import qualified Data.Foldable as F (Foldable(toList))
 import qualified Data.Map.Strict as M ((!))
 import qualified Data.Set as S (Set, empty, fromList, singleton, toAscList, toList, union)
 
-import Lean.Print (allBThm, andc, andget, cut, fmt, stab, stabproof, tabproof, tupcong, w, W)
+import Lean.Print (allBThm, allL, andc, andget, cut, fmt, stab, stabproof, tabOr, tabproof, tupcong, w, W)
 import Lean.Sched.Emit.Ctx (argVal, condHw, condVal, evt, ihelper, isCond, isUncond, kd, lportOf, mxKind,
     ocread, site, sitePort, step, svHw, val, vctx, yof, EC(ecMet, ecM, ecKinds, ecNM, ecHyp, ecHya, ecNS, ecNR,
-    ecRDC, ecWXM), VCtx(cX, VCtx))
+    ecRDC, ecWXM, ecExport), VCtx(cX, VCtx), exported)
+import Lean.Sched.Export (Export(exMeths), XMeth(xmAR), isSynthKind)
 import Lean.Sched.Kinds (kdCode, kdFx, KindDef(kdAlwaysRdy, kdPorts), PM(PT, PS))
 import Lean.Sched.Model (mxRepr, MSite(sPort, sR, sArgs, sArg, sKind, sCond), MStep(tRes, tSites, tGuard),
-    MX(MLit, MK, MXarg, MGK, MF, MSplit, MG, MZ, MTrue), Model(mOff))
+    MX(MLit, MK, MXarg, MGK, MF, MSplit, MG, MZ, MTrue, MFalse), Model(mOff))
 
 sitesOf :: EC -> Int -> [MSite]
 sitesOf ec k = F.toList (tSites (step ec k))
@@ -62,7 +63,7 @@ gOf r = case r of
 
 rcong :: MX -> String
 rcong e = case e of
-    MZ -> "rfl"; MK _ -> "rfl"; MXarg -> "rfl"; MTrue -> "rfl"; MGK _ -> "rfl"
+    MZ -> "rfl"; MK _ -> "rfl"; MXarg -> "rfl"; MTrue -> "rfl"; MFalse -> "rfl"; MGK _ -> "rfl"
     MLit j -> "congrArg ops.toB (h " ++ show j ++ " (by decide))"
     MF n js -> "congrArg (ops.f " ++ show n ++ ") (" ++ tupcong [ "h " ++ show j ++ " (by decide)" | j <- js ] ++ ")"
     MG n js -> "congrArg (ops.g " ++ show n ++ ") (" ++ tupcong [ "h " ++ show j ++ " (by decide)" | j <- js ] ++ ")"
@@ -91,13 +92,20 @@ emitSiteProofs ec = do
         nS = ecNS ec
         kn k = fromMaybe 0 (elemIndex k kinds)
     w "/-! ## Site facts: reads before, dummy arguments -/\n"
+    -- a synthesized kind's codes as one balanced table (a case per code made each query linear in its ports)
+    let fxCodes k = [ kdCode (kdOf k) p | p <- kdPorts (kdOf k), kdFx (kdOf k) p ]
+        fxCase k | isSynthKind k = "  | " ++ show (kn k) ++ ", c => fxT_" ++ k ++ ".get c\n"
+                 | otherwise = concat [ "  | " ++ show (kn k) ++ ", " ++ show c ++ " => true\n" | c <- fxCodes k ]
+    forM_ [ k | k <- kinds, isSynthKind k ] $ \k ->
+        w ("def fxT_" ++ k ++ " : Tab Bool :=\n  " ++ tabOr "false" [ if kdFx (kdOf k) p then "true" else "false" | p <- kdPorts (kdOf k) ])
     w ("def fxF (κ c : Nat) : Bool := match κ, c with\n"
-       ++ concat [ concat [ "  | " ++ show (kn k) ++ ", " ++ show (kdCode (kdOf k) p) ++ " => true\n" | p <- kdPorts (kdOf k), kdFx (kdOf k) p ] | k <- kinds ]
+       ++ concatMap fxCase kinds
        ++ "  | _, _ => false\ndef kindN : Kind → Nat\n" ++ concat [ "  | ." ++ k ++ " => " ++ show (kn k) ++ "\n" | k <- kinds ]
        ++ "def codeK : (κ : Kind) → (KI κ).M → Nat\n")
     forM_ kinds $ \k -> case k of
         "reg" -> w "  | .reg => fun m => match m with | .rd _ => 0 | .wr _ => 1"
         "tasks" -> w "  | .tasks => fun _ => 0"
+        _ | isSynthKind k -> w ("  | ." ++ k ++ " => fun m => m.val")
         _ -> w ("  | ." ++ k ++ " => fun m => match m with " ++ unwords [ "| ." ++ pn p ++ " => " ++ show (kdCode (kdOf k) p) | p <- kdPorts (kdOf k) ])
     w ("def npK : Kind → Nat\n" ++ concat [ "  | ." ++ k ++ " => " ++ show (if k == "tasks" then 1 else length (kdPorts (kdOf k))) ++ "\n" | k <- kinds ]
        ++ "def offK : Kind → Nat\n" ++ concat [ "  | ." ++ k ++ " => " ++ show (mOff m M.! k) ++ "\n" | k <- kinds ]
@@ -188,10 +196,12 @@ emitValues ec = do
                                 [val ec k (fromMaybe MTrue (tGuard (step ec k))) c Nothing, hgTerm k "hf", val ec k (tRes (step ec k)) c Nothing]
         w (fmt "theorem rqM (ops : Ops V) (E : EqC V) %s : Tab.AllR (RQM ops E %s) mIdx 0 nM :=\n  %s"
                [hyp, hya, tabproof [ fmt "(%s : RQM ops E %s %d %d)" [rqmLeaf mi, hya, show mi, show mi] | mi <- [0 .. ecNM ec - 1] ]])
+        when (exported ec) $ w (cfArText ec)
         w (fmt "theorem cf_of_avail {ops : Ops V} {E : EqC V} {u : St → Nat → V} {oc : OC V} {w : Wires (Fin nM) V} {m : Fin nM}\n\
 \    (h : Avail (P ops E u) oc w m) : CF ops E oc (nR + m.val) = true :=\n\
-\  h.1.resolve_left (fun h' => by cases h')\n\
-\theorem resM_ok (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) (oc : OC V) (w : Wires (Fin nM) V) (m : Fin nM)\n\
+\  %s\n\
+\theorem resM_ok" [if exported ec then "h.1.elim (fun h' => cf_ar ops E oc m h') id" else "h.1.resolve_left (fun h' => by cases h')"]
+           ++ fmt " (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) (oc : OC V) (w : Wires (Fin nM) V) (m : Fin nM)\n\
 \    (h : Avail (P ops E u) oc w m) : (trM (P ops E u) oc w m).2 = some (((P ops E u).comb oc w).2.ret m) := by\n\
 \  rw [trM_eq]\n\
 \  exact Tab.get_allR _ 0 nM (rqM ops E %s) m.val (Nat.zero_le _) m.isLt (u (.inl m)) oc (w.arg m) (cf_of_avail h)\n" [hyp, hya])
@@ -303,6 +313,19 @@ emitRY ec needuc = do
 \  exact Tab.get_allR _ 0 (kR k) (Tab.get_allR _ 0 nS (ryT ops E %s) k (Nat.zero_le _) hk) i (Nat.zero_le _) hi oc v x hal hf hcs ha\n\
 \end\n" [hyp, hya])
     cut
+
+-- | An exported module's always-ready methods: CAN_FIRE is true in every cycle, its guard the constant
+-- and its reads always ready (by computation), so `Avail` needs no RDY (design.md §3.1).
+cfArText :: EC -> String
+cfArText ec =
+    let ars = [ i | (i, x) <- zip [0 :: Int ..] (maybe [] exMeths (ecExport ec)), xmAR x ]
+        lst = "[" ++ intercalate ", " (map show ars) ++ "]"
+    in concat [ fmt "theorem cf_ar_%d (ops : Ops V) (E : EqC V) (oc : OC V) : CF ops E oc (nR + %d) = true := by\n  unfold CF RD; rfl\n" [show i, show i] | i <- ars ]
+       ++ fmt "theorem arL_ok : ∀ m : Fin nM, xAnn.alwaysRdy m = true → m.val ∈ (%s : List Nat) := by decide\n\
+\/-- An always-ready method can fire in every cycle. -/\n\
+\theorem cf_ar (ops : Ops V) (E : EqC V) (oc : OC V) (m : Fin nM) (h : xAnn.alwaysRdy m = true) : CF ops E oc (nR + m.val) = true :=\n\
+\  AllL.mem (P := fun i => CF ops E oc (nR + i) = true) (l := %s) %s m.val (arL_ok m h)\n"
+              [lst, lst, allL [ "cf_ar_" ++ show i ++ " ops E oc" | i <- ars ]]
 
 emitChecks :: EC -> W ()
 emitChecks ec = do

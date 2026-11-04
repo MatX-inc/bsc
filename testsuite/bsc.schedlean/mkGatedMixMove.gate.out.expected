@@ -1,0 +1,7 @@
+GATE {"name": "mkGatedMixMove", "scan": "ok", "slots": 17, "codes": 2, "seg_uses": 5, "mod_facts": 2, "escapes": 1, "esc_facts": 1, "esc_facts_max_per_pair": 1, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 1}, "esc_facts_unconfirmed": ["RL_move/s.write RL_mix/s.read"], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [["c.write", 2]], "lc_method": ["c.write"], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 2, "step_fallback": [], "unguarded": []}
+counts mkGatedMixMove               4     11     0      4      4      2      1     2     0     2
+unrealized 0
+domain clocks CLK_gclk(gate CLK_GATE_gclk) CLK; resets RST_N
+shadow mkGatedMixMove ports with two callers 1, solver calls 1, shadowing ports 1 [L 1]; lc callers max 2; ports relying on mutually_exclusive 0, conflict_free 0; last caller admits all
+shadow L c.write [RegN] callers 2
+mkGatedMixMove           default  flat  emitter no  shadow ports [L 1] lc callers max 2 slots 17 codes 2 esc 1 facts 1 (null 1) pairwise 2 seg_uses 5 mod_facts 2 | 1 escape facts unconfirmed (RL_move/s.write RL_mix/s.read) step 4

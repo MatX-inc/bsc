@@ -1,1 +1,2 @@
-schedlean: AssertionError: a mutually_exclusive check with 2 rules on its first side ((WILL_FIRE_RL_r1 || WILL_FIRE_RL_r2) && WILL_FIRE_RL_r3): not emitted yet
+scan segments 1 (at most 4096 uses each)
+wrote SysMeJoin.lean: rules 5, methods 0, children 4, sites 12, task statements 1, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0

@@ -1,0 +1,3 @@
+scan segments 1 (at most 4096 uses each)
+wrote ConflictFree3.lean: rules 5, methods 0, children 17, sites 31, task statements 3, muxes 2 (member pairs: 0 by checks, 2 one by one), exR bits 0, escapes 2 (site pairs 3, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=2, ag lemmas 3
+check ConflictFree3.lean: proved

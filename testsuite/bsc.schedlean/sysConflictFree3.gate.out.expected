@@ -1,0 +1,5 @@
+GATE {"name": "sysConflictFree3", "scan": "ok", "slots": 51, "codes": 3, "seg_uses": 13, "mod_facts": 5, "escapes": 2, "esc_facts": 3, "esc_facts_max_per_pair": 2, "esc_facts_how": {"solver": 1, "bsc": 0, "assert": 2, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 3, "me_needed_pairs": 0, "pairwise": 2, "step_fallback": [], "unguarded": []}
+counts sysConflictFree3             5     31     3     13     10      4      1     2     0     2
+unrealized 0
+shadow sysConflictFree3 ports with two callers 2, solver calls 4, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+sysConflictFree3         default  A     emitter yes shadow ports [-] lc callers max 0 slots 51 codes 3 esc 2 facts 3 (solver 1, assert 2) pairwise 2 seg_uses 13 mod_facts 5 assertions relied on: scan 0 me, escape facts 2 cf, shadow 0 me 0 cf step 13

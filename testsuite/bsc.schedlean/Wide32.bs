@@ -1,0 +1,13 @@
+package Wide32(sysWide32, mkWideKid32) where
+
+import Vector
+import Wide
+
+{-# verilog mkWideKid32 #-}
+{-# properties mkWideKid32 = { alwaysReady } #-}
+mkWideKid32 :: Module (WideIfc 32)
+mkWideKid32 = mkWideKid
+
+{-# verilog sysWide32 #-}
+sysWide32 :: Module Empty
+sysWide32 = mkWideTop mkWideKid32

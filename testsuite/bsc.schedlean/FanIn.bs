@@ -1,0 +1,15 @@
+package FanIn where
+
+-- One rule updating a vector of 16 registers by an index: its step restates the index mux at each
+-- register, fan-in 288, above the step fan-in bound (256): the gate names it, the emitter stops.
+import Vector
+
+{-# verilog sysFanIn #-}
+sysFanIn :: Module Empty
+sysFanIn =
+  module
+    rs :: Vector 16 (Reg (Bit 19)) <- replicateM (mkReg 0)
+    i :: Reg (Bit 4) <- mkReg 0
+    rules
+      "r1": when True ==> (select rs i) := (select rs i)._read + zeroExtend i
+      "inc": when True ==> i := i + 1

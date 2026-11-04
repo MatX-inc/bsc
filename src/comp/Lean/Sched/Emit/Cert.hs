@@ -11,13 +11,14 @@ import Data.List (intercalate)
 import Data.Maybe (fromMaybe)
 import qualified Data.Map.Strict as M ((!), findWithDefault, lookup, toList, fromList, fromListWith)
 
-import Lean.Print (allL, cut, fmt, stab, stabproof, w, W)
+import Lean.Print (allL, cut, fmt, stab, stabproof, tabproofI, w, W)
 import Lean.Sched.Emit.Arms (tuser)
-import Lean.Sched.Emit.Ctx (argVal, condVal, entry, isUncond, kd, lportOf, site, step, EC(ecMuxes, ecVB, ecKV,
-    ecU, ecNR, ecSelmux, ecPortInfo, ecM, ecNT, ecKinds, ecHyp, ecHya, ecWXM, ecMet, ecLCP, ecNS),
+import Lean.Sched.Emit.Ctx (argVal, condVal, entry, exported, isUncond, kd, lportOf, site, step, EC(ecMuxes, ecVB, ecKV,
+    ecU, ecNR, ecSelmux, ecPortInfo, ecM, ecNT, ecKinds, ecHyp, ecHya, ecWXM, ecMet, ecLCP, ecNS, ecSynth),
     PInfo(piMargs, piArgk, piMpos, piQ, piMus), VCtx(VCtx))
+import Lean.Sched.Export (isSynthKind, portFn, Export(exNS), SynthKid(skExport, skOff))
 import Lean.Sched.Kinds (kdFx, KindDef(kdAlwaysRdy, kdPorts, kdHasEn), PM(..))
-import Lean.Sched.Model (MPort, MSite(sPort, sHw), MStep(tSites), MX(MChk), Model(mByk))
+import Lean.Sched.Model (MPort, MSite(sPort, sHw), MStep(tSites), MX(MChk, MCfT), Model(mByk))
 
 -- | The last-caller section (after the glue); returns hvR's text for the certificate.
 emitLC :: EC -> W String
@@ -108,6 +109,24 @@ emitLC ec
 \  simp only [Bool.and_eq_true] at h2\n\
 \  simp only [stOf, h2.1, cond_true] at e\n\
 \  cases e\n" else "") ++ "end\n")
+
+-- | An exported module's own interface facts: each method C with itself or one argument wire, and a
+-- method without an enable (a value method) calls only ports without one (design.md §3.1).
+exportCertText :: String
+exportCertText = "theorem selfAnnX : ∀ m : Fin nM, xAnn.conf m m = true ∨ xAnn.share m = true := by decide\n\
+\theorem enVB : Tab.allB (fun k keys => Nat.beq (kT.get k) 0 || Tab.allB (fun _ p => Nat.blt k nR || xAnn.hasEn (mM (k - nR)) ||\n\
+\    !(CI p.1).ann.hasEn p.2) keys 0 (kT.get k)) keyT 0 nS = true := by decide +kernel\n\
+\theorem enV_ok (ops : Ops V) (E : EqC V) (u : St → Nat → V) : ∀ (oc : OC V) (w : Wires (Fin nM) V) (m : Fin nM),\n\
+\    Env (P ops E u) oc w → (P ops E u).X.ann.hasEn m = false → (P ops E u).X.ann.alwaysEn m = false →\n\
+\    Avail (P ops E u) oc w m → ∀ c ∈ (trM (P ops E u) oc w m).1, ((P ops E u).CI c.1).ann.hasEn c.2.1 = false := by\n\
+\  intro oc w m _ hen _ _ c hc\n\
+\  rw [trM_eq] at hc\n\
+\  obtain ⟨i, hi, e⟩ := mem_keys (callsOf_fn_ports _ _ _ c hc)\n\
+\  have h := sitesB_spec (fun k _ p => Nat.blt k nR || xAnn.hasEn (mM (k - nR)) || !(CI p.1).ann.hasEn p.2) enVB (nR + m.val) (mlt m) i hi\n\
+\  have h1 : Nat.blt (nR + m.val) nR = false :=\n\
+\    Bool.eq_false_iff.mpr (fun h' => absurd (Nat.blt_eq.mp h') (Nat.not_lt.mpr (Nat.le_add_right nR m.val)))\n\
+\  rw [h1, Nat.add_sub_cancel_left, mM_val, show xAnn.hasEn m = false from hen, e] at h\n\
+\  simpa using h\n"
 
 pmName :: PM -> String
 pmName (PS s) = s
@@ -301,6 +320,7 @@ emitEAQ ec = do
             tqLeaf t = let (k, i0, st) = tu M.! t
                            cR = "(u (.inr (rR " ++ show k ++ ")))"
                            enp | sHw st == Just MChk = "en_tchk (fun hw => ((Bool.and_eq_true _ _).mp (cf_of_wf hw)).2)"
+                               | Just (MCfT c) <- sHw st = "en_tcf (cfA_" ++ show c ++ " ops E oc hE.1)"
                                | isUncond st = "en_tk rfl"
                                | otherwise = "en_cnd Iff.rfl (fun hf => iff_of_eqB (" ++ condVal ec k st (VCtx cR "ops.z" "hf") ++ "))"
                            av = argVal ec k st (VCtx cR "ops.z" "hav")
@@ -340,12 +360,18 @@ emitEAQ ec = do
                 return (e, a, al)
             st <- gets id
             return ([ e | (e, _, _) <- parts ], [ a | (_, a, _) <- parts ], concat [ al | (_, _, al) <- parts ], st)
-        let an = allName k
+        let an = case lookup k (ecSynth ec) of
+                Just sk -> let pt = maybe (exNS (skExport sk) ++ ".mM") (const (portFn k)) (skOff sk)
+                           in "Tab.finAll " ++ pt ++ " " ++ pt ++ "_val fxT_" ++ k
+                Nothing -> allName k
+            -- a synthesized kind's ports' facts are a balanced tree shaped as its fxT table (Tab.finAll)
+            portsArg xs | isSynthKind k = "(" ++ tabproofI "    " xs ++ ")"
+                        | otherwise = "(" ++ intercalate ")\n    (" xs ++ ")"
         w (fmt "theorem ea_%s_%d (ops : Ops V) (E : EqC V) %s (u : St → Nat → V) : EAQ ops E %s u .%s %d arm_%s_%d := by\n" [k, show i, hyp, hya, k, show i, k, show i]
            ++ concat [ "  have " ++ nm ++ " : " ++ st ++ " := by decide +kernel\n" | (nm, st) <- hxs ]
            ++ "  intro h oc w hE\n"
-           ++ fmt "  refine ⟨%s (%s), %s (%s)%s⟩" [an, intercalate ")\n    (" ens, an, intercalate ")\n    (" args
-                                                 , if null lcp then "" else ", " ++ an ++ " (" ++ intercalate ")\n    (" argsL ++ ")"])
+           ++ fmt "  refine ⟨%s %s, %s %s%s⟩" [an, portsArg ens, an, portsArg args
+                                             , if null lcp then "" else ", " ++ an ++ " " ++ portsArg argsL])
     forM_ (ecKinds ec) $ \k -> do
         let n = length (mByk m M.! k)
         if k == "tasks"
@@ -438,14 +464,14 @@ emitCert ec lcHvr = do
 \theorem onehot_ok (ops : Ops V) (E : EqC V) " ++ hyp ++ " (u : St → Nat → V) (oc : OC V) (w : " ++ wxm ++ ")\n\
 \    (hC : EnvC (P ops E u) oc w) : onehotP ops E oc :=\n\
 \  " ++ allL [ "chain_" ++ show q ++ " ops E " ++ hya ++ " oc hC.1" | q <- [0 .. length (ecMuxes ec) - 1] ] ++ "\n\
-\\n" ++ lcHvr ++ "def cert (ops : Ops V) (E : EqC V) " ++ hyp ++ " (u : St → Nat → V) : " ++ (if lc then "CertL" else "Cert") ++ " (P ops E u) :=\n\
+\\n" ++ lcHvr ++ (if met && exported ec then exportCertText else "") ++ "def cert (ops : Ops V) (E : EqC V) " ++ hyp ++ " (u : St → Nat → V) : " ++ (if lc then "CertL" else "Cert") ++ " (P ops E u) :=\n\
 \  " ++ (if lc then "LC.PairFacts.toCertL" else "PairFacts.toCert") ++ " (P ops E u) (pairs ops E " ++ hya ++ " u) (fp ops E) users (usersOk ops E) (fpOk ops E u)\n"
-       ++ (if met then "    (fun m => Or.inl (decide_eq_true rfl)) (fun oc w m _ hav => resM_ok ops E " ++ hya ++ " u oc w m hav)\n"
+       ++ (if met then "    " ++ (if exported ec then "(fun m => selfAnnX m)" else "(fun m => Or.inl (decide_eq_true rfl))") ++ " (fun oc w m _ hav => resM_ok ops E " ++ hya ++ " u oc w m hav)\n"
            else "    (fun m => m.elim) (fun _ _ m => m.elim)\n")
        ++ "    (fun oc w r _ hf => resR_ok ops E " ++ hya ++ " u oc w r hf)\n"
        ++ (if met then "    (rdyM_ok ops E " ++ hya ++ " u) (rdyR_ok ops E " ++ hya ++ " u)\n" else "    (fun _ _ m => m.elim) (rdyR_ok ops E " ++ hya ++ " u)\n")
        ++ "    (fun oc w j cm hE hcm => by obtain ⟨κ, i, hi⟩ := j; exact (eaAll ops E " ++ hya ++ " u κ i hi hi oc w hE).1 cm hcm)\n"
-       ++ (if met then "    (fun _ _ m _ h => by simp [X, xAnn] at h)\n" else "    (fun _ _ m => m.elim)\n")
+       ++ (if met && exported ec then "    (enV_ok ops E u)\n" else if met then "    (fun _ _ m _ h => by simp [X, xAnn] at h)\n" else "    (fun _ _ m => m.elim)\n")
        ++ (if not lc
            then fmt "    (fun oc w j cm hE s hs hav x hx => by obtain ⟨κ, i, hi⟩ := j; exact (eaAll ops E %s u κ i hi hi oc w hE).2 cm s hs hav x hx)\n\
 \    (fun oc w j cm _ h => by obtain ⟨κ, i⟩ := j; cases κ <;> cases cm <;> cases h)\n\
@@ -461,7 +487,7 @@ emitCert ec lcHvr = do
 \      obtain ⟨κ, i, hi⟩ := j; exact (eaAll ops E %s u κ i hi hi oc w hE).2.2 cm hl s hs hon x hx hlt)\n" (replicate 8 hya)))
        ++ (if met then "theorem cf_of_availB {ops : Ops V} {E : EqC V} {oc : OC V} {w : Wires (Fin nM) V} {m : Fin nM}\n\
 \    (h : Avail (F ops E).base oc w m) : CF ops E oc (nR + m.val) = true :=\n\
-\  h.1.resolve_left (fun h' => by cases h')\n" else "")
+\  " ++ (if exported ec then "h.1.elim (fun h' => cf_ar ops E oc m h') id" else "h.1.resolve_left (fun h' => by cases h')") ++ "\n" else "")
        ++ "\n\
 \/-- **The certificate fixed before the skipped values**: rules, firing and hits do not mention\n\
 \    `u`, and a step's calls are the same at every `u` (`trUS`). -/\n\

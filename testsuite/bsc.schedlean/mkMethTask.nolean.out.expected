@@ -1,0 +1,4 @@
+schedlean: --lean names /nonexistent, which is not an executable
+note: MethTask: method put: 1 task call(s) left out of task agreement (bsc G0020)
+scan segments 1 (at most 4096 uses each)
+wrote MethTask.lean: rules 2, methods 1, children 3, sites 5, task statements 1, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0

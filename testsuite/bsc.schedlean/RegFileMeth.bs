@@ -1,0 +1,20 @@
+package RegFileMeth where
+
+-- A RegFile (an assumed leaf with paths from address to data) in a module with an action method.
+import RegFile
+
+interface RfIfc =
+  put :: Bit 8 -> Action
+
+{-# synthesize mkRegFileMeth #-}
+mkRegFileMeth :: Module RfIfc
+mkRegFileMeth = module
+  rf :: RegFile (Bit 2) (Bit 8) <- mkRegFileFull
+  i :: Reg (Bit 2) <- mkReg 0
+  j :: Reg (Bit 8) <- mkReg 0
+  rules
+    "step": when True ==> do
+      rf.upd i (rf.sub (i + 1))
+      i := i + 1
+  interface
+    put x = j := x

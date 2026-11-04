@@ -1,0 +1,14 @@
+package TwoDomains where
+
+-- An input clock of its own family: two clock domains, which schedlean does not check.
+clockedBy :: (IsModule m mType) => Clock -> m a -> m a
+clockedBy c = changeSpecialWires (Just c) Nothing Nothing
+
+{-# synthesize mkTwoDomains #-}
+mkTwoDomains :: Clock -> Module Empty
+mkTwoDomains c2 = module
+  a :: Reg (Bit 8) <- mkReg 0
+  b :: Reg (Bit 8) <- clockedBy c2 $ mkRegU
+  rules
+    "ra": when True ==> a := a + 1
+    "rb": when True ==> b := b + 1

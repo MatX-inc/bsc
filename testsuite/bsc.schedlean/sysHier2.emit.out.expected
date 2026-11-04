@@ -1,0 +1,7 @@
+scan segments 1 (at most 4096 uses each)
+wrote MkLeaf.lean: rules 1, methods 2, children 1, sites 3, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+scan segments 1 (at most 4096 uses each)
+wrote MkMid.lean: rules 1, methods 2, children 2, sites 5, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 0, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+scan segments 1 (at most 4096 uses each)
+wrote SysHier2.lean: rules 2, methods 0, children 2, sites 4, task statements 0, muxes 0 (member pairs: 0 by checks, 0 one by one), exR bits 1, escapes 0 (site pairs 0, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=1, ag lemmas 0
+hierarchy sysHier2: modules 3 (mkLeaf, mkMid, sysHier2); mkMid.c syn0 mkLeaf path A; sysHier2.m syn0 mkMid path A; sysHier2.k syn1 mkLeaf path A

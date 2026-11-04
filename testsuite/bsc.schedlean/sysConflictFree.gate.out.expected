@@ -1,0 +1,6 @@
+GATE {"name": "sysConflictFree", "scan": "ok", "slots": 103, "codes": 5, "seg_uses": 22, "mod_facts": 11, "escapes": 2, "esc_facts": 5, "esc_facts_max_per_pair": 4, "esc_facts_how": {"solver": 0, "bsc": 4, "assert": 1, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [["a.write", 3]], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 2, "cf_checks": 5, "me_needed_pairs": 2, "pairwise": 3, "step_fallback": [], "unguarded": []}
+counts sysConflictFree             10     75     6     22     18      8      1     3     0     2
+unrealized 0
+shadow sysConflictFree ports with two callers 6, solver calls 11, shadowing ports 1 [L 1]; lc callers max 3; ports relying on mutually_exclusive 0, conflict_free 5; last caller admits all
+shadow L a.write [RegN] callers 3
+sysConflictFree          default  A     emitter yes shadow ports [L 1] lc callers max 3 slots 103 codes 5 esc 2 facts 5 (bsc 4, assert 1) pairwise 3 seg_uses 22 mod_facts 11 assertions relied on: scan 2 me, escape facts 1 cf, shadow 0 me 5 cf step 22

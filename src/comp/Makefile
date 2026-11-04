@@ -42,6 +42,10 @@ BINDIR=$(PREFIX)/bin
 # Where package information is installed
 LICDIR=$(PREFIX)/LICENSES
 
+# The Lean library schedlean --check compiles (once, into a cache) from $(PREFIX)/lib/schedlean
+SCHEDLEANLIBDIR=$(PREFIX)/lib/schedlean
+SCHEDLEANLIB=$(addprefix $(TOP)/util/schedlean/theory/modular/,Modular.lean EmitLemmas.lean Scan.lean LastCaller.lean SiteCond.lean)
+
 # Top-level of where intermediate GHC files are stored
 BUILDDIR=$(TOP)/build/comp
 
@@ -431,6 +435,12 @@ install-bluetcl: $(PKGINFO)
 install-utils: $(addprefix $(BINDIR)/,$(UTILEXES))
 install-utils: $(addprefix $(BINDIR)/core/,$(UTILEXES))
 install-utils: $(PKGINFO)
+install-utils: install-schedlean-lib
+
+.PHONY: install-schedlean-lib
+install-schedlean-lib:
+	mkdir -p -m 755 $(SCHEDLEANLIBDIR)
+	$(INSTALL) -m 644 $(SCHEDLEANLIB) $(SCHEDLEANLIBDIR)
 
 .PHONY: install-showrules
 install-showrules: $(addprefix $(BINDIR)/,$(SHOWRULESEXES))

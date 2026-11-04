@@ -20,13 +20,14 @@ import Lean.Print (allBThm, allL, cut, fmt, splitN, splitW, stab, stabKeyed, sta
 import Lean.Sched.Bounds (defaultBounds, Bounds(bnGateSeg, bnGateSlots, bnGateCodes, bnGateStep,
     bnGatePortUsers, bnGateGroup, bnGateLcUsers, bnGateEsc, bnGateEscFacts, bnGateModFacts, bnGateStruct,
     bnGateSelmux))
-import Lean.Sched.Emit.Ctx (condVal, entry, excl, isUncond, kd, site, step, EC(ecM, ecLiti, ecCFIdx, ecNM,
+import Lean.Sched.Emit.Ctx (asmChk, condVal, entry, excl, exported, isUncond, kd, site, step, EC(ecM, ecLiti, ecCFIdx, ecNM,
     ecNT, ecHyp, ecHya, ecMet, ecLCP, ecDn, ecKinds, ecU, ecMuxes, ecSelmux, ecVirt, ecESC, ecNeed, ecEsc,
-    ecVB, ecMann, ecD, ecMgrp, ecNSlots, ecGroups, ecEFacts, ecWXM, ecNR), VCtx(VCtx))
-import Lean.Sched.Kinds (KindDef(kdLPorts, kdHasEn))
+    ecVB, ecMann, ecD, ecMgrp, ecNSlots, ecGroups, ecEFacts, ecWXM, ecNR, ecExport, ecSynth), VCtx(VCtx))
+import Lean.Sched.Export (isSynthKind, Export(exNS), SynthKid(skExport, skOff))
+import Lean.Sched.Kinds (KindDef(kdLPorts, kdHasEn, kdMType))
 import Lean.Sched.Model (exclSrc, DView(dvCF), MSite, MStep(tName, tSites), Model(mDV, mChecks, mTStart,
     mRules))
-import Lean.Sched.Scan (mannPlain, runScanStates, scanDesign, Ent, MAnn, ScanDesign(scD, scKt, scFpM, scFpR),
+import Lean.Sched.Scan (mannExport, mannPlain, runScanStates, scanDesign, Ent, MAnn, ScanDesign(scD, scKt, scFpM, scFpR),
     St)
 
 -- | What the summary line and the bounds need from the earlier sections.
@@ -54,10 +55,10 @@ emitChains ec = do
         liti = ecLiti ec
     w "/-! ## The muxes' one-hot chains, from the exclusions -/\n"
     w "section\nvariable {V : Type}\n"
-    w "/-- A run-time check excludes its head with every rule of its list. -/\n\
+    w ("/-- A run-time check excludes its head with every rule of its list. -/\n\
 \theorem chkC (ops : Ops V) (E : EqC V) (oc : OC V) (hA : asmP ops E oc) (c : Nat) (hc : Nat.blt c nC = true) :\n\
 \    ∀ y ∈ chkLst.get c, WF ops E oc (chkHead.get c) = true → WF ops E oc y = true → False :=\n\
-\  forall_of_check (hA.2 c hc)\n"
+\  forall_of_check (" ++ asmChk ec "hA" ++ " c hc)\n")
     cs <- forM (zip [0 :: Int ..] (ecMuxes ec)) $ \(q, (_, us, plan)) -> do
         let ks = map fst us
             n = length ks
@@ -96,6 +97,7 @@ emitChains ec = do
                                      then "fun h1 h2 => " ++ excl ec x y "hA" "hy" (wfxOf ec x (sis M.! x) "h1") (wfxOf ec y (sis M.! y) "h2")
                                      else let (nfi, how) = cfIndex ec (q, x, y)
                                           in "fun h1 h2 => " ++ (if isNothing how then "hr" else "hy") ++ ".cx_" ++ show nfi ++ " oc "
+                                             ++ (if how == Just "assert" then "hA " else "")
                                              ++ unwords ([wfxOf ec x (sis M.! x) "h1"] ++ cxOf ec x (sis M.! x) "h1" ++ [wfxOf ec y (sis M.! y) "h2"] ++ cxOf ec y (sis M.! y) "h2")
                                    | y <- tl ] ]
             stab ("msT_" ++ qs) "Tab (Nat × Nat)" [ "(" ++ show x ++ ", cvS [] [" ++ intercalate ", " (map show tl) ++ "])" | (x, tl, _) <- rows ]
@@ -262,8 +264,9 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
     w ("abbrev ng : Nat := " ++ show (length groups))
     when met $ do
         let Just (nfI, nfO, ngI, ngO, h3ok) = ecMann ec
-        when (any (/= 0) h3ok) $ error "schedlean: AssertionError: h3ok entries"
+        when (any (/= 0) h3ok && not (exported ec)) $ error "schedlean: AssertionError: h3ok entries"
         forM_ [("nfIT", nfI), ("nfOT", nfO), ("ngIT", ngI), ("ngOT", ngO)] $ \(nm, tb) -> stab nm "Tab Nat" (map show tb)
+        when (exported ec) $ stab "h3okT" "Tab Nat" (map show h3ok)
     let dArgs = if met then ["nM", show (ecD ec), "fpMT", "nfIT", "nfOT", "ngIT", "ngOT"]
                 else ["0", show (ecD ec), ".leaf []", ".leaf 0", ".leaf 0", ".leaf 0", ".leaf 0"]
     w (fmt "def D : Design where\n\
@@ -277,12 +280,12 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
 \  nfO := %s\n\
 \  ngI := %s\n\
 \  ngO := %s\n\
-\  h3ok := .leaf 0\n\
+\  h3ok := %s\n\
 \  exM := .leaf 0\n\
 \  exR := exRT\n\
 \  exMR := .leaf 0\n\
 \  escR := escRT\n\
-\  rc := fun i => rcT.get i\n" dArgs)
+\  rc := fun i => rcT.get i\n" (take 7 dArgs ++ [if met && exported ec then "h3okT" else ".leaf 0"]))
     cut
     -- the gate's numeric bounds, as generator checks, written into the file
     let maxL xs = maximum (0 : xs)
@@ -364,12 +367,16 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
            else "  fun y hy i h => by rw [Nat.eq_of_beq_eq_true (Tab.allB_spec _ exRT 0 nR ghT y (Nat.zero_le _) hy)] at h; simp at h"))
     cut
     let lps k = intercalate ", " (fromMaybe [] (kdLPorts (kd ec k)))
+        mty k = fromMaybe "" (kdMType (kd ec k))
     forM_ kinds $ \k -> case k of
         "tasks" -> w "theorem ports_tasks : ∀ p : (KI .tasks).M, p ∈ List.finRange nT := List.mem_finRange"
         "reg" -> w "theorem ports_reg : ∀ p : CRegM 1, p ∈ [Reg.read, Reg.write]\n  | .rd ⟨0, _⟩ => by simp\n  | .wr ⟨0, _⟩ => by simp"
+        _ | isSynthKind k -> w (fmt "theorem ports_%s : ∀ p : %s, p ∈ List.finRange %s := portsU_%s" [k, mty k, drop 4 (mty k), k])
         _ -> w (fmt "theorem ports_%s : ∀ p : (KI .%s).M, p ∈ [%s] := by intro p; cases p <;> simp" [k, k, lps k])
     w ("def portsK : (κ : Kind) → List (KI κ).M\n"
-       ++ concat [ if k == "tasks" then "  | .tasks => List.finRange nT\n" else "  | ." ++ k ++ " => [" ++ lps k ++ "]\n" | k <- kinds ]
+       ++ concat [ if k == "tasks" then "  | .tasks => List.finRange nT\n"
+                   else if isSynthKind k then "  | ." ++ k ++ " => List.finRange " ++ drop 4 (mty k) ++ "\n"
+                   else "  | ." ++ k ++ " => [" ++ lps k ++ "]\n" | k <- kinds ]
        ++ "def portsJ (j : I) : List (CI j).M := portsK j.1\n\
 \theorem portsJ_ok (j : I) (m : (CI j).M) : m ∈ portsJ j := by\n\
 \  obtain ⟨κ, i⟩ := j\n\
@@ -378,8 +385,16 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
 \def isT : Kind → Bool\n" ++ concat [ "  | ." ++ k ++ " => " ++ (if k == "tasks" then "true" else "false") ++ "\n" | k <- kinds ]
        ++ "def tnum : (κ : Kind) → (KI κ).M → Nat\n" ++ concat [ "  | ." ++ k ++ " => " ++ (if k == "tasks" then "fun t => t.val" else "fun _ => 0") ++ "\n" | k <- kinds ])
     w (fmt fpOkText [if null lcp then "List.Sublist.refl _" else "List.sublist_append_left _ _"] ++ (if met then fpMOkText else ""))
-    forM_ kinds $ \k -> unless (k == "tasks") $
-        w (fmt "theorem kind_%s (z : V) : KindOK (V := V) (KI .%s).ann (codeK .%s) (D.kc %d) (fxF %d) z :=\n  kindOK_of_chk ports_%s (by decide +kernel) z"
+    forM_ kinds $ \k -> unless (k == "tasks") $ case lookup k (ecSynth ec) of
+        -- a synthesized kind's table checked by rows, its annotation's rows and columns as masks
+        Just sk -> let a = maybe (exNS (skExport sk) ++ ".xAnn") (const ("sA_" ++ k)) (skOff sk)
+                       hyp = "(fun _ _ h => (Bool.and_eq_true _ _).mp h)"
+                   in w (fmt "theorem kind_%s (z : V) : KindOK (V := V) (KI .%s).ann (codeK .%s) (D.kc %d) (fxF %d) z :=\n\
+\  kindOK_of_rows (n := %s) (pr := %sPrecT.get) (pc := %sPrecCT.get) (sr := %sSbrT.get) (sc := %sSbrCT.get)\n\
+\    (cr := %sConfT.get) (cc := %sConfCT.get) (sh := fun i => %sShareB.testBit i) %s %s %s (fun _ h => h)\n\
+\    (by decide +kernel) z"
+               [k, k, k, show (kn k), show (kn k), drop 4 (mty k), a, a, a, a, a, a, a, hyp, hyp, hyp])
+        Nothing -> w (fmt "theorem kind_%s (z : V) : KindOK (V := V) (KI .%s).ann (codeK .%s) (D.kc %d) (fxF %d) z :=\n  kindOK_of_chk ports_%s (by decide +kernel) z"
                [k, k, k, show (kn k), show (kn k), k])
     w chainSText
     let gmuxA = listArray (0, length gmux - 1) gmux
@@ -417,7 +432,8 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
                               c2 = VCtx ("(u (.inr (rR " ++ show r2 ++ ")))") "ops.z" "f2"
                               args = ["f1", "f2"] ++ [ "((" ++ condVal ec r1 s1 c1 ++ ").symm.trans h1)" | not (isUncond s1) ]
                                      ++ [ "((" ++ condVal ec r2 s2 c2 ++ ").symm.trans h2)" | not (isUncond s2) ]
-                          in "fun h1 h2 => " ++ (if isNothing how then "hr" else "hy") ++ ".esc_" ++ show fi ++ " oc " ++ unwords args
+                          in "fun h1 h2 => " ++ (if isNothing how then "hr" else "hy") ++ ".esc_" ++ show fi ++ " oc "
+                             ++ (if how == Just "assert" then "hE.1 " else "") ++ unwords args
                         | i2 <- sort (byi M.! i1) ]
                  | i1 <- keys ]
         stabKeyed ("escB_" ++ show ne) "Tab (Nat × List Nat)" keys [ "(" ++ show i1 ++ ", [" ++ intercalate ", " (map show (sort (byi M.! i1))) ++ "])" | i1 <- keys ]
@@ -453,7 +469,8 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
                     ++ allL [ "esc_" ++ show n ++ " ops E " ++ hya ++ " u" | n <- [0 .. length escl - 1] ] ++ ") p hp) escInj escT_ok")
         else return "fun _ _ r1 r2 _ h => by\n    have e : (D.escR.get ((G ops E u).rk r2)).testBit (D.rc ((G ops E u).rk r1)) = false := by\n      rw [show D.escR.get ((G ops E u).rk r2) = 0 from Tab.allB_spec (fun _ n => Nat.beq n 0) escRT 0 nR (by decide +kernel) r2.val (Nat.zero_le _) r2.isLt |> Nat.eq_of_beq_eq_true]\n      exact Nat.zero_testBit _\n    rw [e] at h; cases h"
     let methFields = if met then "  mi_lt m := m.isLt\n" else "  mi_lt m := m.elim\n"
-    nf <- if met then w nfText >> return nfMet else return nfNoMet
+    nf <- if met && exported ec then w (nfXText ++ nfRest) >> return nfXMet
+          else if met then w nfText >> return nfMet else return nfNoMet
     let kcase non tk = concat [ if k == "tasks" then "    · " ++ tk ++ "\n" else "    · " ++ non k ++ "\n" | k <- kinds ]
     w ("\ntheorem glueOK (ops : Ops V) (E : EqC V) " ++ hyp ++ " (u : St → Nat → V) : GlueOK (P ops E u) D (G ops E u) (fire ops E) where\n"
        ++ methFields ++ "  rk_lt r := r.isLt\n\
@@ -500,7 +517,7 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
     return (nseg, segUses)
 
 mannOf :: EC -> MAnn
-mannOf ec = mannPlain [ tName r | r <- drop (ecNR ec) (mRules (ecM ec)) ] (dvCF (mDV (ecM ec)))
+mannOf ec = maybe (mannPlain [ tName r | r <- drop (ecNR ec) (mRules (ecM ec)) ] (dvCF (mDV (ecM ec)))) mannExport (ecExport ec)
 
 cloText :: String
 cloText = "/-- Chain intervals by the scan's step position (methods first, then rules by rank). -/\n\
@@ -710,6 +727,76 @@ nfNoMet = "  nfI m := m.elim\n\
 \  ngO m := m.elim\n\
 \  h3ok m := m.elim\n\
 \  exM _ _ m := m.elim\n"
+
+-- | An exported module's method tables, checked against its annotation for every argument (§3.1).
+nfXMet :: String
+nfXMet = "  nfI m1 m2 h x y := notFollow_of m1 m2 (tab_spec nfIT nfB nfOK_I m1 m2 h) x y\n\
+\  nfO m1 m2 h x y := notFollow_of m1 m2 (tab_spec nfOT (fun a b => nfB b a) nfOK_O m2 m1 h) x y\n\
+\  ngI m1 m2 h x y := notGroup_of m1 m2 (tab_spec ngIT ngB ngOK_I m1 m2 h) x y\n\
+\  ngO m1 m2 h x y := notGroup_of m1 m2 (tab_spec ngOT (fun a b => ngB b a) ngOK_O m2 m1 h) x y\n\
+\  h3ok m m' h := h3_of m m' (tab_spec h3okT h3B h3OK m m' h)\n\
+\  exM _ _ m1 m2 _ h := by simp [D, Tab.get] at h\n"
+
+nfXText :: String
+nfXText = "/-- Where the scan's method tables set a bit, the exported annotation forbids that order for every\n\
+\    argument (`nfB`), or that grouping (`ngB`), or allows a method to hit before (`h3B`). -/\n\
+\def nfB (a b : Nat) : Bool :=\n\
+\  if a = b then xAnn.conf (mM a) (mM a) else xAnn.prec (mM b) (mM a) || xAnn.conf (mM a) (mM b) || xAnn.conf (mM b) (mM a)\n\
+\def ngB (a b : Nat) : Bool := nfB a b || xAnn.sbr (mM a) (mM b) || xAnn.sbr (mM b) (mM a)\n\
+\def h3B (a b : Nat) : Bool :=\n\
+\  !Nat.beq a b && ((xAnn.prec (mM a) (mM b) && xAnn.sbr (mM a) (mM b)) || xAnn.conf (mM a) (mM b) || xAnn.conf (mM b) (mM a))\n\
+\theorem tab_spec (T : Tab Nat) (f : Nat → Nat → Bool)\n\
+\    (hT : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || f i e)) T 0 nM = true)\n\
+\    (a b : Fin nM) (h : (T.get b.val).testBit a.val = true) : f a.val b.val = true := by\n\
+\  have h1 := List.all_eq_true.mp (Tab.allB_spec _ T 0 nM hT b.val (Nat.zero_le _) b.isLt) a.val (List.mem_range.mpr a.isLt)\n\
+\  rw [h] at h1\n\
+\  simpa using h1\n\
+\theorem notFollow_of (m1 m2 : Fin nM) (h : nfB m1.val m2.val = true) (x y : V) : ¬ X.ann.Follow (m1, x) (m2, y) := by\n\
+\  intro hf\n\
+\  obtain ⟨h1, h2, h3, -⟩ := hf\n\
+\  have h2' : xAnn.conf m1 m2 = false := h2\n\
+\  have h3' : xAnn.conf m2 m1 = false := h3\n\
+\  unfold nfB at h\n\
+\  simp only [mM_val] at h\n\
+\  by_cases e : m1 = m2\n\
+\  · subst e\n\
+\    rw [if_pos rfl, h2'] at h\n\
+\    exact absurd h (by decide)\n\
+\  · have h1' : xAnn.prec m2 m1 = false := h1 e\n\
+\    rw [if_neg (fun e' => e (Fin.ext e')), h1', h2', h3'] at h\n\
+\    exact absurd h (by decide)\n\
+\theorem notGroup_of (m1 m2 : Fin nM) (h : ngB m1.val m2.val = true) (x y : V) : ¬ X.ann.Group (m1, x) (m2, y) := by\n\
+\  intro hg\n\
+\  obtain ⟨hf, h4, h5⟩ := hg\n\
+\  unfold ngB at h\n\
+\  simp only [Bool.or_eq_true, mM_val] at h\n\
+\  rcases h with (h | h) | h\n\
+\  · exact notFollow_of m1 m2 h x y hf\n\
+\  · exact Bool.noConfusion ((show xAnn.sbr m1 m2 = false from h4).symm.trans h)\n\
+\  · exact Bool.noConfusion ((show xAnn.sbr m2 m1 = false from h5).symm.trans h)\n\
+\theorem h3_of (m m' : Fin nM) (h : h3B m.val m'.val = true) : m ≠ m' ∧\n\
+\    ((X.ann.prec m m' = true ∧ X.ann.sbr m m' = true) ∨ X.ann.conf m m' = true ∨ X.ann.conf m' m = true) := by\n\
+\  unfold h3B at h\n\
+\  simp only [mM_val, Bool.and_eq_true, Bool.or_eq_true] at h\n\
+\  refine ⟨fun e => ?_, ?_⟩\n\
+\  · subst e; simp at h\n\
+\  · rcases h.2 with (h2 | h2) | h2\n\
+\    · exact Or.inl h2\n\
+\    · exact Or.inr (Or.inl h2)\n\
+\    · exact Or.inr (Or.inr h2)\n\
+\theorem nfOK_I : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || nfB i e)) nfIT 0 nM = true := by decide +kernel\n\
+\theorem nfOK_O : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || nfB e i)) nfOT 0 nM = true := by decide +kernel\n\
+\theorem ngOK_I : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || ngB i e)) ngIT 0 nM = true := by decide +kernel\n\
+\theorem ngOK_O : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || ngB e i)) ngOT 0 nM = true := by decide +kernel\n\
+\theorem h3OK : Tab.allB (fun e n => (List.range nM).all (fun i => !n.testBit i || h3B i e)) h3okT 0 nM = true := by decide +kernel\n"
+
+-- | nfText after its method-table lemmas (the chain facts every module with methods states).
+nfRest :: String
+nfRest = drop (length (fst (breakOn "/-- No method calls a chain" nfText))) nfText
+  where breakOn pat str = go "" str
+          where go acc r@(c : cs) | take (length pat) r == pat = (reverse acc, r)
+                                  | otherwise = go (c : acc) cs
+                go acc [] = (reverse acc, [])
 
 nfText :: String
 nfText = "theorem nf_self (T : Tab Nat) (hT : Tab.allB (fun m2 n => (List.range nM).all (fun m1 => !n.testBit m1 || Nat.beq m1 m2)) T 0 nM = true)\n\

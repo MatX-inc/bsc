@@ -1,0 +1,521 @@
+package Chain128(sysChain128) where
+
+import Chain
+
+-- 128 synthesized levels below sysChain128
+
+{-# verilog mkA0 #-}
+mkA0 :: Module Link
+mkA0 = mkLink0
+
+{-# verilog mkA1 #-}
+mkA1 :: Module Link
+mkA1 = mkLink mkA0
+
+{-# verilog mkA2 #-}
+mkA2 :: Module Link
+mkA2 = mkLink mkA1
+
+{-# verilog mkA3 #-}
+mkA3 :: Module Link
+mkA3 = mkLink mkA2
+
+{-# verilog mkA4 #-}
+mkA4 :: Module Link
+mkA4 = mkLink mkA3
+
+{-# verilog mkA5 #-}
+mkA5 :: Module Link
+mkA5 = mkLink mkA4
+
+{-# verilog mkA6 #-}
+mkA6 :: Module Link
+mkA6 = mkLink mkA5
+
+{-# verilog mkA7 #-}
+mkA7 :: Module Link
+mkA7 = mkLink mkA6
+
+{-# verilog mkA8 #-}
+mkA8 :: Module Link
+mkA8 = mkLink mkA7
+
+{-# verilog mkA9 #-}
+mkA9 :: Module Link
+mkA9 = mkLink mkA8
+
+{-# verilog mkA10 #-}
+mkA10 :: Module Link
+mkA10 = mkLink mkA9
+
+{-# verilog mkA11 #-}
+mkA11 :: Module Link
+mkA11 = mkLink mkA10
+
+{-# verilog mkA12 #-}
+mkA12 :: Module Link
+mkA12 = mkLink mkA11
+
+{-# verilog mkA13 #-}
+mkA13 :: Module Link
+mkA13 = mkLink mkA12
+
+{-# verilog mkA14 #-}
+mkA14 :: Module Link
+mkA14 = mkLink mkA13
+
+{-# verilog mkA15 #-}
+mkA15 :: Module Link
+mkA15 = mkLink mkA14
+
+{-# verilog mkA16 #-}
+mkA16 :: Module Link
+mkA16 = mkLink mkA15
+
+{-# verilog mkA17 #-}
+mkA17 :: Module Link
+mkA17 = mkLink mkA16
+
+{-# verilog mkA18 #-}
+mkA18 :: Module Link
+mkA18 = mkLink mkA17
+
+{-# verilog mkA19 #-}
+mkA19 :: Module Link
+mkA19 = mkLink mkA18
+
+{-# verilog mkA20 #-}
+mkA20 :: Module Link
+mkA20 = mkLink mkA19
+
+{-# verilog mkA21 #-}
+mkA21 :: Module Link
+mkA21 = mkLink mkA20
+
+{-# verilog mkA22 #-}
+mkA22 :: Module Link
+mkA22 = mkLink mkA21
+
+{-# verilog mkA23 #-}
+mkA23 :: Module Link
+mkA23 = mkLink mkA22
+
+{-# verilog mkA24 #-}
+mkA24 :: Module Link
+mkA24 = mkLink mkA23
+
+{-# verilog mkA25 #-}
+mkA25 :: Module Link
+mkA25 = mkLink mkA24
+
+{-# verilog mkA26 #-}
+mkA26 :: Module Link
+mkA26 = mkLink mkA25
+
+{-# verilog mkA27 #-}
+mkA27 :: Module Link
+mkA27 = mkLink mkA26
+
+{-# verilog mkA28 #-}
+mkA28 :: Module Link
+mkA28 = mkLink mkA27
+
+{-# verilog mkA29 #-}
+mkA29 :: Module Link
+mkA29 = mkLink mkA28
+
+{-# verilog mkA30 #-}
+mkA30 :: Module Link
+mkA30 = mkLink mkA29
+
+{-# verilog mkA31 #-}
+mkA31 :: Module Link
+mkA31 = mkLink mkA30
+
+{-# verilog mkA32 #-}
+mkA32 :: Module Link
+mkA32 = mkLink mkA31
+
+{-# verilog mkA33 #-}
+mkA33 :: Module Link
+mkA33 = mkLink mkA32
+
+{-# verilog mkA34 #-}
+mkA34 :: Module Link
+mkA34 = mkLink mkA33
+
+{-# verilog mkA35 #-}
+mkA35 :: Module Link
+mkA35 = mkLink mkA34
+
+{-# verilog mkA36 #-}
+mkA36 :: Module Link
+mkA36 = mkLink mkA35
+
+{-# verilog mkA37 #-}
+mkA37 :: Module Link
+mkA37 = mkLink mkA36
+
+{-# verilog mkA38 #-}
+mkA38 :: Module Link
+mkA38 = mkLink mkA37
+
+{-# verilog mkA39 #-}
+mkA39 :: Module Link
+mkA39 = mkLink mkA38
+
+{-# verilog mkA40 #-}
+mkA40 :: Module Link
+mkA40 = mkLink mkA39
+
+{-# verilog mkA41 #-}
+mkA41 :: Module Link
+mkA41 = mkLink mkA40
+
+{-# verilog mkA42 #-}
+mkA42 :: Module Link
+mkA42 = mkLink mkA41
+
+{-# verilog mkA43 #-}
+mkA43 :: Module Link
+mkA43 = mkLink mkA42
+
+{-# verilog mkA44 #-}
+mkA44 :: Module Link
+mkA44 = mkLink mkA43
+
+{-# verilog mkA45 #-}
+mkA45 :: Module Link
+mkA45 = mkLink mkA44
+
+{-# verilog mkA46 #-}
+mkA46 :: Module Link
+mkA46 = mkLink mkA45
+
+{-# verilog mkA47 #-}
+mkA47 :: Module Link
+mkA47 = mkLink mkA46
+
+{-# verilog mkA48 #-}
+mkA48 :: Module Link
+mkA48 = mkLink mkA47
+
+{-# verilog mkA49 #-}
+mkA49 :: Module Link
+mkA49 = mkLink mkA48
+
+{-# verilog mkA50 #-}
+mkA50 :: Module Link
+mkA50 = mkLink mkA49
+
+{-# verilog mkA51 #-}
+mkA51 :: Module Link
+mkA51 = mkLink mkA50
+
+{-# verilog mkA52 #-}
+mkA52 :: Module Link
+mkA52 = mkLink mkA51
+
+{-# verilog mkA53 #-}
+mkA53 :: Module Link
+mkA53 = mkLink mkA52
+
+{-# verilog mkA54 #-}
+mkA54 :: Module Link
+mkA54 = mkLink mkA53
+
+{-# verilog mkA55 #-}
+mkA55 :: Module Link
+mkA55 = mkLink mkA54
+
+{-# verilog mkA56 #-}
+mkA56 :: Module Link
+mkA56 = mkLink mkA55
+
+{-# verilog mkA57 #-}
+mkA57 :: Module Link
+mkA57 = mkLink mkA56
+
+{-# verilog mkA58 #-}
+mkA58 :: Module Link
+mkA58 = mkLink mkA57
+
+{-# verilog mkA59 #-}
+mkA59 :: Module Link
+mkA59 = mkLink mkA58
+
+{-# verilog mkA60 #-}
+mkA60 :: Module Link
+mkA60 = mkLink mkA59
+
+{-# verilog mkA61 #-}
+mkA61 :: Module Link
+mkA61 = mkLink mkA60
+
+{-# verilog mkA62 #-}
+mkA62 :: Module Link
+mkA62 = mkLink mkA61
+
+{-# verilog mkA63 #-}
+mkA63 :: Module Link
+mkA63 = mkLink mkA62
+
+{-# verilog mkA64 #-}
+mkA64 :: Module Link
+mkA64 = mkLink mkA63
+
+{-# verilog mkA65 #-}
+mkA65 :: Module Link
+mkA65 = mkLink mkA64
+
+{-# verilog mkA66 #-}
+mkA66 :: Module Link
+mkA66 = mkLink mkA65
+
+{-# verilog mkA67 #-}
+mkA67 :: Module Link
+mkA67 = mkLink mkA66
+
+{-# verilog mkA68 #-}
+mkA68 :: Module Link
+mkA68 = mkLink mkA67
+
+{-# verilog mkA69 #-}
+mkA69 :: Module Link
+mkA69 = mkLink mkA68
+
+{-# verilog mkA70 #-}
+mkA70 :: Module Link
+mkA70 = mkLink mkA69
+
+{-# verilog mkA71 #-}
+mkA71 :: Module Link
+mkA71 = mkLink mkA70
+
+{-# verilog mkA72 #-}
+mkA72 :: Module Link
+mkA72 = mkLink mkA71
+
+{-# verilog mkA73 #-}
+mkA73 :: Module Link
+mkA73 = mkLink mkA72
+
+{-# verilog mkA74 #-}
+mkA74 :: Module Link
+mkA74 = mkLink mkA73
+
+{-# verilog mkA75 #-}
+mkA75 :: Module Link
+mkA75 = mkLink mkA74
+
+{-# verilog mkA76 #-}
+mkA76 :: Module Link
+mkA76 = mkLink mkA75
+
+{-# verilog mkA77 #-}
+mkA77 :: Module Link
+mkA77 = mkLink mkA76
+
+{-# verilog mkA78 #-}
+mkA78 :: Module Link
+mkA78 = mkLink mkA77
+
+{-# verilog mkA79 #-}
+mkA79 :: Module Link
+mkA79 = mkLink mkA78
+
+{-# verilog mkA80 #-}
+mkA80 :: Module Link
+mkA80 = mkLink mkA79
+
+{-# verilog mkA81 #-}
+mkA81 :: Module Link
+mkA81 = mkLink mkA80
+
+{-# verilog mkA82 #-}
+mkA82 :: Module Link
+mkA82 = mkLink mkA81
+
+{-# verilog mkA83 #-}
+mkA83 :: Module Link
+mkA83 = mkLink mkA82
+
+{-# verilog mkA84 #-}
+mkA84 :: Module Link
+mkA84 = mkLink mkA83
+
+{-# verilog mkA85 #-}
+mkA85 :: Module Link
+mkA85 = mkLink mkA84
+
+{-# verilog mkA86 #-}
+mkA86 :: Module Link
+mkA86 = mkLink mkA85
+
+{-# verilog mkA87 #-}
+mkA87 :: Module Link
+mkA87 = mkLink mkA86
+
+{-# verilog mkA88 #-}
+mkA88 :: Module Link
+mkA88 = mkLink mkA87
+
+{-# verilog mkA89 #-}
+mkA89 :: Module Link
+mkA89 = mkLink mkA88
+
+{-# verilog mkA90 #-}
+mkA90 :: Module Link
+mkA90 = mkLink mkA89
+
+{-# verilog mkA91 #-}
+mkA91 :: Module Link
+mkA91 = mkLink mkA90
+
+{-# verilog mkA92 #-}
+mkA92 :: Module Link
+mkA92 = mkLink mkA91
+
+{-# verilog mkA93 #-}
+mkA93 :: Module Link
+mkA93 = mkLink mkA92
+
+{-# verilog mkA94 #-}
+mkA94 :: Module Link
+mkA94 = mkLink mkA93
+
+{-# verilog mkA95 #-}
+mkA95 :: Module Link
+mkA95 = mkLink mkA94
+
+{-# verilog mkA96 #-}
+mkA96 :: Module Link
+mkA96 = mkLink mkA95
+
+{-# verilog mkA97 #-}
+mkA97 :: Module Link
+mkA97 = mkLink mkA96
+
+{-# verilog mkA98 #-}
+mkA98 :: Module Link
+mkA98 = mkLink mkA97
+
+{-# verilog mkA99 #-}
+mkA99 :: Module Link
+mkA99 = mkLink mkA98
+
+{-# verilog mkA100 #-}
+mkA100 :: Module Link
+mkA100 = mkLink mkA99
+
+{-# verilog mkA101 #-}
+mkA101 :: Module Link
+mkA101 = mkLink mkA100
+
+{-# verilog mkA102 #-}
+mkA102 :: Module Link
+mkA102 = mkLink mkA101
+
+{-# verilog mkA103 #-}
+mkA103 :: Module Link
+mkA103 = mkLink mkA102
+
+{-# verilog mkA104 #-}
+mkA104 :: Module Link
+mkA104 = mkLink mkA103
+
+{-# verilog mkA105 #-}
+mkA105 :: Module Link
+mkA105 = mkLink mkA104
+
+{-# verilog mkA106 #-}
+mkA106 :: Module Link
+mkA106 = mkLink mkA105
+
+{-# verilog mkA107 #-}
+mkA107 :: Module Link
+mkA107 = mkLink mkA106
+
+{-# verilog mkA108 #-}
+mkA108 :: Module Link
+mkA108 = mkLink mkA107
+
+{-# verilog mkA109 #-}
+mkA109 :: Module Link
+mkA109 = mkLink mkA108
+
+{-# verilog mkA110 #-}
+mkA110 :: Module Link
+mkA110 = mkLink mkA109
+
+{-# verilog mkA111 #-}
+mkA111 :: Module Link
+mkA111 = mkLink mkA110
+
+{-# verilog mkA112 #-}
+mkA112 :: Module Link
+mkA112 = mkLink mkA111
+
+{-# verilog mkA113 #-}
+mkA113 :: Module Link
+mkA113 = mkLink mkA112
+
+{-# verilog mkA114 #-}
+mkA114 :: Module Link
+mkA114 = mkLink mkA113
+
+{-# verilog mkA115 #-}
+mkA115 :: Module Link
+mkA115 = mkLink mkA114
+
+{-# verilog mkA116 #-}
+mkA116 :: Module Link
+mkA116 = mkLink mkA115
+
+{-# verilog mkA117 #-}
+mkA117 :: Module Link
+mkA117 = mkLink mkA116
+
+{-# verilog mkA118 #-}
+mkA118 :: Module Link
+mkA118 = mkLink mkA117
+
+{-# verilog mkA119 #-}
+mkA119 :: Module Link
+mkA119 = mkLink mkA118
+
+{-# verilog mkA120 #-}
+mkA120 :: Module Link
+mkA120 = mkLink mkA119
+
+{-# verilog mkA121 #-}
+mkA121 :: Module Link
+mkA121 = mkLink mkA120
+
+{-# verilog mkA122 #-}
+mkA122 :: Module Link
+mkA122 = mkLink mkA121
+
+{-# verilog mkA123 #-}
+mkA123 :: Module Link
+mkA123 = mkLink mkA122
+
+{-# verilog mkA124 #-}
+mkA124 :: Module Link
+mkA124 = mkLink mkA123
+
+{-# verilog mkA125 #-}
+mkA125 :: Module Link
+mkA125 = mkLink mkA124
+
+{-# verilog mkA126 #-}
+mkA126 :: Module Link
+mkA126 = mkLink mkA125
+
+{-# verilog mkA127 #-}
+mkA127 :: Module Link
+mkA127 = mkLink mkA126
+
+{-# verilog sysChain128 #-}
+sysChain128 :: Module Link
+sysChain128 = mkLink mkA127

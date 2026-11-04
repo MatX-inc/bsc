@@ -1,0 +1,11 @@
+GATE {"name": "mkLookup", "scan": "ok", "slots": 2, "codes": 1, "seg_uses": 1, "mod_facts": 0, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts mkLookup                     1      1     0      1      0      0      1     0     0     0
+unrealized 0
+shadow mkLookup ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+mkLookup                 default  A     emitter yes shadow ports [-] lc callers max 0 slots 2 codes 1 esc 0 facts 0 (-) pairwise 0 seg_uses 1 mod_facts 0 step 1
+GATE {"name": "sysHierArg", "scan": "ok", "slots": 4, "codes": 1, "seg_uses": 3, "mod_facts": 0, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts sysHierArg                   1      3     0      3      0      0      1     1     0     0
+unrealized 0
+shadow sysHierArg ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+sysHierArg               default  A     emitter no  shadow ports [-] lc callers max 0 slots 4 codes 1 esc 0 facts 0 (-) pairwise 0 seg_uses 3 mod_facts 0 step 3
+hierarchy sysHierArg: modules 2 (mkLookup, sysHierArg); sysHierArg.l syn0 mkLookup assumed leaf: value method get has arguments: not exported yet (its result reads an input)

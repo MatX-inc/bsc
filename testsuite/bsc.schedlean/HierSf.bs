@@ -1,0 +1,33 @@
+package HierSf where
+
+-- A synthesized child on path A that holds an assumed leaf (a SizedFIFO): the parent's docstrings
+-- and hierarchy row name what the child's file assumes.
+import FIFO
+
+interface SfKid =
+  put :: Bit 8 -> Action
+  count :: Bit 8
+
+{-# verilog mkSfKid #-}
+mkSfKid :: Module SfKid
+mkSfKid = module
+  q :: FIFO (Bit 8) <- mkSizedFIFO 4
+  n :: Reg (Bit 8) <- mkReg 0
+  m :: Reg (Bit 8) <- mkReg 0
+  rules
+    "fill": when True ==> q.enq m
+    "drain": when True ==> do
+      q.deq
+      n := n + q.first
+  interface
+    put x = m := x
+    count = n
+
+{-# verilog sysHierSf #-}
+sysHierSf :: Module Empty
+sysHierSf = module
+  k :: SfKid <- mkSfKid
+  t :: Reg (Bit 8) <- mkReg 0
+  rules
+    "rp": when t > 2 ==> k.put t
+    "rt": when True ==> t := t + k.count

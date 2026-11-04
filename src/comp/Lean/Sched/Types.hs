@@ -38,6 +38,8 @@ data Meth = Meth
     , mtKind   :: MethKind
     , mtCopies :: [Port]       -- ^ the copies in use
     , mtDeps   :: [String]     -- ^ action methods whose same-cycle calls it sees
+    , mtConst  :: Bool         -- ^ its outputs are constants (bsc's [const] port property)
+    , mtInHigh :: Bool         -- ^ an action method with an inhigh enable (always_enabled): it runs every cycle
     }
 
 -- | One copy of a child method, named by its hardware signals: @r$EN_write@,

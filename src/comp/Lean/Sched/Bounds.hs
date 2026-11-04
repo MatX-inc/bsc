@@ -6,11 +6,12 @@ module Lean.Sched.Bounds
 
 data Bounds = Bounds
     { bnGateEsc, bnGateEscFacts, bnGateSeg, bnGateSlots, bnGateCodes, bnGateStep, bnGatePortUsers, bnGateGroup
-    , bnGateSelmux, bnGateLcUsers, bnGatePart, bnGateStruct, bnGateModFacts, bnGateMuxPairs :: Int }
+    , bnGateSelmux, bnGateLcUsers, bnGatePart, bnGateStruct, bnGateModFacts, bnGateMuxPairs, bnGateFanIn :: Int }
 
 defaultBounds :: Bounds
--- (mux pairs: members proved exclusive one by one, at most the pairwise port's 64 users' 2,016)
-defaultBounds = Bounds 64 4096 4096 8192 4096 4096 3296 3296 64 512 4000000 128 16384 2016
+-- (mux pairs: members proved exclusive one by one, at most the pairwise port's 64 users' 2,016; a step's fan-in:
+-- its sites' operator inputs, which each site restates, at the measured knee of 256)
+defaultBounds = Bounds 64 4096 4096 8192 4096 4096 3296 3296 64 512 4000000 128 16384 2016 256
 
 -- | Each bound's --limit name, with its reader and writer.
 boundNames :: [(String, (Bounds -> Int, Int -> Bounds -> Bounds))]
@@ -22,7 +23,8 @@ boundNames =
     , ("selmux", (bnGateSelmux, \v b -> b { bnGateSelmux = v })), ("lc-users", (bnGateLcUsers, \v b -> b { bnGateLcUsers = v }))
     , ("part-bytes", (bnGatePart, \v b -> b { bnGatePart = v })), ("struct", (bnGateStruct, \v b -> b { bnGateStruct = v }))
     , ("mod-facts", (bnGateModFacts, \v b -> b { bnGateModFacts = v }))
-    , ("mux-pairs", (bnGateMuxPairs, \v b -> b { bnGateMuxPairs = v })) ]
+    , ("mux-pairs", (bnGateMuxPairs, \v b -> b { bnGateMuxPairs = v }))
+    , ("step-fanin", (bnGateFanIn, \v b -> b { bnGateFanIn = v })) ]
 
 -- | Lower the named bounds; a name not known, or a value above the bound, is an error.
 applyLimits :: [(String, Int)] -> Bounds -> Either String Bounds

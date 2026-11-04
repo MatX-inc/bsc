@@ -1,13 +1,14 @@
 -- | bsc's disjointness solver (Yices or STP, by the flags) as a SAT oracle for
 -- Boolean skeletons: AND gates over free one-bit atoms, every name fresh.
 module Lean.Solver
-    ( Solver, Verdict(..), newSolver, solveCircuit, solveCNF, solverQueries, readDimacs
+    ( Solver, Verdict(..), newSolver, newSolverOn, solveCircuit, solveCNF, solverQueries, readDimacs
+    , Live, newLive, liveRun
     , Circuit, circuitN, newCircuit, cCone, cGate, cNew, cAtom, cAnd, cOr, cIte, solveC
     ) where
 
 import ASyntax (aFalse, aTBool, aTrue, defaultAId, ADef(ADef), AExpr(ASDef, ASPort, APrim))
 import ASyntaxUtil (aNot)
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import DisjointTest (DisjointTestState, initDisjointTestState, addADefToDisjointTestState, checkDisjointExpr)
 import Error (ErrorHandle)
 import Flags (Flags)
@@ -17,23 +18,66 @@ import qualified Data.IntMap.Strict as IM (IntMap, empty, lookup, member, insert
 import qualified Data.IntSet as IS (member, IntSet, empty, fromList, insert, toList, union)
 import qualified Data.Map.Strict as M (Map, empty, lookup, insert)
 import qualified Data.Set as S (fromList, toAscList)
+import System.IO.Unsafe (unsafePerformIO)
 
 -- | UNSAT is the only verdict a caller may rely on; Unknown never counts as UNSAT.
 data Verdict = Unsat | Sat | Unknown
     deriving (Eq, Show)
 
+-- | A disjoint-test state remade from its maker when another was made since: Yices keeps one live
+-- context per process, and making a state resets Yices (freeing every earlier context and term).
+data Live = Live { lvMake :: IO DisjointTestState, lvRef :: IORef (Int, DisjointTestState), lvNames :: IORef Int }
+
+{-# NOINLINE liveGen #-}
+liveGen :: IORef Int
+liveGen = unsafePerformIO (newIORef 0)
+
+-- | Every state of the process is made here, so that a state used after another was made is remade.
+newLive :: IO DisjointTestState -> IO Live
+newLive mk = do
+    st <- mk
+    g <- atomicModifyIORef' liveGen (\n -> (n + 1, n + 1))
+    Live mk <$> newIORef (g, st) <*> newIORef 0
+
+-- | The state, remade if another was made since, with the generation it belongs to.
+liveCur :: Live -> IO (Int, DisjointTestState)
+liveCur lv = do
+    (g, st) <- readIORef (lvRef lv)
+    cur <- readIORef liveGen
+    if g == cur then return (g, st) else do
+        st' <- lvMake lv
+        g' <- atomicModifyIORef' liveGen (\n -> (n + 1, n + 1))
+        writeIORef (lvRef lv) (g', st')
+        return (g', st')
+
+-- | Run one step on the live state, keeping its result.
+liveRun :: Live -> (DisjointTestState -> IO (a, DisjointTestState)) -> IO a
+liveRun lv f = do
+    (g, st) <- liveCur lv
+    (r, st') <- f st
+    writeIORef (lvRef lv) (g, st')
+    return r
+
 data Solver = Solver
-    { svState   :: IORef DisjointTestState
+    { svLive    :: Live
+    , svGen     :: IORef Int            -- the state's generation 'svDefined' belongs to
     , svDefined :: IORef IS.IntSet      -- gates of the current encoder already given to bsc
     , svQueries :: IORef Int
     , svPrefix  :: IORef String         -- the encoder whose gates 'svDefined' holds
     , svFresh   :: IORef Int            -- for fresh encoder prefixes
+    , svBase    :: String               -- every name's prefix, distinct from the state's definitions
     }
 
 newSolver :: ErrorHandle -> Flags -> IO Solver
-newSolver errh flags = do
-    st <- initDisjointTestState "schedlean" errh flags [] [] []
-    Solver <$> newIORef st <*> newIORef IS.empty <*> newIORef 0 <*> newIORef "" <*> newIORef 0
+newSolver errh flags = newLive (initDisjointTestState "schedlean" errh flags [] [] []) >>= \lv -> newSolverOn lv ""
+
+-- | A solver asking through @lv@; @base@ starts no name of @lv@'s definitions.  Solvers of one state
+-- are named apart (bsc keeps converted definitions by name).
+newSolverOn :: Live -> String -> IO Solver
+newSolverOn lv base = do
+    k <- atomicModifyIORef' (lvNames lv) (\n -> (n + 1, n))
+    Solver lv <$> newIORef (-1) <*> newIORef IS.empty <*> newIORef 0 <*> newIORef "" <*> newIORef 0
+              <*> pure (base ++ "s" ++ show k ++ "_")
 
 solverQueries :: Solver -> IO Int
 solverQueries = readIORef . svQueries
@@ -41,9 +85,12 @@ solverQueries = readIORef . svQueries
 -- | Are @roots@ and @clauses@ satisfiable (variable 1 true, @gates@ ANDs, the rest free)?  @prefix@,
 -- fresh per encoder, names its variables (bsc memoises proofs by expression).
 solveCircuit :: Solver -> String -> IM.IntMap [Int] -> [[Int]] -> [Int] -> IO Verdict
-solveCircuit sv prefix gates clauses roots = do
+solveCircuit sv prefix0 gates clauses roots = do
+    (g, _) <- liveCur (svLive sv)
+    g0 <- readIORef (svGen sv)
     cur <- readIORef (svPrefix sv)
-    if cur == prefix then return () else writeIORef (svDefined sv) IS.empty >> writeIORef (svPrefix sv) prefix
+    if cur == prefix && g0 == g then return ()
+    else writeIORef (svDefined sv) IS.empty >> writeIORef (svPrefix sv) prefix >> writeIORef (svGen sv) g
     defined <- readIORef (svDefined sv)
     let need = reachable (concat clauses ++ roots)
         -- one definition per gate not yet defined, operands first
@@ -53,10 +100,9 @@ solveCircuit sv prefix gates clauses roots = do
     -- the query is one definition too, so that bsc's proof memo compares a name, not the formula
     let qid = mk_homeless_id (prefix ++ "query" ++ show nq)
         q = ADef qid aTBool (andE (andL roots : [ orL c | c <- clauses ])) []
-    st0 <- readIORef (svState sv)
-    st1 <- addADefToDisjointTestState st0 (new ++ [q])
-    (r, st2) <- checkDisjointExpr st1 (ASDef aTBool qid) aTrue
-    writeIORef (svState sv) st2
+    r <- liveRun (svLive sv) $ \st0 -> do
+        st1 <- addADefToDisjointTestState st0 (new ++ [q])
+        checkDisjointExpr st1 (ASDef aTBool qid) aTrue
     modifyIORef' (svDefined sv) (IS.union (IS.fromList [ v | v <- need, IM.member v gates ]))
     modifyIORef' (svQueries sv) (+ 1)
     return $ case r of
@@ -64,6 +110,7 @@ solveCircuit sv prefix gates clauses roots = do
         Just False -> Sat
         Nothing -> Unknown
   where
+    prefix = svBase sv ++ prefix0
     gid v = mk_homeless_id (prefix ++ "g" ++ show v)
     var v | v == 1 = aTrue
           | IM.member v gates = ASDef aTBool (gid v)
@@ -93,7 +140,7 @@ solveCircuit sv prefix gates clauses roots = do
 solveCNF :: Solver -> String -> [[Int]] -> IO Verdict
 solveCNF sv prefix cls = do
     writeIORef (svDefined sv) IS.empty
-    writeIORef (svPrefix sv) prefix
+    writeIORef (svPrefix sv) (svBase sv ++ prefix)
     solveCircuit sv prefix IM.empty cls []
 
 -- | The clauses of a DIMACS file.

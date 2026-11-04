@@ -18,18 +18,19 @@ import qualified Data.Set as S (Set, member, delete, difference, empty, fromList
     toAscList, union)
 import qualified Data.Sequence as Sq (index)
 
-import Lean.Sched.Bounds (Bounds(bnGateSelmux, bnGateMuxPairs, bnGateEsc, bnGateEscFacts, bnGateModFacts))
+import Lean.Sched.Bounds (Bounds(bnGateSelmux, bnGateMuxPairs, bnGateEsc, bnGateEscFacts, bnGateModFacts, bnGateSlots, bnGateFanIn))
 import Lean.Sched.BscFacts (BscLookup)
-import Lean.Sched.Emit.Ctx (argHw, isUncond, mxKind, EC(..), PInfo(PInfo))
+import Lean.Sched.Emit.Ctx (argHw, isUncond, mxKind, EC(..), HwEdit(NoEdit), PInfo(PInfo))
 import Lean.Sched.Facts (FactEngine(..), FactShare, newFactEngine)
 import Lean.Sched.Kinds (kdFx, KindDef(kdPorts, kdAlwaysRdy, kdHasEn, kdHasArg))
 import Lean.Sched.MECheck (render)
-import Lean.Sched.Model (exclSrc, mportRepr, muxPairs, users, DView(dvCF), InvRef(InvFact), MCheck(ckLst,
-    ckFull, ckLine, ckHead), MFact(fOk), MSite(sArg, sKind, sPort, sFact, sInv), MStep(tSites, tName),
-    Model(mByk, mNR, mNM, mNS, mChecks, mCfChecks, mNSlots, mD, mK, mFacts, mRules, mFanOutside, mNT, mBlk,
+import Lean.Sched.Model (exclSrc, mportRepr, muxPairs, stepFanIn, users, DView(dvCF, dvExport, dvSynthK), InvRef(InvFact), MCheck(ckLst,
+    ckFull, ckLine, ckHead, ckHeads, ckAll, ckRule), MFact(fOk), MSite(sArg, sKind, sPort, sFact, sInv), MStep(tSites, tName),
+    Model(mByk, mNR, mNM, mNS, mChecks, mCfChecks, mCfS, mNSlots, mD, mK, mFacts, mRules, mFanOutside, mNT, mBlk,
     mKinds))
 import Lean.Sched.Py (strip)
-import Lean.Sched.Scan (escPairs, mannPlain, methTables, scanMasks, MAnn(maRel))
+import Lean.Sched.Scan (escPairs, mannExport, mannPlain, methTables, scanMasks, MAnn(maRel))
+import Lean.Sched.Export (SynthKid(skKind), exConfB)
 import Lean.Sched.Sites (Sites)
 import Lean.Solver (Solver)
 
@@ -48,17 +49,21 @@ mkPlan sv share dv sites bl bnd name m = runExceptT $ do
         rulesA = listArray (0, nS - 1) (mRules m)
         siteOf k i = Sq.index (tSites (rulesA ! k)) i
         mnames = [ tName r | r <- drop nR (mRules m) ]
-        plain = mannPlain mnames (dvCF dv)
-        mconf a b = a == b || not (testBit (maRel plain ! b) a)
+        plain = maybe (mannPlain mnames (dvCF dv)) mannExport (dvExport dv)
+        mconf a b = maybe (a == b || not (testBit (maRel plain ! b) a)) (\ex -> exConfB ex a b) (dvExport dv)
         checks = mChecks m
         chkA = listArray (0, length checks - 1) checks
-    -- conflict_free checks (user assertions) enter the gate's solver calls; a file cannot state them yet
-    assertP (null (mCfChecks m)) "conflict_free run-time checks (user assertions) are not emitted yet"
-    when met $ assertP (and [ not (mconf a b) | a <- [0 .. nM - 1], b <- [0 .. nM - 1], a /= b ]) "non-CF method pairs"
+    -- conflict_free checks (user assertions) are stated in asmP, all of them: the solver's assumptions behind
+    -- a fact it confirms only with them (`assert`) are then the file's, and the fact is stated under asmP
+    assertP (length (mCfS m) == length (mCfChecks m)) "a conflict_free check a file cannot state"
+    -- a synthesized child states its exported relations (design.md §3.1); the top module is pairwise CF
+    when (met && isNothing (dvExport dv)) $ assertP (and [ not (mconf a b) | a <- [0 .. nM - 1], b <- [0 .. nM - 1], a /= b ]) "non-CF method pairs"
     -- bsc's mutually_exclusive checks as suffix groups: a group [x0, .., xn] has the checks (x_j, [x_j+1 .. xn])
-    let bylst = M.fromListWith (flip (++)) [ (ckLst ch, [c]) | (c, ch) <- zip [0 :: Int ..] checks ]
+    -- (a line with several rules on its first side stays as its single checks)
+    let joined ch = length (ckHeads ch) > 1
+        bylst = M.fromListWith (flip (++)) [ (ckLst ch, [c]) | (c, ch) <- zip [0 :: Int ..] checks, not (joined ch) ]
         grpStep (groups, chkG) (c0, ch0)
-            | length (ckLst ch0) /= 1 || M.member c0 chkG = return (groups, chkG)
+            | length (ckLst ch0) /= 1 || M.member c0 chkG || joined ch0 = return (groups, chkG)
             | otherwise = do
                 let grow sq chain = case [ c | c <- M.findWithDefault [] sq bylst, not (M.member c chkG), c `notElem` chain ] of
                         [] -> (sq, chain)
@@ -78,8 +83,15 @@ mkPlan sv share dv sites bl bnd name m = runExceptT $ do
     forM_ checks $ \ch -> when (ckFull ch) $
         assertP (render [ruleName (ckHead ch)] (map ruleName (ckLst ch)) == strip (ckLine ch))
                 ("a stated check differs from bsc's line: " ++ take 80 (ckLine ch))
+    -- and a line with several rules on its first side is its checks, one per rule of that side, one list
+    let mates = M.fromListWith (flip (++)) [ ((ckRule ch, ckLine ch), [ch]) | ch <- checks, joined ch, ckAll ch ]
+    forM_ [ (ch, cs) | cs@(ch : _) <- M.elems mates ] $ \(ch, cs) ->
+        assertP (map ckHead cs == ckHeads ch && all ((== ckLst ch) . ckLst) cs
+                 && render (map ruleName (ckHeads ch)) (map ruleName (ckLst ch)) == strip (ckLine ch))
+                ("a stated check differs from bsc's line: " ++ take 80 (ckLine ch))
     let u0 = users m
     assertP (muxPairs m <= bnGateMuxPairs bnd) ("gate: " ++ show (muxPairs m) ++ " mux member pairs proved one by one, above the bound " ++ show (bnGateMuxPairs bnd))
+    assertP (stepFanIn m <= bnGateFanIn bnd) ("gate: a step of fan-in " ++ show (stepFanIn m) ++ " (its sites' operator inputs), above the bound " ++ show (bnGateFanIn bnd))
     assertP (and [ S.size (S.fromList ps) == length ps | r <- mRules m, let ps = map sPort (F.toList (tSites r)) ])
             "two sites of one step on one port"
     fe <- liftIO (newFactEngine sv share dv sites bl m mconf)
@@ -94,6 +106,8 @@ mkPlan sv share dv sites bl bnd name m = runExceptT $ do
         d = if null lcp then mD m else max 1 (bitLen (nslots - 1))
         virt = [ [ (vb M.! p, kv, 0) | p <- lcp, any ((== k) . fst) (u0 M.! p) ] | k <- [0 .. nR - 1] ]
         mann = if met then Just plain else Nothing
+    -- the slot bound before the scan and the text (ScanTabs checks every bound again, with the same words)
+    assertP (nslots <= bnGateSlots bnd) ("gate: slots in the state " ++ show nslots ++ " above the bound " ++ show (bnGateSlots bnd))
     (need, esc, dn) <- case scanMasks m lcSlots mann of
         Left err -> throwError (pyErrLine err)
         Right x -> return x
@@ -120,7 +134,10 @@ mkPlan sv share dv sites bl bnd name m = runExceptT $ do
                  , ecPortInfo = M.empty, ecMultiBlk = any ((> 1) . length) (M.elems (mBlk m))
                  , ecHasUnconf = False, ecHyp = "", ecHya = ""
                  , ecWXM = "Wires " ++ xm ++ " V", ecXM = xm
-                 , ecMann = fmap (\ma -> let (a, b, c, e, f) = methTables ma in (a, b, c, e, f)) mann }
+                 , ecMann = fmap (\ma -> let (a, b, c, e, f) = methTables ma in (a, b, c, e, f)) mann, ecEdit = NoEdit
+                 , ecDomNote = "", ecExport = dvExport dv
+                 , ecSynth = let byKind = M.fromListWith (\_ old -> old) [ (skKind x, x) | x <- M.elems (dvSynthK dv) ]
+                             in [ (k, sk) | k <- mKinds m, Just sk <- [M.lookup k byKind] ] }
         xm = if met then "(Fin nM)" else "Empty"
         chkHeads = M.fromListWith (flip (++)) [ (ckHead ch, [c]) | (c, ch) <- zip [0 ..] checks, not (M.member c chkG) ]
         exclNone a b = isNothing (exclSrc m a b)
@@ -169,6 +186,9 @@ mkPlan sv share dv sites bl bnd name m = runExceptT $ do
                     sy = fromMaybe 0 (lookup y mus)
                 (how, bt) <- liftIO (feCx fe p (x, sx) (y, sy))
                 return [(q, x, y, sx, sy, how, bt)]
+    -- a fact confirmed only with the conflict_free checks assumed is stated under asmP, which states them
+    assertP (not (null (mCfS m)) || null ([ () | (_, _, _, _, Just "assert", _) <- efacts ] ++ [ () | (_, _, _, _, _, Just "assert", _) <- cfacts ]))
+            "a fact confirmed with conflict_free checks assumed, in a file that does not state them"
     let hasUnconf = any (not . fOk) facts || any (\(_, _, _, _, h, _) -> isNothing h) efacts || any (\(_, _, _, _, _, h, _) -> isNothing h) cfacts
         hrArg = if hasUnconf then " (hr : Unconfirmed ops E)" else ""
     return ec0 { ecCFacts = cfacts, ecCFIdx = M.fromList [ ((q, x, y), (n, h)) | (n, (q, x, y, _, _, h, _)) <- zip [0 ..] cfacts ], ecMuxes = muxes, ecSelmux = selmux, ecMgrp = mgrp, ecLCMux = lcmux, ecPortInfo = pinfo

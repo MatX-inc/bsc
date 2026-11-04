@@ -10,7 +10,8 @@ file with nothing but its core library; the proofs are by `bv_decide` and kernel
     bsc -elab -u -verilog LookupQ.bsv               # writes mkLookupQ.ba
     inst/bin/schedlean --gate mkLookupQ.ba          # does the modular proof apply?
     inst/bin/schedlean mkLookupQ.ba                 # writes MkLookupQ.lean (the modular obligation)
-    lean MkLookupQ.lean                             # checks it, against the library in theory/modular
+    inst/bin/schedlean --check mkLookupQ.ba         # writes it and checks it in Lean
+    inst/bin/schedlean --mutants 6 mkLookupQ.ba     # and checks that six broken hardwares fail
 
 The default output is the **modular** obligation (`theory/modular/design.md`, conventions in
 `theory/modular/emit/conventions.md`), proved against the Lean library in `theory/modular`
@@ -24,14 +25,21 @@ list). The driver `src/comp/schedlean.hs` only parses options, reads the `.ba` a
 verifier is in hierarchical modules under `src/comp/Lean/`:
 
 - `Lean.Sched.*`, the schedule verifier. Extraction from bsc's in-memory `APackage` and schedule:
-  `Types`, `Extract`, `Conflicts`, `Order`, `OutOfOrder`, `BscFacts`. The modular model: `Expr`,
+  `Types`, `Extract`, `Conflicts`, `Order`, `OutOfOrder`, `BscFacts`, `Domain` (clock domains, gated
+  clocks and resets). The modular model: `Expr`,
   `Enc`, `Reach`, `MECheck`, `Sites` (site conditions), `Kinds`, `Model`, `Scan`, `Facts`, `Shadow`,
-  `Bounds`, `Gate`. The emitter: `Emit` and `Emit.*`. Views and tests: `Show`, `APkg` (a parse of
+  `Bounds`, `Gate`. Synthesized children: `Export` (a child's exported interface, its kinds in a
+  parent) and `Hier` (the instance DAG, children first). The emitter: `Emit` and `Emit.*`. Views and tests: `Show`, `APkg` (a parse of
   bsc's printed `APackage`, kept only as a test oracle for `--show-model=apkg-text`), `Py`, `Time`.
   `Flat` is the flat theorem behind `--flat`.
-- `Lean.Print`, `Lean.BV` and `Lean.Solver` can be reused by other Lean verifiers of bsc output.
-  `Lean.Solver` asks bsc's own disjointness solver (Yices or STP) about Boolean skeletons; an unknown
-  verdict never counts as unsatisfiable.
+  `Check` runs Lean for `--check` and `--mutants`; `Mutate` makes the mutants.
+- `Lean.Print`, `Lean.BV`, `Lean.Solver` and `Lean.Run` can be reused by other Lean verifiers of bsc
+  output. `Lean.Solver` asks bsc's own disjointness solver (Yices or STP) about Boolean skeletons; an
+  unknown verdict never counts as unsatisfiable. Yices keeps one live context per process (making a
+  state resets it), so a module's bsc facts, gate checks and skeleton queries share one state
+  (`Live`, the skeleton names apart from the module's definitions), and a state made before another
+  (a parent's, after its children's) is remade before it is asked again. `Lean.Run` finds and runs Lean, capped and timed, and
+  reads its verdict.
 
 Options:
 
@@ -42,7 +50,11 @@ Options:
   (design.md §11): the `GATE` record (scan, escapes and their facts with how each was confirmed,
   last-caller ports, bounds, generic leaves, assertions relied on), a `counts` row (largest step,
   port users, run-time check groups), the shadow classes, and one summary row: design, mode, `A` or
-  `flat`, whether the emitter writes a file (a dry run in memory), and the reasons.
+  `flat`, whether the emitter writes a file (a dry run in memory), and the reasons. A module with
+  gated clocks or several resets also gets a `domain` line (its clocks, gates and resets). A module
+  of several clock domains gets its own verdict, `not checked: multi-domain`, neither `A` nor `flat`
+  (a `GATE` record with the verdict and the summary row with its domains; exit status 0); see
+  *Clocks and resets*.
 - `--show-model[=VIEW]` prints an intermediate view: the extracted design (no `VIEW`), `apkg`,
   `apkg-tree`, `apkg-text`, `apkg-mem`, `sites`, `model`, `facts`.
 - `--flat` writes the flat theorem; `--time-phases` prints each phase's wall and CPU time on standard
@@ -50,11 +62,127 @@ Options:
 - Measurement options, each labelled in the file: `--limit NAME=N` lowers a gate bound (never raises
   one), `--first-rules N` keeps the first N steps (a partial theorem), `--no-task-agreement` leaves
   out task agreement (a weaker theorem).
-- `--check`, `--mutants N` and `--lean PATH` are parsed but stop with "not implemented yet";
-  `check.sh` and `mutate.py` do these jobs for `--flat` files meanwhile.
+- `--check` checks the file written in Lean (the parts first, each compiled for the next) and prints
+  `check FILE: VERDICT`: `proved` (Lean exits 0, no error, no `sorry`, and every `#print axioms` lists
+  only `propext`, `Classical.choice`, `Quot.sound`), `counterexample` (`decide` proves a proposition
+  false, or `bv_decide` gives an assignment), `vacuous` (a `--flat` file's consistency check fails),
+  `timeout` or `error`, the reason and the log (`<stem>.check.log`). Works on `--flat` files too.
+- `--mutants N` checks the modular file, then N mutants of its hardware, each of which must fail:
+  an enable dropped or forced on, an argument under a fresh operator, two mux members' arguments
+  exchanged, a guard reading another port, two task statements of steps in a forced order numbered the
+  other way round (CF order), a last-caller mux whose first caller wins, a call condition left out of
+  a port's enable where a `conflict_free` check names that caller and another (so the two may both
+  call in the hardware, while the check still reads the condition). Only mutants whose obligation
+  is false are made (a step that can fire, a call that can be made, two steps that can fire together
+  in a forced order), so a mutant whose file checks is a gap in the theorem. Kinds take turns and each
+  kind's candidates are spread over the design; the first N are the same for any larger N. A killed
+  mutant's files are removed, a missed or timed-out one's kept as `<stem>_mut<i>.lean`
+  (`--keep-mutants` keeps them all). A mutant the emitter refuses to write (only a CF-order one can
+  be) is reported `not written` and counted apart, not as killed: there is no Lean evidence for it.
+  `util/schedlean/mutate.py` mutates `--flat` files.
+- `--lean PATH` (else `$LEAN`, else `lean` on `PATH`), `--lean-timeout SECONDS` (default 1800);
+  every Lean run is `-j1 -DElab.async=false` under a 24 GiB address-space cap (`prlimit`, else
+  `ulimit -v`). `--lean-lib DIR` holds the library (`Modular`, `EmitLemmas`, `Scan`, `LastCaller`,
+  `SiteCond`) compiled, or its sources, which are compiled once into `$SCHEDLEAN_CACHE` (else
+  `~/.cache/schedlean`), keyed by Lean's version and the sources. Default: `$BLUESPECDIR/schedlean`
+  (`make install-utils` installs the sources there), else the checkout's `theory/modular`.
+- `-p DIRS`/`--search-path DIRS` (colon-separated, may repeat): where synthesized children's `.ba`
+  files are, after the parent's directory; see *Synthesized children*.
+- Exit status: 0 written (and proved, every mutant killed); 1 the emitter stops; 2 usage; 3
+  counterexample; 4 vacuous; 5 timeout (also a mutant's); 6 any other Lean error; 7 Lean could not
+  run (not found, or the library did not build); 8 a mutant's file checks; 9 a mutant's file is not
+  written (the emitter stops on it).
 
 Library children are told apart from user imports through the installation: schedlean reads
 `$BLUESPECDIR` (set by the installed wrapper), else the bsc directory the `.ba` records.
+
+## Clocks and resets
+
+The modular proof checks a module of **one clock domain** (bsc's clock domains are clock families):
+
+- **Gated clocks** of that family are supported when the gate is an input of the module (a gated
+  input clock, `gate_input_clocks`, with `clock_family`). bsc ANDs a clock's gate into the condition
+  of every action call on the state it clocks (`IExpand`, `handleMethod`), so the gate is in the
+  `CAN_FIRE` of each rule that writes that state and in the `RDY` of each method that does.
+  schedlean checks, for every such call, that the step's guard (a method's ready signal) and the
+  call's condition imply the gate, structurally or with bsc's solver. Then in a cycle with the gate
+  off that state is not called and holds, as its Lean model does without calls, whether or not the
+  clock still ticks. The gate is not part of the module's Lean interface: a guard that reads it is an
+  opaque operator of its other reads, and the theorem holds for every `ops`, so for the gate's value
+  in each cycle. The emitter stops, and the gate fails, with a named reason when a gate is not an
+  input (a gate a child drives, such as `mkGatedClock`'s, has no Lean model yet), when a child's
+  Verilog takes a gate as a port, or when a call may be enabled with its gate off. That a gated clock
+  shares the default clock's edges is the `clock_family` attribute, a user assertion schedlean does
+  not check (a trust point, named in the top theorem's docstring; see *What is trusted*).
+- **Several resets**: the theorem covers the cycles **outside reset**, with every reset deasserted;
+  the file's first comment and the top theorem's docstring say so. A module of one reset is covered
+  the same way (the library models have no reset), and its file is unchanged. Async-reset primitives (`RegA`, `ConfigRegA`; FIFOs choose async reset by a Verilog define,
+  not by module name) get the model of their synchronous form, which they equal outside reset.
+- **Several clock domains**: not checked, with no fallback. `--gate` reports `not checked:
+  multi-domain` with each domain's clocks; the emitter and `--show-model` stop with the same message.
+  `--flat` still refuses any module with several clocks or resets.
+
+## Synthesized children
+
+A module with synthesized children (bsc compiled them separately, `(* synthesize *)`) is checked one
+file per module (design.md §3.1). schedlean finds each child's `.ba` beside its parent's, else in the
+`-p` directories, and writes the files children first: `<Child>.lean` (the module name capitalised)
+beside the top file, each child's file imported by its parents. The instance tree is read from each
+`.ba`'s instances alone; a module is read in full only at its turn, and its file is written (and with
+`--check` checked, with its mutants) before the next is read, so a run holds one module at a time.
+`--gate` prints each module's record and rows, children first, then a `hierarchy` row giving each
+child instance its kind and place; `--check` checks the files in order (each child's compiled file on
+its parents' path), stopping at the first that does not prove, and `--mutants N` mutates each module
+once it proves, each mutant checked against the real children.
+
+A child **on path A** enters its parent through its own file's `built` theorem (Lean's `Built.node`):
+its own solver verdicts, operators and assumed leaves become fields of the parent's `Subs` record, a
+named hypothesis of the top theorem, one entry per instance (a child's file folds its inputs, method
+arguments and module ports, into its operators, so two instances fed differently have different
+ones). A child's
+file exports its whole interface: action methods (each C with itself, whatever bsc exports for a method
+with itself), value methods without arguments, bsc's relations between distinct methods, and
+`alwaysRdy` for the methods bsc builds always ready (their ready output is the constant true, which
+bsc's wrapper of the child assumes; the child's file proves its guard is true). A child is on path A
+when its file is written with a top theorem from its hypotheses alone, the parent reads none of its
+ready ports, and the parent's view of its schedule equals its own. The parent's theorem then holds
+under what the child's file assumes (its assumed leaves and user assertions, and its own children's):
+the parent's `Leaves` docstring, its header and its `hierarchy` row name them.
+
+Otherwise the child is an **assumed leaf** of the parent, named in `Leaves` (per instance, a `Module`,
+its `Realizes`, `Causal` and `Aliased`), with an interface from the parent's view of bsc's schedule,
+each `RDY_m` a value port aliased to `m`'s ready output; the `hierarchy` row says why. The commonest
+reason is a parent reading a child's ready port (a guarded method); the others are a value method with
+arguments (not exported, and a parent reading one stops the emitter), a child whose `.ba` is not
+found, the parent's view of its schedule or always-ready methods differing from its own `.ba`, and the
+child's own limits (no `Acyc`/`top`, unconfirmed facts, a scan failure). An assumed leaf whose `.ba` is
+not found is assumed to fire each action method on its enable. The top module's file keeps its value
+methods outside its interface, as before.
+
+A child with an `always_enabled` or `enabled_when_ready` action method is neither: bsc runs such a
+method in every cycle (or whenever it is ready), not on the parent's enable, so no contract with an
+enable describes it. Its export is refused (its `.ba` names the attribute, or its `WILL_FIRE` is not
+the method's enable), and a parent that uses it stops, with the reason in its gate row (verdict not A)
+and in the `hierarchy` row. Fix path: export `alwaysEn` for such a method and emit the parent's `alw`
+obligation (the library's `CertB.alw`: a step that fires in every cycle calls the port).
+
+## User assertions
+
+bsc checks `mutually_exclusive` and `conflict_free` only at run time (`$error` R0001 and R0002). The
+modular file states every such check in `asmP`, the module's assertions, and `top` covers the cycles
+in which they pass (design.md §5):
+
+- a `mutually_exclusive` line `(WILL_FIRE_a1 || …) && (WILL_FIRE_b1 || …)` is one check per rule of
+  its first side, `!(WF ai && (WF b1 || …))`, which together are exactly bsc's line; a chain of
+  single-rule lines is one `SufAsm` group;
+- a `conflict_free` check in rule `R`, `!(WILL_FIRE_R && line)`, is `cfL_c`: the line's conjuncts, each
+  instrumentation wire (`_<method>_<rule>$EN_<instance>`) read as its one writer's argument, the
+  writer's call condition. The `$error` that reports it is a task statement of `R` that the step never
+  makes; its hardware enable is `WF R && cfL_c`, which `asm` makes false;
+- a dynamic fact the solver confirms only with the `conflict_free` checks assumed (`assert` in the
+  `GATE` line), an escape or the exclusivity of two callers of one port, is stated under `asmP`.
+
+The first comment lists them. A check line in another form stops the emitter.
 
 ## Running it
 
@@ -328,7 +456,9 @@ saying where it comes from. A file has only the structures it needs.
   confirmed facts are used.
 * `Assertions`: the user's `mutually_exclusive` and `conflict_free`
   assertions, and bsc's other run-time checks; bsc reports at simulation
-  time if one fails.
+  time if one fails. A gated clock's `clock_family` attribute (it shares
+  the default clock's edges) is a user assertion too, checked by nothing;
+  the modular file names it in its top theorem's docstring.
 * `Congruence`: functional consistency. These facts hold by construction;
   they are hypotheses only to keep the uninterpreted functions out of the
   SAT problem. A read the annotations rule out is tied to the hardware's
@@ -350,7 +480,11 @@ rewrites the back end makes in printing a call: `$fatal(code, msg)` as
 outside SystemVerilog mode, a string-mux argument as an if/else of two
 calls, and a C function's wide result as its first argument.
 Verilog also skips a call while its rule's reset is asserted, which is
-not modelled: the theorem's trace is that of a cycle out of reset. The
+not modelled: the theorem's trace is that of a cycle out of reset. With
+gated clocks of the module's family the block is sensitive to each
+oscillator's falling edge (`always @(negedge CLK_g or negedge CLK)`), and
+the trace assumes it runs once per cycle (the `#0` at its start makes the
+edges of one time step one run). The
 trace is this module's alone: how calls of different modules in one cycle
 interleave, and task state they share, are left out (see *Limitations*). It
 matches each hardware call to a sequential one by rule, task (as Verilog
@@ -395,8 +529,9 @@ The tool runs in three pure phases:
 
 ## Limitations
 
-* Only modules with one clock and one reset are supported; others are
-  refused, as are modules with size parameters.
+* The modular file covers modules of one clock domain (see *Clocks and
+  resets*); `--flat` covers only modules with one clock and one reset.
+  Modules with size parameters are refused.
 * Exported clocks, clock gates and resets are not compared; the tool warns
   when a module has them.
 * The order of system-task calls is a property of the module's Verilog. It
@@ -428,7 +563,7 @@ The tool runs in three pure phases:
 
 `examples/` holds small designs (BSV, and Bluespec Classic `.bs`), each
 exercising a part of the model, and `check.sh` compiles each with bsc, runs
-the tool and checks the result with Lean; a module whose source says
+the tool with `--flat` and checks the result with Lean (and `mutate.py`'s mutants); a module whose source says
 `check.sh: <module> fails with a counterexample in <theorem>` must instead
 fail in that theorem alone, with a counterexample, while `schedule_sound`
 checks:

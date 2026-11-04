@@ -1,0 +1,48 @@
+package Hier1 where
+
+-- One level of synthesized children: mkCounter instanced twice (a value and an action method, value SB
+-- incr), and mkPair (put, copy and total, with copy SB put between two action methods).
+interface Counter =
+  incr :: Bit 8 -> Action
+  value :: Bit 8
+
+{-# verilog mkCounter #-}
+mkCounter :: Module Counter
+mkCounter = module
+  r :: Reg (Bit 8) <- mkReg 0
+  interface
+    incr x = r := r + x
+    value = r
+
+interface Pair =
+  put :: Bit 8 -> Action
+  copy :: Action
+  total :: Bit 8
+
+{-# verilog mkPair #-}
+mkPair :: Module Pair
+mkPair = module
+  r :: Reg (Bit 8) <- mkReg 0
+  s :: Reg (Bit 8) <- mkReg 0
+  interface
+    put x = r := x
+    copy = s := r
+    total = r + s
+
+{-# verilog sysHier1 #-}
+sysHier1 :: Module Empty
+sysHier1 = module
+  a :: Counter <- mkCounter
+  b :: Counter <- mkCounter
+  p :: Pair <- mkPair
+  t :: Reg (Bit 8) <- mkReg 0
+  u :: Reg (Bit 8) <- mkReg 0
+  rules
+    "ra": when True ==> a.incr 1
+    "rb": when t > 2 ==> do
+      b.incr a.value
+      t := t + 1
+    "rc": when True ==> do
+      p.put t
+      p.copy
+    "rd": when p.total > 5 ==> u := u + 1

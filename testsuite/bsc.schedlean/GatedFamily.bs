@@ -1,0 +1,30 @@
+package GatedFamily where
+
+-- A gated input clock of the default clock's family: registers g, k and h on it, a, b and c on the
+-- default clock. bsc puts the gate in the condition of every action call on g, k and h.
+clockedBy :: (IsModule m mType) => Clock -> m a -> m a
+clockedBy c = changeSpecialWires (Just c) Nothing Nothing
+
+interface GatedIfc =
+  set :: Bit 8 -> Action
+  peek :: Bit 8
+
+{-# synthesize mkGatedFamily {
+  gate_input_clocks = { gclk },
+  clock_family = { default_clock, gclk } } #-}
+mkGatedFamily :: Clock -> Module GatedIfc
+mkGatedFamily gclk = module
+  a :: Reg (Bit 8) <- mkReg 0
+  b :: Reg (Bit 8) <- mkReg 0
+  c :: Reg (Bit 8) <- mkReg 0
+  g :: Reg (Bit 8) <- clockedBy gclk $ mkReg 0
+  k :: Reg (Bit 8) <- clockedBy gclk $ mkReg 0
+  h :: Reg (Bit 8) <- clockedBy gclk $ mkReg 0
+  rules
+    "base": when True ==> a := a + 1
+    "gated": when True ==> g := g + a
+    "maybe": when True ==> if a > 5 then k := a else b := a
+    "back": when g > 3 ==> c := g + k
+  interface
+    set x = h := x
+    peek = b + c + h

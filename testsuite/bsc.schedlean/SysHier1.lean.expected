@@ -1,0 +1,1465 @@
+/- SysHier1: the modular obligation of one corpus module, emitted by schedlean.
+   Structure (children, steps, sites, users, exclusions) is the design's; data and
+   guards are opaque operators over their real fan-in (see e2e/README.md).
+   Assumed user assertions (bsc's run-time checks): none. -/
+import Scan
+import MkCounter
+import MkPair
+open Modular Emit Scan
+open scoped List
+
+set_option autoImplicit false
+set_option linter.unusedVariables false
+set_option linter.unusedSimpArgs false
+set_option linter.deprecated false
+set_option maxRecDepth 100000
+set_option maxHeartbeats 0
+
+namespace SysHier1
+noncomputable section
+
+/-- The module's operators: constants, opaque data and Boolean operators (by number), tuples,
+    and the design's Bool reading of a one-bit value. -/
+structure Ops (V : Type) where
+  z : V
+  tup : V → V → V
+  k : Nat → V
+  f : Nat → V → V
+  g : Nat → V → Bool
+  ofBool : Bool → V
+  toB : V → Bool := fun _ => false
+
+section
+variable {V : Type}
+/-- A split use of conditional reads: equal selections, and equal values where selected. -/
+theorem split_val {α : Type} {b b' : Bool} {x1 x2 y1 y2 : α} (hb : b = b') (h1 : b' = true → x1 = y1)
+    (h2 : x2 = y2) : (bif b then x1 else x2) = (bif b' then y1 else y2) := by
+  subst hb; cases b <;> simp_all
+/-- Urgency with several blockers: `a && !(b₁ || …)` excludes each `bᵢ`. -/
+theorem blk_excl_or {a b : Bool} {l : List Bool} {p : Nat} (h : (a && !orL l) = true) (hl : l[p]? = some b)
+    (hb : b = true) : False := by
+  have : orL l = true := orL_true.mpr ⟨b, List.mem_of_getElem? hl, hb⟩
+  rw [this] at h; simp at h
+theorem iff_of_eqB {a b : Bool} (h : a = b) : a = true ↔ b = true := by rw [h]
+/-- A conditional read's site value, its condition rewritten. -/
+theorem ite_bcongr {α : Type} {c c' : Bool} (h : c = c') (a b : α) :
+    (if c = true then a else b) = (if c' = true then a else b) := by rw [h]
+/-- An R term over its own read's site value: the readiness fact gives the invariance. -/
+theorem inv_self {G : V → Bool} {c : Bool} {p : V} (h : ∀ t, G (if c = true then p else t) = true → c = true)
+    (t : V) : G (if c = true then p else t) = G p := by
+  cases c with
+  | true => rfl
+  | false =>
+    have h1 : G t ≠ true := fun e => absurd (h t e) (by decide)
+    have h2 : G p ≠ true := fun e => absurd (h p e) (by decide)
+    simp only [Bool.false_eq_true, ite_false]
+    cases ht : G t <;> cases hp : G p <;> simp_all
+theorem cond_congr {α : Type} {b b' : Bool} {x x' y y' : α} (hb : b = b') (hx : x = x') (hy : y = y') :
+    (bif b then x else y) = (bif b' then x' else y') := by subst hb hx hy; rfl
+/-- One user's enable entry, from its firing and its call condition. -/
+theorem en_cnd {a c : Bool} {On C : Prop} (hOn : On ↔ a = true) (hC : a = true → (C ↔ c = true)) :
+    (a && c) = true ↔ On ∧ C := by
+  rw [Bool.and_eq_true]
+  constructor
+  · intro h; exact ⟨hOn.mpr h.1, (hC h.1).mpr h.2⟩
+  · intro h; exact ⟨hOn.mp h.1, (hC (hOn.mp h.1)).mp h.2⟩
+theorem en_unc {a : Bool} {On C : Prop} (hOn : On ↔ a = true) (hC : a = true → C) : a = true ↔ On ∧ C :=
+  ⟨fun h => ⟨hOn.mpr h, hC h⟩, fun h => hOn.mp h.1⟩
+/-- A port's enable over explicit per-user entries. -/
+theorem en_pairs (P : Parent V) (fire : ((j : P.I) → Outs (P.CI j).M V) → Wires P.X.M V → P.PR → Bool)
+    (oc : (j : P.I) → Outs (P.CI j).M V) (w : Wires P.X.M V) (j : P.I) (cm : (P.CI j).M) :
+    ∀ (l : List (Step P × Bool)), AllL (fun e => e.2 = true ↔ On P fire oc w e.1 ∧ Calls P (trS P oc w e.1) j cm) l →
+      (orL (l.map Prod.snd) = true ↔ ∃ s ∈ l.map Prod.fst, On P fire oc w s ∧ Calls P (trS P oc w s) j cm)
+  | [], _ => by simp [orL]
+  | e :: l, ⟨h1, h2⟩ => by
+    have h1' : e.2 = true ↔ On P fire oc w e.1 ∧ Calls P (trS P oc w e.1) j cm := h1
+    simp only [List.map_cons, orL, Bool.or_eq_true, List.mem_cons, exists_eq_or_imp]
+    rw [h1', en_pairs P fire oc w j cm l h2]
+theorem mem_callsOf_inv {I : Type} {CM : I → Type} (ρ : Nat → V) : ∀ (ss : List (Site I CM V)) (c : Σ j, CM j × V),
+    c ∈ callsOf ρ ss → ∃ s ∈ ss, s.cond ρ = true ∧ c = ⟨s.j, (s.m, s.arg ρ)⟩
+  | [], c, h => by simp [callsOf] at h
+  | s :: ss, c, h => by
+    simp only [callsOf, List.mem_append] at h
+    rcases h with h | h
+    · by_cases hc : s.cond ρ = true
+      · rw [if_pos hc] at h; simp only [List.mem_singleton] at h; exact ⟨s, List.mem_cons_self .., hc, h⟩
+      · rw [if_neg hc] at h; simp at h
+    · obtain ⟨s', hs', h1, h2⟩ := mem_callsOf_inv ρ ss c h
+      exact ⟨s', List.mem_cons_of_mem _ hs', h1, h2⟩
+end
+
+/-! ## Child interfaces: the library's, and assumed kinds from the dump's schedules -/
+
+inductive Kind where
+  | reg | syn0 | syn1
+  deriving DecidableEq
+
+abbrev nk : Kind → Nat
+  | .reg => 2
+  | .syn0 => 2
+  | .syn1 => 1
+
+abbrev KI : Kind → Iface
+  | .reg => Reg.X
+  | .syn0 => MkCounter.X
+  | .syn1 => MkPair.X
+
+abbrev I := Σ κ : Kind, Fin (nk κ)
+abbrev CI : I → Iface := fun j => KI j.1
+abbrev OC (V : Type) := (j : I) → Outs (CI j).M V
+
+def iReg (i : Nat) : I := ⟨.reg, ⟨i % nk .reg, Nat.mod_lt _ (by decide)⟩⟩
+def iSyn0 (i : Nat) : I := ⟨.syn0, ⟨i % nk .syn0, Nat.mod_lt _ (by decide)⟩⟩
+def iSyn1 (i : Nat) : I := ⟨.syn1, ⟨i % nk .syn1, Nat.mod_lt _ (by decide)⟩⟩
+
+def xAnn : Ann Empty where
+  prec e _ := e.elim
+  sbr e _ := e.elim
+  conf e _ := e.elim
+  share e := e.elim
+  hasEn e := e.elim
+  alwaysEn e := e.elim
+  alwaysRdy e := e.elim
+abbrev X : Iface := ⟨Empty, inferInstance, xAnn⟩
+
+abbrev nR : Nat := 4
+abbrev nS : Nat := 4
+abbrev St := Empty ⊕ Fin nR
+/-- Rule `k` (rules are numbered in schedule order). -/
+def rR (k : Nat) : Fin nR := ⟨k % nR, Nat.mod_lt _ (by decide)⟩
+theorem rR_val (r : Fin nR) : rR r.val = r := Fin.ext (Nat.mod_eq_of_lt r.isLt)
+theorem rlt (r : Fin nR) : r.val < nS := Nat.lt_of_lt_of_le r.isLt (by decide)
+
+/-! ## Per-kind builders, port splits, uses -/
+
+def regW {V : Type} (en : Bool) (d z : V) : Wires (CRegM 1) V :=
+  ⟨fun m => match m with | .wr _ => en | .rd _ => false, fun m => match m with | .wr _ => d | .rd _ => z⟩
+def wireW {V : Type} (en : Bool) (d z : V) : Wires WireM V :=
+  ⟨fun m => match m with | .wset => en | _ => false, fun m => match m with | .wset => d | _ => z⟩
+def wire0W {V : Type} (en : Bool) (z : V) : Wires Wire0M V :=
+  ⟨fun m => match m with | .wset => en | _ => false, fun _ => z⟩
+theorem fin1 (i : Fin 1) : i = 0 := by obtain ⟨k, hk⟩ := i; congr; omega
+theorem regAll {Q : CRegM 1 → Prop} (hr : Q Reg.read) (hw : Q Reg.write) : ∀ cm, Q cm := by
+  intro cm; cases cm with
+  | rd i => rw [fin1 i]; exact hr
+  | wr i => rw [fin1 i]; exact hw
+theorem wireAll {Q : WireM → Prop} (hs : Q .wset) (hg : Q .wget) (hh : Q .whas) : ∀ cm, Q cm := by
+  intro cm; cases cm <;> assumption
+theorem reg_nopath (p q : CRegM 1) : (cregAnn 1).path p q = false := by
+  cases p <;> cases q <;> rename_i a b <;> rw [fin1 a, fin1 b] <;> rfl
+theorem wire0All {Q : Wire0M → Prop} (hs : Q .wset) (hh : Q .whas) : ∀ cm, Q cm := by
+  intro cm; cases cm <;> assumption
+
+/-- A port's uses: a table keyed by step (its sites per step), and its users as a list. -/
+structure Uses (M : Type) where
+  uses : M → Tab (Nat × List Nat)
+  us : M → List Nat
+def regU (rd wr : Tab (Nat × List Nat)) (rd' wr' : List Nat) : Uses (CRegM 1) :=
+  ⟨fun m => match m with | .rd _ => rd | .wr _ => wr, fun m => match m with | .rd _ => rd' | .wr _ => wr'⟩
+def wireU (s g h : Tab (Nat × List Nat)) (s' g' h' : List Nat) : Uses WireM :=
+  ⟨fun m => match m with | .wset => s | .wget => g | .whas => h, fun m => match m with | .wset => s' | .wget => g' | .whas => h'⟩
+def wire0U (s h : Tab (Nat × List Nat)) (s' h' : List Nat) : Uses Wire0M :=
+  ⟨fun m => match m with | .wset => s | .whas => h, fun m => match m with | .wset => s' | .whas => h'⟩
+
+/-- A synthesized child's wires and uses, by method index in balanced tables (design §3.1). -/
+def finW {V : Type} {n : Nat} (en : Tab Bool) (d : Tab V) : Wires (Fin n) V :=
+  ⟨fun m => en.get m.val, fun m => d.get m.val⟩
+def finU {n : Nat} (t : Tab (Tab (Nat × List Nat))) (l : Tab (List Nat)) : Uses (Fin n) :=
+  ⟨fun m => t.get m.val, fun m => l.get m.val⟩
+
+def uses_reg : Tab (Uses (KI .reg).M) :=
+  (.node 1 (.leaf (regU (.node 2 (.leaf (1, [0])) (.leaf (2, [1]))) (.leaf (2, [3])) [1, 2] [2]))
+  (.leaf (regU (.leaf (0, [1])) (.leaf (0, [2])) [0] [0])))
+def uses_syn0 : Tab (Uses (KI .syn0).M) :=
+  (.node 1 (.leaf (finU (.node 1 (.leaf ((.leaf (2, [0]))))
+  (.leaf ((.leaf (3, [0])))))
+  (.node 1 (.leaf ([2]))
+  (.leaf ([3])))))
+  (.leaf (finU (.node 1 (.leaf ((.leaf (0, []))))
+  (.leaf ((.leaf (2, [2])))))
+  (.node 1 (.leaf ([]))
+  (.leaf ([2]))))))
+def uses_syn1 : Tab (Uses (KI .syn1).M) :=
+  (.leaf (finU (.node 1 (.leaf ((.leaf (0, [0]))))
+  (.node 2 (.leaf ((.leaf (1, [1]))))
+  (.leaf ((.leaf (1, [2]))))))
+  (.node 1 (.leaf ([0]))
+  (.node 2 (.leaf ([1]))
+  (.leaf ([1]))))))
+def usesK : (κ : Kind) → Tab (Uses (KI κ).M)
+  | .reg => uses_reg
+  | .syn0 => uses_syn0
+  | .syn1 => uses_syn1
+
+/-- A port's uses: a table keyed by rule, so a rule's sites on the port are a lookup (no walk). -/
+def usesAt (p : Σ j : I, (CI j).M) : Tab (Nat × List Nat) := ((usesK p.1.1).get p.1.2.val).uses p.2
+def usL (p : Σ j : I, (CI j).M) : List Nat := ((usesK p.1.1).get p.1.2.val).us p.2
+def users (j : I) (cm : (CI j).M) : List St := (usL ⟨j, cm⟩).map (fun k => .inr (rR k))
+def idx (s : St) (p : Σ j : I, (CI j).M) : List Nat := match s with
+  | .inl e => e.elim
+  | .inr r => idxT (usesAt p) r.val
+
+theorem usOK_reg : Tab.allB (fun _ U => ([Reg.read, Reg.write] : List (KI .reg).M).all (fun m => usersT (U.uses m) == U.us m)) uses_reg 0 (nk .reg) = true := by
+  decide +kernel
+theorem portsU_reg : ∀ p : CRegM 1, p ∈ [Reg.read, Reg.write]
+  | .rd ⟨0, _⟩ => by simp
+  | .wr ⟨0, _⟩ => by simp
+theorem usOK_syn0 : Tab.allB (fun _ U => (List.finRange MkCounter.nM : List (KI .syn0).M).all (fun m => usersT (U.uses m) == U.us m)) uses_syn0 0 (nk .syn0) = true := by
+  decide +kernel
+theorem portsU_syn0 : ∀ p : Fin MkCounter.nM, p ∈ List.finRange MkCounter.nM := List.mem_finRange
+theorem usOK_syn1 : Tab.allB (fun _ U => (List.finRange MkPair.nM : List (KI .syn1).M).all (fun m => usersT (U.uses m) == U.us m)) uses_syn1 0 (nk .syn1) = true := by
+  decide +kernel
+theorem portsU_syn1 : ∀ p : Fin MkPair.nM, p ∈ List.finRange MkPair.nM := List.mem_finRange
+/-- The users list is the uses table's (decided per kind). -/
+theorem usersT_eq (p : Σ j : I, (CI j).M) : usersT (usesAt p) = usL p := by
+  obtain ⟨⟨κ, i, hi⟩, m⟩ := p
+  cases κ
+  · have h := List.all_eq_true.mp (Tab.allB_spec _ uses_reg 0 (nk .reg) usOK_reg i (Nat.zero_le _) hi) m (portsU_reg m)
+    exact beq_iff_eq.mp h
+  · have h := List.all_eq_true.mp (Tab.allB_spec _ uses_syn0 0 (nk .syn0) usOK_syn0 i (Nat.zero_le _) hi) m (portsU_syn0 m)
+    exact beq_iff_eq.mp h
+  · have h := List.all_eq_true.mp (Tab.allB_spec _ uses_syn1 0 (nk .syn1) usOK_syn1 i (Nat.zero_le _) hi) m (portsU_syn1 m)
+    exact beq_iff_eq.mp h
+
+theorem mem_users {r : Fin nR} {p : Σ j : I, (CI j).M} {i : Nat} (h : i ∈ idx (.inr r) p) : (.inr r : St) ∈ users p.1 p.2 := by
+  have h1 := mem_usersT h
+  rw [usersT_eq] at h1
+  have h' := List.mem_map_of_mem (f := fun k => (.inr (rR k) : St)) h1
+  rw [rR_val] at h'
+  exact h'
+/-- A fact for each user of a port, from a balanced proof over its uses table (no list proof). -/
+theorem users_all {j : I} {cm : (CI j).M} {Q : St → Prop}
+    (h : Tab.All (fun e => e.2.isEmpty = false → Q (.inr (rR e.1))) (usesAt ⟨j, cm⟩)) : ∀ s ∈ users j cm, Q s := by
+  intro s hs
+  obtain ⟨k, hk, rfl⟩ := List.mem_map.mp hs
+  rw [← usersT_eq] at hk
+  exact usersT_all (Q := fun k => Q (.inr (rR k))) h k hk
+
+/-! ## Steps as numbered site tables (rules, then methods) -/
+
+def key_0 : Tab (Σ j : I, (CI j).M) :=
+  (.node 1 (.leaf (⟨iSyn1 0, (MkPair.mM 0)⟩))
+  (.node 2 (.leaf (⟨iReg 1, Reg.read⟩))
+  (.leaf (⟨iReg 1, Reg.write⟩))))
+def key_1 : Tab (Σ j : I, (CI j).M) :=
+  (.node 1 (.leaf (⟨iReg 0, Reg.read⟩))
+  (.node 2 (.leaf (⟨iSyn1 0, (MkPair.mM 1)⟩))
+  (.leaf (⟨iSyn1 0, (MkPair.mM 2)⟩))))
+def key_2 : Tab (Σ j : I, (CI j).M) :=
+  (.node 2 (.node 1 (.leaf (⟨iSyn0 0, (MkCounter.mM 0)⟩))
+  (.leaf (⟨iReg 0, Reg.read⟩)))
+  (.node 3 (.leaf (⟨iSyn0 1, (MkCounter.mM 1)⟩))
+  (.leaf (⟨iReg 0, Reg.write⟩))))
+def key_3 : Tab (Σ j : I, (CI j).M) :=
+  (.leaf (⟨iSyn0 0, (MkCounter.mM 1)⟩))
+def keyT : Tab (Tab (Σ j : I, (CI j).M)) :=
+  (.node 2 (.node 1 (.leaf (key_0))
+  (.leaf (key_1)))
+  (.node 3 (.leaf (key_2))
+  (.leaf (key_3))))
+def kT : Tab Nat :=
+  (.node 2 (.node 1 (.leaf (3))
+  (.leaf (3)))
+  (.node 3 (.leaf (4))
+  (.leaf (1))))
+abbrev kR (k : Nat) : Nat := kT.get k
+
+section
+variable {V : Type}
+/-- An unconditional site that passes the dummy argument (reads, calls without data). -/
+def rdSF (V : Type) (ops : Ops V) (E : EqC V) (x : V) : SF V := (fun _ => true, fun _ => ops.z)
+end
+
+def sf_0 : Tab ((V : Type) → Ops V → EqC V → V → SF V) :=
+  (.node 1 (.leaf (rdSF))
+  (.node 2 (.leaf (rdSF))
+  (.leaf (fun V (ops : Ops V) (E : EqC V) (x : V) => ((fun ρ => true, fun ρ => ops.f 0 (ρ 1)) : SF V)))))
+def sf_1 : Tab ((V : Type) → Ops V → EqC V → V → SF V) :=
+  (.node 1 (.leaf (rdSF))
+  (.node 2 (.leaf (rdSF))
+  (.leaf (fun V (ops : Ops V) (E : EqC V) (x : V) => ((fun ρ => true, fun ρ => ops.f 1 (ρ 0)) : SF V)))))
+def sf_2 : Tab ((V : Type) → Ops V → EqC V → V → SF V) :=
+  (.node 2 (.node 1 (.leaf (rdSF))
+  (.leaf (rdSF)))
+  (.node 3 (.leaf (fun V (ops : Ops V) (E : EqC V) (x : V) => ((fun ρ => true, fun ρ => ops.f 2 (ρ 0)) : SF V)))
+  (.leaf (fun V (ops : Ops V) (E : EqC V) (x : V) => ((fun ρ => true, fun ρ => ops.f 3 (ρ 1)) : SF V)))))
+def sf_3 : Tab ((V : Type) → Ops V → EqC V → V → SF V) :=
+  (.leaf (fun V (ops : Ops V) (E : EqC V) (x : V) => ((fun ρ => true, fun ρ => ops.k 0) : SF V)))
+def sfT : Tab (Tab ((V : Type) → Ops V → EqC V → V → SF V)) :=
+  (.node 2 (.node 1 (.leaf (sf_0))
+  (.leaf (sf_1)))
+  (.node 3 (.leaf (sf_2))
+  (.leaf (sf_3))))
+
+section
+variable {V : Type}
+/-- Step `k`'s sites at argument `x` (a method's argument; rules pass `z`). -/
+def siteS (ops : Ops V) (E : EqC V) (k : Nat) (x : V) : Nat → Site I (fun j => (CI j).M) V :=
+  mkSite (keyT.get k).get (fun i => (sfT.get k).get i V ops E x)
+abbrev siteR (ops : Ops V) (E : EqC V) (k : Nat) : Nat → Site I (fun j => (CI j).M) V := siteS ops E k ops.z
+end
+
+/-- Each step's result: its explicit guard, read at its position (run-time check rules: `some z`);
+    a method returns its result expression. -/
+def resT : Tab ((V : Type) → Ops V → EqC V → V → (Nat → V) → Option V) :=
+  (.node 2 (.node 1 (.leaf (fun V (ops : Ops V) (E : EqC V) (x : V) (ρ : Nat → V) => bif ops.g 0 (ρ 0) then some (ops.z) else none))
+  (.leaf (fun V (ops : Ops V) (E : EqC V) (x : V) (ρ : Nat → V) => bif ops.g 1 (ops.z) then some (ops.z) else none)))
+  (.node 3 (.leaf (fun V (ops : Ops V) (E : EqC V) (x : V) (ρ : Nat → V) => bif ops.g 2 (ρ 1) then some (ops.z) else none))
+  (.leaf (fun V (ops : Ops V) (E : EqC V) (x : V) (ρ : Nat → V) => bif ops.g 3 (ops.z) then some (ops.z) else none))))
+/-! ## The hardware: guards, firing, run-time checks -/
+
+def alwaysRdyB (p : Σ j : I, (CI j).M) : Bool := (CI p.1).ann.alwaysRdy p.2
+
+section
+variable {V : Type}
+/-- The ready signals of a rule's guarded calls, ANDed into its CAN_FIRE (calls are unconditional). -/
+@[irreducible] def RD (oc : OC V) (k : Nat) : Bool :=
+  (List.range' 0 (kR k)).all (fun i => alwaysRdyB ((keyT.get k).get i) || (oc ((keyT.get k).get i).1).rdy ((keyT.get k).get i).2)
+
+def G_0 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := ops.g 0 ((oc (iSyn1 0)).ret (MkPair.mM 0))
+def G_1 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := ops.g 1 (ops.z)
+def G_2 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := ops.g 2 ((oc (iReg 0)).ret Reg.read)
+def G_3 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := ops.g 3 (ops.z)
+def bTrue (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := true
+def WFd_0 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := (RD oc 0 && G_0 V ops E oc) && bTrue V ops E oc
+def WFd_1 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := (RD oc 1 && G_1 V ops E oc) && bTrue V ops E oc
+def WFd_2 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := (RD oc 2 && G_2 V ops E oc) && bTrue V ops E oc
+def WFd_3 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := (RD oc 3 && G_3 V ops E oc) && bTrue V ops E oc
+end
+
+/-- bsc's `mutually_exclusive` groups whose checks are suffixes (`SufAsm`), in bsc's order. -/
+def grpT : Tab (List Nat) :=
+  (.leaf ([]))
+section
+variable {V : Type}
+
+end
+
+def gT : Tab ((V : Type) → Ops V → EqC V → OC V → Bool) :=
+  (.node 2 (.node 1 (.leaf (G_0))
+  (.leaf (G_1)))
+  (.node 3 (.leaf (G_2))
+  (.leaf (G_3))))
+def bT : Tab ((V : Type) → Ops V → EqC V → OC V → Bool) :=
+  (.node 2 (.node 1 (.leaf (bTrue))
+  (.leaf (bTrue)))
+  (.node 3 (.leaf (bTrue))
+  (.leaf (bTrue))))
+def chkHead : Tab Nat :=
+  (.leaf (0))
+def chkLst : Tab (List Nat) :=
+  (.leaf ([]))
+abbrev nC : Nat := 0
+abbrev nG : Nat := 0
+def dAT : Tab Nat :=
+  (.leaf (0))
+def dBT : Tab Nat :=
+  (.leaf (0))
+abbrev nD : Nat := 0
+
+section
+variable {V : Type}
+/-- CAN_FIRE: the guarded calls' ready signals and the step's guard. -/
+def CF (ops : Ops V) (E : EqC V) (oc : OC V) (k : Nat) : Bool := RD oc k && (gT.get k) V ops E oc
+/-- WILL_FIRE: CAN_FIRE and not blocked by a more urgent rule (a method's is its CAN_FIRE). -/
+def WF (ops : Ops V) (E : EqC V) (oc : OC V) (k : Nat) : Bool := CF ops E oc k && (bT.get k) V ops E oc
+def fire (ops : Ops V) (E : EqC V) : OC V → Wires Empty V → Fin nR → Bool := fun oc _ r => WF ops E oc r.val
+def stepOn (ops : Ops V) (E : EqC V) (oc : OC V) : St → Bool
+  | .inl e => e.elim
+  | .inr r => WF ops E oc r.val
+/-- The module's assertions: bsc's run-time checks of `mutually_exclusive`, each `!(WF h && (WF y || …))`
+    exactly as bsc's line (one rule on its first side), a group's checks as one `SufAsm`. -/
+def asmP (ops : Ops V) (E : EqC V) (oc : OC V) : Prop :=
+  (∀ g, Nat.blt g nG = true → SufAsm (WF ops E oc) (grpT.get g)) ∧
+  ∀ c, Nat.blt c nC = true → (WF ops E oc (chkHead.get c) && orL ((chkLst.get c).map (WF ops E oc))) = false
+theorem cf_of_wf {ops : Ops V} {E : EqC V} {oc : OC V} {k : Nat} (h : WF ops E oc k = true) : CF ops E oc k = true :=
+  ((Bool.and_eq_true _ _).mp h).1
+theorem rd_of_cf {ops : Ops V} {E : EqC V} {oc : OC V} {k : Nat} (h : CF ops E oc k = true) : RD oc k = true :=
+  ((Bool.and_eq_true _ _).mp h).1
+theorem g_of_cf {ops : Ops V} {E : EqC V} {oc : OC V} {k : Nat} (h : CF ops E oc k = true) : (gT.get k) V ops E oc = true :=
+  ((Bool.and_eq_true _ _).mp h).2
+
+end
+
+/-! ## The hardware: per-port definitions, per-kind arm tables -/
+
+section
+variable {V : Type}
+
+def en_reg_0_write (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Bool := orL [WF ops E oc 2]
+def arg_reg_0_write (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : V := ops.f 3 ((oc (iReg 0)).ret Reg.read)
+def en_reg_1_write (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Bool := orL [WF ops E oc 0]
+def arg_reg_1_write (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : V := ops.f 0 ((oc (iReg 1)).ret Reg.read)
+def en_syn0_0_incr (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Bool := orL [WF ops E oc 3]
+def arg_syn0_0_incr (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : V := ops.k 0
+def en_syn0_1_incr (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Bool := orL [WF ops E oc 2]
+def arg_syn0_1_incr (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : V := ops.f 2 ((oc (iSyn0 0)).ret (MkCounter.mM 0))
+def en_syn1_0_copy (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Bool := orL [WF ops E oc 1]
+def en_syn1_0_put (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Bool := orL [WF ops E oc 1]
+def arg_syn1_0_put (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : V := ops.f 1 ((oc (iReg 0)).ret Reg.read)
+end
+
+def arm_reg_0 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Wires (KI .reg).M V :=
+  regW (en_reg_0_write ops E oc w) (arg_reg_0_write ops E oc w) ops.z
+def arm_reg_1 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Wires (KI .reg).M V :=
+  regW (en_reg_1_write ops E oc w) (arg_reg_1_write ops E oc w) ops.z
+def arm_syn0_0 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Wires (KI .syn0).M V :=
+  finW (n := MkCounter.nM) (.node 1 (.leaf (false))
+  (.leaf (en_syn0_0_incr ops E oc w)))
+  (.node 1 (.leaf (ops.z))
+  (.leaf (arg_syn0_0_incr ops E oc w)))
+def arm_syn0_1 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Wires (KI .syn0).M V :=
+  finW (n := MkCounter.nM) (.node 1 (.leaf (false))
+  (.leaf (en_syn0_1_incr ops E oc w)))
+  (.node 1 (.leaf (ops.z))
+  (.leaf (arg_syn0_1_incr ops E oc w)))
+def arm_syn1_0 (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : Wires (KI .syn1).M V :=
+  finW (n := MkPair.nM) (.node 1 (.leaf (false))
+  (.node 2 (.leaf (en_syn1_0_copy ops E oc w))
+  (.leaf (en_syn1_0_put ops E oc w))))
+  (.node 1 (.leaf (ops.z))
+  (.node 2 (.leaf (ops.z))
+  (.leaf (arg_syn1_0_put ops E oc w))))
+def arms_reg : Tab ((V : Type) → Ops V → EqC V → OC V → Wires Empty V → Wires (KI .reg).M V) :=
+  (.node 1 (.leaf (arm_reg_0))
+  (.leaf (arm_reg_1)))
+def arms_syn0 : Tab ((V : Type) → Ops V → EqC V → OC V → Wires Empty V → Wires (KI .syn0).M V) :=
+  (.node 1 (.leaf (arm_syn0_0))
+  (.leaf (arm_syn0_1)))
+def arms_syn1 : Tab ((V : Type) → Ops V → EqC V → OC V → Wires Empty V → Wires (KI .syn1).M V) :=
+  (.leaf (arm_syn1_0))
+section
+variable {V : Type}
+def arms : (κ : Kind) → Tab ((V : Type) → Ops V → EqC V → OC V → Wires Empty V → Wires (KI κ).M V)
+  | .reg => arms_reg
+  | .syn0 => arms_syn0
+  | .syn1 => arms_syn1
+
+/-- The parent's combinational logic: children through the arm tables; a method's RDY is its
+    CAN_FIRE, its result the result expression. -/
+def comb (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires Empty V) : ((j : I) → Wires (CI j).M V) × Outs Empty V :=
+  (fun j => (arms j.1).get j.2.val V ops E oc w, ⟨fun e => e.elim, fun e => e.elim⟩)
+/-- The parallel muxes' selectors are one-hot. -/
+def onehotP (ops : Ops V) (E : EqC V) (oc : OC V) : Prop :=
+  True
+
+/-- **The family**: each step's program is `runSites v … v` of its own skipped values `v`. -/
+abbrev F (ops : Ops V) (E : EqC V) : ParentU V where
+  I := I
+  decI := inferInstance
+  kids := allKids [.reg, .syn0, .syn1] nk
+  kids_nodup := allKids_nodup nk _ (by decide)
+  kids_all := mem_allKids _ nk (fun κ => by cases κ <;> simp)
+  CI := CI
+  X := X
+  PR := Fin nR
+  body := fun m _ _ => m.elim
+  rbody := fun r v => runSites v ((resT.get r.val) V ops E ops.z) (sitesF (siteR ops E r.val) (kR r.val)) 0 v
+  comb := comb ops E
+  asm := fun oc _ => asmP ops E oc
+  onehot := fun oc _ => onehotP ops E oc
+  toB := ops.toB
+
+/-- The parent at skipped values `u` (step `s` sees only `u s`). -/
+abbrev P (ops : Ops V) (E : EqC V) (u : St → Nat → V) : Parent V := (F ops E).at u
+/-- Each step's program takes its skipped values only through `runSites`; its sites and result
+    do not receive them (design §18 trust point 7, checked by `rfl`). -/
+theorem F_sites (ops : Ops V) (E : EqC V) : F ops E = withRuleSites (F ops E)
+    (fun r => sitesF (siteR ops E r.val) (kR r.val)) (fun r => (resT.get r.val) V ops E ops.z) := rfl
+end
+
+section
+variable {V : Type}
+/-- bsc's solver verdicts, hypotheses as today: disjointness (CAN_FIRE of each pair); the
+    use-level readiness facts over R_seq, each escape's dynamic exclusion and the callers'
+    exclusivity at a mux, as confirmed by the solver over schedlean's conditions (in groups `gK`). -/
+structure Hyps (ops : Ops V) (E : EqC V) : Prop where
+  disj : ∀ (oc : OC V) (d : Nat), Nat.blt d nD = true → (CF ops E oc (dAT.get d) && CF ops E oc (dBT.get d)) = false
+
+theorem meX (ops : Ops V) (E : EqC V) (oc : OC V) (hA : asmP ops E oc) (c p : Nat) {y : Nat}
+    (hc : Nat.blt c nC = true) (hp : (chkLst.get c)[p]? = some y)
+    (h1 : WF ops E oc (chkHead.get c) = true) (h2 : WF ops E oc y = true) : False :=
+  me_excl (hA.2 c hc) h1 (p := p) (by rw [List.getElem?_map, hp]; rfl) h2
+theorem meG (ops : Ops V) (E : EqC V) (oc : OC V) (hA : asmP ops E oc) (g a b : Nat) {x y : Nat}
+    (hg : Nat.blt g nG = true) (hx : (grpT.get g)[a]? = some x) (hy : (grpT.get g)[b]? = some y)
+    (hab : Nat.blt a b = true) (h1 : WF ops E oc x = true) (h2 : WF ops E oc y = true) : False :=
+  sufAsm_excl (hA.1 g hg) hx hy hab h1 h2
+theorem dX (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (oc : OC V) (d : Nat) (hd : Nat.blt d nD = true)
+    (h1 : WF ops E oc (dAT.get d) = true) (h2 : WF ops E oc (dBT.get d) = true) : False :=
+  disj_excl (hy.disj oc d hd) (cf_of_wf h1) (cf_of_wf h2)
+end
+
+/-! ## Site facts: reads before, dummy arguments -/
+
+def fxT_syn0 : Tab Bool :=
+  (.node 1 (.leaf (true))
+  (.leaf (false)))
+def fxT_syn1 : Tab Bool :=
+  (.node 1 (.leaf (true))
+  (.node 2 (.leaf (false))
+  (.leaf (false))))
+def fxF (κ c : Nat) : Bool := match κ, c with
+  | 0, 0 => true
+  | 1, c => fxT_syn0.get c
+  | 2, c => fxT_syn1.get c
+  | _, _ => false
+def kindN : Kind → Nat
+  | .reg => 0
+  | .syn0 => 1
+  | .syn1 => 2
+def codeK : (κ : Kind) → (KI κ).M → Nat
+
+  | .reg => fun m => match m with | .rd _ => 0 | .wr _ => 1
+  | .syn0 => fun m => m.val
+  | .syn1 => fun m => m.val
+def npK : Kind → Nat
+  | .reg => 2
+  | .syn0 => 2
+  | .syn1 => 3
+def offK : Kind → Nat
+  | .reg => 0
+  | .syn0 => 4
+  | .syn1 => 8
+def baseOf (j : I) : Nat := offK j.1 + j.2.val * npK j.1
+def fxP (p : Σ j : I, (CI j).M) : Bool := fxF (kindN p.1.1) (codeK p.1.1 p.2)
+
+section
+variable {V : Type}
+/-- Site `i` of step `k`: it reads only earlier sites, and a flagged port's call carries `z`. -/
+def SQ (ops : Ops V) (E : EqC V) (k i : Nat) (F : (V : Type) → Ops V → EqC V → V → SF V) : Prop :=
+  ∀ x : V, SFReads i (F V ops E x) ∧ (fxP ((keyT.get k).get i) = true → ∀ ρ, (F V ops E x).2 ρ = ops.z)
+def SQT (ops : Ops V) (E : EqC V) (k : Nat) (t : Tab ((V : Type) → Ops V → EqC V → V → SF V)) : Prop :=
+  Tab.AllR (SQ ops E k) t 0 (kT.get k)
+
+theorem sq_0 (ops : Ops V) (E : EqC V) : SQT ops E 0 sf_0 :=
+  ⟨Tab.one (fun x => ⟨sfr_const _ _, fun _ _ => rfl⟩),
+  ⟨Tab.one (fun x => ⟨sfr_const _ _, fun _ _ => rfl⟩),
+  Tab.one (fun x => ⟨fun ρ ρ' h => ⟨rfl, congrArg (ops.f 0) (h 1 (by decide))⟩, fun h => absurd h (by decide)⟩)⟩⟩
+theorem sq_1 (ops : Ops V) (E : EqC V) : SQT ops E 1 sf_1 :=
+  ⟨Tab.one (fun x => ⟨sfr_const _ _, fun _ _ => rfl⟩),
+  ⟨Tab.one (fun x => ⟨sfr_const _ _, fun _ _ => rfl⟩),
+  Tab.one (fun x => ⟨fun ρ ρ' h => ⟨rfl, congrArg (ops.f 1) (h 0 (by decide))⟩, fun h => absurd h (by decide)⟩)⟩⟩
+theorem sq_2 (ops : Ops V) (E : EqC V) : SQT ops E 2 sf_2 :=
+  ⟨⟨Tab.one (fun x => ⟨sfr_const _ _, fun _ _ => rfl⟩),
+  Tab.one (fun x => ⟨sfr_const _ _, fun _ _ => rfl⟩)⟩,
+  ⟨Tab.one (fun x => ⟨fun ρ ρ' h => ⟨rfl, congrArg (ops.f 2) (h 0 (by decide))⟩, fun h => absurd h (by decide)⟩),
+  Tab.one (fun x => ⟨fun ρ ρ' h => ⟨rfl, congrArg (ops.f 3) (h 1 (by decide))⟩, fun h => absurd h (by decide)⟩)⟩⟩
+theorem sq_3 (ops : Ops V) (E : EqC V) : SQT ops E 3 sf_3 :=
+  Tab.one (fun x => ⟨fun ρ ρ' h => ⟨rfl, rfl⟩, fun h => absurd h (by decide)⟩)
+theorem sqT (ops : Ops V) (E : EqC V) : Tab.AllR (SQT ops E) sfT 0 nS :=
+  ⟨⟨Tab.one (sq_0 ops E),
+  Tab.one (sq_1 ops E)⟩,
+  ⟨Tab.one (sq_2 ops E),
+  Tab.one (sq_3 ops E)⟩⟩
+theorem sqR (ops : Ops V) (E : EqC V) (k : Nat) (hk : k < nS) : Tab.AllR (SQ ops E k) (sfT.get k) 0 (kR k) :=
+  Tab.get_allR _ 0 nS (sqT ops E) k (Nat.zero_le _) hk
+theorem hOK (ops : Ops V) (E : EqC V) (k : Nat) (hk : k < nS) (x : V) : ∀ i, i < kR k → ReadsBefore i (siteS ops E k x i) :=
+  fun i hi => ((Tab.get_allR _ 0 (kR k) (sqR ops E k hk) i (Nat.zero_le _) hi) x).1
+
+/-- The environment of step `k`'s sites at argument `x`, the hardware's values. -/
+abbrev envS (ops : Ops V) (E : EqC V) (v : Nat → V) (oc : OC V) (k : Nat) (x : V) : Nat → V :=
+  envHw v oc (sitesF (siteS ops E k x) (kR k)) 0 v
+abbrev envR (ops : Ops V) (E : EqC V) (v : Nat → V) (oc : OC V) (k : Nat) : Nat → V := envS ops E v oc k ops.z
+
+theorem trR_eq (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (r : Fin nR) :
+    trR (P ops E u) oc r = (callsOf (envR ops E (u (.inr r)) oc r.val) (sitesF (siteR ops E r.val) (kR r.val)),
+      (resT.get r.val) V ops E ops.z (envR ops E (u (.inr r)) oc r.val)) :=
+  trace_fn (u (.inr r)) oc _ (siteR ops E r.val) (kR r.val) (hOK ops E r.val (rlt r) ops.z)
+theorem trS_eq (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V) (r : Fin nR) :
+    trS (P ops E u) oc w (.inr r) = callsOf (envR ops E (u (.inr r)) oc r.val) (sitesF (siteR ops E r.val) (kR r.val)) :=
+  congrArg Prod.fst (trR_eq ops E u oc r)
+theorem envS_at (ops : Ops V) (E : EqC V) (v : Nat → V) (oc : OC V) (k : Nat) (hk : k < nS) (x : V) (i : Nat) (hi : i < kR k) :
+    envS ops E v oc k x i = if (siteS ops E k x i).cond (envS ops E v oc k x) then (oc (siteS ops E k x i).j).ret (siteS ops E k x i).m else v i :=
+  envHw_fn v oc (siteS ops E k x) (kR k) (hOK ops E k hk x) i hi
+theorem envR_at (ops : Ops V) (E : EqC V) (v : Nat → V) (oc : OC V) (k : Nat) (hk : k < nS) (i : Nat) (hi : i < kR k) :
+    envR ops E v oc k i = if (siteR ops E k i).cond (envR ops E v oc k) then (oc (siteR ops E k i).j).ret (siteR ops E k i).m else v i :=
+  envS_at ops E v oc k hk ops.z i hi
+end
+
+section
+variable {V : Type}
+
+theorem ev_0_0 (ops : Ops V) (E : EqC V) (v : Nat → V) (oc : OC V) (x : V) : envS ops E v oc 0 x 0 = (oc (iSyn1 0)).ret (MkPair.mM 0) :=
+  (envS_at ops E v oc 0 (by decide) x 0 (by decide)).trans rfl
+theorem ev_0_1 (ops : Ops V) (E : EqC V) (v : Nat → V) (oc : OC V) (x : V) : envS ops E v oc 0 x 1 = (oc (iReg 1)).ret Reg.read :=
+  (envS_at ops E v oc 0 (by decide) x 1 (by decide)).trans rfl
+theorem ev_1_0 (ops : Ops V) (E : EqC V) (v : Nat → V) (oc : OC V) (x : V) : envS ops E v oc 1 x 0 = (oc (iReg 0)).ret Reg.read :=
+  (envS_at ops E v oc 1 (by decide) x 0 (by decide)).trans rfl
+theorem ev_2_0 (ops : Ops V) (E : EqC V) (v : Nat → V) (oc : OC V) (x : V) : envS ops E v oc 2 x 0 = (oc (iSyn0 0)).ret (MkCounter.mM 0) :=
+  (envS_at ops E v oc 2 (by decide) x 0 (by decide)).trans rfl
+theorem ev_2_1 (ops : Ops V) (E : EqC V) (v : Nat → V) (oc : OC V) (x : V) : envS ops E v oc 2 x 1 = (oc (iReg 0)).ret Reg.read :=
+  (envS_at ops E v oc 2 (by decide) x 1 (by decide)).trans rfl
+end
+
+section
+variable {V : Type}
+theorem res_some (z : V) {b : Bool} (h : b = true) : (bif b then some z else none).isSome = true := by
+  rw [h]; rfl
+theorem res_eq {b : Bool} {r r' : V} (hb : b = true) (hr : r = r') : (bif b then some r else none) = some r' := by
+  subst hb hr; rfl
+/-- A step's run-time precondition: a rule fires, a method can fire. -/
+def PRE (ops : Ops V) (E : EqC V) (oc : OC V) (k : Nat) : Bool := bif Nat.blt k nR then WF ops E oc k else CF ops E oc k
+theorem pre_r {ops : Ops V} {E : EqC V} {oc : OC V} {r : Fin nR} (h : WF ops E oc r.val = true) : PRE ops E oc r.val = true := by
+  unfold PRE; rw [show Nat.blt r.val nR = true from Nat.blt_eq.mpr r.isLt]; exact h
+/-- Rule `k`'s result is defined when it fires (its guard read at its position). -/
+def RQ (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (k : Nat) (g : (V : Type) → Ops V → EqC V → OC V → Bool) : Prop :=
+  ∀ (v : Nat → V) (oc : OC V), PRE ops E oc k = true → ((resT.get k) V ops E ops.z (envR ops E v oc k)).isSome = true
+
+theorem rqT (ops : Ops V) (E : EqC V) (hy : Hyps ops E) : Tab.AllR (RQ ops E hy) gT 0 nS :=
+  ⟨⟨Tab.one ((fun v oc hf => res_some _ ((congrArg (ops.g 0) (ev_0_0 ops E v oc ops.z)).trans (g_of_cf (cf_of_wf hf))) : RQ ops E hy 0 G_0)),
+  Tab.one ((fun v oc hf => res_some _ ((congrArg (ops.g 1) (rfl)).trans (g_of_cf (cf_of_wf hf))) : RQ ops E hy 1 G_1))⟩,
+  ⟨Tab.one ((fun v oc hf => res_some _ ((congrArg (ops.g 2) (ev_2_1 ops E v oc ops.z)).trans (g_of_cf (cf_of_wf hf))) : RQ ops E hy 2 G_2)),
+  Tab.one ((fun v oc hf => res_some _ ((congrArg (ops.g 3) (rfl)).trans (g_of_cf (cf_of_wf hf))) : RQ ops E hy 3 G_3))⟩⟩
+theorem resR_ok (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V) (r : Fin nR)
+    (hf : fire ops E oc w r = true) : (trR (P ops E u) oc r).2.isSome = true := by
+  rw [trR_eq]
+  exact Tab.get_allR _ 0 nS (rqT ops E hy) r.val (Nat.zero_le _) (rlt r) (u (.inr r)) oc (pre_r hf)
+
+end
+
+/-! ## Each step's calls at every skipped value (`CertU.trU`) -/
+
+section
+variable {V : Type}
+/-- Site `i` of step `k`, when the step may run, agrees at any two skipped values of its step:
+    its condition, and its argument where taken. -/
+def HQ (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (k i : Nat) (F : (V : Type) → Ops V → EqC V → V → SF V) : Prop :=
+  ∀ (oc : OC V) (v v' : Nat → V) (x : V), PRE ops E oc k = true →
+    (F V ops E x).1 (envS ops E v oc k x) = (F V ops E x).1 (envS ops E v' oc k x) ∧
+    ((F V ops E x).1 (envS ops E v oc k x) = true → (F V ops E x).2 (envS ops E v oc k x) = (F V ops E x).2 (envS ops E v' oc k x))
+def HQT (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (k : Nat) (t : Tab ((V : Type) → Ops V → EqC V → V → SF V)) : Prop :=
+  Tab.AllR (HQ ops E hy k) t 0 (kT.get k)
+
+theorem hq_0 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) : HQT ops E hy 0 sf_0 :=
+  ⟨Tab.one (fun _ _ _ _ _ => ⟨rfl, fun _ => rfl⟩),
+  ⟨Tab.one (fun _ _ _ _ _ => ⟨rfl, fun _ => rfl⟩),
+  Tab.one (fun oc v v' x hf => ⟨rfl, fun _ => (congrArg (ops.f 0) (ev_0_1 ops E v oc x)).trans (congrArg (ops.f 0) (ev_0_1 ops E v' oc x)).symm⟩)⟩⟩
+theorem hq_1 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) : HQT ops E hy 1 sf_1 :=
+  ⟨Tab.one (fun _ _ _ _ _ => ⟨rfl, fun _ => rfl⟩),
+  ⟨Tab.one (fun _ _ _ _ _ => ⟨rfl, fun _ => rfl⟩),
+  Tab.one (fun oc v v' x hf => ⟨rfl, fun _ => (congrArg (ops.f 1) (ev_1_0 ops E v oc x)).trans (congrArg (ops.f 1) (ev_1_0 ops E v' oc x)).symm⟩)⟩⟩
+theorem hq_2 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) : HQT ops E hy 2 sf_2 :=
+  ⟨⟨Tab.one (fun _ _ _ _ _ => ⟨rfl, fun _ => rfl⟩),
+  Tab.one (fun _ _ _ _ _ => ⟨rfl, fun _ => rfl⟩)⟩,
+  ⟨Tab.one (fun oc v v' x hf => ⟨rfl, fun _ => (congrArg (ops.f 2) (ev_2_0 ops E v oc x)).trans (congrArg (ops.f 2) (ev_2_0 ops E v' oc x)).symm⟩),
+  Tab.one (fun oc v v' x hf => ⟨rfl, fun _ => (congrArg (ops.f 3) (ev_2_1 ops E v oc x)).trans (congrArg (ops.f 3) (ev_2_1 ops E v' oc x)).symm⟩)⟩⟩
+theorem hq_3 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) : HQT ops E hy 3 sf_3 :=
+  Tab.one (fun _ _ _ _ _ => ⟨rfl, fun _ => rfl⟩)
+theorem hqT (ops : Ops V) (E : EqC V) (hy : Hyps ops E) : Tab.AllR (HQT ops E hy) sfT 0 nS :=
+  ⟨⟨Tab.one (hq_0 ops E hy),
+  Tab.one (hq_1 ops E hy)⟩,
+  ⟨Tab.one (hq_2 ops E hy),
+  Tab.one (hq_3 ops E hy)⟩⟩
+/-- A step that may run makes the same calls at any two skipped values of its step. -/
+theorem trUS (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (oc : OC V) (k : Nat) (hk : k < nS) (v v' : Nat → V) (x : V)
+    (hf : PRE ops E oc k = true) :
+    callsOf (envS ops E v oc k x) (sitesF (siteS ops E k x) (kR k)) = callsOf (envS ops E v' oc k x) (sitesF (siteS ops E k x) (kR k)) :=
+  callsOf_fn_congr _ _ _ _ (fun i hi =>
+    Tab.get_allR _ 0 (kR k) (Tab.get_allR _ 0 nS (hqT ops E hy) k (Nat.zero_le _) hk) i (Nat.zero_le _) hi oc v v' x hf)
+end
+
+/-! ## Decided checks over closed tables -/
+
+/-- A check over each step's sites (steps without sites pass). -/
+theorem sitesB_spec (f : Nat → Nat → (Σ j : I, (CI j).M) → Bool)
+    (h : Tab.allB (fun k keys => Nat.beq (kT.get k) 0 || Tab.allB (f k) keys 0 (kT.get k)) keyT 0 nS = true)
+    (k : Nat) (hk : k < nS) : ∀ i, i < kR k → f k i ((keyT.get k).get i) = true := by
+  intro i hi
+  have h1 := Tab.allB_spec _ keyT 0 nS h k (Nat.zero_le _) hk
+  simp only [Bool.or_eq_true] at h1
+  rcases h1 with h1 | h1
+  · have := Nat.eq_of_beq_eq_true h1; simp only [kR] at hi; omega
+  · exact Tab.allB_spec _ _ 0 (kT.get k) h1 i (Nat.zero_le _) hi
+
+theorem chkAll : Tab.allB (fun k keys => Nat.beq (kT.get k) 0 ||
+    Tab.allB (fun i p => (idxT (usesAt p) k).contains i) keys 0 (kT.get k)) keyT 0 nS = true := by decide +kernel
+theorem hchkT (k : Nat) (hk : k < nS) : ∀ i, i < kR k → i ∈ idxT (usesAt ((keyT.get k).get i)) k := by
+  intro i hi
+  have h := sitesB_spec (fun k i p => (idxT (usesAt p) k).contains i) chkAll k hk i hi
+  simpa using h
+theorem hchk (r : Fin nR) : ∀ i, i < kR r.val → i ∈ idx (.inr r) ((keyT.get r.val).get i) :=
+  hchkT r.val (rlt r)
+
+section
+variable {V : Type}
+
+theorem onIff (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V) :
+    ∀ s, On (P ops E u) (fire ops E) oc w s ↔ stepOn ops E oc s = true := by
+  intro s; cases s with
+  | inl e => exact e.elim
+  | inr r => exact Iff.rfl
+
+/-- A rule's site on a port: the rule calls the port when the site's condition holds. -/
+theorem cR (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V) (r : Fin nR) (j : I) (cm : (CI j).M)
+    (i0 : Nat) (hidx : idx (.inr r) ⟨j, cm⟩ = [i0]) (hi0 : Nat.blt i0 (kR r.val) = true)
+    (hk0 : (keyT.get r.val).get i0 = ⟨j, cm⟩) (hc : (siteR ops E r.val i0).cond (envR ops E (u (.inr r)) oc r.val) = true) :
+    Calls (P ops E u) (trS (P ops E u) oc w (.inr r)) j cm := by
+  show ∃ x, (cm, x) ∈ proj j (trS (P ops E u) oc w (.inr r))
+  rw [trS_eq]
+  exact (calls_one _ (siteR ops E r.val) (kR r.val) (keyT.get r.val).get (fun _ => rfl) (idx (.inr r)) (hchk r) j cm i0
+    hidx hi0 hk0).mpr hc
+theorem cRk (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V) (r : Fin nR) (κ : Kind) (i : Nat)
+    (hi : i < nk κ) (cm : (KI κ).M) (i0 : Nat) (hidx : idxT (((usesK κ).get i).uses cm) r.val = [i0])
+    (hi0 : Nat.blt i0 (kR r.val) = true) (hk0 : (keyT.get r.val).get i0 = ⟨⟨κ, ⟨i, hi⟩⟩, cm⟩)
+    (hc : (siteR ops E r.val i0).cond (envR ops E (u (.inr r)) oc r.val) = true) :
+    Calls (P ops E u) (trS (P ops E u) oc w (.inr r)) ⟨κ, ⟨i, hi⟩⟩ cm :=
+  cR ops E u oc w r ⟨κ, ⟨i, hi⟩⟩ cm i0 hidx hi0 hk0 hc
+theorem aR (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V) (r : Fin nR) (j : I) (cm : (CI j).M)
+    (i0 : Nat) (hidx : idx (.inr r) ⟨j, cm⟩ = [i0]) (v : V)
+    (hv : (siteR ops E r.val i0).cond (envR ops E (u (.inr r)) oc r.val) = true → (siteR ops E r.val i0).arg (envR ops E (u (.inr r)) oc r.val) = v)
+    (x : V) (hx : (cm, x) ∈ proj j (trS (P ops E u) oc w (.inr r))) : v = x := by
+  rw [trS_eq] at hx
+  exact arg_one _ (siteR ops E r.val) (kR r.val) (keyT.get r.val).get (fun _ => rfl) (idx (.inr r)) (hchk r) j cm i0 hidx v hv x hx
+theorem aRk (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V) (r : Fin nR) (κ : Kind) (i : Nat)
+    (hi : i < nk κ) (cm : (KI κ).M) (i0 : Nat) (hidx : idxT (((usesK κ).get i).uses cm) r.val = [i0]) (v : V)
+    (hv : (siteR ops E r.val i0).cond (envR ops E (u (.inr r)) oc r.val) = true → (siteR ops E r.val i0).arg (envR ops E (u (.inr r)) oc r.val) = v)
+    (x : V) (hx : (cm, x) ∈ proj (⟨κ, ⟨i, hi⟩⟩ : I) (trS (P ops E u) oc w (.inr r))) : v = x :=
+  aR ops E u oc w r ⟨κ, ⟨i, hi⟩⟩ cm i0 hidx v hv x hx
+theorem cRkIff (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V) (r : Fin nR) (κ : Kind)
+    (i : Nat) (hi : i < nk κ) (cm : (KI κ).M) (i0 : Nat) (hidx : idxT (((usesK κ).get i).uses cm) r.val = [i0])
+    (hi0 : Nat.blt i0 (kR r.val) = true) (hk0 : (keyT.get r.val).get i0 = ⟨⟨κ, ⟨i, hi⟩⟩, cm⟩) :
+    Calls (P ops E u) (trS (P ops E u) oc w (.inr r)) ⟨κ, ⟨i, hi⟩⟩ cm ↔
+      (siteR ops E r.val i0).cond (envR ops E (u (.inr r)) oc r.val) = true := by
+  show (∃ x, (cm, x) ∈ proj (⟨κ, ⟨i, hi⟩⟩ : I) (trS (P ops E u) oc w (.inr r))) ↔ _
+  rw [trS_eq]
+  exact calls_one _ (siteR ops E r.val) (kR r.val) (keyT.get r.val).get (fun _ => rfl) (idx (.inr r)) (hchk r)
+    (⟨κ, ⟨i, hi⟩⟩ : I) cm i0 hidx hi0 hk0
+/-- A rule's call on a port was made: its site's condition held. -/
+theorem aRkC (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V) (r : Fin nR) (κ : Kind) (i : Nat)
+    (hi : i < nk κ) (cm : (KI κ).M) (i0 : Nat) (hidx : idxT (((usesK κ).get i).uses cm) r.val = [i0])
+    (x : V) (hx : (cm, x) ∈ proj (⟨κ, ⟨i, hi⟩⟩ : I) (trS (P ops E u) oc w (.inr r))) :
+    (siteR ops E r.val i0).cond (envR ops E (u (.inr r)) oc r.val) = true := by
+  rw [trS_eq] at hx
+  obtain ⟨i', hi', hc, -⟩ := mem_proj_fn _ (siteR ops E r.val) (kR r.val) (keyT.get r.val).get (fun _ => rfl) (idx (.inr r))
+    (hchk r) (⟨κ, ⟨i, hi⟩⟩ : I) cm x hx
+  have e : idx (.inr r) ⟨⟨κ, ⟨i, hi⟩⟩, cm⟩ = [i0] := hidx
+  rw [e, List.mem_singleton] at hi'
+  subst hi'
+  exact hc
+end
+
+/-! ## The muxes' one-hot chains, from the exclusions -/
+
+section
+variable {V : Type}
+
+/-- A run-time check excludes its head with every rule of its list. -/
+theorem chkC (ops : Ops V) (E : EqC V) (oc : OC V) (hA : asmP ops E oc) (c : Nat) (hc : Nat.blt c nC = true) :
+    ∀ y ∈ chkLst.get c, WF ops E oc (chkHead.get c) = true → WF ops E oc y = true → False :=
+  forall_of_check (hA.2 c hc)
+
+end
+
+/-! ## The scan: footprints, kind tables, exception masks, escapes -/
+
+def fpRT : Tab (List Ent) :=
+  (.node 2 (.node 1 (.leaf ([(8, 2, 0), (2, 0, 0), (2, 0, 1)]))
+  (.leaf ([(0, 0, 0), (8, 2, 1), (8, 2, 2)])))
+  (.node 3 (.leaf ([(4, 1, 0), (0, 0, 0), (6, 1, 1), (0, 0, 1)]))
+  (.leaf ([(4, 1, 1)]))))
+def ktT : Tab (Tab KC) :=
+  (.node 1 (.leaf ((.node 1 (.leaf (⟨[1], [], [1], []⟩))
+  (.leaf (⟨[], [0], [1], [0, 1]⟩)))))
+  (.node 2 (.leaf ((.node 1 (.leaf (⟨[1], [], [1], []⟩))
+  (.leaf (⟨[1], [0, 1], [1], [0, 1]⟩)))))
+  (.leaf ((.node 1 (.leaf (⟨[1, 2], [], [1, 2], []⟩))
+  (.node 2 (.leaf (⟨[1, 2], [0, 1], [1, 2], [0, 1]⟩))
+  (.leaf (⟨[2], [0, 1, 2], [2], [0, 1, 2]⟩))))))))
+def exRT : Tab Nat :=
+  (.node 2 (.node 1 (.leaf (0))
+  (.leaf (0)))
+  (.node 3 (.leaf (0))
+  (.leaf (0))))
+def escRT : Tab Nat :=
+  (.node 2 (.node 1 (.leaf (0))
+  (.leaf (0)))
+  (.node 3 (.leaf (0))
+  (.leaf (0))))
+def rcT : Tab Nat :=
+  (.node 2 (.node 1 (.leaf (0))
+  (.leaf (0)))
+  (.node 3 (.leaf (0))
+  (.leaf (0))))
+def rinvT : Tab Nat :=
+  (.leaf (0))
+def memT : Tab (List Nat) :=
+  (.leaf ([]))
+def gidT : Tab (List Nat) :=
+  (.node 2 (.node 1 (.leaf ([]))
+  (.leaf ([])))
+  (.node 3 (.leaf ([]))
+  (.leaf ([]))))
+def cmT : Tab Nat :=
+  (.leaf (0))
+abbrev ng : Nat := 0
+def D : Design where
+  nM := 0
+  nR := nR
+  d := 4
+  fpM := .leaf []
+  fpR := fpRT
+  kt := ktT
+  nfI := .leaf 0
+  nfO := .leaf 0
+  ngI := .leaf 0
+  ngO := .leaf 0
+  h3ok := .leaf 0
+  exM := .leaf 0
+  exR := exRT
+  exMR := .leaf 0
+  escR := escRT
+  rc := fun i => rcT.get i
+
+/-! Gate bounds (design.md §11 item 6), each with this module's value (a table setting: the value used):
+  * uses in one scan segment (the module: uses of its largest step): at most 4096, this module 4
+  * slots in the state: at most 8192, this module 11
+  * rule codes: at most 4096, this module 1
+  * sites in one step: at most 4096, this module 4
+  * users of one port (mux members): at most 3296, this module 2
+  * members of one exception group: at most 3296, this module 0
+  * callers of one last-caller port: at most 512, this module 0
+  * escaped rule pairs: at most 64, this module 0
+  * dynamic facts of one escaped pair: at most 4096, this module 0
+  * facts of one module (escape, caller-exclusivity, readiness and invariance): at most 16384, this module 0
+  * fields of one fact group (Hyps and Unconfirmed in groups gK): at most 128, this module 0
+  * entries per table definition (C21): at most 128, setting used 128
+  * source characters per table definition (C21): at most 20000, setting used 20000
+  * users of a port listed entry by entry (en_list / en_lit threshold): at most 8, setting used 8
+  * users of one port proved pair by pair (a conditional user, or a module with methods): at most 64, this module 0
+-/
+theorem segZ : D.segLast 0 ST.init = true := by decide +kernel
+theorem scanOK : D.Ok := D.ok_of_chain [] segZ
+
+def chB (j : I) : Bool := false
+def posK : (κ : Kind) → (KI κ).M → Nat
+  | .reg => fun _ => 0
+  | .syn0 => fun _ => 0
+  | .syn1 => fun _ => 0
+
+def stT : Tab Nat :=
+  (.node 2 (.node 1 (.leaf (0))
+  (.leaf (0)))
+  (.node 3 (.leaf (0))
+  (.leaf (0))))
+def stF (g : Nat) : Nat := bif Nat.blt g nR then stT.get g else 0
+theorem stMono : Tab.allB (fun g x => Nat.ble x 0 && Nat.ble x (bif Nat.blt (g + 1) nR then stT.get (g + 1) else 0)) stT 0 nR = true := by decide +kernel
+theorem chainAll : Tab.allB (fun k keys =>
+    incB ((((List.range' 0 (kT.get k)).map keys.get).filter (fun p => chB p.1)).map (fun p => posK p.1.1 p.2)) &&
+    ((((List.range' 0 (kT.get k)).map keys.get).filter (fun p => chB p.1)).map (fun p => posK p.1.1 p.2)).all
+      (fun x => Nat.ble (bif Nat.blt k nR then stF k else 0) x && Nat.blt x (bif Nat.blt k nR then stF (k + 1) else 0))) keyT 0 nS = true := by decide +kernel
+/-- Chain intervals by the scan's step position (methods first, then rules by rank). -/
+def cloG (g : Nat) : Nat := if g < D.nM then 0 else stF (g - D.nM)
+def chiG (g : Nat) : Nat := if g < D.nM then 0 else stF (g - D.nM + 1)
+theorem cloG_r (r : Nat) : cloG (D.nM + r) = stF r := by
+  unfold cloG; rw [if_neg (Nat.not_lt.mpr (Nat.le_add_right _ _)), Nat.add_sub_cancel_left]
+theorem chiG_r (r : Nat) : chiG (D.nM + r) = stF (r + 1) := by
+  unfold chiG; rw [if_neg (Nat.not_lt.mpr (Nat.le_add_right _ _)), Nat.add_sub_cancel_left]
+theorem cmonoG (g1 g2 : Nat) (h : g1 < g2) : chiG g1 ≤ cloG g2 := by
+  have hm := mono_of_succ stF (stF_mono stT nR 0 stMono)
+  unfold chiG cloG
+  split <;> split
+  · exact Nat.le_refl _
+  · exact Nat.zero_le _
+  · omega
+  · exact hm _ _ (by omega)
+
+section
+variable {V : Type}
+def G (ops : Ops V) (E : EqC V) (u : St → Nat → V) : Glue (P ops E u) D where
+  mi := fun m => m.elim
+  ruleAt := rR
+  rk := fun r => r.val
+  base := baseOf
+  kind := fun j => kindN j.1
+  code := fun j m => codeK j.1 m
+  fx := fxF
+  z := ops.z
+  ch := chB
+  pos := fun j m => posK j.1 m
+  clo := cloG
+  chi := chiG
+end
+
+def entK (p : Σ j : I, (CI j).M) : Ent := (baseOf p.1, kindN p.1.1, codeK p.1.1 p.2)
+
+theorem fpAll : Tab.allB (fun k l => l == (List.range' 0 (kT.get k)).map (fun i => entK ((keyT.get k).get i))) fpRT 0 nR = true := by decide +kernel
+theorem hcm_ok : ∀ g, g < ng → cmT.get g = bits ((memT.get g).map D.rc) := fun _ h => absurd h (Nat.not_lt_zero _)
+theorem hg_ok : ∀ x, x < nR → ∀ g ∈ gidT.get x, g < ng ∧ (cmT.get g).testBit (D.rc x) = true := by
+  intro x hx g hg
+  have h := Tab.allB_spec (fun _ l => l.isEmpty) gidT 0 nR (by decide +kernel) x (Nat.zero_le _) hx
+  simp only [List.isEmpty_iff] at h
+  rw [h] at hg
+  simp at hg
+theorem hinj_ok : ∀ g, g < ng → ∀ x ∈ memT.get g, ∀ x1, x1 < D.nR → D.rc x1 = D.rc x → x1 = x := fun _ h => absurd h (Nat.not_lt_zero _)
+theorem ghT : Tab.allB (fun y n => Nat.beq n 0) exRT 0 nR = true := by decide +kernel
+theorem hT_ok : ∀ y, y < nR → Sub (exRT.get y) (orMask (gidT.get y) cmT.get) :=
+  fun y hy i h => by rw [Nat.eq_of_beq_eq_true (Tab.allB_spec _ exRT 0 nR ghT y (Nat.zero_le _) hy)] at h; simp at h
+theorem ports_reg : ∀ p : CRegM 1, p ∈ [Reg.read, Reg.write]
+  | .rd ⟨0, _⟩ => by simp
+  | .wr ⟨0, _⟩ => by simp
+theorem ports_syn0 : ∀ p : Fin MkCounter.nM, p ∈ List.finRange MkCounter.nM := portsU_syn0
+theorem ports_syn1 : ∀ p : Fin MkPair.nM, p ∈ List.finRange MkPair.nM := portsU_syn1
+def portsK : (κ : Kind) → List (KI κ).M
+  | .reg => [Reg.read, Reg.write]
+  | .syn0 => List.finRange MkCounter.nM
+  | .syn1 => List.finRange MkPair.nM
+def portsJ (j : I) : List (CI j).M := portsK j.1
+theorem portsJ_ok (j : I) (m : (CI j).M) : m ∈ portsJ j := by
+  obtain ⟨κ, i⟩ := j
+  cases κ
+  · exact ports_reg m
+  · exact ports_syn0 m
+  · exact ports_syn1 m
+
+/-- The `Tasks` child, and a task port's statement number (0 elsewhere); statements are numbered in rank order. -/
+def isT : Kind → Bool
+  | .reg => false
+  | .syn0 => false
+  | .syn1 => false
+def tnum : (κ : Kind) → (KI κ).M → Nat
+  | .reg => fun _ => 0
+  | .syn0 => fun _ => 0
+  | .syn1 => fun _ => 0
+
+section
+variable {V : Type}
+theorem testBit_leaf0 (k i : Nat) : ((Tab.leaf 0 : Tab Nat).get k).testBit i = false := by simp [Tab.get]
+
+theorem fpR_ok (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (r : Fin nR) :
+    (trR (P ops E u) oc r).1.map (G ops E u).ent <+ D.fpR.get ((G ops E u).rk r) := by
+  rw [trR_eq]
+  refine (fp_of_sites (G ops E u) _ _).trans ?_
+  have h := Tab.allB_spec _ fpRT 0 nR fpAll r.val (Nat.zero_le _) r.isLt
+  rw [beq_iff_eq] at h
+  show (sitesF (siteR ops E r.val) (kR r.val)).map (G ops E u).entS <+ fpRT.get r.val
+  rw [h, sitesF_map]
+  exact List.Sublist.refl _
+
+theorem zR_ok (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (r : Fin nR) :
+    ∀ c ∈ (trR (P ops E u) oc r).1, (G ops E u).fx ((G ops E u).kind c.1) ((G ops E u).code c.1 c.2.1) = true → c.2.2 = (G ops E u).z := by
+  rw [trR_eq]
+  apply z_of_sites (G ops E u)
+  intro s hs hf ρ'
+  obtain ⟨i, hi, rfl⟩ := mem_sitesF hs
+  exact ((Tab.get_allR _ 0 (kR r.val) (sqR ops E r.val (rlt r)) i (Nat.zero_le _) hi) ops.z).2 hf ρ'
+
+theorem kind_reg (z : V) : KindOK (V := V) (KI .reg).ann (codeK .reg) (D.kc 0) (fxF 0) z :=
+  kindOK_of_chk ports_reg (by decide +kernel) z
+theorem kind_syn0 (z : V) : KindOK (V := V) (KI .syn0).ann (codeK .syn0) (D.kc 1) (fxF 1) z :=
+  kindOK_of_rows (n := MkCounter.nM) (pr := MkCounter.xAnnPrecT.get) (pc := MkCounter.xAnnPrecCT.get) (sr := MkCounter.xAnnSbrT.get) (sc := MkCounter.xAnnSbrCT.get)
+    (cr := MkCounter.xAnnConfT.get) (cc := MkCounter.xAnnConfCT.get) (sh := fun i => MkCounter.xAnnShareB.testBit i) (fun _ _ h => (Bool.and_eq_true _ _).mp h) (fun _ _ h => (Bool.and_eq_true _ _).mp h) (fun _ _ h => (Bool.and_eq_true _ _).mp h) (fun _ h => h)
+    (by decide +kernel) z
+theorem kind_syn1 (z : V) : KindOK (V := V) (KI .syn1).ann (codeK .syn1) (D.kc 2) (fxF 2) z :=
+  kindOK_of_rows (n := MkPair.nM) (pr := MkPair.xAnnPrecT.get) (pc := MkPair.xAnnPrecCT.get) (sr := MkPair.xAnnSbrT.get) (sc := MkPair.xAnnSbrCT.get)
+    (cr := MkPair.xAnnConfT.get) (cc := MkPair.xAnnConfCT.get) (sh := fun i => MkPair.xAnnShareB.testBit i) (fun _ _ h => (Bool.and_eq_true _ _).mp h) (fun _ _ h => (Bool.and_eq_true _ _).mp h) (fun _ _ h => (Bool.and_eq_true _ _).mp h) (fun _ h => h)
+    (by decide +kernel) z
+theorem chainS (ops : Ops V) (E : EqC V) (u : St → Nat → V) (k : Nat) (hk : k < nS) (x : V) :
+    (∀ p ∈ (sitesF (siteS ops E k x) (kR k)).map (fun s => (⟨s.j, s.m⟩ : Σ j : I, (CI j).M)),
+      (G ops E u).ch p.1 = true → (bif Nat.blt k nR then stF k else 0) ≤ (G ops E u).pos p.1 p.2 ∧
+        (G ops E u).pos p.1 p.2 < (bif Nat.blt k nR then stF (k + 1) else 0)) ∧
+    incB ((((sitesF (siteS ops E k x) (kR k)).map (fun s => (⟨s.j, s.m⟩ : Σ j : I, (CI j).M))).filter
+      (fun p => (G ops E u).ch p.1)).map (fun p => (G ops E u).pos p.1 p.2)) = true := by
+  rw [sitesF_map]
+  exact chain_keys (G := G ops E u) _ _ _ _ (Tab.allB_spec _ keyT 0 nS chainAll k (Nat.zero_le _) hk)
+
+/-- Exception group `l`: its rules never two fire. -/
+def CHQ (ops : Ops V) (E : EqC V) (u : St → Nat → V) (g : Nat) (l : List Nat) : Prop :=
+  ∀ oc w, Env (P ops E u) oc w → amoChain false (l.map (fun i => fire ops E oc w (rR i)))
+theorem chT (ops : Ops V) (E : EqC V) (u : St → Nat → V) (hy : Hyps ops E) : Tab.AllR (CHQ ops E u) memT 0 ng :=
+  fun _ _ h => absurd h (Nat.not_lt_zero _)
+
+/-- Ports' static `Follow`: a flagged (argument-less) port's calls carry `z`. -/
+def okP (j : I) (a b : (CI j).M) : Bool :=
+  folP (CI j).ann a b && (!decide (a = b) || !(CI j).ann.share a || fxP ⟨j, a⟩)
+theorem okP_follow (z : V) : ∀ j (a b : (CI j).M × V), okP j a.1 b.1 = true →
+    (fxP ⟨j, a.1⟩ = true → a.2 = z) → (fxP ⟨j, b.1⟩ = true → b.2 = z) → (CI j).ann.Follow a b := by
+  intro j a b h ha hb
+  simp only [okP, Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true', decide_eq_false_iff_not] at h
+  obtain ⟨hf, hs⟩ := h
+  simp only [folP, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq, Bool.not_eq_true'] at hf
+  obtain ⟨⟨h11, h12⟩, h13⟩ := hf
+  refine ⟨fun hne => ?_, h12, h13, fun he hsh => ?_⟩
+  · rcases h11 with h | h
+    · exact absurd h hne
+    · exact h
+  · rcases hs with (h | h) | h
+    · exact absurd he h
+    · rw [hsh] at h; cases h
+    · have e2 : fxP ⟨j, b.1⟩ = true := by rw [← he]; exact h
+      rw [ha h, hb e2]
+
+/-- Two task statements in number order may follow each other (`taskAnn`: the lower one runs first). -/
+theorem okP_task (j : I) (a b : (CI j).M) (h : isT j.1 = true) (hab : tnum j.1 a < tnum j.1 b) : okP j a b = true := by
+  obtain ⟨κ, i⟩ := j
+  cases κ <;> simp only [isT, Bool.false_eq_true] at h
+/-- An escaped pair over numbered site tables, with flagged ports' calls carrying `z`; its bad site pairs
+    keyed by first-step site (`badT`, leaves `(i, i2s)`), each site's partners in one pass (`subS`): linear in
+    the facts (cost review r8-2 M1). A first-step task statement below `lo`, with every second-step one at
+    least `lo` (`hc2`), is one comparison, independent of `nT` (cost review r8b-1 M1). -/
+theorem okT_exceptZ (z : V) (ρ1 ρ2 : Nat → V) (site1 site2 : Nat → Site I (fun j => (CI j).M) V) (k1 k2 : Nat)
+    (key1 key2 : Tab (Σ j, (CI j).M))
+    (hkey1 : ∀ i, (⟨(site1 i).j, (site1 i).m⟩ : Σ j, (CI j).M) = key1.get i)
+    (hkey2 : ∀ i, (⟨(site2 i).j, (site2 i).m⟩ : Σ j, (CI j).M) = key2.get i)
+    (idx2 : (Σ j, (CI j).M) → List Nat) (hchk2 : ∀ i, i < k2 → i ∈ idx2 (key2.get i)) (badT : Tab (Nat × List Nat))
+    (lo : Nat)
+    (hz1 : ∀ c ∈ callsOf ρ1 (sitesF site1 k1), fxP ⟨c.1, c.2.1⟩ = true → c.2.2 = z)
+    (hz2 : ∀ c ∈ callsOf ρ2 (sitesF site2 k2), fxP ⟨c.1, c.2.1⟩ = true → c.2.2 = z)
+    (hc : Tab.allB (fun i p => (isT p.1.1 && Nat.blt (tnum p.1.1 p.2) lo) || (portsJ p.1).all (fun b => okP p.1 p.2 b ||
+      subS (idx2 ⟨p.1, b⟩) (idxT badT i))) key1 0 k1 = true)
+    (hc2 : Tab.allB (fun _ p => !isT p.1.1 || Nat.ble lo (tnum p.1.1 p.2)) key2 0 k2 = true)
+    (hbad : Tab.All (fun e : Nat × List Nat =>
+      AllL (fun i2 => (site1 e.1).cond ρ1 = true → (site2 i2).cond ρ2 = true → False) e.2) badT) :
+    ∀ j, ∀ a ∈ proj j (callsOf ρ1 (sitesF site1 k1)), ∀ b ∈ proj j (callsOf ρ2 (sitesF site2 k2)), (CI j).ann.Follow a b := by
+  intro j ⟨a1, a2⟩ ha b hb
+  obtain ⟨s, hs, hc1, ha2⟩ := mem_proj_callsOf (I := I) (CM := fun j => (CI j).M) ρ1 j a1 a2 (sitesF site1 k1) ha
+  rw [List.mem_filter] at hs
+  obtain ⟨i1, hi1, rfl⟩ := mem_sitesF hs.1
+  have e1 : key1.get i1 = ⟨j, a1⟩ := (hkey1 i1).symm.trans ((onPort_iff (I := I) (CM := fun j => (CI j).M) (V := V) j a1 _).mp hs.2)
+  obtain ⟨s2, hs2, hc2', -⟩ := mem_proj_callsOf (I := I) (CM := fun j => (CI j).M) ρ2 j b.1 b.2 (sitesF site2 k2) hb
+  rw [List.mem_filter] at hs2
+  obtain ⟨i2, hi2k, rfl⟩ := mem_sitesF hs2.1
+  have e2 : key2.get i2 = ⟨j, b.1⟩ := (hkey2 i2).symm.trans ((onPort_iff (I := I) (CM := fun j => (CI j).M) (V := V) j b.1 _).mp hs2.2)
+  have hi2 : i2 ∈ idx2 ⟨j, b.1⟩ := e2 ▸ hchk2 i2 hi2k
+  have hzF : okP j a1 b.1 = true → (CI j).ann.Follow (a1, a2) b := fun h' =>
+    okP_follow z j (a1, a2) b h' (fun hf => hz1 ⟨j, (a1, a2)⟩ (mem_proj j _ _ ha) hf)
+      (fun hf => hz2 ⟨j, b⟩ (mem_proj j _ _ hb) hf)
+  have h := Tab.allB_spec _ key1 0 k1 hc i1 (Nat.zero_le _) hi1
+  rw [e1, Bool.or_eq_true] at h
+  rcases h with h | h
+  · rw [Bool.and_eq_true] at h
+    have h2 := Tab.allB_spec _ key2 0 k2 hc2 i2 (Nat.zero_le _) hi2k
+    rw [e2, h.1, Bool.not_true, Bool.false_or] at h2
+    exact hzF (okP_task j a1 b.1 h.1 (Nat.lt_of_lt_of_le (Eq.mp Nat.blt_eq h.2) (Nat.le_of_ble_eq_true h2)))
+  have h' := List.all_eq_true.mp h b.1 (portsJ_ok j b.1)
+  rw [Bool.or_eq_true] at h'
+  rcases h' with h' | h'
+  · exact hzF h'
+  · obtain ⟨e, he, ek, hm⟩ := mem_idxT (subS_mem _ _ h' i2 hi2)
+    have hf := AllL.mem (Tab.all_mem hbad e he) i2 hm
+    rw [ek] at hf
+    exact (hf hc1 hc2').elim
+/-- `esc_of_pairs` with its table check needed only below `nR` (the escape table's last leaf may
+    be a rule's). -/
+theorem esc_of_pairsB (u : St → Nat → V) (ops : Ops V) (E : EqC V) (L : List (Nat × Nat))
+    (hL : ∀ p ∈ L, ∀ oc w, Env (P ops E u) oc w → fire ops E oc w (rR p.1) = true → fire ops E oc w (rR p.2) = true →
+      OkT (P ops E u) (trR (P ops E u) oc (rR p.1)).1 (trR (P ops E u) oc (rR p.2)).1)
+    (hinj : ∀ p ∈ L, ∀ x1, x1 < D.nR → D.rc x1 = D.rc p.1 → x1 = p.1)
+    (hT : ∀ i, i < D.nR → Sub (D.escR.get i) (bits ((L.filter (fun p => p.2 == i)).map (fun p => D.rc p.1)))) :
+    ∀ oc w r1 r2, Env (P ops E u) oc w → (D.escR.get ((G ops E u).rk r2)).testBit (D.rc ((G ops E u).rk r1)) = true →
+      fire ops E oc w r1 = true → fire ops E oc w r2 = true → OkT (P ops E u) (trR (P ops E u) oc r1).1 (trR (P ops E u) oc r2).1 := by
+  intro oc w r1 r2 hE hb f1 f2
+  obtain ⟨p, hp, e⟩ := List.mem_map.mp (mem_of_testBit_bits (hT _ r2.isLt _ hb))
+  have hp' := List.mem_filter.mp hp
+  have e2 : p.2 = r2.val := beq_iff_eq.mp hp'.2
+  have e1 : r1.val = p.1 := hinj p hp'.1 _ r1.isLt e.symm
+  have h := hL p hp'.1 oc w hE (by rw [← e1, rR_val]; exact f1) (by rw [e2, rR_val]; exact f2)
+  rw [← e1, e2, rR_val, rR_val] at h
+  exact h
+
+
+theorem glueOK (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : GlueOK (P ops E u) D (G ops E u) (fire ops E) where
+  mi_lt m := m.elim
+  rk_lt r := r.isLt
+  rk_at r := rR_val r
+  at_rk i hi := Nat.mod_eq_of_lt hi
+  kind j h := by
+    obtain ⟨κ, i⟩ := j
+    cases κ
+    · exact kind_reg _
+    · exact kind_syn0 _
+    · exact kind_syn1 _
+  kindC j h := by
+    obtain ⟨κ, i⟩ := j
+    cases κ
+    · simp [G, chB] at h
+    · simp [G, chB] at h
+    · simp [G, chB] at h
+  chAnn j h a b hlt := by
+    obtain ⟨κ, i⟩ := j
+    cases κ
+    · simp [G, chB] at h
+    · simp [G, chB] at h
+    · simp [G, chB] at h
+  cmono g1 g2 h := cmonoG g1 g2 h
+  cinM _ _ m := m.elim
+  cinR oc r := by
+    rw [trR_eq]
+    have hc := chain_in_of_sites (G ops E u) (envR ops E (u (.inr r)) oc r.val) _ _ _ (chainS ops E u r.val (rlt r) ops.z).1
+    have e0 : Nat.blt r.val nR = true := Nat.blt_eq.mpr r.isLt
+    simp only [e0, cond_true] at hc
+    intro c hcm hch
+    have := hc c hcm hch
+    show cloG (D.nM + r.val) ≤ _ ∧ _ < chiG (D.nM + r.val)
+    rw [cloG_r, chiG_r]
+    exact this
+  cincM _ _ m := m.elim
+  cincR oc r := by
+    rw [trR_eq]
+    exact chain_inc_of_sites (G ops E u) _ _ (chainS ops E u r.val (rlt r) ops.z).2
+  chCode j h p := by
+    obtain ⟨κ, i⟩ := j
+    cases κ
+    · simp [G, chB] at h
+    · simp [G, chB] at h
+    · simp [G, chB] at h
+  fpM _ _ m := m.elim
+  fpR oc r := fpR_ok ops E u oc r
+  zM _ _ m := m.elim
+  zR oc r := zR_ok ops E u oc r
+  nfI m := m.elim
+  nfO m := m.elim
+  ngI m := m.elim
+  ngO m := m.elim
+  h3ok m := m.elim
+  exM _ _ m := m.elim
+  exR := exR_of_cmask (P ops E u) (G ops E u) (fire ops E) (fun r => r.isLt) rR_val memT gidT cmT ng
+    (chT ops E u hy) hcm_ok hg_ok hinj_ok hT_ok
+  exMR _ _ m := m.elim
+  esc := fun _ _ r1 r2 _ h => by
+    have e : (D.escR.get ((G ops E u).rk r2)).testBit (D.rc ((G ops E u).rk r1)) = false := by
+      rw [show D.escR.get ((G ops E u).rk r2) = 0 from Tab.allB_spec (fun _ n => Nat.beq n 0) escRT 0 nR (by decide +kernel) r2.val (Nat.zero_le _) r2.isLt |> Nat.eq_of_beq_eq_true]
+      exact Nat.zero_testBit _
+    rw [e] at h; cases h
+
+/-- **The pair fields, from the scan.** -/
+def pairs (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : PairFacts (P ops E u) (G ops E u).rules (fire ops E) :=
+  pairFacts_of_scan (P ops E u) scanOK (G ops E u) (fire ops E) (glueOK ops E hy u)
+end
+
+/-! ## Enables and arguments: one lemma per child instance, dispatched by table -/
+
+section
+variable {V : Type}
+/-- What `Cert.en` and `Cert.arg` say about child `⟨κ, i⟩` whose arm is `A`. -/
+def EAQ (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) (κ : Kind) (i : Nat)
+    (A : (V : Type) → Ops V → EqC V → OC V → Wires Empty V → Wires (KI κ).M V) : Prop :=
+  ∀ (h : i < nk κ) (oc : OC V) (w : Wires Empty V), Env (P ops E u) oc w →
+    (∀ cm : (KI κ).M, (KI κ).ann.hasEn cm = true →
+      ((A V ops E oc w).en cm = true ↔ ∃ s ∈ users (⟨κ, ⟨i, h⟩⟩ : I) cm, On (P ops E u) (fire ops E) oc w s ∧
+        Calls (P ops E u) (trS (P ops E u) oc w s) (⟨κ, ⟨i, h⟩⟩ : I) cm)) ∧
+    (∀ cm : (KI κ).M, ∀ s ∈ users (⟨κ, ⟨i, h⟩⟩ : I) cm, Av (P ops E u) (fire ops E) oc w s →
+      ∀ x, (cm, x) ∈ proj (⟨κ, ⟨i, h⟩⟩ : I) (trS (P ops E u) oc w s) → (A V ops E oc w).arg cm = x)
+
+/-- A flagged (argument-less value) port's calls carry `z`. -/
+theorem zarg (ops : Ops V) (E : EqC V) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V) (j : I) (cm : (CI j).M)
+    (hf : fxP ⟨j, cm⟩ = true) :
+    ∀ s ∈ users j cm, Av (P ops E u) (fire ops E) oc w s → ∀ x, (cm, x) ∈ proj j (trS (P ops E u) oc w s) → ops.z = x := by
+  intro s _ _ x hx
+  cases s with
+  | inl e => exact e.elim
+  | inr r =>
+    have hc := mem_proj j _ _ hx
+    exact (zR_ok ops E u oc r ⟨j, (cm, x)⟩ hc hf).symm
+
+theorem ea_reg_0 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : EAQ ops E hy u .reg 0 arm_reg_0 := by
+  have hx_2_3_write : idxT (((usesK .reg).get 0).uses Reg.write) (rR 2).val = [3] := by decide +kernel
+  intro h oc w hE
+  refine ⟨regAll (fun hh => by cases hh)
+    (fun _ => en_list (P ops E u) (fire ops E) oc w ⟨.reg, ⟨0, h⟩⟩ Reg.write (stepOn ops E oc) (onIff ops E u oc w)
+      (users ⟨.reg, ⟨0, h⟩⟩ Reg.write) ⟨cRk ops E u oc w (rR 2) .reg 0 h Reg.write 3 hx_2_3_write rfl rfl rfl, trivial⟩), regAll (zarg ops E u oc w _ _ rfl)
+    (arg_users (P ops E u) (fire ops E) oc w ⟨.reg, ⟨0, h⟩⟩ Reg.write _ (users ⟨.reg, ⟨0, h⟩⟩ Reg.write)
+      ⟨fun hav x hx => aRk ops E u oc w (rR 2) .reg 0 h Reg.write 3 hx_2_3_write _ (fun _ => congrArg (ops.f 3) (ev_2_1 ops E (u (.inr (rR 2))) oc ops.z)) x hx, trivial⟩)⟩
+theorem ea_reg_1 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : EAQ ops E hy u .reg 1 arm_reg_1 := by
+  have hx_0_2_write : idxT (((usesK .reg).get 1).uses Reg.write) (rR 0).val = [2] := by decide +kernel
+  intro h oc w hE
+  refine ⟨regAll (fun hh => by cases hh)
+    (fun _ => en_list (P ops E u) (fire ops E) oc w ⟨.reg, ⟨1, h⟩⟩ Reg.write (stepOn ops E oc) (onIff ops E u oc w)
+      (users ⟨.reg, ⟨1, h⟩⟩ Reg.write) ⟨cRk ops E u oc w (rR 0) .reg 1 h Reg.write 2 hx_0_2_write rfl rfl rfl, trivial⟩), regAll (zarg ops E u oc w _ _ rfl)
+    (arg_users (P ops E u) (fire ops E) oc w ⟨.reg, ⟨1, h⟩⟩ Reg.write _ (users ⟨.reg, ⟨1, h⟩⟩ Reg.write)
+      ⟨fun hav x hx => aRk ops E u oc w (rR 0) .reg 1 h Reg.write 2 hx_0_2_write _ (fun _ => congrArg (ops.f 0) (ev_0_1 ops E (u (.inr (rR 0))) oc ops.z)) x hx, trivial⟩)⟩
+theorem ea_syn0_0 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : EAQ ops E hy u .syn0 0 arm_syn0_0 := by
+  have hx_3_0_incr : idxT (((usesK .syn0).get 0).uses (MkCounter.mM 1)) (rR 3).val = [0] := by decide +kernel
+  intro h oc w hE
+  refine ⟨Tab.finAll MkCounter.mM MkCounter.mM_val fxT_syn0 (⟨Tab.one (fun hh => by cases hh),
+    Tab.one (fun _ => en_list (P ops E u) (fire ops E) oc w ⟨.syn0, ⟨0, h⟩⟩ (MkCounter.mM 1) (stepOn ops E oc) (onIff ops E u oc w)
+      (users ⟨.syn0, ⟨0, h⟩⟩ (MkCounter.mM 1)) ⟨cRk ops E u oc w (rR 3) .syn0 0 h (MkCounter.mM 1) 0 hx_3_0_incr rfl rfl rfl, trivial⟩)⟩), Tab.finAll MkCounter.mM MkCounter.mM_val fxT_syn0 (⟨Tab.one (zarg ops E u oc w _ _ rfl),
+    Tab.one (arg_users (P ops E u) (fire ops E) oc w ⟨.syn0, ⟨0, h⟩⟩ (MkCounter.mM 1) _ (users ⟨.syn0, ⟨0, h⟩⟩ (MkCounter.mM 1))
+      ⟨fun hav x hx => aRk ops E u oc w (rR 3) .syn0 0 h (MkCounter.mM 1) 0 hx_3_0_incr _ (fun _ => rfl) x hx, trivial⟩)⟩)⟩
+theorem ea_syn0_1 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : EAQ ops E hy u .syn0 1 arm_syn0_1 := by
+  have hx_2_2_incr : idxT (((usesK .syn0).get 1).uses (MkCounter.mM 1)) (rR 2).val = [2] := by decide +kernel
+  intro h oc w hE
+  refine ⟨Tab.finAll MkCounter.mM MkCounter.mM_val fxT_syn0 (⟨Tab.one (fun hh => by cases hh),
+    Tab.one (fun _ => en_list (P ops E u) (fire ops E) oc w ⟨.syn0, ⟨1, h⟩⟩ (MkCounter.mM 1) (stepOn ops E oc) (onIff ops E u oc w)
+      (users ⟨.syn0, ⟨1, h⟩⟩ (MkCounter.mM 1)) ⟨cRk ops E u oc w (rR 2) .syn0 1 h (MkCounter.mM 1) 2 hx_2_2_incr rfl rfl rfl, trivial⟩)⟩), Tab.finAll MkCounter.mM MkCounter.mM_val fxT_syn0 (⟨Tab.one (zarg ops E u oc w _ _ rfl),
+    Tab.one (arg_users (P ops E u) (fire ops E) oc w ⟨.syn0, ⟨1, h⟩⟩ (MkCounter.mM 1) _ (users ⟨.syn0, ⟨1, h⟩⟩ (MkCounter.mM 1))
+      ⟨fun hav x hx => aRk ops E u oc w (rR 2) .syn0 1 h (MkCounter.mM 1) 2 hx_2_2_incr _ (fun _ => congrArg (ops.f 2) (ev_2_0 ops E (u (.inr (rR 2))) oc ops.z)) x hx, trivial⟩)⟩)⟩
+theorem ea_syn1_0 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : EAQ ops E hy u .syn1 0 arm_syn1_0 := by
+  have hx_1_1_copy : idxT (((usesK .syn1).get 0).uses (MkPair.mM 1)) (rR 1).val = [1] := by decide +kernel
+  have hx_1_2_put : idxT (((usesK .syn1).get 0).uses (MkPair.mM 2)) (rR 1).val = [2] := by decide +kernel
+  intro h oc w hE
+  refine ⟨Tab.finAll MkPair.mM MkPair.mM_val fxT_syn1 (⟨Tab.one (fun hh => by cases hh),
+    ⟨Tab.one (fun _ => en_list (P ops E u) (fire ops E) oc w ⟨.syn1, ⟨0, h⟩⟩ (MkPair.mM 1) (stepOn ops E oc) (onIff ops E u oc w)
+      (users ⟨.syn1, ⟨0, h⟩⟩ (MkPair.mM 1)) ⟨cRk ops E u oc w (rR 1) .syn1 0 h (MkPair.mM 1) 1 hx_1_1_copy rfl rfl rfl, trivial⟩),
+    Tab.one (fun _ => en_list (P ops E u) (fire ops E) oc w ⟨.syn1, ⟨0, h⟩⟩ (MkPair.mM 2) (stepOn ops E oc) (onIff ops E u oc w)
+      (users ⟨.syn1, ⟨0, h⟩⟩ (MkPair.mM 2)) ⟨cRk ops E u oc w (rR 1) .syn1 0 h (MkPair.mM 2) 2 hx_1_2_put rfl rfl rfl, trivial⟩)⟩⟩), Tab.finAll MkPair.mM MkPair.mM_val fxT_syn1 (⟨Tab.one (zarg ops E u oc w _ _ rfl),
+    ⟨Tab.one (arg_users (P ops E u) (fire ops E) oc w ⟨.syn1, ⟨0, h⟩⟩ (MkPair.mM 1) _ (users ⟨.syn1, ⟨0, h⟩⟩ (MkPair.mM 1))
+      ⟨fun hav x hx => aRk ops E u oc w (rR 1) .syn1 0 h (MkPair.mM 1) 1 hx_1_1_copy _ (fun _ => rfl) x hx, trivial⟩),
+    Tab.one (arg_users (P ops E u) (fire ops E) oc w ⟨.syn1, ⟨0, h⟩⟩ (MkPair.mM 2) _ (users ⟨.syn1, ⟨0, h⟩⟩ (MkPair.mM 2))
+      ⟨fun hav x hx => aRk ops E u oc w (rR 1) .syn1 0 h (MkPair.mM 2) 2 hx_1_2_put _ (fun _ => congrArg (ops.f 1) (ev_1_0 ops E (u (.inr (rR 1))) oc ops.z)) x hx, trivial⟩)⟩⟩)⟩
+theorem eaAll_reg (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : Tab.AllR (EAQ ops E hy u .reg) arms_reg 0 2 :=
+  ⟨Tab.one (ea_reg_0 ops E hy u),
+  Tab.one (ea_reg_1 ops E hy u)⟩
+theorem eaAll_syn0 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : Tab.AllR (EAQ ops E hy u .syn0) arms_syn0 0 2 :=
+  ⟨Tab.one (ea_syn0_0 ops E hy u),
+  Tab.one (ea_syn0_1 ops E hy u)⟩
+theorem eaAll_syn1 (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : Tab.AllR (EAQ ops E hy u .syn1) arms_syn1 0 1 :=
+  Tab.one (ea_syn1_0 ops E hy u)
+theorem eaAll (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) (κ : Kind) (i : Nat) (h : i < nk κ) :
+    EAQ ops E hy u κ i ((arms κ).get i) := by
+  cases κ
+  · exact Tab.get_allR _ 0 _ (eaAll_reg ops E hy u) i (Nat.zero_le _) h
+  · exact Tab.get_allR _ 0 _ (eaAll_syn0 ops E hy u) i (Nat.zero_le _) h
+  · exact Tab.get_allR _ 0 _ (eaAll_syn1 ops E hy u) i (Nat.zero_le _) h
+end
+
+/-! ## The certificate and the obligation -/
+
+section
+variable {V : Type}
+def fp (ops : Ops V) (E : EqC V) : St → List (Σ j : I, (CI j).M)
+  | .inl e => e.elim
+  | .inr r => (sitesF (siteR ops E r.val) (kR r.val)).map (fun s => ⟨s.j, s.m⟩)
+
+theorem usersOk (ops : Ops V) (E : EqC V) : ∀ (s : St), ∀ p ∈ fp ops E s, s ∈ users p.1 p.2 := by
+  intro s p hp
+  cases s with
+  | inl e => exact e.elim
+  | inr r =>
+    obtain ⟨i, hi, rfl⟩ := mem_keys hp
+    exact mem_users (hchk r i hi)
+
+theorem fpOk (ops : Ops V) (E : EqC V) (u : St → Nat → V) : ∀ (oc : OC V) (w : Wires Empty V) (s : St),
+    ∀ c ∈ trS (P ops E u) oc w s, (⟨c.1, c.2.1⟩ : Σ j : I, (CI j).M) ∈ fp ops E s := by
+  intro oc w s c hc
+  cases s with
+  | inl e => exact e.elim
+  | inr r => rw [trS_eq] at hc; exact callsOf_fn_ports _ _ _ c hc
+
+theorem rdyR_ok (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : ∀ (oc : OC V) (w : Wires Empty V) (r : Fin nR),
+    Env (P ops E u) oc w → fire ops E oc w r = true → ∀ c ∈ (trR (P ops E u) oc r).1,
+      ((P ops E u).CI c.1).ann.alwaysRdy c.2.1 = false → (oc c.1).rdy c.2.1 = true := by
+  intro oc w r _ hf c hc ha
+  rw [trR_eq] at hc
+  obtain ⟨i, hi, e⟩ := mem_keys (callsOf_fn_ports _ _ _ c hc)
+  have hrd := rd_of_cf (cf_of_wf hf)
+  unfold RD at hrd
+  have h2 := List.all_eq_true.mp hrd i (List.mem_range'.mpr ⟨i, hi, by omega⟩)
+  rw [e] at h2
+  simp only [alwaysRdyB, Bool.or_eq_true] at h2
+  rcases h2 with h2 | h2
+  · rw [ha] at h2; cases h2
+  · exact h2
+
+theorem onehot_ok (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) (oc : OC V) (w : Wires Empty V)
+    (hC : EnvC (P ops E u) oc w) : onehotP ops E oc :=
+  trivial
+
+def cert (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (u : St → Nat → V) : Cert (P ops E u) :=
+  PairFacts.toCert (P ops E u) (pairs ops E hy u) (fp ops E) users (usersOk ops E) (fpOk ops E u)
+    (fun m => m.elim) (fun _ _ m => m.elim)
+    (fun oc w r _ hf => resR_ok ops E hy u oc w r hf)
+    (fun _ _ m => m.elim) (rdyR_ok ops E hy u)
+    (fun oc w j cm hE hcm => by obtain ⟨κ, i, hi⟩ := j; exact (eaAll ops E hy u κ i hi hi oc w hE).1 cm hcm)
+    (fun _ _ m => m.elim)
+    (fun oc w j cm hE s hs hav x hx => by obtain ⟨κ, i, hi⟩ := j; exact (eaAll ops E hy u κ i hi hi oc w hE).2 cm s hs hav x hx)
+    (fun oc w j cm _ h => by obtain ⟨κ, i⟩ := j; cases κ <;> cases cm <;> cases h)
+    (onehot_ok ops E hy u)
+
+/-- **The certificate fixed before the skipped values**: rules, firing and hits do not mention
+    `u`, and a step's calls are the same at every `u` (`trUS`). -/
+def certU (ops : Ops V) (E : EqC V) (hy : Hyps ops E) : CertU (F ops E) where
+  rules := (List.range nR).map rR
+  fire := fire ops E
+  hit := (pairs ops E hy (fun _ _ => ops.z)).hit
+  cert u := cert ops E hy u
+  rules_eq _ := rfl
+  fire_eq _ := rfl
+  hit_eq _ := rfl
+  trU oc w s u u' _ hav := by
+    cases s with
+    | inl e => exact e.elim
+    | inr r => exact (trS_eq ops E u oc w r).trans ((trUS ops E hy oc r.val (rlt r) _ _ ops.z (pre_r hav)).trans
+        (trS_eq ops E u' oc w r).symm)
+
+/-- **The module's obligation**: the order and every child's calls are fixed before the skipped
+    values; for every value type, operators, constants and solver verdicts. -/
+theorem obl [Inhabited V] (ops : Ops V) (E : EqC V) (hy : Hyps ops E) : OblU (F ops E) :=
+  oblU_of_cert (F ops E) (certU ops E hy)
+end
+
+/-! ## Acyclicity: read lists as filters of allOuts -/
+
+def wireRk (b : Nat) : WireM → Nat := fun m => match m with
+  | .wget | .whas => b
+  | _ => 0
+def wire0Rk (b : Nat) : Wire0M → Nat := fun m => match m with
+  | .whas => b
+  | _ => 0
+
+def rkK : (κ : Kind) → Nat → (KI κ).M → Nat
+  | .reg => fun _ _ => 0
+  | .syn0 => fun _ _ => 0
+  | .syn1 => fun _ _ => 0
+
+def rk (y : Σ j : I, (CI j).M) : Nat := rkK y.1.1 y.1.2.val y.2
+def mxRDT : Tab Nat :=
+  (.node 2 (.node 1 (.leaf (0))
+  (.leaf (0)))
+  (.node 3 (.leaf (0))
+  (.leaf (0))))
+def allOuts : List (Σ j : I, (CI j).M) := allPorts [.reg, .syn0, .syn1] nk (fun κ => (KI κ).M) portsK
+theorem mem_allOuts (y : Σ j : I, (CI j).M) : y ∈ allOuts :=
+  mem_allPorts _ nk _ portsK (fun κ => by cases κ <;> simp) (fun κ m => by
+    cases κ
+    · exact ports_reg m
+    · exact ports_syn0 m
+    · exact ports_syn1 m
+  ) y
+def allIns : List Empty := []
+theorem mem_allIns (p : Empty) : p ∈ allIns := p.elim
+def outsBelow (r : Nat) : List (Σ j : I, (CI j).M) := allOuts.filter (fun y => Nat.blt (rk y) r)
+def DK : (κ : Kind) → Nat → (KI κ).M → List (Σ j : I, (CI j).M)
+
+  | .reg => fun _ _ => allOuts
+  | .syn0 => fun _ _ => allOuts
+  | .syn1 => fun _ _ => allOuts
+
+theorem rdBnd : Tab.allB (fun k keys => Nat.beq (kT.get k) 0 ||
+    Tab.allB (fun i p => alwaysRdyB p || Nat.ble (rk p) (mxRDT.get k)) keys 0 (kT.get k)) keyT 0 nS = true := by
+  decide +kernel
+theorem rdB (k : Nat) (hk : k < nS) : ∀ i, i < kR k → alwaysRdyB ((keyT.get k).get i) = false →
+    rk ((keyT.get k).get i) ≤ mxRDT.get k := by
+  intro i hi ha
+  have h := sitesB_spec (fun k i p => alwaysRdyB p || Nat.ble (rk p) (mxRDT.get k)) rdBnd k hk i hi
+  simp only [ha, Bool.false_or] at h
+  exact Nat.le_of_ble_eq_true h
+
+theorem all_congr' {α : Type} {f g : α → Bool} : ∀ (l : List α), (∀ a ∈ l, f a = g a) → l.all f = l.all g
+  | [], _ => rfl
+  | a :: l, h => by
+    simp only [List.all_cons]
+    rw [h a (List.mem_cons_self ..), all_congr' l (fun b hb => h b (List.mem_cons_of_mem _ hb))]
+
+section
+variable {V : Type}
+theorem agO {oc oc' : OC V} {b : Nat} (hR : ∀ y, Nat.blt (rk y) b = true → AgreeO (oc y.1) (oc' y.1) y.2)
+    (j : I) (m : (CI j).M) (h : Nat.blt (rk ⟨j, m⟩) b = true) : (oc j).ret m = (oc' j).ret m := (hR ⟨j, m⟩ h).2
+theorem agR {oc oc' : OC V} {b : Nat} (hR : ∀ y, Nat.blt (rk y) b = true → AgreeO (oc y.1) (oc' y.1) y.2)
+    (j : I) (m : (CI j).M) (h : Nat.blt (rk ⟨j, m⟩) b = true) : (oc j).rdy m = (oc' j).rdy m := (hR ⟨j, m⟩ h).1
+
+theorem agRD {oc oc' : OC V} {b : Nat} (hR : ∀ y, Nat.blt (rk y) b = true → AgreeO (oc y.1) (oc' y.1) y.2)
+    (k : Nat) (hk : k < nS) (hb : Nat.blt (mxRDT.get k) b = true) : RD oc k = RD oc' k := by
+  unfold RD
+  apply all_congr'
+  intro i hi
+  have hi' : i < kR k := by simp at hi; omega
+  cases ha : alwaysRdyB ((keyT.get k).get i)
+  · rw [(hR _ (blt_of_le_blt (rdB k hk i hi' ha) hb)).1]
+  · rfl
+
+end
+
+
+section
+variable {V : Type}
+def acyc (ops : Ops V) (E : EqC V) : Acyc (F ops E).base where
+  D j p := DK j.1 j.2.val p
+  Dw _ _ := []
+  Do e := e.elim
+  Dwo e := e.elim
+  dep oc oc' w w' j p hD hW := by
+    obtain ⟨κ, i, hi⟩ := j
+    cases κ with
+    | reg => exact dep_of_all (F ops E).base allOuts mem_allOuts allIns mem_allIns oc oc' w w' hD hW _ _
+    | syn0 => exact dep_of_all (F ops E).base allOuts mem_allOuts allIns mem_allIns oc oc' w w' hD hW _ _
+    | syn1 => exact dep_of_all (F ops E).base allOuts mem_allOuts allIns mem_allIns oc oc' w w' hD hW _ _
+  depo _ _ _ _ q := q.elim
+  rk := rk
+  N := 1
+  rk_lt y := by
+    obtain ⟨⟨κ, i, hi⟩, m⟩ := y
+    cases κ with
+    | reg => exact Nat.zero_lt_succ _
+    | syn0 => exact Nat.zero_lt_succ _
+    | syn1 => exact Nat.zero_lt_succ _
+  rk_ok j q p hpq y hy := by
+    obtain ⟨κ, i, hi⟩ := j
+    cases κ with
+    | reg => rw [reg_nopath] at hpq; cases hpq
+    | syn0 => cases hpq
+    | syn1 => cases hpq
+  reach _ := []
+  reach_w _ _ _ _ _ hp := by cases hp
+  reach_o _ _ _ _ _ _ _ hp := by cases hp
+  path_w q := q.elim
+  path_o q := q.elim
+end
+
+/-! ## The built module and its top theorem -/
+
+/-- No assumed leaf: every child is a library model with a proved contract, or a synthesized
+    child through its own file. -/
+structure Leaves (V : Type) (toB : V → Bool) where
+  dummy : Unit := ()
+
+/-- The synthesized children on path A, per instance (each instance's inputs are its own): its
+    operators, constants, solver verdicts (named hypotheses, as `Hyps`), assumed leaves and own
+    children (design §3.1). -/
+structure Subs (V : Type) where
+  syn0ops : Fin (nk .syn0) → MkCounter.Ops V
+  syn0E : Fin (nk .syn0) → EqC V
+  syn0hy : ∀ i, MkCounter.Hyps (syn0ops i) (syn0E i)
+  syn0lv : ∀ i, MkCounter.Leaves V (syn0ops i).toB
+  syn0sub : Fin (nk .syn0) → MkCounter.Subs V
+  syn1ops : Fin (nk .syn1) → MkPair.Ops V
+  syn1E : Fin (nk .syn1) → EqC V
+  syn1hy : ∀ i, MkPair.Hyps (syn1ops i) (syn1E i)
+  syn1lv : ∀ i, MkPair.Leaves V (syn1ops i).toB
+  syn1sub : Fin (nk .syn1) → MkPair.Subs V
+  dummy : Unit := ()
+
+section
+variable {V : Type}
+def implK (ops : Ops V) (lv : Leaves V ops.toB) (sub : Subs V) : (j : I) → ModuleU V (CI j)
+
+  | ⟨.reg, _⟩ => Reg.toU
+  | ⟨.syn0, i⟩ => MkCounter.modU (sub.syn0ops i) (sub.syn0E i) (sub.syn0lv i) (sub.syn0sub i)
+  | ⟨.syn1, i⟩ => MkPair.modU (sub.syn1ops i) (sub.syn1E i) (sub.syn1lv i) (sub.syn1sub i)
+/-- The module: its family over its children. -/
+abbrev modU (ops : Ops V) (E : EqC V) (lv : Leaves V ops.toB) (sub : Subs V) : ModuleU V X :=
+  (F ops E).toModuleU (implK ops lv sub)
+
+theorem built [Inhabited V] (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (lv : Leaves V ops.toB) (sub : Subs V) :
+    Built X (modU ops E lv sub) :=
+  Built.node (F ops E) (implK ops lv sub)
+    (fun ⟨κ, i⟩ => by
+      cases κ
+      · exact Built.leaf _ reg_realizes (creg_causal 1)
+      · exact MkCounter.built (sub.syn0ops i) (sub.syn0E i) (sub.syn0hy i) (sub.syn0lv i) (sub.syn0sub i)
+      · exact MkPair.built (sub.syn1ops i) (sub.syn1E i) (sub.syn1hy i) (sub.syn1lv i) (sub.syn1sub i)
+    )
+    (fun ⟨κ, i⟩ => by
+      cases κ
+      · exact aliased_of_none _ _ (fun p q => rfl) (fun a p => rfl)
+      · exact aliased_of_none _ _ (fun p q => rfl) (fun a p => rfl)
+      · exact aliased_of_none _ _ (fun p q => rfl) (fun a p => rfl)
+    )
+    (obl ops E hy) (acyc ops E)
+
+/-- **The module's top theorem**: the contract, with the run fixed before every skipped value
+    of the tree, and every input has a hardware cycle; the synthesized children's hypotheses are
+    `sub`'s fields, per instance. -/
+theorem top [Inhabited V] (ops : Ops V) (E : EqC V) (hy : Hyps ops E) (lv : Leaves V ops.toB) (sub : Subs V) :
+    RealizesU (modU ops E lv sub) ∧
+    ∀ s w, (modU ops E lv sub).clean s = s → ∃ o s' g, (modU ops E lv sub).hw s w o s' g :=
+  (built ops E hy lv sub).top
+end
+
+end
+end SysHier1
+
+#print axioms SysHier1.obl
+#print axioms SysHier1.top
+
+
+/-! Gate: 1 part(s) (one Lean file each), the largest 79019 bytes, at most 4000000. -/

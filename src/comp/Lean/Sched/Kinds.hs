@@ -1,12 +1,14 @@
 -- | Child kinds as the modular file models them (model.py): the library
 -- primitives with Lean models, the assumed leaves, and the gate's generic kinds.
 module Lean.Sched.Kinds
-    ( PM(..), pmRepr, KindDef(..), kdCode, kdFx, Sched, schedMap, schedRel, ofSched, makeKinds, kindOrder, kindOf
-    , genericKind, ctrSched, noValueTasks, tasksKind, parseSched, schedNames, libSets, ifcTypes
+    ( PM(..), pmRepr, KindDef(..), kdCode, kdFx, Sched, schedMap, schedRel, ofSched, makeKinds, kindOrder, kindOf, cfgTypes
+    , genericKind, codedKind, schedCodes, ctrSched, noValueTasks, tasksKind, parseSched, schedNames, libSets, ifcTypes
     ) where
 
 import ASyntax (APackage(..), AVInst(..), AType(..))
 import Control.Exception (catch, IOException)
+import Data.Array (Array)
+import qualified Data.Array as A (listArray)
 import Data.Array.Unboxed (UArray, (!), accumArray, listArray)
 import Data.List (elemIndex, isInfixOf)
 import Data.Word (Word8)
@@ -37,11 +39,14 @@ data KindDef = KindDef
     , kdShare, kdHasEn, kdAlwaysRdy, kdHasArg :: PM -> Bool
     , kdPaths :: [(PM, PM)], kdBuilder, kdUsesc :: Maybe String, kdLib :: Bool
     , kdCodeRel :: Maybe (Int -> Int -> Bool, Int -> Int -> Bool, Int -> Int -> Bool)
-      -- ^ prec, sbr and conf over port codes, where a kind is large (the generic kinds)
+      -- ^ prec, sbr and conf over port codes, where a kind is large (generic and synthesized kinds)
+    , kdIx :: Maybe (M.Map PM Int)  -- ^ each port's code, where a kind is large
+    , kdLPortA :: Maybe (Array Int String)  -- ^ kdLPorts by code, where a kind is large
     }
 
 kdCode :: KindDef -> PM -> Int
-kdCode k p = fromMaybe (error ("schedlean: no port " ++ show p ++ " in kind " ++ kdName k)) (elemIndex p (kdPorts k))
+kdCode k p = fromMaybe (error ("schedlean: no port " ++ show p ++ " in kind " ++ kdName k))
+    (maybe (elemIndex p (kdPorts k)) (M.lookup p) (kdIx k))
 
 -- | An argument-less value port: every call carries z.
 kdFx :: KindDef -> PM -> Bool
@@ -108,7 +113,7 @@ mkKind :: String -> Maybe String -> Maybe String -> [PM] -> Maybe [String] -> (P
        -> (PM -> PM -> Bool) -> (PM -> Bool) -> (PM -> Bool) -> (PM -> Bool) -> [(PM, PM)] -> Maybe String -> Maybe String
        -> Bool -> Maybe (PM -> Bool) -> KindDef
 mkKind n i mt ps lps prec sbr conf share en rdy paths b u lib ha =
-    KindDef n i mt ps lps prec sbr conf share en rdy (fromMaybe dflt ha) paths b u lib Nothing
+    KindDef n i mt ps lps prec sbr conf share en rdy (fromMaybe dflt ha) paths b u lib Nothing Nothing Nothing
   where dflt p = en p && p `notElem` [PS "deq", PS "clear"]
 
 inS :: [String] -> PM -> Bool
@@ -178,11 +183,16 @@ makeKinds fifoSched cfgSched = M.fromList [ (kdName k, k) | k <- ks ]
 kindOrder :: [String]
 kindOrder = ["reg", "cfg", "fifo", "f2", "sf", "rf", "rwS", "rwC", "rw0S", "rw0C", "tasks"]
 
--- | model.kind_of: the library primitive a child's Verilog module is.
+-- | ConfigReg's Verilog modules: one Lean model (outside reset ConfigRegA behaves as ConfigRegN).
+cfgTypes :: [String]
+cfgTypes = ["ConfigRegN", "ConfigRegUN", "ConfigRegA"]
+
+-- | model.kind_of: the library primitive a child's Verilog module is (RegA, ConfigRegA: their
+-- synchronous models, outside reset; FIFOs select async reset by a Verilog define, not by name).
 kindOf :: String -> String -> Either String String
 kindOf typ ss
     | typ `elem` ["RegN", "RegUN", "RegA"] = Right "reg"
-    | typ == "ConfigRegN" = Right "cfg"
+    | typ `elem` cfgTypes = Right "cfg"
     | typ == "FIFOL1" = Right "fifo"
     | typ == "FIFO2" = Right "f2"
     | typ == "SizedFIFO" = Right "sf"
@@ -202,7 +212,7 @@ ctrSched = [ (["value"], "SB", ["addA", "addB", "setC", "setF"]), (["setC"], "SB
 genericKind :: String -> String -> Sched -> [(String, String, String, Bool)] -> Bool -> Bool -> KindDef
 genericKind name typ sl0 meths synth lib =
     (mkKind name Nothing Nothing [ PS p | p <- ports ] Nothing prec sbr conf (not . act) act (const True) [] Nothing Nothing False
-            (Just hasArg)) { kdCodeRel = Just (precC, sbrC, confC) }
+            (Just hasArg)) { kdCodeRel = Just (precC, sbrC, confC), kdIx = Just (M.fromList (zip (map PS ports) [0 ..])) }
   where
     ports = [ p | (p, _, _, _) <- meths ]
     nP = length ports
@@ -217,7 +227,6 @@ genericKind name typ sl0 meths synth lib =
     relA = accumArray (\old new -> if old == 0 then new else old) 0 (0, nB * nB - 1)
                [ (a * nB + b, relCode r) | (ps, r, qs) <- sl, Just a <- map (`M.lookup` baseIx) ps
                                          , Just b <- map (`M.lookup` baseIx) qs ] :: UArray Int Word8
-    relCode r = case r of { "CF" -> 1; "SB" -> 2; "SBR" -> 3; "C" -> 4; _ -> 5 } :: Word8
     rel p q = relA ! (bOf ! p * nB + bOf ! q)
     precC p q = p /= q && bOf ! p /= bOf ! q && rel p q `elem` [2, 3]
     sbrC p q
@@ -237,6 +246,38 @@ genericKind name typ sl0 meths synth lib =
     act _ = False
     hasArg (PS p) = hargA ! ix p
     hasArg _ = False
+
+-- | A kind over its ports' codes (0 to n - 1): prec, sbr and conf by code pair; share, hasEn,
+-- alwaysRdy and hasArg by code; the queries by port through one index (a port not in it: False).
+codedKind :: String -> Maybe String -> Maybe String -> [PM] -> Maybe [String] -> (Int -> Int -> Bool, Int -> Int -> Bool, Int -> Int -> Bool)
+          -> (Int -> Bool, Int -> Bool, Int -> Bool, Int -> Bool) -> KindDef
+codedKind name iface mty ports lps rels@(precC, sbrC, confC) (shareC, enC, rdyC, argC) = KindDef
+    { kdName = name, kdIface = iface, kdMType = mty, kdPorts = ports, kdLPorts = lps
+    , kdPrec = on precC, kdSbr = on sbrC, kdConf = on confC
+    , kdShare = one shareA, kdHasEn = one enA, kdAlwaysRdy = one rdyA, kdHasArg = one argA
+    , kdPaths = [], kdBuilder = Nothing, kdUsesc = Nothing, kdLib = False, kdCodeRel = Just rels, kdIx = Just ix
+    , kdLPortA = fmap (A.listArray (0, n - 1)) lps }
+  where
+    n = length ports
+    ix = M.fromList (zip ports [0 ..])
+    arrOf f = listArray (0, n - 1) (map f [0 .. n - 1]) :: UArray Int Bool
+    (shareA, enA, rdyA, argA) = (arrOf shareC, arrOf enC, arrOf rdyC, arrOf argC)
+    on f p q = case (M.lookup p ix, M.lookup q ix) of
+        (Just a, Just b) -> f a b
+        _ -> False
+    one a p = maybe False (a !) (M.lookup p ix)
+
+-- | bsc's schedule statements as relation codes by port pair (row-major over @ports@; 0 none, 1 CF,
+-- 2 SB, 3 SBR, 4 C, 5 other), the first statement naming a pair winning (as 'schedMap').
+schedCodes :: [String] -> Sched -> UArray Int Word8
+schedCodes ports sl = accumArray (\old new -> if old == 0 then new else old) 0 (0, n * n - 1)
+    [ (a * n + b, relCode r) | (ps, r, qs) <- sl, Just a <- map (`M.lookup` ix) ps, Just b <- map (`M.lookup` ix) qs ]
+  where
+    n = length ports
+    ix = M.fromList (zip ports [0 :: Int ..])
+
+relCode :: String -> Word8
+relCode r = case r of { "CF" -> 1; "SB" -> 2; "SBR" -> 3; "C" -> 4; _ -> 5 }
 
 -- | The task statements' kind: one port per statement, in rank order.
 tasksKind :: Int -> KindDef

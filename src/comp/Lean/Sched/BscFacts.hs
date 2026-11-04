@@ -26,6 +26,7 @@ import qualified Data.Map.Strict as M (Map, (!), elems, empty, findWithDefault, 
 import qualified Data.Set as S (Set, member, empty, fromList, insert, singleton, toList, union)
 import qualified Data.Sequence as Sq (Seq, empty, length, null, (|>))
 
+import Lean.Solver (Solver, newLive, liveRun, newSolverOn)
 import Lean.Sched.Conflicts (conflicting, conflictingIn, emptyUseIndex, mergeOn, useIndex, useIndexCons)
 import Lean.Sched.Extract (freePrefix, scheduledRules)
 import Lean.Sched.Order (orderBlock, ordersOf)
@@ -166,21 +167,19 @@ instance NFData Candidate
 
 -- ---------------------------------------------------------------- the modular path
 
--- | bsc's disjointness solver on each candidate, keeping the confirmed facts (a chain is given as
--- definitions, each the OR of the one before and one more member), and a way to ask more of it.
+-- | bsc's solver on each candidate, keeping the confirmed facts (a chain: definitions, each the OR of the
+-- one before and one more member), a way to ask more, and the skeleton solver on the same live state.
 confirmDisjointnessMore :: ErrorHandle -> Flags -> APackage -> Design -> [Candidate]
-                        -> IO ([DisjointFact], [DisjointFact] -> IO [DisjointFact])
+                        -> IO ([DisjointFact], [DisjointFact] -> IO [DisjointFact], Solver)
 confirmDisjointnessMore errh flags apkg d candidates = do
     let rules = [ (ruleName r, rulePred r, ruleAncestor r) | r <- scheduledRules apkg ]
-    st0 <- initDisjointTestState "schedlean" errh flags (M.elems (dSeqDefs d) ++ chainDefs) (apkg_state_instances apkg) rules
-    (st1, kept) <- foldM check (st0, []) candidates
-    ref <- newIORef st1
-    let more fs = do
-            st <- readIORef ref
+    live <- newLive (initDisjointTestState "schedlean" errh flags (M.elems (dSeqDefs d) ++ chainDefs) (apkg_state_instances apkg) rules)
+    kept <- liveRun live (\st0 -> do { (st1, ks) <- foldM check (st0, []) candidates; return (ks, st1) })
+    let more fs = liveRun live $ \st -> do
             (st', ks) <- foldM (\(s, ks) f -> do { (ok, s') <- ask s f; return (s', if ok then f : ks else ks) }) (st, []) fs
-            writeIORef ref st'
-            return (reverse ks)
-    return (reverse kept, more)
+            return (reverse ks, st')
+    sv <- newSolverOn live (freePrefix "sl_" (M.keys (dSeqDefs d)))
+    return (reverse kept, more, sv)
   where
     chains = map fst (M.elems (M.fromListWith (\new old -> if snd new > snd old then new else old)
                                    [ (cnName c, (c, n)) | Chained (DisjointFact { dfChain = Just (c, n) }) _ <- candidates ]))

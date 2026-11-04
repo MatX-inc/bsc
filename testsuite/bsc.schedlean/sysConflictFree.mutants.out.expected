@@ -1,0 +1,12 @@
+scan segments 1 (at most 4096 uses each)
+wrote ConflictFree.lean: rules 10, methods 0, children 36, sites 75, task statements 6, muxes 5 (member pairs: 0 by checks, 5 one by one), exR bits 2, escapes 2 (site pairs 5, unconfirmed 0), readiness and invariance facts 0 (unconfirmed 0), later-site literals dropped 0, ranks N=2, ag lemmas 4
+check ConflictFree.lean: proved
+mutant 1 of 8, enable drop: the enable of mode.write leaves out RL_tick: killed (error)
+mutant 2 of 8, argument change: the argument of mode.write under a fresh operator: killed (error)
+mutant 3 of 8, mux priority swap: the mux of rs_0.write: RL_r1 and RL_r2 exchange arguments: killed (error)
+mutant 4 of 8, guard read change: the guard of RL_emitA reads c.read for mode.read: killed (error)
+mutant 5 of 8, last-caller order reversal: the last-caller mux of a.write: the first of its 3 callers wins: killed (error)
+mutant 6 of 8, conflict_free condition drop: the enable of rs_0.write takes RL_r1 without its call condition: killed (error)
+mutant 7 of 8, enable force: task statement 0 (RL_emitB's conflict_free report) enabled in every cycle: killed (error)
+mutant 8 of 8, argument change: the argument of _write_RL_r2$EN_rs_0.wset under a fresh operator: killed (error)
+mutants: 8 of 8 killed

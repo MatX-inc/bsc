@@ -1,0 +1,16 @@
+GATE {"name": "mkCounter", "scan": "ok", "slots": 2, "codes": 1, "seg_uses": 2, "mod_facts": 0, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": true, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts mkCounter                    2      3     0      2      1      0      1     1     0     1
+unrealized 0
+shadow mkCounter ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+mkCounter                default  A     emitter yes shadow ports [-] lc callers max 0 slots 2 codes 1 esc 0 facts 0 (-) pairwise 0 seg_uses 2 mod_facts 0 step 2
+GATE {"name": "mkPair", "scan": "ok", "slots": 4, "codes": 1, "seg_uses": 2, "mod_facts": 0, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": true, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts mkPair                       3      5     0      2      2      1      1     1     0     1
+unrealized 0
+shadow mkPair ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+mkPair                   default  A     emitter yes shadow ports [-] lc callers max 0 slots 4 codes 1 esc 0 facts 0 (-) pairwise 0 seg_uses 2 mod_facts 0 step 2
+GATE {"name": "sysHier1", "scan": "ok", "slots": 11, "codes": 1, "seg_uses": 4, "mod_facts": 0, "escapes": 0, "esc_facts": 0, "esc_facts_max_per_pair": 0, "esc_facts_how": {"solver": 0, "bsc": 0, "assert": 0, "null": 0}, "esc_facts_unconfirmed": [], "esc_facts_err": null, "esc_facts_fallback": 0, "lc": [], "lc_method": [], "noncf_methods": false, "mtasks": [], "generic": [], "generic_class": {}, "me_checks": 0, "cf_checks": 0, "me_needed_pairs": 0, "pairwise": 0, "step_fallback": [], "unguarded": []}
+counts sysHier1                     4     11     0      4      3      3      1     1     0     0
+unrealized 0
+shadow sysHier1 ports with two callers 0, solver calls 0, shadowing ports 0 [-]; lc callers max 0; ports relying on mutually_exclusive 0, conflict_free 0; no shadowing
+sysHier1                 default  A     emitter yes shadow ports [-] lc callers max 0 slots 11 codes 1 esc 0 facts 0 (-) pairwise 0 seg_uses 4 mod_facts 0 step 4
+hierarchy sysHier1: modules 3 (mkCounter, mkPair, sysHier1); sysHier1.a syn0 mkCounter path A; sysHier1.b syn0 mkCounter path A; sysHier1.p syn1 mkPair path A

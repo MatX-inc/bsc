@@ -7,21 +7,23 @@ module Lean.Sched.Emit.Hdr
 import Control.Monad (forM_, when, unless)
 import Data.Array ((!), listArray)
 import Data.Bits (shiftL, (.|.))
-import Data.List (intercalate)
+import Data.List (intercalate, stripPrefix)
 import Data.Maybe (fromMaybe)
 import qualified Data.Foldable as F (Foldable(toList))
-import qualified Data.Map.Strict as M (null, (!), findWithDefault, keys, lookup, member, fromListWith)
+import qualified Data.Map.Strict as M (null, (!), findWithDefault, fromList, keys, lookup, member, fromListWith)
 import qualified Data.Set as S (member, empty, fromList, insert, toAscList)
 import qualified Data.Sequence as Sq (fromList, index)
 
-import Lean.Print (andterm, cut, fmt, nat, stab, tab, tup, w, W)
-import Lean.Sched.Emit.Ctx (condHw, ex, guardHw, guardRho, ihelper, isUncond, kd, lport, mxKind, rdyHw, rho,
+import Lean.Print (andterm, cut, fmt, nat, stab, tab, tabOr, tup, w, W)
+import Lean.Sched.Emit.Ctx (cfHw, condHw, ex, hasCf, hwGuard, guardRho, ihelper, isUncond, kd, lport, mxKind, rdyHw, rho,
     site, sitePort, step, EC(ecRDC, ecName, ecLCP, ecCfgLib, ecNM, ecNR, ecU, ecNT, ecKinds, ecM, ecNS,
-    ecMultiBlk, ecChkG, ecLitc, ecGroups, ecWXM, ecMet))
-import Lean.Sched.Kinds (KindDef(kdAlwaysRdy, kdIface, kdUsesc, kdPorts, kdLPorts), PM(PT), Sched)
-import Lean.Sched.Model (DView(dvKids, dvKidOrder), MCheck(ckLst, ckHead), MPort, MSite(sPort, sKind, sArgs,
-    sCond, sArg), MStep(tGuard, tRes, tSites), MX(MFalse, MTrue, MZ, MChkI), Model(mDisj, mMTasks, mDV, mByk,
-    mRules, mBlk, mChecks))
+    ecMultiBlk, ecChkG, ecLitc, ecGroups, ecWXM, ecMet, ecDomNote, ecExport, ecSynth))
+import Lean.Sched.Export (Export(exNS, exMeths, exModule), SynthKid(..), XMeth(..), exConfB, exPrecB, exSbrB, isSynthKind, portFn)
+import Lean.Sched.Kinds (cfgTypes, KindDef(kdAlwaysRdy, kdIface, kdUsesc, kdPorts, kdLPorts, kdCodeRel,
+    kdShare, kdHasEn, kdMType), PM(PT, PS), Sched)
+import Lean.Sched.Model (DView(dvKids, dvKidOrder), MCheck(ckLst, ckHead, ckHeads), MCf(cfRule, cfLine), MPort,
+    MSite(sPort, sKind, sArgs, sCond, sArg), MStep(tGuard, tRes, tSites, tName), MX(MFalse, MTrue, MZ, MChkI),
+    Model(mDisj, mMTasks, mDV, mByk, mRules, mBlk, mChecks, mCfS))
 
 mtaskNote :: EC -> String
 mtaskNote ec = case mMTasks (ecM ec) of
@@ -31,17 +33,30 @@ mtaskNote ec = case mMTasks (ecM ec) of
 
 asmNote :: EC -> String
 asmNote ec
-    | null (mChecks (ecM ec)) = "\n   Assumed user assertions (bsc's run-time checks): none."
+    | null (mChecks (ecM ec)) && not (hasCf ec) = "\n   Assumed user assertions (bsc's run-time checks): none" ++ (if null kidAsm then "." else " of its own." ++ kidAsm)
     | otherwise = "\n   Assumed user assertions (bsc's run-time checks, in `asm`): " ++ show (length (ecGroups ec))
                   ++ " mutually_exclusive group(s) of " ++ (case ecGroups ec of { [] -> "0"; gs -> intercalate ", " (map (show . length) gs) })
-                  ++ " rules (`grpT`) and " ++ show (length (ecLitc ec)) ++ " single check(s) (`chkHead`, `chkLst`)."
+                  ++ " rules (`grpT`) and " ++ show (length (ecLitc ec)) ++ " single check(s) (`chkHead`, `chkLst`)"
+                  ++ (if nj == 0 then "" else ",\n   " ++ show nj ++ " of them from line(s) with several rules on their first side (one check per rule of\n\
+\   that side; together exactly bsc's line)")
+                  ++ (if not (hasCf ec) then "." else ";\n   " ++ show (length (mCfS (ecM ec))) ++ " conflict_free check(s) (`cfR`, `cfT`), each instrumentation wire read as its one\n\
+\   writer's argument; a fact the solver confirms only with them assumed is stated under `asmP`.")
+                  ++ kidAsm
+  where kidAsm = case [ exModule (skExport sk) | (_, sk) <- ecSynth ec, skOff sk == Nothing, "user assertions (in asm)" `elem` skAssume sk ] of
+            [] -> ""
+            ms -> "\n   Its synthesized children's files assume their own (in their `asm`): " ++ intercalate ", " ms ++ "."
+        nj = length [ () | c <- ecLitc ec, length (ckHeads (mChecks (ecM ec) !! c)) > 1 ]
 
 schedLean :: Sched -> String -> String
 schedLean sl ctor = "[" ++ intercalate ",\n   " [ "([" ++ intercalate ", " (map (ctor ++) ps) ++ "], ." ++ r ++ ", ["
                                                    ++ intercalate ", " (map (ctor ++) qs) ++ "])" | (ps, r, qs) <- sl ] ++ "]"
 
 kidSched :: EC -> String -> Sched
-kidSched ec typ = case [ sl | k <- dvKidOrder dv, Just (t, _, sl) <- [M.lookup k (dvKids dv)], t == typ ] of
+kidSched ec typ = kidSchedOf ec [typ]
+
+-- | The schedule of the first child whose Verilog module is one of these.
+kidSchedOf :: EC -> [String] -> Sched
+kidSchedOf ec typs = case [ sl | k <- dvKidOrder dv, Just (t, _, sl) <- [M.lookup k (dvKids dv)], t `elem` typs ] of
     (x : _) -> x
     [] -> []
   where dv = mDV (ecM ec)
@@ -56,7 +71,7 @@ emitHeader ec = do
         m = ecM ec
     w (fmt "/- %s: the modular obligation of one corpus module, emitted by schedlean.\n\
 \   Structure (children, steps, sites, users, exclusions) is the design's; data and\n\
-\   guards are opaque operators over their real fan-in (see e2e/README.md).%s%s -/\n\
+\   guards are opaque operators over their real fan-in (see e2e/README.md).%s%s%s -/\n\
 \%s\n\
 \open Modular Emit Scan\n\
 \open scoped List\n\
@@ -81,12 +96,30 @@ emitHeader ec = do
 \  g : Nat → V → Bool\n\
 \  ofBool : Bool → V\n\
 \  toB : V → Bool := fun _ => false\n"
-       [name, mtaskNote ec, asmNote ec, if not (null (ecLCP ec)) || ecCfgLib ec then "import LastCaller" else "import Scan", name])
+       [name, mtaskNote ec, asmNote ec, ecDomNote ec, (if not (null (ecLCP ec)) || ecCfgLib ec then "import LastCaller" else "import Scan")
+                                                     ++ concat [ "\nimport " ++ ns | ns <- childImports ec ], name])
     w localLemmas
     w "/-! ## Child interfaces: the library's, and assumed kinds from the dump's schedules -/\n"
     when ("fifo" `elem` kinds) $ w (fmt fifoText [schedLean (kidSched ec "FIFOL1") "."])
-    when ("cfg" `elem` kinds) $ w (fmt cfgLibText [schedLean (kidSched ec "ConfigRegN") "."])
+    when ("cfg" `elem` kinds) $ w (fmt cfgLibText [schedLean (kidSchedOf ec cfgTypes) "."])
     when ("rf" `elem` kinds) $ w rfText
+    forM_ [ (k, sk) | (k, sk) <- ecSynth ec, skOff sk /= Nothing ] $ \(k, sk) -> do
+        let kdef = kd ec k
+            ps = kdPorts kdef
+            n = length ps
+            (cp, cs, cc) = fromMaybe (error "schedlean: a synthesized leaf without code relations") (kdCodeRel kdef)
+            code = M.fromList (zip ps [0 :: Int ..])
+            rel f = [ [ b | b <- [0 .. n - 1], f a b ] | a <- [0 .. n - 1] ]
+            rdyOf = [ maybe [] pure (M.lookup (PS ("RDY_" ++ pname p)) code) | p <- ps ]
+        w (fmt "/-- %s: %s, an assumed synthesized leaf (design §3.1, %s): its ports bsc's methods as the parent\n\
+\    sees them, action methods C with themselves, each RDY_m an always-ready value port aliased to m's ready. -/"
+               [k, exModule (skExport sk), maybe "" id (skOff sk)])
+        w (finAnn ("sA_" ++ k) n (rel cp) (rel cs) (rel cc) (map (kdShare kdef) ps)
+                  (map (kdHasEn kdef) ps) (map (kdAlwaysRdy kdef) ps) (Just rdyOf))
+        w (fmt "abbrev sX_%s : Iface := ⟨Fin %d, inferInstance, sA_%s⟩\n\
+\def %s (i : Nat) : Fin %d := ⟨i %% %d, Nat.mod_lt _ (by decide)⟩\n\
+\theorem %s_val (m : Fin %d) : %s m.val = m := Fin.ext (Nat.mod_eq_of_lt m.isLt)\n"
+               [k, show n, k, portFn k, show n, show n, portFn k, show n, portFn k])
     when (hasF2 ec) $ w ""
     let nT = ecNT ec
         kdOf = kd ec
@@ -98,14 +131,54 @@ emitHeader ec = do
     w ("abbrev KI : Kind → Iface\n" ++ concat [ "  | ." ++ k ++ " => " ++ fromMaybe "" (kdIface (kdOf k)) ++ "\n" | k <- kinds ])
     w "abbrev I := Σ κ : Kind, Fin (nk κ)\nabbrev CI : I → Iface := fun j => KI j.1\nabbrev OC (V : Type) := (j : I) → Outs (CI j).M V\n"
     forM_ kinds $ \k -> w (fmt "def %s (i : Nat) : I := ⟨.%s, ⟨i %% nk .%s, Nat.mod_lt _ (by decide)⟩⟩" [ihelper k, k, k])
-    if not (ecMet ec)
-        then w (fmt noMetText [show (ecNR ec), show (ecNS ec)])
-        else w (fmt metText [show (ecNM ec), show (ecNR ec), show (ecNS ec)])
+    case ecExport ec of
+        Just ex | ecMet ec -> do
+            let xs = exMeths ex
+                n = length xs
+                rel f = [ [ b | b <- [0 .. n - 1], f a b ] | a <- [0 .. n - 1] ]
+            w (fmt "\nabbrev nM : Nat := %d\n\
+\/-- The module's exported methods, as a synthesized child (design §3.1), in order: %s.\n\
+\    bsc's exported relations as bits by method (prec: SB, SBR; sbr: SBR; conf: C, or none; action\n\
+\    methods C with themselves); value methods without an enable, one argument wire (`share`);\n\
+\    `alwaysRdy` where bsc builds the method always ready (its wrapper assumes RDY = 1). -/" [show n, intercalate ", " (map xmName xs)])
+            w (finAnn "xAnn" n (rel (exPrecB ex)) (rel (exSbrB ex)) (rel (exConfB ex)) (map xmValue xs) (map (not . xmValue) xs) (map xmAR xs) Nothing)
+            w (fmt (fromMaybe (error "schedlean: metText does not start with metHead") (stripPrefix metHead metText)) [show (ecNR ec), show (ecNS ec)])
+        _ | not (ecMet ec) -> w (fmt noMetText [show (ecNR ec), show (ecNS ec)])
+          | otherwise -> w (fmt metText [show (ecNM ec), show (ecNR ec), show (ecNS ec)])
     w buildersText
+    unless (null (ecSynth ec)) $ w finBuilders
     when ("cfg" `elem` kinds) $ w cfgBuilders
     when ("fifo" `elem` kinds) $ w fifoBuilders
     when (hasF2 ec) $ w f2Builders
     when ("rf" `elem` kinds) $ w rfBuilders
+
+-- | The files of the synthesized children on path A (design.md §3.1).
+childImports :: EC -> [String]
+childImports ec = foldl (\acc x -> if x `elem` acc then acc else acc ++ [x]) [] [ exNS (skExport sk) | (_, sk) <- ecSynth ec, skOff sk == Nothing ]
+
+pname :: PM -> String
+pname (PS p) = p
+pname (PT t) = show t
+
+-- | An annotation over @Fin n@ as bits by port: prec, sbr, conf, each by rows and by columns (a pair related
+-- where both say so, for the row-mask kind check), share, hasEn, alwaysRdy, and rdyRet when given.
+finAnn :: String -> Int -> [[Int]] -> [[Int]] -> [[Int]] -> [Bool] -> [Bool] -> [Bool] -> Maybe [[Int]] -> String
+finAnn nm n prec sbr conf share en rdy rr =
+    concat [ "def " ++ nm ++ s ++ "T : Tab Nat :=\n  " ++ tabOr "0" (map (show . bitsOf) t) ++ "\n"
+           | (s, t) <- concat [ [(r, x), (r ++ "C", cols x)] | (r, x) <- [("Prec", prec), ("Sbr", sbr), ("Conf", conf)] ]
+                       ++ maybe [] (\x -> [("RdyRet", x)]) rr ]
+    ++ concat [ "def " ++ nm ++ s ++ "B : Nat := " ++ show (bitsOf [ i | (i, True) <- zip [0 ..] t ]) ++ "\n"
+              | (s, t) <- [("Share", share), ("En", en), ("Rdy", rdy)] ]
+    ++ "def " ++ nm ++ " : Ann (Fin " ++ show n ++ ") where\n"
+    ++ concat [ "  " ++ f ++ " p q := (" ++ nm ++ s ++ "T.get p.val).testBit q.val && (" ++ nm ++ s ++ "CT.get q.val).testBit p.val\n"
+              | (f, s) <- [("prec", "Prec"), ("sbr", "Sbr"), ("conf", "Conf")] ]
+    ++ "  share m := " ++ nm ++ "ShareB.testBit m.val\n  hasEn m := " ++ nm ++ "EnB.testBit m.val\n  alwaysEn _ := false\n"
+    ++ "  alwaysRdy m := " ++ nm ++ "RdyB.testBit m.val\n"
+    ++ maybe "" (const ("  rdyRet a p := (" ++ nm ++ "RdyRetT.get a.val).testBit p.val\n")) rr
+  where bitsOf is = foldl (\acc i -> acc .|. (1 `shiftL` i)) (0 :: Integer) is
+        -- each column's rows, from the rows (one pass over the pairs)
+        cols x = let m = M.fromListWith (flip (++)) [ (b, [a]) | (a, bs) <- zip [0 :: Int ..] x, b <- bs ]
+                 in [ M.findWithDefault [] b m | b <- [0 .. n - 1] ]
 
 usesTab :: EC -> MPort -> String
 usesTab ec p =
@@ -127,11 +200,17 @@ emitUses ec = do
         nT = ecNT ec
         kdOf = kd ec
         lps k = intercalate ", " (fromMaybe [] (kdLPorts (kdOf k)))
+        plist k = if isSynthKind k then "List.finRange " ++ drop 4 (mty k) else "[" ++ lps k ++ "]"
+        mty k = fromMaybe "" (kdMType (kdOf k))
     forM_ kinds $ \k -> if k == "tasks"
         then do
             stab "tusesT" "Tab (Tab (Nat × List Nat))" [ usesTab ec ("tasks", 0, PT t) | t <- [0 .. nT - 1] ]
             stab "tusT" "Tab (List Nat)" [ usesUs ec ("tasks", 0, PT t) | t <- [0 .. nT - 1] ]
             w "def uses_tasks : Tab (Uses (KI .tasks).M) := .leaf ⟨fun t => tusesT.get t.val, fun t => tusT.get t.val⟩"
+        else if isSynthKind k then stab ("uses_" ++ k) ("Tab (Uses (KI ." ++ k ++ ").M)")
+                  [ "finU " ++ tabOr ".leaf (0, [])" [ usesTab ec (k, i, pm) | pm <- kdPorts (kdOf k) ] ++ "\n  "
+                    ++ tabOr "[]" [ usesUs ec (k, i, pm) | pm <- kdPorts (kdOf k) ]
+                  | i <- [0 .. length (mByk m M.! k) - 1] ]
         else stab ("uses_" ++ k) ("Tab (Uses (KI ." ++ k ++ ").M)")
                   [ fromMaybe "" (kdUsesc (kdOf k)) ++ " " ++ unwords [ usesTab ec (k, i, pm) | pm <- kdPorts (kdOf k) ]
                     ++ " " ++ unwords [ usesUs ec (k, i, pm) | pm <- kdPorts (kdOf k) ]
@@ -141,10 +220,13 @@ emitUses ec = do
     forM_ kinds $ \k -> if k == "tasks"
         then w "theorem usOK_tasks' : Tab.allB (fun t T => usersT T == tusT.get t) tusesT 0 nT = true := by decide +kernel"
         else do
-            w (fmt "theorem usOK_%s : Tab.allB (fun _ U => ([%s] : List (KI .%s).M).all (fun m => usersT (U.uses m) == U.us m)) uses_%s 0 (nk .%s) = true := by\n  decide +kernel"
-                   [k, lps k, k, k, k])
+            w (fmt "theorem usOK_%s : Tab.allB (fun _ U => (%s : List (KI .%s).M).all (fun m => usersT (U.uses m) == U.us m)) uses_%s 0 (nk .%s) = true := by\n  decide +kernel"
+                   [k, plist k, k, k, k])
             if k == "reg"
                 then w "theorem portsU_reg : ∀ p : CRegM 1, p ∈ [Reg.read, Reg.write]\n  | .rd ⟨0, _⟩ => by simp\n  | .wr ⟨0, _⟩ => by simp"
+                else if isSynthKind k
+                -- a synthesized kind's ports are List.finRange (no list written or decided)
+                then w (fmt "theorem portsU_%s : ∀ p : %s, p ∈ List.finRange %s := List.mem_finRange" [k, mty k, drop 4 (mty k)])
                 else w (fmt "theorem portsU_%s : ∀ p : (KI .%s).M, p ∈ [%s] := by intro p; cases p <;> simp" [k, k, lps k])
     w ("/-- The users list is the uses table's (decided per kind). -/\n\
 \theorem usersT_eq (p : Σ j : I, (CI j).M) : usersT (usesAt p) = usL p := by\n\
@@ -261,6 +343,10 @@ emitGuards ec = do
         Just (MChkI c) | Just (g, j) <- M.lookup c chkG ->
             w (fmt "def G_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := WFd_%d V ops E oc && orL (((grpT.get %d).drop %d).map (fun y => (wfdT.get y) V ops E oc))"
                    [show k, show (ckHead (checks ! c)), show g, show (j + 1)])
+        Just (MChkI c) | length (ckHeads (checks ! c)) > 1 -> let ch = checks ! c
+                          in w (fmt "def G_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := orL [%s] && orL [%s]"
+                                    [show k, intercalate ", " [ "WFd_" ++ show y ++ " V ops E oc" | y <- ckHeads ch ]
+                                    , intercalate ", " [ "WFd_" ++ show y ++ " V ops E oc" | y <- ckLst ch ]])
         Just (MChkI c) -> let ch = checks ! c
                           in w (fmt "def G_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool := WFd_%d V ops E oc && orL [%s]"
                                     [show k, show (ckHead ch), intercalate ", " [ "WFd_" ++ show y ++ " V ops E oc" | y <- ckLst ch ]])
@@ -278,13 +364,40 @@ emitGuards ec = do
     stab "dAT" "Tab Nat" (case disj of { [] -> ["0"]; _ -> [ show a | (a, _) <- disj ] })
     stab "dBT" "Tab Nat" (case disj of { [] -> ["0"]; _ -> [ show b | (_, b) <- disj ] })
     w ("abbrev nD : Nat := " ++ show (length disj))
-    w (fmt cfWfText [ecWXM ec] ++ (if not (ecMet ec) then stepOnNoMet else stepOnMet) ++ asmText)
+    let cfs = mCfS m
+        joinedN = length [ () | c <- litc, length (ckHeads (checks ! c)) > 1 ]
+    w (fmt cfWfText [ecWXM ec] ++ (if not (ecMet ec) then stepOnNoMet else stepOnMet) ++ cfText ec ++ asmTextOf (joinedN > 0) (not (null cfs)))
+    -- each conflict_free check from asm, for the task statement that reports it
+    unless (null cfs) $
+        w ("section\nvariable {V : Type}\n/-- A conflict_free check's report: its step never makes it, and its enable is false where\n\
+\    the check passes (`asm`). -/\n\
+\theorem en_tcf {a b : Bool} (h : (a && b) = false) : (a && b) = true ↔ a = true ∧ false = true := by\n\
+\  rw [h]; exact ⟨fun h' => absurd h' Bool.false_ne_true, fun h' => absurd h'.2 Bool.false_ne_true⟩\n"
+           ++ concat [ fmt "theorem cfA_%d (ops : Ops V) (E : EqC V) (oc : OC V) (hA : asmP ops E oc) :\n\
+\    (WF ops E oc %d && cfL_%d V ops E oc) = false := hA.2.2 %d rfl\n" [show c, show (cfRule cf), show c, show c]
+                     | (c, cf) <- zip [0 :: Int ..] cfs ]
+           ++ "end\n")
     cut
+
+-- | bsc's conflict_free checks as the file states them: each one's line and rule (empty without any).
+cfText :: EC -> String
+cfText ec = case mCfS (ecM ec) of
+    [] -> ""
+    cfs -> "/-! bsc's `conflict_free` checks (design §5): check `c` in rule `cfR.get c` is `!(WF R && cfL_c)`, `cfL_c`\n\
+\    its line with each instrumentation wire read as its one unconditional writer's argument (a condition\n\
+\    over that writer's reads; trust point 3). -/\n"
+           ++ concat [ fmt "/-- In %s, bsc's line `%s`. -/\ndef cfL_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) : Bool :=\n  %s\n"
+                           [tName (step ec (cfRule cf)), unwords (words (cfLine cf)), show c, cfHw ec cf]
+                     | (c, cf) <- zip [0 :: Int ..] cfs ]
+           ++ "def cfR : Tab Nat :=\n  " ++ tab (map (show . cfRule) cfs) ++ "\n"
+           ++ "def cfT : Tab ((V : Type) → Ops V → EqC V → OC V → Bool) :=\n  " ++ tab [ "cfL_" ++ show c | c <- [0 .. length cfs - 1] ] ++ "\n"
+           ++ "abbrev nF : Nat := " ++ show (length cfs) ++ "\n"
+
 
 -- | CAN_FIRE's guard part: the explicit guard, and bsc's lifted readiness of conditional guarded calls.
 gDef :: EC -> Int -> String
 gDef ec k =
-    let base = guardHw ec k
+    let base = hwGuard ec k
         rdc = ecRDC ec ! k
         parts = [ "(!(" ++ condHw ec k (site ec k i) ++ ") || " ++ rdyHw ec (sitePort ec k i) ++ ")" | i <- rdc ]
     in if null rdc then base else "(" ++ base ++ ") && (" ++ andterm (parts ++ ["true"]) ++ ")"
@@ -420,6 +533,28 @@ noMetText = "\n\
 \def rR (k : Nat) : Fin nR := ⟨k %% nR, Nat.mod_lt _ (by decide)⟩\n\
 \theorem rR_val (r : Fin nR) : rR r.val = r := Fin.ext (Nat.mod_eq_of_lt r.isLt)\n\
 \theorem rlt (r : Fin nR) : r.val < nS := Nat.lt_of_lt_of_le r.isLt (by decide)\n"
+
+-- | metText's lines up to and including X (an exported module states its own xAnn instead).
+metHead :: String
+metHead = "\n\
+\abbrev nM : Nat := %d\n\
+\/-- The module's exported methods (dump order): pairwise CF, each conflicting with itself; enabled,\n\
+\    with RDY outputs. -/\n\
+\def xAnn : Ann (Fin nM) where\n\
+\  prec _ _ := false\n\
+\  sbr _ _ := false\n\
+\  conf p q := decide (p = q)\n\
+\  share _ := false\n\
+\  hasEn _ := true\n\
+\  alwaysEn _ := false\n\
+\  alwaysRdy _ := false\n"
+
+finBuilders :: String
+finBuilders = "/-- A synthesized child's wires and uses, by method index in balanced tables (design §3.1). -/\n\
+\def finW {V : Type} {n : Nat} (en : Tab Bool) (d : Tab V) : Wires (Fin n) V :=\n\
+\  ⟨fun m => en.get m.val, fun m => d.get m.val⟩\n\
+\def finU {n : Nat} (t : Tab (Tab (Nat × List Nat))) (l : Tab (List Nat)) : Uses (Fin n) :=\n\
+\  ⟨fun m => t.get m.val, fun m => l.get m.val⟩\n"
 
 metText :: String
 metText = "\n\
@@ -608,12 +743,23 @@ stepOnMet = "def stepOn (ops : Ops V) (E : EqC V) (oc : OC V) (w : Wires (Fin nM
 \  | .inl m => calledM w m\n\
 \  | .inr r => WF ops E oc r.val\n"
 
-asmText :: String
-asmText = "/-- The module's assertions: bsc's run-time checks of `mutually_exclusive`, each `!(WF h && (WF y || …))`\n\
-\    exactly as bsc's line (one rule on its first side), a group's checks as one `SufAsm`. -/\n\
+-- | asmP and its accessors: with lines of several rules on their first side (@joined@), and with
+-- conflict_free checks (@cf@, a third conjunct); with neither, round 9a's text.
+asmTextOf :: Bool -> Bool -> String
+asmTextOf joined cf = "/-- The module's assertions: bsc's run-time checks of `mutually_exclusive`, each `!(WF h && (WF y || …))`\n\
+\    exactly as bsc's line (one rule on its first side), a group's checks as one `SufAsm`"
+    ++ (if joined then ";\n    a line `(WF h₁ || …) && (WF y || …)` as one such check per `hᵢ` (together exactly the line)" else "")
+    ++ (if cf then ";\n    and bsc's `conflict_free` checks, each `!(WF R && cfL_c)`" else "")
+    ++ ". -/\n\
 \def asmP (ops : Ops V) (E : EqC V) (oc : OC V) : Prop :=\n\
-\  (∀ g, Nat.blt g nG = true → SufAsm (WF ops E oc) (grpT.get g)) ∧\n\
-\  ∀ c, Nat.blt c nC = true → (WF ops E oc (chkHead.get c) && orL ((chkLst.get c).map (WF ops E oc))) = false\n\
+\  (∀ g, Nat.blt g nG = true → SufAsm (WF ops E oc) (grpT.get g)) ∧\n"
+    ++ (if not cf then "  ∀ c, Nat.blt c nC = true → (WF ops E oc (chkHead.get c) && orL ((chkLst.get c).map (WF ops E oc))) = false\n"
+        else "  (∀ c, Nat.blt c nC = true → (WF ops E oc (chkHead.get c) && orL ((chkLst.get c).map (WF ops E oc))) = false) ∧\n\
+\  ∀ c, Nat.blt c nF = true → (WF ops E oc (cfR.get c) && (cfT.get c) V ops E oc) = false\n")
+    ++ asmRest
+
+asmRest :: String
+asmRest = "\
 \theorem cf_of_wf {ops : Ops V} {E : EqC V} {oc : OC V} {k : Nat} (h : WF ops E oc k = true) : CF ops E oc k = true :=\n\
 \  ((Bool.and_eq_true _ _).mp h).1\n\
 \theorem rd_of_cf {ops : Ops V} {E : EqC V} {oc : OC V} {k : Nat} (h : CF ops E oc k = true) : RD oc k = true :=\n\

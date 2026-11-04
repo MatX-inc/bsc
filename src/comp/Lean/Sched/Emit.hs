@@ -1,7 +1,7 @@
 -- | The modular obligation file of one module (mke2e.py, emit/conventions.md):
 -- the sections in order, the facts' group paths, parts and the summary.
 module Lean.Sched.Emit
-    ( emitFile, Emitted(..), emitModule
+    ( emitFile, Emitted(..), MutantFile(..), emitModule
     ) where
 
 import Control.Exception (ErrorCall(..), SomeAsyncException, displayException, evaluate, fromException, throwIO, try)
@@ -16,67 +16,90 @@ import qualified Data.Map.Strict as M (Map, lookup)
 
 import Lean.Print (runW, w, WS(wsL))
 import Lean.Sched.Bounds (Bounds(bnGatePart))
-import Lean.Sched.Emit.Acyc (acycPlan, emitAcyc, emitTop, AcycPlan(apAgNeed, apNoAcyc, apNN))
+import Lean.Sched.Emit.Acyc (acycPlan, assumesOf, emitAcyc, emitTop, emitTopH, AcycPlan(apAgNeed, apNoAcyc, apNN))
 import Lean.Sched.Emit.Arms (emitArms, emitHyps)
 import Lean.Sched.Emit.Cert (emitCert, emitEAQ, emitLC)
-import Lean.Sched.Emit.Ctx (isUncond, kd, step, EC(ecESC, ecNS, ecName, ecM, ecEFacts, ecNR, ecNM, ecNT,
-    ecMuxes, ecNeed))
+import Lean.Sched.Emit.Ctx (hierForm, isUncond, kd, step, EC(ecESC, ecNS, ecName, ecM, ecEFacts, ecNR, ecNM, ecNT,
+    ecMuxes, ecNeed, ecEdit, ecDomNote, ecHasUnconf))
 import Lean.Sched.Emit.Hdr (emitGuards, emitHeader, emitSites, emitUses)
 import Lean.Sched.Emit.Plan (mkPlan)
+import Lean.Sched.Domain (domainNote)
 import Lean.Sched.Emit.Proofs (emitChecks, emitHQ, emitRY, emitSiteProofs, emitValues)
 import Lean.Sched.Emit.ScanTabs (emitChains, emitScan, Counts(cnUncov, cnChkPairs))
 import Lean.Sched.Facts (newFactShare)
 import Lean.Sched.Kinds (KindDef(kdAlwaysRdy))
 import Lean.Sched.Model (buildModelWith, pyStrErr, MFact(fOk), MSite(sPort), MStep(tSites), Model(mLaterDrops,
     mMTasks, mRules, mInst, mFacts))
+import Lean.Sched.Mutate (candidates, choose, renumberTasks, Change(..), Mutant(..))
 import Lean.Sched.Py (omSize)
-import Lean.Sched.Run (prepare, Input(inBounds, inTimer), Prep(pBL, pSolver, pDV, pSites))
+import Lean.Sched.Run (prepare, Input(inBounds, inTimer, inDesign), Prep(pBL, pSolver, pDV, pSites, pDomain, pDomainWhy))
 import Lean.Sched.Time (phase)
 
 -- | The file's parts (path stem suffix and text) and the lines the prototype printed.
-data Emitted = Emitted { emParts :: [(Maybe Int, String)], emLog :: [String] }
+data Emitted = Emitted { emParts :: [(Maybe Int, String)], emLog :: [String], emOff :: Maybe String, emAssume :: [String] }
+  -- ^ emOff: why a parent cannot build on the file (no top, or unconfirmed facts); Nothing on path A;
+  -- emAssume: what the file assumes (Acyc.assumesOf)
 
--- | The default run: site conditions, the model in the emitter's mode, its plan, then the
--- file's parts in memory (Left: the stop message).  @tasks@ and @firstRules@ are measurement options.
-emitModule :: Input -> Bool -> Maybe Int -> FilePath -> IO (Either String Emitted)
-emitModule inp tasks firstRules file = do
-    r <- try (emitModule' inp tasks firstRules file)
+-- | A hardware mutant (--mutants): its kind, what it changes, and its file at a given path.
+data MutantFile = MutantFile { mfKind :: String, mfWhat :: String, mfEmit :: FilePath -> IO (Either String Emitted) }
+
+-- | The default run: sites, the model, its plan, the file's parts in memory (Left: the stop message)
+-- and the first @nmut@ mutants; @tasks@ and @firstRules@ are measurement options.
+emitModule :: Input -> Bool -> Maybe Int -> FilePath -> Int -> IO (Either String (Emitted, [MutantFile]))
+emitModule inp tasks firstRules file nmut = stops (emitModule' inp tasks firstRules file nmut)
+
+-- | Any exception (an error call, a failed pattern) is a stop; interrupts and overflows propagate.
+stops :: IO (Either String a) -> IO (Either String a)
+stops act = do
+    r <- try act
     case r of
-        -- any exception (an error call, a failed pattern) is a stop; interrupts and overflows propagate
         Left e | Just a <- fromException e -> throwIO (a :: SomeAsyncException)
                | otherwise -> return (Left (dropPrefix "schedlean: " (maybe (displayException e) (\(ErrorCall m) -> m) (fromException e))))
         Right x -> return x
   where dropPrefix pre s = if take (length pre) s == pre then drop (length pre) s else s
 
-emitModule' :: Input -> Bool -> Maybe Int -> FilePath -> IO (Either String Emitted)
-emitModule' inp tasks firstRules file = do
+forced :: Emitted -> IO Emitted
+forced em = evaluate (sum (map (length . snd) (emParts em)) + length (concat (emLog em))) >> return em
+
+emitModule' :: Input -> Bool -> Maybe Int -> FilePath -> Int -> IO (Either String (Emitted, [MutantFile]))
+emitModule' inp tasks firstRules file nmut = do
     let t = inTimer inp
     r <- prepare inp
     case r of
         Left (Left err) -> return (Left ("sites: " ++ err))
         Left (Right err) -> return (Left err)
+        Right p | (why : _) <- pDomainWhy p -> return (Left why)
         Right p -> do
             me <- phase t "model" (buildModelWith False tasks firstRules (pDV p) (pSites p))
             case me of
                 Left err -> return (Left (pyStrErr err))
                 Right m -> do
-                    share <- newFactShare (pSolver p) (pSites p)
-                    pe <- phase t "facts" (mkPlan (pSolver p) share (pDV p) (pSites p) (pBL p) (inBounds inp) (takeBaseName file) m)
+                    let plan m' = newFactShare (pSolver p) (pSites p) >>= \share ->
+                            fmap (fmap (\ec -> ec { ecDomNote = domainNote (pDomain p) }))
+                                 (mkPlan (pSolver p) share (pDV p) (pSites p) (pBL p) (inBounds inp) (takeBaseName file) m')
+                    pe <- phase t "facts" (plan m)
                     case pe of
                         Left err -> return (Left err)
                         Right ec -> phase t "emit" $ do
-                            let em = emitFile ec (inBounds inp) file
                             -- forced here, so the emitter's own stops are caught by emitModule
-                            _ <- evaluate (sum (map (length . snd) (emParts em)) + length (concat (emLog em)))
-                            return (Right em)
+                            em <- forced (emitFile ec (inBounds inp) file)
+                            let mutant mu = MutantFile (muKind mu) (muWhat mu) $ \out -> stops $ case muChange mu of
+                                    Hw e -> Right <$> forced (emitFile ec { ecEdit = e } (inBounds inp) out)
+                                    Renumber k -> plan (renumberTasks k m) >>= either (return . Left)
+                                                      (\ec' -> Right <$> forced (emitFile ec' (inBounds inp) out))
+                                muts = if nmut <= 0 then [] else map mutant (choose nmut (candidates (inDesign inp) ec))
+                            return (Right (em, muts))
 
 -- | UTF-8 length of a string, as os.path.getsize counts it.
 utf8Len :: String -> Int
 utf8Len = sum . map (\c -> let o = ord c in if o < 0x80 then 1 else if o < 0x800 then 2 else if o < 0x10000 then 3 else 4)
 
 emitFile :: EC -> Bounds -> FilePath -> Emitted
-emitFile ec bnd out = Emitted files (notes ++ partsMsg ++ [segMsg, wroteMsg])
+emitFile ec bnd out = Emitted files (notes ++ partsMsg ++ [segMsg, wroteMsg]) off (assumesOf ec)
   where
+    off | apNoAcyc ap = Just "no Acyc/top"
+        | ecHasUnconf ec = Just "unconfirmed facts"
+        | otherwise = Nothing
     nS = ecNS ec
     needuc = or [ not (isUncond s) && not (kdAlwaysRdy (kd ec k) p) | k <- [0 .. nS - 1], s <- F.toList (tSites (step ec k)), let (k, _, p) = sPort s ]
     ap = acycPlan ec
@@ -100,7 +123,7 @@ emitFile ec bnd out = Emitted files (notes ++ partsMsg ++ [segMsg, wroteMsg])
         w "/-! ## Acyclicity: read lists as filters of allOuts -/\n"
         if apNoAcyc ap
             then w ("end\nend " ++ ecName ec ++ "\n\n#print axioms " ++ ecName ec ++ ".obl\n")
-            else emitAcyc ec ap >> emitTop ec
+            else emitAcyc ec ap >> (if hierForm ec then emitTopH ec else emitTop ec)
         let (fp, _, _, _) = hy
         return (fp, cn, nseg, segUses)
     ((fpath, cn, nseg, segUses), ws) = runW prog

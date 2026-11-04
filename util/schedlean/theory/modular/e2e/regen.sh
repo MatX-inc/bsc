@@ -21,14 +21,14 @@ for m in noagg nosched both; do
   $E -o modes8/MkUrgencyBlocking_$m.lean $IN/lcmodes/$m/mkUrgencyBlocking/mkUrgencyBlocking.ba
 done
 $E -o MkMCR.lean $IN/corpus/mkMCR/mkMCR.ba
+# user assertions in the file: a mutually_exclusive line and a conflict_free check (design.md section 5)
+$E -o MkAssertedSchedules.lean $IN/corpus/mkAssertedSchedules/mkAssertedSchedules.ba
 ( cd lcprobe && $E -o LcProbe64.lean $IN/lcprobe/mkLcProbe64/mkLcProbe64.ba )
-# MethTaskBadEn: the rule's task statement enabled always, which must fail
-( cd mtask && $E -o MethTask.lean $IN/mtask/mkMethTask/mkMethTask.ba &&
-  sed -e 's/(.leaf (fun V (ops : Ops V) (E : EqC V) (oc : OC V) => WF ops E oc 1 \&\& true))/(.leaf (fun V (ops : Ops V) (E : EqC V) (oc : OC V) => true))/' \
-      -e 's/^namespace MethTask$/namespace MethTaskBadEn/' -e 's/^end MethTask$/end MethTaskBadEn/' \
-      -e 's/MethTask\.obl/MethTaskBadEn.obl/; s/MethTask\.top/MethTaskBadEn.top/' MethTask.lean > MethTaskBadEn.lean &&
-  diff MethTask.lean MethTaskBadEn.lean | grep -c '^>' )
-# mejoin: the emitter must stop; the gate still finds the last-caller port
+# MethTask, checked, and six hardware mutants, which must fail (mutant 3, the rule's task statement
+# enabled always, was MethTaskBadEn); Lean from LEAN or PATH
+( cd mtask && $E --mutants 6 -o MethTask.lean $IN/mtask/mkMethTask/mkMethTask.ba )
+# mejoin: a check line with two rules on its first side, one check per rule of it; the gate finds the
+# last-caller port the file has
 ( cd mejoin && $E -o SysMeJoin.lean $IN/mejoin/sysMeJoin/sysMeJoin.ba 2>&1 | tail -1;
   $E --gate $IN/mejoin/sysMeJoin/sysMeJoin.ba | grep -o '"lc": [^]]*]]' )
 } > regen.log 2>&1

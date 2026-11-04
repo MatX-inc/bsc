@@ -1,0 +1,50 @@
+package ConflictFree where
+
+import FIFO
+import Vector
+
+-- conflict_free (bsc's run-time check R0002; the proof assumes it): emitA and emitB both enqueue outQ under
+-- conditions bsc cannot relate, and r1 and r2 update entries of rs at index i and i+1, as in
+-- sysConflictFreeOKLarge.  mutually_exclusive with two rules on its first side: up1 and up2 both write a and
+-- may fire together; down reads and writes a and is asserted exclusive with both.
+{-# verilog sysConflictFree #-}
+sysConflictFree :: Module Empty
+sysConflictFree =
+  module
+    mode :: Reg (Bit 2) <- mkReg 0
+    limit :: Reg (Bit 8) <- mkReg 0
+    c :: Reg (Bit 8) <- mkReg 0
+    outQ :: FIFO (Bit 8) <- mkFIFO
+    rs :: Vector 4 (Reg (Bit 8)) <- replicateM (mkReg 0)
+    i :: Reg (Bit 2) <- mkReg 0
+    a :: Reg (Bit 8) <- mkReg 0
+    let emitA :: Rules
+        emitA = rules
+                  "emitA": when True ==> if mode == 2 then outQ.enq c else noAction
+        emitB :: Rules
+        emitB = rules
+                  "emitB": when True ==> if limit == 9 then outQ.enq limit else noAction
+        r1 :: Rules
+        r1 = rules
+               "r1": when True ==> (select rs i) := (select rs i)._read + 1
+        r2 :: Rules
+        r2 = rules
+               "r2": when True ==> (select rs (i + 1)) := (select rs (i + 1))._read + 2
+        ups :: Rules
+        ups = rules
+                "up1": when mode == 1 ==> a := a + 1
+                "up2": when limit == 3 ==> a := c
+        down :: Rules
+        down = rules
+                 "down": when c == 7 ==> a := a - 1
+    addRules (rJoinConflictFree emitA emitB)
+    addRules (rJoinConflictFree r1 r2)
+    addRules (rJoinMutuallyExclusive ups down)
+    rules
+      "tick": when True ==>
+        action
+          i := i + 1
+          c := c + 1
+          mode := mode + 1
+          limit := limit + 1
+      "drain": when True ==> outQ.deq

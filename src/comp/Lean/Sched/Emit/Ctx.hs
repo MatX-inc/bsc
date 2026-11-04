@@ -1,9 +1,10 @@
 -- | What the emitter's sections share: the module's plan (model, scan, facts,
 -- muxes) and the renderings of a step's expressions (mke2e.py lines 662-876).
 module Lean.Sched.Emit.Ctx
-    ( EC(..), PInfo(..), VCtx(..), vctx, site, step, kd, ihelper, lport, lportOf, ocread, sitePort
-    , isUncond, isCond, ex, rterm, rho, hw, xhw, condHw, argHw, guardHw, guardRho, svHw, rsv, yof
-    , val, evt, evst, evct, condVal, argVal, rdyHw, excl, entry, fsrc, mxKind
+    ( EC(..), PInfo(..), HwEdit(..), VCtx(..), vctx, site, step, kd, ihelper, lport, lportOf, ocread, sitePort, hierForm, exported
+    , hasCf, asmChk, cfHw
+    , isUncond, isCond, ex, rterm, rho, hw, xhw, condHw, argHw, guardHw, hwGuard, guardRho, svHw, rsv, yof
+    , val, evt, evst, evct, condVal, argVal, rdyHw, excl, entry, entryOn, fsrc, mxKind
     ) where
 
 import Data.Array (Array, (!))
@@ -14,15 +15,30 @@ import qualified Data.Set as S (Set)
 import qualified Data.Sequence as Sq (index)
 
 import Lean.Print (andc, andget, andterm, tup, tupcong)
-import Lean.Sched.Kinds (kdCode, KindDef(kdLPorts), PM(PT))
-import Lean.Sched.Model (mxRepr, InvRef(InvFact, InvSelf), MPort, MSite(sArg, sPort, sR, sYsv, sInv, sFact,
-    sCKind, sCond, sKind, sArgs), MStep(tGuard, tSites), MX(..), Model(mMEFind, mK, mBlk, mDFind))
+import Lean.Sched.Export (Export, SynthKid)
+import Lean.Sched.Kinds (kdCode, KindDef(kdLPorts, kdLPortA), PM(PT))
+import Lean.Sched.Model (mxRepr, CfC(CfWF, CfX), InvRef(InvFact, InvSelf), MCf(cfConj), MPort, MSite(sArg, sPort, sR,
+    sYsv, sInv, sFact, sCKind, sCond, sKind, sArgs), MStep(tGuard, tSites), MX(..), Model(mMEFind, mK, mBlk, mDFind, mCfS))
 import Lean.Sched.Scan (ScanDesign, Ent)
 
 -- | A port's arms: its users, how its argument is chosen ('none', 'const', 'single', 'mux', 'lc'),
 -- and for a mux its number, members in mux order and positions.
 data PInfo = PInfo { piUsers :: [(Int, Int)], piArgk :: String, piQ :: Int, piMus :: [(Int, Int)]
                    , piMargs :: [MSite], piMpos :: M.Map Int Int }
+
+-- | One change to the hardware the file states (a mutant, "Lean.Sched.Mutate"); the steps'
+-- sites, and so the obligation's other side, stay as they are.
+data HwEdit = NoEdit
+    | EnDrop MPort Int              -- ^ the port's enable leaves out its user n
+    | EnForce MPort                 -- ^ the port's enable is on in every cycle
+    | TaskEn Int Bool               -- ^ task statement t enabled never (False) or always (True)
+    | ArgWrap MPort Int             -- ^ user n's argument under a fresh operator
+    | TaskArgWrap Int               -- ^ task statement t's arguments under a fresh operator
+    | MuxSwap MPort Int             -- ^ mux members n and n+1 exchange their arguments
+    | GuardRead Int Int (Maybe Int) -- ^ step k's guard reads site j' (Nothing: a constant) for read j
+    | LcReverse MPort               -- ^ a last-caller mux's arms reversed: the first caller wins
+    | CondDrop MPort Int            -- ^ the port's enable takes user n without its call condition
+    deriving (Eq)
 
 data EC = EC
     { ecM :: Model, ecName :: String
@@ -48,7 +64,33 @@ data EC = EC
     , ecHasUnconf :: Bool, ecHyp, ecHya :: String
     , ecWXM, ecXM :: String
     , ecMann :: Maybe ([Integer], [Integer], [Integer], [Integer], [Integer])
+    , ecEdit :: HwEdit
+    , ecDomNote :: String          -- ^ the note on gated clocks and resets (Lean.Sched.Domain.domainNote)
+    , ecExport :: Maybe Export     -- ^ written as a synthesized child: its exported interface (design.md §3.1)
+    , ecSynth :: [(String, SynthKid)]  -- ^ its synthesized children's kinds, in kind order
     }
+
+-- | The built module in the hierarchy form: implK gives ModuleU, with Subs (a child, or a parent).
+hierForm :: EC -> Bool
+hierForm ec = exported ec || not (null (ecSynth ec))
+
+-- | The file states bsc's conflict_free checks: asmP's third conjunct (the checks' part is then .2.1).
+hasCf :: EC -> Bool
+hasCf ec = not (null (mCfS (ecM ec)))
+
+-- | asmP's part for the single mutually_exclusive checks, from h : asmP ops E oc.
+asmChk :: EC -> String -> String
+asmChk ec h = h ++ (if hasCf ec then ".2.1" else ".2")
+
+-- | conflict_free check c's line in the hardware: its conjuncts, each over its own step's reads.
+cfHw :: EC -> MCf -> String
+cfHw ec cf = foldr1 (\a b -> a ++ " && " ++ b) (map one (cfConj cf))
+  where one (CfWF k) = "WF ops E oc " ++ show k
+        one (CfX k e) = ex ec k e (hw ec k) (xhw ec k)
+
+-- | Written as a synthesized child (design.md §3.1).
+exported :: EC -> Bool
+exported ec = isJust (ecExport ec)
 
 step :: EC -> Int -> MStep
 step ec k = ecRules ec ! k
@@ -64,7 +106,10 @@ ihelper (c : r) = 'i' : toUpper c : r
 ihelper [] = "i"
 
 lportOf :: EC -> String -> PM -> String
-lportOf ec k m = fromMaybe [] (kdLPorts (kd ec k)) !! kdCode (kd ec k) m
+lportOf ec k m = case kdLPortA kdef of
+    Just a -> a ! kdCode kdef m
+    Nothing -> fromMaybe [] (kdLPorts kdef) !! kdCode kdef m
+  where kdef = kd ec k
 
 lport :: EC -> MPort -> String
 lport ec (k, i, m) = case m of
@@ -90,7 +135,7 @@ isCond ec k j = isJust (sR (site ec k j))
 mxKind :: MX -> String
 mxKind x = case x of
     MZ -> "z"; MK _ -> "k"; MXarg -> "x"; MF _ _ -> "f"; MG _ _ -> "g"; MGK _ -> "gk"; MSplit {} -> "split"
-    MTrue -> "true"; MFalse -> "false"; MLit _ -> "lit"; MChkI _ -> "check"; MChk -> "chk"; MTup -> "tup"
+    MTrue -> "true"; MFalse -> "false"; MLit _ -> "lit"; MChkI _ -> "check"; MChk -> "chk"; MTup -> "tup"; MCfT _ -> "cf"
 
 rOf :: EC -> Int -> Int -> (Int, [Int])
 rOf ec k i = case sR (site ec k i) of
@@ -111,6 +156,7 @@ ex ec k e at xarg = case e of
     MK n -> "ops.k " ++ show n
     MXarg -> xarg
     MTrue -> "true"
+    MFalse -> "false"
     MGK n -> "ops.g " ++ show n ++ " ops.z"
     MLit j -> "ops.toB (" ++ at j ++ ")"
     MF n js -> "ops.f " ++ show n ++ " (" ++ tup (map at js) ++ ")"
@@ -142,6 +188,14 @@ guardOf ec k = fromMaybe MTrue (tGuard (step ec k))
 
 guardHw :: EC -> Int -> String
 guardHw ec k = ex ec k (guardOf ec k) (hw ec k) (xhw ec k)
+
+-- | The guard in CAN_FIRE (the hardware's), with a 'GuardRead' edit applied.
+hwGuard :: EC -> Int -> String
+hwGuard ec k = case ecEdit ec of
+    GuardRead k' j r | k' == k ->
+        let at i = if i /= j then hw ec k i else maybe "ops.z" (hw ec k) r
+        in ex ec k (guardOf ec k) at (xhw ec k)
+    _ -> guardHw ec k
 
 guardRho :: EC -> Int -> String
 guardRho ec k = ex ec k (guardOf ec k) rho "x"
@@ -208,7 +262,7 @@ factTerm ec k i c hR =
 -- | A proof that e at the step's environment equals e at the hardware.
 val :: EC -> Int -> MX -> VCtx -> Maybe (M.Map Int String) -> String
 val ec k e c condOk = case e of
-    MZ -> "rfl"; MK _ -> "rfl"; MXarg -> "rfl"; MTrue -> "rfl"; MGK _ -> "rfl"
+    MZ -> "rfl"; MK _ -> "rfl"; MXarg -> "rfl"; MTrue -> "rfl"; MFalse -> "rfl"; MGK _ -> "rfl"
     MLit j -> "congrArg ops.toB (" ++ rd j ++ ")"
     MF n js -> "congrArg (ops.f " ++ show n ++ ") (" ++ tupcong (map rd js) ++ ")"
     MG n js -> "congrArg (ops.g " ++ show n ++ ") (" ++ tupcong (map rd js) ++ ")"
@@ -237,8 +291,12 @@ argVal ec k st c
 -- | A user's enable entry: it fires (a method: is called), and its call condition.
 entry :: EC -> Int -> MSite -> String
 entry ec k st =
-    let on = if k >= ecNR ec then "calledM w (mM " ++ show (k - ecNR ec) ++ ")" else "WF ops E oc " ++ show k
+    let on = entryOn ec k
     in if isUncond st then on else "(" ++ on ++ " && " ++ condHw ec k st ++ ")"
+
+-- | A user's firing in an enable entry.
+entryOn :: EC -> Int -> String
+entryOn ec k = if k >= ecNR ec then "calledM w (mM " ++ show (k - ecNR ec) ++ ")" else "WF ops E oc " ++ show k
 
 -- | Proof of False from h1 : WF x = true, h2 : WF y = true.
 excl :: EC -> Int -> Int -> String -> String -> String -> String -> String

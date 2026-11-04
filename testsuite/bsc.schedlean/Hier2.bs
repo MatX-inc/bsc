@@ -1,0 +1,39 @@
+package Hier2 where
+
+-- Two levels of synthesized children: sysHier2 instances mkMid, which instances mkLeaf; sysHier2 also
+-- instances mkLeaf directly (one module file for both levels).
+interface Leaf =
+  bump :: Bit 8 -> Action
+  level :: Bit 8
+
+{-# verilog mkLeaf #-}
+mkLeaf :: Module Leaf
+mkLeaf = module
+  r :: Reg (Bit 8) <- mkReg 0
+  interface
+    bump x = r := r + x
+    level = r
+
+interface Mid =
+  step :: Action
+  peek :: Bit 8
+
+{-# verilog mkMid #-}
+mkMid :: Module Mid
+mkMid = module
+  c :: Leaf <- mkLeaf
+  n :: Reg (Bit 8) <- mkReg 1
+  rules
+    "tick": when True ==> n := n + c.level
+  interface
+    step = c.bump 1
+    peek = n
+
+{-# verilog sysHier2 #-}
+sysHier2 :: Module Empty
+sysHier2 = module
+  m :: Mid <- mkMid
+  k :: Leaf <- mkLeaf
+  rules
+    "go": when k.level < 100 ==> m.step
+    "obs": when True ==> k.bump m.peek

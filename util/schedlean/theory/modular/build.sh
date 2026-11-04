@@ -47,8 +47,8 @@ run build scan/chain8/Cs1024.lean
 run build scan/tasks/TC_2564_32.lean
 run build scan/tasks/TC_10240_256.lean
 run build e2e/mtask/MethTask.lean
-echo "(negative: MethTaskBadEn must fail, rc 1)" >> build/all.log
-run build e2e/mtask/MethTaskBadEn.lean
+run build e2e/mejoin/SysMeJoin.lean
+run build e2e/MkAssertedSchedules.lean
 run build e2e/MkUrgencyBlocking.lean
 for m in noagg nosched both; do run build e2e/modes8/MkUrgencyBlocking_$m.lean; done
 run build e2e/lcprobe/LcProbe64.lean

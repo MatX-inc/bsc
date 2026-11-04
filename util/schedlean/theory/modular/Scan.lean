@@ -1826,6 +1826,158 @@ theorem pmux_of_agree {V : Type} (v d : V) : ∀ (l : List (Bool × V)), (∀ e 
 
 end Groups
 
+/-! ## A synthesized kind's table, checked by rows (open issue 22) -/
+
+section KindRows
+variable {V : Type}
+
+/-- A port's bits in direction `p` (a row `pr i` or column `pc i` of `prec`): the ports `k` with
+    `i = k` or not `p` at `k`, related by neither conf table, and an argument-less port's own call. -/
+def kindMask (full i : Nat) (p cr cc : Nat) (dg : Bool) : Nat :=
+  ((2 ^ i ||| clr full p) &&& clr full (cr ||| cc)) &&& clr full (bif dg then 2 ^ i else 0)
+
+/-- A kind's four table rows for port `i` of `n` against the ports the annotation lets follow (or
+    group with) port `i`, each checked at once as a bit mask; each relation is given as rows (`pr`, ...)
+    and columns (`pc`, ...), a pair related only where both say so (open issue 22). -/
+noncomputable def kindRow (n : Nat) (kc : Nat → KC) (fx : Nat → Bool) (pr pc sr sc cr cc : Nat → Nat)
+    (sh : Nat → Bool) (i : Nat) : Bool :=
+  let full := 2 ^ n - 1
+  let fI := kindMask full i (pr i) (cr i) (cc i) (sh i && !fx i)
+  let fO := kindMask full i (pc i) (cr i) (cc i) (sh i && !fx i)
+  let ns := clr full (sr i ||| sc i)
+  subB full (bits (kc i).cin ||| fI) && subB full (bits (kc i).cout ||| fO) &&
+    subB full (bits (kc i).gin ||| (fI &&& ns)) && subB full (bits (kc i).gout ||| (fO &&& ns))
+
+noncomputable def kindRows (n : Nat) (kc : Nat → KC) (fx : Nat → Bool) (pr pc sr sc cr cc : Nat → Nat)
+    (sh : Nat → Bool) : Bool :=
+  (List.range n).all (kindRow n kc fx pr pc sr sc cr cc sh)
+
+theorem testBit_full {n k : Nat} (h : k < n) : (2 ^ n - 1).testBit k = true := by
+  rw [Nat.testBit_two_pow_sub_one]; exact decide_eq_true h
+
+theorem kindMask_bit {full i p cr cc k : Nat} {dg : Bool} (hf : full.testBit k = true)
+    (h : (kindMask full i p cr cc dg).testBit k = true) :
+    (i = k ∨ p.testBit k = false) ∧ cr.testBit k = false ∧ cc.testBit k = false ∧ (i = k → dg = false) := by
+  unfold kindMask at h
+  cases dg
+  · simp only [Nat.testBit_and, Nat.testBit_or, testBit_clr, Nat.testBit_two_pow, hf, Bool.true_and,
+      Bool.cond_false, Bool.or_eq_false_iff, Nat.zero_testBit, Bool.not_false, Bool.and_true, Bool.and_eq_true, Bool.or_eq_true,
+      Bool.not_eq_true', decide_eq_true_eq] at h
+    exact ⟨h.1, h.2.1, h.2.2, fun _ => rfl⟩
+  · simp only [Nat.testBit_and, Nat.testBit_or, testBit_clr, Nat.testBit_two_pow, hf, Bool.true_and,
+      Bool.cond_true, Bool.or_eq_false_iff, Bool.and_eq_true, Bool.or_eq_true, Bool.not_eq_true', decide_eq_true_eq, decide_eq_false_iff_not] at h
+    exact ⟨h.1.1, h.1.2.1, h.1.2.2, fun e => absurd e h.2⟩
+
+theorem kindRow_ok {n : Nat} {kc : Nat → KC} {fx : Nat → Bool} {pr pc sr sc cr cc : Nat → Nat} {sh : Nat → Bool}
+    {i k : Nat} (h : kindRow n kc fx pr pc sr sc cr cc sh i = true) (hk : k < n) :
+    (k ∈ (kc i).cin ∨ (kindMask (2 ^ n - 1) i (pr i) (cr i) (cc i) (sh i && !fx i)).testBit k = true) ∧
+    (k ∈ (kc i).cout ∨ (kindMask (2 ^ n - 1) i (pc i) (cr i) (cc i) (sh i && !fx i)).testBit k = true) ∧
+    (k ∈ (kc i).gin ∨ ((kindMask (2 ^ n - 1) i (pr i) (cr i) (cc i) (sh i && !fx i)).testBit k = true ∧
+      (sr i).testBit k = false ∧ (sc i).testBit k = false)) ∧
+    (k ∈ (kc i).gout ∨ ((kindMask (2 ^ n - 1) i (pc i) (cr i) (cc i) (sh i && !fx i)).testBit k = true ∧
+      (sr i).testBit k = false ∧ (sc i).testBit k = false)) := by
+  have hf := testBit_full hk
+  simp only [kindRow, Bool.and_eq_true] at h
+  obtain ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩ := h
+  have mem : ∀ {l : List Nat} {x : Nat}, subB (2 ^ n - 1) (bits l ||| x) = true → k ∈ l ∨ x.testBit k = true :=
+    fun h => (testBit_or_cases (testBit_of_subB h hf)).imp mem_of_testBit_bits id
+  have ns : ∀ {x : Nat}, (x &&& clr (2 ^ n - 1) (sr i ||| sc i)).testBit k = true →
+      x.testBit k = true ∧ (sr i).testBit k = false ∧ (sc i).testBit k = false := by
+    intro x hx
+    simp only [Nat.testBit_and, testBit_clr, Nat.testBit_or, hf, Bool.true_and, Bool.and_eq_true,
+      Bool.not_eq_true', Bool.or_eq_false_iff] at hx
+    exact hx
+  exact ⟨mem h1, mem h2, (mem h3).imp id ns, (mem h4).imp id ns⟩
+
+/-- **A synthesized kind's table, checked by rows** (`kindRows`, about `n²/64` word operations): sound for
+    any annotation whose relations hold only where both its rows and its columns say so. -/
+theorem kindOK_of_rows {n : Nat} {A : Ann (Fin n)} {kc : Nat → KC} {fx : Nat → Bool}
+    {pr pc sr sc cr cc : Nat → Nat} {sh : Nat → Bool}
+    (hP : ∀ p q : Fin n, A.prec p q = true → (pr p.val).testBit q.val = true ∧ (pc q.val).testBit p.val = true)
+    (hS : ∀ p q : Fin n, A.sbr p q = true → (sr p.val).testBit q.val = true ∧ (sc q.val).testBit p.val = true)
+    (hC : ∀ p q : Fin n, A.conf p q = true → (cr p.val).testBit q.val = true ∧ (cc q.val).testBit p.val = true)
+    (hSh : ∀ p : Fin n, A.share p = true → sh p.val = true)
+    (h : kindRows n kc fx pr pc sr sc cr cc sh = true) (z : V) :
+    KindOK A (fun m => m.val) kc fx z := by
+  have row : ∀ (i k : Fin n), _ := fun i k =>
+    kindRow_ok (List.all_eq_true.mp h i.val (List.mem_range.mpr i.isLt)) k.isLt
+  -- Follow from row b's mask at a (fin, gin) and from row a's mask at b (fout, gout)
+  have folIn : ∀ a b : Fin n × V, (kindMask (2 ^ n - 1) b.1.val (pr b.1.val) (cr b.1.val) (cc b.1.val)
+      (sh b.1.val && !fx b.1.val)).testBit a.1.val = true → ArgZ fx (fun m => m.val) z a → ArgZ fx (fun m => m.val) z b →
+      A.Follow a b := by
+    intro a b hm ha hb
+    obtain ⟨h1, h2, h3, h4⟩ := kindMask_bit (testBit_full a.1.isLt) hm
+    refine ⟨fun hne => ?_, ?_, ?_, fun he hs => ?_⟩
+    · cases e : A.prec b.1 a.1
+      · rfl
+      · have := (hP _ _ e).1
+        rcases h1 with h1 | h1
+        · exact absurd (Fin.ext h1).symm hne
+        · rw [h1] at this; cases this
+    · cases e : A.conf a.1 b.1
+      · rfl
+      · have := (hC _ _ e).2; rw [h3] at this; cases this
+    · cases e : A.conf b.1 a.1
+      · rfl
+      · have := (hC _ _ e).1; rw [h2] at this; cases this
+    · have e := h4 (congrArg Fin.val he).symm
+      have hs' := hSh _ hs
+      rw [he] at hs'
+      simp only [hs', Bool.true_and, Bool.not_eq_false'] at e
+      have hfa : fx a.1.val = true := by rw [he]; exact e
+      have hfb : fx b.1.val = true := e
+      rw [ha hfa, hb hfb]
+  have folOut : ∀ a b : Fin n × V, (kindMask (2 ^ n - 1) a.1.val (pc a.1.val) (cr a.1.val) (cc a.1.val)
+      (sh a.1.val && !fx a.1.val)).testBit b.1.val = true → ArgZ fx (fun m => m.val) z a → ArgZ fx (fun m => m.val) z b →
+      A.Follow a b := by
+    intro a b hm ha hb
+    obtain ⟨h1, h2, h3, h4⟩ := kindMask_bit (testBit_full b.1.isLt) hm
+    refine ⟨fun hne => ?_, ?_, ?_, fun he hs => ?_⟩
+    · cases e : A.prec b.1 a.1
+      · rfl
+      · have := (hP _ _ e).2
+        rcases h1 with h1 | h1
+        · exact absurd (Fin.ext h1) hne
+        · rw [h1] at this; cases this
+    · cases e : A.conf a.1 b.1
+      · rfl
+      · have := (hC _ _ e).1; rw [h2] at this; cases this
+    · cases e : A.conf b.1 a.1
+      · rfl
+      · have := (hC _ _ e).2; rw [h3] at this; cases this
+    · have e := h4 (congrArg Fin.val he)
+      have hs' := hSh _ hs
+      simp only [hs', Bool.true_and, Bool.not_eq_false'] at e
+      have hfb : fx b.1.val = true := by rw [← he]; exact e
+      rw [ha e, hb hfb]
+  refine ⟨fun a b hn ha hb => ?_, fun a b hn ha hb => ?_, fun a b hn ha hb => ?_, fun a b hn ha hb => ?_⟩
+  · rcases (row b.1 a.1).1 with h | h
+    · exact absurd h hn
+    · exact folIn a b h ha hb
+  · rcases (row a.1 b.1).2.1 with h | h
+    · exact absurd h hn
+    · exact folOut a b h ha hb
+  · rcases (row b.1 a.1).2.2.1 with h | ⟨h, hs1, hs2⟩
+    · exact absurd h hn
+    · refine ⟨folIn a b h ha hb, ?_, ?_⟩
+      · cases e : A.sbr a.1 b.1
+        · rfl
+        · have := (hS _ _ e).2; rw [hs2] at this; cases this
+      · cases e : A.sbr b.1 a.1
+        · rfl
+        · have := (hS _ _ e).1; rw [hs1] at this; cases this
+  · rcases (row a.1 b.1).2.2.2 with h | ⟨h, hs1, hs2⟩
+    · exact absurd h hn
+    · refine ⟨folOut a b h ha hb, ?_, ?_⟩
+      · cases e : A.sbr a.1 b.1
+        · rfl
+        · have := (hS _ _ e).1; rw [hs1] at this; cases this
+      · cases e : A.sbr b.1 a.1
+        · rfl
+        · have := (hS _ _ e).2; rw [hs2] at this; cases this
+
+end KindRows
+
 /-! ## Site lists give the footprint and dummy-argument facts -/
 
 section SitesGlue
@@ -2398,6 +2550,7 @@ end Modular
 
 #print axioms Modular.Scan.Design.ok_of_chain
 #print axioms Modular.Scan.kindOK_of_chk
+#print axioms Modular.Scan.kindOK_of_rows
 #print axioms Modular.Scan.kindOut_chain
 #print axioms Modular.Scan.Design.mm_static_out
 #print axioms Modular.Scan.h4_of_scan

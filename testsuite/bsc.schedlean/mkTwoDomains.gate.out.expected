@@ -1,0 +1,2 @@
+GATE {"name": "mkTwoDomains", "verdict": "not checked: multi-domain"}
+mkTwoDomains             default  not checked: multi-domain | 2 clock domains: CLK; CLK_c2

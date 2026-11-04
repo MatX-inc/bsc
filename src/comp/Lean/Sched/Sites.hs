@@ -42,7 +42,7 @@ import Lean.Sched.Reach (encFormula, liftFS, litExprs, litKey, newRS, reachTop, 
 import Lean.Sched.Tree (APkg(apInsts, apGuarded, apRules, apIfcVals, apMethArgs), Act(ACallA, ATask), E(EId,
     ELit))
 import Lean.Sched.Types (portLabel, Call(clPort), Child(chMethods, chStmts, chOrder), Design(dUserME, dUseDefs,
-    dChildren, dDisjoint, dBlocks, dChildOrder, dSteps), Meth(mtCopies, mtKind), MethKind(ValueMethod),
+    dChildren, dDisjoint, dBlocks, dChildOrder, dSteps), Meth(mtCopies, mtKind, mtConst), MethKind(ValueMethod),
     Port(ptCopy, ptInst, ptMeth), Step(stName, stDescr, stReads, stCalls, stChecks))
 import Lean.Solver (solverQueries, Solver, Verdict(Unsat))
 
@@ -195,9 +195,11 @@ analyseSites sv d ap asi = do
             | m == "first" && (M.member "i_notEmpty" ms || M.member "notEmpty" ms) =
                 if omLookup k (apGuarded ap) == Just False then Nothing
                 else Just [ (k, x) | x <- ["i_notEmpty", "notEmpty"], M.member x ms ]
-            | M.member ("RDY_" ++ m) ms = Just [(k, "RDY_" ++ m)]
+            | Just r <- M.lookup ("RDY_" ++ m) ms, not (mtConst r && not (S.member (k, "RDY_" ++ m) readRdy)) = Just [(k, "RDY_" ++ m)]
             | otherwise = Nothing
           where ms = chMethods (kids M.! k)
+        -- a constant RDY no step reads: bsc's wrapper of a synthesized child assumes it is 1 (bsc.hs true_ifc_ids)
+        readRdy = S.fromList [ (siInst s, siMeth s) | st <- steps, s <- ssSites st, siRead s ]
         guardExpr st = case omLookup (ssName st) (apRules ap) of
             Just (p, _) -> p
             Nothing | M.member ("CAN_FIRE_" ++ ssName st) (sdDefs sd) -> EId ("CAN_FIRE_" ++ ssName st)

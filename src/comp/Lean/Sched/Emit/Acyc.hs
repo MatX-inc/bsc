@@ -1,7 +1,7 @@
 -- | Acyclicity (read lists as filters of allOuts, ranks of path inputs) and
 -- the built module's top theorem (mke2e.py lines 3608-4139).
 module Lean.Sched.Emit.Acyc
-    ( acycPlan, AcycPlan(..), emitAcyc, emitTop
+    ( acycPlan, AcycPlan(..), emitAcyc, emitTop, emitTopH, assumesOf
     ) where
 
 import Control.Monad (forM_, when, unless)
@@ -14,12 +14,13 @@ import qualified Data.Map.Strict as M (Map, (!), elems, empty, findWithDefault, 
 import qualified Data.Set as S (Set, member, empty, insert, toAscList)
 
 import Lean.Print (andc, cut, fmt, listCong, stabproof, tab, tupcong, w, W)
-import Lean.Sched.Emit.Ctx (ihelper, isUncond, kd, lportOf, mxKind, site, sitePort, step, EC(ecM, ecU, ecNR,
-    ecMet, ecNS, ecWXM, ecMultiBlk, ecRDC, ecPortInfo, ecSelmux, ecKinds, ecHyp, ecHya, ecName, ecCfgLib),
-    PInfo(piUsers, piQ, piArgk, piMus, piMargs))
+import Lean.Sched.Emit.Ctx (hasCf, ihelper, isUncond, kd, lportOf, mxKind, site, sitePort, step, EC(ecM, ecU, ecNR,
+    ecMet, ecNS, ecWXM, ecMultiBlk, ecRDC, ecPortInfo, ecSelmux, ecKinds, ecHyp, ecHya, ecName, ecCfgLib, ecDomNote),
+    PInfo(piUsers, piQ, piArgk, piMus, piMargs), ecSynth)
+import Lean.Sched.Export (Export(exNS, exModule), SynthKid(..), isSynthKind)
 import Lean.Sched.Kinds (KindDef(kdLib, kdAlwaysRdy, kdHasEn, kdPorts), PM(..))
-import Lean.Sched.Model (mxRepr, MPort, MSite(sArg, sR, sPort, sCond), MStep(tGuard, tSites), MX(MTrue, MZ, MK,
-    MXarg, MGK, MLit, MF, MSplit, MG), Model(mMTasks, mBlk, mByk))
+import Lean.Sched.Model (mxRepr, MPort, MSite(sArg, sR, sPort, sCond), MStep(tGuard, tSites), MX(MTrue, MFalse, MZ, MK,
+    MXarg, MGK, MLit, MF, MSplit, MG), Model(mMTasks, mBlk, mByk, mChecks))
 
 -- | A child's rank: one bound, or FIFOL1's two (deq's, then enq's and clear's).
 data Rank = R1 Int | R2 Int Int
@@ -86,8 +87,12 @@ acycPlan ec = AcycPlan rank noAcyc nn agneed
     kinds = ecKinds ec
     nInst k = length (M.findWithDefault [] k (mByk m))
     insts = [ (k, i, ms) | (k, ms) <- pathInputs, k `elem` kinds, i <- [0 .. nInst k - 1] ]
+    -- an input whose users' WILL_FIRE enters it is at least 1 (agWF asks the bound above the reads' 0)
+    agIn p@(k, _, mm) = case M.lookup p (ecPortInfo ec) of
+        Just pi -> not (null (piUsers pi)) && (kdHasEn (kd ec k) mm || piArgk pi == "mux")
+        _ -> False
     pass r0 = foldl (\(r, ch) (k, i, ms) ->
-                        let fan mm = maximum ((-1) : [ prk r y | y <- inputReads ec (k, i, PS mm) ])
+                        let fan mm = maximum ((if agIn (k, i, PS mm) then 0 else -1) : [ prk r y | y <- inputReads ec (k, i, PS mm) ])
                             b = if k == "fifo" then let b1 = fan "deq" + 1 in R2 b1 (max b1 (fan "enq" + 1))
                                 else R1 (maximum (map fan ms) + 1)
                             old = M.findWithDefault (if k == "fifo" then R2 0 0 else R1 0) (k, i) r
@@ -109,7 +114,7 @@ acycPlan ec = AcycPlan rank noAcyc nn agneed
 
 agx :: EC -> Int -> MX -> (MPort -> String) -> String
 agx ec k e rd = case e of
-    MZ -> "rfl"; MK _ -> "rfl"; MXarg -> "rfl"; MTrue -> "rfl"; MGK _ -> "rfl"
+    MZ -> "rfl"; MK _ -> "rfl"; MXarg -> "rfl"; MTrue -> "rfl"; MFalse -> "rfl"; MGK _ -> "rfl"
     MLit j -> "congrArg ops.toB (" ++ rd (sitePort ec k j) ++ ")"
     MF n js -> "congrArg (ops.f " ++ show n ++ ") (" ++ tupcong (map (rd . sitePort ec k) js) ++ ")"
     MG n js -> "congrArg (ops.g " ++ show n ++ ") (" ++ tupcong (map (rd . sitePort ec k) js) ++ ")"
@@ -235,9 +240,11 @@ emitAcyc ec ap = do
         w (fmt "theorem dqAll_%s (ops : Ops V) (E : EqC V) : Tab.AllR (DQ_%s ops E) arms_%s 0 %d :=\n  %s" [k, k, k, show n, prf])
     w "end\n"
     let projSel ps mm = let i = fromMaybe 0 (elemIndex mm ps) in concat (replicate i ".2") ++ (if i < length ps - 1 then ".1" else "")
-        da = if met then "dep_of_all (F ops E).base allOuts mem_allOuts allIns mem_allIns oc oc' w w' hD (by simpa [DwK, pinK] using hW) _ _"
-             else "dep_of_all (F ops E).base allOuts mem_allOuts allIns mem_allIns oc oc' w w' hD hW _ _"
-        depCase k = case lookup k pathInputs of
+        -- (a RegFile's pinK is RFM.isS, unfolded for its upd port)
+        daK k = if met then "dep_of_all (F ops E).base allOuts mem_allOuts allIns mem_allIns oc oc' w w' hD (by simpa [DwK, pinK"
+                            ++ (if k == "rf" then ", RFM.isS" else "") ++ "] using hW) _ _"
+                else "dep_of_all (F ops E).base allOuts mem_allOuts allIns mem_allIns oc oc' w w' hD hW _ _"
+        depCase k = let da = daK k in case lookup k pathInputs of
             Nothing -> "    | " ++ k ++ " => exact " ++ da ++ "\n"
             Just ps -> "    | " ++ k ++ " =>\n      cases p with\n"
                        ++ concat [ if pmS p `elem` ps
@@ -296,58 +303,30 @@ emitTop ec = do
         hya = ecHya ec
         name = ecName ec
         cfgLib = ecCfgLib ec
-        assumed = M.fromList [ ("fifo", "FIFOL1"), ("cfg", "ConfigRegN"), ("sf", "SizedFIFO"), ("rf", "RegFile") ]
-        leaves = [ assumed M.! k | k <- kinds, M.member k assumed, not (k == "cfg" && cfgLib) ]
-    unless (and [ M.member k assumed || kdLib (kd ec k) || (k == "cfg" && cfgLib) | k <- kinds, k /= "tasks" ]) $
+        leaves = libLeaves ec
+    unless (and [ M.member k assumedLeaf || kdLib (kd ec k) || (k == "cfg" && cfgLib) | k <- kinds, k /= "tasks" ]) $
         error "schedlean: AssertionError: a child that is neither a library model nor an assumed primitive leaf"
     let leavesDoc = if null leaves then "No assumed leaf: every child is a library model with a proved contract."
                     else "The assumed leaves (primitives whose library contracts are not yet proved): " ++ intercalate ", " leaves ++ "."
-        impl k = case k of
-            "reg" -> "Reg"; "cfg" -> if cfgLib then "LC.CfgReg" else "lv.cfg"; "fifo" -> "lv.fifo"; "tasks" -> "Tasks nT"
-            "f2" -> "FIFO2 ops.ofBool"; "sf" -> "lv.sf"; "rf" -> "lv.rf"; "rwS" -> "RWire ops.ofBool true true"
-            "rwC" -> "RWire ops.ofBool true false"; "rw0S" -> "RWire0 ops.ofBool true true"; "rw0C" -> "RWire0 ops.ofBool true false"
-            _ -> error ("schedlean: no implementation for kind " ++ k)
-        leaf k = case k of
-            "cfg" | cfgLib -> "Built.leaf _ LC.cfg_realizes LC.cfg_causal"
-            "reg" -> "Built.leaf _ reg_realizes (creg_causal 1)"
-            "cfg" -> "Built.leaf _ lv.cfgR lv.cfgC"
-            "fifo" -> "Built.leaf _ lv.fifoR lv.fifoC"
-            "tasks" -> "Built.leaf _ (tasks_realizes nT) (tasks_causal nT)"
-            "f2" -> "Built.leaf _ (fifo2_realizes _) (fifo2_causal _)"
-            "sf" -> "Built.leaf _ lv.sfR lv.sfC"
-            "rf" -> "Built.leaf _ lv.rfR lv.rfC"
-            _ | k `elem` ["rwS", "rwC"] -> "Built.leaf _ (rwire_realizes _ _ _) (rwire_causal _ _ _)"
-            _ -> "Built.leaf _ (rwire0_realizes _ _ _) (rwire0_causal _ _ _)"
-        alias k = case k of
-            "f2" -> "(fifo2_aliased ops.ofBool ops.toB hy.tob).toU"
-            "sf" -> "lv.sfA.toU"
-            "reg" -> "aliased_of_none _ _ (fun p q => rfl) (fun a p => rfl)"
-            "tasks" -> "aliased_of_none _ _ (fun p q => rfl) (fun a p => rfl)"
-            _ -> "aliased_of_none _ _ (fun p q => by cases p <;> cases q <;> rfl) (fun a p => by cases a <;> cases p <;> rfl)"
         topm = "((F ops E).toModuleU (fun j => (implK ops lv j.1).toU))"
-        note = concatMap (\c -> c) (replaceNL (mtaskNoteE ec))
+        note = topNote ec
     w ("/-! ## The built module and its top theorem -/\n\
 \\n\
 \/-- " ++ leavesDoc ++ " -/\n\
-\structure Leaves (V : Type) (toB : V → Bool) where\n"
-       ++ (if "fifo" `elem` kinds then "  fifo : Module V FL.X\n  fifoR : Realizes fifo\n  fifoC : Causal fifo\n" else "")
-       ++ (if "cfg" `elem` kinds && not cfgLib then "  cfg : Module V Cfg.X\n  cfgR : Realizes cfg\n  cfgC : Causal cfg\n" else "")
-       ++ (if "sf" `elem` kinds then "  sf : Module V FIFO2.X\n  sfR : Realizes sf\n  sfC : Causal sf\n  sfA : Aliased toB sf\n" else "")
-       ++ (if "rf" `elem` kinds then "  rf : Module V RF.X\n  rfR : Realizes rf\n  rfC : Causal rf\n" else "")
-       ++ "  dummy : Unit := ()\n\
+\structure Leaves (V : Type) (toB : V → Bool) where\n" ++ libLeafFields ec ++ "  dummy : Unit := ()\n\
 \\n\
 \section\n\
 \variable {V : Type}\n\
 \def implK (ops : Ops V) (lv : Leaves V ops.toB) : (κ : Kind) → Module V (KI κ)\n")
-    forM_ kinds $ \k -> w ("  | ." ++ k ++ " => " ++ impl k)
+    forM_ kinds $ \k -> w ("  | ." ++ k ++ " => " ++ libImpl cfgLib k)
     w (fmt "\n\
 \theorem built [Inhabited V] (ops : Ops V) (E : EqC V) %s (lv : Leaves V ops.toB) :\n\
 \    Built X %s :=\n\
 \  Built.node (F ops E) (fun j => (implK ops lv j.1).toU)\n\
 \    (fun ⟨κ, _⟩ => by\n\
-\      cases κ\n" [hyp, topm] ++ concat [ "      · exact " ++ leaf k ++ "\n" | k <- kinds ] ++ "    )\n\
+\      cases κ\n" [hyp, topm] ++ concat [ "      · exact " ++ libLeaf cfgLib k ++ "\n" | k <- kinds ] ++ "    )\n\
 \    (fun ⟨κ, _⟩ => by\n\
-\      cases κ\n" ++ concat [ "      · exact " ++ alias k ++ "\n" | k <- kinds ] ++ fmt "    )\n\
+\      cases κ\n" ++ concat [ "      · exact " ++ libAlias k ++ "\n" | k <- kinds ] ++ fmt "    )\n\
 \    (obl ops E %s) (acyc ops E)\n\
 \\n\
 \/-- **The module's top theorem**: the contract, with the run fixed before every skipped value\n\
@@ -363,11 +342,153 @@ emitTop ec = do
 \\n\
 \#print axioms %s.obl\n\
 \#print axioms %s.top\n" [hya, note, hyp, topm, topm, topm, hya, name, name, name])
+
+-- | The primitives whose library contracts are assumed: kind and Verilog module.
+assumedLeaf :: M.Map String String
+assumedLeaf = M.fromList [ ("fifo", "FIFOL1"), ("cfg", "ConfigRegN"), ("sf", "SizedFIFO"), ("rf", "RegFile") ]
+
+-- | What a module's file assumes: its assumed leaves, user assertions, and its path-A children's.
+assumesOf :: EC -> [String]
+assumesOf ec = libLeaves ec
+    ++ [ exModule (skExport sk) ++ " (synthesized, assumed leaf)" | (_, sk) <- ecSynth ec, skOff sk /= Nothing ]
+    ++ [ "user assertions (in asm)" | not (null (mChecks (ecM ec))) || hasCf ec ]
+    ++ [ exModule (skExport sk) ++ ": " ++ a | (_, sk) <- ecSynth ec, skOff sk == Nothing, a <- skAssume sk ]
+
+-- | The path-A children's assumptions, for a parent's docstrings.
+kidAssumes :: EC -> String
+kidAssumes ec = intercalate "; " [ exModule (skExport sk) ++ ": " ++ intercalate ", " (skAssume sk)
+                                 | (_, sk) <- ecSynth ec, skOff sk == Nothing, not (null (skAssume sk)) ]
+
+-- | The module's assumed primitive leaves, by Verilog module.
+libLeaves :: EC -> [String]
+libLeaves ec = [ assumedLeaf M.! k | k <- ecKinds ec, M.member k assumedLeaf, not (k == "cfg" && ecCfgLib ec) ]
+
+-- | The Leaves fields of the assumed primitive leaves.
+libLeafFields :: EC -> String
+libLeafFields ec =
+    (if "fifo" `elem` kinds then "  fifo : Module V FL.X\n  fifoR : Realizes fifo\n  fifoC : Causal fifo\n" else "")
+    ++ (if "cfg" `elem` kinds && not (ecCfgLib ec) then "  cfg : Module V Cfg.X\n  cfgR : Realizes cfg\n  cfgC : Causal cfg\n" else "")
+    ++ (if "sf" `elem` kinds then "  sf : Module V FIFO2.X\n  sfR : Realizes sf\n  sfC : Causal sf\n  sfA : Aliased toB sf\n" else "")
+    ++ (if "rf" `elem` kinds then "  rf : Module V RF.X\n  rfR : Realizes rf\n  rfC : Causal rf\n" else "")
+  where kinds = ecKinds ec
+
+-- | A library kind's module (its implK entry), its Built leaf, and its Aliased proof.
+libImpl, libLeaf :: Bool -> String -> String
+libImpl cfgLib k = case k of
+    "reg" -> "Reg"; "cfg" -> if cfgLib then "LC.CfgReg" else "lv.cfg"; "fifo" -> "lv.fifo"; "tasks" -> "Tasks nT"
+    "f2" -> "FIFO2 ops.ofBool"; "sf" -> "lv.sf"; "rf" -> "lv.rf"; "rwS" -> "RWire ops.ofBool true true"
+    "rwC" -> "RWire ops.ofBool true false"; "rw0S" -> "RWire0 ops.ofBool true true"; "rw0C" -> "RWire0 ops.ofBool true false"
+    _ -> error ("schedlean: no implementation for kind " ++ k)
+libLeaf cfgLib k = case k of
+    "cfg" | cfgLib -> "Built.leaf _ LC.cfg_realizes LC.cfg_causal"
+    "reg" -> "Built.leaf _ reg_realizes (creg_causal 1)"
+    "cfg" -> "Built.leaf _ lv.cfgR lv.cfgC"
+    "fifo" -> "Built.leaf _ lv.fifoR lv.fifoC"
+    "tasks" -> "Built.leaf _ (tasks_realizes nT) (tasks_causal nT)"
+    "f2" -> "Built.leaf _ (fifo2_realizes _) (fifo2_causal _)"
+    "sf" -> "Built.leaf _ lv.sfR lv.sfC"
+    "rf" -> "Built.leaf _ lv.rfR lv.rfC"
+    _ | k `elem` ["rwS", "rwC"] -> "Built.leaf _ (rwire_realizes _ _ _) (rwire_causal _ _ _)"
+    _ -> "Built.leaf _ (rwire0_realizes _ _ _) (rwire0_causal _ _ _)"
+
+libAlias :: String -> String
+libAlias k = case k of
+    "f2" -> "(fifo2_aliased ops.ofBool ops.toB hy.tob).toU"
+    "sf" -> "lv.sfA.toU"
+    "reg" -> "aliased_of_none _ _ (fun p q => rfl) (fun a p => rfl)"
+    "tasks" -> "aliased_of_none _ _ (fun p q => rfl) (fun a p => rfl)"
+    _ -> "aliased_of_none _ _ (fun p q => by cases p <;> cases q <;> rfl) (fun a p => by cases a <;> cases p <;> rfl)"
+
+-- | The top theorem's note: method task calls left out, gated clocks and resets.
+topNote :: EC -> String
+topNote ec = concat (replaceNL (mtaskNoteE ec ++ ecDomNote ec))
   where
     replaceNL s = case s of
         ('\n' : ' ' : ' ' : ' ' : r) -> "\n    " : replaceNL r
         (c : r) -> [c] : replaceNL r
         [] -> []
+
+-- | The built module and its top theorem in the hierarchy form (design.md §3.1): children as ModuleU, a
+-- synthesized one through its file's `built` (else a leaf), its entries per instance.
+emitTopH :: EC -> W ()
+emitTopH ec = do
+    let kinds = ecKinds ec
+        hyp = ecHyp ec
+        hya = ecHya ec
+        name = ecName ec
+        cfgLib = ecCfgLib ec
+        synA = [ (k, sk) | (k, sk) <- ecSynth ec, skOff sk == Nothing ]
+        synL = [ (k, sk) | (k, sk) <- ecSynth ec, skOff sk /= Nothing ]
+        leaves = libLeaves ec ++ [ exModule (skExport sk) ++ " (synthesized, " ++ k ++ ")" | (k, sk) <- synL ]
+    unless (and [ M.member k assumedLeaf || kdLib (kd ec k) || (k == "cfg" && cfgLib) || isSynthKind k | k <- kinds, k /= "tasks" ]) $
+        error "schedlean: AssertionError: a child that is neither a library model nor an assumed primitive leaf"
+    let kidA = kidAssumes ec
+        leavesDoc = (if null leaves then "No assumed leaf" ++ (if null kidA then "" else " of its own") ++ ": every child is a library model with a proved contract, or a synthesized\n    child through its own file."
+                     else "The assumed leaves (primitives whose library contracts are not yet proved, synthesized children off\n    path A, one per instance): " ++ intercalate ", " leaves ++ ".")
+                    ++ (if null kidA then "" else "\n    Its synthesized children's files assume (their own `Leaves`, `asm`): " ++ kidA ++ ".")
+        ns k = maybe "" (exNS . skExport) (lookup k synA)
+        subI k fs = unwords [ "(sub." ++ k ++ f ++ " i)" | f <- fs ]
+        impl k
+            | Just _ <- lookup k synA = ns k ++ ".modU " ++ subI k ["ops", "E", "lv", "sub"]
+            | Just _ <- lookup k synL = "(lv." ++ k ++ " i).toU"
+            | otherwise = let m = libImpl cfgLib k in if ' ' `elem` m then "(" ++ m ++ ").toU" else m ++ ".toU"
+        leaf k
+            | Just _ <- lookup k synA = ns k ++ ".built " ++ subI k ["ops", "E", "hy", "lv", "sub"]
+            | Just _ <- lookup k synL = "Built.leaf _ (lv." ++ k ++ "R i) (lv." ++ k ++ "C i)"
+            | otherwise = libLeaf cfgLib k
+        alias k
+            | Just _ <- lookup k synA = "aliased_of_none _ _ (fun p q => rfl) (fun a p => rfl)"
+            | Just _ <- lookup k synL = "(lv." ++ k ++ "A i).toU"
+            | otherwise = libAlias k
+        topm = "(modU ops E lv sub)"
+    w ("/-! ## The built module and its top theorem -/\n\
+\\n\
+\/-- " ++ leavesDoc ++ " -/\n\
+\structure Leaves (V : Type) (toB : V → Bool) where\n" ++ libLeafFields ec
+       ++ concat [ fmt "  %s : Fin (nk .%s) → Module V sX_%s\n  %sR : ∀ i, Realizes (%s i)\n  %sC : ∀ i, Causal (%s i)\n  %sA : ∀ i, Aliased toB (%s i)\n"
+                       [k, k, k, k, k, k, k, k, k] | (k, _) <- synL ]
+       ++ "  dummy : Unit := ()\n\
+\\n\
+\/-- The synthesized children on path A, per instance (each instance's inputs are its own): its\n\
+\    operators, constants, solver verdicts (named hypotheses, as `Hyps`), assumed leaves and own\n\
+\    children (design §3.1). -/\n\
+\structure Subs (V : Type) where\n"
+       ++ concat [ fmt "  %sops : Fin (nk .%s) → %s.Ops V\n  %sE : Fin (nk .%s) → EqC V\n  %shy : ∀ i, %s.Hyps (%sops i) (%sE i)\n\
+\  %slv : ∀ i, %s.Leaves V (%sops i).toB\n  %ssub : Fin (nk .%s) → %s.Subs V\n"
+                       [k, k, n, k, k, k, n, k, k, k, n, k, k, k, n] | (k, sk) <- synA, let n = exNS (skExport sk) ]
+       ++ "  dummy : Unit := ()\n\
+\\n\
+\section\n\
+\variable {V : Type}\n\
+\def implK (ops : Ops V) (lv : Leaves V ops.toB) (sub : Subs V) : (j : I) → ModuleU V (CI j)\n")
+    forM_ kinds $ \k -> w ("  | ⟨." ++ k ++ ", " ++ (if isSynthKind k then "i" else "_") ++ "⟩ => " ++ impl k)
+    w (fmt "/-- The module: its family over its children. -/\n\
+\abbrev modU (ops : Ops V) (E : EqC V) (lv : Leaves V ops.toB) (sub : Subs V) : ModuleU V X :=\n\
+\  (F ops E).toModuleU (implK ops lv sub)\n\
+\\n\
+\theorem built [Inhabited V] (ops : Ops V) (E : EqC V) %s (lv : Leaves V ops.toB) (sub : Subs V) :\n\
+\    Built X %s :=\n\
+\  Built.node (F ops E) (implK ops lv sub)\n\
+\    (fun ⟨κ, i⟩ => by\n\
+\      cases κ\n" [hyp, topm] ++ concat [ "      · exact " ++ leaf k ++ "\n" | k <- kinds ] ++ "    )\n\
+\    (fun ⟨κ, i⟩ => by\n\
+\      cases κ\n" ++ concat [ "      · exact " ++ alias k ++ "\n" | k <- kinds ] ++ fmt "    )\n\
+\    (obl ops E %s) (acyc ops E)\n\
+\\n\
+\/-- **The module's top theorem**: the contract, with the run fixed before every skipped value\n\
+\    of the tree, and every input has a hardware cycle; the synthesized children's hypotheses are\n\
+\    `sub`'s fields, per instance.%s -/\n\
+\theorem top [Inhabited V] (ops : Ops V) (E : EqC V) %s (lv : Leaves V ops.toB) (sub : Subs V) :\n\
+\    RealizesU %s ∧\n\
+\    ∀ s w, %s.clean s = s → ∃ o s' g, %s.hw s w o s' g :=\n\
+\  (built ops E %s lv sub).top\n\
+\end\n\
+\\n\
+\end\n\
+\end %s\n\
+\\n\
+\#print axioms %s.obl\n\
+\#print axioms %s.top\n" [hya, topNote ec, hyp, topm, topm, topm, hya, name, name, name])
 
 mtaskNoteE :: EC -> String
 mtaskNoteE ec = case mMTasks (ecM ec) of

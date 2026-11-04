@@ -1,0 +1,137 @@
+package Chain32(sysChain32) where
+
+import Chain
+
+-- 32 synthesized levels below sysChain32
+
+{-# verilog mkB0 #-}
+mkB0 :: Module Link
+mkB0 = mkLink0
+
+{-# verilog mkB1 #-}
+mkB1 :: Module Link
+mkB1 = mkLink mkB0
+
+{-# verilog mkB2 #-}
+mkB2 :: Module Link
+mkB2 = mkLink mkB1
+
+{-# verilog mkB3 #-}
+mkB3 :: Module Link
+mkB3 = mkLink mkB2
+
+{-# verilog mkB4 #-}
+mkB4 :: Module Link
+mkB4 = mkLink mkB3
+
+{-# verilog mkB5 #-}
+mkB5 :: Module Link
+mkB5 = mkLink mkB4
+
+{-# verilog mkB6 #-}
+mkB6 :: Module Link
+mkB6 = mkLink mkB5
+
+{-# verilog mkB7 #-}
+mkB7 :: Module Link
+mkB7 = mkLink mkB6
+
+{-# verilog mkB8 #-}
+mkB8 :: Module Link
+mkB8 = mkLink mkB7
+
+{-# verilog mkB9 #-}
+mkB9 :: Module Link
+mkB9 = mkLink mkB8
+
+{-# verilog mkB10 #-}
+mkB10 :: Module Link
+mkB10 = mkLink mkB9
+
+{-# verilog mkB11 #-}
+mkB11 :: Module Link
+mkB11 = mkLink mkB10
+
+{-# verilog mkB12 #-}
+mkB12 :: Module Link
+mkB12 = mkLink mkB11
+
+{-# verilog mkB13 #-}
+mkB13 :: Module Link
+mkB13 = mkLink mkB12
+
+{-# verilog mkB14 #-}
+mkB14 :: Module Link
+mkB14 = mkLink mkB13
+
+{-# verilog mkB15 #-}
+mkB15 :: Module Link
+mkB15 = mkLink mkB14
+
+{-# verilog mkB16 #-}
+mkB16 :: Module Link
+mkB16 = mkLink mkB15
+
+{-# verilog mkB17 #-}
+mkB17 :: Module Link
+mkB17 = mkLink mkB16
+
+{-# verilog mkB18 #-}
+mkB18 :: Module Link
+mkB18 = mkLink mkB17
+
+{-# verilog mkB19 #-}
+mkB19 :: Module Link
+mkB19 = mkLink mkB18
+
+{-# verilog mkB20 #-}
+mkB20 :: Module Link
+mkB20 = mkLink mkB19
+
+{-# verilog mkB21 #-}
+mkB21 :: Module Link
+mkB21 = mkLink mkB20
+
+{-# verilog mkB22 #-}
+mkB22 :: Module Link
+mkB22 = mkLink mkB21
+
+{-# verilog mkB23 #-}
+mkB23 :: Module Link
+mkB23 = mkLink mkB22
+
+{-# verilog mkB24 #-}
+mkB24 :: Module Link
+mkB24 = mkLink mkB23
+
+{-# verilog mkB25 #-}
+mkB25 :: Module Link
+mkB25 = mkLink mkB24
+
+{-# verilog mkB26 #-}
+mkB26 :: Module Link
+mkB26 = mkLink mkB25
+
+{-# verilog mkB27 #-}
+mkB27 :: Module Link
+mkB27 = mkLink mkB26
+
+{-# verilog mkB28 #-}
+mkB28 :: Module Link
+mkB28 = mkLink mkB27
+
+{-# verilog mkB29 #-}
+mkB29 :: Module Link
+mkB29 = mkLink mkB28
+
+{-# verilog mkB30 #-}
+mkB30 :: Module Link
+mkB30 = mkLink mkB29
+
+{-# verilog mkB31 #-}
+mkB31 :: Module Link
+mkB31 = mkLink mkB30
+
+{-# verilog sysChain32 #-}
+sysChain32 :: Module Link
+sysChain32 = mkLink mkB31
