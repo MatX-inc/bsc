@@ -170,6 +170,7 @@ import LambdaCalc(convAPackageToLambdaCalc)
 import SAL(convAPackageToSAL)
 
 import VVerilogDollar
+import VStableRenumber(stableRenumberVProgram)
 import ISplitIf(iSplitIf)
 import VFileName
 
@@ -1260,9 +1261,13 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Remove dollar signs from Verilog identifiers
        start flags DFverilogDollar
+       -- Canonicalize generated-name numbering (-stable-verilog)
+       let vprog0' = if (stableVerilog flags)
+                     then stableRenumberVProgram vprog0
+                     else vprog0
        let vprog = if (removeVerilogDollar flags)
-                   then (removeDollarsFromVerilog vprog0)
-                   else vprog0
+                   then (removeDollarsFromVerilog vprog0')
+                   else vprog0'
        t <- dump errh flags t DFverilogDollar dumpnames vprog
 
        -- Generate DPI wrapper C files for any polymorphic imports.  This is
