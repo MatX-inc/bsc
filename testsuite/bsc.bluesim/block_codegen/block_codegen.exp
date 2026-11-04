@@ -174,13 +174,9 @@ compile_no_source_fail_error "c_with_entry" \
 # -c generates from .ba files, not from source
 compile_fail_error BlockCodegen.bsv S0097 1 {-sim -c mkBlockCodegen}
 
-# -c is not supported with the Verilog backend (yet)
-compile_no_source_fail_error "verilog_c_mode" \
-    {-verilog -c mkBlockCodegen mkBlockCodegen.ba} S0098
-
 # -c is not supported with -systemc
 compile_no_source_fail_error "systemc_c_mode" \
-    {-systemc -c mkBlockCodegen} S0099
+    {-systemc -c mkBlockCodegen} S0098
 
 # -c requires a backend
 compile_no_source_fail_error "no_backend_c_mode" \
