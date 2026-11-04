@@ -63,12 +63,12 @@ find_n_strings DictSharingRetry.bs.bsc-out {satisfy:} 0
 # written by that compiler; the numbers depend on the Prelude's instance
 # set, as typecheck_DictSharingTrace.out.expected's do); a reuse that
 # evaluated the recorded identifiers at the hit moves two of them.
-proc bo_generated_names { bo out } {
+proc bo_generated_names { bo out {pat {_tc(dict|temp)[0-9]+}} } {
     global srcdir
     global subdir
     set here [absolute $srcdir]
     cd [file join $here $subdir]
-    set status [catch {exec sh -c "tr -c '\[:print:\]' '\\n' < $bo | grep -oE '_tc(dict|temp)\[0-9\]+' > $out"}]
+    set status [catch {exec sh -c "tr -c '\[:print:\]' '\\n' < $bo | grep -oE '$pat' > $out"}]
     cd $here
     return $status
 }
@@ -123,3 +123,42 @@ erase DictSharingJoinMut.bo
 compile_verilog_pass DictSharingJoinMut.bs mkMut {-g mkMut2 -g sysMut -no-tc-dict-share}
 bo_generated_names DictSharingJoinMut.bo DictSharingJoinMut.tcnames.out
 compare_file DictSharingJoinMut.tcnames.out
+
+# A nested associated type function application that the derived
+# Generic instance keeps unreduced (the outer function's tag is a
+# parameter of the data type): inside the walk of Count (Holder TagX
+# LitA), expTFun expands Slot TagX (Pred Bool (LitPred LitA)) into
+# class predicates with fresh type variables, and the concreteness
+# order solves the SlotEnc predicate while the inner function's result
+# variable is still free, so the walk resolves Slot for a nonground
+# argument.  sat records no such result (it is never consulted, and it
+# would carry the definition's type variables into the .bo, where the
+# type function cache is written in the interning order of its keys'
+# spellings; a replay re-records the walk's results under renumbered
+# variables, in another order).  The generated dictionary names of the
+# .bo are pinned as DictSharingMutRec's are, and so are its generated
+# type variable names (the binders of its polymorphic definitions,
+# none from the type function cache; the .tyvars.out.expected files
+# were written by the compiler without reuse that records only ground
+# results).  The ground results are still delivered to elaboration.
+erase DictSharingAtfParam.bo
+compile_verilog_pass DictSharingAtfParam.bs mkNest {-g mkNest2 -g sysNest -trace-tc-dict-share}
+find_n_strings DictSharingAtfParam.bs.bsc-vcomp-out {satisfy:} 289
+bo_generated_names DictSharingAtfParam.bo DictSharingAtfParam.tcnames.out
+compare_file DictSharingAtfParam.tcnames.out
+bo_generated_names DictSharingAtfParam.bo DictSharingAtfParam.tyvars.out {_tctyvar[0-9]+}
+compare_file DictSharingAtfParam.tyvars.out
+erase DictSharingAtfParam.bo
+compile_verilog_pass DictSharingAtfParam.bs mkNest {-g mkNest2 -g sysNest -trace-atf-cache}
+find_regexp DictSharingAtfParam.bs.bsc-vcomp-out {ATF cache hit: .DictSharingAtfParam.Slot,}
+find_n_strings DictSharingAtfParam.bs.bsc-vcomp-out {ATF cache miss} 0
+
+# An importer of that package reads its .bo and walks the same
+# predicates in its own modules: the same two lists of its own .bo
+erase DictSharingAtfUse.bo
+compile_verilog_pass DictSharingAtfUse.bs mkUse {-g sysUse -trace-tc-dict-share}
+find_n_strings DictSharingAtfUse.bs.bsc-vcomp-out {satisfy:} 30
+bo_generated_names DictSharingAtfUse.bo DictSharingAtfUse.tcnames.out
+compare_file DictSharingAtfUse.tcnames.out
+bo_generated_names DictSharingAtfUse.bo DictSharingAtfUse.tyvars.out {_tctyvar[0-9]+}
+compare_file DictSharingAtfUse.tyvars.out

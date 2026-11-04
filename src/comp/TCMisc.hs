@@ -727,9 +727,9 @@ recordWalk p_pred root sbs s_final sp = do
 -- under the same renumbering (it binds only variables the walk drew,
 -- which occur nowhere but in the block, so the replay returns no
 -- substitution); and the type function results the walk's nested
--- predicates recorded are recorded again, in the walk's order, with
--- every variable of the walk renumbered (a result is recorded as its
--- predicate stood when it was solved, before the walk bound the rest).
+-- predicates recorded are recorded again, in the walk's order (they
+-- are ground, sat records no other, so nothing of theirs is
+-- renumbered).
 -- The block itself is rebuilt by SolvedBinds.replayDeriv when its
 -- consumer demands it, by the walk's own fromSB and merge calls under
 -- the new numbers, so the consumer evaluates the same identifiers in
@@ -746,7 +746,7 @@ replaySolvedBinds new_root new_num e = do
         delta = c - first
         shift = shiftGenTyVars first count delta
         renumber (TyVar i n k) = TVar (mkGenTyVar (getPosition i) (n + delta) k)
-        replayATF (i, args, r) = recordATFResult i (map shift args) (shift r)
+        replayATF (i, args, r) = recordATFResult i args r
     mapM_ replayATF (walkATFs sp)
     let s = mkSubst ([ (v, shift (apSub (deSubst e) (TVar v)))
                      | v <- getSubstDomain (deSubst e) ]
