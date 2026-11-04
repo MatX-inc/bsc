@@ -9,6 +9,7 @@ bsc.bluesim/vcd :: UNSUPPORTED: `sysVCDTest1.v.out' matches `sysVCDTest1.out.exp
 bsc.bluesim/vcd :: UNSUPPORTED: `sysVCDTest2.v' link to executable `sysVCDTest2': not run under verilator: design-initiated $dumpvars aborts: sim_main.cpp calls Verilated::traceEverOn only under +bscvcd
 bsc.bluesim/vcd :: UNSUPPORTED: `sysVCDTest2.v.out' matches `sysVCDTest2.out.expected': not run under verilator: design-initiated $dumpvars aborts: sim_main.cpp calls Verilated::traceEverOn only under +bscvcd
 bsc.bluetcl/fst_correlation :: UNSUPPORTED: fst_correlation: not run under verilator: iverilog-specific (vvp -fst; vpiDefName scope types)
+bsc.bluetcl/vcd_correlation :: UNSUPPORTED: vcd_correlation requires Verilog and Bluesim
 bsc.bsv_examples/Amba_dmac :: UNSUPPORTED: Verilog simulation `sysAmbaDmac' executes: not run under verilator: hand-written event-driven testbench (amba_tb.v `always #4' clock) needs --timing; toplevel `sysAmbaDmac' names no Verilog module
 bsc.bsv_examples/Amba_dmac :: UNSUPPORTED: ` mkDMAC.v mkSlave.v ahb_bus.v ahb_default.v ahb_ram.v ram_1024x32.v amba_tb.v' link to executable `sysAmbaDmac': not run under verilator: hand-written event-driven testbench (amba_tb.v `always #4' clock) needs --timing; toplevel `sysAmbaDmac' names no Verilog module
 bsc.bsv_examples/Amba_dmac :: UNSUPPORTED: `sysAmbaDmac.out' output comparison: not run under verilator: hand-written event-driven testbench (amba_tb.v `always #4' clock) needs --timing; toplevel `sysAmbaDmac' names no Verilog module (PRMS Rob_Brown)
