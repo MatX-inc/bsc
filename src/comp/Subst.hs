@@ -4,7 +4,7 @@ module Subst(
              nullSubst, isNullSubst, (+->), mkSubst,
              Types(..), (@@), merge, mergeWith, mergeListWith,
              mergeAgreements,
-             trimSubst, trimSubstByVars,
+             trimSubst, trimSubstByVars, keepSubstVars,
              {- removeFromSubst, -}
              apSubstToSubst,
              getSubstDomain, getSubstRange, sizeSubst,
@@ -276,6 +276,16 @@ trimSubst :: TyVar -> Subst -> Subst
 trimSubst v (S old_map old_back) = S new_map new_back
   where (new_map, _) = Map.split v old_map
         new_back     = fixupBack new_map old_back
+
+-- This keeps only the entries for the given variables, by looking each
+-- one up (the cost is in the kept entries, not in the substitution);
+-- both maps are built before the result is returned, so a caller that
+-- forces the result holds nothing of the input but the kept types.
+keepSubstVars :: Set.Set TyVar -> Subst -> Subst
+keepSubstVars vs (S old_map _) = new_map `seq` new_back `seq` S new_map new_back
+  where kept = [ (v, t) | v <- Set.toList vs, Just t <- [Map.lookup v old_map] ]
+        new_map  = Map.fromList kept
+        new_back = mk_set_vars kept
 
 -- This removes substitution entries whose LHS or RHS contains the variables.
 -- (That is, entried for a type variable and whose associated type contains

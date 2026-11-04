@@ -7,9 +7,9 @@ module TIMonad(
         getAllowIncoherent, maskAllowIncoherent,
         getFlags, setFlags, getSymTab,
         getSubst, clearSubst, extSubst, updSubst,
-        newTVar, newTVarId, isNewTVar, newDict, newVar,
+        newTVar, newTVarId, isNewTVar, newDict, newDictN, newVar,
         freshInst,
-        VPred(..), getVPredPositions, expandSynVPred,
+        VPred(..), noDictNum, getVPredPositions, expandSynVPred,
         EPred(..), Infer2, CheckT, TaskCheckT,
         getBoundTVs, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
@@ -21,7 +21,14 @@ module TIMonad(
         updAssumpPos,
         recordPackageUse, recordATFResult,
         incrementSatStack, decrementSatStack, getSatStack, mkTSSatElement, TSSatElement,
-              pushSatStackContext, popSatStackContext
+              pushSatStackContext, popSatStackContext,
+        DictCacheFrame, DictCacheEntry(..), WalkSpan(..), DrawEvent(..),
+        pushDictCache, popDictCache,
+        lookupDictCache, noteDictCacheHit, insertDictCache,
+        saveDictCache, restoreDictCache,
+        WalkMark, ATFResult, beginWalk, endWalk, walkATFs,
+        drawsClear, replayable, replaySpan,
+        logDraw, mkDictId, mkGenTyVar, shiftGenTyVars
         , tiRecoveringFromError
         , tiRecoveringFromErrorxx
         , disambiguateStruct
@@ -41,6 +48,7 @@ import Error(internalError, EMsg, WMsg, EMsgs(..), ErrMsg(..))
 import Flags(Flags, maxTIStackDepth)
 import Subst
 import Pred
+import SolvedBinds(Deriv)
 import Scheme
 import Assump
 import SymTab
@@ -49,7 +57,8 @@ import PreIds(idBits, idLiteral, idRealLiteral, idSizedLiteral,
 import Control.Monad(when)
 import Control.Monad.Except(ExceptT, runExceptT, throwError, catchError)
 import Control.Monad.State(State, StateT, runState, runStateT,
-                           lift, gets, get, put, modify)
+                           lift, gets, get, put, modify, modify')
+import Changed(Changed(..), changed2, changedOrId)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Util(headOrErr)
@@ -109,7 +118,110 @@ data TStateRecover = TStateRecover {
   -- this definition, so repeated queries are answered from here
   -- rather than re-posed
   tsNumProven :: S.Set Pred,
-  tsNumRefuted :: S.Set Pred
+  tsNumRefuted :: S.Set Pred,
+  -- The dictionaries shared within the enclosing satisfy calls,
+  -- innermost first (see DictCacheFrame).  satisfyXStream pushes a
+  -- frame on entry and pops it on exit, so an entry never outlives the
+  -- givens it was solved under, and the frames of a call that fails
+  -- are discarded with the rest of this record on error recovery.
+  -- TCMisc.sat states what is recorded and how a hit is consumed
+  -- (a replay of the recorded walk, TCMisc.replaySolvedBinds).
+  tsDictCache :: [DictCacheFrame],
+  -- The deepest the sat stack and the context stack have been since
+  -- the innermost beginWalk
+  tsSatDepthHigh :: !Int,
+  tsSatContextsHigh :: !Int,
+  -- How many walks are being measured (beginWalk nests), the type
+  -- function results recorded since the outermost began, newest
+  -- first, with their count, and under -trace-tcvar the draws made
+  -- since, likewise.  Both logs are empty while no walk is measured;
+  -- a span keeps the log as its walk ended and the count of its own
+  -- entries, so a nested walk's results are shared with every walk
+  -- around it, never copied.
+  tsWalkDepth :: !Int,
+  tsATFLog :: ![ATFResult],
+  tsATFLogLen :: !Int,
+  tsDrawLog :: ![DrawEvent],
+  tsDrawLogLen :: !Int
+}
+
+-- A type function result as recordATFResult records it: the function,
+-- its arguments and the type they resolve to
+type ATFResult = (Id, [Type], Type)
+
+-- One satisfy call's recorded derivations: each ground predicate solved
+-- in the call to the entry sat recorded for its first solve, with the
+-- number of later equal predicates that replayed an entry and the
+-- counter numbers those replays drew (reported by
+-- -trace-tc-dict-share).  The key is the predicate as the solver built
+-- it; Pred's Ord ignores positions.
+data DictCacheFrame = DictCacheFrame {
+  dcEntries :: !(M.Map Pred DictCacheEntry),
+  dcHits :: !Int,
+  dcDrawn :: !Int
+}
+
+-- A recorded derivation (TCMisc.sat): how the instance walk built the
+-- block for the first occurrence of a ground predicate, by the numbers
+-- the walk drew (SolvedBinds.Deriv: no identifier of the block is
+-- held or evaluated), and what the walk consumed.
+-- TCMisc.replaySolvedBinds states how a later occurrence takes it.
+-- The fields are built when the entry is recorded (nothing of the
+-- walk's state outlives it).
+data DictCacheEntry = DictCacheEntry {
+  deRootNum :: !Int,        -- the first occurrence's dictionary number
+  deDeriv :: !Deriv,        -- the derivation of the block satMany merged
+                            -- for it
+  deSubst :: !Subst,        -- the walk's own substitution, restricted to
+                            -- the type variables free in the block: the
+                            -- part a replay has to apply (the rest binds
+                            -- variables the block does not mention)
+  deSpan :: !WalkSpan,      -- what the walk drew and how deep it went
+  deVars :: ![TyVar]        -- the walk's type variables left free in the
+                            -- block or in the substitution's range
+}
+
+-- What a walk drew from the fresh-name counter, how far it grew the
+-- sat stack and the context stack, and the type function results it
+-- recorded, measured from beginWalk to endWalk; under -trace-tcvar
+-- also the trace lines of its draws.  The results and the draws are
+-- the first wsATFCount and wsDrawCount entries of the logs as the walk
+-- ended (newest first; walkATFs and walkDraws give them in order).
+data WalkSpan = WalkSpan {
+  wsFirst :: !Int,     -- the counter when the walk began
+  wsCount :: !Int,     -- the numbers it drew
+  wsDepth :: !Int,     -- its growth of the sat stack
+  wsContexts :: !Int,  -- its growth of the context stack
+  wsATFs :: ![ATFResult],
+  wsATFCount :: !Int,
+  wsDraws :: ![DrawEvent],
+  wsDrawCount :: !Int
+}
+
+walkATFs :: WalkSpan -> [ATFResult]
+walkATFs sp = reverse (take (wsATFCount sp) (wsATFs sp))
+
+walkDraws :: WalkSpan -> [DrawEvent]
+walkDraws sp = reverse (take (wsDrawCount sp) (wsDraws sp))
+
+-- A draw's -trace-tcvar line, kept while a walk is measured so that a
+-- replay can print it under the number it assigns
+data DrawEvent = DrewTyVar !Int String  -- newTVar's number and reason
+               | DrewDict !Int          -- newDict's number
+               | DrewInst Inst          -- newInst's candidate, whose
+                                        -- types can carry the walk's
+                                        -- own variables
+
+-- The state beginWalk displaces, restored by endWalk, and the lengths
+-- of the logs when it began
+data WalkMark = WalkMark {
+  wmCount :: !Int,
+  wmDepth :: !Int,
+  wmContexts :: !Int,
+  wmDepthHigh :: !Int,
+  wmContextsHigh :: !Int,
+  wmATFLen :: !Int,
+  wmDrawLen :: !Int
 }
 
 type TSSatElement = EPred
@@ -119,7 +231,7 @@ mkTSSatElement :: (Maybe [TyVar]) -> [EPred] -> VPred -> TSSatElement
 -- variable to the pred.  We still will need to solve the pred "p".
 -- It is useful when there is recursion, where the solved "p" will
 -- refer right back to this predicate.
-mkTSSatElement _ _ (VPred i (PredWithPositions p _ _)) = EPred (CVar i) p
+mkTSSatElement _ _ (VPred i _ (PredWithPositions p _ _)) = EPred (CVar i) p
 
 type TSSatStack = SizedStack TSSatElement
 type TSSuperSatStack = SizedStack TSSatStack
@@ -140,6 +252,9 @@ sizedStackPush maxStackDepth (SizedStack size stack) x =
     if ( size >= maxStackDepth )
         then fail "stack overflow"
         else return (SizedStack (succ size) (x:stack))
+
+sizedStackSize :: SizedStack a -> Int
+sizedStackSize (SizedStack size _) = size
 
 sizedStackPop :: SizedStack a -> SizedStack a
 sizedStackPop (SizedStack size (_:rest)) =
@@ -183,7 +298,15 @@ initRecoverState = TStateRecover {
     tsExplPreds = [],
     tsSatStack = mkSizedStack [mkSizedStack []],
     tsNumProven = S.empty,
-    tsNumRefuted = S.empty
+    tsNumRefuted = S.empty,
+    tsDictCache = [],
+    tsSatDepthHigh = 0,
+    tsSatContextsHigh = 0,
+    tsWalkDepth = 0,
+    tsATFLog = [],
+    tsATFLogLen = 0,
+    tsDrawLog = [],
+    tsDrawLogLen = 0
   }
 
 data TIResult a = TIResult {
@@ -296,9 +419,16 @@ recordPackageUse (Just pkg) = lift (modify (addPackage pkg))
   where addPackage pkg s = s { tsUsedPackages = S.insert pkg (tsUsedPackages s) }
 
 recordATFResult :: Id -> [Type] -> Type -> TI ()
-recordATFResult atfId args result =
+recordATFResult atfId args result = do
     lift (modify addATF)
+    -- for the walks being measured (beginWalk), so that a replay
+    -- records the same results
+    modify' logATF
   where addATF s = s { tsATFCache = M.insert (atfId, args) result (tsATFCache s) }
+        logATF s | tsWalkDepth s > 0 =
+                     s { tsATFLog = (atfId, args, result) : tsATFLog s,
+                         tsATFLogLen = tsATFLogLen s + 1 }
+                 | otherwise = s
 
 -- XXX maybe someday get rid of this function and replace with catchError
 handle :: TI a -> (EMsgs -> TI a) -> TI a
@@ -379,6 +509,191 @@ addNumDecided proven refuted = modify (\ s ->
     s { tsNumProven = foldr S.insert (tsNumProven s) proven,
         tsNumRefuted = foldr S.insert (tsNumRefuted s) refuted })
 
+-- The frame of the innermost satisfy call (see tsDictCache).  Outside
+-- any satisfy call there is no frame: a lookup misses and an insert
+-- records nothing, so the reduction loops that do not run under
+-- satisfy (reducePredsAggressive, batchSolveNumericPreds) share
+-- nothing.
+pushDictCache :: TI ()
+pushDictCache = modify (\ s ->
+    s { tsDictCache = DictCacheFrame M.empty 0 0 : tsDictCache s })
+
+-- Pop the frame of the satisfy call that is ending; returns how many
+-- derivations it recorded, how many were replayed and how many counter
+-- numbers the replays drew.  Every pop matches the push of the same
+-- call, so an empty stack is a bug.
+popDictCache :: TI (Int, Int, Int)
+popDictCache = do
+  frames <- gets tsDictCache
+  case frames of
+    (c:cs) -> do modify (\ s -> s { tsDictCache = cs })
+                 return (M.size (dcEntries c), dcHits c, dcDrawn c)
+    [] -> internalError "TIMonad.popDictCache: no satisfy call in progress"
+
+lookupDictCache :: Pred -> TI (Maybe DictCacheEntry)
+lookupDictCache p = do
+  frames <- gets tsDictCache
+  case frames of
+    (c:_) -> return (M.lookup p (dcEntries c))
+    [] -> return Nothing
+
+-- Count a replay and the counter numbers it drew
+noteDictCacheHit :: Int -> TI ()
+noteDictCacheHit n = modify' (\ s -> s { tsDictCache = case tsDictCache s of
+                                                         (c:cs) -> c { dcHits = dcHits c + 1,
+                                                                       dcDrawn = dcDrawn c + n } : cs
+                                                         [] -> [] })
+
+-- Record the first solve of p.  sat looks a shareable predicate up
+-- before solving it, and solving p cannot record p again (a nested
+-- occurrence of p is a knot on the sat stack, which is never
+-- recorded), so an insert either records a key new to the frame or,
+-- after a declined replay, replaces the entry with the walk that just
+-- ran.  The entry is built before it is stored (its fields are strict).
+insertDictCache :: Pred -> DictCacheEntry -> TI ()
+insertDictCache p e = e `seq` modify' ins
+  where ins s = case tsDictCache s of
+                  (c:cs) -> s { tsDictCache =
+                                  c { dcEntries = M.insert p e (dcEntries c) } : cs }
+                  [] -> s
+
+-- The frames as they are before a sat call whose result the caller may
+-- drop (sMany puts a provisional partial reduction aside and retries
+-- the predicate later).  The dictionaries recorded during such a call
+-- are bound only in the dropped result, so the caller restores the
+-- frames when it drops it; the nested satisfy calls of sat push and pop
+-- their own frames, so the saved list is the stack of the same depth.
+-- The counter is not restored: the dropped attempt drew its numbers.
+saveDictCache :: TI [DictCacheFrame]
+saveDictCache = gets tsDictCache
+
+restoreDictCache :: [DictCacheFrame] -> TI ()
+restoreDictCache frames = modify (\ s -> s { tsDictCache = frames })
+
+-- Measure a walk: what it draws from the counter, how far it grows
+-- the sat stack and the context stack (the high-water marks are set to
+-- the current sizes and restored at the end, raised by the walk's
+-- own), which type function results it records, and under
+-- -trace-tcvar which draws it makes.  Measurements nest: an inner
+-- walk's results and draws are the outer walk's too (the logs run on
+-- until the outermost walk ends; the mark keeps their lengths).
+beginWalk :: TI WalkMark
+beginWalk = do
+  c <- lift (gets tsNextTyVar)
+  s <- get
+  let (d, k) = satStackSizes (tsSatStack s)
+  put $! s { tsSatDepthHigh = d, tsSatContextsHigh = k,
+             tsWalkDepth = tsWalkDepth s + 1 }
+  return $! WalkMark { wmCount = c, wmDepth = d, wmContexts = k,
+                       wmDepthHigh = tsSatDepthHigh s,
+                       wmContextsHigh = tsSatContextsHigh s,
+                       wmATFLen = tsATFLogLen s,
+                       wmDrawLen = tsDrawLogLen s }
+
+endWalk :: WalkMark -> TI WalkSpan
+endWalk m = do
+  c <- lift (gets tsNextTyVar)
+  s <- get
+  let depth = tsWalkDepth s - 1
+      done = depth == 0
+      sp = WalkSpan { wsFirst = wmCount m, wsCount = c - wmCount m,
+                      wsDepth = tsSatDepthHigh s - wmDepth m,
+                      wsContexts = tsSatContextsHigh s - wmContexts m,
+                      wsATFs = tsATFLog s,
+                      wsATFCount = tsATFLogLen s - wmATFLen m,
+                      wsDraws = tsDrawLog s,
+                      wsDrawCount = tsDrawLogLen s - wmDrawLen m }
+  put $! s { tsSatDepthHigh = max (wmDepthHigh m) (tsSatDepthHigh s),
+             tsSatContextsHigh = max (wmContextsHigh m) (tsSatContextsHigh s),
+             tsWalkDepth = depth,
+             tsATFLog = if done then [] else tsATFLog s,
+             tsATFLogLen = if done then 0 else tsATFLogLen s,
+             tsDrawLog = if done then [] else tsDrawLog s,
+             tsDrawLogLen = if done then 0 else tsDrawLogLen s }
+  return $! sp
+
+-- The sizes of the top context's stack and of the context stack
+satStackSizes :: TSSuperSatStack -> (Int, Int)
+satStackSizes ss@(SizedStack k _) =
+  case sizedStackPeek ss of
+    SizedStack d _ -> (d, k)
+
+-- Whether newTVar would take every one of the numbers c .. c+n-1 as it
+-- draws it: it passes over a number that names a bound generated type
+-- variable (the loop in newTVar), which can happen only for a type
+-- bound in a fresh TI run (expandSynN) and makes a walk's consumption
+-- depend on the counter's value, so TCMisc.sat neither records nor
+-- replays a walk across such a number.
+drawsClear :: Int -> Int -> TI Bool
+drawsClear c n = do
+  bvs <- getBoundTVs
+  return (not (any collides bvs))
+  where collides v = isNewTVar v && tv_num v >= c && tv_num v < c + n
+
+-- Whether the walk a span measured could run the same way now: its
+-- growth keeps both sat stacks within -max-ti-stack-depth (the walk
+-- would stop with ETypeStackOverflow or ETypeSuperStackOverflow
+-- otherwise, which a replay must leave to it) and newTVar would take
+-- every number it needs (drawsClear).
+replayable :: WalkSpan -> TI Bool
+replayable sp = do
+  flags <- getFlags
+  ss <- gets tsSatStack
+  c <- lift (gets tsNextTyVar)
+  let (d, k) = satStackSizes ss
+      limit = maxTIStackDepth flags
+  if d + wsDepth sp > limit || k + wsContexts sp > limit
+    then return False
+    else drawsClear c (wsCount sp)
+
+-- Draw a measured walk's numbers at once: the counter advances by its
+-- count, and under -trace-tcvar its draws are printed under the
+-- numbers they take now (and kept for an enclosing measured walk).
+-- Returns the counter value the span starts from now.
+replaySpan :: WalkSpan -> TI Int
+replaySpan sp = do
+  c <- lift $ do s <- get
+                 put (s { tsNextTyVar = tsNextTyVar s + wsCount sp })
+                 return (tsNextTyVar s)
+  when doVarTrace $ do
+    let shift n = n + (c - wsFirst sp)
+        replay (DrewTyVar n msg) = do
+            traceM ("newTVar: " ++ show (shift n) ++ " " ++ msg)
+            return (DrewTyVar (shift n) msg)
+        replay (DrewDict n) = do
+            traceM ("newDict: " ++ ppReadable (shift n))
+            return (DrewDict (shift n))
+        replay (DrewInst ii) = do
+            let ii' = shiftInst (shiftGenTyVars (wsFirst sp) (wsCount sp) (c - wsFirst sp)) ii
+            traceM ("newInst " ++ ppReadable ii')
+            return (DrewInst ii')
+    evs <- mapM replay (walkDraws sp)
+    mapM_ logDraw evs
+  return c
+
+-- The instance with its types renumbered and nothing else changed
+-- (apSub on a predicate expands the synonyms of its types, which the
+-- walk's own line prints as written).  An instance the walk visits is
+-- an instance declaration's (its dictionary applied to its variables,
+-- MakeSymTab.doInst) or a numeric class's (the predicate's type,
+-- StdPrel.mkNumInstBody); any other expression is left as it is.
+shiftInst :: (Type -> Type) -> Inst -> Inst
+shiftInst shift (Inst e vs (ps :=> p) pkg) =
+    Inst (expr e) vs (map pwp ps :=> pred p) pkg
+  where pwp (PredWithPositions pr poss anc) = PredWithPositions (pred pr) poss anc
+        pred (IsIn c ts) = IsIn c (map shift ts)
+        expr (CTApply f ts) = CTApply (expr f) (map shift ts)
+        expr (CStructT t fs) = CStructT (shift t) [ (i, expr x) | (i, x) <- fs ]
+        expr x = x
+
+-- Under -trace-tcvar, keep a draw's line for the walks being measured
+logDraw :: DrawEvent -> TI ()
+logDraw ev = modify' addDraw
+  where addDraw s | tsWalkDepth s > 0 =
+                      s { tsDrawLog = ev : tsDrawLog s,
+                          tsDrawLogLen = tsDrawLogLen s + 1 }
+                  | otherwise = s
+
 mkEPred :: Pred -> TI EPred
 mkEPred p = do i <- newDict
                return $ EPred (CVar i) p
@@ -415,10 +730,12 @@ newTVar msg k x = do
   bvs <- getBoundTVs
   let loopVar = do
         n <- getTyVarNum
-        let v = TyVar (enumId "tctyvar" pos n) n k
+        let v = mkGenTyVar pos n k
         if (v `elem` bvs) then loopVar
          else do
-           when doVarTrace $ traceM ("newTVar: " ++ show n ++ " " ++ msg);
+           when doVarTrace $ do
+             traceM ("newTVar: " ++ show n ++ " " ++ msg)
+             logDraw (DrewTyVar n msg)
            return (TVar v)
   loopVar
 
@@ -438,10 +755,37 @@ isNewTVar (TyVar i _ _) =
     isBadId i
 
 newDict :: TI Id
-newDict = do
+newDict = fmap fst newDictN
+
+-- A fresh dictionary variable with the counter number it is named by
+newDictN :: TI (Id, Int)
+newDictN = do
  n <- getTyVarNum
- when doVarTrace $ traceM ("newDict: " ++ ppReadable n)
- return (addIdProp (enumId "tcdict" noPosition n) IdPDict)
+ when doVarTrace $ do
+   traceM ("newDict: " ++ ppReadable n)
+   logDraw (DrewDict n)
+ return (mkDictId n, n)
+
+-- The spelling of a generated dictionary variable or type variable, as
+-- newDict and newTVar name them; a replay (TCMisc.replaySolvedBinds)
+-- names the renumbered ones the same way
+mkDictId :: Int -> Id
+mkDictId n = addIdProp (enumId "tcdict" noPosition n) IdPDict
+
+mkGenTyVar :: Position -> Int -> Kind -> TyVar
+mkGenTyVar pos n k = TyVar (enumId "tctyvar" pos n) n k
+
+-- The type with every type variable numbered in [first, first + count)
+-- renumbered by delta (a walk's span under the counter of a replay,
+-- TCMisc.replaySolvedBinds); every subtree without such a variable is
+-- the input's own.
+shiftGenTyVars :: Int -> Int -> Int -> Type -> Type
+shiftGenTyVars first count delta = changedOrId shift
+  where shift (TVar (TyVar i n k))
+          | n >= first && n < first + count =
+              Changed (TVar (mkGenTyVar (getPosition i) (n + delta) k))
+        shift (TAp l r) = changed2 TAp l r (shift l) (shift r)
+        shift _ = Unchanged
 
 newVar :: Position -> String -> TI Id
 newVar p str = do
@@ -463,28 +807,37 @@ freshInst msg x (Forall ks qt@(_ :=> t)) = do
 
 ------
 
--- VPred is an unsolved predicate (at least in satisfy, satMany, sat...)
-data VPred = VPred Id PredWithPositions
+-- VPred is an unsolved predicate (at least in satisfy, satMany, sat...):
+-- its dictionary variable, the counter number newDict named that
+-- variable by (noDictNum when it was not drawn from the counter), and
+-- the predicate.  The number lets the solver refer to the variable
+-- without evaluating its identifier (TCMisc.recordWalk).
+data VPred = VPred Id !Int PredWithPositions
     deriving (Show)
 
+-- The number of a dictionary variable that newDict did not draw: the
+-- counter starts above it, so it names no drawn variable
+noDictNum :: Int
+noDictNum = -1
+
 instance Types VPred where
-    apSub s (VPred i p) = VPred i (apSub s p)
-    tv (VPred _ p) = tv p
+    apSub s (VPred i n p) = VPred i n (apSub s p)
+    tv (VPred _ _ p) = tv p
 
 instance PPrint VPred where
 -- note that the colon (:) that gets printed here is NOT a list cons!
-    pPrint d p (VPred i q) = pparen (p>0) (ppId d i <> text":" <> pPrint d 10 q)
+    pPrint d p (VPred i _ q) = pparen (p>0) (ppId d i <> text":" <> pPrint d 10 q)
 
 getVPredPositions :: VPred -> [Position]
-getVPredPositions (VPred i p) = getPredPositions p
+getVPredPositions (VPred i _ p) = getPredPositions p
 
 -- the best position for a VPred should be its dictionary binding
 instance HasPosition VPred where
-  getPosition (VPred i p) = getPosition i
+  getPosition (VPred i _ p) = getPosition i
 
 
 expandSynVPred :: VPred -> VPred
-expandSynVPred (VPred i (PredWithPositions (IsIn c ts) poss anc)) = VPred i pwp'
+expandSynVPred (VPred i n (PredWithPositions (IsIn c ts) poss anc)) = VPred i n pwp'
   where pwp' = PredWithPositions p' poss anc
         p'   = IsIn c ts'
         ts'  = map expandSyn ts
@@ -742,7 +1095,9 @@ incrementSatStack x = do
     Nothing -> (err(noPosition,ETypeStackOverflow))
     Just newstack ->
         modify (\ts -> ts { tsSatStack =
-                              sizedStackModify superstack (const newstack)})
+                              sizedStackModify superstack (const newstack),
+                            tsSatDepthHigh =
+                              max (tsSatDepthHigh ts) (sizedStackSize newstack)})
 
 decrementSatStack :: TI ()
 decrementSatStack = do
@@ -763,7 +1118,9 @@ pushSatStackContext = do
   case (sizedStackPush (maxTIStackDepth flags) superstack (mkSizedStack [])) of
     Nothing -> err (noPosition, ETypeSuperStackOverflow)
     Just newstack ->
-        modify (\ts -> ts { tsSatStack = newstack })
+        modify (\ts -> ts { tsSatStack = newstack,
+                            tsSatContextsHigh =
+                              max (tsSatContextsHigh ts) (sizedStackSize newstack) })
 
 popSatStackContext :: TI ()
 popSatStackContext = do

@@ -1,0 +1,39 @@
+package DictSharingAtfUse where
+
+-- An importer of DictSharingAtfParam: it reads DictSharingAtfParam's .bo (whose type-function
+-- cache region differs between the compilers), re-exports its functions
+-- and walks the same predicates itself in two synthesized modules.
+
+import DictSharingAtfParam
+
+useImp :: UInt 8 -> UInt 8
+useImp x = count hA + count hB + useBig1 x x + count (Pair2 hA hY) + x
+
+useImp2 :: UInt 8 -> UInt 8 -> UInt 8
+useImp2 x y = useBig2 x y + count (RC hB RN RN hYB) + count hA + useD y
+
+interface UIfc =
+  uget :: UInt 8
+  uput :: UInt 8 -> Action
+
+mkUse :: Module UIfc
+mkUse =
+  module
+    r :: Reg (UInt 8) <- mkReg 0
+    s :: Reg (UInt 8) <- mkReg 1
+    rules
+      "a": when r > 3 ==> r := r + useImp s + count hA + count (hAx (r > 1) s)
+      "b": when s > 4 ==> s := useImp2 r s + count hB
+    interface
+      uget = r + s + useC r
+      uput x = r := x + count (Pair2 hA hY)
+
+sysUse :: Module Empty
+sysUse =
+  module
+    n :: UIfc <- mkUse
+    rules
+      when True ==> do
+        $display "uget: " n.uget
+        $finish
+      when True ==> n.uput 3

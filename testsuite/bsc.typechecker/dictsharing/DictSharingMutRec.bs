@@ -1,0 +1,123 @@
+package DictSharingMutRec where
+
+-- A Generic catch-all traversal class with hardware-valued methods over
+-- structs, sums and two mutually recursive data types A and B.  The
+-- traversal of A ties a knot to the root (Count A) from two fields and
+-- a knot to the member Count B from B's own field, so two projection
+-- binders of the cycle's recursive dictionary group are each referenced
+-- twice and survive the simplifier's single-use inlining, and IConv
+-- orders the group's binders by the interning ordinal of their spelling
+-- (the typechecker's counter restarts per definition, so a spelling
+-- recurs and keeps the ordinal of its first interning).  Each module
+-- poses the ground predicates of its register types more than once, so
+-- the typechecker replays their derivations; a replay that evaluated
+-- the recorded identifiers at the hit would intern spellings the later
+-- cycles reuse, in another order than the consumer of the derivation
+-- does, and the .bo would nest the group's binders differently.
+
+class Count a where
+  count :: a -> UInt 8
+
+instance Count (UInt 8) where
+  count x = x
+
+instance Count Bool where
+  count b = if b then 1 else 0
+
+instance (Generic a r, Count' r) => Count a where
+  count x = count' (from x)
+
+class Count' r where
+  count' :: r -> UInt 8
+
+instance (Count' r1, Count' r2) => Count' (r1, r2) where
+  count' (x, y) = count' x + count' y
+
+instance (Count' r1, Count' r2) => Count' (Either r1 r2) where
+  count' (Left x) = count' x
+  count' (Right y) = count' y
+
+instance Count' () where
+  count' () = 0
+
+instance (Count' r) => Count' (Meta m r) where
+  count' (Meta x) = count' x
+
+instance (Count a) => Count' (Conc a) where
+  count' (Conc x) = count x
+
+struct Pair =
+  p0 :: UInt 8
+  p1 :: Bool
+ deriving (Bits, Eq)
+
+struct Triple =
+  t0 :: UInt 8
+  t1 :: Bool
+  t2 :: Pair
+ deriving (Bits, Eq)
+
+pair :: Pair
+pair = Pair { p0 = 1; p1 = True }
+
+triple :: Triple
+triple = Triple { t0 = 2; t1 = False; t2 = pair }
+
+data A = AN | AC Pair B A
+
+data B = BN | BC Pair A B
+
+interface Ifc =
+  get :: UInt 8
+  put :: Pair -> Action
+
+mkMut :: Module Ifc
+mkMut =
+  module
+    r :: Reg Pair <- mkReg pair
+    s :: Reg Triple <- mkReg triple
+    c :: Reg (UInt 8) <- mkReg 0
+    rules
+      "count": when r.p1 ==> do
+        c := c + count (AC r (BC s.t2 AN BN) (AC pair BN AN)) + count (BC r (AC s.t2 BN AN) BN)
+      "other": when (not r.p1) ==> c := c + count (AC r BN AN)
+    interface
+      get = let n :: UInt 8
+                n = count (AC r (BC r AN BN) AN) + count r + count s
+                (x, y) = (r.p0, s.t0)
+                (u, v) = (s.t2.p0, c)
+                a = x + y
+                b = u + v
+            in  ((a & b) | (a ^ b)) + n
+      put x = r := x
+
+mkMut2 :: Module Ifc
+mkMut2 =
+  module
+    r :: Reg Pair <- mkReg pair
+    s :: Reg Triple <- mkReg triple
+    c :: Reg (UInt 8) <- mkReg 0
+    rules
+      "count": when r.p1 ==> c := c + count (BC r (AC s.t2 (BC r AN BN) AN) (BC pair AN BN))
+    interface
+      get = let m :: UInt 8
+                m = count (BC r AN (BC s.t2 AN BN)) + count (AC r BN AN)
+                (x, y) = (r.p0, s.t0)
+                (u, v) = (s.t2.p0, c)
+                a = x + y
+                b = u + v
+            in  ((a & b) | (a ^ b)) + m
+      put x = r := x
+
+sysMut :: Module Empty
+sysMut =
+  module
+    n1 :: Ifc <- mkMut
+    n2 :: Ifc <- mkMut2
+    rules
+      when True ==> do
+        $display "get: " n1.get n2.get
+        $finish
+      when True ==> do
+        n1.put pair
+        n2.put pair

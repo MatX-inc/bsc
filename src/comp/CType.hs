@@ -415,6 +415,12 @@ getTStr (TCon (TyStr s _)) = s
 getTStr t = internalError $ "getTNum: not a type-level string -- " ++ (show t)
 
 isTVar :: Type -> Bool
+isTVar (TVar _) = True
+isTVar _ = False
+
+isTCon :: Type -> Bool
+isTCon (TCon _) = True
+isTCon _ = False
 
 -- whether a type variable occurs in the type (a ground type is left as
 -- it is by a substitution, so a caller can keep it instead of copying it)
@@ -422,13 +428,6 @@ hasTyVar :: Type -> Bool
 hasTyVar (TVar _) = True
 hasTyVar (TAp l r) = hasTyVar l || hasTyVar r
 hasTyVar _ = False
-
-isTVar (TVar _) = True
-isTVar _ = False
-
-isTCon :: Type -> Bool
-isTCon (TCon _) = True
-isTCon _ = False
 
 isGeneratedTVar :: TyVar -> Bool
 isGeneratedTVar (TyVar _ n _) = n /= noTyVarNo

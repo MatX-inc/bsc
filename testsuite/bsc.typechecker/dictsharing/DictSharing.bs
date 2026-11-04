@@ -1,0 +1,107 @@
+package DictSharing where
+
+-- A traversal over the Generic representation in the shape of the
+-- Prelude's derived traversals: a catch-all instance that goes through
+-- Generic for every type without an instance of its own, and
+-- representation instances that recurse into both components of a
+-- product.  Every field re-derives the traversal of its type, so the
+-- nested structs below (whose fields repeat a few types) pose the same
+-- ground predicates many times in one definition.  The typechecker
+-- solves each of them once per satisfy call and replays the solution for
+-- the later occurrences (TCMisc.sat, replaySolvedBinds).
+
+class CountLeaves a where
+  countLeaves :: a -> Integer
+
+instance CountLeaves (UInt n) where
+  countLeaves _ = 1
+
+instance CountLeaves Bool where
+  countLeaves _ = 1
+
+instance (Generic a r, CountLeaves' r) => CountLeaves a where
+  countLeaves x = countLeaves' (from x)
+
+class CountLeaves' r where
+  countLeaves' :: r -> Integer
+
+instance (CountLeaves' r1, CountLeaves' r2) => CountLeaves' (r1, r2) where
+  countLeaves' (x, y) = countLeaves' x + countLeaves' y
+
+instance CountLeaves' () where
+  countLeaves' () = 0
+
+instance (CountLeaves' r) => CountLeaves' (Meta m r) where
+  countLeaves' (Meta x) = countLeaves' x
+
+instance (CountLeaves a) => CountLeaves' (Conc a) where
+  countLeaves' (Conc x) = countLeaves x
+
+struct Pair =
+  p0 :: UInt 8
+  p1 :: Bool
+
+struct Triple =
+  t0 :: UInt 16
+  t1 :: Bool
+  t2 :: UInt 4
+
+struct Row =
+  r0 :: Pair
+  r1 :: Triple
+  r2 :: Pair
+  r3 :: Triple
+  r4 :: Pair
+  r5 :: Triple
+  r6 :: Pair
+  r7 :: Triple
+
+struct Grid =
+  g0 :: Row
+  g1 :: Row
+  g2 :: Row
+  g3 :: Row
+  g4 :: Row
+  g5 :: Row
+  g6 :: Row
+  g7 :: Row
+
+struct Block =
+  b0 :: Grid
+  b1 :: Grid
+  b2 :: Grid
+  b3 :: Grid
+  b4 :: Grid
+  b5 :: Grid
+  b6 :: Grid
+  b7 :: Grid
+
+pair :: Pair
+pair = Pair { p0 = 1; p1 = True }
+
+triple :: Triple
+triple = Triple { t0 = 2; t1 = False; t2 = 3 }
+
+row :: Row
+row = Row { r0 = pair; r1 = triple; r2 = pair; r3 = triple;
+            r4 = pair; r5 = triple; r6 = pair; r7 = triple }
+
+grid :: Grid
+grid = Grid { g0 = row; g1 = row; g2 = row; g3 = row;
+              g4 = row; g5 = row; g6 = row; g7 = row }
+
+block :: Block
+block = Block { b0 = grid; b1 = grid; b2 = grid; b3 = grid;
+                b4 = grid; b5 = grid; b6 = grid; b7 = grid }
+
+-- 8 grids of 8 rows of 4 pairs and 4 triples: 1280 leaves
+blockLeaves :: Integer
+blockLeaves = countLeaves block
+
+sysDictSharing :: Module Empty
+sysDictSharing =
+  module
+    rules
+      when True ==> do
+        $display "leaves: " blockLeaves
+        $finish

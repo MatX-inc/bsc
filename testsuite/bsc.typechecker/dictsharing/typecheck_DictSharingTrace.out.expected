@@ -1,0 +1,435 @@
+=== typecheck (DictSharingTrace):
+package DictSharingTrace where {
+import DictSharing;
+
+import Prelude ...;
+
+import PreludeBSV ...;
+
+import DictSharing ...;
+
+struct Three = {
+    a :: DictSharing.Pair;
+    b :: DictSharing.Pair;
+    c :: DictSharing.Pair
+};
+
+DictSharingTrace.Prelude.Generic~DictSharingTrace.Three~Prelude.Meta~Prelude.MetaData~Three~DictSharingTrace~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Three~0~3~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~a~0~Prelude.Conc~DictSharing.Pair~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~b~1~Prelude.Conc~DictSharing.Pair~Prelude.Meta~Prelude.MetaField~c~2~Prelude.Conc~DictSharing.Pair :: Prelude.Generic
+																																																		     DictSharingTrace.Three
+																																																		     (Prelude.Meta
+																																																		      (Prelude.MetaData
+																																																		       "Three"
+																																																		       "DictSharingTrace"
+																																																		       ()
+																																																		       1)
+																																																		      (Prelude.Meta
+																																																		       (Prelude.MetaConsNamed
+																																																			"Three"
+																																																			0
+																																																			3)
+																																																		       (Prelude.Meta
+																																																			(Prelude.MetaField
+																																																			 "a"
+																																																			 0)
+																																																			(Prelude.Conc
+																																																			 DictSharing.Pair),
+																																																			Prelude.Meta
+																																																			(Prelude.MetaField
+																																																			 "b"
+																																																			 1)
+																																																			(Prelude.Conc
+																																																			 DictSharing.Pair),
+																																																			Prelude.Meta
+																																																			(Prelude.MetaField
+																																																			 "c"
+																																																			 2)
+																																																			(Prelude.Conc
+																																																			 DictSharing.Pair))));
+DictSharingTrace.Prelude.Generic~DictSharingTrace.Three~Prelude.Meta~Prelude.MetaData~Three~DictSharingTrace~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Three~0~3~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~a~0~Prelude.Conc~DictSharing.Pair~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~b~1~Prelude.Conc~DictSharing.Pair~Prelude.Meta~Prelude.MetaField~c~2~Prelude.Conc~DictSharing.Pair =
+    let { _from :: DictSharingTrace.Three ->
+		   Prelude.Meta (Prelude.MetaData "Three" "DictSharingTrace" () 1)
+		   (Prelude.Meta (Prelude.MetaConsNamed "Three" 0 3)
+		    (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+		     Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+		     Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair)));
+	  _from _x =
+	      Prelude.Meta
+		·(Prelude.Meta (Prelude.MetaConsNamed "Three" 0 3)
+		  (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+		   Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+		   Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair)))
+		·(Prelude.MetaData "Three" "DictSharingTrace" () 1)
+		(Prelude.Meta
+		   ·(Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+		     Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+		     Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair))
+		   ·(Prelude.MetaConsNamed "Three" 0 3)
+		   (Prelude.PrimPair { Prelude.fst = Prelude.Meta
+						       ·(Prelude.Conc DictSharing.Pair)
+						       ·(Prelude.MetaField "a" 0)
+						       (Prelude.Conc ·DictSharing.Pair (.DictSharingTrace.a _x));
+				       Prelude.snd = Prelude.PrimPair { Prelude.fst = Prelude.Meta
+											·(Prelude.Conc DictSharing.Pair)
+											·(Prelude.MetaField "b" 1)
+											(Prelude.Conc ·DictSharing.Pair
+											   (.DictSharingTrace.b _x));
+									Prelude.snd = Prelude.Meta
+											·(Prelude.Conc DictSharing.Pair)
+											·(Prelude.MetaField "c" 2)
+											(Prelude.Conc ·DictSharing.Pair
+											   (.DictSharingTrace.c _x));
+									};
+				       }));
+	  _to :: Prelude.Meta (Prelude.MetaData "Three" "DictSharingTrace" () 1)
+		 (Prelude.Meta (Prelude.MetaConsNamed "Three" 0 3)
+		  (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+		   Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+		   Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair))) ->
+		 DictSharingTrace.Three;
+	  _to
+	  (Prelude.Meta
+	   ·(Prelude.Meta (Prelude.MetaConsNamed "Three" 0 3)
+	     (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+	      Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+	      Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair)))
+	   ·(Prelude.MetaData "Three" "DictSharingTrace" () 1)
+	   (Prelude.Meta
+	    ·(Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+	      Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+	      Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair))
+	    ·(Prelude.MetaConsNamed "Three" 0 3)
+	    (Prelude.Meta
+	     ·(Prelude.Conc DictSharing.Pair)
+	     ·(Prelude.MetaField "a" 0)
+	     (Prelude.Conc ·DictSharing.Pair a1), (Prelude.Meta
+						   ·(Prelude.Conc DictSharing.Pair)
+						   ·(Prelude.MetaField "b" 1)
+						   (Prelude.Conc ·DictSharing.Pair a2), Prelude.Meta
+											·(Prelude.Conc DictSharing.Pair)
+											·(Prelude.MetaField "c" 2)
+											(Prelude.Conc
+											 ·DictSharing.Pair
+											 a3))))) =
+	      DictSharingTrace.Three { DictSharingTrace.a = a1;
+				       DictSharingTrace.b = a2;
+				       DictSharingTrace.c = a3;
+				       }; }
+    in  Prelude.Generic { Prelude.from = _from; Prelude.to = _to; };;
+
+three :: DictSharingTrace.Three;
+three =
+    DictSharingTrace.Three { DictSharingTrace.a = DictSharing.pair;
+			     DictSharingTrace.b = DictSharing.pair;
+			     DictSharingTrace.c = DictSharing.pair;
+			     };;
+
+threeLeaves :: Prelude.Integer;
+threeLeaves =
+    letseq { _tcdict1222 :: DictSharing.CountLeaves (Prelude.UInt 8);
+	     _tcdict1222 =  DictSharing.DictSharing.CountLeaves~Prelude.UInt~n ·8;
+	     _tcdict1220 :: DictSharing.CountLeaves' (Prelude.Conc (Prelude.UInt 8));
+	     _tcdict1220 =  DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a ·(Prelude.UInt 8) _tcdict1222;
+	     _tcdict1212 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)));
+	     _tcdict1212 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Conc (Prelude.UInt 8))
+		   ·(Prelude.MetaField "p0" 0)
+		   _tcdict1220;
+	     _tcdict1217 :: DictSharing.CountLeaves Prelude.Bool;
+	     _tcdict1217 =  DictSharing.DictSharing.CountLeaves~Prelude.Bool;
+	     _tcdict1215 :: DictSharing.CountLeaves' (Prelude.Conc Prelude.Bool);
+	     _tcdict1215 =  DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a ·Prelude.Bool _tcdict1217;
+	     _tcdict1211 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool));
+	     _tcdict1211 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Conc Prelude.Bool)
+		   ·(Prelude.MetaField "p1" 1)
+		   _tcdict1215;
+	     _tcdict1208 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			     Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool));
+	     _tcdict1208 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+		   ·(Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))
+		   ·(Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)))
+		   _tcdict1211
+		   _tcdict1212;
+	     _tcdict1205 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+			     (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			      Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool)));
+	     _tcdict1205 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+		     Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))
+		   ·(Prelude.MetaConsNamed "Pair" 0 2)
+		   _tcdict1208;
+	     _tcdict1201 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaData "Pair" "DictSharing" () 1)
+			     (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+			      (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			       Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))));
+	     _tcdict1201 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+		     (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+		      Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool)))
+		   ·(Prelude.MetaData "Pair" "DictSharing" () 1)
+		   _tcdict1205;
+	     _tcdict1202 :: Prelude.Generic DictSharing.Pair
+			    (Prelude.Meta (Prelude.MetaData "Pair" "DictSharing" () 1)
+			     (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+			      (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			       Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))));
+	     _tcdict1202 =
+		 DictSharing.Prelude.Generic~DictSharing.Pair~Prelude.Meta~Prelude.MetaData~Pair~DictSharing~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Pair~0~2~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~p0~0~Prelude.Conc~Prelude.UInt~8~Prelude.Meta~Prelude.MetaField~p1~1~Prelude.Conc~Prelude.Bool;
+	     _tcdict1198 :: DictSharing.CountLeaves DictSharing.Pair;
+	     _tcdict1198 =
+		 DictSharing.DictSharing.CountLeaves~a
+		   ·(Prelude.Meta (Prelude.MetaData "Pair" "DictSharing" () 1)
+		     (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+		      (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+		       Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))))
+		   ·DictSharing.Pair
+		   _tcdict1201
+		   _tcdict1202;
+	     _tcdict1196 :: DictSharing.CountLeaves' (Prelude.Conc DictSharing.Pair);
+	     _tcdict1196 =  DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a ·DictSharing.Pair _tcdict1198;
+	     _tcdict1129 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair));
+	     _tcdict1129 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Conc DictSharing.Pair)
+		   ·(Prelude.MetaField "a" 0)
+		   _tcdict1196;
+	     _tcdict1192 :: DictSharing.CountLeaves (Prelude.UInt 8);
+	     _tcdict1192 =  DictSharing.DictSharing.CountLeaves~Prelude.UInt~n ·8;
+	     _tcdict1190 :: DictSharing.CountLeaves' (Prelude.Conc (Prelude.UInt 8));
+	     _tcdict1190 =  DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a ·(Prelude.UInt 8) _tcdict1192;
+	     _tcdict1182 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)));
+	     _tcdict1182 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Conc (Prelude.UInt 8))
+		   ·(Prelude.MetaField "p0" 0)
+		   _tcdict1190;
+	     _tcdict1187 :: DictSharing.CountLeaves Prelude.Bool;
+	     _tcdict1187 =  DictSharing.DictSharing.CountLeaves~Prelude.Bool;
+	     _tcdict1185 :: DictSharing.CountLeaves' (Prelude.Conc Prelude.Bool);
+	     _tcdict1185 =  DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a ·Prelude.Bool _tcdict1187;
+	     _tcdict1181 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool));
+	     _tcdict1181 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Conc Prelude.Bool)
+		   ·(Prelude.MetaField "p1" 1)
+		   _tcdict1185;
+	     _tcdict1178 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			     Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool));
+	     _tcdict1178 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+		   ·(Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))
+		   ·(Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)))
+		   _tcdict1181
+		   _tcdict1182;
+	     _tcdict1175 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+			     (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			      Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool)));
+	     _tcdict1175 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+		     Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))
+		   ·(Prelude.MetaConsNamed "Pair" 0 2)
+		   _tcdict1178;
+	     _tcdict1171 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaData "Pair" "DictSharing" () 1)
+			     (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+			      (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			       Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))));
+	     _tcdict1171 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+		     (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+		      Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool)))
+		   ·(Prelude.MetaData "Pair" "DictSharing" () 1)
+		   _tcdict1175;
+	     _tcdict1172 :: Prelude.Generic DictSharing.Pair
+			    (Prelude.Meta (Prelude.MetaData "Pair" "DictSharing" () 1)
+			     (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+			      (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			       Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))));
+	     _tcdict1172 =
+		 DictSharing.Prelude.Generic~DictSharing.Pair~Prelude.Meta~Prelude.MetaData~Pair~DictSharing~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Pair~0~2~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~p0~0~Prelude.Conc~Prelude.UInt~8~Prelude.Meta~Prelude.MetaField~p1~1~Prelude.Conc~Prelude.Bool;
+	     _tcdict1168 :: DictSharing.CountLeaves DictSharing.Pair;
+	     _tcdict1168 =
+		 DictSharing.DictSharing.CountLeaves~a
+		   ·(Prelude.Meta (Prelude.MetaData "Pair" "DictSharing" () 1)
+		     (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+		      (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+		       Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))))
+		   ·DictSharing.Pair
+		   _tcdict1171
+		   _tcdict1172;
+	     _tcdict1166 :: DictSharing.CountLeaves' (Prelude.Conc DictSharing.Pair);
+	     _tcdict1166 =  DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a ·DictSharing.Pair _tcdict1168;
+	     _tcdict1133 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair));
+	     _tcdict1133 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Conc DictSharing.Pair)
+		   ·(Prelude.MetaField "b" 1)
+		   _tcdict1166;
+	     _tcdict1162 :: DictSharing.CountLeaves (Prelude.UInt 8);
+	     _tcdict1162 =  DictSharing.DictSharing.CountLeaves~Prelude.UInt~n ·8;
+	     _tcdict1160 :: DictSharing.CountLeaves' (Prelude.Conc (Prelude.UInt 8));
+	     _tcdict1160 =  DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a ·(Prelude.UInt 8) _tcdict1162;
+	     _tcdict1152 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)));
+	     _tcdict1152 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Conc (Prelude.UInt 8))
+		   ·(Prelude.MetaField "p0" 0)
+		   _tcdict1160;
+	     _tcdict1157 :: DictSharing.CountLeaves Prelude.Bool;
+	     _tcdict1157 =  DictSharing.DictSharing.CountLeaves~Prelude.Bool;
+	     _tcdict1155 :: DictSharing.CountLeaves' (Prelude.Conc Prelude.Bool);
+	     _tcdict1155 =  DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a ·Prelude.Bool _tcdict1157;
+	     _tcdict1151 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool));
+	     _tcdict1151 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Conc Prelude.Bool)
+		   ·(Prelude.MetaField "p1" 1)
+		   _tcdict1155;
+	     _tcdict1148 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			     Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool));
+	     _tcdict1148 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+		   ·(Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))
+		   ·(Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)))
+		   _tcdict1151
+		   _tcdict1152;
+	     _tcdict1145 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+			     (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			      Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool)));
+	     _tcdict1145 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+		     Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))
+		   ·(Prelude.MetaConsNamed "Pair" 0 2)
+		   _tcdict1148;
+	     _tcdict1141 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaData "Pair" "DictSharing" () 1)
+			     (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+			      (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			       Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))));
+	     _tcdict1141 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+		     (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+		      Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool)))
+		   ·(Prelude.MetaData "Pair" "DictSharing" () 1)
+		   _tcdict1145;
+	     _tcdict1142 :: Prelude.Generic DictSharing.Pair
+			    (Prelude.Meta (Prelude.MetaData "Pair" "DictSharing" () 1)
+			     (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+			      (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+			       Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))));
+	     _tcdict1142 =
+		 DictSharing.Prelude.Generic~DictSharing.Pair~Prelude.Meta~Prelude.MetaData~Pair~DictSharing~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Pair~0~2~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~p0~0~Prelude.Conc~Prelude.UInt~8~Prelude.Meta~Prelude.MetaField~p1~1~Prelude.Conc~Prelude.Bool;
+	     _tcdict1138 :: DictSharing.CountLeaves DictSharing.Pair;
+	     _tcdict1138 =
+		 DictSharing.DictSharing.CountLeaves~a
+		   ·(Prelude.Meta (Prelude.MetaData "Pair" "DictSharing" () 1)
+		     (Prelude.Meta (Prelude.MetaConsNamed "Pair" 0 2)
+		      (Prelude.Meta (Prelude.MetaField "p0" 0) (Prelude.Conc (Prelude.UInt 8)),
+		       Prelude.Meta (Prelude.MetaField "p1" 1) (Prelude.Conc Prelude.Bool))))
+		   ·DictSharing.Pair
+		   _tcdict1141
+		   _tcdict1142;
+	     _tcdict1136 :: DictSharing.CountLeaves' (Prelude.Conc DictSharing.Pair);
+	     _tcdict1136 =  DictSharing.DictSharing.CountLeaves'~Prelude.Conc~a ·DictSharing.Pair _tcdict1138;
+	     _tcdict1132 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair));
+	     _tcdict1132 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Conc DictSharing.Pair)
+		   ·(Prelude.MetaField "c" 2)
+		   _tcdict1136;
+	     _tcdict1128 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+			     Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair));
+	     _tcdict1128 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+		   ·(Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair))
+		   ·(Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair))
+		   _tcdict1132
+		   _tcdict1133;
+	     _tcdict1125 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+			     Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+			     Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair));
+	     _tcdict1125 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.PrimPair~r1~r2
+		   ·(Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+		     Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair))
+		   ·(Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair))
+		   _tcdict1128
+		   _tcdict1129;
+	     _tcdict1122 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaConsNamed "Three" 0 3)
+			     (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+			      Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+			      Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair)));
+	     _tcdict1122 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+		     Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+		     Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair))
+		   ·(Prelude.MetaConsNamed "Three" 0 3)
+		   _tcdict1125;
+	     _tcdict1118 :: DictSharing.CountLeaves'
+			    (Prelude.Meta (Prelude.MetaData "Three" "DictSharingTrace" () 1)
+			     (Prelude.Meta (Prelude.MetaConsNamed "Three" 0 3)
+			      (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+			       Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+			       Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair))));
+	     _tcdict1118 =
+		 DictSharing.DictSharing.CountLeaves'~Prelude.Meta~m~r
+		   ·(Prelude.Meta (Prelude.MetaConsNamed "Three" 0 3)
+		     (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+		      Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+		      Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair)))
+		   ·(Prelude.MetaData "Three" "DictSharingTrace" () 1)
+		   _tcdict1122;
+	     _tcdict1119 :: Prelude.Generic DictSharingTrace.Three
+			    (Prelude.Meta (Prelude.MetaData "Three" "DictSharingTrace" () 1)
+			     (Prelude.Meta (Prelude.MetaConsNamed "Three" 0 3)
+			      (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+			       Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+			       Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair))));
+	     _tcdict1119 =
+		 DictSharingTrace.Prelude.Generic~DictSharingTrace.Three~Prelude.Meta~Prelude.MetaData~Three~DictSharingTrace~Prelude.PrimUnit~1~Prelude.Meta~Prelude.MetaConsNamed~Three~0~3~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~a~0~Prelude.Conc~DictSharing.Pair~Prelude.PrimPair~Prelude.Meta~Prelude.MetaField~b~1~Prelude.Conc~DictSharing.Pair~Prelude.Meta~Prelude.MetaField~c~2~Prelude.Conc~DictSharing.Pair;
+	     _tcdict1007 :: DictSharing.CountLeaves DictSharingTrace.Three;
+	     _tcdict1007 =
+		 DictSharing.DictSharing.CountLeaves~a
+		   ·(Prelude.Meta (Prelude.MetaData "Three" "DictSharingTrace" () 1)
+		     (Prelude.Meta (Prelude.MetaConsNamed "Three" 0 3)
+		      (Prelude.Meta (Prelude.MetaField "a" 0) (Prelude.Conc DictSharing.Pair),
+		       Prelude.Meta (Prelude.MetaField "b" 1) (Prelude.Conc DictSharing.Pair),
+		       Prelude.Meta (Prelude.MetaField "c" 2) (Prelude.Conc DictSharing.Pair))))
+		   ·DictSharingTrace.Three
+		   _tcdict1118
+		   _tcdict1119;
+	     _tctemp1224 :: Prelude.Integer;
+	     _tctemp1224 =  DictSharing.countLeaves ·DictSharingTrace.Three _tcdict1007 DictSharingTrace.three; }
+    in  _tctemp1224;
+}
+
+-----

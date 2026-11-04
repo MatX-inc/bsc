@@ -20,6 +20,7 @@ import Data.List
 import Control.Monad(foldM, when)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.IntMap as IM
 import System.IO.Unsafe(unsafePerformIO)
 
 import Util
@@ -76,6 +77,16 @@ doTraceSatisfy = elem "-trace-tc-satisfy" progArgs
 
 satTrace :: String -> a -> a
 satTrace s x = if doTraceSatisfy then traces s x else x
+
+doTraceDictShare :: Bool
+doTraceDictShare = elem "-trace-tc-dict-share" progArgs
+
+-- A hidden switch that turns the reuse of derivations off (sat): every
+-- instance walk then runs, nothing is recorded and nothing replayed,
+-- so that the compiler's outputs with the switch witness that the
+-- derivations built beside the blocks change nothing by themselves
+noTcDictShare :: Bool
+noTcDictShare = elem "-no-tc-dict-share" progArgs
 
 satTraceM :: Monad m => String -> m ()
 satTraceM s = when (doTraceSatisfy) $ traceM s
@@ -182,7 +193,16 @@ satisfyXStream dvs es ps = do
         -- satTraceM ("satisfy enter: " ++ ppString (dvs, ps))
 -- it is not clear if applying the substitution here wins or not
         s0 <- getSubst
+        -- the shared dictionaries of this call (TIMonad.tsDictCache):
+        -- the givens "es" are fixed for the whole loop, so a ground
+        -- predicate solved once here is solved for the whole call
+        pushDictCache
         SolveResult rs sbs s <- satisfy' dvs (apSub s0 es) (apSub s0 ps)
+        (recorded, hits, drawn) <- popDictCache
+        when (doTraceDictShare && hits > 0) $
+            traceM ("satisfy: " ++ show recorded ++ " derivations recorded, "
+                    ++ show hits ++ " replayed, " ++ show drawn
+                    ++ " counter numbers drawn by the replays")
 --      SolveResult rs sbs s <- satisfy' dvs es ps
         -- satTraceM ("satisfy exit: " ++ ppString (rs,sbs,s) ++ "\n")
         extSubst "satisfyX" s
@@ -248,6 +268,7 @@ satisfy' dvs es ps = do
              else
                 sMany (dvsSub s' dvs) (apSub s' es) unchanged_rs (sbs' <++ sbs) (s' @@ s) (apSub s' changed_rs)
         sMany dvs es rs sbs s (p:ps) = do
+            dict_frames <- saveDictCache
             SatResult x_needed x_sbs x_s x_commit <- sat dvs es p
             -- satTrace ("sMany: sat=" ++ ppReadable (p, x_needed)) $ return ()
             case x_needed of
@@ -267,7 +288,10 @@ satisfy' dvs es ps = do
                 -- put it aside and ignore its result,
                 -- except when it's a numeric typeclass and we're not doing
                 -- "last resort" satisfying
-                (_:_) | not (vpIsPreClass p) || isJust dvs ->
+                (_:_) | not (vpIsPreClass p) || isJust dvs -> do
+                    -- the dictionaries recorded for sharing while the
+                    -- attempt ran are bound only in the dropped x_sbs
+                    restoreDictCache dict_frames
                     sMany dvs es (p:rs) sbs s ps
                 new_ps ->
                     if isNullSubst x_s then
@@ -277,10 +301,10 @@ satisfy' dvs es ps = do
                         sMany (dvsSub x_s dvs) (apSub x_s es) (new_ps ++ unchanged_rs) (x_sbs <++ sbs) (x_s @@ s) (apSub x_s (changed_rs ++ ps))
 
 expTConPred :: VPred -> TI [VPred]
-expTConPred (VPred e (PredWithPositions (IsIn c ts) pos anc)) = do
+expTConPred (VPred e n (PredWithPositions (IsIn c ts) pos anc)) = do
         vsts <- mapM expTFun ts
         let (vss, ts') = unzip vsts
-        return (VPred e (PredWithPositions (IsIn c ts') pos anc): concat vss)
+        return (VPred e n (PredWithPositions (IsIn c ts') pos anc): concat vss)
 
 -- Build a class predicate from a fully-applied ATF.  Given the ATF's
 -- class, param indices, target index, the ATF arguments, and the type
@@ -369,21 +393,21 @@ expTFun t = return ([], t)
 joinCtxs :: [TyVar] -> [VPred] -> Maybe ([VPred], Subst, SolvedBind)
 joinCtxs bound_tyvars vps = listToMaybe (mapMaybe matchBlobs joined_blob_list)
   where blob_list = [((c, n, boolCompress (map not bs) ts), vp) |
-                     vp@(VPred _ (PredWithPositions (IsIn c ts) _ _)) <- vps,
+                     vp@(VPred _ _ (PredWithPositions (IsIn c ts) _ _)) <- vps,
                      (n, bs) <- zip [0..] (funDeps c)]
         joined_blob_list = joinByFst blob_list
-        matchPreds n (VPred i pp@(PredWithPositions (IsIn c ts) pos anc))
-                     (VPred i' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
+        matchPreds n (VPred i ni pp@(PredWithPositions (IsIn c ts) pos anc))
+                     (VPred i' ni' pp'@(PredWithPositions (IsIn _ ts') pos' anc')) = do
           let bs = funDeps c !! n
           -- we could try to capture and use numeric equalities here
           -- but that would require being on the TI monad,
           -- which doesn't seem worth it
           (s, []) <- mgu bound_tyvars (boolCompress bs ts) (boolCompress bs ts')
-          let p'' = VPred i' (PredWithPositions (IsIn c ts') (pos' ++ pos) (anc' ++ anc))
-              rs  = p'':[ vp | vp@(VPred j _) <- vps, j /= i && j /= i']
+          let p'' = VPred i' ni' (PredWithPositions (IsIn c ts') (pos' ++ pos) (anc' ++ anc))
+              rs  = p'':[ vp | vp@(VPred j _ _) <- vps, j /= i && j /= i']
               pr = removePredPositions pp
               b = (i, predToType (apSub s pr), CVar i')
-              sb = mkSolvedBind b False -- Joining equivalent predicates, not recursive
+              sb = mkSolvedBind ni (ShVar ni') b False -- Joining equivalent predicates, not recursive
           return (rs, s, sb)
         -- uniquePairs because we need to try every possible pair of matching VPreds
         matchBlobs ((_,n,_), vps) = listToMaybe $ mapMaybe (uncurry (matchPreds n)) $ uniquePairs vps
@@ -411,6 +435,7 @@ sat dvs ps p =
     whole_stack <- getSatStack
     bound_tyvars <- getBoundTVs
     let IsIn p_cl p_tys = toPred p
+        VPred p_id p_num _ = p
         -- Only a ground result is recorded: a result whose arguments
         -- hold a type variable is never consulted
         -- (IExpandUtils.fullTypeNormalizer looks up concrete arguments
@@ -434,11 +459,11 @@ sat dvs ps p =
         -- the TIMonad is reset for each top-level definition.
         lookfor_result = lookfor bound_tyvars p whole_stack
     case lookfor_result of
-      Just (b, (s, [])) ->
+      Just (b@(_, _, e), (s, [])) ->
          -- tie the recursive knot!
          -- traces ("recursive knot: " ++ (ppString p) ++ " = " ++ (ppString lookfor_result))$
          case p of
-           (VPred vp (PredWithPositions (IsIn cl tys) poss _))
+           (VPred vp _ (PredWithPositions (IsIn cl tys) poss _))
             | (name cl) == (CTypeclass idBits)
                -> err (makeERecursiveBitsErrorMessage poss tys cl)
                   {-
@@ -453,37 +478,90 @@ sat dvs ps p =
                                   )
                                   -}
            -- if we satisfy numeric provisos recursively, we haven't proven it
-           (VPred vp (PredWithPositions (IsIn cl _) poss _)) | isPreClass cl ->
+           (VPred vp _ (PredWithPositions (IsIn cl _) poss _)) | isPreClass cl ->
                    return (SatResult [p] emptySBs nullSubst Provisional)
            _ -> satTrace ("sat recursive: " ++ ppReadable (p, b, s)) $
-                let sb = mkSolvedBind b True -- Found on stack, recursive
+                let sb = mkSolvedBind p_num (ShOuter e) b True -- Found on stack, recursive
                 in return (SatResult [] (fromSB sb) s Provisional)
       _ -> do
        let this_point :: TSSatElement
            this_point = (mkTSSatElement dvs ps p)
        incrementSatStack this_point
-       return_val <- case lookfor bound_tyvars p (concatMap bySuperE ps) of
-         Just (b, (s, [])) -> do
+       -- A ground predicate of an ordinary class has one answer for the
+       -- whole satisfy call: the givens are fixed for the call, no type
+       -- variable of its own can be refined, and the instance walk is a
+       -- function of the predicate.  So the walk runs once per call and
+       -- is recorded with what it drew from the fresh-name counter
+       -- (beginWalk, endWalk, recordWalk), and a later equal predicate
+       -- that no given discharges replays it (replaySolvedBinds): the
+       -- same bindings in the same merge order, under the dictionary
+       -- ids and type variables the walk would draw now, and the counter
+       -- advanced by what the walk drew; the typechecked program and
+       -- every generated name after it are what the walk would have
+       -- produced.  Only a full, coherent, non-recursive reduction
+       -- without a join of its residuals is recorded (recordWalk,
+       -- which reads the walk's derivation and nothing of the block,
+       -- so that no identifier of the block is evaluated before its
+       -- consumer evaluates it): a knot tied on the sat stack or an
+       -- incoherent match is evidence that belongs where it was found,
+       -- and a join (joinCtxs) evaluates the identifiers of the walk's
+       -- residuals, which a replay would leave for later
+       -- (SolvedBinds.derivWhole).
+       -- Numeric classes stay out: their reduction consults dvs and the
+       -- solver, not the instance walk alone.  A given keeps its
+       -- precedence over the walk, and a recorded walk is replayed only
+       -- where it would run the same way again: within the stack limits
+       -- and the counter's draws (replayable), and with none of its
+       -- predicates now found on the sat stack or among the givens
+       -- (derivationUnchanged).
+       let p_pred = toPred p
+           shareable = not noTcDictShare && not (isPreClass p_cl) && not (any hasTyVar p_tys)
+           m_given = lookfor bound_tyvars p (concatMap bySuperE ps)
+       m_shared <- case m_given of
+           Just (_, (_, [])) -> return Nothing
+           _ | shareable -> do
+                 m_rec <- lookupDictCache p_pred
+                 case m_rec of
+                   Just e -> do
+                     fits <- replayable (deSpan e)
+                     same <- if fits then derivationUnchanged bound_tyvars whole_stack ps (deDeriv e)
+                             else return False
+                     return (if same then m_rec else Nothing)
+                   Nothing -> return Nothing
+             | otherwise -> return Nothing
+       return_val <- case (m_given, m_shared) of
+         (Just (b@(_, _, e), (s, [])), _) -> do
              satTrace ("sat in super: " ++ ppReadable (p, concatMap bySuperE ps)) $ return ()
-             let sb = mkSolvedBind b False -- Satisfied via superclass from source, not recursive
+             let sb = mkSolvedBind p_num (ShOuter e) b False -- Satisfied via superclass from source, not recursive
              return (SatResult [] (fromSB sb) s Provisional)
+         (_, Just e) ->
+             satTrace ("sat shared: " ++ ppReadable p) $ do
+             sbs <- replaySolvedBinds p_id p_num e
+             -- what the walk records for the predicate itself, after
+             -- the results of its nested predicates (replaySolvedBinds)
+             recordATFs nullSubst
+             return (SatResult [] sbs nullSubst Provisional)
          -- we might introduce a numeric equality here, so try instance reduction first
-         m_equals -> do
+         (m_equals, _) -> do
           -- if instance reduction fails, fall back to introducing an equality
           let fail msg =
                 case m_equals of
-                  Just (b, (s, num_eqs)) -> do
+                  Just (b@(_, _, e), (s, num_eqs)) -> do
                     satTrace ("sat in super (num eq): " ++ ppReadable (p, concatMap bySuperE ps, num_eqs)) $ return ()
-                    let VPred _ p_pwp = p
+                    let VPred _ _ p_pwp = p
                     eq_ps <- concatMapM (eqToVPred (getPredAncestors p_pwp) (getVPredPositions p)) num_eqs
-                    let sb = mkSolvedBind b False -- From superclass, not recursive
+                    let sb = mkSolvedBind p_num (ShOuter e) b False -- From superclass, not recursive
                     SolveResult rs sbs s' <- satMany (dvsSub s dvs) (apSub s ps) [] (fromSB sb) s eq_ps
                     return (SatResult rs sbs s' Provisional)
                   Nothing -> satTrace msg $ return (SatResult [p] emptySBs nullSubst Provisional)
           ai <- getAllowIncoherent
+          -- the walk's draws and depth, for the record
+          m_mark <- if shareable then fmap Just beginWalk else return Nothing
           x  <- reducePred ps dvs p
-          case x of
-            Nothing -> fail "sat unreduced"
+          -- the result, and the full coherent reduction a record is made of
+          (result_val, m_full) <- case x of
+            Nothing -> do r <- fail "sat unreduced"
+                          return (r, Nothing)
             Just (Reduction qs sb us Nothing mpkg) ->
                 satTrace ("sat calls satMany ") $ do
                 result <- satMany (dvsSub us dvs) (apSub us ps) [] (fromSB sb) us qs -- qs should have us applied already
@@ -491,7 +569,7 @@ sat dvs ps p =
                   SolveResult [] sbs s_final -> do
                     recordPackageUse mpkg
                     recordATFs s_final
-                    return (SatResult [] sbs s_final Provisional)
+                    return (SatResult [] sbs s_final Provisional, Just (sbs, s_final))
                   SolveResult needed sbs s_final -> do
                     -- A coherent match whose context is not yet satisfied:
                     -- under ordered-clause fundep semantics no other
@@ -521,7 +599,7 @@ sat dvs ps p =
                         return (if any unifiable givens
                                 then Provisional else Committable)
                     when (commitment == Committable) $ recordPackageUse mpkg
-                    return (SatResult needed sbs s_final commitment)
+                    return (SatResult needed sbs s_final commitment, Nothing)
             Just (Reduction qs sb us (Just (h@(IsIn c _))) mpkg) | fromMaybe ai (allowIncoherent c) ->
               satTrace ("sat calls satMany (incoherent) ") $ do
               result0 <- satMany (dvsSub us dvs) (apSub us ps) [] (fromSB sb) us qs
@@ -537,7 +615,7 @@ sat dvs ps p =
                     return (SolveResult needed (nsbs <++ sbs) s_final)
                 r -> return r
               case result of
-                SolveResult ps@(_:_) sbs s_final -> return (SatResult ps sbs s_final Provisional)
+                SolveResult ps@(_:_) sbs s_final -> return (SatResult ps sbs s_final Provisional, Nothing)
                 SolveResult [] sbs s_final -> do
                   recordPackageUse mpkg
                   -- No recordATFs here: an incoherent match is an
@@ -547,15 +625,147 @@ sat dvs ps p =
                   -- to importing compiles as if it were canonical.
                   let (vp_pred, inst_pred) = niceTypes (apSub s_final (toPred p, h))
                   let pos = getPosition $ getVPredPositions p
-                  let VPred dictId _ = p
+                  let VPred dictId _ _ = p
                       di = DirectIncoherence (apSub s_final (toPred p)) (apSub s_final h) pos
                       sbs' = addDirectIncoherence dictId di sbs
                   when (allowIncoherent c /= Just True) $
                     twarn (pos, WIncoherentMatch (pfpString vp_pred) (pfpString inst_pred))
-                  return (SatResult [] sbs' s_final Provisional)
-            bad_match -> fail ("sat incoherent disallowed: " ++ ppReadable bad_match)
+                  return (SatResult [] sbs' s_final Provisional, Nothing)
+            bad_match -> do r <- fail ("sat incoherent disallowed: " ++ ppReadable bad_match)
+                            return (r, Nothing)
+          case m_mark of
+            Just mark -> do
+              sp <- endWalk mark
+              case m_full of
+                Just (sbs, s_final) -> recordWalk p_pred p_num sbs s_final sp
+                Nothing -> return ()
+            Nothing -> return ()
+          return result_val
        decrementSatStack
        return return_val
+
+-- A recorded walk would run the same way again only if none of the
+-- predicates it solved would now be found on the sat stack (a
+-- recursive knot) or discharged by a given, since sat takes both before
+-- the instance walk.  The derivation's predicates are rebuilt from its
+-- leaves' binding types (predToType in sat), under the current
+-- substitution; the stack and the givens are matched as lookfor
+-- matches them, and a binding counts as found unless every fundep row
+-- disagrees at an input position (NoMatch): the walk poses a goal
+-- before the match fills its determined positions, so a goal with a
+-- fresh variable there would match an entry its binding type conflicts
+-- with, while the input positions are the goal's own (nothing on the
+-- stack or among the givens carries a fresh variable of the walk).  A
+-- type whose class cannot be rebuilt counts as found.  The check is
+-- conservative: the derivation's types carry the monad's substitution,
+-- not this call's, and a member discharged from a given counts as
+-- found; either way the walk runs instead of the replay.
+derivationUnchanged :: [TyVar] -> [EPred] -> [EPred] -> Deriv -> TI Bool
+derivationUnchanged bound_tyvars stack givens deriv = do
+    s <- getSubst
+    symt <- getSymTab
+    let eps = stack ++ concatMap bySuperE givens
+        meq x y = if x == y then Just nullSubst else Nothing
+        matches pr (EPred _ pr') = case matchTop bound_tyvars meq pr pr' of
+                                     NoMatch -> False
+                                     _ -> True
+        args acc (TAp f a) = args (a : acc) f
+        args acc _ = acc
+        subst t = if hasTyVar t then apSub s t else t
+        typeToPred t = do i <- leftCon t
+                          cl <- findSClass symt (CTypeclass i)
+                          return (IsIn cl (map subst (args [] t)))
+        found t = case typeToPred t of
+                    Just pr -> any (matches pr) eps
+                    Nothing -> True
+    return (not (any found (derivTypes deriv)))
+
+-- Record a walk that reduced a ground predicate in full: the number of
+-- its root dictionary variable, the derivation of its block
+-- (SolvedBinds.Deriv: the bindings by number, their types and the
+-- instance expressions, without their identifiers), the part of the
+-- walk's own substitution that binds a type variable free in the block
+-- (the only part a replay applies; the walk composed its substitution
+-- with @@, so it is idempotent and that part resolves every such
+-- variable in one application, as the loop's apSub at the end of the
+-- call would) and the span measured for it, with the walk's type
+-- variables left in the block or in that substitution's range, for the
+-- renumbering of a replay.  Not recorded: a block with a recursive,
+-- an incoherent or a joining binding, or one another operation changed
+-- (derivWhole: a replay could not rebuild it, or would evaluate the
+-- walk's identifiers at other moments), a walk across a number newTVar would
+-- pass over (drawsClear: its consumption would depend on the counter's
+-- value), or whose substitution binds a variable it did not draw (a
+-- side effect on the context a replay would not repeat).  Nothing here
+-- evaluates an identifier of the block: the derivation is read for its
+-- numbers, flags and types (a leaf's self-recursion flag compares
+-- predicates, whose type variables compare by number).
+recordWalk :: Pred -> Int -> SolvedBinds -> Subst -> WalkSpan -> TI ()
+recordWalk p_pred root sbs s_final sp = do
+    clear <- drawsClear (wsFirst sp) (wsCount sp)
+    let deriv = sbsDeriv sbs
+        inSpanVar v = tv_num v >= wsFirst sp && tv_num v < wsFirst sp + wsCount sp
+        own = all inSpanVar (getSubstDomain s_final)
+        block_vars = derivTyVars deriv
+        kept = keepSubstVars block_vars s_final
+        vars = S.toList (S.filter inSpanVar
+                             (S.union block_vars (S.fromList (getSubstRange kept)))
+                         `S.difference` S.fromList (getSubstDomain kept))
+    when (clear && own && derivWhole deriv) $
+        insertDictCache p_pred (DictCacheEntry { deRootNum = root, deDeriv = deriv,
+                                                 deSubst = kept, deSpan = sp,
+                                                 deVars = vars })
+
+-- A later occurrence of a recorded predicate takes the recorded
+-- derivation under the numbers the walk would draw now.  The walk drew
+-- its numbers in one run of the counter from wsFirst, so a dictionary
+-- or type variable it numbered n is renumbered c + (n - wsFirst), c
+-- being the counter at this occurrence, and the counter advances past
+-- them (replaySpan); the recorded root becomes this occurrence's
+-- dictionary variable; the walk's own substitution, which the loop
+-- would apply to the original names at the end of the call, is applied
+-- under the same renumbering (it binds only variables the walk drew,
+-- which occur nowhere but in the block, so the replay returns no
+-- substitution); and the type function results the walk's nested
+-- predicates recorded are recorded again, in the walk's order (they
+-- are ground, sat records no other, so nothing of theirs is
+-- renumbered).
+-- The block itself is rebuilt by SolvedBinds.replayDeriv when its
+-- consumer demands it, by the walk's own fromSB and merge calls under
+-- the new numbers, so the consumer evaluates the same identifiers in
+-- the same order as it would the walk's; here only numbers, types and
+-- the substitution are built.  A number the walk did not draw that is
+-- not its root is an internalError (SolvedBinds' numbering invariant).
+replaySolvedBinds :: Id -> Int -> DictCacheEntry -> TI SolvedBinds
+replaySolvedBinds new_root new_num e = do
+    c <- replaySpan (deSpan e)
+    noteDictCacheHit (wsCount (deSpan e))
+    let sp = deSpan e
+        first = wsFirst sp
+        count = wsCount sp
+        delta = c - first
+        shift = shiftGenTyVars first count delta
+        renumber (TyVar i n k) = TVar (mkGenTyVar (getPosition i) (n + delta) k)
+        replayATF (i, args, r) = recordATFResult i args r
+    mapM_ replayATF (walkATFs sp)
+    let s = mkSubst ([ (v, shift (apSub (deSubst e) (TVar v)))
+                     | v <- getSubstDomain (deSubst e) ]
+                     ++ [ (v, renumber v) | v <- deVars e ])
+        ground = isNullSubst s
+        root = deRootNum e
+        num n | n == root = new_num
+              | n >= first && n < first + count = n + delta
+              | otherwise = internalError ("TCMisc.replaySolvedBinds: dictionary outside the walk: "
+                                           ++ ppReadable (n, first, count))
+        -- one identifier per renumbered dictionary, shared by its binding
+        -- and every reference to it, as the walk's own are
+        dicts = IM.fromList [ (n, mkDictId (num n)) | n <- derivBinders (deDeriv e), n /= root ]
+        dict n | n == root = new_root
+               | otherwise = IM.findWithDefault (mkDictId (num n)) n dicts
+        subT t = if ground || not (hasTyVar t) then t else apSub s t
+        subE x = if ground || S.null (exprTyVars x S.empty) then x else apSub s x
+    return (replayDeriv (Renum { rnNum = num, rnDict = dict, rnType = subT, rnExpr = subE })
+                        (deDeriv e))
 
 makeERecursiveBitsErrorMessage :: [Position] -> [Type] -> Class -> EMsg
 -- a somewhat hacky function which tries to come up with the best
@@ -600,7 +810,7 @@ checkJoinCtxs tag rs s rs' = do
 batchSolveNumericPreds :: [EPred] -> [VPred] -> TI ([VPred], SolvedBinds)
 batchSolveNumericPreds es rs = do
     flags <- getFlags
-    let isNumVP (VPred _ (PredWithPositions (IsIn c _) _ _)) = isPreClass c
+    let isNumVP (VPred _ _ (PredWithPositions (IsIn c _) _ _)) = isPreClass c
         nps = filter isNumVP rs
     if not (useProvisoSAT flags) || null nps
       then return (rs, emptySBs)
@@ -622,17 +832,17 @@ batchSolveNumericPreds es rs = do
                 partition (\ (_, p) -> p `S.member` proven_cache) nnps
             (known_bad, misses) =
                 partition (\ (_, p) -> p `S.member` refuted_cache) rest
-            mkNumBind ((VPred w _), p) =
+            mkNumBind ((VPred w nw _), p) =
                 let t = predToType p
-                in  mkSolvedBind (w, t, mkNumInstBody t) False
+                in  mkSolvedBind nw ShNum (w, t, mkNumInstBody t) False
             givens = [ p | EPred _ p <- es ]
             ground (_, p) = null (tv p)
             -- discharged preds are removed in place: the survivors keep
             -- their arrival order, which flows onward into retry order,
             -- inferred contexts, and error messages
             residualsWithout discharged =
-                let ds = S.fromList [ i | ((VPred i _), _) <- discharged ]
-                in  [ vp | vp@(VPred i _) <- rs, i `S.notMember` ds ]
+                let ds = S.fromList [ i | ((VPred i _ _), _) <- discharged ]
+                in  [ vp | vp@(VPred i _ _) <- rs, i `S.notMember` ds ]
             -- Prove each pending pred from the definition's givens, as
             -- the per-predicate code did.  Ground preds are closed
             -- arithmetic: they are queried with no assumptions at all,
@@ -720,8 +930,8 @@ satMany dvs es rs_accum sbs s ps =
     satMany' dvs es rs_accum sbs s (sortBy cmpPredConcreteness ps)
     where
         cmpPredConcreteness :: VPred -> VPred -> Ordering
-        cmpPredConcreteness (VPred _ (PredWithPositions (IsIn _ ts1) _ _))
-                            (VPred _ (PredWithPositions (IsIn _ ts2) _ _)) =
+        cmpPredConcreteness (VPred _ _ (PredWithPositions (IsIn _ ts1) _ _))
+                            (VPred _ _ (PredWithPositions (IsIn _ ts2) _ _)) =
             compare (concreteness ts2) (concreteness ts1) -- higher first
         concreteness ts = length (filter (not . isTVar) ts)
 
@@ -851,13 +1061,13 @@ instance PPrint Reduction where
         pPrint d p ((qs, sb, us), (minst, mpkg))
 
 reducePred :: [EPred] -> DVS -> VPred -> TI (Maybe Reduction)
-reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
+reducePred _eps dvs (VPred w wn pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
     pushSatStackContext
     bound_tyvars <- getBoundTVs
     ts' <- mapM normT ts
     let pr' = IsIn c ts'
         pp' = PredWithPositions pr' pos anc
-        v' = VPred w pp'
+        v' = VPred w wn pp'
         -- Quick pre-check: can the instance head possibly match the predicate?
         -- Compares head type constructors at non-determined fundep positions.
         -- If both sides have a concrete non-synonym constructor and they
@@ -1083,7 +1293,7 @@ matchFDRow bound_tyvars mtch ts1 ts2 bs =
 -- instance for a dedicated error message.  Returns the normalized
 -- predicate and the instantiated head of the conflicting instance.
 findFunDepConflict :: VPred -> TI (Maybe (Pred, Pred))
-findFunDepConflict (VPred _ (PredWithPositions (IsIn c ts) pos _)) = do
+findFunDepConflict (VPred _ _ (PredWithPositions (IsIn c ts) pos _)) = do
     ai <- getAllowIncoherent
     if isPreClass c || outputFallThroughAllowed ai c
       then return Nothing
@@ -1128,7 +1338,7 @@ data InstMatch = InstMatch {
     }
 
 byInst :: VPred -> Inst -> TI (Match InstMatch)
-byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
+byInst (VPred i i_num p) (Inst e _ (ps :=> h) pkg) = do
     -- no longer necessary because reducePred now provides a fresh instance
     -- Inst e _ (ps :=> h) <- newInst ii (getPredPositions p)
     bound_tyvars <- getBoundTVs
@@ -1141,21 +1351,21 @@ byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
      Conflict -> return Conflict
      Match (inst_subst, (fd_subst, num_eqs)) -> do
         let s = fd_subst @@ inst_subst
-        vs <- mapM (const newDict) ps
+        vs <- mapM (const newDictN) ps
         -- if the instance is recursive (has a proviso for itself and expects
         -- a dictionary argument for that), then don't use a new dictionary
         -- for that argument, just pass the instance to itself
         let isSelfRec = any (== p) (apSub s ps)
-            vs' = zipWith (\ x y -> if (y == p) then i else x) vs (apSub s ps)
+            refs' = zipWith (\ x y -> if (y == p) then (i, i_num) else x) vs (apSub s ps)
         eq_ps <- mapM (eqToPred (getPredPositions p)) num_eqs
         let eq_pwps = map (mkPredWithPositions []) eq_ps
-        eq_vs <- mapM (const newDict) eq_pwps
+        eq_vs <- mapM (const newDictN) eq_pwps
         -- if p introduces a new predicate, carry on the position info,
         -- and record p (and its own reduction chain) as the ancestry of
         -- the residual, for error reporting in terms of the user-written
         -- root predicate
         let p_ancestors = mkPredAncestor p : getPredAncestors p
-            mkvpred x y = VPred x (addPredAncestors
+            mkvpred (x, n) y = VPred x n (addPredAncestors
                                        (addPredPositions y (getPredPositions p))
                                        p_ancestors)
             -- if the instance is recursive one of these will be unused?
@@ -1164,14 +1374,15 @@ byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
             e' = apSub s e
         ps'' <- concatMapM (expTConPred . expandSynVPred) ps'
         -- rtrace ("byInst: " ++ ppReadable (ps', e', t)) $ return ()
-        let binding = (i, t, CApply e' (map CVar vs'))
+        let binding = (i, t, CApply e' (map (CVar . fst) refs'))
             -- The binding's expression does not reference the deferred
             -- numeric-equality dictionaries (eq_vs), but it is only
             -- valid evidence if those equalities hold; record them as
             -- semantic dependencies so anything walking a binding's
             -- free variables (emission ordering, later reuse checks)
             -- sees the obligation (see SolvedBinds.addBindDeps).
-            solvedBind = addBindDeps eq_vs (mkSolvedBind binding isSelfRec)
+            solvedBind = addBindDeps eq_vs
+                             (mkSolvedBind i_num (ShInst e' (map snd refs')) binding isSelfRec)
         return (Match (InstMatch ps'' solvedBind inst_subst fd_subst pkg))
 
 -- Create a new instance by replacing the type variables in the instance
@@ -1183,7 +1394,9 @@ byInst (VPred i p) (Inst e _ (ps :=> h) pkg) = do
 newInst :: Inst -> [Position] -> TI (Maybe TyVar, Inst)
 newInst ii@(Inst _ vs _ _) poss = do
     let getpos v = getMostUsefulPosition poss (getPosition v)
-    when doVarTrace $ traceM ("newInst " ++ ppReadable ii)
+    when doVarTrace $ do
+        traceM ("newInst " ++ ppReadable ii)
+        logDraw (DrewInst ii)
     ts <- mapM (\ v -> newTVar "newInst" (kind v) (getpos v)) vs
     let v = case ts of
                 (TVar x:xs) -> Just x
@@ -1192,7 +1405,7 @@ newInst ii@(Inst _ vs _ _) poss = do
 
 lookfor :: [TyVar] -> VPred -> [EPred] -> Maybe (Bind, (Subst, [(Type, Type)]))
 lookfor bound_tyvars _ [] = Nothing
-lookfor bound_tyvars v@(VPred i pp) eps@(EPred e pr':ps) =
+lookfor bound_tyvars v@(VPred i _ pp) eps@(EPred e pr':ps) =
     let pr = removePredPositions pp
         meq x y = if x == y then Just nullSubst else Nothing
     in  -- traces ("lookfor " ++ ppReadable (pr, pr', ps)) $
@@ -1617,29 +1830,29 @@ unifyFnFromTo x e t = do
 -- they should not be re-introduced later (by predicate reduction)o
 mkVPred :: Position -> PredWithPositions -> TI [VPred]
 mkVPred pos p = do
-    v <- newDict
-    expTConPred (expandSynVPred $ VPred v (addPredPositions p [pos]))
+    (v, n) <- newDictN
+    expTConPred (expandSynVPred $ VPred v n (addPredPositions p [pos]))
 
 mkVPredNoNewPos :: PredWithPositions -> TI [VPred]
 mkVPredNoNewPos p = do
-    v <- newDict
-    expTConPred (expandSynVPred $ VPred v p)
+    (v, n) <- newDictN
+    expTConPred (expandSynVPred $ VPred v n p)
 
 -- entry point when we don't need synonyms reduced
 -- mainly deriving and other places where we check reducibility
 mkVPredFromPred :: [Position] -> Pred -> TI VPred
 mkVPredFromPred poss p = do
-  v <- newDict
-  return (VPred v $ mkPredWithPositions poss p)
+  (v, n) <- newDictN
+  return (VPred v n $ mkPredWithPositions poss p)
 
 toPredWithPositions :: VPred -> PredWithPositions
-toPredWithPositions (VPred _ p) = p
+toPredWithPositions (VPred _ _ p) = p
 
 toPred :: VPred -> Pred
 toPred p = removePredPositions (toPredWithPositions p)
 
 vpIsPreClass :: VPred -> Bool
-vpIsPreClass (VPred _ (PredWithPositions (IsIn cl _) _ _)) = isPreClass cl
+vpIsPreClass (VPred _ _ (PredWithPositions (IsIn cl _) _ _)) = isPreClass cl
 
 
 -- Close a set of variables with respect to predicates and their functional
@@ -1759,7 +1972,7 @@ niceTypes given_type =
 
 -- Classes with *-kind types which can be defaulted
 getStarDefaults :: S.Set TyVar -> VPred -> [(TyVar, [Type])]
-getStarDefaults fvs (VPred i (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
+getStarDefaults fvs (VPred i _ (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
     case ts of
       [TVar v, _] | cid == idPrimIndex,
                      not (S.member v fvs) -> [(v, [tInteger, tNat noPosition])]
@@ -1775,7 +1988,7 @@ getStarDefaults fvs (VPred i (PredWithPositions (IsIn (Class {name=(CTypeclass c
 
 -- Classes with #-kind types which can be defaulted
 getNumDefaults :: S.Set TyVar -> VPred -> [(TyVar, [Type])]
-getNumDefaults fvs (VPred i (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
+getNumDefaults fvs (VPred i _ (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
     case ts of
       [TVar v, t, _] | cid == idBitExtend,
                         not (S.member v fvs),
@@ -1792,7 +2005,7 @@ getNumDefaults fvs (VPred i (PredWithPositions (IsIn (Class {name=(CTypeclass ci
       _ -> []
 
 getForceDefaults :: S.Set TyVar -> VPred -> [(TyVar, Type)]
-getForceDefaults fvs (VPred i (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
+getForceDefaults fvs (VPred i _ (PredWithPositions (IsIn (Class {name=(CTypeclass cid)}) ts) _ _)) =
     case ts of
       [TVar v]    | cid == idStringLiteral,
                      not (S.member v fvs) -> [(v, tString)]
@@ -2107,17 +2320,17 @@ propagateFunDeps ps0 =
 -- never reduce (which we'll want to report an error about now, not later)
 --
 isReduciblePred :: VPred -> TI Bool
-isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos _)) |
+isReduciblePred (VPred i _ pp@(PredWithPositions p@(IsIn c ts) pos _)) |
     -- XXX for now, we don't consider Add, Max, Min, Log, Mul, Div, NumEq
     -- XXX (the "genInsts" of these classes doesn't handle "maybe reducible")
     (isPreClass c) = return True
-isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos anc)) = do
+isReduciblePred (VPred i n pp@(PredWithPositions p@(IsIn c ts) pos anc)) = do
     ts' <- mapM normT ts
     ai <- getAllowIncoherent
     bvs <- getBoundTVs
     let p' = IsIn c ts'
         pp' = PredWithPositions p' pos anc
-        v' = VPred i pp'
+        v' = VPred i n pp'
         -- Under ordered-clause fundep semantics, an instance whose input
         -- positions match but whose determined positions conflict makes
         -- the predicate unsatisfiable -- final, unless an earlier (more
@@ -2161,7 +2374,7 @@ isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos anc)) = do
 -- see earlierInstanceMayCapture) -- isReduciblePred uses it to
 -- decide whether a later conflict is conclusive.
 byInstIsReducible :: VPred -> Inst -> TI (Match (), Bool)
-byInstIsReducible (VPred i p) ii = do
+byInstIsReducible (VPred i _ p) ii = do
     (mv, Inst e _ (ps :=> h) _) <- newInst ii (getPredPositions p)
     bound_tyvars <- getBoundTVs
     let p_bare = removePredPositions p
@@ -2247,7 +2460,7 @@ matchTopIsReducible bound_tyvars p1@(IsIn c1 ts1) p2@(IsIn c2 ts2) =
 
 
 byExplPredIsReducible :: VPred -> EPred -> TI (Match ())
-byExplPredIsReducible (VPred _ p) (EPred _ ep) = do
+byExplPredIsReducible (VPred _ _ p) (EPred _ ep) = do
     bound_tyvars <- getBoundTVs
     return $
         matchExplPred bound_tyvars (removePredPositions p) ep
