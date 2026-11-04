@@ -76,10 +76,12 @@ import ISyntaxUtil
 import IExpandUtils
 import IExpandMeta(SiteKind(..), idSiteKey, rootSiteKey, Binder(..), renderDump,
                    MetaTables(..), emptyContextTable, internFrame, siteOf,
-                   frameOf, binderOf, aliasUnions, aliasMembers, aliasClassOf,
-                   noCell, DefRecord(..), ModuleMeta(..), MetaLedger(..), AliasMap,
+                   frameOf, binderOf, validityOf, aliasUnions,
+                   aliasMembers, aliasClassOf, noCell, DefRecord(..),
+                   ModuleMeta(..), MetaLedger(..), forceModuleMeta, AliasMap,
+                   Repack(..), RepackFact(..), meetValidity, undefKindCode,
                    renderCensus, checkProfile, checkKeptPositions, checkNameHints,
-                   aliasClassCount)
+                   checkBitGate, aliasClassCount)
 import Wires
 import IWireSet
 import qualified IfcBetterInfo as BetterInfo
@@ -419,6 +421,13 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
       putStr (renderDump (go_meta go)
                          [ (p, hc_meta c) | (p, c) <- IM.toAscList iheap ])
 
+  -- The table is built now, in full, so that the module retains nothing
+  -- of the heap through it: its records are strict and hold pointers,
+  -- site and context ids and the cells' name hints (already forced), so
+  -- the forcing interns no string and touches no def name.  This is the
+  -- table's one deep walk: its NFData instance is a leaf (IExpandMeta).
+  forceModuleMeta meta `seq` return ()
+
   -- -metadata-census: the census of the store for this module, from the
   -- metadata table and the headers of the kept cells, and the
   -- cross-checks against the evaluator's own bookkeeping: the frames
@@ -433,6 +442,9 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
           profile = [ (i, pos, n) | (i, pm) <- M.toList (go_profile go),
                                     (pos, n) <- M.toList pm ]
           hints = [ (p, hc_meta c, hc_name c) | (p, c) <- IM.toAscList iheap ]
+          -- every reachable cell, with the def type of a lifted one
+          defTypes = IM.fromList [ (p, t) | (p, (_, Just (IDef _ t _ _))) <- ptr_info ]
+          gates = [ (p, hc_meta c, IM.lookup p defTypes) | (p, c) <- IM.toAscList iheap ]
           -- the action method calls whose selector kept the positions of
           -- the selections it was reached through (-method-conditions)
           kept = [ (p, hc_meta c, poss)
@@ -444,6 +456,7 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
           nKept = sum [ length poss | (_, _, poss) <- kept ]
           missing = length (checkKeptPositions (mm_sites meta) kept)
           (bound, named, badHints) = checkNameHints (mm_sites meta) hints
+          (gated, withFacts, typedDefs, badGates) = checkBitGate (mm_sites meta) gates
       putStr (renderCensus modName meta (go_census go) (IM.size iheap)
                            (aliasClassCount aliases) defs)
       case checkProfile (mm_sites meta) (go_census go) profile of
@@ -455,6 +468,13 @@ iExpand errh flags symt alldefs recdefs atf_cache is_noinlined_func pps def@(IDe
                          ++ unlines badHints)
       putStrLn ("  name hints: " ++ show bound ++ " cells bound to a parameter, "
                 ++ show named ++ " outside the library, each named by it")
+      -- the gate: facts on gated cells alone, and the gate of a lifted
+      -- def's cell as its type decides
+      unless (null badGates) $
+          internalError ("iExpand: census facts or gates differ from the cell types:\n"
+                         ++ unlines badGates)
+      putStrLn ("  bit gate: cells gated " ++ show gated ++ ", with facts " ++ show withFacts
+                ++ "; lifted defs gated as their types decide " ++ show typedDefs)
       -- reported, not asserted: a method call's cell is built once, in
       -- the instantiation that provides the method, and every selection
       -- of it in the parent shares that cell, so the positions of the
@@ -922,11 +942,34 @@ buildModuleMeta tables roots defcache aliases iheap ptr_map refs lifted =
         internCell ((!t, !memo), !m) (p, c) =
             let (st', ctx) = internFrame (t, memo) (frameOf (hc_meta c))
             in  (st', IM.insert p ctx m)
-        ((contexts, _), ctxOf) =
+        (cellContexts, ctxOf) =
             foldl' internCell ((emptyContextTable, IM.empty), IM.empty)
                    (IM.toAscList iheap)
         ctxAt p = IM.findWithDefault 0 p ctxOf
         factOf p = (siteOf (metaOf p), ctxAt p)
+
+        -- the repacks, their frames interned after the cells' (the memo
+        -- continues), each keyed by the canonical pointer of its cell
+        -- when that cell is kept
+        internRepack ((!t, !memo), !rs) r =
+            let (st', ctx) = internFrame (t, memo) (rp_frame r)
+                rf = RepackFact { rf_kind = rp_kind r, rf_cell = rp_cell r,
+                                  rf_from = rp_from r, rf_to = rp_to r,
+                                  rf_context = ctx }
+            in  (st', rf : rs)
+        ((contexts, _), repacksRev) =
+            foldl' internRepack (cellContexts, []) (mt_repacks tables)
+        repacks = reverse repacksRev
+        -- a repack is attached to the lifted def of its cell's canonical,
+        -- or, when its cell was not kept, to the lifted defs of the
+        -- cell's alias class (the cell the bits were read through)
+        liftedByAlias = IMS.fromListWith (++)
+                            [ (aliasClassOf aliases p, [p]) | p <- IS.toList lifted ]
+        defsOfCell c | IM.member c iheap = [ptran c]
+                     | otherwise = IM.findWithDefault [] (aliasClassOf aliases c) liftedByAlias
+        repacksOf = IMS.fromListWith (flip (++))
+                        [ (p, [r]) | r <- repacks, let c = rf_cell r, c /= noCell,
+                                     p <- defsOfCell c ]
 
         -- the CSE unions: the cells identified under each canonical, in
         -- pointer order (built from the descending list, so that each
@@ -956,10 +999,24 @@ buildModuleMeta tables roots defcache aliases iheap ptr_map refs lifted =
         foldedOf p = IS.toAscList (IS.unions (map closureOf
                          (filter (not . isLifted) (IM.findWithDefault [] p crefs))))
 
+        -- the undefined values in a kept cell's expression, by kind, in
+        -- expression order (the walk of hptrs, over the same nodes)
+        undefsOf p = case cellOf p of
+                       HNF { hc_pexpr = P _ e } -> undefKinds e []
+                       _ -> []
+        undefKinds (IAps f _ es) acc = foldr undefKinds acc (f : es)
+        undefKinds (ICon _ (ICStateVar { iVar = IStateVar { isv_iargs = es } })) acc =
+            foldr undefKinds acc es
+        undefKinds (ICon _ (ICUndet { iuKind = k })) acc = undefKindCode k : acc
+        undefKinds _ acc = acc
+
         record p =
             let (site, ctx) = factOf p
-                mergedFacts = map factOf (IM.findWithDefault [] p merged)
-                foldedFacts = map factOf (foldedOf p)
+                mergedPtrs = IM.findWithDefault [] p merged
+                mergedFacts = map factOf mergedPtrs
+                folded = foldedOf p
+                foldedFacts = map factOf folded
+                mergedMetas = map metaOf mergedPtrs
             in  DefRecord { dr_ptr = p,
                             dr_hint = hc_name (cellOf p),
                             dr_site = site,
@@ -971,11 +1028,20 @@ buildModuleMeta tables roots defcache aliases iheap ptr_map refs lifted =
                             dr_parent = IM.findWithDefault noCell p parents,
                             dr_shared = IS.member p defcache,
                             dr_binder = binderOf (metaOf p),
-                            dr_alias = aliasOf p }
+                            dr_alias = aliasOf p,
+                            -- the validity meets over the cells CSE
+                            -- identified as one value
+                            dr_validity = foldr meetValidity (validityOf (metaOf p))
+                                                (map validityOf mergedMetas),
+                            dr_repacks = concat [ IM.findWithDefault [] q repacksOf
+                                                | q <- p : folded ],
+                            dr_undefs = concatMap undefsOf (p : folded) }
     in  ModuleMeta { mm_sites = mt_sites tables,
                      mm_contexts = contexts,
+                     mm_types = mt_types tables,
                      mm_roots = roots,
                      mm_defs = IM.fromSet record lifted,
+                     mm_repacks = repacks,
                      mm_events = [] }
 
 
@@ -1837,7 +1903,7 @@ handlePrim isMFix curClkRstn ns p ea@(IAps (ICon _ (ICPrim { primOp = PrimModule
         -- forces name, which addHeapCell's deepseq of hc_name forces in
         -- any case on the next line; nothing but the store's lookup
         -- runs between the two.
-        meta <- stampForKey (idSiteKey SKInst name)
+        meta <- stampForKey (idSiteKey SKInst name) t
         (ptr, ref) <- addHeapCell "prim-mod-fix" (HHole (Just name) meta)
         let rt = IRefT t ptr (getPosition name) ref
         stno <- getStateNo
@@ -2374,6 +2440,8 @@ iExpandSubmodArg :: Id -> (VArgInfo, HExpr) ->
 iExpandSubmodArg inst_id (varg, e) = do
     -- evaluate the argument
     (e', ws) <- evaleNF_ModArg inst_id (varg, e)
+    -- the argument is declared the type it is passed at
+    declareBoundary e'
     -- check the clocks
     -- (Check that there are not multiple domains in the expr and warn
     -- if there are multiple resets in the expr.  Checking of the clock
@@ -4169,9 +4237,14 @@ conAp' _ (ICPrim _ PrimOrd) o [T f, T sz, E e] = evalStaticOp e (aitBit sz) hand
 
 -- chr (ord e)  -->  e
 -- chr (if c t e)  -->  if c (chr t) (chr e)
-conAp' _ (ICPrim _ PrimChr) o [T sz, T to, E e] = evalStaticOp e to handleChr
-  where handleChr (IAps (ICon _ (ICPrim _ PrimOrd)) [to', _] [e']) | to == to' = eval1 e'
-        handleChr e' = return $ pExpr $ mkAp o [T sz, T to, E e']
+-- (evalStaticOp' with the heaped argument in hand, so that chrEvent can
+-- name the cell of the bits converted; the handler is evalStaticOp's)
+conAp' _ (ICPrim _ PrimChr) o [T sz, T to, E e] = evalStaticOp' True True True e to handleChr
+  where handleChr _ (p, IAps (ICon _ (ICPrim _ PrimOrd)) [to', _] [e']) | to == to' =
+            addPredG p $ eval1 e'
+        handleChr ee (p, e') = addPredG p $ do
+            chrEvent to ee e'
+            return $ pExpr $ mkAp o [T sz, T to, E e']
 
 -- valueOf, fast case for ITNum
 conAp' i (ICPrim _ PrimValueOf) _ [T (ITNum n), _] =
@@ -4278,6 +4351,9 @@ conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
           ICon _ (ICInt {}) ->
               addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
           _ -> do
+              -- the bits are read as ta: valid for it as the coercion
+              -- decides, and repacked when they were not known valid
+              unpackEvent ta xee
               sel <- mkBitsMethodSel i (iConType ci) idUnpack
               aref <- toHeap "coerce" ta
                              (IAps sel [ta, tn] [d, xee]) Nothing
@@ -4392,14 +4468,14 @@ conAp' tfs (ICPrim _ PrimUpdateBitArray) fe [T (ITNum n), E bs, E i, E b] = do
        when ((i' < 0) || (i' >= n)) $
             internalError("primUpdateBitArray: index out of range: " ++ show i' ++
                           " >= " ++ show n)
-       arr' <- iArrayUpdate arr i' b
+       arr' <- iArrayUpdate itBit1 arr i' b
        return (P p (ICon ci (ICLazyArray arr_ty arr' Nothing)))
      _ -> internalError ("PrimUpdateBitArray - not array: " ++ ppReadable e')
 
 conAp' i (ICPrim _ PrimUninitBitArray) fe [T (ITNum len), E pos, E name] = do
   pos' <- toHeap "uninit-bit" itPosition pos Nothing
   name' <- toHeap "uninit-bit" itString name Nothing
-  let uninit_bit n = mkArrayCell $ IAps icPrimUninitialized [itBit1] [pos', name'']
+  let uninit_bit n = mkArrayCell itBit1 $ IAps icPrimUninitialized [itBit1] [pos', name'']
         where name'' = iMkStrConcat name' (iMkString ("[" ++ (show n) ++ "]"))
   elems <- mapM uninit_bit [0..len-1]
   let arr :: Array.Array Integer (ArrayCell HeapData)
@@ -5211,7 +5287,7 @@ doArrayUpdate f@(ICon upd_i (ICPrim {iConType = opType}))
         -- this doesn't include "idx_p"; we add that to the result
         let handleArrayUpdate (ICon arr_i icarr@(ICLazyArray { iArray = arr })) =
                 if iArrayInRange arr index then do
-                  arr' <- iArrayUpdate arr index val_e'
+                  arr' <- iArrayUpdate elem_t arr index val_e'
                   return $ pExpr $
                       -- note that we mark the array as initialized
                       ICon arr_i (icarr { iArray = arr', uninit = Nothing })
@@ -6351,7 +6427,7 @@ iMkArray t ln val =
  do
    let n = ln - 1 :: Integer
    let ns = [0..n] :: [Integer]
-   cell <- mkArrayCell val
+   cell <- mkArrayCell t val
    let zips = zip ns (replicate (fromInteger ln) cell)
    let arr = Array.array (0, n) zips
    when doDebug $ traceM ("iMkStArray: length " ++ (show ln) ++ " of type " ++ (ppReadable t))
@@ -6373,19 +6449,20 @@ iArraySelect arr ix =
    let ptr = arr Array.! ix
    return (ac_ptr ptr, ac_ref ptr)
 
-iArrayUpdate :: ILazyArray HeapData -> Integer -> HExpr -> G (ILazyArray HeapData)
-iArrayUpdate arr ix pv =
+iArrayUpdate :: IType -> ILazyArray HeapData -> Integer -> HExpr -> G (ILazyArray HeapData)
+iArrayUpdate t arr ix pv =
  do
    -- traceM ("iArrayUpdate: " ++ (show ix) ++ " from array bounds " ++ (show (max, min)))
-   cell <- mkArrayCell pv
+   cell <- mkArrayCell t pv
    return (arr Array.// [(ix, cell)])
 
 iArrayInRange :: ILazyArray HeapData -> Integer -> Bool
 iArrayInRange arr = Array.inRange (Array.bounds arr)
 
-mkArrayCell :: HExpr -> G (ArrayCell HeapData)
-mkArrayCell e = do
-   meta <- stampFor NoBinder e
+-- the cell of an element of a type
+mkArrayCell :: IType -> HExpr -> G (ArrayCell HeapData)
+mkArrayCell t e = do
+   meta <- stampFor NoBinder t e
    let hcell = HUnev e Nothing meta
    (p, r) <- addHeapCell "mk-array-cell" hcell
    return (ArrayCell p r)

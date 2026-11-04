@@ -34,6 +34,7 @@ module IExpandUtils(
         addHeapPred,
         stampFor, stampForKey, pushDefFrame, pushRootFrame,
         withMetaFrame, withCellMetaFrame, withCellDefFrame,
+        unpackEvent, chrEvent, declareBoundary,
         unionAlias, aliasRead,
         addInputClock, addOutputClock, addInputReset, addOutputReset,
         getClkGateUses, clearClkGateUses, setClkGateUses,
@@ -70,6 +71,7 @@ module IExpandUtils(
 import Control.Monad(when, liftM)
 import Control.Monad.State.Strict(StateT, runStateT, evalStateT, lift, liftIO,
                                   gets, get, put, modify)
+import Data.Bits((.|.))
 import Data.IORef
 import Data.Time.Clock.POSIX(getPOSIXTime)
 import System.IO.Unsafe
@@ -118,7 +120,11 @@ import IExpandMeta(MetaStore, MetaTables, SiteKind(..), SiteKey, idSiteKey,
                    headSiteOf, cellDefSite, newMetaStore, lookupSite, mintSite,
                    pushFrame, pushRoot, swapFrame, swapCellFrame, stampMeta,
                    aliasUnion, readMetaTables, readRoots,
-                   Census, readCensus, recordUnfolding, recordCompletion)
+                   Census, readCensus, recordUnfolding, recordCompletion,
+                   Tier(..), typeValidity, coercionValidity, constructedValidity,
+                   validityTiers, windowValidity, meetValidity, refineMeta,
+                   validityOf, rawValidity, bitCell, RepackKind(..),
+                   recordRepack, noCell)
 import IOUtil(progArgs)
 import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
@@ -2619,11 +2625,12 @@ mkIRefT t p pos r = t `deepseq` IRefT t p pos r
 
 -- The binder is written into the header of the new cell (see
 -- IExpandMeta): the parameter the expression is an argument of, or the
--- index of the field or operand it is moved into.
+-- index of the field or operand it is moved into; the type decides the
+-- header's gate.
 addHeapUnev :: Binder -> String -> IType -> HExpr -> Maybe Id -> G HExpr
 addHeapUnev b tag t e cell_name_orig = do
  cell_name <- improveCellName e cell_name_orig
- meta <- stampFor b e
+ meta <- stampFor b t e
  let newcell = (HUnev { hc_hexpr = e, hc_name = cell_name, hc_meta = meta })
  (p, r) <- addHeapCell tag newcell
  -- trace_hcell p e
@@ -2647,7 +2654,7 @@ addHeapWHNFAlias :: Maybe HeapPointer -> Binder -> String -> IType -> PExpr
                  -> Maybe Id -> G HExpr
 addHeapWHNFAlias partner b tag t pe@(P _ e) cell_name_orig = do
   cell_name <- improveCellName e cell_name_orig
-  meta <- stampFor b e
+  meta <- stampValue b t e
   let newcell = (HWHNF { hc_pexpr = pe, hc_name = cell_name, hc_meta = meta })
   (p, r) <- addHeapCell tag newcell
   case partner of
@@ -2684,7 +2691,7 @@ addHeapPred tag e = do
   let t = itBit1       -- boolean condition
       pe = P pTrue e   -- no implicit condition
       ws = wsEmpty     -- no wire set
-  meta <- stampFor NoBinder e
+  meta <- stampValue NoBinder t e
   let newcell = (HNF { hc_pexpr = pe, hc_wire_set = ws, hc_name = Nothing,
                        hc_meta = meta })
   (p, r) <- addHeapCell tag newcell
@@ -2697,18 +2704,23 @@ addHeapPred tag e = do
 getHeap :: HeapData -> G HeapCell
 getHeap (HeapData ref) = liftIO (readIORef ref)
 
--- The new cell is built from the old cell's header, so that the header
--- written at allocation is the one the cell carries for its whole life.
+-- The new cell is built from the old cell's header, so that the site,
+-- frame and binder written at allocation are the ones the cell carries
+-- for its whole life; the header's validity is refined with that of
+-- the value the cell receives (valueMeta), and the cell is rebuilt on
+-- the refined header only when it changed.
 {-# INLINE updHeap #-}
 updHeap :: String -> (HeapPointer, HeapData) -> (CellMeta -> HeapCell) -> G ()
 updHeap tag (p, HeapData ref) mkcell = do
    o <- getHeap (HeapData ref)
-   let e = mkcell (hc_meta o)
+   let e0 = mkcell (hc_meta o)
    -- a cell whose content is a reference holds that cell's value
-   case e of
+   case e0 of
      HWHNF { hc_pexpr = P _ (IRefT _ q _ _) } -> unionAlias p q
      HNF { hc_pexpr = P _ (IRefT _ q _ _) } -> unionAlias p q
      _ -> return ()
+   refined <- valueMeta o e0
+   let e = maybe e0 mkcell refined
    when doTraceHeap2 $
       traceM ("old val [" ++ tag ++ "]: " ++ "(_" ++ show p ++ ", " ++ ppReadable o ++ ")")
    when doTraceHeap $
@@ -2848,8 +2860,8 @@ mintDefSite st i = do
 -- evaluator builds some of those identifiers lazily from fresh strings
 -- (ports, parameters, names).
 {-# INLINE stampFor #-}
-stampFor :: Binder -> HExpr -> G CellMeta
-stampFor b e = do
+stampFor :: Binder -> IType -> HExpr -> G CellMeta
+stampFor b t e = do
   st <- getMetaStore
   site <- case rootOf e of
             RSDef i -> do (s, _) <- mintDefSite st i
@@ -2857,14 +2869,261 @@ stampFor b e = do
             RSKey key -> liftIO (fst <$> mintSite st key noSiteFacts)
             RSHead r -> do cell <- getHeap r
                            return (headSiteOf st (hc_meta cell))
-  liftIO (stampMeta st site b)
+  liftIO (stampMeta st site b t)
 
 -- the header of a cell whose site key the caller has in hand
-stampForKey :: SiteKey -> G CellMeta
-stampForKey key = do
+stampForKey :: SiteKey -> IType -> G CellMeta
+stampForKey key t = do
   st <- getMetaStore
   (site, _) <- liftIO (mintSite st key noSiteFacts)
-  liftIO (stampMeta st site NoBinder)
+  liftIO (stampMeta st site NoBinder t)
+
+-- ---------------
+-- Validity (see IExpandMeta).  The validity of a value is derived when
+-- the value lands in a cell (addHeapWHNF, addHeapPred and the updates
+-- of updHeap), from the root node of the value and the headers of the
+-- cells it references; the coercion events (unpackEvent, chrEvent)
+-- write the validity the coercion decides for the bits it reads; the
+-- boundary events (declareBoundary, and the port types read at a
+-- method call's landing) write declared types.  None of this allocates
+-- a cell or forces a value the evaluator had not forced: the nodes
+-- inspected are the evaluated heads and the heaped or evaluated
+-- operands the clauses built the value from, and a cell's header is a
+-- strict field read through its reference.  Only a gated cell (one of
+-- type Bit n, IExpandMeta.bitCellType) takes facts: refineMeta drops
+-- them for every other cell, and the derivation of a landing value's
+-- validity is skipped for such a cell but for the port declarations a
+-- method call makes on its argument cells (methodValidity).
+
+-- the header of a cell allocated now for an evaluated value: the stamp,
+-- refined with the value's validity
+stampValue :: Binder -> IType -> HExpr -> G CellMeta
+stampValue b t e = do
+  m <- stampFor b t e
+  v <- validityOfValue (bitCell m) e
+  return $! maybe m id (refineMeta m v)
+
+-- The header a cell takes with the value it receives: refined with the
+-- validity of the new content when that is evaluated; and when the
+-- cell held a pack coercion that the new normal form materialises,
+-- with the validity the materialisation decides (materialisedPack).
+-- Nothing when nothing changes.
+valueMeta :: HeapCell -> HeapCell -> G (Maybe CellMeta)
+valueMeta old new =
+  case new of
+    HWHNF { hc_pexpr = P _ v, hc_meta = m } -> refine m v
+    HNF { hc_pexpr = P _ v, hc_meta = m } -> do
+      r1 <- refine m v
+      case old of
+        HWHNF { hc_pexpr = P _ (ICon _ (ICLazyPack { lzTa = ta })) } | bitCell m -> do
+          let m1 = maybe m id r1
+          r2 <- materialisedPack ta v
+          return (case r2 >>= refineMeta m1 of
+                    Nothing -> r1
+                    refined -> refined)
+        _ -> return r1
+    _ -> return Nothing
+  where refine m v = do fs <- validityOfValue (bitCell m) v
+                        return (refineMeta m fs)
+
+-- The validity of the materialisation of a derived pack at a type: by
+-- construction, when every leaf of the concatenation (through the
+-- conditionals a merged pack carries) is bits known valid: a cell with
+-- a validity, or a literal; raw otherwise.  The leaves were walked to
+-- normal form before the update, so reading them forces nothing.
+materialisedPack :: IType -> HExpr -> G (Maybe Int)
+materialisedPack ta v = do
+  tiers <- leafTiers v
+  case tiers of
+    Nothing -> return Nothing
+    Just ts -> do st <- getMetaStore
+                  Just <$> liftIO (constructedValidity st ta ts)
+
+-- the tiers of the leaves of a materialised pack, joined, or Nothing
+-- when a leaf is not known valid
+leafTiers :: HExpr -> G (Maybe Int)
+leafTiers (IAps (ICon _ (ICPrim _ PrimConcat)) _ [x, y]) = both x y
+leafTiers (IAps (ICon _ (ICPrim _ PrimIf)) _ [_, x, y]) = both x y
+leafTiers (IRefT _ _ _ r) = do
+  v <- validityOf . hc_meta <$> getHeap r
+  return (if v == rawValidity then Nothing else Just (validityTiers v))
+leafTiers (ICon _ (ICInt {})) = return (Just 0)
+leafTiers _ = return Nothing
+
+both :: HExpr -> HExpr -> G (Maybe Int)
+both x y = do
+  a <- leafTiers x
+  b <- leafTiers y
+  return ((.|.) <$> a <*> b)
+
+-- The validity of an evaluated value landing in a cell, from its root
+-- node and the headers of the cells it references.  A reference
+-- carries its cell's validity.  A held pack (ICLazyPack) is valid as
+-- coercionValidity decides from its payload; a held unpack and a chr
+-- land in cells of the unpacked type, which take no facts (the bits
+-- side of each carries the validity, unpackEvent and chrEvent).  A
+-- literal is valid at its Bit type.  A conditional, a case and a
+-- dynamic selection are joins of their arms (validity meets).  An
+-- extraction windows the validity of its operand.  Arithmetic is
+-- valid at its hole-free result type by construction and a comparison
+-- at Bit 1; a concatenation, shifts and bit operations are raw.  A
+-- method call on an instance is declared by the port types the
+-- instance saved (methodValidity).  Everything else is raw.  Only the
+-- heads named here are inspected, and under them only the operands
+-- the evaluator forced before it built the node.  For a cell outside
+-- the gate (gated False) the value is not inspected, but for a method
+-- call, whose landing declares the port types on its argument cells.
+validityOfValue :: Bool -> HExpr -> G Int
+validityOfValue gated e = do
+  st <- getMetaStore
+  case e of
+    IAps (ICon m (ICSel {})) _ (ICon i (ICStateVar { iVar = v }) : args) ->
+      methodValidity st gated m i v args
+    _ | not gated -> return rawValidity
+    IRefT _ _ _ r -> headerValidity r
+    ICon _ (ICLazyPack { lzTa = ta, lzOrig = o }) -> do
+      (src, boundary) <- sourceValidity o
+      (_, v, assumed) <- liftIO (coercionValidity st ta src boundary)
+      return (if assumed then rawValidity else v)
+    ICon _ (ICInt { iConType = t }) | isBitType t ->
+      liftIO (typeValidity st TConstruction t)
+    IAps (ICon _ (ICPrim _ PrimIf)) _ [_, a, b] -> meetOf [a, b]
+    IAps (ICon _ (ICPrim _ PrimCase)) _ (_ : dflt : arms) ->
+      meetOf (dflt : armValues arms)
+    IAps (ICon _ (ICPrim _ PrimArrayDynSelect)) _ [ICon _ (ICLazyArray { iArray = arr }), _] ->
+      meetAll <$> mapM (\ (ArrayCell _ r) -> headerValidity r) (Array.elems arr)
+    IAps (ICon _ (ICPrim _ PrimSelect)) [ITNum k, ITNum m, _] [x] -> do
+      v <- validityOfValue True x
+      liftIO (windowValidity st v (fromInteger m) (fromInteger k))
+    IAps (ICon _ (ICPrim _ op)) ts _
+      | Just t <- arithResult op ts -> liftIO (typeValidity st TConstruction t)
+      | comparePrim op -> liftIO (typeValidity st TConstruction itBit1)
+    _ -> return rawValidity
+  where
+    meetOf es = meetAll <$> mapM (validityOfValue True) es
+    -- the values of a case's arms: its arguments after the index and
+    -- the default alternate between a tag and the arm's value
+    armValues (_ : v : rest) = v : armValues rest
+    armValues _ = []
+
+meetAll :: [Int] -> Int
+meetAll [] = rawValidity
+meetAll (v : vs) = foldl' meetValidity v vs
+
+-- the validity in a cell's header
+headerValidity :: HeapData -> G Int
+headerValidity r = validityOf . hc_meta <$> getHeap r
+
+-- The validity of the bits a coercion reads, and whether they come
+-- straight from a boundary: a reference carries its cell's validity; a
+-- method argument, a module port or a module parameter is a boundary
+-- constant, whose type the boundary declares by coercing it; any other
+-- value is raw.
+sourceValidity :: HExpr -> G (Int, Bool)
+sourceValidity (IRefT _ _ _ r) = do
+  v <- headerValidity r
+  return (v, False)
+sourceValidity (ICon _ (ICMethArg {})) = return (rawValidity, True)
+sourceValidity (ICon _ (ICModPort {})) = return (rawValidity, True)
+sourceValidity (ICon _ (ICModParam {})) = return (rawValidity, True)
+sourceValidity _ = return (rawValidity, False)
+
+-- the result type of an arithmetic primitive from its type arguments
+-- (Prelude.bs: primAdd, primSub and primNeg at Bit n; primMul at
+-- Bit k -> Bit n -> Bit m; primQuot at Bit k -> Bit n -> Bit k;
+-- primRem at Bit k -> Bit n -> Bit n)
+arithResult :: PrimOp -> [IType] -> Maybe IType
+arithResult PrimAdd [ITNum n] = Just (itBitN n)
+arithResult PrimSub [ITNum n] = Just (itBitN n)
+arithResult PrimNeg [ITNum n] = Just (itBitN n)
+arithResult PrimMul [_, _, ITNum m] = Just (itBitN m)
+arithResult PrimQuot [ITNum k, _] = Just (itBitN k)
+arithResult PrimRem [_, ITNum n] = Just (itBitN n)
+arithResult _ _ = Nothing
+
+comparePrim :: PrimOp -> Bool
+comparePrim op = op `elem` [PrimEQ, PrimEQ3, PrimULE, PrimULT, PrimSLE, PrimSLT]
+
+-- The validity of a method call on an instance, from the port types
+-- the instance's module saved (savePortType; Prelude.mkReg and the
+-- wrappers GenWrap generates save the source type of every port): each
+-- argument that is one cell and one port is declared that port's type,
+-- and the call, when its cell is gated (a value method: the cell of an
+-- action or actionvalue method is an action or a struct and takes
+-- nothing), is declared the type of the method's output port.  The
+-- method is found as getMethodClock finds it; an instance with no
+-- saved port types, or a method with none, declares nothing.
+methodValidity :: MetaStore -> Bool -> Id -> Id -> IStateVar HeapData -> [HExpr] -> G Int
+methodValidity st gated m i v args = do
+  s <- get
+  case M.lookup (Just i) (portTypeMap s) of
+    Nothing -> return rawValidity
+    Just ports ->
+      case [ f | f@(Method { vf_name = n }) <- vFields (isv_vmi v), n == unQualId m ] of
+        [Method { vf_inputs = ins, vf_outputs = outs }] -> do
+          sequence_ [ declareOn r t
+                    | ([(pn, _)], IRefT _ _ _ r) <- zip ins args,
+                      Just t <- [M.lookup pn ports] ]
+          case outs of
+            [(pn, _)] | gated, Just t <- M.lookup pn ports ->
+              liftIO (typeValidity st TDeclaration t)
+            _ -> return rawValidity
+        _ -> return rawValidity
+
+-- declare the value of a cell to be of a type: validity by declaration
+-- (nothing on a cell outside the gate)
+declareOn :: HeapData -> IType -> G ()
+declareOn r t = do
+  st <- getMetaStore
+  v <- liftIO (typeValidity st TDeclaration t)
+  addFacts r v
+
+-- write a validity into a cell's header (a cell that already has it,
+-- or one outside the gate, keeps its header)
+addFacts :: HeapData -> Int -> G ()
+addFacts (HeapData ref) v =
+  liftIO $ modifyIORef' ref $ \ c ->
+      case refineMeta (hc_meta c) v of
+        Nothing -> c
+        Just m -> c { hc_meta = m }
+
+-- The bits xee, in weak head normal form, are unpacked as ta: the
+-- validity the coercion decides on their cell when they have one, and
+-- a repack when they were not known valid for ta (coercionValidity;
+-- the bits of a boundary constant are declared valid by the unpack).
+unpackEvent :: IType -> HExpr -> G ()
+unpackEvent ta xee = coercionEvent RKUnpack ta xee
+
+-- The bits ee, whose weak head normal form is e', are converted to the
+-- enumeration to (chr): as unpackEvent, except that a literal is valid
+-- by construction and records nothing.
+chrEvent :: IType -> HExpr -> HExpr -> G ()
+chrEvent _ _ (ICon _ (ICInt {})) = return ()
+chrEvent to ee _ = coercionEvent RKChr to ee
+
+-- The validity the coercion decides is written onto the cell of the
+-- bits (the value of the unpacked type lands in a cell that takes no
+-- facts): a trivial Bit validity gives way to the type (refineValidity),
+-- and a repack's assumption is recorded once, so that a second coercion
+-- of the same bits to the type finds them assumed valid for it.
+coercionEvent :: RepackKind -> IType -> HExpr -> G ()
+coercionEvent kind t ee = do
+  st <- getMetaStore
+  (src, boundary) <- sourceValidity ee
+  (row, v, repack) <- liftIO (coercionValidity st t src boundary)
+  case ee of
+    IRefT _ p _ r -> do
+      addFacts r v
+      when repack $ liftIO (recordRepack st kind p src row)
+    _ -> when repack $ liftIO (recordRepack st kind noCell src row)
+
+-- A value in normal form at a boundary (the argument of an
+-- instantiation, evaluated by evaleNF_ModArg): declared the type it
+-- is passed at, when it is a cell of a Bit type (a clock, a reset, an
+-- inout or a parameter constant is no cell).
+declareBoundary :: HExpr -> G ()
+declareBoundary (IRefT t _ _ r) | isBitType t = declareOn r t
+declareBoundary _ = return ()
 
 -- The root of an expression being heaped, classified for the stamp: a
 -- definition reference (whose row carries the use-site fact), any

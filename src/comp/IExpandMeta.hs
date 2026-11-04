@@ -5,25 +5,33 @@ module IExpandMeta(
         siteIdsFromRows,
         -- frames, binders and cell headers
         Frame, Binder(..), CellMeta, noBinder, headSiteOf, cellDefSite,
+        bitCell, bitCellType,
+        -- validity
+        TypeTable(..), typeIdsFromRows, TypeKey(..), holeFree, bitWidth,
+        rawValidity, validityView, validityTiers, meetValidity, Tier(..),
+        typeValidity, coercionValidity, constructedValidity, windowValidity,
+        refineMeta, RepackKind(..), Repack(..), recordRepack,
         -- the store and the hooks the evaluator calls
         MetaStore, newMetaStore, lookupSite, mintSite, pushFrame, pushRoot,
         swapFrame, swapCellFrame, stampMeta, aliasUnion, readRoots,
         -- the tables after elaboration and the query interface, read by
         -- the rebuild and the dump alone
         MetaTables(..), AliasMap, readMetaTables,
-        siteOf, frameOf, binderOf, chainOf, aliasClassOf, aliasMembers,
+        siteOf, frameOf, binderOf, chainOf, validityOf,
+        aliasClassOf, aliasMembers,
         renderSite, renderDump,
         -- the module metadata table, built by the rebuild
         ContextTable(..), emptyContextTable, contextTableSize, internFrame,
         contextChain, contextIdsFromRows, aliasUnions, noCell, DefRecord(..),
-        ModuleMeta(..),
-        emptyModuleMeta, defNameString, sideFileSchema, renderSideFile,
+        ModuleMeta(..), RepackFact(..), undefKindCode, emptyModuleMeta,
+        forceModuleMeta, defNameString, sideFileSchema, renderSideFile,
         -- the ledger the packages carry
         MetaLedger(..), emptyMetaLedger, PassTag(..), MetaEvent(..),
         appendEvent, resolveId, renderLedger,
         -- the census (-metadata-census)
         Census, readCensus, recordUnfolding, recordCompletion, aliasClassCount,
-        renderCensus, checkProfile, checkKeptPositions, checkNameHints
+        renderCensus, checkProfile, checkKeptPositions, checkNameHints,
+        checkBitGate
         ) where
 
 import Control.Monad(when)
@@ -42,12 +50,15 @@ import qualified Data.Set as S
 import System.FilePath(takeFileName)
 
 import ErrorUtil(internalError)
-import Eval(NFData(..), rnf2, rnf3, rnf4, rnf5, rnf11)
+import Eval(NFData(..), rnf2, rnf3, rnf4, rnf5)
 import FStringCompat(FString, getFString)
 import Id(Id, getIdBase, getIdQual, getIdPosition, getIdString)
-import PPrint(PPrint(..), empty)
+import IType(IType(..))
+import PPrint(PPrint(..), empty, ppString)
 import Position(Position(..), noPosition, isPreludePosition)
+import PreIds(idBit, idUInt, idInt, idBool)
 import Prim(PrimOp)
+import Undefined(UndefKind(..))
 
 -- ===============
 -- The evaluator metadata store
@@ -57,12 +68,15 @@ import Prim(PrimOp)
 -- unfoldings it was created under (the frame), rooted at a rule, a
 -- method or an instantiation, the binder the cell's value was bound
 -- to (a parameter, or the index of a field or operand it was moved
--- into), and the alias class of cells that hold one value.  It is
--- written by the evaluator through the hooks below and read only
--- through the query interface: by the rebuild at the end of
--- elaboration, which also builds the module metadata table from it
--- (IExpand.buildModuleMeta; the side-file renderer, renderSideFile,
--- reads that table), and by the -metadata-dump printer.
+-- into), the alias class of cells that hold one value, and for a
+-- cell of type Bit n its validity (the one type whose encoding the
+-- bits are known to satisfy, or raw, with the tier of that
+-- knowledge).  It is written by the
+-- evaluator through the hooks below and read only through the query
+-- interface: by the rebuild at the end of elaboration, which also
+-- builds the module metadata table from it (IExpand.buildModuleMeta;
+-- the side-file renderer, renderSideFile, reads that table), and by
+-- the -metadata-dump printer.
 --
 -- Rules that keep the store invisible to the generated output:
 --
@@ -227,21 +241,31 @@ instance Show Frame where
         "frame " ++ show i ++ " site " ++ show s ++ " count " ++ show c
 
 -- The header every heap cell carries: the site of the expression the
--- cell was created for, the frame current when it was created, and the
+-- cell was created for, the frame current when it was created, the
 -- site of its binder (noBinder when the cell was created for no
--- parameter, field or operand).  It is written once, at allocation,
--- and copied across every state transition of the cell.
+-- parameter, field or operand) and the validity of its value
+-- (rawValidity, or a type-window row with tier bits, under the gate
+-- bit that says the cell's type admits facts, bitCellType).  The site,
+-- frame, binder and gate are written once, at allocation, and copied
+-- across every state transition of the cell; the validity is refined
+-- when the cell's value is known (refineMeta: a value lands in the
+-- cell, a coercion reads it, a boundary declares it) and otherwise
+-- copied, and a cell outside the gate keeps it raw.
 data CellMeta = CellMeta { cm_site :: {-# UNPACK #-} !Int,
                            cm_frame :: !Frame,
-                           cm_binder :: {-# UNPACK #-} !Int }
+                           cm_binder :: {-# UNPACK #-} !Int,
+                           cm_validity :: {-# UNPACK #-} !Int }
 
 -- Site ids start at 1, so 0 is free to mean no binder.
 noBinder :: Int
 noBinder = 0
 
 instance Show CellMeta where
-    show (CellMeta s f b) = "CellMeta " ++ show s ++ " (" ++ show f ++ ")" ++
-                            (if b == noBinder then "" else " binder " ++ show b)
+    show m@(CellMeta s f b _) =
+        "CellMeta " ++ show s ++ " (" ++ show f ++ ")" ++
+        (if b == noBinder then "" else " binder " ++ show b) ++
+        (if bitCell m then " bit" else "") ++
+        (if validityOf m == rawValidity then "" else " valid " ++ show (validityOf m))
 
 -- the site of a cell that borrows the site of the cell at its head
 {-# INLINE headSiteOf #-}
@@ -272,6 +296,8 @@ data MetaStore = MetaStore { ms_sites :: !(IORef SiteTable),
                              ms_frame :: !(IORef Frame),
                              ms_alias :: !(IORef AliasMap),
                              ms_roots :: !(IORef [Int]),
+                             ms_types :: !(IORef TypeTable),
+                             ms_repacks :: !(IORef [Repack]),
                              ms_seed :: {-# UNPACK #-} !Int,
                              ms_census :: !Bool,
                              ms_counts :: !(IORef Census) }
@@ -283,8 +309,11 @@ newMetaStore seed census = do
     reg <- newIORef TopFrame
     alias <- newIORef IM.empty
     roots <- newIORef []
+    types <- newIORef emptyTypeTable
+    repacks <- newIORef []
     counts <- newIORef emptyCensus
-    return (MetaStore sites next reg alias roots seed census counts)
+    return (MetaStore sites next reg alias roots types repacks
+                      seed census counts)
 
 -- The one scrambling function: identity when the seed is 0.
 perturb :: MetaStore -> Int -> Int
@@ -427,18 +456,295 @@ swapFrame st fr = do
 swapCellFrame :: MetaStore -> CellMeta -> IO Frame
 swapCellFrame st m = swapFrame st (cm_frame m)
 
--- The header for a cell allocated now at a site, with its binder (whose
--- site is minted here, on the first cell bound to it).
+-- The header for a cell allocated now at a site, of a type, with its
+-- binder (whose site is minted here, on the first cell bound to it).
+-- The gate is set from the type (bitCellType); every cell starts raw.
 {-# INLINE stampMeta #-}
-stampMeta :: MetaStore -> Int -> Binder -> IO CellMeta
-stampMeta st site b = do
+stampMeta :: MetaStore -> Int -> Binder -> IType -> IO CellMeta
+stampMeta st site b t = do
     fr <- readIORef (ms_frame st)
+    let gate = if bitCellType t then bitGate else 0
     binder <- case b of
                 NoBinder -> return noBinder
                 BoundTo i -> mint (idSiteKey SKBinder i)
                 MovedTo n -> mint (FieldKey n)
-    return $! CellMeta site fr binder
+    return $! CellMeta site fr binder gate
   where mint key = fst <$> mintSite st key (False, False)
+
+-- ===============
+-- Validity
+--
+-- The one type fact the store keeps about a bit-shaped value: the
+-- validity (must) is the one type whose encoding the bits are known to
+-- satisfy, with the tier of that knowledge: by construction (a
+-- hole-free type, a literal, a derived pack of valid fields), by
+-- declaration (a port of a module, an argument of an instantiation) or
+-- by assumption (bits unpacked as a type they were not known to be
+-- valid for, which is a repack fact); or rawValidity.  Validity meets
+-- at every join (equal types survive, their tiers joined; different
+-- types or a raw side give raw).
+--
+-- The validity word names a row of the type-window table: a type and a
+-- window of it (an offset from bit 0 and a width; the whole type is
+-- window (0, -1), whose width the type decides).  The window is the
+-- field a derived instance extracts from a value valid at the type
+-- (windowValidity), which an unpack of that window reads as the field
+-- (coercionValidity).  The table is keyed by the program's types,
+-- compared by their intern ids (IType's Ord), and the windows the
+-- derived instances take from them, so it is bounded by the type
+-- declarations and never by the elaborated data; nothing here creates
+-- a string.  Validity is census-grade until the valid-unknown
+-- redesign and instance lawfulness land, which the side file's schema
+-- says.
+
+-- A type window: the type, the offset and the width.
+data TypeKey = TypeKey !IType {-# UNPACK #-} !Int {-# UNPACK #-} !Int
+        deriving (Eq, Ord)
+
+-- the whole of a value of a type
+typeWindow :: IType -> TypeKey
+typeWindow t = TypeKey t 0 wholeWidth
+
+wholeWidth :: Int
+wholeWidth = -1
+
+data TypeTable = TypeTable { tt_next :: {-# UNPACK #-} !Int,
+                             tt_ids :: !(M.Map TypeKey Int),
+                             tt_rows :: !(IM.IntMap TypeKey) }
+
+emptyTypeTable :: TypeTable
+emptyTypeTable = TypeTable 1 M.empty IM.empty
+
+-- the id map of the table rebuilt from its rows, for a reader of the
+-- .bxref file (GenBXref writes the rows alone: a key orders by its
+-- type's intern id, so the map's order is not a function of the
+-- content)
+typeIdsFromRows :: IM.IntMap TypeKey -> M.Map TypeKey Int
+typeIdsFromRows rows = M.fromList [ (key, v) | (v, key) <- IM.toList rows ]
+
+-- Look a type window up, or mint it; the id is perturbed under the
+-- scramble like every number the store mints.
+mintType :: MetaStore -> TypeKey -> IO Int
+mintType st key = do
+    t <- readIORef (ms_types st)
+    case M.lookup key (tt_ids t) of
+      Just v -> return v
+      Nothing -> do
+        let v = perturb st (tt_next t)
+            t' = t { tt_next = tt_next t + 1,
+                     tt_ids = M.insert key v (tt_ids t),
+                     tt_rows = IM.insert v key (tt_rows t) }
+        writeIORef (ms_types st) $! t'
+        return v
+
+-- A type whose every bit pattern is a valid encoding: Bit, UInt and
+-- Int at any width, and Bool.  A struct of such fields is hole-free as
+-- well, but deciding that needs the field types, which the evaluator
+-- does not have in hand; such a type counts as hole-bearing here, which
+-- errs towards recording a repack.  The identifiers compared are
+-- Prelude type constructors, interned when the Prelude's .bo was read.
+holeFree :: IType -> Bool
+holeFree (ITAp (ITCon c _ _) (ITNum _)) = c == idBit || c == idUInt || c == idInt
+holeFree (ITCon c _ _) = c == idBool
+holeFree _ = False
+
+-- the width of a Bit type, or wholeWidth
+bitWidth :: IType -> Int
+bitWidth (ITAp (ITCon c _ _) (ITNum n)) | c == idBit = fromInteger n
+bitWidth _ = wholeWidth
+
+-- The validity of a value: rawValidity, or the id of a type window
+-- with four bits above it: three tier bits (58 by construction, 59 by
+-- declaration, 60 by assumption) and bit 57, which says the window's
+-- type is a Bit type, whose validity is trivial (every pattern is a
+-- Bit n) and gives way to a source type when one becomes known
+-- (refineValidity).  The bits are set from their facts through
+-- perturbBool so that the scramble inverts them like a site's fact
+-- bits; the row id is perturbed when it is minted.
+--
+-- The gate.  A hint that outlives the evaluator is attached to cells of
+-- type Bit n alone, the cells that become wires and defs; a struct,
+-- union, interface, function, action or numeric-type cell carries none,
+-- and a cell of another primitive type only where a consumer reads the
+-- hint for that type (none today).  The gate is one bit of the
+-- validity word, set at allocation from the cell's type (stampMeta)
+-- and read by refineMeta, the one writer of facts into a header; it is
+-- store state that no evaluator decision reads, so the scramble leaves
+-- it alone, and validityOf masks it.
+--
+-- Bool, a data type that is never unpacked and always a one-bit wire,
+-- is excluded by the letter of the rule; boolCellsCarryFacts admits a
+-- cell of that type to the gate.  A Bool method of a module is a Bit 1
+-- port, so its call's cell is a Bit 1 cell declared valid at Bool,
+-- gated either way; a cell of the type Bool itself (a chr of bits to
+-- Bool, a Bool field) takes no fact today, since a chr writes on the
+-- bits side, so the constant changes nothing until a consumer reads
+-- such a cell.
+bitGate :: Int
+bitGate = bit 61
+
+boolCellsCarryFacts :: Bool
+boolCellsCarryFacts = False
+
+-- the types whose cells carry facts (the identifiers compared are
+-- Prelude type constructors, as in holeFree)
+bitCellType :: IType -> Bool
+bitCellType (ITAp (ITCon c _ _) _) = c == idBit
+bitCellType (ITCon c _ _) = boolCellsCarryFacts && c == idBool
+bitCellType _ = False
+
+-- the cell's type admits facts
+bitCell :: CellMeta -> Bool
+bitCell m = testBit (cm_validity m) 61
+
+rawValidity :: Int
+rawValidity = 0
+
+trivialBit :: Int
+trivialBit = bit 57
+
+validityBits :: Int
+validityBits = trivialBit .|. siteBits
+
+-- the trivial bit of a validity at a type, from the type
+trivialBits :: MetaStore -> IType -> Int
+trivialBits st t = if perturbBool st (bitWidth t /= wholeWidth) then trivialBit else 0
+
+data Tier = TConstruction | TDeclaration | TAssumption
+        deriving (Eq)
+
+tierBit :: Tier -> Int
+tierBit TConstruction = bit 58
+tierBit TDeclaration = bit 59
+tierBit TAssumption = bit 60
+
+tierBits :: MetaStore -> Tier -> Int
+tierBits st tier = L.foldl' (.|.) 0
+                     [ tierBit t | t <- [TConstruction, TDeclaration, TAssumption],
+                                   perturbBool st (t == tier) ]
+
+-- the type window of a validity, without its bits, and the tier bits
+validityView :: Int -> Int
+validityView v = v .&. complement validityBits
+
+validityTiers :: Int -> Int
+validityTiers v = v .&. siteBits
+
+-- the validity is at a Bit type (trivial)
+trivialValidity :: Int -> Bool
+trivialValidity v = testBit v 57
+
+-- Meet, at a join of two values: equal types survive with their tiers
+-- joined; a raw side or different types give raw.
+meetValidity :: Int -> Int -> Int
+meetValidity a b
+  | a == rawValidity || b == rawValidity = rawValidity
+  | validityView a == validityView b = a .|. b
+  | otherwise = rawValidity
+
+-- Refine, as more becomes known about one value: raw gives way to a
+-- type, equal types join their tiers, a trivial Bit type gives way to
+-- a source type, and a type already known is otherwise kept.
+refineValidity :: Int -> Int -> Int
+refineValidity old new
+  | old == rawValidity = new
+  | new == rawValidity = old
+  | validityView old == validityView new = old .|. new
+  | trivialValidity old && not (trivialValidity new) = new
+  | otherwise = old
+
+-- the validity of a value valid at a type on a tier
+typeValidity :: MetaStore -> Tier -> IType -> IO Int
+typeValidity st tier t = do
+    v <- mintType st (typeWindow t)
+    return $! v .|. tierBits st tier .|. trivialBits st t
+
+-- The validity of bits coerced to a type (an unpack, or the conversion
+-- of bits to an enumeration), given the validity the bits had and
+-- whether they came straight from a boundary (a port or parameter
+-- constant, whose type the boundary declares by coercing it): valid at
+-- the type by construction when the type is hole-free, by declaration
+-- at a boundary, with the bits' own tiers when they were valid at that
+-- type or at a window of a valid value (the field a derived instance
+-- extracts, windowValidity), and by assumption otherwise, which is a
+-- repack (the last component) that the caller records; the type's row
+-- in every case, returned as well so that the repack can name it.  A
+-- pack reads the same decision for its payload and keeps raw where
+-- this says assumption, because packing assumes nothing: the
+-- materialisation of the pack decides (constructedValidity).
+coercionValidity :: MetaStore -> IType -> Int -> Bool -> IO (Int, Int, Bool)
+coercionValidity st t src boundary = do
+    v <- mintType st (typeWindow t)
+    tt <- readIORef (ms_types st)
+    let kept = validityView src == v
+        window = src /= rawValidity && not (trivialValidity src) &&
+                 case IM.lookup (validityView src) (tt_rows tt) of
+                   Just (TypeKey _ _ w) -> w /= wholeWidth
+                   Nothing -> False
+        (val, repack)
+          | holeFree t = (v .|. tierBits st TConstruction .|. trivialBits st t, False)
+          | boundary = (v .|. tierBits st TDeclaration, False)
+          | kept = (src, False)
+          | window = (v .|. validityTiers src, False)
+          | otherwise = (v .|. tierBits st TAssumption, True)
+    return (v, val, repack)
+
+-- The validity of bits constructed as a type from valid parts (the
+-- materialisation of a derived pack whose leaves were all valid): by
+-- construction, joined with the tiers of the parts.
+constructedValidity :: MetaStore -> IType -> Int -> IO Int
+constructedValidity st t tiers = do
+    v <- mintType st (typeWindow t)
+    return $! v .|. tierBits st TConstruction .|. (tiers .&. siteBits)
+
+-- The validity of bits [m, m + k) of a value with the validity src: the
+-- window of the source's validity when the source was valid at a
+-- source type, which an unpack of the window reads as the field a
+-- derived instance extracts (the evaluator has no field layout to
+-- check the window against); raw otherwise, and raw at a trivial Bit
+-- type.
+windowValidity :: MetaStore -> Int -> Int -> Int -> IO Int
+windowValidity st src m k
+  | src == rawValidity || trivialValidity src = return rawValidity
+  | otherwise = do
+      tt <- readIORef (ms_types st)
+      case IM.lookup (validityView src) (tt_rows tt) of
+        Just (TypeKey ty o w) | w == wholeWidth || m + k <= w -> do
+            wv <- mintType st (TypeKey ty (o + m) k)
+            return (wv .|. validityTiers src)
+        _ -> return rawValidity
+
+-- Refine a header with the validity of its value; Nothing when it does
+-- not change, so that a cell whose facts are unchanged keeps its
+-- header, and Nothing for a cell outside the gate, which takes no fact
+-- whatever lands in it (every writer of facts into a header comes
+-- here).
+refineMeta :: CellMeta -> Int -> Maybe CellMeta
+refineMeta m v
+  | not (bitCell m) = Nothing
+  | v' == old = Nothing
+  | otherwise = Just (m { cm_validity = v' .|. bitGate })
+  where old = validityOf m
+        v' = refineValidity old v
+
+-- A repack: bits reinterpreted as a type they were not known to be
+-- valid for, at an unpack or at the conversion of computed bits to an
+-- enumeration (chr): the cell that held the bits (noCell for a value
+-- that had none), the validity they had, the row of the type they were
+-- read as, and the frame current at the event.
+data RepackKind = RKUnpack | RKChr
+        deriving (Eq, Show)
+
+data Repack = Repack { rp_kind :: !RepackKind,
+                       rp_cell :: {-# UNPACK #-} !Int,
+                       rp_from :: {-# UNPACK #-} !Int,
+                       rp_to :: {-# UNPACK #-} !Int,
+                       rp_frame :: !Frame }
+
+recordRepack :: MetaStore -> RepackKind -> Int -> Int -> Int -> IO ()
+recordRepack st kind cell from to = do
+    fr <- readIORef (ms_frame st)
+    modifyIORef' (ms_repacks st) (Repack kind (perturb st cell) from to fr :)
 
 -- ===============
 -- Alias classes
@@ -511,16 +817,20 @@ aliasUnions pairs m0 = L.foldl' step m0 pairs
                 (rq, m2) = aliasFindIn q m1
             in  if rp == rq then m2 else IM.insert (max rp rq) (min rp rq) m2
 
--- The tables of the store after elaboration: the site table and the
--- alias classes.
+-- The tables of the store after elaboration: the site table, the alias
+-- classes, the type-window table and the repacks (in event order).
 data MetaTables = MetaTables { mt_sites :: !SiteTable,
-                               mt_alias :: !AliasMap }
+                               mt_alias :: !AliasMap,
+                               mt_types :: !TypeTable,
+                               mt_repacks :: ![Repack] }
 
 readMetaTables :: MetaStore -> IO MetaTables
 readMetaTables st = do
     sites <- readIORef (ms_sites st)
     alias <- readIORef (ms_alias st)
-    return (MetaTables sites alias)
+    types <- readIORef (ms_types st)
+    repacks <- readIORef (ms_repacks st)
+    return (MetaTables sites alias types (reverse repacks))
 
 -- the sites of the root frames, in push order
 readRoots :: MetaStore -> IO [Int]
@@ -538,6 +848,11 @@ frameOf = cm_frame
 -- the site of the cell's binder, or noBinder
 binderOf :: CellMeta -> Int
 binderOf = cm_binder
+
+-- the validity of the cell's value (rawValidity, or a type window with
+-- tier bits; the gate bit masked)
+validityOf :: CellMeta -> Int
+validityOf m = cm_validity m .&. complement bitGate
 
 -- (site, count) of every frame from the cell's frame to the root
 chainOf :: CellMeta -> [(Int, Int)]
@@ -592,21 +907,42 @@ renderSite t s =
         in  showSiteKind (siteKeyKind key) ++ " " ++ body ++
             (if null flags then "" else " " ++ flags)
 
+-- A type window as "<type>", with " [<offset>+<width>]" for a window
+-- that is not the whole type; the type is printed by reading its
+-- identifiers' strings.
+renderTypeWindow :: TypeTable -> Int -> String
+renderTypeWindow tt v =
+    case IM.lookup v (tt_rows tt) of
+      Nothing -> "type " ++ show v ++ " (no row)"
+      Just (TypeKey ty o w) ->
+          ppString ty ++
+          (if w == wholeWidth then "" else " [" ++ show o ++ "+" ++ show w ++ "]")
+
+-- a validity as "<type window> <letters>" (c by construction, d by
+-- declaration, a by assumption, b at a Bit type), or "-" for raw
+renderValidity :: TypeTable -> Int -> String
+renderValidity tt v
+  | v == rawValidity = "-"
+  | otherwise = renderTypeWindow tt (validityView v) ++ " " ++
+                [ c | (c, b) <- [('c', 58), ('d', 59), ('a', 60), ('b', 57)], testBit v b ]
+
 -- One line per cell, in the order given (the caller passes ascending
 -- pointer order): the pointer, the cell's site, its binder when it has
 -- one, the root of its alias class when the class has another cell,
--- then the chain of frames from the creating frame to the root, each
--- as site#count.
+-- its validity when it is not raw, then the chain of frames from the
+-- creating frame to the root, each as site#count.
 renderDump :: MetaTables -> [(Int, CellMeta)] -> String
-renderDump (MetaTables t am) cells = unlines (map line cells)
+renderDump (MetaTables t am tt _) cells = unlines (map line cells)
   where line (p, m) =
             "_" ++ show p ++ ": " ++ renderSite t (siteOf m) ++
-            binder (binderOf m) ++ alias p ++
+            binder (binderOf m) ++ alias p ++ validity (validityOf m) ++
             concatMap link (chainOf m)
         binder b | b == noBinder = ""
                  | otherwise = ", " ++ renderSite t b
         alias p | IS.member p members = ", alias _" ++ show (aliasClassOf am p)
                 | otherwise = ""
+        validity v | v == rawValidity = ""
+                   | otherwise = ", valid " ++ renderValidity tt v
         members = aliasMembers am
         link (s, c) = " <- " ++ renderSite t s ++ "#" ++ show c
 
@@ -717,16 +1053,54 @@ data DefRecord = DefRecord {
         dr_binder :: {-# UNPACK #-} !Int,
         -- the root of the cell's alias class after the CSE unions, when
         -- the class holds another cell, or noCell
-        dr_alias :: {-# UNPACK #-} !Int
+        dr_alias :: {-# UNPACK #-} !Int,
+        -- the validity of the cell's value, met with that of the cells
+        -- CSE identified with it
+        dr_validity :: {-# UNPACK #-} !Int,
+        -- the repacks of bits held by this cell, by a cell CSE
+        -- identified with it or by a cell folded into it, in event order
+        dr_repacks :: ![RepackFact],
+        -- the kinds of the undefined values in the def's expression and
+        -- in the cells folded into it, in expression order
+        -- (undefKindCode); their origin is the def's site and context
+        dr_undefs :: ![Int]
     }
+
+-- A repack as the table records it: the kind, the cell (noCell when the
+-- bits had none), the validity the bits had, the row of the type they
+-- were read as, and the context of the frame current at the event.
+data RepackFact = RepackFact { rf_kind :: !RepackKind,
+                               rf_cell :: {-# UNPACK #-} !Int,
+                               rf_from :: {-# UNPACK #-} !Int,
+                               rf_to :: {-# UNPACK #-} !Int,
+                               rf_context :: {-# UNPACK #-} !Int }
+
+instance NFData RepackKind where
+    rnf k = k `seq` ()
+
+instance NFData RepackFact where
+    rnf (RepackFact x1 x2 x3 x4 x5) = rnf5 x1 x2 x3 x4 x5
+
+-- the code of an undefined value's kind in a record, and its name
+undefKindCode :: UndefKind -> Int
+undefKindCode UNotUsed = 0
+undefKindCode UDontCare = 1
+undefKindCode UNoMatch = 2
+
+undefKindName :: Int -> String
+undefKindName 0 = "not-used"
+undefKindName 1 = "dont-care"
+undefKindName 2 = "no-match"
+undefKindName n = "kind-" ++ show n
 
 -- Heap pointers start at 0, so -1 is free to mean no cell.
 noCell :: Int
 noCell = -1
 
 instance NFData DefRecord where
-    rnf (DefRecord x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11) =
-        rnf11 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11
+    rnf (DefRecord x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14) =
+        rnf5 x1 x2 x3 x4 x5 `seq` rnf5 x6 x7 x8 x9 x10 `seq`
+        rnf4 x11 x12 x13 x14
 
 -- The name the rebuild gives the def lifted from a cell: the name hint
 -- with its illegal characters dropped, its base extended by the pointer
@@ -744,27 +1118,33 @@ defNameString p hint =
                 qual = legal (getFString (getIdQual i))
             in  if null qual then base else qual ++ "." ++ base
 
--- The table: the sites, the contexts, the root sites (rules, methods and
--- instantiations, in push order), the def records, keyed by the
--- canonical heap pointer (the number the def's name ends in), and the
--- events of the passes after elaboration (the ledger below), most
+-- The table: the sites, the contexts, the type windows, the root
+-- sites (rules, methods and instantiations, in push order), the def
+-- records, keyed by the canonical heap pointer (the number the def's
+-- name ends in), every repack of the elaboration in event order, and
+-- the events of the passes after elaboration (the ledger below), most
 -- recent first, so that a pass appends by consing (appendEvent).
 data ModuleMeta = ModuleMeta { mm_sites :: !SiteTable,
                                mm_contexts :: !ContextTable,
+                               mm_types :: !TypeTable,
                                mm_roots :: ![Int],
                                mm_defs :: !(IM.IntMap DefRecord),
+                               mm_repacks :: ![RepackFact],
                                mm_events :: ![MetaEvent] }
 
 emptyModuleMeta :: ModuleMeta
-emptyModuleMeta = ModuleMeta emptySiteTable emptyContextTable [] IM.empty []
+emptyModuleMeta = ModuleMeta emptySiteTable emptyContextTable emptyTypeTable
+                             [] IM.empty [] []
 
 -- compact, so that the derived Show of an IModule stays printable; the
 -- events are not counted, so the text does not change with the ledger
 instance Show ModuleMeta where
     show mm = "ModuleMeta sites " ++ show (siteTableSize (mm_sites mm)) ++
               " contexts " ++ show (contextTableSize (mm_contexts mm)) ++
+              " types " ++ show (IM.size (tt_rows (mm_types mm))) ++
               " roots " ++ show (length (mm_roots mm)) ++
-              " defs " ++ show (IM.size (mm_defs mm))
+              " defs " ++ show (IM.size (mm_defs mm)) ++
+              " repacks " ++ show (length (mm_repacks mm))
 
 instance NFData SiteKey where
     rnf (IdKey b q p k) = rnf4 b q p k
@@ -791,8 +1171,32 @@ instance NFData SiteTable where
 instance NFData ContextTable where
     rnf (ContextTable n ids rows ops) = rnf4 n ids rows ops
 
+-- A key in weak head normal form is in normal form: the window is
+-- unpacked, and the type is an interned node (IType.internAp forces
+-- both children for its key).  The type's interior, shared with the
+-- module's own types, is not walked: rnf does not memoise, and a walk
+-- of every key's type through the sorts of its constructors was the
+-- cost of every deepseq of the table.
+instance NFData TypeKey where
+    rnf k = k `seq` ()
+
+instance NFData TypeTable where
+    rnf (TypeTable n ids rows) = rnf3 n ids rows
+
+-- The table's one deep walk, performed by iExpand when the table is
+-- built; the NFData instance below walks the events alone, so that
+-- the deepseq of the whole module at every later stage
+-- (TopUtils.dump) does not walk the tables again (rnf does not
+-- memoise).
+forceModuleMeta :: ModuleMeta -> ()
+forceModuleMeta (ModuleMeta s c ty r d rp e) =
+    rnf3 s c ty `seq` rnf4 r d rp e
+
 instance NFData ModuleMeta where
-    rnf (ModuleMeta s c r d e) = rnf5 s c r d e
+    -- the tables were walked once by forceModuleMeta; the events are
+    -- what the passes after elaboration append, forced where the
+    -- package is
+    rnf mm = rnf (mm_events mm)
 
 -- ===============
 -- The ledger
@@ -844,8 +1248,9 @@ instance NFData MetaEvent where
 -- The ledger as a package field.  The instances are what keep the field
 -- out of the generated output: Eq and Ord are constant, so a comparison
 -- of packages (APackage and ASPackage derive Eq) never sees it; Data is
--- a leaf, so a generic traversal never descends into it; NFData forces
--- the table and the events, so a package's deepseq forces the ledger
+-- a leaf, so a generic traversal never descends into it; NFData walks
+-- the events (the table was forced in full at the end of elaboration,
+-- forceModuleMeta), so a package's deepseq forces the ledger's events
 -- where it forces the package; PPrint prints nothing, so no package
 -- dump changes with the ledger (the metadata dump stage prints it on
 -- request); Show is the table's compact line, so the expanded module's
@@ -952,17 +1357,33 @@ renderEvent ev =
 --   def <name> | site <site> | chain <chain> | contexts <n>
 --     | merged <n> {<site> @ <chain>}... | folded <n> {<site> @ <chain>}...
 --     | parent <cell> | binder <binder> | alias <cell> | tiers <letters or ->
+--     | validity <type window> <letters or ->
+--     | repacks <n> {<repack>}... | undefined <n> {<kind>}...
 --
 -- where a cell is the name of the def lifted from it, _<pointer> when
 -- no def was (a folded cell; the root of an alias class is the class's
 -- earliest cell, lifted or not), or - for none; a binder is a parameter
 -- as <name> [<file>:<line>:<col>], a field or operand as field <n>, or -;
 --
--- and the tier letters are u (use-site), d (definition-site),
--- h (head-site), s (shared) and m (merged).
+-- the tier letters are u (use-site), d (definition-site),
+-- h (head-site), s (shared) and m (merged); a type window is a type,
+-- with [<offset>+<width>] for a window that is not the whole type; a
+-- validity's letters are c (by construction), d (by declaration), a
+-- (by assumption) and b (at a Bit type, trivially); a repack is
+-- "<unpack or chr> <cell> from <validity> to <type> @ <chain>"; an
+-- undefined value's kind is not-used, dont-care or no-match.
+--
+-- Every repack of the module is also listed on a line of its own, as
+-- "repack <repack>", since the bits may have had no cell or a cell no
+-- def was lifted from.  The line "validity census-grade" says that
+-- the validity column is a census until the valid-unknown redesign and
+-- instance lawfulness land.
 
 sideFileSchema :: String
 sideFileSchema = "bsc-metadata 1"
+
+validityGrade :: String
+validityGrade = "validity census-grade"
 
 -- a binder site without its kind word, which the column's label gives
 renderBinderSite :: SiteTable -> Int -> String
@@ -980,12 +1401,14 @@ renderChain st ct ctx =
 
 renderSideFile :: String -> ModuleMeta -> String
 renderSideFile modName mm =
-    unlines ([sideFileSchema, "module " ++ modName] ++
+    unlines ([sideFileSchema, "module " ++ modName, validityGrade] ++
              [ "root " ++ renderSite st s | s <- mm_roots mm ] ++
-             map renderDef (IM.elems (mm_defs mm)))
+             map renderDef (IM.elems (mm_defs mm)) ++
+             [ "repack " ++ renderRepack r | r <- mm_repacks mm ])
   where
     st = mm_sites mm
     ct = mm_contexts mm
+    tt = mm_types mm
     renderDef r =
         intercalate " | "
             [ "def " ++ defName r,
@@ -997,11 +1420,24 @@ renderSideFile modName mm =
               "parent " ++ renderCell (dr_parent r),
               "binder " ++ renderBinder (dr_binder r),
               "alias " ++ renderCell (dr_alias r),
-              "tiers " ++ renderTiers r ]
+              "tiers " ++ renderTiers r,
+              "validity " ++ renderValidity tt (dr_validity r),
+              "repacks " ++ show (length (dr_repacks r)) ++
+                  concat [ " {" ++ renderRepack rp ++ "}" | rp <- dr_repacks r ],
+              "undefined " ++ show (length (dr_undefs r)) ++
+                  concat [ " {" ++ undefKindName k ++ "}" | k <- dr_undefs r ] ]
     renderFacts fs =
         show (length fs) ++
         concat [ " {" ++ renderSite st s ++ " @ " ++ renderChain st ct c ++ "}"
                | (s, c) <- fs ]
+    renderRepack rp =
+        (case rf_kind rp of
+           RKUnpack -> "unpack "
+           RKChr -> "chr ") ++
+        renderCell (rf_cell rp) ++
+        " from " ++ renderValidity tt (rf_from rp) ++
+        " to " ++ renderTypeWindow tt (rf_to rp) ++
+        " @ " ++ renderChain st ct (rf_context rp)
     defName r = defNameString (dr_ptr r) (dr_hint r)
     renderCell p | p == noCell = "-"
                  | otherwise = case IM.lookup p (mm_defs mm) of
@@ -1185,6 +1621,16 @@ renderCensus modName mm cs cells aliasClasses defs = unlines $
       "  depth: " ++ showDistribution (distribution (map (length . chainOf . snd) withChains)),
       "  count: " ++ showDistribution (distribution [ c | Frame { fr_count = c } <- IM.elems frames ]),
       "  alias classes " ++ show aliasClasses,
+      "  validity: defs with a must-type " ++ show (length withType)
+        ++ " (at a Bit type " ++ show (nTier 57)
+        ++ "; by construction " ++ show (nTier 58) ++ ", by declaration " ++ show (nTier 59)
+        ++ ", by assumption " ++ show (nTier 60) ++ "), type windows "
+        ++ show (IM.size (tt_rows (mm_types mm))),
+      "  repacks " ++ show (length (mm_repacks mm))
+        ++ " (unpack " ++ show (length [ () | r <- mm_repacks mm, rf_kind r == RKUnpack ])
+        ++ ", chr " ++ show (length [ () | r <- mm_repacks mm, rf_kind r == RKChr ])
+        ++ "), on lifted defs " ++ show (sum (map (length . dr_repacks . fst) defs))
+        ++ "; undefined values on lifted defs " ++ show (sum (map (length . dr_undefs . fst) defs)),
       "  cost: frame pushes " ++ show (cs_unfoldings cs + cs_completions cs + rootPushes)
         ++ ", context-table operations " ++ show (ct_ops ct)
         ++ " for " ++ show (contextTableSize ct) ++ " contexts",
@@ -1196,6 +1642,8 @@ renderCensus modName mm cs cells aliasClasses defs = unlines $
     t = mm_sites mm
     ct = mm_contexts mm
     withChains = [ d | d@(_, m) <- defs, not (null (chainOf m)) ]
+    withType = [ d | d@(r, _) <- defs, dr_validity r /= rawValidity ]
+    nTier b = length [ () | (r, _) <- withType, testBit (dr_validity r) b ]
     rootKinds = [SKRule, SKMethodRoot, SKInst]
     rootPushes = sum (IM.elems (cs_roots cs))
     byKind ks m = counts [ (showSiteKind k, IM.findWithDefault 0 (fromEnum k) m) | k <- ks ]
@@ -1277,6 +1725,23 @@ checkNameHints t cells =
                 ++ renderKey key ++ ", name hint " ++ renderHint hint
               | (p, m, hint, key) <- checked, maybe True ((/= key) . hintKey) hint ]
     in  (length bound, length checked, bad)
+
+-- The gate against the facts and the types: a cell with a validity is
+-- a gated cell, and the cell of a lifted def (whose type the rebuild
+-- has in hand) is gated exactly when the def's type admits facts.
+-- Returns the gated cells, the cells with facts, the defs checked and
+-- the mismatches rendered.
+checkBitGate :: SiteTable -> [(Int, CellMeta, Maybe IType)] -> (Int, Int, Int, [String])
+checkBitGate t cells =
+    let gated = length [ () | (_, m, _) <- cells, bitCell m ]
+        withFacts = [ c | c@(_, m, _) <- cells, validityOf m /= rawValidity ]
+        typed = [ c | c@(_, _, Just _) <- cells ]
+        bad = [ "_" ++ show p ++ " (" ++ renderSite t (siteOf m) ++ "): facts outside the gate"
+              | (p, m, _) <- withFacts, not (bitCell m) ] ++
+              [ "_" ++ show p ++ " (" ++ renderSite t (siteOf m) ++ "): gate "
+                ++ show (bitCell m) ++ " for the type " ++ ppString ty
+              | (p, m, Just ty) <- typed, bitCell m /= bitCellType ty ]
+    in  (gated, length withFacts, length typed, bad)
 
 -- The positions kept for method conditions against the chains: a
 -- position recorded on a method call (the selections the call was
