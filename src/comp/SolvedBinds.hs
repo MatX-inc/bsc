@@ -62,7 +62,8 @@ data Shape = ShInst CExpr [Int]  -- an instance's dictionary (TCMisc.byInst:
                                  -- substituted) applied to the dictionaries
                                  -- of its context, by number
            | ShVar !Int          -- another predicate's dictionary
-                                 -- (TCMisc.joinCtxs)
+                                 -- (TCMisc.joinCtxs); never in a
+                                 -- recorded derivation (derivWhole)
            | ShOuter CExpr       -- an expression from outside the walk: a
                                  -- given, a superclass selection from one
                                  -- or an entry of the sat stack (a
@@ -435,14 +436,29 @@ leafTyVars lf = typeTyVars (lfType lf) exprVars
 
 -- Whether a replay may rebuild the block: no recursive binding (a
 -- knot on the sat stack or a self-recursive instance), no incoherent
--- match, nothing opaque.  A replayed subtree is whole: only a whole
--- block is recorded.
+-- match, no binding that joins two residual predicates, nothing
+-- opaque.  A replayed subtree is whole: only a whole block is
+-- recorded.
+-- A join (TCMisc.joinCtxs, inside a walk whose residuals a later
+-- substitution changed) compares the dictionary variables of every
+-- residual of the walk, which evaluates their identifiers at that
+-- moment; a replay of the walk would not, so those spellings would be
+-- interned later than the compiler without the reuse interns them,
+-- and a recursive dictionary group of a later definition that reuses
+-- a spelling would be ordered differently in the .bo (IConv.iConvLet).
+-- Such a walk runs again at every occurrence of its predicate.
 derivWhole :: Deriv -> Bool
 derivWhole DEmpty = True
-derivWhole (DLeaf lf) = not (lfRecursive lf) && not (lfIncoherent lf)
+derivWhole (DLeaf lf) = not (lfRecursive lf) && not (lfIncoherent lf) && not (leafJoins lf)
 derivWhole (DMerge info _ _) = diWhole info
 derivWhole (DReplay _ _) = True
 derivWhole DOpaque = False
+
+-- Whether the binding joins two residual predicates (TCMisc.joinCtxs)
+leafJoins :: Leaf -> Bool
+leafJoins lf = case lfShape lf of
+                 ShVar _ -> True
+                 _ -> False
 
 -- The leaves' types, those under a replay in the numbering of the
 -- enclosing walk (TCMisc.derivationUnchanged)
@@ -512,7 +528,8 @@ leafBind r lf = sb { solvedClass = lfClass lf }
                     ShInst f ds -> let f' = rnExpr r f
                                    in  (ShInst f' (map (rnNum r) ds),
                                         CApply f' (map (CVar . rnDict r) ds))
-                    ShVar m -> (ShVar (rnNum r m), CVar (rnDict r m))
+                    ShVar _ -> internalError ("SolvedBinds.leafBind: joined binding in a recorded derivation: "
+                                              ++ ppReadable n)
                     ShOuter x -> (ShOuter x, x)
                     ShNum -> (ShNum, mkNumInstBody t)
         sb0 = addBindDeps [ (rnDict r d, rnNum r d) | d <- lfDeps lf ]

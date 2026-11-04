@@ -83,3 +83,43 @@ compile_pass DictSharingMutRec.bs {-no-tc-dict-share} 1
 find_n_strings DictSharingMutRec.bs.bsc-out {satisfy:} 0
 bo_generated_names DictSharingMutRec.bo DictSharingMutRec.tcnames.out
 compare_file DictSharingMutRec.tcnames.out
+
+# A walk in which joinCtxs joined two residual predicates is never
+# recorded (SolvedBinds.derivWhole): the join compares the dictionary
+# variables of every residual of the walk, which interns their spellings
+# at that moment, and a replay of the walk would leave them to be
+# interned later, in another order.  The instance context of Count (T d)
+# poses two Pick and two ToU predicates whose first arguments are bound
+# at once by Fix2, so the walk joins the Picks and then the ToUs; Count
+# (T Bool) is posed again inside the walks of the Generic traversal of
+# Wrap, Wrap2 and Wrap3.  The walks the modules' calls replay are
+# walks without a join: in 69 of the 75 replaying satisfy calls only
+# leaf instances, which draw no counter number (a reuse that replayed
+# the joined walks drew numbers in every one of them).  The generated
+# names of the .bo are pinned as DictSharingMutRec's are; the .bo is
+# erased first, since the Verilog compile passes -u
+erase DictSharingJoinCtx.bo
+compile_verilog_pass DictSharingJoinCtx.bs mkJoin {-g mkJoin2 -g sysJoin -trace-tc-dict-share}
+find_n_strings DictSharingJoinCtx.bs.bsc-vcomp-out {satisfy:} 75
+find_n_strings DictSharingJoinCtx.bs.bsc-vcomp-out {, 0 counter numbers drawn by the replays} 69
+bo_generated_names DictSharingJoinCtx.bo DictSharingJoinCtx.tcnames.out
+compare_file DictSharingJoinCtx.tcnames.out
+
+# The same joins before definitions with the recursive dictionary group
+# of DictSharingMutRec: the counter restarts per definition, so the
+# spellings of the residuals joined in the earlier definitions' nested
+# walks name projection binders of the later definitions' groups.  The
+# generated names of the .bo, in the order the .bo stream first writes
+# them, are pinned to the list the compiler without this reuse writes
+# (the .tcnames.out.expected file was written by that compiler); a reuse
+# that replayed the joined walks moved two of them.
+erase DictSharingJoinMut.bo
+compile_verilog_pass DictSharingJoinMut.bs mkMut {-g mkMut2 -g sysMut}
+bo_generated_names DictSharingJoinMut.bo DictSharingJoinMut.tcnames.out
+compare_file DictSharingJoinMut.tcnames.out
+
+# The same list with the reuse switched off
+erase DictSharingJoinMut.bo
+compile_verilog_pass DictSharingJoinMut.bs mkMut {-g mkMut2 -g sysMut -no-tc-dict-share}
+bo_generated_names DictSharingJoinMut.bo DictSharingJoinMut.tcnames.out
+compare_file DictSharingJoinMut.tcnames.out

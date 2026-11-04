@@ -1,0 +1,158 @@
+package DictSharingJoinCtx where
+
+-- Two predicates of a fundep class joined inside a walk that finishes
+-- whole: the instance context of Count (T d) poses Pick a b (UInt 8)
+-- and Pick e c (UInt 8) while a and e are still type variables (both
+-- are determined at once by Fix2 from f, f by Fix1 from d; the
+-- concreteness sort runs the Picks, whose third argument is concrete,
+-- before Fix2), so the walk puts the Picks and the ToUs aside and,
+-- when Fix2 binds a and e, joins the two Picks and then the two ToUs
+-- (joinCtxs compares the dictionary variables of every residual) and
+-- discharges the rest.  Count (T Bool) is posed again inside the walks
+-- of the Generic traversal of Wrap and Wrap2 (a nested occurrence:
+-- equal predicates of one list are joined, only a nested one replays),
+-- in definitions whose bodies draw counter numbers before and after it
+-- and in three synthesized modules.
+
+class Count a where
+  count :: a -> UInt 8
+
+instance Count (UInt 8) where
+  count x = x
+
+instance Count Bool where
+  count b = if b then 1 else 0
+
+instance (Generic a r, Count' r) => Count a where
+  count x = count' (from x)
+
+class Count' r where
+  count' :: r -> UInt 8
+
+instance (Count' r1, Count' r2) => Count' (r1, r2) where
+  count' (x, y) = count' x + count' y
+
+instance (Count' r1, Count' r2) => Count' (Either r1 r2) where
+  count' (Left x) = count' x
+  count' (Right y) = count' y
+
+instance Count' () where
+  count' () = 0
+
+instance (Count' r) => Count' (Meta m r) where
+  count' (Meta x) = count' x
+
+instance (Count a) => Count' (Conc a) where
+  count' (Conc x) = count x
+
+class Fix1 d f | d -> f where
+  fix1 :: d -> f
+
+instance Fix1 Bool (UInt 8) where
+  fix1 b = if b then 1 else 0
+
+instance Fix1 (UInt 8) Bool where
+  fix1 x = x > 0
+
+class Fix2 f a e | f -> a e where
+  fix2a :: f -> a
+  fix2e :: f -> e
+
+instance Fix2 (UInt 8) Bool Bool where
+  fix2a x = x > 1
+  fix2e x = x > 2
+
+instance Fix2 Bool (UInt 8) (UInt 8) where
+  fix2a b = if b then 2 else 3
+  fix2e b = if b then 4 else 5
+
+class Pick a b k | a k -> b where
+  pick :: k -> a -> b
+
+instance Pick Bool (UInt 8) (UInt 8) where
+  pick k b = if b then k else 0
+
+instance Pick (UInt 8) Bool (UInt 8) where
+  pick k x = x > k
+
+class ToU b where
+  toU :: b -> UInt 8
+
+instance ToU (UInt 8) where
+  toU x = x
+
+instance ToU Bool where
+  toU b = if b then 1 else 0
+
+data T d = T d
+
+instance (Pick a b (UInt 8), Pick e c (UInt 8), Fix2 f a e, Fix1 d f, ToU b, ToU c) => Count (T d) where
+  count (T d) = toU (pick (2 :: UInt 8) (fix2a (fix1 d))) + toU (pick (3 :: UInt 8) (fix2e (fix1 d)))
+
+data Wrap = Wrap (T Bool) (T Bool)
+
+data Wrap2 = WN | WC Wrap (T Bool) Wrap2 Wrap2
+
+data Wrap3 = Wrap3 (T (UInt 8)) Wrap (T Bool)
+
+useBoth :: UInt 8
+useBoth = count (T True) + count (Wrap (T True) (T True))
+
+useThree :: UInt 8
+useThree = count (T True) + count (Wrap (T True) (T True)) + count (WC (Wrap (T True) (T True)) (T True) WN WN)
+           + count (T (0 :: UInt 8)) + count (Wrap3 (T 1) (Wrap (T True) (T True)) (T True))
+
+useLate :: UInt 8 -> UInt 8
+useLate x = x + 1 + 2 + 3 * x - 4 + (x >> 1) + (x << 2) + 5 + 6 + 7 + 8 + 9
+            + (x & 10) + (x | 11) + (x ^ 12) + 13 + 14 + 15 + 16 + 17 + 18 + 19
+            + (x * 20) - 21 + 22 + 23 + 24 + 25 + 26 + 27 + 28 + 29 + 30 + 31
+            + count (T True) + count (Wrap (T True) (T True))
+
+useLater :: UInt 8 -> UInt 8 -> UInt 8
+useLater x y = x + 1 + 2 + 3 * x - 4 + (x >> 1) + (x << 2) + 5 + 6 + 7 + 8 + 9
+               + (y & 10) + (y | 11) + (y ^ 12) + 13 + 14 + 15 + 16 + 17 + 18 + 19
+               + (x * 20) - 21 + 22 + 23 + 24 + 25 + 26 + 27 + 28 + 29 + 30 + 31
+               + (y * 32) - 33 + 34 + 35 + 36 + 37 + 38 + 39 + 40 + 41 + 42 + 43
+               + (x * 44) - 45 + 46 + 47 + 48 + 49 + 50 + 51 + 52 + 53 + 54 + 55
+               + count (T (1 :: UInt 8)) + count (Wrap3 (T 1) (Wrap (T True) (T True)) (T True)) + count (T True) + count (Wrap (T True) (T True))
+
+interface Ifc =
+  get :: UInt 8
+  put :: UInt 8 -> Action
+
+mkJoin :: Module Ifc
+mkJoin =
+  module
+    r :: Reg (UInt 8) <- mkReg 0
+    s :: Reg (UInt 8) <- mkReg 1
+    rules
+      "a": when r > 3 ==> r := r + count (T (r > 1)) + count (Wrap (T (s > 2)) (T True)) + useBoth
+      "b": when s > 4 ==> s := useLate s + count (T r) + count (Wrap3 (T s) (Wrap (T (r > 1)) (T True)) (T (s > 2))) + useLater r s
+    interface
+      get = r + s + count (T (r > 1)) + count (WC (Wrap (T (s > 2)) (T True)) (T True) WN WN)
+      put x = r := x + count (T True) + count (Wrap (T (x > 1)) (T True))
+
+mkJoin2 :: Module Ifc
+mkJoin2 =
+  module
+    r :: Reg (UInt 8) <- mkReg 0
+    s :: Reg (UInt 8) <- mkReg 1
+    rules
+      "a": when r > 3 ==> r := useLater r s + count (T r) + count (Wrap3 (T r) (Wrap (T True) (T (s > 2))) (T True)) + useThree
+      "b": when s > 4 ==> s := useLate s + count (T (s > 1)) + count (WC (Wrap (T (s > 2)) (T True)) (T (r > 1)) (WC (Wrap (T True) (T True)) (T True) WN WN) WN)
+    interface
+      get = r + s + count (Wrap (T (r > 1)) (T True)) + count (T (s > 1))
+      put x = r := x + count (Wrap (T (x > 1)) (T True)) + count (T True)
+
+sysJoin :: Module Empty
+sysJoin =
+  module
+    n1 :: Ifc <- mkJoin
+    n2 :: Ifc <- mkJoin2
+    rules
+      when True ==> do
+        $display "get: " n1.get n2.get
+        $finish
+      when True ==> do
+        n1.put 3
+        n2.put 4

@@ -498,12 +498,15 @@ sat dvs ps p =
        -- ids and type variables the walk would draw now, and the counter
        -- advanced by what the walk drew; the typechecked program and
        -- every generated name after it are what the walk would have
-       -- produced.  Only a full, coherent, non-recursive reduction is
-       -- recorded (recordWalk, which reads the walk's derivation and
-       -- nothing of the block, so that no identifier of the block is
-       -- evaluated before its consumer evaluates it): a knot tied on
-       -- the sat stack or an incoherent match is evidence that belongs
-       -- where it was found.
+       -- produced.  Only a full, coherent, non-recursive reduction
+       -- without a join of its residuals is recorded (recordWalk,
+       -- which reads the walk's derivation and nothing of the block,
+       -- so that no identifier of the block is evaluated before its
+       -- consumer evaluates it): a knot tied on the sat stack or an
+       -- incoherent match is evidence that belongs where it was found,
+       -- and a join (joinCtxs) evaluates the identifiers of the walk's
+       -- residuals, which a replay would leave for later
+       -- (SolvedBinds.derivWhole).
        -- Numeric classes stay out: their reduction consults dvs and the
        -- solver, not the instance walk alone.  A given keeps its
        -- precedence over the walk, and a recorded walk is replayed only
@@ -687,9 +690,10 @@ derivationUnchanged bound_tyvars stack givens deriv = do
 -- variable in one application, as the loop's apSub at the end of the
 -- call would) and the span measured for it, with the walk's type
 -- variables left in the block or in that substitution's range, for the
--- renumbering of a replay.  Not recorded: a block with a recursive or
--- an incoherent binding, or one another operation changed (derivWhole:
--- a replay could not rebuild it), a walk across a number newTVar would
+-- renumbering of a replay.  Not recorded: a block with a recursive,
+-- an incoherent or a joining binding, or one another operation changed
+-- (derivWhole: a replay could not rebuild it, or would evaluate the
+-- walk's identifiers at other moments), a walk across a number newTVar would
 -- pass over (drawsClear: its consumption would depend on the counter's
 -- value), or whose substitution binds a variable it did not draw (a
 -- side effect on the context a replay would not repeat).  Nothing here
