@@ -429,7 +429,7 @@ fsOr xs fs
     | otherwise =
         let out0 = S.fromList (concat [ case fsNode fs x of { NOr ys -> ys; _ -> [x] } | x <- xs, x /= fsF ])
             conj x = case fsNode fs x of { NAnd ys -> S.fromList ys; _ -> S.singleton x }
-            -- absorption, as schedlean's orAll: x || (c && x) is x
+            -- absorption, as schedcheck's orAll: x || (c && x) is x
             out | S.size out0 > 1 && S.size out0 <= 64 =
                     let cs = M.fromList [ (x, conj x) | x <- S.toList out0 ]
                     in S.filter (\x -> not (any (\y -> y /= x && (cs M.! y) `S.isProperSubsetOf` (cs M.! x)) (S.toList out0))) out0

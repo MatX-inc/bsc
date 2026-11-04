@@ -139,7 +139,7 @@ data Bucket = Bucket { bkUses :: !(Sq.Seq (Int, Int, Port, AExpr)), bkSteps :: !
                      , bkLast :: (Int, Int, Port, AExpr) }
 
 emptyBucket :: Bucket
-emptyBucket = Bucket Sq.empty 0 (error "schedlean: an empty bucket")
+emptyBucket = Bucket Sq.empty 0 (error "schedcheck: an empty bucket")
 
 addUse :: Bucket -> (Int, Int, Port, AExpr) -> Bucket
 addUse bk u@(a, _, _, _) =
@@ -173,7 +173,7 @@ confirmDisjointnessMore :: ErrorHandle -> Flags -> APackage -> Design -> [Candid
                         -> IO ([DisjointFact], [DisjointFact] -> IO [DisjointFact], Solver)
 confirmDisjointnessMore errh flags apkg d candidates = do
     let rules = [ (ruleName r, rulePred r, ruleAncestor r) | r <- scheduledRules apkg ]
-    live <- newLive (initDisjointTestState "schedlean" errh flags (M.elems (dSeqDefs d) ++ chainDefs) (apkg_state_instances apkg) rules)
+    live <- newLive (initDisjointTestState "schedcheck" errh flags (M.elems (dSeqDefs d) ++ chainDefs) (apkg_state_instances apkg) rules)
     kept <- liveRun live (\st0 -> do { (st1, ks) <- foldM check (st0, []) candidates; return (ks, st1) })
     let more fs = liveRun live $ \st -> do
             (st', ks) <- foldM (\(s, ks) f -> do { (ok, s') <- ask s f; return (s', if ok then f : ks else ks) }) (st, []) fs

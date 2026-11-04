@@ -74,7 +74,7 @@ stops act = do
     r <- try act
     case r of
         Left e | Just a <- fromException e -> throwIO (a :: SomeAsyncException)
-               | otherwise -> return (Left (dropPrefix "schedlean: " (maybe (displayException e) (\(ErrorCall m) -> m) (fromException e))))
+               | otherwise -> return (Left (dropPrefix "schedcheck: " (maybe (displayException e) (\(ErrorCall m) -> m) (fromException e))))
         Right x -> return x
   where dropPrefix pre s = if take (length pre) s == pre then drop (length pre) s else s
 
@@ -178,7 +178,7 @@ emitFile ec bnd out = Emitted files (notes ++ partsMsg ++ [segMsg, wroteMsg] ++ 
         (e, '.' : r) | '/' `notElem` e -> reverse r
         _ -> p
     hdr = let h = intercalate "\n" (take (hdrEnd + 1) ls)
-              ix = fromMaybe (error "schedlean: the header has no noncomputable section") (findIx "\nnoncomputable section\n" h)
+              ix = fromMaybe (error "schedcheck: the header has no noncomputable section") (findIx "\nnoncomputable section\n" h)
           in take (ix + length "\nnoncomputable section\n") h
     np = length parts
     body pi (a, b)
@@ -241,7 +241,7 @@ subFacts fp = go ' '
         | not (isW prev), Just (src, rest) <- pfx s, (nm, rest') <- factName rest, not (null nm), endOk rest'
         = case M.lookup (src, nm) fp of
             Just g -> src ++ "." ++ g ++ "." ++ nm ++ go (lastC nm) rest'
-            Nothing -> error ("schedlean: KeyError: " ++ nm)
+            Nothing -> error ("schedcheck: KeyError: " ++ nm)
         | otherwise = c : go c r
     pfx s = case s of
         ('h' : 'y' : '.' : r) -> Just ("hy", r)

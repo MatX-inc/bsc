@@ -107,7 +107,7 @@ analyseSites sv d ap asi = do
                      [ SSite r l (ptInst p) (ptMeth p) (ptCopy p) k (mIx p)
                      | (k, (r, l, p)) <- zip [0 ..] ss ] st
         kidIx = M.map (\c -> M.fromDistinctAscList (zip (M.keys (chMethods c)) [0 ..])) kids
-        mIx p = M.findWithDefault (error ("schedlean: a site on " ++ portLabel p ++ ", which its child does not list")) (ptMeth p) (kidIx M.! ptInst p)
+        mIx p = M.findWithDefault (error ("schedcheck: a site on " ++ portLabel p ++ ", which its child does not list")) (ptMeth p) (kidIx M.! ptInst p)
         -- the child's relation by method number, the last statement naming a pair winning (annOf);
         -- bsc's default C for unlisted pairs, two copies of one method CF
         relOf = M.map (\c -> let ms = chMethods c; nm = M.size ms

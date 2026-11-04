@@ -1,0 +1,405 @@
+# schedcheck: the gate, the modular file, its Lean check and mutants, and the extraction views on small designs.
+# SCHEDCHECK names the tool (default: schedcheck beside bsc); the tests are skipped without it.
+
+proc which_schedcheck {} {
+    global env
+    if { [info exists env(SCHEDCHECK)] && [file exists $env(SCHEDCHECK)] } then {
+        return [absolute $env(SCHEDCHECK)]
+    }
+    set s [file join [file dirname [which_bsc]] schedcheck]
+    if { [file exists $s] } then { return $s }
+    return ""
+}
+
+# run schedcheck ARGS in the test directory, its output to OUT; pass if it exits with STATUS
+proc schedcheck_run { args out {status 0} } {
+    global srcdir subdir schedcheck
+    incr_stat "schedcheck"
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+    set cmd "$schedcheck $args >& $out"
+    verbose "Executing: $cmd" 4
+    set rc [catch "exec sh -c \"$cmd\"" result]
+    set got [expr { $rc == 0 ? 0 : [lindex $::errorCode 2] }]
+    if { $got == $status } then {
+        pass "schedcheck $args exits with $status"
+    } else {
+        fail "schedcheck $args exits with $got, not $status"
+    }
+    cd $here
+}
+
+set schedcheck [which_schedcheck]
+if { $schedcheck == "" } then {
+    unsupported "schedcheck not found (set SCHEDCHECK)"
+    return
+}
+
+# designs written for schedcheck (Classic): an inverted CF-swap fact, a run-time check joining two rules, a method's
+# task call (bsc G0020), a method writing its argument plus a read, a FIFO read under a non-literal condition (noagg)
+foreach {src mod opts} {InvFact.bs mkInvFact "" InvFact2.bs mkInvFact2 "" MeJoin.bs sysMeJoin "" MethTask.bs mkMethTask ""
+                        MethArg.bs mkMethArg "" RdyRead.bs mkRdyRead "-no-aggressive-conditions"} {
+    compile_verilog_pass $src $mod [string trim "-elab $opts"]
+    schedcheck_run "--gate $mod.ba" $mod.gate.out
+    compare_file $mod.gate.out
+}
+
+# the CF-swap facts asked pair by pair equal those of every swapped order
+foreach mod {mkInvFact mkInvFact2} {
+    schedcheck_run "--show-model=inverted-check $mod.ba" $mod.inverted.out
+    compare_file $mod.inverted.out
+}
+
+# the modular file, and a check line with two rules on its first side (one check per rule of that side)
+schedcheck_run "-o MethTask.lean mkMethTask.ba" mkMethTask.emit.out
+compare_file mkMethTask.emit.out
+compare_file MethTask.lean
+schedcheck_run "-o SysMeJoin.lean sysMeJoin.ba" sysMeJoin.emit.out
+compare_file sysMeJoin.emit.out
+compare_file SysMeJoin.lean
+
+# a method's argument is one term where an ev_ lemma is applied to it; the read the emitter cannot state yet
+# is a clean stop
+schedcheck_run "-o MethArg.lean mkMethArg.ba" mkMethArg.emit.out
+compare_file mkMethArg.emit.out
+compare_file MethArg.lean
+schedcheck_run "-o RdyRead.lean mkRdyRead.ba" mkRdyRead.emit.out 1
+compare_file mkRdyRead.emit.out
+
+# one clock domain (Lean.Sched.Domain): a gated input clock of the default clock's family, two resets with
+# async-reset registers, a gate a child drives (a clean stop), and two clock domains (not checked: multi-domain)
+foreach {src mod} {GatedFamily.bs mkGatedFamily TwoResets.bs mkTwoResets GatedChild.bs sysGatedChild
+                   TwoDomains.bs mkTwoDomains} {
+    compile_verilog_pass $src $mod "-elab"
+    schedcheck_run "--gate $mod.ba" $mod.gate.out
+    compare_file $mod.gate.out
+}
+schedcheck_run "-o GatedFamily.lean mkGatedFamily.ba" mkGatedFamily.emit.out
+compare_file mkGatedFamily.emit.out
+compare_file GatedFamily.lean
+schedcheck_run "-o TwoResets.lean mkTwoResets.ba" mkTwoResets.emit.out
+compare_file mkTwoResets.emit.out
+compare_file TwoResets.lean
+schedcheck_run "-o GatedChild.lean sysGatedChild.ba" sysGatedChild.emit.out 1
+compare_file sysGatedChild.emit.out
+schedcheck_run "-o TwoDomains.lean mkTwoDomains.ba" mkTwoDomains.emit.out 1
+compare_file mkTwoDomains.emit.out
+
+# a gate bsc folds into a rule's firing under an if: the gate check asks bsc's solver, whose one live
+# state the bsc-facts phase and the skeleton solver share (no Yices state used after a reset)
+compile_verilog_pass GatedMix.bs sysGatedMix "-elab"
+compile_verilog_pass GatedMix.bs mkGatedMixMove "-elab"
+foreach mod {sysGatedMix mkGatedMixMove} {
+    schedcheck_run "--gate $mod.ba" $mod.gate.out
+    compare_file $mod.gate.out
+}
+
+# a RegFile in a module with a method (its acyc case unfolds RFM.isS), and conflict_free over three
+# rules with a read/write pair (the check line reads the scheduler's use condition)
+foreach {src mod} {RegFileMeth.bs mkRegFileMeth ConflictFree3.bs sysConflictFree3} {
+    compile_verilog_pass $src $mod "-elab"
+    schedcheck_run "--gate $mod.ba" $mod.gate.out
+    compare_file $mod.gate.out
+}
+schedcheck_run "-o ConflictFree3.lean sysConflictFree3.ba" sysConflictFree3.emit.out
+compare_file sysConflictFree3.emit.out
+
+# a bsc gated-clock bug (GateBug.bs, being filed): the escape stays unconfirmed, so the gate says flat and
+# the file is path B; a method driving an RWire's path input (obligation only: no Acyc/top); two ungated
+# clocks of one family (the domain line; the file names clock_family as a trust point); an always_ready
+# method on a gated clock (-unsafe-always-ready: enabled with its gate off, flat)
+foreach {src mod opts} {GateBug.bs sysGateBug "" OblOnly.bs sysOblOnly "" Fam.bs sysFam "" Uar.bs sysUar "-unsafe-always-ready"} {
+    compile_verilog_pass $src $mod [string trim "-elab $opts"]
+    schedcheck_run "--gate $mod.ba" $mod.gate.out
+    compare_file $mod.gate.out
+}
+foreach {mod file} {sysGateBug GateBug sysOblOnly OblOnly sysFam Fam} {
+    schedcheck_run "-o $file.lean $mod.ba" $mod.emit.out
+    compare_file $mod.emit.out
+}
+compare_file Fam.lean
+
+# a step above the fan-in bound (256): the gate names it, the emitter stops
+compile_verilog_pass FanIn.bs sysFanIn "-elab"
+schedcheck_run "--gate sysFanIn.ba" sysFanIn.gate.out
+compare_file sysFanIn.gate.out
+schedcheck_run "-o FanIn.lean sysFanIn.ba" sysFanIn.emit.out 1
+compare_file sysFanIn.emit.out
+
+# synthesized children (design.md section 3.1): one file per module, children first; mkCounter instanced
+# twice (a value and an action method, value SB incr) and mkPair (copy SB put, two action methods); two
+# levels (sysHier2: mkMid instances mkLeaf, as sysHier2 does); a child off path A (sysHier3 reads
+# mkGuarded's ready ports: an assumed leaf); a read of a child's value method with arguments stops
+foreach {src mod} {Hier1.bs sysHier1 Hier2.bs sysHier2 Hier3.bs sysHier3 Hier3.bs sysHierArg} {
+    compile_verilog_pass $src $mod "-elab"
+    schedcheck_run "--gate $mod.ba" $mod.gate.out
+    compare_file $mod.gate.out
+}
+schedcheck_run "-o SysHier1.lean sysHier1.ba" sysHier1.emit.out
+compare_file sysHier1.emit.out
+compare_file MkPair.lean
+compare_file SysHier1.lean
+schedcheck_run "-o SysHier2.lean sysHier2.ba" sysHier2.emit.out
+compare_file sysHier2.emit.out
+compare_file SysHier2.lean
+schedcheck_run "-o SysHier3.lean sysHier3.ba" sysHier3.emit.out
+compare_file sysHier3.emit.out
+compare_file SysHier3.lean
+schedcheck_run "-o SysHierArg.lean sysHierArg.ba" sysHierArg.emit.out 1
+compare_file sysHierArg.emit.out
+
+# a child on path A holding an assumed SizedFIFO: the parent's Leaves docstring and the hierarchy row
+# name what the child's file assumes
+compile_verilog_pass HierSf.bs sysHierSf "-elab"
+schedcheck_run "--gate sysHierSf.ba" sysHierSf.gate.out
+compare_file sysHierSf.gate.out
+schedcheck_run "-o SysHierSf.lean sysHierSf.ba" sysHierSf.emit.out
+compare_file sysHierSf.emit.out
+compare_file SysHierSf.lean
+
+# a child's always_enabled method runs in every cycle, not on its parent's enable: no export, and the
+# parent stops, its gate row naming the child (verdict not A)
+compile_verilog_pass AlwaysEn.bs sysAE "-elab"
+schedcheck_run "--gate sysAE.ba" sysAE.gate.out
+compare_file sysAE.gate.out
+schedcheck_run "-o SysAE.lean sysAE.ba" sysAE.emit.out 1
+compare_file sysAE.emit.out
+
+# conflict_free checks in the file (design.md section 5): two rules enqueueing one FIFO and two rules
+# updating a register vector by an index, each pair joined conflict_free, and a mutually_exclusive line
+# with two rules on its first side
+compile_verilog_pass ConflictFree.bs sysConflictFree "-elab"
+schedcheck_run "--gate sysConflictFree.ba" sysConflictFree.gate.out
+compare_file sysConflictFree.gate.out
+schedcheck_run "-o ConflictFree.lean sysConflictFree.ba" sysConflictFree.emit.out
+compare_file sysConflictFree.emit.out
+compare_file ConflictFree.lean
+
+# linear cost (plan section 5.1): a step of n/4 sites in each of four rules; the emission phases'
+# CPU time at four times the size at most 2.5 squared times as much, and every phase at a 512k stack
+proc schedcheck_cpu { log } {
+    set f [open $log r]
+    set cpu ""
+    while { [gets $f line] >= 0 } {
+        if { [regexp {^schedcheck: total emission wall [0-9.]+ cpu ([0-9.]+)} $line _ c] } then { set cpu $c }
+    }
+    close $f
+    return $cpu
+}
+foreach n {512 2048} {
+    compile_verilog_pass Grow$n.bs sysGrow$n "-elab"
+    schedcheck_run "--gate --time-phases sysGrow$n.ba +RTS -K512k -RTS" sysGrow$n.gate.log
+}
+schedcheck_run "--show-model sysGrow2048.ba +RTS -K512k -RTS" sysGrow2048.show.log
+set here [absolute $srcdir]
+set c1 [schedcheck_cpu [file join $here $subdir sysGrow512.gate.log]]
+set c4 [schedcheck_cpu [file join $here $subdir sysGrow2048.gate.log]]
+if { $c1 == "" || $c4 == "" } then {
+    fail "schedcheck --time-phases gave no emission total"
+} elseif { $c4 <= 6.25 * $c1 + 0.05 } then {
+    pass "schedcheck emission grows linearly ($c1 s at 512, $c4 s at 2048)"
+} else {
+    fail "schedcheck emission grows faster than linear ($c1 s at 512, $c4 s at 2048)"
+}
+
+# one synthesized child of n methods, its schedule relating n^2 method pairs: the parent's model, facts
+# and emitter dry run, with the child on path A and as an assumed leaf (its .ba absent, in alone/), each
+# phase's CPU time at four times the methods at most 1.5 x 16 times as much
+proc schedcheck_phase_cpu { log ph } {
+    set f [open $log r]
+    set cpu ""
+    while { [gets $f line] >= 0 } {
+        if { [regexp "^schedcheck: phase $ph wall \[0-9.\]+ cpu (\[0-9.\]+)" $line _ c] } then { set cpu $c }
+    }
+    close $f
+    return $cpu
+}
+file mkdir [file join $here $subdir alone]
+foreach n {64 256} {
+    compile_verilog_pass Wide$n.bs sysWide$n "-elab"
+    schedcheck_run "--gate --time-phases sysWide$n.ba +RTS -K512k -RTS" sysWide$n.gate.log
+    file copy -force [file join $here $subdir sysWide$n.ba] [file join $here $subdir alone sysWide$n.ba]
+    schedcheck_run "--gate --time-phases alone/sysWide$n.ba +RTS -K512k -RTS" sysWide$n.alone.log
+}
+foreach {how ph} {gate model gate facts gate emit-dry alone model alone facts alone emit-dry} {
+    set w1 [schedcheck_phase_cpu [file join $here $subdir sysWide64.$how.log] $ph]
+    set w4 [schedcheck_phase_cpu [file join $here $subdir sysWide256.$how.log] $ph]
+    if { $w1 == "" || $w4 == "" } then {
+        fail "schedcheck --time-phases gave no $ph phase ($how)"
+    } elseif { $w4 <= 24 * $w1 + 0.05 } then {
+        pass "schedcheck $ph phase grows with the child's method pairs ($how: $w1 s at 64, $w4 s at 256)"
+    } else {
+        fail "schedcheck $ph phase grows faster than the child's method pairs ($how: $w1 s at 64, $w4 s at 256)"
+    }
+}
+
+# a chain of synthesized modules, each read in full only at its turn: the run's CPU time at four times
+# the modules (32 and 128, where retention once showed) at most 1.5 x 4 times as much
+proc schedcheck_total_cpu { log } {
+    set f [open $log r]
+    set cpu 0
+    while { [gets $f line] >= 0 } {
+        if { [regexp {^schedcheck: total [a-z]+ wall [0-9.]+ cpu ([0-9.]+)} $line _ c] } then { set cpu [expr $cpu + $c] }
+    }
+    close $f
+    return $cpu
+}
+foreach n {32 128} {
+    compile_verilog_pass Chain$n.bs sysChain$n "-elab"
+    schedcheck_run "--time-phases -o SysChain$n.lean sysChain$n.ba +RTS -K512k -RTS" sysChain$n.emit.log
+}
+set h1 [format %.3f [schedcheck_total_cpu [file join $here $subdir sysChain32.emit.log]]]
+set h4 [format %.3f [schedcheck_total_cpu [file join $here $subdir sysChain128.emit.log]]]
+if { $h4 <= 6 * $h1 + 0.05 } then {
+    pass "schedcheck grows linearly with the modules of a hierarchy ($h1 s at 32, $h4 s at 128)"
+} else {
+    fail "schedcheck grows faster than the modules of a hierarchy ($h1 s at 32, $h4 s at 128)"
+}
+
+# Lean that cannot run: the file is written, the run exits 7 (no Lean needed), with --mutants too
+schedcheck_run "--check --lean /nonexistent -o MethTask.lean mkMethTask.ba" mkMethTask.nolean.out 7
+compare_file mkMethTask.nolean.out
+schedcheck_run "--mutants 2 --lean /nonexistent -o MethTask.lean mkMethTask.ba" mkMethTask.nolean-mutants.out 7
+compare_file mkMethTask.nolean-mutants.out
+
+# a stand-in for Lean (FakeLean.sh, each file's log recorded in <stem>.fakelog) and a library of empty .olean
+# files: an axiom outside the standard three on a continuation line of a list Lean wraps (exit 6), the
+# standard three wrapped (proved), a list the log ends inside (exit 6), a run past its time limit (exit 5),
+# and mutants failing in a definition, not a theorem (exit 9)
+file attributes [file join $here $subdir FakeLean.sh] -permissions 0755
+file mkdir [file join $here $subdir fakelib]
+foreach m {Modular EmitLemmas Scan LastCaller SiteCond} { close [open [file join $here $subdir fakelib $m.olean] w] }
+set fake "--lean ./FakeLean.sh --lean-lib fakelib"
+foreach {stem status} {AxWrap 6 AxStd 0 AxOpen 6} {
+    schedcheck_run "--check $fake -o $stem.lean mkMethTask.ba" $stem.fake.out $status
+    compare_file $stem.fake.out
+}
+schedcheck_run "--check --lean-timeout 0 $fake -o Slow.lean mkMethTask.ba" Slow.fake.out 5
+compare_file Slow.fake.out
+schedcheck_run "--mutants 2 $fake -o DefErr.lean mkMethTask.ba" DefErr.fake.out 9
+compare_file DefErr.fake.out
+
+# Lean (LEAN, else PATH; skipped without it): --check proves the file (also the gated-clock and two-reset
+# ones, and the hierarchies' files), --mutants kills every hardware mutant (MethTask's mutant 3 is the old
+# MethTaskBadEn; sysMutants has a target for every kind)
+proc which_lean {} {
+    global env
+    if { [info exists env(LEAN)] && $env(LEAN) != "" } then {
+        if { [file executable $env(LEAN)] } then { return [absolute $env(LEAN)] }
+        return ""
+    }
+    set l [auto_execok lean]
+    if { $l == "" } then { return "" }
+    return [lindex $l 0]
+}
+set lean [which_lean]
+# the Lean wall time of one file (by its name) in a --check --time-phases run
+proc schedcheck_file_wall { log name } {
+    set f [open $log r]
+    set t ""
+    while { [gets $f line] >= 0 } {
+        if { [regexp {^schedcheck: lean (\S+) wall ([0-9.]+)} $line _ n c] && [file tail $n] == $name } then { set t $c }
+    }
+    close $f
+    return $t
+}
+# the Lean wall time of a --check --time-phases run's files
+proc schedcheck_lean_wall { log } {
+    set f [open $log r]
+    set t ""
+    while { [gets $f line] >= 0 } {
+        if { [regexp {^schedcheck: lean \S+ wall ([0-9.]+)} $line _ c] } then { set t [expr { $t == "" ? $c : $t + $c }] }
+    }
+    close $f
+    return $t
+}
+# the compiled Lean library: SCHEDCHECK_CACHE when set, else a cache in this directory (not ~/.cache)
+if { ![info exists env(SCHEDCHECK_CACHE)] || $env(SCHEDCHECK_CACHE) == "" } then {
+    set env(SCHEDCHECK_CACHE) [file join $here $subdir schedcheck-cache]
+}
+if { $lean == "" } then {
+    unsupported "schedcheck --check and --mutants: Lean not found (set LEAN)"
+} else {
+    schedcheck_run "--check --lean $lean -o MethTask.lean mkMethTask.ba" mkMethTask.check.out
+    compare_file mkMethTask.check.out
+    schedcheck_run "--check --lean $lean -o MethArg.lean mkMethArg.ba" mkMethArg.check.out
+    compare_file mkMethArg.check.out
+    schedcheck_run "--check --lean $lean -o GatedFamily.lean mkGatedFamily.ba" mkGatedFamily.check.out
+    compare_file mkGatedFamily.check.out
+    schedcheck_run "--check --lean $lean -o TwoResets.lean mkTwoResets.ba" mkTwoResets.check.out
+    compare_file mkTwoResets.check.out
+    schedcheck_run "--mutants 6 --lean $lean -o MethTask.lean mkMethTask.ba" mkMethTask.mutants.out
+    compare_file mkMethTask.mutants.out
+    compile_verilog_pass Mutants.bs sysMutants "-elab"
+    schedcheck_run "--mutants 8 --lean $lean -o Mutants.lean sysMutants.ba" sysMutants.mutants.out
+    compare_file sysMutants.mutants.out
+    # the hierarchies: each child's file, then its parents'; mutants of each module (each checked against
+    # the real children) must fail
+    schedcheck_run "--check --lean $lean -o SysHier1.lean sysHier1.ba" sysHier1.check.out
+    compare_file sysHier1.check.out
+    schedcheck_run "--check --lean $lean -o SysHier3.lean sysHier3.ba" sysHier3.check.out
+    compare_file sysHier3.check.out
+    schedcheck_run "--mutants 2 --lean $lean -o SysHier2.lean sysHier2.ba" sysHier2.mutants.out
+    compare_file sysHier2.mutants.out
+    # user assertions: the joined mutually_exclusive line, and conflict_free checks with mutants (among them
+    # a call condition left out of an enable where a conflict_free check names both callers)
+    schedcheck_run "--check --lean $lean -o SysMeJoin.lean sysMeJoin.ba" sysMeJoin.check.out
+    compare_file sysMeJoin.check.out
+    schedcheck_run "--mutants 8 --lean $lean -o ConflictFree.lean sysConflictFree.ba" sysConflictFree.mutants.out
+    compare_file sysConflictFree.mutants.out
+    # the gate folded under an if, a RegFile with a method, conflict_free over three rules, a path-A
+    # child holding an assumed leaf
+    schedcheck_run "--check --lean $lean -o GatedMix.lean sysGatedMix.ba" sysGatedMix.check.out
+    compare_file sysGatedMix.check.out
+    schedcheck_run "--check --lean $lean -o RegFileMeth.lean mkRegFileMeth.ba" mkRegFileMeth.check.out
+    compare_file mkRegFileMeth.check.out
+    schedcheck_run "--check --lean $lean -o ConflictFree3.lean sysConflictFree3.ba" sysConflictFree3.check.out
+    compare_file sysConflictFree3.check.out
+    schedcheck_run "--check --lean $lean -o SysHierSf.lean sysHierSf.ba" sysHierSf.check.out
+    compare_file sysHierSf.check.out
+    # path B and obligation only: the gate-bug design's file proves, but its top takes an unconfirmed fact
+    # (exit 10, its mutants weak evidence); a method driving a path input gives obl alone (exit 11); two
+    # clocks of one family prove; a Lean run past its time limit is killed (exit 5)
+    schedcheck_run "--check --lean $lean -o GateBug.lean sysGateBug.ba" sysGateBug.check.out 10
+    compare_file sysGateBug.check.out
+    schedcheck_run "--mutants 2 --lean $lean -o GateBug.lean sysGateBug.ba" sysGateBug.mutants.out 10
+    compare_file sysGateBug.mutants.out
+    schedcheck_run "--check --lean $lean -o OblOnly.lean sysOblOnly.ba" sysOblOnly.check.out 11
+    compare_file sysOblOnly.check.out
+    schedcheck_run "--check --lean $lean -o Fam.lean sysFam.ba" sysFam.check.out
+    compare_file sysFam.check.out
+    schedcheck_run "--check --lean-timeout 0 --lean $lean -o MethTask.lean mkMethTask.ba" mkMethTask.timeout.out 5
+    compare_file mkMethTask.timeout.out
+    # a wide child as an assumed leaf (its .ba absent): the parent's Lean time at twice the methods at most
+    # 2.5 times as much (the kind table checked by rows, the ports' facts a balanced tree)
+    compile_verilog_pass Wide32.bs sysWide32 "-elab"
+    file copy -force [file join $here $subdir sysWide32.ba] [file join $here $subdir alone sysWide32.ba]
+    foreach n {32 64} {
+        schedcheck_run "--check --time-phases --lean $lean -o alone/W$n.lean alone/sysWide$n.ba" sysWide$n.lean.log
+    }
+    set l1 [schedcheck_lean_wall [file join $here $subdir sysWide32.lean.log]]
+    set l2 [schedcheck_lean_wall [file join $here $subdir sysWide64.lean.log]]
+    if { $l1 == "" || $l2 == "" } then {
+        fail "schedcheck --check --time-phases gave no Lean time for the wide parent"
+    } elseif { $l2 <= 2.5 * $l1 } then {
+        pass "the wide parent's Lean time grows linearly with the child's methods ($l1 s at 32, $l2 s at 64)"
+    } else {
+        fail "the wide parent's Lean time grows faster than the child's methods ($l1 s at 32, $l2 s at 64)"
+    }
+    # a synthesized child's own file (MkWideKid64 and MkWideKid128: 128 and 256 methods, each under a one-rule
+    # parent): its Lean time at twice the methods at most 3 times as much (its method tables checked by rows;
+    # before, 4 times as much here and 6 at 512 methods)
+    compile_verilog_pass WideOne.bs sysWideOne64 "-elab"
+    foreach n {64 128} {
+        schedcheck_run "--check --time-phases --lean $lean -o WO$n.lean sysWideOne$n.ba" sysWideOne$n.lean.log
+    }
+    set k1 [schedcheck_file_wall [file join $here $subdir sysWideOne64.lean.log] MkWideKid64.lean]
+    set k2 [schedcheck_file_wall [file join $here $subdir sysWideOne128.lean.log] MkWideKid128.lean]
+    if { $k1 == "" || $k2 == "" } then {
+        fail "schedcheck --check --time-phases gave no Lean time for the wide child's own file"
+    } elseif { $k2 <= 3 * $k1 } then {
+        pass "the wide child's own Lean time grows with its .ba ($k1 s at 128 methods, $k2 s at 256)"
+    } else {
+        fail "the wide child's own Lean time grows faster than its .ba ($k1 s at 128 methods, $k2 s at 256)"
+    }
+}

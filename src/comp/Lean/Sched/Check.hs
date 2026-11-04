@@ -1,4 +1,4 @@
--- | --check and --mutants: the files schedlean writes, in Lean (each module's parts in build order,
+-- | --check and --mutants: the files schedcheck writes, in Lean (each module's parts in build order,
 -- children before parents), and each hardware mutant's file, which must fail.
 module Lean.Sched.Check
     ( CheckOpts(..), writeEmitted, setupLean, checkFiles, reportCheck, pathBCode, oblOnlyCode
@@ -22,7 +22,7 @@ import Lean.Sched.Time (Timer, phase)
 
 data CheckOpts = CheckOpts { coLean :: Maybe FilePath, coLib :: Maybe FilePath, coTimeout :: Int, coTime :: Bool, coKeep :: Bool }
 
--- | The Lean library a modular file imports, in build order (src/comp/Makefile's SCHEDLEANLIB reads this line).
+-- | The Lean library a modular file imports, in build order (src/comp/Makefile's SCHEDCHECKLIB reads this line).
 libModules :: [String]
 libModules = ["Modular", "EmitLemmas", "Scan", "LastCaller", "SiteCond"]
 
@@ -71,30 +71,30 @@ setupLean co needLib = do
                         cache <- cacheDir
                         fmap (\lib -> c { lcPath = [lib] }) <$> prepareLibrary c dir libModules cache
 
--- | The library: --lean-lib, else the installation's (@$BLUESPECDIR/schedlean@), else the checkout's.
+-- | The library: --lean-lib, else the installation's (@$BLUESPECDIR/schedcheck@), else the checkout's.
 libDir :: Maybe FilePath -> IO (Either String FilePath)
 libDir (Just d) = return (Right d)
 libDir Nothing = do
     env <- getEnvironment
     exe <- getExecutablePath
-    let cands = [ bd </> "schedlean" | Just bd <- [lookup "BLUESPECDIR" env] ]
-                ++ [ takeDirectory exe </> ".." </> ".." </> "util" </> "schedlean" </> "theory" </> "modular" ]
+    let cands = [ bd </> "schedcheck" | Just bd <- [lookup "BLUESPECDIR" env] ]
+                ++ [ takeDirectory exe </> ".." </> ".." </> "util" </> "schedcheck" </> "theory" </> "modular" ]
     found <- filterM' (\d -> doesFileExist (d </> "Modular.lean")) cands
     return $ case found of
         (d : _) -> Right d
         [] -> Left ("the Lean library (Modular.lean) is in none of " ++ intercalate ", " cands ++ "; give --lean-lib DIR")
   where filterM' p xs = fmap concat (forM xs (\x -> p x >>= \b -> return [ x | b ]))
 
--- | Where compiled libraries are kept: $SCHEDLEAN_CACHE, else $XDG_CACHE_HOME/schedlean, else
--- ~/.cache/schedlean.
+-- | Where compiled libraries are kept: $SCHEDCHECK_CACHE, else $XDG_CACHE_HOME/schedcheck, else
+-- ~/.cache/schedcheck.
 cacheDir :: IO FilePath
 cacheDir = do
     env <- getEnvironment
-    return $ case (lookup "SCHEDLEAN_CACHE" env, lookup "XDG_CACHE_HOME" env, lookup "HOME" env) of
+    return $ case (lookup "SCHEDCHECK_CACHE" env, lookup "XDG_CACHE_HOME" env, lookup "HOME" env) of
         (Just d, _, _) | not (null d) -> d
-        (_, Just d, _) | not (null d) -> d </> "schedlean"
-        (_, _, Just h) -> h </> ".cache" </> "schedlean"
-        _ -> ".schedlean-cache"
+        (_, Just d, _) | not (null d) -> d </> "schedcheck"
+        (_, _, Just h) -> h </> ".cache" </> "schedcheck"
+        _ -> ".schedcheck-cache"
 
 logOf :: FilePath -> FilePath
 logOf f = dropExtension f ++ ".check.log"
@@ -104,7 +104,7 @@ checkOne :: CheckOpts -> LeanConf -> FilePath -> Bool -> Maybe FilePath -> IO Re
 checkOne co c f ax ol = do
     hFlush stdout
     res <- checkFile c ax f ol (logOf f)
-    when (coTime co) $ hPutStrLn stderr (printf "schedlean: lean %s wall %.3f" f (rWall res))
+    when (coTime co) $ hPutStrLn stderr (printf "schedcheck: lean %s wall %.3f" f (rWall res))
     return res
 
 -- | Check a module's files in build order: each part compiled for the next (into @<main>.olean.d@),
@@ -123,7 +123,7 @@ checkFiles co c paths = do
 checkParts :: CheckOpts -> LeanConf -> FilePath -> Bool -> [FilePath] -> IO (Result, FilePath)
 checkParts co c dir isTop paths = go paths
   where
-    go [] = error "schedlean: no file to check"
+    go [] = error "schedcheck: no file to check"
     go [f] = (\r -> (r, logOf f)) <$> checkOne co c f True (if isTop then Nothing else Just (dir </> takeBaseName f))
     go (f : rest) = do
         r <- checkOne co c f False (Just (dir </> takeBaseName f))
@@ -182,7 +182,7 @@ checkModule ck isTop paths pv nmut muts = do
         conf <- readIORef (ckConf ck) >>= maybe (setupLean (ckOpts ck) True >>= \r -> writeIORef (ckConf ck) (Just r) >> return r) return
         case conf of
             Left e -> do
-                hPutStrLn stderr ("schedlean: " ++ e)
+                hPutStrLn stderr ("schedcheck: " ++ e)
                 setCode ck cannotRunCode >> writeIORef (ckStopped ck) True
             Right c0 -> do
                 createDirectoryIfMissing True (ckDir ck)

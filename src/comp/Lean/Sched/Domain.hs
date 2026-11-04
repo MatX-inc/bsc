@@ -123,7 +123,7 @@ domainNote d = concatMap ("\n   " ++) (gates ++ family ++ resets)
     gates | null gs = []
           | otherwise =
               [ "Gated clocks of the module's one clock family: " ++ intercalate ", " [ o ++ " (gate input " ++ g ++ ")" | (o, g) <- gs ] ++ "."
-              , "bsc ANDs a clock's gate into every action call on the state it clocks (schedlean checks that each such"
+              , "bsc ANDs a clock's gate into every action call on the state it clocks (schedcheck checks that each such"
               , "call's enable implies it), so with the gate off that state is not called and holds. A gate is not part"
               , "of the interface: a guard reading it is an operator of its other reads, covered for every `ops`, so for"
               , "each cycle's gate." ]
@@ -131,7 +131,7 @@ domainNote d = concatMap ("\n   " ++) (gates ++ family ++ resets)
     family | length clocks <= 1 = []
            | otherwise =
                [ "Trust point: the module's clocks (" ++ intercalate ", " (map ckOsc clocks) ++ ") share one oscillator's edges, as bsc's"
-               , "clock_family attribute (or a BVI import's same_family) asserts; schedlean does not check it." ]
+               , "clock_family attribute (or a BVI import's same_family) asserts; schedcheck does not check it." ]
     resets | length (dmResets d) <= 1 = []
            | otherwise = [ "The module has " ++ show (length (dmResets d)) ++ " resets (" ++ intercalate ", " (dmResets d)
                            ++ "): the theorem covers the cycles", "outside reset, with every reset deasserted." ]

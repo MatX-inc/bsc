@@ -42,10 +42,10 @@ BINDIR=$(PREFIX)/bin
 # Where package information is installed
 LICDIR=$(PREFIX)/LICENSES
 
-# The Lean library schedlean --check compiles (once, into a cache) from $(PREFIX)/lib/schedlean:
+# The Lean library schedcheck --check compiles (once, into a cache) from $(PREFIX)/lib/schedcheck:
 # the modules named on Lean/Sched/Check.hs's libModules line
-SCHEDLEANLIBDIR=$(PREFIX)/lib/schedlean
-SCHEDLEANLIB=$(addprefix $(TOP)/util/schedlean/theory/modular/,$(addsuffix .lean,$(shell sed -n 's/^libModules = \[\(.*\)\]$$/\1/p' $(TOP)/src/comp/Lean/Sched/Check.hs | tr -d '",')))
+SCHEDCHECKLIBDIR=$(PREFIX)/lib/schedcheck
+SCHEDCHECKLIB=$(addprefix $(TOP)/util/schedcheck/theory/modular/,$(addsuffix .lean,$(shell sed -n 's/^libModules = \[\(.*\)\]$$/\1/p' $(TOP)/src/comp/Lean/Sched/Check.hs | tr -d '",')))
 
 # Top-level of where intermediate GHC files are stored
 BUILDDIR=$(TOP)/build/comp
@@ -264,7 +264,7 @@ SOURCES = BuildVersion.hs BuildSystem.hs $(SOURCES_WO_EXTRA_BUILDVERSION)
 
 BSCEXES = bsc
 TCLEXES = bluetcl
-UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck schedlean
+UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck schedcheck
 SHOWRULESEXES = showrules
 
 EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES)
@@ -359,9 +359,9 @@ vcdcheck: $(SOURCES)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
 
-# schedlean asks bsc's disjointness solver, so it links the solvers as bsc does
-.PHONY: schedlean
-schedlean: $(SOURCES)
+# schedcheck asks bsc's disjointness solver, so it links the solvers as bsc does
+.PHONY: schedcheck
+schedcheck: $(SOURCES)
 	$(PREBUILDCOMMAND)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS) $(BSC_BUILDLIBS)
 	$(POSTBUILDCOMMAND)
@@ -436,12 +436,12 @@ install-bluetcl: $(PKGINFO)
 install-utils: $(addprefix $(BINDIR)/,$(UTILEXES))
 install-utils: $(addprefix $(BINDIR)/core/,$(UTILEXES))
 install-utils: $(PKGINFO)
-install-utils: install-schedlean-lib
+install-utils: install-schedcheck-lib
 
-.PHONY: install-schedlean-lib
-install-schedlean-lib:
-	mkdir -p -m 755 $(SCHEDLEANLIBDIR)
-	$(INSTALL) -m 644 $(SCHEDLEANLIB) $(SCHEDLEANLIBDIR)
+.PHONY: install-schedcheck-lib
+install-schedcheck-lib:
+	mkdir -p -m 755 $(SCHEDCHECKLIBDIR)
+	$(INSTALL) -m 644 $(SCHEDCHECKLIB) $(SCHEDCHECKLIBDIR)
 
 .PHONY: install-showrules
 install-showrules: $(addprefix $(BINDIR)/,$(SHOWRULESEXES))

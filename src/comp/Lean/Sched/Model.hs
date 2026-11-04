@@ -415,7 +415,7 @@ stepM cx s meth = do
     sb2 <- foldM (\sb i -> do
         let site = Sq.index (sbSites sb) i
             (_, ii, pm) = sPort site
-            m = case pm of { PS x -> x; PT _ -> error "schedlean: a RegFile copy on a task port" }
+            m = case pm of { PS x -> x; PT _ -> error "schedcheck: a RegFile copy on a task port" }
             inst = fromMaybe "" (lookupNth ii [ k | (k, ("rf", _)) <- omToList (cxInst cx) ])
             copies = sort [ read (drop 1 m2) :: Int | st <- F.toList (sbSites sb), (kd2, i2, PS m2) <- [sPort st], kd2 == "rf", i2 == ii ]
             args = M.findWithDefault [] inst subargs
@@ -481,7 +481,7 @@ orderCalls cx n0 sb
             _ -> go (acc Sq.|> c) seen rest
 
 orDie :: String -> Maybe a -> a
-orDie msg = fromMaybe (error ("schedlean: " ++ msg))
+orDie msg = fromMaybe (error ("schedcheck: " ++ msg))
 
 lookupNth :: Int -> [a] -> Maybe a
 lookupNth i xs = case drop i xs of { (x : _) | i >= 0 -> Just x; _ -> Nothing }
@@ -499,10 +499,10 @@ rdyTerms cx sb0 = foldM one sb0 [ i | (i, s) <- zip [0 ..] (F.toList (sbSites sb
     one sb i = do
         let site = Sq.index (sbSites sb) i
             e = orDie "a readiness site without its record" (sRdyE site)
-            (g, fan0) = case sR site of { Just (MG g' f') -> (g', f'); _ -> error "schedlean: a readiness site without its R" }
+            (g, fan0) = case sR site of { Just (MG g' f') -> (g', f'); _ -> error "schedcheck: a readiness site without its R" }
             lim = M.findWithDefault n i firstUse
             late = [ j | j <- fan0, j >= lim ]
-            sv0 = case srKind e of { RRdy { rSV = x } -> x; _ -> error "schedlean: a readiness record of reach kind" }
+            sv0 = case srKind e of { RRdy { rSV = x } -> x; _ -> error "schedcheck: a readiness record of reach kind" }
         (sv, fan) <- if null late then return (sv0, fan0) else do
             lift (modify' (\st -> st { msLater = msLater st + length late }))
             let drop' = S.fromList [ fromMaybe ("", "") (sPortName (Sq.index (sbSites sb) j)) | j <- late ]
@@ -516,7 +516,7 @@ rdyTerms cx sb0 = foldM one sb0 [ i | (i, s) <- zip [0 ..] (F.toList (sbSites sb
         unless (yset == S.fromList (svY sv)) $
             throwPy "AssertionError" ("site-value reads differ in " ++ sbName sb ++ " / " ++ fromMaybe "" (sLabel site))
         nf <- lift (gets (Sq.length . msFacts))
-        let litI = case sCond site of { MLit x -> x; _ -> error "schedlean: a readiness site without its literal" }
+        let litI = case sCond site of { MLit x -> x; _ -> error "schedcheck: a readiness site without its literal" }
             fact = MFact "rdy" i (Just litI) (svRdy sv) (sbName sb) (fromMaybe "" (sLabel site)) ys (length late)
             others = [ j | j <- ys, j /= i ]
         lift (modify' (\st -> st { msFacts = msFacts st Sq.|> fact }))

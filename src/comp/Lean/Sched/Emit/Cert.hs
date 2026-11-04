@@ -50,7 +50,7 @@ emitLC ec
 \    exact %s (Q := fun cm => lcK .%s i cm = true → (KI .%s).ann.sbr cm cm = true ∧ (KI .%s).ann.hasEn cm = true)\n\
 \      (fun h => absurd h (by simp [lcK])) (fun _ => ⟨by decide, by decide⟩) cm" [allk, k, k, k] )
                 _ -> do
-                    unless (null insts) $ error "schedlean: a last-caller port of a kind without a last-caller model"
+                    unless (null insts) $ error "schedcheck: a last-caller port of a kind without a last-caller model"
                     return ( "  | ." ++ k ++ " => fun _ _ => false", "  | ." ++ k ++ " => fun _ _ => 0", []
                            , "  · simp [lcJ, lcK] at hl", "  · simp [lcJ, lcK] at hl" )
         let col f = [ f r | r <- rows ]
@@ -164,7 +164,7 @@ bigPort = 8
 -- | A users leaf's first site (usesLeaves never gives an empty list).
 site0 :: [Int] -> Int
 site0 (s : _) = s
-site0 [] = error "schedlean: a users leaf with no site"
+site0 [] = error "schedcheck: a users leaf with no site"
 
 enProof :: EC -> MPort -> String -> HX String
 enProof ec p@(k, i, m) inst = do
@@ -195,7 +195,7 @@ enProof ec p@(k, i, m) inst = do
                     else let cv = condVal ec st s (VCtx ("(u (.inr (rR " ++ show st ++ ")))") "ops.z" "hf")
                          in return (fmt "en_cnd Iff.rfl (fun hf => (cRkIff ops E u oc w (rR %d) .%s %d h %s %d %s rfl rfl).trans (iff_of_eqB (%s)))" [show st, k, show i, lp, show si, h, cv])
                 else do
-                    unless (isUncond s) $ error "schedlean: AssertionError: conditional method call"
+                    unless (isUncond s) $ error "schedcheck: AssertionError: conditional method call"
                     return (fmt "en_unc Iff.rfl (fun hf => cMk ops E u oc w (mM %d) .%s %d h %s %d %s rfl rfl rfl)" [show (st - nR), k, show i, lp, show si, h])
             return ((stepT, "(" ++ stepT ++ ", " ++ entry ec st s ++ ")"), pf)
         let ents = map (snd . fst) rs
@@ -239,7 +239,7 @@ argProof ec p@(k, i, m) inst = do
 
 lcProof :: EC -> MPort -> String -> HX String
 lcProof ec p@(k, i, m) inst = do
-    let pi = fromMaybe (error ("schedlean: last-caller port " ++ show p ++ " has no info")) (M.lookup p (ecPortInfo ec))
+    let pi = fromMaybe (error ("schedcheck: last-caller port " ++ show p ++ " has no info")) (M.lookup p (ecPortInfo ec))
         lp = lportOf ec k m
         q = piQ pi
         mus = piMus pi
@@ -264,7 +264,7 @@ allName :: String -> String
 allName k = case k of
     "reg" -> "regAll"; "cfg" -> "cfgAll"; "fifo" -> "flAll"; "f2" -> "f2All"; "sf" -> "f2All"; "rf" -> "rfAll"
     "rwS" -> "wireAll"; "rwC" -> "wireAll"; "rw0S" -> "wire0All"; "rw0C" -> "wire0All"
-    _ -> error ("schedlean: no ports lemma for kind " ++ k)
+    _ -> error ("schedcheck: no ports lemma for kind " ++ k)
 
 emitEAQ :: EC -> W ()
 emitEAQ ec = do

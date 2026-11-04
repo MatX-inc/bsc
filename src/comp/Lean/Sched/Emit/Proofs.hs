@@ -59,7 +59,7 @@ gOf :: Maybe MX -> (Int, [Int])
 gOf r = case r of
     Nothing -> (0, [])
     Just (MG n js) -> (n, js)
-    Just e -> error ("schedlean: R is not a G: " ++ mxRepr e)
+    Just e -> error ("schedcheck: R is not a G: " ++ mxRepr e)
 
 rcong :: MX -> String
 rcong e = case e of
@@ -67,7 +67,7 @@ rcong e = case e of
     MLit j -> "congrArg ops.toB (h " ++ show j ++ " (by decide))"
     MF n js -> "congrArg (ops.f " ++ show n ++ ") (" ++ tupcong [ "h " ++ show j ++ " (by decide)" | j <- js ] ++ ")"
     MG n js -> "congrArg (ops.g " ++ show n ++ ") (" ++ tupcong [ "h " ++ show j ++ " (by decide)" | j <- js ] ++ ")"
-    _ -> error ("schedlean: rcong: " ++ mxRepr e)
+    _ -> error ("schedcheck: rcong: " ++ mxRepr e)
 
 rcongK :: EC -> Int -> MX -> String
 rcongK ec k e = case e of
@@ -262,7 +262,7 @@ emitRY ec needuc = do
             | sKind st == "read" =
                 let lsite = case sCond st of
                         MLit j -> j
-                        _ -> error ("schedlean: a ready-guarded read in step " ++ show k ++ " under a condition that is not one literal (not emitted yet)")
+                        _ -> error ("schedcheck: a ready-guarded read in step " ++ show k ++ " under a condition that is not one literal (not emitted yet)")
                     (kk, ii, mm) = sPort st
                     (lk, _, lm) = sitePort ec k lsite
                 in fmt "fun oc v x hal hf hc ha => ((hal (%s %d)).2 %s %s rfl).trans ((congrArg ops.toB (%s)).symm.trans hc)"

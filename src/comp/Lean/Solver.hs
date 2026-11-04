@@ -69,7 +69,7 @@ data Solver = Solver
     }
 
 newSolver :: ErrorHandle -> Flags -> IO Solver
-newSolver errh flags = newLive (initDisjointTestState "schedlean" errh flags [] [] []) >>= \lv -> newSolverOn lv ""
+newSolver errh flags = newLive (initDisjointTestState "schedcheck" errh flags [] [] []) >>= \lv -> newSolverOn lv ""
 
 -- | A solver asking through @lv@; @base@ starts no name of @lv@'s definitions.  Solvers of one state
 -- are named apart (bsc keeps converted definitions by name).

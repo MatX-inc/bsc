@@ -127,7 +127,7 @@ agx ec k e rd = case e of
         let rs = andc [ "congrArg (ops.g " ++ show n ++ ") (" ++ tupcong (map (rd . sitePort ec k) js) ++ ")"
                       | i <- is, let MG n js = fromMaybe (MG 0 []) (sR (site ec k i)) ]
         in "cond_congr (" ++ rs ++ ") (" ++ agx ec k a rd ++ ") (" ++ agx ec k b rd ++ ")"
-    _ -> error ("schedlean: agx: " ++ mxRepr e)
+    _ -> error ("schedcheck: agx: " ++ mxRepr e)
 
 -- | Acyc; returns False when the module has none (the file then ends after obl).
 emitAcyc :: EC -> AcycPlan -> W ()
@@ -315,7 +315,7 @@ emitTop ec = do
         synL = [ (k, sk) | (k, sk) <- ecSynth ec, skOff sk /= Nothing ]
         leaves = libLeaves ec ++ [ exModule (skExport sk) ++ " (synthesized, " ++ k ++ ")" | (k, sk) <- synL ]
     unless (and [ M.member k assumedLeaf || kdLib (kd ec k) || (k == "cfg" && cfgLib) || isSynthKind k | k <- kinds, k /= "tasks" ]) $
-        error "schedlean: AssertionError: a child that is neither a library model nor an assumed primitive leaf"
+        error "schedcheck: AssertionError: a child that is neither a library model nor an assumed primitive leaf"
     let kidA = kidAssumes ec
         leavesDoc
             | not hier = if null leaves then "No assumed leaf: every child is a library model with a proved contract."
@@ -424,7 +424,7 @@ libImpl cfgLib k = case k of
     "reg" -> "Reg"; "cfg" -> if cfgLib then "LC.CfgReg" else "lv.cfg"; "fifo" -> "lv.fifo"; "tasks" -> "Tasks nT"
     "f2" -> "FIFO2 ops.ofBool"; "sf" -> "lv.sf"; "rf" -> "lv.rf"; "rwS" -> "RWire ops.ofBool true true"
     "rwC" -> "RWire ops.ofBool true false"; "rw0S" -> "RWire0 ops.ofBool true true"; "rw0C" -> "RWire0 ops.ofBool true false"
-    _ -> error ("schedlean: no implementation for kind " ++ k)
+    _ -> error ("schedcheck: no implementation for kind " ++ k)
 libLeaf cfgLib k = case k of
     "cfg" | cfgLib -> "Built.leaf _ LC.cfg_realizes LC.cfg_causal"
     "reg" -> "Built.leaf _ reg_realizes (creg_causal 1)"

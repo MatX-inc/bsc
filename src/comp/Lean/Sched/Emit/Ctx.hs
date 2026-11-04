@@ -140,7 +140,7 @@ mxKind x = case x of
 rOf :: EC -> Int -> Int -> (Int, [Int])
 rOf ec k i = case sR (site ec k i) of
     Just (MG n js) -> (n, js)
-    _ -> error ("schedlean: site " ++ show (k, i) ++ " has no R")
+    _ -> error ("schedcheck: site " ++ show (k, i) ++ " has no R")
 
 -- | The reach term of conditional read site i of step k.
 rterm :: EC -> Int -> Int -> (Int -> String) -> String
@@ -164,7 +164,7 @@ ex ec k e at xarg = case e of
     MSplit is a b ->
         let rs = case is of { [i] -> rterm ec k i at; _ -> andterm [ rterm ec k i at | i <- is ] }
         in "(bif " ++ rs ++ " then " ++ ex ec k a at xarg ++ " else " ++ ex ec k b at xarg ++ ")"
-    _ -> error ("schedlean: ex: " ++ mxRepr e)
+    _ -> error ("schedcheck: ex: " ++ mxRepr e)
 
 rho :: Int -> String
 rho j = "ρ " ++ show j
@@ -228,10 +228,10 @@ rinv ec k i c =
         Just InvSelf ->
             let (n, js) = rOf ec k i
                 g = "fun y => ops.g " ++ show n ++ " (" ++ tup [ if j == i then "y" else ocread ec (sitePort ec k j) | j <- js ] ++ ")"
-                f = fromMaybe (error "schedlean: inv_self without a fact") (sFact s)
+                f = fromMaybe (error "schedcheck: inv_self without a fact") (sFact s)
             in "inv_self (G := " ++ g ++ ") (fun t => " ++ fsrc ec f ++ ".rdy_" ++ show f ++ " oc t " ++ cHf c ++ ") " ++ vj i
         Just (InvFact n) -> fsrc ec n ++ ".inv_" ++ show n ++ " oc " ++ unwords (map vj y) ++ " " ++ cHf c
-        _ -> error "schedlean: a Y without an invariance"
+        _ -> error "schedcheck: a Y without an invariance"
 
 rval :: EC -> Int -> Int -> VCtx -> String
 rval ec k i c =
@@ -253,7 +253,7 @@ evct _ k j c h = "evc_" ++ show k ++ "_" ++ show j ++ " ops E " ++ cV c ++ " oc 
 factTerm :: EC -> Int -> Int -> VCtx -> String -> String
 factTerm ec k i c hR =
     let s = site ec k i
-        f = fromMaybe (error "schedlean: a readiness site without a fact") (sFact s)
+        f = fromMaybe (error "schedcheck: a readiness site without a fact") (sFact s)
         y = yof ec k i
     in if null y then fsrc ec f ++ ".rdy_" ++ show f ++ " oc " ++ cHf c ++ " " ++ hR
        else fsrc ec f ++ ".rdy_" ++ show f ++ " oc " ++ unwords [ "(" ++ cV c ++ " " ++ show j ++ ")" | j <- y ] ++ " " ++ cHf c
@@ -273,11 +273,11 @@ val ec k e c condOk = case e of
                                      in M.insert i (if sCKind s == Just "reach" then hR else factTerm ec k i c hR) m)
                        (fromMaybe M.empty condOk) (zip [0 ..] crs)
         in "split_val (" ++ rv ++ ") (fun hR => " ++ val ec k a c (Just ok) ++ ") (" ++ val ec k b c condOk ++ ")"
-    _ -> error ("schedlean: val: " ++ mxRepr e)
+    _ -> error ("schedcheck: val: " ++ mxRepr e)
   where
     rd j | isCond ec k j = case condOk >>= M.lookup j of
              Just h -> evct ec k j c h
-             Nothing -> error ("schedlean: conditional read " ++ show j ++ " of step " ++ show k ++ " used outside its reach")
+             Nothing -> error ("schedcheck: conditional read " ++ show j ++ " of step " ++ show k ++ " used outside its reach")
          | otherwise = evt ec k j c
 
 condVal :: EC -> Int -> MSite -> VCtx -> String
@@ -315,7 +315,7 @@ excl ec x y hA hy h1 h2 =
                         Just (g, j) -> "meG ops E oc " ++ hA ++ " " ++ show g ++ " " ++ show j ++ " " ++ show (j + 1 + p)
                                        ++ " rfl rfl rfl rfl " ++ a ++ " " ++ b
                         Nothing -> "meX ops E oc " ++ hA ++ " " ++ show (ecLiti ec M.! c) ++ " " ++ show p ++ " rfl rfl " ++ a ++ " " ++ b
-               Nothing -> error ("schedlean: no exclusion between steps " ++ show (x, y))
+               Nothing -> error ("schedcheck: no exclusion between steps " ++ show (x, y))
   where
     sw fl = if not fl then (h1, h2) else (h2, h1)
     blk fl p = let (a, b) = sw fl

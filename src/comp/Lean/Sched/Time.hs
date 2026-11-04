@@ -24,12 +24,12 @@ phase (Timer on ref) name act = do
     c1 <- getCPUTime
     let cpu = fromIntegral (c1 - c0) / 1e12
     modifyIORef' ref ((name, w1 - w0, cpu) :)
-    when on $ hPutStrLn stderr (printf "schedlean: phase %s wall %.3f cpu %.3f" name (w1 - w0) cpu)
+    when on $ hPutStrLn stderr (printf "schedcheck: phase %s wall %.3f cpu %.3f" name (w1 - w0) cpu)
     return x
 
 -- | An extra line under the phases (a count, say).
 phaseNote :: Timer -> String -> IO ()
-phaseNote (Timer on _) s = when on $ hPutStrLn stderr ("schedlean: " ++ s)
+phaseNote (Timer on _) s = when on $ hPutStrLn stderr ("schedcheck: " ++ s)
 
 extractionPhases :: [String]
 extractionPhases = ["read", "astate", "extract", "bsc-facts", "hier", "hier-read", "hier-astate", "hier-extract", "hier-bsc-facts"]
@@ -40,6 +40,6 @@ reportTotals (Timer on ref) = when on $ do
     ps <- readIORef ref
     let tot sel = (sum [ w | (n, w, _) <- ps, sel n ], sum [ c | (n, _, c) <- ps, sel n ])
         line :: String -> (Double, Double) -> IO ()
-        line n (w, c) = hPutStrLn stderr (printf "schedlean: total %s wall %.3f cpu %.3f" n w c)
+        line n (w, c) = hPutStrLn stderr (printf "schedcheck: total %s wall %.3f cpu %.3f" n w c)
     line "extraction" (tot (`elem` extractionPhases))
     line "emission" (tot (`notElem` extractionPhases))

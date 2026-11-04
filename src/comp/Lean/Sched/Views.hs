@@ -30,7 +30,7 @@ import Lean.Sched.Types (Design(..), Step(..), Child(..))
 import Lean.Solver (Verdict(..), newSolver, solveCNF, readDimacs)
 
 viewNames :: [String]
-viewNames = ["sites", "model", "facts", "inverted-check", "sched-check"]
+viewNames = ["sites", "model", "facts", "inverted-check", "child-sched"]
 
 -- | One view's lines (Left: no bsc library).
 showView :: Input -> String -> IO (Either String [String])
@@ -81,7 +81,7 @@ showView inp what = case what of
                         ++ (if allInv == mine then " same" else " DIFFER"))
                        : [ "  only orders " ++ show k | k <- S.toList (S.difference allInv mine) ]
                        ++ [ "  only pairwise " ++ show k | k <- S.toList (S.difference mine allInv) ]))
-    "sched-check" -> do
+    "child-sched" -> do
         -- test: each child's statements, read from bsc's records, equal the parse of its printed schedule
         let bad = [ chInst c | c <- M.elems (dChildren d), let t = unwords (words (chSched c))
                              , chStmts c /= parseSched (if take 1 t == "[" then init (drop 1 t) else t) ]

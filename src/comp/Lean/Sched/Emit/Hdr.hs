@@ -69,7 +69,7 @@ emitHeader ec = do
     let name = ecName ec
         kinds = ecKinds ec
         m = ecM ec
-    w (fmt "/- %s: the modular obligation of one corpus module, emitted by schedlean.\n\
+    w (fmt "/- %s: the modular obligation of one corpus module, emitted by schedcheck.\n\
 \   Structure (children, steps, sites, users, exclusions) is the design's; data and\n\
 \   guards are opaque operators over their real fan-in (see e2e/README.md).%s%s%s -/\n\
 \%s\n\
@@ -107,7 +107,7 @@ emitHeader ec = do
         let kdef = kd ec k
             ps = kdPorts kdef
             n = length ps
-            (cp, cs, cc) = fromMaybe (error "schedlean: a synthesized leaf without code relations") (kdCodeRel kdef)
+            (cp, cs, cc) = fromMaybe (error "schedcheck: a synthesized leaf without code relations") (kdCodeRel kdef)
             code = M.fromList (zip ps [0 :: Int ..])
             rel f = [ [ b | b <- [0 .. n - 1], f a b ] | a <- [0 .. n - 1] ]
             rdyOf = [ maybe [] pure (M.lookup (PS ("RDY_" ++ pname p)) code) | p <- ps ]
@@ -142,7 +142,7 @@ emitHeader ec = do
 \    methods C with themselves); value methods without an enable, one argument wire (`share`);\n\
 \    `alwaysRdy` where bsc builds the method always ready (its wrapper assumes RDY = 1). -/" [show n, intercalate ", " (map xmName xs)])
             w (finAnn "xAnn" n (rel (exPrecB ex)) (rel (exSbrB ex)) (rel (exConfB ex)) (map xmValue xs) (map (not . xmValue) xs) (map xmAR xs) Nothing)
-            w (fmt (fromMaybe (error "schedlean: metText does not start with metHead") (stripPrefix metHead metText)) [show (ecNR ec), show (ecNS ec)])
+            w (fmt (fromMaybe (error "schedcheck: metText does not start with metHead") (stripPrefix metHead metText)) [show (ecNR ec), show (ecNS ec)])
         _ | not (ecMet ec) -> w (fmt noMetText [show (ecNR ec), show (ecNS ec)])
           | otherwise -> w (fmt metText [show (ecNM ec), show (ecNR ec), show (ecNS ec)])
     w buildersText
@@ -263,7 +263,7 @@ emitSites ec = do
     let nS = ecNS ec
         k0 = case ecKinds ec of
             (k : _) -> k
-            [] -> error "schedlean: IndexError: a step without sites in a module without children (not emitted yet)"
+            [] -> error "schedcheck: IndexError: a step without sites in a module without children (not emitted yet)"
         sites k = F.toList (tSites (step ec k))
     w "/-! ## Steps as numbered site tables (rules, then methods) -/\n"
     forM_ [0 .. nS - 1] $ \k -> do

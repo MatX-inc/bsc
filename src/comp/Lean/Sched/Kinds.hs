@@ -45,7 +45,7 @@ data KindDef = KindDef
     }
 
 kdCode :: KindDef -> PM -> Int
-kdCode k p = fromMaybe (error ("schedlean: no port " ++ show p ++ " in kind " ++ kdName k))
+kdCode k p = fromMaybe (error ("schedcheck: no port " ++ show p ++ " in kind " ++ kdName k))
     (maybe (elemIndex p (kdPorts k)) (M.lookup p) (kdIx k))
 
 -- | An argument-less value port: every call carries z.
@@ -238,7 +238,7 @@ genericKind name typ sl0 meths synth lib =
         | bOf ! p == bOf ! q && p /= q = False
         | p == q && synth && actA ! p = True
         | otherwise = let a = rel p q; b = rel q p in a == 4 || b == 4 || (a == 0 && b == 0)
-    ix p = M.findWithDefault (error ("schedlean: no port " ++ p ++ " in kind " ++ name)) p portIx
+    ix p = M.findWithDefault (error ("schedcheck: no port " ++ p ++ " in kind " ++ name)) p portIx
     onPS f (PS p) (PS q) = f (ix p) (ix q)
     onPS _ _ _ = False
     prec = onPS precC

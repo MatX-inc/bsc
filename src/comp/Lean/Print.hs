@@ -87,10 +87,10 @@ cut = modify' (\st -> st { wsCuts = wsCuts st ++ [Sq.length (wsL st)] })
 fmt :: String -> [String] -> String
 fmt ('%' : '%' : r) as = '%' : fmt r as
 fmt ('%' : c : r) (a : as) | c `elem` "sd" = a ++ fmt r as
-fmt ('%' : c : _) [] | c `elem` "sd" = error "schedlean: fmt: too few arguments"
+fmt ('%' : c : _) [] | c `elem` "sd" = error "schedcheck: fmt: too few arguments"
 fmt (c : r) as = c : fmt r as
 fmt [] [] = []
-fmt [] _ = error "schedlean: fmt: too many arguments"
+fmt [] _ = error "schedcheck: fmt: too many arguments"
 
 nat :: Int -> String
 nat = show
@@ -128,7 +128,7 @@ setSplit :: String -> Split -> W ()
 setSplit n s = modify' (\st -> st { wsSplits = M.insert n s (wsSplits st) })
 
 getSplit :: String -> W Split
-getSplit n = gets (\st -> M.findWithDefault (error ("schedlean: no table " ++ n)) n (wsSplits st))
+getSplit n = gets (\st -> M.findWithDefault (error ("schedcheck: no table " ++ n)) n (wsSplits st))
 
 -- | `def name : ty` as tab(items), its subtrees of at most splitW characters their own definitions.
 stab :: String -> String -> [String] -> W ()
@@ -215,7 +215,7 @@ allBThm thm f name n = do
                 ra <- render a
                 rb <- render b
                 return ("(Tab.allB_node " ++ ra ++ " " ++ rb ++ ")")
-            Whole _ _ -> error "schedlean: allB_thm on a whole table"
+            Whole _ _ -> error "schedcheck: allB_thm on a whole table"
     case st of
         Whole _ _ -> w ("theorem " ++ thm ++ " : Tab.allB (" ++ f ++ ") " ++ name ++ " 0 " ++ n ++ " = true := by decide +kernel")
         _ -> do
@@ -236,7 +236,7 @@ tabproof :: [String] -> String
 tabproof = tabproofI "  "
 
 tabproofI :: String -> [String] -> String
-tabproofI _ [] = error "schedlean: a balanced proof of no entries"
+tabproofI _ [] = error "schedcheck: a balanced proof of no entries"
 tabproofI ind items = go 0 (length items)
   where
     v = Sq.fromList items
@@ -261,7 +261,7 @@ tupcong (c : cs) = "congr2 ops.tup (" ++ c ++ ") (" ++ tupcong cs ++ ")"
 andc :: [String] -> String
 andc [c] = c
 andc (c : cs) = "congr2 and (" ++ c ++ ") (" ++ andc cs ++ ")"
-andc [] = error "schedlean: andc []"
+andc [] = error "schedcheck: andc []"
 
 -- | From h : (b0 && (b1 && ...)) = true with n conjuncts, the i-th.
 andget :: String -> Int -> Int -> String
@@ -271,7 +271,7 @@ andget h n i = let t = iterate (\x -> "((Bool.and_eq_true _ _).mp " ++ x ++ ").2
 andterm :: [String] -> String
 andterm [t] = t
 andterm (t : ts) = "(" ++ t ++ ") && (" ++ andterm ts ++ ")"
-andterm [] = error "schedlean: andterm []"
+andterm [] = error "schedcheck: andterm []"
 
 listCong :: [String] -> String
 listCong [] = "rfl"

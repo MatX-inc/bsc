@@ -65,10 +65,10 @@ emitChains ec = do
             sel = M.findWithDefault False q (ecSelmux ec)
             gq0 = M.lookup q (ecMgrp ec)
             qs = show q
-        unless (all (< nR) ks) $ error "schedlean: AssertionError: a mux with method users"
+        unless (all (< nR) ks) $ error "schedcheck: AssertionError: a mux with method users"
         if sel && maybe False (\(_, g) -> length g == n) gq0 then do
             let Just (g0, gks) = gq0
-            unless (gks == ks) $ error "schedlean: a group mux out of order"
+            unless (gks == ks) $ error "schedcheck: a group mux out of order"
             stab ("gsT_" ++ qs) "Tab Nat" (map show ks)
             let selq = "(fun (t : Nat) (e : (V : Type) → Ops V → EqC V → OC V → Bool × V) => (e V ops E oc).1 = true → WF ops E oc (gsT_" ++ qs ++ ".get t) = true)"
             prf <- stabproof ("mT_" ++ qs) ("sel_" ++ qs) "(ops : Ops V) (E : EqC V) (oc : OC V)" "ops E oc"
@@ -115,7 +115,7 @@ emitChains ec = do
             let gq = gq0
                 gs = maybe [] snd gq
                 ksr = take (n - length gs) ks
-            unless (drop (n - length gs) ks == gs) $ error "schedlean: a mux's group members are not last"
+            unless (drop (n - length gs) ks == gs) $ error "schedcheck: a mux's group members are not last"
             let p0 = length gs * (length gs - 1) `div` 2
             if isJust gq && null ksr then do
                 let Just (g0, _) = gq
@@ -161,7 +161,7 @@ emitChains ec = do
     return (Counts (sum (map fst cs)) (sum (map snd cs)))
 
 cfIndex :: EC -> (Int, Int, Int) -> (Int, Maybe String)
-cfIndex ec key = M.findWithDefault (error ("schedlean: KeyError: no caller-exclusivity fact " ++ show key)) key (ecCFIdx ec)
+cfIndex ec key = M.findWithDefault (error ("schedcheck: KeyError: no caller-exclusivity fact " ++ show key)) key (ecCFIdx ec)
 
 bitsI :: Integer -> [Int]
 bitsI = go 0
@@ -242,17 +242,17 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
         rcA = listArray (0, nR - 1) rcode
         rinv = 0 : members
         codeMask x = foldl (.|.) 0 [ (1 :: Integer) `shiftL` (rcA ! j) | j <- bitsI x, j < nR
-                                   , rcA ! j /= 0 || error "schedlean: AssertionError: exception bit of a rule in no group" ]
+                                   , rcA ! j /= 0 || error "schedcheck: AssertionError: exception bit of a rule in no group" ]
         exRc = map codeMask (ecNeed ec)
         escRc = map codeMask (ecEsc ec)
         lcSlots = [ (ecVB ec M.! p, S.toAscList (S.fromList (map fst (u M.! p)))) | p <- lcp ]
         mann = fmap (const ()) (ecMann ec)
     let dc = case scanDesign m lcSlots exRc escRc (if met then Just (mannOf ec) else Nothing) of
             Right x -> x
-            Left e -> error ("schedlean: " ++ e)
+            Left e -> error ("schedcheck: " ++ e)
         states = case runScanStates dc (Just rcode) of
             Right x -> x
-            Left info -> error ("schedlean: AssertionError: " ++ info)
+            Left info -> error ("schedcheck: AssertionError: " ++ info)
     _ <- return mann
     stab "exRT" "Tab Nat" (map show exRc)
     stab "escRT" "Tab Nat" (map show escRc)
@@ -264,7 +264,7 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
     w ("abbrev ng : Nat := " ++ show (length groups))
     when met $ do
         let Just (nfI, nfO, ngI, ngO, h3ok) = ecMann ec
-        when (any (/= 0) h3ok && not (exported ec)) $ error "schedlean: AssertionError: h3ok entries"
+        when (any (/= 0) h3ok && not (exported ec)) $ error "schedcheck: AssertionError: h3ok entries"
         forM_ [("nfIT", nfI), ("nfOT", nfO), ("ngIT", ngI), ("ngOT", ngO)] $ \(nm, tb) -> stab nm "Tab Nat" (map show tb)
         when (exported ec) $ stab "h3okT" "Tab Nat" (map show h3ok)
     let dArgs = if met then ["nM", show (ecD ec), "fpMT", "nfIT", "nfOT", "ngIT", "ngOT"]
@@ -311,7 +311,7 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
             , ("source characters per table definition (C21)", True, 20000, 20000, splitW)
             , ("users of a port listed entry by entry (en_list / en_lit threshold)", True, 8, 8, 8)
             , ("users of one port proved pair by pair (a conditional user, or a module with methods)", False, bnGateSelmux df, bnGateSelmux bnd, selPairs) ]
-    forM_ bounds $ \(bn, _, _, used, v) -> when (v > used) $ error ("schedlean: AssertionError: gate: " ++ bn ++ " " ++ show v ++ " above the bound " ++ show used)
+    forM_ bounds $ \(bn, _, _, used, v) -> when (v > used) $ error ("schedcheck: AssertionError: gate: " ++ bn ++ " " ++ show v ++ " above the bound " ++ show used)
     w ("/-! Gate bounds (design.md §11 item 6), each with this module's value (a table setting: the value used):\n"
        ++ concat [ "  * " ++ bn ++ ": at most " ++ show used ++ (if used == bd then "" else " (lowered from " ++ show bd ++ ")") ++ ", "
                    ++ (if setting then "setting used" else "this module") ++ " " ++ show v ++ "\n" | (bn, setting, bd, used, v) <- bounds ] ++ "-/")
@@ -421,7 +421,7 @@ emitScan ec bnd (modFacts, nHy, nUn, _) = do
         tstA = listArray (0, length (mTStart m) - 1) (mTStart m)
         wxm = ecWXM ec
     forM_ (zip [0 :: Int ..] escl) $ \(ne, (r1, r2, bad)) -> do
-        when (null bad) $ error "schedlean: AssertionError: an escaped pair without a failing site pair"
+        when (null bad) $ error "schedcheck: AssertionError: an escaped pair without a failing site pair"
         let byi = M.fromListWith (flip (++)) [ (i1, [i2]) | (i1, i2) <- bad ]
             keys = M.keys byi
             hb = [ allL [ let fi = efidx M.! (r1, r2, i1, i2)

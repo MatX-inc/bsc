@@ -150,7 +150,7 @@ viewCheck ex c
     pnames = [ m | m <- chOrder c, not ("RDY_" `isPrefixOf` m && M.member (drop 4 m) (chMethods c)) ]
     -- as viewKind: m is always ready unless its RDY_m exists and is not bsc's constant
     viewAR m = maybe True mtConst (M.lookup ("RDY_" ++ m) (chMethods c))
-    (pp, ps, pc) = maybe (error "schedlean: a view kind without code relations") id (kdCodeRel (viewKind "view" c))
+    (pp, ps, pc) = maybe (error "schedcheck: a view kind without code relations") id (kdCodeRel (viewKind "view" c))
     vix = M.fromList (zip (chOrder c) [0 :: Int ..])
     n = length ms
     ca = listArray (0, n - 1) [ M.findWithDefault (-1) (xmName x) vix | x <- ms ] :: Array Int Int

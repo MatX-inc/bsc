@@ -136,7 +136,7 @@ emitArms ec = do
             _ | isSynthKind k -> fmt "finW (n := %s) %s\n  %s"
                                      [ drop 4 (fromMaybe "" (kdMType (kd ec k))), tabOr "false" [ if kdHasEn (kd ec k) pm then enT (k, i, pm) else "false" | pm <- kdPorts (kd ec k) ]
                                      , tabOr "ops.z" [ argT (k, i, pm) | pm <- kdPorts (kd ec k) ] ]
-            _ -> error ("schedlean: no arm for kind " ++ k)
+            _ -> error ("schedcheck: no arm for kind " ++ k)
     forM_ kinds $ \k -> forM_ [0 .. length (mByk m M.! k) - 1] $ \i ->
         w (fmt "def arm_%s_%d (V : Type) (ops : Ops V) (E : EqC V) (oc : OC V) (w : %s) : Wires (KI .%s).M V :=\n  %s"
                [k, show i, wxm, k, armBody k i])
@@ -222,7 +222,7 @@ emitHyps ec = do
         fixed = ["  disj : ∀ (oc : OC V) (d : Nat), Nat.blt d nD = true → (CF ops E oc (dAT.get d) && CF ops E oc (dBT.get d)) = false"]
                 ++ [ "  tob : ∀ b, ops.toB (ops.ofBool b) = b" | hasF2 ]
         factF = [ (fOk f, ("  /-- " ++ (if fKind f == "rdy" then "readiness" else "invariance of R") ++ ", " ++ fStep f ++ " / " ++ fLabel f
-                            ++ ": this formula " ++ (if fOk f then "confirmed" else "not confirmed") ++ " by schedlean (site-value form"
+                            ++ ": this formula " ++ (if fOk f then "confirmed" else "not confirmed") ++ " by schedcheck (site-value form"
                             ++ (if fLate f /= 0 then ", " ++ show (fLate f) ++ " later-site literals dropped" else "") ++ ") -/\n  "
                             ++ fKind f ++ "_" ++ show n ++ " : " ++ factStmt n f, fKind f ++ "_" ++ show n))
                 | (n, f) <- zip [0 :: Int ..] facts ]
@@ -256,9 +256,9 @@ emitHyps ec = do
     w ("section\nvariable {V : Type}\n" ++ hgT ++ ugT
        ++ "/-- bsc's solver verdicts, hypotheses as today: disjointness (CAN_FIRE of each pair); the\n\
 \    use-level readiness facts over R_seq, each escape's dynamic exclusion and the callers'\n\
-\    exclusivity at a mux, as confirmed by the solver over schedlean's conditions (in groups `gK`). -/\n\
+\    exclusivity at a mux, as confirmed by the solver over schedcheck's conditions (in groups `gK`). -/\n\
 \structure Hyps (ops : Ops V) (E : EqC V) : Prop where\n" ++ intercalate "\n" (fixed ++ hgF) ++ "\n"
-       ++ (if ecHasUnconf ec then "/-- Facts schedlean refutes (or bsc did not confirm): a module that needs one is off path A\n\
+       ++ (if ecHasUnconf ec then "/-- Facts schedcheck refutes (or bsc did not confirm): a module that needs one is off path A\n\
 \    (fail safe); this file states them so that its cost and structure can be measured. -/\n\
 \structure Unconfirmed (ops : Ops V) (E : EqC V) : Prop where\n" ++ intercalate "\n" ugF ++ "\n" else "")
        ++ "\n\
