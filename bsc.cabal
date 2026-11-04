@@ -48,6 +48,7 @@ library
     FlexibleContexts,
     FlexibleInstances,
     TypeSynonymInstances,
+  extra-libraries: z
   if os(osx)
     extra-libraries: c++
   else
@@ -61,7 +62,15 @@ library
     src/vendor/htcl,
     src/vendor/stp/HaskellIfc,
     src/vendor/yices/v2.6/HaskellIfc,
-  c-sources: src/vendor/htcl/haskell.c
+  c-sources:
+    src/comp/fstscopes_hier.c,
+    src/vendor/htcl/haskell.c,
+    src/vendor/libfst/src/fastlz.c,
+    src/vendor/libfst/src/fstapi.c,
+    src/vendor/libfst/src/lz4.c,
+  include-dirs:
+    src/libfst_config,
+    src/vendor/libfst/src,
   exposed-modules:
     AAddSchedAssumps
     AAddScheduleDefs
@@ -139,6 +148,7 @@ library
     ErrorUtil
     Eval
     Exceptions
+    FSTRead
     FStringCompat
     FileIOUtil
     FileNameUtil
@@ -374,6 +384,18 @@ executable dumpbo
     bytestring >=0.11.5.4
   ghc-options: -main-is Main_dumpbo
   main-is: dumpbo.hs
+
+executable fstcheck
+  import: common_exes
+  build-depends:
+    regex-compat ^>=0.95.2.2,
+  ghc-options: -main-is Main_fstcheck
+  main-is: fstcheck.hs
+
+executable fstscopes
+  import: common_exes
+  ghc-options: -main-is Main_fstscopes
+  main-is: fstscopes.hs
 
 executable showrules
   import: common_exes
