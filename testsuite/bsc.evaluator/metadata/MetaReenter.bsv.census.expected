@@ -10,9 +10,14 @@ metadata census for sysMetaReenter:
   depth: 2:8 9:4
   count: 1:28 2:3
   alias classes 82
+  validity: defs with a must-type 12 (at a Bit type 4; by construction 4, by declaration 8, by assumption 0), defs with views 12, derived views 24 (paths to depth 1), type windows 3
+  repacks 0 (unpack 0, chr 0), on lifted defs 0; undefined values on lifted defs 0
   cost: frame pushes 812, context-table operations 47 for 23 contexts
   chains walked 802, loops re-entered 4 (def Prelude.primFix [Array.bsv] ur: 8 instances, 16 iterations, depth 2; def Prelude.primFix [Array.bsv] ur: 4 instances, 8 iterations, depth 2; def Prelude.primFix [Vector.bs] ur: 4 instances, 4 iterations, depth 2; def Prelude.primFix [Vector.bs] ur: 2 instances, 2 iterations, depth 2), repeated non-recursion sites 11 (def Prelude.bind_ [Prelude.bs] x8; def Prelude.__avFunc [Prelude.bs] x2; def Prelude.bind_ [MetaReenter.bsv:28:4] u x1)
   name hints: 4 cells bound to a parameter, 0 outside the library, each named by it
+  bit gate: cells gated 12, with facts 12; lifted defs gated as their types decide 12
+  edges: cells moved 15 (field 2, payload 12, operand 1), longest chain 1
+  views: 8 views and validities at a Bit type checked against the def's width
   method-condition positions: 0 calls, 0 kept, 0 on chains
 Verilog file created: sysMetaReenter.v
 All packages are up to date.

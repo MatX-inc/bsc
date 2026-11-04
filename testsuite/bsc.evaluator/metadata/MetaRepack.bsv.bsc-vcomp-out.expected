@@ -1,0 +1,33 @@
+checking package dependencies
+compiling MetaRepack.bsv
+code generation for sysMetaRepack starts
+_136: prim PrimUnpack, field 1, alias _136, valid Prelude.UInt 8 c, views {Prelude.Bit 8; Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_239: prim PrimEQ, field 2, valid Prelude.Bit 1 cb, views {Prelude.Bit 1} <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_240: def Prelude.toPrimAction [MetaRepack.bsv:32:7] u, field 3, alias _240 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_243: method Prelude.read [Prelude.bs], field 0, valid MetaRepack.Flag d, views {MetaRepack.Flag} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_255: def Prelude.toPrimAction [MetaRepack.bsv:39:7] u, field 3 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_258: def Prelude.primExtract [MetaRepack.bsv:39:25] u, binder low [MetaRepack.bsv:39:15], valid MetaRepack.Flag a, views {MetaRepack.Flag; Prelude.Bit 8 [0+2]} <- def Prelude.toPrimAction [MetaRepack.bsv:39:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_269: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs], alias _269 <- def Prelude.toPrimAction [MetaRepack.bsv:39:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_294: method Prelude.read [Prelude.bs], field 0, valid Prelude.Bit 8 db, views {Prelude.Bit 8} <- def Prelude.toPrimAction [MetaRepack.bsv:39:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_311: prim PrimSelect, field 0, views {Prelude.Bit 8 [0+2]} <- def Prelude.toPrimAction [MetaRepack.bsv:39:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_313: prim PrimEQ, valid Prelude.Bit 1 cb, views {Prelude.Bit 1} <- def Prelude.bind_ [MetaRepack.bsv:41:11] u#1 <- def Prelude.toPrimAction [MetaRepack.bsv:39:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_314: method Prelude.write [Prelude.bs], binder a [Prelude.bs] <- def Prelude.fromPrimAction [Prelude.bs]#1 <- def Prelude.bind_ [MetaRepack.bsv:41:11] u#1 <- def Prelude.toPrimAction [MetaRepack.bsv:39:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_316: prim PrimAdd, binder x [Prelude.bs], valid Prelude.Bit 8 cdb, views {Prelude.Bit 8} <- def Prelude.bind_ [MetaRepack.bsv:41:11] u#1 <- def Prelude.toPrimAction [MetaRepack.bsv:39:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_317: method Prelude.write [Prelude.bs], binder a [Prelude.bs] <- def Prelude.fromPrimAction [Prelude.bs]#1 <- def Prelude.bind_ [MetaRepack.bsv:41:11] u#1 <- def Prelude.toPrimAction [MetaRepack.bsv:39:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_325: prim PrimIf, field 1 <- def Prelude.toPrimAction [MetaRepack.bsv:39:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_329: def Prelude.toPrimAction [MetaRepack.bsv:50:7] u, field 3, alias _329 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_340: prim PrimUnpack, field 0, alias _136, valid Prelude.Bit 8 db, views {Prelude.Bit 8; Prelude.UInt 8/UInt} <- def Prelude.toPrimAction [MetaRepack.bsv:50:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_341: method Prelude.read [Prelude.bs], alias _341, valid Prelude.UInt 8 cd, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_343: prim PrimUnpack, field 0, alias _341, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_345: def Prelude.toPrimAction [MetaRepack.bsv:55:7] u, field 3, alias _345 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_354: prim PrimAdd, field 0, valid Prelude.Bit 4 cb, views {MetaRepack.Pair/0; Prelude.Bit 4} <- def Prelude.toPrimAction [MetaRepack.bsv:55:7] u#1 <- def Prelude.addRules [MetaRepack.bsv:31:4] u#1 <- def Prelude.bind_ [MetaRepack.bsv:31:4] u#1
+_357: method Prelude.read [Prelude.bs], valid MetaRepack.Pair d, views {MetaRepack.Pair} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_360: prim PrimUnpack, field 0, alias _360, valid MetaRepack.Pair [2+4] d, views {MetaRepack.Pair [2+4]; MetaRepack.Pair/0} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_363: prim PrimSelect, field 1, valid MetaRepack.Pair [0+2] d, views {MetaRepack.Flag; MetaRepack.Pair [0+2]; MetaRepack.Pair/1} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+Warning: "MetaRepack.bsv", line 23, column 8: (G0117)
+  Rule `put' shadows the effects of `reinterpret' when they execute in the
+  same clock cycle. Affected method calls:
+    raw.write
+  To silence this warning, use the `-no-warn-action-shadowing' flag.
+Verilog file created: sysMetaRepack.v
+All packages are up to date.

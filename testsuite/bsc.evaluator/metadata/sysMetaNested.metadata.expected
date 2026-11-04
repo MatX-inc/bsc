@@ -1,10 +1,10 @@
 bsc-metadata 1
-def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaNested.bsv:13:4] u#1 -> def Prelude.primFix [MetaNested.bsv:19:7] ur#2 -> def Prelude.primFix [MetaNested.bsv:20:10] ur#1 | contexts 2 | merged 1 {prim PrimUnpack @ def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1} | folded 0 | parent _N | binder field 0 | alias _N | tiers m
-def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaNested.bsv:13:4] u#1 -> def Prelude.primFix [MetaNested.bsv:19:7] ur#2 -> def Prelude.primFix [MetaNested.bsv:20:10] ur#2 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias - | tiers -
-def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaNested.bsv:13:4] u#1 -> def Prelude.primFix [MetaNested.bsv:19:7] ur#3 -> def Prelude.primFix [MetaNested.bsv:20:10] ur#1 | contexts 1 | merged 0 | folded 0 | parent - | binder field 0 | alias - | tiers -
-def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent - | binder field 0 | alias _N | tiers -
-def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
-def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaNested.bsv:13:4] u#1 -> def Prelude.primFix [MetaNested.bsv:19:7] ur#2 -> def Prelude.primFix [MetaNested.bsv:20:10] ur#1 | contexts 2 | merged 1 {prim PrimUnpack @ def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1} | folded 0 | parent _N | binder field 0 | alias _N | tiers m | validity Prelude.UInt 8 d | views 2 {Prelude.UInt 8} {Prelude.UInt 8/UInt} | repacks 0 | undefined 0
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaNested.bsv:13:4] u#1 -> def Prelude.primFix [MetaNested.bsv:19:7] ur#2 -> def Prelude.primFix [MetaNested.bsv:20:10] ur#2 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias - | tiers - | validity Prelude.Bit 8 cb | views 2 {Prelude.Bit 8} {Prelude.UInt 8/UInt} | repacks 0 | undefined 0
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaNested.bsv:13:4] u#1 -> def Prelude.primFix [MetaNested.bsv:19:7] ur#3 -> def Prelude.primFix [MetaNested.bsv:20:10] ur#1 | contexts 1 | merged 0 | folded 0 | parent - | binder field 0 | alias - | tiers - | validity Prelude.Bit 8 cb | views 2 {Prelude.Bit 8} {Prelude.UInt 8/UInt} | repacks 0 | undefined 0
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent - | binder field 0 | alias _N | tiers - | validity Prelude.UInt 8 d | views 2 {Prelude.UInt 8} {Prelude.UInt 8/UInt} | repacks 0 | undefined 0
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers - | validity Prelude.UInt 8 d | views 2 {Prelude.UInt 8} {Prelude.UInt 8/UInt} | repacks 0 | undefined 0
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers - | validity Prelude.UInt 8 d | views 2 {Prelude.UInt 8} {Prelude.UInt 8/UInt} | repacks 0 | undefined 0
 module sysMetaNested
 root inst grid_0_0 [MetaNested.bsv:11:43]
 root inst grid_0_1 [MetaNested.bsv:11:43]
@@ -12,3 +12,4 @@ root inst grid_1_0 [MetaNested.bsv:11:43]
 root inst grid_1_1 [MetaNested.bsv:11:43]
 root methodroot total [MetaNested.bsv:10:8]
 root rule tick
+validity census-grade

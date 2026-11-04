@@ -1,8 +1,9 @@
 bsc-metadata 1
-def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaMutual.bsv:19:4] u#1 -> def Prelude.addRules [MetaMutual.bsv:19:4] u#1 -> def Prelude.toPrimAction [MetaMutual.bsv:20:7] u#1 -> def MetaMutual.stepA [MetaMutual.bsv:3:19] r#1 -> def MetaMutual.stepB [MetaMutual.bsv:7:19] r#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias - | tiers -
-def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaMutual.bsv:19:4] u#1 -> def Prelude.addRules [MetaMutual.bsv:19:4] u#1 -> def Prelude.toPrimAction [MetaMutual.bsv:20:7] u#1 -> def MetaMutual.stepA [MetaMutual.bsv:3:19] r#2 | contexts 1 | merged 0 | folded 0 | parent _N | binder field 0 | alias - | tiers -
-def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers -
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaMutual.bsv:19:4] u#1 -> def Prelude.addRules [MetaMutual.bsv:19:4] u#1 -> def Prelude.toPrimAction [MetaMutual.bsv:20:7] u#1 -> def MetaMutual.stepA [MetaMutual.bsv:3:19] r#1 -> def MetaMutual.stepB [MetaMutual.bsv:7:19] r#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias - | tiers - | validity Prelude.Bit 8 cb | views 2 {Prelude.Bit 8} {Prelude.UInt 8/UInt} | repacks 0 | undefined 0
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaMutual.bsv:19:4] u#1 -> def Prelude.addRules [MetaMutual.bsv:19:4] u#1 -> def Prelude.toPrimAction [MetaMutual.bsv:20:7] u#1 -> def MetaMutual.stepA [MetaMutual.bsv:3:19] r#2 | contexts 1 | merged 0 | folded 0 | parent _N | binder field 0 | alias - | tiers - | validity Prelude.Bit 8 cb | views 2 {Prelude.Bit 8} {Prelude.UInt 8/UInt} | repacks 0 | undefined 0
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias _N | tiers - | validity Prelude.UInt 8 d | views 2 {Prelude.UInt 8} {Prelude.UInt 8/UInt} | repacks 0 | undefined 0
 module sysMetaMutual
 root inst acc [MetaMutual.bsv:17:19]
 root methodroot value [MetaMutual.bsv:16:8]
 root rule tick
+validity census-grade

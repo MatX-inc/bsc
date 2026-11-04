@@ -10,9 +10,14 @@ metadata census for sysMetaCross:
   depth: 2:2 6:1 7:1
   count: 1:15
   alias classes 14
+  validity: defs with a must-type 4 (at a Bit type 2; by construction 2, by declaration 2, by assumption 0), defs with views 4, derived views 8 (paths to depth 1), type windows 3
+  repacks 0 (unpack 0, chr 0), on lifted defs 0; undefined values on lifted defs 0
   cost: frame pushes 57, context-table operations 18 for 13 contexts
   chains walked 52, loops re-entered 0, repeated non-recursion sites 3 (def Prelude.bind_ [Prelude.bs] x2; def Prelude.bind_ [MetaCross.bsv:14:4] u x1)
   name hints: 0 cells bound to a parameter, 0 outside the library, each named by it
+  bit gate: cells gated 4, with facts 4; lifted defs gated as their types decide 4
+  edges: cells moved 6 (field 0, payload 4, operand 2), longest chain 1
+  views: 4 views and validities at a Bit type checked against the def's width
   method-condition positions: 0 calls, 0 kept, 0 on chains
 Verilog file created: sysMetaCross.v
 All packages are up to date.

@@ -1,0 +1,14 @@
+bsc-metadata 1
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaUndef.bsv:21:4] u#1 -> def Prelude.addRules [MetaUndef.bsv:21:4] u#1 -> def Prelude.toPrimAction [MetaUndef.bsv:22:7] u#1 | contexts 1 | merged 0 | folded 0 | parent v__h | binder - | alias - | tiers - | validity Prelude.Bit 8 cb | views 1 {Prelude.Bit 8} | repacks 0 | undefined 0
+def c__h | site method Prelude.read [Prelude.bs] | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent v__h | binder field 0 | alias - | tiers - | validity Prelude.Bool d | views 1 {Prelude.Bool} | repacks 0 | undefined 0
+def t__h | site method Prelude.read [Prelude.bs] | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent - | binder - | alias - | tiers - | validity MetaUndef.Two d | views 1 {MetaUndef.Two} | repacks 0 | undefined 0
+def u_a__h | site method Prelude._read [MetaUndef.bsv:28:24] | chain def Prelude.bind_ [MetaUndef.bsv:21:4] u#1 -> def Prelude.addRules [MetaUndef.bsv:21:4] u#1 -> def Prelude.toPrimAction [MetaUndef.bsv:28:7] u#1 | contexts 2 | merged 1 {prim PrimUnpack @ def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1} | folded 0 | parent __h | binder field 0 | alias _N | tiers m | validity Prelude.Bit 8 db | views 2 {MetaUndef.Two/0} {Prelude.Bit 8} | repacks 0 | undefined 0
+def v__h | site prim PrimIf | chain def Prelude.bind_ [MetaUndef.bsv:21:4] u#1 -> def Prelude.addRules [MetaUndef.bsv:21:4] u#1 -> def Prelude.toPrimAction [MetaUndef.bsv:22:7] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder v [MetaUndef.bsv:22:15] | alias - | tiers - | validity Prelude.Bit 8 db | views 1 {Prelude.Bit 8} | repacks 0 | undefined 1 {dont-care}
+module sysMetaUndef
+root inst c [MetaUndef.bsv:18:15]
+root inst r [MetaUndef.bsv:16:18]
+root inst t [MetaUndef.bsv:17:14]
+root methodroot out [MetaUndef.bsv:15:8]
+root rule dc
+root rule part
+validity census-grade

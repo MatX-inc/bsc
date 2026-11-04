@@ -190,4 +190,61 @@ erase MetaCrossLib.bo
 compile_pass MetaCrossLib.bsv
 metadata_golden MetaCross sysMetaCross
 
+# Views and validity: a register's bits unpacked as the enumeration
+# they were declared with (no repack), a byte's bits unpacked as an
+# enumeration they are not known to be valid for (a deliberate repack,
+# on the cell of the bits), bits unpacked as a hole-free type (no
+# repack), a struct packed from valid fields (valid by construction) and
+# the fields moved out of a struct (the struct's path), pinned by the
+# side file's validity, views and repack columns
+metadata_golden MetaRepack sysMetaRepack
+
+# an undefined value: the user don't-care under a dynamic condition is
+# recorded by kind (dont-care) on the conditional's def; the struct field
+# left undefined folds into the register write and reaches no def
+metadata_golden MetaUndef sysMetaUndef
+
+# Cells outside the gate: a struct with Integer and String fields moved
+# out beside a Bit field, actions joined under a rule, the enumeration
+# and the struct read from registers and held before unpacking, a chr
+# of computed bits, the Bool methods of an import-BVI FIFO and the
+# actionvalue method of a synthesized submodule; only the Bit-typed
+# cells carry a validity or a view, and the census checks the gate
+# against the facts of every cell and the type of every lifted def
+metadata_golden MetaNonBit sysMetaNonBit
+
+# Derived views: the paths of a value in the source types come from the
+# move edges and the types at the rebuild, not from stored views: a leaf
+# three structs deep (Inner/0, Mid/1/0 and Outer/1/1/0), the payloads of
+# two constructors of one payload type (T/A and T/B), a struct payload
+# extracted from a Maybe (Inner/0 alone: the Valid under the unpack's
+# conditional is cancelled against the match before any cell exists),
+# two chains of a recursive type of depths two and four built by nesting
+# its constructor (Chain/Link/0 on every element: one unrolling, the cut
+# at the recursive type), the field selected from a conditional of two
+# structs (Word/0 alone: an operand of the conditional is no field) and
+# a struct packed from fresh field cells (Word, from the concatenation
+# of its fields); the census checks every edge against the types and
+# the chains and every derived window against the def's width
+metadata_golden MetaDerived sysMetaDerived
+
+# The bits under a chr of a conditional: a one-bit enumeration (whose
+# coercion is not held) unpacked from a conditional of two reads, and
+# written from a conditional of two unpacks; in both the field's value
+# is a chr of the conditional, whose bits are no cell, so neither arm's
+# cell reads the field's path (the register of the bits a chr reads is
+# emptied around the arms of a conditional and discarded afterwards);
+# a two-bit enumeration from the same shapes beside it, held, whose
+# conditional cell reads the field's path and its declared type
+metadata_golden MetaChrArm sysMetaChrArm
+
+# The chr in the condition: a one-bit enumeration unpacked by a function
+# the evaluator unfolds (the ord above it is not cancelled by ISimplify)
+# and compared, as the condition of a conditional of two unpacks merged
+# into one chr above it; the condition's chr is handled at the field's
+# level outside the arms, so its record is the last of that level, but
+# the merged chr's operand (the conditional) is no record's: the
+# condition's bits keep their own facts alone and read no path
+metadata_golden MetaChrCond sysMetaChrCond
+
 }

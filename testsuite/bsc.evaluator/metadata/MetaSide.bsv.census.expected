@@ -10,9 +10,14 @@ metadata census for sysMetaSide:
   depth: 2:7 3:1 4:5 5:3
   count: 1:21 2:1 3:1
   alias classes 54
+  validity: defs with a must-type 12 (at a Bit type 6; by construction 7, by declaration 7, by assumption 0), defs with views 12, derived views 18 (paths to depth 1), type windows 4
+  repacks 0 (unpack 0, chr 0), on lifted defs 0; undefined values on lifted defs 0
   cost: frame pushes 261, context-table operations 48 for 19 contexts
   chains walked 249, loops re-entered 0, repeated non-recursion sites 10 (def Prelude.bind_ [Prelude.bs] x6; def Prelude.__avFunc [Prelude.bs] x2; def Prelude.bind_ x1; def Prelude.bind_ [MetaSide.bsv:36:4] u x1)
   name hints: 4 cells bound to a parameter, 1 outside the library, each named by it
+  bit gate: cells gated 19, with facts 15; lifted defs gated as their types decide 16
+  edges: cells moved 17 (field 2, payload 8, operand 7), longest chain 1
+  views: 12 views and validities at a Bit type checked against the def's width
   method-condition positions: 0 calls, 0 kept, 0 on chains
 Warning: "MetaSide.bsv", line 30, column 8: (G0010)
   Rule "r1" was treated as more urgent than "r2". Conflicts:

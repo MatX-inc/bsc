@@ -1,0 +1,34 @@
+bsc-metadata 1
+def __h | site method FIFOF.first [MetaNonBit.bsv:84:16] | chain def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 -> def Prelude.toPrimAction [MetaNonBit.bsv:84:7] u#1 -> def Prelude.bind_ [MetaNonBit.bsv:84:11] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder x [Prelude.bs] | alias _N | tiers - | validity Prelude.Bit 8 db | views 1 {Prelude.Bit 8} | repacks 0 | undefined 0
+def __h | site method FIFOF_.i_notEmpty [FIFOF_.bsv] | chain def Prelude.bind_#1 -> def Prelude.bind_#1 -> def Prelude.bind_#1 -> def Prelude.bind_#1 -> def Prelude.bind_#1 -> def Prelude.bind_#1 | contexts 1 | merged 0 | folded 0 | parent - | binder field 0 | alias - | tiers - | validity Prelude.Bool d | views 1 {Prelude.Bool} | repacks 0 | undefined 0
+def __h | site method FIFOF_.i_notFull [FIFOF_.bsv] | chain def Prelude.bind_#1 -> def Prelude.bind_#1 -> def Prelude.bind_#1 -> def Prelude.bind_#1 -> def Prelude.bind_#1 -> def Prelude.bind_#1 | contexts 1 | merged 0 | folded 0 | parent - | binder field 0 | alias - | tiers - | validity Prelude.Bool d | views 1 {Prelude.Bool} | repacks 0 | undefined 0
+def __h | site method Prelude.avValue [Prelude.bs] | chain def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 -> def Prelude.toPrimAction [MetaNonBit.bsv:79:7] u#1 | contexts 1 | merged 0 | folded 1 {method MetaNonBit.take [MetaNonBit.bsv:24:33] @ def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 -> def Prelude.toPrimAction [MetaNonBit.bsv:79:7] u#1} | parent _N | binder v [Prelude.bs] | alias __h | tiers - | validity Prelude.Bit 8 db | views 2 {Prelude.AVStruct (Prelude.Bit 8)/0} {Prelude.Bit 8} | repacks 0 | undefined 0
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 -> def Prelude.toPrimAction [MetaNonBit.bsv:57:7] u#1 -> def Prelude.bind_ [MetaNonBit.bsv:57:7] u#1 -> def Prelude.fromPrimAction [MetaNonBit.bsv:57:7] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder - | alias - | tiers - | validity Prelude.Bit 8 cb | views 1 {Prelude.Bit 8} | repacks 0 | undefined 0
+def __h | site prim PrimAdd | chain def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 -> def Prelude.toPrimAction [MetaNonBit.bsv:57:7] u#1 -> def Prelude.bind_ [MetaNonBit.bsv:57:7] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder x [Prelude.bs] | alias - | tiers - | validity Prelude.Bit 8 cdb | views 1 {Prelude.Bit 8} | repacks 0 | undefined 0
+def __h | site prim PrimEQ | chain def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 -> def Prelude.toPrimAction [MetaNonBit.bsv:64:7] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder - | alias - | tiers - | validity Prelude.Bit 1 cb | views 1 {Prelude.Bit 1} | repacks 0 | undefined 0
+def __h | site prim PrimOrd | chain def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 | contexts 1 | merged 0 | folded 0 | parent - | binder field 2 | alias __h | tiers - | validity Prelude.Bool d | views 1 {Prelude.Bool} | repacks 0 | undefined 0
+def __h | site prim PrimOrd | chain def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 | contexts 1 | merged 0 | folded 0 | parent - | binder field 2 | alias __h | tiers - | validity Prelude.Bool d | views 1 {Prelude.Bool} | repacks 0 | undefined 0
+def __h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 1 | alias __h | tiers - | validity Prelude.Bit 8 db | views 1 {Prelude.Bit 8} | repacks 0 | undefined 0
+def _x1000000_snd__h | site prim PrimSelect | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder field 1 | alias - | tiers - | validity MetaNonBit.Pair [0+2] d | views 3 {MetaNonBit.Hue} {MetaNonBit.Pair [0+2]} {MetaNonBit.Pair/1} | repacks 0 | undefined 0
+def hue__h | site method Prelude.read [Prelude.bs] | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent __h | binder field 0 | alias - | tiers - | validity MetaNonBit.Hue d | views 1 {MetaNonBit.Hue} | repacks 0 | undefined 0
+def lo__h | site prim PrimAdd | chain def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 -> def Prelude.toPrimAction [MetaNonBit.bsv:72:7] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder field 0 | alias - | tiers - | validity Prelude.Bit 4 cb | views 2 {MetaNonBit.Pair/0} {Prelude.Bit 4} | repacks 0 | undefined 0
+def lo__h | site prim PrimUnpack | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent lo__h | binder field 0 | alias lo__h | tiers - | validity MetaNonBit.Pair [2+4] d | views 2 {MetaNonBit.Pair [2+4]} {MetaNonBit.Pair/0} | repacks 0 | undefined 0
+def mx_v__h | site method Prelude._read [MetaNonBit.bsv:53:46] | chain - | contexts 1 | merged 0 | folded 0 | parent __h | binder field 2 | alias _N | tiers - | validity Prelude.Bit 8 db | views 2 {MetaNonBit.Mixed/2} {Prelude.Bit 8} | repacks 0 | undefined 0
+def pr__h | site method Prelude.read [Prelude.bs] | chain def Prelude.bind_ [Prelude.bs]#1 -> def Prelude.bind_ [Prelude.bs]#1 | contexts 1 | merged 0 | folded 0 | parent lo__h | binder - | alias - | tiers - | validity MetaNonBit.Pair d | views 1 {MetaNonBit.Pair} | repacks 0 | undefined 0
+def raw_BITS_1_TO_0___h | site prim PrimSelect | chain def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 -> def Prelude.toPrimAction [MetaNonBit.bsv:64:7] u#1 | contexts 1 | merged 0 | folded 0 | parent _N | binder field 0 | alias - | tiers - | validity - | views 1 {Prelude.Bit 8 [0+2]} | repacks 0 | undefined 0
+module sysMetaNonBit
+repack unpack _407 from - to MetaNonBit.Hue @ def Prelude.bind_ [MetaNonBit.bsv:56:4] u#1 -> def Prelude.addRules [MetaNonBit.bsv:56:4] u#1 -> def Prelude.toPrimAction [MetaNonBit.bsv:64:7] u#1
+root inst acc [MetaNonBit.bsv:45:18]
+root inst hue [MetaNonBit.bsv:46:14]
+root inst pr [MetaNonBit.bsv:47:15]
+root inst q [MetaNonBit.bsv:48:20]
+root inst raw [MetaNonBit.bsv:44:18]
+root inst sub [MetaNonBit.bsv:49:8]
+root methodroot busy [MetaNonBit.bsv:43:8]
+root methodroot out [MetaNonBit.bsv:43:8]
+root rule drain
+root rule pair
+root rule show
+root rule take
+root rule turn
+validity census-grade

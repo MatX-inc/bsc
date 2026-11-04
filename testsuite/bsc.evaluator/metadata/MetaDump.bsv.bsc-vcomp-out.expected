@@ -10,20 +10,20 @@ _664: prim PrimJoinActions, field 1 <- def Prelude.__avFunc [Prelude.bs]#1 <- de
 _689: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs], alias _689 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaDump.bsv:24:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
 _694: prim PrimJoinActions, field 1 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaDump.bsv:24:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
 _724: prim PrimJoinActions, field 1, alias _719 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.__avFunc [Prelude.bs]#1 <- def Prelude.toPrimAction [MetaDump.bsv:24:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
-_755: prim PrimUnpack, field 0, alias _753 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
-_773: prim PrimUnpack, field 0, alias _771 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
-_784: prim PrimUnpack, field 0, alias _782 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
-_804: prim PrimUnpack, field 0, alias _802 <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_755: prim PrimUnpack, field 0, alias _753, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_773: prim PrimUnpack, field 0, alias _771, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_784: prim PrimUnpack, field 0, alias _782, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
+_804: prim PrimUnpack, field 0, alias _802, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.bind_ [Prelude.bs]#1 <- def Prelude.bind_ [Prelude.bs]#1
 _836: def Prelude.toPrimAction [MetaDump.bsv:31:7] u, field 3 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
 _845: method Prelude.avAction [Prelude.bs], binder a [Prelude.bs], alias _845 <- def Prelude.toPrimAction [MetaDump.bsv:31:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
-_855: method FIFOF_.i_notEmpty [FIFOF_.bsv], field 0 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1
+_855: method FIFOF_.i_notEmpty [FIFOF_.bsv], field 0, valid Prelude.Bool d, views {Prelude.Bool} <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1
 _866: method FIFOF_.deq [FIFOF_.bsv] <- def Prelude.toPrimAction [MetaDump.bsv:31:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
 _872: method Prelude.write [Prelude.bs], binder a [Prelude.bs] <- def Prelude.fromPrimAction [Prelude.bs]#1 <- def Prelude.bind_ [MetaDump.bsv:31:7] u#1 <- def Prelude.toPrimAction [MetaDump.bsv:31:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
-_878: method FIFOF_.first [FIFOF_.bsv], alias _875 <- def Prelude.fromPrimAction [Prelude.bs]#1 <- def Prelude.bind_ [MetaDump.bsv:31:7] u#1 <- def Prelude.toPrimAction [MetaDump.bsv:31:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
-_932: prim PrimAdd, field 0 <- def Prelude.primFix [MetaDump.bsv:37:7] ur#3 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
-_933: prim PrimAdd, field 0 <- def Prelude.primFix [MetaDump.bsv:37:7] ur#2 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
-_934: prim PrimAdd, field 0 <- def Prelude.primFix [MetaDump.bsv:37:7] ur#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
-_1012: method FIFOF_.i_notFull [FIFOF_.bsv], field 0 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1
+_878: method FIFOF_.first [FIFOF_.bsv], alias _875, valid Prelude.UInt 8 d, views {Prelude.UInt 8} <- def Prelude.fromPrimAction [Prelude.bs]#1 <- def Prelude.bind_ [MetaDump.bsv:31:7] u#1 <- def Prelude.toPrimAction [MetaDump.bsv:31:7] u#1 <- def Prelude.addRules [MetaDump.bsv:23:4] u#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
+_932: prim PrimAdd, field 0, valid Prelude.Bit 8 cb, views {Prelude.Bit 8; Prelude.UInt 8/UInt} <- def Prelude.primFix [MetaDump.bsv:37:7] ur#3 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
+_933: prim PrimAdd, field 0, valid Prelude.Bit 8 cb, views {Prelude.Bit 8; Prelude.UInt 8/UInt} <- def Prelude.primFix [MetaDump.bsv:37:7] ur#2 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
+_934: prim PrimAdd, field 0, valid Prelude.UInt 8 d, views {Prelude.UInt 8; Prelude.UInt 8/UInt} <- def Prelude.primFix [MetaDump.bsv:37:7] ur#1 <- def Prelude.bind_ [MetaDump.bsv:23:4] u#1
+_1012: method FIFOF_.i_notFull [FIFOF_.bsv], field 0, valid Prelude.Bool d, views {Prelude.Bool} <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1 <- def Prelude.bind_#1
 _1026: method FIFOF_.enq [FIFOF_.bsv] <- def Prelude.bitsToActionValue_ [Prelude.bs]#1 <- methodroot poke [MetaDump.bsv:16:8]#1
 Verilog file created: sysMetaDump.v
 All packages are up to date.
