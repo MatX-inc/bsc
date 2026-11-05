@@ -1,0 +1,39 @@
+# Tests for -hack-no-icheck-package and -hack-no-icheck-passes, checked
+# against -trace-intern-table, which writes <package>.intern.json beside
+# the .bo when bsc exits: one JSON document listing every interned
+# string with its id, in id order, so two compiles whose documents are
+# identical interned the same strings in the same order.  Ids compare
+# by intern id, so a change that moves the first forcing of a string can
+# change Map and Set orders and the generated names with them.
+#
+# The compiles run with -v, which prints "types OK" for every internal
+# check that ran: four package-level checks (iPCheck after internal,
+# fixup, isimpdicts and isimplify) and, per synthesized module, the
+# module check after expanded, six more after the post-expansion passes
+# (iMCheck after Fmt inline, inline, transform, splitIf, lift and
+# transform) and the ASyntax checks; two modules here, 46 in all.
+
+erase ICheck.bo
+compile_backend_pass ICheck.bs {-trace-intern-table -v}
+find_n_strings ICheck.bs.bsc-out {types OK} 46
+move ICheck.intern.json ICheck.checked.intern.json
+move ICheck.bo ICheck.checked.bo
+move mkCounter.v mkCounter.checked.v
+move sysICheck.v sysICheck.checked.v
+
+# -hack-no-icheck-package makes the four package-level checks no-ops and
+# -hack-no-icheck-passes the six post-expansion module checks; the check
+# after expanded and the ASyntax checks still run, so sixteen "types OK"
+# lines fewer.  A check is a pure re-typing whose Bool only feeds an
+# internal error, but it is also the first consumer of the pass's lazy
+# result, so skipping it is admissible only if the dump that follows
+# forces the same thunks and no string is first interned in a different
+# order: the .bo, both generated Verilog files and the intern table
+# must be identical to the checked compile's.
+erase ICheck.bo
+compile_backend_pass ICheck.bs {-trace-intern-table -hack-no-icheck-package -hack-no-icheck-passes -v}
+find_n_strings ICheck.bs.bsc-out {types OK} 30
+compare_file ICheck.bo ICheck.checked.bo
+compare_file mkCounter.v mkCounter.checked.v
+compare_file sysICheck.v sysICheck.checked.v
+compare_file ICheck.intern.json ICheck.checked.intern.json

@@ -787,7 +787,7 @@ genModule
 
     start flags DFinlineFmt
     imod_fmt <- iInlineFmt errh imod0
-    iMCheck flags symt imod_fmt "Fmt inline"
+    iMCheckPass flags symt imod_fmt "Fmt inline"
     t <- dump errh flags t DFinlineFmt dumpnames imod_fmt
     stats flags DFinlineFmt imod_fmt
 
@@ -797,34 +797,34 @@ genModule
             if inlineISyntax flags
             then (iInline (inlineSimple flags) imod_fmt)
             else imod_fmt
-    iMCheck flags symt imod_inline "inline"
+    iMCheckPass flags symt imod_inline "inline"
     t <- dump errh flags t DFinline dumpnames imod_inline
     stats flags DFinline imod_inline
 
     start flags DFtransform
     let imod_trans = iTransform errh flags "__i" imod_inline
-    iMCheck flags symt imod_trans "transform"
+    iMCheckPass flags symt imod_trans "transform"
     t <- dump errh flags t DFtransform dumpnames imod_trans
     stats flags DFtransform imod_trans
 
     -- Split rules containing if statements
     start flags DFsplitIf
     let imod_splitif = iSplitIf flags imod_trans
-    iMCheck flags symt imod_splitif "splitIf"
+    iMCheckPass flags symt imod_splitif "splitIf"
     t <- dump errh flags t DFsplitIf dumpnames imod_splitif
     stats flags DFsplitIf imod_splitif
 
     -- Lift where possible
     start flags DFlift
     let imod_lift = iLift errh flags imod_splitif
-    iMCheck flags symt imod_lift "lift"
+    iMCheckPass flags symt imod_lift "lift"
     t <- dump errh flags t DFlift dumpnames imod_lift
     stats flags DFlift imod_lift
 
     -- Transform to simpler form (take 2)
     start flags DFtransform
     let imod_trans2 = iTransform errh flags "__j" imod_lift
-    iMCheck flags symt imod_trans2 "transform"
+    iMCheckPass flags symt imod_trans2 "transform"
     t <- dump errh flags t DFtransform dumpnames imod_trans2
     stats flags DFtransform imod_trans2
 
@@ -2375,8 +2375,27 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
 
 -- ===============
 
+-- The hidden switches -hack-no-icheck-package and -hack-no-icheck-passes
+-- (registered with the other progArgs-queried flags in
+-- FlagsDecode.traceflags; BSC_OPTIONS reaches progArgs too) make the
+-- package-level checks (iPCheck: after internal, fixup, isimpdicts and
+-- isimplify) and the module checks after the six post-expansion passes
+-- (iMCheckPass: after Fmt inline, inline, transform, splitIf, lift and
+-- transform) no-ops, so a skipped check prints no "types OK" either.
+-- The check after expanded (iMCheck) and the ASyntax checks are not
+-- affected: the expanded check's traversal is the first forcing of the
+-- lazily named heap-cell defs, so its order reaches the generated names.
+-- Absent the switches every check runs, as before.
+{-# NOINLINE skipICheckPackage #-}
+skipICheckPackage :: Bool
+skipICheckPackage = "-hack-no-icheck-package" `elem` progArgs
+
+{-# NOINLINE skipICheckPasses #-}
+skipICheckPasses :: Bool
+skipICheckPasses = "-hack-no-icheck-passes" `elem` progArgs
+
 iPCheck :: Flags -> SymTab -> IPackage a -> String -> IO ()
-iPCheck flags symt ipkg desc = -- deepseq ipkg $
+iPCheck flags symt ipkg desc = unless skipICheckPackage $ -- deepseq ipkg $
         if doICheck flags && not (tCheckIPackage flags symt ipkg)
             then internalError (
                 "internal typecheck failed (iPCheck after " ++
@@ -2396,6 +2415,11 @@ iMCheck flags symt imod desc =
             if (verbose flags)
                 then putStrLnF "types OK"
                 else return ()
+
+-- iMCheck after one of the six post-expansion passes
+iMCheckPass :: Flags -> SymTab -> IModule a -> String -> IO ()
+iMCheckPass flags symt imod desc =
+    unless skipICheckPasses $ iMCheck flags symt imod desc
 
 aCheck :: Flags -> APackage -> String -> IO ()
 aCheck flags amod desc =
