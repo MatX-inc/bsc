@@ -1,0 +1,60 @@
+package InternTable where
+
+import Vector
+
+-- Source for the intern-table tests (intern_table.exp): a synthesized
+-- module with methods and rules; a class used at two types through a
+-- polymorphic helper, so FixupDefs, ISimpDicts and ISimplify rewrite
+-- dictionary references; a Fmt built with fshow (the Fmt inline pass);
+-- conditional actions (lift); and a condition shared by two rules
+-- (transform).
+
+interface Counter =
+    bump  :: UInt 8 -> Action
+    clear :: Action
+    total :: UInt 8
+    full  :: Bool
+
+class Scale a where
+    scale :: a -> a
+
+instance Scale (UInt n) where
+    scale x = x + x
+
+instance Scale (Bit n) where
+    scale x = x << 1
+
+sumScaled :: (Scale a, Arith a) => Vector 4 a -> a
+sumScaled v = foldr (+) 0 (map scale v)
+
+{-# verilog mkCounter #-}
+mkCounter :: Module Counter
+mkCounter = module
+    acc :: Reg (UInt 8) <- mkReg 0
+    base :: Reg (UInt 8) <- mkReg 0
+    hist :: Reg (Vector 4 (UInt 8)) <- mkReg (replicate 0)
+    interface
+        bump n = action { acc := acc + n; hist := shiftInAt0 hist n }
+            when acc - base < 200
+        clear = base := acc
+        total = sumScaled hist + base
+        full = acc - base >= 200
+
+{-# verilog sysInternTable #-}
+sysInternTable :: Module Empty
+sysInternTable = module
+    c :: Counter <- mkCounter
+    cnt :: Reg (UInt 8) <- mkReg 0
+    bits :: Reg (Bit 16) <- mkReg 1
+    rules
+      "step": when not c.full ==>
+        action
+          cnt := cnt + 1
+          if cnt > 3 then c.bump (cnt + 2) else c.bump 1
+          bits := sumScaled (replicate bits)
+          $display "%0d " cnt (fshow (c.total, bits))
+      "wrap": when c.full ==>
+        action
+          c.clear
+          $display (fshow cnt)
+      "done": when cnt == 40 ==> $finish 0
