@@ -7,7 +7,7 @@
 -- | Setup hooks for the bsc package (build-type: Hooks; doc/cabal.md).
 module SetupHooks (setupHooks) where
 
-import Control.Monad (filterM, forM_)
+import Control.Monad (filterM, forM_, when)
 import Control.Monad.IO.Class (liftIO)
 import Data.List (isPrefixOf)
 import Data.List.NonEmpty (NonEmpty ((:|)))
@@ -22,6 +22,7 @@ import qualified Distribution.Simple.LocalBuildInfo as LBI
 import Distribution.Simple.PackageIndex (lookupUnitId)
 import Distribution.Simple.SetupHooks
 import Distribution.Simple.Utils (rewriteFileEx)
+import Distribution.System (OS (..), buildOS)
 import Distribution.Utils.Path (moduleNameSymbolicPath, (<.>))
 import Distribution.Verbosity (normal)
 import System.Directory
@@ -126,7 +127,8 @@ writeAutogenModules (autogenDir, mods) = do
 
 -- | Post-build hook: symlink lib/SAT beside the built library and executables
 -- to the solver directory from LIBRARY_PATH so binaries in dist-newstyle run
--- in place via their relative rpath ($ORIGIN/../lib/SAT).
+-- in place via their relative rpath ($ORIGIN/../lib/SAT). On Linux, strip
+-- symbols matching ghc_* to remove temporary GHC link-stub filenames.
 postBuildComponent :: PostBuildComponentHook
 postBuildComponent inputs = do
   let lbi = inputs.localBuildInfo
@@ -142,6 +144,10 @@ postBuildComponent inputs = do
           createDirectoryIfMissing True (dir </> "lib")
           removePathForcibly link
           createDirectoryLink sat link
+    CExe exe ->
+      when (buildOS == Linux) $ do
+        let name = prettyShow (exeName exe)
+        callProcess "objcopy" ["--wildcard", "--strip-symbol=ghc_*", build </> name </> name]
     _ -> pure ()
   where
     holdsSolvers dir = do
