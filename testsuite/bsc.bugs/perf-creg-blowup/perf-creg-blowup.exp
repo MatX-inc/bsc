@@ -8,7 +8,7 @@
 #
 # Each test passes an explicit -K sized at >=2x the measured peak so
 # that a regression that grows stack usage on a normal bsc will be
-# caught.  The PROF build (BSC_BUILD=PROF) bakes in -K256m to
+# caught.  A profiling build bakes in -K256m (INSTALL.md) to
 # accommodate cost-centre overhead (~10x), so the same tests pass
 # with the prof binary.
 #
