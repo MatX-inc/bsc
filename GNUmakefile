@@ -20,7 +20,7 @@ help:
 	@echo
 	@echo '    make  install-src  Build and install just the tools'
 	@echo '    make  install-solvers'
-	@echo '                       Build and install just the vendored solvers (for a cabal build by hand)'
+	@echo '                       Build and install just the vendored solvers'
 	@echo '    make  install-doc  Build and install just the documentation'
 	@echo
 	@echo '    make  check-smoke  Run a quick smoke test'
@@ -52,8 +52,8 @@ install-src:
 	$(MAKE)  -C src  PREFIX=$(PREFIX)  install
 
 # The vendored solvers alone, built by their own Makefiles and installed under
-# $(PREFIX)/lib/SAT: what a cabal build run by hand links against, with the
-# directory named in LIBRARY_PATH. install-src does this first.
+# $(PREFIX)/lib/SAT with their link names, so that a build may link the
+# installed copies by name. install-src does this first.
 .PHONY: install-solvers
 install-solvers:
 	$(MAKE)  -C src  PREFIX=$(PREFIX)  install-solvers
