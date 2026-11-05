@@ -12,6 +12,7 @@ import System.IO(hFlush, stdout, hPutStr, stderr, hGetContents, hClose, hSetBuff
 import System.IO(hSetEncoding, utf8)
 import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExecuteMode, setFileMode, getFileStatus, fileAccess)
 import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory)
+import System.Directory(removeFile)
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
 import Data.Char(isSpace, toLower, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
@@ -22,11 +23,14 @@ import Numeric(showOct)
 
 import Control.Monad(when, unless, filterM, liftM, foldM)
 import Control.Monad.Except(runExceptT)
+import Data.IORef(IORef, newIORef, readIORef, writeIORef)
+import System.IO.Unsafe(unsafePerformIO)
 import Control.Concurrent(forkIO)
 import Control.Concurrent.MVar(newEmptyMVar, putMVar, takeMVar)
 import qualified Control.Exception as CE
 import qualified Data.Map as M
 import qualified Data.Set as S
+import qualified Data.ByteString.Lazy as BL
 
 import ListMap(lookupWithDefault)
 import SCC(scc)
@@ -49,7 +53,8 @@ import FileIOUtil(writeFileCatch, readFileMaybe, removeFileCatch,
 import TopUtils
 import SystemCheck(doSystemCheck)
 import BuildSystem
-import IOUtil(getEnvDef)
+import IOUtil(getEnvDef, progArgs)
+import SpeedyString(snapshotInternState, renderInternTable)
 
 -- compiler libs
 --import FStringCompat
@@ -180,7 +185,30 @@ main = do
     hSetEncoding stderr utf8
     args <- getArgs
     -- bsc can raise exception,  catch them here  print the message and exit out.
-    bsCatch (hmain args)
+    bsCatch (hmain args) `CE.finally` dumpInternTable
+
+-- Hidden flag -trace-intern-table: write the table to $BSC_INTERN_DUMP or
+-- <package>.intern.json after every output is written, interning nothing.
+dumpInternTable :: IO ()
+dumpInternTable = when ("-trace-intern-table" `elem` progArgs) $ do
+    env_file <- getEnvDef "BSC_INTERN_DUMP" ""
+    dflt_file <- readIORef internDumpFile
+    case (if null env_file then dflt_file else Just env_file) of
+      Nothing -> return ()
+      Just file -> do
+        snapshot <- snapshotInternState
+        case renderInternTable snapshot of
+          Right bytes -> BL.writeFile file bytes
+          Left problem -> do
+            hPutStr stderr ("-trace-intern-table: " ++ problem ++ "\n")
+            -- so that an older table cannot pass for this run's
+            stale <- doesFileExist file
+            when stale (removeFile file)
+            CE.throwIO (ExitFailure 1)
+
+{-# NOINLINE internDumpFile #-}
+internDumpFile :: IORef (Maybe FilePath)
+internDumpFile = unsafePerformIO (newIORef Nothing)
 
 -- Use with hugs top level
 hmain :: [String] -> IO ()
@@ -337,6 +365,9 @@ compilePackage
     pwd <- getCurrentDirectory
     let name = createEncodedFullFilePath name_orig pwd
         dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
+
+    -- where -trace-intern-table writes its dump (see dumpInternTable)
+    writeIORef internDumpFile (Just (putInDir (bdir flags) name "intern.json"))
 
     clkTime <- getClockTime
     epochTime <- getPOSIXTime
