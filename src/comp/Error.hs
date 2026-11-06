@@ -977,6 +977,7 @@ data ErrMsg =
         | EBSimInoutIfc [String]
         | EBSimInoutArg (Maybe String) [String]
         | EBSimSplitMethods [String]
+        | ESizeParamBluesimUnsupported String
 
         | EDivideByZero
         | EIntegerNegativeExponent
@@ -4140,6 +4141,11 @@ getErrorText (WSVStdIdentExternal name) =
             "and cannot be renamed in the generated Verilog.  Some tools " ++
             "(for example verilator) will fail to parse code that uses " ++
             "this name.  Consider renaming it in the source."))
+
+getErrorText (ESizeParamBluesimUnsupported mod_name) =
+    (Generate 134, empty,
+     s2par ("Bluesim does not yet support synthesized modules with numeric " ++
+            "type parameters (" ++ ishow mod_name ++ ")."))
 
 
 ---------------------------------------------------------------------------

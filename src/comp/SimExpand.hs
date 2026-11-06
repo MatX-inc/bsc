@@ -3,8 +3,9 @@ module SimExpand ( simExpand, simExpandSched, simCheckPackage ) where
 
 import Data.Maybe (isNothing, isJust, catMaybes, mapMaybe, maybeToList,
                    fromMaybe, listToMaybe)
-import Data.List (partition, union, nub, sort, sortBy, delete)
-import Control.Monad (when, guard, msum {-, mapM_ -})
+import Data.List (partition, union, nub, sort, sortBy, delete, intercalate)
+import Data.Bits ((.&.), (.|.), xor, complement, shiftL, shiftR)
+import Control.Monad (when, guard, msum, foldM {-, mapM_ -})
 import Debug.Trace
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -17,6 +18,8 @@ import PPrint
 import Flags
 import FStringCompat(mkFString)
 import Backend
+import IntLit (IntLit(..), ilValue, ilDec, ilSizedDec, ilSizedHex, ilBin)
+import Prim (PrimOp(..))
 
 import PreStrings (sSigned, sUnsigned)
 import PreIds (idDefaultClock, idDefaultReset, idInteger)
@@ -29,7 +32,7 @@ import Wires(WireProps(..), ClockDomain)
 import Pragma(PProp(..), isAlwaysEn, isEnWhenRdy, RulePragma(..),
               getDefaultClockArg, getDefaultResetArg)
 import ASyntax
-import ASyntaxUtil(aSubst, findAExprs, exprFold)
+import ASyntaxUtil(aSubst, aType, findAExprs, exprFold)
 import AScheduleInfo
 import AUses(MethodId(..))
 import Params(isConstAExpr)
@@ -38,12 +41,13 @@ import SimPrimitiveModules(getPrimDomainInfo, checkBluesimPrimitives)
 import SimCCBlock(SimCCBlock(..), primBlocks)
 import SchedInfo (methodConflictInfo, sSB)
 import ABin (ABin(..), ABinModInfo(..))
-import ABinUtil(HierMap, getABIHierarchy, assertNoSchedErr)
+import ABinUtil(HierMap, InstModMap, ABinMap,
+                getABIHierarchy, hierMapToInstModMap, assertNoSchedErr)
 import SimDomainInfo
 
 import SCC (tsort)
 
-import Util (headOrErr, map_insertManyWith, allPairs, stableOrdNub, mapFst, mapSnd)
+import Util (headOrErr, map_insertManyWith, allPairs, stableOrdNub, mapFst, mapSnd, log2)
 import GraphUtil(extractOneCycle_map, reverseMap)
 
 -- ===============
@@ -94,58 +98,76 @@ simExpand errh flags topname fabis = do
      else when ((not (null top_args)) || (not (null top_params))) $
                bsError errh [(noPosition, EBSimTopLevelArgOrParam False (top_args ++ top_params))]
 
-    simpkgs <- mapM (simExpandABin errh flags) (map snd modinfos_used_by_name)
-    let pkg_map = M.fromList (map (\p -> (sp_name p,p)) simpkgs)
+    -- In -sim -c mode (blockCodegen), if the root module itself has
+    -- uninstantiated numeric size parameters, skip standalone C++ codegen
+    -- for the template .ba; its concrete specializations will be generated
+    -- when the enclosing design is linked.
+    if (blockCodegen flags && not (null (apkg_size_params (abmi_apkg topModInfo))))
+    then return $ SimSystem { ssys_packages    = M.empty
+                            , ssys_schedules   = []
+                            , ssys_top         = topmodId
+                            , ssys_instmap     = M.empty
+                            , ssys_ffuncmap    = ffuncmap
+                            , ssys_filemap     = filemap
+                            , ssys_default_clk = Nothing
+                            , ssys_default_rst = Nothing
+                            }
+    else do
+      (modinfos_used_by_name', hiermap', instmap', filemap')
+          <- instantiateTemplates errh topname hiermap instmap filemap modinfos_used_by_name
 
-    -- record default clock and reset for top module
-    -- (when an argument is designated as the default clock/reset, its
-    -- port serves as the top-level default clock/reset)
-    let top_pps = abmi_pps topModInfo
-        arg_port_name prefix rename_lookups arg =
-            let base = getIdBaseString arg
-                m_name = msum [ lookup arg xs | xs <- rename_lookups ]
-                dflt = if (null prefix) then base else (prefix ++ "_" ++ base)
-            in  fromMaybe dflt m_name
-        def_clk = case (getDefaultClockArg top_pps) of
-                    Just arg ->
-                        let prefix = fromMaybe "CLK" $
-                                       listToMaybe [ s | PPCLK s <- top_pps ]
-                            renames = [ xs | PPclock_osc xs <- top_pps ]
-                        in  Just (arg_port_name prefix renames arg)
-                    Nothing ->
-                        msum $ [ lookup idDefaultClock xs
-                               | (PPclock_osc xs) <- top_pps
-                               ] ++
-                               [Just "CLK"]
-        top_clk = do x <- def_clk
-                     guard (not (null x))
-                     return x
-        def_rst = case (getDefaultResetArg top_pps) of
-                    Just arg ->
-                        let prefix = fromMaybe (resetName flags) $
-                                       listToMaybe [ s | PPRSTN s <- top_pps ]
-                            renames = [ xs | PPreset_port xs <- top_pps ]
-                        in  Just (arg_port_name prefix renames arg)
-                    Nothing ->
-                        msum $ [ lookup idDefaultReset xs
-                               | (PPreset_port xs) <- top_pps
-                               ] ++
-                               [Just "RSTN"]
-        top_rst = do x <- def_rst
-                     guard (not (null x))
-                     return x
+      simpkgs <- mapM (simExpandABin errh flags) (map snd modinfos_used_by_name')
+      let pkg_map = M.fromList (map (\p -> (sp_name p,p)) simpkgs)
 
-    simscheds <- simExpandSched modinfos_used_by_name hiermap instmap topname
+      -- record default clock and reset for top module
+      -- (when an argument is designated as the default clock/reset, its
+      -- port serves as the top-level default clock/reset)
+      let top_pps = abmi_pps topModInfo
+          arg_port_name prefix rename_lookups arg =
+              let base = getIdBaseString arg
+                  m_name = msum [ lookup arg xs | xs <- rename_lookups ]
+                  dflt = if (null prefix) then base else (prefix ++ "_" ++ base)
+              in  fromMaybe dflt m_name
+          def_clk = case (getDefaultClockArg top_pps) of
+                      Just arg ->
+                          let prefix = fromMaybe "CLK" $
+                                         listToMaybe [ s | PPCLK s <- top_pps ]
+                              renames = [ xs | PPclock_osc xs <- top_pps ]
+                          in  Just (arg_port_name prefix renames arg)
+                      Nothing ->
+                          msum $ [ lookup idDefaultClock xs
+                                 | (PPclock_osc xs) <- top_pps
+                                 ] ++
+                                 [Just "CLK"]
+          top_clk = do x <- def_clk
+                       guard (not (null x))
+                       return x
+          def_rst = case (getDefaultResetArg top_pps) of
+                      Just arg ->
+                          let prefix = fromMaybe (resetName flags) $
+                                         listToMaybe [ s | PPRSTN s <- top_pps ]
+                              renames = [ xs | PPreset_port xs <- top_pps ]
+                          in  Just (arg_port_name prefix renames arg)
+                      Nothing ->
+                          msum $ [ lookup idDefaultReset xs
+                                 | (PPreset_port xs) <- top_pps
+                                 ] ++
+                                 [Just "RSTN"]
+          top_rst = do x <- def_rst
+                       guard (not (null x))
+                       return x
 
-    return $ SimSystem { ssys_packages    = pkg_map
-                       , ssys_schedules   = simscheds
-                       , ssys_top         = topmodId
-                       , ssys_instmap     = instmap
-                       , ssys_ffuncmap    = ffuncmap
-                       , ssys_filemap     = filemap
-                       , ssys_default_clk = top_clk
-                       , ssys_default_rst = top_rst
-                       }
+      simscheds <- simExpandSched modinfos_used_by_name' hiermap' instmap' topname
+
+      return $ SimSystem { ssys_packages    = pkg_map
+                         , ssys_schedules   = simscheds
+                         , ssys_top         = topmodId
+                         , ssys_instmap     = instmap'
+                         , ssys_ffuncmap    = ffuncmap
+                         , ssys_filemap     = filemap'
+                         , ssys_default_clk = top_clk
+                         , ssys_default_rst = top_rst
+                         }
 
 -- ===============
 
@@ -2389,12 +2411,499 @@ hasEnabledMethod modInfo =
 
 getArgsAndParams :: ABinModInfo -> ([String],[String])
 getArgsAndParams modInfo =
-    let inputs = getAPackageInputs (abmi_apkg modInfo)
+    let apkg   = abmi_apkg modInfo
+        inputs = getAPackageInputs apkg
         params = filter (isParam . snd) inputs
         ports  = filter (isPort . snd) inputs
-        params' = [ getIdBaseString i | (AAI_Port (i,_),_) <- params ]
+        size_params = map getIdBaseString (apkg_size_params apkg)
+        params' = size_params ++ [ getIdBaseString i | (AAI_Port (i,_),_) <- params ]
         ports'  = [ getIdBaseString i | (AAI_Port (i,_),_) <- ports ]
     in (ports',params')
+
+-- ===============
+-- Bluesim Template Specialization for Size-Parameterized Modules
+--
+-- Rationale (why SimExpand specializes APackage templates in Haskell
+-- rather than emitting C++ `template <unsigned int w>` classes):
+--
+-- 1. Width-dispatched C++ representations and operators:
+--    Bluesim's C++ code generator (SimMakeCBlocks / SimCCBlock) selects
+--    fundamentally different C++ storage types and instruction forms based
+--    on the concrete bit width of each signal:
+--      * 1..8 bits   -> `tUInt8`  with native C++ operators (+, &, >>)
+--      * 9..32 bits  -> `tUInt32` with native C++ operators
+--      * 33..64 bits -> `tUInt64` with native C++ operators
+--      * > 64 bits   -> `tUWide` (`WideData`), which uses multi-word
+--                       buffers, chunked 32-bit literal initializers, and
+--                       procedural helper calls (`bs_wide_add`, `wop_...`,
+--                       `get_bits_in_word32`, `build_concat`, etc.) instead
+--                       of C++ expression operators.
+-- 2. Compile-time word/bit layout in SimPackageOpt and SimCCBlock:
+--    Passes such as `optimizeConcats`, `wideExtractPrim`, `wideConcatPrim`,
+--    and constant literal decomposition compute 32-bit word boundaries, bit
+--    shifts, and masks in Haskell during code generation.
+-- 3. Whole-hierarchy schedule merging and static VCD tables:
+--    Unlike Verilog (where modules remain black boxes with ports), Bluesim
+--    merges method calls and schedules across module boundaries
+--    (`simExpandSched`) and emits static VCD signal width tables.
+--
+-- By compiling each size-parameterized module once to a template `.ba` file
+-- containing symbolic `ASize`s (`bsc -sim -u`), front-end typechecking,
+-- elaboration, and scheduling happen only once per source module.  Then, at
+-- simulation link time (`bsc -sim -e topMod`), `instantiateTemplates` walks
+-- the hierarchy from `topname`, clones each parameterized `ABinModInfo` once
+-- per distinct `(module, [size_arg_1, ...])` tuple (e.g. `mkPass_s_8`,
+-- `mkPass_s_32`), substitutes all symbolic `ASize`s and `ASParam`s, and
+-- constant-folds `APrim` expressions so that all downstream Bluesim passes
+-- operate on concrete bit widths without duplicating front-end compilation.
+
+instantiateTemplates ::
+    ErrorHandle ->
+    String ->
+    HierMap ->
+    InstModMap ->
+    ABinMap ->
+    [(String, (ABinModInfo, String))] ->
+    IO ([(String, (ABinModInfo, String))], HierMap, InstModMap, ABinMap)
+instantiateTemplates errh topname hiermap instmap filemap modinfos_used_by_name
+  | all (null . apkg_size_params . abmi_apkg . fst . snd) modinfos_used_by_name =
+      return (modinfos_used_by_name, hiermap, instmap, filemap)
+  | otherwise = do
+      let orig_map = M.fromList modinfos_used_by_name
+          top_entry =
+              case M.lookup topname orig_map of
+                Just e  -> e
+                Nothing -> internalError ("instantiateTemplates: topname not found: " ++ topname)
+          -- Keep primitive/foreign entries (which are not in orig_map) in the initial HierMap
+          init_hier  = M.filterWithKey (\k _ -> not (k `M.member` orig_map)) hiermap
+          init_mods  = M.singleton topname top_entry
+
+          go [] acc_mods acc_hier acc_files = (acc_mods, acc_hier, acc_files)
+          go (cur_name : rest_work) acc_mods acc_hier acc_files
+            | cur_name `M.member` acc_hier =
+                go rest_work acc_mods acc_hier acc_files
+            | otherwise =
+                let (cur_abi, cur_ver) =
+                        case M.lookup cur_name acc_mods of
+                          Just e  -> e
+                          Nothing -> internalError ("instantiateTemplates: missing mod " ++ cur_name)
+                    cur_apkg = abmi_apkg cur_abi
+                    defs = apkg_local_defs cur_apkg
+                    dmap = M.fromList [ (i, aSubst dmap e) | ADef i _ e _ <- defs ]
+                    resolveConst e = foldConstAExpr id (aSubst dmap e)
+
+                    stepInst (avi, (mods_acc, files_acc, work_acc)) =
+                        let child_name = getVNameString (vName (avi_vmi avi))
+                        in case M.lookup child_name orig_map of
+                             Nothing ->
+                                 (avi, (mods_acc, files_acc, work_acc))
+                             Just (child_abi, child_ver) ->
+                                 let ps = apkg_size_params (abmi_apkg child_abi)
+                                 in if null ps
+                                    then let (mods_acc', work_acc') =
+                                                 if child_name `M.member` mods_acc
+                                                 then (mods_acc, work_acc)
+                                                 else (M.insert child_name (child_abi, child_ver) mods_acc,
+                                                       work_acc ++ [child_name])
+                                         in (avi, (mods_acc', files_acc, work_acc'))
+                                    else let k = length ps
+                                             (size_arg_exprs, rest_iargs) = splitAt k (avi_iargs avi)
+                                             extractInt e =
+                                                 case resolveConst e of
+                                                   ASInt _ _ lit -> ilValue lit
+                                                   other -> internalError ("instantiateTemplates: non-constant size argument for " ++
+                                                                           child_name ++ ": " ++ ppReadable other)
+                                             vals = map extractInt size_arg_exprs
+                                             spec_name = child_name ++ "_s_" ++ intercalate "_" (map show vals)
+                                             vmi  = avi_vmi avi
+                                             vmi' = vmi { vName = VName spec_name
+                                                        , vArgs = drop k (vArgs vmi)
+                                                        }
+                                             avi' = avi { avi_vmi   = vmi'
+                                                        , avi_iargs = rest_iargs
+                                                        }
+                                             (mods_acc', files_acc', work_acc') =
+                                                 if spec_name `M.member` mods_acc
+                                                 then (mods_acc, files_acc, work_acc)
+                                                 else let spec_abi = specializeABinModInfo spec_name ps vals child_abi
+                                                          mods1 = M.insert spec_name (spec_abi, child_ver) mods_acc
+                                                          files1 = case M.lookup child_name files_acc of
+                                                                     Just f  -> M.insert spec_name f files_acc
+                                                                     Nothing -> files_acc
+                                                      in (mods1, files1, work_acc ++ [spec_name])
+                                         in (avi', (mods_acc', files_acc', work_acc'))
+
+                    (insts', (acc_mods1, acc_files1, new_work1)) =
+                        foldr (\avi (avis, st) ->
+                                 let (avi', st') = stepInst (avi, st)
+                                 in  (avi' : avis, st'))
+                              ([], (acc_mods, acc_files, []))
+                              (apkg_state_instances cur_apkg)
+
+                    func_pairs =
+                        [ (inst_name, mod_name)
+                        | ADef _ _ (ANoInlineFunCall _ _ (ANoInlineFun mod_name _ _ (Just inst_name)) _) _
+                            <- defs ]
+                    stepFunc (_, fn_mod) (mods_acc, work_acc) =
+                        case M.lookup fn_mod orig_map of
+                          Just entry | not (fn_mod `M.member` mods_acc) ->
+                              (M.insert fn_mod entry mods_acc, work_acc ++ [fn_mod])
+                          _ -> (mods_acc, work_acc)
+                    (acc_mods2, new_work2) =
+                        foldr stepFunc (acc_mods1, new_work1) func_pairs
+
+                    cur_apkg' = cur_apkg { apkg_state_instances = insts' }
+                    cur_abi'  = cur_abi  { abmi_apkg = cur_apkg' }
+                    acc_mods3 = M.insert cur_name (cur_abi', cur_ver) acc_mods2
+
+                    submod_pairs =
+                        [ (getIdString (avi_vname avi), getVNameString (vName (avi_vmi avi)))
+                        | avi <- insts' ]
+                    acc_hier1 = M.insert cur_name (submod_pairs, func_pairs) acc_hier
+                in  go (rest_work ++ new_work2) acc_mods3 acc_hier1 acc_files1
+
+          (final_mods, final_hier, final_files) =
+              go [topname] init_mods init_hier filemap
+
+      final_instmap <- either (bsError errh) return $
+                       hierMapToInstModMap final_hier topname
+      return (M.toList final_mods, final_hier, final_instmap, final_files)
+
+specializeABinModInfo :: String -> [AId] -> [Integer] -> ABinModInfo -> ABinModInfo
+specializeABinModInfo spec_name ps vals abi =
+    abi { abmi_apkg = specializeAPackage spec_name ps vals (abmi_apkg abi) }
+
+specializeAPackage :: String -> [AId] -> [Integer] -> APackage -> APackage
+specializeAPackage spec_name ps vals apkg =
+    let size_pairs = concat [ [(p, SizeConst v), (unQualId p, SizeConst v)]
+                            | (p, v) <- zip ps vals ]
+        val_pairs  = concat [ [(p, v), (unQualId p, v)]
+                            | (p, v) <- zip ps vals ]
+        sizeMap = M.fromList size_pairs
+        valMap  = M.fromList val_pairs
+
+        specType :: AType -> AType
+        specType (ATBit sz)         = ATBit (substSizeExpr sizeMap sz)
+        specType (ATString msz)     = ATString (fmap (substSizeExpr sizeMap) msz)
+        specType ATReal             = ATReal
+        specType (ATArray len ety)  = ATArray (substSizeExpr sizeMap len) (specType ety)
+        specType (ATTuple tys)      = ATTuple (map specType tys)
+        specType (ATAbstract i szs) = ATAbstract i (map (substSizeExpr sizeMap) szs)
+
+        raw_dmap = M.fromList [ (i, e) | ADef i _ e _ <- apkg_local_defs apkg ]
+        resolveConst :: AExpr -> AExpr
+        resolveConst (ASDef _ i) =
+            case M.lookup i raw_dmap of
+              Just rhs ->
+                  let rhs' = specExpr rhs
+                  in  case rhs' of
+                        ASInt {} -> rhs'
+                        _        -> ASDef (aType rhs') i
+              Nothing -> internalError ("specializeAPackage.resolveConst: missing def " ++ ppReadable i)
+        resolveConst e = e
+
+        hasParam :: AExpr -> Bool
+        hasParam (ASParam _ oid) = M.member oid valMap
+        hasParam (ASDef _ i)     = maybe False hasParam (M.lookup i raw_dmap)
+        hasParam (APrim _ _ _ args) = any hasParam args
+        hasParam (AFunCall _ _ "$clog2" False args) = any hasParam args
+        hasParam _ = False
+
+        evalConstParamExpr :: AExpr -> Maybe Integer
+        evalConstParamExpr (ASInt _ _ lit) = Just (ilValue lit)
+        evalConstParamExpr (ASParam _ oid) = M.lookup oid valMap
+        evalConstParamExpr (ASDef _ i)     = M.lookup i raw_dmap >>= evalConstParamExpr
+        evalConstParamExpr (AFunCall _ _ "$clog2" False [arg]) = do
+            v <- evalConstParamExpr arg
+            if v > 0 then Just (toInteger (log2 v)) else Nothing
+        evalConstParamExpr (APrim _ _ op args) =
+            case (op, args) of
+              (PrimAdd, _) -> fmap sum (mapM evalConstParamExpr args)
+              (PrimSub, [e1, e2]) -> (-) <$> evalConstParamExpr e1 <*> evalConstParamExpr e2
+              (PrimMul, [e1, e2]) -> (*) <$> evalConstParamExpr e1 <*> evalConstParamExpr e2
+              (PrimQuot, [e1, e2]) -> do
+                  v1 <- evalConstParamExpr e1
+                  v2 <- evalConstParamExpr e2
+                  if v2 /= 0 then Just (v1 `quot` v2) else Nothing
+              (PrimRem, [e1, e2]) -> do
+                  v1 <- evalConstParamExpr e1
+                  v2 <- evalConstParamExpr e2
+                  if v2 /= 0 then Just (v1 `rem` v2) else Nothing
+              (PrimSL, [e1, e2]) -> do
+                  v1 <- evalConstParamExpr e1
+                  v2 <- evalConstParamExpr e2
+                  if v2 >= 0 then Just (shiftL v1 (fromInteger v2)) else Nothing
+              (PrimSRL, [e1, e2]) -> do
+                  v1 <- evalConstParamExpr e1
+                  v2 <- evalConstParamExpr e2
+                  if v2 >= 0 then Just (shiftR v1 (fromInteger v2)) else Nothing
+              (PrimConcat, _) ->
+                  let step acc e = do
+                          v <- evalConstParamExpr e
+                          case specType (aType e) of
+                            ATBit (SizeConst wk) ->
+                                let m = if wk <= 0 then 0 else v `mod` (2 ^ wk)
+                                in  Just (shiftL acc (fromInteger wk) + m)
+                            _ -> Nothing
+                  in  foldM step 0 args
+              (PrimExtract, [e1, hi, lo]) -> do
+                  v1  <- evalConstParamExpr e1
+                  vhi <- evalConstParamExpr hi
+                  vlo <- evalConstParamExpr lo
+                  let w = vhi - vlo + 1
+                      m = if w <= 0 then 0 else (shiftR v1 (fromInteger vlo)) `mod` (2 ^ w)
+                  if vlo >= 0 then Just m else Nothing
+              (PrimIf, [c, t, f]) -> do
+                  vc <- evalConstParamExpr c
+                  if vc /= 0 then evalConstParamExpr t else evalConstParamExpr f
+              (PrimEQ, [e1, e2]) -> do
+                  v1 <- evalConstParamExpr e1
+                  v2 <- evalConstParamExpr e2
+                  Just (if v1 == v2 then 1 else 0)
+              (PrimULT, [e1, e2]) -> do
+                  v1 <- evalConstParamExpr e1
+                  v2 <- evalConstParamExpr e2
+                  Just (if v1 < v2 then 1 else 0)
+              (PrimULE, [e1, e2]) -> do
+                  v1 <- evalConstParamExpr e1
+                  v2 <- evalConstParamExpr e2
+                  Just (if v1 <= v2 then 1 else 0)
+              (PrimBAnd, _) -> do
+                  vs <- mapM evalConstParamExpr args
+                  Just (if all (/= 0) vs then 1 else 0)
+              (PrimBOr, _) -> do
+                  vs <- mapM evalConstParamExpr args
+                  Just (if any (/= 0) vs then 1 else 0)
+              (PrimBNot, [e1]) -> do
+                  v1 <- evalConstParamExpr e1
+                  Just (if v1 == 0 then 1 else 0)
+              _ -> Nothing
+        evalConstParamExpr _ = Nothing
+
+        specExpr :: AExpr -> AExpr
+        specExpr e@(APrim oid ty _ _)
+            | ATBit (SizeConst w) <- specType ty
+            , hasParam e
+            , Just v <- evalConstParamExpr e =
+                let ty' = ATBit (SizeConst w)
+                    m   = if w <= 0 then 0 else v `mod` (2 ^ w)
+                in  ASInt oid ty' (ilSizedDec w m)
+        specExpr (APrim oid ty op args) =
+            let ty'   = specType ty
+                args' = map specExpr args
+                args'' = case (op, args') of
+                           (PrimExtract, [e', hi', lo']) ->
+                               [e', resolveConst hi', resolveConst lo']
+                           _ -> args'
+            in  foldConstAExpr resolveConst (APrim oid ty' op args'')
+        specExpr (AMethCall ty oid mid args) =
+            AMethCall (specType ty) oid mid (map specExpr args)
+        specExpr (AMethValue ty oid mid) =
+            AMethValue (specType ty) oid mid
+        specExpr (ATuple ty elems) =
+            ATuple (specType ty) (map specExpr elems)
+        specExpr (ATupleSel ty e idx) =
+            ATupleSel (specType ty) (specExpr e) idx
+        specExpr (ANoInlineFunCall ty oid fun args) =
+            ANoInlineFunCall (specType ty) oid fun (map specExpr args)
+        specExpr (AFunCall ty oid fname isC args) =
+            let ty'   = specType ty
+                args' = map specExpr args
+            in  case (fname, ty', map resolveConst args') of
+                  ("$clog2", ATBit (SizeConst w), [ASInt _ _ l1]) | ilValue l1 > 0 ->
+                      let v = log2 (ilValue l1)
+                          m = if w <= 0 then 0 else v `mod` (2 ^ w)
+                      in  ASInt oid ty' (ilSizedDec w m)
+                  _ -> AFunCall ty' oid fname isC args'
+        specExpr (ATaskValue ty oid fname isC cookie) =
+            ATaskValue (specType ty) oid fname isC cookie
+        specExpr (ASPort ty oid) =
+            ASPort (specType ty) oid
+        specExpr (ASParam ty oid) =
+            let ty' = specType ty
+            in  case M.lookup oid valMap of
+                  Just val ->
+                      case ty' of
+                        ATBit (SizeConst w) ->
+                            let m = if w <= 0 then 0 else val `mod` (2 ^ w)
+                            in  ASInt defaultAId ty' (ilSizedDec w m)
+                        _ -> ASInt defaultAId ty' (ilDec val)
+                  Nothing -> ASParam ty' oid
+        specExpr (ASDef ty oid) =
+            ASDef (specType ty) oid
+        specExpr (ASInt oid ty lit) =
+            let ty' = specType ty
+            in  case ty' of
+                  ATBit (SizeConst w) | ilValue lit < 0 ->
+                      let uval = if w <= 0 then 0 else (ilValue lit) `mod` (2 ^ w)
+                      in  ASInt oid ty' (ilSizedHex w uval)
+                  _ -> ASInt oid ty' lit
+        specExpr (ASReal oid ty rval) =
+            ASReal oid (specType ty) rval
+        specExpr (ASStr oid ty sval) =
+            ASStr oid (specType ty) sval
+        specExpr (ASAny ty mval) =
+            ASAny (specType ty) (fmap specExpr mval)
+        specExpr (ASClock ty clk) =
+            ASClock (specType ty) (specClock clk)
+        specExpr (ASReset ty rst) =
+            ASReset (specType ty) (specReset rst)
+        specExpr (ASInout ty iot) =
+            ASInout (specType ty) (specInout iot)
+        specExpr (AMGate ty oid clkid) =
+            AMGate (specType ty) oid clkid
+
+        specClock (AClock osc gate) = AClock (specExpr osc) (specExpr gate)
+        specReset (AReset w)        = AReset (specExpr w)
+        specInout (AInout w)        = AInout (specExpr w)
+
+        specAbsInput (AAI_Port (i, ty)) = AAI_Port (i, specType ty)
+        specAbsInput (AAI_Inout i sz)   = AAI_Inout i (substSizeExpr sizeMap sz)
+        specAbsInput ai                 = ai
+
+        specInst avi =
+            avi { avi_type       = specType (avi_type avi)
+                , avi_meth_types = [ ( map (map specType) ins
+                                     , fmap specType men
+                                     , map specType outs
+                                     )
+                                   | (ins, men, outs) <- avi_meth_types avi ]
+                , avi_iargs      = map (resolveConst . specExpr) (avi_iargs avi)
+                }
+
+        specDef (ADef i ty e props) =
+            ADef i (specType ty) (specExpr e) props
+
+        specAssump (AAssumption prop acts) =
+            AAssumption (specExpr prop) (map specAction acts)
+
+        specAction (ACall oid mid args) =
+            ACall oid mid (map specExpr args)
+        specAction (AFCall oid fun isC args assump) =
+            AFCall oid fun isC (map specExpr args) assump
+        specAction (ATaskAction oid fun isC cookie args temp vtyp assump) =
+            ATaskAction oid fun isC cookie (map specExpr args) temp (specType vtyp) assump
+
+        specRule r =
+            r { arule_pred    = specExpr (arule_pred r)
+              , arule_actions = map specAction (arule_actions r)
+              , arule_assumps = map specAssump (arule_assumps r)
+              }
+
+        specMethodInput = map (\(i, t) -> (i, specType t))
+
+        specIFace ifc@(AIDef {}) =
+            ifc { aif_inputs  = map specMethodInput (aif_inputs ifc)
+                , aif_pred    = specExpr (aif_pred ifc)
+                , aif_value   = specDef (aif_value ifc)
+                , aif_assumps = map specAssump (aif_assumps ifc)
+                }
+        specIFace ifc@(AIAction {}) =
+            ifc { aif_inputs = map specMethodInput (aif_inputs ifc)
+                , aif_pred   = specExpr (aif_pred ifc)
+                , aif_body   = map specRule (aif_body ifc)
+                }
+        specIFace ifc@(AIActionValue {}) =
+            ifc { aif_inputs = map specMethodInput (aif_inputs ifc)
+                , aif_pred   = specExpr (aif_pred ifc)
+                , aif_body   = map specRule (aif_body ifc)
+                , aif_value  = specDef (aif_value ifc)
+                }
+        specIFace ifc@(AIClock {}) =
+            ifc { aif_clock = specClock (aif_clock ifc) }
+        specIFace ifc@(AIReset {}) =
+            ifc { aif_reset = specReset (aif_reset ifc) }
+        specIFace ifc@(AIInout {}) =
+            ifc { aif_inout = specInout (aif_inout ifc) }
+
+        pos = getPosition (apkg_name apkg)
+    in  apkg { apkg_name            = mkId pos (mkFString spec_name)
+             , apkg_size_params     = []
+             , apkg_inputs          = map specAbsInput (apkg_inputs apkg)
+             , apkg_clock_domains   = [ (cd, map specClock clks)
+                                      | (cd, clks) <- apkg_clock_domains apkg ]
+             , apkg_reset_list      = [ (rid, specReset r)
+                                      | (rid, r) <- apkg_reset_list apkg ]
+             , apkg_state_instances = map specInst (apkg_state_instances apkg)
+             , apkg_local_defs      = map specDef (apkg_local_defs apkg)
+             , apkg_rules           = map specRule (apkg_rules apkg)
+             , apkg_interface       = map specIFace (apkg_interface apkg)
+             }
+
+foldConstAExpr :: (AExpr -> AExpr) -> AExpr -> AExpr
+foldConstAExpr resolveConst expr@(APrim aid ty op args) =
+    let mask n x = if n <= 0 then 0 else x `mod` (2 ^ n)
+        toSigned n x =
+            let u = mask n x
+            in  if n > 0 && u >= (2 ^ (n - 1)) then u - (2 ^ n) else u
+        rargs = map resolveConst args
+        isIntLit (ASInt {}) = True
+        isIntLit _          = False
+    in case (op, args) of
+         (PrimZeroExt, [e]) | ty == aType e -> e
+         (PrimSignExt, [e]) | ty == aType e -> e
+         (PrimTrunc,   [e]) | ty == aType e -> e
+         (PrimIf, [cond, thn, els]) ->
+             case resolveConst cond of
+               c | isTrue c  -> resolveConst thn
+                 | isFalse c -> resolveConst els
+               _             -> expr
+         _ | ATBit (SizeConst w) <- ty
+           , not (null rargs)
+           , all isIntLit rargs ->
+               let mkLit v  = ASInt aid ty (ilSizedDec w (mask w v))
+                   mkBool b = ASInt aid aTBool (ilBin (if b then 1 else 0))
+                   vals     = [ ilValue l | ASInt _ _ l <- rargs ]
+               in case (op, rargs) of
+                    (PrimAdd, _) -> mkLit (sum vals)
+                    (PrimSub, [_, _]) -> mkLit (vals!!0 - vals!!1)
+                    (PrimMul, [_, _]) -> mkLit (vals!!0 * vals!!1)
+                    (PrimQuot, [_, _]) | vals!!1 /= 0 -> mkLit (vals!!0 `quot` vals!!1)
+                    (PrimRem,  [_, _]) | vals!!1 /= 0 -> mkLit (vals!!0 `rem` vals!!1)
+                    (PrimAnd, _) -> mkLit (foldl1 (.&.) vals)
+                    (PrimOr,  _) -> mkLit (foldl1 (.|.) vals)
+                    (PrimXor, _) -> mkLit (foldl1 xor vals)
+                    (PrimInv, [_]) -> mkLit (complement (vals!!0))
+                    (PrimNeg, [_]) -> mkLit (negate (vals!!0))
+                    (PrimSL,  [_, _]) | vals!!1 >= 0 ->
+                        mkLit (shiftL (vals!!0) (fromInteger (vals!!1)))
+                    (PrimSRL, [ASInt _ (ATBit (SizeConst w1)) l1, _]) | vals!!1 >= 0 ->
+                        mkLit (shiftR (mask w1 (ilValue l1)) (fromInteger (vals!!1)))
+                    (PrimSRA, [ASInt _ (ATBit (SizeConst w1)) l1, _]) | vals!!1 >= 0 ->
+                        mkLit (shiftR (toSigned w1 (ilValue l1)) (fromInteger (vals!!1)))
+                    (PrimZeroExt, [ASInt _ (ATBit (SizeConst w1)) l1]) ->
+                        mkLit (mask w1 (ilValue l1))
+                    (PrimSignExt, [ASInt _ (ATBit (SizeConst w1)) l1]) ->
+                        mkLit (toSigned w1 (ilValue l1))
+                    (PrimTrunc, [_]) -> mkLit (vals!!0)
+                    (PrimExtract, [_, _, _]) | vals!!2 >= 0 ->
+                        mkLit (shiftR (vals!!0) (fromInteger (vals!!2)))
+                    (PrimConcat, _) ->
+                        let step acc (ASInt _ (ATBit (SizeConst wk)) lk) =
+                                shiftL acc (fromInteger wk) + mask wk (ilValue lk)
+                            step acc _ = acc
+                        in  mkLit (foldl step 0 rargs)
+                    (PrimEQ, [ASInt _ (ATBit (SizeConst w1)) l1, ASInt _ _ l2]) ->
+                        mkBool (mask w1 (ilValue l1) == mask w1 (ilValue l2))
+                    (PrimULE, [ASInt _ (ATBit (SizeConst w1)) l1, ASInt _ _ l2]) ->
+                        mkBool (mask w1 (ilValue l1) <= mask w1 (ilValue l2))
+                    (PrimULT, [ASInt _ (ATBit (SizeConst w1)) l1, ASInt _ _ l2]) ->
+                        mkBool (mask w1 (ilValue l1) < mask w1 (ilValue l2))
+                    (PrimSLE, [ASInt _ (ATBit (SizeConst w1)) l1, ASInt _ _ l2]) ->
+                        mkBool (toSigned w1 (ilValue l1) <= toSigned w1 (ilValue l2))
+                    (PrimSLT, [ASInt _ (ATBit (SizeConst w1)) l1, ASInt _ _ l2]) ->
+                        mkBool (toSigned w1 (ilValue l1) < toSigned w1 (ilValue l2))
+                    (PrimBAnd, _) -> mkBool (all (/= 0) vals)
+                    (PrimBOr,  _) -> mkBool (any (/= 0) vals)
+                    (PrimBNot, [_]) -> mkBool (vals!!0 == 0)
+                    _ -> expr
+         _ -> expr
+foldConstAExpr resolveConst expr@(AFunCall (ATBit (SizeConst w)) aid "$clog2" False [arg])
+    | ASInt _ (ATBit (SizeConst w1)) l1 <- resolveConst arg =
+        let mask n x = if n <= 0 then 0 else x `mod` (2 ^ n)
+            v = toInteger (log2 (mask w1 (ilValue l1)))
+        in  ASInt aid (ATBit (SizeConst w)) (ilSizedDec w (mask w v))
+foldConstAExpr _ expr = expr
 
 -- ===============
 

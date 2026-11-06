@@ -45,7 +45,7 @@ module IExpandUtils(
         makeArgInout, makeIfcInout, getInoutWires,
         makeDomainToBoundaryIdsMap, getDomainToBoundaryIdsMap,
         findBoundaryClock, isClockAncestor,
-        isPrimType, isParamOnlyType,
+        isPrimType, isNumericIType, isParamOnlyType,
         HeapPointer, unheap, unheapU, shallowUnheap, unheapAll,
         toHeap, toHeapCon, toHeapWHNFCon,
         toHeapWHNF,
@@ -56,6 +56,7 @@ module IExpandUtils(
         newIStateLoc, newIStateLocForRule,
         isNoInlinedFunc, isAggressive, setAggressive,
         getPragmas, setPragmas,
+        getSizeParams, setSizeParams,
         cleanupFinalRules,
         heapCellToHExpr,
         canLiftCond,
@@ -379,9 +380,8 @@ isPrimType (ITCon i _ _) = i == idPrimAction ||
 -- ActionValue_ must be applied to (a tuple of) Bit
 isPrimType (ITAp (ITCon i _ _) t)
   | i == idActionValue_ = t == itPrimUnit || isBitTupleType t
--- Primitive constructor applied to numeric type(s)
--- We normalize types so no unresolved numeric types should escape elaboration.
-isPrimType (ITAp a (ITNum _)) = isPrimTAp a
+-- Primitive constructor applied to numeric type(s) (concrete or symbolic)
+isPrimType (ITAp a n) | isNumericIType n = isPrimTAp a
 -- Primitive arrays
 isPrimType (ITAp (ITCon i _ _) elem_ty) | i == idPrimArray = isPrimType elem_ty
 -- Tuples of bits
@@ -393,9 +393,18 @@ isPrimTAp :: IType -> Bool
 isPrimTAp (ITCon _ _ (TIstruct SInterface{} _)) = True
 isPrimTAp (ITCon i _ _) = i == idBit ||
                           i == idInout_
--- Again, no unresolved numeric types should escape elaboration.
-isPrimTAp (ITAp a (ITNum _)) = isPrimTAp a
+isPrimTAp (ITAp a n) | isNumericIType n = isPrimTAp a
 isPrimTAp _ = False
+
+isNumericIType :: IType -> Bool
+isNumericIType (ITNum _) = True
+isNumericIType (ITVar _) = True
+isNumericIType (ITAp (ITCon op _ _) a)
+  | op `elem` [idTExp, idTLog] = isNumericIType a
+isNumericIType (ITAp (ITAp (ITCon op _ _) a) b)
+  | op `elem` [idTAdd, idTSub, idTMul, idTDiv, idTMax, idTMin] =
+      isNumericIType a && isNumericIType b
+isNumericIType _ = False
 
 isParamOnlyType :: IType -> Bool
 isParamOnlyType t = t == itString || t == itReal || t == itInteger
@@ -607,7 +616,10 @@ data GState = GState {
         -- aggressive conditions
         aggressive_cond :: Bool,
 
-        atfCache :: !IATFCache
+        atfCache :: !IATFCache,
+
+        -- symbolic size parameters of the top-level module being elaborated
+        g_size_params :: [Id]
         }
 
 initGState :: ErrorHandle -> Flags ->
@@ -667,9 +679,16 @@ initGState errh flags symt alldefs atf_cache defId is_noinlined_func pps =
                       savedRules = [],
                       badEvaluation = False,
                       aggressive_cond = aggImpConds flags,
-                      atfCache = atf_cache
+                      atfCache = atf_cache,
+                      g_size_params = []
  }
     in  gs
+
+getSizeParams :: G [Id]
+getSizeParams = gets g_size_params
+
+setSizeParams :: [Id] -> G ()
+setSizeParams ps = modify (\s -> s { g_size_params = ps })
 
 data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_resets   :: [HReset],
@@ -1759,7 +1778,7 @@ makeOutputRstn mod_pos id_rst port_id rstn = do
 -- Also, an optional clock Id and reset Id are given, if the inout is to be
 -- associated with a specific clock domain (the domain of that clock) or
 -- specific reset.
-makeArgInout ::  Id -> Integer -> Maybe Id -> Maybe Id ->
+makeArgInout ::  Id -> IType -> Maybe Id -> Maybe Id ->
                  G (HInout, IAbstractInput, VArgInfo)
 makeArgInout id_iot sz mclk mrst = do
   when doTraceClock $ traceM "makeArgInout\n"

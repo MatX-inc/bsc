@@ -1,0 +1,13 @@
+package BadAuxNumProviso(mkBadAuxNumProviso) where
+
+{-# verilog mkBadAuxNumProviso #-}
+mkBadAuxNumProviso :: (Add k1 k2 w) => Module (Reg (Bit w))
+mkBadAuxNumProviso =
+  module
+    r :: Reg (Bit w) <- mkReg 0
+    interface
+      _write x =
+        let hi :: Bit k1 = truncateLSB x
+            lo :: Bit k2 = truncate x
+        in  r := (hi ++ lo)
+      _read = r

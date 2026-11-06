@@ -243,11 +243,12 @@ idPolyWrapField = mk_no fsPolyWrapField
 idLiftModule :: Id
 idLiftModule = prelude_id_no fsLiftModule
 
-idWrapField, idFromWrapField, idToWrapField, idSaveFieldPortTypes :: Id
+idWrapField, idFromWrapField, idToWrapField, idSaveFieldPortTypes, idNonEmptyBits :: Id
 idWrapField = prelude_id_no fsWrapField
 idFromWrapField = prelude_id_no fsFromWrapField
 idToWrapField = prelude_id_no fsToWrapField
 idSaveFieldPortTypes = prelude_id_no fsSaveFieldPortTypes
+idNonEmptyBits = prelude_id_no fsNonEmptyBits
 
 idFromWrapNoInline :: Id
 idFromWrapNoInline = prelude_id_no fsFromWrapNoInline

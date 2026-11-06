@@ -145,6 +145,7 @@ isConstIExprFunc :: IExpr a -> Bool
 -- XXX this should check for only prims which can be turned into
 -- XXX acceptable Verilog primitives, and return False for others
 isConstIExprFunc (ICon _ (ICPrim {})) = True
+isConstIExprFunc (ICon _ (ICForeign { fName = "$clog2" })) = True
 -- tuples, selector functions, constructor selectors etc, should all
 -- have been evaluated away, leaving only bits
 isConstIExprFunc _ = False
@@ -177,6 +178,8 @@ isConstAExpr _ e@(ASDef {}) =
     -- XXX for other uses?
 isConstAExpr ps (APrim { aprim_prim = op, ae_args = es }) =
     (isConstOp op && all (isConstAExpr ps) es)
+isConstAExpr ps (AFunCall _ _ "$clog2" False es) =
+    all (isConstAExpr ps) es
 isConstAExpr _ _ = False
 
 

@@ -486,7 +486,7 @@ toBits res = convType (Just (SBits 1)) res
 -- rather than just saying whether we expect Bits or Bool (with no size)
 getBitType :: AExpr -> SType
 getBitType e = case (ae_type e) of
-                 ATBit w -> SBits w
+                 ATBit w -> SBits (fromConcreteSize "AExpr2STP.getBitType" w)
                  t -> internalError ("getBitType: " ++ ppReadable t)
 
 -- -------------------------
@@ -494,7 +494,8 @@ getBitType e = case (ae_type e) of
 convAExpr2SExpr :: Maybe SType -> AExpr -> SM (S.Expr, SType)
 
 -- If the context expects Bool, create a Bool value
-convAExpr2SExpr (Just SBool) (ASInt _ (ATBit width) (IntLit _ _ ilValue)) = do
+convAExpr2SExpr (Just SBool) (ASInt _ (ATBit width_sz) (IntLit _ _ ilValue)) = do
+    let width = fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz
     when traceConv $ traceM("conv IntLit (Bool)" ++ itos ilValue)
     when (width /= 1) $
         internalError ("convAExpr2SExpr: invalid width: " ++ ppReadable width)
@@ -506,13 +507,15 @@ convAExpr2SExpr (Just SBool) (ASInt _ (ATBit width) (IntLit _ _ ilValue)) = do
                          else internalError ("convAExpr2SExpr: invalid Bool" ++
                                              ppReadable ilValue)
     return (ye, SBool)
-convAExpr2SExpr _ (ASInt _ (ATBit width) (IntLit _ _ ilValue)) = do
+convAExpr2SExpr _ (ASInt _ (ATBit width_sz) (IntLit _ _ ilValue)) = do
+    let width = fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz
     when traceConv $ traceM("conv IntLit " ++ itos ilValue)
     ctx <- gets context
     ye <- liftIO $ S.mkBVConstantFromInteger ctx width ilValue
     return (ye, SBits width)
 
-convAExpr2SExpr mty e@(ASDef (ATBit width) aid) = do
+convAExpr2SExpr mty e@(ASDef (ATBit width_sz) aid) = do
+    let width = fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz
     when traceConv $ traceM("conv def " ++ ppString aid)
     ymap <- gets defSExprMap
     case (M.lookup aid ymap) of
@@ -544,7 +547,8 @@ convAExpr2SExpr mty e@(ASDef (ATBit width) aid) = do
                                   ppReadable aid)
               else addUnknownExpr mty e width
 
-convAExpr2SExpr mty (ASPort (ATBit width) aid) = do
+convAExpr2SExpr mty (ASPort (ATBit width_sz) aid) = do
+    let width = fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz
     when traceConv $ traceM("conv port " ++ ppReadable aid)
     -- We could use "getVarDeclFromName" to see if a decl exists for this yet,
     -- but we avoid the foreign call (two calls!) and keep our own map
@@ -567,12 +571,14 @@ convAExpr2SExpr mty (ASParam t@(ATBit _) aid) =
 -- For ASAny, create an independent variable.
 -- If it has a tagged value, don't use it!  That's not part of the formal
 -- meaning, it's an implementation optimization.
-convAExpr2SExpr mty (ASAny (ATBit width) _) = do
+convAExpr2SExpr mty (ASAny (ATBit width_sz) _) = do
+    let width = fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz
     when traceConv $ traceM("conv any")
     str <- getAnyName
     makeDeclAndVar mty str width
 
-convAExpr2SExpr mty (APrim i (ATBit width) p args) = do
+convAExpr2SExpr mty (APrim i (ATBit width_sz) p args) = do
+    let width = fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz
     when traceConv $ traceM("conv prim " ++ ppString p)
     convPrim2SExpr mty p i width args
 
@@ -587,24 +593,28 @@ convAExpr2SExpr mty (APrim i (ATBit width) p args) = do
 -- the port helpers canonicalize to the actual port name, so that methods which
 -- share the same output port appear logically equivalent
 -- XXX These could be unevaluated functions, applied to converted arguments
-convAExpr2SExpr mty (AMethCall ty@(ATBit width) modId methId args) = do
+convAExpr2SExpr mty (AMethCall ty@(ATBit width_sz) modId methId args) = do
     smap <- gets stateMap
-    let e = AMethCall ty modId (getSingleMethodOutputPort smap modId methId) args
+    let width = fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz
+        e = AMethCall ty modId (getSingleMethodOutputPort smap modId methId) args
     addUnknownExpr mty e width
-convAExpr2SExpr mty (AMethValue ty@(ATBit width) modId methId) = do
+convAExpr2SExpr mty (AMethValue ty@(ATBit width_sz) modId methId) = do
     smap <- gets stateMap
-    let e = AMethValue ty modId (getSingleMethodOutputPort smap modId methId)
+    let width = fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz
+        e = AMethValue ty modId (getSingleMethodOutputPort smap modId methId)
     addUnknownExpr mty e width
-convAExpr2SExpr mty (ATupleSel ty@(ATBit width) (AMethCall _ modId methId args) selIdx) = do
+convAExpr2SExpr mty (ATupleSel ty@(ATBit width_sz) (AMethCall _ modId methId args) selIdx) = do
     smap <- gets stateMap
-    let e = AMethCall ty modId (getMethodOutputPortAt smap modId methId selIdx) args
+    let width = fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz
+        e = AMethCall ty modId (getMethodOutputPortAt smap modId methId selIdx) args
     addUnknownExpr mty e width
-convAExpr2SExpr mty (ATupleSel ty@(ATBit width) (AMethValue _ modId methId) selIdx) = do
+convAExpr2SExpr mty (ATupleSel ty@(ATBit width_sz) (AMethValue _ modId methId) selIdx) = do
     smap <- gets stateMap
-    let e = AMethValue ty modId (getMethodOutputPortAt smap modId methId selIdx)
+    let width = fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz
+        e = AMethValue ty modId (getMethodOutputPortAt smap modId methId selIdx)
     addUnknownExpr mty e width
 
-convAExpr2SExpr mty e@(AMGate (ATBit 1) _ _) =
+convAExpr2SExpr mty e@(AMGate (ATBit (SizeConst 1)) _ _) =
     -- Gates are used as Bool, so the current context should be SBool,
     -- but pass the current context just to be safe
     -- XXX Passing the current context is just a heuristic
@@ -614,15 +624,15 @@ convAExpr2SExpr mty e@(AMGate (ATBit 1) _ _) =
 -- of the specified size.
 -- XXX Passing the current context is just a heuristic
 convAExpr2SExpr mty e@(ASStr _ (ATString (Just width)) _ ) =
-    addUnknownExpr mty e width
-convAExpr2SExpr mty e@(ANoInlineFunCall (ATBit width) _ _ _ ) =
+    addUnknownExpr mty e (fromConcreteSize "AExpr2STP.convAExpr2SExpr" width)
+convAExpr2SExpr mty e@(ANoInlineFunCall (ATBit width_sz) _ _ _ ) =
     -- XXX This could be an unevaluated function, applied to converted arguments
-    addUnknownExpr mty e width
-convAExpr2SExpr mty e@(AFunCall (ATBit width) _ _ _ _ ) =
+    addUnknownExpr mty e (fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz)
+convAExpr2SExpr mty e@(AFunCall (ATBit width_sz) _ _ _ _ ) =
     -- XXX This could be an unevaluated function, applied to converted arguments
-    addUnknownExpr mty e width
-convAExpr2SExpr mty e@(ATaskValue (ATBit width) _ _ _ _) =
-    addUnknownExpr mty e width
+    addUnknownExpr mty e (fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz)
+convAExpr2SExpr mty e@(ATaskValue (ATBit width_sz) _ _ _ _) =
+    addUnknownExpr mty e (fromConcreteSize "AExpr2STP.convAExpr2SExpr" width_sz)
 
 -- For unknown abstract types, error out
 convAExpr2SExpr _ e =
@@ -658,7 +668,7 @@ convPrim2SExpr mty PrimCase i w (idx : dflt : ces) =
     -- in the absence of a "case" construct, just convert to if-then-else
     let foldFn (v, e) res =
             let c = APrim i aTBool PrimEQ [idx, v]
-            in  APrim i (ATBit w) PrimIf [c, e, res]
+            in  APrim i (ATBit (SizeConst w)) PrimIf [c, e, res]
     in  convAExpr2SExpr mty (foldr foldFn dflt (makePairs ces))
 {-
     -- force "idx" to be Bits
@@ -703,15 +713,15 @@ convPrim2SExpr mty PrimArrayDynSelect i w args =
           let foldFn (n, e) res =
                   let n_lit = ASInt i (ae_type idx) (ilDec n)
                       c = APrim i aTBool PrimEQ [idx, n_lit]
-                  in  APrim i (ATBit w) PrimIf [c, e, res]
+                  in  APrim i (ATBit (SizeConst w)) PrimIf [c, e, res]
               -- number of arms is the min of the elems and the max index
               idx_ty = ae_type idx
               max_idx = case idx_ty of
-                          ATBit sz -> (2^sz) - 1
+                          ATBit sz -> (2^(fromConcreteSize "AExpr2STP.convPrim2SExpr" sz)) - 1
                           _ -> internalError ("convPrim2SExpr: idx_ty")
               arms = zip [0..max_idx] es
               -- default (even if it's not reachable)
-              dflt = ASAny (ATBit w) Nothing
+              dflt = ASAny (ATBit (SizeConst w)) Nothing
           in  convAExpr2SExpr mty (foldr foldFn dflt arms)
       [ASDef _ i_def, idx] -> do
           dmap <- gets defMap
@@ -829,18 +839,18 @@ convPrim2SExpr _ PrimExtract _ _ [e, ub@(ASInt {}), lb@(ASInt {})] = do
 -- XXX We could implement the logic for this?
 convPrim2SExpr mty PrimExtract i w args =
     -- XXX This could be an unevaluated function, applied to converted arguments
-    addUnknownExpr mty (APrim i (ATBit w) PrimExtract args) w
+    addUnknownExpr mty (APrim i (ATBit (SizeConst w)) PrimExtract args) w
 
 -- Bit arguments, Bit result
 convPrim2SExpr _ PrimConcat i w args@[_, _] =
     doBinPrim_BitsBits w S.mkBVConcat args
 convPrim2SExpr _ PrimConcat i width (a1:args) =
     let a1width = case (ae_type a1) of
-                   ATBit n -> n
+                   ATBit n -> fromConcreteSize "AExpr2STP.convPrim2SExpr" n
                    t -> internalError ("convPrim2SExpr: PrimConcat width: " ++
                                        ppReadable t)
         a2width = width - a1width
-        a2 = APrim i (ATBit a2width) PrimConcat args
+        a2 = APrim i (ATBit (SizeConst a2width)) PrimConcat args
     in  doBinPrim_BitsBits width S.mkBVConcat [a1, a2]
 
 -- Sign extend,  sizes take from argument and return type
@@ -848,7 +858,7 @@ convPrim2SExpr _ PrimSignExt i w [e] =
     doBinIntPrim_BitsBits w S.mkBVSignExtend e (fromInteger w)
 
 convPrim2SExpr mty p i w args =
-    addUnknownExpr mty (APrim i (ATBit w) p args) w
+    addUnknownExpr mty (APrim i (ATBit (SizeConst w)) p args) w
     --internalError ("unexpected prim: " ++ ppReadable (p, args))
 
 
@@ -958,7 +968,7 @@ extractInt e = internalError ("extractInt: unexpected pattern: " ++ show e)
 -- -----
 
 getWidth :: AType -> Integer
-getWidth (ATBit w) = w
+getWidth (ATBit w) = fromConcreteSize "AExpr2STP.getWidth" w
 getWidth t = internalError ("AExpr2STP.getWidth: " ++ ppReadable t)
 
 -- copied from similar function in AOpt
@@ -968,8 +978,8 @@ aZeroExtend w e =
         pad_size = w - e_size
     in  case (compare pad_size 0) of
           EQ -> e
-          GT -> APrim dummy_id (ATBit w) PrimConcat
-                    [ASInt defaultAId (ATBit pad_size) (ilDec 0), e]
+          GT -> APrim dummy_id (ATBit (SizeConst w)) PrimConcat
+                    [ASInt defaultAId (ATBit (SizeConst pad_size)) (ilDec 0), e]
           LT -> internalError ("AExpr2STP.aZeroExtend: " ++ ppReadable (w, e))
 
 aSignExtend :: Integer -> AExpr -> AExpr
@@ -978,7 +988,7 @@ aSignExtend w e =
         pad_size = w - e_size
     in  case (compare pad_size 0) of
           EQ -> e
-          GT -> APrim dummy_id (ATBit w) PrimSignExt [e]
+          GT -> APrim dummy_id (ATBit (SizeConst w)) PrimSignExt [e]
           LT -> internalError ("AExpr2STP.aSignExtend: " ++ ppReadable (w, e))
 
 sTruncate :: Integer -> (S.Expr, SType) -> SM (S.Expr, SType)

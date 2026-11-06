@@ -78,7 +78,7 @@ import CVPrint
 import Id
 import Backend
 import Pragma
-import VModInfo(VPathInfo, VPort)
+import VModInfo(VPathInfo, VPort, VWireInfo(..), VArgInfo(..), VName(..))
 import Deriving(derive)
 import SymTab
 import MakeSymTab(mkSymTab, mkSymTabWithWarnings, cConvInst,
@@ -958,8 +958,10 @@ genModule
     -- the amod doesn't change beyond this point
     let amod_final = amod_no_undet
 
-    -- save wireinfo
-    let wireinfo = apkg_external_wires amod_final
+    -- save wireinfo (including synthesized size parameters for the wrapper's CmoduleVerilog)
+    let raw_wireinfo = apkg_external_wires amod_final
+        size_param_wargs = [ Param (VName (getIdBaseString p)) | p <- apkg_size_params amod_final ]
+        wireinfo = raw_wireinfo { wArgs = size_param_wargs ++ wArgs raw_wireinfo }
     let fieldinfo = getAPackageFieldInfos amod_final
 
     blurb <- mkGenFileHeader flags
@@ -1340,6 +1342,23 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        sim_system <- simExpand errh flags toplevel abis
        time <- dump errh flags time0 DFsimExpand dumpnames sim_system
 
+       -- When invoked in -c mode on an uninstantiated size-parameterized
+       -- template .ba, simExpand returns an empty package map; skip codegen
+       -- because concrete specializations are generated when linking the
+       -- enclosing design.
+       if (M.null (ssys_packages sim_system))
+       then return (time, [], [], time)
+       else genModuleC' errh flags dumpnames time prefix sim_system
+
+genModuleC' :: ErrorHandle
+            -> Flags
+            -> DumpNames
+            -> TimeInfo
+            -> String
+            -> SimSystem
+            -> IO (TimeInfo, [String], [String], TimeInfo)
+genModuleC' errh flags dumpnames time prefix sim_system =
+    do
        -- extract file dependency structure and determine if any
        -- existing bluesim packages can reuse existing object files
        -- (in -c mode, all files are always regenerated)
@@ -2322,7 +2341,16 @@ compileCDefToIDef errh flags dumpnames symt ipkg def =
     t <- getNow
 
     start flags DFwrapper_ctxreduce
-    (cpkg_ctx, _, _) <- cCtxReduceIO errh flags symt cpkg0
+    (cpkg_ctx0, _, _) <- cCtxReduceIO errh flags symt cpkg0
+    -- The wrapper's top-level CQType was already context-reduced once in
+    -- GenWrap.getDef (matching the SymTab entry). Restore it so the second
+    -- cCtxReduceIO pass (needed for the wrapper body) does not reverse the
+    -- predicate list and alter dictionary/type-variable ordering in tiExpl.
+    let cpkg_ctx = case (def, cpkg_ctx0) of
+                     (CValueSign (CDef _ orig_cqt _),
+                      CPackage nm exps imps sigs fixs [CValueSign (CDef i _ cs)] incs) ->
+                         CPackage nm exps imps sigs fixs [CValueSign (CDef i orig_cqt cs)] incs
+                     _ -> cpkg_ctx0
     t <- dump errh flags t DFwrapper_ctxreduce dumpnames cpkg_ctx
 
     start flags DFwrapper_typecheck

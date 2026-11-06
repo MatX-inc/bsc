@@ -33,7 +33,9 @@ doPrimOp pos op ts es =
   in  if (all isLit es)
       then let tints = [ i | ITNum i <- ts]
                eints = map mkPrimArg es
-           in  doPrimOp' pos op tints eints
+           in  if length tints == length ts
+               then doPrimOp' pos op tints eints
+               else Nothing
       else Nothing
 
 -- ---------------

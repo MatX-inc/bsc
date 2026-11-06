@@ -67,8 +67,8 @@ itInout_ = ITCon idInout_ (IKNum `IKFun` IKStar) tiInout
 itInoutT :: IType -> IType
 itInoutT t = ITAp itInout t
 
-itInout_N :: Integer -> IType
-itInout_N n = ITAp itInout_ (mkNumConT n)
+itInout_N :: IType -> IType
+itInout_N n = ITAp itInout_ n
 
 itPrimArray :: IType
 itPrimArray = ITCon idPrimArray (IKStar `IKFun` IKStar) tiPrimArray
@@ -140,11 +140,11 @@ isitActionValue (ITAp (ITCon i (IKFun IKStar IKStar) _) t) =
 isitActionValue _ = False
 
 isitInout_ :: IType -> Bool
-isitInout_ (ITAp (ITCon i (IKFun IKNum IKStar) _ ) (ITNum x)) = (i == idInout_)
+isitInout_ (ITAp (ITCon i (IKFun IKNum IKStar) _ ) _) = (i == idInout_)
 isitInout_ _ = False
 
-getInout_Size :: IType -> Integer
-getInout_Size (ITAp ic (ITNum n)) | ic == itInout_ = n
+getInout_Size :: IType -> IType
+getInout_Size (ITAp ic n) | ic == itInout_ = n
 getInout_Size t =
     internalError ("getInout_Size: type is not Inout_: " ++ ppReadable t)
 
@@ -670,9 +670,10 @@ icPrimSetSelPosition = ICon idPrimSetSelPosition (ICPrim t PrimSetSelPosition)
 
 icPrimSL :: IExpr a
 icPrimSL = ICon idPrimSL (ICPrim t PrimSL)
-  where t = ITForAll i IKNum (ty `itFun` itNat `itFun` ty)
+  where t = ITForAll i IKNum (ITForAll j IKNum (ty `itFun` tyj `itFun` ty))
         ty = itBit `ITAp` ITVar i
-        i = take1tmpVarIds
+        tyj = itBit `ITAp` ITVar j
+        (i, j) = take2tmpVarIds
 
 icPrimSRL :: IExpr a
 icPrimSRL = ICon idPrimSRL (ICPrim t PrimSRL)
@@ -716,7 +717,7 @@ icClock i c = ICon i (ICClock {iConType = itClock, iClock = c})
 icReset :: Id -> IReset a -> IExpr a
 icReset i r = ICon i (ICReset {iConType = itReset, iReset = r})
 
-icInout :: Id -> Integer -> IInout a -> IExpr a
+icInout :: Id -> IType -> IInout a -> IExpr a
 icInout i sz iot = ICon i (ICInout {iConType = itInout_N sz, iInout = iot})
 
 icSelClockOsc :: Id -> IClock a -> IExpr a
@@ -1103,6 +1104,7 @@ iMGetIfcName t = Nothing
 
 -- get the interface type from a Module def type
 iGetModIfcType :: IType -> IType
+iGetModIfcType (ITForAll _ _ t) = iGetModIfcType t
 iGetModIfcType t =
     let (_, modTy) = itGetArrows t
     in  case modTy of
@@ -1184,13 +1186,18 @@ getStateVarNames (ICon i (ICStateVar {})) = [i]
 getStateVarNames (IAps f _ es) = concatMap getStateVarNames (f:es)
 getStateVarNames _ = []
 
-iTLog, iTAdd, iTMax, iTMin, iTMul, iTDiv :: IType
+iTLog, iTAdd, iTSub, iTMax, iTMin, iTMul, iTDiv :: IType
 iTLog = ITCon idTLog (IKNum `IKFun` IKNum) TIabstract
 iTAdd = ITCon idTAdd (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
+iTSub = ITCon idTSub (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
 iTMax = ITCon idTMax (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
 iTMin = ITCon idTMin (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
 iTMul = ITCon idTMul (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
 iTDiv = ITCon idTDiv (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
+
+iTAddT, iTSubT :: IType -> IType -> IType
+iTAddT x y = ITAp (ITAp iTAdd x) y
+iTSubT x y = ITAp (ITAp iTSub x) y
 
 iDefMap :: (IExpr a -> IExpr a) -> IDef a -> IDef a
 iDefMap f (IDef i t e p) = IDef i t (f e) p

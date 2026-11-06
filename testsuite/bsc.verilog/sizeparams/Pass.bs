@@ -1,0 +1,10 @@
+package Pass(mkPass) where
+
+{-# verilog mkPass #-}
+mkPass :: Module (Reg (Bit w))
+mkPass =
+  module
+    r :: Reg (Bit w) <- mkRegU
+    interface
+      _write x = r._write x
+      _read = r._read

@@ -174,7 +174,7 @@ moveDefsOntoStack flags instmodmap (blocks,scheds) =
                                  (Just ty) -> (ty == ATReal) ||
                                               ((not (isStringType ty)) &&
                                                (not (isTupleType ty)) &&
-                                               ((aSize ty) <= 64))
+                                               ((aSizeInt ty) <= 64))
                                  Nothing   -> False
               -- don't move AV task defs
               exprOkToMove = S.notMember (sbid,aid) atask_set

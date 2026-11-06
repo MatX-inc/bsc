@@ -3564,7 +3564,7 @@ data PortArgInfo =
   | PAPort Id AType (String, IType) (Maybe Id) (Maybe Id)
   | PAClock Id (Maybe ((String, IType), Maybe (String, IType)))
   | PAReset Id (Maybe (String, IType)) (Maybe Id)
-  | PAInout Id Integer (String, IType) (Maybe Id) (Maybe Id)
+  | PAInout Id ASize (String, IType) (Maybe Id) (Maybe Id)
 
 
 getModPortInfo :: APackage -> [PProp] -> Type ->
@@ -3929,7 +3929,7 @@ getPortsModArgReset in_rstinfo i =
 
 getPortsModArgInout ::
     M.Map VName IType ->
-    Id -> Integer -> VName -> Maybe Id -> Maybe Id -> [PortArgInfo]
+    Id -> ASize -> VName -> Maybe Id -> Maybe Id -> [PortArgInfo]
 getPortsModArgInout ptmap i sz vn mclk mrst =
     if (sz == 0)
     then []
@@ -4092,12 +4092,13 @@ dispMPortWithType s mport =
 
 -- display AType
 dispSize :: AType -> [HTclObj]
-dispSize (ATBit sz) = [tagInt "size" (fromInteger sz)]
-dispSize _          = []
+dispSize (ATBit sz)                         = [dispNSize sz]
+dispSize _                                  = []
 
 -- display a numeric size
-dispNSize :: Integer -> HTclObj
-dispNSize sz = tagInt "size" (fromInteger sz)
+dispNSize :: ASize -> HTclObj
+dispNSize (SizeConst sz) = tagInt "size" (fromInteger sz)
+dispNSize sz             = tagStr "size" (ppString sz)
 
 
 -- display module arguments

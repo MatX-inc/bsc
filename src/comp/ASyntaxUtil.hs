@@ -38,6 +38,19 @@ isConst (ASInt _ _ (IntLit {})) = True
 isConst (ASAny {}) = True
 isConst _ = False
 
+isConstOrParamExpr :: AExpr -> Bool
+isConstOrParamExpr e | isConst e = True
+isConstOrParamExpr (ASParam {}) = True
+isConstOrParamExpr (AFunCall _ _ "$clog2" False es) = all isConstOrParamExpr es
+isConstOrParamExpr (APrim _ _ _ es) = all isConstOrParamExpr es
+isConstOrParamExpr _ = False
+
+hasParamExpr :: AExpr -> Bool
+hasParamExpr (ASParam {}) = True
+hasParamExpr (AFunCall _ _ _ _ es) = any hasParamExpr es
+hasParamExpr (APrim _ _ _ es) = any hasParamExpr es
+hasParamExpr _ = False
+
 isASAny :: AExpr -> Bool
 isASAny (ASAny {}) = True
 isASAny _          = False
@@ -230,8 +243,11 @@ getForeignCallNames apkg =
 -- extract the type and sizes of ASyntax expressions
 class ATypeC a where
     aType :: a -> AType
-    aSize :: a -> Integer
+    aSize :: a -> ASize
     aSize e = aSize (aType e)
+
+aSizeInt :: (ATypeC a) => a -> Integer
+aSizeInt e = fromConcreteSize "aSizeInt" (aSize e)
 
 instance ATypeC AType where
     aSize e =
@@ -257,7 +273,7 @@ instance ATypeC ADef where
 -- whose elements are laid out with the first in the most-significant position.
 -- Shared by the Verilog (ATupleSel -> bit-slice) and Bluesim (ATupleSel ->
 -- extract) lowerings so they stay in sync.
-tupleElemRange :: AType -> Integer -> (Integer, Integer)
+tupleElemRange :: AType -> Integer -> (ASize, ASize)
 tupleElemRange (ATTuple ts) idx =
     let sizes = map aSize ts
         lo    = sum (genericDrop idx sizes)          -- bits below the element

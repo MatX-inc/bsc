@@ -1,0 +1,13 @@
+package BadNonNumProviso(TagClass(..), mkBadNonNumProviso) where
+
+class TagClass n where
+    tagVal :: Bit n -> Bit 32
+
+{-# verilog mkBadNonNumProviso #-}
+mkBadNonNumProviso :: (TagClass w) => Module (Reg (Bit w))
+mkBadNonNumProviso =
+  module
+    r :: Reg (Bit w) <- mkReg 0
+    interface
+      _write x = r := x
+      _read = r

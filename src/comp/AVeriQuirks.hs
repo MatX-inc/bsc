@@ -8,7 +8,8 @@ import PPrint
 import IntLit
 import ErrorUtil(internalError)
 import Position
-import Flags(Flags, keepAddSize, removePrimModules, useNegate, readableMux)
+import Flags(Flags, keepAddSize, removePrimModules, useNegate, readableMux,
+             removeReg, removeCross)
 import Id
 import PreIds(idUnsigned)
 import FStringCompat(mkFString)
@@ -19,6 +20,8 @@ import Prim
 import DefProp(defPropsHasNoCSE)
 import ASyntax
 import ASyntaxUtil
+import VModInfo(vArgs, VArgInfo(..))
+import BackendNamingConventions(isRegInst, isClockCrossingRegInst)
 import ForeignFunctions(isAVId, fromAVId)
 -- import AOpt(aOptBoolExpr)
 import SignalNaming
@@ -44,6 +47,9 @@ data QState = QState {
     qs_rmPrimModules :: Bool,
     qs_useNegate     :: Bool,
     qs_readableMux   :: Bool,
+    qs_rmReg         :: Bool,
+    qs_rmCross       :: Bool,
+    qs_unsizedParams :: [AId],
   -- state
     -- unique name generator
     uniqueId :: Integer,
@@ -110,6 +116,9 @@ aVeriQuirks flags pkg =
                 qs_rmPrimModules = removePrimModules flags,
                 qs_useNegate = useNegate flags,
                 qs_readableMux = readableMux flags,
+                qs_rmReg = removeReg flags,
+                qs_rmCross = removeCross flags,
+                qs_unsizedParams = [ i | (i, ATAbstract _ _) <- aspkg_parameters pkg ],
                 uniqueId = 1,
                 defs = [],
                 rlookup = M.empty
@@ -134,8 +143,14 @@ aQDef (ADef i t e p) = do
 
 
 aQInst :: AVInst -> QQState (AVInst)
-aQInst avi@(AVInst { avi_iargs = args }) = do
-  args' <- mapM (aQExp False) args
+aQInst avi@(AVInst { avi_vmi = vmi, avi_iargs = args }) = do
+  rmReg <- gets qs_rmReg
+  rmCross <- gets qs_rmCross
+  let inlinedReg = rmReg && isRegInst avi &&
+                   (not (isClockCrossingRegInst avi) || rmCross)
+      aQArg (Param _, e) | not inlinedReg = return e
+      aQArg (_, e) = aQExp False e
+  args' <- mapM aQArg (zip (vArgs vmi) args)
   return (avi { avi_iargs = args' })
 
 
@@ -175,7 +190,7 @@ aQForeignCallAV x = return x
 aQExp :: Bool -> AExpr -> QQState AExpr
 -- non-constant bit extraction turns into shift and mask
 aQExp top (APrim aid t@(ATBit n) PrimExtract [e, h, l])
-                | h /= l && not (isConst h && isConst l) =
+                | h /= l && not (isConstOrParamExpr h && isConstOrParamExpr l) =
     let te = aType e
         m = case te of
               (ATBit sz) -> sz
@@ -184,14 +199,20 @@ aQExp top (APrim aid t@(ATBit n) PrimExtract [e, h, l])
         -- (e & ~(('1 << 1) << h))
         e1 = APrim aid te PrimAnd [e, mask]
         mask = APrim aid te PrimInv [(APrim aid te PrimSL [maskbase, h])]
-        maskbase = ASInt aid te (ilHex (2^m - 2)) -- ('1 << 1)
+        maskbase = case m of
+                     SizeConst mc -> ASInt aid te (ilHex (2^mc - 2)) -- ('1 << 1)
+                     _ -> APrim aid te PrimSL [ASInt aid te (ilDec (-1)), aSNat 1]
         -- e1 >> l
         e2 = APrim aid te PrimSRL [e1, l]
         -- extend/truncate e2
-        e3 = case (compare m n) of
-               GT -> APrim aid t PrimExtract [e2, aSInt ht (n-1), aSInt ht 0]
-               LT -> APrim aid t PrimZeroExt [e2]
-               EQ -> e2
+        e3 = case (m, n) of
+               (SizeConst mc, SizeConst nc) ->
+                 case compare mc nc of
+                   GT -> APrim aid t PrimExtract [e2, aSInt ht (nc-1), aSInt ht 0]
+                   LT -> APrim aid t PrimZeroExt [e2]
+                   EQ -> e2
+               _ | m == n -> e2
+                 | otherwise -> APrim aid t PrimExtract [e2, sizeToAExpr (n - 1), aSInt ht 0]
     in  aQExp top e3
 
 -- probably redundant with IConv
@@ -204,9 +225,9 @@ aQExp top eee@(APrim aid t@(ATBit 1) op [e1, n]) | op `elem` [PrimSL, PrimSRL] =
 aQExp top eee@(APrim aid t@(ATBit 1) PrimSRA [e1, n]) = aQExp top e1
 
 -- Arithmetic (Signed) shift right by constants
-aQExp top eee@(APrim aid t@(ATBit n) PrimSRA [e1, ASInt _ _ (IntLit _ _ k)]) =
+aQExp top eee@(APrim aid t@(ATBit (SizeConst n)) PrimSRA [e1, ASInt _ _ (IntLit _ _ k)]) =
     let sfted = if (k < n) then
-                    APrim aid (ATBit (n-k)) PrimExtract [e1, aSNat (n-1), aSNat k]
+                    APrim aid (ATBit (fromInteger (n-k))) PrimExtract [e1, aSNat (n-1), aSNat k]
                 else APrim aid (ATBit 1) PrimExtract [e1, aSNat (n-1), aSNat (n-1)]
     in aQExp top (APrim aid t PrimSignExt [sfted])
 
@@ -214,9 +235,12 @@ aQExp top eee@(APrim aid t@(ATBit n) PrimSRA [e1, ASInt _ _ (IntLit _ _ k)]) =
 -- arithmetic right shift replicates MSB  Need do some shifting and masking
 aQExp top (APrim aid t@(ATBit n) PrimSRA [e1,e2]) = do
         let sl = APrim aid (ATBit n) PrimSRL [e1, e2]
-            mask = ASInt aid (ATBit n) (ilHex (2^n - 1))
+            mask = case n of
+                     SizeConst nc -> ASInt aid (ATBit n) (ilHex (2^nc - 1))
+                     _            -> ASInt aid (ATBit n) (ilDec (-1))
             maskshift = APrim aid (ATBit n) PrimInv [(APrim aid (ATBit n) PrimSRL [mask, e2])]
-            msb = APrim aid (ATBit 1) PrimExtract [e1, aSNat (n-1), aSNat (n-1)]
+            msb_idx = sizeToAExpr (n - 1)
+            msb = APrim aid (ATBit 1) PrimExtract [e1, msb_idx, msb_idx]
             msbs = APrim aid (ATBit n) PrimSignExt [msb]
             msbmask = APrim aid (ATBit n) PrimAnd [maskshift, msbs]
             sel = APrim aid t PrimOr [sl, msbmask]
@@ -291,7 +315,9 @@ aQExp top (APrim aid t p es) | p == PrimAdd || p == PrimSub = do
 -- sign-magnitude arithmetic) in the correct narrow context rather than
 -- the wider result context.
 aQExp top x@(APrim aid t p es) | p == PrimMul =
-    if top
+    if all isConstOrParamExpr es
+    then return x
+    else if top
     then if ((aSize t) == (sum (map aSize es)))
          then do es' <- mapM mkDefS es
                  return (APrim aid t p es')
@@ -302,9 +328,12 @@ aQExp top x@(APrim aid t p es) | p == PrimMul =
 -- when arguments are complex expressions (e.g. sign-magnitude negations),
 -- Verilog evaluates them in the result width rather than the operand width.
 -- Forcing arguments into named defs gives each the correct narrow context.
-aQExp top x@(APrim aid t p es) | p == PrimQuot || p == PrimRem = do
-    es' <- mapM mkDefS es
-    return (APrim aid t p es')
+aQExp top x@(APrim aid t p es) | p == PrimQuot || p == PrimRem =
+    if all isConstOrParamExpr es
+    then return x
+    else do
+        es' <- mapM mkDefS es
+        return (APrim aid t p es')
 
 -- For PrimMux and PrimPriMux operators,
 aQExp top x@(APrim aid t p es) | p == PrimMux || p == PrimPriMux = do
@@ -315,6 +344,24 @@ aQExp top x@(APrim aid t p es) | p == PrimMux || p == PrimPriMux = do
     case ( rmPrimModules,  readableMux ) of
       (True, False) ->         aQMux aid t p es' -- build AndOr Muxes
       (_, _ )       ->  return (APrim aid t p es')
+
+-- In Verilog concatenations {e1, ..., en}, each element's width is
+-- self-determined. Unsized module parameters (ASParam) and $clog2 calls
+-- have a 32-bit self-determined width in Verilog even when their ASyntax
+-- type is narrower or wider than 32 bits. Extract such elements into
+-- sized intermediate wires so the concatenation has the exact width.
+aQExp top (APrim aid t PrimConcat es) = do
+    ups <- gets qs_unsizedParams
+    let mkConcatElem e = do
+            e' <- aQExp False e
+            if aSize e' /= SizeConst 32 && hasUnsizedParamOrClog2 ups e'
+              then do
+                let te = aType e'
+                i <- addExpr te e'
+                return (ASDef te i)
+              else return e'
+    es' <- mapM mkConcatElem es
+    return (APrim aid t PrimConcat es')
 
 aQExp top (APrim aid t p es)       = mapM (aQExp False) es >>= return . APrim aid t p
 aQExp top (AMethCall t i m es)     = mapM (aQExp False) es >>= return . AMethCall t i m
@@ -373,7 +420,7 @@ aQMux _ _ _ _  = internalError ("AVerilog::aQMux")
 
 
 aBitOr :: AId -> AType -> [AExpr] -> AExpr
-aBitOr aid t@(ATBit n) es =
+aBitOr aid t@(ATBit (SizeConst n)) es =
     let (cs, xs) = partition isConst es
         one = 2^n-1
         c = foldr (integerOr . getConst one) 0 cs
@@ -386,10 +433,13 @@ aBitOr aid t@(ATBit n) es =
             aOr' xs
         else
             aOr' (xs ++ [aSInt t c])
+aBitOr aid t@(ATBit _) [] = aInt t 0
+aBitOr aid t@(ATBit _) [e] = e
+aBitOr aid t@(ATBit _) es = APrim aid t PrimOr es
 aBitOr _ _ _ = internalError ("AVerilog::aOr")
 
 aBitAnd :: AId -> AType -> [AExpr] -> AExpr
-aBitAnd aid t@(ATBit n) es =
+aBitAnd aid t@(ATBit (SizeConst n)) es =
     let (cs, xs) = partition isConst es
         one = 2^n-1
         c = foldr (integerAnd . getConst 0) one cs
@@ -402,6 +452,9 @@ aBitAnd aid t@(ATBit n) es =
             aAnd' xs
         else
             aAnd' (xs ++ [aSInt t c])
+aBitAnd aid t@(ATBit _) [] = ASInt defaultAId t (ilDec (-1))
+aBitAnd aid t@(ATBit _) [e] = e
+aBitAnd aid t@(ATBit _) es = APrim aid t PrimAnd es
 aBitAnd _ _ _ = internalError ("AVerilog::aAnd")
 
 aInt :: AType -> Integer -> AExpr
@@ -426,8 +479,16 @@ mkDefS e@(_)                  = do
 
 -- extracts of v[n:0]  become v
 aExtract :: AId -> AType -> AExpr -> AExpr -> AExpr -> AExpr
-aExtract _ _ v (ASInt _ _ (IntLit _ _ n')) (ASInt _ _ (IntLit _ _ 0)) | aSize v == n'+1 = v
+aExtract _ _ v (ASInt _ _ (IntLit _ _ n')) (ASInt _ _ (IntLit _ _ 0)) | aSize v == SizeConst (n'+1) = v
+aExtract _ t v _ (ASInt _ _ (IntLit _ _ 0)) | aSize v == aSize t = v
 aExtract aid t v h l = APrim aid t PrimExtract [v,h,l]
+
+hasUnsizedParamOrClog2 :: [AId] -> AExpr -> Bool
+hasUnsizedParamOrClog2 ups (ASParam _ i) = i `elem` ups
+hasUnsizedParamOrClog2 _ (AFunCall _ _ fn False _) | fn == "$clog2" = True
+hasUnsizedParamOrClog2 _ (APrim _ _ PrimExtract _) = False
+hasUnsizedParamOrClog2 ups (APrim _ _ _ args) = any (hasUnsizedParamOrClog2 ups) args
+hasUnsizedParamOrClog2 _ _ = False
 
 aSNat :: Integer -> AExpr
 aSNat n = ASInt defaultAId aTNat (ilDec n)

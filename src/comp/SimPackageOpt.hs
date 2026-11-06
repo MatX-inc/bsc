@@ -137,7 +137,7 @@ inlineDefs pkg =
       isUnsized _ = False
       isNotOk d
         | isUnsized (adef_type d)         = True
-        | (aSize d > 64)                  = True
+        | (aSizeInt d > 64)               = True
         | isTupleType (adef_type d)       = True
         | isTaskOrForeignFunc d           = True
         | isCase d                        = True
@@ -186,16 +186,16 @@ optimizeConcats pkg =
               -- was only replaced with a value at the start of the Bluesim
               -- backend
               combine_constants (0,_) [] = []
-              combine_constants (w,n) [] = [ ASInt dummy_id (ATBit w) (ilSizedBin w n) ]
-              combine_constants (w,n) ((ASInt _ (ATBit w') (IntLit _ _ n')):es) =
+              combine_constants (w,n) [] = [ ASInt dummy_id (ATBit (SizeConst w)) (ilSizedBin w n) ]
+              combine_constants (w,n) ((ASInt _ (ATBit (SizeConst w')) (IntLit _ _ n')):es) =
                 combine_constants (w+w', n*(2^w') + n') es
               combine_constants (0,_) (e:es) =
                 [e] ++ (combine_constants (0,0) es)
               combine_constants (w,n) (e:es) =
-                [ASInt dummy_id (ATBit w) (ilSizedBin w n),e] ++ (combine_constants (0,0) es)
+                [ASInt dummy_id (ATBit (SizeConst w)) (ilSizedBin w n),e] ++ (combine_constants (0,0) es)
               -- this is the optimized concat arguments regardless of width
               args' = map optConcat $ combine_constants (0,0) $ flatten args
-          in if ((aSize pty) <= 64)
+          in if ((aSizeInt pty) <= 64)
              then -- for non-wide concats, we have no optimizations
                   -- beyond the basic ones
                   case args' of
@@ -204,14 +204,14 @@ optimizeConcats pkg =
                     _   -> APrim pid pty PrimConcat args'
              else -- restructure wide concats into chunks aligned on
                   -- 32-bit boundaries
-                  let extract (APrim aid (ATBit sz) PrimExtract [e,_,ASInt _ _ (IntLit _ _ base)]) nbits lo =
-                        APrim aid (ATBit nbits) PrimExtract [e, aNat (base + lo + nbits - 1), aNat (base + lo) ]
+                  let extract (APrim aid (ATBit _sz) PrimExtract [e,_,ASInt _ _ (IntLit _ _ base)]) nbits lo =
+                        APrim aid (ATBit (SizeConst nbits)) PrimExtract [e, aNat (base + lo + nbits - 1), aNat (base + lo) ]
                       extract e nbits lo =
-                        APrim dummy_id (ATBit nbits) PrimExtract [e, aNat (lo + nbits - 1), aNat lo]
+                        APrim dummy_id (ATBit (SizeConst nbits)) PrimExtract [e, aNat (lo + nbits - 1), aNat lo]
                       restructure grp sz []     = [grp]
                       restructure grp sz (e:es) =
                         let bits_left_in_dword = if ((sz /= 0) && ((sz `rem` 32) == 0)) then 32 else (sz `rem` 32);
-                            e_sz = aSize e
+                            e_sz = aSizeInt e
                         in if e_sz <= bits_left_in_dword
                            then restructure (grp ++ [e]) (sz - e_sz) es
                            else -- need to break e across word boundary
@@ -221,8 +221,8 @@ optimizeConcats pkg =
                       args'' = [ case grp of
                                     []  -> internalError "SimPackageOpt: optimizeConcats has empty arg group"
                                     [e] -> e
-                                    _   -> APrim dummy_id (ATBit (sum (map aSize grp))) PrimConcat grp
-                               | grp <- restructure [] (aSize pty) args'
+                                    _   -> APrim dummy_id (ATBit (SizeConst (sum (map aSizeInt grp)))) PrimConcat grp
+                               | grp <- restructure [] (aSizeInt pty) args'
                                ]
                   in case args'' of
                        []  -> internalError "SimPackageOpt: optimizeConcats has empty arg list"
@@ -314,10 +314,10 @@ convertASAny errh flags apkg = do
                _   -> -- this situation should have been rejected when
                       -- we checked command-line flags
                       bsError errh [(noPosition, EBluesimNoXZ tgt)]
-        return $ ASInt dummy_id (ATBit n) (ilSizedHex n v)
+        return $ ASInt dummy_id (ATBit (SizeConst n)) (ilSizedHex n v)
 
       cvtASAnyExpr :: AExpr -> IO AExpr
-      cvtASAnyExpr (ASAny ty _) = mkVal (aSize ty)
+      cvtASAnyExpr (ASAny ty _) = mkVal (aSizeInt ty)
       cvtASAnyExpr (APrim aid ty op args) =
         do args' <- mapM cvtASAnyExpr args
            return $ APrim aid ty op args'

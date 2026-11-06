@@ -1,0 +1,147 @@
+package SymOptTest where
+
+struct Triple a b c =
+    f1 :: Bit a
+    f2 :: Bit b
+    f3 :: Bit c
+  deriving (Bits, Eq)
+
+interface SymOptIfc a b c =
+    idTriple     :: Triple a b c -> Triple a b c
+    midField     :: Bit a -> Bit b -> Bit c -> Bit b
+    nestedSlice  :: Triple a b c -> Bit b
+    muxTriple    :: Bool -> Triple a b c -> Triple a b c -> Triple a b c
+    eqConcatZero :: Bit a -> Bit a -> Bool
+    mulPow2      :: Bit a -> Bit a
+    identOps     :: Bit a -> Bit a
+    invViaXor    :: Bit b -> Bit b
+    isNeg        :: Int a -> Bool
+    isNegLE      :: Int b -> Bool
+    addNegConst  :: Int a -> Int a
+
+{-# verilog mkSymOptBox #-}
+mkSymOptBox :: Module (SymOptIfc a b c)
+mkSymOptBox =
+  module
+    let uConst :: UInt a
+        uConst = 5
+        iConst :: Int a
+        iConst = -3
+        bConst :: Bit a
+        bConst = 2
+        delta :: Integer
+        delta = toStaticIndex uConst + toStaticIndex iConst - toStaticIndex bConst
+    interface
+      -- 1. Selecting all 3 symbolic-width fields and re-concatenating them
+      --    must fuse adjacent selects and simplify full-width select to identity:
+      idTriple t = Triple { f1 = t.f1; f2 = t.f2; f3 = t.f3 }
+
+      -- 2. Constructing a 3-field struct and projecting the middle field
+      --    must simplify through nested PrimConcat to just y:
+      midField x y z =
+        let t :: Triple a b c
+            t = Triple { f1 = x; f2 = y; f3 = z }
+        in  t.f2
+
+      -- 3. Nested PrimSelect composition: truncateLSB (truncate (pack t))
+      --    must fuse into a single slice t[b + c - 1 : c]:
+      nestedSlice t =
+        let lowBC :: Bit (TAdd b c)
+            lowBC = truncate (pack t)
+            hiB :: Bit b
+            hiB = truncateLSB lowBC
+        in  hiB
+
+      -- 4. PrimIf pack/unpack elimination on symbolic-width structs:
+      muxTriple cond t1 t2 =
+        if cond
+        then Triple { f1 = t1.f1; f2 = t1.f2; f3 = t1.f3 }
+        else Triple { f1 = t2.f1; f2 = t2.f2; f3 = t2.f3 }
+
+      -- 5. Concat equality splitting on symbolic widths:
+      --    (x1 ++ 0) == (x2 ++ 0) simplifies to x1 == x2:
+      eqConcatZero x1 x2 = (x1 ++ (0 :: Bit b)) == (x2 ++ (0 :: Bit b))
+
+      -- 6. Multiply by 1 and power-of-2 strength reduction on symbolic width a:
+      mulPow2 x = (1 * x) * 4
+
+      -- 7. Bitwise, shift, multiply, 0 ++ 0, ~(-1), and -0 identities on symbolic width a:
+      identOps x =
+        let all1 :: Bit a
+            all1 = invert 0
+            zCat :: Bit (TAdd a b)
+            zCat = (0 :: Bit a) ++ (0 :: Bit b)
+            z0 :: Bit a
+            z0 = truncate zCat + fromInteger delta
+            z1 :: Bit a
+            z1 = invert all1 + negate 0
+        in  ((((x & all1) | z0) ^ z1) * 1 << (0 :: UInt 4)) >> (0 :: UInt 4)
+
+      -- 8. Bitwise annihilators (y & 0 -> 0, y | -1 -> -1, ~(-1) -> 0) and xor with -1 -> ~y:
+      invViaXor y = (y ^ (invert 0)) | ((y & 0) ^ (invert (y | (invert 0))))
+
+      -- 9. Signed (s < 0) with arithmetic shift by 0 (PrimSRA) and signExtend 0:
+      isNeg s =
+        let zExt :: Int (TAdd c a)
+            zExt = signExtend (0 :: Int a)
+            z :: Int a
+            z = unpack (truncate (pack zExt))
+        in  (s >> (0 :: UInt 4)) < z
+
+      -- 10. Signed (s <= -1) (PrimSLE) on symbolic width b simplifies to sign bit s[b-1]:
+      isNegLE s = s <= -1
+
+      -- 11. Symbolic-width negative two's-complement constant (VEWConstSym i < -1):
+      addNegConst s = s + (-3)
+
+{-# verilog sysSymOptTest #-}
+sysSymOptTest :: Module Empty
+sysSymOptTest =
+  module
+    box1 :: SymOptIfc 4 8 6 <- mkSymOptBox
+    box2 :: SymOptIfc 7 5 9 <- mkSymOptBox
+    step :: Reg (Bit 1) <- mkReg 0
+
+    rules
+      "check0": when step == 0
+        ==> action
+              step := 1
+              let t1a = Triple { f1 = 4'hA; f2 = 8'h5C; f3 = 6'h2B }
+                  t1b = Triple { f1 = 4'h3; f2 = 8'hE1; f3 = 6'h14 }
+                  r1 = box1.idTriple t1a
+                  m1 = box1.midField 4'h3 8'hE7 6'h19
+                  s1 = box1.nestedSlice t1a
+                  mx1 = box1.muxTriple True t1a t1b
+                  eq1 = box1.eqConcatZero 4'hA 4'hA
+                  mp1 = box1.mulPow2 4'h3
+                  i1 = box1.identOps 4'h9
+                  v1 = box1.invViaXor 8'hA5
+                  n1_pos = box1.isNeg 5
+                  nl1_pos = box1.isNegLE 12
+                  an1 = box1.addNegConst 5
+
+                  t2a = Triple { f1 = 7'h55; f2 = 5'h13; f3 = 9'h1A4 }
+                  t2b = Triple { f1 = 7'h12; f2 = 5'h06; f3 = 9'h055 }
+                  r2 = box2.idTriple t2a
+                  m2 = box2.midField 7'h12 5'h0D 9'h077
+                  s2 = box2.nestedSlice t2a
+                  mx2 = box2.muxTriple False t2a t2b
+                  eq2 = box2.eqConcatZero 7'h55 7'h12
+                  mp2 = box2.mulPow2 7'h15
+                  i2 = box2.identOps 7'h6B
+                  v2 = box2.invViaXor 5'h12
+                  n2_pos = box2.isNeg 12
+                  nl2_pos = box2.isNegLE 0
+                  an2 = box2.addNegConst (-2)
+              $display "box1: id=(%0h,%0h,%0h) mid=%0h sl=%0h mux=(%0h,%0h,%0h) eq=%0d mp=%0h ident=%0h inv=%0h neg=(%0d,%0d) add=%0d"
+                       r1.f1 r1.f2 r1.f3 m1 s1 mx1.f1 mx1.f2 mx1.f3 eq1 mp1 i1 v1 n1_pos nl1_pos an1
+              $display "box2: id=(%0h,%0h,%0h) mid=%0h sl=%0h mux=(%0h,%0h,%0h) eq=%0d mp=%0h ident=%0h inv=%0h neg=(%0d,%0d) add=%0d"
+                       r2.f1 r2.f2 r2.f3 m2 s2 mx2.f1 mx2.f2 mx2.f3 eq2 mp2 i2 v2 n2_pos nl2_pos an2
+      "check1": when step == 1
+        ==> action
+              let n1_neg = box1.isNeg (-3)
+                  nl1_neg = box1.isNegLE (-1)
+                  n2_neg = box2.isNeg (-1)
+                  nl2_neg = box2.isNegLE (-5)
+              $display "neg_neg=(%0d,%0d,%0d,%0d)" n1_neg nl1_neg n2_neg nl2_neg
+              $finish 0

@@ -1,0 +1,131 @@
+package NumericFuncsTest where
+
+-- Leaf module parameterized by two sizes x and y (no ordering constraint),
+-- testing TMax, TMin, and TLog in both port widths and valueOf.
+interface MinMaxLeaf x y =
+    putMax :: Bit (TMax x y) -> Action
+    getMax :: Bit (TMax x y)
+    getMin :: Bit (TMin x y)
+    leafInfo :: Bit 32
+
+{-# verilog mkMinMaxLeaf #-}
+mkMinMaxLeaf :: (Add 1 _x x, Add 1 _y y, Add 1 _mx (TMax x y), Add 1 _mn (TMin x y),
+                 Add (TMin x y) _diff (TMax x y)) =>
+                Module (MinMaxLeaf x y)
+mkMinMaxLeaf =
+    module
+        rMax :: Reg (Bit (TMax x y)) <- mkReg (fromInteger (valueOf (TMax x y)))
+        let bMax :: Bit 8 = fromInteger (valueOf (TMax x y))
+            bMin :: Bit 8 = fromInteger (valueOf (TMin x y))
+            bLogX :: Bit 8 = fromInteger (valueOf (TLog x))
+            bLogY :: Bit 8 = fromInteger (valueOf (TLog y))
+        interface
+            putMax v = rMax := v
+            getMax = rMax
+            getMin = truncate rMax
+            leafInfo = bMax ++ bMin ++ bLogX ++ bLogY
+
+-- Comprehensive module exercising all 8 numeric type functions
+-- (TAdd, TSub, TMul, TDiv, TLog, TExp, TMax, TMin) and all 7 numeric
+-- proviso classes (Add, Mul, Div, Log, Max, Min, NumEq), plus nested
+-- instantiation of mkMinMaxLeaf with reversed (b, a) and derived (TLog a, TDiv a b) sizes.
+interface NumFuncBox a b =
+    step     :: Bit a -> Bit b -> Action
+    sumPort  :: Bit (TAdd a b)
+    diffPort :: Bit (TSub a b)
+    prodPort :: Bit (TMul a b)
+    quotPort :: Bit (TDiv a b)
+    logPort  :: Bit (TLog a)
+    expPort  :: Bit (TExp b)
+    maxPort  :: Bit (TMax a b)
+    minPort  :: Bit (TMin a b)
+    funcSizes :: Bit 64
+    childInfo :: Bit 32
+
+{-# verilog mkNumFuncBox #-}
+mkNumFuncBox :: (Add 1 _a a, Add 1 _b b, Add b _d a,
+                 Add 1 _s (TAdd a b), Add 1 _df (TSub a b),
+                 Add 1 _p (TMul a b), Add 1 _q (TDiv a b),
+                 Add 1 _l (TLog a), Add 1 _e (TExp b),
+                 Add 1 _mx (TMax a b), Add 1 _mn (TMin a b),
+                 Add 1 _mxba (TMax b a), Add 1 _mnba (TMin b a),
+                 Add (TMin b a) _mdiff (TMax b a),
+                 Add _exta a (TMul a b), Add _extb b (TMul a b),
+                 Add _ext32 (TMax b a) 32,
+                 Mul a b _prod, Div a b _quot, Log a _lg,
+                 Max a b _maxv, Min a b _minv, NumEq a a) =>
+                Module (NumFuncBox a b)
+mkNumFuncBox =
+    module
+        rSum  :: Reg (Bit (TAdd a b)) <- mkReg 0
+        rDiff :: Reg (Bit (TSub a b)) <- mkReg 0
+        rProd :: Reg (Bit (TMul a b)) <- mkReg 0
+        rQuot :: Reg (Bit (TDiv a b)) <- mkReg 0
+        rLog  :: Reg (Bit (TLog a))   <- mkReg 0
+        rExp  :: Reg (Bit (TExp b))   <- mkReg 0
+        rMax  :: Reg (Bit (TMax a b)) <- mkReg 0
+        rMin  :: Reg (Bit (TMin a b)) <- mkReg 0
+
+        -- Instantiate child parameterized module with (b, a) where b < a,
+        -- testing TMax/TMin when the first argument is smaller.
+        leaf :: MinMaxLeaf b a <- mkMinMaxLeaf
+
+        let sAdd :: Bit 8 = fromInteger (valueOf (TAdd a b))
+            sSub :: Bit 8 = fromInteger (valueOf (TSub a b))
+            sMul :: Bit 8 = fromInteger (valueOf (TMul a b))
+            sDiv :: Bit 8 = fromInteger (valueOf (TDiv a b))
+            sLog :: Bit 8 = fromInteger (valueOf (TLog a))
+            sExp :: Bit 8 = fromInteger (valueOf (TExp b))
+            sMax :: Bit 8 = fromInteger (valueOf (TMax a b))
+            sMin :: Bit 8 = fromInteger (valueOf (TMin a b))
+
+        interface
+            step va vb = action
+                rSum  := va ++ vb
+                rDiff := truncate va
+                rProd := zeroExtend va + zeroExtend vb
+                rQuot := fromInteger (valueOf (TDiv a b))
+                rLog  := fromInteger (valueOf (TLog a))
+                rExp  := (1 << vb)
+                rMax  := fromInteger (valueOf (TMax a b))
+                rMin  := truncate vb
+                leaf.putMax (fromInteger (valueOf (TAdd (TLog a) (TDiv a b))))
+            sumPort   = rSum
+            diffPort  = rDiff
+            prodPort  = rProd
+            quotPort  = rQuot
+            logPort   = rLog
+            expPort   = rExp
+            maxPort   = rMax
+            minPort   = rMin
+            funcSizes = sAdd ++ sSub ++ sMul ++ sDiv ++ sLog ++ sExp ++ sMax ++ sMin
+            childInfo = leaf.leafInfo ^ zeroExtend leaf.getMax
+
+{-# verilog sysNumericFuncsTest #-}
+sysNumericFuncsTest :: Module Empty
+sysNumericFuncsTest =
+    module
+        box1 :: NumFuncBox 9 3  <- mkNumFuncBox
+        box2 :: NumFuncBox 10 4 <- mkNumFuncBox
+        box3 :: NumFuncBox 16 2 <- mkNumFuncBox
+        leaf1 :: MinMaxLeaf 3 9 <- mkMinMaxLeaf
+        leaf2 :: MinMaxLeaf 9 3 <- mkMinMaxLeaf
+        cycle :: Reg (Bit 8)    <- mkReg 0
+
+        rules
+            "r0": when cycle == 0 ==> action
+                $display "init sizes1=%h child1=%h" box1.funcSizes box1.childInfo
+                $display "init sizes2=%h child2=%h" box2.funcSizes box2.childInfo
+                $display "init sizes3=%h child3=%h" box3.funcSizes box3.childInfo
+                $display "init leaf1=%h max1=%0d min1=%0d" leaf1.leafInfo leaf1.getMax leaf1.getMin
+                $display "init leaf2=%h max2=%0d min2=%0d" leaf2.leafInfo leaf2.getMax leaf2.getMin
+                box1.step 0x1a5 0x5
+                box2.step 0x2aa 0x3
+                box3.step 0xbeef 0x2
+                cycle := 1
+
+            "r1": when cycle == 1 ==> action
+                $display "step1 sum=%h diff=%h prod=%h quot=%0d log=%0d exp=%h max=%0d min=%0d child=%h" box1.sumPort box1.diffPort box1.prodPort box1.quotPort box1.logPort box1.expPort box1.maxPort box1.minPort box1.childInfo
+                $display "step2 sum=%h diff=%h prod=%h quot=%0d log=%0d exp=%h max=%0d min=%0d child=%h" box2.sumPort box2.diffPort box2.prodPort box2.quotPort box2.logPort box2.expPort box2.maxPort box2.minPort box2.childInfo
+                $display "step3 sum=%h diff=%h prod=%h quot=%0d log=%0d exp=%h max=%0d min=%0d child=%h" box3.sumPort box3.diffPort box3.prodPort box3.quotPort box3.logPort box3.expPort box3.maxPort box3.minPort box3.childInfo
+                $finish 0

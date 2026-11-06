@@ -1,0 +1,3 @@
+box1: id=(a,5c,2b) mid=e7 sl=5c mux=(a,5c,2b) eq=1 mp=c ident=9 inv=5a neg=(0,0) add=2
+box2: id=(55,13,1a4) mid=d sl=13 mux=(12,6,55) eq=0 mp=54 ident=6b inv=d neg=(0,0) add=-5
+neg_neg=(1,1,1,1)

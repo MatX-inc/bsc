@@ -1,0 +1,127 @@
+#
+# Tests for synthesizing modules with numeric type parameters to parameterized Verilog
+# Primary tests are in BH (.bs); secondary tests in BSV (.bsv) cover complementary cases.
+#
+
+# 1. Primary BH: Compile mkPass (Module (Reg (Bit w))) to parameterized Verilog and inspect mkPass.v
+compile_verilog_pass Pass.bs
+if { $vtest == 1 } {
+    find_regexp mkPass.v {parameter w \= 1\;}
+    find_regexp mkPass.v {input  \[w \- 1 \: 0\] \_write\_1\;}
+    find_regexp mkPass.v {output \[w \- 1 \: 0\] \_read\;}
+    find_regexp mkPass.v {reg \[w \- 1 \: 0\] r\;}
+}
+
+# 2. Primary BH: Separate-package foreign Verilog import at widths 1, 8, 17, 32, 64
+test_veri_only_multi PassBVI sysPassBVI {mkPass}
+
+# 3. Primary BH: Direct instantiation via GenWrap wrapper at widths 1, 8, 17, 32, 64 (Bluesim + Verilog)
+test_c_veri_multi PassDirect sysPassDirect {mkPass}
+
+# 4. Primary BH: Multi-parameter, valueOf, numeric provisos (Add), nested parameterized submodules
+#    (diamond & >64-bit WideData), and Tuple2 port packing (Bluesim + Verilog)
+test_c_veri_multi ParamPipeTest sysParamPipeTest {mkPipe mkDoublePipe mkWiden mkPairSwap}
+if { $vtest == 1 } {
+    find_regexp mkWiden.v {parameter in\_w \= 1\;}
+    find_regexp mkWiden.v {parameter out\_w \= 1\;}
+    find_regexp mkPairSwap.v {input  \[a\_w \+ b\_w \- 1 \: 0\] swap\_1\;}
+    find_regexp mkPairSwap.v {output \[a\_w \+ b\_w \- 1 \: 0\] swap\;}
+}
+
+# 5. Secondary BSV: Combined numeric size parameter + Bit#(w) value parameter (mkShiftReg),
+#    both via separate-package import "BVI" and direct BSV instantiation with struct/TMul/TAdd (Bluesim + Verilog)
+compile_verilog_pass ShiftRegBSV.bsv
+if { $vtest == 1 } {
+    find_regexp mkShiftReg.v {parameter w \= 1\;}
+    find_regexp mkShiftReg.v {parameter \[w \- 1 \: 0\] init\_val \=}
+}
+test_veri_only_bsv_modules ShiftRegBVI {mkShiftReg}
+test_c_veri_bsv_modules AluSliceBSV {mkShiftReg mkSplitJoin}
+if { $vtest == 1 } {
+    find_regexp mkSplitJoin.v {parameter hi\_w \= 1\;}
+    find_regexp mkSplitJoin.v {parameter lo\_w \= 1\;}
+    find_regexp mkSplitJoin.v {output \[2 \* hi\_w \- 1 \: 0\] dupHi\;}
+}
+
+# 6. Primary BH & Secondary BSV: All 8 numeric type functions (TAdd, TSub, TMul, TDiv,
+#    TLog, TExp, TMax, TMin) and all 7 numeric proviso classes (Add, Mul, Div, Log,
+#    Max, Min, NumEq) in port widths, valueOf expressions, and nested child parameters
+test_c_veri_multi NumericFuncsTest sysNumericFuncsTest {mkMinMaxLeaf mkNumFuncBox}
+if { $vtest == 1 } {
+    find_regexp mkMinMaxLeaf.v {output \[\(\(x \>\= y\) \? x \: y\) \- 1 \: 0\] getMax\;}
+    find_regexp mkMinMaxLeaf.v {output \[\(\(x \<\= y\) \? x \: y\) \- 1 \: 0\] getMin\;}
+    find_regexp mkNumFuncBox.v {\$clog2\(a\)}
+    find_regexp mkNumFuncBox.v {\(a \+ b \- 1\) \/ b}
+}
+test_c_veri_bsv_modules NumericProvisosBSV {mkPacketFramer}
+if { $vtest == 1 } {
+    find_regexp mkPacketFramer.v {output \[\(\(payload\_w \>\= lane\_w\) \? payload\_w \: lane\_w\) \- 1 \: 0\] widerVal\;}
+    find_regexp mkPacketFramer.v {output \[2 \* payload\_w \- \(lane\_w \+ 1\) \: 0\] stretchBits\;}
+}
+
+# 7. Primary BH & Secondary BSV: Standalone parameterized FIFO1, FIFO2, FIFOL1, and Counter
+#    primitives across widths 1, 2, 4, 8, 17, 19, 32, 64, 72, 128, including Bool `guarded`
+#    and Bit#(w) `init_val` value parameters (Bluesim + Verilog)
+test_c_veri_multi ParamFifoCounterTest sysParamFifoCounterTest {mkParamFIFO1 mkParamFIFO2 mkParamCounter}
+if { $vtest == 1 } {
+    find_regexp mkParamFIFO1.v {parameter width \= 1\;}
+    find_regexp mkParamFIFO1.v {parameter \[0 \: 0\] guarded \=}
+    find_regexp mkParamFIFO2.v {parameter width \= 1\;}
+    find_regexp mkParamCounter.v {parameter \[width \- 1 \: 0\] init\_val \=}
+}
+test_c_veri_bsv_modules ParamFifoBSV {mkParamFIFOL1}
+
+# 8. Primary BH & Secondary BSV: Parameterized Inout#(Bit#(w)) arguments and interface fields
+compile_verilog_pass ParamInoutTest.bs
+if { $vtest == 1 } {
+    find_regexp mkParamInoutPassthrough.v {parameter w \= 1\;}
+    find_regexp mkParamInoutPassthrough.v {inout  \[w \- 1 \: 0\] io\_in\;}
+    find_regexp mkParamInoutPassthrough.v {\.io\_out\(io\_in\)}
+}
+compile_verilog_pass ParamInoutBSV.bsv
+if { $vtest == 1 } {
+    find_regexp mkParamInoutConnect.v {inout  \[w \- 1 \: 0\] left\;}
+    find_regexp mkDualInoutThru.v {inout  \[a \+ b \- 1 \: 0\] inSum\;}
+}
+
+# 9. Symbolic optimizations (ITransform / AOpt) on parameterized widths:
+#    3-field struct slice/concat cancellation, nested slice fusion, struct mux
+#    pack/unpack elimination, concat equality splitting, power-of-2 multiply,
+#    bitwise/shift/multiply identities, signed < 0 and <= -1 sign-bit extraction,
+#    and negative two's-complement symbolic-width literals
+test_c_veri_multi SymOptTest sysSymOptTest {mkSymOptBox}
+if { $vtest == 1 } {
+    find_regexp mkSymOptBox.v {assign idTriple \= idTriple\_1 \;}
+    find_regexp mkSymOptBox.v {assign midField \= midField\_2 \;}
+    find_regexp mkSymOptBox.v {assign nestedSlice \= nestedSlice\_1\[b \+ c \- 1\:c\] \;}
+    find_regexp mkSymOptBox.v {assign muxTriple \= muxTriple\_1 \? muxTriple\_2 \: muxTriple\_3 \;}
+    find_regexp mkSymOptBox.v {assign eqConcatZero \= eqConcatZero\_1 \=\= eqConcatZero\_2 \;}
+    find_regexp mkSymOptBox.v {assign identOps \= identOps\_1 \;}
+    find_regexp mkSymOptBox.v {assign invViaXor \= \~invViaXor\_1 \;}
+    find_regexp mkSymOptBox.v {assign isNeg \= isNeg\_1\[a \- 1\] \;}
+    find_regexp mkSymOptBox.v {assign isNegLE \= isNegLE\_1\[b \- 1\] \;}
+    find_regexp mkSymOptBox.v {assign addNegConst \= addNegConst\_1 \+ \{ \{\(a \- 2\)\{1'b1\}\}, 2'd1 \} \;}
+}
+
+# 10. Bluesim top-level uninstantiated size-parameter rejection (G0099) & -sim -c template handling
+if { $ctest == 1 } {
+    compile_object_pass Pass.bs
+    gen_modules_pass {mkPass}
+    link_objects_fail_error {mkPass.ba} mkPass G0099
+
+    compile_object_pass AluSliceBSV.bsv
+    gen_modules_pass {mkSplitJoin}
+    link_objects_fail_error {mkSplitJoin.ba} mkSplitJoin G0099
+}
+
+# 10. Negative tests for value polymorphism, non-numeric provisos, ambiguous auxiliary vars,
+#     and well-typed modules with illegal elaboration-time evaluation on size parameters (BH & BSV)
+compile_verilog_fail_error BadPolyIfc.bs T0043
+compile_verilog_fail_error BadNonNumProviso.bs T0043
+compile_verilog_fail_error BadAuxNumProviso.bs T0079 2
+compile_verilog_fail_error BadEvalLoop.bs G0013
+
+compile_verilog_fail_error BadPolyMethodBSV.bsv T0043
+compile_verilog_fail_error BadClassProvisoBSV.bsv T0043
+compile_verilog_fail_error BadUnderconstrainedBSV.bsv T0079 2
+compile_verilog_fail_error BadForLoopBSV.bsv G0013

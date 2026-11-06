@@ -26,6 +26,7 @@ module AVerilogUtil (
 
                      -- size routine
                      vSize,
+                     sizeToVExpr,
                      isNotZeroSized,
                      flagsToVco,
                      VConvtOpts(..)
@@ -78,7 +79,7 @@ data VConvtOpts = VConvtOpts {
                               -- foreign-function map and def widths, for
                               -- monomorphizing polymorphic DPI call names
                               vco_ffmap       :: ForeignFuncMap,
-                              vco_def_widths  :: M.Map AId Integer
+                              vco_def_widths  :: M.Map AId ASize
                               }
 
 
@@ -596,8 +597,9 @@ vDefMpd vco defin@(ADef i t (APrim _ _ PrimCase es@(x:defarm:ces_t)) _) _ =
         ev = if (null sensitivityList)
              then (internalError("AVerilogUtil:: null sensitivity list for case" ++ ppReadable defin))
              else foldr1 VEEOr (map (VEE . VEVar) sensitivityList)
-        n = aSize x
-        fullcase = (2^n * 2) == (length ces_t)
+        fullcase = case aSize x of
+                     SizeConst n -> (2^n * 2) == (length ces_t)
+                     _           -> False
         def = if fullcase then [] else [VDefault (VAssign (VLId vi) (vExpr vco defarm))]
 
 vDefMpd vco (ADef i_t t_t@(ATBit _) (ATaskValue {}) _) _ =
@@ -687,7 +689,7 @@ splitByTupleWidth :: [AType] -> [(String, Integer)]
                   -> [(AType, [(String, Integer)])]
 splitByTupleWidth []       _   = []
 splitByTupleWidth (t':ts')  pts =
-    let (grp, rest) = takeWidth (aSize t') pts
+    let (grp, rest) = takeWidth (aSizeInt t') pts
     in  (t', grp) : splitByTupleWidth ts' rest
   where takeWidth 0 ps      = ([], ps)
         takeWidth _ []      = ([], [])
@@ -753,31 +755,36 @@ vExpr vco (APrim _ _ PrimConcat es) = VEConcat (map (vExpr vco) es)
 -- Avoid repetition syntax for strings
 vExpr vco (APrim _ _ PrimStringConcat es) = VEConcat (map (vExpr vco) es)
 vExpr vco (APrim _ _ PrimExtract [e1, e2, e3]) | e2 == e3 = VESelect1 (vExpr vco e1) (vExprC vco e2)
-vExpr vco (APrim _ _ PrimExtract [e1, e2, e3]) | isConst e2 && isConst e3 = VESelect (vExpr vco e1) (vExprC vco e2) (vExprC vco e3)
+vExpr vco (APrim _ _ PrimExtract [e1, e2, e3]) | isConstOrParamExpr e2 && isConstOrParamExpr e3 = VESelect (vExpr vco e1) (vExprC vco e2) (vExprC vco e3)
 vExpr vco (APrim _ _ PrimIf [e1, e2, e3]) = VEIf (vExpr vco e1) (vExpr vco e2) (vExpr vco e3)
 vExpr vco (APrim _ _ PrimBNot [e]) = vNot (vExpr vco e)
 vExpr vco (APrim _ _ PrimRange [_,_,e]) = vExpr vco e
 vExpr vco (APrim _ t PrimZeroExt [e]) =
-            VEConcat [VEWConst
-                        (mkVId "0")
-                        (aSize t - aSize e)
-                        10
-                        0,
-                    vExpr vco e]
-vExpr vco (APrim _ t PrimSignExt [e]) | aSize e == 1 && aSize t > 0 = VERepeat (VEConst (aSize t)) (vExpr vco e)
+    case aSize t - aSize e of
+      SizeConst pad ->
+        VEConcat [VEWConst (mkVId "0") pad 10 0, vExpr vco e]
+      pad ->
+        VEConcat [VERepeat (sizeToVExpr pad) (VEWConst (mkVId "0") 1 2 0),
+                  vExpr vco e]
+vExpr vco (APrim _ t PrimSignExt [e]) | aSize e == 1, SizeConst wt <- aSize t, wt > 0 =
+    VERepeat (VEConst wt) (vExpr vco e)
+vExpr vco (APrim _ t PrimSignExt [e]) | aSize e == 1 =
+    VERepeat (sizeToVExpr (aSize t)) (vExpr vco e)
 -- Replicate the sign bit.
-vExpr vco e0@(APrim _ t PrimSignExt [e]) = VEConcat [vERepeat fill (VESelect1 vexp (VEConst (j-1))), vexp]
-    where fill = if (j >= i) then
-                   internalError("AVerilogUtil.broken SignExtend: " ++ ppReadable e0)
-                 else i-j
-          vexp = vExpr vco e
-          i = aSize t
+vExpr vco e0@(APrim _ t PrimSignExt [e]) = VEConcat [vERepeat fill (VESelect1 vexp (sizeToVExpr (j-1))), vexp]
+    where i = aSize t
           j = aSize e
-          vERepeat 1 x = x
-          vERepeat n x = VERepeat (VEConst n) x
+          fill = case (i, j) of
+                   (SizeConst ic, SizeConst jc) | jc >= ic ->
+                     internalError("AVerilogUtil.broken SignExtend: " ++ ppReadable e0)
+                   _ -> i-j
+          vexp = vExpr vco e
+          vERepeat (SizeConst 1) x = x
+          vERepeat n x = VERepeat (sizeToVExpr n) x
 vExpr vco (APrim aid t p [e1, e2]) | isSignedCmp p = VEOp (idToVId aid) (flip_t (vExpr vco e1)) (unsOp p) (flip_t (vExpr vco e2))
-  where flip_t e = vXor e (VEWConst (mkVId (show ((2 :: Integer)^(s-1)))) s 16 (2^(s-1)))
-        s = aSize (aType e1)
+  where flip_t e = case aSize (aType e1) of
+                     SizeConst s -> vXor e (VEWConst (mkVId (show ((2 :: Integer)^(s-1)))) s 16 (2^(s-1)))
+                     s           -> vXor e (mkVEOp (VEWConst (mkVId "1") 1 2 1) VShL (sizeToVExpr (s - 1)))
 vExpr vco (APrim aid _ p [e]) = VEUnOp (idToVId aid) (toVOp p) (vExpr vco e)
 vExpr vco (APrim aid _ p [e1,e2]) | p == PrimSL || p == PrimSRL = VEOp (idToVId aid) (vExpr vco e1) (toVOp p) (vExprC vco e2)
 vExpr vco (APrim aid _ p [e1,e2]) = VEOp (idToVId aid) (vExpr vco e1) (toVOp p) (vExpr vco e2)
@@ -792,7 +799,8 @@ vExpr vco e@(AFunCall t _ n isC es) =
                     else vNameToTask False n
       name = if isC then foreignName else n
   in VEFctCall (mkVId name) (map (vExpr vco) es)
-vExpr vco (ASInt idt (ATBit w) (IntLit _ b i))  = VEWConst (idToVId idt) w b i
+vExpr vco (ASInt idt (ATBit (SizeConst w)) (IntLit _ b i)) = VEWConst (idToVId idt) w b i
+vExpr vco (ASInt _   (ATBit w)             (IntLit _ b i)) = VEWConstSym (sizeToVExpr w) b i
 vExpr vco (ASReal _ _ r)                        = VEReal r
 vExpr vco (ASStr _ _ s)                         = VEString s
 -- The only ATuple nodes are built during I->A conversion from tuples of port values.
@@ -803,7 +811,8 @@ vExpr vco (ASDef (ATTuple ts) i) =
 vExpr vco (ASDef _ i)                           = VEVar (vId i)
 vExpr vco (ASPort _ i)                          = VEVar (vId i)
 vExpr vco (ASParam _ i)                         = VEVar (vId i)
-vExpr vco (ASAny (ATBit w) _)                   = VEUnknown w (vco_unspec vco)
+vExpr vco (ASAny (ATBit (SizeConst w)) _)       = VEUnknown w (vco_unspec vco)
+vExpr vco (ASAny (ATBit w) _)                   = VEUnknownSym (sizeToVExpr w) (vco_unspec vco)
 
 -- See above: a reassembled ATuple is always element-selected or split into
 -- per-element wires, so a whole ATuple never reaches vExpr -- this is an
@@ -828,6 +837,13 @@ vXor e1 e2 = mkVEOp e1 VXor e2
 vExprC :: VConvtOpts -> AExpr -> VExpr
 vExprC vco e@(ASInt _ (ATBit _) (IntLit _ _ i)) = -- trace ("vExprC: " ++ (ppReadable e)) $
   VEConst i
+vExprC vco (APrim aid _ p [e1, e2])
+    | p `elem` [PrimAdd, PrimSub, PrimMul, PrimQuot, PrimRem, PrimSL, PrimSRL]
+    , isConstOrParamExpr e1 && isConstOrParamExpr e2 =
+  VEOp (idToVId aid) (vExprC vco e1) (toVOp p) (vExprC vco e2)
+vExprC vco (AFunCall _ _ "$clog2" False es)
+    | all isConstOrParamExpr es =
+  VEFctCall (mkVId "$clog2") (map (vExprC vco) es)
 vExprC vco e = -- trace ("vExprC: " ++ (ppReadable e)) $
   dropLeadingZeroes (vExpr vco e)
 
@@ -883,14 +899,14 @@ dropLeadingZeroes' e = e
 
 -- ------------------------------
 
-muxInst :: VConvtOpts -> Bool -> Integer -> VId -> [VExpr] -> VMItem
+muxInst :: VConvtOpts -> Bool -> ASize -> VId -> [VExpr] -> VMItem
 muxInst vco pri s i es =
     VMInst {
             vi_module_name  = mkVId ((if pri then "Pri" else "")
                                      ++ "Mux_"
                                      ++ itos (length es `div` 2)),
             vi_inst_name    = i,
-            vi_inst_params  = [(viWidth, Just (VEConst s))],
+            vi_inst_params  = [(viWidth, Just (sizeToVExpr s))],
             vi_inst_ports   = zip muxInputs (map Just es)
            }
 
@@ -1163,15 +1179,36 @@ isNotZeroSized atb@(ATBit {}) = 0 /= atb_size atb
 isNotZeroSized atb@(ATAbstract { ata_sizes = [n]}) = 0 /= n
 isNotZeroSized _                  = True
 
+sizeToVExpr :: ASize -> VExpr
+sizeToVExpr (SizeConst n) = VEConst n
+sizeToVExpr (SizeVar v)   = VEVar (vId v)
+sizeToVExpr (SizeAdd a b) = mkVEOp (sizeToVExpr a) VAdd (sizeToVExpr b)
+sizeToVExpr (SizeSub a b) = mkVEOp (sizeToVExpr a) VSub (sizeToVExpr b)
+sizeToVExpr (SizeMul a b) = mkVEOp (sizeToVExpr a) VMul (sizeToVExpr b)
+sizeToVExpr (SizeDiv a b) =
+    let va = sizeToVExpr a
+        vb = sizeToVExpr b
+    in mkVEOp (mkVEOp (mkVEOp va VAdd vb) VSub (VEConst 1)) VQuot vb
+sizeToVExpr (SizeLog2 a)  = VEFctCall (mkVId "$clog2") [sizeToVExpr a]
+sizeToVExpr (SizeExp2 a)  = mkVEOp (VEConst 1) VShL (sizeToVExpr a)
+sizeToVExpr (SizeMax a b) =
+    let va = sizeToVExpr a
+        vb = sizeToVExpr b
+    in VEIf (mkVEOp va VUGE vb) va vb
+sizeToVExpr (SizeMin a b) =
+    let va = sizeToVExpr a
+        vb = sizeToVExpr b
+    in VEIf (mkVEOp va VULE vb) va vb
+
 vSize :: AType -> Maybe VRange
-vSize (ATBit 1) = Nothing
-vSize (ATBit n) = Just (VEConst (n-1), VEConst 0)
-vSize (ATAbstract i [1]) | i==idInout_ = Nothing
-vSize (ATAbstract i [n]) | i==idInout_ = Just (VEConst (n-1), VEConst 0)
-vSize t@(ATString (Just _)) = Just (VEConst ((aSize t)-1::Integer), VEConst 0)
+vSize (ATBit (SizeConst 1)) = Nothing
+vSize (ATBit n) = Just (sizeToVExpr (n - 1), VEConst 0)
+vSize (ATAbstract i [SizeConst 1]) | i==idInout_ = Nothing
+vSize (ATAbstract i [n]) | i==idInout_ = Just (sizeToVExpr (n - 1), VEConst 0)
+vSize t@(ATString (Just _)) = Just (sizeToVExpr (aSize t - 1), VEConst 0)
 vSize (ATString Nothing)  = Just (VEConst (dummy_string_size - 1::Integer), VEConst 0)
 -- A tuple is represented as a bit-concat of its elements.
-vSize t@(ATTuple _) = Just (VEConst (aSize t - 1), VEConst 0)
+vSize t@(ATTuple _) = Just (sizeToVExpr (aSize t - 1), VEConst 0)
 vSize t = internalError("Attempt to get size of non-Bit type: " ++ ppReadable t)
 
 -- Looks at VRange to determine if Verilog expression is 0 size [-1:0]  yuck.
@@ -1234,10 +1271,12 @@ vNameToTask False s = "$imported_" ++ s
 -- monomorphic function (or one not found), the base name is returned unchanged.
 -- 'mretW' is the concrete return width (used only when the return is
 -- polymorphic); 'argWs' are the concrete argument widths (aligned to ff_args).
-dpiMonoCallName :: VConvtOpts -> String -> Maybe Integer -> [Integer] -> String
+dpiMonoCallName :: VConvtOpts -> String -> Maybe ASize -> [ASize] -> String
 dpiMonoCallName vco base mretW argWs =
   case M.lookup base (vco_ffmap vco) of
-    Just ff | isPolyFF ff -> mkDPIMonoName base (dpiPolyWidths ff mretW argWs)
+    Just ff | isPolyFF ff ->
+      mkDPIMonoName base (dpiPolyWidths ff (fmap (fromConcreteSize "dpiMonoCallName") mretW)
+                                           (map (fromConcreteSize "dpiMonoCallName") argWs))
     _                     -> base
 
 

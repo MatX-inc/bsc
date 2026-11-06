@@ -130,7 +130,8 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
 
         mkRW :: AVInst  -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg])
         mkRW (AVInst { avi_vname=i,
-                       avi_iargs=(ASInt _ _ (IntLit _ _ n) : _) }) = rw_defs i n False False
+                       avi_iargs=(e : _) })
+            | Just n <- aExprToSizeExpr e = rw_defs i n False False
         mkRW (x@(_)) = internalError ("aRWire.mkRW: " ++ ppReadable x)
 
         mkBW0 :: AVInst  -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg])
@@ -138,7 +139,8 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
 
         mkBW :: AVInst  -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg])
         mkBW (AVInst { avi_vname=i,
-                       avi_iargs=(ASInt _ _ (IntLit _ _ n) : _) }) = rw_defs i n False True
+                       avi_iargs=(e : _) })
+            | Just n <- aExprToSizeExpr e = rw_defs i n False True
         mkBW (x@(_)) = internalError ("aRWire.mkBW: " ++ ppReadable x)
 
         -- take in the base module identifier

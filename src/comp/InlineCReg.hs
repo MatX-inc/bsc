@@ -90,7 +90,7 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
 
                 width =
                     case (avi_iargs avi) of
-                      (ASInt _ _ (IntLit _ _ n) : _) -> n
+                      (e : _) | Just n <- aExprToSizeExpr e -> n
                       as -> internalError ("aInlineCReg: " ++ ppReadable as)
 
                 dataTy = ATBit width

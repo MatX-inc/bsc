@@ -1,0 +1,208 @@
+package ParamFifoCounterTest where
+
+interface ParamFIFO width =
+    enq      :: Bit width -> Action
+    deq      :: Action
+    first    :: Bit width
+    clear    :: Action
+    notEmpty :: Bool
+    notFull  :: Bool
+
+-- 1-element parameterized FIFO with a Bool value parameter `guarded`,
+-- exercising `if guarded then ... else ...` (doIf) on a module value parameter
+-- alongside a numeric size parameter `width`.
+{-# verilog mkParamFIFO1 { parameter guarded } #-}
+mkParamFIFO1 :: (Add 1 _w width) => Bool -> Module (ParamFIFO width)
+mkParamFIFO1 guarded =
+    module
+        d0      :: Reg (Bit width)   <- mkReg 0
+        full    :: Reg Bool          <- mkReg False
+        rwEnq   :: RWire (Bit width) <- mkRWire
+        pwDeq   :: PulseWire         <- mkPulseWire
+        pwClear :: PulseWire         <- mkPulseWire
+
+        rules
+            "fifo1_update": when True ==> action
+                if pwClear then action
+                    full := False
+                else case (rwEnq.wget, pwDeq) of
+                    (Valid v, _) -> action
+                        d0   := v
+                        full := True
+                    (Invalid, True) -> action
+                        full := False
+                    (Invalid, False) ->
+                        noAction
+
+        interface
+            enq v = rwEnq.wset v
+                    when (if guarded then not full else True)
+            deq   = pwDeq.send
+                    when (if guarded then full else True)
+            first = d0
+                    when (if guarded then full else True)
+            clear = pwClear.send
+            notEmpty = full
+            notFull  = not full
+
+-- 2-element shifting parameterized FIFO with a Bool value parameter `guarded`.
+{-# verilog mkParamFIFO2 { parameter guarded } #-}
+mkParamFIFO2 :: (Add 1 _w width) => Bool -> Module (ParamFIFO width)
+mkParamFIFO2 guarded =
+    module
+        d0      :: Reg (Bit width)   <- mkReg 0
+        d1      :: Reg (Bit width)   <- mkReg 0
+        v0      :: Reg Bool          <- mkReg False
+        v1      :: Reg Bool          <- mkReg False
+        rwEnq   :: RWire (Bit width) <- mkRWire
+        pwDeq   :: PulseWire         <- mkPulseWire
+        pwClear :: PulseWire         <- mkPulseWire
+
+        rules
+            "fifo2_update": when True ==> action
+                if pwClear then action
+                    v0 := False
+                    v1 := False
+                else case (rwEnq.wget, pwDeq) of
+                    (Valid x, False) ->
+                        if v0 then action
+                            d1 := d0
+                            d0 := x
+                            v1 := True
+                        else action
+                            d0 := x
+                            v0 := True
+                    (Invalid, True) -> action
+                        v0 := v1
+                        v1 := False
+                    (Valid x, True) ->
+                        if v1 then action
+                            d1 := d0
+                            d0 := x
+                        else action
+                            d0 := x
+                            v0 := True
+                    (Invalid, False) ->
+                        noAction
+
+        interface
+            enq x = rwEnq.wset x
+                    when (if guarded then not v1 else True)
+            deq   = pwDeq.send
+                    when (if guarded then v0 else True)
+            first = (if v1 then d1 else d0)
+                    when (if guarded then v0 else True)
+            clear = pwClear.send
+            notEmpty = v0
+            notFull  = not v1
+
+-- Parameterized up/down counter with a `Bit width` value parameter `init_val`,
+-- supporting simultaneous inc and dec in the same cycle.
+interface ParamCounter width =
+    inc   :: Bit width -> Action
+    dec   :: Bit width -> Action
+    up    :: Action
+    down  :: Action
+    clear :: Action
+    value :: Bit width
+
+{-# verilog mkParamCounter { parameter init_val } #-}
+mkParamCounter :: (Add 1 _w width) => Bit width -> Module (ParamCounter width)
+mkParamCounter init_val =
+    module
+        cnt     :: Reg (Bit width)   <- mkReg init_val
+        rwInc   :: RWire (Bit width) <- mkRWire
+        rwDec   :: RWire (Bit width) <- mkRWire
+        pwClear :: PulseWire         <- mkPulseWire
+
+        rules
+            "counter_update": when True ==> action
+                if pwClear then
+                    cnt := init_val
+                else action
+                    let deltaInc = fromMaybe 0 rwInc.wget
+                        deltaDec = fromMaybe 0 rwDec.wget
+                    cnt := cnt + deltaInc - deltaDec
+
+        interface
+            inc v = rwInc.wset v
+            dec v = rwDec.wset v
+            up    = rwInc.wset 1
+            down  = rwDec.wset 1
+            clear = pwClear.send
+            value = cnt
+
+{-# verilog sysParamFifoCounterTest #-}
+sysParamFifoCounterTest :: Module Empty
+sysParamFifoCounterTest =
+    module
+        -- Guarded and unguarded FIFO1 across widths 1, 8, 32, 64, 128
+        f1_1   :: ParamFIFO 1   <- mkParamFIFO1 True
+        f1_8u  :: ParamFIFO 8   <- mkParamFIFO1 False
+        f1_64  :: ParamFIFO 64  <- mkParamFIFO1 True
+        f1_128 :: ParamFIFO 128 <- mkParamFIFO1 True
+
+        -- FIFO2 at widths 2, 17, 32
+        f2_2   :: ParamFIFO 2   <- mkParamFIFO2 True
+        f2_17  :: ParamFIFO 17  <- mkParamFIFO2 True
+        f2_32  :: ParamFIFO 32  <- mkParamFIFO2 True
+
+        -- Counter at widths 1, 2, 8, 17, 32, 64, 128
+        c1   :: ParamCounter 1   <- mkParamCounter 0
+        c2   :: ParamCounter 2   <- mkParamCounter 1
+        c8   :: ParamCounter 8   <- mkParamCounter 0x10
+        c17  :: ParamCounter 17  <- mkParamCounter 0x10000
+        c32  :: ParamCounter 32  <- mkParamCounter 0x12345678
+        c64  :: ParamCounter 64  <- mkParamCounter 0xfedcba9876543210
+        c128 :: ParamCounter 128 <- mkParamCounter 0x00010002000300040005000600070008
+
+        step :: Reg (Bit 8) <- mkReg 0
+
+        rules
+            "s0": when step == 0 ==> action
+                $display "s0 c=%b,%0d,%h,%h,%h,%h,%h" c1.value c2.value c8.value c17.value c32.value c64.value c128.value
+                f1_1.enq 1
+                f1_8u.enq 0xa5
+                f1_64.enq 0x1122334455667788
+                f1_128.enq 0xdeadbeefcafebabe0123456789abcdef
+                f2_2.enq 2
+                f2_17.enq 0x15555
+                f2_32.enq 0xaaaa0001
+                c1.up
+                c2.inc 2
+                c8.inc 0x25
+                c8.dec 0x05
+                c17.inc 0x00abc
+                c32.inc 0x00001000
+                c32.dec 0x00000078
+                c64.up
+                c128.inc 0x10000000000000001
+                step := 1
+
+            "s1": when step == 1 ==> action
+                $display "s1 f1=%b,%h,%h,%h" f1_1.first f1_8u.first f1_64.first f1_128.first
+                $display "s1 f2=%0d,%h,%h" f2_2.first f2_17.first f2_32.first
+                $display "s1 c=%b,%0d,%h,%h,%h,%h,%h" c1.value c2.value c8.value c17.value c32.value c64.value c128.value
+                -- Unguarded f1_8u allows enq when already full (overwriting)
+                f1_8u.enq 0x5a
+                f1_1.deq
+                f1_64.deq
+                f1_128.deq
+                -- Enqueue second element into FIFO2s
+                f2_2.enq 3
+                f2_17.enq 0x0aaaa
+                f2_32.enq 0xbbbb0002
+                c8.clear
+                step := 2
+
+            "s2": when step == 2 ==> action
+                $display "s2 f1_empty=%b,%b f1_8u=%h c8=%h" (not f1_1.notEmpty) (not f1_64.notEmpty) f1_8u.first c8.value
+                $display "s2 f2_first=%0d,%h,%h full=%b" f2_2.first f2_17.first f2_32.first (not f2_32.notFull)
+                f2_2.deq
+                f2_17.deq
+                f2_32.deq
+                step := 3
+
+            "s3": when step == 3 ==> action
+                $display "s3 f2_second=%0d,%h,%h" f2_2.first f2_17.first f2_32.first
+                $finish 0

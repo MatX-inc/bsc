@@ -1,0 +1,82 @@
+package ParamPipeTest(PipeIfc(..), mkPipe, mkDoublePipe, WidenIfc(..), mkWiden, SwapIfc(..), mkPairSwap, sysParamPipeTest) where
+
+interface PipeIfc width =
+    put      :: Bit width -> Action
+    get      :: Bit width
+    getWidth :: Bit 32
+
+{-# verilog mkPipe #-}
+mkPipe :: Module (PipeIfc width)
+mkPipe =
+  module
+    r :: Reg (Bit width) <- mkReg 0
+    interface
+      put x = r := x + fromInteger (valueOf width)
+      get = r
+      getWidth = fromInteger (valueOf width)
+
+{-# verilog mkDoublePipe #-}
+mkDoublePipe :: Module (PipeIfc width)
+mkDoublePipe =
+  module
+    s1 :: PipeIfc width           <- mkPipe
+    s2 :: PipeIfc (TAdd 64 width) <- mkPipe
+    interface
+      put x = do
+        s1.put x
+        let wide_x :: Bit (TAdd 64 width) = (0 :: Bit 64) ++ x
+        s2.put wide_x
+      get =
+        let hi_idx :: Bit 32 = fromInteger (valueOf width - 1)
+            lo_s2  :: Bit width = (s2.get)[hi_idx : 0]
+        in  s1.get + lo_s2
+      getWidth = s1.getWidth + s2.getWidth
+
+interface WidenIfc in_w out_w =
+    widen :: Bit in_w -> Bit out_w
+    inc   :: Bit in_w -> Bit (TAdd in_w 1)
+
+{-# verilog mkWiden #-}
+mkWiden :: (Add in_w pad_w out_w, Add 1 k in_w) => Module (WidenIfc in_w out_w)
+mkWiden =
+  module
+    interface
+      widen x =
+        let upper :: Bit k = truncateLSB x
+            rebuilt :: Bit in_w = upper ++ x[0:0]
+        in  zeroExtend rebuilt
+      inc x = zeroExtend x + 1
+
+interface SwapIfc a_w b_w =
+    swap :: Tuple2 (Bit a_w) (Bit b_w) -> Tuple2 (Bit b_w) (Bit a_w)
+
+{-# verilog mkPairSwap #-}
+mkPairSwap :: Module (SwapIfc a_w b_w)
+mkPairSwap =
+  module
+    interface
+      swap p =
+        case p of
+          (a, b) -> (b, a)
+
+{-# verilog sysParamPipeTest #-}
+sysParamPipeTest :: Module Empty
+sysParamPipeTest =
+  module
+    p8  :: PipeIfc 8       <- mkPipe
+    p16 :: PipeIfc 16      <- mkPipe
+    dp8 :: PipeIfc 8       <- mkDoublePipe
+    w   :: WidenIfc 8 16   <- mkWiden
+    sw  :: SwapIfc 8 16    <- mkPairSwap
+
+    cycle :: Reg (Bit 8) <- mkReg 0
+
+    rules
+      "step": when True ==> do
+        cycle := cycle + 1
+        p8.put cycle
+        p16.put (w.widen p8.get)
+        dp8.put cycle
+        let (sw_b, sw_a) = sw.swap (cycle, p16.get)
+        $display "cycle=%0d p8=%0d p16=%0d dp8=%0d dpw=%0d w8=%0d w16=%0d inc=%0d sw_b=%0d sw_a=%0d" cycle p8.get p16.get dp8.get dp8.getWidth p8.getWidth p16.getWidth (w.inc cycle) sw_b sw_a
+        if cycle == 5 then $finish 0 else noAction

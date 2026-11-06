@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 module ASyntax(
         APackage(..),
         getAPackageFieldInfos,
@@ -11,7 +12,14 @@ module ASyntax(
         AId,
         AMethodId,
         AType(..),
-        ASize,
+        ASize(..),
+        isConcreteSize,
+        fromConcreteSize,
+        normSizeExpr,
+        substSizeExpr,
+        freeSizeVars,
+        iTypeToSizeExpr,
+        aExprToSizeExpr,
         ARule(..),
         AAssumption(..),
         ARuleId,
@@ -88,6 +96,7 @@ module ASyntax(
         dropScheduleIds,
         dropSchedulerIds,
         aNat,
+        sizeToAExpr,
         AForeignCall(..),
         AForeignBlock,
         PPrintExpand(..),
@@ -117,14 +126,15 @@ module ASyntax(
 import Prelude hiding ((<>))
 #endif
 
-import Data.List(nub, intersect, (\\), partition)
+import Data.List(nub, intersect, (\\), partition, foldl')
 -- import IntegerUtil(integerFormatPref)
 import Eval
 import PPrint
 import IntLit
 import Id
 import IdPrint
-import PreIds(idPrimAction, idClock, idReset, idInout, idInout_, idPreludeRead, idNoReset)
+import PreIds(idPrimAction, idClock, idReset, idInout, idInout_, idPreludeRead, idNoReset,
+              idTAdd, idTSub, idTMul, idTDiv, idTLog, idTExp, idTMax, idTMin)
 import Prim
 import ErrorUtil(internalError)
 import Backend
@@ -135,13 +145,16 @@ import FStringCompat
 -- import Position(noPosition)
 import Position
 import Data.Maybe
-import Util(itos)
+import qualified Data.Generics as Generic
+import qualified Data.Set as S
+import Util(itos, divC, log2)
 import VModInfo
 import Wires
 import ProofObligation(ProofObligation, MsgFn)
 import Flags
 import qualified Data.Map as M
-import ISyntax(IType)
+import CType(TISort(TIabstract))
+import ISyntax(IType(..), IKind(..))
 import InstNodes(InstTree)
 
 -- packages converted from ISyntax
@@ -517,7 +530,207 @@ isTupleType :: AType -> Bool
 isTupleType (ATTuple _) = True
 isTupleType _           = False
 
-type ASize = Integer
+-- Bit-width and array-length expressions in ASyntax.
+-- Concrete widths use SizeConst; size-parameterized modules carry symbolic
+-- expressions over module size parameters (SizeVar) and type-level numeric
+-- operators (SizeAdd, SizeSub, SizeMul, SizeDiv, SizeLog2, SizeExp2, SizeMax,
+-- SizeMin).
+--
+-- Algebraic operations (+, -, *) normalize via normSizeExpr so that equal
+-- linear combinations (e.g. (w + 1) - 1 and w) compare equal under (==).
+-- Note that the derived Ord instance is syntactic structural ordering (for
+-- Map/Set keys), NOT semantic numeric ordering on symbolic expressions:
+-- code that tests semantic inequalities (such as s1 < s2) must pattern-match
+-- SizeConst or inspect the normalized difference (s1 - s2).
+data ASize
+    = SizeConst !Integer
+    | SizeVar   !Id
+    | SizeAdd   !ASize !ASize
+    | SizeSub   !ASize !ASize
+    | SizeMul   !ASize !ASize
+    | SizeDiv   !ASize !ASize
+    | SizeLog2  !ASize
+    | SizeExp2  !ASize
+    | SizeMax   !ASize !ASize
+    | SizeMin   !ASize !ASize
+    deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
+
+instance NFData ASize where
+    rnf (SizeConst n) = rnf n
+    rnf (SizeVar v)   = rnf v
+    rnf (SizeAdd a b) = rnf2 a b
+    rnf (SizeSub a b) = rnf2 a b
+    rnf (SizeMul a b) = rnf2 a b
+    rnf (SizeDiv a b) = rnf2 a b
+    rnf (SizeLog2 a)  = rnf a
+    rnf (SizeExp2 a)  = rnf a
+    rnf (SizeMax a b) = rnf2 a b
+    rnf (SizeMin a b) = rnf2 a b
+
+instance Num ASize where
+    a + b         = normSizeExpr (SizeAdd a b)
+    a - b         = normSizeExpr (SizeSub a b)
+    a * b         = normSizeExpr (SizeMul a b)
+    negate (SizeConst n) = SizeConst (negate n)
+    negate a      = normSizeExpr (SizeSub (SizeConst 0) a)
+    abs a         = a
+    signum (SizeConst n) = SizeConst (signum n)
+    signum _      = SizeConst 1
+    fromInteger n = SizeConst n
+
+instance PPrint ASize where
+    pPrint _ _ (SizeConst n) = text (itos n)
+    pPrint d p (SizeVar v)   = pPrint d p v
+    pPrint d p (SizeAdd a b) = pparen (p > 6) (pPrint d 6 a <+> text "+" <+> pPrint d 7 b)
+    pPrint d p (SizeSub a b) = pparen (p > 6) (pPrint d 6 a <+> text "-" <+> pPrint d 7 b)
+    pPrint d p (SizeMul a b) = pparen (p > 7) (pPrint d 7 a <+> text "*" <+> pPrint d 8 b)
+    pPrint d p (SizeDiv a b) = text "TDiv#(" <> pPrint d 0 a <> text ", " <> pPrint d 0 b <> text ")"
+    pPrint d _ (SizeLog2 a)  = text "TLog#(" <> pPrint d 0 a <> text ")"
+    pPrint d _ (SizeExp2 a)  = text "TExp#(" <> pPrint d 0 a <> text ")"
+    pPrint d _ (SizeMax a b) = text "TMax#(" <> pPrint d 0 a <> text ", " <> pPrint d 0 b <> text ")"
+    pPrint d _ (SizeMin a b) = text "TMin#(" <> pPrint d 0 a <> text ", " <> pPrint d 0 b <> text ")"
+
+isConcreteSize :: ASize -> Bool
+isConcreteSize (SizeConst _) = True
+isConcreteSize _             = False
+
+fromConcreteSize :: String -> ASize -> Integer
+fromConcreteSize _      (SizeConst n) = n
+fromConcreteSize caller s =
+    internalError (caller ++ ": unexpected symbolic ASize: " ++ ppReadable s)
+
+type SizeLin = (M.Map ASize Integer, Integer)
+
+cleanSizeLinMap :: M.Map ASize Integer -> M.Map ASize Integer
+cleanSizeLinMap = M.filter (/= 0)
+
+addSizeLin :: SizeLin -> SizeLin -> SizeLin
+addSizeLin (m1, c1) (m2, c2) =
+    (cleanSizeLinMap (M.unionWith (+) m1 m2), c1 + c2)
+
+subSizeLin :: SizeLin -> SizeLin -> SizeLin
+subSizeLin (m1, c1) (m2, c2) =
+    (cleanSizeLinMap (M.unionWith (+) m1 (M.map negate m2)), c1 - c2)
+
+scaleSizeLin :: Integer -> SizeLin -> SizeLin
+scaleSizeLin 0 _ = (M.empty, 0)
+scaleSizeLin k (m, c) =
+    (cleanSizeLinMap (M.map (* k) m), k * c)
+
+toSizeLin :: ASize -> SizeLin
+toSizeLin (SizeConst n) = (M.empty, n)
+toSizeLin (SizeAdd a b) = addSizeLin (toSizeLin a) (toSizeLin b)
+toSizeLin (SizeSub a b) = subSizeLin (toSizeLin a) (toSizeLin b)
+toSizeLin (SizeMul a b) =
+    case (normSizeExpr a, normSizeExpr b) of
+      (SizeConst k, b') -> scaleSizeLin k (toSizeLin b')
+      (a', SizeConst k) -> scaleSizeLin k (toSizeLin a')
+      (a', b') -> (M.singleton (SizeMul (min a' b') (max a' b')) 1, 0)
+toSizeLin s =
+    case normSizeAtom s of
+      SizeConst n -> (M.empty, n)
+      s'          -> (M.singleton s' 1, 0)
+
+normSizeAtom :: ASize -> ASize
+normSizeAtom s@(SizeConst _) = s
+normSizeAtom s@(SizeVar _)   = s
+normSizeAtom (SizeDiv a b) =
+    case (normSizeExpr a, normSizeExpr b) of
+      (SizeConst x, SizeConst y) | y > 0 -> SizeConst (divC x y)
+      (x, SizeConst 1)                   -> x
+      (a', b') -> SizeDiv a' b'
+normSizeAtom (SizeLog2 a) =
+    case normSizeExpr a of
+      SizeConst x | x > 0 -> SizeConst (log2 x)
+      SizeExp2 x          -> x
+      a'                  -> SizeLog2 a'
+normSizeAtom (SizeExp2 a) =
+    case normSizeExpr a of
+      SizeConst x | x >= 0 -> SizeConst (2 ^ x)
+      a'                   -> SizeExp2 a'
+normSizeAtom (SizeMax a b) =
+    case (normSizeExpr a, normSizeExpr b) of
+      (SizeConst x, SizeConst y) -> SizeConst (max x y)
+      (x, y) | x == y            -> x
+      (x, y) | x > y             -> SizeMax y x
+      (a', b') -> SizeMax a' b'
+normSizeAtom (SizeMin a b) =
+    case (normSizeExpr a, normSizeExpr b) of
+      (SizeConst x, SizeConst y) -> SizeConst (min x y)
+      (x, y) | x == y            -> x
+      (x, y) | x > y             -> SizeMin y x
+      (a', b') -> SizeMin a' b'
+normSizeAtom s = normSizeExpr s
+
+fromSizeLin :: SizeLin -> ASize
+fromSizeLin (m, c)
+  | M.null m = SizeConst c
+  | otherwise =
+      let mkTerm a 1 = a
+          mkTerm a k = SizeMul (SizeConst k) a
+          posAtoms = [ mkTerm a k | (a, k) <- M.toAscList m, k > 0 ]
+          negAtoms = [ mkTerm a (-k) | (a, k) <- M.toAscList m, k < 0 ]
+          posAll = if c > 0 then posAtoms ++ [SizeConst c] else posAtoms
+          negAll = if c < 0 then negAtoms ++ [SizeConst (-c)] else negAtoms
+          sumTerms [] = SizeConst 0
+          sumTerms (t:ts) = foldl' SizeAdd t ts
+      in  if null negAll
+          then sumTerms posAll
+          else SizeSub (sumTerms posAll) (sumTerms negAll)
+
+normSizeExpr :: ASize -> ASize
+normSizeExpr s@(SizeConst _) = s
+normSizeExpr s@(SizeVar _)   = s
+normSizeExpr s@(SizeAdd _ _) = fromSizeLin (toSizeLin s)
+normSizeExpr s@(SizeSub _ _) = fromSizeLin (toSizeLin s)
+normSizeExpr s@(SizeMul _ _) = fromSizeLin (toSizeLin s)
+normSizeExpr s = normSizeAtom s
+
+substSizeExpr :: M.Map Id ASize -> ASize -> ASize
+substSizeExpr env = normSizeExpr . go
+  where
+    go s@(SizeConst _) = s
+    go (SizeVar v)     = M.findWithDefault (SizeVar v) v env
+    go (SizeAdd a b)   = SizeAdd (go a) (go b)
+    go (SizeSub a b)   = SizeSub (go a) (go b)
+    go (SizeMul a b)   = SizeMul (go a) (go b)
+    go (SizeDiv a b)   = SizeDiv (go a) (go b)
+    go (SizeLog2 a)    = SizeLog2 (go a)
+    go (SizeExp2 a)    = SizeExp2 (go a)
+    go (SizeMax a b)   = SizeMax (go a) (go b)
+    go (SizeMin a b)   = SizeMin (go a) (go b)
+
+freeSizeVars :: ASize -> S.Set Id
+freeSizeVars (SizeConst _) = S.empty
+freeSizeVars (SizeVar v)   = S.singleton v
+freeSizeVars (SizeAdd a b) = S.union (freeSizeVars a) (freeSizeVars b)
+freeSizeVars (SizeSub a b) = S.union (freeSizeVars a) (freeSizeVars b)
+freeSizeVars (SizeMul a b) = S.union (freeSizeVars a) (freeSizeVars b)
+freeSizeVars (SizeDiv a b) = S.union (freeSizeVars a) (freeSizeVars b)
+freeSizeVars (SizeLog2 a)  = freeSizeVars a
+freeSizeVars (SizeExp2 a)  = freeSizeVars a
+freeSizeVars (SizeMax a b) = S.union (freeSizeVars a) (freeSizeVars b)
+freeSizeVars (SizeMin a b) = S.union (freeSizeVars a) (freeSizeVars b)
+
+iTypeToSizeExpr :: IType -> Maybe ASize
+iTypeToSizeExpr (ITNum n) = Just (SizeConst n)
+iTypeToSizeExpr (ITVar i) = Just (SizeVar i)
+iTypeToSizeExpr (ITAp (ITCon op _ _) a)
+  | op == idTLog = fmap (normSizeExpr . SizeLog2) (iTypeToSizeExpr a)
+  | op == idTExp = fmap (normSizeExpr . SizeExp2) (iTypeToSizeExpr a)
+iTypeToSizeExpr (ITAp (ITAp (ITCon op _ _) a) b)
+  | op == idTAdd = liftBin SizeAdd a b
+  | op == idTSub = liftBin SizeSub a b
+  | op == idTMul = liftBin SizeMul a b
+  | op == idTDiv = liftBin SizeDiv a b
+  | op == idTMax = liftBin SizeMax a b
+  | op == idTMin = liftBin SizeMin a b
+  where
+    liftBin f x y = do
+      sx <- iTypeToSizeExpr x
+      sy <- iTypeToSizeExpr y
+      return (normSizeExpr (f sx sy))
+iTypeToSizeExpr _ = Nothing
 
 getArrayElemType :: AType -> AType
 getArrayElemType (ATArray _ t) = t
@@ -553,7 +766,7 @@ data AAbstractInput =
         -- clock osc and maybe gate
         AAI_Clock AId (Maybe AId) |
         AAI_Reset AId |
-        AAI_Inout AId Integer
+        AAI_Inout AId ASize
     deriving (Eq, Show)
 
 instance NFData AAbstractInput where
@@ -872,7 +1085,7 @@ aIfaceArgs = concat . aIfaceArgGroups
 
 -- associate the internal and external names and width of AIFace args
 
-aiface_argnames_width :: AIFace -> [(AId, String, Integer)]
+aiface_argnames_width :: AIFace -> [(AId, String, ASize)]
 aiface_argnames_width (AIClock {}) = []
 aiface_argnames_width (AIReset {}) = []
 aiface_argnames_width aif =
@@ -882,7 +1095,7 @@ aiface_argnames_width aif =
         (map aIfaceArgSize ports)
 
 
-aIfaceArgSize :: AInput -> Integer
+aIfaceArgSize :: AInput -> ASize
 aIfaceArgSize (_, ATBit size) = size
 aIfaceArgSize x = internalError ("aIfaceArgSize: " ++ show x)
 
@@ -1009,7 +1222,7 @@ mkOutputWireId var_id (VName wire_str) =
 mkOutputWire :: AId -> VName -> AExpr
 mkOutputWire var_id wire_name = ASPort (ATBit 1) (mkOutputWireId var_id wire_name)
 
-mkIfcInoutN :: Integer -> AId -> VName -> AExpr
+mkIfcInoutN :: ASize -> AId -> VName -> AExpr
 mkIfcInoutN n var_id wire_name = ASPort (aTInout_ n) (mkOutputWireId var_id wire_name)
 
 type AClockDomain = (ClockDomain, [AClock]) -- domain identifier and all the associated clocks
@@ -1331,6 +1544,47 @@ aXSBool b = aSBool b
 aNat :: Integer -> AExpr
 aNat i = ASInt defaultAId aTNat (ilDec i)
 
+sizeToAExpr :: ASize -> AExpr
+sizeToAExpr (SizeConst n) = aNat n
+sizeToAExpr (SizeVar v)   = ASParam aTNat v
+sizeToAExpr (SizeAdd a b) = APrim defaultAId aTNat PrimAdd [sizeToAExpr a, sizeToAExpr b]
+sizeToAExpr (SizeSub a b) = APrim defaultAId aTNat PrimSub [sizeToAExpr a, sizeToAExpr b]
+sizeToAExpr (SizeMul a b) = APrim defaultAId aTNat PrimMul [sizeToAExpr a, sizeToAExpr b]
+sizeToAExpr (SizeDiv a b) =
+    let num = sizeToAExpr (normSizeExpr (SizeAdd a (SizeSub b (SizeConst 1))))
+    in  APrim defaultAId aTNat PrimQuot [num, sizeToAExpr b]
+sizeToAExpr (SizeLog2 a)  = AFunCall aTNat defaultAId "$clog2" False [sizeToAExpr a]
+sizeToAExpr (SizeExp2 a)  = APrim defaultAId aTNat PrimSL [aNat 1, sizeToAExpr a]
+sizeToAExpr (SizeMax a b) =
+    let ea = sizeToAExpr a
+        eb = sizeToAExpr b
+    in  APrim defaultAId aTNat PrimIf [APrim defaultAId aTBool PrimULT [ea, eb], eb, ea]
+sizeToAExpr (SizeMin a b) =
+    let ea = sizeToAExpr a
+        eb = sizeToAExpr b
+    in  APrim defaultAId aTNat PrimIf [APrim defaultAId aTBool PrimULT [ea, eb], ea, eb]
+
+aExprToSizeExpr :: AExpr -> Maybe ASize
+aExprToSizeExpr (ASInt _ _ (IntLit _ _ n)) = Just (SizeConst n)
+aExprToSizeExpr (ASParam _ v)              = Just (SizeVar v)
+aExprToSizeExpr (APrim _ _ PrimAdd [a, b]) = fmap normSizeExpr (SizeAdd <$> aExprToSizeExpr a <*> aExprToSizeExpr b)
+aExprToSizeExpr (APrim _ _ PrimSub [a, b]) = fmap normSizeExpr (SizeSub <$> aExprToSizeExpr a <*> aExprToSizeExpr b)
+aExprToSizeExpr (APrim _ _ PrimMul [a, b]) = fmap normSizeExpr (SizeMul <$> aExprToSizeExpr a <*> aExprToSizeExpr b)
+aExprToSizeExpr (APrim _ _ PrimQuot [a, b]) =
+    case (aExprToSizeExpr a, aExprToSizeExpr b) of
+      (Just num, Just den) ->
+        let a' = normSizeExpr (SizeSub (SizeAdd num (SizeConst 1)) den)
+        in  Just (normSizeExpr (SizeDiv a' den))
+      _ -> Nothing
+aExprToSizeExpr (AFunCall _ _ "$clog2" False [a]) = fmap (normSizeExpr . SizeLog2) (aExprToSizeExpr a)
+aExprToSizeExpr (APrim _ _ PrimSL [ASInt _ _ (IntLit _ _ 1), a]) = fmap (normSizeExpr . SizeExp2) (aExprToSizeExpr a)
+aExprToSizeExpr (APrim _ _ PrimSL [a, ASInt _ _ (IntLit _ _ k)])
+    | k >= 0 = fmap normSizeExpr (SizeMul <$> aExprToSizeExpr a <*> Just (SizeConst (2^k)))
+aExprToSizeExpr (APrim _ _ PrimIf [APrim _ _ PrimULT [ea, eb], et, ef])
+    | et == eb && ef == ea = fmap normSizeExpr (SizeMax <$> aExprToSizeExpr ea <*> aExprToSizeExpr eb)
+    | et == ea && ef == eb = fmap normSizeExpr (SizeMin <$> aExprToSizeExpr ea <*> aExprToSizeExpr eb)
+aExprToSizeExpr _ = Nothing
+
 
 aTrue :: AExpr
 aTrue = aSBool True
@@ -1607,7 +1861,8 @@ instance PPrint AExpr where
     pPrint d p (ASPort _ i) = pPrint d p i
     pPrint d p (ASParam _ i) = pPrint d p i
     pPrint d p (ASDef _ i) = pPrint d p i
-    pPrint d p (ASInt _ (ATBit sz) i) = text (showSizedVeriIntLit sz i)
+    pPrint d p (ASInt _ (ATBit (SizeConst sz)) i) = text (showSizedVeriIntLit sz i)
+    pPrint d p (ASInt _ (ATBit sz) i) = text (ppString sz ++ "'" ++ showVeriIntLit i)
     pPrint d p (ASInt _ _ i) = text (showVeriIntLit i)
     pPrint d p (ASReal _ _ r) = pPrint d p r
     pPrint d p (ASStr _ _ s) = text (show s)
@@ -1627,12 +1882,12 @@ ppExprType :: PDetail -> AType -> Doc -> Doc
 ppExprType d t e = text "(" <> e <+> text "::" <+> pPrint d 0 t <> text ")"
 
 instance PPrint AType where
-    pPrint d p (ATBit n) = text ("Bit " ++ itos n)
+    pPrint d p (ATBit n) = text "Bit" <+> pPrint d 0 n
     pPrint d p (ATReal)  = text ("Real ")
     pPrint d p (ATString Nothing) = text "String (unsized)"
-    pPrint d p (ATString (Just n)) = text ("String (" ++ (itos n) ++ " chars)")
+    pPrint d p (ATString (Just n)) = text "String (" <> pPrint d 0 n <+> text "chars)"
     pPrint d p (ATArray sz ty) =
-        text "Array" <+> text (itos sz) <+> pPrint d 0 ty
+        text "Array" <+> pPrint d 0 sz <+> pPrint d 0 ty
     pPrint d p (ATTuple ts) =
         text "Tuple" <+> parens (commaSep (map (pPrint d 0) ts))
     pPrint d p (ATAbstract i ns) = sep (text "ABSTRACT: " : pPrint d 0 i : map (pPrint d 0) ns)
@@ -1913,7 +2168,8 @@ instance PPrintExpand AExpr where
     pPrintExpand m d ec e@(ASInt _ (ATBit 1) i) | literal ec == Boolean, isFalse e  = text "False"
     pPrintExpand m d ec e@(ASInt _ (ATBit 1) i) | literal ec == Boolean, isTrue e   = text "True"
     pPrintExpand m d ec (ASInt _ (ATBit sz) i)  | (literal ec == Index) = text (showVeriIntLit i)
-    pPrintExpand m d ec (ASInt _ (ATBit sz) i) = text (showSizedVeriIntLit sz i)
+    pPrintExpand m d ec (ASInt _ (ATBit (SizeConst sz)) i) = text (showSizedVeriIntLit sz i)
+    pPrintExpand m d ec (ASInt _ (ATBit sz) i) = text (ppString sz ++ "'" ++ showVeriIntLit i)
     pPrintExpand m d ec (ASInt _ _ i) = text (showVeriIntLit i)
     pPrintExpand m d ec (ASReal _ _ r) = pPrint d (getP ec) r
     pPrintExpand m d ec (ASStr _ _ s) = text (show s)

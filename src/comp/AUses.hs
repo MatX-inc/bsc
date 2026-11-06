@@ -889,9 +889,10 @@ eDomainArray idx_e (APrim _ _ PrimIf [cnd, thn, els]) = do
   mergeExprUsesM [cond_uses, common_uses, thn_only, els_only]
 -}
 eDomainArray idx_e (APrim _ _ PrimBuildArray es) = do
-  let max_idx = case (aType idx_e) of
-                  ATBit sz -> (2^sz) - 1
-                  _ -> internalError ("eDomainArray: idx_ty")
+  let indexed_es = case (aType idx_e) of
+                     ATBit (SizeConst sz) -> zip [0 .. (2^sz) - 1] es
+                     ATBit _              -> zip [0 ..] es
+                     _ -> internalError ("eDomainArray: idx_ty")
   -- XXX what about indexing out of range?
   -- XXX should the last element be considered the default
   let mkEq e n = APrim defaultAId aTBool PrimEQ [e, aNat n]
@@ -900,7 +901,7 @@ eDomainArray idx_e (APrim _ _ PrimBuildArray es) = do
         dm <- getDefMap
         return $ addUseCond dm (mkEq idx_e n) e_uses
   -- only consider uses up to the maximum indexable element
-  es_uses <- mapM mkUses (zip [0..max_idx] es)
+  es_uses <- mapM mkUses indexed_es
   mergeExprUsesM es_uses
 eDomainArray idx_e (ASDef _ i) = do
   -- XXX can we memoize results?

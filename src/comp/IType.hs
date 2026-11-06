@@ -6,6 +6,8 @@ module IType(
   ,IKind(..)
   ,itArrow
   ,mkNumConT
+  ,iTypeDiff
+  ,iTypeSubNonNeg
   ,iTypeNodeId
   ,fTVars
   ,VarSet
@@ -23,6 +25,7 @@ import Prelude hiding ((<>))
 
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import Data.List(foldl')
 import Data.IORef(IORef, newIORef, readIORef, atomicModifyIORef')
 import Data.Maybe(isJust, fromJust)
 import System.IO.Unsafe(unsafePerformIO)
@@ -30,11 +33,12 @@ import System.IO.Unsafe(unsafePerformIO)
 import ErrorUtil(internalError)
 import IOUtil(progArgs)
 import Id(Id, getIdBase, getIdQual, setIdPosition, setIdProps, setIdQual)
-import PreIds(idArrow, idId, idTNumToStr)
+import PreIds(idArrow, idId, idTNumToStr,
+              idTAdd, idTSub, idTMul, idTDiv, idTMax, idTMin)
 import TypeOps(opNumT, opStrT)
 import CType(Type(..), CType, TyCon(..), TyVar(..), Kind(..),
              TISort(..), StructSubType(..),
-             cTApplys, cTVar, cTCon, cTNum, cTStr)
+             cTApplys, cTVar, cTVarKind, cTCon, cTNum, cTStr)
 import Pragma(IfcPragma(..))
 import StdPrel(tiArrow)
 import Eval(NFData(..), rnf3, rnf2, rnf)
@@ -470,7 +474,90 @@ mkITAp (ITCon op _ _) (ITNum x) | op == idTNumToStr =
 
 mkITAp (ITCon op _ _) a | op == idId = a
 
+mkITAp (ITAp_ _ _ (ITCon op _ _) x) y
+  | op == idTAdd || op == idTSub
+  , Just t' <- fromITLin (toITLinOp op x y) = t'
+  | op == idTMul && (x == ITNum 0 || y == ITNum 0) = ITNum 0
+  | op == idTMul && x == ITNum 1 = y
+  | op == idTMul && y == ITNum 1 = x
+  | op == idTMul && x > y =
+      rawBinIT itTMulCon y x
+  | op == idTDiv && y == ITNum 1 = x
+  | (op == idTMax || op == idTMin) && x == y = x
+  | (op == idTMax || op == idTMin) && x > y =
+      rawBinIT (ITCon op kNNN TIabstract) y x
+
 mkITAp f a = internAp f a
+
+type ITLin = (M.Map IType Integer, Integer)
+
+kNNN :: IKind
+kNNN = IKNum `IKFun` (IKNum `IKFun` IKNum)
+
+itTAddCon, itTSubCon, itTMulCon :: IType
+itTAddCon = ITCon idTAdd kNNN TIabstract
+itTSubCon = ITCon idTSub kNNN TIabstract
+itTMulCon = ITCon idTMul kNNN TIabstract
+
+rawBinIT :: IType -> IType -> IType -> IType
+rawBinIT con x y = internAp (internAp con x) y
+
+cleanITLinMap :: M.Map IType Integer -> M.Map IType Integer
+cleanITLinMap = M.filter (/= 0)
+
+addITLin :: ITLin -> ITLin -> ITLin
+addITLin (m1, c1) (m2, c2) =
+    (cleanITLinMap (M.unionWith (+) m1 m2), c1 + c2)
+
+subITLin :: ITLin -> ITLin -> ITLin
+subITLin (m1, c1) (m2, c2) =
+    (cleanITLinMap (M.unionWith (+) m1 (M.map negate m2)), c1 - c2)
+
+toITLin :: IType -> ITLin
+toITLin (ITNum n) = (M.empty, n)
+toITLin (ITAp_ _ _ (ITAp_ _ _ (ITCon op _ _) a) b)
+  | op == idTAdd = addITLin (toITLin a) (toITLin b)
+  | op == idTSub = subITLin (toITLin a) (toITLin b)
+toITLin t = (M.singleton t 1, 0)
+
+toITLinOp :: Id -> IType -> IType -> ITLin
+toITLinOp op x y
+  | op == idTAdd = addITLin (toITLin x) (toITLin y)
+  | op == idTSub = subITLin (toITLin x) (toITLin y)
+  | otherwise = (M.singleton (rawBinIT (ITCon op kNNN TIabstract) x y) 1, 0)
+
+fromITLin :: ITLin -> Maybe IType
+fromITLin (m, c)
+  | M.null m = if c >= 0 then Just (mkNumConT c) else Nothing
+  | otherwise =
+      let posAtoms = concat [ replicate (fromInteger k) a | (a, k) <- M.toAscList m, k > 0 ]
+          negAtoms = concat [ replicate (fromInteger (-k)) a | (a, k) <- M.toAscList m, k < 0 ]
+          posAll = if c > 0 then posAtoms ++ [ITNum c] else posAtoms
+          negAll = if c < 0 then negAtoms ++ [ITNum (-c)] else negAtoms
+          sumTerms [] = ITNum 0
+          sumTerms (t:ts) = foldl' (rawBinIT itTAddCon) t ts
+      in  if null posAll
+          then Nothing
+          else if null negAll
+               then Just (sumTerms posAll)
+               else Just (rawBinIT itTSubCon (sumTerms posAll) (sumTerms negAll))
+
+-- If (a - b) simplifies to a constant integer (positive, zero, or negative),
+-- return Just (a - b).
+iTypeDiff :: IType -> IType -> Maybe Integer
+iTypeDiff a b =
+    case subITLin (toITLin a) (toITLin b) of
+      (m, c) | M.null m -> Just c
+      _ -> Nothing
+
+-- If (a - b) is provably non-negative (a sum of non-negative size terms with
+-- non-negative constant term), return Just the simplified IType for (a - b).
+iTypeSubNonNeg :: IType -> IType -> Maybe IType
+iTypeSubNonNeg a b =
+    let (m, c) = subITLin (toITLin a) (toITLin b)
+    in  if c >= 0 && all (> 0) (M.elems m)
+        then fromITLin (m, c)
+        else Nothing
 
 mkNumConT :: Integer -> IType
 mkNumConT i =
@@ -630,7 +717,7 @@ ppQuant s d p i t e =
 iToCT :: IType -> CType
 iToCT (ITForAll _ _ _) = internalError "IConv.iToCT: ITForAll"
 iToCT (ITAp t1 t2) = TAp (iToCT t1) (iToCT t2)
-iToCT (ITVar i) = internalError "IConv.iToCT: ITVar"
+iToCT (ITVar i) = cTVarKind i KNum
 iToCT (ITCon i k s) = TCon (TyCon i (Just (iToCK k)) s)
 iToCT (ITNum n) = TCon (TyNum n noPosition)
 iToCT (ITStr s) = TCon (TyStr s noPosition)
