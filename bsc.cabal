@@ -93,8 +93,20 @@ library
   else
     extra-libraries: stdc++
     ld-options: -Wl,-rpath,$ORIGIN/../lib/SAT
+  -- FSTRead reads FST waves through the vendored libfst (the src/vendor/libfst
+  -- submodule), compiled into the library with the flat accessors for its
+  -- fstHier record in src/comp/fstscopes_hier.c; fstapi.c's <config.h> comes
+  -- from src/libfst_config, and libfst needs zlib on every platform.
+  extra-libraries: z
+  include-dirs:
+    src/libfst_config,
+    src/vendor/libfst/src,
   c-sources:
     src/vendor/htcl/haskell.c,
+    src/comp/fstscopes_hier.c,
+    src/vendor/libfst/src/fastlz.c,
+    src/vendor/libfst/src/fstapi.c,
+    src/vendor/libfst/src/lz4.c,
   exposed-modules:
     AAddSchedAssumps
     AAddScheduleDefs
@@ -172,6 +184,7 @@ library
     ErrorUtil
     Eval
     Exceptions
+    FSTRead
     FStringCompat
     FileIOUtil
     FileNameUtil
@@ -336,6 +349,7 @@ library
     Verilog
     Version
     Warmup
+    WaveCheck
     Wires
     Yices
     YicesFFI
@@ -392,3 +406,13 @@ executable tconcheck
   import: common_exes
   ghc-options: -main-is Main_tconcheck
   main-is: tconcheck.hs
+
+executable fstcheck
+  import: common_exes
+  ghc-options: -main-is Main_fstcheck
+  main-is: fstcheck.hs
+
+executable fstscopes
+  import: common_exes
+  ghc-options: -main-is Main_fstscopes
+  main-is: fstscopes.hs
