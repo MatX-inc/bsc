@@ -350,6 +350,7 @@ library
     Version
     Warmup
     WaveCheck
+    WireAnalysis
     Wires
     Yices
     YicesFFI
