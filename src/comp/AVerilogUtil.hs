@@ -38,7 +38,8 @@ import Data.Maybe
 
 import FStringCompat(FString, getFString)
 import ErrorUtil
-import Flags(Flags, readableMux, unSpecTo, systemVerilogOutput, useDPI)
+import Flags(Flags, readableMux, unSpecTo, systemVerilogOutput, useDPI,
+             stableVerilog)
 import PPrint
 import IntLit
 import Id
@@ -79,7 +80,8 @@ data VConvtOpts = VConvtOpts {
                               -- foreign-function map and def widths, for
                               -- monomorphizing polymorphic DPI call names
                               vco_ffmap       :: ForeignFuncMap,
-                              vco_def_widths  :: M.Map AId Integer
+                              vco_def_widths  :: M.Map AId Integer,
+                              vco_stable      :: Bool
                               }
 
 
@@ -90,7 +92,8 @@ flagsToVco flags = VConvtOpts {
                                vco_sv_tasks = systemVerilogOutput flags,
                                vco_use_dpi = useDPI flags,
                                vco_ffmap = M.empty,
-                               vco_def_widths = M.empty
+                               vco_def_widths = M.empty,
+                               vco_stable = stableVerilog flags
                               }
 
 -- This has been abolished from the compiler everywhere but the Verilog backend
