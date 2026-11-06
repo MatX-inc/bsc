@@ -352,6 +352,15 @@ added in the same way, with a `Makefile` and `<category>.exp` file.
     cd $here
     ```
 
+### Conventions and tips for writing tests
+
+* Prefer `$display` over a newline-less `$write` for test output that will
+  be compared against an expected file.  Some simulators (Verilator, for
+  example) print a banner when `$finish` is called; without a trailing
+  newline, the banner lands on the same line as the test's output, and the
+  scripts that filter simulator banners from the output will strip the
+  test's value along with it.
+
 ---
 
 ## Diagnosing test failures
