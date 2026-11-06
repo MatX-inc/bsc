@@ -11,6 +11,7 @@ bsc2bsv
 bsv2bsc
 showrules
 vcdcheck
+tconcheck
 
 # Ignore TAGS files
 TAGS
