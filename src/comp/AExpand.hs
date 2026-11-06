@@ -502,7 +502,8 @@ cheap :: PrimOp -> [AExpr] -> Bool
 cheap PrimBNot es                                = True
 cheap PrimBAnd es                                = length es < 9
 cheap PrimBOr  es                                = length es < 9
-cheap PrimEQ   [_, (ASInt _ (ATBit sz) _)]       = sz <= 24             -- comparing with a small constant is easy
+cheap PrimEQ   [_, (ASInt _ (ATBit (SizeConst sz)) _)] = sz <= 24             -- comparing with a small constant is easy
+cheap PrimEQ   [_, (ASInt _ (ATBit _) _)]              = False
 cheap PrimExtract [ _ , (ASInt{} ), (ASInt {} )] = True
 cheap _        es                                = False
 

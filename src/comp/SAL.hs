@@ -502,13 +502,14 @@ boolToBitVar = SVar $ primCtx (SId "boolToBit")
 -- -----
 
 anyVar :: AType -> SExpr
-anyVar (ATBit width)       = SVar $ bitCtx width (SId "undef")
+anyVar (ATBit width)       = SVar $ bitCtx (fromConcreteSize "SAL.anyVar" width) (SId "undef")
 anyVar t | (t == mkATBool) = SVar $ primCtx (SId "undefBool")
 anyVar (ATTuple ts)        = internalError ("anyVar: multi-output methods are not yet supported")
 anyVar (ATString _)        = SVar $ stringCtx (SId "undef")
 anyVar (ATReal)            = SVar $ primCtx (SId "undefReal")
-anyVar (ATArray sz t)      = arrBuild sz $
-                               replicate (fromInteger sz) (anyVar t)
+anyVar (ATArray sz t)      = let sz' = fromConcreteSize "SAL.anyVar" sz
+                             in  arrBuild sz' $
+                                   replicate (fromInteger sz') (anyVar t)
 anyVar t@(ATAbstract {})   = internalError ("anyVar: " ++ ppReadable t)
 
 -- -----
@@ -1043,11 +1044,11 @@ setUniqueNum n = do
 -- -------------------------
 
 convAType :: AType -> SType
-convAType (ATBit width) = bitNType width
+convAType (ATBit width) = bitNType (fromConcreteSize "SAL.convAType" width)
 convAType (ATString Nothing) = stringType
 convAType (ATString (Just width)) = stringType -- XXX ?
 convAType (ATReal) = realType
-convAType (ATArray sz t) = arrType sz (convAType t)
+convAType (ATArray sz t) = arrType (fromConcreteSize "SAL.convAType" sz) (convAType t)
 convAType t | (t == mkATBool) = boolType
 convAType (ATTuple ts) = internalError ("convAType: multi-output methods are not yet supported")
 convAType t@(ATAbstract {}) = internalError ("convAType: " ++ ppReadable t)
@@ -1258,7 +1259,7 @@ convAExpr (ASInt _ t (IntLit _ _ v)) | (t == mkATBool) =
     1 -> return trueCon
     _ -> internalError ("convAExpr: invalid Bool: " ++ ppReadable v)
 convAExpr (ASInt _ (ATBit width) (IntLit _ _ v)) =
-  return $ bitConst width v
+  return $ bitConst (fromConcreteSize "SAL.convAExpr" width) v
 convAExpr e@(ASInt {}) =
   internalError ("convAExpr: non-bit ASInt: " ++ ppReadable e)
 
@@ -1363,15 +1364,15 @@ convAPrim PrimArrayDynSelect t [arr, idx] = do
   arr_expr <- convAExpr arr
   idx_expr <- convAExpr idx
   let arrty = ae_type arr
-      arrsz = getArraySize arrty
+      arrsz = fromConcreteSize "SAL.PrimArrayDynSelect" (getArraySize arrty)
       elemty = getArrayElemType arrty
-      idxsz = aSize idx
+      idxsz = aSizeInt idx
   return $ arrSelect arrsz (convAType elemty) idxsz arr_expr idx_expr
 
 convAPrim PrimBuildArray arr_ty as = do
   a_exprs <- mapM convAExpr as
   -- XXX the size should also be the length of "as"
-  let sz = getArraySize arr_ty
+  let sz = fromConcreteSize "SAL.PrimBuildArray" (getArraySize arr_ty)
   return $ arrBuild sz a_exprs
 
 -- removed in IExpand
@@ -1395,7 +1396,7 @@ convAPrim PrimBNot _ [a] = do
 -- (in the ASyntax, it can handle variable arguments)
 convAPrim p@(PrimConcat) t as@(_:_) = do
   let mapFn a = do a_expr <- convAExpr a
-                   return (aSize a, a_expr)
+                   return (aSizeInt a, a_expr)
   a_exprs <- mapM mapFn as
   let foldFn (sz1, a1) (sz2, a2) =
           (sz1 + sz2,
@@ -1404,7 +1405,7 @@ convAPrim p@(PrimConcat) t as@(_:_) = do
 
 convAPrim p@(PrimExtract) (ATBit sz2) [a, _, _] = do
   a_expr <- convAExpr a
-  return $ sApply (SVar (prim2Ctx (aSize a) sz2 (primId p))) [a_expr]
+  return $ sApply (SVar (prim2Ctx (aSizeInt a) (fromConcreteSize "SAL.PrimExtract" sz2) (primId p))) [a_expr]
 
 -- converted to PrimSelect in IConv
 --convAPrim PrimSplit t as =
@@ -1422,7 +1423,7 @@ convAPrim p@(PrimExtract) (ATBit sz2) [a, _, _] = do
 convAPrim p t as | p `elem` [ PrimAdd, PrimSub, PrimAnd, PrimOr, PrimXor,
                               PrimInv, PrimNeg ] = do
    a_exprs <- mapM convAExpr as
-   return $ sApply (SVar (prim1Ctx (aSize t) (primId p))) a_exprs
+   return $ sApply (SVar (prim1Ctx (aSizeInt t) (primId p))) a_exprs
 
 -- treat equality of booleans different from equality of bit vectors
 convAPrim p@(PrimEQ) t as@(a1:_) | (ae_type a1 == mkATBool) = do
@@ -1433,24 +1434,24 @@ convAPrim p@(PrimEQ) t as@(a1:_) | (ae_type a1 == mkATBool) = do
 convAPrim p t as@(a1:_)
     | p `elem` [ PrimEQ, PrimULE, PrimULT, PrimSLE, PrimSLT ] = do
    a_exprs <- mapM convAExpr as
-   return $ sApply (SVar (prim1Ctx (aSize a1) (primId p))) a_exprs
+   return $ sApply (SVar (prim1Ctx (aSizeInt a1) (primId p))) a_exprs
 
 convAPrim p t as@[val, idx] | p `elem` [ PrimSL, PrimSRL, PrimSRA ] = do
    a_exprs <- mapM convAExpr as
-   let sz1 = aSize val
-       sz2 = aSize idx
+   let sz1 = aSizeInt val
+       sz2 = aSizeInt idx
    return $ sApply (SVar (prim2Ctx sz1 sz2 (primId p))) a_exprs
 
 convAPrim p t as@[a1, a2] | p `elem` [ PrimMul, PrimQuot, PrimRem ] = do
    a_exprs <- mapM convAExpr as
-   let sz1 = aSize a1
-       sz2 = aSize a2
+   let sz1 = aSizeInt a1
+       sz2 = aSizeInt a2
    return $ sApply (SVar (prim2Ctx sz1 sz2 (primId p))) a_exprs
 
 convAPrim p t [a] | p `elem` [ PrimSignExt, PrimZeroExt, PrimTrunc ] = do
    a_expr <- convAExpr a
-   let sz1 = aSize a
-       sz2 = aSize t
+   let sz1 = aSizeInt a
+       sz2 = aSizeInt t
    return $ sApply (SVar (prim2Ctx sz1 sz2 (primId p))) [a_expr]
 
 convAPrim p _ as = do

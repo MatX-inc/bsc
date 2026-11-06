@@ -248,10 +248,9 @@ aState' flags pps schedule_info apkg = do
         (param_args, port_args, inout_args) =
             getAPackageParamsPortsAndInouts apkg
 
-        -- aspkg input parameters (other than size parameters)
+        -- aspkg input parameters (including size parameters)
         param_inputs =
-            -- XXX size parameters are bit-32?
-            [ (p, aTNat) | p <- size_ps ] ++
+            [ (p, ATAbstract p []) | p <- size_ps ] ++
             -- module arguments declared as parameters
             param_args
 
@@ -546,7 +545,7 @@ aState' flags pps schedule_info apkg = do
     -- create the signal Id info for the ASPackage
     let signal_info =
             ASPSignalInfo {
-                aspsi_inputs = map fst (param_args ++ port_args ++ inout_args),
+                aspsi_inputs = size_ps ++ map fst (param_args ++ port_args ++ inout_args),
 
                 aspsi_output_clks  = map mkSIClockTuple clk_blob,
                 aspsi_output_rsts  = rstn_exps,

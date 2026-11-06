@@ -364,7 +364,7 @@ mkStringLiteralName n = "__str_literal_" ++ (show n)
 
 -- convert an AType into a combinator for the appropriate C type
 aTypeToCType :: AType -> (CCFragment -> CCFragment)
-aTypeToCType (ATBit size) = (`ofType` (bitsType size CTunsigned))
+aTypeToCType (ATBit size) = (`ofType` (bitsType (fromConcreteSize "SimCCBlock.aTypeToCType" size) CTunsigned))
 aTypeToCType (ATString _) = (`ofType` (classType "std::string"))
 aTypeToCType (ATReal) = (`ofType` doubleType)
 aTypeToCType (ATTuple _) = userType "WideData"
@@ -563,7 +563,7 @@ isPrimBlock id = any (\sb -> (sb_id sb) == id) primBlocks
 --      be released after the function returns.
 -- It also keeps the map from foreign function names to
 -- ForeignFunctions, which is read but not written.
-data ConvState = CS { literals :: [(ASize,Integer)]
+data ConvState = CS { literals :: [(Integer,Integer)]
                     , str_literal_count :: Integer
                     , str_map :: M.Map String Integer
                     , copied_args :: Bool
@@ -598,7 +598,7 @@ setHasCopiedArg = modify (\s -> s { copied_args = True })
 clearHasCopiedArg :: State ConvState ()
 clearHasCopiedArg = modify (\s -> s { copied_args = False })
 
-addLit :: (ASize,Integer) -> State ConvState ()
+addLit :: (Integer,Integer) -> State ConvState ()
 addLit (w,n) = do lits <- gets literals
                   modify (\s -> s { literals = ((w,n):lits) })
 
@@ -646,7 +646,7 @@ isWideDef (t, _) = wideDataType t
 mkUndetVal :: AType -> State ConvState CCExpr
 mkUndetVal ty = do
   tgt <- gets undet_type
-  let n = aSize ty
+  let n = aSizeInt ty
       v = case tgt of
             "0" -> 0
             "1" -> (2^n) - 1
@@ -656,7 +656,7 @@ mkUndetVal ty = do
                    internalError $
                      "SimCCBlock.mkUndetVal: unexpected undet type: "
                      ++ show tgt
-  aExprToCExpr noRet $ ASInt dummy_id (ATBit n) (ilSizedHex n v)
+  aExprToCExpr noRet $ ASInt dummy_id (ATBit (SizeConst n)) (ilSizedHex n v)
 
 -- ----------------------
 -- Support for primitives
@@ -742,7 +742,7 @@ simplePrimN ret op op_name args =
          else do return $ foldl1 op vs
 
 -- Generate an expression for a unary operator that requires masking
-maskedPrim1 :: (Maybe (Bool,AId)) -> ASize -> (CCExpr -> CCExpr) -> String
+maskedPrim1 :: (Maybe (Bool,AId)) -> Integer -> (CCExpr -> CCExpr) -> String
                -> AExpr -> ExprConv
 maskedPrim1 ret out_width op op_name arg =
     do v <- simplePrim1 ret op op_name arg
@@ -775,8 +775,8 @@ mulPrim ret out_width op_name arg1 arg2 =
     in do v1 <- aExprToCExpr noRet arg1
           v2 <- aExprToCExpr noRet arg2
           wdata_test <- getWDataTest
-          let p_v1 = promote out_width (aSize arg1) v1
-              p_v2 = promote out_width (aSize arg2) v2
+          let p_v1 = promote out_width (aSizeInt arg1) v1
+              p_v2 = promote out_width (aSizeInt arg2) v2
               (w_ret,w_wret) =
                   case ret of
                     Nothing -> ([], False)
@@ -801,7 +801,7 @@ wideExtractPrim ret out_width e hi lo =
                (Just (True,aid))  -> ([aPortIdToC aid], (wdata_test aid))
        if w_wret
          then return $ (var "wop_primExtractWide") `cCall` ([ mkUInt32 out_width
-                                                            , mkUInt32 (aSize e), v
+                                                            , mkUInt32 (aSizeInt e), v
                                                             , mkUInt32 32, mkUInt32 hi
                                                             , mkUInt32 32, mkUInt32 lo
                                                             ] ++ w_ret)
@@ -829,7 +829,7 @@ wideExtractPrim ret out_width e hi lo =
 wideConcatPrim :: (Maybe (Bool,AId)) -> Integer -> [AExpr] -> ExprConv
 wideConcatPrim ret out_width args =
     do arg_exprs <- mapM (aExprToCExpr noRet) args
-       let arg_widths = map aSize args
+       let arg_widths = map aSizeInt args
            shift_amounts = tail $ scanr (+) 0 arg_widths
        wdata_test <- getWDataTest
        let (w_ret,w_wret) =
@@ -867,20 +867,20 @@ mkPrimCall ret sz name args =
              then ((arg_list'++(w_ret)), ("wop_prim" ++ (sizedName name sz)))
              else (arg_list', "prim" ++ (sizedName name sz))
      return $ (var call_name) `cCall` arg_list_ret
-  where arg_size :: AExpr -> ASize
+  where arg_size :: AExpr -> Integer
         arg_size expr = case (aType expr) of
                           (ATString Nothing) -> 0
                           (ATReal)           -> 0
-                          _                  -> aSize expr
+                          _                  -> aSizeInt expr
         -- overload resolution needs specific information on argument types
         mkArg expr = if (isConst expr)              ||
                         (isStringType (aType expr)) ||
                         ((aType expr) == ATReal) ||
                         (isTupleType (aType expr)) ||
-                        ((aSize expr) > 64)
+                        ((aSizeInt expr) > 64)
                      then aExprToCExpr noRet expr
                      else do cexpr <- aExprToCExpr noRet expr
-                             return $ (bitsType (aSize expr) CTunsigned) `cCast` cexpr
+                             return $ (bitsType (aSizeInt expr) CTunsigned) `cCast` cexpr
 
 numWords :: Integer -> CCExpr
 numWords n = mkUInt32 ((n + 31) `div` 32)
@@ -902,8 +902,8 @@ convertArgList args = convert args (encodeArgs args)
         convert ((Field e f):rest) str = do e' <- aExprToCExpr noRet e
                                             rest' <- convert rest str
                                             return ((e' `cDot` f):rest')
-        convert ((Ptr (ASInt _ ty val)):rest) str | aSize ty <= 64 =
-          do let w  = aSize ty
+        convert ((Ptr (ASInt _ ty val)):rest) str | aSizeInt ty <= 64 =
+          do let w  = aSizeInt ty
                  x  = ilValue val
                  e' = (var (mkLiteralName w x)) `cDot` "data"
              addLit (w,x) -- record the literal for out-of-line generation
@@ -923,7 +923,7 @@ convertArgList args = convert args (encodeArgs args)
              rest' <- convert rest str
              setHasCopiedArg
              let arg_list = case argExpr a of
-                              (Just e) -> [e', numWords (aSize e) ]
+                              (Just e) -> [e', numWords (aSizeInt e) ]
                               Nothing  -> [e']
                  copy = (var "copy_arg") `cCall` arg_list
              return (copy:rest')
@@ -979,15 +979,15 @@ getConstVal _ = Nothing
 -- expressions).
 aExprToCExpr :: (Maybe (Bool,AId)) -> AExpr -> ExprConv
 aExprToCExpr ret p@(APrim _ _ PrimAdd args) = argCount (==2) args $
-  maskedPrim2 ret (aSize p) (cAdd) (toWString PrimAdd) (args!!0) (args!! 1)
+  maskedPrim2 ret (aSizeInt p) (cAdd) (toWString PrimAdd) (args!!0) (args!! 1)
 aExprToCExpr ret p@(APrim _ _ PrimSub args) = argCount (==2) args $
-  maskedPrim2 ret (aSize p) (cSub) (toWString PrimSub) (args!!0) (args!! 1)
+  maskedPrim2 ret (aSizeInt p) (cSub) (toWString PrimSub) (args!!0) (args!! 1)
 aExprToCExpr ret p@(APrim _ _ PrimMul args) = argCount (==2) args $
-  mulPrim ret (aSize p) (toWString PrimMul) (args!!0) (args!! 1)
+  mulPrim ret (aSizeInt p) (toWString PrimMul) (args!!0) (args!! 1)
 aExprToCExpr ret p@(APrim _ _ PrimQuot args) = argCount (==2) args $
-  maskedPrim2 ret (aSize p) (cQuot) (toWString PrimQuot) (args!!0) (args!! 1)
+  maskedPrim2 ret (aSizeInt p) (cQuot) (toWString PrimQuot) (args!!0) (args!! 1)
 aExprToCExpr ret p@(APrim _ _ PrimRem args) = argCount (==2) args $
-  maskedPrim2 ret (aSize p) (cRem) (toWString PrimRem) (args!!0) (args!! 1)
+  maskedPrim2 ret (aSizeInt p) (cRem) (toWString PrimRem) (args!!0) (args!! 1)
 aExprToCExpr ret (APrim _ _ PrimAnd args) = argCount (>1) args $
   simplePrimN ret (cBitAnd) (toWString PrimAnd) args
 aExprToCExpr ret (APrim _ _ PrimOr args) = argCount (>1) args $
@@ -995,15 +995,15 @@ aExprToCExpr ret (APrim _ _ PrimOr args) = argCount (>1) args $
 aExprToCExpr ret (APrim _ _ PrimXor args) = argCount (>1) args $
   simplePrimN ret (cBitXor) (toWString PrimXor) args
 aExprToCExpr ret p@(APrim _ _ PrimSL args) = argCount (==2) args $
-  mkPrimCall ret (aSize p) "ShiftL" args
+  mkPrimCall ret (aSizeInt p) "ShiftL" args
 aExprToCExpr ret p@(APrim _ _ PrimSRL args) = argCount (==2) args $
-  mkPrimCall ret (aSize p) "ShiftR" args
+  mkPrimCall ret (aSizeInt p) "ShiftR" args
 aExprToCExpr ret p@(APrim _ _ PrimSRA args) = argCount (==2) args $
-  mkPrimCall ret (aSize p) "ShiftRA" args
+  mkPrimCall ret (aSizeInt p) "ShiftRA" args
 aExprToCExpr ret p@(APrim _ _ PrimInv args) = argCount (==1) args $
-  maskedPrim1 ret (aSize p) (cCompl) (toWString PrimInv) (args!!0)
+  maskedPrim1 ret (aSizeInt p) (cCompl) (toWString PrimInv) (args!!0)
 aExprToCExpr ret p@(APrim _ _ PrimNeg args) = argCount (==1) args $
-  maskedPrim1 ret (aSize p) (cUMinus) (toWString PrimNeg) (args!!0)
+  maskedPrim1 ret (aSizeInt p) (cUMinus) (toWString PrimNeg) (args!!0)
 aExprToCExpr _ (APrim _ _ PrimEQ args) = argCount (==2) args $
   simplePrim2 noRet (cEq) (toWString PrimEQ) (args!!0) (args!!1)
 -- Bluesim isn't 4-state, so PrimEQ3 is the same as PrimEQ
@@ -1014,40 +1014,40 @@ aExprToCExpr _ (APrim _ _ PrimULE args) = argCount (==2) args $
 aExprToCExpr _ (APrim _ _ PrimULT args) = argCount (==2) args $
   simplePrim2 noRet (cLt) (toWString PrimULT) (args!!0) (args!!1)
 aExprToCExpr _ p@(APrim _ _ PrimSLE args) = argCount (==2) args $
-  mkPrimCall noRet (aSize p) "SLE" args
+  mkPrimCall noRet (aSizeInt p) "SLE" args
 aExprToCExpr _ p@(APrim _ _ PrimSLT args) = argCount (==2) args $
-  mkPrimCall noRet (aSize p) "SLT" args
+  mkPrimCall noRet (aSizeInt p) "SLT" args
 aExprToCExpr _ (APrim _ _ PrimIf args) = argCount (==3) args $
   do c  <- aExprToCExpr noRet (args!!0)
      v1 <- aExprToCExpr noRet (args!!1)
      v0 <- aExprToCExpr noRet (args!!2)
      return $ cTernary c v1 v0
 aExprToCExpr ret p@(APrim _ _ PrimSignExt args) = argCount (==1) args $
-  mkPrimCall ret (aSize p) "SignExt" args
+  mkPrimCall ret (aSizeInt p) "SignExt" args
 aExprToCExpr ret p@(APrim _ _ PrimZeroExt args) = argCount (==1) args $
-  mkPrimCall ret (aSize p) "ZeroExt" args
+  mkPrimCall ret (aSizeInt p) "ZeroExt" args
 aExprToCExpr ret p@(APrim _ _ PrimTrunc args) = argCount (==1) args $
-  mkPrimCall ret (aSize p) "Trunc" args
+  mkPrimCall ret (aSizeInt p) "Trunc" args
 aExprToCExpr ret p@(APrim _ _ PrimExtract args) = argCount (==3) args $
   let mhi = getConstVal (args!!1)
       mlo = getConstVal (args!!2)
   in case (mhi,mlo) of
-      (Just hi, Just lo) -> if ((aSize p) > 64) || ((aSize (args!!0)) > 64)
-                            then wideExtractPrim ret (aSize p) (args!!0) hi lo
+      (Just hi, Just lo) -> if ((aSizeInt p) > 64) || ((aSizeInt (args!!0)) > 64)
+                            then wideExtractPrim ret (aSizeInt p) (args!!0) hi lo
                             else do v <- aExprToCExpr noRet (args!!0)
-                                    let out_width = aSize p
+                                    let out_width = aSizeInt p
                                         out_type = bitsType out_width CTunsigned
                                         v' = v `cRShift` (mkUInt32 lo)
-                                        v'' = if (hi == (aSize (args!!0)) - 1)
+                                        v'' = if (hi == (aSizeInt (args!!0)) - 1)
                                               then v'
                                               else addMask out_width v'
                                     return $ out_type `cCast` v''
-      _ -> mkPrimCall ret (aSize p) "Extract" args
+      _ -> mkPrimCall ret (aSizeInt p) "Extract" args
 aExprToCExpr ret p@(APrim _ _ PrimConcat args) = argCount (>=2) args $
-  if (aSize p) <= 64
-  then do let arg_widths = map aSize args
+  if (aSizeInt p) <= 64
+  then do let arg_widths = map aSizeInt args
               arg_types  = map (\w -> bitsType w CTunsigned) arg_widths
-              out_width  = aSize p
+              out_width  = aSizeInt p
               out_type   = bitsType out_width CTunsigned
           arg_exprs <- mapM (aExprToCExpr noRet) args
           let arg_exprs_cast = [ if (t == out_type) then e else (out_type `cCast` e)
@@ -1057,7 +1057,7 @@ aExprToCExpr ret p@(APrim _ _ PrimConcat args) = argCount (>=2) args $
               shifted_exprs = zipWith cLShift arg_exprs_cast (map mkUInt32 shift_amounts)
               or_together   = foldl1 cBitOr shifted_exprs
           return $ addMask out_width or_together
-  else wideConcatPrim ret (aSize p) args
+  else wideConcatPrim ret (aSizeInt p) args
 aExprToCExpr _ (APrim _ _ PrimBAnd args) = argCount (>1) args $
   simplePrimN noRet (cAnd) (toWString PrimBAnd) args
 aExprToCExpr _ (APrim _ _ PrimBOr args) = argCount (>1) args $
@@ -1074,12 +1074,12 @@ aExprToCExpr _ (AMethCall _ id mid args) =
 -- a tuple is laid out in wide data as a concatenation of its elements,
 -- with the first element in the most-significant bits (Verilog {e1,...,en})
 aExprToCExpr ret e@(ATuple _ exprs) =
-  wideConcatPrim ret (aSize e) exprs
+  wideConcatPrim ret (aSizeInt e) exprs
 -- NB: idx is 1-based (see AConv and AState), so 'genericDrop idx' yields the
 -- elements strictly below the selected one; sizeAfter is therefore the low bit
 -- of element idx, and [aSize t + sizeAfter - 1 : sizeAfter] is its bit range.
 aExprToCExpr ret (ATupleSel t e idx) =
-  wideExtractPrim ret (aSize t) e hi lo
+  wideExtractPrim ret (aSizeInt t) e (fromConcreteSize "SimCCBlock.aExprToCExpr" hi) (fromConcreteSize "SimCCBlock.aExprToCExpr" lo)
   where (hi, lo) = tupleElemRange (ae_type e) idx
 aExprToCExpr _ e@(AMGate _ id clkid) =
   do gmap <- gets gate_map
@@ -1097,18 +1097,15 @@ aExprToCExpr _ e@(ASPort  _ id) =
                        Just num -> aGateIdToC num
                        Nothing  -> aPortIdToC id
 aExprToCExpr _ (ASDef   _ id) = do return $ aDefIdToC id
-aExprToCExpr _ (ASInt _ (ATBit w) val) | w == 1    =
-  do return $ mkBit (ilValue val)
-                                       | w <= 8    =
-  do return $ mkUInt8 (ilValue val)
-                                       | w <= 32   =
-  do return $ mkUInt32 (ilValue val)
-                                       | w <= 64   =
-  do return $ mkUInt64 (ilValue val)
-                                       | otherwise =
-  do let x = ilValue val
-     addLit (w,x) -- record the wide literal for out-of-line generation
-     return $ var (mkLiteralName w x)
+aExprToCExpr _ (ASInt _ (ATBit w_sz) val)
+  | w == 1    = do return $ mkBit (ilValue val)
+  | w <= 8    = do return $ mkUInt8 (ilValue val)
+  | w <= 32   = do return $ mkUInt32 (ilValue val)
+  | w <= 64   = do return $ mkUInt64 (ilValue val)
+  | otherwise = do let x = ilValue val
+                   addLit (w,x) -- record the wide literal for out-of-line generation
+                   return $ var (mkLiteralName w x)
+  where w = fromConcreteSize "SimCCBlock.aExprToCExpr" w_sz
 aExprToCExpr _ (ASReal _ _ val) = return $ mkDouble val
 aExprToCExpr _ (ASStr _ _ str) =
 --  do return $ mkStr str
@@ -1155,7 +1152,7 @@ simFnStmtToCStmt (SFSDef isPort (ty@(ATReal),aid) Nothing) =
   do let dst = if isPort then aPortIdToCLval aid else aDefIdToCLval aid
      return $ decl $ (aTypeToCType ty) dst
 simFnStmtToCStmt (SFSDef isPort (ty,aid) Nothing) =
-  let w = aSize ty
+  let w = aSizeInt ty
       dst = if isPort then aPortIdToCLval aid else aDefIdToCLval aid
       typed_id = (aTypeToCType ty) dst
   in if w > 64 || isTupleType ty   -- for wide data, use (bits,false) constructor to avoid initialization penalty
@@ -1165,7 +1162,7 @@ simFnStmtToCStmt (SFSDef isPort (ty@(ATString (Just sz)),aid) (Just expr)) =
   do let dst = if isPort then aPortIdToCLval aid else aDefIdToCLval aid
          typed_id = (aTypeToCType ty) dst
      v <- aExprToCExpr noRet expr
-     return $ construct typed_id [v, mkUInt32 sz]
+     return $ construct typed_id [v, mkUInt32 (fromConcreteSize "SimCCBlock.simFnStmtToCStmt" sz)]
 simFnStmtToCStmt (SFSDef isPort (ty,aid) (Just expr)) =
   do ff_map <- gets function_map
      let isCase (APrim _ _ PrimCase _) = True
@@ -1421,20 +1418,21 @@ mkWideInitList wide_defs =
 -- all enables and readys are covered.  For wide ports, we set the size
 -- and clear the data.
 mkPortInit :: (AType,AId,VName) -> [CCFragment]
-mkPortInit ((ATBit 1),_,vn) =
+mkPortInit ((ATBit (SizeConst 1)),_,vn) =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkBool False) ]
-mkPortInit ((ATBit n),_,vn) | n > 64 =
+mkPortInit ((ATBit n_sz),_,vn) | n > 64 =
   let p = aPortIdToC (vName_to_id vn)
   in [ stmt $ p `cDot` "setSize" `cCall` [ mkUInt32 n ]
      , stmt $ p `cDot` "clear" `cCall` []
      ]
-mkPortInit ((ATBit n),_,vn) | n > 32 =
+  where n = fromConcreteSize "SimCCBlock.mkPortInit" n_sz
+mkPortInit ((ATBit n_sz),_,vn) | fromConcreteSize "SimCCBlock.mkPortInit" n_sz > 32 =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkUInt64 0) ]
-mkPortInit ((ATBit n),_,vn) =
+mkPortInit ((ATBit _),_,vn) =
   [ assign (aPortIdToCLval (vName_to_id vn)) (mkUInt32 0) ]
 mkPortInit (t@(ATTuple _),_,vn) =
   let p = aPortIdToC (vName_to_id vn)
-  in [ stmt $ p `cDot` "setSize" `cCall` [ mkUInt32 $ aSize t ]
+  in [ stmt $ p `cDot` "setSize" `cCall` [ mkUInt32 $ aSizeInt t ]
      , stmt $ p `cDot` "clear" `cCall` []
      ]
 mkPortInit p = internalError ("SimCCBlock.mkPortInit: " ++ ppReadable p)
@@ -1719,14 +1717,15 @@ simCCBlockToClassDeclaration genVCD sb_map sb =
 -- (unless it is wide, in which case the constructor for wide data already
 -- does that).
 mkCtorInit :: S.Set AId -> (AType,AId) -> Maybe (AId,[AExpr])
-mkCtorInit task_id_set (aty@(ATBit sz),aid)
+mkCtorInit task_id_set (aty@(ATBit sz_expr),aid)
   | sz > 64     = Just (aid,[aNat sz])
   | (S.member aid task_id_set)
                 = let val = ASInt defaultAId aty (ilHex (aaaa sz))
                   in  Just (aid,[val])
   | otherwise   = Nothing
+  where sz = fromConcreteSize "SimCCBlock.mkCtorInit" sz_expr
 mkCtorInit _ (aty@(ATTuple _),aid) =
-  Just (aid, [ aNat (aSize aty) ])
+  Just (aid, [ aNat (aSizeInt aty) ])
 -- system tasks shouldn't be returning other types (like String),
 -- so no need to consult the task_id_set
 mkCtorInit _ _  = Nothing
@@ -1737,7 +1736,7 @@ mkVCDCallArgs :: VCDCallType -> AType -> String -> CCExpr -> [CCExpr]
 mkVCDCallArgs ct ty name def =
   let size_arg = case ty of
                    (ATString Nothing) -> [ mkUInt32 0 ]
-                   otherwise          -> [ mkUInt32 (aSize ty) ]
+                   otherwise          -> [ mkUInt32 (aSizeInt ty) ]
   in case ct of
        VCDDef    -> [ cPostInc (var "num"), mkStr name ] ++ size_arg
        VCDX      -> [ cPostInc (var "num") ] ++ size_arg
@@ -1773,17 +1772,17 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
          task_id_set = S.fromList (sb_taskDefs sb)
          pub_def_inits = mapMaybe (mkCtorInit task_id_set) (sb_publicDefs sb)
          pri_def_inits = mapMaybe (mkCtorInit task_id_set) (sb_privateDefs sb)
-         symbols = sortBy symOrd $ [ (getIdString i, SymParam i sz)
+         symbols = sortBy symOrd $ [ (getIdString i, SymParam i (fromConcreteSize "SimCCBlock.simCCBlockToClassDefinition" sz))
                                    -- deliberately drop non-bit parameters
                                    -- i.e. real & string
                                    | (ATBit sz, i, False) <- sb_parameters sb
                                    ] ++
-                                   [ (getIdString i, SymPort i (aSize t))
+                                   [ (getIdString i, SymPort i (aSizeInt t))
                                    | (t, i, True) <- sb_parameters sb ] ++
-                                   [ (getIdString i, SymPort i (aSize t))
+                                   [ (getIdString i, SymPort i (aSizeInt t))
                                    | (t, _, vn) <- sb_methodPorts sb
                                    , let i = vName_to_id vn ] ++
-                                   [ (getIdString i, SymDef i (aSize t))
+                                   [ (getIdString i, SymDef i (aSizeInt t))
                                    | (t, i) <- sb_publicDefs sb
                                    , isOkId i ] ++
                                    [ (getIdString i, SymModule i)
@@ -2171,7 +2170,7 @@ wideLocalDef _ = []
 -- return True if this type is represented as wide data
 -- (i.e. it is larger than 64 bits, or it is a tuple)
 wideDataType :: AType -> Bool
-wideDataType (ATBit sz) = sz > 64
+wideDataType (ATBit sz) = fromConcreteSize "SimCCBlock.wideDataType" sz > 64
 wideDataType (ATTuple _) = True
 wideDataType _ = False
 

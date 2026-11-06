@@ -235,7 +235,7 @@ is_real e = aType e == ATReal
 
 str_size :: AExpr -> [Char]
 str_size (ASDef (ATString Nothing) _) = ""
-str_size e                            = show (aSize e)
+str_size e                            = show (aSizeInt e)
 
 argExpr :: Argument -> Maybe AExpr
 argExpr (Arg e)     = Just e
@@ -265,11 +265,11 @@ encodeArgs args =
       prefix _                              = ""
       encode (Arg e)     | is_str e  = Just ((str_size e) ++ "s")
                          | is_real e = Just "r"
-                         | otherwise = Just ((prefix e) ++ (show (aSize e)))
-      encode (Field e _) = Just ((prefix e) ++ (show (aSize e)) ++ "p")
+                         | otherwise = Just ((prefix e) ++ (show (aSizeInt e)))
+      encode (Field e _) = Just ((prefix e) ++ (show (aSizeInt e)) ++ "p")
       encode (Ptr e)     = if (is_str e)
                            then Just "s"
-                           else Just ((prefix e) ++ (show (aSize e)) ++ "p")
+                           else Just ((prefix e) ++ (show (aSizeInt e)) ++ "p")
       encode (Copy a)    = encode a
       encode (NoConst a) = encode a
       encode _           = Nothing
@@ -278,7 +278,7 @@ encodeArgs args =
 -- A value treated polymorphically must be handled based on the type of
 -- the actual expression.
 polyArg :: AExpr -> Argument
-polyArg e = if aSize e > 64 then Field e "data" else Ptr e
+polyArg e = if aSizeInt e > 64 then Field e "data" else Ptr e
 -- Create an Argument value for an AExpr, without copying
 noCopy :: (AExpr,ForeignType) -> Argument
 noCopy (e,t) | is_str e  = NoConst (Arg e)
@@ -303,7 +303,7 @@ ignoreRet fc =
     Polymorphic ->
       case fc of
         (FFAction _ (ATaskAction { ataskact_value_type = ty })) ->
-           Alloc (aSize ty) False
+           Alloc (aSizeInt ty) False
         otherwise -> Null
     otherwise   -> Null
 
@@ -312,11 +312,11 @@ ignoreRet fc =
 -- be used directly.  If it is not, then it must be copied
 -- into 32-bit storage and written back after the call.
 forReturn :: (AExpr, ForeignType) -> (ReturnStyle,Argument)
-forReturn (e,rt) | aSize e > 64 = (Pointer,  noCopy (e,rt))
-                 | isPoly rt    = (Buffered, Alloc (aSize e) True)
-                 | aSize e > 32 = (Buffered, Alloc (aSize e) True)
-                 | aSize e > 8  = (Direct,   noCopy (e,rt))
-                 | otherwise    = (Buffered, Alloc (aSize e) True)
+forReturn (e,rt) | aSizeInt e > 64 = (Pointer,  noCopy (e,rt))
+                 | isPoly rt       = (Buffered, Alloc (aSizeInt e) True)
+                 | aSizeInt e > 32 = (Buffered, Alloc (aSizeInt e) True)
+                 | aSizeInt e > 8  = (Direct,   noCopy (e,rt))
+                 | otherwise       = (Buffered, Alloc (aSizeInt e) True)
 
 -- Foreign functions which return wide or polymorphic values have
 -- a pointer to the storage for the return passed as their first argument.
@@ -425,10 +425,10 @@ mkSystemTaskArgs add_sim add_this ret_arg args =
   in sim ++ this ++ argstr ++ (maybeToList ret_arg) ++ rest
 
 convAExprToArgument :: AExpr -> Argument
-convAExprToArgument e | (is_str e)     = Ptr e
-                      | (is_real e)    = Arg e
-                      | (aSize e) > 64 = Ptr e
-                      | otherwise      = Arg e
+convAExprToArgument e | (is_str e)        = Ptr e
+                      | (is_real e)       = Arg e
+                      | (aSizeInt e) > 64 = Ptr e
+                      | otherwise         = Arg e
 
 
 -- Generate a (do_writeback, fn name, arg list) tuple for a system task
@@ -601,14 +601,14 @@ mkDPIInst ff@(FF nm rt args) mretW argWs =
 -- concrete instantiations needed.
 getDPIInstantiations :: ForeignFuncMap -> ASPackage -> [DPIInst]
 getDPIInstantiations ffmap aspkg =
-  let defW = M.fromList [ (i, aSize t) | ADef i t _ _ <- aspkg_values aspkg ]
+  let defW = M.fromList [ (i, aSizeInt t) | ADef i t _ _ <- aspkg_values aspkg, isConcreteSize (aSize t) ]
 
-      exprUses = [ mkDPIInst ff (Just (aSize (aType e))) (map (aSize . aType) (ae_args e))
+      exprUses = [ mkDPIInst ff (Just (aSizeInt (aType e))) (map (aSizeInt . aType) (ae_args e))
                  | e@(AFunCall { ae_funname = nm, ae_isC = True })
                      <- findAExprs exprForeignCalls aspkg
                  , Just ff <- [M.lookup nm ffmap] ]
 
-      actUses  = [ mkDPIInst ff mret (map (aSize . aType) (drop 1 (afc_args fc)))
+      actUses  = [ mkDPIInst ff mret (map (aSizeInt . aType) (drop 1 (afc_args fc)))
                  | fc <- concatMap snd (aspkg_foreign_calls aspkg)
                  , Just ff <- [M.lookup (afc_fun fc) ffmap]
                  , let mret = case afc_writes fc of

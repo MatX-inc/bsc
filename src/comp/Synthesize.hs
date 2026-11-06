@@ -17,7 +17,7 @@ import Id
 import Prim
 import DefProp(DefProp, defPropsHasNoCSE)
 import ASyntax
-import ASyntaxUtil(tsortADefs, aType, isConst, aSize, )
+import ASyntaxUtil(tsortADefs, aType, isConst, aSizeInt)
 import AExpand(aSRemoveUnused)
 import AOpt(aOptBoolExpr)
 import IOUtil(progArgs)
@@ -162,17 +162,18 @@ toE :: AExpr -> S AExpr
 toE (APrim aid t p [x,y]) | p == PrimSLE || p == PrimSLT =
         let ty = aType x
             n = case ty of
-                  (ATBit sz) -> sz
+                  (ATBit sz) -> fromConcreteSize "Synthesize.toE PrimSLx" sz
                   _ -> internalError "Synthesize.toE PrimSLx: n"
             c = ASInt defaultAId ty (ilHex (2^(n-1)))
             x' = APrim aid ty PrimXor [x, c]
             y' = APrim aid ty PrimXor [y, c]
         in  toE (APrim aid t (if p == PrimSLE then PrimULE else PrimULT) [x',y'])
 -- XXX bad code
-toE (APrim aid t@(ATBit n) PrimExtract [e, h, l]) | h /= l && not (isConst h && isConst l) =
-        let te = aType e
+toE (APrim aid t@(ATBit n_sz) PrimExtract [e, h, l]) | h /= l && not (isConst h && isConst l) =
+        let n = fromConcreteSize "Synthesize.toE PrimExtract: n" n_sz
+            te = aType e
             m = case te of
-                  (ATBit sz) -> sz
+                  (ATBit sz) -> fromConcreteSize "Synthesize.toE PrimExtract: m" sz
                   _ -> internalError "Synthesize.toE PrimExtract: m"
             e1 | m > n     = APrim aid t PrimExtract
                                 [e1f,
@@ -289,8 +290,8 @@ synExp (ASPort t i) = return (splitASPort t i)
 synExp v@(ASParam t i) = return [ v ]
 --synExp (ASDef t i) = return (splitASDef t i)
 synExp v@(ASDef (ATBit 1) i) = return [ v ]
-synExp (ASDef (ATBit n) i) = return [ ASDef aTBool (wireId i k) | k <- [0..fromInteger n-1] ]
-synExp (ASInt aid (ATBit n) (IntLit _ _ i)) = return [ ASInt aid aTBool (ilSizedBin 1 b) | b <- reverse (integerToBits n i) ]
+synExp (ASDef (ATBit n) i) = return [ ASDef aTBool (wireId i k) | k <- [0..fromInteger (fromConcreteSize "Synthesize.synExp ASDef" n)-1] ]
+synExp (ASInt aid (ATBit n) (IntLit _ _ i)) = return [ ASInt aid aTBool (ilSizedBin 1 b) | b <- reverse (integerToBits (fromConcreteSize "Synthesize.synExp ASInt" n) i) ]
 synExp (ASStr _ _ _) = internalError "Synthesize.synExp: ASStr"
 synExp (ASAny t _) = internalError "Synthesize.synExp: ASAny"
 synExp _ = internalError( "Synthesize::synExp" )
@@ -311,7 +312,7 @@ splitASPort t i = splitVar t i (ASPort t i)
 splitVar :: AType -> AId -> AExpr -> [AExpr]
 splitVar t@(ATBit 1) i v = [v]
 splitVar t@(ATBit n) i v =
-    [ APrim i aTBool PrimExtract [v, aj, aj] | j <- [0..n-1], let aj = aNat j ]
+    [ APrim i aTBool PrimExtract [v, aj, aj] | j <- [0..fromConcreteSize "Synthesize.splitVar" n-1], let aj = aNat j ]
 splitVar _ _ _ = internalError( "Synthesize::splitVar" )
 
 -- ---------------
@@ -401,17 +402,19 @@ synPrim aid _ PrimConcat es = do
         ess <- mapM synExp es
         return (concat (reverse ess))
 synPrim aid _ PrimRange [_,_,e] = synExp e
-synPrim aid (ATBit n) PrimZeroExt [e] = do
-        let k = aSize e
+synPrim aid (ATBit n_sz) PrimZeroExt [e] = do
+        let n = fromConcreteSize "Synthesize.PrimZeroExt" n_sz
+            k = aSizeInt e
         es <- synExp e
         return (es ++ replicate (fromInteger (n-k)) aFalse)
-synPrim aid (ATBit n) PrimSignExt [e] = do
-        let k = aSize e
+synPrim aid (ATBit n_sz) PrimSignExt [e] = do
+        let n = fromConcreteSize "Synthesize.PrimSignExt" n_sz
+            k = aSizeInt e
         es <- synExp e
         let sign = last es
         return (es ++ replicate (fromInteger (n-k)) sign)
 synPrim aid _ PrimCase (c:d:ces) = do
-        let n = aSize c
+        let n = aSizeInt c
             pown = 2^n
             arms = [ (i,e) | (ASInt _ _ (IntLit _ _ i), e) <- makePairs ces ]
             len = genericLength arms
@@ -448,12 +451,14 @@ synPrim aid _ PrimSub [x, y] = do
         ys <- synExpS y
         (_, ss) <- synXSub aid xs ys aTrue
         return ss
-synPrim aid (ATBit n) PrimNeg [y] = do
-        let xs = replicate (fromInteger n) aFalse
+synPrim aid (ATBit n_sz) PrimNeg [y] = do
+        let n = fromConcreteSize "Synthesize.PrimNeg" n_sz
+            xs = replicate (fromInteger n) aFalse
         ys <- synExpS y
         (_, ss) <- synXSub aid xs ys aTrue
         return ss
-synPrim aid (ATBit n) PrimMul [x, y] = do
+synPrim aid (ATBit n_sz) PrimMul [x, y] = do
+        let n = fromConcreteSize "Synthesize.PrimMul" n_sz
         xs <- synExpS x
         ys <- synExpS y
         ss <- synMul aid xs ys
@@ -468,13 +473,14 @@ synPrim aid _ PrimULE [x, y] = do
         ys <- synExpS y
         (le, _) <- synXSub aid ys xs aTrue
         return [le]
-synPrim aid (ATBit n) p [x, y] | p == PrimSL || p == PrimSRL || p == PrimSRA = do
+synPrim aid (ATBit _) p [x, y] | p == PrimSL || p == PrimSRL || p == PrimSRA = do
         xs <- synExpS x
         ys <- synExpS y
         synShifter aid (shiftOf p) (take (log2 (length xs)) ys) xs
 -- scheduler
-synPrim aid t@(ATBit n) p es =
-        trace ("synPrim: unimplemented " ++ ppReadable (p,t,es)) $
+synPrim aid t@(ATBit n_sz) p es =
+        let n = fromConcreteSize "Synthesize.synPrim" n_sz
+        in trace ("synPrim: unimplemented " ++ ppReadable (p,t,es)) $
         return (map (const unknown) [1..n])
   where -- XXX using a fake port reference to create a reference to 'z' value
         unknown = ASPort aTBool (mkId noPosition (mkFString "z"))

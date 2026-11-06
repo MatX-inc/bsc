@@ -1759,7 +1759,7 @@ makeOutputRstn mod_pos id_rst port_id rstn = do
 -- Also, an optional clock Id and reset Id are given, if the inout is to be
 -- associated with a specific clock domain (the domain of that clock) or
 -- specific reset.
-makeArgInout ::  Id -> Integer -> Maybe Id -> Maybe Id ->
+makeArgInout ::  Id -> IType -> Maybe Id -> Maybe Id ->
                  G (HInout, IAbstractInput, VArgInfo)
 makeArgInout id_iot sz mclk mrst = do
   when doTraceClock $ traceM "makeArgInout\n"

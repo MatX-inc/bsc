@@ -581,7 +581,8 @@ aExpandDynSel stringOK findFn = mapAExprs expDynSel
              APrim arr_i arr_ty PrimBuildArray elem_es ->
                let idx_ty = ae_type idx_e
                    max_idx = case idx_ty of
-                               ATBit sz -> (2^sz) - 1
+                               ATBit (SizeConst sz) -> (2^sz) - 1
+                               ATBit _ -> genericLength elem_es - 1
                                _ -> internalError ("aExpandDynSel: idx_ty")
                    -- number of arms is the min of the elems and the max index
                    arms = zip [0..max_idx] elem_es
@@ -844,7 +845,7 @@ aPrim _ aid t PrimConcat es = return $ aConcat es
 
 -- optimize bitwise ops with constants
 -- (if optBitConst flag is True)
-aPrim bflags aid t@(ATBit n) p exs
+aPrim bflags aid t@(ATBit (SizeConst n)) p exs
     | ao_bitConst bflags &&  bitwise p && any isInt exs = do
     -- trace (ppReadable (APrim _ t p es)) $ return ()
     let mkBit (ASInt _ _ (IntLit { ilValue = i })) =
@@ -875,7 +876,7 @@ aPrim bflags aid dty PrimExtract [e@(ASInt _ _ c), h@(ASInt _ _ hi), l@(ASInt _ 
         vhi = ilValue hi
         vlo = ilValue lo
         finalSize = vhi - vlo + 1
-    return (ASInt aid (ATBit finalSize) (truncateInteger (ilValue c) vhi vlo))
+    return (ASInt aid (ATBit (SizeConst finalSize)) (truncateInteger (ilValue c) vhi vlo))
 
 -- Always do bool simplification for 1 bit opt!?
 aPrim _ aid t p es = return $ aPrimBool aid t p es
@@ -1046,7 +1047,7 @@ aFlattenConc cmuxo getf ex = flatConc ex
             APrim _ _ PrimConcat es -> concatMap flatConc es
             _ -> [e]
         flatConc (APrim _ _ PrimConcat es) = concatMap flatConc es
-        flatConc (ASInt _ (ATBit n) (IntLit { ilValue = i })) | cmuxo = integerToAExprs n i
+        flatConc (ASInt _ (ATBit (SizeConst n)) (IntLit { ilValue = i })) | cmuxo = integerToAExprs n i
         flatConc e = [e]
 
 
@@ -1075,7 +1076,7 @@ isASimple _             = False
 -- XXX this doesn't signal back whether we have made a complete case,
 -- XXX so that it can remove the default arm (or add a pragma)
 complete :: AType -> AExpr -> [(AExpr,AExpr)] -> [(AExpr,AExpr)]
-complete t@(ATBit nx) d cepairs =
+complete t@(ATBit (SizeConst nx)) d cepairs =
   let
       -- the maximum number of cases
       maxlen = 2^nx
@@ -1119,6 +1120,9 @@ complete t@(ATBit nx) d cepairs =
      else
          sortedPairs
 
+complete (ATBit _) _ cepairs =
+    let cmpIndex (x,_) (y,_) = cmpASInt x y
+    in  sortBy cmpIndex cepairs
 complete _ _ _ = internalError( "AOpt::complete" )
 
 rmDupsInCasePairs :: [(AExpr,AExpr)] ->  [(AExpr,AExpr)]
@@ -1259,23 +1263,15 @@ muxOpt bflgs aidx dty op esIn | ao_muxExpand bflgs  = do
     -- replaced with a reference to that signal).
     --
     ess <- mapM (mapM mkDefS) (map (aFlattenConc cmuxo getf) asIn)
+    ess' <- if all (all (isConcreteSize . aSize)) ess
+            then let szs = (remOrdDup . sort . concatMap (scanr (+) 0 . map aSizeInt)) ess
+                 in  return (map (reverse . splitEs 0 szs . reverse) ess)
+            else case ess of
+                   [] -> return []
+                   (es0:rest)
+                     | all (\es -> map aSize es == map aSize es0) rest -> return ess
+                     | otherwise -> mapM (\a -> (:[]) <$> mkDefS a) asIn
     let
-        -- Concatenations are broken apart to mux the separate pieces?
-        -- For Strings, the aSize function returns string size *8 which is bad in this case
-        -- szs represents all the break points for the various c exprs which are concats.
-        -- for each "es" in "ess" (corresponding to the pieces concatenated
-        -- to form the value for one branch),
-        --   * get the size of each piece
-        --   * produce the list of indices for the start of each piece:
-        --     given the lengths [1,2,3] produces [6,5,3,0]
-        -- from these lengths, one ordered list of all indices is made
-        -- (indicating each location where a concat on some branch starts)
-        --
-        szs = (remOrdDup . sort . concatMap (scanr (+) 0 . map aSize)) ess
-        -- XXX need to CSE expressions that are split
-    let
-        -- lists of the concatenated pieces for each branch of the mux
-        ess' = map (reverse . splitEs 0 szs . reverse) ess
          -- to turn mux of concats into a concat of muxes, transpose the
         -- list into lists for each mux containing the same segment from
         -- each value
@@ -1350,7 +1346,7 @@ splitEs :: Integer -> [Integer] -> [AExpr] -> [AExpr]
 splitEs offs (l:ss@(h:_)) (e:es) =
             let
                 -- the size of the next piece
-                s = aSize e
+                s = aSizeInt e
                 -- the distance from the current index to the next index
                 d = h - l
             in
@@ -1395,9 +1391,9 @@ aConcat exs =
                         [e', ASInt _ _ (IntLit _ _ hi'), ASInt _ _ (IntLit _ _ lo')]) :
                 as) | e == e' && lo == hi' + 1 =
                         joinPairs (aExtract e hi lo' : as)
-        joinPairs ((ASInt aid (ATBit s) (IntLit _ b i)) : (ASInt aid' (ATBit s') (IntLit _ _ i')) : as) =
+        joinPairs ((ASInt aid (ATBit (SizeConst s)) (IntLit _ b i)) : (ASInt aid' (ATBit (SizeConst s')) (IntLit _ _ i')) : as) =
                         -- XXX the literal has no width
-                        joinPairs ((ASInt aid (ATBit (s+s')) (IntLit Nothing b (i*2^s' + i'))) : as)
+                        joinPairs ((ASInt aid (ATBit (SizeConst (s+s'))) (IntLit Nothing b (i*2^s' + i'))) : as)
         joinPairs (a:as) = a : joinPairs as
         joinPairs [] = []
         flat (APrim _ _ PrimConcat es) = concatMap flat es
@@ -1407,32 +1403,32 @@ aConcat exs =
         es -> APrim defaultAId (ATBit (sum (map aSize es))) PrimConcat es
 
 aSelect :: AExpr -> Integer -> Integer -> AExpr
-aSelect (ASAny _ _) _ d = ASAny (ATBit d) Nothing
+aSelect (ASAny _ _) _ d = ASAny (ATBit (SizeConst d)) Nothing
 aSelect (ASInt aid _ (IntLit w b i)) offs d =
-        ASInt aid (ATBit d) (IntLit Nothing b (integerSelect d offs i))
+        ASInt aid (ATBit (SizeConst d)) (IntLit Nothing b (integerSelect d offs i))
 aSelect (APrim aid _ PrimExtract [e, (ASInt _ _ _), ASInt _ _ (IntLit _ _ lo)]) offs d =
-        APrim aid (ATBit d) PrimExtract [e, aNat (offs+d-1+lo), aNat (offs+lo)]
+        APrim aid (ATBit (SizeConst d)) PrimExtract [e, aNat (offs+d-1+lo), aNat (offs+lo)]
 aSelect e0@(APrim aid _ PrimConcat exs) offs dx =
     let (es', offs') = chopL (reverse exs) offs
-                        where chopL (e:es) o | s <= o = chopL es (o-s) where s = aSize e
+                        where chopL (e:es) o | s <= o = chopL es (o-s) where s = aSizeInt e
                               chopL es o = (es, o)
         es'' = chopH es' (dx+offs')
-                        where chopH (e:es) d | d > 0 = e : chopH es (d - aSize e)
+                        where chopH (e:es) d | d > 0 = e : chopH es (d - aSizeInt e)
                               chopH _ _ = []
     in  case reverse es'' of
         [] -> internalError ("aSelect PrimConcat " ++ ppReadable (e0, offs, dx))
         [e] -> aSelect e offs' dx
         ses ->        let ce = APrim aid (ATBit (sum (map aSize ses))) PrimConcat ses
-                in APrim aid (ATBit dx) PrimExtract [ce, aNat (offs'+dx-1), aNat offs']
+                in APrim aid (ATBit (SizeConst dx)) PrimExtract [ce, aNat (offs'+dx-1), aNat offs']
 
-aSelect e offs d = APrim defaultAId (ATBit d) PrimExtract [e, aNat (offs+d-1), aNat offs]
+aSelect e offs d = APrim defaultAId (ATBit (SizeConst d)) PrimExtract [e, aNat (offs+d-1), aNat offs]
 
 aExtract :: AExpr -> Integer -> Integer -> AExpr
-aExtract e hi 0 | hi+1 == aSize e = e
+aExtract e hi 0 | SizeConst (hi+1) == aSize e = e
 aExtract e hi lo =
         APrim
             defaultAId
-            (ATBit (hi-lo+1))
+            (ATBit (SizeConst (hi-lo+1)))
             PrimExtract [e, aNat hi, aNat lo]
 
 ------------

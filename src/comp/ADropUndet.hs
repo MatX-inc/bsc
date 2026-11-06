@@ -77,17 +77,24 @@ fixUndet errh flags defmap = g
 
 mkUnspec :: ErrorHandle -> String -> AType -> AExpr
 mkUnspec errh tgt t =
-    let sz = aSize t
-        val = case tgt of
-                "0" -> 0
-                "1" -> (2^sz) -1
-                "A" -> aaaa sz
-                _   -> -- this situation should have been rejected when
-                       -- we checked command-line flags
-                       bsErrorUnsafe errh
-                           [(noPosition, ENoOptUndetNoXZ tgt)]
-    in
-        ASInt defaultAId t (ilHex val)
+    case aSize t of
+      SizeConst sz ->
+        let val = case tgt of
+                    "0" -> 0
+                    "1" -> (2^sz) -1
+                    "A" -> aaaa sz
+                    _   -> -- this situation should have been rejected when
+                           -- we checked command-line flags
+                           bsErrorUnsafe errh
+                               [(noPosition, ENoOptUndetNoXZ tgt)]
+        in  ASInt defaultAId t (ilHex val)
+      _ ->
+        case tgt of
+          "0" -> ASInt defaultAId t (ilHex 0)
+          "1" -> ASAny t Nothing
+          "A" -> ASAny t Nothing
+          _   -> bsErrorUnsafe errh
+                     [(noPosition, ENoOptUndetNoXZ tgt)]
 
 
 canFixUndet :: Flags -> M.Map AId Bool -> AExpr -> Bool

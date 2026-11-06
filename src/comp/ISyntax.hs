@@ -188,7 +188,7 @@ data IAbstractInput =
         -- clock osc and maybe gate
         IAI_Clock Id (Maybe Id) |
         IAI_Reset Id |
-        IAI_Inout Id Integer
+        IAI_Inout Id IType
         -- room to add other types here, like:
         --   IAI_Struct [(Id, IType)]
     deriving (Eq, Show)

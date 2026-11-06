@@ -67,8 +67,8 @@ itInout_ = ITCon idInout_ (IKNum `IKFun` IKStar) tiInout
 itInoutT :: IType -> IType
 itInoutT t = ITAp itInout t
 
-itInout_N :: Integer -> IType
-itInout_N n = ITAp itInout_ (mkNumConT n)
+itInout_N :: IType -> IType
+itInout_N n = ITAp itInout_ n
 
 itPrimArray :: IType
 itPrimArray = ITCon idPrimArray (IKStar `IKFun` IKStar) tiPrimArray
@@ -140,11 +140,11 @@ isitActionValue (ITAp (ITCon i (IKFun IKStar IKStar) _) t) =
 isitActionValue _ = False
 
 isitInout_ :: IType -> Bool
-isitInout_ (ITAp (ITCon i (IKFun IKNum IKStar) _ ) (ITNum x)) = (i == idInout_)
+isitInout_ (ITAp (ITCon i (IKFun IKNum IKStar) _ ) _) = (i == idInout_)
 isitInout_ _ = False
 
-getInout_Size :: IType -> Integer
-getInout_Size (ITAp ic (ITNum n)) | ic == itInout_ = n
+getInout_Size :: IType -> IType
+getInout_Size (ITAp ic n) | ic == itInout_ = n
 getInout_Size t =
     internalError ("getInout_Size: type is not Inout_: " ++ ppReadable t)
 
@@ -716,7 +716,7 @@ icClock i c = ICon i (ICClock {iConType = itClock, iClock = c})
 icReset :: Id -> IReset a -> IExpr a
 icReset i r = ICon i (ICReset {iConType = itReset, iReset = r})
 
-icInout :: Id -> Integer -> IInout a -> IExpr a
+icInout :: Id -> IType -> IInout a -> IExpr a
 icInout i sz iot = ICon i (ICInout {iConType = itInout_N sz, iInout = iot})
 
 icSelClockOsc :: Id -> IClock a -> IExpr a

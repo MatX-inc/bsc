@@ -7,6 +7,7 @@ import ErrorUtil(internalError)
 import Prim
 import ASyntax
 import ASyntaxUtil
+import BackendNamingConventions(isRegInst)
 import Params(isConstAExpr)
 import Data.Maybe(isNothing)
 import qualified Data.Set as S
@@ -60,8 +61,14 @@ chkDupWires asp = tracePP "chkDupWires" dup_set (S.null dup_set)
 chkAVInst :: AVInst -> Bool
 chkAVInst aa =
   let
+      isConstOrConcatDef (APrim _ _ PrimConcat es) =
+          all (\x -> case x of ASDef {} -> True; _ -> isConstOrConcatDef x) es
+      isConstOrConcatDef e = isConstAExpr [] e
       chkParam e = let t = chkAExpr e
-                   in  isConstAExpr [] e && (isBit t || isString t || isReal t)
+                       ok = if isRegInst aa
+                            then isConstOrConcatDef e
+                            else isConstAExpr [] e
+                   in  ok && (isBit t || isString t || isReal t)
   in
     (tracePP "chkAVInst Params" aa $ all chkParam (getParams aa)) &&
     (tracePP "chkAVInst Ports"  aa $ all (isBitOrInout_ . chkAExpr) (getPorts aa)) &&
@@ -170,7 +177,7 @@ chkAExpr e@(APrim _ t PrimRem es) =
                 internalError ("chkAExpr * : " ++ ppReadable e)
 chkAExpr e@(APrim _ t PrimConcat es) =
         let ts = map chkAExpr es
-            getBit (ATBit n) = n
+            getBit (ATBit n) = normSizeExpr n
             getBit _ = internalError("ACheck checkAExpr.getBit" ++ (show e))
         in  if all isBit ts && isBit t && sum (map getBit ts) == getBit t
             then
@@ -186,7 +193,10 @@ chkAExpr e@(APrim _ t op es) | isRelOp op =
                 else internalError ("chkAExpr: relop " ++ ppReadable (e, t, ts))
 chkAExpr e@(APrim _ t op [v]) | op == PrimSignExt || op == PrimZeroExt =
         case (chkAExpr v, t) of
-        (ATBit n, ATBit m) | n <= m -> t
+        (ATBit n, ATBit m)
+          | SizeConst d <- normSizeExpr (m - n) ->
+              if d >= 0 then t else internalError ("chkAExpr: " ++ ppReadable (e, chkAExpr v, t))
+          | otherwise -> t
         _ -> internalError ("chkAExpr: " ++ ppReadable (e, chkAExpr v, t))
 chkAExpr e@(APrim _ t PrimIf (c:es)) =
     if all ((compatTypesWthStr t) . chkAExpr) es && chkAExpr c == aTBool
@@ -279,15 +289,19 @@ chkAExpr e@(AFunCall { ae_type = t, ae_args = es }) =
                 then t
                 else internalError ("chkAExpr: funcall " ++ ppReadable e)
 
+-- Symbolic two's-complement negative constant on a parameterized width
+-- (emitted with 1-extension in Verilog and masked to 2^w in SimExpand):
+chkAExpr (ASInt _ t@(ATBit sz) (IntLit _ _ i)) | i < 0 && not (isConcreteSize sz) = t
 chkAExpr (ASInt _ _ (IntLit _ _ i)) | i < 0 =
         internalError ("chkAExpr: negative constant: " ++ show i)
-chkAExpr (ASInt _ t@(ATBit sz) (IntLit _ _ i)) =
+chkAExpr (ASInt _ t@(ATBit (SizeConst sz)) (IntLit _ _ i)) =
         -- check that "log2(i+1) <= sz"
         -- or, in otherwords, "2^sz >  i"
         if (2^sz > i)
         then t
         else internalError ("chkAExpr: integer does not fit in size: " ++
                             ppReadable (i,sz))
+chkAExpr (ASInt _ t@(ATBit _) (IntLit _ _ _)) = t
 chkAExpr (ASInt _ t (IntLit _ _ i)) =
         internalError ("chkAExpr: non-bit integer: " ++ ppReadable (t,i))
 

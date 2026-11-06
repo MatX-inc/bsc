@@ -914,11 +914,11 @@ setUniqueNum n = do
 -- -------------------------
 
 convAType :: AType -> SType
-convAType (ATBit width) = bitNType width
+convAType (ATBit width) = bitNType (fromConcreteSize "LambdaCalc.convAType" width)
 convAType (ATString Nothing) = stringType
 convAType (ATString (Just width)) = stringType -- XXX ?
 convAType (ATReal) = realType
-convAType (ATArray sz t) = arrType sz (convAType t)
+convAType (ATArray sz t) = arrType (fromConcreteSize "LambdaCalc.convAType" sz) (convAType t)
 convAType t | (t == mkATBool) = boolType
 convAType (ATTuple ts) = internalError ("convAType: multi-output methods are not yet supported")
 convAType t@(ATAbstract {}) = internalError ("convAType: " ++ ppReadable t)
@@ -1147,7 +1147,7 @@ convAExpr (ASInt _ t (IntLit _ _ v)) | (t == mkATBool) =
     1 -> return trueCon
     _ -> internalError ("convAExpr: invalid Bool: " ++ ppReadable v)
 convAExpr (ASInt _ (ATBit width) (IntLit _ _ v)) =
-  return $ SBVLit width v
+  return $ SBVLit (fromConcreteSize "LambdaCalc.convAExpr" width) v
 convAExpr e@(ASInt {}) =
   internalError ("convAExpr: non-bit ASInt: " ++ ppReadable e)
 
@@ -1256,7 +1256,7 @@ convAPrim PrimArrayDynSelect t [arr, idx] = do
 convAPrim PrimBuildArray t as = do
   a_exprs <- mapM convAExpr as
   let sz = case t of
-             ATArray n _ -> n
+             ATArray n _ -> fromConcreteSize "LambdaCalc.convAPrim" n
              _ -> internalError ("convAPrim: PrimBuildArray: " ++ ppReadable t)
   let p_var = SVar (mk_homeless_id ("buildArray" ++ show sz))
   return (sApply p_var a_exprs)

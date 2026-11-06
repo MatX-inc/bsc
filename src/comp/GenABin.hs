@@ -34,7 +34,7 @@ import qualified Data.ByteString as B
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20260715-6"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261104-1"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -822,6 +822,8 @@ instance Bin VExpr where
     writeBytes (VEIf c t f)       = do putI 14; toBin c; toBin t; toBin f
     writeBytes (VEFctCall i es)   = do putI 15; toBin i; toBin es
     writeBytes (VEMacro m)        = do putI 16; toBin m;
+    writeBytes (VEWConstSym w b v) = do putI 17; toBin w; toBin b; toBin v
+    writeBytes (VEUnknownSym w s)  = do putI 18; toBin w; toBin s
     readBytes = do
       i <- getI
       case i of
@@ -845,6 +847,9 @@ instance Bin VExpr where
         14 -> do c <- fromBin; t <- fromBin; f <- fromBin; return (VEIf c t f)
         15 -> do i <- fromBin; es <- fromBin; return (VEFctCall i es)
         16 -> do m <- fromBin;  return (VEMacro m);
+        17 -> do w <- fromBin; b <- fromBin; v <- fromBin;
+                 return (VEWConstSym w b v)
+        18 -> do w <- fromBin; s <- fromBin; return (VEUnknownSym w s)
         n -> internalError $ "GenABin(VExpr).readBytes: " ++ show n
 
 instance Bin VTri where

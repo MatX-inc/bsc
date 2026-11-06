@@ -468,10 +468,6 @@ aPathsPreSched errh flags apkg = do
       internalError ("APaths.aPathsPreSched: " ++
                      "non-clk/rst inputs found as clk/rst in VWireInfo")
 
-  -- We don't handle size parameters yet
-  when (not (null size_ps)) $
-      internalError "APath.aPathsPreSched: size parameters not supported"
-
 
   -- ====================
   -- Determine the nodes of the graph
@@ -616,6 +612,7 @@ aPathsPreSched errh flags apkg = do
           [ (arg_id, PNTopArgument arg_id arg_num) |
                 (arg_num, (arg_id,_)) <- port_inputs ]
       module_arg_params =
+          [ (sp_id, PNTopArgument sp_id 0) | sp_id <- size_ps ] ++
           [ (arg_id, PNTopArgument arg_id arg_num) |
                 (arg_num, (arg_id,_)) <- param_inputs ]
 

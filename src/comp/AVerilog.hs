@@ -449,15 +449,19 @@ aVerilog errh flags pps aspack ffmap =
         args =        [ VAParameter (vId i) r v isStr
                      | (i, t) <- ps,
                        let (r, v, isStr) = case t of
-                                      ATBit sz -> (Just (VEConst (sz-1),
+                                      ATBit (SizeConst sz) -> (Just (VEConst (sz-1),
                                                          VEConst 0),
                                              VEWConst (mkVId "0") sz 2 0, False)
+                                      ATBit sz -> (Just (sizeToVExpr (sz-1),
+                                                         VEConst 0),
+                                             VEWConstSym (sizeToVExpr sz) 2 0, False)
                                       -- under -system-verilog-output, emit a SV
                                       -- `string` parameter so $display treats it
                                       -- as a string, not a packed bit-vector
                                       ATString _ -> (Nothing, VEString "",
                                                      systemVerilogOutput flags)
                                       ATReal -> (Nothing, VEReal 0.0, False)
+                                      ATAbstract c [] | c == i -> (Nothing, VEConst 1, False)
                                       _ -> (Nothing, VEConst 0, False) ] ++
                 [ VAInput (vId i) (vSize t)
                      | (i, t) <- is ] ++
@@ -1571,7 +1575,9 @@ mkInstInputDeclMaybe sztm in_port_id =
 isConstVE :: [Id] -> VExpr -> Bool
 isConstVE _  (VEConst {}) = True
 isConstVE _  (VEWConst {}) = True
+isConstVE ps (VEWConstSym w _ _) = isConstVE ps w
 isConstVE _  (VEUnknown {}) = True
+isConstVE ps (VEUnknownSym w _) = isConstVE ps w
 isConstVE _  (VEString {}) = True
 isConstVE _  (VEReal {}) = True
 isConstVE _  (VETriConst {}) = True
@@ -1589,6 +1595,7 @@ isConstVE ps (VEIf e1 e2 e3) = isConstVE ps e1 &&
 isConstVE ps (VEVar vid) = (vidToId vid `elem` ps)
 isConstVE ps (VEIndex vid idx) = isConstVE ps (VEVar vid) &&
                                  isConstVE ps idx
+isConstVE ps (VEFctCall (VId "$clog2" _ _) es) = all (isConstVE ps) es
 isConstVE _ (VEFctCall {}) = False
 isConstVE _ (VEMacro {}) = True
 
@@ -2015,7 +2022,9 @@ instance VUse VEventExpr where
 instance VUse VExpr where
     vuses (VEConst _) = []
     vuses (VEWConst _ _ _ _) = []
+    vuses (VEWConstSym w _ _) = vuses w
     vuses (VEUnknown _ _) = []
+    vuses (VEUnknownSym w _) = vuses w
     vuses (VEReal _) = []
     vuses (VEString _) = []
     vuses (VETriConst _) = []

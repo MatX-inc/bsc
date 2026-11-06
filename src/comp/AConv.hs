@@ -332,7 +332,10 @@ aAbstractInput :: IAbstractInput -> AAbstractInput
 aAbstractInput (IAI_Port (i,t)) = (AAI_Port (i, aTypeConv i t))
 aAbstractInput (IAI_Clock osc mgate) = (AAI_Clock osc mgate)
 aAbstractInput (IAI_Reset r) = (AAI_Reset r)
-aAbstractInput (IAI_Inout r n) = (AAI_Inout r n)
+aAbstractInput (IAI_Inout r n) =
+    case iTypeToSizeExpr n of
+      Just sz -> AAI_Inout r sz
+      Nothing -> internalError ("aAbstractInput: bad Inout_ size: " ++ ppReadable (r, n))
 
 aIface :: Flags -> IEFace a -> M AIFace
 aIface flags iface@(IEFace i its maybe_e maybe_rs wp fi) = do
@@ -417,7 +420,9 @@ aInout r = do
               -> let t = iGetType e
                      i_iot = lookupIfcInoutWire i (getVModInfo sv)
                  in  if (isitInout_ t)
-                     then return (mkIfcInoutN (getInout_Size t) vid i_iot)
+                     then case iTypeToSizeExpr (getInout_Size t) of
+                            Just sz -> return (mkIfcInoutN sz vid i_iot)
+                            Nothing -> internalError ("aInout: bad Inout_ size: " ++ ppReadable e)
                      else internalError ("aInout: sel not Inout_ type: " ++
                                          ppReadable e)
           e@(ICon _ (ICModPort t)) ->
@@ -487,26 +492,38 @@ aExpr exp@(IAps (ICon isel (ICPrim _ PrimSelect)) [ITNum i1, ITNum i2, ITNum i3]
         e' <- aSExpr e
         if i2 < i3 && i3-i2 >= i1
            then
-            return $ APrim isel (ATBit i1) PrimExtract [e', aNat (i1+i2-1), aNat i2]
+            return $ APrim isel (ATBit (fromInteger i1)) PrimExtract [e', aNat (i1+i2-1), aNat i2]
            else
             internalError ("aExpr select: bad bit selection\n" ++
                            ppReadable (getIdPosition isel) ++ ppReadable exp)
+aExpr exp@(IAps (ICon isel (ICPrim _ PrimSelect)) [t1, t2, _] [e])
+    | Just k <- iTypeToSizeExpr t1
+    , Just i <- iTypeToSizeExpr t2 = do
+        e' <- aSExpr e
+        let hi = sizeToAExpr (k + i - 1)
+            lo = sizeToAExpr i
+        return $ APrim isel (ATBit k) PrimExtract [e', hi, lo]
 
 aExpr (IAps (ICon i (ICPrim _ PrimExtract)) [ITNum i1, _, ITNum i2] [e,h,l]) = do
         let n = log2 i1
         errh <- gets errHandle
         es' <- mapM aSExpr [e, eTrunc errh n h, eTrunc errh n l]
-        return $ APrim i (ATBit i2) PrimExtract es'
+        return $ APrim i (ATBit (fromInteger i2)) PrimExtract es'
+aExpr (IAps (ICon i (ICPrim _ PrimExtract)) [_, _, t2] [e,h,l])
+    | Just sz2 <- iTypeToSizeExpr t2 = do
+        es' <- mapM aSExpr [e, h, l]
+        return $ APrim i (ATBit sz2) PrimExtract es'
 -- XXX we can remove PrimRange here, or keep it
 aExpr (IAps (ICon i (ICPrim _ PrimRange)) _ [_,_,e]) =
         aSExpr e
 -- XXX hack to get strings into the compiler (masquerade as integers or bits)
 aExpr (IAps (ICon i1 (ICPrim _ PrimIntegerToBit)) _ [IAps (ICon i2 (ICPrim _ PrimStringToInteger)) _ [s]]) =
         aExpr s
--- special cases for sign and zero extensions, since they depend on the type information
-aExpr e@(IAps (ICon i (ICPrim _ PrimSignExt)) [_,_,ITNum ii] es) = do
+-- special case for sign extension, since it depends on the type information
+aExpr e@(IAps (ICon i (ICPrim _ PrimSignExt)) [_,_,t] es)
+    | Just sz <- iTypeToSizeExpr t = do
         es' <- mapM aSExpr es
-        return $ APrim i (ATBit ii) PrimSignExt es'
+        return $ APrim i (ATBit sz) PrimSignExt es'
 aExpr e@(IAps (ICon i (ICPrim _ p)) ts es) | realPrim p = do
         es' <- mapM aSExpr (if p `elem` assocPrims then concatMap (joinOp p) es else es)
         --traceM (ppReadable (es, es'))
@@ -609,8 +626,7 @@ aExpr e@(ICon _ (ICReset { iConType = t, iReset = r})) =
       return (ASReset at ar)
 
 aExpr e@(ICon _ (ICInout { iConType = it, iInout = i})) | (isitInout_ it) = do
-  let sz = getInout_Size it
-      at = aTInout_ sz  -- aTypeConv e it
+  let at = aTypeConvE e it
   ai <- aInout i
   return (ASInout at ai)
 
@@ -750,8 +766,8 @@ aEDef i e ps = do
             return a
 
 aTypeConv :: Id -> IType -> AType
-aTypeConv _ (ITAp (ITCon b _ _) (ITNum n)) | b == idBit = ATBit n
-aTypeConv _ (ITAp (ITCon i _ _) (ITNum n)) | i == idInout_ = ATAbstract idInout_ [n]
+aTypeConv _ (ITAp (ITCon b _ _) t) | b == idBit, Just sz <- iTypeToSizeExpr t = ATBit sz
+aTypeConv _ (ITAp (ITCon i _ _) t) | i == idInout_, Just sz <- iTypeToSizeExpr t = ATAbstract idInout_ [sz]
 aTypeConv a (ITAp (ITCon r _ _) elem_ty) | r == idPrimArray =
     -- no way to get the size
     internalError("aTypeConv: array: " ++ ppReadable a)
@@ -773,8 +789,8 @@ aTypeConv _ t = abs t []
 -- A String expression can be used to determine the size of the ATString type.
 --
 aTypeConvE :: IExpr a -> IType -> AType
-aTypeConvE a (ITAp (ITCon b _ _) (ITNum n)) | b == idBit = ATBit n
-aTypeConvE a (ITAp (ITCon i _ _) (ITNum n)) | i == idInout_ = ATAbstract idInout_ [n]
+aTypeConvE a (ITAp (ITCon b _ _) t) | b == idBit, Just sz <- iTypeToSizeExpr t = ATBit sz
+aTypeConvE a (ITAp (ITCon i _ _) t) | i == idInout_, Just sz <- iTypeToSizeExpr t = ATAbstract idInout_ [sz]
 aTypeConvE a (ITAp (ITCon r _ _) elem_ty) | r == idPrimArray =
   -- XXX we could examine the expression and find the type
   -- XXX but this func isn't used to get the type of PrimBuildArray
@@ -870,13 +886,13 @@ primType PrimConcat _ es = ATBit (sum (map (unbit . aType) es))
     where unbit (ATBit width) = width
           unbit _ = internalError "concatenation of abstract types in AConv.primType"
 primType PrimMul ts _ = ATBit (getNum (last ts))
-    where getNum (ITNum n) = n
+    where getNum t | Just sz <- iTypeToSizeExpr t = sz
           getNum _ = internalError "multiplication of abstract types in AConv.primType"
 primType PrimQuot ts _ = ATBit (getNum (head ts))
-    where getNum (ITNum n) = n
+    where getNum t | Just sz <- iTypeToSizeExpr t = sz
           getNum _ = internalError "quotient of abstract types in AConv.primType"
 primType PrimRem ts _ = ATBit (getNum (last ts))
-    where getNum (ITNum n) = n
+    where getNum t | Just sz <- iTypeToSizeExpr t = sz
           getNum _ = internalError "remainder of abstract types in AConv.primType"
 primType p _ _ | p `elem` (primBools ++ primCmps) = ATBit 1
 primType p _ (e:_) | p `elem` primAriths || p == PrimRange = aType e
@@ -1067,12 +1083,11 @@ trId m i =
 -----
 
 -- XXX should insert runtime-error code when we truncate the indices on PrimExtract
-eTrunc :: ErrorHandle -> ASize -> IExpr a -> IExpr a
+eTrunc :: ErrorHandle -> Integer -> IExpr a -> IExpr a
 eTrunc errh n e =
-    if (k > n)
-    then let e' = IAps (icSelect noPosition) [ITNum n, ITNum 0, ITNum k] [e]
-         in  fst (iTransExpr errh e')
-    else e
-  where k = case aTypeConvE e (iGetType e) of
-              ATBit sz -> sz
-              _ -> internalError "AConv.eTrunc: unexpected type"
+    case aTypeConvE e (iGetType e) of
+      ATBit (SizeConst k) | k > n ->
+          let e' = IAps (icSelect noPosition) [ITNum n, ITNum 0, ITNum k] [e]
+          in  fst (iTransExpr errh e')
+      ATBit _ -> e
+      _ -> internalError "AConv.eTrunc: unexpected type"

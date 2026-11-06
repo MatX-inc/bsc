@@ -602,7 +602,7 @@ convertSchedules flags creation_time top_id def_clk def_rst sb_map ff_map
 
 -- Some literals cannot be written inline in the generated C, so they are
 -- declared as separate variables at the beginning of the file.
-mkLiteralDecls :: [(ASize,Integer)] -> [CCFragment]
+mkLiteralDecls :: [(Integer,Integer)] -> [CCFragment]
 mkLiteralDecls [] = [blankLines 0]
 mkLiteralDecls lits = [comment "Literal declarations" (blankLines 0)]
                       ++ (concatMap mkLitDecl lits)

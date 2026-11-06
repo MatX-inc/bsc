@@ -77,17 +77,17 @@ unused = internalError "size parameter used unexpectedly"
 -- Get the list of size parameters needed to evaluate a primitive.
 -- These must match the patterns in Prim.hs
 getOpSizes :: PrimOp -> AExpr -> [Integer]
-getOpSizes PrimMul     e = [unused, unused, aSize e]
-getOpSizes PrimQuot    e = [aSize e, unused]
-getOpSizes PrimRem     e = [unused, aSize e]
-getOpSizes PrimSL      e = [aSize e, unused]
-getOpSizes PrimSRL     e = [aSize e, unused]
-getOpSizes PrimSRA     e = [aSize e, unused]
+getOpSizes PrimMul     e = [unused, unused, aSizeInt e]
+getOpSizes PrimQuot    e = [aSizeInt e, unused]
+getOpSizes PrimRem     e = [unused, aSizeInt e]
+getOpSizes PrimSL      e = [aSizeInt e, unused]
+getOpSizes PrimSRL     e = [aSizeInt e, unused]
+getOpSizes PrimSRA     e = [aSizeInt e, unused]
 getOpSizes PrimZeroExt _ = [unused, unused, unused]
-getOpSizes PrimSignExt e = [unused, aSize ((ae_args e)!!0), aSize e]
-getOpSizes PrimTrunc   e = [unused, aSize e, unused]
-getOpSizes PrimExtract e = [aSize ((ae_args e)!!0), unused, aSize e]
-getOpSizes PrimConcat  e = [aSize ((ae_args e)!!0), aSize ((ae_args e)!!1), aSize e]
+getOpSizes PrimSignExt e = [unused, aSizeInt ((ae_args e)!!0), aSizeInt e]
+getOpSizes PrimTrunc   e = [unused, aSizeInt e, unused]
+getOpSizes PrimExtract e = [aSizeInt ((ae_args e)!!0), unused, aSizeInt e]
+getOpSizes PrimConcat  e = [aSizeInt ((ae_args e)!!0), aSizeInt ((ae_args e)!!1), aSizeInt e]
 getOpSizes PrimSelect  e = internalError $ "APrims: PrimSelect should not occur"
-getOpSizes _           e = [aSize e]  -- by default just give the result size
+getOpSizes _           e = [aSizeInt e]  -- by default just give the result size
 

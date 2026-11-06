@@ -1477,7 +1477,7 @@ getAExprValue smap vmap pfx pfx_noroot defmap instmap at e =
         exprfn = lookupAExpr pfx defmap
         methfn = lookupMeth pfx_noroot instmap
     in case (aType e) of
-         (ATBit n) -> case (evalAExprToInteger valfn exprfn methfn e) of
+         (ATBit (SizeConst n)) -> case (evalAExprToInteger valfn exprfn methfn e) of
                         (Right x)  -> Right $ to_VCDValue x n
                         (Left msg) -> Left msg
          _ -> Left "Cannot reconstruct non-bit types"

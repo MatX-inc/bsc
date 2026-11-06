@@ -77,10 +77,10 @@ mkRegInstInfo errh flags avi =
         reg_id = vId (mkQOUT avi)
         din_id = vId (mkDIN avi)
         en_id = vId (mkEN avi)
-        reg_size = case (getRegWidth avi) of
-                       (ASInt _ _ (IntLit _ _ n)) -> vSize (ATBit n)
-                       -- the parameter expression should be constant
-                       e -> internalError ("mkRegInstInfo: " ++ ppReadable e)
+        reg_size = case aExprToSizeExpr (getRegWidth avi) of
+                       Just n -> vSize (ATBit n)
+                       -- the parameter expression should be constant or size expression
+                       Nothing -> internalError ("mkRegInstInfo: " ++ ppReadable (getRegWidth avi))
         en_size = Nothing  -- no range means one bit
         -- find the special inputs (note that RegUN doesn't have a RST)
         clk_expr = vExpr vco (getRegClock errh avi)
@@ -163,13 +163,19 @@ mkInitialAssignments flags avis =
                 -- XXX we pass in an empty rewiring map because registers have no inouts
                 (_, vminst, _) = vState flags M.empty avi
                 qout = VLId (VId (getIdString id) id (Just vminst))
-                val = case (getRegWidth avi) of
-                        ASInt { ae_ival = IntLit { ilValue = width } }
+                val = case aExprToSizeExpr (getRegWidth avi) of
+                        Just (SizeConst width)
                           -> let val = aaaa width
                                  -- XXX use the ASInt ae_objid?
                                  id = mkVId (itos val)
                              in  VEWConst id width 16 val
-                        e -> internalError ("mkInit: " ++ ppDebug e)
+                        Just sz
+                          -> let w = sizeToVExpr sz
+                             in  VEConcat [VERepeat (mkVEOp w VRem (VEConst 2))
+                                                    (VEWConst (mkVId "0") 1 2 0),
+                                           VERepeat (mkVEOp w VQuot (VEConst 2))
+                                                    (VEWConst (mkVId "2") 2 2 2)]
+                        Nothing -> internalError ("mkInit: " ++ ppDebug (getRegWidth avi))
             in  VAssign qout val
 
         -- use VSeq (not vSeq) so that the initial block always has

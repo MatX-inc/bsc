@@ -1063,7 +1063,7 @@ iExpandModuleResetArgs i [] e = return ([], e)
 
 iExpandModuleInoutArgs :: Id -> (HClock, HReset) -> [ArgState] -> HExpr
                    -> G ([ArgState], HExpr)
-iExpandModuleInoutArgs i clkRst ((Right (iot_id,t@(ITAp tc (ITNum sz)))):as) e
+iExpandModuleInoutArgs i clkRst ((Right (iot_id,t@(ITAp tc sz))):as) e
           | tc == itInout_ = do
   -- find the associated clock/reset for the port, from any attributes
   (mclk_name, mrst_name) <- findModArgClockReset clkRst iot_id
@@ -1072,9 +1072,6 @@ iExpandModuleInoutArgs i clkRst ((Right (iot_id,t@(ITAp tc (ITNum sz)))):as) e
   let e' = eSubst iot_id (icInout iot_id sz inout) e
   (as', e'') <- iExpandModuleInoutArgs i clkRst as e'
   return (a':as', e'')
-iExpandModuleInoutArgs i clkRst ((Right (iot_id,(ITAp tc _)):as)) e
-          | tc == itInout_ = do
-                             internalError("IexpandmoduleInoutArgs")
 iExpandModuleInoutArgs i clkRst (a:as) e = do
   (as', e') <- iExpandModuleInoutArgs i clkRst as e
   return (a:as', e')
@@ -3900,7 +3897,7 @@ conAp' i (ICPrim _ PrimInoutUncast) _ [T sz, T t, E inout] = do
     (ICon i ci@(ICInout {})) -> return $ pExpr (ICon i ci { iConType = itInoutT t })
     _ -> internalError "PrimInoutUncast"
 
-conAp' i (ICPrim _ PrimInoutCast) _ [T t, T (ITNum sz), E inout] = do
+conAp' i (ICPrim _ PrimInoutCast) _ [T t, T sz, E inout] = do
   (_,e) <- evalInout inout
   case e of
     (ICon i ci@(ICInout {})) -> return $ pExpr (ICon i ci { iConType = itInout_N sz })

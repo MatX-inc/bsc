@@ -31,7 +31,7 @@ data IOIO = INPUT | OUTPUT | INOUT deriving (Eq)
 instance NFData IOIO where rnf x = seq x ()
 
 --   (name, input(T)/output(F), width, properties)
-newtype VIOProps = VIOProps [(AId, IOIO, Integer, [VeriPortProp])]
+newtype VIOProps = VIOProps [(AId, IOIO, ASize, [VeriPortProp])]
         deriving (Eq)
 
 instance NFData VIOProps where
@@ -44,7 +44,7 @@ instance PPrint VIOProps where
         where pp (i, io, sz, ps) =
                 let s = getIdString i
                     si = s ++ replicate (29 - length s) ' '
-                    n = itos sz
+                    n = ppString sz
                     sn = replicate (5 - length n) ' ' ++ n
                     iotxt = case (io) of
                               INPUT -> " I"
@@ -71,15 +71,15 @@ getIOProps flags ppp@(ASPackage _ _ _ os is ios vs _ ds io_ds fs _ _ _) =
                 where nonZero (_, _, sz, _) = sz /= 0
 
         -- construct VIOProps for an output
-        getOInfo :: (AId,AType) -> (AId, IOIO, Integer, [VeriPortProp])
+        getOInfo :: (AId,AType) -> (AId, IOIO, ASize, [VeriPortProp])
         getOInfo (i, t) = (i, OUTPUT, size t, getOProp i)
 
         -- construct VIOProps for an input
-        getIInfo :: (AId,AType) -> (AId, IOIO, Integer, [VeriPortProp])
+        getIInfo :: (AId,AType) -> (AId, IOIO, ASize, [VeriPortProp])
         getIInfo (i, t) = (i, INPUT, size t, getIProp i)
 
         -- construct VIOProps for an inout
-        getIOInfo :: (AId,AType) -> (AId, IOIO, Integer, [VeriPortProp])
+        getIOInfo :: (AId,AType) -> (AId, IOIO, ASize, [VeriPortProp])
         getIOInfo (i, t) = (i, INOUT, size t, getIOProp i)
 
         -- lookup the definition for an id
@@ -405,7 +405,7 @@ noUse i (ASDef _ i')         = i /= i'
 noUse _ _                    = True
 
 -- compute the size of a port
-size :: AType -> Integer
+size :: AType -> ASize
 size (ATBit n) = n
 size (ATAbstract a _) | a == idPrimAction = 1
 size (ATAbstract a [n]) | a == idInout_ = n

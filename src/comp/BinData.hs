@@ -1008,6 +1008,35 @@ instance Bin VName where
     readBytes = do { s <- fromBin; return (VName s) }
 
 -- ----------
+-- Bin ASize
+
+instance Bin ASize where
+    writeBytes (SizeConst n)  = do putI 0; toBin n
+    writeBytes (SizeVar v)    = do putI 1; toBin v
+    writeBytes (SizeAdd a b)  = do putI 2; toBin a; toBin b
+    writeBytes (SizeSub a b)  = do putI 3; toBin a; toBin b
+    writeBytes (SizeMul a b)  = do putI 4; toBin a; toBin b
+    writeBytes (SizeDiv a b)  = do putI 5; toBin a; toBin b
+    writeBytes (SizeLog2 a)   = do putI 6; toBin a
+    writeBytes (SizeExp2 a)   = do putI 7; toBin a
+    writeBytes (SizeMax a b)  = do putI 8; toBin a; toBin b
+    writeBytes (SizeMin a b)  = do putI 9; toBin a; toBin b
+    readBytes = do
+        i <- getI
+        case i of
+          0 -> do n <- fromBin; return (SizeConst n)
+          1 -> do v <- fromBin; return (SizeVar v)
+          2 -> do a <- fromBin; b <- fromBin; return (SizeAdd a b)
+          3 -> do a <- fromBin; b <- fromBin; return (SizeSub a b)
+          4 -> do a <- fromBin; b <- fromBin; return (SizeMul a b)
+          5 -> do a <- fromBin; b <- fromBin; return (SizeDiv a b)
+          6 -> do a <- fromBin; return (SizeLog2 a)
+          7 -> do a <- fromBin; return (SizeExp2 a)
+          8 -> do a <- fromBin; b <- fromBin; return (SizeMax a b)
+          9 -> do a <- fromBin; b <- fromBin; return (SizeMin a b)
+          n -> internalError $ "BinData.Bin(ASize).readBytes: " ++ show n
+
+-- ----------
 -- Bin AType
 
 instance Bin AType where

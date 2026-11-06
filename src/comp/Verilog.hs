@@ -57,7 +57,7 @@ import Eval
 import PPrint
 import Fixity(Fixity(..))
 import IntegerUtil(integerFormat, aaaa)
-import Util(itos, to_quoted_string)
+import Util(itos, log2, to_quoted_string)
 import ErrorUtil(internalError)
 import Id
 import Position
@@ -847,6 +847,9 @@ data VExpr
         | VEIf VExpr VExpr VExpr
         | VEFctCall VId [VExpr]
         | VEMacro String
+        -- Width-parameterized constant and unspecified value (for symbolic ASize):
+        | VEWConstSym VExpr Integer Integer -- symbolic_width base value
+        | VEUnknownSym VExpr String
         deriving (Eq, Ord, Show, Generic.Data, Generic.Typeable)
 
 -- vVar :: String -> VExpr
@@ -856,6 +859,26 @@ instance PPrint VExpr where
         pPrint d p (VEConst i) = text (itos i)
         pPrint d p (VEReal r) = text (show r)
         pPrint d p v@(VEWConst _ w b i) = text (createVEWConstString w b i)
+        pPrint d p (VEWConstSym w _ 0) =
+            pPrint d p (VERepeat w (VEWConst (mkVId "0") 1 2 0))
+        pPrint d p (VEWConstSym w _ (-1)) =
+            pPrint d p (VERepeat w (VEWConst (mkVId "1") 1 2 1))
+        pPrint d p (VEWConstSym w _ 1) =
+            let z = VERepeat (subSymWidth w 1) (VEWConst (mkVId "0") 1 2 0)
+                one = VEWConst (mkVId "1") 1 2 1
+            in pPrint d p (VEConcat [z, one])
+        pPrint d p (VEWConstSym w b i)
+          | i < -1 =
+            let k = max 1 (log2 (-i))
+                m = i `mod` (2 ^ k)
+                o = VERepeat (subSymWidth w k) (VEWConst (mkVId "1") 1 2 1)
+                c = VEWConst (mkVId (itos m)) k b m
+            in pPrint d p (VEConcat [o, c])
+          | otherwise =
+            let k = max 1 (log2 (i + 1))
+                z = VERepeat (subSymWidth w k) (VEWConst (mkVId "0") 1 2 0)
+                c = VEWConst (mkVId (itos i)) k b i
+            in pPrint d p (VEConcat [z, c])
 
 --        pPrint d p (VEUnknown w) = text (itos w ++"'b0/*x*/")
         pPrint d p (VEUnknown w val) = pPrint d p v <> text " /* unspecified value */ "
@@ -869,6 +892,17 @@ instance PPrint VExpr where
                         "X" ->  VETriConst (replicate wint Vx)
                         "Z" ->  VETriConst (replicate wint Vz)
                         _   ->  internalError( "Verilog::pPrint: " ++ ppReadable val)
+        pPrint d p (VEUnknownSym w val) = pPrint d p v <> text " /* unspecified value */ "
+            where v = case val of
+                        "A" -> VEConcat [VERepeat (mkVEOp w VRem (VEConst 2))
+                                                  (VEWConst (mkVId "0") 1 2 0),
+                                         VERepeat (mkVEOp w VQuot (VEConst 2))
+                                                  (VEWConst (mkVId "2") 2 2 2)]
+                        "0" -> VERepeat w (VEWConst (mkVId "0") 1 2 0)
+                        "1" -> VERepeat w (VETriConst [V1])
+                        "X" -> VERepeat w (VETriConst [Vx])
+                        "Z" -> VERepeat w (VETriConst [Vz])
+                        _   -> internalError ("Verilog::pPrint VEUnknownSym: " ++ ppReadable val)
         pPrint d p (VEString s) = text $ to_quoted_string s
         pPrint d p (VEMacro s)  = text ("`" ++ s)
         pPrint d p (VETriConst ts) = text (itos (length ts) ++ "'b") <> foldr (<>) (text "") (map (pPrint d 0) ts)
@@ -909,6 +943,8 @@ instance NFData VExpr where
     rnf (VEIf e1 e2 e3) = rnf3 e1 e2 e3
     rnf (VEFctCall vid exprs) = rnf2 vid exprs
     rnf (VEMacro s) = rnf s
+    rnf (VEWConstSym w b i) = rnf3 w b i
+    rnf (VEUnknownSym w val) = rnf2 w val
 
 createVEWConstString :: Integer -> Integer -> Integer -> String
 createVEWConstString width base 0 =
@@ -1219,6 +1255,16 @@ commonDeclTypes _ _                                     = False
 
 mkVEOp :: VExpr -> VOp -> VExpr -> VExpr
 mkVEOp vexpr_0 vop vexpr_1 = VEOp defaultVId vexpr_0 vop vexpr_1
+
+subSymWidth :: VExpr -> Integer -> VExpr
+subSymWidth w 0 = w
+subSymWidth (VEOp _ e VAdd (VEConst c)) k
+    | c == k = e
+    | c > k  = mkVEOp e VAdd (VEConst (c - k))
+    | otherwise = mkVEOp e VSub (VEConst (k - c))
+subSymWidth (VEOp _ e VSub (VEConst c)) k =
+    mkVEOp e VSub (VEConst (c + k))
+subSymWidth w k = mkVEOp w VSub (VEConst k)
 
 mkVEUnOp :: VOp -> VExpr -> VExpr
 mkVEUnOp vop vexpr = VEUnOp defaultVId vop vexpr
