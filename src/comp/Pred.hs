@@ -16,6 +16,7 @@ import Prelude hiding ((<>))
 #endif
 
 import Data.List(union, genericSplitAt, genericLength)
+import Data.Maybe(fromMaybe, isNothing)
 import Eval
 import Error(ErrMsg(..), internalError, bsErrorReallyUnsafe)
 import Position
@@ -53,7 +54,15 @@ instance PVPrint t => PVPrint (Qual t) where
     pvPrint d p (ps :=> t) = pvparen (p>0) $ pvPrint d 0 t <+> pvPreds d (map removePredPositions ps)
 
 instance Types t => Types (Qual t) where
-    apSub s (ps :=> t) = apSub s ps :=> apSub s t
+    apSub s q = fromMaybe q (apSubM s q)
+    -- local changed-detection: contexts are short, so forcing the
+    -- element results here is cheap and buys whole-value sharing
+    apSubM s (ps :=> t) =
+        let mps = map (apSubM s) ps
+            mt  = apSubM s t
+        in  if all isNothing mps && isNothing mt
+            then Nothing
+            else Just (zipWith fromMaybe ps mps :=> fromMaybe t mt)
     tv      (ps :=> t) = tv ps `union` tv t
 
 instance (NFData a) => NFData (Qual a) where
@@ -167,7 +176,15 @@ instance PVPrint Pred where
     pvPrint d p (IsIn c ts) = pvparen (p>0) $ pvpId d (typeclassId $ name c) <> pvParameterTypes d ts
 
 instance Types Pred where
-    apSub s (IsIn c ts) = IsIn c $ expandSyn <$> apSub s ts
+    apSub s p = fromMaybe p (apSubM s p)
+    -- expandSyn re-normalizes only when the substitution actually
+    -- introduced new structure; an untouched pred is already expanded
+    -- (preds are synonym-expanded at construction)
+    apSubM s (IsIn c ts) =
+        let mts = map (apSubM s) ts
+        in  if all isNothing mts
+            then Nothing
+            else Just (IsIn c (expandSyn <$> zipWith fromMaybe ts mts))
     tv      (IsIn c ts) = tv ts
 
 instance NFData Pred where
@@ -265,7 +282,17 @@ instance NFData Inst where
     rnf (Inst x1 x2 x3 x4) = rnf4 x1 x2 x3 x4
 
 mkInst :: CExpr -> Qual Pred -> Maybe Id -> Inst
-mkInst e i pkg = Inst e (tv i) i pkg
+-- The instance HEAD is synonym-expanded at construction: instance
+-- matching is structural, so a synonym in the head would never match
+-- an expanded solver predicate.  (Previously this was masked by apSub
+-- incidentally re-expanding every pred it touched.)  Context preds
+-- need no expansion here -- subgoals are minted through mkVPred*,
+-- which normalizes.
+mkInst e (ps :=> p) pkg = let i' = ps :=> expandSynPred p
+                          in  Inst e (tv i') i' pkg
+
+expandSynPred :: Pred -> Pred
+expandSynPred (IsIn c ts) = IsIn c (map expandSyn ts)
 
 instance Types Inst where
     apSub s (Inst e _ i pkg) = Inst (apSub s e) [] (apSub s i) pkg
