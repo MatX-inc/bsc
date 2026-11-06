@@ -214,7 +214,7 @@ internDumpFile = unsafePerformIO (newIORef Nothing)
 hmain :: [String] -> IO ()
 hmain args = do
     pprog <- getProgName
-    cdir <- getEnvDef "BLUESPECDIR" dfltBluespecDir
+    cdir <- getBluespecDir
     bscopts <- getEnvDef "BSC_OPTIONS" ""
     let args' = words bscopts ++ args
     -- reconstruct original command line (modulo whitespace)
