@@ -1,0 +1,8 @@
+init sizes1=0c061b0304080903 child1=0903020d
+init sizes2=0e06280304100a04 child2=0a04020e
+init sizes3=120e200804041002 child3=10020114
+init leaf1=09030204 max1=9 min1=1
+init leaf2=09030402 max2=9 min2=1
+step1 sum=d2d diff=25 prod=00001aa quot=3 log=4 exp=20 max=9 min=5 child=09030203
+step2 sum=2aa3 diff=2a prod=00000002ad quot=3 log=4 exp=0008 max=10 min=3 child=0a040203
+step3 sum=2fbbe diff=3eef prod=0000bef1 quot=8 log=4 exp=4 max=16 min=2 child=10020108

@@ -1,0 +1,4 @@
+init f1 idx=4 mask=0100 wider=12 oh=01 stretch=21
+init f2 idx=4 mask=0100 wider=13 oh=0001 stretch=22
+load f1 idx=9 mask=1111 wider=3aa oh=20 stretch=1a53a5
+load f2 idx=10 mask=1111 wider=12bf oh=0200 stretch=16d2b6

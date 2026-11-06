@@ -1342,6 +1342,23 @@ genModuleC errh flags dumpnames time0 toplevel abis =
        sim_system <- simExpand errh flags toplevel abis
        time <- dump errh flags time0 DFsimExpand dumpnames sim_system
 
+       -- When invoked in -c mode on an uninstantiated size-parameterized
+       -- template .ba, simExpand returns an empty package map; skip codegen
+       -- because concrete specializations are generated when linking the
+       -- enclosing design.
+       if (M.null (ssys_packages sim_system))
+       then return (time, [], [], time)
+       else genModuleC' errh flags dumpnames time prefix sim_system
+
+genModuleC' :: ErrorHandle
+            -> Flags
+            -> DumpNames
+            -> TimeInfo
+            -> String
+            -> SimSystem
+            -> IO (TimeInfo, [String], [String], TimeInfo)
+genModuleC' errh flags dumpnames time prefix sim_system =
+    do
        -- extract file dependency structure and determine if any
        -- existing bluesim packages can reuse existing object files
        -- (in -c mode, all files are always regenerated)

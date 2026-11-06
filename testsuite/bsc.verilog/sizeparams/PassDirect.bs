@@ -1,0 +1,29 @@
+package PassDirect(sysPassDirect) where
+
+import Pass
+
+{-# verilog sysPassDirect #-}
+sysPassDirect :: Module Empty
+sysPassDirect =
+  module
+    r1  :: Reg (Bit 1)  <- mkPass
+    r8  :: Reg (Bit 8)  <- mkPass
+    r17 :: Reg (Bit 17) <- mkPass
+    r32 :: Reg (Bit 32) <- mkPass
+    r64 :: Reg (Bit 64) <- mkPass
+
+    cycle :: Reg (Bit 8) <- mkReg 0
+
+    rules
+      "step": when True ==> do
+        cycle := cycle + 1
+        r1  := truncate cycle
+        r8  := cycle + 0x10
+        r17 := zeroExtend cycle + 0x10000
+        r32 := zeroExtend cycle + 0xCAFE0000
+        r64 := zeroExtend cycle + 0x0123456789ABCDEF
+        if cycle > 0 then
+          $display "cycle=%0d r1=%0d r8=%0h r17=%0h r32=%0h r64=%0h" cycle r1 r8 r17 r32 r64
+        else
+          noAction
+        if cycle == 4 then $finish 0 else noAction

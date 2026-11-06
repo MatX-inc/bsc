@@ -1,0 +1,4 @@
+cycle=0 p12=(4,51) dup12=44 p24=(8,1001) dup24=808
+cycle=1 p12=(5,21) dup12=55 p24=(3c,1) dup24=3c3c
+cycle=2 p12=(5,20) dup12=55 p24=(3c,0) dup24=3c3c
+cycle=3 p12=(5,23) dup12=55 p24=(3c,3) dup24=3c3c

@@ -1,0 +1,10 @@
+package BadPolyIfc(mkBadPolyIfc) where
+
+{-# verilog mkBadPolyIfc #-}
+mkBadPolyIfc :: (Bits a sa) => Module (Reg a)
+mkBadPolyIfc =
+  module
+    r :: Reg a <- mkRegU
+    interface
+      _write x = r._write x
+      _read = r._read

@@ -1,0 +1,15 @@
+package BadEvalLoop(mkBadEvalLoop) where
+
+{-# verilog mkBadEvalLoop #-}
+mkBadEvalLoop :: Module (Reg (Bit w))
+mkBadEvalLoop =
+  module
+    r :: Reg (Bit w) <- mkReg 0
+    _ <- if valueOf w > 8 then
+           do extra :: Reg (Bit w) <- mkReg 1
+              return ()
+         else
+           return ()
+    interface
+      _write x = r := x
+      _read = r

@@ -1,6 +1,6 @@
 module ABinUtil (
                  HierMap, InstModMap, ABinMap,
-                 getABIHierarchy, assertNoSchedErr,
+                 getABIHierarchy, hierMapToInstModMap, assertNoSchedErr,
                  readAndCheckABin,
                  readAndCheckABinPath,
                  readAndCheckABinPathCatch,
@@ -240,7 +240,6 @@ followABIHierarchy mparent curmod_name = do
 
 followABMIHierarchy :: APackage -> M ()
 followABMIHierarchy curpkg = do
-
     -- ----------
     -- get the instantiated module instances
 

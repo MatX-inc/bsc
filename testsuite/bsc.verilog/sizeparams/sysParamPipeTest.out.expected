@@ -1,0 +1,6 @@
+cycle=0 p8=0 p16=0 dp8=0 dpw=80 w8=8 w16=16 inc=1 sw_b=0 sw_a=0
+cycle=1 p8=8 p16=16 dp8=80 dpw=80 w8=8 w16=16 inc=2 sw_b=16 sw_a=1
+cycle=2 p8=9 p16=24 dp8=82 dpw=80 w8=8 w16=16 inc=3 sw_b=24 sw_a=2
+cycle=3 p8=10 p16=25 dp8=84 dpw=80 w8=8 w16=16 inc=4 sw_b=25 sw_a=3
+cycle=4 p8=11 p16=26 dp8=86 dpw=80 w8=8 w16=16 inc=5 sw_b=26 sw_a=4
+cycle=5 p8=12 p16=27 dp8=88 dpw=80 w8=8 w16=16 inc=6 sw_b=27 sw_a=5
