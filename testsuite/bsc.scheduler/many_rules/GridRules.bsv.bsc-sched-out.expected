@@ -5654,4 +5654,5 @@ Logical execution order: flow_n,
 
 ===========================================
 Verilog file created: mkGridRules.v
+Elaborated module file created: mkGridRules.ba
 All packages are up to date.
