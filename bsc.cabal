@@ -384,3 +384,8 @@ executable vcdcheck
   import: common_exes
   ghc-options: -main-is Main_vcdcheck
   main-is: vcdcheck.hs
+
+executable tconcheck
+  import: common_exes
+  ghc-options: -main-is Main_tconcheck
+  main-is: tconcheck.hs
