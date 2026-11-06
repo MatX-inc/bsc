@@ -135,7 +135,7 @@ FST_LIB_OBJS = fstapi.o fastlz.o lz4.o
 FST_LIB_CFLAGS = -Wall -g -std=gnu99 \
                  -D_FILE_OFFSET_BITS=64 \
                  -I../libfst_config \
-                 -fPIC $(PROF) $(COPT)
+                 -fPIC $(PROF) $(COPT) $(PREFIX_MAP)
 
 LIBS = $(LIB_PRIM) $(LIB_KERNEL)
 
