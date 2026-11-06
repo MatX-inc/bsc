@@ -1,5 +1,6 @@
 module StaleUtils ( getModTime, allFreshVs ) where
 
+import Warmup ()
 import System.Posix.Files
 import System.Posix.Types(EpochTime)
 
