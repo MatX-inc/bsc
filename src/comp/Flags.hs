@@ -51,6 +51,13 @@ data Flags = Flags {
         dumpFormats :: [String], -- waveform dump formats compiled into the sim
                                  -- (subset of vcd/fst/fsdb; [] means none)
         dumps :: [(DumpFlag, Maybe FilePath)], -- dump to file or stdout
+        -- -remap-path-prefix FROM=TO: obsolete, accepted with a warning and
+        -- ignored. Paths are stored relative to the build directory
+        -- unconditionally (see FileNameUtil.createEncodedFullFilePath), so
+        -- there is nothing to remap; the flag stays accepted so existing
+        -- invocations keep working, and the field stays so the record keeps
+        -- its layout.
+        remapPathPrefix :: [(String, String)],
         enablePoisonPills :: Bool,
         codegenNames :: [String],
         entry :: Maybe String,
@@ -359,5 +366,7 @@ storedFlagsPaths r flags =
             vPathRaw = rL (vPathRaw flags),
             vPath = rL (vPath flags),
             dumps = [ (d, rM mf) | (d, mf) <- dumps flags ],
-            dumpAll = fmap rM (dumpAll flags)
+            dumpAll = fmap rM (dumpAll flags),
+            -- the ignored flag's argument names the build directory
+            remapPathPrefix = []
         }
