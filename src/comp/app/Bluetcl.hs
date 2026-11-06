@@ -78,6 +78,7 @@ import AUses(MethodId(..))
 import VModInfo
 import ADumpSchedule
 import BackendNamingConventions
+import WireAnalysis(getWireTypeMap)
 
 import TclParseUtils
 
