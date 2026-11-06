@@ -159,7 +159,7 @@ library
     CCSyntax
     CFreeVars
     CPPLineDirectives
-    CSubst
+    CQualifyClassDefaults
     CSyntax
     CSyntaxTypes
     CSyntaxUtil
@@ -176,6 +176,7 @@ library
     DefProp
     Depend
     Deriving
+    DictAliases
     DisjointTest
     DynamicMap
     EquivalenceClass
