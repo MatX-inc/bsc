@@ -66,7 +66,6 @@ data Flags = Flags {
         fdir :: Maybe String,
         finalcleanup :: Int,
         genABin :: Bool,
-        genABinVerilog :: Bool,
         genName :: [String],
         genSysC :: Bool,
         ifcPathRaw :: [String],

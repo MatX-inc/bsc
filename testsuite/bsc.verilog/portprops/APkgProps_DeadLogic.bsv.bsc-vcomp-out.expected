@@ -29,4 +29,5 @@ EN_log                         I     1 unused
 -----
 
 Verilog file created: sysAPkgProps_DeadLogic.v
+Elaborated module file created: sysAPkgProps_DeadLogic.ba
 All packages are up to date.
