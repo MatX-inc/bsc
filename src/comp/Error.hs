@@ -776,6 +776,8 @@ data ErrMsg =
         | EFunDepConflict String String String [Position]
             -- class name, context, conflicting instance head, positions
         | WFunDepCoverage String String [String]
+        | EBoundTyVarEscape String [String]
+            -- escaping type variable, enclosing bindings that capture it
         | ECtxRedWrongBitSize String Integer Integer [Position]
         | ECtxRedBitwiseBool [Position]
         | ECtxRedBitwise String [Position]
@@ -1972,8 +1974,10 @@ getErrorText (EConstrAmb t f) =
     (Type 19, empty, s2par ("Constructor " ++ ishow f ++ " is not disambiguated by type " ++ ishow t))
 getErrorText (EUnify e t1 t2) =
     (Type 20, empty,
-     s2par "Type error at:" $$
-     nest 2 (text e) $$
+     (if null e
+      then s2par "Type mismatch"
+      else s2par "Type error at:" $$
+           nest 2 (text e)) $$
      s2par "Expected type:" $$
      nest 2 (text t2) $$
      s2par "Inferred type:" $$
@@ -2104,6 +2108,21 @@ getErrorText (WFunDepCoverage inst cls vars) =
             "different results.  If the class's resolution is " ++
             "intentionally not a function of its inputs, declare the " ++
             "class " ++ quote "incoherent" ++ "."))
+
+getErrorText (EBoundTyVarEscape v capturers) =
+    (Type 161, empty,
+     s2par ((if null v
+             then "A type variable which is quantified "
+             else "The type variable " ++ quote v ++
+                  ", which is quantified ") ++
+            "at this definition, would escape its scope" ++
+            (if null capturers
+             then ""
+             else " into the type of " ++
+                  unwordsAnd (map quote capturers)) ++
+            ".  A value whose type mentions a locally quantified " ++
+            "variable cannot be used or bound outside the " ++
+            "quantifier's scope."))
 
 -- Type 32 was EContextReductionVar until it merged with EContextReduction
 -- sufficiently long ago that we can reuse the number now
