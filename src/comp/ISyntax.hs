@@ -50,6 +50,8 @@ module ISyntax(
         ftVars,
         aVars,
         mkNumConT,
+        iTypeDiff,
+        iTypeSubNonNeg,
         showTypeless,
         showTypelessRules,
         getIExprPosition,
@@ -906,7 +908,7 @@ cmpC c1 c2 =
         case c1 of
         ICDef { } -> EQ
         ICPrim { } -> EQ
-        ICForeign { } -> compare (fcallNo c1) (fcallNo c2)
+        ICForeign { iConType = t1 } -> compare (fcallNo c1, t1) (fcallNo c2, iConType c2)
         -- XXX ICCon should check conNo and numCon instead of relying
         -- on the identifier equality from ICon
         ICCon { iConType = t1 } -> compare t1 (iConType c2)
@@ -929,7 +931,7 @@ cmpC c1 c2 =
         ICValue { } -> EQ
         ICMethArg { } -> EQ
         ICModPort { } -> EQ
-        ICModParam { } -> EQ
+        ICModParam { iConType = t1 } -> compare t1 (iConType c2)
         ICIFace { ifcTyId = ti1, ifcIds = is1 } -> compare (ti1, is1) (ifcTyId c2, ifcIds c2)
         ICRuleAssert { iAsserts = asserts } -> compare asserts (iAsserts c2)
         ICSchedPragmas { iPragmas = pragmas } -> compare pragmas (iPragmas c2)

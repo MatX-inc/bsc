@@ -670,9 +670,10 @@ icPrimSetSelPosition = ICon idPrimSetSelPosition (ICPrim t PrimSetSelPosition)
 
 icPrimSL :: IExpr a
 icPrimSL = ICon idPrimSL (ICPrim t PrimSL)
-  where t = ITForAll i IKNum (ty `itFun` itNat `itFun` ty)
+  where t = ITForAll i IKNum (ITForAll j IKNum (ty `itFun` tyj `itFun` ty))
         ty = itBit `ITAp` ITVar i
-        i = take1tmpVarIds
+        tyj = itBit `ITAp` ITVar j
+        (i, j) = take2tmpVarIds
 
 icPrimSRL :: IExpr a
 icPrimSRL = ICon idPrimSRL (ICPrim t PrimSRL)
@@ -1103,6 +1104,7 @@ iMGetIfcName t = Nothing
 
 -- get the interface type from a Module def type
 iGetModIfcType :: IType -> IType
+iGetModIfcType (ITForAll _ _ t) = iGetModIfcType t
 iGetModIfcType t =
     let (_, modTy) = itGetArrows t
     in  case modTy of
@@ -1184,13 +1186,18 @@ getStateVarNames (ICon i (ICStateVar {})) = [i]
 getStateVarNames (IAps f _ es) = concatMap getStateVarNames (f:es)
 getStateVarNames _ = []
 
-iTLog, iTAdd, iTMax, iTMin, iTMul, iTDiv :: IType
+iTLog, iTAdd, iTSub, iTMax, iTMin, iTMul, iTDiv :: IType
 iTLog = ITCon idTLog (IKNum `IKFun` IKNum) TIabstract
 iTAdd = ITCon idTAdd (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
+iTSub = ITCon idTSub (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
 iTMax = ITCon idTMax (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
 iTMin = ITCon idTMin (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
 iTMul = ITCon idTMul (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
 iTDiv = ITCon idTDiv (IKNum `IKFun` (IKNum `IKFun` IKNum)) TIabstract
+
+iTAddT, iTSubT :: IType -> IType -> IType
+iTAddT x y = ITAp (ITAp iTAdd x) y
+iTSubT x y = ITAp (ITAp iTSub x) y
 
 iDefMap :: (IExpr a -> IExpr a) -> IDef a -> IDef a
 iDefMap f (IDef i t e p) = IDef i t (f e) p

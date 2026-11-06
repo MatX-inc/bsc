@@ -693,13 +693,16 @@ aExp bflags etop@(ASDef t aid) =
            aggInline = ao_aggInline bflags
        return $
          case (aggInline, e ) of
-           (True,  el@(APrim _ _ PrimExtract [ _, (ASInt {} ), (ASInt {} ) ]))
+           (True,  el@(APrim _ _ PrimExtract [ _, h, l ]))
+             | isConstOrParamExpr h && isConstOrParamExpr l
                                         -> el
            (True,  el@(AMethValue {} )) -> el
            (True,  el@(ASPort {} ))     -> el
            (True,  el@(ASParam {} ))    -> el
            (True,  el@(ASDef {} ))      -> el
            (_,     el@(ASInt {} ))      -> el
+           (_,     el) | hasParamExpr el && isConstOrParamExpr el
+                                        -> el
            (_,     el@(ASStr {} ))      -> el
            -- Do not inline in other cases.
            -- In particular, ATaskValue must stay toplevel,
@@ -771,7 +774,8 @@ aPrim bflags aid t@(ATBit 1) op es
 -- turn if into a mux
 -- (if optIfMux flag is True)
 -- Note: this can inline
-aPrim bflags aid t PrimIf [cnd, x, y]  | ao_ifmux bflags && not (isStringType t) = do
+aPrim bflags aid t PrimIf [cnd, x, y]
+  | ao_ifmux bflags && not (isStringType t) && not (any hasParamExpr [cnd, x, y] && all isConstOrParamExpr [cnd, x, y]) = do
     let muxSize = ao_ifmuxsize bflags
     c' <- mkDefS cnd
     findD <- findDef
@@ -877,6 +881,22 @@ aPrim bflags aid dty PrimExtract [e@(ASInt _ _ c), h@(ASInt _ _ hi), l@(ASInt _ 
         vlo = ilValue lo
         finalSize = vhi - vlo + 1
     return (ASInt aid (ATBit (SizeConst finalSize)) (truncateInteger (ilValue c) vhi vlo))
+aPrim _ aid dty PrimExtract [ASAny _ _, _, _] =
+    return (ASAny dty Nothing)
+aPrim _ aid dty PrimExtract [ASInt _ _ (IntLit _ b 0), _, _] =
+    return (ASInt aid dty (IntLit Nothing b 0))
+aPrim _ aid dty PrimExtract [ASInt _ _ (IntLit _ b (-1)), _, _] =
+    return (ASInt aid dty (IntLit Nothing b (-1)))
+aPrim _ _ dty PrimExtract [e, h, l]
+    | Just 0 <- aExprToSizeExpr l
+    , Just hi <- aExprToSizeExpr h
+    , hi + 1 == aSize e && aType e == dty =
+    return e
+aPrim bflags aid dty PrimExtract [APrim _ _ PrimExtract [e, _, l1], h2, l2]
+    | Just lo1 <- aExprToSizeExpr l1
+    , Just hi2 <- aExprToSizeExpr h2
+    , Just lo2 <- aExprToSizeExpr l2 =
+    aPrim bflags aid dty PrimExtract [e, sizeToAExpr (lo1 + hi2), sizeToAExpr (lo1 + lo2)]
 
 -- Always do bool simplification for 1 bit opt!?
 aPrim _ aid t p es = return $ aPrimBool aid t p es
@@ -1385,15 +1405,23 @@ splitEs _ _ _ = []
 aConcat :: [AExpr] -> AExpr
 aConcat exs =
     let joinPairs :: [AExpr] -> [AExpr]
-        joinPairs ((APrim aid _ PrimExtract
-                        [e,  ASInt _ _ (IntLit _ _ hi), ASInt _ _ (IntLit _ _ lo) ]) :
-                   (APrim aid' _ PrimExtract
-                        [e', ASInt _ _ (IntLit _ _ hi'), ASInt _ _ (IntLit _ _ lo')]) :
-                as) | e == e' && lo == hi' + 1 =
+        joinPairs ((APrim aid _ PrimExtract [e, hi_e, lo_e]) :
+                   (APrim aid' _ PrimExtract [e', hi_e', lo_e']) :
+                as)
+            | e == e'
+            , Just hi <- aExprToSizeExpr hi_e
+            , Just lo <- aExprToSizeExpr lo_e
+            , Just hi' <- aExprToSizeExpr hi_e'
+            , Just lo' <- aExprToSizeExpr lo_e'
+            , lo == hi' + 1 =
                         joinPairs (aExtract e hi lo' : as)
         joinPairs ((ASInt aid (ATBit (SizeConst s)) (IntLit _ b i)) : (ASInt aid' (ATBit (SizeConst s')) (IntLit _ _ i')) : as) =
                         -- XXX the literal has no width
                         joinPairs ((ASInt aid (ATBit (SizeConst (s+s'))) (IntLit Nothing b (i*2^s' + i'))) : as)
+        joinPairs ((ASInt aid (ATBit s) (IntLit _ b 0)) : (ASInt _ (ATBit s') (IntLit _ _ 0)) : as) =
+                        joinPairs ((ASInt aid (ATBit (s+s')) (IntLit Nothing b 0)) : as)
+        joinPairs ((ASInt aid (ATBit s) (IntLit _ b (-1))) : (ASInt _ (ATBit s') (IntLit _ _ (-1))) : as) =
+                        joinPairs ((ASInt aid (ATBit (s+s')) (IntLit Nothing b (-1))) : as)
         joinPairs (a:as) = a : joinPairs as
         joinPairs [] = []
         flat (APrim _ _ PrimConcat es) = concatMap flat es
@@ -1410,10 +1438,11 @@ aSelect (APrim aid _ PrimExtract [e, (ASInt _ _ _), ASInt _ _ (IntLit _ _ lo)]) 
         APrim aid (ATBit (SizeConst d)) PrimExtract [e, aNat (offs+d-1+lo), aNat (offs+lo)]
 aSelect e0@(APrim aid _ PrimConcat exs) offs dx =
     let (es', offs') = chopL (reverse exs) offs
-                        where chopL (e:es) o | s <= o = chopL es (o-s) where s = aSizeInt e
+                        where chopL (e:es) o | SizeConst s <- aSize e, s <= o = chopL es (o-s)
                               chopL es o = (es, o)
         es'' = chopH es' (dx+offs')
-                        where chopH (e:es) d | d > 0 = e : chopH es (d - aSizeInt e)
+                        where chopH (e:es) d | d > 0, SizeConst s <- aSize e = e : chopH es (d - s)
+                              chopH (e:es) d | d > 0 = e:es
                               chopH _ _ = []
     in  case reverse es'' of
         [] -> internalError ("aSelect PrimConcat " ++ ppReadable (e0, offs, dx))
@@ -1423,13 +1452,13 @@ aSelect e0@(APrim aid _ PrimConcat exs) offs dx =
 
 aSelect e offs d = APrim defaultAId (ATBit (SizeConst d)) PrimExtract [e, aNat (offs+d-1), aNat offs]
 
-aExtract :: AExpr -> Integer -> Integer -> AExpr
-aExtract e hi 0 | SizeConst (hi+1) == aSize e = e
+aExtract :: AExpr -> ASize -> ASize -> AExpr
+aExtract e hi 0 | hi + 1 == aSize e = e
 aExtract e hi lo =
         APrim
             defaultAId
-            (ATBit (SizeConst (hi-lo+1)))
-            PrimExtract [e, aNat hi, aNat lo]
+            (ATBit (hi - lo + 1))
+            PrimExtract [e, sizeToAExpr hi, sizeToAExpr lo]
 
 ------------
 
