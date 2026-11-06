@@ -163,7 +163,6 @@ install-showrules: $(PKGINFO)
 
 .PHONY: install-checkers
 install-checkers: $(addprefix $(BINDIR)/,$(CHECKEXES))
-install-checkers: $(addprefix $(BINDIR)/core/,$(CHECKEXES))
 install-checkers: $(PKGINFO)
 
 # ----
