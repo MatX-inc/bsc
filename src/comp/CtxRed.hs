@@ -84,7 +84,9 @@ instance CtxRed CDefn where
     -- XXX do data&class?
 
     ctxRed (Cstruct vis ss idk vs fs ds) = do
+        addBoundTVs (getVarKinds idk vs)
         fs' <- mapM ctxRed fs
+        popBoundTVs
         return (Cstruct vis ss idk vs fs' ds)
 
     ctxRed (Cinstance cqt ds) = do
@@ -414,7 +416,7 @@ ctxRedCQType' isInstHead cqt = do
     (trim_point, _) <- newTVarId "ctxRedCQType" KStar cqt
 
     -- core context reduction
-    let dvs = (tv vqs) ++ prev_bound_tvs
+    let dvs = filter (not . isGeneratedTVar) (tv vqs) ++ prev_bound_tvs
     SolveResult ps _ s <- reducePredsAggressive (Just dvs) [] vqs
 
     let t' = apSub s t

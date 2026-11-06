@@ -69,7 +69,7 @@ import Pragma
 import DefProp
 import Changed(changedOrId)
 import ISyntax
-import ISyntaxSubst(eSubst, eSubstBatch, tSubstBatch)
+import ISyntaxSubst(tSubst, eSubst, etSubst, eSubstBatch, tSubstBatch)
 import IConv(iConvT, iConvExpr)
 import ISyntaxUtil
 import IExpandUtils
@@ -813,9 +813,6 @@ iExpandModuleDef ::
     HDef ->
     G ([(Id, IKind)], [IAbstractInput], [VArgInfo], [IEFace HeapData])
 iExpandModuleDef (IDef i t e _) = do
-    -- this was to allow code-gen of modules with numeric parameters,
-    -- but we don't support that, so set the list of such params to null
-    let iks = []
     when doDebug $ traceM "iExpandModuleDef: expanding"
     let user_mod_name = init (getIdBaseString i)
     showTopProgress ("Elaborating module " ++ quote user_mod_name)
@@ -826,6 +823,9 @@ iExpandModuleDef (IDef i t e _) = do
     -- create the initial scope for scheduling attributes
     -- (putting the top-level method names into scope)
     pushTopModuleSchedNameScope t
+
+    (iks, e_stripped) <- prepareParameterizedModule i t e
+    setSizeParams (map fst iks)
     fmod <- isNoInlinedFunc
     pps <- getPragmas
 
@@ -913,7 +913,7 @@ iExpandModuleDef (IDef i t e _) = do
 
     -- iExpandModuleLam elaborates the actual module
     (args, vargs, clkRst, default_args, default_vargs, (P p_ifc ifc))
-        <- iExpandModuleLam i resolveDefaults e
+        <- iExpandModuleLam i resolveDefaults e_stripped
 
     showTopProgress "Elaborating interface"
     pushIfcSchedNameScope
@@ -935,6 +935,124 @@ iExpandModuleDef (IDef i t e _) = do
 
     showTopProgress ("Finished elaborating module " ++ quote user_mod_name)
     return (iks, args', vargs', ifcs)
+
+-- ----------
+
+numericProvisoIds :: [Id]
+numericProvisoIds = [idAdd, idMul, idDiv, idLog, idMax, idMin, idNumEq]
+
+iTExp :: IType
+iTExp = ITCon idTExp (IKNum `IKFun` IKNum) TIabstract
+
+orderedFTVars :: IType -> [Id]
+orderedFTVars ty = nub (go [] ty)
+  where
+    go bound (ITVar v)
+        | v `elem` bound = []
+        | otherwise      = [v]
+    go bound (ITAp f a) = go bound f ++ go bound a
+    go bound (ITForAll v _ b) = go (v : bound) b
+    go _ _ = []
+
+-- Prepare a size-polymorphic synthesized module for symbolic elaboration:
+-- 1. Strip leading type lambdas (ILAM v IKNum) and numeric proviso dictionary
+--    lambdas (Add, Mul, Div, Log, Max, Min, NumEq).
+-- 2. Partition the KNum type variables into independent size parameters
+--    (those occurring free in the module's argument or interface types, in
+--    first-appearance order matching GenWrap) and auxiliary proviso variables.
+-- 3. Solve the auxiliary variables in terms of the independent size parameters
+--    using type-level numeric operators (TAdd, TSub, TMul, TDiv, TLog, TExp,
+--    TMax, TMin) via solveNumericProvisos, and substitute those solutions into
+--    the module body.
+-- 4. Replace the zero-method numeric proviso dictionary arguments with empty
+--    ICTuple constructors so elaboration can proceed to the value lambdas.
+prepareParameterizedModule :: Id -> IType -> HExpr -> G ([(Id, IKind)], HExpr)
+prepareParameterizedModule modId modType modExpr0 = do
+    modExpr <- evaleUH modExpr0
+    when (not (null (getNonSynthTypes modExpr))) $
+        errG (reportNonSynthTypeInModuleArg modId modExpr)
+    let stripILAMs acc (ILAM v k body) = stripILAMs ((v, k) : acc) body
+        stripILAMs acc body = (reverse acc, body)
+        (ty_vars, body_after_ty) = stripILAMs [] modExpr
+    when (any ((/= IKNum) . snd) ty_vars) $
+        errG (reportNonSynthTypeInModuleArg modId modExpr)
+    let stripDictLams acc (ILam d_id d_ty body)
+            | (ITCon cls_id _ (TIstruct SClass _), cls_args) <- splitITAp d_ty
+            = stripDictLams ((d_id, d_ty, cls_id, cls_args) : acc) body
+        stripDictLams acc body = (reverse acc, body)
+        (dict_lams, body_core) = stripDictLams [] body_after_ty
+    when (any (\(_, _, cls_id, _) -> cls_id `notElem` numericProvisoIds) dict_lams) $
+        errG (reportNonSynthTypeInModuleArg modId modExpr)
+    if null ty_vars && null dict_lams
+      then return ([], modExpr)
+      else do
+        let dropAllForAll (ITForAll _ _ b) = dropAllForAll b
+            dropAllForAll b = b
+            mod_ty = dropArrows (length dict_lams) (dropAllForAll modType)
+            ty_var_ids = map fst ty_vars
+            size_params = filter (`elem` ty_var_ids) (orderedFTVars mod_ty)
+            aux_vars = [ v | v <- ty_var_ids, v `notElem` size_params ]
+        sols <- solveNumericProvisos modId (S.fromList size_params) aux_vars
+                  [ (cls_id, cls_args) | (_, _, cls_id, cls_args) <- dict_lams ]
+        let applyTySols ty = foldl' (\acc (v, s) -> tSubst v s acc) ty sols
+            body_ty_subst = foldl' (\acc (v, s) -> etSubst v s acc) body_core sols
+            mkEmptyDict d_id d_ty =
+                let d_ty' = applyTySols d_ty
+                in  ICon d_id (ICTuple { iConType = d_ty', fieldIds = [] })
+            body_final = foldl' (\acc (d_id, d_ty, _, _) -> eSubst d_id (mkEmptyDict d_id d_ty) acc)
+                                body_ty_subst dict_lams
+            iks = [ (p, IKNum) | p <- size_params ]
+        return (iks, body_final)
+
+solveNumericProvisos :: Id -> S.Set Id -> [Id] -> [(Id, [IType])] -> G [(Id, IType)]
+solveNumericProvisos modId known0 unsolved0 provisos = go known0 unsolved0 []
+  where
+    go _ [] sols = return (reverse sols)
+    go known unsolved sols =
+        let applySols ty = foldl' (\acc (v, s) -> tSubst v s acc) ty (reverse sols)
+            provisos' = [ (cls_id, map applySols args) | (cls_id, args) <- provisos ]
+            candidates =
+                [ (v, rhs)
+                | v <- unsolved
+                , (cls_id, args) <- provisos'
+                , rhs <- solveOne v cls_id args
+                , fTVars rhs `S.isSubsetOf` known
+                ]
+        in  case candidates of
+              ((v, rhs) : _) ->
+                  go (S.insert v known) (filter (/= v) unsolved) ((v, rhs) : sols)
+              [] ->
+                  let modPos = getPosition modId
+                      modName = init (getIdBaseString modId)
+                      vStrs = intercalate ", " (map (quote . pfpString) unsolved)
+                      str = "The numeric type variable(s) " ++ vStrs ++
+                            " in the module's provisos cannot be uniquely determined from the module's interface or port types."
+                  in  errG (modPos, EBadIfcType (Just modName) str)
+
+    solveOne :: Id -> Id -> [IType] -> [IType]
+    solveOne v cls_id [a, b, c]
+        | cls_id == idAdd =
+            [ ITAp (ITAp iTAdd a) b | c == ITVar v ] ++
+            [ ITAp (ITAp iTSub c) b | a == ITVar v ] ++
+            [ ITAp (ITAp iTSub c) a | b == ITVar v ]
+        | cls_id == idMul =
+            [ ITAp (ITAp iTMul a) b | c == ITVar v ] ++
+            [ ITAp (ITAp iTDiv c) b | a == ITVar v ] ++
+            [ ITAp (ITAp iTDiv c) a | b == ITVar v ]
+        | cls_id == idDiv =
+            [ ITAp (ITAp iTDiv a) b | c == ITVar v ]
+        | cls_id == idMax =
+            [ ITAp (ITAp iTMax a) b | c == ITVar v ]
+        | cls_id == idMin =
+            [ ITAp (ITAp iTMin a) b | c == ITVar v ]
+    solveOne v cls_id [a, b]
+        | cls_id == idLog =
+            [ ITAp iTLog a | b == ITVar v ] ++
+            [ ITAp iTExp b | a == ITVar v ]
+        | cls_id == idNumEq =
+            [ b | a == ITVar v ] ++
+            [ a | b == ITVar v ]
+    solveOne _ _ _ = []
 
 -- ----------
 
@@ -1867,8 +1985,9 @@ updNStateVars n = do
 -- inside ICStateVar in ISyntaxSubst.
 chkStateVarTypes :: Id -> IType -> [[IType]] -> G ()
 chkStateVarTypes i t tss = do
+    sps <- getSizeParams
     let allTypes = t : concat tss
-        ftvs = S.unions (map fTVars allTypes)
+        ftvs = S.unions (map fTVars allTypes) `S.difference` S.fromList sps
         atfs = concatMap findATFs allTypes
     when (not (S.null ftvs)) $
         internalError $ "IExpand.newState: state variable " ++
@@ -3814,6 +3933,9 @@ conAp' i (ICPrim _ PrimWarning) _ (T t : E pos_e : E s : E e : as) = do
   showPrimWarning pos s
   evalAp "PrimWarning - result" e as
 
+conAp' i (ICPrim _ PrimUninitialized) _ (T t@(ITAp tc sz) : as)
+  | tc == itBit && (case sz of { ITNum _ -> False; _ -> True }) =
+    conAp' i (ICPrim itUninitialized PrimRawUninitialized) icPrimRawUninitialized (T t : as)
 conAp' i (ICPrim _ PrimUninitialized) _ (T t : as) = do
   let it = itPosition `itFun` itString `itFun` t
   -- polymorphism should be resolved
@@ -3944,6 +4066,10 @@ conAp' _ (ICPrim _ PrimChr) o [T sz, T to, E e] = evalStaticOp e to handleChr
 -- valueOf, fast case for ITNum
 conAp' i (ICPrim _ PrimValueOf) _ [T (ITNum n), _] =
     return $ pExpr $ iMkLitAt (getPosition i) itInteger n
+-- valueOf on a symbolic numeric type expression containing module size parameters
+conAp' i (ICPrim _ PrimValueOf) _ [T t, _]
+    | Just e <- sizeITypeToIntExpr (getPosition i) t =
+    return $ pExpr e
 -- valueOf, for non-expanded type operators
 -- errors here because we handle it in evalAp'
 conAp' i (ICPrim _ PrimValueOf) _ [T t, _] = internalError ("PrimValueOf unsimplified: " ++ ppReadable t)
@@ -4072,12 +4198,21 @@ conAp' tfs (ICPrim _ PrimIntegerToBit) fe [T ty@(ITNum k), E e] = evalStaticOp e
             | otherwise        = result
           where err = errG (getIdPosition i, EInvalidLiteral "Bit" k (pfpString il))
                 result = return $ pExpr $ iMkLitWBAt (getIdPosition i) (itBitN k) w b (mask k l)
-        -- a module parameter of type Integer has no literal value at
-        -- elaboration time; re-type the reference at the target size so
-        -- it lowers to a reference to the Verilog parameter
+        -- a module parameter of type Integer or symbolic size expression
+        -- has no literal value at elaboration time; lower it to a Bit#(k)
+        -- expression referencing the Verilog parameter(s)
         -- (no range check is possible on a symbolic value)
-        handleInt (ICon i (ICModParam it)) | it == itInteger =
-            return $ pExpr $ ICon i (ICModParam (itBitN k))
+        handleInt e'
+            | Just be <- intExprToBitExpr (getIExprPosition fe) ty e' =
+                return $ pExpr be
+        handleInt e' = nfError "primIntegerToBit" $ mkAp fe [T ty, E e']
+conAp' tfs (ICPrim _ PrimIntegerToBit) fe [T ty, E e]
+  | isNumericIType ty = evalStaticOp e (aitBit ty) handleInt
+  where handleInt (ICon i (ICInt { iVal = IntLit { ilValue = l, ilWidth = w, ilBase = b } })) =
+            return $ pExpr $ iMkLitWBAt (getIdPosition i) (aitBit ty) w b l
+        handleInt e'
+            | Just be <- intExprToBitExpr (getIExprPosition fe) ty e' =
+                return $ pExpr be
         handleInt e' = nfError "primIntegerToBit" $ mkAp fe [T ty, E e']
 
 -- Special case of doPrimOp that checks bounds and keeps the base.
@@ -4088,9 +4223,21 @@ conAp' tfs (ICPrim _ PrimIntegerToUIntBits) fe [T ty@(ITNum k), E e] = evalStati
             errG (getIdPosition i, EInvalidLiteral "UInt" k (pfpString il))
           else
             return $ pExpr $ iMkLitWBAt (getIdPosition i) (itBitN k) w b (mask k l)
-        -- symbolic Integer module parameter (see PrimIntegerToBit)
-        handleInt (ICon i (ICModParam it)) | it == itInteger =
-            return $ pExpr $ ICon i (ICModParam (itBitN k))
+        -- symbolic Integer module parameter or size expression (see PrimIntegerToBit)
+        handleInt e'
+            | Just be <- intExprToBitExpr (getIExprPosition fe) ty e' =
+                return $ pExpr be
+        handleInt e' = nfError "primIntegerToUIntBits" $ mkAp fe [T ty, E e']
+conAp' tfs (ICPrim _ PrimIntegerToUIntBits) fe [T ty, E e]
+  | isNumericIType ty = evalStaticOp e (aitBit ty) handleInt
+  where handleInt (ICon i (ICInt { iVal = il@(IntLit { ilValue = l, ilWidth = w, ilBase = b }) })) =
+          if l < 0 then
+            errG (getIdPosition i, EInvalidLiteral "UInt" 0 (pfpString il))
+          else
+            return $ pExpr $ iMkLitWBAt (getIdPosition i) (aitBit ty) w b l
+        handleInt e'
+            | Just be <- intExprToBitExpr (getIExprPosition fe) ty e' =
+                return $ pExpr be
         handleInt e' = nfError "primIntegerToUIntBits" $ mkAp fe [T ty, E e']
 
 -- Special case of doPrimOp that checks bounds and keeps the base.
@@ -4106,9 +4253,18 @@ conAp' tfs (ICPrim _ PrimIntegerToIntBits) fe [T ty@(ITNum k), E e] = evalStatic
             | otherwise        = result
           where err = errG (getIdPosition i, EInvalidLiteral "Int" k (pfpString il))
                 result = return $ pExpr $ iMkLitWBAt (getIdPosition i) (itBitN k) w b (mask k l)
-        -- symbolic Integer module parameter (see PrimIntegerToBit)
-        handleInt (ICon i (ICModParam it)) | it == itInteger =
-            return $ pExpr $ ICon i (ICModParam (itBitN k))
+        -- symbolic Integer module parameter or size expression (see PrimIntegerToBit)
+        handleInt e'
+            | Just be <- intExprToBitExpr (getIExprPosition fe) ty e' =
+                return $ pExpr be
+        handleInt e' = nfError "primIntegerToIntBits" $ mkAp fe [T ty, E e']
+conAp' tfs (ICPrim _ PrimIntegerToIntBits) fe [T ty, E e]
+  | isNumericIType ty = evalStaticOp e (aitBit ty) handleInt
+  where handleInt (ICon i (ICInt { iVal = IntLit { ilValue = l, ilWidth = w, ilBase = b } })) =
+            return $ pExpr $ iMkLitWBAt (getIdPosition i) (aitBit ty) w b l
+        handleInt e'
+            | Just be <- intExprToBitExpr (getIExprPosition fe) ty e' =
+                return $ pExpr be
         handleInt e' = nfError "primIntegerToIntBits" $ mkAp fe [T ty, E e']
 
 -- XXX This could go in doPrimOp
@@ -4174,8 +4330,18 @@ conAp' i (ICPrim _ PrimUninitBitArray) fe [T (ITNum len), E pos, E name] = do
       arr = Array.listArray (0, len-1) elems
   return (pExpr (ICon i (ICLazyArray (itBitN len) arr (Just (pos', name')))))
 
-conAp' tfs (ICPrim _ PrimUIntBitsToInteger) fe [T (ITNum k), E e] = evalStaticOp e itInteger handleInt
-  where handleInt (ICon i ci@(ICInt { })) = return $ pExpr $ ICon i (ci { iConType = itInteger })
+conAp' tfs (ICPrim _ PrimBitToInteger) fe [T ty, E e]
+  | isNumericIType ty = evalStaticOp e itInteger handleInt
+  where handleInt (ICon i ci@(ICInt { iVal = IntLit { ilValue = l } }))
+          | l >= 0 = return $ pExpr $ ICon i (ci { iConType = itInteger })
+        handleInt (ICon i (ICModParam _)) = return $ pExpr $ ICon i (ICModParam itInteger)
+        handleInt e' = nfError "primBitToInteger" $ mkAp fe [T ty, E e']
+
+conAp' tfs (ICPrim _ PrimUIntBitsToInteger) fe [T ty, E e]
+  | isNumericIType ty = evalStaticOp e itInteger handleInt
+  where handleInt (ICon i ci@(ICInt { iVal = IntLit { ilValue = l } }))
+          | l >= 0 = return $ pExpr $ ICon i (ci { iConType = itInteger })
+        handleInt (ICon i (ICModParam _)) = return $ pExpr $ ICon i (ICModParam itInteger)
         handleInt e' = do -- traceM "primUIntBitsToInteger";
                           -- traceM (show e ++ "\n")
                           -- traceM (show e' ++ "\n")
@@ -4188,11 +4354,17 @@ conAp' tfs (ICPrim _ PrimIntBitsToInteger) fe [T (ITNum k), E e] = evalStaticOp 
             return $ pExpr $ ICon i (ci {iConType = itInteger})
            else
             return $ pExpr $ ICon i (ci {iConType = itInteger, iVal = v {ilValue = l - 2^k}})
+        handleInt (ICon i (ICModParam _)) = return $ pExpr $ ICon i (ICModParam itInteger)
         handleInt e' = do -- traceM "primIntBitsToInteger";
                           -- traceM (show e ++ "\n")
                           -- traceM (show e' ++ "\n")
                           -- XXX consider EDynamicBits for the PrimIf case
                           nfError "primIntBitsToInteger" e'
+conAp' tfs (ICPrim _ PrimIntBitsToInteger) fe [T ty, E e]
+  | isNumericIType ty = evalStaticOp e itInteger handleInt
+  where handleInt (ICon i ci@(ICInt { })) = return $ pExpr $ ICon i (ci { iConType = itInteger })
+        handleInt (ICon i (ICModParam _)) = return $ pExpr $ ICon i (ICModParam itInteger)
+        handleInt e' = nfError "primIntBitsToInteger" e'
 
 conAp' ci prim@(ICPrim _ PrimSetSelPosition) f (T _ : E pos_e : E res_e : as) = do
   poss <- evalPositions pos_e
@@ -4307,6 +4479,8 @@ conAp' _ prim@(ICPrim _ op) fe@(ICon prim_id _) [E e]
             Just (Left errmsg) -> errG (pos, errmsg)
             Nothing -> internalError ("IExpand.conAp' - can't calculate: " ++
                                       ppReadable (op, e'))
+                     | isSymIntOp op && isSymIntExpr e' =
+          return $ pExpr $ mkAp fe [E e']
                      | otherwise = nfError "integer/realPrim 1" $ mkAp fe [E e']
         -- if we touch a module parameter we can't evaluate further
         -- handleLit e' | isIConParam e' = nfError $ mkAp fe [E e']
@@ -4327,6 +4501,12 @@ conAp' _ prim@(ICPrim _ op) fe@(ICon prim_id _) [E e1, E e2]
             Just (Left errmsg) -> errG (pos, errmsg)
             Nothing -> internalError ("IExpand.conAp' - can't calculate: " ++
                                       ppReadable (op, e1', e2'))
+                           | Just b <- evalSymIntCmp op e1' e2' =
+          return $ pExpr $ iMkBoolAt pos b
+                           | isSymIntOp op &&
+                             ((isSymIntExpr e1' && (isSymIntExpr e2' || isSymIConInt e2')) ||
+                              (isSymIConInt e1' && isSymIntExpr e2')) =
+          return $ pExpr $ mkAp fe [E e1', E e2']
                            | otherwise = nfError "integer/realPrim 2" $ mkAp fe [E e1', E e2']
         -- if we touch a module parameter, we can't evaluate further
         -- handleLit2 e1' e2' | isIConParam e1 || isIConParam e2 = nfError $ mkAp fe [E e1', E e2']
@@ -4370,6 +4550,12 @@ conAp' _ (ICPrim _ op) fe@(ICon prim_id _) as | strictPrim op = do
                 bldAp' "Prim 1" fe ees
          else
             case (op, as') of
+            (PrimNeg, [T ty, E (ICon i (ICInt { iVal = IntLit { ilValue = v, ilWidth = w, ilBase = b } }))])
+              | isNumericIType ty ->
+                return (P p (iMkLitWBAt (getIdPosition i) (aitBit ty) w b (-v)))
+            (PrimInv, [T ty, E (ICon i (ICInt { iVal = IntLit { ilValue = v, ilWidth = w, ilBase = b } }))])
+              | isNumericIType ty ->
+                return (P p (iMkLitWBAt (getIdPosition i) (aitBit ty) w b (-1 - v)))
             (PrimBNot, [E e]) | isDyn e ->
                 -- The iTransExpr catch-all will handle PrimIf but not
                 -- arrays.  The push is memoized per heap cell (pushBNot):
@@ -5233,12 +5419,12 @@ improveIf f t cnd (IAps (ICon i1 c1@(ICTuple {})) ts1 es1)
 
 -- push if improvement inside bit concatenations with matching boundaries
 -- this is a post-pack version of the struct/tuple case above
-improveIf f t cnd thn@(IAps concat@(ICon _ (ICPrim _ PrimConcat)) ts1@[ITNum sx, ITNum sy, _] [thn_x, thn_y])
-                  els@(IAps        (ICon _ (ICPrim _ PrimConcat)) ts2                         [els_x, els_y])
+improveIf f t cnd thn@(IAps concat@(ICon _ (ICPrim _ PrimConcat)) ts1@[tx, ty, _] [thn_x, thn_y])
+                  els@(IAps        (ICon _ (ICPrim _ PrimConcat)) ts2             [els_x, els_y])
   | ts1 == ts2 = do
   when doTraceIf $ traceM ("improveIf PrimConcat triggered " ++ ppReadable (cnd,thn,els))
-  (x', _) <- improveIf f (itBitN sx) cnd thn_x els_x
-  (y', _) <- improveIf f (itBitN sy) cnd thn_y els_y
+  (x', _) <- improveIf f (aitBit tx) cnd thn_x els_x
+  (y', _) <- improveIf f (aitBit ty) cnd thn_y els_y
   return (IAps concat ts1 [x', y'], True)
 
 improveIf f t cnd thn@(IAps chr@(ICon _ (ICPrim _ PrimChr)) ts1 [chr_thn])
@@ -6179,6 +6365,278 @@ reportNonSynthTypeInMethod modId methId methExpr =
                      mkEMsg v
 
 
+sizeITypeToIntExpr :: Position -> IType -> Maybe HExpr
+sizeITypeToIntExpr pos (ITNum n) = Just (iMkLitAt pos itInteger n)
+sizeITypeToIntExpr pos (ITVar v) =
+    Just (ICon (setIdPosition pos v) (ICModParam itInteger))
+sizeITypeToIntExpr pos (ITAp (ITAp (ITCon op _ _) t1) t2) = do
+    e1 <- sizeITypeToIntExpr pos t1
+    e2 <- sizeITypeToIntExpr pos t2
+    let mkIntBinOp prim_id prim_op a b =
+            let ty = itInteger `itFun` (itInteger `itFun` itInteger)
+            in  IAps (ICon prim_id (ICPrim ty prim_op)) [] [a, b]
+    if op == idTAdd then Just (mkIntBinOp (idPlusAt pos) PrimIntegerAdd e1 e2)
+      else if op == idTSub then Just (mkIntBinOp (idMinusAt pos) PrimIntegerSub e1 e2)
+      else if op == idTMul then Just (mkIntBinOp (idStarAt pos) PrimIntegerMul e1 e2)
+      else if op == idTDiv then
+          let one = iMkLitAt pos itInteger 1
+              num = mkIntBinOp (idMinusAt pos) PrimIntegerSub
+                        (mkIntBinOp (idPlusAt pos) PrimIntegerAdd e1 e2)
+                        one
+          in  Just (mkIntBinOp (idSlashAt pos) PrimIntegerQuot num e2)
+      else if op == idTMax then
+          case evalSymIntCmp PrimIntegerLT e1 e2 of
+            Just True  -> Just e2
+            Just False -> Just e1
+            Nothing -> do
+              b1 <- intExprToBitExpr pos (ITNum 32) e1
+              b2 <- intExprToBitExpr pos (ITNum 32) e2
+              let cnd = IAps icPrimULT [ITNum 32] [b1, b2]
+              return (IAps icIf [itInteger] [cnd, e2, e1])
+      else if op == idTMin then
+          case evalSymIntCmp PrimIntegerLT e1 e2 of
+            Just True  -> Just e1
+            Just False -> Just e2
+            Nothing -> do
+              b1 <- intExprToBitExpr pos (ITNum 32) e1
+              b2 <- intExprToBitExpr pos (ITNum 32) e2
+              let cnd = IAps icPrimULT [ITNum 32] [b1, b2]
+              return (IAps icIf [itInteger] [cnd, e1, e2])
+      else Nothing
+sizeITypeToIntExpr pos (ITAp (ITCon op _ _) t1)
+  | op == idTExp = do
+      e1 <- sizeITypeToIntExpr pos t1
+      let ty = itInteger `itFun` (itInteger `itFun` itInteger)
+          two = iMkLitAt pos itInteger 2
+      return (IAps (ICon (idStarStarAt pos) (ICPrim ty PrimIntegerExp)) [] [two, e1])
+  | op == idTLog = do
+      e1 <- sizeITypeToIntExpr pos t1
+      let ty = itInteger `itFun` itInteger
+          log2_id = mkId pos (mkFString "primIntegerLog2")
+      return (IAps (ICon log2_id (ICPrim ty PrimIntegerLog2)) [] [e1])
+sizeITypeToIntExpr _ _ = Nothing
+
+derefHExpr :: HExpr -> HExpr
+derefHExpr (IRefT _ _ _ r) = derefHExpr (heapCellToHExpr (unsafeDerefHeap r))
+derefHExpr (IAps (ICon _ (ICPrim _ PrimWhenPred)) _ [_, e]) = derefHExpr e
+derefHExpr e = e
+
+derefAllHExpr :: HExpr -> HExpr
+derefAllHExpr e0 =
+  case derefHExpr e0 of
+    IAps f ts es -> IAps (derefAllHExpr f) ts (map derefAllHExpr es)
+    e -> e
+
+isSymIConInt :: HExpr -> Bool
+isSymIConInt = isIConInt . derefHExpr
+
+isSymIntOp :: PrimOp -> Bool
+isSymIntOp PrimIntegerNeg  = True
+isSymIntOp PrimIntegerAdd  = True
+isSymIntOp PrimIntegerSub  = True
+isSymIntOp PrimIntegerMul  = True
+isSymIntOp PrimIntegerQuot = True
+isSymIntOp PrimIntegerRem  = True
+isSymIntOp PrimIntegerExp  = True
+isSymIntOp PrimIntegerLog2 = True
+isSymIntOp _               = False
+
+isSymIntExpr :: HExpr -> Bool
+isSymIntExpr e0 =
+  case derefHExpr e0 of
+    ICon _ (ICModParam it) -> it == itInteger
+    IAps (ICon _ (ICPrim _ op)) [] [e]
+      | isSymIntOp op -> isSymIntExpr e
+    IAps (ICon _ (ICPrim _ op)) [] [e1, e2]
+      | isSymIntOp op ->
+          (isSymIntExpr e1 && (isSymIntExpr e2 || isSymIConInt e2)) ||
+          (isSymIConInt e1 && isSymIntExpr e2)
+    IAps (ICon _ (ICPrim _ PrimIf)) [it] [_, e1, e2]
+      | it == itInteger ->
+          (isSymIntExpr e1 && (isSymIntExpr e2 || isSymIConInt e2)) ||
+          (isSymIConInt e1 && isSymIntExpr e2)
+    _ -> False
+
+evalSymIntCmp :: PrimOp -> HExpr -> HExpr -> Maybe Bool
+evalSymIntCmp op e1 e2
+  | op `elem` [PrimIntegerEQ, PrimIntegerLE, PrimIntegerLT]
+  , (isSymIntExpr e1 && (isSymIntExpr e2 || isSymIConInt e2)) ||
+    (isSymIConInt e1 && isSymIntExpr e2) =
+      let (lo_bnd, hi_bnd) =
+              let (lo1, hi1) = symIntBounds e1
+                  (lo2, hi2) = symIntBounds e2
+              in  ((-) <$> lo1 <*> hi2, (-) <$> hi1 <*> lo2)
+          (minDiff, maxDiff) =
+              case (symIntLinForm e1, symIntLinForm e2) of
+                (Just (c1, m1), Just (c2, m2)) ->
+                    let c = c1 - c2
+                        m = M.filter (/= 0) $
+                            M.unionWith (+) m1 (M.map negate m2)
+                        ks = M.elems m
+                        lo = if all (> 0) ks then Just (c + sum ks) else lo_bnd
+                        hi = if all (< 0) ks then Just (c + sum ks) else hi_bnd
+                    in  (lo, hi)
+                _ -> (lo_bnd, hi_bnd)
+      in  case op of
+            PrimIntegerEQ
+              | minDiff == Just 0 && maxDiff == Just 0 -> Just True
+              | maybe False (> 0) minDiff || maybe False (< 0) maxDiff -> Just False
+              | otherwise -> Nothing
+            PrimIntegerLE
+              | maybe False (<= 0) maxDiff -> Just True
+              | maybe False (> 0) minDiff  -> Just False
+              | otherwise -> Nothing
+            PrimIntegerLT
+              | maybe False (< 0) maxDiff  -> Just True
+              | maybe False (>= 0) minDiff -> Just False
+              | otherwise -> Nothing
+            _ -> Nothing
+evalSymIntCmp _ _ _ = Nothing
+
+symIntLinForm :: HExpr -> Maybe (Integer, M.Map Id Integer)
+symIntLinForm e0 =
+  case derefHExpr e0 of
+    ICon _ (ICInt { iVal = IntLit { ilValue = n } }) ->
+        Just (n, M.empty)
+    ICon v (ICModParam it)
+      | it == itInteger ->
+        Just (0, M.singleton v 1)
+    IAps (ICon _ (ICPrim _ PrimIntegerNeg)) [] [e] -> do
+        (c, m) <- symIntLinForm e
+        return (-c, M.map negate m)
+    IAps (ICon _ (ICPrim _ PrimIntegerAdd)) [] [e1, e2] -> do
+        (c1, m1) <- symIntLinForm e1
+        (c2, m2) <- symIntLinForm e2
+        return (c1 + c2, M.filter (/= 0) (M.unionWith (+) m1 m2))
+    IAps (ICon _ (ICPrim _ PrimIntegerSub)) [] [e1, e2] -> do
+        (c1, m1) <- symIntLinForm e1
+        (c2, m2) <- symIntLinForm e2
+        return (c1 - c2, M.filter (/= 0) (M.unionWith (+) m1 (M.map negate m2)))
+    IAps (ICon _ (ICPrim _ PrimIntegerMul)) [] [e1, e2] ->
+        case (symIntLinForm e1, symIntLinForm e2) of
+          (Just (c1, m1), Just (c2, m2))
+            | M.null m1 ->
+                if c1 == 0 then Just (0, M.empty)
+                else Just (c1 * c2, M.map (* c1) m2)
+            | M.null m2 ->
+                if c2 == 0 then Just (0, M.empty)
+                else Just (c1 * c2, M.map (* c2) m1)
+          _ -> Nothing
+    _ -> Nothing
+
+symIntBounds :: HExpr -> (Maybe Integer, Maybe Integer)
+symIntBounds e0 =
+  case derefHExpr e0 of
+    ICon _ (ICInt { iVal = IntLit { ilValue = n } }) ->
+        (Just n, Just n)
+    ICon _ (ICModParam it)
+      | it == itInteger ->
+        (Just 1, Nothing)
+    IAps (ICon _ (ICPrim _ PrimIntegerNeg)) [] [e] ->
+        let (lo, hi) = symIntBounds e
+        in  (negate <$> hi, negate <$> lo)
+    IAps (ICon _ (ICPrim _ PrimIntegerAdd)) [] [e1, e2] ->
+        let (lo1, hi1) = symIntBounds e1
+            (lo2, hi2) = symIntBounds e2
+        in  ((+) <$> lo1 <*> lo2, (+) <$> hi1 <*> hi2)
+    IAps (ICon _ (ICPrim _ PrimIntegerSub)) [] [e1, e2] ->
+        let (lo1, hi1) = symIntBounds e1
+            (lo2, hi2) = symIntBounds e2
+            lo = case (lo1, lo2, hi2) of
+                   (Just l1, _, Just h2)
+                     | l1 >= 1 && h2 == 1 -> Just (max 0 (l1 - 1))
+                     | l1 >= 1 && h2 >= 2 -> Just (max 1 (l1 - h2))
+                     | otherwise          -> Just (l1 - h2)
+                   (Just l1, Just l2, Nothing) | l1 >= 1 && l2 >= 1 -> Just 1
+                   _ -> Nothing
+        in  (lo, (-) <$> hi1 <*> lo2)
+    IAps (ICon _ (ICPrim _ PrimIntegerMul)) [] [e1, e2]
+      | (Just l1, hi1) <- symIntBounds e1
+      , (Just l2, hi2) <- symIntBounds e2
+      , l1 >= 0 && l2 >= 0 ->
+        (Just (l1 * l2), (*) <$> hi1 <*> hi2)
+    IAps (ICon _ (ICPrim _ PrimIntegerQuot)) [] [e1, e2]
+      | (Just l1, hi1) <- symIntBounds e1
+      , (Just l2, _)   <- symIntBounds e2
+      , l1 >= 1 && l2 >= 1 ->
+        (Just 1, quot <$> hi1 <*> Just l2)
+    IAps (ICon _ (ICPrim _ PrimIntegerExp)) [] [e1, e2]
+      | (Just l1, hi1) <- symIntBounds e1
+      , (Just l2, hi2) <- symIntBounds e2
+      , l1 >= 1 && l2 >= 0 ->
+        (Just (l1 ^ l2), (^) <$> hi1 <*> hi2)
+    IAps (ICon _ (ICPrim _ PrimIntegerLog2)) [] [_] ->
+        (Just 1, Nothing)
+    IAps (ICon _ (ICPrim _ PrimIf)) [it] [_, e1, e2]
+      | it == itInteger ->
+        let (lo1, hi1) = symIntBounds e1
+            (lo2, hi2) = symIntBounds e2
+        in  (min <$> lo1 <*> lo2, max <$> hi1 <*> hi2)
+    _ -> (Nothing, Nothing)
+
+intExprToBitExpr :: Position -> IType -> HExpr -> Maybe HExpr
+intExprToBitExpr pos ty e0 =
+  case derefHExpr e0 of
+    ICon i (ICModParam it)
+      | it == itInteger -> Just (ICon i (ICModParam (aitBit ty)))
+    ICon i (ICInt { iVal = IntLit { ilValue = l, ilWidth = w, ilBase = b } }) ->
+      let val = case ty of
+                  ITNum k -> mask k l
+                  _       -> l
+      in  Just (iMkLitWBAt (getIdPosition i) (aitBit ty) w b val)
+    IAps (ICon _ (ICPrim _ PrimIntegerNeg)) [] [e] -> do
+      be <- intExprToBitExpr pos ty e
+      let neg_ty = ITForAll k IKNum (aitBit (ITVar k) `itFun` aitBit (ITVar k))
+          k = take1tmpVarIds
+          icPrimNeg = ICon (idNegateAt pos) (ICPrim neg_ty PrimNeg)
+      return (IAps icPrimNeg [ty] [be])
+    IAps (ICon _ (ICPrim _ PrimIntegerLog2)) [] [e] -> do
+      be <- intExprToBitExpr pos (ITNum 32) e
+      let clog2_fc = ICon (mkId pos (mkFString "$clog2"))
+                          (ICForeign { iConType = itNat `itFun` aitBit ty
+                                     , fName = "$clog2"
+                                     , isC = False
+                                     , foports = Nothing
+                                     , fcallNo = Nothing
+                                     , fTyVarNames = []
+                                     })
+      return (IAps clog2_fc [] [be])
+    IAps (ICon _ (ICPrim _ PrimIf)) [it] [cnd, e1, e2]
+      | it == itInteger -> do
+          b1 <- intExprToBitExpr pos ty e1
+          b2 <- intExprToBitExpr pos ty e2
+          return (IAps icIf [aitBit ty] [derefAllHExpr cnd, b1, b2])
+    IAps (ICon _ (ICPrim _ op)) [] [e1, e2]
+      | op == PrimIntegerAdd -> do
+          b1 <- intExprToBitExpr pos ty e1
+          b2 <- intExprToBitExpr pos ty e2
+          return (IAps icPrimAdd [ty] [b1, b2])
+      | op == PrimIntegerSub -> do
+          b1 <- intExprToBitExpr pos ty e1
+          b2 <- intExprToBitExpr pos ty e2
+          return (IAps icPrimSub [ty] [b1, b2])
+      | op == PrimIntegerMul -> do
+          b1 <- intExprToBitExpr pos ty e1
+          b2 <- intExprToBitExpr pos ty e2
+          return (IAps icPrimMul [ty, ty, ty] [b1, b2])
+      | op == PrimIntegerQuot -> do
+          b1 <- intExprToBitExpr pos ty e1
+          b2 <- intExprToBitExpr pos ty e2
+          return (IAps icPrimQuot [ty, ty] [b1, b2])
+      | op == PrimIntegerRem -> do
+          b1 <- intExprToBitExpr pos ty e1
+          b2 <- intExprToBitExpr pos ty e2
+          return (IAps icPrimRem [ty, ty] [b1, b2])
+      | op == PrimIntegerExp
+      , ICon _ (ICInt { iVal = IntLit { ilValue = 2 } }) <- derefHExpr e1 -> do
+          b2 <- intExprToBitExpr pos (ITNum 32) e2
+          let one = iMkLitAt pos (aitBit ty) 1
+              (k, m) = take2tmpVarIds
+              sl_ty = ITForAll k IKNum (ITForAll m IKNum (aitBit (ITVar k) `itFun` aitBit (ITVar m) `itFun` aitBit (ITVar k)))
+              sl_con = ICon (setIdPosition pos idPrimSL) (ICPrim sl_ty PrimSL)
+          return (IAps sl_con [ty, ITNum 32] [one, b2])
+    _ -> Nothing
+
 reportNonSynthTypeInModuleArg :: Id -> IExpr a -> EMsg
 reportNonSynthTypeInModuleArg modId modExpr =
     let modPos = getPosition modId
@@ -6203,11 +6661,13 @@ reportNonSynthTypeInModuleArg modId modExpr =
 getNonSynthTypes :: IExpr a -> [IType]
 getNonSynthTypes expr =
     let
-        -- we only want to catch types which are fully known (no variables)
-        isAllTCon (ITCon {}) = True
-        isAllTCon (ITNum {}) = True
-        isAllTCon (ITAp t1 t2) = isAllTCon t1 && isAllTCon t2
-        isAllTCon _ = False
+        -- we want to catch concrete types or types parameterized by
+        -- module size variables (any ITVar other than the Bits size var t)
+        isKnownType _ (ITCon {}) = True
+        isKnownType _ (ITNum {}) = True
+        isKnownType t (ITVar u) = u /= t
+        isKnownType t (ITAp t1 t2) = isKnownType t t1 && isKnownType t t2
+        isKnownType _ _ = False
 
         -- the ILAM should be the first things
         getTyVars ts (ILAM t _ e) = getTyVars (t:ts) e
@@ -6219,7 +6679,7 @@ getNonSynthTypes expr =
                                       v)
                                 (ITVar t))
                           eb)
-            | (c == idBits) && (isAllTCon v)
+            | (c == idBits) && (isKnownType t v)
             = getVars ((t,v):vts) eb
         getVars vts (ILam _ _ eb) = getVars vts eb
         getVars vts _ = vts

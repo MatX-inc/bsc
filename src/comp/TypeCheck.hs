@@ -141,10 +141,12 @@ checkTopPreds mid a ps = do
 -- returning any unsatisfied preds
 topExpr :: CType -> CExpr -> TI ([VPred], CExpr)
 topExpr td e = do
+  addBoundTVs (tv td)
   (ps, e') <- tiExpr [] td e
   (ps', sbs0) <- satisfy [] ps
   sbs <- warnTransitiveIncoherent sbs0
   s <- getSubst
+  popBoundTVs
   let rec_defls    = getRecursiveDefls sbs
       nonrec_defls = getNonRecursiveDefls sbs
   -- Generate code: nonrec outside (letseq), rec inside (letrec)

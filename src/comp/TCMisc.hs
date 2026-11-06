@@ -888,7 +888,12 @@ reducePred _eps dvs (VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
                 x <- byInst v' i'
                 case x of
                    NoMatch -> do
-                     let chk = earlierInstanceMayCapture pr' h
+                     let nonZeroBoundWidth =
+                             qualEq (typeclassId (name c)) idNonEmptyBits &&
+                             case ts' of
+                               (n : _) -> not (null (tv n)) && all (`elem` bound_tyvars) (tv n)
+                               _       -> False
+                         chk = not nonZeroBoundWidth && earlierInstanceMayCapture pr' h
                      f (chk || incoherent) is
                    Defer ->
                      -- a rigid deferral: the row's determined positions

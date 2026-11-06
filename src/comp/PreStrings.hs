@@ -351,6 +351,7 @@ fsFromWrapField   = mkFString "fromWrapField"
 fsFromWrapNoInline = mkFString "fromWrapNoInline"
 fsToWrapField     = mkFString "toWrapField"
 fsSaveFieldPortTypes = mkFString "saveFieldPortTypes"
+fsNonEmptyBits    = mkFString "NonEmptyBits"
 
 -- XXX low ASCII only, please...
 sAcute             = "__"

@@ -6,7 +6,8 @@
 # Since T0043 can be called with different messages, these should really
 # check more closely than just the tag
 compile_verilog_fail_error IntegerMethodArg.bsv T0043 2
-compile_verilog_fail_error PolymorphicMethodArg.bsv T0043
+compile_verilog_pass PolymorphicMethodArg.bsv
+compile_verilog_fail_error PolymorphicTypeMethodArg.bsv T0043
 compile_verilog_fail_error ProvisoIfc.bsv T0043
 compile_verilog_fail_error ProvisoMethod.bsv T0043
 compile_verilog_fail_error NonBitsModuleArg.bsv T0043

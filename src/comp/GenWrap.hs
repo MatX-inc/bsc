@@ -33,7 +33,7 @@ import Pred hiding (name)
 import qualified Pred(name)
 import Scheme
 import Assump
-import CType(cTNum, cTStr, tyConArgs, getArrows, cTVarNum, isIfc, getRes, typeclassId)
+import CType(cTNum, cTStr, tyConArgs, getArrows, cTVarNum, isIfc, getRes, typeclassId, getTyVarId)
 import VModInfo(VSchedInfo, VPathInfo(..), VeriPortProp(..), VArgInfo(..),
                 VFieldInfo(..), VName(..), VWireInfo(..), VPort)
 -- GenWrap defines its own versions that expand synonyms and use qualEq
@@ -212,10 +212,11 @@ instance PPrint IfcTRec where
 
 data GeneratedIfc = GeneratedIfc
     {
-     genifc_id     :: Id,
-     genifc_kind   :: Kind,
-     genifc_cdefn  :: CDefn,
-     genifc_pprops :: [PProp]
+     genifc_id      :: Id,
+     genifc_kind    :: Kind,
+     genifc_numargs :: [Id],
+     genifc_cdefn   :: CDefn,
+     genifc_pprops  :: [PProp]
     }
   deriving (Show)
 
@@ -381,10 +382,7 @@ genWrapE generating ppmap cpack@(CPackage packageId exps imps impsigs fixs ds in
            di    = genifc_id genifc
            qdi   = qualId mid di
            k     = genifc_kind genifc
-           -- the type only has parameters if it's a wrapped foreign func
-           -- (in which case, the params are sizes from added Bits provisos)
-           -- XXX should we give better names in that case?
-           vs    = []
+           vs    = genifc_numargs genifc
            -- XXX if we need the field names, get them from genifc_cdefn
            ti    = TIstruct (SInterface noIfcPragmas)
                        (internalError "extSym: tried to access field names")
@@ -419,7 +417,15 @@ procDef (def@(CDef _ t _), _, _, pps) =
        return res
 procDef _ = internalError "genWrapE::procDef not CDef"
 
--- check that the type being generated is legal (uses the def to get a position)
+-- Check that the type of a synthesized module is legal.
+-- Non-numeric type variables (k /= KNum) and non-numeric typeclass provisos
+-- are rejected, while numeric kind variables (KNum) constrained by standard
+-- numeric provisos (Add, Mul, Div, Log, Max, Min, NumEq) are permitted so
+-- that size-polymorphic modules can be synthesized into parameterized
+-- Verilog modules (and Bluesim APackage templates).  Independent KNum
+-- variables appearing in the module's arguments or interface become leading
+-- Verilog parameters in VModInfo; dependent KNum variables are solved by
+-- prepareParameterizedModule in IExpand.
 chkType :: CDef -> CQType -> GWMonad [CType]
 chkType def ty =
  do
@@ -427,44 +433,51 @@ chkType def ty =
    symt <- getSymTab
    case convCQType symt ty of
      Left msg -> bad msg
-     Right ((_:_) :=> _) ->
-        let ctx = if isClassic() then "context" else "proviso"
-            msg = "It has a " ++ ctx ++ "."
-        in  bad (getPosition def, EBadIfcType (Just $ pfpString defId) msg)
-     Right ([]    :=> t) ->
+     Right (ps :=> t) ->
       do
-        if not (null (tv t))
-          then let msg = "Its interface is polymorphic."
+        let isNumericPred pp =
+              case removePredPositions pp of
+                IsIn cls _ ->
+                  any (qualEq (typeclassId (Pred.name cls)))
+                      [idAdd, idMul, idDiv, idLog, idMax, idMin, idNumEq]
+            bad_ps = filter (not . isNumericPred) ps
+            non_num_tvs = [ v | v@(TyVar _ _ k) <- tv (ps :=> t), k /= KNum ]
+        if not (null bad_ps)
+          then let ctx = if isClassic() then "context" else "proviso"
+                   msg = "It has a " ++ ctx ++ "."
                in  bad (getPosition def, EBadIfcType (Just $ pfpString defId) msg)
-          else
-           do
-             --traceM ("chkType: " ++ pfpReadable (t, getArrows t))
-             case getArrows t of
-               (args, TAp (TCon (TyCon tm _ _)) tr) | tm == idModule -> do
-                  pint <- getPolyInterface tr
-                  case pint of
-                    -- XXX: should do better with the exact field position
-                    (f:_) -> let msg = "Its interface has a polymorphic field " ++
-                                       quote (pfpString f) ++ "."
-                             in  bad (getPosition def,
-                                      EBadIfcType (Just $ pfpString defId) msg)
-                    [] ->
-                     do
-                       ----traceM ("chkType 2: " ++ pfpReadable (chkInterface tr))
-                       cint <- chkInterface tr
-                       case cint of
-                         Just _ ->
-                          do
-                            trs <- getInterfaces args
-                            return (tr : trs)
-                         Nothing -> let msg = "The type " ++
-                                              quote (pfpString t) ++
-                                              " is not an interface."
-                                    in  bad (getPosition def,
-                                             EBadIfcType (Just $ pfpString defId) msg)
-               _ -> let msg = "It is not a module."
-                    in  bad (getPosition def,
-                             EBadIfcType (Just $ pfpString defId) msg)
+          else if not (null non_num_tvs)
+            then let msg = "Its interface is polymorphic."
+                 in  bad (getPosition def, EBadIfcType (Just $ pfpString defId) msg)
+            else
+             do
+               --traceM ("chkType: " ++ pfpReadable (t, getArrows t))
+               case getArrows t of
+                 (args, TAp (TCon (TyCon tm _ _)) tr) | tm == idModule -> do
+                    pint <- getPolyInterface tr
+                    case pint of
+                      -- XXX: should do better with the exact field position
+                      (f:_) -> let msg = "Its interface has a polymorphic field " ++
+                                         quote (pfpString f) ++ "."
+                               in  bad (getPosition def,
+                                        EBadIfcType (Just $ pfpString defId) msg)
+                      [] ->
+                       do
+                         ----traceM ("chkType 2: " ++ pfpReadable (chkInterface tr))
+                         cint <- chkInterface tr
+                         case cint of
+                           Just _ ->
+                            do
+                              trs <- getInterfaces args
+                              return (tr : trs)
+                           Nothing -> let msg = "The type " ++
+                                                quote (pfpString t) ++
+                                                " is not an interface."
+                                      in  bad (getPosition def,
+                                               EBadIfcType (Just $ pfpString defId) msg)
+                 _ -> let msg = "It is not a module."
+                      in  bad (getPosition def,
+                               EBadIfcType (Just $ pfpString defId) msg)
 
 -- Return a list of names of any fields which are polymorphic,
 -- if the given type is an interface; otherwise return an empty list.
@@ -495,15 +508,17 @@ makeIfcTRec pps t =
               flat_t <- flatTypeId pps' t
               raw <- rawTypeId t
               let rootId = addInternalProp raw
+                  num_vs = nub [ i | TyVar i _ KNum <- tv t ]
+                  knd    = foldr (\_ k -> Kfun KNum k) KStar num_vs
               --
               return IfcTRec { rec_id        = flat_t,
                                rec_isforeign = False,
                                rec_rootid    = rootId,
                                rec_type      = t,
                                rec_pprops    = pps',
-                               rec_kind      = KStar,
+                               rec_kind      = knd,
                                rec_finfs     = fts,
-                               rec_numargs   = [],
+                               rec_numargs   = num_vs,
                                rec_typemap   = [] }
 
 -- pulls out all PProps relevant to GenWrap
@@ -581,20 +596,24 @@ getDef generating ds (i, pps) =
 
 -- force IsModule to be Module when we are generating
 fixupPolyModType :: CQType -> GWMonad CQType
-fixupPolyModType ty =
+fixupPolyModType ty@(CQType orig_ctx _) =
  do
    symt <- getSymTab
    case convCQType symt ty of
      Left msg -> return ty -- let other processing handle the error
-     -- note that any other provisos will be an error while generating anyway
-     Right ([pp] :=> t) ->
-       case (removePredPositions pp) of
-         (IsIn cls [TVar tv1, TVar tv2]) | (typeclassId (Pred.name cls) == idIsModule)
-           -> do
-                let modSubst = mkSubst [(tv1, tModule), (tv2, tId)]
-                return (CQType [] (apSub modSubst t))
-         _ -> return ty
-     _ -> return ty
+     Right (ps :=> t) ->
+       let splitIsMod (cpred, pp) (isMods, rem_ctx) =
+             case removePredPositions pp of
+               IsIn cls [TVar tv1, TVar tv2]
+                 | typeclassId (Pred.name cls) == idIsModule ->
+                   ((tv1, tv2) : isMods, rem_ctx)
+               _ -> (isMods, cpred : rem_ctx)
+           (isMods, rem_ctx) = foldr splitIsMod ([], []) (zip orig_ctx ps)
+       in case isMods of
+            ((tv1, tv2) : _) ->
+              let modSubst = mkSubst [(tv1, tModule), (tv2, tId)]
+              in  return (CQType (apSub modSubst rem_ctx) (apSub modSubst t))
+            [] -> return ty
 
 
 -- --------------------
@@ -834,6 +853,7 @@ genTDef trec@(IfcTRec newId rootId _ sty _ k fts args _) =
    return GeneratedIfc {
       genifc_id = newId,
       genifc_kind = k,
+      genifc_numargs = args,
       genifc_cdefn = ifc',
       genifc_pprops = newprops }
 
@@ -1046,14 +1066,15 @@ genIfcFieldFN trec rootId  prefixes (FInf fieldIdQ argtypes r _) =
 -- on differing attributes)
 
 mkTo_ :: IfcTRec -> GWMonad CDefn
-mkTo_ trec@(IfcTRec { rec_numargs = [], rec_typemap = [] }) =
+mkTo_ trec@(IfcTRec { rec_numargs = numargs, rec_typemap = [] }) =
  do
    let pps = rec_pprops trec
        -- i = rec_id trec
        t = rec_type trec
    tyId <- flatTypeId pps t
    let arg = id_t (getPosition t)
-   let ty = t `fn` cTCon tyId
+       flat_ty = cTApplys (cTCon tyId) (map cTVarNum numargs)
+   let ty = t `fn` flat_ty
    to <- (genTo pps t (CVar arg))
    let cls = CClause [CPVar arg] [] to
    return (CValueSign (CDef (to_Id tyId) (CQType [] ty) [cls]))
@@ -1130,14 +1151,15 @@ genTo pps ty mk =
 
 -- XXX this duplicates the traversals done by mkTo_ / genIfcField
 mkFrom_ :: IfcTRec -> GWMonad CDefn
-mkFrom_ trec@(IfcTRec { rec_numargs = [], rec_typemap = [] }) =
+mkFrom_ trec@(IfcTRec { rec_numargs = numargs, rec_typemap = [] }) =
  do
    let pps = rec_pprops trec
        -- i = rec_id trec
        t = rec_type trec
    tyId <- flatTypeId pps t
    let arg = id_t (getPosition t)
-   let ty = cTCon tyId `fn` t
+       flat_ty = cTApplys (cTCon tyId) (map cTVarNum numargs)
+   let ty = flat_ty `fn` t
    expr <- genFrom pps t (CVar arg)
    let cls = CClause [CPVar arg] [] expr
    return (CValueSign (CDef (from_Id tyId) (CQType [] ty) [cls]))
@@ -1233,10 +1255,10 @@ mkInstances trec = do
   return [genericInstance]
 
 mkGeneric :: IfcTRec -> GWMonad CDefn
-mkGeneric (IfcTRec { rec_id = flat_id, rec_type = orig_ty, rec_rootid = orig_id }) = do
+mkGeneric (IfcTRec { rec_id = flat_id, rec_type = orig_ty, rec_rootid = orig_id, rec_numargs = numargs }) = do
   ctxs <- mkCtxs orig_ty
   let pos = getPosition orig_id
-      flat_ty = cTCon flat_id
+      flat_ty = cTApplys (cTCon flat_id) (map cTVarNum numargs)
       cqt = CQType ctxs $ cTApplys (cTCon idGeneric)
             [flat_ty, cTApplys (cTCon idMeta)
               [cTApplys (cTCon idMetaData)
@@ -1265,8 +1287,10 @@ mkCtxs ty =
      Just (_, _, fts) -> do
        css <- mapM meth fts
        let bits_types = unions css
+           used_ids = map getTyVarId (tv ty)
+           free_tmp_ids = [ v | v <- tmpTyVarIds, v `notElem` used_ids ]
            ctxs = [ CPred (CTypeclass idBits) [t, cTVarNum v]
-                        | (t, v) <- zip bits_types tmpTyVarIds ]
+                        | (t, v) <- zip bits_types free_tmp_ids ]
        return ctxs
  where
    meth :: FInf -> GWMonad [CType]
@@ -1312,7 +1336,7 @@ mkCtxs ty =
 -- the values before applying the module def to them.
 
 mkNewModDef :: M.Map Id GeneratedIfc -> ModDefInfo -> GWMonad CDefn
-mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
+mkNewModDef genIfcMap (def@(CDef i (CQType orig_preds t) dcls), cqt, vtis, vps) =
  do
    --traceM ("mkNewModDef: " ++ ppReadable def)
    -- XXX This could have been stored in the moduledef info
@@ -1326,13 +1350,14 @@ mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
                         Nothing -> internalError "GenWrap.mkNewModDef: cint"
 
    tyId <- flatTypeId vps tr    -- id of the Ifc_
-   let ty = tmod (cTCon tyId)   -- type of new module
 
    -- sanity check the port names (clashes, bad identifiers, etc)
    let genifc = case (M.lookup tyId genIfcMap) of
                   Just res -> res
                   Nothing -> internalError ("mkNewModDef: can't find ifc: " ++
                                             ppReadable tyId)
+       flat_ifc_ty = cTApplys (cTCon tyId) (map cTVarNum (genifc_numargs genifc))
+       ty = tmod flat_ifc_ty    -- type of new module
        cfields = case genifc_cdefn genifc of
                    (Cstruct _ _ _ _ cs _) -> cs
                    _ -> internalError "GenWrap.mkNewModDef: cfields"
@@ -1375,7 +1400,10 @@ mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
        cls = CClause (map CPVar vs) [] lte
 
    -- produce the context and new base-type for the new def
-   let tvs = map cTVarNum (take (length ts) tmpTyVarIds)
+   let used_ids = map getTyVarId (tv (orig_preds, t))
+       free_tmp_ids = [ v | v <- tmpTyVarIds, v `notElem` used_ids ]
+       tvs = [ TVar (TyVar v n KNum)
+             | (v, n) <- zip (take (length ts) free_tmp_ids) [1..] ]
    -- reverse because we want to tack on the innermost type first
    -- and we are folding from the left
    (ctx, ty') <- foldM mkCtx ([], ty) (reverse (zip ts tvs))
@@ -1384,7 +1412,7 @@ mkNewModDef genIfcMap (def@(CDef i (CQType _ t) dcls), cqt, vtis, vps) =
    --traceM (" mkNewModDef: dcls: " ++ ppReadable dcls)
    --traceM (" mkNewModDef: exprs: " ++ ppReadable exprs)
    --traceM ( "mkNewModDef: cls:" ++  ppReadable cls )
-   let result =  (CValueSign (CDef (modIdRename vps i) (CQType ctx ty') [cls]))
+   let result =  (CValueSign (CDef (modIdRename vps i) (CQType (orig_preds ++ ctx) ty') [cls]))
    --traceM( "mkNewModDef tyId: " ++ ppReadable tyId )
    --traceM( "mkNewModDef vs: " ++ ppReadable vs )
    --traceM( "mkNewModDef res: " ++ ppReadable result )
@@ -1461,13 +1489,28 @@ mkNewModDef _ (def,_,_,_) =
 -- type DefFun = Bool -> VWireInfo -> VSchedInfo -> VPathInfo -> [VPort] -> SymTab -> [VFieldInfo] -> [Id] -> IO CDefn
 -- XXX: alwaysEnabled is dropped and broken (not propagated to {inhigh})
 mkDef :: [PProp] -> [PProp] -> CDef -> CQType -> GWMonad DefFun
-mkDef iprags pps (CDef i (CQType _ qt) _) cqt = do
+mkDef iprags pps (CDef i def_cqt@(CQType _ qt) _) cqt = do
  st0 <- get
  return (\fmod wire_info sch pathinfo ips symt fields true_ifc_ids -> do
   let
       (ts, tr) = case getArrows qt of
                    (ats, TAp _ r) -> (ats, r)
                    _ -> internalError "GenWrap.mkDef: ts, tr"
+      qt_kinded = case convCQType symt def_cqt of
+                    Right (_ :=> t_k) -> t_k
+                    Left _ -> qt
+      (ts_k, tr_k) = case getArrows qt_kinded of
+                       (ats, TAp _ r) -> (ats, r)
+                       _ -> (ts, tr)
+      all_size_vars = nub [ v | TyVar v _ KNum <- tv (ts_k, tr_k) ]
+      size_var_map = [ (getIdBaseString v, v) | v <- all_size_vars ]
+      size_vars =
+          let leading_params = [ v | Param (VName s) <- take (length all_size_vars) (wArgs wire_info)
+                                   , Just v <- [lookup s size_var_map] ]
+          in  if length leading_params == length all_size_vars
+              then leading_params
+              else all_size_vars
+      ifc_size_vars = nub [ v | TyVar v _ KNum <- tv tr_k ]
       st1 = st0 { symtable = symt }
   -- do not use ifc prags here
   (st2, ti_) <- runGWMonadGetNoFail (flatTypeId pps tr) st1
@@ -1514,8 +1557,13 @@ mkDef iprags pps (CDef i (CQType _ qt) _) cqt = do
 
   (st4, argss) <- runGWMonadGetNoFail (zipWithM genArg (map CVar vs) ts) st3
   let (arg_exprs, arg_ts) = unzip $ concat argss
+      mkValueOfExpr v =
+        let pos = getPosition v
+        in  cVApply idValueOf
+              [CHasType (anyExprAt pos) (CQType [] (TAp tBit (cTVarNum v)))]
+      size_param_exprs = map mkValueOfExpr size_vars
       -- make the arg port-types, for saving in the module
-      arg_pts = mkArgPortTypes wire_info arg_ts
+      arg_pts = mkArgPortTypes (length size_vars) wire_info arg_ts
   let
       fields' = filter (not . (isRdyToRemoveField (iprags ++ pps))) fields
       veriFields = (map (fixupVeriField (iprags ++ pps) ips) fields')
@@ -1524,13 +1572,13 @@ mkDef iprags pps (CDef i (CQType _ qt) _) cqt = do
              pps
              (CLit(CLiteral noPosition(LString( getIdBaseString i) )))
              wire_info
-             arg_exprs
+             (size_param_exprs ++ arg_exprs)
              veriFields
              sch
              pathinfo
       vlift = (cVApply idLiftModule [vexp])
   body <- runGWMonadNoFail
-              (genFromBody arg_pts vlift true_ifc_ids ti_ ifcId finfs)
+              (genFromBody arg_pts vlift true_ifc_ids ti_ ifc_size_vars ifcId finfs)
               st4
   let cls = CClause (map CPVar vs) [] body
   return $ CValueSign (CDef i cqt [cls]))
@@ -1538,11 +1586,11 @@ mkDef iprags pps (CDef i (CQType _ qt) _) cqt = do
 mkDef _ _ def _ = internalError ("GenWrap::mkDef unexpected " ++ show def )
 
 
-mkArgPortTypes :: VWireInfo -> [CType] -> [(VPort, CType)]
-mkArgPortTypes wire_info arg_ts =
+mkArgPortTypes :: Int -> VWireInfo -> [CType] -> [(VPort, CType)]
+mkArgPortTypes num_size_params wire_info arg_ts =
     let
         -- xWrapperModuleVerilog will check that the lists are the same length
-        arg_its = zip (wArgs wire_info) arg_ts
+        arg_its = zip (drop num_size_params (wArgs wire_info)) arg_ts
         mkPortType (Port vp _ _, t) = [(vp,t)]
         mkPortType (InoutArg vn _ _, t) = [((vn,[]),t)]
         -- XXX fill in info for the rest?
@@ -1556,11 +1604,11 @@ mkArgPortTypes wire_info arg_ts =
 -- used in wrapper generate to wrap the module given by mk
 -- to the result.
 genFromBody :: [(VPort, CType)] ->
-               CExpr -> [Id] -> Id -> Id -> [FInf] -> GWMonad CExpr
-genFromBody arg_pts mk true_ifc_ids si ifcId fts =
+               CExpr -> [Id] -> Id -> [Id] -> Id -> [FInf] -> GWMonad CExpr
+genFromBody arg_pts mk true_ifc_ids si ifc_size_vars ifcId fts =
  do
    -- traceM( "genFromBody: " ++ ppReadable fts )
-   let sty = cTCon si
+   let sty = cTApplys (cTCon si) (map cTVarNum ifc_size_vars)
    let pos = getIdPosition si
    let mkMethod = mkFromBind true_ifc_ids (CVar (id_t pos))
    meths <- mapM mkMethod fts
