@@ -104,7 +104,7 @@ endif
 
 BSCEXES = bsc
 TCLEXES = bluetcl
-UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba vcdcheck
+UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba fstcheck fstscopes vcdcheck
 SHOWRULESEXES = showrules
 # Build-consistency checkers: installed as part of the normal install
 # (not just install-extra), because the library build runs them
