@@ -18,6 +18,7 @@ m4_process "-DBLUESPECDIR=[get_default_bsdir]" \
 m4_process "-DBLUESPECDIR=$bsdir" bsc.print-flags.out.expected bsc.print-flags.out.expected.post-m4
 m4_process "-DBLUESPECDIR=$bsdir" bsc.print-flags.split-if.out.expected bsc.print-flags.split-if.out.expected.post-m4
 m4_process "-DBLUESPECDIR=$bsdir" bsc.print-flags.expand-if.out.expected bsc.print-flags.expand-if.out.expected.post-m4
+m4_process "-DBLUESPECDIR=$bsdir" bsc.print-flags.remap-path-prefix.out.expected bsc.print-flags.remap-path-prefix.out.expected.post-m4
 m4_process "-DBLUESPECDIR=$bsdir" bsc.print-flags-raw.out.expected bsc.print-flags-raw.out.expected.post-m4
 m4_process "-DBLUESPECDIR=$bsdir"  bsc.test_bsc_option.out.expected bsc.test_bsc_option.out.expected.post-m4
 
@@ -29,6 +30,9 @@ test_basic_options -print-flags-raw bsc.print-flags-raw.out bsc.print-flags-raw.
 # test -split-if and -expand-if flags (-expand-if test includes deprecation warning)
 test_basic_options "-print-flags -split-if" bsc.print-flags.split-if.out bsc.print-flags.split-if.out.expected.post-m4
 test_basic_options "-print-flags -expand-if" bsc.print-flags.expand-if.out bsc.print-flags.expand-if.out.expected.post-m4
+
+# -remap-path-prefix is obsolete: accepted with a warning, and ignored
+test_basic_options "-print-flags -remap-path-prefix /x=." bsc.print-flags.remap-path-prefix.out bsc.print-flags.remap-path-prefix.out.expected.post-m4
 
 
 # Test that the expected file has not been accidentally corrupted.
