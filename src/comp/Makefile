@@ -104,13 +104,14 @@ endif
 
 BSCEXES = bsc
 TCLEXES = bluetcl
+BO2BLOOGLEEXES = bo2bloogle
 UTILEXES = bsc2bsv bsv2bsc dumpbo dumpba fstcheck fstscopes vcdcheck
 SHOWRULESEXES = showrules
 # Build-consistency checkers: installed as part of the normal install
 # (not just install-extra), because the library build runs them
 CHECKEXES = tconcheck
 
-EXES = $(BSCEXES) $(TCLEXES) $(UTILEXES) $(SHOWRULESEXES) $(CHECKEXES)
+EXES = $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(UTILEXES) $(SHOWRULESEXES) $(CHECKEXES)
 
 # Point the linker at the vendored solvers installed in $(PREFIX)/lib/SAT.
 CABAL_ENV = LIBRARY_PATH="$(abspath $(PREFIX))/lib/SAT$${LIBRARY_PATH:+:$$LIBRARY_PATH}"
@@ -136,7 +137,7 @@ $(EXES): version
 # Install targets
 
 .PHONY: install
-install: $(BSCEXES) $(TCLEXES) $(CHECKEXES) install-bsc install-bluetcl install-checkers
+install: $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) install-bsc install-bluetcl install-bo2bloogle install-checkers
 
 .PHONY: install-extra
 install-extra: $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
@@ -155,7 +156,6 @@ install-bluetcl: $(PKGINFO)
 
 .PHONY: install-bo2bloogle
 install-bo2bloogle: $(addprefix $(BINDIR)/,$(BO2BLOOGLEEXES))
-install-bo2bloogle: $(addprefix $(BINDIR)/core/,$(BO2BLOOGLEEXES))
 install-bo2bloogle: $(PKGINFO)
 
 .PHONY: install-utils
