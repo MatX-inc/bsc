@@ -78,6 +78,7 @@ Flags {
 	redStepsMaxIntervals = 10,
 	redStepsWarnInterval = 100000,
 	relaxMethodEarliness = True,
+	remapPathPrefix = [],
 	removeCReg = True,
 	removeCross = True,
 	removeEmptyRules = True,
