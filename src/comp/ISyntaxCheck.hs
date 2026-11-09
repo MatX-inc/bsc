@@ -15,7 +15,7 @@ import Position
 import Id
 import PreIds
 import ISyntax
-import IType(iTypeGroundKind)
+import IType(iTypeAtfFree, iTypeGroundKind)
 import ISyntaxSubst(tSubst, tSubstBatch)
 import ISyntaxUtil
 import Changed(changedOrId)
@@ -168,7 +168,8 @@ tCheck flags symt cache r eqTy ec@(ILam i t e) =
         itFun t (tCheck flags symt cache (addT symt i t r) eqTy e)
 tCheck flags symt cache r eqTy ec@(IAps f0 ts [a]) =
         let f = iAps f0 ts []
-            norm = changedOrId $ fullTypeNormalizer flags symt cache
+            norm t | atfFree t = t
+                   | otherwise = changedOrId (fullTypeNormalizer flags symt cache) t
             at = norm $ tCheck flags symt cache r eqTy a
             (rt, at') =
                 case norm $ tCheck flags symt cache r eqTy f of
@@ -205,6 +206,14 @@ tCheck flags symt cache r eqTy (IAps f [] []) =
     tCheck flags symt cache r eqTy f
 tCheck _ _ _ _ _ (IRefT t _ _ _) = t
 --tCheck _ _ _ _ e = internalError ("no match in tCheck: " ++ ppReadable e)
+
+-- Whether a type mentions no associated type function, so that
+-- fullTypeNormalizer would return it Unchanged.  That walk only matches on
+-- the constructors of the type's nodes and tycon sorts, all evaluated before
+-- the type exists, so skipping it forces nothing.  An interior node carries
+-- the answer in a field set when it was interned.
+atfFree :: IType -> Bool
+atfFree = iTypeAtfFree
 
 -- Instantiate a polymorphic type with type arguments, checking kinds in order.
 instTypes :: Env -> IExpr a -> IType -> [IType] -> IType
