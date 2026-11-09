@@ -731,10 +731,10 @@ ctypeStatsOn = "-trace-ctype-stats" `elem` progArgs
 -- -check-ctype-ids: every answer taken from two equal words -- cmp's EQ
 -- and Unify's mgu and match shortcuts -- is also decided structurally
 -- (checkEqByWord); a disagreement is an internal error.  The
--- one-sided shortcuts (apSub, tv, expandSyn, inst, getFreeT and chkTAp)
--- return their input on the ground or normal flag and are not checked
--- here: they rest on the flags' definition, and -no-ctype-ids turns them
--- all off.
+-- one-sided shortcuts (apSub, tv, expandSyn, inst, getFreeT, chkTAp,
+-- TCMisc's expTFun, normT, expandSynN and the badCon scan) return their
+-- input on the ground or normal flag and are not checked here: they
+-- rest on the flags' definition, and -no-ctype-ids turns them all off.
 {-# NOINLINE checkCanonIds #-}
 checkCanonIds :: Bool
 checkCanonIds = "-check-ctype-ids" `elem` progArgs
