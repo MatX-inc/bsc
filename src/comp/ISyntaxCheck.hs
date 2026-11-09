@@ -15,6 +15,7 @@ import Position
 import Id
 import PreIds
 import ISyntax
+import IType(iTypeGroundKind)
 import ISyntaxSubst(tSubst, tSubstBatch)
 import ISyntaxUtil
 import Changed(changedOrId)
@@ -257,21 +258,45 @@ iGetKind = kCheck emptyEnv
 
 -- a kind error is an internal error
 kCheckErr :: Env -> IType -> IKind
-kCheckErr r (ITForAll i k t) = let kr = kCheckErr (addK i k r) t
-                               in  kr `seq` IKFun k kr
-kCheckErr r tc@(ITAp f a) =
+kCheckErr r t
+    | groundINode t = groundKind r t
+    | otherwise      = kCheckErrNode r t
+
+kCheckErrNode :: Env -> IType -> IKind
+kCheckErrNode r (ITForAll i k t) = let kr = kCheckErr (addK i k r) t
+                                   in  kr `seq` IKFun k kr
+kCheckErrNode r tc@(ITAp f a) =
   case kCheckErr r f of
     kf@(IKFun ka kr) ->
         let ka' = kCheckErr r a
         in  assert (ka' == ka) "ITAp" (tc, (f, kf), (ka', ka)) (ka', ka) kr
     k -> internalError ("kCheck " ++ ppReadable (tc, k))
-kCheckErr r t@(ITVar i) =
+kCheckErrNode r t@(ITVar i) =
     case findK i r of
       Just k -> k
       Nothing -> internalError ("findK: " ++ ppReadable (r, t))
-kCheckErr _ (ITCon _ k _) = k
-kCheckErr _ (ITNum _) = IKNum
-kCheckErr _ (ITStr _) = IKStr
+kCheckErrNode _ (ITCon _ k _) = k
+kCheckErrNode _ (ITNum _) = IKNum
+kCheckErrNode _ (ITStr _) = IKStr
+
+-- The kind of a ground interior node depends on the node alone, so it is
+-- checked once per node for the whole compilation: the node's lazy kind
+-- field (IType.iTypeGroundKind) walks it on first demand, as the check
+-- would, and later checks read the field.  This moves no first forcing: a
+-- node's children are evaluated before the node exists, and kinds hold no
+-- strings.  An ill-kinded node's field is Nothing, and the check below then
+-- raises its internal error as before.  With -hack-no-itype-ftv-cache no
+-- node counts as ground.
+groundINode :: IType -> Bool
+groundINode t@(ITAp _ _) = ftvCacheEnabled && vsNull (fTVarSet t)
+groundINode t@(ITForAll _ _ _) = ftvCacheEnabled && vsNull (fTVarSet t)
+groundINode _ = False
+
+groundKind :: Env -> IType -> IKind
+groundKind r t =
+    case iTypeGroundKind t of
+      Just k  -> k
+      Nothing -> kCheckErrNode r t
 
 tCheckIPackage :: Flags -> SymTab -> IPackage a -> Bool
 tCheckIPackage flags symt (IPackage pi _ _ ds atf_cache) =
