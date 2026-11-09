@@ -339,7 +339,7 @@ dummy_id = dummyId noPosition
 -- properties from that Id.
 enumId :: String -> Position -> Int -> Id
 enumId str pos index =
-    let id_str = tmpFString index ("_" ++ str ++ itos index)
+    let id_str = enumFString str index
     in  setBadId
             (Id pos fsEmpty id_str [])
 
