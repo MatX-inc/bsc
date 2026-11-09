@@ -419,10 +419,6 @@ getPortInfo pps aif =
 -- -----
 
 exclRulesDBToDisjRulesDB :: ExclusiveRulesDB -> DisjointRulesDB
-exclRulesDBToDisjRulesDB (ExclusiveRulesDB emap) =
-    let e_edges = M.toList emap
-        convEdge (r,(ds,es)) = (r, ds)
-        d_edges = map convEdge e_edges
-    in  M.fromList d_edges
+exclRulesDBToDisjRulesDB = erdbDisjointSets
 
 -- -----

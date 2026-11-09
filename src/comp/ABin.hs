@@ -12,6 +12,7 @@ module ABin (ABin(..),
              abemi_method_uses_map,
              abemi_warnings,
              abemi_schedule,
+             abemi_exclusive_rules_db,
              abemi_rule_relation_db
              ) where
 
@@ -203,6 +204,12 @@ abemi_schedule m =
     case m of
       Left l  -> asei_schedule (abmsei_aschederrinfo l)
       Right r -> Just (asi_schedule (abmi_aschedinfo r))
+
+abemi_exclusive_rules_db :: ABinEitherModInfo -> Maybe ExclusiveRulesDB
+abemi_exclusive_rules_db m =
+    case m of
+      Left l  -> asei_exclusive_rules_db (abmsei_aschederrinfo l)
+      Right r -> Just (asi_exclusive_rules_db (abmi_aschedinfo r))
 
 abemi_rule_relation_db :: ABinEitherModInfo -> Maybe RuleRelationDB
 abemi_rule_relation_db m =

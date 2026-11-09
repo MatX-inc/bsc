@@ -939,7 +939,7 @@ aSchedule_step1 errh flags prefix pps amod = do
 
   do s <- get
      let rrdb1 = tr "ruleRelationDB" $
-                 mkRuleRelationDB ruleNames rule_disjoint
+                 mkRuleRelationDB ruleNames
                      cfConflictMap0 scConflictMap0
                      [] [] scConflictEdgesSP []
      put (s { sm_rule_relation_db = Just rrdb1 })
@@ -1037,7 +1037,7 @@ aSchedule_step1 errh flags prefix pps amod = do
 
   do s <- get
      let rrdb2 = tr "ruleRelationDB" $
-                 mkRuleRelationDB ruleNames rule_disjoint
+                 mkRuleRelationDB ruleNames
                      cfConflictMap0 scConflictMap0
                      resDrops' [] scConflictEdgesSP []
      put (s { sm_rule_relation_db = Just rrdb2 })
@@ -1280,7 +1280,7 @@ aSchedule_step2 errh flags prefix pps urgency_pairs amod ( scConflictMap0
 
   do s <- get
      let rrdb3 = tr "ruleRelationDB" $
-                 mkRuleRelationDB ruleNames rule_disjoint
+                 mkRuleRelationDB ruleNames
                      cfConflictMap0 scConflictMap0
                      resDrops' cycleDrops scConflictEdgesSP []
      put (s { sm_rule_relation_db = Just rrdb3 })
@@ -1759,7 +1759,7 @@ aSchedule_step3 errh flags prefix pps amod ( scConflictMap0
   -- XXX we should be able to pass just the final cf/sc maps to this function,
   -- XXX in place of the five separate maps/lists of conflicts
   let ruleRelationDB = tr "ruleRelationDB" $
-                       mkRuleRelationDB ruleNames rule_disjoint
+                       mkRuleRelationDB ruleNames
                            cfConflictMap0 scConflictMap0
                            resDrops' cycleDrops scConflictEdgesSP
                            (arb_earliness_edges ++ arb_earliness_ffunc_edges)
@@ -1770,7 +1770,8 @@ aSchedule_step3 errh flags prefix pps amod ( scConflictMap0
 
   -- Show rule queries,
   -- if the commandline flag was used to request dump of rule relationships
-  tr "doQueries" $ convIO $ doQueries errh flags ruleNames ruleRelationDB
+  tr "doQueries" $ convIO $
+      doQueries errh flags ruleNames rule_disjoint ruleRelationDB
 
   -- ====================
   -- vSchedInfo
@@ -3854,14 +3855,14 @@ mkExclusiveRulesDB rule_names rule_uses_map are_disjoint are_cf cf_map sc_map
 -- User-requested rule relationship queries
 --
 
-mkRuleRelationDB :: [ARuleId] -> (ARuleId -> ARuleId -> Bool) ->
+mkRuleRelationDB :: [ARuleId] ->
                     ConflictMap -> ConflictMap ->
                     [(ARuleId, ARuleId, [Conflicts])] ->
                     [(ARuleId, ARuleId, [Conflicts])] ->
                     [(ARuleId, ARuleId, [Conflicts])] ->
                     [(CSNode, CSNode, CSEdge)] ->
                     RuleRelationDB
-mkRuleRelationDB rule_names rule_disjoint cf_map sc_map
+mkRuleRelationDB rule_names cf_map sc_map
                  res_drops cycle_drops sched_pragma_drops arb_edges =
   let
       arb_map :: M.Map (ARuleId, ARuleId) Conflicts
@@ -3899,22 +3900,22 @@ mkRuleRelationDB rule_names rule_disjoint cf_map sc_map
                      , mPragma = get_conflict sched_pragma_drops
                      , mArb = M.lookup (rule1, rule2) arb_map
                      }
-              minfo = if (info /= defaultRuleRelationship)
-                      then (Just info)
-                      else Nothing
-          in ((rule1,rule2), rule1 `rule_disjoint` rule2, minfo)
+          in ((rule1,rule2), info)
 
       infos = [ getPairInfo r1 r2 | r1 <- rule_names, r2 <- rule_names ]
 
-  in rrdbFromList infos
+  in RuleRelationDB (M.fromList [ p | p@(_, info) <- infos,
+                                      info /= defaultRuleRelationship ])
 
-doQueries :: ErrorHandle -> Flags -> [ARuleId] -> RuleRelationDB -> IO ()
-doQueries errh flags rule_names relationDB =
+doQueries :: ErrorHandle -> Flags -> [ARuleId] -> RuleDisjointTest ->
+             RuleRelationDB -> IO ()
+doQueries errh flags rule_names rule_disjoint relationDB =
     mapM_ print_sched_infos (schedQueries flags)
     where -- print info for a pair of rules
           print_sched_info (rule1, rule2) =
-              let (disj,rri) = getRuleRelation relationDB rule1 rule2
-                  doc = printRuleRelationInfo rule1 rule2 disj rri
+              let disj = rule_disjoint rule1 rule2
+                  rri = getRuleRelation relationDB rule1 rule2
+                  doc = printRuleRelationInfo rule1 rule2 (Just disj) rri
               in  putStrLn (ppDoc doc)
           -- print info for multiple rules specified in one query flag
           print_sched_infos (rules1, rules2) =

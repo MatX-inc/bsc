@@ -30,6 +30,7 @@ import System.Environment(getEnv)
 import System.Mem(performGC)
 import Text.Regex
 import qualified Data.Map as M
+import qualified Data.Set as S
 
 -- Bluespec imports
 import Util(quote, concatMapM, concatUnzip3, lastOrErr, fromJustOrErr, fst3,
@@ -70,7 +71,7 @@ import ASyntaxUtil
 import Pragma
 import DefProp
 import AScheduleInfo
-import AUses(MethodId(..))
+import AUses(MethodId(..), rumToObjectMap)
 import VModInfo
 import ADumpSchedule
 import BackendNamingConventions
@@ -1704,7 +1705,18 @@ tclRule ["rel", modname, rule1, rule2] =
                  when (rule2 `notElem` rule_names) $ mkRuleErr rule2
                  let rId1 = mk_homeless_id rule1
                      rId2 = mk_homeless_id rule2
-                     (disj, rinfo) = getRuleRelation rrdb rId1 rId2
+                     rinfo = getRuleRelation rrdb rId1 rId2
+                     -- the .ba records disjointness only for rules that
+                     -- use a common submodule (as in mkExclusiveRulesDB)
+                     rum = case abmi of
+                             Left l  -> asei_rule_uses_map (abmsei_aschederrinfo l)
+                             Right r -> asi_rule_uses_map (abmi_aschedinfo r)
+                     objs r = M.findWithDefault S.empty r (rumToObjectMap rum)
+                     share = not (S.null (S.intersection (objs rId1) (objs rId2)))
+                     disj = case (abemi_exclusive_rules_db abmi) of
+                              Just erdb | share
+                                -> Just (areRulesDisjoint erdb rId1 rId2)
+                              _ -> Nothing
                  return $ TStr (ppDoc (printRuleRelationInfo rId1 rId2 disj rinfo))
 ----------
 tclRule ["full",modname,rule] =
