@@ -15,6 +15,7 @@ import ErrorUtil(internalError)
 import Flags
 import Id(getIdString, getIdQual, getIdQualString, unQualId)
 import SimCCBlock
+import SimPackage(simPruneSubtree)
 import ASyntax
 import ASyntaxUtil(exprForeignCalls,actionForeignCalls)
 import ForeignFunctions
@@ -68,7 +69,7 @@ simBlocksToC flags time top_block def_clk def_rst
                , ids_in_instance <- groupBy ((==) `on` (getIdQual . snd)) sorted_ids
                -- find the Id of the module block for this instance
                , let inst_name = getIdQualString $ snd (head ids_in_instance)
-               , let sbid = lookupInstance sb_map top_mod_id inst_name
+               , let sbid = lookupInstance (simPruneSubtree flags) sb_map top_mod_id inst_name
                -- lookup the clock domain for this clock in this instance
                , let i = snd (head ids_in_instance)
                , let d = lookupDom (clk,i) clk_groups
@@ -118,12 +119,14 @@ simBlocksToC flags time top_block def_clk def_rst
 simLinkTopOnly :: Bool
 simLinkTopOnly = "-sim-link-top-only" `elem` progArgs
 
-lookupInstance :: SBMap -> Maybe SBId -> String -> Maybe SBId
-lookupInstance _ Nothing _ = Nothing
-lookupInstance sb_map (Just top_id) s =
+lookupInstance :: Bool -> SBMap -> Maybe SBId -> String -> Maybe SBId
+lookupInstance _ _ Nothing _ = Nothing
+lookupInstance pruned sb_map (Just top_id) s =
   let path = wordsBy (=='.') s
   in case path of
        ("top":rest) -> helper rest top_id
+       -- a pruned root's schedule Ids are unqualified (see topScope)
+       [] | pruned  -> Just top_id
        otherwise    -> Nothing
   where helper []     i = Just i
         helper (p:ps) i =

@@ -11,6 +11,7 @@ import ABinUtil(InstModMap)
 import ErrorUtil(internalError)
 import Util(mapSnd)
 import SimPrimitiveModules(isPrimitiveModule)
+import SimPackage(simPruneSubtree)
 
 import Data.Maybe(maybeToList)
 import Data.List(find, intercalate, sortOn)
@@ -28,7 +29,12 @@ simCOpt :: Flags -> InstModMap ->
 simCOpt flags instmodmap (blocks, scheds, clk_groups, gate_info) =
   let (blocks1,scheds1) = moveDefsOntoStack flags instmodmap (blocks,scheds)
       blocks2           = map (mapBlockFns removeUnusedLocals) blocks1
-      scheds2           = map (mapSchedFns removeUnusedLocals) scheds1
+      -- A pruned root (see simPruneSubtree) writes no schedule, so keep
+      -- its schedule as built: renaming the defs moved into it would make
+      -- names whose creation order depends on the pruned descendants.
+      scheds2           = if simPruneSubtree flags
+                          then scheds
+                          else map (mapSchedFns removeUnusedLocals) scheds1
   in (blocks2, scheds2, clk_groups, gate_info)
 
 

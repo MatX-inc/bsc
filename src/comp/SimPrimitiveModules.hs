@@ -4,7 +4,7 @@ module SimPrimitiveModules ( primMap
                            , TickDirection(..)
                            , tickElem, tickIsPos, tickIsNeg
                            , checkBluesimPrimitives
-                           , getPrimDomainInfo
+                           , getPrimDomainInfo, primDomainNames
                            , isPrimitiveModule, isFIFO
                            ) where
 
@@ -628,6 +628,28 @@ getPrimDomainInfo avi prim | isDualPortBRAM prim =
       prim_iface   = []                          -- [AIFace]
   in Just (avi, prim_domains, prim_iface)
 getPrimDomainInfo _ _ = Nothing
+
+-- Every name that getPrimDomainInfo interns for a primitive (keep in step
+-- with it: SimExpand checks these before pruning a -c root's subtree).
+primDomainNames :: String -> [String]
+primDomainNames prim
+  | prim `elem` ["RWire", "RWire0", "BypassWire", "BypassWire0", "ProbeWire"]
+              = ["clk", "CLK"]
+  | prim `elem` ["Counter", "Probe", "SyncReset"] = ["CLK"]
+  | prim == "ClockGen" = ["gen_clk", "CLK_OUT"]
+  | prim == "RegAligned" = ["CLK", "clk_src"]
+  | isCReg prim = ["CLK"]
+  | prim `elem` ["MakeClock", "GatedClock"] = ["new_clk", "CLK_OUT", "CLK_GATE_OUT"]
+  | prim == "ClockInverter" = ["slowClock", "CLK_OUT"]
+  | prim == "GatedClockInverter" = ["slowClock", "CLK_OUT", "CLK_GATE_OUT"]
+  | prim == "ClockDiv" = ["slowClock", "CLK_OUT", "CLK_IN"]
+  | prim == "GatedClockDiv" = ["slowClock", "CLK_OUT", "CLK_GATE_OUT", "CLK_IN"]
+  | prim `elem` ["ClockSelect", "ClockMux"] = ["clock_out", "CLK_OUT", "CLK_GATE_OUT"]
+  | prim `elem` ["UngatedClockSelect", "UngatedClockMux"] = ["clock_out", "CLK_OUT"]
+  | prim == "SyncHandshake" = ["sCLK", "dCLK"]
+  | isFIFO prim || isSinglePortBRAM prim = ["CLK"]
+  | isDualPortBRAM prim = ["CLKA", "CLKB"]
+  | otherwise = []
 
 setInputClockPort :: AVInst -> Id -> Id -> AVInst
 setInputClockPort avi clk_id osc_id =
