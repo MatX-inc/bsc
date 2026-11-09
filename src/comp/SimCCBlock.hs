@@ -61,12 +61,12 @@ import IntLit
 import IntegerUtil(aaaa)
 import PPrint hiding (char, int)
 import Util(itos, headOrErr, initOrErr, lastOrErr, unconsOrErr,
-            snd3, makePairs, concatMapM)
+            snd3, makePairs, concatMapM, stableOrdNub)
 import Eval
 import ErrorUtil(internalError)
 
 import Data.Maybe
-import Data.List(partition, intersperse, intercalate, nub, sortBy)
+import Data.List(partition, intersperse, intercalate, sortBy)
 import Data.List.Split(wordsBy)
 import Numeric(showHex)
 import Control.Monad(when)
@@ -1887,7 +1887,9 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
      -- --------------------
      -- VCD dumping routines
 
-     let ids_by_clock = [ (fromJust clk, nub rl_ids)
+     -- a rule domain can write tens of thousands of defs; Id's Ord agrees
+     -- with its Eq, so this keeps nub's order
+     let ids_by_clock = [ (fromJust clk, stableOrdNub rl_ids)
                         | (clk, rls) <- sb_rules sb
                         , isJust clk
                         , let rules = map snd rls
@@ -1910,7 +1912,7 @@ simCCBlockToClassDefinition genVCD sb_map sch_map sb =
                 | (i,f) <- concatMap snd ms1
                 ]
          methods' = ms1' ++ ms2
-         ids_by_clock' = [ (fromJust clk, nub mth_ids)
+         ids_by_clock' = [ (fromJust clk, stableOrdNub mth_ids)
                          | (clk, mths) <- methods'
                          , (isJust clk) && (fromJust clk /= noClockDomain)
                          , let ms = map snd mths
