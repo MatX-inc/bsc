@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Determinism ladder for the Cabal build (doc/cabal.md section 7): verify that
-# serial, parallel, relocated, and in-place incremental builds of one commit
-# produce identical objects, interfaces, archives, shared libraries, programs,
-# and installed directories (`run` hashes inst/bluehs). `run` executes all
-# legs in fresh checkouts on one machine (and is run in CI by
-# .github/workflows/cabal.yml), runs `rebuild` on the serial legs, and compares
-# the hash lists with `verdict`. `hash` also writes a `.toolchain` record beside
-# each list so `verdict` can report any tool changes.
+# The determinism ladder of the cabal build (doc/cabal.md): one commit built
+# serially, oversubscribed, in another directory or, from GHC 9.12,
+# incrementally must give bit-identical objects, interfaces, archives, shared
+# objects and programs, and the same bytes in any installed directory named to
+# `hash` (`run` names the installed tree, inst, the bluehs runtime under it
+# included).  `run` is the whole ladder on one machine, every leg a fresh
+# checkout in a directory of its own: it runs `hash` on every leg, `rebuild` on
+# the serial legs and `verdict` over the lists; CI
+# (.github/workflows/cabal.yml) runs it, one job per platform.  `hash` writes a
+# record of the toolchain beside each list, which `verdict` reads a difference
+# against.
 set -u
 SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 TOP="$(cd "$(dirname "$SELF")/.." && pwd)"; cd "$TOP" || exit 2
@@ -37,17 +40,24 @@ USAGE
   exit 2
 }
 die() { echo "cabal-ladder: $*" >&2; exit 2; }
-# GHC >= 9.12 provides -fobject-determinism (enabled in cabal.project), which
-# makes compiled object files independent of the GHC session's unique supply so
-# a single recompiled module matches a clean build. On older GHCs, object files
-# depend on session uniques (e.g. local symbol names and SRT entry order), so
-# only the no-op rebuild is checked in place.
+# From GHC 9.12 -fobject-determinism makes a module's object independent of
+# the session's uniques (at 9.14.1, a module recompiled alone under a
+# perturbed unique supply is identical with the flag and differs without
+# it), and cabal.project turns it on there, so the in-place round holds the
+# rebuild after the marker edit's revert to the reference.  Below 9.12 the
+# flag does not exist and the object carries the uniques (at 9.4.7, in a
+# local label's name and its relocation; in a small test, in the order of a
+# static reference table's entries), so a module recompiled alone is not
+# byte-identical to the one compiled in the full build, while clean builds
+# agree among themselves.
 ghc_deterministic() { ghc --numeric-version | grep -Eq '^(9\.1[2-9]|9\.[2-9][0-9]|[1-9][0-9])\.'; }
 # macOS has no sha256sum; shasum prints the same "hash  path" lines.
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
-# Hash interface files via `ghc --show-iface`, stripping `interface hash:` and
-# `flags: fingerprint:` (which include Cabal's absolute autogen include path).
-# Pass `-package-env -` so output does not depend on `.ghc.environment.*`.
+# An interface is hashed as the text of `ghc --show-iface` minus its interface
+# hash and flags fingerprint: cabal passes the autogen include directory by
+# absolute path and GHC fingerprints its flags, so the bytes of a .hi depend on
+# the checkout directory while its content does not.  The package environment
+# is off, or the text names the environment file and spells unit ids by it.
 iface_hash() {  # one interface file -> "hash  path"
   local text
   text="$(ghc -package-env - --show-iface "$1")" || { echo "cabal-ladder: ghc --show-iface failed on $1" >&2; exit 1; }
@@ -56,9 +66,18 @@ iface_hash() {  # one interface file -> "hash  path"
 }
 export -f sha256 iface_hash
 
-# Record the host environment, build tools (cc, ld, ar, ghc, cabal, patchelf),
-# and the tool and package versions from `cabal_macros.h` (which Cabal passes
-# to every CPP-enabled module, so any tool version change alters interfaces).
+# What built the list it is written beside, for reading a difference: the
+# runner image when GitHub's runner names one, the system, the C compiler,
+# the linker and ar, ghc, cabal, patchelf where it is (mk-dist.sh rewrites the
+# shipped libraries with it), and the versions in the package's
+# cabal_macros.h, the header Cabal includes into every module that runs the C
+# preprocessor: every program Cabal configured and found a version for (ld, ar
+# and tar carry none), used by the package or not, and every dependency.
+# A program installed at another version between two legs' dependency steps
+# (pkg-config on a macOS runner, once) is in that header and so in the
+# interface of every such module, in the package and in the store alike, with
+# nothing in the build to blame; the record names it.  The dependencies are
+# pinned by cabal.project's index-state and recorded for completeness.
 toolchain_record() {
   version_line() {  # LABEL COMMAND ARGS...: the first line the command prints, or that it is not found
     if command -v "$2" >/dev/null 2>&1; then echo "$1: $("${@:2}" 2>&1 | head -1)"; else echo "$1: $2 not found"; fi
@@ -71,7 +90,8 @@ toolchain_record() {
   version_line ghc ghc --numeric-version
   version_line cabal cabal --numeric-version
   command -v patchelf >/dev/null 2>&1 && version_line patchelf patchelf --version
-  # `cabal_macros.h` comments list each configured tool and dependency version.
+  # The header's own comments name each tool and package with its version
+  # (the macro names spell a hyphen as an underscore).
   if [ -d dist-newstyle/build ] && find dist-newstyle/build -name cabal_macros.h | grep -q .; then
     find dist-newstyle/build -name cabal_macros.h -exec sed -n \
       -e 's|^/\* tool \(.*\)-\([0-9][0-9.]*\) \*/$|tool \1: \2|p' \
@@ -82,14 +102,17 @@ toolchain_record() {
   return 0
 }
 
-# Hash objects, archives, shared libraries, interfaces, and executables under
-# dist-newstyle/build plus all files in any given installed directories, using
-# repo-relative paths. Interfaces under dist-newstyle/build and under `store/`
-# in an installed directory are hashed with `iface_hash`; symlinks are hashed
-# by their link target text.
+# Every object, archive, shared object and interface under dist-newstyle/build
+# and every program bsc.cabal declares, as bytes except interfaces, with paths relative
+# to the repository so builds in different directories compare.  Then every
+# file of each installed directory named after the list: as bytes, except the
+# interfaces under a `store` directory (the libraries this tree builds and
+# their dependencies, whose bytes carry the build directory as above); a
+# shipped GHC runtime's own interfaces are copies of the installed compiler's
+# and compare as bytes.  A symbolic link is hashed as its target's text.
 hash_build() {
   LIST="$1"; shift
-  # Remove incomplete outputs on failure so they cannot compare as valid.
+  # A partial list would compare like a complete one.
   trap '[ $? -eq 0 ] || rm -f "$LIST" "${LIST%.sha256}.toolchain"' EXIT
   local ncpu programs e bin empty_digest
   ncpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
@@ -119,7 +142,9 @@ hash_build() {
   for dir in "$@"; do
     grep -q "  ${dir#"$TOP/"}/" "$LIST" || die "no files of $dir hashed into $LIST"
   done
-  # Fail if no interfaces were hashed or if any interface hashed as empty text.
+  # A list without interfaces, or an interface with the digest of empty text,
+  # means the interface hashing silently produced nothing; it must not compare
+  # IDENTICAL.  (An installed directory may hold empty files; those are bytes.)
   grep -q '\.hi$' "$LIST" || die "no .hi files hashed into $LIST"
   empty_digest="$(sha256 < /dev/null | cut -d' ' -f1)"
   grep "^$empty_digest " "$LIST" | grep -Eq '\.(hi|dyn_hi|p_hi)$' && die "$LIST hashes an interface as empty text"
@@ -128,8 +153,9 @@ hash_build() {
   echo "toolchain recorded in ${LIST%.sha256}.toolchain"
 }
 
-# Compare NAME.toolchain records alongside two hash lists.
-# With `quiet`, print nothing when they agree or either is absent.
+# The toolchain records beside two lists (NAME.toolchain beside NAME.sha256):
+# whether they agree and, when not, their difference, under the lists' line;
+# with `quiet`, nothing when they agree or either is absent.
 toolchain_compare() {  # REF_LIST OTHER_LIST [quiet]
   local a="${1%.sha256}.toolchain" b="${2%.sha256}.toolchain" f
   for f in "$a" "$b"; do
@@ -145,9 +171,13 @@ toolchain_compare() {  # REF_LIST OTHER_LIST [quiet]
   diff "$a" "$b" | grep '^[<>]' | sed 's/^/      /'
 }
 
-# Compare each hash list against REF_LIST, grouping differences by artifact
-# category (program, shared, object, interface, archive, distribution) and
-# comparing sidecar .toolchain records.
+# Pass means every list is identical to the reference.  Differences are
+# reported by category (program, shared object, object, interface, archive;
+# installed for the files of an installed directory, and distribution for
+# those of a bluehs runtime under it) so a failure says what moved, and
+# against the toolchain records beside the two lists, so it says whether the
+# same tools built them; the records do not decide the result, which is the
+# bytes'.  Identical lists whose records differ are noted as well.
 verdict() {
   local ref="$1" fail=0 other name diffs n cat sel c; shift
   [ -r "$ref" ] && [ -s "$ref" ] || { echo "verdict: reference $ref is missing, unreadable or empty"; exit 2; }
@@ -163,14 +193,15 @@ verdict() {
     n=$(printf '%s\n' "$diffs" | sed '/^$/d' | wc -l)
     echo "DIFFER: $(basename "$ref" .sha256) vs $name: $n file(s)"
     build=$(printf '%s\n' "$diffs" | grep '^dist-newstyle/' || true)
-    for cat in program shared object interface archive distribution; do
+    for cat in program shared object interface archive installed distribution; do
       case "$cat" in
         program) sel=$(printf '%s\n' "$build" | grep -Ev '\.(o|hi|dyn_o|dyn_hi|p_o|p_hi|a|so|dylib)$' || true);;
         shared) sel=$(printf '%s\n' "$build" | grep -E '\.(so|dylib)$' || true);;
         object) sel=$(printf '%s\n' "$build" | grep -E '\.(o|dyn_o|p_o)$' || true);;
         interface) sel=$(printf '%s\n' "$build" | grep -E '\.(hi|dyn_hi|p_hi)$' || true);;
         archive) sel=$(printf '%s\n' "$build" | grep '\.a$' || true);;
-        distribution) sel=$(printf '%s\n' "$diffs" | grep -v '^dist-newstyle/' || true);;
+        installed) sel=$(printf '%s\n' "$diffs" | grep -v '^dist-newstyle/' | grep -v '/bluehs/' || true);;
+        distribution) sel=$(printf '%s\n' "$diffs" | grep -v '^dist-newstyle/' | grep '/bluehs/' || true);;
       esac
       c=$(printf '%s\n' "$sel" | sed '/^$/d' | wc -l)
       [ "$c" -gt 0 ] && { echo "   $cat: $c"; printf '%s\n' "$sel" | sed '/^$/d' | head -8 | sed 's/^/      /'; }
@@ -181,9 +212,15 @@ verdict() {
   exit $fail
 }
 
-# In-place rebuild round: no-op rebuild, plus (on GHC >= 9.12) a comment edit
-# to $LEAF and revert, hashing each step into $OUT/NAME-{rebuild,edit,revert}.sha256.
-# Override steps with $REBUILD_STEPS and the build command with $BUILD_CMD.
+# The in-place round: a rebuild with nothing changed and, from GHC 9.12
+# (ghc_deterministic), a rebuild after a marker edit, a comment, to one
+# module, which recompiles that module alone, and a rebuild after the
+# revert, each hashed like `hash` (with the DIRs given) into
+# $OUT/NAME-rebuild, NAME-edit and NAME-revert.  $REBUILD_STEPS names the
+# steps instead when set.  $BUILD_CMD is the build, `cabal build all`
+# unless the caller installs too (`run` passes the make targets, so what the
+# leg installs is rebuilt and hashed with the build).  The caller's EXIT trap
+# restores $LEAF.
 rebuild_round() {  # NAME [DIR...]
   local name="$1" steps="${REBUILD_STEPS:-}" step t0 rc; shift
   mkdir -p "$OUT"
@@ -206,11 +243,17 @@ rebuild_round() {  # NAME [DIR...]
   done
 }
 
-# Run the full ladder in $OUT/legs. Each leg DIR-jN is a detached worktree at
-# HEAD built at parallelism N and hashed with inst/bluehs; serial legs (N=1)
-# also run rebuild_round. The reference leg (first in $LEGS) finishes its
-# initial build before the remaining legs run (up to $LADDER_JOBS at once,
-# defaulting to 1 per 6 GB RAM) so they share the populated Cabal store.
+# The ladder on this machine.  A leg is a name DIR-jN: a fresh checkout of HEAD
+# under $OUT/legs, in a directory of its own, built and installed at cabal
+# jobs N (and ghc -jN where the project compiles in parallel, GHC 9.12 on)
+# through the make targets, so what it installs is built and hashed with the
+# build tree, then hashed with inst; a serial leg (N = 1) then runs the
+# in-place round (rebuild_round).  The reference leg, the first of $LEGS,
+# builds alone first: the dependency store it fills is shared by the others,
+# which then run up to $LADDER_JOBS at once, one per 6 GB of memory unless
+# set.  A leg's tree goes once its lists are written (KEEP_LEGS=1 keeps it);
+# the lists, the toolchain records and the logs stay in $OUT, and the verdict
+# over them is the result.
 ladder_jobs_default() {
   local kb
   kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null)
@@ -231,8 +274,8 @@ run_ladder() {
   ncpu=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
   mkdir -p "$OUT/legs"
   echo "ladder: legs $legs, reference $ref, up to $jobs at once; results in $OUT"
-  # Check out, build, install, and hash leg NAME (plus rebuild_round for j1).
-  # Touches $OUT/NAME.built once hashed and writes exit code to $OUT/NAME.rc.
+  # NAME: the leg's checkout, build and install, hash, and the serial leg's
+  # round; $OUT/NAME.built marks the store filled, $OUT/NAME.rc its exit.
   leg_run() {
     local name="$1" dir n rc=0 t0 build
     dir="$OUT/legs/$name"; n="${name##*-j}"
@@ -245,11 +288,11 @@ run_ladder() {
     echo "$name: build exit $rc, $(( $(date +%s) - t0 )) s"
     if [ $rc -eq 0 ]; then
       (cd "$dir" && ./inst/bin/bsc -v) >> "$OUT/$name.log" 2>&1 || true
-      (cd "$dir" && ./util/cabal-ladder.sh hash "$OUT/$name.sha256" inst/bluehs) >> "$OUT/$name.log" 2>&1 || rc=$?
+      (cd "$dir" && ./util/cabal-ladder.sh hash "$OUT/$name.sha256" inst) >> "$OUT/$name.log" 2>&1 || rc=$?
     fi
     [ $rc -eq 0 ] && touch "$OUT/$name.built"
     if [ $rc -eq 0 ] && [ "$n" = 1 ]; then
-      (cd "$dir" && OUT="$OUT" BUILD_CMD="$build" ./util/cabal-ladder.sh rebuild "$name" inst/bluehs) >> "$OUT/$name.log" 2>&1 || rc=$?
+      (cd "$dir" && OUT="$OUT" BUILD_CMD="$build" ./util/cabal-ladder.sh rebuild "$name" inst) >> "$OUT/$name.log" 2>&1 || rc=$?
       echo "$name: round exit $rc"
     fi
     [ $rc -eq 0 ] || tail -15 "$OUT/$name.log" | sed "s/^/   $name: /"
@@ -260,7 +303,7 @@ run_ladder() {
   live() {  # how many of the pids given are running
     local p c=0; for p in "$@"; do kill -0 "$p" 2>/dev/null && c=$((c + 1)); done; echo $c
   }
-  # Build the reference leg alone first to populate the shared store.
+  # The reference first, alone, until its lists are written or it fails.
   leg_run "$ref" & refpid=$!
   while [ ! -e "$OUT/$ref.built" ] && kill -0 "$refpid" 2>/dev/null; do sleep 10; done
   [ -e "$OUT/$ref.built" ] || { wait "$refpid"; die "the reference leg $ref failed; see $OUT/$ref.log"; }
@@ -270,7 +313,7 @@ run_ladder() {
     leg_run "$name" & pids="$pids $!"
   done
   wait
-  # Collect expected hash lists so any failed leg or round reports MISSING.
+  # Every leg and every round the plan expects, so a failed one is MISSING.
   local others="" rounds=""
   for name in ${legs#"$ref"}; do others="$others $OUT/$name.sha256"; done
   for name in $legs; do
