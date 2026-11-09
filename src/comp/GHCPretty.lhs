@@ -173,7 +173,7 @@ module GHCPretty (
         hang, punctuate,
 
 --      renderStyle,            -- Haskell 1.3 only
-        render, fullRender
+        render, fullRender, fullRenderWith
        ,docToOneLine
   ) where
 
@@ -888,7 +888,17 @@ fullRender OneLineMode _ _ txt end doc = easy_display space_text txt end (reduce
 fullRender LeftMode    _ _ txt end doc = easy_display nl_text    txt end (reduceDoc doc)
 
 fullRender mode line_length ribbons_per_line txt end doc
-  = display mode line_length ribbon_length txt end best_doc
+  = fullRenderWith mode line_length ribbons_per_line txt
+                   (\k rest -> Str (indent k) `txt` rest) end doc
+
+-- As fullRender, with the indentation that starts a line emitted by the
+-- caller's function, so a non-String target need not build it as a String.
+fullRenderWith :: Mode -> Int -> Float -> (TextDetails -> a -> a)
+               -> (Int -> a -> a) -> a -> Doc -> a
+fullRenderWith OneLineMode _ _ txt _ end doc = easy_display space_text txt end (reduceDoc doc)
+fullRenderWith LeftMode    _ _ txt _ end doc = easy_display nl_text    txt end (reduceDoc doc)
+fullRenderWith mode line_length ribbons_per_line txt ind end doc
+  = display mode line_length ribbon_length txt ind end best_doc
   where
     best_doc = best mode hacked_line_length ribbon_length (reduceDoc doc)
 
@@ -896,8 +906,9 @@ fullRender mode line_length ribbons_per_line txt end doc
     ribbon_length = round (fromIntegral line_length / ribbons_per_line)
     hacked_line_length = case mode of { ZigZagMode -> maxBound; other -> line_length }
 
-display :: Mode -> Int -> Int -> (TextDetails -> a -> a) -> a -> Doc -> a
-display mode page_width ribbon_width txt end doc
+display :: Mode -> Int -> Int -> (TextDetails -> a -> a) -> (Int -> a -> a)
+        -> a -> Doc -> a
+display mode page_width ribbon_width txt ind end doc
   = case page_width - ribbon_width of { gap_width ->
     case gap_width `quot` 2 of { shift ->
     let
@@ -923,7 +934,7 @@ display mode page_width ribbon_width txt end doc
                     other -> lay1 k s sl p
         lay _ _ = internalError "bad case in lay"
 
-        lay1 k s sl p = Str (indent k) `txt` (s `txt` (lay2  $! k + sl) p)
+        lay1 k s sl p = ind k (s `txt` (lay2  $! k + sl) p)
 
         lay2 k (NilAbove p)        = nl_text `txt` lay k p
         lay2 k (TextBeside s sl p) = s `txt` ((lay2 $! k + sl) p)
