@@ -26,6 +26,8 @@ import System.IO.Unsafe
 import Debug.Trace(traceM)
 import qualified Data.Map as M
 import qualified Data.Set as S
+import Data.Array.Unboxed(UArray, accumArray)
+import qualified Data.Array.Unboxed as UA
 
 import qualified GraphMap as G
 import qualified GraphWrapper as GW
@@ -125,10 +127,63 @@ pp = pretty 78 78
 --
 
 -- SET of non-conflicting methods
-newtype NoConflictSet = NoConflictSet (S.Set (MethodId, MethodId))
+-- Membership is answered from per-instance tables (see NCTable), which
+-- the three levels share; the pairs as a set are only for the dump.
+data NoConflictSet = NoConflictSet {
+                         ncs_level :: NCLevel,
+                         ncs_tables :: M.Map AId NCTable,
+                         ncs_set :: S.Set (MethodId, MethodId)
+                     }
 
 instance PPrint NoConflictSet where
-    pPrint d p (NoConflictSet s) = pPrint d p (S.toList s)
+    pPrint d p ncs = pPrint d p (S.toList (ncs_set ncs))
+
+-- CF: conflict-free (either order); PC: CF or SB; SC: PC or SBR
+data NCLevel = NCCF | NCPC | NCSC deriving (Eq, Ord)
+
+-- An instance's methods, numbered, and bit matrices over pairs of those
+-- numbers for its CF (both orders), SB and SBR annotations, built on
+-- first use.  A child's CF list can hold nearly all pairs of its 1000+
+-- methods; its .ba already stores these lists as n*n bit matrices.
+data NCTable = NCTable {
+                   nct_index :: M.Map AId Int,
+                   nct_size :: Int,
+                   nct_cf, nct_sb, nct_sbr :: UArray Int Bool
+               }
+
+-- the union of the annotations, if instances share a name
+mkNCTable :: [VMethodConflictInfo] -> NCTable
+mkNCTable mcis = NCTable index n (matrix True cfs) (matrix False sbs) (matrix False sbrs)
+  where cfs  = concatMap sCF mcis
+        sbs  = concatMap sSB mcis
+        sbrs = concatMap sSBR mcis
+        index = foldl' add M.empty [ m | ps <- [cfs, sbs, sbrs], (a, b) <- ps, m <- [a, b] ]
+        add ix m = if M.member m ix then ix else M.insert m (M.size ix) ix
+        n = M.size index
+        matrix both ps =
+            accumArray (\_ x -> x) False (0, n * n - 1)
+                [ (k, True) | (a, b) <- ps,
+                              let i = index M.! a,
+                              let j = index M.! b,
+                              k <- if both then [i * n + j, j * n + i] else [i * n + j] ]
+
+-- An instance's method numbering (-1 for methods it does not annotate)
+-- and the membership test on pairs of numbers.
+ncInstance :: NoConflictSet -> AId -> (AId -> Int, Int -> Int -> Bool)
+ncInstance ncs obj =
+    case M.lookup obj (ncs_tables ncs) of
+      Nothing -> (const (-1), \ _ _ -> False)
+      Just t -> let n = nct_size t
+                    has i j = i >= 0 && j >= 0 &&
+                              let k = i * n + j
+                              in  nct_cf t UA.! k ||
+                                  (ncs_level ncs >= NCPC && nct_sb t UA.! k) ||
+                                  (ncs_level ncs >= NCSC && nct_sbr t UA.! k)
+                in  (\m -> M.findWithDefault (-1) m (nct_index t), has)
+
+ncMember :: NoConflictSet -> MethodId -> MethodId -> Bool
+ncMember ncs (MethodId o1 m1) (MethodId o2 m2) =
+    o1 == o2 && let (num, has) = ncInstance ncs o1 in has (num m1) (num m2)
 
 -- --------------------
 
@@ -934,11 +989,9 @@ aSchedule_step1 errh flags prefix pps amod = do
       -- Also consider conflicting methods available infinitely many times
       -- because the schedule resolves that resource conflict
   let resMax' = tr "let resMax'" $ M.fromList
-          [(r,n') | let (NoConflictSet pc) = ncSetPC,
-                    let (NoConflictSet cf) = ncSetCF,
-                    (r,n) <- resMax,
+          [(r,n') | (r,n) <- resMax,
                     -- 0 means all to one port
-                    let n' = if ((r,r) `S.member` pc || (r,r) `S.member` cf)
+                    let n' = if (ncMember ncSetPC r r || ncMember ncSetCF r r)
                              then n
                              else 0]
 
@@ -2778,11 +2831,16 @@ extractMethodArgEdges scConflictMap0 ds ifs =
 -- retrieve conflict information from ATS
 getStateInfo :: [AVInst] ->
                 (NoConflictSet, NoConflictSet, NoConflictSet, [(MethodId,Integer)])
-getStateInfo ss = (NoConflictSet $ S.unions cfss,
-                   NoConflictSet $ S.unions pcss,
-                   NoConflictSet $ S.unions scss,
+getStateInfo ss = (NoConflictSet NCCF tables (S.unions cfss),
+                   NoConflictSet NCPC tables (S.unions pcss),
+                   NoConflictSet NCSC tables (S.unions scss),
                    rss)
-    where cfss = [cfs  | (cfs, _, _, _) <- sinfos]
+    where tables = M.map mkNCTable $
+                     M.fromListWith (flip (++))
+                       [ (avi_vname avi, [methodConflictInfo (vSched (avi_vmi avi))])
+                       | avi <- ss ]
+          -- the sets, for the dump only
+          cfss = [cfs  | (cfs, _, _, _) <- sinfos]
           pcss = [sbs  | (_, sbs, _, _) <- sinfos]
           scss = [sbrs | (_, _,sbrs, _) <- sinfos]
           rss  = sort $ concat [r  | (_, _, _, r)  <- sinfos]
@@ -3987,16 +4045,20 @@ type MethodIdMap = M.Map AId [(AId, AExpr)]
 -- XXX with elsewhere (AState.hs)?
 conflicts :: NoConflictSet -> MethodIdMap ->  MethodIdMap ->
              [((MethodId, AExpr), (MethodId, AExpr))]
-conflicts (NoConflictSet ncset) us1 us2 =
+conflicts ncset us1 us2 =
     -- traces ( "conflicts: " ++ ppReadable us ++ ppReadable us' ) $
     [ ((id1,c1), (id2,c2))
       | (obj, methset1) <- M.toList us1,
         (Just methset2) <- [M.lookup obj us2],
+        let (num, noConflict) = ncInstance ncset obj,
+        -- number the second use's methods once, not once per pair
+        let methset2' = [ (m2, c2, num m2) | (m2,c2) <- methset2, not (isRdyId m2) ],
         (m1,c1) <- methset1, not (isRdyId m1),
-        (m2,c2) <- methset2, not (isRdyId m2),
+        let i1 = num m1,
+        (m2,c2,i2) <- methset2',
         let id1 = MethodId obj m1,
         let id2 = MethodId obj m2,
-        not $ (id1,id2) `S.member` ncset ]
+        not (noConflict i1 i2) ]
 
 
 -- ----------
@@ -4212,7 +4274,7 @@ type RuleMethodUseMap = M.Map ARuleId (AExpr, M.Map AId [(AId, AExpr)])
 makeRuleMethodUseMaps :: NoConflictSet -> RuleUsesMap ->
                          (RuleMethodUseMap,
                           RulePCConflictUseMap)
-makeRuleMethodUseMaps (NoConflictSet setPC) ruleUseMap =
+makeRuleMethodUseMaps setPC ruleUseMap =
     let
         full_use_map :: M.Map ARuleId (AExpr, M.Map Id (M.Map Id [UniqueUse]))
         full_use_map = rumToMethodUseMap ruleUseMap
@@ -4247,7 +4309,7 @@ makeRuleMethodUseMaps (NoConflictSet setPC) ruleUseMap =
                         p@(methId, uses@(_:_:_)) <- M.toList mus,
                         let m = MethodId objId methId,
                         -- ... that are not PC with itself
-                        not ((m,m) `S.member` setPC)
+                        not (ncMember setPC m m)
                   ]
 
               -- map from instance Id to a list of used method pairs
@@ -4263,8 +4325,8 @@ makeRuleMethodUseMaps (NoConflictSet setPC) ruleUseMap =
                               -- that conflict with each other
                               let m1 = MethodId instId methId1,
                               let m2 = MethodId instId methId2,
-                              not ((m1,m2) `S.member` setPC),
-                              not ((m2,m1) `S.member` setPC)
+                              not (ncMember setPC m1 m2),
+                              not (ncMember setPC m2 m1)
                           ]
                   in  M.mapWithKey makePairConfls usemap
           in
