@@ -16,6 +16,7 @@ import FileNameUtil(mkAName, getRelativeFilePath)
 import TopUtils(putStrLnF)
 
 import Control.Monad(unless)
+import System.Directory(getCurrentDirectory)
 
 -- For dumping purposes, this returns a list of
 -- the foreign src IDs, and their corresponding ForeignFunctions
@@ -43,7 +44,8 @@ genForeign errh flags prefix (CPackage pkg_id _ _ _ _ defs _) =
                 abinPrintPrefix = "Foreign import file created: "
             in  do
                    -- write the file with full path
-                   genABinFile errh (remapPositionFile (remapPathPrefix flags)) afilename abin
+                   pwd <- getCurrentDirectory
+                   genABinFile errh (remapPositionFile pwd (remapPathPrefix flags)) afilename abin
                    -- report the file to the user with relative path
                    -- (typically just the filename, for current directory)
                    unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel

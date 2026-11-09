@@ -252,6 +252,15 @@ remapPathMaybe prefixes path =
           [] -> Nothing
           _  -> Just (snd (maximum matches))
 
+-- remapPath for a path this run encoded: FROM prefixes are matched against
+-- the pwd-qualified form the encoding had before it wrote "." for the pwd,
+-- so a mapping applies as it did then.  A path no prefix matches keeps
+-- its "." form.
+remapEncodedPath :: FilePath -> [(String, String)] -> FilePath -> FilePath
+remapEncodedPath pwd prefixes path =
+    let qualified = maybe path ((pwd ++ "///") ++) (stripPrefix ".///" path)
+    in  maybe path id (remapPathMaybe prefixes qualified)
+
 -- The form in which a plain (marker-free) path from the flags is stored
 -- in a .ba file: a path under the working directory relative to it, and
 -- a path under the installation ($BLUESPECDIR) relative to '%', the
