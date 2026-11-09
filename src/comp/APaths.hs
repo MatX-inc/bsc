@@ -1133,18 +1133,16 @@ aPathsPostSched flags pps apkg pathGraphInfo (ASchedule scheds _) = do
   -- ====================
   -- Find paths from inputs to outputs
 
+  -- (with paths, for the trace only)
   let reachables = findReachables pathgraph mod_inputs
 
   -- pairs of PathNode
   -- (an output is paired with an input iff it is among the nodes
-  -- reachable from the input, which the set answers without scanning
-  -- the reachable list once per output)
+  -- reachable from the input; we don't need to know the path)
+  reached_outputs <- findReachableTargetsIO pathgraph mod_inputs mod_outputs
   let pathpairs = [ (input, output) |
-                        -- we don't need to know the path
-                        (input, rs) <- zip mod_inputs reachables,
-                        let reached = S.fromList (map fst rs),
-                        output <- mod_outputs,
-                        output `S.member` reached ]
+                        (input, outputs) <- zip mod_inputs reached_outputs,
+                        output <- outputs ]
 
   -- --------------------
   -- Convert the path ids from PathNode to VName
