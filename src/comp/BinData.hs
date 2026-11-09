@@ -1761,7 +1761,8 @@ cacheCount KIType    bc = let (Known n _) = itype_cache bc    in n
 -- entries and the byte count of the bodies region) is passed as loop
 -- arguments, so a plain byte run costs no record copy.
 data WState = WState
-  { wsRemap   :: Position -> Position     -- -remap-path-prefix
+  { wsRemap   :: Bool -> FString -> FString  -- -remap-path-prefix
+  , wsFiles   :: !(M.Map (Bool, FString) FString)  -- wsRemap's results
   , wsCache   :: !BinCache
   , wsStrings :: [FString]                -- first occurrences, most recent first
   , wsEntries :: !Entries                -- closed entries
@@ -1784,9 +1785,10 @@ plainBytes x = concatMap plain (out_data (writeBytes x))
 -- assignment (per kind, first occurrence, parent before children) is
 -- the same as the previous in-stream scheme's, so the output remains a
 -- pure function of the content.
-assemble :: (Position -> Position) -> [BinElem] -> [Byte]
-assemble remapP = assembleGo st0 [] 0
-  where st0 = WState { wsRemap = remapP, wsCache = unknownCache
+assemble :: (Bool -> FString -> FString) -> [BinElem] -> [Byte]
+assemble remapF = assembleGo st0 [] 0
+  where st0 = WState { wsRemap = remapF, wsFiles = M.empty
+                     , wsCache = unknownCache
                      , wsStrings = []
                      , wsEntries = noEntries, wsChunks = IM.empty
                      , wsOpen = [], wsNChunks = 0 }
@@ -1805,11 +1807,18 @@ assembleGo !st frames !main (S s : xs) =
                 in emit (plainBytes idx)
                         st { wsCache = cache', wsStrings = s : wsStrings st }
                         frames main xs
--- The Position transform (-remap-path-prefix) is applied before
+-- The file-name transform (-remap-path-prefix) is applied before
 -- sharing, so the cache is keyed on the stored (remapped) value:
--- positions that remap equal share a single entry.
-assembleGo !st frames !main (P p : xs) =
-  let p' = wsRemap st p in shared KPosition p' p' st frames main xs
+-- positions that remap equal share a single entry.  It runs once per
+-- (pos_is_stdlib, pos_file), its only inputs; a later position reuses
+-- the FString the first one interned.
+assembleGo !st frames !main (P p@(Position f l c lib) : xs) =
+  let (f', st') = case M.lookup (lib, f) (wsFiles st) of
+                    Just g  -> (g, st)
+                    Nothing -> let g = wsRemap st lib f
+                               in (g, st { wsFiles = M.insert (lib, f) g (wsFiles st) })
+      p' = if f' == f then p else Position f' l c lib
+  in shared KPosition p' p' st' frames main xs
 assembleGo !st frames !main (I i : xs)  = shared KId (id_key i) i st frames main xs
 assembleGo !st frames !main (T t : xs)  = shared KType (type_key t) t st frames main xs
 assembleGo !st frames !main (IT t : xs) = shared KIType (itype_key t) t st frames main xs
@@ -1899,10 +1908,10 @@ finish st frames bodiesEnd
 -- byte stream is generated lazily through the monad and preserves
 -- sharing.
 
-runOutWith :: (Position -> Position) -> Out () -> [Byte]
-runOutWith remapP (Out xs _) =
+runOutWith :: (Bool -> FString -> FString) -> Out () -> [Byte]
+runOutWith remapF (Out xs _) =
     let bes   = toList xs
-        bytes = assemble remapP bes
+        bytes = assemble remapF bes
     in -- trace ("xs = " ++ (show xs)) $
        -- trace ("bytes = " ++ (show bytes)) $
        if trace_bindata
@@ -1911,12 +1920,12 @@ runOutWith remapP (Out xs _) =
 
 -- Convenience function for encoding structures in the Bin typeclass
 encode :: (Bin a) => a -> [Byte]
-encode = encodeWith id
+encode = encodeWith (const id)
 
--- encode with a Position transform applied to stored positions
--- (-remap-path-prefix; see assemble)
-encodeWith :: (Bin a) => (Position -> Position) -> a -> [Byte]
-encodeWith remapP x = runOutWith remapP (toBin x)
+-- encode with a transform of stored positions' file names, given each
+-- position's pos_is_stdlib (-remap-path-prefix; see assembleGo)
+encodeWith :: (Bin a) => (Bool -> FString -> FString) -> a -> [Byte]
+encodeWith remapF x = runOutWith remapF (toBin x)
 
 -- ------------------------------------------------------------------
 -- Reading the container

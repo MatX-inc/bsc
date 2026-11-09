@@ -8,6 +8,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
 import Position
+import FStringCompat(FString)
 import Pragma
 import Error(internalError, ErrMsg(..), ErrorHandle, bsError)
 import ISyntax
@@ -38,12 +39,12 @@ headerBS = B.pack header
 -- the IDef instance), so a reader that never looks at a body never
 -- decodes it; the signatures, the package header and the per-def
 -- names, types and properties are decoded at load.
-genBinFile :: ErrorHandle -> (Position -> Position) ->
+genBinFile :: ErrorHandle -> (Bool -> FString -> FString) ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
-genBinFile errh remapP fn bi_sig bo_sig ipkg =
+genBinFile errh remapF fn bi_sig bo_sig ipkg =
     let poisoned = any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]
     in writeBinaryFileCatch errh fn
-           (header ++ encodeWith remapP (bi_sig, bo_sig, BoPackage poisoned ipkg))
+           (header ++ encodeWith remapF (bi_sig, bo_sig, BoPackage poisoned ipkg))
 
 -- The authenticating hash is a fold over every byte after the tag,
 -- computed here (eagerly) from the raw bytes: it does not depend on
