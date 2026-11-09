@@ -267,8 +267,31 @@ idCompareWithPos a b = case (compare a b) of
                        LT -> LT
                        GT -> GT
 
+-- Orders as comparing getIdString would, without building the qualified
+-- strings: schedule maps key on hierarchical names with long shared prefixes.
 cmpIdByName :: Id -> Id -> Ordering
-i `cmpIdByName` i' = getIdString i `compare` getIdString i'
+cmpIdByName i i'
+    | q == q'   = if b == b' then EQ else getFString b `compare` getFString b'
+    | otherwise = let (s, ss) = segs q b
+                      (s', ss') = segs q' b'
+                  in  cmpSegs s ss s' ss'
+  where q = getIdQual i
+        q' = getIdQual i'
+        b = getIdBase i
+        b' = getIdBase i'
+        segs qual base | qual == fsEmpty = (getFString base, [])
+                       | otherwise       = (getFString qual, [".", getFString base])
+
+-- Lexicographic comparison of (concat (x:xs)) with (concat (y:ys)).
+cmpSegs :: String -> [String] -> String -> [String] -> Ordering
+cmpSegs (c:cs) xs (c':cs') ys = case compare c c' of
+                                    EQ -> cmpSegs cs xs cs' ys
+                                    o  -> o
+cmpSegs [] (s:ss) ys yss = cmpSegs s ss ys yss
+cmpSegs xs xss [] (s:ss) = cmpSegs xs xss s ss
+cmpSegs [] [] [] [] = EQ
+cmpSegs [] [] _ _ = LT
+cmpSegs _ _ [] [] = GT
 
 cmpSuffixedIdByName :: Id -> Id -> Ordering
 cmpSuffixedIdByName x y =
