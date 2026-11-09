@@ -211,7 +211,8 @@ aState' flags pps schedule_info apkg = do
         -- We separate out the RDY defs for always_ready methods from others,
         -- because we want the defs (they feed into enables) but do want the
         -- RDY ports.
-        isAlwaysReadyMethod m = (isRdyId (aif_name m)) && (isAlwaysRdy pps (aif_name m))
+        isAR = isAlwaysRdy pps
+        isAlwaysReadyMethod m = (isRdyId (aif_name m)) && (isAR (aif_name m))
         (always_rdy_ifc,other_ifc) = partition isAlwaysReadyMethod ifc
         outs :: [ADef]
         outs = concatMap (outputDefToADefs fmod pps) other_ifc

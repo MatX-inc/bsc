@@ -3380,7 +3380,8 @@ addReadyCF pps meths vsi = vsi { methodConflictInfo = mci' }
         -- do not introduce annotations for ready signals of
         -- always_ready methods - the corresponding interface
         -- methods won't exist
-        meths_noAR = filter (not . (isAlwaysRdy pps)) meths
+        meths_noAR = let isAR = isAlwaysRdy pps
+                     in  filter (not . isAR) meths
         (readys, nonReadys) = partition isRdyId meths_noAR
         -- avoid nub by being careful with the generation
         readyPairs = uniquePairs readys ++

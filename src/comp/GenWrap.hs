@@ -1517,7 +1517,8 @@ mkDef iprags pps (CDef i (CQType _ qt) _) cqt = do
       -- make the arg port-types, for saving in the module
       arg_pts = mkArgPortTypes wire_info arg_ts
   let
-      fields' = filter (not . (isRdyToRemoveField (iprags ++ pps))) fields
+      isRdyToRemove = isRdyToRemoveField (iprags ++ pps)
+      fields' = filter (not . isRdyToRemove) fields
       veriFields = (map (fixupVeriField (iprags ++ pps) ips) fields')
       vexp = xWrapperModuleVerilog
              fmod
@@ -2271,7 +2272,8 @@ id_t pos = mkId pos fs_t
 -- Ready method utilities
 
 isRdyToRemoveField :: [PProp] -> VFieldInfo -> Bool
-isRdyToRemoveField pps f = isAlwaysRdy pps (vf_name f)
+isRdyToRemoveField pps = isAR . vf_name
+  where isAR = isAlwaysRdy pps
 
 
 hasReadyFN :: [VFieldInfo] -> VFieldInfo -> Bool
