@@ -581,6 +581,7 @@ traceflags = [
           "hack-no-eq-word",
           "hack-no-itype-ftv-cache",
           "hack-no-let-batch",
+          "hack-no-typed-let-batch",
           "hack-no-rnf-ground",
           "hack-strict-inst-tree",
           "outlaw-sv-kws-as-classic-ids",
