@@ -76,7 +76,8 @@ iTransExpr errh =
 
 iTransExpr' :: (?errh :: ErrorHandle) =>
                IExpr a -> (IExpr a, Bool)
-iTransExpr' (IAps f ts es) = iTrAp emptyCtx f ts es
+iTransExpr' (IAps f ts es) = let ?memo = emptyOpndMemo ""
+                             in  iTrAp emptyCtx f ts es
 iTransExpr' e = (e, False)
 
 {- not really useful external uses only have one-level transformations exposed
@@ -108,6 +109,8 @@ iTransform1 no errh flags prefix imod@(IModule { imod_state_insts = itvs,
         trMod = do
             mapM_ iTrDef ds
             iTransFixupDefNames flags
+            -- the references made so far are replaced by renamed copies
+            memoClear
             rs' <- iTrRules rs
             ifc' <- mapM iTrIfc ifc
             -- clock and reset expressions (in nc and nr) are just wires - do not simplify
@@ -115,6 +118,7 @@ iTransform1 no errh flags prefix imod@(IModule { imod_state_insts = itvs,
                              do es' <- mapM (iTrExprL emptyCtx []) es
                                 return (i, sv { isv_iargs = es' }))
                           itvs
+            memoClear
             return (itvs', rs', ifc')
 
 iTrIfc :: IEFace a -> T (IEFace a) a
@@ -138,7 +142,8 @@ iTrRule r = do
         c' <- iTrExprL ctx [] (irule_pred r)
         let c'' = optBoolExpr doBO c'
         -- traceM("iTrRule cond " ++ ppReadable (irule_name r, c''))
-        e' <- iTrExprL (addT c'' ctx) [] (irule_body r)
+        ctx' <- addTM c'' ctx
+        e' <- iTrExprL ctx' [] (irule_body r)
         -- traceM("iTrRule body " ++ ppReadable (irule_name r, e'))
         return $ r { irule_pred = c'', irule_body = e' }
 
@@ -242,8 +247,10 @@ iTrExpr1 ctx idxs r x@(IAps pif@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) 
             (rt, re) = case r of
                          RIf _ rt0 re0 | cndSame -> (rt0, re0)
                          _ -> (RNone, RNone)
-        TR thn' ct rt' <- iTrExprR (addT cnd' ctx) idxs rt thn
-        TR els' ce re' <- iTrExprR (addF cnd' ctx) idxs re els
+        ctxT <- addTM cnd' ctx
+        TR thn' ct rt' <- iTrExprR ctxT idxs rt thn
+        ctxF <- addFM cnd' ctx
+        TR els' ce re' <- iTrExprR ctxF idxs re els
 --        traceM ("IF " ++ ppString (IAps pif [t] [cnd', thn', els']) ++ "\n   " ++ ppReadable (cnd, cnd0, cnd1))
         res <- iTrExpr' ctx idxs pif [t] [cnd', thn', els'] []
         case res of
@@ -261,8 +268,10 @@ iTrExpr1 ctx idxs _ (IAps pcase@(ICon _ (ICPrim _ PrimCase)) ts@[sz_idx, elem_ty
         let foldFn (res_ces, res_ctx) (c,e) = do
               c' <- iTrExpr ctx [] (expValShallow c)
               let eq_e = iePrimEQ sz_idx idx' c'
-              e' <- iTrExpr (addT eq_e res_ctx) idxs e
-              return ((c',e'):res_ces, addF eq_e res_ctx)
+              ctxT <- addTM eq_e res_ctx
+              e' <- iTrExpr ctxT idxs e
+              ctxF <- addFM eq_e res_ctx
+              return ((c',e'):res_ces, ctxF)
         (rev_ces', ctx') <- foldM foldFn ([], ctx) (makePairs ces)
         let ces' = flattenPairs (reverse rev_ces')
         dflt' <- iTrExpr ctx' idxs dflt
@@ -282,26 +291,34 @@ iTrExpr1 ctx idxs@((idx,sz_idx):rest_idxs) _ (IAps pupd@(ICon _ (ICPrim _ PrimAr
                            | sz_idx < sz_upd_idx = (sz_upd_idx, mkExtend sz_idx sz_upd_idx idx, upd_idx)
                            | otherwise           = (sz_upd_idx, idx, upd_idx)
                    in  iePrimEQ (ITNum max_sz) e1 e2
-        val' <- iTrExpr (addT eq_e ctx) idxs (expValShallow val)
-        arr' <- iTrExpr (addF eq_e ctx) idxs (expValShallow arr)
+        ctxT <- addTM eq_e ctx
+        val' <- iTrExpr ctxT idxs (expValShallow val)
+        ctxF <- addFM eq_e ctx
+        arr' <- iTrExpr ctxF idxs (expValShallow arr)
         fmap trDone $ iTrExpr' ctx idxs pupd ts [arr', upd_idx', val'] []
 iTrExpr1 ctx idxs@((idx,sz_idx):rest_idxs) _ (IAps pbld@(ICon i (ICPrim _ PrimBuildArray)) ts es) = do
         let foldFn (res_es, res_ctx) (n, e) = do
               let n_lit = iMkLitAt (getPosition i) (aitBit (ITNum sz_idx)) n
               let eq_e = iePrimEQ (ITNum sz_idx) idx n_lit
-              e' <- iTrExpr (addT eq_e res_ctx) rest_idxs (expValShallow e)
-              return (e':res_es, addF eq_e res_ctx)
+              ctxT <- addTM eq_e res_ctx
+              e' <- iTrExpr ctxT rest_idxs (expValShallow e)
+              ctxF <- addFM eq_e res_ctx
+              return (e':res_es, ctxF)
         (rev_es', _) <- foldM foldFn ([], ctx) (zip [0..] es)
         fmap trDone $ iTrExpr' ctx idxs pbld ts (reverse rev_es') []
 iTrExpr1 ctx idxs _ (IAps pand@(ICon _ (ICPrim _ PrimBAnd)) ts [e1, e2]) = do
         e1' <- iTrExpr ctx [] e1
-        e2'' <- iTrExpr (addT e1'  ctx) [] (expValShallow e2)
-        e1'' <- iTrExpr (addT e2'' ctx) [] (expValShallow e1')
+        ctx1 <- addTM e1' ctx
+        e2'' <- iTrExpr ctx1 [] (expValShallow e2)
+        ctx2 <- addTM e2'' ctx
+        e1'' <- iTrExpr ctx2 [] (expValShallow e1')
         fmap trDone $ iTrExpr' ctx idxs pand ts [e1'', e2''] []
 iTrExpr1 ctx idxs _ (IAps por@(ICon _ (ICPrim _ PrimBOr)) ts [e1, e2]) = do
         e1' <- iTrExpr ctx [] e1
-        e2'' <- iTrExpr (addF e1'  ctx) [] (expValShallow e2)
-        e1'' <- iTrExpr (addF e2'' ctx) [] (expValShallow e1')
+        ctx1 <- addFM e1' ctx
+        e2'' <- iTrExpr ctx1 [] (expValShallow e2)
+        ctx2 <- addFM e2'' ctx
+        e1'' <- iTrExpr ctx2 [] (expValShallow e1')
         fmap trDone $ iTrExpr' ctx idxs por ts [e1'', e2''] []
 iTrExpr1 ctx idxs r x@(IAps f ts es) = do
         let rs = case r of
@@ -321,6 +338,9 @@ iTrExpr1 ctx idxs r x@(ICon i (ICUndet t k (Just e))) = do
              _ -> RNone
   TR e' c re <- iTrExprR ctx idxs r1 e
   return (TR (if c then ICon i (ICUndet t k (Just e')) else x) c (RAps [re]))
+iTrExpr1 ctx idxs _ e@(ICon _ (ICValue {})) = do
+  memoTouch e
+  return (TR e False RNone)
 iTrExpr1 ctx idxs _ e = return (TR e False RNone)
 
 expandHRef :: IExpr a -> T (IExpr a) a
@@ -358,7 +378,9 @@ iTrExpr' ctx [] (ICon _ (ICPrim _ PrimJoinActions)) _
     [e, ICon _ (ICPrim _ PrimNoActions)] rs = retraverse ctx (rcptAt 0 rs) e
 iTrExpr' ctx idxs f ts es _ = do
         errh <- gets errHandle
+        m <- gets memo
         let (et, trans) = let ?errh = errh
+                              ?memo = m
                           in iTrAp ctx f ts es
         if trans then
             do TR e _ rc <- iTrExprR ctx idxs RNone et
@@ -368,17 +390,21 @@ iTrExpr' ctx idxs f ts es _ = do
                 (e, cse) <- runCSE et
                 let t = iGetType e
                     isBool = t == itBit1
+                    res = case cse of
+                            CseKept -> Kept e
+                            CseRef s -> Done e True (RCse s)
+                            CseNew -> Done e True RNone
+                if not isBool then return res else do
+                    memoTouch e
+                    m' <- gets memo
                     -- one expansion of the new node serves both queries
-                    o = opnd e
-                if isBool && isTOpnd ctx o then
-                    return (Done iTrue True RNone)
-                else if isBool && isFOpnd ctx o then
-                    return (Done iFalse True RNone)
-                else
-                    return $ case cse of
-                               CseKept -> Kept e
-                               CseRef s -> Done e True (RCse s)
-                               CseNew -> Done e True RNone
+                    let o = opnd m' e
+                    if isTOpnd ctx o then
+                        return (Done iTrue True RNone)
+                    else if isFOpnd ctx o then
+                        return (Done iFalse True RNone)
+                    else
+                        return res
 
 -- Re-traverse the action left after removing noAction, as iTrAp's rule does:
 -- that pass can add CSE entries and is the first to intern some CSE names.
@@ -464,19 +490,19 @@ runCSE e = return (e, CseKept)
 -- recursively transform an expression
 -- noting that a nontrivial transformation has happened
 {-# INLINE iTrAp2 #-}
-iTrAp2 :: (?errh :: ErrorHandle) =>
+iTrAp2 :: (?errh :: ErrorHandle, ?memo :: OpndMemo a) =>
           Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
 iTrAp2 ctx e ts es = (iTrApExp ctx e ts es, True)
 
 -- transform an expression, forgetting whether an transformation
 -- was done or not - used for recursive transformation
 {-# INLINE iTrApExp #-}
-iTrApExp :: (?errh :: ErrorHandle) =>
+iTrApExp :: (?errh :: ErrorHandle, ?memo :: OpndMemo a) =>
             Ctx a -> IExpr a -> [IType] -> [IExpr a] -> IExpr a
 iTrApExp ctx e ts es = fst (iTrAp ctx e ts es)
 
 -- transform an expression, if it is an application
-iTrExprIfAp :: (?errh :: ErrorHandle) =>
+iTrExprIfAp :: (?errh :: ErrorHandle, ?memo :: OpndMemo a) =>
                Ctx a -> IExpr a -> (IExpr a, Bool)
 iTrExprIfAp ctx (IAps f ts es) = iTrAp ctx f ts es
 iTrExprIfAp _   e              = (e,False)
@@ -486,7 +512,7 @@ iTrExprIfAp _   e              = (e,False)
 -- The arguments need to be unfolded when they are matched against IAps nodes,
 -- since these are already CSEed.
 -- Returns a flag indicating whether the expression changed or not
-iTrAp :: (?errh :: ErrorHandle) =>
+iTrAp :: (?errh :: ErrorHandle, ?memo :: OpndMemo a) =>
          Ctx a -> IExpr a -> [IType] -> [IExpr a] -> (IExpr a, Bool)
 
 -- eliminate null actions
@@ -631,7 +657,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]
                 (_, ICon _ (ICUndet {}), _) -> (els, True)
 
                 _ -> (IAps p [t] [cnd, thn, els], False)
-  where o = opnd cnd
+  where o = opnd ?memo cnd
 
 -- Boolean optimization
 
@@ -653,8 +679,8 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimBAnd)) _ [c1, c2]
          | otherwise                = (IAps p [] [c1, c2], False)
   -- the expanded operands and the contexts extended with each of them
   -- are shared by all the guards above
-  where o1 = opnd c1
-        o2 = opnd c2
+  where o1 = opnd ?memo c1
+        o2 = opnd ?memo c2
         ctx1 = addTOpnd o1 ctx
         ctx2 = addTOpnd o2 ctx
 
@@ -672,11 +698,11 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimBOr)) _ [c1, c2]
          | isUndet c1 || isUndet c2 = (iTrue, True)
          | isTOpnd ctx2 o1          = (c1, True)      -- c2 implies c1
          | isTOpnd ctx1 o2          = (c2, True)      -- c1 implies c2
-         | isTOpnd (addF c1 ctx) o2 = (iTrue, True)   -- not c1 implies c2
-         | isTOpnd (addF c2 ctx) o1 = (iTrue, True)   -- not c2 implies c1
+         | isTOpnd (addF ?memo c1 ctx) o2 = (iTrue, True)   -- not c1 implies c2
+         | isTOpnd (addF ?memo c2 ctx) o1 = (iTrue, True)   -- not c2 implies c1
          | otherwise                = (IAps p [] [c1, c2], False)
-  where o1 = opnd c1
-        o2 = opnd c2
+  where o1 = opnd ?memo c1
+        o2 = opnd ?memo c2
         ctx1 = addTOpnd o1 ctx
         ctx2 = addTOpnd o2 ctx
 
@@ -698,7 +724,7 @@ iTrAp ctx p@(ICon _ (ICPrim _ PrimBNot)) _ [c]
               IAps i@(ICon _ (ICPrim _ PrimIf))  [t] [e1,e2,e3] -> iTrAp2 ctx i [t] [e1, iTrApExp ctx iNot [] [e2], iTrApExp ctx iNot [] [e3]]
               u@(ICon i (ICUndet t k Nothing)) -> (u, True)
               _                                                 -> (IAps p [] [c], False)
-  where o = opnd c
+  where o = opnd ?memo c
 
 -- e == e --> True
 iTrAp ctx (ICon _ (ICPrim _ PrimEQ)) _ [e, e'] | e == e' = (iTrue, True)
@@ -1402,12 +1428,102 @@ splitConstExpr _ _ _ = Nothing
 -- and comparisons.
 data Opnd a = Opnd (IExpr a) [IExpr a] [IExpr a]
 
-opnd :: IExpr a -> Opnd a
-opnd c = let e = expValAndOrCmp c
-         in  Opnd e (bTerms e) (bTerms (ieNot e))
+-- The pieces of a reference this pass made are kept in the pass state
+-- (OpndMemo), so they are computed once per cell rather than once per query.
+-- A cell's fields are thunks of what each query would compute, over the same
+-- objects (for a renamed copy, over another copy of the same def, which
+-- forces the same original objects), and refCell forces what expValAndOrCmp
+-- would first, so no Id is forced earlier or later.  Cells never reach the IR.
+opnd :: OpndMemo a -> IExpr a -> Opnd a
+opnd m c = Opnd e ts nts
+  where (e, ts, nts) =
+            case refCell m c of
+              Just (OpndCell x xts xnts _) -> (x, xts, xnts)
+              _ -> let x = expAOC m c in (x, bTerms x, bTerms (ieNot x))
 
-addT :: IExpr a -> Ctx a -> Ctx a
-addT e ctx = addTOpnd (opnd e) ctx
+-- opnd m (ieNot c), as addF used to compute it.  For a reference c,
+-- ieNot c is (IAps iNot [] [c]).
+opndNot :: OpndMemo a -> IExpr a -> Opnd a
+opndNot m c = Opnd e ts nts
+  where (e, ts, nts) =
+            case refCell m c of
+              Just (OpndCell x _ _ xfts) ->
+                  let e' = IAps iNot [] [x] in (e', xfts, bTerms (ieNot e'))
+              _ -> let x = expAOC m (ieNot c) in (x, bTerms x, bTerms (ieNot x))
+
+-- The cell of a reference whose def expValAndOrCmp expands, after the
+-- matching that expValAndOrCmp does on it
+refCell :: OpndMemo a -> IExpr a -> Maybe (OpndCell a)
+refCell m (ICon _ (ICValue { iValDef = IAps (ICon _ (ICPrim _ p)) _ _, iValKey = k }))
+  | isAndOrCmp p = memoLookup m k
+refCell _ _ = Nothing
+
+-- The pieces of a reference with def d: expAOC of d, the terms of it and
+-- of its negation, and the terms of (not d)
+data OpndCell a = OpndCell (IExpr a) [IExpr a] [IExpr a] [IExpr a]
+
+-- The cells of the references this pass made, by IValKey number: the current
+-- generation, the one before, and the fills in the current one.  Cells are
+-- filled in T (memoTouch) and read by the queries from a snapshot.  At most
+-- 2 * memoGenSize cells are kept; a reference touched after its cell left the
+-- current generation gets a fresh one.
+data OpndMemo a = OpndMemo String !Int !(IM.IntMap (OpndCell a)) !(IM.IntMap (OpndCell a))
+
+emptyOpndMemo :: String -> OpndMemo a
+emptyOpndMemo tag = OpndMemo tag 0 IM.empty IM.empty
+
+memoGenSize :: Int
+memoGenSize = 32768
+
+memoLookup :: OpndMemo a -> IValKey -> Maybe (OpndCell a)
+memoLookup (OpndMemo tag _ cur prev) (IValKey tag' k) =
+    case IM.lookup k cur of
+      Just c -> mine c
+      Nothing -> IM.lookup k prev >>= mine
+  where mine c = if tag' == tag then Just c else Nothing
+memoLookup _ NoIValKey = Nothing
+
+-- A new cell expands d against the current generation only, so that an
+-- unevaluated cell keeps no older generation alive.
+memoFill :: OpndMemo a -> Int -> IExpr a -> OpndMemo a
+memoFill (OpndMemo tag n cur prev) k d
+  | n >= memoGenSize = fill 0 IM.empty cur
+  | otherwise        = fill n cur prev
+  where fill n' cur' prev' =
+            let c = opndCell (OpndMemo tag n' cur' IM.empty) d
+            in  OpndMemo tag (n' + 1) (IM.insert k c cur') prev'
+
+opndCell :: OpndMemo a -> IExpr a -> OpndCell a
+opndCell m d = OpndCell x (bTerms x) (bTerms (ieNot x)) (bTerms (IAps iNot [] [x]))
+  where x = expAOC m d
+
+-- Fill the cell of a reference this pass made, unless the current generation
+-- has it; of the reference it reads only the key.
+memoTouch :: IExpr a -> T () a
+memoTouch (ICon _ (ICValue { iValDef = d, iValKey = IValKey tag k })) = do
+    st <- get
+    let m@(OpndMemo tag' _ cur _) = memo st
+    if tag /= tag' || IM.member k cur
+      then return ()
+      else let m' = memoFill m k d
+           in  m' `seq` put st { memo = m' }
+memoTouch _ = return ()
+
+memoClear :: T () a
+memoClear = do
+    st <- get
+    let OpndMemo tag _ _ _ = memo st
+    put st { memo = emptyOpndMemo tag }
+
+addT :: OpndMemo a -> IExpr a -> Ctx a -> Ctx a
+addT m e ctx = addTOpnd (opnd m e) ctx
+
+-- addT and addF with the memo as it stands
+addTM, addFM :: IExpr a -> Ctx a -> T (Ctx a) a
+addTM e ctx = do m <- gets memo
+                 return (addT m e ctx)
+addFM e ctx = do m <- gets memo
+                 return (addF m e ctx)
 
 addTOpnd :: Opnd a -> Ctx a -> Ctx a
 addTOpnd (Opnd e ts _) (Ctx vs be) = Ctx (addEqs e vs) (bAddTerms ts be)
@@ -1422,13 +1538,24 @@ addTOpnd (Opnd e ts _) (Ctx vs be) = Ctx (addEqs e vs) (bAddTerms ts be)
         addNEqs (IAps (ICon _ (ICPrim _ PrimBNot)) _ [e]) vs = addEqs e vs
         addNEqs _ vs = vs
 
-addF :: IExpr a -> Ctx a -> Ctx a
-addF e ctx = addT (ieNot e) ctx
+addF :: OpndMemo a -> IExpr a -> Ctx a -> Ctx a
+addF m e ctx = addTOpnd (opndNot m e) ctx
 
 expValAndOrCmp :: IExpr a -> IExpr a
 expValAndOrCmp (IAps e ts es) = IAps e ts (map expValAndOrCmp es)
 expValAndOrCmp (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ )})) | isAndOrCmp p = expValAndOrCmp e
 expValAndOrCmp e = e
+
+-- expValAndOrCmp, sharing the expansions in the memo's cells.  Only for
+-- the Boolean queries: optBoolExpr's result goes back into the IR, so it
+-- keeps building its own copy.
+expAOC :: OpndMemo a -> IExpr a -> IExpr a
+expAOC m (IAps e ts es) = IAps e ts (map (expAOC m) es)
+expAOC m (ICon _ (ICValue { iValDef = e@(IAps (ICon _ (ICPrim _ p)) _ _ ), iValKey = k }))
+  | isAndOrCmp p = case memoLookup m k of
+                     Just (OpndCell x _ _ _) -> x
+                     _ -> expAOC m e
+expAOC _ e = e
 
 isAndOrCmp :: PrimOp -> Bool
 isAndOrCmp p = p `elem` [PrimBAnd, PrimBOr, PrimBNot, PrimEQ, PrimULT, PrimULE, PrimSLT, PrimSLE]
@@ -1642,7 +1769,10 @@ data TState a = TState {
         cse_map :: M.Map (IExpr a) (IExpr a, IDef a, Int),
 
         -- condOpt's optimized conditions, by CSE entry number
-        cond_opt :: IM.IntMap (IExpr a)
+        cond_opt :: IM.IntMap (IExpr a),
+
+        -- the operand pieces of the references made by this pass
+        memo :: !(OpndMemo a)
         }
 
 type T b a = State (TState a) b
@@ -1657,6 +1787,7 @@ runT errh flags no prefix xforms =
                            , def_map = M.empty
                            , cse_map = M.empty
                            , cond_opt = IM.empty
+                           , memo = emptyOpndMemo prefix
                            }
     in case runState xforms initState of
          (x, ts) ->
@@ -1686,9 +1817,9 @@ newExprT t e = do
     Nothing -> do
         n <- gets idNo
         let i = setBadId $ mkId noPosition (mkFString ((prefix ts) ++ itos n))
-            e' = ICon i (ICValue t e)
-            d = IDef i t e []  -- props get lost here, but restored in iTransRenameIdsInDef
             s = fromInteger n
+            e' = ICon i (ICValue t e (IValKey (prefix ts) s))
+            d = IDef i t e []  -- props get lost here, but restored in iTransRenameIdsInDef
             cmap' = M.insert e (e', d, s) cmap
             !n'   = n + 1
         cmap' `seq` put $ ts { idNo = n', cse_map = cmap' }
@@ -1721,8 +1852,8 @@ uEq' e (ICon _ (ICUndet { imVal = Nothing })) = True
 uEq' e1 (ICon _ (ICUndet { imVal = Just e2 })) = uEq e1 e2
 uEq' (ICon _ (ICUndet { imVal = Just e1 })) e2 = uEq e1 e2
 uEq' (ICon i1 (ICValue { })) (ICon i2 (ICValue { })) = i1 == i2
-uEq' (ICon _ (ICValue _ e1)) e2 = uEq e1 e2
-uEq' e1 (ICon _ (ICValue _ e2)) = uEq e1 e2
+uEq' (ICon _ (ICValue _ e1 _)) e2 = uEq e1 e2
+uEq' e1 (ICon _ (ICValue _ e2 _)) = uEq e1 e2
 uEq' (IAps (ICon _ (ICPrim _ PrimIf)) _ [c1,t1,e1]) (IAps (ICon _ (ICPrim _ PrimIf)) _ [c2,t2,e2]) =
     (c1 `eqE` c2 && t1 `uEq` t2 && e1 `uEq` e2) ||
     (t1 `uEq` e1 && t2 `uEq` e2 && t1 `uEq` t2)

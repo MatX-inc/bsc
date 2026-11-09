@@ -413,7 +413,7 @@ createRefsAndDefsAndActions (IAps (ICon c (ICSel {})) _ [(IAps (ICon _ (ICForeig
                  = (es, [], [])
 createRefsAndDefsAndActions  e@(ICon _ ICString {}) = ([e], [], [])
 createRefsAndDefsAndActions e | iGetType e == itString = ([(iMkString "%0s"), e], [], [])
-createRefsAndDefsAndActions e = ([(iMkString "%0s"), (ICon i (ICValue {iConType = t, iValDef = e}))],
+createRefsAndDefsAndActions e = ([(iMkString "%0s"), (ICon i (ICValue {iConType = t, iValDef = e, iValKey = NoIValKey}))],
                                  [(IDef i t e [])],
                                  removeConditions (createActionExpr e))
                 where i = enumId "_ff" noPosition (fromInteger n)

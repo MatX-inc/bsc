@@ -364,7 +364,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
               else
                   -- assign the expr to a def, and replace the ptr reference
                   -- with a module def reference (which is what ICValue is)
-                  (ICon i (ICValue t e'), Just (IDef i t e' []))
+                  (ICon i (ICValue t e' NoIValKey), Just (IDef i t e' []))
 
       -- a map from the new pointers to their expressions
       --    Actually, a map to a pair of an expression and maybe an IDef;
@@ -605,7 +605,7 @@ removeInlinedPositions flags imod0 =
     rmConInfo (ICDef t d) = ICDef t (rmExpr d)
     rmConInfo (ICUndet t k mv) = ICUndet t k (fmap rmExpr mv)
     rmConInfo (ICStateVar t sv) = ICStateVar t (rmStateVar sv)
-    rmConInfo (ICValue t d) = ICValue t (rmExpr d)
+    rmConInfo (ICValue t d _) = ICValue t (rmExpr d) NoIValKey
     rmConInfo (ICMethod t ins outs m) = ICMethod t ins outs (rmExpr m)
     rmConInfo (ICClock t c) = ICClock t (rmClock c)
     rmConInfo (ICReset t r) = ICReset t (rmReset r)
@@ -6222,7 +6222,7 @@ getStateVars clk lvs vs (ICon i (ICModPort t) : xs) =
 getStateVars clk lvs vs (ICon i (ICModParam t) : xs) =
     do is <- getStateVars clk lvs vs xs
        return (i:is)
-getStateVars clk lvs vs (ICon _ (ICValue _ e) : xs) = getStateVars clk lvs vs (e : xs)
+getStateVars clk lvs vs (ICon _ (ICValue _ e _) : xs) = getStateVars clk lvs vs (e : xs)
 getStateVars clk lvs vs (ICon i (ICIFace { }) : xs) = do is <- getStateVars clk lvs vs xs
                                                          return (i:is)
 getStateVars clk lvs vs (ICon _ _ : xs) = getStateVars clk lvs vs xs

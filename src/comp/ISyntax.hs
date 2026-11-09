@@ -8,6 +8,7 @@ module ISyntax(
         IExpr(..),
         ConTagInfo(..),
         IConInfo(..),
+        IValKey(..),
         IRules(..),
         IRule(..),
         IEFace(..),
@@ -806,7 +807,8 @@ data IConInfo a =
           -- this is created in iExpand, so it only exists in IModule
           -- and does not appear in IPackage
           -- XXX consider renaming it to ICModDef?
-        | ICValue { iConType :: IType, iValDef :: IExpr a }
+          -- iValKey is not compared (see IValKey)
+        | ICValue { iConType :: IType, iValDef :: IExpr a, iValKey :: !IValKey }
           -- module arguments that are interfaces -- NO LONGER SUPPORTED
         | ICIFace { iConType :: IType, ifcTyId :: Id, ifcIds :: [(Id, Integer, Bool)] }
           -- a constructor containing rule pragmas, which is used in the
@@ -851,6 +853,13 @@ data IConInfo a =
         | ICPosition { iConType :: IType, iPosition :: [Position] }
         | ICType { iConType :: IType, iType :: IType }
         | ICPred { iConType :: IType, iPred :: Pred a }
+        deriving (Show)
+
+-- The CSE name an ITransform pass gave a reference, as the pass's prefix
+-- and number, so that the pass can key its own tables on the reference
+-- without forcing, and so interning, its Id.  A copy whose def changes
+-- must drop the key.
+data IValKey = NoIValKey | IValKey String !Int
         deriving (Show)
 
 ordC :: IConInfo a -> Int
@@ -1270,7 +1279,7 @@ instance NFData (IConInfo a) where
     rnf (ICModParam x1) = rnf x1
     -- rnf (ICValue x1 x2) = rnf2 x1 x2
     -- XXX the above line causes cycles somehow so, like ICDef, we don't enter ICValue
-    rnf (ICValue x1 x2) = ()
+    rnf (ICValue x1 x2 _) = ()
     rnf (ICIFace x1 x2 x3) = rnf3 x1 x2 x3
     rnf (ICRuleAssert x1 x2) = rnf2 x1 x2
     rnf (ICSchedPragmas x1 x2) = rnf2 x1 x2
