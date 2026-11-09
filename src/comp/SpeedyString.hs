@@ -4,7 +4,7 @@ module SpeedyString(SString, toString, fromString, fromEnumName,
                     (++), concat, filter,
                     InternSnapshot(..), snapshotInternState, validSnapshot,
                     renderInternTable, internCount, internedSince,
-                    isInterned) where
+                    isInterned, sstringId) where
 
 import Prelude hiding((++), concat, filter)
 import qualified Prelude((++), filter)
@@ -28,6 +28,10 @@ import qualified Data.Generics as Generic
 
 data SString = SString !Int -- unique id
    deriving (Generic.Data, Generic.Typeable)
+
+-- The string's id, in [0, internCount): equal ids are equal strings.
+sstringId :: SString -> Int
+sstringId (SString i) = i
 
 instance Eq SString where
     (SString i) == (SString i') = i == i'
