@@ -189,6 +189,10 @@ hooks write (`SetupHooks.hs`), so a later program needs no change here.
 Build it in the same tree as the `bsc` beside it: the library rejects `.ba`
 files whose build version stamp differs (see Caveats).
 
+The determinism ladder (`doc/cabal.md` section 7) also hashes `inst/bluehs` on
+every leg to verify that the distribution is identical across checkout paths
+and parallelism settings.
+
 Everything redistributed is covered in `inst/bluehs/LICENSES/`: `COPYING`
 lists the components, with BSC's own terms (`COPYING.bsc`), the texts the
 release ships for code adapted into the compiler and for the bundled solver
