@@ -7,6 +7,7 @@ import Control.Exception(evaluate)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import Position
 import FStringCompat(FString)
 import Pragma
@@ -41,10 +42,10 @@ headerBS = B.pack header
 -- names, types and properties are decoded at load.
 genBinFile :: ErrorHandle -> (Bool -> FString -> FString) ->
               String -> CSignature -> CSignature -> IPackage a -> IO ()
-genBinFile errh remapF fn bi_sig bo_sig ipkg =
+genBinFile errh remapF fn bi_sig bo_sig ipkg = do
     let poisoned = any hasPoisonPill [ e | IDef _ _ e _ <- ipkg_defs ipkg ]
-    in writeBinaryFileCatch errh fn
-           (header ++ encodeWith remapF (bi_sig, bo_sig, BoPackage poisoned ipkg))
+    bytes <- encodeWithIO remapF (bi_sig, bo_sig, BoPackage poisoned ipkg)
+    writeBinaryFileCatch errh fn (BL.append (BL.fromStrict headerBS) bytes)
 
 -- The authenticating hash is a fold over every byte after the tag,
 -- computed here (eagerly) from the raw bytes: it does not depend on
