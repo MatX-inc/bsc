@@ -1370,15 +1370,14 @@ isPassThroughOp i = (i == idBit) ||
 -- only term-side Ids and heap-ref stamps are consulted.
 getIExprPosition :: IExpr a -> Position
 
-getIExprPosition (ILam i _ e) =
-    firstPos [getIdPosition i, getIExprPosition e]
+getIExprPosition (ILam i _ e) = posIdThenExpr i e
 
 getIExprPosition (IAps e _ es) =
-    firstPos (getIExprPosition e : map getIExprPosition es)
+    firstPosWith getIExprPosition (getIExprPosition e) es
 
 getIExprPosition (IVar i) = getIdPosition i
 
-getIExprPosition (ILAM i _ e) = firstPos [getIdPosition i, getIExprPosition e]
+getIExprPosition (ILAM i _ e) = posIdThenExpr i e
 getIExprPosition (ICon i _) = getIdPosition i
 -- The positions stamped on the heap ref (collected out of band when
 -- expressions are rewritten).
@@ -1387,8 +1386,20 @@ getIExprPosition (ICon i _) = getIdPosition i
 -- poss is a singleton allocation seed, so the pick rule is moot; when
 -- issue #863 re-enables stamping at the evaluator sites, revisit it
 -- (recency is not representable in a set).
-getIExprPosition (IRefT _ _ poss _) =
-    firstPos (S.toAscList poss)
+getIExprPosition (IRefT _ _ poss _)
+    | S.size poss == 1 = let p = S.findMin poss  -- firstPos [p], no list
+                         in  if isNoPosition p then noPosition else p
+    | otherwise = firstPos (S.toAscList poss)
+
+-- firstPos [getIdPosition i, getIExprPosition e]: both forced, in that order.
+posIdThenExpr :: Id -> IExpr a -> Position
+posIdThenExpr i e =
+    case getIdPosition i of
+      !p -> case getIExprPosition e of
+              !q | isNoPosition p -> if isNoPosition q then noPosition else q
+                 | isUsefulPosition p || isNoPosition q ||
+                   not (isUsefulPosition q) -> p
+                 | otherwise -> q
 
 --------
 
