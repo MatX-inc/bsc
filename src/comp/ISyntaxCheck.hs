@@ -146,9 +146,16 @@ eqTypeNum _ _ _ _ _ = False
 
 -------
 
+-- Inlined so that each call site builds its report only on failure: the
+-- payload arguments float into the failing branch, and a check that holds
+-- allocates nothing for them.
+{-# INLINE assert #-}
 assert :: (PPrint e, Show t) => Bool -> String -> e -> t -> a -> a
-assert True  s e t x = x
-assert False s e t x = internalError ("assert failed: " ++ s ++ "\n" ++ ppReadable e ++ "\n" ++ (show t))
+assert ok s e t x = if ok then x else assertFailed s e t
+
+{-# NOINLINE assertFailed #-}
+assertFailed :: (PPrint e, Show t) => String -> e -> t -> a
+assertFailed s e t = internalError ("assert failed: " ++ s ++ "\n" ++ ppReadable e ++ "\n" ++ (show t))
 --assert False s e x = internalError ("assert failed: " ++ s ++ "\n" ++ ppDebug e)
 
 type EqTy = Env -> IType -> IType -> Bool
@@ -258,7 +265,10 @@ kCheckErr r tc@(ITAp f a) =
         let ka' = kCheckErr r a
         in  assert (ka' == ka) "ITAp" (tc, (f, kf), (ka', ka)) (ka', ka) kr
     k -> internalError ("kCheck " ++ ppReadable (tc, k))
-kCheckErr r t@(ITVar i) = fromJustOrErr ("findK: " ++ ppReadable (r, t)) (findK i r)
+kCheckErr r t@(ITVar i) =
+    case findK i r of
+      Just k -> k
+      Nothing -> internalError ("findK: " ++ ppReadable (r, t))
 kCheckErr _ (ITCon _ k _) = k
 kCheckErr _ (ITNum _) = IKNum
 kCheckErr _ (ITStr _) = IKStr
