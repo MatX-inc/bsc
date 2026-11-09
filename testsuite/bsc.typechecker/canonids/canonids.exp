@@ -4,21 +4,23 @@
 # on it.
 #
 # -check-ctype-ids makes every EQ answered from two canonical words (cmp,
-# Unify's mgu and match) also be decided structurally (an internal error
-# on disagreement), and -no-ctype-ids keeps the gate shut, so every
+# Unify's mgu and match) also be decided structurally and compares every
+# IConv memo hit with a fresh conversion (an internal error on
+# disagreement), and -no-ctype-ids keeps the gate shut, so every
 # comparison, substitution, synonym expansion and unification takes its
 # structural path.  Both compiles must succeed, and the .bo and the
 # generated Verilog must be identical with and without the words.
 # -trace-ctype-stats prints the counters at exit: the ones checked here
-# show that the words were in use (cmp answered EQ from words) and that
-# computing them interned no string of their own except the
-# typechecker's _tctyvarN and _tctempN names
+# show that the words were in use (cmp answered EQ from words, the
+# IConv memo hit) and that computing them interned no string of their
+# own except the typechecker's _tctyvarN and _tctempN names
 # (intern_other), none of them a binder of a letrec group with more
 # than one binder (letrec_offender, over letrec_group groups checked).
 
 erase CanonIds.bo
 compile_backend_pass CanonIds.bs {-check-ctype-ids -trace-ctype-stats}
 find_regexp CanonIds.bs.bsc-out {ctype-stats cmp_eq_by_word [1-9]}
+find_regexp CanonIds.bs.bsc-out {ctype-stats iconv_memo_hit [1-9]}
 find_n_strings CanonIds.bs.bsc-out {ctype-stats intern_other 0} 1
 find_regexp CanonIds.bs.bsc-out {ctype-stats letrec_group [1-9]}
 find_n_strings CanonIds.bs.bsc-out {ctype-stats letrec_offender 0} 1
