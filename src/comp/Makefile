@@ -137,7 +137,7 @@ $(EXES): version
 # Install targets
 
 .PHONY: install
-install: $(BSCEXES) $(TCLEXES) install-bsc install-bluetcl
+install: $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) install-bsc install-bluetcl install-bo2bloogle install-checkers
 
 .PHONY: install-extra
 install-extra: $(UTILEXES) $(SHOWRULESEXES) install-utils install-showrules
