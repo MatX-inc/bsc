@@ -1070,7 +1070,9 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
            <- simCheckPackage errh (backend flags == Just Bluesim) amod
 
        -- generate the abin file
-       let afilename = mkAName (bdir flags) prefix modstr
+       pwd <- getCurrentDirectory
+       let storedFlags = storedFlagsPaths (storedPath pwd (bluespecDir flags)) flags
+           afilename = mkAName (bdir flags) prefix modstr
            afilename_rel = getRelativeFilePath afilename
            backend = apkg_backend amod_for_abin
            abinPrintPrefix =
@@ -1109,7 +1111,9 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
        start flags DFwriteABin
 
        -- generate the abin file
-       let afilename = mkAName (bdir flags) prefix modstr
+       pwd <- getCurrentDirectory
+       let storedFlags = storedFlagsPaths (storedPath pwd (bluespecDir flags)) flags
+           afilename = mkAName (bdir flags) prefix modstr
            afilename_rel = getRelativeFilePath afilename
            abinPrintPrefix = "Elaborated error module file created: "
            remapP = remapPositionFile (remapPathPrefix flags)
