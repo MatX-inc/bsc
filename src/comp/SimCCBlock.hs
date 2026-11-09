@@ -67,7 +67,6 @@ import ErrorUtil(internalError)
 
 import Data.Maybe
 import Data.List(partition, intersperse, intercalate, sortBy)
-import Data.List.Split(wordsBy)
 import Numeric(showHex)
 import Control.Monad(when)
 import Control.Monad.State(State, gets, modify)
@@ -514,9 +513,15 @@ mkGateAssign top inst num gate_src =
 adjustInstQuals :: AId -> ([String], String)
 adjustInstQuals id =
     let v = getIdBaseString id
-        qs = wordsBy (=='.') (getIdQualString id)
+        qs = splitDots (getIdQualString id)
         qs' = map (pfxInst ++) qs
     in  (qs', v)
+
+-- wordsBy (== '.'), which is slow, and this runs for every converted Id
+splitDots :: String -> [String]
+splitDots s = case dropWhile (== '.') s of
+                "" -> []
+                s' -> let (w, rest) = break (== '.') s' in w : splitDots rest
 
 -- ===============
 
