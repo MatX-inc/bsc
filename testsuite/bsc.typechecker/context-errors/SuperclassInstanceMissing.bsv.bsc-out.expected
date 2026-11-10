@@ -1,0 +1,7 @@
+checking package dependencies
+compiling ./SuperclassInstanceMissing_Classes.bsv
+compiling SuperclassInstanceMissing.bsv
+Error: "SuperclassInstanceMissing.bsv", line 6, column 10: (T0031)
+  The provisos for this expression could not be resolved because there are no
+  instances of the form:
+    SuperclassInstanceMissing_Classes::Super#(SuperclassInstanceMissing::T)
