@@ -1,0 +1,11 @@
+package ForeignModMissingFieldClassic where
+
+interface Counter =
+   up    :: PrimAction
+   value :: Bit 4
+
+vcount :: Module Counter
+vcount = module verilog "count_4" "clk"
+         {
+            up = "enable";
+         }
