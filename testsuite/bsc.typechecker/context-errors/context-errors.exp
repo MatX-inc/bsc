@@ -216,6 +216,11 @@ compile_fail_error EModInstWrongArgs_TooFew1.bsv T0108
 compile_fail_error EModInstWrongArgs_TooFew2.bsv T0084
 compile_fail_error EModInstWrongArgs_TooFewViaMap.bsv T0107
 
+# A missing superclass instance is reported at the instance, not at the
+# superclass declaration (here in another package)
+compile_fail_error SuperclassInstanceMissing.bsv T0031
+compare_file SuperclassInstanceMissing.bsv.bsc-out
+
 # -----
 # Test for Bug 1645
 

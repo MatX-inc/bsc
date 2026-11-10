@@ -513,14 +513,13 @@ convInst errh mi r di@(Cinstance qt@(CQType _ t) ds) =
         mkf d = (i, CVar (mkUId i)) where i = getLName d
         sds = {-trace (ppReadable supsi)-} supsi
           where sups = super cls
-                -- keep the position of the subclass contexts around
-                (s_ids, s_preds) = unzip sups
-                s_poss = map getPosition s_ids
+                s_preds = map snd sups
                 ats = tyConArgs t
                 s_preds' = map mkinst s_preds
-                -- once the predicates are made, zip them with the positions
-                -- to be used for the position of the field in the CStruct
-                supsi = map bnd (zip s_poss s_preds')
+                -- The superclass fields are positioned at this instance,
+                -- so a missing superclass instance is reported where the
+                -- user must supply it, not at the class declaration.
+                supsi = map bnd s_preds'
                 vs = csig cls
                 mkinst p =
                     -- This definition doesn't work because "quantify" throws
@@ -529,11 +528,11 @@ convInst errh mi r di@(Cinstance qt@(CQType _ t) ds) =
                     --   in  inst ats gen
                     let s = mkSubst (zip vs ats)
                     in  apSub s (predToType p)
-                bnd (pos, t) =
+                bnd t =
                         let tc = fromJustOrErr "convInst bnd: leftCon" (leftCon t)
                             ts = tyConArgs t
                             cqt = CQType [CPred (CTypeclass tc) ts] noType
-                        in  (setIdPosition pos (unQualId tc),
+                        in  (setIdPosition (getPosition di) (unQualId tc),
                              -- XXX Lennart's comment: hacky encoding of dict
                              -- XXX "tiExpr" looks for this construction
                              CHasType (anyExprAt (getPosition di)) cqt)

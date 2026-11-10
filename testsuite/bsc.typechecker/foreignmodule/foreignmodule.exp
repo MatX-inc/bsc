@@ -24,6 +24,16 @@ compile_fail_error ForeignModResetHasArgs.bsv T0103
 
 compile_fail_error ForeignModNotField.bsv T0104
 compile_fail_error ForeignModMissingField.bsv T0105
+compare_file ForeignModMissingField.bsv.bsc-out
+
+# A missing field is reported at the import, not at the interface
+# declaration (here in another package)
+compile_fail_error ForeignModMissingFieldImported.bsv T0105
+compare_file ForeignModMissingFieldImported.bsv.bsc-out
+
+# The same for a Classic import, which is only checked by the typechecker
+compile_fail_error ForeignModMissingFieldClassic.bs T0105
+compare_file ForeignModMissingFieldClassic.bs.bsc-out
 
 compile_fail_error ForeignModBadResetClock.bsv P0134
 

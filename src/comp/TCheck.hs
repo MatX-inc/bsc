@@ -864,10 +864,12 @@ tiExpr as td exp@(CmoduleVerilog name ui clks rsts args fields sch ps) = do
                   i:_ -> err (getIdPosition i, EForeignModNotField
                                                    (pfpString ti) (pfpString i))
                   [] -> -- now check for missing fields
+                      -- (reported at the import, which is what must change,
+                      -- not at the field, which may be in another package)
                       case fs \\ fieldnames of
-                        i:_ -> err (getIdPosition i,
-                                    EForeignModMissingField (pfpString i)
-                                        name_str name_pos_str)
+                        i:_ -> err (getPosition name,
+                                    EForeignModMissingField (pfpString ti)
+                                        (pfpString i))
                         _ -> do fields' <- mapM (chkVeriIfc self_sb_methods) fields
                                 let e' = CmoduleVerilogT ty name' ui clks rsts
                                                          ses' fields' sch ps
