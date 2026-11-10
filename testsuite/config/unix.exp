@@ -1001,6 +1001,17 @@ proc make_patch_file_name { file } {
 # Compilation routines
 #
 
+# A test that caps the heap (+RTS -M) is asserting a bound on live data, so
+# compact the old generation from the first major collection (+RTS -c): the
+# outcome then follows the live set, not where major collections fall.
+proc bsc_heap_cap_options {options} {
+    set rts [lsearch -exact $options +RTS]
+    if {$rts >= 0 && [lsearch -glob [lrange $options $rts end] -M*] >= 0} {
+        set options [linsert $options [expr {$rts + 1}] -c]
+    }
+    return $options
+}
+
 # compile no source, just to test options
 proc gen_basic_output { options output } {
     global bsc
@@ -1012,6 +1023,7 @@ proc gen_basic_output { options output } {
     set here [absolute $srcdir]
     cd [file join $here $subdir]
 
+    set options [bsc_heap_cap_options $options]
     set status [exec_with_log "gen_basic_output" "$bsc $options >& $output" 2]
     cd $here
     return [expr $status == 0]
@@ -1060,6 +1072,7 @@ proc bsc_compile { source {options ""} {nodeps 0} } {
     if { ! $nodeps } {
         append bsc_compile_options " -u"
     }
+    set options [bsc_heap_cap_options $options]
     set cmd "$bsc $options $bsc_compile_options $source >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_compile" $cmd 2]
@@ -1187,6 +1200,7 @@ proc bsc_compile_to_object { source { module ""} { options "" } } {
         append c_comp_options " -g $module"
     }
 
+    set options [bsc_heap_cap_options $options]
     set cmd "$bsc $options $c_comp_options $source >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_compile_to_object" $cmd 2]
@@ -1223,6 +1237,7 @@ proc bsc_link_objects { objects toplevel { options "" } } {
     set objects $mods
 
     set link_options "-no-show-timestamps -no-show-version -sim -e $toplevel -o $exefile"
+    set options [bsc_heap_cap_options $options]
     set cmd "$bsc $link_options $options $objects >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_link_objects" $cmd 2]
@@ -1249,6 +1264,7 @@ proc bsc_compile_verilog { source { module "" } { options "" } } {
         append v_comp_options " -g $module"
     }
 
+    set options [bsc_heap_cap_options $options]
     set cmd "$bsc $options $v_comp_options $source >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_compile_verilog" "$cmd" 2]
@@ -1275,6 +1291,7 @@ proc bsc_compile_synthesize_verilog { source { module "" } { options "" } } {
         append v_comp_options " -g $module"
     }
 
+    set options [bsc_heap_cap_options $options]
     set cmd "$bsc $options $v_comp_options $source >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_compile_synthesize_verilog" $cmd 2]
@@ -1301,6 +1318,7 @@ proc bsc_compile_verilog_dump_schedule { source { module "" } { options "" } } {
         append v_comp_options " -verilog -g $module"
     }
 
+    set options [bsc_heap_cap_options $options]
     set cmd "$bsc $options $v_comp_options $source >& $output"
     verbose "Executing: $cmd" 4
     set status [exec_with_log "bsc_compile_verilog_dump_schedule" $cmd 2]
@@ -1334,6 +1352,7 @@ proc bsc_create_systemc_objects { objects toplevel { options "" } } {
 
         set link_options "-no-show-timestamps -no-show-version -systemc -e $toplevel"
 
+        set options [bsc_heap_cap_options $options]
         set cmd "$bsc $cxx_options $options $link_options $objects >& $output"
         verbose "Executing: $cmd" 4
         set status [exec_with_log "bsc_create_systemc_objects" $cmd 2]
