@@ -1,0 +1,5 @@
+checking package dependencies
+compiling ForeignModMissingFieldClassic.bs
+Error: "ForeignModMissingFieldClassic.bs", line 8, column 24: (T0105)
+  This foreign module import is missing the field `value' of its interface
+  `ForeignModMissingFieldClassic.Counter'

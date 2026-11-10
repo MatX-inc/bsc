@@ -674,7 +674,7 @@ fixVerilogIfc (ds,ts) d = return ((d:ds),ts)
 fixCModuleVerilog :: Id -> ([CMStmt], [IfcTRec], [CPred]) -> CMStmt -> GWMonad ([CMStmt], [IfcTRec], [CPred])
 fixCModuleVerilog n (ss,ts,ps)
        bdy@(CMStmt (CSBindT p@(CPVar mName) mi pprops cq@(CQType qs ty)
-                            def@(CApply _ [CmoduleVerilog _ _ _ _ aes fs _ _]))) = do
+                            def@(CApply _ [CmoduleVerilog vname _ _ _ aes fs _ _]))) = do
    let mStmtSPT = savePortTypeStmt (CVar id_x)
        mStmtSPTO = savePortTypeOfStmt (CVar id_x)
    let saveArgTypes (Port vp _ _, e) = [mStmtSPTO vp e]
@@ -731,6 +731,15 @@ fixCModuleVerilog n (ss,ts,ps)
                                           EForeignModNotField
                                               (pfpString i) (pfpString fname))
        save_f_stmtss <- mapM save_f fs
+       -- Check for missing fields here, while the user's interface type is
+       -- known (typecheck only sees the generated one), and report them at
+       -- the import, not at the field declaration.
+       let bvi_fnames = map vf_name fs
+       case [ f | finf <- flat_fts, let f = unQualId (name finf),
+                  f `notElem` bvi_fnames ] of
+         f:_ -> bad (getPosition vname,
+                     EForeignModMissingField (pfpString i) (pfpString f))
+         [] -> return ()
        let save_a_stmtss = map saveArgTypes aes
        let save_stmts = concat (save_a_stmtss ++ save_f_stmtss)
        let pos = getPosition n
