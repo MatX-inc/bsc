@@ -1,5 +1,6 @@
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
-module GenBi(BiFile(..), genBiFile, readBiFile, readBiFileStrict) where
+module GenBi(BiFile(..), genBiFile, readBiFile, readBiFileMaybe, readBiFileStrict,
+             readBiStrings) where
 
 -- The .bi file: a package's user-visible signature, as -signature-only
 -- writes it after context reduction, with the import closure it was
@@ -57,18 +58,34 @@ genBiFile errh remapF fn bi = do
 readBiFile :: ErrorHandle -> String -> B.ByteString -> IO (BiFile, String)
 readBiFile = readBiWith False
 
+-- As readBiFile, with Nothing for a file that is not a .bi of this version
+readBiFileMaybe :: B.ByteString -> Maybe (BiFile, String)
+readBiFileMaybe = decodeBi False
+
 -- Everything decoded and validated at once (for tools that print it)
 readBiFileStrict :: ErrorHandle -> String -> B.ByteString -> IO (BiFile, String)
 readBiFileStrict = readBiWith True
 
-readBiWith :: Bool -> ErrorHandle -> String -> B.ByteString -> IO (BiFile, String)
-readBiWith strict errh nm s =
+-- The strings of the file, as reading it interns them, and nothing else
+readBiStrings :: ErrorHandle -> String -> B.ByteString -> IO [FString]
+readBiStrings errh nm s =
     let hlen = B.length headerBS
     in if B.take hlen s == headerBS
-       then do let payload = B.drop hlen s
-                   bi = if strict then decodeStrict payload else decode payload
-                   -- only the hash of the pair is used
-                   (_, hash) = decodeWithHash payload :: ((), String)
-               _ <- evaluate hash
-               return (bi, hash)
+       then return (decodeStrings (B.drop hlen s))
        else bsError errh [(noPosition, EBinFileVerMismatch nm)]
+
+readBiWith :: Bool -> ErrorHandle -> String -> B.ByteString -> IO (BiFile, String)
+readBiWith strict errh nm s =
+    case decodeBi strict s of
+      Just (bi, hash) -> do _ <- evaluate hash
+                            return (bi, hash)
+      Nothing -> bsError errh [(noPosition, EBinFileVerMismatch nm)]
+
+decodeBi :: Bool -> B.ByteString -> Maybe (BiFile, String)
+decodeBi strict s =
+    let hlen = B.length headerBS
+        payload = B.drop hlen s
+        bi = if strict then decodeStrict payload else decode payload
+        -- only the hash of the pair is used
+        (_, hash) = decodeWithHash payload :: ((), String)
+    in  if B.take hlen s == headerBS then Just (bi, hash) else Nothing

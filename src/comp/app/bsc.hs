@@ -125,7 +125,8 @@ import GenBin(genBinFile, forceSignatures, CPackageBin(..), stripImpSigs, checkR
               sortSched)
 import GenBi(BiFile(..), genBiFile)
 import GenChk(ChkFile(..), genChkFile)
-import GenTci(TciFile(..), TciInput(..), TciStats(..), genTciFile, readTciFile)
+import GenTci(TciFile(..), TciInput(..), TciStats(..), genTciFile, readTciFile,
+              readTciLibraries)
 import GenWrap(genWrap, WrapInfo(..))
 import GenFuncWrap(genFuncWrap, addFuncWrap)
 import GenForeign(genForeign, checkForeign)
@@ -410,7 +411,8 @@ removeStaleTci errh flags name =
 
 -- -check-only X.tci: the steps of compilePackage after the table that
 -- follows CtxReduce, from what -signature-only recorded in the .tci (see
--- writeTci), which is the only file read.  Messages that the steps
+-- writeTci), which is the only file read besides the library .bi files
+-- it refers to (found on the -p path).  Messages that the steps
 -- before it produce were reported by -signature-only, so the .chk holds
 -- only this run's.  The table is built once, from the pruned signatures
 -- and the package, after the canonical-word gate opens: the .tci's
@@ -427,14 +429,12 @@ checkTci errh flags name_tci =
 
     start flags DFimports
     bytes <- readBinaryFileCatch errh noPosition name_tci
-    (tci, tci_hash) <- readTciFile errh name_tci bytes enableCanonIds
-    let name = tci_source tci
-        mctx@(CPackage pkgId _ _ impsigs _ _ _) = tci_package tci
-        dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
+    (tci0, tci_hash) <- readTciFile errh name_tci bytes enableCanonIds
+    let name = tci_source tci0
     setSyntax (if hasDotSuf bscSrcSuffix name then CLASSIC else BSV)
     writeIORef internDumpFile (Just (putInDir (bdir flags) name "intern.json"))
     -- the two runs must agree on everything but the mode and locations
-    when (tci_flags tci /= flagsFingerprint flags) $
+    when (tci_flags tci0 /= flagsFingerprint flags) $
         bsError errh [(cmdPosition, EGeneric
             ("The flags differ from those of the -signature-only compile that wrote " ++
              getRelativeFilePath tci_name ++ "."))]
@@ -442,9 +442,13 @@ checkTci errh flags name_tci =
     when warnRedundantProvisos $
         bsError errh [(cmdPosition, EGeneric
             "-warn-redundant-provisos needs the source file, not a .tci file.")]
+    tci <- readTciLibraries errh (verbose flags) (ifcPath flags) tci0
+    let mctx@(CPackage pkgId _ _ impsigs _ _ _) = tci_package tci
+        dumpnames = (Just (baseName (dropSuf name)), Just (getIdString (unQualId pkgId)), Nothing)
     when traceTci $
         hPutStrLn stderr (unwords [ "tci read", getRelativeFilePath tci_name, "hash", tci_hash
-                                  , "signatures", show (length impsigs) ])
+                                  , "signatures", show (length impsigs)
+                                  , "libraries", show (length [ () | Just _ <- tci_libs tci ]) ])
     t <- dumpStr errh flags tStart DFimports dumpnames name_tci
 
     start flags DFsympostctxreduce
@@ -639,7 +643,7 @@ compilePackage
         (ok, pkgsUsedInExports) <-
             writeSignature errh flags t dumpnames name pwd biClosure symt mctx
         when ok $
-            writeTci errh flags name handoffStrings mctx atfCacheFromCtxReduce
+            writeTci errh flags name biClosure handoffStrings mctx atfCacheFromCtxReduce
                      (pkgsUsedInTypes, pkgsUsedInCtxReduce, pkgsUsedInExports)
         CE.throwIO (FrontEndDone ok)
 
@@ -1001,15 +1005,17 @@ writeSignature errh flags t dumpnames name pwd closure symt
     return (ok, pkgsUsedInExports)
 
 -- -signature-only: also write the package's .tci, the input of
--- -check-only X.tci (see GenTci).  handoffStrings are the spellings
+-- -check-only X.tci (see GenTci).  closure is every imported package with
+-- the hash of the .bi read for it; handoffStrings are the spellings
 -- interned when the package reached the handoff, in arrival order.
-writeTci :: ErrorHandle -> Flags -> String -> [String] -> CPackage -> CATFCache ->
-            (S.Set Id, S.Set Id, S.Set Id) -> IO ()
-writeTci errh flags name handoffStrings mctx atfCache usedSets = do
+writeTci :: ErrorHandle -> Flags -> String -> [(Id, String)] -> [String] -> CPackage ->
+            CATFCache -> (S.Set Id, S.Set Id, S.Set Id) -> IO ()
+writeTci errh flags name closure handoffStrings mctx atfCache usedSets = do
     let tci_filename = putInDir (bdir flags) name tciSuffix
         ti = TciInput { ti_source = name
                       , ti_flags = flagsFingerprint flags
                       , ti_package = mctx
+                      , ti_bi_hashes = M.fromList [ (getIdString i, h) | (i, h) <- closure ]
                       , ti_used = usedSets
                       , ti_atf = atfCache
                       , ti_handoff_strings = map mkFString handoffStrings
@@ -1030,7 +1036,8 @@ showTciStats fn hash st =
         (bs, bl, bsig) = ts_bytes st
     in  unwords [ "tci write", getRelativeFilePath fn, "hash", hash
                 , "entries", show kept ++ "/" ++ show entries
-                , "lib", show (ts_lib st), "names", show (ts_names st)
+                , "lib", show (fst (ts_lib st)) ++ "/" ++ show (snd (ts_lib st))
+                , "names", show (ts_names st)
                 , "strings", show (ts_strings st)
                 , "bytes", show bs ++ "+" ++ show bl ++ "+" ++ show bsig
                 , "stripped-files", show (ts_stripped st) ]

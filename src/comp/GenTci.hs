@@ -1,33 +1,39 @@
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
 module GenTci(TciFile(..), TciInput(..), TciStats(..),
-              genTciFile, readTciFile) where
+              genTciFile, readTciFile, readTciLibraries) where
 
 -- The .tci file: the typecheck input that -signature-only hands to
 -- -check-only.  It holds the package after context reduction (mctx), its
--- imported signatures pruned to what a lookup from the package can reach,
--- and the values that the check cannot compute without the steps before
--- context reduction.  -check-only X.tci reads nothing else (see bsc.hs,
--- checkTci).  It carries no hashes of the import closure, so it changes
--- only when what the check reads changes.
+-- imported MatX signatures pruned to what a lookup from the package can
+-- reach, a reference to each library signature, and the values that the
+-- check cannot compute without the steps before context reduction.
+-- -check-only X.tci reads nothing else but the referenced library .bi
+-- files of the installation (see bsc.hs, checkTci).  It carries no hashes
+-- of the MatX import closure, so it changes only when what the check
+-- reads changes.  Library signatures are whole (the check inserts
+-- references to library names) and never change under a MatX edit.
 --
 -- The file is the tag and three format 2 containers, each but the last
 -- preceded by its length (u64, little-endian):
 --   1. strings in the writer's intern order: every string of the other
---      two, and every string the writer had interned when it reached the
---      handoff except those only the pruned entries hold (the compiler's
---      own strings, PreStrings, are always kept).  The reader
---      interns a container's string table eagerly and in table order, so
---      these keep their relative order, including the ones the check
---      makes again before typecheck (instance names, the built-in
---      classes, kind variables);
---   2. TciLocal: mctx (imported signatures as references) and the rest;
---   3. the imported signatures, pruned, one per closure package.
+--      two and of the referenced library .bi files, and every string the
+--      writer had interned when it reached the handoff except those only
+--      the pruned entries hold (the compiler's own strings, PreStrings,
+--      are always kept).  The reader interns a container's string table
+--      eagerly and in table order, so these keep their relative order,
+--      including the ones the check makes again before typecheck
+--      (instance names, the built-in classes, kind variables), and
+--      reading a library .bi afterwards interns nothing new;
+--   2. TciLocal: mctx (imported signatures as references), the hash of
+--      each library's .bi, and the rest;
+--   3. the imported MatX signatures, pruned, in closure order.
 -- Imported positions are stored with only their file (see genTciFile),
 -- except in imported class and field default bodies, which the check
 -- typechecks in the package's scope.
 
-import Control.Monad(when)
+import Control.Monad(when, zipWithM)
 import Control.Exception(evaluate)
+import Data.Maybe(isNothing, fromMaybe)
 import Data.Bits(shiftL)
 import Data.Char(isDigit)
 import Data.List(isPrefixOf, isSuffixOf, sort)
@@ -48,16 +54,21 @@ import Id
 import CType
 import CSyntax
 import Pragma(Pragma(..))
+import PFPrint(pfpString)
 import Error(ErrMsg(..), ErrorHandle, bsError)
+import ErrorUtil(internalError)
 import BinData
 import GenBin(CPackageBin(..))
-import FileIOUtil(writeFileBuilderCatch)
+import GenBi(BiFile(..), readBiFile, readBiFileMaybe, readBiStrings)
+import FileNameUtil(biSuffix)
+import FileIOUtil(writeFileBuilderCatch, readBinaryFileCatch, existsFilePath, readBinFoundFile)
 import Util(hashInit, nextHashByte, showHash)
+import SpeedyString(internCount)
 import PreStrings(allPreStrings)
 
 -- .tci file tag -- change this whenever the .tci format changes
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-tci-20261110-1"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-tci-20261110-2"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -66,9 +77,11 @@ headerBS = B.pack header
 data TciFile = TciFile
     { tci_source       :: String   -- the source file, as the writer encoded it
     , tci_flags        :: String   -- fingerprint of the semantic flags
-      -- mctx, with the pruned signatures (file name "", no import list)
+      -- mctx, with the pruned signatures (file name "", no import list);
+      -- a library's has no entries until readTciLibraries reads them
     , tci_package      :: CPackage
-    , tci_libs         :: [Bool]   -- per signature: a library, kept whole
+      -- per signature: Just the hash of the library .bi it refers to
+    , tci_libs         :: [Maybe String]
     , tci_used_types   :: S.Set Id -- packages used in types (before ctxreduce)
     , tci_used_ctx     :: S.Set Id -- packages used by context reduction
     , tci_used_exports :: S.Set Id -- packages used by the export list
@@ -80,6 +93,7 @@ data TciInput = TciInput
     { ti_source    :: String
     , ti_flags     :: String
     , ti_package   :: CPackage  -- mctx, with the full imported signatures
+    , ti_bi_hashes :: M.Map String String  -- closure package -> hash of its .bi
     , ti_used      :: (S.Set Id, S.Set Id, S.Set Id)  -- types, ctxreduce, exports
     , ti_atf       :: M.Map (Id, [Type]) Type
       -- every string interned when the package reached the handoff (after
@@ -91,7 +105,7 @@ data TciInput = TciInput
 
 data TciStats = TciStats
     { ts_entries    :: (Int, Int)  -- imported non-library entries: kept, all
-    , ts_lib        :: Int         -- library entries (kept)
+    , ts_lib        :: (Int, Int)  -- library signatures, their entries
     , ts_names      :: Int         -- names in the keep set
     , ts_strings    :: Int
     , ts_bytes      :: (Int, Int, Int)  -- strings, local part, signatures
@@ -99,7 +113,7 @@ data TciStats = TciStats
     }
 
 -- The local part of the file
-data TciLocal = TciLocal String String CPackageBin [Bool]
+data TciLocal = TciLocal String String CPackageBin [Maybe String]
                          [Id] [Id] [Id] [((Id, [Type]), Type)]
 
 instance Bin TciLocal where
@@ -143,12 +157,17 @@ instance Bin TciField where
 genTciFile :: ErrorHandle -> String -> TciInput -> IO (TciStats, String)
 genTciFile errh fn ti = do
     let CPackage pid exps imps sigs fixs ds incs = ti_package ti
-        libs = [ isLibrary sig | CImpSign _ _ sig <- sigs ]
+        isLib = [ isLibrary sig | CImpSign _ _ sig <- sigs ]
+        biHash n = case M.lookup (getIdString n) (ti_bi_hashes ti) of
+                     Just h -> h
+                     Nothing -> internalError ("genTciFile: no .bi hash: " ++ getIdString n)
+        libs = [ if l then Just (biHash n) else Nothing
+               | (l, CImpSign _ _ (CSignature n _ _ _)) <- zip isLib sigs ]
         -- the files of the closure's non-library packages: a position in
         -- one of them is an imported definition's (a package's own
         -- positions, including its include files, are kept)
         impFiles = IS.fromList [ fstringId (pos_file (getIdPosition n))
-                               | (False, CImpSign _ _ (CSignature n _ _ _)) <- zip libs sigs ]
+                               | (False, CImpSign _ _ (CSignature n _ _ _)) <- zip isLib sigs ]
         sel p = not (pos_is_stdlib p) && pos_line p >= 0 &&
                 IS.member (fstringId (pos_file p)) impFiles
         msel = if ti_keep_pos ti then Nothing else Just sel
@@ -158,15 +177,21 @@ genTciFile errh fn ti = do
                          libs (sortIds ut) (sortIds uc) (sortIds ue)
                          (M.toList (ti_atf ti))
     (bsL, strsL) <- strict <$> encodeV2Strip msel local
+    -- every string of the library .bi files, which the check interns when
+    -- it reads them (Sig has read them, so these are interned already)
+    strsLib <- concat <$> sequence
+                 [ readBinaryFileCatch errh noPosition f >>= readBiStrings errh f
+                 | (True, CImpSign f _ _) <- zip isLib sigs ]
     let exportAll = S.fromList [ getIdString p | Left es <- [exps], CExpPkg p <- es
                                                , p /= pid ]
     (sigs', dropped, stats) <-
         if ti_full ti
-        then return (map wholeSig sigs, [], keepAllStats libs sigs)
-        else pruneSigs (IS.fromList (map fstringId strsL)) exportAll (zip libs sigs)
+        then return ([ wholeSig s | (False, s) <- zip isLib sigs ], [],
+                     keepAllStats isLib sigs)
+        else pruneSigs (IS.fromList (map fstringId strsL)) exportAll (zip isLib sigs)
     (bsS, strsS) <- strict <$> encodeV2Strip msel [ TciSig s | s <- sigs' ]
     (_, strsD) <- encodeV2Strip Nothing dropped
-    let kept = IS.fromList (map fstringId (strsL ++ strsS))
+    let kept = IS.fromList (map fstringId (strsL ++ strsS ++ strsLib))
         -- a check makes the compiler's own strings itself (NumEq for a
         -- numeric proviso, say), and spellings of the shapes it generates;
         -- dropping one would move it after every string of the file
@@ -177,7 +202,7 @@ genTciFile errh fn ti = do
                                     (IS.union kept builtins)
         handoff = [ x | x <- ti_handoff_strings ti
                       , not (IS.member (fstringId x) onlyDropped) ]
-        strs = S.toAscList (S.fromList (strsL ++ strsS ++ handoff))
+        strs = S.toAscList (S.fromList (strsL ++ strsS ++ strsLib ++ handoff))
     (bsT, _) <- strict <$> encodeV2Strip Nothing strs
     let body = BB.word64LE (fromIntegral (B.length bsT)) <> BB.byteString bsT <>
                BB.word64LE (fromIntegral (B.length bsL)) <> BB.byteString bsL <>
@@ -214,7 +239,7 @@ keepAllStats :: [Bool] -> [CImportedSignature] -> TciStats
 keepAllStats libs sigs =
     let n lib = sum [ length ds | (l, CImpSign _ _ (CSignature _ _ _ ds)) <- zip libs sigs
                                 , l == lib ]
-    in  TciStats (n False, n False) (n True) 0 0 (0, 0, 0) 0
+    in  TciStats (n False, n False) (length (filter id libs), n True) 0 0 (0, 0, 0) 0
 
 -- -------------------------
 -- The keep rule
@@ -223,12 +248,14 @@ keepAllStats libs sigs =
 -- is a set of base names, seeded with every string of the local part
 -- (every Id of mctx, generated names included, and the used sets and ATF
 -- cache), with "val" (the Generic poly-wrap field), and with every name
--- that a kept entry binds or mentions.  Kept: every library signature
--- whole; every instance; every entry of a package re-exported whole
+-- that a kept entry binds or mentions.  Kept (library signatures are
+-- referred to whole, and every name they bind or mention is in N): every
+-- instance; every entry of a package re-exported whole
 -- (export Q::*); every entry binding an RDY_ name; and every entry that
 -- binds a name in N, in any package and namespace.  Fixities and pragmas
 -- are kept when their name is in N.  Each closure package keeps its
--- signature, in order, even when nothing in it is kept.
+-- signature, in order, even when nothing in it is kept.  Returns the
+-- non-library signatures, pruned.
 
 pruneSigs :: IS.IntSet -> S.Set String -> [(Bool, CImportedSignature)] ->
              IO ([CSignature], [CDefn], TciStats)
@@ -275,20 +302,20 @@ pruneSigs seeds exportAll lsigs = do
         keepPragma (CPragma (Pproperties i _)) = inN i
         keepPragma (CPragma (Pnoinline is)) = any inN is
         keepPragma _ = False
-        prune si (True, CImpSign _ _ (CSignature n _ fs ds)) = CSignature n [] fs ds
-        prune si (False, CImpSign _ _ (CSignature n _ fs ds)) =
+        prune si (CImpSign _ _ (CSignature n _ fs ds)) =
             CSignature n [] (filter keepFix fs)
                 [ d | (di, d) <- zip [0 ..] ds
                     , S.member (si, di) keptSet || (isPragma d && keepPragma d) ]
         isPragma (CPragma _) = True
         isPragma _ = False
         nLib = sum [ length ds | (True, CImpSign _ _ (CSignature _ _ _ ds)) <- lsigs ]
-        sigs' = zipWith prune [0 ..] lsigs
+        sigs' = [ prune si s | (si, (False, s)) <- zip [0 ..] lsigs ]
         dropped = [ d | (k, (_, d)) <- entries, not (S.member k keptSet) ] ++
                   [ CPragma p | (False, CImpSign _ _ (CSignature _ _ _ ds)) <- lsigs
                               , d@(CPragma p) <- ds, not (keepPragma d) ]
     return (sigs', dropped,
-            TciStats (S.size keptSet, length entries) nLib (IS.size nFinal) 0 (0, 0, 0) 0)
+            TciStats (S.size keptSet, length entries) (length (filter fst lsigs), nLib)
+                     (IS.size nFinal) 0 (0, 0, 0) 0)
   where isInstance (CIinstance {}) = True
         isInstance _ = False
 
@@ -369,7 +396,8 @@ tyIds (TDefMonad _) = []
 -- Reading
 
 -- The strings are interned first, then afterStrings runs, then the rest
--- is decoded; also returns the hash of every byte after the tag.
+-- is decoded; also returns the hash of every byte after the tag.  Library
+-- signatures are left as references (see readTciLibraries).
 readTciFile :: ErrorHandle -> String -> B.ByteString -> IO () ->
                IO (TciFile, String)
 readTciFile errh nm s afterStrings = do
@@ -387,11 +415,15 @@ readTciFile errh nm s afterStrings = do
     let TciLocal src fl (CPackageBin pkg) libs ut uc ue atf = decode bsL
         sigs = decode bsS :: [CSignature]
         CPackage pid exps imps refs fixs ds incs = pkg
-        sigs' = [ CImpSign "" q sig | (CImpSign _ q _, sig) <- zip refs sigs ]
-    when (length sigs /= length refs) $ bad
+        merge (CImpSign _ q sig : rs) (Just _ : ls) ss = CImpSign "" q sig : merge rs ls ss
+        merge (CImpSign _ q _ : rs) (Nothing : ls) (sig : ss) = CImpSign "" q sig : merge rs ls ss
+        merge [] [] [] = []
+        merge _ _ _ = internalError "readTciFile: signatures"
+    when (length libs /= length refs ||
+          length sigs /= length (filter isNothing libs)) $ bad
     return (TciFile { tci_source = src
                     , tci_flags = fl
-                    , tci_package = CPackage pid exps imps sigs' fixs ds incs
+                    , tci_package = CPackage pid exps imps (merge refs libs sigs) fixs ds incs
                     , tci_libs = libs
                     , tci_used_types = S.fromList ut
                     , tci_used_ctx = S.fromList uc
@@ -402,3 +434,47 @@ readTciFile errh nm s afterStrings = do
                      in  B.splitAt n (B.drop 8 b)
         readW64 :: B.ByteString -> Word64
         readW64 b = foldr (\x acc -> (acc `shiftL` 8) + fromIntegral x) 0 (B.unpack b)
+
+-- Fill in each library signature of a .tci that readTciFile read, from
+-- the library's .bi on the search path (verbose: each copy read is
+-- reported), which must be the file -signature-only read: the first
+-- copy with the recorded hash, so other copies are no reason for a
+-- warning.  Its strings are among the .tci's, which readTciFile has
+-- interned, so this interns nothing; the .bi is decoded as lazily as an
+-- import is, and a copy passed over is not decoded.
+readTciLibraries :: ErrorHandle -> Bool -> [String] -> TciFile -> IO TciFile
+readTciLibraries errh verb path tci = do
+    let CPackage pid exps imps sigs fixs ds incs = tci_package tci
+        fill Nothing s = return s
+        fill (Just h) (CImpSign f q (CSignature n _ _ _)) = do
+            let biname = getIdString n ++ "." ++ biSuffix
+                search first [] = return (Left first)
+                search first (c:cs) = do
+                    mfile <- readBinFoundFile errh noPosition verb c
+                    case mfile of
+                      Nothing -> search first cs
+                      Just file
+                        | Just (bi, hash) <- readBiFileMaybe file, hash == h
+                        -> return (Right (bi, c))
+                        | otherwise -> search (Just (fromMaybe (file, c) first)) cs
+            found <- existsFilePath biname path >>= search Nothing
+            (bi, name) <- case found of
+                Right bc -> return bc
+                Left Nothing ->
+                    bsError errh [(noPosition, EMissingIfcFile biname (pfpString n))]
+                -- the first copy read is reported: not a .bi, or not the one
+                Left (Just (file, name)) -> do
+                    _ <- readBiFile errh name file
+                    bsError errh [(noPosition, EBinFileSignatureMismatch biname (pfpString pid))]
+            when (bi_name bi /= n) $
+                bsError errh [(noPosition, EBinFilePkgNameMismatch name
+                                               (pfpString n) (pfpString (bi_name bi)))]
+            let CSignature n' _ fs es = bi_sig bi
+            return (CImpSign f q (CSignature n' [] fs es))
+    before <- internCount
+    sigs' <- zipWithM fill (tci_libs tci) sigs
+    after <- internCount
+    when (after /= before) $
+        internalError ("readTciLibraries: a library .bi holds " ++ show (after - before) ++
+                       " strings that the .tci does not")
+    return (tci { tci_package = CPackage pid exps imps sigs' fixs ds incs })

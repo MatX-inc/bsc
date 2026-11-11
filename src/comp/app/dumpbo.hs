@@ -86,14 +86,15 @@ main = do
         putStrLn "Signatures:"
         mapM_ (\(lib, CImpSign _ q (CSignature n _ fs es)) ->
                    putStrLn ("  " ++ getIdString n ++ (if q then " qualified" else "") ++
-                             (if lib then " library" else "") ++ ": " ++
-                             show (length es) ++ " entries, " ++ show (length fs) ++
-                             " fixities"))
+                             case lib of
+                               Just h -> ": library, .bi hash " ++ h
+                               Nothing -> ": " ++ show (length es) ++ " entries, " ++
+                                          show (length fs) ++ " fixities"))
               (zip (tci_libs tci) sigs)
         -- -bi: the non-library signatures as kept; otherwise the package
         if isBI
           then mapM_ (\(lib, CImpSign _ _ sig) ->
-                          if lib then return () else putStr (ppReadable sig))
+                          maybe (putStr (ppReadable sig)) (const (return ())) lib)
                      (zip (tci_libs tci) sigs)
           else putStr (ppReadable pkg)
       else do
