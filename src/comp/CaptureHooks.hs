@@ -61,7 +61,8 @@ netStepDropped stage pin pout =
                    (capOf (aspkg_capture pin)) gone
     in  pout { aspkg_capture = Cap t }
 
--- AState: the APackage's defs to the ASPackage's (a fresh table).
+-- AState: the APackage's defs to the ASPackage's, onto the table AState
+-- started (its boundary links).
 netStepFrom :: Int -> APackage -> ASPackage -> ASPackage
 netStepFrom stage apkg pout =
     let users = [ (HLId i, aVars e) | ADef i _ e _ <- apkg_local_defs apkg ] ++
@@ -70,7 +71,7 @@ netStepFrom stage apkg pout =
                 [ (HLId (aif_name f), aVars f) | f <- apkg_interface apkg ]
     in  pout { aspkg_capture =
                  Cap (netDiff stage M.empty (apkg_local_defs apkg) (outIds pout)
-                              users emptyCapTable) }
+                              users (capOf (aspkg_capture pout))) }
 
 outIds :: ASPackage -> S.Set AId
 outIds p = S.fromList [ i | ADef i _ _ _ <- aspkg_values p ]

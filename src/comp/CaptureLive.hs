@@ -16,9 +16,14 @@ module CaptureLive(
                    CapTable(..), emptyCapTable,
                    NetLive(..), NetNameL(..), NetFrom(..),
                    NameRefL(..), NameFact(..), HostL(..), Gone(..),
-                   ObsL(..), CapTy(..), isNameFact,
+                   ObsL(..), CapTy(..), LinkL(..), isNameFact,
                    capMerge, capMergeFacts, capGone, capGoneFacts, capCopied, capDead,
                    capRename, capStat, capNamesOf, capRecs, capFromRecs,
+                   -- boundary links
+                   capLinks, boundaryLinks, methLink, instLink,
+                   linkArm, linkSel, linkPreSel, linkPortDef, linkEnable,
+                   linkRWireData, linkRWireHas, linkCRegRead, linkCRegWrite,
+                   linkRegDIn, linkPreEnable,
                    -- stages
                    stIExpand, stInlineFmt, stInline, stTransI, stTransIInline,
                    stLift, stTransJ, stTransJInline, stIParams, stIDropRules,
@@ -33,7 +38,7 @@ module CaptureLive(
                    -- perturbation
                    perturbing, perturbMask,
                    ptHeader, ptNames, ptNetnames,
-                   ptEvents, ptCopylinks, ptMoves, ptWindows, ptDecl,
+                   ptEvents, ptCopylinks, ptMoves, ptWindows, ptDecl, ptBoundary,
                    rotate
                   ) where
 
@@ -81,14 +86,16 @@ data NameRefL = HeapName !Int (Maybe Id)
               | DefName Id
               | CseNo !Char !Int
 
--- A fact on a record: a name merged into it, or (ObsFact, from step 1.2) a
--- type observation, which the same operations carry through every merge.
+-- A fact on a record: a name merged into it, a type observation (ObsFact,
+-- from step 1.2) or a boundary link (LinkFact, from step 1.5), which the
+-- same operations carry through every merge.
 data NameFact = NameFact { nf_ref :: !NameRefL, nf_via :: !Int, nf_stage :: !Int }
               | ObsFact !ObsL
+              | LinkFact !LinkL
 
 isNameFact :: NameFact -> Bool
 isNameFact (NameFact {}) = True
-isNameFact (ObsFact {}) = False
+isNameFact _ = False
 
 -- A type observation (CaptureEvents' kinds): made at IExpand's rebuild from
 -- the evaluator's event log, on the def whose cell the event names, or read
@@ -111,6 +118,26 @@ data ObsL = ObsL { ol_kind  :: !Int
                  , ol_count :: !Int }   -- identical events folded
 
 data CapTy = NoTy | Ty IType
+
+-- A boundary link (step 1.5): the definition holding it carries the bits of
+-- a port of a state instance of the stored package, in a role (the link*
+-- codes): an arm, select or preselect of the mux AState builds for a method
+-- argument's port, that port's definition, an enable or an enable term, or
+-- the definition InlineWires or InlineCReg makes for an inlined RWire's or
+-- CReg's port.  The instance and method are the ones the pass read (a
+-- method call's, or the instance's own name); the reader types the link
+-- through the instance's port types.  A merge carries it like any fact:
+-- the survivor carries the same bits.
+data LinkL = LinkL { ll_role  :: !Int
+                   , ll_n     :: !Int        -- arm, select or enable term (from 1;
+                                             -- 0 the EN definition); portdef: 0 one
+                                             -- input, 1 mux, 2 priority mux; CReg port
+                   , ll_inst  :: !Id
+                   , ll_meth  :: !(Maybe Id) -- Nothing: the role names the port
+                   , ll_ino   :: !Int        -- copy of a multi-ported method, -1 none
+                   , ll_argN  :: !Int        -- argument, from 1; 0 none
+                   , ll_portM :: !Int }      -- port of a split argument, from 1;
+                                             -- 0 not split
 
 -- Where an inlined definition went: a definition, rule, method or
 -- instance of that stage, by Id, or an instance argument.
@@ -161,6 +188,12 @@ instance NFData NameRefL where
 instance NFData NameFact where
   rnf (NameFact r v s) = rnf3 r v s
   rnf (ObsFact o) = rnf o
+  rnf (LinkFact l) = rnf l
+-- the Ids are ones the pass that made the link had evaluated (it spelled
+-- them in the names of the definitions it made), so evaluating them is
+-- enough
+instance NFData LinkL where
+  rnf (LinkL _ _ i m _ _ _) = i `seq` maybe () (`seq` ()) m
 -- the types are fully built (see ObsL), so evaluating them is enough
 instance NFData ObsL where
   rnf (ObsL _ _ t1 t2 _ _ _ _ _) = rnf t1 `seq` rnf t2
@@ -261,6 +294,57 @@ capGoneFacts kind stage via ns hosts t =
 capRename :: Int -> Int -> Id -> Id -> CapTable -> CapTable
 capRename stage via old new t = capMerge stage via new [old] t
 
+-- Boundary links onto the definitions that carry them.
+capLinks :: [(Id, LinkL)] -> CapTable -> CapTable
+capLinks ls t = foldl' (\t' (i, l) -> capMergeFacts i [LinkFact l] t') t ls
+
+-- A link on a port of a method argument (AState).
+methLink :: Int -> Int -> Id -> Id -> Maybe Integer -> Integer -> Maybe Integer -> LinkL
+methLink role n o m ino argN portM =
+  LinkL role n o (Just m) (maybe (-1) fromInteger ino) (fromInteger argN)
+        (maybe 0 fromInteger portM)
+
+-- A link on the port its role names (InlineWires, InlineCReg).
+instLink :: Int -> Int -> Id -> LinkL
+instLink role n o = LinkL role n o Nothing (-1) 0 0
+
+-- The links of each mux (or inlined instance), in order.  Perturbed
+-- (boundary): each group's links name the next group's port, an arm's
+-- number moves to the next arm, and select and portdef swap roles.
+boundaryLinks :: [[(Id, LinkL)]] -> [(Id, LinkL)]
+boundaryLinks gs0
+  | perturbing ptBoundary = concat (zipWith pert gs (rotate gs))
+  | otherwise = concat gs0
+  where
+    gs = filter (not . null) gs0
+    pert g next =
+      let arms = length [ () | (_, l) <- g, ll_role l == linkArm ]
+          LinkL _ _ o m ino a p = snd (head next)
+          one l = let l' = l { ll_inst = o, ll_meth = m, ll_ino = ino,
+                               ll_argN = a, ll_portM = p }
+                  in  case ll_role l of
+                        r | r == linkArm -> l' { ll_n = ll_n l `mod` max 1 arms + 1 }
+                          | r == linkSel -> l' { ll_role = linkPortDef }
+                          | r == linkPortDef -> l' { ll_role = linkSel }
+                          | r == linkCRegRead -> l' { ll_n = (ll_n l + 1) `mod` 5 }
+                          | otherwise -> l'
+      in  [ (i, one l) | (i, l) <- g ]
+
+-- Link roles (Capture.linkRoleNames spells them)
+linkArm, linkSel, linkPreSel, linkPortDef, linkEnable, linkRWireData,
+  linkRWireHas, linkCRegRead, linkCRegWrite, linkRegDIn, linkPreEnable :: Int
+linkArm = 0
+linkSel = 1
+linkPreSel = 2
+linkPortDef = 3
+linkEnable = 4
+linkRWireData = 5
+linkRWireHas = 6
+linkCRegRead = 7
+linkCRegWrite = 8
+linkRegDIn = 9
+linkPreEnable = 10
+
 capStat :: Int -> Int -> Int -> CapTable -> CapTable
 capStat _ _ 0 t = t
 capStat stage kind n t =
@@ -328,7 +412,7 @@ kindDead = 2
 
 -- bit numbers, in the order of the spec's token table
 ptHeader, ptNames, ptNetnames, ptEvents, ptCopylinks, ptMoves, ptWindows,
-  ptDecl :: Int
+  ptDecl, ptBoundary :: Int
 ptHeader = 0
 ptNames = 1
 ptNetnames = 2
@@ -337,6 +421,7 @@ ptCopylinks = 4
 ptMoves = 5
 ptWindows = 6
 ptDecl = 7
+ptBoundary = 9
 
 perturbTokens :: [(String, Int)]
 perturbTokens =

@@ -10,7 +10,8 @@ import qualified Data.Set as S
 import BackendNamingConventions
 import Error(internalError, EMsg, WMsg)
 import Flags(Flags, removeCross)
-import CaptureLive(Cap(..), capOf, stInlineWires)
+import CaptureLive(Cap(..), capOf, stInlineWires, LinkL, capLinks, boundaryLinks,
+                   instLink, linkRWireData, linkRWireHas)
 import CaptureHooks(netRenames)
 
 -- import Debug.Trace
@@ -67,10 +68,12 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
                          aspkg_values = (defs' ++ newdefs),
                         aspkg_inlined_ports = ws',
                         aspkg_signal_info = si',
-                        -- the capture: the wire defs renamed
+                        -- the capture: the wire defs renamed, and the
+                        -- wires' outputs linked to their ports
                         aspkg_capture =
-                          Cap (netRenames stInlineWires name_subst
-                                          (capOf (aspkg_capture pkg))) }),
+                          Cap (capLinks (boundaryLinks rw_links)
+                                 (netRenames stInlineWires name_subst
+                                             (capOf (aspkg_capture pkg)))) }),
      warnings, errors)
   where -- definition map (id -> value)
         defmap = M.fromList [(i, e) | (ADef i _t e _) <- defs]
@@ -90,14 +93,17 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
         --  * any substitutions on the defs (e.g. replace wsetEn with whas)
         --  * any warnings to trigger
         --  * any errors to trigger
+        --  * the capture's boundary links on the outputs
         rwire_tuples = map mkRW rws ++ map mkRW0 rw0s ++
                        map mkBW bws ++ map mkBW0 bw0s
 
         -- record the rwire output port names in ws
-        ws' = concatMap (\(a,b,c,d,e,f) -> b) rwire_tuples
+        ws' = concatMap (\(a,b,c,d,e,f,_) -> b) rwire_tuples
+
+        rw_links = map (\(_,_,_,_,_,_,l) -> l) rwire_tuples
 
         -- record the signal info for RTL grouping
-        rwire_signal_info = map (\(a,b,c,d,e,f) -> (a,"RWire",b)) rwire_tuples
+        rwire_signal_info = map (\(a,b,c,d,e,f,_) -> (a,"RWire",b)) rwire_tuples
         si_ips = aspsi_inlined_ports si
         si' = si { aspsi_inlined_ports = rwire_signal_info ++ si_ips }
 
@@ -109,16 +115,16 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
             case (lookup i s) of
                 Nothing    -> d
                 Just new_i -> d { adef_objid = new_i }
-        name_subst = concatMap (\(a,b,c,d,e,f) -> d) rwire_tuples
+        name_subst = concatMap (\(a,b,c,d,e,f,_) -> d) rwire_tuples
         defs' = map (renameADef name_subst) defs
 
         -- any new definitions
         -- (to constants, when the input port was dangling)
-        newdefs = concatMap (\(a,b,c,d,e,f) -> c) rwire_tuples
+        newdefs = concatMap (\(a,b,c,d,e,f,_) -> c) rwire_tuples
 
         -- -----
-        warnings = concatMap (\(a,b,c,d,e,f) -> e) rwire_tuples
-        errors   = concatMap (\(a,b,c,d,e,f) -> f) rwire_tuples
+        warnings = concatMap (\(a,b,c,d,e,f,_) -> e) rwire_tuples
+        errors   = concatMap (\(a,b,c,d,e,f,_) -> f) rwire_tuples
 
         -- since the RWire output ports are now defined locally and are
         -- not outputs of modules anymore, remove them from the svars list
@@ -131,18 +137,18 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
         rmap = M.fromList [(i, ASDef t i) | (i, t) <- wire_svars]
 
         -- functions for making the defs for RWire and BypassWire
-        mkRW0 :: AVInst -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg])
+        mkRW0 :: AVInst -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg],[(AId,LinkL)])
         mkRW0 (AVInst { avi_vname=i }) = rw_defs i 0 True False
 
-        mkRW :: AVInst  -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg])
+        mkRW :: AVInst  -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg],[(AId,LinkL)])
         mkRW (AVInst { avi_vname=i,
                        avi_iargs=(ASInt _ _ (IntLit _ _ n) : _) }) = rw_defs i n False False
         mkRW (x@(_)) = internalError ("aRWire.mkRW: " ++ ppReadable x)
 
-        mkBW0 :: AVInst  -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg])
+        mkBW0 :: AVInst  -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg],[(AId,LinkL)])
         mkBW0 (AVInst { avi_vname=i }) = rw_defs i 0 False True
 
-        mkBW :: AVInst  -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg])
+        mkBW :: AVInst  -> (AId,[AId],[ADef],[(AId,AId)],[WMsg],[EMsg],[(AId,LinkL)])
         mkBW (AVInst { avi_vname=i,
                        avi_iargs=(ASInt _ _ (IntLit _ _ n) : _) }) = rw_defs i n False True
         mkBW (x@(_)) = internalError ("aRWire.mkBW: " ++ ppReadable x)
@@ -156,7 +162,9 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
         --   new internal definitions (that support the inlining)
         --   a substitution (to replace ASVar by ASDef where necessary)
         --   any warnings encountered (i.e. enables not night)
-        rw_defs :: AId -> ASize -> Bool -> Bool -> (AId, [AId], [ADef], [(AId, AId)], [WMsg], [EMsg])
+        --   the capture's boundary links (on the output defs)
+        rw_defs :: AId -> ASize -> Bool -> Bool ->
+                   (AId, [AId], [ADef], [(AId, AId)], [WMsg], [EMsg], [(AId, LinkL)])
         rw_defs i sz is_rwire0 always_en =
             let
                 -- the rwire inputs
@@ -197,5 +205,10 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
                     (if is_rwire0 then [] else [rw_get_id]) ++
                     -- whas
                     (if always_en then [] else [rw_has_id])
+                -- each is a renamed input def or a new constant def
+                links =
+                    (if is_rwire0 then [] else [(rw_get_id, instLink linkRWireData 0 i)]) ++
+                    (if always_en then [] else [(rw_has_id, instLink linkRWireHas 0 i)])
             in
-                (i, outputs, whas_def ++ wget_def, whas_subst ++ wget_subst, wmsg, emsg)
+                (i, outputs, whas_def ++ wget_def, whas_subst ++ wget_subst, wmsg, emsg,
+                 links)

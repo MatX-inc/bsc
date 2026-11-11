@@ -6,12 +6,14 @@ module AState(
               aState,
               ) where
 
-import CaptureLive(Cap(..), emptyCapTable)
+import CaptureLive(Cap(..), emptyCapTable, LinkL(..), capLinks, boundaryLinks,
+                   methLink, linkArm, linkSel, linkPreSel, linkPortDef,
+                   linkEnable, linkPreEnable)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
 import Data.List(transpose, sortBy, partition,
-            unzip4, groupBy, intersect,
+            unzip5, groupBy, intersect,
             genericLength)
 
 import Util
@@ -421,15 +423,15 @@ aState' flags pps schedule_info apkg = do
         value_method_ids = [ i | (AIDef { aif_name = i }) <- ifc ]
 
         -- muxes for values (definitions)
-        (emux_selss, emux_valss, emux_outss, esss) =
-            unzip4 (map (mkEmuxssExpr exclusive_rules_db value_method_ids om) ers)
+        (emux_selss, emux_valss, emux_outss, esss, emux_linkss) =
+            unzip5 (map (mkEmuxssExpr exclusive_rules_db value_method_ids om) ers)
 
         -- muxes for actions
         -- (we don't need a substitution for actionvalue value calls,
         --  because there is no multiplicity for action/actionvalue methods,
         --  so any value calls can be converted to use of the one port)
-        (amux_selss, amux_valss, amux_outss, _) =
-            unzip4 (map (mkEmuxssAction exclusive_rules_db value_method_ids om) ars)
+        (amux_selss, amux_valss, amux_outss, _, amux_linkss) =
+            unzip5 (map (mkEmuxssAction exclusive_rules_db value_method_ids om) ars)
 
         mux_sel_defs = concat emux_selss ++ concat amux_selss
         mux_val_defs = concat emux_valss ++ concat amux_valss
@@ -441,7 +443,20 @@ aState' flags pps schedule_info apkg = do
         esubmap = M.fromList $ genAliases (mux_sel_defs)
         mux_defs = map (aSubst esubmap)  mux_defsRed
 
-        enas = concatMap mkEnabless ars
+        (enass, ena_linkss) = unzip (map mkEnabless ars)
+        enas = concat enass
+
+        -- the capture's boundary links, a select that genAliases made an
+        -- alias on the definition its uses now name
+        selTarget i = case M.lookup i esubmap of
+                        Just (ASDef _ j) -> j
+                        _ -> i
+        onTarget (i, l) | ll_role l == linkSel || ll_role l == linkPreSel = (selTarget i, l)
+                        | otherwise = (i, l)
+        boundary_links =
+            boundaryLinks (map (map onTarget)
+                               (concat emux_linkss ++ concat amux_linkss ++
+                                concat ena_linkss))
 
         -- substitution of value method calls to instance outputs
         substs = M.fromList (concat esss)
@@ -596,8 +611,10 @@ aState' flags pps schedule_info apkg = do
                            aspkg_inlined_ports   = [],
                            aspkg_signal_info     = signal_info,
                            aspkg_comment_info    = comment_info,
-                           -- the Verilog backend fills it (CaptureHooks)
-                           aspkg_capture         = Cap emptyCapTable }
+                           -- the boundary links; the Verilog backend
+                           -- adds the rest (CaptureHooks)
+                           aspkg_capture         =
+                             Cap (capLinks boundary_links emptyCapTable) }
 
     -- does the number of uses (n) exceed the number of available ports (p)?
     let overused_ports = [ (o,m,k,n) | ((o,m),n) <- omns,
@@ -1016,24 +1033,26 @@ mkBlob mMap omMultMap (method@(MethodId obj met), usedPorts) =
 --  * a list of new mux output defs to add to the package
 --  * an expression substitution to replace old expressions with uses
 --    of the new definitions
+--  * the capture's boundary links on the new definitions, one list per mux
 
 mkEmuxss :: ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
             ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob ->
-            ([ADef], [ADef], [ADef], AExprSubst)
+            ([ADef], [ADef], [ADef], AExprSubst, [[(AId, LinkL)]])
 mkEmuxss tl cnd rdb value_method_ids om (((o, m), f), emrss) =
     let genfunct = mkEmuxs tl cnd rdb value_method_ids om o m
-        (sel_dss, val_dss, out_dss, sss) = unzip4 (zipWith genfunct (map (toMaybe f) [0..]) emrss)
-    in  (concat sel_dss, concat val_dss, concat out_dss, concat sss)
+        (sel_dss, val_dss, out_dss, sss, lss) =
+            unzip5 (zipWith genfunct (map (toMaybe f) [0..]) emrss)
+    in  (concat sel_dss, concat val_dss, concat out_dss, concat sss, concat lss)
 
 -- XXX The "const aTrue" suggests that the use is unconditional.
 -- XXX This assumption might change some if we fix Bug 37 with
 -- XXX conditional def/use analysis.
 mkEmuxssExpr :: ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
-             -> ([ADef], [ADef], [ADef], AExprSubst)
+             -> ([ADef], [ADef], [ADef], AExprSubst, [[(AId, LinkL)]])
 mkEmuxssExpr = mkEmuxss id (const aTrue)
 
 mkEmuxssAction :: ExclusiveRulesDB -> [AId] -> OrderMap -> MethBlob
-               -> ([ADef], [ADef], [ADef], AExprSubst)
+               -> ([ADef], [ADef], [ADef], AExprSubst, [[(AId, LinkL)]])
 mkEmuxssAction = mkEmuxss tail head
 
 -- ---------------
@@ -1044,7 +1063,7 @@ mkEmuxssAction = mkEmuxss tail head
 mkEmuxs :: ([AExpr] -> [AExpr]) -> ([AExpr] -> AExpr) ->
            ExclusiveRulesDB -> [AId] -> OrderMap ->
            AId -> AId -> Maybe Integer -> MethPortBlob ->
-           ([ADef], [ADef], [ADef], AExprSubst)
+           ([ADef], [ADef], [ADef], AExprSubst, [[(AId, LinkL)]])
 mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
     let
         -- Break each MethPortBlob into a list of the expressions for
@@ -1072,7 +1091,9 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
         def_tuples = zipWith (\(argN, portM) ->
                                   mkEmux rdb value_method_ids om ino o m argN portM)
                          portCoords arg_blobs
-        (sel_defs, val_defs, out_defs) = concatUnzip3 def_tuples
+        (sel_defs, val_defs, out_defs) =
+            concatUnzip3 [ (s, v, d) | (s, v, d, _) <- def_tuples ]
+        links = [ ls | (_, _, _, ls) <- def_tuples ]
 
         mkPortSubsts (e, _) =
             case aType e of
@@ -1086,7 +1107,7 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
         subst = concatMap mkPortSubsts emrs
     in
         -- traces ("mkEmuxs " ++ ppReadable emrs ++ ppReadable xs) $
-        (sel_defs, val_defs, out_defs, subst)
+        (sel_defs, val_defs, out_defs, subst, links)
 
 
 -- ---------------
@@ -1108,13 +1129,22 @@ mkEmuxs tl cnd rdb value_method_ids om o m ino emrs =
 --  * A list of new definitions for selector signals into the mux
 --  * A list of new definitions for the values to be selected in the mux
 --  * The definition for the output of the mux
+--  * The capture's boundary links on those definitions (and, for a single
+--    input, on the definition or port it names, which carries the same bits)
 --
 mkEmux :: ExclusiveRulesDB -> [AId] -> OrderMap ->
           Maybe Integer -> AId -> AId -> Integer -> Maybe Integer ->
-          [(AExpr, AExpr, Maybe [ARuleId])] -> ([ADef], [ADef], [ADef])
+          [(AExpr, AExpr, Maybe [ARuleId])] ->
+          ([ADef], [ADef], [ADef], [(AId, LinkL)])
 mkEmux exclusive_rules_db value_method_ids om ino o m argN portM [(e, _, _)] =
     -- Only one input to the mux
-    ([], [], [ ADef (argId ino o m argN portM) (aType e) e [] ])
+    let d = ADef (argId ino o m argN portM) (aType e) e []
+        link role n = methLink role n o m ino argN portM
+        src = case e of
+                ASDef _ x -> [(x, link linkArm 1)]
+                ASPort _ x -> [(x, link linkArm 1)]
+                _ -> []
+    in  ([], [], [d], (adef_objid d, link linkPortDef 0) : src)
 mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_) =
     -- Multiple inputs
     let
@@ -1263,7 +1293,9 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         (mux_pairs, val_defs) = concatUnzipMap mkArg ers'
         default_pair = mkDefaultPair t mux_pairs
         -- The new Id defs for the mux selector control signals
-        sel_defs = concatMap mkSel ers'
+        -- (per arm: the selector, or the pre-selector and the selector)
+        sel_defss = map mkSel ers'
+        sel_defs = concat sel_defss
 
         -- The Id of this argument
         i = argId ino o m argN portM
@@ -1278,13 +1310,23 @@ mkEmux exclusive_rules_db value_method_ids om ino o m argN portM ers@((e,_,_):_)
         -- The uses used in predicates (should not be > 1)
         pred_uses = [ v | (v, _, Nothing) <- ers ]
 
+        -- the capture's boundary links (mkArg makes one def per arm)
+        link role n = methLink role n o m ino argN portM
+        links = (i, link linkPortDef (if usePri then 2 else 1)) :
+                [ (adef_objid d, link linkArm n) | (n, d) <- zip [1..] val_defs ] ++
+                concat [ case ds of
+                           [p, s] -> [(adef_objid p, link linkPreSel n),
+                                      (adef_objid s, link linkSel n)]
+                           _ -> [ (adef_objid s, link linkSel n) | s <- ds ]
+                       | (n, ds) <- zip [1..] sel_defss ]
+
     in  --traces ("mkEmux(1) " ++ ppReadable (ers, ers', t)) $
         --traces ("mkEmux(2) " ++ ppReadable (ers)) $
         --traces ("mkEmux(new_defs) " ++ ppReadable (new_defs)) $
         if (length pred_uses > 1)
         then internalError ("Multiple port use " ++
                             ppReadable (o, m, map fst3 ers))
-        else (sel_defs, val_defs, [out_def])
+        else (sel_defs, val_defs, [out_def], links)
 
 mkEmux _ _ _ _ _ _ _ _ _ = internalError "mkEMux"
 
@@ -1298,10 +1340,13 @@ mkDefaultPair t aexprs = [APrim  defaultAId (ATBit 1) PrimBNot [orCond] , ASAny 
 -- Function: mkEnabless
 --
 
-mkEnabless :: MethBlob -> [ADef]
-mkEnabless (((o, m), f), emrss) = concat (zipWith (mkEnables o m) (map (toMaybe f) [0..]) emrss)
+-- The second result: the capture's boundary links, one list per port.
+mkEnabless :: MethBlob -> ([ADef], [[(AId, LinkL)]])
+mkEnabless (((o, m), f), emrss) =
+    let (dss, lss) = unzip (zipWith (mkEnables o m) (map (toMaybe f) [0..]) emrss)
+    in  (concat dss, lss)
 
-mkEnables :: AId -> AId -> Maybe Integer -> MethPortBlob -> [ADef]
+mkEnables :: AId -> AId -> Maybe Integer -> MethPortBlob -> ([ADef], [(AId, LinkL)])
 mkEnables o m ino emrs =
         let mi = mkMethId o m ino MethodEnable
             (dss, ess) = unzip (zipWith mkE emrs [1..])
@@ -1325,9 +1370,17 @@ mkEnables o m ino emrs =
               in
                   (dor ++ [dand], [ASDef aTBool iand])
             mkE _ _ = ([], [])
+            -- the capture's boundary links: the EN def, and each use's term
+            -- (and the OR of its rules' fires)
+            link role k = methLink role k o m ino 0 Nothing
+            terms = concat [ [ (adef_objid d, link linkPreEnable k) | d <- init ds ] ++
+                             [ (adef_objid (last ds), link linkEnable k) ]
+                           | (k, ds) <- zip [1..] dss, not (null ds) ]
         in case (concat dss, concat ess) of
-            ([ADef i _ e p], [ASDef _ i']) | i == i' -> [ADef mi aTBool e p] -- pass on props?
-            (ds, es)                               -> ds ++ [ADef mi aTBool (aOrs es) []]
+            ([ADef i _ e p], [ASDef _ i']) | i == i' -> ([ADef mi aTBool e p], -- pass on props?
+                                                         [(mi, link linkEnable 0)])
+            (ds, es)                               -> (ds ++ [ADef mi aTBool (aOrs es) []],
+                                                       (mi, link linkEnable 0) : terms)
 
 
 -- ==============================

@@ -184,6 +184,9 @@ build mode remap imports apkg mnet = do
       ifcInputs (AIActionValue { aif_inputs = is }) = is
       ifcInputs _ = []
       ruleIx = M.fromList [ (arule_id r, DRRule k) | (k, r) <- zip [0..] (apkg_rules apkg) ]
+      instOrd i = case M.lookup i instIx of
+                    Just (DRInst k _) -> k
+                    _ -> -1
       -- the earlier tables win: a def named like an input is the def
       resolve i = case M.lookup i defIx of
                     Just r -> Just r
@@ -234,7 +237,7 @@ build mode remap imports apkg mnet = do
                return (InnerRec innerKindUnattached viaSelf 0 (self : ns') [] os')
   net <- case mnet of
            Nothing -> return Nothing
-           Just nl -> Just <$> freezeNet remap resolve nl
+           Just nl -> Just <$> freezeNet remap resolve instOrd nl
   let stats = M.toList (ct_stats tbl)
       stats' = if perturbing ptHeader then zip (map fst stats) (rotate (map snd stats))
                else stats
@@ -246,6 +249,7 @@ build mode remap imports apkg mnet = do
 
 nameRec :: (Bool -> String -> String) -> NameFact -> F NameRec
 nameRec _ (ObsFact _) = internalError "CaptureFreeze.nameRec: an observation"
+nameRec _ (LinkFact _) = internalError "CaptureFreeze.nameRec: a link"
 nameRec remap (NameFact ref via stage) = do
   (n, s) <- case ref of
               DefName i -> do n <- idName i
@@ -278,9 +282,10 @@ goneRec remap hostOf (Gone kind via stage fs hs) = do
   return (InnerRec kind via stage ns' hs' os')
 
 -- Net space: the ledger's names, each with the apkg items and later names
--- it stands for, and the net-space records.
-freezeNet :: (Bool -> String -> String) -> (Id -> Maybe DefRef) -> NetLive -> F NetCap
-freezeNet remap resolve (NetLive names tbl) = do
+-- it stands for, the net-space records, and the boundary links on both.
+freezeNet :: (Bool -> String -> String) -> (Id -> Maybe DefRef) -> (Id -> Int) ->
+             NetLive -> F NetCap
+freezeNet remap resolve instOrd (NetLive names tbl) = do
   let netIx = M.fromListWith (\_ old -> old)
                 [ (i, k) | (k, nl) <- zip [1..] names, i <- nnl_ids nl ]
       origin (NameFact (DefName d) via _) =
@@ -334,4 +339,16 @@ freezeNet remap resolve (NetLive names tbl) = do
                                    g_names = (NameFact (DefName d) _ _ : _) }
                               | k == kindDead -> fmap (\r -> (r, s)) (resolve d)
                             _ -> Nothing) gone
-  return (NetCap ns (inners ++ orphans) dropped)
+      -- a net's links, then those of the records in nc_inner (minus their
+      -- entry), in that order
+      linked = [ (k, l) | (k, nl) <- zip [1 :: Int ..] names, i <- nnl_ids nl,
+                          LinkFact l <- capNamesOf i tbl ] ++
+               [ (negate k, l) | (k, fs) <- zip [1 :: Int ..]
+                                              (map g_names gone ++ map snd unattached),
+                                 LinkFact l <- fs ]
+  links <- forF linked $ \(d, LinkL r n o mm c a p) -> do
+             m <- case mm of
+                    Nothing -> return 0
+                    Just x -> str (getFString (getIdBase x))
+             return (NetLink d (instOrd o) m a p r n c)
+  return (NetCap ns (inners ++ orphans) dropped links)

@@ -15,10 +15,10 @@ module Capture(
                Capture(..), CapFile(..), CapPackage(..), CapSites(..),
                DefRef(..), DefRec(..), NameRec(..), NameRef(..),
                InnerRec(..), Host(..), ObsRec(..), CapType(..),
-               NetCap(..), NetName(..), Origin(..),
+               NetCap(..), NetName(..), Origin(..), NetLink(..),
                capVersion, emptyCapture,
                innerKindInner, innerKindConst, innerKindDead, innerKindUnattached,
-               viaNames, stageNames, obsKindNames, boolOpNames,
+               viaNames, stageNames, obsKindNames, boolOpNames, linkRoleNames,
                captureHeader, captureSummary, captureDump
               ) where
 
@@ -34,8 +34,9 @@ import ErrorUtil(internalError)
 --   2: type events (step 1.2): cap_types, dr_obs, ir_obs
 --   3: declared types (step 1.4): the array-elem, array-of, dynsel-result
 --      and bool-by observations
+--   4: boundary links (step 1.5): nc_links
 capVersion :: Int
-capVersion = 3
+capVersion = 4
 
 data Capture = Capture
   { cap_version  :: !Int
@@ -154,7 +155,35 @@ data CapType = CTCon !Int !Int          -- qualifier, base
 -- Verilog backend: the Verilog identifiers and where they came from
 data NetCap = NetCap { nc_names   :: [NetName]
                      , nc_inner   :: [InnerRec]   -- after amod_final
-                     , nc_dropped :: [(DefRef, Int)] }  -- apkg defs dropped, by stage
+                     , nc_dropped :: [(DefRef, Int)]  -- apkg defs dropped, by stage
+                     , nc_links   :: [NetLink] }  -- boundary links (step 1.5)
+
+-- A boundary link (step 1.5): definition nl_def carries the bits of a port
+-- of state instance nl_inst, in role nl_role (linkRoleNames):
+--   arm n, sel n, presel n: arm n of the mux AState built for argument
+--     nl_argN (split port nl_portM) of method nl_meth (copy nl_ino), its
+--     select, or the select's rule part (n from 1);
+--   portdef: the definition of that port, n = 0 a single input, 1 a mux,
+--     2 a priority mux;
+--   enable n, preenable n: the method's EN definition (n = 0) or its n-th
+--     use's term (enable) or rule part (preenable);
+--   rwire-data, rwire-has: an inlined RWire's (or BypassWire's) wget and
+--     whas definitions;
+--   creg-read n, creg-write n: an inlined CReg's port n read result, or the
+--     write argument InlineCReg made for an unused port n;
+--   reg-din: the D_IN of the register InlineCReg made, after its n ports.
+-- Ports are from 1; nl_portM = 0 is an argument with one port; nl_inst is
+-- an apkg_state_instances ordinal (-1 none); nl_meth is a string (0: the
+-- role names the port); nl_ino = -1 is a method with one copy.
+data NetLink = NetLink { nl_def    :: !Int   -- an nc_names entry (from 1), or minus an
+                                             -- nc_inner entry (a def that left)
+                       , nl_inst   :: !Int
+                       , nl_meth   :: !Int
+                       , nl_argN   :: !Int
+                       , nl_portM  :: !Int
+                       , nl_role   :: !Int
+                       , nl_n      :: !Int
+                       , nl_ino    :: !Int }
 
 data NetName = NetName { nn_vname :: !Int, nn_from :: [Origin] }
 
@@ -185,6 +214,13 @@ obsKindNames =
   , (9, "pack-merge"), (10, "unpack-merge"), (11, "move")
   , (12, "win-concat"), (13, "win-select"), (14, "win-zeroext"), (15, "win-signext")
   , (17, "array-elem"), (18, "array-of"), (19, "dynsel-result"), (20, "bool-by") ]
+
+-- NetLink roles (nl_role)
+linkRoleNames :: [(Int, String)]
+linkRoleNames =
+  [ (0, "arm"), (1, "sel"), (2, "presel"), (3, "portdef"), (4, "enable")
+  , (5, "rwire-data"), (6, "rwire-has"), (7, "creg-read"), (8, "creg-write")
+  , (9, "reg-din"), (10, "preenable") ]
 
 -- bool-by's operators (or_lo)
 boolOpNames :: [(Int, String)]
@@ -227,7 +263,8 @@ instance NFData Host where
   rnf (HInner k) = rnf k
   rnf (HNet k) = rnf k
   rnf (HName n) = rnf n
-instance NFData NetCap where rnf (NetCap ns is ds) = rnf3 ns is ds
+instance NFData NetCap where rnf (NetCap ns is ds ls) = rnf4 ns is ds ls
+instance NFData NetLink where rnf l = l `seq` ()
 instance NFData NetName where rnf (NetName v os) = rnf2 v os
 instance NFData Origin where
   rnf (OApkg r v) = rnf2 r v
@@ -347,8 +384,14 @@ instance Bin Host where
       _ -> internalError ("Capture.Host: tag " ++ show t)
 
 instance Bin NetCap where
-  writeBytes (NetCap ns is ds) = toBin ns >> toBin is >> toBin ds
-  readBytes = NetCap <$> fromBin <*> fromBin <*> fromBin
+  writeBytes (NetCap ns is ds ls) = toBin ns >> toBin is >> toBin ds >> toBin ls
+  readBytes = NetCap <$> fromBin <*> fromBin <*> fromBin <*> fromBin
+
+instance Bin NetLink where
+  writeBytes (NetLink d i m a p r n c) = do
+    toBin d; toBin i; toBin m; toBin a; toBin p; toBin r; toBin n; toBin c
+  readBytes = NetLink <$> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin
+                      <*> fromBin <*> fromBin <*> fromBin
 
 instance Bin NetName where
   writeBytes (NetName v os) = toBin v >> toBin os
@@ -398,6 +441,7 @@ captureSummary c = do
     , row "net.names" (maybe 0 (length . nc_names) net) (fmap nc_names net)
     , row "net.inner" (maybe 0 (length . nc_inner) net) (fmap nc_inner net)
     , row "net.dropped" (maybe 0 (length . nc_dropped) net) (fmap nc_dropped net)
+    , row "net.links" (maybe 0 (length . nc_links) net) (fmap nc_links net)
     ]
   total <- B.length <$> encodeWithIO (\_ f -> f) c
   return (("capture: version " ++ show (cap_version c) ++ ", mode " ++
@@ -426,7 +470,13 @@ captureDump c =
         intercalate ", " (map origin os)
       | (i, NetName v os) <- zip [1 :: Int ..] (nc_names nc) ] ++
       [ "net.inner " ++ show i ++ " " ++ inner r | (i, r) <- zip [1 :: Int ..] (nc_inner nc) ] ++
-      [ "net.dropped " ++ ref k ++ " " ++ stage s | (k, s) <- nc_dropped nc ]
+      [ "net.dropped " ++ ref k ++ " " ++ stage s | (k, s) <- nc_dropped nc ] ++
+      [ "net.link " ++ (if d < 0 then "inner " ++ show (negate d) else "net " ++ show d) ++
+        " " ++ lkp linkRoleNames r ++ " " ++ show n ++
+        " inst#" ++ show i ++ (if m == 0 then "" else " " ++ str m) ++
+        (if c >= 0 then " copy " ++ show c else "") ++
+        (if a > 0 then " arg " ++ show a else "") ++ (if p > 0 then " port " ++ show p else "")
+      | NetLink d i m a p r n c <- nc_links nc ]
  where
   strs = cap_strings c
   nstrs = length strs

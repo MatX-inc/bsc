@@ -154,9 +154,9 @@ import AProofs(aCheckProofs)
 import ADropDefs(aDropDefs)
 import AOpt(aOpt)
 import AVerilog(aVerilog)
-import CaptureLive(NetLive, perturbMask, stInline, stAState, stInlineCReg,
+import CaptureLive(NetLive, perturbMask, stInline, stAState,
                    stADropDefs, stSynthesize, stVeriQuirks, stFinalCleanup)
-import CaptureHooks(netStep, netStepCreated, netStepDropped, netStepFrom)
+import CaptureHooks(netStepCreated, netStepDropped, netStepFrom)
 import CaptureLedger(netLedger)
 import CaptureFreeze(freezeCapture)
 import AVeriQuirks(aVeriQuirks)
@@ -1722,8 +1722,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Inline CReg modules (replacing with Reg modules)
        start flags DFcreg
        let asmodNoCReg
-               | removeCReg flags = netStep stInlineCReg asmodNoWires
-                                            (aInlineCReg asmodNoWires)
+               -- (it drops no def: its capture is the input's, plus links)
+               | removeCReg flags = aInlineCReg asmodNoWires
                | otherwise = asmodNoWires
        asCheck flags asmodNoCReg "ainlinecreg"
        t <- dump errh flags t DFcreg dumpnames asmodNoCReg

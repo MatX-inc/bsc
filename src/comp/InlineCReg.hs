@@ -10,6 +10,8 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import BackendNamingConventions
 import ErrorUtil(internalError)
+import CaptureLive(Cap(..), capOf, LinkL, capLinks, boundaryLinks, instLink,
+                   linkCRegRead, linkCRegWrite, linkRegDIn)
 
 
 --
@@ -50,22 +52,23 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
         --  * new Reg instance
         --  * new Reg instance's output ports
         --  * new defs (for the CReg outputs and the Reg inputs)
+        --  * the capture's boundary links on the new defs
         creg_tuples = map mkCR creg_vs
 
         -- record the CReg port names
-        creg_ports = concatMap (\(a,b,c,d,e) -> b) creg_tuples
+        creg_ports = concatMap (\(a,b,c,d,e,_) -> b) creg_tuples
         creg_ports_set = S.fromList creg_ports
 
         -- record the signal info for RTL grouping
-        creg_signal_info = map (\(a,b,c,d,e) -> (a,"CReg",b)) creg_tuples
+        creg_signal_info = map (\(a,b,c,d,e,_) -> (a,"CReg",b)) creg_tuples
         si_ips = aspsi_inlined_ports si
         si' = si { aspsi_inlined_ports = creg_signal_info ++ si_ips }
 
         -- any new definitions
-        new_defs = concatMap (\(a,b,c,d,e) -> e) creg_tuples
+        new_defs = concatMap (\(a,b,c,d,e,_) -> e) creg_tuples
 
         -- new Reg instances
-        new_vs = map (\(a,b,c,d,e) -> c) creg_tuples
+        new_vs = map (\(a,b,c,d,e,_) -> c) creg_tuples
 
         -- since the CReg output ports are now defined locally and are
         -- not outputs of modules anymore, remove them from the svars list
@@ -74,7 +77,7 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
             partition (\(i,t) -> i `S.member` creg_ports_set) svars
 
         -- the output ports for the new Reg instances
-        new_reg_svars = concatMap (\(a,b,c,d,e) -> d) creg_tuples
+        new_reg_svars = concatMap (\(a,b,c,d,e,_) -> d) creg_tuples
 
         -- create a map of the CReg output ports to the signals which
         -- now carry their values
@@ -82,7 +85,7 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
         portmap = M.fromList [(i, ASDef t i) | (i, t) <- creg_svars]
 
         -- function for making the tuple for a CReg
-        mkCR :: AVInst -> (AId, [AId], AVInst, [(AId, AType)], [ADef])
+        mkCR :: AVInst -> (AId, [AId], AVInst, [(AId, AType)], [ADef], [(AId, LinkL)])
         mkCR avi =
             let
                 ports = 5
@@ -102,6 +105,7 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
                 old_creg_ports = concatMap makePorts [0..(ports-1)]
 
                 -- if a write method is unused, create a def for it
+                -- (the enable's and the argument's)
                 makeUnusedMethodDefs n =
                     let en_id = cregWriteEnId i n
                         arg_id = cregWriteArgId i n
@@ -114,7 +118,7 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
                                       []
                                   else
                                       [ADef arg_id dataTy (ASAny dataTy Nothing) []]
-                    in  en_def ++ arg_def
+                    in  (en_def, arg_def)
 
                 makeReadResExpr 0 = ASPort dataTy (regReadResId i)
                 makeReadResExpr n =
@@ -128,23 +132,37 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
                     let res_id = cregReadResId i n
                     in  ADef res_id dataTy (makeReadResExpr n) []
 
+                unused_defs = map makeUnusedMethodDefs [0..(ports-1)]
+                read_res_defs = map makeReadResDef [0..(ports-1)]
+
                 new_creg_defs =
-                    concatMap makeUnusedMethodDefs [0..(ports-1)] ++
-                    map makeReadResDef [0..(ports-1)]
+                    concatMap (\(en, arg) -> en ++ arg) unused_defs ++
+                    read_res_defs
 
                 new_reg_avi = cregToReg avi
 
                 new_reg_ports = [(regReadResId i, dataTy)]
 
+                reg_din_def = ADef (regWriteArgId i) dataTy (makeReadResExpr ports) []
                 new_reg_defs =
                     [ADef (regWriteEnId i) (ATBit 1) aTrue [],
-                     ADef (regWriteArgId i) dataTy (makeReadResExpr ports) []]
+                     reg_din_def]
+
+                -- the read results, the arguments of unused writes and the
+                -- register's input (the CReg's ports have the CReg's type)
+                links =
+                    [ (adef_objid d, instLink linkCRegRead n i)
+                    | (n, d) <- zip [0..] read_res_defs ] ++
+                    [ (adef_objid d, instLink linkCRegWrite n i)
+                    | (n, (_, ds)) <- zip [0..] unused_defs, d <- ds ] ++
+                    [ (adef_objid reg_din_def, instLink linkRegDIn ports i) ]
             in
                 (i,
                  old_creg_ports,
                  new_reg_avi,
                  new_reg_ports,
-                 new_creg_defs ++ new_reg_defs)
+                 new_creg_defs ++ new_reg_defs,
+                 links)
 
     in
         aSubst portmap $
@@ -155,5 +173,10 @@ aInlineCReg pkg@(ASPackage { aspkg_state_instances = vs,
               , aspkg_values = defs ++ new_defs
               , aspkg_inlined_ports = ips ++ creg_ports
               , aspkg_signal_info = si'
+                -- InlineCReg keeps every def, so the capture gains only
+                -- the links
+              , aspkg_capture =
+                  Cap (capLinks (boundaryLinks (map (\(_,_,_,_,_,l) -> l) creg_tuples))
+                                (capOf (aspkg_capture pkg)))
               }
 
