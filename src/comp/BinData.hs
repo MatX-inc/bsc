@@ -12,7 +12,7 @@ module BinData ( Byte
                , section
                , Lazy(..), toBinLazy, fromBinLazy
                , encodeWithIO, encodeV2, encodeV2With
-               , encodeV2Strip, keepPositions
+               , encodeV2Strip, encodeV2Strings, keepPositions
                , decode, decodeStrict, decodeWithHash
                , maxFooterSize, strTableRegion, decodeStringTable
                ) where
@@ -108,6 +108,7 @@ import Prim hiding(PrimArg(..))
 import Util(hashInit, nextHashByte, showHash)
 
 import Data.List(mapAccumL)
+import Data.Coerce(coerce)
 import Control.Monad(liftM, ap, when)
 import Control.Monad.ST(ST, runST)
 import GHC.ST(ST(..))
@@ -603,11 +604,18 @@ stringIdx w s = do
   case IM.lookup k m of
     Just n -> return n
     Nothing -> do
-      n <- readIORef (wNStr w)
-      writeIORef (wNStr w) $! n + 1
+      n <- newString w s
       writeIORef (wStrIdx w) $! IM.insert k n m
-      modifyIORef' (wStrs w) (s :)
       return n
+
+-- The next string index, for a string not written before; wStrIdx is
+-- left to the caller
+newString :: W -> FString -> IO Int
+newString w s = do
+  n <- readIORef (wNStr w)
+  writeIORef (wNStr w) $! n + 1
+  modifyIORef' (wStrs w) (s :)
+  return n
 
 -- The file-name transform (-remap-path-prefix) is applied before
 -- sharing, so the key is the stored (remapped) value: positions that
@@ -2121,6 +2129,25 @@ encodeV2Strip sel x = do
   strs <- readIORef (wStrs w)
   bs <- finishW2 w st
   return (bs, reverse strs)
+
+-- What encodeV2 writes for a list of strings whose ids strictly ascend,
+-- without wStrIdx: no id repeats, so no lookup there could hit
+encodeV2Strings :: [FString] -> IO B.ByteString
+encodeV2Strings strs = do
+  when (not (ascending strs)) $
+    internalError "BinData.encodeV2Strings: ids not ascending"
+  encodeV2 (coerce strs :: [NewString])
+  where ascending (s : ss@(s' : _)) = fstringId s < fstringId s' && ascending ss
+        ascending _ = True
+
+-- A string written as the next string index (see encodeV2Strings)
+newtype NewString = NewString FString
+
+instance Bin NewString where
+  writeBytes (NewString s) = writeBytes s
+  readBytes = NewString <$> readBytes
+  toBin (NewString s) = Out $ \w -> newString w s >>= putIdx w
+  fromBin = NewString <$> fromBin
 
 -- Write with every position kept, under encodeV2Strip
 keepPositions :: Out () -> Out ()
