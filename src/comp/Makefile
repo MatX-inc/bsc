@@ -465,10 +465,8 @@ bo2bloogle: $(SOURCES)
 	$(BUILDCOMMAND) -main-is Main_$@ $(BUILDFLAGS) $(RTSFLAGS)
 	$(POSTBUILDCOMMAND)
 
-# bluetcl is built in two steps:
-# 1. Build BlueTcl module using -c to emit .hi/.o files, and also the
-#    BlueTcl_stub.h reqired by bluetcl_Main.hsc in the next action
-# 2. Link BlueTcl with a custom C main that #includes BlueTcl_stub.h
+# bluetcl has a Haskell main that hands control to Tcl through a C shim, so
+# the RTS comes up the ordinary way and there is one entry point to maintain.
 .PHONY: bluetcl
 bluetcl: app/bluetcl_Main.hs app/Bluetcl.hs app/bluetcl_shim.c $(SOURCES)
 	$(PREBUILDCOMMAND)
@@ -505,7 +503,8 @@ endif
 # rest compile only their own main and link, and GHCJOBS still parallelises
 # within each compile. Naming one executable directly still builds just it.
 .PHONY: install
-install: $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) install-bsc install-bluetcl install-bo2bloogle install-checkers
+install:
+	$(MAKE) -j1 $(BSCEXES) $(TCLEXES) $(BO2BLOOGLEEXES) $(CHECKEXES) install-bsc install-bluetcl install-bo2bloogle install-checkers
 
 .PHONY: install-extra
 install-extra:
