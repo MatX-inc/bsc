@@ -88,7 +88,8 @@ data SolvedBinds = SolvedBinds {
   incoherentIds :: S.Set Id,
   bindClasses :: M.Map Id Class,                   -- class per bind (for allowIncoherent check)
   bindTypes :: M.Map Id Type,                      -- type per bind (for diagnostic messages)
-  directIncoherences :: M.Map Id DirectIncoherence -- root cause per directly-incoherent bind
+  directIncoherences :: M.Map Id DirectIncoherence, -- root cause per directly-incoherent bind
+  nonRecFVsForced :: Bool                          -- nonRecursiveBinds' free-variable sets are evaluated
 } deriving (Show)
 
 instance Types SolvedBinds where
@@ -118,7 +119,8 @@ fromSB (SolvedBind b@(i, t, _) fv isRec isInc cls) =
       incoherentIds = if isInc then S.singleton i else S.empty,
       bindClasses = maybe M.empty (M.singleton i) cls,
       bindTypes = M.singleton i t,
-      directIncoherences = M.empty
+      directIncoherences = M.empty,
+      nonRecFVsForced = False
     }
     else SolvedBinds {
       recursiveBinds = [],
@@ -128,7 +130,8 @@ fromSB (SolvedBind b@(i, t, _) fv isRec isInc cls) =
       incoherentIds = if isInc then S.singleton i else S.empty,
       bindClasses = maybe M.empty (M.singleton i) cls,
       bindTypes = M.singleton i t,
-      directIncoherences = M.empty
+      directIncoherences = M.empty,
+      nonRecFVsForced = False
     }
 
 infixl 6 <++ -- directional append new <++ old
@@ -143,6 +146,10 @@ new <++ old
         internalError $ "SolvedBinds invariant violated: new depends on old!\n" ++
                         "new: " ++ ppReadable new ++ "\n" ++
                         "old: " ++ ppReadable old
+    -- No recursive binds on either side: nothing is promoted and noBadDeps holds.
+    -- Test the lists, not recursiveIds: forcing those sets compares Ids and moves interning.
+    | null (recursiveBinds new) && null (recursiveBinds old) =
+        forceOldFVs `seq` fastResult
     | noBadDeps = result
     | otherwise = internalError $ "nonRecursive depending on recursive in result: " ++
                                   ppReadable (new, old, result)
@@ -166,7 +173,17 @@ new <++ old
                       incoherentIds = incoherentIds new `S.union` incoherentIds old,
                       bindClasses = bindClasses new `M.union` bindClasses old,
                       bindTypes = bindTypes new `M.union` bindTypes old,
-                      directIncoherences = directIncoherences new `M.union` directIncoherences old
+                      directIncoherences = directIncoherences new `M.union` directIncoherences old,
+                      nonRecFVsForced = True
+                   }
+          -- evaluate old's free variables as the skipped walk would, keeping intern order
+          forceOldFVs | nonRecFVsForced old = ()
+                      | otherwise = foldr (\(_, fv) r -> fv `seq` r) () (nonRecursiveBinds old)
+          fastResult = result {
+                      recursiveBinds = recursiveBinds new ++ recursiveBinds old,
+                      nonRecursiveBinds = nonRecursiveBinds new ++ nonRecursiveBinds old,
+                      recursiveIds = recursiveIds old,
+                      nonRecursiveIds = nonRecursiveIds new `S.union` nonRecursiveIds old
                    }
           noBadDeps = all (not . dependsOn (recursiveIds result)) (nonRecursiveBinds result)
 
@@ -229,7 +246,8 @@ emptySBs = SolvedBinds {
              incoherentIds = S.empty,
              bindClasses = M.empty,
              bindTypes = M.empty,
-             directIncoherences = M.empty
+             directIncoherences = M.empty,
+             nonRecFVsForced = True
            }
 
 instance PPrint SolvedBinds where
