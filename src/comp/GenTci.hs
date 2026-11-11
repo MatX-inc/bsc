@@ -36,7 +36,8 @@ import Control.Exception(evaluate)
 import Data.Maybe(isNothing, fromMaybe)
 import Data.Bits(shiftL)
 import Data.Char(isDigit)
-import Data.List(isPrefixOf, sort, foldl')
+import Data.List(sort, foldl')
+import Data.Array(Array, listArray, (!))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Builder as BB
@@ -48,8 +49,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word(Word64)
 
-import FStringCompat(FString, getFString, fstringId, mkFString, headFString, allFString,
-                     foldrFString, isSuffixOfFString)
+import FStringCompat(FString, fstringId, mkFString, headFString, allFString,
+                     foldrFString, isSuffixOfFString, takeFString)
 import Position(Position(..), noPosition)
 import Id
 import CType
@@ -191,7 +192,7 @@ genTciFile errh fn ti = do
     (sigs', stats) <-
         if ti_full ti
         then return ([ wholeSig s | (False, s) <- zip isLib sigs ], keepAllStats isLib sigs)
-        else pruneSigs (IS.fromList (map fstringId strsL)) exportAll (zip isLib sigs)
+        else pruneSigs strsL exportAll (zip isLib sigs)
     (bsS, strsS) <- encodeV2Strip msel [ TciSig s | s <- sigs' ]
     let kept = foldl' (foldl' addNew) strsLib [strsL, strsS]
         -- a check makes the compiler's own strings itself (NumEq for a
@@ -262,44 +263,42 @@ keepAllStats libs sigs =
 -- signature, in order, even when nothing in it is kept.  Returns the
 -- non-library signatures, pruned.
 
-pruneSigs :: IS.IntSet -> S.Set String -> [(Bool, CImportedSignature)] ->
+pruneSigs :: [FString] -> S.Set String -> [(Bool, CImportedSignature)] ->
              IO ([CSignature], TciStats)
 pruneSigs seeds exportAll lsigs = do
-    let -- (signature, entry) -> entry, for non-library signatures
-        entries = [ ((si, di), (n, d))
-                  | (si, (False, CImpSign _ _ (CSignature n _ _ ds))) <- zip [0 :: Int ..] lsigs
-                  , (di, d) <- zip [0 :: Int ..] ds ]
+    let -- the non-library signatures' entries, numbered in order, with
+        -- whether their package is re-exported whole
+        entries = [ (whole, d) | (False, CImpSign _ _ (CSignature n _ _ ds)) <- lsigs
+                               , let whole = getIdString n `S.member` exportAll, d <- ds ]
+        nEntries = length entries
+        libDefs = [ d | (True, CImpSign _ _ (CSignature _ _ _ ds)) <- lsigs, d <- ds ]
     -- every string of the entries' default bodies (rare in signatures)
-    bodies <- fmap M.fromList $ sequence
+    bodies <- fmap IM.fromList $ sequence
                 [ do (_, strs) <- encodeV2Strip Nothing defs
-                     return (k, strs)
-                | (k, (_, d)) <- entries, let defs = defaultBodies d, not (null defs) ]
-    let entryMap = M.fromList entries
-        namesOf k d = defnNames d ++ M.findWithDefault [] k bodies
+                     return (e, strs)
+                | (e, (_, d)) <- zip [0 ..] entries, let defs = defaultBodies d, not (null defs) ]
+    let entryArr = listArray (0, nEntries - 1) (map snd entries) :: Array Int CDefn
         byName = IM.fromListWith (++)
-                   [ (fstringId b, [k]) | (k, (_, d)) <- entries, b <- defnBinders d ]
-        libNames = concat [ concatMap defnNames ds
-                          | (True, CImpSign _ _ (CSignature _ _ _ ds)) <- lsigs ]
-        isRdy b = "RDY_" `isPrefixOf` getFString b
-        k0 = [ k | (k, (n, d)) <- entries
-                 , isInstance d || getIdString n `S.member` exportAll
-                   || any isRdy (defnBinders d) ]
-        n0 = IS.unions [ seeds
-                       , IS.fromList (map fstringId (mkFString "val" : libNames)) ]
-        -- keep the entries k, then everything the names reach
-        go :: IS.IntSet -> S.Set (Int, Int) -> [Int] -> [(Int, Int)] ->
-              (IS.IntSet, S.Set (Int, Int))
-        go ns kept [] [] = (ns, kept)
-        go ns kept names (k : ks)
-            | k `S.member` kept = go ns kept names ks
+                   [ (fstringId b, [e]) | (e, (_, d)) <- zip [0 ..] entries, b <- defnBinders d ]
+        -- add a name to N, queueing the entries that bind it
+        add k@(Keep ns q) x =
+            let i = fstringId x
+            in  if IS.member i ns then k
+                else Keep (IS.insert i ns) (IM.findWithDefault [] i byName ++ q)
+        isRdy b = takeFString 4 b == "RDY_"
+        k0 = [ e | (e, (whole, d)) <- zip [0 ..] entries
+                 , isInstance d || whole || any isRdy (defnBinders d) ]
+        -- keep the queued entries, then everything their names reach
+        go kept (Keep ns []) = (ns, kept)
+        go kept (Keep ns (e : q))
+            | IS.member e kept = go kept (Keep ns q)
             | otherwise =
-                let d = snd (entryMap M.! k)
-                    new = IS.toList (IS.fromList [ x | x <- map fstringId (namesOf k d)
-                                                     , not (IS.member x ns) ])
-                    ns' = foldr IS.insert ns new
-                in  go ns' (S.insert k kept) (new ++ names) ks
-        go ns kept (x : xs) [] = go ns kept xs (IM.findWithDefault [] x byName)
-        (nFinal, keptSet) = go n0 S.empty (IS.toList n0) k0
+                go (IS.insert e kept)
+                   (foldl' add (foldDefnNames add (Keep ns q) (entryArr ! e))
+                           (IM.findWithDefault [] e bodies))
+        start = foldl' (foldDefnNames add) (foldl' add (Keep IS.empty k0) (mkFString "val" : seeds))
+                       libDefs
+        (nFinal, keptSet) = go IS.empty start
         inN i = IS.member (fstringId (getIdBase i)) nFinal
         keepFix (CInfix _ i) = inN i
         keepFix (CInfixl _ i) = inN i
@@ -307,19 +306,24 @@ pruneSigs seeds exportAll lsigs = do
         keepPragma (CPragma (Pproperties i _)) = inN i
         keepPragma (CPragma (Pnoinline is)) = any inN is
         keepPragma _ = False
-        prune si (CImpSign _ _ (CSignature n _ fs ds)) =
+        prune e0 (CImpSign _ _ (CSignature n _ fs ds)) =
             CSignature n [] (filter keepFix fs)
-                [ d | (di, d) <- zip [0 ..] ds
-                    , S.member (si, di) keptSet || (isPragma d && keepPragma d) ]
+                [ d | (e, d) <- zip [e0 ..] ds
+                    , IS.member e keptSet || (isPragma d && keepPragma d) ]
         isPragma (CPragma _) = True
         isPragma _ = False
-        nLib = sum [ length ds | (True, CImpSign _ _ (CSignature _ _ _ ds)) <- lsigs ]
-        sigs' = [ prune si s | (si, (False, s)) <- zip [0 ..] lsigs ]
+        pruneAll _ [] = []
+        pruneAll e0 (s@(CImpSign _ _ (CSignature _ _ _ ds)) : ss) =
+            prune e0 s : pruneAll (e0 + length ds) ss
+        sigs' = pruneAll 0 [ s | (False, s) <- lsigs ]
     return (sigs',
-            TciStats (S.size keptSet, length entries) (length (filter fst lsigs), nLib)
+            TciStats (IS.size keptSet, nEntries) (length (filter fst lsigs), length libDefs)
                      (IS.size nFinal) 0 (0, 0, 0) 0)
   where isInstance (CIinstance {}) = True
         isInstance _ = False
+
+-- The keep rule's names so far (N) and the entries queued to keep
+data Keep = Keep !IS.IntSet [Int]
 
 -- The default bodies of a struct's or class's fields
 defaultBodies :: CDefn -> [CClause]
@@ -344,55 +348,47 @@ defnBinders d = map getIdBase $ case d of
     Cprimitive i _ -> [i]
     _ -> []
 
--- The base names an entry binds or mentions, except in default bodies
--- (see pruneSigs).  Type variables and the sorts carried by TyCons are
--- left out: a tyvar binds nothing, and a TyCon's sort comes from the
--- entry that binds its name, which its name keeps.
-defnNames :: CDefn -> [FString]
-defnNames d = defnBinders d ++ map getIdBase (defnIds d)
-
-defnIds :: CDefn -> [Id]
-defnIds d = case d of
-    Ctype _ _ t -> tyIds t
-    CItype _ _ _ -> []
-    CprimType _ -> []
-    Cdata { cd_original_summands = ocs, cd_internal_summands = ics, cd_derivings = ders } ->
-        concatMap (concatMap qtIds . cos_arg_types) ocs ++
-        concatMap (tyIds . cis_arg_type) ics ++ concatMap derIds ders
-    Cstruct _ st _ _ fs ders -> stIds st ++ concatMap fieldIds fs ++ concatMap derIds ders
-    Cclass _ ps _ _ _ _ fs -> concatMap predIds ps ++ concatMap fieldIds fs
-    CIclass _ ps _ _ _ _ _ _ -> concatMap predIds ps
-    CIValueSign _ qt -> qtIds qt
-    Cforeign { cforg_type = qt } -> qtIds qt
-    Cprimitive _ qt -> qtIds qt
-    CIinstance i qt -> i : qtIds qt
-    CPragma (Pproperties i _) -> [i]
-    CPragma (Pnoinline is) -> is
-    Cinstance qt _ -> qtIds qt
-    CValue i _ -> [i]
-    CValueSign (CDef i qt _) -> i : qtIds qt
-    CValueSign (CDefT i _ qt _) -> i : qtIds qt
+-- A strict left fold over the base names an entry binds or mentions,
+-- except in default bodies (see pruneSigs).  Type variables and the sorts
+-- carried by TyCons are left out: a tyvar binds nothing, and a TyCon's
+-- sort comes from the entry that binds its name, which its name keeps.
+foldDefnNames :: (a -> FString -> a) -> a -> CDefn -> a
+foldDefnNames f z0 d = defn (foldl' f z0 (defnBinders d))
   where
-    derIds (CStock tcs) = map typeclassId tcs
-    derIds (CVia tc i) = [typeclassId tc, i]
-    stIds (SDataCon i _) = [i]
-    stIds (SPolyWrap i mc f) = i : f : maybe [] (: []) mc
-    stIds _ = []
-    fieldIds (CField n _ qt _ mot) = n : qtIds qt ++ maybe [] tyIds mot
-
-qtIds :: CQType -> [Id]
-qtIds (CQType ps t) = concatMap predIds ps ++ tyIds t
-
-predIds :: CPred -> [Id]
-predIds (CPred tc ts) = typeclassId tc : concatMap tyIds ts
-
-tyIds :: CType -> [Id]
-tyIds (TCon (TyCon i _ _)) = [i]
-tyIds (TCon _) = []
-tyIds (TAp a b) = tyIds a ++ tyIds b
-tyIds (TVar _) = []
-tyIds (TGen _ _) = []
-tyIds (TDefMonad _) = []
+    defn z = case d of
+      Ctype _ _ t -> ty z t
+      CItype _ _ _ -> z
+      CprimType _ -> z
+      Cdata { cd_original_summands = ocs, cd_internal_summands = ics, cd_derivings = ders } ->
+          foldl' der (foldl' (\z' -> ty z' . cis_arg_type) (foldl' (foldl' qt) z (map cos_arg_types ocs)) ics) ders
+      Cstruct _ st _ _ fs ders -> foldl' der (foldl' field (sub z st) fs) ders
+      Cclass _ ps _ _ _ _ fs -> foldl' field (foldl' prd z ps) fs
+      CIclass _ ps _ _ _ _ _ _ -> foldl' prd z ps
+      CIValueSign _ t -> qt z t
+      Cforeign { cforg_type = t } -> qt z t
+      Cprimitive _ t -> qt z t
+      CIinstance i t -> qt (idf z i) t
+      CPragma (Pproperties i _) -> idf z i
+      CPragma (Pnoinline is) -> foldl' idf z is
+      Cinstance t _ -> qt z t
+      CValue i _ -> idf z i
+      CValueSign (CDef i t _) -> qt (idf z i) t
+      CValueSign (CDefT i _ t _) -> qt (idf z i) t
+    idf !z i = f z (getIdBase i)
+    der z (CStock tcs) = foldl' idf z (map typeclassId tcs)
+    der z (CVia tc i) = idf (idf z (typeclassId tc)) i
+    sub z (SDataCon i _) = idf z i
+    sub z (SPolyWrap i mc g) = maybe id (flip idf) mc (idf (idf z i) g)
+    sub z _ = z
+    field z (CField n _ t _ mot) = maybe id (flip ty) mot (qt (idf z n) t)
+    qt z (CQType ps t) = ty (foldl' prd z ps) t
+    prd z (CPred tc ts) = foldl' ty (idf z (typeclassId tc)) ts
+    ty z (TCon (TyCon i _ _)) = idf z i
+    ty z (TCon _) = z
+    ty z (TAp a b) = ty (ty z a) b
+    ty z (TVar _) = z
+    ty z (TGen _ _) = z
+    ty z (TDefMonad _) = z
 
 -- -------------------------
 -- Reading
