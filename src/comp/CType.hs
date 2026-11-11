@@ -695,7 +695,7 @@ data CTypeStat
     | LetrecGroup | LetrecOffender
     | SeqCTypeShortcut | ApSubShortcut | TvShortcut | ExpandSynShortcut
     | InstShortcut | MguShortcut | MatchShortcut | GetFreeTShortcut
-    | ChkTApShortcut
+    | ChkTApShortcut | IConvMemoHit | IConvMemoMiss
     deriving (Eq, Ord, Enum, Bounded)
 
 statName :: CTypeStat -> String
@@ -723,6 +723,8 @@ statName MguShortcut = "mgu_shortcut"
 statName MatchShortcut = "match_shortcut"
 statName GetFreeTShortcut = "getfreet_shortcut"
 statName ChkTApShortcut = "chktap_shortcut"
+statName IConvMemoHit = "iconv_memo_hit"
+statName IConvMemoMiss = "iconv_memo_miss"
 
 {-# NOINLINE ctypeStatsOn #-}
 ctypeStatsOn :: Bool
@@ -730,7 +732,8 @@ ctypeStatsOn = "-trace-ctype-stats" `elem` progArgs
 
 -- -check-ctype-ids: every answer taken from two equal words -- cmp's EQ
 -- and Unify's mgu and match shortcuts -- is also decided structurally
--- (checkEqByWord); a disagreement is an internal error.  The
+-- (checkEqByWord), and every IConv memo hit is compared with a fresh
+-- conversion of the type; a disagreement is an internal error.  The
 -- one-sided shortcuts (apSub, tv, expandSyn, inst, getFreeT, chkTAp,
 -- TCMisc's expTFun, normT, expandSynN and the badCon scan) return their
 -- input on the ground or normal flag and are not checked here: they
