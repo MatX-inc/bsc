@@ -30,6 +30,7 @@ import VModInfo(VPathInfo)
 import ForeignFunctions(ForeignFunction(..))
 import Flags(Flags(..))
 import Verilog(VProgram)
+import Capture(Capture, captureHeader)
 
 
 -- ===============
@@ -65,7 +66,9 @@ data ABinModInfo =
         abmi_pathinfo :: VPathInfo,
         abmi_flags       :: Flags,
         -- the generated Verilog
-        abmi_vprogram :: Maybe VProgram
+        abmi_vprogram :: Maybe VProgram,
+        -- provenance facts (Capture), written last
+        abmi_capture :: Capture
     }
 
 data ABinForeignFuncInfo =
@@ -90,7 +93,9 @@ data ABinModSchedErrInfo =
         -- original type of the module
         abmsei_oqt :: CQType,
         -- flags
-        abmsei_flags :: Flags
+        abmsei_flags :: Flags,
+        -- provenance facts (Capture), apkg space only
+        abmsei_capture :: Capture
     }
 
 -- ---------------
@@ -114,7 +119,7 @@ instance PPrint ABin where
 
 
 instance PPrint ABinModInfo where
-    pPrint d p (ABinModInfo path srcName apkg aschedinfo pps oqt mi pathinfo flags vprog) =
+    pPrint d p (ABinModInfo path srcName apkg aschedinfo pps oqt mi pathinfo flags vprog cap) =
         text "path:" <+> text path $+$
         text "package:" <+> text srcName $+$
         pPrint d 0 apkg $+$
@@ -126,7 +131,8 @@ instance PPrint ABinModInfo where
         -- no dump of flags
         text "vprog:" <+> (if (isNothing vprog)
                            then text "Nothing"
-                           else text "Just ...") -- no dump of contents
+                           else text "Just ...") $+$ -- no dump of contents
+        text "capture:" <+> text (captureHeader cap)
 
 
 instance PPrint ABinForeignFuncInfo where
@@ -136,7 +142,7 @@ instance PPrint ABinForeignFuncInfo where
 
 
 instance PPrint ABinModSchedErrInfo where
-    pPrint d p (ABinModSchedErrInfo path srcName apkg aschederrinfo pps oqt flags) =
+    pPrint d p (ABinModSchedErrInfo path srcName apkg aschederrinfo pps oqt flags _) =
         text "path:" <+> text path $+$
         text "package:" <+> text srcName $+$
         pPrint d 0 apkg $+$

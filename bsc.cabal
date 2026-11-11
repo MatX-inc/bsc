@@ -151,6 +151,11 @@ library
     CCSyntax
     CFreeVars
     CPPLineDirectives
+    Capture
+    CaptureFreeze
+    CaptureHooks
+    CaptureLedger
+    CaptureLive
     CSubst
     CSyntax
     CSyntaxTypes

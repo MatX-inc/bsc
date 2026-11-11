@@ -10,6 +10,8 @@ import qualified Data.Set as S
 import BackendNamingConventions
 import Error(internalError, EMsg, WMsg)
 import Flags(Flags, removeCross)
+import CaptureLive(Cap(..), capOf, stInlineWires)
+import CaptureHooks(netRenames)
 
 -- import Debug.Trace
 
@@ -64,7 +66,11 @@ aInlineWires flags pkg@(ASPackage { aspkg_state_instances = vs,
                         aspkg_state_outputs = nonwire_svars,
                          aspkg_values = (defs' ++ newdefs),
                         aspkg_inlined_ports = ws',
-                        aspkg_signal_info = si' }),
+                        aspkg_signal_info = si',
+                        -- the capture: the wire defs renamed
+                        aspkg_capture =
+                          Cap (netRenames stInlineWires name_subst
+                                          (capOf (aspkg_capture pkg))) }),
      warnings, errors)
   where -- definition map (id -> value)
         defmap = M.fromList [(i, e) | (ADef i _t e _) <- defs]

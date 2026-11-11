@@ -20,7 +20,7 @@ import Prelude hiding ((<>))
 
 import Control.Monad(foldM, forM, zipWithM)
 import Control.Monad.State.Strict(State, runState, gets, get, put)
-import Data.List((\\))
+import Data.List((\\), foldl')
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 import qualified Data.IntMap as IM
@@ -48,6 +48,10 @@ import ISyntax
 import ISyntaxUtil
 import IPrims(doPrimOp)
 import IInline(iSortDs, iInline)
+import CaptureLive(Cap(..), capOf, CapTable, NameRefL(..), NameFact(..),
+                   capMerge, capMergeFacts, capGone,
+                   stTransI, stTransJ, stTransIInline, stTransJInline,
+                   capDead, viaCse, viaCseName, viaAtom, kindConst)
 import MapTurns(Found(..), lookupTurns, insertTurns)
 import BExpr
 
@@ -93,8 +97,9 @@ iTransExprLoop e =
 
 iTransform :: ErrorHandle -> Flags -> String -> IModule a -> IModule a
 iTransform errh flags prefix =
-          iInline False .                -- XXX only for debug
+          iInline inline_stage False .                -- XXX only for debug
         iTransform1 1 errh flags prefix . iSortDs
+  where inline_stage = if prefix == "__i" then stTransIInline else stTransJInline
 
 iTransform1 :: Integer -> ErrorHandle -> Flags -> String ->
                IModule a -> IModule a
@@ -105,8 +110,11 @@ iTransform1 no errh flags prefix imod@(IModule { imod_state_insts = itvs,
     imod { imod_state_insts = itvs',
            imod_local_defs  = ds',
            imod_rules       = rs',
-           imod_interface   = ifc' }
-  where ((itvs', rs', ifc'), ds') = runT errh flags no prefix trMod
+           imod_interface   = ifc',
+           imod_capture     = Cap cap' }
+  where ((itvs', rs', ifc'), ds', ts_final) = runT errh flags no prefix trMod
+        cap' = transformCapture prefix (fixup_capture ts_final) (cse_map ts_final)
+                                ds' (capOf (imod_capture imod))
         trMod = do
             mapM_ iTrDef ds
             iTransFixupDefNames flags
@@ -1773,12 +1781,17 @@ data TState a = TState {
         cond_opt :: IM.IntMap (IExpr a),
 
         -- the operand pieces of the references made by this pass
-        memo :: !(OpndMemo a)
+        memo :: !(OpndMemo a),
+
+        -- the def map and rename map of iTransFixupDefNames, for the
+        -- capture (transformCapture)
+        fixup_capture :: (M.Map Id (IType, IExpr a, [DefProp]), M.Map Id Id)
         }
 
 type T b a = State (TState a) b
 
-runT :: ErrorHandle -> Flags -> Integer -> String -> T b a -> (b, [IDef a])
+-- The final state is for the capture (transformCapture).
+runT :: ErrorHandle -> Flags -> Integer -> String -> T b a -> (b, [IDef a], TState a)
 runT errh flags no prefix xforms =
     let initState :: TState a
         initState = TState { errHandle = errh
@@ -1789,6 +1802,7 @@ runT errh flags no prefix xforms =
                            , cse_map = M.empty
                            , cond_opt = IM.empty
                            , memo = emptyOpndMemo prefix
+                           , fixup_capture = (M.empty, M.empty)
                            }
     in case runState xforms initState of
          (x, ts) ->
@@ -1799,7 +1813,7 @@ runT errh flags no prefix xforms =
                         , defPropsHasNoCSE props
                       ]
                   defs = defs_from_cse ++ non_cse_defs
-              in  (x, defs)
+              in  (x, defs, ts)
 
 getDoBO :: T Bool a
 getDoBO = do
@@ -2094,8 +2108,45 @@ iTransFixupDefNames flags = do
       new_state :: TState a
       new_state = transform_state { def_map = new_defmap,
                                     cse_map = new_csemap,
-                                    cond_opt = IM.empty }
+                                    cond_opt = IM.empty,
+                                    fixup_capture = (old_defmap, rename_map) }
   put new_state
+
+-- The capture's view of iTransform1 (CaptureLive).  A def that is not in
+-- the output was CSE'd into the def the fixup picked for its group, or its
+-- transformed body was a port or constant.  A group whose picked name is a
+-- def's keeps the unpicked CSE name as its number.  Reads the pre-fixup
+-- bodies only as far as the fixup's cse_ids_map matched them, and the
+-- groups' picked names, which the output defs hold.
+transformCapture :: String -> (M.Map Id (IType, IExpr a, [DefProp]), M.Map Id Id) ->
+                    M.Map (IExpr a) (IExpr a, IDef a, Int) -> [IDef a] ->
+                    CapTable -> CapTable
+transformCapture prefix (old_defmap, rename_map) csemap ds' t0 =
+    let stage = if prefix == "__i" then stTransI else stTransJ
+        letter = case prefix of
+                   (_ : _ : c : _) -> c
+                   _ -> '?'
+        out = S.fromList [ i | IDef i _ _ _ <- ds' ]
+        rename n = M.findWithDefault n n rename_map
+        one t (d, (_, e, _))
+          | S.member d out = t
+          | otherwise =
+              case e of
+                ICon n (ICValue {}) -> capMerge stage viaCse (rename n) [d] t
+                ICon p ic | isPortCon ic -> capMerge stage viaAtom p [d] t
+                ICon _ _ -> capGone kindConst stage viaAtom d [] t
+                _ -> capDead stage d t
+        isPortCon (ICModPort {}) = True
+        isPortCon (ICMethArg {}) = True
+        isPortCon (ICModParam {}) = True
+        isPortCon (ICStateVar {}) = True
+        isPortCon _ = False
+        t1 = foldl' one t0 (M.toList old_defmap)
+        -- groups named after a def keep their CSE number
+        cse_names = [ (i, NameFact (CseNo letter s) viaCseName stage)
+                    | (_, (_, IDef i _ _ _, s)) <- M.toList csemap,
+                      M.member i old_defmap ]
+    in  foldl' (\t (i, f) -> capMergeFacts i [f] t) t1 cse_names
 
 -- given a map from old to new identifiers, replace all occurrences
 -- of the old identifier with the new in a given expression

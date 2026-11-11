@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Werror=missing-fields #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# OPTIONS_GHC -Werror -fwarn-incomplete-patterns #-}
@@ -21,6 +22,8 @@ import InstNodes(InstNode(..))
 import Verilog
 
 import ABin
+import Capture()
+import CaptureLive(Cap(..), emptyCapTable)
 import BinData
 import FileIOUtil(writeBinaryFileCatch)
 
@@ -36,7 +39,7 @@ import qualified Data.ByteString.Lazy as BL
 -- .ba file tag -- change this whenever the .ba format changes
 -- See also GenBin.header
 header :: [Byte]
-header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261109-17"
+header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261111-31"
 
 headerBS :: B.ByteString
 headerBS = B.pack header
@@ -86,6 +89,8 @@ instance Bin ABin where
             toBin (abmi_pathinfo modinfo)
             toBin (abmi_flags modinfo)
             toBin (abmi_vprogram modinfo)
+            -- last, so that every Id it counts was written above
+            toBin (abmi_capture modinfo)
   writeBytes (ABinModSchedErr modinfo version) =
          section "ABinModSchedErr" $
          do -- tag which kind of module
@@ -99,6 +104,7 @@ instance Bin ABin where
             toBin (abmsei_pps modinfo)
             toBin (abmsei_oqt modinfo)
             toBin (abmsei_flags modinfo)
+            toBin (abmsei_capture modinfo)
   readBytes = do tag <- getI
                  version <- fromBin
                  case (tag) of
@@ -117,9 +123,10 @@ instance Bin ABin where
                            pathinfo <- fromBin
                            flags <- fromBin
                            vprog <- fromBin
+                           cap <- fromBin
                            let modinfo =
                                    ABinModInfo path srcName apkg asched pps
-                                               oqt mi pathinfo flags vprog
+                                               oqt mi pathinfo flags vprog cap
                            return (ABinMod modinfo version)
                    2 -> do path <- fromBin
                            srcName <- fromBin
@@ -128,9 +135,10 @@ instance Bin ABin where
                            pps <- fromBin
                            oqt <- fromBin
                            flags <- fromBin
+                           cap <- fromBin
                            let modinfo =
                                    ABinModSchedErrInfo path srcName apkg
-                                                       aschederr pps oqt flags
+                                                       aschederr pps oqt flags cap
                            return (ABinModSchedErr modinfo version)
                    n -> internalError ("GenABin.Bin(ABin): tag = " ++ show n)
 
@@ -209,7 +217,9 @@ instance Bin APackage where
                              apkg_interface = aifcs,
                              apkg_inst_comments = ics,
                              apkg_inst_tree = inst_tree,
-                             apkg_proof_obligations = []
+                             apkg_proof_obligations = [],
+                             -- the .ba's capture is abmi_capture
+                             apkg_capture = Cap emptyCapTable
                                     })
 
 -- ----------

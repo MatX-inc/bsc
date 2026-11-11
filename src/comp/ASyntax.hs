@@ -143,6 +143,7 @@ import Flags
 import qualified Data.Map as M
 import ISyntax(IType)
 import InstNodes(InstTree)
+import CaptureLive(Cap, CapTable)
 
 -- packages converted from ISyntax
 data APackage = APackage {
@@ -182,12 +183,16 @@ data APackage = APackage {
             -- instantiation tree of rules and methods
     apkg_inst_tree :: InstTree,
             -- proof obligations which have not yet been discharged
-    apkg_proof_obligations :: [(ProofObligation AExpr, MsgFn)]
+    apkg_proof_obligations :: [(ProofObligation AExpr, MsgFn)],
+            -- provenance facts for the .ba (CaptureLive); always equal,
+            -- never printed, not written by Bin APackage
+    apkg_capture :: Cap CapTable
     } deriving (Eq, Show)
 
 instance NFData APackage where
-    rnf (APackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17) =
-        rnf17 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17
+    -- the capture field last: see CaptureLive
+    rnf (APackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18) =
+        rnf18 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 n16 n17 n18
 
 getAPackageFieldInfos :: APackage -> [VFieldInfo]
 getAPackageFieldInfos = map aif_fieldinfo . apkg_interface
@@ -281,13 +286,17 @@ data ASPackage = ASPackage {
         -- info about which Ids are for what purpose
         aspkg_signal_info :: ASPSignalInfo,
         -- user comments to be included in the output RTL
-        aspkg_comment_info :: ASPCommentInfo
+        aspkg_comment_info :: ASPCommentInfo,
+        -- provenance facts for the Verilog .ba (CaptureLive), keyed by
+        -- this package's names; always equal, never printed
+        aspkg_capture :: Cap CapTable
     }
         deriving (Eq, Show)
 
 instance NFData ASPackage where
-    rnf (ASPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14) =
-        rnf14 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14
+    -- the capture field last: see CaptureLive
+    rnf (ASPackage n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15) =
+        rnf15 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15
 
 data ASPSignalInfo = ASPSignalInfo {
         -- input params, ports, clocks, and resets are all in one list
@@ -1421,7 +1430,7 @@ ppVTI :: PDetail -> (VModInfo, [AExpr], [(AId, Integer)]) -> Doc
 ppVTI d (vi, es, ns) = sep [pPrint d 0 (vName vi), pPrint d 0 vi, pPrint d 0 es, pPrint d 0 ns]
 
 instance PPrint ASPackage where
-    pPrint d p pack@(ASPackage mi fmod ps exps is ios ss sos ds iods fs ws ids cmap) =
+    pPrint d p pack@(ASPackage mi fmod ps exps is ios ss sos ds iods fs ws ids cmap _) =
         (text "ASPackage" <+> ppId d mi <> if fmod then text " -- function" else text "") $+$
         text "-- ASPackage parameters" $+$
         (text "" <+> sep (map (pPrint d 0) ps) <> text ";") $+$

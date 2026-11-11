@@ -14,6 +14,12 @@ import Error(EMsg, ErrorHandle, bsError)
 import Position(noPosition)
 import CType(TISort(..), StructSubType(..))
 import qualified Data.Map as M
+import qualified Data.Set as S
+import Data.List(foldl')
+import IInline(iValVars)
+import CaptureLive(Cap(..), capOf, CapTable, HostL(..), NameRefL(..), NameFact(..),
+                   capGone, capMergeFacts, capStat, stInlineFmt,
+                   viaInline, viaCreated, kindInner)
 -- import Debug.Trace(trace)
 
 type F a = StateT (Int, [IDef a]) (ExceptT EMsg (IO))
@@ -40,9 +46,65 @@ iInlineFmt errh imod =
        result <- runExceptT (runStateT (splitFmtsF imod_fmt) (ffcallNo, []))
        case result of
             Right x@(imod', (ffcallNo', ds')) ->
-                return (imod' {imod_local_defs = ds ++ ds',
-                               imod_ffcallNo = ffcallNo'})
+                let imod_out = imod' {imod_local_defs = ds ++ ds',
+                                      imod_ffcallNo = ffcallNo'}
+                    cap = fmtCapture imod imod_out (capOf (imod_capture imod))
+                in  return (imod_out { imod_capture = Cap cap })
             Left msg -> bsError errh [msg]
+
+-- The capture's view (CaptureLive): the Fmt-typed defs this pass drops
+-- were inlined into the defs, rules, methods and instance arguments that
+-- used them in the input; each def it adds records the ones that use it in
+-- the output (where its value was cut from).  Both modules were deepseq'd
+-- by the DFexpanded and DFinlineFmt dumps, and each walk runs only when
+-- there is a def to look for.
+fmtCapture :: IModule a -> IModule a -> CapTable -> CapTable
+fmtCapture imod_in imod_out t0 =
+    let ins = S.fromList [ i | IDef i _ _ _ <- imod_local_defs imod_in ]
+        outs = S.fromList [ i | IDef i _ _ _ <- imod_local_defs imod_out ]
+        gone = dedup S.empty [ i | IDef i _ _ _ <- imod_local_defs imod_in,
+                                   not (S.member i outs) ]
+        new = dedup S.empty [ i | IDef i _ _ _ <- imod_local_defs imod_out,
+                                  not (S.member i ins) ]
+        dedup _ [] = []
+        dedup seen (i:is) | S.member i seen = dedup seen is
+                          | otherwise = i : dedup (S.insert i seen) is
+        hostsIn = usersOf (S.fromList gone) imod_in
+        hostsOut = usersOf (S.fromList new) imod_out
+        hostsOf hm i = dedupHosts S.empty (M.findWithDefault [] i hm)
+        dedupHosts _ [] = []
+        dedupHosts seen (h:hs) | S.member (hostId h) seen = dedupHosts seen hs
+                               | otherwise = h : dedupHosts (S.insert (hostId h) seen) hs
+        hostId (HLId i) = i
+        hostId (HLInst i _) = i
+        t1 = foldl' (\t i -> capGone kindInner stInlineFmt viaInline i (hostsOf hostsIn i) t)
+                    t0 gone
+        t2 = foldl' (\t i -> capMergeFacts i
+                                [ NameFact (DefName (hostId h)) viaCreated stInlineFmt
+                                | h <- hostsOf hostsOut i ] t)
+                    t1 new
+    in  capStat stInlineFmt viaCreated (length new) t2
+
+-- For each of the given defs, the defs, rules, methods and instance
+-- arguments of the module whose expressions refer to it, in module order.
+usersOf :: S.Set Id -> IModule a -> M.Map Id [HostL]
+usersOf targets imod
+  | S.null targets = M.empty
+  | otherwise =
+      M.map reverse $ M.fromListWith (++)
+        [ (r, [h]) | (h, es) <- users, e <- es, r <- iValVars e, S.member r targets ]
+  where
+    rules (IRules _ rs) = rs
+    users = [ (HLId i, [e]) | IDef i _ e _ <- imod_local_defs imod ] ++
+            [ (HLId (irule_name r), [irule_pred r, irule_body r])
+            | r <- rules (imod_rules imod) ] ++
+            [ (HLId i, maybe [] ((:[]) . fst) me ++
+                       concat [ [irule_pred r, irule_body r]
+                              | Just irs <- [mrs], r <- rules irs ])
+            | IEFace i _ me mrs _ _ <- imod_interface imod ] ++
+            [ (HLInst inst k, [e])
+            | (inst, IStateVar { isv_iargs = es }) <- imod_state_insts imod,
+              (k, e) <- zip [0..] es ]
 
 splitFmtsF :: IModule a -> F a (IModule a)
 splitFmtsF imod@(IModule { imod_local_defs  = ds,

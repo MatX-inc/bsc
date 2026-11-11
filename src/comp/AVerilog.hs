@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances, TypeSynonymInstances, PatternGuards #-}
 {-# LANGUAGE FlexibleInstances #-}
-module AVerilog (aVerilog) where
+module AVerilog (aVerilog, VRenames) where
 
 import Data.List(nub,
             mapAccumL,
@@ -61,10 +61,14 @@ import qualified GraphWrapper as G
 -- Flags are the compiler flags
 -- [PProp] are the Pragmas
 -- XXX this function is too big
+-- The renames are for the capture's net-name ledger (CaptureLedger).
 aVerilog :: ErrorHandle -> Flags -> [PProp] -> ASPackage -> ForeignFuncMap ->
-            IO VProgram
+            IO (VProgram, VRenames)
 aVerilog errh flags pps aspack ffmap =
-    do let vprog0 = VProgram (map renameInoutPorts mods) dpi_decls comments
+    do let renamed_mods = map renameInoutPorts mods
+           vprog0 = VProgram (map fst renamed_mods) dpi_decls comments
+           inout_renames = [ (new, old) | (_, rs) <- renamed_mods,
+                                          (old, new) <- M.toList rs ]
        -- Gate the identifier legalization below on a cheap scan of the
        -- positions where a colliding name can originate.  The scan is
        -- sound by the invariant documented at vModuleDeclVIds: every VId
@@ -95,7 +99,7 @@ aVerilog errh flags pps aspack ffmap =
                           any (suspect_str . fst) foreign_func_names ||
                           any (any suspect_vid . vModuleDeclVIds) mods
        if (not has_suspects)
-        then return vprog0
+        then return (vprog0, (inout_renames, []))
         else do
          -- Identifiers that collide with the class names of SystemVerilog's
          -- built-in std package (process, semaphore, mailbox) cannot be
@@ -130,7 +134,7 @@ aVerilog errh flags pps aspack ffmap =
            then return ()
            else bsWarning errh
                     [ (pos, WSVReservedIdent name) | (name, pos) <- sv_clashes ]
-         return vprog
+         return (vprog, (inout_renames, [ (n, n') | (n, n', _) <- renamed ]))
   where
         -- vco carries the foreign-function map and def widths so that DPI call
         -- sites can be monomorphized (name-mangled by concrete width)
@@ -879,7 +883,12 @@ mkVDeclsAndDefs vDef ds =
 -- plain-port rendering for those.  (A port whose name is already in
 -- use elsewhere in the module is left in expression form; that should
 -- not happen, but this pass must not capture.)
-renameInoutPorts :: VModule -> VModule
+-- The Verilog renames the capture records: renameInoutPorts' (port, net)
+-- pairs and renameSVStdIdents' (old, new) names.
+type VRenames = ([(VId, VId)], [(String, String)])
+
+-- with the renames made (net -> port)
+renameInoutPorts :: VModule -> (VModule, M.Map VId VId)
 renameInoutPorts vm =
     let args = concatMap fst (vm_ports vm)
 
@@ -924,7 +933,7 @@ renameInoutPorts vm =
             | i == i', M.lookup i' net_count' == Just 1
             = VAInout i Nothing r
         plain a = a
-    in  vm' { vm_ports = [ (map plain as, c) | (as, c) <- vm_ports vm' ] }
+    in  (vm' { vm_ports = [ (map plain as, c) | (as, c) <- vm_ports vm' ] }, renames)
 
 computeInouts :: M.Map AId AId -> ASPackage -> [(Id, AType, Id)]
 computeInouts inout_rewire_map aspack =

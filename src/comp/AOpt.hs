@@ -13,8 +13,8 @@ module AOpt(aOpt,
 
 import Control.Monad(when, foldM, zipWithM)
 import Control.Monad.State.Strict(State, StateT, evalState, evalStateT, liftIO,
-                                  gets, get, put)
-import Data.List(sortBy, genericLength, sort, transpose, partition, groupBy, nub)
+                                  gets, get, put, modify')
+import Data.List(sortBy, genericLength, sort, transpose, partition, groupBy, nub, foldl')
 import Util(mapFst)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -56,6 +56,9 @@ import Util(anySame)
 import Util(tracep {- , traces -})
 import Debug.Trace
 import IOUtil(progArgs)
+import CaptureLive(Cap(..), capOf, NameRefL(..), NameFact(..), capMergeFacts,
+                   stAOpt, viaCopy)
+import CaptureHooks(netStep, netStepJoined)
 
 import SAT(SATState, initSATState, checkBiImplication, isConstExpr)
 
@@ -92,7 +95,7 @@ aOpt errh flags pkg0 | not (optATS flags) =
                    inlineB  -- expcheap
                    pkg1
     in
-        return pkg2
+        return (netStep stAOpt pkg0 pkg2)
 -- when optATS is specified
 aOpt errh flags pkg0 = do
     let
@@ -151,7 +154,7 @@ aOpt errh flags pkg0 = do
 
     -- optimize defs with "aOptDefs", then remove defs and expand again
     --
-    let (ds1, fb1, ss1) = aOptDefs bflags ds fb ss
+    let (ds1, fb1, ss1, copies) = aOptDefs bflags ds fb ss
     when debug $
       traceM ("trace defs, post aOptDefs (ds1): " ++ ppReadable ds1)
     let pkg3 = pkg2 { aspkg_values = ds1,
@@ -193,8 +196,19 @@ aOpt errh flags pkg0 = do
                    False   -- expcheap
                    pkg6
         pkg8 = aOptFinalPass flags pkg7
+        -- for the capture: the defs joinDefs made aliases of an equal def
+        joined = M.fromList [ (j, i) | (ADef j _ e2 _, ADef _ _ (ASDef _ i) _)
+                                         <- zip ds2 ds3,
+                                       not (isASDef e2) ]
+        isASDef (ASDef {}) = True
+        isASDef _ = False
     --
-    return pkg8
+        -- and each def aOptDef made a copy of another's expression names it
+        pkg0c = pkg0 { aspkg_capture =
+                         Cap (foldl' (\t (i, j) -> capMergeFacts i
+                                         [NameFact (DefName j) viaCopy stAOpt] t)
+                                     (capOf (aspkg_capture pkg0)) copies) }
+    return (netStepJoined stAOpt joined pkg0c pkg8)
 
 
 data BFlags = BFlags  { ao_ifmux        :: Bool,
@@ -270,7 +284,10 @@ type UseMap = (M.Map AId Int)
 data OState = OState { o_nextid :: Integer,
                        o_defs   :: [ADef],
                        o_defmap :: DefMap,
-                       o_usemap :: UseMap
+                       o_usemap :: UseMap,
+                       -- for the capture: (def, the def whose expression
+                       -- aOptDef copied into it), newest first
+                       o_copies :: [(AId, AId)]
                      }
 
 -- start with Id 1, no defs, and an uninitialized map
@@ -278,7 +295,8 @@ initOState :: OState
 initOState = OState { o_nextid = 1,
                       o_defs   = [],
                       o_defmap = M.empty,
-                      o_usemap = M.empty
+                      o_usemap = M.empty,
+                      o_copies = []
                     }
 
 type O a = State OState a
@@ -390,9 +408,11 @@ expandUniqueVarRef _ _ e = e
 
 -- Top-level optimization function over all local defs
 --   calls aOptDef and aMuxOptDef on each def
-aOptDefs :: BFlags -> [ADef] -> [AForeignBlock] -> [AVInst] -> ([ADef],[AForeignBlock],[AVInst])
+-- The fourth result is for the capture: the defs aOptDef redirected.
+aOptDefs :: BFlags -> [ADef] -> [AForeignBlock] -> [AVInst] ->
+            ([ADef],[AForeignBlock],[AVInst],[(AId, AId)])
 aOptDefs bflgs ds fblocks ss = (evalState optf initOState)
-  where optf :: O ( [ADef], [AForeignBlock], [AVInst] )
+  where optf :: O ( [ADef], [AForeignBlock], [AVInst], [(AId, AId)] )
         optf = do
             --traceM ("FF " ++ ppReadable ds)
             setNonDefUses ss fblocks
@@ -408,7 +428,8 @@ aOptDefs bflgs ds fblocks ss = (evalState optf initOState)
             fb2 <- mapM (aMuxOptForeign bflgs) fb1
             ss1 <- mapM (aOptInstDefs bflgs) ss
             newdefs <- getDefs
-            return (newdefs,fb2,ss1)
+            copies <- gets o_copies
+            return (newdefs,fb2,ss1,reverse copies)
 
 aOptInstDefs :: BFlags -> AVInst -> O AVInst
 aOptInstDefs bflgs inst =
@@ -475,7 +496,9 @@ aOptDef bflgs def@(ADef i t rdef@(ASDef rt aid) ps) = do
             internalError ("Aopt::aOptDef lookup failed: " ++ ppReadable def)
         Just (ATaskValue {}) -> aOptDef_dflt bflgs def  -- don't redirect
         Just (AFunCall { ae_isC = True }) -> aOptDef_dflt bflgs def  -- don't redirect
-        Just rdef_expr -> addDef (ADef i t rdef_expr ps)
+        Just rdef_expr -> do addDef (ADef i t rdef_expr ps)
+                             modify' (\s -> let cs = (i, aid) : o_copies s
+                                             in  cs `seq` s { o_copies = cs })
 aOptDef bflgs def = aOptDef_dflt bflgs def
 
 -- the default case for aOptDef (shared between the two branches above)

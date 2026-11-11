@@ -13,6 +13,8 @@ import BackendNamingConventions(createVerilogNameMap,
                                 xLateIdUsingFStringMap)
 import Util(fastNub)
 import DefProp(DefProp)
+import CaptureLive(Cap(..), capOf, stRenameIO)
+import CaptureHooks(netRenames)
 
 -- ==============================
 -- Function: aRenameIO
@@ -60,12 +62,17 @@ aRenameIO flags pkg =
                       -- remove duplicates because output wires may be hooked up
                       -- to more than one method (e.g. FIFOF_.notFull, FIFOF_.i_notFull)
                       (fastNub (mapFst (tr vmap) svars)) -- state output names
-                      (map (trD vmap) defs)    -- names of defs & in def exprs
+                      defs'                    -- names of defs & in def exprs
                       (map (trIOD vmap) iods)  -- names in iodef exprs
                       (map (trFB vmap) fs)     -- names in foreign block exprs
                       (map (tr vmap) ws)       -- inlined port names
                       (trSI vmap si)           -- names in signal info
                       cmap  -- instance names should not have changed
+                      (Cap (netRenames stRenameIO renames
+                                       (capOf (aspkg_capture pkg))))
+        defs' = map (trD vmap) defs
+        -- for the capture: the defs this pass renamed
+        renames = [ (i, i') | (ADef i _ _ _, ADef i' _ _ _) <- zip defs defs', i /= i' ]
 
     in
         new_pkg

@@ -1,4 +1,4 @@
-module VVerilogDollar (removeDollarsFromVerilog) where
+module VVerilogDollar (removeDollarsFromVerilog, removeDollarsFromVerilogMap) where
 import Id
 import FStringCompat
 import PreStrings (fsDollar)
@@ -11,7 +11,12 @@ import qualified Data.Set as Set
 import ErrorUtil (internalError)
 
 removeDollarsFromVerilog :: VProgram -> VProgram
-removeDollarsFromVerilog vprog
+removeDollarsFromVerilog = fst . removeDollarsFromVerilogMap
+
+-- with the map from each renamed Id to its new Id (for the capture's
+-- net-name ledger)
+removeDollarsFromVerilogMap :: VProgram -> (VProgram, Map.Map Id Id)
+removeDollarsFromVerilogMap vprog
   = let
         all_vids :: [VId]
         all_vids = get_vids vprog
@@ -21,7 +26,7 @@ removeDollarsFromVerilog vprog
 
         the_map :: The_map
         the_map = get_map_ids used_ids all_vids
-      in everywhere (mkT (new_vid the_map)) vprog
+      in (everywhere (mkT (new_vid the_map)) vprog, the_map)
 
 get_vids :: VProgram -> [VId]
 get_vids vprog

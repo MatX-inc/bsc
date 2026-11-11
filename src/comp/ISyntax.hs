@@ -114,6 +114,7 @@ import Error(internalError, EMsg, ErrMsg(..))
 import PFPrint
 import IStateLoc(IStateLoc)
 import IType
+import CaptureLive(Cap, CapTable)
 
 -- ============================================================
 -- IPackage, IModule
@@ -168,9 +169,32 @@ data IModule a
                 imod_interface :: [IEFace a],           -- package interface
                 imod_ffcallNo :: Int,                    -- next available unique ffcalNo
                 -- comments on submodule instantiations
-                imod_instance_comments :: [(Id, [String])]
+                imod_instance_comments :: [(Id, [String])],
+                -- provenance facts for the .ba (CaptureLive); nothing
+                -- in the compiler reads them
+                imod_capture :: Cap CapTable
           }
-         deriving (Show)
+
+-- what a derived instance printed before the capture field
+instance Show (IModule a) where
+  showsPrec d m = showParen (d >= 11) $
+      showString "IModule {imod_name = " . showsPrec 0 (imod_name m) .
+      showString ", imod_is_wrapped = " . showsPrec 0 (imod_is_wrapped m) .
+      showString ", imod_backend_specifc = " . showsPrec 0 (imod_backend_specifc m) .
+      showString ", imod_external_wires = " . showsPrec 0 (imod_external_wires m) .
+      showString ", imod_pragmas = " . showsPrec 0 (imod_pragmas m) .
+      showString ", imod_type_args = " . showsPrec 0 (imod_type_args m) .
+      showString ", imod_wire_args = " . showsPrec 0 (imod_wire_args m) .
+      showString ", imod_clock_domains = " . showsPrec 0 (imod_clock_domains m) .
+      showString ", imod_resets = " . showsPrec 0 (imod_resets m) .
+      showString ", imod_state_insts = " . showsPrec 0 (imod_state_insts m) .
+      showString ", imod_port_types = " . showsPrec 0 (imod_port_types m) .
+      showString ", imod_local_defs = " . showsPrec 0 (imod_local_defs m) .
+      showString ", imod_rules = " . showsPrec 0 (imod_rules m) .
+      showString ", imod_interface = " . showsPrec 0 (imod_interface m) .
+      showString ", imod_ffcallNo = " . showsPrec 0 (imod_ffcallNo m) .
+      showString ", imod_instance_comments = " . showsPrec 0 (imod_instance_comments m) .
+      showString "}"
 
 getWireInfo :: IModule a -> VWireInfo
 getWireInfo = imod_external_wires
@@ -1056,7 +1080,7 @@ instance PPrint (IPackage a) where
   where sep a b c = b $+$ a $+$ c
 
 instance PPrint (IModule a) where
- pPrint d p (IModule mi fmod be wi ps ks as clks rsts vs pts ds rs ifc ffcalNo cmap) =
+ pPrint d p (IModule mi fmod be wi ps ks as clks rsts vs pts ds rs ifc ffcalNo cmap _) =
         (text "IModule" <+> ppId d mi <> if fmod then text " -- function" else text "") $+$
         (case be of
              Nothing -> empty
@@ -1233,8 +1257,9 @@ instance NFData (IPackage a) where
     rnf (IPackage i lps ps ds atfCache) = rnf5 i ps lps ds atfCache
 
 instance NFData (IModule a) where
-    rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16) =
-        rnf16 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16
+    -- the capture field last: see CaptureLive
+    rnf (IModule x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17) =
+        rnf17 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17
 
 instance NFData (IEFace a) where
     rnf (IEFace x1 x2 x3 x4 x5 x6) = rnf6 x1 x2 x3 x4 x5 x6

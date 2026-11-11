@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Werror=missing-fields #-}
 {-# LANGUAGE BangPatterns, CPP #-}
 module Main_bsc(main, hmain) where
 
@@ -89,7 +90,7 @@ import Error(internalError, ErrMsg(..),
              ErrorHandle, initErrorHandle, setErrorHandleFlags,
              bsError, bsErrorNoExit, bsWarning, bsMessage,
              exitFail, exitOK, exitFailWith, takeDiagnostics)
-import Position(noPosition, cmdPosition, remapPositionFile)
+import Position(noPosition, cmdPosition, remapPositionFile, remapPositionPath)
 import CVPrint
 import Id
 import Backend
@@ -102,7 +103,7 @@ import MakeSymTab(mkSymTab, mkSymTabWithWarnings, mkSymTabBase, mkSymTabExtend,
                   getPackagesUsedInTypes)
 import TypeCheck(cCtxReduceIO, cTypeCheck, CATFCache, mergeCATFCaches)
 import CtxRed(SignProvisos)
-import Eval(rnf)
+import Eval(rnf, deepseq)
 import RedundantProvisos(warnRedundantProvisos, checkRedundantProvisos)
 import PatMatchCheck(patternMatchWarnings)
 import CType(enableCanonIds, disableCanonIds, canonIdsOpen, cTypeStats)
@@ -153,6 +154,11 @@ import AProofs(aCheckProofs)
 import ADropDefs(aDropDefs)
 import AOpt(aOpt)
 import AVerilog(aVerilog)
+import CaptureLive(NetLive, perturbMask, stInline, stAState, stInlineCReg,
+                   stADropDefs, stSynthesize, stVeriQuirks, stFinalCleanup)
+import CaptureHooks(netStep, netStepCreated, netStepDropped, netStepFrom)
+import CaptureLedger(netLedger)
+import CaptureFreeze(freezeCapture)
 import AVeriQuirks(aVeriQuirks)
 import VIOProps(VIOProps, getIOProps)
 import VFinalCleanup(finalCleanup)
@@ -967,6 +973,8 @@ compilePackage
     --   doesn't update "alldefs"; this is likely OK because it is only used
     --   to build undefined values (in IExpand) and to insert RWires
     --   (in AAddSchedAssumps)
+    -- the loaded packages and their .bo hashes, for the .ba capture
+    let cap_imports = [ (i, h) | (i, (h, _)) <- M.toList hashmap ]
     let gen :: (IPackage HeapData, Bool) -> [WrapInfo] -> IO (IPackage HeapData, Bool)
         gen (im, !success) []  = return (im, success)
         gen (im, !success) (wi@(WrapInfo { mod_nm = i, wrapped_mod = i' }) : xs) = do
@@ -982,6 +990,7 @@ compilePackage
                   def <- genModule errh wi fwrapper flags dumpnames'
                              prefix (getIdBaseString pkgId)
                              internalSymt alldefs elabATFCache (getDef im i')
+                             cap_imports
                   return (def, True)
                 ex_comp s = do
                   hFlush stdout >> hPutStr stderr s
@@ -1240,6 +1249,7 @@ genModule ::
     M.Map Id (IExpr HeapData) ->
     IATFCache ->
     IDef HeapData ->
+    [(Id, String)] -> -- imported packages and their .bo hashes (capture)
     IO (CDefn)
 
 -- [IDef HeapData], VSchedInfo, VPathInfo, VWireInfo, [VFieldInfo], [VPort])
@@ -1254,7 +1264,8 @@ genModule
     symt
     alldefs
     atf_cache
-    def  =
+    def
+    cap_imports =
 
   do
     let pps = wi_prags wi
@@ -1296,7 +1307,7 @@ genModule
     start flags DFinline
     let imod_inline@(IModule { imod_interface = ifc }) =
             if inlineISyntax flags
-            then (iInline (inlineSimple flags) imod_fmt)
+            then (iInline stInline (inlineSimple flags) imod_fmt)
             else imod_fmt
     iMCheck flags symt imod_inline "inline"
     t <- dump errh flags t DFinline dumpnames imod_inline
@@ -1416,7 +1427,7 @@ genModule
                     t <- if (genABin flags)
                          then writeABinSchedErr errh pps flags dumpnames t
                                   prefix modstr srcName (orig_cqt wi)
-                                  schedule_info amod_clean
+                                  schedule_info amod_clean cap_imports
                          else return t
                     exitFail errh
     t <- dump errh flags t DFschedule dumpnames (asi_schedule schedule_info)
@@ -1515,21 +1526,21 @@ genModule
     --           XXX it would be nice if the Bluesim backend had the same info
     -- * vprog = the Verilog data structure, for recording in the .ba file,
     --           so that it's available to bluetcl
-    (t, veriPortProps, vprog)
+    (t, veriPortProps, vprog, netcap)
         <- if (backend flags == Just Verilog)
-           then do (t', ips, v)
+           then do (t', ips, v, nc)
                        <- genModuleVerilog
                              errh pps flags dumpnames t prefix modstr
                              blurb methodConflictBlurb methodConflictBVI
                              vPathInfo sched_info'' amod_final
-                   return (t', ips, Just v)
-           else return (t, [], Nothing)
+                   return (t', ips, Just v, Just nc)
+           else return (t, [], Nothing, Nothing)
 
     t <- if (genABin flags)
          then writeABin errh pps flags dumpnames t prefix
                   modstr srcName (orig_cqt wi)
                   sched_info'' methodConflict vPathInfo
-                  amod_final vprog
+                  amod_final vprog cap_imports netcap
          else return t
 
     -- Wrapper generation
@@ -1558,9 +1569,10 @@ genModule
 writeABin :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
              String -> String -> String -> CQType ->
              AScheduleInfo -> MethodDumpInfo -> VPathInfo ->
-             APackage -> Maybe VProgram -> IO (TimeInfo)
+             APackage -> Maybe VProgram -> [(Id, String)] -> Maybe NetLive ->
+             IO (TimeInfo)
 writeABin errh pps flags dumpnames t prefix modstr srcName oqt
-          sched_info methodConflict vPathInfo amod vprog =
+          sched_info methodConflict vPathInfo amod vprog cap_imports netcap =
     do
        start flags DFwriteABin
 
@@ -1599,8 +1611,12 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
                           abmi_pathinfo = vPathInfo,
                           abmi_flags       = storedFlags,
                           abmi_vprogram    = if (genABinVerilog flags)
-                                             then vprog else Nothing
+                                             then vprog else Nothing,
+                          -- written last, when the fields above are
+                          abmi_capture     = freezeCapture perturbMask capRemap
+                                               cap_imports amod_for_abin netcap
                      }
+           capRemap = remapPositionPath pwd (remapPathPrefix flags)
            abin = ABinMod modinfo (bscVersionStr True)
        genABinFile errh remapP afilename abin
        unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
@@ -1609,9 +1625,9 @@ writeABin errh pps flags dumpnames t prefix modstr srcName oqt
 
 writeABinSchedErr :: ErrorHandle -> [PProp] -> Flags -> DumpNames -> TimeInfo ->
                      String -> String -> String -> CQType ->
-                     AScheduleErrInfo -> APackage -> IO (TimeInfo)
+                     AScheduleErrInfo -> APackage -> [(Id, String)] -> IO (TimeInfo)
 writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
-                  sched_info amod =
+                  sched_info amod cap_imports =
     do
        start flags DFwriteABin
 
@@ -1633,8 +1649,11 @@ writeABinSchedErr errh pps flags dumpnames t prefix modstr srcName oqt
                           abmsei_aschederrinfo = sched_info,
                           abmsei_pps           = pps,
                           abmsei_oqt           = oqt,
-                          abmsei_flags         = storedFlags
+                          abmsei_flags         = storedFlags,
+                          abmsei_capture       = freezeCapture perturbMask capRemap
+                                                   cap_imports amod Nothing
                      }
+           capRemap = remapPositionPath pwd (remapPathPrefix flags)
            abin = ABinModSchedErr modinfo (bscVersionStr True)
        genABinFile errh remapP afilename abin
        unless (quiet flags) $ putStrLnF $ abinPrintPrefix ++ afilename_rel
@@ -1659,7 +1678,8 @@ genModuleVerilog :: ErrorHandle
                  -> APackage
                  -> IO (TimeInfo,
                         [VPort],   -- port properties for the import-BVI
-                        VProgram)  -- generated Verilog
+                        VProgram,  -- generated Verilog
+                        NetLive)   -- the capture's net names
 genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                  blurb methodConflictBlurb methodConflictBVI vPathInfo scheduleInfo
                  atsPackage =
@@ -1681,7 +1701,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Generate muxes etc.
        start flags DFastate
-       asmod <- aState errh flags pprops scheduleInfo atsPackage
+       asmod <- netStepFrom stAState atsPackage <$>
+                  aState errh flags pprops scheduleInfo atsPackage
        -- after aState, method calls should no longer exist
        asMethCheck flags asmod "astate"
        t <- dump errh flags t DFastate dumpnames asmod
@@ -1701,7 +1722,8 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Inline CReg modules (replacing with Reg modules)
        start flags DFcreg
        let asmodNoCReg
-               | removeCReg flags = aInlineCReg asmodNoWires
+               | removeCReg flags = netStep stInlineCReg asmodNoWires
+                                            (aInlineCReg asmodNoWires)
                | otherwise = asmodNoWires
        asCheck flags asmodNoCReg "ainlinecreg"
        t <- dump errh flags t DFcreg dumpnames asmodNoCReg
@@ -1717,7 +1739,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- drop unused defs
        start flags DFadropdefs
-       let adropmod = aDropDefs armod
+       let adropmod = netStepDropped stADropDefs armod (aDropDefs armod)
        asCheck flags adropmod "adropdefs"
        t <- dump errh flags t DFadropdefs dumpnames adropmod
        stats flags DFadropdefs adropmod
@@ -1731,7 +1753,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Expand some primitives
        start flags DFsynthesize
-       let asynmod = (aSynthesize flags aomod)
+       let asynmod = netStepCreated stSynthesize aomod (aSynthesize flags aomod)
        asCheck flags asynmod "asynthesize"
        -- Check that referenced signal names exist
        asSignalCheck flags asynmod "synthesize"
@@ -1740,7 +1762,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFveriquirks
-       let aqmod = aVeriQuirks flags asynmod
+       let aqmod = netStepCreated stVeriQuirks asynmod (aVeriQuirks flags asynmod)
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))
@@ -1750,7 +1772,7 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
 
        -- Transform to adapt to Verilog quirks
        start flags DFfinalcleanup
-       let aumod =  finalCleanup flags aqmod
+       let aumod = netStepCreated stFinalCleanup aqmod (finalCleanup flags aqmod)
        -- this check is too strict on plus operator output size
        -- XXX fix the check, don't disable it
        when (not (keepAddSize flags))
@@ -1765,14 +1787,14 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
        -- Generate Verilog
        start flags DFverilog
        -- This is monadic because it can report an error
-       vprog0 <- aVerilog errh flags pprops aumod ff_map
+       (vprog0, vrenames) <- aVerilog errh flags pprops aumod ff_map
        t <- dump errh flags t DFverilog dumpnames vprog0
 
        -- Remove dollar signs from Verilog identifiers
        start flags DFverilogDollar
-       let vprog = if (removeVerilogDollar flags)
-                   then (removeDollarsFromVerilog vprog0)
-                   else vprog0
+       let (vprog, dollar_map)
+               | removeVerilogDollar flags = removeDollarsFromVerilogMap vprog0
+               | otherwise = (vprog0, M.empty)
        t <- dump errh flags t DFverilogDollar dumpnames vprog
 
        -- Generate DPI wrapper C files for any polymorphic imports.  This is
@@ -1792,10 +1814,16 @@ genModuleVerilog errh pprops flags dumpnames time0 prefix moduleName
                          vprog
        t <- dump errh flags t DFwriteVerilog dumpnames vfilenames
 
+       -- the capture's net names, forced here (after the Verilog is
+       -- written) so that every compile, not only a .ba writer, runs it
+       let netcap = netLedger vprog dollar_map vrenames aumod
+       netcap `deepseq` return ()
+
        -- Return
        -- * the port properties (to be included in the import-BVI)
        -- * the Verilog structure (for accessing in bluetcl)
-       return (t, ips, vprog)
+       -- * the capture's net names
+       return (t, ips, vprog, netcap)
 
 
 -- Write a Verilog program to file (along with its use file)

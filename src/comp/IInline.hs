@@ -1,4 +1,4 @@
-module IInline(iInline, iSortDs) where
+module IInline(iInline, iSortDs, iValVars) where
 import Data.List(group, sort, nub, foldl')
 import Util
 import qualified Data.Set as S
@@ -13,11 +13,15 @@ import ISyntaxUtil(irulesMap, iDefsMap)
 import IInlineUtil(iSubst, iSubstIfc)
 import Prim
 import Data.Maybe(catMaybes)
+import CaptureLive(Cap(..), capOf, CapTable, HostL(..),
+                   capMerge, capGone, capDead, viaInlineAlias, viaAtom, viaInline,
+                   kindInner, kindConst)
 -- import Debug.Trace(trace)
 
 
-iInline :: Bool -> IModule a -> IModule a
-iInline inlSimp = iInline1 . iInlineS inlSimp -- . iSortDs
+-- The stage is the capture's (CaptureLive), for the defs iInline1 drops.
+iInline :: Int -> Bool -> IModule a -> IModule a
+iInline stage inlSimp = iInline1 stage . iInlineS inlSimp -- . iSortDs
 --iInline inlSimp = iInlineAll
 
 -- Sort definitions in dependency order
@@ -85,14 +89,14 @@ varVars (_, IStateVar { isv_iargs = es }) =
         in  vs ++ vs                -- XXX
 
 -- Inline definitions used once
-iInline1 :: IModule a -> IModule a
-iInline1 = iInlineUseLimit 1
+iInline1 :: Int -> IModule a -> IModule a
+iInline1 stage = iInlineUseLimit stage 1
 
 -- iInlineAll :: IModule a -> IModule a
 -- iInlineAll = iInlineUseLimit 100000
 
-iInlineUseLimit :: Int -> IModule a -> IModule a
-iInlineUseLimit use_limit
+iInlineUseLimit :: Int -> Int -> IModule a -> IModule a
+iInlineUseLimit stage use_limit
                 imod@(IModule { imod_state_insts = itvs,
                                 imod_local_defs  = ds,
                                 imod_rules       = rs,
@@ -147,11 +151,82 @@ iInlineUseLimit use_limit
                       | (name, sv@(IStateVar { isv_iargs = es }))
                             <- imod_state_insts imod,
                         let es' = map (iSubst onemap dmap) es ]
+        cap = inlineCapture stage get uses ds ds'' imod
+                            (capOf (imod_capture imod))
         new_imod = imod { imod_local_defs = ds'',
                           imod_rules = rs',
                           imod_interface = ifc',
-                          imod_state_insts = state_vars' }
+                          imod_state_insts = state_vars',
+                          imod_capture = Cap cap }
     in new_imod
+
+-- The capture's view of iInlineUseLimit: each def it drops was inlined
+-- into its one use (an alias of the def or port it names, a constant, or
+-- an inner record of the user) or was unused.  Reads the dropped defs'
+-- bodies only as deep as the use count's iValVars did, and the users'
+-- references as that count found them.
+inlineCapture :: Int -> (Id -> IExpr a) -> M.Map Id Int ->
+                 [IDef a] -> [IDef a] -> IModule a -> CapTable -> CapTable
+inlineCapture stage get uses ds ds'' imod t0 =
+    let kept = S.fromList [ i | IDef i _ _ _ <- ds'' ]
+        gone = dedup S.empty [ i | IDef i _ _ _ <- ds, not (S.member i kept) ]
+        dedup _ [] = []
+        dedup seen (i:is) | S.member i seen = dedup seen is
+                          | otherwise = i : dedup (S.insert i seen) is
+        -- a dropped def with a use was inlined (production keeps one with
+        -- more uses than the limit, or a used keep Id); read from the
+        -- counts, so that isKeepId is never read here
+        inlined i = M.member i uses
+        inners = S.fromList [ i | i <- gone, inlined i, not (isAtom (get i)) ]
+        isAtom (ICon _ (ICValue {})) = True
+        isAtom (ICon _ _) = True
+        isAtom _ = False
+        -- the user of each inner def
+        users = [ (HLId u, [get u]) | u <- M.keys uses ] ++
+                [ (HLId (irule_name r), [irule_pred r, irule_body r])
+                | let IRules _ rs = imod_rules imod, r <- rs ] ++
+                [ (HLId i, maybe [] ((:[]) . fst) me ++
+                           concat [ [irule_pred r, irule_body r]
+                                  | Just (IRules _ rs) <- [mrs], r <- rs ])
+                | IEFace i _ me mrs _ _ <- imod_interface imod ] ++
+                [ (HLInst inst k, [e])
+                | (inst, IStateVar { isv_iargs = es }) <- imod_state_insts imod,
+                  (k, e) <- zip [0..] es ]
+        hosts | S.null inners = M.empty
+              | otherwise = M.fromList [ (r, h) | (h, es) <- users, e <- es,
+                                                 r <- iValVars e, S.member r inners ]
+        -- an alias of an alias that also went: the one that stayed
+        aliasOf = M.fromList [ (i, j) | i <- gone, inlined i,
+                                        ICon j (ICValue {}) <- [get i] ]
+        resolve :: Int -> Id -> Id
+        resolve n j | n > 64 = j
+                    | otherwise = case M.lookup j aliasOf of
+                                    Just k | k /= j -> resolve (n + 1) k
+                                    _ -> j
+        -- the merges first, so that a name merged into a def that went
+        -- too leaves with that def's record
+        merge t i
+          | not (inlined i) = t
+          | otherwise =
+              case get i of
+                ICon j (ICValue {}) -> capMerge stage viaInlineAlias (resolve 0 j) [i] t
+                ICon p ic | isPort ic -> capMerge stage viaAtom p [i] t
+                _ -> t
+        leave t i
+          | not (inlined i) = capDead stage i t
+          | otherwise =
+              case get i of
+                ICon _ (ICValue {}) -> t
+                ICon _ ic | isPort ic -> t
+                ICon _ _ -> capGone kindConst stage viaAtom i [] t
+                _ -> capGone kindInner stage viaInline i
+                             (maybe [] (:[]) (M.lookup i hosts)) t
+        isPort (ICModPort {}) = True
+        isPort (ICMethArg {}) = True
+        isPort (ICModParam {}) = True
+        isPort (ICStateVar {}) = True
+        isPort _ = False
+    in  foldl' leave (foldl' merge t0 gone) gone
 
 -- The references in e, left to right.  The list is built onto an
 -- accumulator: appending each subterm's list copied it once per enclosing

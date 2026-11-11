@@ -1,7 +1,12 @@
+{-# OPTIONS_GHC -Werror=missing-fields #-}
 module AConv (aConv, aTypeConv, isLocalAId) where
 
 import Util(itos, headOrErr, initOrErr, lastOrErr, log2, concatMapM, makePairs)
 import qualified Data.Map as M
+import qualified Data.Set as S
+import CaptureLive(Cap(..), capOf, CapTable, NameRefL(..), NameFact(..),
+                   capMerge, capMergeFacts, capGone, stAConv,
+                   capDead, viaCse, viaCseName, viaAtom, kindConst)
 import Control.Monad(when, liftM, forM, zipWithM)
 import Control.Monad.Except(throwError)
 import Control.Monad.State(StateT, runStateT, gets, get, put)
@@ -27,7 +32,7 @@ import ASyntax
 import ASyntaxUtil
 import GenWrapUtils(isGenId, dropGenSuffixId)
 import Prim
-import Data.List(genericLength, nub)
+import Data.List(genericLength, nub, foldl')
 import Data.Maybe(fromMaybe)
 import VModInfo(lookupOutputClockWires, lookupOutputResetWire,
                 lookupIfcInoutWire, vArgs, VArgInfo(..))
@@ -183,7 +188,7 @@ checkForeignInRules method rs =
 
 
 aDo :: IModule a -> M APackage
-aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcalNo cmap) = do
+aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcalNo cmap icap) = do
         flags <- getFlags
 
         -- AVInst keeps the types of method ports
@@ -326,7 +331,44 @@ aDo imod@(IModule mi fmod be wi ps iks its clks rsts itvs pts idefs rs ifc ffcal
                             apkg_interface = aSubst subst_map aifc,
                             apkg_inst_comments = cmap,
                             apkg_inst_tree = mkInstTree imod,
-                            apkg_proof_obligations = [] })
+                            apkg_proof_obligations = [],
+                            apkg_capture = Cap (aconvCapture idefs defMap rename_map
+                                                    local_defs (capOf icap)) })
+
+-- The capture's view of AConv (CaptureLive).  A def that is not in the
+-- package was CSE'd into the def its group picked (an unpicked CSE name is
+-- kept on the picked def), converted to a port, parameter or constant, or
+-- never reached (dead).  Reads each def's converted head, which the CSE
+-- fixup above matched, and the rename map, which every converted
+-- reference consulted.
+aconvCapture :: [IDef a] -> IEDefMap -> M.Map AId (AType, AId) -> [ADef] ->
+                CapTable -> CapTable
+aconvCapture idefs defMap rename_map local_defs t0 =
+    let out = S.fromList [ i | ADef i _ _ _ <- local_defs ]
+        rename n = maybe n snd (M.lookup n rename_map)
+        dedup _ [] = []
+        dedup seen (i:is) | S.member i seen = dedup seen is
+                          | otherwise = i : dedup (S.insert i seen) is
+        one t i
+          | S.member i out = t
+          | otherwise =
+              case M.lookup i defMap of
+                Nothing -> capDead stAConv i t
+                Just (e, _) ->
+                  case e of
+                    ASDef _ n -> capMerge stAConv viaCse (rename n) [i] t
+                    ASPort _ p -> capMerge stAConv viaAtom p [i] t
+                    ASParam _ p -> capMerge stAConv viaAtom p [i] t
+                    ASInt {} -> capGone kindConst stAConv viaAtom i [] t
+                    ASReal {} -> capGone kindConst stAConv viaAtom i [] t
+                    ASStr {} -> capGone kindConst stAConv viaAtom i [] t
+                    ASAny {} -> capGone kindConst stAConv viaAtom i [] t
+                    _ -> capDead stAConv i t
+        t1 = foldl' one t0 (dedup S.empty [ i | IDef i _ _ _ <- idefs ])
+        -- a group that took a def's name keeps its CSE name
+        cse_names = [ (new, NameFact (DefName cse) viaCseName stAConv)
+                    | (cse, (_, new)) <- M.toList rename_map, new /= cse ]
+    in  foldl' (\t (i, f) -> capMergeFacts i [f] t) t1 cse_names
 
 aAbstractInput :: IAbstractInput -> AAbstractInput
 aAbstractInput (IAI_Port (i,t)) = (AAI_Port (i, aTypeConv i t))

@@ -83,6 +83,10 @@ import qualified IfcBetterInfo as BetterInfo
 import ITransform(iTransExpr)
 
 import IOUtil(progArgs)
+import CaptureLive(Cap(..), CapTable, NameRefL(..), NameFact(..),
+                   capFromRecs, capMergeFacts, capGoneFacts, capStat, stIExpand,
+                   viaSelf, viaEqPtrs1, viaEqPtrs2, viaPDefAtom, kindConst,
+                   perturbing, ptNames, rotate)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
 
@@ -326,7 +330,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
       -- a property we expect in IModule and which the function "pDef"
       -- below also relies on (since "pDef" and "m" are recursively built,
       -- the lazy knot terminates only on acyclic references)
-      (cse_ptrs, ptr_map) = eqPtrs iheap ptrs0
+      (cse_ptrs, ptr_map, ptrm0) = eqPtrs iheap ptrs0
       -- function for translating old pointers to new ones
       ptran p = IM.findWithDefault p p ptr_map
 
@@ -409,12 +413,16 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
             then Just $ fromJustOrErr "iExpand: backend" (backend flags)
             else Nothing
 
+      -- the names each def keeps (forced by the DFexpanded dump, after
+      -- the defs, rules and interface)
+      imod_cap = iExpandCapture iheap ptr_map ptrm0 ptr_info args
+
       -- the expanded module
       imod0 = IModule mi is_noinlined_func mbe wi [] iks args
                      (go_clock_domains go) (go_resets go)
                      insts' (go_port_types go)
                      defs rules_cleanup ifc'
-                     (go_ffcallNo go) comments_map
+                     (go_ffcallNo go) comments_map (Cap imod_cap)
       -- if preserving method conditions, then remove the book-keeping info
       imod = removeInlinedPositions flags imod0
 
@@ -715,8 +723,9 @@ removeInlinedPositions flags imod0 =
 -- 1. a tsorted list of the heap pointers (used to build the output module)
 -- 2. a heap-reference to heap-reference map that seems to be used to do
 -- some sort of heap compression and/or CSE (is this still useful)?
+-- The third output is pass 1's map, for the capture (iExpandCapture).
 eqPtrs :: IM.IntMap HeapCell -> [HeapPointer] ->
-          ([HeapPointer], IM.IntMap HeapPointer)
+          ([HeapPointer], IM.IntMap HeapPointer, IM.IntMap HeapPointer)
 eqPtrs heap ptrs =
     let getHeapCell p = case (IM.lookup p heap) of
                         Just cell -> cell
@@ -849,7 +858,77 @@ eqPtrs heap ptrs =
     in  --traces (show (length ptrs, length (M.elems dsm))) $
         --traces (show (IM.toList ptrm)) $
         --traces (show (M.elems dsm)) $
-        (M.elems dsm, ptrm)
+        (M.elems dsm, ptrm, ptrm0)
+
+-- The capture's names at the end of elaboration (CaptureLive).  Each def
+-- made from a class of CSE-equal cells keeps the names of the cells merged
+-- into it, by pointer and raw cell name (the def names those cells would
+-- have had are never built).  A class that pDef inlines instead goes to the
+-- port it reads, or becomes a constant.  Reads only what eqPtrs and pDef
+-- forced: the cells' constructors and names (deepseq'd when the cell was
+-- made), the pass maps, and the head and IConInfo of each inlined value,
+-- which hToDef matched; the def Ids are pDef's own, forced by the module's
+-- dump ahead of the capture field.
+iExpandCapture :: IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
+                  IM.IntMap HeapPointer -> [(HeapPointer, (HExpr, Maybe HDef))] ->
+                  [IAbstractInput] -> CapTable
+iExpandCapture iheap ptr_map ptrm0 ptr_info args =
+    let pertN = perturbing ptNames
+        cellName p = case IM.lookup p iheap of
+                       Just cell -> hc_name cell
+                       Nothing -> Nothing
+        cellExpr p = case IM.lookup p iheap of
+                       Just (HNF { hc_pexpr = P _ e }) -> Just e
+                       _ -> Nothing
+        -- canonical -> the pointers merged into it, ascending (consing in
+        -- descending order: appending would be quadratic in a class's size)
+        cls = IM.fromListWith (++) [ (c, [q]) | (q, c) <- IM.toDescList ptr_map ]
+        passVia q = if IM.member q ptrm0 /= pertN then viaEqPtrs1 else viaEqPtrs2
+        facts selfVia c =
+            let qs = IM.findWithDefault [] c cls
+                ps = c : qs
+                names = map cellName ps
+                names' = if pertN then rotate names else names
+            in  zipWith3 (\p n v -> NameFact (HeapName p n) v stIExpand)
+                         ps names' (selfVia : map passVia qs)
+        -- defs that absorbed a class
+        def_recs = [ (i, facts viaSelf c)
+                   | (c, (_, Just (IDef i _ _ _))) <- ptr_info, IM.member c cls ]
+        def_recs' = if pertN
+                    then zip (rotate (map fst def_recs)) (map snd def_recs)
+                    else def_recs
+        -- the module's ports, for the perturbed alias target
+        port_ids = [ i | IAI_Port (i, _) <- args ]
+        other_port pid = case dropWhile (/= pid) port_ids of
+                           (_ : q : _) -> q
+                           _ -> case port_ids of
+                                  (q : _) -> q
+                                  [] -> pid
+        -- inlined classes: every named or merged one
+        inlined = [ c | (c, (_, Nothing)) <- ptr_info,
+                        IM.member c cls || isJust (cellName c) ]
+        addInlined t c =
+            let ns = facts viaPDefAtom c
+            in  case cellExpr c of
+                  Just (ICon pid ic) | isPortCon ic ->
+                      capMergeFacts (if pertN then other_port pid else pid) ns t
+                  Just (ICon _ ic) | isConstCon ic ->
+                      capGoneFacts kindConst stIExpand viaPDefAtom ns [] t
+                  _ -> capStat stIExpand 1 (length ns) t
+        isPortCon (ICModPort {}) = True
+        isPortCon (ICMethArg {}) = True
+        isPortCon (ICModParam {}) = True
+        isPortCon (ICStateVar {}) = True
+        isPortCon _ = False
+        isConstCon (ICInt {}) = True
+        isConstCon (ICReal {}) = True
+        isConstCon (ICString {}) = True
+        isConstCon (ICChar {}) = True
+        isConstCon (ICUndet {}) = True
+        isConstCon _ = False
+        t0 = capFromRecs def_recs'
+        t1 = foldl' addInlined t0 inlined
+    in  capStat stIExpand 0 (IM.size ptr_map) t1
 
 
 -----------------------------------------------------------------------------

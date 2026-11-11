@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Werror=missing-fields #-}
 
 --XXX {-# OPTIONS_GHC -fwarn-name-shadowing -fwarn-missing-signatures #-}
 
@@ -5,6 +6,7 @@ module AState(
               aState,
               ) where
 
+import CaptureLive(Cap(..), emptyCapTable)
 import qualified Data.Map as M
 import qualified Data.Set as S
 
@@ -593,7 +595,9 @@ aState' flags pps schedule_info apkg = do
                            aspkg_foreign_calls   = fblocks' ,
                            aspkg_inlined_ports   = [],
                            aspkg_signal_info     = signal_info,
-                           aspkg_comment_info    = comment_info }
+                           aspkg_comment_info    = comment_info,
+                           -- the Verilog backend fills it (CaptureHooks)
+                           aspkg_capture         = Cap emptyCapTable }
 
     -- does the number of uses (n) exceed the number of available ports (p)?
     let overused_ports = [ (o,m,k,n) | ((o,m),n) <- omns,

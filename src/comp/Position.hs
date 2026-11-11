@@ -31,10 +31,17 @@ mkPositionFull f l c is_stdlib = Position f l c is_stdlib
 remapPositionFile :: FilePath -> [(String, String)] -> Bool -> FString -> FString
 remapPositionFile _ [] _ f = f
 remapPositionFile pwd prefixes is_stdlib f =
+    mkFString (remapPositionPath pwd prefixes is_stdlib (getFString f))
+
+-- The same remap on a plain file name, which interns nothing (the .ba
+-- capture's file table stores what Bin Position would store)
+remapPositionPath :: FilePath -> [(String, String)] -> Bool -> FilePath -> FilePath
+remapPositionPath _ [] _ f = f
+remapPositionPath pwd prefixes is_stdlib f =
     let -- a library position's "." is where the library was built
         remap = if is_stdlib then remapPath prefixes
                              else remapEncodedPath pwd prefixes
-    in  mkFString (remap (getFString f))
+    in  remap f
 
 instance Eq Position where
   (Position f1 l1 c1 _) == (Position f2 l2 c2 _) = (f1, l1, c1) == (f2, l2, c2)

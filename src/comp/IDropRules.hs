@@ -18,6 +18,8 @@ import Prim
 import VModInfo(VFieldInfo(..))
 import Util(fromJustOrErr)
 import PPrint
+import CaptureLive(Cap(..), capOf, CapTable, NameRefL(..), NameFact(..),
+                   capGoneFacts, stIDropRules, viaDrop, kindDead)
 
 
 -- Handle rules that don't do anything,
@@ -42,7 +44,16 @@ iDropRules errh flags imod0 = do
   imod1 <- dropFalseRules errh flags imod0
   imod2 <- dropEmptyRules errh flags imod1
   warnUndetPreds errh flags imod2
-  return imod2
+  return (imod2 { imod_capture = Cap (dropRulesCapture imod0 imod2) })
+
+-- The capture records the names of the rules dropped (CaptureLive).
+dropRulesCapture :: IModule a -> IModule a -> CapTable
+dropRulesCapture imod0 imod2 =
+  let ruleIds m = let IRules _ rs = imod_rules m in map irule_name rs
+      kept = S.fromList (ruleIds imod2)
+      gone = [ NameFact (DefName r) viaDrop stIDropRules
+             | r <- ruleIds imod0, not (S.member r kept) ]
+  in  capGoneFacts kindDead stIDropRules viaDrop gone [] (capOf (imod_capture imod0))
 
 dropFalseRules :: ErrorHandle -> Flags -> IModule a -> IO (IModule a)
 dropFalseRules errh flags imod@(IModule { imod_rules = (IRules sps rs),

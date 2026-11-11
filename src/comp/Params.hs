@@ -7,6 +7,8 @@ module Params(
              ) where
 
 import qualified Data.Map as M
+import qualified Data.Set as S
+import Data.List(foldl')
 import Error(internalError, EMsg, ErrMsg(..), ErrorHandle, bsError)
 import PPrint
 import Id
@@ -15,6 +17,7 @@ import ISyntax
 import ASyntax
 import VModInfo
 import Prim
+import CaptureLive(Cap(..), capOf, CapTable, HostL(..), capCopied, stIParams, viaParam)
 
 -- ==========
 
@@ -48,7 +51,9 @@ iParams errh imod =
         dmap = M.fromList [ (i, iSubst dmap e) | IDef i _ e _ <- ds ]
 
         ss' = map (inlineParams dmap) ss
-        imod' = imod { imod_state_insts = ss' }
+        imod' = imod { imod_state_insts = ss',
+                       imod_capture =
+                         Cap (paramsCapture ds ss (capOf (imod_capture imod))) }
 
         emsgs = concatMap checkParams ss'
     in
@@ -75,6 +80,29 @@ inlineParams dmap (inst, svar) =
     in
         (inst, svar')
 
+
+-- The capture's view of iParams (CaptureLive): each def whose value was
+-- inlined into a parameter argument is recorded as an inner record of that
+-- instance argument (the def itself stays).  Walks the arguments and the
+-- bodies they reach as inlineParams' iSubst does, which the DFiparams dump
+-- forced.
+paramsCapture :: [IDef a] -> [(Id, IStateVar a)] -> CapTable -> CapTable
+paramsCapture ds ss t0 =
+    let bodies = M.fromList [ (i, e) | IDef i _ e _ <- ds ]
+        reach seen (IAps f _ es) = foldl' reach (reach seen f) es
+        reach seen (ICon i _)
+            | S.member i seen = seen
+            | otherwise = case M.lookup i bodies of
+                            Just e -> reach (S.insert i seen) e
+                            Nothing -> seen
+        reach seen _ = seen
+        uses = [ (d, HLInst inst k)
+               | (inst, svar) <- ss,
+                 (k, (Param {}, e)) <- zip [0..] (zip (vArgs (isv_vmi svar))
+                                                      (isv_iargs svar)),
+                 d <- S.toList (reach S.empty e) ]
+        hosts = M.map reverse (M.fromListWith (++) [ (d, [h]) | (d, h) <- uses ])
+    in  foldl' (\t (d, hs) -> capCopied stIParams viaParam d hs t) t0 (M.toList hosts)
 
 checkParams :: (Id, IStateVar a) -> [EMsg]
 checkParams (inst, svar) =
