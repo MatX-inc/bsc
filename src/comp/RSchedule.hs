@@ -25,6 +25,7 @@ module RSchedule(rSchedule, RAT, ratToNestedLists) where
 
 import Data.List((\\),partition,sortBy)
 import Data.Maybe(maybeToList)
+import Data.Ord(comparing)
 import Control.Monad(when)
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -59,9 +60,19 @@ trace_uugraph = "-trace-uugraph" `elem` progArgs
 type RAT = M.Map MethodId (M.Map UniqueUse Integer) -- resource allocation table
 
 -- hack to avoid sorting order differences after switching from a list to a map
+--
+-- Each entry is rendered once, lazily, into a key all its comparisons share.
+-- This sorts and interns as rendering both entries in every comparison did:
+-- the answers are the same, so the stable sortBy makes the same comparisons;
+-- a key is first forced in the comparison that first rendered its entry; and
+-- the key is ppString without its init, which stays in the comparison, so it
+-- compiles as before and reaches the characters in the same order (with -O,
+-- the second entry's join2ids first).  Re-rendering only redid join2ids,
+-- re-interning spellings already interned.  Do not force the keys up front
+-- (sortOn): that would move the interning.
 sortRatList :: [(MethodId, [(UniqueUse, Integer)])] -> [(MethodId, [(UniqueUse, Integer)])]
-sortRatList = sortBy cmp
-    where cmp x y = compare (ppString x) (ppString y)
+sortRatList = map snd . sortBy (comparing (init . fst)) . map (\x -> (render x, x))
+    where render = pretty 100000 100000 . pPrint PDReadable 0
 
 ratToNestedLists :: RAT -> [(MethodId, [(UniqueUse, Integer)])]
 ratToNestedLists = sortRatList . M.toList . M.map M.toList
