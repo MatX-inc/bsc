@@ -189,6 +189,10 @@ data Class
             funDeps2 :: [[Maybe Bool]],
             inputPositions :: [Int],      -- pure-input positions for PredTrie (pureInputPositions funDeps (length csig))
                                           -- empty when all positions are outputs: trie degenerates to a flat list
+            -- The instance fields below are as of the table the record
+            -- was built for; a Pred's embedded record can be older than
+            -- the current table, so the typechecker reads them through
+            -- TCMisc.currentClass.
             genInsts :: [TyVar] -> Maybe [TyVar] -> Pred -> [Inst],
             -- the instances of genInsts, in its order, each marked as one
             -- to try or as one the lookup ruled out: an instance with a

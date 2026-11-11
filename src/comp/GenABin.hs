@@ -570,7 +570,7 @@ instance Bin Flags where
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
                 a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138 a_139
-                a_140 _frontEndMode) =
+                a_140 _frontEndMode _rebuildSymTab) =
        do
           wr_chunk0; wr_chunk1; wr_chunk2; wr_chunk3; wr_chunk4;
           wr_chunk5; wr_chunk6; wr_chunk7; wr_chunk8; wr_chunk9
@@ -673,7 +673,7 @@ instance Bin Flags where
                 a_110 a_111 a_112 a_113 a_114 a_115 a_116 a_117 a_118 a_119
                 a_120 a_121 a_122 a_123 a_124 a_125 a_126 a_127 a_128 a_129
                 a_130 a_131 a_132 a_133 a_134 a_135 a_136 a_137 a_138 a_139
-                a_140 FullCompile)
+                a_140 FullCompile False)
       where
         {-# NOINLINE rd_chunk0 #-}
         rd_chunk0 =

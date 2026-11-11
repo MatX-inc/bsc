@@ -1731,6 +1731,17 @@ instance PPrint Reduction where
     pPrint d p (Reduction qs sb us minst mpkg _) =
         pPrint d p ((qs, sb, us), (minst, mpkg))
 
+-- The predicate's class as the current symbol table has it.  A Pred
+-- embeds its Class by value, and a record built against an earlier table
+-- can lack the instances GenWrap and Deriving added since; only the
+-- instance fields can differ, so read instances through this.
+currentClass :: Class -> TI Class
+currentClass c = do
+    r <- getSymTab
+    return $ case findSClass r (name c) of
+               Just c' | name c' == name c -> c'
+               _ -> c
+
 reducePred :: [EPred] -> DVS -> VPred -> TI (Maybe Reduction)
 reducePred _eps dvs vp@(VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) = do
     countDP CReducePred 1
@@ -1874,7 +1885,8 @@ reducePred _eps dvs vp@(VPred w pp@(PredWithPositions pr@(IsIn c ts) pos anc)) =
                          sb''  = sb' { solvedClass = Just c }
                      return $ Just (Reduction qs sb'' fd_subst minst mpkg ns)
 
-    let cands = genCandidates c bound_tyvars dvs pr'
+    ic <- currentClass c
+    let cands = genCandidates ic bound_tyvars dvs pr'
     r <- f False cands
     rpTrace ("reducePred " ++ ppReadable (dvs, pr', [ i | Try i <- cands ], r)) $ return ()
     popSatStackContext
@@ -2032,7 +2044,8 @@ findFunDepConflict (VPred _ (PredWithPositions (IsIn c ts) pos _)) = do
                   Defer     -> walk is
                   Conflict  -> return (Just (pr', h))
                   Match _   -> return Nothing
-        walk (genInsts c bound_tyvars Nothing pr')
+        ic <- currentClass c
+        walk (genInsts ic bound_tyvars Nothing pr')
 
 dvsSub :: Subst -> DVS -> DVS
 dvsSub s dvs = dvs
@@ -3214,7 +3227,8 @@ isReduciblePred (VPred i pp@(PredWithPositions p@(IsIn c ts) pos anc)) = do
                             Conflict -> return False
                             Match () -> return True
                             _       -> g eps
-    let is' = genInsts c bvs Nothing p'
+    ic <- currentClass c
+    let is' = genInsts ic bvs Nothing p'
     r <- f False is'
     return r
 

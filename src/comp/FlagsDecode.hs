@@ -764,7 +764,8 @@ defaultFlags bluespecdir = Flags {
         warnMethodUrgency = True,
         warnOverlappingPatterns = True,
         warnUndetPred = False,
-        frontEndMode = FullCompile
+        frontEndMode = FullCompile,
+        rebuildSymTab = False
         }
 
 -- Default path value replaced in adjustFinalFlags
@@ -1669,6 +1670,10 @@ externalFlags = [
          (Toggle (\f x -> f {timeStamps=x}) (showIfTrue timeStamps),
           "include timestamps in generated files", Visible)),
 
+        ("rebuild-symtab",
+         (Toggle (\f x -> f {rebuildSymTab=x}) (showIfTrue rebuildSymTab),
+          "build each symbol table from scratch instead of extending the first", Hidden)),
+
         ("signature-only",
          (Toggle (\f x -> f {frontEndMode = if x then SignatureOnly else FullCompile})
                  (showIfTrue ((== SignatureOnly) . frontEndMode)),
@@ -2087,6 +2092,7 @@ showFlagsRaw flags =
           ("printFlagsRaw", show (printFlagsRaw flags)),
           ("promoteWarnings", show (promoteWarnings flags)),
           ("readableMux", show (readableMux flags)),
+          ("rebuildSymTab", show (rebuildSymTab flags)),
           ("redStepsMaxIntervals", show (redStepsMaxIntervals flags)),
           ("redStepsWarnInterval", show (redStepsWarnInterval flags)),
           ("relaxMethodEarliness", show (relaxMethodEarliness flags)),
