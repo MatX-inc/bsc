@@ -79,10 +79,13 @@ chkSubstOrder (S _ new_rhs) (S old_lhs _) =
 -- Add a newer substitution (ss1) to an older substitution (ss2).
 -- Any knowledge in ss1 is applied to ss2, and then the bindings are merged.
 --
+-- Map.intersection makes the comparisons Set.intersection of the two
+-- keysSets made, in the same order (containers 0.6.7: keysSet keeps the
+-- tree's shape, and the two intersections and splitMembers match), without
+-- building the key sets.
 (@@) :: Subst -> Subst -> Subst
 ss1@(S s1 _) @@ ss2@(S _ var_old) =
-    case (Set.null (Set.intersection (Map.keysSet var_old)
-                                     (Map.keysSet s1))) of
+    case (Map.null (Map.intersection var_old s1)) of
      True -> --no need to apply s1 to s2
              --trace ("no ap: " ++ ppReadable (ss1, ss2)) $
                 merge_sv ss1 ss2
