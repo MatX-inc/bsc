@@ -11,6 +11,8 @@ module CType(
   typeCanonWord, typeCanonWordNode,
   isGroundType, isNormalType, isGroundNode, isNormalNode,
   enableCanonIds, disableCanonIds, CTypeStat(..), ctypeStat, bumpCTypeStat, cTypeStats,
+  checkLetrecBinders,
+  checkEqByWord, checkCanonIds,
 
   -- ** Examining Types
   getTyVarId, getTypeKind,
@@ -64,14 +66,16 @@ import Prelude hiding ((<>))
 #endif
 
 import Data.Char(isDigit, chr)
-import Data.List(union)
+import Data.List(union, isPrefixOf, partition)
 import Data.Maybe
 import qualified Data.Generics as Generic
 import qualified Data.Map.Strict as M
 import qualified Data.IntMap.Strict as IM
+import qualified Data.Set as S
 import Data.IORef(IORef, newIORef, readIORef, writeIORef, modifyIORef',
                   atomicModifyIORef')
 import System.IO.Unsafe(unsafePerformIO, unsafeDupablePerformIO)
+import System.IO(hPutStrLn, stderr)
 import Control.Monad(when, unless)
 
 import Eval
@@ -88,7 +92,7 @@ import Pragma(IfcPragma)
 import TypeOps
 import PVPrint(PVPrint(..))
 import FStringCompat
-import SpeedyString(internCount)
+import SpeedyString(internCount, internedSince)
 import IOUtil(progArgs)
 
 -- Data structures
@@ -334,7 +338,7 @@ instance Ord TyCon where
 -- caller's TyCon untouched, so positions, kinds, sort payloads and Id
 -- properties stay exactly where the caller put them.  The word is a pure
 -- function of the node's structure under the structural Eq Type, so its
--- only uses are an equality shortcut (equal words <=> Eq-equal) and the
+-- only uses are an equality shortcut (equal words => Eq-equal) and the
 -- two flags:
 --
 --   ground: w >= 0.  No TVar, TGen or TDefMonad anywhere inside.
@@ -374,11 +378,56 @@ instance Ord TyCon where
 -- for each package it compiles (bsc -u compiles several in one process).
 -- From then on every TyCon Id reachable from a type is a symbol-table
 -- key, a Prelude PreId or a .bo-decoded Id whose strings the eager
--- string-table read already interned, so no interning moves.  The
--- intern_delta counter under -trace-ctype-stats witnesses this and must
--- stay 0.  Nodes built while the gate is shut carry -1: final for an
--- interior node (the typechecker rebuilds every spine it touches), but a
--- leaf's word is recomputed on demand by typeCanonWord, because the Type.hs
+-- string-table read already interned, so no type constructor's name is
+-- interned by a word computation.  Forcing a child thunk can still run
+-- typechecker code earlier than the thunk's consumer would (a
+-- substitution's TyVar comparisons, say), and that code interns two
+-- kinds of generated name: a fresh _tctyvarN, since Eq TyVar forces the
+-- Ids of two variables with equal numbers, and the _tctempN that a
+-- newTVar's lazy position retains (TIMonad: pos = getPosition x with x
+-- the value binder; id_pos is strict, so forcing the TyVar's Id forces
+-- the binder's Id and interns its name).  The witness that no output
+-- can have moved with them has three parts, under -trace-ctype-stats:
+--
+--   intern_other = 0: every string interned while a word was computed
+--     is exactly _tctyvarN or _tctempN (withInternDelta prints anything
+--     else).  This covers every user name, every TyStr literal, every
+--     PreString and the _tcdictN dictionary binders.
+--   letrec_offender = 0: no binder of a letrec group with more than
+--     one binder has a name interned while a word was computed
+--     (checkLetrecBinders, from IConv.iConvLet).  Two passes between
+--     TCheck and IExpand sort the binders of such a group with ties
+--     broken on Ord Id.  Simplify.selectSimple runs SCC.scc and
+--     SCC.tsort over a Cletrec's definitions, but only under
+--     -simplify-csyntax, which is off by default, and the order it
+--     leaves cannot survive anyway: SCC.ntsort sorts its input before
+--     building the queue it pops from.  So the emitted order is
+--     decided by iConvLet's SCC.tsort alone, which breaks in-degree
+--     ties on Ord Id: a binder interned early could reorder the
+--     emitted definitions, and IExpand's heap order and the generated
+--     names with it; a _tctempN in a one-binder group cannot.
+--   .bo identity with a -no-ctype-ids compile (canonids.exp): a
+--     _tctyvarN Id never decides an order in this process -- Ord TyVar
+--     compares the number first (user type variables share noTyVarNo
+--     and are compared by Id, but their names are interned at parse
+--     time, before the gate), and the Id leaves the TyVar only into
+--     IConv's ITVar, whose one order-sensitive container is the
+--     package's ATF cache, serialized into the .bo in key order.
+--
+-- intern_delta and intern_tctemp count the admitted _tctyvarN and
+-- _tctempN strings, and letrec_group the groups checked, for
+-- information.  The names do reach one output: the ECO capture's
+-- .intern snapshot serializes the whole string table, so an earlier or
+-- added name shifts the ids of the strings interned after it.  That is
+-- harmless: replay restores the table only to decode the .ba and never
+-- runs the typechecker, and a shift that keeps every other pair's
+-- relative order changes no Ord Id answer, so the capture's .ba is
+-- decoded-identical and its .eco-ast.bin, .eco-graph and .output-0.v
+-- byte-identical to a compile without words.
+--
+-- Nodes built while the gate is shut carry -1: final for an interior
+-- node (the typechecker rebuilds every spine it touches), but a leaf's
+-- word is recomputed on demand by typeCanonWord, because the Type.hs
 -- CAFs (tArrow, tBit, ...) are first forced before the gate and would
 -- otherwise refuse every arrow type.
 --
@@ -472,17 +521,74 @@ childWord (TCon_ w c) | w >= 0 = return w
                       | otherwise = bumpCTypeStat LeafRecompute >> leafWord c
 childWord _ = return (-1)
 
--- Under -trace-ctype-stats, the number of strings interned while an
--- action ran is accumulated into intern_delta (see Forcing above).
+-- Under -trace-ctype-stats, every string interned while an action ran
+-- is recorded in wordInterned and, the first time, counted by its
+-- spelling: a typechecker type variable (exactly _tctyvarN, TIMonad's
+-- enumId "tctyvar") in intern_delta, a typechecker value binder
+-- (exactly _tctempN, enumId "tctemp") in intern_tctemp, anything else
+-- in intern_other, printed as it is found (see Forcing above).  A
+-- nested construction (childWord forcing a TAp thunk runs mkTAp inside
+-- the outer action) has already recorded and counted its own strings.
 withInternDelta :: IO a -> IO a
 withInternDelta act
     | ctypeStatsOn = do
         n0 <- internCount
         r <- act
         n1 <- internCount
-        addCTypeStat InternDelta (n1 - n0)
+        when (n1 > n0) $ do
+            seen <- readIORef wordInterned
+            ss <- internedSince n0
+            let new = [ (fs, s) | s <- ss, let fs = mkFString s,
+                                  not (S.member fs seen) ]
+                (tyvars, rest) = partition (isTcName "tctyvar" . snd) new
+                (temps, others) = partition (isTcName "tctemp" . snd) rest
+            writeIORef wordInterned (S.union seen (S.fromList (map fst new)))
+            addCTypeStat InternDelta (length tyvars)
+            addCTypeStat InternTcTemp (length temps)
+            addCTypeStat InternOther (length others)
+            mapM_ (\(_, s) -> hPutStrLn stderr ("ctype-stats intern_other " ++ show s))
+                  others
         return r
     | otherwise = act
+
+-- The strings interned while a word was computed, under
+-- -trace-ctype-stats only (empty otherwise); read by checkLetrecBinders.
+{-# NOINLINE wordInterned #-}
+wordInterned :: IORef (S.Set FString)
+wordInterned = unsafePerformIO $ newIORef S.empty
+
+-- The spelling of a typechecker-generated name: "_" ++ str followed by
+-- digits, and nothing else (a user's _tctyvarFoo counts as an offender).
+isTcName :: String -> String -> Bool
+isTcName str s = pre `isPrefixOf` s && not (null ds) && all isDigit ds
+  where pre = '_' : str
+        ds = drop (length pre) s
+
+-- IConv.iConvLet passes the binders of every letrec group it has
+-- ordered with SCC.tsort, and the group's conversion as the second
+-- argument, which is returned.  Under -trace-ctype-stats, when the
+-- group has more than one binder (tsort's in-degree tie-break on Ord Id
+-- can then decide the emitted order), each binder whose base string was
+-- interned while a word was computed is printed and counted in
+-- letrec_offender, which must read 0, and the group in letrec_group
+-- (see Forcing above).  Without the flag the binders are not forced.
+{-# NOINLINE checkLetrecBinders #-}
+checkLetrecBinders :: [Id] -> a -> a
+checkLetrecBinders is x
+    | ctypeStatsOn, multi = unsafePerformIO $ do
+        bumpCTypeStat LetrecGroup
+        seen <- readIORef wordInterned
+        let offenders = [ i | i <- is, S.member (getIdBase i) seen ]
+        addCTypeStat LetrecOffender (length offenders)
+        mapM_ (\i -> hPutStrLn stderr ("ctype-stats letrec_offender "
+                                       ++ show (getIdBaseString i) ++ " at "
+                                       ++ prPosition (getIdPosition i)))
+              offenders
+        return x
+    | otherwise = x
+  where multi = case is of
+                  (_ : _ : _) -> True
+                  _ -> False
 
 -- The smart constructors behind the TCon and TAp pattern synonyms.  They
 -- run under unsafeDupablePerformIO: a duplicated evaluation would find
@@ -566,20 +672,27 @@ eqStructural (TGen _ i1) (TGen _ i2) = i1 == i2
 eqStructural (TDefMonad _) (TDefMonad _) = True
 eqStructural _ _ = False
 
+-- An answer taken from two equal words.  Under -check-ctype-ids the two
+-- types are also compared structurally, and a disagreement is an
+-- internal error naming the site.
+checkEqByWord :: String -> Type -> Type -> a -> a
+checkEqByWord site x y r
+    | checkCanonIds && not (eqStructural x y) =
+        internalError (site ++ ": equal canonical words for unequal types: "
+                       ++ show (x, y))
+    | otherwise = r
+
 -- The EQ answer of cmp's word shortcut.
 eqByWord :: Type -> Type -> Ordering
-eqByWord x y
-    | checkCanonIds && not (eqStructural x y) =
-        internalError ("CType.cmp: equal canonical words for unequal types: "
-                       ++ show (x, y))
-    | otherwise = ctypeStat CmpEqByWord x `seq` EQ
+eqByWord x y = checkEqByWord "CType.cmp" x y (ctypeStat CmpEqByWord x `seq` EQ)
 
 -- Counters, kept and printed (by bsc at exit) only under
 -- -trace-ctype-stats; every bump is a no-op otherwise.
 data CTypeStat
     = TApBuilt | TConBuilt | PreGateBuilt | TableHit | TableNew
     | RefuseChild | RefuseUnqual | RefuseTyStr | LeafRecompute
-    | CmpEqByWord | InternDelta
+    | CmpEqByWord | InternDelta | InternTcTemp | InternOther
+    | LetrecGroup | LetrecOffender
     | SeqCTypeShortcut | ApSubShortcut | TvShortcut | ExpandSynShortcut
     | InstShortcut | MguShortcut | MatchShortcut | GetFreeTShortcut
     | ChkTApShortcut
@@ -597,6 +710,10 @@ statName RefuseTyStr = "refuse_tystr"
 statName LeafRecompute = "leaf_recompute"
 statName CmpEqByWord = "cmp_eq_by_word"
 statName InternDelta = "intern_delta"
+statName InternTcTemp = "intern_tctemp"
+statName InternOther = "intern_other"
+statName LetrecGroup = "letrec_group"
+statName LetrecOffender = "letrec_offender"
 statName SeqCTypeShortcut = "seq_ctype_shortcut"
 statName ApSubShortcut = "apsub_shortcut"
 statName TvShortcut = "tv_shortcut"
@@ -611,8 +728,13 @@ statName ChkTApShortcut = "chktap_shortcut"
 ctypeStatsOn :: Bool
 ctypeStatsOn = "-trace-ctype-stats" `elem` progArgs
 
--- -check-ctype-ids: every identity decision is also made structurally
--- and a disagreement is an internal error.
+-- -check-ctype-ids: every answer taken from two equal words -- cmp's EQ
+-- and Unify's mgu and match shortcuts -- is also decided structurally
+-- (checkEqByWord); a disagreement is an internal error.  The
+-- one-sided shortcuts (apSub, tv, expandSyn, inst, getFreeT and chkTAp)
+-- return their input on the ground or normal flag and are not checked
+-- here: they rest on the flags' definition, and -no-ctype-ids turns them
+-- all off.
 {-# NOINLINE checkCanonIds #-}
 checkCanonIds :: Bool
 checkCanonIds = "-check-ctype-ids" `elem` progArgs
