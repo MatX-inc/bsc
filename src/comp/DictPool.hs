@@ -96,7 +96,8 @@ data PK = PKey !Int        -- ^ ground, normal, keyed
                            --   variables (their numbers)
         | PUneval          -- ^ a part is not evaluated yet
         | PNotNormal       -- ^ not normal (synonym, type function,
-                           --   unqualified tycon, TGen)
+                           --   unqualified tycon, TGen), or built
+                           --   before the canonical-word gate opened
         deriving (Eq, Show)
 
 data KeyTable = KeyTable {
@@ -130,17 +131,25 @@ typeKey alloc kt0 t0 = go kt0 t0
     node kt t@(TAp f a)
       | w >= 0 = (if normalWord w then PKey w else PNotNormal, False, kt)
       | otherwise =
+          -- (the second child's triple is taken apart by a case where it
+          -- is read: as a lazy pattern, GHC allocates it and a selector)
           let (kf, sf, kt1) = go kt f
-              (ka, sa, kt2) = go kt1 a
-          in  case (kf, ka) of
-                (PUneval, _) -> (PUneval, False, kt2)
-                (_, PUneval) -> (PUneval, False, kt2)
-                (PNotNormal, _) -> (PNotNormal, False, kt2)
-                (_, PNotNormal) -> (PNotNormal, False, kt2)
-                (PKey x, PKey y) -> apKey kt2 (sf || sa) x y
-                (PVar xs, PVar ys) -> (PVar (xs ++ ys), False, kt2)
-                (PVar xs, _) -> (PVar xs, False, kt2)
-                (_, PVar ys) -> (PVar ys, False, kt2)
+          in  case kf of
+                PUneval -> (PUneval, False, case go kt1 a of (_, _, kt2) -> kt2)
+                _ -> case go kt1 a of
+                  (ka, sa, kt2) -> case (kf, ka) of
+                    (_, PUneval) -> (PUneval, False, kt2)
+                    (PNotNormal, _) -> (PNotNormal, False, kt2)
+                    (_, PNotNormal) -> (PNotNormal, False, kt2)
+                    (PKey x, PKey y)
+                      -- a node without a word whose children both have one
+                      -- was built while the canonical-word gate was shut,
+                      -- and an equal node built since has a word, not this key
+                      | x >= 0 && y >= 0 -> (PNotNormal, False, kt2)
+                      | otherwise -> apKey kt2 (sf || sa) x y
+                    (PVar xs, PVar ys) -> (PVar (xs ++ ys), False, kt2)
+                    (PVar xs, _) -> (PVar xs, False, kt2)
+                    (_, PVar ys) -> (PVar ys, False, kt2)
       where w = typeCanonWordNode t
     node kt (TVar v)
       | isEvaluated v, TyVar _ n _ <- v, isEvaluated n = (PVar [n], False, kt)
