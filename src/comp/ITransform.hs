@@ -1,6 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ImplicitParams, PatternGuards, ScopedTypeVariables #-}
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns, MagicHash, UnboxedTuples #-}
 module ITransform(
 
                  -- the transform stage
@@ -18,11 +18,19 @@ module ITransform(
 import Prelude hiding ((<>))
 #endif
 
-import Control.Monad(foldM, forM)
+import Control.Monad(foldM, forM, zipWithM)
 import Control.Monad.State.Strict(State, runState, gets, get, put)
 import Data.List((\\))
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.IntMap as IM
+import System.IO.Unsafe(unsafePerformIO)
+import GHC.Exts(unpackClosure#, indexArray#)
+import GHC.Ptr(Ptr(..))
+-- GHC.Exts.Heap's peekItbl reads the info table layout of the build's way
+-- (profiled or not)
+import GHC.Exts.Heap(ClosureType(..), StgInfoTable(tipe), peekItbl)
+import Unsafe.Coerce(unsafeCoerce)
 
 import IntegerUtil(mask, integerAnd)
 import Util(log2, itos, appFstM, snd3, makePairs, flattenPairs,
@@ -142,16 +150,113 @@ iTrRules (IRules sps rs) = do
 iTrExprL :: Ctx a -> [(IExpr a, Integer)] -> IExpr a -> T (IExpr a) a
 iTrExprL ctx idxs e = expandHRef e >>= iTrExpr ctx idxs
 
+-- What a traversal knows about the expression it returned, for a later
+-- traversal of that same expression in the same context with no indices
+-- (see retraverse).  A receipt travels with its expression: up the call
+-- chain as part of the result, and down again into a re-traversal of the
+-- expression, so it always describes the object it came with.  The context
+-- of that re-traversal is built from the same arguments as the one the
+-- receipt was made in (the same object, or addT/addF of the same condition
+-- object, see RIf), so it is an equal value.
+data Rcpt
+        = RNone
+        -- traversing it there while idNo is the number replays a traversal
+        -- that returned it unchanged and added no CSE entry; the inner
+        -- receipt serves once idNo has moved on
+        | RFin !Integer Rcpt
+        -- an application kept as built from its arguments (iTrAp did not
+        -- fire and runCSE returned it): the arguments' receipts
+        | RAps [Rcpt]
+        -- an if kept as built: its condition is condOpt's form for that CSE
+        -- entry (a number >= 0), or a CSE reference that is its own
+        -- optimized form (-1), or unknown (-2); and the arms' receipts
+        | RIf !Int Rcpt Rcpt
+        -- the CSE reference with this number
+        | RCse !Int
+
+-- A traversal's result: the expression, whether it is a new object (False:
+-- the input itself, since nothing in it changed), and its receipt.
+data TR a = TR (IExpr a) !Bool Rcpt
+
 iTrExpr :: Ctx a -> [(IExpr a, Integer)] -> IExpr a -> T (IExpr a) a
-iTrExpr ctx idxs (IAps pif@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) = do
+iTrExpr ctx idxs e = do
+        TR e' _ _ <- iTrExprR ctx idxs RNone e
+        return e'
+
+-- iTrExpr given a receipt for e.  Only calls with no indices use receipts
+-- and return them.  A call that returns its input unchanged and adds no
+-- CSE entry makes the strongest receipt: a replay in the same context and
+-- CSE state (idNo determines cse_map) would run the same pure code on the
+-- same objects, so it would force only what this call forced, add nothing
+-- and return the same object; that replay is what a valid RFin skips.
+iTrExprR :: Ctx a -> [(IExpr a, Integer)] -> Rcpt -> IExpr a -> T (TR a) a
+iTrExprR ctx [] r e = do
+        n0 <- gets idNo
+        case r of
+          RFin n _ | n == n0 -> return (TR e False r)
+          _ -> do
+            TR e' c rc <- iTrExpr1 ctx [] (unFin r) e
+            n1 <- gets idNo
+            return $! if c || n1 /= n0 then TR e' c rc else TR e' False (RFin n0 rc)
+iTrExprR ctx idxs _ e = do
+        TR e' c _ <- iTrExpr1 ctx idxs RNone e
+        return (TR e' c RNone)
+
+unFin :: Rcpt -> Rcpt
+unFin (RFin _ r) = r
+unFin r = r
+
+-- The receipt of argument k.
+rcptAt :: Int -> [Rcpt] -> Rcpt
+rcptAt k rs = case drop k rs of
+                r : _ -> r
+                [] -> RNone
+
+-- The expressions of a list of results, whether any is new, and their
+-- receipts.
+unTRs :: [TR a] -> ([IExpr a], Bool, [Rcpt])
+unTRs [] = ([], False, [])
+unTRs (TR e c r : trs) = let (es, cs, rs) = unTRs trs
+                         in  (e : es, c || cs, r : rs)
+
+-- Each clause computes what it always did.  When the result is the node
+-- iTrAp kept, built from the same head, types and unchanged arguments, the
+-- clause returns its input node instead of that copy: iTrAp's rules that
+-- rewrite arguments without firing apply to bit operators, which runCSE
+-- never keeps, so the copy holds the same objects as the input.
+iTrExpr1 :: Ctx a -> [(IExpr a, Integer)] -> Rcpt -> IExpr a -> T (TR a) a
+iTrExpr1 ctx idxs r x@(IAps pif@(ICon _ (ICPrim _ PrimIf)) [t] [cnd, thn, els]) = do
         doBO <- getDoBO
-        cnd1 <- iTrExpr ctx [] (expValShallow cnd)
-        let cnd' = optBoolExpr doBO cnd1
-        thn' <- iTrExpr (addT cnd' ctx) idxs thn
-        els' <- iTrExpr (addF cnd' ctx) idxs els
+        TR cnd1 c1 rc1 <- iTrExprR ctx [] RNone (expValShallow cnd)
+        (cnd', tag) <- case rc1 of
+                         RCse s -> do c <- condOpt doBO s cnd1
+                                      return (c, s)
+                         _ -> return (optBoolExpr doBO cnd1, -1)
+        -- whether cnd' is the condition the receipt describes, which this
+        -- node holds: condOpt's form for the same entry, or a reference
+        -- that is its own optimized form and came back unchanged (cnd' is
+        -- then a new thunk that evaluates to it)
+        let cndSame = case r of
+                        RIf s _ _ -> (s >= 0 && s == tag) || (s == -1 && tag == -1 && not c1)
+                        _ -> False
+            (rt, re) = case r of
+                         RIf _ rt0 re0 | cndSame -> (rt0, re0)
+                         _ -> (RNone, RNone)
+        TR thn' ct rt' <- iTrExprR (addT cnd' ctx) idxs rt thn
+        TR els' ce re' <- iTrExprR (addF cnd' ctx) idxs re els
 --        traceM ("IF " ++ ppString (IAps pif [t] [cnd', thn', els']) ++ "\n   " ++ ppReadable (cnd, cnd0, cnd1))
-        iTrExpr' ctx idxs pif [t] [cnd', thn', els']
-iTrExpr ctx idxs (IAps pcase@(ICon _ (ICPrim _ PrimCase)) ts@[sz_idx, elem_ty] (idx:dflt:ces)) = do
+        res <- iTrExpr' ctx idxs pif [t] [cnd', thn', els'] []
+        case res of
+          Kept et ->
+            let same = cndSame && not ct && not ce
+                -- optBoolExpr builds no ICValue node, so an ICValue result is
+                -- its input, a reference it leaves as it is
+                tag' | tag >= 0 = tag
+                     | isEvaluatedRef cnd' = -1
+                     | otherwise = -2
+            in  return (TR (if same then x else et) (not same) (RIf tag' rt' re'))
+          Done e c rc -> return (TR e c rc)
+iTrExpr1 ctx idxs _ (IAps pcase@(ICon _ (ICPrim _ PrimCase)) ts@[sz_idx, elem_ty] (idx:dflt:ces)) = do
         idx' <- iTrExpr ctx [] (expValShallow idx)
         let foldFn (res_ces, res_ctx) (c,e) = do
               c' <- iTrExpr ctx [] (expValShallow c)
@@ -161,12 +266,12 @@ iTrExpr ctx idxs (IAps pcase@(ICon _ (ICPrim _ PrimCase)) ts@[sz_idx, elem_ty] (
         (rev_ces', ctx') <- foldM foldFn ([], ctx) (makePairs ces)
         let ces' = flattenPairs (reverse rev_ces')
         dflt' <- iTrExpr ctx' idxs dflt
-        iTrExpr' ctx idxs pcase ts (idx':dflt':ces')
-iTrExpr ctx idxs (IAps psel@(ICon _ (ICPrim _ PrimArrayDynSelect)) ts@[elem_ty, ITNum sz_idx] [arr, idx]) = do
+        fmap trDone $ iTrExpr' ctx idxs pcase ts (idx':dflt':ces') []
+iTrExpr1 ctx idxs _ (IAps psel@(ICon _ (ICPrim _ PrimArrayDynSelect)) ts@[elem_ty, ITNum sz_idx] [arr, idx]) = do
         idx' <- iTrExpr ctx [] (expValShallow idx)
         arr' <- iTrExpr ctx ((idx,sz_idx):idxs) (expValShallow arr)
-        iTrExpr' ctx idxs psel ts [arr', idx']
-iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pupd@(ICon _ (ICPrim _ PrimArrayDynUpdate)) ts@[elem_ty, ITNum sz_upd_idx] [arr, upd_idx, val]) = do
+        fmap trDone $ iTrExpr' ctx idxs psel ts [arr', idx'] []
+iTrExpr1 ctx idxs@((idx,sz_idx):rest_idxs) _ (IAps pupd@(ICon _ (ICPrim _ PrimArrayDynUpdate)) ts@[elem_ty, ITNum sz_upd_idx] [arr, upd_idx, val]) = do
         upd_idx' <- iTrExpr ctx [] (expValShallow upd_idx)
         let mkExtend in_sz out_sz e =
                 let k = out_sz - in_sz
@@ -179,34 +284,44 @@ iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pupd@(ICon _ (ICPrim _ PrimArray
                    in  iePrimEQ (ITNum max_sz) e1 e2
         val' <- iTrExpr (addT eq_e ctx) idxs (expValShallow val)
         arr' <- iTrExpr (addF eq_e ctx) idxs (expValShallow arr)
-        iTrExpr' ctx idxs pupd ts [arr', upd_idx', val']
-iTrExpr ctx idxs@((idx,sz_idx):rest_idxs) (IAps pbld@(ICon i (ICPrim _ PrimBuildArray)) ts es) = do
+        fmap trDone $ iTrExpr' ctx idxs pupd ts [arr', upd_idx', val'] []
+iTrExpr1 ctx idxs@((idx,sz_idx):rest_idxs) _ (IAps pbld@(ICon i (ICPrim _ PrimBuildArray)) ts es) = do
         let foldFn (res_es, res_ctx) (n, e) = do
               let n_lit = iMkLitAt (getPosition i) (aitBit (ITNum sz_idx)) n
               let eq_e = iePrimEQ (ITNum sz_idx) idx n_lit
               e' <- iTrExpr (addT eq_e res_ctx) rest_idxs (expValShallow e)
               return (e':res_es, addF eq_e res_ctx)
         (rev_es', _) <- foldM foldFn ([], ctx) (zip [0..] es)
-        iTrExpr' ctx idxs pbld ts (reverse rev_es')
-iTrExpr ctx idxs (IAps pand@(ICon _ (ICPrim _ PrimBAnd)) ts [e1, e2]) = do
+        fmap trDone $ iTrExpr' ctx idxs pbld ts (reverse rev_es') []
+iTrExpr1 ctx idxs _ (IAps pand@(ICon _ (ICPrim _ PrimBAnd)) ts [e1, e2]) = do
         e1' <- iTrExpr ctx [] e1
         e2'' <- iTrExpr (addT e1'  ctx) [] (expValShallow e2)
         e1'' <- iTrExpr (addT e2'' ctx) [] (expValShallow e1')
-        iTrExpr' ctx idxs pand ts [e1'', e2'']
-iTrExpr ctx idxs (IAps por@(ICon _ (ICPrim _ PrimBOr)) ts [e1, e2]) = do
+        fmap trDone $ iTrExpr' ctx idxs pand ts [e1'', e2''] []
+iTrExpr1 ctx idxs _ (IAps por@(ICon _ (ICPrim _ PrimBOr)) ts [e1, e2]) = do
         e1' <- iTrExpr ctx [] e1
         e2'' <- iTrExpr (addF e1'  ctx) [] (expValShallow e2)
         e1'' <- iTrExpr (addF e2'' ctx) [] (expValShallow e1')
-        iTrExpr' ctx idxs por ts [e1'', e2'']
-iTrExpr ctx idxs (IAps f ts es) = do
-        es' <- mapM (iTrExpr ctx []) es
-        iTrExpr' ctx idxs f ts es'
+        fmap trDone $ iTrExpr' ctx idxs por ts [e1'', e2''] []
+iTrExpr1 ctx idxs r x@(IAps f ts es) = do
+        let rs = case r of
+                   RAps rs0 -> rs0 ++ repeat RNone
+                   _ -> repeat RNone
+        trs <- zipWithM (\e re -> iTrExprR ctx [] re e) es rs
+        let (es', changed, rs') = unTRs trs
+        res <- iTrExpr' ctx idxs f ts es' rs'
+        case res of
+          Kept et -> return (TR (if changed then et else x) changed (RAps rs'))
+          Done e c rc -> return (TR e c rc)
 -- XXX This makes some conditions simpler, but maybe other things get worse?
-iTrExpr ctx idxs (ICon _ (ICUndet t _ _)) | t == itAction = return icNoActions
-iTrExpr ctx idxs (ICon i (ICUndet t k (Just e))) = do
-  e' <- iTrExpr ctx idxs e
-  return (ICon i (ICUndet t k (Just e')))
-iTrExpr ctx idxs e = return e
+iTrExpr1 ctx idxs _ (ICon _ (ICUndet t _ _)) | t == itAction = return (TR icNoActions True RNone)
+iTrExpr1 ctx idxs r x@(ICon i (ICUndet t k (Just e))) = do
+  let r1 = case r of
+             RAps [r0] -> r0
+             _ -> RNone
+  TR e' c re <- iTrExprR ctx idxs r1 e
+  return (TR (if c then ICon i (ICUndet t k (Just e')) else x) c (RAps [re]))
+iTrExpr1 ctx idxs _ e = return (TR e False RNone)
 
 expandHRef :: IExpr a -> T (IExpr a) a
 expandHRef (IAps f ts es) = do
@@ -226,34 +341,107 @@ expandHRef (ICon i (ICUndet t k (Just e))) = do
 expandHRef e = return e        -- XXX
 --expandHRef e = internalError ("expandHRef " ++ ppReadable e)
 
-iTrExpr' :: Ctx a -> [(IExpr a, Integer)] -> IExpr a -> [IType] -> [IExpr a] -> T (IExpr a) a
--- The arguments are already transformed in this context with no indices.
--- Removing noAction does not require another traversal of the surviving action.
-iTrExpr' _ [] (ICon _ (ICPrim _ PrimJoinActions)) _
-    [ICon _ (ICPrim _ PrimNoActions), e] = return e
-iTrExpr' _ [] (ICon _ (ICPrim _ PrimJoinActions)) _
-    [e, ICon _ (ICPrim _ PrimNoActions)] = return e
-iTrExpr' ctx idxs f ts es = do
+-- What iTrExpr' did with a node: kept it (iTrAp did not fire and runCSE
+-- returned it), giving the node as built; or replaced it.
+data XR a = Kept (IExpr a)
+          | Done (IExpr a) !Bool Rcpt
+
+trDone :: XR a -> TR a
+trDone (Kept e) = TR e True RNone
+trDone (Done e c r) = TR e c r
+
+-- The arguments are already transformed (rs: their receipts, when known).
+iTrExpr' :: Ctx a -> [(IExpr a, Integer)] -> IExpr a -> [IType] -> [IExpr a] -> [Rcpt] -> T (XR a) a
+iTrExpr' ctx [] (ICon _ (ICPrim _ PrimJoinActions)) _
+    [ICon _ (ICPrim _ PrimNoActions), e] rs = retraverse ctx (rcptAt 1 rs) e
+iTrExpr' ctx [] (ICon _ (ICPrim _ PrimJoinActions)) _
+    [e, ICon _ (ICPrim _ PrimNoActions)] rs = retraverse ctx (rcptAt 0 rs) e
+iTrExpr' ctx idxs f ts es _ = do
         errh <- gets errHandle
         let (et, trans) = let ?errh = errh
                           in iTrAp ctx f ts es
         if trans then
-            iTrExpr ctx idxs et
+            do TR e _ rc <- iTrExprR ctx idxs RNone et
+               return (Done e True rc)
         else
             do
-                e <- runCSE et
+                (e, cse) <- runCSE et
                 let t = iGetType e
                     isBool = t == itBit1
                     -- one expansion of the new node serves both queries
                     o = opnd e
                 if isBool && isTOpnd ctx o then
-                    return iTrue
+                    return (Done iTrue True RNone)
                 else if isBool && isFOpnd ctx o then
-                    return iFalse
+                    return (Done iFalse True RNone)
                 else
-                    return e
+                    return $ case cse of
+                               CseKept -> Kept e
+                               CseRef s -> Done e True (RCse s)
+                               CseNew -> Done e True RNone
 
-runCSE :: IExpr a -> T (IExpr a) a
+-- Re-traverse the action left after removing noAction, as iTrAp's rule does:
+-- that pass can add CSE entries and is the first to intern some CSE names.
+-- e is an argument just transformed in this context with no indices, and r
+-- its receipt.  When that receipt is still valid (the argument came back
+-- unchanged with no CSE entry added since), the re-traversal would replay
+-- it exactly, and iTrExprR skips it.  A finished re-traversal's result
+-- carries such a receipt to the enclosing joins, so nested eliminations no
+-- longer repeat their lookups quadratically.
+retraverse :: Ctx a -> Rcpt -> IExpr a -> T (XR a) a
+retraverse ctx r e = do
+        TR e' _ rc <- iTrExprR ctx [] r e
+        return (Done e' True rc)
+
+-- The optimized form of the condition that is CSE entry s, the reference
+-- c, shared by every if whose condition is that entry: optBoolExpr is a
+-- pure function of the reference, which is one object per entry, so the
+-- shared thunk has the value a new one would have and forcing it forces
+-- what forcing a new one would.  Entries are renamed at the def fixup,
+-- which empties this map.
+condOpt :: Bool -> Int -> IExpr a -> T (IExpr a) a
+condOpt doBO s c = do
+        st <- get
+        case IM.lookup s (cond_opt st) of
+          Just c' -> return c'
+          Nothing -> do
+            let c' = optBoolExpr doBO c
+            put $ st { cond_opt = IM.insert s c' (cond_opt st) }
+            return c'
+
+-- Whether an expression is already an ICValue reference.  It forces
+-- nothing; when the answer is False only a later skip is lost.
+isEvaluatedRef :: IExpr a -> Bool
+isEvaluatedRef e = case evaluatedCon e of
+                     Just (ICon _ ci) -> case evaluatedCon ci of
+                                           Just (ICValue {}) -> True
+                                           _ -> False
+                     _ -> False
+
+-- The value, if it is already a constructor (possibly behind indirections);
+-- Nothing for a thunk.  It forces nothing, so matching on Just runs no code.
+{-# NOINLINE evaluatedCon #-}
+evaluatedCon :: b -> Maybe b
+evaluatedCon x = unsafePerformIO (go x)
+  where go :: c -> IO (Maybe b)
+        go v = case unpackClosure# v of
+          (# info, _, ptrs #) -> do
+            itbl <- peekItbl (Ptr info)
+            case tipe itbl of
+              t | isCon t -> return (Just (unsafeCoerce v))
+                | isInd t -> case indexArray# ptrs 0# of (# v' #) -> go v'
+                | otherwise -> return Nothing
+        isCon t = t `elem` [CONSTR, CONSTR_1_0, CONSTR_0_1, CONSTR_2_0,
+                            CONSTR_1_1, CONSTR_0_2, CONSTR_NOCAF]
+        -- a BLACKHOLE's indirectee is the value, or a TSO or blocking
+        -- queue (not a constructor) while it is being evaluated
+        isInd t = t `elem` [IND, IND_STATIC, BLACKHOLE]
+
+-- What runCSE did: returned its input, or a CSE reference with this
+-- number, or another new expression.
+data CseR = CseKept | CseRef !Int | CseNew
+
+runCSE :: IExpr a -> T (IExpr a, CseR) a
 runCSE e@(IAps _ _ _) = do
   -- This used to recurse on the arguments, but we don't need to do that,
   -- because "runCSE" is called from iTrExpr, which already recurses on the
@@ -261,16 +449,17 @@ runCSE e@(IAps _ _ _) = do
   let t = iGetType e
   -- Only CSE applications that are not actions or tuple method values
   if not (isActionType t || isPairType t) then
-      newExprT t e
+      do (r, s) <- newExprT t e
+         return (r, CseRef s)
    else
-      return e
+      return (e, CseKept)
 -- should CSE values boxed by undefined
 -- they have something to CSE against
 runCSE (ICon i (ICUndet t k (Just v))) = do
-  v' <- runCSE v
+  (v', _) <- runCSE v
   let e' = ICon i (ICUndet t k (Just v'))
-  return e'
-runCSE e = return e
+  return (e', CseNew)
+runCSE e = return (e, CseKept)
 
 -- recursively transform an expression
 -- noting that a nontrivial transformation has happened
@@ -1449,7 +1638,11 @@ data TState a = TState {
         --   * the def ("IDef defname deftype e")
         -- When the monad is run, because all exprs are inlined and then CSE'd
         -- back up, the defs for the package will come from this map.
-        cse_map :: M.Map (IExpr a) (IExpr a, IDef a)
+        --   * the entry's number (the idNo that named it)
+        cse_map :: M.Map (IExpr a) (IExpr a, IDef a, Int),
+
+        -- condOpt's optimized conditions, by CSE entry number
+        cond_opt :: IM.IntMap (IExpr a)
         }
 
 type T b a = State (TState a) b
@@ -1463,10 +1656,11 @@ runT errh flags no prefix xforms =
                            , idNo = no
                            , def_map = M.empty
                            , cse_map = M.empty
+                           , cond_opt = IM.empty
                            }
     in case runState xforms initState of
          (x, ts) ->
-              let defs_from_cse = map (snd . snd) (M.toList (cse_map ts))
+              let defs_from_cse = [ d | (_, (_, d, _)) <- M.toList (cse_map ts) ]
                   non_cse_defs =
                       [ IDef i t e props
                         | (i, (t, e, props)) <- M.toList (def_map ts)
@@ -1480,24 +1674,26 @@ getDoBO = do
   flgs <- gets flags
   return (optBool flgs)
 
--- Create a CSE def for an expression, returning a reference;
--- if a def already exists for this expression, return the existing reference.
-newExprT :: IType -> IExpr a -> T (IExpr a) a
+-- Create a CSE def for an expression, returning a reference and the entry's
+-- number; if a def already exists for this expression, return the existing
+-- reference.
+newExprT :: IType -> IExpr a -> T (IExpr a, Int) a
 newExprT t e = do
   ts <- get
   cmap <- gets cse_map
   case (M.lookup e cmap) of
-    Just (e', _) -> return e'
+    Just (e', _, s) -> return (e', s)
     Nothing -> do
         n <- gets idNo
         let i = setBadId $ mkId noPosition (mkFString ((prefix ts) ++ itos n))
             e' = ICon i (ICValue t e)
             d = IDef i t e []  -- props get lost here, but restored in iTransRenameIdsInDef
-            cmap' = M.insert e (e', d) cmap
+            s = fromInteger n
+            cmap' = M.insert e (e', d, s) cmap
             !n'   = n + 1
         cmap' `seq` put $ ts { idNo = n', cse_map = cmap' }
         -- traceM ("newExprT " ++ ppString e ++ " -> " ++ ppString (e',d))
-        return e'
+        return (e', s)
 
 addDefT :: Id -> IType -> IExpr a -> [DefProp] -> T () a
 addDefT i t e p = do
@@ -1748,8 +1944,8 @@ iTransFixupDefNames flags = do
       --    * the def name and expr are updated
       new_csemap =
           M.fromList
-               [ (rename_expr e, (rename_expr ref, rename_def def))
-                 | (e, (ref, def)) <- M.toList old_csemap ]
+               [ (rename_expr e, (rename_expr ref, rename_def def, s))
+                 | (e, (ref, def, s)) <- M.toList old_csemap ]
 
       -- fix up the defs to refer to new CSE name in their exprs
       -- (the def names themselves are unchanged)
@@ -1759,7 +1955,8 @@ iTransFixupDefNames flags = do
 
       new_state :: TState a
       new_state = transform_state { def_map = new_defmap,
-                                    cse_map = new_csemap }
+                                    cse_map = new_csemap,
+                                    cond_opt = IM.empty }
   put new_state
 
 -- given a map from old to new identifiers, replace all occurrences
