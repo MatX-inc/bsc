@@ -3546,6 +3546,32 @@ proc bluehs_run_pass { script {arguments {}} {output ""} } {
     return [expr {$status == 0}]
 }
 
+# Run a script with bluehs, and compare its output with the expected output
+proc bluehs_run_compare_pass { script {expected ""} } {
+    global bluehs
+    global srcdir
+    global subdir
+
+    bsc_initialize
+
+    set here [absolute $srcdir]
+    cd [file join $here $subdir]
+
+    set output [make_bluehs_output_name $script]
+    set cmd "$bluehs $script >& $output"
+    verbose "Executing: $cmd" 4
+    set status [exec_with_log "bluehs" $cmd 2]
+
+    cd $here
+
+    if { $status == 0 } then {
+        pass "`$script' runs with bluehs"
+    } else {
+        fail "`$script' should run with bluehs"
+    }
+    compare_file $output $expected
+}
+
 # Use the showrules utility to modify VCD files
 proc showrules { topmod vcdin vcdout {options ""}} {
     global showrules
