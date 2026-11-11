@@ -38,7 +38,7 @@ module CType(
   -- ** Constructing Types
   noType, tVar, tVarKind, cTVar, cTVarKind, cTVarNum, cTCon, cTNum, cTStr,
   cTApplys, setTypePosition,
-  mkGenTyVar, loadedTyVar, setTyVarKind, genTyVarNum,
+  mkGenTyVar, loadedTyVar, setTyVarKind, genTyVarNum, genTyVarEqForce,
 
   -- * Kinds
   Kind(..), PartialKind(..),
@@ -226,6 +226,16 @@ setTyVarPosition pos (TyVarU i n k) = TyVarU (setIdPosition pos i) n k
 setTyVarPosition pos (TyVarG p n k i) =
     TyVarG (unsafeDupablePerformIO (forceGenName p n >> evaluate pos))
            n k (setIdPosition pos i)
+
+-- | What comparing a generated variable with an equal one forces, as
+-- (==) and compare do (genForcedPair), when both hold the same position.
+-- Subst.trimSubst uses it in place of the lookup whose equal comparison
+-- it is: the substitution's keys and the variables in its back map that
+-- carry one number are the variable newTVar drew (or setTyVarKind copies
+-- of it), so they hold one position.
+genTyVarEqForce :: TyVar -> Bool
+genTyVarEqForce (TyVarG p n _ _) = case genForcedPair p p n of () -> True
+genTyVarEqForce (TyVarU _ _ _) = True
 
 -- | Whether the variable's Id is a generated (bad) name; TIMonad.isNewTVar.
 isBadTyVar :: TyVar -> Bool
