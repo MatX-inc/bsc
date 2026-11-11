@@ -331,9 +331,12 @@ filterPNDefs pns = filter (not . isPNDef) pns
           isPNDef (PNDefTupleElem _ _) = True
           isPNDef _ = False
 
+-- bind (alwaysRdyNode pps) to share isAlwaysRdy's id lists across nodes
 alwaysRdyNode :: [PProp] -> PathNode -> Bool
-alwaysRdyNode pps (PNTopMethodRes m _) = isAlwaysRdy pps m
-alwaysRdyNode pps _ = False
+alwaysRdyNode pps = isARNode
+  where isAR = isAlwaysRdy pps
+        isARNode (PNTopMethodRes m _) = isAR m
+        isARNode _ = False
 
 enWhenRdyNode :: [PProp] -> PathNode -> Bool
 enWhenRdyNode pps (PNTopMethodEnable m) = isEnWhenRdy pps m
@@ -1064,7 +1067,8 @@ aPathsPostSched flags pps apkg pathGraphInfo (ASchedule scheds _) = do
 
   let pathgraph0    = pgi_graph pathGraphInfo
       mod_inputs    = filter (not . (enWhenRdyNode pps)) (pgi_inputs pathGraphInfo)
-      mod_outputs   = filter (not . (alwaysRdyNode pps)) (pgi_outputs pathGraphInfo)
+      isARNode      = alwaysRdyNode pps
+      mod_outputs   = filter (not . isARNode) (pgi_outputs pathGraphInfo)
       user_rule_ids = map aRuleName (apkg_rules apkg)
       rule_ids      = user_rule_ids ++
                       (map aRuleName (concatMap aIfaceRules

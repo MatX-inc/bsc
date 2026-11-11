@@ -1078,7 +1078,8 @@ genModule
     -- ids of value methods with constant True output
     -- (any rdy signals in this list don't need to be wired up
     -- in the wrapper; it can assume a value of 1)
-    let true_ifc_ids  = [ i | IEFace i _ (Just (e, t)) _ _ _ <- ifc, isTrue e || isAlwaysRdy pps i ]
+    let isAR = isAlwaysRdy pps
+        true_ifc_ids  = [ i | IEFace i _ (Just (e, t)) _ _ _ <- ifc, isTrue e || isAR i ]
     def <- (deffun wi)
                  fwrapper
                  wireinfo

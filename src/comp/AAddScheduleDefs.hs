@@ -193,7 +193,8 @@ handleAlwaysReady :: Bool -> Position -> [PProp] -> ExprMap ->
 handleAlwaysReady warn pkgpos pps pre_rdy_map =
   let (m, proofs) = unzip (map doRdy (M.toList pre_rdy_map))
   in (M.fromList m, concat proofs)
-  where doRdy (n,e) | isAlwaysRdy pps (mkRdyId n) =
+  where isAR = isAlwaysRdy pps
+        doRdy (n,e) | isAR (mkRdyId n) =
           ((n,e), [mustBeTrue warn pkgpos n e])
         doRdy (n,e) = ((n,e),[])
 

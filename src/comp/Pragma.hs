@@ -644,19 +644,23 @@ isAlwaysEn (pp:pps) i = isAlwaysEn pps i
 
 -- Given RDY_nm, return if nm is in the list for always_ready
 -- NOTE: always_enabled implies always_ready
+-- Applied to the pragmas alone, this builds each listed pragma's RDY ids
+-- once, as a lazy list shared by every call of the result, so callers
+-- testing many ids should bind (isAlwaysRdy pps).  Each id is still made
+-- by the first call that reaches it, so names are interned in the same order.
 isAlwaysRdy :: [PProp] -> Id -> Bool
-isAlwaysRdy [] i = False
-isAlwaysRdy ((PPalwaysReady []):pps) i = isRdyId i -- always_ready for whole module (backwards compatible)
-isAlwaysRdy ((PPalwaysEnabled []):pps) i = isRdyId i -- always_enabled for module (backwards compatible)
-isAlwaysRdy ((PPalwaysReady is):pps) i = -- traces( "isar: " ++ ppReadable i ++ ":" ++ ppReadable  (map (mkRdyId . flattenUSId) is)) $
- if i `elem` (map (mkRdyId . flattenUSId) is)
-   then True
-   else isAlwaysRdy pps i
-isAlwaysRdy ((PPalwaysEnabled is):pps) i =
- if i `elem` (map (mkRdyId . flattenUSId) is)
-   then True
-   else isAlwaysRdy pps i
-isAlwaysRdy (pp:pps) i = isAlwaysRdy pps i
+isAlwaysRdy pps = \i -> check i rdyLists
+  where
+    -- Nothing: all ready methods (an empty list, for backwards compatibility)
+    rdyLists = [ if null is then Nothing
+                 else Just (map (mkRdyId . flattenUSId) is)
+               | pp <- pps, Just is <- [alwaysRdyNames pp] ]
+    alwaysRdyNames (PPalwaysReady is)   = Just is
+    alwaysRdyNames (PPalwaysEnabled is) = Just is
+    alwaysRdyNames _                    = Nothing
+    check _ [] = False
+    check i (Nothing : _) = isRdyId i
+    check i (Just rdys : rest) = i `elem` rdys || check i rest
 
 
 -- NOTE: always_enabled implies enabled_when_ready
