@@ -379,7 +379,29 @@ partBytes = go []
 bytesOf :: Table -> Int -> IO SBS.ShortByteString
 bytesOf t i = do k <- unsafeRead (tKey t) i
                  if k == 0 then unsafeRead (tStr t) i
-                           else return (packSpelling (genSpelling k))
+                           else return (genBytes k)
+
+-- packSpelling (genSpelling k), without building the String
+genBytes :: Int -> SBS.ShortByteString
+genBytes k = fst (SBS.unfoldrN (lp + nd) step 0)
+  where
+    tag = k .&. 3
+    pre = if tag == 0 then err else unsafeAt genPrefixes (tag - 1)
+    lp = SBS.length pre
+    n = k `shiftR` 2
+    nd = let go d p = if n < p then d else go (d + 1) (p * 10) in go 1 (10 :: Int)
+    step :: Int -> Maybe (Word8, Int)
+    step i | i < lp = Just (SBS.unsafeIndex pre i, i + 1)
+           | otherwise = Just (fromIntegral (ord '0' + (n `quot` pow10 (lp + nd - 1 - i)) `rem` 10),
+                               i + 1)
+    pow10 j = unsafeAt powers10 j
+
+genPrefixes :: Array Int SBS.ShortByteString
+genPrefixes = listArray (0, 2) (map (packSpelling . genPrefix) [1, 2, 3])
+
+-- 10 ^ 0 .. 10 ^ 15: a generated name's number has at most 15 digits
+powers10 :: Array Int Int
+powers10 = listArray (0, 15) (iterate (* 10) 1)
 
 -- hashStr of the String p packs
 hashBytes :: SBS.ShortByteString -> Int
