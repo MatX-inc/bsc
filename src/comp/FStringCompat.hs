@@ -2,13 +2,16 @@
 module FStringCompat(FString, getFString,
                      tmpFString, enumFString, cloneFString, concatFString,
                      mkNumFString, mkStrFString, mkFString,
-                     filterFString, fstringId
+                     filterFString, fstringId,
+                     fstringUtf8, mkFStringUtf8
                     ) where
 
 -- wrapper to make SStrings look like FStrings
 
 import Prelude hiding((++))
 import qualified SpeedyString as S
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Short as SBS
 import PPrint(PPrint(..), text)
 import Util(itos)
 import qualified Data.Generics as Generic
@@ -40,6 +43,16 @@ getFString = toString
 
 mkFString :: String -> FString
 mkFString s = fromString s
+
+-- | The UTF-8 encoding of getFString f, when it is f's stored spelling
+-- (SpeedyString.utf8Bytes).
+fstringUtf8 :: FString -> Maybe SBS.ShortByteString
+fstringUtf8 (FString s) = S.utf8Bytes s
+
+-- | mkFString of the String that well-formed UTF-8 bytes decode to
+-- (SpeedyString.fromUtf8): checked now, interned when forced.
+mkFStringUtf8 :: BS.ByteString -> Maybe FString
+mkFStringUtf8 b = fmap FString (S.fromUtf8 b)
 
 cloneFString :: [FString] -> FString -> FString
 cloneFString fs f = head [f' | n <- [1..] :: [Integer],
