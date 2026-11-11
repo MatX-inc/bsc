@@ -142,6 +142,26 @@ files_dont_exist { top_only/mkMid.cxx top_only/mkSub.cxx \
 }
 
 # -------------------------
+# -sim-link-top-only makes a link write only the top's and the model's files,
+# byte-identical to a full link's; the submodules' come from -c.
+
+if { $ctest == 1 } {
+
+mkdir top_link
+link_objects_pass {} mkTop2 \
+    {-simdir top_link -sim-link-top-only -KILLsimBlocksToC}
+files_exist      { top_link/mkTop2.cxx top_link/mkTop2.h \
+                   top_link/model_mkTop2.cxx top_link/model_mkTop2.h }
+files_dont_exist { top_link/mkMid.cxx top_link/mkMid.h \
+                   top_link/mkSub.cxx top_link/mkSub.h }
+compare_file top_link/mkTop2.cxx       hierB/mkTop2.cxx
+compare_file top_link/mkTop2.h         hierB/mkTop2.h
+compare_file top_link/model_mkTop2.cxx hierB/model_mkTop2.cxx
+compare_file top_link/model_mkTop2.h   hierB/model_mkTop2.h
+
+}
+
+# -------------------------
 # -c output is block form; a link's top is generated in top form.  The
 # generation-options descriptor in the .h records the form, so a fresh
 # block-form artifact is never reused as the top of a link (and a

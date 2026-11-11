@@ -25,6 +25,7 @@ import Wires(ClockDomain)
 import VModInfo(vName_to_id)
 import PPrint(ppReadable) -- hiding (int, char)
 import Util(concatMapM, mapFst, mapSnd)
+import IOUtil(progArgs)
 import SimFileUtils(codeGenOptionDescr)
 import TopUtils(TimeInfo(..))
 import Version(versionname)
@@ -99,7 +100,9 @@ simBlocksToC flags time top_block def_clk def_rst
     -- one module in, that module's outputs out).  Submodules get their files
     -- from their own -c invocations; their content is byte-identical either
     -- way, so only which files are written changes, never their bytes.
-    let gen_blocks = if blockCodegen flags
+    -- -sim-link-top-only applies the same rule to the -e link's top block
+    -- (a trace flag, not a Flags field: Flags is serialized into every .ba).
+    let gen_blocks = if blockCodegen flags || simLinkTopOnly
                      then filter ((== top_block) . sb_id) mod_blocks
                      else mod_blocks
     module_names <- concatMapM (cvtModBlock writeFileC) gen_blocks
@@ -111,6 +114,9 @@ simBlocksToC flags time top_block def_clk def_rst
                       else convertSchedules flags time top_block def_clk def_rst sb_map ff_map
                                             wdef_inst_map scheds clk_groups gate_info writeFileC
     return $ module_names ++ schedule_names
+
+simLinkTopOnly :: Bool
+simLinkTopOnly = "-sim-link-top-only" `elem` progArgs
 
 lookupInstance :: SBMap -> Maybe SBId -> String -> Maybe SBId
 lookupInstance _ Nothing _ = Nothing
