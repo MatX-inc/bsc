@@ -14,7 +14,7 @@ import System.Posix.Files(fileMode,  unionFileModes, ownerExecuteMode, groupExec
 import System.Directory(getDirectoryContents, doesFileExist, getCurrentDirectory)
 import System.Directory(removeFile)
 import System.Time(getClockTime, ClockTime(TOD)) -- XXX: from old-time package
-import Data.Char(isSpace, toLower, ord)
+import Data.Char(isSpace, ord)
 import Data.List(intersect, nub, partition, intersperse, sort,
             isPrefixOf, isSuffixOf, unzip5, intercalate, foldl')
 import Data.Time.Clock.POSIX(getPOSIXTime)
@@ -1910,9 +1910,10 @@ cxxLink errh flags toplevel names creation_time = do
         -- show is used for quoting
         libdirflags = (map (("-L"++) . show) (cLibPath flags))
         userlibs = map (("-l"++) . show) (cLibs flags)
-        exportmap = let binfmt = map toLower (binFmtToString getBinFmtType)
-                    in  show $ (bluespecDir flags) ++ "/Bluesim/" ++
-                               "bs_" ++ binfmt ++ "_export_map.txt"
+        exportmap = show $ (bluespecDir flags) ++ "/Bluesim/" ++
+                           case getBinFmtType of
+                             ELF   -> "bs_elf_export_map.txt"
+                             MachO -> "bs_mach-o_export_map.txt"
         -- this flag doesn't seem to work, so we use a separate call to "strip"
         stripflags = [] -- if (cDebug flags) then [] else ["-Wl,-x"]
         switches =
