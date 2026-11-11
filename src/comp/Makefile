@@ -524,7 +524,6 @@ install-bluetcl: $(PKGINFO)
 
 .PHONY: install-bo2bloogle
 install-bo2bloogle: $(addprefix $(BINDIR)/,$(BO2BLOOGLEEXES))
-install-bo2bloogle: $(addprefix $(BINDIR)/core/,$(BO2BLOOGLEEXES))
 install-bo2bloogle: $(PKGINFO)
 
 .PHONY: install-utils
@@ -537,7 +536,6 @@ install-showrules: $(PKGINFO)
 
 .PHONY: install-checkers
 install-checkers: $(addprefix $(BINDIR)/,$(CHECKEXES))
-install-checkers: $(addprefix $(BINDIR)/core/,$(CHECKEXES))
 install-checkers: $(PKGINFO)
 
 # ----
