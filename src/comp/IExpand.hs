@@ -86,7 +86,12 @@ import IOUtil(progArgs)
 import CaptureLive(Cap(..), CapTable, NameRefL(..), NameFact(..),
                    capFromRecs, capMergeFacts, capGoneFacts, capStat, stIExpand,
                    viaSelf, viaEqPtrs1, viaEqPtrs2, viaPDefAtom, kindConst,
-                   perturbing, ptNames, rotate)
+                   perturbing, ptNames, ptEvents, rotate)
+import CaptureEvents(CapLogF, MoveSpec(..), moveSpec,
+                     evPackHold, evPackCancel, evPackUndet, evUnpackHold,
+                     evUnpackCancel, evUnpackUndet, evUnpackConst,
+                     evPackMerge, evUnpackMerge, lkMat, lkCopy)
+import CaptureRebuild(typeObservations)
 import ISyntaxXRef(mapIExprPosition)
 import IStateLoc
 
@@ -415,7 +420,7 @@ iExpand errh flags symt alldefs atf_cache is_noinlined_func pps def@(IDef mi _ _
 
       -- the names each def keeps (forced by the DFexpanded dump, after
       -- the defs, rules and interface)
-      imod_cap = iExpandCapture iheap ptr_map ptrm0 ptr_info args
+      imod_cap = iExpandCapture iheap ptr_map ptrm0 ptr_info args (go_caplog go)
 
       -- the expanded module
       imod0 = IModule mi is_noinlined_func mbe wi [] iks args
@@ -868,11 +873,12 @@ eqPtrs heap ptrs =
 -- forced: the cells' constructors and names (deepseq'd when the cell was
 -- made), the pass maps, and the head and IConInfo of each inlined value,
 -- which hToDef matched; the def Ids are pDef's own, forced by the module's
--- dump ahead of the capture field.
+-- dump ahead of the capture field.  The evaluator's type events become
+-- observations on the defs and ports (CaptureRebuild).
 iExpandCapture :: IM.IntMap HeapCell -> IM.IntMap HeapPointer ->
                   IM.IntMap HeapPointer -> [(HeapPointer, (HExpr, Maybe HDef))] ->
-                  [IAbstractInput] -> CapTable
-iExpandCapture iheap ptr_map ptrm0 ptr_info args =
+                  [IAbstractInput] -> CapLogF -> CapTable
+iExpandCapture iheap ptr_map ptrm0 ptr_info args caplog =
     let pertN = perturbing ptNames
         cellName p = case IM.lookup p iheap of
                        Just cell -> hc_name cell
@@ -928,7 +934,10 @@ iExpandCapture iheap ptr_map ptrm0 ptr_info args =
         isConstCon _ = False
         t0 = capFromRecs def_recs'
         t1 = foldl' addInlined t0 inlined
-    in  capStat stIExpand 0 (IM.size ptr_map) t1
+        (obs, obs_stats) = typeObservations caplog iheap ptr_map ptr_info
+        t2 = foldl' (\ t (i, fs) -> capMergeFacts i fs t) t1 obs
+        t3 = foldl' (\ t (k, n) -> capStat stIExpand k n t) t2 obs_stats
+    in  capStat stIExpand 0 (IM.size ptr_map) t3
 
 
 -----------------------------------------------------------------------------
@@ -2899,8 +2908,15 @@ walkNF e =
     nfError "walkNF" e
   else do
     when (doDebug || doTraceNF) $ traceM ("walkNF " ++ ppReadable e)
-    let upd p e@(IRefT _ _ _ _) ws = do
-            P p' e' <- unheap (P p e)
+    let -- a capture link (CaptureEvents) from the walked cell, which upd
+        -- overwrites (e was matched by iGetType)
+        capWalkLink k src = case e of
+                              IRefT _ w _ _ -> capLink k w src
+                              _ -> return ()
+        upd p r@(IRefT _ src _ _) ws = do
+            -- the walked cell gets a copy of the referenced cell's value
+            capWalkLink lkCopy src
+            P p' e' <- unheap (P p r)
             upd p' e' ws
         upd p n ws =
             let pn = P p n in
@@ -3110,11 +3126,13 @@ walkNF e =
                 -- materialized form lives in lzApplied's own cell, which
                 -- the walkNF below updates to HNF on the first walk
                 -- (later walks are the memoized-ref fast path).
-                (ICon _ (ICLazyPack { lzApplied = a })) -> do
+                (ICon _ (ICLazyPack { lzApplied = a, lzAppliedPtr = aptr })) -> do
+                    capWalkLink lkMat aptr
                     _ <- evalUHV a  -- force the applied cell to WHNF
                     (P pa a', ws) <- walkNF a
                     upd (pConj p0 pa) a' ws
-                (ICon _ (ICLazyUnpack { lzApplied = a })) -> do
+                (ICon _ (ICLazyUnpack { lzApplied = a, lzAppliedPtr = aptr })) -> do
+                    capWalkLink lkMat aptr
                     _ <- evalUHV a
                     (P pa a', ws) <- walkNF a
                     upd (pConj p0 pa) a' ws
@@ -3210,6 +3228,43 @@ evalUHV e = do
             _ <- uhCellLater pe
             return pe'
 
+-- A heaping action that makes one new cell, with that cell's pointer (-1
+-- if it made another number of cells), for the capture (CaptureEvents)
+capHeapNew :: G HExpr -> G (HExpr, HeapPointer)
+capHeapNew act = do
+  h0 <- capNextPtr
+  r <- act
+  h1 <- capNextPtr
+  return (r, if h1 == h0 + 1 then h0 else -1)
+
+-- a held node's (lzOrigPtr, lzAppliedPtr); exchanged under the "events"
+-- perturbation
+capHeldPtrs :: HeapPointer -> HeapPointer -> (HeapPointer, HeapPointer)
+capHeldPtrs o a | perturbing ptEvents = (a, o)
+                | otherwise = (o, a)
+
+-- evalUH, also giving the heap pointer of the returned heaped expression
+-- (-1: a constant, or not known), for the capture's event log
+-- (CaptureEvents): the reference uhHeaped (or uhArray) matched, or the one
+-- cell uhHeaped made.  Used only at the held pack/unpack arms of conAp'.
+evalUHP :: HExpr -> G (HExpr, PExpr, HeapPointer)
+evalUHP e = do
+        pe@(P p0 e0) <- eval1 e
+        when (doTraceHeapAlloc && isRefUH e) $
+            traceM ("wasted re-heap: " ++ ppReadable (e, pe))
+        case e0 of
+          ICon _ (ICLazyArray t arr u) | specialArr t u -> do
+            (e', pe') <- uhArray e e0 t p0
+            -- uhArray matched e
+            let ptr = case e of
+                        IRefT _ q _ _ -> q
+                        _ -> -1
+            return (e', pe', ptr)
+          _ -> do
+            pe' <- uhUnheap e pe
+            (e', ptr) <- uhHeapedP pe
+            return (e', pe', ptr)
+
 isRefUH :: HExpr -> Bool
 isRefUH (IRefT _ _ _ _) = True
 isRefUH _ = False
@@ -3277,6 +3332,25 @@ uhType (IAps f ts es) = dropArrows (length es) <$> instFunType (iGetType f) ts
 uhType e0 = do -- handle ILam and ILAM since they are WHNF
   normC <- getTypeNormalizerC
   return (iGetTypeNorm normC e0)
+
+-- uhHeaped, with the pointer of the returned expression's cell (evalUHP):
+-- the matched reference, or the one cell toHeapWHNF made; when it made
+-- none, it returned a value its clauses matched
+uhHeapedP :: PExpr -> G (HExpr, HeapPointer)
+uhHeapedP pe@(P p0 e0) =
+  case e0 of
+    ICon   _ _     | p0 == pTrue -> return (e0, -1)
+    IRefT  _ q _ _ | p0 == pTrue -> return (e0, q)
+    _ -> do t <- uhType e0
+            h0 <- capNextPtr
+            e' <- toHeapWHNF "eval-uh" t pe Nothing
+            h1 <- capNextPtr
+            let ptr | h1 == h0 + 1 = h0
+                    | h1 == h0 = case e' of
+                                   IRefT _ q _ _ -> q
+                                   _ -> -1
+                    | otherwise = -1
+            return (e', ptr)
 
 -- uhHeaped for a caller that may not use the heaped expression
 data UHCell = UHExpr HExpr
@@ -3843,7 +3917,13 @@ evalHeap (ptr, ref) = do
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, e))
         -- we don't use evalUH here because we don't want to trigger
         -- lazy bit-array fusing
-        pe' <- eval1 e >>= unheap
+        pe0 <- eval1 e
+        pe' <- unheap pe0
+        -- the cell gets a copy of a referenced cell's value (a capture
+        -- link, CaptureEvents; unheap matched pe0)
+        case pe0 of
+          P _ (IRefT _ src _ _) -> capLink lkCopy ptr src
+          _ -> return ()
         when doDebug $ traceM ("evalHeap " ++ ppReadable (ptr, pe'))
         case pe' of
             P _ (IAps (ICon _ (ICUndet { })) _ _) -> internalError ("evalHeap: " ++ ppReadable (ptr, pe'))
@@ -3853,8 +3933,11 @@ evalHeap (ptr, ref) = do
                            | otherwise = id
                     struct_field_names =
                          [Just (prefix (unQualId name)) | name <- field_names]
-                argTys <- takeArgTypes (length as) <$> instFunType (iGetType f) ts
-                as' <- mapM (\(t, a, n) -> toHeap "move-tuple" t a n) $ zip3 argTys as struct_field_names
+                ft <- instFunType (iGetType f) ts
+                let argTys = takeArgTypes (length as) ft
+                    mv = moveSpec ptr (length as) ft
+                as' <- mapM (\(k, t, a, n) -> capMoveArg mv k a (toHeap "move-tuple" t a n)) $
+                         zip4 [0..] argTys as struct_field_names
                 when doDebug $ traceM ("evalHeap move #1\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
                 {-           (mapIExprPosition cross
@@ -3873,11 +3956,18 @@ evalHeap (ptr, ref) = do
                                                    | strictPrim p = internalError ("evalHeap - prim should be evaluated:" ++ ppReadable (p, pe'))
                                                    | otherwise = True
                     isLazyOp _ = False
-                argTys <- takeArgTypes (length as) <$> instFunType (iGetType f) ts
-                let th t a = if isLazyOp f
-                             then toHeap "move-ap" t a Nothing
-                             else toHeapWHNF "move-ap" t (P pTrue a) Nothing
-                as' <- zipWithM th argTys as
+                ft <- instFunType (iGetType f) ts
+                let argTys = takeArgTypes (length as) ft
+                    -- only a constructor's arguments are moves (isLazyOp
+                    -- has matched f by the time capMoveArg reads this)
+                    mv = case f of
+                           ICon _ (ICCon {}) -> moveSpec ptr (length as) ft
+                           _ -> NoMove
+                    th (k, t) a = capMoveArg mv k a $
+                                  if isLazyOp f
+                                  then toHeap "move-ap" t a Nothing
+                                  else toHeapWHNF "move-ap" t (P pTrue a) Nothing
+                as' <- zipWithM th (zip [0..] argTys) as
                 when doDebug $ traceM ("evalHeap move #2\n" ++ ppReadable (zip as' as))
                 let pe'' = P p (IAps f ts as')
                 {-            (mapIExprPosition cross
@@ -3890,6 +3980,27 @@ evalHeap (ptr, ref) = do
                 let new_cell = HWHNF {hc_pexpr = pe', hc_name = expr_name }
                 updHeap "evalHeap" (ptr,ref) new_cell
                 return pe'
+
+-- Heap a moved argument (evalHeap), logging the move for the capture
+-- (CaptureEvents): the child is the argument's cell (a reference the
+-- heaping action matched), or the one cell the action made; a constant
+-- has none.  The spec is read only after the action ran.
+capMoveArg :: MoveSpec -> Int -> HExpr -> G HExpr -> G HExpr
+capMoveArg mv k a act = do
+  h0 <- capNextPtr
+  r <- act
+  case mv of
+    NoMove -> return r
+    DictMove -> do capMove mv k (-1)
+                   return r
+    _ -> do h1 <- capNextPtr
+            let child = case a of
+                          IRefT _ q _ _ -> q
+                          ICon _ _ -> -1
+                          _ | h1 == h0 + 1 -> h0
+                            | otherwise -> -1
+            capMove mv k child
+            return r
 
 -- used when IAps expr@(ICon name coninfo) ...
 -- so Id is name, IConInfo is coninfo, IExpr is expr, as are the accumulated arguments
@@ -4425,21 +4536,30 @@ conAp' _ (ICPrim _ PrimUnpack) _ (T ta : T tn : E _ : E x : rest)
 -- coerced eagerly so that undefined-value propagation and static folding
 -- (case tags, if conditions, always-ready proofs) behave as without
 -- holding.
+--
+-- Each arm logs a type event for the capture (CaptureEvents) on the cell
+-- of the bits: ta was compared by the fast path's guard, and ta' by the
+-- cancellation guard, before an arm runs.
 conAp' i ci@(ICPrim _ PrimPack) _ [T ta, T tn, E d, E x]
     | not doEagerPackUnpack, tn /= ITNum 0, tn /= ITNum 1 = do
-        (xee, P px xw) <- evalUH x
+        (xee, P px xw, xp) <- evalUHP x
         case xw of
-          ICon _ (ICLazyUnpack { lzTa = ta', lzOrig = b }) | ta == ta' ->
+          ICon _ (ICLazyUnpack { lzTa = ta', lzOrig = b, lzOrigPtr = bp }) | ta == ta' -> do
+              capEvent evPackCancel bp ta
               return (P px b)
-          ICon _ (ICUndet {}) ->
+          ICon _ (ICUndet {}) -> do
+              capEvent evPackUndet xp ta
               addPredG px $ unfoldBitsCoercion "PrimPack" idPack d [E xee]
           _ -> do
               sel <- mkBitsMethodSel i (iConType ci) idPack
-              aref <- toHeap "coerce" (aitBit tn)
-                             (IAps sel [ta, tn] [d, xee]) Nothing
-              let node = ICLazyPack { iConType = aitBit tn, lzTa = ta,
+              (aref, apt) <- capHeapNew $
+                  toHeap "coerce" (aitBit tn) (IAps sel [ta, tn] [d, xee]) Nothing
+              capEvent evPackHold apt ta
+              let (op, app) = capHeldPtrs xp apt
+                  node = ICLazyPack { iConType = aitBit tn, lzTa = ta,
                                       lzTn = tn, lzOrig = xee,
-                                      lzApplied = aref }
+                                      lzApplied = aref,
+                                      lzOrigPtr = op, lzAppliedPtr = app }
               -- NB: px is deliberately NOT attached here: the payload's
               -- implicit conditions live in its heap cell (xee) and
               -- re-surface when the coercion is forced or cancelled;
@@ -4449,21 +4569,34 @@ conAp' i ci@(ICPrim _ PrimPack) _ [T ta, T tn, E d, E x]
               return (P pTrue (ICon i node))
 conAp' i ci@(ICPrim _ PrimUnpack) _ [T ta, T tn, E d, E x]
     | not doEagerPackUnpack, tn /= ITNum 0, tn /= ITNum 1 = do
-        (xee, P px xw) <- evalUH x
+        (xee, P px xw, xp) <- evalUHP x
         case xw of
-          ICon _ (ICLazyPack { lzTa = ta', lzOrig = v }) | ta == ta' ->
+          ICon _ (ICLazyPack { lzTa = ta', lzOrig = v, lzAppliedPtr = bp }) | ta == ta' -> do
+              capEvent evUnpackCancel bp ta
               return (P px v)
-          ICon _ (ICUndet {}) ->
+          ICon _ (ICUndet {}) -> do
+              capEvent evUnpackUndet xp ta
               addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
-          ICon _ (ICInt {}) ->
+          ICon _ (ICInt {}) -> do
+              capEvent evUnpackConst xp ta
               addPredG px $ unfoldBitsCoercion "PrimUnpack" idUnpack d [E xee]
           _ -> do
               sel <- mkBitsMethodSel i (iConType ci) idUnpack
-              aref <- toHeap "coerce" ta
-                             (IAps sel [ta, tn] [d, xee]) Nothing
-              let node = ICLazyUnpack { iConType = ta, lzTa = ta,
+              (aref, apt) <- capHeapNew $
+                  toHeap "coerce" ta (IAps sel [ta, tn] [d, xee]) Nothing
+              -- the bits: a held pack's (at another type: a repack), a held
+              -- unpack's, or the payload's
+              case xw of
+                ICon _ (ICLazyPack { lzTa = ta', lzAppliedPtr = bp }) ->
+                    capRepack bp ta ta'
+                ICon _ (ICLazyUnpack { lzOrigPtr = bp }) ->
+                    capEvent evUnpackHold bp ta
+                _ -> capEvent evUnpackHold xp ta
+              let (op, app) = capHeldPtrs xp apt
+                  node = ICLazyUnpack { iConType = ta, lzTa = ta,
                                         lzTn = tn, lzOrig = xee,
-                                        lzApplied = aref }
+                                        lzApplied = aref,
+                                        lzOrigPtr = op, lzAppliedPtr = app }
               -- NB: px is deliberately NOT attached (see PrimPack above)
               return (P pTrue (ICon i node))
 
@@ -5500,9 +5633,15 @@ improveIf f t cnd thn@(ICon i1 n1@(ICLazyPack { lzTa = ta1, lzTn = tn1,
        -- conAp' builds it with evalUH, and the cancellation path hands
        -- it to consumers that unheap it), so heap the residual payload
        -- mux in WHNF state; lzApplied stays unevaluated, as at creation.
-       o' <- toHeapWHNF "improve-if-held" ta1 (P pTrue (IAps f [ta1] [cnd, o1, o2])) Nothing
-       a' <- toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
-       return (ICon i1 (n1 { lzOrig = o', lzApplied = a' }), True)
+       (o', op) <- capHeapNew $
+         toHeapWHNF "improve-if-held" ta1 (P pTrue (IAps f [ta1] [cnd, o1, o2])) Nothing
+       (a', app) <- capHeapNew $
+         toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
+       -- the merged bits (a capture event, CaptureEvents; ta1 was compared)
+       capEvent evPackMerge app ta1
+       let (op', app') = capHeldPtrs op app
+       return (ICon i1 (n1 { lzOrig = o', lzApplied = a',
+                             lzOrigPtr = op', lzAppliedPtr = app' }), True)
 improveIf f t cnd thn@(ICon i1 n1@(ICLazyUnpack { lzTa = ta1, lzTn = tn1,
                                                   lzOrig = o1, lzApplied = a1 }))
                   (ICon _ (ICLazyUnpack { lzTa = ta2, lzTn = tn2,
@@ -5515,9 +5654,15 @@ improveIf f t cnd thn@(ICon i1 n1@(ICLazyUnpack { lzTa = ta1, lzTn = tn1,
        -- the payload if has the packed type (Bit tn), the applied if
        -- the payload type (t = ta = iConType of the node)
        -- see the pack arm above: lzOrig must be an evaluated cell
-       o' <- toHeapWHNF "improve-if-held" (aitBit tn1) (P pTrue (IAps f [aitBit tn1] [cnd, o1, o2])) Nothing
-       a' <- toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
-       return (ICon i1 (n1 { lzOrig = o', lzApplied = a' }), True)
+       (o', op) <- capHeapNew $
+         toHeapWHNF "improve-if-held" (aitBit tn1) (P pTrue (IAps f [aitBit tn1] [cnd, o1, o2])) Nothing
+       (a', app) <- capHeapNew $
+         toHeapCon "improve-if-held" t (IAps f [t] [cnd, a1, a2]) Nothing
+       -- the merged bits (a capture event, CaptureEvents; ta1 was compared)
+       capEvent evUnpackMerge op ta1
+       let (op', app') = capHeldPtrs op app
+       return (ICon i1 (n1 { lzOrig = o', lzApplied = a',
+                             lzOrigPtr = op', lzAppliedPtr = app' }), True)
 -- Muxing a held coercion against an undefined value drops the undefined
 -- side and keeps the held node, subject to the same improveIfUndet
 -- policy as the general undefined-dropping clauses at the end of this

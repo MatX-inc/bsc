@@ -16,6 +16,7 @@ module CaptureLive(
                    CapTable(..), emptyCapTable,
                    NetLive(..), NetNameL(..), NetFrom(..),
                    NameRefL(..), NameFact(..), HostL(..), Gone(..),
+                   ObsL(..), CapTy(..), isNameFact,
                    capMerge, capMergeFacts, capGone, capGoneFacts, capCopied, capDead,
                    capRename, capStat, capNamesOf, capRecs, capFromRecs,
                    -- stages
@@ -32,6 +33,7 @@ module CaptureLive(
                    -- perturbation
                    perturbing, perturbMask,
                    ptHeader, ptNames, ptNetnames,
+                   ptEvents, ptCopylinks, ptMoves, ptWindows,
                    rotate
                   ) where
 
@@ -45,6 +47,7 @@ import PPrint(PPrint(..), empty)
 import Data.Char(isDigit)
 import FStringCompat(getFString)
 import Id(Id, getIdQual, getIdBase)
+import IType(IType)
 import IOUtil(capturePerturbEnv)
 
 -- -----
@@ -78,7 +81,32 @@ data NameRefL = HeapName !Int (Maybe Id)
               | DefName Id
               | CseNo !Char !Int
 
+-- A fact on a record: a name merged into it, or (ObsFact, from step 1.2) a
+-- type observation, which the same operations carry through every merge.
 data NameFact = NameFact { nf_ref :: !NameRefL, nf_via :: !Int, nf_stage :: !Int }
+              | ObsFact !ObsL
+
+isNameFact :: NameFact -> Bool
+isNameFact (NameFact {}) = True
+isNameFact (ObsFact {}) = False
+
+-- A type observation (CaptureEvents' kinds): made at IExpand's rebuild from
+-- the evaluator's event log, on the def whose cell the event names.  The
+-- types are ones the evaluator had evaluated, so fully built (an interned
+-- IType's children are evaluated at construction).
+data ObsL = ObsL { ol_kind  :: !Int
+                 , ol_tier  :: !Int     -- 0 the def's own cell, 1 a cell eqPtrs merged
+                                        -- into it, 2 a cell linked to one of those
+                 , ol_type  :: !CapTy   -- the observed type
+                 , ol_type2 :: !CapTy   -- a repack's pack type; a move's parent type
+                 , ol_lo    :: !Int     -- a window's offset; a move's argument index
+                 , ol_width :: !Int     -- a window's width (-1: none)
+                 , ol_src   :: !Int     -- the cell the event named (heap pointer)
+                 , ol_link  :: !Int     -- the other cell: a payload, a move's parent,
+                                        -- a window's cell (-1: none)
+                 , ol_count :: !Int }   -- identical events folded
+
+data CapTy = NoTy | Ty IType
 
 -- Where an inlined definition went: a definition, rule, method or
 -- instance of that stage, by Id, or an instance argument.
@@ -128,6 +156,13 @@ instance NFData NameRefL where
   rnf (CseNo c n) = rnf2 c n
 instance NFData NameFact where
   rnf (NameFact r v s) = rnf3 r v s
+  rnf (ObsFact o) = rnf o
+-- the types are fully built (see ObsL), so evaluating them is enough
+instance NFData ObsL where
+  rnf (ObsL _ _ t1 t2 _ _ _ _ _) = rnf t1 `seq` rnf t2
+instance NFData CapTy where
+  rnf NoTy = ()
+  rnf (Ty t) = t `seq` ()
 instance NFData HostL where
   rnf (HLId i) = rnf i
   rnf (HLInst i k) = rnf2 i k
@@ -193,12 +228,13 @@ capGone kind stage via v hosts t =
 
 -- A def nothing used left the module: recorded with its names, except a
 -- generated def (an unqualified "__h<p>", "__i<n>" or "__j<n>") with no
--- other name, which is only counted (stage * 100 + statDeadGen): such a
--- name was never in any output and stands for no source name.
+-- other name, which is only counted (stage * 100 + statDeadGen), with any
+-- type observations: such a name was never in any output and stands for
+-- no source name.
 capDead :: Int -> Id -> CapTable -> CapTable
 capDead stage v t
-  | null (M.findWithDefault [] v (ct_recs t)) && generatedId v =
-      capStat stage statDeadGen 1 t
+  | not (any isNameFact (M.findWithDefault [] v (ct_recs t))) && generatedId v =
+      capStat stage statDeadGen 1 (t { ct_recs = M.delete v (ct_recs t) })
   | otherwise = capGone kindDead stage viaDrop v [] t
 
 generatedId :: Id -> Bool
@@ -287,10 +323,14 @@ kindDead = 2
 -- permutes values already in hand.
 
 -- bit numbers, in the order of the spec's token table
-ptHeader, ptNames, ptNetnames :: Int
+ptHeader, ptNames, ptNetnames, ptEvents, ptCopylinks, ptMoves, ptWindows :: Int
 ptHeader = 0
 ptNames = 1
 ptNetnames = 2
+ptEvents = 3
+ptCopylinks = 4
+ptMoves = 5
+ptWindows = 6
 
 perturbTokens :: [(String, Int)]
 perturbTokens =

@@ -8,6 +8,7 @@ module IExpandUtils(
         unsafeDerefHeap, HeapCell(..), uniqueStateName, newStateNo, getStateNo,
         HExpr, HeapData(..), HClock, HReset, HInout, HStateVar, HRules, HWireSet, HDef, HRule, HEFace,
         runG, G, GOutput(..),
+        capNextPtr, capEvent, capRepack, capLink, capMove,
         errG, errsG, deferErrors, eWarning, eWarnings, getElabProgressContext,
         eNoNF, addRules,
         pushTopModuleSchedNameScope, pushTopValueSchedNameScope, pushModuleSchedNameScope,
@@ -116,6 +117,8 @@ import ISyntaxXRef(mapIExprPosition2)
 import IStateLoc(IStateLoc, IStateLocPathComponent(..), StateLocMap,
                  newIStateLocTop, hasIgnore, isAddRules, isLoop, extendStateLocMap,
                  stateLocToPrefix, createSuffixedId,  hasHide, hasHideAll, stateLocToHierName)
+import CaptureEvents(CapLog, newCapLog, CapLogF, freezeCapLog, MoveSpec(..),
+                     logEvent, logRepack, logLink, logMove)
 
 {- DEBUGGING AIDS
 import Util(getEnvDef,traces)
@@ -596,7 +599,10 @@ data GRefs = GRefs {
         hp             :: !(IORef HeapPointer), -- next unique id for a new heap reference
         -- store for creating unique names when ruleNameCheck is off; holds
         -- an unforced suffix, since forcing one uniquifies rule names
-        newRuleSuffix  :: !(IORef Integer)
+        newRuleSuffix  :: !(IORef Integer),
+        -- the capture's type-event log (CaptureEvents); nothing in the
+        -- compile reads it
+        capLog         :: !CapLog
         }
 
 newGRefs :: Flags -> IO GRefs
@@ -610,11 +616,42 @@ newGRefs flags = do
   reset_r <- newIORef initResetId
   hp_r <- newIORef 0
   suffix_r <- newIORef 0
+  cap_log <- newCapLog
   return (GRefs { stepNo = step_r, nextWarnStep = warn_r,
                   stateNo = state_r, ffcallNo = ffcall_r,
                   newClockId = clock_r, newClockDomain = domain_r,
                   newResetId = reset_r, hp = hp_r,
-                  newRuleSuffix = suffix_r })
+                  newRuleSuffix = suffix_r, capLog = cap_log })
+
+-- The capture's view of the evaluator (CaptureEvents).  These read and
+-- write only the hp counter and the log, never GState (unlike
+-- readCounter, whose value forces it), so they force nothing.
+
+-- the pointer the next heap cell will get
+{-# INLINE capNextPtr #-}
+capNextPtr :: G HeapPointer
+capNextPtr = G $ \ st@(GS r _) -> do
+  n <- readIORef (hp r)
+  return (n, st)
+
+{-# INLINE capIO #-}
+capIO :: (CapLog -> IO ()) -> G ()
+capIO act = G $ \ st@(GS r _) -> do
+  act (capLog r)
+  return ((), st)
+
+capEvent :: Int -> HeapPointer -> IType -> G ()
+capEvent kind p t = capIO (\ l -> logEvent l kind p t)
+
+capRepack :: HeapPointer -> IType -> IType -> G ()
+capRepack p tTo tFrom = capIO (\ l -> logRepack l p tTo tFrom)
+
+capLink :: Int -> HeapPointer -> HeapPointer -> G ()
+capLink kind dst src = capIO (\ l -> logLink l kind dst src)
+
+capMove :: MoveSpec -> Int -> HeapPointer -> G ()
+capMove NoMove _ _ = return ()
+capMove spec k child = capIO (\ l -> logMove l spec k child)
 
 -- a counter's value (see GRefs)
 {-# INLINE readCounter #-}
@@ -804,6 +841,7 @@ data GOutput a = GOutput { go_clock_domains :: [(ClockDomain, [HClock])],
                            go_backend_specific :: Bool,
                            go_ffcallNo :: Int,
                            go_atfCache :: IATFCache,
+                           go_caplog :: CapLogF,
                            goutput :: a }
 
 runG :: ErrorHandle -> Flags ->
@@ -818,6 +856,7 @@ runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
      final_steps <- readIORef (stepNo refs)
      final_hp <- readIORef (hp refs)
      final_ffcallNo <- readIORef (ffcallNo refs)
+     cap_log <- freezeCapLog (capLog refs)
      -- convert the relevant info in the final GState into the GOutput
      do
          -- if any file handles were not closed, close them now
@@ -865,6 +904,7 @@ runG errh flags symt alldefs atf_cache defId is_noinlined_func pps gFn =
                      go_backend_specific = backend_specific gs',
                      go_ffcallNo = final_ffcallNo,
                      go_atfCache = atfCache gs',
+                     go_caplog = cap_log,
                      goutput = retval
                     })
 

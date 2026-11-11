@@ -866,10 +866,18 @@ data IConInfo a =
           -- equal type arguments imply interchangeable dictionaries).
           -- lzTa/lzTn are the (a, n) type arguments, used for the
           -- cancellation match.
+          -- lzOrigPtr/lzAppliedPtr are the heap pointers of lzOrig's and
+          -- lzApplied's cells (-1: none), for the capture's event log
+          -- (CaptureEvents) only: nothing compares, prints or reads them
+          -- otherwise (Show of an IExpr is for traces and internal errors).
         | ICLazyPack { iConType :: IType, lzTa :: IType, lzTn :: IType,
-                       lzOrig :: IExpr a, lzApplied :: IExpr a }
+                       lzOrig :: IExpr a, lzApplied :: IExpr a,
+                       lzOrigPtr :: {-# UNPACK #-} !Int,
+                       lzAppliedPtr :: {-# UNPACK #-} !Int }
         | ICLazyUnpack { iConType :: IType, lzTa :: IType, lzTn :: IType,
-                         lzOrig :: IExpr a, lzApplied :: IExpr a }
+                         lzOrig :: IExpr a, lzApplied :: IExpr a,
+                         lzOrigPtr :: {-# UNPACK #-} !Int,
+                         lzAppliedPtr :: {-# UNPACK #-} !Int }
         | ICName { iConType :: IType, iName :: Id }
         | ICAttrib { iConType :: IType, iAttributes :: [(Position,PProp)] }
           -- This was updated to support a list of positions,
@@ -1315,8 +1323,8 @@ instance NFData (IConInfo a) where
     rnf (ICName x1 x2) = rnf2 x1 x2
     rnf (ICAttrib x1 x2) = rnf2 x1 x2
     rnf (ICLazyArray x1 x2 x3) = rnf3 x1 x2 x3
-    rnf (ICLazyPack x1 x2 x3 x4 x5) = rnf5 x1 x2 x3 x4 x5
-    rnf (ICLazyUnpack x1 x2 x3 x4 x5) = rnf5 x1 x2 x3 x4 x5
+    rnf (ICLazyPack x1 x2 x3 x4 x5 _ _) = rnf5 x1 x2 x3 x4 x5
+    rnf (ICLazyUnpack x1 x2 x3 x4 x5 _ _) = rnf5 x1 x2 x3 x4 x5
     rnf (ICPosition x1 x2) = rnf2 x1 x2
     rnf (ICType x1 x2) = rnf2 x1 x2
     rnf (ICPred x1 x2) = rnf2 x1 x2

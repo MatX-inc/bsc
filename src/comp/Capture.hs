@@ -14,25 +14,26 @@
 module Capture(
                Capture(..), CapFile(..), CapPackage(..), CapSites(..),
                DefRef(..), DefRec(..), NameRec(..), NameRef(..),
-               InnerRec(..), Host(..),
+               InnerRec(..), Host(..), ObsRec(..), CapType(..),
                NetCap(..), NetName(..), Origin(..),
                capVersion, emptyCapture,
                innerKindInner, innerKindConst, innerKindDead, innerKindUnattached,
-               viaNames, stageNames,
+               viaNames, stageNames, obsKindNames,
                captureHeader, captureSummary, captureDump
               ) where
 
 import Data.List(intercalate)
 import qualified Data.ByteString.Lazy as B
-import Eval(NFData(..), rnf2, rnf3, rnf4, rnf5)
+import Eval(NFData(..), rnf2, rnf3, rnf4, rnf6)
 import BinData(Bin(..), putI, getI, encodeWithIO)
 import ErrorUtil(internalError)
 
 -- Layout version; each step that changes the layout bumps it and the .ba
 -- header tag (GenABin.header).
 --   1: names (step 1.1)
+--   2: type events (step 1.2): cap_types, dr_obs, ir_obs
 capVersion :: Int
-capVersion = 1
+capVersion = 2
 
 data Capture = Capture
   { cap_version  :: !Int
@@ -41,6 +42,7 @@ data Capture = Capture
   , cap_files    :: [CapFile]
   , cap_packages :: [CapPackage]   -- the imports, with their .bo hashes
   , cap_sites    :: CapSites
+  , cap_types    :: [CapType]      -- type k is entry k-1; children point back
   , cap_defs     :: [DefRec]       -- apkg space, ascending key
   , cap_inner    :: [InnerRec]     -- names that left the module before amod_final
   , cap_stats    :: [(Int, Int)]   -- counters (stage * 100 + kind, count)
@@ -61,8 +63,9 @@ data DefRef = DRDef !Int          -- apkg_local_defs
             | DRRule !Int         -- apkg_rules
   deriving (Eq, Ord)
 
--- every name merged into a definition (its own name is in the apkg)
-data DefRec = DefRec { dr_key :: !DefRef, dr_names :: [NameRec] }
+-- every name merged into a definition (its own name is in the apkg), and
+-- the types observed on it
+data DefRec = DefRec { dr_key :: !DefRef, dr_names :: [NameRec], dr_obs :: [ObsRec] }
 
 data NameRec = NameRec { nr_name  :: !NameRef
                        , nr_via   :: !Int    -- how it merged (viaNames)
@@ -87,7 +90,8 @@ data InnerRec = InnerRec { ir_kind  :: !Int
                          , ir_via   :: !Int
                          , ir_stage :: !Int
                          , ir_names :: [NameRec]
-                         , ir_hosts :: [Host] }
+                         , ir_hosts :: [Host]
+                         , ir_obs   :: [ObsRec] }
 
 innerKindInner, innerKindConst, innerKindDead, innerKindUnattached :: Int
 innerKindInner = 0
@@ -100,6 +104,44 @@ data Host = HDef !DefRef      -- a definition in the stored apkg
           | HInner !Int       -- cap_inner (or nc_inner) entry, 1-based
           | HNet !Int         -- nc_names entry, 1-based
           | HName !NameRef    -- a host that is none of these (a later name)
+
+-- A type observation (step 1.2): IExpand saw the def's value (or the value
+-- of a cell holding the same value, or of one eqPtrs merged into it) at a
+-- type (obsKindNames):
+--   pack-hold, pack-cancel, pack-undet, pack-merge: the bits are a pack
+--     from or_type (held, cancelled against an unpack, applied at once to
+--     a don't-care, or merged by an if of two held packs);
+--   unpack-hold, unpack-cancel, unpack-undet, unpack-const, unpack-merge:
+--     the bits are unpacked to or_type;
+--   repack: the bits of a pack from or_type2, unpacked to or_type;
+--   move: the value is argument or_lo (of type or_type) of a constructor
+--     or tuple of type or_type2 in cell or_link;
+--   win-concat: bits [or_lo, or_lo+or_width) of the def are cell or_link;
+--   win-select: the def is bits [or_lo, or_lo+or_width) of cell or_link;
+--   win-zeroext, win-signext: the def extends cell or_link (or_width bits).
+-- Cells are IExpand heap pointers: a def's own is the number in its
+-- "__h<p>" name, and NHeap names give the cells merged into it.
+data ObsRec = ObsRec { or_kind  :: !Int
+                     , or_tier  :: !Int   -- 0 the def's own cell, 1 a cell eqPtrs
+                                          -- merged into it, 2 a cell linked to one
+                                          -- of those (materialised or copied)
+                     , or_type  :: !Int   -- cap_types, 0 = unknown
+                     , or_type2 :: !Int
+                     , or_lo    :: !Int
+                     , or_width :: !Int
+                     , or_src   :: !Int   -- the cell the event named
+                     , or_link  :: !Int   -- the other cell, -1 = none
+                     , or_count :: !Int } -- identical events folded
+
+-- A type, post-order: children are earlier entries (1-based).  Names are
+-- strings; kinds, sorts, fields and widths are the reader's, from the
+-- packages' .bo files.
+data CapType = CTCon !Int !Int          -- qualifier, base
+             | CTAp !Int !Int           -- function, argument
+             | CTNum !Integer
+             | CTStr !Int
+             | CTVar !Int               -- base
+             | CTForAll !Int !Int       -- binder base, body
 
 -- Verilog backend: the Verilog identifiers and where they came from
 data NetCap = NetCap { nc_names   :: [NetName]
@@ -115,7 +157,7 @@ data Origin = OApkg !DefRef !Int     -- an apkg item, and the via code
             | ODollar !Int           -- the name before removeDollarsFromVerilog
 
 emptyCapture :: Int -> Capture
-emptyCapture mode = Capture capVersion mode [] [] [] (CapSites [] [] []) [] [] [] Nothing
+emptyCapture mode = Capture capVersion mode [] [] [] (CapSites [] [] []) [] [] [] [] Nothing
 
 -- -----
 -- Enumerations (the reader's spelling of via and stage codes)
@@ -127,6 +169,13 @@ viaNames =
   , (7, "cse"), (8, "cse-name"), (9, "drop")
   , (10, "alias"), (11, "rename"), (12, "param")
   , (13, "join"), (14, "created"), (15, "aopt-copy") ]
+
+obsKindNames :: [(Int, String)]
+obsKindNames =
+  [ (1, "pack-hold"), (2, "pack-cancel"), (3, "pack-undet"), (4, "unpack-hold")
+  , (5, "unpack-cancel"), (6, "unpack-undet"), (7, "unpack-const"), (8, "repack")
+  , (9, "pack-merge"), (10, "unpack-merge"), (11, "move")
+  , (12, "win-concat"), (13, "win-select"), (14, "win-zeroext"), (15, "win-signext") ]
 
 stageNames :: [(Int, String)]
 stageNames =
@@ -142,20 +191,22 @@ stageNames =
 -- NFData
 
 instance NFData Capture where
-  rnf (Capture v m ss fs ps st ds is xs n) =
-    v `seq` m `seq` rnf ss `seq` rnf fs `seq` rnf ps `seq` rnf st `seq`
+  rnf (Capture v m ss fs ps st ts ds is xs n) =
+    v `seq` m `seq` rnf ss `seq` rnf fs `seq` rnf ps `seq` rnf st `seq` rnf ts `seq`
     rnf ds `seq` rnf is `seq` rnf xs `seq` rnf n
 instance NFData CapFile where rnf (CapFile p l) = rnf2 p l
 instance NFData CapPackage where rnf (CapPackage n h) = rnf2 n h
 instance NFData CapSites where rnf (CapSites f l c) = rnf3 f l c
 instance NFData DefRef where rnf r = r `seq` ()
-instance NFData DefRec where rnf (DefRec k ns) = rnf2 k ns
+instance NFData DefRec where rnf (DefRec k ns os) = rnf3 k ns os
+instance NFData ObsRec where rnf o = o `seq` ()
+instance NFData CapType where rnf t = t `seq` ()
 instance NFData NameRec where rnf (NameRec n v s t) = rnf4 n v s t
 instance NFData NameRef where
   rnf (NId q b) = rnf2 q b
   rnf (NHeap p m) = rnf2 p m
   rnf (NGen c n) = rnf2 c n
-instance NFData InnerRec where rnf (InnerRec k v s ns hs) = rnf5 k v s ns hs
+instance NFData InnerRec where rnf (InnerRec k v s ns hs os) = rnf6 k v s ns hs os
 instance NFData Host where
   rnf (HDef r) = rnf r
   rnf (HInner k) = rnf k
@@ -174,8 +225,8 @@ instance NFData Origin where
 -- Bin
 
 instance Bin Capture where
-  writeBytes (Capture v m ss fs ps st ds is xs n) = do
-    toBin v; toBin m; toBin ss; toBin fs; toBin ps; toBin st
+  writeBytes (Capture v m ss fs ps st ts ds is xs n) = do
+    toBin v; toBin m; toBin ss; toBin fs; toBin ps; toBin st; toBin ts
     toBin ds; toBin is; toBin xs; toBin n
   readBytes = do
     v <- fromBin
@@ -183,9 +234,9 @@ instance Bin Capture where
       then internalError ("Capture: layout version " ++ show v ++
                           ", this reader knows " ++ show capVersion)
       else do m <- fromBin; ss <- fromBin; fs <- fromBin; ps <- fromBin
-              st <- fromBin; ds <- fromBin; is <- fromBin; xs <- fromBin
-              n <- fromBin
-              return (Capture v m ss fs ps st ds is xs n)
+              st <- fromBin; ts <- fromBin; ds <- fromBin; is <- fromBin
+              xs <- fromBin; n <- fromBin
+              return (Capture v m ss fs ps st ts ds is xs n)
 
 instance Bin CapFile where
   writeBytes (CapFile p l) = toBin p >> toBin l
@@ -217,8 +268,32 @@ instance Bin DefRef where
       _ -> internalError ("Capture.DefRef: tag " ++ show t)
 
 instance Bin DefRec where
-  writeBytes (DefRec k ns) = toBin k >> toBin ns
-  readBytes = DefRec <$> fromBin <*> fromBin
+  writeBytes (DefRec k ns os) = toBin k >> toBin ns >> toBin os
+  readBytes = DefRec <$> fromBin <*> fromBin <*> fromBin
+
+instance Bin ObsRec where
+  writeBytes (ObsRec k t ty ty2 lo w src l n) = do
+    toBin k; toBin t; toBin ty; toBin ty2; toBin lo; toBin w; toBin src; toBin l; toBin n
+  readBytes = ObsRec <$> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin
+                     <*> fromBin <*> fromBin <*> fromBin <*> fromBin
+
+instance Bin CapType where
+  writeBytes (CTCon q b) = putI 0 >> toBin q >> toBin b
+  writeBytes (CTAp f a) = putI 1 >> toBin f >> toBin a
+  writeBytes (CTNum n) = putI 2 >> toBin n
+  writeBytes (CTStr s) = putI 3 >> toBin s
+  writeBytes (CTVar v) = putI 4 >> toBin v
+  writeBytes (CTForAll v t) = putI 5 >> toBin v >> toBin t
+  readBytes = do
+    t <- getI
+    case t of
+      0 -> CTCon <$> fromBin <*> fromBin
+      1 -> CTAp <$> fromBin <*> fromBin
+      2 -> CTNum <$> fromBin
+      3 -> CTStr <$> fromBin
+      4 -> CTVar <$> fromBin
+      5 -> CTForAll <$> fromBin <*> fromBin
+      _ -> internalError ("Capture.CapType: tag " ++ show t)
 
 instance Bin NameRec where
   writeBytes (NameRec n v s t) = toBin n >> toBin v >> toBin s >> toBin t
@@ -237,9 +312,10 @@ instance Bin NameRef where
       _ -> internalError ("Capture.NameRef: tag " ++ show t)
 
 instance Bin InnerRec where
-  writeBytes (InnerRec k v s ns hs) =
-    toBin k >> toBin v >> toBin s >> toBin ns >> toBin hs
+  writeBytes (InnerRec k v s ns hs os) =
+    toBin k >> toBin v >> toBin s >> toBin ns >> toBin hs >> toBin os
   readBytes = InnerRec <$> fromBin <*> fromBin <*> fromBin <*> fromBin <*> fromBin
+                       <*> fromBin
 
 instance Bin Host where
   writeBytes (HDef r) = putI 0 >> toBin r
@@ -293,12 +369,15 @@ captureHeader c =
 captureSummary :: Capture -> IO [String]
 captureSummary c = do
   let net = cap_net c
+      obs = concatMap dr_obs (cap_defs c) ++ concatMap ir_obs (cap_inner c)
   sections <- sequence
     [ row "strings" (length (cap_strings c)) (cap_strings c)
     , row "files" (length (cap_files c)) (cap_files c)
     , row "packages" (length (cap_packages c)) (cap_packages c)
     , row "sites" (length (cs_line (cap_sites c))) (cap_sites c)
+    , row "types" (length (cap_types c)) (cap_types c)
     , row "defs" (length (cap_defs c)) (cap_defs c)
+    , row "obs" (length obs) obs
     , row "inner" (length (cap_inner c)) (cap_inner c)
     , row "stats" (length (cap_stats c)) (cap_stats c)
     , row "net.names" (maybe 0 (length . nc_names) net) (fmap nc_names net)
@@ -319,8 +398,11 @@ captureDump :: Capture -> [String]
 captureDump c =
   [ "capture version " ++ show (cap_version c) ++ " mode " ++ show (cap_mode c) ] ++
   [ "package " ++ str n ++ " " ++ str h | CapPackage n h <- cap_packages c ] ++
-  [ "def " ++ ref k ++ ": " ++ names ns | DefRec k ns <- cap_defs c ] ++
-  [ "inner " ++ show i ++ " " ++ inner r | (i, r) <- zip [1 :: Int ..] (cap_inner c) ] ++
+  [ "type " ++ show i ++ " " ++ ctype t | (i, t) <- zip [1 :: Int ..] (cap_types c) ] ++
+  concat [ ("def " ++ ref k ++ ": " ++ names ns) : map (("  obs " ++) . obs) os
+         | DefRec k ns os <- cap_defs c ] ++
+  concat [ ("inner " ++ show i ++ " " ++ inner r) : map (("  obs " ++) . obs) (ir_obs r)
+         | (i, r) <- zip [1 :: Int ..] (cap_inner c) ] ++
   [ "stat " ++ show k ++ " " ++ show n | (k, n) <- cap_stats c ] ++
   case cap_net c of
     Nothing -> []
@@ -366,7 +448,22 @@ captureDump c =
          | k == innerKindDead = "dead"
          | k == innerKindUnattached = "unattached"
          | otherwise = show k
-  inner (InnerRec k v s ns hs) =
+  ctype (CTCon q b) = "con " ++ (if q == 0 then "" else str q ++ "::") ++ str b
+  ctype (CTAp f a) = "ap " ++ show f ++ " " ++ show a
+  ctype (CTNum n) = "num " ++ show n
+  ctype (CTStr t) = "str " ++ str t
+  ctype (CTVar v) = "var " ++ str v
+  ctype (CTForAll v t) = "forall " ++ str v ++ " " ++ show t
+  tyref 0 = "?"
+  tyref k = "t" ++ show k
+  obs (ObsRec k t ty ty2 lo w src l n) =
+    lkp obsKindNames k ++ " tier " ++ show t ++ " " ++ tyref ty ++
+    (if ty2 /= 0 then " from " ++ tyref ty2 else "") ++
+    (if lo >= 0 then " lo " ++ show lo else "") ++
+    (if w >= 0 then " width " ++ show w else "") ++
+    " cell " ++ show src ++ (if l >= 0 then " link " ++ show l else "") ++
+    (if n /= 1 then " x" ++ show n else "")
+  inner (InnerRec k v s ns hs _) =
     kind k ++ " " ++ via v ++ "@" ++ stage s ++ ": " ++ names ns ++
     (if null hs then "" else " in " ++ intercalate ", " (map host hs))
   origin (OApkg r v) = ref r ++ " (" ++ via v ++ ")"

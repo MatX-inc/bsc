@@ -152,10 +152,12 @@ library
     CFreeVars
     CPPLineDirectives
     Capture
+    CaptureEvents
     CaptureFreeze
     CaptureHooks
     CaptureLedger
     CaptureLive
+    CaptureRebuild
     CSubst
     CSyntax
     CSyntaxTypes

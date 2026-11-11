@@ -7,6 +7,7 @@ module IType(
   ,itArrow
   ,mkNumConT
   ,iTypeNodeId
+  ,tCode
   ,iTypeAtfFree
   ,iTypeGroundKind
   ,fTVars
