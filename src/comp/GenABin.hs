@@ -5,6 +5,7 @@ module GenABin(genABinFile, readABinFile) where
 
 import Error(internalError, ErrMsg(..), ErrorHandle, bsErrorUnsafe)
 import Position
+import FStringCompat(FString)
 
 --import Time(ClockTime)
 import Backend
@@ -39,9 +40,9 @@ header = B.unpack $ TE.encodeUtf8 $ T.pack "bsc-ba-20261030-15"
 headerBS :: B.ByteString
 headerBS = B.pack header
 
-genABinFile :: ErrorHandle -> (Position -> Position) -> String -> ABin -> IO ()
-genABinFile errh remapP fn abin =
-    writeBinaryFileCatch errh fn (header ++ encodeWith remapP abin)
+genABinFile :: ErrorHandle -> (Bool -> FString -> FString) -> String -> ABin -> IO ()
+genABinFile errh remapF fn abin =
+    writeBinaryFileCatch errh fn (header ++ encodeWith remapF abin)
 
 -- A .ba marks nothing lazy, and its readers (linking, the -u staleness
 -- check) consume and validate the whole file, so it is decoded
