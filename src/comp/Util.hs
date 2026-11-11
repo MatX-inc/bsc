@@ -508,16 +508,19 @@ map_deleteMany ks m =
 map_mapM :: (Ord k, Monad m) => (a -> m b) -> M.Map k a -> m (M.Map k b)
 map_mapM fn m = mapSndM fn (M.toList m) >>= return . M.fromList
 
+{-# INLINABLE map_unionsWithM #-}
 map_unionsWithM :: (Ord k, Monad m) =>
                    (a -> a -> m a) -> [M.Map k a] -> m (M.Map k a)
 map_unionsWithM fn [] = return M.empty
 map_unionsWithM fn [m] = return m
 map_unionsWithM fn (m:ms) = foldM (map_unionWithM fn) m ms
 
+{-# INLINABLE map_unionWithM #-}
 map_unionWithM :: (Ord k, Monad m) =>
                   (a -> a -> m a) -> M.Map k a -> M.Map k a -> m (M.Map k a)
 map_unionWithM fn m1 m2 = map_insertManyWithM fn (M.toList m2) m1
 
+{-# INLINABLE map_insertWithM #-}
 map_insertWithM :: (Ord k, Monad m) =>
                    (a -> a -> m a) -> k -> a -> M.Map k a -> m (M.Map k a)
 map_insertWithM fn k a m =
@@ -526,6 +529,7 @@ map_insertWithM fn k a m =
       Just b  -> do c <- fn a b
                     return $ M.insert k c m
 
+{-# INLINABLE map_insertManyWithM #-}
 map_insertManyWithM :: (Ord k, Monad m) =>
                        (a -> a -> m a) -> [(k, a)] -> M.Map k a -> m (M.Map k a)
 map_insertManyWithM fn kas m =
