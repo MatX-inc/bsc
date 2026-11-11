@@ -692,7 +692,7 @@ instance Bin (IConInfo a) where
     writeBytes (ICType t it)    = do putI 19; toBin t; toBin it
     writeBytes (ICIFace _ _ _) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICIFace"
-    writeBytes (ICValue _ _) =
+    writeBytes (ICValue _ _ _) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICValue"
     writeBytes (ICMethArg _) =
         internalError "GenBin.Bin(IConInfo).writeBytes: ICMethArg"

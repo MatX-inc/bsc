@@ -21,7 +21,7 @@ iSubstWhen tst subMap defMap e = sub e
             Nothing ->
               let ev = fromJustOrErr ("iSubstWhen ICValue def not found: " ++ ppReadable i)
                                      (M.lookup i defMap)
-              in ICon i (val { iValDef = ev })
+              in ICon i (val { iValDef = ev, iValKey = NoIValKey })
             Just e -> if tst e then e else d
         sub u@(ICon i (ICUndet t k (Just v))) = ICon i (ICUndet t k (Just (sub v)))
         sub c@(ICon {}) = c
