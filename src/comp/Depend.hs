@@ -186,8 +186,7 @@ getInfo errh flags gflags fname pkg@(CPackage i _ imps _ _ defs incs) warns = do
     -- are current, and in -signature-only when both its .bi and its .tci
     -- are (missing is older than any date)
     tbo <- case frontEndMode flags of
-             m | m `elem` [CheckOnly, CheckWithSignature] ->
-                   min <$> getIfcTime biSuffix <*> getIfcTime chkSuffix
+             CheckOnly -> min <$> getIfcTime biSuffix <*> getIfcTime chkSuffix
              SignatureOnly -> min <$> getIfcTime biSuffix <*> getIfcTime tciSuffix
              _ -> getIfcTime (ifcSuffix flags)
 

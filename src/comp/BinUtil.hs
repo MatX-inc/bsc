@@ -264,8 +264,8 @@ type BiMap = M.Map String (String, BiFile, String)
 -- Under -u -check-only, whose dependency check has made each .chk current
 -- with its .bi, a .chk beside the .bi that records a failed check is
 -- reported as readImports reports a .bo with poisoned definitions, the
--- first time the package is read in the run.  seen0 is Just the packages
--- read by earlier compiles of the -u run, returned updated.
+-- first time a check of the run reads the package.  seen0 is Just the
+-- packages read by earlier checks of the -u run, returned updated.
 readImportsBi :: ErrorHandle -> Flags -> HashMap -> Maybe (S.Set String) ->
                  CPackage ->
                  IO (CPackage, HashMap, Maybe (S.Set String), [(Id, String)])
@@ -307,7 +307,7 @@ readBi :: ErrorHandle -> Flags -> String -> BiMap -> HashMap ->
           Maybe (S.Set String) -> Id -> IO (BiMap, HashMap, Maybe (S.Set String))
 readBi errh flags pkgName bimap0 hashmap0 seen0 p0 = go bimap0 hashmap0 seen0 [p0]
   where
-    checking = frontEndMode flags `elem` [CheckOnly, CheckWithSignature]
+    checking = frontEndMode flags == CheckOnly
     firstRead p = maybe False (not . S.member (getIdString p))
     pillMsg = if (enablePoisonPills flags)
               then bsWarning errh

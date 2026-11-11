@@ -336,30 +336,37 @@ compile_with_deps errh flags name = do
         verb = showUpds flags && not (quiet flags)
         checking = frontEndMode flags == CheckOnly
         -- the flags when re-compiling depended modules
-        -- (-check-only checks each import and writes the .bi it reads)
         flags_depend = flags { updCheck = False,
                                genName = [],
-                               showCodeGen = verb,
-                               frontEndMode = if checking
-                                              then CheckWithSignature
-                                              else frontEndMode flags }
+                               showCodeGen = verb }
         -- the flags when re-compiling this module
-        flags_this = flags_depend { genName = genName flags,
-                                    frontEndMode = frontEndMode flags }
+        flags_this = flags_depend { genName = genName flags }
+        -- -check-only checks each import it recompiles after a
+        -- -signature-only pass has written the import's .bi (and .tci),
+        -- which later packages read; the named package is only checked
+        passes fn | fn == name = [flags_this]
+                  | checking   = [flags_depend { frontEndMode = SignatureOnly },
+                                  flags_depend]
+                  | otherwise  = [flags_depend]
         comp biSeen (success, binmap0, hashmap0) (fn, pkg, parse_warns) = do
-            -- the .chk records only this package's diagnostics
-            when checking $ takeDiagnostics errh >> return ()
             when (verb) $ putStrLnF ("compiling " ++ fn)
-            -- Show warnings for this file
-            when (not $ null parse_warns) $ bsWarning errh parse_warns
-            let fl = if (fn == name)
-                     then flags_this
-                     else flags_depend
-            t <- getNow
-            removeStaleTci errh fl fn
-            (cur_success, binmap, hashmap)
-                <- compilePackage errh fl t binmap0 hashmap0 biSeen fn pkg
-            return (cur_success && success, binmap, hashmap)
+            let pass (ok, binmap, hashmap) fl = do
+                    -- a .chk records only its own pass's diagnostics
+                    when checking $ takeDiagnostics errh >> return ()
+                    -- Show warnings for this file
+                    when (not $ null parse_warns) $ bsWarning errh parse_warns
+                    t <- getNow
+                    removeStaleTci errh fl fn
+                    -- readImportsBi reports an import's failed check at the
+                    -- first check that reads its .bi; a signature pass reads
+                    -- no .chk, so its reads do not count
+                    let seen = if frontEndMode fl == SignatureOnly
+                               then Nothing
+                               else biSeen
+                    (cur_success, binmap', hashmap')
+                        <- compilePackage errh fl t binmap hashmap seen fn pkg
+                    return (cur_success && ok, binmap', hashmap')
+            foldM pass (success, binmap0, hashmap0) (passes fn)
     when (verb) $ putStrLnF "checking package dependencies"
 
     t <- getNow
@@ -675,7 +682,7 @@ compilePackage
     when (warnRedundantProvisos && not tcErrors) $
       checkRedundantProvisos errh symt11 mder signProvisos mod
 
-    when (frontEndMode flags `elem` [CheckOnly, CheckWithSignature]) $
+    when (frontEndMode flags == CheckOnly) $
         writeCheck errh flags t dumpnames name pwd biClosure symt
                    (mergeCATFCaches ctypeATFCache atfCacheFromCtxReduce)
                    mctx mod tcErrors
@@ -1072,12 +1079,13 @@ flagsFingerprint flags =
 -- typecheck: a foreign function imported twice (genForeign), a local
 -- mutual recursion that iConvPackage cannot convert, genUserSign's
 -- messages, unused imports, and what writing the .bo's signatures
--- raises.  The other messages of later stages are not produced.  For an
--- import that -u -check-only recompiles (CheckWithSignature), also write
--- the package's .bi.  Checking a .tci, the packages used by the exports
--- come from the .tci: genUserSign, and its messages, belong to
--- -signature-only, whose table holds every imported entry.  The .chk
--- records the files the check read (closure).
+-- raises.  The other messages of later stages are not produced.  The
+-- .bi of an import that -u -check-only checks comes from a
+-- -signature-only pass (compile_with_deps), not from here.  Checking a
+-- .tci, the packages used by the exports come from the .tci:
+-- genUserSign, and its messages, belong to -signature-only, whose table
+-- holds every imported entry.  The .chk records the files the check read
+-- (closure).
 writeCheck :: ErrorHandle -> Flags -> TimeInfo -> DumpNames -> String ->
               FilePath -> [(Id, String)] -> SymTab -> CATFCache -> CPackage ->
               CPackage -> Bool -> [S.Set Id] -> Maybe (S.Set Id) -> IO Bool
@@ -1121,12 +1129,6 @@ writeCheck errh flags t dumpnames name pwd closure symt atfCache
     genChkFile errh remapP chk_filename (chkOf contents)
     when (verbose flags) $
          putStrLnF ("Check file created: " ++ getRelativeFilePath chk_filename)
-    when (frontEndMode flags == CheckWithSignature) $ do
-        let bi_filename = putInDir (bdir flags) name biSuffix
-            bi_sig = fromJustOrErr "writeCheck: no signature" m_bi_sig
-        genBiFile errh remapP bi_filename (BiFile pkgId closure bi_sig)
-        when (verbose flags) $
-             putStrLnF ("Interface file created: " ++ getRelativeFilePath bi_filename)
     _ <- dumpStr errh flags t DFwriteBin dumpnames chk_filename
     return ok
 

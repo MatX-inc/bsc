@@ -1,0 +1,11 @@
+package FrontEndChainB where
+
+-- The middle of the chain (see frontend.exp)
+
+import FrontEndChainA
+
+struct Setting = { mode :: Mode; count :: UInt 8 }
+    deriving (Eq, Bits)
+
+weight :: Setting -> UInt 8
+weight s = scale s.mode * s.count
