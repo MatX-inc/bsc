@@ -162,10 +162,11 @@ proc find_lines_in_order { filename strings } {
     find_regexp $filename $re
 }
 
-# -u -check-only gives each import it recompiles a -signature-only pass,
-# which writes the .bi that later packages read, and then a check; the
-# named package is only checked.  A chain FrontEndChainA <- FrontEndChainB
-# <- FrontEndChainC, from scratch:
+# -u -check-only gives each package it recompiles, the named one too, a
+# -signature-only pass, which writes the .bi that later packages read and
+# the .tci, and then checks the .tci, as -check-only X.tci does (-trace-tci
+# reports each .tci read).  A chain FrontEndChainA <- FrontEndChainB <-
+# FrontEndChainC, from scratch:
 set chain_passes {
     "compiling ./FrontEndChainA.bs"
     "Interface file created: FrontEndChainA.bi"
@@ -176,24 +177,34 @@ set chain_passes {
     "Typecheck input file created: FrontEndChainB.tci"
     "Check file created: FrontEndChainB.chk"
     "compiling FrontEndChainC.bs"
+    "Interface file created: FrontEndChainC.bi"
+    "Typecheck input file created: FrontEndChainC.tci"
     "Check file created: FrontEndChainC.chk"
     "All packages checked."
 }
-foreach p {FrontEndChainA FrontEndChainB FrontEndChainC} {
+set chain {FrontEndChainA FrontEndChainB FrontEndChainC}
+foreach p $chain {
     foreach s {bi tci chk bo} {
         erase $p.$s
     }
 }
-front_end_pass FrontEndChainC.bs -check-only "-v"
+front_end_pass FrontEndChainC.bs -check-only "-v -trace-tci"
 find_lines_in_order [make_bsc_output_name FrontEndChainC.bs] $chain_passes
-# each pass reports FrontEndChainA's warnings, as the standalone compiles do
-find_n_strings [make_bsc_output_name FrontEndChainC.bs] "(P0223)" 2
-find_n_strings [make_bsc_output_name FrontEndChainC.bs] "(T0160)" 2
-string_does_not_occur [make_bsc_output_name FrontEndChainC.bs] "FrontEndChainC.bi"
-string_does_not_occur [make_bsc_output_name FrontEndChainC.bs] "FrontEndChainC.tci"
-foreach f {FrontEndChainA.bi FrontEndChainA.chk FrontEndChainB.bi FrontEndChainB.chk \
-           FrontEndChainC.chk} {
-    copy $f $f.u-out
+foreach p $chain {
+    find_lines_in_order [make_bsc_output_name FrontEndChainC.bs] \
+        [list "Typecheck input file created: $p.tci" "tci read $p.tci" \
+              "Check file created: $p.chk"]
+}
+# the front end runs once per package, so FrontEndChainA's warnings are
+# reported once
+find_n_strings [make_bsc_output_name FrontEndChainC.bs] "(P0223)" 1
+find_n_strings [make_bsc_output_name FrontEndChainC.bs] "(T0160)" 1
+nukedir frontend_u
+mkdir frontend_u
+foreach p $chain {
+    foreach s {bi chk} {
+        copy $p.$s frontend_u/$p.$s
+    }
 }
 
 # then checks only the named package again
@@ -202,15 +213,26 @@ string_does_not_occur [make_bsc_output_name FrontEndChainC.bs] "FrontEndChainA"
 string_does_not_occur [make_bsc_output_name FrontEndChainC.bs] "FrontEndChainB"
 find_n_strings [make_bsc_output_name FrontEndChainC.bs] "compiling FrontEndChainC.bs" 1
 
-# The imports' .bi and every .chk (which records the package's warnings)
-# are those of standalone -signature-only and -check-only compiles
-foreach p {FrontEndChainA FrontEndChainB} {
-    front_end_pass $p.bs -signature-only "" 1
-    compare_bytes $p.bi.u-out $p.bi
+# A .tci that -u wrote is checked by a standalone -check-only too (the
+# flags fingerprint leaves out what -u sets only for printing)
+foreach p $chain {
+    front_end_pass $p.tci -check-only "" 1
 }
-foreach p {FrontEndChainA FrontEndChainB FrontEndChainC} {
-    front_end_pass $p.bs -check-only "" 1
-    compare_bytes $p.chk.u-out $p.chk
+
+# Every .bi is that of a standalone -signature-only compile, and every
+# .chk records the messages, status and package of a standalone check of
+# the .tci that compile writes (the .tci, and so the .chk's record of it,
+# can differ: -u has interned the other packages' strings too)
+foreach p $chain {
+    front_end_pass $p.bs -signature-only "" 1
+    compare_bytes frontend_u/$p.bi $p.bi
+    front_end_pass $p.tci -check-only "" 1
+    if { [do_internal_checks] } {
+        dumpbo frontend_u/$p.chk
+        dumpbo $p.chk
+        compare_file [make_dumpbo_output_name frontend_u/$p.chk] \
+            [make_dumpbo_output_name $p.chk]
+    }
 }
 
 # A changed import gets both passes again, and what imports it is checked
@@ -226,8 +248,8 @@ foreach s {chk bi} {
     find_lines_in_order [make_bsc_output_name FrontEndChainC.bs] $chain_passes
 }
 
-# A body error in the bottom package of a chain is reported by its check,
-# after its signature pass has written its .bi
+# A body error in the bottom package of a chain is reported by the check
+# of its .tci, after its signature pass has written its .bi
 foreach p {FrontEndBodyErr FrontEndUsesBodyErr FrontEndChainBodyErr} {
     foreach s {bi tci chk} {
         erase $p.$s
@@ -239,8 +261,8 @@ find_lines_in_order [make_bsc_output_name FrontEndChainBodyErr.bs] \
 string_does_not_occur [make_bsc_output_name FrontEndChainBodyErr.bs] "FrontEndUsesBodyErr"
 files_exist {FrontEndBodyErr.bi FrontEndBodyErr.tci}
 
-# and, continuing after errors, the first check that reads its .bi warns
-# that its check failed: the middle package's check, not a signature pass
+# and, continuing after errors, the first signature pass that reads its
+# .bi warns that its check failed: the middle package's
 foreach p {FrontEndBodyErr FrontEndUsesBodyErr FrontEndChainBodyErr} {
     foreach s {bi tci chk} {
         erase $p.$s
@@ -267,3 +289,11 @@ foreach d {frontend_paths/a frontend_paths/b/c} {
 front_end_pass FrontEndB.bs -check-only "-p frontend_paths/a -bdir frontend_paths/out_a" 1
 front_end_pass FrontEndB.bs -check-only "-p frontend_paths/b/c -bdir frontend_paths/out_b" 1
 compare_file frontend_paths/out_a/FrontEndB.chk frontend_paths/out_b/FrontEndB.chk
+
+# -warn-redundant-provisos needs the package before context reduction,
+# which the check of a .tci does not have, so it needs -check-only
+# without -u
+front_end_fail FrontEndB.bs -check-only "-warn-redundant-provisos"
+find_regexp [make_bsc_output_name FrontEndB.bs] \
+    {-warn-redundant-provisos needs a check of the source file}
+front_end_pass FrontEndB.bs -check-only "-warn-redundant-provisos" 1
