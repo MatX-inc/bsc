@@ -31,12 +31,12 @@ module GenTci(TciFile(..), TciInput(..), TciStats(..),
 -- except in imported class and field default bodies, which the check
 -- typechecks in the package's scope.
 
-import Control.Monad(when, zipWithM)
+import Control.Monad(when, zipWithM, foldM)
 import Control.Exception(evaluate)
 import Data.Maybe(isNothing, fromMaybe)
 import Data.Bits(shiftL)
 import Data.Char(isDigit)
-import Data.List(isPrefixOf, isSuffixOf, sort)
+import Data.List(isPrefixOf, sort, foldl')
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Builder as BB
@@ -48,7 +48,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as TE
 import Data.Word(Word64)
 
-import FStringCompat(FString, getFString, fstringId, mkFString)
+import FStringCompat(FString, getFString, fstringId, mkFString, headFString, allFString,
+                     foldrFString, isSuffixOfFString)
 import Position(Position(..), noPosition)
 import Id
 import CType
@@ -61,7 +62,7 @@ import BinData
 import GenBin(CPackageBin(..))
 import GenBi(BiFile(..), readBiFile, readBiFileMaybe, readBiStrings)
 import FileNameUtil(biSuffix)
-import FileIOUtil(writeFileBuilderCatch, readBinaryFileCatch, existsFilePath, readBinFoundFile)
+import FileIOUtil(writeFileBuilderCatch, existsFilePath, readBinFoundFile)
 import Util(hashInit, nextHashByte, showHash)
 import SpeedyString(internCount)
 import PreStrings(allPreStrings)
@@ -176,57 +177,59 @@ genTciFile errh fn ti = do
                          (CPackageBin (CPackage pid exps imps sigs fixs ds incs))
                          libs (sortIds ut) (sortIds uc) (sortIds ue)
                          (M.toList (ti_atf ti))
-    (bsL, strsL) <- strict <$> encodeV2Strip msel local
+    (bsL, strsL) <- encodeV2Strip msel local
     -- every string of the .bi files the signatures were read from (Sig has
     -- read them, so these are interned already): the check interns a
     -- library's when it reads it; a MatX file's that no kept entry holds
     -- are those only the pruned entries hold (its package name is kept)
-    let biStrings lib = concat <$> sequence
-                          [ readBinaryFileCatch errh noPosition f >>= readBiStrings errh f
-                          | (l, CImpSign f _ _) <- zip isLib sigs, l == lib ]
-    strsLib <- biStrings True
+    let foldBi lib k z = foldM (\a f -> do strs <- readBiStrings errh f
+                                           return $! foldl' k a strs)
+                               z [ f | (l, CImpSign f _ _) <- zip isLib sigs, l == lib ]
+    strsLib <- foldBi True addNew IM.empty
     let exportAll = S.fromList [ getIdString p | Left es <- [exps], CExpPkg p <- es
                                                , p /= pid ]
     (sigs', stats) <-
         if ti_full ti
         then return ([ wholeSig s | (False, s) <- zip isLib sigs ], keepAllStats isLib sigs)
         else pruneSigs (IS.fromList (map fstringId strsL)) exportAll (zip isLib sigs)
-    (bsS, strsS) <- strict <$> encodeV2Strip msel [ TciSig s | s <- sigs' ]
-    strsD <- if ti_full ti then return [] else biStrings False
-    let kept = IS.fromList (map fstringId (strsL ++ strsS ++ strsLib))
+    (bsS, strsS) <- encodeV2Strip msel [ TciSig s | s <- sigs' ]
+    let kept = foldl' (foldl' addNew) strsLib [strsL, strsS]
         -- a check makes the compiler's own strings itself (NumEq for a
         -- numeric proviso, say), and spellings of the shapes it generates;
         -- dropping one would move it after every string of the file
         -- instead of keeping Sig's rank
         builtins = IS.fromList (map fstringId allPreStrings)
-        onlyDropped = IS.difference (IS.fromList [ fstringId x | x <- strsD
-                                                             , not (generatedShape x) ])
-                                    (IS.union kept builtins)
-        handoff = [ x | x <- ti_handoff_strings ti
-                      , not (IS.member (fstringId x) onlyDropped) ]
-        strs = S.toAscList (S.fromList (strsL ++ strsS ++ strsLib ++ handoff))
-    (bsT, _) <- strict <$> encodeV2Strip Nothing strs
-    let body = BB.word64LE (fromIntegral (B.length bsT)) <> BB.byteString bsT <>
-               BB.word64LE (fromIntegral (B.length bsL)) <> BB.byteString bsL <>
-               BB.byteString bsS
-        bodyBS = BL.toStrict (BB.toLazyByteString body)
-        hash = showHash (B.foldl' nextHashByte hashInit bodyBS)
-    writeFileBuilderCatch errh fn (BB.byteString headerBS <> BB.byteString bodyBS)
+        dropCand d x = let i = fstringId x
+                       in  if IM.member i kept || IS.member i builtins || IS.member i d
+                           then d else IS.insert i d
+    -- the strings of the MatX files that are neither kept nor the compiler's
+    cands <- if ti_full ti then return IS.empty else foldBi False dropCand IS.empty
+    let onlyDropped x = IS.member (fstringId x) cands && not (generatedShape x)
+        handoff = [ x | x <- ti_handoff_strings ti, not (onlyDropped x) ]
+        strs = IM.elems (foldl' addNew kept handoff)
+    (bsT, _) <- encodeV2Strip Nothing strs
+    let lenLE b = BB.toLazyByteString (BB.word64LE (fromIntegral (BL.length b)))
+        body = [lenLE bsT, bsT, lenLE bsL, bsL, bsS]
+        hash = showHash (foldl' (BL.foldl' nextHashByte) hashInit body)
+    writeFileBuilderCatch errh fn (BB.byteString headerBS <> foldMap BB.lazyByteString body)
     return (stats { ts_strings = length strs
-                  , ts_bytes = (B.length bsT, B.length bsL, B.length bsS)
+                  , ts_bytes = (bl bsT, bl bsL, bl bsS)
                   , ts_stripped = if ti_keep_pos ti then 0 else IS.size impFiles },
             hash)
   where wholeSig (CImpSign _ _ (CSignature n _ fs ds)) = CSignature n [] fs ds
-        strict (bs, ss) = (BL.toStrict bs, ss)
+        bl = fromIntegral . BL.length
+        -- an IntMap by id is the strings in Ord FString order
+        addNew m x = let i = fstringId x
+                     in  if IM.member i m then m else IM.insert i x m
 
 -- The spellings of the names that the check generates (_tcdictN, x__,
 -- x_AV for $swrite into x (TCheck.createIdNew), instance names with
 -- dots, x~y, numbers), by their shape
 generatedShape :: FString -> Bool
 generatedShape fs =
-    let s = getFString fs
-    in  take 1 s == "_" || "__" `isSuffixOf` s || "_AV" `isSuffixOf` s ||
-        (not (null s) && all isDigit s) || any (`elem` ".~") s
+    headFString fs == Just '_' || isSuffixOfFString "__" fs || isSuffixOfFString "_AV" fs ||
+    (headFString fs /= Nothing && allFString isDigit fs) ||
+    foldrFString (\c r -> c `elem` ".~" || r) False fs
 
 -- A library's .bi is compiled with -stdlib-names, which marks every
 -- position in it, the package name's included (the file it was read from

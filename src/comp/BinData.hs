@@ -13,7 +13,8 @@ module BinData ( Byte
                , Lazy(..), toBinLazy, fromBinLazy
                , encodeWithIO, encodeV2, encodeV2With
                , encodeV2Strip, keepPositions
-               , decode, decodeStrict, decodeWithHash, decodeStrings
+               , decode, decodeStrict, decodeWithHash
+               , maxFooterSize, strTableRegion, decodeStringTable
                ) where
 
 {- Routines for converting structures to/from byte strings.
@@ -1947,15 +1948,23 @@ footerBytes ft =
     ++ footerMagic (fFormat ft)
 
 parseFooter :: BS.ByteString -> Footer
-parseFooter s =
-    let len  = BS.length s
+parseFooter s = parseFooterOf (BS.length s) s
+
+-- The footer of a container of len bytes, read from t, the container's
+-- last bytes: all of them, or at least maxFooterSize.
+-- Out of line: inlined into decodeContainer, it makes every container
+-- read allocate more
+{-# NOINLINE parseFooterOf #-}
+parseFooterOf :: Int -> BS.ByteString -> Footer
+parseFooterOf len t =
+    let tlen = BS.length t
         -- every format's magic has the same length
-        magic = BS.unpack (BS.drop (len - length (footerMagic Format1)) s)
+        magic = BS.unpack (BS.drop (tlen - length (footerMagic Format1)) t)
         fmt = case [ f | f <- [Format1, Format2], footerMagic f == magic ] of
                 [f] -> f
                 _ -> bad "footer"
         base = len - footerSize fmt
-        field i = readU64 s (base + 8 * i)
+        field i = readU64 t (tlen - footerSize fmt + 8 * i)
         nk = length (formatKinds fmt)
         ft = Footer { fFormat     = fmt
                     , fBodiesEnd  = field 0
@@ -2544,10 +2553,14 @@ emptyTables s =
 -- The string table in table order, each string interned as it is read
 -- (unless walking: see mkTables)
 readStrTable :: Bool -> BS.ByteString -> Footer -> ST s [FString]
-readStrTable walk s ft =
-  runAt (emptyTables s) False (fStrStart ft) (fChunkStart ft) "string table" $ do
+readStrTable walk s ft = readStrings walk s (fStrStart ft) (fChunkStart ft) (fStrCount ft)
+
+-- The string table that holds count strings and spans start .. end of s
+readStrings :: Bool -> BS.ByteString -> Int -> Int -> Int -> ST s [FString]
+readStrings walk s start end count =
+  runAt (emptyTables s) False start end "string table" $ do
     n <- getU32
-    when (n /= fStrCount ft) $
+    when (n /= count) $
       internalError "BinData.decode: malformed container (string count)"
     let loop i acc
           | i >= n    = return (reverse acc)
@@ -2557,10 +2570,21 @@ readStrTable walk s ft =
                            loop (i + 1) (fs : acc)
     loop (0 :: Int) []
 
--- A container's strings, interned in table order as decode interns them,
--- with nothing else decoded
-decodeStrings :: BS.ByteString -> [FString]
-decodeStrings s = runST (readStrTable False s (parseFooter s))
+-- The most bytes a container's footer takes
+maxFooterSize :: Int
+maxFooterSize = maximum (map footerSize [Format1, Format2])
+
+-- A container's string table: its start and end (offsets into the
+-- container) and its string count, from the container's length and last
+-- bytes as parseFooterOf takes them; a bad footer fails as decode fails
+strTableRegion :: Int -> BS.ByteString -> (Int, Int, Int)
+strTableRegion len t = let ft = parseFooterOf len t
+                       in  (fStrStart ft, fChunkStart ft, fStrCount ft)
+
+-- The strings of a string table (see strTableRegion) holding n strings,
+-- interned in table order as decode interns them
+decodeStringTable :: Int -> BS.ByteString -> [FString]
+decodeStringTable n s = runST (readStrings False s 0 (BS.length s) n)
 
 decodeContainer :: (Bin a) => Bool -> BS.ByteString -> a
 decodeContainer strict s = runST $ do
