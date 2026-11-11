@@ -17,7 +17,7 @@ module TIMonad(
         VPred, pattern VPred, vpNum, vpWith, mkVPredN,
         getVPredPositions, expandSynVPred,
         EPred(..), Infer2, CheckT, TaskCheckT,
-        getBoundTVs, getTopBoundTVs, addBoundTVs, popBoundTVs,
+        getBoundTVs, getBoundTVStack, getTopBoundTVs, addBoundTVs, popBoundTVs,
         getExplPreds, getTopExplPreds, addExplPreds, popExplPreds, mkEPred,
         GSeg(..), GTree(..), Givens, mkGivens, givensSegs, givensList, givensOnList,
         givensAppend,
@@ -537,6 +537,10 @@ updSubst f = modify (transSubst f)
 
 getBoundTVs :: TI [TyVar]
 getBoundTVs = gets tsBoundTyVarStack >>= (return . concat)
+
+-- the bound tvars by level, newest first (getBoundTVs concatenates them)
+getBoundTVStack :: TI [[TyVar]]
+getBoundTVStack = gets tsBoundTyVarStack
 
 -- get just the most recently bound tvars
 getTopBoundTVs :: TI [TyVar]

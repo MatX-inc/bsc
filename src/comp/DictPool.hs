@@ -329,7 +329,7 @@ data Cnt = CReducePred | CSat | CLookup | CHitWord | CHitStr | CHitVarOut
          | CVerifyOk | CVerifyDraws
          | CSkipNoRec | CNoRecAdd
          | CNoRecVar | CNoRecTaint | CNoRecNested
-         | CSkipRefused | CRecJoinOut | CHitJoins | CRecOutDvs | CFallbackRank
+         | CSkipRefused | CRecJoinOut | CHitJoins | CRecOutDvs | CFallbackRank | CFallbackFresh
     deriving (Eq, Ord, Show, Enum, Bounded)
 
 -- Counter keys at noRecByBase + fromEnum c count the lookups skipped for a
@@ -364,3 +364,4 @@ cntName c = case c of
     CSkipRefused -> "skip_refused"
     CRecJoinOut -> "rec_join_outside"; CHitJoins -> "hit_joins"
     CRecOutDvs -> "rec_output_in_dvs"; CFallbackRank -> "fallback_rank"
+    CFallbackFresh -> "fallback_fresh"
