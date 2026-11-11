@@ -1132,7 +1132,11 @@ combineCombSchedInfo use_map domain_id_map parent_abi parent_csi
         -- for each node in the parent schedule, find its uses in the child
         makeParentNodeUses node = (node, findUses use_map rdy_map inst node)
 
-        parent_uses = map makeParentNodeUses parent_nodes
+        -- The parent's graph holds every node merged so far, but only its
+        -- own rules use this child, and the combines ignore nodes with no
+        -- uses; walking them all would make merging quadratic.
+        parent_uses = filter (not . null . snd) $
+                      map makeParentNodeUses parent_nodes
 
         -- once we join the child methods to the parent rules which use
         -- them, we need to remove all the methods from the child's
