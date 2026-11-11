@@ -200,10 +200,8 @@ gkValid ver v = all ok
 -- Entries
 
 -- | Class name, the incoherence flag, last-resort flag, fundep row, and
--- per position: Left the key of a key position or ground output, or
--- Right j for an output whose variable's number is the j-th smallest of
--- the outputs' distinct variables' (so the key holds their sharing and
--- the order of their numbers, which joins and unification go by).
+-- per position: the key of a key position or ground output, or -1 - j
+-- for an output that is the j-th distinct type variable of the outputs.
 type PoolKey = (Id, Bool, Bool, Int, [Either Int Int])
 
 -- | A dictionary name in a recorded solve: the root predicate's, or the
@@ -297,6 +295,8 @@ data Entry = Entry {
         eGoals :: GoalSum,      -- ^ nested goals (TCMisc.goalsClear)
         eMaxSat :: !Int,        -- ^ sat-stack growth above the root
         eMaxSuper :: !Int,      -- ^ super-stack growth above the root
+        eOutRank :: [Int],      -- ^ per distinct output variable, in position
+                                --   order, the rank of its number among theirs
         eRefused :: !Int        -- ^ lookups the hit guard refused
                                 --   (TCMisc.goalsClear)
     }
@@ -329,7 +329,7 @@ data Cnt = CReducePred | CSat | CLookup | CHitWord | CHitStr | CHitVarOut
          | CVerifyOk | CVerifyDraws
          | CSkipNoRec | CNoRecAdd
          | CNoRecVar | CNoRecTaint | CNoRecNested
-         | CSkipRefused | CRecJoinOut | CHitJoins | CRecOutDvs | CFallbackFresh
+         | CSkipRefused | CRecJoinOut | CHitJoins | CRecOutDvs | CFallbackRank | CFallbackFresh
          | CRefDvs | CRefStack
          | CRefRootRigidUneval | CRefRootRigidKeyed
          | CRefRootFlexUneval | CRefRootFlexKeyed
@@ -369,7 +369,8 @@ cntName c = case c of
     CNoRecNested -> "norec_nested_taint"
     CSkipRefused -> "skip_refused"
     CRecJoinOut -> "rec_join_outside"; CHitJoins -> "hit_joins"
-    CRecOutDvs -> "rec_output_in_dvs"; CFallbackFresh -> "fallback_fresh"
+    CRecOutDvs -> "rec_output_in_dvs"; CFallbackRank -> "fallback_rank"
+    CFallbackFresh -> "fallback_fresh"
     CRefDvs -> "refuse_dvs"; CRefStack -> "refuse_stack"
     CRefRootRigidUneval -> "refuse_root_rigid_uneval"
     CRefRootRigidKeyed -> "refuse_root_rigid_keyed"
