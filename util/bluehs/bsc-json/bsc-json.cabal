@@ -1,0 +1,31 @@
+cabal-version: 3.16
+
+-- Readers of the JSON files bsc writes, for programs run against the bsc
+-- library (util/bluehs).  A package of its own so that aeson stays out of
+-- the bsc library and its programs (doc/cabal.md section 2).
+name: bsc-json
+version: 0.1
+synopsis: Readers of the JSON files the Bluespec compiler writes
+homepage: https://github.com/B-Lang-org/bsc
+license: BSD-3-Clause
+maintainer: bsc-dev@groups.io
+category: Hardware
+build-type: Simple
+tested-with:
+  GHC == 9.4.7,
+  GHC == 9.6.7,
+  GHC == 9.8.4,
+  GHC == 9.10.3,
+  GHC == 9.12.2,
+  GHC == 9.14.1
+
+library
+  default-language: GHC2021
+  ghc-options: -Wall -Wno-orphans
+  exposed-modules: InternRestore
+  build-depends:
+    base       >=4.17.2.0 && <4.23,
+    bytestring >=0.11.5.2 && <0.13,
+    bsc,
+    -- 2.2.5.1 is the first release with the fix for HSEC-2026-0007
+    aeson      >=2.2.5.1 && <2.4,
