@@ -15,3 +15,10 @@ set ::env(BSC_INTERN_DUMP) "InternTable.env.intern.json"
 compile_backend_pass InternTable.bs {-trace-intern-table}
 unset ::env(BSC_INTERN_DUMP)
 compare_file InternTable.env.intern.json InternTable.default.intern.json
+
+# A program against the bsc library restores snapshots in fresh processes:
+# RestoreReject.hs runs the restore's rejection cases, one process each.
+# Untested without bluehs.
+foreach mode {invalid late noted empty generated lazycount} {
+    bluehs_run_pass RestoreReject.hs [list $mode] RestoreReject.hs.$mode.bluehs-out
+}
