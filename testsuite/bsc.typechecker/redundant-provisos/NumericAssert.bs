@@ -1,0 +1,19 @@
+package NumericAssert where
+
+-- A written proviso whose own class passes no dictionary asserts sizes or
+-- serves typing.  The type function in each one below brings a Bits
+-- proviso whose dictionary is unused, but the written proviso is not
+-- reported: no warning.
+
+atLeastByte :: (Add 8 _pad (SizeOf t)) => t -> Bool
+atLeastByte _ = True
+
+wordsOf :: (Log (TDiv (SizeOf t) 8) _wbits) => t -> Bool
+wordsOf _ = True
+
+class Fits n m where {}
+
+instance Fits 4 8 where {}
+
+fits :: (Fits 4 (SizeOf t)) => t -> Bool
+fits _ = True

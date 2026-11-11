@@ -1,0 +1,23 @@
+package SuperPair where
+
+-- Literal a is a superclass of Arith a.  What is reported depends on what
+-- each body needs, not on the order of the provisos, which decides the
+-- dictionary that the typechecker takes a literal from.
+
+onlyLiteral :: (Arith a, Literal a) => a -> a
+onlyLiteral _ = 1
+
+onlyLiteral2 :: (Literal a, Arith a) => a -> a
+onlyLiteral2 _ = 1
+
+both :: (Arith a, Literal a) => a -> a
+both x = x + 1
+
+both2 :: (Literal a, Arith a) => a -> a
+both2 x = x + 1
+
+onlyArith :: (Arith a, Literal a) => a -> a
+onlyArith x = x + x
+
+neither :: (Arith a, Literal a) => a -> a
+neither x = x

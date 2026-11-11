@@ -1,0 +1,20 @@
+package FundepUnseen where
+
+class Convert a b | a -> b where
+  convert :: a -> b
+
+class Named a where
+  nameOf :: a -> String
+
+-- The variable that the functional dependency determines appears nowhere
+-- else, so typing does not need the proviso either.
+same :: (Convert a b) => a -> a
+same x = x
+
+-- b appears only in another unused proviso, which goes too.
+count :: (Convert a b, Named b) => a -> Integer
+count _ = 0
+
+-- The size variable appears only in the proviso, and SizeOf is not used.
+constByte :: (Bits a sa) => a -> Bit 8
+constByte _ = 0

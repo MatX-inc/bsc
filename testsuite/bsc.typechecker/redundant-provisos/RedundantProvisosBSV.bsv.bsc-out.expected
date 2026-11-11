@@ -1,0 +1,9 @@
+checking package dependencies
+compiling RedundantProvisosBSV.bsv
+Warning: "RedundantProvisosBSV.bsv", line 3, column 44: (T0167)
+  The proviso `Eq#(a)' on `lessThan' is redundant: the definition does not use
+  it.
+Warning: "RedundantProvisosBSV.bsv", line 7, column 58: (T0167)
+  The proviso `Arith#(a)' on `mkStore' is redundant: the definition does not
+  use it.
+All packages are up to date.

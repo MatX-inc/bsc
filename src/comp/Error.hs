@@ -860,6 +860,8 @@ data ErrMsg =
         | WIncoherentMatch String String
         | WOrphanInst String
         | WTransitiveIncoherentMatch String String String
+        | WRedundantProviso String String (Maybe String)
+          -- ^ definition, proviso, a proviso that supplies what is used of it
         | EModInstWrongArgs [Position]
         | EAmbiguous [(String, Position, [(String, [Position])])]
         | EAmbiguousExplCtx [Doc] [Doc] Doc
@@ -3169,6 +3171,14 @@ getErrorText (WTransitiveIncoherentMatch pred root_pred root_inst) =
      s2par ("Proviso " ++ pred ++ " is satisfied by a dictionary that transitively " ++
             "depends on an incoherent match of " ++ root_pred ++
             " against instance " ++ root_inst))
+
+getErrorText (WRedundantProviso def prov msup) =
+    (Type 167, empty,
+     s2par ("The proviso " ++ ishow prov ++ " on " ++ ishow def ++
+            " is redundant: " ++
+            case msup of
+              Nothing -> "the definition does not use it."
+              Just sup -> ishow sup ++ " supplies all that the definition uses of it."))
 
 -- Generation Errors
 

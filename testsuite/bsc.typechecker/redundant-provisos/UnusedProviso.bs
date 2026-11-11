@@ -1,0 +1,12 @@
+package UnusedProviso where
+
+class Shape a where
+  area :: a -> Integer
+
+-- The definition uses Eq but never Shape.
+isSame :: (Eq a, Shape a) => a -> a -> Bool
+isSame x y = x == y
+
+-- An unused proviso on a module.
+mkHolder :: (IsModule m c, Bits a sa, Eq a) => a -> m (Reg a)
+mkHolder init = mkReg init

@@ -593,7 +593,8 @@ traceflags = [
           "show-qualifiers",
           "show-raw-id",
           "sim-link-top-only",
-          "warn-meth-arg-mismatch"
+          "warn-meth-arg-mismatch",
+          "warn-redundant-provisos"
          ]
 
 -- -------------------------

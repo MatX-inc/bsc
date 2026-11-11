@@ -1,0 +1,12 @@
+package ImpliedBySuper where
+
+class Named a where
+  nameOf :: a -> String
+
+class (Named a) => Labelled a where
+  labelOf :: a -> String
+
+-- Named a is a superclass of Labelled a.  Context reduction keeps both, and
+-- Labelled a, which the body uses, supplies all that it uses of Named a.
+describe :: (Named a, Labelled a) => a -> String
+describe x = nameOf x +++ labelOf x

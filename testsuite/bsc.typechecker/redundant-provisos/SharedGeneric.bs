@@ -1,0 +1,25 @@
+package SharedGeneric where
+
+-- A conversion class with a generic default instance.
+class Conv ctx a b where
+  conv :: ctx -> a -> b
+
+class Conv' ctx r s where
+  conv' :: ctx -> r -> s
+
+instance (Generic a r, Generic b s, Conv' ctx r s) => Conv ctx a b where
+  conv c x = to (conv' c (from x))
+
+instance (Conv' ctx r s) => Conv' ctx (Meta m r) (Meta m s) where
+  conv' c (Meta x) = Meta (conv' c x)
+
+instance (Conv ctx a b) => Conv' ctx (Conc a) (Conc b) where
+  conv' c (Conc x) = Conc (conv c x)
+
+data Up = Up
+data Down = Down
+
+-- Both provisos reduce through the generic instance and share
+-- Generic (f n) r; only the Down conversion is used.
+relay :: (Conv Up (f n) (f n), Conv Down (f n) (f n)) => f n -> f n
+relay x = conv Down x

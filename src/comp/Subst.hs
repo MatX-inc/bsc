@@ -7,7 +7,7 @@ module Subst(
              trimSubst, trimSubstByVars,
              {- removeFromSubst, -}
              apSubstToSubst,
-             getSubstDomain, getSubstRange, sizeSubst,
+             getSubstDomain, getSubstRange, getSubstAssocs, sizeSubst,
              chkSubstOrder
              ) where
 
@@ -248,6 +248,9 @@ getSubstDomain (S eo _) = (Map.keys eo)
 
 getSubstRange :: Subst -> [TyVar]
 getSubstRange (S eo _ ) = concat (map tv (Map.elems eo))
+
+getSubstAssocs :: Subst -> [(TyVar, Type)]
+getSubstAssocs (S eo _) = Map.assocs eo
 
 
 -------

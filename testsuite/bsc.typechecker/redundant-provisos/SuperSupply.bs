@@ -1,0 +1,21 @@
+package SuperSupply where
+
+class Named a where
+  nameOf :: a -> String
+
+class (Named a) => Labelled a where
+  labelOf :: a -> String
+
+class Fancy a where
+  fancy :: a -> String
+
+data Box a = Box a
+
+instance (Named a, Fancy a) => Fancy (Box a) where
+  fancy (Box x) = nameOf x +++ fancy x
+
+-- Fancy (Box a) reduces to Named a and Fancy a.  The body takes nameOf from
+-- Named a, which Labelled a would supply as a superclass, and never uses
+-- Fancy a, so the whole proviso is redundant.
+describe :: (Labelled a, Fancy (Box a)) => a -> String
+describe x = nameOf x +++ labelOf x
