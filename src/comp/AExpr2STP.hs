@@ -91,14 +91,17 @@ withTraceTest m =
 -- -------------------------
 
 checkDisjointExpr :: SState -> AExpr -> AExpr -> IO (Maybe Bool, SState)
-checkDisjointExpr s e1 e2 = runStateT (checkDisjointExprM True e1 e2) s
+checkDisjointExpr s e1 e2 = runStateT (checkDisjointExprM True True e1 e2) s
 
 -- For expression queries (single = True; rule pairs pass False), a pair
 -- that is one condition with itself or with True is satisfiable exactly when
 -- that condition is, so the result is kept per condition (satMap) and the
 -- solver runs once for each.  The conversions are made as for any pair.
-checkDisjointExprM :: Bool -> AExpr -> AExpr -> SM (Maybe Bool)
-checkDisjointExprM single e1 e2 = withTraceTest $ do
+-- A rule pair whose verdict is not read (check = False) is looked up and
+-- converted as any pair, but its check is left in proofMap (Unchecked) for
+-- a later query on the same pair to make.
+checkDisjointExprM :: Bool -> Bool -> AExpr -> AExpr -> SM (Maybe Bool)
+checkDisjointExprM single check e1 e2 = withTraceTest $ do
 
   when traceTest $ traceM("comparing exprs: " ++ ppString (e1, e2))
   when traceConv $ traceM("   e1 = " ++ show e1)
@@ -113,16 +116,18 @@ checkDisjointExprM single e1 e2 = withTraceTest $ do
         (ye2, _) <- convAExpr2SExpr_Force True e2
         --when traceTest $ traceM("conv2 done")
 
+        if check then doCheck ctx ye1 ye2 else do
+          liftIO $ S.ctxPop ctx
+          addToProofMap e1 e2 (Unchecked ye1 ye2)
+          return Nothing
+
+      doCheck ctx ye1 ye2 = do
         sat_memo <- gets satMap
         let mcond = if single then singleCondition e1 e2 else Nothing
         sat_res <- case mcond of
           Just c | Just r <- M.lookup c sat_memo -> return r
           _ -> do
-            liftIO $ S.assert ctx ye1
-            liftIO $ S.assert ctx ye2
-
-            yf <- gets falseExpr
-            res <- liftIO $ S.query ctx yf
+            res <- assertQuery ctx ye1 ye2
             case mcond of
               Just c | res == S.Valid || res == S.Invalid ->
                 modify (\s -> s { satMap = M.insert c res (satMap s) })
@@ -130,31 +135,50 @@ checkDisjointExprM single e1 e2 = withTraceTest $ do
             return res
         liftIO $ S.ctxPop ctx
         --
-        addToProofMap e1 e2 sat_res
-        return sat_res
+        addToProofMap e1 e2 (Proved sat_res)
+        return (Just sat_res)
 
   memRes <- lookupProofMap e1 e2
-  sat_res <- case memRes of
-    Just r -> return r
+  msat_res <- case memRes of
+    Just (Proved r) -> return (Just r)
+    Just (Unchecked ye1 ye2)
+      | check -> do ctx <- gets context
+                    liftIO $ S.ctxPush ctx
+                    r <- assertQuery ctx ye1 ye2
+                    liftIO $ S.ctxPop ctx
+                    addToProofMap e1 e2 (Proved r)
+                    return (Just r)
+      | otherwise -> return Nothing
     Nothing -> doProof
 
   -- if query(False) is Valid, then there is an inconsistency
   -- when both "e1" and "e2" are asserted, so they are ME
-  return $ case (sat_res) of
-              S.Invalid -> Just False
-              S.Valid   -> Just True
-              S.Timeout -> Nothing
-              S.Error   -> internalError ("STP query error")
+  return $ case (msat_res) of
+              Just S.Invalid -> Just False
+              Just S.Valid   -> Just True
+              Just S.Timeout -> Nothing
+              Just S.Error   -> internalError ("STP query error")
+              Nothing        -> Nothing
 
-checkDisjointRulePair :: SState -> (ARuleId, ARuleId) -> IO (Maybe Bool, SState)
-checkDisjointRulePair s rp = runStateT (checkDisjointRulePairM rp) s
+-- Assert two converted conditions in the pushed context and query False.
+assertQuery :: S.Context -> S.Expr -> S.Expr -> SM S.Result
+assertQuery ctx ye1 ye2 = do
+  liftIO $ S.assert ctx ye1
+  liftIO $ S.assert ctx ye2
+  yf <- gets falseExpr
+  liftIO $ S.query ctx yf
 
-checkDisjointRulePairM :: (ARuleId, ARuleId) -> SM (Maybe Bool)
-checkDisjointRulePairM (r1, r2) = do
+-- The Bool says whether the verdict is read (see checkDisjointExprM).
+checkDisjointRulePair :: SState -> (ARuleId, ARuleId) -> Bool ->
+                         IO (Maybe Bool, SState)
+checkDisjointRulePair s rp check = runStateT (checkDisjointRulePairM rp check) s
+
+checkDisjointRulePairM :: (ARuleId, ARuleId) -> Bool -> SM (Maybe Bool)
+checkDisjointRulePairM (r1, r2) check = do
   when traceTest $ traceM("comparing rules: " ++ ppString (r1,r2))
   c1 <- getRuleCond r1
   c2 <- getRuleCond r2
-  checkDisjointExprM False c1 c2
+  checkDisjointExprM False check c1 c2
 
 -- The condition whose satisfiability is that of the pair, if there is one.
 singleCondition :: AExpr -> AExpr -> Maybe AExpr
@@ -321,7 +345,7 @@ data SState =
                defMap        :: M.Map AId ADef,
                ruleMap       :: M.Map ARuleId RuleTriple,
                stateMap      :: M.Map AId VModInfo,
-               proofMap      :: M.Map (AExpr, AExpr) S.Result,
+               proofMap      :: M.Map (AExpr, AExpr) ProofEntry,
                proofMapS     :: M.Map S.Expr S.Result,
                -- satisfiability of single conditions (checkDisjointExprM)
                satMap        :: M.Map AExpr S.Result,
@@ -338,6 +362,9 @@ data SState =
               }
 
 type SM = StateT SState IO
+
+-- A pair's result, or its converted conditions while it is unchecked.
+data ProofEntry = Proved S.Result | Unchecked S.Expr S.Expr
 
 type RuleTriple = (ARuleId, [AExpr], Maybe ARuleId)
 
@@ -378,7 +405,7 @@ addToPortMap p res = do
         pmap' = M.insert p res pmap
     put (s { portSExprMap = pmap' })
 
-addToProofMap :: AExpr -> AExpr -> S.Result -> SM()
+addToProofMap :: AExpr -> AExpr -> ProofEntry -> SM()
 addToProofMap e1 e2 res = do
   rmap <- gets proofMap
   -- insert both orderings for expressions
@@ -386,7 +413,7 @@ addToProofMap e1 e2 res = do
       rmapX = M.insert (e2,e1) res rmap1
   modify (\s -> s {proofMap = rmapX})
 
-lookupProofMap :: AExpr -> AExpr -> SM (Maybe S.Result)
+lookupProofMap :: AExpr -> AExpr -> SM (Maybe ProofEntry)
 lookupProofMap e1 e2 = do
   rmap <- gets proofMap
   return $ M.lookup (e1,e2) rmap
